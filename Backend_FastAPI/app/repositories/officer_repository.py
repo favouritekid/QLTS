@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select, func, or_, and_, case, literal_column
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, joinedload
+from sqlalchemy.orm import selectinload, joinedload, load_only
 
 from app import models
 from app.core.constants import UserRole, SYSTEM_CONSULTATION_METHOD
@@ -1423,17 +1423,67 @@ class OfficerRepository(BaseRepository[models.User]):
         Returns:
             List of officer user IDs
         """
+        # FAIL-CLOSED: scope='unit' mà không có đơn vị thì KHÔNG được âm thầm
+        # rơi về phạm vi toàn tổ chức — trả rỗng để caller lộ lỗi sớm.
+        if scope == "unit" and unit_id is None:
+            return []
+
         conditions = [
             models.User.role == UserRole.OFFICER,
             models.User.status == "active",
         ]
-        
-        if unit_id:
+
+        # ⚠️ `is not None`, KHÔNG dùng truthiness: `unit_id=0` lọt qua `if unit_id:`
+        # sẽ bỏ hẳn mệnh đề lọc đơn vị ⇒ trả về TOÀN BỘ officer của tổ chức. Với
+        # caller mới (distribution panel, officer tự xem đơn vị mình) đó là đường
+        # lộ danh sách nhân sự toàn công ty.
+        if unit_id is not None:
             conditions.append(models.User.unit_id == unit_id)
-        
-        query = select(models.User.id).where(*conditions)
+
+        query = select(models.User.id).where(*conditions).order_by(models.User.id)
         result = await self.db.execute(query)
         return [row[0] for row in result.fetchall()]
+
+    async def get_officers_by_ids(self, officer_ids: List[int]) -> List[models.User]:
+        """Load User rows cho danh sách officer id (KHÔNG lock).
+
+        Dùng cho distribution panel: cần ``max_capacity`` / ``assignment_weight`` /
+        ``last_assigned_at`` / ``availability_status`` để tính tải.
+        ⚠️ CỐ Ý KHÔNG lọc ``availability_status`` — officer đang offline/busy vẫn
+        phải hiển thị trên bảng (được đánh dấu không eligible), việc lọc pool
+        chấm điểm do caller quyết định.
+
+        ⚠️ ``order_by(id)``: hạ nguồn dùng sort ỔN ĐỊNH theo
+        ``(overloaded, score, last_assigned)``; khi hoà hoàn toàn (đơn vị mới,
+        ai cũng ``last_assigned=NULL``) thứ tự đầu vào QUYẾT ĐỊNH thứ hạng. Không
+        có ORDER BY thì thứ hạng đổi giữa các lần poll và có thể lệch engine.
+
+        ⚠️ ``load_only``: đây là đường ĐỌC hiển thị, không được kéo
+        ``password_hash`` / ``totp_secret_encrypted`` / ``backup_codes_hashed``
+        vào bộ nhớ chỉ để in tên và tải. ``unit`` eager-load để lấy tên đơn vị
+        mà không cần query rời (Anti-N+1 theo CLAUDE.md).
+        """
+        if not officer_ids:
+            return []
+        result = await self.db.execute(
+            select(models.User)
+            .options(
+                load_only(
+                    models.User.id,
+                    models.User.username,
+                    models.User.full_name,
+                    models.User.unit_id,
+                    models.User.max_capacity,
+                    models.User.assignment_weight,
+                    models.User.last_assigned_at,
+                    models.User.availability_status,
+                ),
+                selectinload(models.User.unit),
+            )
+            .where(models.User.id.in_(officer_ids))
+            .order_by(models.User.id)
+        )
+        return list(result.scalars().all())
 
     async def get_officers_total_capacity(self, officer_ids: List[int]) -> int:
         """Sum actual max_capacity for given officers. NULL defaults to 100."""

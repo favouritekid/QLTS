@@ -38,6 +38,7 @@ import {
   KPICardsGrid,
   ActionInsightsPanel,
   WeeklyLeaderboard,
+  OfficerDistributionPanel,
   SmartHeader,
   AnnualProgressCard,
   MonthlyBreakdownCard,
@@ -599,6 +600,19 @@ function DashboardContent({ initialStats }: { initialStats?: EnhancedOfficerStat
 
       {/* Row 5: Leaderboard (supplementary) */}
       <WeeklyLeaderboard scope={scope} unitId={effectiveUnitId} officerId={selectedOfficerId} />
+
+      {/* Row 6: Giải trình phân phối lead ("điểm bận").
+          Bảng này chỉ có nghĩa khi SO SÁNH nhiều người trong cùng đơn vị.
+          - CỐ Ý không truyền officerId: backend hiểu đó là drill-down 1 người
+            và sẽ thu bảng còn đúng 1 dòng.
+          - ẨN khi đang drill-down một officer cụ thể: lúc đó phần còn lại của
+            dashboard đang nói về riêng người đó, mà panel lại không biết đơn vị
+            của họ (admin không chọn unit ⇒ backend mặc định toàn tổ chức) nên
+            sẽ hiện nhầm ngữ cảnh. Thà ẩn còn hơn hiện sai.
+            (Cải tiến sau: backend thêm chế độ "đơn vị của officer đang xem".) */}
+      {selectedOfficerId == null && (
+        <OfficerDistributionPanel unitId={effectiveUnitId} />
+      )}
     </div>
   );
 }

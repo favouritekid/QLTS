@@ -1001,3 +1001,314 @@ class TestMyKpiPlanResponseShape:
         expected = {1: 12.5, 2: 8.0}
         for m in data["months"]:
             assert m["consultations_actual_avg"] == expected.get(m["month"])
+
+
+# ===========================================================================
+# Distribution Panel ("Điểm bận") — scope / IDOR / privacy
+# ===========================================================================
+DISTRIBUTION_URL = "/api/officer/distribution-panel"
+
+
+class TestDistributionPanelScope:
+    """Endpoint này CỐ Ý rộng hơn dashboard: officer xem được CẢ ĐƠN VỊ mình.
+
+    Vì thế phải ghim chặt: không rò sang đơn vị khác, không nhận tham số trỏ
+    người/đơn vị khác, và lời khuyên cá nhân chỉ hiện trên dòng của chính mình.
+    """
+
+    @pytest.mark.asyncio
+    async def test_officer_sees_own_unit_including_colleagues(
+        self, client: AsyncClient, officer_user_in_db, officer_token_headers,
+        officer2_in_unit1,
+    ):
+        """Officer xem được cả đơn vị — thấy CẢ đồng nghiệp cùng unit."""
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+
+        ids = {e["user_id"] for e in body["entries"]}
+        assert officer_user_in_db["id"] in ids
+        assert officer2_in_unit1["id"] in ids, "phải thấy đồng nghiệp cùng đơn vị"
+        assert body["total_officers"] == len(body["entries"])
+
+    @pytest.mark.asyncio
+    async def test_officer_does_not_see_other_unit(
+        self, client: AsyncClient, officer_token_headers, officer_in_unrelated_unit,
+    ):
+        """Officer KHÔNG thấy người ở đơn vị khác."""
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        ids = {e["user_id"] for e in resp.json()["entries"]}
+        assert officer_in_unrelated_unit["id"] not in ids
+
+    @pytest.mark.asyncio
+    async def test_officer_other_officer_id_404(
+        self, client: AsyncClient, officer_token_headers, officer2_in_unit1,
+    ):
+        """Trỏ officer_id người khác ⇒ 404 (không lộ tồn tại)."""
+        resp = await client.get(
+            DISTRIBUTION_URL,
+            params={"officer_id": officer2_in_unit1["id"]},
+            headers=officer_token_headers,
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_officer_other_unit_id_404(
+        self, client: AsyncClient, officer_token_headers, unrelated_unit,
+    ):
+        """Trỏ unit_id đơn vị khác ⇒ 404."""
+        resp = await client.get(
+            DISTRIBUTION_URL,
+            params={"unit_id": unrelated_unit},
+            headers=officer_token_headers,
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_boost_only_on_own_row(
+        self, client: AsyncClient, officer_user_in_db, officer_token_headers,
+        officer2_in_unit1,
+    ):
+        """🔒 Lời khuyên CHỈ hiện trên dòng của chính người xem."""
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        entries = resp.json()["entries"]
+
+        mine = [e for e in entries if e["user_id"] == officer_user_in_db["id"]]
+        others = [e for e in entries if e["user_id"] != officer_user_in_db["id"]]
+        assert len(mine) == 1
+        assert mine[0]["is_current_user"] is True
+        assert mine[0]["boost"], "dòng của mình phải có lời khuyên"
+        for e in others:
+            assert e["is_current_user"] is False
+            assert e["boost"] is None, "KHÔNG được lộ lời khuyên của người khác"
+            # nhưng số liệu + chẩn đoán vẫn công khai (minh bạch)
+            assert e["diagnosis"]
+            assert "eff_util_pct" in e
+
+    @pytest.mark.asyncio
+    async def test_manager_ok(
+        self, client: AsyncClient, manager_user_in_db, manager_token_headers,
+    ):
+        resp = await client.get(DISTRIBUTION_URL, headers=manager_token_headers)
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_admin_ok(
+        self, client: AsyncClient, admin_user_in_db, admin_token_headers,
+    ):
+        resp = await client.get(DISTRIBUTION_URL, headers=admin_token_headers)
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_regular_user_blocked(
+        self, client: AsyncClient, regular_user_token_headers,
+    ):
+        """Role ngoài officer/manager/admin bị chặn (fail-close)."""
+        resp = await client.get(DISTRIBUTION_URL, headers=regular_user_token_headers)
+        assert resp.status_code in (401, 403)
+
+    @pytest.mark.asyncio
+    async def test_numbers_are_engine_numbers(
+        self, client: AsyncClient, officer_token_headers,
+    ):
+        """Bất biến số liệu: deducted = workload - dist_load, và điểm bận
+        = dist_load/(capacity*weight)*100 — đúng công thức engine."""
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        for e in resp.json()["entries"]:
+            assert e["deducted"] == e["workload"] - e["dist_load"]
+            expected_eff = round(
+                e["dist_load"] / (e["max_capacity"] * e["weight"]) * 100, 1
+            )
+            assert e["eff_util_pct"] == expected_eff
+
+
+# --- Bổ sung sau review: accountant deny + manager ngoài scope + scoring_mode ---
+ACCOUNTANT_DIST_DATA = {
+    "username": "accountant_dist",
+    "email": "accountant_dist@example.com",
+    "password": "AccountantDist!321",
+    "role": "accountant",
+    "status": "active",
+}
+
+
+@pytest_asyncio.fixture
+async def accountant_in_unit1(seed_lead_dependencies):
+    """Accountant cùng UNIT_1 — dùng để ghim Casbin DENY của endpoint này."""
+    return await _create_user_and_role(
+        ACCOUNTANT_DIST_DATA, "role:accountant", unit_id=1
+    )
+
+
+class TestDistributionPanelDenies:
+    """Các nhánh CHẶN + ngữ nghĩa scoring_mode (bổ sung sau review)."""
+
+    @pytest.mark.asyncio
+    async def test_accountant_denied(
+        self, client: AsyncClient, accountant_in_unit1,
+    ):
+        """Accountant kế thừa role:officer nhưng PHẢI bị DENY tường minh.
+
+        Endpoint lộ tên + tải của cả phòng tư vấn ⇒ ngoài phạm vi kế toán.
+        Nếu row deny trong ACCOUNTANT_TEMPLATE bị mất, test này đỏ.
+        """
+        headers = await _get_token_headers(client, ACCOUNTANT_DIST_DATA)
+        resp = await client.get(DISTRIBUTION_URL, headers=headers)
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_manager_other_unit_denied(
+        self, client: AsyncClient, manager_user_in_db, manager_token_headers,
+        unrelated_unit,
+    ):
+        """Manager trỏ unit ngoài phạm vi ⇒ CHẶN.
+
+        ⚠️ Ghi nhận hành vi THẬT: nhánh manager/admin ủy quyền nguyên vẹn cho
+        ``get_officer_dashboard_scope`` nên trả **403** (PermissionDeniedError),
+        khác nhánh officer (404). Cố ý giữ nguyên để một nguồn sự thật cho cả họ
+        endpoint dashboard — test ghim đúng hành vi này, không ghim theo mong muốn.
+        """
+        resp = await client.get(
+            DISTRIBUTION_URL,
+            params={"unit_id": unrelated_unit},
+            headers=manager_token_headers,
+        )
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_manager_out_of_scope_officer_404(
+        self, client: AsyncClient, manager_token_headers, officer_in_unrelated_unit,
+    ):
+        """Drill-down sang officer ngoài phạm vi manager ⇒ 404 (không lộ tồn tại)."""
+        resp = await client.get(
+            DISTRIBUTION_URL,
+            params={"officer_id": officer_in_unrelated_unit["id"]},
+            headers=manager_token_headers,
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_scoring_mode_is_per_unit_not_first_unit(
+        self, client: AsyncClient, officer_token_headers, officer2_in_unit1,
+    ):
+        """scoring_mode top-level PHẢI là tóm tắt đúng của các entry.
+
+        Chấm điểm chạy per-unit; lấy mode của đơn vị ĐẦU TIÊN làm đại diện sẽ
+        giải thích sai cho phần entries còn lại khi phạm vi trải nhiều đơn vị.
+        Ghim: mọi entry có trường riêng, và top-level = mode chung / "mixed" / None.
+        """
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        entries = body["entries"]
+
+        for e in entries:
+            assert "scoring_mode" in e
+
+        real_modes = {e["scoring_mode"] for e in entries if e["scoring_mode"]}
+        if len(real_modes) > 1:
+            assert body["scoring_mode"] == "mixed"
+        elif len(real_modes) == 1:
+            assert body["scoring_mode"] == next(iter(real_modes))
+        else:
+            assert body["scoring_mode"] is None
+
+
+# ===========================================================================
+# Distribution Panel — CHẾ ĐỘ ĐANG CHẠY PROD (cờ BẬT)
+# ===========================================================================
+# ⚠️ `.env.test` không set cờ nào ⇒ mặc định TẮT HẾT. Khi tắt thì
+# self_sourced = tuition_hold = deducted = 0, dist_load == workload, weight == 1,
+# và eff_util_pct == real_util_pct == fill_pct — nghĩa là mọi assert về số liệu
+# trở thành hằng đúng (0 == 0, x == x) và TOÀN BỘ chủ đề của tính năng (giảm
+# trừ, trọng số, "điểm bận vs chỗ đầy") KHÔNG được test. Prod unit 14 đang chạy
+# member + exclude-self + finance ⇒ phải test đúng cấu hình đó.
+
+
+@pytest.fixture
+def prod_flags(monkeypatch):
+    """Bật đúng bộ cờ đang chạy prod cho các test dưới đây."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ENABLE_MEMBER_WEIGHTED_ASSIGNMENT", True)
+    monkeypatch.setattr(settings, "ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED", True)
+    monkeypatch.setattr(settings, "ENABLE_FINANCE_WORKLOAD_DISCOUNT", True)
+    monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)
+    return settings
+
+
+class TestDistributionPanelProdFlags:
+    """Ghim bộ số ở ĐÚNG cấu hình prod — nơi các phép trừ/trọng số mới có tác dụng."""
+
+    @pytest.mark.asyncio
+    async def test_scoring_mode_is_member_when_flags_on(
+        self, client: AsyncClient, officer_token_headers, prod_flags,
+    ):
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        body = resp.json()
+        # Với cờ TẮT giá trị này là "legacy" — assert dưới đây chỉ đúng khi cờ BẬT,
+        # nên nó cũng là canary phát hiện test lại rơi về chế độ mặc định.
+        assert body["scoring_mode"] == "member"
+        for e in body["entries"]:
+            assert e["scoring_mode"] == "member"
+
+    @pytest.mark.asyncio
+    async def test_deducted_equals_self_plus_tuition_minus_overlap(
+        self, client: AsyncClient, officer_token_headers, prod_flags,
+    ):
+        """Bất biến then chốt: overlap PHẢI có trên wire và khớp phép trừ.
+
+        Thiếu `overlap`, client sẽ trình bày `self + tuition` như một phép cộng
+        không bằng `deducted` (phần giao bị trừ hai lần trong đầu người đọc).
+        """
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        for e in resp.json()["entries"]:
+            assert "overlap" in e
+            assert e["deducted"] == e["self_sourced"] + e["tuition_hold"] - e["overlap"]
+            assert e["overlap"] <= min(e["self_sourced"], e["tuition_hold"])
+            assert e["dist_load"] == e["workload"] - e["deducted"]
+
+    @pytest.mark.asyncio
+    async def test_weight_actually_divides_eff_util(
+        self, client: AsyncClient, officer_token_headers, prod_flags,
+    ):
+        """Với cờ TẮT thì weight luôn = 1 nên phép chia này vô nghĩa."""
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        for e in resp.json()["entries"]:
+            expected = round(
+                e["dist_load"] / (e["max_capacity"] * e["weight"]) * 100, 1
+            )
+            assert e["eff_util_pct"] == expected
+            # real_util_pct KHÔNG chia trọng số
+            assert e["real_util_pct"] == round(
+                e["dist_load"] / e["max_capacity"] * 100, 1
+            )
+
+    @pytest.mark.asyncio
+    async def test_username_not_exposed(
+        self, client: AsyncClient, officer_token_headers, prod_flags,
+    ):
+        """Endpoint trả cả roster đơn vị ⇒ không được kèm login-id đồng nghiệp."""
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        for e in resp.json()["entries"]:
+            assert "username" not in e
+            assert "email" not in e
+
+    @pytest.mark.asyncio
+    async def test_diagnosis_never_addresses_reader_on_peer_rows(
+        self, client: AsyncClient, officer_user_in_db, officer_token_headers,
+        officer2_in_unit1, prod_flags,
+    ):
+        """`diagnosis` render ở MỌI dòng nên không được xưng "bạn"."""
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        for e in resp.json()["entries"]:
+            if e["user_id"] != officer_user_in_db["id"]:
+                assert "bạn" not in e["diagnosis"].lower(), e["diagnosis"]

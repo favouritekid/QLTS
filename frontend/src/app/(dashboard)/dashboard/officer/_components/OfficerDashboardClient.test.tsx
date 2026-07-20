@@ -120,6 +120,7 @@ vi.mock("lucide-react", () => ({
 let headerProps: Record<string, any> = {};
 let kpiGridProps: Record<string, any> = {};
 let monthlyProps: Record<string, any> = {};
+let distributionProps: Record<string, any> = {};
 
 vi.mock("@/components/officer/dashboard", () => ({
   KPICardsGrid: (props: any) => {
@@ -128,6 +129,10 @@ vi.mock("@/components/officer/dashboard", () => ({
   },
   ActionInsightsPanel: () => <div data-testid="action-insights" />,
   WeeklyLeaderboard: () => <div data-testid="leaderboard" />,
+  OfficerDistributionPanel: (props: any) => {
+    distributionProps = props;
+    return <div data-testid="distribution-panel" />;
+  },
   AnnualProgressCard: () => <div data-testid="annual-progress" />,
   MonthlyBreakdownCard: (props: any) => {
     monthlyProps = props;
@@ -542,5 +547,28 @@ describe("OfficerDashboardClient", () => {
     renderWithProviders();
     await waitFor(() => expect(screen.getByTestId("performance-chart")).toBeInTheDocument());
     expect(perfChartProps.enrollmentPace).toBeNull();
+  });
+
+  it("mounts OfficerDistributionPanel without officerId (bảng so cả đơn vị)", async () => {
+    renderWithProviders();
+    await waitFor(() =>
+      expect(screen.getByTestId("distribution-panel")).toBeInTheDocument()
+    );
+    // Bảng điểm bận so sánh CẢ đơn vị; truyền officerId sẽ khiến backend
+    // drill-down còn 1 dòng và mất ý nghĩa so sánh ⇒ ghim là không truyền.
+    expect(distributionProps.officerId).toBeUndefined();
+    expect("unitId" in distributionProps).toBe(true);
+  });
+
+  it("ẨN OfficerDistributionPanel khi drill-down một officer cụ thể", async () => {
+    // Bảng điểm bận chỉ có nghĩa khi SO SÁNH nhiều người cùng đơn vị. Khi
+    // drill-down, panel không biết đơn vị của người được chọn (admin không
+    // chọn unit ⇒ backend mặc định toàn tổ chức) nên sẽ hiện sai ngữ cảnh.
+    setUrlSearch("?scope=organization&unit=42&officer=7");
+    renderWithProviders();
+    await waitFor(() =>
+      expect(screen.getByTestId("smart-header")).toBeInTheDocument()
+    );
+    expect(screen.queryByTestId("distribution-panel")).not.toBeInTheDocument();
   });
 });

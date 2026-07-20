@@ -6,7 +6,9 @@ Lead Assignment Service - Automatic lead distribution logic.
 This ensures notifications are persisted to database AND sent via Socket.IO/Email.
 """
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.exc import OperationalError  # Dùng để bắt LockNotAvailableError
@@ -280,6 +282,301 @@ async def _log_assignment_decision(
 
 
 # Thêm tham số logger=None
+class AssignmentFlags(NamedTuple):
+    """Anh chup 4 co dieu khien cach cham diem phan phoi (doc 1 lan/quyet dinh)."""
+
+    member_on: bool
+    fairness_on: bool
+    exclude_active: bool
+    finance_on: bool
+
+
+def read_assignment_flags() -> AssignmentFlags:
+    """Doc co tu settings - BYTE-IDENTICAL voi logic goc o BUOC 3.
+
+    ``exclude_active`` bi GATE KEP: co loai-self chi co tac dung o che do
+    member/fairness (legacy sap xep thuan last_assigned => dist_load vo nghia).
+    ``finance_on`` DOC LAP (overloaded/threshold ap moi che do).
+    """
+    from ..config import settings
+
+    member_on = settings.ENABLE_MEMBER_WEIGHTED_ASSIGNMENT
+    fairness_on = settings.ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT
+    exclude_active = (
+        settings.ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED
+        and (member_on or fairness_on)
+    )
+    finance_on = settings.ENABLE_FINANCE_WORKLOAD_DISCOUNT
+    return AssignmentFlags(member_on, fairness_on, exclude_active, finance_on)
+
+
+@dataclass
+class UnitOfficerLoads:
+    """Ket qua cham diem tai cua MOT don vi.
+
+    ``loads``: TAT CA officer duoc truyen vao (ke ca day tai / khong eligible),
+    da sap xep: nhom eligible (sort theo engine) truoc, phan con lai noi sau.
+    Caller loc ``eligible_for_assignment`` de lay pool chon nguoi.
+    """
+
+    loads: list
+    scoring: str | None
+    assign_reason: str | None
+    flags: AssignmentFlags
+
+
+async def compute_unit_officer_loads(
+    db: AsyncSession,
+    officers,
+    *,
+    include_at_capacity: bool = True,
+    eligible_officer_ids=None,
+    lead_unit_id: int = None,
+    flags: AssignmentFlags = None,
+    log: logging.Logger = None,
+) -> UnitOfficerLoads:
+    """Tinh tai + cham diem + sap xep officer cua mot don vi (HAM THUAN).
+
+    NGUON SU THAT DUY NHAT cho bo so phan phoi. ``automatically_assign_lead``
+    va dashboard "diem ban" deu goi ham nay => KHONG THE lech nhau. Moi thay doi
+    cong thuc phai sua o day.
+
+    Args:
+        officers: pool HIEN THI - moi officer can tinh metric.
+        include_at_capacity: False => loai han officer day tai khoi ``loads``.
+        eligible_officer_ids: pool CHAM DIEM. ``None`` => moi officer truyen vao
+            deu eligible (duong engine: BUOC 2 da loc availability + blacklist).
+            Dashboard truyen tap officer ``availability_status == 'available'``
+            de officer offline/busy van co metric hien thi nhung KHONG tham gia
+            cham diem/sap xep => diem cua nguoi eligible y het engine.
+            Ham nay KHONG tu doc ``availability_status`` - loc la viec cua caller.
+    """
+    _log = log or default_log
+    flags = flags or read_assignment_flags()
+    member_on, fairness_on = flags.member_on, flags.fairness_on
+    exclude_active, finance_on = flags.exclude_active, flags.finance_on
+
+    officer_ids = [o.id for o in officers]
+    eligible_set = (
+        set(eligible_officer_ids)
+        if eligible_officer_ids is not None
+        else set(officer_ids)
+    )
+
+    # --- Dem tai (+ tu tuyen / hoc phi theo co) - 1 round-trip ---
+    _wl_cols = [
+        models.Lead.assigned_officer_id,
+        func.count(models.Lead.id).label("workload"),
+    ]
+    if exclude_active:
+        _wl_cols.append(
+            func.count(models.Lead.id)
+            .filter(_self_sourced_subquery())
+            .label("self_cnt")
+        )
+    if finance_on:
+        _wl_cols.append(
+            func.count(models.Lead.id)
+            .filter(_tuition_hold_filter())
+            .label("tuition_cnt")
+        )
+    if exclude_active and finance_on:
+        _wl_cols.append(
+            func.count(models.Lead.id)
+            .filter(
+                and_(
+                    _self_sourced_subquery(),
+                    _tuition_hold_filter(),
+                )
+            )
+            .label("self_and_tuition_cnt")
+        )
+    workload_stmt = (
+        select(*_wl_cols)
+        .join(
+            models.ConsultationStatus,
+            models.Lead.consultation_status_id == models.ConsultationStatus.id,
+            isouter=True,
+        )
+        .where(
+            models.Lead.assigned_officer_id.in_(officer_ids),
+            models.Lead.deleted_at.is_(None),
+            _non_final_status_filter(),
+        )
+        .group_by(models.Lead.assigned_officer_id)
+    )
+    workload_map: dict = {}
+    self_map: dict = {}
+    tuition_map: dict = {}
+    self_and_tuition_map: dict = {}
+    for row in await db.execute(workload_stmt):
+        workload_map[row.assigned_officer_id] = row.workload
+        if exclude_active:
+            self_map[row.assigned_officer_id] = row.self_cnt
+        if finance_on:
+            tuition_map[row.assigned_officer_id] = row.tuition_cnt
+        if exclude_active and finance_on:
+            self_and_tuition_map[row.assigned_officer_id] = (
+                row.self_and_tuition_cnt
+            )
+    _dbg_load = (
+        f"[Unit: {lead_unit_id}] Workloads={workload_map} "
+        f"self-sourced={self_map}"
+    )
+    if finance_on:
+        _dbg_load += f" tuition-hold={tuition_map}"
+    _log.debug(_dbg_load)
+
+    # --- Dung metric per-officer (pool-independent) ---
+    loads = []
+    for officer in officers:
+        workload = workload_map.get(officer.id, 0)
+        capacity = _safe_capacity(officer)
+        at_capacity = workload >= capacity
+        if at_capacity and not include_at_capacity:
+            _log.debug(
+                f"Officer {officer.id} skipped (at full capacity: "
+                f"{workload}/{capacity})"
+            )
+            continue
+        weight = _safe_weight(officer)
+        self_cnt = self_map.get(officer.id, 0) if exclude_active else 0
+        tuition_cnt = tuition_map.get(officer.id, 0) if finance_on else 0
+        overlap = (
+            self_and_tuition_map.get(officer.id, 0)
+            if (exclude_active and finance_on)
+            else 0
+        )
+        balance_load = workload - self_cnt - tuition_cnt + overlap
+        real_util = balance_load / capacity
+        eff_util = balance_load / (capacity * weight)
+        loads.append(
+            {
+                "officer": officer,
+                "workload": workload,
+                "dist_load": balance_load,
+                "real_util": real_util,
+                "eff_util": eff_util,
+                "weight": weight,
+                "overloaded": ((workload - tuition_cnt) / capacity)
+                >= SAFETY_THRESHOLD,
+                "tuition_hold": tuition_cnt,
+                # Surface cho dashboard (da tinh san, khong ton query them).
+                # capacity = _safe_capacity(officer) -> dashboard doc thang, khong
+                # goi lai helper => khong the lech mau so voi engine.
+                "capacity": capacity,
+                "self_cnt": self_cnt,
+                # BAT BUOC surface: deducted = self + tuition - overlap. Neu chi
+                # tra self/tuition, moi UI hien thi chung se ngam hieu la phep
+                # CONG va sai bang dung phan giao (lead vua tu tim vua da dong tien).
+                "overlap": overlap,
+                "at_capacity": at_capacity,
+                "eligible_for_assignment": (
+                    officer.id in eligible_set and not at_capacity
+                ),
+                "score": real_util,
+                "last_assigned": officer.last_assigned_at
+                or datetime.min.replace(tzinfo=timezone.utc),
+            }
+        )
+
+    scoring_pool = [ol for ol in loads if ol["eligible_for_assignment"]]
+    others = [ol for ol in loads if not ol["eligible_for_assignment"]]
+    # ``others`` KHONG BAO GIO di qua khau cham diem, nen phai co thu tu on dinh
+    # RIENG. Neu de nguyen thu tu DB, caller (dashboard) enumerate ra `rank` se
+    # xuat ban mot thu tu tuy y duoi dang bang xep hang.
+    others.sort(key=lambda x: (x["at_capacity"], x["eff_util"], x["officer"].id))
+    if not scoring_pool:
+        # Khong ai du dieu kien => BO QUA han khau cham diem (giu dung hanh vi
+        # cu: engine return som o nhanh at_capacity, KHONG query lich su).
+        # Van tra ve theo thu tu on dinh (khong phai thu tu DB).
+        return UnitOfficerLoads(
+            loads=others, scoring=None, assign_reason=None, flags=flags
+        )
+
+    # --- Lich su phan cong (chi khi fairness bat) ---
+    hist_counts: dict = {}
+    if fairness_on:
+        try:
+            from sqlalchemy import select as sel, func as fn
+            hist_q = await db.execute(
+                sel(
+                    models.AssignmentDecisionLog.assigned_officer_id,
+                    fn.count(models.AssignmentDecisionLog.id).label("cnt"),
+                )
+                .where(
+                    models.AssignmentDecisionLog.unit_id == lead_unit_id,
+                    models.AssignmentDecisionLog.assigned_officer_id.isnot(None),
+                )
+                .group_by(models.AssignmentDecisionLog.assigned_officer_id)
+            )
+            hist_counts = {r.assigned_officer_id: r.cnt for r in hist_q.all()}
+        except Exception as e:
+            _log.warning(
+                f"[Unit: {lead_unit_id}] Fairness history query failed, "
+                f"falling back: {e}"
+            )
+
+    # --- Quyet dinh CHE DO cham diem (pool = scoring_pool) ---
+    if member_on and fairness_on:
+        eligible_hist_total = sum(
+            hist_counts.get(e["officer"].id, 0) for e in scoring_pool
+        )
+        scoring = "member_fairness" if eligible_hist_total >= 10 else "member"
+    elif fairness_on:
+        total_hist = sum(hist_counts.values())
+        scoring = "fairness" if total_hist >= 10 else "legacy"
+    elif member_on:
+        scoring = "member"
+    else:
+        scoring = "legacy"
+
+    if scoring == "member_fairness":
+        total_weight = sum(e["weight"] for e in scoring_pool)
+        for e in scoring_pool:
+            target_share = e["weight"] / total_weight
+            actual_share = (
+                hist_counts.get(e["officer"].id, 0) / eligible_hist_total
+            )
+            e["score"] = 0.6 * e["eff_util"] + 0.4 * (actual_share - target_share)
+        assign_reason = "member_fairness_weighted"
+        _log.info(
+            f"[Unit: {lead_unit_id}] Member+fairness weighted "
+            f"(pool_hist={eligible_hist_total})"
+        )
+    elif scoring == "fairness":
+        for e in scoring_pool:
+            share = hist_counts.get(e["officer"].id, 0) / total_hist
+            e["score"] = 0.6 * e["real_util"] + 0.4 * share
+        assign_reason = "fairness_weighted"
+        _log.info(
+            f"[Unit: {lead_unit_id}] Using fairness-weighted scoring "
+            f"(history={total_hist})"
+        )
+    elif scoring == "member":
+        for e in scoring_pool:
+            e["score"] = e["eff_util"]
+        assign_reason = "member_weighted"
+        _log.info(f"[Unit: {lead_unit_id}] Using member-weighted scoring")
+    else:
+        assign_reason = "lowest_workload"
+        _log.info(f"[Unit: {lead_unit_id}] Using legacy round-robin")
+
+    if scoring == "legacy":
+        scoring_pool.sort(key=lambda x: (x["overloaded"], x["last_assigned"]))
+    else:
+        scoring_pool.sort(
+            key=lambda x: (x["overloaded"], x["score"], x["last_assigned"])
+        )
+
+    return UnitOfficerLoads(
+        loads=scoring_pool + others,
+        scoring=scoring,
+        assign_reason=assign_reason,
+        flags=flags,
+    )
+
+
 async def automatically_assign_lead(
     lead_id: int, db: AsyncSession, logger: logging.Logger = None
 ) -> tuple[dict, list]:
@@ -423,178 +720,25 @@ async def automatically_assign_lead(
                     f"[Lead ID: {lead_id}] Found {len(available_officers)} available officers for unit {lead_unit_id}."
                 )
 
-                # === BƯỚC 3: TÍNH TOÁN WORKLOAD (+ tải TỰ TUYỂN nếu exclude_active) ===
-                # `exclude_active` = flag loại-self CHỈ có tác dụng ở chế độ member/
-                # fairness (legacy sắp xếp thuần last_assigned → dist_load vô nghĩa;
-                # gate ở đây tránh query thừa + không bẩn legacy snapshot). Khi active
-                # thêm 1 aggregate self_cnt = COUNT(...) FILTER(tự tuyển) NGAY trên
-                # workload_stmt ⇒ 1 round-trip, và bất biến self_cnt ≤ workload là CẤU
-                # TRÚC (subset của FILTER trên cùng tập dòng) ⇒ balance_load ≥ 0 khỏi
-                # cần max(0). Flags đọc 1 lần ở đây, tái dùng ở BƯỚC 5.
-                from ..config import settings
-
-                member_on = settings.ENABLE_MEMBER_WEIGHTED_ASSIGNMENT
-                fairness_on = settings.ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT
-                exclude_active = (
-                    settings.ENABLE_DISTRIBUTION_EXCLUDE_SELF_SOURCED
-                    and (member_on or fairness_on)
-                )
-                # Option A finance discount (cờ ĐỘC LẬP — KHÔNG gate theo member/
-                # fairness vì overloaded/threshold áp mọi chế độ). Khi ON: lead học
-                # phí non-final giảm trừ khỏi dist_load (eff_util) + cổng overloaded.
-                # OFF ⇒ 0 aggregate phụ + audit-shape y hệt hôm nay.
-                finance_on = settings.ENABLE_FINANCE_WORKLOAD_DISCOUNT
-
+                # === BUOC 3-5: TINH TAI + CHAM DIEM + SAP XEP ===
+                # Dung HAM CHUNG compute_unit_officer_loads - cung duong code voi
+                # dashboard "diem ban" nen hai ben KHONG THE lech so. O day pool da
+                # duoc BUOC 2 loc availability + blacklist nen KHONG truyen
+                # eligible_officer_ids (mac dinh: moi officer deu eligible) => hanh
+                # vi y het truoc refactor.
                 officer_ids = [o.id for o in available_officers]
-                _wl_cols = [
-                    models.Lead.assigned_officer_id,
-                    func.count(models.Lead.id).label("workload"),
+                _loads_res = await compute_unit_officer_loads(
+                    db,
+                    available_officers,
+                    include_at_capacity=True,
+                    lead_unit_id=lead_unit_id,
+                    log=log,
+                )
+                finance_on = _loads_res.flags.finance_on
+                # officer_loads = pool CHON NGUOI (con capacity), da sort theo engine.
+                officer_loads = [
+                    ol for ol in _loads_res.loads if ol["eligible_for_assignment"]
                 ]
-                if exclude_active:
-                    _wl_cols.append(
-                        func.count(models.Lead.id)
-                        .filter(_self_sourced_subquery())
-                        .label("self_cnt")
-                    )
-                if finance_on:
-                    # Tải HỌC PHÍ (sts14/sts10) — giảm trừ ở dist_load + overloaded.
-                    _wl_cols.append(
-                        func.count(models.Lead.id)
-                        .filter(_tuition_hold_filter())
-                        .label("tuition_cnt")
-                    )
-                if exclude_active and finance_on:
-                    # Phần GIAO self-tuyển ∩ học phí — chống trừ HAI LẦN khi tính
-                    # dist_load = workload − |self ∪ tuition|.
-                    # ⚠️ EFFICIENCY (chấp nhận có chủ đích): filter này nhúng LẠI
-                    # `_self_sourced_subquery()` (correlated LIMIT-1 trên
-                    # assignment_log) nên khi CẢ HAI cờ ON, subquery chạy 2 lần/dòng
-                    # (self_cnt + đây). KHÔNG refactor thành 1 cột `is_self` chung ở
-                    # đây vì sẽ đụng path self-sourced HIỆN CÓ (MockWorkloadRow +
-                    # test_assignment_self_sourced đã ghim self_cnt). Chỉ phát sinh
-                    # khi member/fairness + finance đều ON; auto-assign không siêu
-                    # nóng (chạy lúc tạo lead) ⇒ chi phí chấp nhận được.
-                    _wl_cols.append(
-                        func.count(models.Lead.id)
-                        .filter(
-                            and_(
-                                _self_sourced_subquery(),
-                                _tuition_hold_filter(),
-                            )
-                        )
-                        .label("self_and_tuition_cnt")
-                    )
-                workload_stmt = (
-                    select(*_wl_cols)
-                    .join(
-                        models.ConsultationStatus,
-                        models.Lead.consultation_status_id == models.ConsultationStatus.id,
-                        isouter=True,  # LEFT JOIN để bao gồm cả lead chưa có status
-                    )
-                    .where(
-                        models.Lead.assigned_officer_id.in_(officer_ids),
-                        models.Lead.deleted_at.is_(None),  # lead đã xóa không tính tải
-                        # Chỉ đếm lead chưa kết thúc — cùng định nghĩa với
-                        # is_officer_at_threshold (referral fast-path).
-                        _non_final_status_filter(),
-                    )
-                    .group_by(models.Lead.assigned_officer_id)
-                )
-                workload_map: dict = {}
-                self_map: dict = {}
-                tuition_map: dict = {}
-                self_and_tuition_map: dict = {}
-                for row in await db.execute(workload_stmt):
-                    workload_map[row.assigned_officer_id] = row.workload
-                    if exclude_active:
-                        self_map[row.assigned_officer_id] = row.self_cnt
-                    if finance_on:
-                        tuition_map[row.assigned_officer_id] = row.tuition_cnt
-                    if exclude_active and finance_on:
-                        self_and_tuition_map[row.assigned_officer_id] = (
-                            row.self_and_tuition_cnt
-                        )
-                # ⚠️ Parity khi OFF: hậu tố tuition-hold CHỈ nối khi finance_on ⇒
-                # cờ OFF giữ nguyên chuỗi log cũ (byte-identical, không chỉ audit).
-                _dbg_load = (
-                    f"[Lead ID: {lead_id}] Workloads={workload_map} "
-                    f"self-sourced={self_map}"
-                )
-                if finance_on:
-                    _dbg_load += f" tuition-hold={tuition_map}"
-                log.debug(_dbg_load)
-
-                # === BƯỚC 4: Xây dựng Danh sách Officer Hợp lệ (còn capacity) ===
-                officer_loads = []
-                for officer in available_officers:
-                    workload = workload_map.get(officer.id, 0)
-                    # Capacity an toàn (mặc định 100, không bao giờ <= 0) —
-                    # cùng helper với is_officer_at_threshold.
-                    capacity = _safe_capacity(officer)
-
-                    # Gate còn-capacity LUÔN theo TỔNG workload (trần cứng) —
-                    # self-tuyển/weight KHÔNG BAO GIỜ nới trần này.
-                    if workload < capacity:
-                        weight = _safe_weight(officer)
-                        # balance_load = CƠ SỞ SẮP XẾP = workload − |self ∪ tuition|.
-                        # - self (exclude_active): lead tự tuyển không làm giảm suất.
-                        # - tuition (finance_on): khách HỌC PHÍ đã chuyển đổi, không
-                        #   còn là tải tư vấn (Option A).
-                        # Mỗi phần = 0 khi cờ tương ứng OFF; trừ `overlap` (self ∩
-                        # tuition) để KHÔNG trừ hai lần. Cả hai ⊆ workload ⇒
-                        # balance_load ≥ 0 (khỏi max(0)).
-                        self_cnt = (
-                            self_map.get(officer.id, 0) if exclude_active else 0
-                        )
-                        tuition_cnt = (
-                            tuition_map.get(officer.id, 0) if finance_on else 0
-                        )
-                        overlap = (
-                            self_and_tuition_map.get(officer.id, 0)
-                            if (exclude_active and finance_on)
-                            else 0
-                        )
-                        balance_load = workload - self_cnt - tuition_cnt + overlap
-                        # real_util/eff_util tính trên balance_load (đầu vào SẮP
-                        # XẾP ở BƯỚC 5). eff_util có nhân weight: weight cao ⇒
-                        # eff_util thấp ⇒ officer "được coi là vơi hơn" ⇒ nhận
-                        # nhiều lead hơn (member ON).
-                        real_util = balance_load / capacity
-                        eff_util = balance_load / (capacity * weight)
-                        officer_loads.append(
-                            {
-                                "officer": officer,
-                                "workload": workload,  # TỔNG tải (audit + gate)
-                                "dist_load": balance_load,  # cơ sở SẮP XẾP
-                                "real_util": real_util,
-                                "eff_util": eff_util,
-                                "weight": weight,
-                                # ⚠️ Cổng an toàn TÁCH khỏi real_util (dist-based khi
-                                # exclude_active). weight/self-tuyển KHÔNG phá trần.
-                                # Option A: chỉ trừ HỌC PHÍ (tuition_cnt) khi
-                                # finance_on — self KHÔNG trừ ở cổng này (giữ như hôm
-                                # nay). tuition_cnt ⊆ workload ⇒ ≥ 0.
-                                "overloaded": (
-                                    (workload - tuition_cnt) / capacity
-                                )
-                                >= SAFETY_THRESHOLD,
-                                # tải học phí (audit; chỉ emit vào snapshot khi ON).
-                                "tuition_hold": tuition_cnt,
-                                # score = giá trị dùng để SẮP XẾP; mặc định real_util,
-                                # các nhánh weighted ở BƯỚC 5 ghi đè. Ở nhánh legacy/
-                                # fallback score GIỮ real_util nhưng KHÔNG quyết định thứ
-                                # tự (sort chỉ theo overloaded+last_assigned) — chỉ mang
-                                # tính thông tin cho snapshot.
-                                "score": real_util,
-                                # Xử lý last_assigned_at là None (coalesce)
-                                "last_assigned": officer.last_assigned_at
-                                or datetime.min.replace(tzinfo=timezone.utc),
-                            }
-                        )
-                    else:
-                        log.debug(
-                            f"[Lead ID: {lead_id}] Officer {officer.id} skipped (at full capacity: {workload}/{capacity})"
-                        )
 
                 # --- Xử lý khi tất cả Officer đã đầy tải ---
                 if not officer_loads:
@@ -628,113 +772,23 @@ async def automatically_assign_lead(
                         eligible_officer_ids=officer_ids, unit_id=lead_unit_id,
                         channel="auto", reason="at_capacity",
                         capacity_snapshot={
-                            str(o.id): {
-                                "current": workload_map.get(o.id, 0),
-                                "max": o.max_capacity or 100,
+                            str(ol["officer"].id): {
+                                "current": ol["workload"],
+                                "max": ol["officer"].max_capacity or 100,
                                 **(
-                                    {"tuition_hold": tuition_map.get(o.id, 0)}
+                                    {"tuition_hold": ol["tuition_hold"]}
                                     if finance_on
                                     else {}
                                 ),
                             }
-                            for o in available_officers
+                            for ol in _loads_res.loads
                         }, log=log,
                     )
                     return {"status": AssignmentResult.FAILED, "reason": AssignmentFailureReason.AT_CAPACITY, "lead_id": lead_id, "unit_id": lead_unit_id}, _post_commit_callbacks
 
-                # === BƯỚC 5: Sắp xếp và Chọn Officer ===
-                # Hai flag ĐỘC LẬP chồng lên logic gốc (KHÔNG thay thế nhánh):
-                #   ENABLE_MEMBER_WEIGHTED_ASSIGNMENT   → order theo eff_util (nhân weight)
-                #   ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT → thêm thành phần fairness share
-                # order_util = eff_util nếu member ON, ngược lại real_util (=== hôm nay).
-                # overloaded = (workload/capacity) >= SAFETY_THRESHOLD — LUÔN theo
-                # TỔNG tải; weight/self-tuyển KHÔNG BAO GIỜ phá cổng an toàn (không
-                # dồn quá tải thật). (member_on/fairness_on/settings đã đọc ở BƯỚC 3.)
-
-                # `overloaded` (cổng an toàn theo tải THẬT) đã đặt sẵn ở BƯỚC 4 —
-                # SAFETY_THRESHOLD là hằng module (chia sẻ với referral fast-path qua
-                # is_officer_at_threshold). weight KHÔNG BAO GIỜ phá cổng này.
-
-                # Lịch sử phân công của đơn vị — chỉ truy vấn khi fairness bật.
-                hist_counts: dict = {}
-                if fairness_on:
-                    try:
-                        from sqlalchemy import select as sel, func as fn
-                        hist_q = await db.execute(
-                            sel(
-                                models.AssignmentDecisionLog.assigned_officer_id,
-                                fn.count(models.AssignmentDecisionLog.id).label("cnt"),
-                            )
-                            .where(
-                                models.AssignmentDecisionLog.unit_id == lead_unit_id,
-                                models.AssignmentDecisionLog.assigned_officer_id.isnot(None),
-                            )
-                            .group_by(models.AssignmentDecisionLog.assigned_officer_id)
-                        )
-                        hist_counts = {r.assigned_officer_id: r.cnt for r in hist_q.all()}
-                    except Exception as e:
-                        log.warning(f"[Lead ID: {lead_id}] Fairness history query failed, falling back: {e}")
-
-                # --- Quyết định CHẾ ĐỘ chấm điểm theo 2 flag độc lập + đủ history ---
-                #   member_fairness: fairness ON + member ON + đủ pool-history (>=10)
-                #   fairness:        fairness ON + member OFF + đủ unit-history (>=10) — Y HỆT P2-2 cũ
-                #   member:          member ON (gồm cả fallback fairness+member thiếu history)
-                #   legacy:          cả 2 OFF, HOẶC fairness ON + member OFF + thiếu history — Y HỆT hôm nay
-                # (member scoring viết ở MỘT nơi duy nhất bên dưới, tránh trùng lặp.)
-                if member_on and fairness_on:
-                    # Target & actual PHẢI cùng pool = officer_loads (sau lọc capacity).
-                    # KHÔNG dùng total_hist toàn unit: history officer offline/đầy tải sẽ
-                    # loãng mẫu số ⇒ officer đã vượt share trong pool vẫn bị coi là dưới
-                    # target. Pool đồng đều weight ⇒ pressure = actual − 1/N.
-                    eligible_hist_total = sum(hist_counts.get(e["officer"].id, 0) for e in officer_loads)
-                    scoring = "member_fairness" if eligible_hist_total >= 10 else "member"
-                elif fairness_on:
-                    total_hist = sum(hist_counts.values())
-                    scoring = "fairness" if total_hist >= 10 else "legacy"
-                elif member_on:
-                    scoring = "member"
-                else:
-                    scoring = "legacy"
-
-                # --- Áp chế độ: đặt score + reason. Mỗi weight >= 1 và các ngưỡng
-                # history >= 10 đã đảm bảo mọi mẫu số dưới đây đều > 0 (không div-0). ---
-                if scoring == "member_fairness":
-                    total_weight = sum(e["weight"] for e in officer_loads)
-                    for e in officer_loads:
-                        target_share = e["weight"] / total_weight
-                        actual_share = hist_counts.get(e["officer"].id, 0) / eligible_hist_total
-                        # pressure = actual − target (<0 ⇒ dưới target ⇒ đẩy lên; >0 ⇒ phạt)
-                        e["score"] = 0.6 * e["eff_util"] + 0.4 * (actual_share - target_share)
-                    assign_reason = "member_fairness_weighted"
-                    log.info(f"[Lead ID: {lead_id}] Member+fairness weighted (pool_hist={eligible_hist_total})")
-                elif scoring == "fairness":
-                    # ⚠️ Khi exclude_active, real_util là DIST-based ⇒ score fairness
-                    # KHÁC P2-2 gốc (officer thắng có thể lật). Chủ đích (spec §5).
-                    for e in officer_loads:
-                        share = hist_counts.get(e["officer"].id, 0) / total_hist
-                        e["score"] = 0.6 * e["real_util"] + 0.4 * share
-                    assign_reason = "fairness_weighted"
-                    log.info(f"[Lead ID: {lead_id}] Using fairness-weighted scoring (history={total_hist})")
-                elif scoring == "member":
-                    # Tie-break đầu là eff_util (weight cao ⇒ eff_util thấp ⇒ ưu tiên),
-                    # rồi last_assigned. Weight ĐỒNG ĐỀU (đều =1) ⇒ eff_util == real_util
-                    # ⇒ order theo TẢI (proportional), KHÁC round-robin thuần legacy —
-                    # chủ đích member mode. ⚠️ Khi exclude_active, "TẢI" ở đây là
-                    # DIST-based (đã trừ tự tuyển), KHÔNG phải tổng workload.
-                    for e in officer_loads:
-                        e["score"] = e["eff_util"]
-                    assign_reason = "member_weighted"
-                    log.info(f"[Lead ID: {lead_id}] Using member-weighted scoring")
-                else:  # legacy — Y HỆT hôm nay
-                    assign_reason = "lowest_workload"
-                    log.info(f"[Lead ID: {lead_id}] Using legacy round-robin")
-
-                # Legacy sắp xếp KHÔNG dùng score (round-robin thuần theo last_assigned);
-                # các chế độ weighted chèn score làm tie-break thứ 2 (sau cổng overloaded).
-                if scoring == "legacy":
-                    officer_loads.sort(key=lambda x: (x["overloaded"], x["last_assigned"]))
-                else:
-                    officer_loads.sort(key=lambda x: (x["overloaded"], x["score"], x["last_assigned"]))
+                # === BUOC 5: da tinh trong compute_unit_officer_loads ===
+                scoring = _loads_res.scoring
+                assign_reason = _loads_res.assign_reason
 
                 chosen_officer_data = officer_loads[0]
                 chosen_one = chosen_officer_data["officer"]

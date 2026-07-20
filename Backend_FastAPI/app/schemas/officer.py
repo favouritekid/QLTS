@@ -416,6 +416,78 @@ class WeeklyLeaderboard(BaseModel):
 
 
 # =============================================================================
+# Distribution Panel ("Điểm bận") — giải trình phân phối lead của đơn vị
+# =============================================================================
+
+class OfficerArchetype(BaseModel):
+    """Nhãn kiểu officer suy ra từ tỉ lệ các đòn bẩy tải."""
+    key: str
+    label: str
+
+
+class OfficerDistributionEntry(BaseModel):
+    """Một dòng trong bảng điểm bận.
+
+    Mọi con số tải đến TRỰC TIẾP từ ``assignment_service.compute_unit_officer_loads``
+    — cùng hàm engine chia lead dùng, nên KHÔNG thể lệch.
+    """
+    rank: int
+    user_id: int
+    # ⚠️ KHÔNG expose `username`: endpoint này trả cả roster đơn vị, FE chỉ render
+    # `full_name` — đưa login-id đồng nghiệp lên wire là bề mặt PII vô ích.
+    full_name: str
+    unit_id: Optional[int] = None
+    unit_name: Optional[str] = None
+    # Chế độ chấm điểm engine áp cho ĐƠN VỊ của dòng này (per-unit, vì ngưỡng
+    # history fairness tính riêng từng đơn vị). Đây mới là giá trị chính xác;
+    # trường cùng tên ở cấp panel chỉ là tóm tắt.
+    scoring_mode: Optional[str] = None
+
+    # --- Số liệu tải (nguyên bản từ engine) ---
+    workload: int                  # Lead đang giữ (tổng non-final)
+    max_capacity: int              # Khả năng nhận
+    weight: int                    # Ưu tiên kỳ cựu (×N)
+    self_sourced: int              # Lead tự tìm
+    tuition_hold: int              # Hồ sơ đã đóng tiền
+    # Phần GIAO (vừa tự tìm vừa đã đóng tiền) — chỉ bị trừ MỘT lần.
+    # ⚠️ deducted = self_sourced + tuition_hold − overlap. Thiếu trường này thì
+    # client sẽ trình bày self+tuition như một phép cộng KHÔNG bằng deducted.
+    overlap: int = 0
+    dist_load: int                 # Lead hệ thống tính
+    deducted: int                  # Không tính = self + tuition − overlap
+    real_util_pct: float           # dist_load/cap  (cơ sở sắp xếp, %)
+    fill_pct: float                # workload/cap   (chỗ đầy thật, %)
+    eff_util_pct: float            # ĐIỂM BẬN = dist_load/(cap*weight), %
+    score: float                   # điểm sắp xếp thực tế của engine
+    overload_gate_pct: float       # (workload-tuition)/cap, ngưỡng dừng 80%
+
+    # --- Cờ trạng thái ---
+    overloaded: bool
+    at_capacity: bool
+    eligible_for_assignment: bool  # False = offline/busy/đầy tải ⇒ ngoài luồng chia
+    availability_status: str
+
+    # --- Diễn giải (backend tính, thin-client) ---
+    archetype: OfficerArchetype
+    diagnosis: str
+    boost: Optional[str] = None    # 🔒 CHỈ set cho chính người đang xem
+    is_current_user: bool = False
+
+
+class OfficerDistributionPanel(BaseModel):
+    """Bảng điểm bận của (các) đơn vị trong phạm vi người xem."""
+    unit_id: Optional[int] = None
+    total_officers: int
+    # legacy | member | fairness | member_fairness | "mixed" | None.
+    # ⚠️ Chỉ là TÓM TẮT: chấm điểm chạy per-unit, nên khi phạm vi trải nhiều đơn
+    # vị có mode khác nhau giá trị này = "mixed"; muốn chính xác đọc
+    # ``entries[].scoring_mode``. None = không đơn vị nào có pool chấm điểm.
+    scoring_mode: Optional[str] = None
+    flags_snapshot: Dict[str, bool]
+    entries: List[OfficerDistributionEntry]
+
+
+# =============================================================================
 # PHASE 6: Team Stats for Performance Comparison
 # =============================================================================
 

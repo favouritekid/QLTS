@@ -1,0 +1,267 @@
+// @vitest-environment jsdom
+import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const mockUseOfficerDistribution = vi.fn();
+vi.mock("@/hooks/officer/useOfficerDistribution", () => ({
+  useOfficerDistribution: (...args: unknown[]) =>
+    mockUseOfficerDistribution(...args),
+}));
+
+// ⚠️ CỐ Ý KHÔNG mock @/components/ui/popover: lời khuyên (`boost`) nằm TRONG
+// TooltipContent nên phải mở tooltip bằng tương tác THẬT mới assert được. Mock
+// tooltip sẽ render sẵn nội dung và test mất hết giá trị.
+import {
+  EntryDetails,
+  OfficerDistributionPanel,
+} from "./OfficerDistributionPanel";
+
+const ME = {
+  rank: 1,
+  user_id: 18,
+  full_name: "Hiền",
+  unit_id: 14,
+  unit_name: "Phòng Tuyển sinh",
+  scoring_mode: "member",
+  workload: 248,
+  max_capacity: 400,
+  weight: 2,
+  self_sourced: 54,
+  tuition_hold: 100,
+  overlap: 20,
+  dist_load: 114,
+  deducted: 134,
+  real_util_pct: 28.5,
+  fill_pct: 62.0,
+  eff_util_pct: 14.2,
+  score: 0.1425,
+  overload_gate_pct: 37.0,
+  overloaded: false,
+  at_capacity: false,
+  eligible_for_assignment: true,
+  availability_status: "available",
+  archetype: { key: "tuition_heavy", label: "Chủ yếu chờ học phí" },
+  diagnosis: "100/248 lead đã đóng tiền nên không bị tính.",
+  boost: "LỜI KHUYÊN RIÊNG CỦA HIỀN",
+  is_current_user: true,
+};
+
+const PEER = {
+  ...ME,
+  rank: 2,
+  user_id: 25,
+  full_name: "Kiên",
+  eff_util_pct: 23.0,
+  archetype: { key: "balanced", label: "Cân bằng" },
+  diagnosis: "Tải chủ yếu là lead hệ thống chia.",
+  boost: null,
+  is_current_user: false,
+};
+
+const OFFLINE = {
+  ...PEER,
+  rank: 3,
+  user_id: 99,
+  full_name: "Quốc Duy",
+  eligible_for_assignment: false,
+  availability_status: "offline",
+  archetype: { key: "paused", label: "Đang tắt nhận lead" },
+};
+
+function mockPanel(entries: unknown[]) {
+  mockUseOfficerDistribution.mockReturnValue({
+    data: {
+      unit_id: 14,
+      total_officers: entries.length,
+      scoring_mode: "member",
+      flags_snapshot: { member_weighted: true },
+      entries,
+    },
+    isLoading: false,
+    error: null,
+  });
+}
+
+describe("OfficerDistributionPanel", () => {
+  beforeEach(() => {
+    mockUseOfficerDistribution.mockReset();
+  });
+
+  it("hiện mọi người trong đơn vị kèm điểm bận", () => {
+    mockPanel([ME, PEER]);
+    render(<OfficerDistributionPanel />);
+
+    expect(screen.getByText("Hiền")).toBeInTheDocument();
+    expect(screen.getByText("Kiên")).toBeInTheDocument();
+    expect(screen.getByText("14.2")).toBeInTheDocument();
+    expect(screen.getByText("23")).toBeInTheDocument();
+    expect(screen.getByText("BẠN")).toBeInTheDocument();
+  });
+
+  it("tách nhóm người đang không nhận lead", () => {
+    mockPanel([ME, OFFLINE]);
+    render(<OfficerDistributionPanel />);
+
+    expect(screen.getByText("Đang không nhận lead")).toBeInTheDocument();
+    expect(screen.getByText("Quốc Duy")).toBeInTheDocument();
+  });
+
+  it("KHÔNG lộ lời khuyên khi tooltip chưa mở", () => {
+    mockPanel([ME, PEER]);
+    render(<OfficerDistributionPanel />);
+
+    expect(
+      screen.queryByText("LỜI KHUYÊN RIÊNG CỦA HIỀN")
+    ).not.toBeInTheDocument();
+  });
+
+  // Nội dung tooltip test TRỰC TIẾP: Radix chỉ render nó vào portal khi mở, mà
+  // jsdom không drive được tương tác mở của Radix (dự án cũng theo cách này ở
+  // `dialog.test.tsx` — render Radix mở sẵn). Hover thật verify bằng smoke trình duyệt.
+  it("nội dung tooltip dòng của MÌNH: có phép tính + lời khuyên riêng", () => {
+    render(<EntryDetails e={ME} />);
+
+    expect(screen.getByText("LỜI KHUYÊN RIÊNG CỦA HIỀN")).toBeInTheDocument();
+    expect(screen.getByText(/Dành riêng cho bạn/)).toBeInTheDocument();
+    // phép tính hiện bằng số thật (không phải FE tự tính)
+    expect(
+      screen.getByText(/Điểm bận = 114 ÷ \(400×2\) ×100 = 14\.2/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Chỗ đầy thật = 248\/400 = 62%/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Ngưỡng tạm dừng = \(248−100\)\/400 = 37%/)
+    ).toBeInTheDocument();
+  });
+
+  it("nội dung tooltip ĐỒNG NGHIỆP: có chẩn đoán nhưng KHÔNG có lời khuyên", () => {
+    render(<EntryDetails e={PEER} />);
+
+    expect(
+      screen.getByText("Tải chủ yếu là lead hệ thống chia.")
+    ).toBeInTheDocument();
+    // 🔒 tuyệt đối không rò lời khuyên của người khác
+    expect(
+      screen.queryByText("LỜI KHUYÊN RIÊNG CỦA HIỀN")
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Dành riêng cho bạn/)).not.toBeInTheDocument();
+  });
+
+  it("🔒 FAIL-CLOSED: peer lỡ có boost vẫn KHÔNG được lộ", () => {
+    // Giả lập backend rò rỉ: entry của người khác lại kèm boost.
+    // UI phải câm vì điều kiện render là is_current_user && boost.
+    const leaky = { ...PEER, boost: "RÒ RỈ KHÔNG ĐƯỢC HIỆN" };
+    render(<EntryDetails e={leaky} />);
+
+    expect(screen.queryByText("RÒ RỈ KHÔNG ĐƯỢC HIỆN")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Dành riêng cho bạn/)).not.toBeInTheDocument();
+    // nhưng phần công khai vẫn render bình thường
+    expect(
+      screen.getByText("Tải chủ yếu là lead hệ thống chia.")
+    ).toBeInTheDocument();
+  });
+
+  it("gom nhóm theo ĐƠN VỊ khi phạm vi trải nhiều đơn vị", () => {
+    const otherUnit = {
+      ...PEER,
+      rank: 1, // rank đánh RIÊNG từng đơn vị ⇒ trùng số với dòng đơn vị khác
+      user_id: 77,
+      full_name: "Phạm Thu",
+      unit_id: 15,
+      unit_name: "Phòng Đào tạo",
+      scoring_mode: "legacy",
+    };
+    mockPanel([ME, PEER, otherUnit]);
+    render(<OfficerDistributionPanel />);
+
+    // Có header đơn vị cho từng nhóm + cảnh báo không so chéo được
+    expect(screen.getByText("Phòng Tuyển sinh")).toBeInTheDocument();
+    expect(screen.getByText("Phòng Đào tạo")).toBeInTheDocument();
+    expect(screen.getByText(/riêng trong từng đơn vị/)).toBeInTheDocument();
+    // nhãn chế độ xếp hạng hiển thị bằng lời thường
+    expect(screen.getByText(/cách xếp: theo điểm bận/)).toBeInTheDocument();
+    expect(screen.getByText(/cách xếp: luân phiên/)).toBeInTheDocument();
+  });
+
+  it("KHÔNG hiện header đơn vị khi chỉ có một đơn vị", () => {
+    mockPanel([ME, PEER]);
+    render(<OfficerDistributionPanel />);
+
+    expect(screen.queryByText("Phòng Tuyển sinh")).not.toBeInTheDocument();
+    expect(screen.queryByText(/riêng trong từng đơn vị/)).not.toBeInTheDocument();
+  });
+
+  it("thanh đo dựng đúng 3 đoạn từ số backend (không tự tính lại)", () => {
+    mockPanel([ME]);
+    const { container } = render(<OfficerDistributionPanel />);
+
+    // sys = eff_util_pct; weight = real_util - eff_util; skip = fill - real_util
+    const widths = Array.from(
+      container.querySelectorAll<HTMLElement>("span.h-full")
+    ).map((el) => el.style.width);
+    expect(widths).toEqual(["14.2%", "14.3%", "33.5%"]);
+  });
+
+  it("hiện skeleton khi đang tải và thông báo khi lỗi", () => {
+    mockUseOfficerDistribution.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+    });
+    const { rerender } = render(<OfficerDistributionPanel />);
+    expect(screen.queryByText("Hiền")).not.toBeInTheDocument();
+
+    mockUseOfficerDistribution.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      error: new Error("boom"),
+    });
+    rerender(<OfficerDistributionPanel />);
+    expect(
+      screen.getByText(/Không tải được bảng điểm bận/)
+    ).toBeInTheDocument();
+  });
+
+  it("nhãn 'không tính' KHÔNG trình bày như phép cộng khi có phần giao", () => {
+    // deducted = self + tuition − overlap. Nếu in "54 + 100" cạnh "−134",
+    // người đọc thấy một phép cộng không bằng tổng của chính nó.
+    render(<EntryDetails e={ME} />);
+    expect(
+      screen.getByText(/tự tìm 54, đã đóng tiền 100, trùng 20/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/tự tìm 54 \+ đã đóng tiền 100/)).not.toBeInTheDocument();
+  });
+
+  it("không có phần giao thì vẫn dùng dấu + cho dễ đọc", () => {
+    render(<EntryDetails e={{ ...ME, overlap: 0, self_sourced: 34, deducted: 134 }} />);
+    expect(
+      screen.getByText(/tự tìm 34 \+ đã đóng tiền 100/)
+    ).toBeInTheDocument();
+  });
+
+  it("CHẠM/BẤM mở được bảng chi tiết — đường dùng trên điện thoại", async () => {
+    const user = (await import("@testing-library/user-event")).default.setup();
+    mockPanel([ME]);
+    render(<OfficerDistributionPanel />);
+
+    expect(screen.queryByText(/Dành riêng cho bạn/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Hiền/ }));
+    expect(await screen.findByText(/Dành riêng cho bạn/)).toBeInTheDocument();
+  });
+
+  it("một đơn vị vẫn nói rõ cách xếp (legacy không được hiện điểm bận trơ)", () => {
+    mockUseOfficerDistribution.mockReturnValue({
+      data: {
+        unit_id: 14,
+        total_officers: 1,
+        scoring_mode: "legacy",
+        flags_snapshot: {},
+        entries: [{ ...ME, scoring_mode: "legacy" }],
+      },
+      isLoading: false,
+      error: null,
+    });
+    render(<OfficerDistributionPanel />);
+    expect(screen.getByText(/Cách xếp của đơn vị/)).toBeInTheDocument();
+    expect(screen.getByText(/xếp theo lượt/)).toBeInTheDocument();
+  });
+});

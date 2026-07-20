@@ -159,6 +159,9 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/officer/availability", "action": "POST"},
         {"subject": "{role}", "object": "/api/officer/my-kpi-plan", "action": "GET"},  # Gap 2
         {"subject": "{role}", "object": "/api/officer/recommendations", "action": "GET"},  # Phase 7
+        # Bảng "điểm bận" — officer xem được CẢ ĐƠN VỊ mình (minh bạch cách chia
+        # lead). Accountant kế thừa officer nên có DENY riêng ở ACCOUNTANT_TEMPLATE.
+        {"subject": "{role}", "object": "/api/officer/distribution-panel", "action": "GET"},  # noqa: E501
         # Admissions access (Admission Profile workflow)
         {"subject": "{role}", "object": "/api/admissions", "action": "GET"},   # List profiles
         {"subject": "{role}", "object": "/api/admissions", "action": "POST"},  # Create profile
@@ -338,6 +341,10 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # These are ADDITIONAL accountant-only permissions (Finance operations)
         # Accountant does NOT inherit Manager (separation of duties)
         # =========================================================================
+        # DENY bảng "điểm bận": kế thừa officer sẽ allow, nhưng endpoint này lộ
+        # TÊN + TẢI của cả phòng tư vấn — ngoài phạm vi kế toán. Deny tường minh ở
+        # policy layer (không chỉ dựa dependency fail-close).
+        {"subject": "{role}", "object": "/api/officer/distribution-panel", "action": "GET", "eft": "deny"},  # noqa: E501
         # Profile access (SELF only)
         {"subject": "{role}", "object": "/api/profile", "action": "GET"},
         {"subject": "{role}", "object": "/api/profile", "action": "PUT"},

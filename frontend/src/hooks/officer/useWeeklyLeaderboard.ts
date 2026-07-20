@@ -12,6 +12,8 @@ export const officerKeys = {
     filters?.unitId,
     filters?.officerId,
   ] as const,
+  distributionPanel: (unitId?: number | null) =>
+    [...officerKeys.all, "distribution-panel", unitId ?? null] as const,
   upcomingActivities: (month: number, year: number) => [...officerKeys.all, "upcoming-activities", month, year] as const,
   recommendations: (limit: number, startDate?: string, endDate?: string) =>
     [...officerKeys.all, "recommendations", limit, startDate, endDate] as const,
