@@ -113,10 +113,14 @@ TUITION_SCHEDULE: dict[str, dict] = {
         "hk1": 9_200_000, "discount_percent": 0,
         "first": 4_500_000, "second": 4_700_000,
     },
-    # ⚠️ Mã CNTT Trung cấp là 5480202 ("Công nghệ thông tin (ứng dụng phần
-    # mềm)") theo dữ liệu production. Bảng thu bản giấy ghi 5480201 — nhưng
-    # 5480201 chính là mã CNTT CAO ĐẲNG, dùng nhầm thì mọi hồ sơ CNTT-TC bị
-    # chặn phát giấy.
+    # ⚠️ ĐỪNG "sửa lại cho khớp bảng thu bản giấy". Bảng giấy ghi 5480201,
+    # nhưng production KHÔNG CÓ mã đó: ngành CNTT Trung cấp trên hệ thống là
+    # 5480202 ("Công nghệ thông tin (ứng dụng phần mềm)") — đã đối chiếu
+    # major_program trên prod 19-07, và user chốt "mã theo production" 20-07.
+    # Đổi về 5480201 thì không tra được dòng nào ⇒ CHẶN SẠCH mọi hồ sơ CNTT-TC
+    # (16 hồ sơ tại thời điểm đối chiếu).
+    # (Ghi chú: 6480201 mới là mã CNTT CAO ĐẲNG — xem dòng "6480201" ở trên.
+    # Bản comment trước ở đây nói 5480201 là mã Cao đẳng: SAI.)
     "5480202": {  # Công nghệ thông tin (ứng dụng phần mềm)
         "hk1": 9_200_000, "discount_percent": 0,
         "first": 4_500_000, "second": 4_700_000,

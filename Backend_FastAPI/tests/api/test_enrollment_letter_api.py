@@ -449,6 +449,140 @@ async def test_build_letter_data_binds_major_degree_and_real_fee(
     assert data["signatory_name"]
 
 
+async def test_active_fee_lookup_sees_amount_committed_by_another_session(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Guard "học phí đổi giữa lúc render" phải THẤY được thay đổi.
+
+    ``issue_enrollment_letter`` gọi ``_get_active_hk1_tuition_fee`` HAI lần trên
+    CÙNG một session: lần đầu ở ``build_letter_data``, lần sau sau khi có khoá,
+    rồi so tổng học phí hai lần. Mặc định SQLAlchemy trả instance trong identity
+    map và giữ nguyên thuộc tính đã nạp ⇒ lần hai đọc lại giá trị cũ và phép so
+    trở thành "so một giá trị với chính nó" — guard chết mà mọi test vẫn xanh.
+
+    Test PHẢI đổi số bằng một session KHÁC đã commit; đổi trong cùng session sẽ
+    xanh giả vì session đó đương nhiên nhìn thấy thay đổi của chính nó.
+    """
+    from app.services.enrollment_letter_service import (
+        _get_active_hk1_tuition_fee,
+    )
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"reread{uuid.uuid4().hex[:6]}",
+    )
+    await _seed_hk1_fee(profile_id)
+
+    async with AsyncSessionLocal() as session:
+        first = await _get_active_hk1_tuition_fee(session, profile_id)
+        assert int(first.final_amount) == 9_200_000
+
+        # Session KHÁC, đã commit — đúng kịch bản kế toán sửa tiền giữa lúc ta
+        # đang render PDF.
+        async with AsyncSessionLocal() as other:
+            async with other.begin():
+                fee_other = await other.get(Fee, first.id)
+                fee_other.final_amount = Decimal("9900000")
+
+        second = await _get_active_hk1_tuition_fee(session, profile_id)
+        assert int(second.final_amount) == 9_900_000, (
+            "đọc lại vẫn ra số cũ — identity map che mất thay đổi, guard "
+            "fee_changed_during_render không thể kích hoạt"
+        )
+
+
+async def test_build_letter_data_rejects_fee_from_another_academic_year(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Fee thuộc năm học khác năm của bảng thu ⇒ chặn.
+
+    Bảng thu chỉ đúng cho MỘT mùa tuyển sinh. (Đối chiếu prod 20-07: cả 341 hồ
+    sơ HK1 đang là academic_year=2026 nên cửa này không chặn nhầm ai; nó chặn
+    đúng hồ sơ mùa sau nếu ai đó quên cập nhật bảng thu.)
+    """
+    from app.utils.exceptions import ValidationError
+
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"year{uuid.uuid4().hex[:8]}",
+    )
+    major_id = await _get_or_create_scheduled_major()
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            session.add(
+                Fee(
+                    admission_profile_id=profile_id,
+                    fee_type="tuition",
+                    academic_year=2027,  # bảng thu là của mùa 2026
+                    semester_no=1,
+                    base_amount=Decimal("9200000"),
+                    final_amount=Decimal("9200000"),
+                    status=FeeStatusEnum.invoiced.value,
+                    resolved_major_id=major_id,
+                    resolved_degree_level="Trung cấp",
+                )
+            )
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        with pytest.raises(ValidationError) as exc:
+            await build_letter_data(session, profile)
+
+    assert "2027" in str(exc.value) and "2026" in str(exc.value)
+
+
+async def test_amount_drift_error_does_not_advise_recalculating_fee(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Thông báo lệch số KHÔNG được khuyên bấm tính lại học phí.
+
+    Nguồn lệch nhiều khả năng nhất là hồ sơ được giảm/chỉnh học phí thủ công
+    (applied_discount source='manual_discount'); officer làm theo lời khuyên đó
+    sẽ xoá đúng khoản chỉnh tay mà kế toán vừa nhập.
+    """
+    from app.utils.exceptions import ValidationError
+
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"advice{uuid.uuid4().hex[:6]}",
+    )
+    major_id = await _get_or_create_scheduled_major()
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            session.add(
+                Fee(
+                    admission_profile_id=profile_id,
+                    fee_type="tuition",
+                    academic_year=2026,
+                    semester_no=1,
+                    base_amount=Decimal("9200000"),
+                    final_amount=Decimal("7000000"),  # đã giảm tay
+                    status=FeeStatusEnum.invoiced.value,
+                    resolved_major_id=major_id,
+                    resolved_degree_level="Trung cấp",
+                )
+            )
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        with pytest.raises(ValidationError) as exc:
+            await build_letter_data(session, profile)
+
+    msg = str(exc.value)
+    assert "kế toán" in msg, "phải hướng officer sang người, không sang nút bấm"
+    assert "ĐỪNG bấm tính lại" in msg
+
+
 async def test_build_letter_data_rejects_major_missing_from_schedule(
     seed_lead_dependencies: dict,
     officer_user_in_db: dict,

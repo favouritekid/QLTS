@@ -7,13 +7,18 @@ profile's active HK1 tuition Fee), render the PDF off the event loop, persist
 the bytes to disk (atomic + sha256 + retention) and record an ``EnrollmentLetter``
 issuance row. The router commits; this service only flushes (arch rule).
 
-SỐ TIỀN bám ACTIVE HK1 tuition ``Fee`` của hồ sơ (final_amount, trừ đã nộp /
-được miễn) — không bao giờ tính lại — nên học phí in ra khớp khoản thu thật.
-NGÀNH + TRÌNH ĐỘ thì resolve theo NGUYỆN VỌNG rồi ĐỐI CHIẾU với ngành mà tiền
-đã tính theo (xem ``_resolve_admitted_major``): giấy ghi "Đã trúng tuyển ngành
-X" nên X phải là nguyện vọng, và lệch giữa hai nguồn thì KHÔNG phát giấy.
-Thiếu Fee (hoặc bất kỳ trường bắt buộc nào) → lỗi "thiếu dữ liệu" thay vì phát
-ra một tờ giấy khuyết.
+SỐ TIỀN in trên giấy lấy từ BẢNG THU của Nhà trường
+(``constants.enrollment_letter.TUITION_SCHEDULE``, tra theo mã ngành), KHÔNG
+dẫn xuất từ Fee và **KHÔNG trừ phần thí sinh đã nộp trước** (quyết định nghiệp
+vụ 20-07: mọi giấy cùng ngành in cùng một bảng thu, việc đối trừ tiền giữ chỗ
+làm tại quầy). Fee vẫn BẮT BUỘC phải có và tổng của nó phải KHỚP bảng thu —
+lệch thì không phát giấy, vì khi đó hai nguồn đang nói hai số khác nhau.
+
+NGÀNH + TRÌNH ĐỘ resolve theo NGUYỆN VỌNG rồi ĐỐI CHIẾU với ngành mà tiền đã
+tính theo (xem ``_resolve_admitted_major``): giấy ghi "Đã trúng tuyển ngành X"
+nên X phải là nguyện vọng, và lệch giữa hai nguồn thì KHÔNG phát giấy. Thiếu
+Fee (hoặc bất kỳ trường bắt buộc nào) → lỗi "thiếu dữ liệu" thay vì phát ra một
+tờ giấy khuyết.
 """
 
 from __future__ import annotations
@@ -52,6 +57,17 @@ async def _get_active_hk1_tuition_fee(db, profile_id: int):
     Active = ``status != cancelled`` (a unique partial index guarantees at most
     one such fee per profile for tuition — see ``Fee.__table_args__``). Eager
     loads ``resolved_major`` so the ngành name is available without a lazy load.
+
+    ``populate_existing=True`` là BẮT BUỘC, không phải tối ưu. Hàm này được gọi
+    HAI lần trong cùng một session: lần đầu ở ``build_letter_data``, lần sau ở
+    ``issue_enrollment_letter`` để kiểm lại số tiền sau khi đã có khoá. Mặc định
+    SQLAlchemy trả lại chính instance trong identity map và GIỮ NGUYÊN các thuộc
+    tính đã nạp — nên lần gọi thứ hai đọc lại đúng giá trị cũ và phép so
+    "tiền bây giờ vs tiền lúc render" thành so một giá trị với chính nó: guard
+    không bao giờ kích hoạt được. (Ca Fee bị huỷ vẫn bắt được vì SQL lọc
+    ``status != cancelled`` nên trả None/row khác — chỉ ca SỬA final_amount tại
+    chỗ là lọt, và đó đúng là ca giấy in sai số tiền.) Cùng lớp lỗi với
+    ``get_for_update`` không re-read khi instance đã nằm trong session.
     """
     stmt = (
         select(models.Fee)
@@ -63,6 +79,7 @@ async def _get_active_hk1_tuition_fee(db, profile_id: int):
         )
         .options(selectinload(models.Fee.resolved_major))
         .order_by(models.Fee.created_at.desc())
+        .execution_options(populate_existing=True)
     )
     return (await db.execute(stmt)).scalars().first()
 
@@ -243,11 +260,17 @@ def _resolve_tuition_schedule(
             fee_total=total,
             schedule_total=row["hk1"],
         )
+        # ⚠️ KHÔNG khuyên "hãy tính lại học phí" ở đây. Lệch số rất có thể là do
+        # hồ sơ được giảm/chỉnh học phí THỦ CÔNG (applied_discount
+        # source='manual_discount') — bấm tính lại sẽ XOÁ MẤT chính khoản chỉnh
+        # tay đó. Lệch ở đây là việc của người, không phải việc của một nút bấm.
         raise ValidationError(
             f"Không thể tạo giấy báo nhập học — học phí kỳ I của hồ sơ là "
             f"{total:,.0f} đồng nhưng bảng thu ngành '{major_name}' ghi "
-            f"{row['hk1']:,.0f} đồng. Hai số phải khớp nhau; hãy tính lại học "
-            f"phí hoặc báo bộ phận kỹ thuật cập nhật bảng thu."
+            f"{row['hk1']:,.0f} đồng. Nếu hồ sơ này được giảm/chỉnh học phí "
+            f"riêng thì giấy báo (in theo bảng thu chung) không phản ánh đúng số "
+            f"phải nộp — hãy liên hệ kế toán để đối chiếu. ĐỪNG bấm tính lại học "
+            f"phí: thao tác đó xoá khoản chỉnh tay."
         )
 
     return row
