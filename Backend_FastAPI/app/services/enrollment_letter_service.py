@@ -88,7 +88,8 @@ async def _resolve_admitted_major(db, profile, fee):
     ĐỐI CHIẾU với ngành mà tiền đã tính theo; lệch nhau thì KHÔNG phát giấy, vì
     một tờ giấy ghi ngành A kèm học phí của ngành B là văn bản tự mâu thuẫn.
 
-    Trả về ``(major_name, degree_level, offering_type|None)``. Ném
+    Trả về ``(major_name, degree_level, offering_type|None, major_code|None)``.
+    ``major_code`` là khoá tra ``TUITION_SCHEDULE`` (bảng thu học phí). Ném
     ``ValidationError`` với lý do đọc được nếu không xác định được ngành, Fee
     chưa gắn ngành, hoặc hai nguồn lệch nhau.
     """
@@ -128,6 +129,8 @@ async def _resolve_admitted_major(db, profile, fee):
                     # thí sinh hệ Liên thông / Vừa làm vừa học nhận giấy chính
                     # thức ghi sai hệ.
                     models.ProgramOffering.offering_type,
+                    # Mã ngành = khoá tra bảng thu học phí (TUITION_SCHEDULE).
+                    models.MajorProgram.code,
                 )
                 .select_from(models.OfferingAcademicInfo)
                 .join(
@@ -148,7 +151,13 @@ async def _resolve_admitted_major(db, profile, fee):
     # --- Nguồn 2 (đối chứng / dự phòng): snapshot đã đóng băng trên Fee ---
     snap_major = fee.resolved_major if fee is not None else None
     snap = (
-        (snap_major.id, snap_major.name, fee.resolved_degree_level, None)
+        (
+            snap_major.id,
+            snap_major.name,
+            fee.resolved_degree_level,
+            None,
+            snap_major.code,
+        )
         if snap_major and snap_major.name
         else None
     )
@@ -182,7 +191,66 @@ async def _resolve_admitted_major(db, profile, fee):
         )
 
     chosen = live or snap
-    return chosen[1], chosen[2], chosen[3]
+    return chosen[1], chosen[2], chosen[3], chosen[4]
+
+
+def _resolve_tuition_schedule(
+    major_code, major_name, degree_level, fee, total: int
+) -> dict:
+    """Tra bảng thu học phí kỳ I theo MÃ NGÀNH và đối chiếu với Fee.
+
+    FAIL-CLOSED ở cả ba cửa (quyết định 19-07). Giấy báo là văn bản chính thức
+    có chữ ký Hiệu trưởng, nên "không phát được, báo lỗi rõ" luôn tốt hơn "phát
+    ra một tờ ghi sai số tiền":
+
+    1. Ngành chưa có trong bảng thu (ngành mới mở, hoặc mã lệch) — không có mức
+       đợt nào để in.
+    2. Fee thuộc năm học khác năm của bảng thu — bảng thu chỉ đúng cho MỘT mùa,
+       in mức của mùa này lên hồ sơ mùa khác là sai.
+    3. Tổng học phí trong hệ thống lệch tổng của bảng thu — hai nguồn đang nói
+       hai số khác nhau; chọn bừa một bên là đoán.
+
+    Trả về dict dòng bảng thu (``hk1``/``discount_percent``/``first``/``second``).
+    """
+    row = C.TUITION_SCHEDULE.get((major_code or "").strip())
+    if row is None:
+        log.warning(
+            "enrollment_letter.tuition_schedule_missing",
+            major_code=major_code,
+            major_name=major_name,
+            degree_level=degree_level,
+        )
+        raise ValidationError(
+            f"Không thể tạo giấy báo nhập học — ngành '{major_name}' "
+            f"({degree_level}, mã {major_code or 'chưa có'}) chưa có trong bảng "
+            f"thu học phí của giấy báo. Hãy báo bộ phận kỹ thuật bổ sung bảng "
+            f"thu trước khi phát giấy."
+        )
+
+    year = getattr(fee, "academic_year", None)
+    if year != C.TUITION_SCHEDULE_ACADEMIC_YEAR:
+        raise ValidationError(
+            f"Không thể tạo giấy báo nhập học — học phí của hồ sơ thuộc năm học "
+            f"{year or 'không xác định'}, trong khi bảng thu trên giấy báo là "
+            f"của mùa tuyển sinh {C.TUITION_SCHEDULE_ACADEMIC_YEAR}. Hãy báo bộ "
+            f"phận kỹ thuật cập nhật bảng thu."
+        )
+
+    if total != row["hk1"]:
+        log.warning(
+            "enrollment_letter.tuition_amount_drift",
+            major_code=major_code,
+            fee_total=total,
+            schedule_total=row["hk1"],
+        )
+        raise ValidationError(
+            f"Không thể tạo giấy báo nhập học — học phí kỳ I của hồ sơ là "
+            f"{total:,.0f} đồng nhưng bảng thu ngành '{major_name}' ghi "
+            f"{row['hk1']:,.0f} đồng. Hai số phải khớp nhau; hãy tính lại học "
+            f"phí hoặc báo bộ phận kỹ thuật cập nhật bảng thu."
+        )
+
+    return row
 
 
 def _school_year_label(fee) -> str:
@@ -241,9 +309,12 @@ async def build_letter_data(db, profile) -> dict:
     # phí đã tính theo (xem ``_resolve_admitted_major``). Chạy SAU khối
     # ``missing`` vì nó cần fee, và nó tự ném ValidationError với lý do riêng
     # thay vì gộp vào danh sách "thiếu dữ liệu".
-    major_name, degree_level, offering_type = await _resolve_admitted_major(
-        db, profile, fee
-    )
+    (
+        major_name,
+        degree_level,
+        offering_type,
+        major_code,
+    ) = await _resolve_admitted_major(db, profile, fee)
     if not degree_level:
         # Trình độ KHÔNG được để trống: dữ liệu thật có ngành trùng tên giữa
         # Cao đẳng và Trung cấp, nên "Đã trúng tuyển ngành: Kế toán" một mình
@@ -253,14 +324,30 @@ async def build_letter_data(db, profile) -> dict:
             "ngành trúng tuyển. Hãy tính lại học phí trước khi phát giấy."
         )
 
-    # Số ĐỢT 1 thực sự in trên giấy = phần bị kẹp theo số còn phải nộp, không
-    # phải hằng FIRST_INSTALLMENT. Snapshot phải ghi ĐÚNG SỐ ĐÃ IN, nếu không
-    # nó nói dối chính tờ giấy nó mô tả.
+    # Danh mục hồ sơ mang theo khác nhau giữa Cao đẳng và Trung cấp. Không tra
+    # được ⇒ KHÔNG phát: một tờ giấy ghi sai danh mục khiến thí sinh đi cả trăm
+    # cây số tới trường rồi phải quay về lấy giấy tờ.
+    required_documents = C.documents_for_degree(degree_level)
+    if required_documents is None:
+        log.warning(
+            "enrollment_letter.documents_missing_for_degree",
+            profile_id=profile.id,
+            degree_level=degree_level,
+        )
+        raise ValidationError(
+            f"Không thể tạo giấy báo nhập học — chưa có danh mục hồ sơ nhập học "
+            f"cho trình độ '{degree_level}'. Hãy báo bộ phận kỹ thuật bổ sung "
+            f"trước khi phát giấy."
+        )
+
+    # --- Khối tiền: tra BẢNG THU của Nhà trường theo mã ngành ---------------
+    # Các mức đợt là mức CHUẨN của bảng thu, KHÔNG trừ phần đã nộp trước (quyết
+    # định nghiệp vụ 19-07): phần lớn hồ sơ đã nộp giữ chỗ 2,5tr và việc đối trừ
+    # được thực hiện tại quầy khi thí sinh đến đóng, không thể hiện trên giấy.
     _total = max(0, int(round(fee.final_amount or 0)))
-    _paid = max(0, int(round(fee.paid_amount or 0)))
-    _waived = max(0, int(round(fee.waived_amount or 0)))
-    _remaining = max(0, _total - min(_total, _paid + _waived))
-    _first_installment = min(_remaining, C.FIRST_INSTALLMENT)
+    schedule = _resolve_tuition_schedule(
+        major_code, major_name, degree_level, fee, _total
+    )
 
     return {
         "full_name": full_name,
@@ -279,13 +366,9 @@ async def build_letter_data(db, profile) -> dict:
         # round (not truncate) so a hypothetical fractional discount never
         # under-states the charge on the official letter; VND fees are whole.
         "hk1_fee_amount": _total,
-        # ĐÃ NỘP / ĐƯỢC MIỄN đi kèm để giấy in đúng số CÒN PHẢI NỘP. Luồng
-        # prepay (giữ chỗ) cho phép đóng HK1 khi hồ sơ còn `submitted`, nên một
-        # thí sinh đã trả trước rất dễ được duyệt rồi nhận giấy — in
-        # `final_amount` gộp là đòi lại tiền họ đã đóng, trên văn bản có chữ ký
-        # Hiệu trưởng. (Fee đã miễn toàn phần cũng vào đây thay vì bị đòi đủ.)
-        "hk1_paid_amount": _paid,
-        "hk1_waived_amount": _waived,
+        # Mã ngành = khoá đã tra bảng thu. Lưu lại để hậu kiểm truy được dòng
+        # bảng thu nào đã sinh ra các con số dưới đây.
+        "major_code": major_code,
         "fee_id": fee.id,
         # Nhãn năm học DẪN XUẤT từ chính Fee đang render (quy ước dùng khắp
         # repo: fees.py / invoices.py), KHÔNG lấy hằng process-wide — nếu không
@@ -294,7 +377,14 @@ async def build_letter_data(db, profile) -> dict:
         # Literal ĐÃ IN lên giấy được chụp lại cùng: đây là official record,
         # mà mọi hằng dưới đây đều có thể đổi giữa các mùa tuyển sinh. Không
         # lưu thì sau retention không còn gì đối chiếu "giấy đã nói gì".
-        "first_installment": _first_installment,
+        # Bảng thu có thể được sửa cho mùa sau, nên các mức đợt + hạn nộp phải
+        # nằm trong snapshot chứ không tra lại lúc đọc.
+        "required_documents": required_documents,
+        "tuition_discount_percent": schedule["discount_percent"],
+        "first_installment": schedule["first"],
+        "second_installment": schedule["second"],
+        "first_installment_due": C.INSTALLMENT_1_DUE.isoformat(),
+        "second_installment_due": C.INSTALLMENT_2_DUE.isoformat(),
         "bank_account_number": C.BANK_ACCOUNT_NUMBER,
         "bank_account_name": C.BANK_ACCOUNT_NAME,
         "bank_name": C.BANK_NAME,
@@ -429,13 +519,16 @@ async def issue_enrollment_letter(
     # giữa lúc ta đang render, và giấy sẽ mang số tiền của một Fee đã cancelled
     # với ``data_snapshot.fee_id`` trỏ vào đó. Chỉ kiểm status là bỏ sót đúng
     # thứ tờ giấy nói ra.
+    # Chỉ kiểm ĐÚNG những gì tờ giấy nói: id Fee + TỔNG học phí (các mức đợt là
+    # hằng của bảng thu, tra từ tổng này). Phần đã nộp / được miễn KHÔNG còn in
+    # trên giấy nữa nên một khoản thu vừa vào trong lúc render không được phép
+    # làm hỏng lần phát hành — kiểm cả hai như trước sẽ chặn oan đúng nhóm hồ sơ
+    # prepay vốn đang đóng tiền liên tục.
     fee_now = await _get_active_hk1_tuition_fee(db, profile.id)
     if (
         fee_now is None
         or fee_now.id != data.get("fee_id")
         or int(round(fee_now.final_amount or 0)) != data.get("hk1_fee_amount")
-        or int(round(fee_now.paid_amount or 0)) != data.get("hk1_paid_amount")
-        or int(round(fee_now.waived_amount or 0)) != data.get("hk1_waived_amount")
     ):
         await to_thread.run_sync(_best_effort_delete, final_path)
         log.warning(

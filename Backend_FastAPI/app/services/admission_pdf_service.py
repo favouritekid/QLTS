@@ -378,15 +378,6 @@ def _styles(fonts: dict[str, Any]) -> dict[str, ParagraphStyle]:
     }
 
 
-def _installments(remaining: int) -> tuple[int, int]:
-    """Chia khoản CÒN PHẢI NỘP thành đợt 1 (mức cố định ``FIRST_INSTALLMENT``,
-    kẹp theo số còn lại) + đợt 2 (phần dư). Số còn lại thấp/bằng 0 thu về một
-    đợt duy nhất (đợt 2 = 0, không render)."""
-    remaining = max(0, int(remaining))
-    first = min(remaining, C.FIRST_INSTALLMENT)
-    return first, remaining - first
-
-
 def _two_col(left: str, right: str, st: dict, split: float = 0.60) -> Table:
     """Hai vế trên CÙNG một dòng, thẳng cột — thay cho tab của Word
     ("Thí sinh: X    Ngày sinh: Y")."""
@@ -434,26 +425,23 @@ def _money_rows(rows: list[tuple[str, str]], st: dict) -> Table:
     return t
 
 
-def _fee_lines(data: dict, end_str: str, st: dict) -> list[Any]:
-    """Khối học phí — bám SỐ THẬT của Fee.
+def _fee_lines(data: dict, st: dict) -> list[Any]:
+    """Khối học phí — in MỨC CHUẨN của bảng thu Nhà trường.
 
-    Giấy in TỔNG học phí, phần ĐÃ NỘP / ĐƯỢC MIỄN (nếu có) và số CÒN PHẢI
-    NỘP; các đợt chia trên số còn lại. Trước đây khối này in thẳng
-    ``final_amount`` gộp, nên một thí sinh đã đóng trước (luồng prepay/giữ chỗ)
-    nhận giấy chính thức đòi lại toàn bộ số tiền đã trả.
+    Các con số (tổng, mức từng đợt, hạn nộp, tỉ lệ ưu đãi) đã được
+    ``build_letter_data`` tra từ ``TUITION_SCHEDULE`` theo mã ngành và đối chiếu
+    với Fee, nên ở đây chỉ còn việc trình bày.
+
+    Giấy KHÔNG in phần thí sinh đã nộp trước (quyết định nghiệp vụ 19-07): mọi
+    giấy của cùng một ngành in cùng một bảng thu, việc đối trừ tiền giữ chỗ diễn
+    ra tại quầy khi thí sinh đến đóng.
     """
     total = max(0, int(data.get("hk1_fee_amount") or 0))
-    paid = max(0, int(data.get("hk1_paid_amount") or 0))
-    waived = max(0, int(data.get("hk1_waived_amount") or 0))
-    # Kẹp để tổng LUÔN bằng các thành phần in bên dưới, kể cả với dữ liệu lệch.
-    # Kẹp theo TỔNG, không kẹp từng phần độc lập: `min(paid,total)` và
-    # `min(waived,total)` riêng rẽ cho ra hai dòng cộng lại LỚN HƠN dòng tổng
-    # khi paid+waived > total (đã dựng được: 5tr + 6tr in dưới một dòng tổng
-    # 9,2tr). Trên văn bản có chữ ký thì đó là con số tự mâu thuẫn.
-    settled = min(total, paid + waived)
-    paid = min(paid, settled)
-    waived = settled - paid
-    remaining = total - settled
+    first = max(0, int(data.get("first_installment") or 0))
+    second = max(0, int(data.get("second_installment") or 0))
+    discount = max(0, int(data.get("tuition_discount_percent") or 0))
+    due1 = _fmt_date(data.get("first_installment_due"))
+    due2 = _fmt_date(data.get("second_installment_due"))
     school_year = _esc(data.get("school_year") or C.SCHOOL_YEAR)
 
     flow: list[Any] = [
@@ -463,31 +451,40 @@ def _fee_lines(data: dict, end_str: str, st: dict) -> list[Any]:
             st["body"],
         )
     ]
-    rows: list[tuple[str, str]] = []
-    if paid > 0:
-        rows.append(("- Đã nộp", f"{_fmt_vnd(paid)} đồng"))
-    if waived > 0:
-        rows.append(("- Được miễn giảm", f"{_fmt_vnd(waived)} đồng"))
 
-    if remaining <= 0:
-        if rows:
-            flow.append(_money_rows(rows, st))
-        flow.append(
-            Paragraph(
-                "- Thí sinh đã hoàn thành học phí học kỳ I.", st["indent"]
+    if discount > 0:
+        # Ngành ưu đãi: nộp MỘT lần, và chính việc nộp đủ trước hạn là điều kiện
+        # hưởng ưu đãi — nên câu chữ phải nói rõ điều kiện, không chỉ in số cuối.
+        rows = [
+            (
+                f"- Ưu đãi giảm {discount}% học phí kỳ I nếu nộp đủ "
+                f"đến ngày {due1}",
+                f"<b>{_fmt_vnd(first)} đồng</b>",
             )
-        )
-        return flow
-
-    if settled > 0:
-        rows.append(("- Còn phải nộp", f"<b>{_fmt_vnd(remaining)} đồng</b>"))
-    first, second = _installments(remaining)
-    rows.append(
-        (f"- Đóng đợt 1 (đến ngày {end_str})", f"<b>{_fmt_vnd(first)} đồng</b>")
-    )
-    if second > 0:
-        rows.append(("- Đóng đợt 2", f"<b>{_fmt_vnd(second)} đồng</b>"))
+        ]
+    else:
+        rows = [
+            (f"- Đóng đợt 1 (đến ngày {due1})", f"<b>{_fmt_vnd(first)} đồng</b>")
+        ]
+        if second > 0:
+            rows.append(
+                (
+                    f"- Đóng đợt 2 (đến ngày {due2})",
+                    f"<b>{_fmt_vnd(second)} đồng</b>",
+                )
+            )
     flow.append(_money_rows(rows, st))
+
+    # Quà tặng nhập học sớm — đặt SAU trọn khối đợt (không chen giữa đợt 1 và
+    # đợt 2, vì chen vào đó cắt đứt mạch con số). Áp dụng cho CẢ ngành thu 2 đợt
+    # lẫn ngành ưu đãi: mốc xét là cùng một ngày với hạn đợt 1.
+    flow.append(
+        Paragraph(
+            f"<b>- {C.EARLY_ENROLLMENT_BONUS_LABEL}:</b> "
+            + C.EARLY_ENROLLMENT_BONUS.format(due=f"<b>{due1}</b>"),
+            st["indent"],
+        )
+    )
     return flow
 
 
@@ -559,10 +556,16 @@ def _build_body(data: dict, st: dict) -> list[Any]:
             st["body"],
         ),
     ]
-    for line in C.REQUIRED_DOCUMENTS:
-        flow.append(Paragraph(f"- {line.strip()}", st["indent"]))
+    # Danh mục hồ sơ theo TRÌNH ĐỘ. Snapshot đã ghi sẵn danh mục đã in (giấy là
+    # official record, mà danh mục có thể đổi giữa các mùa); chỉ tra lại theo
+    # trình độ khi render từ dữ liệu không có key đó.
+    documents = data.get("required_documents") or C.documents_for_degree(
+        data.get("degree_level")
+    )
+    for line in documents or []:
+        flow.append(Paragraph(f"- {str(line).strip()}", st["indent"]))
 
-    flow.extend(_fee_lines(data, end_str, st))
+    flow.extend(_fee_lines(data, st))
     flow.append(Spacer(1, 1.2 * mm))
     flow.append(
         Paragraph(
@@ -682,8 +685,10 @@ def render_enrollment_letter(data: dict) -> bytes:
 
     ``data`` keys: ``full_name``, ``dob``, ``permanent_address``,
     ``major_name``, ``degree_level`` (optional), ``offering_type``,
-    ``hk1_fee_amount`` (tổng), ``hk1_paid_amount`` / ``hk1_waived_amount``
-    (optional, mặc định 0), ``school_year`` (optional → hằng fallback),
+    ``hk1_fee_amount`` (tổng), ``first_installment`` / ``second_installment`` /
+    ``first_installment_due`` / ``second_installment_due`` /
+    ``tuition_discount_percent`` (khối tiền, đã tra từ bảng thu ở
+    ``build_letter_data``), ``school_year`` (optional → hằng fallback),
     ``enrollment_start_date``, ``enrollment_end_date``, ``phone``.
     """
     fonts = _resolve_fonts()

@@ -30,6 +30,12 @@ from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models.finance import Fee, FeeStatusEnum
 from tests.conftest import _create_user_and_role, _get_token_headers
+from tests.fixtures.constants import TestOrgData
+
+# Mã ngành THẬT có trong bảng thu (app/constants/enrollment_letter.py):
+# 5510216 = Công nghệ ô tô, Trung cấp, học phí HK1 = 9.200.000.
+_SCHEDULED_MAJOR_CODE = "5510216"
+_SCHEDULED_MAJOR_ID = 9510216
 
 pytestmark = pytest.mark.asyncio
 
@@ -142,7 +148,47 @@ async def _seed_letter(
             return letter.id
 
 
-async def _seed_hk1_fee(profile_id: int, major_id: int) -> None:
+async def _get_or_create_scheduled_major() -> int:
+    """MajorProgram mang MÃ NGÀNH THẬT có trong bảng thu (``TUITION_SCHEDULE``).
+
+    Fixture chung dùng mã giả 'TM1', mà từ 19-07 khối tiền trên giấy được tra từ
+    bảng thu theo mã ngành và FAIL-CLOSED khi không tra được — nên hồ sơ gắn mã
+    giả không phát được giấy. Chọn 5510216 (Công nghệ ô tô, Trung cấp) vì tổng
+    học phí của nó = 9.200.000, đúng số các test ở đây vẫn seed.
+    """
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            existing = (
+                await session.execute(
+                    select(models.MajorProgram).where(
+                        models.MajorProgram.code == _SCHEDULED_MAJOR_CODE
+                    )
+                )
+            ).scalars().first()
+            if existing is not None:
+                return existing.id
+            # id TƯỜNG MINH: fixture chung chèn MAJOR_1 với id=1 cứng nên
+            # sequence của major_program vẫn đứng ở 1 — để SQLAlchemy tự cấp id
+            # sẽ đụng ngay khoá chính (đã tái hiện: UniqueViolation id=1).
+            major = models.MajorProgram(
+                id=_SCHEDULED_MAJOR_ID,
+                name="Công nghệ ô tô",
+                code=_SCHEDULED_MAJOR_CODE,
+                degree_level="Trung cấp",
+                unit_id=TestOrgData.UNIT_1["id"],
+            )
+            session.add(major)
+            await session.flush()
+            return major.id
+
+
+async def _seed_hk1_fee(profile_id: int, major_id: int | None = None) -> None:
+    """Fee HK1 gắn ngành CÓ trong bảng thu, tổng khớp bảng thu (9.200.000).
+
+    ``major_id`` giữ lại cho tương thích chữ ký cũ nhưng bị BỎ QUA: gắn ngành
+    ngoài bảng thu thì build_letter_data từ chối phát giấy.
+    """
+    resolved_major_id = await _get_or_create_scheduled_major()
     async with AsyncSessionLocal() as session:
         async with session.begin():
             session.add(
@@ -154,8 +200,8 @@ async def _seed_hk1_fee(profile_id: int, major_id: int) -> None:
                     base_amount=Decimal("9200000"),
                     final_amount=Decimal("9200000"),
                     status=FeeStatusEnum.invoiced.value,  # != cancelled
-                    resolved_major_id=major_id,
-                    resolved_degree_level="Cao đẳng",
+                    resolved_major_id=resolved_major_id,
+                    resolved_degree_level="Trung cấp",
                 )
             )
 
@@ -388,15 +434,108 @@ async def test_build_letter_data_binds_major_degree_and_real_fee(
         data = await build_letter_data(session, profile)
 
     assert data["hk1_fee_amount"] == 9_200_000
-    assert data["hk1_paid_amount"] == 0
-    assert data["hk1_waived_amount"] == 0
     assert data["school_year"] == "2026-2027"  # từ fee.academic_year, không hằng
     assert data["major_name"]
     assert data["degree_level"]
-    # Literal đã in được chụp lại để còn đối chiếu sau khi retention scrub PII.
-    assert data["first_installment"] > 0
+    # Khối tiền phải là MỨC CHUẨN của bảng thu cho đúng mã ngành đã tra
+    # (5510216 Trung cấp: 4.500.000 + 4.700.000), không phải số suy từ Fee.
+    assert data["major_code"] == _SCHEDULED_MAJOR_CODE
+    assert data["first_installment"] == 4_500_000
+    assert data["second_installment"] == 4_700_000
+    assert data["tuition_discount_percent"] == 0
+    assert data["first_installment_due"] == "2026-07-31"
+    assert data["second_installment_due"] == "2026-09-30"
     assert data["bank_account_number"]
     assert data["signatory_name"]
+
+
+async def test_build_letter_data_rejects_major_missing_from_schedule(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Ngành KHÔNG có trong bảng thu ⇒ chặn phát giấy (quyết định 19-07).
+
+    Không tra được mã ngành nghĩa là không biết thu bao nhiêu mỗi đợt. Rơi về
+    một công thức mặc định sẽ in ra mức thu không đúng chính sách mà không ai
+    biết — thà chặn và báo lỗi đọc được.
+    """
+    from app.utils.exceptions import ValidationError
+
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"nosch{uuid.uuid4().hex[:7]}",
+    )
+    # Fee gắn ngành fixture mã 'TM1' — mã giả, chắc chắn ngoài bảng thu.
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            session.add(
+                Fee(
+                    admission_profile_id=profile_id,
+                    fee_type="tuition",
+                    academic_year=2026,
+                    semester_no=1,
+                    base_amount=Decimal("9200000"),
+                    final_amount=Decimal("9200000"),
+                    status=FeeStatusEnum.invoiced.value,
+                    resolved_major_id=seed_lead_dependencies["major_program_id"],
+                    resolved_degree_level="Cao đẳng",
+                )
+            )
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        with pytest.raises(ValidationError) as exc:
+            await build_letter_data(session, profile)
+
+    assert "bảng thu" in str(exc.value).lower()
+
+
+async def test_build_letter_data_rejects_amount_drift_from_schedule(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Tổng học phí trong hệ thống LỆCH bảng thu ⇒ chặn.
+
+    Hai nguồn đang nói hai số khác nhau; in bên nào cũng là đoán. Đây là lưới
+    an toàn cho đúng kịch bản dễ xảy ra nhất: ai đó sửa học phí trong phần mềm
+    mà quên cập nhật bảng thu của giấy báo (hằng số Python, phải deploy).
+    """
+    from app.utils.exceptions import ValidationError
+
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"drift{uuid.uuid4().hex[:7]}",
+    )
+    major_id = await _get_or_create_scheduled_major()
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            session.add(
+                Fee(
+                    admission_profile_id=profile_id,
+                    fee_type="tuition",
+                    academic_year=2026,
+                    semester_no=1,
+                    base_amount=Decimal("9900000"),
+                    final_amount=Decimal("9900000"),  # bảng thu ghi 9.200.000
+                    status=FeeStatusEnum.invoiced.value,
+                    resolved_major_id=major_id,
+                    resolved_degree_level="Trung cấp",
+                )
+            )
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        with pytest.raises(ValidationError) as exc:
+            await build_letter_data(session, profile)
+
+    msg = str(exc.value)
+    assert "9,900,000" in msg and "9,200,000" in msg
 
 
 async def test_build_letter_data_rejects_profile_without_fee(
@@ -570,10 +709,14 @@ async def test_major_resolved_from_choice_not_fee_snapshot(
     # Fee, rồi trỏ hồ sơ vào academic_info đó ⇒ resolve đi nhánh live và join 3
     # bảng thực sự chạy. Hệ đào tạo cố tình KHÁC mặc định để chứng minh giấy in
     # theo dữ liệu chứ không theo hằng.
+    # Cùng ngành với Fee (ngành CÓ trong bảng thu) — trỏ sang ngành khác thì
+    # guard "nguyện vọng lệch ngành đã tính phí" chặn trước, và test này không
+    # còn kiểm được nhánh live nữa.
+    scheduled_major_id = await _get_or_create_scheduled_major()
     async with AsyncSessionLocal() as session:
         async with session.begin():
             offering = models.ProgramOffering(
-                program_id=seed_lead_dependencies["major_program_id"],
+                program_id=scheduled_major_id,
                 offering_type="Liên thông",
                 is_active=True,
             )

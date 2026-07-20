@@ -46,6 +46,13 @@ def _base_data(**overrides):
         degree_level="Cao đẳng",
         offering_type="Chính quy",
         hk1_fee_amount=6_500_000,
+        # Khối tiền đã được build_letter_data tra sẵn từ bảng thu (renderer chỉ
+        # trình bày) — ở đây dựng thẳng như một dòng bảng thu thu 2 đợt.
+        tuition_discount_percent=0,
+        first_installment=4_600_000,
+        second_installment=1_900_000,
+        first_installment_due="2026-07-31",
+        second_installment_due="2026-09-30",
         enrollment_start_date=datetime.date(2026, 7, 28),
         enrollment_end_date=datetime.date(2026, 8, 5),
         phone="0906123456",
@@ -57,6 +64,17 @@ def _base_data(**overrides):
 def _text(pdf_bytes: bytes) -> str:
     reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
     return "".join((p.extract_text() or "") for p in reader.pages)
+
+
+def _flat(pdf_bytes: bytes) -> str:
+    """Text đã gộp mọi khoảng trắng về một dấu cách.
+
+    Bắt buộc khi assert một CÂU: ReportLab ngắt dòng theo bề rộng khung, nên
+    một cụm từ bình thường ('ba lô') có thể rơi vào hai dòng và
+    ``extract_text`` trả về 'ba\\nlô'. Assert thẳng trên text thô làm test đỏ
+    vì lý do trình bày, trong khi nội dung giấy hoàn toàn đúng.
+    """
+    return " ".join(_text(pdf_bytes).split())
 
 
 def _page_count(pdf_bytes: bytes) -> int:
@@ -76,6 +94,8 @@ _LONGEST = dict(
     major_name="Cao đẳng Công nghệ kỹ thuật điều khiển và tự động hoá",
     offering_type="Chính quy - Liên thông vừa làm vừa học",
     hk1_fee_amount=12_750_000,
+    first_installment=8_925_000,
+    second_installment=3_825_000,
 )
 
 
@@ -134,22 +154,108 @@ def test_bank_transfer_note_is_ascii_sanitized():
     assert "Phạm Thái Hà" in text  # display line still has accents
 
 
-def test_installments_split_first_fixed_second_remainder():
-    """HK1 is shown as đợt 1 (fixed FIRST_INSTALLMENT) + đợt 2 (remainder).
-    6.500.000 → đợt 1 = 4.000.000, đợt 2 = 2.500.000."""
-    assert pdf._installments(6_500_000) == (4_000_000, 2_500_000)
-    text = _text(pdf.render_enrollment_letter(_base_data(hk1_fee_amount=6_500_000)))
-    assert "Đóng đợt 1" in text and "4.000.000" in text
-    assert "Đóng đợt 2" in text and "2.500.000" in text
+def test_two_installments_print_their_own_due_dates():
+    """Thu 2 đợt: mỗi đợt in kèm HẠN RIÊNG của nó (31/07 và 30/09), không phải
+    ngày kết thúc nhập học của hồ sơ."""
+    text = _text(pdf.render_enrollment_letter(_base_data()))
+    assert "Đóng đợt 1" in text and "31/07/2026" in text and "4.600.000" in text
+    assert "Đóng đợt 2" in text and "30/09/2026" in text and "1.900.000" in text
 
 
-def test_low_fee_collapses_to_single_installment():
-    """A HK1 at/below the first-installment size has no đợt 2 (remainder 0),
-    so only đợt 1 (= the full amount) is printed."""
-    assert pdf._installments(3_000_000) == (3_000_000, 0)
-    text = _text(pdf.render_enrollment_letter(_base_data(hk1_fee_amount=3_000_000)))
-    assert "Đóng đợt 1" in text and "3.000.000" in text
+def test_discounted_major_prints_one_conditional_line():
+    """Ngành ưu đãi: MỘT dòng nộp duy nhất, và ưu đãi phải in thành ĐIỀU KIỆN
+    ('nếu nộp đủ đến ngày ...') — chỉ in số cuối thì thí sinh không biết vì sao
+    lệch với dòng tổng phía trên."""
+    text = _flat(
+        pdf.render_enrollment_letter(
+            _base_data(
+                hk1_fee_amount=7_000_000,
+                tuition_discount_percent=30,
+                first_installment=4_900_000,
+                second_installment=0,
+            )
+        )
+    )
+    assert "giảm 30%" in text and "nếu nộp đủ" in text and "31/07/2026" in text
+    assert "4.900.000" in text
     assert "Đóng đợt 2" not in text
+
+
+def test_required_documents_follow_the_degree_level():
+    """Danh mục hồ sơ phải theo TRÌNH ĐỘ.
+
+    Trung cấp tuyển cả thí sinh mới hoàn thành THCS, nên in yêu cầu 'Bằng tốt
+    nghiệp THPT' như bên Cao đẳng là đòi thứ họ không thể có — và thí sinh sẽ
+    tin tờ giấy có chữ ký Hiệu trưởng hơn là tin lời tư vấn qua điện thoại.
+    """
+    cd = _flat(pdf.render_enrollment_letter(_base_data(degree_level="Cao đẳng")))
+    assert "Học bạ Trung học Phổ thông" in cd
+    assert "THCS" not in cd
+
+    tc = _flat(pdf.render_enrollment_letter(_base_data(degree_level="Trung cấp")))
+    assert "THCS/THPT" in tc
+    assert "Học bạ Trung học Phổ thông hoặc bảng điểm" not in tc
+
+    # Giấy tờ tuỳ thân là phần CHUNG — phải còn ở cả hai trình độ.
+    for text in (cd, tc):
+        assert "Căn cước công dân" in text and "04 ảnh thẻ 3x4" in text
+
+
+def test_unknown_degree_level_has_no_document_list():
+    """Trình độ lạ ⇒ helper trả None để người gọi fail-closed, KHÔNG lặng lẽ rơi
+    về danh mục của một trình độ khác."""
+    from app.constants import enrollment_letter as consts
+
+    assert consts.documents_for_degree("Sơ cấp") is None
+    assert consts.documents_for_degree("") is None
+    assert consts.documents_for_degree(None) is None
+    # Chuẩn hoá hoa/thường + khoảng trắng thừa vẫn phải nhận ra.
+    assert consts.documents_for_degree("  CAO ĐẲNG ") == consts.documents_for_degree(
+        "Cao đẳng"
+    )
+
+
+def test_early_enrollment_bonus_uses_the_first_installment_due_date():
+    """Quà tặng nhập học sớm phải in đúng MỐC của đợt 1, dẫn từ dữ liệu.
+
+    Nếu câu này viết cứng một ngày riêng thì đổi hạn thu (constants) sẽ cho ra
+    tờ giấy nói hai ngày khác nhau — mà chính tờ giấy đó là căn cứ thí sinh cầm
+    đến đòi quyền lợi.
+    """
+    text = _flat(
+        pdf.render_enrollment_letter(
+            _base_data(first_installment_due="2026-08-15")
+        )
+    )
+    assert "Ưu đãi nhập học sớm" in text
+    assert "ba lô" in text and "A1" in text and "ký túc xá" in text
+    assert "15/08/2026" in text
+    assert "31/07/2026" not in text, "mốc quà tặng đang bị viết cứng"
+
+
+def test_early_enrollment_bonus_also_shown_for_discounted_majors():
+    """Ngành ưu đãi 30% chỉ có MỘT dòng nộp; quà tặng vẫn phải xuất hiện — cùng
+    mốc thời gian, nên không có lý do để nhóm này mất quyền lợi."""
+    text = _flat(
+        pdf.render_enrollment_letter(
+            _base_data(
+                hk1_fee_amount=7_000_000,
+                tuition_discount_percent=30,
+                first_installment=4_900_000,
+                second_installment=0,
+            )
+        )
+    )
+    assert "Ưu đãi nhập học sớm" in text and "ba lô" in text
+
+
+def test_letter_never_shows_what_the_candidate_already_paid():
+    """Giấy in MỨC CHUẨN của bảng thu, không đối trừ tiền giữ chỗ (quyết định
+    19-07) — việc đối trừ diễn ra tại quầy. Một dòng 'Đã nộp'/'Còn phải nộp' lọt
+    lên giấy nghĩa là hai tờ giấy cùng ngành in hai số khác nhau."""
+    text = _flat(pdf.render_enrollment_letter(_base_data()))
+    for banned in ("Đã nộp", "Còn phải nộp", "Được miễn giảm"):
+        assert banned not in text, f"giấy còn in '{banned}'"
 
 
 # --- Layout: MỘT trang ------------------------------------------------------
@@ -160,7 +266,17 @@ def test_low_fee_collapses_to_single_installment():
     [
         ({}, "dữ liệu chuẩn"),
         (_LONGEST, "dữ liệu dài nhất"),
-        ({"hk1_fee_amount": 0}, "miễn học phí (không có đợt 2)"),
+        # Dòng ưu đãi là dòng nhãn DÀI NHẤT bảng thu sinh ra ("Ưu đãi giảm 30%
+        # học phí kỳ I nếu nộp đủ đến ngày ...") → wrap 2 dòng, phải kiểm riêng.
+        (
+            {
+                "hk1_fee_amount": 7_000_000,
+                "tuition_discount_percent": 30,
+                "first_installment": 4_900_000,
+                "second_installment": 0,
+            },
+            "ngành ưu đãi (nhãn dài nhất)",
+        ),
     ],
 )
 def test_letter_fits_one_page(overrides, label):
@@ -208,41 +324,38 @@ def test_font_stacks_register_under_distinct_names():
 # --- Học phí: bám số THẬT của Fee -------------------------------------------
 
 
-def test_paid_amount_is_deducted_from_what_the_letter_asks_for():
-    """Thí sinh đã đóng trước (luồng giữ chỗ) không được nhận giấy đòi lại toàn
-    bộ số tiền: giấy in tổng, phần đã nộp, và các đợt chia trên số CÒN LẠI."""
-    text = _text(
-        pdf.render_enrollment_letter(
-            _base_data(hk1_fee_amount=9_200_000, hk1_paid_amount=4_000_000)
-        )
-    )
-    assert "9.200.000" in text  # tổng học phí vẫn hiển thị
-    assert "Đã nộp" in text
-    assert "Còn phải nộp" in text and "5.200.000" in text
-    # đợt 1 kẹp theo số còn lại: 4.000.000, đợt 2 = 1.200.000
-    assert "Đóng đợt 1" in text and "1.200.000" in text
+def test_tuition_schedule_is_internally_consistent():
+    """Bảng thu là dữ liệu gõ tay 20 dòng — một con số lệch sẽ in thẳng lên văn
+    bản có chữ ký Hiệu trưởng mà không ai phát hiện. Khoá hai bất biến:
+    thu 2 đợt ⇒ đợt1 + đợt2 == tổng; ưu đãi ⇒ đợt1 == tổng × (100−giảm)%.
+    """
+    from app.constants import enrollment_letter as consts
+
+    assert consts.TUITION_SCHEDULE, "bảng thu rỗng"
+    for code, row in consts.TUITION_SCHEDULE.items():
+        total, first = row["hk1"], row["first"]
+        second, disc = row["second"], row["discount_percent"]
+        if disc:
+            assert second == 0, f"{code}: ngành ưu đãi không được có đợt 2"
+            assert first == round(total * (100 - disc) / 100), (
+                f"{code}: đợt 1 ({first:,}) không bằng {100 - disc}% của "
+                f"{total:,}"
+            )
+        else:
+            assert first + second == total, (
+                f"{code}: {first:,} + {second:,} != {total:,}"
+            )
 
 
-def test_fully_paid_letter_asks_for_nothing():
-    """Đã đóng đủ → không in đợt nào, chỉ xác nhận đã hoàn thành."""
-    text = _text(
-        pdf.render_enrollment_letter(
-            _base_data(hk1_fee_amount=7_300_000, hk1_paid_amount=7_300_000)
-        )
-    )
-    assert "đã hoàn thành học phí" in text.lower()
-    assert "Đóng đợt 1" not in text
+def test_every_active_major_code_is_in_the_schedule():
+    """Mã ngành trong bảng thu phải đúng dạng mã ngành thật (7 chữ số, 6=Cao
+    đẳng / 5=Trung cấp). Bắt lỗi gõ mã — mã sai không tra được thì hồ sơ ngành
+    đó bị CHẶN phát giấy, và lỗi chỉ lộ ra khi officer bấm nút."""
+    from app.constants import enrollment_letter as consts
 
-
-def test_waived_fee_is_not_billed():
-    """Fee được miễn toàn phần không bị đòi tiền trên giấy chính thức."""
-    text = _text(
-        pdf.render_enrollment_letter(
-            _base_data(hk1_fee_amount=6_500_000, hk1_waived_amount=6_500_000)
-        )
-    )
-    assert "Được miễn giảm" in text
-    assert "Đóng đợt 1" not in text
+    for code in consts.TUITION_SCHEDULE:
+        assert code.isdigit() and len(code) == 7, f"mã ngành lạ: {code}"
+        assert code[0] in ("5", "6"), f"mã ngành không phải CĐ/TC: {code}"
 
 
 def test_school_year_comes_from_the_data_not_a_constant():
