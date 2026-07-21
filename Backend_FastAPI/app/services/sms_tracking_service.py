@@ -9,7 +9,7 @@ KHÔNG import fastapi; raise domain exception; service flush (router commit).
 Xem SMS_MARKETING_MODULE_DESIGN.md §6.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Mapping, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.sms_tracking_repository import SmsTrackingRepository
 from app.services.sms_resolve import GENERIC_404, resolve_code
 from app.utils.exceptions import ResourceNotFoundError
-from app.utils.sms_bot import detect_bot
+from app.utils.sms_bot import BURST_WINDOW_SECONDS, detect_bot
 from app.utils.sms_token import compute_ip_hash
 from app.utils.sms_url import host_in_allowlist
 
@@ -58,15 +58,22 @@ class SmsTrackingService:
                     raise ResourceNotFoundError(detail=GENERIC_404)
             else:
                 target = f"/lp/{code}"
-            # mobile_channel=True: lượt này đến TỪ TIN SMS → chỉ mở được trên
-            # điện thoại. UA desktop = máy quét chống spam của nhà mạng, vốn
-            # lọt hết 3 dấu hiệu cũ và thổi phồng CTR (xem sms_bot).
+            # Lượt này đến TỪ TIN SMS → bật dấu hiệu chùm quét nhà mạng: cùng
+            # một UA không-di-động mở link của nhiều người nhận khác trong ít
+            # giây (xem sms_bot). Đếm TRƯỚC khi ghi click hiện tại.
+            same_ua_recipients = await self.repo.count_recent_same_ua_recipients(
+                user_agent=user_agent,
+                campaign_id=resolved.recipient.campaign_id,
+                since=now - timedelta(seconds=BURST_WINDOW_SECONDS),
+                exclude_recipient_id=resolved.recipient.id,
+            )
             is_bot, reason = detect_bot(
                 user_agent=user_agent,
                 headers=headers,
                 handed_off_at=resolved.recipient.handed_off_at,
                 now=now,
                 mobile_channel=True,
+                same_ua_recipients=same_ua_recipients,
             )
             await self.repo.record_click(
                 recipient_id=resolved.recipient.id,

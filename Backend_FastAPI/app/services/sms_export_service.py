@@ -38,12 +38,10 @@ from app.utils.sms_render import has_link
 
 log = logging.getLogger(__name__)
 
-# Campaign đã build, được phép export (lần đầu 'ready'; re-export idempotent
-# khi 'exported'). 'draft' = chưa build/stale; 'handed_off'/'closed' = khoá.
 # Campaign được phép export: 'ready' (lần đầu), 'exported' (re-export), và
 # 'handed_off' (re-export để RETRY batch failed của nhà mạng khác mà không
-# kẹt — xem mark_handed_off). 'draft' = chưa build/stale; 'closed' = đã bàn
-# giao hết → khoá.
+# kẹt — xem mark_handed_off). 'draft' = chưa build hoặc build đã stale;
+# 'closed' = đã bàn giao hết → khoá.
 # Public: campaign_service đọc để điền cờ `can_export` cho FE (thin-client)
 # → chỉ MỘT định nghĩa gate, không drift giữa gate thật và cờ hiển thị.
 EXPORTABLE_CAMPAIGN_STATUS = {"ready", "exported", "handed_off"}
@@ -52,6 +50,21 @@ _REGENERATE_BATCH_STATUS = {"pending", "failed", "purged", "invalidated"}
 
 
 _aware = ensure_aware  # alias tới helper tz chung (bỏ bản sao logic)
+
+
+def campaign_state_allows_export(campaign: SmsCampaign) -> bool:
+    """Campaign có ở TRẠNG THÁI cho phép export/re-export không.
+
+    MỘT nguồn sự thật cho hai chỗ: gate thật (`_assert_exportable`) và cờ
+    `can_export` mà `sms_campaign_service` gửi cho FE — thêm điều kiện mới
+    thì cả hai cùng đổi, không còn cảnh FE bật nút rồi ăn 400.
+    KHÔNG bao gồm attestation/preflight: những thứ đó FE hiển thị riêng dưới
+    dạng "còn thiếu gì" nên không được nuốt vào một cờ boolean.
+    """
+    return (
+        campaign.status in EXPORTABLE_CAMPAIGN_STATUS
+        and campaign.build_revision >= 1
+    )
 
 
 def _carrier_label(carrier_bucket: str) -> str:
@@ -105,6 +118,12 @@ class SmsExportService:
             and b.purged_at is None
             and not is_expired
         )
+        # KHÔNG cần thêm điều kiện `b.build_revision == campaign.build_revision`
+        # (gate thứ 5 của `mark_handed_off`): batch revision cũ vừa bị
+        # `invalidate_export_batches_before` đặt 'invalidated' khi build lại,
+        # vừa bị `list_batches(campaign_id, build_revision)` lọc khỏi response.
+        # ⚠️ Cờ này giờ là gate DUY NHẤT của nút "Đã bàn giao" ở FE — nếu sau
+        # này list trả cả batch revision cũ thì PHẢI thêm điều kiện đó vào đây.
         out.can_mark_handed_off = bool(
             b.status == "generated"
             and b.invalidated_at is None
@@ -123,19 +142,21 @@ class SmsExportService:
     # Gate fail-closed (§8.4)
     # ===============================================================
     def _assert_exportable(self, campaign: SmsCampaign) -> None:
+        # Phần trạng thái dùng CHUNG `campaign_state_allows_export` với cờ
+        # `can_export` gửi cho FE; chỉ các thông điệp lỗi là riêng ở đây.
         if campaign.status == "draft":
             raise BusinessRuleViolation(
                 detail="Campaign chưa Build (hoặc đã đổi nhóm/nội dung sau "
                 "Build) — Build lại trước khi export."
             )
-        if campaign.status not in EXPORTABLE_CAMPAIGN_STATUS:
-            raise BusinessRuleViolation(
-                detail="Campaign đã bàn giao/đóng — không export lại; tạo "
-                "campaign mới."
-            )
-        rev = campaign.build_revision
-        if rev < 1:
+        if not campaign_state_allows_export(campaign):
+            if campaign.status not in EXPORTABLE_CAMPAIGN_STATUS:
+                raise BusinessRuleViolation(
+                    detail="Campaign đã bàn giao/đóng — không export lại; tạo "
+                    "campaign mới."
+                )
             raise BusinessRuleViolation(detail="Campaign chưa Build.")
+        rev = campaign.build_revision
         # 3 attestation phải khớp build_revision hiện tại + có reference thật.
         missing: List[str] = []
         if campaign.consent_checked_build_revision != rev or not (
@@ -383,7 +404,7 @@ class SmsExportService:
     # Read: kết quả export + danh sách batch (GET)
     # ===============================================================
     async def get_export_result(
-        self, campaign_id: int
+        self, campaign_id: int, *, regenerated: bool = True
     ) -> sms_schemas.SmsExportResult:
         # File sinh ở session callback KHÁC → expire instance cũ trong session
         # này để list_batches đọc trạng thái mới nhất (pending→generated).
@@ -400,6 +421,15 @@ class SmsExportService:
             build_revision=campaign.build_revision,
             total_exportable=sum(b.recipient_count for b in batches),
             batches=[self._batch_out(b, now) for b in batches],
+            # Export là idempotent: mọi batch còn hạn + còn file thì KHÔNG sinh
+            # lại. Nói thẳng ra, đừng để FE báo "Đã tạo file export" cho một
+            # thao tác không tạo gì (hay gặp ở campaign 'handed_off' đang retry
+            # một nhà mạng lỗi).
+            message=(
+                None
+                if regenerated
+                else "Các file export hiện có vẫn dùng được — không sinh lại."
+            ),
         )
 
     async def list_export_batches(

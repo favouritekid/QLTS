@@ -30,6 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useUploadContacts } from "@/hooks/useSmsContacts"
+import { downloadBlob } from "@/lib/utils/download-blob"
 import type { SmsImportResult } from "@/lib/zod/sms"
 
 import {
@@ -42,23 +43,20 @@ const NONE = "none"
 
 // Header mẫu = đúng tên cột chuẩn BE. BE cũng chấp nhận biến thể tiếng Việt
 // có dấu ("Họ và tên", "SĐT"), nhưng file mẫu dùng tên chuẩn cho chắc chắn.
+// SĐT bọc ="…" — mở bằng Excel thì cột giữ nguyên dạng chữ, không bị ép thành
+// số làm mất số 0 đầu (0912… → 912…). Backend vẫn tự gỡ lớp bọc này.
 const SAMPLE_CSV = [
   "full_name,phone,note",
-  "Nguyen Van A,0912345678,Lop 12A1",
-  "Tran Thi B,0987654321,",
+  'Nguyen Van A,="0912345678",Lop 12A1',
+  'Tran Thi B,="0987654321",',
 ].join("\r\n")
 
 function downloadSampleCsv() {
   // BOM để Excel nhận UTF-8 (tên có dấu không thành ký tự lạ).
-  const blob = new Blob(["﻿" + SAMPLE_CSV], {
-    type: "text/csv;charset=utf-8",
-  })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement("a")
-  a.href = url
-  a.download = "mau-danh-sach-lien-he.csv"
-  a.click()
-  URL.revokeObjectURL(url)
+  downloadBlob(
+    new Blob(["﻿" + SAMPLE_CSV], { type: "text/csv;charset=utf-8" }),
+    "mau-danh-sach-lien-he.csv",
+  )
 }
 
 interface Props {
@@ -170,9 +168,13 @@ export function SmsImportDialog({
               <div className="text-muted-foreground space-y-1 rounded border bg-muted/40 p-2 text-xs">
                 <p>
                   Bắt buộc 2 cột: <code className="font-mono">full_name</code>{" "}
-                  và <code className="font-mono">phone</code> (chấp nhận tên
-                  tiếng Việt: “Họ và tên”, “Số điện thoại”, “SĐT”). Cột{" "}
-                  <code className="font-mono">note</code> tùy chọn.
+                  và <code className="font-mono">phone</code> — chấp nhận tên
+                  tiếng Việt (“Họ và tên”, “SĐT học sinh”, “Số điện thoại phụ
+                  huynh”). Cột <code className="font-mono">note</code> tùy chọn.
+                </p>
+                <p>
+                  Họ và tên phải nằm CHUNG một cột (file tách “Họ đệm” + “Tên”
+                  sẽ bị từ chối để tránh lưu thiếu họ).
                 </p>
                 <Button
                   type="button"

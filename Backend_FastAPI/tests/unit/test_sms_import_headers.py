@@ -11,6 +11,8 @@ Thuần logic, không chạm DB/HTTP.
 """
 import pytest
 
+from app.utils.exceptions import ValidationError
+
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
@@ -23,6 +25,11 @@ import pytest
         ["Họ tên học sinh", "Số điện thoại"],      # biến thể hay gặp
         ["  Họ tên  ", " SĐT "],                   # thừa khoảng trắng
         ["Ho ten", "So dien thoai"],               # gõ không dấu
+        # Header thật luôn có đuôi → phải khớp theo CỤM CON, không so cả chuỗi
+        ["Họ và tên học sinh", "SĐT học sinh"],
+        ["Họ tên thí sinh", "Số điện thoại phụ huynh"],
+        ["Họ và tên", "Số điện thoại (Zalo)"],
+        ["﻿Họ và tên", "SĐT"],                # BOM do Excel ghi CSV
     ],
 )
 def test_resolve_columns_accepts_vietnamese_headers(headers):
@@ -31,6 +38,54 @@ def test_resolve_columns_accepts_vietnamese_headers(headers):
     found = _resolve_columns(headers)
     assert "full_name" in found, f"không nhận cột tên trong {headers}"
     assert "phone" in found, f"không nhận cột sđt trong {headers}"
+
+
+@pytest.mark.unit
+def test_dt_column_is_never_read_as_phone():
+    """"DT" trong danh sách trường = Dân tộc, và sau khi bỏ dấu thì "ĐT"
+    (điện thoại) cũng ra "dt" → không phân biệt được. Nhận nhầm sẽ khiến cả
+    file import 0 dòng trong im lặng, tệ hơn hẳn báo thiếu cột."""
+    from app.services.sms_contact_service import _resolve_columns
+
+    found = _resolve_columns(["STT", "Họ và tên", "DT", "Lớp", "SĐT"])
+    assert found["phone"] == "SĐT"
+    assert found["full_name"] == "Họ và tên"
+
+
+@pytest.mark.unit
+def test_split_surname_given_name_rejected_loudly():
+    """File tách "Họ đệm" + "Tên": nhận cột "Tên" làm họ tên sẽ lưu tên cụt
+    mà không báo gì — chặn to tiếng thay vì hỏng dữ liệu âm thầm."""
+    from app.services.sms_contact_service import _resolve_columns
+
+    with pytest.raises(ValidationError) as exc:
+        _resolve_columns(["Họ đệm", "Tên", "SĐT"])
+    assert "gộp" in str(exc.value.detail).lower()
+
+
+@pytest.mark.unit
+def test_ten_alone_still_accepted():
+    """Chỉ có 1 cột tên (không tách họ) thì vẫn nhận như trước."""
+    from app.services.sms_contact_service import _resolve_columns
+
+    found = _resolve_columns(["Tên", "SĐT"])
+    assert found["full_name"] == "Tên"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "headers",
+    [
+        ["Tên trường", "SĐT"],      # "ten" là cụm con → không được gán bừa
+        ["Tên lớp", "SĐT"],
+        ["Tên ngành", "SĐT"],
+    ],
+)
+def test_weak_name_alias_is_exact_match_only(headers):
+    from app.services.sms_contact_service import _resolve_columns
+
+    found = _resolve_columns(headers)
+    assert "full_name" not in found
 
 
 @pytest.mark.unit
@@ -69,3 +124,27 @@ def test_slugify_still_ascii_after_refactor():
 
     assert _slugify("Trường THPT Số 1 Đông Hòa") == "truong-thpt-so-1-dong-hoa"
     assert _slugify("") == "group"
+
+
+# ===================================================================
+# Ô số điện thoại sau khi qua tay Excel
+# ===================================================================
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("0912345678", "0912345678"),        # bình thường
+        ("912345678", "0912345678"),         # Excel ép số → mất số 0 đầu
+        ('="0912345678"', "0912345678"),     # lớp bọc chống-ép-kiểu ở file mẫu
+        ('="912345678"', "0912345678"),      # bọc + đã mất số 0
+        (" 0912345678 ", "0912345678"),      # thừa khoảng trắng
+        ("+84912345678", "+84912345678"),    # dạng quốc tế: không đụng
+        ("02363822655", "02363822655"),      # số cố định: không đụng
+        ("123456789", "123456789"),          # 9 số nhưng sai đầu số → giữ nguyên
+        ("", ""),
+    ],
+)
+def test_clean_phone_cell(raw, expected):
+    from app.services.sms_contact_service import _clean_phone_cell
+
+    assert _clean_phone_cell(raw) == expected

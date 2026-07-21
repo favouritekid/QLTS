@@ -54,7 +54,7 @@ export function SmsExportSection({ campaign }: Props) {
   // với vòng đời campaign: bàn giao batch đầu đẩy campaign sang 'handed_off',
   // nếu khoá cả khu theo status thì các nhà mạng còn lại mất nút bàn giao và
   // operator tưởng đã xong (sự cố chiến dịch #6: 338/380 người kẹt).
-  const canExport = campaign.can_export === true
+  const canExport = campaign.can_export
   const [handoffTarget, setHandoffTarget] = useState<{
     id: number
     carrier: string
@@ -116,6 +116,20 @@ export function SmsExportSection({ campaign }: Props) {
             <p className="flex items-center gap-1.5 text-xs font-medium text-amber-800">
               <AlertTriangle className="h-3.5 w-3.5" />
               Chưa export được: {reasons.join(" · ")}.
+            </p>
+          </div>
+        )}
+
+        {/* Không export được vì TRẠNG THÁI (đổi nhóm sau build → 'draft', hoặc
+            đã đóng): phải nói ra, nếu không thẻ chỉ còn dòng "Bấm Export
+            Excel…" trong khi chẳng có nút nào để bấm. */}
+        {!canExport && (
+          <div className="rounded border bg-muted/40 p-2.5">
+            <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              {campaign.status === "closed"
+                ? "Chiến dịch đã đóng — mọi nhà mạng đã bàn giao xong."
+                : "Nhóm hoặc nội dung đã đổi sau lần dựng gần nhất — Build lại để export bản mới."}
             </p>
           </div>
         )}

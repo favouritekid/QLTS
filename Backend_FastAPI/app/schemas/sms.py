@@ -432,7 +432,11 @@ class SmsCampaignOut(BaseModel):
     # Gate TRẠNG THÁI export/re-export (status + đã build). KHÔNG gồm
     # attestation/preflight — FE hiển thị riêng phần "còn thiếu gì".
     # 'handed_off' VẪN true: re-export để retry batch nhà mạng lỗi (§8.4).
-    can_export: Optional[bool] = None
+    # KHÔNG đặt default: đây là cờ gate, path nào quên `_with_computed` phải
+    # vỡ ngay lúc serialize chứ không im lặng phát ra false rồi ẩn mất nút
+    # bàn giao — đúng lớp sự cố #6. Cả 6 endpoint trả SmsCampaignOut hiện đều
+    # đi qua `_with_computed`.
+    can_export: bool
 
 
 class SmsCampaignList(BaseModel):
