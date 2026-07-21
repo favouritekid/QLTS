@@ -604,19 +604,27 @@ def refresh_admission_derived_task(self):
     task_log = logging.getLogger(task_name)
 
     async def _run() -> dict:
+        from sqlalchemy.orm import joinedload
+        from ..models import ProfileDocument, ProfileSubjectScore
         from ..models.admission import AdmissionProfile
-        from ..models.profile_data import ProfileSubjectScore
         from ..repositories.admission_repository import _choices_eager_load_options
         from ..services.admission_service import refresh_derived_fields
 
         result = {"scanned": 0, "refreshed": 0, "failed": 0}
 
         async with task_db_session() as session:
+            # Eager PHẢI phủ mọi quan hệ refresh_derived_fields chạm (sync, không
+            # được lazy-load): lead (gpa_only) + subject_scores→subject +
+            # documents→document_type (validator đọc doc.document_type.code) +
+            # choices graph (multi-NV criteria/subject-group live).
             stmt = (
                 select(AdmissionProfile)
                 .options(
                     *_choices_eager_load_options(),
-                    selectinload(AdmissionProfile.documents),
+                    selectinload(AdmissionProfile.lead),
+                    selectinload(AdmissionProfile.documents).joinedload(
+                        ProfileDocument.document_type
+                    ),
                     selectinload(AdmissionProfile.subject_scores).selectinload(
                         ProfileSubjectScore.subject
                     ),
