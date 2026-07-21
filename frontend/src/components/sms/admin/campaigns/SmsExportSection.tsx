@@ -138,7 +138,11 @@ export function SmsExportSection({ campaign }: Props) {
           <Skeleton className="h-16 w-full" />
         ) : batches.length === 0 ? (
           <p className="text-muted-foreground py-3 text-center text-sm">
-            Chưa có file export. Bấm “Export Excel” để sinh 1 file / nhà mạng.
+            {/* Đừng bảo người ta bấm một nút không tồn tại: khi trạng thái
+                không cho export thì nút "Export Excel" đã bị ẩn. */}
+            {canExport
+              ? "Chưa có file export. Bấm “Export Excel” để sinh 1 file / nhà mạng."
+              : "Chưa có file export cho bản dựng hiện tại."}
           </p>
         ) : (
           <div className="divide-y">
