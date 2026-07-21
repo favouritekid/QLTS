@@ -66,7 +66,7 @@ import type {
   EventGroupPreferencesResponse,
   UserSessionListResponse,
 } from '@/types/api.types';
-import type { AdmissionListParams, AdmissionProfileResponse, AdmissionsPage } from '@/lib/zod/admissions';
+import type { AdmissionListParams, AdmissionProfileResponse, AdmissionsPageLite } from '@/lib/zod/admissions';
 import type { EnhancedOfficerStats } from '@/hooks/useDashboardStats';
 import type { CollaboratorsPage } from '@/types/collaborator.types';
 import type {
@@ -582,8 +582,8 @@ const admissions = {
   /**
    * List admission profiles (Server-Side)
    */
-  async listProfiles(params?: AdmissionListParams): Promise<AdmissionsPage> {
-    return serverFetch<AdmissionsPage>('/api/admissions', {
+  async listProfiles(params?: AdmissionListParams): Promise<AdmissionsPageLite> {
+    return serverFetch<AdmissionsPageLite>('/api/admissions', {
       params: params as Record<string, unknown> | undefined,
     });
   },

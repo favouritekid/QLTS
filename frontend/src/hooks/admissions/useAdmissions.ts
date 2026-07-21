@@ -21,7 +21,7 @@ import type {
   AdmissionProfileResponse,
   AdmissionProfileUpdate,
   AdmissionListParams,
-  AdmissionsPage,
+  AdmissionsPageLite,
   AdmissionStatusCounts,
   AdmissionStats,
   BulkApproveRequest,
@@ -54,7 +54,7 @@ export const admissionsKeys = {
 
 export function useListAdmissions(
   filters?: AdmissionListParams,
-  options?: { initialData?: AdmissionsPage }
+  options?: { initialData?: AdmissionsPageLite }
 ) {
   return useQuery({
     queryKey: admissionsKeys.list(filters as Record<string, unknown> | undefined),

@@ -1279,6 +1279,42 @@ export const admissionsPageSchema = z.object({
 export type AdmissionsPage = z.infer<typeof admissionsPageSchema>
 
 /**
+ * DTO NHẸ cho BẢNG danh sách /admissions (perf/admissions-list).
+ * `.pick` từ response đầy đủ ⇒ subset TƯƠNG THÍCH: đọc field nằm trong đây OK,
+ * đọc field nặng đã bỏ (choices/documents_checklist/validation...) → TS chặn.
+ * BE trả đúng bộ này (schemas.AdmissionProfileListItem); detail vẫn full.
+ */
+export const admissionListItemSchema = admissionProfileResponseSchema.pick({
+  id: true,
+  lead_id: true,
+  version: true,
+  status: true,
+  created_at: true,
+  lead: true,
+  program_name: true,
+  completion_percent: true,
+  eligibility_status: true,
+  tuition_paid_hk1: true,
+  tuition_remaining_hk1: true,
+  tuition_overdue_hk1: true,
+  tuition_hk1_status: true,
+  assigned_officer_name: true,
+  assigned_reviewer_name: true,
+  available_actions: true,
+})
+
+export type AdmissionListItem = z.infer<typeof admissionListItemSchema>
+
+export const admissionsPageLiteSchema = z.object({
+  total_count: z.number(),
+  page: z.number(),
+  page_size: z.number(),
+  profiles: z.array(admissionListItemSchema),
+})
+
+export type AdmissionsPageLite = z.infer<typeof admissionsPageLiteSchema>
+
+/**
  * Submit Response Schema
  * Used for POST /api/admissions/{id}/submit response
  * 
