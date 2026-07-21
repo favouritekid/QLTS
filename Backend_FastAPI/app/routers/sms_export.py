@@ -46,7 +46,10 @@ async def export_campaign(
     await db.commit()
     if callback is not None:
         await callback()
-    return await service.get_export_result(campaign_id)
+    # callback None = không batch nào cần sinh lại → nói đúng điều đó.
+    return await service.get_export_result(
+        campaign_id, regenerated=callback is not None
+    )
 
 
 @router.get(

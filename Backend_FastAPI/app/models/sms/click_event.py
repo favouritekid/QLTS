@@ -8,6 +8,10 @@ tổng recipient handed_off. Không lưu IP thô → ip_hash HMAC.
 `sms_campaign_recipient` (report đã JOIN sẵn). KHÔNG denormalize campaign_id/
 contact_id ở đây vì 3 FK độc lập cho phép gắn sai campaign/contact → hỏng CTR.
 Xem `Documents/SMS_MARKETING_MODULE_DESIGN.md` §4.10.
+
+`bot_reason` (cột comment liệt kê 3 giá trị đầu, giữ nguyên để không sinh
+migration comment-only): known_scanner_ua · prefetch_head · no_user_agent ·
+non_mobile_ua (chỉ kênh SMS) · instant_after_send. Nguồn: `utils/sms_bot.py`.
 """
 from datetime import datetime
 from typing import Optional

@@ -104,6 +104,45 @@ class SmsTrackingRepository:
             .values(**values)
         )
 
+    async def count_recent_same_ua_recipients(
+        self,
+        *,
+        user_agent: Optional[str],
+        campaign_id: int,
+        since: datetime,
+        exclude_recipient_id: int,
+    ) -> int:
+        """Đếm người nhận KHÁC **của cùng campaign** mà cùng UA này vừa mở
+        link từ `since`.
+
+        Vân tay máy quét nhà mạng = MỘT user-agent mở link của hàng loạt người
+        nhận trong vài giây (campaign #6: 10 người/28 giây). Người thật dùng
+        máy tính/iPad thì lẻ tẻ nên đếm ra 0 → không bị gắn nhãn bot.
+
+        ⚠️ Bắt buộc giới hạn theo campaign: chuỗi UA của Chrome desktop đã bị
+        đóng băng từ bản 120 nên hàng triệu máy gửi y hệt nhau — đếm trên toàn
+        bảng thì vài người thật ở các campaign khác nhau cùng bấm trong 60
+        giây là đủ để người thứ ba bị gán nhãn oan.
+        Cửa sổ nhỏ + index `clicked_at` → chỉ quét vài dòng cuối bảng.
+        """
+        if not user_agent:
+            return 0
+        res = await self.db.execute(
+            select(func.count(func.distinct(SmsClickEvent.recipient_id)))
+            .select_from(SmsClickEvent)
+            .join(
+                SmsCampaignRecipient,
+                SmsCampaignRecipient.id == SmsClickEvent.recipient_id,
+            )
+            .where(
+                SmsClickEvent.user_agent == user_agent[:512],
+                SmsClickEvent.clicked_at >= since,
+                SmsClickEvent.recipient_id != exclude_recipient_id,
+                SmsCampaignRecipient.campaign_id == campaign_id,
+            )
+        )
+        return int(res.scalar() or 0)
+
     # ---------------------------------------------------------------
     # Click event + denorm counter (atomic — chống lost update khi click //)
     # ---------------------------------------------------------------

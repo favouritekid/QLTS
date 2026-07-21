@@ -10,9 +10,9 @@ Tuân thủ kiến trúc QLTS: KHÔNG import fastapi; raise domain exception (kh
 HTTPException); chỉ `flush` (router `commit`). SMS marketing KHÔNG qua
 dispatch() (§11.8) nên service trả thẳng result, không (result, callback).
 """
+import asyncio
 import io
 import re
-import unicodedata
 from datetime import datetime
 from typing import List, Optional, Tuple
 
@@ -41,41 +41,168 @@ from app.utils.phone_helpers import (
     normalize_vn_mobile,
     to_zalo_phone,
 )
+from app.utils.text_helpers import strip_diacritics
 
 # Import giới hạn an toàn
 MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_IMPORT_ROWS = 50000
 
-# Alias header tiếng Việt → tên cột chuẩn
-_COL_ALIASES = {
-    "full_name": {"full_name", "fullname", "ho_ten", "hoten", "ten", "name"},
-    "phone": {
-        "phone", "so_dien_thoai", "sodienthoai", "sdt", "dien_thoai",
-        "phone_number", "phonenumber",
-    },
-    "note": {"note", "ghi_chu", "ghichu", "notes"},
-}
+# Nhận diện cột theo CỤM CON trên header đã bỏ dấu + gộp "_"
+# (`_normalize_header`), KHÔNG so bằng danh sách chuỗi cố định: header thật
+# luôn có đuôi ("Họ và tên học sinh", "SĐT phụ huynh", "Số điện thoại (Zalo)")
+# nên liệt kê tổ hợp là trò đuổi bắt không hồi kết.
+#
+# ⚠️ TUYỆT ĐỐI KHÔNG thêm "dt": trong danh sách trường "DT" gần như luôn là
+# **Dân tộc**, và sau bước bỏ dấu thì "ĐT" (điện thoại) cũng thành "dt" —
+# không phân biệt được. Nhận nhầm còn tệ hơn báo thiếu cột: cả file import
+# im lặng 0 dòng vì "Kinh"/"Tày" không phải số di động.
+_NAME_PHRASES = ("full_name", "fullname", "ho_va_ten", "hovaten", "ho_ten", "hoten")
+_PHONE_PHRASES = (
+    "so_dien_thoai", "sodienthoai", "dien_thoai", "sdt", "so_dt",
+    "phone", "mobile", "so_may",
+)
+_NOTE_PHRASES = ("ghi_chu", "ghichu", "note", "chu_thich")
+# Chỉ khớp CHÍNH XÁC (không phải cụm con) — "ten" là cụm con của "ten_truong",
+# "ten_lop", "ten_nganh"… nên dùng làm cụm con sẽ gán bừa.
+_NAME_EXACT_FALLBACK = {"ten", "name"}
+# Cột "họ" đứng riêng ⇒ file tách họ/tên, ghép sai sẽ mất họ đệm (xem
+# `_resolve_columns`).
+_SURNAME_EXACT = {"ho", "ho_dem", "hodem", "ho_va_dem"}
 
 
 def _slugify(name: str) -> str:
     """Sinh slug ASCII (bỏ dấu tiếng Việt) cho group code."""
-    s = unicodedata.normalize("NFD", name or "")
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    s = s.replace("đ", "d").replace("Đ", "D").lower().strip()
+    s = strip_diacritics(name).lower().strip()
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
     return s[:50] or "group"
 
 
+def _normalize_header(col: str) -> str:
+    """Chuẩn hóa 1 header về khóa so khớp: bỏ dấu + lower + gộp mọi ký tự
+    không phải chữ/số thành '_' (nuốt luôn BOM nếu file CSV có).
+
+    ⚠ Bước bỏ dấu là BẮT BUỘC: thiếu nó thì cụm viết cho tiếng Việt không
+    bao giờ khớp header thật ("Họ tên" → "họ_tên" ≠ "ho_ten"), khiến file
+    hợp lệ bị từ chối 400 "thiếu cột bắt buộc".
+    """
+    s = strip_diacritics(str(col or "")).lower().strip()
+    return re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+
+
 def _resolve_columns(columns: List[str]) -> dict:
-    """Map tên cột thực (đã chuẩn hóa) → cột chuẩn. Trả {chuẩn: thực}."""
-    found = {}
-    norm = {c.lower().strip().replace(" ", "_"): c for c in columns}
-    for canonical, aliases in _COL_ALIASES.items():
+    """Map cột thực → cột chuẩn. Trả {chuẩn: thực}.
+
+    Nhiều cột cùng khớp (vd "SĐT học sinh" + "SĐT phụ huynh") → lấy cột đứng
+    TRƯỚC trong file, theo quy ước cột chính nằm bên trái.
+    """
+    found: dict = {}
+    # setdefault: 2 header khác nhau có thể chuẩn hóa về CÙNG khóa (vd "Họ tên"
+    # và "Ho ten") → giữ cột xuất hiện TRƯỚC thay vì để cột sau ghi đè.
+    norm: dict = {}
+    for c in columns:
+        key = _normalize_header(c)
+        if key:
+            norm.setdefault(key, c)
+
+    for canonical, phrases in (
+        ("full_name", _NAME_PHRASES),
+        ("phone", _PHONE_PHRASES),
+        ("note", _NOTE_PHRASES),
+    ):
         for key, original in norm.items():
-            if key in aliases:
+            if any(p in key for p in phrases):
                 found[canonical] = original
                 break
+
+    if "full_name" not in found:
+        weak = next(
+            (o for k, o in norm.items() if k in _NAME_EXACT_FALLBACK), None
+        )
+        if weak is not None:
+            surname = next(
+                (o for k, o in norm.items() if k in _SURNAME_EXACT), None
+            )
+            # File tách "Họ đệm" + "Tên": nhận cột "Tên" làm full_name sẽ lưu
+            # tên cụt ("An", "Bình") mà KHÔNG báo lỗi gì — hỏng dữ liệu âm thầm
+            # rồi đem cá nhân hoá nội dung SMS. Thà chặn to tiếng.
+            if surname is not None:
+                raise ValidationError(
+                    detail=(
+                        f"File tách cột họ ('{surname}') và tên ('{weak}') — "
+                        "gộp thành MỘT cột họ tên đầy đủ (vd 'Họ và tên') "
+                        "rồi import lại."
+                    )
+                )
+            found["full_name"] = weak
     return found
+
+
+def _read_csv_bytes(content: bytes):
+    """Đọc CSV chịu được thực tế Excel tiếng Việt.
+
+    Hai cái bẫy khiến file "đúng" vẫn 400:
+    - **Dấu phân cách**: Excel bản vi-VN dùng dấu chấm phẩy làm list separator
+      nên "CSV (Comma delimited)" lại ghi ra `full_name;phone;note`. Mặc định
+      `read_csv` tách bằng dấu phẩy → cả dòng thành MỘT cột → "thiếu cột".
+      `sep=None` + engine python để pandas tự dò.
+    - **Bảng mã**: Excel có thể ghi ANSI (cp1258) hoặc "Unicode Text" (UTF-16)
+      thay vì UTF-8.
+    """
+    import pandas as pd
+
+    # UTF-16 phải thử TRƯỚC: `latin1` giải mã được mọi chuỗi byte nên nó sẽ
+    # nuốt file UTF-16 thành mojibake, rồi báo "thiếu cột" — sai nguyên nhân,
+    # người dùng không đời nào đoán ra là do bảng mã.
+    encodings = ("utf-8-sig", "cp1258", "latin1")
+    if content[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        encodings = ("utf-16",) + encodings
+
+    last_error: Exception = ValidationError(detail="File CSV không đọc được")
+    for encoding in encodings:
+        try:
+            return pd.read_csv(
+                io.BytesIO(content),
+                dtype=str,
+                sep=None,
+                engine="python",
+                encoding=encoding,
+            )
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+        except pd.errors.ParserError as exc:
+            # Sniffer bó tay (thường là file đúng 1 cột) → ép dấu phẩy.
+            last_error = exc
+            try:
+                return pd.read_csv(
+                    io.BytesIO(content), dtype=str, encoding=encoding
+                )
+            except UnicodeDecodeError:
+                continue
+    raise last_error
+
+
+def _clean_phone_cell(phone: str) -> str:
+    """Dọn 2 biến dạng do Excel gây ra trước khi validate số.
+
+    1. Lớp bọc chống-ép-kiểu `="0912345678"` (file mẫu của ta dùng đúng cách
+       này; Excel hiển thị thành chữ nhưng nếu upload thẳng thì tới đây vẫn
+       là chuỗi thô).
+    2. Số 0 đầu bị ăn mất khi Excel ép cột SĐT thành số ("0912345678" →
+       "912345678") — không vá thì TOÀN BỘ file bị loại "không phải di động
+       VN". Chỉ đụng đúng ca 9 chữ số mở đầu bằng đầu số di động VN (3/5/7/
+       8/9); số 10 chữ số hay dạng +84 không bị ảnh hưởng.
+
+    Cố ý làm ở tầng import, KHÔNG nới `normalize_vn_mobile` (helper dùng chung
+    toàn hệ thống — nới ở đó thì nhập tay/API cũng nhận bừa số thiếu số 0).
+    """
+    cleaned = phone.strip()
+    m = re.fullmatch(r'="?([^"]*)"?', cleaned)
+    if m:
+        cleaned = m.group(1).strip()
+    if re.fullmatch(r"[35789]\d{8}", cleaned):
+        return "0" + cleaned
+    return cleaned
 
 
 def _reject_null(patch: dict, fields) -> None:
@@ -410,7 +537,7 @@ class SmsContactService:
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         try:
             if ext == "csv":
-                df = pd.read_csv(io.BytesIO(file_content), dtype=str)
+                df = _read_csv_bytes(file_content)
             elif ext == "xlsx":
                 df = pd.read_excel(
                     io.BytesIO(file_content), engine="openpyxl", dtype=str
@@ -440,7 +567,9 @@ class SmsContactService:
                     "full_name": str(
                         row.get(colmap["full_name"]) or ""
                     ).strip(),
-                    "phone": str(row.get(colmap["phone"]) or "").strip(),
+                    "phone": _clean_phone_cell(
+                        str(row.get(colmap["phone"]) or "")
+                    ),
                     "note": (
                         str(row.get(colmap["note"]) or "").strip()
                         if "note" in colmap
@@ -483,7 +612,13 @@ class SmsContactService:
             consent_proof_ref,
             consent_obtained_at,
         )
-        rows = self._parse_rows(file_content, filename or "")
+        # `_parse_rows` là CPU-bound thuần sync (pandas đọc tới 50.000 dòng,
+        # engine="python" để dò dấu phân cách lại chậm hơn engine C khoảng một
+        # bậc) → chạy thẳng trong coroutine sẽ treo event loop của worker vài
+        # giây, mọi request khác trên worker đó đứng theo.
+        rows = await asyncio.to_thread(
+            self._parse_rows, file_content, filename or ""
+        )
 
         # --- Phân loại từng dòng (mỗi dòng vào ĐÚNG 1 bucket) ---
         errors: List[sms_schemas.SmsImportRowError] = []

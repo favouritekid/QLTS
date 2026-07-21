@@ -10,6 +10,22 @@ import unicodedata
 from typing import Optional
 
 
+def strip_diacritics(raw: Optional[str]) -> str:
+    """Bỏ dấu tiếng Việt, GIỮ nguyên mọi ký tự khác (khoảng trắng, dấu câu).
+
+    Dùng chung cho mọi chỗ cần so khớp không-dấu (slug nhóm/campaign, nhận
+    diện header import…) — đừng chép lại vòng NFD ở service mới.
+    """
+    if not raw:
+        return ""
+    # NFD decomposition splits accented chars into base + combining mark;
+    # dropping Mn (Mark, nonspacing) removes the accent while keeping the letter.
+    normalized = unicodedata.normalize("NFD", raw)
+    ascii_str = "".join(c for c in normalized if unicodedata.category(c) != "Mn")
+    # Replace đ/Đ separately — NFD doesn't decompose them (Latin Extended).
+    return ascii_str.replace("đ", "d").replace("Đ", "D")
+
+
 def to_bank_transfer_note(raw: Optional[str], max_len: int = 90) -> str:
     """Strip Vietnamese diacritics and non-alphanumeric characters.
 
@@ -19,12 +35,7 @@ def to_bank_transfer_note(raw: Optional[str], max_len: int = 90) -> str:
     """
     if not raw:
         return ""
-    # NFD decomposition splits accented chars into base + combining mark;
-    # dropping Mn (Mark, nonspacing) removes the accent while keeping the letter.
-    normalized = unicodedata.normalize("NFD", raw)
-    ascii_str = "".join(c for c in normalized if unicodedata.category(c) != "Mn")
-    # Replace đ/Đ separately — NFD doesn't decompose them (Latin Extended).
-    ascii_str = ascii_str.replace("đ", "d").replace("Đ", "D")
+    ascii_str = strip_diacritics(raw)
     # Collapse any non-[a-zA-Z0-9] run into a single space, then trim.
     ascii_str = re.sub(r"[^a-zA-Z0-9 ]+", " ", ascii_str)
     ascii_str = re.sub(r"\s+", " ", ascii_str).strip()

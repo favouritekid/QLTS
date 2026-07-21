@@ -10,7 +10,6 @@ Tuân thủ kiến trúc QLTS: KHÔNG import fastapi; raise domain exception; ch
 SMS_MARKETING_MODULE_DESIGN.md §3/§6/§7/§8.
 """
 import re
-import unicodedata
 from datetime import datetime, timezone
 
 from app.utils.tz import ensure_aware
@@ -24,6 +23,7 @@ from app.models.sms import SmsCampaign, SmsContactGroup
 from app.repositories.sms_campaign_repository import SmsCampaignRepository
 from app.repositories.sms_contact_repository import SmsContactRepository
 from app.schemas import sms as sms_schemas
+from app.services.sms_export_service import campaign_state_allows_export
 from app.utils.exceptions import (
     BusinessRuleViolation,
     ConflictError,
@@ -48,6 +48,7 @@ from app.utils.sms_token import (
     generate_short_code,
 )
 from app.utils.sms_url import host_in_allowlist
+from app.utils.text_helpers import strip_diacritics
 
 # Status cho phép build lại (chưa bàn giao/đóng).
 _REBUILDABLE = {"draft", "ready", "exported"}
@@ -55,9 +56,9 @@ _TOKEN_RETRY = 5  # số lần auto-retry khi token_hash collision (§6.1)
 
 
 def _slugify(name: str) -> str:
-    s = unicodedata.normalize("NFD", name or "")
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    s = s.replace("đ", "d").replace("Đ", "D").lower().strip()
+    """Slug ASCII cho campaign code — dùng chung helper bỏ dấu (đừng chép lại
+    vòng NFD; bản ở `sms_contact_service` đã gom về `text_helpers`)."""
+    s = strip_diacritics(name).lower().strip()
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
     return s[:50] or "campaign"
 
@@ -134,10 +135,13 @@ class SmsCampaignService:
     def _with_computed(
         self, campaign: SmsCampaign, group_count: Optional[int] = None
     ) -> SmsCampaign:
-        # Luôn set cả 2 transient attr (kể cả None) để Pydantic from_attributes
+        # Luôn set cả 3 transient attr (kể cả None) để Pydantic from_attributes
         # không thiếu thuộc tính khi serialize SmsCampaignOut ở list.
         campaign.has_link = has_link(campaign.sms_template)
         campaign.group_count = group_count
+        # Gọi thẳng vị từ của export_service → FE không tự suy diễn từ status,
+        # và cờ hiển thị không thể lệch khỏi gate thật.
+        campaign.can_export = campaign_state_allows_export(campaign)
         return campaign
 
     # ===============================================================

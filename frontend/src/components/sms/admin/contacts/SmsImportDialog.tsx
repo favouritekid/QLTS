@@ -2,7 +2,13 @@
 "use client"
 
 import { useState } from "react"
-import { AlertTriangle, CheckCircle2, Loader2, Upload } from "lucide-react"
+import {
+  AlertTriangle,
+  CheckCircle2,
+  FileDown,
+  Loader2,
+  Upload,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -24,6 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useUploadContacts } from "@/hooks/useSmsContacts"
+import { downloadBlob } from "@/lib/utils/download-blob"
 import type { SmsImportResult } from "@/lib/zod/sms"
 
 import {
@@ -33,6 +40,24 @@ import {
 } from "../labels"
 
 const NONE = "none"
+
+// Header mẫu = đúng tên cột chuẩn BE. BE cũng chấp nhận biến thể tiếng Việt
+// có dấu ("Họ và tên", "SĐT"), nhưng file mẫu dùng tên chuẩn cho chắc chắn.
+// SĐT bọc ="…" — mở bằng Excel thì cột giữ nguyên dạng chữ, không bị ép thành
+// số làm mất số 0 đầu (0912… → 912…). Backend vẫn tự gỡ lớp bọc này.
+const SAMPLE_CSV = [
+  "full_name,phone,note",
+  'Nguyen Van A,="0912345678",Lop 12A1',
+  'Tran Thi B,="0987654321",',
+].join("\r\n")
+
+function downloadSampleCsv() {
+  // BOM để Excel nhận UTF-8 (tên có dấu không thành ký tự lạ).
+  downloadBlob(
+    new Blob(["﻿" + SAMPLE_CSV], { type: "text/csv;charset=utf-8" }),
+    "mau-danh-sach-lien-he.csv",
+  )
+}
 
 interface Props {
   open: boolean
@@ -122,8 +147,8 @@ export function SmsImportDialog({
         <DialogHeader>
           <DialogTitle>Import liên hệ vào «{groupName}»</DialogTitle>
           <DialogDescription>
-            File .csv hoặc .xlsx (cột số điện thoại + họ tên). Số cố định / không
-            hợp lệ sẽ bị bỏ qua và liệt kê ở kết quả.
+            File .csv hoặc .xlsx. Số cố định / không hợp lệ sẽ bị bỏ qua và liệt
+            kê ở kết quả.
           </DialogDescription>
         </DialogHeader>
 
@@ -140,6 +165,27 @@ export function SmsImportDialog({
                 disabled={mutation.isPending}
                 onChange={(e) => setFile(e.target.files?.[0] ?? null)}
               />
+              <div className="text-muted-foreground space-y-1 rounded border bg-muted/40 p-2 text-xs">
+                <p>
+                  Bắt buộc 2 cột: <code className="font-mono">full_name</code>{" "}
+                  và <code className="font-mono">phone</code> — chấp nhận tên
+                  tiếng Việt (“Họ và tên”, “SĐT học sinh”, “Số điện thoại phụ
+                  huynh”). Cột <code className="font-mono">note</code> tùy chọn.
+                </p>
+                <p>
+                  Họ và tên phải nằm CHUNG một cột (file tách “Họ đệm” + “Tên”
+                  sẽ bị từ chối để tránh lưu thiếu họ).
+                </p>
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0 text-xs"
+                  onClick={downloadSampleCsv}
+                >
+                  <FileDown className="mr-1 h-3.5 w-3.5" /> Tải file mẫu (.csv)
+                </Button>
+              </div>
             </div>
 
             <div className="space-y-1.5">

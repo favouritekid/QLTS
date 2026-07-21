@@ -131,7 +131,10 @@ export function SmsCampaignWorkspace({ campaignId }: { campaignId: number }) {
             campaign={campaign}
             editable={audienceEditable}
           />
-          <SmsExportSection campaign={campaign} editable={audienceEditable} />
+          {/* Khu Export tự đọc cờ BE (`can_export` + `can_mark_handed_off`
+              từng batch) — KHÔNG dùng chung cờ audience, vì bàn giao/re-export
+              vẫn hợp lệ sau khi campaign chuyển 'handed_off'. */}
+          <SmsExportSection campaign={campaign} />
         </>
       )}
 

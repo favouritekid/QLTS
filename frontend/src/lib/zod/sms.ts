@@ -590,6 +590,11 @@ export const smsCampaignSchema = z.object({
   handed_off_marked_at: z.string().nullable().optional(),
   has_link: z.boolean().nullable().optional(),
   group_count: z.number().nullable().optional(),
+  /** Gate trạng thái export/re-export do BE tính (còn true khi handed_off để
+   *  retry batch nhà mạng lỗi). KHÔNG suy diễn lại từ `status` ở FE.
+   *  BẮT BUỘC như can_download/can_mark_handed_off: thiếu cờ = lỗi hợp đồng,
+   *  phải để Zod chặn chứ không mặc định false rồi ẩn nút trong im lặng. */
+  can_export: z.boolean(),
 })
 export type SmsCampaign = z.infer<typeof smsCampaignSchema>
 
