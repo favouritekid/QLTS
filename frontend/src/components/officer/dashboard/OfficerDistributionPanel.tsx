@@ -20,15 +20,11 @@
  *      không nói ra thì con số to trông như điểm thành tích.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useOfficerDistribution } from "@/hooks/officer/useOfficerDistribution";
 import type { OfficerDistributionEntry } from "@/lib/zod/officer";
 import { cn } from "@/lib/utils";
@@ -58,8 +54,7 @@ const SEG_META: Record<SegKey, { bar: string; label: string }> = {
 
 // Làm tròn 2 chữ số: hiệu hai số backend có thể sinh nhiễu dấu phẩy động
 // (28.5 − 14.3 = 14.200000000000001) làm width CSS xấu và test giòn.
-const clamp = (n: number) =>
-  Math.round(Math.max(0, Math.min(100, n)) * 100) / 100;
+const clamp = (n: number) => Math.round(Math.max(0, Math.min(100, n)) * 100) / 100;
 
 /**
  * Ba đoạn của thanh, tính THUẦN từ số backend trả (không suy diễn thêm).
@@ -72,12 +67,8 @@ const clamp = (n: number) =>
  */
 function segmentsOf(e: OfficerDistributionEntry) {
   const sys = clamp(e.eff_util_pct);
-  const weight = clamp(
-    Math.min(Math.max(0, e.real_util_pct - e.eff_util_pct), 100 - sys)
-  );
-  const skip = clamp(
-    Math.min(Math.max(0, e.fill_pct - e.real_util_pct), 100 - sys - weight)
-  );
+  const weight = clamp(Math.min(Math.max(0, e.real_util_pct - e.eff_util_pct), 100 - sys));
+  const skip = clamp(Math.min(Math.max(0, e.fill_pct - e.real_util_pct), 100 - sys - weight));
   return {
     sys,
     weight,
@@ -109,50 +100,32 @@ function LoadBar({
   size?: "sm" | "lg";
 }) {
   const seg = segmentsOf(e);
-  const dim = (k: SegKey) =>
-    highlight && highlight !== k ? "opacity-20" : "opacity-100";
+  const dim = (k: SegKey) => (highlight && highlight !== k ? "opacity-20" : "opacity-100");
 
   return (
-    <span
-      className={cn(
-        "relative block rounded border bg-muted",
-        size === "lg" ? "h-8" : "h-6"
-      )}
-    >
+    <span className={cn("relative block rounded border bg-muted", size === "lg" ? "h-8" : "h-6")}>
       <span className="absolute inset-0 flex overflow-hidden rounded">
         {/* shrink-0: không cho flex co đoạn khi tổng chạm trần */}
         <span
           data-seg="sys"
-          className={cn(
-            "h-full shrink-0 transition-opacity",
-            SEG_META.sys.bar,
-            dim("sys")
-          )}
+          className={cn("h-full shrink-0 transition-opacity", SEG_META.sys.bar, dim("sys"))}
           style={{ width: `${seg.sys}%` }}
         />
         <span
           data-seg="weight"
-          className={cn(
-            "h-full shrink-0 transition-opacity",
-            SEG_META.weight.bar,
-            dim("weight")
-          )}
+          className={cn("h-full shrink-0 transition-opacity", SEG_META.weight.bar, dim("weight"))}
           style={{ width: `${seg.weight}%` }}
         />
         <span
           data-seg="skip"
-          className={cn(
-            "h-full shrink-0 transition-opacity",
-            SEG_META.skip.bar,
-            dim("skip")
-          )}
+          className={cn("h-full shrink-0 transition-opacity", SEG_META.skip.bar, dim("skip"))}
           style={{ width: `${seg.skip}%` }}
         />
       </span>
       {/* Ngưỡng tạm dừng 80% */}
       <span
         aria-hidden="true"
-        className="absolute -top-0.5 -bottom-0.5 border-l-2 border-dashed border-error-500"
+        className="absolute -bottom-0.5 -top-0.5 border-l-2 border-dashed border-error-500"
         style={{ left: "80%" }}
       />
       {/* Mốc dùng để SO với vạch 80% — đại lượng engine thật sự gate */}
@@ -160,7 +133,7 @@ function LoadBar({
         aria-hidden="true"
         data-seg="gate"
         className={cn(
-          "absolute -top-1 -bottom-1 w-0.5 rounded transition-opacity",
+          "absolute -bottom-1 -top-1 w-0.5 rounded transition-opacity",
           SEG_META.gate.bar,
           dim("gate")
         )}
@@ -224,17 +197,10 @@ function LedgerRow({
         "-mx-1 flex items-baseline justify-between gap-4 rounded px-1",
         interactive && "hover:bg-muted"
       )}
-      onPointerEnter={
-        interactive ? () => onFocusSeg?.(seg as SegKey) : undefined
-      }
+      onPointerEnter={interactive ? () => onFocusSeg?.(seg as SegKey) : undefined}
       onPointerLeave={interactive ? () => onFocusSeg?.(null) : undefined}
     >
-      <span
-        className={cn(
-          "flex items-baseline gap-1.5",
-          muted && "text-muted-foreground"
-        )}
-      >
+      <span className={cn("flex items-baseline gap-1.5", muted && "text-muted-foreground")}>
         {/* Chấm màu = cầu nối duy nhất giữa con số và đoạn trên thanh. */}
         {seg && (
           <span
@@ -294,11 +260,7 @@ export function EntryDetails({ e }: { e: OfficerDistributionEntry }) {
           seg="sys"
           onFocusSeg={setFocusSeg}
         />
-        <LedgerRow
-          label="÷ Khả năng nhận"
-          value={String(e.max_capacity)}
-          muted
-        />
+        <LedgerRow label="÷ Khả năng nhận" value={String(e.max_capacity)} muted />
         {e.weight > 1 && (
           <LedgerRow
             label="÷ Ưu tiên kỳ cựu"
@@ -319,8 +281,7 @@ export function EntryDetails({ e }: { e: OfficerDistributionEntry }) {
 
       <div className="space-y-0.5 border-t pt-1.5 opacity-90">
         <p className="tabular-nums">
-          Điểm bận = {e.dist_load} ÷ ({e.max_capacity}×{e.weight}) ×100 ={" "}
-          {e.eff_util_pct}
+          Điểm bận = {e.dist_load} ÷ ({e.max_capacity}×{e.weight}) ×100 = {e.eff_util_pct}
         </p>
         <p className="tabular-nums">
           Chỗ đầy thật = {e.workload}/{e.max_capacity} = {e.fill_pct}%
@@ -330,8 +291,8 @@ export function EntryDetails({ e }: { e: OfficerDistributionEntry }) {
           onPointerEnter={() => setFocusSeg("gate")}
           onPointerLeave={() => setFocusSeg(null)}
         >
-          Ngưỡng tạm dừng = ({e.workload}−{e.tuition_hold})/{e.max_capacity} ={" "}
-          {e.overload_gate_pct}% (dừng khi ≥80%)
+          Ngưỡng tạm dừng = ({e.workload}−{e.tuition_hold})/{e.max_capacity} = {e.overload_gate_pct}
+          % (dừng khi ≥80%)
         </p>
       </div>
 
@@ -367,21 +328,14 @@ export function EntryDetails({ e }: { e: OfficerDistributionEntry }) {
  * 🔒 Chỉ render khi `is_current_user`. Admin/manager xem người khác không có
  * thẻ này và không được thấy `boost` của bất kỳ ai.
  */
-function YourCard({
-  e,
-  peersInUnit,
-}: {
-  e: OfficerDistributionEntry;
-  peersInUnit: number;
-}) {
+function YourCard({ e, peersInUnit }: { e: OfficerDistributionEntry; peersInUnit: number }) {
   // `rank` chỉ có nghĩa khi đơn vị thật sự chấm theo điểm bận VÀ người này đang
   // trong pool: chế độ `legacy` xếp theo lượt nên in thứ hạng ở đây là nói sai
   // cơ chế, còn người tắt nhận lead thì không nằm trong bảng xếp nào cả.
-  const showRank =
-    e.eligible_for_assignment && e.scoring_mode !== "legacy" && peersInUnit > 1;
+  const showRank = e.eligible_for_assignment && e.scoring_mode !== "legacy" && peersInUnit > 1;
 
   return (
-    <div className="mb-4 rounded-lg border border-primary/40 bg-primary/5 p-3">
+    <div className="border-primary/40 bg-primary/5 mb-4 rounded-lg border p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">
@@ -392,7 +346,7 @@ function YourCard({
           </p>
         </div>
         <div className="shrink-0 text-right">
-          <p className="text-2xl font-bold leading-none tabular-nums text-primary">
+          <p className="text-2xl font-bold tabular-nums leading-none text-primary">
             {e.eff_util_pct}
           </p>
           <p className="text-[10px] text-muted-foreground">điểm bận</p>
@@ -406,9 +360,8 @@ function YourCard({
 
       {showRank && (
         <p className="mt-2 text-[11px] text-muted-foreground">
-          Đang xếp thứ <b className="text-foreground">{e.rank}</b> trong{" "}
-          {peersInUnit} người của đơn vị — thứ tự này quyết định ai được chia
-          trước.
+          Đang xếp thứ <b className="text-foreground">{e.rank}</b> trong {peersInUnit} người của đơn
+          vị — thứ tự này quyết định ai được chia trước.
         </p>
       )}
 
@@ -417,8 +370,12 @@ function YourCard({
           tại điểm render — không phụ thuộc chỗ gọi chọn đúng entry. */}
       {e.is_current_user && e.boost && (
         <div className="mt-2.5 border-t pt-2">
+          {/* 🔒 PHẢI giữ dấu bảo mật ở đây: thẻ này là chỗ lời khuyên hiện ra
+              NỔI BẬT NHẤT, trên đúng cái bảng mọi đồng nghiệp cùng xem — mất
+              tín hiệu "riêng tư" ở nơi riêng tư nhất là sai chỗ nhất. */}
           <p className="text-[11px] font-semibold uppercase tracking-wide">
-            Việc của bạn
+            Việc của bạn{" "}
+            <span className="font-normal normal-case text-muted-foreground">· 🔒 chỉ bạn thấy</span>
           </p>
           <p className="mt-0.5 text-xs leading-relaxed">{e.boost}</p>
         </div>
@@ -435,6 +392,18 @@ const HOVER_OPEN_MS = 160;
 const HOVER_CLOSE_MS = 140;
 
 /**
+ * Hàng đang mở bảng chi tiết trong CẢ panel (theo user_id, null = không có).
+ *
+ * ⚠️ Bảng này tồn tại để SO SÁNH, mà popover che khuất các hàng khác — nên mở
+ * cái này phải đóng cái kia. Trước đây mỗi hàng giữ open riêng ⇒ ghim A rồi rê
+ * B làm hai popover chồng lên nhau, phản đúng ý đồ. Điều phối tập trung ở đây.
+ */
+const OpenRowContext = createContext<{
+  openId: number | null;
+  setOpenId: (id: number | null) => void;
+}>({ openId: null, setOpenId: () => {} });
+
+/**
  * Mở bảng chi tiết bằng RÊ CHUỘT trên máy để bàn, giữ nguyên bấm/chạm ở mọi nơi
  * khác.
  *
@@ -444,10 +413,7 @@ const HOVER_CLOSE_MS = 140;
  * lớp tăng tiến, chặn bằng `(hover: hover) and (pointer: fine)` để máy cảm ứng
  * và bút không kích hoạt nhầm rồi popover tự đóng ngay khi ngón tay rời.
  */
-function useHoverIntent(
-  setOpen: (v: boolean) => void,
-  pinnedRef: React.RefObject<boolean>
-) {
+function useHoverIntent(setOpen: (v: boolean) => void, pinnedRef: React.RefObject<boolean>) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clear = useCallback(() => {
@@ -465,18 +431,17 @@ function useHoverIntent(
     typeof window.matchMedia === "function" &&
     window.matchMedia("(hover: hover) and (pointer: fine)").matches;
 
-  const schedule =
-    (open: boolean, delay: number) => (ev: React.PointerEvent) => {
-      if (ev.pointerType === "touch" || ev.pointerType === "pen") return;
-      if (!canHover()) return;
-      clear();
-      timer.current = setTimeout(() => {
-        // ⚠️ Đọc cờ ghim TẠI LÚC CHẠY, không phải lúc đặt hẹn: người dùng có
-        // thể bấm ghim trong khoảng chờ. Đọc qua state sẽ dính giá trị cũ.
-        if (!open && pinnedRef.current) return;
-        setOpen(open);
-      }, delay);
-    };
+  const schedule = (open: boolean, delay: number) => (ev: React.PointerEvent) => {
+    if (ev.pointerType === "touch" || ev.pointerType === "pen") return;
+    if (!canHover()) return;
+    clear();
+    timer.current = setTimeout(() => {
+      // ⚠️ Đọc cờ ghim TẠI LÚC CHẠY, không phải lúc đặt hẹn: người dùng có
+      // thể bấm ghim trong khoảng chờ. Đọc qua state sẽ dính giá trị cũ.
+      if (!open && pinnedRef.current) return;
+      setOpen(open);
+    }, delay);
+  };
 
   return {
     open: schedule(true, HOVER_OPEN_MS),
@@ -487,12 +452,30 @@ function useHoverIntent(
 
 function OfficerRow({ e }: { e: OfficerDistributionEntry }) {
   const dimmed = !e.eligible_for_assignment;
-  const [open, setOpen] = useState(false);
+  // Open state SỐNG Ở PANEL (một hàng mở tại một thời điểm). Hàng này mở ⇔
+  // openId trỏ đúng nó.
+  const { openId, setOpenId } = useContext(OpenRowContext);
+  const open = openId === e.user_id;
+
+  const setOpen = useCallback(
+    (v: boolean) => {
+      setOpenId(v ? e.user_id : null);
+    },
+    [e.user_id, setOpenId]
+  );
+
   // GHIM = mở bằng bấm/chạm. Bảng này dài (10 dòng số + lời khuyên) nên người
   // đọc phải được rời chuột mà nó không biến mất — chỉ bản mở-bằng-rê mới tự
   // đóng. Dùng ref vì hẹn giờ hover đọc cờ ở tương lai, state sẽ stale.
   const pinnedRef = useRef(false);
   const hover = useHoverIntent(setOpen, pinnedRef);
+
+  // Khi hàng này đóng vì BẤT KỲ lý do gì — kể cả một hàng KHÁC được mở làm
+  // openId đổi (Radix KHÔNG phát onOpenChange trong trường hợp đó) — phải bỏ
+  // ghim, không thì lần rê sau tưởng vẫn đang ghim và từ chối tự đóng.
+  useEffect(() => {
+    if (!open) pinnedRef.current = false;
+  }, [open]);
 
   const handleOpenChange = (v: boolean) => {
     if (!v) pinnedRef.current = false;
@@ -529,9 +512,7 @@ function OfficerRow({ e }: { e: OfficerDistributionEntry }) {
           {/* Tên + nhãn kiểu */}
           <span className="min-w-0">
             <span className="flex items-center gap-1.5">
-              <span className="truncate text-sm font-medium">
-                {e.full_name}
-              </span>
+              <span className="truncate text-sm font-medium">{e.full_name}</span>
               {e.is_current_user && (
                 <span className="shrink-0 rounded border border-primary px-1 text-[9px] font-bold text-primary">
                   BẠN
@@ -558,6 +539,12 @@ function OfficerRow({ e }: { e: OfficerDistributionEntry }) {
         className="max-w-[340px] text-xs"
         // Nội dung chỉ để ĐỌC — đừng cướp focus khỏi hàng vừa bấm.
         onOpenAutoFocus={(ev) => ev.preventDefault()}
+        // ⚠️ PHẢI chặn CẢ đóng: hover-mở khiến popover có thể mở khi con trỏ
+        // đang ở NƠI KHÁC (đang gõ ô tìm kiếm). Mặc định Radix giật focus về
+        // nút hàng khi đóng ⇒ nuốt ký tự người dùng đang gõ và có thể kéo cuộn.
+        // Focus chỉ nên nhảy về trigger khi chính người dùng đóng bằng bàn phím
+        // — nhưng ta không mở bằng bàn phím tự động nên chặn là an toàn.
+        onCloseAutoFocus={(ev) => ev.preventDefault()}
         // Rê từ hàng sang chính bảng chi tiết không được làm nó đóng.
         onPointerEnter={hover.clear}
         onPointerLeave={hover.close}
@@ -622,16 +609,11 @@ function groupByUnit(entries: OfficerDistributionEntry[]) {
  * trong CÙNG một đơn vị. Chỉ gắn thêm id khi thật sự trùng, để trường hợp
  * thường không phải mang một con số kỹ thuật vô ích.
  */
-function unitLabel(
-  g: { unitId: number | null; unitName: string | null },
-  duplicated: boolean
-) {
+function unitLabel(g: { unitId: number | null; unitName: string | null }, duplicated: boolean) {
   if (g.unitName == null) {
     return g.unitId != null ? `Đơn vị #${g.unitId}` : "Chưa gán đơn vị";
   }
-  return duplicated && g.unitId != null
-    ? `${g.unitName} #${g.unitId}`
-    : g.unitName;
+  return duplicated && g.unitId != null ? `${g.unitName} #${g.unitId}` : g.unitName;
 }
 
 /** Danh sách trong MỘT đơn vị: nhóm đang nhận trước, nhóm ngoài luồng sau. */
@@ -675,163 +657,164 @@ function LegendSwatch({ seg }: { seg: SegKey }) {
   );
 }
 
-export function OfficerDistributionPanel({
-  unitId,
-  className,
-}: OfficerDistributionPanelProps) {
+export function OfficerDistributionPanel({ unitId, className }: OfficerDistributionPanelProps) {
   const { data, isLoading, error } = useOfficerDistribution({ unitId });
 
   const entries = data?.entries ?? [];
   const me = entries.find((e) => e.is_current_user) ?? null;
   // Số người CÙNG ĐƠN VỊ với mình — thứ hạng chỉ so được trong phạm vi đó.
-  const peersInUnit = me
-    ? entries.filter((e) => e.unit_id === me.unit_id).length
-    : 0;
+  const peersInUnit = me ? entries.filter((e) => e.unit_id === me.unit_id).length : 0;
+
+  // Điều phối "chỉ một hàng mở" cho TOÀN panel (xem OpenRowContext).
+  const [openId, setOpenId] = useState<number | null>(null);
 
   return (
-    <Card className={className}>
-      <CardHeader className="pb-3">
-        {/* Admin/manager không có dòng nào là của mình ⇒ xưng "bạn" là sai đối
+    <OpenRowContext.Provider value={{ openId, setOpenId }}>
+      <Card className={className}>
+        <CardHeader className="pb-3">
+          {/* Admin/manager không có dòng nào là của mình ⇒ xưng "bạn" là sai đối
             tượng: với họ đây là bảng giám sát cả đơn vị. */}
-        <CardTitle className="text-base">
-          {me
-            ? "Vì sao bạn được chia lead"
-            : "Vì sao hệ thống chia lead cho từng người"}
-        </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          Điểm bận (0–100): càng thấp càng được chia nhiều. Rê chuột hoặc bấm vào
-          từng người để xem phép tính đầy đủ.
-        </p>
-        <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
-          <LegendSwatch seg="sys" />
-          <LegendSwatch seg="weight" />
-          <LegendSwatch seg="skip" />
-          <LegendSwatch seg="gate" />
-        </div>
-      </CardHeader>
-
-      <CardContent>
-        {isLoading && (
-          <div className="space-y-2">
-            {[0, 1, 2, 3].map((i) => (
-              <Skeleton key={i} className="h-10 w-full" />
-            ))}
+          <CardTitle className="text-base">
+            {me ? "Vì sao bạn được chia lead" : "Vì sao hệ thống chia lead cho từng người"}
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Điểm bận (0–100): càng thấp càng được chia nhiều. Rê chuột hoặc bấm vào từng người để
+            xem phép tính đầy đủ.
+          </p>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1">
+            <LegendSwatch seg="sys" />
+            <LegendSwatch seg="weight" />
+            <LegendSwatch seg="skip" />
+            <LegendSwatch seg="gate" />
+            {/* Vạch đỏ đứt được vẽ trên MỌI thanh (LoadBar) nên PHẢI có mục chú
+              thích — bỏ nó đi thì người xem thấy một vạch đỏ vô danh, đúng cái
+              "nhầm 4 đại lượng %" bảng này có tiền sử. */}
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span
+                aria-hidden="true"
+                className="inline-block h-3 w-0 border-l-2 border-dashed border-error-500"
+              />
+              Ngưỡng tạm dừng 80%
+            </span>
           </div>
-        )}
+        </CardHeader>
 
-        {!isLoading && error && (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            Không tải được bảng điểm bận. Thử lại sau.
-          </p>
-        )}
+        <CardContent>
+          {isLoading && (
+            <div className="space-y-2">
+              {[0, 1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-10 w-full" />
+              ))}
+            </div>
+          )}
 
-        {!isLoading && !error && data && entries.length === 0 && (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            Chưa có nhân viên nào trong phạm vi này.
-          </p>
-        )}
+          {!isLoading && error && (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              Không tải được bảng điểm bận. Thử lại sau.
+            </p>
+          )}
 
-        {!isLoading && !error && data && entries.length > 0 && (
-          <>
-            {me && <YourCard e={me} peersInUnit={peersInUnit} />}
+          {!isLoading && !error && data && entries.length === 0 && (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              Chưa có nhân viên nào trong phạm vi này.
+            </p>
+          )}
 
-            {me && entries.length > 1 && (
-              <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                So với đồng nghiệp
-              </p>
-            )}
+          {!isLoading && !error && data && entries.length > 0 && (
+            <>
+              {me && <YourCard e={me} peersInUnit={peersInUnit} />}
 
-            {/* Trục chung — thẳng hàng với vùng thanh của mọi dòng */}
-            <div
-              aria-hidden="true"
-              className="grid grid-cols-[minmax(96px,140px)_1fr_36px] gap-3 px-1 pb-1"
-            >
-              <span />
-              <span className="relative block h-3 text-[10px] text-muted-foreground">
-                <span className="absolute left-0">0</span>
-                <span className="absolute left-1/2 -translate-x-1/2">50%</span>
-                <span className="absolute left-[80%] -translate-x-1/2 font-semibold text-error-500">
-                  80%
-                </span>
-                {/* KHÔNG in nhãn "100%": ở bề ngang điện thoại nó đè lên nhãn
+              {me && entries.length > 1 && (
+                <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  So với đồng nghiệp
+                </p>
+              )}
+
+              {/* Trục chung — thẳng hàng với vùng thanh của mọi dòng */}
+              <div
+                aria-hidden="true"
+                className="grid grid-cols-[minmax(96px,140px)_1fr_36px] gap-3 px-1 pb-1"
+              >
+                <span />
+                <span className="relative block h-3 text-[10px] text-muted-foreground">
+                  <span className="absolute left-0">0</span>
+                  <span className="absolute left-1/2 -translate-x-1/2">50%</span>
+                  <span className="absolute left-[80%] -translate-x-1/2 font-semibold text-error-500">
+                    80%
+                  </span>
+                  {/* KHÔNG in nhãn "100%": ở bề ngang điện thoại nó đè lên nhãn
                     80% (mốc quan trọng nhất — ngưỡng tạm dừng). Mép phải thanh
                     đã có viền, hết trục là 100% không cần nói. */}
-              </span>
-              <span />
-            </div>
+                </span>
+                <span />
+              </div>
 
-            {(() => {
-              const groups = groupByUnit(entries);
-              const multiUnit = groups.length > 1;
-              const nameSeen = new Map<string, number>();
-              for (const g of groups) {
-                if (g.unitName == null) continue;
-                nameSeen.set(g.unitName, (nameSeen.get(g.unitName) ?? 0) + 1);
-              }
-              return (
-                <>
-                  {multiUnit ? (
-                    <p className="px-1 pb-2 text-[11px] text-muted-foreground">
-                      Phạm vi gồm {groups.length} đơn vị — điểm bận và thứ hạng
-                      tính <b>riêng trong từng đơn vị</b>, không so chéo được.
-                    </p>
-                  ) : (
-                    // Một đơn vị vẫn PHẢI nói rõ cách xếp: ở chế độ `legacy`
-                    // engine sắp theo (quá tải, lâu chưa nhận) và KHÔNG đọc điểm
-                    // bận — hiện con số to mà không chú thích sẽ khiến người xem
-                    // tưởng đó là lý do phân phối.
-                    groups[0]?.scoringMode && (
+              {(() => {
+                const groups = groupByUnit(entries);
+                const multiUnit = groups.length > 1;
+                const nameSeen = new Map<string, number>();
+                for (const g of groups) {
+                  if (g.unitName == null) continue;
+                  nameSeen.set(g.unitName, (nameSeen.get(g.unitName) ?? 0) + 1);
+                }
+                return (
+                  <>
+                    {multiUnit ? (
                       <p className="px-1 pb-2 text-[11px] text-muted-foreground">
-                        Cách xếp của đơn vị:{" "}
-                        <b>
-                          {SCORING_LABEL[groups[0].scoringMode] ??
-                            groups[0].scoringMode}
-                        </b>
-                        {groups[0].scoringMode === "legacy" && (
-                          <>
-                            {" "}
-                            — chế độ này xếp theo lượt (lâu chưa nhận trước),
-                            điểm bận chỉ để tham khảo.
-                          </>
-                        )}
+                        Phạm vi gồm {groups.length} đơn vị — điểm bận và thứ hạng tính{" "}
+                        <b>riêng trong từng đơn vị</b>, không so chéo được.
                       </p>
-                    )
-                  )}
-                  {groups.map((g) => (
-                    <div
-                      key={g.key}
-                      className={multiUnit ? "mt-4 first:mt-0" : undefined}
-                    >
-                      {multiUnit && (
-                        <div className="flex flex-wrap items-baseline gap-x-2 border-b px-1 pb-1">
-                          <span className="text-sm font-semibold">
-                            {unitLabel(
-                              g,
-                              g.unitName != null &&
-                                (nameSeen.get(g.unitName) ?? 0) > 1
-                            )}
-                          </span>
-                          <span className="text-[11px] text-muted-foreground">
-                            {g.entries.length} người
-                            {g.scoringMode
-                              ? ` · cách xếp: ${SCORING_LABEL[g.scoringMode] ?? g.scoringMode}`
-                              : ""}
-                          </span>
-                        </div>
-                      )}
-                      <EntryList entries={g.entries} />
-                    </div>
-                  ))}
-                  {/* Nhãn chiều thang đặt SAU danh sách cho người KHÔNG có thẻ
+                    ) : (
+                      // Một đơn vị vẫn PHẢI nói rõ cách xếp: ở chế độ `legacy`
+                      // engine sắp theo (quá tải, lâu chưa nhận) và KHÔNG đọc điểm
+                      // bận — hiện con số to mà không chú thích sẽ khiến người xem
+                      // tưởng đó là lý do phân phối.
+                      groups[0]?.scoringMode && (
+                        <p className="px-1 pb-2 text-[11px] text-muted-foreground">
+                          Cách xếp của đơn vị:{" "}
+                          <b>{SCORING_LABEL[groups[0].scoringMode] ?? groups[0].scoringMode}</b>
+                          {groups[0].scoringMode === "legacy" && (
+                            <>
+                              {" "}
+                              — chế độ này xếp theo lượt (lâu chưa nhận trước), điểm bận chỉ để tham
+                              khảo.
+                            </>
+                          )}
+                        </p>
+                      )
+                    )}
+                    {groups.map((g) => (
+                      <div key={g.key} className={multiUnit ? "mt-4 first:mt-0" : undefined}>
+                        {multiUnit && (
+                          <div className="flex flex-wrap items-baseline gap-x-2 border-b px-1 pb-1">
+                            <span className="text-sm font-semibold">
+                              {unitLabel(
+                                g,
+                                g.unitName != null && (nameSeen.get(g.unitName) ?? 0) > 1
+                              )}
+                            </span>
+                            <span className="text-[11px] text-muted-foreground">
+                              {g.entries.length} người
+                              {g.scoringMode
+                                ? ` · cách xếp: ${SCORING_LABEL[g.scoringMode] ?? g.scoringMode}`
+                                : ""}
+                            </span>
+                          </div>
+                        )}
+                        <EntryList entries={g.entries} />
+                      </div>
+                    ))}
+                    {/* Nhãn chiều thang đặt SAU danh sách cho người KHÔNG có thẻ
                       "của bạn" (admin/manager): họ vẫn phải biết ít màu là rảnh,
                       nhưng thông tin đó không đáng chiếm đầu bảng. */}
-                  {!me && <AxisMeaning className="mt-2 px-1" />}
-                </>
-              );
-            })()}
-          </>
-        )}
-      </CardContent>
-    </Card>
+                    {!me && <AxisMeaning className="mt-2 px-1" />}
+                  </>
+                );
+              })()}
+            </>
+          )}
+        </CardContent>
+      </Card>
+    </OpenRowContext.Provider>
   );
 }
