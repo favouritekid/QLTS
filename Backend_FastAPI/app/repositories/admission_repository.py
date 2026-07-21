@@ -321,6 +321,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         unassigned: bool = False,
         today: Optional[date] = None,
         with_hk1: bool = False,
+        lean: bool = False,
         **filters
     ) -> Tuple[List[models.AdmissionProfile], int]:
         """
@@ -471,27 +472,34 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             ).join(
                 models.MajorProgram, models.ProgramOffering.program_id == models.MajorProgram.id
             )
-        data_query = (
-            data_query.options(
-                selectinload(models.AdmissionProfile.assigned_reviewer),
-                selectinload(models.AdmissionProfile.lead).options(
-                    selectinload(models.Lead.assigned_officer),
-                    selectinload(models.Lead.offering).options(
-                        selectinload(models.ProgramOffering.program),
-                        selectinload(models.ProgramOffering.academic_info_history)
-                        .selectinload(models.OfferingAcademicInfo.semester_tuitions),
-                    ),
+        # Eager NHẸ dùng chung: lead→officer + offering→program (program_name) +
+        # academic_info→semester_tuitions (HK1) + documents (doc-debt) + reviewer.
+        _eager_opts = [
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+            selectinload(models.AdmissionProfile.lead).options(
+                selectinload(models.Lead.assigned_officer),
+                selectinload(models.Lead.offering).options(
+                    selectinload(models.ProgramOffering.program),
+                    selectinload(models.ProgramOffering.academic_info_history)
+                    .selectinload(models.OfferingAcademicInfo.semester_tuitions),
                 ),
+            ),
+            selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
+        ]
+        if not lean:
+            # Graph NẶNG (student + subject_scores + choices 6-nhánh) CHỈ cần khi
+            # caller chạy `_compute_frontend_fields`/`_compute_completion_percent`
+            # per-row (list-đầy-đủ/export/stats-cũ). Đường LIST NHẸ (lean=True) đọc
+            # cached_completion/cached_readiness từ cột nên KHÔNG cần graph này →
+            # payload + thời gian giảm mạnh. (Multi-NV eligibility/completion read
+            # profile.choices → thiếu eager sẽ MissingGreenlet, nên chỉ bỏ khi lean.)
+            _eager_opts += [
                 selectinload(models.AdmissionProfile.student),
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
-                selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
-                # P0 hotfix multi-NV — list/export/stats call
-                # _compute_frontend_fields/_compute_completion_percent per row,
-                # which now read profile.choices (+ nested scores/group/criteria)
-                # for multi-NV eligibility/completion. Without this the per-row
-                # sync access lazy-loads → MissingGreenlet (N-row 500).
                 *_choices_eager_load_options(),
-            )
+            ]
+        data_query = (
+            data_query.options(*_eager_opts)
             # Stable secondary key: ties on the primary sort (esp. remaining_hk1 where
             # many profiles share a value, or no-HK1 rows all = 0) would otherwise
             # duplicate/skip across LIMIT/OFFSET pages (mirror Invoice.id tiebreaker

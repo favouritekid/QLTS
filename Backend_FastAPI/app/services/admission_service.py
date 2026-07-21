@@ -4731,6 +4731,38 @@ async def create_profile(
 
 
 
+def _compute_list_actions(
+    profile: models.AdmissionProfile,
+    current_user: Optional[models.User],
+    documents: list = None,
+) -> list:
+    """Tập hành động NHẸ cho hàng LIST — {approve, reject, claim, unclaim} tính
+    THUẦN từ status + role + assigned_reviewer + doc-debt, KHÔNG cần choices
+    graph. Mirror ĐÚNG nhánh permissions của `_compute_frontend_fields` cho 4
+    key này (approve gate `not _compute_outstanding_debt_codes`). Cổng THẬT
+    (fee/doc-debt/quota) re-check LIVE ở mutation nên eventual-lệch vô hại.
+    `available_actions_v2` KHÔNG set ở list ⇒ FE `hasAction` fallback về đây.
+    """
+    if current_user is None:
+        return []
+    role = current_user.role
+    is_manager = role == UserRole.MANAGER
+    is_admin = role == UserRole.ADMIN
+    status = profile.status
+    actions: list = []
+    if status in ("submitted", "resubmitted") and (is_manager or is_admin):
+        if not _compute_outstanding_debt_codes(profile, documents):
+            actions.append("approve")
+        actions.append("reject")
+        if not profile.assigned_reviewer_id:
+            actions.append("claim")
+    if profile.assigned_reviewer_id and (
+        profile.assigned_reviewer_id == current_user.id or is_admin
+    ):
+        actions.append("unclaim")
+    return actions
+
+
 async def get_profiles(
     db: AsyncSession,
     skip: int,
@@ -4750,6 +4782,7 @@ async def get_profiles(
     officer_ids: Optional[List[int]] = None,
     reviewer_ids: Optional[List[int]] = None,
     unassigned: bool = False,
+    lean: bool = False,
 ) -> Tuple[List[models.AdmissionProfile], int]:
     """
     Get filtered list of admission profiles with total count.
@@ -4802,8 +4835,34 @@ async def get_profiles(
         order=order,
         today=today,
         with_hk1=True,  # list path needs HK1 money columns + remaining_hk1 sort
+        lean=lean,
         **coord,
     )
+
+    if lean:
+        # ── Đường LIST NHẸ (perf/admissions-list) ────────────────────────────
+        # KHÔNG chạy `_compute_frontend_fields`/`_calculate_and_update_totals`
+        # per-row (nặng + cần choices graph), KHÔNG batch verifier-names/minor-
+        # correction. Chỉ đọc read-model cột + tính action nhẹ. program_name +
+        # HK1 money đã do repo set (object.__setattr__). Trả `AdmissionProfile
+        # ListItem` (~15 field) → payload ~40KB thay 324KB.
+        for profile in profiles:
+            profile.completion_percent = (
+                profile.cached_completion if profile.cached_completion is not None else 0
+            )
+            profile.eligibility_status = profile.cached_readiness or "pending"
+            # Tên hiển thị (mirror _compute_frontend_fields:2371-2377) — dùng
+            # __dict__.get để KHÔNG lazy-load (MissingGreenlet trong sync).
+            _reviewer = profile.__dict__.get("assigned_reviewer")
+            profile.assigned_reviewer_name = _reviewer.full_name if _reviewer else None
+            _lead = profile.__dict__.get("lead")
+            _officer = _lead.__dict__.get("assigned_officer") if _lead else None
+            profile.assigned_officer_name = _officer.full_name if _officer else None
+            _docs = profile.__dict__.get("documents")
+            profile.available_actions = _compute_list_actions(
+                profile, current_user, _docs
+            )
+        return profiles, total_count
 
     # ADM-031 round 10: pre-resolve verifier names ACROSS all profiles in
     # one SELECT so the listing endpoint stays free of N+1 even when many

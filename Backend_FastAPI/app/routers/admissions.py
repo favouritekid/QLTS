@@ -118,7 +118,7 @@ from ..core.client_ip import get_client_ip  # noqa: E402
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get(
     "",
-    response_model=schemas.AdmissionsPage,
+    response_model=schemas.AdmissionsPageLite,
     summary="List admission profiles",
 )
 async def list_admission_profiles(
@@ -206,9 +206,10 @@ async def list_admission_profiles(
         unit_id=unit_id,
         reviewer_ids=reviewer_ids,
         unassigned=unassigned,
+        lean=True,  # perf/admissions-list: DTO nhẹ, đọc read-model cột (không graph)
     )
 
-    return schemas.AdmissionsPage(
+    return schemas.AdmissionsPageLite(
         total_count=total_count,
         page=page,
         page_size=page_size,
