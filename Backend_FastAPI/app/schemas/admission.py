@@ -1548,6 +1548,7 @@ class AdmissionProfileListItem(BaseModel):
     eligibility_status: Optional[str] = None
     tuition_paid_hk1: Optional[Decimal] = None
     tuition_remaining_hk1: Optional[Decimal] = None
+    tuition_overdue_hk1: bool = False
     tuition_hk1_status: Optional[str] = None
     assigned_officer_name: Optional[str] = None
     assigned_reviewer_name: Optional[str] = None
