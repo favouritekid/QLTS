@@ -46,30 +46,59 @@ from app.utils.phone_helpers import (
 MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_IMPORT_ROWS = 50000
 
-# Alias header tiếng Việt → tên cột chuẩn
+# Alias header tiếng Việt → tên cột chuẩn. So khớp SAU khi bỏ dấu
+# (`_normalize_header`) nên chỉ cần liệt kê dạng ASCII: "Họ và tên" →
+# "ho_va_ten", "SĐT" → "sdt".
 _COL_ALIASES = {
-    "full_name": {"full_name", "fullname", "ho_ten", "hoten", "ten", "name"},
+    "full_name": {
+        "full_name", "fullname", "ho_ten", "hoten", "ten", "name",
+        "ho_va_ten", "hovaten", "ho_ten_hoc_sinh", "ten_hoc_sinh",
+        "hoc_sinh", "ho_ten_thi_sinh", "ten_thi_sinh",
+    },
     "phone": {
         "phone", "so_dien_thoai", "sodienthoai", "sdt", "dien_thoai",
-        "phone_number", "phonenumber",
+        "phone_number", "phonenumber", "so_dt", "dt", "so_may",
+        "dien_thoai_lien_he", "sdt_lien_he", "so_dien_thoai_lien_he",
+        "mobile", "so_dien_thoai_hoc_sinh",
     },
-    "note": {"note", "ghi_chu", "ghichu", "notes"},
+    "note": {"note", "ghi_chu", "ghichu", "notes", "chu_thich"},
 }
+
+
+def _strip_diacritics(text: str) -> str:
+    """Bỏ dấu tiếng Việt → ASCII (đ/Đ không phải dấu tổ hợp nên thay tay)."""
+    s = unicodedata.normalize("NFD", text or "")
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return s.replace("đ", "d").replace("Đ", "D")
 
 
 def _slugify(name: str) -> str:
     """Sinh slug ASCII (bỏ dấu tiếng Việt) cho group code."""
-    s = unicodedata.normalize("NFD", name or "")
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
-    s = s.replace("đ", "d").replace("Đ", "D").lower().strip()
+    s = _strip_diacritics(name).lower().strip()
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
     return s[:50] or "group"
+
+
+def _normalize_header(col: str) -> str:
+    """Chuẩn hóa 1 header về khóa so-alias: bỏ dấu + lower + gộp mọi ký tự
+    không phải chữ/số thành '_'.
+
+    ⚠ Bước bỏ dấu là BẮT BUỘC: thiếu nó thì alias viết cho tiếng Việt không
+    bao giờ khớp header thật ("Họ tên" → "họ_tên" ≠ "ho_ten"), khiến file
+    hợp lệ bị từ chối 400 "thiếu cột bắt buộc".
+    """
+    s = _strip_diacritics(str(col or "")).lower().strip()
+    return re.sub(r"[^a-z0-9]+", "_", s).strip("_")
 
 
 def _resolve_columns(columns: List[str]) -> dict:
     """Map tên cột thực (đã chuẩn hóa) → cột chuẩn. Trả {chuẩn: thực}."""
     found = {}
-    norm = {c.lower().strip().replace(" ", "_"): c for c in columns}
+    # setdefault: 2 header khác nhau có thể chuẩn hóa về CÙNG khóa (vd "Họ tên"
+    # và "Ho ten") → giữ cột xuất hiện TRƯỚC thay vì để cột sau ghi đè.
+    norm: dict = {}
+    for c in columns:
+        norm.setdefault(_normalize_header(c), c)
     for canonical, aliases in _COL_ALIASES.items():
         for key, original in norm.items():
             if key in aliases:
