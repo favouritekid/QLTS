@@ -58,11 +58,15 @@ class SmsTrackingService:
                     raise ResourceNotFoundError(detail=GENERIC_404)
             else:
                 target = f"/lp/{code}"
+            # mobile_channel=True: lượt này đến TỪ TIN SMS → chỉ mở được trên
+            # điện thoại. UA desktop = máy quét chống spam của nhà mạng, vốn
+            # lọt hết 3 dấu hiệu cũ và thổi phồng CTR (xem sms_bot).
             is_bot, reason = detect_bot(
                 user_agent=user_agent,
                 headers=headers,
                 handed_off_at=resolved.recipient.handed_off_at,
                 now=now,
+                mobile_channel=True,
             )
             await self.repo.record_click(
                 recipient_id=resolved.recipient.id,
