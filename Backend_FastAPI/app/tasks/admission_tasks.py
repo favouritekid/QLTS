@@ -23,11 +23,20 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import selectinload
 
 from ..celery_app import celery_app
 from .utils import run_async_task, task_db_session
+
+# Trạng thái ĐÓNG BĂNG read-model (completion/readiness không còn đổi) — sweep
+# tính 1 lần (khi cached_derived_at NULL) rồi thôi. Mọi trạng thái KHÁC được coi
+# là "đang biến động" và refresh mỗi chu kỳ (an toàn: thà refresh thừa còn hơn
+# để badge lệch — completion KHÔNG per-profile-pure nên không suy được từ 1 cột).
+_DERIVED_FROZEN_STATUSES = ("enrolled", "dropped", "withdrawn")
+# Trần mỗi lần chạy — sweep round-robin theo cached_derived_at cũ nhất (NULLS
+# FIRST = backfill trước). Đủ cho vài nghìn hồ sơ active với chu kỳ 5'.
+_DERIVED_SWEEP_BATCH = 400
 
 
 @celery_app.task(
@@ -565,5 +574,89 @@ def check_admission_confirmation_reminders_task(self):
             "outcome": outcome,
             **result,
         },
+    )
+    return result
+
+
+@celery_app.task(
+    name="refresh_admission_derived_task",
+    bind=True,
+    autoretry_for=(Exception,),
+    max_retries=2,
+    default_retry_delay=120,
+)
+def refresh_admission_derived_task(self):
+    """Beat (~5'): làm tươi read-model `cached_completion`/`cached_readiness`/
+    `cached_derived_at` cho hồ sơ CHƯA tính (backfill lazy) hoặc đang biến động.
+
+    Backbone của eventual-consistency (perf/admissions-list): list + stats đọc
+    cột thay vì tính-lại-mỗi-request. Sweep phủ MỌI nguyên nhân đổi completion
+    (kể cả sửa live-config multi-NV + doc-verify/choice-score không bump
+    updated_at) nên KHÔNG cần rải recompute vào từng mutation-site.
+
+    - Chọn: `cached_derived_at IS NULL` (chưa tính) HOẶC status NOT IN frozen.
+    - Order: cached_derived_at ASC NULLS FIRST → backfill trước, rồi cũ-nhất
+      trước (round-robin), LIMIT batch → bounded mỗi lần.
+    - Eager: choices graph (multi-NV đọc live criteria/subject-group) + documents
+      + subject_scores → refresh_derived_fields chạy thuần, không MissingGreenlet.
+    """
+    task_name = "refresh_admission_derived_task"
+    task_log = logging.getLogger(task_name)
+
+    async def _run() -> dict:
+        from ..models.admission import AdmissionProfile
+        from ..models.profile_data import ProfileSubjectScore
+        from ..repositories.admission_repository import _choices_eager_load_options
+        from ..services.admission_service import refresh_derived_fields
+
+        result = {"scanned": 0, "refreshed": 0, "failed": 0}
+
+        async with task_db_session() as session:
+            stmt = (
+                select(AdmissionProfile)
+                .options(
+                    *_choices_eager_load_options(),
+                    selectinload(AdmissionProfile.documents),
+                    selectinload(AdmissionProfile.subject_scores).selectinload(
+                        ProfileSubjectScore.subject
+                    ),
+                )
+                .where(
+                    or_(
+                        AdmissionProfile.cached_derived_at.is_(None),
+                        AdmissionProfile.status.notin_(_DERIVED_FROZEN_STATUSES),
+                    )
+                )
+                .order_by(AdmissionProfile.cached_derived_at.asc().nulls_first())
+                .limit(_DERIVED_SWEEP_BATCH)
+            )
+            profiles = (await session.execute(stmt)).scalars().unique().all()
+            result["scanned"] = len(profiles)
+
+            for profile in profiles:
+                try:
+                    # Savepoint per-hồ-sơ: 1 hồ sơ lỗi compute không chặn cả batch.
+                    async with session.begin_nested():
+                        refresh_derived_fields(profile, profile.documents)
+                    result["refreshed"] += 1
+                except Exception:
+                    result["failed"] += 1
+                    task_log.exception(
+                        "refresh_derived failed", extra={"profile_id": profile.id}
+                    )
+
+            await session.commit()
+
+        return result
+
+    result = run_async_task(
+        async_func=_run,
+        task_name=task_name,
+        task_log=task_log,
+        validate_keys=["scanned", "refreshed", "failed"],
+    )
+    task_log.info(
+        "refresh_admission_derived heartbeat: end",
+        extra={"event": "refresh_admission_derived_heartbeat", "phase": "end", **result},
     )
     return result

@@ -749,8 +749,6 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             conditions.append(models.AdmissionProfile.academic_year == academic_year)
 
         # Status counts in one query
-        # Note: completion_percent is computed at service layer (not a DB column),
-        # so we cannot use func.avg() here. avg_completion defaults to 0.
         query = (
             select(
                 models.AdmissionProfile.status,
@@ -764,6 +762,19 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
 
         result = await self.db.execute(query)
         rows = result.all()
+
+        # avg_completion — ĐỌC read-model `cached_completion` (perf/admissions-list)
+        # bằng AVG SQL, thay cho fetch-all mọi hồ sơ + Python loop (~2.1s → ~ms).
+        # AVG bỏ qua NULL (hồ sơ chưa được sweep tính); COALESCE 0 cho cửa sổ đầu
+        # khi mọi hàng còn NULL. Eventual-consistent với list (cùng cột).
+        avg_query = select(
+            func.coalesce(func.avg(models.AdmissionProfile.cached_completion), 0.0)
+        ).join(models.Lead)
+        if conditions:
+            avg_query = avg_query.where(and_(*conditions))
+        avg_completion = round(
+            float((await self.db.execute(avg_query)).scalar() or 0.0), 1
+        )
 
         status_counts = {}
         total = 0
@@ -798,7 +809,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             "withdrawn_count": withdrawn_count,
             "withdrawal_pending_count": withdrawal_pending_count,
             "conversion_rate": conversion_rate,
-            "avg_completion": 0.0,
+            "avg_completion": avg_completion,
         }
 
     async def get_distinct_academic_years(

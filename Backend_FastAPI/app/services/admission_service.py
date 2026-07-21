@@ -1530,6 +1530,59 @@ def _compute_completion_percent(
     return min(100, completion)
 
 
+def _compute_readiness_status(
+    profile: models.AdmissionProfile,
+    documents: list = None,
+) -> str:
+    """Readiness/eligibility ('eligible'|'ineligible') — THUẦN (không cần
+    current_user). MIRROR chính xác khối "eligibility_status" của
+    `_compute_frontend_fields` (validation_errors == 0 ⇒ eligible; approved/
+    enrolled ⇒ eligible). Dùng cho read-model `cached_readiness`.
+
+    ⚠️ Multi-NV: `_validate_scores`→`validate_choice_scores_complete` đọc LIVE
+    `admission_path.criteria` + `subject_group.subject_mappings` ⇒ KHÔNG
+    per-profile-pure. Caller PHẢI eager-load choices graph (nếu không →
+    MissingGreenlet trong async session).
+    """
+    if profile.status in ("approved", "enrolled"):
+        return "eligible"
+    applied_rules = profile.applied_rules or {}
+    _gpa_error, score_ve, _gpa_errors = _validate_scores(profile, applied_rules)
+    _doc_errors, doc_ve, _u1, _u2, _u3 = _validate_documents(
+        profile, documents, applied_rules
+    )
+    _missing_personal, personal_ve = _validate_personal_info(profile)
+    validation_errors = score_ve + doc_ve + personal_ve
+    return "eligible" if len(validation_errors) == 0 else "ineligible"
+
+
+def refresh_derived_fields(
+    profile: models.AdmissionProfile,
+    documents: list = None,
+) -> tuple[int, str]:
+    """Tính + GHI read-model (`cached_completion`/`cached_readiness`/
+    `cached_derived_at`) cho một profile. Backbone của eventual-consistency:
+    gọi bởi sweep nền + tại state-transition + `update_profile` (mọi caller PHẢI
+    commit sau đó).
+
+    Tái dùng `_calculate_and_update_totals` → `_compute_completion_percent` →
+    `_compute_readiness_status` (đúng THỨ TỰ như đường list/detail: tính
+    total/average trước để `_validate_scores` single-NV đọc đúng). Giá trị KHỚP
+    y hệt live mà detail trả.
+
+    ⚠️ PHẢI gọi với choices/documents/scores ĐÃ eager-load (multi-NV cần graph).
+    """
+    if documents is None:
+        documents = profile.__dict__.get("documents")
+    _calculate_and_update_totals(profile)
+    completion = _compute_completion_percent(profile, documents)
+    readiness = _compute_readiness_status(profile, documents)
+    profile.cached_completion = completion
+    profile.cached_readiness = readiness
+    profile.cached_derived_at = datetime.now(timezone.utc)
+    return completion, readiness
+
+
 @dataclass
 class LeadAdmissionEligibility:
     """Result of lead-level admission eligibility check.
@@ -4917,36 +4970,15 @@ async def get_admission_stats(
 
     unit_filter, officer_filter = _resolve_idor_filters(current_user)
 
-    stats = await admission_repo.get_aggregate_stats(
+    # avg_completion đã được `get_aggregate_stats` tính bằng AVG(cached_completion)
+    # SQL (perf/admissions-list). VÒNG FETCH-ALL cũ (load mọi hồ sơ + Python loop,
+    # ~2.1s) ĐÃ BỎ — read-model do `refresh_admission_derived_task` làm tươi nền,
+    # eventual-consistent. Detail vẫn hiển thị completion tính LIVE.
+    return await admission_repo.get_aggregate_stats(
         unit_id=unit_filter,
         assigned_officer_id=officer_filter,
         academic_year=academic_year,
     )
-
-    # Compute avg_completion over ALL profiles in scope (no sampling)
-    total = stats.get("total_profiles", 0)
-    if total > 0:
-        completion_sum = 0
-        fetched = 0
-        batch_size = 500
-        while fetched < total:
-            batch, _ = await admission_repo.get_filtered_with_count(
-                skip=fetched,
-                limit=batch_size,
-                unit_id=unit_filter,
-                assigned_officer_id=officer_filter,
-                academic_year=academic_year,
-            )
-            if not batch:
-                break
-            for p in batch:
-                _calculate_and_update_totals(p)
-                docs = p.documents if hasattr(p, "documents") else None
-                completion_sum += _compute_completion_percent(p, docs)
-            fetched += len(batch)
-        stats["avg_completion"] = round(completion_sum / fetched, 1) if fetched > 0 else 0.0
-
-    return stats
 
 
 async def get_academic_years(
