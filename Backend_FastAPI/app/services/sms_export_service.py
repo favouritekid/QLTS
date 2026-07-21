@@ -44,7 +44,9 @@ log = logging.getLogger(__name__)
 # 'handed_off' (re-export để RETRY batch failed của nhà mạng khác mà không
 # kẹt — xem mark_handed_off). 'draft' = chưa build/stale; 'closed' = đã bàn
 # giao hết → khoá.
-_EXPORTABLE_CAMPAIGN_STATUS = {"ready", "exported", "handed_off"}
+# Public: campaign_service đọc để điền cờ `can_export` cho FE (thin-client)
+# → chỉ MỘT định nghĩa gate, không drift giữa gate thật và cờ hiển thị.
+EXPORTABLE_CAMPAIGN_STATUS = {"ready", "exported", "handed_off"}
 # Batch ở các trạng thái này = CHƯA có file dùng được → (re)generate.
 _REGENERATE_BATCH_STATUS = {"pending", "failed", "purged", "invalidated"}
 
@@ -126,7 +128,7 @@ class SmsExportService:
                 detail="Campaign chưa Build (hoặc đã đổi nhóm/nội dung sau "
                 "Build) — Build lại trước khi export."
             )
-        if campaign.status not in _EXPORTABLE_CAMPAIGN_STATUS:
+        if campaign.status not in EXPORTABLE_CAMPAIGN_STATUS:
             raise BusinessRuleViolation(
                 detail="Campaign đã bàn giao/đóng — không export lại; tạo "
                 "campaign mới."

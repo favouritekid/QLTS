@@ -429,6 +429,10 @@ class SmsCampaignOut(BaseModel):
     # Computed (service điền)
     has_link: Optional[bool] = None
     group_count: Optional[int] = None
+    # Gate TRẠNG THÁI export/re-export (status + đã build). KHÔNG gồm
+    # attestation/preflight — FE hiển thị riêng phần "còn thiếu gì".
+    # 'handed_off' VẪN true: re-export để retry batch nhà mạng lỗi (§8.4).
+    can_export: Optional[bool] = None
 
 
 class SmsCampaignList(BaseModel):

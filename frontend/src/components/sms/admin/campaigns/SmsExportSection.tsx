@@ -40,8 +40,6 @@ const REQUIRED = SMS_ATTESTATION_KINDS.length
 
 interface Props {
   campaign: SmsCampaign
-  /** Export/handoff được khi chưa bàn giao/đóng. Chỉ mount khi đã build. */
-  editable: boolean
 }
 
 function formatBytes(n: number | null | undefined): string {
@@ -51,7 +49,12 @@ function formatBytes(n: number | null | undefined): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function SmsExportSection({ campaign, editable }: Props) {
+export function SmsExportSection({ campaign }: Props) {
+  // Cờ BE. Bàn giao là chuyện TỪNG batch (`b.can_mark_handed_off`) — KHÔNG gắn
+  // với vòng đời campaign: bàn giao batch đầu đẩy campaign sang 'handed_off',
+  // nếu khoá cả khu theo status thì các nhà mạng còn lại mất nút bàn giao và
+  // operator tưởng đã xong (sự cố chiến dịch #6: 338/380 người kẹt).
+  const canExport = campaign.can_export === true
   const [handoffTarget, setHandoffTarget] = useState<{
     id: number
     carrier: string
@@ -92,7 +95,7 @@ export function SmsExportSection({ campaign, editable }: Props) {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base">Export &amp; bàn giao</CardTitle>
-        {editable && (
+        {canExport && (
           <Button
             size="sm"
             onClick={() => exportMut.mutate()}
@@ -108,7 +111,7 @@ export function SmsExportSection({ campaign, editable }: Props) {
         )}
       </CardHeader>
       <CardContent className="space-y-3">
-        {editable && !ready && (
+        {canExport && !ready && (
           <div className="rounded border border-amber-300 bg-amber-50 p-2.5">
             <p className="flex items-center gap-1.5 text-xs font-medium text-amber-800">
               <AlertTriangle className="h-3.5 w-3.5" />
@@ -175,7 +178,7 @@ export function SmsExportSection({ campaign, editable }: Props) {
                       <Download className="mr-1.5 h-3.5 w-3.5" /> Tải
                     </Button>
                   )}
-                  {editable && b.can_mark_handed_off && (
+                  {b.can_mark_handed_off && (
                     <Button
                       size="sm"
                       onClick={() =>

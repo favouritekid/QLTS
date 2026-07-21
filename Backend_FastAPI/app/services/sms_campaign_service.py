@@ -24,6 +24,7 @@ from app.models.sms import SmsCampaign, SmsContactGroup
 from app.repositories.sms_campaign_repository import SmsCampaignRepository
 from app.repositories.sms_contact_repository import SmsContactRepository
 from app.schemas import sms as sms_schemas
+from app.services.sms_export_service import EXPORTABLE_CAMPAIGN_STATUS
 from app.utils.exceptions import (
     BusinessRuleViolation,
     ConflictError,
@@ -134,10 +135,16 @@ class SmsCampaignService:
     def _with_computed(
         self, campaign: SmsCampaign, group_count: Optional[int] = None
     ) -> SmsCampaign:
-        # Luôn set cả 2 transient attr (kể cả None) để Pydantic from_attributes
+        # Luôn set cả 3 transient attr (kể cả None) để Pydantic from_attributes
         # không thiếu thuộc tính khi serialize SmsCampaignOut ở list.
         campaign.has_link = has_link(campaign.sms_template)
         campaign.group_count = group_count
+        # Nguồn sự thật DUY NHẤT của gate trạng thái export = hằng bên
+        # export_service → FE không tự suy diễn từ status (đọc cờ này).
+        campaign.can_export = (
+            campaign.status in EXPORTABLE_CAMPAIGN_STATUS
+            and campaign.build_revision >= 1
+        )
         return campaign
 
     # ===============================================================
