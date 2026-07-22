@@ -390,7 +390,9 @@ class AdmissionProfile(Base):
     # mà `_compute_frontend_fields` set: tránh collision khiến autoflush ghi cột
     # trên ĐƯỜNG ĐỌC (list gọi _compute_frontend_fields per-row rồi query batch →
     # autoflush sẽ flush cột dirty = write-on-GET). 3 cột này CHỈ được ghi TƯỜNG
-    # MINH bởi `refresh_derived_fields` (sweep nền + tại state-transition/update).
+    # MINH bởi `refresh_derived_fields` (HIỆN TẠI chỉ sweep nền
+    # `refresh_admission_derived_task`; chưa nối opportunistic-refresh tại
+    # state-transition/update → badge list trễ ≤ chu kỳ sweep).
     # completion/eligibility KHÔNG per-profile-pure (multi-NV đọc live-config +
     # doc-verify/choice-score không bump updated_at) ⇒ eventual-consistency: list
     # + stats đọc cột (trễ ≤ chu kỳ sweep); detail + cổng submit/approve vẫn LIVE.

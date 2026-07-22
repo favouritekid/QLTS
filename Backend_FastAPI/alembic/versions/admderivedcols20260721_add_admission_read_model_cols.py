@@ -63,18 +63,21 @@ def upgrade() -> None:
             comment="Lần cuối refresh_derived_fields ghi cached_completion/readiness (UTC).",
         ),
     )
-    # Partial index phục vụ sweep: quét nhanh hàng CHƯA tính (backfill lazy).
+    # Index phục vụ sweep `refresh_admission_derived_task`, khớp CHÍNH XÁC thứ tự
+    # truy vấn: ORDER BY cached_derived_at ASC NULLS FIRST LIMIT N. NULLS FIRST
+    # trong index cho phép index-scan phục vụ CẢ (a) quét hàng CHƯA tính (NULL ở
+    # đầu = backfill lazy) LẪN (b) steady-state lấy N hàng cũ nhất — KHÔNG seq-scan
+    # + sort toàn bảng mỗi chu kỳ (khác partial-index-chỉ-NULL sẽ rỗng sau backfill).
     op.create_index(
-        "ix_admission_profile_derived_pending",
+        "ix_admission_profile_cached_derived_at",
         TABLE,
-        ["id"],
+        [sa.text("cached_derived_at ASC NULLS FIRST")],
         unique=False,
-        postgresql_where=sa.text("cached_derived_at IS NULL"),
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_admission_profile_derived_pending", table_name=TABLE)
+    op.drop_index("ix_admission_profile_cached_derived_at", table_name=TABLE)
     op.drop_column(TABLE, "cached_derived_at")
     op.drop_column(TABLE, "cached_readiness")
     op.drop_column(TABLE, "cached_completion")

@@ -6,7 +6,7 @@ conftest truncate mọi bảng mỗi test → mỗi test tự kiểm soát datas
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select, update
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app import models
 from app.database import AsyncSessionLocal
@@ -72,7 +72,13 @@ class TestAdmissionReadModel:
                 .where(models.AdmissionProfile.id == pid)
                 .options(
                     selectinload(models.AdmissionProfile.lead),
-                    selectinload(models.AdmissionProfile.documents),
+                    # joinedload(document_type) KHỚP eager của sweep task — validator
+                    # đọc doc.document_type.code; thiếu nó + hồ sơ có giấy = Missing
+                    # Greenlet. Test giữ đúng graph sweep để không cho cảm giác an
+                    # toàn giả (dù fixture hiện không có ProfileDocument).
+                    selectinload(models.AdmissionProfile.documents).joinedload(
+                        models.ProfileDocument.document_type
+                    ),
                     selectinload(models.AdmissionProfile.subject_scores),
                     *_choices_eager_load_options(),
                 )
@@ -131,7 +137,8 @@ class TestAdmissionReadModel:
     ):
         """_compute_list_actions: submitted + admin + chưa claim → reject+claim;
         approve chỉ khi không nợ giấy (hồ sơ này không có debt snapshot → approve
-        có mặt)."""
+        có mặt); admin luôn có assign_officer (bulk-assign bar). unclaim KHÔNG lọt
+        vào output list (không UI list nào đọc)."""
         unit_id = seed_lead_dependencies["unit_id"]
         pid = await _make_profile(unit_id)
         await _set_cached(pid, 50, "ineligible")
@@ -141,3 +148,25 @@ class TestAdmissionReadModel:
         assert "reject" in acts
         assert "claim" in acts  # chưa có reviewer
         assert "approve" in acts  # no document_debt snapshot → không gate
+        # Regression guard: bulk "Phân công hàng loạt" cần assign_officer trên MỌI
+        # hàng (FE canAssign = every('assign_officer')). Admin → luôn có.
+        assert "assign_officer" in acts
+        assert "unclaim" not in acts  # dead-data đã bỏ khỏi output list
+
+    async def test_lean_list_actions_dropped_seat_collapses(
+        self, client: AsyncClient, admin_token_headers: dict, seed_lead_dependencies: dict
+    ):
+        """Ghế thôi học (is_dropped=True, status vẫn 'enrolled') → list KHÔNG bày
+        action nào (mirror detail-collapse), kể cả assign_officer."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        pid = await _make_profile(unit_id, status="enrolled")
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                await session.execute(
+                    update(models.AdmissionProfile)
+                    .where(models.AdmissionProfile.id == pid)
+                    .values(is_dropped=True, cached_completion=100, cached_readiness="eligible")
+                )
+        resp = await client.get("/api/admissions", headers=admin_token_headers)
+        row = _find(resp.json(), pid)
+        assert row["available_actions"] == []

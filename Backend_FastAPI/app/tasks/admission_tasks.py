@@ -29,11 +29,16 @@ from sqlalchemy.orm import selectinload
 from ..celery_app import celery_app
 from .utils import run_async_task, task_db_session
 
-# Trạng thái ĐÓNG BĂNG read-model (completion/readiness không còn đổi) — sweep
-# tính 1 lần (khi cached_derived_at NULL) rồi thôi. Mọi trạng thái KHÁC được coi
-# là "đang biến động" và refresh mỗi chu kỳ (an toàn: thà refresh thừa còn hơn
-# để badge lệch — completion KHÔNG per-profile-pure nên không suy được từ 1 cột).
-_DERIVED_FROZEN_STATUSES = ("enrolled", "dropped", "withdrawn")
+# Trạng thái ĐÓNG BĂNG read-model (completion/readiness KHÔNG còn đổi) — sweep
+# tính 1 lần (khi cached_derived_at NULL) rồi thôi. Mọi trạng thái KHÁC coi là
+# "đang biến động" và refresh mỗi chu kỳ (an toàn: thà refresh thừa còn hơn để
+# badge lệch — completion KHÔNG per-profile-pure nên không suy được từ 1 cột).
+# CHỈ gồm state THỰC-SỰ-XONG + KHÔNG editable: 'enrolled' (đã nhập học; ghế
+# thôi-học is_dropped VẪN status 'enrolled' nên đã phủ) + 'withdrawn'. KHÔNG
+# đóng băng 'rejected'/'revision_requested' vì chúng CÒN editable (edit gate
+# admission_service.py) → completion đổi tại chỗ, phải re-sweep. ('dropped' KHÔNG
+# phải giá trị status hợp lệ — đã bỏ khỏi tuple: entry chết.)
+_DERIVED_FROZEN_STATUSES = ("enrolled", "withdrawn")
 # Trần mỗi lần chạy — sweep round-robin theo cached_derived_at cũ nhất (NULLS
 # FIRST = backfill trước). Đủ cho vài nghìn hồ sơ active với chu kỳ 5'.
 _DERIVED_SWEEP_BATCH = 400
@@ -643,12 +648,20 @@ def refresh_admission_derived_task(self):
 
             for profile in profiles:
                 try:
-                    # Savepoint per-hồ-sơ: 1 hồ sơ lỗi compute không chặn cả batch.
-                    async with session.begin_nested():
-                        refresh_derived_fields(profile, profile.documents)
+                    # `refresh_derived_fields` thuần Python (không SQL trong block)
+                    # → try/except đã đủ cô lập 1 hồ sơ lỗi khỏi cả batch; KHÔNG
+                    # cần SAVEPOINT (bỏ ~2×N round-trip begin_nested/release mỗi
+                    # chu kỳ). Ghi cached_* chỉ pending trong session tới commit.
+                    refresh_derived_fields(profile, profile.documents)
                     result["refreshed"] += 1
                 except Exception:
                     result["failed"] += 1
+                    # Sentinel: đóng dấu cached_derived_at (GIỮ completion/readiness
+                    # NULL) để hồ sơ lỗi KHÔNG kẹt đầu ORDER BY ... NULLS FIRST và
+                    # bị chọn lại → log ERROR MỖI chu kỳ (poison head-of-line). Nay
+                    # nó lùi về cuối, chỉ thử lại khi lại là cũ nhất; completion NULL
+                    # nên vẫn ngoài AVG stats (không bơm số sai).
+                    profile.cached_derived_at = datetime.now(timezone.utc)
                     task_log.exception(
                         "refresh_derived failed", extra={"profile_id": profile.id}
                     )

@@ -577,7 +577,11 @@ export function useAdmissionsFilter(
   const countFilters: Record<string, unknown> = useMemo(() => {
     const params: Record<string, unknown> = {}
 
-    if (search) params.search = search
+    // debouncedSearch (KHÔNG phải `search` thô) để: (a) status-counts KHÔNG fire
+    // mỗi phím gõ, (b) số đếm tab KHỚP hàng danh sách (apiFilters cũng dùng
+    // debouncedSearch) — nếu dùng `search` thô, đếm theo 'abc' còn rows theo 'ab'
+    // lệch tới 300ms.
+    if (debouncedSearch) params.search = debouncedSearch
     if (majorFilter) params.major_id = majorFilter
     if (academicYear !== undefined) params.academic_year = academicYear
     if (degreeLevelFilter) params.degree_level = degreeLevelFilter
@@ -589,7 +593,7 @@ export function useAdmissionsFilter(
 
     return params
   }, [
-    search, majorFilter, academicYear, degreeLevelFilter, paymentStatusFilter,
+    debouncedSearch, majorFilter, academicYear, degreeLevelFilter, paymentStatusFilter,
     dateFrom, dateTo, officerFilters, unitId, reviewerFilters, unassigned,
   ])
 
