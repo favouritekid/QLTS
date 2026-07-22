@@ -473,15 +473,16 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 models.MajorProgram, models.ProgramOffering.program_id == models.MajorProgram.id
             )
         # Eager NHẸ dùng chung: lead→officer + offering→program (program_name) +
-        # academic_info→semester_tuitions (HK1) + documents (doc-debt) + reviewer.
+        # documents (doc-debt) + reviewer. HK1 money đến từ correlated subquery
+        # (with_hk1), KHÔNG từ offering.academic_info_history → đã BỎ eager nhánh đó
+        # (grep: không đường list/detail admission nào đọc semester_tuitions) để
+        # khỏi tải ~2 SELECT/trang rồi vứt — ngay trên endpoint đang tối ưu.
         _eager_opts = [
             selectinload(models.AdmissionProfile.assigned_reviewer),
             selectinload(models.AdmissionProfile.lead).options(
                 selectinload(models.Lead.assigned_officer),
                 selectinload(models.Lead.offering).options(
                     selectinload(models.ProgramOffering.program),
-                    selectinload(models.ProgramOffering.academic_info_history)
-                    .selectinload(models.OfferingAcademicInfo.semester_tuitions),
                 ),
             ),
             selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
@@ -497,6 +498,19 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 selectinload(models.AdmissionProfile.student),
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
                 *_choices_eager_load_options(),
+            ]
+        else:
+            # lean=True: student/subject_scores/fees khai báo lazy="selectin" ở MAPPER
+            # (models/admission.py) → BỎ khỏi .options() KHÔNG tắt được, vẫn nạp mặc
+            # định (+ subject_scores.subject KHÔNG nạp trên lean → chạm score.subject =
+            # MissingGreenlet ngầm). raiseload TẮT HẲN eager 3 quan hệ này (đường lean
+            # KHÔNG đọc chúng: chỉ cached cols + program_name/HK1(subquery)/tên phụ
+            # trách + documents) → giảm ~N query/trang THẬT + biến bẫy MissingGreenlet
+            # thành lỗi rõ nếu tương lai ai lỡ chạm.
+            _eager_opts += [
+                raiseload(models.AdmissionProfile.student),
+                raiseload(models.AdmissionProfile.subject_scores),
+                raiseload(models.AdmissionProfile.fees),
             ]
         data_query = (
             data_query.options(*_eager_opts)

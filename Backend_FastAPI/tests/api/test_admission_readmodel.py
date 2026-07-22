@@ -170,3 +170,50 @@ class TestAdmissionReadModel:
         resp = await client.get("/api/admissions", headers=admin_token_headers)
         row = _find(resp.json(), pid)
         assert row["available_actions"] == []
+
+    async def test_refresh_preserves_updated_at(self, seed_lead_dependencies):
+        """refresh_derived_fields ghi cached_* NHƯNG KHÔNG bump `updated_at`
+        (flag_modified) — sweep 5' không được giả làm 'sửa lần cuối' của mọi hồ sơ
+        non-terminal (hỏng sort_by=updated_at / cột CSV / magic-link consumed_at)."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        pid = await _make_profile(unit_id)
+        async with AsyncSessionLocal() as session:
+            p0 = await session.get(models.AdmissionProfile, pid)
+            orig_updated = p0.updated_at
+        async with AsyncSessionLocal() as session:
+            stmt = (
+                select(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == pid)
+                .options(
+                    selectinload(models.AdmissionProfile.lead),
+                    selectinload(models.AdmissionProfile.documents).joinedload(
+                        models.ProfileDocument.document_type
+                    ),
+                    selectinload(models.AdmissionProfile.subject_scores),
+                    *_choices_eager_load_options(),
+                )
+            )
+            p = (await session.execute(stmt)).scalars().first()
+            admission_service.refresh_derived_fields(p, p.documents)
+            assert p.cached_derived_at is not None
+            await session.commit()
+        async with AsyncSessionLocal() as session:
+            p2 = await session.get(models.AdmissionProfile, pid)
+            assert p2.cached_completion is not None  # cached ĐÃ ghi (row có UPDATE)
+            assert p2.updated_at == orig_updated, (
+                "refresh_derived_fields KHÔNG được bump updated_at "
+                f"(gốc {orig_updated} → sau refresh {p2.updated_at})"
+            )
+
+    async def test_lean_list_actions_manager_same_unit(
+        self, client: AsyncClient, manager_token_headers: dict, seed_lead_dependencies: dict
+    ):
+        """Manager CÙNG unit → hàng list có assign_officer (nhánh is_manager của
+        `_list_action_flags` — bổ sung test admin vốn phủ nhánh is_admin)."""
+        unit_id = seed_lead_dependencies["unit_id"]
+        pid = await _make_profile(unit_id)  # lead trong unit của manager
+        await _set_cached(pid, 50, "ineligible")
+        resp = await client.get("/api/admissions", headers=manager_token_headers)
+        assert resp.status_code == 200, resp.text
+        row = _find(resp.json(), pid)
+        assert "assign_officer" in set(row["available_actions"])

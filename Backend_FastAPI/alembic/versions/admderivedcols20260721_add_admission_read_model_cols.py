@@ -14,8 +14,9 @@ Cột (nullable — KHÔNG backfill trong migration):
 ⚠️ KHÔNG backfill ở đây: completion/readiness cần chạy validator Python
 (`_compute_completion_percent`/`_compute_readiness_status`), không SQL-able —
 đặc biệt multi-NV đọc live-config. Các cột khởi tạo NULL; **beat task
-`refresh_admission_derived_task` TỰ backfill lazily** (refresh mọi hàng
-`cached_derived_at IS NULL` + mọi hàng non-terminal mỗi chu kỳ). Stats
+`refresh_admission_derived_task` TỰ backfill lazily** (mỗi chu kỳ 5' refresh tối
+đa `_DERIVED_SWEEP_BATCH` hàng cũ nhất theo cached_derived_at NULLS FIRST — độ tươi
+thực = ceil(N_non_frozen/batch)×5', KHÔNG phải "mọi hàng mỗi chu kỳ"). Stats
 `AVG(cached_completion)` bỏ qua NULL (COALESCE ở service cho cửa sổ đầu).
 
 Revision ID: admderivedcols20260721

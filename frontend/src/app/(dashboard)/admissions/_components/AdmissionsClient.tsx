@@ -348,7 +348,11 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
   const handleExport = useCallback(() => {
     exportCsv.mutate({
       status: state.statusFilters.length > 0 ? state.statusFilters.join(",") : undefined,
-      search: state.search || undefined,
+      // debounced (apiFilters.search) — KHÔNG state.search thô: bảng + đếm tab dùng
+      // debouncedSearch, nếu export đọc thô thì khi user XOÁ ô search rồi bấm 'Xuất
+      // CSV' trong 300ms → CSV gửi search=undefined → tải TOÀN BỘ thay vì tập đang
+      // thấy (comment gốc hứa 'CSV matches the on-screen list').
+      search: apiFilters.search,
       major_id: state.majorFilter || undefined,
       academic_year: state.academicYear || undefined,
       degree_level: state.degreeLevelFilter || undefined,
@@ -364,7 +368,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
         unassigned: state.unassigned,
       }),
     })
-  }, [exportCsv, state])
+  }, [exportCsv, state, apiFilters])
 
   const isAnyLoading = bulkApprove.isPending || bulkReject.isPending || bulkAssign.isPending || exportCsv.isPending
 

@@ -1351,9 +1351,14 @@ class TestTokenBasedConfirmation:
 
 
 class TestAdmissionListNullJsonbFields:
-    """BUG-2 regression guard: GET /admissions must tolerate rows with NULL
-    JSONB list columns (family_info, academic_history). Pre-fix this crashed
-    the whole page with pydantic `list_type` validation error.
+    """BUG-2 regression guard: endpoint admission phải tolerate hàng có NULL
+    JSONB list columns (family_info, academic_history). Pre-fix crash cả trang
+    với pydantic `list_type` error.
+
+    Sau perf/admissions-list: LIST trả lean DTO (không còn 2 field này) nên chỉ
+    cần list 200 + không rớt hàng; coercion NULL→[] được kiểm ở đường DETAIL
+    (`AdmissionProfileResponse._coerce_null_list_jsonb_to_empty`) — nơi vẫn
+    serialize chúng.
     """
 
     async def test_list_tolerates_profile_with_null_list_fields(
@@ -1395,8 +1400,9 @@ class TestAdmissionListNullJsonbFields:
             f"fields. Got {response.status_code}: {response.text[:300]}"
         )
 
-        # Find the poisoned row in the response; its list fields must have
-        # been coerced to `[]`.
+        # Lean list DTO (perf/admissions-list) KHÔNG còn serialize family_info/
+        # academic_history (field nặng, đã bỏ khỏi bảng) → list KHÔNG THỂ dính
+        # BUG-2 `list_type` cho 2 field này nữa; chỉ cần list 200 + không rớt hàng.
         body = response.json()
         rows = body.get("profiles") or body.get("items") or []
         poison = next((p for p in rows if p["id"] == profile_id), None)
@@ -1404,8 +1410,23 @@ class TestAdmissionListNullJsonbFields:
             f"Poisoned profile {profile_id} missing from response; list "
             f"may have silently dropped it."
         )
-        assert poison["family_info"] == []
-        assert poison["academic_history"] == []
+        assert "family_info" not in poison and "academic_history" not in poison, (
+            "Lean list DTO không nên chứa family_info/academic_history (đã chuyển "
+            "khỏi list — nếu xuất hiện lại nghĩa là DTO bị phình ngược)."
+        )
+
+        # BUG-2 coercion guard THỰC ở đường DETAIL — nơi AdmissionProfileResponse
+        # VẪN serialize 2 field JSONB này; `_coerce_null_list_jsonb_to_empty`
+        # (schemas/admission.py mode='before') biến NULL→[] TRƯỚC type-check nên
+        # detail không 500 + trả [].
+        detail = await client.get(f"/api/admissions/{profile_id}", headers=headers)
+        assert detail.status_code == 200, (
+            f"Detail endpoint must not 500 on NULL list JSONB fields. "
+            f"Got {detail.status_code}: {detail.text[:300]}"
+        )
+        dbody = detail.json()
+        assert dbody["family_info"] == []
+        assert dbody["academic_history"] == []
 
 
 # ==============================================================================

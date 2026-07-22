@@ -623,7 +623,10 @@ async def export_admissions_csv(
     _validate_payment_status(payment_status)
 
     # Export path: no page cap, lightweight hydration (only completion_percent).
-    # Same coordination filters as list so the CSV matches the on-screen rows.
+    # Same coordination filters as list so the CSV covers the same ROW SET as the
+    # on-screen list. ⚠️ Cột 'Tiến độ hoàn thiện' trong CSV tính LIVE (get_profiles_
+    # for_export, non-lean) nên có thể lệch badge trên BẢNG (đọc cached read-model,
+    # eventual) tới ≤1 chu kỳ sweep — khớp TẬP hàng, không nhất thiết khớp từng số.
     profiles = await admission_service.get_profiles_for_export(
         db=db,
         current_user=current_user,

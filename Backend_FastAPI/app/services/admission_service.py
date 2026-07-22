@@ -1612,13 +1612,16 @@ def _compute_readiness_status(
 def refresh_derived_fields(
     profile: models.AdmissionProfile,
     documents: list = None,
+    *,
+    preserve_updated_at: bool = True,
 ) -> tuple[int, str]:
     """Tính + GHI read-model (`cached_completion`/`cached_readiness`/
     `cached_derived_at`) cho một profile. Backbone của eventual-consistency.
 
     Caller HIỆN TẠI: CHỈ `refresh_admission_derived_task` (sweep nền ~5'). Chưa
     nối opportunistic-refresh tại state-transition/update_profile ⇒ badge list +
-    AVG stats trễ ≤ chu kỳ sweep; detail + cổng submit/approve luôn LIVE. Mọi
+    AVG stats trễ ≤ ceil(N_non_frozen/batch)×chu kỳ sweep; detail + cổng
+    submit/approve luôn LIVE. Mọi
     caller PHẢI commit sau đó.
 
     Chạy `_run_profile_validators` MỘT lần rồi truyền cho cả
@@ -1627,6 +1630,9 @@ def refresh_derived_fields(
     `_validate_scores` single-NV đọc đúng). Giá trị KHỚP y hệt live mà detail trả.
 
     ⚠️ PHẢI gọi với choices/documents/scores ĐÃ eager-load (multi-NV cần graph).
+    ⚠️ `preserve_updated_at=True` (mặc định) GIỮ `updated_at`. Nếu nối vào mutation
+    nghiệp vụ CÙNG transaction → truyền `preserve_updated_at=False` để mutation vẫn
+    bump updated_at (xem comment dưới).
     """
     if documents is None:
         documents = profile.__dict__.get("documents")
@@ -1637,7 +1643,37 @@ def refresh_derived_fields(
     profile.cached_completion = completion
     profile.cached_readiness = readiness
     profile.cached_derived_at = datetime.now(timezone.utc)
+    # ⚠️ preserve_updated_at (mặc định True, cho SWEEP nền): KHÔNG để làm-tươi
+    # read-model bump `updated_at` — đây là refresh view nội bộ, KHÔNG phải sửa
+    # nghiệp vụ. Ghi cached_* làm row dirty → UPDATE; Python onupdate của
+    # `updated_at` recompute NẾU updated_at không trong SET → sweep 5' ghi đè 'sửa
+    # lần cuối' của MỌI hồ sơ non-terminal (hỏng sort_by=updated_at, cột CSV, magic-
+    # link consumed_at). flag_modified đưa updated_at (GIÁ TRỊ CŨ) vào SET → onupdate
+    # bỏ qua → giữ mốc.
+    # 🔴 KHI nối opportunistic-refresh vào mutation nghiệp vụ (approve/enroll/
+    # update_profile) trong CÙNG transaction: PHẢI gọi preserve_updated_at=False,
+    # nếu không flag_modified sẽ ghi đè mốc cũ → mutation THẬT mất bump updated_at.
+    if preserve_updated_at:
+        flag_modified(profile, "updated_at")
     return completion, readiness
+
+
+def mark_derived_failed(profile: models.AdmissionProfile) -> None:
+    """Sentinel khi `refresh_derived_fields` RAISE (sweep gọi trong except).
+
+    - Đóng dấu `cached_derived_at = now()` → đẩy hồ sơ lỗi KHỎI đầu ORDER BY
+      cached_derived_at NULLS FIRST (chống poison head-of-line + log ERROR mỗi
+      chu kỳ); chỉ thử lại khi lại là cũ nhất.
+    - INVALIDATE `cached_completion`/`cached_readiness` về NULL — KHÔNG giữ giá
+      trị cũ (có thể đã sai vì input đổi) → list hiện 0%/'pending' TRUNG THỰC +
+      hàng nằm NGOÀI AVG stats, thay vì trông y hệt hàng khoẻ (silent lie).
+    - GIỮ `updated_at` (flag_modified) như `refresh_derived_fields` — sentinel
+      cũng là ghi read-model, KHÔNG phải sửa nghiệp vụ.
+    """
+    profile.cached_completion = None
+    profile.cached_readiness = None
+    profile.cached_derived_at = datetime.now(timezone.utc)
+    flag_modified(profile, "updated_at")
 
 
 def _list_action_flags(
@@ -2537,7 +2573,21 @@ def _compute_frontend_fields(
     
     # Aggregate validation errors
     validation_errors = score_ve + doc_ve + personal_ve
-    
+
+    # perf: gói kết quả 3 validator (VỪA chạy ở trên) để `_compute_completion_
+    # percent` (dưới) KHỎI duyệt LẠI — nặng nhất là `_validate_scores`→
+    # `validate_choice_scores_complete` (multi-NV duyệt LIVE choice-graph). Đây là
+    # caller NÓNG nhất (mọi detail GET + mọi mutation response qua
+    # `_populate_response_fields`), nên bỏ double-validation ở đây đáng giá.
+    _fe_validators = {
+        "gpa_error": gpa_error, "score_ve": score_ve, "gpa_errors": gpa_errors,
+        "doc_errors": doc_errors, "doc_ve": doc_ve,
+        "uploaded_doc_codes": uploaded_doc_codes,
+        "upload_required_docs": upload_required_docs,
+        "unverified_doc_codes": unverified_doc_codes,
+        "missing_personal": missing_personal, "personal_ve": personal_ve,
+    }
+
     # Track CCCD error for backward compatibility with step_status logic
     cccd_error = not profile.citizen_id
     
@@ -2840,7 +2890,9 @@ def _compute_frontend_fields(
     # =========================================================================
     # 6. COMPLETION PERCENT (delegates to shared pure helper)
     # =========================================================================
-    profile.completion_percent = _compute_completion_percent(profile, documents)
+    profile.completion_percent = _compute_completion_percent(
+        profile, documents, _validators=_fe_validators
+    )
     
     # =========================================================================
     # 7. DOCUMENTS CHECKLIST (for frontend display)
@@ -5015,9 +5067,11 @@ async def get_profiles_for_export(
     Skips full _compute_frontend_fields (permissions, actions, step_status, etc.).
 
     Honors the SAME coordination filters as the list (officer/unit/reviewer/
-    unassigned) so the exported set matches the on-screen filtered rows.
-    with_hk1=False (default): export doesn't render HK1 money columns, so skip the
-    aggregate subqueries.
+    unassigned) so the exported ROW SET matches the on-screen filtered rows.
+    ⚠️ completion_percent ở đây tính LIVE (`_compute_completion_percent` per-row) —
+    KHÁC đường list (đọc cached read-model, eventual): cùng TẬP hàng nhưng cột tiến
+    độ có thể lệch badge bảng tới ≤1 chu kỳ sweep. with_hk1=False (default): export
+    doesn't render HK1 money columns, so skip the aggregate subqueries.
     """
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
@@ -13022,6 +13076,14 @@ async def bulk_approve(
     per_profile_callbacks: List[Optional[Callable]] = []
     bundle_persist_results: List[str] = []
 
+    # Khoá FOR UPDATE theo profile_id TĂNG dần (thứ tự canonical) để tránh deadlock
+    # ABBA: sweep read-model (`refresh_admission_derived_task`) UPDATE cached_* theo
+    # PK tăng dần, còn payload FE theo thứ tự bảng (created_at desc ≈ id giảm) — khoá
+    # ngược chiều nhau + giữ tới lần commit duy nhất ở router = vòng khoá đảo chiều.
+    # Sort KHÔNG đổi ngữ nghĩa (kết quả keyed theo profile_id, callback per-profile);
+    # cũng đồng bộ thứ tự khoá giữa các bulk song song.
+    items = sorted(items, key=lambda it: it["profile_id"])
+
     for item in items:
         profile_id = item["profile_id"]
         expected_version = item["version"]
@@ -13284,6 +13346,14 @@ async def bulk_reject(
     errors: Dict[int, str] = {}
     per_profile_callbacks: List[Optional[Callable]] = []
     bundle_persist_results: List[str] = []
+
+    # Khoá FOR UPDATE theo profile_id TĂNG dần (thứ tự canonical) để tránh deadlock
+    # ABBA: sweep read-model (`refresh_admission_derived_task`) UPDATE cached_* theo
+    # PK tăng dần, còn payload FE theo thứ tự bảng (created_at desc ≈ id giảm) — khoá
+    # ngược chiều nhau + giữ tới lần commit duy nhất ở router = vòng khoá đảo chiều.
+    # Sort KHÔNG đổi ngữ nghĩa (kết quả keyed theo profile_id, callback per-profile);
+    # cũng đồng bộ thứ tự khoá giữa các bulk song song.
+    items = sorted(items, key=lambda it: it["profile_id"])
 
     for item in items:
         profile_id = item["profile_id"]
