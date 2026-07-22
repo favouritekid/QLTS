@@ -36,7 +36,7 @@ const ME = {
   at_capacity: false,
   eligible_for_assignment: true,
   availability_status: "available",
-  archetype: { key: "tuition_heavy", label: "Chủ yếu chờ học phí" },
+  archetype: { key: "tuition_heavy", label: "Hồ sơ đã đóng tiền là chính" },
   diagnosis: "100/248 lead đã đóng tiền nên không bị tính.",
   boost: "LỜI KHUYÊN RIÊNG CỦA HIỀN",
   is_current_user: true,

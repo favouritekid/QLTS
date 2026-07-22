@@ -1793,8 +1793,12 @@ def classify_archetype(load: Dict[str, Any], finance_on: bool) -> Dict[str, str]
         return {"key": "available", "label": "Còn nhiều chỗ trống"}
     if workload > 0 and load["self_cnt"] / workload >= 0.50:
         return {"key": "self_driven", "label": "Tự tìm khách là chính"}
+    # ⚠️ NHÃN PHẢI NÓI "ĐÃ ĐÓNG TIỀN", KHÔNG PHẢI "CHỜ HỌC PHÍ": nhóm được trừ là
+    # lead ĐÃ có tiền HK1 vào (assignment_service._tuition_hold_filter). Lead mới
+    # tính phí mà chưa thu đồng nào VẪN nằm trong dist_load — gọi nhóm này là
+    # "chờ học phí" là mô tả ngược đúng cái vừa bị loại khỏi discount.
     if finance_on and workload > 0 and load["tuition_hold"] / workload >= 0.50:
-        return {"key": "tuition_heavy", "label": "Chủ yếu chờ học phí"}
+        return {"key": "tuition_heavy", "label": "Hồ sơ đã đóng tiền là chính"}
     return {"key": "balanced", "label": "Cân bằng"}
 
 
