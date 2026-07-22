@@ -11,7 +11,7 @@ import type {
   AdmissionProfileUpdate,
   AdmissionSubmitResponse,
   EnrollStudentResponse,
-  AdmissionsPage,
+  AdmissionsPageLite,
   AdmissionListParams,
   AdmissionStatusCounts,
   AdmissionStats,
@@ -40,8 +40,8 @@ function toNum(v: unknown): number | null {
  */
 export async function listAdmissions(
   params?: AdmissionListParams
-): Promise<AdmissionsPage> {
-  const response = await api.get<AdmissionsPage>('/api/admissions', { params })
+): Promise<AdmissionsPageLite> {
+  const response = await api.get<AdmissionsPageLite>('/api/admissions', { params })
   const page = response.data
   return {
     ...page,

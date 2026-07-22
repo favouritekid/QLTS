@@ -321,6 +321,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         unassigned: bool = False,
         today: Optional[date] = None,
         with_hk1: bool = False,
+        lean: bool = False,
         **filters
     ) -> Tuple[List[models.AdmissionProfile], int]:
         """
@@ -471,27 +472,48 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             ).join(
                 models.MajorProgram, models.ProgramOffering.program_id == models.MajorProgram.id
             )
-        data_query = (
-            data_query.options(
-                selectinload(models.AdmissionProfile.assigned_reviewer),
-                selectinload(models.AdmissionProfile.lead).options(
-                    selectinload(models.Lead.assigned_officer),
-                    selectinload(models.Lead.offering).options(
-                        selectinload(models.ProgramOffering.program),
-                        selectinload(models.ProgramOffering.academic_info_history)
-                        .selectinload(models.OfferingAcademicInfo.semester_tuitions),
-                    ),
+        # Eager NHẸ dùng chung: lead→officer + offering→program (program_name) +
+        # documents (doc-debt) + reviewer. HK1 money đến từ correlated subquery
+        # (with_hk1), KHÔNG từ offering.academic_info_history → đã BỎ eager nhánh đó
+        # (grep: không đường list/detail admission nào đọc semester_tuitions) để
+        # khỏi tải ~2 SELECT/trang rồi vứt — ngay trên endpoint đang tối ưu.
+        _eager_opts = [
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+            selectinload(models.AdmissionProfile.lead).options(
+                selectinload(models.Lead.assigned_officer),
+                selectinload(models.Lead.offering).options(
+                    selectinload(models.ProgramOffering.program),
                 ),
+            ),
+            selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
+        ]
+        if not lean:
+            # Graph NẶNG (student + subject_scores + choices 6-nhánh) CHỈ cần khi
+            # caller chạy `_compute_frontend_fields`/`_compute_completion_percent`
+            # per-row (list-đầy-đủ/export/stats-cũ). Đường LIST NHẸ (lean=True) đọc
+            # cached_completion/cached_readiness từ cột nên KHÔNG cần graph này →
+            # payload + thời gian giảm mạnh. (Multi-NV eligibility/completion read
+            # profile.choices → thiếu eager sẽ MissingGreenlet, nên chỉ bỏ khi lean.)
+            _eager_opts += [
                 selectinload(models.AdmissionProfile.student),
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
-                selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
-                # P0 hotfix multi-NV — list/export/stats call
-                # _compute_frontend_fields/_compute_completion_percent per row,
-                # which now read profile.choices (+ nested scores/group/criteria)
-                # for multi-NV eligibility/completion. Without this the per-row
-                # sync access lazy-loads → MissingGreenlet (N-row 500).
                 *_choices_eager_load_options(),
-            )
+            ]
+        else:
+            # lean=True: student/subject_scores/fees khai báo lazy="selectin" ở MAPPER
+            # (models/admission.py) → BỎ khỏi .options() KHÔNG tắt được, vẫn nạp mặc
+            # định (+ subject_scores.subject KHÔNG nạp trên lean → chạm score.subject =
+            # MissingGreenlet ngầm). raiseload TẮT HẲN eager 3 quan hệ này (đường lean
+            # KHÔNG đọc chúng: chỉ cached cols + program_name/HK1(subquery)/tên phụ
+            # trách + documents) → giảm ~N query/trang THẬT + biến bẫy MissingGreenlet
+            # thành lỗi rõ nếu tương lai ai lỡ chạm.
+            _eager_opts += [
+                raiseload(models.AdmissionProfile.student),
+                raiseload(models.AdmissionProfile.subject_scores),
+                raiseload(models.AdmissionProfile.fees),
+            ]
+        data_query = (
+            data_query.options(*_eager_opts)
             # Stable secondary key: ties on the primary sort (esp. remaining_hk1 where
             # many profiles share a value, or no-HK1 rows all = 0) would otherwise
             # duplicate/skip across LIMIT/OFFSET pages (mirror Invoice.id tiebreaker
@@ -749,8 +771,6 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             conditions.append(models.AdmissionProfile.academic_year == academic_year)
 
         # Status counts in one query
-        # Note: completion_percent is computed at service layer (not a DB column),
-        # so we cannot use func.avg() here. avg_completion defaults to 0.
         query = (
             select(
                 models.AdmissionProfile.status,
@@ -764,6 +784,19 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
 
         result = await self.db.execute(query)
         rows = result.all()
+
+        # avg_completion — ĐỌC read-model `cached_completion` (perf/admissions-list)
+        # bằng AVG SQL, thay cho fetch-all mọi hồ sơ + Python loop (~2.1s → ~ms).
+        # AVG bỏ qua NULL (hồ sơ chưa được sweep tính); COALESCE 0 cho cửa sổ đầu
+        # khi mọi hàng còn NULL. Eventual-consistent với list (cùng cột).
+        avg_query = select(
+            func.coalesce(func.avg(models.AdmissionProfile.cached_completion), 0.0)
+        ).join(models.Lead)
+        if conditions:
+            avg_query = avg_query.where(and_(*conditions))
+        avg_completion = round(
+            float((await self.db.execute(avg_query)).scalar() or 0.0), 1
+        )
 
         status_counts = {}
         total = 0
@@ -798,7 +831,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             "withdrawn_count": withdrawn_count,
             "withdrawal_pending_count": withdrawal_pending_count,
             "conversion_rate": conversion_rate,
-            "avg_completion": 0.0,
+            "avg_completion": avg_completion,
         }
 
     async def get_distinct_academic_years(

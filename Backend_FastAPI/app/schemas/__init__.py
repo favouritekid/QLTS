@@ -162,6 +162,8 @@ from .admission import (
     AdmissionProfileUpdate,
     AdmissionProfileResponse,
     AdmissionsPage,
+    AdmissionProfileListItem,  # perf/admissions-list — DTO nhẹ cho bảng
+    AdmissionsPageLite,  # perf/admissions-list — paginated list nhẹ
     PendingDiplomaItem,  # PR #13.7 — nợ bằng reminder
     PendingDiplomaResponse,  # PR #13.7 — nợ bằng reminder
     AdmissionSubmitRequest,  # Fast-track C1 — submit-with-document-debt body

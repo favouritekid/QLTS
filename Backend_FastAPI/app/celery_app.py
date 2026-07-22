@@ -243,6 +243,15 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "default"},
     },
 
+    # --- perf/admissions-list: read-model refresh sweep ---
+    # Làm tươi cached_completion/cached_readiness cho hồ sơ CHƯA tính (backfill
+    # lazy) + đang biến động. Backbone eventual-consistency của list/stats.
+    "refresh-admission-derived": {
+        "task": "refresh_admission_derived_task",
+        "schedule": 300,  # Every 5 minutes
+        "options": {"queue": "default"},
+    },
+
     # --- Phase C2: Stale delivery reconciliation ---
     "reconcile-stale-deliveries": {
         "task": "reconcile_stale_deliveries",

@@ -118,7 +118,7 @@ from ..core.client_ip import get_client_ip  # noqa: E402
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get(
     "",
-    response_model=schemas.AdmissionsPage,
+    response_model=schemas.AdmissionsPageLite,
     summary="List admission profiles",
 )
 async def list_admission_profiles(
@@ -206,9 +206,10 @@ async def list_admission_profiles(
         unit_id=unit_id,
         reviewer_ids=reviewer_ids,
         unassigned=unassigned,
+        lean=True,  # perf/admissions-list: DTO nhẹ, đọc read-model cột (không graph)
     )
 
-    return schemas.AdmissionsPage(
+    return schemas.AdmissionsPageLite(
         total_count=total_count,
         page=page,
         page_size=page_size,
@@ -622,7 +623,10 @@ async def export_admissions_csv(
     _validate_payment_status(payment_status)
 
     # Export path: no page cap, lightweight hydration (only completion_percent).
-    # Same coordination filters as list so the CSV matches the on-screen rows.
+    # Same coordination filters as list so the CSV covers the same ROW SET as the
+    # on-screen list. ⚠️ Cột 'Tiến độ hoàn thiện' trong CSV tính LIVE (get_profiles_
+    # for_export, non-lean) nên có thể lệch badge trên BẢNG (đọc cached read-model,
+    # eventual) tới ≤1 chu kỳ sweep — khớp TẬP hàng, không nhất thiết khớp từng số.
     profiles = await admission_service.get_profiles_for_export(
         db=db,
         current_user=current_user,

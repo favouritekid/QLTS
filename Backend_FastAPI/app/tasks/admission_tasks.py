@@ -23,11 +23,28 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import selectinload
 
 from ..celery_app import celery_app
 from .utils import run_async_task, task_db_session
+
+# Trạng thái ĐÓNG BĂNG read-model (completion/readiness KHÔNG còn đổi) — sweep
+# tính 1 lần (khi cached_derived_at NULL) rồi thôi. Mọi trạng thái KHÁC coi là
+# "đang biến động" và refresh mỗi chu kỳ (an toàn: thà refresh thừa còn hơn để
+# badge lệch — completion KHÔNG per-profile-pure nên không suy được từ 1 cột).
+# CHỈ gồm state THỰC-SỰ-XONG + KHÔNG editable: 'enrolled' (đã nhập học; ghế
+# thôi-học is_dropped VẪN status 'enrolled' nên đã phủ) + 'withdrawn'. KHÔNG
+# đóng băng 'rejected'/'revision_requested' vì chúng CÒN editable (edit gate
+# admission_service.py) → completion đổi tại chỗ, phải re-sweep. ('dropped' KHÔNG
+# phải giá trị status hợp lệ — đã bỏ khỏi tuple: entry chết.)
+_DERIVED_FROZEN_STATUSES = ("enrolled", "withdrawn")
+# Trần mỗi lần chạy — sweep round-robin theo cached_derived_at cũ nhất (NULLS
+# FIRST = backfill trước). ⚠️ Độ tươi THỰC của read-model = ceil(N_non_frozen /
+# batch) × 5' — KHÔNG phải "≤ 1 chu kỳ" (mỗi cycle chỉ chạm tối đa `batch` hàng).
+# Prod hiện ~478 non-frozen → 1000 phủ hết trong 1 cycle. Khi N_non_frozen vượt
+# batch (mùa cao điểm) độ trễ tăng tuyến tính → cân nhắc tăng batch hoặc rút chu kỳ.
+_DERIVED_SWEEP_BATCH = 1000
 
 
 @celery_app.task(
@@ -565,5 +582,130 @@ def check_admission_confirmation_reminders_task(self):
             "outcome": outcome,
             **result,
         },
+    )
+    return result
+
+
+@celery_app.task(
+    name="refresh_admission_derived_task",
+    bind=True,
+    autoretry_for=(Exception,),
+    max_retries=2,
+    default_retry_delay=120,
+)
+def refresh_admission_derived_task(self):
+    """Beat (~5'): làm tươi read-model `cached_completion`/`cached_readiness`/
+    `cached_derived_at` cho hồ sơ CHƯA tính (backfill lazy) hoặc đang biến động.
+
+    Backbone của eventual-consistency (perf/admissions-list): list + stats đọc
+    cột thay vì tính-lại-mỗi-request. Sweep phủ MỌI nguyên nhân đổi completion
+    (kể cả sửa live-config multi-NV + doc-verify/choice-score không bump
+    updated_at) nên KHÔNG cần rải recompute vào từng mutation-site.
+
+    - Chọn: `cached_derived_at IS NULL` (chưa tính) HOẶC status NOT IN frozen.
+    - Order: cached_derived_at ASC NULLS FIRST → backfill trước, rồi cũ-nhất
+      trước (round-robin), LIMIT batch → bounded mỗi lần.
+    - Eager: choices graph (multi-NV đọc live criteria/subject-group) + documents
+      + subject_scores → refresh_derived_fields chạy thuần, không MissingGreenlet.
+    """
+    task_name = "refresh_admission_derived_task"
+    task_log = logging.getLogger(task_name)
+
+    async def _run() -> dict:
+        from sqlalchemy.orm import joinedload, raiseload
+        from ..models import ProfileDocument, ProfileSubjectScore
+        from ..models.admission import AdmissionProfile
+        from ..repositories.admission_repository import _choices_eager_load_options
+        from ..services.admission_service import refresh_derived_fields, mark_derived_failed
+
+        result = {"scanned": 0, "refreshed": 0, "failed": 0}
+
+        async with task_db_session() as session:
+            # Eager PHẢI phủ mọi quan hệ refresh_derived_fields chạm (sync, không
+            # được lazy-load): lead (gpa_only) + subject_scores→subject +
+            # documents→document_type (validator đọc doc.document_type.code) +
+            # choices graph (multi-NV criteria/subject-group live).
+            # raiseload student + fees (fees→invoices→payments→transactions là cây
+            # SÂU) — 2 quan hệ lazy="selectin" ở mapper NẶNG nhất mà refresh KHÔNG
+            # đọc → khỏi nạp cho tối đa _DERIVED_SWEEP_BATCH hồ sơ mỗi 5'. (7 quan hệ
+            # audit User còn eager theo mapper — nhẹ hơn; nâng lên raiseload("*") sau
+            # khi chạy sweep xác nhận refresh không chạm quan hệ nào ngoài 4 cái dưới.)
+            stmt = (
+                select(AdmissionProfile)
+                .options(
+                    raiseload(AdmissionProfile.student),
+                    raiseload(AdmissionProfile.fees),
+                    *_choices_eager_load_options(),
+                    selectinload(AdmissionProfile.lead),
+                    selectinload(AdmissionProfile.documents).joinedload(
+                        ProfileDocument.document_type
+                    ),
+                    selectinload(AdmissionProfile.subject_scores).selectinload(
+                        ProfileSubjectScore.subject
+                    ),
+                )
+                .where(
+                    or_(
+                        AdmissionProfile.cached_derived_at.is_(None),
+                        # Chưa tính XONG (chưa từng tính HOẶC sweep-fail → mark_derived_
+                        # failed set NULL + stamp cached_derived_at) → retry. KHÔNG có
+                        # vế này, hồ sơ ĐÃ FROZEN mà fail đúng 1 lần sẽ kẹt 0%/'pending'
+                        # vĩnh viễn (cached_derived_at>updated_at + status frozen → rớt).
+                        AdmissionProfile.cached_completion.is_(None),
+                        AdmissionProfile.status.notin_(_DERIVED_FROZEN_STATUSES),
+                        # Hồ sơ ĐÃ đóng băng NHƯNG có sửa nghiệp vụ (updated_at) SAU
+                        # lần cache gần nhất → tính LẠI 1 lần. `status` là INPUT của
+                        # completion/eligibility (approved→enrolled: _eligibility_from
+                        # _errors trả 'eligible' + step-8 lock→success +12đ), nên hồ
+                        # sơ cache lúc còn 'approved' rồi mới enroll sẽ HIỆN SAI nếu
+                        # không tính lại. Nhờ sweep GIỮ updated_at (flag_modified),
+                        # sau lần bắt kịp cached_derived_at > updated_at → tự đóng băng
+                        # lại (không lặp vô hạn).
+                        # ⚠️ HỞ CÒN LẠI (đã thu hẹp, chấp nhận được): thay đổi KHÔNG
+                        # bump updated_at trên hồ sơ ĐÃ frozen — doc-verify (policy CHO
+                        # withdrawn) hoặc admin sửa admission_path.criteria (live-config
+                        # multi-NV) — sẽ KHÔNG kích vế này ⇒ cached lệch tới khi có
+                        # transition/edit khác. Hiếm (enrolled/withdrawn ít bị đụng);
+                        # nếu cần kín tuyệt đối phải bỏ freeze hoặc thêm cột cached_status.
+                        AdmissionProfile.cached_derived_at < AdmissionProfile.updated_at,
+                    )
+                )
+                .order_by(AdmissionProfile.cached_derived_at.asc().nulls_first())
+                .limit(_DERIVED_SWEEP_BATCH)
+            )
+            profiles = (await session.execute(stmt)).scalars().unique().all()
+            result["scanned"] = len(profiles)
+
+            for profile in profiles:
+                try:
+                    # `refresh_derived_fields` thuần Python (không SQL trong block)
+                    # → try/except đã đủ cô lập 1 hồ sơ lỗi khỏi cả batch; KHÔNG
+                    # cần SAVEPOINT (bỏ ~2×N round-trip begin_nested/release mỗi
+                    # chu kỳ). Ghi cached_* chỉ pending trong session tới commit.
+                    refresh_derived_fields(profile, profile.documents)
+                    result["refreshed"] += 1
+                except Exception:
+                    result["failed"] += 1
+                    # Sentinel: đẩy hồ sơ lỗi khỏi đầu NULLS-FIRST (chống poison
+                    # head-of-line) + INVALIDATE cached về NULL (0%/'pending' trung
+                    # thực, ngoài AVG) + GIỮ updated_at. Xem docstring helper.
+                    mark_derived_failed(profile)
+                    task_log.exception(
+                        "refresh_derived failed", extra={"profile_id": profile.id}
+                    )
+
+            await session.commit()
+
+        return result
+
+    result = run_async_task(
+        async_func=_run,
+        task_name=task_name,
+        task_log=task_log,
+        validate_keys=["scanned", "refreshed", "failed"],
+    )
+    task_log.info(
+        "refresh_admission_derived heartbeat: end",
+        extra={"event": "refresh_admission_derived_heartbeat", "phase": "end", **result},
     )
     return result

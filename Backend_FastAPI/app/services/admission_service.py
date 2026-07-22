@@ -1425,9 +1425,55 @@ def _validate_personal_info(
     return missing_personal, validation_errors
 
 
+def _run_profile_validators(
+    profile: models.AdmissionProfile,
+    documents: list,
+    applied_rules: dict,
+) -> dict:
+    """Chạy 3 validator (scores/documents/personal) MỘT LẦN và trả MỌI output.
+
+    `_compute_completion_percent` + `_compute_readiness_status` mỗi hàm vốn tự
+    chạy đủ 3 validator; khi tính cả hai cho cùng một hồ sơ (read-model refresh),
+    truyền kết quả hàm này vào để KHỎI duyệt lại — phần nặng nhất là
+    `_validate_scores`→`validate_choice_scores_complete` (multi-NV duyệt LIVE
+    criteria/subject-group).
+    """
+    gpa_error, score_ve, gpa_errors = _validate_scores(profile, applied_rules)
+    doc_errors, doc_ve, uploaded_doc_codes, upload_required_docs, unverified_doc_codes = (
+        _validate_documents(profile, documents, applied_rules)
+    )
+    missing_personal, personal_ve = _validate_personal_info(profile)
+    return {
+        "gpa_error": gpa_error,
+        "score_ve": score_ve,
+        "gpa_errors": gpa_errors,
+        "doc_errors": doc_errors,
+        "doc_ve": doc_ve,
+        "uploaded_doc_codes": uploaded_doc_codes,
+        "upload_required_docs": upload_required_docs,
+        "unverified_doc_codes": unverified_doc_codes,
+        "missing_personal": missing_personal,
+        "personal_ve": personal_ve,
+    }
+
+
+def _eligibility_from_errors(validation_errors: list, status: str) -> str:
+    """Quy tắc DUY NHẤT map validation_errors → eligibility ('eligible'|
+    'ineligible'). NGUỒN SỰ THẬT dùng chung bởi `_compute_frontend_fields`
+    (detail) và `_compute_readiness_status` (read-model list) ⇒ badge list KHỚP
+    detail, không drift khi ai sửa luật eligibility."""
+    if len(validation_errors) == 0:
+        return "eligible"
+    if status in ("approved", "enrolled"):
+        return "eligible"
+    return "ineligible"
+
+
 def _compute_completion_percent(
     profile: models.AdmissionProfile,
     documents: list = None,
+    *,
+    _validators: dict = None,
 ) -> int:
     """
     Compute completion_percent for a profile from step status weights.
@@ -1438,14 +1484,19 @@ def _compute_completion_percent(
     Args:
         profile: AdmissionProfile with subject_scores and lead loaded
         documents: Optional list of ProfileDocument
+        _validators: Optional pre-run `_run_profile_validators` result — truyền
+            khi caller đã chạy validator (tránh duyệt lại; xem refresh_derived_fields).
 
     Returns:
         Completion percentage (0-100)
     """
     applied_rules = profile.applied_rules or {}
-    gpa_error, _, _ = _validate_scores(profile, applied_rules)
-    doc_errors, _, _, _, _ = _validate_documents(profile, documents, applied_rules)
-    missing_personal, _ = _validate_personal_info(profile)
+    _v = _validators if _validators is not None else _run_profile_validators(
+        profile, documents, applied_rules
+    )
+    gpa_error = _v["gpa_error"]
+    doc_errors = _v["doc_errors"]
+    missing_personal = _v["missing_personal"]
 
     # Eligibility (simplified — mirrors _compute_frontend_fields logic)
     has_any_validation_error = gpa_error or len(doc_errors) > 0 or len(missing_personal) > 0
@@ -1528,6 +1579,138 @@ def _compute_completion_percent(
         elif state == "warning":
             completion += int(weight * 0.5)
     return min(100, completion)
+
+
+def _compute_readiness_status(
+    profile: models.AdmissionProfile,
+    documents: list = None,
+    *,
+    _validators: dict = None,
+) -> str:
+    """Readiness/eligibility ('eligible'|'ineligible') — THUẦN (không cần
+    current_user). Dùng CHUNG luật `_eligibility_from_errors` với
+    `_compute_frontend_fields` (detail) nên KHỚP y hệt. Dùng cho read-model
+    `cached_readiness`.
+
+    ⚠️ Multi-NV: `_validate_scores`→`validate_choice_scores_complete` đọc LIVE
+    `admission_path.criteria` + `subject_group.subject_mappings` ⇒ KHÔNG
+    per-profile-pure. Caller PHẢI eager-load choices graph (nếu không →
+    MissingGreenlet trong async session).
+
+    `_validators`: truyền `_run_profile_validators` đã chạy sẵn để khỏi duyệt lại.
+    """
+    if _validators is None and profile.status in ("approved", "enrolled"):
+        return "eligible"
+    applied_rules = profile.applied_rules or {}
+    _v = _validators if _validators is not None else _run_profile_validators(
+        profile, documents, applied_rules
+    )
+    validation_errors = _v["score_ve"] + _v["doc_ve"] + _v["personal_ve"]
+    return _eligibility_from_errors(validation_errors, profile.status)
+
+
+def refresh_derived_fields(
+    profile: models.AdmissionProfile,
+    documents: list = None,
+    *,
+    preserve_updated_at: bool = True,
+) -> tuple[int, str]:
+    """Tính + GHI read-model (`cached_completion`/`cached_readiness`/
+    `cached_derived_at`) cho một profile. Backbone của eventual-consistency.
+
+    Caller HIỆN TẠI: CHỈ `refresh_admission_derived_task` (sweep nền ~5'). Chưa
+    nối opportunistic-refresh tại state-transition/update_profile ⇒ badge list +
+    AVG stats trễ ≤ ceil(N_non_frozen/batch)×chu kỳ sweep; detail + cổng
+    submit/approve luôn LIVE. Mọi
+    caller PHẢI commit sau đó.
+
+    Chạy `_run_profile_validators` MỘT lần rồi truyền cho cả
+    `_compute_completion_percent` + `_compute_readiness_status` (khỏi duyệt
+    choice-graph 2×). Gọi `_calculate_and_update_totals` TRƯỚC (total/average để
+    `_validate_scores` single-NV đọc đúng). Giá trị KHỚP y hệt live mà detail trả.
+
+    ⚠️ PHẢI gọi với choices/documents/scores ĐÃ eager-load (multi-NV cần graph).
+    ⚠️ `preserve_updated_at=True` (mặc định) GIỮ `updated_at`. Nếu nối vào mutation
+    nghiệp vụ CÙNG transaction → truyền `preserve_updated_at=False` để mutation vẫn
+    bump updated_at (xem comment dưới).
+    """
+    if documents is None:
+        documents = profile.__dict__.get("documents")
+    _calculate_and_update_totals(profile)
+    _v = _run_profile_validators(profile, documents, profile.applied_rules or {})
+    completion = _compute_completion_percent(profile, documents, _validators=_v)
+    readiness = _compute_readiness_status(profile, documents, _validators=_v)
+    profile.cached_completion = completion
+    profile.cached_readiness = readiness
+    profile.cached_derived_at = datetime.now(timezone.utc)
+    # ⚠️ preserve_updated_at (mặc định True, cho SWEEP nền): KHÔNG để làm-tươi
+    # read-model bump `updated_at` — đây là refresh view nội bộ, KHÔNG phải sửa
+    # nghiệp vụ. Ghi cached_* làm row dirty → UPDATE; Python onupdate của
+    # `updated_at` recompute NẾU updated_at không trong SET → sweep 5' ghi đè 'sửa
+    # lần cuối' của MỌI hồ sơ non-terminal (hỏng sort_by=updated_at, cột CSV, magic-
+    # link consumed_at). flag_modified đưa updated_at (GIÁ TRỊ CŨ) vào SET → onupdate
+    # bỏ qua → giữ mốc.
+    # 🔴 KHI nối opportunistic-refresh vào mutation nghiệp vụ (approve/enroll/
+    # update_profile) trong CÙNG transaction: PHẢI gọi preserve_updated_at=False,
+    # nếu không flag_modified sẽ ghi đè mốc cũ → mutation THẬT mất bump updated_at.
+    if preserve_updated_at:
+        flag_modified(profile, "updated_at")
+    return completion, readiness
+
+
+def mark_derived_failed(profile: models.AdmissionProfile) -> None:
+    """Sentinel khi `refresh_derived_fields` RAISE (sweep gọi trong except).
+
+    - Đóng dấu `cached_derived_at = now()` → đẩy hồ sơ lỗi KHỎI đầu ORDER BY
+      cached_derived_at NULLS FIRST (chống poison head-of-line + log ERROR mỗi
+      chu kỳ); chỉ thử lại khi lại là cũ nhất.
+    - INVALIDATE `cached_completion`/`cached_readiness` về NULL — KHÔNG giữ giá
+      trị cũ (có thể đã sai vì input đổi) → list hiện 0%/'pending' TRUNG THỰC +
+      hàng nằm NGOÀI AVG stats, thay vì trông y hệt hàng khoẻ (silent lie).
+    - GIỮ `updated_at` (flag_modified) như `refresh_derived_fields` — sentinel
+      cũng là ghi read-model, KHÔNG phải sửa nghiệp vụ.
+    """
+    profile.cached_completion = None
+    profile.cached_readiness = None
+    profile.cached_derived_at = datetime.now(timezone.utc)
+    flag_modified(profile, "updated_at")
+
+
+def _list_action_flags(
+    profile: models.AdmissionProfile,
+    current_user: models.User,
+    *,
+    is_manager: bool,
+    is_admin: bool,
+    outstanding_debt_codes: list,
+) -> dict:
+    """Cổng boolean cho 5 hành động MÀ CẢ detail LẪN list bày: approve / reject /
+    claim / unclaim / assign_officer.
+
+    NGUỒN SỰ THẬT DUY NHẤT — `_compute_frontend_fields` (permissions dict, detail)
+    và `_compute_list_actions` (hàng list) CÙNG gọi hàm này ⇒ KHÔNG drift (đây là
+    gốc lỗi assign_officer bị bỏ sót ở bản list đầu). Chỉ đọc status +
+    assigned_reviewer_id + lead.unit_id (mapped / eager-safe), KHÔNG cần choices
+    graph. Cổng THẬT (fee/doc-debt/quota) vẫn re-check LIVE ở mutation.
+    """
+    status = profile.status
+    can_review = status in ("submitted", "resubmitted") and (is_manager or is_admin)
+    return {
+        "approve": can_review and not outstanding_debt_codes,
+        "reject": can_review,
+        "claim": can_review and not profile.assigned_reviewer_id,
+        "unclaim": bool(profile.assigned_reviewer_id)
+        and (profile.assigned_reviewer_id == current_user.id or is_admin),
+        # Officer-to-lead assignment (POST /admissions/bulk/assign): admin luôn,
+        # manager khi lead cùng unit. KHÔNG gate theo status (route cập nhật
+        # lead.assigned_officer_id bất kể admission state).
+        "assign_officer": is_admin or (
+            is_manager
+            and profile.lead is not None
+            and profile.lead.unit_id is not None
+            and profile.lead.unit_id == current_user.unit_id
+        ),
+    }
 
 
 @dataclass
@@ -2089,6 +2272,14 @@ def _compute_frontend_fields(
     # service-side gate in ``approve_profile``; assigned to the profile lower
     # down (single source of truth for the FE badge + parity with GET).
     _outstanding_debt_codes = _compute_outstanding_debt_codes(profile, documents)
+    # Cổng 5 hành động (approve/reject/claim/unclaim/assign_officer) dùng CHUNG
+    # với hàng list (`_compute_list_actions`) qua `_list_action_flags` — nguồn sự
+    # thật duy nhất, chống drift (từng để sót assign_officer ở bản list đầu).
+    _la = _list_action_flags(
+        profile, current_user,
+        is_manager=is_manager, is_admin=is_admin,
+        outstanding_debt_codes=_outstanding_debt_codes,
+    )
     permissions = {
         "edit": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
         "save": status in ["draft", "rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
@@ -2097,12 +2288,8 @@ def _compute_frontend_fields(
         # FE hides/disables the button and the service raises BusinessRuleViolation
         # if it is attempted anyway. ``_outstanding_debt_codes`` is [] for every
         # profile without a debt snapshot → no behaviour change there.
-        "approve": (
-            status in ["submitted", "resubmitted"]
-            and (is_manager or is_admin)
-            and not _outstanding_debt_codes
-        ),
-        "reject": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
+        "approve": _la["approve"],
+        "reject": _la["reject"],
         # Phase 3 multi-NV simplified flow 2026-05-15: manager/admin click
         # "Công bố kết quả" trực tiếp từ submitted/reviewing → engine cascade
         # auto-transition submitted→reviewing→result_published→admitted/rejected.
@@ -2209,20 +2396,9 @@ def _compute_frontend_fields(
         # was rejected (so the profile is not stuck awaiting a refund).
         "cancel_withdrawal": is_admin and status == "withdrawal_pending",
         "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
-        "claim": (status in ["submitted", "resubmitted"] and (is_manager or is_admin)
-                  and not profile.assigned_reviewer_id),
-        "unclaim": (bool(profile.assigned_reviewer_id)
-                    and (profile.assigned_reviewer_id == current_user.id or is_admin)),
-        # Officer-to-lead assignment via POST /admissions/bulk/assign. Mirrors
-        # the route: admin always, manager when the lead's unit matches theirs.
-        # Not gated by profile status (route updates lead.assigned_officer_id
-        # regardless of admission state).
-        "assign_officer": is_admin or (
-            is_manager
-            and profile.lead is not None
-            and profile.lead.unit_id is not None
-            and profile.lead.unit_id == current_user.unit_id
-        ),
+        "claim": _la["claim"],
+        "unclaim": _la["unclaim"],
+        "assign_officer": _la["assign_officer"],
         # PR #7 — official fee/invoice creation via POST /api/fees/calculate.
         # Mirrors _fee_calc_authorized in routers/fees.py: admin + accountant
         # always (central finance roles, Casbin grants accountant /fees/calculate
@@ -2397,17 +2573,28 @@ def _compute_frontend_fields(
     
     # Aggregate validation errors
     validation_errors = score_ve + doc_ve + personal_ve
-    
+
+    # perf: gói kết quả 3 validator (VỪA chạy ở trên) để `_compute_completion_
+    # percent` (dưới) KHỎI duyệt LẠI — nặng nhất là `_validate_scores`→
+    # `validate_choice_scores_complete` (multi-NV duyệt LIVE choice-graph). Đây là
+    # caller NÓNG nhất (mọi detail GET + mọi mutation response qua
+    # `_populate_response_fields`), nên bỏ double-validation ở đây đáng giá.
+    _fe_validators = {
+        "gpa_error": gpa_error, "score_ve": score_ve, "gpa_errors": gpa_errors,
+        "doc_errors": doc_errors, "doc_ve": doc_ve,
+        "uploaded_doc_codes": uploaded_doc_codes,
+        "upload_required_docs": upload_required_docs,
+        "unverified_doc_codes": unverified_doc_codes,
+        "missing_personal": missing_personal, "personal_ve": personal_ve,
+    }
+
     # Track CCCD error for backward compatibility with step_status logic
     cccd_error = not profile.citizen_id
     
-    # Determine eligibility status
-    if len(validation_errors) == 0:
-        profile.eligibility_status = "eligible"
-    elif status in ["approved", "enrolled"]:
-        profile.eligibility_status = "eligible"
-    else:
-        profile.eligibility_status = "ineligible"
+    # Determine eligibility status — luật dùng CHUNG với read-model list
+    # (`_compute_readiness_status` gọi cùng `_eligibility_from_errors`) nên badge
+    # list KHỚP detail.
+    profile.eligibility_status = _eligibility_from_errors(validation_errors, status)
     
     # Ticket #2: Compute is_qualified
     profile.is_qualified = not gpa_error
@@ -2703,7 +2890,9 @@ def _compute_frontend_fields(
     # =========================================================================
     # 6. COMPLETION PERCENT (delegates to shared pure helper)
     # =========================================================================
-    profile.completion_percent = _compute_completion_percent(profile, documents)
+    profile.completion_percent = _compute_completion_percent(
+        profile, documents, _validators=_fe_validators
+    )
     
     # =========================================================================
     # 7. DOCUMENTS CHECKLIST (for frontend display)
@@ -4678,6 +4867,38 @@ async def create_profile(
 
 
 
+def _compute_list_actions(
+    profile: models.AdmissionProfile,
+    current_user: Optional[models.User],
+    documents: list = None,
+) -> list:
+    """Tập hành động NHẸ cho hàng LIST — tính THUẦN từ status + role +
+    assigned_reviewer + lead.unit_id + doc-debt, KHÔNG cần choices graph.
+
+    Dùng CHUNG `_list_action_flags` với `_compute_frontend_fields` (detail) ⇒ cổng
+    KHỚP y hệt, không drift. Chỉ TRẢ các action mà UI list thật tiêu thụ:
+    approve/reject/claim (RowActionsMenu) + assign_officer (bulk bar). `unclaim`
+    tính trong flags nhưng KHÔNG có component list nào đọc → bỏ khỏi output (tránh
+    payload chết + lệch với detail-collapse). `available_actions_v2` KHÔNG set ở
+    list ⇒ FE `hasAction` fallback về `available_actions` đây.
+    """
+    if current_user is None:
+        return []
+    # Ghế đã thôi học (is_dropped=True; status vẫn 'enrolled') là side-channel
+    # terminal — detail collapse mọi action về `view`; list cũng KHÔNG bày action.
+    if getattr(profile, "is_dropped", False):
+        return []
+    role = current_user.role
+    is_manager = role == UserRole.MANAGER
+    is_admin = role == UserRole.ADMIN
+    flags = _list_action_flags(
+        profile, current_user,
+        is_manager=is_manager, is_admin=is_admin,
+        outstanding_debt_codes=_compute_outstanding_debt_codes(profile, documents),
+    )
+    return [a for a in ("approve", "reject", "claim", "assign_officer") if flags[a]]
+
+
 async def get_profiles(
     db: AsyncSession,
     skip: int,
@@ -4697,6 +4918,7 @@ async def get_profiles(
     officer_ids: Optional[List[int]] = None,
     reviewer_ids: Optional[List[int]] = None,
     unassigned: bool = False,
+    lean: bool = False,
 ) -> Tuple[List[models.AdmissionProfile], int]:
     """
     Get filtered list of admission profiles with total count.
@@ -4749,8 +4971,34 @@ async def get_profiles(
         order=order,
         today=today,
         with_hk1=True,  # list path needs HK1 money columns + remaining_hk1 sort
+        lean=lean,
         **coord,
     )
+
+    if lean:
+        # ── Đường LIST NHẸ (perf/admissions-list) ────────────────────────────
+        # KHÔNG chạy `_compute_frontend_fields`/`_calculate_and_update_totals`
+        # per-row (nặng + cần choices graph), KHÔNG batch verifier-names/minor-
+        # correction. Chỉ đọc read-model cột + tính action nhẹ. program_name +
+        # HK1 money đã do repo set (object.__setattr__). Trả `AdmissionProfile
+        # ListItem` (~15 field) → payload ~40KB thay 324KB.
+        for profile in profiles:
+            profile.completion_percent = (
+                profile.cached_completion if profile.cached_completion is not None else 0
+            )
+            profile.eligibility_status = profile.cached_readiness or "pending"
+            # Tên hiển thị (mirror _compute_frontend_fields:2371-2377) — dùng
+            # __dict__.get để KHÔNG lazy-load (MissingGreenlet trong sync).
+            _reviewer = profile.__dict__.get("assigned_reviewer")
+            profile.assigned_reviewer_name = _reviewer.full_name if _reviewer else None
+            _lead = profile.__dict__.get("lead")
+            _officer = _lead.__dict__.get("assigned_officer") if _lead else None
+            profile.assigned_officer_name = _officer.full_name if _officer else None
+            _docs = profile.__dict__.get("documents")
+            profile.available_actions = _compute_list_actions(
+                profile, current_user, _docs
+            )
+        return profiles, total_count
 
     # ADM-031 round 10: pre-resolve verifier names ACROSS all profiles in
     # one SELECT so the listing endpoint stays free of N+1 even when many
@@ -4819,9 +5067,11 @@ async def get_profiles_for_export(
     Skips full _compute_frontend_fields (permissions, actions, step_status, etc.).
 
     Honors the SAME coordination filters as the list (officer/unit/reviewer/
-    unassigned) so the exported set matches the on-screen filtered rows.
-    with_hk1=False (default): export doesn't render HK1 money columns, so skip the
-    aggregate subqueries.
+    unassigned) so the exported ROW SET matches the on-screen filtered rows.
+    ⚠️ completion_percent ở đây tính LIVE (`_compute_completion_percent` per-row) —
+    KHÁC đường list (đọc cached read-model, eventual): cùng TẬP hàng nhưng cột tiến
+    độ có thể lệch badge bảng tới ≤1 chu kỳ sweep. with_hk1=False (default): export
+    doesn't render HK1 money columns, so skip the aggregate subqueries.
     """
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
@@ -4917,36 +5167,15 @@ async def get_admission_stats(
 
     unit_filter, officer_filter = _resolve_idor_filters(current_user)
 
-    stats = await admission_repo.get_aggregate_stats(
+    # avg_completion đã được `get_aggregate_stats` tính bằng AVG(cached_completion)
+    # SQL (perf/admissions-list). VÒNG FETCH-ALL cũ (load mọi hồ sơ + Python loop,
+    # ~2.1s) ĐÃ BỎ — read-model do `refresh_admission_derived_task` làm tươi nền,
+    # eventual-consistent. Detail vẫn hiển thị completion tính LIVE.
+    return await admission_repo.get_aggregate_stats(
         unit_id=unit_filter,
         assigned_officer_id=officer_filter,
         academic_year=academic_year,
     )
-
-    # Compute avg_completion over ALL profiles in scope (no sampling)
-    total = stats.get("total_profiles", 0)
-    if total > 0:
-        completion_sum = 0
-        fetched = 0
-        batch_size = 500
-        while fetched < total:
-            batch, _ = await admission_repo.get_filtered_with_count(
-                skip=fetched,
-                limit=batch_size,
-                unit_id=unit_filter,
-                assigned_officer_id=officer_filter,
-                academic_year=academic_year,
-            )
-            if not batch:
-                break
-            for p in batch:
-                _calculate_and_update_totals(p)
-                docs = p.documents if hasattr(p, "documents") else None
-                completion_sum += _compute_completion_percent(p, docs)
-            fetched += len(batch)
-        stats["avg_completion"] = round(completion_sum / fetched, 1) if fetched > 0 else 0.0
-
-    return stats
 
 
 async def get_academic_years(
@@ -12847,6 +13076,14 @@ async def bulk_approve(
     per_profile_callbacks: List[Optional[Callable]] = []
     bundle_persist_results: List[str] = []
 
+    # Khoá FOR UPDATE theo profile_id TĂNG dần (thứ tự canonical) để tránh deadlock
+    # ABBA: sweep read-model (`refresh_admission_derived_task`) UPDATE cached_* theo
+    # PK tăng dần, còn payload FE theo thứ tự bảng (created_at desc ≈ id giảm) — khoá
+    # ngược chiều nhau + giữ tới lần commit duy nhất ở router = vòng khoá đảo chiều.
+    # Sort KHÔNG đổi ngữ nghĩa (kết quả keyed theo profile_id, callback per-profile);
+    # cũng đồng bộ thứ tự khoá giữa các bulk song song.
+    items = sorted(items, key=lambda it: it["profile_id"])
+
     for item in items:
         profile_id = item["profile_id"]
         expected_version = item["version"]
@@ -13109,6 +13346,14 @@ async def bulk_reject(
     errors: Dict[int, str] = {}
     per_profile_callbacks: List[Optional[Callable]] = []
     bundle_persist_results: List[str] = []
+
+    # Khoá FOR UPDATE theo profile_id TĂNG dần (thứ tự canonical) để tránh deadlock
+    # ABBA: sweep read-model (`refresh_admission_derived_task`) UPDATE cached_* theo
+    # PK tăng dần, còn payload FE theo thứ tự bảng (created_at desc ≈ id giảm) — khoá
+    # ngược chiều nhau + giữ tới lần commit duy nhất ở router = vòng khoá đảo chiều.
+    # Sort KHÔNG đổi ngữ nghĩa (kết quả keyed theo profile_id, callback per-profile);
+    # cũng đồng bộ thứ tự khoá giữa các bulk song song.
+    items = sorted(items, key=lambda it: it["profile_id"])
 
     for item in items:
         profile_id = item["profile_id"]

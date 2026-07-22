@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils"
 import { ADMISSION_STATUS_CONFIG, getStatusDotColor } from "@/lib/status-config"
 import { hasAction } from "@/lib/admission/permissions"
 import { formatVND } from "@/lib/zod/finance"
-import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import type { AdmissionListItem } from "@/lib/zod/admissions"
 
 export function getInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
@@ -158,10 +158,10 @@ export function RowActionsMenu({
   onApprove,
   onReject,
 }: {
-  profile: AdmissionProfileResponse
-  onClaim?: (profile: AdmissionProfileResponse) => void
-  onApprove?: (profile: AdmissionProfileResponse) => void
-  onReject?: (profile: AdmissionProfileResponse) => void
+  profile: AdmissionListItem
+  onClaim?: (profile: AdmissionListItem) => void
+  onApprove?: (profile: AdmissionListItem) => void
+  onReject?: (profile: AdmissionListItem) => void
 }) {
   // Quyền hành động do BE quyết (available_actions) — thin client, không gate
   // bằng status string ở FE.

@@ -59,7 +59,7 @@ import {
 } from "@/hooks/admissions/filterDefaults"
 import { admissionsApi } from "@/lib/api/admissions"
 import { handleApiError, type ApiErrorResponse } from "@/lib/error-handler"
-import type { AdmissionListParams, AdmissionProfileResponse, AdmissionsPage } from "@/lib/zod/admissions"
+import type { AdmissionListParams, AdmissionListItem, AdmissionsPageLite } from "@/lib/zod/admissions"
 
 import { getColumns } from "./columns"
 import { AdmissionsBulkActionsBar } from "./AdmissionsBulkActionsBar"
@@ -90,7 +90,7 @@ function activateRow(e: React.KeyboardEvent, fn: () => void) {
 // =============================================================================
 
 interface AdmissionsClientProps {
-  initialData?: AdmissionsPage
+  initialData?: AdmissionsPageLite
   initialQueryParams?: AdmissionListParams
 }
 
@@ -105,7 +105,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false)
   const [assignDialogOpen, setAssignDialogOpen] = useState(false)
-  const [rowRejectTarget, setRowRejectTarget] = useState<AdmissionProfileResponse | null>(null)
+  const [rowRejectTarget, setRowRejectTarget] = useState<AdmissionListItem | null>(null)
 
   // Density: default 'comfortable' (SSR-safe), đọc localStorage SAU mount
   // để tránh hydration mismatch.
@@ -189,7 +189,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
 
   // ── Claim handler ─────────────────────────────────────────────────────
   const handleClaimFromList = useCallback(
-    async (profile: AdmissionProfileResponse) => {
+    async (profile: AdmissionListItem) => {
       if (profile.version == null) return
       try {
         await admissionsApi.claimAdmissionProfile(profile.id, { version: profile.version })
@@ -209,7 +209,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
 
   // ── Single-row approve/reject (row menu) — gated by hasAction ──────────
   const handleRowApprove = useCallback(
-    async (profile: AdmissionProfileResponse) => {
+    async (profile: AdmissionListItem) => {
       try {
         await bulkApprove.mutateAsync({
           items: [{ profile_id: profile.id, version: profile.version ?? 1 }],
@@ -223,7 +223,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
   )
 
   // Reject cần lý do → mở dialog cho đúng 1 hồ sơ.
-  const requestRowReject = useCallback((profile: AdmissionProfileResponse) => {
+  const requestRowReject = useCallback((profile: AdmissionListItem) => {
     setRowRejectTarget(profile)
   }, [])
 
@@ -348,7 +348,11 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
   const handleExport = useCallback(() => {
     exportCsv.mutate({
       status: state.statusFilters.length > 0 ? state.statusFilters.join(",") : undefined,
-      search: state.search || undefined,
+      // debounced (apiFilters.search) — KHÔNG state.search thô: bảng + đếm tab dùng
+      // debouncedSearch, nếu export đọc thô thì khi user XOÁ ô search rồi bấm 'Xuất
+      // CSV' trong 300ms → CSV gửi search=undefined → tải TOÀN BỘ thay vì tập đang
+      // thấy (comment gốc hứa 'CSV matches the on-screen list').
+      search: apiFilters.search,
       major_id: state.majorFilter || undefined,
       academic_year: state.academicYear || undefined,
       degree_level: state.degreeLevelFilter || undefined,
@@ -364,7 +368,7 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
         unassigned: state.unassigned,
       }),
     })
-  }, [exportCsv, state])
+  }, [exportCsv, state, apiFilters])
 
   const isAnyLoading = bulkApprove.isPending || bulkReject.isPending || bulkAssign.isPending || exportCsv.isPending
 
@@ -671,12 +675,12 @@ function LoadingState() {
 // =============================================================================
 
 interface AdmissionCardProps {
-  profile: AdmissionProfileResponse
+  profile: AdmissionListItem
   isSelected: boolean
   onSelect: (checked: boolean) => void
-  onClaim: (profile: AdmissionProfileResponse) => void
-  onApprove: (profile: AdmissionProfileResponse) => void
-  onReject: (profile: AdmissionProfileResponse) => void
+  onClaim: (profile: AdmissionListItem) => void
+  onApprove: (profile: AdmissionListItem) => void
+  onReject: (profile: AdmissionListItem) => void
   onOpen: () => void
 }
 

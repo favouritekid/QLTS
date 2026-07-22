@@ -241,6 +241,17 @@ export function useAdmissionsFilter(
   const [page, setPage] = useState(initialValues.page)
   const [pageSize] = useState(defaultPageSize)
   const [search, setSearch] = useState(initialValues.search)
+  // perf/admissions-list: debounce search TRƯỚC khi vào apiFilters (query params)
+  // — ô search hiển thị `search` tức thì (gõ mượt), nhưng API `/api/admissions`
+  // CHỈ fire sau khi ngưng gõ 300ms. Trước đây `apiFilters` đọc `search` thô →
+  // fire GET mỗi phím (mỗi lần lại là 1 query key + fan-out BE). URL-debounce
+  // (100ms, effect riêng) không đụng tới đây. Các filter khác đổi 1-phát nên
+  // không cần debounce.
+  const [debouncedSearch, setDebouncedSearch] = useState(initialValues.search)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(t)
+  }, [search])
   const [statusFilters, setStatusFilters] = useState<string[]>(initialValues.statusFilters)
   const [majorFilter, setMajorFilter] = useState(initialValues.majorFilter)
   const [academicYear, setAcademicYear] = useState<number | undefined>(initialValues.academicYear)
@@ -543,7 +554,7 @@ export function useAdmissionsFilter(
       order: sortOrder,
     }
 
-    if (search) params.search = search
+    if (debouncedSearch) params.search = debouncedSearch
     if (statusFilters.length > 0) params.status = statusFilters.join(",")
     if (majorFilter) params.major_id = majorFilter
     if (academicYear !== undefined) params.academic_year = academicYear
@@ -557,7 +568,7 @@ export function useAdmissionsFilter(
 
     return params
   }, [
-    page, pageSize, search, statusFilters, majorFilter, academicYear,
+    page, pageSize, debouncedSearch, statusFilters, majorFilter, academicYear,
     degreeLevelFilter, paymentStatusFilter, dateFrom, dateTo, sortBy, sortOrder,
     officerFilters, unitId, reviewerFilters, unassigned,
   ])
@@ -566,7 +577,11 @@ export function useAdmissionsFilter(
   const countFilters: Record<string, unknown> = useMemo(() => {
     const params: Record<string, unknown> = {}
 
-    if (search) params.search = search
+    // debouncedSearch (KHÔNG phải `search` thô) để: (a) status-counts KHÔNG fire
+    // mỗi phím gõ, (b) số đếm tab KHỚP hàng danh sách (apiFilters cũng dùng
+    // debouncedSearch) — nếu dùng `search` thô, đếm theo 'abc' còn rows theo 'ab'
+    // lệch tới 300ms.
+    if (debouncedSearch) params.search = debouncedSearch
     if (majorFilter) params.major_id = majorFilter
     if (academicYear !== undefined) params.academic_year = academicYear
     if (degreeLevelFilter) params.degree_level = degreeLevelFilter
@@ -578,7 +593,7 @@ export function useAdmissionsFilter(
 
     return params
   }, [
-    search, majorFilter, academicYear, degreeLevelFilter, paymentStatusFilter,
+    debouncedSearch, majorFilter, academicYear, degreeLevelFilter, paymentStatusFilter,
     dateFrom, dateTo, officerFilters, unitId, reviewerFilters, unassigned,
   ])
 

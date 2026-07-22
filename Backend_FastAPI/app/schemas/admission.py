@@ -1527,6 +1527,44 @@ class AdmissionsPage(BaseModel):
     profiles: List[AdmissionProfileResponse]
 
 
+class AdmissionProfileListItem(BaseModel):
+    """DTO NHẸ cho BẢNG danh sách `/admissions` (perf/admissions-list).
+
+    Chỉ ~15 field FE thật render — KHÔNG choices/documents_checklist/validation
+    summaries/priority cluster/executive_summary (tiết kiệm ~15KB/dòng, payload
+    324KB→~40KB). `completion_percent`/`eligibility_status` ĐỌC từ read-model
+    cột (`cached_completion`/`cached_readiness`, eventual-consistent qua sweep);
+    `available_actions` tính NHẸ (status+role+doc-debt), KHÔNG cần choices graph.
+    Detail vẫn dùng `AdmissionProfileResponse` (đầy đủ + LIVE).
+    """
+    id: int
+    lead_id: int
+    version: int
+    status: str
+    created_at: datetime
+    lead: Optional[LeadShallowForAdmission] = None
+    program_name: Optional[str] = None
+    completion_percent: int = 0
+    eligibility_status: Optional[str] = None
+    tuition_paid_hk1: Optional[Decimal] = None
+    tuition_remaining_hk1: Optional[Decimal] = None
+    tuition_overdue_hk1: bool = False
+    tuition_hk1_status: Optional[str] = None
+    assigned_officer_name: Optional[str] = None
+    assigned_reviewer_name: Optional[str] = None
+    available_actions: List[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdmissionsPageLite(BaseModel):
+    """Paginated list NHẸ — thay `AdmissionsPage` cho endpoint list `/admissions`."""
+    total_count: int
+    page: int
+    page_size: int
+    profiles: List[AdmissionProfileListItem]
+
+
 class PendingDiplomaItem(BaseModel):
     """PR #13.7 — một hồ sơ còn "nợ bằng" (Giấy CN tốt nghiệp tạm thời)."""
     profile_id: int

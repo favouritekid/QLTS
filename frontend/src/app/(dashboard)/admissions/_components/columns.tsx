@@ -15,7 +15,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight } from "lucide-react"
 import Link from "next/link"
 
 import { Checkbox } from "@/components/ui/checkbox"
-import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import type { AdmissionListItem } from "@/lib/zod/admissions"
 import { formatDate } from "@/lib/utils/admission-helpers"
 import {
   Assignees,
@@ -29,12 +29,12 @@ import {
 
 type Density = "comfortable" | "compact"
 
-const columnHelper = createColumnHelper<AdmissionProfileResponse>()
+const columnHelper = createColumnHelper<AdmissionListItem>()
 
 interface ColumnOptions {
-  onClaim?: (profile: AdmissionProfileResponse) => void
-  onApprove?: (profile: AdmissionProfileResponse) => void
-  onReject?: (profile: AdmissionProfileResponse) => void
+  onClaim?: (profile: AdmissionListItem) => void
+  onApprove?: (profile: AdmissionListItem) => void
+  onReject?: (profile: AdmissionListItem) => void
   density?: Density
 }
 
@@ -43,7 +43,7 @@ function SortableHeader<TValue>({
   column,
   label,
 }: {
-  column: Column<AdmissionProfileResponse, TValue>
+  column: Column<AdmissionListItem, TValue>
   label: string
 }) {
   const sorted = column.getIsSorted()
@@ -60,7 +60,7 @@ function SortableHeader<TValue>({
   )
 }
 
-export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileResponse, unknown>[] {
+export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionListItem, unknown>[] {
   const compact = options?.density === "compact"
 
   return [
@@ -88,7 +88,7 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
       enableSorting: false,
       enableHiding: false,
       size: 40,
-    }) as ColumnDef<AdmissionProfileResponse, unknown>,
+    }) as ColumnDef<AdmissionListItem, unknown>,
 
     // Identity (sortable by name)
     columnHelper.accessor((row) => row.lead?.full_name ?? `Lead #${row.lead_id}`, {
@@ -120,7 +120,7 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
         )
       },
       size: 240,
-    }) as ColumnDef<AdmissionProfileResponse, unknown>,
+    }) as ColumnDef<AdmissionListItem, unknown>,
 
     // Status
     columnHelper.accessor("status", {
@@ -128,7 +128,7 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
       cell: ({ getValue }) => <StatusDot status={getValue()} />,
       enableSorting: false,
       size: 130,
-    }) as ColumnDef<AdmissionProfileResponse, unknown>,
+    }) as ColumnDef<AdmissionListItem, unknown>,
 
     // Progress
     columnHelper.accessor("completion_percent", {
@@ -136,7 +136,7 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
       cell: ({ getValue }) => <ProgressBar value={getValue()} className="min-w-[120px]" />,
       enableSorting: false,
       size: 150,
-    }) as ColumnDef<AdmissionProfileResponse, unknown>,
+    }) as ColumnDef<AdmissionListItem, unknown>,
 
     // Eligibility
     columnHelper.accessor("eligibility_status", {
@@ -144,7 +144,7 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
       cell: ({ getValue }) => <EligibilityToken status={getValue()} />,
       enableSorting: false,
       size: 120,
-    }) as ColumnDef<AdmissionProfileResponse, unknown>,
+    }) as ColumnDef<AdmissionListItem, unknown>,
 
     // Học phí HK1 (Admission List v2) — sortable theo "Còn lại". id="remaining_hk1"
     // khớp state.sortBy → BE sort end-to-end; accessor là number (normalize ở
@@ -160,7 +160,7 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
         />
       ),
       size: 170,
-    }) as ColumnDef<AdmissionProfileResponse, unknown>,
+    }) as ColumnDef<AdmissionListItem, unknown>,
 
     // Assignees (officer + reviewer — luôn hiện cả hai, mọi density)
     columnHelper.accessor("assigned_officer_name", {
@@ -174,7 +174,7 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
       ),
       enableSorting: false,
       size: 110,
-    }) as ColumnDef<AdmissionProfileResponse, unknown>,
+    }) as ColumnDef<AdmissionListItem, unknown>,
 
     // Created date (sortable)
     columnHelper.accessor("created_at", {
@@ -185,7 +185,7 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
         </span>
       ),
       size: 110,
-    }) as ColumnDef<AdmissionProfileResponse, unknown>,
+    }) as ColumnDef<AdmissionListItem, unknown>,
 
     // Actions (chevron hover + menu)
     columnHelper.display({
@@ -204,6 +204,6 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
       ),
       enableSorting: false,
       size: 64,
-    }) as ColumnDef<AdmissionProfileResponse, unknown>,
+    }) as ColumnDef<AdmissionListItem, unknown>,
   ]
 }

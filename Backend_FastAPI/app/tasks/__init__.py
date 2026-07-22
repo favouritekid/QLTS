@@ -42,6 +42,7 @@ from .collaborator_tasks import (
 from .admission_tasks import (
     check_admission_surveys_due_task,
     check_admission_confirmation_reminders_task,
+    refresh_admission_derived_task,
 )
 from .notification_outbox_tasks import (
     dispatch_pending_outbox,  # T0-4a skeleton; T0-4b will replace body
@@ -79,6 +80,7 @@ __all__ = [
     "send_ctv_weekly_summary_task",
     # Admission tasks
     "check_admission_surveys_due_task",
+    "refresh_admission_derived_task",
     "check_admission_confirmation_reminders_task",
     # T0-4a admission outbox skeleton (cold cutover prerequisite)
     "dispatch_pending_outbox",

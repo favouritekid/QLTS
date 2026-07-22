@@ -44,6 +44,16 @@ class AdmissionProfile(Base):
     __table_args__ = (
         UniqueConstraint('citizen_id', 'academic_year', name='uq_citizen_academic_year'),
         Index('ix_admission_profile_citizen_year', 'citizen_id', 'academic_year'),
+        # perf/admissions-list read-model: index phục vụ sweep
+        # `refresh_admission_derived_task` (ORDER BY cached_derived_at ASC NULLS
+        # FIRST LIMIT N). PHẢI khai báo Ở ĐÂY, không chỉ trong migration
+        # `admderivedcols20260721` — Test DB (`Base.metadata.create_all()`) đọc
+        # declaration này + tránh `alembic autogenerate` sinh spurious DROP (mẫu
+        # lead.py). NULLS FIRST khớp migration (backfill NULL-đầu + steady-state).
+        Index(
+            'ix_admission_profile_cached_derived_at',
+            text('cached_derived_at ASC NULLS FIRST'),
+        ),
         # Wave 3-E (M-1-15a) replaces the legacy single-profile-per-lead
         # UNIQUE on ``lead_id`` with a composite ``(lead_id, academic_year)``
         # UNIQUE so a lead can apply for multiple academic years (one
@@ -381,6 +391,35 @@ class AdmissionProfile(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
         comment="Last update time (UTC)"
+    )
+
+    # =========================================================================
+    # DERIVED READ-MODEL (denormalized snapshot — perf/admissions-list)
+    # =========================================================================
+    # ⚠️ CỐ Ý đặt tên KHÁC field transient `completion_percent`/`eligibility_status`
+    # mà `_compute_frontend_fields` set: tránh collision khiến autoflush ghi cột
+    # trên ĐƯỜNG ĐỌC (list gọi _compute_frontend_fields per-row rồi query batch →
+    # autoflush sẽ flush cột dirty = write-on-GET). 3 cột này CHỈ được ghi TƯỜNG
+    # MINH bởi `refresh_derived_fields` (HIỆN TẠI chỉ sweep nền
+    # `refresh_admission_derived_task`; chưa nối opportunistic-refresh tại
+    # state-transition/update → badge list trễ ≤ ceil(N_non_frozen/batch)×chu kỳ sweep).
+    # completion/eligibility KHÔNG per-profile-pure (multi-NV đọc live-config +
+    # doc-verify/choice-score không bump updated_at) ⇒ eventual-consistency: list
+    # + stats đọc cột (trễ ≤ ceil(N_non_frozen/batch)×chu kỳ sweep); detail + cổng submit/approve vẫn LIVE.
+    cached_completion: Mapped[Optional[int]] = mapped_column(
+        SmallInteger,
+        nullable=True,
+        comment="Read-model: completion_percent (0-100). Ghi bởi refresh_derived_fields; đọc bởi list + AVG stats. Eventual-consistent.",
+    )
+    cached_readiness: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True,
+        comment="Read-model: readiness/eligibility ('eligible'|'ineligible'). Ghi bởi refresh_derived_fields; đọc bởi list. Eventual-consistent.",
+    )
+    cached_derived_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Lần cuối refresh_derived_fields ghi cached_completion/readiness (UTC).",
     )
 
     # =========================================================================
