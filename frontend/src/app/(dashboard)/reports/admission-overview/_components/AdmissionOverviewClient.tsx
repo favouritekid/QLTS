@@ -1,0 +1,286 @@
+"use client";
+
+import * as React from "react";
+import { LayoutDashboard } from "lucide-react";
+
+import { SummaryBand } from "@/app/(dashboard)/reports/admissions-weekly/_components/SummaryBand";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useDebtReport } from "@/hooks/finance/useDebtReport";
+import { useOrganizationUnits } from "@/hooks/useOrganization";
+import {
+  useAdmissionTrend,
+  useOfficerMajorMatrix,
+  usePipelineFunnel,
+} from "@/hooks/reports/useAdmissionOverview";
+import { useReportFilters, useWeeklyReport } from "@/hooks/reports/useWeeklyReport";
+import { cn } from "@/lib/utils";
+import type { MatrixMetric } from "@/lib/zod/reports";
+
+import { DebtPanel } from "./DebtPanel";
+import { OfficerMajorHeatmap } from "./OfficerMajorHeatmap";
+import { OverviewFunnel } from "./OverviewFunnel";
+import { OverviewTrend } from "./OverviewTrend";
+import { QuotaRunway } from "./QuotaRunway";
+
+const CURRENT_YEAR = new Date().getFullYear();
+const ALL_ROUNDS = "__all__";
+const ALL_UNITS = "__all__";
+
+function errMessage(err: unknown): string {
+  const e = err as {
+    response?: { status?: number; data?: { detail?: string } };
+  };
+  const status = e?.response?.status;
+  if (status === 403) return "Bạn không có quyền xem báo cáo này.";
+  if (status === 404) return "Không tìm thấy đơn vị/đợt đã chọn.";
+  if (status === 400) {
+    // BusinessRuleViolation (vd đợt thiếu ngày bắt đầu/kết thúc) — nêu đúng lý do
+    // để người dùng biết cách xử lý, thay vì thông báo chung chung.
+    const detail = e?.response?.data?.detail;
+    return typeof detail === "string" && detail ? detail : "Tham số không hợp lệ.";
+  }
+  if (status === 422) return "Tham số không hợp lệ.";
+  return "Không tải được báo cáo. Vui lòng thử lại.";
+}
+
+function Panel({
+  title,
+  caption,
+  children,
+  className,
+}: {
+  title: string;
+  caption?: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={cn("rounded-xl border bg-card p-4 shadow-sm", className)}>
+      <div className="mb-3 flex items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold">{title}</h2>
+        {caption && (
+          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+            {caption}
+          </span>
+        )}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+interface FlatUnit {
+  id: number;
+  name: string;
+  depth: number;
+}
+
+export function AdmissionOverviewClient() {
+  const [year, setYear] = React.useState(CURRENT_YEAR);
+  const [round, setRound] = React.useState<string>(ALL_ROUNDS);
+  const [unit, setUnit] = React.useState<string>(ALL_UNITS);
+  const [metric, setMetric] = React.useState<MatrixMetric>("enrolled");
+
+  const roundCode = round === ALL_ROUNDS ? undefined : round;
+  const unitId = unit === ALL_UNITS ? undefined : Number(unit);
+
+  // Filter option sources.
+  const { data: filters } = useReportFilters(year);
+  const { data: orgUnits = [] } = useOrganizationUnits();
+  const yearOptions = React.useMemo(
+    () =>
+      Array.from(new Set([...(filters?.academic_years ?? []), CURRENT_YEAR])).sort(
+        (a, b) => b - a,
+      ),
+    [filters],
+  );
+  const roundCodes = filters?.rounds ?? [];
+  const flatUnits = React.useMemo(() => {
+    const out: FlatUnit[] = [];
+    const walk = (units: typeof orgUnits, depth: number) => {
+      for (const u of units) {
+        out.push({ id: u.id, name: u.name, depth });
+        if (u.children?.length) walk(u.children, depth + 1);
+      }
+    };
+    walk(orgUnits, 0);
+    return out;
+  }, [orgUnits]);
+
+  const scope = { academic_year: year, round_code: roundCode, unit_id: unitId };
+
+  // Primary query (KPI band + runway) + the three overview panels + debt.
+  const weekly = useWeeklyReport({
+    academic_year: year,
+    group_by: "major",
+    round_code: roundCode,
+    unit_id: unitId,
+  });
+  const funnel = usePipelineFunnel(scope);
+  const trend = useAdmissionTrend(scope);
+  const matrix = useOfficerMajorMatrix({ ...scope, metric });
+  const debt = useDebtReport({
+    academic_year: year,
+    unit_id: unitId,
+    fee_type: "tuition",
+  });
+
+  const synced =
+    weekly.data && weekly.data.academic_year === year ? weekly.data : undefined;
+  const anyFetching =
+    weekly.isFetching || funnel.isFetching || trend.isFetching || matrix.isFetching;
+
+  const onYearChange = (next: number) => {
+    setYear(next);
+    setRound(ALL_ROUNDS); // dependent filter may be invalid for the new year
+  };
+
+  return (
+    <div className="flex h-full flex-col space-y-5 p-4 sm:p-6">
+      {/* Header + filters (scope cả trang) */}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="flex items-center gap-2 text-2xl font-bold">
+            <LayoutDashboard className="size-6 text-primary" /> Tổng quan tuyển sinh
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Phễu · chỉ tiêu · tài chính · tải cán bộ — một màn hình để nắm nhanh và
+            can thiệp đúng chỗ.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Năm học</label>
+            <Select value={year.toString()} onValueChange={(v) => onYearChange(Number(v))}>
+              <SelectTrigger className="w-24" aria-label="Năm học">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {yearOptions.map((y) => (
+                  <SelectItem key={y} value={y.toString()}>
+                    {y}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Đợt</label>
+            <Select value={round} onValueChange={setRound}>
+              <SelectTrigger className="w-32" aria-label="Đợt">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_ROUNDS}>Tất cả đợt</SelectItem>
+                {roundCodes.map((rc) => (
+                  <SelectItem key={rc} value={rc}>
+                    {rc}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Đơn vị</label>
+            <Select value={unit} onValueChange={setUnit}>
+              <SelectTrigger className="w-44" aria-label="Đơn vị">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_UNITS}>Toàn trường</SelectItem>
+                {flatUnits.map((u) => (
+                  <SelectItem key={u.id} value={u.id.toString()}>
+                    <span style={u.depth > 0 ? { paddingLeft: u.depth * 10 } : undefined}>
+                      {u.name}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </div>
+
+      {weekly.isError ? (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+          {errMessage(weekly.error)}
+        </div>
+      ) : weekly.isLoading || !synced ? (
+        <div className="space-y-4">
+          <Skeleton className="h-24 w-full" />
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Skeleton className="h-72 w-full" />
+            <Skeleton className="h-72 w-full" />
+          </div>
+          <Skeleton className="h-96 w-full" />
+        </div>
+      ) : (
+        <div
+          className={cn(
+            "space-y-4",
+            anyFetching && "opacity-60 transition-opacity",
+          )}
+        >
+          {/* KPI band (tái dùng SummaryBand của báo cáo tuần) */}
+          <SummaryBand rows={synced.rows} totals={synced.totals} groupBy={synced.group_by} />
+
+          {/* Phễu + Xu hướng */}
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Panel title="Dòng chảy mùa tuyển sinh" caption="pipeline_stage">
+              {funnel.data ? (
+                <OverviewFunnel funnel={funnel.data} />
+              ) : (
+                <Skeleton className="h-64 w-full" />
+              )}
+            </Panel>
+            <Panel title="Nhịp tích luỹ 8 tuần" caption="cumulative">
+              {trend.data ? (
+                <OverviewTrend trend={trend.data} />
+              ) : (
+                <Skeleton className="h-64 w-full" />
+              )}
+            </Panel>
+          </div>
+
+          {/* Đường băng chỉ tiêu 20 ngành */}
+          <Panel title="Đường băng chỉ tiêu — theo ngành" caption="admission-weekly">
+            <p className="mb-3 -mt-1 text-xs text-muted-foreground">
+              Sắp theo mức cần đẩy — ngành nguy cơ (tỉ lệ đạt thấp) hiện đầu.
+            </p>
+            <QuotaRunway rows={synced.rows} />
+          </Panel>
+
+          {/* Heatmap cán bộ × ngành */}
+          <Panel title="Tải cán bộ × ngành" caption="officer-major-matrix">
+            {matrix.data ? (
+              <OfficerMajorHeatmap
+                matrix={matrix.data}
+                metric={metric}
+                onMetricChange={setMetric}
+              />
+            ) : (
+              <Skeleton className="h-56 w-full" />
+            )}
+          </Panel>
+
+          {/* Công nợ học phí */}
+          <Panel title="Công nợ học phí HK1" caption="debt-report">
+            <DebtPanel summary={debt.data?.summary} isLoading={debt.isLoading} />
+          </Panel>
+
+          <p className="text-xs text-muted-foreground">
+            Số liệu tính lại theo phân bổ hiện tại — tuần đã qua có thể đổi sau khi
+            công bố kết quả. Phễu &amp; công nợ theo cohort đợt/năm.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}

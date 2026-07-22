@@ -96,3 +96,82 @@ export type DataQuality = z.infer<typeof dataQualitySchema>;
 export type AdmissionWeeklyReport = z.infer<typeof admissionWeeklyReportSchema>;
 export type ReportFilters = z.infer<typeof reportFiltersSchema>;
 export type ReportGroupBy = AdmissionWeeklyReport["group_by"];
+
+// ===========================================================================
+// Overview dashboard extras — pipeline funnel · trend · officer×major heatmap
+// (GET .../admission-weekly/{pipeline-funnel,trend,officer-major-matrix})
+// ===========================================================================
+
+export const funnelStageSchema = z.object({
+  stage_id: z.string(), // "stg01"..
+  name: z.string(),
+  order: z.number().int(), // 0-based
+  is_final: z.boolean(),
+  color_code: z.string(), // hex #RRGGBB
+  current: z.number().int(), // lead đang ở giai đoạn này
+});
+
+export const pipelineFunnelSchema = z.object({
+  academic_year: z.number().int(),
+  round_code: z.string().nullable(),
+  scope_unit_id: z.number().int().nullable(),
+  total_leads: z.number().int(),
+  stages: z.array(funnelStageSchema),
+});
+
+export const trendPointSchema = z.object({
+  iso_year: z.number().int(),
+  iso_week: z.number().int(),
+  week_start: z.string(), // YYYY-MM-DD (Monday)
+  week_end: z.string(),
+  submitted_cumulative: z.number().int(),
+  admitted_cumulative: z.number().int(),
+  enrolled_cumulative: z.number().int(),
+});
+
+export const admissionTrendSchema = z.object({
+  academic_year: z.number().int(),
+  round_code: z.string().nullable(),
+  scope_unit_id: z.number().int().nullable(),
+  weeks: z.number().int(),
+  points: z.array(trendPointSchema), // cũ → mới
+});
+
+export const matrixOfficerSchema = z.object({
+  id: z.number().int().nullable(), // null = "Chưa gán cán bộ"
+  name: z.string(),
+});
+
+export const matrixMajorSchema = z.object({
+  id: z.number().int().nullable(), // null = "Chưa phân loại ngành"
+  code: z.string().nullable(),
+  name: z.string(),
+  degree_level: z.string().nullable(),
+});
+
+export const officerMajorCellSchema = z.object({
+  officer_id: z.number().int().nullable(),
+  major_id: z.number().int().nullable(),
+  enrolled: z.number().int(),
+  submitted: z.number().int(),
+});
+
+export const officerMajorMatrixSchema = z.object({
+  academic_year: z.number().int(),
+  round_code: z.string().nullable(),
+  scope_unit_id: z.number().int().nullable(),
+  group_by_metric: z.enum(["enrolled", "submitted"]),
+  officers: z.array(matrixOfficerSchema), // hàng
+  majors: z.array(matrixMajorSchema), // cột
+  cells: z.array(officerMajorCellSchema), // thưa
+});
+
+export type FunnelStage = z.infer<typeof funnelStageSchema>;
+export type PipelineFunnel = z.infer<typeof pipelineFunnelSchema>;
+export type TrendPoint = z.infer<typeof trendPointSchema>;
+export type AdmissionTrend = z.infer<typeof admissionTrendSchema>;
+export type MatrixOfficer = z.infer<typeof matrixOfficerSchema>;
+export type MatrixMajor = z.infer<typeof matrixMajorSchema>;
+export type OfficerMajorCell = z.infer<typeof officerMajorCellSchema>;
+export type OfficerMajorMatrix = z.infer<typeof officerMajorMatrixSchema>;
+export type MatrixMetric = OfficerMajorMatrix["group_by_metric"];

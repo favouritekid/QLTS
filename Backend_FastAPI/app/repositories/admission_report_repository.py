@@ -599,3 +599,102 @@ class AdmissionReportRepository:
             bucket.active_current += int(active_cnt or 0)
             bucket.consulting_positive_current += int(consult_cnt or 0)
         return out
+
+    # ----------------------------------------------------- milestone timestamps
+    async def milestone_timestamps(
+        self, profile_ids: list[int]
+    ) -> dict[str, dict[int, datetime]]:
+        """profile_id → FIRST-transition timestamp per milestone (for the trend).
+
+        Same event definition as ``admission_milestones`` (MIN occurred_at, skipping
+        the synthetic ``from_status IS NULL`` backfill row), but returns the raw
+        timestamps so the service can bucket them into any number of week cutoffs
+        without re-querying per week. Monotone funnel: submitted ⊇ admitted ⊇
+        enrolled.
+        """
+        empty = {"submitted": {}, "admitted": {}, "enrolled": {}}
+        if not profile_ids:
+            return empty
+        hist = models.AdmissionProfileStatusHistory
+
+        async def _first_into(status_pred) -> dict[int, datetime]:
+            rows = await self.db.execute(
+                select(hist.profile_id, func.min(hist.occurred_at))
+                .where(
+                    hist.profile_id.in_(profile_ids),
+                    hist.from_status.isnot(None),
+                    status_pred,
+                )
+                .group_by(hist.profile_id)
+            )
+            return {pid: ts for pid, ts in rows if ts is not None}
+
+        admitted_set = set(ADMITTED_LIKE_STATUSES) | {ENROLLED_STATUS}
+        submitted_set = set(SUBMITTED_STATUSES) | admitted_set
+        return {
+            "submitted": await _first_into(hist.to_status.in_(submitted_set)),
+            "admitted": await _first_into(hist.to_status.in_(admitted_set)),
+            "enrolled": await _first_into(hist.to_status == ENROLLED_STATUS),
+        }
+
+    # -------------------------------------------------------- pipeline funnel
+    async def pipeline_funnel_counts(
+        self,
+        cohort_ranges: list[WindowRange],
+        scope_unit_id: Optional[int],
+        officer_id: Optional[int],
+    ) -> tuple[list[tuple[str, str, int, bool, str]], dict[str, int], int]:
+        """(stages_meta, counts_by_stage, total_leads) for the cohort.
+
+        Stages = every ``PipelineStage`` ordered by ``order``. Counts = distinct
+        leads currently at each stage (``Lead.pipeline_stage_id``) among the cohort
+        (``created_at`` in a round window of the year, non-deleted, unit/officer
+        scoped). A lead with NULL stage folds into the lowest-order stage (chưa bắt
+        đầu) so ``Σ current == total_leads``.
+        """
+        stage_rows = (
+            await self.db.execute(
+                select(
+                    models.PipelineStage.id,
+                    models.PipelineStage.name,
+                    models.PipelineStage.order,
+                    models.PipelineStage.is_final_stage,
+                    models.PipelineStage.color_code,
+                ).order_by(models.PipelineStage.order)
+            )
+        ).all()
+        stages = [
+            (sid, name, order, bool(fin), color)
+            for sid, name, order, fin, color in stage_rows
+        ]
+        if not cohort_ranges:
+            return stages, {}, 0
+
+        window_preds = [
+            and_(models.Lead.created_at >= r.start, models.Lead.created_at < r.end_excl)
+            for r in cohort_ranges
+        ]
+        conds = [models.Lead.deleted_at.is_(None), or_(*window_preds)]
+        if scope_unit_id is not None:
+            conds.append(models.Lead.unit_id == scope_unit_id)
+        if officer_id is not None:
+            conds.append(models.Lead.assigned_officer_id == officer_id)
+
+        rows = await self.db.execute(
+            select(
+                models.Lead.pipeline_stage_id,
+                func.count(distinct(models.Lead.id)),
+            )
+            .where(and_(*conds))
+            .group_by(models.Lead.pipeline_stage_id)
+        )
+        lowest = stages[0][0] if stages else None  # order-sorted → first = lowest
+        counts: dict[str, int] = {}
+        total = 0
+        for stage_id, cnt in rows:
+            c = int(cnt or 0)
+            total += c
+            key = stage_id if stage_id is not None else lowest
+            if key is not None:
+                counts[key] = counts.get(key, 0) + c
+        return stages, counts, total

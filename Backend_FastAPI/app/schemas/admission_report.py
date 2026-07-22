@@ -127,3 +127,77 @@ class ReportFilters(BaseModel):
 
     academic_years: list[int] = Field(default_factory=list)
     rounds: list[str] = Field(default_factory=list)
+
+
+# ============================================================================
+# Overview dashboard extras (funnel · trend · officer×major heatmap)
+# Cùng cổng report (require_admin_or_manager), cùng scope IDOR (_resolve_scope).
+# ============================================================================
+
+
+class ScopedReport(BaseModel):
+    """Common scope echo so the client can confirm what slice it rendered."""
+
+    academic_year: int
+    round_code: Optional[str] = None  # None = mọi đợt của năm
+    scope_unit_id: Optional[int] = None  # None = toàn trường
+
+
+# ---- Pipeline funnel (lead theo giai đoạn pipeline hiện tại) ----------------
+class FunnelStage(BaseModel):
+    stage_id: str  # "stg01".. (PipelineStage.id)
+    name: str
+    order: int  # PipelineStage.order (0-based)
+    is_final: bool  # PipelineStage.is_final_stage
+    color_code: str
+    current: int = 0  # lead ĐANG ở giai đoạn này (mỗi lead đúng 1 giai đoạn)
+
+
+class PipelineFunnelResponse(ScopedReport):
+    total_leads: int = 0
+    # Sorted by ``order``. Lead chưa gán giai đoạn gộp vào giai đoạn order thấp
+    # nhất (chưa bắt đầu). ``current`` cộng = total_leads.
+    stages: list[FunnelStage] = Field(default_factory=list)
+
+
+# ---- Trend (chuỗi thời gian N tuần, tích luỹ) -------------------------------
+class TrendPoint(BaseModel):
+    iso_year: int
+    iso_week: int
+    week_start: date  # Monday (VN)
+    week_end: date  # Sunday (VN, inclusive)
+    submitted_cumulative: int = 0
+    admitted_cumulative: int = 0
+    enrolled_cumulative: int = 0
+
+
+class AdmissionTrendResponse(ScopedReport):
+    weeks: int  # số điểm trả về
+    points: list[TrendPoint] = Field(default_factory=list)  # cũ → mới
+
+
+# ---- Heatmap cán bộ × ngành -------------------------------------------------
+class MatrixOfficer(BaseModel):
+    id: Optional[int] = None  # None = "Chưa gán cán bộ" (bucket)
+    name: str
+
+
+class MatrixMajor(BaseModel):
+    id: Optional[int] = None  # None = "Chưa phân loại ngành" (ambiguous ∪ unresolved)
+    code: Optional[str] = None
+    name: str
+    degree_level: Optional[str] = None
+
+
+class OfficerMajorCell(BaseModel):
+    officer_id: Optional[int] = None
+    major_id: Optional[int] = None
+    enrolled: int = 0  # đã nhập học (cumulative, event-based)
+    submitted: int = 0  # đã nộp hồ sơ (cumulative)
+
+
+class OfficerMajorMatrixResponse(ScopedReport):
+    group_by_metric: Literal["enrolled", "submitted"] = "enrolled"
+    officers: list[MatrixOfficer] = Field(default_factory=list)  # hàng
+    majors: list[MatrixMajor] = Field(default_factory=list)  # cột
+    cells: list[OfficerMajorCell] = Field(default_factory=list)  # thưa (sparse)

@@ -1,9 +1,16 @@
 import { api } from "./client";
 import { filenameFromDisposition } from "@/lib/utils/download-blob";
 import {
+  admissionTrendSchema,
   admissionWeeklyReportSchema,
+  officerMajorMatrixSchema,
+  pipelineFunnelSchema,
   reportFiltersSchema,
+  type AdmissionTrend,
   type AdmissionWeeklyReport,
+  type MatrixMetric,
+  type OfficerMajorMatrix,
+  type PipelineFunnel,
   type ReportFilters,
   type ReportGroupBy,
 } from "@/lib/zod/reports";
@@ -69,4 +76,48 @@ export async function exportAdmissionSummary(
       `bao_cao_tuyen_sinh_${academic_year}.xlsx`,
     ),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Overview dashboard extras (funnel · trend · officer×major heatmap).
+// Shared scope params (Năm · Đợt · Đơn vị) — backend enforces IDOR.
+// ---------------------------------------------------------------------------
+
+export interface OverviewParams {
+  academic_year: number;
+  round_code?: string; // omit = mọi đợt của năm
+  unit_id?: number; // admin chọn; manager bị BE ép về đơn vị của mình
+}
+
+/** Phễu lead theo giai đoạn pipeline hiện tại (cohort = đợt/năm). */
+export async function getPipelineFunnel(
+  params: OverviewParams,
+): Promise<PipelineFunnel> {
+  const response = await api.get(
+    "/api/v2/admin/reports/admission-weekly/pipeline-funnel",
+    { params },
+  );
+  return pipelineFunnelSchema.parse(response.data);
+}
+
+/** N tuần tích luỹ (nộp hồ sơ / đủ điều kiện / nhập học). */
+export async function getAdmissionTrend(
+  params: OverviewParams & { weeks?: number },
+): Promise<AdmissionTrend> {
+  const response = await api.get(
+    "/api/v2/admin/reports/admission-weekly/trend",
+    { params },
+  );
+  return admissionTrendSchema.parse(response.data);
+}
+
+/** Heatmap cán bộ × ngành (đếm enrolled hoặc submitted, cumulative-to-now). */
+export async function getOfficerMajorMatrix(
+  params: OverviewParams & { metric?: MatrixMetric },
+): Promise<OfficerMajorMatrix> {
+  const response = await api.get(
+    "/api/v2/admin/reports/admission-weekly/officer-major-matrix",
+    { params },
+  );
+  return officerMajorMatrixSchema.parse(response.data);
 }

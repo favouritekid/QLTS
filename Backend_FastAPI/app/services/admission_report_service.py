@@ -25,10 +25,18 @@ from app.repositories.admission_report_repository import (
     WindowRange,
 )
 from app.schemas.admission_report import (
+    AdmissionTrendResponse,
     AdmissionWeeklyReportResponse,
     DataQuality,
+    FunnelStage,
+    MatrixMajor,
+    MatrixOfficer,
+    OfficerMajorCell,
+    OfficerMajorMatrixResponse,
+    PipelineFunnelResponse,
     ReportFilters,
     ReportRow,
+    TrendPoint,
     WeekMeta,
 )
 from app.utils.datetime_helpers import today_vn
@@ -88,6 +96,25 @@ class AdmissionReportService:
             iso_year=iso_year, iso_week=iso_week, week_start=monday, week_end=sunday
         )
         return meta, WindowRange(start=start_dt, end_excl=end_excl)
+
+    @staticmethod
+    def _default_anchor(academic_year: int, week_start: Optional[date]) -> Optional[date]:
+        """Anchor a cumulative-to-now cutoff INSIDE ``academic_year``.
+
+        Current year → today (None → ``_compute_week`` uses today). Past year →
+        last ISO week (Dec 28, cumulative ≈ trọn năm). Future → first ISO week
+        (Jan 4, cumulative ~0). Mirrors ``get_weekly_report``'s implicit-week rule
+        so overview panels agree with the weekly cockpit.
+        """
+        if week_start is not None:
+            return week_start
+        if academic_year == today_vn().year:
+            return None
+        return (
+            date(academic_year, 1, 4)
+            if academic_year > today_vn().year
+            else date(academic_year, 12, 28)
+        )
 
     # ------------------------------------------------------------ cohort window
     async def _cohort_ranges(
@@ -334,6 +361,184 @@ class AdmissionReportService:
             rows=rows,
             totals=totals,
             data_quality=dq,
+        )
+
+    # ------------------------------------------------- overview: pipeline funnel
+    async def get_pipeline_funnel(
+        self,
+        *,
+        current_user: models.User,
+        academic_year: int,
+        round_code: Optional[str] = None,
+        unit_id: Optional[int] = None,
+    ) -> PipelineFunnelResponse:
+        """Lead theo giai đoạn pipeline hiện tại (cohort = đợt/năm, scope IDOR)."""
+        scope_unit_id = self._resolve_scope(current_user, unit_id)
+        cohort_ranges = await self._cohort_ranges(academic_year, round_code)
+        stages_meta, counts, total = await self.repo.pipeline_funnel_counts(
+            cohort_ranges, scope_unit_id, None
+        )
+        stages = [
+            FunnelStage(
+                stage_id=sid,
+                name=name,
+                order=order,
+                is_final=fin,
+                color_code=color,
+                current=counts.get(sid, 0),
+            )
+            for sid, name, order, fin, color in stages_meta
+        ]
+        return PipelineFunnelResponse(
+            academic_year=academic_year,
+            round_code=round_code,
+            scope_unit_id=scope_unit_id,
+            total_leads=total,
+            stages=stages,
+        )
+
+    # ------------------------------------------------------- overview: trend
+    async def get_trend(
+        self,
+        *,
+        current_user: models.User,
+        academic_year: int,
+        round_code: Optional[str] = None,
+        unit_id: Optional[int] = None,
+        weeks: int = 8,
+    ) -> AdmissionTrendResponse:
+        """N tuần tích luỹ (nộp/đủ ĐK/nhập học) — mỗi điểm là mốc first-transition
+        < hết tuần đó. Resolve hồ sơ 1 lần rồi bucket, không query lại mỗi tuần."""
+        scope_unit_id = self._resolve_scope(current_user, unit_id)
+        end_meta, _ = self._compute_week(self._default_anchor(academic_year, None))
+        dims, _ = await self.repo.resolve_profiles(
+            academic_year, scope_unit_id, None, round_code
+        )
+        ts = await self.repo.milestone_timestamps(list(dims.keys()))
+        points: list[TrendPoint] = []
+        for i in range(weeks - 1, -1, -1):  # cũ → mới
+            wmeta, wrange = self._compute_week(end_meta.week_start - timedelta(weeks=i))
+            cutoff = wrange.end_excl
+            points.append(
+                TrendPoint(
+                    iso_year=wmeta.iso_year,
+                    iso_week=wmeta.iso_week,
+                    week_start=wmeta.week_start,
+                    week_end=wmeta.week_end,
+                    submitted_cumulative=sum(
+                        1 for t in ts["submitted"].values() if t < cutoff
+                    ),
+                    admitted_cumulative=sum(
+                        1 for t in ts["admitted"].values() if t < cutoff
+                    ),
+                    enrolled_cumulative=sum(
+                        1 for t in ts["enrolled"].values() if t < cutoff
+                    ),
+                )
+            )
+        return AdmissionTrendResponse(
+            academic_year=academic_year,
+            round_code=round_code,
+            scope_unit_id=scope_unit_id,
+            weeks=weeks,
+            points=points,
+        )
+
+    # -------------------------------------------- overview: officer × major heat
+    async def get_officer_major_matrix(
+        self,
+        *,
+        current_user: models.User,
+        academic_year: int,
+        round_code: Optional[str] = None,
+        unit_id: Optional[int] = None,
+        metric: str = "enrolled",
+    ) -> OfficerMajorMatrixResponse:
+        """Ma trận (cán bộ × ngành) đếm enrolled + submitted (cumulative-to-now).
+
+        Tái dùng ``resolve_profiles`` (đã cho cặp officer_key × major_key mỗi hồ sơ)
+        + ``admission_milestones``. Ambiguous ∪ unresolved gộp cột "Chưa phân loại
+        ngành"; unassigned → hàng "Chưa gán cán bộ".
+        """
+        scope_unit_id = self._resolve_scope(current_user, unit_id)
+        _, week = self._compute_week(self._default_anchor(academic_year, None))
+        dims, _major_by_id = await self.repo.resolve_profiles(
+            academic_year, scope_unit_id, None, round_code
+        )
+        milestones = await self.repo.admission_milestones(
+            list(dims.keys()), week, week.end_excl
+        )
+
+        cells: dict[tuple, list] = {}  # (officer_id|None, major_id|None) -> [enr, sub]
+        officer_names: dict = {}
+        majors: dict = {}  # major_id|None -> MajorInfo|None
+        for pid, dim in dims.items():
+            ms = milestones.get(pid, {})
+            oid = dim.officer_key if isinstance(dim.officer_key, int) else None
+            mid = dim.major_key if isinstance(dim.major_key, int) else None
+            slot = cells.setdefault((oid, mid), [0, 0])
+            if ms.get("enrolled_cumulative"):
+                slot[0] += 1
+            if ms.get("submitted_cumulative"):
+                slot[1] += 1
+            officer_names.setdefault(oid, dim.officer_name if oid is not None else None)
+            majors.setdefault(mid, dim.major if mid is not None else None)
+
+        missing = [o for o, nm in officer_names.items() if isinstance(o, int) and not nm]
+        if missing:
+            resolved = await self.repo.get_user_names(missing)
+            for oid in missing:
+                officer_names[oid] = resolved.get(oid, f"Cán bộ #{oid}")
+
+        idx = 0 if metric == "enrolled" else 1
+        o_total = {
+            o: sum(v[idx] for (oo, _m), v in cells.items() if oo == o)
+            for o in officer_names
+        }
+        m_total = {
+            m: sum(v[idx] for (_o, mm), v in cells.items() if mm == m) for m in majors
+        }
+        officer_ids = sorted(
+            officer_names, key=lambda o: (o is None, -o_total[o])
+        )
+        major_ids = sorted(majors, key=lambda m: (m is None, -m_total[m]))
+
+        officers_out = [
+            MatrixOfficer(
+                id=o,
+                name=(officer_names.get(o) or "Cán bộ")
+                if o is not None
+                else "Chưa gán cán bộ",
+            )
+            for o in officer_ids
+        ]
+        majors_out = []
+        for m in major_ids:
+            if m is None:
+                majors_out.append(MatrixMajor(id=None, name="Chưa phân loại ngành"))
+                continue
+            info = majors.get(m)
+            majors_out.append(
+                MatrixMajor(
+                    id=m,
+                    code=info.code if info else None,
+                    name=(info.name if info and info.name else f"Ngành #{m}"),
+                    degree_level=info.degree_level if info else None,
+                )
+            )
+        cells_out = [
+            OfficerMajorCell(officer_id=o, major_id=m, enrolled=v[0], submitted=v[1])
+            for (o, m), v in cells.items()
+            if v[0] or v[1]
+        ]
+        return OfficerMajorMatrixResponse(
+            academic_year=academic_year,
+            round_code=round_code,
+            scope_unit_id=scope_unit_id,
+            group_by_metric=metric,  # type: ignore[arg-type]
+            officers=officers_out,
+            majors=majors_out,
+            cells=cells_out,
         )
 
     # --------------------------------------------------------------- helpers

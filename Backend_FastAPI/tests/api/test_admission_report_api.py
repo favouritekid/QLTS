@@ -324,3 +324,136 @@ async def test_filters_without_year_omits_rounds(client: AsyncClient, admin_user
     body = res.json()
     assert body["rounds"] == []  # no academic_year → rounds omitted
     assert isinstance(body["academic_years"], list)
+
+
+# =============================================================================
+# Overview extras — pipeline funnel · trend · officer×major heatmap
+# Same gate (admin_or_manager) + same _resolve_scope IDOR as the weekly report.
+# EMPTY_YEAR keeps the 200 path deterministic (no cohort → zero everything).
+# =============================================================================
+
+FUNNEL_URL = "/api/v2/admin/reports/admission-weekly/pipeline-funnel"
+TREND_URL = "/api/v2/admin/reports/admission-weekly/trend"
+MATRIX_URL = "/api/v2/admin/reports/admission-weekly/officer-major-matrix"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_funnel_admin_empty_year_returns_200(
+    client: AsyncClient, admin_user_in_db
+):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(FUNNEL_URL, params={"academic_year": EMPTY_YEAR}, headers=h)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["academic_year"] == EMPTY_YEAR
+    assert body["round_code"] is None
+    assert body["scope_unit_id"] is None
+    assert body["total_leads"] == 0
+    assert isinstance(body["stages"], list)
+    # No cohort in the isolated year → every stage current == 0 (stage metadata
+    # may or may not be seeded in the test DB; either way counts are zero).
+    for stage in body["stages"]:
+        for key in ("stage_id", "name", "order", "is_final", "color_code", "current"):
+            assert key in stage, f"missing funnel stage key '{key}': {stage}"
+        assert stage["current"] == 0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_funnel_missing_year_returns_422(
+    client: AsyncClient, admin_user_in_db
+):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(FUNNEL_URL, headers=h)  # academic_year required
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_pipeline_funnel_manager_without_unit_returns_403(
+    client: AsyncClient, manager_no_unit_user_in_db
+):
+    h = await _login(
+        client,
+        manager_no_unit_user_in_db["username"],
+        manager_no_unit_user_in_db["password"],
+    )
+    res = await client.get(FUNNEL_URL, params={"academic_year": EMPTY_YEAR}, headers=h)
+    assert res.status_code == 403, res.text
+
+
+@pytest.mark.asyncio
+async def test_pipeline_funnel_manager_foreign_unit_returns_404(
+    client: AsyncClient, manager_user_in_db, seed_other_unit
+):
+    h = await _login(
+        client, TestUsers.MANAGER["username"], TestUsers.MANAGER["password"]
+    )
+    res = await client.get(
+        FUNNEL_URL,
+        params={"academic_year": EMPTY_YEAR, "unit_id": TestOrgData.UNIT_2["id"]},
+        headers=h,
+    )
+    assert res.status_code == 404, res.text
+
+
+@pytest.mark.asyncio
+async def test_trend_admin_empty_year_returns_200(
+    client: AsyncClient, admin_user_in_db
+):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(
+        TREND_URL, params={"academic_year": EMPTY_YEAR, "weeks": 8}, headers=h
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["weeks"] == 8
+    assert isinstance(body["points"], list)
+    assert len(body["points"]) == 8  # weeks requested → weeks points
+    for pt in body["points"]:
+        for key in ("iso_year", "iso_week", "week_start", "week_end"):
+            assert key in pt, f"missing trend point key '{key}': {pt}"
+        # Isolated year → no milestones → zero cumulative at every week.
+        assert pt["submitted_cumulative"] == 0
+        assert pt["admitted_cumulative"] == 0
+        assert pt["enrolled_cumulative"] == 0
+    # Points ordered old → new (week_start strictly increasing).
+    starts = [pt["week_start"] for pt in body["points"]]
+    assert starts == sorted(starts)
+
+
+@pytest.mark.asyncio
+async def test_trend_weeks_out_of_range_returns_422(
+    client: AsyncClient, admin_user_in_db
+):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(
+        TREND_URL, params={"academic_year": EMPTY_YEAR, "weeks": 99}, headers=h  # le=26
+    )
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_officer_major_matrix_admin_empty_year_returns_200(
+    client: AsyncClient, admin_user_in_db
+):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(MATRIX_URL, params={"academic_year": EMPTY_YEAR}, headers=h)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["group_by_metric"] == "enrolled"  # default
+    # Isolated year → no profiles → empty matrix (not an error).
+    assert body["officers"] == []
+    assert body["majors"] == []
+    assert body["cells"] == []
+
+
+@pytest.mark.asyncio
+async def test_officer_major_matrix_invalid_metric_returns_422(
+    client: AsyncClient, admin_user_in_db
+):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(
+        MATRIX_URL,
+        params={"academic_year": EMPTY_YEAR, "metric": "bogus"},  # pattern gate
+        headers=h,
+    )
+    assert res.status_code == 422, res.text
