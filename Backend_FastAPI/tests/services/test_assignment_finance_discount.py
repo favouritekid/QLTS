@@ -3,19 +3,25 @@
 """Real-DB test cho GIẢM TRỪ TẢI HỌC PHÍ (Option A, ENABLE_FINANCE_WORKLOAD_DISCOUNT).
 
 Bọc sau cờ ``ENABLE_FINANCE_WORKLOAD_DISCOUNT`` (default OFF). Khi ON: lead ở
-trạng thái học phí non-final (``TUITION_HOLD_STATUS_IDS`` = sts14/sts10) được
-giảm trừ khỏi:
+trạng thái học phí non-final (``TUITION_HOLD_STATUS_IDS`` = sts14/sts10) VÀ ĐÃ CÓ
+TIỀN HỌC PHÍ VÀO (sts10, hoặc sts14 có ``fee.paid_amount > 0``) được giảm trừ khỏi:
   - cơ sở sắp xếp ``dist_load`` (eff_util) — GỘP với self-tuyển, chống trừ 2 lần
     qua phần giao S∩T,
   - cổng ``overloaded`` = ((workload − tuition)/capacity) >= SAFETY_THRESHOLD,
   - ``is_officer_at_threshold`` (referral fast-path).
 Trần cứng ``workload < capacity`` VẪN theo TỔNG workload (không test ở đây).
 
-Seed lead + consultation_status THẬT rồi execute production path
+⚠️ sts14 "đã tính phí nhưng CHƯA thu đồng nào" KHÔNG được trừ — officer vẫn phải
+theo đuổi thu tiền nên đó vẫn là tải thật (ghim bởi
+``test_sts14_unpaid_stays_in_workload``).
+
+Seed lead + consultation_status + fee THẬT rồi execute production path
 (``COUNT(id) FILTER(_tuition_hold_filter())`` + union self∩tuition) và gọi thẳng
 ``is_officer_at_threshold``. Chạy one-off container (CLAUDE.md) — seed DB thật.
 """
+import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import and_, func, select
@@ -26,6 +32,7 @@ from app.security import get_password_hash
 from app.services.assignment_reason import build_assignment_reason
 from app.services.assignment_service import (
     TUITION_HOLD_STATUS_IDS,
+    TUITION_SETTLED_STATUS_ID,
     _non_final_status_filter,
     _self_sourced_subquery,
     _tuition_hold_filter,
@@ -98,6 +105,49 @@ async def _mk_lead(db, deps, officer, status_id, phone):
     return lead
 
 
+async def _mk_paid_tuition(
+    db,
+    lead,
+    *,
+    paid=Decimal("5000000"),
+    fee_type="tuition",
+    status="partial",
+):
+    """Hồ sơ + 1 khoản phí đã ghi nhận tiền thu — bằng chứng "đã xác nhận đóng".
+
+    ``paid=0`` ⇒ mô phỏng ca ĐÃ TÍNH PHÍ NHƯNG CHƯA THU (không được trừ tải).
+    """
+    profile = models.AdmissionProfile(
+        lead_id=lead.id,
+        citizen_id=uuid.uuid4().hex[:12],
+        status="approved",
+        applied_rules={},
+        academic_year=2026,
+        version=1,
+    )
+    db.add(profile)
+    await db.flush()
+
+    db.add(
+        models.Fee(
+            admission_profile_id=profile.id,
+            fee_type=fee_type,
+            semester_no=1 if fee_type == "tuition" else None,
+            academic_year=2026,
+            base_amount=Decimal("10000000"),
+            total_discount=Decimal("0"),
+            final_amount=Decimal("10000000"),
+            paid_amount=paid,
+            waived_amount=Decimal("0"),
+            status=status,
+            calculated_at=datetime.now(timezone.utc),
+            version=1,
+        )
+    )
+    await db.flush()
+    return profile
+
+
 async def _self_log(db, lead, officer):
     """AssignmentLog manual + reason DO CHÍNH officer ⇒ latest self-sourced."""
     db.add(
@@ -120,6 +170,9 @@ def test_tuition_hold_status_ids_documented():
     from app.services.phase_manager import LeadPhase, PHASE_STATUSES
 
     assert TUITION_HOLD_STATUS_IDS == ("sts14", "sts10")
+    # sts10 = HK1 settled ⇒ tự nó là bằng chứng thu tiền, KHÔNG cần soi bảng fee.
+    assert TUITION_SETTLED_STATUS_ID == "sts10"
+    assert TUITION_SETTLED_STATUS_ID in TUITION_HOLD_STATUS_IDS
     fee = PHASE_STATUSES[LeadPhase.FEE]
     # Là tập con của nhóm FEE chính thức, và đúng bằng FEE trừ sts18 (fee status
     # FINAL duy nhất, bị loại có chủ đích khỏi discount tải).
@@ -131,9 +184,10 @@ def test_tuition_hold_status_ids_documented():
 async def test_tuition_hold_filter_and_union_dedup(db, seeded_dependencies):
     """production path: workload (non-final) / tuition_cnt / self_cnt / (self∩tuition).
 
-    5 lead: sts14, sts10 (tuition), sts18 (FINAL → rớt workload), sts06 (non-final
-    non-tuition), sts14+self-sourced. Chốt: sts18 KHÔNG vào workload lẫn tuition;
-    dist_load = workload − |self ∪ tuition| dedup đúng qua phần giao."""
+    5 lead: sts14 ĐÃ THU một phần, sts10, sts18 (FINAL → rớt workload), sts06
+    (non-final non-tuition), sts14 ĐÃ THU + self-sourced. Chốt: sts18 KHÔNG vào
+    workload lẫn tuition; dist_load = workload − |self ∪ tuition| dedup đúng qua
+    phần giao."""
     deps = seeded_dependencies
     await _ensure_status(db, "sts14", False)  # Chưa hoàn tất học phí (non-final)
     await _ensure_status(db, "sts10", False)  # Đã hoàn tất học phí (non-final)
@@ -141,11 +195,13 @@ async def test_tuition_hold_filter_and_union_dedup(db, seeded_dependencies):
     await _ensure_status(db, "sts06", False)  # Đồng ý tư vấn (non-final, non-tuition)
     o = await _mk_officer(db, deps["unit_id"], "flt")
 
-    await _mk_lead(db, deps, o, "sts14", "0961000001")           # tuition
-    await _mk_lead(db, deps, o, "sts10", "0961000002")           # tuition
+    l1 = await _mk_lead(db, deps, o, "sts14", "0961000001")   # tuition đã thu 1 phần
+    await _mk_paid_tuition(db, l1)
+    await _mk_lead(db, deps, o, "sts10", "0961000002")        # settled (không cần fee)
     await _mk_lead(db, deps, o, "sts18", "0961000003")           # FINAL → excluded
     await _mk_lead(db, deps, o, "sts06", "0961000004")           # non-final non-tuition
     l5 = await _mk_lead(db, deps, o, "sts14", "0961000005")  # tuition + self-sourced
+    await _mk_paid_tuition(db, l5)
     await _self_log(db, l5, o)
 
     stmt = (
@@ -186,12 +242,61 @@ async def test_tuition_hold_filter_and_union_dedup(db, seeded_dependencies):
     assert row.self_cnt <= row.workload
 
 
+async def test_sts14_unpaid_stays_in_workload(db, seeded_dependencies):
+    """🔒 YÊU CẦU NGHIỆP VỤ: "đã tính phí nhưng CHƯA xác nhận đóng" VẪN tính tải.
+
+    Cùng trạng thái sts14, chỉ khác chứng cứ tiền — 5 ca:
+      L1 fee học phí paid>0                → TRỪ (đã thu một phần)
+      L2 fee học phí paid=0                → GIỮ (mới tính phí, chưa thu)
+      L3 KHÔNG có hồ sơ/fee                → GIỮ
+      L4 fee học phí paid>0 nhưng CANCELLED→ GIỮ (phiếu phí đã huỷ, tiền không tính)
+      L5 fee LỆ PHÍ HỒ SƠ paid>0           → GIỮ (không phải học phí)
+    ⇒ tuition_cnt == 1. Đây là hàng rào duy nhất chặn tái diễn hành vi cũ
+    (trừ theo status trần, gộp cả lead chưa thu đồng nào)."""
+    deps = seeded_dependencies
+    await _ensure_status(db, "sts14", False)
+    o = await _mk_officer(db, deps["unit_id"], "unpaid")
+
+    l1 = await _mk_lead(db, deps, o, "sts14", "0963000001")
+    await _mk_paid_tuition(db, l1)
+    l2 = await _mk_lead(db, deps, o, "sts14", "0963000002")
+    await _mk_paid_tuition(db, l2, paid=Decimal("0"), status="calculated")
+    await _mk_lead(db, deps, o, "sts14", "0963000003")  # không hồ sơ/fee
+    l4 = await _mk_lead(db, deps, o, "sts14", "0963000004")
+    await _mk_paid_tuition(db, l4, status="cancelled")
+    l5 = await _mk_lead(db, deps, o, "sts14", "0963000005")
+    await _mk_paid_tuition(db, l5, fee_type="application", status="paid")
+
+    stmt = (
+        select(
+            func.count(models.Lead.id).label("workload"),
+            func.count(models.Lead.id)
+            .filter(_tuition_hold_filter())
+            .label("tuition_cnt"),
+        )
+        .join(
+            models.ConsultationStatus,
+            models.Lead.consultation_status_id == models.ConsultationStatus.id,
+            isouter=True,
+        )
+        .where(
+            models.Lead.assigned_officer_id == o.id,
+            models.Lead.deleted_at.is_(None),
+            _non_final_status_filter(),
+        )
+    )
+    row = (await db.execute(stmt)).one()
+
+    assert row.workload == 5
+    assert row.tuition_cnt == 1  # CHỈ L1
+
+
 async def test_is_officer_at_threshold_finance_discount(
     db, seeded_dependencies, monkeypatch
 ):
     """Referral fast-path (Option A yêu cầu #1): cờ ON trừ tải học phí khỏi ngưỡng.
 
-    cap=10; 7 lead sts06 + 2 lead sts14 = workload 9, tuition 2.
+    cap=10; 7 lead sts06 + 2 lead sts14 ĐÃ THU = workload 9, tuition 2.
       - OFF: 9/10 = 0.90 ≥ 0.8  → at threshold (True)
       - ON:  (9−2)/10 = 0.70 < 0.8 → KHÔNG at threshold (False)
     """
@@ -202,7 +307,8 @@ async def test_is_officer_at_threshold_finance_discount(
     for i in range(7):
         await _mk_lead(db, deps, o, "sts06", f"09620001{i:02d}")
     for i in range(2):
-        await _mk_lead(db, deps, o, "sts14", f"09620002{i:02d}")
+        _l = await _mk_lead(db, deps, o, "sts14", f"09620002{i:02d}")
+        await _mk_paid_tuition(db, _l)
 
     # Cờ OFF ⇒ ngưỡng theo TỔNG workload (y hệt hôm nay).
     monkeypatch.setattr(settings, "ENABLE_FINANCE_WORKLOAD_DISCOUNT", False)

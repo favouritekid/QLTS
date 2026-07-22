@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import NamedTuple
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import OperationalError  # Dùng để bắt LockNotAvailableError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,14 +56,63 @@ def _non_final_status_filter():
 # lọt vào; ghim bởi test_tuition_hold_status_ids_documented.
 TUITION_HOLD_STATUS_IDS = ("sts14", "sts10")
 
+# sts10 "Đã hoàn tất học phí" = HK1 settled (đóng đủ HOẶC miễn 100% —
+# ``fee_calculation_service.is_hk1_settled``) ⇒ tự nó ĐÃ là bằng chứng thu tiền,
+# không cần soi bảng fee.
+TUITION_SETTLED_STATUS_ID = "sts10"
+
+
+def _tuition_payment_confirmed_subquery():
+    """Correlated EXISTS — lead có ÍT NHẤT MỘT khoản HỌC PHÍ đã ghi nhận tiền
+    thực thu (``fee.paid_amount > 0``).
+
+    ``fee.paid_amount`` chỉ tăng ở money-math chạy SAU khi payment chuyển
+    ``verified`` (payment_service ~:433) ⇒ > 0 nghĩa là kế toán ĐÃ XÁC NHẬN đóng,
+    một phần hay đủ đều tính. Cố ý KHÔNG xét ``waived_amount``: miễn giảm không
+    phải "đã đóng" (ca miễn TOÀN PHẦN đi đường sts10 ở trên nên không lọt lưới).
+    Cố ý bó ``fee_type='tuition'``: lệ phí hồ sơ / BHYT đã thu KHÔNG làm lead
+    thoát tải tư vấn. ``status <> 'cancelled'`` loại phiếu phí đã huỷ.
+
+    ⚠️ INDEX: dựa ``ix_admission_profile_lead_id`` + ``ix_fee_admission_profile_id``.
+    """
+    return (
+        select(1)
+        .select_from(models.Fee)
+        .join(
+            models.AdmissionProfile,
+            models.Fee.admission_profile_id == models.AdmissionProfile.id,
+        )
+        .where(
+            models.AdmissionProfile.lead_id == models.Lead.id,
+            models.Fee.fee_type == "tuition",
+            models.Fee.status != "cancelled",
+            models.Fee.paid_amount > 0,
+        )
+        .correlate(models.Lead)
+        .exists()
+    )
+
 
 def _tuition_hold_filter():
-    """SQL condition: lead ở trạng thái học phí non-final (``TUITION_HOLD_STATUS_IDS``).
+    """SQL condition: lead ĐÃ CÓ TIỀN HỌC PHÍ VÀO (một phần hoặc đủ).
+
+    = ``TUITION_HOLD_STATUS_IDS`` VÀ (sts10 HOẶC có fee học phí ``paid_amount>0``).
+
+    ⚠️ sts14 "Chưa hoàn tất học phí" gộp HAI ca khác hẳn nhau về tải:
+      * đã đóng MỘT PHẦN (còn nợ) → khách đã chốt, không còn là tải tư vấn ⇒ TRỪ.
+      * mới TÍNH PHÍ, chưa thu đồng nào → officer vẫn phải theo đuổi ⇒ KHÔNG trừ.
+    Status một mình không phân biệt được, nên phải soi bảng ``fee``.
 
     Dùng làm FILTER aggregate trong workload_stmt (và referral fast-path) để đếm
     riêng phần tải học phí — chỉ khi ``ENABLE_FINANCE_WORKLOAD_DISCOUNT`` ON.
     """
-    return models.ConsultationStatus.id.in_(TUITION_HOLD_STATUS_IDS)
+    return and_(
+        models.ConsultationStatus.id.in_(TUITION_HOLD_STATUS_IDS),
+        or_(
+            models.ConsultationStatus.id == TUITION_SETTLED_STATUS_ID,
+            _tuition_payment_confirmed_subquery(),
+        ),
+    )
 
 
 # _ASSIGNMENT_SOURCE_METHODS = method của SỰ KIỆN (RE-)PHÂN CÔNG (cách officer CÓ
