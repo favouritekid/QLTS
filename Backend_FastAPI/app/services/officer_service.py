@@ -1861,8 +1861,14 @@ def build_boost(load: Dict[str, Any], archetype_key: str) -> str:
     """Lời khuyên hành động. 🔒 Chỉ gắn cho CHÍNH người đang xem (caller gate).
 
     Bám đúng cơ chế engine: chỉ ``dist_load`` (lead hệ thống tính) mới kéo điểm
-    bận xuống. Lead tự tìm / hồ sơ đã đóng tiền ĐÃ được trừ sẵn nên xử lý chúng
+    bận xuống. Lead tự tìm / hồ sơ ĐÃ ĐÓNG TIỀN đã được trừ sẵn nên xử lý chúng
     KHÔNG làm được chia thêm — tuyệt đối không khuyên sai điều này.
+
+    ⚠️ NHƯNG hồ sơ mới TÍNH PHÍ mà CHƯA thu đồng nào thì VẪN nằm trong
+    ``dist_load`` (assignment_service._tuition_hold_filter đòi bằng chứng tiền) —
+    nên "đôn đốc đóng học phí HK1" LÀ một đòn bẩy hạ điểm bận thật, ngang với
+    chốt lead đang mở. Officer thường không còn lead nào để "chốt" sau đợt tính
+    phí hàng loạt, nên lời khuyên chỉ nêu mỗi việc chốt lead là bất khả thi.
     """
     workload = load["workload"]
     capacity = load["capacity"]
@@ -1878,7 +1884,8 @@ def build_boost(load: Dict[str, Any], archetype_key: str) -> str:
     if archetype_key == "overloaded":
         return (
             f"Bạn đang giữ {workload}/{capacity} lead nên hệ thống tạm giảm chia. "
-            f"Chốt bớt lead đang mở để hạ điểm bận."
+            f"Hạ điểm bận bằng cách chốt bớt lead đang mở, hoặc đôn đốc hồ sơ "
+            f"đã tính học phí đóng khoản đầu tiên."
         )
     if dist == 0:
         return "Hệ thống đang thấy bạn hoàn toàn rảnh — bạn được ưu tiên chia trước."
@@ -1897,8 +1904,9 @@ def build_boost(load: Dict[str, Any], archetype_key: str) -> str:
             f"đang tính."
         )
     return (
-        f"Muốn được chia thêm: giảm {dist} lead hệ thống đang tính bằng cách "
-        f"chốt bớt lead đang mở — điểm bận sẽ hạ xuống."
+        f"Muốn được chia thêm: giảm {dist} lead hệ thống đang tính — chốt bớt "
+        f"lead đang mở, hoặc đôn đốc hồ sơ đã tính học phí đóng khoản đầu tiên "
+        f"(đóng rồi là hết bị tính)."
     )
 
 

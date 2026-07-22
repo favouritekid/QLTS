@@ -13,6 +13,7 @@ from typing import NamedTuple
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import OperationalError  # Dùng để bắt LockNotAvailableError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from .. import models
 from ..core.constants import UserRole
@@ -47,41 +48,63 @@ def _non_final_status_filter():
     )
 
 
-# Non-final tuition fee statuses (stg05 "Xử lý học phí" — tuition-hold). Khách
-# đã chuyển đổi, đang chờ đóng đủ / xác nhận nhập học ⇒ KHÔNG còn là tải tư vấn.
-# Được GIẢM TRỪ khỏi cơ sở sắp xếp + cổng quá tải + referral fast-path khi
-# ``ENABLE_FINANCE_WORKLOAD_DISCOUNT`` ON. Excludes sts18 (TUITION_REFUNDED,
-# is_final) — trạng thái final KHÔNG BAO GIỜ tính tải nên không cần liệt kê.
+# Non-final tuition fee statuses (stg05 "Xử lý học phí" — tuition-hold).
+# ⚠️ ĐIỀU KIỆN CẦN, KHÔNG ĐỦ: thuộc tuple này CHƯA đủ để được giảm trừ tải —
+# lead còn phải CÓ TIỀN HỌC PHÍ HK1 VÀO, xem ``_tuition_hold_filter()``. Thêm một
+# trạng thái học phí mới vào đây mà quên đối chiếu bằng-chứng-tiền ở đó thì tính
+# năng im lặng không chạy cho trạng thái mới.
+# Excludes sts18 (TUITION_REFUNDED, is_final) — trạng thái final KHÔNG BAO GIỜ
+# tính tải nên không cần liệt kê.
 # ⚠️ Hardcode có chủ đích (KHÔNG derive theo stage_id='stg05') để sts18 không
 # lọt vào; ghim bởi test_tuition_hold_status_ids_documented.
 TUITION_HOLD_STATUS_IDS = ("sts14", "sts10")
 
 # sts10 "Đã hoàn tất học phí" = HK1 settled (đóng đủ HOẶC miễn 100% —
-# ``fee_calculation_service.is_hk1_settled``) ⇒ tự nó ĐÃ là bằng chứng thu tiền,
-# không cần soi bảng fee.
+# ``fee_calculation_service.is_hk1_settled``). Miễn 100% có paid_amount=0 nên
+# KHÔNG đối chiếu được bằng tiền thu; nhánh sts10 vì thế chỉ loại ca nhãn RỖNG
+# RUỘT (``_tuition_label_unbacked_subquery``).
 TUITION_SETTLED_STATUS_ID = "sts10"
 
+# Marker phiên bản ghi kèm ``tuition_hold`` vào assignment_decision_log. Cùng một
+# khoá JSON từng mang HAI nghĩa: trước 22-07 = "mọi lead sts14+sts10", từ 22-07 =
+# "chỉ lead ĐÃ có tiền HK1 của lần ứng tuyển hiện tại". Không có marker thì ai
+# plot chuỗi thời gian để soi công bằng phân phối sẽ thấy bậc thang tụt tại ngày
+# deploy và đọc nhầm thành sự cố dữ liệu. Đổi quy tắc ⇒ đổi giá trị này.
+TUITION_DISCOUNT_RULE = "paid-hk1-current-year"
 
-def _tuition_payment_confirmed_subquery():
-    """Correlated EXISTS — lead đã ghi nhận tiền thực thu cho HỌC PHÍ **HK1**
-    (``fee.paid_amount > 0``).
 
-    ``fee.paid_amount`` chỉ tăng ở money-math chạy SAU khi payment chuyển
-    ``verified`` (payment_service ~:433) ⇒ > 0 nghĩa là kế toán ĐÃ XÁC NHẬN đóng,
-    một phần hay đủ đều tính. Cố ý KHÔNG xét ``waived_amount``: miễn giảm không
-    phải "đã đóng" (ca miễn TOÀN PHẦN đi đường sts10 ở trên nên không lọt lưới).
-    Cố ý bó ``fee_type='tuition'``: lệ phí hồ sơ / BHYT đã thu KHÔNG làm lead
-    thoát tải tư vấn. ``status <> 'cancelled'`` loại phiếu phí đã huỷ.
+def _current_admission_year_subquery():
+    """Năm học của LẦN ỨNG TUYỂN HIỆN TẠI = ``max(academic_year)`` các hồ sơ của lead.
 
-    ⚠️ ``semester_no == 1`` BẮT BUỘC — phải khớp ĐÚNG phạm vi vòng đời mà nó đại
-    diện: CHỈ HK1 điều khiển pipeline sts14/sts10 (``is_hk1_settled`` = tuition +
-    semester_no=1). Nới ra mọi học kỳ thì lead còn NỢ HK1 nhưng đã đóng HK2+ sẽ
-    bị trừ khỏi tải OAN — trong khi officer vẫn đang phải đòi HK1, đúng thứ mà
-    thay đổi này muốn giữ lại trong workload. Prod 22-07 chưa có fee HK2+ nào
-    (387/387 tuition = HK1) nên đây là hàng rào cho lúc mở học phí HK2, không
-    phải vá lỗi đang chảy máu. Ghim bởi ``test_hk2_paid_hk1_unpaid_stays``.
+    ``uq_admission_profile_lead_year`` (models/admission.py) cố ý cho 1 lead nhiều
+    hồ sơ — mỗi năm một cái — và admission_service cho lead ở terminal fee/enrolled
+    nộp lại mùa sau. Không có mốc này thì tiền HK1 của MÙA CŨ sẽ miễn trừ tải cho
+    hồ sơ mùa MỚI chưa thu đồng nào (tiền cũ sống sót được: rút hồ sơ ``admitted``
+    không hoàn không huỷ fee, bỏ học sang sts12, hoàn một phần, refund kẹt pending).
+    """
+    _ap = aliased(models.AdmissionProfile)
+    return (
+        select(func.max(_ap.academic_year))
+        .where(_ap.lead_id == models.Lead.id)
+        .correlate(models.Lead)
+        .scalar_subquery()
+    )
 
-    ⚠️ INDEX: dựa ``ix_admission_profile_lead_id`` + ``ix_fee_admission_profile_id``.
+
+def _hk1_fee_exists(*money_conditions):
+    """Correlated EXISTS: lead có fee HỌC PHÍ **HK1 của lần ứng tuyển hiện tại**
+    thoả thêm ``money_conditions``.
+
+    Bộ ba ``fee_type='tuition'`` + ``semester_no == 1`` + ``status <> 'cancelled'``
+    là vị từ HK1 chính tắc — MIRROR của ``fee_calculation_service.is_hk1_settled``
+    và ``repositories/admission_repository._hk1_fee_predicate`` (bản SQL dùng cho
+    danh sách hồ sơ). Đổi phạm vi HK1 ở một nơi thì PHẢI rà cả ba, nếu không bảng
+    "điểm bận" và danh sách hồ sơ sẽ nói hai con số khác nhau về cùng một hồ sơ.
+
+    ⚠️ ``semester_no == 1`` BẮT BUỘC — CHỈ HK1 điều khiển pipeline sts14/sts10.
+    Nới ra mọi học kỳ thì lead còn NỢ HK1 nhưng đã đóng HK2+ bị trừ khỏi tải OAN
+    trong khi officer vẫn đang phải đòi HK1. Ghim bởi
+    ``test_hk2_paid_hk1_unpaid_stays_in_workload``.
     """
     return (
         select(1)
@@ -92,26 +115,65 @@ def _tuition_payment_confirmed_subquery():
         )
         .where(
             models.AdmissionProfile.lead_id == models.Lead.id,
+            models.AdmissionProfile.academic_year
+            == _current_admission_year_subquery(),
             models.Fee.fee_type == "tuition",
             models.Fee.semester_no == 1,
             models.Fee.status != "cancelled",
-            models.Fee.paid_amount > 0,
+            *money_conditions,
         )
         .correlate(models.Lead)
         .exists()
     )
 
 
-def _tuition_hold_filter():
-    """SQL condition: lead ĐÃ CÓ TIỀN HỌC PHÍ VÀO (một phần hoặc đủ).
+def _tuition_payment_confirmed_subquery():
+    """EXISTS — kế toán ĐÃ XÁC NHẬN thu tiền học phí HK1 (``paid_amount > 0``).
 
-    = ``TUITION_HOLD_STATUS_IDS`` VÀ (sts10 HOẶC có fee học phí HK1
-    ``paid_amount>0``).
+    ``fee.paid_amount`` chỉ tăng ở money-math chạy SAU khi payment chuyển
+    ``verified`` (payment_service ~:433) ⇒ > 0 nghĩa là tiền đã vào thật, một phần
+    hay đủ đều tính; hoàn tiền có giảm ngược (payment_service ~:120) nên bằng
+    chứng tự rút lại. Cố ý KHÔNG xét ``waived_amount``: miễn giảm không phải "đã
+    đóng" — ca miễn TOÀN PHẦN đi đường sts10.
+    """
+    return _hk1_fee_exists(models.Fee.paid_amount > 0)
+
+
+def _tuition_label_unbacked_subquery():
+    """EXISTS — lead mang nhãn sts10 nhưng HK1 KHÔNG có gì chống lưng: chưa thu
+    (``paid_amount == 0``), chưa miễn (``waived_amount == 0``), mà vẫn còn phải
+    thu (``final_amount > 0``).
+
+    Đây là dấu vết của nhãn CHẾT: void lô import đảo tiền NGOÀI savepoint rồi
+    bước lùi nhãn lead thất bại trong ``try/except`` chỉ ``log.error``
+    (payment_import_service ~:1666/:1688) — tiền đã đảo hết mà lead vẫn đứng
+    sts10. Không có beat nào đối soát lead-status ↔ fee, nên nếu tin sts10 vô điều
+    kiện thì lead 0 đồng đó được miễn trừ tải VĨNH VIỄN. Ca miễn 100% hợp lệ có
+    ``waived_amount > 0`` nên KHÔNG lọt vào đây.
+    """
+    return _hk1_fee_exists(
+        models.Fee.paid_amount == 0,
+        models.Fee.waived_amount == 0,
+        models.Fee.final_amount > 0,
+    )
+
+
+def _tuition_hold_filter():
+    """SQL condition: lead ĐÃ CÓ TIỀN HỌC PHÍ HK1 VÀO (một phần, đủ, hoặc miễn).
+
+    = ``TUITION_HOLD_STATUS_IDS`` VÀ (sts10-có-chống-lưng HOẶC HK1 ``paid > 0``).
 
     ⚠️ sts14 "Chưa hoàn tất học phí" gộp HAI ca khác hẳn nhau về tải:
       * đã đóng MỘT PHẦN (còn nợ) → khách đã chốt, không còn là tải tư vấn ⇒ TRỪ.
       * mới TÍNH PHÍ, chưa thu đồng nào → officer vẫn phải theo đuổi ⇒ KHÔNG trừ.
     Status một mình không phân biệt được, nên phải soi bảng ``fee``.
+
+    ⚠️ TIỀN ĐIỀU KIỆN FROM: khác ``_non_final_status_filter()``, vị từ này KHÔNG
+    tự chứa — hai subquery bên trong correlate tới ``models.Lead`` nên câu bao
+    ngoài BẮT BUỘC có ``lead`` trong FROM. Dùng nó trong query chỉ JOIN
+    ``consultation_status`` (thống kê theo status, read-model) sẽ nổ
+    ``ProgrammingError: missing FROM-clause entry for table "lead"`` LÚC CHẠY —
+    không compile-time, không type-check.
 
     Dùng làm FILTER aggregate trong workload_stmt (và referral fast-path) để đếm
     riêng phần tải học phí — chỉ khi ``ENABLE_FINANCE_WORKLOAD_DISCOUNT`` ON.
@@ -119,7 +181,10 @@ def _tuition_hold_filter():
     return and_(
         models.ConsultationStatus.id.in_(TUITION_HOLD_STATUS_IDS),
         or_(
-            models.ConsultationStatus.id == TUITION_SETTLED_STATUS_ID,
+            and_(
+                models.ConsultationStatus.id == TUITION_SETTLED_STATUS_ID,
+                ~_tuition_label_unbacked_subquery(),
+            ),
             _tuition_payment_confirmed_subquery(),
         ),
     )
@@ -835,7 +900,10 @@ async def automatically_assign_lead(
                                 "current": ol["workload"],
                                 "max": ol["officer"].max_capacity or 100,
                                 **(
-                                    {"tuition_hold": ol["tuition_hold"]}
+                                    {
+                                        "tuition_hold": ol["tuition_hold"],
+                                        "discount_rule": TUITION_DISCOUNT_RULE,
+                                    }
                                     if finance_on
                                     else {}
                                 ),
@@ -913,7 +981,10 @@ async def automatically_assign_lead(
                                 # Option A: chỉ thêm khi finance_on ⇒ OFF giữ nguyên
                                 # audit-shape (byte-identical).
                                 **(
-                                    {"tuition_hold": ol["tuition_hold"]}
+                                    {
+                                        "tuition_hold": ol["tuition_hold"],
+                                        "discount_rule": TUITION_DISCOUNT_RULE,
+                                    }
                                     if finance_on
                                     else {}
                                 ),
@@ -926,7 +997,10 @@ async def automatically_assign_lead(
                             "current": ol["workload"],
                             "max": ol["officer"].max_capacity or 100,
                             **(
-                                {"tuition_hold": ol["tuition_hold"]}
+                                {
+                                    "tuition_hold": ol["tuition_hold"],
+                                    "discount_rule": TUITION_DISCOUNT_RULE,
+                                }
                                 if finance_on
                                 else {}
                             ),
