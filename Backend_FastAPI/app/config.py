@@ -607,8 +607,9 @@ class Settings(BaseSettings):
         validation_alias="ENABLE_FINANCE_WORKLOAD_DISCOUNT",
     )  # Khi ON: lead ở giai đoạn HỌC PHÍ non-final (sts14 Chưa hoàn tất học phí +
     # sts10 Đã hoàn tất học phí — xem TUITION_HOLD_STATUS_IDS) VÀ ĐÃ CÓ TIỀN HỌC
-    # PHÍ VÀO (sts10 = settled, hoặc sts14 có fee tuition paid_amount>0 = đã thu
-    # một phần) được GIẢM TRỪ khỏi
+    # PHÍ HK1 VÀO (sts10 = settled, hoặc sts14 có fee tuition HK1 paid_amount>0 =
+    # đã thu một phần — HK2+ KHÔNG tính, xem _tuition_payment_confirmed_subquery)
+    # được GIẢM TRỪ khỏi
     # cơ sở sắp xếp (eff_util/dist_load), khỏi cổng `overloaded`, VÀ khỏi
     # is_officer_at_threshold (referral fast-path) — vì đây là khách đã chuyển đổi
     # đang chờ xác nhận nhập học, không còn là tải tư vấn. Gate cứng

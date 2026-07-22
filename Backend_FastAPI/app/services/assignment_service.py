@@ -63,8 +63,8 @@ TUITION_SETTLED_STATUS_ID = "sts10"
 
 
 def _tuition_payment_confirmed_subquery():
-    """Correlated EXISTS — lead có ÍT NHẤT MỘT khoản HỌC PHÍ đã ghi nhận tiền
-    thực thu (``fee.paid_amount > 0``).
+    """Correlated EXISTS — lead đã ghi nhận tiền thực thu cho HỌC PHÍ **HK1**
+    (``fee.paid_amount > 0``).
 
     ``fee.paid_amount`` chỉ tăng ở money-math chạy SAU khi payment chuyển
     ``verified`` (payment_service ~:433) ⇒ > 0 nghĩa là kế toán ĐÃ XÁC NHẬN đóng,
@@ -72,6 +72,14 @@ def _tuition_payment_confirmed_subquery():
     phải "đã đóng" (ca miễn TOÀN PHẦN đi đường sts10 ở trên nên không lọt lưới).
     Cố ý bó ``fee_type='tuition'``: lệ phí hồ sơ / BHYT đã thu KHÔNG làm lead
     thoát tải tư vấn. ``status <> 'cancelled'`` loại phiếu phí đã huỷ.
+
+    ⚠️ ``semester_no == 1`` BẮT BUỘC — phải khớp ĐÚNG phạm vi vòng đời mà nó đại
+    diện: CHỈ HK1 điều khiển pipeline sts14/sts10 (``is_hk1_settled`` = tuition +
+    semester_no=1). Nới ra mọi học kỳ thì lead còn NỢ HK1 nhưng đã đóng HK2+ sẽ
+    bị trừ khỏi tải OAN — trong khi officer vẫn đang phải đòi HK1, đúng thứ mà
+    thay đổi này muốn giữ lại trong workload. Prod 22-07 chưa có fee HK2+ nào
+    (387/387 tuition = HK1) nên đây là hàng rào cho lúc mở học phí HK2, không
+    phải vá lỗi đang chảy máu. Ghim bởi ``test_hk2_paid_hk1_unpaid_stays``.
 
     ⚠️ INDEX: dựa ``ix_admission_profile_lead_id`` + ``ix_fee_admission_profile_id``.
     """
@@ -85,6 +93,7 @@ def _tuition_payment_confirmed_subquery():
         .where(
             models.AdmissionProfile.lead_id == models.Lead.id,
             models.Fee.fee_type == "tuition",
+            models.Fee.semester_no == 1,
             models.Fee.status != "cancelled",
             models.Fee.paid_amount > 0,
         )
@@ -96,7 +105,8 @@ def _tuition_payment_confirmed_subquery():
 def _tuition_hold_filter():
     """SQL condition: lead ĐÃ CÓ TIỀN HỌC PHÍ VÀO (một phần hoặc đủ).
 
-    = ``TUITION_HOLD_STATUS_IDS`` VÀ (sts10 HOẶC có fee học phí ``paid_amount>0``).
+    = ``TUITION_HOLD_STATUS_IDS`` VÀ (sts10 HOẶC có fee học phí HK1
+    ``paid_amount>0``).
 
     ⚠️ sts14 "Chưa hoàn tất học phí" gộp HAI ca khác hẳn nhau về tải:
       * đã đóng MỘT PHẦN (còn nợ) → khách đã chốt, không còn là tải tư vấn ⇒ TRỪ.

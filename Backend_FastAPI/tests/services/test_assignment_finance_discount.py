@@ -4,7 +4,8 @@
 
 Bọc sau cờ ``ENABLE_FINANCE_WORKLOAD_DISCOUNT`` (default OFF). Khi ON: lead ở
 trạng thái học phí non-final (``TUITION_HOLD_STATUS_IDS`` = sts14/sts10) VÀ ĐÃ CÓ
-TIỀN HỌC PHÍ VÀO (sts10, hoặc sts14 có ``fee.paid_amount > 0``) được giảm trừ khỏi:
+TIỀN HỌC PHÍ HK1 VÀO (sts10, hoặc sts14 có fee tuition HK1 ``paid_amount > 0``)
+được giảm trừ khỏi:
   - cơ sở sắp xếp ``dist_load`` (eff_util) — GỘP với self-tuyển, chống trừ 2 lần
     qua phần giao S∩T,
   - cổng ``overloaded`` = ((workload − tuition)/capacity) >= SAFETY_THRESHOLD,
@@ -105,18 +106,8 @@ async def _mk_lead(db, deps, officer, status_id, phone):
     return lead
 
 
-async def _mk_paid_tuition(
-    db,
-    lead,
-    *,
-    paid=Decimal("5000000"),
-    fee_type="tuition",
-    status="partial",
-):
-    """Hồ sơ + 1 khoản phí đã ghi nhận tiền thu — bằng chứng "đã xác nhận đóng".
-
-    ``paid=0`` ⇒ mô phỏng ca ĐÃ TÍNH PHÍ NHƯNG CHƯA THU (không được trừ tải).
-    """
+async def _mk_profile(db, lead):
+    """Hồ sơ tuyển sinh tối thiểu để treo fee lên."""
     profile = models.AdmissionProfile(
         lead_id=lead.id,
         citizen_id=uuid.uuid4().hex[:12],
@@ -127,12 +118,29 @@ async def _mk_paid_tuition(
     )
     db.add(profile)
     await db.flush()
+    return profile
 
+
+async def _add_fee(
+    db,
+    profile,
+    *,
+    paid=Decimal("5000000"),
+    fee_type="tuition",
+    semester_no=1,
+    status="partial",
+):
+    """1 khoản phí. ``paid>0`` = bằng chứng kế toán ĐÃ XÁC NHẬN thu.
+
+    ``paid=0`` ⇒ ca ĐÃ TÍNH PHÍ NHƯNG CHƯA THU (không được trừ tải).
+    ⚠️ CHECK ``chk_fee_nontuition_semester_no_null``: phí non-tuition phải để
+    ``semester_no`` NULL.
+    """
     db.add(
         models.Fee(
             admission_profile_id=profile.id,
             fee_type=fee_type,
-            semester_no=1 if fee_type == "tuition" else None,
+            semester_no=semester_no if fee_type == "tuition" else None,
             academic_year=2026,
             base_amount=Decimal("10000000"),
             total_discount=Decimal("0"),
@@ -145,6 +153,12 @@ async def _mk_paid_tuition(
         )
     )
     await db.flush()
+
+
+async def _mk_paid_tuition(db, lead, **kw):
+    """Shortcut: hồ sơ + 1 khoản học phí HK1 đã thu (mặc định)."""
+    profile = await _mk_profile(db, lead)
+    await _add_fee(db, profile, **kw)
     return profile
 
 
@@ -246,8 +260,8 @@ async def test_sts14_unpaid_stays_in_workload(db, seeded_dependencies):
     """🔒 YÊU CẦU NGHIỆP VỤ: "đã tính phí nhưng CHƯA xác nhận đóng" VẪN tính tải.
 
     Cùng trạng thái sts14, chỉ khác chứng cứ tiền — 5 ca:
-      L1 fee học phí paid>0                → TRỪ (đã thu một phần)
-      L2 fee học phí paid=0                → GIỮ (mới tính phí, chưa thu)
+      L1 fee học phí HK1 paid>0            → TRỪ (đã thu một phần)
+      L2 fee học phí HK1 paid=0            → GIỮ (mới tính phí, chưa thu)
       L3 KHÔNG có hồ sơ/fee                → GIỮ
       L4 fee học phí paid>0 nhưng CANCELLED→ GIỮ (phiếu phí đã huỷ, tiền không tính)
       L5 fee LỆ PHÍ HỒ SƠ paid>0           → GIỮ (không phải học phí)
@@ -289,6 +303,53 @@ async def test_sts14_unpaid_stays_in_workload(db, seeded_dependencies):
 
     assert row.workload == 5
     assert row.tuition_cnt == 1  # CHỈ L1
+
+
+async def test_hk2_paid_hk1_unpaid_stays_in_workload(db, seeded_dependencies):
+    """🔒 Bằng chứng thu tiền phải BÓ ĐÚNG HK1 — vòng đời mà sts14/sts10 đại diện.
+
+    Lead sts14 đã đóng HK2 nhưng HK1 VẪN CHƯA THU: officer còn phải đòi HK1 ⇒
+    KHÔNG được trừ tải. Không có ``semester_no == 1`` thì EXISTS khớp mọi học kỳ
+    và lead này bị trừ oan (prod hôm nay 0 fee HK2+, nhưng sẽ có khi mở HK2).
+
+    Đối chứng L2: cùng cấu hình + HK1 ĐÃ thu ⇒ trừ. Thiếu đối chứng thì test vẫn
+    xanh cả khi subquery hỏng hoàn toàn (không khớp gì)."""
+    deps = seeded_dependencies
+    await _ensure_status(db, "sts14", False)
+    o = await _mk_officer(db, deps["unit_id"], "hk2")
+
+    l1 = await _mk_lead(db, deps, o, "sts14", "0964000001")
+    p1 = await _mk_profile(db, l1)
+    await _add_fee(db, p1, semester_no=1, paid=Decimal("0"), status="calculated")
+    await _add_fee(db, p1, semester_no=2, paid=Decimal("7000000"), status="partial")
+
+    l2 = await _mk_lead(db, deps, o, "sts14", "0964000002")
+    p2 = await _mk_profile(db, l2)
+    await _add_fee(db, p2, semester_no=1, paid=Decimal("3000000"), status="partial")
+    await _add_fee(db, p2, semester_no=2, paid=Decimal("7000000"), status="partial")
+
+    stmt = (
+        select(
+            func.count(models.Lead.id).label("workload"),
+            func.count(models.Lead.id)
+            .filter(_tuition_hold_filter())
+            .label("tuition_cnt"),
+        )
+        .join(
+            models.ConsultationStatus,
+            models.Lead.consultation_status_id == models.ConsultationStatus.id,
+            isouter=True,
+        )
+        .where(
+            models.Lead.assigned_officer_id == o.id,
+            models.Lead.deleted_at.is_(None),
+            _non_final_status_filter(),
+        )
+    )
+    row = (await db.execute(stmt)).one()
+
+    assert row.workload == 2
+    assert row.tuition_cnt == 1  # CHỈ L2 (HK1 đã thu); L1 nợ HK1 vẫn là tải
 
 
 async def test_is_officer_at_threshold_finance_discount(
