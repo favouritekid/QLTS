@@ -651,6 +651,17 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/v2/admissions/*/publish-result",    "action": "POST"},  # T6
         {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-promote",  "action": "POST"},  # T10
         {"subject": "{role}", "object": "/api/v2/admissions/*/waitlist-reject",   "action": "POST"},  # T11
+        # Cây tổ chức + số liệu tổng hợp TOÀN TRƯỜNG (trang admin "Organization
+        # Tree", FE nav gate admin+manager). Endpoint trả aggregation mọi đơn vị
+        # (service `get_organization_tree_with_aggregation` KHÔNG scope theo user,
+        # cache Redis global) ⇒ CHỈ vai oversight. Manager ALLOW ở đây; admin qua
+        # wildcard `/*`. OFFICER KHÔNG được xem (không có link nav; chỉ giữ base
+        # `/api/organization-units` GET để đổ dropdown). ⚠️ Migration nền
+        # `p2q3r4s5t6u7` (2024-11-19) TỪNG seed row `role:officer` cho endpoint này
+        # ("for dropdowns") → migration admwfcasbin20260723 XÓA row officer đó (và
+        # accountant kế thừa officer) để chỉ còn manager+admin. Officer-DENY KHÔNG
+        # dùng được (manager kế thừa officer → deny-override chặn cả manager).
+        {"subject": "{role}", "object": "/api/organization-units/tree-with-aggregation", "action": "GET"},
         # Admission Configuration Console (Phase 1: Admission Path Management)
         # NOTE: Manager can create/edit paths, but ONLY ADMIN can activate/deactivate
         {"subject": "{role}", "object": "/api/admission-config/years", "action": "GET"},  # Academic years
