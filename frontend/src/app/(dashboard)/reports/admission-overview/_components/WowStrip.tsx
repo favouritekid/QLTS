@@ -61,7 +61,8 @@ export function WowStrip({ wow }: { wow: AdmissionWow }) {
   if (wow.insufficient_data || !wow.comparison) {
     return (
       <p className="text-sm text-muted-foreground">
-        Chưa đủ 2 tuần đã hoàn tất để so nhịp tuần (năm chưa bắt đầu hoặc mới mở).
+        Chưa đủ 2 tuần đã hoàn tất trong năm học này để so nhịp tuần (chỉ áp dụng
+        cho năm đang diễn ra).
       </p>
     );
   }

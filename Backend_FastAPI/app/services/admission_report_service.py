@@ -557,16 +557,22 @@ class AdmissionReportService:
             return row
 
         # First-transition timestamp → 1 trong 2 tuần hoàn tất, theo dim của hồ sơ.
+        # CHỈ materialize hàng khi có sự kiện TRONG 2 tuần (mốc ngoài cửa sổ đóng góp
+        # 0 cho cả hai → bỏ, tránh hàng biến-động-0 thừa; totals không đổi).
         for milestone in ("submitted", "admitted", "enrolled"):
             for pid, t in ts[milestone].items():
                 dim = dims.get(pid)
                 if dim is None:
                     continue
+                in_current = w1.start <= t < w1.end_excl
+                in_previous = w2.start <= t < w2.end_excl
+                if not (in_current or in_previous):
+                    continue
                 key = dim.major_key if group_by == "major" else dim.officer_key
                 mv: WowMovement = getattr(_row(key), milestone)
-                if w1.start <= t < w1.end_excl:
+                if in_current:
                     mv.count_current += 1
-                elif w2.start <= t < w2.end_excl:
+                else:
                     mv.count_previous += 1
 
         # Nhãn (mirror get_weekly_report): key int = ngành/cán bộ thật; key str =
