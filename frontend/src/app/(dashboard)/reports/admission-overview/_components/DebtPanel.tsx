@@ -42,7 +42,7 @@ export function DebtPanel({
           </div>
         </div>
         <div className="text-sm text-muted-foreground">
-          Đã thu{" "}
+          Đã thu trên khoản còn nợ{" "}
           <span className="font-semibold text-foreground">
             {formatVND(summary.total_paid)}
           </span>{" "}

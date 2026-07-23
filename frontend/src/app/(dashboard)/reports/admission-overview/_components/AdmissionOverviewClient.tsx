@@ -332,20 +332,21 @@ export function AdmissionOverviewClient() {
       {/* Mỗi panel TỰ quản trạng thái → weekly lỗi (vd đợt thiếu ngày) KHÔNG che
           phễu/trend/matrix/công nợ (fetch độc lập, funnel cố ý skip_undated). */}
       <div className={cn("space-y-4", anyFetching && "opacity-60 transition-opacity")}>
-        {/* KPI band — theo toggle bảng (group_by · tuần/lũy kế), trạng thái riêng */}
+        {/* KPI band ĐIỀU HÀNH — ỔN ĐỊNH (ngành · lũy kế năm), KHÔNG đổi theo toggle
+            ẩn ở tab Bảng chi tiết (tránh KPI đổi mà control lại không nhìn thấy). */}
         <PanelState
           query={{
-            isError: weeklyDetail.isError,
-            error: weeklyDetail.error,
-            data: syncedDetail,
+            isError: weeklyMajor.isError,
+            error: weeklyMajor.error,
+            data: syncedMajor,
           }}
           skeleton="h-24 w-full"
         >
-          {syncedDetail && (
+          {syncedMajor && (
             <SummaryBand
-              rows={syncedDetail.rows}
-              totals={syncedDetail.totals}
-              groupBy={syncedDetail.group_by}
+              rows={syncedMajor.rows}
+              totals={syncedMajor.totals}
+              groupBy={syncedMajor.group_by}
             />
           )}
         </PanelState>
@@ -363,7 +364,12 @@ export function AdmissionOverviewClient() {
           {/* ---- TAB TRỰC QUAN ---- */}
           <TabsContent value="visual" className="mt-4 space-y-4">
             <div className="grid gap-4 lg:grid-cols-2">
-              <Panel title="Dòng chảy mùa tuyển sinh" caption="pipeline_stage">
+              <Panel title="Phễu LEAD theo giai đoạn">
+                <p className="mb-3 -mt-1 text-xs text-muted-foreground">
+                  Đếm <strong>LEAD</strong> đi tới từng bước pipeline (cohort đợt,
+                  gồm khách vãng lai) — <em>khác</em> KPI “Hồ sơ đã nộp” (đếm theo
+                  hồ sơ). Không so trực tiếp hai con số.
+                </p>
                 <PanelState query={funnel} skeleton="h-64 w-full">
                   {funnel.data && <OverviewFunnel funnel={funnel.data} />}
                 </PanelState>
@@ -375,12 +381,14 @@ export function AdmissionOverviewClient() {
               </Panel>
             </div>
 
-            {/* Độ đầy chỉ tiêu — dùng weeklyMajor (ngành · lũy kế) độc lập toggle */}
-            <Panel title="Độ đầy chỉ tiêu — theo ngành" caption="admission-weekly">
+            {/* Hồ sơ nộp / chỉ tiêu — tử số là HỒ SƠ NỘP (không phải nhập học);
+                dùng weeklyMajor (ngành · lũy kế) độc lập toggle */}
+            <Panel title="Hồ sơ nộp / chỉ tiêu — theo ngành">
               <p className="mb-3 -mt-1 text-xs text-muted-foreground">
-                Mỗi thanh = chỉ tiêu; hổ phách = đã đóng học phí HK1, xanh = đã nộp
-                chưa đóng, phần trống = còn thiếu so chỉ tiêu. Ngành nguy cơ (đầy
-                thấp) hiện đầu.
+                Mẫu số = <strong>chỉ tiêu</strong>; độ dài thanh = <strong>hồ sơ
+                đã nộp</strong>/chỉ tiêu (KHÔNG phải nhập học). Trong đó hổ phách =
+                đã đóng học phí HK1, xanh = đã nộp chưa đóng, phần trống = còn
+                thiếu. Ngành nguy cơ (đầy thấp) hiện đầu.
               </p>
               <PanelState
                 query={{
