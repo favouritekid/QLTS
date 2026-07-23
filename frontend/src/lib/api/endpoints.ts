@@ -249,6 +249,9 @@ export const API_ENDPOINTS = {
       WAIVE: (feeId: number) => `/api/fees/${feeId}/waive`,
       CANCEL: (feeId: number) => `/api/fees/${feeId}/cancel`,
       RECALCULATE: (feeId: number) => `/api/fees/${feeId}/recalculate`,
+      // Đổi ngành: kế toán xác nhận reprice (accountant + admin).
+      CONFIRM_MAJOR_CHANGE: (feeId: number) =>
+        `/api/fees/${feeId}/confirm-major-change`,
     },
 
     INVOICES: {

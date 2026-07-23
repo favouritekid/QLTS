@@ -1259,6 +1259,15 @@ export const admissionProfileResponseSchema = z.object({
     .describe(
       "True when a rejected/withdrawn profile still holds unrefunded tuition."
     ),
+  // Đổi ngành: BE-owned transient. True khi hồ sơ đang trong chu kỳ đổi ngành
+  // (major_change_requested HOẶC active HK1 fee awaiting_accountant_confirmation)
+  // → badge "Chờ kế toán xác nhận" + ẩn xuất giấy. Default false (backward-compat).
+  major_change_cycle_open: z
+    .boolean()
+    .default(false)
+    .describe(
+      "True khi hồ sơ đang trong chu kỳ đổi ngành (chờ kế toán xác nhận học phí)."
+    ),
 })
 
 export type AdmissionProfileResponse = z.infer<
@@ -1301,6 +1310,7 @@ export const admissionListItemSchema = admissionProfileResponseSchema.pick({
   assigned_officer_name: true,
   assigned_reviewer_name: true,
   available_actions: true,
+  major_change_cycle_open: true,
 })
 
 export type AdmissionListItem = z.infer<typeof admissionListItemSchema>

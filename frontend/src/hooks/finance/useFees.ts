@@ -391,3 +391,36 @@ export function useRecalculateFee() {
     },
   })
 }
+
+/**
+ * Đổi ngành: kế toán xác nhận reprice.
+ *
+ * Invalidate CẢ fee/invoice LẪN admission — vì confirm clear cờ đổi ngành trên
+ * hồ sơ (major_change_cycle_open → false) + mở lại available_actions (xuất giấy/
+ * duyệt). Không refresh admission thì badge + nút giấy trên trang hồ sơ vẫn ẩn.
+ */
+export function useConfirmMajorChange() {
+  const queryClient = useQueryClient()
+
+  return useMutation<Fee, AxiosError<ApiErrorResponse>, { feeId: number }>({
+    mutationFn: ({ feeId }) => feesApi.confirmMajorChange(feeId),
+    onSuccess: (fee) => {
+      toast.success("Đã xác nhận đổi ngành — officer có thể tiếp tục.")
+      invalidateFeeQueries(queryClient, fee.id, {
+        byProfile: fee.admission_profile_id,
+        profileSummary: fee.admission_profile_id,
+      })
+      queryClient.invalidateQueries({ queryKey: ["invoices"] })
+      // Refresh hồ sơ: cờ đổi ngành + available_actions đổi sau confirm.
+      queryClient.invalidateQueries({ queryKey: ["admissions"] })
+    },
+    onError: (error) => {
+      const detail = error.response?.data?.detail
+      const message =
+        typeof detail === "string"
+          ? detail
+          : "Không thể xác nhận đổi ngành. Vui lòng thử lại."
+      toast.error(message)
+    },
+  })
+}

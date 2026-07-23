@@ -50,6 +50,8 @@ export interface FeeViewModel extends Omit<FeeDetail, "status" | "fee_type"> {
   show_waive_button: boolean
   show_cancel_button: boolean
   show_recalculate_button: boolean
+  // Đổi ngành: nút "Xác nhận đổi ngành" (accountant/admin + cờ BE bật).
+  show_confirm_major_change_button: boolean
   is_paid: boolean
   is_overdue: boolean
   is_terminal: boolean
@@ -93,6 +95,7 @@ export function toFeeViewModel(fee: FeeDetail): FeeViewModel {
     show_waive_button: fee.can_waive,
     show_cancel_button: fee.can_cancel,
     show_recalculate_button: fee.can_recalculate,
+    show_confirm_major_change_button: fee.can_confirm_major_change ?? false,
     is_paid: fee.status === "paid",
     is_overdue: fee.status === "overdue",
     is_terminal: ["paid", "cancelled", "waived"].includes(fee.status),
@@ -178,6 +181,9 @@ export interface FeeListItemViewModel {
   can_waive: boolean
   can_cancel: boolean
   can_recalculate: boolean
+  // Đổi ngành: badge "chờ kế toán xác nhận" trên card fee.
+  awaiting_accountant_confirmation: boolean
+  can_confirm_major_change: boolean
 }
 
 /**
@@ -223,6 +229,8 @@ export function toFeeListViewModel(fees: Fee[]): FeeListItemViewModel[] {
       can_waive: fee.can_waive,
       can_cancel: fee.can_cancel,
       can_recalculate: fee.can_recalculate,
+      awaiting_accountant_confirmation: fee.awaiting_accountant_confirmation ?? false,
+      can_confirm_major_change: fee.can_confirm_major_change ?? false,
     }
   })
 }

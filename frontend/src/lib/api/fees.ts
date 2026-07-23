@@ -240,6 +240,21 @@ export async function recalculateFee(feeId: number, data: FeeRecalculateRequest)
   return response.data
 }
 
+/**
+ * Đổi ngành: kế toán (hoặc admin) xác nhận học phí đã reprice → clear cờ chờ,
+ * mở lại xuất giấy/duyệt, báo officer. PUT (không body).
+ *
+ * @throws {AxiosError} 403 nếu không có quyền (chỉ accountant + admin)
+ * @throws {AxiosError} 409 nếu fee không đang chờ xác nhận (đã confirm)
+ * @throws {AxiosError} 400 nếu bất biến hoá đơn lệch (cần rà thủ công)
+ */
+export async function confirmMajorChange(feeId: number): Promise<Fee> {
+  const response = await api.put<Fee>(
+    API_ENDPOINTS.FINANCE.FEES.CONFIRM_MAJOR_CHANGE(feeId),
+  )
+  return response.data
+}
+
 // ============================================================================
 // EXPORTED API OBJECT
 // ============================================================================
@@ -258,4 +273,5 @@ export const feesApi = {
   waiveFee,
   cancelFee,
   recalculateFee,
+  confirmMajorChange,
 }

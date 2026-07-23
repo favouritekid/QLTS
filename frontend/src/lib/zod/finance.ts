@@ -207,6 +207,14 @@ export const feeSchema = z.object({
   can_recalculate: z.boolean(),
   // Additional metadata
   due_date: z.string().nullable(), // First invoice due date for quick reference
+  // Đổi ngành có khấu trừ phiếu thu (BE-owned). Optional/default cho backward-compat
+  // trong lúc rollout (cờ BE MAJOR_CHANGE_REPRICE_ENABLED). FE thin-client: chỉ
+  // hiển thị theo cờ BE, KHÔNG tự suy.
+  awaiting_accountant_confirmation: z.boolean().optional().default(false),
+  can_confirm_major_change: z.boolean().optional().default(false),
+  major_change_from_major_name: z.string().nullable().optional().default(null),
+  major_change_to_major_name: z.string().nullable().optional().default(null),
+  major_change_delta_amount: z.string().nullable().optional().default(null),
 })
 
 export type Fee = z.infer<typeof feeSchema>
@@ -223,6 +231,9 @@ export const feeSummarySchema = z.object({
   status: feeStatusSchema,
   // BE-owned: khoản phí có hóa đơn còn thu được (invoice-level, gồm penalty).
   has_payable_invoice: z.boolean(),
+  // Đổi ngành: cờ để worklist kế toán + drawer đánh dấu "chờ xác nhận".
+  awaiting_accountant_confirmation: z.boolean().optional().default(false),
+  can_confirm_major_change: z.boolean().optional().default(false),
 })
 
 export type FeeSummary = z.infer<typeof feeSummarySchema>

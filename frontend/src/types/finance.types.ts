@@ -127,6 +127,13 @@ export interface Fee {
   can_recalculate: boolean
   // Additional metadata
   due_date: string | null // First invoice due date for quick reference
+  // Đổi ngành có khấu trừ phiếu thu (BE-owned). Optional cho backward-compat
+  // trong lúc rollout (cờ BE MAJOR_CHANGE_REPRICE_ENABLED).
+  awaiting_accountant_confirmation?: boolean
+  can_confirm_major_change?: boolean
+  major_change_from_major_name?: string | null
+  major_change_to_major_name?: string | null
+  major_change_delta_amount?: string | null
 }
 
 export interface FeeSummary {
@@ -152,6 +159,9 @@ export interface FeeSummary {
   // Current base amount — only the drawer sets it (prefills the "Tính lại"
   // dialog). Absent elsewhere (no recalculate button there).
   base_amount?: string
+  // Đổi ngành: cờ để worklist kế toán + drawer đánh dấu "chờ xác nhận".
+  awaiting_accountant_confirmation?: boolean
+  can_confirm_major_change?: boolean
 }
 
 export interface FeeDetail extends Fee {
