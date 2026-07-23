@@ -1169,6 +1169,16 @@ async def publish_result(
             f"trạng thái hiện tại: '{profile.status}'"
         )
 
+    # Đổi ngành: CHẶN công bố kết quả khi đang chu kỳ đổi ngành (học phí chưa
+    # chốt / chờ kế toán) — không quyết định trúng tuyển với nghĩa vụ tiền chưa
+    # xác nhận. Flag OFF → no-op. Đặt TRƯỚC auto-transition + cascade.
+    from .fee_calculation_service import is_major_change_cycle_open
+    if await is_major_change_cycle_open(db, profile):
+        raise BusinessRuleViolation(
+            "Không thể công bố kết quả khi hồ sơ đang đổi ngành — chờ kế toán "
+            "xác nhận học phí trước."
+        )
+
     # Fast-track nợ giấy tờ (C1.5) — DECISION GATE. A multi-NV profile can be
     # submitted WITH a document debt (acknowledge + reason), so it may sit at
     # ``submitted`` with owed docs still unverified. ``publish_result`` is the

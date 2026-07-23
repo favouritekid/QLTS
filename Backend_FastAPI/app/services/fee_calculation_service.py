@@ -679,6 +679,14 @@ class FeeCalculationService:
             if lead is None or lead.unit_id != unit_id:
                 raise ResourceNotFoundError("Admission profile not found")
 
+        # Đổi ngành: CHẶN tính phí khi đang chu kỳ đổi ngành (fee HK1 đang được
+        # reprice / chờ kế toán). Flag OFF → no-op. Đặt trong khoá profile.
+        if await is_major_change_cycle_open(self.db, profile):
+            raise BusinessRuleViolation(
+                "Không thể tính học phí khi hồ sơ đang trong quá trình đổi ngành "
+                "— chờ kế toán xác nhận trước."
+            )
+
         # Re-validate the fee-eligible STATE under the lock. A multi-NV profile
         # that gained a 2nd NV — or left a fee-eligible state — since the router
         # check now fails closed instead of pricing the wrong ngành.

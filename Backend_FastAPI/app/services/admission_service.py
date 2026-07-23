@@ -8889,6 +8889,18 @@ async def _perform_enrollment_core(
     # IDOR check (after lock acquired)
     _check_idor_access(profile, current_user)
 
+    # Đổi ngành: CHẶN nhập học khi đang chu kỳ đổi ngành (học phí chưa chốt). Guard
+    # status != enrolled để KHÔNG chặn idempotent re-enroll. Flag OFF → no-op.
+    # (Thường state machine đã chặn vì hồ sơ đổi ngành ở draft/revision, nhưng
+    # belt-and-suspenders — awaiting-fee có thể tồn tại khi hồ sơ đã submit lại.)
+    if profile.status != "enrolled":
+        from .fee_calculation_service import is_major_change_cycle_open
+        if await is_major_change_cycle_open(db, profile):
+            raise BusinessRuleViolation(
+                "Không thể nhập học khi hồ sơ đang trong quá trình đổi ngành — "
+                "chờ kế toán xác nhận học phí trước."
+            )
+
     # ✅ HIGH PRIORITY FIX #7: Idempotency check - return existing student if already enrolled
     # MUST be BEFORE status check to handle idempotent requests correctly
     # Prevents duplicate student creation if endpoint is called multiple times
@@ -9344,6 +9356,15 @@ async def approve_profile(
             error=str(e),
         )
         raise BadRequest(str(e))
+
+    # Đổi ngành: CHẶN duyệt khi đang chu kỳ đổi ngành (học phí chưa chốt / chờ kế
+    # toán) — không duyệt hồ sơ với nghĩa vụ tiền chưa xác nhận. Flag OFF → no-op.
+    from .fee_calculation_service import is_major_change_cycle_open
+    if await is_major_change_cycle_open(db, profile):
+        raise BusinessRuleViolation(
+            "Không thể duyệt hồ sơ đang trong quá trình đổi ngành — chờ kế toán "
+            "xác nhận học phí trước."
+        )
 
     # ✅ APPLICATION FEE CHECK
     # Per PHASE_WORKFLOW.md: Profile can only be approved if fee is paid or exempt

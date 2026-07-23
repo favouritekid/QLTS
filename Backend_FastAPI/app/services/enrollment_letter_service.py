@@ -387,6 +387,17 @@ async def build_letter_data(db, profile) -> dict:
     if fee is None:
         missing.append("phí học kỳ 1 (HK1) — hãy tính học phí trước")
 
+    # Đổi ngành: CHẶN xuất giấy khi đang trong chu kỳ đổi ngành (chờ officer sửa
+    # + nộp lại HOẶC chờ kế toán xác nhận) — giấy sẽ ghi ngành/số tiền sai. Gate
+    # feature-flag-aware (flag OFF → False). Kiểm ở CẢ đây LẪN re-check dưới khoá
+    # (issue_enrollment_letter) chống TOCTOU cửa sổ render.
+    from app.services.fee_calculation_service import is_major_change_cycle_open
+    if await is_major_change_cycle_open(db, profile):
+        raise ValidationError(
+            "Không thể xuất giấy báo nhập học: hồ sơ đang trong quá trình đổi "
+            "ngành, chờ kế toán xác nhận học phí."
+        )
+
     if missing:
         raise ValidationError(
             "Không thể tạo giấy báo nhập học — thiếu dữ liệu: "
@@ -655,6 +666,17 @@ async def issue_enrollment_letter(
         raise BusinessRuleViolation(
             "Học phí của hồ sơ vừa thay đổi trong lúc tạo giấy báo — không phát "
             "hành để tránh in sai số tiền. Hãy thử lại."
+        )
+
+    # Đổi ngành: re-check dưới khoá (TOCTOU) — chu kỳ đổi ngành có thể mở TRONG
+    # lúc render (cửa sổ ~350ms không giữ khoá). Xoá file tạm + fail như nhánh
+    # fee-changed. Flag OFF → False → no-op.
+    from app.services.fee_calculation_service import is_major_change_cycle_open
+    if await is_major_change_cycle_open(db, profile):
+        await to_thread.run_sync(_best_effort_delete, final_path)
+        raise BusinessRuleViolation(
+            "Hồ sơ vừa vào quá trình đổi ngành trong lúc tạo giấy báo — không "
+            "phát hành. Hãy chờ kế toán xác nhận học phí rồi thử lại."
         )
 
     _now = datetime.now(timezone.utc)
