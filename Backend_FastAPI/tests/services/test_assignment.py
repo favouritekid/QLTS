@@ -420,7 +420,7 @@ async def test_finance_discount_on_flips_ranking_and_adds_audit_key(
     monkeypatch, mock_db_session, lead_new, officer_1, officer_2
 ):
     """member ON + finance ON: officer_1 tải TỔNG cao hơn (8) nhưng 6/8 là lead
-    HỌC PHÍ (sts14/sts10) ⇒ dist_load 8−6=2 < officer_2 (4) ⇒ officer_1 THẮNG
+    HỌC PHÍ ĐÃ THU TIỀN ⇒ dist_load 8−6=2 < officer_2 (4) ⇒ officer_1 THẮNG
     (đảo thứ hạng). Cổng overloaded officer_1 = (8−6)/10=0.2 < 0.8 (KHÔNG bị đẩy
     sau dù raw 0.8). scores_snapshot thêm key 'tuition_hold'."""
     monkeypatch.setattr(settings, "ENABLE_FAIRNESS_WEIGHTED_ASSIGNMENT", False)

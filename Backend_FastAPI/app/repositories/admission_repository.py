@@ -94,6 +94,10 @@ def _choices_eager_load_options() -> tuple:
 # Dùng chung cho: cột tiền "Đã đóng / Còn lại" + filter "Quá hạn" + sort "Còn lại".
 # HK1-predicate mirror ``fee_calculation_service.is_hk1_settled_fee``:
 #   tuition + semester_no == 1 + status != cancelled.
+# ⚠️ Bản SQL SONG SINH thứ hai: ``services/assignment_service._hk1_fee_exists``
+# (giảm trừ tải học phí khỏi phân công lead) — correlate tới Lead thay vì
+# AdmissionProfile. Đổi phạm vi HK1 ở đây thì PHẢI sửa cả bên đó, nếu không bảng
+# "điểm bận" và danh sách hồ sơ sẽ nói hai con số khác nhau về cùng một hồ sơ.
 # Correlate tới AdmissionProfile (outer) để chạy như scalar subquery / EXISTS
 # trong query list — KHÔNG N+1 (aggregate, không phải relationship eager-load).
 def _hk1_fee_predicate():

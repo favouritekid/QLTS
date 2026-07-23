@@ -12,6 +12,7 @@ to verify:
 5. /api/officer/my-kpi-plan response shape (consultations_actual_avg field)
 """
 import logging
+import uuid
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
@@ -1240,8 +1241,114 @@ def prod_flags(monkeypatch):
     return settings
 
 
+async def _create_tuition_lead(
+    officer_id: int, unit_id: int, name: str, phone: str, paid: str,
+) -> int:
+    """Lead sts14 + hồ sơ + học phí HK1 với số tiền ĐÃ THU cho trước.
+
+    ``paid="0"`` ⇒ mới tính phí, chưa thu đồng nào (KHÔNG được giảm trừ tải).
+    Cần cho các test dưới đây vì không seed lead học phí thì ``tuition_hold`` = 0
+    ở mọi dòng và mọi assert về cột giảm trừ thành hằng đúng ``0 == 0``.
+    """
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            if await session.get(models.ConsultationStatus, "sts14") is None:
+                session.add(
+                    models.ConsultationStatus(
+                        id="sts14",
+                        name="Chưa hoàn tất học phí",
+                        color_code="#FBBF24",
+                        is_final=False,
+                    )
+                )
+                await session.flush()
+
+            lead = models.Lead(
+                full_name=name,
+                phone=phone,
+                source="website",
+                status="assigned",
+                unit_id=unit_id,
+                assigned_officer_id=officer_id,
+                consultation_status_id="sts14",
+                pipeline_stage_id="STAGE_A",
+            )
+            session.add(lead)
+            await session.flush()
+
+            profile = models.AdmissionProfile(
+                lead_id=lead.id,
+                citizen_id=uuid.uuid4().hex[:12],
+                status="approved",
+                applied_rules={},
+                academic_year=2026,
+                version=1,
+            )
+            session.add(profile)
+            await session.flush()
+
+            paid_amount = Decimal(paid)
+            session.add(
+                models.Fee(
+                    admission_profile_id=profile.id,
+                    fee_type="tuition",
+                    semester_no=1,
+                    academic_year=2026,
+                    base_amount=Decimal("10000000"),
+                    total_discount=Decimal("0"),
+                    final_amount=Decimal("10000000"),
+                    paid_amount=paid_amount,
+                    waived_amount=Decimal("0"),
+                    status="partial" if paid_amount > 0 else "calculated",
+                    calculated_at=datetime.now(timezone.utc),
+                    version=1,
+                )
+            )
+            await session.flush()
+            lead_id = lead.id
+    return lead_id
+
+
 class TestDistributionPanelProdFlags:
     """Ghim bộ số ở ĐÚNG cấu hình prod — nơi các phép trừ/trọng số mới có tác dụng."""
+
+    @pytest.mark.asyncio
+    async def test_tuition_hold_counts_only_leads_with_money_in(
+        self, client: AsyncClient, officer_user_in_db, officer_token_headers,
+        seed_lead_dependencies, prod_flags,
+    ):
+        """🔒 Cột `tuition_hold` trên wire phải đếm theo TIỀN, không theo trạng thái.
+
+        Các test còn lại trong class này chạy đúng hình dạng SQL production (GROUP
+        BY + 4 cột FILTER) nhưng KHÔNG seed lead học phí nào, nên `tuition_hold`
+        luôn 0 và bất biến `deducted` thành hằng đúng — subquery hỏng hoàn toàn
+        (khớp 0 dòng, hoặc khớp mọi dòng) vẫn xanh. Đây là chỗ ghim ngữ nghĩa.
+
+        3 lead sts14: 1 đã thu một phần, 2 mới tính phí chưa thu ⇒ tuition_hold=1,
+        dist_load = workload − 1. Hành vi cũ (trừ theo status) cho tuition_hold=3.
+        """
+        officer_id = officer_user_in_db["id"]
+        unit_id = seed_lead_dependencies["unit_id"]
+        await _create_tuition_lead(
+            officer_id, unit_id, "HP đã thu", "0912340001", "3000000"
+        )
+        await _create_tuition_lead(
+            officer_id, unit_id, "HP chưa thu 1", "0912340002", "0"
+        )
+        await _create_tuition_lead(
+            officer_id, unit_id, "HP chưa thu 2", "0912340003", "0"
+        )
+
+        resp = await client.get(DISTRIBUTION_URL, headers=officer_token_headers)
+        assert resp.status_code == 200
+        me = next(
+            e for e in resp.json()["entries"] if e["user_id"] == officer_id
+        )
+
+        assert me["workload"] >= 3
+        assert me["tuition_hold"] == 1
+        assert me["dist_load"] == me["workload"] - me["deducted"]
+        assert me["deducted"] >= 1
 
     @pytest.mark.asyncio
     async def test_scoring_mode_is_member_when_flags_on(

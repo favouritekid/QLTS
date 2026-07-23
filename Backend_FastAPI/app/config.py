@@ -606,13 +606,17 @@ class Settings(BaseSettings):
         default=False,
         validation_alias="ENABLE_FINANCE_WORKLOAD_DISCOUNT",
     )  # Khi ON: lead ở giai đoạn HỌC PHÍ non-final (sts14 Chưa hoàn tất học phí +
-    # sts10 Đã hoàn tất học phí — xem TUITION_HOLD_STATUS_IDS) được GIẢM TRỪ khỏi
+    # sts10 Đã hoàn tất học phí — xem TUITION_HOLD_STATUS_IDS) VÀ ĐÃ CÓ TIỀN HỌC
+    # PHÍ HK1 VÀO (sts10 = settled, hoặc sts14 có fee tuition HK1 paid_amount>0 =
+    # đã thu một phần — HK2+ KHÔNG tính, xem _tuition_payment_confirmed_subquery)
+    # được GIẢM TRỪ khỏi
     # cơ sở sắp xếp (eff_util/dist_load), khỏi cổng `overloaded`, VÀ khỏi
     # is_officer_at_threshold (referral fast-path) — vì đây là khách đã chuyển đổi
     # đang chờ xác nhận nhập học, không còn là tải tư vấn. Gate cứng
     # `workload < capacity` VẪN theo TỔNG workload (không ôm quá capacity học sinh
-    # thật). Loại trừ sts18 (TUITION_REFUNDED, is_final). Default False ⇒ 0 đổi
-    # hành vi + 0 aggregate/audit-shape phụ cho tới khi bật.
+    # thật). Loại trừ sts18 (TUITION_REFUNDED, is_final) VÀ ca "đã tính phí nhưng
+    # chưa thu đồng nào" (officer còn phải theo đuổi ⇒ vẫn là tải thật). Default
+    # False ⇒ 0 đổi hành vi + 0 aggregate/audit-shape phụ cho tới khi bật.
 
     # -- Lead Lifecycle SLA: auto-close stale rejected consultations --
     # A lead in sts04 (CONSULT_REJECTED, is_final=false for re-engagement) that
