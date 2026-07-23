@@ -399,6 +399,18 @@ class FeeResponse(FeeBase):
     # P3: First invoice due date for quick reference
     due_date: Optional[date] = None
 
+    # Đổi ngành có khấu trừ phiếu thu (feature "major-change reprice").
+    # ``awaiting_accountant_confirmation`` map thẳng từ model (from_attributes);
+    # phần còn lại router TỰ tính (FE không đoán — hiệu chỉnh audit #4):
+    #   can_confirm_major_change   quyền bấm xác nhận (accountant/admin + cờ bật)
+    #   major_change_from/to_major_name  hiển thị "A→B" trong dialog kế toán
+    #   major_change_delta_amount  chênh lệch nghĩa vụ tiền sau reprice (±)
+    awaiting_accountant_confirmation: bool = False
+    can_confirm_major_change: bool = False
+    major_change_from_major_name: Optional[str] = None
+    major_change_to_major_name: Optional[str] = None
+    major_change_delta_amount: Optional[Decimal] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -434,6 +446,13 @@ class FeeSummaryResponse(BaseModel):
     # drive a recalculate dialog, and None makes "not provided" explicit rather
     # than a misleading 0.
     base_amount: Optional[Decimal] = None
+
+    # Đổi ngành: cờ để worklist kế toán + drawer đánh dấu "chờ xác nhận" và
+    # bật nút mở dialog. ``awaiting_accountant_confirmation`` map thẳng từ model;
+    # ``can_confirm_major_change`` router tính (accountant/admin + cờ bật). Chi
+    # tiết A→B + delta ở FeeResponse/FeeDetailResponse (dialog fetch detail).
+    awaiting_accountant_confirmation: bool = False
+    can_confirm_major_change: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

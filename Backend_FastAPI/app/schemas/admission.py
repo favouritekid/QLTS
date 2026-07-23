@@ -1427,6 +1427,20 @@ class AdmissionProfileResponse(BaseModel):
             "'cần hoàn tiền' warning banner."
         ),
     )
+    # COMPUTED (transient): true khi hồ sơ đang trong CHU KỲ đổi ngành —
+    # ``profile.major_change_requested`` (admin đã cho phép, chờ officer sửa +
+    # nộp lại) HOẶC active HK1 fee ``awaiting_accountant_confirmation`` (đã reprice,
+    # chờ kế toán chốt). Gate FE: ẩn nút xuất giấy + hiện badge "Chờ kế toán xác
+    # nhận". Set bởi ``_populate_major_change_flag``; False mặc định (không set →
+    # không lộ nút = fail-safe). Migration majchg1a/1b.
+    major_change_cycle_open: bool = Field(
+        default=False,
+        description=(
+            "True khi hồ sơ đang trong chu kỳ đổi ngành (major_change_requested "
+            "hoặc active HK1 fee awaiting_accountant_confirmation). Ẩn xuất giấy + "
+            "badge 'Chờ kế toán xác nhận'."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1553,6 +1567,11 @@ class AdmissionProfileListItem(BaseModel):
     assigned_officer_name: Optional[str] = None
     assigned_reviewer_name: Optional[str] = None
     available_actions: List[str] = Field(default_factory=list)
+    # Đổi ngành: cùng cờ transient như AdmissionProfileResponse — để BẢNG danh
+    # sách render badge "Chờ kế toán xác nhận" + ẩn action xuất giấy. PHẢI set ở
+    # vòng lặp lean (_populate_major_change_flag) nếu không FE nhận default False
+    # = false-negative im lặng (badge không hiện). Migration majchg1a/1b.
+    major_change_cycle_open: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1972,6 +1991,18 @@ class RevisionRequest(BaseModel):
         ...,
         ge=1,
         description="REQUIRED: Current profile version for optimistic locking"
+    )
+    # Đổi ngành: khi True, set profile.major_change_requested (nới finance lock +
+    # bypass round-open) — CHỈ khi có HK1 tuition fee active, status pre-decision,
+    # và không còn chu kỳ đổi ngành đang chờ kế toán. Bỏ qua nếu flag OFF /
+    # post-decision. Mặc định False (revision thường không đổi ngành).
+    allow_major_change: bool = Field(
+        default=False,
+        description=(
+            "Cho phép officer đổi ngành trên hồ sơ đã đóng học phí HK1 (nới "
+            "finance lock). Chỉ hiệu lực khi MAJOR_CHANGE_REPRICE_ENABLED + "
+            "pre-decision + có HK1 fee active."
+        ),
     )
 
     @field_validator('reason')
@@ -2524,6 +2555,19 @@ class AdmissionAdminRollbackRequest(BaseModel):
         max_length=500,
         description="Mandatory rollback reason (audit log + dispatch payload)",
     )
+    # Đổi ngành: khi True, ngoài rollback → draft còn set major_change_requested
+    # (CHỈ khi có HK1 tuition fee active + status pre-decision + không còn chu kỳ
+    # chờ kế toán). Đây là ĐƯỜNG CHÍNH cho hồ sơ đã đóng tiền (request_revision
+    # không nhận từ approved/confirmed/admitted). Bỏ qua nếu flag OFF /
+    # post-decision. Mặc định False (rollback thường không đổi ngành).
+    allow_major_change: bool = Field(
+        default=False,
+        description=(
+            "Cho phép officer đổi ngành trên hồ sơ đã đóng học phí HK1 (nới "
+            "finance lock). Chỉ hiệu lực khi MAJOR_CHANGE_REPRICE_ENABLED + "
+            "pre-decision + có HK1 fee active."
+        ),
+    )
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -2535,6 +2579,10 @@ class AdmissionAdminRollbackResponse(BaseModel):
     status: Literal["draft"] = "draft"
     rolled_back_from: str  # The status the profile was in BEFORE rollback
     already_at_target: bool = False  # W9-J.7.idem 2026-05-16: True when no-op (profile already draft)
+    # Đổi ngành: True khi rollback này đã set major_change_requested (FE hiện
+    # hướng dẫn "officer sửa nguyện vọng rồi nộp lại"). False khi allow_major_change
+    # bị bỏ qua (flag OFF / post-decision / không có HK1 fee).
+    major_change_requested: bool = False
 
 
 # =============================================================================

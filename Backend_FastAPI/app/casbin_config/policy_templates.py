@@ -399,6 +399,10 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # excludes accountant — separation of duties). NOT granted to accountant:
         # the grant would be DEAD (route rejects before Casbin) and a foot-gun if
         # the route ever switched to CasbinAuth. Removed 2026-06-21 (#413 follow-up).
+        # Đổi ngành: kế toán xác nhận reprice (maker-checker). Route dùng CasbinAuth
+        # (KHÔNG RequireManager) nên grant này SỐNG. Segment cuối literal riêng →
+        # không keyMatch4-collide với waive/recalculate. Migration majchg1c_casbin.
+        {"subject": "{role}", "object": "/api/fees/{id}/confirm-major-change", "action": "PUT"},
 
         # INVOICES - Full CRUD (except delete)
         {"subject": "{role}", "object": "/api/invoices", "action": "GET"},

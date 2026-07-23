@@ -556,6 +556,13 @@ class Settings(BaseSettings):
     ENABLE_FEE_VERIFICATION: bool = Field(
         default=False, validation_alias="ENABLE_FEE_VERIFICATION"
     )  # Block enrollment if tuition fee not paid/waived (Phase 6)
+    MAJOR_CHANGE_REPRICE_ENABLED: bool = Field(
+        default=False, validation_alias="MAJOR_CHANGE_REPRICE_ENABLED"
+    )  # Feature "đổi ngành có khấu trừ phiếu thu + kế toán xác nhận". OFF =
+    # no-op tuyệt đối: mọi nhánh (set/clear major_change_requested, nới finance
+    # lock, bypass round-open, reprice hook, gate 6 điểm) gate cờ này. Bật ở PR-2
+    # sau khi FE sẵn sàng. Migration cột/casbin/trigger là thuần cộng thêm nên
+    # deploy cờ OFF không đổi hành vi.
     ADMISSION_FEE_GATE_MODE: Literal["legacy", "semester_hk1"] = Field(
         default="legacy", validation_alias="ADMISSION_FEE_GATE_MODE"
     )  # ADR-002: 'legacy' = paid/waived; 'semester_hk1' = HK1 financial clearance (partial passes)

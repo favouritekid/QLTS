@@ -35,7 +35,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import (
-    CheckConstraint, Date, DateTime, ForeignKey, Index,
+    Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index,
     Integer, Numeric, String, Text, UniqueConstraint, text
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -304,6 +304,30 @@ class Fee(Base):
         nullable=True,
         comment="Snapshot: degree level TEXT NAME ('Cao đẳng'…) matching "
                 "MajorProgram.degree_level legacy text + admissions FE filter value"
+    )
+
+    # --- Major-change reprice cycle (feature "đổi ngành có khấu trừ phiếu thu") ---
+    # Bật ở ``reprice_for_major_change`` (sau khi đã ghi lại final_amount +
+    # invoice.amount), tắt ở ``confirm_major_change``. Là MỘT vế của
+    # ``_major_change_cycle_open`` (vế kia = profile.major_change_requested).
+    # Gate xuất giấy / approve / enroll đọc cờ này. Migration majchg1a.
+    awaiting_accountant_confirmation: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+        comment="Đổi ngành: fee đang chờ kế toán xác nhận (reprice bật, confirm tắt)"
+    )
+    major_change_from_academic_info_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("offering_academic_info.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Đổi ngành: snapshot OfferingAcademicInfo ngành CŨ (hiển thị A→B)"
+    )
+    major_change_flagged_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Đổi ngành: thời điểm bật awaiting_accountant_confirmation (UTC)"
     )
 
     created_at: Mapped[datetime] = mapped_column(
