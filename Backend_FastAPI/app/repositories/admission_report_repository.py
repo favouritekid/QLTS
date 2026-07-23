@@ -498,19 +498,25 @@ class AdmissionReportRepository:
         return {pid: status for pid, status in rows.all()}
 
     async def tuition_hk1_payment(self, profile_ids: list[int]) -> dict[int, str]:
-        """Tình trạng đóng học phí HỌC KỲ 1 mỗi hồ sơ → 'full' | 'partial'.
+        """Tình trạng học phí HỌC KỲ 1 mỗi hồ sơ → 'full' | 'partial'.
 
         Chỉ HK1 (``semester_no == 1``) vì đây là cổng nhập học của báo cáo tuyển
         sinh. Unique index (profile, fee_type, semester_no) WHERE status<>'cancelled'
         đảm bảo tối đa MỘT dòng active/hồ sơ → không cần gộp. ``remaining =
-        final_amount - paid_amount - waived_amount``. Hồ sơ không có dòng HK1 hoặc
-        chưa đóng đồng nào → không xuất hiện (coi như 'chưa đóng').
+        final_amount - paid_amount - waived_amount``.
+        - **full** = nghĩa vụ HK1 ĐÃ TẤT TOÁN (``remaining <= 0``) trên một khoản
+          phí THỰC (``base_amount > 0``): đóng đủ, hoặc được miễn/giảm hết — gồm
+          **miễn 100%** (``final_amount == 0`` do chiết khấu hết ``base``). Gác
+          ``base_amount > 0`` để loại phí CHƯA LẬP (base=0) khỏi bị tính là "đủ".
+        - **partial** = đã đóng > 0 nhưng còn nợ.
+        Hồ sơ không có dòng HK1 / chưa phát sinh → không xuất hiện (coi 'chưa đóng').
         """
         if not profile_ids:
             return {}
         rows = await self.db.execute(
             select(
                 models.Fee.admission_profile_id,
+                models.Fee.base_amount,
                 models.Fee.final_amount,
                 models.Fee.paid_amount,
                 models.Fee.waived_amount,
@@ -522,9 +528,9 @@ class AdmissionReportRepository:
             )
         )
         out: dict[int, str] = {}
-        for pid, final_amt, paid, waived in rows.all():
+        for pid, base, final_amt, paid, waived in rows.all():
             remaining = final_amt - paid - waived
-            if final_amt > 0 and remaining <= 0:
+            if base > 0 and remaining <= 0:
                 out[pid] = "full"
             elif paid > 0 and remaining > 0:
                 out[pid] = "partial"

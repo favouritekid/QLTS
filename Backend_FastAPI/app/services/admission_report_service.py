@@ -447,17 +447,14 @@ class AdmissionReportService:
             academic_year, scope_unit_id, None, round_code
         )
         ts = await self.repo.milestone_timestamps(list(dims.keys()))
-        # A FUTURE academic_year anchors at Jan-4 (ISO week 1); walk FORWARD so the
-        # axis stays in-year (walking back would label weeks in year-1). Current/past
-        # years walk backward from the anchor week. Both produce points old → new.
-        future = academic_year > today_vn().year
+        # Điểm CUỐI = tuần mốc (``_default_anchor``) → trend khớp snapshot lũy kế
+        # của KPI band + ma trận officer×ngành (cùng cutoff), KHÔNG lệch số. Walk
+        # BACKWARD cho MỌI năm (điểm old→new). Năm tương lai: 8 tuần kết ở ISO tuần
+        # 1 nên nhãn có thể chạm cuối năm trước — chấp nhận (năm tương lai ~0 dữ
+        # liệu) để đổi lấy nhất quán, thay vì chiếu tới tuần chưa xảy ra.
         points: list[TrendPoint] = []
         for k in range(weeks):
-            base = (
-                end_meta.week_start + timedelta(weeks=k)
-                if future
-                else end_meta.week_start - timedelta(weeks=(weeks - 1 - k))
-            )
+            base = end_meta.week_start - timedelta(weeks=(weeks - 1 - k))
             wmeta, wrange = self._compute_week(base)
             cutoff = wrange.end_excl
             points.append(

@@ -257,73 +257,76 @@ export function AdmissionOverviewClient() {
         </div>
       </div>
 
-      {weekly.isError ? (
-        <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
-          {errMessage(weekly.error)}
-        </div>
-      ) : weekly.isLoading || !synced ? (
-        <div className="space-y-4">
-          <Skeleton className="h-24 w-full" />
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Skeleton className="h-72 w-full" />
-            <Skeleton className="h-72 w-full" />
-          </div>
-          <Skeleton className="h-96 w-full" />
-        </div>
-      ) : (
-        <div
-          className={cn(
-            "space-y-4",
-            anyFetching && "opacity-60 transition-opacity",
-          )}
+      {/* Mỗi panel TỰ quản trạng thái → weekly lỗi (vd đợt thiếu ngày) KHÔNG che
+          phễu/trend/matrix/công nợ (fetch độc lập, funnel cố ý skip_undated). */}
+      <div className={cn("space-y-4", anyFetching && "opacity-60 transition-opacity")}>
+        {/* KPI band (tái dùng SummaryBand) — phụ thuộc weekly, trạng thái riêng */}
+        <PanelState
+          query={{ isError: weekly.isError, error: weekly.error, data: synced }}
+          skeleton="h-24 w-full"
         >
-          {/* KPI band (tái dùng SummaryBand của báo cáo tuần) */}
-          <SummaryBand rows={synced.rows} totals={synced.totals} groupBy={synced.group_by} />
+          {synced && (
+            <SummaryBand
+              rows={synced.rows}
+              totals={synced.totals}
+              groupBy={synced.group_by}
+            />
+          )}
+        </PanelState>
 
-          {/* Phễu + Xu hướng */}
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Panel title="Dòng chảy mùa tuyển sinh" caption="pipeline_stage">
-              <PanelState query={funnel} skeleton="h-64 w-full">
-                {funnel.data && <OverviewFunnel funnel={funnel.data} />}
-              </PanelState>
-            </Panel>
-            <Panel title="Nhịp tích luỹ 8 tuần" caption="cumulative">
-              <PanelState query={trend} skeleton="h-64 w-full">
-                {trend.data && <OverviewTrend trend={trend.data} />}
-              </PanelState>
-            </Panel>
-          </div>
-
-          {/* Đường băng chỉ tiêu 20 ngành */}
-          <Panel title="Đường băng chỉ tiêu — theo ngành" caption="admission-weekly">
-            <p className="mb-3 -mt-1 text-xs text-muted-foreground">
-              Sắp theo mức cần đẩy — ngành nguy cơ (tỉ lệ đạt thấp) hiện đầu.
-            </p>
-            <QuotaRunway rows={synced.rows} />
-          </Panel>
-
-          {/* Heatmap ngành × cán bộ (hàng = ngành, cột = cán bộ) */}
-          <Panel title="Tải hồ sơ theo ngành × cán bộ" caption="officer-major-matrix">
-            <PanelState query={matrix} skeleton="h-56 w-full">
-              {matrix.data && <OfficerMajorHeatmap matrix={matrix.data} />}
+        {/* Phễu + Xu hướng (độc lập) */}
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Panel title="Dòng chảy mùa tuyển sinh" caption="pipeline_stage">
+            <PanelState query={funnel} skeleton="h-64 w-full">
+              {funnel.data && <OverviewFunnel funnel={funnel.data} />}
             </PanelState>
           </Panel>
-
-          {/* Công nợ học phí (mọi kỳ — endpoint không tách semester) */}
-          <Panel title="Công nợ học phí" caption="debt-report">
-            <p className="mb-3 -mt-1 text-xs text-muted-foreground">
-              Toàn bộ học phí còn nợ (mọi kỳ) · theo năm học và đơn vị — chưa lọc
-              theo đợt.
-            </p>
-            <DebtPanel summary={debt.data?.summary} isLoading={debt.isLoading} />
+          <Panel title="Nhịp tích luỹ 8 tuần" caption="cumulative">
+            <PanelState query={trend} skeleton="h-64 w-full">
+              {trend.data && <OverviewTrend trend={trend.data} />}
+            </PanelState>
           </Panel>
-
-          <p className="text-xs text-muted-foreground">
-            Số liệu tính lại theo phân bổ hiện tại — tuần đã qua có thể đổi sau khi
-            công bố kết quả. Phễu theo cohort đợt/năm.
-          </p>
         </div>
-      )}
+
+        {/* Độ đầy chỉ tiêu theo ngành — phụ thuộc weekly, trạng thái riêng */}
+        <Panel title="Độ đầy chỉ tiêu — theo ngành" caption="admission-weekly">
+          <p className="mb-3 -mt-1 text-xs text-muted-foreground">
+            Mỗi thanh = chỉ tiêu; hổ phách = đã đóng học phí HK1, xanh = đã nộp
+            chưa đóng, phần trống = còn thiếu so chỉ tiêu. Ngành nguy cơ (đầy
+            thấp) hiện đầu.
+          </p>
+          <PanelState
+            query={{ isError: weekly.isError, error: weekly.error, data: synced }}
+            skeleton="h-56 w-full"
+          >
+            {synced && <QuotaRunway rows={synced.rows} matrix={matrix.data} />}
+          </PanelState>
+        </Panel>
+
+        {/* Heatmap ngành × cán bộ (độc lập) */}
+        <Panel title="Tải hồ sơ theo ngành × cán bộ" caption="officer-major-matrix">
+          <PanelState query={matrix} skeleton="h-56 w-full">
+            {matrix.data && <OfficerMajorHeatmap matrix={matrix.data} />}
+          </PanelState>
+        </Panel>
+
+        {/* Công nợ học phí (độc lập; mọi kỳ — endpoint không tách semester) */}
+        <Panel title="Công nợ học phí" caption="debt-report">
+          <p className="mb-3 -mt-1 text-xs text-muted-foreground">
+            Toàn bộ học phí còn nợ (mọi kỳ) · theo năm học và đơn vị — chưa lọc
+            theo đợt.
+          </p>
+          <DebtPanel summary={debt.data?.summary} isLoading={debt.isLoading} />
+        </Panel>
+
+        <p className="text-xs text-muted-foreground">
+          Số liệu tính lại theo phân bổ hiện tại — tuần đã qua có thể đổi sau khi
+          công bố kết quả. <strong>Phễu</strong> đếm LEAD theo cohort đợt (gồm
+          khách vãng lai) nên bậc “Đã nộp hồ sơ” có thể lệch nhẹ so với dải KPI
+          “Hồ sơ nộp” (đếm theo mốc hồ sơ). KPI · đường băng chỉ tiêu · heatmap ·
+          trend dùng chung một nguồn milestone → nhất quán với Báo cáo tuyển sinh.
+        </p>
+      </div>
     </div>
   );
 }

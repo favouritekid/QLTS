@@ -1025,6 +1025,14 @@ async def test_officer_major_matrix_five_metrics_end_to_end(
     f_full = await _seed_fee(db, p_full.id, year, fee_type="tuition")
     f_full.paid_amount = Decimal("1000000")  # remaining 0 → đóng đủ
     await db.flush()
+    # (5) MIỄN 100% học phí HK1 (final=0 do chiết khấu hết base) + đã nộp — nghĩa
+    # vụ đã tất toán nên tính "đóng đủ" (fee_full), không phải "chưa đóng".
+    p_waived = await _profile()
+    await _seed_history(db, p_waived.id, "submitted", at)
+    f_waived = await _seed_fee(db, p_waived.id, year, fee_type="tuition")
+    f_waived.total_discount = Decimal("1000000")
+    f_waived.final_amount = Decimal("0")  # base 1.000.000 − chiết khấu 1.000.000
+    await db.flush()
 
     svc = AdmissionReportService(db)
     resp = await svc.get_officer_major_matrix(current_user=_admin(), academic_year=year)
@@ -1032,10 +1040,10 @@ async def test_officer_major_matrix_five_metrics_end_to_end(
     cell = next(
         c for c in resp.cells if c.officer_id == officer_id and c.major_id == major.id
     )
-    assert cell.submitted == 3  # p_sub, p_part, p_full (đều có mốc submitted)
+    assert cell.submitted == 4  # p_sub, p_part, p_full, p_waived (đều có mốc submitted)
     assert cell.draft == 1  # chỉ hồ sơ status='draft'
     assert cell.fee_partial == 1  # p_part
-    assert cell.fee_full == 1  # p_full
+    assert cell.fee_full == 2  # p_full (đóng đủ) + p_waived (miễn 100%)
     assert cell.enrolled == 1  # p_full
 
 

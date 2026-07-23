@@ -3,55 +3,89 @@
 import * as React from "react";
 
 import { cn } from "@/lib/utils";
-import type { ReportRow } from "@/lib/zod/reports";
+import type { OfficerMajorMatrix, ReportRow } from "@/lib/zod/reports";
 
 const nf = new Intl.NumberFormat("vi-VN");
 
-/** Same thresholds as the weekly cockpit's ``quotaTone``. */
-function tone(ratio: number): string {
-  if (ratio >= 0.9) return "bg-emerald-500";
-  if (ratio >= 0.5) return "bg-amber-500";
-  return "bg-rose-500";
+/** Màu % độ đầy — rose = nguy cơ, emerald = đạt; tách khỏi màu thanh (amber/sky). */
+function toneText(r: number | null): string {
+  if (r == null) return "text-foreground";
+  if (r >= 0.9) return "text-emerald-600 dark:text-emerald-500";
+  if (r < 0.5) return "text-rose-600 dark:text-rose-500";
+  return "text-foreground";
+}
+
+/** Bỏ hậu tố "(mã)" trùng ở label (mã đã hiện riêng). */
+function cleanName(r: ReportRow): string {
+  return r.code && r.label.endsWith(`(${r.code})`)
+    ? r.label.slice(0, -(r.code.length + 2)).trimEnd()
+    : r.label;
+}
+
+function LegendItem({ className, label }: { className: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={cn("inline-block size-2.5 rounded-sm", className)} />
+      {label}
+    </span>
+  );
 }
 
 /**
- * Đường băng chỉ tiêu — mỗi ngành một thanh tiến độ nhập-học / chỉ-tiêu, sắp theo
- * mức cần đẩy (tỉ lệ đạt tăng dần → ngành nguy cơ hiện đầu). Quota chỉ có ở lát
- * cắt toàn-trường · mọi-đợt (BE trả quota=null khi lọc đợt/đơn vị) → khi thiếu
- * quota, xếp theo số nhập học và ẩn cột tiến độ.
+ * Độ đầy chỉ tiêu theo ngành — MỖI NGÀNH một thanh xếp chồng chuẩn hoá theo chỉ
+ * tiêu (thanh đầy = 100% chỉ tiêu). Ba khúc RỜI NHAU cộng đúng bằng chỉ tiêu:
+ * đã đóng học phí HK1 (hổ phách) · đã nộp chưa đóng (xanh) · còn trống (nền xám).
+ * Số học phí HK1 (partial+full) tái dùng từ ma trận officer×ngành — KHÔNG gọi
+ * thêm API. Sắp ngành NGUY CƠ (độ đầy thấp) lên đầu. Khi lọc 1 đợt, BE trả
+ * quota=null → không có "còn trống", xếp theo số hồ sơ + ghi chú.
  */
-export function QuotaRunway({ rows }: { rows: ReportRow[] }) {
-  const majors = React.useMemo(
-    () => rows.filter((r) => !r.is_bucket && r.group_key != null),
-    [rows],
-  );
-  const hasQuota = React.useMemo(
-    () => majors.some((r) => r.admission.quota != null && r.admission.quota > 0),
-    [majors],
-  );
-
-  const ranked = React.useMemo(() => {
-    const withRatio = majors.map((r) => {
-      const q = r.admission.quota ?? 0;
-      const ratio = q > 0 ? r.admission.enrolled_cumulative / q : null;
-      return { row: r, ratio };
-    });
-    withRatio.sort((a, b) => {
-      if (hasQuota) {
-        // no-quota rows sink; otherwise most-behind (lowest ratio) first
-        if (a.ratio == null) return 1;
-        if (b.ratio == null) return -1;
-        return a.ratio - b.ratio;
+export function QuotaRunway({
+  rows,
+  matrix,
+}: {
+  rows: ReportRow[];
+  matrix?: OfficerMajorMatrix;
+}) {
+  // Học phí HK1 đã đóng (partial+full) theo ngành, gộp từ các ô officer×ngành.
+  const feeByMajor = new Map<number, number>();
+  if (matrix) {
+    for (const c of matrix.cells) {
+      if (c.major_id != null) {
+        feeByMajor.set(
+          c.major_id,
+          (feeByMajor.get(c.major_id) ?? 0) + c.fee_partial + c.fee_full,
+        );
       }
-      return b.row.admission.enrolled_cumulative - a.row.admission.enrolled_cumulative;
-    });
-    return withRatio;
-  }, [majors, hasQuota]);
+    }
+  }
 
-  const maxEnrolled = React.useMemo(
-    () => Math.max(1, ...majors.map((r) => r.admission.enrolled_cumulative)),
-    [majors],
+  const majors = rows.filter((r) => !r.is_bucket && r.group_key != null);
+  const hasQuota = majors.some(
+    (r) => r.admission.quota != null && r.admission.quota > 0,
   );
+  const maxSubmitted = Math.max(
+    1,
+    ...majors.map((r) => r.admission.submitted_cumulative),
+  );
+
+  const items = majors
+    .map((row) => {
+      const mid = row.group_key as number;
+      const quota = row.admission.quota;
+      const submitted = row.admission.submitted_cumulative;
+      const paid = Math.min(submitted, feeByMajor.get(mid) ?? 0);
+      const fillRatio =
+        quota != null && quota > 0 ? submitted / quota : null;
+      return { row, mid, quota, submitted, paid, fillRatio };
+    })
+    .sort((a, b) => {
+      if (hasQuota) {
+        if (a.fillRatio == null) return 1;
+        if (b.fillRatio == null) return -1;
+        return a.fillRatio - b.fillRatio; // nguy cơ (đầy thấp) lên đầu
+      }
+      return b.submitted - a.submitted;
+    });
 
   if (majors.length === 0) {
     return (
@@ -62,63 +96,104 @@ export function QuotaRunway({ rows }: { rows: ReportRow[] }) {
   }
 
   return (
-    <div className="space-y-1.5">
-      {!hasQuota && (
-        <p className="pb-1 text-xs text-muted-foreground">
-          Lát cắt này không có chỉ tiêu năm — xếp theo số nhập học.
-        </p>
-      )}
-      {ranked.map(({ row, ratio }) => {
-        const enrolled = row.admission.enrolled_cumulative;
-        const quota = row.admission.quota;
-        const width =
-          ratio != null
-            ? Math.min(100, ratio * 100)
-            : (enrolled / maxEnrolled) * 100;
-        return (
-          <div
-            key={row.group_key}
-            className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 rounded-md px-1.5 py-1.5 hover:bg-muted/50 sm:grid-cols-[minmax(120px,200px)_1fr_auto]"
-          >
-            <div className="flex min-w-0 items-center gap-2">
-              {row.code && (
-                <span className="hidden shrink-0 font-mono text-[10px] text-muted-foreground sm:inline">
-                  {row.code}
-                </span>
-              )}
-              <span className="truncate text-sm font-medium" title={row.label}>
-                {/* strip ONLY the exact "(code)" suffix (code is shown separately),
-                    never a meaningful trailing parenthetical in the name */}
-                {row.code && row.label.endsWith(`(${row.code})`)
-                  ? row.label.slice(0, -(row.code.length + 2)).trimEnd()
-                  : row.label}
-              </span>
-            </div>
-            <div className="col-span-2 h-2.5 overflow-hidden rounded-full bg-muted sm:col-span-1">
-              <div
-                className={cn(
-                  "h-full rounded-full transition-[width] duration-500",
-                  ratio != null ? tone(ratio) : "bg-primary",
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <LegendItem className="bg-amber-500" label="Đã đóng học phí HK1" />
+        <LegendItem className="bg-sky-500" label="Đã nộp, chưa đóng" />
+        <LegendItem
+          className="bg-muted-foreground/20"
+          label={hasQuota ? "Còn trống so chỉ tiêu" : "Số hồ sơ (thang tương đối)"}
+        />
+        {!hasQuota && (
+          <span className="italic">
+            Chỉ tiêu chỉ có ở view “Tất cả đợt” — đang xếp theo số hồ sơ.
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-1">
+        {items.map(({ row, mid, quota, submitted, paid, fillRatio }) => {
+          const base = hasQuota && quota ? quota : maxSubmitted;
+          const filledFrac = base > 0 ? Math.min(1, submitted / base) : 0;
+          const paidFrac = submitted > 0 ? paid / submitted : 0; // trong phần đã nộp
+          const over = fillRatio != null && fillRatio > 1;
+          const fillPct = fillRatio != null ? Math.round(fillRatio * 100) : null;
+          const paidPctOfSub =
+            submitted > 0 ? Math.round((paid / submitted) * 100) : 0;
+          const title =
+            `${cleanName(row)}${row.code ? ` (${row.code})` : ""}\n` +
+            `Chỉ tiêu: ${quota != null ? nf.format(quota) : "— (chỉ có ở Tất cả đợt)"}\n` +
+            `Số hồ sơ: ${nf.format(submitted)}${fillPct != null ? ` · ${fillPct}% chỉ tiêu` : ""}\n` +
+            `Đã đóng học phí HK1: ${nf.format(paid)} · ${paidPctOfSub}% hồ sơ`;
+
+          return (
+            <div
+              key={mid}
+              title={title}
+              className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 rounded-md px-1.5 py-1.5 hover:bg-muted/50 sm:grid-cols-[minmax(120px,220px)_1fr_auto]"
+            >
+              {/* Nhãn ngành */}
+              <div className="flex min-w-0 items-center gap-2">
+                {row.code && (
+                  <span className="hidden shrink-0 font-mono text-[10px] text-muted-foreground sm:inline">
+                    {row.code}
+                  </span>
                 )}
-                style={{ width: `${Math.max(2, width)}%` }}
-              />
-            </div>
-            <div className="flex items-baseline justify-end gap-1.5 tabular-nums">
-              <span className="text-sm font-semibold">{nf.format(enrolled)}</span>
-              {quota != null && quota > 0 && (
-                <>
-                  <span className="text-xs text-muted-foreground">
-                    /{nf.format(quota)}
+                <span className="truncate text-sm font-medium">
+                  {cleanName(row)}
+                </span>
+              </div>
+
+              {/* Thanh xếp chồng: nền xám = còn trống; đè đã-đóng (amber) + chưa-đóng (sky) */}
+              <div className="col-span-2 flex items-center gap-1.5 sm:col-span-1">
+                <div className="relative h-3 flex-1 overflow-hidden rounded-full bg-muted-foreground/15">
+                  <div className="flex h-full" style={{ width: `${filledFrac * 100}%` }}>
+                    {paidFrac > 0 && (
+                      <div
+                        className="h-full rounded-full bg-amber-500"
+                        style={{ width: `${paidFrac * 100}%` }}
+                      />
+                    )}
+                    {paidFrac < 1 && (
+                      <div
+                        className="h-full rounded-full bg-sky-500"
+                        style={{
+                          width: `${(1 - paidFrac) * 100}%`,
+                          marginLeft: paidFrac > 0 ? 2 : 0,
+                        }}
+                      />
+                    )}
+                  </div>
+                </div>
+                {over && (
+                  <span
+                    className="shrink-0 text-xs font-semibold text-emerald-600 dark:text-emerald-500"
+                    title="Vượt chỉ tiêu"
+                  >
+                    ▸
                   </span>
-                  <span className="w-9 text-right text-xs text-muted-foreground">
-                    {ratio != null ? Math.round(ratio * 100) : 0}%
-                  </span>
-                </>
-              )}
+                )}
+              </div>
+
+              {/* Số liệu */}
+              <div className="flex items-baseline justify-end gap-1.5 tabular-nums">
+                {fillPct != null ? (
+                  <>
+                    <span className={cn("text-sm font-semibold", toneText(fillRatio))}>
+                      {fillPct}%
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {nf.format(submitted)}/{nf.format(quota as number)}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-sm font-semibold">{nf.format(submitted)}</span>
+                )}
+              </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
