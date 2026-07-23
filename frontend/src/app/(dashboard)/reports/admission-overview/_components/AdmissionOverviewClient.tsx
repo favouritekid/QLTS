@@ -41,6 +41,7 @@ import { blobErrorMessage, downloadBlob } from "@/lib/utils/download-blob";
 import { subDaysVN } from "@/lib/utils/vn-date";
 import type { ReportGroupBy } from "@/lib/zod/reports";
 
+import { ActionNeeded } from "./ActionNeeded";
 import { DebtPanel } from "./DebtPanel";
 import { OfficerMajorHeatmap } from "./OfficerMajorHeatmap";
 import { OverviewFunnel } from "./OverviewFunnel";
@@ -373,7 +374,21 @@ export function AdmissionOverviewClient() {
 
           {/* ---- TAB ĐIỀU HÀNH: khu hành động trước, phân tích nguyên nhân sau ---- */}
           <TabsContent value="exec" className="mt-4 space-y-4">
-            {/* (P3: khối "Cần xử lý ngay" sẽ chèn ở đầu tab này) */}
+            {/* 0. Cần xử lý ngay — cảnh báo hành động (đầu tab điều hành) */}
+            <Panel title="Cần xử lý ngay">
+              <PanelState
+                query={{
+                  isError: weeklyMajor.isError,
+                  error: weeklyMajor.error,
+                  data: syncedMajor,
+                }}
+                skeleton="h-24 w-full"
+              >
+                {syncedMajor && (
+                  <ActionNeeded report={syncedMajor} debt={debt.data} />
+                )}
+              </PanelState>
+            </Panel>
 
             {/* 1. Chỉ tiêu — tử số là HỒ SƠ NỘP (không phải nhập học) */}
             <Panel title="Hồ sơ nộp / chỉ tiêu — theo ngành">
