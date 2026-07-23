@@ -956,6 +956,66 @@ async def recalculate_fee(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+# ⚠️ THỨ TỰ ĐÚNG: @router.put TRƯỚC @limiter.limit (bottom-up decorator) — nếu
+# đặt ngược như recalculate/waive/cancel trong file này thì limiter KHÔNG chạy
+# (nợ slowapi-limiter-decorator-order-debt). Route MỚI nên làm đúng.
+@router.put(
+    "/{fee_id}/confirm-major-change",
+    response_model=finance_schemas.FeeResponse,
+    summary="Kế toán xác nhận đổi ngành (đã reprice)",
+)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def confirm_major_change(
+    request: Request,
+    fee_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """Kế toán (hoặc admin) xác nhận học phí đổi ngành đã reprice → clear cờ chờ,
+    mở lại xuất giấy/approve, báo officer.
+
+    **Auth**: ``CasbinAuth`` — chỉ ``role:accountant`` được grant (migration
+    majchg1c) + admin qua wildcard ``/*``. Manager/officer deny-by-default.
+    KHÔNG dùng ``require_finance_staff`` (nó cho cả manager).
+
+    **Business**: fee phải đang ``awaiting_accountant_confirmation`` (409 nếu
+    không). Bất biến hoá đơn (=final−waived) đã đúng từ reprice — confirm chỉ rà
+    phòng thủ, KHÔNG reconcile.
+    """
+    fee_service = FeeCalculationService(db)
+    unit_id = finance_scope_unit_id(current_user)
+
+    try:
+        fee, callback = await fee_service.confirm_major_change(
+            fee_id,
+            actor_id=current_user.id,
+            unit_id=unit_id,
+        )
+        await db.commit()
+        if callback:
+            await callback()
+
+        log.info(
+            "fee_major_change_confirmed_via_api",
+            fee_id=fee_id,
+            user_id=current_user.id,
+        )
+
+        fresh = await fee_service.fee_repo.get_by_id_with_relations(
+            fee_id, unit_id
+        )
+        return _build_fee_response(
+            fresh or fee, current_user_role=current_user.role
+        )
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except BusinessRuleViolation as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 # ==============================================================================
 # HELPER FUNCTIONS
 # ==============================================================================
@@ -1082,6 +1142,15 @@ def _fee_can_cancel(fee, current_user_role: str = None) -> bool:
     return not is_terminal and fee.paid_amount == 0 and is_admin
 
 
+def _fee_can_confirm_major_change(fee, current_user_role: str = None) -> bool:
+    """Quyền bấm "Xác nhận đổi ngành" — mirror route gate confirm-major-change
+    (accountant + admin; manager/officer deny). Chỉ khi cờ đang bật.
+    """
+    return bool(
+        getattr(fee, "awaiting_accountant_confirmation", False)
+    ) and current_user_role in (UserRole.ACCOUNTANT, UserRole.ADMIN)
+
+
 def _format_permanent_address(profile) -> Optional[str]:
     """Join the profile's stored permanent-address parts into ONE readable line
     (số nhà/đường → tổ/thôn → xã/phường → quận/huyện → tỉnh) for the drawer.
@@ -1162,6 +1231,14 @@ def _build_fee_response(
         can_cancel=can_cancel,
         can_recalculate=can_recalculate,
         due_date=first_due_date,
+        # Đổi ngành: cờ (từ model) + quyền confirm (role-aware). A→B + delta là
+        # display giàu hơn, enrich ở endpoint detail có DB (mặc định None ở đây).
+        awaiting_accountant_confirmation=getattr(
+            fee, "awaiting_accountant_confirmation", False
+        ),
+        can_confirm_major_change=_fee_can_confirm_major_change(
+            fee, current_user_role
+        ),
     )
 
 

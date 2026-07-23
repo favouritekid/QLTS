@@ -1942,6 +1942,154 @@ class FeeCalculationService:
         )
         return fee, True
 
+    async def confirm_major_change(
+        self,
+        fee_id: int,
+        *,
+        actor_id: Optional[int] = None,
+        unit_id: Optional[int] = None,
+    ) -> Tuple[Fee, Optional[Callable]]:
+        """Kế toán xác nhận reprice đổi ngành → clear cờ, báo officer tiếp tục.
+
+        CẮT 1 — reprice đã ghi ``invoice.amount`` đúng ngay từ đầu, nên confirm
+        KHÔNG reconcile tiền: chỉ ASSERT bất biến ``Σ(invoice active) == final −
+        waived`` như lưới phòng thủ (lệch → raise, KHÔNG tự sửa — kế toán rà tay),
+        clear ``awaiting_accountant_confirmation``, audit, dispatch báo officer.
+
+        Lock invoice → fee (khớp luồng tiền, tránh ABBA). Require cờ đang bật.
+        Idempotent: gọi lại khi cờ đã clear → ConflictError rõ nghĩa.
+        """
+        active_invoices = list(
+            (
+                await self.db.execute(
+                    select(Invoice)
+                    .join(Fee, Fee.id == Invoice.fee_id)
+                    .where(
+                        Invoice.fee_id == fee_id,
+                        Invoice.status != InvoiceStatusEnum.cancelled.value,
+                    )
+                )
+            ).scalars().all()
+        )
+        # reprice đảm bảo đúng 1 invoice active; >1 không thể tới đây.
+        if len(active_invoices) != 1:
+            raise BusinessRuleViolation(
+                "Khoản phí không có đúng 1 hoá đơn học phí đang hoạt động — "
+                "kế toán cần rà thủ công."
+            )
+        invoice = await self.invoice_repo.get_for_update(
+            active_invoices[0].id, unit_id
+        )
+        if invoice is None:
+            raise ResourceNotFoundError("Fee not found")
+        fee = await self.fee_repo.get_for_update(invoice.fee_id, unit_id)
+        if fee is None or fee.id != fee_id:
+            raise ResourceNotFoundError("Fee not found")
+        await self.db.refresh(fee)
+
+        if not fee.awaiting_accountant_confirmation:
+            raise ConflictError(
+                "Khoản phí này không đang chờ xác nhận đổi ngành (có thể đã "
+                "được xác nhận trước đó)."
+            )
+
+        target = fee.final_amount - fee.waived_amount
+        if target <= 0:
+            raise BusinessRuleViolation(
+                "Học phí sau miễn/giảm bằng 0 — kế toán cần xử tài chính thủ "
+                "công (không thể ghi hoá đơn = 0)."
+            )
+        # Bất biến phòng thủ (reprice đã ghi đúng): 1 invoice active = final−waived.
+        if invoice.amount != target:
+            raise BusinessRuleViolation(
+                f"Bất biến hoá đơn lệch (hoá đơn {invoice.amount} ≠ học phí "
+                f"phải thu {target}) — kế toán cần rà thủ công trước khi xác nhận."
+            )
+
+        # Clear cờ (GIỮ major_change_from_academic_info_id + flagged_at làm lịch sử).
+        fee.awaiting_accountant_confirmation = False
+        fee.version += 1
+        fee.notes = (
+            f"{fee.notes or ''}\n[{datetime.now(timezone.utc).isoformat()}] "
+            f"Kế toán (user {actor_id}) xác nhận đổi ngành."
+        )
+        await self.db.flush()
+
+        # Recompute fee status phòng thủ (thường không đổi — invoice.amount đã đúng).
+        from app.services.invoice_service import InvoiceService
+        await InvoiceService(self.db).recompute_fee_from_invoices(fee.id)
+
+        # Load profile + lead cho dispatch (IDOR-scoped). Tên ngành mới đọc tường
+        # minh (fee.resolved_major lazy=raise — KHÔNG chạm trực tiếp).
+        profile = await self._get_profile(fee.admission_profile_id, unit_id)
+        new_major_name = None
+        if fee.resolved_major_id is not None:
+            new_major_name = (
+                await self.db.execute(
+                    select(models.MajorProgram.name).where(
+                        models.MajorProgram.id == fee.resolved_major_id
+                    )
+                )
+            ).scalar_one_or_none()
+
+        from app.services import audit_service
+        await audit_service.log_audit(
+            self.db,
+            entity_type="Fee",
+            entity_id=fee.id,
+            action="major_change_confirmed",
+            actor_user_id=actor_id,
+            field_name="awaiting_accountant_confirmation",
+            old_value="true",
+            new_value="false",
+            reason=f"Kế toán xác nhận đổi ngành (ngành mới: {new_major_name}).",
+            source="api",
+        )
+
+        # Dispatch báo officer phụ trách tiếp tục (xuất giấy…).
+        _lead = getattr(profile, "lead", None) if profile is not None else None
+        officer_id = getattr(_lead, "assigned_officer_id", None) if _lead else None
+        user_ids = [officer_id] if officer_id else []
+        payload = {
+            "fee_id": fee.id,
+            "invoice_id": invoice.id,
+            "admission_profile_id": fee.admission_profile_id,
+            "lead_id": getattr(_lead, "id", None) if _lead else None,
+            "unit_id": getattr(_lead, "unit_id", None) if _lead else None,
+            "new_major_name": new_major_name,
+            "profile_code": f"HS-{fee.admission_profile_id}",
+            "actor_id": actor_id,
+            "user_ids": user_ids,
+        }
+        from app.services.notification_dispatcher import (
+            dispatch,
+            rooms_for_finance_review,
+        )
+        from app.core.events import SystemEvents
+        _rooms = rooms_for_finance_review(profile, user_ids)
+        _notif_ids, notif_cb = await dispatch(
+            self.db,
+            event=SystemEvents.MAJOR_CHANGE_CONFIRMED,
+            payload=payload,
+            dedupe_key=f"fee:{fee.id}:major_change_confirmed",
+            rooms=_rooms,
+        )
+
+        log.info(
+            "fee_major_change_confirmed",
+            fee_id=fee.id,
+            profile_id=fee.admission_profile_id,
+            invoice_id=invoice.id,
+            actor_id=actor_id,
+            officer_notified=bool(user_ids),
+        )
+
+        async def post_commit():
+            if notif_cb:
+                await notif_cb()
+
+        return fee, post_commit
+
 
 # ==========================================================================
 # HELPER FUNCTIONS (Module-level)
