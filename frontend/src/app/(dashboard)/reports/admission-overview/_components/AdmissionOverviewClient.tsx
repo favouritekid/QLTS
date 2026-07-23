@@ -47,10 +47,20 @@ import { OfficerMajorHeatmap } from "./OfficerMajorHeatmap";
 import { OverviewFunnel } from "./OverviewFunnel";
 import { OverviewTrend } from "./OverviewTrend";
 import { QuotaRunway } from "./QuotaRunway";
+import {
+  ALL_ROUNDS,
+  ALL_UNITS,
+  CURRENT_YEAR,
+  canonicalizeOverviewState,
+  resolveApiUnitId,
+  serializeOverviewParams,
+  useOverviewUrlState,
+  type HeatmapTab,
+  type OverviewTab,
+} from "./useOverviewUrlState";
 
-const CURRENT_YEAR = new Date().getFullYear();
-const ALL_ROUNDS = "__all__";
-const ALL_UNITS = "__all__";
+/** Empty ổn định — tránh churn dep của effect canonicalize khi filters đang tải. */
+const NO_ROUNDS: readonly string[] = [];
 
 const dm = (s: string) => `${s.slice(8, 10)}/${s.slice(5, 7)}`;
 
@@ -123,18 +133,12 @@ interface FlatUnit {
   depth: number;
 }
 
-type TabKey = "exec" | "analysis";
-
 export function AdmissionOverviewClient() {
-  const [year, setYear] = React.useState(CURRENT_YEAR);
-  const [round, setRound] = React.useState<string>(ALL_ROUNDS);
-  const [unit, setUnit] = React.useState<string>(ALL_UNITS);
-  const [tab, setTab] = React.useState<TabKey>("exec");
-  // Điều khiển của tab "Phân tích chi tiết" — CHỈ lái bảng chi tiết (KPI band
-  // điều hành cố định, không đổi theo các toggle này).
-  const [groupBy, setGroupBy] = React.useState<ReportGroupBy>("major");
-  const [period, setPeriod] = React.useState<Period>("ytd");
-  const [weekStart, setWeekStart] = React.useState<string | undefined>(undefined);
+  // URL = NGUỒN TRẠNG THÁI (deep-link · reload · Back/Forward khôi phục cùng lát
+  // dữ liệu). Không mirror useState → không có vòng lặp state ↔ URL.
+  const { state, patch, commit, search } = useOverviewUrlState();
+  const { tab, year, round, unit, groupBy, period, weekStart, heatmap } = state;
+
   const [exporting, setExporting] = React.useState(false);
   const mountedRef = React.useRef(true);
   React.useEffect(
@@ -144,11 +148,9 @@ export function AdmissionOverviewClient() {
     [],
   );
 
-  const roundCode = round === ALL_ROUNDS ? undefined : round;
-  const unitId = unit === ALL_UNITS ? undefined : Number(unit);
-
   // Filter option sources.
-  const { data: filters } = useReportFilters(year);
+  const filtersQuery = useReportFilters(year);
+  const filters = filtersQuery.data;
   const { data: orgUnits = [] } = useOrganizationUnits();
   const yearOptions = React.useMemo(
     () =>
@@ -157,7 +159,7 @@ export function AdmissionOverviewClient() {
       ).sort((a, b) => b - a),
     [filters, year],
   );
-  const roundCodes = filters?.rounds ?? [];
+  const roundCodes = filters?.rounds ?? NO_ROUNDS;
   const flatUnits = React.useMemo(() => {
     const out: FlatUnit[] = [];
     const walk = (units: typeof orgUnits, depth: number) => {
@@ -170,7 +172,35 @@ export function AdmissionOverviewClient() {
     return out;
   }, [orgUnits]);
 
-  const scope = { academic_year: year, round_code: roundCode, unit_id: unitId };
+  // Round hợp lệ theo NĂM: chỉ gửi round_code khi catalog đợt của ĐÚNG năm đã tải
+  // (không phải placeholder năm cũ) và mã đợt có trong danh sách → không request lỗi.
+  const roundReady = filters !== undefined && !filtersQuery.isPlaceholderData;
+  const roundCode =
+    round !== ALL_ROUNDS && roundReady && roundCodes.includes(round)
+      ? round
+      : undefined;
+
+  // Scope-probe: LUÔN gửi unit_id=undefined để học scope người dùng an toàn (không
+  // bao giờ gửi unit của URL trước khi biết scope). Manager & admin-không-lọc-đơn-vị
+  // trùng key với weeklyMajor → React Query dedup (1 request); chỉ admin CÓ lọc đơn
+  // vị mới tách thành 2 query. Không self-cycle (key probe không phụ thuộc scope).
+  const scopeProbe = useWeeklyReport({
+    academic_year: year,
+    group_by: "major",
+    round_code: roundCode,
+    unit_id: undefined,
+  });
+  const scopeResolved = scopeProbe.data !== undefined;
+  const enforcedUnit = scopeProbe.data?.scope_unit_id ?? null;
+
+  const urlUnitId = unit === ALL_UNITS ? undefined : Number(unit);
+  const effectiveUnitId = resolveApiUnitId({ scopeResolved, enforcedUnit, urlUnitId });
+
+  const scopeParams = {
+    academic_year: year,
+    round_code: roundCode,
+    unit_id: effectiveUnitId,
+  };
 
   // Query cho BẢNG chi tiết — theo toggle (group_by · period/week). KHÔNG cấp
   // KPI band (KPI dùng weeklyMajor ổn định).
@@ -178,7 +208,7 @@ export function AdmissionOverviewClient() {
     academic_year: year,
     group_by: groupBy,
     round_code: roundCode,
-    unit_id: unitId,
+    unit_id: effectiveUnitId,
     week_start: weekStart,
   });
   // KPI band ĐIỀU HÀNH + "Hồ sơ nộp / chỉ tiêu" cần ngành + LŨY KẾ (chỉ tiêu theo
@@ -187,14 +217,14 @@ export function AdmissionOverviewClient() {
     academic_year: year,
     group_by: "major",
     round_code: roundCode,
-    unit_id: unitId,
+    unit_id: effectiveUnitId,
   });
-  const funnel = usePipelineFunnel(scope);
-  const trend = useAdmissionTrend(scope);
-  const matrix = useOfficerMajorMatrix(scope);
+  const funnel = usePipelineFunnel(scopeParams);
+  const trend = useAdmissionTrend(scopeParams);
+  const matrix = useOfficerMajorMatrix(scopeParams);
   const debt = useDebtReport({
     academic_year: year,
-    unit_id: unitId,
+    unit_id: effectiveUnitId,
     fee_type: "tuition",
   });
 
@@ -223,21 +253,34 @@ export function AdmissionOverviewClient() {
     return rankByQuotaGap(syncedDetail.rows);
   }, [syncedDetail, period, groupBy]);
 
-  // Enforced unit scope (thin-client). Đọc scope_unit_id off weeklyMajor (luôn
-  // fetch, ổn định) → manager bị khóa về đơn vị của mình.
-  const enforcedUnit = weeklyMajor.data?.scope_unit_id ?? null;
-  const scopeDetermined = weeklyMajor.data !== undefined;
-  const isUnitScoped = scopeDetermined && unit === ALL_UNITS && enforcedUnit != null;
-  const unitPickerDisabled = !scopeDetermined || isUnitScoped;
+  // Hiển thị khóa đơn vị (thin-client). Người dùng bị giới hạn (manager) → picker
+  // khóa & hiện đúng đơn vị; URL cũng được canonicalize về đơn vị đó (effect dưới).
+  const isUnitScoped = scopeResolved && enforcedUnit != null;
+  const unitPickerDisabled = !scopeResolved || isUnitScoped;
   const unitValue = isUnitScoped ? String(enforcedUnit) : unit;
   const enforcedUnitName = isUnitScoped
     ? flatUnits.find((u) => u.id === enforcedUnit)?.name
     : undefined;
 
+  // Canonicalize URL (replace, không tạo history): round không thuộc năm → bỏ;
+  // manager khóa unit về scope_unit_id (bỏ unit lạ); và LÀM SẠCH mọi param sai/rác/
+  // mặc-định về dạng chuẩn (serialize LUÔN ghi year → share-link không đổi nghĩa khi
+  // sang năm mới). So chuỗi canonical với URL thô → idempotent, hội tụ, không loop.
+  React.useEffect(() => {
+    const canonical = canonicalizeOverviewState(state, {
+      roundReady,
+      roundCodes,
+      scopeResolved,
+      enforcedUnit,
+    });
+    if (serializeOverviewParams(canonical) !== search) {
+      commit(canonical, { replace: true });
+    }
+  }, [state, search, roundReady, roundCodes, scopeResolved, enforcedUnit, commit]);
+
   const onYearChange = (next: number) => {
-    setYear(next);
-    setRound(ALL_ROUNDS); // dependent filter may be invalid for the new year
-    setWeekStart(undefined);
+    // Đổi năm: đợt & mốc tuần của năm cũ không còn hợp lệ → dọn cùng lúc (1 lần push).
+    patch({ year: next, round: ALL_ROUNDS, weekStart: undefined });
   };
 
   const onExport = async () => {
@@ -292,7 +335,7 @@ export function AdmissionOverviewClient() {
             <label htmlFor="filter-round" className="text-xs text-muted-foreground">
               Đợt
             </label>
-            <Select value={round} onValueChange={setRound}>
+            <Select value={round} onValueChange={(v) => patch({ round: v })}>
               <SelectTrigger id="filter-round" className="w-32" aria-label="Đợt">
                 <SelectValue />
               </SelectTrigger>
@@ -312,7 +355,7 @@ export function AdmissionOverviewClient() {
             </label>
             <Select
               value={unitValue}
-              onValueChange={setUnit}
+              onValueChange={(v) => patch({ unit: v })}
               disabled={unitPickerDisabled}
             >
               <SelectTrigger id="filter-unit" className="w-44" aria-label="Đơn vị">
@@ -362,7 +405,7 @@ export function AdmissionOverviewClient() {
           )}
         </PanelState>
 
-        <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)}>
+        <Tabs value={tab} onValueChange={(v) => patch({ tab: v as OverviewTab })}>
           <TabsList>
             <TabsTrigger value="exec" className="gap-1.5">
               <LayoutDashboard aria-hidden className="size-4" /> Điều hành
@@ -452,20 +495,26 @@ export function AdmissionOverviewClient() {
           <TabsContent value="analysis" className="mt-4 space-y-4">
             <Panel title="Tải hồ sơ theo ngành × cán bộ">
               <PanelState query={matrix} skeleton="h-56 w-full">
-                {matrix.data && <OfficerMajorHeatmap matrix={matrix.data} />}
+                {matrix.data && (
+                  <OfficerMajorHeatmap
+                    matrix={matrix.data}
+                    tabKey={heatmap}
+                    onTabKeyChange={(k) => patch({ heatmap: k as HeatmapTab })}
+                  />
+                )}
               </PanelState>
             </Panel>
 
             <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-3">
-                  <Tabs value={groupBy} onValueChange={(v) => setGroupBy(v as ReportGroupBy)}>
+                  <Tabs value={groupBy} onValueChange={(v) => patch({ groupBy: v as ReportGroupBy })}>
                     <TabsList>
                       <TabsTrigger value="major">Theo ngành</TabsTrigger>
                       <TabsTrigger value="officer">Theo nhân viên</TabsTrigger>
                     </TabsList>
                   </Tabs>
-                  <Tabs value={period} onValueChange={(v) => setPeriod(v as Period)}>
+                  <Tabs value={period} onValueChange={(v) => patch({ period: v as Period })}>
                     <TabsList>
                       <TabsTrigger value="week">Tuần này</TabsTrigger>
                       <TabsTrigger value="ytd">Lũy kế năm</TabsTrigger>
@@ -477,7 +526,9 @@ export function AdmissionOverviewClient() {
                       size="icon"
                       aria-label="Tuần trước"
                       disabled={!navAnchor}
-                      onClick={() => navAnchor && setWeekStart(subDaysVN(navAnchor, 7))}
+                      onClick={() =>
+                        navAnchor && patch({ weekStart: subDaysVN(navAnchor, 7) })
+                      }
                     >
                       <ChevronLeft aria-hidden />
                     </Button>
@@ -498,12 +549,18 @@ export function AdmissionOverviewClient() {
                       size="icon"
                       aria-label="Tuần sau"
                       disabled={!navAnchor}
-                      onClick={() => navAnchor && setWeekStart(subDaysVN(navAnchor, -7))}
+                      onClick={() =>
+                        navAnchor && patch({ weekStart: subDaysVN(navAnchor, -7) })
+                      }
                     >
                       <ChevronRight aria-hidden />
                     </Button>
                     {weekStart && (
-                      <Button variant="ghost" size="sm" onClick={() => setWeekStart(undefined)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => patch({ weekStart: undefined })}
+                      >
                         Tuần này
                       </Button>
                     )}

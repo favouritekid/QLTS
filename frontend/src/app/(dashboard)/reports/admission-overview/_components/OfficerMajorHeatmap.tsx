@@ -49,8 +49,19 @@ const TABS: Tab[] = [
  * trận trả CẢ 5 chỉ số → đổi tab client-side, không refetch. Hàng "Chưa phân
  * loại ngành" / cột "Chưa gán" giữ nguyên; hàng/cột "Tổng" để đối chiếu KPI.
  */
-export function OfficerMajorHeatmap({ matrix }: { matrix: OfficerMajorMatrix }) {
-  const [tabKey, setTabKey] = React.useState(TABS[0].key);
+export function OfficerMajorHeatmap({
+  matrix,
+  tabKey: controlledTabKey,
+  onTabKeyChange,
+}: {
+  matrix: OfficerMajorMatrix;
+  /** Controlled: khoá tab đang chọn (khi cha đồng bộ lên URL). Bỏ trống → tự quản. */
+  tabKey?: string;
+  onTabKeyChange?: (key: string) => void;
+}) {
+  const [internalTabKey, setInternalTabKey] = React.useState(TABS[0].key);
+  const tabKey = controlledTabKey ?? internalTabKey;
+  const setTabKey = onTabKeyChange ?? setInternalTabKey;
   const tab = TABS.find((t) => t.key === tabKey) ?? TABS[0];
   const metrics = tab.metrics;
   const multi = metrics.length > 1;
