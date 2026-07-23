@@ -1143,10 +1143,18 @@ async def test_pipeline_funnel_leak_by_outcome_counts_for_funnel_and_walk_in(
         db, stage_id=stg_neg, outcome="negative", is_final=True
     )
 
-    await _seed_funnel_lead(db, deps, year, stage_id=stg_a, cs_id=cs_ok, created_at=in_win)
-    await _seed_funnel_lead(db, deps, year, stage_id=stg_b, cs_id=cs_reject, created_at=in_win)
-    await _seed_funnel_lead(db, deps, year, stage_id=stg_a, cs_id=cs_activity, created_at=in_win)
-    await _seed_funnel_lead(db, deps, year, stage_id=stg_neg, cs_id=cs_dropped, created_at=in_win)
+    await _seed_funnel_lead(
+        db, deps, year, stage_id=stg_a, cs_id=cs_ok, created_at=in_win
+    )
+    await _seed_funnel_lead(
+        db, deps, year, stage_id=stg_b, cs_id=cs_reject, created_at=in_win
+    )
+    await _seed_funnel_lead(
+        db, deps, year, stage_id=stg_a, cs_id=cs_activity, created_at=in_win
+    )
+    await _seed_funnel_lead(
+        db, deps, year, stage_id=stg_neg, cs_id=cs_dropped, created_at=in_win
+    )
     # walk-in: created BEFORE the round window but holds an in-scope profile
     await _seed_funnel_lead(
         db,

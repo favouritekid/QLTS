@@ -103,7 +103,9 @@ class AdmissionReportService:
         return meta, WindowRange(start=start_dt, end_excl=end_excl)
 
     @staticmethod
-    def _default_anchor(academic_year: int, week_start: Optional[date]) -> Optional[date]:
+    def _default_anchor(
+        academic_year: int, week_start: Optional[date]
+    ) -> Optional[date]:
         """Anchor a cumulative-to-now cutoff INSIDE ``academic_year``.
 
         Current year → today (None → ``_compute_week`` uses today). Past year →
@@ -683,7 +685,9 @@ class AdmissionReportService:
             officer_names.setdefault(oid, dim.officer_name if oid is not None else None)
             majors.setdefault(mid, dim.major if mid is not None else None)
 
-        missing = [o for o, nm in officer_names.items() if isinstance(o, int) and not nm]
+        missing = [
+            o for o, nm in officer_names.items() if isinstance(o, int) and not nm
+        ]
         if missing:
             resolved = await self.repo.get_user_names(missing)
             for oid in missing:
