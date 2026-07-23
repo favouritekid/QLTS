@@ -3773,6 +3773,7 @@ async def _populate_response_fields(
     # also set on the GET path (``get_profile``) which does NOT call this
     # helper — keep both in lockstep.
     await _populate_unrefunded_payment_flag(db, profile)
+    await _populate_major_change_flag(db, profile)
 
 
 async def _populate_unrefunded_payment_flag(
@@ -3811,6 +3812,25 @@ async def _populate_unrefunded_payment_flag(
         profile.id
     )
     profile.has_unrefunded_payment = refundable_held > 0
+
+
+async def _populate_major_change_flag(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+) -> None:
+    """Set transient ``major_change_cycle_open`` cho FE (badge "Chờ kế toán xác
+    nhận" + ẩn nút xuất giấy). Delegate predicate DUY NHẤT
+    ``is_major_change_cycle_open`` (đã gate feature flag → cờ OFF luôn False).
+
+    Idempotent. PHẢI gọi ở MỌI nơi build response (mutations + GET detail + lean
+    list + non-lean + update + reload) — miss chỗ nào thì FE nhận default False
+    = false-negative im lặng (badge không hiện, nút giấy không bị ẩn).
+    """
+    from app.services.fee_calculation_service import is_major_change_cycle_open
+
+    profile.major_change_cycle_open = await is_major_change_cycle_open(
+        db, profile
+    )
 
 
 async def _load_priority_audit_log(
@@ -4982,6 +5002,26 @@ async def get_profiles(
         # correction. Chỉ đọc read-model cột + tính action nhẹ. program_name +
         # HK1 money đã do repo set (object.__setattr__). Trả `AdmissionProfile
         # ListItem` (~15 field) → payload ~40KB thay 324KB.
+        # Đổi ngành: cờ badge — BATCH 1 query/trang (KHÔNG per-row → tránh N+1),
+        # gated feature flag (OFF → skip query, mọi cờ False). requested đọc từ
+        # cột đã load; awaiting query gộp theo page.
+        from app.config import settings as _settings
+        _mc_awaiting_ids: set = set()
+        if _settings.MAJOR_CHANGE_REPRICE_ENABLED and profiles:
+            _pids = [p.id for p in profiles]
+            _mc_awaiting_ids = set(
+                (
+                    await db.execute(
+                        select(models.Fee.admission_profile_id).where(
+                            models.Fee.admission_profile_id.in_(_pids),
+                            models.Fee.fee_type == "tuition",
+                            models.Fee.semester_no == 1,
+                            models.Fee.status != "cancelled",
+                            models.Fee.awaiting_accountant_confirmation.is_(True),
+                        )
+                    )
+                ).scalars().all()
+            )
         for profile in profiles:
             profile.completion_percent = (
                 profile.cached_completion if profile.cached_completion is not None else 0
@@ -4997,6 +5037,13 @@ async def get_profiles(
             _docs = profile.__dict__.get("documents")
             profile.available_actions = _compute_list_actions(
                 profile, current_user, _docs
+            )
+            profile.major_change_cycle_open = bool(
+                _settings.MAJOR_CHANGE_REPRICE_ENABLED
+                and (
+                    getattr(profile, "major_change_requested", False)
+                    or profile.id in _mc_awaiting_ids
+                )
             )
         return profiles, total_count
 
@@ -5021,6 +5068,10 @@ async def get_profiles(
             _compute_frontend_fields(
                 profile, current_user, docs, list_verifier_names
             )
+        # Đổi ngành: parity với detail (non-lean path KHÔNG qua
+        # _populate_unrefunded — pre-existing gap). Cheap: predicate short-circuit
+        # major_change_requested (no query) + gated flag.
+        await _populate_major_change_flag(db, profile)
 
     # Batch-resolve minor_correction state for the page in ONE query rather
     # than N path lookups. This keeps the list endpoint at exactly one
@@ -5272,6 +5323,7 @@ async def get_profile(
     # ``_compute_frontend_fields`` directly, so set the unrefunded-payment
     # flag here too — otherwise GET would default it to False.
     await _populate_unrefunded_payment_flag(db, profile)
+    await _populate_major_change_flag(db, profile)
 
     return profile
 
@@ -5779,6 +5831,9 @@ async def update_profile(
         documents,
         await _resolve_verifier_names(db, documents),
     )
+    # Đổi ngành: parity (update_profile gọi _compute_frontend_fields trực tiếp,
+    # KHÔNG qua _populate_response_fields → cần set cờ tường minh).
+    await _populate_major_change_flag(db, profile)
 
     # Audit trail: log profile update with field-level changes
     from ..services import audit_service
@@ -6328,6 +6383,226 @@ async def _is_current_era_ward(db: AsyncSession, commune_code: Optional[str]) ->
     return result.scalar_one_or_none() is not None
 
 
+async def _resolve_major_change_choice_path(
+    db: AsyncSession, profile: "models.AdmissionProfile"
+):
+    """Chọn AdmissionPath để đổi ngành — CÙNG quy tắc resolve_fee_academic_info:
+    1 choice ``decision=='admitted'`` / đúng 1 choice / else FAIL-CLOSED (KHÔNG
+    chọn bừa). Trả AdmissionPath (đã eager academic_info)."""
+    stmt = (
+        select(models.AdmissionProfileChoice)
+        .where(models.AdmissionProfileChoice.admission_profile_id == profile.id)
+        .options(
+            selectinload(models.AdmissionProfileChoice.admission_path)
+            .selectinload(models.AdmissionPath.academic_info)
+        )
+        .order_by(models.AdmissionProfileChoice.display_order)
+    )
+    choices = list((await db.execute(stmt)).scalars().all())
+    admitted = [c for c in choices if c.decision == "admitted"]
+    if len(admitted) == 1:
+        chosen = admitted[0]
+    elif len(choices) == 1:
+        chosen = choices[0]
+    else:
+        raise BadRequest(
+            "Hồ sơ đa nguyện vọng chưa xác định được ngành để đổi ngành "
+            "(chưa có/nhiều nguyện vọng chưa công bố kết quả)."
+        )
+    path = getattr(chosen, "admission_path", None)
+    if path is None:
+        raise BadRequest("Nguyện vọng đã chọn không có đường tuyển sinh hợp lệ.")
+    return path
+
+
+async def _apply_major_change_snapshot(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+    admission_repo,
+    current_user: Optional["models.User"],
+) -> None:
+    """Đồng bộ ``applied_rules`` (path/round/academic_info) + quota + doc snapshot
+    theo ngành MỚI khi officer đổi ngành. Gọi ở ``submit_and_evaluate`` +
+    ``resubmit_profile`` khi ``flag AND major_change_requested``, TRƯỚC cutoff/
+    eligibility/mandatory_docs read.
+
+    - Rewrite ``applied_rules[admission_path_id/admission_round_id/academic_info_id]``
+      (hợp lệ nhờ trigger whitelist 1F) → cutoff (:6515) + quota-increment (:6960)
+      + doc-resolve bám ngành MỚI thay ngành cũ.
+    - GIẢM ``submission_count`` path CŨ (floor 0) → hoàn +1 của lần submit trước;
+      lần submit này +1 vào path MỚI ⇒ KHÔNG phantom quota.
+    - Re-resolve doc snapshot theo ngành mới (``_reresolve_documents_snapshot``
+      giờ đọc path mới; bộ giấy ngành khác → mandatory_docs khác).
+    """
+    path = await _resolve_major_change_choice_path(db, profile)
+    applied = dict(profile.applied_rules or {})
+    old_path_id = applied.get("admission_path_id")
+    new_path_id = path.id
+    if str(old_path_id) != str(new_path_id):
+        from sqlalchemy import text as _sa_text
+        if old_path_id is not None:
+            try:
+                _old_pid = int(old_path_id)
+            except (TypeError, ValueError):
+                _old_pid = None
+            if _old_pid is not None:
+                await db.execute(
+                    _sa_text(
+                        "UPDATE admission_path "
+                        "SET submission_count = GREATEST(submission_count - 1, 0) "
+                        "WHERE id = :pid"
+                    ),
+                    {"pid": _old_pid},
+                )
+        applied["admission_path_id"] = new_path_id
+        applied["admission_round_id"] = path.admission_round_id
+        applied["academic_info_id"] = path.academic_info_id
+        profile.applied_rules = applied
+        flag_modified(profile, "applied_rules")
+        await db.flush()
+        log.info(
+            "major_change_snapshot_applied",
+            profile_id=profile.id,
+            old_path_id=old_path_id,
+            new_path_id=new_path_id,
+        )
+    # Re-resolve doc snapshot cho ngành mới (đọc applied_rules path MỚI).
+    await _reresolve_documents_snapshot(db, profile, admission_repo, current_user)
+
+
+async def _major_name_of_academic_info(
+    db: AsyncSession, ai_id: Optional[int]
+) -> Optional[str]:
+    """Tên ngành (MajorProgram.name) từ ``academic_info_id`` — mold join của
+    ``resnapshot_fee_academic_info_for_profile`` (academic_info → offering →
+    major). None nếu không tra được (best-effort, chỉ dùng cho display thông báo)."""
+    if ai_id is None:
+        return None
+    try:
+        return (
+            await db.execute(
+                select(models.MajorProgram.name)
+                .select_from(models.OfferingAcademicInfo)
+                .join(
+                    models.ProgramOffering,
+                    models.ProgramOffering.id
+                    == models.OfferingAcademicInfo.offering_id,
+                )
+                .join(
+                    models.MajorProgram,
+                    models.MajorProgram.id == models.ProgramOffering.program_id,
+                )
+                .where(models.OfferingAcademicInfo.id == int(ai_id))
+            )
+        ).scalar_one_or_none()
+    except Exception:
+        return None
+
+
+async def _reprice_on_resubmit_if_major_change(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+    actor: Optional["models.User"],
+) -> Optional[Callable]:
+    """Hook SAU submit/resubmit THÀNH CÔNG: nếu đang chu kỳ đổi ngành, reprice
+    HK1 fee sang ngành mới + dispatch báo kế toán+admin. **LUÔN clear
+    ``major_change_requested``** (kể cả no-op) — chống stale/fail-open.
+
+    Gate: ``flag AND uses_choice_engine``. Trả post_commit callback (dispatch
+    AWAITING event) hoặc None. Gọi từ ``submit_and_evaluate`` success +
+    ``resubmit_profile`` (sau revalidate).
+    """
+    from app.config import settings as _s
+    if not _s.MAJOR_CHANGE_REPRICE_ENABLED or not getattr(
+        profile, "uses_choice_engine", False
+    ):
+        return None
+    was_requested = bool(getattr(profile, "major_change_requested", False))
+    # LUÔN clear (an toàn kể cả officer không đổi ngành thật).
+    profile.major_change_requested = False
+    if not was_requested:
+        return None
+
+    from app.services.enrollment_letter_service import _get_active_hk1_tuition_fee
+    from app.services.fee_calculation_service import FeeCalculationService
+
+    fee = await _get_active_hk1_tuition_fee(db, profile.id)
+    if fee is None:
+        return None
+    repriced_fee, changed = await FeeCalculationService(
+        db
+    ).reprice_for_major_change(profile, actor_id=getattr(actor, "id", None))
+    if not changed or repriced_fee is None:
+        return None
+
+    # Active invoice của fee (reprice đảm bảo đúng 1).
+    invoice_id = (
+        await db.execute(
+            select(models.Invoice.id).where(
+                models.Invoice.fee_id == repriced_fee.id,
+                models.Invoice.status != "cancelled",
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+
+    old_major_name = await _major_name_of_academic_info(
+        db, repriced_fee.major_change_from_academic_info_id
+    )
+    new_major_name = await _major_name_of_academic_info(
+        db, repriced_fee.resolved_academic_info_id
+    )
+    # Số còn phải thu sau đổi ngành (>=0 do đã chặn sinh dư) — actionable cho kế toán.
+    delta_amount = (
+        repriced_fee.final_amount
+        - repriced_fee.paid_amount
+        - repriced_fee.waived_amount
+    )
+
+    # Recipients = kế toán + admin active (specific_users, fail-closed).
+    recipient_ids = list(
+        (
+            await db.execute(
+                select(models.User.id).where(
+                    models.User.role.in_(["accountant", "admin"]),
+                    models.User.status == "active",
+                )
+            )
+        ).scalars().all()
+    )
+    _lead = profile.__dict__.get("lead")
+    payload = {
+        "fee_id": repriced_fee.id,
+        "invoice_id": invoice_id,
+        "admission_profile_id": profile.id,
+        "lead_id": profile.lead_id,
+        "unit_id": getattr(_lead, "unit_id", None) if _lead else None,
+        "old_major_name": old_major_name,
+        "new_major_name": new_major_name,
+        "delta_amount": str(delta_amount),
+        "profile_code": f"HS-{profile.id}",
+        "letter_superseded": True,
+        "user_ids": recipient_ids,
+    }
+    from app.services.notification_dispatcher import (
+        dispatch,
+        rooms_for_finance_review,
+    )
+    _rooms = rooms_for_finance_review(profile, recipient_ids)
+    _ids, notif_cb = await dispatch(
+        db,
+        event=SystemEvents.MAJOR_CHANGE_AWAITING_CONFIRMATION,
+        payload=payload,
+        dedupe_key=f"fee:{repriced_fee.id}:major_change_awaiting",
+        rooms=_rooms,
+    )
+
+    async def _post_commit():
+        if notif_cb:
+            await notif_cb()
+
+    return _post_commit
+
+
 async def submit_and_evaluate(
     db: AsyncSession,
     profile_id: int,
@@ -6441,6 +6716,17 @@ async def submit_and_evaluate(
         raise BadRequest(
             f"Cannot submit profile with status '{profile.status}'. "
             "Only draft profiles can be submitted."
+        )
+
+    # Đổi ngành: đồng bộ applied_rules (path/round/academic_info) + quota + doc
+    # snapshot theo ngành MỚI TRƯỚC cutoff + eligibility + mandatory_docs read.
+    # Gate CHẶT (flag AND cờ profile) — flag OFF/không-đổi-ngành giữ hành vi cũ.
+    from app.config import settings as _mc_submit_settings
+    if _mc_submit_settings.MAJOR_CHANGE_REPRICE_ENABLED and getattr(
+        profile, "major_change_requested", False
+    ):
+        await _apply_major_change_snapshot(
+            db, profile, admission_repo, current_user
         )
 
     # PR-2 (2026-05-28) — Round cutoff enforcement (SPEC §2.1.a Rule 1).
@@ -7001,6 +7287,13 @@ async def submit_and_evaluate(
             citizen_id=profile.citizen_id,
         )
 
+        # Đổi ngành: hook reprice HK1 fee sang ngành mới + báo kế toán. LUÔN clear
+        # major_change_requested (kể cả no-op). Gate flag+uses_choice_engine bên
+        # trong. Trả callback dispatch AWAITING (compose vào return dưới).
+        _major_change_cb = await _reprice_on_resubmit_if_major_change(
+            db, profile, current_user
+        )
+
         # Capture payload fields at flush time so the post-commit
         # callback does not depend on the session staying loaded.
         # Mirrors the V2 router shape (admissions.py post-#293) so the
@@ -7059,13 +7352,18 @@ async def submit_and_evaluate(
                 rooms=_capture_rooms,
             )
 
+        async def _submit_post_commit() -> None:
+            await _post_commit_dispatch()
+            if _major_change_cb is not None:
+                await _major_change_cb()
+
         return (
             {
                 "status": "submitted",  # ✅ FIX: submitted status
                 "message": "Hồ sơ đã được nộp thành công. Chờ phê duyệt từ Manager.",
                 "validation_errors": None,  # ✅ FIX: Match schema field name
             },
-            _post_commit_dispatch,
+            _submit_post_commit,
         )
 
 
@@ -9517,6 +9815,14 @@ async def request_revision(
     # internally for its own audit + ADMISSION_* dispatch payload.
     _old_status_for_audit = profile.status
 
+    # Đổi ngành: mở chu kỳ TRƯỚC transition (đọc status GỐC để kiểm pre-decision).
+    # Set major_change_requested nếu đủ điều kiện; raise nếu còn chu kỳ chờ kế
+    # toán. Flag OFF / post-decision / không có HK1 fee → no-op.
+    from .fee_calculation_service import maybe_open_major_change_cycle
+    await maybe_open_major_change_cycle(
+        db, profile, allow_major_change=bool(data.get("allow_major_change", False)),
+    )
+
     # Phase 1 hotfix-2: ``extra_fields`` writes onto AdmissionProfile
     # columns; it does NOT flow into the dispatch payload. The seeded
     # ADMISSION_REVISION_REQUESTED template references
@@ -10445,6 +10751,22 @@ async def resubmit_profile(
             "Please refresh and try again."
         )
 
+    # Đổi ngành: revalidate eligibility + đồng bộ applied_rules/quota/doc theo
+    # ngành MỚI TRƯỚC transition (status GỐC còn revision_requested/rejected —
+    # trong editable set cho _reresolve_documents_snapshot). resubmit KHÔNG
+    # revalidate mặc định → khi đổi ngành PHẢI revalidate (bộ giấy + điều kiện xét
+    # tuyển ngành khác). Gate flag AND major_change_requested. Fail-closed nếu
+    # thiếu giấy ngành mới (→ raise, discard txn trước khi có audit/history rows).
+    from app.config import settings as _mc_resub_settings
+    if _mc_resub_settings.MAJOR_CHANGE_REPRICE_ENABLED and getattr(
+        profile, "major_change_requested", False
+    ):
+        from app.repositories import AdmissionRepository as _MCAdmissionRepo
+        await _apply_major_change_snapshot(
+            db, profile, _MCAdmissionRepo(db), officer
+        )
+        await _validate_eligibility_all_choices(db, profile)
+
     # STATE CHANGE — caller still captures old_status for the legacy
     # bundle + commission callback below; transition() also captures
     # internally for audit + ADMISSION_* dispatch.
@@ -10589,9 +10911,16 @@ async def resubmit_profile(
             profile_id=profile.id,
         )
 
+    # Đổi ngành: hook reprice HK1 fee sang ngành mới + báo kế toán. LUÔN clear
+    # major_change_requested. Chạy SAU transition (status=resubmitted) + revalidate
+    # ở trên. Callback dispatch AWAITING compose vào final_callback.
+    _major_change_cb = await _reprice_on_resubmit_if_major_change(
+        db, profile, officer
+    )
+
     final_callback = compose_post_commit_callbacks(
         label="admission_resubmit",
-        callbacks=[_audit_log_callback, bundle_callback, commission_callback, transition_callback],
+        callbacks=[_audit_log_callback, bundle_callback, commission_callback, transition_callback, _major_change_cb],
     )
 
     return profile, final_callback
@@ -11500,6 +11829,7 @@ async def _finalize_withdrawn(
     # manual via maker-checker). On the refund-finalize path this is 0 by
     # construction (finalize only runs once the refundable balance hits 0).
     await _populate_unrefunded_payment_flag(db, profile)
+    await _populate_major_change_flag(db, profile)
     # F12: Mutation Response Contract — populate computed fields so the direct
     # withdraw response (STEP 0 admitted / refundable<=0 path) matches a GET.
     # Harmless on the refund-finalize path (the RefundRequest is the response
@@ -11855,6 +12185,7 @@ async def withdraw_profile(
     )
     await db.flush()
     await _populate_unrefunded_payment_flag(db, profile)
+    await _populate_major_change_flag(db, profile)
     # F12: Mutation Response Contract — populate permissions/available_actions/
     # eligibility/completion so the withdraw response matches a subsequent GET.
     await _populate_response_fields(db, profile, actor)
@@ -11940,6 +12271,7 @@ async def cancel_withdrawal(
     )
     await db.flush()
     await _populate_unrefunded_payment_flag(db, profile)
+    await _populate_major_change_flag(db, profile)
     # F12: Mutation Response Contract — populate computed fields so the
     # cancel-withdrawal response matches a subsequent GET.
     await _populate_response_fields(db, profile, actor)

@@ -103,6 +103,96 @@ def is_hk1_settled_fee(fee) -> bool:
     )
 
 
+async def is_major_change_cycle_open(
+    db: AsyncSession, profile: "models.AdmissionProfile"
+) -> bool:
+    """True khi hồ sơ đang trong CHU KỲ đổi ngành — dùng chung bởi cờ transient
+    FE (``_populate_major_change_flag``) VÀ 6 gate (xuất giấy / approve /
+    publish_result / enroll / confirm / calculate_fee).
+
+    = ``profile.major_change_requested`` (admin đã cho phép, chờ officer sửa +
+    nộp lại) HOẶC active HK1 tuition fee ``awaiting_accountant_confirmation`` (đã
+    reprice, chờ kế toán chốt).
+
+    Flag ``MAJOR_CHANGE_REPRICE_ENABLED`` OFF → LUÔN False ⇒ mọi gate no-op +
+    badge không hiện (deploy cờ OFF không đổi hành vi). ``major_change_requested``
+    đọc trực tiếp (không DB hit); chỉ query khi cờ profile chưa bật.
+    """
+    if not settings.MAJOR_CHANGE_REPRICE_ENABLED:
+        return False
+    if getattr(profile, "major_change_requested", False):
+        return True
+    row = (
+        await db.execute(
+            select(Fee.id)
+            .where(
+                Fee.admission_profile_id == profile.id,
+                Fee.fee_type == FeeTypeEnum.tuition.value,
+                Fee.semester_no == 1,
+                Fee.status != FeeStatusEnum.cancelled.value,
+                Fee.awaiting_accountant_confirmation.is_(True),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return row is not None
+
+
+# Status pre-decision được phép mở chu kỳ đổi ngành (trước công bố kết quả — tránh
+# stale choice.decision=='admitted' bám ngành cũ). Post-decision cần reset
+# decision + xử quota/seat = ngoài scope v1.
+_MAJOR_CHANGE_PRE_DECISION_STATUSES = ("submitted", "resubmitted")
+
+
+async def maybe_open_major_change_cycle(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+    *,
+    allow_major_change: bool,
+) -> bool:
+    """Mở chu kỳ đổi ngành: set ``profile.major_change_requested=True`` nếu ĐỦ
+    điều kiện. Gọi từ ``admin_rollback_profile`` + ``request_revision`` TRƯỚC khi
+    transition (đọc status GỐC).
+
+    Điều kiện (mọi cái phải đúng, nếu không → bỏ qua, KHÔNG raise):
+      * flag ON + ``allow_major_change`` + ``uses_choice_engine``;
+      * status GỐC ∈ pre-decision ``{submitted, resubmitted}`` (post-decision bỏ
+        qua — stale admitted bám ngành cũ, reset decision ngoài scope);
+      * có HK1 tuition fee active (không có → không có gì để reprice).
+
+    Raise ``BusinessRuleViolation`` KHI ``allow_major_change`` nhưng active fee
+    đang ``awaiting_accountant_confirmation`` (single-cycle lock — không mở chu
+    kỳ 2 trước khi kế toán chốt).
+
+    Trả ``True`` nếu đã set cờ; ``False`` nếu bỏ qua.
+    """
+    if not settings.MAJOR_CHANGE_REPRICE_ENABLED or not allow_major_change:
+        return False
+    if not getattr(profile, "uses_choice_engine", False):
+        return False
+    if profile.status not in _MAJOR_CHANGE_PRE_DECISION_STATUSES:
+        return False
+    from app.services.enrollment_letter_service import (
+        _get_active_hk1_tuition_fee,
+    )
+    fee = await _get_active_hk1_tuition_fee(db, profile.id)
+    if fee is None:
+        return False
+    if fee.awaiting_accountant_confirmation:
+        raise BusinessRuleViolation(
+            "Còn một chu kỳ đổi ngành đang chờ kế toán xác nhận — không thể mở "
+            "chu kỳ đổi ngành mới."
+        )
+    profile.major_change_requested = True
+    log.info(
+        "major_change_cycle_opened",
+        profile_id=profile.id,
+        from_status=profile.status,
+        fee_id=fee.id,
+    )
+    return True
+
+
 def _academic_info_of_choice(choice: "models.AdmissionProfileChoice") -> Any:
     """OfferingAcademicInfo behind a choice's admission_path (or None).
 

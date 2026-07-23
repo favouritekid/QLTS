@@ -1432,6 +1432,7 @@ async def admin_rollback_profile(
     profile: "AdmissionProfile",
     reason: str,
     actor: Any,
+    allow_major_change: bool = False,
 ) -> Tuple[Dict[str, Any], Optional[Callable[[], Awaitable[None]]]]:
     """T17 admin-rollback: any non-final state → draft (admin-only).
 
@@ -1495,6 +1496,14 @@ async def admin_rollback_profile(
             rejector_id=_rej_id,
         )
 
+    # Đổi ngành: mở chu kỳ TRƯỚC transition (đọc status GỐC = rolled_back_from để
+    # kiểm pre-decision). Set major_change_requested nếu đủ điều kiện; raise nếu
+    # còn chu kỳ chờ kế toán. Flag OFF / post-decision → no-op.
+    from .fee_calculation_service import maybe_open_major_change_cycle
+    major_change_opened = await maybe_open_major_change_cycle(
+        db, profile, allow_major_change=allow_major_change
+    )
+
     _, callback = await state_service.transition(
         db, profile, "draft",
         actor=actor,
@@ -1503,6 +1512,7 @@ async def admin_rollback_profile(
         event_metadata={
             "rolled_back_from": rolled_back_from,
             "actor_id": getattr(actor, "id", None),
+            "major_change_requested": major_change_opened,
         },
     )
 
@@ -1511,6 +1521,7 @@ async def admin_rollback_profile(
             "profile_id": profile.id,
             "status": "draft",
             "rolled_back_from": rolled_back_from,
+            "major_change_requested": major_change_opened,
         },
         callback,
     )

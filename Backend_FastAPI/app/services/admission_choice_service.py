@@ -150,7 +150,18 @@ class AdmissionChoiceService:
         # round.end_date. Per locked decision: POST + PATCH gate, DELETE
         # vẫn allow. Reuse round_obj đã load ngay trên cho allow_multi_nv
         # check — không thêm query.
-        assert_round_open(round_obj, context_hint=_CHOICE_CRUD_HINT)
+        # Đổi ngành: BYPASS round-open khi admin đã cho phép — chống bẫy bất đối
+        # xứng (delete_choice miễn trừ assert_round_open, add_choice thì không) →
+        # sau khi round đóng officer xoá được NV nhưng KHÔNG thêm lại được, hồ sơ
+        # kẹt 0 NV không nộp lại được. Gate CẢ flag LẪN cờ profile (flag OFF → cũ).
+        from app.config import settings as _mc_settings
+        _mc_bypass_round = (
+            _mc_settings.MAJOR_CHANGE_REPRICE_ENABLED
+            and getattr(profile, "major_change_requested", False)
+            and profile.status in ("draft", "revision_requested")
+        )
+        if not _mc_bypass_round:
+            assert_round_open(round_obj, context_hint=_CHOICE_CRUD_HINT)
 
         # First choice luôn cho phép (Wave A single-NV vẫn ship 1 choice
         # via this path). Chỉ block ADD-NV-2-trở-lên khi flag tắt.
@@ -587,6 +598,18 @@ class AdmissionChoiceService:
         both exclude ``status = 'cancelled'`` (PR-2), so a cancelled row no
         longer reserves the ``(profile, tuition, semester_no)`` slot.
         """
+        # Đổi ngành: NỚI CÓ CHỦ ĐÍCH khi admin đã cho phép (major_change_requested)
+        # và hồ sơ ở draft/revision_requested. Officer được sửa NV dù đã đóng học
+        # phí; fee sẽ được reprice ở hook submit/resubmit. Gate CHẶT (không chỉ
+        # theo flag): CẢ feature flag LẪN cờ profile — flag OFF thì KHÔNG bao giờ
+        # bypass (mọi resubmit không liên quan giữ nguyên hành vi cũ).
+        from app.config import settings as _settings
+        if (
+            _settings.MAJOR_CHANGE_REPRICE_ENABLED
+            and getattr(profile, "major_change_requested", False)
+            and profile.status in ("draft", "revision_requested")
+        ):
+            return
         if await self.fee_repo.has_active_tuition_fee(profile.id):
             raise BusinessRuleViolation(
                 f"Hồ sơ đã phát sinh học phí, không thể {action}; "
