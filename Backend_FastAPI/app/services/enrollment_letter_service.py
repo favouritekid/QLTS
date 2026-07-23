@@ -84,6 +84,41 @@ async def _get_active_hk1_tuition_fee(db, profile_id: int):
     return (await db.execute(stmt)).scalars().first()
 
 
+async def supersede_current_letter(
+    db, profile_id: int, *, reason: str
+) -> int:
+    """Đóng dấu ``superseded_at`` cho bản giấy báo HIỆN HÀNH của hồ sơ (nếu có).
+
+    Dùng khi ĐỔI NGÀNH (``reprice_for_major_change``): giấy cũ ghi ngành + số
+    tiền CŨ, không còn hiệu lực. Chỉ GIẢI PHÓNG slot "bản hiện hành" (partial
+    unique index ``ix_enrollment_letter_current`` trên ``profile_id WHERE
+    superseded_at IS NULL``) — KHÔNG chèn bản mới (bản mới phát lại sau khi kế
+    toán confirm, qua ``issue_enrollment_letter``). File PDF cũ KHÔNG bị xoá:
+    route download cố ý không lọc ``superseded_at`` (đường phục hồi/đối chiếu).
+
+    Reuse ĐÚNG câu UPDATE mold của ``issue_enrollment_letter`` block (a). Trả về
+    số bản vừa đóng dấu (0 = hồ sơ chưa từng phát giấy → no-op, không lỗi).
+    """
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        update(models.EnrollmentLetter)
+        .where(
+            models.EnrollmentLetter.profile_id == profile_id,
+            models.EnrollmentLetter.superseded_at.is_(None),
+        )
+        .values(superseded_at=now)
+    )
+    n = result.rowcount or 0
+    if n:
+        log.info(
+            "enrollment_letter_superseded",
+            profile_id=profile_id,
+            superseded_count=n,
+            reason=reason,
+        )
+    return n
+
+
 async def _resolve_admitted_major(db, profile, fee):
     """Ngành + trình độ IN LÊN GIẤY, lấy theo NGUYỆN VỌNG (không phải cột
     snapshot trên Fee).
