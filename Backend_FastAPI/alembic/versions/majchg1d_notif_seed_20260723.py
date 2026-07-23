@@ -34,7 +34,7 @@ MAJOR_CHANGE_EVENTS = (
         "title": "Đổi ngành — chờ kế toán xác nhận",
         "message": (
             "Hồ sơ ${profile_code} đổi ngành ${old_major_name} → "
-            "${new_major_name}, học phí đã định giá lại (chênh lệch "
+            "${new_major_name}, học phí đã định giá lại (còn phải thu "
             "${delta_amount}). Cần kế toán xác nhận trước khi phát giấy báo."
         ),
         "ntype": "warning",

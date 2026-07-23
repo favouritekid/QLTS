@@ -513,9 +513,14 @@ async def get_fee(
         invoice_repo = fee_service.invoice_repo
         invoices = await invoice_repo.get_by_fee_id(fee_id)
 
-        return _build_fee_detail_response(
+        response = _build_fee_detail_response(
             fee, invoices, current_user_role=current_user.role
         )
+        # Đổi ngành: enrich A→B + còn phải thu cho dialog kế toán (review #2 — 3
+        # field này _build_fee_response để None; router async resolve tên ngành).
+        if response.awaiting_accountant_confirmation:
+            await _enrich_major_change_display(db, fee, response)
+        return response
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -556,6 +561,12 @@ async def get_fees_by_profile(
             paid_amount=f.paid_amount,
             remaining_amount=f.remaining_amount,
             status=f.status,
+            awaiting_accountant_confirmation=getattr(
+                f, "awaiting_accountant_confirmation", False
+            ),
+            can_confirm_major_change=_fee_can_confirm_major_change(
+                f, current_user.role
+            ),
         )
         for f in fees
     ]
@@ -613,6 +624,12 @@ async def get_profile_finance_summary(
                 status=f.status,
                 has_payable_invoice=any(
                     _invoice_is_payable(inv) for inv in (f.invoices or [])
+                ),
+                awaiting_accountant_confirmation=getattr(
+                    f, "awaiting_accountant_confirmation", False
+                ),
+                can_confirm_major_change=_fee_can_confirm_major_change(
+                    f, current_user.role
                 ),
             )
             for f in summary["fees"]
@@ -743,6 +760,14 @@ async def get_profile_collection(
                 can_cancel=_fee_can_cancel(f, current_user.role),
                 # base_amount prefills the drawer's "Tính lại" dialog.
                 base_amount=f.base_amount,
+                # Đổi ngành: cờ để drawer/worklist đánh dấu "chờ xác nhận" + bật
+                # nút confirm (review #5 — explicit-kwargs bypass from_attributes).
+                awaiting_accountant_confirmation=getattr(
+                    f, "awaiting_accountant_confirmation", False
+                ),
+                can_confirm_major_change=_fee_can_confirm_major_change(
+                    f, current_user.role
+                ),
             )
             for f in fees
         ],
@@ -1240,6 +1265,50 @@ def _build_fee_response(
             fee, current_user_role
         ),
     )
+
+
+async def _enrich_major_change_display(db, fee, response) -> None:
+    """Resolve tên ngành CŨ (major_change_from_academic_info_id) + MỚI
+    (resolved_major_id) + số còn phải thu, gán vào response cho dialog kế toán
+    (review #2). Best-effort: field nào không tra được để None (dialog fallback)."""
+    from sqlalchemy import select as _select
+
+    async def _major_name_by_ai(ai_id):
+        if ai_id is None:
+            return None
+        return (
+            await db.execute(
+                _select(models.MajorProgram.name)
+                .select_from(models.OfferingAcademicInfo)
+                .join(
+                    models.ProgramOffering,
+                    models.ProgramOffering.id
+                    == models.OfferingAcademicInfo.offering_id,
+                )
+                .join(
+                    models.MajorProgram,
+                    models.MajorProgram.id == models.ProgramOffering.program_id,
+                )
+                .where(models.OfferingAcademicInfo.id == ai_id)
+            )
+        ).scalar_one_or_none()
+
+    response.major_change_from_major_name = await _major_name_by_ai(
+        fee.major_change_from_academic_info_id
+    )
+    # Ngành MỚI: resolved_major_id đã trỏ ngành mới (reprice resnapshot force).
+    if fee.resolved_major_id is not None:
+        response.major_change_to_major_name = (
+            await db.execute(
+                _select(models.MajorProgram.name).where(
+                    models.MajorProgram.id == fee.resolved_major_id
+                )
+            )
+        ).scalar_one_or_none()
+    # Còn phải thu = final − paid − waived (đã chặn sinh dư nên >= 0). Raw decimal
+    # string — FE formatVND tự format (khớp zod z.string()).
+    outstanding = fee.final_amount - fee.paid_amount - fee.waived_amount
+    response.major_change_delta_amount = str(outstanding)
 
 
 def _build_fee_detail_response(

@@ -1325,7 +1325,7 @@ _FINANCE_USER_EVENTS: tuple = (
             _var("unit_id", "integer", "ID đơn vị", False),
             _var("old_major_name", "string", "Ngành cũ", False),
             _var("new_major_name", "string", "Ngành mới", False),
-            _var("delta_amount", "string", "Chênh lệch học phí (raw Decimal string)"),
+            _var("delta_amount", "string", "Số còn phải thu sau đổi ngành (VND đã format)"),
             _var("profile_code", "string", "Mã hồ sơ pseudo (HS-{id})", False),
             _var("letter_superseded", "boolean", "Giấy báo cũ đã hết hiệu lực"),
         ),

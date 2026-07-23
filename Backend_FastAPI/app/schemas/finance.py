@@ -404,12 +404,13 @@ class FeeResponse(FeeBase):
     # phần còn lại router TỰ tính (FE không đoán — hiệu chỉnh audit #4):
     #   can_confirm_major_change   quyền bấm xác nhận (accountant/admin + cờ bật)
     #   major_change_from/to_major_name  hiển thị "A→B" trong dialog kế toán
-    #   major_change_delta_amount  chênh lệch nghĩa vụ tiền sau reprice (±)
+    #   major_change_delta_amount  số CÒN PHẢI THU sau reprice (raw decimal str,
+    #                              FE tự format — khớp FE zod z.string())
     awaiting_accountant_confirmation: bool = False
     can_confirm_major_change: bool = False
     major_change_from_major_name: Optional[str] = None
     major_change_to_major_name: Optional[str] = None
-    major_change_delta_amount: Optional[Decimal] = None
+    major_change_delta_amount: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

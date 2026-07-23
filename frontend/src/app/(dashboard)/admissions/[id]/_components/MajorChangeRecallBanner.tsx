@@ -35,13 +35,41 @@ export function MajorChangeRecallBanner({ cycleOpen, candidateName }: Props) {
     `Nhà trường sẽ gửi giấy báo mới sau khi hoàn tất xác nhận học phí. ` +
     `Trân trọng.`
 
+  const [failed, setFailed] = React.useState(false)
+
   const handleCopy = async () => {
+    setFailed(false)
+    // navigator.clipboard là undefined trên HTTP (LAN test 192.168.x) → fallback
+    // execCommand qua textarea ẩn; nếu vẫn không được thì báo lỗi để officer
+    // copy tay, KHÔNG im lặng (review #13).
+    let ok = false
     try {
-      await navigator.clipboard.writeText(template)
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(template)
+        ok = true
+      }
+    } catch {
+      ok = false
+    }
+    if (!ok) {
+      try {
+        const ta = document.createElement("textarea")
+        ta.value = template
+        ta.style.position = "fixed"
+        ta.style.opacity = "0"
+        document.body.appendChild(ta)
+        ta.select()
+        ok = document.execCommand("copy")
+        document.body.removeChild(ta)
+      } catch {
+        ok = false
+      }
+    }
+    if (ok) {
       setCopied(true)
       window.setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Clipboard bị chặn (không HTTPS / quyền) — im lặng, officer copy tay.
+    } else {
+      setFailed(true)
     }
   }
 
@@ -73,6 +101,20 @@ export function MajorChangeRecallBanner({ cycleOpen, candidateName }: Props) {
         )}
         {copied ? "Đã copy câu mẫu" : "Copy câu mẫu nhắn thí sinh"}
       </Button>
+      {failed && (
+        <div className="mt-2">
+          <p className="mb-1 text-xs">
+            Không copy tự động được (trình duyệt chặn) — hãy chọn và copy tay:
+          </p>
+          <textarea
+            readOnly
+            value={template}
+            rows={4}
+            className="w-full resize-none rounded border border-amber-300 bg-white/70 p-2 text-xs dark:bg-transparent"
+            onFocus={(e) => e.currentTarget.select()}
+          />
+        </div>
+      )}
     </div>
   )
 }

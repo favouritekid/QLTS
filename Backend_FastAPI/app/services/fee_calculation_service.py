@@ -164,9 +164,20 @@ async def maybe_open_major_change_cycle(
     đang ``awaiting_accountant_confirmation`` (single-cycle lock — không mở chu
     kỳ 2 trước khi kế toán chốt).
 
+    ESCAPE HATCH (review #3): rollback/revision thường (``allow_major_change=False``)
+    CLEAR ``major_change_requested`` — cho admin un-stick hồ sơ kẹt (officer không
+    qua được validation ngành mới / bỏ dở). KHÔNG đụng ``awaiting_accountant_
+    confirmation`` trên fee (kế toán xử riêng).
+
     Trả ``True`` nếu đã set cờ; ``False`` nếu bỏ qua.
     """
-    if not settings.MAJOR_CHANGE_REPRICE_ENABLED or not allow_major_change:
+    if not settings.MAJOR_CHANGE_REPRICE_ENABLED:
+        return False
+    if not allow_major_change:
+        # Rollback/revision thường → reset cờ (escape hatch cho hồ sơ kẹt).
+        if getattr(profile, "major_change_requested", False):
+            profile.major_change_requested = False
+            log.info("major_change_cycle_cleared_by_plain_rollback", profile_id=profile.id)
         return False
     if not getattr(profile, "uses_choice_engine", False):
         return False
@@ -354,6 +365,7 @@ async def resnapshot_fee_academic_info_for_profile(
     profile_id: int,
     *,
     profile: "Optional[models.AdmissionProfile]" = None,
+    force: bool = False,
 ) -> int:
     """Re-snapshot ``Fee.resolved_*`` (academic_info / major / degree) for the
     non-cancelled fees of a profile — the SINGLE writer of the denormalized major
@@ -398,6 +410,14 @@ async def resnapshot_fee_academic_info_for_profile(
             )
         ).scalars().first()
     if profile is None:
+        return 0
+
+    # Đổi ngành: TRONG cửa sổ đổi ngành (major_change_requested) giá fee vẫn là
+    # ngành CŨ (reprice chỉ chạy khi nộp lại). Nếu resnapshot ghi resolved_* sang
+    # ngành MỚI ngay ở add/delete_choice thì finance list/drawer/status-counts hiển
+    # thị "ngành mới + số tiền cũ" suốt cửa sổ (fix review #7). Bỏ qua ở đây; reprice
+    # gọi lại với force=True SAU khi đã đổi giá → resolved_* + amount đồng bộ.
+    if not force and getattr(profile, "major_change_requested", False):
         return 0
 
     # Cheap existence guard FIRST: a profile with no non-cancelled fee has
@@ -1819,6 +1839,12 @@ class FeeCalculationService:
                 "Hồ sơ có nhiều/không có đợt học phí HK1 đang hoạt động — đổi "
                 "ngành cần xử tài chính thủ công (v1 chỉ hỗ trợ đúng 1 hoá đơn)."
             )
+        # ⚠️ ACCEPTED RISK (review #8 — ABBA deadlock, PLAUSIBLE/hiếm): reprice chạy
+        # BÊN TRONG profile lock (submit/resubmit giữ profile FOR UPDATE) rồi khoá
+        # invoice→fee; get_for_update KHÔNG có of= nên khoá lan cả profile+lead. Trái
+        # thứ tự với cancel_fee (fee→invoice). Vá THẬT = thêm of=Invoice/Fee cho MỌI
+        # get_for_update (đổi hành vi toàn bộ payment flow) → ngoài scope PR, làm ở
+        # đợt lock-order riêng. Flag OFF nên chưa phơi bày; đã ghi nhận trong memory.
         invoice = await self.invoice_repo.get_for_update(active_invoices[0].id)
         if invoice is None:
             raise BusinessRuleViolation(
@@ -1863,6 +1889,21 @@ class FeeCalculationService:
             fee.priced_from_academic_info_id is not None
             and fee.priced_from_academic_info_id == academic_info.id
         ):
+            return fee, False
+        # Fee CŨ/legacy (priced_from NULL, backfill chỉ điền khi resolved khác NULL):
+        # không tin được priced_from → so GIÁ đã tính. Nếu base/discount/final trùng
+        # giá hiện tại ⇒ không có gì đổi ⇒ no-op (tránh reprice + SUPERSEDE GIẤY hợp
+        # lệ vô cớ). Ngành đổi mà giá y hệt trên fee legacy là ca cực hiếm; ưu tiên
+        # không huỷ giấy đúng của nhóm legacy.
+        if (
+            fee.priced_from_academic_info_id is None
+            and new_base == fee.base_amount
+            and new_total_discount == fee.total_discount
+            and new_final == fee.final_amount
+        ):
+            # Vá priced_from cho fee legacy để lần sau drift-gate tin field này.
+            fee.priced_from_academic_info_id = academic_info.id
+            await self.db.flush()
             return fee, False
         # (a) Giảm học phí THỦ CÔNG → ngoài scope v1 (reprice DELETE/INSERT lại
         # dòng discount theo ngành mới sẽ làm RƠI giảm tay). Query tường minh
@@ -1998,8 +2039,10 @@ class FeeCalculationService:
         await InvoiceService(self.db).recompute_fee_from_invoices(fee.id)
 
         # (9) Cập nhật resolved_* sang ngành mới (filter/list/drawer/status-counts).
+        # force=True: vượt guard "skip khi major_change_requested" (giờ giá đã đổi
+        # nên resolved_* PHẢI đồng bộ theo — xem review #7).
         await resnapshot_fee_academic_info_for_profile(
-            self.db, profile.id, profile=profile
+            self.db, profile.id, profile=profile, force=True
         )
 
         # (10) Supersede giấy báo cũ (phương án c) — chỉ giải phóng slot "hiện
@@ -2010,6 +2053,9 @@ class FeeCalculationService:
             profile.id,
             reason="Đổi ngành — giấy báo cũ hết hiệu lực",
         )
+        # Stash số giấy vừa hết hiệu lực (transient, không persist) để hook dispatch
+        # đọc đúng letter_superseded thay vì hardcode True (fix review #15).
+        fee.__dict__["_mc_letter_superseded"] = superseded > 0
 
         # (11) Lead overlay: CHỈ khi settlement chuyển False→True (ngành rẻ hơn làm
         # paid đủ). Forward-only — KHÔNG dùng force (kéo lùi lead là regression SL1).
@@ -2074,6 +2120,27 @@ class FeeCalculationService:
         Lock invoice → fee (khớp luồng tiền, tránh ABBA). Require cờ đang bật.
         Idempotent: gọi lại khi cờ đã clear → ConflictError rõ nghĩa.
         """
+        # Kiểm fee TỒN TẠI (unit-scoped) TRƯỚC — fee_id không có → 404, KHÔNG lẫn
+        # với anomaly "0/2+ hoá đơn" (400). Tránh báo kế toán rà thủ công một fee
+        # không hề tồn tại (fix review #11 — CLAUDE.md not-found→404).
+        exists = (
+            await self.db.execute(
+                select(Fee.id)
+                .join(models.AdmissionProfile)
+                .join(models.Lead)
+                .where(
+                    Fee.id == fee_id,
+                    *(
+                        [models.Lead.unit_id == unit_id]
+                        if unit_id is not None
+                        else []
+                    ),
+                )
+            )
+        ).scalar_one_or_none()
+        if exists is None:
+            raise ResourceNotFoundError("Fee not found")
+
         active_invoices = list(
             (
                 await self.db.execute(
@@ -2186,7 +2253,8 @@ class FeeCalculationService:
             self.db,
             event=SystemEvents.MAJOR_CHANGE_CONFIRMED,
             payload=payload,
-            dedupe_key=f"fee:{fee.id}:major_change_confirmed",
+            # Gồm version → mỗi chu kỳ đổi ngành có key confirm riêng (review #4).
+            dedupe_key=f"fee:{fee.id}:v{fee.version}:major_change_confirmed",
             rooms=_rooms,
         )
 

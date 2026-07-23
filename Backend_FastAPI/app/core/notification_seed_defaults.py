@@ -267,7 +267,7 @@ NOTIFICATION_SEED_DEFAULTS: Dict[SystemEvents, Dict[str, Any]] = {
     },
     SystemEvents.MAJOR_CHANGE_AWAITING_CONFIRMATION: {
         "title_template": "Đổi ngành — chờ kế toán xác nhận",
-        "message_template": "Hồ sơ ${profile_code} đổi ngành ${old_major_name} → ${new_major_name}, học phí đã định giá lại (chênh lệch ${delta_amount}). Cần kế toán xác nhận trước khi phát giấy báo.",
+        "message_template": "Hồ sơ ${profile_code} đổi ngành ${old_major_name} → ${new_major_name}, học phí đã định giá lại (còn phải thu ${delta_amount}). Cần kế toán xác nhận trước khi phát giấy báo.",
         "notification_type": "warning",
         "recipient_config": {"resolver_type": "specific_users", "params": {}},
     },

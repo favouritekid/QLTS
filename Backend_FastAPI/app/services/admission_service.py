@@ -3825,12 +3825,33 @@ async def _populate_major_change_flag(
     Idempotent. PHẢI gọi ở MỌI nơi build response (mutations + GET detail + lean
     list + non-lean + update + reload) — miss chỗ nào thì FE nhận default False
     = false-negative im lặng (badge không hiện, nút giấy không bị ẩn).
+
+    Khi cycle open cũng STRIP ``issue_enrollment_letter`` khỏi permissions +
+    available_actions (review #6): server đã chặn phát giấy ở build_letter_data/
+    issue, nhưng permission flag KHÔNG gate cờ này nên nút vẫn hiện → bấm 400. Ẩn
+    ở đây (sau khi biết cờ) để nút thực sự tự ẩn, chỉ còn badge.
     """
     from app.services.fee_calculation_service import is_major_change_cycle_open
 
-    profile.major_change_cycle_open = await is_major_change_cycle_open(
-        db, profile
-    )
+    cycle_open = await is_major_change_cycle_open(db, profile)
+    _set_major_change_flag(profile, cycle_open)
+
+
+def _set_major_change_flag(
+    profile: models.AdmissionProfile, cycle_open: bool
+) -> None:
+    """Sync core: set transient + strip letter action khi cycle open. Tách ra để
+    đường lean/non-lean BATCH cờ (1 query/trang) tái dùng, không per-row query (#9)."""
+    profile.major_change_cycle_open = cycle_open
+    if cycle_open:
+        perms = getattr(profile, "permissions", None)
+        if isinstance(perms, dict):
+            perms["issue_enrollment_letter"] = False
+        actions = getattr(profile, "available_actions", None)
+        if isinstance(actions, list) and "issue_enrollment_letter" in actions:
+            profile.available_actions = [
+                a for a in actions if a != "issue_enrollment_letter"
+            ]
 
 
 async def _load_priority_audit_log(
@@ -5038,12 +5059,15 @@ async def get_profiles(
             profile.available_actions = _compute_list_actions(
                 profile, current_user, _docs
             )
-            profile.major_change_cycle_open = bool(
-                _settings.MAJOR_CHANGE_REPRICE_ENABLED
-                and (
-                    getattr(profile, "major_change_requested", False)
-                    or profile.id in _mc_awaiting_ids
-                )
+            _set_major_change_flag(
+                profile,
+                bool(
+                    _settings.MAJOR_CHANGE_REPRICE_ENABLED
+                    and (
+                        getattr(profile, "major_change_requested", False)
+                        or profile.id in _mc_awaiting_ids
+                    )
+                ),
             )
         return profiles, total_count
 
@@ -5059,6 +5083,25 @@ async def get_profiles(
         if all_docs:
             list_verifier_names = await _resolve_verifier_names(db, all_docs)
 
+    # Đổi ngành: BATCH awaiting-fee ids 1 query/trang (KHÔNG per-row → tránh N+1,
+    # #9), gated flag. Mirror đường lean.
+    from app.config import settings as _mc_nl_settings
+    _mc_nl_awaiting_ids: set = set()
+    if _mc_nl_settings.MAJOR_CHANGE_REPRICE_ENABLED and profiles:
+        _mc_nl_awaiting_ids = set(
+            (
+                await db.execute(
+                    select(models.Fee.admission_profile_id).where(
+                        models.Fee.admission_profile_id.in_([p.id for p in profiles]),
+                        models.Fee.fee_type == "tuition",
+                        models.Fee.semester_no == 1,
+                        models.Fee.status != "cancelled",
+                        models.Fee.awaiting_accountant_confirmation.is_(True),
+                    )
+                )
+            ).scalars().all()
+        )
+
     # Hydrate computed fields (same as detail API) using eager-loaded relations
     for profile in profiles:
         _calculate_and_update_totals(profile)
@@ -5068,10 +5111,16 @@ async def get_profiles(
             _compute_frontend_fields(
                 profile, current_user, docs, list_verifier_names
             )
-        # Đổi ngành: parity với detail (non-lean path KHÔNG qua
-        # _populate_unrefunded — pre-existing gap). Cheap: predicate short-circuit
-        # major_change_requested (no query) + gated flag.
-        await _populate_major_change_flag(db, profile)
+        _set_major_change_flag(
+            profile,
+            bool(
+                _mc_nl_settings.MAJOR_CHANGE_REPRICE_ENABLED
+                and (
+                    getattr(profile, "major_change_requested", False)
+                    or profile.id in _mc_nl_awaiting_ids
+                )
+            ),
+        )
 
     # Batch-resolve minor_correction state for the page in ONE query rather
     # than N path lookups. This keeps the list endpoint at exactly one
@@ -5333,6 +5382,8 @@ async def _reresolve_documents_snapshot(
     profile: "models.AdmissionProfile",
     admission_repo,
     current_user: Optional["models.User"],
+    *,
+    path_id_override: Optional[int] = None,
 ) -> None:
     """Re-resolve doc snapshot khi cultural/vocational đổi (feat audience).
 
@@ -5359,7 +5410,10 @@ async def _reresolve_documents_snapshot(
     if profile.status not in ("draft", "rejected", "revision_requested"):
         return
     applied = profile.applied_rules or {}
-    path_id = applied.get("admission_path_id")
+    # Đổi ngành: dùng path MỚI truyền vào (không đọc applied_rules.admission_path_id
+    # vì nó CHỦ ĐÍCH chưa rewrite tới khi submit/resubmit THÀNH CÔNG — giữ tham
+    # chiếu path gốc cho quota, xem _apply_major_change_snapshot / review #1).
+    path_id = path_id_override if path_id_override is not None else applied.get("admission_path_id")
     if path_id is None:
         return  # legacy / hồ sơ không có path snapshot → bỏ qua
 
@@ -6420,41 +6474,68 @@ async def _apply_major_change_snapshot(
     profile: "models.AdmissionProfile",
     admission_repo,
     current_user: Optional["models.User"],
+):
+    """Re-resolve DOC snapshot theo ngành MỚI (KHÔNG rewrite applied_rules path,
+    KHÔNG chạm quota). Gọi SỚM ở submit/resubmit (trước mandatory_docs check).
+
+    🔴 QUOTA/PATH KHÔNG làm ở đây (fix review #1): nếu rewrite applied_rules.
+    admission_path_id sớm rồi submit FAIL validation (nhánh soft-error commit),
+    lần retry mất tham chiếu path GỐC → −1 nhầm path → over/under-count. Vì thế
+    path rewrite + quota transfer dời sang ``_commit_major_change_path_quota``,
+    gọi CHỈ khi submit/resubmit THÀNH CÔNG (atomic). Doc-resolve dùng path MỚI
+    tường minh (path_id_override) nên không cần applied_rules đã rewrite.
+
+    Trả ``(old_path_id, new_path)`` cho caller commit lúc success.
+    """
+    path = await _resolve_major_change_choice_path(db, profile)
+    applied = profile.applied_rules or {}
+    old_path_id = applied.get("admission_path_id")
+
+    # Doc snapshot ngành mới (bộ giấy khác → mandatory_docs khác) — dùng path MỚI
+    # tường minh, KHÔNG đọc applied_rules.admission_path_id (chưa rewrite).
+    await _reresolve_documents_snapshot(
+        db, profile, admission_repo, current_user, path_id_override=path.id,
+    )
+    return old_path_id, path
+
+
+async def _commit_major_change_path_quota(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+    old_path_id,
+    new_path,
     *,
     increment_new_path: bool = False,
 ) -> None:
-    """Đồng bộ ``applied_rules`` (path/round/academic_info) + quota + doc snapshot
-    theo ngành MỚI khi officer đổi ngành. Gọi ở ``submit_and_evaluate`` +
-    ``resubmit_profile`` khi ``flag AND major_change_requested``, TRƯỚC cutoff/
-    eligibility/mandatory_docs read.
+    """Rewrite applied_rules[path/round/academic] sang ngành MỚI + chuyển quota:
+    −1 path cũ (hoàn +1 của lần submit gốc), và (nếu increment_new_path) +1 path
+    mới với quota guard. Gọi CHỈ khi submit/resubmit ĐÃ THÀNH CÔNG (atomic với
+    transition) — xem review #1.
 
-    QUOTA (đối xứng 2 nhánh — chống phantom Ở CẢ HAI):
-    Hồ sơ khi mở chu kỳ đang ở ``submitted``/``resubmitted`` ⇒ đã có +1 trên path
-    ĐANG áp dụng (từ lần submit gốc). Vì thế **LUÔN −1 path cũ** (không chỉ khi
-    đổi path) — để lần re-submit đếm lại đúng 1 lần. Ai +1 lại:
-      * ``submit_and_evaluate`` (admin_rollback→draft→submit): downstream atomic
-        downstream atomic increment (submit_and_evaluate else-branch) đọc applied_rules path (đã rewrite sang MỚI) → +1. Gọi
-        với ``increment_new_path=False``.
-      * ``resubmit_profile`` (request_revision→revision→resubmit): KHÔNG có
-        downstream increment ⇒ hàm này TỰ +1 path mới (quota guard). Gọi với
-        ``increment_new_path=True``.
-    → path cũ (nếu đổi) về đúng, path mới +1. Nếu KHÔNG đổi path: −1 rồi +1 = giữ
-    nguyên (đếm 1 lần). Cũng vá luôn double-count admin_rollback→submit pre-existing.
-
-    - Rewrite ``applied_rules[admission_path_id/admission_round_id/academic_info_id]``
-      (hợp lệ nhờ trigger whitelist 1F) → cutoff + quota + doc-resolve bám ngành MỚI.
-    - Re-resolve doc snapshot theo ngành mới (bộ giấy ngành khác → mandatory_docs khác).
+    - submit: increment_new_path=False (downstream atomic +1 ở else-branch, đọc
+      applied_rules path ĐÃ rewrite ở đây).
+    - resubmit: increment_new_path=True (không có downstream +1).
     """
     from sqlalchemy import text as _sa_text
 
-    path = await _resolve_major_change_choice_path(db, profile)
+    new_path_id = new_path.id
     applied = dict(profile.applied_rules or {})
-    old_path_id = applied.get("admission_path_id")
-    new_path_id = path.id
-    path_changed = str(old_path_id) != str(new_path_id)
+    if str(old_path_id) != str(new_path_id):
+        applied["admission_path_id"] = new_path_id
+        applied["admission_round_id"] = new_path.admission_round_id
+        applied["academic_info_id"] = new_path.academic_info_id
+        profile.applied_rules = applied
+        flag_modified(profile, "applied_rules")
+        await db.flush()
+        log.info(
+            "major_change_snapshot_applied",
+            profile_id=profile.id,
+            old_path_id=old_path_id,
+            new_path_id=new_path_id,
+        )
 
-    # LUÔN −1 path ĐANG áp dụng (hoàn +1 của lần submit gốc). Không phụ thuộc đổi
-    # path — re-submit sẽ +1 lại (submit: downstream; resubmit: bên dưới).
+    # −1 path GỐC (bù +1 của lần submit gốc — path rewrite ở trên nên downstream/
+    # bên dưới +1 vào path MỚI). Cùng transaction với transition → fail-safe.
     if old_path_id is not None:
         try:
             _old_pid = int(old_path_id)
@@ -6470,22 +6551,6 @@ async def _apply_major_change_snapshot(
                 {"pid": _old_pid},
             )
 
-    if path_changed:
-        applied["admission_path_id"] = new_path_id
-        applied["admission_round_id"] = path.admission_round_id
-        applied["academic_info_id"] = path.academic_info_id
-        profile.applied_rules = applied
-        flag_modified(profile, "applied_rules")
-        await db.flush()
-        log.info(
-            "major_change_snapshot_applied",
-            profile_id=profile.id,
-            old_path_id=old_path_id,
-            new_path_id=new_path_id,
-        )
-
-    # Nhánh resubmit KHÔNG có downstream increment → TỰ +1 path mới với quota
-    # guard (mirror submit_and_evaluate atomic submit counter, else-branch success). Quota đầy → 400.
     if increment_new_path and new_path_id is not None:
         inc_row = (
             await db.execute(
@@ -6504,9 +6569,6 @@ async def _apply_major_change_snapshot(
                 f"Đã đủ chỉ tiêu nộp hồ sơ cho đường tuyển sinh {new_path_id}. "
                 "Vui lòng chọn đợt tuyển sinh khác hoặc liên hệ admin."
             )
-
-    # Re-resolve doc snapshot cho ngành mới (đọc applied_rules path MỚI).
-    await _reresolve_documents_snapshot(db, profile, admission_repo, current_user)
 
 
 async def _major_name_of_academic_info(
@@ -6534,7 +6596,14 @@ async def _major_name_of_academic_info(
                 .where(models.OfferingAcademicInfo.id == int(ai_id))
             )
         ).scalar_one_or_none()
-    except Exception:
+    except Exception as exc:
+        # Best-effort (chỉ display tên ngành trong thông báo) nhưng KHÔNG nuốt
+        # câm — LOG để lỗi DB thật (join hỏng / txn abort) không vô hình (#14).
+        log.warning(
+            "major_name_of_academic_info_failed",
+            academic_info_id=ai_id,
+            error=str(exc),
+        )
         return None
 
 
@@ -6590,12 +6659,14 @@ async def _reprice_on_resubmit_if_major_change(
     new_major_name = await _major_name_of_academic_info(
         db, repriced_fee.resolved_academic_info_id
     )
-    # Số còn phải thu sau đổi ngành (>=0 do đã chặn sinh dư) — actionable cho kế toán.
-    delta_amount = (
+    # Số CÒN PHẢI THU sau đổi ngành (>=0 do đã chặn sinh dư) — actionable cho kế
+    # toán. Format VND có dấu chấm nghìn (review #10 — thay str(Decimal) thô).
+    outstanding = (
         repriced_fee.final_amount
         - repriced_fee.paid_amount
         - repriced_fee.waived_amount
     )
+    outstanding_vnd = f"{int(outstanding):,}".replace(",", ".") + " ₫"
 
     # Recipients = kế toán + admin active (specific_users, fail-closed).
     recipient_ids = list(
@@ -6617,9 +6688,12 @@ async def _reprice_on_resubmit_if_major_change(
         "unit_id": getattr(_lead, "unit_id", None) if _lead else None,
         "old_major_name": old_major_name,
         "new_major_name": new_major_name,
-        "delta_amount": str(delta_amount),
+        # Key giữ tên delta_amount (template dùng ${delta_amount}) nhưng NGHĨA =
+        # còn phải thu, đã format VND (message sửa nhãn 'còn phải thu' — review #10).
+        "delta_amount": outstanding_vnd,
         "profile_code": f"HS-{profile.id}",
-        "letter_superseded": True,
+        # Đọc số giấy THẬT vừa hết hiệu lực (reprice stash), không hardcode (#15).
+        "letter_superseded": bool(repriced_fee.__dict__.get("_mc_letter_superseded", False)),
         "user_ids": recipient_ids,
     }
     from app.services.notification_dispatcher import (
@@ -6631,7 +6705,10 @@ async def _reprice_on_resubmit_if_major_change(
         db,
         event=SystemEvents.MAJOR_CHANGE_AWAITING_CONFIRMATION,
         payload=payload,
-        dedupe_key=f"fee:{repriced_fee.id}:major_change_awaiting",
+        # Gồm version để MỖI CHU KỲ đổi ngành (reprice bump version) có key riêng —
+        # nếu key chỉ theo fee.id thì chu kỳ 2 (A→B→C) bị dedupe mất thông báo kế
+        # toán (review #4). notification dedupe lookup không có time-window.
+        dedupe_key=f"fee:{repriced_fee.id}:v{repriced_fee.version}:major_change_awaiting",
         rooms=_rooms,
     )
 
@@ -6757,14 +6834,18 @@ async def submit_and_evaluate(
             "Only draft profiles can be submitted."
         )
 
-    # Đổi ngành: đồng bộ applied_rules (path/round/academic_info) + quota + doc
-    # snapshot theo ngành MỚI TRƯỚC cutoff + eligibility + mandatory_docs read.
-    # Gate CHẶT (flag AND cờ profile) — flag OFF/không-đổi-ngành giữ hành vi cũ.
+    # Đổi ngành: re-resolve DOC snapshot theo ngành MỚI TRƯỚC mandatory_docs read.
+    # KHÔNG rewrite applied_rules.path / quota ở đây — dời sang nhánh SUCCESS
+    # (_commit_major_change_path_quota) để validation-fail không để lại quota lệch
+    # (review #1). Gate CHẶT (flag AND cờ profile).
     from app.config import settings as _mc_submit_settings
-    if _mc_submit_settings.MAJOR_CHANGE_REPRICE_ENABLED and getattr(
+    _mc_submit_active = _mc_submit_settings.MAJOR_CHANGE_REPRICE_ENABLED and getattr(
         profile, "major_change_requested", False
-    ):
-        await _apply_major_change_snapshot(
+    )
+    _mc_old_path_id = None
+    _mc_new_path = None
+    if _mc_submit_active:
+        _mc_old_path_id, _mc_new_path = await _apply_major_change_snapshot(
             db, profile, admission_repo, current_user
         )
 
@@ -7214,6 +7295,16 @@ async def submit_and_evaluate(
             None,  # No post-commit callback when validation failed
         )
     else:
+        # Đổi ngành: validation ĐÃ PASS → giờ mới rewrite applied_rules sang path
+        # MỚI + −1 path GỐC (atomic với transition; downstream +1 dưới đây đọc
+        # applied_rules ĐÃ rewrite → +1 path mới). Nếu validation fail ở nhánh
+        # trên thì KHÔNG tới đây → quota không lệch (review #1).
+        if _mc_submit_active and _mc_new_path is not None:
+            await _commit_major_change_path_quota(
+                db, profile, _mc_old_path_id, _mc_new_path,
+                increment_new_path=False,
+            )
+
         # Phase 2 v8.2 PR-2B v2 — Atomic submit per-path counter (SPEC
         # §4.1 line 4100-4107 pattern). Tier 2 quota guard: increment
         # admission_path.submission_count atomically, block if
@@ -10822,11 +10913,17 @@ async def resubmit_profile(
         profile, "major_change_requested", False
     ):
         from app.repositories import AdmissionRepository as _MCAdmissionRepo
-        await _apply_major_change_snapshot(
+        # Doc snapshot ngành mới TRƯỚC validate; path rewrite + quota transfer
+        # SAU khi validate PASS (validate raise → rollback, không để lại quota
+        # lệch — review #1). resubmit không có downstream +1 nên tự +1.
+        _mc_resub_old_path, _mc_resub_new_path = await _apply_major_change_snapshot(
             db, profile, _MCAdmissionRepo(db), officer,
-            increment_new_path=True,  # resubmit KHÔNG có downstream +1 (submit else-branch)
         )
         await _validate_eligibility_all_choices(db, profile)
+        await _commit_major_change_path_quota(
+            db, profile, _mc_resub_old_path, _mc_resub_new_path,
+            increment_new_path=True,
+        )
 
     # STATE CHANGE — caller still captures old_status for the legacy
     # bundle + commission callback below; transition() also captures

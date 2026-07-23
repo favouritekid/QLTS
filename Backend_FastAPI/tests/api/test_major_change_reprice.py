@@ -353,9 +353,13 @@ async def test_reprice_drift_gate_true_noop(
 async def test_quota_snapshot_resubmit_increments_new_path(
     seed_lead_dependencies, major_change_on
 ):
-    """B2 REGRESSION: _apply_major_change_snapshot(increment_new_path=True) —
-    path cũ A −1, path mới B +1 (resubmit KHÔNG có downstream +1)."""
-    from app.services.admission_service import _apply_major_change_snapshot
+    """B2 REGRESSION (post review #1): quota transfer dời sang
+    _commit_major_change_path_quota (gọi SAU validate). resubmit increment=True →
+    path cũ A −1, path mới B +1."""
+    from app.services.admission_service import (
+        _apply_major_change_snapshot,
+        _commit_major_change_path_quota,
+    )
     from app.repositories import AdmissionRepository
 
     majors = await _seed_two_majors(
@@ -387,8 +391,11 @@ async def test_quota_snapshot_resubmit_increments_new_path(
             .options(selectinload(models.AdmissionProfile.lead))
             .where(models.AdmissionProfile.id == ids["profile_id"])
         )).scalar_one()
-        await _apply_major_change_snapshot(
-            db, profile, AdmissionRepository(db), None, increment_new_path=True,
+        old_path, new_path = await _apply_major_change_snapshot(
+            db, profile, AdmissionRepository(db), None,
+        )
+        await _commit_major_change_path_quota(
+            db, profile, old_path, new_path, increment_new_path=True,
         )
         await db.commit()
 
@@ -399,10 +406,13 @@ async def test_quota_snapshot_resubmit_increments_new_path(
 async def test_quota_snapshot_submit_defers_increment(
     seed_lead_dependencies, major_change_on
 ):
-    """Nhánh submit (increment_new_path=False): chỉ −1 path cũ (downstream :else +1
-    ở submit_and_evaluate mới +1 path mới — KHÔNG test ở đây). Xác nhận KHÔNG
-    tự +1 để tránh double-count."""
-    from app.services.admission_service import _apply_major_change_snapshot
+    """Nhánh submit (increment=False): chỉ −1 path cũ (downstream else-branch của
+    submit_and_evaluate mới +1 path mới — KHÔNG test ở đây). Xác nhận
+    _commit_major_change_path_quota KHÔNG tự +1 để tránh double-count."""
+    from app.services.admission_service import (
+        _apply_major_change_snapshot,
+        _commit_major_change_path_quota,
+    )
     from app.repositories import AdmissionRepository
 
     majors = await _seed_two_majors(
@@ -429,13 +439,62 @@ async def test_quota_snapshot_submit_defers_increment(
             .options(selectinload(models.AdmissionProfile.lead))
             .where(models.AdmissionProfile.id == ids["profile_id"])
         )).scalar_one()
-        await _apply_major_change_snapshot(
-            db, profile, AdmissionRepository(db), None, increment_new_path=False,
+        old_path, new_path = await _apply_major_change_snapshot(
+            db, profile, AdmissionRepository(db), None,
+        )
+        await _commit_major_change_path_quota(
+            db, profile, old_path, new_path, increment_new_path=False,
         )
         await db.commit()
 
     assert await _path_count(majors["path_a"]) == 4, "path cũ chưa −1"
     assert await _path_count(majors["path_b"]) == 0, "submit nhánh KHÔNG được tự +1 (double-count)"
+
+
+async def test_quota_snapshot_alone_leaves_quota_untouched(
+    seed_lead_dependencies, major_change_on
+):
+    """REGRESSION #1: _apply_major_change_snapshot (gọi SỚM, trước validation)
+    KHÔNG được đụng quota — nếu submit fail validation (không tới _commit) thì
+    submission_count không lệch. Chứng minh −1 đã dời khỏi hàm snapshot."""
+    from app.services.admission_service import _apply_major_change_snapshot
+    from app.repositories import AdmissionRepository
+
+    majors = await _seed_two_majors(
+        seed_lead_dependencies,
+        price_a=Decimal("6500000"), price_b=Decimal("9200000"),
+    )
+    ids = await _seed_profile_fee_invoice(
+        seed_lead_dependencies, majors,
+        choice_tag="b", priced_from_tag="a", resolved_tag="a",
+        price_a=Decimal("6500000"), paid=Decimal("3000000"),
+    )
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(update(models.AdmissionPath)
+                .where(models.AdmissionPath.id == majors["path_a"])
+                .values(submission_count=5))
+            await s.execute(update(models.AdmissionPath)
+                .where(models.AdmissionPath.id == majors["path_b"])
+                .values(submission_count=3))
+
+    async with AsyncSessionLocal() as db:
+        profile = (await db.execute(
+            select(models.AdmissionProfile)
+            .options(selectinload(models.AdmissionProfile.lead))
+            .where(models.AdmissionProfile.id == ids["profile_id"])
+        )).scalar_one()
+        old_path, new_path = await _apply_major_change_snapshot(
+            db, profile, AdmissionRepository(db), None,
+        )
+        await db.commit()  # mô phỏng commit sau validation-FAIL (không _commit quota)
+
+    # Quota GIỮ NGUYÊN — snapshot chỉ đổi doc, không đụng submission_count.
+    assert await _path_count(majors["path_a"]) == 5, "snapshot KHÔNG được −1 (leak #1)"
+    assert await _path_count(majors["path_b"]) == 3
+    # applied_rules.admission_path_id CHƯA rewrite (giữ path gốc A cho retry).
+    fresh = await _load_profile(ids["profile_id"])
+    assert str((fresh.applied_rules or {}).get("admission_path_id")) == str(majors["path_a"])
 
 
 # ===========================================================================
