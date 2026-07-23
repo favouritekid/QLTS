@@ -151,6 +151,10 @@ class FunnelStage(BaseModel):
     is_final: bool  # PipelineStage.is_final_stage
     color_code: str
     current: int = 0  # lead ĐANG ở giai đoạn này (mỗi lead đúng 1 giai đoạn)
+    # Mô hình phễu do BACKEND tính (FE chỉ render — thin-client):
+    reached: int = 0  # lũy kế "từng đạt bậc này" trên đường phễu; bậc leak = current
+    conversion_pct: Optional[float] = None  # % chuyển tiếp từ bậc path trước (0..100)
+    is_leak: bool = False  # bậc rời phễu (terminal âm) — FE hiển thị tách, không thuộc path
 
 
 class PipelineFunnelResponse(ScopedReport):

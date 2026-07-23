@@ -118,12 +118,18 @@ class AdmissionReportService:
 
     # ------------------------------------------------------------ cohort window
     async def _cohort_ranges(
-        self, academic_year: int, round_code: Optional[str]
+        self,
+        academic_year: int,
+        round_code: Optional[str],
+        *,
+        skip_undated: bool = False,
     ) -> list[WindowRange]:
         """VN [start 00:00, end+1day 00:00) windows for the year's round(s).
 
-        Fail-closed: a selected round missing start/end raises (don't silently span
-        everything). ``round_code`` not found → 404.
+        ``round_code`` not found → 404. A round missing start/end normally raises
+        (fail-closed — the weekly cockpit). ``skip_undated=True`` (the overview
+        funnel) SKIPS such rounds instead, so one misconfigured round can't 400 the
+        whole "tất cả đợt" view.
         """
         stmt = select(
             models.OfferingAdmissionRound.round_code,
@@ -140,6 +146,8 @@ class AdmissionReportService:
         ranges: list[WindowRange] = []
         for rc, start, end in rows:
             if start is None or end is None:
+                if skip_undated:
+                    continue
                 raise BusinessRuleViolation(
                     detail=(
                         f"Đợt {rc} thiếu ngày bắt đầu/kết thúc — "
@@ -154,6 +162,32 @@ class AdmissionReportService:
                 )
             )
         return ranges
+
+    async def _assert_round_exists(
+        self, academic_year: int, round_code: Optional[str]
+    ) -> None:
+        """404 if a specific ``round_code`` is given but not configured for the year.
+
+        Trend/matrix scope profiles via ``resolve_profiles`` (which silently keeps
+        round=None profiles), so without this a typo'd round returns 200 with a
+        misleading subset — this makes them fail like the funnel/``_cohort_ranges``.
+        """
+        if round_code is None:
+            return
+        exists = (
+            await self.db.execute(
+                select(models.OfferingAdmissionRound.id)
+                .where(
+                    models.OfferingAdmissionRound.academic_year == academic_year,
+                    models.OfferingAdmissionRound.round_code == round_code,
+                )
+                .limit(1)
+            )
+        ).first()
+        if exists is None:
+            raise ResourceNotFoundError(
+                detail=f"Không tìm thấy đợt {round_code} năm {academic_year}."
+            )
 
     # ----------------------------------------------------------------- filters
     async def get_filter_options(self, academic_year: Optional[int]) -> ReportFilters:
@@ -183,18 +217,9 @@ class AdmissionReportService:
         unit_id: Optional[int] = None,
     ) -> AdmissionWeeklyReportResponse:
         scope_unit_id = self._resolve_scope(current_user, unit_id)
-        # Implicit week for a NON-current academic_year: anchor INSIDE that year so
-        # the week + cumulative cutoffs stay in-year (today's week would compute
-        # cutoffs outside it). Future → ISO week 1 (Jan 4; cumulative ~0, chưa bắt
-        # đầu); past → last ISO week (Dec 28; cumulative ≈ trọn năm). Both dates are
-        # always inside the year's own ISO weeks.
-        anchor = week_start
-        if anchor is None and academic_year != today_vn().year:
-            anchor = (
-                date(academic_year, 1, 4)
-                if academic_year > today_vn().year
-                else date(academic_year, 12, 28)
-            )
+        # Anchor the implicit week INSIDE the academic year via the shared helper —
+        # one source of truth with the overview panels (see ``_default_anchor``).
+        anchor = self._default_anchor(academic_year, week_start)
         week_meta, week = self._compute_week(anchor)
         # An EXPLICIT week_start before the academic year is a stale bookmark → reject
         # on the NORMALIZED ISO year (ISO week 1's Monday can fall in the prior Dec).
@@ -372,29 +397,25 @@ class AdmissionReportService:
         round_code: Optional[str] = None,
         unit_id: Optional[int] = None,
     ) -> PipelineFunnelResponse:
-        """Lead theo giai đoạn pipeline hiện tại (cohort = đợt/năm, scope IDOR)."""
+        """Lead theo giai đoạn pipeline hiện tại (cohort = đợt/năm, scope IDOR).
+
+        Funnel bỏ qua đợt thiếu ngày (``skip_undated=True``) để 1 đợt cấu hình lỗi
+        không 400 cả view; đợt không tồn tại vẫn 404. Mô hình phễu (reached /
+        conversion / leak) do BACKEND tính (FE render nguyên) — xem ``_build_funnel_stages``.
+        """
         scope_unit_id = self._resolve_scope(current_user, unit_id)
-        cohort_ranges = await self._cohort_ranges(academic_year, round_code)
+        cohort_ranges = await self._cohort_ranges(
+            academic_year, round_code, skip_undated=True
+        )
         stages_meta, counts, total = await self.repo.pipeline_funnel_counts(
             cohort_ranges, scope_unit_id, None
         )
-        stages = [
-            FunnelStage(
-                stage_id=sid,
-                name=name,
-                order=order,
-                is_final=fin,
-                color_code=color,
-                current=counts.get(sid, 0),
-            )
-            for sid, name, order, fin, color in stages_meta
-        ]
         return PipelineFunnelResponse(
             academic_year=academic_year,
             round_code=round_code,
             scope_unit_id=scope_unit_id,
             total_leads=total,
-            stages=stages,
+            stages=self._build_funnel_stages(stages_meta, counts),
         )
 
     # ------------------------------------------------------- overview: trend
@@ -410,14 +431,24 @@ class AdmissionReportService:
         """N tuần tích luỹ (nộp/đủ ĐK/nhập học) — mỗi điểm là mốc first-transition
         < hết tuần đó. Resolve hồ sơ 1 lần rồi bucket, không query lại mỗi tuần."""
         scope_unit_id = self._resolve_scope(current_user, unit_id)
+        await self._assert_round_exists(academic_year, round_code)
         end_meta, _ = self._compute_week(self._default_anchor(academic_year, None))
         dims, _ = await self.repo.resolve_profiles(
             academic_year, scope_unit_id, None, round_code
         )
         ts = await self.repo.milestone_timestamps(list(dims.keys()))
+        # A FUTURE academic_year anchors at Jan-4 (ISO week 1); walk FORWARD so the
+        # axis stays in-year (walking back would label weeks in year-1). Current/past
+        # years walk backward from the anchor week. Both produce points old → new.
+        future = academic_year > today_vn().year
         points: list[TrendPoint] = []
-        for i in range(weeks - 1, -1, -1):  # cũ → mới
-            wmeta, wrange = self._compute_week(end_meta.week_start - timedelta(weeks=i))
+        for k in range(weeks):
+            base = (
+                end_meta.week_start + timedelta(weeks=k)
+                if future
+                else end_meta.week_start - timedelta(weeks=(weeks - 1 - k))
+            )
+            wmeta, wrange = self._compute_week(base)
             cutoff = wrange.end_excl
             points.append(
                 TrendPoint(
@@ -461,6 +492,7 @@ class AdmissionReportService:
         ngành"; unassigned → hàng "Chưa gán cán bộ".
         """
         scope_unit_id = self._resolve_scope(current_user, unit_id)
+        await self._assert_round_exists(academic_year, round_code)
         _, week = self._compute_week(self._default_anchor(academic_year, None))
         dims, _major_by_id = await self.repo.resolve_profiles(
             academic_year, scope_unit_id, None, round_code
@@ -491,17 +523,16 @@ class AdmissionReportService:
                 officer_names[oid] = resolved.get(oid, f"Cán bộ #{oid}")
 
         idx = 0 if metric == "enrolled" else 1
-        o_total = {
-            o: sum(v[idx] for (oo, _m), v in cells.items() if oo == o)
-            for o in officer_names
-        }
-        m_total = {
-            m: sum(v[idx] for (_o, mm), v in cells.items() if mm == m) for m in majors
-        }
+        # Single pass over cells → O(cells), not O(officers×cells + majors×cells).
+        o_total: dict = {}
+        m_total: dict = {}
+        for (o, m), v in cells.items():
+            o_total[o] = o_total.get(o, 0) + v[idx]
+            m_total[m] = m_total.get(m, 0) + v[idx]
         officer_ids = sorted(
-            officer_names, key=lambda o: (o is None, -o_total[o])
+            officer_names, key=lambda o: (o is None, -o_total.get(o, 0))
         )
-        major_ids = sorted(majors, key=lambda m: (m is None, -m_total[m]))
+        major_ids = sorted(majors, key=lambda m: (m is None, -m_total.get(m, 0)))
 
         officers_out = [
             MatrixOfficer(
@@ -542,6 +573,53 @@ class AdmissionReportService:
         )
 
     # --------------------------------------------------------------- helpers
+    @staticmethod
+    def _build_funnel_stages(
+        stages_meta: list, counts: dict
+    ) -> list[FunnelStage]:
+        """Backend owns the funnel model (thin-client): from ordered stage meta
+        ``(id, name, order, is_final, color)`` + current counts, compute per-stage
+        ``reached`` (cumulative on the success path), ``conversion_pct`` (vs the
+        previous path stage) and mark the drop-off (``is_leak``) stage.
+
+        Leak = highest-``order`` final stage (e.g. "Không đi học"); the rest form the
+        narrowing path where reached[k] = Σ current at/below k (a lead at stage k
+        passed every earlier stage). Pure + unit-testable; the FE renders it verbatim.
+        """
+        ordered = sorted(stages_meta, key=lambda s: s[2])  # by order
+        finals = [s for s in ordered if s[3]]  # is_final
+        leak_id = finals[-1][0] if finals else None  # highest-order final = drop-off
+        path = [s for s in ordered if s[0] != leak_id]
+        reached: dict = {}
+        running = 0
+        for s in reversed(path):  # bottom-up cumulative
+            running += counts.get(s[0], 0)
+            reached[s[0]] = running
+        out: list[FunnelStage] = []
+        prev_reached: Optional[int] = None
+        for sid, name, order, is_final, color in ordered:
+            cur = counts.get(sid, 0)
+            if sid == leak_id:
+                out.append(
+                    FunnelStage(
+                        stage_id=sid, name=name, order=order, is_final=is_final,
+                        color_code=color, current=cur, reached=cur,
+                        conversion_pct=None, is_leak=True,
+                    )
+                )
+                continue
+            r = reached.get(sid, 0)
+            conv = round(r / prev_reached * 100, 1) if prev_reached else None
+            out.append(
+                FunnelStage(
+                    stage_id=sid, name=name, order=order, is_final=is_final,
+                    color_code=color, current=cur, reached=r,
+                    conversion_pct=conv, is_leak=False,
+                )
+            )
+            prev_reached = r
+        return out
+
     @staticmethod
     def _sort_key(row: ReportRow):
         # buckets to the bottom; real rows by activity (hồ sơ nộp lũy kế, rồi lead).

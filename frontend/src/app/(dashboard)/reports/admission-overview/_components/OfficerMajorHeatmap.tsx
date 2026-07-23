@@ -108,7 +108,14 @@ export function OfficerMajorHeatmap({
                         )}
                         style={
                           v > 0
-                            ? { backgroundColor: `hsl(var(--primary) / ${alpha})` }
+                            ? {
+                                // `--primary` is a hex token (not HSL channels), so
+                                // `hsl(var(--primary)/α)` is invalid; color-mix tints
+                                // it with transparency in both themes.
+                                backgroundColor: `color-mix(in srgb, var(--primary) ${Math.round(
+                                  alpha * 100,
+                                )}%, transparent)`,
+                              }
                             : undefined
                         }
                       >

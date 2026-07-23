@@ -65,7 +65,7 @@ export function OverviewTrend({ trend }: { trend: AdmissionTrend }) {
           contentStyle={{
             fontSize: 12,
             borderRadius: 8,
-            border: "1px solid hsl(var(--border))",
+            border: "1px solid var(--border)",
           }}
         />
         <Legend wrapperStyle={{ fontSize: 12 }} />

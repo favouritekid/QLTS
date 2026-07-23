@@ -7,32 +7,23 @@ import type { PipelineFunnel } from "@/lib/zod/reports";
 const nf = new Intl.NumberFormat("vi-VN");
 
 /**
- * Pipeline funnel — leads by current stage, rendered as a narrowing "reached"
- * funnel. The highest-order final stage (e.g. "Không đi học") is the leak, shown
- * apart; the remaining ordered stages form the path where reached[k] = Σ current
- * for path stages at or below k (a lead at stage k has passed every earlier one).
- * Bar colour is the stage's own configured pipeline colour (consistent with how
- * stages appear elsewhere in the app).
+ * Pipeline funnel — pure renderer (thin-client). The backend owns the funnel
+ * model: each stage carries `reached` (cumulative on the success path),
+ * `conversion_pct`, and an `is_leak` flag for the drop-off stage. This component
+ * only lays them out and normalises bar width to the widest path stage. Bar
+ * colour is the stage's own configured pipeline colour.
  */
 export function OverviewFunnel({ funnel }: { funnel: PipelineFunnel }) {
-  const { path, leak, reached, maxReached } = React.useMemo(() => {
-    const sorted = [...funnel.stages].sort((a, b) => a.order - b.order);
-    const finals = sorted.filter((s) => s.is_final);
-    const leakStage = finals.length ? finals[finals.length - 1] : null; // highest-order final = drop-off
-    const pathStages = sorted.filter((s) => s !== leakStage);
-    const acc: Record<string, number> = {};
-    let running = 0;
-    for (let i = pathStages.length - 1; i >= 0; i--) {
-      running += pathStages[i].current;
-      acc[pathStages[i].stage_id] = running;
-    }
-    return {
-      path: pathStages,
-      leak: leakStage,
-      reached: acc,
-      maxReached: pathStages.length ? acc[pathStages[0].stage_id] : 0,
-    };
-  }, [funnel]);
+  const path = React.useMemo(
+    () =>
+      funnel.stages.filter((s) => !s.is_leak).sort((a, b) => a.order - b.order),
+    [funnel],
+  );
+  const leak = React.useMemo(
+    () => funnel.stages.find((s) => s.is_leak),
+    [funnel],
+  );
+  const maxReached = path.length ? Math.max(...path.map((s) => s.reached)) : 0;
 
   if (funnel.total_leads === 0) {
     return (
@@ -44,17 +35,14 @@ export function OverviewFunnel({ funnel }: { funnel: PipelineFunnel }) {
 
   return (
     <div className="space-y-2.5">
-      {path.map((s, i) => {
-        const value = reached[s.stage_id] ?? 0;
-        const width = maxReached ? (value / maxReached) * 100 : 0;
-        const prev = i > 0 ? reached[path[i - 1].stage_id] ?? 0 : null;
-        const conv = prev && prev > 0 ? (value / prev) * 100 : null;
+      {path.map((s) => {
+        const width = maxReached ? (s.reached / maxReached) * 100 : 0;
         return (
           <div key={s.stage_id}>
             <div className="flex items-baseline justify-between gap-2 text-sm">
               <span className="truncate font-medium">{s.name}</span>
               <span className="shrink-0 font-semibold tabular-nums">
-                {nf.format(value)}
+                {nf.format(s.reached)}
               </span>
             </div>
             <div className="mt-1 h-2.5 w-full overflow-hidden rounded-full bg-muted">
@@ -66,9 +54,9 @@ export function OverviewFunnel({ funnel }: { funnel: PipelineFunnel }) {
                 }}
               />
             </div>
-            {conv != null && (
+            {s.conversion_pct != null && (
               <div className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-                ↓ {conv.toFixed(0)}% chuyển tiếp
+                ↓ {s.conversion_pct.toFixed(0)}% chuyển tiếp
               </div>
             )}
           </div>

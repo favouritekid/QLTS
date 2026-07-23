@@ -87,7 +87,11 @@ export function QuotaRunway({ rows }: { rows: ReportRow[] }) {
                 </span>
               )}
               <span className="truncate text-sm font-medium" title={row.label}>
-                {row.label.replace(/\s*\([^)]*\)\s*$/, "")}
+                {/* strip ONLY the exact "(code)" suffix (code is shown separately),
+                    never a meaningful trailing parenthetical in the name */}
+                {row.code && row.label.endsWith(`(${row.code})`)
+                  ? row.label.slice(0, -(row.code.length + 2)).trimEnd()
+                  : row.label}
               </span>
             </div>
             <div className="col-span-2 h-2.5 overflow-hidden rounded-full bg-muted sm:col-span-1">

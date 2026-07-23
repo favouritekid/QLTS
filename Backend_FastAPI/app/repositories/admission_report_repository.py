@@ -437,39 +437,15 @@ class AdmissionReportRepository:
         """
         if not profile_ids:
             return {}
-        hist = models.AdmissionProfileStatusHistory
+        # Reuse the single milestone-timestamp source (``milestone_timestamps``) so
+        # this (weekly cockpit + heatmap) and the trend panel can NEVER diverge on
+        # the milestone taxonomy — one place owns the status sets + backfill skip.
+        firsts = await self.milestone_timestamps(profile_ids)
         result: dict[int, dict[str, bool]] = {}
-
-        async def _first_into(status_pred):
-            rows = await self.db.execute(
-                select(hist.profile_id, func.min(hist.occurred_at))
-                .where(
-                    hist.profile_id.in_(profile_ids),
-                    # Exclude the phase1_10 synthetic "initial state" backfill row
-                    # (from_status NULL → current @ profile.created_at) — it would
-                    # mis-date legacy milestones to the creation week. Scalar-derived
-                    # backfills + real transitions keep a non-NULL from_status.
-                    hist.from_status.isnot(None),
-                    status_pred,
-                )
-                .group_by(hist.profile_id)
-            )
-            return {pid: ts for pid, ts in rows}
-
-        # Monotone funnel: a profile that reached a later milestone is counted at
-        # every earlier one too (override/bulk-import can skip the 'submitted' row),
-        # so submitted ⊇ admitted ⊇ enrolled → MIN(submitted) ≤ MIN(admitted) ≤ ...
-        admitted_set = set(ADMITTED_LIKE_STATUSES) | {ENROLLED_STATUS}
-        submitted_set = set(SUBMITTED_STATUSES) | admitted_set
-        firsts = {
-            "submitted": await _first_into(hist.to_status.in_(submitted_set)),
-            "admitted": await _first_into(hist.to_status.in_(admitted_set)),
-            "enrolled": await _first_into(hist.to_status == ENROLLED_STATUS),
-        }
         for milestone, by_pid in firsts.items():
-            for pid, ts in by_pid.items():
+            for pid, ts in by_pid.items():  # ts is never None (source drops None)
                 slot = result.setdefault(pid, {})
-                if ts is not None and ts < cumulative_end:
+                if ts < cumulative_end:
                     slot[f"{milestone}_cumulative"] = True
                     if week.start <= ts < week.end_excl:
                         slot[f"{milestone}_in_week"] = True
@@ -693,8 +669,8 @@ class AdmissionReportRepository:
         total = 0
         for stage_id, cnt in rows:
             c = int(cnt or 0)
-            total += c
             key = stage_id if stage_id is not None else lowest
             if key is not None:
                 counts[key] = counts.get(key, 0) + c
+                total += c  # only count what a stage can display → Σ current == total
         return stages, counts, total

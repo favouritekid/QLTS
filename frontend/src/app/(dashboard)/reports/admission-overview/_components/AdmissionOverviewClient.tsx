@@ -76,6 +76,27 @@ function Panel({
   );
 }
 
+/** Panel body state: error note (not a stuck skeleton), else data, else skeleton. */
+function PanelState({
+  query,
+  skeleton,
+  children,
+}: {
+  query: { isError: boolean; error: unknown; data: unknown };
+  skeleton: string;
+  children: React.ReactNode;
+}) {
+  if (query.isError) {
+    return (
+      <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+        {errMessage(query.error)}
+      </div>
+    );
+  }
+  if (query.data) return <>{children}</>;
+  return <Skeleton className={skeleton} />;
+}
+
 interface FlatUnit {
   id: number;
   name: string;
@@ -95,11 +116,13 @@ export function AdmissionOverviewClient() {
   const { data: filters } = useReportFilters(year);
   const { data: orgUnits = [] } = useOrganizationUnits();
   const yearOptions = React.useMemo(
+    // include the selected `year` so its <SelectItem> always exists (the Năm
+    // trigger never blanks while useReportFilters refetches on a year switch).
     () =>
-      Array.from(new Set([...(filters?.academic_years ?? []), CURRENT_YEAR])).sort(
-        (a, b) => b - a,
-      ),
-    [filters],
+      Array.from(
+        new Set([...(filters?.academic_years ?? []), CURRENT_YEAR, year]),
+      ).sort((a, b) => b - a),
+    [filters, year],
   );
   const roundCodes = filters?.rounds ?? [];
   const flatUnits = React.useMemo(() => {
@@ -234,18 +257,14 @@ export function AdmissionOverviewClient() {
           {/* Phễu + Xu hướng */}
           <div className="grid gap-4 lg:grid-cols-2">
             <Panel title="Dòng chảy mùa tuyển sinh" caption="pipeline_stage">
-              {funnel.data ? (
-                <OverviewFunnel funnel={funnel.data} />
-              ) : (
-                <Skeleton className="h-64 w-full" />
-              )}
+              <PanelState query={funnel} skeleton="h-64 w-full">
+                {funnel.data && <OverviewFunnel funnel={funnel.data} />}
+              </PanelState>
             </Panel>
             <Panel title="Nhịp tích luỹ 8 tuần" caption="cumulative">
-              {trend.data ? (
-                <OverviewTrend trend={trend.data} />
-              ) : (
-                <Skeleton className="h-64 w-full" />
-              )}
+              <PanelState query={trend} skeleton="h-64 w-full">
+                {trend.data && <OverviewTrend trend={trend.data} />}
+              </PanelState>
             </Panel>
           </div>
 
@@ -259,25 +278,28 @@ export function AdmissionOverviewClient() {
 
           {/* Heatmap cán bộ × ngành */}
           <Panel title="Tải cán bộ × ngành" caption="officer-major-matrix">
-            {matrix.data ? (
-              <OfficerMajorHeatmap
-                matrix={matrix.data}
-                metric={metric}
-                onMetricChange={setMetric}
-              />
-            ) : (
-              <Skeleton className="h-56 w-full" />
-            )}
+            <PanelState query={matrix} skeleton="h-56 w-full">
+              {matrix.data && (
+                <OfficerMajorHeatmap
+                  matrix={matrix.data}
+                  metric={metric}
+                  onMetricChange={setMetric}
+                />
+              )}
+            </PanelState>
           </Panel>
 
           {/* Công nợ học phí */}
           <Panel title="Công nợ học phí HK1" caption="debt-report">
+            <p className="mb-3 -mt-1 text-xs text-muted-foreground">
+              Theo năm học · đơn vị (chưa lọc theo đợt).
+            </p>
             <DebtPanel summary={debt.data?.summary} isLoading={debt.isLoading} />
           </Panel>
 
           <p className="text-xs text-muted-foreground">
             Số liệu tính lại theo phân bổ hiện tại — tuần đã qua có thể đổi sau khi
-            công bố kết quả. Phễu &amp; công nợ theo cohort đợt/năm.
+            công bố kết quả. Phễu theo cohort đợt/năm.
           </p>
         </div>
       )}

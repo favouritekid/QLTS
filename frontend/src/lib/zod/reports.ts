@@ -109,6 +109,10 @@ export const funnelStageSchema = z.object({
   is_final: z.boolean(),
   color_code: z.string(), // hex #RRGGBB
   current: z.number().int(), // lead đang ở giai đoạn này
+  // mô hình phễu do BACKEND tính (thin-client — FE render nguyên):
+  reached: z.number().int(), // lũy kế "từng đạt bậc này" (đường phễu); leak = current
+  conversion_pct: z.number().nullable(), // % chuyển tiếp từ bậc trước (0..100)
+  is_leak: z.boolean(), // bậc rời phễu (terminal âm) — render tách khỏi path
 });
 
 export const pipelineFunnelSchema = z.object({

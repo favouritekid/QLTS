@@ -20,6 +20,9 @@ export function useReportFilters(year?: number) {
     queryKey: weeklyReportKeys.filters(year),
     queryFn: () => getReportFilters(year),
     staleTime: 5 * 60 * 1000, // catalog rarely changes
+    // Keep the previous catalog during a year switch so the Year/Đợt selects don't
+    // blank out (the year list is global, not year-specific).
+    placeholderData: (prev) => prev,
   });
 }
 

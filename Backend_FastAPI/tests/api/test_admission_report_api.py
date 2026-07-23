@@ -339,23 +339,36 @@ MATRIX_URL = "/api/v2/admin/reports/admission-weekly/officer-major-matrix"
 
 @pytest.mark.asyncio
 async def test_pipeline_funnel_admin_empty_year_returns_200(
-    client: AsyncClient, admin_user_in_db
+    client: AsyncClient, admin_user_in_db, seed_lead_dependencies
 ):
+    """Empty year (no cohort) → all-zero counts, but the SEEDED pipeline stages must
+    still return with the backend-computed funnel model (reached/conversion/leak).
+    ``seed_lead_dependencies`` seeds stg01–stg07 (stg07 = highest-order final = leak),
+    so the stage-level asserts actually run (not a vacuously-empty loop)."""
     h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
     res = await client.get(FUNNEL_URL, params={"academic_year": EMPTY_YEAR}, headers=h)
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["academic_year"] == EMPTY_YEAR
-    assert body["round_code"] is None
-    assert body["scope_unit_id"] is None
+    assert body["round_code"] is None and body["scope_unit_id"] is None
     assert body["total_leads"] == 0
-    assert isinstance(body["stages"], list)
-    # No cohort in the isolated year → every stage current == 0 (stage metadata
-    # may or may not be seeded in the test DB; either way counts are zero).
-    for stage in body["stages"]:
-        for key in ("stage_id", "name", "order", "is_final", "color_code", "current"):
+
+    stages = body["stages"]
+    ids = {s["stage_id"] for s in stages}
+    # Stage catalog is year-independent → seeded stages surface even with no cohort.
+    assert {"stg01", "stg06", "stg07"} <= ids
+    for stage in stages:
+        for key in (
+            "stage_id", "name", "order", "is_final", "color_code",
+            "current", "reached", "conversion_pct", "is_leak",
+        ):
             assert key in stage, f"missing funnel stage key '{key}': {stage}"
-        assert stage["current"] == 0
+        assert stage["current"] == 0 and stage["reached"] == 0
+
+    by_id = {s["stage_id"]: s for s in stages}
+    # Backend owns leak identification: exactly one, the highest-order final (stg07).
+    assert sum(1 for s in stages if s["is_leak"]) == 1
+    assert by_id["stg07"]["is_leak"] is True and by_id["stg06"]["is_leak"] is False
 
 
 @pytest.mark.asyncio
