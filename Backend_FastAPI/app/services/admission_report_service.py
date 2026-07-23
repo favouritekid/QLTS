@@ -22,11 +22,13 @@ from app.repositories.admission_report_repository import (
     UNRESOLVED,
     AdmissionReportRepository,
     GroupKey,
+    MajorInfo,
     WindowRange,
 )
 from app.schemas.admission_report import (
     AdmissionTrendResponse,
     AdmissionWeeklyReportResponse,
+    AdmissionWowResponse,
     DataQuality,
     FunnelStage,
     MatrixMajor,
@@ -38,6 +40,9 @@ from app.schemas.admission_report import (
     ReportRow,
     TrendPoint,
     WeekMeta,
+    WowComparison,
+    WowMovement,
+    WowRow,
 )
 from app.utils.datetime_helpers import today_vn
 from app.utils.exceptions import (
@@ -480,6 +485,149 @@ class AdmissionReportService:
             scope_unit_id=scope_unit_id,
             weeks=weeks,
             points=points,
+        )
+
+    # ---------------------------------------- overview: week-over-week (WoW)
+    @staticmethod
+    def _finalize_movement(mv: WowMovement) -> None:
+        """delta + delta_pct (%); mẫu số 0 → delta_pct=None (ưu tiên số tuyệt đối)."""
+        mv.delta = mv.count_current - mv.count_previous
+        mv.delta_pct = (
+            round(mv.delta / mv.count_previous * 100, 1)
+            if mv.count_previous > 0
+            else None
+        )
+
+    async def get_week_over_week(
+        self,
+        *,
+        current_user: models.User,
+        academic_year: int,
+        round_code: Optional[str] = None,
+        unit_id: Optional[int] = None,
+        group_by: str = "major",
+    ) -> AdmissionWowResponse:
+        """Biến động 2 tuần ISO ĐÃ HOÀN TẤT gần nhất (bỏ tuần đang chạy), 3 milestone.
+
+        Tái dùng ``resolve_profiles`` (dim ỔN ĐỊNH theo major_id/officer_id — không
+        join bằng nhãn) + ``milestone_timestamps`` (first-transition) + cùng
+        scope/RBAC như trend. Năm KHÔNG phải năm hiện tại (``_default_anchor`` trả
+        != None) → không có "tuần đang chạy" thật → ``insufficient_data`` (KHÔNG bịa
+        2 tuần 0 giả). ``delta_pct=None`` khi tuần trước = 0. Tính theo major·officer
+        ·totals; totals = Σ dimension (khớp tổng chung). FE chỉ render.
+        """
+        scope_unit_id = self._resolve_scope(current_user, unit_id)
+        await self._assert_round_exists(academic_year, round_code)
+
+        totals = WowRow(group_key=None, label="TỔNG")
+        # WoW chỉ có nghĩa khi có "tuần đang chạy" thật = NĂM HIỆN TẠI. Năm khác
+        # (_default_anchor != None: tương lai → Jan-4 nên 2 tuần rơi vào tháng 12 năm
+        # trước = giả; quá khứ → Dec-28, mùa đã đóng) → báo insufficient_data.
+        anchor = self._default_anchor(academic_year, None)
+        if anchor is not None:
+            return AdmissionWowResponse(
+                academic_year=academic_year,
+                round_code=round_code,
+                scope_unit_id=scope_unit_id,
+                group_by=group_by,  # type: ignore[arg-type]
+                insufficient_data=True,
+                comparison=None,
+                rows=[],
+                totals=totals,
+            )
+
+        end_meta, _ = self._compute_week(anchor)  # tuần ĐANG CHẠY (loại khỏi WoW)
+        w1_meta, w1 = self._compute_week(end_meta.week_start - timedelta(weeks=1))
+        w2_meta, w2 = self._compute_week(end_meta.week_start - timedelta(weeks=2))
+
+        dims, _major_by_id = await self.repo.resolve_profiles(
+            academic_year, scope_unit_id, None, round_code
+        )
+        ts = await self.repo.milestone_timestamps(list(dims.keys()))
+
+        acc: dict[GroupKey, WowRow] = {}
+
+        def _row(key: GroupKey) -> WowRow:
+            row = acc.get(key)
+            if row is None:
+                row = WowRow(label="")
+                acc[key] = row
+            return row
+
+        # First-transition timestamp → 1 trong 2 tuần hoàn tất, theo dim của hồ sơ.
+        for milestone in ("submitted", "admitted", "enrolled"):
+            for pid, t in ts[milestone].items():
+                dim = dims.get(pid)
+                if dim is None:
+                    continue
+                key = dim.major_key if group_by == "major" else dim.officer_key
+                mv: WowMovement = getattr(_row(key), milestone)
+                if w1.start <= t < w1.end_excl:
+                    mv.count_current += 1
+                elif w2.start <= t < w2.end_excl:
+                    mv.count_previous += 1
+
+        # Nhãn (mirror get_weekly_report): key int = ngành/cán bộ thật; key str =
+        # bucket sentinel (ambiguous/unresolved/unassigned).
+        officer_names: dict[int, str] = {}
+        major_labels: dict[int, MajorInfo] = {}
+        if group_by == "officer":
+            for dim in dims.values():
+                if isinstance(dim.officer_key, int) and dim.officer_name:
+                    officer_names[dim.officer_key] = dim.officer_name
+            missing = [k for k in acc if isinstance(k, int) and k not in officer_names]
+            officer_names.update(await self.repo.get_user_names(missing))
+        else:
+            for dim in dims.values():
+                if isinstance(dim.major_key, int) and dim.major:
+                    major_labels[dim.major_key] = dim.major
+
+        rows: list[WowRow] = []
+        for key, row in acc.items():
+            if isinstance(key, str):  # bucket sentinel
+                row.is_bucket = True
+                row.bucket_kind = key  # type: ignore[assignment]
+                row.label = _BUCKET_LABELS.get(key, key)
+            elif group_by == "major":
+                info = major_labels.get(key)
+                row.group_key = key
+                row.code = info.code if info else None
+                row.degree_level = info.degree_level if info else None
+                if info and info.name:
+                    row.label = f"{info.name} ({info.code})" if info.code else info.name
+                else:
+                    row.label = f"Ngành #{key}"
+            else:  # officer
+                row.group_key = key
+                row.label = officer_names.get(key, f"Cán bộ #{key}")
+            rows.append(row)
+
+        # totals = Σ COUNT của dimension (trước khi tính delta), rồi finalise delta ở
+        # MỌI hàng + totals → tổng dimension khớp tổng chung.
+        for row in rows:
+            for milestone in ("submitted", "admitted", "enrolled"):
+                tm: WowMovement = getattr(totals, milestone)
+                rm: WowMovement = getattr(row, milestone)
+                tm.count_current += rm.count_current
+                tm.count_previous += rm.count_previous
+        for target in (*rows, totals):
+            for milestone in ("submitted", "admitted", "enrolled"):
+                self._finalize_movement(getattr(target, milestone))
+
+        rows.sort(key=lambda r: (r.is_bucket, -r.submitted.count_current))
+
+        return AdmissionWowResponse(
+            academic_year=academic_year,
+            round_code=round_code,
+            scope_unit_id=scope_unit_id,
+            group_by=group_by,  # type: ignore[arg-type]
+            insufficient_data=False,
+            comparison=WowComparison(
+                latest_complete_week=w1_meta,
+                previous_complete_week=w2_meta,
+            ),
+            rows=rows,
+            totals=totals,
         )
 
     # -------------------------------------------- overview: officer × major heat

@@ -31,6 +31,7 @@ import { useDebtReport } from "@/hooks/finance/useDebtReport";
 import { useOrganizationUnits } from "@/hooks/useOrganization";
 import {
   useAdmissionTrend,
+  useAdmissionWow,
   useOfficerMajorMatrix,
   usePipelineFunnel,
 } from "@/hooks/reports/useAdmissionOverview";
@@ -47,6 +48,7 @@ import { OfficerMajorHeatmap } from "./OfficerMajorHeatmap";
 import { OverviewFunnel } from "./OverviewFunnel";
 import { OverviewTrend } from "./OverviewTrend";
 import { QuotaRunway } from "./QuotaRunway";
+import { WowStrip } from "./WowStrip";
 import {
   ALL_ROUNDS,
   ALL_UNITS,
@@ -222,6 +224,8 @@ export function AdmissionOverviewClient() {
   const funnel = usePipelineFunnel(scopeParams);
   const trend = useAdmissionTrend(scopeParams);
   const matrix = useOfficerMajorMatrix(scopeParams);
+  // WoW: tổng giống nhau bất kể group_by (Σ mọi hồ sơ) → fetch "major", render totals.
+  const wow = useAdmissionWow({ ...scopeParams, group_by: "major" });
   const debt = useDebtReport({
     academic_year: year,
     unit_id: effectiveUnitId,
@@ -244,7 +248,8 @@ export function AdmissionOverviewClient() {
     weeklyMajor.isFetching ||
     funnel.isFetching ||
     trend.isFetching ||
-    matrix.isFetching;
+    matrix.isFetching ||
+    wow.isFetching;
 
   // Cockpit (lũy kế + ngành): rank ngành theo % chỉ tiêu tăng dần (nguy cơ đầu).
   const cockpitRows = React.useMemo(() => {
@@ -430,6 +435,13 @@ export function AdmissionOverviewClient() {
                 {syncedMajor && (
                   <ActionNeeded report={syncedMajor} debt={debt.data} />
                 )}
+              </PanelState>
+            </Panel>
+
+            {/* 0b. Nhịp so tuần trước — biến động 2 tuần ISO đã hoàn tất (WoW) */}
+            <Panel title="Nhịp so tuần trước">
+              <PanelState query={wow} skeleton="h-28 w-full">
+                {wow.data && <WowStrip wow={wow.data} />}
               </PanelState>
             </Panel>
 

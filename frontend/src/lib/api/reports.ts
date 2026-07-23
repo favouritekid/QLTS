@@ -3,11 +3,13 @@ import { filenameFromDisposition } from "@/lib/utils/download-blob";
 import {
   admissionTrendSchema,
   admissionWeeklyReportSchema,
+  admissionWowSchema,
   officerMajorMatrixSchema,
   pipelineFunnelSchema,
   reportFiltersSchema,
   type AdmissionTrend,
   type AdmissionWeeklyReport,
+  type AdmissionWow,
   type OfficerMajorMatrix,
   type PipelineFunnel,
   type ReportFilters,
@@ -119,4 +121,15 @@ export async function getOfficerMajorMatrix(
     { params },
   );
   return officerMajorMatrixSchema.parse(response.data);
+}
+
+/** Biến động 2 tuần ISO đã hoàn tất (loại tuần đang chạy) — 3 milestone. */
+export async function getAdmissionWow(
+  params: OverviewParams & { group_by: ReportGroupBy },
+): Promise<AdmissionWow> {
+  const response = await api.get(
+    "/api/v2/admin/reports/admission-weekly/week-over-week",
+    { params },
+  );
+  return admissionWowSchema.parse(response.data);
 }

@@ -185,3 +185,49 @@ export type OfficerMajorCell = z.infer<typeof officerMajorCellSchema>;
 export type OfficerMajorMatrix = z.infer<typeof officerMajorMatrixSchema>;
 /** Khoá 1 chỉ số trong ô (dùng cho tab heatmap). */
 export type MatrixMetric = "submitted" | "draft" | "fee_partial" | "fee_full" | "enrolled";
+
+// ===========================================================================
+// Week-over-week — biến động 2 tuần ISO ĐÃ HOÀN TẤT (loại tuần đang chạy)
+// (GET .../admission-weekly/week-over-week)
+// ===========================================================================
+
+export const wowMovementSchema = z.object({
+  count_current: z.number().int().default(0), // tuần hoàn tất gần nhất (W-1)
+  count_previous: z.number().int().default(0), // tuần hoàn tất liền trước (W-2)
+  delta: z.number().int().default(0),
+  delta_pct: z.number().nullable().default(null), // %; null khi mẫu số 0
+});
+
+export const wowRowSchema = z.object({
+  group_key: z.number().int().nullable(),
+  label: z.string(),
+  code: z.string().nullable().default(null),
+  degree_level: z.string().nullable().default(null),
+  is_bucket: z.boolean().default(false),
+  bucket_kind: bucketKindSchema.nullable().default(null),
+  submitted: wowMovementSchema,
+  admitted: wowMovementSchema,
+  enrolled: wowMovementSchema,
+});
+
+export const wowComparisonSchema = z.object({
+  latest_complete_week: weekMetaSchema, // W-1
+  previous_complete_week: weekMetaSchema, // W-2
+});
+
+export const admissionWowSchema = z.object({
+  academic_year: z.number().int(),
+  round_code: z.string().nullable(),
+  scope_unit_id: z.number().int().nullable(),
+  group_by: z.enum(["major", "officer"]),
+  attribution: z.literal("recomputed-current"),
+  // Năm chưa bắt đầu / không đủ 2 tuần hoàn tất → comparison=null, rows=[].
+  insufficient_data: z.boolean().default(false),
+  comparison: wowComparisonSchema.nullable().default(null),
+  rows: z.array(wowRowSchema).default([]),
+  totals: wowRowSchema,
+});
+
+export type WowMovement = z.infer<typeof wowMovementSchema>;
+export type WowRow = z.infer<typeof wowRowSchema>;
+export type AdmissionWow = z.infer<typeof admissionWowSchema>;

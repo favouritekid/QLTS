@@ -456,3 +456,82 @@ async def test_officer_major_matrix_admin_empty_year_returns_200(
     assert body["cells"] == []
     # Contract no longer carries group_by_metric (FE fetches all 5 metrics once).
     assert "group_by_metric" not in body
+
+
+# =============================================================================
+# Week-over-week — /admission-weekly/week-over-week
+# 2 tuần ISO đã hoàn tất (loại tuần đang chạy). EMPTY_YEAR=2099 là năm TƯƠNG LAI →
+# không có tuần đang chạy thật → insufficient_data (giá trị real được phủ ở
+# integration test dùng năm hiện tại).
+# =============================================================================
+
+WOW_URL = "/api/v2/admin/reports/admission-weekly/week-over-week"
+
+
+@pytest.mark.asyncio
+async def test_wow_admin_future_year_insufficient_data(
+    client: AsyncClient, admin_user_in_db
+):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(WOW_URL, params={"academic_year": EMPTY_YEAR}, headers=h)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    # Năm tương lai → chưa bắt đầu → không đủ 2 tuần hoàn tất → insufficient_data
+    # (KHÔNG bịa 2 tuần 0 giả).
+    assert body["insufficient_data"] is True
+    assert body["comparison"] is None
+    assert body["rows"] == []
+    assert body["group_by"] == "major"
+    assert body["attribution"] == "recomputed-current"
+    assert body["scope_unit_id"] is None
+    # totals movement luôn có mặt (0), delta_pct=None khi mẫu số 0.
+    for milestone in ("submitted", "admitted", "enrolled"):
+        mv = body["totals"][milestone]
+        assert mv["count_current"] == 0
+        assert mv["count_previous"] == 0
+        assert mv["delta"] == 0
+        assert mv["delta_pct"] is None
+
+
+@pytest.mark.asyncio
+async def test_wow_group_by_invalid_returns_422(client: AsyncClient, admin_user_in_db):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(
+        WOW_URL, params={"academic_year": EMPTY_YEAR, "group_by": "foo"}, headers=h
+    )
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_wow_missing_year_returns_422(client: AsyncClient, admin_user_in_db):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(WOW_URL, headers=h)  # academic_year required
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_wow_manager_without_unit_returns_403(
+    client: AsyncClient, manager_no_unit_user_in_db
+):
+    h = await _login(
+        client,
+        manager_no_unit_user_in_db["username"],
+        manager_no_unit_user_in_db["password"],
+    )
+    res = await client.get(WOW_URL, params={"academic_year": EMPTY_YEAR}, headers=h)
+    assert res.status_code == 403, res.text
+
+
+@pytest.mark.asyncio
+async def test_wow_manager_foreign_unit_returns_404(
+    client: AsyncClient, manager_user_in_db, seed_other_unit
+):
+    h = await _login(
+        client, TestUsers.MANAGER["username"], TestUsers.MANAGER["password"]
+    )
+    res = await client.get(
+        WOW_URL,
+        params={"academic_year": EMPTY_YEAR, "unit_id": TestOrgData.UNIT_2["id"]},
+        headers=h,
+    )
+    assert res.status_code == 404, res.text

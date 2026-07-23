@@ -19,6 +19,7 @@ from app.database import get_db
 from app.schemas.admission_report import (
     AdmissionTrendResponse,
     AdmissionWeeklyReportResponse,
+    AdmissionWowResponse,
     OfficerMajorMatrixResponse,
     PipelineFunnelResponse,
     ReportFilters,
@@ -112,6 +113,29 @@ async def get_admission_trend(
         round_code=round_code,
         unit_id=unit_id,
         weeks=weeks,
+    )
+
+
+@router.get("/admission-weekly/week-over-week", response_model=AdmissionWowResponse)
+async def get_admission_week_over_week(
+    academic_year: int = Query(..., ge=2020, le=2100),
+    group_by: str = Query("major", pattern="^(major|officer)$"),
+    round_code: Optional[str] = Query(None, max_length=20),
+    unit_id: Optional[int] = Query(
+        None, ge=1, description="Admin chọn đơn vị; manager bị ép về đơn vị của mình"
+    ),
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_admin_or_manager),
+) -> AdmissionWowResponse:
+    """Nhịp tuần: 2 tuần ISO ĐÃ HOÀN TẤT gần nhất (loại tuần đang chạy), 3 milestone
+    (nộp / đủ ĐK / nhập học) theo ngành · cán bộ · tổng. FE chỉ render."""
+    service = AdmissionReportService(db)
+    return await service.get_week_over_week(
+        current_user=current_user,
+        academic_year=academic_year,
+        round_code=round_code,
+        unit_id=unit_id,
+        group_by=group_by,
     )
 
 

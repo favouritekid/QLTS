@@ -21,6 +21,7 @@ from app.repositories.admission_report_repository import (
     AdmissionReportRepository,
 )
 from app.services.admission_report_service import VN_TZ, AdmissionReportService
+from app.utils.datetime_helpers import today_vn
 from app.utils.exceptions import BusinessRuleViolation, ValidationError
 
 pytestmark = pytest.mark.asyncio
@@ -1172,3 +1173,152 @@ async def test_pipeline_funnel_leak_by_outcome_counts_for_funnel_and_walk_in(
     assert by_id[stg_b].is_leak is False  # mid stage, not a leak STAGE
     assert by_id[stg_neg].is_leak is True  # all-negative final stage → leak stage
     assert by_id[stg_neg].current == 0
+
+
+# ----------------------------------------------------------- week-over-week (WoW)
+# WoW so 2 tuần ISO ĐÃ HOÀN TẤT gần nhất, LOẠI tuần đang chạy. Chỉ có nghĩa khi có
+# "tuần đang chạy" thật = NĂM HIỆN TẠI → các test giá trị dùng ``today_vn().year``
+# (khác các test khác dùng năm tương lai 2050+). Cách ly bằng MAJOR riêng + reconcile
+# totals theo cấu trúc (bền với data năm-hiện-tại khác trong qlts_test).
+
+
+def _wow_weeks():
+    """Tuần đang chạy (loại) + W-1/W-2 (2 tuần hoàn tất), anchored trên hôm nay (VN)."""
+    end_meta, run = AdmissionReportService._compute_week(today_vn())
+    _m1, w1 = AdmissionReportService._compute_week(
+        end_meta.week_start - timedelta(weeks=1)
+    )
+    _m2, w2 = AdmissionReportService._compute_week(
+        end_meta.week_start - timedelta(weeks=2)
+    )
+    return end_meta, run, w1, w2
+
+
+async def test_wow_buckets_two_complete_weeks_and_excludes_running_week(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """W-1 → count_current, W-2 → count_previous, tuần đang chạy → LOẠI. current=1,
+    previous=2 → delta=-1, delta_pct=-50%. Tổng dimension khớp tổng chung."""
+    year = today_vn().year
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    end_meta, run, w1, w2 = _wow_weeks()
+
+    major, offering = await _seed_catalog(db, year, unit_id)
+
+    async def _submit_at(occurred_at):
+        _, p = await _seed_lead_profile(
+            db, seeded_dependencies, year, offering.id, officer_id,
+            created_at=occurred_at,
+        )
+        await _seed_history(db, p.id, "submitted", occurred_at)
+        return p
+
+    await _submit_at(w1.start + timedelta(days=2))  # W-1 → current
+    await _submit_at(w2.start + timedelta(days=1))  # W-2 → previous
+    await _submit_at(w2.start + timedelta(days=3))  # W-2 → previous
+    await _submit_at(run.start + timedelta(minutes=30))  # tuần đang chạy → LOẠI
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_week_over_week(
+        current_user=_admin(), academic_year=year, group_by="major"
+    )
+    assert resp.insufficient_data is False
+    assert resp.comparison is not None
+    # 2 tuần hoàn tất, đều TRƯỚC tuần đang chạy; previous < latest.
+    assert resp.comparison.latest_complete_week.week_start < run.start.date()
+    assert (
+        resp.comparison.previous_complete_week.week_start
+        < resp.comparison.latest_complete_week.week_start
+    )
+
+    row = _find(resp.rows, major.id)
+    assert row is not None
+    assert row.submitted.count_current == 1  # chỉ W-1 (tuần đang chạy bị loại)
+    assert row.submitted.count_previous == 2  # cả hai W-2
+    assert row.submitted.delta == -1
+    assert row.submitted.delta_pct == -50.0
+
+    # tổng dimension khớp tổng chung (structural — bền với data khác trong qlts_test).
+    for milestone in ("submitted", "admitted", "enrolled"):
+        tot = getattr(resp.totals, milestone)
+        assert tot.count_current == sum(
+            getattr(r, milestone).count_current for r in resp.rows
+        )
+        assert tot.count_previous == sum(
+            getattr(r, milestone).count_previous for r in resp.rows
+        )
+        assert tot.delta == tot.count_current - tot.count_previous
+
+
+async def test_wow_previous_zero_delta_pct_is_none(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """Tuần trước = 0 (mẫu số 0) → delta_pct=None (ưu tiên số tuyệt đối)."""
+    year = today_vn().year
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    _end, _run, w1, _w2 = _wow_weeks()
+    major, offering = await _seed_catalog(db, year, unit_id)
+    _, p = await _seed_lead_profile(
+        db, seeded_dependencies, year, offering.id, officer_id,
+        created_at=w1.start + timedelta(days=2),
+    )
+    await _seed_history(db, p.id, "submitted", w1.start + timedelta(days=2))
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_week_over_week(
+        current_user=_admin(), academic_year=year, group_by="major"
+    )
+    row = _find(resp.rows, major.id)
+    assert row is not None
+    assert row.submitted.count_current == 1
+    assert row.submitted.count_previous == 0
+    assert row.submitted.delta == 1
+    assert row.submitted.delta_pct is None  # mẫu số 0
+
+
+async def test_wow_group_by_officer_manager_scope(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """group_by=officer + manager bị ép về đơn vị của mình (scope_unit_id)."""
+    year = today_vn().year
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    _end, _run, w1, _w2 = _wow_weeks()
+    _, offering = await _seed_catalog(db, year, unit_id)
+    _, p = await _seed_lead_profile(
+        db, seeded_dependencies, year, offering.id, officer_id,
+        created_at=w1.start + timedelta(days=2),
+    )
+    await _seed_history(db, p.id, "submitted", w1.start + timedelta(days=2))
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_week_over_week(
+        current_user=_manager(unit_id), academic_year=year, group_by="officer"
+    )
+    assert resp.scope_unit_id == unit_id  # manager ép về đơn vị của mình
+    row = _find(resp.rows, officer_id)
+    assert row is not None and not row.is_bucket
+    assert row.submitted.count_current == 1
+
+
+async def test_wow_future_year_insufficient_data(
+    db: AsyncSession, seeded_dependencies: dict
+):
+    """Năm tương lai → chưa bắt đầu → insufficient_data (không bịa 2 tuần 0 giả)."""
+    svc = AdmissionReportService(db)
+    resp = await svc.get_week_over_week(current_user=_admin(), academic_year=2200)
+    assert resp.insufficient_data is True
+    assert resp.comparison is None
+    assert resp.rows == []
+
+
+async def test_wow_past_year_insufficient_data(
+    db: AsyncSession, seeded_dependencies: dict
+):
+    """Năm quá khứ → không có tuần đang chạy thật → insufficient_data."""
+    svc = AdmissionReportService(db)
+    resp = await svc.get_week_over_week(current_user=_admin(), academic_year=2020)
+    assert resp.insufficient_data is True
+    assert resp.comparison is None

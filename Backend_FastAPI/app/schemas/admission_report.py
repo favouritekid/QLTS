@@ -215,3 +215,46 @@ class OfficerMajorMatrixResponse(ScopedReport):
     officers: list[MatrixOfficer] = Field(default_factory=list)
     majors: list[MatrixMajor] = Field(default_factory=list)
     cells: list[OfficerMajorCell] = Field(default_factory=list)  # thưa (sparse)
+
+
+# ---- Week-over-week (biến động 2 tuần ISO ĐÃ HOÀN TẤT, loại tuần đang chạy) --
+class WowMovement(BaseModel):
+    """Biến động 1 milestone giữa 2 tuần ISO đã HOÀN TẤT (không tính tuần đang chạy)."""
+
+    count_current: int = 0  # tuần hoàn tất gần nhất (W-1)
+    count_previous: int = 0  # tuần hoàn tất liền trước (W-2)
+    delta: int = 0  # count_current − count_previous
+    delta_pct: Optional[float] = None  # %; None khi count_previous == 0 (mẫu số 0)
+
+
+class WowRow(BaseModel):
+    group_key: Optional[int] = None  # major_id / officer_id; None cho bucket/tổng
+    label: str
+    code: Optional[str] = None  # major code (major grouping only)
+    degree_level: Optional[str] = None  # major grouping only
+    is_bucket: bool = False
+    bucket_kind: Optional[BucketKind] = None
+    submitted: WowMovement = Field(default_factory=WowMovement)
+    admitted: WowMovement = Field(default_factory=WowMovement)
+    enrolled: WowMovement = Field(default_factory=WowMovement)
+
+
+class WowComparison(BaseModel):
+    latest_complete_week: WeekMeta  # W-1
+    previous_complete_week: WeekMeta  # W-2
+
+
+class AdmissionWowResponse(ScopedReport):
+    """Nhịp tuần: 2 tuần ISO ĐÃ HOÀN TẤT gần nhất (tuần đang chạy bị loại).
+
+    ``insufficient_data=True`` khi năm chưa bắt đầu / không đủ 2 tuần hoàn tất →
+    ``comparison=None``, ``rows=[]`` (KHÔNG bịa 2 tuần 0 giả). Attribution =
+    recomputed-current: số của tuần đã qua có thể đổi khi hồ sơ được phân công lại.
+    """
+
+    group_by: GroupBy
+    attribution: Literal["recomputed-current"] = "recomputed-current"
+    insufficient_data: bool = False
+    comparison: Optional[WowComparison] = None
+    rows: list[WowRow] = Field(default_factory=list)
+    totals: WowRow  # Σ across rows (label="TỔNG")
