@@ -63,6 +63,25 @@ def upgrade() -> None:
             comment="Đổi ngành: thời điểm bật awaiting_accountant_confirmation (UTC).",
         ),
     )
+    # Ngành ĐÃ ĐỊNH GIÁ (priced-from) — CHỈ pricing ghi (calculate_fee + reprice),
+    # KHÔNG phải resnapshot. Drift gate của reprice tin field này thay
+    # resolved_academic_info_id (resnapshot ghi field kia sớm ở add/delete_choice
+    # → desync). Backfill = resolved_academic_info_id (prod 0 hồ sơ đang đổi ngành
+    # nên 2 field đang đồng bộ — an toàn). Fee sau này calculate_fee tự set.
+    op.add_column(
+        TABLE,
+        sa.Column(
+            "priced_from_academic_info_id",
+            sa.Integer(),
+            sa.ForeignKey("offering_academic_info.id", ondelete="SET NULL"),
+            nullable=True,
+            comment="Đổi ngành: OfferingAcademicInfo mà giá hiện tại được tính theo (drift gate).",
+        ),
+    )
+    op.execute(
+        "UPDATE fee SET priced_from_academic_info_id = resolved_academic_info_id "
+        "WHERE resolved_academic_info_id IS NOT NULL"
+    )
     # Partial index phục vụ worklist kế toán ("các fee đang chờ xác nhận"). Rất
     # thưa (chỉ hàng đang trong chu kỳ) nên partial WHERE = true là đủ + rẻ.
     op.create_index(
@@ -78,6 +97,7 @@ def downgrade() -> None:
     op.drop_index(
         "ix_fee_awaiting_accountant_confirmation", table_name=TABLE
     )
+    op.drop_column(TABLE, "priced_from_academic_info_id")
     op.drop_column(TABLE, "major_change_flagged_at")
     op.drop_column(TABLE, "major_change_from_academic_info_id")
     op.drop_column(TABLE, "awaiting_accountant_confirmation")

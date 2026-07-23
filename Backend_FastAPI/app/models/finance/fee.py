@@ -329,6 +329,15 @@ class Fee(Base):
         nullable=True,
         comment="Đổi ngành: thời điểm bật awaiting_accountant_confirmation (UTC)"
     )
+    # Ngành ĐÃ ĐỊNH GIÁ — CHỈ pricing ghi (calculate_fee + reprice_for_major_change),
+    # KHÔNG phải resnapshot. Drift gate reprice tin field này thay
+    # resolved_academic_info_id (resnapshot desync sớm ở add/delete_choice).
+    priced_from_academic_info_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("offering_academic_info.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Đổi ngành: OfferingAcademicInfo mà giá hiện tại tính theo (drift gate)"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

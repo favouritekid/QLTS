@@ -704,8 +704,15 @@ class FeeCalculationService:
         # removing the double resolve. Direct/test callers pass an explicit
         # base_amount → their values are used as-is; a ``discount_policy_ids`` of
         # None then keeps the legacy "no discount" meaning (NOT auto-derive).
+        # Đổi ngành: id ngành đã ĐỊNH GIÁ (priced-from). CHỈ pricing ghi field
+        # này (calculate_fee + reprice) — KHÔNG phải resnapshot (resnapshot ghi
+        # resolved_academic_info_id sớm ở add_choice/delete_choice nên field đó
+        # desync, không tin được cho drift gate). None cho direct/test callers
+        # (explicit base_amount) — reprice sẽ tự tính khi cần.
+        priced_from_ai_id: Optional[int] = None
         if base_amount is None:
             academic_info = await resolve_fee_academic_info(self.db, profile)
+            priced_from_ai_id = academic_info.id
             if discount_policy_ids is None:
                 discount_policy_ids = list(
                     academic_info.applied_discount_policy_ids or []
@@ -820,6 +827,7 @@ class FeeCalculationService:
             calculated_by_id=user_id,
             calculated_at=datetime.now(timezone.utc),
             version=1,
+            priced_from_academic_info_id=priced_from_ai_id,
         )
 
         self.db.add(fee)
@@ -1844,10 +1852,16 @@ class FeeCalculationService:
                 "Còn một chu kỳ đổi ngành đang chờ kế toán xác nhận — hãy hoàn "
                 "tất chu kỳ đó trước."
             )
-        # (g) Drift gate: ngành KHÔNG đổi → no-op (không reprice, không dispatch).
+        # (g) Drift gate: fee ĐÃ ĐỊNH GIÁ đúng ngành hiện tại → no-op. So
+        # ``priced_from_academic_info_id`` (chỉ pricing ghi) — KHÔNG dùng
+        # ``resolved_academic_info_id`` (resnapshot ghi sớm ở add_choice/
+        # delete_choice → đã desync sang ngành mới TRƯỚC khi reprice chạy; dùng
+        # nó khiến reprice im lặng no-op với ĐƠN-NV, để giá ngành cũ + không bật
+        # cờ kế toán). priced_from == new ⇒ giá hiện tại đúng ngành mới ⇒ không
+        # cần làm gì. NULL (fee cũ / test) ⇒ != ⇒ reprice để chắc.
         if (
-            fee.resolved_academic_info_id is not None
-            and fee.resolved_academic_info_id == academic_info.id
+            fee.priced_from_academic_info_id is not None
+            and fee.priced_from_academic_info_id == academic_info.id
         ):
             return fee, False
         # (a) Giảm học phí THỦ CÔNG → ngoài scope v1 (reprice DELETE/INSERT lại
@@ -1945,6 +1959,9 @@ class FeeCalculationService:
         fee.base_amount = new_base
         fee.total_discount = new_total_discount
         fee.final_amount = new_final
+        # Ghi ngành ĐÃ ĐỊNH GIÁ (drift gate lần sau tin field này, không phải
+        # resolved_academic_info_id do resnapshot desync sớm).
+        fee.priced_from_academic_info_id = academic_info.id
         fee.version += 1
         fee.notes = (
             f"{fee.notes or ''}\n[{now.isoformat()}] Đổi ngành (major-change "

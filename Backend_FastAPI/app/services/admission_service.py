@@ -6420,40 +6420,57 @@ async def _apply_major_change_snapshot(
     profile: "models.AdmissionProfile",
     admission_repo,
     current_user: Optional["models.User"],
+    *,
+    increment_new_path: bool = False,
 ) -> None:
     """Đồng bộ ``applied_rules`` (path/round/academic_info) + quota + doc snapshot
     theo ngành MỚI khi officer đổi ngành. Gọi ở ``submit_and_evaluate`` +
     ``resubmit_profile`` khi ``flag AND major_change_requested``, TRƯỚC cutoff/
     eligibility/mandatory_docs read.
 
+    QUOTA (đối xứng 2 nhánh — chống phantom Ở CẢ HAI):
+    Hồ sơ khi mở chu kỳ đang ở ``submitted``/``resubmitted`` ⇒ đã có +1 trên path
+    ĐANG áp dụng (từ lần submit gốc). Vì thế **LUÔN −1 path cũ** (không chỉ khi
+    đổi path) — để lần re-submit đếm lại đúng 1 lần. Ai +1 lại:
+      * ``submit_and_evaluate`` (admin_rollback→draft→submit): downstream atomic
+        increment (:6960) đọc applied_rules path (đã rewrite sang MỚI) → +1. Gọi
+        với ``increment_new_path=False``.
+      * ``resubmit_profile`` (request_revision→revision→resubmit): KHÔNG có
+        downstream increment ⇒ hàm này TỰ +1 path mới (quota guard). Gọi với
+        ``increment_new_path=True``.
+    → path cũ (nếu đổi) về đúng, path mới +1. Nếu KHÔNG đổi path: −1 rồi +1 = giữ
+    nguyên (đếm 1 lần). Cũng vá luôn double-count admin_rollback→submit pre-existing.
+
     - Rewrite ``applied_rules[admission_path_id/admission_round_id/academic_info_id]``
-      (hợp lệ nhờ trigger whitelist 1F) → cutoff (:6515) + quota-increment (:6960)
-      + doc-resolve bám ngành MỚI thay ngành cũ.
-    - GIẢM ``submission_count`` path CŨ (floor 0) → hoàn +1 của lần submit trước;
-      lần submit này +1 vào path MỚI ⇒ KHÔNG phantom quota.
-    - Re-resolve doc snapshot theo ngành mới (``_reresolve_documents_snapshot``
-      giờ đọc path mới; bộ giấy ngành khác → mandatory_docs khác).
+      (hợp lệ nhờ trigger whitelist 1F) → cutoff + quota + doc-resolve bám ngành MỚI.
+    - Re-resolve doc snapshot theo ngành mới (bộ giấy ngành khác → mandatory_docs khác).
     """
+    from sqlalchemy import text as _sa_text
+
     path = await _resolve_major_change_choice_path(db, profile)
     applied = dict(profile.applied_rules or {})
     old_path_id = applied.get("admission_path_id")
     new_path_id = path.id
-    if str(old_path_id) != str(new_path_id):
-        from sqlalchemy import text as _sa_text
-        if old_path_id is not None:
-            try:
-                _old_pid = int(old_path_id)
-            except (TypeError, ValueError):
-                _old_pid = None
-            if _old_pid is not None:
-                await db.execute(
-                    _sa_text(
-                        "UPDATE admission_path "
-                        "SET submission_count = GREATEST(submission_count - 1, 0) "
-                        "WHERE id = :pid"
-                    ),
-                    {"pid": _old_pid},
-                )
+    path_changed = str(old_path_id) != str(new_path_id)
+
+    # LUÔN −1 path ĐANG áp dụng (hoàn +1 của lần submit gốc). Không phụ thuộc đổi
+    # path — re-submit sẽ +1 lại (submit: downstream; resubmit: bên dưới).
+    if old_path_id is not None:
+        try:
+            _old_pid = int(old_path_id)
+        except (TypeError, ValueError):
+            _old_pid = None
+        if _old_pid is not None:
+            await db.execute(
+                _sa_text(
+                    "UPDATE admission_path "
+                    "SET submission_count = GREATEST(submission_count - 1, 0) "
+                    "WHERE id = :pid"
+                ),
+                {"pid": _old_pid},
+            )
+
+    if path_changed:
         applied["admission_path_id"] = new_path_id
         applied["admission_round_id"] = path.admission_round_id
         applied["academic_info_id"] = path.academic_info_id
@@ -6466,6 +6483,28 @@ async def _apply_major_change_snapshot(
             old_path_id=old_path_id,
             new_path_id=new_path_id,
         )
+
+    # Nhánh resubmit KHÔNG có downstream increment → TỰ +1 path mới với quota
+    # guard (mirror submit_and_evaluate atomic increment :6960). Quota đầy → 400.
+    if increment_new_path and new_path_id is not None:
+        inc_row = (
+            await db.execute(
+                _sa_text(
+                    "UPDATE admission_path "
+                    "SET submission_count = submission_count + 1 "
+                    "WHERE id = :pid "
+                    "  AND (round_quota IS NULL OR submission_count < round_quota) "
+                    "RETURNING submission_count"
+                ),
+                {"pid": int(new_path_id)},
+            )
+        ).first()
+        if inc_row is None:
+            raise BadRequest(
+                f"Đã đủ chỉ tiêu nộp hồ sơ cho đường tuyển sinh {new_path_id}. "
+                "Vui lòng chọn đợt tuyển sinh khác hoặc liên hệ admin."
+            )
+
     # Re-resolve doc snapshot cho ngành mới (đọc applied_rules path MỚI).
     await _reresolve_documents_snapshot(db, profile, admission_repo, current_user)
 
@@ -10784,7 +10823,8 @@ async def resubmit_profile(
     ):
         from app.repositories import AdmissionRepository as _MCAdmissionRepo
         await _apply_major_change_snapshot(
-            db, profile, _MCAdmissionRepo(db), officer
+            db, profile, _MCAdmissionRepo(db), officer,
+            increment_new_path=True,  # resubmit KHÔNG có downstream +1 (:6960)
         )
         await _validate_eligibility_all_choices(db, profile)
 
