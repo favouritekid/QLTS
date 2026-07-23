@@ -61,6 +61,7 @@ import { AdmissionLayout } from "./layout/AdmissionLayout"
 import { derivePriorityIssues, firstAttentionStep, missingRequiredDataSteps } from "./layout/priorityIssues"
 import { AdmissionActions } from "./AdmissionActions"
 import { StatusBanner } from "@/components/ui/StatusBanner"
+import { MajorChangeRecallBanner } from "./MajorChangeRecallBanner"
 
 // Tabs
 import { PersonalInfoTab } from "./tabs/PersonalInfoTab"
@@ -584,6 +585,12 @@ export function AdmissionDetailClient({
             </div>
           )
         )}
+
+        {/* Đổi ngành: nhắc thu hồi giấy báo cũ + copy câu mẫu (phương án c). */}
+        <MajorChangeRecallBanner
+          cycleOpen={profile.major_change_cycle_open ?? false}
+          candidateName={profile.lead?.full_name}
+        />
 
         {/* TAB CONTENT — no wrapper card: each tab renders its own Card(s), so an
             outer bg-card/shadow here was a redundant card-in-card that boxed the
