@@ -6,8 +6,10 @@ import type { DebtReportSummary } from "@/types/finance.types";
 
 const nf = new Intl.NumberFormat("vi-VN");
 
+// bucket_0_30 = days_overdue ≤ 30 (FinanceReportService) → gồm CẢ nợ trong hạn
+// LẪN quá hạn 1–30 ngày; đừng gán nhãn "Trong hạn" cho cả nhóm.
 const AGING = [
-  { field: "bucket_0_30", label: "Trong hạn · 0–30 ngày", accent: "bg-amber-500" },
+  { field: "bucket_0_30", label: "Trong hạn / quá hạn ≤ 30 ngày", accent: "bg-amber-500" },
   { field: "bucket_31_60", label: "Quá hạn · 31–60 ngày", accent: "bg-orange-500" },
   { field: "bucket_over_60", label: "Quá hạn · > 60 ngày", accent: "bg-rose-500" },
 ] as const;

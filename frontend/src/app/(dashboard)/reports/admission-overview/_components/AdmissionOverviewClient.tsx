@@ -160,6 +160,16 @@ export function AdmissionOverviewClient() {
   const anyFetching =
     weekly.isFetching || funnel.isFetching || trend.isFetching || matrix.isFetching;
 
+  // A unit-scoped user (manager): the backend forces its own unit and returns it as
+  // scope_unit_id even when "Toàn trường" is selected. Reflect that enforced scope
+  // (show the real unit, lock the picker) so figures aren't mislabeled schoolwide and
+  // a foreign-unit pick can't 404. Admin toàn trường → scope_unit_id null → unlocked.
+  const enforcedUnitId = synced?.scope_unit_id ?? null;
+  const unitLocked = enforcedUnitId != null && unit === ALL_UNITS;
+  const enforcedUnitName = unitLocked
+    ? flatUnits.find((u) => u.id === enforcedUnitId)?.name
+    : undefined;
+
   const onYearChange = (next: number) => {
     setYear(next);
     setRound(ALL_ROUNDS); // dependent filter may be invalid for the new year
@@ -212,12 +222,24 @@ export function AdmissionOverviewClient() {
           </div>
           <div className="space-y-1">
             <label className="text-xs text-muted-foreground">Đơn vị</label>
-            <Select value={unit} onValueChange={setUnit}>
+            <Select
+              value={unitLocked ? String(enforcedUnitId) : unit}
+              onValueChange={setUnit}
+              disabled={unitLocked}
+            >
               <SelectTrigger className="w-44" aria-label="Đơn vị">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL_UNITS}>Toàn trường</SelectItem>
+                {/* enforced unit may not be in the tree yet (still loading) — keep an
+                    item so the locked value always displays a name */}
+                {unitLocked &&
+                  !flatUnits.some((u) => u.id === enforcedUnitId) && (
+                    <SelectItem value={String(enforcedUnitId)}>
+                      {enforcedUnitName ?? `Đơn vị #${enforcedUnitId}`}
+                    </SelectItem>
+                  )}
                 {flatUnits.map((u) => (
                   <SelectItem key={u.id} value={u.id.toString()}>
                     <span style={u.depth > 0 ? { paddingLeft: u.depth * 10 } : undefined}>
@@ -289,10 +311,11 @@ export function AdmissionOverviewClient() {
             </PanelState>
           </Panel>
 
-          {/* Công nợ học phí */}
-          <Panel title="Công nợ học phí HK1" caption="debt-report">
+          {/* Công nợ học phí (mọi kỳ — endpoint không tách semester) */}
+          <Panel title="Công nợ học phí" caption="debt-report">
             <p className="mb-3 -mt-1 text-xs text-muted-foreground">
-              Theo năm học · đơn vị (chưa lọc theo đợt).
+              Toàn bộ học phí còn nợ (mọi kỳ) · theo năm học và đơn vị — chưa lọc
+              theo đợt.
             </p>
             <DebtPanel summary={debt.data?.summary} isLoading={debt.isLoading} />
           </Panel>

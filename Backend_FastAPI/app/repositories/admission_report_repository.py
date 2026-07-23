@@ -25,7 +25,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional, Union
 
-from sqlalchemy import and_, distinct, func, or_, select
+from sqlalchemy import and_, distinct, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -619,14 +619,22 @@ class AdmissionReportRepository:
         cohort_ranges: list[WindowRange],
         scope_unit_id: Optional[int],
         officer_id: Optional[int],
-    ) -> tuple[list[tuple[str, str, int, bool, str]], dict[str, int], int]:
-        """(stages_meta, counts_by_stage, total_leads) for the cohort.
+        profile_lead_ids: Optional[set] = None,
+    ) -> tuple[list[tuple[str, str, int, bool, str]], dict[str, int], int, int, set]:
+        """(stages_meta, on_path_counts, leaked, total_leads, leak_stage_ids).
 
-        Stages = every ``PipelineStage`` ordered by ``order``. Counts = distinct
-        leads currently at each stage (``Lead.pipeline_stage_id``) among the cohort
-        (``created_at`` in a round window of the year, non-deleted, unit/officer
-        scoped). A lead with NULL stage folds into the lowest-order stage (chưa bắt
-        đầu) so ``Σ current == total_leads``.
+        Funnel honours the pipeline contract:
+        - **Cohort** = leads ``created_at`` in a round window OR that already produced
+          an in-scope profile (``profile_lead_ids`` — walk-ins between rounds), parity
+          with the weekly report so admission never exceeds the lead population.
+        - **counts_for_funnel**: only statuses flagged for the funnel (or no status)
+          count — activity statuses (NO_ANSWER…) are excluded, matching the KPI funnel.
+        - **Early exit by OUTCOME, not stage order**: a lead whose CURRENT status is
+          FINAL + NEGATIVE (rejected / dropped / không đi học / refunded) goes to
+          ``leaked`` — NOT the success path — regardless of the stage it parked at.
+          Everyone else counts on ``pipeline_stage_id`` (NULL stage → lowest order).
+        ``leak_stage_ids`` = negative-terminal stages (final stage whose statuses are
+        all negative) so the caller drops them from the displayed path.
         """
         stage_rows = (
             await self.db.execute(
@@ -643,13 +651,34 @@ class AdmissionReportRepository:
             (sid, name, order, bool(fin), color)
             for sid, name, order, fin, color in stage_rows
         ]
-        if not cohort_ranges:
-            return stages, {}, 0
+        # Negative-terminal stages: is_final AND no consultation_status with a
+        # non-negative outcome (polarity from outcome_type, NOT stage order).
+        cs = models.ConsultationStatus
+        leak_stage_ids = set(
+            (
+                await self.db.execute(
+                    select(models.PipelineStage.id).where(
+                        models.PipelineStage.is_final_stage.is_(True),
+                        ~exists().where(
+                            cs.stage_id == models.PipelineStage.id,
+                            cs.outcome_type != "negative",
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
 
         window_preds = [
             and_(models.Lead.created_at >= r.start, models.Lead.created_at < r.end_excl)
             for r in cohort_ranges
         ]
+        if profile_lead_ids:
+            window_preds.append(models.Lead.id.in_(profile_lead_ids))
+        if not window_preds:
+            return stages, {}, 0, 0, leak_stage_ids
+
         conds = [models.Lead.deleted_at.is_(None), or_(*window_preds)]
         if scope_unit_id is not None:
             conds.append(models.Lead.unit_id == scope_unit_id)
@@ -659,18 +688,33 @@ class AdmissionReportRepository:
         rows = await self.db.execute(
             select(
                 models.Lead.pipeline_stage_id,
+                cs.is_final,
+                cs.outcome_type,
                 func.count(distinct(models.Lead.id)),
             )
-            .where(and_(*conds))
-            .group_by(models.Lead.pipeline_stage_id)
+            .select_from(models.Lead)
+            .join(cs, models.Lead.consultation_status_id == cs.id, isouter=True)
+            .where(
+                and_(*conds),
+                # counts_for_funnel contract: exclude activity statuses; no-status
+                # leads (NULL) still count on the path.
+                or_(cs.counts_for_funnel.is_(None), cs.counts_for_funnel.is_(True)),
+            )
+            .group_by(models.Lead.pipeline_stage_id, cs.is_final, cs.outcome_type)
         )
         lowest = stages[0][0] if stages else None  # order-sorted → first = lowest
-        counts: dict[str, int] = {}
+        on_path: dict[str, int] = {}
+        leaked = 0
         total = 0
-        for stage_id, cnt in rows:
+        for stage_id, is_final, outcome, cnt in rows:
             c = int(cnt or 0)
+            outcome_val = getattr(outcome, "value", outcome)
+            if is_final and outcome_val == "negative":  # early exit, off the path
+                leaked += c
+                total += c
+                continue
             key = stage_id if stage_id is not None else lowest
             if key is not None:
-                counts[key] = counts.get(key, 0) + c
-                total += c  # only count what a stage can display → Σ current == total
-        return stages, counts, total
+                on_path[key] = on_path.get(key, 0) + c
+                total += c
+        return stages, on_path, leaked, total, leak_stage_ids

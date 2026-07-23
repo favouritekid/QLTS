@@ -399,23 +399,33 @@ class AdmissionReportService:
     ) -> PipelineFunnelResponse:
         """Lead theo giai đoạn pipeline hiện tại (cohort = đợt/năm, scope IDOR).
 
-        Funnel bỏ qua đợt thiếu ngày (``skip_undated=True``) để 1 đợt cấu hình lỗi
-        không 400 cả view; đợt không tồn tại vẫn 404. Mô hình phễu (reached /
-        conversion / leak) do BACKEND tính (FE render nguyên) — xem ``_build_funnel_stages``.
+        - Chỉ view "tất cả đợt" mới bỏ qua đợt thiếu ngày (``skip_undated``); chọn
+          đích danh 1 đợt thiếu ngày → vẫn báo lỗi cấu hình (không giả rỗng).
+        - Cohort gồm lead có hồ sơ (``profile_lead_ids``) → khớp weekly, admission
+          không vượt lead.
+        - Mô hình phễu (reached/conversion/leak theo OUTCOME) do BACKEND tính.
         """
         scope_unit_id = self._resolve_scope(current_user, unit_id)
         cohort_ranges = await self._cohort_ranges(
-            academic_year, round_code, skip_undated=True
+            academic_year, round_code, skip_undated=round_code is None
         )
-        stages_meta, counts, total = await self.repo.pipeline_funnel_counts(
-            cohort_ranges, scope_unit_id, None
+        # walk-in parity: leads that already produced an in-scope profile
+        dims, _ = await self.repo.resolve_profiles(
+            academic_year, scope_unit_id, None, round_code
+        )
+        profile_lead_ids = {d.lead_id for d in dims.values()}
+        stages_meta, on_path, leaked, total, leak_ids = (
+            await self.repo.pipeline_funnel_counts(
+                cohort_ranges, scope_unit_id, None, profile_lead_ids
+            )
         )
         return PipelineFunnelResponse(
             academic_year=academic_year,
             round_code=round_code,
             scope_unit_id=scope_unit_id,
             total_leads=total,
-            stages=self._build_funnel_stages(stages_meta, counts),
+            leaked=leaked,
+            stages=self._build_funnel_stages(stages_meta, on_path, leak_ids),
         )
 
     # ------------------------------------------------------- overview: trend
@@ -575,31 +585,30 @@ class AdmissionReportService:
     # --------------------------------------------------------------- helpers
     @staticmethod
     def _build_funnel_stages(
-        stages_meta: list, counts: dict
+        stages_meta: list, on_path: dict, leak_stage_ids: set
     ) -> list[FunnelStage]:
         """Backend owns the funnel model (thin-client): from ordered stage meta
-        ``(id, name, order, is_final, color)`` + current counts, compute per-stage
-        ``reached`` (cumulative on the success path), ``conversion_pct`` (vs the
-        previous path stage) and mark the drop-off (``is_leak``) stage.
+        ``(id, name, order, is_final, color)`` + ON-PATH counts (early exits already
+        removed by the repo) + ``leak_stage_ids`` (negative-terminal stages derived
+        from status outcomes), compute per-stage ``reached`` (cumulative on the path)
+        and ``conversion_pct`` (vs the previous path stage).
 
-        Leak = highest-``order`` final stage (e.g. "Không đi học"); the rest form the
-        narrowing path where reached[k] = Σ current at/below k (a lead at stage k
-        passed every earlier stage). Pure + unit-testable; the FE renders it verbatim.
+        Leak stages are marked (``is_leak``) and kept OFF the path; the exited leads
+        themselves are reported once as ``PipelineFunnelResponse.leaked``. reached[k]
+        = Σ on_path at/below k. Pure + unit-testable; the FE renders it verbatim.
         """
         ordered = sorted(stages_meta, key=lambda s: s[2])  # by order
-        finals = [s for s in ordered if s[3]]  # is_final
-        leak_id = finals[-1][0] if finals else None  # highest-order final = drop-off
-        path = [s for s in ordered if s[0] != leak_id]
+        path = [s for s in ordered if s[0] not in leak_stage_ids]
         reached: dict = {}
         running = 0
-        for s in reversed(path):  # bottom-up cumulative
-            running += counts.get(s[0], 0)
+        for s in reversed(path):  # bottom-up cumulative on the path
+            running += on_path.get(s[0], 0)
             reached[s[0]] = running
         out: list[FunnelStage] = []
         prev_reached: Optional[int] = None
         for sid, name, order, is_final, color in ordered:
-            cur = counts.get(sid, 0)
-            if sid == leak_id:
+            cur = on_path.get(sid, 0)
+            if sid in leak_stage_ids:
                 out.append(
                     FunnelStage(
                         stage_id=sid, name=name, order=order, is_final=is_final,

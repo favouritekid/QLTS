@@ -19,10 +19,6 @@ export function OverviewFunnel({ funnel }: { funnel: PipelineFunnel }) {
       funnel.stages.filter((s) => !s.is_leak).sort((a, b) => a.order - b.order),
     [funnel],
   );
-  const leak = React.useMemo(
-    () => funnel.stages.find((s) => s.is_leak),
-    [funnel],
-  );
   const maxReached = path.length ? Math.max(...path.map((s) => s.reached)) : 0;
 
   if (funnel.total_leads === 0) {
@@ -62,11 +58,11 @@ export function OverviewFunnel({ funnel }: { funnel: PipelineFunnel }) {
           </div>
         );
       })}
-      {leak && leak.current > 0 && (
+      {funnel.leaked > 0 && (
         <div className="border-t pt-2 text-xs text-muted-foreground">
-          Rời phễu — {leak.name}:{" "}
+          Rời phễu (từ chối · rút · không đi học):{" "}
           <span className="font-semibold tabular-nums text-rose-500">
-            {nf.format(leak.current)}
+            {nf.format(funnel.leaked)}
           </span>
         </div>
       )}

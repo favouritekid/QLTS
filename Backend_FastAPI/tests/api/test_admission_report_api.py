@@ -342,16 +342,18 @@ async def test_pipeline_funnel_admin_empty_year_returns_200(
     client: AsyncClient, admin_user_in_db, seed_lead_dependencies
 ):
     """Empty year (no cohort) → all-zero counts, but the SEEDED pipeline stages must
-    still return with the backend-computed funnel model (reached/conversion/leak).
-    ``seed_lead_dependencies`` seeds stg01–stg07 (stg07 = highest-order final = leak),
-    so the stage-level asserts actually run (not a vacuously-empty loop)."""
+    still return with the backend-computed funnel model (current/reached/conversion/
+    is_leak) + the top-level ``leaked``. ``seed_lead_dependencies`` seeds stg01–stg07,
+    so the stage-level asserts actually run (not a vacuously-empty loop). Leak
+    IDENTIFICATION (outcome-based) is unit-tested separately — the seed's statuses
+    default to neutral outcome, so no stage is flagged is_leak here."""
     h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
     res = await client.get(FUNNEL_URL, params={"academic_year": EMPTY_YEAR}, headers=h)
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["academic_year"] == EMPTY_YEAR
     assert body["round_code"] is None and body["scope_unit_id"] is None
-    assert body["total_leads"] == 0
+    assert body["total_leads"] == 0 and body["leaked"] == 0
 
     stages = body["stages"]
     ids = {s["stage_id"] for s in stages}
@@ -364,11 +366,7 @@ async def test_pipeline_funnel_admin_empty_year_returns_200(
         ):
             assert key in stage, f"missing funnel stage key '{key}': {stage}"
         assert stage["current"] == 0 and stage["reached"] == 0
-
-    by_id = {s["stage_id"]: s for s in stages}
-    # Backend owns leak identification: exactly one, the highest-order final (stg07).
-    assert sum(1 for s in stages if s["is_leak"]) == 1
-    assert by_id["stg07"]["is_leak"] is True and by_id["stg06"]["is_leak"] is False
+        assert isinstance(stage["is_leak"], bool)
 
 
 @pytest.mark.asyncio

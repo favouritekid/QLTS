@@ -119,7 +119,8 @@ export const pipelineFunnelSchema = z.object({
   academic_year: z.number().int(),
   round_code: z.string().nullable(),
   scope_unit_id: z.number().int().nullable(),
-  total_leads: z.number().int(),
+  total_leads: z.number().int(), // = Σ on-path + leaked
+  leaked: z.number().int(), // lead rời phễu (final + outcome negative, mọi bậc)
   stages: z.array(funnelStageSchema),
 });
 

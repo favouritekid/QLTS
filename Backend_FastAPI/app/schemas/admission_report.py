@@ -150,17 +150,17 @@ class FunnelStage(BaseModel):
     order: int  # PipelineStage.order (0-based)
     is_final: bool  # PipelineStage.is_final_stage
     color_code: str
-    current: int = 0  # lead ĐANG ở giai đoạn này (mỗi lead đúng 1 giai đoạn)
+    current: int = 0  # lead ON-PATH ở giai đoạn này (đã loại lead rời phễu)
     # Mô hình phễu do BACKEND tính (FE chỉ render — thin-client):
     reached: int = 0  # lũy kế "từng đạt bậc này" trên đường phễu; bậc leak = current
     conversion_pct: Optional[float] = None  # % chuyển tiếp từ bậc path trước (0..100)
-    is_leak: bool = False  # bậc rời phễu (terminal âm) — FE hiển thị tách, không thuộc path
+    is_leak: bool = False  # bậc terminal ÂM (mọi trạng thái negative) — FE ẩn khỏi path
 
 
 class PipelineFunnelResponse(ScopedReport):
-    total_leads: int = 0
-    # Sorted by ``order``. Lead chưa gán giai đoạn gộp vào giai đoạn order thấp
-    # nhất (chưa bắt đầu). ``current`` cộng = total_leads.
+    total_leads: int = 0  # tổng lead của phễu = Σ on-path + leaked
+    leaked: int = 0  # lead rời phễu (trạng thái final + outcome negative, mọi bậc)
+    # Sorted by ``order``; lead chưa gán giai đoạn gộp vào bậc order thấp nhất.
     stages: list[FunnelStage] = Field(default_factory=list)
 
 
