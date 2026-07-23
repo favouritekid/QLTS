@@ -493,13 +493,15 @@ class AdmissionReportService:
         academic_year: int,
         round_code: Optional[str] = None,
         unit_id: Optional[int] = None,
-        metric: str = "enrolled",
     ) -> OfficerMajorMatrixResponse:
-        """Ma trận (cán bộ × ngành) đếm enrolled + submitted (cumulative-to-now).
+        """Ma trận (ngành × cán bộ) — mỗi ô đếm 5 chỉ số hồ sơ cho 3 tab FE:
+        Hồ sơ (đã nộp · nháp) · Học phí HK1 (một phần · đủ) · Nhập học.
 
-        Tái dùng ``resolve_profiles`` (đã cho cặp officer_key × major_key mỗi hồ sơ)
-        + ``admission_milestones``. Ambiguous ∪ unresolved gộp cột "Chưa phân loại
-        ngành"; unassigned → hàng "Chưa gán cán bộ".
+        Tái dùng ``resolve_profiles`` (cặp officer_key × major_key mỗi hồ sơ) +
+        ``admission_milestones`` (submitted/enrolled) + trạng thái hồ sơ (nháp) +
+        đóng học phí HK1. Ambiguous ∪ unresolved gộp "Chưa phân loại ngành";
+        unassigned → "Chưa gán cán bộ". Trả CẢ 5 chỉ số → FE đổi tab client-side
+        không refetch.
         """
         scope_unit_id = self._resolve_scope(current_user, unit_id)
         await self._assert_round_exists(academic_year, round_code)
@@ -507,22 +509,32 @@ class AdmissionReportService:
         dims, _major_by_id = await self.repo.resolve_profiles(
             academic_year, scope_unit_id, None, round_code
         )
-        milestones = await self.repo.admission_milestones(
-            list(dims.keys()), week, week.end_excl
-        )
+        pids = list(dims.keys())
+        milestones = await self.repo.admission_milestones(pids, week, week.end_excl)
+        statuses = await self.repo.profile_statuses(pids)
+        tuition = await self.repo.tuition_hk1_payment(pids)
 
-        cells: dict[tuple, list] = {}  # (officer_id|None, major_id|None) -> [enr, sub]
+        # (officer_id|None, major_id|None) -> [submitted, draft, fee_partial,
+        # fee_full, enrolled]
+        cells: dict[tuple, list] = {}
         officer_names: dict = {}
         majors: dict = {}  # major_id|None -> MajorInfo|None
         for pid, dim in dims.items():
             ms = milestones.get(pid, {})
             oid = dim.officer_key if isinstance(dim.officer_key, int) else None
             mid = dim.major_key if isinstance(dim.major_key, int) else None
-            slot = cells.setdefault((oid, mid), [0, 0])
-            if ms.get("enrolled_cumulative"):
-                slot[0] += 1
+            slot = cells.setdefault((oid, mid), [0, 0, 0, 0, 0])
             if ms.get("submitted_cumulative"):
+                slot[0] += 1
+            if statuses.get(pid) == "draft":
                 slot[1] += 1
+            fee = tuition.get(pid)
+            if fee == "partial":
+                slot[2] += 1
+            elif fee == "full":
+                slot[3] += 1
+            if ms.get("enrolled_cumulative"):
+                slot[4] += 1
             officer_names.setdefault(oid, dim.officer_name if oid is not None else None)
             majors.setdefault(mid, dim.major if mid is not None else None)
 
@@ -532,17 +544,15 @@ class AdmissionReportService:
             for oid in missing:
                 officer_names[oid] = resolved.get(oid, f"Cán bộ #{oid}")
 
-        idx = 0 if metric == "enrolled" else 1
-        # Single pass over cells → O(cells), not O(officers×cells + majors×cells).
-        o_total: dict = {}
-        m_total: dict = {}
+        # Sắp cán bộ + ngành theo tổng 'đã nộp' (chỉ số tab đầu) giảm dần → thứ tự
+        # ỔN ĐỊNH xuyên tab; bucket (id=None) chốt cuối. FE re-sort hàng theo tab.
+        o_sub: dict = {}
+        m_sub: dict = {}
         for (o, m), v in cells.items():
-            o_total[o] = o_total.get(o, 0) + v[idx]
-            m_total[m] = m_total.get(m, 0) + v[idx]
-        officer_ids = sorted(
-            officer_names, key=lambda o: (o is None, -o_total.get(o, 0))
-        )
-        major_ids = sorted(majors, key=lambda m: (m is None, -m_total.get(m, 0)))
+            o_sub[o] = o_sub.get(o, 0) + v[0]
+            m_sub[m] = m_sub.get(m, 0) + v[0]
+        officer_ids = sorted(officer_names, key=lambda o: (o is None, -o_sub.get(o, 0)))
+        major_ids = sorted(majors, key=lambda m: (m is None, -m_sub.get(m, 0)))
 
         officers_out = [
             MatrixOfficer(
@@ -568,15 +578,22 @@ class AdmissionReportService:
                 )
             )
         cells_out = [
-            OfficerMajorCell(officer_id=o, major_id=m, enrolled=v[0], submitted=v[1])
+            OfficerMajorCell(
+                officer_id=o,
+                major_id=m,
+                submitted=v[0],
+                draft=v[1],
+                fee_partial=v[2],
+                fee_full=v[3],
+                enrolled=v[4],
+            )
             for (o, m), v in cells.items()
-            if v[0] or v[1]
+            if any(v)
         ]
         return OfficerMajorMatrixResponse(
             academic_year=academic_year,
             round_code=round_code,
             scope_unit_id=scope_unit_id,
-            group_by_metric=metric,  # type: ignore[arg-type]
             officers=officers_out,
             majors=majors_out,
             cells=cells_out,

@@ -485,6 +485,51 @@ class AdmissionReportRepository:
         )
         return [tuple(r) for r in rows.all()]
 
+    async def profile_statuses(self, profile_ids: list[int]) -> dict[int, str]:
+        """Trạng thái HIỆN TẠI của từng hồ sơ (dùng cho ô 'nháp' = status='draft')."""
+        if not profile_ids:
+            return {}
+        rows = await self.db.execute(
+            select(
+                models.AdmissionProfile.id,
+                models.AdmissionProfile.status,
+            ).where(models.AdmissionProfile.id.in_(profile_ids))
+        )
+        return {pid: status for pid, status in rows.all()}
+
+    async def tuition_hk1_payment(self, profile_ids: list[int]) -> dict[int, str]:
+        """Tình trạng đóng học phí HỌC KỲ 1 mỗi hồ sơ → 'full' | 'partial'.
+
+        Chỉ HK1 (``semester_no == 1``) vì đây là cổng nhập học của báo cáo tuyển
+        sinh. Unique index (profile, fee_type, semester_no) WHERE status<>'cancelled'
+        đảm bảo tối đa MỘT dòng active/hồ sơ → không cần gộp. ``remaining =
+        final_amount - paid_amount - waived_amount``. Hồ sơ không có dòng HK1 hoặc
+        chưa đóng đồng nào → không xuất hiện (coi như 'chưa đóng').
+        """
+        if not profile_ids:
+            return {}
+        rows = await self.db.execute(
+            select(
+                models.Fee.admission_profile_id,
+                models.Fee.final_amount,
+                models.Fee.paid_amount,
+                models.Fee.waived_amount,
+            ).where(
+                models.Fee.admission_profile_id.in_(profile_ids),
+                models.Fee.fee_type == "tuition",
+                models.Fee.semester_no == 1,
+                models.Fee.status != "cancelled",
+            )
+        )
+        out: dict[int, str] = {}
+        for pid, final_amt, paid, waived in rows.all():
+            remaining = final_amt - paid - waived
+            if final_amt > 0 and remaining <= 0:
+                out[pid] = "full"
+            elif paid > 0 and remaining > 0:
+                out[pid] = "partial"
+        return out
+
     # -------------------------------------------------------------------- leads
     async def lead_counts(
         self,

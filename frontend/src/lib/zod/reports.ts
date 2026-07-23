@@ -154,20 +154,24 @@ export const matrixMajorSchema = z.object({
   degree_level: z.string().nullable(),
 });
 
+// 5 chỉ số/ô → FE render 3 tab (Hồ sơ · Học phí HK1 · Nhập học). `default(0)` để
+// không vỡ nếu BE cũ chưa trả field mới.
 export const officerMajorCellSchema = z.object({
   officer_id: z.number().int().nullable(),
   major_id: z.number().int().nullable(),
-  enrolled: z.number().int(),
-  submitted: z.number().int(),
+  submitted: z.number().int().default(0), // đã nộp hồ sơ (cumulative)
+  draft: z.number().int().default(0), // hồ sơ đang ở trạng thái 'draft' (nháp)
+  fee_partial: z.number().int().default(0), // đóng học phí HK1 một phần
+  fee_full: z.number().int().default(0), // đóng đủ học phí HK1
+  enrolled: z.number().int().default(0), // đã nhập học (cumulative)
 });
 
 export const officerMajorMatrixSchema = z.object({
   academic_year: z.number().int(),
   round_code: z.string().nullable(),
   scope_unit_id: z.number().int().nullable(),
-  group_by_metric: z.enum(["enrolled", "submitted"]),
-  officers: z.array(matrixOfficerSchema), // hàng
-  majors: z.array(matrixMajorSchema), // cột
+  officers: z.array(matrixOfficerSchema), // cán bộ (render làm cột)
+  majors: z.array(matrixMajorSchema), // ngành (render làm hàng)
   cells: z.array(officerMajorCellSchema), // thưa
 });
 
@@ -179,4 +183,5 @@ export type MatrixOfficer = z.infer<typeof matrixOfficerSchema>;
 export type MatrixMajor = z.infer<typeof matrixMajorSchema>;
 export type OfficerMajorCell = z.infer<typeof officerMajorCellSchema>;
 export type OfficerMajorMatrix = z.infer<typeof officerMajorMatrixSchema>;
-export type MatrixMetric = OfficerMajorMatrix["group_by_metric"];
+/** Khoá 1 chỉ số trong ô (dùng cho tab heatmap). */
+export type MatrixMetric = "submitted" | "draft" | "fee_partial" | "fee_full" | "enrolled";

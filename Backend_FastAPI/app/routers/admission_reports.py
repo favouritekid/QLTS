@@ -125,18 +125,17 @@ async def get_admission_officer_major_matrix(
     unit_id: Optional[int] = Query(
         None, ge=1, description="Admin chọn đơn vị; manager bị ép về đơn vị của mình"
     ),
-    metric: str = Query("enrolled", pattern="^(enrolled|submitted)$"),
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(require_admin_or_manager),
 ) -> OfficerMajorMatrixResponse:
-    """Heatmap cán bộ × ngành — đếm enrolled + submitted (cumulative-to-now)."""
+    """Heatmap ngành × cán bộ — mỗi ô 5 chỉ số (đã nộp · nháp · học phí HK1 một
+    phần/đủ · nhập học); FE render 3 tab, đổi tab client-side."""
     service = AdmissionReportService(db)
     return await service.get_officer_major_matrix(
         current_user=current_user,
         academic_year=academic_year,
         round_code=round_code,
         unit_id=unit_id,
-        metric=metric,
     )
 
 

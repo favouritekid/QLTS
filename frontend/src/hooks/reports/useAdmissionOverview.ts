@@ -6,7 +6,6 @@ import {
   getPipelineFunnel,
   type OverviewParams,
 } from "@/lib/api/reports";
-import type { MatrixMetric } from "@/lib/zod/reports";
 
 /**
  * React Query hooks for the admission-overview dashboard panels. Same scope
@@ -18,8 +17,7 @@ export const overviewKeys = {
   funnel: (p: OverviewParams) => [...overviewKeys.all, "funnel", p] as const,
   trend: (p: OverviewParams & { weeks?: number }) =>
     [...overviewKeys.all, "trend", p] as const,
-  matrix: (p: OverviewParams & { metric?: MatrixMetric }) =>
-    [...overviewKeys.all, "matrix", p] as const,
+  matrix: (p: OverviewParams) => [...overviewKeys.all, "matrix", p] as const,
 };
 
 export function usePipelineFunnel(params: OverviewParams) {
@@ -42,9 +40,7 @@ export function useAdmissionTrend(params: OverviewParams & { weeks?: number }) {
   });
 }
 
-export function useOfficerMajorMatrix(
-  params: OverviewParams & { metric?: MatrixMetric },
-) {
+export function useOfficerMajorMatrix(params: OverviewParams) {
   return useQuery({
     queryKey: overviewKeys.matrix(params),
     queryFn: () => getOfficerMajorMatrix(params),

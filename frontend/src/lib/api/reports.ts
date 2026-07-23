@@ -8,7 +8,6 @@ import {
   reportFiltersSchema,
   type AdmissionTrend,
   type AdmissionWeeklyReport,
-  type MatrixMetric,
   type OfficerMajorMatrix,
   type PipelineFunnel,
   type ReportFilters,
@@ -111,9 +110,9 @@ export async function getAdmissionTrend(
   return admissionTrendSchema.parse(response.data);
 }
 
-/** Heatmap cán bộ × ngành (đếm enrolled hoặc submitted, cumulative-to-now). */
+/** Heatmap ngành × cán bộ — mỗi ô 5 chỉ số; FE render 3 tab client-side. */
 export async function getOfficerMajorMatrix(
-  params: OverviewParams & { metric?: MatrixMetric },
+  params: OverviewParams,
 ): Promise<OfficerMajorMatrix> {
   const response = await api.get(
     "/api/v2/admin/reports/admission-weekly/officer-major-matrix",

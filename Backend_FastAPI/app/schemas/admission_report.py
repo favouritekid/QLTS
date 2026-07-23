@@ -194,14 +194,24 @@ class MatrixMajor(BaseModel):
 
 
 class OfficerMajorCell(BaseModel):
+    """5 chỉ số/ô để FE render 3 tab (Hồ sơ · Học phí HK1 · Nhập học).
+
+    ``submitted``/``enrolled`` = mốc lịch sử (cumulative-to-now). ``draft`` =
+    trạng thái hồ sơ HIỆN TẠI = 'draft'. ``fee_partial``/``fee_full`` = đóng học
+    phí HỌC KỲ 1 (một phần / đủ) — chỉ HK1 vì là cổng nhập học của báo cáo TS.
+    """
+
     officer_id: Optional[int] = None
     major_id: Optional[int] = None
-    enrolled: int = 0  # đã nhập học (cumulative, event-based)
     submitted: int = 0  # đã nộp hồ sơ (cumulative)
+    draft: int = 0  # hồ sơ đang ở trạng thái 'draft' (nháp)
+    fee_partial: int = 0  # đóng học phí HK1 một phần (paid>0, còn nợ)
+    fee_full: int = 0  # đóng đủ học phí HK1 (remaining<=0)
+    enrolled: int = 0  # đã nhập học (cumulative, event-based)
 
 
 class OfficerMajorMatrixResponse(ScopedReport):
-    group_by_metric: Literal["enrolled", "submitted"] = "enrolled"
-    officers: list[MatrixOfficer] = Field(default_factory=list)  # hàng
-    majors: list[MatrixMajor] = Field(default_factory=list)  # cột
+    # Hai trục; FE render ngành làm hàng, cán bộ làm cột (orientation do FE quyết).
+    officers: list[MatrixOfficer] = Field(default_factory=list)
+    majors: list[MatrixMajor] = Field(default_factory=list)
     cells: list[OfficerMajorCell] = Field(default_factory=list)  # thưa (sparse)

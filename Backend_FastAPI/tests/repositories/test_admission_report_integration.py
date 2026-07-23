@@ -984,6 +984,61 @@ async def test_application_paid_without_submit_counts_prepay_draft(
     assert resp.totals.admission.fee_paid_not_submitted == 1
 
 
+async def test_officer_major_matrix_five_metrics_end_to_end(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """Ô matrix đếm 5 chỉ số: submitted/enrolled (milestone) · draft (status hồ
+    sơ HIỆN TẠI) · fee_partial/fee_full (học phí HK1). Năm tương lai → cutoff
+    cumulative ≈ tuần đầu tháng 1, nên mốc submit/enroll seed vào 04/01 để được
+    đếm; draft & học phí không phụ thuộc thời gian.
+    """
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    at = datetime(year, 1, 4, 12, tzinfo=VN_TZ)  # trong tuần cutoff (năm tương lai)
+    major, offering = await _seed_catalog(db, year, unit_id)
+
+    async def _profile(status="submitted"):
+        _, p = await _seed_lead_profile(
+            db, seeded_dependencies, year, offering.id, officer_id, created_at=at
+        )
+        if status != "submitted":
+            p.status = status
+            await db.flush()
+        return p
+
+    # (1) đã nộp
+    p_sub = await _profile()
+    await _seed_history(db, p_sub.id, "submitted", at)
+    # (2) nháp — status='draft', KHÔNG có mốc submitted
+    await _profile(status="draft")
+    # (3) học phí HK1 một phần (paid>0, còn nợ) + đã nộp
+    p_part = await _profile()
+    await _seed_history(db, p_part.id, "submitted", at)
+    f_part = await _seed_fee(db, p_part.id, year, fee_type="tuition")
+    f_part.paid_amount = Decimal("400000")  # final 1,000,000 → remaining 600,000
+    await db.flush()
+    # (4) đóng đủ HK1 (remaining<=0) + đã nộp + nhập học
+    p_full = await _profile()
+    await _seed_history(db, p_full.id, "submitted", at)
+    await _seed_history(db, p_full.id, "enrolled", at, from_status="submitted")
+    f_full = await _seed_fee(db, p_full.id, year, fee_type="tuition")
+    f_full.paid_amount = Decimal("1000000")  # remaining 0 → đóng đủ
+    await db.flush()
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_officer_major_matrix(current_user=_admin(), academic_year=year)
+
+    cell = next(
+        c for c in resp.cells if c.officer_id == officer_id and c.major_id == major.id
+    )
+    assert cell.submitted == 3  # p_sub, p_part, p_full (đều có mốc submitted)
+    assert cell.draft == 1  # chỉ hồ sơ status='draft'
+    assert cell.fee_partial == 1  # p_part
+    assert cell.fee_full == 1  # p_full
+    assert cell.enrolled == 1  # p_full
+
+
 # --------------------------------------------------------- pipeline funnel (DB)
 async def _seed_pstage(db, *, is_final=False):
     n = next(_seq)

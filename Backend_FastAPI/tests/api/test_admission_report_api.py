@@ -450,21 +450,9 @@ async def test_officer_major_matrix_admin_empty_year_returns_200(
     res = await client.get(MATRIX_URL, params={"academic_year": EMPTY_YEAR}, headers=h)
     assert res.status_code == 200, res.text
     body = res.json()
-    assert body["group_by_metric"] == "enrolled"  # default
     # Isolated year → no profiles → empty matrix (not an error).
     assert body["officers"] == []
     assert body["majors"] == []
     assert body["cells"] == []
-
-
-@pytest.mark.asyncio
-async def test_officer_major_matrix_invalid_metric_returns_422(
-    client: AsyncClient, admin_user_in_db
-):
-    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
-    res = await client.get(
-        MATRIX_URL,
-        params={"academic_year": EMPTY_YEAR, "metric": "bogus"},  # pattern gate
-        headers=h,
-    )
-    assert res.status_code == 422, res.text
+    # Contract no longer carries group_by_metric (FE fetches all 5 metrics once).
+    assert "group_by_metric" not in body

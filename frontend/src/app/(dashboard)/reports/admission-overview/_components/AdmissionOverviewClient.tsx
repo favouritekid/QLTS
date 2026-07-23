@@ -21,7 +21,6 @@ import {
 } from "@/hooks/reports/useAdmissionOverview";
 import { useReportFilters, useWeeklyReport } from "@/hooks/reports/useWeeklyReport";
 import { cn } from "@/lib/utils";
-import type { MatrixMetric } from "@/lib/zod/reports";
 
 import { DebtPanel } from "./DebtPanel";
 import { OfficerMajorHeatmap } from "./OfficerMajorHeatmap";
@@ -107,7 +106,6 @@ export function AdmissionOverviewClient() {
   const [year, setYear] = React.useState(CURRENT_YEAR);
   const [round, setRound] = React.useState<string>(ALL_ROUNDS);
   const [unit, setUnit] = React.useState<string>(ALL_UNITS);
-  const [metric, setMetric] = React.useState<MatrixMetric>("enrolled");
 
   const roundCode = round === ALL_ROUNDS ? undefined : round;
   const unitId = unit === ALL_UNITS ? undefined : Number(unit);
@@ -148,7 +146,7 @@ export function AdmissionOverviewClient() {
   });
   const funnel = usePipelineFunnel(scope);
   const trend = useAdmissionTrend(scope);
-  const matrix = useOfficerMajorMatrix({ ...scope, metric });
+  const matrix = useOfficerMajorMatrix(scope);
   const debt = useDebtReport({
     academic_year: year,
     unit_id: unitId,
@@ -304,16 +302,10 @@ export function AdmissionOverviewClient() {
             <QuotaRunway rows={synced.rows} />
           </Panel>
 
-          {/* Heatmap cán bộ × ngành */}
-          <Panel title="Tải cán bộ × ngành" caption="officer-major-matrix">
+          {/* Heatmap ngành × cán bộ (hàng = ngành, cột = cán bộ) */}
+          <Panel title="Tải hồ sơ theo ngành × cán bộ" caption="officer-major-matrix">
             <PanelState query={matrix} skeleton="h-56 w-full">
-              {matrix.data && (
-                <OfficerMajorHeatmap
-                  matrix={matrix.data}
-                  metric={metric}
-                  onMetricChange={setMetric}
-                />
-              )}
+              {matrix.data && <OfficerMajorHeatmap matrix={matrix.data} />}
             </PanelState>
           </Panel>
 
