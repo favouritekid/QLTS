@@ -982,3 +982,130 @@ async def test_application_paid_without_submit_counts_prepay_draft(
     assert row.admission.fee_paid_not_submitted == 1  # only p_draft
     assert row.admission.submitted_cumulative == 1  # only p_sub (milestone)
     assert resp.totals.admission.fee_paid_not_submitted == 1
+
+
+# --------------------------------------------------------- pipeline funnel (DB)
+async def _seed_pstage(db, *, is_final=False):
+    n = next(_seq)
+    sid = f"rptfst{n}"
+    db.add(
+        models.PipelineStage(
+            id=sid, name=f"FStage {n}", order=900000 + n, is_final_stage=is_final
+        )
+    )
+    await db.flush()
+    return sid
+
+
+async def _seed_funnel_status(
+    db, *, stage_id, outcome="neutral", is_final=False, counts_for_funnel=True
+):
+    n = next(_seq)
+    cs = models.ConsultationStatus(
+        id=f"rptfcs{n}",
+        name=f"FCS {n}",
+        color_code="#123456",
+        stage_id=stage_id,
+        outcome_type=models.OutcomeTypeEnum(outcome),
+        is_final=is_final,
+        counts_for_funnel=counts_for_funnel,
+    )
+    db.add(cs)
+    await db.flush()
+    return cs.id
+
+
+async def _seed_funnel_lead(
+    db, deps, year, *, stage_id, cs_id, created_at, offering_id=None, with_profile=False
+):
+    n = next(_seq)
+    lead = models.Lead(
+        full_name=f"RPT FN {n}",
+        phone=f"08{n:08d}",
+        email=f"rptfn_{n}@t.com",
+        source="website",
+        unit_id=deps["unit_id"],
+        consultation_status_id=cs_id,
+        pipeline_stage_id=stage_id,
+        status="new",
+        offering_id=offering_id,
+        created_at=created_at,
+    )
+    db.add(lead)
+    await db.flush()
+    if with_profile:
+        db.add(
+            models.AdmissionProfile(
+                lead_id=lead.id,
+                status="submitted",
+                citizen_id=f"{n:012d}",
+                version=1,
+                applied_rules={},
+                academic_year=year,
+                uses_choice_engine=False,
+            )
+        )
+        await db.flush()
+    return lead
+
+
+async def test_pipeline_funnel_leak_by_outcome_counts_for_funnel_and_walk_in(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """Funnel aggregation contract exercised WITH data (not the empty-year early
+    return at repository.py). Covers three review findings at once:
+      • early exit by OUTCOME: a lead with a final+negative status at a NON-terminal
+        stage → leaked, NOT inflating the success path;
+      • counts_for_funnel=false (activity status) → excluded entirely;
+      • walk-in: a lead created OUTSIDE the round window but holding an in-scope
+        profile → pulled into the cohort via profile_lead_ids.
+    """
+    year = next(_year_seq)
+    deps = seeded_dependencies
+    _, offering = await _seed_catalog(db, year, deps["unit_id"])  # round covers year
+    in_win = datetime(year, 6, 1, tzinfo=VN_TZ)
+
+    stg_a = await _seed_pstage(db)  # progress
+    stg_b = await _seed_pstage(db)  # progress (mid — a rejection can happen here)
+    stg_neg = await _seed_pstage(db, is_final=True)  # negative terminal stage
+    cs_ok = await _seed_funnel_status(db, stage_id=stg_a)  # neutral → on-path
+    cs_reject = await _seed_funnel_status(
+        db, stage_id=stg_b, outcome="negative", is_final=True
+    )  # rejected at a NON-terminal stage
+    cs_activity = await _seed_funnel_status(
+        db, stage_id=stg_a, counts_for_funnel=False
+    )  # activity status → excluded from the funnel
+    cs_dropped = await _seed_funnel_status(
+        db, stage_id=stg_neg, outcome="negative", is_final=True
+    )
+
+    await _seed_funnel_lead(db, deps, year, stage_id=stg_a, cs_id=cs_ok, created_at=in_win)
+    await _seed_funnel_lead(db, deps, year, stage_id=stg_b, cs_id=cs_reject, created_at=in_win)
+    await _seed_funnel_lead(db, deps, year, stage_id=stg_a, cs_id=cs_activity, created_at=in_win)
+    await _seed_funnel_lead(db, deps, year, stage_id=stg_neg, cs_id=cs_dropped, created_at=in_win)
+    # walk-in: created BEFORE the round window but holds an in-scope profile
+    await _seed_funnel_lead(
+        db,
+        deps,
+        year,
+        stage_id=stg_a,
+        cs_id=cs_ok,
+        created_at=datetime(year - 1, 3, 1, tzinfo=VN_TZ),
+        offering_id=offering.id,
+        with_profile=True,
+    )
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_pipeline_funnel(current_user=_admin(), academic_year=year)
+    by_id = {s.stage_id: s for s in resp.stages}
+
+    # activity status (counts_for_funnel=false) excluded; leaked = rejected + dropped
+    # (by OUTCOME); on-path = 2 at stg_a (one in-window + the walk-in via profile).
+    assert resp.total_leads == 4  # 5 seeded − 1 activity-excluded
+    assert resp.leaked == 2  # rejected-mid-stage + negative-terminal
+    assert by_id[stg_a].current == 2 and by_id[stg_a].reached == 2
+    assert by_id[stg_a].is_leak is False
+    assert by_id[stg_b].current == 0  # rejected lead is leaked, not on-path here
+    assert by_id[stg_b].is_leak is False  # mid stage, not a leak STAGE
+    assert by_id[stg_neg].is_leak is True  # all-negative final stage → leak stage
+    assert by_id[stg_neg].current == 0

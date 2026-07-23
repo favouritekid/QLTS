@@ -160,14 +160,20 @@ export function AdmissionOverviewClient() {
   const anyFetching =
     weekly.isFetching || funnel.isFetching || trend.isFetching || matrix.isFetching;
 
-  // A unit-scoped user (manager): the backend forces its own unit and returns it as
-  // scope_unit_id even when "Toàn trường" is selected. Reflect that enforced scope
-  // (show the real unit, lock the picker) so figures aren't mislabeled schoolwide and
-  // a foreign-unit pick can't 404. Admin toàn trường → scope_unit_id null → unlocked.
-  const enforcedUnitId = synced?.scope_unit_id ?? null;
-  const unitLocked = enforcedUnitId != null && unit === ALL_UNITS;
-  const enforcedUnitName = unitLocked
-    ? flatUnits.find((u) => u.id === enforcedUnitId)?.name
+  // Enforced unit scope (thin-client, pure derivation — no ref/effect). The picker
+  // stays LOCKED until the first report response arrives (scope determined), so a
+  // manager can't pick a foreign unit before we know the scope and 404. A unit-scoped
+  // user (manager) keeps "Toàn trường" selected while the backend returns their own
+  // unit as scope_unit_id → we show that unit and keep it locked (never diverges from
+  // ALL_UNITS → the check stays valid). scope_unit_id is year-independent, so read it
+  // off weekly.data (survives placeholder during a year switch). Admin → null → free.
+  const enforcedUnit = weekly.data?.scope_unit_id ?? null;
+  const scopeDetermined = weekly.data !== undefined;
+  const isUnitScoped = scopeDetermined && unit === ALL_UNITS && enforcedUnit != null;
+  const unitPickerDisabled = !scopeDetermined || isUnitScoped;
+  const unitValue = isUnitScoped ? String(enforcedUnit) : unit;
+  const enforcedUnitName = isUnitScoped
+    ? flatUnits.find((u) => u.id === enforcedUnit)?.name
     : undefined;
 
   const onYearChange = (next: number) => {
@@ -223,9 +229,9 @@ export function AdmissionOverviewClient() {
           <div className="space-y-1">
             <label className="text-xs text-muted-foreground">Đơn vị</label>
             <Select
-              value={unitLocked ? String(enforcedUnitId) : unit}
+              value={unitValue}
               onValueChange={setUnit}
-              disabled={unitLocked}
+              disabled={unitPickerDisabled}
             >
               <SelectTrigger className="w-44" aria-label="Đơn vị">
                 <SelectValue />
@@ -234,10 +240,10 @@ export function AdmissionOverviewClient() {
                 <SelectItem value={ALL_UNITS}>Toàn trường</SelectItem>
                 {/* enforced unit may not be in the tree yet (still loading) — keep an
                     item so the locked value always displays a name */}
-                {unitLocked &&
-                  !flatUnits.some((u) => u.id === enforcedUnitId) && (
-                    <SelectItem value={String(enforcedUnitId)}>
-                      {enforcedUnitName ?? `Đơn vị #${enforcedUnitId}`}
+                {isUnitScoped &&
+                  !flatUnits.some((u) => u.id === enforcedUnit) && (
+                    <SelectItem value={String(enforcedUnit)}>
+                      {enforcedUnitName ?? `Đơn vị #${enforcedUnit}`}
                     </SelectItem>
                   )}
                 {flatUnits.map((u) => (
