@@ -6433,7 +6433,7 @@ async def _apply_major_change_snapshot(
     ĐANG áp dụng (từ lần submit gốc). Vì thế **LUÔN −1 path cũ** (không chỉ khi
     đổi path) — để lần re-submit đếm lại đúng 1 lần. Ai +1 lại:
       * ``submit_and_evaluate`` (admin_rollback→draft→submit): downstream atomic
-        increment (:6960) đọc applied_rules path (đã rewrite sang MỚI) → +1. Gọi
+        downstream atomic increment (submit_and_evaluate else-branch) đọc applied_rules path (đã rewrite sang MỚI) → +1. Gọi
         với ``increment_new_path=False``.
       * ``resubmit_profile`` (request_revision→revision→resubmit): KHÔNG có
         downstream increment ⇒ hàm này TỰ +1 path mới (quota guard). Gọi với
@@ -6485,7 +6485,7 @@ async def _apply_major_change_snapshot(
         )
 
     # Nhánh resubmit KHÔNG có downstream increment → TỰ +1 path mới với quota
-    # guard (mirror submit_and_evaluate atomic increment :6960). Quota đầy → 400.
+    # guard (mirror submit_and_evaluate atomic submit counter, else-branch success). Quota đầy → 400.
     if increment_new_path and new_path_id is not None:
         inc_row = (
             await db.execute(
@@ -10824,7 +10824,7 @@ async def resubmit_profile(
         from app.repositories import AdmissionRepository as _MCAdmissionRepo
         await _apply_major_change_snapshot(
             db, profile, _MCAdmissionRepo(db), officer,
-            increment_new_path=True,  # resubmit KHÔNG có downstream +1 (:6960)
+            increment_new_path=True,  # resubmit KHÔNG có downstream +1 (submit else-branch)
         )
         await _validate_eligibility_all_choices(db, profile)
 
