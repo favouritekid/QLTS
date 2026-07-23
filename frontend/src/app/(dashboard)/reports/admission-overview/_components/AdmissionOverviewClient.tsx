@@ -72,31 +72,22 @@ function errMessage(err: unknown): string {
 
 function Panel({
   title,
-  caption,
   children,
   className,
 }: {
   title: string;
-  caption?: string;
   children: React.ReactNode;
   className?: string;
 }) {
   return (
     <section className={cn("rounded-xl border bg-card p-4 shadow-sm", className)}>
-      <div className="mb-3 flex items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold">{title}</h2>
-        {caption && (
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-            {caption}
-          </span>
-        )}
-      </div>
+      <h2 className="mb-3 text-sm font-semibold">{title}</h2>
       {children}
     </section>
   );
 }
 
-/** Panel body state: error note (not a stuck skeleton), else data, else skeleton. */
+/** Panel body state: lỗi (role=alert) → dữ liệu → skeleton (role=status). */
 function PanelState({
   query,
   skeleton,
@@ -108,13 +99,21 @@ function PanelState({
 }) {
   if (query.isError) {
     return (
-      <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+      <div
+        role="alert"
+        className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+      >
         {errMessage(query.error)}
       </div>
     );
   }
   if (query.data) return <>{children}</>;
-  return <Skeleton className={skeleton} />;
+  return (
+    <div role="status" aria-live="polite" aria-busy>
+      <span className="sr-only">Đang tải dữ liệu…</span>
+      <Skeleton className={skeleton} />
+    </div>
+  );
 }
 
 interface FlatUnit {
@@ -123,14 +122,15 @@ interface FlatUnit {
   depth: number;
 }
 
-type TabKey = "visual" | "table";
+type TabKey = "exec" | "analysis";
 
 export function AdmissionOverviewClient() {
   const [year, setYear] = React.useState(CURRENT_YEAR);
   const [round, setRound] = React.useState<string>(ALL_ROUNDS);
   const [unit, setUnit] = React.useState<string>(ALL_UNITS);
-  const [tab, setTab] = React.useState<TabKey>("visual");
-  // Bảng chi tiết controls (cũng lái KPI band — user chốt "theo toggle bảng").
+  const [tab, setTab] = React.useState<TabKey>("exec");
+  // Điều khiển của tab "Phân tích chi tiết" — CHỈ lái bảng chi tiết (KPI band
+  // điều hành cố định, không đổi theo các toggle này).
   const [groupBy, setGroupBy] = React.useState<ReportGroupBy>("major");
   const [period, setPeriod] = React.useState<Period>("ytd");
   const [weekStart, setWeekStart] = React.useState<string | undefined>(undefined);
@@ -171,7 +171,8 @@ export function AdmissionOverviewClient() {
 
   const scope = { academic_year: year, round_code: roundCode, unit_id: unitId };
 
-  // KPI band + bảng chi tiết — theo toggle (group_by · period/week).
+  // Query cho BẢNG chi tiết — theo toggle (group_by · period/week). KHÔNG cấp
+  // KPI band (KPI dùng weeklyMajor ổn định).
   const weeklyDetail = useWeeklyReport({
     academic_year: year,
     group_by: groupBy,
@@ -179,8 +180,8 @@ export function AdmissionOverviewClient() {
     unit_id: unitId,
     week_start: weekStart,
   });
-  // Đường băng chỉ tiêu cần ngành + LŨY KẾ (chỉ tiêu theo ngành, năm) — độc lập
-  // toggle bảng. Khi toggle = major + lũy kế thì trùng key với weeklyDetail → dedup.
+  // KPI band ĐIỀU HÀNH + "Hồ sơ nộp / chỉ tiêu" cần ngành + LŨY KẾ (chỉ tiêu theo
+  // ngành, năm) — độc lập toggle. Trùng key khi major+lũy-kế → React Query dedup.
   const weeklyMajor = useWeeklyReport({
     academic_year: year,
     group_by: "major",
@@ -221,8 +222,8 @@ export function AdmissionOverviewClient() {
     return rankByQuotaGap(syncedDetail.rows);
   }, [syncedDetail, period, groupBy]);
 
-  // Enforced unit scope (thin-client, pure derivation). Đọc scope_unit_id off
-  // weeklyMajor (luôn fetch, ổn định) → manager bị khóa về đơn vị của mình.
+  // Enforced unit scope (thin-client). Đọc scope_unit_id off weeklyMajor (luôn
+  // fetch, ổn định) → manager bị khóa về đơn vị của mình.
   const enforcedUnit = weeklyMajor.data?.scope_unit_id ?? null;
   const scopeDetermined = weeklyMajor.data !== undefined;
   const isUnitScoped = scopeDetermined && unit === ALL_UNITS && enforcedUnit != null;
@@ -259,18 +260,22 @@ export function AdmissionOverviewClient() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-bold">
-            <LayoutDashboard className="size-6 text-primary" /> Tổng quan tuyển sinh
+            <LayoutDashboard aria-hidden className="size-6 text-primary" /> Tổng
+            quan tuyển sinh
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Phễu · chỉ tiêu · tài chính · tải cán bộ — trực quan để nắm nhanh,
-            bảng chi tiết để tra cứu &amp; xuất Excel.
+            Chỉ tiêu · công nợ · phễu · tài chính — <strong>Điều hành</strong> để
+            nắm nhanh &amp; xử lý, <strong>Phân tích chi tiết</strong> để tra cứu
+            &amp; xuất Excel.
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Năm học</label>
+            <label htmlFor="filter-year" className="text-xs text-muted-foreground">
+              Năm học
+            </label>
             <Select value={year.toString()} onValueChange={(v) => onYearChange(Number(v))}>
-              <SelectTrigger className="w-24" aria-label="Năm học">
+              <SelectTrigger id="filter-year" className="w-24" aria-label="Năm học">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -283,9 +288,11 @@ export function AdmissionOverviewClient() {
             </Select>
           </div>
           <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Đợt</label>
+            <label htmlFor="filter-round" className="text-xs text-muted-foreground">
+              Đợt
+            </label>
             <Select value={round} onValueChange={setRound}>
-              <SelectTrigger className="w-32" aria-label="Đợt">
+              <SelectTrigger id="filter-round" className="w-32" aria-label="Đợt">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -299,13 +306,15 @@ export function AdmissionOverviewClient() {
             </Select>
           </div>
           <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Đơn vị</label>
+            <label htmlFor="filter-unit" className="text-xs text-muted-foreground">
+              Đơn vị
+            </label>
             <Select
               value={unitValue}
               onValueChange={setUnit}
               disabled={unitPickerDisabled}
             >
-              <SelectTrigger className="w-44" aria-label="Đơn vị">
+              <SelectTrigger id="filter-unit" className="w-44" aria-label="Đơn vị">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -329,11 +338,12 @@ export function AdmissionOverviewClient() {
         </div>
       </div>
 
-      {/* Mỗi panel TỰ quản trạng thái → weekly lỗi (vd đợt thiếu ngày) KHÔNG che
-          phễu/trend/matrix/công nợ (fetch độc lập, funnel cố ý skip_undated). */}
-      <div className={cn("space-y-4", anyFetching && "opacity-60 transition-opacity")}>
+      <div
+        aria-busy={anyFetching}
+        className={cn("space-y-4", anyFetching && "opacity-60 transition-opacity")}
+      >
         {/* KPI band ĐIỀU HÀNH — ỔN ĐỊNH (ngành · lũy kế năm), KHÔNG đổi theo toggle
-            ẩn ở tab Bảng chi tiết (tránh KPI đổi mà control lại không nhìn thấy). */}
+            của tab Phân tích (tránh KPI đổi mà control lại không nhìn thấy). */}
         <PanelState
           query={{
             isError: weeklyMajor.isError,
@@ -353,42 +363,25 @@ export function AdmissionOverviewClient() {
 
         <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)}>
           <TabsList>
-            <TabsTrigger value="visual" className="gap-1.5">
-              <LayoutDashboard className="size-4" /> Trực quan
+            <TabsTrigger value="exec" className="gap-1.5">
+              <LayoutDashboard aria-hidden className="size-4" /> Điều hành
             </TabsTrigger>
-            <TabsTrigger value="table" className="gap-1.5">
-              <BarChart3 className="size-4" /> Bảng chi tiết
+            <TabsTrigger value="analysis" className="gap-1.5">
+              <BarChart3 aria-hidden className="size-4" /> Phân tích chi tiết
             </TabsTrigger>
           </TabsList>
 
-          {/* ---- TAB TRỰC QUAN ---- */}
-          <TabsContent value="visual" className="mt-4 space-y-4">
-            <div className="grid gap-4 lg:grid-cols-2">
-              <Panel title="Phễu LEAD theo giai đoạn">
-                <p className="mb-3 -mt-1 text-xs text-muted-foreground">
-                  Đếm <strong>LEAD</strong> đi tới từng bước pipeline (cohort đợt,
-                  gồm khách vãng lai) — <em>khác</em> KPI “Hồ sơ đã nộp” (đếm theo
-                  hồ sơ). Không so trực tiếp hai con số.
-                </p>
-                <PanelState query={funnel} skeleton="h-64 w-full">
-                  {funnel.data && <OverviewFunnel funnel={funnel.data} />}
-                </PanelState>
-              </Panel>
-              <Panel title="Nhịp tích luỹ 8 tuần" caption="cumulative">
-                <PanelState query={trend} skeleton="h-64 w-full">
-                  {trend.data && <OverviewTrend trend={trend.data} />}
-                </PanelState>
-              </Panel>
-            </div>
+          {/* ---- TAB ĐIỀU HÀNH: khu hành động trước, phân tích nguyên nhân sau ---- */}
+          <TabsContent value="exec" className="mt-4 space-y-4">
+            {/* (P3: khối "Cần xử lý ngay" sẽ chèn ở đầu tab này) */}
 
-            {/* Hồ sơ nộp / chỉ tiêu — tử số là HỒ SƠ NỘP (không phải nhập học);
-                dùng weeklyMajor (ngành · lũy kế) độc lập toggle */}
+            {/* 1. Chỉ tiêu — tử số là HỒ SƠ NỘP (không phải nhập học) */}
             <Panel title="Hồ sơ nộp / chỉ tiêu — theo ngành">
               <p className="mb-3 -mt-1 text-xs text-muted-foreground">
                 Mẫu số = <strong>chỉ tiêu</strong>; độ dài thanh = <strong>hồ sơ
                 đã nộp</strong>/chỉ tiêu (KHÔNG phải nhập học). Trong đó hổ phách =
                 đã đóng học phí HK1, xanh = đã nộp chưa đóng, phần trống = còn
-                thiếu. Ngành nguy cơ (đầy thấp) hiện đầu.
+                thiếu. Ngành thiếu nhiều so chỉ tiêu hiện đầu.
               </p>
               <PanelState
                 query={{
@@ -404,142 +397,162 @@ export function AdmissionOverviewClient() {
               </PanelState>
             </Panel>
 
-            <Panel title="Tải hồ sơ theo ngành × cán bộ" caption="officer-major-matrix">
+            {/* 2. Công nợ học phí */}
+            <Panel title="Công nợ học phí">
+              <p className="mb-3 -mt-1 text-xs text-muted-foreground">
+                Toàn bộ học phí còn nợ (mọi kỳ) · theo năm học và đơn vị — chưa lọc
+                theo đợt. “Đã thu” ở đây = đã thu trên hoá đơn CÒN NỢ (khác dải KPI
+                “Thu ròng tuyển sinh” = tổng cash mọi phí).
+              </p>
+              <DebtPanel summary={debt.data?.summary} isLoading={debt.isLoading} />
+            </Panel>
+
+            {/* 3. Phễu + 4. Xu hướng — phân tích nguyên nhân, đặt sau khu hành động */}
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Panel title="Phễu LEAD theo giai đoạn">
+                <p className="mb-3 -mt-1 text-xs text-muted-foreground">
+                  Đếm <strong>LEAD</strong> đi tới từng bước pipeline (cohort đợt,
+                  gồm khách vãng lai) — <em>khác</em> KPI “Hồ sơ đã nộp” (đếm theo
+                  hồ sơ). Không so trực tiếp hai con số.
+                </p>
+                <PanelState query={funnel} skeleton="h-64 w-full">
+                  {funnel.data && <OverviewFunnel funnel={funnel.data} />}
+                </PanelState>
+              </Panel>
+              <Panel title="Nhịp tích luỹ 8 tuần">
+                <PanelState query={trend} skeleton="h-64 w-full">
+                  {trend.data && <OverviewTrend trend={trend.data} />}
+                </PanelState>
+              </Panel>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Số liệu tính lại theo phân bổ hiện tại — tuần đã qua có thể đổi sau
+              khi công bố kết quả. Dải KPI · chỉ tiêu · heatmap · trend dùng chung
+              nguồn milestone (nhất quán); phễu đếm LEAD (đã ghi rõ trong panel).
+            </p>
+          </TabsContent>
+
+          {/* ---- TAB PHÂN TÍCH CHI TIẾT: heatmap + bảng đầy đủ (truy vấn sâu) ---- */}
+          <TabsContent value="analysis" className="mt-4 space-y-4">
+            <Panel title="Tải hồ sơ theo ngành × cán bộ">
               <PanelState query={matrix} skeleton="h-56 w-full">
                 {matrix.data && <OfficerMajorHeatmap matrix={matrix.data} />}
               </PanelState>
             </Panel>
 
-            <Panel title="Công nợ học phí" caption="debt-report">
-              <p className="mb-3 -mt-1 text-xs text-muted-foreground">
-                Toàn bộ học phí còn nợ (mọi kỳ) · theo năm học và đơn vị — chưa lọc
-                theo đợt. “Đã thu” ở đây = đã thu trên hoá đơn CÒN NỢ (khác dải KPI
-                “Đã thu” tổng cash mọi phí).
-              </p>
-              <DebtPanel summary={debt.data?.summary} isLoading={debt.isLoading} />
-            </Panel>
-
-            <p className="text-xs text-muted-foreground">
-              Số liệu tính lại theo phân bổ hiện tại — tuần đã qua có thể đổi sau
-              khi công bố kết quả. <strong>Phễu</strong> đếm LEAD theo cohort đợt
-              (gồm khách vãng lai) nên bậc “Đã nộp hồ sơ” có thể lệch nhẹ so với
-              dải KPI “Hồ sơ nộp” (đếm theo mốc hồ sơ). KPI · đường băng chỉ tiêu ·
-              heatmap · trend dùng chung một nguồn milestone.
-            </p>
-          </TabsContent>
-
-          {/* ---- TAB BẢNG CHI TIẾT ---- */}
-          <TabsContent value="table" className="mt-4 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <Tabs value={groupBy} onValueChange={(v) => setGroupBy(v as ReportGroupBy)}>
-                  <TabsList>
-                    <TabsTrigger value="major">Theo ngành</TabsTrigger>
-                    <TabsTrigger value="officer">Theo nhân viên</TabsTrigger>
-                  </TabsList>
-                </Tabs>
-                <Tabs value={period} onValueChange={(v) => setPeriod(v as Period)}>
-                  <TabsList>
-                    <TabsTrigger value="week">Tuần này</TabsTrigger>
-                    <TabsTrigger value="ytd">Lũy kế năm</TabsTrigger>
-                  </TabsList>
-                </Tabs>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    aria-label="Tuần trước"
-                    disabled={!navAnchor}
-                    onClick={() => navAnchor && setWeekStart(subDaysVN(navAnchor, 7))}
-                  >
-                    <ChevronLeft />
-                  </Button>
-                  <div className="min-w-[140px] rounded-md border px-3 py-1.5 text-center text-sm">
-                    {weekMeta ? (
-                      <>
-                        <span className="font-medium">Tuần {weekMeta.iso_week}</span>
-                        <span className="block text-xs text-muted-foreground">
-                          {dm(weekMeta.week_start)} – {dm(weekMeta.week_end)}
-                        </span>
-                      </>
-                    ) : (
-                      <Skeleton className="h-8 w-full" />
-                    )}
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    aria-label="Tuần sau"
-                    disabled={!navAnchor}
-                    onClick={() => navAnchor && setWeekStart(subDaysVN(navAnchor, -7))}
-                  >
-                    <ChevronRight />
-                  </Button>
-                  {weekStart && (
-                    <Button variant="ghost" size="sm" onClick={() => setWeekStart(undefined)}>
-                      Tuần này
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <Tabs value={groupBy} onValueChange={(v) => setGroupBy(v as ReportGroupBy)}>
+                    <TabsList>
+                      <TabsTrigger value="major">Theo ngành</TabsTrigger>
+                      <TabsTrigger value="officer">Theo nhân viên</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                  <Tabs value={period} onValueChange={(v) => setPeriod(v as Period)}>
+                    <TabsList>
+                      <TabsTrigger value="week">Tuần này</TabsTrigger>
+                      <TabsTrigger value="ytd">Lũy kế năm</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      aria-label="Tuần trước"
+                      disabled={!navAnchor}
+                      onClick={() => navAnchor && setWeekStart(subDaysVN(navAnchor, 7))}
+                    >
+                      <ChevronLeft aria-hidden />
                     </Button>
-                  )}
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                onClick={onExport}
-                disabled={exporting}
-                title="Xuất số liệu tuyển sinh cả năm ra Excel (3 sheet: số liệu chung · chia theo nhân viên · quy ước)"
-              >
-                <Download className="mr-2 size-4" />
-                {exporting ? "Đang xuất…" : "Xuất Excel"}
-              </Button>
-            </div>
-
-            <PanelState
-              query={{
-                isError: weeklyDetail.isError,
-                error: weeklyDetail.error,
-                data: syncedDetail,
-              }}
-              skeleton="h-96 w-full"
-            >
-              {syncedDetail && (
-                <>
-                  <WeeklyReportTable
-                    rows={cockpitRows}
-                    totals={syncedDetail.totals}
-                    groupBy={syncedDetail.group_by}
-                    period={period}
-                  />
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                    {period === "ytd" && groupBy === "major" && round === ALL_ROUNDS && (
-                      <span className="flex items-center gap-2">
-                        Chỉ tiêu:
-                        <span className="flex items-center gap-1">
-                          <span className="size-2 rounded-full bg-rose-500" />&lt;50%
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <span className="size-2 rounded-full bg-amber-500" />50–90%
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <span className="size-2 rounded-full bg-emerald-500" />≥90%
-                        </span>
-                      </span>
-                    )}
-                    {period === "ytd" && groupBy === "major" && round !== ALL_ROUNDS && (
-                      <span>Đang lọc đợt — tiến độ chỉ tiêu (theo cả năm) tạm ẩn.</span>
-                    )}
-                    {syncedDetail.data_quality.ambiguous_profiles > 0 && (
-                      <span>· Nhiều NV trúng: {syncedDetail.data_quality.ambiguous_profiles}</span>
-                    )}
-                    {syncedDetail.data_quality.unresolved_profiles > 0 && (
-                      <span>· Chưa phân loại ngành: {syncedDetail.data_quality.unresolved_profiles}</span>
-                    )}
-                    {groupBy === "officer" && syncedDetail.data_quality.unassigned_profiles > 0 && (
-                      <span>· Chưa gán cán bộ: {syncedDetail.data_quality.unassigned_profiles}</span>
+                    <div className="min-w-[140px] rounded-md border px-3 py-1.5 text-center text-sm">
+                      {weekMeta ? (
+                        <>
+                          <span className="font-medium">Tuần {weekMeta.iso_week}</span>
+                          <span className="block text-xs text-muted-foreground">
+                            {dm(weekMeta.week_start)} – {dm(weekMeta.week_end)}
+                          </span>
+                        </>
+                      ) : (
+                        <Skeleton className="h-8 w-full" />
+                      )}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      aria-label="Tuần sau"
+                      disabled={!navAnchor}
+                      onClick={() => navAnchor && setWeekStart(subDaysVN(navAnchor, -7))}
+                    >
+                      <ChevronRight aria-hidden />
+                    </Button>
+                    {weekStart && (
+                      <Button variant="ghost" size="sm" onClick={() => setWeekStart(undefined)}>
+                        Tuần này
+                      </Button>
                     )}
                   </div>
-                </>
-              )}
-            </PanelState>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={onExport}
+                  disabled={exporting}
+                  title="Xuất số liệu tuyển sinh cả năm · toàn trường ra Excel (3 sheet: số liệu chung · chia theo nhân viên · quy ước)"
+                >
+                  <Download aria-hidden className="mr-2 size-4" />
+                  {exporting ? "Đang xuất…" : "Xuất Excel (cả năm · toàn trường)"}
+                </Button>
+              </div>
+
+              <PanelState
+                query={{
+                  isError: weeklyDetail.isError,
+                  error: weeklyDetail.error,
+                  data: syncedDetail,
+                }}
+                skeleton="h-96 w-full"
+              >
+                {syncedDetail && (
+                  <>
+                    <WeeklyReportTable
+                      rows={cockpitRows}
+                      totals={syncedDetail.totals}
+                      groupBy={syncedDetail.group_by}
+                      period={period}
+                    />
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      {period === "ytd" && groupBy === "major" && round === ALL_ROUNDS && (
+                        <span className="flex items-center gap-2">
+                          Chỉ tiêu:
+                          <span className="flex items-center gap-1">
+                            <span aria-hidden className="size-2 rounded-full bg-rose-500" />&lt;50%
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span aria-hidden className="size-2 rounded-full bg-amber-500" />50–90%
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span aria-hidden className="size-2 rounded-full bg-emerald-500" />≥90%
+                          </span>
+                        </span>
+                      )}
+                      {period === "ytd" && groupBy === "major" && round !== ALL_ROUNDS && (
+                        <span>Đang lọc đợt — tiến độ chỉ tiêu (theo cả năm) tạm ẩn.</span>
+                      )}
+                      {syncedDetail.data_quality.ambiguous_profiles > 0 && (
+                        <span>· Nhiều NV trúng: {syncedDetail.data_quality.ambiguous_profiles}</span>
+                      )}
+                      {syncedDetail.data_quality.unresolved_profiles > 0 && (
+                        <span>· Chưa phân loại ngành: {syncedDetail.data_quality.unresolved_profiles}</span>
+                      )}
+                      {groupBy === "officer" && syncedDetail.data_quality.unassigned_profiles > 0 && (
+                        <span>· Chưa gán cán bộ: {syncedDetail.data_quality.unassigned_profiles}</span>
+                      )}
+                    </div>
+                  </>
+                )}
+              </PanelState>
+            </div>
           </TabsContent>
         </Tabs>
       </div>

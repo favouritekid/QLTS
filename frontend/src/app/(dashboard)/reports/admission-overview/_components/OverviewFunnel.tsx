@@ -42,10 +42,12 @@ export function OverviewFunnel({ funnel }: { funnel: PipelineFunnel }) {
               </span>
             </div>
             <div className="mt-1 h-2.5 w-full overflow-hidden rounded-full bg-muted">
+              {/* Sàn 2% CHỈ áp cho bậc có dữ liệu (reached>0) — bậc =0 vẽ 0% để
+                  không biểu diễn sai (finding: reached=0 mà vẫn có thanh). */}
               <div
                 className="h-full rounded-full transition-[width] duration-500"
                 style={{
-                  width: `${Math.max(2, width)}%`,
+                  width: `${s.reached > 0 ? Math.max(2, width) : 0}%`,
                   backgroundColor: s.color_code,
                 }}
               />

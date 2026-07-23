@@ -122,9 +122,14 @@ export function OfficerMajorHeatmap({ matrix }: { matrix: OfficerMajorMatrix }) 
       ) : (
         <div className="overflow-x-auto rounded-lg border">
           <table className="w-full border-collapse text-sm">
+            <caption className="sr-only">
+              Ma trận số hồ sơ theo ngành (hàng) × cán bộ (cột) — đậm hơn nghĩa là
+              nhiều hồ sơ hơn.
+            </caption>
             <thead>
               <tr>
                 <th
+                  scope="col"
                   rowSpan={multi ? 2 : 1}
                   className="sticky left-0 z-10 border-b bg-card px-3 py-2 text-left align-bottom text-xs font-semibold text-muted-foreground"
                 >
@@ -133,6 +138,7 @@ export function OfficerMajorHeatmap({ matrix }: { matrix: OfficerMajorMatrix }) 
                 {officers.map((off) => (
                   <th
                     key={off.id ?? "none"}
+                    scope={metrics.length > 1 ? "colgroup" : "col"}
                     colSpan={metrics.length}
                     title={off.name}
                     className="border-b border-l px-2 py-2 text-center align-bottom text-[11px] font-medium text-muted-foreground"
@@ -143,6 +149,7 @@ export function OfficerMajorHeatmap({ matrix }: { matrix: OfficerMajorMatrix }) 
                   </th>
                 ))}
                 <th
+                  scope={metrics.length > 1 ? "colgroup" : "col"}
                   colSpan={metrics.length}
                   className="border-b border-l bg-card px-2 py-2 text-center text-xs font-semibold text-muted-foreground"
                 >
@@ -155,6 +162,7 @@ export function OfficerMajorHeatmap({ matrix }: { matrix: OfficerMajorMatrix }) 
                     metrics.map((mt) => (
                       <th
                         key={`${off.id ?? "none"}:${mt.key}`}
+                        scope="col"
                         className="border-b border-l px-2 py-1 text-center text-[10px] font-normal text-muted-foreground"
                       >
                         {mt.label}
@@ -164,6 +172,7 @@ export function OfficerMajorHeatmap({ matrix }: { matrix: OfficerMajorMatrix }) 
                   {metrics.map((mt) => (
                     <th
                       key={`tot:${mt.key}`}
+                      scope="col"
                       className="border-b border-l bg-card px-2 py-1 text-center text-[10px] font-normal text-muted-foreground"
                     >
                       {mt.label}
@@ -176,6 +185,7 @@ export function OfficerMajorHeatmap({ matrix }: { matrix: OfficerMajorMatrix }) 
               {majors.map((mj) => (
                 <tr key={mj.id ?? "none"}>
                   <th
+                    scope="row"
                     className="sticky left-0 z-10 border-b bg-card px-3 py-1.5 text-left font-medium"
                     title={mj.code ? `${mj.name} · ${mj.code}` : mj.name}
                   >
@@ -218,7 +228,14 @@ export function OfficerMajorHeatmap({ matrix }: { matrix: OfficerMajorMatrix }) 
                               : undefined
                           }
                         >
-                          {v === 0 ? "·" : nf.format(v)}
+                          {v === 0 ? (
+                            <>
+                              <span aria-hidden>·</span>
+                              <span className="sr-only">0</span>
+                            </>
+                          ) : (
+                            nf.format(v)
+                          )}
                         </td>
                       );
                     }),

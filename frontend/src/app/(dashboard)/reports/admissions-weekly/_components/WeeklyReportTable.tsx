@@ -3,6 +3,7 @@
 import {
   Table,
   TableBody,
+  TableCaption,
   TableCell,
   TableHead,
   TableHeader,
@@ -79,14 +80,22 @@ function FirstCell({
   dot?: string | null;
 }) {
   return (
-    <TableCell className="sticky left-0 bg-background">
-      <div className="flex items-center gap-2">
+    <TableHead
+      scope="row"
+      className="sticky left-0 bg-background align-top font-normal text-foreground"
+    >
+      <div className="flex min-w-0 items-center gap-2">
         {dot && (
           <span className={cn("size-2 shrink-0 rounded-full", dot)} aria-hidden />
         )}
-        <span className={cn("font-medium", isTotal && "font-bold")}>{row.label}</span>
+        <span
+          className={cn("max-w-[220px] truncate font-medium", isTotal && "font-bold")}
+          title={row.label}
+        >
+          {row.label}
+        </span>
         {row.degree_level && (
-          <span className="rounded border px-1 text-[10px] text-muted-foreground">
+          <span className="shrink-0 rounded border px-1 text-[10px] text-muted-foreground">
             {row.degree_level}
           </span>
         )}
@@ -94,7 +103,7 @@ function FirstCell({
       {row.code && (
         <span className="block text-xs text-muted-foreground">{row.code}</span>
       )}
-    </TableCell>
+    </TableHead>
   );
 }
 
@@ -174,11 +183,17 @@ export function WeeklyReportTable({
     };
 
     return (
-      <div className="overflow-x-auto rounded-lg border">
+      <div className="overflow-hidden rounded-lg border">
         <Table>
+          <TableCaption className="sr-only">
+            Báo cáo tuyển sinh lũy kế năm theo {isMajor ? "ngành" : "cán bộ"} — chỉ
+            tiêu, hồ sơ đã nộp, trúng tuyển, nhập học, đang theo, đã thu.
+          </TableCaption>
           <TableHeader>
             <TableRow className="bg-muted/50 text-xs">
-              <TableHead className="sticky left-0 bg-muted/50">{firstColLabel}</TableHead>
+              <TableHead scope="col" className="sticky left-0 bg-muted/50">
+                {firstColLabel}
+              </TableHead>
               {showQuota && (
                 <TableHead className="border-l">Tiến độ chỉ tiêu (Nhập học)</TableHead>
               )}
@@ -257,20 +272,24 @@ export function WeeklyReportTable({
   );
 
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <div className="overflow-hidden rounded-lg border">
       <Table>
+        <TableCaption className="sr-only">
+          Báo cáo tuyển sinh trong tuần theo {isMajor ? "ngành" : "cán bộ"} — lead,
+          hồ sơ, tài chính phát sinh trong tuần đã chọn.
+        </TableCaption>
         <TableHeader>
           <TableRow className="bg-muted/50">
-            <TableHead rowSpan={2} className="sticky left-0 bg-muted/50 align-bottom">
+            <TableHead scope="col" rowSpan={2} className="sticky left-0 bg-muted/50 align-bottom">
               {firstColLabel}
             </TableHead>
-            <TableHead colSpan={3} className="border-l text-center">
+            <TableHead scope="colgroup" colSpan={3} className="border-l text-center">
               Lead (tư vấn)
             </TableHead>
-            <TableHead colSpan={3} className="border-l text-center">
+            <TableHead scope="colgroup" colSpan={3} className="border-l text-center">
               Hồ sơ (tuần)
             </TableHead>
-            <TableHead colSpan={3} className="border-l text-center">
+            <TableHead scope="colgroup" colSpan={3} className="border-l text-center">
               Tài chính (thu tuần)
             </TableHead>
           </TableRow>

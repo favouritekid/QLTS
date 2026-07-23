@@ -67,7 +67,14 @@ export function SummaryBand({
               {nf.format(t.quota as number)}
             </span>
           </div>
-          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
+          <div
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.min(100, Math.round(ratio * 100))}
+            aria-label={`Nhập học đạt ${Math.round(ratio * 100)}% chỉ tiêu năm (${nf.format(t.enrolled_cumulative)}/${nf.format(t.quota as number)})`}
+            className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted"
+          >
             <div
               className={cn("h-full rounded-full", quotaTone(ratio))}
               style={{ width: `${Math.min(100, Math.round(ratio * 100))}%` }}

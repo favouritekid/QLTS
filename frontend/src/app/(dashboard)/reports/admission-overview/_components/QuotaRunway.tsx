@@ -144,10 +144,15 @@ export function QuotaRunway({
                 </span>
               </div>
 
-              {/* Thanh xếp chồng: nền xám = còn trống; đè đã-đóng (amber) + chưa-đóng (sky) */}
+              {/* Thanh xếp chồng: nền xám = còn trống; đè đã-đóng (amber) + chưa-đóng (sky).
+                  role=img + aria-label để screen reader đọc được (màu không là tín hiệu duy nhất). */}
               <div className="col-span-2 flex items-center gap-1.5 sm:col-span-1">
-                <div className="relative h-3 flex-1 overflow-hidden rounded-full bg-muted-foreground/15">
-                  <div className="flex h-full" style={{ width: `${filledFrac * 100}%` }}>
+                <div
+                  role="img"
+                  aria-label={title}
+                  className="relative h-3 flex-1 overflow-hidden rounded-full bg-muted-foreground/15"
+                >
+                  <div aria-hidden className="flex h-full" style={{ width: `${filledFrac * 100}%` }}>
                     {paidFrac > 0 && (
                       <div
                         className="h-full rounded-full bg-amber-500"
@@ -167,6 +172,7 @@ export function QuotaRunway({
                 </div>
                 {over && (
                   <span
+                    aria-hidden
                     className="shrink-0 text-xs font-semibold text-emerald-600 dark:text-emerald-500"
                     title="Vượt chỉ tiêu"
                   >
