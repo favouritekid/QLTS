@@ -17,7 +17,7 @@ thái phí). Cột thuần cộng thêm, mọi hàng cũ nhận default false / 
 với ``MAJOR_CHANGE_REPRICE_ENABLED=False`` là no-op tuyệt đối.
 
 Revision ID: majchg1a_fee_cols_20260723
-Revises: admderivedcols20260721
+Revises: admwfcasbin20260723
 Create Date: 2026-07-23
 """
 from typing import Sequence, Union
@@ -26,7 +26,9 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "majchg1a_fee_cols_20260723"
-down_revision: Union[str, None] = "admderivedcols20260721"
+# Re-point 23-07: PR #499 (admwfcasbin20260723) merge TRƯỚC, fork cùng cha
+# admderivedcols20260721. Nối tiếp SAU #499 để chuỗi tuyến tính 1 head.
+down_revision: Union[str, None] = "admwfcasbin20260723"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
