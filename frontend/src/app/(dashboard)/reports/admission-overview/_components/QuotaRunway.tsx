@@ -67,6 +67,9 @@ export function QuotaRunway({
     1,
     ...majors.map((r) => r.admission.submitted_cumulative),
   );
+  // Chỉ tiêu LỚN NHẤT — mốc để scale ĐỘ DÀI thanh: ngành chỉ tiêu lớn nhất = thanh
+  // dài nhất, các ngành ngắn theo tỉ lệ (đọc ngay quy mô từng ngành).
+  const maxQuota = Math.max(1, ...majors.map((r) => r.admission.quota ?? 0));
 
   const items = majors
     .map((row) => {
@@ -101,16 +104,30 @@ export function QuotaRunway({
         <LegendItem className="bg-amber-500" label="Đã đóng học phí HK1" />
         <LegendItem className="bg-sky-500" label="Đã nộp, chưa đóng" />
         <LegendItem
-          className="bg-muted-foreground/20"
+          className="bg-slate-200 ring-1 ring-inset ring-slate-300/70 dark:bg-slate-700 dark:ring-slate-600/70"
           label={hasQuota ? "Còn trống so chỉ tiêu" : "Số hồ sơ (thang tương đối)"}
         />
-        {!hasQuota && <span className="italic">Xếp theo số hồ sơ.</span>}
+        {hasQuota ? (
+          <span className="italic">Độ dài thanh = chỉ tiêu · vạch = mốc chỉ tiêu.</span>
+        ) : (
+          <span className="italic">Xếp theo số hồ sơ.</span>
+        )}
       </div>
 
       <div className="space-y-1">
         {items.map(({ row, mid, quota, submitted, paid, fillRatio }) => {
-          const base = hasQuota && quota ? quota : maxSubmitted;
-          const filledFrac = base > 0 ? Math.min(1, submitted / base) : 0;
+          // ĐỘ DÀI thanh (track) = CHỈ TIÊU ngành / chỉ tiêu lớn nhất (ngành lớn nhất
+          // = thanh dài nhất). Không có chỉ tiêu (lọc đợt / scope đơn vị) → theo số
+          // hồ sơ so với ngành nhiều hồ sơ nhất.
+          const hasQ = quota != null && quota > 0;
+          const trackFrac = hasQuota
+            ? hasQ
+              ? (quota as number) / maxQuota
+              : 0
+            : submitted / maxSubmitted;
+          // Phần tô TRONG track = hồ sơ đã nộp / chỉ tiêu ngành (clamp 100%). Khi
+          // không có chỉ tiêu, track đã đại diện số hồ sơ nên tô đầy track.
+          const inFilled = hasQuota ? (hasQ ? Math.min(1, submitted / (quota as number)) : 0) : 1;
           const paidFrac = submitted > 0 ? paid / submitted : 0; // trong phần đã nộp
           const over = fillRatio != null && fillRatio > 1;
           const fillPct = fillRatio != null ? Math.round(fillRatio * 100) : null;
@@ -153,31 +170,44 @@ export function QuotaRunway({
                 </span>
               </div>
 
-              {/* Thanh xếp chồng: nền xám = còn trống; đè đã-đóng (amber) + chưa-đóng (sky).
-                  role=img + aria-label để screen reader đọc được (màu không là tín hiệu duy nhất). */}
+              {/* Rãnh full-width; TRACK có ĐỘ DÀI = chỉ tiêu (so chỉ tiêu lớn nhất).
+                  Trong track: nền xám = còn trống, đè amber (đã đóng) + sky (chưa
+                  đóng). Vạch ở cuối track = mốc chỉ tiêu. role=img + aria-label để
+                  screen reader đọc được (màu/độ-dài không là tín hiệu duy nhất). */}
               <div className="col-span-2 flex items-center gap-1.5 sm:col-span-1">
-                <div
-                  role="img"
-                  aria-label={title}
-                  className="relative h-3 flex-1 overflow-hidden rounded-full bg-muted-foreground/15"
-                >
-                  <div aria-hidden className="flex h-full" style={{ width: `${filledFrac * 100}%` }}>
-                    {paidFrac > 0 && (
-                      <div
-                        className="h-full rounded-full bg-amber-500"
-                        style={{ width: `${paidFrac * 100}%` }}
-                      />
-                    )}
-                    {paidFrac < 1 && (
-                      <div
-                        className="h-full rounded-full bg-sky-500"
-                        style={{
-                          width: `${(1 - paidFrac) * 100}%`,
-                          marginLeft: paidFrac > 0 ? 2 : 0,
-                        }}
-                      />
-                    )}
+                <div className="relative h-3 flex-1">
+                  <div
+                    role="img"
+                    aria-label={title}
+                    className="relative h-full overflow-hidden rounded-full bg-slate-200 ring-1 ring-inset ring-slate-300/70 dark:bg-slate-700 dark:ring-slate-600/70"
+                    style={{ width: `${Math.max(trackFrac * 100, 1)}%` }}
+                  >
+                    <div aria-hidden className="flex h-full" style={{ width: `${inFilled * 100}%` }}>
+                      {paidFrac > 0 && (
+                        <div
+                          className="h-full rounded-full bg-amber-500"
+                          style={{ width: `${paidFrac * 100}%` }}
+                        />
+                      )}
+                      {paidFrac < 1 && (
+                        <div
+                          className="h-full rounded-full bg-sky-500"
+                          style={{
+                            width: `${(1 - paidFrac) * 100}%`,
+                            marginLeft: paidFrac > 0 ? 2 : 0,
+                          }}
+                        />
+                      )}
+                    </div>
                   </div>
+                  {/* mốc chỉ tiêu = cuối track (chỉ khi lát cắt có chỉ tiêu) */}
+                  {hasQ && (
+                    <span
+                      aria-hidden
+                      className="absolute -top-0.5 -bottom-0.5 w-px bg-foreground/40"
+                      style={{ left: `${Math.max(trackFrac * 100, 1)}%` }}
+                    />
+                  )}
                 </div>
                 {over && (
                   <span

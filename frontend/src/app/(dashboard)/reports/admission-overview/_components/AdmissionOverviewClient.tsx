@@ -511,11 +511,11 @@ export function AdmissionOverviewClient() {
               <p className="mb-3 -mt-1 text-xs text-muted-foreground">
                 {majorHasQuota ? (
                   <>
-                    Mẫu số = <strong>chỉ tiêu</strong>; độ dài thanh ={" "}
-                    <strong>hồ sơ đã nộp</strong>/chỉ tiêu (KHÔNG phải nhập học).
-                    Trong đó hổ phách = đã đóng học phí HK1, xanh = đã nộp chưa
-                    đóng, phần trống = còn thiếu. Ngành thiếu nhiều so chỉ tiêu
-                    hiện đầu.
+                    <strong>Độ dài thanh = chỉ tiêu</strong> (ngành chỉ tiêu lớn
+                    nhất = dài nhất, vạch = mốc chỉ tiêu). Phần tô ={" "}
+                    <strong>hồ sơ đã nộp</strong> (hổ phách = đã đóng học phí HK1,
+                    xanh = đã nộp chưa đóng), phần trống = còn thiếu so chỉ tiêu
+                    (KHÔNG phải nhập học). Ngành thiếu nhiều so chỉ tiêu hiện đầu.
                   </>
                 ) : (
                   <>
