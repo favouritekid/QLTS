@@ -260,6 +260,10 @@ class AdmissionReportService:
         milestones = await self.repo.admission_milestones(
             profile_ids, week, week.end_excl
         )
+        # Chi tiết hoá (khớp heatmap): trạng thái nháp + học phí HK1 — SNAPSHOT hiện
+        # tại (không cutoff), cùng nguồn/định nghĩa với ma trận officer×major.
+        statuses = await self.repo.profile_statuses(profile_ids)
+        tuition = await self.repo.tuition_hk1_payment(profile_ids)
         fin_rows = await self.repo.finance_rows(profile_ids, week.end_excl)
         profile_lead_ids = {d.lead_id for d in dims.values()}
         lead_map = await self.repo.lead_counts(
@@ -299,6 +303,14 @@ class AdmissionReportService:
                     setattr(a, f"{m}_in_week", getattr(a, f"{m}_in_week") + 1)
                 if ms.get(f"{m}_cumulative"):
                     setattr(a, f"{m}_cumulative", getattr(a, f"{m}_cumulative") + 1)
+            # Nháp + học phí HK1 (snapshot) — khớp cột tương ứng của heatmap.
+            if statuses.get(pid) == "draft":
+                a.draft += 1
+            fee = tuition.get(pid)
+            if fee == "partial":
+                a.fee_hk1_partial += 1
+            elif fee == "full":
+                a.fee_hk1_full += 1
 
         # ---- finance ledger (cash: payment/refund; refund amount stored negative)
         paid_profiles: dict[GroupKey, set] = {}
@@ -871,6 +883,9 @@ class AdmissionReportService:
                 "admitted_cumulative",
                 "enrolled_cumulative",
                 "fee_paid_not_submitted",
+                "draft",
+                "fee_hk1_partial",
+                "fee_hk1_full",
             ):
                 setattr(
                     t.admission, m, getattr(t.admission, m) + getattr(row.admission, m)

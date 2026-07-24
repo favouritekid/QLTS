@@ -126,7 +126,7 @@ export function WeeklyReportTable({
     // Quota progress only renders when the backend attached a quota (major view,
     // không lọc đợt). Otherwise fall back to the count layout (Nộp/Trúng/NH).
     const showQuota = isMajor && totals.admission.quota != null;
-    const colCount = 8;
+    const colCount = 11; // +Nháp, +HK1 một phần, +HK1 đủ (chi tiết hoá khớp heatmap)
 
     const renderRow = (row: ReportRow, isTotal = false) => {
       const a = row.admission;
@@ -159,6 +159,9 @@ export function WeeklyReportTable({
             {count(a.submitted_cumulative)}
           </TableCell>
           <TableCell className="text-right tabular-nums">
+            {count(a.draft)}
+          </TableCell>
+          <TableCell className="text-right tabular-nums">
             {count(a.admitted_cumulative)}
           </TableCell>
           {!showQuota && (
@@ -166,6 +169,12 @@ export function WeeklyReportTable({
               {count(a.enrolled_cumulative)}
             </TableCell>
           )}
+          <TableCell className="border-l text-right tabular-nums">
+            {count(a.fee_hk1_partial)}
+          </TableCell>
+          <TableCell className="text-right tabular-nums">
+            {count(a.fee_hk1_full)}
+          </TableCell>
           <TableCell className="border-l text-right tabular-nums">
             {pct(row.conversion.submit_to_admit)}
           </TableCell>
@@ -188,8 +197,8 @@ export function WeeklyReportTable({
           <TableCaption className="sr-only">
             Báo cáo tuyển sinh lũy kế năm theo {isMajor ? "ngành" : "cán bộ"} —{" "}
             {showQuota
-              ? "tiến độ chỉ tiêu (nhập học), hồ sơ đã nộp, trúng tuyển, đang theo, đã thu."
-              : "hồ sơ đã nộp, trúng tuyển, nhập học, đang theo, đã thu."}
+              ? "tiến độ chỉ tiêu (nhập học), hồ sơ đã nộp, nháp, trúng tuyển, học phí HK1 (một phần / đủ), đang theo, đã thu."
+              : "hồ sơ đã nộp, nháp, trúng tuyển, nhập học, học phí HK1 (một phần / đủ), đang theo, đã thu."}
           </TableCaption>
           <TableHeader>
             <TableRow className="bg-muted/50 text-xs">
@@ -202,8 +211,11 @@ export function WeeklyReportTable({
               <TableHead className={cn("text-right", !showQuota && "border-l")}>
                 Nộp
               </TableHead>
+              <TableHead className="text-right">Nháp</TableHead>
               <TableHead className="text-right">Trúng</TableHead>
               {!showQuota && <TableHead className="text-right">Nhập học</TableHead>}
+              <TableHead className="border-l text-right">HK1 một phần</TableHead>
+              <TableHead className="text-right">HK1 đủ</TableHead>
               <TableHead className="border-l text-right">Nộp→Trúng</TableHead>
               <TableHead className="text-right">Trúng→NH</TableHead>
               <TableHead className="border-l text-right">Đang theo</TableHead>

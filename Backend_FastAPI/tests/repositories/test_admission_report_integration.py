@@ -1110,6 +1110,65 @@ async def test_officer_major_matrix_five_metrics_end_to_end(
     assert cell.enrolled == 1  # p_full
 
 
+async def test_weekly_report_detail_metrics_match_matrix(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """Chi tiết hoá (khớp heatmap): get_weekly_report trả draft + fee_hk1_partial/
+    full CÙNG con số với các chỉ số tương ứng của ma trận officer×major, tại cùng
+    lát cắt lũy-kế → hai bảng của tab 'Phân tích chi tiết' đối chiếu trực tiếp."""
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    at = datetime(year, 1, 4, 12, tzinfo=VN_TZ)  # trong tuần cutoff (năm tương lai)
+    major, offering = await _seed_catalog(db, year, unit_id)
+
+    async def _profile(status="submitted"):
+        _, p = await _seed_lead_profile(
+            db, seeded_dependencies, year, offering.id, officer_id, created_at=at
+        )
+        if status != "submitted":
+            p.status = status
+            await db.flush()
+        return p
+
+    p_sub = await _profile()
+    await _seed_history(db, p_sub.id, "submitted", at)
+    await _profile(status="draft")  # nháp
+    p_part = await _profile()
+    await _seed_history(db, p_part.id, "submitted", at)
+    f_part = await _seed_fee(db, p_part.id, year, fee_type="tuition")
+    f_part.paid_amount = Decimal("400000")  # remaining 600.000 → một phần
+    await db.flush()
+    p_full = await _profile()
+    await _seed_history(db, p_full.id, "submitted", at)
+    await _seed_history(db, p_full.id, "enrolled", at, from_status="submitted")
+    f_full = await _seed_fee(db, p_full.id, year, fee_type="tuition")
+    f_full.paid_amount = Decimal("1000000")  # remaining 0 → đóng đủ
+    await db.flush()
+
+    svc = AdmissionReportService(db)
+    weekly = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=year, group_by="major"
+    )
+    matrix = await svc.get_officer_major_matrix(
+        current_user=_admin(), academic_year=year
+    )
+    wr = _find(weekly.rows, major.id)
+    cell = next(
+        c for c in matrix.cells if c.officer_id == officer_id and c.major_id == major.id
+    )
+    # các chỉ số CHUNG khớp con số giữa cockpit (weekly) và heatmap (matrix)
+    assert wr.admission.submitted_cumulative == cell.submitted == 3
+    assert wr.admission.draft == cell.draft == 1
+    assert wr.admission.fee_hk1_partial == cell.fee_partial == 1
+    assert wr.admission.fee_hk1_full == cell.fee_full == 1
+    assert wr.admission.enrolled_cumulative == cell.enrolled == 1
+    # totals cockpit cũng cộng đúng
+    assert weekly.totals.admission.draft == 1
+    assert weekly.totals.admission.fee_hk1_partial == 1
+    assert weekly.totals.admission.fee_hk1_full == 1
+
+
 # --------------------------------------------------------- pipeline funnel (DB)
 async def _seed_pstage(db, *, is_final=False):
     n = next(_seq)

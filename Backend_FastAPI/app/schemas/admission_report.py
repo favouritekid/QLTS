@@ -56,6 +56,12 @@ class AdmissionMetrics(BaseModel):
     # Đã đóng lệ phí xét tuyển (application paid) NHƯNG hồ sơ CHƯA nộp (chưa có
     # milestone submitted) — nhóm prepay fast-track cần nhắc hoàn tất nộp hồ sơ.
     fee_paid_not_submitted: int = 0
+    # Chi tiết hoá (khớp heatmap ngành×cán bộ): hồ sơ NHÁP (status='draft') +
+    # học phí HK1 đã đóng một-phần / đủ. Snapshot HIỆN TẠI (không theo cutoff tuần),
+    # cùng định nghĩa với ma trận officer×major → hai bảng đối chiếu trực tiếp.
+    draft: int = 0
+    fee_hk1_partial: int = 0
+    fee_hk1_full: int = 0
     # chỉ tiêu (annual_admission_quota) — major grouping only; None for officer
     # view / buckets / total rows where a quota does not apply.
     quota: Optional[int] = None

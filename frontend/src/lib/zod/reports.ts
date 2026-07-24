@@ -32,6 +32,11 @@ export const admissionMetricsSchema = z.object({
   fee_paid_not_submitted: z.number().int().default(0),
   admitted_cumulative: z.number().int(),
   enrolled_cumulative: z.number().int(),
+  // Chi tiết hoá (khớp heatmap): nháp + học phí HK1 một-phần/đủ. default(0) để
+  // không vỡ nếu BE cũ chưa trả field.
+  draft: z.number().int().default(0),
+  fee_hk1_partial: z.number().int().default(0),
+  fee_hk1_full: z.number().int().default(0),
   quota: z.number().int().nullable(), // chỉ tiêu (major view); null = N/A
 });
 
