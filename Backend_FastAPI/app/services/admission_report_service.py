@@ -108,18 +108,32 @@ class AdmissionReportService:
     ) -> Optional[date]:
         """Anchor a cumulative-to-now cutoff INSIDE ``academic_year``.
 
-        Current year → today (None → ``_compute_week`` uses today). Past year →
-        last ISO week (Dec 28, cumulative ≈ trọn năm). Future → first ISO week
-        (Jan 4, cumulative ~0). Mirrors ``get_weekly_report``'s implicit-week rule
-        so overview panels agree with the weekly cockpit.
+        Current year → today, EXCEPT when today's ISO week belongs to another year
+        (a late-December / early-January boundary — e.g. 2025-12-29 has iso_year
+        2026, 2027-01-01 has iso_year 2026): clamp to the nearest in-year ISO week
+        so ``week.iso_year === academic_year`` always holds (blocker: the FE default
+        year = calendar year, so this is a production path, not just a stale
+        bookmark). Past year → last ISO week (Dec 28). Future → first ISO week
+        (Jan 4). Dec 28 / Jan 4 are the canonical dates whose ISO year is guaranteed
+        to equal ``academic_year``. Mirrors ``get_weekly_report``'s implicit-week
+        rule so overview panels agree with the weekly cockpit.
         """
         if week_start is not None:
             return week_start
-        if academic_year == today_vn().year:
-            return None
+        today = today_vn()
+        if academic_year == today.year:
+            iso_year = today.isocalendar()[0]
+            if iso_year == academic_year:
+                return None  # today's ISO week is in-year → dùng tuần thật hôm nay
+            # today rơi vào tuần ISO của năm KHÁC (ranh giới cuối 12 / đầu 1).
+            return (
+                date(academic_year, 12, 28)
+                if iso_year > academic_year
+                else date(academic_year, 1, 4)
+            )
         return (
             date(academic_year, 1, 4)
-            if academic_year > today_vn().year
+            if academic_year > today.year
             else date(academic_year, 12, 28)
         )
 
@@ -516,20 +530,21 @@ class AdmissionReportService:
 
         Tái dùng ``resolve_profiles`` (dim ỔN ĐỊNH theo major_id/officer_id — không
         join bằng nhãn) + ``milestone_timestamps`` (first-transition) + cùng
-        scope/RBAC như trend. Năm KHÔNG phải năm hiện tại (``_default_anchor`` trả
-        != None) → không có "tuần đang chạy" thật → ``insufficient_data`` (KHÔNG bịa
-        2 tuần 0 giả). ``delta_pct=None`` khi tuần trước = 0. Tính theo major·officer
-        ·totals; totals = Σ dimension (khớp tổng chung). FE chỉ render.
+        scope/RBAC như trend. WoW cần TUẦN THẬT hôm nay (không phải anchor đã clamp
+        của ``_default_anchor``) → chỉ chạy khi năm báo cáo = năm dương lịch hiện
+        tại; năm khác → ``insufficient_data`` (KHÔNG bịa 2 tuần 0 giả). ``delta_pct
+        =None`` khi tuần trước = 0. Tính theo major·officer·totals; totals = Σ
+        dimension (khớp tổng chung). FE chỉ render.
         """
         scope_unit_id = self._resolve_scope(current_user, unit_id)
         await self._assert_round_exists(academic_year, round_code)
 
         totals = WowRow(group_key=None, label="TỔNG")
-        # WoW chỉ có nghĩa khi có "tuần đang chạy" thật = NĂM HIỆN TẠI. Năm khác
-        # (_default_anchor != None: tương lai → Jan-4 nên 2 tuần rơi vào tháng 12 năm
-        # trước = giả; quá khứ → Dec-28, mùa đã đóng) → báo insufficient_data.
-        anchor = self._default_anchor(academic_year, None)
-        if anchor is not None:
+        # WoW chỉ có nghĩa khi có "tuần đang chạy" thật = NĂM DƯƠNG LỊCH HIỆN TẠI.
+        # (Không dùng ``_default_anchor is not None`` làm proxy: nó nay clamp cả năm
+        # hiện tại ở ranh giới cuối-12/đầu-1 nên sẽ báo != None oan.) Năm khác → mùa
+        # chưa mở / đã đóng → insufficient_data.
+        if academic_year != today_vn().year:
             return AdmissionWowResponse(
                 academic_year=academic_year,
                 round_code=round_code,
@@ -541,7 +556,7 @@ class AdmissionReportService:
                 totals=totals,
             )
 
-        end_meta, _ = self._compute_week(anchor)  # tuần ĐANG CHẠY (loại khỏi WoW)
+        end_meta, _ = self._compute_week(None)  # tuần THẬT hôm nay (loại khỏi WoW)
         w1_meta, w1 = self._compute_week(end_meta.week_start - timedelta(weeks=1))
         w2_meta, w2 = self._compute_week(end_meta.week_start - timedelta(weeks=2))
         # Đầu tháng 1: 2 tuần đã-hoàn-tất gần nhất rơi vào tháng 12 NĂM TRƯỚC (ISO

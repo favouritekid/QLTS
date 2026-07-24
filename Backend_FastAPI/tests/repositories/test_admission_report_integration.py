@@ -648,6 +648,43 @@ async def test_future_year_implicit_week_defaults_in_year(
     assert resp.academic_year == 2200
 
 
+async def test_implicit_anchor_clamps_year_end_boundary_into_year(
+    db: AsyncSession, seeded_dependencies: dict, monkeypatch
+):
+    # 2025-12-29 has iso_year 2026. Report for CURRENT calendar year 2025 with NO
+    # week_start (FE default year = calendar year) must clamp the implicit anchor to
+    # the last in-year ISO week (Dec 28) so week.iso_year === academic_year — not
+    # silently return a 2026-stamped week. Regression for the reviewer's repro.
+    monkeypatch.setattr(
+        "app.services.admission_report_service.today_vn",
+        lambda: date(2025, 12, 29),
+    )
+    svc = AdmissionReportService(db)
+    resp = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=2025, group_by="major"
+    )
+    assert resp.week.iso_year == 2025
+    assert resp.academic_year == 2025
+
+
+async def test_implicit_anchor_clamps_year_start_boundary_into_year(
+    db: AsyncSession, seeded_dependencies: dict, monkeypatch
+):
+    # 2027-01-01 has iso_year 2026. Report for CURRENT calendar year 2027 with NO
+    # week_start must clamp the implicit anchor to the first in-year ISO week (Jan 4)
+    # so week.iso_year === academic_year.
+    monkeypatch.setattr(
+        "app.services.admission_report_service.today_vn",
+        lambda: date(2027, 1, 1),
+    )
+    svc = AdmissionReportService(db)
+    resp = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=2027, group_by="major"
+    )
+    assert resp.week.iso_year == 2027
+    assert resp.academic_year == 2027
+
+
 async def test_report_years_include_config_only_year(
     db: AsyncSession, seeded_dependencies: dict
 ):

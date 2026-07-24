@@ -185,6 +185,49 @@ export function resolveApiUnitId(i: {
 }
 
 // ---------------------------------------------------------------------------
+// SLICE-CURRENT — có được coi response (giữ bởi placeholderData:prev) là lát cắt
+// HIỆN TẠI không. Phải khớp năm·đợt·đơn-vị VÀ scope + catalog đợt đã sẵn sàng
+// (nếu không, deep-link có đơn-vị/đợt lúc bootstrap sẽ hiện báo cáo toàn-trường /
+// toàn-năm như dữ liệu thật). Thuần — test được.
+// ---------------------------------------------------------------------------
+
+export interface SliceEcho {
+  academic_year: number;
+  round_code: string | null;
+  scope_unit_id: number | null;
+}
+
+export function isSliceCurrent(
+  d: SliceEcho | undefined,
+  expected: {
+    year: number;
+    round: string | null; // giá trị round_code KỲ VỌNG (null = mọi đợt)
+    unit: number | null; // scope_unit_id KỲ VỌNG (gồm manager bị ép)
+    scopeResolved: boolean; // đã học được scope người dùng chưa
+    roundResolved: boolean; // đợt = ALL, hoặc mã đợt đã có trong catalog năm
+  },
+): boolean {
+  return (
+    !!d &&
+    expected.scopeResolved &&
+    expected.roundResolved &&
+    d.academic_year === expected.year &&
+    (d.round_code ?? null) === expected.round &&
+    (d.scope_unit_id ?? null) === expected.unit
+  );
+}
+
+/** Nhãn scope cho nút Xuất Excel — derive từ BỘ LỌC (scope) hiện tại, KHÔNG từ
+ *  response (response có thể trễ/toàn-trường lúc bootstrap → nhãn nhảy sai). */
+export function describeExportScope(
+  unitId: number | null,
+  units: readonly { id: number; name: string }[],
+): string {
+  if (unitId == null) return "toàn trường";
+  return units.find((u) => u.id === unitId)?.name ?? `đơn vị #${unitId}`;
+}
+
+// ---------------------------------------------------------------------------
 // HOOK
 // ---------------------------------------------------------------------------
 

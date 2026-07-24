@@ -14,6 +14,8 @@ import {
   ALL_ROUNDS,
   ALL_UNITS,
   canonicalizeOverviewState,
+  describeExportScope,
+  isSliceCurrent,
   parseOverviewParams,
   resolveApiUnitId,
   serializeOverviewParams,
@@ -197,5 +199,80 @@ describe("resolveApiUnitId", () => {
     expect(
       resolveApiUnitId({ scopeResolved: true, enforcedUnit: null, urlUnitId: 5 }),
     ).toBe(5);
+  });
+});
+
+describe("isSliceCurrent", () => {
+  const echo = { academic_year: 2026, round_code: null, scope_unit_id: null };
+  const ok = {
+    year: 2026,
+    round: null,
+    unit: null,
+    scopeResolved: true,
+    roundResolved: true,
+  };
+
+  it("khớp năm·đợt·đơn-vị + scope/đợt sẵn sàng → current", () => {
+    expect(isSliceCurrent(echo, ok)).toBe(true);
+  });
+
+  it("chưa resolve scope (bootstrap) → KHÔNG current dù response khớp", () => {
+    expect(isSliceCurrent(echo, { ...ok, scopeResolved: false })).toBe(false);
+  });
+
+  it("URL có đợt nhưng catalog chưa ready → KHÔNG current (chống hiện toàn-năm)", () => {
+    // response toàn-năm (round_code=null) đến trước, đợt chưa sẵn → không được coi là lát cắt đợt
+    expect(isSliceCurrent(echo, { ...ok, roundResolved: false })).toBe(false);
+  });
+
+  it("đơn vị response khác đơn vị kỳ vọng (đang đổi unit) → KHÔNG current", () => {
+    expect(isSliceCurrent(echo, { ...ok, unit: 14 })).toBe(false);
+  });
+
+  it("manager: response scope_unit_id khớp expectedUnit bị ép → current", () => {
+    expect(
+      isSliceCurrent(
+        { academic_year: 2026, round_code: null, scope_unit_id: 14 },
+        { ...ok, unit: 14 },
+      ),
+    ).toBe(true);
+  });
+
+  it("đợt khớp mã cụ thể → current", () => {
+    expect(
+      isSliceCurrent(
+        { academic_year: 2026, round_code: "DOT_2", scope_unit_id: null },
+        { ...ok, round: "DOT_2" },
+      ),
+    ).toBe(true);
+  });
+
+  it("năm response khác năm hiện tại (đang đổi năm) → KHÔNG current", () => {
+    expect(
+      isSliceCurrent({ ...echo, academic_year: 2025 }, ok),
+    ).toBe(false);
+  });
+
+  it("data undefined → KHÔNG current", () => {
+    expect(isSliceCurrent(undefined, ok)).toBe(false);
+  });
+});
+
+describe("describeExportScope", () => {
+  const units = [
+    { id: 14, name: "Phòng Tuyển Sinh" },
+    { id: 19, name: "Trung tâm ĐT ngắn hạn" },
+  ];
+
+  it("không có đơn vị (toàn quyền) → 'toàn trường'", () => {
+    expect(describeExportScope(null, units)).toBe("toàn trường");
+  });
+
+  it("có đơn vị đã biết tên → tên đơn vị", () => {
+    expect(describeExportScope(14, units)).toBe("Phòng Tuyển Sinh");
+  });
+
+  it("đơn vị lạ (chưa có trong danh sách) → fallback theo id", () => {
+    expect(describeExportScope(99, units)).toBe("đơn vị #99");
   });
 });

@@ -54,6 +54,8 @@ import {
   ALL_UNITS,
   CURRENT_YEAR,
   canonicalizeOverviewState,
+  describeExportScope,
+  isSliceCurrent,
   resolveApiUnitId,
   serializeOverviewParams,
   useOverviewUrlState,
@@ -234,15 +236,21 @@ export function AdmissionOverviewClient() {
 
   // `placeholderData: prev` giữ lát cắt CŨ hiển thị trong lúc đổi bộ lọc → phải
   // xác nhận response phản chiếu ĐÚNG (năm · đợt · đơn vị) hiện tại trước khi coi là
-  // "synced", nếu không màn điều hành hiện số của đơn vị/đợt khác như dữ liệu thật.
-  // BE echo round_code + scope_unit_id; expectedUnit gồm cả manager bị BE ép scope.
+  // "synced". Thêm 2 điều kiện bootstrap: (a) đã học scope người dùng, (b) đợt đã
+  // sẵn sàng trong catalog — nếu không, deep-link có đơn-vị/đợt lúc mới tải sẽ hiện
+  // báo cáo toàn-trường/toàn-năm như dữ liệu thật. BE echo round_code + scope_unit_id.
   const expectedRound = roundCode ?? null;
   const expectedUnit = effectiveUnitId ?? enforcedUnit ?? null;
+  const roundResolved =
+    round === ALL_ROUNDS || (roundReady && roundCodes.includes(round));
   const sliceMatches = (d: AdmissionWeeklyReport | undefined) =>
-    !!d &&
-    d.academic_year === year &&
-    (d.round_code ?? null) === expectedRound &&
-    (d.scope_unit_id ?? null) === expectedUnit;
+    isSliceCurrent(d, {
+      year,
+      round: expectedRound,
+      unit: expectedUnit,
+      scopeResolved,
+      roundResolved,
+    });
   const syncedDetail = sliceMatches(weeklyDetail.data)
     ? weeklyDetail.data
     : undefined;
@@ -318,14 +326,11 @@ export function AdmissionOverviewClient() {
   };
 
   // Export bám ĐÚNG lát cắt đơn vị đang xem (admin chọn đơn vị → xuất đơn vị đó;
-  // manager → BE tự ép về đơn vị của họ khi unit_id bỏ trống). Nhãn/tooltip động
-  // theo scope thật để manager không thấy "toàn trường" trong khi file chỉ có đơn vị.
-  const scopeUnitId = syncedMajor?.scope_unit_id ?? null;
-  const exportScopeLabel =
-    scopeUnitId != null
-      ? (flatUnits.find((u) => u.id === scopeUnitId)?.name ??
-        `đơn vị #${scopeUnitId}`)
-      : "toàn trường";
+  // manager → BE tự ép về đơn vị của họ khi unit_id bỏ trống). Nhãn derive từ
+  // expectedUnit (SCOPE hiện tại) — KHÔNG từ syncedMajor (response có thể trễ/
+  // toàn-trường lúc bootstrap → nhãn nhảy sai). Nút khóa tới khi scopeResolved để
+  // không xuất khi effectiveUnitId chưa phản ánh đúng scope (deep-link ?unit=…).
+  const exportScopeLabel = describeExportScope(expectedUnit, flatUnits);
 
   const onExport = async () => {
     setExporting(true);
@@ -660,7 +665,7 @@ export function AdmissionOverviewClient() {
                 <Button
                   variant="outline"
                   onClick={onExport}
-                  disabled={exporting}
+                  disabled={exporting || !scopeResolved}
                   title={`Xuất số liệu tuyển sinh cả năm · ${exportScopeLabel} ra Excel (3 sheet: số liệu chung · chia theo nhân viên · quy ước)`}
                 >
                   <Download aria-hidden className="mr-2 size-4" />
