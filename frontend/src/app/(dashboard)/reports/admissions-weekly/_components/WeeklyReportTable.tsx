@@ -205,6 +205,7 @@ export function WeeklyReportTable({
     };
 
     return (
+      <>
       <div className="overflow-hidden rounded-lg border">
         <Table>
           <TableCaption className="sr-only">
@@ -259,6 +260,14 @@ export function WeeklyReportTable({
           </TableBody>
         </Table>
       </div>
+      {!showSnapshot && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Cột <strong>Nháp</strong> &amp; <strong>Học phí HK1</strong> chỉ hiển thị
+          ở lát cắt hiện tại (số liệu là trạng thái mới nhất, không có phiên bản lịch
+          sử theo tuần).
+        </p>
+      )}
+      </>
     );
   }
 

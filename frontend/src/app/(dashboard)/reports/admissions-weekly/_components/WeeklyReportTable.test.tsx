@@ -104,12 +104,21 @@ describe("WeeklyReportTable", () => {
         snapshotAsOfNow={false}
       />,
     );
-    expect(screen.queryByText("Nháp")).toBeNull();
-    expect(screen.queryByText("HK1 một phần")).toBeNull();
-    expect(screen.queryByText("HK1 đủ")).toBeNull();
+    // kiểm CỘT (columnheader) — không dùng queryByText vì chú thích dưới bảng cũng
+    // nhắc chữ "Nháp"/"Học phí HK1".
+    const headers = screen
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent);
+    expect(headers).not.toContain("Nháp");
+    expect(headers).not.toContain("HK1 một phần");
+    expect(headers).not.toContain("HK1 đủ");
     // các cột lũy-kế vẫn còn
-    expect(screen.getByText("Nộp")).toBeTruthy();
-    expect(screen.getByText("Trúng")).toBeTruthy();
+    expect(headers).toContain("Nộp");
+    expect(headers).toContain("Trúng");
+    // có chú thích giải thích vì sao ẩn
+    expect(
+      screen.getByText(/chỉ hiển thị[\s\S]*ở lát cắt hiện tại/),
+    ).toBeTruthy();
   });
 
   // Cột hoạt-động (period=week) KHÔNG có các cột chi tiết hoá lũy-kế.
