@@ -17,6 +17,16 @@ vi.mock("../MinorCorrectionDialog", () => ({
   MinorCorrectionDialog: () => <button data-testid="mock-minor-correction">Sửa nhỏ</button>,
 }))
 
+// C2 — useAdminRollback dùng react-query (cần QueryClient); AuditReasonDialog kéo
+// theo localStorage. Mock cả hai để test menu thuần không cần provider.
+vi.mock("@/hooks/admissions", () => ({
+  useAdminRollback: () => ({ mutate: vi.fn(), isPending: false }),
+}))
+vi.mock("@/components/admissions/AuditReasonDialog", () => ({
+  AuditReasonDialog: () => null,
+  pushRecentReason: vi.fn(),
+}))
+
 // Pass-through AlertDialog mock — keep trigger + action both clickable
 vi.mock("@/components/ui/alert-dialog", () => ({
   AlertDialog: ({ children, open }: { children: React.ReactNode; open?: boolean }) =>
@@ -116,6 +126,17 @@ describe("ProfileActionMenu", () => {
       render(<ProfileActionMenu profile={buildProfile({ permissions: { minor_correction: true } })} />)
       expect(screen.getByTestId("menu-item-minor-correction")).toBeInTheDocument()
       expect(screen.getByTestId("mock-minor-correction")).toBeInTheDocument()
+    })
+
+    // C2 — entry-point admin rollback (+ đổi ngành).
+    it("admin_rollback=true: hiển thị item 'Đưa về nháp / Đổi ngành'", () => {
+      render(<ProfileActionMenu profile={buildProfile({ permissions: { admin_rollback: true } })} />)
+      expect(screen.getByTestId("menu-item-admin-rollback")).toBeInTheDocument()
+    })
+
+    it("admin_rollback vắng mặt: KHÔNG hiển thị item admin-rollback", () => {
+      render(<ProfileActionMenu profile={buildProfile({ permissions: { claim: true } })} onClaim={vi.fn()} />)
+      expect(screen.queryByTestId("menu-item-admin-rollback")).not.toBeInTheDocument()
     })
   })
 

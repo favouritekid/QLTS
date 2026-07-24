@@ -599,12 +599,15 @@ export function useRequestRevisionAdmission(id: number) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (data: { reason: string; version: number }) =>
+    mutationFn: (data: { reason: string; version: number; allow_major_change?: boolean }) =>
       admissionsApi.requestRevision(id, data),
     onSuccess: (data) => {
+      const cycleOpened = data.major_change_cycle_open === true
       if (data.status === "revision_requested") {
         toast.success("Đã yêu cầu sửa hồ sơ", {
-          description: "Officer phụ trách đã nhận thông báo. Có thể nộp lại sau khi sửa.",
+          description: cycleOpened
+            ? "Chu kỳ ĐỔI NGÀNH đã mở — officer sửa nguyện vọng + nộp lại để định giá lại học phí (kế toán xác nhận)."
+            : "Officer phụ trách đã nhận thông báo. Có thể nộp lại sau khi sửa.",
         })
       } else {
         toast.info("Yêu cầu sửa đã được xử lý", {
@@ -622,6 +625,38 @@ export function useRequestRevisionAdmission(id: number) {
         queryClient,
         invalidateKeys: [[...admissionsKeys.detail(id)]],
         context: "yêu cầu sửa hồ sơ",
+      })
+    },
+  })
+}
+
+/**
+ * C2 — Admin rollback về draft (Admin only). `allow_major_change=true` mở chu kỳ
+ * ĐỔI NGÀNH (định giá lại HP + kế toán xác nhận). Entry-point UI thay cho gọi API.
+ */
+export function useAdminRollback(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: { reason: string; allow_major_change?: boolean }) =>
+      admissionsApi.adminRollback(id, data),
+    onSuccess: (data) => {
+      const cycleOpened = data.major_change_cycle_open === true
+      toast.success("Đã đưa hồ sơ về nháp", {
+        description: cycleOpened
+          ? "Chu kỳ ĐỔI NGÀNH đã mở — officer sửa nguyện vọng + nộp lại để định giá lại học phí (kế toán xác nhận)."
+          : "Hồ sơ đã chuyển về trạng thái nháp.",
+      })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "status-counts"] })
+      queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "đưa hồ sơ về nháp",
       })
     },
   })

@@ -92,7 +92,8 @@ describe("AuditReasonDialog", () => {
       target: { value: "   Long enough reason here   " },
     })
     fireEvent.click(screen.getByTestId("audit-reason-confirm"))
-    expect(onConfirm).toHaveBeenCalledWith("Long enough reason here")
+    // C2: onConfirm nhận (reason, allowMajorChange). Không hiện toggle → false.
+    expect(onConfirm).toHaveBeenCalledWith("Long enough reason here", false)
   })
 
   it("renders recent-reasons section ONLY when localStorage has entries", () => {
@@ -196,5 +197,114 @@ describe("AuditReasonDialog", () => {
       "audit-reason-textarea",
     ) as HTMLTextAreaElement
     expect(textarea.disabled).toBe(true)
+  })
+
+  // -------------------------------------------------------------------------
+  // C2 — checkbox "Cho phép đổi ngành" (mở chu kỳ định giá lại + kế toán xác nhận)
+  // -------------------------------------------------------------------------
+  describe("showMajorChangeToggle (C2)", () => {
+    const typeValidReason = () => {
+      fireEvent.change(screen.getByTestId("audit-reason-textarea"), {
+        target: { value: "Thí sinh xin đổi sang ngành khác" },
+      })
+    }
+
+    it("mặc định KHÔNG render checkbox đổi ngành", () => {
+      render(
+        <AuditReasonDialog
+          action="admin_rollback"
+          open={true}
+          onOpenChange={() => {}}
+          onConfirm={() => {}}
+        />,
+      )
+      expect(
+        screen.queryByTestId("allow-major-change-checkbox"),
+      ).toBeNull()
+    })
+
+    it("bật prop → render checkbox, mặc định CHƯA tick → onConfirm(..., false)", () => {
+      const onConfirm = vi.fn()
+      render(
+        <AuditReasonDialog
+          action="admin_rollback"
+          open={true}
+          onOpenChange={() => {}}
+          onConfirm={onConfirm}
+          showMajorChangeToggle
+        />,
+      )
+      const checkbox = screen.getByTestId("allow-major-change-checkbox")
+      // Radix Checkbox phản ánh trạng thái qua aria-checked / data-state.
+      expect(checkbox.getAttribute("aria-checked")).toBe("false")
+      typeValidReason()
+      fireEvent.click(screen.getByTestId("audit-reason-confirm"))
+      expect(onConfirm).toHaveBeenCalledWith(
+        "Thí sinh xin đổi sang ngành khác",
+        false,
+      )
+    })
+
+    it("tick checkbox → onConfirm(..., true)", () => {
+      const onConfirm = vi.fn()
+      render(
+        <AuditReasonDialog
+          action="request_revision"
+          open={true}
+          onOpenChange={() => {}}
+          onConfirm={onConfirm}
+          showMajorChangeToggle
+        />,
+      )
+      fireEvent.click(screen.getByTestId("allow-major-change-checkbox"))
+      expect(
+        screen.getByTestId("allow-major-change-checkbox").getAttribute("aria-checked"),
+      ).toBe("true")
+      typeValidReason()
+      fireEvent.click(screen.getByTestId("audit-reason-confirm"))
+      expect(onConfirm).toHaveBeenCalledWith(
+        "Thí sinh xin đổi sang ngành khác",
+        true,
+      )
+    })
+
+    it("đóng rồi mở lại: checkbox RESET về chưa tick (không dính lần trước)", () => {
+      const onConfirm = vi.fn()
+      const { rerender } = render(
+        <AuditReasonDialog
+          action="admin_rollback"
+          open={true}
+          onOpenChange={() => {}}
+          onConfirm={onConfirm}
+          showMajorChangeToggle
+        />,
+      )
+      fireEvent.click(screen.getByTestId("allow-major-change-checkbox"))
+      expect(
+        screen.getByTestId("allow-major-change-checkbox").getAttribute("aria-checked"),
+      ).toBe("true")
+
+      const dialog = (open: boolean) => (
+        <AuditReasonDialog
+          action="admin_rollback"
+          open={open}
+          onOpenChange={() => {}}
+          onConfirm={onConfirm}
+          showMajorChangeToggle
+        />
+      )
+      rerender(dialog(false))
+      rerender(dialog(true))
+
+      expect(
+        screen.getByTestId("allow-major-change-checkbox").getAttribute("aria-checked"),
+      ).toBe("false")
+      typeValidReason()
+      fireEvent.click(screen.getByTestId("audit-reason-confirm"))
+      expect(onConfirm).toHaveBeenLastCalledWith(
+        "Thí sinh xin đổi sang ngành khác",
+        false,
+      )
+    })
   })
 })

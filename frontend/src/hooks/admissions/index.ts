@@ -38,6 +38,8 @@ export {
   useRejectAdmission,
   // E2E #10 fix 2026-05-15 — manager request_revision flow
   useRequestRevisionAdmission,
+  // C2 — admin rollback + entry-point đổi ngành
+  useAdminRollback,
   // Phase 3 multi-NV: 1-click publish (bỏ start-review YAGNI)
   usePublishAdmissionResult,
   useEnrollStudent,

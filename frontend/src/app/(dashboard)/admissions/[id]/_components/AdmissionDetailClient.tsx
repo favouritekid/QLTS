@@ -463,10 +463,11 @@ export function AdmissionDetailClient({
   }, [])
 
   const handleConfirmRequestRevision = useCallback(
-    (reason: string) => {
+    (reason: string, allowMajorChange: boolean) => {
       if (!vm?.version) return
       requestRevisionMutation.mutate(
-        { reason, version: vm.version },
+        // C2: allow_major_change mở chu kỳ đổi ngành (BE no-op nếu không đủ ĐK).
+        { reason, version: vm.version, allow_major_change: allowMajorChange },
         {
           onSuccess: () => {
             // #8: remember the reason for this action's "recent reasons" dropdown.
@@ -731,6 +732,10 @@ export function AdmissionDetailClient({
         onOpenChange={setRequestRevisionDialogOpen}
         onConfirm={handleConfirmRequestRevision}
         isSubmitting={requestRevisionMutation.isPending}
+        // C2: toggle đổi ngành chỉ khi hồ sơ đã nộp/nộp-lại (miền mở chu kỳ).
+        showMajorChangeToggle={
+          profile.status === "submitted" || profile.status === "resubmitted"
+        }
       />
     </FormProvider>
   )

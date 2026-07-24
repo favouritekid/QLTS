@@ -26,7 +26,7 @@
  */
 
 import { useState } from "react"
-import { MoreVertical, Loader2, ClipboardCheck, XCircle, Trash } from "lucide-react"
+import { MoreVertical, Loader2, ClipboardCheck, XCircle, Trash, Undo2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -47,6 +47,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { MinorCorrectionDialog } from "../MinorCorrectionDialog"
+import { AdminRollbackDialog } from "./AdminRollbackDialog"
 import { usePermissions } from "@/hooks/usePermissions"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
@@ -73,10 +74,13 @@ export function ProfileActionMenu({
   const [claimDialogOpen, setClaimDialogOpen] = useState(false)
   const [unclaimDialogOpen, setUnclaimDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [adminRollbackDialogOpen, setAdminRollbackDialogOpen] = useState(false)
 
   const hasAssignmentAction = can("claim") || can("unclaim")
   const hasMaintenanceAction = can("minor_correction") || can("delete")
-  const hasAnyAction = hasAssignmentAction || hasMaintenanceAction
+  const canAdminRollback = can("admin_rollback")
+  const hasAnyAction =
+    hasAssignmentAction || hasMaintenanceAction || canAdminRollback
 
   if (!hasAnyAction) return null
 
@@ -143,6 +147,24 @@ export function ProfileActionMenu({
               )}
             </>
           )}
+
+          {canAdminRollback && (
+            <>
+              {(hasAssignmentAction || hasMaintenanceAction) && (
+                <DropdownMenuSeparator />
+              )}
+              <DropdownMenuLabel className="text-xs text-muted-foreground">
+                Nâng cao
+              </DropdownMenuLabel>
+              <DropdownMenuItem
+                onSelect={() => setAdminRollbackDialogOpen(true)}
+                data-testid="menu-item-admin-rollback"
+              >
+                <Undo2 className="w-4 h-4 mr-2" />
+                Đưa về nháp / Đổi ngành
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
 
@@ -195,6 +217,17 @@ export function ProfileActionMenu({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* C2 — admin rollback + entry-point ĐỔI NGÀNH. Render CÓ ĐIỀU KIỆN để hook
+          react-query chỉ chạy khi admin có quyền (không ép QueryClient vào test
+          render menu ở ngữ cảnh khác). */}
+      {canAdminRollback && (
+        <AdminRollbackDialog
+          profileId={profile.id}
+          open={adminRollbackDialogOpen}
+          onOpenChange={setAdminRollbackDialogOpen}
+        />
+      )}
     </>
   )
 }

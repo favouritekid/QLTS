@@ -2438,6 +2438,12 @@ def _compute_frontend_fields(
         # Without this flag the UI cannot surface an Override button,
         # so admin would only be able to invoke /override via direct API.
         "override": status == "approved" and is_admin,
+        # C2: admin-rollback → draft (admin-only, POST /api/v2/admissions/{id}/
+        # admin-rollback). Surface nút UI + entry-point ĐỔI NGÀNH (checkbox
+        # allow_major_change) cho hồ sơ đã nộp/nộp-lại — trước đây chỉ gọi được
+        # qua API. Chỉ submitted/resubmitted (miền mở chu kỳ đổi ngành; các status
+        # khác dùng override/luồng riêng).
+        "admin_rollback": is_admin and status in ("submitted", "resubmitted"),
         # Tentative — true only when role + status + path_id snapshot
         # exists. Async resolver _resolve_minor_correction_state flips
         # this back to False if the per-path effective allowlist is

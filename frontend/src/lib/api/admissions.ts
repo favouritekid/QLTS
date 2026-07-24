@@ -243,10 +243,28 @@ export async function rejectAdmission(
  */
 export async function requestRevision(
   id: number,
-  data: { reason: string; version: number }
+  data: { reason: string; version: number; allow_major_change?: boolean }
 ): Promise<AdmissionProfileResponse> {
   const response = await api.post<AdmissionProfileResponse>(
     `/api/admissions/${id}/request-revision`,
+    data
+  )
+  return response.data
+}
+
+/**
+ * Admin rollback profile về draft (Admin only)
+ * POST /api/v2/admissions/{id}/admin-rollback
+ *
+ * C2: entry-point ĐỔI NGÀNH — `allow_major_change=true` mở chu kỳ định giá lại
+ * học phí + kế toán xác nhận. KHÔNG cần version (admin override). Reason 10-500.
+ */
+export async function adminRollback(
+  id: number,
+  data: { reason: string; allow_major_change?: boolean }
+): Promise<AdmissionProfileResponse> {
+  const response = await api.post<AdmissionProfileResponse>(
+    `/api/v2/admissions/${id}/admin-rollback`,
     data
   )
   return response.data
@@ -651,6 +669,7 @@ export const admissionsApi = {
   submitAdmission,
   resubmitAdmission,
   requestRevision,
+  adminRollback,
   approveAdmission,
   rejectAdmission,
   minorCorrection,
