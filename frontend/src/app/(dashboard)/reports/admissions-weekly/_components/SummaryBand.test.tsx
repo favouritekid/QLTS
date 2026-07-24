@@ -52,7 +52,7 @@ function mkRow(o: {
 }
 
 describe("SummaryBand", () => {
-  it("major + quota → Nhập học/Chỉ tiêu, Đã thu money, ngành đạt count", () => {
+  it("major + quota → Nhập học/Chỉ tiêu, Thu ròng money, ngành đạt count", () => {
     const rows = [
       mkRow({ label: "A", quota: 100, enrolled: 95 }), // 95% → đạt
       mkRow({ label: "B", quota: 100, enrolled: 40 }),
@@ -67,7 +67,7 @@ describe("SummaryBand", () => {
     });
     render(<SummaryBand rows={rows} totals={totals} groupBy="major" />);
     expect(screen.getByText("Nhập học / Chỉ tiêu")).toBeTruthy();
-    expect(screen.getByText("6.260.000 ₫")).toBeTruthy(); // Đã thu (money string)
+    expect(screen.getByText("6.260.000 ₫")).toBeTruthy(); // Thu ròng (money string)
     expect(screen.getByText("/ 3 ngành có chỉ tiêu")).toBeTruthy();
     // scope the count to its own card so it can't collide with other numbers
     const card = screen.getByText("Ngành đạt ≥90%").parentElement as HTMLElement;
@@ -85,9 +85,10 @@ describe("SummaryBand", () => {
     render(<SummaryBand rows={[]} totals={totals} groupBy="officer" />);
     expect(screen.queryByText("Nhập học / Chỉ tiêu")).toBeNull();
     expect(screen.getByText("Nhập học")).toBeTruthy();
-    expect(screen.getByText("Hồ sơ nộp")).toBeTruthy();
+    expect(screen.getByText("Hồ sơ đã nộp")).toBeTruthy();
     // prepay-draft card surfaces the "đã đóng lệ phí, chưa nộp" cohort
-    const prepay = screen.getByText("Đóng phí chưa nộp").parentElement as HTMLElement;
+    const prepay = screen.getByText("Đã đóng lệ phí XT · còn nháp")
+      .parentElement as HTMLElement;
     expect(within(prepay).getByText("14")).toBeTruthy();
   });
 
