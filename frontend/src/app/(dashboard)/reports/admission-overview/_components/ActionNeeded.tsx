@@ -70,18 +70,27 @@ function cleanName(r: ReportRow): string {
  * - Chỉ tiêu: gọi "Thiếu so với chỉ tiêu" (độ đầy < 50%), KHÔNG "nguy cơ không đạt".
  * - Công nợ quá hạn: CHỈ đếm bucket 31–60 và >60 (bucket 0–30 trộn trong-hạn +
  *   quá-hạn-1-30 nên không cảnh báo chắc).
+ * - Công nợ FAIL-CLOSED: nếu query công nợ chưa tải xong hoặc LỖI, KHÔNG được
+ *   coi là "sạch" — hiện một dòng cảnh báo rõ ràng để "Không có mục cần xử lý"
+ *   không bao giờ là all-clear GIẢ khi ta chưa thực sự kiểm tra được công nợ.
  * P3a chưa gắn deep-link (chờ P3b khi trang đích hỗ trợ đúng bộ lọc).
  */
 export function ActionNeeded({
   report,
   debt,
+  debtLoading = false,
+  debtError = false,
 }: {
   report: AdmissionWeeklyReport;
   debt?: DebtReportResponse;
+  debtLoading?: boolean;
+  debtError?: boolean;
 }) {
   const alerts: Alert[] = [];
 
   // #1 Công nợ quá hạn — CHỈ 31–60 và >60 (số hồ sơ + số tiền từ debt.items).
+  // Fail-closed: chỉ đánh giá "sạch công nợ" khi ĐÃ có data. Thiếu data (đang tải
+  // hoặc lỗi) → phát cảnh báo thay vì im lặng bỏ qua (tránh all-clear giả).
   if (debt) {
     const sumOut = (rows: DebtReportResponse["items"]) =>
       rows.reduce((s, r) => s + parseFloat(r.total_outstanding || "0"), 0);
@@ -104,6 +113,22 @@ export function ActionNeeded({
         value: `${nf.format(mid.length)} hồ sơ · ${formatVND(String(sumOut(mid)))}`,
       });
     }
+  } else if (debtError) {
+    alerts.push({
+      id: "debt-error",
+      severity: "warning",
+      title: "Chưa kiểm tra được công nợ",
+      hint: "không tải được báo cáo công nợ — hãy tải lại để rà quá hạn",
+      value: "cần tải lại",
+    });
+  } else if (debtLoading) {
+    alerts.push({
+      id: "debt-loading",
+      severity: "info",
+      title: "Đang kiểm tra công nợ…",
+      hint: "chưa thể kết luận quá hạn cho tới khi tải xong",
+      value: "đang tải",
+    });
   }
 
   // #2 Thiếu so chỉ tiêu (chỉ khi lát cắt có chỉ tiêu — toàn trường · mọi đợt).

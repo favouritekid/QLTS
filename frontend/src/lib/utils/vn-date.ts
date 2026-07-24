@@ -33,3 +33,17 @@ export function subDaysVN(dateStr: string, days: number): string {
 export function startOfMonthVN(dateStr: string): string {
   return dateStr.slice(0, 8) + "01";
 }
+
+/**
+ * ISO-8601 week-numbering YEAR of a YYYY-MM-DD date. The ISO year is the year of
+ * the Thursday in that date's week, so late-December days can belong to next
+ * year's week 1 (and early-January days to the prior year's last week). Mirrors
+ * the backend's `week.iso_year`; used to keep week navigation inside the academic
+ * year (the report rejects a week whose iso_year != academic_year).
+ */
+export function isoWeekYearVN(dateStr: string): number {
+  const d = new Date(`${dateStr}T12:00:00Z`);
+  const day = d.getUTCDay() || 7; // Mon=1 … Sun=7
+  d.setUTCDate(d.getUTCDate() + 4 - day); // Thursday of this ISO week
+  return d.getUTCFullYear();
+}

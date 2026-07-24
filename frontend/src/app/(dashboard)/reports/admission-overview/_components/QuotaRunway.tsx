@@ -118,7 +118,7 @@ export function QuotaRunway({
             submitted > 0 ? Math.round((paid / submitted) * 100) : 0;
           const title =
             `${cleanName(row)}${row.code ? ` (${row.code})` : ""}\n` +
-            `Chỉ tiêu: ${quota != null ? nf.format(quota) : "— (chỉ có ở Tất cả đợt)"}\n` +
+            `Chỉ tiêu: ${quota != null ? nf.format(quota) : "— (không áp dụng cho lát cắt này)"}\n` +
             `Số hồ sơ: ${nf.format(submitted)}${fillPct != null ? ` · ${fillPct}% chỉ tiêu` : ""}\n` +
             `Đã đóng học phí HK1: ${nf.format(paid)} · ${paidPctOfSub}% hồ sơ`;
 

@@ -228,11 +228,14 @@ class AdmissionReportService:
         # one source of truth with the overview panels (see ``_default_anchor``).
         anchor = self._default_anchor(academic_year, week_start)
         week_meta, week = self._compute_week(anchor)
-        # An EXPLICIT week_start before the academic year is a stale bookmark → reject
-        # on the NORMALIZED ISO year (ISO week 1's Monday can fall in the prior Dec).
-        if week_start is not None and week_meta.iso_year < academic_year:
+        # An EXPLICIT week_start OUTSIDE the academic year is a stale/forward bookmark
+        # → reject on the NORMALIZED ISO year (ISO week 1's Monday can fall in the
+        # prior Dec; a week whose Thursday lands in the next Jan belongs to next year).
+        # Symmetric guard: both a prior-year bookmark AND a next-year "Tuần sau" step
+        # must fail so ``academic_year`` and ``week.iso_year`` never disagree.
+        if week_start is not None and week_meta.iso_year != academic_year:
             raise ValidationError(
-                detail="week_start trước năm tuyển sinh — hãy chọn tuần trong năm."
+                detail="week_start ngoài năm tuyển sinh — hãy chọn tuần trong năm."
             )
         cohort_ranges = await self._cohort_ranges(academic_year, round_code)
 
@@ -541,6 +544,20 @@ class AdmissionReportService:
         end_meta, _ = self._compute_week(anchor)  # tuần ĐANG CHẠY (loại khỏi WoW)
         w1_meta, w1 = self._compute_week(end_meta.week_start - timedelta(weeks=1))
         w2_meta, w2 = self._compute_week(end_meta.week_start - timedelta(weeks=2))
+        # Đầu tháng 1: 2 tuần đã-hoàn-tất gần nhất rơi vào tháng 12 NĂM TRƯỚC (ISO
+        # year ≠ academic_year) → so nhịp sẽ lấy tuần của năm khác. Không đủ dữ liệu
+        # TRONG NĂM để so → insufficient_data (nhất quán với chặn week_start ngoài năm).
+        if w1_meta.iso_year != academic_year or w2_meta.iso_year != academic_year:
+            return AdmissionWowResponse(
+                academic_year=academic_year,
+                round_code=round_code,
+                scope_unit_id=scope_unit_id,
+                group_by=group_by,  # type: ignore[arg-type]
+                insufficient_data=True,
+                comparison=None,
+                rows=[],
+                totals=totals,
+            )
 
         dims, _major_by_id = await self.repo.resolve_profiles(
             academic_year, scope_unit_id, None, round_code

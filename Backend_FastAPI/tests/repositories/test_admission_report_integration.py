@@ -618,6 +618,23 @@ async def test_week_start_before_academic_year_rejected(
         )
 
 
+async def test_week_start_after_academic_year_rejected(
+    db: AsyncSession, seeded_dependencies: dict
+):
+    # Symmetric to the prior-year guard: a "Tuần sau" bookmark whose NORMALIZED ISO
+    # year is GREATER than the report year must also fail, so academic_year and
+    # week.iso_year can never disagree (blocker: forward week stepping out of year).
+    year = next(_year_seq)
+    svc = AdmissionReportService(db)
+    with pytest.raises(ValidationError):
+        await svc.get_weekly_report(
+            current_user=_admin(),
+            academic_year=year,
+            group_by="major",
+            week_start=date(year + 1, 6, 1),
+        )
+
+
 async def test_future_year_implicit_week_defaults_in_year(
     db: AsyncSession, seeded_dependencies: dict
 ):
@@ -1338,3 +1355,25 @@ async def test_wow_past_year_insufficient_data(
     resp = await svc.get_week_over_week(current_user=_admin(), academic_year=2020)
     assert resp.insufficient_data is True
     assert resp.comparison is None
+
+
+async def test_wow_insufficient_when_complete_weeks_fall_in_prior_year(
+    db: AsyncSession, seeded_dependencies: dict, monkeypatch
+):
+    """Đầu tháng 1 (năm HIỆN TẠI): 2 tuần đã-hoàn-tất gần nhất rơi vào tháng 12 NĂM
+    TRƯỚC (iso_year != academic_year) → insufficient_data thay vì so nhịp với tuần
+    của năm khác. Mock ``today_vn`` về 04/01 để kích hoạt ranh giới ISO-year."""
+    year = next(_year_seq)
+    # academic_year == today.year → anchor=None (đường "năm hiện tại"); nhưng W-1/W-2
+    # rơi tháng 12 năm trước → guard trả insufficient (KHÔNG bịa so sánh lệch năm).
+    monkeypatch.setattr(
+        "app.services.admission_report_service.today_vn",
+        lambda: date(year, 1, 4),
+    )
+    svc = AdmissionReportService(db)
+    resp = await svc.get_week_over_week(
+        current_user=_admin(), academic_year=year, group_by="major"
+    )
+    assert resp.insufficient_data is True
+    assert resp.comparison is None
+    assert resp.rows == []

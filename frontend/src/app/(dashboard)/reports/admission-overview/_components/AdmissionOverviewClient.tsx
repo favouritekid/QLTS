@@ -39,8 +39,8 @@ import { useReportFilters, useWeeklyReport } from "@/hooks/reports/useWeeklyRepo
 import { exportAdmissionSummary } from "@/lib/api/reports";
 import { cn } from "@/lib/utils";
 import { blobErrorMessage, downloadBlob } from "@/lib/utils/download-blob";
-import { subDaysVN } from "@/lib/utils/vn-date";
-import type { ReportGroupBy } from "@/lib/zod/reports";
+import { isoWeekYearVN, subDaysVN } from "@/lib/utils/vn-date";
+import type { AdmissionWeeklyReport, ReportGroupBy } from "@/lib/zod/reports";
 
 import { ActionNeeded } from "./ActionNeeded";
 import { DebtPanel } from "./DebtPanel";
@@ -232,14 +232,23 @@ export function AdmissionOverviewClient() {
     fee_type: "tuition",
   });
 
-  const syncedDetail =
-    weeklyDetail.data && weeklyDetail.data.academic_year === year
-      ? weeklyDetail.data
-      : undefined;
-  const syncedMajor =
-    weeklyMajor.data && weeklyMajor.data.academic_year === year
-      ? weeklyMajor.data
-      : undefined;
+  // `placeholderData: prev` giữ lát cắt CŨ hiển thị trong lúc đổi bộ lọc → phải
+  // xác nhận response phản chiếu ĐÚNG (năm · đợt · đơn vị) hiện tại trước khi coi là
+  // "synced", nếu không màn điều hành hiện số của đơn vị/đợt khác như dữ liệu thật.
+  // BE echo round_code + scope_unit_id; expectedUnit gồm cả manager bị BE ép scope.
+  const expectedRound = roundCode ?? null;
+  const expectedUnit = effectiveUnitId ?? enforcedUnit ?? null;
+  const sliceMatches = (d: AdmissionWeeklyReport | undefined) =>
+    !!d &&
+    d.academic_year === year &&
+    (d.round_code ?? null) === expectedRound &&
+    (d.scope_unit_id ?? null) === expectedUnit;
+  const syncedDetail = sliceMatches(weeklyDetail.data)
+    ? weeklyDetail.data
+    : undefined;
+  const syncedMajor = sliceMatches(weeklyMajor.data)
+    ? weeklyMajor.data
+    : undefined;
   const weekMeta = syncedDetail?.week;
   const navAnchor = weekStart ?? weekMeta?.week_start;
   // Lát cắt hiện tại CÓ chỉ tiêu hay không → lái nhãn panel "Hồ sơ nộp / chỉ tiêu"
@@ -252,6 +261,16 @@ export function AdmissionOverviewClient() {
     (r) => !r.is_bucket && r.admission.quota != null && r.admission.quota > 0,
   );
   const unitScoped = syncedMajor?.scope_unit_id != null;
+
+  // Chặn điều hướng tuần RA NGOÀI năm tuyển sinh: BE từ chối week_start có ISO year
+  // != academic_year (đối xứng), nên nút phải tự khoá ở tuần đầu/cuối năm thay vì
+  // để bấm rồi nhận 400. So bằng ISO-week-year của tuần kế/trước (mirror BE).
+  const prevWeekStart = navAnchor ? subDaysVN(navAnchor, 7) : undefined;
+  const nextWeekStart = navAnchor ? subDaysVN(navAnchor, -7) : undefined;
+  const prevOutOfYear =
+    !!prevWeekStart && isoWeekYearVN(prevWeekStart) !== year;
+  const nextOutOfYear =
+    !!nextWeekStart && isoWeekYearVN(nextWeekStart) !== year;
 
   const anyFetching =
     weeklyDetail.isFetching ||
@@ -298,10 +317,23 @@ export function AdmissionOverviewClient() {
     patch({ year: next, round: ALL_ROUNDS, weekStart: undefined });
   };
 
+  // Export bám ĐÚNG lát cắt đơn vị đang xem (admin chọn đơn vị → xuất đơn vị đó;
+  // manager → BE tự ép về đơn vị của họ khi unit_id bỏ trống). Nhãn/tooltip động
+  // theo scope thật để manager không thấy "toàn trường" trong khi file chỉ có đơn vị.
+  const scopeUnitId = syncedMajor?.scope_unit_id ?? null;
+  const exportScopeLabel =
+    scopeUnitId != null
+      ? (flatUnits.find((u) => u.id === scopeUnitId)?.name ??
+        `đơn vị #${scopeUnitId}`)
+      : "toàn trường";
+
   const onExport = async () => {
     setExporting(true);
     try {
-      const { blob, filename } = await exportAdmissionSummary(year);
+      const { blob, filename } = await exportAdmissionSummary(
+        year,
+        effectiveUnitId,
+      );
       downloadBlob(blob, filename);
       toast.success("Đã xuất báo cáo Excel");
     } catch (err) {
@@ -443,7 +475,12 @@ export function AdmissionOverviewClient() {
                 skeleton="h-24 w-full"
               >
                 {syncedMajor && (
-                  <ActionNeeded report={syncedMajor} debt={debt.data} />
+                  <ActionNeeded
+                    report={syncedMajor}
+                    debt={debt.data}
+                    debtLoading={debt.isLoading}
+                    debtError={debt.isError}
+                  />
                 )}
               </PanelState>
             </Panel>
@@ -579,9 +616,9 @@ export function AdmissionOverviewClient() {
                       variant="outline"
                       size="icon"
                       aria-label="Tuần trước"
-                      disabled={!navAnchor}
+                      disabled={!navAnchor || prevOutOfYear}
                       onClick={() =>
-                        navAnchor && patch({ weekStart: subDaysVN(navAnchor, 7) })
+                        prevWeekStart && patch({ weekStart: prevWeekStart })
                       }
                     >
                       <ChevronLeft aria-hidden />
@@ -602,9 +639,9 @@ export function AdmissionOverviewClient() {
                       variant="outline"
                       size="icon"
                       aria-label="Tuần sau"
-                      disabled={!navAnchor}
+                      disabled={!navAnchor || nextOutOfYear}
                       onClick={() =>
-                        navAnchor && patch({ weekStart: subDaysVN(navAnchor, -7) })
+                        nextWeekStart && patch({ weekStart: nextWeekStart })
                       }
                     >
                       <ChevronRight aria-hidden />
@@ -624,10 +661,12 @@ export function AdmissionOverviewClient() {
                   variant="outline"
                   onClick={onExport}
                   disabled={exporting}
-                  title="Xuất số liệu tuyển sinh cả năm · toàn trường ra Excel (3 sheet: số liệu chung · chia theo nhân viên · quy ước)"
+                  title={`Xuất số liệu tuyển sinh cả năm · ${exportScopeLabel} ra Excel (3 sheet: số liệu chung · chia theo nhân viên · quy ước)`}
                 >
                   <Download aria-hidden className="mr-2 size-4" />
-                  {exporting ? "Đang xuất…" : "Xuất Excel (cả năm · toàn trường)"}
+                  {exporting
+                    ? "Đang xuất…"
+                    : `Xuất Excel (cả năm · ${exportScopeLabel})`}
                 </Button>
               </div>
 

@@ -11,7 +11,12 @@
  * - startOfMonthVN() string manipulation
  */
 import { describe, it, expect } from "vitest";
-import { todayVN, subDaysVN, startOfMonthVN } from "./vn-date";
+import {
+  todayVN,
+  subDaysVN,
+  startOfMonthVN,
+  isoWeekYearVN,
+} from "./vn-date";
 
 describe("todayVN", () => {
   it("returns ISO YYYY-MM-DD format", () => {
@@ -72,6 +77,31 @@ describe("subDaysVN", () => {
 
   it("handles large subtraction (30 days)", () => {
     expect(subDaysVN("2026-03-13", 29)).toBe("2026-02-12");
+  });
+});
+
+describe("isoWeekYearVN", () => {
+  it("mid-year date → same calendar year", () => {
+    // 2026-07-13 (Mon) is squarely inside ISO year 2026.
+    expect(isoWeekYearVN("2026-07-13")).toBe(2026);
+  });
+
+  it("late-December: 2025-12-29 (Mon) belongs to ISO week 1 of 2026", () => {
+    // Its Thursday is 2026-01-01 → ISO year 2026, not 2025.
+    expect(isoWeekYearVN("2025-12-29")).toBe(2026);
+  });
+
+  it("early-January: 2027-01-01 (Fri) still belongs to ISO year 2026", () => {
+    // Thursday of that week is 2026-12-31 → ISO year 2026.
+    expect(isoWeekYearVN("2027-01-01")).toBe(2026);
+  });
+
+  it("2026-12-28 (Mon) is the last in-year week (Thu 2026-12-31 → 2026)", () => {
+    expect(isoWeekYearVN("2026-12-28")).toBe(2026);
+  });
+
+  it("next Monday 2027-01-04 steps into ISO year 2027", () => {
+    expect(isoWeekYearVN("2027-01-04")).toBe(2027);
   });
 });
 
