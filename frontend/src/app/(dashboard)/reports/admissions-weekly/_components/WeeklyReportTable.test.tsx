@@ -73,6 +73,38 @@ describe("WeeklyReportTable", () => {
     expect(screen.getByText("Nhập học")).toBeTruthy();
   });
 
+  // Regression: unit-scope + tất cả đợt → BE trả quota=null cho MỌI ngành. Caption
+  // a11y KHÔNG được nhắc "chỉ tiêu" (cột chỉ tiêu đã ẩn) — nếu không screen reader
+  // đọc sai cấu trúc bảng. Ngược lại khi có quota thì caption phải nhắc chỉ tiêu.
+  it("caption drops 'chỉ tiêu' when quota is null (unit scope / no quota)", () => {
+    const totals = mkRow({ quota: null, enrolled: 0 });
+    render(
+      <WeeklyReportTable
+        rows={[mkRow({ quota: null, enrolled: 0 })]}
+        totals={totals}
+        groupBy="major"
+        period="ytd"
+      />,
+    );
+    const caption = screen.getByText(/Báo cáo tuyển sinh lũy kế năm theo/);
+    expect(caption.textContent).not.toMatch(/chỉ tiêu/);
+    expect(caption.textContent).toMatch(/nhập học/);
+  });
+
+  it("caption mentions 'chỉ tiêu' when a quota is attached (whole-school)", () => {
+    const totals = mkRow({ quota: 100, enrolled: 40 });
+    render(
+      <WeeklyReportTable
+        rows={[mkRow({ quota: 100, enrolled: 40 })]}
+        totals={totals}
+        groupBy="major"
+        period="ytd"
+      />,
+    );
+    const caption = screen.getByText(/Báo cáo tuyển sinh lũy kế năm theo/);
+    expect(caption.textContent).toMatch(/chỉ tiêu/);
+  });
+
   it("week period → activity headers", () => {
     const totals = mkRow({});
     render(

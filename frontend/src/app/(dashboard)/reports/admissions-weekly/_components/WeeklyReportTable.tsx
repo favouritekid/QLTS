@@ -186,8 +186,10 @@ export function WeeklyReportTable({
       <div className="overflow-hidden rounded-lg border">
         <Table>
           <TableCaption className="sr-only">
-            Báo cáo tuyển sinh lũy kế năm theo {isMajor ? "ngành" : "cán bộ"} — chỉ
-            tiêu, hồ sơ đã nộp, trúng tuyển, nhập học, đang theo, đã thu.
+            Báo cáo tuyển sinh lũy kế năm theo {isMajor ? "ngành" : "cán bộ"} —{" "}
+            {showQuota
+              ? "tiến độ chỉ tiêu (nhập học), hồ sơ đã nộp, trúng tuyển, đang theo, đã thu."
+              : "hồ sơ đã nộp, trúng tuyển, nhập học, đang theo, đã thu."}
           </TableCaption>
           <TableHeader>
             <TableRow className="bg-muted/50 text-xs">

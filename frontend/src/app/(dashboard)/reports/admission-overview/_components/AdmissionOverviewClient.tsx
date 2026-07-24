@@ -242,11 +242,16 @@ export function AdmissionOverviewClient() {
       : undefined;
   const weekMeta = syncedDetail?.week;
   const navAnchor = weekStart ?? weekMeta?.week_start;
-  // Lát cắt hiện tại CÓ chỉ tiêu hay không (lọc 1 đợt → BE trả quota=null) — lái
-  // nhãn panel "Hồ sơ nộp / chỉ tiêu" để tiêu đề không nói về thứ đang thiếu.
+  // Lát cắt hiện tại CÓ chỉ tiêu hay không → lái nhãn panel "Hồ sơ nộp / chỉ tiêu"
+  // để tiêu đề không nói về thứ đang thiếu. BE trả quota=null khi HAI lý do độc lập:
+  //   (a) lọc 1 đợt (chỉ tiêu đặt theo NĂM), hoặc
+  //   (b) lát cắt theo đơn vị (chỉ tiêu là mục tiêu CẤP TRƯỜNG theo offering, KHÔNG
+  //       chia theo đơn vị) — luôn đúng với manager.
+  // Phân biệt lý do để copy không nói sai "lọc một đợt" khi manager chọn "Tất cả đợt".
   const majorHasQuota = !!syncedMajor?.rows.some(
     (r) => !r.is_bucket && r.admission.quota != null && r.admission.quota > 0,
   );
+  const unitScoped = syncedMajor?.scope_unit_id != null;
 
   const anyFetching =
     weeklyDetail.isFetching ||
@@ -450,9 +455,10 @@ export function AdmissionOverviewClient() {
               </PanelState>
             </Panel>
 
-            {/* 1. Chỉ tiêu — tử số là HỒ SƠ NỘP (không phải nhập học). Khi lọc 1
-                đợt, BE trả quota=null (chỉ tiêu đặt theo NĂM) → đổi CẢ tiêu đề lẫn
-                mô tả sang thang "số hồ sơ" để nhãn không nói về chỉ tiêu đã mất. */}
+            {/* 1. Chỉ tiêu — tử số là HỒ SƠ NỘP (không phải nhập học). Khi BE trả
+                quota=null (lọc đợt HOẶC lát cắt theo đơn vị) → đổi CẢ tiêu đề lẫn mô
+                tả sang thang "số hồ sơ", nêu ĐÚNG lý do (không nói "lọc một đợt" khi
+                nguyên nhân là scope đơn vị). */}
             <Panel
               title={
                 majorHasQuota
@@ -471,11 +477,21 @@ export function AdmissionOverviewClient() {
                   </>
                 ) : (
                   <>
-                    <strong>Chỉ tiêu đặt theo năm</strong> nên không áp dụng khi
-                    lọc một đợt — độ dài thanh = <strong>số hồ sơ đã nộp</strong>{" "}
-                    theo thang tương đối (ngành nhiều hồ sơ nhất = thanh đầy).
-                    Trong đó hổ phách = đã đóng học phí HK1, xanh = đã nộp chưa
-                    đóng. Ngành nhiều hồ sơ hiện đầu.
+                    {unitScoped ? (
+                      <>
+                        <strong>Lát cắt theo đơn vị chưa có chỉ tiêu được phân bổ
+                        riêng</strong>; đang xếp theo số hồ sơ.
+                      </>
+                    ) : (
+                      <>
+                        <strong>Chỉ tiêu đặt theo năm</strong> nên không áp dụng
+                        khi lọc một đợt; đang xếp theo số hồ sơ.
+                      </>
+                    )}{" "}
+                    Độ dài thanh = <strong>số hồ sơ đã nộp</strong> theo thang
+                    tương đối (ngành nhiều hồ sơ nhất = thanh đầy). Trong đó hổ
+                    phách = đã đóng học phí HK1, xanh = đã nộp chưa đóng. Ngành
+                    nhiều hồ sơ hiện đầu.
                   </>
                 )}
               </p>
@@ -632,23 +648,34 @@ export function AdmissionOverviewClient() {
                       period={period}
                     />
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                      {period === "ytd" && groupBy === "major" && round === ALL_ROUNDS && (
-                        <span className="flex items-center gap-2">
-                          Chỉ tiêu:
-                          <span className="flex items-center gap-1">
-                            <span aria-hidden className="size-2 rounded-full bg-rose-500" />&lt;50%
+                      {/* Thang màu chỉ hiện khi bảng THỰC SỰ có cột tiến độ chỉ tiêu
+                          (BE gắn quota) — không dựa vào round vì lát cắt theo đơn vị
+                          "Tất cả đợt" vẫn quota=null (khớp showQuota của bảng). */}
+                      {period === "ytd" &&
+                        groupBy === "major" &&
+                        syncedDetail.totals.admission.quota != null && (
+                          <span className="flex items-center gap-2">
+                            Chỉ tiêu:
+                            <span className="flex items-center gap-1">
+                              <span aria-hidden className="size-2 rounded-full bg-rose-500" />&lt;50%
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <span aria-hidden className="size-2 rounded-full bg-amber-500" />50–90%
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <span aria-hidden className="size-2 rounded-full bg-emerald-500" />≥90%
+                            </span>
                           </span>
-                          <span className="flex items-center gap-1">
-                            <span aria-hidden className="size-2 rounded-full bg-amber-500" />50–90%
+                        )}
+                      {period === "ytd" &&
+                        groupBy === "major" &&
+                        syncedDetail.totals.admission.quota == null && (
+                          <span>
+                            {unitScoped
+                              ? "Lát cắt theo đơn vị chưa có chỉ tiêu được phân bổ riêng; tiến độ chỉ tiêu tạm ẩn."
+                              : "Đang lọc đợt — tiến độ chỉ tiêu (theo cả năm) tạm ẩn."}
                           </span>
-                          <span className="flex items-center gap-1">
-                            <span aria-hidden className="size-2 rounded-full bg-emerald-500" />≥90%
-                          </span>
-                        </span>
-                      )}
-                      {period === "ytd" && groupBy === "major" && round !== ALL_ROUNDS && (
-                        <span>Đang lọc đợt — tiến độ chỉ tiêu (theo cả năm) tạm ẩn.</span>
-                      )}
+                        )}
                       {syncedDetail.data_quality.ambiguous_profiles > 0 && (
                         <span>· Nhiều NV trúng: {syncedDetail.data_quality.ambiguous_profiles}</span>
                       )}

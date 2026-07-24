@@ -809,16 +809,24 @@ async def test_quota_admin_only_hidden_for_unit_scope(
         current_user=_admin(), academic_year=year, group_by="major", week_start=anchor
     )
     assert _find(admin_resp.rows, major.id).admission.quota == 100
+    # Manager, KHÔNG lọc đợt (round_code=None ⇒ "Tất cả đợt"): quota vẫn phải ẩn
+    # vì lý do là SCOPE ĐƠN VỊ, không phải lọc đợt. FE dựa vào đúng contract này
+    # để hiện copy "Lát cắt theo đơn vị chưa có chỉ tiêu được phân bổ riêng".
     mgr_resp = await svc.get_weekly_report(
         current_user=_manager(unit_id),
         academic_year=year,
         group_by="major",
+        round_code=None,
         week_start=anchor,
     )
     row = _find(mgr_resp.rows, major.id)
     assert row is not None  # manager has the activity
     assert row.admission.quota is None  # whole-school metric hidden for unit scope
     assert mgr_resp.totals.admission.quota is None
+    # NO row may carry a quota under unit scope (not just the seeded major).
+    assert all(r.admission.quota is None for r in mgr_resp.rows)
+    # Scope is echoed so the FE can tell "unit scope" from "round filter".
+    assert mgr_resp.scope_unit_id == unit_id
 
 
 async def test_quota_excludes_archived_major(
