@@ -1015,6 +1015,9 @@ async def auto_verify_payment(
         return None
 
     now = datetime.now(timezone.utc)
+    # Đổi ngành: snapshot ngành ghi nhận doanh thu (bất biến) — bulk auto-verify
+    # stamp ngay (tuition-only). fee đã được caller lock/refresh.
+    from app.services.fee_calculation_service import recognized_major_id_for_fee
     payment = Payment(
         invoice_id=invoice.id,
         method_id=method_id,
@@ -1027,6 +1030,7 @@ async def auto_verify_payment(
         verified_by_id=system_user.id,
         intent_id=None,
         notes="Bulk import thu học phí — auto-verify (system_user)",
+        recognized_major_id=recognized_major_id_for_fee(fee),
     )
     db.add(payment)
     await db.flush()

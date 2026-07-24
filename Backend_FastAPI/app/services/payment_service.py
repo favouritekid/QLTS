@@ -433,6 +433,13 @@ class PaymentService:
         payment.status = PaymentStatusEnum.verified.value
         payment.verified_at = now
         payment.verified_by_id = verifier_id
+        # Đổi ngành: snapshot ngành ghi nhận doanh thu (bất biến) TẠI verify —
+        # tuition-only, đọc fee.resolved_major_id lúc này (xem
+        # recognized_major_id_for_fee). Reprice sau này KHÔNG đụng field này.
+        from app.services.fee_calculation_service import (
+            recognized_major_id_for_fee,
+        )
+        payment.recognized_major_id = recognized_major_id_for_fee(fee)
 
         # Apply money-math to invoice + fee (shared 1 nguồn sự thật với bulk
         # auto-verify) → fee_balance_before / fee_remaining cho audit transaction.

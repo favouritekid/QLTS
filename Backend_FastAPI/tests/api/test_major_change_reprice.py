@@ -295,6 +295,84 @@ async def _path_count(path_id: int) -> int:
 
 
 # ===========================================================================
+# recognized_major_id — doanh thu theo ngành lúc xác minh (edge-case đã-thu-tiền)
+# ===========================================================================
+async def test_recognized_major_id_for_fee_helper():
+    """Helper stamp ngành doanh thu: TUITION → resolved_major_id; application/
+    khác → None (lệ phí xét tuyển không phân bổ ngành). (async cho khớp
+    pytestmark asyncio global; không await gì.)"""
+    from types import SimpleNamespace
+    from app.services.fee_calculation_service import recognized_major_id_for_fee
+
+    assert recognized_major_id_for_fee(
+        SimpleNamespace(fee_type="tuition", resolved_major_id=7)
+    ) == 7
+    # tuition nhưng fee chưa chốt ngành → None ("Chưa xác định", không hồi tố).
+    assert recognized_major_id_for_fee(
+        SimpleNamespace(fee_type="tuition", resolved_major_id=None)
+    ) is None
+    # lệ phí xét tuyển → None dù có resolved_major.
+    assert recognized_major_id_for_fee(
+        SimpleNamespace(fee_type="application", resolved_major_id=7)
+    ) is None
+
+
+async def test_reprice_preserves_payment_recognized_major(
+    seed_lead_dependencies, officer_user_in_db, major_change_on
+):
+    """BẤT BIẾN: reprice đổi ngành KHÔNG được đụng ``Payment.recognized_major_id``
+    (doanh thu đã ghi cho ngành lúc thu là sự kiện quá khứ cố định). Set field =
+    một major đánh dấu (KHÁC ngành reprice sẽ resolve sang), reprice, assert giữ
+    nguyên — nếu reprice lỡ ghi field theo ngành mới thì test đỏ."""
+    majors = await _seed_two_majors(
+        seed_lead_dependencies,
+        price_a=Decimal("6500000"), price_b=Decimal("9200000"),
+    )
+    ids = await _seed_profile_fee_invoice(
+        seed_lead_dependencies, majors,
+        choice_tag="b", priced_from_tag="a", resolved_tag="a",
+        price_a=Decimal("6500000"), paid=Decimal("3000000"),
+    )
+    # Major đánh dấu riêng để phân biệt với ngành reprice resolve tới.
+    from sqlalchemy import text as _sa_text
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(_sa_text(
+                "SELECT setval(pg_get_serial_sequence('major_program','id'), "
+                "(SELECT COALESCE(MAX(id),1) FROM major_program))"))
+            _mk = int(datetime.now(timezone.utc).timestamp() * 1e6) % 10**9
+            marker = models.MajorProgram(
+                name="Marker major", degree_level="Cao dang",
+                code=f"MK{_mk}",
+                unit_id=seed_lead_dependencies["unit_id"], is_active=True)
+            s.add(marker)
+            await s.flush()
+            marker_id = marker.id
+            method = (await s.execute(
+                select(models.PaymentMethod).limit(1))).scalars().first()
+            if method is None:
+                method = models.PaymentMethod(
+                    code="cash", name="Cash", is_online=False, is_active=True)
+                s.add(method)
+                await s.flush()
+            s.add(Payment(
+                invoice_id=ids["invoice_ids"][0], method_id=method.id,
+                amount=Decimal("3000000"), status="verified",
+                created_by_id=officer_user_in_db["id"],
+                recognized_major_id=marker_id))
+
+    await _reprice(ids["profile_id"])
+
+    async with AsyncSessionLocal() as s:
+        pay = (await s.execute(
+            select(Payment).where(
+                Payment.invoice_id == ids["invoice_ids"][0]))).scalars().first()
+    assert pay.recognized_major_id == marker_id, (
+        "reprice ĐÃ ĐỤNG recognized_major_id — tiền đã thu bị relabel (BUG)"
+    )
+
+
+# ===========================================================================
 # REGRESSION — Blocker 1: drift gate desync
 # ===========================================================================
 async def test_reprice_single_nv_after_choice_edit(

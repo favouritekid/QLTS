@@ -103,6 +103,21 @@ def is_hk1_settled_fee(fee) -> bool:
     )
 
 
+def recognized_major_id_for_fee(fee) -> Optional[int]:
+    """Ngành ghi nhận doanh thu cho MỘT payment khi nó chuyển 'verified' —
+    stamp bất biến vào ``Payment.recognized_major_id`` (edge-case đổi ngành).
+
+    CHỈ học phí (tuition) phân bổ theo ngành; lệ phí xét tuyển là phí cố định xử
+    lý hồ sơ, KHÔNG theo ngành → None. Đọc ``resolved_major_id`` tại thời điểm
+    verify (ngành hồ sơ đang thuộc lúc thu); NULL nếu fee chưa chốt ngành ("Chưa
+    xác định" — không gán hồi tố). Dùng chung bởi 3 đường tạo payment verified
+    (manual verify / gateway callback / bulk import) để 1 nguồn sự thật.
+    """
+    if getattr(fee, "fee_type", None) != FeeTypeEnum.tuition.value:
+        return None
+    return getattr(fee, "resolved_major_id", None)
+
+
 async def is_major_change_cycle_open(
     db: AsyncSession, profile: "models.AdmissionProfile"
 ) -> bool:
