@@ -184,10 +184,16 @@ export function ActionNeeded({
             >
               <Icon aria-hidden className="size-3.5" /> {s.label}
             </span>
+            {/* Màn hẹp: mô tả xuống dòng riêng (inline làm tiêu đề bị cắt giữa
+                cụm, khó đọc); từ sm trở lên giữ nguyên một dòng. */}
             <span className="min-w-0 flex-1">
-              <span className="text-sm font-medium">{a.title}</span>
+              <span className="block text-sm font-medium sm:inline">
+                {a.title}
+              </span>
               {a.hint && (
-                <span className="ml-2 text-xs text-muted-foreground">{a.hint}</span>
+                <span className="block text-xs text-muted-foreground sm:ml-2 sm:inline">
+                  {a.hint}
+                </span>
               )}
             </span>
             <span className="shrink-0 text-sm font-semibold tabular-nums">

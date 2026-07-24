@@ -104,11 +104,7 @@ export function QuotaRunway({
           className="bg-muted-foreground/20"
           label={hasQuota ? "Còn trống so chỉ tiêu" : "Số hồ sơ (thang tương đối)"}
         />
-        {!hasQuota && (
-          <span className="italic">
-            Chỉ tiêu chỉ có ở view “Tất cả đợt” — đang xếp theo số hồ sơ.
-          </span>
-        )}
+        {!hasQuota && <span className="italic">Xếp theo số hồ sơ.</span>}
       </div>
 
       <div className="space-y-1">

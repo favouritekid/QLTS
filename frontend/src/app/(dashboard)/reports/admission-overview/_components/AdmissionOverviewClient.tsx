@@ -242,6 +242,11 @@ export function AdmissionOverviewClient() {
       : undefined;
   const weekMeta = syncedDetail?.week;
   const navAnchor = weekStart ?? weekMeta?.week_start;
+  // Lát cắt hiện tại CÓ chỉ tiêu hay không (lọc 1 đợt → BE trả quota=null) — lái
+  // nhãn panel "Hồ sơ nộp / chỉ tiêu" để tiêu đề không nói về thứ đang thiếu.
+  const majorHasQuota = !!syncedMajor?.rows.some(
+    (r) => !r.is_bucket && r.admission.quota != null && r.admission.quota > 0,
+  );
 
   const anyFetching =
     weeklyDetail.isFetching ||
@@ -313,9 +318,9 @@ export function AdmissionOverviewClient() {
             quan tuyển sinh
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Chỉ tiêu · công nợ · phễu · tài chính — <strong>Điều hành</strong> để
-            nắm nhanh &amp; xử lý, <strong>Phân tích chi tiết</strong> để tra cứu
-            &amp; xuất Excel.
+            Chỉ tiêu · công nợ · phễu · tài chính — <strong>Điều hành</strong>{" "}
+            để nắm nhanh &amp; xử lý, <strong>Phân tích chi tiết</strong>{" "}
+            để tra cứu &amp; xuất Excel.
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
@@ -445,13 +450,34 @@ export function AdmissionOverviewClient() {
               </PanelState>
             </Panel>
 
-            {/* 1. Chỉ tiêu — tử số là HỒ SƠ NỘP (không phải nhập học) */}
-            <Panel title="Hồ sơ nộp / chỉ tiêu — theo ngành">
+            {/* 1. Chỉ tiêu — tử số là HỒ SƠ NỘP (không phải nhập học). Khi lọc 1
+                đợt, BE trả quota=null (chỉ tiêu đặt theo NĂM) → đổi CẢ tiêu đề lẫn
+                mô tả sang thang "số hồ sơ" để nhãn không nói về chỉ tiêu đã mất. */}
+            <Panel
+              title={
+                majorHasQuota
+                  ? "Hồ sơ nộp / chỉ tiêu — theo ngành"
+                  : "Hồ sơ nộp — theo ngành"
+              }
+            >
               <p className="mb-3 -mt-1 text-xs text-muted-foreground">
-                Mẫu số = <strong>chỉ tiêu</strong>; độ dài thanh = <strong>hồ sơ
-                đã nộp</strong>/chỉ tiêu (KHÔNG phải nhập học). Trong đó hổ phách =
-                đã đóng học phí HK1, xanh = đã nộp chưa đóng, phần trống = còn
-                thiếu. Ngành thiếu nhiều so chỉ tiêu hiện đầu.
+                {majorHasQuota ? (
+                  <>
+                    Mẫu số = <strong>chỉ tiêu</strong>; độ dài thanh ={" "}
+                    <strong>hồ sơ đã nộp</strong>/chỉ tiêu (KHÔNG phải nhập học).
+                    Trong đó hổ phách = đã đóng học phí HK1, xanh = đã nộp chưa
+                    đóng, phần trống = còn thiếu. Ngành thiếu nhiều so chỉ tiêu
+                    hiện đầu.
+                  </>
+                ) : (
+                  <>
+                    <strong>Chỉ tiêu đặt theo năm</strong> nên không áp dụng khi
+                    lọc một đợt — độ dài thanh = <strong>số hồ sơ đã nộp</strong>{" "}
+                    theo thang tương đối (ngành nhiều hồ sơ nhất = thanh đầy).
+                    Trong đó hổ phách = đã đóng học phí HK1, xanh = đã nộp chưa
+                    đóng. Ngành nhiều hồ sơ hiện đầu.
+                  </>
+                )}
               </p>
               <PanelState
                 query={{
