@@ -81,8 +81,11 @@ export function QuotaRunway({
       const quota = row.admission.quota;
       const submitted = row.admission.submitted_cumulative;
       const paid = Math.min(submitted, feeByMajor.get(mid) ?? 0);
+      // Chỉ phát tín hiệu "chỉ tiêu" (%, màu tiến độ, vượt-chỉ-tiêu, vạch mốc, tỉ
+      // lệ /quota) khi CẢ BẢNG dùng thang chỉ tiêu (hasQuota=every). Lát cắt hỗn
+      // hợp → fillRatio=null toàn bảng → mọi hàng thống nhất ngữ nghĩa số-hồ-sơ.
       const fillRatio =
-        quota != null && quota > 0 ? submitted / quota : null;
+        hasQuota && quota != null && quota > 0 ? submitted / quota : null;
       return { row, mid, quota, submitted, paid, fillRatio };
     })
     .sort((a, b) => {
@@ -137,10 +140,11 @@ export function QuotaRunway({
           const fillPct = fillRatio != null ? Math.round(fillRatio * 100) : null;
           const paidPctOfSub =
             submitted > 0 ? Math.round((paid / submitted) * 100) : 0;
-          // Dòng "còn trống" chỉ có nghĩa khi lát cắt CÓ chỉ tiêu (quota != null).
+          // Dòng "còn trống" chỉ có nghĩa khi CẢ BẢNG dùng thang chỉ tiêu (hasQuota).
+          // Lát hỗn hợp/không-quota → bỏ (tooltip thống nhất ngữ nghĩa số-hồ-sơ).
           // Vượt chỉ tiêu → 0 (không âm). Khớp phần nền xám lộ ra trên thanh.
           const remainingLine =
-            quota == null
+            !hasQuota || quota == null
               ? ""
               : over
                 ? "\nCòn trống: 0 (đã vượt chỉ tiêu)"
@@ -151,7 +155,7 @@ export function QuotaRunway({
                   }`;
           const title =
             `${cleanName(row)}${row.code ? ` (${row.code})` : ""}\n` +
-            `Chỉ tiêu: ${quota != null ? nf.format(quota) : "— (không áp dụng cho lát cắt này)"}\n` +
+            `Chỉ tiêu: ${hasQuota && quota != null ? nf.format(quota) : "— (không áp dụng cho lát cắt này)"}\n` +
             `Số hồ sơ: ${nf.format(submitted)}${fillPct != null ? ` · ${fillPct}% chỉ tiêu` : ""}\n` +
             `Đã đóng học phí HK1: ${nf.format(paid)} · ${paidPctOfSub}% hồ sơ` +
             remainingLine;
@@ -208,8 +212,9 @@ export function QuotaRunway({
                       )}
                     </div>
                   </div>
-                  {/* mốc chỉ tiêu = cuối track (chỉ khi lát cắt có chỉ tiêu) */}
-                  {hasQ && (
+                  {/* mốc chỉ tiêu = cuối track — CHỈ khi cả bảng dùng thang chỉ
+                      tiêu (hasQuota); lát hỗn hợp thang số-hồ-sơ không có mốc. */}
+                  {hasQuota && (
                     <span
                       aria-hidden
                       className="absolute -top-0.5 -bottom-0.5 w-px bg-foreground/40"

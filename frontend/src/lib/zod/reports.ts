@@ -84,6 +84,9 @@ export const admissionWeeklyReportSchema = z.object({
   week: weekMetaSchema,
   scope_unit_id: z.number().int().nullable(),
   attribution: z.literal("recomputed-current"),
+  // True chỉ khi lũy-kế TÍNH ĐẾN HÔM NAY (anchor ngầm = today) → cột snapshot
+  // (Nháp/HK1) mới nhất quán với cột cumulative-as-of. default(false) backward-compat.
+  snapshot_as_of_now: z.boolean().default(false),
   rows: z.array(reportRowSchema),
   totals: reportRowSchema,
   data_quality: dataQualitySchema,

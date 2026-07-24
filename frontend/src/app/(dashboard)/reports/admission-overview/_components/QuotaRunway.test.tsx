@@ -92,8 +92,13 @@ describe("QuotaRunway — thang chỉ tiêu vs số hồ sơ", () => {
     // ngành thiếu quota VẪN render (trước đây bị ép trackFrac=0 → thanh rỗng)
     expect(screen.getByText("Ngành B chưa quota")).toBeTruthy();
     expect(screen.getByText("Ngành A")).toBeTruthy();
-    // hiển thị số hồ sơ tuyệt đối (không % chỉ tiêu vì thang số hồ sơ)
-    expect(screen.getByText("55")).toBeTruthy();
+    // hiển thị số hồ sơ tuyệt đối cho MỌI hàng
+    expect(screen.getByText("55")).toBeTruthy(); // ngành B
+    expect(screen.getByText("40")).toBeTruthy(); // ngành A (số hồ sơ, KHÔNG %)
+    // KHÔNG hàng nào phát tín hiệu chỉ tiêu (%, /quota) — kể cả ngành A có quota
+    expect(screen.queryByText("40%")).toBeNull();
+    expect(screen.queryByText(/\/\s*100/)).toBeNull();
+    expect(screen.queryByText(/Độ dài thanh = chỉ tiêu/)).toBeNull();
   });
 
   it("OVER-quota (vượt chỉ tiêu) → % > 100 + không crash", () => {

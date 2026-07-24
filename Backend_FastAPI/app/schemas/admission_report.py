@@ -117,6 +117,12 @@ class AdmissionWeeklyReportResponse(BaseModel):
     scope_unit_id: Optional[int] = None  # None = toàn trường (admin)
     # week numbers may shift on publish/reopen — see module docstring.
     attribution: Literal["recomputed-current"] = "recomputed-current"
+    # True CHỈ khi lát cắt = lũy-kế TÍNH ĐẾN HÔM NAY thật (anchor ngầm = today).
+    # False cho tuần lịch sử tường minh, năm quá-khứ (chốt 28/12) / tương-lai (chốt
+    # 04/01), và ranh giới ISO-year. Các cột SNAPSHOT hiện-tại (draft/fee_hk1) chỉ
+    # nhất quán với cột cumulative-as-of-cutoff khi cờ này True → FE gate theo cờ
+    # (không tự suy từ week_start ở client vì proxy đó sai các đường trên).
+    snapshot_as_of_now: bool = False
     rows: list[ReportRow]
     totals: ReportRow  # aggregate across rows (label="TỔNG")
     data_quality: DataQuality = Field(default_factory=DataQuality)

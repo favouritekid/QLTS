@@ -419,6 +419,9 @@ class AdmissionReportService:
             group_by=group_by,  # type: ignore[arg-type]
             week=week_meta,
             scope_unit_id=scope_unit_id,
+            # anchor is None ⟺ lũy-kế đến HÔM NAY thật (năm hiện tại, không clamp
+            # ranh giới, không week_start tường minh) → cột snapshot mới nhất quán.
+            snapshot_as_of_now=anchor is None,
             rows=rows,
             totals=totals,
             data_quality=dq,

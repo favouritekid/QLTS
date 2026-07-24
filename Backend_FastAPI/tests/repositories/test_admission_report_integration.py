@@ -618,6 +618,38 @@ async def test_week_start_before_academic_year_rejected(
         )
 
 
+async def test_snapshot_as_of_now_flag(
+    db: AsyncSession, seeded_dependencies: dict
+):
+    """Cờ ``snapshot_as_of_now`` = True CHỈ khi lũy-kế đến HÔM NAY thật (anchor
+    ngầm=today). FE gate cột snapshot (Nháp/HK1) theo cờ này thay vì tự suy
+    week_start==null (proxy sai với năm quá-khứ/tương-lai, week_start tường minh,
+    và placeholderData)."""
+    svc = AdmissionReportService(db)
+    year = today_vn().year
+    # năm hiện tại, KHÔNG week_start → anchor None → True
+    cur = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=year, group_by="major"
+    )
+    assert cur.snapshot_as_of_now is True
+    # năm TƯƠNG LAI (anchor chốt 04/01, KHÔNG phải today) → False
+    fut = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=2200, group_by="major"
+    )
+    assert fut.snapshot_as_of_now is False
+    # năm QUÁ KHỨ (anchor chốt 28/12) → False
+    past = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=2020, group_by="major"
+    )
+    assert past.snapshot_as_of_now is False
+    # week_start TƯỜNG MINH (năm hiện tại) → anchor = week_start (≠None) → False
+    anchor, _ = _week(year)
+    explicit = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=year, group_by="major", week_start=anchor
+    )
+    assert explicit.snapshot_as_of_now is False
+
+
 async def test_week_start_after_academic_year_rejected(
     db: AsyncSession, seeded_dependencies: dict
 ):

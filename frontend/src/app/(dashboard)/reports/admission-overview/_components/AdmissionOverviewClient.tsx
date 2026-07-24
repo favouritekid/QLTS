@@ -708,9 +708,10 @@ export function AdmissionOverviewClient() {
                       totals={syncedDetail.totals}
                       groupBy={syncedDetail.group_by}
                       period={period}
-                      // Nháp/HK1 (snapshot) chỉ khớp khi lũy-kế TÍNH ĐẾN HIỆN TẠI;
-                      // lùi tuần lịch sử (weekStart set) → ẩn để tránh nghịch lý.
-                      snapshotAsOfNow={weekStart == null}
+                      // Cờ từ CHÍNH response (đi kèm data) → tự đúng cả tuần lịch
+                      // sử, năm quá-khứ/tương-lai (anchor≠today), và placeholderData
+                      // (response cũ mang cờ cũ) — chính xác hơn suy từ weekStart.
+                      snapshotAsOfNow={syncedDetail.snapshot_as_of_now}
                     />
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                       {/* Thang màu chỉ hiện khi bảng THỰC SỰ có cột tiến độ chỉ tiêu
