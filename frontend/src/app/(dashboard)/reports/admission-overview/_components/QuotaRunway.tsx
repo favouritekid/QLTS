@@ -116,11 +116,24 @@ export function QuotaRunway({
           const fillPct = fillRatio != null ? Math.round(fillRatio * 100) : null;
           const paidPctOfSub =
             submitted > 0 ? Math.round((paid / submitted) * 100) : 0;
+          // Dòng "còn trống" chỉ có nghĩa khi lát cắt CÓ chỉ tiêu (quota != null).
+          // Vượt chỉ tiêu → 0 (không âm). Khớp phần nền xám lộ ra trên thanh.
+          const remainingLine =
+            quota == null
+              ? ""
+              : over
+                ? "\nCòn trống: 0 (đã vượt chỉ tiêu)"
+                : `\nCòn trống: ${nf.format(quota - submitted)}${
+                    quota > 0
+                      ? ` · ${Math.round(((quota - submitted) / quota) * 100)}% chỉ tiêu`
+                      : ""
+                  }`;
           const title =
             `${cleanName(row)}${row.code ? ` (${row.code})` : ""}\n` +
             `Chỉ tiêu: ${quota != null ? nf.format(quota) : "— (không áp dụng cho lát cắt này)"}\n` +
             `Số hồ sơ: ${nf.format(submitted)}${fillPct != null ? ` · ${fillPct}% chỉ tiêu` : ""}\n` +
-            `Đã đóng học phí HK1: ${nf.format(paid)} · ${paidPctOfSub}% hồ sơ`;
+            `Đã đóng học phí HK1: ${nf.format(paid)} · ${paidPctOfSub}% hồ sơ` +
+            remainingLine;
 
           return (
             <div
