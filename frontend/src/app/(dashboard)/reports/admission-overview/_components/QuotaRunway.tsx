@@ -182,20 +182,24 @@ export function QuotaRunway({
                     className="relative h-full overflow-hidden rounded-full bg-slate-200 ring-1 ring-inset ring-slate-300/70 dark:bg-slate-700 dark:ring-slate-600/70"
                     style={{ width: `${Math.max(trackFrac * 100, 1)}%` }}
                   >
-                    <div aria-hidden className="flex h-full" style={{ width: `${inFilled * 100}%` }}>
+                    {/* Cụm tô bo tròn Ở NGOÀI; 2 khúc con VUÔNG + SÁT nhau (không
+                        khe, không bo giữa) → chỗ tiếp giáp amber/sky không lộ màu
+                        "còn trống". */}
+                    <div
+                      aria-hidden
+                      className="flex h-full overflow-hidden rounded-full"
+                      style={{ width: `${inFilled * 100}%` }}
+                    >
                       {paidFrac > 0 && (
                         <div
-                          className="h-full rounded-full bg-amber-500"
+                          className="h-full bg-amber-500"
                           style={{ width: `${paidFrac * 100}%` }}
                         />
                       )}
                       {paidFrac < 1 && (
                         <div
-                          className="h-full rounded-full bg-sky-500"
-                          style={{
-                            width: `${(1 - paidFrac) * 100}%`,
-                            marginLeft: paidFrac > 0 ? 2 : 0,
-                          }}
+                          className="h-full bg-sky-500"
+                          style={{ width: `${(1 - paidFrac) * 100}%` }}
                         />
                       )}
                     </div>
