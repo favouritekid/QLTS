@@ -60,7 +60,11 @@ export function QuotaRunway({
   }
 
   const majors = rows.filter((r) => !r.is_bucket && r.group_key != null);
-  const hasQuota = majors.some(
+  // Chỉ dùng thang CHỈ TIÊU khi MỌI ngành đều có chỉ tiêu. Nếu chỉ MỘT SỐ ngành có
+  // (lát cắt hỗn hợp — ngành chưa cấu hình annual_admission_quota), ép thang chỉ
+  // tiêu sẽ khiến ngành thiếu quota thành thanh rỗng oan dù có hồ sơ → thay vì vậy
+  // fallback CẢ BẢNG sang thang số-hồ-sơ (an toàn, không hiển thị sai).
+  const hasQuota = majors.every(
     (r) => r.admission.quota != null && r.admission.quota > 0,
   );
   const maxSubmitted = Math.max(

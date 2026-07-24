@@ -112,11 +112,16 @@ export function WeeklyReportTable({
   totals,
   groupBy,
   period,
+  snapshotAsOfNow = true,
 }: {
   rows: ReportRow[];
   totals: ReportRow;
   groupBy: ReportGroupBy;
   period: Period;
+  // Nháp + Học phí HK1 là SNAPSHOT trạng thái HIỆN TẠI (không "as-of" tuần quá
+  // khứ). Khi bảng đang xem một tuần LỊCH SỬ (Nộp/Trúng lũy-kế TÍNH ĐẾN tuần đó),
+  // đặt false để ẩn 3 cột này — tránh nghịch lý "374 đóng HK1 nhưng 0 đã nộp".
+  snapshotAsOfNow?: boolean;
 }) {
   const isMajor = groupBy === "major";
   const firstColLabel = isMajor ? "Ngành" : "Cán bộ";
@@ -126,7 +131,9 @@ export function WeeklyReportTable({
     // Quota progress only renders when the backend attached a quota (major view,
     // không lọc đợt). Otherwise fall back to the count layout (Nộp/Trúng/NH).
     const showQuota = isMajor && totals.admission.quota != null;
-    const colCount = 11; // +Nháp, +HK1 một phần, +HK1 đủ (chi tiết hoá khớp heatmap)
+    // Cột chi tiết hoá (Nháp/HK1) chỉ hợp lệ ở lát cắt HIỆN TẠI (snapshot).
+    const showSnapshot = snapshotAsOfNow;
+    const colCount = 8 + (showSnapshot ? 3 : 0);
 
     const renderRow = (row: ReportRow, isTotal = false) => {
       const a = row.admission;
@@ -158,9 +165,11 @@ export function WeeklyReportTable({
           >
             {count(a.submitted_cumulative)}
           </TableCell>
-          <TableCell className="text-right tabular-nums">
-            {count(a.draft)}
-          </TableCell>
+          {showSnapshot && (
+            <TableCell className="text-right tabular-nums">
+              {count(a.draft)}
+            </TableCell>
+          )}
           <TableCell className="text-right tabular-nums">
             {count(a.admitted_cumulative)}
           </TableCell>
@@ -169,12 +178,16 @@ export function WeeklyReportTable({
               {count(a.enrolled_cumulative)}
             </TableCell>
           )}
-          <TableCell className="border-l text-right tabular-nums">
-            {count(a.fee_hk1_partial)}
-          </TableCell>
-          <TableCell className="text-right tabular-nums">
-            {count(a.fee_hk1_full)}
-          </TableCell>
+          {showSnapshot && (
+            <>
+              <TableCell className="border-l text-right tabular-nums">
+                {count(a.fee_hk1_partial)}
+              </TableCell>
+              <TableCell className="text-right tabular-nums">
+                {count(a.fee_hk1_full)}
+              </TableCell>
+            </>
+          )}
           <TableCell className="border-l text-right tabular-nums">
             {pct(row.conversion.submit_to_admit)}
           </TableCell>
@@ -196,9 +209,10 @@ export function WeeklyReportTable({
         <Table>
           <TableCaption className="sr-only">
             Báo cáo tuyển sinh lũy kế năm theo {isMajor ? "ngành" : "cán bộ"} —{" "}
-            {showQuota
-              ? "tiến độ chỉ tiêu (nhập học), hồ sơ đã nộp, nháp, trúng tuyển, học phí HK1 (một phần / đủ), đang theo, đã thu."
-              : "hồ sơ đã nộp, nháp, trúng tuyển, nhập học, học phí HK1 (một phần / đủ), đang theo, đã thu."}
+            {showQuota ? "tiến độ chỉ tiêu (nhập học), " : ""}hồ sơ đã nộp,{" "}
+            {showSnapshot ? "nháp, " : ""}trúng tuyển,{" "}
+            {!showQuota ? "nhập học, " : ""}
+            {showSnapshot ? "học phí HK1 (một phần / đủ), " : ""}đang theo, đã thu.
           </TableCaption>
           <TableHeader>
             <TableRow className="bg-muted/50 text-xs">
@@ -211,11 +225,15 @@ export function WeeklyReportTable({
               <TableHead className={cn("text-right", !showQuota && "border-l")}>
                 Nộp
               </TableHead>
-              <TableHead className="text-right">Nháp</TableHead>
+              {showSnapshot && <TableHead className="text-right">Nháp</TableHead>}
               <TableHead className="text-right">Trúng</TableHead>
               {!showQuota && <TableHead className="text-right">Nhập học</TableHead>}
-              <TableHead className="border-l text-right">HK1 một phần</TableHead>
-              <TableHead className="text-right">HK1 đủ</TableHead>
+              {showSnapshot && (
+                <>
+                  <TableHead className="border-l text-right">HK1 một phần</TableHead>
+                  <TableHead className="text-right">HK1 đủ</TableHead>
+                </>
+              )}
               <TableHead className="border-l text-right">Nộp→Trúng</TableHead>
               <TableHead className="text-right">Trúng→NH</TableHead>
               <TableHead className="border-l text-right">Đang theo</TableHead>

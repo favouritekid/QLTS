@@ -251,6 +251,8 @@ export function AdmissionsWeeklyClient() {
             totals={synced.totals}
             groupBy={synced.group_by}
             period={period}
+            // Nháp/HK1 (snapshot) chỉ hợp lệ ở lát cắt hiện tại; lùi tuần → ẩn.
+            snapshotAsOfNow={weekStart == null}
           />
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
             {period === "ytd" && groupBy === "major" && round === ALL_ROUNDS && (

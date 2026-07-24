@@ -265,10 +265,23 @@ export function AdmissionOverviewClient() {
   //   (b) lát cắt theo đơn vị (chỉ tiêu là mục tiêu CẤP TRƯỜNG theo offering, KHÔNG
   //       chia theo đơn vị) — luôn đúng với manager.
   // Phân biệt lý do để copy không nói sai "lọc một đợt" khi manager chọn "Tất cả đợt".
-  const majorHasQuota = !!syncedMajor?.rows.some(
-    (r) => !r.is_bucket && r.admission.quota != null && r.admission.quota > 0,
-  );
+  // Dùng EVERY (đồng bộ QuotaRunway): chỉ coi "có chỉ tiêu" khi MỌI ngành đều có —
+  // lát cắt hỗn hợp (một số ngành chưa đặt chỉ tiêu) → xếp theo số hồ sơ.
+  const majorRowsQ =
+    syncedMajor?.rows.filter((r) => !r.is_bucket && r.group_key != null) ?? [];
+  const majorHasQuota =
+    majorRowsQ.length > 0 &&
+    majorRowsQ.every(
+      (r) => r.admission.quota != null && r.admission.quota > 0,
+    );
+  // Lát cắt hỗn hợp = toàn-trường + mọi-đợt nhưng CÓ ngành thiếu chỉ tiêu (khác lý
+  // do lọc-đợt / theo-đơn-vị) → note nêu đúng "một số ngành chưa đặt chỉ tiêu".
   const unitScoped = syncedMajor?.scope_unit_id != null;
+  const quotaMixed =
+    !majorHasQuota &&
+    !unitScoped &&
+    round === ALL_ROUNDS &&
+    majorRowsQ.some((r) => r.admission.quota != null && r.admission.quota > 0);
 
   // Chặn điều hướng tuần RA NGOÀI năm tuyển sinh: BE từ chối week_start có ISO year
   // != academic_year (đối xứng), nên nút phải tự khoá ở tuần đầu/cuối năm thay vì
@@ -524,6 +537,11 @@ export function AdmissionOverviewClient() {
                         <strong>Lát cắt theo đơn vị chưa có chỉ tiêu được phân bổ
                         riêng</strong>; đang xếp theo số hồ sơ.
                       </>
+                    ) : quotaMixed ? (
+                      <>
+                        <strong>Một số ngành chưa đặt chỉ tiêu</strong>; đang xếp
+                        theo số hồ sơ (để không hiển thị sai).
+                      </>
                     ) : (
                       <>
                         <strong>Chỉ tiêu đặt theo năm</strong> nên không áp dụng
@@ -690,6 +708,9 @@ export function AdmissionOverviewClient() {
                       totals={syncedDetail.totals}
                       groupBy={syncedDetail.group_by}
                       period={period}
+                      // Nháp/HK1 (snapshot) chỉ khớp khi lũy-kế TÍNH ĐẾN HIỆN TẠI;
+                      // lùi tuần lịch sử (weekStart set) → ẩn để tránh nghịch lý.
+                      snapshotAsOfNow={weekStart == null}
                     />
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                       {/* Thang màu chỉ hiện khi bảng THỰC SỰ có cột tiến độ chỉ tiêu

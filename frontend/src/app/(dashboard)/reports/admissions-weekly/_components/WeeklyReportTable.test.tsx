@@ -85,6 +85,33 @@ describe("WeeklyReportTable", () => {
     expect(screen.getAllByText("7").length).toBeGreaterThan(0); // HK1 đủ
   });
 
+  // Lùi tuần lịch sử (snapshotAsOfNow=false): Nộp/Trúng là lũy-kế TÍNH ĐẾN tuần đó,
+  // còn Nháp/HK1 là snapshot hiện tại → ẩn để tránh nghịch lý "HK1>0 mà Nộp=0".
+  it("ytd + snapshotAsOfNow=false (tuần lịch sử) → ẩn Nháp / HK1", () => {
+    const totals = mkRow({
+      quota: null,
+      submitted: 0,
+      draft: 87,
+      feePartial: 374,
+      feeFull: 7,
+    });
+    render(
+      <WeeklyReportTable
+        rows={[mkRow({ quota: null, submitted: 0 })]}
+        totals={totals}
+        groupBy="major"
+        period="ytd"
+        snapshotAsOfNow={false}
+      />,
+    );
+    expect(screen.queryByText("Nháp")).toBeNull();
+    expect(screen.queryByText("HK1 một phần")).toBeNull();
+    expect(screen.queryByText("HK1 đủ")).toBeNull();
+    // các cột lũy-kế vẫn còn
+    expect(screen.getByText("Nộp")).toBeTruthy();
+    expect(screen.getByText("Trúng")).toBeTruthy();
+  });
+
   // Cột hoạt-động (period=week) KHÔNG có các cột chi tiết hoá lũy-kế.
   it("week period → no Nháp / HK1 columns", () => {
     const totals = mkRow({ submitted: 5, draft: 2 });
