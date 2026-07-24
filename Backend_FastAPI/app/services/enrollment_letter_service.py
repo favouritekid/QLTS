@@ -391,12 +391,16 @@ async def build_letter_data(db, profile) -> dict:
     # + nộp lại HOẶC chờ kế toán xác nhận) — giấy sẽ ghi ngành/số tiền sai. Gate
     # feature-flag-aware (flag OFF → False). Kiểm ở CẢ đây LẪN re-check dưới khoá
     # (issue_enrollment_letter) chống TOCTOU cửa sổ render.
-    from app.services.fee_calculation_service import is_major_change_cycle_open
-    if await is_major_change_cycle_open(db, profile):
-        raise ValidationError(
-            "Không thể xuất giấy báo nhập học: hồ sơ đang trong quá trình đổi "
-            "ngành, chờ kế toán xác nhận học phí."
-        )
+    from app.services.fee_calculation_service import (
+        assert_major_change_cycle_closed,
+    )
+    await assert_major_change_cycle_closed(  # F13
+        db,
+        profile,
+        message="Không thể xuất giấy báo nhập học: hồ sơ đang trong quá trình "
+        "đổi ngành, chờ kế toán xác nhận học phí.",
+        exc_type=ValidationError,
+    )
 
     if missing:
         raise ValidationError(
@@ -671,6 +675,9 @@ async def issue_enrollment_letter(
     # Đổi ngành: re-check dưới khoá (TOCTOU) — chu kỳ đổi ngành có thể mở TRONG
     # lúc render (cửa sổ ~350ms không giữ khoá). Xoá file tạm + fail như nhánh
     # fee-changed. Flag OFF → False → no-op.
+    # F13 NGOẠI LỆ: KHÔNG dùng assert_major_change_cycle_closed vì phải DỌN file
+    # PDF tạm (_best_effort_delete) TRƯỚC khi raise — helper raise thẳng không cho
+    # chèn cleanup. Giữ check tường minh.
     from app.services.fee_calculation_service import is_major_change_cycle_open
     if await is_major_change_cycle_open(db, profile):
         await to_thread.run_sync(_best_effort_delete, final_path)

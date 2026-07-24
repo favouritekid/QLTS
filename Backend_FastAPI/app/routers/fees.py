@@ -1270,41 +1270,22 @@ def _build_fee_response(
 async def _enrich_major_change_display(db, fee, response) -> None:
     """Resolve tên ngành CŨ (major_change_from_academic_info_id) + MỚI
     (resolved_major_id) + số còn phải thu, gán vào response cho dialog kế toán
-    (review #2). Best-effort: field nào không tra được để None (dialog fallback)."""
-    from sqlalchemy import select as _select
+    (review #2). Best-effort: field nào không tra được để None (dialog fallback).
 
-    async def _major_name_by_ai(ai_id):
-        if ai_id is None:
-            return None
-        return (
-            await db.execute(
-                _select(models.MajorProgram.name)
-                .select_from(models.OfferingAcademicInfo)
-                .join(
-                    models.ProgramOffering,
-                    models.ProgramOffering.id
-                    == models.OfferingAcademicInfo.offering_id,
-                )
-                .join(
-                    models.MajorProgram,
-                    models.MajorProgram.id == models.ProgramOffering.program_id,
-                )
-                .where(models.OfferingAcademicInfo.id == ai_id)
-            )
-        ).scalar_one_or_none()
+    F12: SQL join chuyển vào ``FeeRepository`` (CLAUDE.md 'No direct SQL in
+    Routers, Use Repository pattern')."""
+    from app.repositories.fee_repository import FeeRepository
 
-    response.major_change_from_major_name = await _major_name_by_ai(
-        fee.major_change_from_academic_info_id
+    _fee_repo = FeeRepository(db)
+    response.major_change_from_major_name = (
+        await _fee_repo.get_major_name_by_academic_info(
+            fee.major_change_from_academic_info_id
+        )
     )
     # Ngành MỚI: resolved_major_id đã trỏ ngành mới (reprice resnapshot force).
-    if fee.resolved_major_id is not None:
-        response.major_change_to_major_name = (
-            await db.execute(
-                _select(models.MajorProgram.name).where(
-                    models.MajorProgram.id == fee.resolved_major_id
-                )
-            )
-        ).scalar_one_or_none()
+    response.major_change_to_major_name = await _fee_repo.get_major_name_by_id(
+        fee.resolved_major_id
+    )
     # Còn phải thu = final − paid − waived (đã chặn sinh dư nên >= 0). Raw decimal
     # string — FE formatVND tự format (khớp zod z.string()).
     outstanding = fee.final_amount - fee.paid_amount - fee.waived_amount

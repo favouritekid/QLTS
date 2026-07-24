@@ -23,7 +23,10 @@ interface Props {
  * Thin-client: chỉ hiện theo cờ BE ``major_change_cycle_open``.
  */
 export function MajorChangeRecallBanner({ cycleOpen, candidateName }: Props) {
+  // Rules of Hooks: MỌI useState phải gọi TRƯỚC early-return `!cycleOpen`
+  // — nếu không, khi cờ lật false→true số hook đổi → React crash.
   const [copied, setCopied] = React.useState(false)
+  const [failed, setFailed] = React.useState(false)
 
   if (!cycleOpen) return null
 
@@ -34,8 +37,6 @@ export function MajorChangeRecallBanner({ cycleOpen, candidateName }: Props) {
     `phát trước đó (nếu có) KHÔNG còn hiệu lực — vui lòng KHÔNG sử dụng bản cũ. ` +
     `Nhà trường sẽ gửi giấy báo mới sau khi hoàn tất xác nhận học phí. ` +
     `Trân trọng.`
-
-  const [failed, setFailed] = React.useState(false)
 
   const handleCopy = async () => {
     setFailed(false)

@@ -489,6 +489,45 @@ class FeeRepository(BaseRepository[Fee]):
         result = await self.db.execute(query)
         return result.scalars().first()
 
+    async def get_major_name_by_academic_info(
+        self, academic_info_id: Optional[int]
+    ) -> Optional[str]:
+        """F12 — tên ngành (MajorProgram.name) từ ``offering_academic_info_id``
+        qua join ai → offering → major. Dùng bởi enrich dialog đổi ngành (chuyển
+        SQL khỏi router theo CLAUDE.md 'No direct SQL in Routers')."""
+        if academic_info_id is None:
+            return None
+        return (
+            await self.db.execute(
+                select(models.MajorProgram.name)
+                .select_from(models.OfferingAcademicInfo)
+                .join(
+                    models.ProgramOffering,
+                    models.ProgramOffering.id
+                    == models.OfferingAcademicInfo.offering_id,
+                )
+                .join(
+                    models.MajorProgram,
+                    models.MajorProgram.id == models.ProgramOffering.program_id,
+                )
+                .where(models.OfferingAcademicInfo.id == academic_info_id)
+            )
+        ).scalar_one_or_none()
+
+    async def get_major_name_by_id(
+        self, major_id: Optional[int]
+    ) -> Optional[str]:
+        """F12 — tên ngành trực tiếp theo ``MajorProgram.id``."""
+        if major_id is None:
+            return None
+        return (
+            await self.db.execute(
+                select(models.MajorProgram.name).where(
+                    models.MajorProgram.id == major_id
+                )
+            )
+        ).scalar_one_or_none()
+
 
 class InvoiceRepository(BaseRepository[Invoice]):
     """Repository for Invoice model operations with IDOR protection."""

@@ -138,6 +138,28 @@ async def is_major_change_cycle_open(
     return row is not None
 
 
+async def assert_major_change_cycle_closed(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+    *,
+    message: str,
+    exc_type: type = BusinessRuleViolation,
+) -> None:
+    """F13 — chokepoint DUY NHẤT cho guard "chặn hành động khi hồ sơ đang trong
+    chu kỳ đổi ngành". Mọi hành động bị gate (calculate_fee / approve / enroll /
+    publish_result / xuất giấy báo) gọi helper này thay vì tự copy
+    ``if await is_major_change_cycle_open(...): raise ...``. ``message`` theo hành
+    động (caller truyền); ``exc_type`` mặc định ``BusinessRuleViolation``
+    (build_letter dùng ``ValidationError``). Flag OFF ⇒ ``is_major_change_cycle_open``
+    luôn False ⇒ no-op.
+
+    NGOẠI LỆ: nơi cần DỌN DẸP trước khi raise (issue giấy — xoá PDF tạm) tự check
+    + raise, KHÔNG dùng helper (xem enrollment_letter_service.issue).
+    """
+    if await is_major_change_cycle_open(db, profile):
+        raise exc_type(message)
+
+
 # Status pre-decision được phép mở chu kỳ đổi ngành (trước công bố kết quả — tránh
 # stale choice.decision=='admitted' bám ngành cũ). Post-decision cần reset
 # decision + xử quota/seat = ngoài scope v1.
@@ -700,12 +722,13 @@ class FeeCalculationService:
                 raise ResourceNotFoundError("Admission profile not found")
 
         # Đổi ngành: CHẶN tính phí khi đang chu kỳ đổi ngành (fee HK1 đang được
-        # reprice / chờ kế toán). Flag OFF → no-op. Đặt trong khoá profile.
-        if await is_major_change_cycle_open(self.db, profile):
-            raise BusinessRuleViolation(
-                "Không thể tính học phí khi hồ sơ đang trong quá trình đổi ngành "
-                "— chờ kế toán xác nhận trước."
-            )
+        # reprice / chờ kế toán). Flag OFF → no-op. Đặt trong khoá profile. (F13)
+        await assert_major_change_cycle_closed(
+            self.db,
+            profile,
+            message="Không thể tính học phí khi hồ sơ đang trong quá trình đổi "
+            "ngành — chờ kế toán xác nhận trước.",
+        )
 
         # Re-validate the fee-eligible STATE under the lock. A multi-NV profile
         # that gained a 2nd NV — or left a fee-eligible state — since the router
@@ -1858,6 +1881,11 @@ class FeeCalculationService:
         # get_for_update KHÔNG repopulate instance đã ở session → refresh dưới
         # khoá để đọc paid/waived/status/version TƯƠI (mold recompute_fee_from_invoices).
         await self.db.refresh(fee)
+        # F5: invoice cũng phải refresh dưới khoá — instance nạp ở (2) TRƯỚC khi
+        # khoá; get_for_update KHÔNG populate_existing → nếu payment commit xen giữa
+        # (2)→lock, ``invoice.paid_amount`` còn cũ. status/paid_at (bước 6) +
+        # recompute_fee_from_invoices (bước 8) đọc paid_amount → phải tươi.
+        await self.db.refresh(invoice)
 
         # Re-check khớp dưới khoá.
         if (
@@ -2041,6 +2069,11 @@ class FeeCalculationService:
         # (9) Cập nhật resolved_* sang ngành mới (filter/list/drawer/status-counts).
         # force=True: vượt guard "skip khi major_change_requested" (giờ giá đã đổi
         # nên resolved_* PHẢI đồng bộ theo — xem review #7).
+        # ⚠️ F10 (latent, LOW): resnapshot relabel resolved_* của MỌI fee non-cancelled
+        # (không lọc semester) sang ngành mới, trong khi CHỈ fee HK1 được reprice
+        # amount. Hiện vô hại vì học phí chỉ HK1 (fee HK2+ tuition chưa tồn tại; phí
+        # ứng tuyển/KTX không định giá theo ngành nên relabel = đúng hiển thị). KHI
+        # có học phí HK2+: phải reprice mọi semester tuition hoặc scope lại relabel.
         await resnapshot_fee_academic_info_for_profile(
             self.db, profile.id, profile=profile, force=True
         )
@@ -2231,7 +2264,42 @@ class FeeCalculationService:
         # Dispatch báo officer phụ trách tiếp tục (xuất giấy…).
         _lead = getattr(profile, "lead", None) if profile is not None else None
         officer_id = getattr(_lead, "assigned_officer_id", None) if _lead else None
-        user_ids = [officer_id] if officer_id else []
+        # F8: lead chưa gán officer → KHÔNG được rớt thông báo "trả về xử lý tiếp".
+        # Fallback: reviewer đang phụ trách (đã claim) → nếu không, manager/admin
+        # đang active cùng đơn vị lead (tránh im lặng mất tín hiệu tiếp-tục-quy-trình).
+        if officer_id:
+            user_ids = [officer_id]
+        else:
+            reviewer_id = (
+                getattr(profile, "assigned_reviewer_id", None)
+                if profile is not None
+                else None
+            )
+            if reviewer_id:
+                user_ids = [reviewer_id]
+            else:
+                _lead_unit = getattr(_lead, "unit_id", None) if _lead else None
+                user_ids = (
+                    list(
+                        (
+                            await self.db.execute(
+                                select(models.User.id).where(
+                                    models.User.unit_id == _lead_unit,
+                                    models.User.role.in_(["manager", "admin"]),
+                                    models.User.status == "active",
+                                )
+                            )
+                        ).scalars().all()
+                    )
+                    if _lead_unit is not None
+                    else []
+                )
+            if not user_ids:
+                log.warning(
+                    "major_change_confirmed_no_recipient",
+                    fee_id=fee.id,
+                    profile_id=fee.admission_profile_id,
+                )
         payload = {
             "fee_id": fee.id,
             "invoice_id": invoice.id,
@@ -2241,6 +2309,7 @@ class FeeCalculationService:
             "new_major_name": new_major_name,
             "profile_code": f"HS-{fee.admission_profile_id}",
             "actor_id": actor_id,
+            "fee_version": fee.version,  # F11: template dedup fallback
             "user_ids": user_ids,
         }
         from app.services.notification_dispatcher import (

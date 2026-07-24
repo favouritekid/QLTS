@@ -6499,6 +6499,28 @@ async def _apply_major_change_snapshot(
     return old_path_id, path
 
 
+async def _atomic_increment_path_submission_count(db: AsyncSession, path_id: int):
+    """F15 — atomic quota-guarded +1 ``admission_path.submission_count`` cho MỘT
+    path. RETURNING ``(submission_count, round_quota)`` nếu tăng được; ``None`` khi
+    ``round_quota`` đã đủ (caller tự raise BadRequest + log tuỳ ngữ cảnh). Dùng
+    CHUNG bởi submit downstream (+1 path đã rewrite) và
+    ``_commit_major_change_path_quota`` (resubmit +1 path mới) — trước đây 2 bản
+    UPDATE trùng, dễ drift (SPEC §4.1 pattern)."""
+    from sqlalchemy import text as _text
+    return (
+        await db.execute(
+            _text(
+                "UPDATE admission_path "
+                "SET submission_count = submission_count + 1 "
+                "WHERE id = :pid "
+                "  AND (round_quota IS NULL OR submission_count < round_quota) "
+                "RETURNING submission_count, round_quota"
+            ),
+            {"pid": path_id},
+        )
+    ).first()
+
+
 async def _commit_major_change_path_quota(
     db: AsyncSession,
     profile: "models.AdmissionProfile",
@@ -6552,18 +6574,9 @@ async def _commit_major_change_path_quota(
             )
 
     if increment_new_path and new_path_id is not None:
-        inc_row = (
-            await db.execute(
-                _sa_text(
-                    "UPDATE admission_path "
-                    "SET submission_count = submission_count + 1 "
-                    "WHERE id = :pid "
-                    "  AND (round_quota IS NULL OR submission_count < round_quota) "
-                    "RETURNING submission_count"
-                ),
-                {"pid": int(new_path_id)},
-            )
-        ).first()
+        inc_row = await _atomic_increment_path_submission_count(
+            db, int(new_path_id)
+        )
         if inc_row is None:
             raise BadRequest(
                 f"Đã đủ chỉ tiêu nộp hồ sơ cho đường tuyển sinh {new_path_id}. "
@@ -6694,6 +6707,7 @@ async def _reprice_on_resubmit_if_major_change(
         "profile_code": f"HS-{profile.id}",
         # Đọc số giấy THẬT vừa hết hiệu lực (reprice stash), không hardcode (#15).
         "letter_superseded": bool(repriced_fee.__dict__.get("_mc_letter_superseded", False)),
+        "fee_version": repriced_fee.version,  # F11: template dedup fallback
         "user_ids": recipient_ids,
     }
     from app.services.notification_dispatcher import (
@@ -6863,7 +6877,14 @@ async def submit_and_evaluate(
     # admission_path_id bypass gate (silent skip). Per memory
     # phase3-multi-nv-partial-enablement-2026-05-14 còn ~10 legacy profile
     # — log warning để ops grep + backfill manual nếu cần.
-    cutoff_round = await admission_repo.get_round_for_profile_cutoff(profile)
+    # F3: đổi ngành → cutoff phải theo ROUND của path MỚI. applied_rules còn path
+    # CŨ (rewrite dời sang nhánh success _commit_major_change_path_quota), nên
+    # get_round_for_profile_cutoff(profile) sẽ đọc round path cũ → chặn/lọt sai 2
+    # chiều (cũ-đóng/mới-mở chặn oan; cũ-mở/mới-đóng lọt vào round đã đóng).
+    if _mc_submit_active and _mc_new_path is not None:
+        cutoff_round = await admission_repo.get_round_for_path(_mc_new_path.id)
+    else:
+        cutoff_round = await admission_repo.get_round_for_profile_cutoff(profile)
     if cutoff_round is not None:
         assert_round_open(
             cutoff_round,
@@ -7319,19 +7340,11 @@ async def submit_and_evaluate(
             except (TypeError, ValueError):
                 path_id_int = None
             if path_id_int is not None:
-                from sqlalchemy import text
-                atomic_stmt = text(
-                    "UPDATE admission_path "
-                    "SET submission_count = submission_count + 1 "
-                    "WHERE id = :path_id "
-                    "  AND (round_quota IS NULL "
-                    "       OR submission_count < round_quota) "
-                    "RETURNING submission_count, round_quota"
+                # F15: dùng chung helper atomic increment (trước đây SQL trùng
+                # với _commit_major_change_path_quota).
+                inc_row = await _atomic_increment_path_submission_count(
+                    db, path_id_int
                 )
-                inc_result = await db.execute(
-                    atomic_stmt, {"path_id": path_id_int}
-                )
-                inc_row = inc_result.first()
                 if inc_row is None:
                     log.warning(
                         "atomic_submit_blocked_quota_exhausted",
@@ -9024,12 +9037,13 @@ async def _perform_enrollment_core(
     # (Thường state machine đã chặn vì hồ sơ đổi ngành ở draft/revision, nhưng
     # belt-and-suspenders — awaiting-fee có thể tồn tại khi hồ sơ đã submit lại.)
     if profile.status != "enrolled":
-        from .fee_calculation_service import is_major_change_cycle_open
-        if await is_major_change_cycle_open(db, profile):
-            raise BusinessRuleViolation(
-                "Không thể nhập học khi hồ sơ đang trong quá trình đổi ngành — "
-                "chờ kế toán xác nhận học phí trước."
-            )
+        from .fee_calculation_service import assert_major_change_cycle_closed
+        await assert_major_change_cycle_closed(  # F13
+            db,
+            profile,
+            message="Không thể nhập học khi hồ sơ đang trong quá trình đổi ngành "
+            "— chờ kế toán xác nhận học phí trước.",
+        )
 
     # ✅ HIGH PRIORITY FIX #7: Idempotency check - return existing student if already enrolled
     # MUST be BEFORE status check to handle idempotent requests correctly
@@ -9489,12 +9503,13 @@ async def approve_profile(
 
     # Đổi ngành: CHẶN duyệt khi đang chu kỳ đổi ngành (học phí chưa chốt / chờ kế
     # toán) — không duyệt hồ sơ với nghĩa vụ tiền chưa xác nhận. Flag OFF → no-op.
-    from .fee_calculation_service import is_major_change_cycle_open
-    if await is_major_change_cycle_open(db, profile):
-        raise BusinessRuleViolation(
-            "Không thể duyệt hồ sơ đang trong quá trình đổi ngành — chờ kế toán "
-            "xác nhận học phí trước."
-        )
+    from .fee_calculation_service import assert_major_change_cycle_closed
+    await assert_major_change_cycle_closed(  # F13
+        db,
+        profile,
+        message="Không thể duyệt hồ sơ đang trong quá trình đổi ngành — chờ kế "
+        "toán xác nhận học phí trước.",
+    )
 
     # ✅ APPLICATION FEE CHECK
     # Per PHASE_WORKFLOW.md: Profile can only be approved if fee is paid or exempt
@@ -10916,10 +10931,33 @@ async def resubmit_profile(
         # Doc snapshot ngành mới TRƯỚC validate; path rewrite + quota transfer
         # SAU khi validate PASS (validate raise → rollback, không để lại quota
         # lệch — review #1). resubmit không có downstream +1 nên tự +1.
+        _mc_resub_repo = _MCAdmissionRepo(db)
         _mc_resub_old_path, _mc_resub_new_path = await _apply_major_change_snapshot(
-            db, profile, _MCAdmissionRepo(db), officer,
+            db, profile, _mc_resub_repo, officer,
         )
         await _validate_eligibility_all_choices(db, profile)
+        # F6: gate GIẤY ngành MỚI (comment trên hứa "fail-closed nếu thiếu giấy").
+        # resubmit thường KHÔNG re-check doc, nhưng ĐỔI NGÀNH đổi bộ giấy bắt buộc
+        # → phải chặn nếu thiếu (không có fast-track debt ở resubmit → fail-closed).
+        # _apply_major_change_snapshot đã re-resolve applied_rules.mandatory_docs.
+        _mc_mandatory = list(
+            (profile.applied_rules or {}).get("mandatory_docs") or []
+        )
+        if _mc_mandatory:
+            _mc_uploaded = await _mc_resub_repo.get_uploaded_documents(profile.id)
+            _mc_uploaded_codes = {
+                d.document_type.code
+                for d in _mc_uploaded
+                if d.document_type is not None
+                and getattr(d, "category", None) != "priority_evidence"
+            }
+            _mc_missing = [c for c in _mc_mandatory if c not in _mc_uploaded_codes]
+            if _mc_missing:
+                raise BusinessRuleViolation(
+                    "Không thể nộp lại khi đổi ngành: thiếu giấy tờ bắt buộc của "
+                    f"ngành mới ({', '.join(_mc_missing)}). Vui lòng bổ sung minh "
+                    "chứng trước khi nộp lại."
+                )
         await _commit_major_change_path_quota(
             db, profile, _mc_resub_old_path, _mc_resub_new_path,
             increment_new_path=True,
@@ -11075,6 +11113,12 @@ async def resubmit_profile(
     _major_change_cb = await _reprice_on_resubmit_if_major_change(
         db, profile, officer
     )
+    # F9: reprice hook LUÔN clear major_change_requested (và chỉ set awaiting khi
+    # reprice THẬT sự đổi giá). Cờ transient cycle_open đã populate ở
+    # _populate_response_fields TRƯỚC reprice → với reprice NO-OP (drift gate) sẽ
+    # trả cycle=open sai (tự lành ở GET sau, nhưng response mutation lệch). Re-
+    # populate SAU reprice để phản ánh trạng thái đúng ngay trong response nộp lại.
+    await _populate_major_change_flag(db, profile)
 
     final_callback = compose_post_commit_callbacks(
         label="admission_resubmit",
