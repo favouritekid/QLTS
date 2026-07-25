@@ -129,9 +129,28 @@ describe("ProfileActionMenu", () => {
     })
 
     // C2 — entry-point admin rollback (+ đổi ngành).
-    it("admin_rollback=true: hiển thị item 'Đưa về nháp / Đổi ngành'", () => {
+    it("admin_rollback=true + can_request_major_change=true: nhãn có 'Đổi ngành'", () => {
+      render(
+        <ProfileActionMenu
+          profile={buildProfile({
+            permissions: { admin_rollback: true, can_request_major_change: true },
+          })}
+        />,
+      )
+      expect(screen.getByTestId("menu-item-admin-rollback")).toHaveTextContent(
+        "Đưa về nháp / Đổi ngành",
+      )
+    })
+
+    // RE-GATE: capability false (feature flag OFF / hồ sơ không đủ điều kiện) →
+    // nút rollback GIỮ (chức năng độc lập) nhưng nhãn KHÔNG hứa đổi ngành, vì
+    // server sẽ trả 400 cho allow_major_change=true.
+    it("admin_rollback=true nhưng capability false: nhãn chỉ 'Đưa về nháp'", () => {
       render(<ProfileActionMenu profile={buildProfile({ permissions: { admin_rollback: true } })} />)
-      expect(screen.getByTestId("menu-item-admin-rollback")).toBeInTheDocument()
+      const item = screen.getByTestId("menu-item-admin-rollback")
+      expect(item).toBeInTheDocument()
+      expect(item).toHaveTextContent("Đưa về nháp")
+      expect(item.textContent).not.toMatch(/Đổi ngành/)
     })
 
     it("admin_rollback vắng mặt: KHÔNG hiển thị item admin-rollback", () => {

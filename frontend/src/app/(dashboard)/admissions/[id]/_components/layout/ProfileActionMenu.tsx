@@ -79,6 +79,10 @@ export function ProfileActionMenu({
   const hasAssignmentAction = can("claim") || can("unclaim")
   const hasMaintenanceAction = can("minor_correction") || can("delete")
   const canAdminRollback = can("admin_rollback")
+  // Capability BE (gate feature flag + đủ điều kiện mở chu kỳ). Quyết định CẢ
+  // checkbox trong dialog LẪN nhãn menu — flag OFF thì nhãn không nhắc "Đổi
+  // ngành" để khỏi hứa một lối vào server đang từ chối.
+  const canRequestMajorChange = can("can_request_major_change")
   const hasAnyAction =
     hasAssignmentAction || hasMaintenanceAction || canAdminRollback
 
@@ -161,7 +165,7 @@ export function ProfileActionMenu({
                 data-testid="menu-item-admin-rollback"
               >
                 <Undo2 className="w-4 h-4 mr-2" />
-                Đưa về nháp / Đổi ngành
+                {canRequestMajorChange ? "Đưa về nháp / Đổi ngành" : "Đưa về nháp"}
               </DropdownMenuItem>
             </>
           )}
@@ -226,6 +230,7 @@ export function ProfileActionMenu({
           profileId={profile.id}
           open={adminRollbackDialogOpen}
           onOpenChange={setAdminRollbackDialogOpen}
+          showMajorChangeToggle={canRequestMajorChange}
         />
       )}
     </>

@@ -732,10 +732,10 @@ export function AdmissionDetailClient({
         onOpenChange={setRequestRevisionDialogOpen}
         onConfirm={handleConfirmRequestRevision}
         isSubmitting={requestRevisionMutation.isPending}
-        // C2: toggle đổi ngành chỉ khi hồ sơ đã nộp/nộp-lại (miền mở chu kỳ).
-        showMajorChangeToggle={
-          profile.status === "submitted" || profile.status === "resubmitted"
-        }
+        // C2: toggle đổi ngành theo CAPABILITY BE (thin-client) — gate feature
+        // flag + status + choice-engine + có HK1 fee + chưa chờ kế toán. Suy từ
+        // status ở FE là sai: flag OFF thì server trả 400 cho allow_major_change.
+        showMajorChangeToggle={can("can_request_major_change")}
       />
     </FormProvider>
   )

@@ -20,12 +20,20 @@ interface AdminRollbackDialogProps {
   profileId: number
   open: boolean
   onOpenChange: (open: boolean) => void
+  /**
+   * Hiện checkbox "Cho phép đổi ngành". PHẢI truyền từ capability BE
+   * ``permissions.can_request_major_change`` — KHÔNG hardcode true: khi feature
+   * flag OFF (hoặc hồ sơ không đủ điều kiện) server từ chối
+   * ``allow_major_change=true`` bằng 400, nên checkbox hiện ra là lối vào chết.
+   */
+  showMajorChangeToggle?: boolean
 }
 
 export function AdminRollbackDialog({
   profileId,
   open,
   onOpenChange,
+  showMajorChangeToggle = false,
 }: AdminRollbackDialogProps) {
   const mutation = useAdminRollback(profileId)
 
@@ -48,7 +56,7 @@ export function AdminRollbackDialog({
       onOpenChange={onOpenChange}
       onConfirm={handleConfirm}
       isSubmitting={mutation.isPending}
-      showMajorChangeToggle
+      showMajorChangeToggle={showMajorChangeToggle}
     />
   )
 }

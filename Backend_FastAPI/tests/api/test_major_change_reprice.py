@@ -40,6 +40,7 @@ from app.models.finance import (
     Payment,
 )
 from app.services.fee_calculation_service import FeeCalculationService
+from app.utils.exceptions import BusinessRuleViolation
 
 pytestmark = pytest.mark.asyncio
 
@@ -1257,3 +1258,260 @@ async def test_confirm_falls_back_to_manager_when_lead_has_no_officer(
     assert captured["payload"].get("fee_version") is not None, (
         "F11: payload phải mang fee_version cho dedup theo chu kỳ"
     )
+
+
+# ===========================================================================
+# RE-GATE pre-PR — capability FE + FAIL-CLOSED khi client xin đổi ngành mà
+# server không mở được chu kỳ.
+#
+# Trước bản vá: flag OFF (hoặc hồ sơ không đủ điều kiện) + allow_major_change=
+# True → maybe_open trả False IM LẶNG và rollback/revision VẪN thành công. Client
+# tin chu kỳ đã mở → officer đổi nguyện vọng → fee KHÔNG reprice → giấy báo +
+# công nợ giữ giá ngành cũ. Nay: BusinessRuleViolation (router 400), transition
+# không chạy. Cờ FE ``permissions.can_request_major_change`` dùng CHUNG predicate
+# nên checkbox hiện ⇔ server nhận.
+# ===========================================================================
+async def _seed_regate_profile(seed_lead_dependencies, **kw):
+    """Hồ sơ submitted + HK1 fee active, KHÔNG bật major_change_requested (đúng
+    cảnh "chưa mở chu kỳ" mà admin đang xin mở)."""
+    majors = await _seed_two_majors(
+        seed_lead_dependencies,
+        price_a=Decimal("6500000"), price_b=Decimal("9200000"),
+    )
+    kw.setdefault("major_change_requested", False)
+    ids = await _seed_profile_fee_invoice(seed_lead_dependencies, majors, **kw)
+    return majors, ids
+
+
+async def _history_count(pid: int) -> int:
+    async with AsyncSessionLocal() as s:
+        return len(
+            (
+                await s.execute(
+                    select(models.AdmissionProfileStatusHistory.id).where(
+                        models.AdmissionProfileStatusHistory.profile_id == pid
+                    )
+                )
+            ).scalars().all()
+        )
+
+
+async def _admin_rollback(pid: int, actor_id: int, *, allow: bool):
+    from app.services import admission_choice_engine_service as ce
+
+    async with AsyncSessionLocal() as db:
+        profile = (
+            await db.execute(
+                select(models.AdmissionProfile)
+                .options(selectinload(models.AdmissionProfile.lead))
+                .where(models.AdmissionProfile.id == pid)
+            )
+        ).scalar_one()
+        actor = await db.get(models.User, actor_id)
+        result, cb = await ce.admin_rollback_profile(
+            db, profile, reason="Đưa về nháp để kiểm tra lại hồ sơ",
+            actor=actor, allow_major_change=allow,
+        )
+        await db.commit()
+        return result
+
+
+async def _make_admin(seed_lead_dependencies: dict) -> dict:
+    """Admin cùng đơn vị — ``request_revision`` đi qua ``_check_idor_access`` nên
+    officer chưa được gán hồ sơ sẽ bị 404 (không phải lỗi của luồng đổi ngành)."""
+    from tests.conftest import _create_user_and_role
+
+    ts = int(datetime.now(timezone.utc).timestamp() * 1_000_000) % 100000
+    return await _create_user_and_role(
+        {
+            "username": f"mjc_adm_{ts}",
+            "email": f"mjc_adm_{ts}@example.com",
+            "password": "AdminPass!345",
+            "role": "admin",
+            "status": "active",
+        },
+        "role:admin",
+        unit_id=seed_lead_dependencies["unit_id"],
+    )
+
+
+async def _request_revision(pid: int, reviewer_id: int, *, allow: bool):
+    from app.services import admission_service as adm
+
+    async with AsyncSessionLocal() as db:
+        reviewer = await db.get(models.User, reviewer_id)
+        profile = await db.get(models.AdmissionProfile, pid)
+        profile, cb = await adm.request_revision(
+            db, pid, reviewer,
+            {
+                "reason": "Yêu cầu bổ sung giấy tờ còn thiếu",
+                "version": profile.version,
+                "allow_major_change": allow,
+            },
+        )
+        await db.commit()
+        return profile.status
+
+
+# --- Acceptance 4: flag ON + đủ điều kiện → capability true + cycle mở --------
+async def test_capability_true_and_cycle_opens_when_flag_on(
+    seed_lead_dependencies, officer_user_in_db, major_change_on
+):
+    from app.services.fee_calculation_service import can_open_major_change_cycle
+
+    _, ids = await _seed_regate_profile(seed_lead_dependencies)
+    profile = await _load_profile(ids["profile_id"])
+    async with AsyncSessionLocal() as db:
+        assert await can_open_major_change_cycle(db, profile) is True
+
+    result = await _admin_rollback(
+        ids["profile_id"], officer_user_in_db["id"], allow=True
+    )
+    assert result["major_change_requested"] is True
+    prof = await _load_profile(ids["profile_id"])
+    assert prof.status == "draft"
+    assert prof.major_change_requested is True
+
+
+# --- Acceptance 1: flag OFF → capability false (nút rollback vẫn còn) --------
+async def test_capability_false_when_flag_off(
+    seed_lead_dependencies, officer_user_in_db
+):
+    """Flag OFF: ``admin_rollback`` (quyền độc lập) GIỮ true, nhưng capability đổi
+    ngành false → FE ẩn checkbox + nhãn menu bỏ chữ "Đổi ngành"."""
+    from app.services.admission_service import _populate_major_change_capability
+    from app.services.fee_calculation_service import can_open_major_change_cycle
+
+    _, ids = await _seed_regate_profile(seed_lead_dependencies)
+    profile = await _load_profile(ids["profile_id"])
+    async with AsyncSessionLocal() as db:
+        assert await can_open_major_change_cycle(db, profile) is False
+
+        profile.permissions = {"admin_rollback": True}
+        await _populate_major_change_capability(db, profile)
+        assert profile.permissions["admin_rollback"] is True
+        assert profile.permissions["can_request_major_change"] is False
+
+
+async def test_capability_true_in_permissions_when_flag_on(
+    seed_lead_dependencies, major_change_on
+):
+    from app.services.admission_service import _populate_major_change_capability
+
+    _, ids = await _seed_regate_profile(seed_lead_dependencies)
+    profile = await _load_profile(ids["profile_id"])
+    async with AsyncSessionLocal() as db:
+        profile.permissions = {"request_revision": True}
+        await _populate_major_change_capability(db, profile)
+        assert profile.permissions["can_request_major_change"] is True
+
+
+async def test_capability_false_without_open_permission(
+    seed_lead_dependencies, major_change_on
+):
+    """Officer (không có admin_rollback / request_revision) → capability false,
+    không tốn query fee."""
+    from app.services.admission_service import _populate_major_change_capability
+
+    _, ids = await _seed_regate_profile(seed_lead_dependencies)
+    profile = await _load_profile(ids["profile_id"])
+    async with AsyncSessionLocal() as db:
+        profile.permissions = {"edit": True}
+        await _populate_major_change_capability(db, profile)
+        assert profile.permissions["can_request_major_change"] is False
+
+
+async def test_capability_false_when_awaiting_confirmation(
+    seed_lead_dependencies, major_change_on
+):
+    """Parity với single-cycle lock: fee đang chờ kế toán → capability false
+    (nếu không FE hiện checkbox mà server raise)."""
+    from app.services.fee_calculation_service import can_open_major_change_cycle
+
+    _, ids = await _seed_regate_profile(seed_lead_dependencies, awaiting=True)
+    profile = await _load_profile(ids["profile_id"])
+    async with AsyncSessionLocal() as db:
+        assert await can_open_major_change_cycle(db, profile) is False
+
+
+# --- Acceptance 2: flag OFF + allow=True → 400, không đổi status/history ------
+async def test_admin_rollback_flag_off_with_allow_raises(
+    seed_lead_dependencies, officer_user_in_db
+):
+    _, ids = await _seed_regate_profile(seed_lead_dependencies)
+    before = await _history_count(ids["profile_id"])
+
+    with pytest.raises(BusinessRuleViolation) as exc:
+        await _admin_rollback(
+            ids["profile_id"], officer_user_in_db["id"], allow=True
+        )
+    assert "chưa được bật" in str(exc.value)
+
+    prof = await _load_profile(ids["profile_id"])
+    assert prof.status == "submitted", "transition KHÔNG được chạy"
+    assert prof.major_change_requested is False
+    assert await _history_count(ids["profile_id"]) == before, (
+        "không được ghi history khi đã từ chối"
+    )
+
+
+async def test_request_revision_flag_off_with_allow_raises(
+    seed_lead_dependencies, officer_user_in_db
+):
+    _, ids = await _seed_regate_profile(seed_lead_dependencies)
+    admin = await _make_admin(seed_lead_dependencies)
+    before = await _history_count(ids["profile_id"])
+
+    with pytest.raises(BusinessRuleViolation):
+        await _request_revision(ids["profile_id"], admin["id"], allow=True)
+
+    prof = await _load_profile(ids["profile_id"])
+    assert prof.status == "submitted"
+    assert prof.major_change_requested is False
+    assert await _history_count(ids["profile_id"]) == before
+
+
+async def test_flag_on_but_no_hk1_fee_raises(
+    seed_lead_dependencies, officer_user_in_db, major_change_on
+):
+    """Fail-closed đối xứng: đủ flag nhưng hồ sơ chưa có học phí HK1 → 400 thay vì
+    rollback im lặng (không có gì để định giá lại)."""
+    _, ids = await _seed_regate_profile(seed_lead_dependencies)
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(
+                update(Fee)
+                .where(Fee.id == ids["fee_id"])
+                .values(status="cancelled")
+            )
+
+    with pytest.raises(BusinessRuleViolation) as exc:
+        await _admin_rollback(
+            ids["profile_id"], officer_user_in_db["id"], allow=True
+        )
+    assert "HK1" in str(exc.value)
+    prof = await _load_profile(ids["profile_id"])
+    assert prof.status == "submitted"
+
+
+# --- Acceptance 3: flag OFF + allow=False → luồng cũ vẫn chạy ----------------
+async def test_admin_rollback_flag_off_plain_still_succeeds(
+    seed_lead_dependencies, officer_user_in_db
+):
+    _, ids = await _seed_regate_profile(seed_lead_dependencies)
+    result = await _admin_rollback(
+        ids["profile_id"], officer_user_in_db["id"], allow=False
+    )
+    assert result["status"] == "draft"
+    assert result["major_change_requested"] is False
+    prof = await _load_profile(ids["profile_id"])
+    assert prof.status == "draft"
+
+
+async def test_request_revision_flag_off_plain_still_succeeds(
+    seed_lead_dependencies, officer_user_in_db
+):
+    _, ids = await _seed_regate_profile(seed_lead_dependencies)
+    admin = await _make_admin(seed_lead_dependencies)
+    status = await _request_revision(ids["profile_id"], admin["id"], allow=False)
+    assert status == "revision_requested"

@@ -180,6 +180,78 @@ async def assert_major_change_cycle_closed(
 # decision + xử quota/seat = ngoài scope v1.
 _MAJOR_CHANGE_PRE_DECISION_STATUSES = ("submitted", "resubmitted")
 
+# Lý do KHÔNG mở được chu kỳ đổi ngành → câu tiếng Việt trả về client. Một bảng
+# duy nhất cho CẢ hai người dùng của ``_major_change_cycle_blocker``:
+# ``can_open_major_change_cycle`` (cờ capability cho FE) và
+# ``maybe_open_major_change_cycle`` (fail-closed raise). Tách bảng ra để cờ FE và
+# guard server KHÔNG THỂ lệch tiêu chí — lệch nghĩa là FE hiện checkbox mà server
+# từ chối (hoặc tệ hơn: server im lặng bỏ qua).
+_MAJOR_CHANGE_BLOCKER_MESSAGES = {
+    "flag_off": (
+        "Tính năng đổi ngành có khấu trừ phiếu thu chưa được bật — không thể mở "
+        "chu kỳ đổi ngành."
+    ),
+    "not_choice_engine": (
+        "Hồ sơ không dùng cơ chế nguyện vọng — không đổi ngành theo luồng này."
+    ),
+    "post_decision": (
+        "Chỉ hồ sơ đã nộp / nộp lại (chưa công bố kết quả) mới mở được chu kỳ "
+        "đổi ngành."
+    ),
+    "no_hk1_fee": (
+        "Hồ sơ chưa có học phí HK1 — không có gì để định giá lại."
+    ),
+    "awaiting_confirmation": (
+        "Còn một chu kỳ đổi ngành đang chờ kế toán xác nhận — không thể mở "
+        "chu kỳ đổi ngành mới."
+    ),
+}
+
+
+async def _major_change_cycle_blocker(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+) -> str | None:
+    """Trả reason-code CHẶN mở chu kỳ đổi ngành, hoặc ``None`` nếu mở được.
+
+    NGUỒN SỰ THẬT DUY NHẤT của tiêu chí "mở được chu kỳ": feature flag ON ·
+    ``uses_choice_engine`` · status pre-decision · có HK1 tuition fee active ·
+    fee CHƯA ``awaiting_accountant_confirmation`` (single-cycle lock).
+
+    Đọc status trực tiếp trên ``profile`` nên caller PHẢI gọi TRƯỚC transition
+    (status GỐC), giống hợp đồng cũ của ``maybe_open_major_change_cycle``.
+    """
+    if not settings.MAJOR_CHANGE_REPRICE_ENABLED:
+        return "flag_off"
+    if not getattr(profile, "uses_choice_engine", False):
+        return "not_choice_engine"
+    if profile.status not in _MAJOR_CHANGE_PRE_DECISION_STATUSES:
+        return "post_decision"
+    from app.services.enrollment_letter_service import (
+        _get_active_hk1_tuition_fee,
+    )
+    fee = await _get_active_hk1_tuition_fee(db, profile.id)
+    if fee is None:
+        return "no_hk1_fee"
+    if fee.awaiting_accountant_confirmation:
+        return "awaiting_confirmation"
+    return None
+
+
+async def can_open_major_change_cycle(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+) -> bool:
+    """True khi hồ sơ MỞ ĐƯỢC chu kỳ đổi ngành ngay lúc này — nguồn của cờ
+    ``permissions["can_request_major_change"]`` (``_populate_major_change_flag``).
+
+    FE dùng cờ này để hiện/ẩn checkbox "Cho phép đổi ngành" trong dialog
+    admin-rollback + yêu-cầu-sửa. KHÔNG kiểm quyền role ở đây: mỗi dialog đã bị
+    gate bởi permission hành động của nó (``admin_rollback`` / ``request_revision``);
+    hàm này chỉ trả lời "hồ sơ có ở trạng thái mở được không".
+    """
+    return (await _major_change_cycle_blocker(db, profile)) is None
+
 
 async def maybe_open_major_change_cycle(
     db: AsyncSession,
@@ -187,56 +259,47 @@ async def maybe_open_major_change_cycle(
     *,
     allow_major_change: bool,
 ) -> bool:
-    """Mở chu kỳ đổi ngành: set ``profile.major_change_requested=True`` nếu ĐỦ
-    điều kiện. Gọi từ ``admin_rollback_profile`` + ``request_revision`` TRƯỚC khi
-    transition (đọc status GỐC).
+    """Mở chu kỳ đổi ngành: set ``profile.major_change_requested=True``. Gọi từ
+    ``admin_rollback_profile`` + ``request_revision`` TRƯỚC khi transition (đọc
+    status GỐC).
 
-    Điều kiện (mọi cái phải đúng, nếu không → bỏ qua, KHÔNG raise):
-      * flag ON + ``allow_major_change`` + ``uses_choice_engine``;
-      * status GỐC ∈ pre-decision ``{submitted, resubmitted}`` (post-decision bỏ
-        qua — stale admitted bám ngành cũ, reset decision ngoài scope);
-      * có HK1 tuition fee active (không có → không có gì để reprice).
-
-    Raise ``BusinessRuleViolation`` KHI ``allow_major_change`` nhưng active fee
-    đang ``awaiting_accountant_confirmation`` (single-cycle lock — không mở chu
-    kỳ 2 trước khi kế toán chốt).
+    FAIL-CLOSED: ``allow_major_change=True`` mà KHÔNG mở được (bất kỳ reason-code
+    của ``_major_change_cycle_blocker``, kể cả **feature flag OFF**) →
+    ``BusinessRuleViolation`` ⇒ router 400, transition KHÔNG chạy. Trước đây các
+    ca này trả ``False`` im lặng và rollback/revision VẪN thành công: client tin
+    là chu kỳ đã mở, officer đổi nguyện vọng, fee không được định giá lại → giấy
+    báo + công nợ giữ giá ngành cũ. Không dùng kỷ luật vận hành để chặn sai lệch
+    tiền: từ chối cả hành động.
 
     ESCAPE HATCH (review #3): rollback/revision thường (``allow_major_change=False``)
     CLEAR ``major_change_requested`` — cho admin un-stick hồ sơ kẹt (officer không
-    qua được validation ngành mới / bỏ dở). KHÔNG đụng ``awaiting_accountant_
-    confirmation`` trên fee (kế toán xử riêng).
+    qua được validation ngành mới / bỏ dở) và KHÔNG BAO GIỜ raise. KHÔNG đụng
+    ``awaiting_accountant_confirmation`` trên fee (kế toán xử riêng).
 
-    Trả ``True`` nếu đã set cờ; ``False`` nếu bỏ qua.
+    Trả ``True`` nếu đã set cờ; ``False`` khi ``allow_major_change=False``.
     """
-    if not settings.MAJOR_CHANGE_REPRICE_ENABLED:
-        return False
     if not allow_major_change:
         # Rollback/revision thường → reset cờ (escape hatch cho hồ sơ kẹt).
-        if getattr(profile, "major_change_requested", False):
+        if settings.MAJOR_CHANGE_REPRICE_ENABLED and getattr(
+            profile, "major_change_requested", False
+        ):
             profile.major_change_requested = False
             log.info("major_change_cycle_cleared_by_plain_rollback", profile_id=profile.id)
         return False
-    if not getattr(profile, "uses_choice_engine", False):
-        return False
-    if profile.status not in _MAJOR_CHANGE_PRE_DECISION_STATUSES:
-        return False
-    from app.services.enrollment_letter_service import (
-        _get_active_hk1_tuition_fee,
-    )
-    fee = await _get_active_hk1_tuition_fee(db, profile.id)
-    if fee is None:
-        return False
-    if fee.awaiting_accountant_confirmation:
-        raise BusinessRuleViolation(
-            "Còn một chu kỳ đổi ngành đang chờ kế toán xác nhận — không thể mở "
-            "chu kỳ đổi ngành mới."
+    blocker = await _major_change_cycle_blocker(db, profile)
+    if blocker is not None:
+        log.warning(
+            "major_change_cycle_open_rejected",
+            profile_id=profile.id,
+            reason=blocker,
+            status=profile.status,
         )
+        raise BusinessRuleViolation(_MAJOR_CHANGE_BLOCKER_MESSAGES[blocker])
     profile.major_change_requested = True
     log.info(
         "major_change_cycle_opened",
         profile_id=profile.id,
         from_status=profile.status,
-        fee_id=fee.id,
     )
     return True
 

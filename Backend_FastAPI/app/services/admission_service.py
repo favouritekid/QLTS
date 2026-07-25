@@ -3836,11 +3836,49 @@ async def _populate_major_change_flag(
     available_actions (review #6): server đã chặn phát giấy ở build_letter_data/
     issue, nhưng permission flag KHÔNG gate cờ này nên nút vẫn hiện → bấm 400. Ẩn
     ở đây (sau khi biết cờ) để nút thực sự tự ẩn, chỉ còn badge.
+
+    Cũng set ``permissions["can_request_major_change"]`` (capability MỞ chu kỳ) —
+    xem ``_populate_major_change_capability``.
     """
     from app.services.fee_calculation_service import is_major_change_cycle_open
 
     cycle_open = await is_major_change_cycle_open(db, profile)
     _set_major_change_flag(profile, cycle_open)
+    await _populate_major_change_capability(db, profile)
+
+
+async def _populate_major_change_capability(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+) -> None:
+    """Set ``permissions["can_request_major_change"]`` — capability "hồ sơ này MỞ
+    ĐƯỢC chu kỳ đổi ngành ngay bây giờ", nguồn duy nhất cho checkbox "Cho phép đổi
+    ngành" ở dialog admin-rollback + yêu-cầu-sửa (thin-client: FE không tự suy từ
+    status/feature flag).
+
+    Delegate ``fee_calculation_service.can_open_major_change_cycle`` — CÙNG
+    predicate mà ``maybe_open_major_change_cycle`` dùng để fail-closed raise, nên
+    checkbox hiện ⇔ server nhận. Feature flag OFF ⇒ luôn False (checkbox không
+    hiện, nhãn menu bỏ chữ "Đổi ngành") ⇒ deploy cờ OFF không lộ lối vào nửa vời.
+
+    FAIL-CLOSED: thiếu key ⇒ FE ``can()`` trả false. Nên đường lean list (dùng
+    ``_set_major_change_flag`` batch, không có key này) tự động ẩn checkbox — danh
+    sách không render dialog nào nên không cần query thêm 1 fee/hàng.
+
+    Chỉ query fee khi user THỰC SỰ có quyền mở chu kỳ (``admin_rollback`` hoặc
+    ``request_revision``) — officer/kế toán không tốn query.
+    """
+    perms = getattr(profile, "permissions", None)
+    if not isinstance(perms, dict):
+        return
+    perms["can_request_major_change"] = False
+    if not (perms.get("admin_rollback") or perms.get("request_revision")):
+        return
+    from app.services.fee_calculation_service import can_open_major_change_cycle
+
+    perms["can_request_major_change"] = await can_open_major_change_cycle(
+        db, profile
+    )
 
 
 def _set_major_change_flag(
