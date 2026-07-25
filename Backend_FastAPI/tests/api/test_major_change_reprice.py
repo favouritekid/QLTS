@@ -317,6 +317,82 @@ async def test_recognized_major_id_for_fee_helper():
     ) is None
 
 
+async def test_verify_payment_stamps_recognized_major(
+    seed_lead_dependencies, officer_user_in_db, accountant_user_in_db,
+    major_change_on
+):
+    """STAMP THẬT: verify_payment ghi ``recognized_major_id`` = ngành hiện tại
+    của fee TẠI thời điểm verify (tuition). Application fee → None."""
+    from app.services.payment_service import PaymentService
+    major_id = seed_lead_dependencies["major_program_id"]
+    method_id = await _ensure_cash_method()
+
+    async def _seed_pending(fee_type: str) -> int:
+        """profile + fee(fee_type, resolved_major=major_id) + invoice + payment
+        pending (maker=officer). Trả payment_id."""
+        ts = int(datetime.now(timezone.utc).timestamp() * 1_000_000) % 100000
+        async with AsyncSessionLocal() as s:
+            async with s.begin():
+                lead = models.Lead(
+                    full_name=f"VP {ts}", phone=f"097{ts:07d}"[:10],
+                    unit_id=seed_lead_dependencies["unit_id"], source="walkin")
+                s.add(lead)
+                await s.flush()
+                prof = models.AdmissionProfile(
+                    lead_id=lead.id, citizen_id=f"7{ts:08d}1"[:12],
+                    status="submitted", academic_year=2026,
+                    uses_choice_engine=True, applied_rules={})
+                s.add(prof)
+                await s.flush()
+                fee = Fee(
+                    admission_profile_id=prof.id, fee_type=fee_type,
+                    academic_year=2026,
+                    semester_no=(1 if fee_type == "tuition" else None),
+                    base_amount=Decimal("5000000"),
+                    total_discount=Decimal("0"),
+                    final_amount=Decimal("5000000"),
+                    paid_amount=Decimal("0"), waived_amount=Decimal("0"),
+                    status="partial", resolved_major_id=major_id)
+                s.add(fee)
+                await s.flush()
+                inv = Invoice(
+                    fee_id=fee.id, invoice_number=f"VP-{ts}-{fee_type[:3]}",
+                    installment_no=1, amount=Decimal("5000000"),
+                    paid_amount=Decimal("0"), penalty_amount=Decimal("0"),
+                    status="issued", due_date=date(2026, 9, 30),
+                    issued_at=datetime.now(timezone.utc))
+                s.add(inv)
+                await s.flush()
+                pay = Payment(
+                    invoice_id=inv.id, method_id=method_id,
+                    amount=Decimal("5000000"), status="pending",
+                    created_by_id=officer_user_in_db["id"])
+                s.add(pay)
+                await s.flush()
+                return pay.id
+
+    # TUITION → stamp ngành.
+    pay_tuition = await _seed_pending("tuition")
+    async with AsyncSessionLocal() as db:
+        await PaymentService(db).verify_payment(
+            pay_tuition, verifier_id=accountant_user_in_db["id"])
+        await db.commit()
+    async with AsyncSessionLocal() as s:
+        p = await s.get(Payment, pay_tuition)
+    assert p.status == "verified"
+    assert p.recognized_major_id == major_id, "tuition phải stamp ngành lúc verify"
+
+    # APPLICATION → None (lệ phí không phân bổ ngành).
+    pay_app = await _seed_pending("application")
+    async with AsyncSessionLocal() as db:
+        await PaymentService(db).verify_payment(
+            pay_app, verifier_id=accountant_user_in_db["id"])
+        await db.commit()
+    async with AsyncSessionLocal() as s:
+        p2 = await s.get(Payment, pay_app)
+    assert p2.recognized_major_id is None, "application KHÔNG stamp ngành"
+
+
 async def test_reprice_preserves_payment_recognized_major(
     seed_lead_dependencies, officer_user_in_db, major_change_on
 ):

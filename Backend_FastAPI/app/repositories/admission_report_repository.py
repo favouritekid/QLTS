@@ -39,6 +39,10 @@ ENROLLED_STATUS = "enrolled"
 AMBIGUOUS = "ambiguous"
 UNRESOLVED = "unresolved"
 UNASSIGNED = "unassigned"
+# Đổi ngành: doanh thu tuition thu khi fee CHƯA chốt ngành (Payment.
+# recognized_major_id NULL) → dòng riêng, KHÔNG gộp với "unresolved" (hồ sơ
+# không phân loại ngành) hay application (không phân bổ ngành theo thiết kế).
+UNKNOWN_MAJOR = "unknown_major"
 
 # Cash-affecting ledger types only (waive/adjustment/penalty/reversal are not cash).
 _CASH_TYPES = ("payment", "refund")
@@ -194,6 +198,35 @@ class AdmissionReportRepository:
             )
             for mid, code, name, degree, total in rows
             if total is not None
+        }
+
+    async def major_infos_by_ids(
+        self, major_ids: list[int]
+    ) -> dict[int, MajorInfo]:
+        """major_id -> MajorInfo cho một tập id tuỳ ý (label lookup).
+
+        Đổi ngành: doanh thu tuition được gán theo ngành-LÚC-THU
+        (``Payment.recognized_major_id``), ngành đó có thể KHÔNG còn hồ sơ/quota
+        trong scope hiện tại (thí sinh đã chuyển sang ngành khác) nên vắng mặt
+        trong ``resolve_profiles``/``major_quotas``. Vẫn phải hiển thị đúng tên
+        (dòng "chỉ còn doanh thu, không còn hồ sơ"). Không lọc is_active để một
+        ngành vừa ẩn vẫn hiện đúng tên cho tiền lịch sử.
+        """
+        if not major_ids:
+            return {}
+        rows = (
+            await self.db.execute(
+                select(
+                    models.MajorProgram.id,
+                    models.MajorProgram.code,
+                    models.MajorProgram.name,
+                    models.MajorProgram.degree_level,
+                ).where(models.MajorProgram.id.in_(major_ids))
+            )
+        ).all()
+        return {
+            mid: MajorInfo(major_id=mid, code=code, name=name, degree_level=degree)
+            for mid, code, name, degree in rows
         }
 
     # ------------------------------------------------------------------ catalog
@@ -456,12 +489,18 @@ class AdmissionReportRepository:
         self,
         profile_ids: list[int],
         cumulative_end: datetime,
-    ) -> list[tuple[int, str, str, Decimal, datetime]]:
+    ) -> list[tuple[int, str, str, Decimal, datetime, Optional[int]]]:
         """Raw cash ledger rows for in-scope profiles up to ``cumulative_end``.
 
-        Returns (profile_id, fee_type, transaction_type, amount, created_at).
-        ``amount`` keeps its stored sign (refund negative). Bucketing into
-        week/cumulative + by dimension is done by the caller.
+        Returns (profile_id, fee_type, transaction_type, amount, created_at,
+        recognized_major_id). ``amount`` keeps its stored sign (refund negative).
+        ``recognized_major_id`` = ngành ghi nhận doanh thu tại thời điểm phiếu thu
+        gốc được verified (bất biến) — LEFT JOIN qua ``PaymentTransaction.
+        payment_id`` → ``Payment.recognized_major_id``. NULL cho: adjustment
+        (không có payment), application fee (không stamp), hoặc thu khi fee chưa
+        chốt ngành. Caller (major mode) gán doanh thu TUITION theo ngành-lúc-thu
+        này thay vì ngành HIỆN TẠI của hồ sơ (edge-case đổi ngành sau khi đã thu).
+        Bucketing into week/cumulative + by dimension is done by the caller.
         """
         if not profile_ids:
             return []
@@ -472,8 +511,13 @@ class AdmissionReportRepository:
                 models.PaymentTransaction.transaction_type,
                 models.PaymentTransaction.amount,
                 models.PaymentTransaction.created_at,
+                models.Payment.recognized_major_id,
             )
             .join(models.Fee, models.PaymentTransaction.fee_id == models.Fee.id)
+            .outerjoin(
+                models.Payment,
+                models.PaymentTransaction.payment_id == models.Payment.id,
+            )
             .where(
                 models.Fee.admission_profile_id.in_(profile_ids),
                 # Admission-relevant fees only, so gross/net reconciles with the

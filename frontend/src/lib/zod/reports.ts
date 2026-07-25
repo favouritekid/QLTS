@@ -55,7 +55,14 @@ export const financeMetricsSchema = z.object({
   profiles_paid: z.number().int(),
 });
 
-export const bucketKindSchema = z.enum(["ambiguous", "unresolved", "unassigned"]);
+// "unknown_major": đổi ngành — doanh thu tuition thu khi fee chưa chốt ngành
+// (recognized_major NULL). Tách với "unresolved" + application.
+export const bucketKindSchema = z.enum([
+  "ambiguous",
+  "unresolved",
+  "unassigned",
+  "unknown_major",
+]);
 
 export const reportRowSchema = z.object({
   group_key: z.number().int().nullable(),
@@ -83,7 +90,12 @@ export const admissionWeeklyReportSchema = z.object({
   group_by: z.enum(["major", "officer"]),
   week: weekMetaSchema,
   scope_unit_id: z.number().int().nullable(),
-  attribution: z.literal("recomputed-current"),
+  // Contract HỖN HỢP: hồ sơ/chỉ tiêu theo ngành hiện tại (recomputed-current);
+  // doanh thu học phí theo ngành lúc phiếu thu verified (major-at-verified).
+  attribution: z.object({
+    admission: z.literal("recomputed-current"),
+    tuition_revenue: z.literal("major-at-verified"),
+  }),
   // True chỉ khi lũy-kế TÍNH ĐẾN HÔM NAY (anchor ngầm = today) → cột snapshot
   // (Nháp/HK1) mới nhất quán với cột cumulative-as-of. default(false) backward-compat.
   snapshot_as_of_now: z.boolean().default(false),

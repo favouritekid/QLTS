@@ -44,7 +44,7 @@ const payload = {
     timezone: "Asia/Ho_Chi_Minh",
   },
   scope_unit_id: null,
-  attribution: "recomputed-current",
+  attribution: { admission: "recomputed-current", tuition_revenue: "major-at-verified" },
   rows: [row],
   totals: row,
   data_quality: {

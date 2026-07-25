@@ -19,6 +19,7 @@ from app.core.constants import UserRole
 from app.repositories.admission_report_repository import (
     AMBIGUOUS,
     UNASSIGNED,
+    UNKNOWN_MAJOR,
     UNRESOLVED,
     AdmissionReportRepository,
     GroupKey,
@@ -58,6 +59,10 @@ _BUCKET_LABELS = {
     AMBIGUOUS: "Nhiều NV trúng (chưa xác định ngành)",
     UNRESOLVED: "Chưa phân loại ngành",
     UNASSIGNED: "Chưa gán cán bộ",
+    # Doanh thu tuition thu khi fee chưa chốt ngành (recognized_major NULL) —
+    # PHÂN BIỆT với application ("Không phân bổ ngành" — phí cố định, cố ý không
+    # theo ngành) và unresolved (hồ sơ không phân loại ngành).
+    UNKNOWN_MAJOR: "Đã thu, chưa xác định ngành",
 }
 
 
@@ -313,22 +318,41 @@ class AdmissionReportService:
                 a.fee_hk1_full += 1
 
         # ---- finance ledger (cash: payment/refund; refund amount stored negative)
+        # ATTRIBUTION HỖN HỢP (đổi ngành): doanh thu TUITION gán theo NGÀNH-LÚC-THU
+        # (Payment.recognized_major_id, bất biến) — tiền đã thu cho ngành A vẫn
+        # thuộc A dù hồ sơ đã đổi sang B. Application fee + officer mode giữ theo
+        # DIM (hồ sơ/cán bộ hiện tại). ``profiles_paid`` LUÔN đếm theo dim (hồ sơ)
+        # — một hồ sơ trả ở A rồi B chỉ đếm 1 lần ở ngành hiện tại, KHÔNG double.
         paid_profiles: dict[GroupKey, set] = {}
         # Profiles with a cumulative APPLICATION-fee payment — used to surface the
         # "đã đóng lệ phí nhưng chưa nộp hồ sơ" (prepay-draft) cohort below.
         app_paid_profiles: dict[GroupKey, set] = {}
-        for pid, fee_type, ttype, amount, created_at in fin_rows:
+        # major_id (int) xuất hiện QUA TIỀN nhưng có thể vắng trong dims/quota
+        # (ngành A: tiền lịch sử, hồ sơ đã chuyển) — thu để lookup label sau.
+        revenue_only_major_ids: set[int] = set()
+        for pid, fee_type, ttype, amount, created_at, rec_major_id in fin_rows:
             dim = dims.get(pid)
             if dim is None:
                 continue
-            key = dim.major_key if group_by == "major" else dim.officer_key
-            f = _row(key).finance
+            dim_key = dim.major_key if group_by == "major" else dim.officer_key
+            # Doanh thu tuition theo ngành-lúc-thu (chỉ MAJOR mode; officer mode
+            # không liên quan ngành). NULL → bucket "Đã thu, chưa xác định ngành".
+            if group_by == "major" and fee_type == "tuition":
+                amount_key: GroupKey = (
+                    rec_major_id if rec_major_id is not None else UNKNOWN_MAJOR
+                )
+                if isinstance(amount_key, int):
+                    revenue_only_major_ids.add(amount_key)
+            else:
+                amount_key = dim_key
+            f = _row(amount_key).finance
             amt = Decimal(amount)
             f.net_cumulative += amt
             if ttype == "payment":
-                paid_profiles.setdefault(key, set()).add(pid)
+                # profiles_paid theo DIM (hồ sơ) — không theo amount_key.
+                paid_profiles.setdefault(dim_key, set()).add(pid)
                 if fee_type == "application":
-                    app_paid_profiles.setdefault(key, set()).add(pid)
+                    app_paid_profiles.setdefault(dim_key, set()).add(pid)
             if week.start <= created_at < week.end_excl:
                 f.net_in_week += amt
                 if ttype == "payment":
@@ -373,6 +397,18 @@ class AdmissionReportService:
                 quota_by_major[mid] = q
                 if mid not in acc:
                     _row(mid)  # materialise an empty row (0 counts)
+                major_labels.setdefault(mid, info)
+
+        # ---- Đổi ngành: ngành CHỈ CÒN DOANH THU (tiền tuition thu khi hồ sơ còn ở
+        # ngành đó, nay đã chuyển đi) — lookup tên để dòng hiện đúng thay vì
+        # "Ngành #id". Row đã được materialise trong loop finance (_row(amount_key)).
+        missing_label_ids = [
+            mid for mid in revenue_only_major_ids if mid not in major_labels
+        ]
+        if missing_label_ids:
+            for mid, info in (
+                await self.repo.major_infos_by_ids(missing_label_ids)
+            ).items():
                 major_labels.setdefault(mid, info)
 
         rows: list[ReportRow] = []
