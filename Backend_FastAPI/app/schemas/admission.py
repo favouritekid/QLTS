@@ -1441,6 +1441,16 @@ class AdmissionProfileResponse(BaseModel):
             "badge 'Chờ kế toán xác nhận'."
         ),
     )
+    # COMPUTED (transient): GIAI ĐOẠN 2 của chu kỳ — đã reprice, đang chờ kế toán.
+    # Chỉ ở giai đoạn này giấy báo cũ MỚI bị supersede (reprice làm), nên FE phải
+    # tách: giai đoạn 1 (chờ officer sửa + nộp lại) giấy cũ VẪN hiệu lực.
+    major_change_awaiting_confirmation: bool = Field(
+        default=False,
+        description=(
+            "True khi đã định giá lại và đang chờ kế toán xác nhận (giai đoạn 2). "
+            "Chỉ khi đó giấy báo cũ đã hết hiệu lực."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -1572,6 +1582,8 @@ class AdmissionProfileListItem(BaseModel):
     # vòng lặp lean (_populate_major_change_flag) nếu không FE nhận default False
     # = false-negative im lặng (badge không hiện). Migration majchg1a/1b.
     major_change_cycle_open: bool = False
+    # Giai đoạn 2 (đã reprice, chờ kế toán) — xem AdmissionProfileResponse.
+    major_change_awaiting_confirmation: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -1137,6 +1137,12 @@ def _fee_can_waive(fee, current_user_role: str = None) -> bool:
     status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
     is_terminal = status_value in _FEE_TERMINAL_STATUSES
     is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
+    # Đổi ngành: đang chờ kế toán xác nhận → service
+    # (``_assert_not_awaiting_major_change``) từ chối waive vì nó phá bất biến
+    # ``Σ(invoice) = final − waived`` mà confirm kiểm. Cờ True ở đây = nút hiện rồi
+    # bấm ra 400.
+    if getattr(fee, "awaiting_accountant_confirmation", False):
+        return False
     return not is_terminal and fee.remaining_amount > 0 and is_manager_or_admin
 
 
@@ -1164,6 +1170,10 @@ def _fee_can_cancel(fee, current_user_role: str = None) -> bool:
     status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
     is_terminal = status_value in _FEE_TERMINAL_STATUSES
     is_admin = current_user_role == UserRole.ADMIN
+    # Đổi ngành: đang chờ kế toán → huỷ fee/hoá đơn làm chu kỳ không thể chốt
+    # (mất invoice active), service đã chặn. Mask cờ để không hiện nút chết.
+    if getattr(fee, "awaiting_accountant_confirmation", False):
+        return False
     return not is_terminal and fee.paid_amount == 0 and is_admin
 
 

@@ -1690,3 +1690,203 @@ async def test_submit_cutoff_bypassed_for_major_change(
         await _submit_with_closed_round(
             seed_lead_dependencies, monkeypatch, major_change=True
         )
+
+
+# ===========================================================================
+# REVIEW VÒNG 4 — bulk_approve bỏ gate · fee biến mất giữa chu kỳ · lead sts10
+# một chiều · strip action · mask cờ waive/cancel · 2 giai đoạn banner.
+# ===========================================================================
+async def test_bulk_approve_blocked_during_major_change_cycle(
+    seed_lead_dependencies, major_change_on
+):
+    """P1: ``bulk_approve`` tự dựng lại từng guard (KHÔNG gọi approve_profile) nên
+    thiếu gate đổi ngành = manager duyệt được qua endpoint bulk trong khi học phí
+    ngành mới chưa được kế toán xác nhận."""
+    from app.services import admission_service as adm
+
+    admin = await _make_admin(seed_lead_dependencies)
+    _, ids = await _seed_regate_profile(seed_lead_dependencies, awaiting=True)
+
+    async with AsyncSessionLocal() as db:
+        profile = await db.get(models.AdmissionProfile, ids["profile_id"])
+        approver = await db.get(models.User, admin["id"])
+        result, _cb = await adm.bulk_approve(
+            db,
+            [{"profile_id": ids["profile_id"], "version": profile.version}],
+            approver,
+        )
+
+    assert ids["profile_id"] in (result.get("failed_ids") or []), (
+        f"bulk_approve PHẢI chặn hồ sơ đang đổi ngành — result={result}"
+    )
+    assert "đổi ngành" in str(
+        (result.get("errors") or {}).get(ids["profile_id"], "")
+    )
+    prof = await _load_profile(ids["profile_id"])
+    assert prof.status == "submitted", "không được transition sang approved"
+
+
+async def test_reprice_hook_fails_closed_when_hk1_fee_gone(
+    seed_lead_dependencies, major_change_on
+):
+    """P1: fee HK1 bị huỷ sau khi chu kỳ mở, trước khi nộp lại → hook TRƯỚC ĐÂY
+    clear cờ rồi return None ⇒ nộp ngành mới mà không reprice / không awaiting /
+    không kế toán xem. Phải fail-closed."""
+    from app.services.admission_service import (
+        _reprice_on_resubmit_if_major_change,
+    )
+
+    _, ids = await _seed_regate_profile(
+        seed_lead_dependencies, major_change_requested=True
+    )
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(
+                update(Fee).where(Fee.id == ids["fee_id"]).values(status="cancelled")
+            )
+
+    async with AsyncSessionLocal() as db:
+        profile = (
+            await db.execute(
+                select(models.AdmissionProfile)
+                .options(selectinload(models.AdmissionProfile.lead))
+                .where(models.AdmissionProfile.id == ids["profile_id"])
+            )
+        ).scalar_one()
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await _reprice_on_resubmit_if_major_change(db, profile, None)
+    assert "HK1" in str(exc.value)
+
+
+async def test_reprice_reverts_lead_when_new_major_costs_more(
+    seed_lead_dependencies, officer_user_in_db, major_change_on
+):
+    """P1: ngành cũ đã đóng ĐỦ (settled) + ngành mới ĐẮT hơn → fee/invoice thành
+    partial. Lead phải RỜI sts10 ("đã hoàn tất học phí"), nếu không thí sinh đang
+    nợ tiền vẫn mang nhãn đã đóng đủ ở mọi báo cáo đọc lead status."""
+    from app.services.lead_admission_sync import TUITION_PAID_STATUS
+
+    majors = await _seed_two_majors(
+        seed_lead_dependencies,
+        price_a=Decimal("6500000"), price_b=Decimal("9200000"),
+    )
+    # fee ngành A 6.5tr đã đóng ĐỦ 6.5tr (settled), choice trỏ ngành B 9.2tr.
+    ids = await _seed_profile_fee_invoice(
+        seed_lead_dependencies, majors,
+        choice_tag="b", priced_from_tag="a", resolved_tag="a",
+        price_a=Decimal("6500000"), paid=Decimal("6500000"),
+        fee_status="paid", invoice_paid=Decimal("6500000"),
+    )
+    # Đưa lead lên sts10 qua CHÍNH projection production dùng — không UPDATE tay:
+    # ``revert_lead_tuition_paid`` khôi phục status TRƯỚC ĐÓ từ LeadStatusHistory
+    # (không hardcode đích), nên không có history của lần đẩy lên thì nó skip.
+    from app.services.lead_admission_sync import sync_lead_tuition_paid
+
+    async with AsyncSessionLocal() as db:
+        profile = (
+            await db.execute(
+                select(models.AdmissionProfile)
+                .options(selectinload(models.AdmissionProfile.lead))
+                .where(models.AdmissionProfile.id == ids["profile_id"])
+            )
+        ).scalar_one()
+        await sync_lead_tuition_paid(
+            db, profile, changed_by_user_id=officer_user_in_db["id"],
+            reason="seed: đã đóng đủ học phí ngành cũ",
+        )
+        await db.commit()
+    async with AsyncSessionLocal() as s:
+        lead0 = await s.get(models.Lead, ids["lead_id"])
+        assert lead0.consultation_status_id == TUITION_PAID_STATUS, "seed sts10 thất bại"
+
+    fee_id, changed = await _reprice(ids["profile_id"], officer_user_in_db["id"])
+    assert changed is True and fee_id is not None
+
+    async with AsyncSessionLocal() as s:
+        lead = await s.get(models.Lead, ids["lead_id"])
+        fee = await s.get(Fee, ids["fee_id"])
+    assert fee.final_amount == Decimal("9200000")
+    assert lead.consultation_status_id != TUITION_PAID_STATUS, (
+        f"lead vẫn ở '{TUITION_PAID_STATUS}' dù còn nợ "
+        f"{fee.final_amount - fee.paid_amount}"
+    )
+
+
+async def test_blocked_actions_stripped_from_permissions(seed_lead_dependencies):
+    """P2 (thin-client): mọi action mà service guard chặn khi chu kỳ mở PHẢI bị
+    strip khỏi permissions + available_actions, không chỉ xuất giấy — cờ True mà
+    route trả 400 là nút chết. Aggregate ``has_decision`` tính lại theo."""
+    from app.services.admission_service import _set_major_change_flag
+
+    profile = models.AdmissionProfile(id=1)
+    profile.permissions = {
+        "view": True, "approve": True, "publish_result": True, "enroll": True,
+        "calculate_fee": True, "issue_enrollment_letter": True,
+        "submit": False, "reject": False, "resubmit": False,
+        "request_revision": False, "has_decision": True,
+    }
+    profile.available_actions = [
+        "approve", "publish_result", "enroll", "calculate_fee",
+        "issue_enrollment_letter", "view",
+    ]
+
+    _set_major_change_flag(profile, True, awaiting_confirmation=True)
+
+    for key in ("approve", "publish_result", "enroll", "calculate_fee",
+                "issue_enrollment_letter"):
+        assert profile.permissions[key] is False, f"{key} chưa bị strip"
+        assert key not in profile.available_actions, f"{key} còn trong actions"
+    assert profile.permissions["view"] is True, "action không bị gate phải giữ"
+    assert profile.permissions["has_decision"] is False, (
+        "has_decision phải tính lại sau strip (Step-8 unlock gate của FE)"
+    )
+    assert profile.major_change_awaiting_confirmation is True
+
+
+async def test_two_phase_flags_distinguish_pre_and_post_reprice(
+    seed_lead_dependencies, major_change_on
+):
+    """P2: giai đoạn 1 (chờ officer nộp lại) giấy cũ CHƯA bị supersede → cờ
+    awaiting phải False; giai đoạn 2 (fee awaiting) mới True. Banner FE nói "hết
+    hiệu lực" dựa CHỈ vào cờ giai đoạn 2."""
+    from app.services.fee_calculation_service import (
+        has_awaiting_major_change_fee,
+        is_major_change_cycle_open,
+    )
+
+    _, ids1 = await _seed_regate_profile(
+        seed_lead_dependencies, major_change_requested=True
+    )
+    _, ids2 = await _seed_regate_profile(
+        seed_lead_dependencies, major_change_requested=False, awaiting=True
+    )
+    p1 = await _load_profile(ids1["profile_id"])
+    p2 = await _load_profile(ids2["profile_id"])
+    async with AsyncSessionLocal() as db:
+        assert await is_major_change_cycle_open(db, p1) is True
+        assert await has_awaiting_major_change_fee(db, p1) is False, (
+            "giai đoạn 1: giấy cũ VẪN hiệu lực"
+        )
+        assert await is_major_change_cycle_open(db, p2) is True
+        assert await has_awaiting_major_change_fee(db, p2) is True
+
+
+async def test_fee_capability_flags_masked_while_awaiting():
+    """P2: cờ ``can_waive``/``can_cancel`` phải tắt khi đang chờ kế toán — guard
+    service đã chặn, để cờ True là hiện nút rồi bấm ra 400."""
+    from types import SimpleNamespace
+
+    from app.core.constants import UserRole
+    from app.routers.fees import _fee_can_cancel, _fee_can_waive
+
+    base = dict(
+        status="partial", remaining_amount=Decimal("1000000"),
+        paid_amount=Decimal("0"),
+    )
+    free = SimpleNamespace(**base, awaiting_accountant_confirmation=False)
+    held = SimpleNamespace(**base, awaiting_accountant_confirmation=True)
+
+    assert _fee_can_waive(free, UserRole.MANAGER) is True
+    assert _fee_can_waive(held, UserRole.MANAGER) is False
+    assert _fee_can_cancel(free, UserRole.ADMIN) is True
+    assert _fee_can_cancel(held, UserRole.ADMIN) is False

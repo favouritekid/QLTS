@@ -8,6 +8,14 @@ import { Button } from "@/components/ui/button"
 interface Props {
   /** BE-owned: hồ sơ đang trong chu kỳ đổi ngành. */
   cycleOpen: boolean
+  /**
+   * BE-owned: GIAI ĐOẠN 2 — đã định giá lại, đang chờ kế toán xác nhận. CHỈ khi
+   * đó BE mới đóng dấu hết hiệu lực (supersede) giấy báo hiện hành. Giai đoạn 1
+   * (admin vừa cho phép đổi ngành, officer chưa nộp lại) giấy cũ VẪN còn hiệu
+   * lực — và chu kỳ còn có thể bị bỏ dở (rollback thường clear cờ), nên nói "hết
+   * hiệu lực" lúc đó là thông tin sai gửi cho cả officer lẫn thí sinh.
+   */
+  awaitingConfirmation?: boolean
   /** Tên thí sinh (nếu có) để chèn vào câu mẫu. */
   candidateName?: string | null
 }
@@ -22,7 +30,11 @@ interface Props {
  *
  * Thin-client: chỉ hiện theo cờ BE ``major_change_cycle_open``.
  */
-export function MajorChangeRecallBanner({ cycleOpen, candidateName }: Props) {
+export function MajorChangeRecallBanner({
+  cycleOpen,
+  awaitingConfirmation = false,
+  candidateName,
+}: Props) {
   // Rules of Hooks: MỌI useState phải gọi TRƯỚC early-return `!cycleOpen`
   // — nếu không, khi cờ lật false→true số hook đổi → React crash.
   const [copied, setCopied] = React.useState(false)
@@ -31,12 +43,20 @@ export function MajorChangeRecallBanner({ cycleOpen, candidateName }: Props) {
   if (!cycleOpen) return null
 
   const who = candidateName?.trim() || "Anh/Chị"
-  const template =
-    `Kính gửi ${who},\n` +
-    `Hồ sơ của bạn đang được cập nhật ngành trúng tuyển. Giấy báo nhập học đã ` +
-    `phát trước đó (nếu có) KHÔNG còn hiệu lực — vui lòng KHÔNG sử dụng bản cũ. ` +
-    `Nhà trường sẽ gửi giấy báo mới sau khi hoàn tất xác nhận học phí. ` +
-    `Trân trọng.`
+  // Câu mẫu KHÁC nhau theo giai đoạn: chỉ tuyên bố "hết hiệu lực" khi BE đã thực
+  // sự supersede giấy (sau reprice). Trước đó chỉ nhắc CHỜ, vì chu kỳ có thể bị
+  // bỏ dở và giấy hiện hành vẫn dùng được.
+  const template = awaitingConfirmation
+    ? `Kính gửi ${who},\n` +
+      `Hồ sơ của bạn đã được cập nhật ngành trúng tuyển. Giấy báo nhập học đã ` +
+      `phát trước đó (nếu có) KHÔNG còn hiệu lực — vui lòng KHÔNG sử dụng bản cũ. ` +
+      `Nhà trường sẽ gửi giấy báo mới sau khi hoàn tất xác nhận học phí. ` +
+      `Trân trọng.`
+    : `Kính gửi ${who},\n` +
+      `Hồ sơ của bạn đang được xem xét đổi ngành trúng tuyển. Vui lòng CHỜ nhà ` +
+      `trường xác nhận trước khi làm thủ tục nhập học; nếu ngành thay đổi, nhà ` +
+      `trường sẽ gửi giấy báo mới thay cho bản hiện tại. ` +
+      `Trân trọng.`
 
   const handleCopy = async () => {
     setFailed(false)
@@ -81,13 +101,24 @@ export function MajorChangeRecallBanner({ cycleOpen, candidateName }: Props) {
     >
       <p className="mb-1 flex items-center gap-2 font-semibold">
         <RefreshCw className="h-4 w-4" aria-hidden="true" />
-        Hồ sơ đang đổi ngành — cần thu hồi giấy báo cũ
+        {awaitingConfirmation
+          ? "Hồ sơ đang đổi ngành — cần thu hồi giấy báo cũ"
+          : "Hồ sơ đang chờ đổi ngành — chưa thu hồi giấy báo"}
       </p>
-      <p className="text-sm">
-        Giấy báo nhập học đã phát trước đó (nếu có) đã <strong>hết hiệu lực</strong>.
-        Hãy báo thí sinh KHÔNG dùng bản cũ; bản mới sẽ phát sau khi{" "}
-        <strong>kế toán xác nhận học phí</strong>.
-      </p>
+      {awaitingConfirmation ? (
+        <p className="text-sm">
+          Giấy báo nhập học đã phát trước đó (nếu có) đã{" "}
+          <strong>hết hiệu lực</strong>. Hãy báo thí sinh KHÔNG dùng bản cũ; bản
+          mới sẽ phát sau khi <strong>kế toán xác nhận học phí</strong>.
+        </p>
+      ) : (
+        <p className="text-sm">
+          Giấy báo đã phát <strong>vẫn còn hiệu lực</strong> cho tới khi hồ sơ
+          được nộp lại và học phí ngành mới được định giá — lúc đó hệ thống mới
+          đóng dấu hết hiệu lực bản cũ. Hãy nhắc thí sinh <strong>chờ</strong>,
+          đừng nói bản cũ đã bỏ.
+        </p>
+      )}
       <Button
         type="button"
         variant="outline"

@@ -1268,6 +1268,14 @@ export const admissionProfileResponseSchema = z.object({
     .describe(
       "True khi hồ sơ đang trong chu kỳ đổi ngành (chờ kế toán xác nhận học phí)."
     ),
+  // Giai đoạn 2: đã reprice, chờ kế toán. CHỈ khi đó BE mới supersede giấy báo
+  // hiện hành → banner mới được nói "hết hiệu lực".
+  major_change_awaiting_confirmation: z
+    .boolean()
+    .default(false)
+    .describe(
+      "True khi đã định giá lại và đang chờ kế toán xác nhận (giấy báo cũ đã hết hiệu lực)."
+    ),
 })
 
 export type AdmissionProfileResponse = z.infer<
@@ -1311,6 +1319,7 @@ export const admissionListItemSchema = admissionProfileResponseSchema.pick({
   assigned_reviewer_name: true,
   available_actions: true,
   major_change_cycle_open: true,
+  major_change_awaiting_confirmation: true,
 })
 
 export type AdmissionListItem = z.infer<typeof admissionListItemSchema>

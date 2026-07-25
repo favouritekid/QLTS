@@ -3840,10 +3840,15 @@ async def _populate_major_change_flag(
     Cũng set ``permissions["can_request_major_change"]`` (capability MỞ chu kỳ) —
     xem ``_populate_major_change_capability``.
     """
-    from app.services.fee_calculation_service import is_major_change_cycle_open
+    from app.services.fee_calculation_service import (
+        has_awaiting_major_change_fee,
+        is_major_change_cycle_open,
+    )
 
     cycle_open = await is_major_change_cycle_open(db, profile)
-    _set_major_change_flag(profile, cycle_open)
+    # Giai đoạn 2 (đã reprice, chờ kế toán) → chỉ query khi chu kỳ đang mở.
+    awaiting = await has_awaiting_major_change_fee(db, profile) if cycle_open else False
+    _set_major_change_flag(profile, cycle_open, awaiting)
     await _populate_major_change_capability(db, profile)
 
 
@@ -3881,21 +3886,67 @@ async def _populate_major_change_capability(
     )
 
 
+# Hành động bị SERVICE GUARD chặn khi chu kỳ đổi ngành đang mở
+# (``assert_major_change_cycle_closed`` ở approve / publish_result / enroll /
+# calculate_fee + gate xuất giấy). Cờ permission phải strip ĐÚNG danh sách này:
+# để lộ cờ True nghĩa là FE hiện nút mà route trả 400 — vi phạm hợp đồng
+# thin-client. Khi thêm/bớt gate ở service, cập nhật danh sách này.
+_MAJOR_CHANGE_BLOCKED_ACTIONS = (
+    "issue_enrollment_letter",
+    "approve",
+    "publish_result",
+    "enroll",
+    "calculate_fee",
+)
+
+# Các permission tạo nên aggregate ``has_decision`` (xem _compute_frontend_fields).
+# Strip xong phải tính lại aggregate, nếu không Step-8 unlock gate của FE vẫn mở
+# theo cờ cũ.
+_HAS_DECISION_KEYS = (
+    "submit",
+    "approve",
+    "reject",
+    "resubmit",
+    "request_revision",
+    "publish_result",
+    "enroll",
+)
+
+
 def _set_major_change_flag(
-    profile: models.AdmissionProfile, cycle_open: bool
+    profile: models.AdmissionProfile,
+    cycle_open: bool,
+    awaiting_confirmation: bool = False,
 ) -> None:
-    """Sync core: set transient + strip letter action khi cycle open. Tách ra để
-    đường lean/non-lean BATCH cờ (1 query/trang) tái dùng, không per-row query (#9)."""
+    """Sync core: set 2 cờ transient + strip MỌI action bị gate khi cycle open.
+    Tách ra để đường lean/non-lean BATCH cờ (1 query/trang) tái dùng, không
+    per-row query (#9).
+
+    ``awaiting_confirmation`` = đã reprice, đang chờ kế toán (giai đoạn 2). Phân
+    biệt với ``cycle_open`` (gồm cả giai đoạn 1 "chờ officer sửa + nộp lại", lúc
+    đó giấy báo cũ CHƯA bị supersede) — FE cần tách để không nói giấy còn hiệu lực
+    là đã hết hiệu lực.
+    """
     profile.major_change_cycle_open = cycle_open
-    if cycle_open:
-        perms = getattr(profile, "permissions", None)
-        if isinstance(perms, dict):
-            perms["issue_enrollment_letter"] = False
-        actions = getattr(profile, "available_actions", None)
-        if isinstance(actions, list) and "issue_enrollment_letter" in actions:
-            profile.available_actions = [
-                a for a in actions if a != "issue_enrollment_letter"
-            ]
+    profile.major_change_awaiting_confirmation = bool(
+        cycle_open and awaiting_confirmation
+    )
+    if not cycle_open:
+        return
+    perms = getattr(profile, "permissions", None)
+    if isinstance(perms, dict):
+        for key in _MAJOR_CHANGE_BLOCKED_ACTIONS:
+            if key in perms:
+                perms[key] = False
+        if "has_decision" in perms:
+            perms["has_decision"] = any(
+                perms.get(k, False) for k in _HAS_DECISION_KEYS
+            )
+    actions = getattr(profile, "available_actions", None)
+    if isinstance(actions, list):
+        profile.available_actions = [
+            a for a in actions if a not in _MAJOR_CHANGE_BLOCKED_ACTIONS
+        ]
 
 
 async def _load_priority_audit_log(
@@ -5110,6 +5161,7 @@ async def get_profiles(
                     getattr(profile, "major_change_requested", False)
                     or profile.id in _mc_awaiting_ids
                 ),
+                profile.id in _mc_awaiting_ids,
             )
         return profiles, total_count
 
@@ -5158,6 +5210,7 @@ async def get_profiles(
                 getattr(profile, "major_change_requested", False)
                 or profile.id in _mc_nl_awaiting_ids
             ),
+            profile.id in _mc_nl_awaiting_ids,
         )
 
     # Batch-resolve minor_correction state for the page in ONE query rather
@@ -6687,7 +6740,15 @@ async def _reprice_on_resubmit_if_major_change(
 
     fee = await _get_active_hk1_tuition_fee(db, profile.id)
     if fee is None:
-        return None
+        # FAIL-CLOSED: chu kỳ chỉ mở được khi CÓ fee HK1 active
+        # (``_major_change_cycle_blocker``), nên tới đây mà mất fee nghĩa là nó bị
+        # huỷ giữa chu kỳ. Trả None sẽ nộp ngành MỚI với cờ requested vừa bị clear
+        # ở trên ⇒ không reprice, không awaiting, không kế toán xem — chính là
+        # bypass gate. ``reprice_for_major_change`` cũng coi thiếu fee là lỗi.
+        raise BusinessRuleViolation(
+            "Khoản học phí HK1 của hồ sơ không còn (đã bị huỷ) nên không định giá "
+            "lại được cho ngành mới. Hãy tính lại học phí rồi mở chu kỳ đổi ngành."
+        )
     repriced_fee, changed = await FeeCalculationService(
         db
     ).reprice_for_major_change(profile, actor_id=getattr(actor, "id", None))
@@ -13730,6 +13791,29 @@ async def bulk_approve(
                     "Hồ sơ còn nợ giấy tờ chưa bổ sung/xác minh đủ, "
                     "không thể duyệt."
                 )
+                continue
+
+            # Đổi ngành: CHẶN duyệt khi hồ sơ đang trong chu kỳ đổi ngành —
+            # parity với ``approve_profile``. bulk_approve KHÔNG gọi
+            # approve_profile mà tự dựng lại từng guard, nên thiếu ở đây nghĩa là
+            # manager duyệt được qua endpoint bulk trong khi học phí ngành mới
+            # chưa được kế toán xác nhận (bypass toàn bộ mục đích của gate).
+            # Per-item skip như các gate bulk khác, không abort cả lô.
+            try:
+                from .fee_calculation_service import (
+                    assert_major_change_cycle_closed,
+                )
+                await assert_major_change_cycle_closed(
+                    db,
+                    profile,
+                    message=(
+                        "Hồ sơ đang trong quá trình đổi ngành — chờ kế toán xác "
+                        "nhận học phí trước khi duyệt."
+                    ),
+                )
+            except BusinessRuleViolation as _mc_err:
+                failed_ids.append(profile_id)
+                errors[profile_id] = str(_mc_err)
                 continue
 
             # ADM-026: per-item quota gate. Per-item bypass fields let admin

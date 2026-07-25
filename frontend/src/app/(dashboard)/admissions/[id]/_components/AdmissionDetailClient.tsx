@@ -590,6 +590,9 @@ export function AdmissionDetailClient({
         {/* Đổi ngành: nhắc thu hồi giấy báo cũ + copy câu mẫu (phương án c). */}
         <MajorChangeRecallBanner
           cycleOpen={profile.major_change_cycle_open ?? false}
+          awaitingConfirmation={
+            profile.major_change_awaiting_confirmation ?? false
+          }
           candidateName={profile.lead?.full_name}
         />
 

@@ -146,6 +146,20 @@ async def is_major_change_cycle_open(
     """
     if getattr(profile, "major_change_requested", False):
         return True
+    return await has_awaiting_major_change_fee(db, profile)
+
+
+async def has_awaiting_major_change_fee(
+    db: AsyncSession, profile: "models.AdmissionProfile"
+) -> bool:
+    """True khi hồ sơ có HK1 tuition fee active đang ``awaiting_accountant_
+    confirmation`` — GIAI ĐOẠN 2 của chu kỳ (đã reprice, chờ kế toán chốt).
+
+    Tách khỏi ``is_major_change_cycle_open`` (gộp cả giai đoạn 1 "admin đã cho
+    phép, chờ officer sửa + nộp lại") vì hai giai đoạn khác nhau ở một điểm quan
+    trọng với người dùng: giấy báo cũ CHỈ bị supersede ở bước reprice, tức giai
+    đoạn 2. FE dùng cờ này để nói đúng về hiệu lực giấy.
+    """
     row = (
         await db.execute(
             select(Fee.id)
@@ -2206,8 +2220,16 @@ class FeeCalculationService:
         # đọc đúng letter_superseded thay vì hardcode True (fix review #15).
         fee.__dict__["_mc_letter_superseded"] = superseded > 0
 
-        # (11) Lead overlay: CHỈ khi settlement chuyển False→True (ngành rẻ hơn làm
-        # paid đủ). Forward-only — KHÔNG dùng force (kéo lùi lead là regression SL1).
+        # (11) Lead overlay theo settlement HK1 — HAI CHIỀU, cả hai đều dùng
+        # projection chuyên dụng (KHÔNG dùng `force` của sync_lead_admission_status
+        # — kéo lùi lead kiểu đó là regression SL1).
+        #   * False→True (ngành mới RẺ hơn, paid thành đủ): đẩy lên sts10.
+        #   * True→False (ngành mới ĐẮT hơn, fee/invoice thành partial): PHẢI đảo
+        #     khỏi sts10, nếu không lead vẫn mang nhãn "đã hoàn tất học phí" trong
+        #     khi thí sinh đang nợ tiền — sai phân loại ở mọi báo cáo/pipeline đọc
+        #     lead status. ``revert_lead_tuition_paid`` khôi phục status TRƯỚC lần
+        #     đẩy sts10 từ history (bảo toàn status tiến xa hơn), đúng hợp đồng
+        #     "caller gate: chỉ HK1 + chỉ khi fee KHÔNG còn settled".
         now_settled = is_hk1_settled_fee(fee)
         if now_settled and not was_settled:
             from app.services.lead_admission_sync import sync_lead_tuition_paid
@@ -2216,6 +2238,17 @@ class FeeCalculationService:
                 profile,
                 changed_by_user_id=actor_id,
                 reason="Đổi ngành: học phí ngành mới đã đủ (settled)",
+            )
+        elif was_settled and not now_settled:
+            from app.services.lead_admission_sync import revert_lead_tuition_paid
+            await revert_lead_tuition_paid(
+                self.db,
+                profile,
+                changed_by_user_id=actor_id,
+                reason=(
+                    "Đổi ngành: học phí ngành mới cao hơn — phát sinh dư nợ, "
+                    "không còn hoàn tất học phí"
+                ),
             )
 
         # (12) Audit + cảnh báo cơ sở hoa hồng có thể đổi (commission đọc
