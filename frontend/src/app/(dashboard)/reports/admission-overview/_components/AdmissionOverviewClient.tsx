@@ -281,14 +281,32 @@ export function AdmissionOverviewClient() {
     round === ALL_ROUNDS &&
     majorRowsQ.some((r) => r.admission.quota != null && r.admission.quota > 0);
 
-  // Panel overview (funnel/trend/matrix/wow/debt) fetch theo scopeParams, KHÔNG qua
-  // sync-slice như weekly. Trong bootstrap deep-link (scope CHƯA resolve) chúng fetch
-  // whole-school (effectiveUnitId chưa có) → CHỈ hiển thị khi ĐÃ học scope, tránh
-  // admin thoáng thấy toàn-trường (không dimmed sau khi fetch xong).
-  const funnelData = scopeResolved ? funnel.data : undefined;
-  const trendData = scopeResolved ? trend.data : undefined;
-  const matrixData = scopeResolved ? matrix.data : undefined;
-  const wowData = scopeResolved ? wow.data : undefined;
+  // Panel overview (funnel/trend/matrix/wow) dùng `placeholderData: prev` → trong
+  // bootstrap deep-link, sau khi scope resolve chúng còn giữ lát cắt TOÀN-TRƯỜNG cũ
+  // trong lúc refetch scope mới. `scopeResolved` đơn thuần KHÔNG đủ (rereview): phải
+  // validate scope echo (năm · đợt · đơn vị) như bảng weekly, nếu không admin mở
+  // ?unit=<id> vẫn thoáng thấy toàn-trường. Cả 4 response đều echo scope → isSliceCurrent.
+  const overviewExpected = {
+    year,
+    round: expectedRound,
+    unit: expectedUnit,
+    scopeResolved,
+    roundResolved,
+  };
+  const funnelData = isSliceCurrent(funnel.data, overviewExpected)
+    ? funnel.data
+    : undefined;
+  const trendData = isSliceCurrent(trend.data, overviewExpected)
+    ? trend.data
+    : undefined;
+  const matrixData = isSliceCurrent(matrix.data, overviewExpected)
+    ? matrix.data
+    : undefined;
+  const wowData = isSliceCurrent(wow.data, overviewExpected)
+    ? wow.data
+    : undefined;
+  // Debt KHÔNG dùng placeholderData → data về undefined khi đổi key (không stale
+  // cross-scope) VÀ không echo scope → chỉ cần chờ scope resolve.
   const debtData = scopeResolved ? debt.data : undefined;
   const debtBusy = !scopeResolved || debt.isLoading;
 

@@ -442,7 +442,8 @@ class AdmissionReportService:
           đích danh 1 đợt thiếu ngày → vẫn báo lỗi cấu hình (không giả rỗng).
         - Cohort gồm lead có hồ sơ (``profile_lead_ids``) → khớp weekly, admission
           không vượt lead.
-        - Mô hình phễu (reached/conversion/leak theo OUTCOME) do BACKEND tính.
+        - Phân bố hiện trạng (current/leaked_here/at_risk_here mỗi bậc) do BACKEND
+          tính — mỗi lead đếm 1 lần theo pipeline_stage_id (khớp Pipeline Board).
         """
         scope_unit_id = self._resolve_scope(current_user, unit_id)
         cohort_ranges = await self._cohort_ranges(
