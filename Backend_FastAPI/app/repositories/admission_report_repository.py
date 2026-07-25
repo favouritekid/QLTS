@@ -702,14 +702,19 @@ class AdmissionReportRepository:
             (sid, name, order, bool(fin), color)
             for sid, name, order, fin, color in stage_rows
         ]
-        # Negative-terminal stages: is_final AND no consultation_status with a
-        # non-negative outcome (polarity from outcome_type, NOT stage order).
+        # Negative-terminal stages: is_final AND has AT LEAST ONE consultation_status
+        # AND none of them is non-negative (polarity from outcome_type, NOT stage
+        # order). The ``exists`` guard excludes a final stage with ZERO configured
+        # statuses — such a stage is UNCONFIGURED, not negative-terminal, so leads
+        # parked there must stay ON the displayed path (bug: 0-status final stage was
+        # misclassified as leak and silently dropped).
         cs = models.ConsultationStatus
         leak_stage_ids = set(
             (
                 await self.db.execute(
                     select(models.PipelineStage.id).where(
                         models.PipelineStage.is_final_stage.is_(True),
+                        exists().where(cs.stage_id == models.PipelineStage.id),
                         ~exists().where(
                             cs.stage_id == models.PipelineStage.id,
                             cs.outcome_type != "negative",
@@ -759,13 +764,16 @@ class AdmissionReportRepository:
         total = 0
         for stage_id, is_final, outcome, cnt in rows:
             c = int(cnt or 0)
+            total += c  # every counted lead is in the population (reached+leaked=total)
             outcome_val = getattr(outcome, "value", outcome)
-            if is_final and outcome_val == "negative":  # early exit, off the path
-                leaked += c
-                total += c
-                continue
             key = stage_id if stage_id is not None else lowest
+            # Rời phễu nếu (a) trạng thái HIỆN TẠI final+negative (early exit theo
+            # outcome), HOẶC (b) lead đậu ở stage negative-terminal (leak_stage) dù
+            # trạng thái NULL / non-negative — trước đây (b) rơi vào on_path[leak
+            # stage] rồi bị caller drop khỏi path ⇒ mất khỏi CẢ reached lẫn leaked.
+            if (is_final and outcome_val == "negative") or (key in leak_stage_ids):
+                leaked += c
+                continue
             if key is not None:
                 on_path[key] = on_path.get(key, 0) + c
-                total += c
         return stages, on_path, leaked, total, leak_stage_ids

@@ -1336,6 +1336,50 @@ async def test_pipeline_funnel_leak_by_outcome_counts_for_funnel_and_walk_in(
     assert by_id[stg_neg].current == 0
 
 
+async def test_funnel_leak_stage_null_status_and_zero_status_final(
+    db: AsyncSession, seeded_dependencies: dict
+):
+    """Hai lỗ phễu (ship prod PR #500 → fix fast-follow):
+      (A) lead đậu ở stage NEGATIVE-TERMINAL nhưng consultation_status NULL → phải
+          vào 'leaked'. Trước đây rơi vào on_path[leak_stage] rồi bị caller drop ⇒
+          MẤT khỏi CẢ reached lẫn leaked (reached+leaked ≠ total).
+      (B) final stage có 0 status cấu hình KHÔNG được coi leak-stage (unconfigured
+          ≠ negative-terminal) → lead ở đó ở lại reached.
+    Bất biến lõi: Σ current (leads đậu tại mỗi stage) + leaked == total_leads.
+    """
+    year = next(_year_seq)
+    deps = seeded_dependencies
+    await _seed_catalog(db, year, deps["unit_id"])
+    in_win = datetime(year, 6, 1, tzinfo=VN_TZ)
+
+    stg_prog = await _seed_pstage(db)  # progress (order thấp nhất)
+    stg_neg = await _seed_pstage(db, is_final=True)  # negative-terminal (có status neg)
+    stg_zero = await _seed_pstage(db, is_final=True)  # final NHƯNG 0 status → KHÔNG leak
+    await _seed_funnel_status(db, stage_id=stg_neg, outcome="negative", is_final=True)
+    # stg_zero: KHÔNG seed status nào (unconfigured final stage)
+
+    # (A) lead ở stg_neg, consultation_status NULL
+    await _seed_funnel_lead(db, deps, year, stage_id=stg_neg, cs_id=None, created_at=in_win)
+    # (B) lead ở stg_zero (final 0-status), status NULL
+    await _seed_funnel_lead(db, deps, year, stage_id=stg_zero, cs_id=None, created_at=in_win)
+    # mốc: 1 lead progress bình thường (status NULL)
+    await _seed_funnel_lead(db, deps, year, stage_id=stg_prog, cs_id=None, created_at=in_win)
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_pipeline_funnel(current_user=_admin(), academic_year=year)
+    by_id = {s.stage_id: s for s in resp.stages}
+
+    assert resp.total_leads == 3
+    # (A) leak-stage status-NULL lead → leaked (không mất)
+    assert resp.leaked == 1
+    assert by_id[stg_neg].is_leak is True and by_id[stg_neg].current == 0
+    # (B) final-0-status KHÔNG leak; lead ở lại reached
+    assert by_id[stg_zero].is_leak is False and by_id[stg_zero].current == 1
+    assert by_id[stg_prog].current == 1
+    # bất biến bảo toàn: Σ current + leaked == total
+    assert sum(s.current for s in resp.stages) + resp.leaked == resp.total_leads
+
+
 # ----------------------------------------------------------- week-over-week (WoW)
 # WoW so 2 tuần ISO ĐÃ HOÀN TẤT gần nhất, LOẠI tuần đang chạy. Chỉ có nghĩa khi có
 # "tuần đang chạy" thật = NĂM HIỆN TẠI → các test giá trị dùng ``today_vn().year``
