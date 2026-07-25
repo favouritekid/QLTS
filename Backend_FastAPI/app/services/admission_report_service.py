@@ -22,14 +22,27 @@ from app.repositories.admission_report_repository import (
     UNRESOLVED,
     AdmissionReportRepository,
     GroupKey,
+    MajorInfo,
     WindowRange,
 )
 from app.schemas.admission_report import (
+    AdmissionTrendResponse,
     AdmissionWeeklyReportResponse,
+    AdmissionWowResponse,
     DataQuality,
+    FunnelStage,
+    MatrixMajor,
+    MatrixOfficer,
+    OfficerMajorCell,
+    OfficerMajorMatrixResponse,
+    PipelineFunnelResponse,
     ReportFilters,
     ReportRow,
+    TrendPoint,
     WeekMeta,
+    WowComparison,
+    WowMovement,
+    WowRow,
 )
 from app.utils.datetime_helpers import today_vn
 from app.utils.exceptions import (
@@ -89,14 +102,55 @@ class AdmissionReportService:
         )
         return meta, WindowRange(start=start_dt, end_excl=end_excl)
 
+    @staticmethod
+    def _default_anchor(
+        academic_year: int, week_start: Optional[date]
+    ) -> Optional[date]:
+        """Anchor a cumulative-to-now cutoff INSIDE ``academic_year``.
+
+        Current year → today, EXCEPT when today's ISO week belongs to another year
+        (a late-December / early-January boundary — e.g. 2025-12-29 has iso_year
+        2026, 2027-01-01 has iso_year 2026): clamp to the nearest in-year ISO week
+        so ``week.iso_year === academic_year`` always holds (blocker: the FE default
+        year = calendar year, so this is a production path, not just a stale
+        bookmark). Past year → last ISO week (Dec 28). Future → first ISO week
+        (Jan 4). Dec 28 / Jan 4 are the canonical dates whose ISO year is guaranteed
+        to equal ``academic_year``. Mirrors ``get_weekly_report``'s implicit-week
+        rule so overview panels agree with the weekly cockpit.
+        """
+        if week_start is not None:
+            return week_start
+        today = today_vn()
+        if academic_year == today.year:
+            iso_year = today.isocalendar()[0]
+            if iso_year == academic_year:
+                return None  # today's ISO week is in-year → dùng tuần thật hôm nay
+            # today rơi vào tuần ISO của năm KHÁC (ranh giới cuối 12 / đầu 1).
+            return (
+                date(academic_year, 12, 28)
+                if iso_year > academic_year
+                else date(academic_year, 1, 4)
+            )
+        return (
+            date(academic_year, 1, 4)
+            if academic_year > today.year
+            else date(academic_year, 12, 28)
+        )
+
     # ------------------------------------------------------------ cohort window
     async def _cohort_ranges(
-        self, academic_year: int, round_code: Optional[str]
+        self,
+        academic_year: int,
+        round_code: Optional[str],
+        *,
+        skip_undated: bool = False,
     ) -> list[WindowRange]:
         """VN [start 00:00, end+1day 00:00) windows for the year's round(s).
 
-        Fail-closed: a selected round missing start/end raises (don't silently span
-        everything). ``round_code`` not found → 404.
+        ``round_code`` not found → 404. A round missing start/end normally raises
+        (fail-closed — the weekly cockpit). ``skip_undated=True`` (the overview
+        funnel) SKIPS such rounds instead, so one misconfigured round can't 400 the
+        whole "tất cả đợt" view.
         """
         stmt = select(
             models.OfferingAdmissionRound.round_code,
@@ -113,6 +167,8 @@ class AdmissionReportService:
         ranges: list[WindowRange] = []
         for rc, start, end in rows:
             if start is None or end is None:
+                if skip_undated:
+                    continue
                 raise BusinessRuleViolation(
                     detail=(
                         f"Đợt {rc} thiếu ngày bắt đầu/kết thúc — "
@@ -127,6 +183,32 @@ class AdmissionReportService:
                 )
             )
         return ranges
+
+    async def _assert_round_exists(
+        self, academic_year: int, round_code: Optional[str]
+    ) -> None:
+        """404 if a specific ``round_code`` is given but not configured for the year.
+
+        Trend/matrix scope profiles via ``resolve_profiles`` (which silently keeps
+        round=None profiles), so without this a typo'd round returns 200 with a
+        misleading subset — this makes them fail like the funnel/``_cohort_ranges``.
+        """
+        if round_code is None:
+            return
+        exists = (
+            await self.db.execute(
+                select(models.OfferingAdmissionRound.id)
+                .where(
+                    models.OfferingAdmissionRound.academic_year == academic_year,
+                    models.OfferingAdmissionRound.round_code == round_code,
+                )
+                .limit(1)
+            )
+        ).first()
+        if exists is None:
+            raise ResourceNotFoundError(
+                detail=f"Không tìm thấy đợt {round_code} năm {academic_year}."
+            )
 
     # ----------------------------------------------------------------- filters
     async def get_filter_options(self, academic_year: Optional[int]) -> ReportFilters:
@@ -156,24 +238,18 @@ class AdmissionReportService:
         unit_id: Optional[int] = None,
     ) -> AdmissionWeeklyReportResponse:
         scope_unit_id = self._resolve_scope(current_user, unit_id)
-        # Implicit week for a NON-current academic_year: anchor INSIDE that year so
-        # the week + cumulative cutoffs stay in-year (today's week would compute
-        # cutoffs outside it). Future → ISO week 1 (Jan 4; cumulative ~0, chưa bắt
-        # đầu); past → last ISO week (Dec 28; cumulative ≈ trọn năm). Both dates are
-        # always inside the year's own ISO weeks.
-        anchor = week_start
-        if anchor is None and academic_year != today_vn().year:
-            anchor = (
-                date(academic_year, 1, 4)
-                if academic_year > today_vn().year
-                else date(academic_year, 12, 28)
-            )
+        # Anchor the implicit week INSIDE the academic year via the shared helper —
+        # one source of truth with the overview panels (see ``_default_anchor``).
+        anchor = self._default_anchor(academic_year, week_start)
         week_meta, week = self._compute_week(anchor)
-        # An EXPLICIT week_start before the academic year is a stale bookmark → reject
-        # on the NORMALIZED ISO year (ISO week 1's Monday can fall in the prior Dec).
-        if week_start is not None and week_meta.iso_year < academic_year:
+        # An EXPLICIT week_start OUTSIDE the academic year is a stale/forward bookmark
+        # → reject on the NORMALIZED ISO year (ISO week 1's Monday can fall in the
+        # prior Dec; a week whose Thursday lands in the next Jan belongs to next year).
+        # Symmetric guard: both a prior-year bookmark AND a next-year "Tuần sau" step
+        # must fail so ``academic_year`` and ``week.iso_year`` never disagree.
+        if week_start is not None and week_meta.iso_year != academic_year:
             raise ValidationError(
-                detail="week_start trước năm tuyển sinh — hãy chọn tuần trong năm."
+                detail="week_start ngoài năm tuyển sinh — hãy chọn tuần trong năm."
             )
         cohort_ranges = await self._cohort_ranges(academic_year, round_code)
 
@@ -184,6 +260,10 @@ class AdmissionReportService:
         milestones = await self.repo.admission_milestones(
             profile_ids, week, week.end_excl
         )
+        # Chi tiết hoá (khớp heatmap): trạng thái nháp + học phí HK1 — SNAPSHOT hiện
+        # tại (không cutoff), cùng nguồn/định nghĩa với ma trận officer×major.
+        statuses = await self.repo.profile_statuses(profile_ids)
+        tuition = await self.repo.tuition_hk1_payment(profile_ids)
         fin_rows = await self.repo.finance_rows(profile_ids, week.end_excl)
         profile_lead_ids = {d.lead_id for d in dims.values()}
         lead_map = await self.repo.lead_counts(
@@ -223,6 +303,14 @@ class AdmissionReportService:
                     setattr(a, f"{m}_in_week", getattr(a, f"{m}_in_week") + 1)
                 if ms.get(f"{m}_cumulative"):
                     setattr(a, f"{m}_cumulative", getattr(a, f"{m}_cumulative") + 1)
+            # Nháp + học phí HK1 (snapshot) — khớp cột tương ứng của heatmap.
+            if statuses.get(pid) == "draft":
+                a.draft += 1
+            fee = tuition.get(pid)
+            if fee == "partial":
+                a.fee_hk1_partial += 1
+            elif fee == "full":
+                a.fee_hk1_full += 1
 
         # ---- finance ledger (cash: payment/refund; refund amount stored negative)
         paid_profiles: dict[GroupKey, set] = {}
@@ -331,12 +419,435 @@ class AdmissionReportService:
             group_by=group_by,  # type: ignore[arg-type]
             week=week_meta,
             scope_unit_id=scope_unit_id,
+            # anchor is None ⟺ lũy-kế đến HÔM NAY thật (năm hiện tại, không clamp
+            # ranh giới, không week_start tường minh) → cột snapshot mới nhất quán.
+            snapshot_as_of_now=anchor is None,
             rows=rows,
             totals=totals,
             data_quality=dq,
         )
 
+    # ------------------------------------------------- overview: pipeline funnel
+    async def get_pipeline_funnel(
+        self,
+        *,
+        current_user: models.User,
+        academic_year: int,
+        round_code: Optional[str] = None,
+        unit_id: Optional[int] = None,
+    ) -> PipelineFunnelResponse:
+        """Lead theo giai đoạn pipeline hiện tại (cohort = đợt/năm, scope IDOR).
+
+        - Chỉ view "tất cả đợt" mới bỏ qua đợt thiếu ngày (``skip_undated``); chọn
+          đích danh 1 đợt thiếu ngày → vẫn báo lỗi cấu hình (không giả rỗng).
+        - Cohort gồm lead có hồ sơ (``profile_lead_ids``) → khớp weekly, admission
+          không vượt lead.
+        - Mô hình phễu (reached/conversion/leak theo OUTCOME) do BACKEND tính.
+        """
+        scope_unit_id = self._resolve_scope(current_user, unit_id)
+        cohort_ranges = await self._cohort_ranges(
+            academic_year, round_code, skip_undated=round_code is None
+        )
+        # walk-in parity: leads that already produced an in-scope profile
+        dims, _ = await self.repo.resolve_profiles(
+            academic_year, scope_unit_id, None, round_code
+        )
+        profile_lead_ids = {d.lead_id for d in dims.values()}
+        stages_meta, on_path, leaked, total, leak_ids = (
+            await self.repo.pipeline_funnel_counts(
+                cohort_ranges, scope_unit_id, None, profile_lead_ids
+            )
+        )
+        return PipelineFunnelResponse(
+            academic_year=academic_year,
+            round_code=round_code,
+            scope_unit_id=scope_unit_id,
+            total_leads=total,
+            leaked=leaked,
+            stages=self._build_funnel_stages(stages_meta, on_path, leak_ids),
+        )
+
+    # ------------------------------------------------------- overview: trend
+    async def get_trend(
+        self,
+        *,
+        current_user: models.User,
+        academic_year: int,
+        round_code: Optional[str] = None,
+        unit_id: Optional[int] = None,
+        weeks: int = 8,
+    ) -> AdmissionTrendResponse:
+        """N tuần tích luỹ (nộp/đủ ĐK/nhập học) — mỗi điểm là mốc first-transition
+        < hết tuần đó. Resolve hồ sơ 1 lần rồi bucket, không query lại mỗi tuần."""
+        scope_unit_id = self._resolve_scope(current_user, unit_id)
+        await self._assert_round_exists(academic_year, round_code)
+        end_meta, _ = self._compute_week(self._default_anchor(academic_year, None))
+        dims, _ = await self.repo.resolve_profiles(
+            academic_year, scope_unit_id, None, round_code
+        )
+        ts = await self.repo.milestone_timestamps(list(dims.keys()))
+        # Điểm CUỐI = tuần mốc (``_default_anchor``) → trend khớp snapshot lũy kế
+        # của KPI band + ma trận officer×ngành (cùng cutoff), KHÔNG lệch số. Walk
+        # BACKWARD cho MỌI năm (điểm old→new). Năm tương lai: 8 tuần kết ở ISO tuần
+        # 1 nên nhãn có thể chạm cuối năm trước — chấp nhận (năm tương lai ~0 dữ
+        # liệu) để đổi lấy nhất quán, thay vì chiếu tới tuần chưa xảy ra.
+        points: list[TrendPoint] = []
+        for k in range(weeks):
+            base = end_meta.week_start - timedelta(weeks=(weeks - 1 - k))
+            wmeta, wrange = self._compute_week(base)
+            cutoff = wrange.end_excl
+            points.append(
+                TrendPoint(
+                    iso_year=wmeta.iso_year,
+                    iso_week=wmeta.iso_week,
+                    week_start=wmeta.week_start,
+                    week_end=wmeta.week_end,
+                    submitted_cumulative=sum(
+                        1 for t in ts["submitted"].values() if t < cutoff
+                    ),
+                    admitted_cumulative=sum(
+                        1 for t in ts["admitted"].values() if t < cutoff
+                    ),
+                    enrolled_cumulative=sum(
+                        1 for t in ts["enrolled"].values() if t < cutoff
+                    ),
+                )
+            )
+        return AdmissionTrendResponse(
+            academic_year=academic_year,
+            round_code=round_code,
+            scope_unit_id=scope_unit_id,
+            weeks=weeks,
+            points=points,
+        )
+
+    # ---------------------------------------- overview: week-over-week (WoW)
+    @staticmethod
+    def _finalize_movement(mv: WowMovement) -> None:
+        """delta + delta_pct (%); mẫu số 0 → delta_pct=None (ưu tiên số tuyệt đối)."""
+        mv.delta = mv.count_current - mv.count_previous
+        mv.delta_pct = (
+            round(mv.delta / mv.count_previous * 100, 1)
+            if mv.count_previous > 0
+            else None
+        )
+
+    async def get_week_over_week(
+        self,
+        *,
+        current_user: models.User,
+        academic_year: int,
+        round_code: Optional[str] = None,
+        unit_id: Optional[int] = None,
+        group_by: str = "major",
+    ) -> AdmissionWowResponse:
+        """Biến động 2 tuần ISO ĐÃ HOÀN TẤT gần nhất (bỏ tuần đang chạy), 3 milestone.
+
+        Tái dùng ``resolve_profiles`` (dim ỔN ĐỊNH theo major_id/officer_id — không
+        join bằng nhãn) + ``milestone_timestamps`` (first-transition) + cùng
+        scope/RBAC như trend. WoW cần TUẦN THẬT hôm nay (không phải anchor đã clamp
+        của ``_default_anchor``) → chỉ chạy khi năm báo cáo = năm dương lịch hiện
+        tại; năm khác → ``insufficient_data`` (KHÔNG bịa 2 tuần 0 giả). ``delta_pct
+        =None`` khi tuần trước = 0. Tính theo major·officer·totals; totals = Σ
+        dimension (khớp tổng chung). FE chỉ render.
+        """
+        scope_unit_id = self._resolve_scope(current_user, unit_id)
+        await self._assert_round_exists(academic_year, round_code)
+
+        totals = WowRow(group_key=None, label="TỔNG")
+        # WoW chỉ có nghĩa khi có "tuần đang chạy" thật = NĂM DƯƠNG LỊCH HIỆN TẠI.
+        # (Không dùng ``_default_anchor is not None`` làm proxy: nó nay clamp cả năm
+        # hiện tại ở ranh giới cuối-12/đầu-1 nên sẽ báo != None oan.) Năm khác → mùa
+        # chưa mở / đã đóng → insufficient_data.
+        if academic_year != today_vn().year:
+            return AdmissionWowResponse(
+                academic_year=academic_year,
+                round_code=round_code,
+                scope_unit_id=scope_unit_id,
+                group_by=group_by,  # type: ignore[arg-type]
+                insufficient_data=True,
+                comparison=None,
+                rows=[],
+                totals=totals,
+            )
+
+        end_meta, _ = self._compute_week(None)  # tuần THẬT hôm nay (loại khỏi WoW)
+        w1_meta, w1 = self._compute_week(end_meta.week_start - timedelta(weeks=1))
+        w2_meta, w2 = self._compute_week(end_meta.week_start - timedelta(weeks=2))
+        # Đầu tháng 1: 2 tuần đã-hoàn-tất gần nhất rơi vào tháng 12 NĂM TRƯỚC (ISO
+        # year ≠ academic_year) → so nhịp sẽ lấy tuần của năm khác. Không đủ dữ liệu
+        # TRONG NĂM để so → insufficient_data (nhất quán với chặn week_start ngoài năm).
+        if w1_meta.iso_year != academic_year or w2_meta.iso_year != academic_year:
+            return AdmissionWowResponse(
+                academic_year=academic_year,
+                round_code=round_code,
+                scope_unit_id=scope_unit_id,
+                group_by=group_by,  # type: ignore[arg-type]
+                insufficient_data=True,
+                comparison=None,
+                rows=[],
+                totals=totals,
+            )
+
+        dims, _major_by_id = await self.repo.resolve_profiles(
+            academic_year, scope_unit_id, None, round_code
+        )
+        ts = await self.repo.milestone_timestamps(list(dims.keys()))
+
+        acc: dict[GroupKey, WowRow] = {}
+
+        def _row(key: GroupKey) -> WowRow:
+            row = acc.get(key)
+            if row is None:
+                row = WowRow(label="")
+                acc[key] = row
+            return row
+
+        # First-transition timestamp → 1 trong 2 tuần hoàn tất, theo dim của hồ sơ.
+        # CHỈ materialize hàng khi có sự kiện TRONG 2 tuần (mốc ngoài cửa sổ đóng góp
+        # 0 cho cả hai → bỏ, tránh hàng biến-động-0 thừa; totals không đổi).
+        for milestone in ("submitted", "admitted", "enrolled"):
+            for pid, t in ts[milestone].items():
+                dim = dims.get(pid)
+                if dim is None:
+                    continue
+                in_current = w1.start <= t < w1.end_excl
+                in_previous = w2.start <= t < w2.end_excl
+                if not (in_current or in_previous):
+                    continue
+                key = dim.major_key if group_by == "major" else dim.officer_key
+                mv: WowMovement = getattr(_row(key), milestone)
+                if in_current:
+                    mv.count_current += 1
+                else:
+                    mv.count_previous += 1
+
+        # Nhãn (mirror get_weekly_report): key int = ngành/cán bộ thật; key str =
+        # bucket sentinel (ambiguous/unresolved/unassigned).
+        officer_names: dict[int, str] = {}
+        major_labels: dict[int, MajorInfo] = {}
+        if group_by == "officer":
+            for dim in dims.values():
+                if isinstance(dim.officer_key, int) and dim.officer_name:
+                    officer_names[dim.officer_key] = dim.officer_name
+            missing = [k for k in acc if isinstance(k, int) and k not in officer_names]
+            officer_names.update(await self.repo.get_user_names(missing))
+        else:
+            for dim in dims.values():
+                if isinstance(dim.major_key, int) and dim.major:
+                    major_labels[dim.major_key] = dim.major
+
+        rows: list[WowRow] = []
+        for key, row in acc.items():
+            if isinstance(key, str):  # bucket sentinel
+                row.is_bucket = True
+                row.bucket_kind = key  # type: ignore[assignment]
+                row.label = _BUCKET_LABELS.get(key, key)
+            elif group_by == "major":
+                info = major_labels.get(key)
+                row.group_key = key
+                row.code = info.code if info else None
+                row.degree_level = info.degree_level if info else None
+                if info and info.name:
+                    row.label = f"{info.name} ({info.code})" if info.code else info.name
+                else:
+                    row.label = f"Ngành #{key}"
+            else:  # officer
+                row.group_key = key
+                row.label = officer_names.get(key, f"Cán bộ #{key}")
+            rows.append(row)
+
+        # totals = Σ COUNT của dimension (trước khi tính delta), rồi finalise delta ở
+        # MỌI hàng + totals → tổng dimension khớp tổng chung.
+        for row in rows:
+            for milestone in ("submitted", "admitted", "enrolled"):
+                tm: WowMovement = getattr(totals, milestone)
+                rm: WowMovement = getattr(row, milestone)
+                tm.count_current += rm.count_current
+                tm.count_previous += rm.count_previous
+        for target in (*rows, totals):
+            for milestone in ("submitted", "admitted", "enrolled"):
+                self._finalize_movement(getattr(target, milestone))
+
+        rows.sort(key=lambda r: (r.is_bucket, -r.submitted.count_current))
+
+        return AdmissionWowResponse(
+            academic_year=academic_year,
+            round_code=round_code,
+            scope_unit_id=scope_unit_id,
+            group_by=group_by,  # type: ignore[arg-type]
+            insufficient_data=False,
+            comparison=WowComparison(
+                latest_complete_week=w1_meta,
+                previous_complete_week=w2_meta,
+            ),
+            rows=rows,
+            totals=totals,
+        )
+
+    # -------------------------------------------- overview: officer × major heat
+    async def get_officer_major_matrix(
+        self,
+        *,
+        current_user: models.User,
+        academic_year: int,
+        round_code: Optional[str] = None,
+        unit_id: Optional[int] = None,
+    ) -> OfficerMajorMatrixResponse:
+        """Ma trận (ngành × cán bộ) — mỗi ô đếm 5 chỉ số hồ sơ cho 3 tab FE:
+        Hồ sơ (đã nộp · nháp) · Học phí HK1 (một phần · đủ) · Nhập học.
+
+        Tái dùng ``resolve_profiles`` (cặp officer_key × major_key mỗi hồ sơ) +
+        ``admission_milestones`` (submitted/enrolled) + trạng thái hồ sơ (nháp) +
+        đóng học phí HK1. Ambiguous ∪ unresolved gộp "Chưa phân loại ngành";
+        unassigned → "Chưa gán cán bộ". Trả CẢ 5 chỉ số → FE đổi tab client-side
+        không refetch.
+        """
+        scope_unit_id = self._resolve_scope(current_user, unit_id)
+        await self._assert_round_exists(academic_year, round_code)
+        _, week = self._compute_week(self._default_anchor(academic_year, None))
+        dims, _major_by_id = await self.repo.resolve_profiles(
+            academic_year, scope_unit_id, None, round_code
+        )
+        pids = list(dims.keys())
+        milestones = await self.repo.admission_milestones(pids, week, week.end_excl)
+        statuses = await self.repo.profile_statuses(pids)
+        tuition = await self.repo.tuition_hk1_payment(pids)
+
+        # (officer_id|None, major_id|None) -> [submitted, draft, fee_partial,
+        # fee_full, enrolled]
+        cells: dict[tuple, list] = {}
+        officer_names: dict = {}
+        majors: dict = {}  # major_id|None -> MajorInfo|None
+        for pid, dim in dims.items():
+            ms = milestones.get(pid, {})
+            oid = dim.officer_key if isinstance(dim.officer_key, int) else None
+            mid = dim.major_key if isinstance(dim.major_key, int) else None
+            slot = cells.setdefault((oid, mid), [0, 0, 0, 0, 0])
+            if ms.get("submitted_cumulative"):
+                slot[0] += 1
+            if statuses.get(pid) == "draft":
+                slot[1] += 1
+            fee = tuition.get(pid)
+            if fee == "partial":
+                slot[2] += 1
+            elif fee == "full":
+                slot[3] += 1
+            if ms.get("enrolled_cumulative"):
+                slot[4] += 1
+            officer_names.setdefault(oid, dim.officer_name if oid is not None else None)
+            majors.setdefault(mid, dim.major if mid is not None else None)
+
+        missing = [
+            o for o, nm in officer_names.items() if isinstance(o, int) and not nm
+        ]
+        if missing:
+            resolved = await self.repo.get_user_names(missing)
+            for oid in missing:
+                officer_names[oid] = resolved.get(oid, f"Cán bộ #{oid}")
+
+        # Sắp cán bộ + ngành theo tổng 'đã nộp' (chỉ số tab đầu) giảm dần → thứ tự
+        # ỔN ĐỊNH xuyên tab; bucket (id=None) chốt cuối. FE re-sort hàng theo tab.
+        o_sub: dict = {}
+        m_sub: dict = {}
+        for (o, m), v in cells.items():
+            o_sub[o] = o_sub.get(o, 0) + v[0]
+            m_sub[m] = m_sub.get(m, 0) + v[0]
+        officer_ids = sorted(officer_names, key=lambda o: (o is None, -o_sub.get(o, 0)))
+        major_ids = sorted(majors, key=lambda m: (m is None, -m_sub.get(m, 0)))
+
+        officers_out = [
+            MatrixOfficer(
+                id=o,
+                name=(officer_names.get(o) or "Cán bộ")
+                if o is not None
+                else "Chưa gán cán bộ",
+            )
+            for o in officer_ids
+        ]
+        majors_out = []
+        for m in major_ids:
+            if m is None:
+                majors_out.append(MatrixMajor(id=None, name="Chưa phân loại ngành"))
+                continue
+            info = majors.get(m)
+            majors_out.append(
+                MatrixMajor(
+                    id=m,
+                    code=info.code if info else None,
+                    name=(info.name if info and info.name else f"Ngành #{m}"),
+                    degree_level=info.degree_level if info else None,
+                )
+            )
+        cells_out = [
+            OfficerMajorCell(
+                officer_id=o,
+                major_id=m,
+                submitted=v[0],
+                draft=v[1],
+                fee_partial=v[2],
+                fee_full=v[3],
+                enrolled=v[4],
+            )
+            for (o, m), v in cells.items()
+            if any(v)
+        ]
+        return OfficerMajorMatrixResponse(
+            academic_year=academic_year,
+            round_code=round_code,
+            scope_unit_id=scope_unit_id,
+            officers=officers_out,
+            majors=majors_out,
+            cells=cells_out,
+        )
+
     # --------------------------------------------------------------- helpers
+    @staticmethod
+    def _build_funnel_stages(
+        stages_meta: list, on_path: dict, leak_stage_ids: set
+    ) -> list[FunnelStage]:
+        """Backend owns the funnel model (thin-client): from ordered stage meta
+        ``(id, name, order, is_final, color)`` + ON-PATH counts (early exits already
+        removed by the repo) + ``leak_stage_ids`` (negative-terminal stages derived
+        from status outcomes), compute per-stage ``reached`` (cumulative on the path)
+        and ``conversion_pct`` (vs the previous path stage).
+
+        Leak stages are marked (``is_leak``) and kept OFF the path; the exited leads
+        themselves are reported once as ``PipelineFunnelResponse.leaked``. reached[k]
+        = Σ on_path at/below k. Pure + unit-testable; the FE renders it verbatim.
+        """
+        ordered = sorted(stages_meta, key=lambda s: s[2])  # by order
+        path = [s for s in ordered if s[0] not in leak_stage_ids]
+        reached: dict = {}
+        running = 0
+        for s in reversed(path):  # bottom-up cumulative on the path
+            running += on_path.get(s[0], 0)
+            reached[s[0]] = running
+        out: list[FunnelStage] = []
+        prev_reached: Optional[int] = None
+        for sid, name, order, is_final, color in ordered:
+            cur = on_path.get(sid, 0)
+            if sid in leak_stage_ids:
+                out.append(
+                    FunnelStage(
+                        stage_id=sid, name=name, order=order, is_final=is_final,
+                        color_code=color, current=cur, reached=cur,
+                        conversion_pct=None, is_leak=True,
+                    )
+                )
+                continue
+            r = reached.get(sid, 0)
+            conv = round(r / prev_reached * 100, 1) if prev_reached else None
+            out.append(
+                FunnelStage(
+                    stage_id=sid, name=name, order=order, is_final=is_final,
+                    color_code=color, current=cur, reached=r,
+                    conversion_pct=conv, is_leak=False,
+                )
+            )
+            prev_reached = r
+        return out
+
     @staticmethod
     def _sort_key(row: ReportRow):
         # buckets to the bottom; real rows by activity (hồ sơ nộp lũy kế, rồi lead).
@@ -375,6 +886,9 @@ class AdmissionReportService:
                 "admitted_cumulative",
                 "enrolled_cumulative",
                 "fee_paid_not_submitted",
+                "draft",
+                "fee_hk1_partial",
+                "fee_hk1_full",
             ):
                 setattr(
                     t.admission, m, getattr(t.admission, m) + getattr(row.admission, m)

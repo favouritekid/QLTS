@@ -9,6 +9,10 @@ function mkRow(o: {
   label?: string;
   quota?: number | null;
   enrolled?: number;
+  submitted?: number;
+  draft?: number;
+  feePartial?: number;
+  feeFull?: number;
 }): ReportRow {
   return {
     group_key: 1,
@@ -23,10 +27,13 @@ function mkRow(o: {
       submitted_in_week: 0,
       admitted_in_week: 0,
       enrolled_in_week: 0,
-      submitted_cumulative: 0,
+      submitted_cumulative: o.submitted ?? 0,
       fee_paid_not_submitted: 0,
       admitted_cumulative: 0,
       enrolled_cumulative: o.enrolled ?? 0,
+      draft: o.draft ?? 0,
+      fee_hk1_partial: o.feePartial ?? 0,
+      fee_hk1_full: o.feeFull ?? 0,
       quota: o.quota ?? null,
     },
     conversion: { submit_to_admit: null, admit_to_enroll: null },
@@ -43,6 +50,92 @@ function mkRow(o: {
 }
 
 describe("WeeklyReportTable", () => {
+  // Chi tiết hoá (khớp heatmap): cột Nháp + Học phí HK1 (một phần/đủ) hiện ở layout
+  // lũy-kế và render đúng con số → cockpit đối chiếu trực tiếp với ma trận.
+  it("ytd → shows Nháp + Học phí HK1 columns with values", () => {
+    const totals = mkRow({
+      quota: null,
+      submitted: 411,
+      draft: 87,
+      feePartial: 374,
+      feeFull: 7,
+    });
+    render(
+      <WeeklyReportTable
+        rows={[
+          mkRow({
+            quota: null,
+            submitted: 411,
+            draft: 87,
+            feePartial: 374,
+            feeFull: 7,
+          }),
+        ]}
+        totals={totals}
+        groupBy="major"
+        period="ytd"
+      />,
+    );
+    expect(screen.getByText("Nháp")).toBeTruthy();
+    expect(screen.getByText("HK1 một phần")).toBeTruthy();
+    expect(screen.getByText("HK1 đủ")).toBeTruthy();
+    // giá trị hiển thị (hàng dữ liệu + hàng TỔNG → mỗi số xuất hiện ≥1 lần)
+    expect(screen.getAllByText("87").length).toBeGreaterThan(0); // nháp
+    expect(screen.getAllByText("374").length).toBeGreaterThan(0); // HK1 một phần
+    expect(screen.getAllByText("7").length).toBeGreaterThan(0); // HK1 đủ
+  });
+
+  // Lùi tuần lịch sử (snapshotAsOfNow=false): Nộp/Trúng là lũy-kế TÍNH ĐẾN tuần đó,
+  // còn Nháp/HK1 là snapshot hiện tại → ẩn để tránh nghịch lý "HK1>0 mà Nộp=0".
+  it("ytd + snapshotAsOfNow=false (tuần lịch sử) → ẩn Nháp / HK1", () => {
+    const totals = mkRow({
+      quota: null,
+      submitted: 0,
+      draft: 87,
+      feePartial: 374,
+      feeFull: 7,
+    });
+    render(
+      <WeeklyReportTable
+        rows={[mkRow({ quota: null, submitted: 0 })]}
+        totals={totals}
+        groupBy="major"
+        period="ytd"
+        snapshotAsOfNow={false}
+      />,
+    );
+    // kiểm CỘT (columnheader) — không dùng queryByText vì chú thích dưới bảng cũng
+    // nhắc chữ "Nháp"/"Học phí HK1".
+    const headers = screen
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent);
+    expect(headers).not.toContain("Nháp");
+    expect(headers).not.toContain("HK1 một phần");
+    expect(headers).not.toContain("HK1 đủ");
+    // các cột lũy-kế vẫn còn
+    expect(headers).toContain("Nộp");
+    expect(headers).toContain("Trúng");
+    // có chú thích giải thích vì sao ẩn
+    expect(
+      screen.getByText(/chỉ hiển thị[\s\S]*ở lát cắt hiện tại/),
+    ).toBeTruthy();
+  });
+
+  // Cột hoạt-động (period=week) KHÔNG có các cột chi tiết hoá lũy-kế.
+  it("week period → no Nháp / HK1 columns", () => {
+    const totals = mkRow({ submitted: 5, draft: 2 });
+    render(
+      <WeeklyReportTable
+        rows={[mkRow({ submitted: 5, draft: 2 })]}
+        totals={totals}
+        groupBy="major"
+        period="week"
+      />,
+    );
+    expect(screen.queryByText("Nháp")).toBeNull();
+    expect(screen.queryByText("HK1 một phần")).toBeNull();
+  });
+
   it("ytd + major + quota → quota-progress column (with Nộp)", () => {
     const totals = mkRow({ quota: 100, enrolled: 40 });
     render(
@@ -71,6 +164,38 @@ describe("WeeklyReportTable", () => {
     );
     expect(screen.queryByText("Tiến độ chỉ tiêu (Nhập học)")).toBeNull();
     expect(screen.getByText("Nhập học")).toBeTruthy();
+  });
+
+  // Regression: unit-scope + tất cả đợt → BE trả quota=null cho MỌI ngành. Caption
+  // a11y KHÔNG được nhắc "chỉ tiêu" (cột chỉ tiêu đã ẩn) — nếu không screen reader
+  // đọc sai cấu trúc bảng. Ngược lại khi có quota thì caption phải nhắc chỉ tiêu.
+  it("caption drops 'chỉ tiêu' when quota is null (unit scope / no quota)", () => {
+    const totals = mkRow({ quota: null, enrolled: 0 });
+    render(
+      <WeeklyReportTable
+        rows={[mkRow({ quota: null, enrolled: 0 })]}
+        totals={totals}
+        groupBy="major"
+        period="ytd"
+      />,
+    );
+    const caption = screen.getByText(/Báo cáo tuyển sinh lũy kế năm theo/);
+    expect(caption.textContent).not.toMatch(/chỉ tiêu/);
+    expect(caption.textContent).toMatch(/nhập học/);
+  });
+
+  it("caption mentions 'chỉ tiêu' when a quota is attached (whole-school)", () => {
+    const totals = mkRow({ quota: 100, enrolled: 40 });
+    render(
+      <WeeklyReportTable
+        rows={[mkRow({ quota: 100, enrolled: 40 })]}
+        totals={totals}
+        groupBy="major"
+        period="ytd"
+      />,
+    );
+    const caption = screen.getByText(/Báo cáo tuyển sinh lũy kế năm theo/);
+    expect(caption.textContent).toMatch(/chỉ tiêu/);
   });
 
   it("week period → activity headers", () => {

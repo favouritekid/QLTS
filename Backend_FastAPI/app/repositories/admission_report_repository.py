@@ -25,7 +25,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional, Union
 
-from sqlalchemy import and_, distinct, func, or_, select
+from sqlalchemy import and_, distinct, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -437,39 +437,15 @@ class AdmissionReportRepository:
         """
         if not profile_ids:
             return {}
-        hist = models.AdmissionProfileStatusHistory
+        # Reuse the single milestone-timestamp source (``milestone_timestamps``) so
+        # this (weekly cockpit + heatmap) and the trend panel can NEVER diverge on
+        # the milestone taxonomy — one place owns the status sets + backfill skip.
+        firsts = await self.milestone_timestamps(profile_ids)
         result: dict[int, dict[str, bool]] = {}
-
-        async def _first_into(status_pred):
-            rows = await self.db.execute(
-                select(hist.profile_id, func.min(hist.occurred_at))
-                .where(
-                    hist.profile_id.in_(profile_ids),
-                    # Exclude the phase1_10 synthetic "initial state" backfill row
-                    # (from_status NULL → current @ profile.created_at) — it would
-                    # mis-date legacy milestones to the creation week. Scalar-derived
-                    # backfills + real transitions keep a non-NULL from_status.
-                    hist.from_status.isnot(None),
-                    status_pred,
-                )
-                .group_by(hist.profile_id)
-            )
-            return {pid: ts for pid, ts in rows}
-
-        # Monotone funnel: a profile that reached a later milestone is counted at
-        # every earlier one too (override/bulk-import can skip the 'submitted' row),
-        # so submitted ⊇ admitted ⊇ enrolled → MIN(submitted) ≤ MIN(admitted) ≤ ...
-        admitted_set = set(ADMITTED_LIKE_STATUSES) | {ENROLLED_STATUS}
-        submitted_set = set(SUBMITTED_STATUSES) | admitted_set
-        firsts = {
-            "submitted": await _first_into(hist.to_status.in_(submitted_set)),
-            "admitted": await _first_into(hist.to_status.in_(admitted_set)),
-            "enrolled": await _first_into(hist.to_status == ENROLLED_STATUS),
-        }
         for milestone, by_pid in firsts.items():
-            for pid, ts in by_pid.items():
+            for pid, ts in by_pid.items():  # ts is never None (source drops None)
                 slot = result.setdefault(pid, {})
-                if ts is not None and ts < cumulative_end:
+                if ts < cumulative_end:
                     slot[f"{milestone}_cumulative"] = True
                     if week.start <= ts < week.end_excl:
                         slot[f"{milestone}_in_week"] = True
@@ -508,6 +484,57 @@ class AdmissionReportRepository:
             )
         )
         return [tuple(r) for r in rows.all()]
+
+    async def profile_statuses(self, profile_ids: list[int]) -> dict[int, str]:
+        """Trạng thái HIỆN TẠI của từng hồ sơ (dùng cho ô 'nháp' = status='draft')."""
+        if not profile_ids:
+            return {}
+        rows = await self.db.execute(
+            select(
+                models.AdmissionProfile.id,
+                models.AdmissionProfile.status,
+            ).where(models.AdmissionProfile.id.in_(profile_ids))
+        )
+        return {pid: status for pid, status in rows.all()}
+
+    async def tuition_hk1_payment(self, profile_ids: list[int]) -> dict[int, str]:
+        """Tình trạng học phí HỌC KỲ 1 mỗi hồ sơ → 'full' | 'partial'.
+
+        Chỉ HK1 (``semester_no == 1``) vì đây là cổng nhập học của báo cáo tuyển
+        sinh. Unique index (profile, fee_type, semester_no) WHERE status<>'cancelled'
+        đảm bảo tối đa MỘT dòng active/hồ sơ → không cần gộp. ``remaining =
+        final_amount - paid_amount - waived_amount``.
+        - **full** = nghĩa vụ HK1 ĐÃ TẤT TOÁN (``remaining <= 0``) trên một khoản
+          phí THỰC (``base_amount > 0``): đóng đủ, hoặc được miễn/giảm hết — gồm
+          **miễn 100%** (``final_amount == 0`` do chiết khấu hết ``base``). Gác
+          ``base_amount > 0`` để loại phí CHƯA LẬP (base=0) khỏi bị tính là "đủ".
+        - **partial** = đã đóng > 0 nhưng còn nợ.
+        Hồ sơ không có dòng HK1 / chưa phát sinh → không xuất hiện (coi 'chưa đóng').
+        """
+        if not profile_ids:
+            return {}
+        rows = await self.db.execute(
+            select(
+                models.Fee.admission_profile_id,
+                models.Fee.base_amount,
+                models.Fee.final_amount,
+                models.Fee.paid_amount,
+                models.Fee.waived_amount,
+            ).where(
+                models.Fee.admission_profile_id.in_(profile_ids),
+                models.Fee.fee_type == "tuition",
+                models.Fee.semester_no == 1,
+                models.Fee.status != "cancelled",
+            )
+        )
+        out: dict[int, str] = {}
+        for pid, base, final_amt, paid, waived in rows.all():
+            remaining = final_amt - paid - waived
+            if base > 0 and remaining <= 0:
+                out[pid] = "full"
+            elif paid > 0 and remaining > 0:
+                out[pid] = "partial"
+        return out
 
     # -------------------------------------------------------------------- leads
     async def lead_counts(
@@ -599,3 +626,146 @@ class AdmissionReportRepository:
             bucket.active_current += int(active_cnt or 0)
             bucket.consulting_positive_current += int(consult_cnt or 0)
         return out
+
+    # ----------------------------------------------------- milestone timestamps
+    async def milestone_timestamps(
+        self, profile_ids: list[int]
+    ) -> dict[str, dict[int, datetime]]:
+        """profile_id → FIRST-transition timestamp per milestone (for the trend).
+
+        Same event definition as ``admission_milestones`` (MIN occurred_at, skipping
+        the synthetic ``from_status IS NULL`` backfill row), but returns the raw
+        timestamps so the service can bucket them into any number of week cutoffs
+        without re-querying per week. Monotone funnel: submitted ⊇ admitted ⊇
+        enrolled.
+        """
+        empty = {"submitted": {}, "admitted": {}, "enrolled": {}}
+        if not profile_ids:
+            return empty
+        hist = models.AdmissionProfileStatusHistory
+
+        async def _first_into(status_pred) -> dict[int, datetime]:
+            rows = await self.db.execute(
+                select(hist.profile_id, func.min(hist.occurred_at))
+                .where(
+                    hist.profile_id.in_(profile_ids),
+                    hist.from_status.isnot(None),
+                    status_pred,
+                )
+                .group_by(hist.profile_id)
+            )
+            return {pid: ts for pid, ts in rows if ts is not None}
+
+        admitted_set = set(ADMITTED_LIKE_STATUSES) | {ENROLLED_STATUS}
+        submitted_set = set(SUBMITTED_STATUSES) | admitted_set
+        return {
+            "submitted": await _first_into(hist.to_status.in_(submitted_set)),
+            "admitted": await _first_into(hist.to_status.in_(admitted_set)),
+            "enrolled": await _first_into(hist.to_status == ENROLLED_STATUS),
+        }
+
+    # -------------------------------------------------------- pipeline funnel
+    async def pipeline_funnel_counts(
+        self,
+        cohort_ranges: list[WindowRange],
+        scope_unit_id: Optional[int],
+        officer_id: Optional[int],
+        profile_lead_ids: Optional[set] = None,
+    ) -> tuple[list[tuple[str, str, int, bool, str]], dict[str, int], int, int, set]:
+        """(stages_meta, on_path_counts, leaked, total_leads, leak_stage_ids).
+
+        Funnel honours the pipeline contract:
+        - **Cohort** = leads ``created_at`` in a round window OR that already produced
+          an in-scope profile (``profile_lead_ids`` — walk-ins between rounds), parity
+          with the weekly report so admission never exceeds the lead population.
+        - **counts_for_funnel**: only statuses flagged for the funnel (or no status)
+          count — activity statuses (NO_ANSWER…) are excluded, matching the KPI funnel.
+        - **Early exit by OUTCOME, not stage order**: a lead whose CURRENT status is
+          FINAL + NEGATIVE (rejected / dropped / không đi học / refunded) goes to
+          ``leaked`` — NOT the success path — regardless of the stage it parked at.
+          Everyone else counts on ``pipeline_stage_id`` (NULL stage → lowest order).
+        ``leak_stage_ids`` = negative-terminal stages (final stage whose statuses are
+        all negative) so the caller drops them from the displayed path.
+        """
+        stage_rows = (
+            await self.db.execute(
+                select(
+                    models.PipelineStage.id,
+                    models.PipelineStage.name,
+                    models.PipelineStage.order,
+                    models.PipelineStage.is_final_stage,
+                    models.PipelineStage.color_code,
+                ).order_by(models.PipelineStage.order)
+            )
+        ).all()
+        stages = [
+            (sid, name, order, bool(fin), color)
+            for sid, name, order, fin, color in stage_rows
+        ]
+        # Negative-terminal stages: is_final AND no consultation_status with a
+        # non-negative outcome (polarity from outcome_type, NOT stage order).
+        cs = models.ConsultationStatus
+        leak_stage_ids = set(
+            (
+                await self.db.execute(
+                    select(models.PipelineStage.id).where(
+                        models.PipelineStage.is_final_stage.is_(True),
+                        ~exists().where(
+                            cs.stage_id == models.PipelineStage.id,
+                            cs.outcome_type != "negative",
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        window_preds = [
+            and_(models.Lead.created_at >= r.start, models.Lead.created_at < r.end_excl)
+            for r in cohort_ranges
+        ]
+        if profile_lead_ids:
+            window_preds.append(models.Lead.id.in_(profile_lead_ids))
+        if not window_preds:
+            return stages, {}, 0, 0, leak_stage_ids
+
+        conds = [models.Lead.deleted_at.is_(None), or_(*window_preds)]
+        if scope_unit_id is not None:
+            conds.append(models.Lead.unit_id == scope_unit_id)
+        if officer_id is not None:
+            conds.append(models.Lead.assigned_officer_id == officer_id)
+
+        rows = await self.db.execute(
+            select(
+                models.Lead.pipeline_stage_id,
+                cs.is_final,
+                cs.outcome_type,
+                func.count(distinct(models.Lead.id)),
+            )
+            .select_from(models.Lead)
+            .join(cs, models.Lead.consultation_status_id == cs.id, isouter=True)
+            .where(
+                and_(*conds),
+                # counts_for_funnel contract: exclude activity statuses; no-status
+                # leads (NULL) still count on the path.
+                or_(cs.counts_for_funnel.is_(None), cs.counts_for_funnel.is_(True)),
+            )
+            .group_by(models.Lead.pipeline_stage_id, cs.is_final, cs.outcome_type)
+        )
+        lowest = stages[0][0] if stages else None  # order-sorted → first = lowest
+        on_path: dict[str, int] = {}
+        leaked = 0
+        total = 0
+        for stage_id, is_final, outcome, cnt in rows:
+            c = int(cnt or 0)
+            outcome_val = getattr(outcome, "value", outcome)
+            if is_final and outcome_val == "negative":  # early exit, off the path
+                leaked += c
+                total += c
+                continue
+            key = stage_id if stage_id is not None else lowest
+            if key is not None:
+                on_path[key] = on_path.get(key, 0) + c
+                total += c
+        return stages, on_path, leaked, total, leak_stage_ids

@@ -1,22 +1,11 @@
-import { Suspense } from "react";
+import { redirect } from "next/navigation";
 
-import { Skeleton } from "@/components/ui/skeleton";
-
-import { AdmissionsWeeklyClient } from "./_components/AdmissionsWeeklyClient";
-
-function Loading() {
-  return (
-    <div className="space-y-4 p-4 sm:p-6">
-      <Skeleton className="h-8 w-56" />
-      <Skeleton className="h-72 w-full" />
-    </div>
-  );
-}
-
+/**
+ * Màn "Báo cáo tuyển sinh" đã GỘP vào "Tổng quan tuyển sinh"
+ * (`/reports/admission-overview`, tab "Bảng chi tiết"). Route cũ giữ lại chỉ để
+ * redirect — bookmark/link cũ không gãy. Các `_components` (WeeklyReportTable,
+ * SummaryBand, cockpit-rank) vẫn dùng, được màn gộp import.
+ */
 export default function AdmissionsWeeklyReportPage() {
-  return (
-    <Suspense fallback={<Loading />}>
-      <AdmissionsWeeklyClient />
-    </Suspense>
-  );
+  redirect("/reports/admission-overview");
 }

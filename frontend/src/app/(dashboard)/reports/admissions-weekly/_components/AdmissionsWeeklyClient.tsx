@@ -251,6 +251,9 @@ export function AdmissionsWeeklyClient() {
             totals={synced.totals}
             groupBy={synced.group_by}
             period={period}
+            // Cờ từ chính response (đi kèm data) → tự đúng tuần lịch sử, năm
+            // quá-khứ/tương-lai và placeholderData; chính xác hơn suy từ weekStart.
+            snapshotAsOfNow={synced.snapshot_as_of_now}
           />
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
             {period === "ytd" && groupBy === "major" && round === ALL_ROUNDS && (

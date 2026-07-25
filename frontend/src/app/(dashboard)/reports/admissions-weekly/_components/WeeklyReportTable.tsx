@@ -3,6 +3,7 @@
 import {
   Table,
   TableBody,
+  TableCaption,
   TableCell,
   TableHead,
   TableHeader,
@@ -79,14 +80,22 @@ function FirstCell({
   dot?: string | null;
 }) {
   return (
-    <TableCell className="sticky left-0 bg-background">
-      <div className="flex items-center gap-2">
+    <TableHead
+      scope="row"
+      className="sticky left-0 bg-background align-top font-normal text-foreground"
+    >
+      <div className="flex min-w-0 items-center gap-2">
         {dot && (
           <span className={cn("size-2 shrink-0 rounded-full", dot)} aria-hidden />
         )}
-        <span className={cn("font-medium", isTotal && "font-bold")}>{row.label}</span>
+        <span
+          className={cn("max-w-[220px] truncate font-medium", isTotal && "font-bold")}
+          title={row.label}
+        >
+          {row.label}
+        </span>
         {row.degree_level && (
-          <span className="rounded border px-1 text-[10px] text-muted-foreground">
+          <span className="shrink-0 rounded border px-1 text-[10px] text-muted-foreground">
             {row.degree_level}
           </span>
         )}
@@ -94,7 +103,7 @@ function FirstCell({
       {row.code && (
         <span className="block text-xs text-muted-foreground">{row.code}</span>
       )}
-    </TableCell>
+    </TableHead>
   );
 }
 
@@ -103,11 +112,16 @@ export function WeeklyReportTable({
   totals,
   groupBy,
   period,
+  snapshotAsOfNow = true,
 }: {
   rows: ReportRow[];
   totals: ReportRow;
   groupBy: ReportGroupBy;
   period: Period;
+  // Nháp + Học phí HK1 là SNAPSHOT trạng thái HIỆN TẠI (không "as-of" tuần quá
+  // khứ). Khi bảng đang xem một tuần LỊCH SỬ (Nộp/Trúng lũy-kế TÍNH ĐẾN tuần đó),
+  // đặt false để ẩn 3 cột này — tránh nghịch lý "374 đóng HK1 nhưng 0 đã nộp".
+  snapshotAsOfNow?: boolean;
 }) {
   const isMajor = groupBy === "major";
   const firstColLabel = isMajor ? "Ngành" : "Cán bộ";
@@ -117,7 +131,9 @@ export function WeeklyReportTable({
     // Quota progress only renders when the backend attached a quota (major view,
     // không lọc đợt). Otherwise fall back to the count layout (Nộp/Trúng/NH).
     const showQuota = isMajor && totals.admission.quota != null;
-    const colCount = 8;
+    // Cột chi tiết hoá (Nháp/HK1) chỉ hợp lệ ở lát cắt HIỆN TẠI (snapshot).
+    const showSnapshot = snapshotAsOfNow;
+    const colCount = 8 + (showSnapshot ? 3 : 0);
 
     const renderRow = (row: ReportRow, isTotal = false) => {
       const a = row.admission;
@@ -149,6 +165,11 @@ export function WeeklyReportTable({
           >
             {count(a.submitted_cumulative)}
           </TableCell>
+          {showSnapshot && (
+            <TableCell className="text-right tabular-nums">
+              {count(a.draft)}
+            </TableCell>
+          )}
           <TableCell className="text-right tabular-nums">
             {count(a.admitted_cumulative)}
           </TableCell>
@@ -156,6 +177,16 @@ export function WeeklyReportTable({
             <TableCell className="text-right tabular-nums">
               {count(a.enrolled_cumulative)}
             </TableCell>
+          )}
+          {showSnapshot && (
+            <>
+              <TableCell className="border-l text-right tabular-nums">
+                {count(a.fee_hk1_partial)}
+              </TableCell>
+              <TableCell className="text-right tabular-nums">
+                {count(a.fee_hk1_full)}
+              </TableCell>
+            </>
           )}
           <TableCell className="border-l text-right tabular-nums">
             {pct(row.conversion.submit_to_admit)}
@@ -174,19 +205,36 @@ export function WeeklyReportTable({
     };
 
     return (
-      <div className="overflow-x-auto rounded-lg border">
+      <>
+      <div className="overflow-hidden rounded-lg border">
         <Table>
+          <TableCaption className="sr-only">
+            Báo cáo tuyển sinh lũy kế năm theo {isMajor ? "ngành" : "cán bộ"} —{" "}
+            {showQuota ? "tiến độ chỉ tiêu (nhập học), " : ""}hồ sơ đã nộp,{" "}
+            {showSnapshot ? "nháp, " : ""}trúng tuyển,{" "}
+            {!showQuota ? "nhập học, " : ""}
+            {showSnapshot ? "học phí HK1 (một phần / đủ), " : ""}đang theo, đã thu.
+          </TableCaption>
           <TableHeader>
             <TableRow className="bg-muted/50 text-xs">
-              <TableHead className="sticky left-0 bg-muted/50">{firstColLabel}</TableHead>
+              <TableHead scope="col" className="sticky left-0 bg-muted/50">
+                {firstColLabel}
+              </TableHead>
               {showQuota && (
                 <TableHead className="border-l">Tiến độ chỉ tiêu (Nhập học)</TableHead>
               )}
               <TableHead className={cn("text-right", !showQuota && "border-l")}>
                 Nộp
               </TableHead>
+              {showSnapshot && <TableHead className="text-right">Nháp</TableHead>}
               <TableHead className="text-right">Trúng</TableHead>
               {!showQuota && <TableHead className="text-right">Nhập học</TableHead>}
+              {showSnapshot && (
+                <>
+                  <TableHead className="border-l text-right">HK1 một phần</TableHead>
+                  <TableHead className="text-right">HK1 đủ</TableHead>
+                </>
+              )}
               <TableHead className="border-l text-right">Nộp→Trúng</TableHead>
               <TableHead className="text-right">Trúng→NH</TableHead>
               <TableHead className="border-l text-right">Đang theo</TableHead>
@@ -212,6 +260,14 @@ export function WeeklyReportTable({
           </TableBody>
         </Table>
       </div>
+      {!showSnapshot && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Cột <strong>Nháp</strong> &amp; <strong>Học phí HK1</strong> chỉ hiển thị
+          ở lát cắt hiện tại (số liệu là trạng thái mới nhất, không có phiên bản lịch
+          sử theo tuần).
+        </p>
+      )}
+      </>
     );
   }
 
@@ -257,20 +313,24 @@ export function WeeklyReportTable({
   );
 
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <div className="overflow-hidden rounded-lg border">
       <Table>
+        <TableCaption className="sr-only">
+          Báo cáo tuyển sinh trong tuần theo {isMajor ? "ngành" : "cán bộ"} — lead,
+          hồ sơ, tài chính phát sinh trong tuần đã chọn.
+        </TableCaption>
         <TableHeader>
           <TableRow className="bg-muted/50">
-            <TableHead rowSpan={2} className="sticky left-0 bg-muted/50 align-bottom">
+            <TableHead scope="col" rowSpan={2} className="sticky left-0 bg-muted/50 align-bottom">
               {firstColLabel}
             </TableHead>
-            <TableHead colSpan={3} className="border-l text-center">
+            <TableHead scope="colgroup" colSpan={3} className="border-l text-center">
               Lead (tư vấn)
             </TableHead>
-            <TableHead colSpan={3} className="border-l text-center">
+            <TableHead scope="colgroup" colSpan={3} className="border-l text-center">
               Hồ sơ (tuần)
             </TableHead>
-            <TableHead colSpan={3} className="border-l text-center">
+            <TableHead scope="colgroup" colSpan={3} className="border-l text-center">
               Tài chính (thu tuần)
             </TableHead>
           </TableRow>

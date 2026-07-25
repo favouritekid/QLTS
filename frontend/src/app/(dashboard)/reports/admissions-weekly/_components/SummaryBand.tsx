@@ -67,7 +67,14 @@ export function SummaryBand({
               {nf.format(t.quota as number)}
             </span>
           </div>
-          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
+          <div
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.min(100, Math.round(ratio * 100))}
+            aria-label={`Nhập học đạt ${Math.round(ratio * 100)}% chỉ tiêu năm (${nf.format(t.enrolled_cumulative)}/${nf.format(t.quota as number)})`}
+            className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted"
+          >
             <div
               className={cn("h-full rounded-full", quotaTone(ratio))}
               style={{ width: `${Math.min(100, Math.round(ratio * 100))}%` }}
@@ -88,8 +95,8 @@ export function SummaryBand({
         value={nf.format(totals.lead.active_current)}
       />
       <Card
-        label="Đã thu"
-        hint="lũy kế năm"
+        label="Thu ròng tuyển sinh"
+        hint="lệ phí XT + học phí · lũy kế năm"
         value={formatVND(totals.finance.net_cumulative)}
       />
       {hasQuota ? (
@@ -99,11 +106,11 @@ export function SummaryBand({
           value={met}
         />
       ) : (
-        <Card label="Hồ sơ nộp" hint="lũy kế năm" value={nf.format(t.submitted_cumulative)} />
+        <Card label="Hồ sơ đã nộp" hint="lũy kế năm · đếm theo hồ sơ" value={nf.format(t.submitted_cumulative)} />
       )}
       <Card
-        label="Đóng phí chưa nộp"
-        hint="đã đóng lệ phí, hồ sơ còn nháp — cần nhắc hoàn tất"
+        label="Đã đóng lệ phí XT · còn nháp"
+        hint="đã đóng lệ phí xét tuyển nhưng hồ sơ chưa nộp — cần nhắc hoàn tất"
         value={nf.format(t.fee_paid_not_submitted)}
       />
     </div>

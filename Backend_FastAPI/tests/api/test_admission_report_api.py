@@ -324,3 +324,214 @@ async def test_filters_without_year_omits_rounds(client: AsyncClient, admin_user
     body = res.json()
     assert body["rounds"] == []  # no academic_year → rounds omitted
     assert isinstance(body["academic_years"], list)
+
+
+# =============================================================================
+# Overview extras — pipeline funnel · trend · officer×major heatmap
+# Same gate (admin_or_manager) + same _resolve_scope IDOR as the weekly report.
+# EMPTY_YEAR keeps the 200 path deterministic (no cohort → zero everything).
+# =============================================================================
+
+FUNNEL_URL = "/api/v2/admin/reports/admission-weekly/pipeline-funnel"
+TREND_URL = "/api/v2/admin/reports/admission-weekly/trend"
+MATRIX_URL = "/api/v2/admin/reports/admission-weekly/officer-major-matrix"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_funnel_admin_empty_year_returns_200(
+    client: AsyncClient, admin_user_in_db, seed_lead_dependencies
+):
+    """Empty year (no cohort) → all-zero counts, but the SEEDED pipeline stages must
+    still return with the backend-computed funnel model (current/reached/conversion/
+    is_leak) + the top-level ``leaked``. ``seed_lead_dependencies`` seeds stg01–stg07,
+    so the stage-level asserts actually run (not a vacuously-empty loop). Leak
+    IDENTIFICATION (outcome-based) is unit-tested separately — the seed's statuses
+    default to neutral outcome, so no stage is flagged is_leak here."""
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(FUNNEL_URL, params={"academic_year": EMPTY_YEAR}, headers=h)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["academic_year"] == EMPTY_YEAR
+    assert body["round_code"] is None and body["scope_unit_id"] is None
+    assert body["total_leads"] == 0 and body["leaked"] == 0
+
+    stages = body["stages"]
+    ids = {s["stage_id"] for s in stages}
+    # Stage catalog is year-independent → seeded stages surface even with no cohort.
+    assert {"stg01", "stg06", "stg07"} <= ids
+    for stage in stages:
+        for key in (
+            "stage_id", "name", "order", "is_final", "color_code",
+            "current", "reached", "conversion_pct", "is_leak",
+        ):
+            assert key in stage, f"missing funnel stage key '{key}': {stage}"
+        assert stage["current"] == 0 and stage["reached"] == 0
+        assert isinstance(stage["is_leak"], bool)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_funnel_missing_year_returns_422(
+    client: AsyncClient, admin_user_in_db
+):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(FUNNEL_URL, headers=h)  # academic_year required
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_pipeline_funnel_manager_without_unit_returns_403(
+    client: AsyncClient, manager_no_unit_user_in_db
+):
+    h = await _login(
+        client,
+        manager_no_unit_user_in_db["username"],
+        manager_no_unit_user_in_db["password"],
+    )
+    res = await client.get(FUNNEL_URL, params={"academic_year": EMPTY_YEAR}, headers=h)
+    assert res.status_code == 403, res.text
+
+
+@pytest.mark.asyncio
+async def test_pipeline_funnel_manager_foreign_unit_returns_404(
+    client: AsyncClient, manager_user_in_db, seed_other_unit
+):
+    h = await _login(
+        client, TestUsers.MANAGER["username"], TestUsers.MANAGER["password"]
+    )
+    res = await client.get(
+        FUNNEL_URL,
+        params={"academic_year": EMPTY_YEAR, "unit_id": TestOrgData.UNIT_2["id"]},
+        headers=h,
+    )
+    assert res.status_code == 404, res.text
+
+
+@pytest.mark.asyncio
+async def test_trend_admin_empty_year_returns_200(
+    client: AsyncClient, admin_user_in_db
+):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(
+        TREND_URL, params={"academic_year": EMPTY_YEAR, "weeks": 8}, headers=h
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["weeks"] == 8
+    assert isinstance(body["points"], list)
+    assert len(body["points"]) == 8  # weeks requested → weeks points
+    for pt in body["points"]:
+        for key in ("iso_year", "iso_week", "week_start", "week_end"):
+            assert key in pt, f"missing trend point key '{key}': {pt}"
+        # Isolated year → no milestones → zero cumulative at every week.
+        assert pt["submitted_cumulative"] == 0
+        assert pt["admitted_cumulative"] == 0
+        assert pt["enrolled_cumulative"] == 0
+    # Points ordered old → new (week_start strictly increasing).
+    starts = [pt["week_start"] for pt in body["points"]]
+    assert starts == sorted(starts)
+
+
+@pytest.mark.asyncio
+async def test_trend_weeks_out_of_range_returns_422(
+    client: AsyncClient, admin_user_in_db
+):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(
+        TREND_URL, params={"academic_year": EMPTY_YEAR, "weeks": 99}, headers=h  # le=26
+    )
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_officer_major_matrix_admin_empty_year_returns_200(
+    client: AsyncClient, admin_user_in_db
+):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(MATRIX_URL, params={"academic_year": EMPTY_YEAR}, headers=h)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    # Isolated year → no profiles → empty matrix (not an error).
+    assert body["officers"] == []
+    assert body["majors"] == []
+    assert body["cells"] == []
+    # Contract no longer carries group_by_metric (FE fetches all 5 metrics once).
+    assert "group_by_metric" not in body
+
+
+# =============================================================================
+# Week-over-week — /admission-weekly/week-over-week
+# 2 tuần ISO đã hoàn tất (loại tuần đang chạy). EMPTY_YEAR=2099 là năm TƯƠNG LAI →
+# không có tuần đang chạy thật → insufficient_data (giá trị real được phủ ở
+# integration test dùng năm hiện tại).
+# =============================================================================
+
+WOW_URL = "/api/v2/admin/reports/admission-weekly/week-over-week"
+
+
+@pytest.mark.asyncio
+async def test_wow_admin_future_year_insufficient_data(
+    client: AsyncClient, admin_user_in_db
+):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(WOW_URL, params={"academic_year": EMPTY_YEAR}, headers=h)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    # Năm tương lai → chưa bắt đầu → không đủ 2 tuần hoàn tất → insufficient_data
+    # (KHÔNG bịa 2 tuần 0 giả).
+    assert body["insufficient_data"] is True
+    assert body["comparison"] is None
+    assert body["rows"] == []
+    assert body["group_by"] == "major"
+    assert body["attribution"] == "recomputed-current"
+    assert body["scope_unit_id"] is None
+    # totals movement luôn có mặt (0), delta_pct=None khi mẫu số 0.
+    for milestone in ("submitted", "admitted", "enrolled"):
+        mv = body["totals"][milestone]
+        assert mv["count_current"] == 0
+        assert mv["count_previous"] == 0
+        assert mv["delta"] == 0
+        assert mv["delta_pct"] is None
+
+
+@pytest.mark.asyncio
+async def test_wow_group_by_invalid_returns_422(client: AsyncClient, admin_user_in_db):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(
+        WOW_URL, params={"academic_year": EMPTY_YEAR, "group_by": "foo"}, headers=h
+    )
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_wow_missing_year_returns_422(client: AsyncClient, admin_user_in_db):
+    h = await _login(client, TestUsers.ADMIN["username"], TestUsers.ADMIN["password"])
+    res = await client.get(WOW_URL, headers=h)  # academic_year required
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_wow_manager_without_unit_returns_403(
+    client: AsyncClient, manager_no_unit_user_in_db
+):
+    h = await _login(
+        client,
+        manager_no_unit_user_in_db["username"],
+        manager_no_unit_user_in_db["password"],
+    )
+    res = await client.get(WOW_URL, params={"academic_year": EMPTY_YEAR}, headers=h)
+    assert res.status_code == 403, res.text
+
+
+@pytest.mark.asyncio
+async def test_wow_manager_foreign_unit_returns_404(
+    client: AsyncClient, manager_user_in_db, seed_other_unit
+):
+    h = await _login(
+        client, TestUsers.MANAGER["username"], TestUsers.MANAGER["password"]
+    )
+    res = await client.get(
+        WOW_URL,
+        params={"academic_year": EMPTY_YEAR, "unit_id": TestOrgData.UNIT_2["id"]},
+        headers=h,
+    )
+    assert res.status_code == 404, res.text

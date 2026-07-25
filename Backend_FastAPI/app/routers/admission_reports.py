@@ -16,7 +16,14 @@ from app import models
 from app.core.deps import require_admin_or_manager
 from app.core.rate_limits import RateLimits, limiter
 from app.database import get_db
-from app.schemas.admission_report import AdmissionWeeklyReportResponse, ReportFilters
+from app.schemas.admission_report import (
+    AdmissionTrendResponse,
+    AdmissionWeeklyReportResponse,
+    AdmissionWowResponse,
+    OfficerMajorMatrixResponse,
+    PipelineFunnelResponse,
+    ReportFilters,
+)
 from app.services.admission_report_service import AdmissionReportService
 from app.services.admission_summary_export_service import (
     AdmissionSummaryExportService,
@@ -65,6 +72,95 @@ async def get_admission_weekly_report_filters(
     """Năm (config ∪ data) + đợt cho bộ lọc báo cáo — admin & manager (cùng cổng)."""
     service = AdmissionReportService(db)
     return await service.get_filter_options(academic_year)
+
+
+@router.get("/admission-weekly/pipeline-funnel", response_model=PipelineFunnelResponse)
+async def get_admission_pipeline_funnel(
+    academic_year: int = Query(..., ge=2020, le=2100),
+    round_code: Optional[str] = Query(None, max_length=20),
+    unit_id: Optional[int] = Query(
+        None, ge=1, description="Admin chọn đơn vị; manager bị ép về đơn vị của mình"
+    ),
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_admin_or_manager),
+) -> PipelineFunnelResponse:
+    """Phễu lead theo giai đoạn pipeline hiện tại (cohort = đợt/năm, scope IDOR)."""
+    service = AdmissionReportService(db)
+    return await service.get_pipeline_funnel(
+        current_user=current_user,
+        academic_year=academic_year,
+        round_code=round_code,
+        unit_id=unit_id,
+    )
+
+
+@router.get("/admission-weekly/trend", response_model=AdmissionTrendResponse)
+async def get_admission_trend(
+    academic_year: int = Query(..., ge=2020, le=2100),
+    round_code: Optional[str] = Query(None, max_length=20),
+    unit_id: Optional[int] = Query(
+        None, ge=1, description="Admin chọn đơn vị; manager bị ép về đơn vị của mình"
+    ),
+    weeks: int = Query(8, ge=2, le=26, description="Số tuần tích luỹ trả về"),
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_admin_or_manager),
+) -> AdmissionTrendResponse:
+    """Chuỗi thời gian N tuần tích luỹ (nộp hồ sơ / đủ điều kiện / nhập học)."""
+    service = AdmissionReportService(db)
+    return await service.get_trend(
+        current_user=current_user,
+        academic_year=academic_year,
+        round_code=round_code,
+        unit_id=unit_id,
+        weeks=weeks,
+    )
+
+
+@router.get("/admission-weekly/week-over-week", response_model=AdmissionWowResponse)
+async def get_admission_week_over_week(
+    academic_year: int = Query(..., ge=2020, le=2100),
+    group_by: str = Query("major", pattern="^(major|officer)$"),
+    round_code: Optional[str] = Query(None, max_length=20),
+    unit_id: Optional[int] = Query(
+        None, ge=1, description="Admin chọn đơn vị; manager bị ép về đơn vị của mình"
+    ),
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_admin_or_manager),
+) -> AdmissionWowResponse:
+    """Nhịp tuần: 2 tuần ISO ĐÃ HOÀN TẤT gần nhất (loại tuần đang chạy), 3 milestone
+    (nộp / đủ ĐK / nhập học) theo ngành · cán bộ · tổng. FE chỉ render."""
+    service = AdmissionReportService(db)
+    return await service.get_week_over_week(
+        current_user=current_user,
+        academic_year=academic_year,
+        round_code=round_code,
+        unit_id=unit_id,
+        group_by=group_by,
+    )
+
+
+@router.get(
+    "/admission-weekly/officer-major-matrix",
+    response_model=OfficerMajorMatrixResponse,
+)
+async def get_admission_officer_major_matrix(
+    academic_year: int = Query(..., ge=2020, le=2100),
+    round_code: Optional[str] = Query(None, max_length=20),
+    unit_id: Optional[int] = Query(
+        None, ge=1, description="Admin chọn đơn vị; manager bị ép về đơn vị của mình"
+    ),
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(require_admin_or_manager),
+) -> OfficerMajorMatrixResponse:
+    """Heatmap ngành × cán bộ — mỗi ô 5 chỉ số (đã nộp · nháp · học phí HK1 một
+    phần/đủ · nhập học); FE render 3 tab, đổi tab client-side."""
+    service = AdmissionReportService(db)
+    return await service.get_officer_major_matrix(
+        current_user=current_user,
+        academic_year=academic_year,
+        round_code=round_code,
+        unit_id=unit_id,
+    )
 
 
 @limiter.limit(RateLimits.DATA_EXPORT)  # 20/hour — heavyweight workbook build

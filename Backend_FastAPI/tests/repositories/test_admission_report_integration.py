@@ -21,6 +21,7 @@ from app.repositories.admission_report_repository import (
     AdmissionReportRepository,
 )
 from app.services.admission_report_service import VN_TZ, AdmissionReportService
+from app.utils.datetime_helpers import today_vn
 from app.utils.exceptions import BusinessRuleViolation, ValidationError
 
 pytestmark = pytest.mark.asyncio
@@ -617,6 +618,55 @@ async def test_week_start_before_academic_year_rejected(
         )
 
 
+async def test_snapshot_as_of_now_flag(
+    db: AsyncSession, seeded_dependencies: dict
+):
+    """Cờ ``snapshot_as_of_now`` = True CHỈ khi lũy-kế đến HÔM NAY thật (anchor
+    ngầm=today). FE gate cột snapshot (Nháp/HK1) theo cờ này thay vì tự suy
+    week_start==null (proxy sai với năm quá-khứ/tương-lai, week_start tường minh,
+    và placeholderData)."""
+    svc = AdmissionReportService(db)
+    year = today_vn().year
+    # năm hiện tại, KHÔNG week_start → anchor None → True
+    cur = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=year, group_by="major"
+    )
+    assert cur.snapshot_as_of_now is True
+    # năm TƯƠNG LAI (anchor chốt 04/01, KHÔNG phải today) → False
+    fut = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=2200, group_by="major"
+    )
+    assert fut.snapshot_as_of_now is False
+    # năm QUÁ KHỨ (anchor chốt 28/12) → False
+    past = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=2020, group_by="major"
+    )
+    assert past.snapshot_as_of_now is False
+    # week_start TƯỜNG MINH (năm hiện tại) → anchor = week_start (≠None) → False
+    anchor, _ = _week(year)
+    explicit = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=year, group_by="major", week_start=anchor
+    )
+    assert explicit.snapshot_as_of_now is False
+
+
+async def test_week_start_after_academic_year_rejected(
+    db: AsyncSession, seeded_dependencies: dict
+):
+    # Symmetric to the prior-year guard: a "Tuần sau" bookmark whose NORMALIZED ISO
+    # year is GREATER than the report year must also fail, so academic_year and
+    # week.iso_year can never disagree (blocker: forward week stepping out of year).
+    year = next(_year_seq)
+    svc = AdmissionReportService(db)
+    with pytest.raises(ValidationError):
+        await svc.get_weekly_report(
+            current_user=_admin(),
+            academic_year=year,
+            group_by="major",
+            week_start=date(year + 1, 6, 1),
+        )
+
+
 async def test_future_year_implicit_week_defaults_in_year(
     db: AsyncSession, seeded_dependencies: dict
 ):
@@ -628,6 +678,43 @@ async def test_future_year_implicit_week_defaults_in_year(
     )
     assert resp.week.iso_year == 2200
     assert resp.academic_year == 2200
+
+
+async def test_implicit_anchor_clamps_year_end_boundary_into_year(
+    db: AsyncSession, seeded_dependencies: dict, monkeypatch
+):
+    # 2025-12-29 has iso_year 2026. Report for CURRENT calendar year 2025 with NO
+    # week_start (FE default year = calendar year) must clamp the implicit anchor to
+    # the last in-year ISO week (Dec 28) so week.iso_year === academic_year — not
+    # silently return a 2026-stamped week. Regression for the reviewer's repro.
+    monkeypatch.setattr(
+        "app.services.admission_report_service.today_vn",
+        lambda: date(2025, 12, 29),
+    )
+    svc = AdmissionReportService(db)
+    resp = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=2025, group_by="major"
+    )
+    assert resp.week.iso_year == 2025
+    assert resp.academic_year == 2025
+
+
+async def test_implicit_anchor_clamps_year_start_boundary_into_year(
+    db: AsyncSession, seeded_dependencies: dict, monkeypatch
+):
+    # 2027-01-01 has iso_year 2026. Report for CURRENT calendar year 2027 with NO
+    # week_start must clamp the implicit anchor to the first in-year ISO week (Jan 4)
+    # so week.iso_year === academic_year.
+    monkeypatch.setattr(
+        "app.services.admission_report_service.today_vn",
+        lambda: date(2027, 1, 1),
+    )
+    svc = AdmissionReportService(db)
+    resp = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=2027, group_by="major"
+    )
+    assert resp.week.iso_year == 2027
+    assert resp.academic_year == 2027
 
 
 async def test_report_years_include_config_only_year(
@@ -808,16 +895,24 @@ async def test_quota_admin_only_hidden_for_unit_scope(
         current_user=_admin(), academic_year=year, group_by="major", week_start=anchor
     )
     assert _find(admin_resp.rows, major.id).admission.quota == 100
+    # Manager, KHÔNG lọc đợt (round_code=None ⇒ "Tất cả đợt"): quota vẫn phải ẩn
+    # vì lý do là SCOPE ĐƠN VỊ, không phải lọc đợt. FE dựa vào đúng contract này
+    # để hiện copy "Lát cắt theo đơn vị chưa có chỉ tiêu được phân bổ riêng".
     mgr_resp = await svc.get_weekly_report(
         current_user=_manager(unit_id),
         academic_year=year,
         group_by="major",
+        round_code=None,
         week_start=anchor,
     )
     row = _find(mgr_resp.rows, major.id)
     assert row is not None  # manager has the activity
     assert row.admission.quota is None  # whole-school metric hidden for unit scope
     assert mgr_resp.totals.admission.quota is None
+    # NO row may carry a quota under unit scope (not just the seeded major).
+    assert all(r.admission.quota is None for r in mgr_resp.rows)
+    # Scope is echoed so the FE can tell "unit scope" from "round filter".
+    assert mgr_resp.scope_unit_id == unit_id
 
 
 async def test_quota_excludes_archived_major(
@@ -982,3 +1077,431 @@ async def test_application_paid_without_submit_counts_prepay_draft(
     assert row.admission.fee_paid_not_submitted == 1  # only p_draft
     assert row.admission.submitted_cumulative == 1  # only p_sub (milestone)
     assert resp.totals.admission.fee_paid_not_submitted == 1
+
+
+async def test_officer_major_matrix_five_metrics_end_to_end(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """Ô matrix đếm 5 chỉ số: submitted/enrolled (milestone) · draft (status hồ
+    sơ HIỆN TẠI) · fee_partial/fee_full (học phí HK1). Năm tương lai → cutoff
+    cumulative ≈ tuần đầu tháng 1, nên mốc submit/enroll seed vào 04/01 để được
+    đếm; draft & học phí không phụ thuộc thời gian.
+    """
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    at = datetime(year, 1, 4, 12, tzinfo=VN_TZ)  # trong tuần cutoff (năm tương lai)
+    major, offering = await _seed_catalog(db, year, unit_id)
+
+    async def _profile(status="submitted"):
+        _, p = await _seed_lead_profile(
+            db, seeded_dependencies, year, offering.id, officer_id, created_at=at
+        )
+        if status != "submitted":
+            p.status = status
+            await db.flush()
+        return p
+
+    # (1) đã nộp
+    p_sub = await _profile()
+    await _seed_history(db, p_sub.id, "submitted", at)
+    # (2) nháp — status='draft', KHÔNG có mốc submitted
+    await _profile(status="draft")
+    # (3) học phí HK1 một phần (paid>0, còn nợ) + đã nộp
+    p_part = await _profile()
+    await _seed_history(db, p_part.id, "submitted", at)
+    f_part = await _seed_fee(db, p_part.id, year, fee_type="tuition")
+    f_part.paid_amount = Decimal("400000")  # final 1,000,000 → remaining 600,000
+    await db.flush()
+    # (4) đóng đủ HK1 (remaining<=0) + đã nộp + nhập học
+    p_full = await _profile()
+    await _seed_history(db, p_full.id, "submitted", at)
+    await _seed_history(db, p_full.id, "enrolled", at, from_status="submitted")
+    f_full = await _seed_fee(db, p_full.id, year, fee_type="tuition")
+    f_full.paid_amount = Decimal("1000000")  # remaining 0 → đóng đủ
+    await db.flush()
+    # (5) MIỄN 100% học phí HK1 (final=0 do chiết khấu hết base) + đã nộp — nghĩa
+    # vụ đã tất toán nên tính "đóng đủ" (fee_full), không phải "chưa đóng".
+    p_waived = await _profile()
+    await _seed_history(db, p_waived.id, "submitted", at)
+    f_waived = await _seed_fee(db, p_waived.id, year, fee_type="tuition")
+    f_waived.total_discount = Decimal("1000000")
+    f_waived.final_amount = Decimal("0")  # base 1.000.000 − chiết khấu 1.000.000
+    await db.flush()
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_officer_major_matrix(current_user=_admin(), academic_year=year)
+
+    cell = next(
+        c for c in resp.cells if c.officer_id == officer_id and c.major_id == major.id
+    )
+    assert cell.submitted == 4  # p_sub, p_part, p_full, p_waived (đều có mốc submitted)
+    assert cell.draft == 1  # chỉ hồ sơ status='draft'
+    assert cell.fee_partial == 1  # p_part
+    assert cell.fee_full == 2  # p_full (đóng đủ) + p_waived (miễn 100%)
+    assert cell.enrolled == 1  # p_full
+
+
+async def test_weekly_report_detail_metrics_match_matrix(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """Chi tiết hoá (khớp heatmap): get_weekly_report trả draft + fee_hk1_partial/
+    full CÙNG con số với các chỉ số tương ứng của ma trận officer×major, tại cùng
+    lát cắt lũy-kế → hai bảng của tab 'Phân tích chi tiết' đối chiếu trực tiếp."""
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    at = datetime(year, 1, 4, 12, tzinfo=VN_TZ)  # trong tuần cutoff (năm tương lai)
+    major, offering = await _seed_catalog(db, year, unit_id)
+
+    async def _profile(status="submitted"):
+        _, p = await _seed_lead_profile(
+            db, seeded_dependencies, year, offering.id, officer_id, created_at=at
+        )
+        if status != "submitted":
+            p.status = status
+            await db.flush()
+        return p
+
+    p_sub = await _profile()
+    await _seed_history(db, p_sub.id, "submitted", at)
+    await _profile(status="draft")  # nháp
+    p_part = await _profile()
+    await _seed_history(db, p_part.id, "submitted", at)
+    f_part = await _seed_fee(db, p_part.id, year, fee_type="tuition")
+    f_part.paid_amount = Decimal("400000")  # remaining 600.000 → một phần
+    await db.flush()
+    p_full = await _profile()
+    await _seed_history(db, p_full.id, "submitted", at)
+    await _seed_history(db, p_full.id, "enrolled", at, from_status="submitted")
+    f_full = await _seed_fee(db, p_full.id, year, fee_type="tuition")
+    f_full.paid_amount = Decimal("1000000")  # remaining 0 → đóng đủ
+    await db.flush()
+
+    svc = AdmissionReportService(db)
+    weekly = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=year, group_by="major"
+    )
+    matrix = await svc.get_officer_major_matrix(
+        current_user=_admin(), academic_year=year
+    )
+    wr = _find(weekly.rows, major.id)
+    cell = next(
+        c for c in matrix.cells if c.officer_id == officer_id and c.major_id == major.id
+    )
+    # các chỉ số CHUNG khớp con số giữa cockpit (weekly) và heatmap (matrix)
+    assert wr.admission.submitted_cumulative == cell.submitted == 3
+    assert wr.admission.draft == cell.draft == 1
+    assert wr.admission.fee_hk1_partial == cell.fee_partial == 1
+    assert wr.admission.fee_hk1_full == cell.fee_full == 1
+    assert wr.admission.enrolled_cumulative == cell.enrolled == 1
+    # totals cockpit cũng cộng đúng
+    assert weekly.totals.admission.draft == 1
+    assert weekly.totals.admission.fee_hk1_partial == 1
+    assert weekly.totals.admission.fee_hk1_full == 1
+
+
+# --------------------------------------------------------- pipeline funnel (DB)
+async def _seed_pstage(db, *, is_final=False):
+    n = next(_seq)
+    sid = f"rptfst{n}"
+    db.add(
+        models.PipelineStage(
+            id=sid, name=f"FStage {n}", order=900000 + n, is_final_stage=is_final
+        )
+    )
+    await db.flush()
+    return sid
+
+
+async def _seed_funnel_status(
+    db, *, stage_id, outcome="neutral", is_final=False, counts_for_funnel=True
+):
+    n = next(_seq)
+    cs = models.ConsultationStatus(
+        id=f"rptfcs{n}",
+        name=f"FCS {n}",
+        color_code="#123456",
+        stage_id=stage_id,
+        outcome_type=models.OutcomeTypeEnum(outcome),
+        is_final=is_final,
+        counts_for_funnel=counts_for_funnel,
+    )
+    db.add(cs)
+    await db.flush()
+    return cs.id
+
+
+async def _seed_funnel_lead(
+    db, deps, year, *, stage_id, cs_id, created_at, offering_id=None, with_profile=False
+):
+    n = next(_seq)
+    lead = models.Lead(
+        full_name=f"RPT FN {n}",
+        phone=f"08{n:08d}",
+        email=f"rptfn_{n}@t.com",
+        source="website",
+        unit_id=deps["unit_id"],
+        consultation_status_id=cs_id,
+        pipeline_stage_id=stage_id,
+        status="new",
+        offering_id=offering_id,
+        created_at=created_at,
+    )
+    db.add(lead)
+    await db.flush()
+    if with_profile:
+        db.add(
+            models.AdmissionProfile(
+                lead_id=lead.id,
+                status="submitted",
+                citizen_id=f"{n:012d}",
+                version=1,
+                applied_rules={},
+                academic_year=year,
+                uses_choice_engine=False,
+            )
+        )
+        await db.flush()
+    return lead
+
+
+async def test_pipeline_funnel_leak_by_outcome_counts_for_funnel_and_walk_in(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """Funnel aggregation contract exercised WITH data (not the empty-year early
+    return at repository.py). Covers three review findings at once:
+      • early exit by OUTCOME: a lead with a final+negative status at a NON-terminal
+        stage → leaked, NOT inflating the success path;
+      • counts_for_funnel=false (activity status) → excluded entirely;
+      • walk-in: a lead created OUTSIDE the round window but holding an in-scope
+        profile → pulled into the cohort via profile_lead_ids.
+    """
+    year = next(_year_seq)
+    deps = seeded_dependencies
+    _, offering = await _seed_catalog(db, year, deps["unit_id"])  # round covers year
+    in_win = datetime(year, 6, 1, tzinfo=VN_TZ)
+
+    stg_a = await _seed_pstage(db)  # progress
+    stg_b = await _seed_pstage(db)  # progress (mid — a rejection can happen here)
+    stg_neg = await _seed_pstage(db, is_final=True)  # negative terminal stage
+    cs_ok = await _seed_funnel_status(db, stage_id=stg_a)  # neutral → on-path
+    cs_reject = await _seed_funnel_status(
+        db, stage_id=stg_b, outcome="negative", is_final=True
+    )  # rejected at a NON-terminal stage
+    cs_activity = await _seed_funnel_status(
+        db, stage_id=stg_a, counts_for_funnel=False
+    )  # activity status → excluded from the funnel
+    cs_dropped = await _seed_funnel_status(
+        db, stage_id=stg_neg, outcome="negative", is_final=True
+    )
+
+    await _seed_funnel_lead(
+        db, deps, year, stage_id=stg_a, cs_id=cs_ok, created_at=in_win
+    )
+    await _seed_funnel_lead(
+        db, deps, year, stage_id=stg_b, cs_id=cs_reject, created_at=in_win
+    )
+    await _seed_funnel_lead(
+        db, deps, year, stage_id=stg_a, cs_id=cs_activity, created_at=in_win
+    )
+    await _seed_funnel_lead(
+        db, deps, year, stage_id=stg_neg, cs_id=cs_dropped, created_at=in_win
+    )
+    # walk-in: created BEFORE the round window but holds an in-scope profile
+    await _seed_funnel_lead(
+        db,
+        deps,
+        year,
+        stage_id=stg_a,
+        cs_id=cs_ok,
+        created_at=datetime(year - 1, 3, 1, tzinfo=VN_TZ),
+        offering_id=offering.id,
+        with_profile=True,
+    )
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_pipeline_funnel(current_user=_admin(), academic_year=year)
+    by_id = {s.stage_id: s for s in resp.stages}
+
+    # activity status (counts_for_funnel=false) excluded; leaked = rejected + dropped
+    # (by OUTCOME); on-path = 2 at stg_a (one in-window + the walk-in via profile).
+    assert resp.total_leads == 4  # 5 seeded − 1 activity-excluded
+    assert resp.leaked == 2  # rejected-mid-stage + negative-terminal
+    assert by_id[stg_a].current == 2 and by_id[stg_a].reached == 2
+    assert by_id[stg_a].is_leak is False
+    assert by_id[stg_b].current == 0  # rejected lead is leaked, not on-path here
+    assert by_id[stg_b].is_leak is False  # mid stage, not a leak STAGE
+    assert by_id[stg_neg].is_leak is True  # all-negative final stage → leak stage
+    assert by_id[stg_neg].current == 0
+
+
+# ----------------------------------------------------------- week-over-week (WoW)
+# WoW so 2 tuần ISO ĐÃ HOÀN TẤT gần nhất, LOẠI tuần đang chạy. Chỉ có nghĩa khi có
+# "tuần đang chạy" thật = NĂM HIỆN TẠI → các test giá trị dùng ``today_vn().year``
+# (khác các test khác dùng năm tương lai 2050+). Cách ly bằng MAJOR riêng + reconcile
+# totals theo cấu trúc (bền với data năm-hiện-tại khác trong qlts_test).
+
+
+def _wow_weeks():
+    """Tuần đang chạy (loại) + W-1/W-2 (2 tuần hoàn tất), anchored trên hôm nay (VN)."""
+    end_meta, run = AdmissionReportService._compute_week(today_vn())
+    _m1, w1 = AdmissionReportService._compute_week(
+        end_meta.week_start - timedelta(weeks=1)
+    )
+    _m2, w2 = AdmissionReportService._compute_week(
+        end_meta.week_start - timedelta(weeks=2)
+    )
+    return end_meta, run, w1, w2
+
+
+async def test_wow_buckets_two_complete_weeks_and_excludes_running_week(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """W-1 → count_current, W-2 → count_previous, tuần đang chạy → LOẠI. current=1,
+    previous=2 → delta=-1, delta_pct=-50%. Tổng dimension khớp tổng chung."""
+    year = today_vn().year
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    end_meta, run, w1, w2 = _wow_weeks()
+
+    major, offering = await _seed_catalog(db, year, unit_id)
+
+    async def _submit_at(occurred_at):
+        _, p = await _seed_lead_profile(
+            db, seeded_dependencies, year, offering.id, officer_id,
+            created_at=occurred_at,
+        )
+        await _seed_history(db, p.id, "submitted", occurred_at)
+        return p
+
+    await _submit_at(w1.start + timedelta(days=2))  # W-1 → current
+    await _submit_at(w2.start + timedelta(days=1))  # W-2 → previous
+    await _submit_at(w2.start + timedelta(days=3))  # W-2 → previous
+    await _submit_at(run.start + timedelta(minutes=30))  # tuần đang chạy → LOẠI
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_week_over_week(
+        current_user=_admin(), academic_year=year, group_by="major"
+    )
+    assert resp.insufficient_data is False
+    assert resp.comparison is not None
+    # 2 tuần hoàn tất, đều TRƯỚC tuần đang chạy; previous < latest.
+    assert resp.comparison.latest_complete_week.week_start < run.start.date()
+    assert (
+        resp.comparison.previous_complete_week.week_start
+        < resp.comparison.latest_complete_week.week_start
+    )
+
+    row = _find(resp.rows, major.id)
+    assert row is not None
+    assert row.submitted.count_current == 1  # chỉ W-1 (tuần đang chạy bị loại)
+    assert row.submitted.count_previous == 2  # cả hai W-2
+    assert row.submitted.delta == -1
+    assert row.submitted.delta_pct == -50.0
+
+    # tổng dimension khớp tổng chung (structural — bền với data khác trong qlts_test).
+    for milestone in ("submitted", "admitted", "enrolled"):
+        tot = getattr(resp.totals, milestone)
+        assert tot.count_current == sum(
+            getattr(r, milestone).count_current for r in resp.rows
+        )
+        assert tot.count_previous == sum(
+            getattr(r, milestone).count_previous for r in resp.rows
+        )
+        assert tot.delta == tot.count_current - tot.count_previous
+
+
+async def test_wow_previous_zero_delta_pct_is_none(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """Tuần trước = 0 (mẫu số 0) → delta_pct=None (ưu tiên số tuyệt đối)."""
+    year = today_vn().year
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    _end, _run, w1, _w2 = _wow_weeks()
+    major, offering = await _seed_catalog(db, year, unit_id)
+    _, p = await _seed_lead_profile(
+        db, seeded_dependencies, year, offering.id, officer_id,
+        created_at=w1.start + timedelta(days=2),
+    )
+    await _seed_history(db, p.id, "submitted", w1.start + timedelta(days=2))
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_week_over_week(
+        current_user=_admin(), academic_year=year, group_by="major"
+    )
+    row = _find(resp.rows, major.id)
+    assert row is not None
+    assert row.submitted.count_current == 1
+    assert row.submitted.count_previous == 0
+    assert row.submitted.delta == 1
+    assert row.submitted.delta_pct is None  # mẫu số 0
+
+
+async def test_wow_group_by_officer_manager_scope(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """group_by=officer + manager bị ép về đơn vị của mình (scope_unit_id)."""
+    year = today_vn().year
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    _end, _run, w1, _w2 = _wow_weeks()
+    _, offering = await _seed_catalog(db, year, unit_id)
+    _, p = await _seed_lead_profile(
+        db, seeded_dependencies, year, offering.id, officer_id,
+        created_at=w1.start + timedelta(days=2),
+    )
+    await _seed_history(db, p.id, "submitted", w1.start + timedelta(days=2))
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_week_over_week(
+        current_user=_manager(unit_id), academic_year=year, group_by="officer"
+    )
+    assert resp.scope_unit_id == unit_id  # manager ép về đơn vị của mình
+    row = _find(resp.rows, officer_id)
+    assert row is not None and not row.is_bucket
+    assert row.submitted.count_current == 1
+
+
+async def test_wow_future_year_insufficient_data(
+    db: AsyncSession, seeded_dependencies: dict
+):
+    """Năm tương lai → chưa bắt đầu → insufficient_data (không bịa 2 tuần 0 giả)."""
+    svc = AdmissionReportService(db)
+    resp = await svc.get_week_over_week(current_user=_admin(), academic_year=2200)
+    assert resp.insufficient_data is True
+    assert resp.comparison is None
+    assert resp.rows == []
+
+
+async def test_wow_past_year_insufficient_data(
+    db: AsyncSession, seeded_dependencies: dict
+):
+    """Năm quá khứ → không có tuần đang chạy thật → insufficient_data."""
+    svc = AdmissionReportService(db)
+    resp = await svc.get_week_over_week(current_user=_admin(), academic_year=2020)
+    assert resp.insufficient_data is True
+    assert resp.comparison is None
+
+
+async def test_wow_insufficient_when_complete_weeks_fall_in_prior_year(
+    db: AsyncSession, seeded_dependencies: dict, monkeypatch
+):
+    """Đầu tháng 1 (năm HIỆN TẠI): 2 tuần đã-hoàn-tất gần nhất rơi vào tháng 12 NĂM
+    TRƯỚC (iso_year != academic_year) → insufficient_data thay vì so nhịp với tuần
+    của năm khác. Mock ``today_vn`` về 04/01 để kích hoạt ranh giới ISO-year."""
+    year = next(_year_seq)
+    # academic_year == today.year → anchor=None (đường "năm hiện tại"); nhưng W-1/W-2
+    # rơi tháng 12 năm trước → guard trả insufficient (KHÔNG bịa so sánh lệch năm).
+    monkeypatch.setattr(
+        "app.services.admission_report_service.today_vn",
+        lambda: date(year, 1, 4),
+    )
+    svc = AdmissionReportService(db)
+    resp = await svc.get_week_over_week(
+        current_user=_admin(), academic_year=year, group_by="major"
+    )
+    assert resp.insufficient_data is True
+    assert resp.comparison is None
+    assert resp.rows == []

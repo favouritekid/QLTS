@@ -56,6 +56,12 @@ class AdmissionMetrics(BaseModel):
     # Đã đóng lệ phí xét tuyển (application paid) NHƯNG hồ sơ CHƯA nộp (chưa có
     # milestone submitted) — nhóm prepay fast-track cần nhắc hoàn tất nộp hồ sơ.
     fee_paid_not_submitted: int = 0
+    # Chi tiết hoá (khớp heatmap ngành×cán bộ): hồ sơ NHÁP (status='draft') +
+    # học phí HK1 đã đóng một-phần / đủ. Snapshot HIỆN TẠI (không theo cutoff tuần),
+    # cùng định nghĩa với ma trận officer×major → hai bảng đối chiếu trực tiếp.
+    draft: int = 0
+    fee_hk1_partial: int = 0
+    fee_hk1_full: int = 0
     # chỉ tiêu (annual_admission_quota) — major grouping only; None for officer
     # view / buckets / total rows where a quota does not apply.
     quota: Optional[int] = None
@@ -111,6 +117,12 @@ class AdmissionWeeklyReportResponse(BaseModel):
     scope_unit_id: Optional[int] = None  # None = toàn trường (admin)
     # week numbers may shift on publish/reopen — see module docstring.
     attribution: Literal["recomputed-current"] = "recomputed-current"
+    # True CHỈ khi lát cắt = lũy-kế TÍNH ĐẾN HÔM NAY thật (anchor ngầm = today).
+    # False cho tuần lịch sử tường minh, năm quá-khứ (chốt 28/12) / tương-lai (chốt
+    # 04/01), và ranh giới ISO-year. Các cột SNAPSHOT hiện-tại (draft/fee_hk1) chỉ
+    # nhất quán với cột cumulative-as-of-cutoff khi cờ này True → FE gate theo cờ
+    # (không tự suy từ week_start ở client vì proxy đó sai các đường trên).
+    snapshot_as_of_now: bool = False
     rows: list[ReportRow]
     totals: ReportRow  # aggregate across rows (label="TỔNG")
     data_quality: DataQuality = Field(default_factory=DataQuality)
@@ -127,3 +139,134 @@ class ReportFilters(BaseModel):
 
     academic_years: list[int] = Field(default_factory=list)
     rounds: list[str] = Field(default_factory=list)
+
+
+# ============================================================================
+# Overview dashboard extras (funnel · trend · officer×major heatmap)
+# Cùng cổng report (require_admin_or_manager), cùng scope IDOR (_resolve_scope).
+# ============================================================================
+
+
+class ScopedReport(BaseModel):
+    """Common scope echo so the client can confirm what slice it rendered."""
+
+    academic_year: int
+    round_code: Optional[str] = None  # None = mọi đợt của năm
+    scope_unit_id: Optional[int] = None  # None = toàn trường
+
+
+# ---- Pipeline funnel (lead theo giai đoạn pipeline hiện tại) ----------------
+class FunnelStage(BaseModel):
+    stage_id: str  # "stg01".. (PipelineStage.id)
+    name: str
+    order: int  # PipelineStage.order (0-based)
+    is_final: bool  # PipelineStage.is_final_stage
+    color_code: str
+    current: int = 0  # lead ON-PATH ở giai đoạn này (đã loại lead rời phễu)
+    # Mô hình phễu do BACKEND tính (FE chỉ render — thin-client):
+    reached: int = 0  # lũy kế "từng đạt bậc này" trên đường phễu; bậc leak = current
+    conversion_pct: Optional[float] = None  # % chuyển tiếp từ bậc path trước (0..100)
+    is_leak: bool = False  # bậc terminal ÂM (mọi trạng thái negative) — FE ẩn khỏi path
+
+
+class PipelineFunnelResponse(ScopedReport):
+    total_leads: int = 0  # tổng lead của phễu = Σ on-path + leaked
+    leaked: int = 0  # lead rời phễu (trạng thái final + outcome negative, mọi bậc)
+    # Sorted by ``order``; lead chưa gán giai đoạn gộp vào bậc order thấp nhất.
+    stages: list[FunnelStage] = Field(default_factory=list)
+
+
+# ---- Trend (chuỗi thời gian N tuần, tích luỹ) -------------------------------
+class TrendPoint(BaseModel):
+    iso_year: int
+    iso_week: int
+    week_start: date  # Monday (VN)
+    week_end: date  # Sunday (VN, inclusive)
+    submitted_cumulative: int = 0
+    admitted_cumulative: int = 0
+    enrolled_cumulative: int = 0
+
+
+class AdmissionTrendResponse(ScopedReport):
+    weeks: int  # số điểm trả về
+    points: list[TrendPoint] = Field(default_factory=list)  # cũ → mới
+
+
+# ---- Heatmap cán bộ × ngành -------------------------------------------------
+class MatrixOfficer(BaseModel):
+    id: Optional[int] = None  # None = "Chưa gán cán bộ" (bucket)
+    name: str
+
+
+class MatrixMajor(BaseModel):
+    id: Optional[int] = None  # None = "Chưa phân loại ngành" (ambiguous ∪ unresolved)
+    code: Optional[str] = None
+    name: str
+    degree_level: Optional[str] = None
+
+
+class OfficerMajorCell(BaseModel):
+    """5 chỉ số/ô để FE render 3 tab (Hồ sơ · Học phí HK1 · Nhập học).
+
+    ``submitted``/``enrolled`` = mốc lịch sử (cumulative-to-now). ``draft`` =
+    trạng thái hồ sơ HIỆN TẠI = 'draft'. ``fee_partial``/``fee_full`` = đóng học
+    phí HỌC KỲ 1 (một phần / đủ) — chỉ HK1 vì là cổng nhập học của báo cáo TS.
+    """
+
+    officer_id: Optional[int] = None
+    major_id: Optional[int] = None
+    submitted: int = 0  # đã nộp hồ sơ (cumulative)
+    draft: int = 0  # hồ sơ đang ở trạng thái 'draft' (nháp)
+    fee_partial: int = 0  # đóng học phí HK1 một phần (paid>0, còn nợ)
+    fee_full: int = 0  # đóng đủ học phí HK1 (remaining<=0)
+    enrolled: int = 0  # đã nhập học (cumulative, event-based)
+
+
+class OfficerMajorMatrixResponse(ScopedReport):
+    # Hai trục; FE render ngành làm hàng, cán bộ làm cột (orientation do FE quyết).
+    officers: list[MatrixOfficer] = Field(default_factory=list)
+    majors: list[MatrixMajor] = Field(default_factory=list)
+    cells: list[OfficerMajorCell] = Field(default_factory=list)  # thưa (sparse)
+
+
+# ---- Week-over-week (biến động 2 tuần ISO ĐÃ HOÀN TẤT, loại tuần đang chạy) --
+class WowMovement(BaseModel):
+    """Biến động 1 milestone giữa 2 tuần ISO đã HOÀN TẤT (không tính tuần đang chạy)."""
+
+    count_current: int = 0  # tuần hoàn tất gần nhất (W-1)
+    count_previous: int = 0  # tuần hoàn tất liền trước (W-2)
+    delta: int = 0  # count_current − count_previous
+    delta_pct: Optional[float] = None  # %; None khi count_previous == 0 (mẫu số 0)
+
+
+class WowRow(BaseModel):
+    group_key: Optional[int] = None  # major_id / officer_id; None cho bucket/tổng
+    label: str
+    code: Optional[str] = None  # major code (major grouping only)
+    degree_level: Optional[str] = None  # major grouping only
+    is_bucket: bool = False
+    bucket_kind: Optional[BucketKind] = None
+    submitted: WowMovement = Field(default_factory=WowMovement)
+    admitted: WowMovement = Field(default_factory=WowMovement)
+    enrolled: WowMovement = Field(default_factory=WowMovement)
+
+
+class WowComparison(BaseModel):
+    latest_complete_week: WeekMeta  # W-1
+    previous_complete_week: WeekMeta  # W-2
+
+
+class AdmissionWowResponse(ScopedReport):
+    """Nhịp tuần: 2 tuần ISO ĐÃ HOÀN TẤT gần nhất (tuần đang chạy bị loại).
+
+    ``insufficient_data=True`` khi năm chưa bắt đầu / không đủ 2 tuần hoàn tất →
+    ``comparison=None``, ``rows=[]`` (KHÔNG bịa 2 tuần 0 giả). Attribution =
+    recomputed-current: số của tuần đã qua có thể đổi khi hồ sơ được phân công lại.
+    """
+
+    group_by: GroupBy
+    attribution: Literal["recomputed-current"] = "recomputed-current"
+    insufficient_data: bool = False
+    comparison: Optional[WowComparison] = None
+    rows: list[WowRow] = Field(default_factory=list)
+    totals: WowRow  # Σ across rows (label="TỔNG")
