@@ -1157,6 +1157,11 @@ def _fee_can_recalculate(fee, current_user_role: str = None) -> bool:
     status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
     is_terminal = status_value in _FEE_TERMINAL_STATUSES
     is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
+    # Đổi ngành: đang chờ kế toán xác nhận → route calculate/recalculate bị chặn
+    # bởi ``assert_major_change_cycle_closed``, và bản thân việc tính lại base khi
+    # invoice vừa được ghi lại theo ngành mới sẽ phá bất biến confirm kiểm. Mask cờ.
+    if getattr(fee, "awaiting_accountant_confirmation", False):
+        return False
     return not is_terminal and fee.paid_amount == 0 and is_manager_or_admin
 
 

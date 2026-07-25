@@ -684,12 +684,25 @@ def _compute_invoice_permissions(
     )
     is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
     is_accountant_or_admin = current_user_role in [UserRole.ADMIN, UserRole.ACCOUNTANT]
+    # Đổi ngành: fee cha đang chờ kế toán xác nhận → ``cancel_invoice`` bị service
+    # chặn (huỷ hoá đơn làm chu kỳ không thể chốt: confirm đòi ĐÚNG 1 invoice
+    # active). Hoá đơn 0đ của hồ sơ đổi ngành lọt hết guard cũ nên đây đúng là ca
+    # nút hiện rồi bấm ra 400.
+    # ``__dict__.get`` để KHÔNG trigger lazy-load (MissingGreenlet trong async);
+    # đường nào chưa eager-load ``fee`` thì cờ giữ nguyên như trước — service vẫn
+    # là hàng rào thật, đây chỉ là lớp làm nút không chết.
+    _parent_fee = invoice.__dict__.get("fee")
+    _fee_awaiting_major_change = bool(
+        _parent_fee is not None
+        and getattr(_parent_fee, "awaiting_accountant_confirmation", False)
+    )
     return {
         "can_issue": status_value == "draft" and is_accountant_or_admin,
         "can_cancel": (
             status_value not in ["paid", "cancelled"]
             and invoice.paid_amount == 0
             and is_manager_or_admin
+            and not _fee_awaiting_major_change
         ),
         "can_record_payment": (
             status_value in PAYABLE_INVOICE_STATUSES

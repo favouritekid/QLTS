@@ -1890,3 +1890,87 @@ async def test_fee_capability_flags_masked_while_awaiting():
     assert _fee_can_waive(held, UserRole.MANAGER) is False
     assert _fee_can_cancel(free, UserRole.ADMIN) is True
     assert _fee_can_cancel(held, UserRole.ADMIN) is False
+
+
+async def test_recalculate_and_invoice_cancel_flags_masked_while_awaiting():
+    """P2 (vòng 5): ``can_recalculate`` (fee) và ``can_cancel`` (invoice) cũng phải
+    tắt khi fee đang chờ kế toán — cả hai route đều bị chặn (calculate_fee qua
+    ``assert_major_change_cycle_closed``; cancel_invoice qua guard fee cha), nên cờ
+    True là nút chết. Mask ở helper dùng chung ⇒ phủ cả detail LẪN collection."""
+    from types import SimpleNamespace
+
+    from app.core.constants import UserRole
+    from app.routers.fees import _fee_can_recalculate
+    from app.routers.invoices import _compute_invoice_permissions
+
+    fee_free = SimpleNamespace(
+        status="invoiced", paid_amount=Decimal("0"),
+        remaining_amount=Decimal("9200000"),
+        awaiting_accountant_confirmation=False,
+    )
+    fee_held = SimpleNamespace(
+        status="invoiced", paid_amount=Decimal("0"),
+        remaining_amount=Decimal("9200000"),
+        awaiting_accountant_confirmation=True,
+    )
+    assert _fee_can_recalculate(fee_free, UserRole.MANAGER) is True
+    assert _fee_can_recalculate(fee_held, UserRole.MANAGER) is False
+
+    def _invoice(parent_fee):
+        inv = SimpleNamespace(
+            status="issued", paid_amount=Decimal("0"),
+            remaining_amount=Decimal("9200000"),
+            due_date=date(2026, 9, 30),
+        )
+        # ``_compute_invoice_permissions`` đọc fee qua ``__dict__`` để tránh
+        # lazy-load → SimpleNamespace.__dict__ chính là chỗ nó tra.
+        inv.fee = parent_fee
+        return inv
+
+    assert _compute_invoice_permissions(
+        _invoice(fee_free), UserRole.MANAGER
+    )["can_cancel"] is True
+    assert _compute_invoice_permissions(
+        _invoice(fee_held), UserRole.MANAGER
+    )["can_cancel"] is False
+
+
+async def test_two_flags_come_from_one_snapshot(
+    seed_lead_dependencies, major_change_on, monkeypatch
+):
+    """P2 (vòng 5): 2 cờ banner phải đến từ MỘT snapshot. Trước: query cycle rồi
+    query awaiting lần nữa — kế toán confirm đúng giữa 2 SELECT ⇒ tổ hợp không có
+    thật ``cycle_open=True, awaiting=False`` ⇒ banner tụt về giai đoạn 1, nói giấy
+    cũ CÒN hiệu lực dù vừa bị supersede.
+
+    Mô phỏng: cờ profile đã clear (giai đoạn 2 thuần), awaiting=True. Đếm số lần
+    query awaiting — chỉ được 1, và 2 cờ phải nhất quán."""
+    import app.services.admission_service as adm
+
+    _, ids = await _seed_regate_profile(
+        seed_lead_dependencies, major_change_requested=False, awaiting=True
+    )
+    profile = await _load_profile(ids["profile_id"])
+    profile.permissions = {}
+    calls: list[int] = []
+
+    from app.services import fee_calculation_service as fcs
+
+    _real_fn = fcs.has_awaiting_major_change_fee
+
+    async def _counting(db, prof):
+        calls.append(1)
+        return await _real_fn(db, prof)
+
+    # ``_populate_major_change_flag`` dùng local import → patch trên module đích
+    # có tác dụng (attribute được tra lúc gọi).
+    monkeypatch.setattr(fcs, "has_awaiting_major_change_fee", _counting)
+
+    async with AsyncSessionLocal() as db:
+        await adm._populate_major_change_flag(db, profile)
+
+    assert len(calls) == 1, f"phải query awaiting ĐÚNG 1 lần, thực tế {len(calls)}"
+    assert profile.major_change_cycle_open is True
+    assert profile.major_change_awaiting_confirmation is True, (
+        "2 cờ lệch nhau = tổ hợp không có thật, banner sẽ nói sai về hiệu lực giấy"
+    )

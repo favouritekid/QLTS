@@ -3842,12 +3842,18 @@ async def _populate_major_change_flag(
     """
     from app.services.fee_calculation_service import (
         has_awaiting_major_change_fee,
-        is_major_change_cycle_open,
     )
 
-    cycle_open = await is_major_change_cycle_open(db, profile)
-    # Giai đoạn 2 (đã reprice, chờ kế toán) → chỉ query khi chu kỳ đang mở.
-    awaiting = await has_awaiting_major_change_fee(db, profile) if cycle_open else False
+    # MỘT query duy nhất rồi SUY RA cả hai cờ. Gọi
+    # ``is_major_change_cycle_open`` rồi ``has_awaiting_major_change_fee`` là HAI
+    # SELECT ở hai thời điểm: kế toán confirm đúng giữa hai lệnh → response mang
+    # ``cycle_open=True, awaiting=False`` (một tổ hợp không có thật) và banner tụt
+    # về giai đoạn 1, nói giấy cũ CÒN hiệu lực trong khi nó vừa bị supersede. Cùng
+    # một snapshot thì tổ hợp đó không dựng được.
+    awaiting = await has_awaiting_major_change_fee(db, profile)
+    cycle_open = bool(
+        getattr(profile, "major_change_requested", False) or awaiting
+    )
     _set_major_change_flag(profile, cycle_open, awaiting)
     await _populate_major_change_capability(db, profile)
 
