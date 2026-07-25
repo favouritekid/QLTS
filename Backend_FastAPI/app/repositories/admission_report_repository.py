@@ -525,7 +525,14 @@ class AdmissionReportRepository:
                 models.Fee.admission_profile_id.in_(profile_ids),
                 # Admission-relevant fees only, so gross/net reconciles with the
                 # application+tuition split (excludes dormitory/insurance/...).
+                # Tuition CHỈ HK1 (semester_no=1) — khớp cột đếm hồ sơ (HK1-only)
+                # VÀ Excel _REVENUE_SQL; nếu không, tuition_net gồm HK2+ trong khi
+                # count chỉ HK1 → hai số "tuition theo ngành" lệch nhau.
                 models.Fee.fee_type.in_(("application", "tuition")),
+                or_(
+                    models.Fee.fee_type == "application",
+                    models.Fee.semester_no == 1,
+                ),
                 models.PaymentTransaction.transaction_type.in_(_CASH_TYPES),
                 models.PaymentTransaction.created_at < cumulative_end,
             )

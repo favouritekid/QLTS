@@ -288,8 +288,14 @@ _MAJOR_SQL = text(
 # ngành A vẫn thuộc A dù hồ sơ đã chuyển sang B. Aggregate ledger THẬT (payment +
 # refund + reversal, amount signed → net) theo Payment.recognized_major_id, KHÔNG
 # theo fee.paid_amount của NV1 hiện tại. GỒM reversal (void lô) để net đúng ngành
-# gốc. recognized NULL → sentinel ``:rev_null`` (dòng "Đã thu, chưa xác định
-# ngành"). Per-officer để khớp sheet 2. Scope-unit khớp _LEAD_SQL.
+# gốc. CHỈ HK1 (semester_no=1) — khớp cột đếm hồ sơ. recognized NULL → sentinel
+# ``:rev_null``. Per-officer để khớp sheet 2.
+#  • F13 (khớp _LEAD_SQL): LOẠI hồ sơ withdrawn/withdrawal_pending — học phí đang
+#    hoàn/đã hoàn KHÔNG phải doanh thu thực (cột đếm cũng zero chúng); nếu để lại,
+#    withdrawal_pending (refund duyệt nhưng CHƯA post ledger) sẽ thổi doanh thu.
+#  • YEAR-SCOPE (khớp _LEAD_SQL/_OFFICER_SQL qua _YEAR_SCOPE): revenue chỉ của
+#    lead TRONG cùng phạm vi năm với cột officer → officer luôn ∈ officer_id_set
+#    (không rơi 'Chưa PC' oan) + tổng Excel reconcile với báo cáo tuần.
 _REVENUE_SQL = text(
     """
     SELECT COALESCE(pay.recognized_major_id, CAST(:rev_null AS INTEGER)) AS rmaj,
@@ -301,9 +307,15 @@ _REVENUE_SQL = text(
               AND f.fee_type = 'tuition' AND f.semester_no = 1
     JOIN admission_profile ap ON f.admission_profile_id = ap.id
                               AND ap.academic_year = :year
+                              AND ap.status NOT IN
+                                  ('withdrawn', 'withdrawal_pending')
     JOIN lead l ON ap.lead_id = l.id AND l.deleted_at IS NULL
+    LEFT JOIN program_offering po ON l.offering_id = po.id
     WHERE pt.transaction_type IN ('payment', 'refund', 'reversal')
       AND (CAST(:unit AS INTEGER) IS NULL OR l.unit_id = CAST(:unit AS INTEGER))
+    """
+    + _YEAR_SCOPE
+    + """
     GROUP BY 1, 2
     """
 )
@@ -382,8 +394,11 @@ class AdmissionSummaryExportService:
         oshort = _officer_short_names(oname, officer_ids)
         # "Chưa PC" cần cho lead-không-officer VÀ doanh thu-không-officer (phiếu
         # thu của hồ sơ chưa gán cán bộ vẫn phải vào cột nào đó ở sheet 2).
+        # ⚠️ KHÔNG guard `and r["revenue"]`: revenue loop bump MỌI row (kể cả net
+        # 0 do void sạch) vào cột theo r["off"] → nếu off ∉ set mà cột _UNASSIGNED
+        # chưa add (revenue=0 falsy làm rev_unassigned False) → bump KeyError → 500.
         rev_unassigned = any(
-            r["off"] not in officer_id_set and r["revenue"] for r in revenue
+            r["off"] not in officer_id_set for r in revenue
         )
         n_unassigned = sum(1 for r in leads if r["off"] not in officer_id_set)
         # Sheet-2 columns = officers (+ "Chưa PC" if any lead has no officer) so

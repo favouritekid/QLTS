@@ -323,6 +323,69 @@ async def test_export_revenue_sql_hk1_only_excludes_hk2(
     )
 
 
+async def test_export_revenue_sql_nets_reversal(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """Excel _REVENUE_SQL net reversal THẬT (thực thi SQL, không mock): payment
+    5M + reversal −2M (void lô) → Doanh thu 3M. Nếu bỏ 'reversal' khỏi
+    transaction_type IN(...) → 5M (over-count)."""
+    from app.services.admission_summary_export_service import (
+        _REVENUE_SQL, _REVENUE_NULL,
+    )
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    major, offering = await _seed_catalog(db, year, unit_id)
+    _, profile = await _seed_lead_profile(
+        db, seeded_dependencies, year, offering.id, officer_id,
+        created_at=datetime.now(timezone.utc),
+    )
+    fee = await _seed_fee(db, profile.id, year, fee_type="tuition")
+    now = datetime.now(timezone.utc)
+    pay_id = await _seed_tuition_payment_recognized(
+        db, fee, major.id, "5000000", now, officer_id)
+    await _add_ledger_txn(db, fee.id, pay_id, "reversal", "-2000000", now)
+
+    rows = (await db.execute(
+        _REVENUE_SQL, {"year": year, "unit": None, "rev_null": _REVENUE_NULL},
+    )).mappings().all()
+    assert sum(int(r["revenue"]) for r in rows) == 3_000_000
+
+
+async def test_export_revenue_sql_excludes_withdrawn(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """F13: học phí của hồ sơ withdrawal_pending (refund duyệt CHƯA post ledger)
+    KHÔNG được tính doanh thu — khớp cột đếm hồ sơ (F13 zero). _REVENUE_SQL loại
+    theo ap.status."""
+    from app.services.admission_summary_export_service import (
+        _REVENUE_SQL, _REVENUE_NULL,
+    )
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    major, offering = await _seed_catalog(db, year, unit_id)
+    _, profile = await _seed_lead_profile(
+        db, seeded_dependencies, year, offering.id, officer_id,
+        created_at=datetime.now(timezone.utc),
+    )
+    fee = await _seed_fee(db, profile.id, year, fee_type="tuition")
+    await _seed_tuition_payment_recognized(
+        db, fee, major.id, "9000000", datetime.now(timezone.utc), officer_id)
+    # Chuyển hồ sơ sang withdrawal_pending (refund chưa post → không có ledger bù).
+    async with db.begin_nested():
+        p = await db.get(models.AdmissionProfile, profile.id)
+        p.status = "withdrawal_pending"
+    await db.flush()
+
+    rows = (await db.execute(
+        _REVENUE_SQL, {"year": year, "unit": None, "rev_null": _REVENUE_NULL},
+    )).mappings().all()
+    assert sum(int(r["revenue"]) for r in rows) == 0, (
+        "học phí hồ sơ đang rút KHÔNG được là doanh thu (F13)"
+    )
+
+
 async def test_reversal_reduces_net_not_counted_as_refund(
     db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
 ):
@@ -362,6 +425,39 @@ async def test_reversal_reduces_net_not_counted_as_refund(
     assert row.finance.net_in_week == Decimal("3000000")  # 5 − 2 (reversal giảm)
     assert row.finance.net_cumulative == Decimal("3000000")
     assert row.finance.tuition_net_in_week == Decimal("3000000")
+    assert row.finance.profiles_paid == 1  # net 3M > 0 → vẫn "đã đóng"
+
+
+async def test_reversal_full_void_clears_profiles_paid(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """Void SẠCH (reversal = −payment) → net 0 → profiles_paid = 0 (KHÔNG còn
+    'đã đóng'). Trước fix: profiles_paid vẫn = 1 vì đếm theo 'có payment txn'."""
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    anchor, win = _week(year)
+    major, offering = await _seed_catalog(db, year, unit_id)
+    _, profile = await _seed_lead_profile(
+        db, seeded_dependencies, year, offering.id, officer_id,
+        created_at=win.start + timedelta(days=1),
+    )
+    await _seed_history(db, profile.id, "submitted", win.start + timedelta(days=1))
+    fee = await _seed_fee(db, profile.id, year, fee_type="tuition")
+    pay_id = await _seed_tuition_payment_recognized(
+        db, fee, major.id, "5000000", win.start + timedelta(days=2), officer_id)
+    await _add_ledger_txn(
+        db, fee.id, pay_id, "reversal", "-5000000",
+        win.start + timedelta(days=3))
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=year, group_by="major",
+        week_start=anchor)
+    row = _find(resp.rows, major.id)
+    assert row is not None
+    assert row.finance.net_cumulative == Decimal("0")
+    assert row.finance.profiles_paid == 0, "void sạch KHÔNG còn 'đã đóng'"
 
 
 async def test_tuition_revenue_by_recognized_major_after_change(

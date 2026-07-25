@@ -323,10 +323,10 @@ class AdmissionReportService:
         # thuộc A dù hồ sơ đã đổi sang B. Application fee + officer mode giữ theo
         # DIM (hồ sơ/cán bộ hiện tại). ``profiles_paid`` LUÔN đếm theo dim (hồ sơ)
         # — một hồ sơ trả ở A rồi B chỉ đếm 1 lần ở ngành hiện tại, KHÔNG double.
-        paid_profiles: dict[GroupKey, set] = {}
-        # Profiles with a cumulative APPLICATION-fee payment — used to surface the
-        # "đã đóng lệ phí nhưng chưa nộp hồ sơ" (prepay-draft) cohort below.
-        app_paid_profiles: dict[GroupKey, set] = {}
+        # dim → {pid → net cash} (payment−refund−reversal); profiles_paid = số pid
+        # net > 0 (void sạch không tính). App riêng cho prepay-draft cohort.
+        paid_net: dict[GroupKey, dict[int, Decimal]] = {}
+        app_paid_net: dict[GroupKey, dict[int, Decimal]] = {}
         # major_id (int) xuất hiện QUA TIỀN nhưng có thể vắng trong dims/quota
         # (ngành A: tiền lịch sử, hồ sơ đã chuyển) — thu để lookup label sau.
         revenue_only_major_ids: set[int] = set()
@@ -348,11 +348,16 @@ class AdmissionReportService:
             f = _row(amount_key).finance
             amt = Decimal(amount)
             f.net_cumulative += amt
-            if ttype == "payment":
-                # profiles_paid theo DIM (hồ sơ) — không theo amount_key.
-                paid_profiles.setdefault(dim_key, set()).add(pid)
-                if fee_type == "application":
-                    app_paid_profiles.setdefault(dim_key, set()).add(pid)
+            # profiles_paid theo DIM (hồ sơ) — đếm theo NET (payment−refund−
+            # reversal) > 0, KHÔNG chỉ "có ≥1 payment": hồ sơ void SẠCH (net 0)
+            # KHÔNG còn là "đã đóng". Cộng MỌI cash txn (kể cả refund/reversal).
+            paid_net.setdefault(dim_key, {})
+            paid_net[dim_key][pid] = paid_net[dim_key].get(pid, Decimal("0")) + amt
+            if fee_type == "application":
+                app_paid_net.setdefault(dim_key, {})
+                app_paid_net[dim_key][pid] = (
+                    app_paid_net[dim_key].get(pid, Decimal("0")) + amt
+                )
             if week.start <= created_at < week.end_excl:
                 f.net_in_week += amt
                 if ttype == "payment":
@@ -366,15 +371,19 @@ class AdmissionReportService:
                     f.application_net_in_week += amt
                 elif fee_type == "tuition":
                     f.tuition_net_in_week += amt
-        for key, pids in paid_profiles.items():
-            _row(key).finance.profiles_paid = len(pids)
+        for key, pid_nets in paid_net.items():
+            _row(key).finance.profiles_paid = sum(
+                1 for net in pid_nets.values() if net > 0
+            )
         # Prepay-draft: đã đóng lệ phí xét tuyển nhưng CHƯA nộp hồ sơ (no submitted
-        # milestone) — nhóm prepay fast-track cần nhắc hoàn tất nộp hồ sơ.
-        for key, pids in app_paid_profiles.items():
+        # milestone) — nhóm prepay fast-track cần nhắc hoàn tất nộp hồ sơ. Chỉ pid
+        # có lệ phí net > 0 (đã hoàn/void thì không còn "đã đóng").
+        for key, pid_nets in app_paid_net.items():
             _row(key).admission.fee_paid_not_submitted = sum(
                 1
-                for pid in pids
-                if not milestones.get(pid, {}).get("submitted_cumulative")
+                for pid, net in pid_nets.items()
+                if net > 0
+                and not milestones.get(pid, {}).get("submitted_cumulative")
             )
 
         # ---- labels

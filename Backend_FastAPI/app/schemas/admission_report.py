@@ -80,7 +80,11 @@ class ConversionMetrics(BaseModel):
 
 
 class FinanceMetrics(BaseModel):
-    # ledger PaymentTransaction.created_at; payment|refund (refund stored negative).
+    # ledger PaymentTransaction.created_at; payment | refund | reversal (refund &
+    # reversal stored negative). ⚠️ gross = payment only; refund = |refund| only;
+    # REVERSAL (void lô) chỉ GIẢM net (không có cột riêng, không gộp gross/refund)
+    # → khi có reversal trong tuần, net_in_week ≠ gross_in_week − refund_in_week
+    # (phần chênh = reversal). tuition HK1-only (semester_no=1).
     gross_in_week: Decimal = Decimal("0")
     refund_in_week: Decimal = Decimal("0")
     net_in_week: Decimal = Decimal("0")

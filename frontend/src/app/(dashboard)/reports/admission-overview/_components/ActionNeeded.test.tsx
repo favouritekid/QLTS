@@ -23,7 +23,7 @@ function cleanReport(): AdmissionWeeklyReport {
       week_end: "2026-07-26",
     },
     scope_unit_id: null,
-    attribution: "recomputed-current",
+    attribution: { admission: "recomputed-current", tuition_revenue: "major-at-verified" },
     rows: [],
     totals: {
       group_key: null,
