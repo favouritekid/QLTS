@@ -11,8 +11,10 @@ import {
 
 import { cn } from "@/lib/utils";
 import { formatVND } from "@/lib/zod/finance";
-import type { AdmissionWeeklyReport, ReportRow } from "@/lib/zod/reports";
+import type { AdmissionWeeklyReport } from "@/lib/zod/reports";
 import type { DebtReportResponse } from "@/types/finance.types";
+
+import { cleanName } from "./labels";
 
 const nf = new Intl.NumberFormat("vi-VN");
 
@@ -55,12 +57,6 @@ interface Alert {
   title: string;
   value: string;
   hint?: string;
-}
-
-function cleanName(r: ReportRow): string {
-  return r.code && r.label.endsWith(`(${r.code})`)
-    ? r.label.slice(0, -(r.code.length + 2)).trimEnd()
-    : r.label;
 }
 
 /**

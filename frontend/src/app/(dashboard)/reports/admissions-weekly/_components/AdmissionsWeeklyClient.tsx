@@ -19,7 +19,7 @@ import { exportAdmissionSummary } from "@/lib/api/reports";
 import { useReportFilters, useWeeklyReport } from "@/hooks/reports/useWeeklyReport";
 import { cn } from "@/lib/utils";
 import { blobErrorMessage, downloadBlob } from "@/lib/utils/download-blob";
-import { subDaysVN } from "@/lib/utils/vn-date";
+import { dmVN, subDaysVN } from "@/lib/utils/vn-date";
 import type { ReportGroupBy } from "@/lib/zod/reports";
 
 import { rankByQuotaGap } from "./cockpit-rank";
@@ -28,8 +28,6 @@ import { WeeklyReportTable, type Period } from "./WeeklyReportTable";
 
 const CURRENT_YEAR = new Date().getFullYear();
 const ALL_ROUNDS = "__all__";
-
-const dm = (s: string) => `${s.slice(8, 10)}/${s.slice(5, 7)}`;
 
 /** Friendly message instead of dumping a raw AxiosError / ZodError. */
 function errMessage(err: unknown): string {
@@ -176,7 +174,7 @@ export function AdmissionsWeeklyClient() {
                   <>
                     <span className="font-medium">Tuần {week.iso_week}</span>
                     <span className="block text-xs text-muted-foreground">
-                      {dm(week.week_start)} – {dm(week.week_end)}
+                      {dmVN(week.week_start)} – {dmVN(week.week_end)}
                     </span>
                   </>
                 ) : (

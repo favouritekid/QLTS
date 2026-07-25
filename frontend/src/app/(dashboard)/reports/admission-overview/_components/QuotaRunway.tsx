@@ -5,6 +5,8 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import type { OfficerMajorMatrix, ReportRow } from "@/lib/zod/reports";
 
+import { cleanName } from "./labels";
+
 const nf = new Intl.NumberFormat("vi-VN");
 
 /** Màu % độ đầy — rose = nguy cơ, emerald = đạt; tách khỏi màu thanh (amber/sky). */
@@ -13,13 +15,6 @@ function toneText(r: number | null): string {
   if (r >= 0.9) return "text-emerald-600 dark:text-emerald-500";
   if (r < 0.5) return "text-rose-600 dark:text-rose-500";
   return "text-foreground";
-}
-
-/** Bỏ hậu tố "(mã)" trùng ở label (mã đã hiện riêng). */
-function cleanName(r: ReportRow): string {
-  return r.code && r.label.endsWith(`(${r.code})`)
-    ? r.label.slice(0, -(r.code.length + 2)).trimEnd()
-    : r.label;
 }
 
 function LegendItem({ className, label }: { className: string; label: string }) {
