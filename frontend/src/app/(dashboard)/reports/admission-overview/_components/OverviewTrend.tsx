@@ -13,22 +13,22 @@ import {
 } from "recharts";
 
 import type { AdmissionTrend } from "@/lib/zod/reports";
+import { dmVN } from "@/lib/utils/vn-date";
 
 // Funnel-ordered, theme-legible hues (app convention: recharts hardcodes hex).
 // neutral (top of funnel) → indigo (progressing) → emerald (goal reached).
+// Series data key khớp nhãn cột "Nộp hồ sơ"/… đặt trực tiếp trong map bên dưới.
 const SERIES = [
-  { key: "Nộp hồ sơ", field: "submitted_cumulative", color: "#64748b" },
-  { key: "Đủ điều kiện", field: "admitted_cumulative", color: "#6366f1" },
-  { key: "Nhập học", field: "enrolled_cumulative", color: "#10b981" },
+  { key: "Nộp hồ sơ", color: "#64748b" },
+  { key: "Đủ điều kiện", color: "#6366f1" },
+  { key: "Nhập học", color: "#10b981" },
 ] as const;
-
-const dm = (s: string) => `${s.slice(8, 10)}/${s.slice(5, 7)}`;
 
 export function OverviewTrend({ trend }: { trend: AdmissionTrend }) {
   const data = React.useMemo(
     () =>
       trend.points.map((p) => ({
-        label: dm(p.week_start),
+        label: dmVN(p.week_start),
         "Nộp hồ sơ": p.submitted_cumulative,
         "Đủ điều kiện": p.admitted_cumulative,
         "Nhập học": p.enrolled_cumulative,

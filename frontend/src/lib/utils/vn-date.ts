@@ -34,6 +34,11 @@ export function startOfMonthVN(dateStr: string): string {
   return dateStr.slice(0, 8) + "01";
 }
 
+/** "YYYY-MM-DD" → "DD/MM" — nhãn ngày gọn (trục biểu đồ / tuần). */
+export function dmVN(dateStr: string): string {
+  return `${dateStr.slice(8, 10)}/${dateStr.slice(5, 7)}`;
+}
+
 /**
  * ISO-8601 week-numbering YEAR of a YYYY-MM-DD date. The ISO year is the year of
  * the Thursday in that date's week, so late-December days can belong to next

@@ -39,7 +39,7 @@ import { useReportFilters, useWeeklyReport } from "@/hooks/reports/useWeeklyRepo
 import { exportAdmissionSummary } from "@/lib/api/reports";
 import { cn } from "@/lib/utils";
 import { blobErrorMessage, downloadBlob } from "@/lib/utils/download-blob";
-import { isoWeekYearVN, subDaysVN } from "@/lib/utils/vn-date";
+import { dmVN, isoWeekYearVN, subDaysVN } from "@/lib/utils/vn-date";
 import type { AdmissionWeeklyReport, ReportGroupBy } from "@/lib/zod/reports";
 
 import { ActionNeeded } from "./ActionNeeded";
@@ -65,8 +65,6 @@ import {
 
 /** Empty ổn định — tránh churn dep của effect canonicalize khi filters đang tải. */
 const NO_ROUNDS: readonly string[] = [];
-
-const dm = (s: string) => `${s.slice(8, 10)}/${s.slice(5, 7)}`;
 
 function errMessage(err: unknown): string {
   const e = err as {
@@ -283,6 +281,35 @@ export function AdmissionOverviewClient() {
     round === ALL_ROUNDS &&
     majorRowsQ.some((r) => r.admission.quota != null && r.admission.quota > 0);
 
+  // Panel overview (funnel/trend/matrix/wow) dùng `placeholderData: prev` → trong
+  // bootstrap deep-link, sau khi scope resolve chúng còn giữ lát cắt TOÀN-TRƯỜNG cũ
+  // trong lúc refetch scope mới. `scopeResolved` đơn thuần KHÔNG đủ (rereview): phải
+  // validate scope echo (năm · đợt · đơn vị) như bảng weekly, nếu không admin mở
+  // ?unit=<id> vẫn thoáng thấy toàn-trường. Cả 4 response đều echo scope → isSliceCurrent.
+  const overviewExpected = {
+    year,
+    round: expectedRound,
+    unit: expectedUnit,
+    scopeResolved,
+    roundResolved,
+  };
+  const funnelData = isSliceCurrent(funnel.data, overviewExpected)
+    ? funnel.data
+    : undefined;
+  const trendData = isSliceCurrent(trend.data, overviewExpected)
+    ? trend.data
+    : undefined;
+  const matrixData = isSliceCurrent(matrix.data, overviewExpected)
+    ? matrix.data
+    : undefined;
+  const wowData = isSliceCurrent(wow.data, overviewExpected)
+    ? wow.data
+    : undefined;
+  // Debt KHÔNG dùng placeholderData → data về undefined khi đổi key (không stale
+  // cross-scope) VÀ không echo scope → chỉ cần chờ scope resolve.
+  const debtData = scopeResolved ? debt.data : undefined;
+  const debtBusy = !scopeResolved || debt.isLoading;
+
   // Chặn điều hướng tuần RA NGOÀI năm tuyển sinh: BE từ chối week_start có ISO year
   // != academic_year (đối xứng), nên nút phải tự khoá ở tuần đầu/cuối năm thay vì
   // để bấm rồi nhận 400. So bằng ISO-week-year của tuần kế/trước (mirror BE).
@@ -495,8 +522,8 @@ export function AdmissionOverviewClient() {
                 {syncedMajor && (
                   <ActionNeeded
                     report={syncedMajor}
-                    debt={debt.data}
-                    debtLoading={debt.isLoading}
+                    debt={debtData}
+                    debtLoading={debtBusy}
                     debtError={debt.isError}
                   />
                 )}
@@ -505,8 +532,11 @@ export function AdmissionOverviewClient() {
 
             {/* 0b. Nhịp so tuần trước — biến động 2 tuần ISO đã hoàn tất (WoW) */}
             <Panel title="Nhịp so tuần trước">
-              <PanelState query={wow} skeleton="h-28 w-full">
-                {wow.data && <WowStrip wow={wow.data} />}
+              <PanelState
+                query={{ isError: wow.isError, error: wow.error, data: wowData }}
+                skeleton="h-28 w-full"
+              >
+                {wowData && <WowStrip wow={wowData} />}
               </PanelState>
             </Panel>
 
@@ -564,7 +594,7 @@ export function AdmissionOverviewClient() {
                 skeleton="h-56 w-full"
               >
                 {syncedMajor && (
-                  <QuotaRunway rows={syncedMajor.rows} matrix={matrix.data} />
+                  <QuotaRunway rows={syncedMajor.rows} matrix={matrixData} />
                 )}
               </PanelState>
             </Panel>
@@ -576,24 +606,31 @@ export function AdmissionOverviewClient() {
                 theo đợt. “Đã thu” ở đây = đã thu trên hoá đơn CÒN NỢ (khác dải KPI
                 “Thu ròng tuyển sinh” = tổng cash mọi phí).
               </p>
-              <DebtPanel summary={debt.data?.summary} isLoading={debt.isLoading} />
+              <DebtPanel summary={debtData?.summary} isLoading={debtBusy} />
             </Panel>
 
             {/* 3. Phễu + 4. Xu hướng — phân tích nguyên nhân, đặt sau khu hành động */}
             <div className="grid gap-4 lg:grid-cols-2">
-              <Panel title="Phễu LEAD theo giai đoạn">
+              <Panel title="LEAD theo giai đoạn pipeline">
                 <p className="mb-3 -mt-1 text-xs text-muted-foreground">
-                  Đếm <strong>LEAD</strong> đi tới từng bước pipeline (cohort đợt,
-                  gồm khách vãng lai) — <em>khác</em> KPI “Hồ sơ đã nộp” (đếm theo
-                  hồ sơ). Không so trực tiếp hai con số.
+                  Số <strong>LEAD đang ở mỗi bậc</strong> pipeline (mỗi lead đếm
+                  đúng 1 lần — khớp Pipeline Board / danh sách Lead). Phân bố hiện
+                  trạng, <em>không</em> lũy kế; <em>khác</em> KPI “Hồ sơ đã nộp”
+                  (đếm theo hồ sơ). Không so trực tiếp hai con số.
                 </p>
-                <PanelState query={funnel} skeleton="h-64 w-full">
-                  {funnel.data && <OverviewFunnel funnel={funnel.data} />}
+                <PanelState
+                  query={{ isError: funnel.isError, error: funnel.error, data: funnelData }}
+                  skeleton="h-64 w-full"
+                >
+                  {funnelData && <OverviewFunnel funnel={funnelData} />}
                 </PanelState>
               </Panel>
               <Panel title="Nhịp tích luỹ 8 tuần">
-                <PanelState query={trend} skeleton="h-64 w-full">
-                  {trend.data && <OverviewTrend trend={trend.data} />}
+                <PanelState
+                  query={{ isError: trend.isError, error: trend.error, data: trendData }}
+                  skeleton="h-64 w-full"
+                >
+                  {trendData && <OverviewTrend trend={trendData} />}
                 </PanelState>
               </Panel>
             </div>
@@ -608,10 +645,13 @@ export function AdmissionOverviewClient() {
           {/* ---- TAB PHÂN TÍCH CHI TIẾT: heatmap + bảng đầy đủ (truy vấn sâu) ---- */}
           <TabsContent value="analysis" className="mt-4 space-y-4">
             <Panel title="Tải hồ sơ theo ngành × cán bộ">
-              <PanelState query={matrix} skeleton="h-56 w-full">
-                {matrix.data && (
+              <PanelState
+                query={{ isError: matrix.isError, error: matrix.error, data: matrixData }}
+                skeleton="h-56 w-full"
+              >
+                {matrixData && (
                   <OfficerMajorHeatmap
-                    matrix={matrix.data}
+                    matrix={matrixData}
                     tabKey={heatmap}
                     onTabKeyChange={(k) => patch({ heatmap: k as HeatmapTab })}
                   />
@@ -651,7 +691,7 @@ export function AdmissionOverviewClient() {
                         <>
                           <span className="font-medium">Tuần {weekMeta.iso_week}</span>
                           <span className="block text-xs text-muted-foreground">
-                            {dm(weekMeta.week_start)} – {dm(weekMeta.week_end)}
+                            {dmVN(weekMeta.week_start)} – {dmVN(weekMeta.week_end)}
                           </span>
                         </>
                       ) : (

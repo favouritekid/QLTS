@@ -4,10 +4,10 @@ import * as React from "react";
 import { Minus, TrendingDown, TrendingUp } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { dmVN } from "@/lib/utils/vn-date";
 import type { AdmissionWow, WowMovement } from "@/lib/zod/reports";
 
 const nf = new Intl.NumberFormat("vi-VN");
-const dm = (s: string) => `${s.slice(8, 10)}/${s.slice(5, 7)}`;
 
 /** 3 milestone tổng — nhãn TRUNG THỰC: đây là sự kiện MỚI trong tuần, KHÔNG lũy kế. */
 const MILESTONES: { key: "submitted" | "admitted" | "enrolled"; label: string }[] = [
@@ -74,8 +74,8 @@ export function WowStrip({ wow }: { wow: AdmissionWow }) {
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
         Sự kiện <strong>mới phát sinh</strong> trong tuần (không phải lũy kế). Tuần{" "}
-        {cur.iso_week} ({dm(cur.week_start)}–{dm(cur.week_end)}) so tuần {prev.iso_week}{" "}
-        ({dm(prev.week_start)}–{dm(prev.week_end)}).
+        {cur.iso_week} ({dmVN(cur.week_start)}–{dmVN(cur.week_end)}) so tuần{" "}
+        {prev.iso_week} ({dmVN(prev.week_start)}–{dmVN(prev.week_end)}).
       </p>
       <div className="grid gap-3 sm:grid-cols-3">
         {MILESTONES.map(({ key, label }) => {
