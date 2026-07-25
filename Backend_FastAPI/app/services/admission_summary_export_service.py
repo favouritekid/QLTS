@@ -297,7 +297,8 @@ _REVENUE_SQL = text(
            COALESCE(SUM(pt.amount), 0) AS revenue
     FROM payment_transaction pt
     JOIN payment pay ON pt.payment_id = pay.id
-    JOIN fee f ON pt.fee_id = f.id AND f.fee_type = 'tuition'
+    JOIN fee f ON pt.fee_id = f.id
+              AND f.fee_type = 'tuition' AND f.semester_no = 1
     JOIN admission_profile ap ON f.admission_profile_id = ap.id
                               AND ap.academic_year = :year
     JOIN lead l ON ap.lead_id = l.id AND l.deleted_at IS NULL

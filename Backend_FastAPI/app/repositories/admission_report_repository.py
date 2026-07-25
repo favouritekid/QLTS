@@ -44,8 +44,11 @@ UNASSIGNED = "unassigned"
 # không phân loại ngành) hay application (không phân bổ ngành theo thiết kế).
 UNKNOWN_MAJOR = "unknown_major"
 
-# Cash-affecting ledger types only (waive/adjustment/penalty/reversal are not cash).
-_CASH_TYPES = ("payment", "refund")
+# Cash-affecting ledger types: payment (thu), refund (hoàn), reversal (đảo/void
+# lô — số ÂM, giảm tiền đã thu). waive/adjustment/penalty KHÔNG phải cash.
+# ⚠️ reversal do void lô tạo (payment_import_service ~1644) — TRƯỚC đây bị bỏ sót
+# nên payment đã void vẫn nằm trong net; giờ gồm để net phản ánh đúng.
+_CASH_TYPES = ("payment", "refund", "reversal")
 
 GroupKey = Union[int, str]  # major_id / officer_id, or a bucket sentinel
 

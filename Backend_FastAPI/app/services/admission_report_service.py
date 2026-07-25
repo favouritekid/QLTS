@@ -357,8 +357,11 @@ class AdmissionReportService:
                 f.net_in_week += amt
                 if ttype == "payment":
                     f.gross_in_week += amt
-                else:  # refund — amount is negative; report as a positive figure
+                elif ttype == "refund":  # amount âm → hiển thị số dương
                     f.refund_in_week += abs(amt)
+                # reversal (void lô): amount âm → ĐÃ giảm net_in_week/tuition_net
+                # ở trên. KHÔNG là gross (không phải thu mới) và KHÔNG gộp vào
+                # refund_in_week (reversal ≠ hoàn tiền nghiệp vụ) — chỉ giảm net.
                 if fee_type == "application":
                     f.application_net_in_week += amt
                 elif fee_type == "tuition":

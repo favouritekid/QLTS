@@ -262,6 +262,106 @@ async def _seed_tuition_payment_recognized(
         )
     )
     await db.flush()
+    return payment.id
+
+
+async def _add_ledger_txn(db, fee_id, payment_id, ttype, amount, created_at):
+    """PaymentTransaction (refund/reversal) LINK payment gốc — để finance_rows
+    net theo recognized_major của payment gốc."""
+    db.add(
+        models.PaymentTransaction(
+            payment_id=payment_id, fee_id=fee_id, transaction_type=ttype,
+            amount=Decimal(amount), balance_before=Decimal("0"),
+            balance_after=Decimal("0"), created_at=created_at,
+        )
+    )
+    await db.flush()
+
+
+async def test_export_revenue_sql_hk1_only_excludes_hk2(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """Excel Doanh thu: _REVENUE_SQL CHỈ tính học phí HK1 (semester_no=1) — khớp
+    contract + cột đếm hồ sơ (chỉ HK1). Blocker: thiếu semester_no=1 → HK2 lọt
+    vào Doanh thu trong khi đếm chỉ HK1. Thực thi SQL THẬT (không mock)."""
+    from app.services.admission_summary_export_service import (
+        _REVENUE_SQL, _REVENUE_NULL,
+    )
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    major, offering = await _seed_catalog(db, year, unit_id)
+    _, profile = await _seed_lead_profile(
+        db, seeded_dependencies, year, offering.id, officer_id,
+        created_at=datetime.now(timezone.utc),
+    )
+    hk1_fee = await _seed_fee(db, profile.id, year, fee_type="tuition")
+    # HK2 fee (semester_no=2) — KHÔNG được vào Doanh thu.
+    hk2_fee = models.Fee(
+        admission_profile_id=profile.id, fee_type="tuition",
+        academic_year=year, base_amount=Decimal("3000000"),
+        final_amount=Decimal("3000000"), semester_no=2,
+        calculated_at=datetime.now(timezone.utc),
+    )
+    db.add(hk2_fee)
+    await db.flush()
+    now = datetime.now(timezone.utc)
+    await _seed_tuition_payment_recognized(
+        db, hk1_fee, major.id, "5000000", now, officer_id)
+    await _seed_tuition_payment_recognized(
+        db, hk2_fee, major.id, "3000000", now, officer_id)
+
+    rows = (
+        await db.execute(
+            _REVENUE_SQL,
+            {"year": year, "unit": None, "rev_null": _REVENUE_NULL},
+        )
+    ).mappings().all()
+    total = sum(int(r["revenue"]) for r in rows)
+    assert total == 5_000_000, (
+        f"Doanh thu phải CHỈ HK1 (5M), HK2 (3M) bị loại; got {total}"
+    )
+
+
+async def test_reversal_reduces_net_not_counted_as_refund(
+    db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
+):
+    """Void lô tạo PaymentTransaction(type='reversal', số ÂM) → GIẢM net (in_week
+    + cumulative) nhưng KHÔNG vào refund_in_week (reversal ≠ hoàn tiền) và KHÔNG
+    vào gross_in_week (không phải thu mới). Blocker: trước đây _CASH_TYPES bỏ sót
+    reversal → payment void vẫn nằm nguyên trong net."""
+    year = next(_year_seq)
+    unit_id = seeded_dependencies["unit_id"]
+    officer_id = officer_user_in_db["id"]
+    anchor, win = _week(year)
+    major, offering = await _seed_catalog(db, year, unit_id)
+    _, profile = await _seed_lead_profile(
+        db, seeded_dependencies, year, offering.id, officer_id,
+        created_at=win.start + timedelta(days=1),
+    )
+    await _seed_history(db, profile.id, "submitted", win.start + timedelta(days=1))
+    fee = await _seed_fee(db, profile.id, year, fee_type="tuition")
+    pay_id = await _seed_tuition_payment_recognized(
+        db, fee, major.id, "5000000", win.start + timedelta(days=2), officer_id,
+    )
+    # Void 2M (reversal âm) trong tuần — link payment gốc (recognized=major).
+    await _add_ledger_txn(
+        db, fee.id, pay_id, "reversal", "-2000000",
+        win.start + timedelta(days=3),
+    )
+
+    svc = AdmissionReportService(db)
+    resp = await svc.get_weekly_report(
+        current_user=_admin(), academic_year=year, group_by="major",
+        week_start=anchor,
+    )
+    row = _find(resp.rows, major.id)
+    assert row is not None
+    assert row.finance.gross_in_week == Decimal("5000000")  # chỉ payment
+    assert row.finance.refund_in_week == Decimal("0")  # reversal KHÔNG là refund
+    assert row.finance.net_in_week == Decimal("3000000")  # 5 − 2 (reversal giảm)
+    assert row.finance.net_cumulative == Decimal("3000000")
+    assert row.finance.tuition_net_in_week == Decimal("3000000")
 
 
 async def test_tuition_revenue_by_recognized_major_after_change(
