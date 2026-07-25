@@ -629,6 +629,11 @@ async def issue_enrollment_letter(
             select(
                 models.AdmissionProfile.status,
                 models.AdmissionProfile.is_dropped,
+                # Đọc TƯƠI trong CHÍNH query đã khoá — instance ``profile`` là bản
+                # trước render, ``major_change_requested`` trên đó có thể stale
+                # False sau khi admin mở chu kỳ giữa lúc render. Re-check ở dưới
+                # phải dùng giá trị này, không dùng thuộc tính của instance cũ.
+                models.AdmissionProfile.major_change_requested,
             )
             .where(models.AdmissionProfile.id == profile.id)
             .with_for_update()
@@ -678,8 +683,13 @@ async def issue_enrollment_letter(
     # F13 NGOẠI LỆ: KHÔNG dùng assert_major_change_cycle_closed vì phải DỌN file
     # PDF tạm (_best_effort_delete) TRƯỚC khi raise — helper raise thẳng không cho
     # chèn cleanup. Giữ check tường minh.
+    # Truyền cờ TƯƠI (đọc trong query đã khoá ở trên) qua một view nhẹ thay vì
+    # ``profile`` — instance cũ có thể còn ``major_change_requested=False`` trong
+    # khi admin vừa mở chu kỳ; phần ``awaiting`` của predicate là query riêng nên
+    # đã tươi sẵn.
     from app.services.fee_calculation_service import is_major_change_cycle_open
-    if await is_major_change_cycle_open(db, profile):
+    _locked_view = SimpleNamespace(id=profile.id, major_change_requested=locked[2])
+    if await is_major_change_cycle_open(db, _locked_view):
         await to_thread.run_sync(_best_effort_delete, final_path)
         raise BusinessRuleViolation(
             "Hồ sơ vừa vào quá trình đổi ngành trong lúc tạo giấy báo — không "

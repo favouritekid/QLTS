@@ -1515,3 +1515,178 @@ async def test_request_revision_flag_off_plain_still_succeeds(
     admin = await _make_admin(seed_lead_dependencies)
     status = await _request_revision(ids["profile_id"], admin["id"], allow=False)
     assert status == "revision_requested"
+
+
+# ===========================================================================
+# REVIEW VÒNG 3 — kill-switch KHÔNG được bỏ rơi chu kỳ đang bay + mutation tiền
+# bị chặn khi chờ kế toán + bypass cutoff đối xứng.
+# ===========================================================================
+async def test_cycle_stays_open_when_flag_turned_off(seed_lead_dependencies):
+    """P1: tắt cờ SAU khi chu kỳ đã mở → ``is_major_change_cycle_open`` vẫn True
+    (cả 2 nguồn: cờ profile VÀ fee awaiting). Nếu trả False thì approve/publish/
+    enroll/xuất-giấy mở lại cho hồ sơ chưa định giá lại + chưa có kế toán xác
+    nhận. Cờ chỉ chặn MỞ MỚI (test *_flag_off_with_allow_raises)."""
+    from app.services.fee_calculation_service import (
+        assert_major_change_cycle_closed,
+        is_major_change_cycle_open,
+    )
+
+    # nguồn 1: profile.major_change_requested
+    _, ids = await _seed_regate_profile(
+        seed_lead_dependencies, major_change_requested=True
+    )
+    profile = await _load_profile(ids["profile_id"])
+    async with AsyncSessionLocal() as db:
+        assert settings.MAJOR_CHANGE_REPRICE_ENABLED is False, "test này chạy cờ OFF"
+        assert await is_major_change_cycle_open(db, profile) is True
+        with pytest.raises(BusinessRuleViolation):
+            await assert_major_change_cycle_closed(db, profile, message="chặn")
+
+    # nguồn 2: fee.awaiting_accountant_confirmation (cờ profile đã clear)
+    _, ids2 = await _seed_regate_profile(
+        seed_lead_dependencies, major_change_requested=False, awaiting=True
+    )
+    profile2 = await _load_profile(ids2["profile_id"])
+    async with AsyncSessionLocal() as db:
+        assert await is_major_change_cycle_open(db, profile2) is True
+
+
+async def test_plain_rollback_clears_flag_even_when_flag_off(
+    seed_lead_dependencies, officer_user_in_db
+):
+    """Escape hatch phải chạy khi cờ OFF: sau khi tắt cờ, đây là đường DUY NHẤT
+    clear ``major_change_requested`` qua API — gate cờ ở đó = hồ sơ kẹt vĩnh viễn
+    (mọi gate vẫn chặn) chỉ sửa được bằng tay."""
+    _, ids = await _seed_regate_profile(
+        seed_lead_dependencies, major_change_requested=True
+    )
+    result = await _admin_rollback(
+        ids["profile_id"], officer_user_in_db["id"], allow=False
+    )
+    assert result["status"] == "draft"
+    prof = await _load_profile(ids["profile_id"])
+    assert prof.major_change_requested is False, "escape hatch KHÔNG clear được cờ"
+
+
+async def test_waive_blocked_while_awaiting_confirmation(
+    seed_lead_dependencies, officer_user_in_db, major_change_on
+):
+    """P1: waive giữa lúc chờ kế toán → ``waived_amount`` tăng mà invoice repriced
+    không đổi → confirm raise invariant-mismatch ⇒ chu kỳ KHÔNG THỂ chốt."""
+    _, ids = await _seed_regate_profile(seed_lead_dependencies, awaiting=True)
+    async with AsyncSessionLocal() as db:
+        svc = FeeCalculationService(db)
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await svc.waive_fee(
+                ids["fee_id"], Decimal("100000"), "miễn thử",
+                officer_user_in_db["id"],
+            )
+    assert "chờ kế toán xác nhận đổi ngành" in str(exc.value)
+
+
+async def test_cancel_fee_blocked_while_awaiting_confirmation(
+    seed_lead_dependencies, officer_user_in_db, major_change_on
+):
+    """P1: huỷ fee giữa lúc chờ → mất invoice active ⇒ confirm không tìm được
+    fee/invoice, hồ sơ kẹt sau mọi gate."""
+    _, ids = await _seed_regate_profile(
+        seed_lead_dependencies, awaiting=True, paid=Decimal("0"),
+        invoice_paid=Decimal("0"),
+    )
+    async with AsyncSessionLocal() as db:
+        svc = FeeCalculationService(db)
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await svc.cancel_fee(ids["fee_id"], "huỷ thử", officer_user_in_db["id"])
+    assert "chờ kế toán xác nhận đổi ngành" in str(exc.value)
+
+
+async def test_cancel_invoice_blocked_while_awaiting_confirmation(
+    seed_lead_dependencies, officer_user_in_db, major_change_on
+):
+    """P1: hoá đơn 0đ vẫn lọt guard paid>0 → phải chặn theo cờ awaiting của fee cha
+    (reprice KHÔNG đòi paid>0 nên ca này thật)."""
+    from app.services.invoice_service import InvoiceService
+
+    _, ids = await _seed_regate_profile(
+        seed_lead_dependencies, awaiting=True, paid=Decimal("0"),
+        invoice_paid=Decimal("0"),
+    )
+    async with AsyncSessionLocal() as db:
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await InvoiceService(db).cancel_invoice(
+                ids["invoice_ids"][0], "huỷ thử", officer_user_in_db["id"]
+            )
+    assert "chờ kế toán xác nhận đổi ngành" in str(exc.value)
+
+
+class _PastCutoffSentinel(Exception):
+    """Đánh dấu submit đã đi QUA khối cutoff (chứng minh bypass, không phải fail
+    sớm ở bước khác)."""
+
+
+async def _submit_with_closed_round(
+    seed_lead_dependencies, monkeypatch, *, major_change: bool
+):
+    """Dựng hồ sơ draft + round ĐÃ ĐÓNG rồi gọi submit_and_evaluate. Chặn ngay sau
+    khối cutoff bằng sentinel để test đo đúng một thứ: cutoff có chặn hay không."""
+    import app.services.admission_service as adm
+
+    majors = await _seed_two_majors(
+        seed_lead_dependencies,
+        price_a=Decimal("6500000"), price_b=Decimal("9200000"),
+    )
+    ids = await _seed_profile_fee_invoice(
+        seed_lead_dependencies, majors, major_change_requested=major_change,
+    )
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(
+                update(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == ids["profile_id"])
+                .values(status="draft")
+            )
+            await s.execute(
+                update(models.OfferingAdmissionRound)
+                .where(models.OfferingAdmissionRound.id == majors["round_id"])
+                .values(
+                    start_date=date(2026, 1, 1),
+                    end_date=date(2026, 1, 31),   # đã đóng
+                )
+            )
+
+    async def _sentinel(*a, **kw):
+        raise _PastCutoffSentinel()
+
+    # Cô lập: doc-resnapshot cần cây document-requirement (test DB không có).
+    async def _noop(*a, **kw):
+        return None
+
+    monkeypatch.setattr(adm, "_reresolve_documents_snapshot", _noop, raising=False)
+    monkeypatch.setattr(adm, "_validate_eligibility_all_choices", _sentinel)
+
+    async with AsyncSessionLocal() as db:
+        return await adm.submit_and_evaluate(db, ids["profile_id"], None)
+
+
+async def test_submit_cutoff_blocks_without_major_change(
+    seed_lead_dependencies, monkeypatch, major_change_on
+):
+    """Đối chứng: round đã đóng + KHÔNG đổi ngành → cutoff vẫn chặn (410)."""
+    from app.utils.exceptions import RoundClosedError
+
+    with pytest.raises(RoundClosedError):
+        await _submit_with_closed_round(
+            seed_lead_dependencies, monkeypatch, major_change=False
+        )
+
+
+async def test_submit_cutoff_bypassed_for_major_change(
+    seed_lead_dependencies, monkeypatch, major_change_on
+):
+    """P2: ``add_choice`` bypass cutoff khi chu kỳ đổi ngành mở, nên submit PHẢI
+    bypass theo — nếu không officer sửa được nguyện vọng sau khi đợt đóng nhưng
+    nộp lại bị 410, hồ sơ mắc ở draft (đúng ca bypass kia sinh ra để cứu)."""
+    with pytest.raises(_PastCutoffSentinel):
+        await _submit_with_closed_round(
+            seed_lead_dependencies, monkeypatch, major_change=True
+        )

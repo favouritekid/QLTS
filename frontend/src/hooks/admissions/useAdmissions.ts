@@ -641,7 +641,11 @@ export function useAdminRollback(id: number) {
     mutationFn: (data: { reason: string; allow_major_change?: boolean }) =>
       admissionsApi.adminRollback(id, data),
     onSuccess: (data) => {
-      const cycleOpened = data.major_change_cycle_open === true
+      // Đọc ĐÚNG field của AdminRollbackResponse. `major_change_cycle_open` là cờ
+      // transient của PROFILE response (hook request_revision dùng đúng), KHÔNG
+      // có trong response rollback → dùng nó thì hướng dẫn "sửa NV + nộp lại"
+      // không bao giờ hiện.
+      const cycleOpened = data.major_change_requested === true
       toast.success("Đã đưa hồ sơ về nháp", {
         description: cycleOpened
           ? "Chu kỳ ĐỔI NGÀNH đã mở — officer sửa nguyện vọng + nộp lại để định giá lại học phí (kế toán xác nhận)."

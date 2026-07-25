@@ -593,6 +593,25 @@ class InvoiceService:
         if invoice.status == InvoiceStatusEnum.cancelled.value:
             raise BusinessRuleViolation("Invoice is already cancelled")
 
+        # Đổi ngành: fee cha đang chờ kế toán xác nhận → KHÔNG cho huỷ hoá đơn.
+        # ``confirm_major_change`` đòi ĐÚNG 1 invoice active + bất biến
+        # ``Σ(invoice) = final − waived``; huỷ hoá đơn giữa lúc chờ làm chu kỳ
+        # không thể chốt và hồ sơ kẹt sau mọi gate. Ca paid>0 đã bị guard trên
+        # chặn, nhưng reprice KHÔNG đòi paid>0 nên hoá đơn 0đ vẫn lọt tới đây.
+        # Đối xứng với ``_assert_not_awaiting_major_change`` (waive/cancel fee).
+        _fee_awaiting = (
+            await self.db.execute(
+                select(Fee.awaiting_accountant_confirmation).where(
+                    Fee.id == invoice.fee_id
+                )
+            )
+        ).scalar_one_or_none()
+        if _fee_awaiting:
+            raise BusinessRuleViolation(
+                "Hoá đơn thuộc khoản phí đang chờ kế toán xác nhận đổi ngành — "
+                "không thể huỷ. Hãy xác nhận đổi ngành trước."
+            )
+
         invoice.status = InvoiceStatusEnum.cancelled.value
         invoice.cancelled_at = datetime.now(timezone.utc)
         invoice.cancelled_by_id = user_id

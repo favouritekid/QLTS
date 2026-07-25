@@ -1073,3 +1073,74 @@ async def test_third_issue_extends_expiry_of_ALL_previous_letters(
     # Điểm mấu chốt: CẢ BA cùng hạn, kể cả bản đầu.
     assert first.expires_at == third.expires_at
     assert second.expires_at == third.expires_at
+
+
+# --------------------------------------------------------------------------- #
+# Đổi ngành — TOCTOU: chu kỳ mở TRONG lúc render PDF
+# --------------------------------------------------------------------------- #
+async def test_issue_blocked_when_cycle_opens_during_render(
+    officer_user_in_db: dict,
+    seed_lead_dependencies: dict,
+    monkeypatch,
+):
+    """Re-check dưới khoá phải đọc ``major_change_requested`` TƯƠI, không lấy từ
+    instance profile trước render.
+
+    Mô phỏng đúng cảnh thật: service nhận instance đã load từ đầu request
+    (``major_change_requested=False``), rồi admin mở chu kỳ đổi ngành ở
+    transaction KHÁC trong lúc ReportLab render (~350ms không giữ khoá). Nếu gate
+    đọc thuộc tính của instance cũ, giấy báo ngành/số tiền CŨ vẫn được phát hành.
+    """
+    from sqlalchemy import update as sa_update
+
+    from app.services.enrollment_letter_service import issue_enrollment_letter
+    from app.utils.exceptions import BusinessRuleViolation
+
+    monkeypatch.setattr(settings, "MAJOR_CHANGE_REPRICE_ENABLED", True)
+
+    pid = await _seed_approved_profile(
+        unit_id=seed_lead_dependencies["unit_id"],
+        officer_id=officer_user_in_db["id"],
+        citizen_id=f"toc{uuid.uuid4().hex[:9]}",
+    )
+    await _seed_hk1_fee(pid, seed_lead_dependencies["major_program_id"])
+
+    async with AsyncSessionLocal() as db:
+        profile = (
+            await db.execute(
+                select(models.AdmissionProfile).where(
+                    models.AdmissionProfile.id == pid
+                )
+            )
+        ).scalar_one()
+        assert profile.major_change_requested is False
+        actor = await db.get(models.User, officer_user_in_db["id"])
+
+        # Chu kỳ mở ở transaction khác — instance `profile` ở trên GIỮ giá trị cũ.
+        async with AsyncSessionLocal() as other:
+            async with other.begin():
+                await other.execute(
+                    sa_update(models.AdmissionProfile)
+                    .where(models.AdmissionProfile.id == pid)
+                    .values(major_change_requested=True)
+                )
+        assert profile.major_change_requested is False, "instance phải còn stale"
+
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await issue_enrollment_letter(
+                db, profile,
+                date(2026, 7, 28), date(2026, 8, 5),
+                actor,
+            )
+    assert "đổi ngành" in str(exc.value)
+
+    # Không được để lại bản ghi giấy nào.
+    async with AsyncSessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(models.EnrollmentLetter.id).where(
+                    models.EnrollmentLetter.profile_id == pid
+                )
+            )
+        ).scalars().all()
+    assert rows == []

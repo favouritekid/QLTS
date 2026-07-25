@@ -5067,12 +5067,13 @@ async def get_profiles(
         # correction. Chỉ đọc read-model cột + tính action nhẹ. program_name +
         # HK1 money đã do repo set (object.__setattr__). Trả `AdmissionProfile
         # ListItem` (~15 field) → payload ~40KB thay 324KB.
-        # Đổi ngành: cờ badge — BATCH 1 query/trang (KHÔNG per-row → tránh N+1),
-        # gated feature flag (OFF → skip query, mọi cờ False). requested đọc từ
-        # cột đã load; awaiting query gộp theo page.
-        from app.config import settings as _settings
+        # Đổi ngành: cờ badge — BATCH 1 query/trang (KHÔNG per-row → tránh N+1).
+        # KHÔNG gate feature flag: phải khớp ``is_major_change_cycle_open`` (đường
+        # detail) — cờ chỉ chặn MỞ chu kỳ mới, chu kỳ đang bay vẫn phải hiện badge
+        # + ẩn nút xuất giấy dù cờ đã tắt. requested đọc từ cột đã load; awaiting
+        # query gộp theo page.
         _mc_awaiting_ids: set = set()
-        if _settings.MAJOR_CHANGE_REPRICE_ENABLED and profiles:
+        if profiles:
             _pids = [p.id for p in profiles]
             _mc_awaiting_ids = set(
                 (
@@ -5106,11 +5107,8 @@ async def get_profiles(
             _set_major_change_flag(
                 profile,
                 bool(
-                    _settings.MAJOR_CHANGE_REPRICE_ENABLED
-                    and (
-                        getattr(profile, "major_change_requested", False)
-                        or profile.id in _mc_awaiting_ids
-                    )
+                    getattr(profile, "major_change_requested", False)
+                    or profile.id in _mc_awaiting_ids
                 ),
             )
         return profiles, total_count
@@ -5128,10 +5126,9 @@ async def get_profiles(
             list_verifier_names = await _resolve_verifier_names(db, all_docs)
 
     # Đổi ngành: BATCH awaiting-fee ids 1 query/trang (KHÔNG per-row → tránh N+1,
-    # #9), gated flag. Mirror đường lean.
-    from app.config import settings as _mc_nl_settings
+    # #9). Mirror đường lean — KHÔNG gate flag (xem note ở đường lean).
     _mc_nl_awaiting_ids: set = set()
-    if _mc_nl_settings.MAJOR_CHANGE_REPRICE_ENABLED and profiles:
+    if profiles:
         _mc_nl_awaiting_ids = set(
             (
                 await db.execute(
@@ -5158,11 +5155,8 @@ async def get_profiles(
         _set_major_change_flag(
             profile,
             bool(
-                _mc_nl_settings.MAJOR_CHANGE_REPRICE_ENABLED
-                and (
-                    getattr(profile, "major_change_requested", False)
-                    or profile.id in _mc_nl_awaiting_ids
-                )
+                getattr(profile, "major_change_requested", False)
+                or profile.id in _mc_nl_awaiting_ids
             ),
         )
 
@@ -6930,10 +6924,25 @@ async def submit_and_evaluate(
     else:
         cutoff_round = await admission_repo.get_round_for_profile_cutoff(profile)
     if cutoff_round is not None:
-        assert_round_open(
-            cutoff_round,
-            context_hint="Liên hệ admin nếu cần extend đợt.",
-        )
+        # Đổi ngành: BYPASS cutoff — đối xứng với ``add_choice`` (nó bypass
+        # assert_round_open khi ``major_change_requested`` + status draft/
+        # revision_requested). Không bypass ở đây thì officer sửa được nguyện vọng
+        # sau khi đợt đóng nhưng NỘP LẠI bị 410: hồ sơ mắc ở draft, đúng ca mà
+        # bypass kia sinh ra để cứu. Chu kỳ do ADMIN cố ý mở nên nộp muộn là ý
+        # định nghiệp vụ; log để ops thấy.
+        if _mc_submit_active:
+            log.info(
+                "submit_cutoff_bypassed_major_change",
+                profile_id=profile.id,
+                round_id=cutoff_round.id,
+                round_code=getattr(cutoff_round, "round_code", None),
+                end_date=str(getattr(cutoff_round, "end_date", None)),
+            )
+        else:
+            assert_round_open(
+                cutoff_round,
+                context_hint="Liên hệ admin nếu cần extend đợt.",
+            )
     else:
         log.warning(
             "submit_cutoff_skipped_missing_path_in_applied_rules",

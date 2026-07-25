@@ -129,12 +129,21 @@ async def is_major_change_cycle_open(
     nộp lại) HOẶC active HK1 tuition fee ``awaiting_accountant_confirmation`` (đã
     reprice, chờ kế toán chốt).
 
-    Flag ``MAJOR_CHANGE_REPRICE_ENABLED`` OFF → LUÔN False ⇒ mọi gate no-op +
-    badge không hiện (deploy cờ OFF không đổi hành vi). ``major_change_requested``
-    đọc trực tiếp (không DB hit); chỉ query khi cờ profile chưa bật.
+    ⚠️ CỐ Ý **KHÔNG** gate ``MAJOR_CHANGE_REPRICE_ENABLED``. Cờ đó chặn MỞ chu kỳ
+    MỚI (``_major_change_cycle_blocker``) và chặn reprice, nhưng chu kỳ ĐÃ mở thì
+    phải tiếp tục được tôn trọng: nếu tắt cờ giữa chu kỳ mà hàm này trả False thì
+    approve / publish / enroll / xuất giấy mở lại cho hồ sơ đang có
+    ``awaiting_accountant_confirmation=True`` → phát giấy + chốt trúng tuyển với
+    học phí CHƯA định giá lại và CHƯA có kế toán xác nhận (đúng sai-tiền mà tính
+    năng sinh ra để chặn). Kill-switch không được bỏ rơi hồ sơ đang bay.
+
+    Deploy cờ OFF vẫn no-op vì 2 cột nguồn đều default False/NULL trên prod —
+    điều kiện pre-deploy "đếm ``fee.awaiting_accountant_confirmation`` = 0" chính
+    là thứ bảo đảm điều này, hãy giữ bước đếm đó.
+
+    ``major_change_requested`` đọc trực tiếp (không DB hit); chỉ query khi cờ
+    profile chưa bật.
     """
-    if not settings.MAJOR_CHANGE_REPRICE_ENABLED:
-        return False
     if getattr(profile, "major_change_requested", False):
         return True
     row = (
@@ -238,6 +247,30 @@ async def _major_change_cycle_blocker(
     return None
 
 
+def _assert_not_awaiting_major_change(fee: Fee, action: str) -> None:
+    """Chặn MỌI mutation số tiền trên fee đang ``awaiting_accountant_confirmation``.
+
+    ``confirm_major_change`` chốt chu kỳ bằng cách assert bất biến
+    ``Σ(invoice active) = final − waived`` và đòi ĐÚNG 1 invoice active. Nên nếu
+    giữa lúc chờ mà ai đó:
+      * ``waive_fee`` → ``waived_amount`` tăng, invoice đã repriced KHÔNG đổi →
+        confirm raise invariant-mismatch;
+      * ``cancel_fee`` (hoặc huỷ invoice) → mất invoice active → confirm không
+        tìm được fee/invoice,
+    thì chu kỳ thành KHÔNG THỂ chốt: hồ sơ kẹt (mọi gate vẫn chặn approve/xuất
+    giấy) và chỉ sửa được bằng tay. Chặn ở đây, kế toán xác nhận đổi ngành trước
+    rồi mới miễn/huỷ — thứ tự đó luôn khả thi.
+
+    KHÔNG gate feature flag: đọc state đã persist (cùng lý lẽ với
+    ``is_major_change_cycle_open``).
+    """
+    if getattr(fee, "awaiting_accountant_confirmation", False):
+        raise BusinessRuleViolation(
+            f"Khoản phí đang chờ kế toán xác nhận đổi ngành — không thể {action}. "
+            "Hãy xác nhận đổi ngành trước, rồi thực hiện lại."
+        )
+
+
 async def can_open_major_change_cycle(
     db: AsyncSession,
     profile: "models.AdmissionProfile",
@@ -280,9 +313,10 @@ async def maybe_open_major_change_cycle(
     """
     if not allow_major_change:
         # Rollback/revision thường → reset cờ (escape hatch cho hồ sơ kẹt).
-        if settings.MAJOR_CHANGE_REPRICE_ENABLED and getattr(
-            profile, "major_change_requested", False
-        ):
+        # KHÔNG gate cờ feature: chu kỳ mở rồi mới tắt cờ thì đây là đường DUY
+        # NHẤT clear ``major_change_requested`` qua API — gate cờ ở đây nghĩa là
+        # phải sửa DB tay (xem note không-gate-cờ ở is_major_change_cycle_open).
+        if getattr(profile, "major_change_requested", False):
             profile.major_change_requested = False
             log.info("major_change_cycle_cleared_by_plain_rollback", profile_id=profile.id)
         return False
@@ -1267,6 +1301,8 @@ class FeeCalculationService:
         if not fee:
             raise ResourceNotFoundError("Fee not found")
 
+        _assert_not_awaiting_major_change(fee, "miễn giảm học phí")
+
         remaining = fee.final_amount - fee.paid_amount - fee.waived_amount
 
         # H5: Validate waive amount
@@ -1360,6 +1396,8 @@ class FeeCalculationService:
         fee = await self.fee_repo.get_for_update(fee_id, unit_id)
         if not fee:
             raise ResourceNotFoundError("Fee not found")
+
+        _assert_not_awaiting_major_change(fee, "huỷ khoản phí")
 
         if fee.paid_amount > 0:
             raise BusinessRuleViolation(
