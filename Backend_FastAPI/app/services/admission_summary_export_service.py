@@ -11,7 +11,11 @@ cột phễu; nhóm "Chi tiết hồ sơ" cũng ngoài phễu.)
 - HỌC PHÍ (đã đóng học phí HK1 = fee tuition ``semester_no=1``, partial hoặc đủ):
     Đóng một phần (partial) | Đóng đủ HK1 (đã thu đủ/miễn) | Tổng học phí (SỐ HỒ
     SƠ đã đóng học phí = hp_1p + hp_dhk1; là cột tổng con, KHÔNG cộng vào phễu) |
-    Doanh thu (SỐ TIỀN học phí HK1 đã thu = Σ paid_amount, VND).
+    Doanh thu (SỐ TIỀN học phí, VND). ⚠️ ĐỔI NGÀNH: Doanh thu gán theo NGÀNH-LÚC-
+    THU (``Payment.recognized_major_id``, ledger payment+refund+reversal đã net)
+    — KHÁC đếm hồ sơ (theo NV1 hiện tại). Tiền đã thu cho ngành A vẫn ở A dù hồ
+    sơ đã đổi sang B → ngành A có thể là dòng "chỉ còn doanh thu, không hồ sơ";
+    recognized NULL → dòng "(Đã thu, chưa xác định ngành)" tách riêng.
 - LỆ PHÍ: đã đóng/miễn lệ phí xét tuyển (application: paid_amount>0 OR waived)
     NHƯNG chưa đóng học phí.
 - HỒ SƠ (đã có hồ sơ nhưng CHƯA đóng phí nào) — 1 cột. Chi tiết nháp/nợ/đủ xem
@@ -280,6 +284,33 @@ _MAJOR_SQL = text(
     """
 )
 
+# Doanh thu học phí (cột hp_dt) theo NGÀNH-LÚC-THU — đổi ngành: tiền đã thu cho
+# ngành A vẫn thuộc A dù hồ sơ đã chuyển sang B. Aggregate ledger THẬT (payment +
+# refund + reversal, amount signed → net) theo Payment.recognized_major_id, KHÔNG
+# theo fee.paid_amount của NV1 hiện tại. GỒM reversal (void lô) để net đúng ngành
+# gốc. recognized NULL → sentinel ``:rev_null`` (dòng "Đã thu, chưa xác định
+# ngành"). Per-officer để khớp sheet 2. Scope-unit khớp _LEAD_SQL.
+_REVENUE_SQL = text(
+    """
+    SELECT COALESCE(pay.recognized_major_id, CAST(:rev_null AS INTEGER)) AS rmaj,
+           l.assigned_officer_id AS off,
+           COALESCE(SUM(pt.amount), 0) AS revenue
+    FROM payment_transaction pt
+    JOIN payment pay ON pt.payment_id = pay.id
+    JOIN fee f ON pt.fee_id = f.id AND f.fee_type = 'tuition'
+    JOIN admission_profile ap ON f.admission_profile_id = ap.id
+                              AND ap.academic_year = :year
+    JOIN lead l ON ap.lead_id = l.id AND l.deleted_at IS NULL
+    WHERE pt.transaction_type IN ('payment', 'refund', 'reversal')
+      AND (CAST(:unit AS INTEGER) IS NULL OR l.unit_id = CAST(:unit AS INTEGER))
+    GROUP BY 1, 2
+    """
+)
+
+# Sentinel doanh thu chưa xác định ngành (tuition thu khi fee chưa chốt ngành).
+# KHÁC ``NONE`` (-1, ngành HỒ SƠ chưa xác định) — 2 nghĩa không gộp.
+_REVENUE_NULL = -2
+
 
 def _H(cell, fill=_HEAD_FILL, font=_HEAD_FONT):
     cell.fill = fill
@@ -328,8 +359,13 @@ class AdmissionSummaryExportService:
         leads = (await self.db.execute(_LEAD_SQL, params)).mappings().all()
         officers = (await self.db.execute(_OFFICER_SQL, params)).mappings().all()
         majors = (await self.db.execute(_MAJOR_SQL)).mappings().all()
+        revenue = (
+            await self.db.execute(
+                _REVENUE_SQL, {**params, "rev_null": _REVENUE_NULL}
+            )
+        ).mappings().all()
 
-        wb = self._build_workbook(academic_year, leads, officers, majors)
+        wb = self._build_workbook(academic_year, leads, officers, majors, revenue)
         bio = io.BytesIO()
         wb.save(bio)
         bio.seek(0)
@@ -338,23 +374,29 @@ class AdmissionSummaryExportService:
         return bio.getvalue(), filename
 
     # ----------------------------------------------------------- workbook build
-    def _build_workbook(self, year, leads, officers, majors) -> Workbook:
+    def _build_workbook(self, year, leads, officers, majors, revenue) -> Workbook:
         officer_ids = [r["id"] for r in officers]
         officer_id_set = set(officer_ids)
         oname = {r["id"]: r["nm"] for r in officers}
         oshort = _officer_short_names(oname, officer_ids)
+        # "Chưa PC" cần cho lead-không-officer VÀ doanh thu-không-officer (phiếu
+        # thu của hồ sơ chưa gán cán bộ vẫn phải vào cột nào đó ở sheet 2).
+        rev_unassigned = any(
+            r["off"] not in officer_id_set and r["revenue"] for r in revenue
+        )
         n_unassigned = sum(1 for r in leads if r["off"] not in officer_id_set)
         # Sheet-2 columns = officers (+ "Chưa PC" if any lead has no officer) so
         # EVERY lead is attributed → sheet 2 reconciles exactly with sheet 1.
         officer_cols = list(officer_ids)
-        if n_unassigned:
+        if n_unassigned or rev_unassigned:
             officer_cols.append(_UNASSIGNED)
             oshort[_UNASSIGNED] = "Chưa PC"
 
         major_ids = [m["id"] for m in majors]
         minfo = {m["id"]: m for m in majors}
         NONE = -1
-        all_keys = major_ids + [NONE]
+        # _REVENUE_NULL (-2): doanh thu tuition thu khi fee chưa chốt ngành.
+        all_keys = major_ids + [NONE, _REVENUE_NULL]
 
         # s1[pid][key] = giá trị tổng (sheet 1); s2[pid][key][officer] (sheet 2).
         s1 = {p: {k: 0 for k in STORE_KEYS} for p in all_keys}
@@ -389,9 +431,8 @@ class AdmissionSummaryExportService:
                 else:
                     bump(pid, col, "hp_dhk1", 1)
                 bump(pid, col, "hp_tong", 1)  # tổng con: số hồ sơ đã đóng học phí
-                paid = int(r["hk1_paid"] or 0)
-                if paid:
-                    bump(pid, col, "hp_dt", paid)  # Doanh thu (VND đã thu)
+                # Doanh thu (hp_dt) KHÔNG lấy từ đây nữa — gán riêng theo ledger
+                # recognized_major bên dưới (đổi ngành: tiền theo ngành-lúc-thu).
             elif has_app:  # Lệ phí (đã đóng lệ phí, chưa học phí)
                 bump(pid, col, "le_phi", 1)
             elif ps is not None:  # Hồ sơ (có hồ sơ, chưa đóng phí nào) — 1 cột
@@ -410,14 +451,37 @@ class AdmissionSummaryExportService:
                 bump(pid, col, rk, 1)
                 bump(pid, col, "ref_tong", 1)
 
-        # Chỉ giữ ngành có lead (hoặc dòng "chưa xác định ngành" có dữ liệu).
-        ordered = [p for p in major_ids if s1[p][_TL_KEY] > 0]
-        if s1[NONE][_TL_KEY] > 0:
+        # ---- DOANH THU (hp_dt) theo NGÀNH-LÚC-THU (recognized_major) — TÁCH khỏi
+        # đếm hồ sơ. Đổi ngành: tiền đã thu cho ngành A vẫn ở A dù hồ sơ đã sang B.
+        # Ledger đã net payment+refund+reversal (SUM signed). rmaj có thể là ngành
+        # KHÔNG còn lead (chỉ còn tiền — vẫn hiện) hoặc _REVENUE_NULL (chưa xác
+        # định ngành). Guard: rmaj lạ (major hard-deleted) rơi về _REVENUE_NULL.
+        for r in revenue:
+            rmaj = r["rmaj"]
+            if rmaj not in s1:
+                rmaj = _REVENUE_NULL
+            off = r["off"]
+            col = off if off in officer_id_set else _UNASSIGNED
+            bump(rmaj, col, "hp_dt", int(r["revenue"] or 0))
+
+        # Giữ ngành có lead HOẶC có doanh thu (đổi ngành: ngành chỉ còn tiền vẫn
+        # phải xuất hiện — không bị lọc mất theo lead).
+        def _has_data(p):
+            return s1[p][_TL_KEY] > 0 or s1[p]["hp_dt"] != 0
+
+        ordered = [p for p in major_ids if _has_data(p)]
+        # 2 dòng sentinel cuối, chỉ khi có dữ liệu: NONE (ngành hồ sơ chưa xác
+        # định) + _REVENUE_NULL (doanh thu chưa xác định ngành) — tách bạch.
+        if _has_data(NONE):
             ordered.append(NONE)
+        if _has_data(_REVENUE_NULL):
+            ordered.append(_REVENUE_NULL)
 
         def desc_of(pid):
             if pid == NONE:
                 return "", "(Chưa xác định ngành)", ""
+            if pid == _REVENUE_NULL:
+                return "", "(Đã thu, chưa xác định ngành)", ""
             m = minfo[pid]
             return (
                 sanitize_csv_cell(m["code"]),
