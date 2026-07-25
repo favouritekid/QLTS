@@ -453,10 +453,16 @@ class AdmissionReportService:
             academic_year, scope_unit_id, None, round_code
         )
         profile_lead_ids = {d.lead_id for d in dims.values()}
-        stages_meta, on_path, leaked, total, leak_ids = (
-            await self.repo.pipeline_funnel_counts(
-                cohort_ranges, scope_unit_id, None, profile_lead_ids
-            )
+        (
+            stages_meta,
+            per_stage,
+            negative_per_stage,
+            at_risk_per_stage,
+            leaked,
+            total,
+            leak_ids,
+        ) = await self.repo.pipeline_funnel_counts(
+            cohort_ranges, scope_unit_id, None, profile_lead_ids
         )
         return PipelineFunnelResponse(
             academic_year=academic_year,
@@ -464,7 +470,9 @@ class AdmissionReportService:
             scope_unit_id=scope_unit_id,
             total_leads=total,
             leaked=leaked,
-            stages=self._build_funnel_stages(stages_meta, on_path, leak_ids),
+            stages=self._build_funnel_stages(
+                stages_meta, per_stage, negative_per_stage, at_risk_per_stage, leak_ids
+            ),
         )
 
     # ------------------------------------------------------- overview: trend
@@ -759,9 +767,11 @@ class AdmissionReportService:
         officers_out = [
             MatrixOfficer(
                 id=o,
-                name=(officer_names.get(o) or "Cán bộ")
-                if o is not None
-                else "Chưa gán cán bộ",
+                name=(
+                    (officer_names.get(o) or "Cán bộ")
+                    if o is not None
+                    else "Chưa gán cán bộ"
+                ),
             )
             for o in officer_ids
         ]
@@ -804,49 +814,36 @@ class AdmissionReportService:
     # --------------------------------------------------------------- helpers
     @staticmethod
     def _build_funnel_stages(
-        stages_meta: list, on_path: dict, leak_stage_ids: set
+        stages_meta: list,
+        per_stage: dict,
+        negative_per_stage: dict,
+        at_risk_per_stage: dict,
+        leak_stage_ids: set,
     ) -> list[FunnelStage]:
-        """Backend owns the funnel model (thin-client): from ordered stage meta
-        ``(id, name, order, is_final, color)`` + ON-PATH counts (early exits already
-        removed by the repo) + ``leak_stage_ids`` (negative-terminal stages derived
-        from status outcomes), compute per-stage ``reached`` (cumulative on the path)
-        and ``conversion_pct`` (vs the previous path stage).
+        """Backend owns the funnel model (thin-client): CURRENT-STATE distribution.
 
-        Leak stages are marked (``is_leak``) and kept OFF the path; the exited leads
-        themselves are reported once as ``PipelineFunnelResponse.leaked``. reached[k]
-        = Σ on_path at/below k. Pure + unit-testable; the FE renders it verbatim.
+        Mỗi bậc hiển thị số lead ĐANG Ở bậc đó (``current`` = ``per_stage`` — mỗi
+        lead đếm đúng 1 lần theo ``pipeline_stage_id``), khớp cách đếm-theo-lead của
+        Pipeline Board / Lead List. ``leaked_here`` = đã RỜI PHỄU (negative-terminal);
+        ``at_risk_here`` = tạm âm chưa đóng ("Từ chối tư vấn"); ``tích cực = current −
+        leaked_here − at_risk_here``. KHÔNG lũy kế, KHÔNG conversion (bậc sau có thể
+        đông hơn bậc trước — phân bố hiện trạng). Pure + testable; FE render nguyên.
         """
         ordered = sorted(stages_meta, key=lambda s: s[2])  # by order
-        path = [s for s in ordered if s[0] not in leak_stage_ids]
-        reached: dict = {}
-        running = 0
-        for s in reversed(path):  # bottom-up cumulative on the path
-            running += on_path.get(s[0], 0)
-            reached[s[0]] = running
-        out: list[FunnelStage] = []
-        prev_reached: Optional[int] = None
-        for sid, name, order, is_final, color in ordered:
-            cur = on_path.get(sid, 0)
-            if sid in leak_stage_ids:
-                out.append(
-                    FunnelStage(
-                        stage_id=sid, name=name, order=order, is_final=is_final,
-                        color_code=color, current=cur, reached=cur,
-                        conversion_pct=None, is_leak=True,
-                    )
-                )
-                continue
-            r = reached.get(sid, 0)
-            conv = round(r / prev_reached * 100, 1) if prev_reached else None
-            out.append(
-                FunnelStage(
-                    stage_id=sid, name=name, order=order, is_final=is_final,
-                    color_code=color, current=cur, reached=r,
-                    conversion_pct=conv, is_leak=False,
-                )
+        return [
+            FunnelStage(
+                stage_id=sid,
+                name=name,
+                order=order,
+                is_final=is_final,
+                color_code=color,
+                current=per_stage.get(sid, 0),
+                leaked_here=negative_per_stage.get(sid, 0),
+                at_risk_here=at_risk_per_stage.get(sid, 0),
+                is_leak=sid in leak_stage_ids,
             )
-            prev_reached = r
-        return out
+            for sid, name, order, is_final, color in ordered
+        ]
 
     @staticmethod
     def _sort_key(row: ReportRow):

@@ -116,19 +116,19 @@ export const funnelStageSchema = z.object({
   order: z.number().int(), // 0-based
   is_final: z.boolean(),
   color_code: z.string(), // hex #RRGGBB
-  current: z.number().int(), // lead đang ở giai đoạn này
-  // mô hình phễu do BACKEND tính (thin-client — FE render nguyên):
-  reached: z.number().int(), // lũy kế "từng đạt bậc này" (đường phễu); leak = current
-  conversion_pct: z.number().nullable(), // % chuyển tiếp từ bậc trước (0..100)
-  is_leak: z.boolean(), // bậc rời phễu (terminal âm) — render tách khỏi path
+  // phân bố hiện trạng do BACKEND tính (thin-client — FE render nguyên):
+  current: z.number().int(), // số lead đang ở bậc này (mỗi lead 1 lần theo pipeline stage)
+  leaked_here: z.number().int().default(0), // đã rời phễu tại bậc (negative-terminal)
+  at_risk_here: z.number().int().default(0), // tạm âm chưa đóng (từ chối tư vấn) — còn theo
+  is_leak: z.boolean(), // bậc rời phễu (terminal âm)
 });
 
 export const pipelineFunnelSchema = z.object({
   academic_year: z.number().int(),
   round_code: z.string().nullable(),
   scope_unit_id: z.number().int().nullable(),
-  total_leads: z.number().int(), // = Σ on-path + leaked
-  leaked: z.number().int(), // lead rời phễu (final + outcome negative, mọi bậc)
+  total_leads: z.number().int(), // = Σ current (mỗi lead đúng 1 lần)
+  leaked: z.number().int(), // tổng lead đã rời phễu (outcome negative, mọi bậc)
   stages: z.array(funnelStageSchema),
 });
 

@@ -593,11 +593,12 @@ export function AdmissionOverviewClient() {
 
             {/* 3. Phễu + 4. Xu hướng — phân tích nguyên nhân, đặt sau khu hành động */}
             <div className="grid gap-4 lg:grid-cols-2">
-              <Panel title="Phễu LEAD theo giai đoạn">
+              <Panel title="LEAD theo giai đoạn pipeline">
                 <p className="mb-3 -mt-1 text-xs text-muted-foreground">
-                  Đếm <strong>LEAD</strong> đi tới từng bước pipeline (cohort đợt,
-                  gồm khách vãng lai) — <em>khác</em> KPI “Hồ sơ đã nộp” (đếm theo
-                  hồ sơ). Không so trực tiếp hai con số.
+                  Số <strong>LEAD đang ở mỗi bậc</strong> pipeline (mỗi lead đếm
+                  đúng 1 lần — khớp Pipeline Board / danh sách Lead). Phân bố hiện
+                  trạng, <em>không</em> lũy kế; <em>khác</em> KPI “Hồ sơ đã nộp”
+                  (đếm theo hồ sơ). Không so trực tiếp hai con số.
                 </p>
                 <PanelState
                   query={{ isError: funnel.isError, error: funnel.error, data: funnelData }}

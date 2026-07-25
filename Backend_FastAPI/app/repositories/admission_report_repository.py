@@ -671,21 +671,37 @@ class AdmissionReportRepository:
         scope_unit_id: Optional[int],
         officer_id: Optional[int],
         profile_lead_ids: Optional[set] = None,
-    ) -> tuple[list[tuple[str, str, int, bool, str]], dict[str, int], int, int, set]:
-        """(stages_meta, on_path_counts, leaked, total_leads, leak_stage_ids).
+    ) -> tuple[
+        list[tuple[str, str, int, bool, str]],
+        dict[str, int],
+        dict[str, int],
+        dict[str, int],
+        int,
+        int,
+        set,
+    ]:
+        """(stages, per_stage, negative_per_stage, at_risk_per_stage, leaked, total,
+        leak_ids).
 
-        Funnel honours the pipeline contract:
-        - **Cohort** = leads ``created_at`` in a round window OR that already produced
-          an in-scope profile (``profile_lead_ids`` — walk-ins between rounds), parity
-          with the weekly report so admission never exceeds the lead population.
-        - **counts_for_funnel**: only statuses flagged for the funnel (or no status)
-          count — activity statuses (NO_ANSWER…) are excluded, matching the KPI funnel.
-        - **Early exit by OUTCOME, not stage order**: a lead whose CURRENT status is
-          FINAL + NEGATIVE (rejected / dropped / không đi học / refunded) goes to
-          ``leaked`` — NOT the success path — regardless of the stage it parked at.
-          Everyone else counts on ``pipeline_stage_id`` (NULL stage → lowest order).
-        ``leak_stage_ids`` = negative-terminal stages (final stage whose statuses are
-        all negative) so the caller drops them from the displayed path.
+        CURRENT-STATE distribution — mỗi lead đếm ĐÚNG 1 LẦN ở bậc ``pipeline_stage_id``
+        hiện tại của nó (KHÔNG lũy kế, KHÔNG loại status nào), để số khớp Pipeline Board
+        / Lead List "Giai đoạn" (cùng cách đếm theo lead). Vì thế bậc đầu "Chưa tư vấn"
+        chỉ đếm lead THẬT SỰ đang ở đó, không phải tổng.
+
+        - **Cohort** = leads ``created_at`` trong cửa sổ đợt HOẶC đã có hồ sơ in-scope
+          (``profile_lead_ids`` — khách vãng lai), parity với báo cáo tuần.
+        - **per_stage[stage]** = số lead có ``pipeline_stage_id == stage`` (mỗi lead 1
+          lần, MỌI trạng thái kể cả activity/negative; NULL stage → bậc thấp nhất).
+        - **negative_per_stage[stage]** = đã RỜI PHỄU tại bậc = NEGATIVE-TERMINAL
+          (``is_final`` VÀ outcome negative — bỏ tư vấn/rút/không đi học/hoàn phí) HOẶC
+          đậu ở bậc negative-terminal dù trạng thái NULL.
+        - **at_risk_per_stage[stage]** = tín hiệu ÂM nhưng CHƯA đóng (negative
+          NON-final — "Từ chối tư vấn"): tính CÒN THEO (khớp KPI "Đang theo" đếm theo
+          ``is_final``) nhưng tách riêng để tô màu cảnh báo.
+          ``tích cực = per_stage − negative_per_stage − at_risk_per_stage``.
+        - **leaked** = Σ negative_per_stage (tổng rời phễu); **total** = Σ per_stage.
+        - ``leak_stage_ids`` = bậc negative-terminal (final + mọi status negative);
+          guard ``exists`` loại final 0-status (chưa cấu hình ≠ negative-terminal).
         """
         stage_rows = (
             await self.db.execute(
@@ -733,7 +749,7 @@ class AdmissionReportRepository:
         if profile_lead_ids:
             window_preds.append(models.Lead.id.in_(profile_lead_ids))
         if not window_preds:
-            return stages, {}, 0, 0, leak_stage_ids
+            return stages, {}, {}, {}, 0, 0, leak_stage_ids
 
         conds = [models.Lead.deleted_at.is_(None), or_(*window_preds)]
         if scope_unit_id is not None:
@@ -741,6 +757,9 @@ class AdmissionReportRepository:
         if officer_id is not None:
             conds.append(models.Lead.assigned_officer_id == officer_id)
 
+        # Đếm MỌI lead theo pipeline_stage_id (mỗi lead 1 lần, không loại status nào)
+        # để khớp cách đếm-theo-lead của Pipeline Board / Lead List. ``outcome_type``
+        # chỉ dùng tách phần đã-rời-phễu trong từng bậc (không loại khỏi tổng bậc).
         rows = await self.db.execute(
             select(
                 models.Lead.pipeline_stage_id,
@@ -750,30 +769,39 @@ class AdmissionReportRepository:
             )
             .select_from(models.Lead)
             .join(cs, models.Lead.consultation_status_id == cs.id, isouter=True)
-            .where(
-                and_(*conds),
-                # counts_for_funnel contract: exclude activity statuses; no-status
-                # leads (NULL) still count on the path.
-                or_(cs.counts_for_funnel.is_(None), cs.counts_for_funnel.is_(True)),
-            )
+            .where(and_(*conds))
             .group_by(models.Lead.pipeline_stage_id, cs.is_final, cs.outcome_type)
         )
         lowest = stages[0][0] if stages else None  # order-sorted → first = lowest
-        on_path: dict[str, int] = {}
+        per_stage: dict[str, int] = {}
+        negative_per_stage: dict[str, int] = {}
+        at_risk_per_stage: dict[str, int] = {}
         leaked = 0
         total = 0
         for stage_id, is_final, outcome, cnt in rows:
             c = int(cnt or 0)
-            total += c  # every counted lead is in the population (reached+leaked=total)
-            outcome_val = getattr(outcome, "value", outcome)
+            total += c  # mỗi lead đúng 1 lần → Σ per_stage == total
             key = stage_id if stage_id is not None else lowest
-            # Rời phễu nếu (a) trạng thái HIỆN TẠI final+negative (early exit theo
-            # outcome), HOẶC (b) lead đậu ở stage negative-terminal (leak_stage) dù
-            # trạng thái NULL / non-negative — trước đây (b) rơi vào on_path[leak
-            # stage] rồi bị caller drop khỏi path ⇒ mất khỏi CẢ reached lẫn leaked.
-            if (is_final and outcome_val == "negative") or (key in leak_stage_ids):
-                leaked += c
+            if key is None:
                 continue
-            if key is not None:
-                on_path[key] = on_path.get(key, 0) + c
-        return stages, on_path, leaked, total, leak_stage_ids
+            per_stage[key] = per_stage.get(key, 0) + c
+            outcome_val = getattr(outcome, "value", outcome)
+            # Đã rời phễu: NEGATIVE-TERMINAL (is_final VÀ negative — đã đóng thất bại)
+            # HOẶC đậu ở bậc negative-terminal dù NULL.
+            if (bool(is_final) and outcome_val == "negative") or (
+                key in leak_stage_ids
+            ):
+                negative_per_stage[key] = negative_per_stage.get(key, 0) + c
+                leaked += c
+            # Tạm âm: negative NHƯNG chưa đóng ("Từ chối tư vấn") → còn theo, tách màu.
+            elif outcome_val == "negative":
+                at_risk_per_stage[key] = at_risk_per_stage.get(key, 0) + c
+        return (
+            stages,
+            per_stage,
+            negative_per_stage,
+            at_risk_per_stage,
+            leaked,
+            total,
+            leak_stage_ids,
+        )

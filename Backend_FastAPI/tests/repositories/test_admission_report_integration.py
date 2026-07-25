@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.models.pipeline import StatusTypeEnum
 from app.repositories.admission_report_repository import (
     UNRESOLVED,
     AdmissionReportRepository,
@@ -618,9 +619,7 @@ async def test_week_start_before_academic_year_rejected(
         )
 
 
-async def test_snapshot_as_of_now_flag(
-    db: AsyncSession, seeded_dependencies: dict
-):
+async def test_snapshot_as_of_now_flag(db: AsyncSession, seeded_dependencies: dict):
     """Cờ ``snapshot_as_of_now`` = True CHỈ khi lũy-kế đến HÔM NAY thật (anchor
     ngầm=today). FE gate cột snapshot (Nháp/HK1) theo cờ này thay vì tự suy
     week_start==null (proxy sai với năm quá-khứ/tương-lai, week_start tường minh,
@@ -1045,7 +1044,11 @@ async def test_application_paid_without_submit_counts_prepay_draft(
 
     # (1) prepay-draft: application paid, NO submitted history → counted
     _, p_draft = await _seed_lead_profile(
-        db, seeded_dependencies, year, offering.id, officer_id,
+        db,
+        seeded_dependencies,
+        year,
+        offering.id,
+        officer_id,
         created_at=win.start + timedelta(days=1),
     )
     fee_d = await _seed_fee(db, p_draft.id, year)  # application
@@ -1053,7 +1056,11 @@ async def test_application_paid_without_submit_counts_prepay_draft(
 
     # (2) submitted + application paid → NOT prepay-draft (already nộp)
     _, p_sub = await _seed_lead_profile(
-        db, seeded_dependencies, year, offering.id, officer_id,
+        db,
+        seeded_dependencies,
+        year,
+        offering.id,
+        officer_id,
         created_at=win.start + timedelta(days=1),
     )
     await _seed_history(db, p_sub.id, "submitted", win.start + timedelta(days=2))
@@ -1062,7 +1069,11 @@ async def test_application_paid_without_submit_counts_prepay_draft(
 
     # (3) tuition paid only (no application, no submit) → NOT counted
     _, p_tui = await _seed_lead_profile(
-        db, seeded_dependencies, year, offering.id, officer_id,
+        db,
+        seeded_dependencies,
+        year,
+        offering.id,
+        officer_id,
         created_at=win.start + timedelta(days=1),
     )
     fee_t = await _seed_fee(db, p_tui.id, year, fee_type="tuition")
@@ -1215,7 +1226,13 @@ async def _seed_pstage(db, *, is_final=False):
 
 
 async def _seed_funnel_status(
-    db, *, stage_id, outcome="neutral", is_final=False, counts_for_funnel=True
+    db,
+    *,
+    stage_id,
+    outcome="neutral",
+    is_final=False,
+    counts_for_funnel=True,
+    status_type="transition",
 ):
     n = next(_seq)
     cs = models.ConsultationStatus(
@@ -1226,6 +1243,7 @@ async def _seed_funnel_status(
         outcome_type=models.OutcomeTypeEnum(outcome),
         is_final=is_final,
         counts_for_funnel=counts_for_funnel,
+        status_type=StatusTypeEnum(status_type),
     )
     db.add(cs)
     await db.flush()
@@ -1270,10 +1288,11 @@ async def test_pipeline_funnel_leak_by_outcome_counts_for_funnel_and_walk_in(
     db: AsyncSession, seeded_dependencies: dict, officer_user_in_db: dict
 ):
     """Funnel aggregation contract exercised WITH data (not the empty-year early
-    return at repository.py). Covers three review findings at once:
-      • early exit by OUTCOME: a lead with a final+negative status at a NON-terminal
-        stage → leaked, NOT inflating the success path;
-      • counts_for_funnel=false (activity status) → excluded entirely;
+    return at repository.py). Covers the CURRENT-STATE distribution + 3 semantics:
+      • count-by-lead: mỗi lead đếm ĐÚNG 1 lần theo pipeline_stage_id (Σ current ==
+        total), KỂ CẢ status activity — để khớp Pipeline Board / Lead List;
+      • rời-phễu = NEGATIVE-TERMINAL (is_final VÀ negative): "Từ chối tư vấn"
+        (negative NON-final) tính CÒN THEO, không rời — khớp KPI "Đang theo";
       • walk-in: a lead created OUTSIDE the round window but holding an in-scope
         profile → pulled into the cohort via profile_lead_ids.
     """
@@ -1282,16 +1301,16 @@ async def test_pipeline_funnel_leak_by_outcome_counts_for_funnel_and_walk_in(
     _, offering = await _seed_catalog(db, year, deps["unit_id"])  # round covers year
     in_win = datetime(year, 6, 1, tzinfo=VN_TZ)
 
-    stg_a = await _seed_pstage(db)  # progress
+    stg_a = await _seed_pstage(db)  # progress (lowest order → funnel entry)
     stg_b = await _seed_pstage(db)  # progress (mid — a rejection can happen here)
     stg_neg = await _seed_pstage(db, is_final=True)  # negative terminal stage
     cs_ok = await _seed_funnel_status(db, stage_id=stg_a)  # neutral → on-path
     cs_reject = await _seed_funnel_status(
-        db, stage_id=stg_b, outcome="negative", is_final=True
-    )  # rejected at a NON-terminal stage
+        db, stage_id=stg_b, outcome="negative", is_final=False
+    )  # NON-final negative ("Từ chối tư vấn") → CÒN THEO, KHÔNG rời
     cs_activity = await _seed_funnel_status(
-        db, stage_id=stg_a, counts_for_funnel=False
-    )  # activity status → excluded from the funnel
+        db, stage_id=stg_a, status_type="activity"
+    )  # activity touchpoint → VẪN đếm (mỗi lead 1 lần, khớp board)
     cs_dropped = await _seed_funnel_status(
         db, stage_id=stg_neg, outcome="negative", is_final=True
     )
@@ -1324,28 +1343,36 @@ async def test_pipeline_funnel_leak_by_outcome_counts_for_funnel_and_walk_in(
     resp = await svc.get_pipeline_funnel(current_user=_admin(), academic_year=year)
     by_id = {s.stage_id: s for s in resp.stages}
 
-    # activity status (counts_for_funnel=false) excluded; leaked = rejected + dropped
-    # (by OUTCOME); on-path = 2 at stg_a (one in-window + the walk-in via profile).
-    assert resp.total_leads == 4  # 5 seeded − 1 activity-excluded
-    assert resp.leaked == 2  # rejected-mid-stage + negative-terminal
-    assert by_id[stg_a].current == 2 and by_id[stg_a].reached == 2
+    # ALL 5 counted (activity NOT excluded); leaked = CHỈ dropped (negative-terminal).
+    assert resp.total_leads == 5
+    assert resp.leaked == 1  # non-final reject = còn theo; chỉ negative-terminal rời
+    # current = lead ĐANG ở bậc (mỗi lead 1 lần): stg_a = ok + activity + walk-in = 3.
+    assert by_id[stg_a].current == 3
+    assert by_id[stg_a].leaked_here == 0
     assert by_id[stg_a].is_leak is False
-    assert by_id[stg_b].current == 0  # rejected lead is leaked, not on-path here
+    assert by_id[stg_b].current == 1  # rejected lead sits AT stg_b (đếm 1 lần)
+    assert by_id[stg_b].leaked_here == 0  # NON-final negative → KHÔNG rời
+    assert by_id[stg_b].at_risk_here == 1  # ...mà là TẠM ÂM (từ chối, còn theo)
     assert by_id[stg_b].is_leak is False  # mid stage, not a leak STAGE
+    assert by_id[stg_neg].current == 1  # dropped lead sits AT the terminal stage
+    assert by_id[stg_neg].leaked_here == 1  # negative-TERMINAL → rời
+    assert by_id[stg_neg].at_risk_here == 0  # đã đóng, không phải tạm âm
     assert by_id[stg_neg].is_leak is True  # all-negative final stage → leak stage
-    assert by_id[stg_neg].current == 0
+    # count-by-lead invariant: Σ current == total (mỗi lead đúng 1 lần, không lũy kế).
+    assert sum(s.current for s in resp.stages) == resp.total_leads
+    # leaked_here là tập con trong current, tổng == leaked.
+    assert sum(s.leaked_here for s in resp.stages) == resp.leaked
 
 
 async def test_funnel_leak_stage_null_status_and_zero_status_final(
     db: AsyncSession, seeded_dependencies: dict
 ):
-    """Hai lỗ phễu (ship prod PR #500 → fix fast-follow):
-      (A) lead đậu ở stage NEGATIVE-TERMINAL nhưng consultation_status NULL → phải
-          vào 'leaked'. Trước đây rơi vào on_path[leak_stage] rồi bị caller drop ⇒
-          MẤT khỏi CẢ reached lẫn leaked (reached+leaked ≠ total).
-      (B) final stage có 0 status cấu hình KHÔNG được coi leak-stage (unconfigured
-          ≠ negative-terminal) → lead ở đó ở lại reached.
-    Bất biến lõi: Σ current (leads đậu tại mỗi stage) + leaked == total_leads.
+    """Hai ca biên phân loại rời-phễu (phân bố hiện trạng):
+      (A) lead đậu ở stage NEGATIVE-TERMINAL nhưng consultation_status NULL → vẫn
+          tính rời-phễu TẠI bậc (leaked_here), current VẪN đếm nó (mỗi lead 1 lần).
+      (B) final stage có 0 status cấu hình KHÔNG coi leak-stage (unconfigured ≠
+          negative-terminal) → lead ở đó là 'còn theo', không phải rời.
+    Bất biến lõi: Σ current == total_leads (mỗi lead 1 lần; leaked_here là tập con).
     """
     year = next(_year_seq)
     deps = seeded_dependencies
@@ -1354,30 +1381,39 @@ async def test_funnel_leak_stage_null_status_and_zero_status_final(
 
     stg_prog = await _seed_pstage(db)  # progress (order thấp nhất)
     stg_neg = await _seed_pstage(db, is_final=True)  # negative-terminal (có status neg)
-    stg_zero = await _seed_pstage(db, is_final=True)  # final NHƯNG 0 status → KHÔNG leak
+    stg_zero = await _seed_pstage(db, is_final=True)  # final NHƯNG 0 status → ko leak
     await _seed_funnel_status(db, stage_id=stg_neg, outcome="negative", is_final=True)
     # stg_zero: KHÔNG seed status nào (unconfigured final stage)
 
     # (A) lead ở stg_neg, consultation_status NULL
-    await _seed_funnel_lead(db, deps, year, stage_id=stg_neg, cs_id=None, created_at=in_win)
+    await _seed_funnel_lead(
+        db, deps, year, stage_id=stg_neg, cs_id=None, created_at=in_win
+    )
     # (B) lead ở stg_zero (final 0-status), status NULL
-    await _seed_funnel_lead(db, deps, year, stage_id=stg_zero, cs_id=None, created_at=in_win)
+    await _seed_funnel_lead(
+        db, deps, year, stage_id=stg_zero, cs_id=None, created_at=in_win
+    )
     # mốc: 1 lead progress bình thường (status NULL)
-    await _seed_funnel_lead(db, deps, year, stage_id=stg_prog, cs_id=None, created_at=in_win)
+    await _seed_funnel_lead(
+        db, deps, year, stage_id=stg_prog, cs_id=None, created_at=in_win
+    )
 
     svc = AdmissionReportService(db)
     resp = await svc.get_pipeline_funnel(current_user=_admin(), academic_year=year)
     by_id = {s.stage_id: s for s in resp.stages}
 
     assert resp.total_leads == 3
-    # (A) leak-stage status-NULL lead → leaked (không mất)
     assert resp.leaked == 1
-    assert by_id[stg_neg].is_leak is True and by_id[stg_neg].current == 0
-    # (B) final-0-status KHÔNG leak; lead ở lại reached
-    assert by_id[stg_zero].is_leak is False and by_id[stg_zero].current == 1
+    # (A) leak-stage status-NULL lead: đếm 1 lần TẠI stg_neg + đánh dấu rời tại đó.
+    assert by_id[stg_neg].is_leak is True
+    assert by_id[stg_neg].current == 1 and by_id[stg_neg].leaked_here == 1
+    # (B) final-0-status KHÔNG leak; lead là 'còn theo'.
+    assert by_id[stg_zero].is_leak is False
+    assert by_id[stg_zero].current == 1 and by_id[stg_zero].leaked_here == 0
     assert by_id[stg_prog].current == 1
-    # bất biến bảo toàn: Σ current + leaked == total
-    assert sum(s.current for s in resp.stages) + resp.leaked == resp.total_leads
+    # bất biến: Σ current == total (mỗi lead đúng 1 lần); leaked_here ⊆ current.
+    assert sum(s.current for s in resp.stages) == resp.total_leads
+    assert sum(s.leaked_here for s in resp.stages) == resp.leaked
 
 
 # ----------------------------------------------------------- week-over-week (WoW)
@@ -1413,7 +1449,11 @@ async def test_wow_buckets_two_complete_weeks_and_excludes_running_week(
 
     async def _submit_at(occurred_at):
         _, p = await _seed_lead_profile(
-            db, seeded_dependencies, year, offering.id, officer_id,
+            db,
+            seeded_dependencies,
+            year,
+            offering.id,
+            officer_id,
             created_at=occurred_at,
         )
         await _seed_history(db, p.id, "submitted", occurred_at)
@@ -1466,7 +1506,11 @@ async def test_wow_previous_zero_delta_pct_is_none(
     _end, _run, w1, _w2 = _wow_weeks()
     major, offering = await _seed_catalog(db, year, unit_id)
     _, p = await _seed_lead_profile(
-        db, seeded_dependencies, year, offering.id, officer_id,
+        db,
+        seeded_dependencies,
+        year,
+        offering.id,
+        officer_id,
         created_at=w1.start + timedelta(days=2),
     )
     await _seed_history(db, p.id, "submitted", w1.start + timedelta(days=2))
@@ -1493,7 +1537,11 @@ async def test_wow_group_by_officer_manager_scope(
     _end, _run, w1, _w2 = _wow_weeks()
     _, offering = await _seed_catalog(db, year, unit_id)
     _, p = await _seed_lead_profile(
-        db, seeded_dependencies, year, offering.id, officer_id,
+        db,
+        seeded_dependencies,
+        year,
+        offering.id,
+        officer_id,
         created_at=w1.start + timedelta(days=2),
     )
     await _seed_history(db, p.id, "submitted", w1.start + timedelta(days=2))
