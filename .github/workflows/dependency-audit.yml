@@ -217,6 +217,8 @@ jobs:
           path: frontend/audit-results.json
 
   # Cảnh giới devDependencies mà KHÔNG chặn merge/deploy.
+  #  - Phạm vi là DEV-ONLY thật: lấy hiệu tập (audit toàn cây) − (audit
+  #    production), nên không giẫm chân và không đếm trùng với job gate.
   #  - KHÔNG chạy trên PR: dev-scope hiện có 15 high KHÔNG vá được (upstream
   #    eslint-plugin-jsx-a11y@6.10.2 vẫn khai `peer eslint ^3..^9` nên không
   #    thể lên eslint@10) → để nó đỏ trên mọi PR chỉ khiến người ta quen mắt
@@ -251,31 +253,56 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Audit full tree (devDependencies included)
+      - name: Audit dev-only advisories
         id: audit-dev
         run: |
-          echo "🔍 Auditing full dependency tree (dev included)..."
+          echo "🔍 Auditing dev-only advisories..."
+          # HAI lần audit rồi lấy HIỆU TẬP, không dùng `npm audit` trần.
+          # `npm audit` không cờ là TOÀN CÂY (prod + dev). Báo con số đó dưới
+          # nhãn "dev-scope" sẽ đếm TRÙNG advisory production — job gate đã
+          # báo nó rồi — và phân loại sai một lỗ hổng production thành
+          # "dev-tool, không chặn deploy". Đúng thứ khiến người đọc bỏ qua.
           npm audit --json > audit-dev-results.json || true
+          npm audit --omit=dev --json > audit-prod-baseline.json || true
 
-          # Cùng guard fail-closed như job gate: không metadata = audit HỎNG,
-          # không phải "0 lỗ hổng".
           node -e "
           const fs = require('fs');
-          let data;
-          try {
-            data = JSON.parse(fs.readFileSync('./audit-dev-results.json', 'utf8'));
-          } catch (err) {
-            console.error('❌ audit-dev-results.json is not parseable: ' + err.message);
-            process.exit(1);
+          const load = (path) => {
+            let data;
+            try {
+              data = JSON.parse(fs.readFileSync(path, 'utf8'));
+            } catch (err) {
+              console.error('❌ ' + path + ' is not parseable: ' + err.message);
+              process.exit(1);
+            }
+            if (!data.metadata || !data.metadata.vulnerabilities) {
+              console.error('❌ npm audit returned no metadata for ' + path + ' — treating as AUDIT FAILURE.');
+              process.exit(1);
+            }
+            return data;
+          };
+
+          const full = load('./audit-dev-results.json');
+          const prod = load('./audit-prod-baseline.json');
+
+          // Package nào đã xuất hiện trong audit production thì thuộc trách
+          // nhiệm của job gate, KHÔNG tính vào đây.
+          const inProd = new Set(Object.keys(prod.vulnerabilities || {}));
+          const devOnly = Object.entries(full.vulnerabilities || {})
+            .filter(([name]) => !inProd.has(name));
+
+          const counts = { critical: 0, high: 0, moderate: 0, low: 0, info: 0 };
+          for (const [, entry] of devOnly) {
+            if (counts[entry.severity] !== undefined) counts[entry.severity]++;
           }
-          const meta = data.metadata;
-          if (!meta || !meta.vulnerabilities) {
-            console.error('❌ npm audit returned no metadata — treating as AUDIT FAILURE.');
-            process.exit(1);
+
+          for (const [name, entry] of devOnly) {
+            console.error('  - ' + name + ' (' + entry.severity + ')');
           }
-          const v = meta.vulnerabilities;
-          console.log('critical_count=' + (v.critical || 0));
-          console.log('high_count=' + (v.high || 0));
+          console.error('dev-only packages: ' + devOnly.length);
+
+          console.log('critical_count=' + counts.critical);
+          console.log('high_count=' + counts.high);
           " > dev-counts.txt
 
           cat dev-counts.txt
@@ -283,14 +310,19 @@ jobs:
           CRIT=$(grep '^critical_count=' dev-counts.txt | cut -d= -f2)
           HIGH=$(grep '^high_count=' dev-counts.txt | cut -d= -f2)
 
-          npm audit || true
-
           if [ "$CRIT" -gt "0" ]; then
-            echo "🚨 $CRIT CRITICAL advisory trong toàn cây phụ thuộc!"
+            echo "🚨 $CRIT CRITICAL advisory chỉ có trong devDependencies!"
             exit 1
           fi
 
-          echo "✅ Không có CRITICAL. Còn $HIGH high — theo dõi, không chặn deploy."
+          echo "✅ Không có CRITICAL dev-only. Còn $HIGH high — theo dõi, không chặn deploy."
+
+      - name: Upload production baseline
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-audit-prod-baseline
+          path: frontend/audit-prod-baseline.json
 
       - name: Upload Results
         if: always()
@@ -354,14 +386,14 @@ jobs:
 
             note(process.env.PYTHON_RESULT, process.env.PYTHON_COUNT, '`Python Dependencies` (pip-audit) — số lỗ hổng');
             note(process.env.NODE_RESULT, process.env.NODE_COUNT, '`Node.js Dependencies` (production scope) — high/critical');
-            note(process.env.DEV_RESULT, process.env.DEV_CRITICAL, '`Node.js Dev-scope Advisories` — CRITICAL');
+            note(process.env.DEV_RESULT, process.env.DEV_CRITICAL, '`Node.js Dev-scope Advisories` — CRITICAL **chỉ có trong dev** (đã trừ phần production)');
 
             const body = [
               `Lượt audit \`${context.eventName}\` ngày \`${new Date().toISOString().slice(0, 10)}\` trên \`${context.ref}\` KHÔNG xanh.`,
               '',
               '**Kết quả:**',
               ...rows,
-              process.env.DEV_HIGH ? `- (tham khảo) dev-scope high: ${process.env.DEV_HIGH} — không chặn deploy` : '',
+              process.env.DEV_HIGH ? `- (tham khảo) high chỉ-có-trong-dev: ${process.env.DEV_HIGH} — không chặn deploy` : '',
               '',
               `**Log + artifact:** ${runUrl}`,
               '',
@@ -372,6 +404,34 @@ jobs:
               '',
               'Issue này tự cập nhật ở các lượt sau khi còn đỏ; đóng tay sau khi đã vá.',
             ].filter((line) => line !== '').join('\n');
+
+            // Label phải TỒN TẠI trước khi gắn. Nếu bị bỏ, issue sinh ra
+            // không có label → lần chạy sau `listForRepo({labels})` không
+            // thấy nó và lại mở issue mới, đúng thứ cơ chế này muốn tránh.
+            // (Repo hiện đã có sẵn cả 2; đoạn này để nó tự lành nếu ai đó
+            // xoá label, hoặc khi workflow chạy trên một fork/repo khác.)
+            const ensureLabel = async (name, color, description) => {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (err) {
+                if (err.status !== 404) throw err;
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color,
+                  description,
+                });
+                core.notice(`Đã tạo label thiếu: ${name}`);
+              }
+            };
+
+            await ensureLabel(LABEL, 'b60205', 'Issue theo dõi audit phụ thuộc (bot mở)');
+            await ensureLabel('security', 'd93f0b', 'Vấn đề bảo mật');
 
             const { data: found } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,

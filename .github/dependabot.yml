@@ -80,6 +80,10 @@ updates:
       ci-actions:
         patterns:
           - "*"
+        # BẮT BUỘC có update-types: thiếu nó thì wildcard gom CẢ major, và
+        # nhiều bản nâng action phá vỡ tương thích bị nhồi vào chung 1 PR —
+        # trái hẳn chính sách "major luôn tách riêng" ghi ở đầu file.
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: "ci(deps)"
     labels:
