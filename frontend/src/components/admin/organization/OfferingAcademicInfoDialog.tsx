@@ -224,17 +224,28 @@ export function OfferingAcademicInfoDialog({
     [initializeDialog, onOpenChange]
   );
 
-  // Also init on mount if dialog starts open (parent opens it by
-  // setting open=true before this component mounts).
+  // 🔴 Nạp dữ liệu MỖI LẦN dialog mở, kể cả khi CHA mở bằng cách đổi prop
+  // ``open`` (đường đi thực tế: bấm "Chỉnh sửa" → cha setState).
+  //
+  // Bản cũ chỉ có ``[]`` nên effect chạy đúng một lần lúc MOUNT — mà lúc đó
+  // dialog đang ĐÓNG. Radix chỉ gọi ``onOpenChange`` khi CHÍNH NÓ muốn đổi
+  // trạng thái (Esc / click nền), không gọi khi cha đổi prop. Hệ quả:
+  // ``initializeDialog`` KHÔNG BAO GIỜ chạy ở chế độ sửa, form giữ
+  // ``defaultValues`` rỗng, và bấm Lưu là GHI ĐÈ NULL lên dữ liệu thật —
+  // mất học phí/năm, chỉ tiêu, điểm chuẩn, cờ công khai và XOÁ SẠCH bảng học
+  // phí theo học kỳ. Đo trên dev: sửa để gắn ưu đãi cho ngành Điều dưỡng làm
+  // bay 6 dòng offering_semester_tuition.
+  //
+  // Phụ thuộc ``open`` + ID bản ghi (KHÔNG đọc ref trong effect — react-compiler
+  // cấm chạm ``ref.current`` ngoài event handler). Dùng ID chứ không dùng cả
+  // object ``academicInfo``: query invalidation tạo object mới cùng nội dung,
+  // lấy object làm dependency sẽ nạp lại form giữa chừng và xoá cái người dùng
+  // đang gõ. Vẫn ``queueMicrotask`` để không setState đồng bộ trong effect.
   React.useEffect(() => {
-    if (open && !prevOpenRef.current) {
-      prevOpenRef.current = true;
-      // Defer to next microtask so React commits current render first,
-      // avoiding synchronous setState during render.
-      queueMicrotask(initializeDialog);
-    }
+    if (!open) return;
+    queueMicrotask(initializeDialog);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [open, academicInfo?.id]);
 
   const [saveAction, setSaveAction] = useState<"close" | "continue">("close");
 

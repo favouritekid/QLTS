@@ -702,3 +702,38 @@ def test_reprice_khong_ghi_de_discount_amount_trong_snapshot():
     )
     assert Decimal(snap["applied_amount"]) == Decimal("800000")
     assert Decimal(snap["approved_amount"]) == Decimal("1000000")
+
+
+# ===========================================================================
+# SMOKE BẮT ĐƯỢC — phạm vi ngành phải đọc theo NGỮ NGHĨA, không so đẳng thức
+# ===========================================================================
+# Màn hình tạo chính sách lưu CẢ cờ đang TẮT:
+# ``{"all_programs": true, "is_heavy_only": false}``. Bản đầu so đẳng thức với
+# ``{"all_programs": True}`` nên MỌI chính sách tạo qua giao diện đều bị loại
+# oan — tính năng chọn ưu đãi chết hoàn toàn trên UI trong khi 100 test vẫn
+# xanh, vì test tự dựng scope "sạch". Đây là lớp lỗi chỉ smoke luồng thật bắt
+# được, nên khoá lại bằng chính hình dạng dữ liệu mà UI sinh ra.
+
+
+def test_scope_kem_co_TAT_van_ap_duoc():
+    """Đúng dữ liệu UI sinh ra: all_programs bật + is_heavy_only tắt."""
+    p = _policy(applicable_scope={"all_programs": True, "is_heavy_only": False})
+    assert is_policy_effective(p, TODAY)[0] is True
+    assert resolve_discounts(HK1, [p], as_of=TODAY)[0] == Decimal("730000.00")
+
+
+def test_scope_chi_toan_co_TAT_van_ap_duoc():
+    """Không có ràng buộc nào BẬT ⇒ không có gì để chặn."""
+    p = _policy(applicable_scope={"all_programs": False, "is_heavy_only": False})
+    assert is_policy_effective(p, TODAY)[0] is True
+
+
+def test_scope_co_rang_buoc_BAT_thi_van_bi_chan():
+    """Cờ nặng nhọc BẬT vẫn phải bị chặn — owner chốt KHÔNG giảm ngành nặng nhọc."""
+    p = _policy(applicable_scope={"all_programs": True, "is_heavy_only": True})
+    assert is_policy_effective(p, TODAY)[1] == "co_pham_vi_rieng_chua_chot_nghiep_vu"
+
+
+def test_scope_danh_sach_nganh_van_bi_chan():
+    p = _policy(applicable_scope={"degree_levels": ["Cao đẳng"]})
+    assert is_policy_effective(p, TODAY)[1] == "co_pham_vi_rieng_chua_chot_nghiep_vu"

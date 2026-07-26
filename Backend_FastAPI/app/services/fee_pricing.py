@@ -241,8 +241,17 @@ def is_policy_effective(
     # Phạm vi ngành: KHÔNG suy diễn. Việc "chính sách này áp cho ngành nào" do
     # CẤU HÌNH quyết định (``offering_academic_info.applied_discount_policy_ids``),
     # nên chính sách khai thêm phạm vi riêng mà máy chưa chốt nghiệp vụ ⇒ bỏ qua.
-    scope = getattr(policy, "applicable_scope", None)
-    if scope and scope != {"all_programs": True}:
+    #
+    # 🔴 Đọc theo NGỮ NGHĨA, đừng so đẳng thức với ``{"all_programs": True}``:
+    # màn hình tạo chính sách lưu CẢ các cờ đang TẮT
+    # (``{"all_programs": true, "is_heavy_only": false}``), nên so bằng dict làm
+    # MỌI chính sách tạo qua giao diện bị loại oan — smoke bắt được, còn test
+    # không, vì test tự dựng scope "sạch". Cờ tắt không ràng buộc gì; chỉ những
+    # ràng buộc đang BẬT mới đáng xét.
+    scope = getattr(policy, "applicable_scope", None) or {}
+    rang_buoc_dang_bat = {k: v for k, v in scope.items() if v}
+    rang_buoc_dang_bat.pop("all_programs", None)
+    if rang_buoc_dang_bat:
         return False, "co_pham_vi_rieng_chua_chot_nghiep_vu"
 
     criteria = getattr(policy, "target_criteria", None) or {}

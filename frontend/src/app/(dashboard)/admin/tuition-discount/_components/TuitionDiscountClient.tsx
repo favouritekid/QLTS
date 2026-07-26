@@ -293,7 +293,11 @@ export function TuitionDiscountClient({ initialData }: TuitionDiscountClientProp
       name: policy.name,
       description: policy.description || "",
       discount_type: policy.discount_type,
-      discount_value: policy.discount_value,
+      // 🔴 API trả Decimal dưới dạng CHUỖI ("800000.00") còn schema khai
+      // ``z.number()`` — nhét thẳng vào form thì mọi lần bấm Cập nhật đều chết ở
+      // validate ("expected number, received string"). Chế độ TẠO không lộ vì nó
+      // khởi tạo bằng số 0.
+      discount_value: Number(policy.discount_value),
       valid_from: policy.valid_from ? new Date(policy.valid_from) : null,
       valid_to: policy.valid_to ? new Date(policy.valid_to) : null,
       is_stackable: policy.is_stackable,
