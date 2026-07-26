@@ -46,6 +46,13 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Cùng lý do như bên node-audit: logic đếm quyết định một required
+      # check, nên phải được test TRƯỚC khi tin vào số nó trả ra. Dùng
+      # unittest của thư viện chuẩn — job này không có pytest.
+      - name: Self-test counting logic
+        working-directory: ${{ github.workspace }}/.github/scripts
+        run: python test_pip_audit_count.py
+
       - name: Install pip-audit
         run: pip install pip-audit
 
@@ -92,14 +99,11 @@ jobs:
             exit 1
           fi
 
-          VULNS=$(python -c "
-          import json
-          with open('audit-results.json') as f:
-              data = json.load(f)
-          vulns = data.get('dependencies', [])
-          count = sum(len(d.get('vulns', [])) for d in vulns)
-          print(count)
-          ")
+          # FAIL CLOSED — xem .github/scripts/pip_audit_count.py.
+          # Parser inline cũ dùng data.get('dependencies', []) và
+          # d.get('vulns', []) nên payload {} hoặc {"dependencies":[{}]} đều
+          # cho ra 0 và required check xanh dù chưa audit được gì.
+          VULNS=$(python ../.github/scripts/pip_audit_count.py audit-results.json)
 
           echo "📊 Found $VULNS vulnerability(ies)"
           echo "vuln_count=$VULNS" >> "$GITHUB_OUTPUT"
@@ -183,30 +187,12 @@ jobs:
           # turning a required check red for a non-security reason.
           npm audit --omit=dev --json > audit-results.json || true
 
-          # Parse results — FAIL CLOSED.
-          # On a registry/network error npm still writes VALID json, just
-          # without `metadata` (e.g. {"error":{"code":"ENETUNREACH",...}}).
-          # Reading that as `metadata || {}` yields count=0 and the required
-          # check goes GREEN having audited nothing. python-audit guards the
-          # equivalent case above; this is its counterpart.
-          VULNS=$(node -e "
-          const fs = require('fs');
-          let data;
-          try {
-            data = JSON.parse(fs.readFileSync('./audit-results.json', 'utf8'));
-          } catch (err) {
-            console.error('❌ audit-results.json is not parseable: ' + err.message);
-            process.exit(1);
-          }
-          const meta = data.metadata;
-          if (!meta || !meta.vulnerabilities) {
-            console.error('❌ npm audit returned no metadata — treating as AUDIT FAILURE, not as zero vulnerabilities.');
-            console.error(JSON.stringify(data).slice(0, 500));
-            process.exit(1);
-          }
-          const v = meta.vulnerabilities;
-          console.log((v.high || 0) + (v.critical || 0));
-          ")
+          # Parse results — FAIL CLOSED, dùng chung lib với job dev-scope.
+          # Trên lỗi registry/mạng npm vẫn ghi JSON HỢP LỆ, chỉ thiếu
+          # `metadata` (vd {"error":{"code":"ENETUNREACH",...}}); và ngay cả
+          # khi có `metadata.vulnerabilities` thì nó vẫn có thể là `{}` rỗng.
+          # Cả hai ca đều phải NỔ, không được hoá thành 0 rồi báo xanh.
+          VULNS=$(node ../.github/scripts/audit-gate-count.js audit-results.json)
 
           echo "high_count=$VULNS" >> "$GITHUB_OUTPUT"
           echo "📊 Found $VULNS high/critical vulnerability(ies) in production dependencies"

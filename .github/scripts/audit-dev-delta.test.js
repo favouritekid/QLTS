@@ -12,7 +12,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { computeDelta } = require('./audit-dev-delta.js');
+const { computeDelta, requireCount } = require('./audit-dev-delta.js');
 
 /** Dựng object có hình dạng như npm audit --json. */
 const audit = (counts, vulnerabilities = {}) => ({
@@ -107,4 +107,13 @@ test('FAIL CLOSED: count âm trong dữ liệu gốc phải NỔ', () => {
   const full = audit({ critical: -1, high: 0 });
 
   assert.throws(() => computeDelta(full, prod), /phải là số nguyên không âm/);
+});
+
+test('FAIL CLOSED (gate production): metadata.vulnerabilities rỗng phải NỔ', () => {
+  // REGRESSION cho audit-gate-count.js: guard cũ chỉ chặn `vulnerabilities`
+  // VẮNG MẶT; `{}` rỗng lọt qua rồi rơi vào `(v.high || 0)` → gate xanh mù.
+  assert.throws(
+    () => requireCount({}, 'high', 'audit-results.json'),
+    /phải là số nguyên không âm/
+  );
 });
