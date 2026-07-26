@@ -1122,7 +1122,14 @@ class DiscountPolicyOption(BaseModel):
         None, description="Lý do bằng tiếng Việt để hiển thị."
     )
     selected: bool = Field(
-        ..., description="Đang được tính trong con số phải thu bên dưới?"
+        ..., description="Người dùng đang TÍCH chọn chính sách này?"
+    )
+    applied: bool = Field(
+        ...,
+        description="Có THỰC SỰ được tính vào con số phải thu không. Khác "
+                    "``selected`` khi một chính sách không-cộng-dồn đứng trước "
+                    "đã chặn, hoặc học phí gốc đã giảm hết — lúc đó ``reason_text`` "
+                    "nói rõ vì sao.",
     )
 
 

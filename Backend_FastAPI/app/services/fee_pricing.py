@@ -85,6 +85,15 @@ _CENT = Decimal("0.01")
 # ``policy_id IS NULL`` — chính sách bị xoá cũng để lại NULL).
 MANUAL_DISCOUNT_SOURCE = "manual_discount"
 
+# Mức miễn/giảm tay ĐƯỢC DUYỆT — BẤT BIẾN qua mọi lần định giá lại.
+#
+# 🔴 Vì sao phải có khoá riêng: cột ``discount_amount`` là số ĐANG ÁP, có thể bị
+# cắt khi giá gốc tụt xuống dưới mức duyệt. Lấy chính nó làm mức nền cho lần sau
+# thì quyết định của người bị bào mòn dần và KHÔNG BAO GIỜ phục hồi: duyệt
+# 1.000.000 → giá tụt còn 800.000 (áp 800.000) → giá lên lại 2.000.000 thì vẫn
+# chỉ giảm 800.000. Mức duyệt là dữ kiện gốc, phải giữ nguyên vẹn.
+MANUAL_APPROVED_AMOUNT_KEY = "approved_amount"
+
 
 @dataclass(frozen=True)
 class DiscountContext:
@@ -274,6 +283,11 @@ DISCOUNT_SKIP_REASON_TEXT: dict[str, str] = {
     "khong_thuoc_doi_tuong_da_xac_minh": (
         "Hồ sơ không thuộc đối tượng ưu tiên đã được xác minh"
     ),
+    # Hai lý do dưới đây KHÔNG đến từ bản thân chính sách mà từ TỔ HỢP đang chọn.
+    "bi_chan_boi_chinh_sach_khong_cong_don": (
+        "Không cộng dồn được với ưu đãi đã áp trước đó"
+    ),
+    "da_giam_het_hoc_phi_goc": "Học phí gốc đã được giảm hết, không còn phần nào để giảm",
 }
 
 
@@ -331,6 +345,7 @@ def resolve_discounts(
     calculated_at: Optional[str] = None,
     context: Optional[DiscountContext] = None,
     selected_by: Optional[int] = None,
+    skipped: Optional[dict[Optional[int], str]] = None,
 ) -> tuple[Decimal, list[DiscountLine]]:
     """Tính giảm giá theo CHÍNH SÁCH. Thuần — không DB, không side effect.
 
@@ -343,6 +358,11 @@ def resolve_discounts(
         selected_by: id người TỰ TAY chọn chính sách này (None = áp theo cấu hình
             mặc định của ngành). Ghi vào snapshot để sau này còn truy được ai
             quyết định giảm cho hồ sơ nào.
+        skipped: dict rỗng do bên gọi truyền vào để NHẬN lý do từng chính sách bị
+            bỏ (``{policy_id: mã_lý_do}``). Đây là cách màn hình xem trước biết
+            chính sách nào ĐƯỢC CHỌN nhưng KHÔNG ĐƯỢC ÁP mà không phải suy lại
+            luật một lần nữa — suy lại là tạo bản sao thứ hai của chính engine
+            này, và bản sao thì sẽ drift.
 
     Returns:
         ``(total_discount, lines)`` — đã làm tròn tới đồng-xu và chặn trên ở
@@ -356,17 +376,34 @@ def resolve_discounts(
 
     lines: list[DiscountLine] = []
     total = Decimal("0")
+    stopped_by_non_stackable = False
+
+    def _note_skip(policy_id: Optional[int], reason_code: str) -> None:
+        if skipped is not None:
+            skipped[policy_id] = reason_code
 
     for policy in ordered:
+        policy_id = getattr(policy, "id", None)
+        if stopped_by_non_stackable:
+            # Vòng lặp đã dừng áp ở một chính sách KHÔNG cộng dồn — các chính
+            # sách còn lại vẫn phải được giải thích, nếu không giao diện chỉ
+            # thấy chúng "biến mất".
+            _note_skip(policy_id, "bi_chan_boi_chinh_sach_khong_cong_don")
+            continue
+        if total >= base_amount:
+            _note_skip(policy_id, "da_giam_het_hoc_phi_goc")
+            continue
+
         ok, reason = is_policy_effective(policy, as_of, context)
         if not ok:
             log.info(
                 "discount_policy_skipped",
-                policy_id=getattr(policy, "id", None),
+                policy_id=policy_id,
                 policy_name=getattr(policy, "name", None),
                 reason=reason,
                 as_of=str(as_of),
             )
+            _note_skip(policy_id, reason or "khong_ap_dung_duoc")
             continue
 
         type_value = _policy_type_value(policy)
@@ -379,9 +416,10 @@ def resolve_discounts(
             # Loại lạ (dữ liệu bẩn / enum mới chưa xử) → KHÔNG đoán.
             log.warning(
                 "discount_policy_unknown_type",
-                policy_id=getattr(policy, "id", None),
+                policy_id=policy_id,
                 discount_type=type_value,
             )
+            _note_skip(policy_id, "loai_giam_khong_hop_le")
             continue
 
         # Chặn trên: tổng giảm không vượt base (final không âm).
@@ -389,12 +427,13 @@ def resolve_discounts(
         if amount > remaining:
             log.info(
                 "discount_capped_at_base",
-                policy_id=getattr(policy, "id", None),
+                policy_id=policy_id,
                 requested=str(amount),
                 capped_to=str(remaining),
             )
             amount = remaining
         if amount <= 0:
+            _note_skip(policy_id, "da_giam_het_hoc_phi_goc")
             continue
 
         total += amount
@@ -411,22 +450,20 @@ def resolve_discounts(
             snapshot["selected_by"] = selected_by
         lines.append(
             DiscountLine(
-                policy_id=getattr(policy, "id", None),
+                policy_id=policy_id,
                 amount=amount,
                 snapshot=snapshot,
             )
         )
 
-        # KHÔNG cộng dồn → áp một mình rồi dừng.
+        # KHÔNG cộng dồn → áp một mình rồi dừng. KHÔNG ``break``: đi tiếp để ghi
+        # lý do cho các chính sách còn lại (bên gọi cần giải thích cho người dùng
+        # vì sao ô họ tích lại không được áp).
         if not _is_stackable(policy):
-            log.info(
-                "discount_stop_non_stackable",
-                policy_id=getattr(policy, "id", None),
-            )
-            break
-
-        if total >= base_amount:
-            break
+            log.info("discount_stop_non_stackable", policy_id=policy_id)
+            stopped_by_non_stackable = True
+            if skipped is None:
+                break
 
     return total, lines
 
@@ -461,6 +498,8 @@ def build_manual_discount_line(
             "existing_policy_discount": str(policy_discount),
             "target_final_amount": str(target_final_amount),
             "discount_amount": str(amount),
+            # Mức DUYỆT — không bao giờ bị ghi đè bởi các lần định giá lại.
+            MANUAL_APPROVED_AMOUNT_KEY: str(amount),
             "calculated_at": calculated_at,
             # Nhãn hiển thị cho builder response (tránh "Unknown" trên giao diện).
             "policy_name": "Miễn/giảm học phí (thủ công)",
@@ -481,6 +520,30 @@ def compute_manual_discount_amount(
 
 def _line_snapshot(line: Any) -> dict[str, Any]:
     return getattr(line, "calculation_snapshot", None) or {}
+
+
+def _manual_approved_amount(line: Any, snapshot: dict[str, Any]) -> Decimal:
+    """Mức miễn/giảm tay ĐƯỢC DUYỆT của một dòng — nguồn bất biến để cap.
+
+    Thứ tự đọc: ``approved_amount`` (khoá tường minh) → ``discount_amount`` trong
+    snapshot lúc TẠO dòng → cột ``discount_amount`` hiện tại. Hai mức sau là
+    đường lùi cho dòng tạo trước khi có khoá này; cột hiện tại là lựa chọn CUỐI
+    vì nó có thể đã bị cắt ở một lần định giá lại trước.
+    """
+    for candidate in (
+        snapshot.get(MANUAL_APPROVED_AMOUNT_KEY),
+        snapshot.get("discount_amount"),
+        getattr(line, "discount_amount", None),
+    ):
+        if candidate is None:
+            continue
+        try:
+            value = _q(Decimal(str(candidate)))
+        except (ArithmeticError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return Decimal("0")
 
 
 def is_manual_discount_line(line: Any) -> bool:
@@ -554,30 +617,45 @@ def resolve_repricing(
                 )
             continue
 
-        amount = _q(Decimal(str(getattr(line, "discount_amount", 0) or 0)))
-        if amount <= 0:
-            continue
-
         snapshot = dict(_line_snapshot(line))
-        remaining = base_amount - total
+        approved = _manual_approved_amount(line, snapshot)
+        if approved <= 0:
+            continue
+        # Mức duyệt luôn được ghi lại tường minh — kể cả dòng cũ tạo trước khi có
+        # khoá này — để lần định giá lại sau còn nguồn bất biến mà cap từ đó.
+        snapshot[MANUAL_APPROVED_AMOUNT_KEY] = str(approved)
+
+        # LUÔN cap từ MỨC DUYỆT, không phải từ số đang áp: giá gốc lên lại thì
+        # khoản giảm phải phục hồi đúng mức người đã ký.
+        amount = approved
+        remaining = max(base_amount - total, Decimal("0"))
         if amount > remaining:
-            # Giá gốc mới thấp hơn cả mức đã giảm ⇒ cắt cho final không âm. Ghi
-            # rõ trong snapshot: kế toán phải thấy mức duyệt đã bị cắt, không
-            # phải đoán vì sao con số khác giấy tờ.
             log.warning(
                 "manual_discount_capped_on_reprice",
                 fee_id=getattr(line, "fee_id", None),
-                approved=str(amount),
-                capped_to=str(max(remaining, Decimal("0"))),
+                approved=str(approved),
+                capped_to=str(remaining),
                 new_base=str(base_amount),
             )
-            snapshot["capped_from"] = str(amount)
+            amount = remaining
+            # ``capped_from`` bám MỨC DUYỆT nên không bị bào mòn qua nhiều vòng
+            # (trước đây nó ghi lại số đã cắt của vòng trước: 1tr → 800k → 500k).
+            snapshot["capped_from"] = str(approved)
             snapshot["capped_at"] = calculated_at
-            amount = max(remaining, Decimal("0"))
-            if amount <= 0:
-                continue
+        else:
+            # Hết bị cắt (giá gốc đã lên lại) ⇒ dọn dấu vết cắt của vòng trước,
+            # nếu không kế toán đọc snapshot lại tưởng vẫn đang bị cắt.
+            snapshot.pop("capped_from", None)
+            snapshot.pop("capped_at", None)
 
+        # Số ĐANG áp đi vào khoá riêng. KHÔNG ghi đè ``discount_amount``: với dòng
+        # tạo trước khi có ``approved_amount``, chính khoá đó là đường lùi duy
+        # nhất để đọc lại mức duyệt gốc — ghi đè nó là tự tay phá nguồn phục hồi.
+        snapshot["applied_amount"] = str(amount)
         total += amount
+        # GIỮ dòng kể cả khi bị cắt về 0. Bỏ nó đi thì ``write_fee_discount_lines``
+        # DELETE-rồi-INSERT sẽ xoá hẳn khỏi CSDL: mất audit của một quyết định có
+        # người ký, và lần sau giá gốc lên lại thì không còn gì để phục hồi.
         lines.append(
             DiscountLine(policy_id=None, amount=amount, snapshot=snapshot)
         )

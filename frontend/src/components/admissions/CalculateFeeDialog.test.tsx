@@ -27,6 +27,7 @@ type PolicyOption = {
   reason: string | null;
   reason_text: string | null;
   selected: boolean;
+  applied: boolean;
 };
 
 const { mockAuth, mockPreview } = vi.hoisted(() => ({
@@ -269,6 +270,7 @@ describe("CalculateFeeDialog", () => {
     reason: null,
     reason_text: null,
     selected: true,
+    applied: true,
     ...over,
   });
 
@@ -285,6 +287,7 @@ describe("CalculateFeeDialog", () => {
         name: "Giảm đối tượng ưu tiên",
         selectable: false,
         selected: false,
+        applied: false,
         reason: "khong_thuoc_doi_tuong_da_xac_minh",
         reason_text: "Hồ sơ không thuộc đối tượng ưu tiên đã được xác minh",
       }),
@@ -300,6 +303,29 @@ describe("CalculateFeeDialog", () => {
     const disabled = screen.getByLabelText(/giảm đối tượng ưu tiên/i);
     expect(disabled).toBeDisabled();
     expect(screen.getByLabelText(/giảm đăng ký sớm/i)).toBeEnabled();
+  });
+
+  it("nói rõ khi ưu đãi đã tích nhưng KHÔNG được áp", () => {
+    // is_stackable mặc định FALSE ở CSDL nên tổ hợp này rất dễ gặp: engine áp
+    // ưu đãi độc quyền rồi dừng, ô tích thứ hai không có hiệu lực. Im lặng thì
+    // tổng tiền bên dưới trông như tính sai.
+    mockPreview.data.discount_policies = [
+      policy({ id: 4, name: "Ưu đãi độc quyền" }),
+      policy({
+        id: 9,
+        name: "Ưu đãi cộng dồn",
+        selected: true,
+        applied: false,
+        reason: "bi_chan_boi_chinh_sach_khong_cong_don",
+        reason_text: "Không cộng dồn được với ưu đãi đã áp trước đó",
+      }),
+    ];
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+
+    expect(screen.getByText(/không được áp/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/không cộng dồn được với ưu đãi đã áp trước đó/i)
+    ).toBeInTheDocument();
   });
 
   it("không gửi discount_policy_ids khi người dùng KHÔNG đụng vào ô tích", async () => {

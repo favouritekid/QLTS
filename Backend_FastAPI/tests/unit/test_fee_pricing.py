@@ -486,6 +486,8 @@ def test_reprice_giam_tay_bi_cat_khi_vuot_base_moi():
     assert result.total_discount == Decimal("800000")
     assert result.final_amount == Decimal("0")
     assert Decimal(result.lines[0].snapshot["capped_from"]) == Decimal("1000000")
+    # Mức DUYỆT vẫn nguyên vẹn để vòng sau phục hồi được.
+    assert Decimal(result.lines[0].snapshot["approved_amount"]) == Decimal("1000000")
 
 
 def test_reprice_dong_mo_coi_policy_bi_xoa_thi_bo():
@@ -514,3 +516,189 @@ def test_reprice_chinh_sach_het_han_thi_ha_ve_khong_giu_so_cu():
     )
     assert result.policy_discount == Decimal("0")
     assert result.total_discount == Decimal("1000000")
+
+
+# ===========================================================================
+# BLOCKER P1-1 — mức DUYỆT của giảm tay là bất biến qua nhiều vòng định giá
+# ===========================================================================
+# Bản đầu đọc ``discount_amount`` (số ĐANG áp) làm mức nền cho lần sau, nên mỗi
+# lần bị cắt là mức duyệt bị bào mòn thêm và không bao giờ phục hồi. Cắt về 0 còn
+# BỎ HẲN dòng — mà bên gọi ghi bằng DELETE-rồi-INSERT nên dòng biến mất khỏi CSDL:
+# mất audit của một quyết định có người ký.
+
+
+def _reprice_manual(base: str, line):
+    return resolve_repricing(Decimal(base), [], [line], as_of=TODAY)
+
+
+def _as_orm_line(result_line, *, fee_id: int = 99):
+    """Biến dòng engine trả về thành "dòng đã lưu" cho vòng định giá kế tiếp."""
+    return SimpleNamespace(
+        id=1,
+        fee_id=fee_id,
+        policy_id=result_line.policy_id,
+        discount_amount=result_line.amount,
+        calculation_snapshot=result_line.snapshot,
+    )
+
+
+def test_reprice_nhieu_vong_muc_duyet_khong_bi_bao_mon():
+    """Duyệt 1tr → giá tụt 800k (áp 800k) → giá tụt tiếp 500k → giá LÊN 2tr.
+
+    Mức duyệt phải quay về đủ 1.000.000, không phải 500.000."""
+    line = _manual_line("1000000")
+
+    v1 = _reprice_manual("800000", line)
+    assert v1.total_discount == Decimal("800000")
+
+    v2 = _reprice_manual("500000", _as_orm_line(v1.lines[0]))
+    assert v2.total_discount == Decimal("500000")
+
+    v3 = _reprice_manual("2000000", _as_orm_line(v2.lines[0]))
+    assert v3.total_discount == Decimal("1000000"), (
+        "mức duyệt bị bào mòn qua các vòng cắt — phải cap từ approved_amount "
+        "chứ không phải từ số đang áp"
+    )
+    assert v3.final_amount == Decimal("1000000")
+
+
+def test_reprice_capped_from_luon_la_muc_duyet_khong_phai_so_da_cat():
+    line = _manual_line("1000000")
+    v1 = _reprice_manual("800000", line)
+    v2 = _reprice_manual("500000", _as_orm_line(v1.lines[0]))
+    assert Decimal(v2.lines[0].snapshot["capped_from"]) == Decimal("1000000"), (
+        "capped_from bị ghi đè bằng số đã cắt của vòng trước"
+    )
+
+
+def test_reprice_het_bi_cat_thi_don_dau_vet_cat():
+    """Giá lên lại thì snapshot không được để lại 'đang bị cắt' gây hiểu nhầm."""
+    v1 = _reprice_manual("800000", _manual_line("1000000"))
+    v2 = _reprice_manual("5000000", _as_orm_line(v1.lines[0]))
+    assert "capped_from" not in v2.lines[0].snapshot
+    assert v2.total_discount == Decimal("1000000")
+
+
+def test_reprice_cat_ve_0_van_GIU_dong_de_khong_mat_audit():
+    """Chính sách đã giảm hết base ⇒ giảm tay còn 0, nhưng dòng PHẢI còn.
+
+    Bên gọi ghi bằng DELETE-rồi-INSERT: bỏ dòng khỏi kết quả = xoá khỏi CSDL."""
+    p = _policy(value="100")  # 100% → chính sách ăn hết base
+    result = resolve_repricing(
+        Decimal("1000000"), [p], [_manual_line("500000")], as_of=TODAY
+    )
+    manual = [ln for ln in result.lines if ln.policy_id is None]
+    assert len(manual) == 1, "dòng giảm tay bị xoá mất khỏi kết quả ⇒ mất audit"
+    assert manual[0].amount == Decimal("0")
+    assert Decimal(manual[0].snapshot["approved_amount"]) == Decimal("500000")
+    assert result.total_discount == Decimal("1000000")
+
+
+def test_reprice_dong_cu_khong_co_approved_amount_van_phuc_hoi_duoc():
+    """Dòng tạo TRƯỚC khi có khoá ``approved_amount`` (chỉ có discount_amount
+    trong snapshot) vẫn phải lấy được mức duyệt gốc."""
+    legacy = SimpleNamespace(
+        id=1, fee_id=99, policy_id=None,
+        discount_amount=Decimal("300000"),  # đã bị cắt ở một vòng trước
+        calculation_snapshot={
+            "source": MANUAL_DISCOUNT_SOURCE,
+            "reason": "Quyết định cũ",
+            "discount_amount": "1000000",  # mức duyệt gốc
+        },
+    )
+    result = _reprice_manual("5000000", legacy)
+    assert result.total_discount == Decimal("1000000")
+
+
+# ===========================================================================
+# BLOCKER P1-2 — engine phải nói rõ chính sách nào KHÔNG được áp và vì sao
+# ===========================================================================
+# ``is_stackable`` mặc định FALSE ở CSDL, nên tổ hợp "tích 2 ô" rất dễ chỉ áp 1.
+# Nếu màn hình tự suy quy tắc đó thì sẽ lệch với engine.
+
+
+def test_skipped_bao_ly_do_bi_chan_boi_chinh_sach_khong_cong_don():
+    skipped: dict = {}
+    total, lines = resolve_discounts(
+        HK1,
+        [
+            _policy(pid=1, value="10", is_stackable=False, priority=10),
+            _policy(pid=2, discount_type="amount", value="200000", priority=1),
+        ],
+        as_of=TODAY,
+        skipped=skipped,
+    )
+    assert [ln.policy_id for ln in lines] == [1]
+    assert skipped == {2: "bi_chan_boi_chinh_sach_khong_cong_don"}
+    assert total == Decimal("730000.00")
+
+
+def test_skipped_bao_ly_do_da_giam_het_hoc_phi_goc():
+    skipped: dict = {}
+    _total, lines = resolve_discounts(
+        HK1,
+        [
+            _policy(pid=1, value="100", priority=10),
+            _policy(pid=2, discount_type="amount", value="200000", priority=1),
+        ],
+        as_of=TODAY,
+        skipped=skipped,
+    )
+    assert [ln.policy_id for ln in lines] == [1]
+    assert skipped == {2: "da_giam_het_hoc_phi_goc"}
+
+
+def test_skipped_bao_ly_do_khong_hieu_luc():
+    skipped: dict = {}
+    resolve_discounts(
+        HK1, [_policy(pid=7, valid_to=date(2026, 6, 30))],
+        as_of=TODAY, skipped=skipped,
+    )
+    assert skipped == {7: "da_het_hieu_luc"}
+
+
+def test_moi_ma_ly_do_deu_co_chu_tieng_viet():
+    """Thêm mã lý do mới mà quên viết câu giải thích thì giao diện hiện mã máy."""
+    from app.services.fee_pricing import DISCOUNT_SKIP_REASON_TEXT
+
+    for code, text in DISCOUNT_SKIP_REASON_TEXT.items():
+        assert text and text != code, code
+    for code in (
+        "bi_chan_boi_chinh_sach_khong_cong_don",
+        "da_giam_het_hoc_phi_goc",
+    ):
+        assert code in DISCOUNT_SKIP_REASON_TEXT
+
+
+def test_khong_truyen_skipped_thi_hanh_vi_giu_nguyen():
+    """Bên gọi không quan tâm lý do vẫn phải nhận đúng tổng như trước."""
+    total, lines = resolve_discounts(
+        HK1,
+        [
+            _policy(pid=1, value="10", is_stackable=False, priority=10),
+            _policy(pid=2, discount_type="amount", value="200000", priority=1),
+        ],
+        as_of=TODAY,
+    )
+    assert total == Decimal("730000.00") and len(lines) == 1
+
+
+def test_reprice_khong_ghi_de_discount_amount_trong_snapshot():
+    """``discount_amount`` trong snapshot là đường lùi đọc mức duyệt cho dòng cũ.
+
+    Ghi đè nó bằng số đang áp = tự tay phá nguồn phục hồi duy nhất của những dòng
+    tạo trước khi có khoá ``approved_amount``."""
+    # Dòng THẬT do engine dựng lúc tính phí lần đầu (có đủ discount_amount).
+    goc = build_manual_discount_line(
+        Decimal("5000000"), Decimal("0"), Decimal("4000000"),
+        reason="Học bổng theo quyết định", approved_by=7,
+    )
+    assert Decimal(goc.snapshot["discount_amount"]) == Decimal("1000000")
+
+    v1 = _reprice_manual("800000", _as_orm_line(goc))
+    snap = v1.lines[0].snapshot
+    assert Decimal(snap["discount_amount"]) == Decimal("1000000"), (
+        "discount_amount lúc tạo là đường lùi đọc mức duyệt — không được ghi đè"
+    )
+    assert Decimal(snap["applied_amount"]) == Decimal("800000")
+    assert Decimal(snap["approved_amount"]) == Decimal("1000000")

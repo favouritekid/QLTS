@@ -2002,3 +2002,248 @@ async def test_calculate_tu_choi_uu_dai_ngoai_cau_hinh(
     )
     assert resp.status_code == 400, resp.text
     assert "không nằm trong cấu hình" in resp.json()["detail"]
+
+
+# ==============================================================================
+# BLOCKER P1-2 — ô tích KHÔNG được hứa một ưu đãi mà engine sẽ bỏ
+# ==============================================================================
+# ``is_stackable`` mặc định FALSE ở CSDL. Hai ưu đãi cùng gắn cho ngành mà cái
+# ưu tiên cao không cộng dồn ⇒ engine chỉ áp MỘT. Nếu màn hình vẫn hiện hai ô
+# tích thì tổng tiền bên dưới trông như tính sai.
+
+
+async def _link_non_stackable_pair(cfg: dict) -> tuple:
+    """Gắn 2 chính sách: A KHÔNG cộng dồn (ưu tiên cao) + B cộng dồn. Trả (A, B)."""
+    from app.models.tuition_discount_policy import TuitionDiscountPolicy
+    from sqlalchemy import update as sa_update
+
+    ts = str(int(datetime.now().timestamp() * 1000) % 10**9)
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            a = TuitionDiscountPolicy(
+                code=f"NST_A_{ts}"[:50], name=f"Uu dai doc quyen {ts}",
+                discount_type="amount", discount_value=Decimal("400000"),
+                is_active=True, is_stackable=False, priority=10,
+                applicable_scope={}, target_criteria={},
+            )
+            b = TuitionDiscountPolicy(
+                code=f"NST_B_{ts}"[:50], name=f"Uu dai cong don {ts}",
+                discount_type="amount", discount_value=Decimal("600000"),
+                is_active=True, is_stackable=True, priority=1,
+                applicable_scope={}, target_criteria={},
+            )
+            s.add_all([a, b])
+            await s.flush()
+            ids = (a.id, b.id)
+            ai_id = (await s.execute(
+                select(models.OfferingAcademicInfo.id).where(
+                    models.OfferingAcademicInfo.offering_id == cfg["offering_id"]
+                )
+            )).scalar_one()
+            await s.execute(
+                sa_update(models.OfferingAcademicInfo)
+                .where(models.OfferingAcademicInfo.id == ai_id)
+                .values(applied_discount_policy_ids=list(ids))
+            )
+    return ids
+
+
+@pytest.mark.asyncio
+async def test_preview_phan_biet_da_tich_voi_thuc_su_duoc_ap(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Ưu đãi bị chính sách KHÔNG cộng dồn chặn: vẫn ``selected`` nhưng
+    ``applied=False`` + có lý do tiếng Việt. Tổng phải khớp phần THỰC SỰ áp."""
+    a, b = await _link_non_stackable_pair(fee_calc_config)
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="Preview NonStackable",
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.get(
+        "/api/fees/tuition-preview",
+        params={"admission_profile_id": pid, "semester_no": 1},
+        headers=oh,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Chỉ A được áp ⇒ tổng đúng 400k, KHÔNG phải 1tr.
+    assert Decimal(str(body["total_discount"])) == Decimal("400000"), body
+
+    options = {o["id"]: o for o in body["discount_policies"]}
+    assert options[a]["selected"] is True and options[a]["applied"] is True
+    assert options[b]["selected"] is True, "người dùng vẫn đang tích B"
+    assert options[b]["applied"] is False, (
+        "B không được engine áp — cờ hiển thị phải nói đúng sự thật"
+    )
+    assert options[b]["reason"] == "bi_chan_boi_chinh_sach_khong_cong_don"
+    assert "cộng dồn" in (options[b]["reason_text"] or "")
+
+
+@pytest.mark.asyncio
+async def test_calculate_khop_so_preview_khi_co_chinh_sach_khong_cong_don(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Số thật khi tạo phí phải bằng số xem trước (chỉ áp A)."""
+    a, b = await _link_non_stackable_pair(fee_calc_config)
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="Calc NonStackable",
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+            "discount_policy_ids": [a, b],
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 201, resp.text
+    assert Decimal(str(resp.json()["total_discount"])) == Decimal("400000")
+    rows = await _manual_discount_rows(pid)
+    assert [r.policy_id for r in rows] == [a]
+
+
+# ==============================================================================
+# BLOCKER P1-3 — lựa chọn TƯỜNG MINH phải fail-closed khi ưu đãi hết hiệu lực
+# ==============================================================================
+# Người dùng chọn dựa trên màn hình xem trước; giữa lúc xem với lúc bấm có thể có
+# người tắt chính sách. Im lặng bỏ qua ⇒ phí VẪN tạo thành công nhưng CAO HƠN số
+# họ vừa nhìn thấy — sai lệch tiền im lặng, khó phát hiện nhất.
+
+
+async def _set_policy(policy_id: int, **values) -> None:
+    from app.models.tuition_discount_policy import TuitionDiscountPolicy
+    from sqlalchemy import update as sa_update
+
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(
+                sa_update(TuitionDiscountPolicy)
+                .where(TuitionDiscountPolicy.id == policy_id)
+                .values(**values)
+            )
+
+
+@pytest.mark.asyncio
+async def test_calculate_tu_choi_uu_dai_vua_bi_TAT(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Preview cũ + chính sách vừa bị tắt ⇒ 400, KHÔNG tạo phí với số cao hơn."""
+    p1, _p2 = await _link_two_discounts(fee_calc_config)
+    await _set_policy(p1, is_active=False)
+
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="Calc Stale Disabled",
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+            "discount_policy_ids": [p1],
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 400, resp.text
+    detail = resp.json()["detail"]
+    assert "ngừng hoạt động" in detail, detail
+    assert "tải lại" in detail, "phải chỉ đường cho người dùng"
+
+
+@pytest.mark.asyncio
+async def test_calculate_tu_choi_uu_dai_da_HET_HAN(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Chính sách còn ``is_active`` nhưng đã quá ``valid_to`` ⇒ 400 với đúng lý do."""
+    from datetime import date as _date, timedelta as _timedelta
+
+    p1, _p2 = await _link_two_discounts(fee_calc_config)
+    await _set_policy(p1, valid_to=_date.today() - _timedelta(days=1))
+
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="Calc Stale Expired",
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+            "discount_policy_ids": [p1],
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 400, resp.text
+    assert "hết hạn" in resp.json()["detail"], resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_khong_chon_gi_thi_uu_dai_het_han_chi_bi_BO_QUA_khong_chan(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Không nêu ý kiến (áp theo cấu hình) thì ưu đãi hết hạn chỉ bị bỏ qua.
+
+    Fail-closed chỉ dành cho lựa chọn TƯỜNG MINH — nếu chặn cả đường mặc định thì
+    một chính sách hết hạn trong cấu hình sẽ khoá luôn việc tạo phí của cả ngành."""
+    from datetime import date as _date, timedelta as _timedelta
+
+    p1, p2 = await _link_two_discounts(fee_calc_config)
+    await _set_policy(p1, valid_to=_date.today() - _timedelta(days=1))
+
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="Calc Default Expired",
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "installment_plan_code": "FULL",
+            "semester_no": 1,
+        },
+        headers=oh,
+    )
+    assert resp.status_code == 201, resp.text
+    # Chỉ p2 (600k) được áp; p1 hết hạn bị bỏ qua.
+    assert Decimal(str(resp.json()["total_discount"])) == Decimal("600000")
+    rows = await _manual_discount_rows(pid)
+    assert [r.policy_id for r in rows] == [p2]

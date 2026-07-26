@@ -358,12 +358,21 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
                           }
                         >
                           {policy.name}
-                          {policy.selectable && (
+                          {policy.applied && (
                             <span className="text-primary ml-1 font-medium">
                               −{formatVND(policy.amount)}
                             </span>
                           )}
                         </Label>
+                        {/* Tích rồi mà KHÔNG được áp (bị chính sách không cộng
+                            dồn chặn, hoặc đã giảm hết học phí gốc) — phải nói ra,
+                            nếu không tổng bên dưới trông như tính sai. */}
+                        {policy.selected && !policy.applied && (
+                          <p className="text-amber-600 text-xs dark:text-amber-500">
+                            Không được áp
+                            {policy.reason_text ? `: ${policy.reason_text}` : ""}
+                          </p>
+                        )}
                         {!policy.selectable && policy.reason_text && (
                           <p className="text-muted-foreground text-xs">
                             {policy.reason_text}

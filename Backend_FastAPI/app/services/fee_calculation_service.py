@@ -1047,6 +1047,15 @@ class FeeCalculationService:
                 )
             except ValueError as exc:
                 raise BadRequest(str(exc))
+            if selected_discount_policy_ids is not None:
+                # FAIL-CLOSED cho lựa chọn TƯỜNG MINH. "Thuộc cấu hình ngành"
+                # chưa đủ: chính sách có thể vừa bị tắt / vừa hết hạn / hồ sơ
+                # không thuộc đối tượng — giao diện người dùng đang xem có thể đã
+                # cũ vài phút. Nếu chỉ im lặng bỏ qua thì phí vẫn tạo THÀNH CÔNG
+                # với số CAO HƠN màn hình xem trước, và không ai biết vì sao.
+                await self._assert_selected_policies_effective(
+                    discount_policy_ids, profile
+                )
             if fee_type == FeeTypeEnum.tuition:
                 # Giá chuẩn HK từ offering_semester_tuition là BASE (bắt buộc có
                 # cấu hình HK). Số tiền nghĩa vụ KHÔNG do người dùng nhập tay —
@@ -1295,14 +1304,23 @@ class FeeCalculationService:
             self.db, configured_ids, only_active=False
         )
         by_id = {p.id: p for p in all_policies}
-        applied_set = set(applied_ids)
+        selected_set = set(applied_ids)
 
-        total_discount, _lines = resolve_discounts(
+        # ``skipped`` để ENGINE nói lý do từng chính sách bị bỏ. Không suy lại
+        # luật ở đây: chính sách "không cộng dồn" đứng trước sẽ chặn các chính
+        # sách sau, và nếu màn hình tự đoán quy tắc đó thì sớm muộn cũng lệch
+        # với engine — người dùng thấy hai ô tích mà tổng chỉ bằng một ô.
+        skipped: dict = {}
+        total_discount, applied_lines = resolve_discounts(
             base_amount,
             [by_id[pid] for pid in applied_ids if pid in by_id],
             calculated_at=datetime.now(timezone.utc).isoformat(),
             context=context,
+            skipped=skipped,
         )
+        applied_set = {
+            line.policy_id for line in applied_lines if line.policy_id is not None
+        }
         final_amount = compute_final_amount(base_amount, total_discount)
 
         today = date.today()
@@ -1322,6 +1340,7 @@ class FeeCalculationService:
                     "reason": "khong_ton_tai",
                     "reason_text": "Chính sách không còn tồn tại",
                     "selected": False,
+                    "applied": False,
                 })
                 continue
 
@@ -1331,6 +1350,13 @@ class FeeCalculationService:
             alone, _ = resolve_discounts(
                 base_amount, [policy], as_of=today, context=context
             )
+            is_selected = ok and pid in selected_set
+            is_applied = pid in applied_set
+            # ĐƯỢC CHỌN nhưng KHÔNG được áp (bị chính sách không-cộng-dồn chặn,
+            # hoặc học phí gốc đã giảm hết) — phải nói ra, nếu không tổng tiền
+            # bên dưới trông như tính sai.
+            if is_selected and not is_applied:
+                reason = skipped.get(pid) or reason
             options.append({
                 "id": policy.id,
                 "name": policy.name,
@@ -1342,7 +1368,8 @@ class FeeCalculationService:
                 "selectable": ok,
                 "reason": reason,
                 "reason_text": skip_reason_text(reason),
-                "selected": ok and pid in applied_set,
+                "selected": is_selected,
+                "applied": is_applied,
             })
 
         return base_amount, total_discount, final_amount, options
@@ -2059,6 +2086,48 @@ class FeeCalculationService:
     async def _load_discount_policies(self, policy_ids: List[int]) -> list:
         """Wrapper method của ``load_discount_policies`` (dùng session của service)."""
         return await load_discount_policies(self.db, policy_ids)
+
+    async def _assert_selected_policies_effective(
+        self,
+        policy_ids: List[int],
+        profile: "models.AdmissionProfile",
+    ) -> None:
+        """Mọi ưu đãi người dùng TỰ CHỌN phải còn áp được — nếu không thì 400.
+
+        Dùng CHÍNH ``is_policy_effective`` mà engine dùng, nên câu trả lời của
+        hàng rào này không thể lệch với câu trả lời của luồng tính tiền.
+
+        Vì sao fail-closed thay vì lặng lẽ bỏ qua: người dùng chọn dựa trên màn
+        hình xem trước, và giữa lúc xem với lúc bấm có thể có người tắt chính
+        sách hoặc chính sách hết hạn. Bỏ qua thì khoản phí VẪN được tạo, chỉ là
+        cao hơn con số họ vừa nhìn thấy — sai lệch im lặng về tiền là thứ khó
+        phát hiện nhất. Báo lỗi thì họ tải lại và chọn lại.
+        """
+        if not policy_ids:
+            return
+
+        policies = await load_discount_policies(
+            self.db, policy_ids, only_active=False
+        )
+        by_id = {p.id: p for p in policies}
+        context = discount_context_for_profile(profile)
+        today = date.today()
+
+        problems: List[str] = []
+        for pid in policy_ids:
+            policy = by_id.get(pid)
+            if policy is None:
+                problems.append(f"Ưu đãi id {pid}: không còn tồn tại")
+                continue
+            ok, reason = is_policy_effective(policy, today, context)
+            if not ok:
+                problems.append(f"{policy.name}: {skip_reason_text(reason)}")
+
+        if problems:
+            raise BadRequest(
+                "Không áp được ưu đãi đã chọn — " + "; ".join(problems)
+                + ". Hãy tải lại trang để xem danh sách ưu đãi mới nhất."
+            )
 
     # 🔴 ĐÃ XOÁ ``_calculate_discounts``. Nó nhận policy_id rồi gọi engine, nhưng
     # KHÔNG có tham số ngữ cảnh đối tượng ưu tiên — ai gọi nó thay vì

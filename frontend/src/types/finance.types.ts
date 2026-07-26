@@ -625,7 +625,11 @@ export interface DiscountPolicyOption {
   reason: string | null
   /** Lý do bằng tiếng Việt để hiển thị. */
   reason_text: string | null
+  /** Người dùng đang TÍCH chọn? */
   selected: boolean
+  /** Có THỰC SỰ được tính vào số phải thu không (khác `selected` khi bị chính
+   *  sách không-cộng-dồn chặn hoặc học phí gốc đã giảm hết). */
+  applied: boolean
 }
 
 /** Giá chuẩn học phí (GET /api/fees/tuition-preview) — Decimal as string. */
