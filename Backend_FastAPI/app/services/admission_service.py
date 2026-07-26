@@ -6618,6 +6618,107 @@ async def _atomic_increment_path_submission_count(db: AsyncSession, path_id: int
     ).first()
 
 
+async def _path_dependent_applied_rules(
+    db: AsyncSession,
+    new_path_id: int,
+    old_applied: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Dựng lại CÁC KEY của ``applied_rules`` phụ thuộc path/phương thức, theo
+    path MỚI. Trả dict để caller ``update()`` — **MERGE, không replace**: các key
+    do luồng khác ghi vào cùng JSON (snapshot KV/UT ưu tiên, fee_status đã thu,
+    cờ nội bộ) phải sống sót.
+
+    Dùng CHÍNH các helper mà ``create_profile`` dùng (``_extract_allowed_subject_
+    codes`` / ``_serialize_subject_groups`` / ``_merge_subject_weights``) và cùng
+    loader ``path_repo.get_by_id_with_relations`` để snapshot đổi-ngành không drift
+    khỏi snapshot tạo-hồ-sơ.
+
+    KHÔNG chạm nhóm GIẤY TỜ (``mandatory_docs`` / ``doc_configs``): việc đó do
+    ``_reresolve_documents_snapshot`` làm sớm hơn trong luồng (trước gate F6) và
+    nó là nguồn duy nhất cho nhóm này.
+
+    LỆ PHÍ XÉT TUYỂN (quyết định nghiệp vụ của owner): ``application_fee`` và
+    ``requires_application_fee`` lấy theo path mới, nhưng nếu ``fee_status`` hiện
+    tại là ``paid`` thì GIỮ ``paid`` — lệ phí là phí xử lý hồ sơ, thu một lần;
+    không đòi thí sinh đóng lần hai vì đổi ngành, cũng không hoàn chênh lệch.
+    """
+    from app.repositories.admission_path_repository import AdmissionPathRepository
+
+    path_repo = AdmissionPathRepository(db)
+    full_path = await path_repo.get_by_id_with_relations(new_path_id)
+    if full_path is None:
+        # Không dựng lại được thì để nguyên snapshot cũ + log: thà snapshot cũ
+        # (đã dùng được tới giờ) hơn là ghi nửa vời một bộ tiêu chí rỗng.
+        log.error(
+            "major_change_snapshot_rebuild_skipped_path_not_found",
+            new_path_id=new_path_id,
+        )
+        return {
+            "admission_path_id": new_path_id,
+        }
+
+    criteria = getattr(full_path, "criteria", None)
+    method = getattr(full_path, "admission_method", None)
+
+    def _f(value):
+        return float(value) if value is not None else None
+
+    rebuilt: Dict[str, Any] = {
+        # G1 — tiêu chí cơ bản
+        "min_gpa": _f(getattr(criteria, "min_gpa", None)),
+        "min_score": _f(getattr(criteria, "min_score", None)),
+        # G2 — cấu hình tính điểm
+        "subject_selection_mode": getattr(
+            criteria, "subject_selection_mode", None
+        ) or "fixed",
+        "scoring_method": getattr(criteria, "scoring_method", None) or "sum",
+        "required_subject_count": getattr(criteria, "required_subject_count", None),
+        "min_subject_score": _f(getattr(criteria, "min_subject_score", None)),
+        "max_possible_score": _f(getattr(criteria, "max_possible_score", None)),
+        # G3 — tổ hợp môn
+        "allowed_subject_codes": _extract_allowed_subject_codes(full_path),
+        "subject_groups": _serialize_subject_groups(full_path),
+        "subject_weights": _merge_subject_weights(full_path),
+        # G4 — phương thức
+        "admission_method": getattr(method, "code", None),
+        "admission_method_id": getattr(full_path, "admission_method_id", None),
+        "method_type": (
+            "subject_based"
+            if criteria is not None
+            and getattr(criteria, "subject_group_mappings", None)
+            else "gpa_only"
+        ),
+        # G6 — lệ phí xét tuyển (xem docstring: giữ 'paid')
+        "application_fee": _f(getattr(full_path, "application_fee", None)) or 0,
+        "requires_application_fee": bool(
+            getattr(full_path, "requires_application_fee", False)
+        ),
+        # G7 — id + cờ path-level
+        "admission_path_id": new_path_id,
+        "admission_round_id": full_path.admission_round_id,
+        "academic_info_id": full_path.academic_info_id,
+        "allow_unverified_submission": bool(
+            getattr(full_path, "allow_unverified_submission", False)
+        ),
+        # G8 — audience / quota theo phương thức / bonus override
+        "applicable_to": (
+            list(full_path.applicable_to)
+            if getattr(full_path, "applicable_to", None)
+            else None
+        ),
+        "method_quota": getattr(full_path, "method_quota", None),
+        "bonus_rule_override": getattr(full_path, "bonus_rule_override", None),
+    }
+
+    if str(old_applied.get("fee_status")) == "paid":
+        rebuilt["fee_status"] = "paid"
+    else:
+        rebuilt["fee_status"] = (
+            "pending" if rebuilt["requires_application_fee"] else "exempt"
+        )
+    return rebuilt
+
+
 async def _commit_major_change_path_quota(
     db: AsyncSession,
     profile: "models.AdmissionProfile",
@@ -6640,9 +6741,14 @@ async def _commit_major_change_path_quota(
     new_path_id = new_path.id
     applied = dict(profile.applied_rules or {})
     if str(old_path_id) != str(new_path_id):
-        applied["admission_path_id"] = new_path_id
-        applied["admission_round_id"] = new_path.admission_round_id
-        applied["academic_info_id"] = new_path.academic_info_id
+        # Re-snapshot MỌI key phụ thuộc path/phương thức, không chỉ 3 key id.
+        # Đổi ngành thường kéo theo ĐỔI PHƯƠNG THỨC XÉT TUYỂN (prod: 19/20 ngành có
+        # 2 phương thức, criteria khác hẳn — vd 200 học-bạ average min_gpa 6.0 vs
+        # 100 điểm-thi sum min_score 15.0, 201 THCS chỉ 2 môn), nên giữ criteria/
+        # method/tổ-hợp/quota-method của ngành CŨ là snapshot nói sai về hồ sơ.
+        applied.update(
+            await _path_dependent_applied_rules(db, new_path_id, applied)
+        )
         profile.applied_rules = applied
         flag_modified(profile, "applied_rules")
         await db.flush()
@@ -6651,6 +6757,8 @@ async def _commit_major_change_path_quota(
             profile_id=profile.id,
             old_path_id=old_path_id,
             new_path_id=new_path_id,
+            new_method=applied.get("admission_method"),
+            new_method_type=applied.get("method_type"),
         )
 
     # −1 path GỐC (bù +1 của lần submit gốc — path rewrite ở trên nên downstream/
@@ -11077,6 +11185,35 @@ async def resubmit_profile(
                     "Không thể nộp lại khi đổi ngành: thiếu giấy tờ bắt buộc của "
                     f"ngành mới ({', '.join(_mc_missing)}). Vui lòng bổ sung minh "
                     "chứng trước khi nộp lại."
+                )
+        # GATE ĐIỂM theo TỔ HỢP/PHƯƠNG THỨC MỚI. ``resubmit_profile`` không chạy
+        # scoring validation (chỉ submit_and_evaluate có), nên trước bản vá này hồ
+        # sơ đổi ngành nộp lại được với điểm của phương thức CŨ: vd hồ sơ xét học bạ
+        # THCS (201: 2 môn) chuyển sang ngành THPT (200/100: 3 môn, riêng 100 tính
+        # tổng + sàn 15đ) vẫn qua, rồi cascade T6 loại vì thiếu điểm — thí sinh đã
+        # đóng học phí mới bị loại thầm.
+        # ``validate_choice_scores_complete`` đọc criteria LIVE per-choice
+        # (``_resolve_choice_rule``) nên chạy được TRƯỚC khi applied_rules được
+        # re-snapshot ở bước commit bên dưới.
+        if getattr(profile, "uses_choice_engine", False):
+            from app.repositories.admission_profile_choice_repository import (
+                AdmissionProfileChoiceRepository as _MCChoiceRepo,
+            )
+            from .admission_choice_engine_service import (
+                validate_choice_scores_complete,
+            )
+            # Cùng repo + cùng validator mà ``submit_and_evaluate`` dùng, để hai
+            # đường nộp không lệch tiêu chí (repo này mang eager chain
+            # scores+subject + admission_path.criteria mà validator cần).
+            _mc_choices = await _MCChoiceRepo(db).list_by_profile(profile.id)
+            _mc_score_errors = validate_choice_scores_complete(
+                _mc_choices, profile.applied_rules or {}
+            )
+            if _mc_score_errors:
+                raise BusinessRuleViolation(
+                    "Không thể nộp lại khi đổi ngành: điểm chưa khớp tổ hợp/phương "
+                    "thức xét tuyển của ngành mới. "
+                    + " ".join(_mc_score_errors)
                 )
         await _commit_major_change_path_quota(
             db, profile, _mc_resub_old_path, _mc_resub_new_path,

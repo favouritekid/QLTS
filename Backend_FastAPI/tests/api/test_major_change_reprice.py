@@ -1062,6 +1062,34 @@ async def _prepare_resubmit_case(
     return ids
 
 
+async def _seed_choice_scores(profile_id: int, subject_ids: list[int]) -> None:
+    """Nhập điểm cho MỌI choice của hồ sơ, đủ các môn ``subject_ids``.
+
+    Đổi ngành đổi cả TỔ HỢP/PHƯƠNG THỨC, nên gate điểm ở resubmit đòi hồ sơ có đủ
+    điểm môn của tổ hợp ngành MỚI — mold seed phải nhập điểm giống officer làm
+    thật, không thì mọi test resubmit đổi-ngành sẽ bị chặn (đúng nghiệp vụ)."""
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            choice_ids = (
+                await s.execute(
+                    select(models.AdmissionProfileChoice.id).where(
+                        models.AdmissionProfileChoice.admission_profile_id
+                        == profile_id
+                    )
+                )
+            ).scalars().all()
+            for cid in choice_ids:
+                for sid in subject_ids:
+                    s.add(models.ProfileChoiceScore(
+                        admission_profile_choice_id=cid,
+                        subject_id=sid,
+                        score=Decimal("8.00"),
+                        max_score_snapshot=Decimal("10.00"),
+                        min_possible_score_snapshot=Decimal("0.00"),
+                        weight_snapshot=Decimal("1.00"),
+                    ))
+
+
 async def _upload_doc(profile_id: int, doc_type_id: int) -> None:
     async with AsyncSessionLocal() as s:
         async with s.begin():
@@ -1127,6 +1155,9 @@ async def test_resubmit_passes_when_new_major_docs_uploaded(
     dt_id, dt_code = await _seed_doc_type()
     ids = await _prepare_resubmit_case(seed_lead_dependencies, majors, [dt_code])
     await _upload_doc(ids["profile_id"], dt_id)
+    # Điểm tổ hợp ngành mới — gate điểm ở resubmit đòi (xem
+    # test_resubmit_blocks_when_scores_missing_for_new_major).
+    await _seed_choice_scores(ids["profile_id"], [majors["subject_id"]])
 
     async with AsyncSessionLocal() as db:
         await resubmit_profile(
@@ -1974,3 +2005,329 @@ async def test_two_flags_come_from_one_snapshot(
     assert profile.major_change_awaiting_confirmation is True, (
         "2 cờ lệch nhau = tổ hợp không có thật, banner sẽ nói sai về hiệu lực giấy"
     )
+
+
+# ===========================================================================
+# ĐỔI NGÀNH = ĐỔI PHƯƠNG THỨC XÉT TUYỂN (owner phát hiện 26-07)
+# Prod: 19/20 ngành có 2 phương thức, criteria khác hẳn nhau —
+#   200 học bạ THPT: average, 3 môn, min_gpa 6.0
+#   100 điểm thi THPT: sum, 3 môn, min_score 15.0
+#   201 học bạ THCS: average, 2 môn, min_gpa 5.0
+# ⇒ applied_rules KHÔNG được giữ criteria/method/tổ-hợp/lệ-phí của ngành CŨ.
+# ===========================================================================
+async def _seed_two_paths_diff_method(seed_lead_dependencies: dict) -> dict:
+    """2 path trên 2 ngành, MỖI path một phương thức + criteria RIÊNG (mô phỏng
+    200-học-bạ-average-3-môn-min_gpa vs 100-điểm-thi-sum-3-môn-min_score) + lệ phí,
+    method_quota, allow_unverified_submission khác nhau."""
+    ts = int(datetime.now(timezone.utc).timestamp() * 1_000_000) % 100000
+    prog_id = seed_lead_dependencies["major_program_id"]
+    out: dict = {}
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            from tests.fixtures.builders import AdmissionRoundBuilder
+
+            round_id = await AdmissionRoundBuilder.get_or_create_default_round(
+                s, academic_year=2026
+            )
+            specs = (
+                # tag, method code/name, criteria, tổ hợp, lệ phí, quota, unverified
+                ("a", "HB", "average", 3, Decimal("6.0"), None, 2, 0, None, False),
+                ("b", "TQ", "sum", 3, None, Decimal("15.00"), 3, 150000, 50, True),
+            )
+            for (
+                tag, mcode, scoring, req_count, min_gpa, min_score,
+                n_subjects, app_fee, m_quota, allow_unver,
+            ) in specs:
+                method = models.AdmissionMethod(
+                    code=f"{mcode}{ts}"[:20],
+                    name=f"Method {mcode} {ts}",
+                    requires_subject_scores=True,
+                    is_active=True,
+                )
+                s.add(method)
+                await s.flush()
+
+                sg = models.SubjectGroup(
+                    code=f"G{mcode}{ts}"[:20], name=f"SG {mcode} {ts}"
+                )
+                s.add(sg)
+                await s.flush()
+                for i in range(n_subjects):
+                    subj = models.Subject(
+                        code=f"S{tag}{i}{ts}"[:10],
+                        name_vi=f"Subj {tag}{i} {ts}",
+                        max_score=Decimal("10.00"),
+                        min_possible_score=Decimal("0.00"),
+                    )
+                    s.add(subj)
+                    await s.flush()
+                    s.add(models.SubjectGroupSubject(
+                        subject_group_id=sg.id, subject_id=subj.id,
+                        position=i + 1, weight=Decimal("1.00"),
+                    ))
+                await s.flush()
+
+                criteria = models.AdmissionCriteria(
+                    method_id=method.id,
+                    code=f"C{mcode}{ts}"[:50],
+                    name=f"Criteria {mcode} {ts}",
+                    min_gpa=min_gpa,
+                    min_score=min_score,
+                    required_subject_count=req_count,
+                    subject_selection_mode="fixed",
+                    scoring_method=scoring,
+                    is_active=True,
+                )
+                s.add(criteria)
+                await s.flush()
+                s.add(models.CriteriaSubjectGroup(
+                    criteria_id=criteria.id, subject_group_id=sg.id
+                ))
+
+                offering = models.ProgramOffering(
+                    program_id=prog_id,
+                    offering_type=f"dm_{tag}_{ts}"[:30],
+                    duration_semesters=8,
+                )
+                s.add(offering)
+                await s.flush()
+                ai = models.OfferingAcademicInfo(
+                    offering_id=offering.id,
+                    academic_year=2026,
+                    annual_admission_quota=20,
+                    tuition_fee_per_year=Decimal("6500000")
+                    if tag == "a" else Decimal("9200000"),
+                )
+                s.add(ai)
+                await s.flush()
+                s.add(models.OfferingSemesterTuition(
+                    academic_info_id=ai.id, semester_no=1,
+                    amount=Decimal("6500000") if tag == "a" else Decimal("9200000"),
+                ))
+                path = models.AdmissionPath(
+                    academic_info_id=ai.id,
+                    admission_method_id=method.id,
+                    admission_round_id=round_id,
+                    criteria_id=criteria.id,
+                    status="active",
+                    # ``requires_application_fee`` là PROPERTY dẫn xuất
+                    # (application_fee > 0), không phải cột → không set được.
+                    application_fee=app_fee,
+                    method_quota=m_quota,
+                    allow_unverified_submission=allow_unver,
+                )
+                s.add(path)
+                await s.flush()
+                config = models.PathSubjectGroupConfig(
+                    admission_path_id=path.id,
+                    subject_group_id=sg.id,
+                    min_score=Decimal("15.00"),
+                )
+                s.add(config)
+                await s.flush()
+                out[f"method_{tag}"] = method.id
+                out[f"method_code_{tag}"] = method.code
+                out[f"path_{tag}"] = path.id
+                out[f"ai_{tag}"] = ai.id
+                out[f"config_{tag}"] = config.id
+                out[f"sg_{tag}"] = sg.id
+    return out
+
+
+async def test_major_change_resnapshots_criteria_and_method(
+    seed_lead_dependencies, major_change_on
+):
+    """Re-snapshot PHẢI phủ criteria + phương thức + tổ hợp + quota-method + cờ
+    path-level, không chỉ 3 key id. Giữ nguyên key do luồng khác ghi (MERGE)."""
+    from app.services.admission_service import _commit_major_change_path_quota
+
+    paths = await _seed_two_paths_diff_method(seed_lead_dependencies)
+    ids = await _seed_profile_fee_invoice(
+        seed_lead_dependencies,
+        {
+            "path_a": paths["path_a"], "path_b": paths["path_b"],
+            "ai_a": paths["ai_a"], "ai_b": paths["ai_b"],
+            "config_a": paths["config_a"], "config_b": paths["config_b"],
+        },
+        choice_tag="b", priced_from_tag="a", resolved_tag="a",
+    )
+    # applied_rules ban đầu = ngành A (học bạ, average, min_gpa 6.0, miễn lệ phí)
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(
+                update(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == ids["profile_id"])
+                .values(applied_rules={
+                    "admission_path_id": paths["path_a"],
+                    "admission_method": paths["method_code_a"],
+                    "admission_method_id": paths["method_a"],
+                    "method_type": "subject_based",
+                    "scoring_method": "average",
+                    "required_subject_count": 2,
+                    "min_gpa": 6.0,
+                    "min_score": None,
+                    "allowed_subject_codes": ["OLD1", "OLD2"],
+                    "requires_application_fee": False,
+                    "fee_status": "exempt",
+                    "method_quota": None,
+                    "allow_unverified_submission": False,
+                    # key KHÔNG thuộc path — phải SỐNG SÓT qua re-snapshot
+                    "kv_resolved": "KV2-NT",
+                    "mandatory_docs": ["cccd"],
+                })
+            )
+
+    async with AsyncSessionLocal() as db:
+        profile = await db.get(models.AdmissionProfile, ids["profile_id"])
+        new_path = await db.get(models.AdmissionPath, paths["path_b"])
+        await _commit_major_change_path_quota(
+            db, profile, paths["path_a"], new_path, increment_new_path=True,
+        )
+        await db.commit()
+
+    prof = await _load_profile(ids["profile_id"])
+    ar = prof.applied_rules
+    assert ar["admission_path_id"] == paths["path_b"]
+    assert ar["admission_method_id"] == paths["method_b"], "phương thức chưa đổi"
+    assert ar["admission_method"] == paths["method_code_b"]
+    assert ar["scoring_method"] == "sum", "công thức tính điểm còn của ngành cũ"
+    assert ar["required_subject_count"] == 3, "số môn còn của ngành cũ"
+    assert ar["min_gpa"] is None and float(ar["min_score"]) == 15.0
+    assert ar["method_type"] == "subject_based"
+    assert ar["allowed_subject_codes"] != ["OLD1", "OLD2"], "tổ hợp môn còn cũ"
+    assert len(ar["allowed_subject_codes"]) == 3
+    assert ar["method_quota"] == 50, "quota theo phương thức còn cũ"
+    assert ar["allow_unverified_submission"] is True
+    assert float(ar["application_fee"]) == 150000.0
+    assert ar["requires_application_fee"] is True
+    assert ar["kv_resolved"] == "KV2-NT", (
+        "re-snapshot phải MERGE — key ngoài path (KV/UT) không được biến mất"
+    )
+    assert ar["mandatory_docs"] == ["cccd"], (
+        "nhóm giấy tờ do _reresolve_documents_snapshot quản, re-snapshot không đụng"
+    )
+
+
+async def test_major_change_keeps_application_fee_paid(
+    seed_lead_dependencies, major_change_on
+):
+    """Lệ phí xét tuyển đã đóng thì GIỮ 'paid' dù ngành mới có thu (owner chốt:
+    phí xử lý hồ sơ thu một lần) — không đòi thí sinh đóng lần hai, cũng không để
+    gate approve chặn oan."""
+    from app.services.admission_service import _commit_major_change_path_quota
+
+    paths = await _seed_two_paths_diff_method(seed_lead_dependencies)
+    ids = await _seed_profile_fee_invoice(
+        seed_lead_dependencies,
+        {
+            "path_a": paths["path_a"], "path_b": paths["path_b"],
+            "ai_a": paths["ai_a"], "ai_b": paths["ai_b"],
+            "config_a": paths["config_a"], "config_b": paths["config_b"],
+        },
+        choice_tag="b", priced_from_tag="a", resolved_tag="a",
+    )
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(
+                update(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == ids["profile_id"])
+                .values(applied_rules={
+                    "admission_path_id": paths["path_a"],
+                    "requires_application_fee": True,
+                    "fee_status": "paid",
+                })
+            )
+
+    async with AsyncSessionLocal() as db:
+        profile = await db.get(models.AdmissionProfile, ids["profile_id"])
+        new_path = await db.get(models.AdmissionPath, paths["path_b"])
+        await _commit_major_change_path_quota(
+            db, profile, paths["path_a"], new_path, increment_new_path=True,
+        )
+        await db.commit()
+
+    prof = await _load_profile(ids["profile_id"])
+    assert prof.applied_rules["fee_status"] == "paid", (
+        "đã đóng lệ phí mà bị reset → gate approve chặn oan / đòi đóng lần hai"
+    )
+    assert prof.applied_rules["requires_application_fee"] is True
+
+
+async def test_major_change_fee_status_follows_new_path_when_unpaid(
+    seed_lead_dependencies, major_change_on
+):
+    """Chưa đóng thì fee_status theo path MỚI: path b thu phí → 'pending'."""
+    from app.services.admission_service import _commit_major_change_path_quota
+
+    paths = await _seed_two_paths_diff_method(seed_lead_dependencies)
+    ids = await _seed_profile_fee_invoice(
+        seed_lead_dependencies,
+        {
+            "path_a": paths["path_a"], "path_b": paths["path_b"],
+            "ai_a": paths["ai_a"], "ai_b": paths["ai_b"],
+            "config_a": paths["config_a"], "config_b": paths["config_b"],
+        },
+        choice_tag="b", priced_from_tag="a", resolved_tag="a",
+    )
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(
+                update(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == ids["profile_id"])
+                .values(applied_rules={
+                    "admission_path_id": paths["path_a"],
+                    "requires_application_fee": False,
+                    "fee_status": "exempt",
+                })
+            )
+
+    async with AsyncSessionLocal() as db:
+        profile = await db.get(models.AdmissionProfile, ids["profile_id"])
+        new_path = await db.get(models.AdmissionPath, paths["path_b"])
+        await _commit_major_change_path_quota(
+            db, profile, paths["path_a"], new_path, increment_new_path=True,
+        )
+        await db.commit()
+
+    prof = await _load_profile(ids["profile_id"])
+    assert prof.applied_rules["fee_status"] == "pending"
+
+
+async def test_resubmit_blocks_when_scores_missing_for_new_major(
+    seed_lead_dependencies, major_change_on, monkeypatch
+):
+    """Đổi ngành = đổi tổ hợp/phương thức ⇒ điểm phải khớp tổ hợp ngành MỚI.
+
+    ``resubmit_profile`` không chạy scoring validation (chỉ ``submit_and_evaluate``
+    có), nên trước bản vá hồ sơ nộp lại được KHÔNG có điểm nào cho tổ hợp mới; sau
+    khi kế toán xác nhận học phí, cascade T6 mới loại vì thiếu điểm — thí sinh đã
+    đóng tiền rồi mới bị loại thầm. Fail-closed TRƯỚC transition: quota không
+    chuyển, fee không reprice, status giữ nguyên."""
+    from app.services.admission_service import resubmit_profile
+
+    majors = await _seed_two_majors(
+        seed_lead_dependencies,
+        price_a=Decimal("6500000"), price_b=Decimal("9200000"),
+    )
+    await _ensure_gdnn_config(seed_lead_dependencies, majors)
+    _freeze_doc_snapshot(monkeypatch)
+    dt_id, dt_code = await _seed_doc_type()
+    ids = await _prepare_resubmit_case(seed_lead_dependencies, majors, [dt_code])
+    await _upload_doc(ids["profile_id"], dt_id)
+    # CỐ Ý không nhập điểm cho tổ hợp ngành mới.
+
+    async with AsyncSessionLocal() as db:
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await resubmit_profile(
+                db, ids["profile_id"], None, {"notes": "đổi ngành sang B"},
+            )
+        await db.rollback()
+    assert "điểm chưa khớp tổ hợp" in str(exc.value)
+
+    assert await _path_count(majors["path_a"]) == 5, "quota path cũ không được đụng"
+    assert await _path_count(majors["path_b"]) == 0, "quota path mới không được +1"
+    fee = await _fee(ids["fee_id"])
+    assert fee.final_amount == Decimal("6500000"), "fee không được reprice khi bị chặn"
+    assert fee.awaiting_accountant_confirmation is False
+    prof = await _load_profile(ids["profile_id"])
+    assert prof.status == "revision_requested"
