@@ -61,6 +61,27 @@ ADD_CHOICE_ALLOWED_STATUSES = ("draft", "revision_requested")
 _CHOICE_CRUD_HINT = "Không thể thêm/sửa nguyện vọng (rút NV vẫn cho phép)."
 
 
+def _major_change_round_bypass(profile) -> bool:
+    """True khi được BỎ QUA cutoff đợt tuyển sinh vì đang trong chu kỳ đổi ngành.
+
+    Áp cho MỌI thao tác sửa nguyện vọng (thêm NV / nhập-sửa điểm / đổi thứ tự),
+    không chỉ ``add_choice``: gate điểm ở bước nộp lại đòi điểm khớp tổ hợp ngành
+    MỚI, nên nếu cho thêm NV mà chặn nhập điểm thì officer không bao giờ nộp lại
+    được — hồ sơ mắc ở draft/revision_requested. Đúng bẫy bất đối xứng mà bypass
+    này sinh ra để xoá (smoke 26-07 tái hiện: thêm NV 200 OK, PATCH điểm 410).
+
+    Gate CHẶT: cả feature flag LẪN cờ profile + status trong miền sửa được ⇒ flag
+    OFF hoặc hồ sơ không trong chu kỳ thì giữ nguyên hành vi cũ.
+    """
+    from app.config import settings as _mc_settings
+
+    return bool(
+        _mc_settings.MAJOR_CHANGE_REPRICE_ENABLED
+        and getattr(profile, "major_change_requested", False)
+        and getattr(profile, "status", None) in ("draft", "revision_requested")
+    )
+
+
 async def _noop_callback() -> None:
     """Default no-op post-commit callback."""
     return None
@@ -154,13 +175,7 @@ class AdmissionChoiceService:
         # xứng (delete_choice miễn trừ assert_round_open, add_choice thì không) →
         # sau khi round đóng officer xoá được NV nhưng KHÔNG thêm lại được, hồ sơ
         # kẹt 0 NV không nộp lại được. Gate CẢ flag LẪN cờ profile (flag OFF → cũ).
-        from app.config import settings as _mc_settings
-        _mc_bypass_round = (
-            _mc_settings.MAJOR_CHANGE_REPRICE_ENABLED
-            and getattr(profile, "major_change_requested", False)
-            and profile.status in ("draft", "revision_requested")
-        )
-        if not _mc_bypass_round:
+        if not _major_change_round_bypass(profile):
             assert_round_open(round_obj, context_hint=_CHOICE_CRUD_HINT)
 
         # First choice luôn cho phép (Wave A single-NV vẫn ship 1 choice
@@ -430,7 +445,9 @@ class AdmissionChoiceService:
         round_obj = await self.choice_repo.get_round_by_path_id(
             choice.admission_path_id
         )
-        if round_obj is not None:
+        # Đổi ngành: bypass cutoff như add_choice — xem _major_change_round_bypass
+        # (thêm NV được mà nhập/sửa điểm bị chặn = officer không nộp lại được).
+        if round_obj is not None and not _major_change_round_bypass(profile):
             assert_round_open(round_obj, context_hint=_CHOICE_CRUD_HINT)
 
         if new_display_order == choice.display_order:
@@ -490,7 +507,9 @@ class AdmissionChoiceService:
         round_obj = await self.choice_repo.get_round_by_path_id(
             choice.admission_path_id
         )
-        if round_obj is not None:
+        # Đổi ngành: bypass cutoff như add_choice — xem _major_change_round_bypass
+        # (thêm NV được mà nhập/sửa điểm bị chặn = officer không nộp lại được).
+        if round_obj is not None and not _major_change_round_bypass(profile):
             assert_round_open(round_obj, context_hint=_CHOICE_CRUD_HINT)
 
         # Clear existing scores via direct delete (FK CASCADE would only fire
