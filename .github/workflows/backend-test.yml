@@ -94,6 +94,7 @@ on:
       - 'Backend_FastAPI/**'
       - 'frontend/**'
       - '.github/workflows/**'
+      - '.github/dependabot.yml'
       - 'scripts/**'
 
 concurrency:

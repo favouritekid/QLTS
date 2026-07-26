@@ -12,6 +12,10 @@ on:
       - 'Backend_FastAPI/requirements.txt'
       - 'frontend/package-lock.json'
       - 'frontend/package.json'
+      # Sửa chính workflow này cũng phải có một lượt chạy trên main để xác
+      # nhận gate còn hoạt động — nếu không, một thay đổi làm hỏng gate sẽ
+      # không bao giờ được kiểm chứng sau khi merge.
+      - '.github/workflows/dependency-audit.yml'
   pull_request:
     branches: [main]
   schedule:
@@ -27,6 +31,11 @@ jobs:
       run:
         working-directory: Backend_FastAPI
 
+    # Cho `audit-alarm` biết SỐ LƯỢNG thật, để phân biệt "có lỗ hổng" với
+    # "job chết vì lỗi hạ tầng" (output rỗng khi chết trước lúc đếm xong).
+    outputs:
+      vuln_count: ${{ steps.audit.outputs.vuln_count }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,6 +49,7 @@ jobs:
         run: pip install pip-audit
 
       - name: Run pip-audit
+        id: audit
         run: |
           echo "🔍 Auditing Python dependencies..."
           # --ignore-vuln allowlist (vulns with no fix or disputed by upstream):
@@ -91,6 +101,7 @@ jobs:
           ")
 
           echo "📊 Found $VULNS vulnerability(ies)"
+          echo "vuln_count=$VULNS" >> "$GITHUB_OUTPUT"
 
           # Show human-readable output
           pip-audit -r requirements.txt --desc $IGNORE_ARGS || true
@@ -117,6 +128,9 @@ jobs:
       run:
         working-directory: frontend
 
+    outputs:
+      high_count: ${{ steps.audit.outputs.high_count }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -130,14 +144,13 @@ jobs:
         run: npm ci
 
       - name: Run npm audit
+        id: audit
         run: |
           echo "🔍 Auditing Node.js dependencies (production scope)..."
           # SCOPE = --omit=dev (changed 2026-07-26).
           # The gate counts only vulnerabilities in dependencies that are
-          # actually shipped to the browser/server runtime. devDependencies
-          # (ESLint toolchain, test runners) execute on our own trusted source
-          # at lint/test time inside CI — they are never served to a user, so a
-          # CVE there must not block a product deploy.
+          # actually shipped to the browser/server runtime, so a CVE in the
+          # lint/test toolchain cannot block a product deploy.
           #
           # Concretely: 15 of the high findings are `brace-expansion` (DoS,
           # GHSA range <=5.0.7) reached only through the ESLint dependency
@@ -145,31 +158,51 @@ jobs:
           # ("TypeError: expand is not a function" — 5.x changed the export
           # shape and minimatch/eslint call the old one), so the override in
           # package.json is scoped to `glob` (the only consumer already on the
-          # 5.x line). Clearing the rest requires upgrading the whole ESLint
-          # ecosystem — tracked separately, not a deploy blocker.
+          # 5.x line). Clearing the rest is BLOCKED UPSTREAM: eslint-plugin-
+          # jsx-a11y@6.10.2 (latest) still declares `peer eslint ^3..^9`, so
+          # eslint@10 cannot be installed at all.
           #
-          # Dev-scope findings are still PRINTED below for visibility.
-          npm audit --omit=dev --json > audit-results.json 2>&1 || true
+          # devDependencies are NOT unattended: the `node-audit-dev` job below
+          # watches them on schedule/push (critical-only), and Dependabot
+          # alerts + security updates are enabled on the repo.
+          #
+          # NOTE: no `2>&1` here. npm writes warnings (EBADENGINE, override
+          # conflicts, deprecations) to stderr; merging them into the JSON file
+          # corrupts it and kills the parse below with an opaque SyntaxError,
+          # turning a required check red for a non-security reason.
+          npm audit --omit=dev --json > audit-results.json || true
 
-          # Parse results
+          # Parse results — FAIL CLOSED.
+          # On a registry/network error npm still writes VALID json, just
+          # without `metadata` (e.g. {"error":{"code":"ENETUNREACH",...}}).
+          # Reading that as `metadata || {}` yields count=0 and the required
+          # check goes GREEN having audited nothing. python-audit guards the
+          # equivalent case above; this is its counterpart.
           VULNS=$(node -e "
-          const data = require('./audit-results.json');
-          const meta = data.metadata || {};
-          const total = (meta.vulnerabilities || {});
-          const count = (total.high || 0) + (total.critical || 0);
-          console.log(count);
+          const fs = require('fs');
+          let data;
+          try {
+            data = JSON.parse(fs.readFileSync('./audit-results.json', 'utf8'));
+          } catch (err) {
+            console.error('❌ audit-results.json is not parseable: ' + err.message);
+            process.exit(1);
+          }
+          const meta = data.metadata;
+          if (!meta || !meta.vulnerabilities) {
+            console.error('❌ npm audit returned no metadata — treating as AUDIT FAILURE, not as zero vulnerabilities.');
+            console.error(JSON.stringify(data).slice(0, 500));
+            process.exit(1);
+          }
+          const v = meta.vulnerabilities;
+          console.log((v.high || 0) + (v.critical || 0));
           ")
 
+          echo "high_count=$VULNS" >> "$GITHUB_OUTPUT"
           echo "📊 Found $VULNS high/critical vulnerability(ies) in production dependencies"
 
-          # Show human-readable output (gate scope)
-          npm audit --omit=dev || true
-
-          # Informational only — dev-tool vulns do not fail the build
-          echo "ℹ️ Full audit (incl. devDependencies) — informational, not gated:"
-          npm audit || true
-
           if [ "$VULNS" -gt "0" ]; then
+            # Human-readable detail only when there IS something to read.
+            npm audit --omit=dev || true
             echo "⚠️ High/critical vulnerabilities found in production Node.js dependencies!"
             exit 1
           fi
@@ -183,17 +216,104 @@ jobs:
           name: node-audit-results
           path: frontend/audit-results.json
 
-  # Lượt chạy theo LỊCH (cron thứ 2 hàng tuần) không gắn với PR nào, nên khi
-  # đỏ nó chỉ nằm im trong tab Actions — không ai biết. Job này mở/cập nhật
+  # Cảnh giới devDependencies mà KHÔNG chặn merge/deploy.
+  #  - KHÔNG chạy trên PR: dev-scope hiện có 15 high KHÔNG vá được (upstream
+  #    eslint-plugin-jsx-a11y@6.10.2 vẫn khai `peer eslint ^3..^9` nên không
+  #    thể lên eslint@10) → để nó đỏ trên mọi PR chỉ khiến người ta quen mắt
+  #    với check đỏ, đúng thứ làm cảnh báo mất tác dụng.
+  #  - Chỉ ĐỎ ở mức CRITICAL — dấu hiệu release bị chiếm quyền / chèn mã độc.
+  #    Điều này ĐÁNG quan tâm vì `npm ci` CHẠY lifecycle script của
+  #    devDependencies ngay trong runner, không chỉ "chạy lúc lint".
+  #  - KHÔNG nằm trong required status checks → không bao giờ chặn merge.
+  #    Khi đỏ, `audit-alarm` bên dưới biến nó thành issue.
+  node-audit-dev:
+    name: Node.js Dev-scope Advisories
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    outputs:
+      critical_count: ${{ steps.audit-dev.outputs.critical_count }}
+      high_count: ${{ steps.audit-dev.outputs.high_count }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit full tree (devDependencies included)
+        id: audit-dev
+        run: |
+          echo "🔍 Auditing full dependency tree (dev included)..."
+          npm audit --json > audit-dev-results.json || true
+
+          # Cùng guard fail-closed như job gate: không metadata = audit HỎNG,
+          # không phải "0 lỗ hổng".
+          node -e "
+          const fs = require('fs');
+          let data;
+          try {
+            data = JSON.parse(fs.readFileSync('./audit-dev-results.json', 'utf8'));
+          } catch (err) {
+            console.error('❌ audit-dev-results.json is not parseable: ' + err.message);
+            process.exit(1);
+          }
+          const meta = data.metadata;
+          if (!meta || !meta.vulnerabilities) {
+            console.error('❌ npm audit returned no metadata — treating as AUDIT FAILURE.');
+            process.exit(1);
+          }
+          const v = meta.vulnerabilities;
+          console.log('critical_count=' + (v.critical || 0));
+          console.log('high_count=' + (v.high || 0));
+          " > dev-counts.txt
+
+          cat dev-counts.txt
+          cat dev-counts.txt >> "$GITHUB_OUTPUT"
+          CRIT=$(grep '^critical_count=' dev-counts.txt | cut -d= -f2)
+          HIGH=$(grep '^high_count=' dev-counts.txt | cut -d= -f2)
+
+          npm audit || true
+
+          if [ "$CRIT" -gt "0" ]; then
+            echo "🚨 $CRIT CRITICAL advisory trong toàn cây phụ thuộc!"
+            exit 1
+          fi
+
+          echo "✅ Không có CRITICAL. Còn $HIGH high — theo dõi, không chặn deploy."
+
+      - name: Upload Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-audit-dev-results
+          path: frontend/audit-dev-results.json
+
+  # Lượt chạy KHÔNG gắn với PR (cron thứ 2 hàng tuần, và push:main sau merge)
+  # khi đỏ chỉ nằm im trong tab Actions — không ai biết. Job này mở/cập nhật
   # một issue theo dõi để lỗ hổng mới không trôi qua âm thầm.
-  # Chỉ chạy cho event `schedule`; PR/push đã có check đỏ ngay trên PR rồi.
+  # Điều kiện là `!= 'pull_request'` chứ KHÔNG phải `== 'schedule'`: lần chạy
+  # push:main là POST-merge, check gắn vào commit trên main chứ không gắn PR
+  # nào, nên nó cũng cần chuông y hệt lần chạy theo lịch.
   audit-alarm:
     name: Weekly Audit Alarm
     runs-on: ubuntu-latest
-    needs: [python-audit, node-audit]
+    needs: [python-audit, node-audit, node-audit-dev]
     if: >-
-      always() && github.event_name == 'schedule' &&
-      (needs.python-audit.result == 'failure' || needs.node-audit.result == 'failure')
+      always() && github.event_name != 'pull_request' &&
+      (needs.python-audit.result == 'failure' ||
+       needs.node-audit.result == 'failure' ||
+       needs.node-audit-dev.result == 'failure')
 
     permissions:
       issues: write
@@ -204,38 +324,66 @@ jobs:
         env:
           PYTHON_RESULT: ${{ needs.python-audit.result }}
           NODE_RESULT: ${{ needs.node-audit.result }}
+          DEV_RESULT: ${{ needs.node-audit-dev.result }}
+          PYTHON_COUNT: ${{ needs.python-audit.outputs.vuln_count }}
+          NODE_COUNT: ${{ needs.node-audit.outputs.high_count }}
+          DEV_CRITICAL: ${{ needs.node-audit-dev.outputs.critical_count }}
+          DEV_HIGH: ${{ needs.node-audit-dev.outputs.high_count }}
         with:
           script: |
             const LABEL = 'dependency-audit';
-            const TITLE = '🔒 Dependency audit (weekly) đang ĐỎ';
+            const TITLE = '🔒 Dependency audit đang ĐỎ';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
-            const failed = [];
-            if (process.env.PYTHON_RESULT === 'failure') failed.push('`Python Dependencies` (pip-audit)');
-            if (process.env.NODE_RESULT === 'failure') failed.push('`Node.js Dependencies` (npm audit, phạm vi production)');
+            // Số đếm RỖNG nghĩa là job chết TRƯỚC khi đếm xong (npm ci /
+            // pip install / mạng hỏng) → đó là sự cố hạ tầng, KHÔNG phải
+            // phát hiện lỗ hổng. Phân biệt hai ca này ngay trong body để
+            // người đọc không phải mở log mới biết.
+            const rows = [];
+            let infraSuspected = false;
+
+            const note = (result, count, label) => {
+              if (result !== 'failure') return;
+              if (count === undefined || count === '') {
+                infraSuspected = true;
+                rows.push(`- ${label}: **job hỏng trước khi đếm xong** (nhiều khả năng lỗi hạ tầng/mạng, không phải lỗ hổng)`);
+              } else {
+                rows.push(`- ${label}: **${count}**`);
+              }
+            };
+
+            note(process.env.PYTHON_RESULT, process.env.PYTHON_COUNT, '`Python Dependencies` (pip-audit) — số lỗ hổng');
+            note(process.env.NODE_RESULT, process.env.NODE_COUNT, '`Node.js Dependencies` (production scope) — high/critical');
+            note(process.env.DEV_RESULT, process.env.DEV_CRITICAL, '`Node.js Dev-scope Advisories` — CRITICAL');
 
             const body = [
-              `Lượt audit theo lịch ngày \`${new Date().toISOString().slice(0, 10)}\` phát hiện lỗ hổng.`,
+              `Lượt audit \`${context.eventName}\` ngày \`${new Date().toISOString().slice(0, 10)}\` trên \`${context.ref}\` KHÔNG xanh.`,
               '',
-              '**Job đỏ:**',
-              ...failed.map((f) => `- ${f}`),
+              '**Kết quả:**',
+              ...rows,
+              process.env.DEV_HIGH ? `- (tham khảo) dev-scope high: ${process.env.DEV_HIGH} — không chặn deploy` : '',
               '',
               `**Log + artifact:** ${runUrl}`,
               '',
               '---',
-              'Đây là lượt chạy theo lịch trên `main`, KHÔNG gắn với PR nào — nghĩa là',
-              'lỗ hổng đã nằm sẵn trên nhánh chính. Mọi PR mở sau thời điểm này sẽ bị',
-              'required check chặn cho tới khi vá xong.',
+              infraSuspected
+                ? '⚠️ Ít nhất một job chết trước khi đếm xong — kiểm tra log TRƯỚC khi coi đây là lỗ hổng thật.'
+                : 'Lượt chạy này KHÔNG gắn với PR nào, nghĩa là vấn đề đã nằm sẵn trên `main`. Nếu `Node.js Dependencies` hoặc `Python Dependencies` đỏ thì mọi PR mở sau thời điểm này đều bị required check chặn cho tới khi vá xong.',
               '',
-              'Issue này tự cập nhật mỗi tuần khi còn đỏ; đóng tay sau khi đã vá.',
-            ].join('\n');
+              'Issue này tự cập nhật ở các lượt sau khi còn đỏ; đóng tay sau khi đã vá.',
+            ].filter((line) => line !== '').join('\n');
 
-            const { data: open } = await github.rest.issues.listForRepo({
+            const { data: found } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
               labels: LABEL,
             });
+
+            // ⚠️ Issues API trả CẢ pull request. Không lọc thì một PR mang
+            // label này (thói quen triage rất thường gặp) sẽ nuốt mất cảnh
+            // báo: alarm comment vào PR và issue theo dõi không bao giờ được tạo.
+            const open = found.filter((item) => !item.pull_request);
 
             if (open.length > 0) {
               // Đã có issue theo dõi → thêm comment, tránh đẻ 52 issue/năm

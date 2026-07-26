@@ -3,9 +3,14 @@
 # Bổ trợ cho `dependency-audit.yml`: audit CHẶN khi đã có lỗ hổng, còn
 # Dependabot MỞ SẴN PR vá trước khi bị chặn.
 #
-# ⚠️ Chi phí CI: mỗi PR kích một vòng check, trong đó `pytest` ≈ 51 phút.
-# Vì vậy các bản minor/patch được GOM vào 1 PR mỗi nhóm mỗi tuần thay vì
-# mỗi package một PR. Bản major luôn tách riêng (breaking — cần đọc kỹ).
+# ⚠️ Chi phí CI cao hơn vẻ ngoài: backend-test.yml lọc CẢ `frontend/**` và
+# frontend-test.yml lọc CẢ `Backend_FastAPI/**` (cố ý, để bắt drift hợp đồng
+# BE↔FE). Nên MỘT PR chỉ đụng package-lock.json vẫn kéo theo toàn bộ pytest
+# (~51 phút) + Build + Check + 2 audit. Gom nhóm minor/patch bên dưới giảm
+# SỐ PR, không giảm chi phí mỗi PR. `strict_required_status_checks_policy`
+# còn buộc rebase khi main tiến lên → mỗi rebase chạy lại từ đầu.
+# Repo PUBLIC nên Actions standard runner miễn phí; cái tốn là thời gian chờ.
+# Bản major luôn tách riêng (breaking — cần đọc kỹ).
 #
 # Lưu ý: file này chỉ điều khiển VERSION updates. SECURITY updates (vá CVE
 # ngoài lịch) là tính năng riêng, bật ở Settings → Code security →
@@ -66,6 +71,9 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+      # `timezone` chỉ có tác dụng khi đi KÈM `time`; thiếu `time` thì
+      # Dependabot chạy ở giờ mặc định UTC và dòng timezone chỉ là trang trí.
+      time: "02:00"
       timezone: "Asia/Ho_Chi_Minh"
     open-pull-requests-limit: 2
     groups:
@@ -84,6 +92,7 @@ updates:
     directory: "/frontend"
     schedule:
       interval: "monthly"
+      time: "02:00"
       timezone: "Asia/Ho_Chi_Minh"
     open-pull-requests-limit: 1
     commit-message:
@@ -96,8 +105,27 @@ updates:
     directory: "/Backend_FastAPI"
     schedule:
       interval: "monthly"
+      time: "02:00"
       timezone: "Asia/Ho_Chi_Minh"
     open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(docker)"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # docker-compose.yml ở gốc repo pin 4 image KHÔNG nằm trong 2 Dockerfile
+  # trên: postgres:16-alpine, redis:7-alpine, nginx:1.27-alpine,
+  # certbot/certbot. nginx là thành phần DUY NHẤT phơi ra Internet, còn
+  # postgres giữ toàn bộ dữ liệu — thiếu mục này thì chúng mục ruỗng âm thầm
+  # vì npm/pip audit không nhìn thấy image.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      time: "02:00"
+      timezone: "Asia/Ho_Chi_Minh"
+    open-pull-requests-limit: 2
     commit-message:
       prefix: "chore(docker)"
     labels:
