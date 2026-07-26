@@ -20,7 +20,7 @@ Business Rules:
 - Version column for optimistic locking
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional, Tuple, Callable, Any
 import structlog
@@ -37,6 +37,13 @@ from app.models.finance import (
     PaymentIntent, PaymentIntentStatusEnum,
 )
 from app.models.tuition_discount_policy import TuitionDiscountPolicy
+from app.services.fee_pricing import (
+    compute_final_amount,
+    compute_manual_discount_amount,
+    discount_context_for_profile,
+    resolve_discounts,
+    resolve_fee_pricing,
+)
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.utils.exceptions import (
     ResourceNotFoundError,
@@ -116,6 +123,28 @@ def recognized_major_id_for_fee(fee) -> Optional[int]:
     if getattr(fee, "fee_type", None) != FeeTypeEnum.tuition.value:
         return None
     return getattr(fee, "resolved_major_id", None)
+
+
+async def load_discount_policies(
+    db: AsyncSession, policy_ids: "List[int]"
+) -> list:
+    """Nạp ``TuitionDiscountPolicy`` theo id — I/O DÙNG CHUNG cho mọi luồng định giá.
+
+    Chỉ lọc ``id IN`` + ``is_active`` ở SQL; MỌI quy tắc nghiệp vụ khác (hiệu lực
+    ngày, cộng dồn, giới hạn lượt, phạm vi ngành, điều kiện đối tượng) do
+    ``fee_pricing`` quyết định — một nguồn. Hàm ở tầng module (không phải method)
+    để các hàm module-level như ``recalculate_fees_for_semester_tuition_change``
+    cũng dùng được thay vì tự dựng engine riêng.
+    """
+    if not policy_ids:
+        return []
+    rows = await db.execute(
+        select(TuitionDiscountPolicy).where(
+            TuitionDiscountPolicy.id.in_(policy_ids),
+            TuitionDiscountPolicy.is_active.is_(True),
+        )
+    )
+    return list(rows.scalars().all())
 
 
 async def is_major_change_cycle_open(
@@ -986,51 +1015,48 @@ class FeeCalculationService:
                 f"academic year {academic_year}"
             )
 
-        # Calculate discounts (policy-derived)
-        total_discount, applied_discounts = await self._calculate_discounts(
-            base_amount, discount_policy_ids or []
-        )
-
-        # Miễn/giảm học phí THẬT (Pha 2) — giảm NGHĨA VỤ (final) qua 1 dòng
-        # FeeAppliedDiscount ad-hoc (policy_id=NULL), GIỮ base_amount=canonical.
-        # "Học phí áp dụng" (target_final_amount) là final SAU MỌI giảm → manual
-        # discount = canonical − giảm-policy-sẵn-có − target (KHÔNG phải
-        # canonical − target, tránh giảm quá tay khi đã có policy discount). Sau
-        # đó final == target. Đánh dấu source="manual_discount" trong snapshot
-        # (KHÔNG dựa policy_id IS NULL — policy bị xoá cũng NULL).
+        # ĐỊNH GIÁ — MỘT luồng duy nhất ở ``fee_pricing.resolve_fee_pricing``:
+        # base → giảm theo chính sách → giảm tay (nếu có) → final. Bốn đường
+        # (tính lần đầu / tính lại / xem trước / định giá lại khi đổi ngành) dùng
+        # CÙNG hàm này, nên thêm một bước định giá mới chỉ phải sửa một chỗ.
+        #
+        # Giảm tay (``target_final_amount``) = "học phí áp dụng" do người có thẩm
+        # quyền ấn định: engine tự tính phần giảm cần thiết SAU phần chính sách
+        # (không trừ hai lần) và ``final`` bằng đúng số đã ấn định. Ràng buộc
+        # "target phải nhỏ hơn mức sau giảm hiện hành" kiểm ở đây để báo lỗi rõ.
+        policies = await self._load_discount_policies(discount_policy_ids or [])
+        # Ngữ cảnh xét ĐIỀU KIỆN ĐỐI TƯỢNG: chỉ mã ưu tiên ĐÃ XÁC MINH trên hồ sơ
+        # (owner chốt 26-07 — khai mà chưa xác minh thì không giảm). Cùng một hàm
+        # đọc cho mọi luồng tính phí nên không nơi nào tự suy diễn điều kiện.
+        _discount_ctx = discount_context_for_profile(profile)
         if target_final_amount is not None:
-            existing_policy_discount = total_discount
-            manual_discount_amount = (
-                base_amount - existing_policy_discount - target_final_amount
+            _policy_only = resolve_fee_pricing(
+                base_amount, policies, context=_discount_ctx
             )
-            if manual_discount_amount <= 0:
+            if (
+                compute_manual_discount_amount(
+                    base_amount, _policy_only.total_discount, target_final_amount
+                )
+                <= 0
+            ):
                 raise BadRequest(
                     f"Học phí áp dụng ({target_final_amount}) phải NHỎ HƠN mức sau "
-                    f"giảm hiện hành ({base_amount - existing_policy_discount}). "
+                    f"giảm hiện hành ({_policy_only.final_amount}). "
                     "Nếu không cần giảm thêm thì bỏ miễn/giảm thủ công."
                 )
-            manual_snapshot = {
-                # source = dấu hiệu MÁY ĐỌC ĐƯỢC để soát giảm-tay (KHÔNG dựa
-                # policy_id IS NULL — policy bị xoá cũng NULL).
-                "source": "manual_discount",
-                "reason": manual_discount_reason,
-                "approved_by": user_id,
-                "canonical_amount": str(base_amount),
-                "existing_policy_discount": str(existing_policy_discount),
-                "target_final_amount": str(target_final_amount),
-                "discount_amount": str(manual_discount_amount),
-                "calculated_at": datetime.now(timezone.utc).isoformat(),
-                # policy_name/discount_type/discount_value để builder response
-                # (_build_fee_detail_response) hiển nhãn thay vì "Unknown".
-                "policy_name": "Miễn/giảm học phí (thủ công)",
-                "discount_type": "manual_amount",
-                "discount_value": str(manual_discount_amount),
-            }
-            applied_discounts.append((None, manual_discount_amount, manual_snapshot))
-            total_discount = existing_policy_discount + manual_discount_amount
 
-        # Calculate final amount (== target_final_amount khi có miễn/giảm tay)
-        final_amount = max(Decimal("0"), base_amount - total_discount)
+        pricing = resolve_fee_pricing(
+            base_amount,
+            policies,
+            target_final_amount=target_final_amount,
+            manual_reason=manual_discount_reason,
+            approved_by=user_id,
+            calculated_at=datetime.now(timezone.utc).isoformat(),
+            context=_discount_ctx,
+        )
+        total_discount = pricing.total_discount
+        applied_discounts = pricing.lines_as_tuples()
+        final_amount = pricing.final_amount
 
         # Get installment plan
         installment_plan = None
@@ -1177,7 +1203,7 @@ class FeeCalculationService:
         total_discount, _ = await self._calculate_discounts(
             base_amount, discount_policy_ids
         )
-        final_amount = max(Decimal("0"), base_amount - total_discount)
+        final_amount = compute_final_amount(base_amount, total_discount)
         return base_amount, total_discount, final_amount
 
     async def recalculate_fee(
@@ -1275,7 +1301,7 @@ class FeeCalculationService:
 
         fee.base_amount = new_base_amount
         fee.total_discount = total_discount
-        fee.final_amount = max(Decimal("0"), new_base_amount - total_discount)
+        fee.final_amount = compute_final_amount(new_base_amount, total_discount)
         fee.version += 1
         fee.notes = f"{fee.notes or ''}\n[{datetime.now(timezone.utc).isoformat()}] " \
                     f"Recalculated by user {user_id}: {old_base} → {new_base_amount}. " \
@@ -1882,75 +1908,41 @@ class FeeCalculationService:
         result = await self.db.execute(query)
         return result.scalars().first()
 
+    async def _load_discount_policies(self, policy_ids: List[int]) -> list:
+        """Wrapper method của ``load_discount_policies`` (dùng session của service)."""
+        return await load_discount_policies(self.db, policy_ids)
+
     async def _calculate_discounts(
         self,
         base_amount: Decimal,
         policy_ids: List[int],
+        *,
+        as_of: Optional[date] = None,
     ) -> Tuple[Decimal, List[Tuple[int, Decimal, dict]]]:
+        """Giảm giá theo chính sách — I/O ONLY. Phép tính nằm ở
+        ``app/services/fee_pricing.resolve_discounts`` (nguồn duy nhất).
+
+        Hàm này chỉ làm hai việc: (1) load chính sách theo id, (2) gọi engine
+        thuần. Giữ nguyên chữ ký/kiểu trả về cũ ``(total, [(policy_id, amount,
+        snapshot)])`` nên mọi call site hiện tại không phải sửa.
+
+        🔴 KHÔNG lọc hiệu lực/cộng dồn/loại giảm ở đây — engine làm. Trước đây
+        chính hàm này tự so ``discount_type == "percent"`` trong khi CSDL lưu
+        ``"percentage"`` nên mọi chính sách phần trăm bị tính thành số tiền cố
+        định (10% → 10 đồng), và ``valid_from``/``valid_to``/``is_stackable``
+        không được xét. Thêm điều kiện mới thì sửa ở ``fee_pricing``.
         """
-        Calculate total discount using additive stacking.
-
-        Policy H4: Additive stacking, capped at 100%
-
-        Args:
-            base_amount: Base fee amount
-            policy_ids: List of discount policy IDs
-
-        Returns:
-            Tuple of (total_discount, list of (policy_id, amount, snapshot))
-        """
-        if not policy_ids:
-            return Decimal("0"), []
-
-        # Get discount policies
-        query = select(TuitionDiscountPolicy).where(
-            TuitionDiscountPolicy.id.in_(policy_ids),
-            TuitionDiscountPolicy.is_active == True,
-        )
-        result = await self.db.execute(query)
-        policies = list(result.scalars().all())
-
+        policies = await self._load_discount_policies(policy_ids)
         if not policies:
             return Decimal("0"), []
 
-        # Calculate each discount
-        applied_discounts = []
-        total_percent = Decimal("0")
-
-        for policy in policies:
-            if policy.discount_type == "percent":
-                percent = Decimal(str(policy.discount_value))
-                total_percent += percent
-                discount_amount = (base_amount * percent / 100).quantize(
-                    Decimal("0.01"), rounding=ROUND_HALF_UP
-                )
-            else:  # fixed amount
-                discount_amount = Decimal(str(policy.discount_value))
-
-            snapshot = {
-                "policy_name": policy.name,
-                "discount_type": policy.discount_type,
-                "discount_value": str(policy.discount_value),
-                "calculated_at": datetime.now(timezone.utc).isoformat(),
-            }
-
-            applied_discounts.append((policy.id, discount_amount, snapshot))
-
-        # Cap at 100% (H4)
-        if total_percent > 100:
-            log.warning(
-                "discount_capped",
-                original_percent=str(total_percent),
-                capped_to=100,
-            )
-
-        total_discount = sum(d[1] for d in applied_discounts)
-
-        # Cap discount at base amount
-        if total_discount > base_amount:
-            total_discount = base_amount
-
-        return total_discount, applied_discounts
+        total, lines = resolve_discounts(
+            base_amount,
+            policies,
+            as_of=as_of,
+            calculated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        return total, [line.as_tuple() for line in lines]
 
     # ======================================================================
     # MAJOR-CHANGE REPRICE (đổi ngành có khấu trừ phiếu thu + kế toán xác nhận)
@@ -2026,7 +2018,7 @@ class FeeCalculationService:
         new_total_discount, applied_discounts = await self._calculate_discounts(
             new_base, policy_ids
         )
-        new_final = max(Decimal("0"), new_base - new_total_discount)
+        new_final = compute_final_amount(new_base, new_total_discount)
 
         # (2) Tìm active HK1 fee → active invoice CỦA NÓ → assert đúng 1 → khoá
         # invoice TRƯỚC, fee SAU (khớp thứ tự luồng payment/verify — tránh ABBA).
@@ -2741,20 +2733,54 @@ async def recalculate_fees_for_semester_tuition_change(
         if new_base == fee.base_amount:
             continue
 
-        # Recalculate: re-apply existing discount percentages
-        total_discount = Decimal("0")
+        # ĐỊNH GIÁ LẠI khi đổi giá học kỳ — dùng CHUNG engine ``fee_pricing``.
+        #
+        # 🔴 Bản cũ có engine giảm giá RIÊNG ở đây: nó rescale theo cột
+        # ``FeeAppliedDiscount.discount_percent``, nhưng cột đó KHÔNG BAO GIỜ được
+        # ghi (cả ``calculate_fee`` lẫn ``_write_discount_lines`` đều bỏ trắng) nên
+        # nhánh percent LUÔN chết ⇒ giảm giá bị đóng băng thành số tiền cũ: admin
+        # sửa học phí HK 7tr→10tr thì "giảm 10%" vẫn giữ 700.000 thay vì 1.000.000.
+        # Nay đọc lại CHÍNH SÁCH và tính lại bằng engine chung (đúng phần trăm,
+        # đúng hiệu lực ngày, đúng cộng dồn).
+        #
+        # GIẢM TAY được BẢO TOÀN nguyên số: nó là quyết định của người (học bổng,
+        # hoàn cảnh), không suy lại được từ base mới — và tự rescale sẽ âm thầm đổi
+        # mức đã ấn định. Ghi log để kế toán biết cần rà lại nếu muốn đổi.
+        _policy_ids = [
+            ad.discount_policy_id
+            for ad in fee.applied_discounts
+            if ad.discount_policy_id is not None
+        ]
+        _manual_lines = [
+            ad for ad in fee.applied_discounts if ad.discount_policy_id is None
+        ]
+        _policies = await load_discount_policies(db, _policy_ids)
+        _policy_total, _policy_lines = resolve_discounts(
+            new_base,
+            _policies,
+            calculated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        _by_policy = {line.policy_id: line for line in _policy_lines}
+        total_discount = _policy_total
         for ad in fee.applied_discounts:
-            if ad.discount_percent is not None:
-                disc = (new_base * ad.discount_percent / 100).quantize(Decimal("1"))
-            else:
-                disc = ad.discount_amount
-            ad.discount_amount = disc
-            total_discount += disc
+            if ad.discount_policy_id is None:
+                total_discount += ad.discount_amount  # giảm tay: giữ nguyên
+                continue
+            line = _by_policy.get(ad.discount_policy_id)
+            # Chính sách hết hiệu lực / ngoài phạm vi ⇒ engine không trả dòng nào:
+            # hạ về 0 thay vì giữ số cũ (giữ số cũ là áp một ưu đãi đã hết hạn).
+            ad.discount_amount = line.amount if line else Decimal("0")
+        if _manual_lines:
+            log.info(
+                "fee_recalc_semester_change_preserved_manual_discount",
+                fee_id=fee.id,
+                manual_total=str(sum(a.discount_amount for a in _manual_lines)),
+            )
 
         old_final = fee.final_amount
         fee.base_amount = new_base
         fee.total_discount = min(total_discount, new_base)
-        fee.final_amount = max(Decimal("0"), new_base - fee.total_discount)
+        fee.final_amount = compute_final_amount(new_base, fee.total_discount)
         fee.version += 1
 
         # If fee has draft invoices, rewrite their amounts to match

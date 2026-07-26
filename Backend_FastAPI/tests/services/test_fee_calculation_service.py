@@ -79,6 +79,10 @@ async def fee_fixtures(db: AsyncSession, seeded_dependencies: dict, admin_user):
         discount_type="amount",
         discount_value=Decimal("50000"),
         is_active=True,
+        # Cột ``is_stackable`` mặc định FALSE (không cộng dồn). Engine cũ bỏ qua cờ
+        # này nên luôn cộng dồn; engine mới tôn trọng nó. Hai test dưới CỐ Ý kiểm
+        # cộng dồn ("H4 additive stacking") nên fixture phải khai tường minh.
+        is_stackable=True,
         applicable_scope={},
         target_criteria={},
     )
@@ -91,6 +95,7 @@ async def fee_fixtures(db: AsyncSession, seeded_dependencies: dict, admin_user):
         discount_type="amount",
         discount_value=Decimal("30000"),
         is_active=True,
+        is_stackable=True,
         applicable_scope={},
         target_criteria={},
     )
@@ -103,6 +108,7 @@ async def fee_fixtures(db: AsyncSession, seeded_dependencies: dict, admin_user):
         discount_type="amount",
         discount_value=Decimal("800000"),
         is_active=True,
+        is_stackable=True,
         applicable_scope={},
         target_criteria={},
     )
