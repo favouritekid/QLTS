@@ -141,6 +141,16 @@ jobs:
         with:
           node-version: '20'
 
+      # Chạy ở ĐÂY dù logic delta chỉ được dùng bởi `node-audit-dev`.
+      # Lý do: `node-audit-dev` bị skip trên pull_request, còn Vitest chỉ
+      # include `frontend/src/**` — nên nếu chỉ self-test bên đó thì một PR
+      # làm hỏng script cảnh báo vẫn merge được, và chỉ vỡ ra SAU merge trên
+      # main. Job này là required check, nên đặt test ở đây khiến logic hỏng
+      # không thể lọt qua PR. Chi phí ~0,2 giây, không cần node_modules.
+      - name: Self-test counting logic
+        working-directory: ${{ github.workspace }}
+        run: node --test .github/scripts/audit-dev-delta.test.js
+
       - name: Install dependencies
         run: npm ci
 

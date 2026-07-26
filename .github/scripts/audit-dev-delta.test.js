@@ -1,6 +1,10 @@
 /**
  * Chạy: node --test .github/scripts/audit-dev-delta.test.js
  * Không cần dependency ngoài (node:test có sẵn từ Node 18+; CI dùng Node 20).
+ *
+ * Test ở đây khóa hai thứ:
+ *   1. Cách đếm ĐÚNG (delta severity, không phải hiệu tập theo tên package).
+ *   2. Tính FAIL CLOSED — dữ liệu bất thường phải NỔ, không được hóa thành 0.
  */
 
 'use strict';
@@ -63,21 +67,44 @@ test('high-or-worse gộp cả critical để không bỏ sót khi advisory đ�
   assert.strictEqual(computeDelta(full, prod).highOrWorseDelta, 1);
 });
 
-test('delta không bao giờ âm', () => {
-  // Về lý thuyết cây full ⊇ production nên không xảy ra; vẫn kẹp để một
-  // thay đổi bất thường không tạo ra số âm rồi lọt qua so sánh `-gt 0`.
-  const prod = audit({ critical: 5, high: 5, total: 10 });
-  const full = audit({ critical: 1, high: 1, total: 2 });
+// ----------------------------------------------------------------- fail closed
 
-  const { criticalDelta, highOrWorseDelta } = computeDelta(full, prod);
+test('FAIL CLOSED: critical âm (full < production) phải NỔ, không kẹp về 0', () => {
+  // Cây full ⊇ production nên ca này là bằng chứng hai audit không nhất quán
+  // (advisory DB đổi giữa 2 request / schema đổi / file bị tráo).
+  // Kẹp về 0 sẽ biến sự cố dữ liệu thành một job xanh — đúng kiểu "hỏng im lặng".
+  const prod = audit({ critical: 5, total: 5 });
+  const full = audit({ critical: 1, total: 1 });
 
-  assert.strictEqual(criticalDelta, 0);
-  assert.strictEqual(highOrWorseDelta, 0);
+  assert.throws(() => computeDelta(full, prod), /Invariant vỡ.*critical/s);
 });
 
-test('thiếu số nào coi như 0, không ném lỗi', () => {
+test('FAIL CLOSED: high+critical âm phải NỔ kể cả khi critical hợp lệ', () => {
+  // critical: 1 >= 1 (qua được kiểm tra đầu), nhưng high tụt 5 → 0.
+  const prod = audit({ critical: 1, high: 5, total: 6 });
+  const full = audit({ critical: 1, high: 0, total: 1 });
+
+  assert.throws(() => computeDelta(full, prod), /Invariant vỡ.*high\+critical/s);
+});
+
+test('FAIL CLOSED: count thiếu phải NỔ, không coi là 0', () => {
   const prod = { vulnerabilities: {}, metadata: { vulnerabilities: {} } };
   const full = { vulnerabilities: {}, metadata: { vulnerabilities: { critical: 2 } } };
 
-  assert.strictEqual(computeDelta(full, prod).criticalDelta, 2);
+  assert.throws(() => computeDelta(full, prod), /phải là số nguyên không âm/);
+});
+
+test('FAIL CLOSED: count sai kiểu phải NỔ', () => {
+  const prod = audit({ critical: 0, high: 0 });
+  const full = audit({ critical: 0, high: 0 });
+  full.metadata.vulnerabilities.critical = '3';
+
+  assert.throws(() => computeDelta(full, prod), /phải là số nguyên không âm/);
+});
+
+test('FAIL CLOSED: count âm trong dữ liệu gốc phải NỔ', () => {
+  const prod = audit({ critical: 0, high: 0 });
+  const full = audit({ critical: -1, high: 0 });
+
+  assert.throws(() => computeDelta(full, prod), /phải là số nguyên không âm/);
 });
