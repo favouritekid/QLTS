@@ -1,0 +1,137 @@
+# Dependabot — cập nhật phụ thuộc chủ động
+# ========================================
+# Bổ trợ cho `dependency-audit.yml`: audit CHẶN khi đã có lỗ hổng, còn
+# Dependabot MỞ SẴN PR vá trước khi bị chặn.
+#
+# ⚠️ Chi phí CI cao hơn vẻ ngoài: backend-test.yml lọc CẢ `frontend/**` và
+# frontend-test.yml lọc CẢ `Backend_FastAPI/**` (cố ý, để bắt drift hợp đồng
+# BE↔FE). Nên MỘT PR chỉ đụng package-lock.json vẫn kéo theo toàn bộ pytest
+# (~51 phút) + Build + Check + 2 audit. Gom nhóm minor/patch bên dưới giảm
+# SỐ PR, không giảm chi phí mỗi PR. `strict_required_status_checks_policy`
+# còn buộc rebase khi main tiến lên → mỗi rebase chạy lại từ đầu.
+# Repo PUBLIC nên Actions standard runner miễn phí; cái tốn là thời gian chờ.
+# Bản major luôn tách riêng (breaking — cần đọc kỹ).
+#
+# Lưu ý: file này chỉ điều khiển VERSION updates. SECURITY updates (vá CVE
+# ngoài lịch) là tính năng riêng, bật ở Settings → Code security →
+# "Dependabot security updates".
+
+version: 2
+updates:
+  # ---------------------------------------------------------------- frontend
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "02:00"
+      timezone: "Asia/Ho_Chi_Minh"
+    open-pull-requests-limit: 3
+    groups:
+      # Phụ thuộc SHIP RA RUNTIME — ưu tiên cao nhất, đúng phạm vi gate
+      # `npm audit --omit=dev` trong dependency-audit.yml
+      frontend-runtime:
+        dependency-type: "production"
+        update-types: ["minor", "patch"]
+      # Toolchain (eslint/vitest/playwright/tailwind…) — gộp 1 PR
+      frontend-toolchain:
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    labels:
+      - "dependencies"
+      - "frontend"
+
+  # ----------------------------------------------------------------- backend
+  - package-ecosystem: "pip"
+    directory: "/Backend_FastAPI"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "02:00"
+      timezone: "Asia/Ho_Chi_Minh"
+    open-pull-requests-limit: 3
+    groups:
+      backend-minor-patch:
+        patterns:
+          - "*"
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"
+      - "backend"
+
+  # -------------------------------------------------------- GitHub Actions
+  # actions/checkout, setup-node, setup-python… — nơi hay tồn tại action
+  # bị bỏ hoang hoặc bị chiếm quyền (supply chain).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      # `timezone` chỉ có tác dụng khi đi KÈM `time`; thiếu `time` thì
+      # Dependabot chạy ở giờ mặc định UTC và dòng timezone chỉ là trang trí.
+      time: "02:00"
+      timezone: "Asia/Ho_Chi_Minh"
+    open-pull-requests-limit: 2
+    groups:
+      ci-actions:
+        patterns:
+          - "*"
+        # BẮT BUỘC có update-types: thiếu nó thì wildcard gom CẢ major, và
+        # nhiều bản nâng action phá vỡ tương thích bị nhồi vào chung 1 PR —
+        # trái hẳn chính sách "major luôn tách riêng" ghi ở đầu file.
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "ci(deps)"
+    labels:
+      - "dependencies"
+      - "ci"
+
+  # ------------------------------------------------------------ base images
+  # node:20-alpine / python:3.12-slim — vá lỗ hổng ở tầng OS của image.
+  - package-ecosystem: "docker"
+    directory: "/frontend"
+    schedule:
+      interval: "monthly"
+      time: "02:00"
+      timezone: "Asia/Ho_Chi_Minh"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(docker)"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  - package-ecosystem: "docker"
+    directory: "/Backend_FastAPI"
+    schedule:
+      interval: "monthly"
+      time: "02:00"
+      timezone: "Asia/Ho_Chi_Minh"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(docker)"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # docker-compose.yml ở gốc repo pin 4 image KHÔNG nằm trong 2 Dockerfile
+  # trên: postgres:16-alpine, redis:7-alpine, nginx:1.27-alpine,
+  # certbot/certbot. nginx là thành phần DUY NHẤT phơi ra Internet, còn
+  # postgres giữ toàn bộ dữ liệu — thiếu mục này thì chúng mục ruỗng âm thầm
+  # vì npm/pip audit không nhìn thấy image.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      time: "02:00"
+      timezone: "Asia/Ho_Chi_Minh"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "chore(docker)"
+    labels:
+      - "dependencies"
+      - "docker"
