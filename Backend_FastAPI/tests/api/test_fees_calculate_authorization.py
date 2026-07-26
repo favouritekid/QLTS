@@ -1842,8 +1842,13 @@ async def test_preview_liet_ke_uu_dai_cua_nganh(
     assert set(options) == {p1, p2}
     assert all(opt["selectable"] for opt in options.values())
     assert all(opt["selected"] for opt in options.values())
+    # ``amount`` = số THỰC áp; ở đây cả hai đều áp đủ nên bằng giá trị danh nghĩa.
     assert Decimal(str(options[p1]["amount"])) == Decimal("400000")
     assert Decimal(str(options[p2]["amount"])) == Decimal("600000")
+    # Các dòng cộng lại PHẢI ra tổng — bất biến người dùng nhìn thấy trực tiếp.
+    assert sum(Decimal(str(o["amount"])) for o in options.values()) == Decimal(
+        str(body["total_discount"])
+    )
 
 
 @pytest.mark.asyncio
@@ -2083,6 +2088,12 @@ async def test_preview_phan_biet_da_tich_voi_thuc_su_duoc_ap(
     )
     assert options[b]["reason"] == "bi_chan_boi_chinh_sach_khong_cong_don"
     assert "cộng dồn" in (options[b]["reason_text"] or "")
+    assert Decimal(str(options[b]["amount"])) == Decimal("0"), (
+        "ô không được áp phải hiện 0, không hiện số 'nếu áp riêng'"
+    )
+    assert sum(Decimal(str(o["amount"])) for o in options.values()) == Decimal(
+        str(body["total_discount"])
+    )
 
 
 @pytest.mark.asyncio
@@ -2247,3 +2258,240 @@ async def test_khong_chon_gi_thi_uu_dai_het_han_chi_bi_BO_QUA_khong_chan(
     assert Decimal(str(resp.json()["total_discount"])) == Decimal("600000")
     rows = await _manual_discount_rows(pid)
     assert [r.policy_id for r in rows] == [p2]
+
+
+# ==============================================================================
+# REVIEW VÒNG 3 — số tiền TỪNG DÒNG phải là số THỰC áp, không phải "nếu áp riêng"
+# ==============================================================================
+# Probe: giá gốc 1tr, hai ưu đãi 800k + 500k ⇒ dòng thật 800k + 200k (cái sau bị
+# cắt vì phần còn lại không đủ). Hiện số danh nghĩa thì các dòng cộng lại ra 1,3tr
+# trong khi tổng là 1tr — người dùng tin dòng chứ không tin tổng.
+
+
+async def _link_capped_pair(cfg: dict) -> tuple:
+    """Hai ưu đãi CỘNG DỒN 800k + 500k. Trả (id_800k, id_500k)."""
+    from app.models.tuition_discount_policy import TuitionDiscountPolicy
+    from sqlalchemy import update as sa_update
+
+    ts = str(int(datetime.now().timestamp() * 1000) % 10**9)
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            big = TuitionDiscountPolicy(
+                code=f"CAP_BIG_{ts}"[:50], name=f"Uu dai lon {ts}",
+                discount_type="amount", discount_value=Decimal("800000"),
+                is_active=True, is_stackable=True, priority=10,
+                applicable_scope={}, target_criteria={},
+            )
+            small = TuitionDiscountPolicy(
+                code=f"CAP_SML_{ts}"[:50], name=f"Uu dai nho {ts}",
+                discount_type="amount", discount_value=Decimal("500000"),
+                is_active=True, is_stackable=True, priority=1,
+                applicable_scope={}, target_criteria={},
+            )
+            s.add_all([big, small])
+            await s.flush()
+            ids = (big.id, small.id)
+            ai_id = (await s.execute(
+                select(models.OfferingAcademicInfo.id).where(
+                    models.OfferingAcademicInfo.offering_id == cfg["offering_id"]
+                )
+            )).scalar_one()
+            await s.execute(
+                sa_update(models.OfferingAcademicInfo)
+                .where(models.OfferingAcademicInfo.id == ai_id)
+                .values(applied_discount_policy_ids=list(ids))
+            )
+    return ids
+
+
+async def _set_semester_tuition(cfg: dict, amount: str) -> None:
+    """Đổi giá chuẩn HK1 của ngành (fixture mặc định 5.000.000)."""
+    from app.models.offering_semester_tuition import OfferingSemesterTuition
+    from sqlalchemy import update as sa_update
+
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            ai_id = (await s.execute(
+                select(models.OfferingAcademicInfo.id).where(
+                    models.OfferingAcademicInfo.offering_id == cfg["offering_id"]
+                )
+            )).scalar_one()
+            await s.execute(
+                sa_update(OfferingSemesterTuition)
+                .where(
+                    OfferingSemesterTuition.academic_info_id == ai_id,
+                    OfferingSemesterTuition.semester_no == 1,
+                )
+                .values(amount=Decimal(amount))
+            )
+
+
+@pytest.mark.asyncio
+async def test_preview_amount_la_so_THUC_ap_khi_bi_cat_mot_phan(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Giá gốc 1tr + ưu đãi 800k & 500k ⇒ dòng thật 800k + 200k, tổng 1tr."""
+    big, small = await _link_capped_pair(fee_calc_config)
+    await _set_semester_tuition(fee_calc_config, "1000000")
+
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="Preview Capped Line",
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    resp = await client.get(
+        "/api/fees/tuition-preview",
+        params={"admission_profile_id": pid, "semester_no": 1},
+        headers=oh,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    options = {o["id"]: o for o in body["discount_policies"]}
+
+    assert Decimal(str(options[big]["amount"])) == Decimal("800000")
+    assert Decimal(str(options[small]["amount"])) == Decimal("200000"), (
+        "ưu đãi thứ hai bị cắt còn 200k — hiện 500k là hứa số không có thật"
+    )
+    assert Decimal(str(body["total_discount"])) == Decimal("1000000")
+    assert Decimal(str(body["final_amount"])) == Decimal("0")
+    # Bất biến người dùng nhìn thấy: Σ dòng == tổng.
+    assert sum(Decimal(str(o["amount"])) for o in options.values()) == Decimal(
+        str(body["total_discount"])
+    )
+
+
+@pytest.mark.asyncio
+async def test_dong_preview_khop_dong_thuc_ghi_vao_csdl(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Số từng dòng ở xem trước phải khớp TỪNG DÒNG được ghi vào CSDL."""
+    big, small = await _link_capped_pair(fee_calc_config)
+    await _set_semester_tuition(fee_calc_config, "1000000")
+
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="Calc Capped Line",
+    )
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    preview = await client.get(
+        "/api/fees/tuition-preview",
+        params={"admission_profile_id": pid, "semester_no": 1},
+        headers=oh,
+    )
+    assert preview.status_code == 200, preview.text
+    xem_truoc = {
+        o["id"]: Decimal(str(o["amount"]))
+        for o in preview.json()["discount_policies"]
+    }
+
+    # Gọi thẳng SERVICE, không qua tầng hoá đơn: khi ưu đãi bị cắt thì tổng giảm
+    # đúng bằng giá gốc ⇒ final = 0 ⇒ ``generate_invoices_for_fee`` từ chối tạo
+    # hoá đơn 0đ (đúng nghiệp vụ). Thứ cần khoá ở đây là DÒNG ghi vào CSDL khớp
+    # dòng xem trước, không phải luồng phát hành hoá đơn.
+    from app.models.finance import FeeTypeEnum as _FeeTypeEnum
+    from app.services.fee_calculation_service import FeeCalculationService
+    async with AsyncSessionLocal() as s:
+        nam_hoc = (await s.execute(
+            select(models.AdmissionProfile.academic_year).where(
+                models.AdmissionProfile.id == pid
+            )
+        )).scalar_one()
+        svc = FeeCalculationService(s)
+        fee, _cb = await svc.calculate_fee(
+            admission_profile_id=pid,
+            fee_type=_FeeTypeEnum.tuition,
+            base_amount=None,
+            academic_year=nam_hoc,
+            user_id=1,
+            semester_no=1,
+        )
+        assert fee.total_discount == Decimal("1000000")
+        assert fee.final_amount == Decimal("0")
+        await s.commit()
+
+    rows = await _manual_discount_rows(pid)
+    thuc_te = {r.policy_id: r.discount_amount for r in rows}
+    assert thuc_te == {
+        big: xem_truoc[big],
+        small: xem_truoc[small],
+    }, f"xem trước {xem_truoc} ≠ ghi thật {thuc_te}"
+
+
+# ==============================================================================
+# REVIEW VÒNG 3 — TOCTOU: hàng rào và định giá phải dùng CÙNG một lần đọc
+# ==============================================================================
+
+
+@pytest.mark.asyncio
+async def test_khong_doc_lai_policy_sau_khi_da_kiem(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    fee_calc_config: dict,
+):
+    """Chính sách bị TẮT ngay sau hàng rào không được làm phí tạo ra cao hơn.
+
+    Bản trước đọc CSDL hai lần: hàng rào (only_active=False) rồi định giá
+    (only_active=True). Chính sách tắt giữa hai lần QUA được hàng rào rồi bị lần
+    đọc sau lọc mất ⇒ phí vẫn tạo, vẫn cao hơn xem trước, im lặng. Nay chỉ đọc
+    một lần và dùng lại, nên dù có tắt xen giữa thì số vẫn đúng với cái đã kiểm.
+
+    Mô phỏng khe đó bằng cách tắt chính sách NGAY SAU khi hàng rào chạy xong."""
+    from app.models.tuition_discount_policy import TuitionDiscountPolicy
+    from sqlalchemy import update as sa_update
+    from app.services import fee_calculation_service as fcs
+
+    p1, _p2 = await _link_two_discounts(fee_calc_config)
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="Calc TOCTOU",
+    )
+
+    goc = fcs.FeeCalculationService._assert_selected_policies_effective
+
+    async def _tat_ngay_sau_khi_kiem(self, policy_ids, profile):
+        ket_qua = await goc(self, policy_ids, profile)
+        async with AsyncSessionLocal() as s:
+            async with s.begin():
+                await s.execute(
+                    sa_update(TuitionDiscountPolicy)
+                    .where(TuitionDiscountPolicy.id == p1)
+                    .values(is_active=False)
+                )
+        return ket_qua
+
+    oh = await _login(
+        client, officer_user_in_db["username"], officer_user_in_db["password"]
+    )
+    fcs.FeeCalculationService._assert_selected_policies_effective = (
+        _tat_ngay_sau_khi_kiem
+    )
+    try:
+        resp = await client.post(
+            "/api/fees/calculate",
+            json={
+                "admission_profile_id": pid,
+                "fee_type": "tuition",
+                "installment_plan_code": "FULL",
+                "semester_no": 1,
+                "discount_policy_ids": [p1],
+            },
+            headers=oh,
+        )
+    finally:
+        fcs.FeeCalculationService._assert_selected_policies_effective = goc
+
+    assert resp.status_code == 201, resp.text
+    assert Decimal(str(resp.json()["total_discount"])) == Decimal("400000"), (
+        "định giá đọc lại CSDL nên đánh rơi ưu đãi vừa qua hàng rào"
+    )

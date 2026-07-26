@@ -1112,7 +1112,13 @@ class DiscountPolicyOption(BaseModel):
     discount_type: str = Field(..., description="'percentage' | 'amount'")
     discount_value: Decimal
     amount: Decimal = Field(
-        ..., description="Số tiền giảm trên giá chuẩn học kỳ này (0 nếu không áp được)."
+        ...,
+        description="Số tiền chính sách này THỰC SỰ giảm trong con số phải thu "
+                    "bên dưới (0 khi không được áp). Lấy từ chính dòng engine trả "
+                    "— KHÔNG phải 'nếu áp riêng thì được bao nhiêu', vì một chính "
+                    "sách có thể bị cắt bớt khi phần còn lại của học phí gốc "
+                    "không đủ; hiện số danh nghĩa thì các dòng cộng lại không ra "
+                    "tổng.",
     )
     selectable: bool = Field(..., description="Chọn được ở thời điểm hiện tại?")
     reason: Optional[str] = Field(

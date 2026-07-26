@@ -1033,6 +1033,9 @@ class FeeCalculationService:
         # desync, không tin được cho drift gate). None cho direct/test callers
         # (explicit base_amount) — reprice sẽ tự tính khi cần.
         priced_from_ai_id: Optional[int] = None
+        # Danh sách chính sách ĐÃ QUA hàng rào fail-closed; None = không đi qua
+        # hàng rào (đường mặc định / caller truyền base_amount tường minh).
+        validated_policies: Optional[list] = None
         if base_amount is None:
             academic_info = await resolve_fee_academic_info(self.db, profile)
             priced_from_ai_id = academic_info.id
@@ -1053,7 +1056,12 @@ class FeeCalculationService:
                 # không thuộc đối tượng — giao diện người dùng đang xem có thể đã
                 # cũ vài phút. Nếu chỉ im lặng bỏ qua thì phí vẫn tạo THÀNH CÔNG
                 # với số CAO HƠN màn hình xem trước, và không ai biết vì sao.
-                await self._assert_selected_policies_effective(
+                #
+                # 🔴 GIỮ LẠI danh sách đã kiểm để định giá dùng CHÍNH nó. Đọc lại
+                # lần hai mở một khe TOCTOU: chính sách bị tắt giữa hai lần SELECT
+                # sẽ QUA được hàng rào rồi bị lần đọc sau lọc mất ⇒ phí vẫn tạo,
+                # vẫn cao hơn preview, đúng cái mà hàng rào này sinh ra để chặn.
+                validated_policies = await self._assert_selected_policies_effective(
                     discount_policy_ids, profile
                 )
             if fee_type == FeeTypeEnum.tuition:
@@ -1101,7 +1109,14 @@ class FeeCalculationService:
         # quyền ấn định: engine tự tính phần giảm cần thiết SAU phần chính sách
         # (không trừ hai lần) và ``final`` bằng đúng số đã ấn định. Ràng buộc
         # "target phải nhỏ hơn mức sau giảm hiện hành" kiểm ở đây để báo lỗi rõ.
-        policies = await self._load_discount_policies(discount_policy_ids or [])
+        # Dùng LẠI danh sách đã kiểm ở hàng rào fail-closed (nếu có) — một lần đọc
+        # duy nhất cho cả kiểm lẫn tính, nên không thể có chuyện "qua cửa rồi mất
+        # ở trong". Đường mặc định (người dùng không chọn gì) vẫn đọc như cũ.
+        policies = (
+            validated_policies
+            if validated_policies is not None
+            else await self._load_discount_policies(discount_policy_ids or [])
+        )
         # Ngữ cảnh xét ĐIỀU KIỆN ĐỐI TƯỢNG: chỉ mã ưu tiên ĐÃ XÁC MINH trên hồ sơ
         # (owner chốt 26-07 — khai mà chưa xác minh thì không giảm). Cùng một hàm
         # đọc cho mọi luồng tính phí nên không nơi nào tự suy diễn điều kiện.
@@ -1318,9 +1333,17 @@ class FeeCalculationService:
             context=context,
             skipped=skipped,
         )
-        applied_set = {
-            line.policy_id for line in applied_lines if line.policy_id is not None
+        # Số THỰC ÁP của từng chính sách — lấy từ chính dòng engine trả, KHÔNG
+        # tính lại "nếu áp một mình". Chính sách bị CAP một phần (phần còn lại
+        # của học phí gốc không đủ) có số thực nhỏ hơn số danh nghĩa: base 1tr với
+        # hai ưu đãi 800k + 500k cho ra 800k + 200k. Hiện số danh nghĩa thì các
+        # dòng cộng lại không ra tổng, và người dùng tin dòng chứ không tin tổng.
+        applied_amounts = {
+            line.policy_id: line.amount
+            for line in applied_lines
+            if line.policy_id is not None
         }
+        applied_set = set(applied_amounts)
         final_amount = compute_final_amount(base_amount, total_discount)
 
         today = date.today()
@@ -1345,11 +1368,6 @@ class FeeCalculationService:
                 continue
 
             ok, reason = is_policy_effective(policy, today, context)
-            # Số tiền khi áp MỘT MÌNH trên giá chuẩn — con số ổn định để người
-            # dùng so sánh, không nhảy theo việc tích/bỏ tích chính sách khác.
-            alone, _ = resolve_discounts(
-                base_amount, [policy], as_of=today, context=context
-            )
             is_selected = ok and pid in selected_set
             is_applied = pid in applied_set
             # ĐƯỢC CHỌN nhưng KHÔNG được áp (bị chính sách không-cộng-dồn chặn,
@@ -1364,7 +1382,9 @@ class FeeCalculationService:
                     policy.discount_type, "value", policy.discount_type
                 ),
                 "discount_value": policy.discount_value,
-                "amount": alone,
+                # Số THỰC đang được tính (0 khi không được áp). Không hứa một con
+                # số "nếu áp riêng" mà tổng lại không cộng ra.
+                "amount": applied_amounts.get(pid, Decimal("0")),
                 "selectable": ok,
                 "reason": reason,
                 "reason_text": skip_reason_text(reason),
@@ -2091,8 +2111,14 @@ class FeeCalculationService:
         self,
         policy_ids: List[int],
         profile: "models.AdmissionProfile",
-    ) -> None:
+    ) -> list:
         """Mọi ưu đãi người dùng TỰ CHỌN phải còn áp được — nếu không thì 400.
+
+        TRẢ VỀ chính danh sách chính sách đã kiểm, để bên gọi định giá bằng đúng
+        dữ liệu vừa được kiểm. Nếu bên gọi đọc lại lần nữa thì mở một khe TOCTOU:
+        chính sách bị tắt giữa hai lần đọc sẽ QUA hàng rào rồi bị lần đọc sau lọc
+        mất, và khoản phí vẫn được tạo với số cao hơn màn hình xem trước — đúng
+        cái mà hàng rào này sinh ra để chặn.
 
         Dùng CHÍNH ``is_policy_effective`` mà engine dùng, nên câu trả lời của
         hàng rào này không thể lệch với câu trả lời của luồng tính tiền.
@@ -2104,7 +2130,7 @@ class FeeCalculationService:
         phát hiện nhất. Báo lỗi thì họ tải lại và chọn lại.
         """
         if not policy_ids:
-            return
+            return []
 
         policies = await load_discount_policies(
             self.db, policy_ids, only_active=False
@@ -2128,6 +2154,9 @@ class FeeCalculationService:
                 "Không áp được ưu đãi đã chọn — " + "; ".join(problems)
                 + ". Hãy tải lại trang để xem danh sách ưu đãi mới nhất."
             )
+
+        # Theo ĐÚNG thứ tự id đã chọn, để engine nhận cùng tập với cùng dữ liệu.
+        return [by_id[pid] for pid in policy_ids]
 
     # 🔴 ĐÃ XOÁ ``_calculate_discounts``. Nó nhận policy_id rồi gọi engine, nhưng
     # KHÔNG có tham số ngữ cảnh đối tượng ưu tiên — ai gọi nó thay vì
