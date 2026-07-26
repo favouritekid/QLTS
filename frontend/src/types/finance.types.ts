@@ -606,6 +606,26 @@ export interface FeeCalculateRequest {
   // admin/manager/accountant (backend enforce 403). Bỏ khi không miễn/giảm.
   target_final_amount?: string | null
   manual_discount_reason?: string | null
+  // Ưu đãi theo CHÍNH SÁCH người dùng tích chọn. Phải là tập con của cấu hình
+  // ngành (backend từ chối id ngoài tập đó — 400, không lọc im lặng).
+  // undefined = không nêu ý kiến ⇒ áp toàn bộ cấu hình; [] = không áp ưu đãi nào.
+  discount_policy_ids?: number[]
+}
+
+/** Một chính sách ưu đãi đã cấu hình cho ngành của hồ sơ. */
+export interface DiscountPolicyOption {
+  id: number
+  name: string
+  discount_type: string
+  discount_value: string
+  /** Số tiền giảm khi áp MỘT MÌNH trên giá chuẩn học kỳ (Decimal as string). */
+  amount: string
+  selectable: boolean
+  /** Mã lý do không chọn được (máy đọc). */
+  reason: string | null
+  /** Lý do bằng tiếng Việt để hiển thị. */
+  reason_text: string | null
+  selected: boolean
 }
 
 /** Giá chuẩn học phí (GET /api/fees/tuition-preview) — Decimal as string. */
@@ -614,6 +634,8 @@ export interface TuitionPreviewResponse {
   total_discount: string
   final_amount: string
   semester_no: number
+  /** Ưu đãi đã cấu hình cho ngành — nguồn DUY NHẤT cho ô tích của dialog. */
+  discount_policies: DiscountPolicyOption[]
 }
 
 export interface FeeWaiveRequest {

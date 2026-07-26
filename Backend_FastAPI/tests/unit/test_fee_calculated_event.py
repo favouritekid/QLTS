@@ -23,6 +23,31 @@ from app.core.events import SystemEvents
 from app.models.finance import FeeTypeEnum
 
 
+def _make_profile_fee_eligible(profile) -> None:
+    """Cho mock hồ sơ đủ thuộc tính THẬT mà ``calculate_fee`` đọc.
+
+    ``MagicMock`` trả một mock truthy cho mọi thuộc tính chưa gán, nên gate nào
+    cũng hiểu sai: ``major_change_requested`` thành "đang đổi ngành",
+    ``priority_object_codes`` thành một mảng không lặp được. Gán tường minh.
+    """
+    profile.status = "submitted"
+    profile.uses_choice_engine = False
+    profile.major_change_requested = False
+    profile.priority_object_codes = []
+    profile.priority_object_evidence = {}
+
+
+def _patch_profile_lock(profile):
+    """``calculate_fee`` lấy hồ sơ qua ``AdmissionRepository.get_by_id_for_update``
+    (khoá hàng), KHÔNG qua ``svc._get_profile``. Mock nhầm chỗ là lý do hai test
+    này từng vỡ với ``'coroutine' object has no attribute '__dict__'``."""
+    return patch(
+        "app.repositories.admission_repository.AdmissionRepository"
+        ".get_by_id_for_update",
+        new=AsyncMock(return_value=profile),
+    )
+
+
 @pytest.mark.asyncio
 async def test_calculate_fee_post_commit_emits_fee_calculated_with_lead_stage_changed():
     """After router commit, the returned callback must fire FEE_CALCULATED
@@ -41,6 +66,7 @@ async def test_calculate_fee_post_commit_emits_fee_calculated_with_lead_stage_ch
     profile = MagicMock()
     profile.id = 99
     profile.__dict__["lead"] = lead  # rooms_for_admission / getattr path
+    _make_profile_fee_eligible(profile)
 
     # --- Wire a service instance with mocked collaborators.
     # db.refresh is the step that populates fee.id in reality; fake it by
@@ -53,9 +79,15 @@ async def test_calculate_fee_post_commit_emits_fee_calculated_with_lead_stage_ch
     svc.db.refresh = _refresh  # type: ignore[method-assign]
     svc.fee_repo = MagicMock()
     svc.fee_repo.check_duplicate = AsyncMock(return_value=None)
+    # ``calculate_fee`` KHÔNG dùng ``_get_profile`` (nó khoá hàng qua
+    # ``AdmissionRepository.get_by_id_for_update``) — mock nhầm chỗ khiến hai
+    # test này hỏng âm thầm: profile thật là mock của AsyncMock db, và
+    # ``profile.__dict__`` vỡ ngay ở bước kiểm IDOR.
     svc._get_profile = AsyncMock(return_value=profile)
     svc._lookup_semester_tuition_amount = AsyncMock(return_value=Decimal("5000000"))
-    svc._calculate_discounts = AsyncMock(return_value=(Decimal("0"), []))
+    # Định giá đi thẳng ``fee_pricing`` (hàm thuần); chỉ cần chặn tầng I/O nạp
+    # chính sách là fee ra không giảm — không mock engine tính.
+    svc._load_discount_policies = AsyncMock(return_value=[])
     svc._get_installment_plan = AsyncMock(return_value=None)
 
     # --- Patch the lead-pipeline sync to simulate a stage transition
@@ -63,7 +95,10 @@ async def test_calculate_fee_post_commit_emits_fee_calculated_with_lead_stage_ch
     async def _fake_sync(db, profile, fee_amount, changed_by_user_id, reason):
         lead.pipeline_stage_id = 20
 
-    with patch(
+    with _patch_profile_lock(profile), patch(
+        "app.services.fee_calculation_service.assert_major_change_cycle_closed",
+        new=AsyncMock(return_value=None),
+    ), patch(
         "app.services.lead_admission_sync.sync_lead_tuition_calculated",
         new=_fake_sync,
     ), patch(
@@ -118,6 +153,7 @@ async def test_calculate_fee_reports_lead_stage_unchanged_when_sync_noop():
     profile = MagicMock()
     profile.id = 99
     profile.__dict__["lead"] = lead
+    _make_profile_fee_eligible(profile)
 
     fee = MagicMock()
     fee.id = 55
@@ -128,10 +164,15 @@ async def test_calculate_fee_reports_lead_stage_unchanged_when_sync_noop():
     svc.fee_repo.check_duplicate = AsyncMock(return_value=None)
     svc.fee_repo.create = AsyncMock(return_value=fee)
     svc._get_profile = AsyncMock(return_value=profile)
-    svc._calculate_discounts = AsyncMock(return_value=(Decimal("0"), []))
+    # Định giá đi thẳng ``fee_pricing`` (hàm thuần); chỉ cần chặn tầng I/O nạp
+    # chính sách là fee ra không giảm — không mock engine tính.
+    svc._load_discount_policies = AsyncMock(return_value=[])
     svc._get_installment_plan = AsyncMock(return_value=None)
 
-    with patch(
+    with _patch_profile_lock(profile), patch(
+        "app.services.fee_calculation_service.assert_major_change_cycle_closed",
+        new=AsyncMock(return_value=None),
+    ), patch(
         "app.services.notification_dispatcher.rooms_for_admission",
         return_value=["role_admin", "unit_1", "user_room_42"],
     ), patch(

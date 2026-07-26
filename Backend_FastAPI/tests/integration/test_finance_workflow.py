@@ -1140,6 +1140,121 @@ class TestSemesterTuitionRecalculation:
         await db.refresh(fee)
         assert fee.base_amount == original_base
 
+    @pytest.mark.asyncio
+    async def test_recalc_giu_nguyen_giam_tay_tinh_lai_chinh_sach(
+        self,
+        db: AsyncSession,
+        finance_fixtures: dict,
+        maker_user: models.User,
+    ):
+        """Đổi giá học kỳ: phần CHÍNH SÁCH bám base mới, phần giảm TAY đứng yên.
+
+        Owner chốt 26-07 (Hướng A) — cùng quy tắc với "Tính lại phí" và "đổi
+        ngành", cả ba đi qua ``fee_pricing.resolve_repricing``.
+
+        Đây cũng là hồi quy cho một lỗi thật: khối tính riêng ở hàm này từng đọc
+        ``ad.discount_policy_id`` trong khi model chỉ có ``policy_id`` ⇒
+        ``AttributeError`` (500) ngay khi khoản phí có bất kỳ dòng giảm giá nào.
+        Không test nào chạm tới vì các ca khác đều không có dòng giảm.
+        """
+        from app.models.finance import FeeAppliedDiscount
+        from app.models.offering_semester_tuition import OfferingSemesterTuition
+        from app.models.tuition_discount_policy import TuitionDiscountPolicy
+        from app.services.fee_calculation_service import (
+            recalculate_fees_for_semester_tuition_change,
+        )
+
+        fee_service = FeeCalculationService(db)
+        invoice_service = InvoiceService(db)
+        profile = finance_fixtures["admission_profile"]
+        ai_id = int(profile.applied_rules["academic_info_id"])
+
+        # Chính sách 10% gắn cho ngành (10% của 10tr = 1tr).
+        policy = TuitionDiscountPolicy(
+            code="RECALC_PCT_10",
+            name="Ưu đãi 10% test",
+            discount_type="percentage",
+            discount_value=Decimal("10"),
+            is_active=True,
+            is_stackable=True,
+            applicable_scope={},
+            target_criteria={},
+        )
+        db.add(policy)
+        await db.flush()
+
+        fee, _ = await fee_service.calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.tuition,
+            base_amount=Decimal("0"),  # bỏ qua với tuition
+            academic_year=2025,
+            discount_policy_ids=[policy.id],
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+        assert fee.base_amount == Decimal("10000000")
+        assert fee.total_discount == Decimal("1000000")
+
+        # Thêm dòng giảm TAY 500k (quyết định của người, có lý do + người duyệt).
+        db.add(FeeAppliedDiscount(
+            fee_id=fee.id,
+            policy_id=None,
+            discount_amount=Decimal("500000"),
+            calculation_snapshot={
+                "source": "manual_discount",
+                "reason": "Hoàn cảnh khó khăn theo quyết định nhà trường",
+                "approved_by": maker_user.id,
+            },
+            application_order=2,
+        ))
+        fee.total_discount = Decimal("1500000")
+        fee.final_amount = Decimal("8500000")
+        await db.commit()
+
+        await invoice_service.generate_invoices_for_fee(
+            fee_id=fee.id,
+            due_date_base=date.today() + timedelta(days=30),
+            user_id=maker_user.id,
+            unit_id=finance_fixtures["unit_id"],
+        )
+        await db.commit()
+
+        # Trường tăng học phí học kỳ 10tr → 20tr.
+        sem_row = (await db.execute(
+            select(OfferingSemesterTuition).where(
+                OfferingSemesterTuition.academic_info_id == ai_id,
+                OfferingSemesterTuition.semester_no == 1,
+            )
+        )).scalar_one()
+        sem_row.amount = Decimal("20000000")
+        await db.flush()
+
+        count = await recalculate_fees_for_semester_tuition_change(db, ai_id)
+        await db.commit()
+        assert count == 1
+
+        await db.refresh(fee)
+        assert fee.base_amount == Decimal("20000000")
+        # 10% bám base MỚI = 2tr (bản cũ đóng băng ở 1tr vì rescale theo một cột
+        # không bao giờ được ghi); giảm tay GIỮ 500k, không rescale theo tỷ lệ.
+        assert fee.total_discount == Decimal("2500000")
+        assert fee.final_amount == Decimal("17500000")
+
+        rows = (await db.execute(
+            select(FeeAppliedDiscount).where(FeeAppliedDiscount.fee_id == fee.id)
+        )).scalars().all()
+        manual = [
+            r for r in rows
+            if (r.calculation_snapshot or {}).get("source") == "manual_discount"
+        ]
+        assert len(manual) == 1, "giảm tay không được rơi khi ghi lại dòng"
+        assert manual[0].discount_amount == Decimal("500000")
+        assert (manual[0].calculation_snapshot or {})["reason"], "giữ cả lý do"
+        by_policy = [r for r in rows if r.policy_id == policy.id]
+        assert len(by_policy) == 1
+        assert by_policy[0].discount_amount == Decimal("2000000")
+
 
 # =============================================================================
 # HK1 SETTLED-STATE PIPELINE GATE TESTS (PR 5 — ADR-002; partial != settled)

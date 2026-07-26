@@ -41,8 +41,12 @@ from app.services.fee_pricing import (
     compute_final_amount,
     compute_manual_discount_amount,
     discount_context_for_profile,
+    is_policy_effective,
     resolve_discounts,
     resolve_fee_pricing,
+    resolve_repricing,
+    select_configured_policies,
+    skip_reason_text,
 )
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.utils.exceptions import (
@@ -126,25 +130,66 @@ def recognized_major_id_for_fee(fee) -> Optional[int]:
 
 
 async def load_discount_policies(
-    db: AsyncSession, policy_ids: "List[int]"
+    db: AsyncSession, policy_ids: "List[int]", *, only_active: bool = True
 ) -> list:
     """Nạp ``TuitionDiscountPolicy`` theo id — I/O DÙNG CHUNG cho mọi luồng định giá.
 
-    Chỉ lọc ``id IN`` + ``is_active`` ở SQL; MỌI quy tắc nghiệp vụ khác (hiệu lực
-    ngày, cộng dồn, giới hạn lượt, phạm vi ngành, điều kiện đối tượng) do
-    ``fee_pricing`` quyết định — một nguồn. Hàm ở tầng module (không phải method)
-    để các hàm module-level như ``recalculate_fees_for_semester_tuition_change``
-    cũng dùng được thay vì tự dựng engine riêng.
+    Chỉ lọc ``id IN`` (+ ``is_active`` khi ``only_active``) ở SQL; MỌI quy tắc
+    nghiệp vụ khác (hiệu lực ngày, cộng dồn, giới hạn lượt, phạm vi ngành, điều
+    kiện đối tượng) do ``fee_pricing`` quyết định — một nguồn. Hàm ở tầng module
+    (không phải method) để các hàm module-level như
+    ``recalculate_fees_for_semester_tuition_change`` cũng dùng được thay vì tự
+    dựng engine riêng.
+
+    ``only_active=False`` dùng cho màn hình LIỆT KÊ: chính sách bị tắt SAU khi đã
+    gắn cho ngành vẫn phải hiện ra kèm lý do, nếu không người dùng thấy cấu hình
+    có 3 ưu đãi mà dialog chỉ hiện 1 và không hiểu vì sao.
     """
     if not policy_ids:
         return []
-    rows = await db.execute(
-        select(TuitionDiscountPolicy).where(
-            TuitionDiscountPolicy.id.in_(policy_ids),
-            TuitionDiscountPolicy.is_active.is_(True),
-        )
-    )
+    conditions = [TuitionDiscountPolicy.id.in_(policy_ids)]
+    if only_active:
+        conditions.append(TuitionDiscountPolicy.is_active.is_(True))
+    rows = await db.execute(select(TuitionDiscountPolicy).where(*conditions))
     return list(rows.scalars().all())
+
+
+async def write_fee_discount_lines(
+    db: AsyncSession,
+    fee_id: int,
+    applied_discounts: "List[Tuple[Optional[int], Decimal, dict]]",
+) -> None:
+    """Xoá + ghi lại toàn bộ dòng ``FeeAppliedDiscount`` của một khoản phí.
+
+    Chỗ DUY NHẤT ghi bảng dòng giảm giá cho các luồng TÍNH LẠI (tính lại phí,
+    đổi ngành, đổi giá học kỳ) — cùng cặp với ``fee_pricing.resolve_repricing``
+    là nơi duy nhất TÍNH. Ai tính bằng engine chung mà tự ghi kiểu khác thì tổng
+    trên ``fee`` và tổng các dòng lại lệch nhau.
+
+    DELETE trước là BẮT BUỘC: unique ``uq_fee_applied_discount_fee_policy`` KHÔNG
+    chặn nhiều dòng ``policy_id IS NULL`` (Postgres coi NULL là distinct) nên
+    không DELETE sẽ chồng dòng qua mỗi lần tính lại.
+
+    Ở tầng module (không phải method) để hàm module-level
+    ``recalculate_fees_for_semester_tuition_change`` cũng dùng được.
+    """
+    await db.execute(
+        sa.delete(FeeAppliedDiscount).where(FeeAppliedDiscount.fee_id == fee_id)
+    )
+    await db.flush()
+    for order, (policy_id, discount_amount, snapshot) in enumerate(
+        applied_discounts, 1
+    ):
+        db.add(
+            FeeAppliedDiscount(
+                fee_id=fee_id,
+                policy_id=policy_id,
+                discount_amount=discount_amount,
+                calculation_snapshot=snapshot,
+                application_order=order,
+            )
+        )
+    await db.flush()
 
 
 async def is_major_change_cycle_open(
@@ -838,6 +883,7 @@ class FeeCalculationService:
         semester_no: Optional[int] = None,
         target_final_amount: Optional[Decimal] = None,
         manual_discount_reason: Optional[str] = None,
+        selected_discount_policy_ids: Optional[List[int]] = None,
     ) -> Tuple[Fee, Optional[Callable]]:
         """
         Calculate fee for an admission profile.
@@ -868,6 +914,12 @@ class FeeCalculationService:
             semester_no: Semester number for tuition fees (None for non-tuition).
                 Defaults to 1 for tuition if not provided — lives in service
                 so both HTTP callers and direct callers get the default.
+            selected_discount_policy_ids: chính sách ưu đãi người dùng TỰ CHỌN
+                (đường HTTP). Phải là tập con của cấu hình ngành — owner chốt
+                26-07: officer/kế toán chỉ được chọn trong tập đã cấu hình.
+                ``None`` = không nêu ý kiến ⇒ áp toàn bộ cấu hình (hành vi cũ);
+                ``[]`` = chọn không áp chính sách nào. Chỉ dùng ở chế độ
+                service-resolve (``base_amount=None``).
 
         Returns:
             Tuple of (Fee, post_commit_callback)
@@ -913,7 +965,16 @@ class FeeCalculationService:
             raise ValueError(
                 "calculate_fee: base_amount=None (service-resolve mode) cannot "
                 "be combined with an explicit discount_policy_ids — pass both "
-                "None (router) or both explicit (direct caller)."
+                "None (router) or both explicit (direct caller). Lựa chọn của "
+                "người dùng đi qua selected_discount_policy_ids."
+            )
+        # Lựa chọn của người dùng chỉ có nghĩa khi service tự resolve cấu hình
+        # ngành (mới có tập hợp lệ để giao). Caller truyền base_amount tường minh
+        # thì đã tự quyết định chính sách qua ``discount_policy_ids``.
+        if base_amount is not None and selected_discount_policy_ids is not None:
+            raise ValueError(
+                "calculate_fee: selected_discount_policy_ids chỉ dùng ở chế độ "
+                "service-resolve (base_amount=None)."
             )
 
         # Profile-first row lock — serialize vs choice mutation. Acquiring the
@@ -975,10 +1036,17 @@ class FeeCalculationService:
         if base_amount is None:
             academic_info = await resolve_fee_academic_info(self.db, profile)
             priced_from_ai_id = academic_info.id
-            if discount_policy_ids is None:
-                discount_policy_ids = list(
-                    academic_info.applied_discount_policy_ids or []
+            # Tập áp dụng = lựa chọn người dùng GIAO cấu hình ngành. Quy tắc
+            # "chỉ được chọn trong cấu hình" nằm ở ``select_configured_policies``
+            # (một chỗ duy nhất, dùng chung với endpoint liệt kê cho giao diện —
+            # nút hiện ra và điều server nhận không được lệch nhau).
+            try:
+                discount_policy_ids = select_configured_policies(
+                    academic_info.applied_discount_policy_ids or [],
+                    selected_discount_policy_ids,
                 )
+            except ValueError as exc:
+                raise BadRequest(str(exc))
             if fee_type == FeeTypeEnum.tuition:
                 # Giá chuẩn HK từ offering_semester_tuition là BASE (bắt buộc có
                 # cấu hình HK). Số tiền nghĩa vụ KHÔNG do người dùng nhập tay —
@@ -1053,6 +1121,11 @@ class FeeCalculationService:
             approved_by=user_id,
             calculated_at=datetime.now(timezone.utc).isoformat(),
             context=_discount_ctx,
+            # Chỉ đóng dấu người chọn khi đây THỰC SỰ là lựa chọn tay — áp theo
+            # cấu hình mặc định thì không có ai để quy trách nhiệm.
+            selected_by=(
+                user_id if selected_discount_policy_ids is not None else None
+            ),
         )
         total_discount = pricing.total_discount
         applied_discounts = pricing.lines_as_tuples()
@@ -1178,33 +1251,101 @@ class FeeCalculationService:
         self,
         profile: "models.AdmissionProfile",
         semester_no: int,
-    ) -> Tuple[Decimal, Decimal, Decimal]:
+        *,
+        selected_discount_policy_ids: Optional[List[int]] = None,
+    ) -> Tuple[Decimal, Decimal, Decimal, List[dict]]:
         """Giá chuẩn học phí (read-only, KHÔNG persist) cho dialog "Tính phí" —
         hiển base / giảm giá / dự kiến phải thu để người dùng đối chiếu khi chọn
-        lịch thu (vd chia "đóng trước + còn lại").
+        lịch thu (vd chia "đóng trước + còn lại") và chọn ưu đãi.
 
         Tái dùng ĐÚNG resolver giá + discount như ``calculate_fee`` (cùng nguồn
         sự thật ``resolve_fee_academic_info`` + ``_semester_tuition_amount_for_ai``
-        + ``_calculate_discounts``) nên số preview khớp với số luồng cũ tạo ra.
-        Router lo IDOR (``_fee_calc_authorized``) trước khi gọi — service chỉ tính.
+        + ``select_configured_policies`` + ``resolve_discounts``) nên số xem trước
+        khớp tuyệt đối với số mà nút "Tính phí" tạo ra. Router lo IDOR
+        (``_fee_calc_authorized``) trước khi gọi — service chỉ tính.
+
+        Danh sách chính sách trả kèm gồm CẢ chính sách không chọn được, mỗi cái
+        có ``selectable`` + ``reason`` lấy từ chính ``is_policy_effective`` — cùng
+        predicate mà luồng tính phí thật dùng, nên ô tích của giao diện không thể
+        hứa một ưu đãi mà máy sẽ bỏ qua.
 
         Returns:
-            (base_amount, total_discount, final_amount) cho HK ``semester_no``.
+            ``(base_amount, total_discount, final_amount, policy_options)``.
 
         Raises:
-            BadRequest: ngành chưa xác định (multi-NV chưa công bố) / chưa cấu
-                hình học phí HK.
+            BadRequest: ngành chưa xác định (multi-NV chưa công bố) · chưa cấu
+                hình học phí HK · chọn chính sách ngoài cấu hình của ngành.
         """
         academic_info = await resolve_fee_academic_info(self.db, profile)
         base_amount = await self._semester_tuition_amount_for_ai(
             academic_info.id, semester_no
         )
-        discount_policy_ids = list(academic_info.applied_discount_policy_ids or [])
-        total_discount, _ = await self._calculate_discounts(
-            base_amount, discount_policy_ids
+        configured_ids = list(academic_info.applied_discount_policy_ids or [])
+        try:
+            applied_ids = select_configured_policies(
+                configured_ids, selected_discount_policy_ids
+            )
+        except ValueError as exc:
+            raise BadRequest(str(exc))
+
+        context = discount_context_for_profile(profile)
+        # only_active=False: chính sách bị tắt sau khi đã gắn vẫn phải hiện kèm
+        # lý do, thay vì biến mất khỏi dialog không dấu vết.
+        all_policies = await load_discount_policies(
+            self.db, configured_ids, only_active=False
+        )
+        by_id = {p.id: p for p in all_policies}
+        applied_set = set(applied_ids)
+
+        total_discount, _lines = resolve_discounts(
+            base_amount,
+            [by_id[pid] for pid in applied_ids if pid in by_id],
+            calculated_at=datetime.now(timezone.utc).isoformat(),
+            context=context,
         )
         final_amount = compute_final_amount(base_amount, total_discount)
-        return base_amount, total_discount, final_amount
+
+        today = date.today()
+        options: List[dict] = []
+        for pid in configured_ids:
+            policy = by_id.get(pid)
+            if policy is None:
+                # Cấu hình trỏ tới chính sách đã bị XOÁ. Hiện ra để người quản trị
+                # thấy mà dọn — im lặng bỏ thì cấu hình rác nằm đó mãi.
+                options.append({
+                    "id": pid,
+                    "name": f"(Chính sách đã bị xoá — id {pid})",
+                    "discount_type": "amount",
+                    "discount_value": Decimal("0"),
+                    "amount": Decimal("0"),
+                    "selectable": False,
+                    "reason": "khong_ton_tai",
+                    "reason_text": "Chính sách không còn tồn tại",
+                    "selected": False,
+                })
+                continue
+
+            ok, reason = is_policy_effective(policy, today, context)
+            # Số tiền khi áp MỘT MÌNH trên giá chuẩn — con số ổn định để người
+            # dùng so sánh, không nhảy theo việc tích/bỏ tích chính sách khác.
+            alone, _ = resolve_discounts(
+                base_amount, [policy], as_of=today, context=context
+            )
+            options.append({
+                "id": policy.id,
+                "name": policy.name,
+                "discount_type": getattr(
+                    policy.discount_type, "value", policy.discount_type
+                ),
+                "discount_value": policy.discount_value,
+                "amount": alone,
+                "selectable": ok,
+                "reason": reason,
+                "reason_text": skip_reason_text(reason),
+                "selected": ok and pid in applied_set,
+            })
+
+        return base_amount, total_discount, final_amount, options
 
     async def recalculate_fee(
         self,
@@ -1244,21 +1385,6 @@ class FeeCalculationService:
                 f"Paid amount: {fee.paid_amount} VND"
             )
 
-        # Pha 2: chặn tính lại phí có MIỄN/GIẢM THỦ CÔNG (message cụ thể; cũng bắt
-        # cả khi HĐ đã bị HỦY HẾT — lúc đó issued-block dưới không fire). recalc
-        # chỉ tính lại discount theo policy (existing_policy_ids loại policy_id=NULL)
-        # → sẽ BỎ RƠI dòng giảm tay khỏi final (final nhảy lên) + để lại dòng
-        # orphan. Giảm tay là quyết định riêng (học bổng…), không tự suy lại theo
-        # base mới → bắt hủy & tạo lại thay vì âm thầm mất.
-        if any(
-            (ad.calculation_snapshot or {}).get("source") == "manual_discount"
-            for ad in fee.applied_discounts
-        ):
-            raise BusinessRuleViolation(
-                "Không thể tính lại phí có miễn/giảm học phí thủ công — hãy hủy "
-                "phí rồi tạo lại với mức áp dụng mới."
-            )
-
         # Block when any non-cancelled invoice is beyond draft (#445). Recalc đổi
         # ``fee.final_amount`` nhưng payment thu theo ``invoice.amount`` (KHÔNG
         # đọc fee) → fee 10tr/HĐ issued 10tr, recalc 8tr ⇒ vẫn thu 10tr (dư 2tr);
@@ -1285,15 +1411,25 @@ class FeeCalculationService:
                 "tính lại."
             )
 
-        # Get existing discount policy IDs
+        # ĐỊNH GIÁ LẠI — dùng CHUNG ``fee_pricing.resolve_repricing`` với hai
+        # đường tính lại còn lại (đổi ngành, đổi giá học kỳ) nên ba nơi luôn trả
+        # cùng một câu trả lời. Phần chính sách tính lại trên base mới; phần
+        # MIỄN/GIẢM TAY giữ nguyên số đã duyệt (owner chốt 26-07 — xem docstring
+        # ``resolve_repricing``). Trước đây hàm này TỪ CHỐI tính lại khi có giảm
+        # tay, buộc hủy phí & tạo lại.
         existing_policy_ids = [
             ad.policy_id for ad in fee.applied_discounts if ad.policy_id
         ]
-
-        # Recalculate discounts with new base
-        total_discount, applied_discounts = await self._calculate_discounts(
-            new_base_amount, existing_policy_ids
+        pricing = resolve_repricing(
+            new_base_amount,
+            await self._load_discount_policies(existing_policy_ids),
+            list(fee.applied_discounts),
+            calculated_at=datetime.now(timezone.utc).isoformat(),
+            context=discount_context_for_profile(fee.admission_profile),
         )
+        total_discount = pricing.total_discount
+        applied_discounts = pricing.lines_as_tuples()
+        manual_total = total_discount - pricing.policy_discount
 
         # Update fee
         old_base = fee.base_amount
@@ -1301,11 +1437,23 @@ class FeeCalculationService:
 
         fee.base_amount = new_base_amount
         fee.total_discount = total_discount
-        fee.final_amount = compute_final_amount(new_base_amount, total_discount)
+        fee.final_amount = pricing.final_amount
         fee.version += 1
         fee.notes = f"{fee.notes or ''}\n[{datetime.now(timezone.utc).isoformat()}] " \
                     f"Recalculated by user {user_id}: {old_base} → {new_base_amount}. " \
                     f"Reason: {reason}"
+
+        # Ghi lại dòng discount theo base mới. Bản cũ TÍNH rồi VỨT — số trên
+        # ``fee.total_discount`` đổi nhưng bảng dòng giữ số cũ, nên drawer/audit
+        # cộng ra một tổng khác với chính khoản phí đó.
+        await self._write_discount_lines(fee, applied_discounts)
+        if manual_total > 0:
+            log.info(
+                "fee_recalc_preserved_manual_discount",
+                fee_id=fee_id,
+                manual_total=str(manual_total),
+                new_base=str(new_base_amount),
+            )
 
         # Đồng bộ hóa đơn DRAFT (nếu có) theo final mới để fee↔invoice không lệch
         # — chỉ tới đây khi mọi HĐ còn draft (guard non-draft ở trên). Mirror
@@ -1912,37 +2060,12 @@ class FeeCalculationService:
         """Wrapper method của ``load_discount_policies`` (dùng session của service)."""
         return await load_discount_policies(self.db, policy_ids)
 
-    async def _calculate_discounts(
-        self,
-        base_amount: Decimal,
-        policy_ids: List[int],
-        *,
-        as_of: Optional[date] = None,
-    ) -> Tuple[Decimal, List[Tuple[int, Decimal, dict]]]:
-        """Giảm giá theo chính sách — I/O ONLY. Phép tính nằm ở
-        ``app/services/fee_pricing.resolve_discounts`` (nguồn duy nhất).
-
-        Hàm này chỉ làm hai việc: (1) load chính sách theo id, (2) gọi engine
-        thuần. Giữ nguyên chữ ký/kiểu trả về cũ ``(total, [(policy_id, amount,
-        snapshot)])`` nên mọi call site hiện tại không phải sửa.
-
-        🔴 KHÔNG lọc hiệu lực/cộng dồn/loại giảm ở đây — engine làm. Trước đây
-        chính hàm này tự so ``discount_type == "percent"`` trong khi CSDL lưu
-        ``"percentage"`` nên mọi chính sách phần trăm bị tính thành số tiền cố
-        định (10% → 10 đồng), và ``valid_from``/``valid_to``/``is_stackable``
-        không được xét. Thêm điều kiện mới thì sửa ở ``fee_pricing``.
-        """
-        policies = await self._load_discount_policies(policy_ids)
-        if not policies:
-            return Decimal("0"), []
-
-        total, lines = resolve_discounts(
-            base_amount,
-            policies,
-            as_of=as_of,
-            calculated_at=datetime.now(timezone.utc).isoformat(),
-        )
-        return total, [line.as_tuple() for line in lines]
+    # 🔴 ĐÃ XOÁ ``_calculate_discounts``. Nó nhận policy_id rồi gọi engine, nhưng
+    # KHÔNG có tham số ngữ cảnh đối tượng ưu tiên — ai gọi nó thay vì
+    # ``resolve_fee_pricing``/``resolve_repricing`` sẽ âm thầm đánh rơi mọi chính
+    # sách có điều kiện đối tượng. Ba luồng định giá (tính lần đầu / tính lại /
+    # xem trước) nay đi thẳng ``fee_pricing``, nên giữ lại chỉ là mời gọi dùng
+    # nhầm. Cần load chính sách theo id: ``_load_discount_policies``.
 
     # ======================================================================
     # MAJOR-CHANGE REPRICE (đổi ngành có khấu trừ phiếu thu + kế toán xác nhận)
@@ -1953,34 +2076,8 @@ class FeeCalculationService:
         fee: Fee,
         applied_discounts: List[Tuple[Optional[int], Decimal, dict]],
     ) -> None:
-        """Xoá + ghi lại toàn bộ dòng ``FeeAppliedDiscount`` của fee theo ngành mới.
-
-        Reuse logic ghi từ ``calculate_fee`` (chỗ DUY NHẤT INSERT
-        FeeAppliedDiscount). ``recalculate_fee`` KHÔNG ghi lại line items (tính
-        ``applied_discounts`` rồi vứt) → drawer/audit lệch; reprice PHẢI tự đồng
-        bộ. DELETE trước là BẮT BUỘC: unique ``uq_fee_applied_discount_fee_policy``
-        KHÔNG chặn nhiều dòng ``policy_id IS NULL`` (Postgres coi NULL distinct)
-        nên không DELETE sẽ chồng dòng qua mỗi lần reprice.
-        """
-        await self.db.execute(
-            sa.delete(FeeAppliedDiscount).where(
-                FeeAppliedDiscount.fee_id == fee.id
-            )
-        )
-        await self.db.flush()
-        for order, (policy_id, discount_amount, snapshot) in enumerate(
-            applied_discounts, 1
-        ):
-            self.db.add(
-                FeeAppliedDiscount(
-                    fee_id=fee.id,
-                    policy_id=policy_id,
-                    discount_amount=discount_amount,
-                    calculation_snapshot=snapshot,
-                    application_order=order,
-                )
-            )
-        await self.db.flush()
+        """Wrapper method của ``write_fee_discount_lines`` (session của service)."""
+        await write_fee_discount_lines(self.db, fee.id, applied_discounts)
 
     async def reprice_for_major_change(
         self,
@@ -1999,8 +2096,12 @@ class FeeCalculationService:
         Returns ``(fee, changed)``: ``changed=False`` khi no-op (drift gate — ngành
         không đổi) hoặc flag OFF; caller KHÔNG dispatch. Raise
         ``BusinessRuleViolation`` cho các ca fail-closed ngoài scope v1 (nhiều/
-        không có invoice · giảm tay · post-decision · sinh dư · ngành mới miễn phí
-        · còn payment chờ · còn chu kỳ chờ kế toán).
+        không có invoice · post-decision · sinh dư · ngành mới miễn phí · còn
+        payment chờ · còn chu kỳ chờ kế toán).
+
+        Miễn/giảm TAY KHÔNG còn bị chặn: nó được bảo toàn nguyên số qua
+        ``fee_pricing.resolve_repricing`` (owner chốt 26-07). Chặn ở đây từng là
+        ngõ cụt — hồ sơ đã đóng tiền, đổi ngành xong không định giá lại được.
         """
         if not settings.MAJOR_CHANGE_REPRICE_ENABLED:
             return None, False
@@ -2009,16 +2110,13 @@ class FeeCalculationService:
 
         # (1) Giá ngành MỚI — READ-ONLY, TRƯỚC khi vào khoá (giảm thời gian giữ
         # khoá; resolve_fee_academic_info + _semester_tuition_amount_for_ai +
-        # _calculate_discounts thuần đọc, autoflush=False nên không flush ngầm).
+        # load_discount_policies thuần đọc, autoflush=False nên không flush ngầm).
         academic_info = await resolve_fee_academic_info(self.db, profile)
         new_base = await self._semester_tuition_amount_for_ai(
             academic_info.id, semester_no
         )
         policy_ids = list(academic_info.applied_discount_policy_ids or [])
-        new_total_discount, applied_discounts = await self._calculate_discounts(
-            new_base, policy_ids
-        )
-        new_final = compute_final_amount(new_base, new_total_discount)
+        new_policies = await self._load_discount_policies(policy_ids)
 
         # (2) Tìm active HK1 fee → active invoice CỦA NÓ → assert đúng 1 → khoá
         # invoice TRƯỚC, fee SAU (khớp thứ tự luồng payment/verify — tránh ABBA).
@@ -2104,6 +2202,33 @@ class FeeCalculationService:
             and fee.priced_from_academic_info_id == academic_info.id
         ):
             return fee, False
+        # Dòng giảm giá hiện có — query TƯỜNG MINH thay vì ``fee.applied_discounts``
+        # (selectin có thể chưa nạp sau ``get_for_update``). Phải có TRƯỚC khi so
+        # giá ở nhánh legacy: giảm TAY nằm trong ``fee.total_discount`` nên bỏ nó
+        # ra khỏi phép tính sẽ làm nhánh đó so lệch và reprice vô cớ.
+        existing_lines = list(
+            (
+                await self.db.execute(
+                    select(FeeAppliedDiscount).where(
+                        FeeAppliedDiscount.fee_id == fee.id
+                    )
+                )
+            ).scalars().all()
+        )
+        # ĐỊNH GIÁ LẠI theo ngành MỚI — cùng ``resolve_repricing`` với hai đường
+        # tính lại còn lại. Giảm TAY được BẢO TOÀN nguyên số (owner chốt 26-07):
+        # trước đây đổi ngành TỪ CHỐI hồ sơ có giảm tay, mà hồ sơ đó đã đóng tiền
+        # nên từ chối = kẹt giữa chừng, không có đường ra bằng giao diện.
+        pricing = resolve_repricing(
+            new_base,
+            new_policies,
+            existing_lines,
+            calculated_at=datetime.now(timezone.utc).isoformat(),
+            context=discount_context_for_profile(profile),
+        )
+        new_total_discount = pricing.total_discount
+        applied_discounts = pricing.lines_as_tuples()
+        new_final = pricing.final_amount
         # Fee CŨ/legacy (priced_from NULL, backfill chỉ điền khi resolved khác NULL):
         # không tin được priced_from → so GIÁ đã tính. Nếu base/discount/final trùng
         # giá hiện tại ⇒ không có gì đổi ⇒ no-op (tránh reprice + SUPERSEDE GIẤY hợp
@@ -2119,26 +2244,6 @@ class FeeCalculationService:
             fee.priced_from_academic_info_id = academic_info.id
             await self.db.flush()
             return fee, False
-        # (a) Giảm học phí THỦ CÔNG → ngoài scope v1 (reprice DELETE/INSERT lại
-        # dòng discount theo ngành mới sẽ làm RƠI giảm tay). Query tường minh
-        # thay vì fee.applied_discounts (selectin có thể chưa nạp sau get_for_update).
-        existing_lines = list(
-            (
-                await self.db.execute(
-                    select(FeeAppliedDiscount).where(
-                        FeeAppliedDiscount.fee_id == fee.id
-                    )
-                )
-            ).scalars().all()
-        )
-        if any(
-            (ad.calculation_snapshot or {}).get("source") == "manual_discount"
-            for ad in existing_lines
-        ):
-            raise BusinessRuleViolation(
-                "Hồ sơ có giảm học phí thủ công — đổi ngành cần xử tài chính "
-                "thủ công."
-            )
         # (b) Post-decision: còn nguyện vọng decision=='admitted' → reprice/doc-
         # resolve sẽ bám ngành cũ (reset decision + quota/seat ngoài scope v1).
         choice_decisions = list(
@@ -2679,6 +2784,9 @@ async def recalculate_fees_for_semester_tuition_change(
             selectinload(Fee.applied_discounts),
             selectinload(Fee.invoices),
             selectinload(Fee.installment_plan),
+            # Ngữ cảnh xét điều kiện ĐỐI TƯỢNG ƯU TIÊN của chính sách giảm giá —
+            # nạp sẵn vì truy cập lazy trong vòng lặp async sẽ vỡ (MissingGreenlet).
+            selectinload(Fee.admission_profile),
         )
         .execution_options(populate_existing=True)
     )
@@ -2743,44 +2851,33 @@ async def recalculate_fees_for_semester_tuition_change(
         # Nay đọc lại CHÍNH SÁCH và tính lại bằng engine chung (đúng phần trăm,
         # đúng hiệu lực ngày, đúng cộng dồn).
         #
-        # GIẢM TAY được BẢO TOÀN nguyên số: nó là quyết định của người (học bổng,
-        # hoàn cảnh), không suy lại được từ base mới — và tự rescale sẽ âm thầm đổi
-        # mức đã ấn định. Ghi log để kế toán biết cần rà lại nếu muốn đổi.
+        # GIẢM TAY được BẢO TOÀN nguyên số qua ``resolve_repricing`` — CÙNG hàm
+        # mà "tính lại phí" và "đổi ngành" dùng, nên ba đường không thể trả ba
+        # con số khác nhau cho cùng một khoản phí.
         _policy_ids = [
-            ad.discount_policy_id
-            for ad in fee.applied_discounts
-            if ad.discount_policy_id is not None
+            ad.policy_id for ad in fee.applied_discounts if ad.policy_id is not None
         ]
-        _manual_lines = [
-            ad for ad in fee.applied_discounts if ad.discount_policy_id is None
-        ]
-        _policies = await load_discount_policies(db, _policy_ids)
-        _policy_total, _policy_lines = resolve_discounts(
+        pricing = resolve_repricing(
             new_base,
-            _policies,
+            await load_discount_policies(db, _policy_ids),
+            list(fee.applied_discounts),
             calculated_at=datetime.now(timezone.utc).isoformat(),
+            context=discount_context_for_profile(fee.admission_profile),
         )
-        _by_policy = {line.policy_id: line for line in _policy_lines}
-        total_discount = _policy_total
-        for ad in fee.applied_discounts:
-            if ad.discount_policy_id is None:
-                total_discount += ad.discount_amount  # giảm tay: giữ nguyên
-                continue
-            line = _by_policy.get(ad.discount_policy_id)
-            # Chính sách hết hiệu lực / ngoài phạm vi ⇒ engine không trả dòng nào:
-            # hạ về 0 thay vì giữ số cũ (giữ số cũ là áp một ưu đãi đã hết hạn).
-            ad.discount_amount = line.amount if line else Decimal("0")
-        if _manual_lines:
+        _manual_total = pricing.total_discount - pricing.policy_discount
+        await write_fee_discount_lines(db, fee.id, pricing.lines_as_tuples())
+        if _manual_total > 0:
             log.info(
                 "fee_recalc_semester_change_preserved_manual_discount",
                 fee_id=fee.id,
-                manual_total=str(sum(a.discount_amount for a in _manual_lines)),
+                manual_total=str(_manual_total),
+                new_base=str(new_base),
             )
 
         old_final = fee.final_amount
         fee.base_amount = new_base
-        fee.total_discount = min(total_discount, new_base)
-        fee.final_amount = compute_final_amount(new_base, fee.total_discount)
+        fee.total_discount = pricing.total_discount
+        fee.final_amount = pricing.final_amount
         fee.version += 1
 
         # If fee has draft invoices, rewrite their amounts to match

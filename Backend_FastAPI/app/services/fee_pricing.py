@@ -46,13 +46,21 @@ QUY TẮC GIẢM GIÁ (``resolve_discounts``) — và vì sao từng cái tồn 
 6. **Chặn trên**: tổng giảm không vượt ``base_amount`` (final không âm). Bản cũ cap
    theo "tổng phần trăm ≤ 100" nên chính sách kiểu VND vượt base vẫn lọt.
 
+7. **AI ĐƯỢC CHỌN** (``select_configured_policies``). Officer/kế toán chỉ chọn
+   được TRONG TẬP đã cấu hình cho ngành; id ngoài tập ⇒ lỗi có chữ, KHÔNG lọc im
+   lặng (lọc im lặng = người dùng tưởng đã giảm mà hoá đơn thì không).
+8. **ĐỊNH GIÁ LẠI** (``resolve_repricing``). Ba đường tính lại — bấm "Tính lại
+   phí" · đổi ngành · nhà trường đổi giá học kỳ — dùng CHUNG một hàm. Phần chính
+   sách tính lại theo base mới; phần MIỄN/GIẢM TAY giữ nguyên số đã duyệt (owner
+   chốt 26-07, Hướng A). Trước đó ba nơi trả ba câu trả lời khác nhau.
+
 PENDING_DECISIONS (cần owner chốt, đang fail-closed / bỏ qua có ghi log):
 * Tăng ``current_usage`` ở đâu (khi ghi ``FeeAppliedDiscount``? khi thu tiền?) và
   có hoàn lượt khi huỷ phí không.
-* Chính sách khai ``applicable_scope`` / ``target_criteria`` (vd nặng nhọc, đối
-  tượng ưu tiên) hiện BỊ BỎ QUA dù đã gắn cấu hình. Chốt trước khi mở: chính sách
-  nào thực sự GIẢM số phải thu, chính sách nào là CẤP BÙ (thu đủ, Nhà nước hoàn
-  cho trường — không được trừ vào ``final_amount``), và ai xác minh đối tượng.
+* Chính sách khai ``applicable_scope`` riêng, hoặc ``target_criteria`` ngoài
+  ``priority_types`` (vd vùng/GPA), vẫn BỊ BỎ QUA dù đã gắn cấu hình — chưa chốt
+  nghiệp vụ nên fail-closed. (Điều kiện ĐỐI TƯỢNG ƯU TIÊN thì đã chốt: chỉ áp khi
+  minh chứng ``verified``. Ngành nặng nhọc thì KHÔNG giảm — Nhà nước cấp bù.)
 * ``tuition_discount_service.get_applicable_policies`` (dùng cho trang admin xem
   thử) TỰ ĐỘNG match scope/criteria trên mọi chính sách active — nên nó có thể
   hứa một con số mà luồng thu thật không áp. Chốt xong nghiệp vụ thì gom một
@@ -246,11 +254,73 @@ def is_policy_effective(
     return True, None
 
 
+# Mã lý do → chữ tiếng Việt. Ở CẠNH predicate sinh ra mã (``is_policy_effective``)
+# nên thêm một lý do mới là thấy ngay phải viết câu giải thích cho người dùng —
+# để bảng này ở tầng router/FE thì sớm muộn cũng có mã không ai dịch, và giao
+# diện hiện ô tích xám không kèm lý do.
+DISCOUNT_SKIP_REASON_TEXT: dict[str, str] = {
+    "inactive": "Chính sách đã ngừng hoạt động",
+    "chua_den_hieu_luc": "Chưa tới ngày bắt đầu hiệu lực",
+    "da_het_hieu_luc": "Đã hết hạn hiệu lực",
+    "het_luot_su_dung": "Đã dùng hết số lượt cho phép",
+    "co_pham_vi_rieng_chua_chot_nghiep_vu": (
+        "Chính sách khai phạm vi riêng — chưa chốt nghiệp vụ nên không áp tự động"
+    ),
+    "co_dieu_kien_chua_chot_nghiep_vu": (
+        "Chính sách khai điều kiện mà hệ thống chưa kiểm được"
+    ),
+    "dieu_kien_doi_tuong_rong": "Cấu hình đối tượng ưu tiên đang để trống",
+    "thieu_ngu_canh_doi_tuong": "Không đọc được đối tượng ưu tiên của hồ sơ",
+    "khong_thuoc_doi_tuong_da_xac_minh": (
+        "Hồ sơ không thuộc đối tượng ưu tiên đã được xác minh"
+    ),
+}
+
+
+def skip_reason_text(reason: Optional[str]) -> Optional[str]:
+    """Chữ tiếng Việt cho mã lý do; mã lạ thì trả chính nó (không nuốt thông tin)."""
+    if not reason:
+        return None
+    return DISCOUNT_SKIP_REASON_TEXT.get(reason, reason)
+
+
 def _policy_sort_key(policy: Any) -> tuple[int, int]:
     """``priority`` giảm dần (cao xét trước), rồi ``id`` tăng cho xác định."""
     priority = getattr(policy, "priority", 0) or 0
     pid = getattr(policy, "id", 0) or 0
     return (-int(priority), int(pid))
+
+
+def select_configured_policies(
+    configured_ids: Sequence[int],
+    selected_ids: Optional[Sequence[int]],
+) -> list[int]:
+    """Tập chính sách sẽ áp = lựa chọn của người dùng GIAO với cấu hình của ngành.
+
+    Owner chốt 26-07: officer/kế toán **chỉ được chọn trong tập đã cấu hình cho
+    ngành** — không được tự thêm chính sách ngoài cấu hình. Ở đây là chỗ DUY
+    NHẤT quyết định điều đó, để giao diện và luồng thu thật không lệch nhau.
+
+    * ``selected_ids is None`` = người dùng không nêu ý kiến ⇒ áp toàn bộ cấu
+      hình (hành vi cũ, giữ nguyên cho mọi caller sẵn có).
+    * ``selected_ids == []`` = chọn KHÔNG áp chính sách nào ⇒ tôn trọng.
+    * id ngoài cấu hình ⇒ ``ValueError`` (bên gọi đổi thành lỗi HTTP có chữ).
+      Lọc im lặng thì người dùng tưởng đã giảm mà hoá đơn lại không giảm.
+
+    Trả về theo THỨ TỰ cấu hình để kết quả xác định, không phụ thuộc thứ tự bấm.
+    """
+    configured = list(dict.fromkeys(configured_ids or []))
+    if selected_ids is None:
+        return configured
+
+    selected = list(dict.fromkeys(selected_ids))
+    ngoai_cau_hinh = [pid for pid in selected if pid not in configured]
+    if ngoai_cau_hinh:
+        raise ValueError(
+            "Chính sách ưu đãi không nằm trong cấu hình của ngành: "
+            + ", ".join(str(pid) for pid in ngoai_cau_hinh)
+        )
+    return [pid for pid in configured if pid in set(selected)]
 
 
 def resolve_discounts(
@@ -260,6 +330,7 @@ def resolve_discounts(
     as_of: Optional[date] = None,
     calculated_at: Optional[str] = None,
     context: Optional[DiscountContext] = None,
+    selected_by: Optional[int] = None,
 ) -> tuple[Decimal, list[DiscountLine]]:
     """Tính giảm giá theo CHÍNH SÁCH. Thuần — không DB, không side effect.
 
@@ -269,6 +340,9 @@ def resolve_discounts(
         as_of: ngày xét hiệu lực (mặc định hôm nay).
         calculated_at: ISO timestamp ghi vào snapshot (bên gọi truyền để mọi dòng
             trong cùng một lần tính có CÙNG mốc thời gian).
+        selected_by: id người TỰ TAY chọn chính sách này (None = áp theo cấu hình
+            mặc định của ngành). Ghi vào snapshot để sau này còn truy được ai
+            quyết định giảm cho hồ sơ nào.
 
     Returns:
         ``(total_discount, lines)`` — đã làm tròn tới đồng-xu và chặn trên ở
@@ -324,19 +398,22 @@ def resolve_discounts(
             continue
 
         total += amount
+        snapshot = {
+            "policy_name": getattr(policy, "name", None),
+            "discount_type": type_value,
+            "discount_value": str(raw_value),
+            "priority": getattr(policy, "priority", 0),
+            "is_stackable": _is_stackable(policy),
+            "as_of": str(as_of),
+            "calculated_at": calculated_at,
+        }
+        if selected_by is not None:
+            snapshot["selected_by"] = selected_by
         lines.append(
             DiscountLine(
                 policy_id=getattr(policy, "id", None),
                 amount=amount,
-                snapshot={
-                    "policy_name": getattr(policy, "name", None),
-                    "discount_type": type_value,
-                    "discount_value": str(raw_value),
-                    "priority": getattr(policy, "priority", 0),
-                    "is_stackable": _is_stackable(policy),
-                    "as_of": str(as_of),
-                    "calculated_at": calculated_at,
-                },
+                snapshot=snapshot,
             )
         )
 
@@ -402,6 +479,117 @@ def compute_manual_discount_amount(
     return _q(base_amount - policy_discount - target_final_amount)
 
 
+def _line_snapshot(line: Any) -> dict[str, Any]:
+    return getattr(line, "calculation_snapshot", None) or {}
+
+
+def is_manual_discount_line(line: Any) -> bool:
+    """Dòng giảm TAY? Đọc nhãn ``source`` trong snapshot.
+
+    KHÔNG dựa ``policy_id IS NULL``: cột đó là ``ON DELETE SET NULL``, nên một
+    chính sách bị xoá cũng để lại dòng ``policy_id=None`` — dòng đó KHÔNG phải
+    quyết định miễn/giảm của con người và không được bảo toàn như giảm tay.
+    """
+    return _line_snapshot(line).get("source") == MANUAL_DISCOUNT_SOURCE
+
+
+def resolve_repricing(
+    base_amount: Decimal,
+    policies: Sequence[Any],
+    existing_lines: Sequence[Any],
+    *,
+    as_of: Optional[date] = None,
+    calculated_at: Optional[str] = None,
+    context: Optional[DiscountContext] = None,
+) -> FeePricing:
+    """ĐỊNH GIÁ LẠI một khoản phí ĐÃ TỒN TẠI — nguồn duy nhất cho cả ba đường.
+
+    Ba tình huống khiến giá gốc của một khoản phí đã tạo phải tính lại:
+
+    1. kế toán bấm **"Tính lại phí"** (``recalculate_fee``);
+    2. **đổi ngành** có khấu trừ phiếu thu (``reprice_for_major_change``);
+    3. nhà trường **đổi giá học phí học kỳ** hàng loạt
+       (``recalculate_fees_for_semester_tuition_change``).
+
+    Trước đây ba nơi trả ba câu trả lời khác nhau cho cùng một câu hỏi "khoản
+    giảm TAY đã duyệt thì sao?" — hai nơi TỪ CHỐI tính lại, một nơi giữ nguyên
+    số. Owner chốt 26-07: **giữ nguyên số tiền đã duyệt ở cả ba**.
+
+    Vì sao giữ nguyên chứ không rescale: giảm tay là quyết định của con người
+    cho một hoàn cảnh cụ thể (học bổng, gia cảnh), kèm lý do và người duyệt.
+    Trường tăng giá hay thí sinh đổi ngành không làm hoàn cảnh đó thay đổi, và
+    máy KHÔNG biết ý định gốc là "giảm 1 triệu" hay "giảm 13,7%" — tự suy sẽ âm
+    thầm đổi mức đã có người ký. Bên gọi nên log để kế toán rà lại nếu muốn đổi.
+
+    Còn phần giảm theo CHÍNH SÁCH thì tính lại đầy đủ trên ``base_amount`` mới
+    (đúng phần trăm, đúng hiệu lực ngày, đúng cộng dồn) — đó là số máy suy được.
+
+    Args:
+        base_amount: học phí gốc MỚI.
+        policies: các ``TuitionDiscountPolicy`` đã load (bên gọi query).
+        existing_lines: các ``FeeAppliedDiscount`` hiện có của khoản phí.
+
+    Returns:
+        ``FeePricing`` với ``lines`` = dòng chính sách tính lại + dòng giảm tay
+        giữ nguyên. Dòng ``policy_id`` NULL mà KHÔNG phải giảm tay (chính sách
+        đã bị xoá) bị BỎ + log: không còn cơ sở nào để áp tiếp.
+    """
+    policy_total, lines = resolve_discounts(
+        base_amount,
+        policies,
+        as_of=as_of,
+        calculated_at=calculated_at,
+        context=context,
+    )
+
+    total = policy_total
+    for line in existing_lines:
+        if not is_manual_discount_line(line):
+            if getattr(line, "policy_id", None) is None:
+                log.warning(
+                    "discount_line_orphan_dropped",
+                    fee_id=getattr(line, "fee_id", None),
+                    line_id=getattr(line, "id", None),
+                    amount=str(getattr(line, "discount_amount", 0) or 0),
+                )
+            continue
+
+        amount = _q(Decimal(str(getattr(line, "discount_amount", 0) or 0)))
+        if amount <= 0:
+            continue
+
+        snapshot = dict(_line_snapshot(line))
+        remaining = base_amount - total
+        if amount > remaining:
+            # Giá gốc mới thấp hơn cả mức đã giảm ⇒ cắt cho final không âm. Ghi
+            # rõ trong snapshot: kế toán phải thấy mức duyệt đã bị cắt, không
+            # phải đoán vì sao con số khác giấy tờ.
+            log.warning(
+                "manual_discount_capped_on_reprice",
+                fee_id=getattr(line, "fee_id", None),
+                approved=str(amount),
+                capped_to=str(max(remaining, Decimal("0"))),
+                new_base=str(base_amount),
+            )
+            snapshot["capped_from"] = str(amount)
+            snapshot["capped_at"] = calculated_at
+            amount = max(remaining, Decimal("0"))
+            if amount <= 0:
+                continue
+
+        total += amount
+        lines.append(
+            DiscountLine(policy_id=None, amount=amount, snapshot=snapshot)
+        )
+
+    return FeePricing(
+        base_amount=base_amount,
+        total_discount=total,
+        final_amount=compute_final_amount(base_amount, total),
+        lines=lines,
+    )
+
+
 def compute_final_amount(base_amount: Decimal, total_discount: Decimal) -> Decimal:
     """``final = max(0, base − tổng giảm)`` — một chỗ duy nhất, không lặp lại."""
     return max(Decimal("0"), _q(base_amount - total_discount))
@@ -417,6 +605,7 @@ def resolve_fee_pricing(
     as_of: Optional[date] = None,
     calculated_at: Optional[str] = None,
     context: Optional[DiscountContext] = None,
+    selected_by: Optional[int] = None,
 ) -> FeePricing:
     """LUỒNG TÍNH PHÍ DUY NHẤT: base → giảm chính sách → giảm tay → final.
 
@@ -433,6 +622,7 @@ def resolve_fee_pricing(
         as_of=as_of,
         calculated_at=calculated_at,
         context=context,
+        selected_by=selected_by,
     )
 
     if target_final_amount is not None:

@@ -619,6 +619,10 @@ export const feeCalculateRequestSchema = z
       .max(500, "Lý do không được quá 500 ký tự")
       .nullable()
       .optional(),
+    // Ưu đãi theo CHÍNH SÁCH được tích chọn — phải là tập con cấu hình của
+    // ngành (backend từ chối id ngoài tập đó, không lọc im lặng). Bỏ field =
+    // áp toàn bộ cấu hình; mảng RỖNG = không áp ưu đãi nào (khác nhau).
+    discount_policy_ids: z.array(z.number().int().positive()).optional(),
   })
   // Mirror backend validate_collection_schedule: mode="down_payment" ⟹
   // fee_type=tuition + đủ số đóng trước & 2 hạn + hạn đợt 2 >= đợt 1.

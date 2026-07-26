@@ -1262,6 +1262,54 @@ async def get_academic_info_history(
     return await repo.get_academic_info_history(offering_id, published_only)
 
 
+async def _validate_discount_policy_ids(
+    db: AsyncSession, policy_ids: Optional[List[int]]
+) -> None:
+    """Chặn gắn chính sách ưu đãi KHÔNG tồn tại / đã ngừng hoạt động cho ngành.
+
+    ``applied_discount_policy_ids`` là NGUỒN quyết định "ngành này được giảm
+    theo chính sách nào" (``fee_pricing`` chỉ áp chính sách được gắn tường minh
+    ở đây, không tự suy diễn). Cột là JSONB không có ràng buộc khoá ngoại, nên
+    một id gõ nhầm hoặc một chính sách đã tắt nằm im trong cấu hình mà không ai
+    biết: lúc tính phí, engine lặng lẽ bỏ qua và kế toán thấy "đã bật ưu đãi mà
+    không giảm đồng nào". Bắt tại chỗ CẤU HÌNH thì người sửa được ngay.
+
+    Chính sách CHƯA tới hạn / ĐÃ hết hạn vẫn cho gắn (chuẩn bị cho đợt sau, hoặc
+    giữ lại lịch sử) — hiệu lực theo ngày do engine xét tại thời điểm tính phí.
+    """
+    if not policy_ids:
+        return
+
+    unique = list(dict.fromkeys(policy_ids))
+    if len(unique) != len(policy_ids):
+        raise BadRequest(
+            detail="Danh sách chính sách ưu đãi có id trùng lặp."
+        )
+
+    rows = (
+        await db.execute(
+            select(models.TuitionDiscountPolicy).where(
+                models.TuitionDiscountPolicy.id.in_(unique)
+            )
+        )
+    ).scalars().all()
+    found = {p.id: p for p in rows}
+
+    missing = [pid for pid in unique if pid not in found]
+    if missing:
+        raise BadRequest(
+            detail="Chính sách ưu đãi không tồn tại: "
+                   + ", ".join(str(pid) for pid in missing)
+        )
+
+    inactive = [found[pid] for pid in unique if not found[pid].is_active]
+    if inactive:
+        raise BadRequest(
+            detail="Chính sách ưu đãi đã ngừng hoạt động, không gắn được cho "
+                   "ngành: " + ", ".join(f"{p.name} (id {p.id})" for p in inactive)
+        )
+
+
 async def create_academic_info(
     db: AsyncSession,
     academic_info_in: schemas.OfferingAcademicInfoCreate,
@@ -1301,6 +1349,10 @@ async def create_academic_info(
                 detail=f"Academic info for offering {academic_info_in.offering_id} "
                        f"and year {academic_info_in.academic_year} already exists."
             )
+
+        await _validate_discount_policy_ids(
+            db, academic_info_in.applied_discount_policy_ids
+        )
 
         db_academic_info = models.OfferingAcademicInfo(
             **academic_info_in.model_dump(),
@@ -1381,6 +1433,11 @@ async def update_academic_info(
                                f"(năm trong quá khứ). Dữ liệu tài chính lịch sử phải bất biến (immutable) "
                                f"để đảm bảo tính toàn vẹn của báo cáo tài chính."
                     )
+
+        if "applied_discount_policy_ids" in update_data:
+            await _validate_discount_policy_ids(
+                db, update_data["applied_discount_policy_ids"]
+            )
 
         # Apply updates
         for key, value in update_data.items():

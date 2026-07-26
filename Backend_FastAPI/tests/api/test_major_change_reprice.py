@@ -665,7 +665,15 @@ async def _reprice_expect_block(pid: int):
         await _reprice(pid)
 
 
-async def test_guard_manual_discount(seed_lead_dependencies, major_change_on):
+async def test_manual_discount_preserved_on_reprice(
+    seed_lead_dependencies, major_change_on
+):
+    """Đổi ngành trên hồ sơ có miễn/giảm THỦ CÔNG → BẢO TOÀN nguyên số.
+
+    Owner chốt 26-07 (Hướng A). Bản cũ CHẶN — mà hồ sơ này đã đóng tiền nên chặn
+    là ngõ cụt: đổi ngành xong không định giá lại được, không có đường ra bằng
+    giao diện. Giảm 100.000 theo quyết định của người vẫn là 100.000 sau khi
+    chuyển sang ngành đắt hơn."""
     majors = await _seed_two_majors(
         seed_lead_dependencies,
         price_a=Decimal("6500000"), price_b=Decimal("9200000"),
@@ -679,7 +687,28 @@ async def test_guard_manual_discount(seed_lead_dependencies, major_change_on):
                 calculation_snapshot={"source": "manual_discount"},
                 application_order=1,
             ))
-    await _reprice_expect_block(ids["profile_id"])
+
+    _fee_id, changed = await _reprice(ids["profile_id"])
+    assert changed is True
+
+    async with AsyncSessionLocal() as s:
+        fresh = await s.get(Fee, ids["fee_id"])
+        assert fresh.base_amount == Decimal("9200000")
+        # Ngành mới không gắn chính sách nào ⇒ tổng giảm = đúng phần giảm tay.
+        assert fresh.total_discount == Decimal("100000")
+        assert fresh.final_amount == Decimal("9100000")
+        assert fresh.awaiting_accountant_confirmation is True
+        rows = (await s.execute(
+            select(FeeAppliedDiscount).where(
+                FeeAppliedDiscount.fee_id == ids["fee_id"]
+            )
+        )).scalars().all()
+        manual = [
+            r for r in rows
+            if (r.calculation_snapshot or {}).get("source") == "manual_discount"
+        ]
+        assert len(manual) == 1, "giảm tay không được rơi khi ghi lại dòng"
+        assert manual[0].discount_amount == Decimal("100000")
 
 
 async def test_guard_admitted_choice(seed_lead_dependencies, major_change_on):

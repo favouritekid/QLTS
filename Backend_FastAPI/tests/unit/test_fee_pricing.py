@@ -20,6 +20,7 @@ from app.services.fee_pricing import (
     is_policy_effective,
     resolve_discounts,
     resolve_fee_pricing,
+    resolve_repricing,
 )
 
 HK1 = Decimal("7300000")
@@ -397,3 +398,119 @@ def test_dieu_kien_khac_priority_types_van_fail_closed():
     """Vùng/GPA chưa chốt nghiệp vụ ⇒ không áp, không đoán."""
     p = _policy(target_criteria={"min_gpa": 8.0})
     assert is_policy_effective(p, TODAY)[1] == "co_dieu_kien_chua_chot_nghiep_vu"
+
+
+# ===========================================================================
+# ĐỊNH GIÁ LẠI (resolve_repricing) — Hướng A: giảm TAY giữ nguyên số đã duyệt
+# ===========================================================================
+# Owner chốt 26-07. Ba đường tính lại (bấm "Tính lại phí" · đổi ngành · nhà
+# trường đổi giá học kỳ) trước đây trả BA câu trả lời khác nhau cho cùng câu hỏi
+# "khoản giảm tay đã duyệt thì sao?" — hai nơi từ chối, một nơi giữ nguyên. Nay
+# cả ba gọi hàm này.
+
+
+def _line(
+    *,
+    policy_id: int | None = None,
+    amount: str = "1000000",
+    snapshot: dict | None = None,
+    line_id: int = 1,
+):
+    """Giả lập một dòng ``FeeAppliedDiscount`` (duck-typing như engine đọc)."""
+    return SimpleNamespace(
+        id=line_id,
+        fee_id=99,
+        policy_id=policy_id,
+        discount_amount=Decimal(amount),
+        calculation_snapshot=snapshot,
+    )
+
+
+def _manual_line(amount: str = "1000000", **kw):
+    return _line(
+        policy_id=None,
+        amount=amount,
+        snapshot={
+            "source": MANUAL_DISCOUNT_SOURCE,
+            "reason": "Hoàn cảnh khó khăn theo quyết định nhà trường",
+            "approved_by": 7,
+        },
+        **kw,
+    )
+
+
+def test_reprice_giam_tay_giu_nguyen_so_khi_gia_tang():
+    """Trường tăng giá 7,3tr → 8tr: giảm tay 1tr VẪN là 1tr (KHÔNG rescale theo
+    tỷ lệ), thí sinh đóng thêm đúng phần chênh."""
+    result = resolve_repricing(
+        Decimal("8000000"), [], [_manual_line("1000000")], as_of=TODAY
+    )
+    assert result.total_discount == Decimal("1000000")
+    assert result.final_amount == Decimal("7000000")
+    assert len(result.lines) == 1
+    assert result.lines[0].policy_id is None
+
+
+def test_reprice_giam_tay_giu_nguyen_ca_ly_do_va_nguoi_duyet():
+    """Snapshot gốc (lý do + người duyệt) phải sống sót — đó là hồ sơ audit của
+    một quyết định con người, không phải số máy tính ra."""
+    result = resolve_repricing(
+        Decimal("8000000"), [], [_manual_line("1000000")], as_of=TODAY
+    )
+    snap = result.lines[0].snapshot
+    assert snap["reason"] == "Hoàn cảnh khó khăn theo quyết định nhà trường"
+    assert snap["approved_by"] == 7
+    assert "capped_from" not in snap
+
+
+def test_reprice_chinh_sach_tinh_lai_theo_base_moi_giam_tay_thi_khong():
+    """Cùng một khoản phí: phần CHÍNH SÁCH (10%) bám base mới, phần TAY đứng yên."""
+    p = _policy(value="10")
+    result = resolve_repricing(
+        Decimal("10000000"),
+        [p],
+        [_line(policy_id=1, amount="730000"), _manual_line("1000000", line_id=2)],
+        as_of=TODAY,
+    )
+    assert result.policy_discount == Decimal("1000000.00")  # 10% của base MỚI
+    assert result.total_discount == Decimal("2000000.00")
+    assert result.final_amount == Decimal("8000000.00")
+
+
+def test_reprice_giam_tay_bi_cat_khi_vuot_base_moi():
+    """Base mới thấp hơn mức đã duyệt ⇒ cắt cho final không âm, và GHI RÕ mức gốc
+    vào snapshot: kế toán phải thấy quyết định đã bị cắt, không phải tự đoán."""
+    result = resolve_repricing(
+        Decimal("800000"), [], [_manual_line("1000000")], as_of=TODAY
+    )
+    assert result.total_discount == Decimal("800000")
+    assert result.final_amount == Decimal("0")
+    assert Decimal(result.lines[0].snapshot["capped_from"]) == Decimal("1000000")
+
+
+def test_reprice_dong_mo_coi_policy_bi_xoa_thi_bo():
+    """``policy_id`` NULL mà KHÔNG có nhãn giảm tay = chính sách đã bị xoá
+    (ON DELETE SET NULL) — không còn cơ sở áp tiếp nên bỏ, KHÔNG bảo toàn."""
+    result = resolve_repricing(
+        Decimal("8000000"),
+        [],
+        [_line(policy_id=None, amount="500000", snapshot={"policy_name": "Đã xoá"})],
+        as_of=TODAY,
+    )
+    assert result.total_discount == Decimal("0")
+    assert result.final_amount == Decimal("8000000")
+    assert result.lines == []
+
+
+def test_reprice_chinh_sach_het_han_thi_ha_ve_khong_giu_so_cu():
+    """Chính sách hết hiệu lực: hạ về 0, KHÔNG giữ số cũ (giữ = áp một ưu đãi đã
+    hết hạn). Giảm tay bên cạnh vẫn nguyên."""
+    het_han = _policy(valid_to=date(2026, 6, 30))
+    result = resolve_repricing(
+        Decimal("8000000"),
+        [het_han],
+        [_line(policy_id=1, amount="730000"), _manual_line("1000000", line_id=2)],
+        as_of=TODAY,
+    )
+    assert result.policy_discount == Decimal("0")
+    assert result.total_discount == Decimal("1000000")

@@ -344,6 +344,9 @@ async def calculate_fee(
             semester_no=data.semester_no,
             target_final_amount=data.target_final_amount,
             manual_discount_reason=data.manual_discount_reason,
+            # Ưu đãi người dùng tích chọn trong dialog. None = không nêu ý kiến
+            # ⇒ áp toàn bộ cấu hình của ngành (hành vi cũ, không đổi).
+            selected_discount_policy_ids=data.discount_policy_ids,
         )
 
         # Generate invoices based on installment plan.
@@ -463,6 +466,17 @@ async def preview_tuition(
     # le=12: chặn semester_no ngoài int32 → asyncpg DataError → 500 (cùng lớp
     # int32-guard codebase đã áp ở các route khác). HK thực tế ≤ 12.
     semester_no: int = Query(1, ge=1, le=12, description="Số học kỳ (HK1=1)"),
+    discount_policy_ids: Optional[List[int]] = Query(
+        None,
+        description="Chính sách ưu đãi người dùng tích chọn (phải nằm trong cấu "
+                    "hình của ngành).",
+    ),
+    explicit_discount_selection: bool = Query(
+        False,
+        description="True = danh sách trên là lựa chọn TƯỜNG MINH của người dùng "
+                    "(rỗng nghĩa là không áp ưu đãi nào). False = chưa chọn gì ⇒ "
+                    "áp toàn bộ cấu hình của ngành.",
+    ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
@@ -484,14 +498,31 @@ async def preview_tuition(
             # 404 not 403: no existence leak beyond scope (same as calculate_fee).
             raise ResourceNotFoundError("Admission profile not found")
 
-        base_amount, total_discount, final_amount = await fee_service.preview_tuition(
-            profile, semester_no
+        (
+            base_amount,
+            total_discount,
+            final_amount,
+            policy_options,
+        ) = await fee_service.preview_tuition(
+            profile,
+            semester_no,
+            # Query string KHÔNG phân biệt "không gửi" với "mảng rỗng" — cả hai
+            # đều về None. Nếu bỏ qua khác biệt đó thì người dùng bỏ tích hết ưu
+            # đãi lại thấy số xem trước VẪN giảm (server hiểu là "áp tất cả"), rồi
+            # bấm Tính phí ra một con số khác. Cờ tường minh khép khe hở đó.
+            selected_discount_policy_ids=(
+                (discount_policy_ids or []) if explicit_discount_selection else None
+            ),
         )
         return finance_schemas.TuitionPreviewResponse(
             base_amount=base_amount,
             total_discount=total_discount,
             final_amount=final_amount,
             semester_no=semester_no,
+            discount_policies=[
+                finance_schemas.DiscountPolicyOption(**opt)
+                for opt in policy_options
+            ],
         )
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))

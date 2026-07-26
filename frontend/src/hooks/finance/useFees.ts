@@ -34,8 +34,20 @@ export const feesKeys = {
   byProfile: (profileId: number) => [...feesKeys.all, "by-profile", profileId] as const,
   profileSummary: (profileId: number) => [...feesKeys.all, "profile-summary", profileId] as const,
   collection: (profileId: number) => [...feesKeys.all, "collection", profileId] as const,
-  tuitionPreview: (profileId: number, semesterNo: number) =>
-    [...feesKeys.all, "tuition-preview", profileId, semesterNo] as const,
+  tuitionPreview: (
+    profileId: number,
+    semesterNo: number,
+    discountPolicyIds?: number[]
+  ) =>
+    [
+      ...feesKeys.all,
+      "tuition-preview",
+      profileId,
+      semesterNo,
+      // Sắp xếp để thứ tự tích chọn không tạo cache entry khác nhau cho cùng
+      // một tập ưu đãi. undefined (chưa chọn gì) khác hẳn [] (bỏ tích hết).
+      discountPolicyIds ? [...discountPolicyIds].sort((a, b) => a - b) : null,
+    ] as const,
 }
 
 // =====================================================================
@@ -232,11 +244,12 @@ export function useProfileCollection(
 export function useTuitionPreview(
   profileId: number,
   semesterNo: number,
-  options?: { enabled?: boolean }
+  options?: { enabled?: boolean; discountPolicyIds?: number[] }
 ) {
+  const ids = options?.discountPolicyIds
   return useQuery<TuitionPreviewResponse, AxiosError<ApiErrorResponse>>({
-    queryKey: feesKeys.tuitionPreview(profileId, semesterNo),
-    queryFn: () => feesApi.getTuitionPreview(profileId, semesterNo),
+    queryKey: feesKeys.tuitionPreview(profileId, semesterNo, ids),
+    queryFn: () => feesApi.getTuitionPreview(profileId, semesterNo, ids),
     enabled: (options?.enabled ?? true) && !!profileId && !!semesterNo,
     staleTime: 1000 * 60, // 1 minute — giá chuẩn ít đổi
   })

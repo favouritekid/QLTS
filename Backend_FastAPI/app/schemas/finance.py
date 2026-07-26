@@ -288,6 +288,15 @@ class FeeCalculateRequest(BaseModel):
         description="Học phí áp dụng (final sau MỌI giảm) khi miễn/giảm thủ công.",
     )
     manual_discount_reason: Optional[str] = Field(None, max_length=500)
+    # Ưu đãi theo CHÍNH SÁCH người dùng tích chọn trong dialog. Owner chốt 26-07:
+    # officer/kế toán chỉ được chọn TRONG TẬP đã cấu hình cho ngành — id ngoài
+    # tập đó bị từ chối ở service (400) chứ không lọc im lặng.
+    # None = không nêu ý kiến ⇒ áp toàn bộ cấu hình (hành vi cũ).
+    # [] = chọn KHÔNG áp ưu đãi nào.
+    discount_policy_ids: Optional[List[int]] = Field(
+        None,
+        description="Chính sách ưu đãi được chọn (tập con cấu hình của ngành).",
+    )
 
     @model_validator(mode="after")
     def default_semester_for_tuition(self):
@@ -1090,6 +1099,33 @@ class CalculableProfilesResponse(BaseModel):
     profiles: List[CalculableProfileItem]
 
 
+class DiscountPolicyOption(BaseModel):
+    """Một chính sách ưu đãi ĐÃ ĐƯỢC CẤU HÌNH cho ngành của hồ sơ.
+
+    Officer/kế toán chỉ được chọn trong tập này (owner chốt 26-07). ``selectable``
+    và ``reason`` lấy từ CHÍNH predicate mà server dùng để cho/chặn
+    (``fee_pricing.is_policy_effective``) — nếu giao diện tự suy theo ngày hay
+    theo cờ ``is_active`` thì sẽ có ngày hiện một ô tích mà bấm vào không giảm.
+    """
+    id: int
+    name: str
+    discount_type: str = Field(..., description="'percentage' | 'amount'")
+    discount_value: Decimal
+    amount: Decimal = Field(
+        ..., description="Số tiền giảm trên giá chuẩn học kỳ này (0 nếu không áp được)."
+    )
+    selectable: bool = Field(..., description="Chọn được ở thời điểm hiện tại?")
+    reason: Optional[str] = Field(
+        None, description="Vì sao KHÔNG chọn được (mã lý do máy đọc được)."
+    )
+    reason_text: Optional[str] = Field(
+        None, description="Lý do bằng tiếng Việt để hiển thị."
+    )
+    selected: bool = Field(
+        ..., description="Đang được tính trong con số phải thu bên dưới?"
+    )
+
+
 class TuitionPreviewResponse(BaseModel):
     """Giá chuẩn học phí (read-only) cho dialog "Tính phí"
     (GET /api/fees/tuition-preview).
@@ -1098,11 +1134,16 @@ class TuitionPreviewResponse(BaseModel):
     (``base_amount``), giảm giá hiện hành (``total_discount``) và dự kiến phải thu
     (``final_amount`` = base − discount). KHÔNG persist — chỉ tái dùng resolver
     giá + discount như ``calculate_fee``.
+
+    Kèm ``discount_policies`` = tập chính sách đã cấu hình cho ngành, để dialog
+    hiển thị cho người dùng tích chọn. Cùng một lượt gọi trả CẢ danh sách LẪN con
+    số, nên ô tích và số tiền không thể lệch nhau.
     """
     base_amount: Decimal
     total_discount: Decimal
     final_amount: Decimal
     semester_no: int
+    discount_policies: List[DiscountPolicyOption] = Field(default_factory=list)
 
 
 class ProfileCollectionIdentity(BaseModel):
