@@ -37,6 +37,17 @@ CASH_INFLOW_TYPES: tuple[str, ...] = ("payment",)
 # ``reversal`` là sửa sổ — báo cáo nào cần phân biệt thì đọc riêng từng tuple.
 CASH_OUTFLOW_TYPES: tuple[str, ...] = ("refund", "reversal")
 
+# TIỀN THẬT TRẢ LẠI THÍ SINH. Dùng cho chỉ tiêu mang nhãn "hoàn tiền" trên giao
+# diện (vd ``AccountingPeriod.total_refunds`` → "Tổng hoàn" của kỳ).
+# 🔴 ĐỪNG dùng ``CASH_OUTFLOW_TYPES`` cho nhãn đó: nó gồm cả ``reversal``, mà
+# reversal chỉ là bút toán đảo một khoản đã ghi thu — gộp vào sẽ báo một khoản
+# hoàn chưa từng trả cho ai.
+CASH_REFUND_TYPES: tuple[str, ...] = ("refund",)
+
+# Bút toán ĐẢO ghi nhận (huỷ lô import nhầm). Không phải tiền trả ra; nó rút lại
+# chính khoản thu đã ghi, nên thuộc về phía TỔNG THU khi tách nhãn.
+CASH_REVERSAL_TYPES: tuple[str, ...] = ("reversal",)
+
 # Loại KHÔNG thuộc dòng tiền (giữ để người đọc biết là đã cân nhắc, không phải bỏ
 # sót): ``adjustment`` — khấu trừ khoản dư sang khoản phí khác. Nó cộng
 # ``fee.paid_amount`` nhưng KHÔNG phải tiền mới vào trường, nên đưa vào net sẽ

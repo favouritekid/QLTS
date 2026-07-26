@@ -1435,8 +1435,20 @@ async def update_academic_info(
                     )
 
         if "applied_discount_policy_ids" in update_data:
+            # CHỈ kiểm những id MỚI THÊM. Nếu kiểm cả danh sách thì một chính sách
+            # bị tắt SAU khi đã gắn sẽ khoá cứng mọi lần sửa bản ghi này: giao
+            # diện chỉ liệt kê chính sách còn hoạt động nên người dùng không thấy
+            # để bỏ tích, mà form lại gửi nguyên id cũ trong payload ⇒ bế tắc,
+            # chỉ gỡ được bằng SQL. Giữ nguyên hoặc BỎ id cũ đều phải cho phép.
+            _ids_gui = list(update_data["applied_discount_policy_ids"] or [])
+            # Trùng lặp thì kiểm trên TOÀN danh sách (không phụ thuộc cũ/mới).
+            if len(set(_ids_gui)) != len(_ids_gui):
+                raise BadRequest(
+                    detail="Danh sách chính sách ưu đãi có id trùng lặp."
+                )
+            _ids_cu = set(db_academic_info.applied_discount_policy_ids or [])
             await _validate_discount_policy_ids(
-                db, update_data["applied_discount_policy_ids"]
+                db, [pid for pid in _ids_gui if pid not in _ids_cu]
             )
 
         # Apply updates

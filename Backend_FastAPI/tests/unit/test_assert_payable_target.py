@@ -93,3 +93,28 @@ class TestAssertPayableTarget:
         assert NON_PAYABLE_PROFILE_STATUSES == frozenset(
             {"withdrawn", "rejected", "withdrawal_pending"}
         )
+
+    # ----------------------------------------------------------------------
+    # Đổi ngành: chờ kế toán xác nhận thì KHÔNG được thu tiền
+    # ----------------------------------------------------------------------
+    # Định giá lại khi đổi ngành đặt hoá đơn về ``issued`` với số tiền ngành MỚI
+    # và bật cờ chờ kế toán. Không chặn ở đây thì mọi đường ghi tiền (ghi tay,
+    # xác minh, cổng online, tạo intent, import lô) đều thu được TRƯỚC bước
+    # maker-checker: kế toán mất quyền phủ quyết, và nếu chu kỳ bị huỷ giữa
+    # chừng thì tiền đã nằm trên một mức giá chưa ai duyệt.
+
+    def test_fee_awaiting_accountant_confirmation_blocked(self):
+        fee = _fee()
+        fee.awaiting_accountant_confirmation = True
+        with pytest.raises(BusinessRuleViolation) as exc:
+            assert_payable_target(fee, _invoice(), _profile(), action="thu tiền")
+        assert "chờ kế toán xác nhận" in str(exc.value)
+
+    def test_fee_not_awaiting_passes(self):
+        fee = _fee()
+        fee.awaiting_accountant_confirmation = False
+        assert_payable_target(fee, _invoice(), _profile(), action="thu tiền")
+
+    def test_fee_thieu_thuoc_tinh_thi_khong_chan(self):
+        """Fee cũ / mock không có cột này ⇒ không được chặn nhầm."""
+        assert_payable_target(_fee(), _invoice(), _profile(), action="thu tiền")

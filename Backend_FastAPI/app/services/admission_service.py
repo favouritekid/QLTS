@@ -6914,22 +6914,26 @@ async def _reprice_on_resubmit_if_major_change(
     # phần bị kill-switch chặn.
     if was_requested:
         profile.major_change_requested = False
-    if not _s.MAJOR_CHANGE_REPRICE_ENABLED or not getattr(
-        profile, "uses_choice_engine", False
-    ):
-        if was_requested:
-            log.warning(
-                "major_change_cycle_cleared_without_reprice",
-                profile_id=profile.id,
-                reason=(
-                    "flag OFF"
-                    if not _s.MAJOR_CHANGE_REPRICE_ENABLED
-                    else "not_choice_engine"
-                ),
-            )
-        return None
     if not was_requested:
         return None
+    # 🔴 KHÔNG gate ``MAJOR_CHANGE_REPRICE_ENABLED``: chu kỳ này đã được mở hợp lệ
+    # (lúc mở, cờ tính năng CÓ bật — ``_major_change_cycle_blocker`` gác cửa đó).
+    # Kill-switch chặn MỞ MỚI, không được bỏ rơi cái đang bay. Bỏ qua reprice ở
+    # đây nghĩa là hồ sơ đi tiếp với nguyện vọng ngành MỚI trong khi học phí và
+    # ``applied_rules`` vẫn của ngành CŨ — sai tiền lặng lẽ, không ai thấy.
+    if not getattr(profile, "uses_choice_engine", False):
+        log.warning(
+            "major_change_cycle_cleared_without_reprice",
+            profile_id=profile.id,
+            reason="not_choice_engine",
+        )
+        return None
+    if not _s.MAJOR_CHANGE_REPRICE_ENABLED:
+        log.warning(
+            "major_change_reprice_ran_with_flag_off",
+            profile_id=profile.id,
+            reason="chu ky da mo truoc khi tat co — chay cho xong de khong lech gia",
+        )
 
     from app.services.enrollment_letter_service import _get_active_hk1_tuition_fee
     from app.services.fee_calculation_service import FeeCalculationService
@@ -7147,10 +7151,13 @@ async def submit_and_evaluate(
     # KHÔNG rewrite applied_rules.path / quota ở đây — dời sang nhánh SUCCESS
     # (_commit_major_change_path_quota) để validation-fail không để lại quota lệch
     # (review #1). Gate CHẶT (flag AND cờ profile).
-    from app.config import settings as _mc_submit_settings
-    _mc_submit_active = _mc_submit_settings.MAJOR_CHANGE_REPRICE_ENABLED and getattr(
-        profile, "major_change_requested", False
-    )
+    # 🔴 KHÔNG gate cờ tính năng ở đây. Kill-switch chặn MỞ chu kỳ MỚI
+    # (``_major_change_cycle_blocker``), nhưng chu kỳ ĐÃ mở hợp lệ thì phải chạy
+    # cho xong — giống ``is_major_change_cycle_open`` cố ý không gate cờ. Gate ở
+    # đây thì tắt cờ giữa chu kỳ = hồ sơ nộp lại với NGUYỆN VỌNG mới nhưng
+    # ``applied_rules`` và học phí vẫn của ngành CŨ: sai tiền, sai cả gate xét
+    # tuyển, mà không ai thấy vì hồ sơ vẫn đi tiếp bình thường.
+    _mc_submit_active = bool(getattr(profile, "major_change_requested", False))
     _mc_old_path_id = None
     _mc_new_path = None
     if _mc_submit_active:
@@ -11231,12 +11238,14 @@ async def resubmit_profile(
     # ngành MỚI TRƯỚC transition (status GỐC còn revision_requested/rejected —
     # trong editable set cho _reresolve_documents_snapshot). resubmit KHÔNG
     # revalidate mặc định → khi đổi ngành PHẢI revalidate (bộ giấy + điều kiện xét
-    # tuyển ngành khác). Gate flag AND major_change_requested. Fail-closed nếu
-    # thiếu giấy ngành mới (→ raise, discard txn trước khi có audit/history rows).
-    from app.config import settings as _mc_resub_settings
-    if _mc_resub_settings.MAJOR_CHANGE_REPRICE_ENABLED and getattr(
-        profile, "major_change_requested", False
-    ):
+    # tuyển ngành khác). Fail-closed nếu thiếu giấy ngành mới (→ raise, discard
+    # txn trước khi có audit/history rows).
+    #
+    # 🔴 KHÔNG gate cờ tính năng — chỉ ``major_change_requested``. Kill-switch
+    # chặn MỞ chu kỳ MỚI, chu kỳ đã mở phải chạy cho xong; tắt cờ giữa chừng mà
+    # bỏ qua khối này thì hồ sơ nộp lại với NGUYỆN VỌNG mới nhưng applied_rules
+    # + học phí vẫn ngành CŨ (xem chú thích cùng nội dung ở submit_and_evaluate).
+    if getattr(profile, "major_change_requested", False):
         from app.repositories import AdmissionRepository as _MCAdmissionRepo
         # Doc snapshot ngành mới TRƯỚC validate; path rewrite + quota transfer
         # SAU khi validate PASS (validate raise → rollback, không để lại quota

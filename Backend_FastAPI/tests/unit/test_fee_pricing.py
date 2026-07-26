@@ -737,3 +737,88 @@ def test_scope_co_rang_buoc_BAT_thi_van_bi_chan():
 def test_scope_danh_sach_nganh_van_bi_chan():
     p = _policy(applicable_scope={"degree_levels": ["Cao đẳng"]})
     assert is_policy_effective(p, TODAY)[1] == "co_pham_vi_rieng_chua_chot_nghiep_vu"
+
+
+# ===========================================================================
+# REVIEW VÒNG 4 — "không cộng dồn" phải đứng một mình theo CẢ HAI CHIỀU
+# ===========================================================================
+
+
+def test_khong_cong_don_dung_SAU_chinh_sach_khac_thi_KHONG_ap():
+    """Chính sách cộng-dồn ưu tiên CAO áp trước, chính sách KHÔNG cộng dồn ưu
+    tiên THẤP đứng sau ⇒ cái sau phải bị bỏ.
+
+    Bản cũ chỉ chặn các chính sách ĐỨNG SAU một cái không-cộng-dồn, nên ở thứ tự
+    này cả hai cùng áp và trường thu THIẾU đúng bằng cái thứ hai."""
+    skipped: dict = {}
+    total, lines = resolve_discounts(
+        HK1,
+        [
+            _policy(pid=1, discount_type="amount", value="300000", priority=10),
+            _policy(
+                pid=2, discount_type="amount", value="200000",
+                is_stackable=False, priority=1,
+            ),
+        ],
+        as_of=TODAY,
+        skipped=skipped,
+    )
+    assert [ln.policy_id for ln in lines] == [1]
+    assert total == Decimal("300000.00"), "chính sách không-cộng-dồn vẫn bị cộng vào"
+    assert skipped == {2: "khong_cong_don_duoc_voi_uu_dai_da_ap"}
+
+
+def test_khong_cong_don_dung_DAU_thi_van_ap_va_chan_cac_cai_sau():
+    """Chiều còn lại giữ nguyên: nó áp một mình rồi chặn phần sau."""
+    skipped: dict = {}
+    total, lines = resolve_discounts(
+        HK1,
+        [
+            _policy(
+                pid=1, discount_type="amount", value="300000",
+                is_stackable=False, priority=10,
+            ),
+            _policy(pid=2, discount_type="amount", value="200000", priority=1),
+        ],
+        as_of=TODAY,
+        skipped=skipped,
+    )
+    assert [ln.policy_id for ln in lines] == [1]
+    assert total == Decimal("300000.00")
+    assert skipped == {2: "bi_chan_boi_chinh_sach_khong_cong_don"}
+
+
+# ===========================================================================
+# REVIEW VÒNG 4 — định giá lại KHÔNG được đánh rơi "ai đã chọn ưu đãi"
+# ===========================================================================
+
+
+def test_reprice_giu_nguoi_da_chon_uu_dai():
+    """``selected_by`` là dữ kiện audit engine không suy lại được. Bên gọi ghi
+    bảng dòng bằng DELETE-rồi-INSERT nên không mang sang là mất vĩnh viễn."""
+    p = _policy(pid=4, discount_type="amount", value="500000")
+    dong_cu = SimpleNamespace(
+        id=1, fee_id=99, policy_id=4,
+        discount_amount=Decimal("500000"),
+        calculation_snapshot={"policy_name": "x", "selected_by": 42},
+    )
+    result = resolve_repricing(
+        Decimal("8000000"), [p], [dong_cu], as_of=TODAY
+    )
+    dong_moi = [ln for ln in result.lines if ln.policy_id == 4]
+    assert len(dong_moi) == 1
+    assert dong_moi[0].snapshot.get("selected_by") == 42, (
+        "mất dấu vết người chọn ưu đãi sau một lần tính lại"
+    )
+
+
+def test_reprice_khong_bia_nguoi_chon_khi_von_khong_co():
+    """Áp theo cấu hình mặc định thì KHÔNG có ai để quy trách nhiệm — đừng bịa."""
+    p = _policy(pid=4, discount_type="amount", value="500000")
+    dong_cu = SimpleNamespace(
+        id=1, fee_id=99, policy_id=4,
+        discount_amount=Decimal("500000"),
+        calculation_snapshot={"policy_name": "x"},
+    )
+    result = resolve_repricing(Decimal("8000000"), [p], [dong_cu], as_of=TODAY)
+    assert "selected_by" not in result.lines[0].snapshot

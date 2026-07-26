@@ -296,6 +296,9 @@ DISCOUNT_SKIP_REASON_TEXT: dict[str, str] = {
     "bi_chan_boi_chinh_sach_khong_cong_don": (
         "Không cộng dồn được với ưu đãi đã áp trước đó"
     ),
+    "khong_cong_don_duoc_voi_uu_dai_da_ap": (
+        "Chính sách này không cộng dồn nên chỉ áp được khi đứng một mình"
+    ),
     "da_giam_het_hoc_phi_goc": "Học phí gốc đã được giảm hết, không còn phần nào để giảm",
 }
 
@@ -401,6 +404,19 @@ def resolve_discounts(
             continue
         if total >= base_amount:
             _note_skip(policy_id, "da_giam_het_hoc_phi_goc")
+            continue
+
+        # 🔴 "Không cộng dồn" nghĩa là ĐỨNG MỘT MÌNH — cả hai chiều. Bản cũ chỉ
+        # chặn các chính sách ĐỨNG SAU nó, nên khi một chính sách cộng-dồn có ưu
+        # tiên CAO hơn được áp trước, chính sách không-cộng-dồn phía sau vẫn cộng
+        # thêm vào ⇒ trường thu THIẾU đúng bằng nó, chỉ vì thứ tự ưu tiên.
+        if not _is_stackable(policy) and lines:
+            log.info(
+                "discount_non_stackable_after_others",
+                policy_id=policy_id,
+                da_ap=[ln.policy_id for ln in lines],
+            )
+            _note_skip(policy_id, "khong_cong_don_duoc_voi_uu_dai_da_ap")
             continue
 
         ok, reason = is_policy_effective(policy, as_of, context)
@@ -613,6 +629,20 @@ def resolve_repricing(
         calculated_at=calculated_at,
         context=context,
     )
+
+    # Giữ NGƯỜI ĐÃ CHỌN của từng chính sách. Bên gọi ghi lại bảng dòng bằng
+    # DELETE-rồi-INSERT, nên không mang ``selected_by`` sang là mất VĨNH VIỄN dấu
+    # vết ai quyết định áp ưu đãi đó — chỉ cần một lần "tính lại phí" hay một lần
+    # trường đổi giá học kỳ là sạch. Đây là dữ kiện audit, engine không suy lại được.
+    nguoi_chon_cu = {
+        getattr(line, "policy_id", None): _line_snapshot(line).get("selected_by")
+        for line in existing_lines
+        if getattr(line, "policy_id", None) is not None
+    }
+    for line in lines:
+        nguoi_chon = nguoi_chon_cu.get(line.policy_id)
+        if nguoi_chon is not None and "selected_by" not in line.snapshot:
+            line.snapshot["selected_by"] = nguoi_chon
 
     total = policy_total
     for line in existing_lines:

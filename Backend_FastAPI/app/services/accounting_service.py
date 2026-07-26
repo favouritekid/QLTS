@@ -22,7 +22,11 @@ import structlog
 from sqlalchemy import select, func, and_, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants.cash_ledger import CASH_INFLOW_TYPES, CASH_OUTFLOW_TYPES
+from app.constants.cash_ledger import (
+    CASH_INFLOW_TYPES,
+    CASH_REFUND_TYPES,
+    CASH_REVERSAL_TYPES,
+)
 from app.models.finance import (
     AccountingPeriod,
     PaymentTransaction,
@@ -440,11 +444,19 @@ class AccountingPeriodService:
         # BỎ HẲN ``reversal`` (đảo ghi nhận khi kế toán huỷ lô import nhầm) ⇒ một
         # lô bị huỷ vẫn nằm nguyên trong doanh thu của kỳ, trong khi hai báo cáo
         # kia đã trừ ⇒ ba con số cho cùng một câu hỏi.
+        # 🔴 ``reversal`` KHÔNG phải tiền hoàn cho thí sinh — nó là bút toán ĐẢO
+        # khi kế toán huỷ một lô import nhầm, tức sửa lại chính khoản đã ghi thu.
+        # Gộp nó vào ``total_refunds`` làm màn hình "Tổng hoàn" của kỳ báo một số
+        # tiền chưa từng trả cho ai. Nhưng nó VẪN phải rời khỏi doanh thu, nên
+        # trừ vào TỔNG THU (amount đã âm sẵn ⇒ cộng là trừ). Net = thu − hoàn giữ
+        # nguyên công thức, chỉ hết gán sai nhãn.
         payment_query = (
             select(func.coalesce(func.sum(PaymentTransaction.amount), 0))
             .where(
                 and_(
-                    PaymentTransaction.transaction_type.in_(CASH_INFLOW_TYPES),
+                    PaymentTransaction.transaction_type.in_(
+                        tuple(CASH_INFLOW_TYPES) + tuple(CASH_REVERSAL_TYPES)
+                    ),
                     func.date(PaymentTransaction.created_at) >= first_day,
                     func.date(PaymentTransaction.created_at) <= last_day,
                 )
@@ -453,13 +465,13 @@ class AccountingPeriodService:
         payment_result = await self.db.execute(payment_query)
         total_payments = Decimal(payment_result.scalar() or 0)
 
-        # Tiền RA gồm ``refund`` (hoàn cho thí sinh) VÀ ``reversal`` (đảo lô).
-        # Cả hai lưu amount ÂM nên lấy ABS của tổng.
+        # Tiền HOÀN: CHỈ ``refund`` (tiền thật trả lại thí sinh). Lưu amount ÂM
+        # nên lấy ABS.
         refund_query = (
             select(func.coalesce(func.abs(func.sum(PaymentTransaction.amount)), 0))
             .where(
                 and_(
-                    PaymentTransaction.transaction_type.in_(CASH_OUTFLOW_TYPES),
+                    PaymentTransaction.transaction_type.in_(CASH_REFUND_TYPES),
                     func.date(PaymentTransaction.created_at) >= first_day,
                     func.date(PaymentTransaction.created_at) <= last_day,
                 )

@@ -12,7 +12,8 @@ Bao trùm (theo test plan review):
 - GUARD suite reprice (fail-closed): manual_discount / admitted / miễn-phí /
   sinh-dư / multi-invoice / pending-payment / pending-intent / single-cycle.
 - confirm_major_change: happy / 409 idempotent / invariant lệch → raise.
-- flag OFF → no-op.
+- kill-switch: cờ tắt CHẶN MỞ chu kỳ mới, nhưng KHÔNG bỏ rơi chu kỳ đang bay
+  (nếu không, hồ sơ đi tiếp với nguyện vọng ngành mới mà học phí ngành cũ).
 - casbin endpoint: accountant allow, manager/officer deny.
 
 Test DB dùng create_all() (KHÔNG có trigger applied_rules — memory
@@ -814,15 +815,35 @@ async def test_guard_single_cycle_already_awaiting(
     await _reprice_expect_block(ids["profile_id"])
 
 
-async def test_flag_off_noop(seed_lead_dependencies):
-    """Flag OFF → reprice trả (None, False) ngay, KHÔNG đụng gì."""
+async def test_flag_off_van_reprice_chu_ky_dang_bay(seed_lead_dependencies):
+    """Tắt kill-switch KHÔNG được bỏ rơi chu kỳ đã mở.
+
+    Cờ ``MAJOR_CHANGE_REPRICE_ENABLED`` chặn MỞ chu kỳ MỚI
+    (``_major_change_cycle_blocker`` — đã khoá ở
+    ``test_admin_rollback_flag_off_with_allow_raises``). ``reprice_for_major_change``
+    CHỈ được gọi khi ``major_change_requested`` đang bật, tức chu kỳ đã mở hợp lệ
+    lúc cờ CÒN bật.
+
+    Bản cũ trả ``(None, False)`` ngay khi cờ tắt ⇒ ops bấm kill-switch giữa chừng
+    là hồ sơ nộp lại với NGUYỆN VỌNG ngành mới trong khi học phí vẫn ngành CŨ —
+    sai tiền lặng lẽ, không ai thấy vì hồ sơ vẫn đi tiếp bình thường."""
     majors = await _seed_two_majors(
         seed_lead_dependencies,
         price_a=Decimal("6500000"), price_b=Decimal("9200000"),
     )
     ids = await _seed_profile_fee_invoice(seed_lead_dependencies, majors)
+
+    # KHÔNG bật fixture ``major_change_on`` ⇒ cờ tính năng đang TẮT.
+    assert settings.MAJOR_CHANGE_REPRICE_ENABLED is False
+
     fee_id, changed = await _reprice(ids["profile_id"])
-    assert fee_id is None and changed is False
+    assert changed is True, "chu kỳ đang bay bị bỏ rơi khi tắt cờ"
+    assert fee_id == ids["fee_id"]
+
+    async with AsyncSessionLocal() as s:
+        fresh = await s.get(Fee, ids["fee_id"])
+        assert fresh.base_amount == Decimal("9200000"), "giá vẫn của ngành cũ"
+        assert fresh.awaiting_accountant_confirmation is True
 
 
 # ===========================================================================

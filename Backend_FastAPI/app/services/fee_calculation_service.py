@@ -2201,9 +2201,12 @@ class FeeCalculationService:
         ``fee_pricing.resolve_repricing`` (owner chốt 26-07). Chặn ở đây từng là
         ngõ cụt — hồ sơ đã đóng tiền, đổi ngành xong không định giá lại được.
         """
-        if not settings.MAJOR_CHANGE_REPRICE_ENABLED:
-            return None, False
-
+        # 🔴 KHÔNG gate ``MAJOR_CHANGE_REPRICE_ENABLED``: hàm này CHỈ được gọi từ
+        # hook sau submit/resubmit khi ``major_change_requested`` đang bật — tức
+        # chu kỳ đã mở hợp lệ lúc cờ CÒN bật. Kill-switch chặn MỞ chu kỳ MỚI
+        # (``_major_change_cycle_blocker``); bỏ rơi chu kỳ đang bay thì hồ sơ đi
+        # tiếp với nguyện vọng ngành MỚI mà học phí vẫn ngành CŨ.
+        # Deploy cờ OFF vẫn no-op vì không hồ sơ nào mở được chu kỳ mới.
         semester_no = 1
 
         # (1) Giá ngành MỚI — READ-ONLY, TRƯỚC khi vào khoá (giảm thời gian giữ
