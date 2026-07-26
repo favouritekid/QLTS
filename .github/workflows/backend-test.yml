@@ -95,6 +95,7 @@ on:
       - 'frontend/**'
       - '.github/workflows/**'
       - '.github/dependabot.yml'
+      - '.github/scripts/**'
       - 'scripts/**'
 
 concurrency:

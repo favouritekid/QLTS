@@ -28,10 +28,12 @@ on:
       - 'frontend/**'
       - 'Backend_FastAPI/**'
       - '.github/workflows/**'
-      # `.github/dependabot.yml` KHÔNG khớp `.github/workflows/**`. Thiếu
-      # dòng này thì một PR chỉ chỉnh dependabot.yml sẽ treo vĩnh viễn ở
+      # `.github/dependabot.yml` và `.github/scripts/**` KHÔNG khớp
+      # `.github/workflows/**`. Thiếu 2 dòng này thì một PR chỉ chỉnh
+      # dependabot.yml hoặc script audit sẽ treo vĩnh viễn ở
       # "expected, not run" và không thể merge.
       - '.github/dependabot.yml'
+      - '.github/scripts/**'
       - 'scripts/**'
 
 concurrency:

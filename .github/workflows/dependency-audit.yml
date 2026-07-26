@@ -16,6 +16,7 @@ on:
       # nhận gate còn hoạt động — nếu không, một thay đổi làm hỏng gate sẽ
       # không bao giờ được kiểm chứng sau khi merge.
       - '.github/workflows/dependency-audit.yml'
+      - '.github/scripts/**'
   pull_request:
     branches: [main]
   schedule:
@@ -217,8 +218,11 @@ jobs:
           path: frontend/audit-results.json
 
   # Cảnh giới devDependencies mà KHÔNG chặn merge/deploy.
-  #  - Phạm vi là DEV-ONLY thật: lấy hiệu tập (audit toàn cây) − (audit
-  #    production), nên không giẫm chân và không đếm trùng với job gate.
+  #  - Đo phần TĂNG THÊM khi tính cả dev: delta severity giữa (audit toàn
+  #    cây) và (audit production), nên không đếm trùng với job gate. KHÔNG
+  #    dùng hiệu tập theo tên package — severity gắn với ĐƯỜNG phụ thuộc,
+  #    một package moderate ở prod có thể critical qua nhánh dev và lọt cả
+  #    hai lưới. Chi tiết + test: .github/scripts/audit-dev-delta.js
   #  - KHÔNG chạy trên PR: dev-scope hiện có 15 high KHÔNG vá được (upstream
   #    eslint-plugin-jsx-a11y@6.10.2 vẫn khai `peer eslint ^3..^9` nên không
   #    thể lên eslint@10) → để nó đỏ trên mọi PR chỉ khiến người ta quen mắt
@@ -253,57 +257,27 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Logic đếm nằm ở .github/scripts/audit-dev-delta.js và có test riêng.
+      # Chạy test TRƯỚC khi tin vào số nó trả ra: một thay đổi làm hỏng phép
+      # đếm sẽ biến job này thành "luôn xanh" — kiểu hỏng im lặng tệ nhất
+      # cho một cơ chế cảnh báo.
+      - name: Self-test counting logic
+        working-directory: ${{ github.workspace }}
+        run: node --test .github/scripts/audit-dev-delta.test.js
+
       - name: Audit dev-only advisories
         id: audit-dev
         run: |
           echo "🔍 Auditing dev-only advisories..."
-          # HAI lần audit rồi lấy HIỆU TẬP, không dùng `npm audit` trần.
-          # `npm audit` không cờ là TOÀN CÂY (prod + dev). Báo con số đó dưới
-          # nhãn "dev-scope" sẽ đếm TRÙNG advisory production — job gate đã
-          # báo nó rồi — và phân loại sai một lỗ hổng production thành
-          # "dev-tool, không chặn deploy". Đúng thứ khiến người đọc bỏ qua.
+          # HAI lần audit: `npm audit` trần là TOÀN CÂY (prod + dev). Báo con
+          # số đó dưới nhãn "dev-scope" sẽ đếm TRÙNG advisory production — job
+          # gate đã báo nó rồi — và hạ cấp một lỗ hổng production thành
+          # "dev-tool, không chặn deploy".
           npm audit --json > audit-dev-results.json || true
           npm audit --omit=dev --json > audit-prod-baseline.json || true
 
-          node -e "
-          const fs = require('fs');
-          const load = (path) => {
-            let data;
-            try {
-              data = JSON.parse(fs.readFileSync(path, 'utf8'));
-            } catch (err) {
-              console.error('❌ ' + path + ' is not parseable: ' + err.message);
-              process.exit(1);
-            }
-            if (!data.metadata || !data.metadata.vulnerabilities) {
-              console.error('❌ npm audit returned no metadata for ' + path + ' — treating as AUDIT FAILURE.');
-              process.exit(1);
-            }
-            return data;
-          };
-
-          const full = load('./audit-dev-results.json');
-          const prod = load('./audit-prod-baseline.json');
-
-          // Package nào đã xuất hiện trong audit production thì thuộc trách
-          // nhiệm của job gate, KHÔNG tính vào đây.
-          const inProd = new Set(Object.keys(prod.vulnerabilities || {}));
-          const devOnly = Object.entries(full.vulnerabilities || {})
-            .filter(([name]) => !inProd.has(name));
-
-          const counts = { critical: 0, high: 0, moderate: 0, low: 0, info: 0 };
-          for (const [, entry] of devOnly) {
-            if (counts[entry.severity] !== undefined) counts[entry.severity]++;
-          }
-
-          for (const [name, entry] of devOnly) {
-            console.error('  - ' + name + ' (' + entry.severity + ')');
-          }
-          console.error('dev-only packages: ' + devOnly.length);
-
-          console.log('critical_count=' + counts.critical);
-          console.log('high_count=' + counts.high);
-          " > dev-counts.txt
+          node ../.github/scripts/audit-dev-delta.js \
+            audit-dev-results.json audit-prod-baseline.json > dev-counts.txt
 
           cat dev-counts.txt
           cat dev-counts.txt >> "$GITHUB_OUTPUT"
@@ -311,11 +285,11 @@ jobs:
           HIGH=$(grep '^high_count=' dev-counts.txt | cut -d= -f2)
 
           if [ "$CRIT" -gt "0" ]; then
-            echo "🚨 $CRIT CRITICAL advisory chỉ có trong devDependencies!"
+            echo "🚨 $CRIT CRITICAL tăng thêm khi tính cả devDependencies!"
             exit 1
           fi
 
-          echo "✅ Không có CRITICAL dev-only. Còn $HIGH high — theo dõi, không chặn deploy."
+          echo "✅ Không có CRITICAL tăng thêm. Còn $HIGH high-hoặc-nặng-hơn — theo dõi, không chặn deploy."
 
       - name: Upload production baseline
         if: always()
@@ -386,14 +360,14 @@ jobs:
 
             note(process.env.PYTHON_RESULT, process.env.PYTHON_COUNT, '`Python Dependencies` (pip-audit) — số lỗ hổng');
             note(process.env.NODE_RESULT, process.env.NODE_COUNT, '`Node.js Dependencies` (production scope) — high/critical');
-            note(process.env.DEV_RESULT, process.env.DEV_CRITICAL, '`Node.js Dev-scope Advisories` — CRITICAL **chỉ có trong dev** (đã trừ phần production)');
+            note(process.env.DEV_RESULT, process.env.DEV_CRITICAL, '`Node.js Dev-scope Advisories` — CRITICAL **tăng thêm** khi tính cả dev (đã trừ phần production)');
 
             const body = [
               `Lượt audit \`${context.eventName}\` ngày \`${new Date().toISOString().slice(0, 10)}\` trên \`${context.ref}\` KHÔNG xanh.`,
               '',
               '**Kết quả:**',
               ...rows,
-              process.env.DEV_HIGH ? `- (tham khảo) high chỉ-có-trong-dev: ${process.env.DEV_HIGH} — không chặn deploy` : '',
+              process.env.DEV_HIGH ? `- (tham khảo) high-hoặc-nặng-hơn tăng thêm khi tính cả dev: ${process.env.DEV_HIGH} — không chặn deploy` : '',
               '',
               `**Log + artifact:** ${runUrl}`,
               '',
