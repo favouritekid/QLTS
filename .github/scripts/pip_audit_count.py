@@ -50,24 +50,37 @@ def count_vulns(data):
                 f"{type(dep).__name__}"
             )
 
-        if "vulns" not in dep:
-            # pip-audit bỏ qua một số dependency và khi đó kèm 'skip_reason'
-            # thay vì 'vulns'. CHỈ ca này được phép thiếu 'vulns'.
-            if "skip_reason" in dep:
-                continue
+        # Formatter JSON chính thức của pip-audit phát MỌI entry kèm 'name',
+        # kể cả entry bị bỏ qua. Thiếu name = payload không phải của
+        # pip-audit → không đáng tin.
+        name = dep.get("name")
+        if not isinstance(name, str) or not name.strip():
             raise MalformedAudit(
-                f"dependencies[{index}] ({dep.get('name', '?')}) thiếu cả "
-                "'vulns' lẫn 'skip_reason'"
+                f"dependencies[{index}] phải có 'name' là chuỗi không rỗng, "
+                f"nhận {name!r}"
             )
 
-        vulns = dep["vulns"]
-        if not isinstance(vulns, list):
-            raise MalformedAudit(
-                f"dependencies[{index}].vulns phải là list, nhận "
-                f"{type(vulns).__name__}"
-            )
+        if "vulns" in dep:
+            vulns = dep["vulns"]
+            if not isinstance(vulns, list):
+                raise MalformedAudit(
+                    f"dependencies[{index}] ({name}).vulns phải là list, "
+                    f"nhận {type(vulns).__name__}"
+                )
+            total += len(vulns)
+            continue
 
-        total += len(vulns)
+        # Không có 'vulns' thì CHỈ chấp nhận khi pip-audit nói rõ vì sao bỏ
+        # qua. Kiểm sự TỒN TẠI của khoá là chưa đủ: {"skip_reason": null},
+        # {"skip_reason": ""} hay skip_reason sai kiểu đều sẽ khiến cả entry
+        # bị đếm là 0 và required check xanh.
+        skip_reason = dep.get("skip_reason")
+        if not isinstance(skip_reason, str) or not skip_reason.strip():
+            raise MalformedAudit(
+                f"dependencies[{index}] ({name}) không có 'vulns', và "
+                f"'skip_reason' không phải chuỗi không rỗng (nhận "
+                f"{skip_reason!r})"
+            )
 
     return total
 

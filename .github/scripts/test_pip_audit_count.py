@@ -46,6 +46,38 @@ class CountVulnsTest(unittest.TestCase):
         with self.assertRaises(MalformedAudit):
             count_vulns({"dependencies": [{}]})
 
+    # -------- nhánh skip: có khoá là CHƯA đủ, giá trị phải dùng được --------
+
+    def test_skip_reason_null_raises(self):
+        # REGRESSION: `"skip_reason" in dep` cho payload này đi qua → đếm 0.
+        with self.assertRaises(MalformedAudit):
+            count_vulns({"dependencies": [{"name": "a", "skip_reason": None}]})
+
+    def test_skip_reason_empty_string_raises(self):
+        with self.assertRaises(MalformedAudit):
+            count_vulns({"dependencies": [{"name": "a", "skip_reason": ""}]})
+
+    def test_skip_reason_whitespace_only_raises(self):
+        with self.assertRaises(MalformedAudit):
+            count_vulns({"dependencies": [{"name": "a", "skip_reason": "   "}]})
+
+    def test_skip_reason_wrong_type_raises(self):
+        with self.assertRaises(MalformedAudit):
+            count_vulns({"dependencies": [{"name": "a", "skip_reason": 3}]})
+
+    def test_skipped_entry_without_name_raises(self):
+        # REGRESSION: entry không có cả tên dependency vẫn được tính 0.
+        with self.assertRaises(MalformedAudit):
+            count_vulns({"dependencies": [{"skip_reason": "x"}]})
+
+    def test_name_empty_raises(self):
+        with self.assertRaises(MalformedAudit):
+            count_vulns({"dependencies": [{"name": "  ", "vulns": []}]})
+
+    def test_name_wrong_type_raises(self):
+        with self.assertRaises(MalformedAudit):
+            count_vulns({"dependencies": [{"name": 42, "vulns": []}]})
+
     def test_dependencies_not_a_list_raises(self):
         with self.assertRaises(MalformedAudit):
             count_vulns({"dependencies": "oops"})
