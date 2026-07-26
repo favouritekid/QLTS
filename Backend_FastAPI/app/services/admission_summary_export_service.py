@@ -50,6 +50,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.constants.cash_ledger import CASH_TRANSACTION_TYPES, sql_in_list
 from app.services.admission_report_service import AdmissionReportService
 from app.utils.csv_helpers import sanitize_csv_cell
 
@@ -302,7 +303,13 @@ _REVENUE_SQL = text(
            l.assigned_officer_id AS off,
            COALESCE(SUM(pt.amount), 0) AS revenue
     FROM payment_transaction pt
-    JOIN payment pay ON pt.payment_id = pay.id
+    -- LEFT JOIN, KHÔNG phải INNER: ``payment_transaction.payment_id`` là nullable
+    -- (điều chỉnh sổ không gắn payment nào). Với INNER, những giao dịch đó bị
+    -- Excel BỎ HẲN trong khi báo cáo tuần vẫn tính chúng (xếp vào "chưa xác định
+    -- ngành") ⇒ hai artifact người dùng đối chiếu lệch nhau đúng số đó, và lệch
+    -- theo hướng THIẾU tiền nên không ai thấy. Nay ``recognized_major_id`` NULL
+    -- rơi vào sentinel ``:rev_null`` giống hệt quy tắc của báo cáo tuần.
+    LEFT JOIN payment pay ON pt.payment_id = pay.id
     JOIN fee f ON pt.fee_id = f.id
               AND f.fee_type = 'tuition' AND f.semester_no = 1
     JOIN admission_profile ap ON f.admission_profile_id = ap.id
@@ -311,7 +318,9 @@ _REVENUE_SQL = text(
                                   ('withdrawn', 'withdrawal_pending')
     JOIN lead l ON ap.lead_id = l.id AND l.deleted_at IS NULL
     LEFT JOIN program_offering po ON l.offering_id = po.id
-    WHERE pt.transaction_type IN ('payment', 'refund', 'reversal')
+    WHERE pt.transaction_type IN """
+    + sql_in_list(CASH_TRANSACTION_TYPES)
+    + """
       AND (CAST(:unit AS INTEGER) IS NULL OR l.unit_id = CAST(:unit AS INTEGER))
     """
     + _YEAR_SCOPE

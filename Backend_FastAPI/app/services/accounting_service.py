@@ -22,10 +22,10 @@ import structlog
 from sqlalchemy import select, func, and_, exists
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.constants.cash_ledger import CASH_INFLOW_TYPES, CASH_OUTFLOW_TYPES
 from app.models.finance import (
     AccountingPeriod,
     PaymentTransaction,
-    TransactionTypeEnum,
 )
 from app.utils.exceptions import (
     ResourceNotFoundError,
@@ -434,12 +434,17 @@ class AccountingPeriodService:
         first_day = date(year, month, 1)
         last_day = date(year, month, monthrange(year, month)[1])
 
-        # Query for payments
+        # Tiền VÀO + tiền RA lấy danh sách loại giao dịch từ NGUỒN DUY NHẤT
+        # ``app.constants.cash_ledger`` — dùng chung với báo cáo tuần tuyển sinh và
+        # Excel tổng hợp năm. Trước đây hàm này chỉ đếm ``payment`` và ``refund``,
+        # BỎ HẲN ``reversal`` (đảo ghi nhận khi kế toán huỷ lô import nhầm) ⇒ một
+        # lô bị huỷ vẫn nằm nguyên trong doanh thu của kỳ, trong khi hai báo cáo
+        # kia đã trừ ⇒ ba con số cho cùng một câu hỏi.
         payment_query = (
             select(func.coalesce(func.sum(PaymentTransaction.amount), 0))
             .where(
                 and_(
-                    PaymentTransaction.transaction_type == TransactionTypeEnum.payment.value,
+                    PaymentTransaction.transaction_type.in_(CASH_INFLOW_TYPES),
                     func.date(PaymentTransaction.created_at) >= first_day,
                     func.date(PaymentTransaction.created_at) <= last_day,
                 )
@@ -448,12 +453,13 @@ class AccountingPeriodService:
         payment_result = await self.db.execute(payment_query)
         total_payments = Decimal(payment_result.scalar() or 0)
 
-        # Query for refunds (negative amounts)
+        # Tiền RA gồm ``refund`` (hoàn cho thí sinh) VÀ ``reversal`` (đảo lô).
+        # Cả hai lưu amount ÂM nên lấy ABS của tổng.
         refund_query = (
-            select(func.coalesce(func.sum(func.abs(PaymentTransaction.amount)), 0))
+            select(func.coalesce(func.abs(func.sum(PaymentTransaction.amount)), 0))
             .where(
                 and_(
-                    PaymentTransaction.transaction_type == TransactionTypeEnum.refund.value,
+                    PaymentTransaction.transaction_type.in_(CASH_OUTFLOW_TYPES),
                     func.date(PaymentTransaction.created_at) >= first_day,
                     func.date(PaymentTransaction.created_at) <= last_day,
                 )

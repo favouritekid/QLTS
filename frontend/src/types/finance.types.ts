@@ -272,6 +272,8 @@ export interface InvoiceStatusCounts {
     overdue: number
   }
   overdue_derived: number
+  /** Count cho tab "Chờ xác nhận đổi ngành" (0 nếu BE chưa trả). */
+  awaiting_major_change?: number
   total: number
 }
 
@@ -970,6 +972,8 @@ export interface InvoiceFilters extends InvoiceWorkspaceFilters {
   fee_type?: FeeType
   /** Derived overdue (issued/partial/overdue AND due<today). Use for "Quá hạn" tab. */
   overdue_only?: boolean
+  /** Lens "Chờ xác nhận đổi ngành" (cờ trên khoản phí cha). */
+  awaiting_major_change?: boolean
   search?: string
   sort_by?:
     | "priority"

@@ -141,6 +141,14 @@ async def list_fees(
     profile_id: Optional[int] = Query(None, description="Filter by profile ID"),
     academic_year: Optional[str] = Query(None, description="Filter by academic year"),
     has_outstanding: Optional[bool] = Query(None, description="Filter by outstanding balance > 0"),
+    awaiting_major_change: Optional[bool] = Query(
+        None,
+        description=(
+            "Chỉ lấy khoản phí đang CHỜ KẾ TOÁN XÁC NHẬN ĐỔI NGÀNH. Nguồn của tab "
+            "worklist kế toán — trong lúc chờ, hồ sơ bị chặn duyệt/công bố/ghi "
+            "danh/xuất giấy nên cần một danh sách để không hồ sơ nào bị bỏ quên."
+        ),
+    ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
@@ -176,6 +184,7 @@ async def list_fees(
         has_outstanding=has_outstanding,
         profile_id=profile_id,
         academic_year=academic_year,
+        awaiting_major_change=awaiting_major_change,
     )
 
     # Build response items with profile name
@@ -205,6 +214,18 @@ async def list_fees(
             status=fee.status,
             profile_name=profile_name,
             due_date=due_date,
+            # Đổi ngành: 2 cờ để DANH SÁCH phí hiện được dấu "chờ kế toán xác nhận"
+            # và lọc theo nó. Builder này dựng bằng explicit kwargs (không
+            # ``model_validate``) nên thiếu kwarg là im lặng về False — đó là lý do
+            # badge trước đây không bao giờ xuất hiện ở bảng phí.
+            # ``can_confirm_major_change`` dùng CHÍNH helper role-aware của trang
+            # chi tiết (mirror route gate) — không tự suy theo role ở đây.
+            awaiting_accountant_confirmation=getattr(
+                fee, "awaiting_accountant_confirmation", False
+            ),
+            can_confirm_major_change=_fee_can_confirm_major_change(
+                fee, current_user.role
+            ),
         ))
 
     return finance_schemas.FeesPage(

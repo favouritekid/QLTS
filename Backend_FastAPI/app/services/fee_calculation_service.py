@@ -27,7 +27,7 @@ import structlog
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
 from app import models
@@ -2491,21 +2491,35 @@ class FeeCalculationService:
             if reviewer_id:
                 user_ids = [reviewer_id]
             else:
+                # Bậc cuối: manager CÙNG ĐƠN VỊ, và ADMIN thì KHÔNG lọc đơn vị —
+                # admin là vai toàn hệ thống nên lọc theo unit chỉ tạo điểm mù.
+                # Prod: toàn bộ 440 hồ sơ đã đóng học phí nằm ở đơn vị 14, mà đơn vị
+                # đó KHÔNG có manager lẫn admin nào (admin duy nhất ở đơn vị 12) ⇒
+                # bản cũ trả rỗng đúng nơi có toàn bộ dữ liệu thật, thông báo "kế
+                # toán đã xác nhận, tiếp tục xuất giấy" biến mất trong khi giấy cũ
+                # vừa bị thu hồi.
                 _lead_unit = getattr(_lead, "unit_id", None) if _lead else None
-                user_ids = (
-                    list(
-                        (
-                            await self.db.execute(
-                                select(models.User.id).where(
-                                    models.User.unit_id == _lead_unit,
-                                    models.User.role.in_(["manager", "admin"]),
-                                    models.User.status == "active",
-                                )
-                            )
-                        ).scalars().all()
-                    )
+                _same_unit_manager = (
+                    (models.User.role == "manager")
+                    & (models.User.unit_id == _lead_unit)
                     if _lead_unit is not None
-                    else []
+                    else None
+                )
+                _admin_anywhere = models.User.role == "admin"
+                _cond = (
+                    or_(_same_unit_manager, _admin_anywhere)
+                    if _same_unit_manager is not None
+                    else _admin_anywhere
+                )
+                user_ids = list(
+                    (
+                        await self.db.execute(
+                            select(models.User.id).where(
+                                _cond,
+                                models.User.status == "active",
+                            )
+                        )
+                    ).scalars().all()
                 )
             if not user_ids:
                 log.warning(

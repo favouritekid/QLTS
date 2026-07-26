@@ -112,6 +112,14 @@ async def list_invoices(
     unit_id: Optional[int] = Query(
         None, description="Filter theo đơn vị (INTERSECT với scope IDOR)"
     ),
+    awaiting_major_change: Optional[bool] = Query(
+        None,
+        description=(
+            "Lens 'Chờ xác nhận đổi ngành': chỉ hoá đơn có khoản phí cha đang chờ "
+            "kế toán xác nhận đổi ngành. ORTHOGONAL với trạng thái hoá đơn (giống "
+            "lens 'Quá hạn') — nguồn của tab worklist kế toán."
+        ),
+    ),
     due_window: Optional[str] = Query(
         None, description="Hạn: due_soon_7d (đến hạn ≤7 ngày, chưa thu) | overdue"
     ),
@@ -160,6 +168,7 @@ async def list_invoices(
         officer_id=officer_id,
         unit_id_filter=unit_id,
         due_window=due_window,
+        awaiting_major_change=awaiting_major_change,
     )
 
     # Build enriched list rows (identity + derived urgency + role-aware flags).
@@ -202,6 +211,14 @@ async def get_invoice_status_counts(
     unit_id: Optional[int] = Query(
         None, description="Filter theo đơn vị (INTERSECT với scope IDOR)"
     ),
+    awaiting_major_change: Optional[bool] = Query(
+        None,
+        description=(
+            "Lens 'Chờ xác nhận đổi ngành': chỉ hoá đơn có khoản phí cha đang chờ "
+            "kế toán xác nhận đổi ngành. ORTHOGONAL với trạng thái hoá đơn (giống "
+            "lens 'Quá hạn') — nguồn của tab worklist kế toán."
+        ),
+    ),
     due_window: Optional[str] = Query(
         None, description="Hạn: due_soon_7d (đến hạn ≤7 ngày, chưa thu) | overdue"
     ),
@@ -243,6 +260,7 @@ async def get_invoice_status_counts(
         officer_id=officer_id,
         unit_id_filter=unit_id,
         due_window=due_window,
+        awaiting_major_change=awaiting_major_change,
     )
     return finance_schemas.InvoiceStatusCounts(**counts)
 

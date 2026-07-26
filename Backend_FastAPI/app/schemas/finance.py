@@ -1021,6 +1021,9 @@ class InvoiceStatusCounts(BaseModel):
     """
     counts: Dict[str, int]
     overdue_derived: int
+    # Đổi ngành: count cho tab worklist kế toán ("Chờ xác nhận đổi ngành").
+    # Default 0 để client cũ không vỡ khi field chưa có.
+    awaiting_major_change: int = 0
     total: int
 
     model_config = ConfigDict(from_attributes=True)

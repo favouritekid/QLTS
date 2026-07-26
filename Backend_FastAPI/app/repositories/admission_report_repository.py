@@ -29,6 +29,7 @@ from sqlalchemy import and_, distinct, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.constants.cash_ledger import CASH_TRANSACTION_TYPES
 from app.utils.admission_status import ADMITTED_LIKE_STATUSES
 
 # Milestone status sets (event-based, first-transition).
@@ -44,11 +45,10 @@ UNASSIGNED = "unassigned"
 # không phân loại ngành) hay application (không phân bổ ngành theo thiết kế).
 UNKNOWN_MAJOR = "unknown_major"
 
-# Cash-affecting ledger types: payment (thu), refund (hoàn), reversal (đảo/void
-# lô — số ÂM, giảm tiền đã thu). waive/adjustment/penalty KHÔNG phải cash.
-# ⚠️ reversal do void lô tạo (payment_import_service ~1644) — TRƯỚC đây bị bỏ sót
-# nên payment đã void vẫn nằm trong net; giờ gồm để net phản ánh đúng.
-_CASH_TYPES = ("payment", "refund", "reversal")
+# Cash-affecting ledger types — LẤY TỪ nguồn sự thật duy nhất
+# ``app.constants.cash_ledger`` (dùng chung với Excel tổng hợp năm + sổ kế toán
+# theo kỳ). Thêm/bớt loại giao dịch tiền thì sửa ở module đó, KHÔNG sửa ở đây.
+_CASH_TYPES = CASH_TRANSACTION_TYPES
 
 GroupKey = Union[int, str]  # major_id / officer_id, or a bucket sentinel
 
