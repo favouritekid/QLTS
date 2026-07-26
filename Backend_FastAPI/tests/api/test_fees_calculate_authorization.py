@@ -2495,3 +2495,136 @@ async def test_khong_doc_lai_policy_sau_khi_da_kiem(
     assert Decimal(str(resp.json()["total_discount"])) == Decimal("400000"), (
         "định giá đọc lại CSDL nên đánh rơi ưu đãi vừa qua hàng rào"
     )
+
+
+# ==============================================================================
+# SMOKE BẮT ĐƯỢC — số phải thu về 0 thì KHÔNG được vỡ 500
+# ==============================================================================
+# Giảm giá ăn hết giá gốc mới ⇒ bước đồng bộ hoá đơn ghi ``amount = 0`` và đâm
+# vào CHECK ``chk_invoice_amount_positive``. Người dùng chỉ thấy "đã xảy ra lỗi",
+# còn giao dịch thì rollback nửa chừng. Phải chặn sớm bằng câu chữ chỉ đúng việc
+# cần làm — cùng cách ``generate_invoices_for_fee`` từ chối tạo hoá đơn 0đ.
+
+
+@pytest.mark.asyncio
+async def test_recalculate_ve_0_bi_chan_bang_400_khong_phai_500(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    accountant_same_unit: dict,
+    fee_calc_config: dict,
+):
+    """Canonical 5.000.000, giảm tay 4.000.000 → hạ base xuống 4.000.000 khiến
+    phải thu = 0."""
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="ZeroPayable Recalc", approve=False,
+    )
+    ah = await _login(
+        client, accountant_same_unit["username"], accountant_same_unit["password"]
+    )
+    created = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "semester_no": 1,
+            "target_final_amount": "1000000",
+            "manual_discount_reason": "Hoc bong dac biet theo quyet dinh",
+        },
+        headers=ah,
+    )
+    assert created.status_code == 201, created.text
+    fee_id = created.json()["id"]
+    await _force_invoices_draft(fee_id)
+
+    from app.services.fee_calculation_service import FeeCalculationService
+    from app.utils.exceptions import BusinessRuleViolation
+    async with AsyncSessionLocal() as s:
+        svc = FeeCalculationService(s)
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await svc.recalculate_fee(
+                fee_id=fee_id,
+                new_base_amount=Decimal("4000000"),
+                reason="ha base ve muc giam tay",
+                user_id=1,
+            )
+    assert "bằng 0" in str(exc.value), str(exc.value)
+    assert "huỷ khoản phí" in str(exc.value), str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_doi_gia_hoc_ky_ve_0_thi_BO_QUA_fee_do_khong_vo(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    officer_user_in_db: dict,
+    accountant_same_unit: dict,
+    fee_calc_config: dict,
+):
+    """Cùng lớp lỗi ở luồng HÀNG LOẠT: một khoản phí về 0 không được làm hỏng
+    cả đợt đổi giá của ngành — bỏ qua nó, giữ nguyên dòng audit."""
+    from sqlalchemy import update as sa_update
+    from app.models.finance import Fee, FeeAppliedDiscount
+    from app.services.fee_calculation_service import (
+        recalculate_fees_for_semester_tuition_change,
+    )
+
+    pid = await _create_approved_profile(
+        client, admin_token_headers, officer_user_in_db, fee_calc_config,
+        lead_name="ZeroPayable Semester", approve=False,
+    )
+    ah = await _login(
+        client, accountant_same_unit["username"], accountant_same_unit["password"]
+    )
+    created = await client.post(
+        "/api/fees/calculate",
+        json={
+            "admission_profile_id": pid,
+            "fee_type": "tuition",
+            "semester_no": 1,
+            "target_final_amount": "1000000",
+            "manual_discount_reason": "Hoc bong dac biet theo quyet dinh",
+        },
+        headers=ah,
+    )
+    assert created.status_code == 201, created.text
+    fee_id = created.json()["id"]
+    await _force_invoices_draft(fee_id)
+
+    async with AsyncSessionLocal() as s:
+        ai_id = (await s.execute(
+            select(models.OfferingAcademicInfo.id).where(
+                models.OfferingAcademicInfo.offering_id
+                == fee_calc_config["offering_id"]
+            )
+        )).scalar_one()
+        await s.execute(
+            sa_update(models.OfferingSemesterTuition)
+            .where(
+                models.OfferingSemesterTuition.academic_info_id == ai_id,
+                models.OfferingSemesterTuition.semester_no == 1,
+            )
+            .values(amount=Decimal("3000000"))
+        )
+        await s.commit()
+
+    async with AsyncSessionLocal() as s:
+        so_fee = await recalculate_fees_for_semester_tuition_change(s, ai_id)
+        await s.commit()
+
+    async with AsyncSessionLocal() as s:
+        rows = (await s.execute(
+            select(FeeAppliedDiscount).where(FeeAppliedDiscount.fee_id == fee_id)
+        )).scalars().all()
+        fee = await s.get(Fee, fee_id)
+
+    manual = [
+        r for r in rows
+        if (r.calculation_snapshot or {}).get("source") == "manual_discount"
+    ]
+    assert so_fee == 0, "fee về 0 phải bị BỎ QUA, không được ghi hoá đơn 0đ"
+    assert len(manual) == 1, "dòng audit giảm tay phải còn nguyên"
+    assert Decimal(
+        (manual[0].calculation_snapshot or {})["approved_amount"]
+    ) == Decimal("4000000")
+    assert fee.base_amount == Decimal("5000000"), "fee KHÔNG được đổi nửa vời"

@@ -1478,6 +1478,19 @@ class FeeCalculationService:
         applied_discounts = pricing.lines_as_tuples()
         manual_total = total_discount - pricing.policy_discount
 
+        # 🔴 Số phải thu về 0 (giảm giá ăn hết giá gốc mới) thì KHÔNG còn gì để
+        # xuất hoá đơn. Bước đồng bộ bên dưới sẽ ghi ``invoice.amount = 0`` và
+        # đâm thẳng vào CHECK ``chk_invoice_amount_positive`` ⇒ HTTP 500 và
+        # người dùng chỉ thấy "đã xảy ra lỗi". Chặn sớm với câu chữ chỉ đúng
+        # việc phải làm — cùng cách ``generate_invoices_for_fee`` từ chối tạo
+        # hoá đơn 0đ lúc tính phí lần đầu.
+        if pricing.final_amount - fee.waived_amount <= 0:
+            raise BusinessRuleViolation(
+                f"Học phí sau giảm bằng 0 (giá gốc mới {new_base_amount}, giảm "
+                f"{total_discount}) — không thể phát hành hoá đơn 0đ. Hãy huỷ "
+                "khoản phí rồi tạo lại, hoặc điều chỉnh mức miễn/giảm trước."
+            )
+
         # Update fee
         old_base = fee.base_amount
         old_final = fee.final_amount
@@ -2965,6 +2978,20 @@ async def recalculate_fees_for_semester_tuition_change(
             calculated_at=datetime.now(timezone.utc).isoformat(),
             context=discount_context_for_profile(fee.admission_profile),
         )
+        # 🔴 Giá mới thấp tới mức phải-thu về 0 ⇒ không có gì để xuất hoá đơn;
+        # ghi ``invoice.amount = 0`` sẽ vỡ CHECK ``chk_invoice_amount_positive``.
+        # Đây là xử lý HÀNG LOẠT nên BỎ QUA fee này (có log) thay vì raise — một
+        # khoản phí cá biệt không được làm hỏng cả đợt đổi giá của ngành.
+        if pricing.final_amount - (fee.waived_amount or Decimal("0")) <= 0:
+            log.warning(
+                "fee_recalc_skipped_zero_payable",
+                fee_id=fee.id,
+                new_base=str(new_base),
+                total_discount=str(pricing.total_discount),
+                waived=str(fee.waived_amount),
+            )
+            continue
+
         _manual_total = pricing.total_discount - pricing.policy_discount
         await write_fee_discount_lines(db, fee.id, pricing.lines_as_tuples())
         if _manual_total > 0:
