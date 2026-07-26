@@ -521,6 +521,10 @@ async def test_quota_snapshot_resubmit_increments_new_path(
         seed_lead_dependencies,
         price_a=Decimal("6500000"), price_b=Decimal("9200000"),
     )
+    # Chain program/offering PHẢI đủ `offering_type_id`: re-resolve bộ giấy ngành
+    # mới giờ FAIL-CLOSED khi thiếu (trước đây return im lặng = giữ giấy ngành cũ
+    # ⇒ gate F6 kiểm bộ giấy sai). Prod luôn có FK này; chỉ seed test thiếu.
+    await _ensure_gdnn_config(seed_lead_dependencies, majors)
     # profile ở revision_requested, applied_rules path=A, choice=B
     ids = await _seed_profile_fee_invoice(
         seed_lead_dependencies, majors,
@@ -1587,9 +1591,12 @@ async def test_plain_rollback_clears_flag_even_when_flag_off(
 ):
     """Escape hatch phải chạy khi cờ OFF: sau khi tắt cờ, đây là đường DUY NHẤT
     clear ``major_change_requested`` qua API — gate cờ ở đó = hồ sơ kẹt vĩnh viễn
-    (mọi gate vẫn chặn) chỉ sửa được bằng tay."""
+    (mọi gate vẫn chặn) chỉ sửa được bằng tay.
+
+    Nguyện vọng CHƯA lệch (choice = ngành đã định giá) → huỷ chu kỳ sạch."""
     _, ids = await _seed_regate_profile(
-        seed_lead_dependencies, major_change_requested=True
+        seed_lead_dependencies, major_change_requested=True,
+        choice_tag="a", priced_from_tag="a", resolved_tag="a",
     )
     result = await _admin_rollback(
         ids["profile_id"], officer_user_in_db["id"], allow=False
@@ -1597,6 +1604,59 @@ async def test_plain_rollback_clears_flag_even_when_flag_off(
     assert result["status"] == "draft"
     prof = await _load_profile(ids["profile_id"])
     assert prof.major_change_requested is False, "escape hatch KHÔNG clear được cờ"
+
+
+async def test_plain_rollback_blocked_when_choice_already_drifted(
+    seed_lead_dependencies, officer_user_in_db
+):
+    """Officer ĐÃ đổi nguyện vọng rồi admin huỷ chu kỳ → phải CHẶN.
+
+    Huỷ lúc này để lại hồ sơ nửa vời: nguyện vọng ngành MỚI nhưng applied_rules +
+    fee + resolved_* còn ngành CŨ, và lần nộp sau (luồng thường) +1 chỉ tiêu vào
+    path CŨ trong khi hồ sơ đi path MỚI. Với 381 hồ sơ paid>0 thì recalculate/
+    cancel fee đều bị chặn nên KHÔNG sửa được bằng API."""
+    _, ids = await _seed_regate_profile(
+        seed_lead_dependencies, major_change_requested=True,
+        choice_tag="b", priced_from_tag="a", resolved_tag="a",
+    )
+    with pytest.raises(BusinessRuleViolation) as exc:
+        await _admin_rollback(
+            ids["profile_id"], officer_user_in_db["id"], allow=False
+        )
+    assert "khôi phục nguyện vọng" in str(exc.value)
+    prof = await _load_profile(ids["profile_id"])
+    assert prof.major_change_requested is True, "cờ phải GIỮ để officer sửa NV về"
+    assert prof.status == "submitted", "không được transition khi đã từ chối"
+
+
+async def test_plain_rollback_at_draft_clears_flag(
+    seed_lead_dependencies, officer_user_in_db
+):
+    """Hồ sơ ĐÃ ở draft (đúng nơi chu kỳ đổi ngành đặt nó) vẫn phải huỷ được.
+
+    ``admin_rollback_profile`` early-return ``already_at_target`` ở draft; nếu
+    early-return chạy TRƯỚC escape hatch thì ở draft không còn đường nào clear cờ
+    (``request_revision`` bất khả từ draft) ⇒ hồ sơ kẹt vĩnh viễn sau mọi gate."""
+    _, ids = await _seed_regate_profile(
+        seed_lead_dependencies, major_change_requested=True,
+        choice_tag="a", priced_from_tag="a", resolved_tag="a",
+    )
+    async with AsyncSessionLocal() as s:
+        async with s.begin():
+            await s.execute(
+                update(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id == ids["profile_id"])
+                .values(status="draft")
+            )
+
+    result = await _admin_rollback(
+        ids["profile_id"], officer_user_in_db["id"], allow=False
+    )
+    assert result["already_at_target"] is True
+    prof = await _load_profile(ids["profile_id"])
+    assert prof.major_change_requested is False, (
+        "ở draft escape hatch không chạy → hồ sơ kẹt, chỉ sửa được bằng SQL"
+    )
 
 
 async def test_waive_blocked_while_awaiting_confirmation(

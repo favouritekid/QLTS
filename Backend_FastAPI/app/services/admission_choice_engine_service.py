@@ -1480,12 +1480,26 @@ async def admin_rollback_profile(
     # → 400 confusing UX ("not allowed"). Sau: 200 với
     # `already_at_target=true` cho FE phân biệt no-op vs actual rollback.
     if rolled_back_from == "draft":
+        # Đổi ngành: PHẢI xử cờ TRƯỚC khi return sớm. Chu kỳ đổi ngành mở qua
+        # admin-rollback đặt hồ sơ ở 'draft', nên nếu bỏ qua nhánh này thì:
+        #   * ``allow=False`` (huỷ chu kỳ) không bao giờ clear được cờ — mà ở
+        #     'draft' cũng không còn đường nào khác (request_revision bất khả từ
+        #     draft) ⇒ hồ sơ KẸT VĨNH VIỄN sau mọi gate, chỉ sửa được bằng SQL;
+        #   * ``allow=True`` im lặng trả 200 với major_change_requested=false —
+        #     đúng kiểu "im lặng bỏ qua" mà bản vá fail-closed đã diệt; giờ
+        #     ``maybe_open_major_change_cycle`` raise 400 (status draft =
+        #     post_decision) nên admin biết chu kỳ KHÔNG mở.
+        from .fee_calculation_service import maybe_open_major_change_cycle
+        _mc_opened_at_target = await maybe_open_major_change_cycle(
+            db, profile, allow_major_change=allow_major_change
+        )
         return (
             {
                 "profile_id": profile.id,
                 "status": "draft",
                 "rolled_back_from": "draft",
                 "already_at_target": True,
+                "major_change_requested": _mc_opened_at_target,
             },
             None,
         )

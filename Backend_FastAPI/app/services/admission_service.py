@@ -5520,11 +5520,32 @@ async def _reresolve_documents_snapshot(
     path = await AdmissionPathRepository(db).get_path_for_audience_reresolve(
         int(path_id)
     )
-    if path is None or path.academic_info is None or path.academic_info.offering is None:
+    _chain_ok = (
+        path is not None
+        and path.academic_info is not None
+        and path.academic_info.offering is not None
+        and path.academic_info.offering.offering_type_id is not None
+    )
+    if not _chain_ok:
+        # Đường GỐC (re-resolve theo audience) coi thiếu chain là "không có gì để
+        # đổi" → return im lặng. Đường ĐỔI NGÀNH (path_id_override) thì KHÔNG:
+        # giữ im lặng nghĩa là hồ sơ mang bộ giấy bắt buộc của ngành CŨ, và gate
+        # giấy ở resubmit đọc chính snapshot đó ⇒ fail-OPEN, thí sinh nộp thiếu
+        # giấy ngành mới vẫn qua. Fail-closed để officer/ops thấy config gap.
+        if path_id_override is not None:
+            log.error(
+                "major_change_doc_resnapshot_chain_missing",
+                profile_id=profile.id,
+                path_id=int(path_id),
+                has_path=path is not None,
+            )
+            raise BusinessRuleViolation(
+                "Không xác định được bộ giấy tờ bắt buộc của ngành mới (thiếu cấu "
+                "hình đường tuyển sinh / loại hình đào tạo). Liên hệ admin kiểm "
+                "cấu hình ngành trước khi nộp lại."
+            )
         return
     offering_type_id = path.academic_info.offering.offering_type_id
-    if offering_type_id is None:
-        return
 
     resolved, _ = await AdmissionPathService(db).resolve_documents_for_profile(
         profile, path, offering_type_id
@@ -6618,6 +6639,49 @@ async def _atomic_increment_path_submission_count(db: AsyncSession, path_id: int
     ).first()
 
 
+async def _release_major_change_on_withdraw(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+) -> None:
+    """Giải phóng chu kỳ đổi ngành khi hồ sơ bị RÚT (hoặc finalize rút).
+
+    Clear cờ `major_change_requested` trên hồ sơ + `awaiting_accountant_
+    confirmation` trên mọi fee HK1 tuition chưa huỷ. Giữ `major_change_from_
+    academic_info_id` / `major_change_flagged_at` làm dấu vết audit.
+
+    Idempotent (gọi lại không đổi gì thêm). Không dispatch thông báo: rút hồ sơ đã
+    có event riêng, và chu kỳ này bị huỷ chứ không phải hoàn tất.
+    """
+    changed_fee_ids: list[int] = []
+    rows = (
+        await db.execute(
+            select(models.Fee).where(
+                models.Fee.admission_profile_id == profile.id,
+                models.Fee.fee_type == "tuition",
+                models.Fee.semester_no == 1,
+                models.Fee.status != "cancelled",
+                models.Fee.awaiting_accountant_confirmation.is_(True),
+            )
+        )
+    ).scalars().all()
+    for fee in rows:
+        fee.awaiting_accountant_confirmation = False
+        changed_fee_ids.append(fee.id)
+
+    had_flag = bool(getattr(profile, "major_change_requested", False))
+    if had_flag:
+        profile.major_change_requested = False
+
+    if changed_fee_ids or had_flag:
+        await db.flush()
+        log.info(
+            "major_change_released_on_withdraw",
+            profile_id=profile.id,
+            fee_ids=changed_fee_ids,
+            had_requested_flag=had_flag,
+        )
+
+
 async def _path_dependent_applied_rules(
     db: AsyncSession,
     new_path_id: int,
@@ -6839,13 +6903,31 @@ async def _reprice_on_resubmit_if_major_change(
     ``resubmit_profile`` (sau revalidate).
     """
     from app.config import settings as _s
+
+    was_requested = bool(getattr(profile, "major_change_requested", False))
+    # CLEAR TRƯỚC MỌI GATE. Nộp lại thành công nghĩa là chu kỳ (nếu có) đã kết
+    # thúc, nên cờ phải tắt kể cả khi ops vừa bật kill-switch: gate cờ ở trên
+    # dòng này thì hồ sơ mở chu kỳ lúc flag ON, nộp lại lúc flag OFF sẽ giữ cờ
+    # mãi mãi — mà ``is_major_change_cycle_open`` CỐ Ý không gate flag ⇒ approve/
+    # publish/enroll/calculate_fee/xuất giấy bị chặn vĩnh viễn, chỉ sửa được bằng
+    # SQL. Clear là thao tác an toàn (không đụng tiền), reprice bên dưới mới là
+    # phần bị kill-switch chặn.
+    if was_requested:
+        profile.major_change_requested = False
     if not _s.MAJOR_CHANGE_REPRICE_ENABLED or not getattr(
         profile, "uses_choice_engine", False
     ):
+        if was_requested:
+            log.warning(
+                "major_change_cycle_cleared_without_reprice",
+                profile_id=profile.id,
+                reason=(
+                    "flag OFF"
+                    if not _s.MAJOR_CHANGE_REPRICE_ENABLED
+                    else "not_choice_engine"
+                ),
+            )
         return None
-    was_requested = bool(getattr(profile, "major_change_requested", False))
-    # LUÔN clear (an toàn kể cả officer không đổi ngành thật).
-    profile.major_change_requested = False
     if not was_requested:
         return None
 
@@ -11206,8 +11288,21 @@ async def resubmit_profile(
             # đường nộp không lệch tiêu chí (repo này mang eager chain
             # scores+subject + admission_path.criteria mà validator cần).
             _mc_choices = await _MCChoiceRepo(db).list_by_profile(profile.id)
+            # Validator đọc criteria LIVE per-choice nhưng FALLBACK về snapshot khi
+            # path mới để `required_subject_count` NULL. Ở đây `applied_rules` CỐ Ý
+            # chưa rewrite (retry-safe) nên fallback sẽ lấy số môn của ngành CŨ →
+            # hồ sơ THCS 2 môn lọt sang ngành THPT 3 môn, đúng lỗ cần bịt. Dựng
+            # snapshot ngành MỚI (chỉ để validate, KHÔNG ghi) rồi truyền vào.
+            _mc_rules_preview = {
+                **(profile.applied_rules or {}),
+                **(
+                    await _path_dependent_applied_rules(
+                        db, _mc_resub_new_path.id, profile.applied_rules or {}
+                    )
+                ),
+            }
             _mc_score_errors = validate_choice_scores_complete(
-                _mc_choices, profile.applied_rules or {}
+                _mc_choices, _mc_rules_preview
             )
             if _mc_score_errors:
                 raise BusinessRuleViolation(
@@ -12373,6 +12468,27 @@ async def _finalize_withdrawn(
 
         async with AsyncSessionLocal() as _sess:
             _fee_calc = FeeCalculationService(_sess)
+            # Giải phóng chu kỳ đổi ngành trước: ``cancel_fee`` từ chối fee đang
+            # chờ kế toán xác nhận, mà ở callback này lỗi bị swallow → sẽ để lại
+            # phantom invoice + task treo trong worklist kế toán trên một hồ sơ ĐÃ
+            # rút. Session riêng nên phải load lại profile.
+            _cleanup_profile = await _sess.get(
+                models.AdmissionProfile, _cleanup_pid
+            )
+            if _cleanup_profile is not None:
+                try:
+                    await _release_major_change_on_withdraw(
+                        _sess, _cleanup_profile
+                    )
+                    await _sess.commit()
+                except Exception:
+                    await _sess.rollback()
+                    log.warning(
+                        "finalize_withdrawn post-commit: release major-change "
+                        "cycle failed (cancel_fee bên dưới có thể bị chặn)",
+                        profile_id=_cleanup_pid,
+                        exc_info=True,
+                    )
             _fee_ids = [
                 f.id
                 for f in sorted(
@@ -12596,6 +12712,16 @@ async def withdraw_profile(
                 user_id=_uid,
                 source=RefundSourceEnum.withdrawal.value,
             )
+
+    # STEP 1b: RÚT HỒ SƠ HUỶ LUÔN CHU KỲ ĐỔI NGÀNH. Phải chạy TRƯỚC STEP 2 vì
+    # ``cancel_fee`` từ chối fee đang ``awaiting_accountant_confirmation`` (guard
+    # chống phá bất biến mà ``confirm_major_change`` kiểm) — không giải phóng ở đây
+    # thì rút hồ sơ bị 400 và người dùng (kể cả THÍ SINH tự rút qua magic-link)
+    # nhận thông báo "hãy xác nhận đổi ngành trước", tức phải bắt kế toán chốt một
+    # lần đổi ngành mà thí sinh đã bỏ. Rút hồ sơ đã xoá mọi nghĩa vụ tiền nên chu
+    # kỳ đổi ngành không còn ý nghĩa; giải phóng cũng dọn task treo trong worklist
+    # kế toán.
+    await _release_major_change_on_withdraw(db, profile)
 
     # STEP 2: cancel every UNPAID fee (paid_amount==0) — cascades to its
     # invoices. cancel_fee raises BusinessRuleViolation if a pending (unverified)

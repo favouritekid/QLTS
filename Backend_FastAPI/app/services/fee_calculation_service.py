@@ -300,6 +300,61 @@ async def can_open_major_change_cycle(
     return (await _major_change_cycle_blocker(db, profile)) is None
 
 
+async def _assert_choice_matches_priced_major(
+    db: AsyncSession, profile: "models.AdmissionProfile"
+) -> None:
+    """Raise nếu nguyện vọng HIỆN TẠI không còn khớp ngành mà HK1 fee đã định giá.
+
+    Chỉ dùng cho đường HUỶ chu kỳ đổi ngành (rollback/revision thường). Khi officer
+    đã đổi nguyện vọng nhưng chưa nộp lại, huỷ chu kỳ để lại hồ sơ nửa vời (fee/
+    applied_rules ngành cũ + nguyện vọng ngành mới) và lần nộp sau đếm chỉ tiêu vào
+    path CŨ. Fail-closed + chỉ đường: khôi phục nguyện vọng cũ rồi huỷ.
+
+    Bỏ qua im lặng khi chưa xác định được (hồ sơ nhiều nguyện vọng chưa công bố,
+    chưa có fee, fee chưa có ``priced_from_academic_info_id``) — những ca đó không
+    có gì để lệch, và ta KHÔNG được biến đường thoát thành cái bẫy mới.
+    """
+    from app.services.enrollment_letter_service import _get_active_hk1_tuition_fee
+
+    fee = await _get_active_hk1_tuition_fee(db, profile.id)
+    priced_ai_id = getattr(fee, "priced_from_academic_info_id", None) if fee else None
+    if priced_ai_id is None:
+        return
+
+    rows = (
+        await db.execute(
+            select(models.AdmissionPath.academic_info_id)
+            .select_from(models.AdmissionProfileChoice)
+            .join(
+                models.AdmissionPath,
+                models.AdmissionPath.id
+                == models.AdmissionProfileChoice.admission_path_id,
+            )
+            .where(
+                models.AdmissionProfileChoice.admission_profile_id == profile.id
+            )
+        )
+    ).scalars().all()
+    if not rows or len(set(rows)) != 1:
+        # 0 nguyện vọng, hoặc đa nguyện vọng chưa chốt → không kết luận được.
+        return
+    if rows[0] == priced_ai_id:
+        return
+
+    log.warning(
+        "major_change_cancel_rejected_choice_drift",
+        profile_id=profile.id,
+        priced_from_academic_info_id=priced_ai_id,
+        current_choice_academic_info_id=rows[0],
+    )
+    raise BusinessRuleViolation(
+        "Nguyện vọng hiện tại đã khác ngành mà học phí đang tính, nên chưa huỷ "
+        "được chu kỳ đổi ngành (huỷ lúc này sẽ làm lệch chỉ tiêu và công nợ). "
+        "Hãy khôi phục nguyện vọng ngành cũ rồi huỷ, hoặc nộp lại hồ sơ để hoàn "
+        "tất đổi ngành."
+    )
+
+
 async def maybe_open_major_change_cycle(
     db: AsyncSession,
     profile: "models.AdmissionProfile",
@@ -331,6 +386,15 @@ async def maybe_open_major_change_cycle(
         # NHẤT clear ``major_change_requested`` qua API — gate cờ ở đây nghĩa là
         # phải sửa DB tay (xem note không-gate-cờ ở is_major_change_cycle_open).
         if getattr(profile, "major_change_requested", False):
+            # FAIL-CLOSED khi officer ĐÃ đổi nguyện vọng: clear cờ lúc này để lại
+            # hồ sơ nửa vời — nguyện vọng ngành MỚI nhưng applied_rules + fee +
+            # resolved_* còn ngành CŨ, và lần nộp sau (luồng thường) sẽ +1 quota
+            # vào path CŨ trong khi hồ sơ đi path MỚI ⇒ chỉ tiêu lệch hai chiều,
+            # doanh thu/giấy báo ghi ngành cũ, mà 381 hồ sơ paid>0 thì recalculate/
+            # cancel fee đều bị chặn nên KHÔNG sửa được bằng API.
+            # Đường thoát rõ ràng: officer khôi phục nguyện vọng cũ (vẫn sửa được
+            # vì cờ còn bật → finance lock còn nới) rồi admin huỷ chu kỳ.
+            await _assert_choice_matches_priced_major(db, profile)
             profile.major_change_requested = False
             log.info("major_change_cycle_cleared_by_plain_rollback", profile_id=profile.id)
         return False

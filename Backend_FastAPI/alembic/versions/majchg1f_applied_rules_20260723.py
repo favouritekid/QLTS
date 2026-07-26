@@ -48,8 +48,23 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-# Stable whitelist — 7 keys từ ardockeys01 + 3 major-change identity keys.
+# Stable whitelist — 7 keys từ ardockeys01 + TOÀN BỘ key phụ thuộc path mà
+# ``_path_dependent_applied_rules`` ghi lại khi đổi ngành.
+#
+# 🔴 VÌ SAO phải nới rộng thế này: đổi ngành kéo theo ĐỔI PHƯƠNG THỨC XÉT TUYỂN
+# (prod: 19/20 ngành có 2 phương thức, criteria khác hẳn — 200 học bạ THPT
+# average/3 môn/min_gpa 6.0 vs 100 điểm thi sum/3 môn/min_score 15.0 vs 201 học bạ
+# THCS average/2 môn/min_gpa 5.0). Giữ criteria/tổ-hợp/lệ-phí của ngành CŨ nghĩa là
+# snapshot nói sai về hồ sơ. Nếu whitelist chỉ có 3 key danh tính thì trigger
+# ``enforce_applied_rules_immutability`` RAISE ngay key đầu tiên (vd min_gpa
+# 6.0→NULL) ⇒ mọi lần đổi ngành khác phương thức 500 + rollback, tính năng chết.
+# Test KHÔNG bắt được vì test DB dùng ``create_all()`` nên không có trigger nào.
+#
+# Trigger vẫn giữ hai lớp bảo vệ: (1) key NGOÀI danh sách này bất biến —
+# ``schema_version``, ``snapshot_source``, ``upload_config``, snapshot điểm/ưu tiên;
+# (2) XOÁ key luôn bị từ chối, kể cả key whitelisted.
 ALLOWED_KEYS: tuple[str, ...] = (
+    # ardockeys01 — thu lệ phí + doc-resolution
     "fee_status",
     "fee_paid_at",
     "fee_payment_data",
@@ -57,9 +72,35 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "fee_invoice_id",
     "mandatory_docs",
     "doc_configs",
+    # danh tính path (một snapshot nguyên khối, ghi cùng nhau)
     "admission_path_id",
     "admission_round_id",
     "academic_info_id",
+    # tiêu chí xét tuyển
+    "min_gpa",
+    "min_score",
+    "min_subject_score",
+    "max_possible_score",
+    # cấu hình tính điểm
+    "subject_selection_mode",
+    "scoring_method",
+    "required_subject_count",
+    # tổ hợp môn
+    "allowed_subject_codes",
+    "subject_groups",
+    "subject_weights",
+    # phương thức xét tuyển
+    "admission_method",
+    "admission_method_id",
+    "method_type",
+    # lệ phí xét tuyển theo path
+    "application_fee",
+    "requires_application_fee",
+    # cờ + audience/quota/bonus theo path
+    "allow_unverified_submission",
+    "applicable_to",
+    "method_quota",
+    "bonus_rule_override",
 )
 
 
@@ -69,9 +110,10 @@ def upgrade() -> None:
 CREATE OR REPLACE FUNCTION prevent_applied_rules_update()
 RETURNS TRIGGER AS $$
 DECLARE
-    -- 7 keys (ardockeys01) + 3 major-change identity keys
-    -- (admission_path_id, admission_round_id, academic_info_id) rewritten by
-    -- _apply_major_change_snapshot khi officer đổi ngành. Deletion still rejected.
+    -- 7 keys (ardockeys01) + TOÀN BỘ key phụ thuộc path, ghi lại bởi
+    -- ``_path_dependent_applied_rules`` khi đổi ngành (đổi ngành có thể đổi
+    -- PHƯƠNG THỨC XÉT TUYỂN → criteria/tổ hợp/lệ phí đều phải theo ngành mới).
+    -- Xem ALLOWED_KEYS + ghi chú ở đầu file. Deletion still rejected.
     allowed_keys TEXT[] := ARRAY[
         'fee_status',
         'fee_paid_at',
@@ -82,7 +124,26 @@ DECLARE
         'doc_configs',
         'admission_path_id',
         'admission_round_id',
-        'academic_info_id'
+        'academic_info_id',
+        'min_gpa',
+        'min_score',
+        'min_subject_score',
+        'max_possible_score',
+        'subject_selection_mode',
+        'scoring_method',
+        'required_subject_count',
+        'allowed_subject_codes',
+        'subject_groups',
+        'subject_weights',
+        'admission_method',
+        'admission_method_id',
+        'method_type',
+        'application_fee',
+        'requires_application_fee',
+        'allow_unverified_submission',
+        'applicable_to',
+        'method_quota',
+        'bonus_rule_override'
     ];
     v_key TEXT;
     v_all_keys TEXT[];
