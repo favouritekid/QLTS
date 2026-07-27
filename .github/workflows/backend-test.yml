@@ -162,6 +162,19 @@ jobs:
       # =====================================================================
       # Tier 1: Phase 3 multi-NV core — Wave A/B acceptance gates
       # =====================================================================
+      # Ba tập cuối (cohort đưa sang hệ ký túc xá) canh những thứ hỏng ÂM THẦM:
+      #   * test_hk1_fee_scope_single_source — structural lock-in buộc các call
+      #     site thật sự gọi helper chung, không chép tay lại vị từ HK1;
+      #   * test_dorm_export_cohort — cohort bám đúng năm học được hỏi (mượn
+      #     max(academic_year) sẽ làm hồ sơ mùa cũ biến mất);
+      #   * test_sync_dorm_students — chặn --batch-size <= 0, thứ từng khiến một
+      #     lượt đồng bộ ghi 0 hồ sơ rồi vẫn hạ cờ 7 người và báo thành công.
+      # Không có ở đây thì chúng chỉ chạy nightly, tức là SAU khi đã merge.
+      #
+      # ⚠️ TUYỆT ĐỐI không đặt comment BÊN TRONG `run: >-`. YAML gấp folded
+      # scalar thành MỘT dòng, nên dấu `#` đầu tiên biến toàn bộ phần còn lại
+      # thành comment của shell — nuốt cả danh sách test lẫn `--timeout=60`, và
+      # workflow vẫn xanh vì lệnh vẫn chạy (chỉ là chạy thiếu).
       - name: pytest — Phase 3 multi-NV core
         working-directory: Backend_FastAPI
         run: >-
@@ -184,14 +197,6 @@ jobs:
           tests/unit/test_delete_profile_file_cleanup.py
           tests/unit/test_enrollment_letter_pdf.py
           tests/unit/test_enrollment_letter_cleanup.py
-          # Cohort đưa sang hệ ký túc xá. Ba tập này canh những thứ hỏng ÂM THẦM:
-          #   * test_hk1_fee_scope_single_source — structural lock-in buộc các
-          #     call site thật sự gọi helper chung, không chép tay lại vị từ HK1;
-          #   * test_dorm_export_cohort — cohort bám đúng năm học được hỏi
-          #     (mượn max(academic_year) sẽ làm hồ sơ mùa cũ biến mất);
-          #   * test_sync_dorm_students — chặn --batch-size <= 0, thứ từng khiến
-          #     một lượt đồng bộ ghi 0 hồ sơ rồi vẫn hạ cờ 7 người và báo thành công.
-          # Không có ở đây thì chúng chỉ chạy nightly, tức là sau khi đã merge.
           tests/unit/test_hk1_fee_scope_single_source.py
           tests/repositories/test_dorm_export_cohort.py
           tests/unit/test_sync_dorm_students.py

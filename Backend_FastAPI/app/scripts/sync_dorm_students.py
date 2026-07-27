@@ -156,10 +156,17 @@ class DormApi:
     async def close_sync_run(
         self, run_id: int, status: str, counts: Dict[str, int]
     ) -> None:
+        """Đánh dấu một lượt là thất bại.
+
+        ⚠️ Lọc thêm ``status=eq.running``. Chỉ lọc theo ``id`` thì lời gọi này
+        được phép đổi một lượt ĐÃ ``completed`` thành ``failed`` — đúng cách
+        nhật ký bị ghi sai sau ca mất ACK: dữ liệu đã hạ cờ xong, còn sổ sách
+        ghi thất bại. Phía database cũng có trigger chặn, đây là lớp thứ hai.
+        """
         response = await self._client.patch(
             f"{self._base}/sync_runs",
             headers=self._headers,
-            params={"id": f"eq.{run_id}"},
+            params={"id": f"eq.{run_id}", "status": "eq.running"},
             json={
                 "status": status,
                 "completed_at": "now()",
@@ -209,18 +216,44 @@ class DormApi:
         ⚠️ Chỉ được gọi SAU KHI toàn bộ dữ liệu nguồn đã ghi xong.
 
         Trả về số bản ghi bị hạ cờ.
+
+        ⚠️ Có RETRY vì mất ACK là trạng thái mơ hồ HỢP LỆ: database đã hạ cờ và
+        commit xong, nhưng phản hồi không về tới đây. Không thử lại thì script
+        rơi vào nhánh xử lý lỗi và đánh dấu `failed` cho một lượt thực ra đã
+        thành công — nhật ký nói ngược với dữ liệu. Hàm phía database idempotent
+        với cùng bộ số liệu nên gọi lại là an toàn.
         """
-        response = await self._client.post(
-            f"{self._base}/rpc/finalize_sync_run",
-            headers=self._headers,
-            json={
-                "p_run_id": run_id,
-                "p_source_count": source_count,
-                "p_upserted_count": upserted_count,
-            },
-        )
-        self._raise_for_status(response, "Kết thúc lượt đồng bộ")
-        return response.json()["deactivated_count"]
+        payload = {
+            "p_run_id": run_id,
+            "p_source_count": source_count,
+            "p_upserted_count": upserted_count,
+        }
+
+        last_error: Optional[Exception] = None
+        for attempt in range(1, 4):
+            try:
+                response = await self._client.post(
+                    f"{self._base}/rpc/finalize_sync_run",
+                    headers=self._headers,
+                    json=payload,
+                )
+            except httpx.HTTPError as exc:
+                # Lỗi TRUYỀN TẢI: không biết database đã chạy hay chưa. Đây đúng
+                # là ca phải thử lại.
+                last_error = exc
+                log.warning("dorm_sync_finalize_retry", attempt=attempt)
+                await asyncio.sleep(attempt)
+                continue
+
+            # Lỗi có phản hồi (4xx/5xx) là câu trả lời dứt khoát từ database —
+            # thử lại chỉ lặp lại đúng lỗi đó.
+            self._raise_for_status(response, "Kết thúc lượt đồng bộ")
+            return response.json()["deactivated_count"]
+
+        raise RuntimeError(
+            "Kết thúc lượt đồng bộ thất bại sau 3 lần thử (lỗi kết nối). "
+            "Trạng thái lượt CHƯA rõ — kiểm bảng sync_runs trước khi chạy lại."
+        ) from last_error
 
 
 async def fetch_cohort(academic_year: int) -> List[Any]:
