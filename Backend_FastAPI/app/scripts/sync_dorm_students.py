@@ -117,9 +117,26 @@ class DormApi:
     def _raise_for_status(self, response: httpx.Response, action: str) -> None:
         if response.is_success:
             return
-        # KHÔNG in headers hay URL đầy đủ: chúng mang khoá secret.
+
+        # ⚠️ KHÔNG đưa thân phản hồi vào thông điệp lỗi.
+        #
+        # PostgREST trả kèm giá trị của hàng gây lỗi ("Key (...)=(...) already
+        # exists", chi tiết vi phạm CHECK…), tức có thể là tên người học. Thông
+        # điệp này đi vào exception rồi ra stderr — mà stderr bị CI, cron và
+        # container thu gom y như log. Tách khỏi structlog thôi là chưa đủ.
+        #
+        # Người vận hành cần đủ thông tin để tra: hành động nào, mã HTTP nào, và
+        # request-id để đối chiếu với log phía Supabase.
+        request_id = (
+            response.headers.get("x-request-id")
+            or response.headers.get("sb-request-id")
+            or "không có"
+        )
         raise RuntimeError(
-            f"{action} thất bại (HTTP {response.status_code}): {response.text[:300]}"
+            f"{action} thất bại (HTTP {response.status_code}, "
+            f"request-id {request_id}). "
+            "Chi tiết nằm ở log phía Supabase — cố ý không in ra đây vì nội dung "
+            "lỗi có thể chứa dữ liệu cá nhân."
         )
 
     async def open_sync_run(self, academic_year: int) -> int:
@@ -177,29 +194,33 @@ class DormApi:
         content_range = response.headers.get("content-range", "*/0")
         return int(content_range.split("/")[-1])
 
-    async def deactivate_missing(self, academic_year: int, run_id: int) -> int:
-        """Hạ cờ đủ-điều-kiện cho người KHÔNG xuất hiện ở lượt này.
+    async def finalize_sync_run(
+        self, run_id: int, source_count: int, upserted_count: int
+    ) -> int:
+        """Hạ cờ đủ-điều-kiện VÀ đóng lượt — trong cùng một transaction.
 
-        ⚠️ Chỉ được gọi SAU KHI toàn bộ dữ liệu nguồn đã ghi xong. Gọi sớm —
-        hoặc gọi khi lượt tải hỏng giữa chừng — sẽ đánh dấu cả nhóm chưa kịp đọc
-        tới là "đã rời khỏi danh sách".
+        ⚠️ Hai việc này BẮT BUỘC đi cùng nhau. Tách thành hai lời gọi sẽ để lại
+        khoảng trống: hạ cờ xong mà đóng lượt hỏng thì học viên đã bị hạ cờ
+        trong khi lượt vẫn ``running`` — và lượt ``running`` đó khoá luôn năm học
+        lại, nên mọi lần chạy sau đều bị từ chối trong lúc dữ liệu đã đổi một
+        nửa. Nhánh "ghi hỏng giữa chừng" không phủ được ca này vì nó xảy ra SAU
+        khi ghi xong.
 
-        ⚠️ Chỉ đụng cờ nguồn. Người đang Ở KÝ TÚC XÁ vẫn giữ nguyên chỗ; phía
-        KTX hiện cảnh báo và để quản lý quyết định.
+        ⚠️ Chỉ được gọi SAU KHI toàn bộ dữ liệu nguồn đã ghi xong.
+
+        Trả về số bản ghi bị hạ cờ.
         """
-        response = await self._client.patch(
-            f"{self._base}/students",
-            headers={**self._headers, "Prefer": "return=representation"},
-            params={
-                "academic_year": f"eq.{academic_year}",
-                "or": f"(last_seen_sync_id.is.null,last_seen_sync_id.neq.{run_id})",
-                "source_eligible": "eq.true",
-                "select": "qlts_profile_id",
+        response = await self._client.post(
+            f"{self._base}/rpc/finalize_sync_run",
+            headers=self._headers,
+            json={
+                "p_run_id": run_id,
+                "p_source_count": source_count,
+                "p_upserted_count": upserted_count,
             },
-            json={"source_eligible": False},
         )
-        self._raise_for_status(response, "Hạ cờ đủ điều kiện")
-        return len(response.json())
+        self._raise_for_status(response, "Kết thúc lượt đồng bộ")
+        return response.json()["deactivated_count"]
 
 
 async def fetch_cohort(academic_year: int) -> List[Any]:
@@ -257,6 +278,16 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     # nhất: người gõ `--dry-run --apply` tưởng mình đang xem trước.
     if args.apply and args.dry_run:
         parser.error("Không truyền đồng thời --apply và --dry-run.")
+
+    # ⚠️ batch-size <= 0 là lỗi VÔ HIỆU HOÁ HÀNG LOẠT, không phải lỗi nhỏ.
+    # `range(0, 381, -1)` và `range(0, 381, 0)` đều không sinh vòng lặp nào, nên
+    # KHÔNG hồ sơ nào được ghi — rồi bước hạ cờ vẫn chạy và coi toàn bộ danh
+    # sách là "không còn trong nguồn". Lượt đó kết thúc `completed`, thoát 0, và
+    # nhìn từ ngoài y hệt một lần chạy thành công.
+    if args.batch_size <= 0:
+        parser.error(
+            f"--batch-size phải là số nguyên dương, nhận được {args.batch_size}."
+        )
 
     return args
 
@@ -318,40 +349,48 @@ async def main(argv: Optional[List[str]] = None) -> int:
                 log.info("dorm_sync_batch_done", upserted=upserted, total=len(rows))
 
             # CHỈ tới đây — sau khi TOÀN BỘ nguồn đã ghi xong — mới được hạ cờ.
-            deactivated = await api.deactivate_missing(args.academic_year, run_id)
+            # Hạ cờ và đóng lượt đi cùng nhau trong một transaction phía database
+            # (xem `finalize_sync_run`), nên không còn khoảng trống ở giữa.
+            deactivated = await api.finalize_sync_run(
+                run_id, source_count=len(rows), upserted_count=upserted
+            )
 
         except Exception as exc:
-            # Lượt hỏng giữa chừng: đánh dấu failed và TUYỆT ĐỐI không hạ cờ ai.
-            await api.close_sync_run(
-                run_id,
-                "failed",
-                {"source_count": len(rows), "upserted_count": upserted},
-            )
-            # ⚠️ KHÔNG đưa nội dung lỗi vào log có cấu trúc: thông điệp của
-            # PostgREST có thể mang theo giá trị của hàng gây lỗi (tên người
-            # học), mà log thường được gom về nơi khác và giữ rất lâu. Log chỉ
-            # ghi ĐẾN ĐÂU thì hỏng; chi tiết in ra màn hình cho người đang chạy.
+            # Lượt hỏng: đánh dấu failed. Nếu lỗi xảy ra bên trong
+            # `finalize_sync_run` thì transaction phía database đã rollback, nên
+            # không ai bị hạ cờ — đó chính là lý do gộp hai thao tác đó lại.
+            try:
+                await api.close_sync_run(
+                    run_id,
+                    "failed",
+                    {"source_count": len(rows), "upserted_count": upserted},
+                )
+                marked = True
+            except Exception:
+                # Không đánh dấu được thì lượt sẽ kẹt ở `running` và khoá năm học
+                # lại. Phải nói thẳng ra để người vận hành gỡ tay, thay vì nuốt
+                # lỗi trong khối except rồi ném traceback khó hiểu.
+                marked = False
+
+            # ⚠️ KHÔNG đưa nội dung lỗi vào log có cấu trúc: xem `_raise_for_status`.
             log.error(
                 "dorm_sync_failed",
                 run_id=run_id,
                 upserted_before_failure=upserted,
+                run_marked_failed=marked,
             )
             print(f"✗ Đồng bộ thất bại: {exc}", file=sys.stderr)
             print(
                 "  → KHÔNG hạ cờ đủ-điều-kiện của ai. Chạy lại khi đã xử lý xong.",
                 file=sys.stderr,
             )
+            if not marked:
+                print(
+                    f"  ⚠️ Lượt {run_id} vẫn đang ở trạng thái 'running' và sẽ CHẶN "
+                    "mọi lần chạy sau cho năm này. Đánh dấu nó 'failed' bằng tay.",
+                    file=sys.stderr,
+                )
             return 1
-
-        await api.close_sync_run(
-            run_id,
-            "completed",
-            {
-                "source_count": len(rows),
-                "upserted_count": upserted,
-                "deactivated_count": deactivated,
-            },
-        )
 
     print("── ĐÃ ĐỒNG BỘ ──────────────────────────────────────")
     print(f"  Năm học            : {args.academic_year}")

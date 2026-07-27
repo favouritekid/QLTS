@@ -170,6 +170,25 @@ def test_dry_run_flag_is_accepted():
     assert args.apply is False
 
 
+@pytest.mark.parametrize("bad", ["0", "-1", "-200"])
+def test_batch_size_must_be_positive(bad):
+    """``--batch-size`` <= 0 là lỗi VÔ HIỆU HOÁ HÀNG LOẠT, phải chặn ở parser.
+
+    ``range(0, 381, -1)`` và ``range(0, 381, 0)`` đều không sinh vòng lặp nào,
+    nên KHÔNG hồ sơ nào được ghi — rồi bước hạ cờ vẫn chạy và coi toàn bộ danh
+    sách là "không còn trong nguồn". Đã tái hiện thật: nguồn 381, ghi 0, hạ cờ 7,
+    lượt `completed`, thoát 0. Nhìn từ ngoài y hệt một lần chạy thành công.
+    """
+    with pytest.raises(SystemExit):
+        parse_args(["--academic-year", "2026", "--batch-size", bad])
+
+
+def test_batch_size_positive_is_accepted():
+    args = parse_args(["--academic-year", "2026", "--batch-size", "50"])
+
+    assert args.batch_size == 50
+
+
 def test_apply_and_dry_run_together_is_rejected():
     """Truyền cả hai là mâu thuẫn ý định — phải dừng, không im lặng chọn một bên.
 
