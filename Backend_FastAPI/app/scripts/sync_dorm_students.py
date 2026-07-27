@@ -153,27 +153,84 @@ class DormApi:
         self._raise_for_status(response, "Mở lượt đồng bộ")
         return response.json()[0]["id"]
 
-    async def close_sync_run(
-        self, run_id: int, status: str, counts: Dict[str, int]
-    ) -> None:
-        """Đánh dấu một lượt là thất bại.
+    async def get_sync_run(self, run_id: int) -> Optional[Dict[str, Any]]:
+        """Đọc trạng thái hiện tại của một lượt."""
+        response = await self._client.get(
+            f"{self._base}/sync_runs",
+            headers=self._headers,
+            params={
+                "id": f"eq.{run_id}",
+                "select": "id,status,source_count,upserted_count,deactivated_count",
+            },
+        )
+        self._raise_for_status(response, "Đọc lượt đồng bộ")
+        rows = response.json()
+        return rows[0] if rows else None
 
-        ⚠️ Lọc thêm ``status=eq.running``. Chỉ lọc theo ``id`` thì lời gọi này
-        được phép đổi một lượt ĐÃ ``completed`` thành ``failed`` — đúng cách
-        nhật ký bị ghi sai sau ca mất ACK: dữ liệu đã hạ cờ xong, còn sổ sách
-        ghi thất bại. Phía database cũng có trigger chặn, đây là lớp thứ hai.
+    async def mark_sync_run_failed(self, run_id: int, counts: Dict[str, int]) -> int:
+        """Đánh dấu một lượt ĐANG CHẠY là thất bại. Trả về SỐ HÀNG đã đổi.
+
+        ⚠️ Phải trả về số hàng và người gọi phải kiểm. PostgREST coi PATCH khớp
+        0 hàng là THÀNH CÔNG, nên chỉ nhìn mã HTTP thì một lời gọi không đổi gì
+        vẫn được ghi nhận là "đã đánh dấu thất bại".
+
+        ⚠️ Lọc thêm ``status=eq.running``: chỉ lọc theo ``id`` thì lời gọi này
+        đổi được một lượt ĐÃ ``completed`` thành ``failed``.
         """
         response = await self._client.patch(
             f"{self._base}/sync_runs",
-            headers=self._headers,
-            params={"id": f"eq.{run_id}", "status": "eq.running"},
+            headers={**self._headers, "Prefer": "return=representation"},
+            params={
+                "id": f"eq.{run_id}",
+                "status": "eq.running",
+                "select": "id",
+            },
             json={
-                "status": status,
+                "status": "failed",
                 "completed_at": "now()",
                 **counts,
             },
         )
-        self._raise_for_status(response, "Đóng lượt đồng bộ")
+        self._raise_for_status(response, "Đánh dấu lượt thất bại")
+        return len(response.json())
+
+    async def reconcile_after_failure(
+        self, run_id: int, source_count: int, upserted_count: int
+    ) -> str:
+        """Xác định lượt thực sự kết thúc ra sao sau khi client gặp lỗi.
+
+        Client gặp lỗi KHÔNG đồng nghĩa với việc database chưa làm gì. Ca mất
+        ACK là ví dụ: hạ cờ đã commit xong, chỉ phản hồi không về. Tuyên bố
+        "thất bại, không hạ cờ ai" trong ca đó là ghi sai sổ sách.
+
+        Trả về: ``finalized`` | ``marked_failed`` | ``unknown``.
+        """
+        try:
+            run = await self.get_sync_run(run_id)
+        except Exception:
+            return "unknown"
+
+        if run is None:
+            return "unknown"
+
+        if run["status"] == "completed":
+            # Database đã hoàn tất. Lỗi phía client chỉ là lỗi đường truyền.
+            return "finalized"
+
+        if run["status"] == "failed":
+            return "marked_failed"
+
+        try:
+            changed = await self.mark_sync_run_failed(
+                run_id,
+                {"source_count": source_count, "upserted_count": upserted_count},
+            )
+        except Exception:
+            return "unknown"
+
+        # Đổi được đúng một hàng mới là đã đánh dấu thật. 0 hàng nghĩa là trạng
+        # thái đã đổi giữa lúc đọc và lúc ghi — không được tuyên bố bừa.
+        return "marked_failed" if changed == 1 else "unknown"
 
     async def upsert_students(self, rows: List[Dict[str, Any]]) -> None:
         response = await self._client.post(
@@ -389,38 +446,50 @@ async def main(argv: Optional[List[str]] = None) -> int:
             )
 
         except Exception as exc:
-            # Lượt hỏng: đánh dấu failed. Nếu lỗi xảy ra bên trong
-            # `finalize_sync_run` thì transaction phía database đã rollback, nên
-            # không ai bị hạ cờ — đó chính là lý do gộp hai thao tác đó lại.
-            try:
-                await api.close_sync_run(
-                    run_id,
-                    "failed",
-                    {"source_count": len(rows), "upserted_count": upserted},
+            # Lỗi phía client KHÔNG đồng nghĩa với việc database chưa làm gì.
+            # Hỏi lại trạng thái thật thay vì tuyên bố bừa.
+            outcome = await api.reconcile_after_failure(run_id, len(rows), upserted)
+
+            if outcome == "finalized":
+                # Database đã hoàn tất; chỉ phản hồi không về tới đây. Báo thất
+                # bại trong ca này là ghi sai sổ sách.
+                run = await api.get_sync_run(run_id)
+                log.info("dorm_sync_completed_despite_client_error", run_id=run_id)
+                print("── ĐÃ ĐỒNG BỘ (phản hồi tới muộn) ──────────────────")
+                print(f"  Năm học            : {args.academic_year}")
+                print(f"  Ghi/cập nhật       : {upserted}")
+                print(
+                    f"  Hạ cờ đủ điều kiện : "
+                    f"{(run or {}).get('deactivated_count', '?')}"
                 )
-                marked = True
-            except Exception:
-                # Không đánh dấu được thì lượt sẽ kẹt ở `running` và khoá năm học
-                # lại. Phải nói thẳng ra để người vận hành gỡ tay, thay vì nuốt
-                # lỗi trong khối except rồi ném traceback khó hiểu.
-                marked = False
+                return 0
 
             # ⚠️ KHÔNG đưa nội dung lỗi vào log có cấu trúc: xem `_raise_for_status`.
             log.error(
                 "dorm_sync_failed",
                 run_id=run_id,
                 upserted_before_failure=upserted,
-                run_marked_failed=marked,
+                outcome=outcome,
             )
             print(f"✗ Đồng bộ thất bại: {exc}", file=sys.stderr)
-            print(
-                "  → KHÔNG hạ cờ đủ-điều-kiện của ai. Chạy lại khi đã xử lý xong.",
-                file=sys.stderr,
-            )
-            if not marked:
+
+            if outcome == "marked_failed":
                 print(
-                    f"  ⚠️ Lượt {run_id} vẫn đang ở trạng thái 'running' và sẽ CHẶN "
-                    "mọi lần chạy sau cho năm này. Đánh dấu nó 'failed' bằng tay.",
+                    "  → Lượt đã được đánh dấu 'failed'. KHÔNG ai bị hạ cờ "
+                    "(transaction phía database đã rollback).",
+                    file=sys.stderr,
+                )
+            else:
+                # Không đọc/ghi được trạng thái. Tuyệt đối không tuyên bố
+                # "không hạ cờ ai" — ta không biết điều đó có đúng hay không.
+                print(
+                    f"  ⚠️ KHÔNG XÁC ĐỊNH được trạng thái lượt {run_id}. "
+                    "Có thể dữ liệu đã thay đổi.",
+                    file=sys.stderr,
+                )
+                print(
+                    "  → Kiểm bảng sync_runs và students TRƯỚC khi chạy lại. "
+                    "Lượt còn 'running' sẽ chặn mọi lần chạy sau cho năm này.",
                     file=sys.stderr,
                 )
             return 1
