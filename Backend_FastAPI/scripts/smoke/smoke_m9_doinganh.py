@@ -23,9 +23,9 @@ from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
 from app.config import settings
-from smoke_lib import BASE, chay, ghi, tao_client, tien, tong_ket
+from smoke_lib import BASE, chay, doc_ids, ghi, tao_client, tien, tong_ket
 
-SEED = json.load(open("/app/smoke_ids.json", encoding="utf-8"))
+SEED = doc_ids()
 U, P, PM = SEED["users"], SEED["policies"], SEED["payment_methods"]
 A, B = SEED["nganh_a"], SEED["nganh_b"]
 

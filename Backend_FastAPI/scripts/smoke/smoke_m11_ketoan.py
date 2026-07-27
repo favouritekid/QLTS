@@ -23,9 +23,9 @@ from decimal import Decimal
 from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
-from smoke_lib import chay, ghi, tien, tong_ket
+from smoke_lib import chay, doc_ids, ghi, tien, tong_ket
 
-SEED = json.load(open("/app/smoke_ids.json", encoding="utf-8"))
+SEED = doc_ids()
 A = SEED["nganh_a"]
 NHAN = "SMK11"
 

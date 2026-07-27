@@ -17,9 +17,9 @@ from decimal import Decimal
 from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
-from smoke_lib import BASE, chay, ghi, tao_client, tien, tong_ket
+from smoke_lib import BASE, chay, doc_ids, ghi, tao_client, tien, tong_ket
 
-SEED = json.load(open("/app/smoke_ids.json", encoding="utf-8"))
+SEED = doc_ids()
 U, P = SEED["users"], SEED["policies"]
 AI_A = SEED["nganh_a"]["ai_id"]
 PM = SEED["payment_methods"]

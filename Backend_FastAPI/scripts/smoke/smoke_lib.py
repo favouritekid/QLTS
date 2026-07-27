@@ -142,6 +142,52 @@ async def tao_client(username: str) -> httpx.AsyncClient:
     return c
 
 
+def duong_dan_ids() -> str:
+    """Nơi seed ghi và các kịch bản đọc id đã gieo.
+
+    Suy từ gốc dự án (thư mục cha của ``scripts/``) chứ KHÔNG hằng số ``/app``:
+    cùng một đường dẫn dù chạy trong container hay ngoài host. Cho phép đổi
+    bằng ``SMOKE_IDS_PATH`` khi chạy song song nhiều stack.
+    """
+    rieng = os.environ.get("SMOKE_IDS_PATH")
+    if rieng:
+        return rieng
+    goc = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(goc, "smoke_ids.json")
+
+
+def ghi_ids(du_lieu: dict) -> str:
+    """Ghi NGUYÊN TỬ: tạo file tạm cùng thư mục rồi ``os.replace``.
+
+    Nếu ghi thẳng mà tiến trình chết giữa chừng, kịch bản sau đọc phải JSON cụt
+    và chết vì lý do vô nghĩa. ``os.replace`` là thao tác nguyên tử trên cùng
+    hệ thống tệp nên người đọc chỉ thấy bản cũ hoặc bản mới, không thấy bản dở.
+    """
+    dich = duong_dan_ids()
+    tam = f"{dich}.tmp"
+    with open(tam, "w", encoding="utf-8") as f:
+        json.dump(du_lieu, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tam, dich)
+    return dich
+
+
+def doc_ids() -> dict:
+    """Đọc id đã gieo, báo lỗi CÓ HƯỚNG DẪN khi chưa chạy seed."""
+    dich = duong_dan_ids()
+    try:
+        with open(dich, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        raise SystemExit(
+            f"CHẶN: chưa thấy {dich}. Chạy smoke_seed.py trước — nó gieo dữ liệu "
+            "và ghi file này cho các kịch bản sau."
+        )
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"CHẶN: {dich} hỏng ({e}). Chạy lại smoke_seed.py.")
+
+
 async def xoa_tran_gui_lai_link(profile_id: int) -> None:
     """Xoá bộ đếm "3 link / 24h" của MỘT hồ sơ trong Redis.
 

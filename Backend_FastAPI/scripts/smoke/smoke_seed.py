@@ -32,7 +32,7 @@ from app.security import get_password_hash
 # Import này CHẠY chốt chặn môi trường của smoke_lib (SMOKE_ALLOW_DESTRUCTIVE +
 # từ chối production/staging) và lấy mật khẩu từ SMOKE_PASSWORD — không có hằng
 # số mật khẩu nào trong mã nguồn.
-from smoke_lib import PW  # noqa: E402
+from smoke_lib import PW, ghi_ids  # noqa: E402
 
 
 async def _user(s, username, role, unit_id, full_name):
@@ -141,7 +141,17 @@ async def main():
             ORDER BY ho_so_sach DESC
             LIMIT 2
         """))).mappings().all()
-        assert len(rows) >= 2, f"Cần >=2 ngành có hồ sơ sạch, có {len(rows)}"
+        if len(rows) < 2:
+            # Không phải lỗi code: các lần chạy smoke trước đã gắn học phí / thu
+            # tiền lên hồ sơ nên cạn "hồ sơ sạch". Nói rõ cách thoát thay vì ném
+            # AssertionError trần — người chạy sau sẽ tưởng bộ smoke hỏng.
+            raise SystemExit(
+                f"CHẶN: chỉ tìm được {len(rows)} ngành có ≥2 hồ sơ chưa thu tiền "
+                "(cần 2).\nDB này đã bị các lần smoke trước làm cạn hồ sơ sạch. "
+                "Nạp lại DB dùng-một-lần rồi chạy lại, ví dụ:\n"
+                "  docker exec <pg-dev> pg_dump -U qlts -d qlts_dev "
+                "| docker exec -i <pg-smoke> psql -U qlts -d qlts_dev"
+            )
         ai_a, ai_b = rows[0], rows[1]
 
         for ai, amount in ((ai_a, "10000000"), (ai_b, "12000000")):
@@ -228,6 +238,8 @@ async def main():
 
         await s.commit()
 
+    duong_dan = ghi_ids(out)
+    print(f"Đã ghi id đã gieo vào {duong_dan}")
     print("SEED_JSON_START")
     print(json.dumps(out, ensure_ascii=False, indent=2))
     print("SEED_JSON_END")
