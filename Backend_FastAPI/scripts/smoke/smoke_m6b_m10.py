@@ -13,7 +13,7 @@ from decimal import Decimal
 from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
-from smoke_lib import BASE, tao_client, ghi, tien, tong_ket
+from smoke_lib import BASE, chay, ghi, tao_client, tien, tong_ket
 
 SEED = json.load(open("/app/smoke_ids.json", encoding="utf-8"))
 U, P, PM = SEED["users"], SEED["policies"], SEED["payment_methods"]
@@ -248,4 +248,4 @@ async def main():
     return tong_ket("MỤC 6 (phần còn lại) + MỤC 10")
 
 
-asyncio.run(main())
+chay(main)

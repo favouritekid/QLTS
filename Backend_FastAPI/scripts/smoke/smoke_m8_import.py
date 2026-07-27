@@ -15,7 +15,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
-from smoke_lib import BASE, ghi, tao_client, tien, tong_ket
+from smoke_lib import BASE, chay, ghi, tao_client, tien, tong_ket
 
 NAM = 2026
 KY = 1
@@ -79,9 +79,7 @@ async def main():
     )
     if len(hs) < 4:
         ghi("8.4", "chuẩn bị dữ liệu import", False, f"chỉ tìm được {len(hs)} hồ sơ")
-        tong_ket(NHAN)
-        return
-
+        return tong_ket(NHAN)
     a, b, c, d = hs
 
     # Hồ sơ ở trạng thái KHÔNG thu được (đang chờ rút / đã rút / bị từ chối): preview
@@ -145,9 +143,7 @@ async def main():
     ok = r.status_code == 200
     ghi("8.4a", "kế toán preview file 5 dòng → 200", ok, f"HTTP {r.status_code} {r.text[:200]}")
     if not ok:
-        tong_ket(NHAN)
-        return
-
+        return tong_ket(NHAN)
     pv = r.json()
     batch_id = pv["batch_id"]
     by_no = {row["row_no"]: row for row in pv["rows"]}
@@ -260,8 +256,7 @@ async def main():
     ok = rc.status_code == 200
     ghi("8.6a", "kế toán commit lô → 200", ok, f"HTTP {rc.status_code} {rc.text[:200]}")
     if not ok:
-        tong_ket(NHAN)
-        return
+        return tong_ket(NHAN)
     cm = rc.json()
 
     sau_cm = {
@@ -469,7 +464,5 @@ async def main():
 
     await ketoan.aclose()
     await manager.aclose()
-    tong_ket(NHAN)
-
-
-asyncio.run(main())
+    return tong_ket(NHAN)
+chay(main)

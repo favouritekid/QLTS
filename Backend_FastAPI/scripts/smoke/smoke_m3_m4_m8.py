@@ -7,7 +7,7 @@ from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
 from app.config import settings
-from smoke_lib import BASE, tao_client, ghi, tien, tong_ket
+from smoke_lib import BASE, chay, ghi, tao_client, tien, tong_ket
 
 RETURN_URL = f"{settings.FRONTEND_URL.rstrip(chr(47))}/finance/payments/return"
 
@@ -213,4 +213,4 @@ async def main():
     return tong_ket("MỤC 3 + 4 + 8")
 
 
-asyncio.run(main())
+chay(main)

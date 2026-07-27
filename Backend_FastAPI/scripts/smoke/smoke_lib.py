@@ -1,16 +1,74 @@
 """Tiện ích dùng chung cho các bước smoke — gọi API THẬT qua HTTP.
 
-Chạy trong container backend (cùng network, gọi http://backend:8000).
+⚠️ CÔNG CỤ PHÁ HOẠI DỮ LIỆU. Bộ script này đặt lại mật khẩu tài khoản, sửa
+thẳng bảng học phí và cấu hình ngành. Chỉ chạy trên môi trường dùng-một-lần.
+
+Ba chốt chặn bắt buộc, KHÔNG có giá trị mặc định nào:
+  * ``SMOKE_ALLOW_DESTRUCTIVE=1`` — người chạy phải nói rõ mình chấp nhận.
+  * ``SMOKE_BASE`` — địa chỉ API. Không đoán ``backend:8000``: đoán sai địa chỉ
+    là bắn thẳng vào hệ thống thật.
+  * ``SMOKE_PASSWORD`` — mật khẩu gieo cho tài khoản smoke. Hằng số trong mã
+    nguồn nghĩa là mật khẩu admin công khai trên mọi DB từng chạy script.
+
+Thêm một lớp nữa: từ chối chạy khi môi trường hoặc chuỗi kết nối trông giống
+production/staging, kể cả khi ba biến trên đã đặt đúng.
 """
 import asyncio
 import json
 import os
+import re
 from decimal import Decimal
 
 import httpx
 
-BASE = os.environ.get("SMOKE_BASE", "http://backend:8000")
-PW = "Test@12345"
+# Dấu hiệu môi trường THẬT — chặn cứng, không cho cờ nào ghi đè.
+_DAU_HIEU_THAT = ("production", "prod", "staging", "qlts_production")
+
+
+def _chan_moi_truong_that() -> None:
+    """Từ chối chạy nếu đây không phải môi trường dùng-một-lần.
+
+    Kiểm cả ``APP_ENV`` lẫn chuỗi kết nối DB: một stack dev trỏ nhầm sang DB
+    prod vẫn có ``APP_ENV=development``, nên chỉ nhìn APP_ENV là chưa đủ.
+    """
+    if os.environ.get("SMOKE_ALLOW_DESTRUCTIVE") != "1":
+        raise SystemExit(
+            "CHẶN: bộ smoke sửa dữ liệu (đặt lại mật khẩu, ghi đè học phí).\n"
+            "Đặt SMOKE_ALLOW_DESTRUCTIVE=1 nếu DB này là bản dùng-một-lần."
+        )
+
+    app_env = (os.environ.get("APP_ENV") or "").lower()
+    if app_env in _DAU_HIEU_THAT:
+        raise SystemExit(f"CHẶN: APP_ENV={app_env!r} — không chạy smoke ở đây.")
+
+    dsn = (os.environ.get("DATABASE_URL") or "").lower()
+    # Che mật khẩu trước khi in ra log.
+    dsn_an = re.sub(r"://[^:]+:[^@]+@", "://***:***@", dsn)
+    for dau in _DAU_HIEU_THAT:
+        if dau in dsn:
+            raise SystemExit(
+                f"CHẶN: DATABASE_URL chứa {dau!r} ({dsn_an}) — trông như hệ "
+                "thống thật. Smoke sẽ ghi đè học phí và mật khẩu."
+            )
+
+
+def _bat_buoc(ten: str, goi_y: str) -> str:
+    gia_tri = os.environ.get(ten)
+    if not gia_tri:
+        raise SystemExit(f"CHẶN: thiếu biến môi trường {ten}. {goi_y}")
+    return gia_tri
+
+
+_chan_moi_truong_that()
+
+BASE = _bat_buoc(
+    "SMOKE_BASE",
+    "Ví dụ: SMOKE_BASE=http://backend:8000 (địa chỉ API của stack smoke).",
+)
+PW = _bat_buoc(
+    "SMOKE_PASSWORD",
+    "Mật khẩu gieo cho tài khoản smoke — đặt một chuỗi dùng-một-lần.",
+)
 
 _KQ = []
 
@@ -86,3 +144,19 @@ async def tao_client(username: str) -> httpx.AsyncClient:
 
 def tien(x) -> Decimal:
     return Decimal(str(x))
+
+
+def chay(main) -> None:
+    """Chạy một kịch bản smoke và ĐỔI kết quả thành mã thoát tiến trình.
+
+    ``asyncio.run(main())`` trần luôn thoát 0 kể cả khi có mục FAIL — người gọi
+    (và CI) không có cách nào biết, nên smoke xanh giả. Mọi kịch bản phải đi qua
+    đây, và ``main()`` phải ``return tong_ket(NHAN)``.
+    """
+    ket_qua = asyncio.run(main())
+    if ket_qua is None:
+        raise SystemExit(
+            "LỖI KỊCH BẢN: main() không trả về gì. Phải `return tong_ket(NHAN)` "
+            "để mã thoát phản ánh đúng kết quả."
+        )
+    raise SystemExit(0 if ket_qua else 1)

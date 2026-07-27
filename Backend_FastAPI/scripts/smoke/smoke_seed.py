@@ -18,7 +18,10 @@ from app.models.finance import InstallmentPlan, PaymentMethod
 from app.models.tuition_discount_policy import TuitionDiscountPolicy
 from app.security import get_password_hash
 
-PW = "Test@12345"
+# Import này CHẠY chốt chặn môi trường của smoke_lib (SMOKE_ALLOW_DESTRUCTIVE +
+# từ chối production/staging) và lấy mật khẩu từ SMOKE_PASSWORD — không có hằng
+# số mật khẩu nào trong mã nguồn.
+from smoke_lib import PW  # noqa: E402
 
 
 async def _user(s, username, role, unit_id, full_name):
@@ -217,6 +220,7 @@ async def main():
     print("SEED_JSON_START")
     print(json.dumps(out, ensure_ascii=False, indent=2))
     print("SEED_JSON_END")
+    return True
 
 
-asyncio.run(main())
+raise SystemExit(0 if asyncio.run(main()) else 1)

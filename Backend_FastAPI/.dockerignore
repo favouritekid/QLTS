@@ -40,6 +40,10 @@ docs/
 # Scripts not needed at runtime
 scripts/test_*
 scripts/debug_*
+# Bộ smoke: công cụ PHÁ HOẠI DỮ LIỆU (đặt lại mật khẩu, ghi đè học phí). Dockerfile
+# dùng `COPY . .` nên nếu không loại ở đây, nó nằm sẵn trong image production —
+# ai vào được container là chạy được. Chỉ chạy qua bind-mount ở stack dev.
+scripts/smoke/
 
 # SQLite databases
 *.db

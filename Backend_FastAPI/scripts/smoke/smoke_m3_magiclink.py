@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
-from smoke_lib import BASE, ghi, tao_client, tong_ket
+from smoke_lib import BASE, chay, ghi, tao_client, tong_ket
 
 NHAN = "SMK3-MAGICLINK"
 
@@ -79,8 +79,7 @@ async def main():
     hs = await lay_hoac_duyet(manager, 3)
     if not hs:
         ghi("3.8", "tìm/duyệt hồ sơ để phát hành link", False, "không duyệt được hồ sơ nào")
-        tong_ket(NHAN)
-        return
+        return tong_ket(NHAN)
     pid = hs[0]["pid"]
     cccd = hs[0]["cccd"]
     bon_so_cuoi = cccd[-4:]
@@ -114,8 +113,7 @@ async def main():
     )
     if not tok:
         ghi("3.8b", "token được lưu lại để đối chiếu", False, "không thấy token")
-        tong_ket(NHAN)
-        return
+        return tong_ket(NHAN)
     token = tok[0]["token"]
     hanh_dong = tok[0]["action_type"] or "confirm"
     ghi(
@@ -213,8 +211,7 @@ async def main():
     )
     if not tok2:
         ghi("3.12a", "phát hành link cho hồ sơ thứ hai", False, f"HTTP {r_ph.status_code}")
-        tong_ket(NHAN)
-        return
+        return tong_ket(NHAN)
     token = tok2[0]["token"]
     hanh_dong = tok2[0]["action_type"] or "confirm"
 
@@ -328,7 +325,5 @@ async def main():
     await khach.aclose()
     await officer.aclose()
     await manager.aclose()
-    tong_ket(NHAN)
-
-
-asyncio.run(main())
+    return tong_ket(NHAN)
+chay(main)

@@ -10,7 +10,7 @@ import httpx
 from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
-from smoke_lib import BASE, tao_client, ghi, tong_ket
+from smoke_lib import BASE, chay, ghi, tao_client, tong_ket
 
 SEED = json.load(open("/app/smoke_ids.json", encoding="utf-8"))
 U = SEED["users"]
@@ -115,4 +115,4 @@ async def main():
     return tong_ket("MỤC 2 — RBAC/IDOR")
 
 
-asyncio.run(main())
+chay(main)
