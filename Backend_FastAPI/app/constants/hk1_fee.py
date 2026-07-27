@@ -1,17 +1,25 @@
-"""Vị từ phí HK1 dùng chung — NGUỒN DUY NHẤT.
+"""Vị từ phí HK1 dùng chung — NGUỒN CHUẨN cho các consumer đã refactor.
 
-Bộ ba ``fee_type='tuition'`` + ``semester_no == 1`` + ``status <> 'cancelled'``
-trước đây được viết lại bằng tay ở BA nơi, và cả ba docstring đều phải tự nhắc
-nhau "đổi phạm vi HK1 ở một nơi thì PHẢI rà cả ba":
+⚠️ PHẠM VI TUYÊN BỐ — đọc trước khi tin: file này là nguồn chuẩn cho ĐÚNG BA
+consumer đã chuyển sang dùng nó, **không phải** nguồn duy nhất toàn hệ thống:
 
-* ``repositories/admission_repository._hk1_fee_predicate``  (danh sách hồ sơ)
-* ``services/assignment_service._hk1_fee_exists``           (giảm trừ tải lead)
-* ``services/fee_calculation_service.is_hk1_settled``       (bản Python thuần)
+* ``repositories/admission_repository._hk1_fee_predicate``   (danh sách hồ sơ)
+* ``services/assignment_service._hk1_fee_exists``            (giảm trừ tải lead)
+* ``repositories/dorm_export_repository``                    (cohort KTX)
 
-Ba bản sao đồng nghĩa với việc bảng "điểm bận" và danh sách hồ sơ có thể nói hai
-con số khác nhau về cùng một hồ sơ. File này xoá nợ đó cho hai bản SQL; bản
-Python thuần ``is_hk1_settled`` giữ nguyên vì nó nhận giá trị đã đọc sẵn (không
-phải biểu thức SQL) và mang nghĩa KHÁC — xem chú thích cuối file.
+CÒN NỢ — các nơi vẫn viết tay vị từ này, CHƯA refactor (để PR riêng, vì đụng báo
+cáo và export là vùng dễ làm lệch số):
+
+* ``repositories/admission_report_repository`` (~:534, ~:580)
+* ``services/admission_summary_export_service`` (SQL thô, ~:183)
+* ``services/admission_service`` (~:5141, ~:5196, ~:6661)
+
+Nghĩa là: đổi phạm vi HK1 ở đây thì ba consumer trên tự đúng theo, nhưng vẫn
+PHẢI rà tay các nơi còn nợ. Đừng đọc file này thành "sửa một chỗ là xong".
+
+``services/fee_calculation_service.is_hk1_settled`` cố ý KHÔNG dùng file này: nó
+nhận giá trị đã đọc sẵn (không phải biểu thức SQL) và mang nghĩa KHÁC — "đóng ĐỦ
+hoặc miễn", trong khi hai tầng dưới đây phục vụ "phạm vi" và "đã có tiền vào".
 
 HAI TẦNG — cố ý KHÔNG gộp làm một
 =================================

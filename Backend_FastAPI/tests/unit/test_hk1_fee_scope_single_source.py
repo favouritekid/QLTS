@@ -172,6 +172,9 @@ def test_scope_layer_is_not_accidentally_the_paid_layer():
 # Nhóm test dưới đây thay helper bằng một điều kiện SENTINEL và đòi call site
 # phải nhả ra chính sentinel đó. Chép tay = không có sentinel = ĐỎ.
 #
+# Mỗi hàm dựng SQL được kiểm RIÊNG, không chỉ kiểm câu tổng: một câu ghép nhiều
+# mảnh thì sentinel xuất hiện ở đó không chứng minh được MẢNH NÀO đã gọi helper.
+#
 # ⚠️ Vá ở HAI CẤP KHÁC NHAU, có chủ đích:
 #   * ``admission_repository`` và ``assignment_service`` import helper BÊN TRONG
 #     thân hàm → tra cứu lại mỗi lần gọi → vá trên module ``constants.hk1_fee``.
@@ -222,12 +225,50 @@ def test_dorm_cohort_really_calls_the_paid_helper(monkeypatch):
     assert _SENTINEL_PAID in _sql(dorm_repo.select_paid_hk1_cohort(2026))
 
 
-def test_sentinel_patch_actually_takes_effect():
-    """Chốt an toàn cho chính bộ test: không vá thì không có sentinel.
+def test_paid_hk1_exists_clause_really_calls_the_paid_helper(monkeypatch):
+    """Vị từ EXISTS tiền của cohort phải gọi helper.
 
-    Nếu test này đỏ nghĩa là sentinel rò rỉ từ chỗ khác và ba test trên trở nên
-    vô nghĩa (luôn xanh).
+    Kiểm RIÊNG khỏi ``select_paid_hk1_cohort``: câu cohort ghép nhiều mảnh SQL,
+    nên sentinel xuất hiện ở đó chưa chứng minh CHÍNH mảnh này gọi helper — nó có
+    thể đến từ subquery tên ngành.
     """
+    from app.repositories import dorm_export_repository as dorm_repo
+
+    monkeypatch.setattr(dorm_repo, "confirmed_paid_hk1_conditions", _sentinel_paid)
+    assert _SENTINEL_PAID in _sql(dorm_repo.paid_hk1_exists_clause())
+
+
+def test_resolved_major_subquery_really_calls_the_paid_helper(monkeypatch):
+    """Subquery tên ngành cũng phải soi ĐÚNG dòng phí HK1 đã thu tiền.
+
+    Nếu mảnh này tự viết vị từ riêng, tên ngành có thể lấy từ một dòng phí khác
+    với dòng đã quyết định em ấy vào cohort — sai âm thầm, không có lỗi nào nổ.
+    """
+    from app.repositories import dorm_export_repository as dorm_repo
+
+    monkeypatch.setattr(dorm_repo, "confirmed_paid_hk1_conditions", _sentinel_paid)
+    assert _SENTINEL_PAID in _sql(dorm_repo._resolved_major_name_subquery())
+
+
+def test_sentinel_patch_actually_takes_effect():
+    """Chốt an toàn cho chính bộ test: không vá thì KHÔNG sentinel nào xuất hiện.
+
+    Kiểm CẢ HAI sentinel. Chỉ kiểm ``_SENTINEL`` là thiếu: nếu ``_SENTINEL_PAID``
+    rò rỉ từ chỗ khác thì bốn test tầng cohort ở trên luôn xanh và mất tác dụng —
+    đúng kiểu hỏng im lặng mà nhóm test này sinh ra để chặn.
+    """
+    from app.repositories import dorm_export_repository as dorm_repo
     from app.repositories.admission_repository import _hk1_fee_predicate
 
-    assert _SENTINEL not in _sql(_hk1_fee_predicate())
+    scope_sql = _sql(_hk1_fee_predicate())
+    assert _SENTINEL not in scope_sql
+    assert _SENTINEL_PAID not in scope_sql
+
+    for clause in (
+        dorm_repo.paid_hk1_exists_clause(),
+        dorm_repo._resolved_major_name_subquery(),
+        dorm_repo.select_paid_hk1_cohort(2026),
+    ):
+        rendered = _sql(clause)
+        assert _SENTINEL not in rendered
+        assert _SENTINEL_PAID not in rendered

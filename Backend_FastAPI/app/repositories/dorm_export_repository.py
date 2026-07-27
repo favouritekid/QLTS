@@ -1,9 +1,11 @@
 """Cohort "đã đóng học phí HK1" — nguồn cho export sang ứng dụng KTX.
 
-Đây là NƠI DUY NHẤT định nghĩa "học viên nào được đưa sang hệ KTX". Ứng dụng KTX
+Đây là nơi duy nhất định nghĩa "học viên nào được đưa sang hệ KTX". Ứng dụng KTX
 là hệ tách rời (Supabase) nên nếu vị từ này lệch khỏi QLTS, hai bên sẽ nói hai
 danh sách khác nhau mà không có gì nổ ra — vì vậy điều kiện tiền BẮT BUỘC lấy từ
 ``constants/hk1_fee.confirmed_paid_hk1_conditions`` chứ không viết lại tại chỗ.
+Ràng buộc đó được ghim bằng test structural (monkeypatch sentinel), không chỉ
+bằng so khớp SQL.
 
 ⚠️ ``academic_year`` là THAM SỐ BẮT BUỘC và lọc THẲNG trên
 ``AdmissionProfile.academic_year``. Cố ý KHÔNG mượn
@@ -27,19 +29,28 @@ from app.services.admission_state_machine import AdmissionStatus
 
 # Trạng thái hồ sơ được đưa sang hệ KTX.
 #
-# LOẠI có chủ đích:
-#   * ``draft`` / ``rejected``            — chưa vào hoặc đã bị từ chối
-#   * ``withdrawn``                       — đã rút hẳn
-#   * ``withdrawal_pending``              — ĐANG rút, chờ hoàn tiền. Nhóm này
-#     gần như luôn có ``paid_amount > 0`` (chính vì đã đóng tiền mới phải chờ
-#     hoàn) nên nếu không loại tường minh sẽ lọt vào cohort.
-#   * ``reviewing`` / ``result_published`` / ``waitlisted`` / ``revision_requested``
-#     — chưa có kết quả trúng tuyển. Hồ sơ ở các trạng thái này mà đã đóng học
-#     phí HK1 là bất thường; nếu thực tế có, chúng sẽ KHÔNG xuất hiện trong
-#     cohort và cần xử lý riêng thay vì âm thầm xếp chỗ ở.
+# NGUYÊN TẮC: bằng chứng quyết định là TIỀN ĐÃ VÀO, không phải nhãn trạng thái.
+# Vì vậy danh sách này CỐ Ý RỘNG — chỉ loại đúng bốn trạng thái mà việc xếp chỗ
+# ở là vô nghĩa hoặc sai:
+#
+#   * ``draft``               — chưa nộp hồ sơ
+#   * ``rejected``            — đã bị từ chối
+#   * ``withdrawn``           — đã rút hẳn
+#   * ``withdrawal_pending``  — ĐANG rút, chờ hoàn tiền. Nhóm này gần như luôn
+#     có ``paid_amount > 0`` (chính vì đã đóng tiền mới phải chờ hoàn) nên không
+#     loại tường minh thì chắc chắn lọt vào cohort.
+#
+# Bốn trạng thái ĐANG XÉT (``reviewing``, ``revision_requested``,
+# ``result_published``, ``waitlisted``) ĐƯỢC GIỮ: hồ sơ ở đó mà đã đóng học phí
+# HK1 là bất thường, nhưng em đó vẫn đã bỏ tiền thật và vẫn cần chỗ ở — loại đi
+# là mất người thật khỏi danh sách officer nhìn thấy.
 DORM_COHORT_STATUSES: tuple = (
     AdmissionStatus.SUBMITTED.value,
     AdmissionStatus.RESUBMITTED.value,
+    AdmissionStatus.REVIEWING.value,
+    AdmissionStatus.REVISION_REQUESTED.value,
+    AdmissionStatus.RESULT_PUBLISHED.value,
+    AdmissionStatus.WAITLISTED.value,
     AdmissionStatus.APPROVED.value,
     AdmissionStatus.OVERRIDDEN.value,
     AdmissionStatus.ADMITTED.value,

@@ -295,6 +295,32 @@ async def test_withdrawal_pending_excluded_even_though_paid():
     assert await _cohort_ids(2026) == []
 
 
+async def test_excluded_statuses_are_exactly_the_agreed_four():
+    """Chốt quyết định: CHỈ loại bốn trạng thái, không hơn.
+
+    Bằng chứng quyết định là tiền đã vào, không phải nhãn trạng thái. Bốn trạng
+    thái đang xét (reviewing / revision_requested / result_published /
+    waitlisted) PHẢI nằm trong cohort — hồ sơ ở đó mà đã đóng học phí HK1 là bất
+    thường, nhưng em ấy vẫn bỏ tiền thật và vẫn cần chỗ ở.
+
+    Test này đỏ khi ai đó thu hẹp allow-list mà không bàn lại.
+    """
+    assert set(describe_excluded_statuses()) == {
+        "draft",
+        "rejected",
+        "withdrawn",
+        "withdrawal_pending",
+    }
+    assert len(DORM_COHORT_STATUSES) == 11
+    for still_under_review in (
+        "reviewing",
+        "revision_requested",
+        "result_published",
+        "waitlisted",
+    ):
+        assert still_under_review in DORM_COHORT_STATUSES
+
+
 @pytest.mark.parametrize("status", ["draft", "rejected", "withdrawn"])
 async def test_terminal_or_pre_entry_statuses_excluded(status):
     unit_id = await _make_unit()
