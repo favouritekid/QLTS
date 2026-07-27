@@ -95,17 +95,19 @@ def _hk1_fee_exists(*money_conditions):
     """Correlated EXISTS: lead có fee HỌC PHÍ **HK1 của lần ứng tuyển hiện tại**
     thoả thêm ``money_conditions``.
 
-    Bộ ba ``fee_type='tuition'`` + ``semester_no == 1`` + ``status <> 'cancelled'``
-    là vị từ HK1 chính tắc — MIRROR của ``fee_calculation_service.is_hk1_settled``
-    và ``repositories/admission_repository._hk1_fee_predicate`` (bản SQL dùng cho
-    danh sách hồ sơ). Đổi phạm vi HK1 ở một nơi thì PHẢI rà cả ba, nếu không bảng
-    "điểm bận" và danh sách hồ sơ sẽ nói hai con số khác nhau về cùng một hồ sơ.
+    Phạm vi HK1 (``fee_type='tuition'`` + ``semester_no == 1`` +
+    ``status <> 'cancelled'``) lấy từ NGUỒN DUY NHẤT ``constants/hk1_fee``, dùng
+    chung với ``repositories/admission_repository._hk1_fee_predicate`` (bản SQL
+    cho danh sách hồ sơ). Trước đây hai nơi tự viết lại vị từ này nên bảng "điểm
+    bận" và danh sách hồ sơ có thể nói hai con số khác nhau về cùng một hồ sơ.
 
     ⚠️ ``semester_no == 1`` BẮT BUỘC — CHỈ HK1 điều khiển pipeline sts14/sts10.
     Nới ra mọi học kỳ thì lead còn NỢ HK1 nhưng đã đóng HK2+ bị trừ khỏi tải OAN
     trong khi officer vẫn đang phải đòi HK1. Ghim bởi
     ``test_hk2_paid_hk1_unpaid_stays_in_workload``.
     """
+    from app.constants.hk1_fee import hk1_fee_scope_conditions
+
     return (
         select(1)
         .select_from(models.Fee)
@@ -117,9 +119,9 @@ def _hk1_fee_exists(*money_conditions):
             models.AdmissionProfile.lead_id == models.Lead.id,
             models.AdmissionProfile.academic_year
             == _current_admission_year_subquery(),
-            models.Fee.fee_type == "tuition",
-            models.Fee.semester_no == 1,
-            models.Fee.status != "cancelled",
+            # Đã có JOIN nối Fee ↔ AdmissionProfile ở trên nên KHÔNG truyền
+            # profile_id_expr (tránh phát sinh điều kiện nối trùng).
+            *hk1_fee_scope_conditions(),
             *money_conditions,
         )
         .correlate(models.Lead)
