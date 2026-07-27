@@ -288,6 +288,15 @@ class FeeCalculateRequest(BaseModel):
         description="Học phí áp dụng (final sau MỌI giảm) khi miễn/giảm thủ công.",
     )
     manual_discount_reason: Optional[str] = Field(None, max_length=500)
+    # Ưu đãi theo CHÍNH SÁCH người dùng tích chọn trong dialog. Owner chốt 26-07:
+    # officer/kế toán chỉ được chọn TRONG TẬP đã cấu hình cho ngành — id ngoài
+    # tập đó bị từ chối ở service (400) chứ không lọc im lặng.
+    # None = không nêu ý kiến ⇒ áp toàn bộ cấu hình (hành vi cũ).
+    # [] = chọn KHÔNG áp ưu đãi nào.
+    discount_policy_ids: Optional[List[int]] = Field(
+        None,
+        description="Chính sách ưu đãi được chọn (tập con cấu hình của ngành).",
+    )
 
     @model_validator(mode="after")
     def default_semester_for_tuition(self):
@@ -399,6 +408,19 @@ class FeeResponse(FeeBase):
     # P3: First invoice due date for quick reference
     due_date: Optional[date] = None
 
+    # Đổi ngành có khấu trừ phiếu thu (feature "major-change reprice").
+    # ``awaiting_accountant_confirmation`` map thẳng từ model (from_attributes);
+    # phần còn lại router TỰ tính (FE không đoán — hiệu chỉnh audit #4):
+    #   can_confirm_major_change   quyền bấm xác nhận (accountant/admin + cờ bật)
+    #   major_change_from/to_major_name  hiển thị "A→B" trong dialog kế toán
+    #   major_change_delta_amount  số CÒN PHẢI THU sau reprice (raw decimal str,
+    #                              FE tự format — khớp FE zod z.string())
+    awaiting_accountant_confirmation: bool = False
+    can_confirm_major_change: bool = False
+    major_change_from_major_name: Optional[str] = None
+    major_change_to_major_name: Optional[str] = None
+    major_change_delta_amount: Optional[str] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -434,6 +456,13 @@ class FeeSummaryResponse(BaseModel):
     # drive a recalculate dialog, and None makes "not provided" explicit rather
     # than a misleading 0.
     base_amount: Optional[Decimal] = None
+
+    # Đổi ngành: cờ để worklist kế toán + drawer đánh dấu "chờ xác nhận" và
+    # bật nút mở dialog. ``awaiting_accountant_confirmation`` map thẳng từ model;
+    # ``can_confirm_major_change`` router tính (accountant/admin + cờ bật). Chi
+    # tiết A→B + delta ở FeeResponse/FeeDetailResponse (dialog fetch detail).
+    awaiting_accountant_confirmation: bool = False
+    can_confirm_major_change: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1001,6 +1030,9 @@ class InvoiceStatusCounts(BaseModel):
     """
     counts: Dict[str, int]
     overdue_derived: int
+    # Đổi ngành: count cho tab worklist kế toán ("Chờ xác nhận đổi ngành").
+    # Default 0 để client cũ không vỡ khi field chưa có.
+    awaiting_major_change: int = 0
     total: int
 
     model_config = ConfigDict(from_attributes=True)
@@ -1067,6 +1099,46 @@ class CalculableProfilesResponse(BaseModel):
     profiles: List[CalculableProfileItem]
 
 
+class DiscountPolicyOption(BaseModel):
+    """Một chính sách ưu đãi ĐÃ ĐƯỢC CẤU HÌNH cho ngành của hồ sơ.
+
+    Officer/kế toán chỉ được chọn trong tập này (owner chốt 26-07). ``selectable``
+    và ``reason`` lấy từ CHÍNH predicate mà server dùng để cho/chặn
+    (``fee_pricing.is_policy_effective``) — nếu giao diện tự suy theo ngày hay
+    theo cờ ``is_active`` thì sẽ có ngày hiện một ô tích mà bấm vào không giảm.
+    """
+    id: int
+    name: str
+    discount_type: str = Field(..., description="'percentage' | 'amount'")
+    discount_value: Decimal
+    amount: Decimal = Field(
+        ...,
+        description="Số tiền chính sách này THỰC SỰ giảm trong con số phải thu "
+                    "bên dưới (0 khi không được áp). Lấy từ chính dòng engine trả "
+                    "— KHÔNG phải 'nếu áp riêng thì được bao nhiêu', vì một chính "
+                    "sách có thể bị cắt bớt khi phần còn lại của học phí gốc "
+                    "không đủ; hiện số danh nghĩa thì các dòng cộng lại không ra "
+                    "tổng.",
+    )
+    selectable: bool = Field(..., description="Chọn được ở thời điểm hiện tại?")
+    reason: Optional[str] = Field(
+        None, description="Vì sao KHÔNG chọn được (mã lý do máy đọc được)."
+    )
+    reason_text: Optional[str] = Field(
+        None, description="Lý do bằng tiếng Việt để hiển thị."
+    )
+    selected: bool = Field(
+        ..., description="Người dùng đang TÍCH chọn chính sách này?"
+    )
+    applied: bool = Field(
+        ...,
+        description="Có THỰC SỰ được tính vào con số phải thu không. Khác "
+                    "``selected`` khi một chính sách không-cộng-dồn đứng trước "
+                    "đã chặn, hoặc học phí gốc đã giảm hết — lúc đó ``reason_text`` "
+                    "nói rõ vì sao.",
+    )
+
+
 class TuitionPreviewResponse(BaseModel):
     """Giá chuẩn học phí (read-only) cho dialog "Tính phí"
     (GET /api/fees/tuition-preview).
@@ -1075,11 +1147,16 @@ class TuitionPreviewResponse(BaseModel):
     (``base_amount``), giảm giá hiện hành (``total_discount``) và dự kiến phải thu
     (``final_amount`` = base − discount). KHÔNG persist — chỉ tái dùng resolver
     giá + discount như ``calculate_fee``.
+
+    Kèm ``discount_policies`` = tập chính sách đã cấu hình cho ngành, để dialog
+    hiển thị cho người dùng tích chọn. Cùng một lượt gọi trả CẢ danh sách LẪN con
+    số, nên ô tích và số tiền không thể lệch nhau.
     """
     base_amount: Decimal
     total_discount: Decimal
     final_amount: Decimal
     semester_no: int
+    discount_policies: List[DiscountPolicyOption] = Field(default_factory=list)
 
 
 class ProfileCollectionIdentity(BaseModel):

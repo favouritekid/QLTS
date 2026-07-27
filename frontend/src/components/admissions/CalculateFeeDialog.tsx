@@ -104,6 +104,12 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
   const [targetFinal, setTargetFinal] = useState<number | null>(null)
   const [discountReason, setDiscountReason] = useState<string>("")
 
+  // Ưu đãi theo CHÍNH SÁCH của ngành. null = chưa đụng vào ⇒ để backend áp toàn
+  // bộ cấu hình (hành vi cũ). Mảng = lựa chọn tường minh, KỂ CẢ mảng rỗng
+  // ("không áp ưu đãi nào"). Officer/kế toán chỉ chọn được trong tập cấu hình —
+  // server là hàng rào thật, đây chỉ là giao diện.
+  const [selectedPolicyIds, setSelectedPolicyIds] = useState<number[] | null>(null)
+
   const activePlans = useMemo(
     () => (plansQuery.data ?? []).filter((p) => p.is_active !== false),
     [plansQuery.data]
@@ -121,10 +127,29 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
   const isDiscount = isTuition && canManualDiscount && discountMode
   const isPending = calculateFee.isPending
 
-  // Giá chuẩn — fetch khi bật "đóng trước" HOẶC "miễn/giảm" để hiển mức phải thu.
+  // Giá chuẩn + danh sách ưu đãi của ngành. Fetch cho MỌI khoản học phí (không
+  // chỉ khi bật "đóng trước"/"miễn giảm") vì ưu đãi là thứ người dùng cần thấy
+  // trước khi bấm Tính phí — và con số phải thu phải phản ánh đúng ô đang tích.
   const preview = useTuitionPreview(profileId, semesterNo, {
-    enabled: open && (isDownPayment || isDiscount) && !!profileId,
+    enabled: open && isTuition && !!profileId,
+    discountPolicyIds: selectedPolicyIds ?? undefined,
   })
+
+  // Danh sách ưu đãi đã cấu hình cho ngành. Cờ selectable/lý do do SERVER tính
+  // bằng chính predicate của luồng thu thật — FE không tự suy theo ngày/cờ.
+  const policyOptions = preview.data?.discount_policies ?? []
+  const selectablePolicies = policyOptions.filter((p) => p.selectable)
+  // Tập đang áp: chưa đụng vào ⇒ theo server trả về (mặc định cấu hình).
+  const effectiveSelectedIds =
+    selectedPolicyIds ??
+    policyOptions.filter((p) => p.selected).map((p) => p.id)
+
+  const togglePolicy = (id: number, checked: boolean) => {
+    const base = effectiveSelectedIds
+    setSelectedPolicyIds(
+      checked ? [...base, id] : base.filter((pid) => pid !== id)
+    )
+  }
 
   // Mức PHẢI THU hiện hành (final = base − giảm policy) — "đóng trước" chia con số
   // này; "miễn/giảm" yêu cầu target NHỎ HƠN nó. NULL khi preview chưa tải / lỗi.
@@ -175,6 +200,7 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
     setDiscountMode(false)
     setTargetFinal(null)
     setDiscountReason("")
+    setSelectedPolicyIds(null)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -203,6 +229,11 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
             target_final_amount: String(targetFinal),
             manual_discount_reason: discountReason.trim(),
           }
+        : {}),
+      // Ưu đãi theo chính sách: CHỈ gửi khi người dùng thực sự đụng vào ô tích.
+      // Không đụng ⇒ bỏ field ⇒ backend áp toàn bộ cấu hình như trước.
+      ...(isTuition && selectedPolicyIds !== null
+        ? { discount_policy_ids: selectedPolicyIds }
         : {}),
     })
 
@@ -288,6 +319,94 @@ export function CalculateFeeDialog({ open, onOpenChange, profileId, onSuccess }:
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+          )}
+
+          {/* Ưu đãi theo CHÍNH SÁCH đã cấu hình cho ngành. Chỉ hiện khi ngành có
+              cấu hình — trường chưa gắn ưu đãi nào thì đừng thêm ô trống gây rối.
+              Ô tích không chọn được kèm LÝ DO (server trả), vì "ưu đãi có mà
+              không bấm được" là câu hỏi kế toán sẽ hỏi ngay. */}
+          {isTuition && policyOptions.length > 0 && (
+            <div className="rounded-lg border p-3 space-y-2">
+              <div className="space-y-0.5">
+                <Label>Ưu đãi học phí</Label>
+                <p className="text-muted-foreground text-xs">
+                  Chỉ chọn được trong danh sách đã cấu hình cho ngành này.
+                </p>
+              </div>
+
+              <div className="space-y-2 pt-1">
+                {policyOptions.map((policy) => {
+                  const checked = effectiveSelectedIds.includes(policy.id)
+                  return (
+                    <div key={policy.id} className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        id={`discount_policy_${policy.id}`}
+                        className="mt-1 size-4 shrink-0 accent-primary disabled:opacity-50"
+                        checked={policy.selectable && checked}
+                        disabled={isPending || !policy.selectable}
+                        onChange={(e) => togglePolicy(policy.id, e.target.checked)}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <Label
+                          htmlFor={`discount_policy_${policy.id}`}
+                          className={
+                            policy.selectable
+                              ? "cursor-pointer text-sm font-normal"
+                              : "text-muted-foreground text-sm font-normal"
+                          }
+                        >
+                          {policy.name}
+                          {policy.applied && (
+                            <span className="text-primary ml-1 font-medium">
+                              −{formatVND(policy.amount)}
+                            </span>
+                          )}
+                        </Label>
+                        {/* Tích rồi mà KHÔNG được áp (bị chính sách không cộng
+                            dồn chặn, hoặc đã giảm hết học phí gốc) — phải nói ra,
+                            nếu không tổng bên dưới trông như tính sai. */}
+                        {policy.selected && !policy.applied && (
+                          <p className="text-amber-600 text-xs dark:text-amber-500">
+                            Không được áp
+                            {policy.reason_text ? `: ${policy.reason_text}` : ""}
+                          </p>
+                        )}
+                        {!policy.selectable && policy.reason_text && (
+                          <p className="text-muted-foreground text-xs">
+                            {policy.reason_text}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {preview.data && (
+                <div className="border-t pt-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Giá chuẩn:</span>
+                    <span>{formatVND(preview.data.base_amount)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Tổng ưu đãi:</span>
+                    <span>−{formatVND(preview.data.total_discount)}</span>
+                  </div>
+                  <div className="flex items-center justify-between font-semibold">
+                    <span>Phải thu:</span>
+                    <span className="text-primary">
+                      {formatVND(preview.data.final_amount)}
+                    </span>
+                  </div>
+                </div>
+              )}
+              {selectablePolicies.length === 0 && (
+                <p className="text-muted-foreground text-xs">
+                  Không có ưu đãi nào áp dụng được cho hồ sơ này ở thời điểm hiện tại.
+                </p>
+              )}
             </div>
           )}
 

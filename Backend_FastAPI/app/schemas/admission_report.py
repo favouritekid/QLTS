@@ -24,7 +24,12 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 GroupBy = Literal["major", "officer"]
-BucketKind = Literal["ambiguous", "unresolved", "unassigned"]
+# "unknown_major": đổi ngành — doanh thu tuition thu khi fee CHƯA chốt ngành
+# (Payment.recognized_major_id NULL). Dòng riêng, tách với "unresolved" (hồ sơ
+# không phân loại ngành) và application ("không phân bổ ngành").
+BucketKind = Literal[
+    "ambiguous", "unresolved", "unassigned", "unknown_major"
+]
 
 
 class WeekMeta(BaseModel):
@@ -75,7 +80,11 @@ class ConversionMetrics(BaseModel):
 
 
 class FinanceMetrics(BaseModel):
-    # ledger PaymentTransaction.created_at; payment|refund (refund stored negative).
+    # ledger PaymentTransaction.created_at; payment | refund | reversal (refund &
+    # reversal stored negative). ⚠️ gross = payment only; refund = |refund| only;
+    # REVERSAL (void lô) chỉ GIẢM net (không có cột riêng, không gộp gross/refund)
+    # → khi có reversal trong tuần, net_in_week ≠ gross_in_week − refund_in_week
+    # (phần chênh = reversal). tuition HK1-only (semester_no=1).
     gross_in_week: Decimal = Decimal("0")
     refund_in_week: Decimal = Decimal("0")
     net_in_week: Decimal = Decimal("0")
@@ -109,14 +118,33 @@ class DataQuality(BaseModel):
     unassigned_profiles: int = 0  # no officer (officer grouping)
 
 
+class ReportAttribution(BaseModel):
+    """Contract HỖN HỢP — mỗi trục quy ngành theo quy tắc riêng, KHÔNG một literal
+    chung (một literal đơn dễ gây hiểu sai rằng cả tiền lẫn hồ sơ cùng một ngành).
+
+    * ``admission`` = ``recomputed-current``: hồ sơ / chỉ tiêu / phễu tính theo
+      ngành HIỆN TẠI của hồ sơ (đổi ngành → chuyển sang ngành mới; week số có thể
+      dịch khi publish/reopen — xem module docstring).
+    * ``tuition_revenue`` = ``major-at-verified``: doanh thu học phí gán theo ngành
+      TẠI THỜI ĐIỂM phiếu thu verified (bất biến) — tiền đã thu cho ngành cũ vẫn
+      thuộc ngành cũ sau khi hồ sơ đổi ngành. Lệ phí xét tuyển + officer mode
+      không áp quy tắc này (đi theo hồ sơ/cán bộ hiện tại).
+    """
+
+    admission: Literal["recomputed-current"] = "recomputed-current"
+    tuition_revenue: Literal["major-at-verified"] = "major-at-verified"
+
+
 class AdmissionWeeklyReportResponse(BaseModel):
     academic_year: int
     round_code: Optional[str] = None  # None = mọi đợt của năm
     group_by: GroupBy
     week: WeekMeta
     scope_unit_id: Optional[int] = None  # None = toàn trường (admin)
-    # week numbers may shift on publish/reopen — see module docstring.
-    attribution: Literal["recomputed-current"] = "recomputed-current"
+    # Nâng từ literal đơn (#501) lên contract HỖN HỢP: hồ sơ quy theo ngành HIỆN
+    # TẠI, còn doanh thu học phí quy theo ngành LÚC PHIẾU THU ĐƯỢC XÁC MINH — hai
+    # trục không còn cùng một quy tắc kể từ khi có đổi ngành. Xem ReportAttribution.
+    attribution: ReportAttribution = Field(default_factory=ReportAttribution)
     # True CHỈ khi lát cắt = lũy-kế TÍNH ĐẾN HÔM NAY thật (anchor ngầm = today).
     # False cho tuần lịch sử tường minh, năm quá-khứ (chốt 28/12) / tương-lai (chốt
     # 04/01), và ranh giới ISO-year. Các cột SNAPSHOT hiện-tại (draft/fee_hk1) chỉ

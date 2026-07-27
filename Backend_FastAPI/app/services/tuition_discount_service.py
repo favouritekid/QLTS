@@ -118,8 +118,12 @@ async def create_policy(
         "updated_by_user_id": created_by_user_id,
     })
 
-    # Create new policy via repository
-    db_policy = await repo.create(TuitionDiscountPolicy(**policy_dict))
+    # Create new policy via repository.
+    # 🔴 ``BaseRepository.create`` nhận DICT rồi tự dựng model (``self.model(**obj_in)``).
+    # Bản cũ truyền sẵn một INSTANCE ⇒ ``TypeError: argument after ** must be a
+    # mapping`` ⇒ MỌI lần tạo chính sách qua giao diện đều 500. Không test nào
+    # chạm (test service mock repo nên chữ ký thật không được kiểm).
+    db_policy = await repo.create(policy_dict)
     await db.flush()
 
     # ✅ Create post-commit callback
@@ -180,8 +184,10 @@ async def update_policy(
 
     update_data["updated_by_user_id"] = updated_by_user_id
 
-    # Update via repository
-    db_policy = await repo.update(db_policy, **update_data)
+    # Update via repository. ``BaseRepository.update(db_obj, obj_in: dict)`` nhận
+    # dict Ở VỊ TRÍ THỨ HAI — bản cũ bung thành kwargs ⇒ TypeError ⇒ mọi lần sửa
+    # chính sách qua giao diện đều 500. Cùng một lớp lỗi với ``create`` bên trên.
+    db_policy = await repo.update(db_policy, update_data)
     await db.flush()
 
     # ✅ Create post-commit callback

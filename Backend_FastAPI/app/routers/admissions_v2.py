@@ -402,6 +402,7 @@ async def admin_rollback_admission(
         profile=profile,
         reason=payload.reason,
         actor=current_admin,
+        allow_major_change=payload.allow_major_change,
     )
 
     await db.commit()
@@ -414,12 +415,14 @@ async def admin_rollback_admission(
         rolled_back_from=result["rolled_back_from"],
         actor_id=current_admin.id,
         reason_length=len(payload.reason),
+        major_change_requested=result.get("major_change_requested", False),
     )
 
     return schemas.AdmissionAdminRollbackResponse(
         profile_id=result["profile_id"],
         rolled_back_from=result["rolled_back_from"],
         already_at_target=result.get("already_at_target", False),
+        major_change_requested=result.get("major_change_requested", False),
     )
 
 

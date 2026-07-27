@@ -13,8 +13,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { MoreHorizontal, Eye, Percent, XCircle, RefreshCw } from "lucide-react"
+import { MoreHorizontal, Eye, Percent, XCircle, RefreshCw, Clock } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Badge } from "@/components/ui/badge"
 import { AmountDisplay, RemainingAmount } from "./AmountDisplay"
 import { FeeStatusBadge } from "./FinanceStatusBadges"
 import { FEE_TYPE_LABELS, type FeeType, type FeeStatus } from "@/types/finance.types"
@@ -79,6 +80,16 @@ export function FeeCard({
             <p className="text-xs text-muted-foreground mt-0.5">
               Năm học: {fee.academic_year}
             </p>
+            {/* Đổi ngành: đánh dấu fee đang chờ kế toán xác nhận (worklist). */}
+            {fee.awaiting_accountant_confirmation && (
+              <Badge
+                variant="outline"
+                className="mt-1 gap-1 border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300"
+              >
+                <Clock className="h-3 w-3" aria-hidden="true" />
+                Chờ xác nhận đổi ngành
+              </Badge>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <FeeStatusBadge status={fee.status as FeeStatus} size="sm" />

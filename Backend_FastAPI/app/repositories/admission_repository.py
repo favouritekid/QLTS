@@ -1159,7 +1159,13 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             path_id = int(path_id_raw)
         except (TypeError, ValueError):
             return None
+        return await self.get_round_for_path(path_id)
 
+    async def get_round_for_path(self, path_id: int):
+        """F3 — round cutoff cho MỘT path cụ thể. Dùng khi ĐỔI NGÀNH: cutoff phải
+        đánh giá theo path MỚI (``_apply_major_change_snapshot`` chưa rewrite
+        ``applied_rules.admission_path_id`` — dời sang nhánh success), nếu không
+        ``get_round_for_profile_cutoff`` sẽ đọc round của path CŨ → chặn/lọt sai."""
         stmt = (
             select(AdmissionPath)
             .where(AdmissionPath.id == path_id)

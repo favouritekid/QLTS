@@ -181,6 +181,24 @@ class Payment(Base):
         nullable=True
     )
 
+    # Doanh thu ghi nhận theo ngành TẠI THỜI ĐIỂM XÁC MINH (major-change).
+    # Snapshot BẤT BIẾN: stamp = fee.resolved_major_id lúc payment chuyển
+    # 'verified' (chỉ với TUITION fee — lệ phí xét tuyển không phân bổ ngành nên
+    # để NULL). KHÔNG BAO GIỜ cập nhật khi hồ sơ đổi ngành / reprice /
+    # resnapshot fee → tiền đã thu cho ngành A vẫn thuộc A vĩnh viễn; tiền thu
+    # sau khi đổi sang B thuộc B. Công nợ/hóa đơn hiện tại vẫn theo
+    # ``Fee.resolved_major_id``. NULL = "Chưa xác định" (thu khi fee chưa chốt
+    # ngành) — KHÔNG gán hồi tố. Refund giữ nguyên field trên payment gốc nên
+    # báo cáo net (payment − refund) tự trừ đúng ngành gốc.
+    recognized_major_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("major_program.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Ngành ghi nhận doanh thu tại thời điểm verified (bất biến; "
+                "tuition-only, NULL nếu chưa xác định). KHÔNG đổi khi reprice.",
+    )
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

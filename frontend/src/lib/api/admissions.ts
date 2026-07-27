@@ -243,10 +243,47 @@ export async function rejectAdmission(
  */
 export async function requestRevision(
   id: number,
-  data: { reason: string; version: number }
+  data: { reason: string; version: number; allow_major_change?: boolean }
 ): Promise<AdmissionProfileResponse> {
   const response = await api.post<AdmissionProfileResponse>(
     `/api/admissions/${id}/request-revision`,
+    data
+  )
+  return response.data
+}
+
+/**
+ * Response của admin-rollback — KHÔNG phải AdmissionProfileResponse.
+ *
+ * BE trả `schemas.AdmissionAdminRollbackResponse` (5 field dưới đây). Khai sai
+ * thành profile-response là bẫy im lặng: `major_change_cycle_open` tồn tại trong
+ * type profile nên tsc PASS, nhưng runtime luôn `undefined` → nhánh UI phụ thuộc
+ * nó không bao giờ chạy.
+ */
+export interface AdminRollbackResponse {
+  profile_id: number
+  status: "draft"
+  /** Trạng thái TRƯỚC khi rollback */
+  rolled_back_from: string
+  /** true khi no-op (hồ sơ đã ở draft) */
+  already_at_target: boolean
+  /** true khi rollback này ĐÃ mở chu kỳ đổi ngành */
+  major_change_requested: boolean
+}
+
+/**
+ * Admin rollback profile về draft (Admin only)
+ * POST /api/v2/admissions/{id}/admin-rollback
+ *
+ * C2: entry-point ĐỔI NGÀNH — `allow_major_change=true` mở chu kỳ định giá lại
+ * học phí + kế toán xác nhận. KHÔNG cần version (admin override). Reason 10-500.
+ */
+export async function adminRollback(
+  id: number,
+  data: { reason: string; allow_major_change?: boolean }
+): Promise<AdminRollbackResponse> {
+  const response = await api.post<AdminRollbackResponse>(
+    `/api/v2/admissions/${id}/admin-rollback`,
     data
   )
   return response.data
@@ -651,6 +688,7 @@ export const admissionsApi = {
   submitAdmission,
   resubmitAdmission,
   requestRevision,
+  adminRollback,
   approveAdmission,
   rejectAdmission,
   minorCorrection,

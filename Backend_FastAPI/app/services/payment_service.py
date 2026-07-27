@@ -147,7 +147,7 @@ def assert_payable_target(
     entry point can reuse one guard instead of re-deriving the checks.
     ``action`` customises the Vietnamese message.
 
-    Two dead-target classes are refused:
+    Three dead-target classes are refused:
       1. **Cancelled fee/invoice** — the fee or its invoice was cancelled
          (``cancel_fee`` / cancel-invoice) after this operation started.
       2. **Non-payable profile** — the admission profile was withdrawn /
@@ -155,6 +155,12 @@ def assert_payable_target(
          The invoice can still be ``issued`` on a withdrawn profile (withdraw
          does not cancel fees today), so the invoice-status check alone would
          let money land on a profile that is on its way out.
+      3. **Khoản phí đang CHỜ KẾ TOÁN xác nhận đổi ngành**
+         (``awaiting_accountant_confirmation``). Định giá lại khi đổi ngành đặt
+         hoá đơn về ``issued`` với số tiền ngành mới, nên nếu không chặn ở đây
+         thì thu được tiền TRƯỚC bước maker-checker: kế toán mất quyền phủ
+         quyết, và nếu chu kỳ bị huỷ giữa chừng thì tiền đã nằm trên một mức giá
+         chưa ai duyệt. Cùng họ với guard waive/cancel/recalculate đã có.
 
     ``profile`` is REQUIRED (pass ``None`` explicitly when the fee has no
     admission-profile linkage) so every caller consciously resolves it — a
@@ -170,6 +176,11 @@ def assert_payable_target(
     if profile is not None and profile.status in NON_PAYABLE_PROFILE_STATUSES:
         raise BusinessRuleViolation(
             f"Không thể {action}: hồ sơ đã rút/từ chối/đang chờ hoàn tiền."
+        )
+    if fee is not None and getattr(fee, "awaiting_accountant_confirmation", False):
+        raise BusinessRuleViolation(
+            f"Không thể {action}: học phí vừa được định giá lại do đổi ngành và "
+            "đang chờ kế toán xác nhận. Hãy xác nhận trước khi thu tiền."
         )
 
 
@@ -433,6 +444,13 @@ class PaymentService:
         payment.status = PaymentStatusEnum.verified.value
         payment.verified_at = now
         payment.verified_by_id = verifier_id
+        # Đổi ngành: snapshot ngành ghi nhận doanh thu (bất biến) TẠI verify —
+        # tuition-only, đọc fee.resolved_major_id lúc này (xem
+        # recognized_major_id_for_fee). Reprice sau này KHÔNG đụng field này.
+        from app.services.fee_calculation_service import (
+            recognized_major_id_for_fee,
+        )
+        payment.recognized_major_id = recognized_major_id_for_fee(fee)
 
         # Apply money-math to invoice + fee (shared 1 nguồn sự thật với bulk
         # auto-verify) → fee_balance_before / fee_remaining cho audit transaction.

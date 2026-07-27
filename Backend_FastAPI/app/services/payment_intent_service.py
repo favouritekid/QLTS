@@ -638,6 +638,11 @@ class PaymentIntentService:
         # Issue C fix: verified_by_id must be NULL, not the same as created_by_id,
         # otherwise chk_payment_no_self_approval fires. For the online path
         # there is no human checker — the gateway callback IS the verification.
+        # Đổi ngành: snapshot ngành ghi nhận doanh thu (bất biến) — gateway auto-
+        # verify NÊN stamp ngay (tuition-only). fee đã load ở trên.
+        from app.services.fee_calculation_service import (
+            recognized_major_id_for_fee,
+        )
         payment = Payment(
             invoice_id=intent.invoice_id,
             method_id=intent.method_id,
@@ -649,6 +654,7 @@ class PaymentIntentService:
             verified_at=datetime.now(timezone.utc),
             created_by_id=1,   # System user for online payments
             verified_by_id=None,  # NULL: auto-verified by gateway, no human checker
+            recognized_major_id=recognized_major_id_for_fee(fee),
         )
 
         self.db.add(payment)

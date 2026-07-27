@@ -637,6 +637,22 @@ class AdmissionProfile(Base):
         ),
     )
 
+    # Major-change reprice (feature "đổi ngành có khấu trừ phiếu thu"). Admin đặt
+    # true khi "trả hồ sơ cho phép đổi ngành" (admin_rollback/request_revision với
+    # allow_major_change) → nới _assert_no_finance_lock + bypass assert_round_open
+    # CHỈ cho hồ sơ này. Clear ở hook submit/resubmit (mọi nhánh). Vế còn lại của
+    # _major_change_cycle_open. Migration majchg1b.
+    major_change_requested: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment=(
+            "Admin đã cho phép đổi ngành (nới finance lock + bypass "
+            "round-open). Clear ở submit/resubmit."
+        ),
+    )
+
     # Relationships (Eager Loading to Prevent N+1 Queries)
     lead: Mapped["Lead"] = relationship(
         "Lead",

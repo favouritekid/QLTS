@@ -439,6 +439,10 @@ class TestUserEventsHaveDispatchCallers:
         "payment_received", "payment_verified",
         "payment_rejected",
         "fee_fully_paid", "invoice_issued", "payment_overdue",
+        # Đổi ngành có khấu trừ phiếu thu. AWAITING dispatch từ hook
+        # admission_service._reprice_on_resubmit_if_major_change (sau reprice);
+        # CONFIRMED dispatch từ fee_calculation_service.confirm_major_change.
+        "major_change_awaiting_confirmation", "major_change_confirmed",
         # refund_processed stays internal_future (no refund router yet)
         "ctv_claim_submitted", "ctv_claim_approved", "ctv_claim_rejected",
         "ctv_approved", "ctv_suspended", "ctv_commission_created",

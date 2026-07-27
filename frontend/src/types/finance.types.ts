@@ -127,6 +127,13 @@ export interface Fee {
   can_recalculate: boolean
   // Additional metadata
   due_date: string | null // First invoice due date for quick reference
+  // Đổi ngành có khấu trừ phiếu thu (BE-owned). Optional cho backward-compat
+  // trong lúc rollout (cờ BE MAJOR_CHANGE_REPRICE_ENABLED).
+  awaiting_accountant_confirmation?: boolean
+  can_confirm_major_change?: boolean
+  major_change_from_major_name?: string | null
+  major_change_to_major_name?: string | null
+  major_change_delta_amount?: string | null
 }
 
 export interface FeeSummary {
@@ -152,6 +159,9 @@ export interface FeeSummary {
   // Current base amount — only the drawer sets it (prefills the "Tính lại"
   // dialog). Absent elsewhere (no recalculate button there).
   base_amount?: string
+  // Đổi ngành: cờ để worklist kế toán + drawer đánh dấu "chờ xác nhận".
+  awaiting_accountant_confirmation?: boolean
+  can_confirm_major_change?: boolean
 }
 
 export interface FeeDetail extends Fee {
@@ -262,6 +272,8 @@ export interface InvoiceStatusCounts {
     overdue: number
   }
   overdue_derived: number
+  /** Count cho tab "Chờ xác nhận đổi ngành" (0 nếu BE chưa trả). */
+  awaiting_major_change?: number
   total: number
 }
 
@@ -594,6 +606,30 @@ export interface FeeCalculateRequest {
   // admin/manager/accountant (backend enforce 403). Bỏ khi không miễn/giảm.
   target_final_amount?: string | null
   manual_discount_reason?: string | null
+  // Ưu đãi theo CHÍNH SÁCH người dùng tích chọn. Phải là tập con của cấu hình
+  // ngành (backend từ chối id ngoài tập đó — 400, không lọc im lặng).
+  // undefined = không nêu ý kiến ⇒ áp toàn bộ cấu hình; [] = không áp ưu đãi nào.
+  discount_policy_ids?: number[]
+}
+
+/** Một chính sách ưu đãi đã cấu hình cho ngành của hồ sơ. */
+export interface DiscountPolicyOption {
+  id: number
+  name: string
+  discount_type: string
+  discount_value: string
+  /** Số tiền giảm khi áp MỘT MÌNH trên giá chuẩn học kỳ (Decimal as string). */
+  amount: string
+  selectable: boolean
+  /** Mã lý do không chọn được (máy đọc). */
+  reason: string | null
+  /** Lý do bằng tiếng Việt để hiển thị. */
+  reason_text: string | null
+  /** Người dùng đang TÍCH chọn? */
+  selected: boolean
+  /** Có THỰC SỰ được tính vào số phải thu không (khác `selected` khi bị chính
+   *  sách không-cộng-dồn chặn hoặc học phí gốc đã giảm hết). */
+  applied: boolean
 }
 
 /** Giá chuẩn học phí (GET /api/fees/tuition-preview) — Decimal as string. */
@@ -602,6 +638,8 @@ export interface TuitionPreviewResponse {
   total_discount: string
   final_amount: string
   semester_no: number
+  /** Ưu đãi đã cấu hình cho ngành — nguồn DUY NHẤT cho ô tích của dialog. */
+  discount_policies: DiscountPolicyOption[]
 }
 
 export interface FeeWaiveRequest {
@@ -960,6 +998,8 @@ export interface InvoiceFilters extends InvoiceWorkspaceFilters {
   fee_type?: FeeType
   /** Derived overdue (issued/partial/overdue AND due<today). Use for "Quá hạn" tab. */
   overdue_only?: boolean
+  /** Lens "Chờ xác nhận đổi ngành" (cờ trên khoản phí cha). */
+  awaiting_major_change?: boolean
   search?: string
   sort_by?:
     | "priority"

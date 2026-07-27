@@ -26,6 +26,13 @@ export interface InvoiceStatusTab {
   label: string
   statuses: readonly string[]
   overdue?: boolean
+  /**
+   * Lens "Chờ xác nhận đổi ngành": count = `awaiting_major_change`, filter =
+   * `awaiting_major_change=true`. ORTHOGONAL với trạng thái hoá đơn (một hoá đơn
+   * `issued`/`partial` vẫn có thể đang chờ) — giống lens "Quá hạn", nên KHÔNG
+   * cộng vào phân hoạch trạng thái.
+   */
+  awaitingMajorChange?: boolean
 }
 
 // Order matters. "Quá hạn" is an ORTHOGONAL lens (overdue_derived), NOT part of
@@ -37,6 +44,16 @@ export interface InvoiceStatusTab {
 export const INVOICE_STATUS_TABS: ReadonlyArray<InvoiceStatusTab> = [
   { key: "all", label: "Tất cả", statuses: [] },
   { key: "overdue", label: "Quá hạn", statuses: [], overdue: true }, // orthogonal lens
+  // Đổi ngành: worklist của KẾ TOÁN. Trong lúc chờ họ xác nhận, hồ sơ bị chặn
+  // duyệt/công bố/ghi danh/xuất giấy — trước khi có tab này, đường DUY NHẤT tới
+  // nút xác nhận là thông báo, mà prod chỉ có 1 kế toán nên bỏ lỡ thông báo là hồ
+  // sơ đứng im không ai biết đang chờ ai.
+  {
+    key: "awaiting_major_change",
+    label: "Chờ xác nhận đổi ngành",
+    statuses: [],
+    awaitingMajorChange: true,
+  },
   { key: "issued", label: "Chờ thu", statuses: ["issued"] },
   { key: "partial", label: "Một phần", statuses: ["partial"] },
   { key: "paid", label: "Đã thu", statuses: ["paid"] },

@@ -1481,8 +1481,15 @@ async def test_admin_rollback_response_schema_locked(
     # (default False). FE consumer ignoring extra keys is fine; required
     # keys still locked. Anchor verifies (a) all required keys present
     # (b) no UNEXPECTED keys beyond the documented allowlist.
+    # Đổi ngành (2026-07-27): thêm `major_change_requested` (optional, default
+    # False) — FE đọc CHÍNH cờ này để biết rollback có mở được chu kỳ đổi ngành
+    # hay bị bỏ qua (flag OFF / post-decision / không có HK1 fee), rồi mới hiện
+    # hướng dẫn "officer sửa nguyện vọng rồi nộp lại"
+    # (frontend/src/hooks/admissions/useAdmissions.ts). Cùng dạng mở rộng
+    # backward-compatible với `already_at_target`: key mới có default, consumer
+    # cũ bỏ qua được ⇒ không cần bump version.
     required_keys = {"profile_id", "status", "rolled_back_from"}
-    allowed_keys = required_keys | {"already_at_target"}
+    allowed_keys = required_keys | {"already_at_target", "major_change_requested"}
     actual_keys = set(body.keys())
     assert required_keys <= actual_keys, (
         f"T17 response missing required keys. Required: {required_keys}, "

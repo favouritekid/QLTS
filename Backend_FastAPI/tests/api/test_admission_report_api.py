@@ -74,7 +74,12 @@ def _assert_report_shape(body: dict, *, group_by: str) -> None:
         assert key in body, f"missing top-level key '{key}': {body}"
 
     assert body["group_by"] == group_by
-    assert body["attribution"] == "recomputed-current"
+    # Contract hỗn hợp (đổi ngành): hồ sơ theo ngành hiện tại, doanh thu tuition
+    # theo ngành lúc verified.
+    assert body["attribution"] == {
+        "admission": "recomputed-current",
+        "tuition_revenue": "major-at-verified",
+    }
     assert isinstance(body["rows"], list)
     assert isinstance(body["totals"], dict)
 

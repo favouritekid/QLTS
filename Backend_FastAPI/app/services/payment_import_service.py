@@ -1015,6 +1015,9 @@ async def auto_verify_payment(
         return None
 
     now = datetime.now(timezone.utc)
+    # Đổi ngành: snapshot ngành ghi nhận doanh thu (bất biến) — bulk auto-verify
+    # stamp ngay (tuition-only). fee đã được caller lock/refresh.
+    from app.services.fee_calculation_service import recognized_major_id_for_fee
     payment = Payment(
         invoice_id=invoice.id,
         method_id=method_id,
@@ -1027,6 +1030,7 @@ async def auto_verify_payment(
         verified_by_id=system_user.id,
         intent_id=None,
         notes="Bulk import thu học phí — auto-verify (system_user)",
+        recognized_major_id=recognized_major_id_for_fee(fee),
     )
     db.add(payment)
     await db.flush()
@@ -1329,6 +1333,15 @@ async def commit_batch(
                     raise BusinessRuleViolation(
                         f"hồ sơ đã {profile_status} — không thể thu tiền vào "
                         f"hồ sơ đã rút/từ chối/đang chờ hoàn"
+                    )
+                # Đồng bộ với ``assert_payable_target``: học phí vừa định giá lại
+                # do đổi ngành, đang chờ kế toán xác nhận thì KHÔNG được auto-verify
+                # tiền vào. Import hàng loạt là đường ghi tiền im lặng nhất — bỏ
+                # sót ở đây thì cả một lô tiền đáp lên mức giá chưa ai duyệt.
+                if getattr(fee, "awaiting_accountant_confirmation", False):
+                    raise BusinessRuleViolation(
+                        "học phí đang chờ kế toán xác nhận đổi ngành — "
+                        "xác nhận trước khi thu tiền"
                     )
                 was_hk1 = is_hk1_settled_fee(fee)
 

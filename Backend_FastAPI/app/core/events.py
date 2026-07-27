@@ -573,6 +573,48 @@ class SystemEvents(str, Enum):
     Recipients: Assigned officer
     """
 
+    MAJOR_CHANGE_AWAITING_CONFIRMATION = "major_change_awaiting_confirmation"
+    """
+    Đổi ngành: reprice xong, HK1 fee chờ kế toán xác nhận.
+
+    Payload Schema:
+        {
+            "fee_id": int,
+            "invoice_id": int,
+            "admission_profile_id": int,
+            "lead_id": int | None,
+            "unit_id": int | None,
+            "old_major_name": str | None,
+            "new_major_name": str | None,
+            "delta_amount": str,          # new_final − old_final (Decimal→str)
+            "profile_code": str | None,
+            "letter_superseded": bool,
+            "user_ids": list[int]         # Recipients (kế toán + admin)
+        }
+
+    Recipients: Kế toán + admin (specific_users — service tự resolve).
+    """
+
+    MAJOR_CHANGE_CONFIRMED = "major_change_confirmed"
+    """
+    Đổi ngành: kế toán đã xác nhận — officer được báo để tiếp tục (xuất giấy…).
+
+    Payload Schema:
+        {
+            "fee_id": int,
+            "invoice_id": int | None,
+            "admission_profile_id": int,
+            "lead_id": int | None,
+            "unit_id": int | None,
+            "new_major_name": str | None,
+            "profile_code": str | None,
+            "actor_id": int | None,       # Kế toán xác nhận
+            "user_ids": list[int]         # Recipients (officer phụ trách)
+        }
+
+    Recipients: Officer phụ trách hồ sơ (specific_users).
+    """
+
     # =========================================================================
     # DORM EVENTS (Future)
     # =========================================================================
