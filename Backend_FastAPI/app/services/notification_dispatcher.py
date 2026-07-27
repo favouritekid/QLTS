@@ -406,6 +406,28 @@ def rooms_for_user(user_id: Optional[int]) -> List[str]:
     return rooms
 
 
+def rooms_for_finance_review(
+    profile, recipient_user_ids: Optional[List[int]] = None
+) -> List[str]:
+    """Rooms cho event tài chính nội bộ ĐỔI NGÀNH (chờ / đã xác nhận).
+
+    Event ``privacy="sensitive"`` + ``SOCKET_SCOPED_EMIT`` ⇒ ``rooms=`` BẮT BUỘC
+    non-empty, nếu rỗng domain emit bị bỏ hoàn toàn (fail-closed). Kế toán +
+    admin thấy realtime; cộng room cá nhân từng recipient (officer ở event
+    CONFIRMED) + unit của hồ sơ. ``role_accountant``/``role_admin`` là auto-join
+    room theo role (socket_manager).
+    """
+    rooms: List[str] = ["role_admin", "role_accountant"]
+    lead = getattr(profile, "lead", None) if profile is not None else None
+    if lead is not None:
+        unit_id = getattr(lead, "unit_id", None)
+        if unit_id is not None:
+            rooms.append(f"unit_{unit_id}")
+    for uid in (recipient_user_ids or []):
+        rooms.append(f"user_room_{uid}")
+    return rooms
+
+
 # ---------------------------------------------------------------------------
 # Option-B Commit 7 — SUSPICIOUS_LOGIN socket gating
 # ---------------------------------------------------------------------------

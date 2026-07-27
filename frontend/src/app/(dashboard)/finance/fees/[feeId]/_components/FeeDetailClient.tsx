@@ -29,6 +29,7 @@ import {
   User,
   Calendar,
   Receipt,
+  CheckCircle2,
 } from "lucide-react"
 import { useFeeViewModel } from "@/hooks/finance/useFeeViewModel"
 import { AmountDisplay, FeeStatusBadge, InvoiceStatusBadge } from "@/components/finance"
@@ -37,6 +38,7 @@ import { cn } from "@/lib/utils"
 import { FeeWaiveDialog } from "./FeeWaiveDialog"
 import { FeeCancelDialog } from "./FeeCancelDialog"
 import { FeeRecalculateDialog } from "./FeeRecalculateDialog"
+import { FeeConfirmMajorChangeDialog } from "./FeeConfirmMajorChangeDialog"
 import { resolveFinanceReturn, withFrom } from "@/lib/finance/nav-context"
 
 // =============================================================================
@@ -89,6 +91,9 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
   const [recalculateDialogOpen, setRecalculateDialogOpen] = React.useState(
     searchParams.get("action") === "recalculate"
   )
+  const [confirmMcDialogOpen, setConfirmMcDialogOpen] = React.useState(
+    searchParams.get("action") === "confirm-major-change"
+  )
 
   // Fetch fee detail
   const { data: fee, isLoading, error } = useFeeViewModel(feeId)
@@ -98,6 +103,7 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
     setWaiveDialogOpen(false)
     setCancelDialogOpen(false)
     setRecalculateDialogOpen(false)
+    setConfirmMcDialogOpen(false)
     // Drop the `?action=` param but PRESERVE `?from=` so the return context
     // survives closing a dialog.
     router.replace(withFrom(`/finance/fees/${feeId}`, from))
@@ -171,6 +177,13 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
             >
               <XCircle className="h-4 w-4 mr-2" />
               Hủy
+            </Button>
+          )}
+          {/* Đổi ngành: nút kế toán xác nhận (thin-client, gated cờ BE). */}
+          {fee.show_confirm_major_change_button && (
+            <Button onClick={() => setConfirmMcDialogOpen(true)}>
+              <CheckCircle2 className="h-4 w-4 mr-2" />
+              Xác nhận đổi ngành
             </Button>
           )}
         </div>
@@ -422,6 +435,20 @@ export function FeeDetailClient({ feeId }: FeeDetailClientProps) {
         feeType={fee.fee_type_label}
         currentBaseAmount={fee.base_amount}
         currentBaseAmountFormatted={fee.base_amount_formatted}
+      />
+
+      <FeeConfirmMajorChangeDialog
+        open={confirmMcDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) handleDialogClose()
+          else setConfirmMcDialogOpen(open)
+        }}
+        feeId={feeId}
+        fromMajorName={fee.major_change_from_major_name ?? null}
+        toMajorName={fee.major_change_to_major_name ?? null}
+        finalAmount={fee.final_amount}
+        paidAmount={fee.paid_amount}
+        deltaAmount={fee.major_change_delta_amount ?? null}
       />
     </div>
   )

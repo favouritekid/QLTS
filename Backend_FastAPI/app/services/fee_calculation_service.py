@@ -20,14 +20,14 @@ Business Rules:
 - Version column for optimistic locking
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional, Tuple, Callable, Any
 import structlog
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
 from app import models
@@ -37,6 +37,17 @@ from app.models.finance import (
     PaymentIntent, PaymentIntentStatusEnum,
 )
 from app.models.tuition_discount_policy import TuitionDiscountPolicy
+from app.services.fee_pricing import (
+    compute_final_amount,
+    compute_manual_discount_amount,
+    discount_context_for_profile,
+    is_policy_effective,
+    resolve_discounts,
+    resolve_fee_pricing,
+    resolve_repricing,
+    select_configured_policies,
+    skip_reason_text,
+)
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.utils.exceptions import (
     ResourceNotFoundError,
@@ -101,6 +112,382 @@ def is_hk1_settled_fee(fee) -> bool:
         fee.fee_type, fee.semester_no, fee.status,
         fee.paid_amount, fee.final_amount, fee.waived_amount,
     )
+
+
+def recognized_major_id_for_fee(fee) -> Optional[int]:
+    """Ngành ghi nhận doanh thu cho MỘT payment khi nó chuyển 'verified' —
+    stamp bất biến vào ``Payment.recognized_major_id`` (edge-case đổi ngành).
+
+    CHỈ học phí (tuition) phân bổ theo ngành; lệ phí xét tuyển là phí cố định xử
+    lý hồ sơ, KHÔNG theo ngành → None. Đọc ``resolved_major_id`` tại thời điểm
+    verify (ngành hồ sơ đang thuộc lúc thu); NULL nếu fee chưa chốt ngành ("Chưa
+    xác định" — không gán hồi tố). Dùng chung bởi 3 đường tạo payment verified
+    (manual verify / gateway callback / bulk import) để 1 nguồn sự thật.
+    """
+    if getattr(fee, "fee_type", None) != FeeTypeEnum.tuition.value:
+        return None
+    return getattr(fee, "resolved_major_id", None)
+
+
+async def load_discount_policies(
+    db: AsyncSession, policy_ids: "List[int]", *, only_active: bool = True
+) -> list:
+    """Nạp ``TuitionDiscountPolicy`` theo id — I/O DÙNG CHUNG cho mọi luồng định giá.
+
+    Chỉ lọc ``id IN`` (+ ``is_active`` khi ``only_active``) ở SQL; MỌI quy tắc
+    nghiệp vụ khác (hiệu lực ngày, cộng dồn, giới hạn lượt, phạm vi ngành, điều
+    kiện đối tượng) do ``fee_pricing`` quyết định — một nguồn. Hàm ở tầng module
+    (không phải method) để các hàm module-level như
+    ``recalculate_fees_for_semester_tuition_change`` cũng dùng được thay vì tự
+    dựng engine riêng.
+
+    ``only_active=False`` dùng cho màn hình LIỆT KÊ: chính sách bị tắt SAU khi đã
+    gắn cho ngành vẫn phải hiện ra kèm lý do, nếu không người dùng thấy cấu hình
+    có 3 ưu đãi mà dialog chỉ hiện 1 và không hiểu vì sao.
+    """
+    if not policy_ids:
+        return []
+    conditions = [TuitionDiscountPolicy.id.in_(policy_ids)]
+    if only_active:
+        conditions.append(TuitionDiscountPolicy.is_active.is_(True))
+    rows = await db.execute(select(TuitionDiscountPolicy).where(*conditions))
+    return list(rows.scalars().all())
+
+
+async def write_fee_discount_lines(
+    db: AsyncSession,
+    fee_id: int,
+    applied_discounts: "List[Tuple[Optional[int], Decimal, dict]]",
+) -> None:
+    """Xoá + ghi lại toàn bộ dòng ``FeeAppliedDiscount`` của một khoản phí.
+
+    Chỗ DUY NHẤT ghi bảng dòng giảm giá cho các luồng TÍNH LẠI (tính lại phí,
+    đổi ngành, đổi giá học kỳ) — cùng cặp với ``fee_pricing.resolve_repricing``
+    là nơi duy nhất TÍNH. Ai tính bằng engine chung mà tự ghi kiểu khác thì tổng
+    trên ``fee`` và tổng các dòng lại lệch nhau.
+
+    DELETE trước là BẮT BUỘC: unique ``uq_fee_applied_discount_fee_policy`` KHÔNG
+    chặn nhiều dòng ``policy_id IS NULL`` (Postgres coi NULL là distinct) nên
+    không DELETE sẽ chồng dòng qua mỗi lần tính lại.
+
+    Ở tầng module (không phải method) để hàm module-level
+    ``recalculate_fees_for_semester_tuition_change`` cũng dùng được.
+    """
+    await db.execute(
+        sa.delete(FeeAppliedDiscount).where(FeeAppliedDiscount.fee_id == fee_id)
+    )
+    await db.flush()
+    for order, (policy_id, discount_amount, snapshot) in enumerate(
+        applied_discounts, 1
+    ):
+        db.add(
+            FeeAppliedDiscount(
+                fee_id=fee_id,
+                policy_id=policy_id,
+                discount_amount=discount_amount,
+                calculation_snapshot=snapshot,
+                application_order=order,
+            )
+        )
+    await db.flush()
+
+
+async def is_major_change_cycle_open(
+    db: AsyncSession, profile: "models.AdmissionProfile"
+) -> bool:
+    """True khi hồ sơ đang trong CHU KỲ đổi ngành — dùng chung bởi cờ transient
+    FE (``_populate_major_change_flag``) VÀ 6 gate (xuất giấy / approve /
+    publish_result / enroll / confirm / calculate_fee).
+
+    = ``profile.major_change_requested`` (admin đã cho phép, chờ officer sửa +
+    nộp lại) HOẶC active HK1 tuition fee ``awaiting_accountant_confirmation`` (đã
+    reprice, chờ kế toán chốt).
+
+    ⚠️ CỐ Ý **KHÔNG** gate ``MAJOR_CHANGE_REPRICE_ENABLED``. Cờ đó chặn MỞ chu kỳ
+    MỚI (``_major_change_cycle_blocker``) và chặn reprice, nhưng chu kỳ ĐÃ mở thì
+    phải tiếp tục được tôn trọng: nếu tắt cờ giữa chu kỳ mà hàm này trả False thì
+    approve / publish / enroll / xuất giấy mở lại cho hồ sơ đang có
+    ``awaiting_accountant_confirmation=True`` → phát giấy + chốt trúng tuyển với
+    học phí CHƯA định giá lại và CHƯA có kế toán xác nhận (đúng sai-tiền mà tính
+    năng sinh ra để chặn). Kill-switch không được bỏ rơi hồ sơ đang bay.
+
+    Deploy cờ OFF vẫn no-op vì 2 cột nguồn đều default False/NULL trên prod —
+    điều kiện pre-deploy "đếm ``fee.awaiting_accountant_confirmation`` = 0" chính
+    là thứ bảo đảm điều này, hãy giữ bước đếm đó.
+
+    ``major_change_requested`` đọc trực tiếp (không DB hit); chỉ query khi cờ
+    profile chưa bật.
+    """
+    if getattr(profile, "major_change_requested", False):
+        return True
+    return await has_awaiting_major_change_fee(db, profile)
+
+
+async def has_awaiting_major_change_fee(
+    db: AsyncSession, profile: "models.AdmissionProfile"
+) -> bool:
+    """True khi hồ sơ có HK1 tuition fee active đang ``awaiting_accountant_
+    confirmation`` — GIAI ĐOẠN 2 của chu kỳ (đã reprice, chờ kế toán chốt).
+
+    Tách khỏi ``is_major_change_cycle_open`` (gộp cả giai đoạn 1 "admin đã cho
+    phép, chờ officer sửa + nộp lại") vì hai giai đoạn khác nhau ở một điểm quan
+    trọng với người dùng: giấy báo cũ CHỈ bị supersede ở bước reprice, tức giai
+    đoạn 2. FE dùng cờ này để nói đúng về hiệu lực giấy.
+    """
+    row = (
+        await db.execute(
+            select(Fee.id)
+            .where(
+                Fee.admission_profile_id == profile.id,
+                Fee.fee_type == FeeTypeEnum.tuition.value,
+                Fee.semester_no == 1,
+                Fee.status != FeeStatusEnum.cancelled.value,
+                Fee.awaiting_accountant_confirmation.is_(True),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return row is not None
+
+
+async def assert_major_change_cycle_closed(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+    *,
+    message: str,
+    exc_type: type = BusinessRuleViolation,
+) -> None:
+    """F13 — chokepoint DUY NHẤT cho guard "chặn hành động khi hồ sơ đang trong
+    chu kỳ đổi ngành". Mọi hành động bị gate (calculate_fee / approve / enroll /
+    publish_result / xuất giấy báo) gọi helper này thay vì tự copy
+    ``if await is_major_change_cycle_open(...): raise ...``. ``message`` theo hành
+    động (caller truyền); ``exc_type`` mặc định ``BusinessRuleViolation``
+    (build_letter dùng ``ValidationError``). Flag OFF ⇒ ``is_major_change_cycle_open``
+    luôn False ⇒ no-op.
+
+    NGOẠI LỆ: nơi cần DỌN DẸP trước khi raise (issue giấy — xoá PDF tạm) tự check
+    + raise, KHÔNG dùng helper (xem enrollment_letter_service.issue).
+    """
+    if await is_major_change_cycle_open(db, profile):
+        raise exc_type(message)
+
+
+# Status pre-decision được phép mở chu kỳ đổi ngành (trước công bố kết quả — tránh
+# stale choice.decision=='admitted' bám ngành cũ). Post-decision cần reset
+# decision + xử quota/seat = ngoài scope v1.
+_MAJOR_CHANGE_PRE_DECISION_STATUSES = ("submitted", "resubmitted")
+
+# Lý do KHÔNG mở được chu kỳ đổi ngành → câu tiếng Việt trả về client. Một bảng
+# duy nhất cho CẢ hai người dùng của ``_major_change_cycle_blocker``:
+# ``can_open_major_change_cycle`` (cờ capability cho FE) và
+# ``maybe_open_major_change_cycle`` (fail-closed raise). Tách bảng ra để cờ FE và
+# guard server KHÔNG THỂ lệch tiêu chí — lệch nghĩa là FE hiện checkbox mà server
+# từ chối (hoặc tệ hơn: server im lặng bỏ qua).
+_MAJOR_CHANGE_BLOCKER_MESSAGES = {
+    "flag_off": (
+        "Tính năng đổi ngành có khấu trừ phiếu thu chưa được bật — không thể mở "
+        "chu kỳ đổi ngành."
+    ),
+    "not_choice_engine": (
+        "Hồ sơ không dùng cơ chế nguyện vọng — không đổi ngành theo luồng này."
+    ),
+    "post_decision": (
+        "Chỉ hồ sơ đã nộp / nộp lại (chưa công bố kết quả) mới mở được chu kỳ "
+        "đổi ngành."
+    ),
+    "no_hk1_fee": (
+        "Hồ sơ chưa có học phí HK1 — không có gì để định giá lại."
+    ),
+    "awaiting_confirmation": (
+        "Còn một chu kỳ đổi ngành đang chờ kế toán xác nhận — không thể mở "
+        "chu kỳ đổi ngành mới."
+    ),
+}
+
+
+async def _major_change_cycle_blocker(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+) -> str | None:
+    """Trả reason-code CHẶN mở chu kỳ đổi ngành, hoặc ``None`` nếu mở được.
+
+    NGUỒN SỰ THẬT DUY NHẤT của tiêu chí "mở được chu kỳ": feature flag ON ·
+    ``uses_choice_engine`` · status pre-decision · có HK1 tuition fee active ·
+    fee CHƯA ``awaiting_accountant_confirmation`` (single-cycle lock).
+
+    Đọc status trực tiếp trên ``profile`` nên caller PHẢI gọi TRƯỚC transition
+    (status GỐC), giống hợp đồng cũ của ``maybe_open_major_change_cycle``.
+    """
+    if not settings.MAJOR_CHANGE_REPRICE_ENABLED:
+        return "flag_off"
+    if not getattr(profile, "uses_choice_engine", False):
+        return "not_choice_engine"
+    if profile.status not in _MAJOR_CHANGE_PRE_DECISION_STATUSES:
+        return "post_decision"
+    from app.services.enrollment_letter_service import (
+        _get_active_hk1_tuition_fee,
+    )
+    fee = await _get_active_hk1_tuition_fee(db, profile.id)
+    if fee is None:
+        return "no_hk1_fee"
+    if fee.awaiting_accountant_confirmation:
+        return "awaiting_confirmation"
+    return None
+
+
+def _assert_not_awaiting_major_change(fee: Fee, action: str) -> None:
+    """Chặn MỌI mutation số tiền trên fee đang ``awaiting_accountant_confirmation``.
+
+    ``confirm_major_change`` chốt chu kỳ bằng cách assert bất biến
+    ``Σ(invoice active) = final − waived`` và đòi ĐÚNG 1 invoice active. Nên nếu
+    giữa lúc chờ mà ai đó:
+      * ``waive_fee`` → ``waived_amount`` tăng, invoice đã repriced KHÔNG đổi →
+        confirm raise invariant-mismatch;
+      * ``cancel_fee`` (hoặc huỷ invoice) → mất invoice active → confirm không
+        tìm được fee/invoice,
+    thì chu kỳ thành KHÔNG THỂ chốt: hồ sơ kẹt (mọi gate vẫn chặn approve/xuất
+    giấy) và chỉ sửa được bằng tay. Chặn ở đây, kế toán xác nhận đổi ngành trước
+    rồi mới miễn/huỷ — thứ tự đó luôn khả thi.
+
+    KHÔNG gate feature flag: đọc state đã persist (cùng lý lẽ với
+    ``is_major_change_cycle_open``).
+    """
+    if getattr(fee, "awaiting_accountant_confirmation", False):
+        raise BusinessRuleViolation(
+            f"Khoản phí đang chờ kế toán xác nhận đổi ngành — không thể {action}. "
+            "Hãy xác nhận đổi ngành trước, rồi thực hiện lại."
+        )
+
+
+async def can_open_major_change_cycle(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+) -> bool:
+    """True khi hồ sơ MỞ ĐƯỢC chu kỳ đổi ngành ngay lúc này — nguồn của cờ
+    ``permissions["can_request_major_change"]`` (``_populate_major_change_flag``).
+
+    FE dùng cờ này để hiện/ẩn checkbox "Cho phép đổi ngành" trong dialog
+    admin-rollback + yêu-cầu-sửa. KHÔNG kiểm quyền role ở đây: mỗi dialog đã bị
+    gate bởi permission hành động của nó (``admin_rollback`` / ``request_revision``);
+    hàm này chỉ trả lời "hồ sơ có ở trạng thái mở được không".
+    """
+    return (await _major_change_cycle_blocker(db, profile)) is None
+
+
+async def _assert_choice_matches_priced_major(
+    db: AsyncSession, profile: "models.AdmissionProfile"
+) -> None:
+    """Raise nếu nguyện vọng HIỆN TẠI không còn khớp ngành mà HK1 fee đã định giá.
+
+    Chỉ dùng cho đường HUỶ chu kỳ đổi ngành (rollback/revision thường). Khi officer
+    đã đổi nguyện vọng nhưng chưa nộp lại, huỷ chu kỳ để lại hồ sơ nửa vời (fee/
+    applied_rules ngành cũ + nguyện vọng ngành mới) và lần nộp sau đếm chỉ tiêu vào
+    path CŨ. Fail-closed + chỉ đường: khôi phục nguyện vọng cũ rồi huỷ.
+
+    Bỏ qua im lặng khi chưa xác định được (hồ sơ nhiều nguyện vọng chưa công bố,
+    chưa có fee, fee chưa có ``priced_from_academic_info_id``) — những ca đó không
+    có gì để lệch, và ta KHÔNG được biến đường thoát thành cái bẫy mới.
+    """
+    from app.services.enrollment_letter_service import _get_active_hk1_tuition_fee
+
+    fee = await _get_active_hk1_tuition_fee(db, profile.id)
+    priced_ai_id = getattr(fee, "priced_from_academic_info_id", None) if fee else None
+    if priced_ai_id is None:
+        return
+
+    rows = (
+        await db.execute(
+            select(models.AdmissionPath.academic_info_id)
+            .select_from(models.AdmissionProfileChoice)
+            .join(
+                models.AdmissionPath,
+                models.AdmissionPath.id
+                == models.AdmissionProfileChoice.admission_path_id,
+            )
+            .where(
+                models.AdmissionProfileChoice.admission_profile_id == profile.id
+            )
+        )
+    ).scalars().all()
+    if not rows or len(set(rows)) != 1:
+        # 0 nguyện vọng, hoặc đa nguyện vọng chưa chốt → không kết luận được.
+        return
+    if rows[0] == priced_ai_id:
+        return
+
+    log.warning(
+        "major_change_cancel_rejected_choice_drift",
+        profile_id=profile.id,
+        priced_from_academic_info_id=priced_ai_id,
+        current_choice_academic_info_id=rows[0],
+    )
+    raise BusinessRuleViolation(
+        "Nguyện vọng hiện tại đã khác ngành mà học phí đang tính, nên chưa huỷ "
+        "được chu kỳ đổi ngành (huỷ lúc này sẽ làm lệch chỉ tiêu và công nợ). "
+        "Hãy khôi phục nguyện vọng ngành cũ rồi huỷ, hoặc nộp lại hồ sơ để hoàn "
+        "tất đổi ngành."
+    )
+
+
+async def maybe_open_major_change_cycle(
+    db: AsyncSession,
+    profile: "models.AdmissionProfile",
+    *,
+    allow_major_change: bool,
+) -> bool:
+    """Mở chu kỳ đổi ngành: set ``profile.major_change_requested=True``. Gọi từ
+    ``admin_rollback_profile`` + ``request_revision`` TRƯỚC khi transition (đọc
+    status GỐC).
+
+    FAIL-CLOSED: ``allow_major_change=True`` mà KHÔNG mở được (bất kỳ reason-code
+    của ``_major_change_cycle_blocker``, kể cả **feature flag OFF**) →
+    ``BusinessRuleViolation`` ⇒ router 400, transition KHÔNG chạy. Trước đây các
+    ca này trả ``False`` im lặng và rollback/revision VẪN thành công: client tin
+    là chu kỳ đã mở, officer đổi nguyện vọng, fee không được định giá lại → giấy
+    báo + công nợ giữ giá ngành cũ. Không dùng kỷ luật vận hành để chặn sai lệch
+    tiền: từ chối cả hành động.
+
+    ESCAPE HATCH (review #3): rollback/revision thường (``allow_major_change=False``)
+    CLEAR ``major_change_requested`` — cho admin un-stick hồ sơ kẹt (officer không
+    qua được validation ngành mới / bỏ dở) và KHÔNG BAO GIỜ raise. KHÔNG đụng
+    ``awaiting_accountant_confirmation`` trên fee (kế toán xử riêng).
+
+    Trả ``True`` nếu đã set cờ; ``False`` khi ``allow_major_change=False``.
+    """
+    if not allow_major_change:
+        # Rollback/revision thường → reset cờ (escape hatch cho hồ sơ kẹt).
+        # KHÔNG gate cờ feature: chu kỳ mở rồi mới tắt cờ thì đây là đường DUY
+        # NHẤT clear ``major_change_requested`` qua API — gate cờ ở đây nghĩa là
+        # phải sửa DB tay (xem note không-gate-cờ ở is_major_change_cycle_open).
+        if getattr(profile, "major_change_requested", False):
+            # FAIL-CLOSED khi officer ĐÃ đổi nguyện vọng: clear cờ lúc này để lại
+            # hồ sơ nửa vời — nguyện vọng ngành MỚI nhưng applied_rules + fee +
+            # resolved_* còn ngành CŨ, và lần nộp sau (luồng thường) sẽ +1 quota
+            # vào path CŨ trong khi hồ sơ đi path MỚI ⇒ chỉ tiêu lệch hai chiều,
+            # doanh thu/giấy báo ghi ngành cũ, mà 381 hồ sơ paid>0 thì recalculate/
+            # cancel fee đều bị chặn nên KHÔNG sửa được bằng API.
+            # Đường thoát rõ ràng: officer khôi phục nguyện vọng cũ (vẫn sửa được
+            # vì cờ còn bật → finance lock còn nới) rồi admin huỷ chu kỳ.
+            await _assert_choice_matches_priced_major(db, profile)
+            profile.major_change_requested = False
+            log.info("major_change_cycle_cleared_by_plain_rollback", profile_id=profile.id)
+        return False
+    blocker = await _major_change_cycle_blocker(db, profile)
+    if blocker is not None:
+        log.warning(
+            "major_change_cycle_open_rejected",
+            profile_id=profile.id,
+            reason=blocker,
+            status=profile.status,
+        )
+        raise BusinessRuleViolation(_MAJOR_CHANGE_BLOCKER_MESSAGES[blocker])
+    profile.major_change_requested = True
+    log.info(
+        "major_change_cycle_opened",
+        profile_id=profile.id,
+        from_status=profile.status,
+    )
+    return True
 
 
 def _academic_info_of_choice(choice: "models.AdmissionProfileChoice") -> Any:
@@ -264,6 +651,7 @@ async def resnapshot_fee_academic_info_for_profile(
     profile_id: int,
     *,
     profile: "Optional[models.AdmissionProfile]" = None,
+    force: bool = False,
 ) -> int:
     """Re-snapshot ``Fee.resolved_*`` (academic_info / major / degree) for the
     non-cancelled fees of a profile — the SINGLE writer of the denormalized major
@@ -308,6 +696,14 @@ async def resnapshot_fee_academic_info_for_profile(
             )
         ).scalars().first()
     if profile is None:
+        return 0
+
+    # Đổi ngành: TRONG cửa sổ đổi ngành (major_change_requested) giá fee vẫn là
+    # ngành CŨ (reprice chỉ chạy khi nộp lại). Nếu resnapshot ghi resolved_* sang
+    # ngành MỚI ngay ở add/delete_choice thì finance list/drawer/status-counts hiển
+    # thị "ngành mới + số tiền cũ" suốt cửa sổ (fix review #7). Bỏ qua ở đây; reprice
+    # gọi lại với force=True SAU khi đã đổi giá → resolved_* + amount đồng bộ.
+    if not force and getattr(profile, "major_change_requested", False):
         return 0
 
     # Cheap existence guard FIRST: a profile with no non-cancelled fee has
@@ -487,6 +883,7 @@ class FeeCalculationService:
         semester_no: Optional[int] = None,
         target_final_amount: Optional[Decimal] = None,
         manual_discount_reason: Optional[str] = None,
+        selected_discount_policy_ids: Optional[List[int]] = None,
     ) -> Tuple[Fee, Optional[Callable]]:
         """
         Calculate fee for an admission profile.
@@ -517,6 +914,12 @@ class FeeCalculationService:
             semester_no: Semester number for tuition fees (None for non-tuition).
                 Defaults to 1 for tuition if not provided — lives in service
                 so both HTTP callers and direct callers get the default.
+            selected_discount_policy_ids: chính sách ưu đãi người dùng TỰ CHỌN
+                (đường HTTP). Phải là tập con của cấu hình ngành — owner chốt
+                26-07: officer/kế toán chỉ được chọn trong tập đã cấu hình.
+                ``None`` = không nêu ý kiến ⇒ áp toàn bộ cấu hình (hành vi cũ);
+                ``[]`` = chọn không áp chính sách nào. Chỉ dùng ở chế độ
+                service-resolve (``base_amount=None``).
 
         Returns:
             Tuple of (Fee, post_commit_callback)
@@ -562,7 +965,16 @@ class FeeCalculationService:
             raise ValueError(
                 "calculate_fee: base_amount=None (service-resolve mode) cannot "
                 "be combined with an explicit discount_policy_ids — pass both "
-                "None (router) or both explicit (direct caller)."
+                "None (router) or both explicit (direct caller). Lựa chọn của "
+                "người dùng đi qua selected_discount_policy_ids."
+            )
+        # Lựa chọn của người dùng chỉ có nghĩa khi service tự resolve cấu hình
+        # ngành (mới có tập hợp lệ để giao). Caller truyền base_amount tường minh
+        # thì đã tự quyết định chính sách qua ``discount_policy_ids``.
+        if base_amount is not None and selected_discount_policy_ids is not None:
+            raise ValueError(
+                "calculate_fee: selected_discount_policy_ids chỉ dùng ở chế độ "
+                "service-resolve (base_amount=None)."
             )
 
         # Profile-first row lock — serialize vs choice mutation. Acquiring the
@@ -589,6 +1001,15 @@ class FeeCalculationService:
             if lead is None or lead.unit_id != unit_id:
                 raise ResourceNotFoundError("Admission profile not found")
 
+        # Đổi ngành: CHẶN tính phí khi đang chu kỳ đổi ngành (fee HK1 đang được
+        # reprice / chờ kế toán). Flag OFF → no-op. Đặt trong khoá profile. (F13)
+        await assert_major_change_cycle_closed(
+            self.db,
+            profile,
+            message="Không thể tính học phí khi hồ sơ đang trong quá trình đổi "
+            "ngành — chờ kế toán xác nhận trước.",
+        )
+
         # Re-validate the fee-eligible STATE under the lock. A multi-NV profile
         # that gained a 2nd NV — or left a fee-eligible state — since the router
         # check now fails closed instead of pricing the wrong ngành.
@@ -606,11 +1027,42 @@ class FeeCalculationService:
         # removing the double resolve. Direct/test callers pass an explicit
         # base_amount → their values are used as-is; a ``discount_policy_ids`` of
         # None then keeps the legacy "no discount" meaning (NOT auto-derive).
+        # Đổi ngành: id ngành đã ĐỊNH GIÁ (priced-from). CHỈ pricing ghi field
+        # này (calculate_fee + reprice) — KHÔNG phải resnapshot (resnapshot ghi
+        # resolved_academic_info_id sớm ở add_choice/delete_choice nên field đó
+        # desync, không tin được cho drift gate). None cho direct/test callers
+        # (explicit base_amount) — reprice sẽ tự tính khi cần.
+        priced_from_ai_id: Optional[int] = None
+        # Danh sách chính sách ĐÃ QUA hàng rào fail-closed; None = không đi qua
+        # hàng rào (đường mặc định / caller truyền base_amount tường minh).
+        validated_policies: Optional[list] = None
         if base_amount is None:
             academic_info = await resolve_fee_academic_info(self.db, profile)
-            if discount_policy_ids is None:
-                discount_policy_ids = list(
-                    academic_info.applied_discount_policy_ids or []
+            priced_from_ai_id = academic_info.id
+            # Tập áp dụng = lựa chọn người dùng GIAO cấu hình ngành. Quy tắc
+            # "chỉ được chọn trong cấu hình" nằm ở ``select_configured_policies``
+            # (một chỗ duy nhất, dùng chung với endpoint liệt kê cho giao diện —
+            # nút hiện ra và điều server nhận không được lệch nhau).
+            try:
+                discount_policy_ids = select_configured_policies(
+                    academic_info.applied_discount_policy_ids or [],
+                    selected_discount_policy_ids,
+                )
+            except ValueError as exc:
+                raise BadRequest(str(exc))
+            if selected_discount_policy_ids is not None:
+                # FAIL-CLOSED cho lựa chọn TƯỜNG MINH. "Thuộc cấu hình ngành"
+                # chưa đủ: chính sách có thể vừa bị tắt / vừa hết hạn / hồ sơ
+                # không thuộc đối tượng — giao diện người dùng đang xem có thể đã
+                # cũ vài phút. Nếu chỉ im lặng bỏ qua thì phí vẫn tạo THÀNH CÔNG
+                # với số CAO HƠN màn hình xem trước, và không ai biết vì sao.
+                #
+                # 🔴 GIỮ LẠI danh sách đã kiểm để định giá dùng CHÍNH nó. Đọc lại
+                # lần hai mở một khe TOCTOU: chính sách bị tắt giữa hai lần SELECT
+                # sẽ QUA được hàng rào rồi bị lần đọc sau lọc mất ⇒ phí vẫn tạo,
+                # vẫn cao hơn preview, đúng cái mà hàng rào này sinh ra để chặn.
+                validated_policies = await self._assert_selected_policies_effective(
+                    discount_policy_ids, profile
                 )
             if fee_type == FeeTypeEnum.tuition:
                 # Giá chuẩn HK từ offering_semester_tuition là BASE (bắt buộc có
@@ -648,51 +1100,60 @@ class FeeCalculationService:
                 f"academic year {academic_year}"
             )
 
-        # Calculate discounts (policy-derived)
-        total_discount, applied_discounts = await self._calculate_discounts(
-            base_amount, discount_policy_ids or []
+        # ĐỊNH GIÁ — MỘT luồng duy nhất ở ``fee_pricing.resolve_fee_pricing``:
+        # base → giảm theo chính sách → giảm tay (nếu có) → final. Bốn đường
+        # (tính lần đầu / tính lại / xem trước / định giá lại khi đổi ngành) dùng
+        # CÙNG hàm này, nên thêm một bước định giá mới chỉ phải sửa một chỗ.
+        #
+        # Giảm tay (``target_final_amount``) = "học phí áp dụng" do người có thẩm
+        # quyền ấn định: engine tự tính phần giảm cần thiết SAU phần chính sách
+        # (không trừ hai lần) và ``final`` bằng đúng số đã ấn định. Ràng buộc
+        # "target phải nhỏ hơn mức sau giảm hiện hành" kiểm ở đây để báo lỗi rõ.
+        # Dùng LẠI danh sách đã kiểm ở hàng rào fail-closed (nếu có) — một lần đọc
+        # duy nhất cho cả kiểm lẫn tính, nên không thể có chuyện "qua cửa rồi mất
+        # ở trong". Đường mặc định (người dùng không chọn gì) vẫn đọc như cũ.
+        policies = (
+            validated_policies
+            if validated_policies is not None
+            else await self._load_discount_policies(discount_policy_ids or [])
         )
-
-        # Miễn/giảm học phí THẬT (Pha 2) — giảm NGHĨA VỤ (final) qua 1 dòng
-        # FeeAppliedDiscount ad-hoc (policy_id=NULL), GIỮ base_amount=canonical.
-        # "Học phí áp dụng" (target_final_amount) là final SAU MỌI giảm → manual
-        # discount = canonical − giảm-policy-sẵn-có − target (KHÔNG phải
-        # canonical − target, tránh giảm quá tay khi đã có policy discount). Sau
-        # đó final == target. Đánh dấu source="manual_discount" trong snapshot
-        # (KHÔNG dựa policy_id IS NULL — policy bị xoá cũng NULL).
+        # Ngữ cảnh xét ĐIỀU KIỆN ĐỐI TƯỢNG: chỉ mã ưu tiên ĐÃ XÁC MINH trên hồ sơ
+        # (owner chốt 26-07 — khai mà chưa xác minh thì không giảm). Cùng một hàm
+        # đọc cho mọi luồng tính phí nên không nơi nào tự suy diễn điều kiện.
+        _discount_ctx = discount_context_for_profile(profile)
         if target_final_amount is not None:
-            existing_policy_discount = total_discount
-            manual_discount_amount = (
-                base_amount - existing_policy_discount - target_final_amount
+            _policy_only = resolve_fee_pricing(
+                base_amount, policies, context=_discount_ctx
             )
-            if manual_discount_amount <= 0:
+            if (
+                compute_manual_discount_amount(
+                    base_amount, _policy_only.total_discount, target_final_amount
+                )
+                <= 0
+            ):
                 raise BadRequest(
                     f"Học phí áp dụng ({target_final_amount}) phải NHỎ HƠN mức sau "
-                    f"giảm hiện hành ({base_amount - existing_policy_discount}). "
+                    f"giảm hiện hành ({_policy_only.final_amount}). "
                     "Nếu không cần giảm thêm thì bỏ miễn/giảm thủ công."
                 )
-            manual_snapshot = {
-                # source = dấu hiệu MÁY ĐỌC ĐƯỢC để soát giảm-tay (KHÔNG dựa
-                # policy_id IS NULL — policy bị xoá cũng NULL).
-                "source": "manual_discount",
-                "reason": manual_discount_reason,
-                "approved_by": user_id,
-                "canonical_amount": str(base_amount),
-                "existing_policy_discount": str(existing_policy_discount),
-                "target_final_amount": str(target_final_amount),
-                "discount_amount": str(manual_discount_amount),
-                "calculated_at": datetime.now(timezone.utc).isoformat(),
-                # policy_name/discount_type/discount_value để builder response
-                # (_build_fee_detail_response) hiển nhãn thay vì "Unknown".
-                "policy_name": "Miễn/giảm học phí (thủ công)",
-                "discount_type": "manual_amount",
-                "discount_value": str(manual_discount_amount),
-            }
-            applied_discounts.append((None, manual_discount_amount, manual_snapshot))
-            total_discount = existing_policy_discount + manual_discount_amount
 
-        # Calculate final amount (== target_final_amount khi có miễn/giảm tay)
-        final_amount = max(Decimal("0"), base_amount - total_discount)
+        pricing = resolve_fee_pricing(
+            base_amount,
+            policies,
+            target_final_amount=target_final_amount,
+            manual_reason=manual_discount_reason,
+            approved_by=user_id,
+            calculated_at=datetime.now(timezone.utc).isoformat(),
+            context=_discount_ctx,
+            # Chỉ đóng dấu người chọn khi đây THỰC SỰ là lựa chọn tay — áp theo
+            # cấu hình mặc định thì không có ai để quy trách nhiệm.
+            selected_by=(
+                user_id if selected_discount_policy_ids is not None else None
+            ),
+        )
+        total_discount = pricing.total_discount
+        applied_discounts = pricing.lines_as_tuples()
+        final_amount = pricing.final_amount
 
         # Get installment plan
         installment_plan = None
@@ -722,6 +1183,7 @@ class FeeCalculationService:
             calculated_by_id=user_id,
             calculated_at=datetime.now(timezone.utc),
             version=1,
+            priced_from_academic_info_id=priced_from_ai_id,
         )
 
         self.db.add(fee)
@@ -813,33 +1275,124 @@ class FeeCalculationService:
         self,
         profile: "models.AdmissionProfile",
         semester_no: int,
-    ) -> Tuple[Decimal, Decimal, Decimal]:
+        *,
+        selected_discount_policy_ids: Optional[List[int]] = None,
+    ) -> Tuple[Decimal, Decimal, Decimal, List[dict]]:
         """Giá chuẩn học phí (read-only, KHÔNG persist) cho dialog "Tính phí" —
         hiển base / giảm giá / dự kiến phải thu để người dùng đối chiếu khi chọn
-        lịch thu (vd chia "đóng trước + còn lại").
+        lịch thu (vd chia "đóng trước + còn lại") và chọn ưu đãi.
 
         Tái dùng ĐÚNG resolver giá + discount như ``calculate_fee`` (cùng nguồn
         sự thật ``resolve_fee_academic_info`` + ``_semester_tuition_amount_for_ai``
-        + ``_calculate_discounts``) nên số preview khớp với số luồng cũ tạo ra.
-        Router lo IDOR (``_fee_calc_authorized``) trước khi gọi — service chỉ tính.
+        + ``select_configured_policies`` + ``resolve_discounts``) nên số xem trước
+        khớp tuyệt đối với số mà nút "Tính phí" tạo ra. Router lo IDOR
+        (``_fee_calc_authorized``) trước khi gọi — service chỉ tính.
+
+        Danh sách chính sách trả kèm gồm CẢ chính sách không chọn được, mỗi cái
+        có ``selectable`` + ``reason`` lấy từ chính ``is_policy_effective`` — cùng
+        predicate mà luồng tính phí thật dùng, nên ô tích của giao diện không thể
+        hứa một ưu đãi mà máy sẽ bỏ qua.
 
         Returns:
-            (base_amount, total_discount, final_amount) cho HK ``semester_no``.
+            ``(base_amount, total_discount, final_amount, policy_options)``.
 
         Raises:
-            BadRequest: ngành chưa xác định (multi-NV chưa công bố) / chưa cấu
-                hình học phí HK.
+            BadRequest: ngành chưa xác định (multi-NV chưa công bố) · chưa cấu
+                hình học phí HK · chọn chính sách ngoài cấu hình của ngành.
         """
         academic_info = await resolve_fee_academic_info(self.db, profile)
         base_amount = await self._semester_tuition_amount_for_ai(
             academic_info.id, semester_no
         )
-        discount_policy_ids = list(academic_info.applied_discount_policy_ids or [])
-        total_discount, _ = await self._calculate_discounts(
-            base_amount, discount_policy_ids
+        configured_ids = list(academic_info.applied_discount_policy_ids or [])
+        try:
+            applied_ids = select_configured_policies(
+                configured_ids, selected_discount_policy_ids
+            )
+        except ValueError as exc:
+            raise BadRequest(str(exc))
+
+        context = discount_context_for_profile(profile)
+        # only_active=False: chính sách bị tắt sau khi đã gắn vẫn phải hiện kèm
+        # lý do, thay vì biến mất khỏi dialog không dấu vết.
+        all_policies = await load_discount_policies(
+            self.db, configured_ids, only_active=False
         )
-        final_amount = max(Decimal("0"), base_amount - total_discount)
-        return base_amount, total_discount, final_amount
+        by_id = {p.id: p for p in all_policies}
+        selected_set = set(applied_ids)
+
+        # ``skipped`` để ENGINE nói lý do từng chính sách bị bỏ. Không suy lại
+        # luật ở đây: chính sách "không cộng dồn" đứng trước sẽ chặn các chính
+        # sách sau, và nếu màn hình tự đoán quy tắc đó thì sớm muộn cũng lệch
+        # với engine — người dùng thấy hai ô tích mà tổng chỉ bằng một ô.
+        skipped: dict = {}
+        total_discount, applied_lines = resolve_discounts(
+            base_amount,
+            [by_id[pid] for pid in applied_ids if pid in by_id],
+            calculated_at=datetime.now(timezone.utc).isoformat(),
+            context=context,
+            skipped=skipped,
+        )
+        # Số THỰC ÁP của từng chính sách — lấy từ chính dòng engine trả, KHÔNG
+        # tính lại "nếu áp một mình". Chính sách bị CAP một phần (phần còn lại
+        # của học phí gốc không đủ) có số thực nhỏ hơn số danh nghĩa: base 1tr với
+        # hai ưu đãi 800k + 500k cho ra 800k + 200k. Hiện số danh nghĩa thì các
+        # dòng cộng lại không ra tổng, và người dùng tin dòng chứ không tin tổng.
+        applied_amounts = {
+            line.policy_id: line.amount
+            for line in applied_lines
+            if line.policy_id is not None
+        }
+        applied_set = set(applied_amounts)
+        final_amount = compute_final_amount(base_amount, total_discount)
+
+        today = date.today()
+        options: List[dict] = []
+        for pid in configured_ids:
+            policy = by_id.get(pid)
+            if policy is None:
+                # Cấu hình trỏ tới chính sách đã bị XOÁ. Hiện ra để người quản trị
+                # thấy mà dọn — im lặng bỏ thì cấu hình rác nằm đó mãi.
+                options.append({
+                    "id": pid,
+                    "name": f"(Chính sách đã bị xoá — id {pid})",
+                    "discount_type": "amount",
+                    "discount_value": Decimal("0"),
+                    "amount": Decimal("0"),
+                    "selectable": False,
+                    "reason": "khong_ton_tai",
+                    "reason_text": "Chính sách không còn tồn tại",
+                    "selected": False,
+                    "applied": False,
+                })
+                continue
+
+            ok, reason = is_policy_effective(policy, today, context)
+            is_selected = ok and pid in selected_set
+            is_applied = pid in applied_set
+            # ĐƯỢC CHỌN nhưng KHÔNG được áp (bị chính sách không-cộng-dồn chặn,
+            # hoặc học phí gốc đã giảm hết) — phải nói ra, nếu không tổng tiền
+            # bên dưới trông như tính sai.
+            if is_selected and not is_applied:
+                reason = skipped.get(pid) or reason
+            options.append({
+                "id": policy.id,
+                "name": policy.name,
+                "discount_type": getattr(
+                    policy.discount_type, "value", policy.discount_type
+                ),
+                "discount_value": policy.discount_value,
+                # Số THỰC đang được tính (0 khi không được áp). Không hứa một con
+                # số "nếu áp riêng" mà tổng lại không cộng ra.
+                "amount": applied_amounts.get(pid, Decimal("0")),
+                "selectable": ok,
+                "reason": reason,
+                "reason_text": skip_reason_text(reason),
+                "selected": is_selected,
+                "applied": is_applied,
+            })
+
+        return base_amount, total_discount, final_amount, options
 
     async def recalculate_fee(
         self,
@@ -879,21 +1432,6 @@ class FeeCalculationService:
                 f"Paid amount: {fee.paid_amount} VND"
             )
 
-        # Pha 2: chặn tính lại phí có MIỄN/GIẢM THỦ CÔNG (message cụ thể; cũng bắt
-        # cả khi HĐ đã bị HỦY HẾT — lúc đó issued-block dưới không fire). recalc
-        # chỉ tính lại discount theo policy (existing_policy_ids loại policy_id=NULL)
-        # → sẽ BỎ RƠI dòng giảm tay khỏi final (final nhảy lên) + để lại dòng
-        # orphan. Giảm tay là quyết định riêng (học bổng…), không tự suy lại theo
-        # base mới → bắt hủy & tạo lại thay vì âm thầm mất.
-        if any(
-            (ad.calculation_snapshot or {}).get("source") == "manual_discount"
-            for ad in fee.applied_discounts
-        ):
-            raise BusinessRuleViolation(
-                "Không thể tính lại phí có miễn/giảm học phí thủ công — hãy hủy "
-                "phí rồi tạo lại với mức áp dụng mới."
-            )
-
         # Block when any non-cancelled invoice is beyond draft (#445). Recalc đổi
         # ``fee.final_amount`` nhưng payment thu theo ``invoice.amount`` (KHÔNG
         # đọc fee) → fee 10tr/HĐ issued 10tr, recalc 8tr ⇒ vẫn thu 10tr (dư 2tr);
@@ -920,15 +1458,38 @@ class FeeCalculationService:
                 "tính lại."
             )
 
-        # Get existing discount policy IDs
+        # ĐỊNH GIÁ LẠI — dùng CHUNG ``fee_pricing.resolve_repricing`` với hai
+        # đường tính lại còn lại (đổi ngành, đổi giá học kỳ) nên ba nơi luôn trả
+        # cùng một câu trả lời. Phần chính sách tính lại trên base mới; phần
+        # MIỄN/GIẢM TAY giữ nguyên số đã duyệt (owner chốt 26-07 — xem docstring
+        # ``resolve_repricing``). Trước đây hàm này TỪ CHỐI tính lại khi có giảm
+        # tay, buộc hủy phí & tạo lại.
         existing_policy_ids = [
             ad.policy_id for ad in fee.applied_discounts if ad.policy_id
         ]
-
-        # Recalculate discounts with new base
-        total_discount, applied_discounts = await self._calculate_discounts(
-            new_base_amount, existing_policy_ids
+        pricing = resolve_repricing(
+            new_base_amount,
+            await self._load_discount_policies(existing_policy_ids),
+            list(fee.applied_discounts),
+            calculated_at=datetime.now(timezone.utc).isoformat(),
+            context=discount_context_for_profile(fee.admission_profile),
         )
+        total_discount = pricing.total_discount
+        applied_discounts = pricing.lines_as_tuples()
+        manual_total = total_discount - pricing.policy_discount
+
+        # 🔴 Số phải thu về 0 (giảm giá ăn hết giá gốc mới) thì KHÔNG còn gì để
+        # xuất hoá đơn. Bước đồng bộ bên dưới sẽ ghi ``invoice.amount = 0`` và
+        # đâm thẳng vào CHECK ``chk_invoice_amount_positive`` ⇒ HTTP 500 và
+        # người dùng chỉ thấy "đã xảy ra lỗi". Chặn sớm với câu chữ chỉ đúng
+        # việc phải làm — cùng cách ``generate_invoices_for_fee`` từ chối tạo
+        # hoá đơn 0đ lúc tính phí lần đầu.
+        if pricing.final_amount - fee.waived_amount <= 0:
+            raise BusinessRuleViolation(
+                f"Học phí sau giảm bằng 0 (giá gốc mới {new_base_amount}, giảm "
+                f"{total_discount}) — không thể phát hành hoá đơn 0đ. Hãy huỷ "
+                "khoản phí rồi tạo lại, hoặc điều chỉnh mức miễn/giảm trước."
+            )
 
         # Update fee
         old_base = fee.base_amount
@@ -936,11 +1497,23 @@ class FeeCalculationService:
 
         fee.base_amount = new_base_amount
         fee.total_discount = total_discount
-        fee.final_amount = max(Decimal("0"), new_base_amount - total_discount)
+        fee.final_amount = pricing.final_amount
         fee.version += 1
         fee.notes = f"{fee.notes or ''}\n[{datetime.now(timezone.utc).isoformat()}] " \
                     f"Recalculated by user {user_id}: {old_base} → {new_base_amount}. " \
                     f"Reason: {reason}"
+
+        # Ghi lại dòng discount theo base mới. Bản cũ TÍNH rồi VỨT — số trên
+        # ``fee.total_discount`` đổi nhưng bảng dòng giữ số cũ, nên drawer/audit
+        # cộng ra một tổng khác với chính khoản phí đó.
+        await self._write_discount_lines(fee, applied_discounts)
+        if manual_total > 0:
+            log.info(
+                "fee_recalc_preserved_manual_discount",
+                fee_id=fee_id,
+                manual_total=str(manual_total),
+                new_base=str(new_base_amount),
+            )
 
         # Đồng bộ hóa đơn DRAFT (nếu có) theo final mới để fee↔invoice không lệch
         # — chỉ tới đây khi mọi HĐ còn draft (guard non-draft ở trên). Mirror
@@ -1040,6 +1613,8 @@ class FeeCalculationService:
         if not fee:
             raise ResourceNotFoundError("Fee not found")
 
+        _assert_not_awaiting_major_change(fee, "miễn giảm học phí")
+
         remaining = fee.final_amount - fee.paid_amount - fee.waived_amount
 
         # H5: Validate waive amount
@@ -1133,6 +1708,8 @@ class FeeCalculationService:
         fee = await self.fee_repo.get_for_update(fee_id, unit_id)
         if not fee:
             raise ResourceNotFoundError("Fee not found")
+
+        _assert_not_awaiting_major_change(fee, "huỷ khoản phí")
 
         if fee.paid_amount > 0:
             raise BusinessRuleViolation(
@@ -1539,75 +2116,669 @@ class FeeCalculationService:
         result = await self.db.execute(query)
         return result.scalars().first()
 
-    async def _calculate_discounts(
+    async def _load_discount_policies(self, policy_ids: List[int]) -> list:
+        """Wrapper method của ``load_discount_policies`` (dùng session của service)."""
+        return await load_discount_policies(self.db, policy_ids)
+
+    async def _assert_selected_policies_effective(
         self,
-        base_amount: Decimal,
         policy_ids: List[int],
-    ) -> Tuple[Decimal, List[Tuple[int, Decimal, dict]]]:
-        """
-        Calculate total discount using additive stacking.
+        profile: "models.AdmissionProfile",
+    ) -> list:
+        """Mọi ưu đãi người dùng TỰ CHỌN phải còn áp được — nếu không thì 400.
 
-        Policy H4: Additive stacking, capped at 100%
+        TRẢ VỀ chính danh sách chính sách đã kiểm, để bên gọi định giá bằng đúng
+        dữ liệu vừa được kiểm. Nếu bên gọi đọc lại lần nữa thì mở một khe TOCTOU:
+        chính sách bị tắt giữa hai lần đọc sẽ QUA hàng rào rồi bị lần đọc sau lọc
+        mất, và khoản phí vẫn được tạo với số cao hơn màn hình xem trước — đúng
+        cái mà hàng rào này sinh ra để chặn.
 
-        Args:
-            base_amount: Base fee amount
-            policy_ids: List of discount policy IDs
+        Dùng CHÍNH ``is_policy_effective`` mà engine dùng, nên câu trả lời của
+        hàng rào này không thể lệch với câu trả lời của luồng tính tiền.
 
-        Returns:
-            Tuple of (total_discount, list of (policy_id, amount, snapshot))
+        Vì sao fail-closed thay vì lặng lẽ bỏ qua: người dùng chọn dựa trên màn
+        hình xem trước, và giữa lúc xem với lúc bấm có thể có người tắt chính
+        sách hoặc chính sách hết hạn. Bỏ qua thì khoản phí VẪN được tạo, chỉ là
+        cao hơn con số họ vừa nhìn thấy — sai lệch im lặng về tiền là thứ khó
+        phát hiện nhất. Báo lỗi thì họ tải lại và chọn lại.
         """
         if not policy_ids:
-            return Decimal("0"), []
+            return []
 
-        # Get discount policies
-        query = select(TuitionDiscountPolicy).where(
-            TuitionDiscountPolicy.id.in_(policy_ids),
-            TuitionDiscountPolicy.is_active == True,
+        policies = await load_discount_policies(
+            self.db, policy_ids, only_active=False
         )
-        result = await self.db.execute(query)
-        policies = list(result.scalars().all())
+        by_id = {p.id: p for p in policies}
+        context = discount_context_for_profile(profile)
+        today = date.today()
 
-        if not policies:
-            return Decimal("0"), []
+        problems: List[str] = []
+        for pid in policy_ids:
+            policy = by_id.get(pid)
+            if policy is None:
+                problems.append(f"Ưu đãi id {pid}: không còn tồn tại")
+                continue
+            ok, reason = is_policy_effective(policy, today, context)
+            if not ok:
+                problems.append(f"{policy.name}: {skip_reason_text(reason)}")
 
-        # Calculate each discount
-        applied_discounts = []
-        total_percent = Decimal("0")
-
-        for policy in policies:
-            if policy.discount_type == "percent":
-                percent = Decimal(str(policy.discount_value))
-                total_percent += percent
-                discount_amount = (base_amount * percent / 100).quantize(
-                    Decimal("0.01"), rounding=ROUND_HALF_UP
-                )
-            else:  # fixed amount
-                discount_amount = Decimal(str(policy.discount_value))
-
-            snapshot = {
-                "policy_name": policy.name,
-                "discount_type": policy.discount_type,
-                "discount_value": str(policy.discount_value),
-                "calculated_at": datetime.now(timezone.utc).isoformat(),
-            }
-
-            applied_discounts.append((policy.id, discount_amount, snapshot))
-
-        # Cap at 100% (H4)
-        if total_percent > 100:
-            log.warning(
-                "discount_capped",
-                original_percent=str(total_percent),
-                capped_to=100,
+        if problems:
+            raise BadRequest(
+                "Không áp được ưu đãi đã chọn — " + "; ".join(problems)
+                + ". Hãy tải lại trang để xem danh sách ưu đãi mới nhất."
             )
 
-        total_discount = sum(d[1] for d in applied_discounts)
+        # Theo ĐÚNG thứ tự id đã chọn, để engine nhận cùng tập với cùng dữ liệu.
+        return [by_id[pid] for pid in policy_ids]
 
-        # Cap discount at base amount
-        if total_discount > base_amount:
-            total_discount = base_amount
+    # 🔴 ĐÃ XOÁ ``_calculate_discounts``. Nó nhận policy_id rồi gọi engine, nhưng
+    # KHÔNG có tham số ngữ cảnh đối tượng ưu tiên — ai gọi nó thay vì
+    # ``resolve_fee_pricing``/``resolve_repricing`` sẽ âm thầm đánh rơi mọi chính
+    # sách có điều kiện đối tượng. Ba luồng định giá (tính lần đầu / tính lại /
+    # xem trước) nay đi thẳng ``fee_pricing``, nên giữ lại chỉ là mời gọi dùng
+    # nhầm. Cần load chính sách theo id: ``_load_discount_policies``.
 
-        return total_discount, applied_discounts
+    # ======================================================================
+    # MAJOR-CHANGE REPRICE (đổi ngành có khấu trừ phiếu thu + kế toán xác nhận)
+    # ======================================================================
+
+    async def _write_discount_lines(
+        self,
+        fee: Fee,
+        applied_discounts: List[Tuple[Optional[int], Decimal, dict]],
+    ) -> None:
+        """Wrapper method của ``write_fee_discount_lines`` (session của service)."""
+        await write_fee_discount_lines(self.db, fee.id, applied_discounts)
+
+    async def reprice_for_major_change(
+        self,
+        profile: "models.AdmissionProfile",
+        *,
+        actor_id: Optional[int] = None,
+    ) -> Tuple[Optional[Fee], bool]:
+        """Định giá lại HK1 tuition fee sang ngành MỚI, GIỮ ``paid_amount``, ghi
+        LUÔN ``invoice.amount`` (CẮT 1 — fee↔invoice không lệch), rồi bật cờ chờ
+        kế toán. Entry point DUY NHẤT cho phép ``paid > 0`` (KHÔNG nới
+        ``recalculate_fee`` — M10 giữ strict).
+
+        Gọi bởi hook ``_reprice_on_resubmit_if_major_change`` sau khi officer đổi
+        nguyện vọng + nộp lại. Caller đã giữ profile lock.
+
+        Returns ``(fee, changed)``: ``changed=False`` khi no-op (drift gate — ngành
+        không đổi) hoặc flag OFF; caller KHÔNG dispatch. Raise
+        ``BusinessRuleViolation`` cho các ca fail-closed ngoài scope v1 (nhiều/
+        không có invoice · post-decision · sinh dư · ngành mới miễn phí · còn
+        payment chờ · còn chu kỳ chờ kế toán).
+
+        Miễn/giảm TAY KHÔNG còn bị chặn: nó được bảo toàn nguyên số qua
+        ``fee_pricing.resolve_repricing`` (owner chốt 26-07). Chặn ở đây từng là
+        ngõ cụt — hồ sơ đã đóng tiền, đổi ngành xong không định giá lại được.
+        """
+        # 🔴 KHÔNG gate ``MAJOR_CHANGE_REPRICE_ENABLED``: hàm này CHỈ được gọi từ
+        # hook sau submit/resubmit khi ``major_change_requested`` đang bật — tức
+        # chu kỳ đã mở hợp lệ lúc cờ CÒN bật. Kill-switch chặn MỞ chu kỳ MỚI
+        # (``_major_change_cycle_blocker``); bỏ rơi chu kỳ đang bay thì hồ sơ đi
+        # tiếp với nguyện vọng ngành MỚI mà học phí vẫn ngành CŨ.
+        # Deploy cờ OFF vẫn no-op vì không hồ sơ nào mở được chu kỳ mới.
+        semester_no = 1
+
+        # (1) Giá ngành MỚI — READ-ONLY, TRƯỚC khi vào khoá (giảm thời gian giữ
+        # khoá; resolve_fee_academic_info + _semester_tuition_amount_for_ai +
+        # load_discount_policies thuần đọc, autoflush=False nên không flush ngầm).
+        academic_info = await resolve_fee_academic_info(self.db, profile)
+        new_base = await self._semester_tuition_amount_for_ai(
+            academic_info.id, semester_no
+        )
+        policy_ids = list(academic_info.applied_discount_policy_ids or [])
+        new_policies = await self._load_discount_policies(policy_ids)
+
+        # (2) Tìm active HK1 fee → active invoice CỦA NÓ → assert đúng 1 → khoá
+        # invoice TRƯỚC, fee SAU (khớp thứ tự luồng payment/verify — tránh ABBA).
+        # Lazy import: enrollment_letter_service import ngược fee_calc (lazy) —
+        # giữ lazy 2 chiều để không vòng ở module load.
+        from app.services.enrollment_letter_service import (
+            _get_active_hk1_tuition_fee,
+        )
+        target_fee = await _get_active_hk1_tuition_fee(self.db, profile.id)
+        if target_fee is None:
+            raise BusinessRuleViolation(
+                "Hồ sơ không có học phí HK1 đang hoạt động — đổi ngành cần xử "
+                "tài chính thủ công."
+            )
+        active_invoices = list(
+            (
+                await self.db.execute(
+                    select(Invoice).where(
+                        Invoice.fee_id == target_fee.id,
+                        Invoice.status != InvoiceStatusEnum.cancelled.value,
+                    )
+                )
+            ).scalars().all()
+        )
+        if len(active_invoices) != 1:
+            raise BusinessRuleViolation(
+                "Hồ sơ có nhiều/không có đợt học phí HK1 đang hoạt động — đổi "
+                "ngành cần xử tài chính thủ công (v1 chỉ hỗ trợ đúng 1 hoá đơn)."
+            )
+        # ⚠️ ACCEPTED RISK (review #8 — ABBA deadlock, PLAUSIBLE/hiếm): reprice chạy
+        # BÊN TRONG profile lock (submit/resubmit giữ profile FOR UPDATE) rồi khoá
+        # invoice→fee; get_for_update KHÔNG có of= nên khoá lan cả profile+lead. Trái
+        # thứ tự với cancel_fee (fee→invoice). Vá THẬT = thêm of=Invoice/Fee cho MỌI
+        # get_for_update (đổi hành vi toàn bộ payment flow) → ngoài scope PR, làm ở
+        # đợt lock-order riêng. Flag OFF nên chưa phơi bày; đã ghi nhận trong memory.
+        invoice = await self.invoice_repo.get_for_update(active_invoices[0].id)
+        if invoice is None:
+            raise BusinessRuleViolation(
+                "Không khoá được hoá đơn học phí HK1 để đổi ngành."
+            )
+        fee = await self.fee_repo.get_for_update(invoice.fee_id)
+        if fee is None:
+            raise BusinessRuleViolation(
+                "Không khoá được khoản phí học phí HK1 để đổi ngành."
+            )
+        # get_for_update KHÔNG repopulate instance đã ở session → refresh dưới
+        # khoá để đọc paid/waived/status/version TƯƠI (mold recompute_fee_from_invoices).
+        await self.db.refresh(fee)
+        # F5: invoice cũng phải refresh dưới khoá — instance nạp ở (2) TRƯỚC khi
+        # khoá; get_for_update KHÔNG populate_existing → nếu payment commit xen giữa
+        # (2)→lock, ``invoice.paid_amount`` còn cũ. status/paid_at (bước 6) +
+        # recompute_fee_from_invoices (bước 8) đọc paid_amount → phải tươi.
+        await self.db.refresh(invoice)
+
+        # Re-check khớp dưới khoá.
+        if (
+            fee.admission_profile_id != profile.id
+            or fee.fee_type != FeeTypeEnum.tuition.value
+            or fee.semester_no != semester_no
+            or fee.status == FeeStatusEnum.cancelled.value
+        ):
+            raise BusinessRuleViolation(
+                "Khoản phí học phí HK1 không hợp lệ để đổi ngành (đã đổi trạng "
+                "thái dưới khoá)."
+            )
+
+        # (3) Guard fail-closed — dừng ở cái đầu tiên hỏng.
+        # (c) Single-cycle: còn chu kỳ đổi ngành chờ kế toán → không mở chu kỳ 2.
+        if fee.awaiting_accountant_confirmation:
+            raise BusinessRuleViolation(
+                "Còn một chu kỳ đổi ngành đang chờ kế toán xác nhận — hãy hoàn "
+                "tất chu kỳ đó trước."
+            )
+        # (g) Drift gate: fee ĐÃ ĐỊNH GIÁ đúng ngành hiện tại → no-op. So
+        # ``priced_from_academic_info_id`` (chỉ pricing ghi) — KHÔNG dùng
+        # ``resolved_academic_info_id`` (resnapshot ghi sớm ở add_choice/
+        # delete_choice → đã desync sang ngành mới TRƯỚC khi reprice chạy; dùng
+        # nó khiến reprice im lặng no-op với ĐƠN-NV, để giá ngành cũ + không bật
+        # cờ kế toán). priced_from == new ⇒ giá hiện tại đúng ngành mới ⇒ không
+        # cần làm gì. NULL (fee cũ / test) ⇒ != ⇒ reprice để chắc.
+        if (
+            fee.priced_from_academic_info_id is not None
+            and fee.priced_from_academic_info_id == academic_info.id
+        ):
+            return fee, False
+        # Dòng giảm giá hiện có — query TƯỜNG MINH thay vì ``fee.applied_discounts``
+        # (selectin có thể chưa nạp sau ``get_for_update``). Phải có TRƯỚC khi so
+        # giá ở nhánh legacy: giảm TAY nằm trong ``fee.total_discount`` nên bỏ nó
+        # ra khỏi phép tính sẽ làm nhánh đó so lệch và reprice vô cớ.
+        existing_lines = list(
+            (
+                await self.db.execute(
+                    select(FeeAppliedDiscount).where(
+                        FeeAppliedDiscount.fee_id == fee.id
+                    )
+                )
+            ).scalars().all()
+        )
+        # ĐỊNH GIÁ LẠI theo ngành MỚI — cùng ``resolve_repricing`` với hai đường
+        # tính lại còn lại. Giảm TAY được BẢO TOÀN nguyên số (owner chốt 26-07):
+        # trước đây đổi ngành TỪ CHỐI hồ sơ có giảm tay, mà hồ sơ đó đã đóng tiền
+        # nên từ chối = kẹt giữa chừng, không có đường ra bằng giao diện.
+        pricing = resolve_repricing(
+            new_base,
+            new_policies,
+            existing_lines,
+            calculated_at=datetime.now(timezone.utc).isoformat(),
+            context=discount_context_for_profile(profile),
+        )
+        new_total_discount = pricing.total_discount
+        applied_discounts = pricing.lines_as_tuples()
+        new_final = pricing.final_amount
+        # Fee CŨ/legacy (priced_from NULL, backfill chỉ điền khi resolved khác NULL):
+        # không tin được priced_from → so GIÁ đã tính. Nếu base/discount/final trùng
+        # giá hiện tại ⇒ không có gì đổi ⇒ no-op (tránh reprice + SUPERSEDE GIẤY hợp
+        # lệ vô cớ). Ngành đổi mà giá y hệt trên fee legacy là ca cực hiếm; ưu tiên
+        # không huỷ giấy đúng của nhóm legacy.
+        if (
+            fee.priced_from_academic_info_id is None
+            and new_base == fee.base_amount
+            and new_total_discount == fee.total_discount
+            and new_final == fee.final_amount
+        ):
+            # Vá priced_from cho fee legacy để lần sau drift-gate tin field này.
+            fee.priced_from_academic_info_id = academic_info.id
+            await self.db.flush()
+            return fee, False
+        # (b) Post-decision: còn nguyện vọng decision=='admitted' → reprice/doc-
+        # resolve sẽ bám ngành cũ (reset decision + quota/seat ngoài scope v1).
+        choice_decisions = list(
+            (
+                await self.db.execute(
+                    select(models.AdmissionProfileChoice.decision).where(
+                        models.AdmissionProfileChoice.admission_profile_id
+                        == profile.id
+                    )
+                )
+            ).scalars().all()
+        )
+        if any(d == "admitted" for d in choice_decisions):
+            raise BusinessRuleViolation(
+                "Hồ sơ đã có nguyện vọng trúng tuyển — đổi ngành sau công bố "
+                "kết quả cần xử lý quota/kết quả thủ công (ngoài phạm vi tự động)."
+            )
+        target_amount = new_final - fee.waived_amount
+        # (e) Ngành mới miễn phí hoàn toàn (final − waived = 0) → CHECK invoice
+        # amount>0 sẽ vỡ → chặn, kế toán xử tay (hiếm).
+        if target_amount <= 0:
+            raise BusinessRuleViolation(
+                "Học phí ngành mới sau miễn/giảm bằng 0 — đổi ngành cần xử tài "
+                "chính thủ công."
+            )
+        # (d) Số đã đóng VƯỢT học phí ngành mới (sinh dư) → ngoài scope v1 (không
+        # tạo OverpaymentRecord). Kế toán hoàn/khấu trừ thủ công.
+        if fee.paid_amount > target_amount:
+            raise BusinessRuleViolation(
+                "Số học phí đã đóng vượt học phí ngành mới — đổi ngành cần xử "
+                "tài chính thủ công (hoàn/khấu trừ phần dư)."
+            )
+        # (f) Còn payment chờ xác minh / PaymentIntent online còn sống trên hoá
+        # đơn đích → reprice trên số tiền sắp đổi. Chặn (mold cancel_fee).
+        pending_payment = (
+            await self.db.execute(
+                sa.select(sa.func.count(Payment.id)).where(
+                    Payment.invoice_id == invoice.id,
+                    Payment.status == PaymentStatusEnum.pending.value,
+                )
+            )
+        ).scalar() or 0
+        if pending_payment:
+            raise BusinessRuleViolation(
+                "Hoá đơn học phí đang có khoản thanh toán chờ xác minh — hãy "
+                "xác minh/từ chối trước khi đổi ngành."
+            )
+        now = datetime.now(timezone.utc)
+        active_intents = (
+            await self.db.execute(
+                sa.select(sa.func.count(PaymentIntent.id)).where(
+                    PaymentIntent.invoice_id == invoice.id,
+                    PaymentIntent.status.in_(
+                        [
+                            PaymentIntentStatusEnum.created.value,
+                            PaymentIntentStatusEnum.pending.value,
+                        ]
+                    ),
+                    PaymentIntent.expires_at > now,
+                )
+            )
+        ).scalar() or 0
+        if active_intents:
+            raise BusinessRuleViolation(
+                "Hoá đơn học phí đang có giao dịch online chờ xử lý — hãy đợi "
+                "hoàn tất/hết hạn rồi đổi ngành."
+            )
+
+        # (4) Mutate fee tại chỗ (bỏ M10). GIỮ paid_amount.
+        was_settled = is_hk1_settled_fee(fee)
+        old_ai_id = fee.resolved_academic_info_id  # snapshot ngành CŨ TRƯỚC resnapshot
+        old_final = fee.final_amount
+        fee.base_amount = new_base
+        fee.total_discount = new_total_discount
+        fee.final_amount = new_final
+        # Ghi ngành ĐÃ ĐỊNH GIÁ (drift gate lần sau tin field này, không phải
+        # resolved_academic_info_id do resnapshot desync sớm).
+        fee.priced_from_academic_info_id = academic_info.id
+        fee.version += 1
+        fee.notes = (
+            f"{fee.notes or ''}\n[{now.isoformat()}] Đổi ngành (major-change "
+            f"reprice) bởi user {actor_id}: final {old_final} → {new_final} "
+            f"(academic_info {old_ai_id} → {academic_info.id})."
+        )
+
+        # (5) Ghi lại dòng discount theo ngành mới.
+        await self._write_discount_lines(fee, applied_discounts)
+
+        # (6) CẮT 1 — ghi LUÔN invoice.amount = final − waived (cùng transaction),
+        # rồi recompute invoice status từ paid vs amount mới (mold reverse_payment_balances).
+        invoice.amount = target_amount
+        if (invoice.paid_amount or Decimal("0")) >= invoice.amount:
+            invoice.status = InvoiceStatusEnum.paid.value
+            invoice.paid_at = invoice.paid_at or now
+        elif (invoice.paid_amount or Decimal("0")) > 0:
+            invoice.status = InvoiceStatusEnum.partial.value
+            invoice.paid_at = None
+        else:
+            invoice.status = InvoiceStatusEnum.issued.value
+            invoice.paid_at = None
+
+        # (7) Bật cờ chờ kế toán (+ snapshot ngành cũ + thời điểm).
+        fee.awaiting_accountant_confirmation = True
+        fee.major_change_from_academic_info_id = old_ai_id
+        fee.major_change_flagged_at = now
+        await self.db.flush()
+
+        # (8) Recompute fee status (reuse invoice_service — xử paid→partial khi
+        # ngành mới đắt hơn, skip terminal). Nó re-lock fee (re-entrant, cùng
+        # transaction) + refresh dưới khoá.
+        from app.services.invoice_service import InvoiceService
+        await InvoiceService(self.db).recompute_fee_from_invoices(fee.id)
+
+        # (9) Cập nhật resolved_* sang ngành mới (filter/list/drawer/status-counts).
+        # force=True: vượt guard "skip khi major_change_requested" (giờ giá đã đổi
+        # nên resolved_* PHẢI đồng bộ theo — xem review #7).
+        # ⚠️ F10 (latent, LOW): resnapshot relabel resolved_* của MỌI fee non-cancelled
+        # (không lọc semester) sang ngành mới, trong khi CHỈ fee HK1 được reprice
+        # amount. Hiện vô hại vì học phí chỉ HK1 (fee HK2+ tuition chưa tồn tại; phí
+        # ứng tuyển/KTX không định giá theo ngành nên relabel = đúng hiển thị). KHI
+        # có học phí HK2+: phải reprice mọi semester tuition hoặc scope lại relabel.
+        await resnapshot_fee_academic_info_for_profile(
+            self.db, profile.id, profile=profile, force=True
+        )
+
+        # (10) Supersede giấy báo cũ (phương án c) — chỉ giải phóng slot "hiện
+        # hành", bản mới phát lại sau khi kế toán confirm. File PDF cũ giữ nguyên.
+        from app.services.enrollment_letter_service import supersede_current_letter
+        superseded = await supersede_current_letter(
+            self.db,
+            profile.id,
+            reason="Đổi ngành — giấy báo cũ hết hiệu lực",
+        )
+        # Stash số giấy vừa hết hiệu lực (transient, không persist) để hook dispatch
+        # đọc đúng letter_superseded thay vì hardcode True (fix review #15).
+        fee.__dict__["_mc_letter_superseded"] = superseded > 0
+
+        # (11) Lead overlay theo settlement HK1 — HAI CHIỀU, cả hai đều dùng
+        # projection chuyên dụng (KHÔNG dùng `force` của sync_lead_admission_status
+        # — kéo lùi lead kiểu đó là regression SL1).
+        #   * False→True (ngành mới RẺ hơn, paid thành đủ): đẩy lên sts10.
+        #   * True→False (ngành mới ĐẮT hơn, fee/invoice thành partial): PHẢI đảo
+        #     khỏi sts10, nếu không lead vẫn mang nhãn "đã hoàn tất học phí" trong
+        #     khi thí sinh đang nợ tiền — sai phân loại ở mọi báo cáo/pipeline đọc
+        #     lead status. ``revert_lead_tuition_paid`` khôi phục status TRƯỚC lần
+        #     đẩy sts10 từ history (bảo toàn status tiến xa hơn), đúng hợp đồng
+        #     "caller gate: chỉ HK1 + chỉ khi fee KHÔNG còn settled".
+        now_settled = is_hk1_settled_fee(fee)
+        if now_settled and not was_settled:
+            from app.services.lead_admission_sync import sync_lead_tuition_paid
+            await sync_lead_tuition_paid(
+                self.db,
+                profile,
+                changed_by_user_id=actor_id,
+                reason="Đổi ngành: học phí ngành mới đã đủ (settled)",
+            )
+        elif was_settled and not now_settled:
+            from app.services.lead_admission_sync import revert_lead_tuition_paid
+            await revert_lead_tuition_paid(
+                self.db,
+                profile,
+                changed_by_user_id=actor_id,
+                reason=(
+                    "Đổi ngành: học phí ngành mới cao hơn — phát sinh dư nợ, "
+                    "không còn hoàn tất học phí"
+                ),
+            )
+
+        # (12) Audit + cảnh báo cơ sở hoa hồng có thể đổi (commission đọc
+        # fee.final_amount; prod hiện 0 policy nhưng ghi để lần bật hoa hồng thấy).
+        from app.services import audit_service
+        await audit_service.log_audit(
+            self.db,
+            entity_type="Fee",
+            entity_id=fee.id,
+            action="major_change_repriced",
+            actor_user_id=actor_id,
+            field_name="final_amount",
+            old_value=str(old_final),
+            new_value=str(new_final),
+            reason=(
+                f"Đổi ngành academic_info {old_ai_id} → {academic_info.id}; "
+                f"giấy báo superseded={superseded}; chờ kế toán xác nhận. "
+                f"(Lưu ý: cơ sở hoa hồng có thể đổi theo final_amount.)"
+            ),
+            source="api",
+        )
+        log.info(
+            "fee_major_change_repriced",
+            fee_id=fee.id,
+            profile_id=profile.id,
+            invoice_id=invoice.id,
+            old_final=str(old_final),
+            new_final=str(new_final),
+            old_academic_info_id=old_ai_id,
+            new_academic_info_id=academic_info.id,
+            superseded_letters=superseded,
+            settled_transition=(now_settled and not was_settled),
+            actor_id=actor_id,
+        )
+        return fee, True
+
+    async def confirm_major_change(
+        self,
+        fee_id: int,
+        *,
+        actor_id: Optional[int] = None,
+        unit_id: Optional[int] = None,
+    ) -> Tuple[Fee, Optional[Callable]]:
+        """Kế toán xác nhận reprice đổi ngành → clear cờ, báo officer tiếp tục.
+
+        CẮT 1 — reprice đã ghi ``invoice.amount`` đúng ngay từ đầu, nên confirm
+        KHÔNG reconcile tiền: chỉ ASSERT bất biến ``Σ(invoice active) == final −
+        waived`` như lưới phòng thủ (lệch → raise, KHÔNG tự sửa — kế toán rà tay),
+        clear ``awaiting_accountant_confirmation``, audit, dispatch báo officer.
+
+        Lock invoice → fee (khớp luồng tiền, tránh ABBA). Require cờ đang bật.
+        Idempotent: gọi lại khi cờ đã clear → ConflictError rõ nghĩa.
+        """
+        # Kiểm fee TỒN TẠI (unit-scoped) TRƯỚC — fee_id không có → 404, KHÔNG lẫn
+        # với anomaly "0/2+ hoá đơn" (400). Tránh báo kế toán rà thủ công một fee
+        # không hề tồn tại (fix review #11 — CLAUDE.md not-found→404).
+        exists = (
+            await self.db.execute(
+                select(Fee.id)
+                .join(models.AdmissionProfile)
+                .join(models.Lead)
+                .where(
+                    Fee.id == fee_id,
+                    *(
+                        [models.Lead.unit_id == unit_id]
+                        if unit_id is not None
+                        else []
+                    ),
+                )
+            )
+        ).scalar_one_or_none()
+        if exists is None:
+            raise ResourceNotFoundError("Fee not found")
+
+        active_invoices = list(
+            (
+                await self.db.execute(
+                    select(Invoice)
+                    .join(Fee, Fee.id == Invoice.fee_id)
+                    .where(
+                        Invoice.fee_id == fee_id,
+                        Invoice.status != InvoiceStatusEnum.cancelled.value,
+                    )
+                )
+            ).scalars().all()
+        )
+        # reprice đảm bảo đúng 1 invoice active; >1 không thể tới đây.
+        if len(active_invoices) != 1:
+            raise BusinessRuleViolation(
+                "Khoản phí không có đúng 1 hoá đơn học phí đang hoạt động — "
+                "kế toán cần rà thủ công."
+            )
+        invoice = await self.invoice_repo.get_for_update(
+            active_invoices[0].id, unit_id
+        )
+        if invoice is None:
+            raise ResourceNotFoundError("Fee not found")
+        fee = await self.fee_repo.get_for_update(invoice.fee_id, unit_id)
+        if fee is None or fee.id != fee_id:
+            raise ResourceNotFoundError("Fee not found")
+        await self.db.refresh(fee)
+
+        if not fee.awaiting_accountant_confirmation:
+            raise ConflictError(
+                "Khoản phí này không đang chờ xác nhận đổi ngành (có thể đã "
+                "được xác nhận trước đó)."
+            )
+
+        target = fee.final_amount - fee.waived_amount
+        if target <= 0:
+            raise BusinessRuleViolation(
+                "Học phí sau miễn/giảm bằng 0 — kế toán cần xử tài chính thủ "
+                "công (không thể ghi hoá đơn = 0)."
+            )
+        # Bất biến phòng thủ (reprice đã ghi đúng): 1 invoice active = final−waived.
+        if invoice.amount != target:
+            raise BusinessRuleViolation(
+                f"Bất biến hoá đơn lệch (hoá đơn {invoice.amount} ≠ học phí "
+                f"phải thu {target}) — kế toán cần rà thủ công trước khi xác nhận."
+            )
+
+        # Clear cờ (GIỮ major_change_from_academic_info_id + flagged_at làm lịch sử).
+        fee.awaiting_accountant_confirmation = False
+        fee.version += 1
+        fee.notes = (
+            f"{fee.notes or ''}\n[{datetime.now(timezone.utc).isoformat()}] "
+            f"Kế toán (user {actor_id}) xác nhận đổi ngành."
+        )
+        await self.db.flush()
+
+        # Recompute fee status phòng thủ (thường không đổi — invoice.amount đã đúng).
+        from app.services.invoice_service import InvoiceService
+        await InvoiceService(self.db).recompute_fee_from_invoices(fee.id)
+
+        # Load profile + lead cho dispatch (IDOR-scoped). Tên ngành mới đọc tường
+        # minh (fee.resolved_major lazy=raise — KHÔNG chạm trực tiếp).
+        profile = await self._get_profile(fee.admission_profile_id, unit_id)
+        new_major_name = None
+        if fee.resolved_major_id is not None:
+            new_major_name = (
+                await self.db.execute(
+                    select(models.MajorProgram.name).where(
+                        models.MajorProgram.id == fee.resolved_major_id
+                    )
+                )
+            ).scalar_one_or_none()
+
+        from app.services import audit_service
+        await audit_service.log_audit(
+            self.db,
+            entity_type="Fee",
+            entity_id=fee.id,
+            action="major_change_confirmed",
+            actor_user_id=actor_id,
+            field_name="awaiting_accountant_confirmation",
+            old_value="true",
+            new_value="false",
+            reason=f"Kế toán xác nhận đổi ngành (ngành mới: {new_major_name}).",
+            source="api",
+        )
+
+        # Dispatch báo officer phụ trách tiếp tục (xuất giấy…).
+        _lead = getattr(profile, "lead", None) if profile is not None else None
+        officer_id = getattr(_lead, "assigned_officer_id", None) if _lead else None
+        # F8: lead chưa gán officer → KHÔNG được rớt thông báo "trả về xử lý tiếp".
+        # Fallback: reviewer đang phụ trách (đã claim) → nếu không, manager/admin
+        # đang active cùng đơn vị lead (tránh im lặng mất tín hiệu tiếp-tục-quy-trình).
+        if officer_id:
+            user_ids = [officer_id]
+        else:
+            reviewer_id = (
+                getattr(profile, "assigned_reviewer_id", None)
+                if profile is not None
+                else None
+            )
+            if reviewer_id:
+                user_ids = [reviewer_id]
+            else:
+                # Bậc cuối: manager CÙNG ĐƠN VỊ, và ADMIN thì KHÔNG lọc đơn vị —
+                # admin là vai toàn hệ thống nên lọc theo unit chỉ tạo điểm mù.
+                # Prod: toàn bộ 440 hồ sơ đã đóng học phí nằm ở đơn vị 14, mà đơn vị
+                # đó KHÔNG có manager lẫn admin nào (admin duy nhất ở đơn vị 12) ⇒
+                # bản cũ trả rỗng đúng nơi có toàn bộ dữ liệu thật, thông báo "kế
+                # toán đã xác nhận, tiếp tục xuất giấy" biến mất trong khi giấy cũ
+                # vừa bị thu hồi.
+                _lead_unit = getattr(_lead, "unit_id", None) if _lead else None
+                _same_unit_manager = (
+                    (models.User.role == "manager")
+                    & (models.User.unit_id == _lead_unit)
+                    if _lead_unit is not None
+                    else None
+                )
+                _admin_anywhere = models.User.role == "admin"
+                _cond = (
+                    or_(_same_unit_manager, _admin_anywhere)
+                    if _same_unit_manager is not None
+                    else _admin_anywhere
+                )
+                user_ids = list(
+                    (
+                        await self.db.execute(
+                            select(models.User.id).where(
+                                _cond,
+                                models.User.status == "active",
+                            )
+                        )
+                    ).scalars().all()
+                )
+            if not user_ids:
+                log.warning(
+                    "major_change_confirmed_no_recipient",
+                    fee_id=fee.id,
+                    profile_id=fee.admission_profile_id,
+                )
+        payload = {
+            "fee_id": fee.id,
+            "invoice_id": invoice.id,
+            "admission_profile_id": fee.admission_profile_id,
+            "lead_id": getattr(_lead, "id", None) if _lead else None,
+            "unit_id": getattr(_lead, "unit_id", None) if _lead else None,
+            "new_major_name": new_major_name,
+            "profile_code": f"HS-{fee.admission_profile_id}",
+            "actor_id": actor_id,
+            "fee_version": fee.version,  # F11: template dedup fallback
+            "user_ids": user_ids,
+        }
+        from app.services.notification_dispatcher import (
+            dispatch,
+            rooms_for_finance_review,
+        )
+        from app.core.events import SystemEvents
+        _rooms = rooms_for_finance_review(profile, user_ids)
+        _notif_ids, notif_cb = await dispatch(
+            self.db,
+            event=SystemEvents.MAJOR_CHANGE_CONFIRMED,
+            payload=payload,
+            # Gồm version → mỗi chu kỳ đổi ngành có key confirm riêng (review #4).
+            dedupe_key=f"fee:{fee.id}:v{fee.version}:major_change_confirmed",
+            rooms=_rooms,
+        )
+
+        log.info(
+            "fee_major_change_confirmed",
+            fee_id=fee.id,
+            profile_id=fee.admission_profile_id,
+            invoice_id=invoice.id,
+            actor_id=actor_id,
+            officer_notified=bool(user_ids),
+        )
+
+        async def post_commit():
+            if notif_cb:
+                await notif_cb()
+
+        return fee, post_commit
 
 
 # ==========================================================================
@@ -1727,6 +2898,9 @@ async def recalculate_fees_for_semester_tuition_change(
             selectinload(Fee.applied_discounts),
             selectinload(Fee.invoices),
             selectinload(Fee.installment_plan),
+            # Ngữ cảnh xét điều kiện ĐỐI TƯỢNG ƯU TIÊN của chính sách giảm giá —
+            # nạp sẵn vì truy cập lazy trong vòng lặp async sẽ vỡ (MissingGreenlet).
+            selectinload(Fee.admission_profile),
         )
         .execution_options(populate_existing=True)
     )
@@ -1781,20 +2955,57 @@ async def recalculate_fees_for_semester_tuition_change(
         if new_base == fee.base_amount:
             continue
 
-        # Recalculate: re-apply existing discount percentages
-        total_discount = Decimal("0")
-        for ad in fee.applied_discounts:
-            if ad.discount_percent is not None:
-                disc = (new_base * ad.discount_percent / 100).quantize(Decimal("1"))
-            else:
-                disc = ad.discount_amount
-            ad.discount_amount = disc
-            total_discount += disc
+        # ĐỊNH GIÁ LẠI khi đổi giá học kỳ — dùng CHUNG engine ``fee_pricing``.
+        #
+        # 🔴 Bản cũ có engine giảm giá RIÊNG ở đây: nó rescale theo cột
+        # ``FeeAppliedDiscount.discount_percent``, nhưng cột đó KHÔNG BAO GIỜ được
+        # ghi (cả ``calculate_fee`` lẫn ``_write_discount_lines`` đều bỏ trắng) nên
+        # nhánh percent LUÔN chết ⇒ giảm giá bị đóng băng thành số tiền cũ: admin
+        # sửa học phí HK 7tr→10tr thì "giảm 10%" vẫn giữ 700.000 thay vì 1.000.000.
+        # Nay đọc lại CHÍNH SÁCH và tính lại bằng engine chung (đúng phần trăm,
+        # đúng hiệu lực ngày, đúng cộng dồn).
+        #
+        # GIẢM TAY được BẢO TOÀN nguyên số qua ``resolve_repricing`` — CÙNG hàm
+        # mà "tính lại phí" và "đổi ngành" dùng, nên ba đường không thể trả ba
+        # con số khác nhau cho cùng một khoản phí.
+        _policy_ids = [
+            ad.policy_id for ad in fee.applied_discounts if ad.policy_id is not None
+        ]
+        pricing = resolve_repricing(
+            new_base,
+            await load_discount_policies(db, _policy_ids),
+            list(fee.applied_discounts),
+            calculated_at=datetime.now(timezone.utc).isoformat(),
+            context=discount_context_for_profile(fee.admission_profile),
+        )
+        # 🔴 Giá mới thấp tới mức phải-thu về 0 ⇒ không có gì để xuất hoá đơn;
+        # ghi ``invoice.amount = 0`` sẽ vỡ CHECK ``chk_invoice_amount_positive``.
+        # Đây là xử lý HÀNG LOẠT nên BỎ QUA fee này (có log) thay vì raise — một
+        # khoản phí cá biệt không được làm hỏng cả đợt đổi giá của ngành.
+        if pricing.final_amount - (fee.waived_amount or Decimal("0")) <= 0:
+            log.warning(
+                "fee_recalc_skipped_zero_payable",
+                fee_id=fee.id,
+                new_base=str(new_base),
+                total_discount=str(pricing.total_discount),
+                waived=str(fee.waived_amount),
+            )
+            continue
+
+        _manual_total = pricing.total_discount - pricing.policy_discount
+        await write_fee_discount_lines(db, fee.id, pricing.lines_as_tuples())
+        if _manual_total > 0:
+            log.info(
+                "fee_recalc_semester_change_preserved_manual_discount",
+                fee_id=fee.id,
+                manual_total=str(_manual_total),
+                new_base=str(new_base),
+            )
 
         old_final = fee.final_amount
         fee.base_amount = new_base
-        fee.total_discount = min(total_discount, new_base)
-        fee.final_amount = max(Decimal("0"), new_base - fee.total_discount)
+        fee.total_discount = pricing.total_discount
+        fee.final_amount = pricing.final_amount
         fee.version += 1
 
         # If fee has draft invoices, rewrite their amounts to match

@@ -141,6 +141,14 @@ async def list_fees(
     profile_id: Optional[int] = Query(None, description="Filter by profile ID"),
     academic_year: Optional[str] = Query(None, description="Filter by academic year"),
     has_outstanding: Optional[bool] = Query(None, description="Filter by outstanding balance > 0"),
+    awaiting_major_change: Optional[bool] = Query(
+        None,
+        description=(
+            "Chỉ lấy khoản phí đang CHỜ KẾ TOÁN XÁC NHẬN ĐỔI NGÀNH. Nguồn của tab "
+            "worklist kế toán — trong lúc chờ, hồ sơ bị chặn duyệt/công bố/ghi "
+            "danh/xuất giấy nên cần một danh sách để không hồ sơ nào bị bỏ quên."
+        ),
+    ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
@@ -176,6 +184,7 @@ async def list_fees(
         has_outstanding=has_outstanding,
         profile_id=profile_id,
         academic_year=academic_year,
+        awaiting_major_change=awaiting_major_change,
     )
 
     # Build response items with profile name
@@ -205,6 +214,18 @@ async def list_fees(
             status=fee.status,
             profile_name=profile_name,
             due_date=due_date,
+            # Đổi ngành: 2 cờ để DANH SÁCH phí hiện được dấu "chờ kế toán xác nhận"
+            # và lọc theo nó. Builder này dựng bằng explicit kwargs (không
+            # ``model_validate``) nên thiếu kwarg là im lặng về False — đó là lý do
+            # badge trước đây không bao giờ xuất hiện ở bảng phí.
+            # ``can_confirm_major_change`` dùng CHÍNH helper role-aware của trang
+            # chi tiết (mirror route gate) — không tự suy theo role ở đây.
+            awaiting_accountant_confirmation=getattr(
+                fee, "awaiting_accountant_confirmation", False
+            ),
+            can_confirm_major_change=_fee_can_confirm_major_change(
+                fee, current_user.role
+            ),
         ))
 
     return finance_schemas.FeesPage(
@@ -323,6 +344,9 @@ async def calculate_fee(
             semester_no=data.semester_no,
             target_final_amount=data.target_final_amount,
             manual_discount_reason=data.manual_discount_reason,
+            # Ưu đãi người dùng tích chọn trong dialog. None = không nêu ý kiến
+            # ⇒ áp toàn bộ cấu hình của ngành (hành vi cũ, không đổi).
+            selected_discount_policy_ids=data.discount_policy_ids,
         )
 
         # Generate invoices based on installment plan.
@@ -442,6 +466,17 @@ async def preview_tuition(
     # le=12: chặn semester_no ngoài int32 → asyncpg DataError → 500 (cùng lớp
     # int32-guard codebase đã áp ở các route khác). HK thực tế ≤ 12.
     semester_no: int = Query(1, ge=1, le=12, description="Số học kỳ (HK1=1)"),
+    discount_policy_ids: Optional[List[int]] = Query(
+        None,
+        description="Chính sách ưu đãi người dùng tích chọn (phải nằm trong cấu "
+                    "hình của ngành).",
+    ),
+    explicit_discount_selection: bool = Query(
+        False,
+        description="True = danh sách trên là lựa chọn TƯỜNG MINH của người dùng "
+                    "(rỗng nghĩa là không áp ưu đãi nào). False = chưa chọn gì ⇒ "
+                    "áp toàn bộ cấu hình của ngành.",
+    ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
@@ -463,14 +498,31 @@ async def preview_tuition(
             # 404 not 403: no existence leak beyond scope (same as calculate_fee).
             raise ResourceNotFoundError("Admission profile not found")
 
-        base_amount, total_discount, final_amount = await fee_service.preview_tuition(
-            profile, semester_no
+        (
+            base_amount,
+            total_discount,
+            final_amount,
+            policy_options,
+        ) = await fee_service.preview_tuition(
+            profile,
+            semester_no,
+            # Query string KHÔNG phân biệt "không gửi" với "mảng rỗng" — cả hai
+            # đều về None. Nếu bỏ qua khác biệt đó thì người dùng bỏ tích hết ưu
+            # đãi lại thấy số xem trước VẪN giảm (server hiểu là "áp tất cả"), rồi
+            # bấm Tính phí ra một con số khác. Cờ tường minh khép khe hở đó.
+            selected_discount_policy_ids=(
+                (discount_policy_ids or []) if explicit_discount_selection else None
+            ),
         )
         return finance_schemas.TuitionPreviewResponse(
             base_amount=base_amount,
             total_discount=total_discount,
             final_amount=final_amount,
             semester_no=semester_no,
+            discount_policies=[
+                finance_schemas.DiscountPolicyOption(**opt)
+                for opt in policy_options
+            ],
         )
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -513,9 +565,14 @@ async def get_fee(
         invoice_repo = fee_service.invoice_repo
         invoices = await invoice_repo.get_by_fee_id(fee_id)
 
-        return _build_fee_detail_response(
+        response = _build_fee_detail_response(
             fee, invoices, current_user_role=current_user.role
         )
+        # Đổi ngành: enrich A→B + còn phải thu cho dialog kế toán (review #2 — 3
+        # field này _build_fee_response để None; router async resolve tên ngành).
+        if response.awaiting_accountant_confirmation:
+            await _enrich_major_change_display(db, fee, response)
+        return response
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -556,6 +613,12 @@ async def get_fees_by_profile(
             paid_amount=f.paid_amount,
             remaining_amount=f.remaining_amount,
             status=f.status,
+            awaiting_accountant_confirmation=getattr(
+                f, "awaiting_accountant_confirmation", False
+            ),
+            can_confirm_major_change=_fee_can_confirm_major_change(
+                f, current_user.role
+            ),
         )
         for f in fees
     ]
@@ -613,6 +676,12 @@ async def get_profile_finance_summary(
                 status=f.status,
                 has_payable_invoice=any(
                     _invoice_is_payable(inv) for inv in (f.invoices or [])
+                ),
+                awaiting_accountant_confirmation=getattr(
+                    f, "awaiting_accountant_confirmation", False
+                ),
+                can_confirm_major_change=_fee_can_confirm_major_change(
+                    f, current_user.role
                 ),
             )
             for f in summary["fees"]
@@ -743,6 +812,14 @@ async def get_profile_collection(
                 can_cancel=_fee_can_cancel(f, current_user.role),
                 # base_amount prefills the drawer's "Tính lại" dialog.
                 base_amount=f.base_amount,
+                # Đổi ngành: cờ để drawer/worklist đánh dấu "chờ xác nhận" + bật
+                # nút confirm (review #5 — explicit-kwargs bypass from_attributes).
+                awaiting_accountant_confirmation=getattr(
+                    f, "awaiting_accountant_confirmation", False
+                ),
+                can_confirm_major_change=_fee_can_confirm_major_change(
+                    f, current_user.role
+                ),
             )
             for f in fees
         ],
@@ -956,6 +1033,66 @@ async def recalculate_fee(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+# ⚠️ THỨ TỰ ĐÚNG: @router.put TRƯỚC @limiter.limit (bottom-up decorator) — nếu
+# đặt ngược như recalculate/waive/cancel trong file này thì limiter KHÔNG chạy
+# (nợ slowapi-limiter-decorator-order-debt). Route MỚI nên làm đúng.
+@router.put(
+    "/{fee_id}/confirm-major-change",
+    response_model=finance_schemas.FeeResponse,
+    summary="Kế toán xác nhận đổi ngành (đã reprice)",
+)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def confirm_major_change(
+    request: Request,
+    fee_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """Kế toán (hoặc admin) xác nhận học phí đổi ngành đã reprice → clear cờ chờ,
+    mở lại xuất giấy/approve, báo officer.
+
+    **Auth**: ``CasbinAuth`` — chỉ ``role:accountant`` được grant (migration
+    majchg1c) + admin qua wildcard ``/*``. Manager/officer deny-by-default.
+    KHÔNG dùng ``require_finance_staff`` (nó cho cả manager).
+
+    **Business**: fee phải đang ``awaiting_accountant_confirmation`` (409 nếu
+    không). Bất biến hoá đơn (=final−waived) đã đúng từ reprice — confirm chỉ rà
+    phòng thủ, KHÔNG reconcile.
+    """
+    fee_service = FeeCalculationService(db)
+    unit_id = finance_scope_unit_id(current_user)
+
+    try:
+        fee, callback = await fee_service.confirm_major_change(
+            fee_id,
+            actor_id=current_user.id,
+            unit_id=unit_id,
+        )
+        await db.commit()
+        if callback:
+            await callback()
+
+        log.info(
+            "fee_major_change_confirmed_via_api",
+            fee_id=fee_id,
+            user_id=current_user.id,
+        )
+
+        fresh = await fee_service.fee_repo.get_by_id_with_relations(
+            fee_id, unit_id
+        )
+        return _build_fee_response(
+            fresh or fee, current_user_role=current_user.role
+        )
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except BusinessRuleViolation as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 # ==============================================================================
 # HELPER FUNCTIONS
 # ==============================================================================
@@ -1052,6 +1189,12 @@ def _fee_can_waive(fee, current_user_role: str = None) -> bool:
     status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
     is_terminal = status_value in _FEE_TERMINAL_STATUSES
     is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
+    # Đổi ngành: đang chờ kế toán xác nhận → service
+    # (``_assert_not_awaiting_major_change``) từ chối waive vì nó phá bất biến
+    # ``Σ(invoice) = final − waived`` mà confirm kiểm. Cờ True ở đây = nút hiện rồi
+    # bấm ra 400.
+    if getattr(fee, "awaiting_accountant_confirmation", False):
+        return False
     return not is_terminal and fee.remaining_amount > 0 and is_manager_or_admin
 
 
@@ -1066,6 +1209,11 @@ def _fee_can_recalculate(fee, current_user_role: str = None) -> bool:
     status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
     is_terminal = status_value in _FEE_TERMINAL_STATUSES
     is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
+    # Đổi ngành: đang chờ kế toán xác nhận → route calculate/recalculate bị chặn
+    # bởi ``assert_major_change_cycle_closed``, và bản thân việc tính lại base khi
+    # invoice vừa được ghi lại theo ngành mới sẽ phá bất biến confirm kiểm. Mask cờ.
+    if getattr(fee, "awaiting_accountant_confirmation", False):
+        return False
     return not is_terminal and fee.paid_amount == 0 and is_manager_or_admin
 
 
@@ -1079,7 +1227,20 @@ def _fee_can_cancel(fee, current_user_role: str = None) -> bool:
     status_value = fee.status.value if hasattr(fee.status, "value") else fee.status
     is_terminal = status_value in _FEE_TERMINAL_STATUSES
     is_admin = current_user_role == UserRole.ADMIN
+    # Đổi ngành: đang chờ kế toán → huỷ fee/hoá đơn làm chu kỳ không thể chốt
+    # (mất invoice active), service đã chặn. Mask cờ để không hiện nút chết.
+    if getattr(fee, "awaiting_accountant_confirmation", False):
+        return False
     return not is_terminal and fee.paid_amount == 0 and is_admin
+
+
+def _fee_can_confirm_major_change(fee, current_user_role: str = None) -> bool:
+    """Quyền bấm "Xác nhận đổi ngành" — mirror route gate confirm-major-change
+    (accountant + admin; manager/officer deny). Chỉ khi cờ đang bật.
+    """
+    return bool(
+        getattr(fee, "awaiting_accountant_confirmation", False)
+    ) and current_user_role in (UserRole.ACCOUNTANT, UserRole.ADMIN)
 
 
 def _format_permanent_address(profile) -> Optional[str]:
@@ -1162,7 +1323,40 @@ def _build_fee_response(
         can_cancel=can_cancel,
         can_recalculate=can_recalculate,
         due_date=first_due_date,
+        # Đổi ngành: cờ (từ model) + quyền confirm (role-aware). A→B + delta là
+        # display giàu hơn, enrich ở endpoint detail có DB (mặc định None ở đây).
+        awaiting_accountant_confirmation=getattr(
+            fee, "awaiting_accountant_confirmation", False
+        ),
+        can_confirm_major_change=_fee_can_confirm_major_change(
+            fee, current_user_role
+        ),
     )
+
+
+async def _enrich_major_change_display(db, fee, response) -> None:
+    """Resolve tên ngành CŨ (major_change_from_academic_info_id) + MỚI
+    (resolved_major_id) + số còn phải thu, gán vào response cho dialog kế toán
+    (review #2). Best-effort: field nào không tra được để None (dialog fallback).
+
+    F12: SQL join chuyển vào ``FeeRepository`` (CLAUDE.md 'No direct SQL in
+    Routers, Use Repository pattern')."""
+    from app.repositories.fee_repository import FeeRepository
+
+    _fee_repo = FeeRepository(db)
+    response.major_change_from_major_name = (
+        await _fee_repo.get_major_name_by_academic_info(
+            fee.major_change_from_academic_info_id
+        )
+    )
+    # Ngành MỚI: resolved_major_id đã trỏ ngành mới (reprice resnapshot force).
+    response.major_change_to_major_name = await _fee_repo.get_major_name_by_id(
+        fee.resolved_major_id
+    )
+    # Còn phải thu = final − paid − waived (đã chặn sinh dư nên >= 0). Raw decimal
+    # string — FE formatVND tự format (khớp zod z.string()).
+    outstanding = fee.final_amount - fee.paid_amount - fee.waived_amount
+    response.major_change_delta_amount = str(outstanding)
 
 
 def _build_fee_detail_response(

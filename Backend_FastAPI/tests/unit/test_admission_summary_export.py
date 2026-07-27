@@ -117,7 +117,10 @@ def _rows():
 def test_build_workbook_funnel_sums_to_total():
     leads, officers, majors = _rows()
     svc = AdmissionSummaryExportService(db=None)
-    wb = svc._build_workbook(2026, leads, officers, majors)
+    # Doanh thu (hp_dt) giờ theo LEDGER recognized_major (đổi ngành) — KHÔNG lấy
+    # từ hk1_paid của lead. Tổng 20M (3+12+5) để khớp assertion tổng cũ.
+    revenue = [dict(rmaj=1, off=10, revenue=20_000_000)]
+    wb = svc._build_workbook(2026, leads, officers, majors, revenue)
 
     assert wb.sheetnames == [
         "Số liệu chung",
@@ -158,7 +161,7 @@ def test_build_workbook_funnel_sums_to_total():
 def test_build_workbook_handles_zero_officers():
     leads, _, majors = _rows()
     svc = AdmissionSummaryExportService(db=None)
-    wb = svc._build_workbook(2026, leads, [], majors)
+    wb = svc._build_workbook(2026, leads, [], majors, [])
     assert "Chia theo nhân viên" in wb.sheetnames
     assert wb["Số liệu chung"].cell(7, 6).value == len(leads)
 
@@ -184,12 +187,13 @@ def test_build_workbook_edge_cases():
     officers = [dict(id=10, nm="Nguyễn An")]
     majors = [dict(id=1, code="6480201", name="CNTT", degree_level="Cao đẳng")]
     svc = AdmissionSummaryExportService(db=None)
-    ws = svc._build_workbook(2026, leads, officers, majors)["Số liệu chung"]
+    # Miễn 100% → không có phiếu thu → ledger rỗng → Doanh thu 0.
+    ws = svc._build_workbook(2026, leads, officers, majors, [])["Số liệu chung"]
     assert ws.cell(7, 6).value == 2  # Tổng lead
     # (a) miễn học phí
     assert ws.cell(7, 15).value == 1  # Đóng đủ HK1
     assert ws.cell(7, 16).value == 1  # Tổng học phí (đếm) = 1
-    assert ws.cell(7, 17).value == 0  # Doanh thu = 0 (miễn, paid=0)
+    assert ws.cell(7, 17).value == 0  # Doanh thu = 0 (miễn, ledger rỗng)
     # (b) has_app + nháp → Lệ phí, KHÔNG vào Hồ sơ
     assert ws.cell(7, 13).value == 1  # Lệ phí
     assert ws.cell(7, 12).value == 0  # Hồ sơ chưa đóng phí = 0
@@ -199,3 +203,73 @@ def test_build_workbook_edge_cases():
     assert ws.cell(7, 21).value == 2  # ref Tổng
     # Phễu 9 cột (7-15) = Tổng lead
     assert sum(ws.cell(7, c).value for c in range(7, 16)) == 2
+
+
+def _rows_by_code(ws):
+    out = {}
+    for r in range(8, ws.max_row + 1):
+        code = ws.cell(r, 2).value  # cột "Mã ngành"
+        name = ws.cell(r, 3).value  # cột "Ngành, nghề"
+        if code:
+            out[code] = r
+        elif name:  # dòng sentinel (không mã) — key theo tên
+            out[name] = r
+    return out
+
+
+def test_build_workbook_revenue_by_recognized_major():
+    """ĐỐI SOÁT Excel (đổi ngành): hồ sơ ĐẾM ở ngành hiện tại (B), Doanh thu theo
+    ngành-LÚC-THU (A). Ngành A chỉ còn tiền vẫn xuất hiện; B không có doanh thu."""
+    svc = AdmissionSummaryExportService(db=None)
+    leads = [
+        _lead(id=1, pid=2, cs="sts10", off=10, pstatus="approved",
+              has_app=True, hk1_settled=True, hk1_final=9_000_000,
+              hk1_paid=7_000_000),
+    ]
+    officers = [dict(id=10, nm="NV A")]
+    majors = [
+        dict(id=1, code="AAA", name="Ngành A", degree_level="Cao đẳng"),
+        dict(id=2, code="BBB", name="Ngành B", degree_level="Cao đẳng"),
+    ]
+    # Tiền thu khi hồ sơ CÒN Ở NGÀNH A (rmaj=1), dù giờ hồ sơ ở ngành B (pid=2).
+    revenue = [dict(rmaj=1, off=10, revenue=7_000_000)]
+    ws = svc._build_workbook(
+        2026, leads, officers, majors, revenue
+    )["Số liệu chung"]
+
+    assert ws.cell(7, 17).value == 7_000_000  # tổng Doanh thu
+    rbc = _rows_by_code(ws)
+    assert "AAA" in rbc, "ngành A (chỉ còn doanh thu) phải xuất hiện"
+    assert "BBB" in rbc
+    ra, rb = rbc["AAA"], rbc["BBB"]
+    # Ngành A: Doanh thu 7M, KHÔNG đếm hồ sơ học phí.
+    assert ws.cell(ra, 17).value == 7_000_000
+    assert (ws.cell(ra, 16).value or 0) == 0
+    # Ngành B: đếm 1 hồ sơ đóng đủ HK1, Doanh thu 0 (tiền ghi ở A).
+    assert ws.cell(rb, 16).value == 1
+    assert (ws.cell(rb, 17).value or 0) == 0
+
+
+def test_build_workbook_revenue_unknown_major_and_reversal():
+    """Doanh thu recognized NULL → dòng "(Đã thu, chưa xác định ngành)" riêng.
+    Ledger đã net reversal (SUM signed) — service chỉ cộng số truyền vào."""
+    svc = AdmissionSummaryExportService(db=None)
+    leads = [_lead(id=1, pid=1, cs="sts10", off=10, pstatus="approved",
+                   has_app=True, hk1_settled=True, hk1_final=5_000_000,
+                   hk1_paid=5_000_000)]
+    officers = [dict(id=10, nm="NV A")]
+    majors = [dict(id=1, code="AAA", name="Ngành A", degree_level="Cao đẳng")]
+    # rmaj=-2 (recognized NULL) 5M; và một khoản đã net reversal (5M − 2M = 3M).
+    revenue = [
+        dict(rmaj=-2, off=10, revenue=5_000_000),
+        dict(rmaj=1, off=10, revenue=3_000_000),
+    ]
+    ws = svc._build_workbook(
+        2026, leads, officers, majors, revenue
+    )["Số liệu chung"]
+    assert ws.cell(7, 17).value == 8_000_000  # tổng 5+3
+    rbc = _rows_by_code(ws)
+    assert "(Đã thu, chưa xác định ngành)" in rbc, "bucket NULL phải tách riêng"
+    r_unknown = rbc["(Đã thu, chưa xác định ngành)"]
+    assert ws.cell(r_unknown, 17).value == 5_000_000
+    assert ws.cell(rbc["AAA"], 17).value == 3_000_000

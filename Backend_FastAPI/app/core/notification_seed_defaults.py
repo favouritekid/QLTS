@@ -265,6 +265,18 @@ NOTIFICATION_SEED_DEFAULTS: Dict[SystemEvents, Dict[str, Any]] = {
         "notification_type": "info",
         "recipient_config": {"resolver_type": "specific_users", "params": {}},
     },
+    SystemEvents.MAJOR_CHANGE_AWAITING_CONFIRMATION: {
+        "title_template": "Đổi ngành — chờ kế toán xác nhận",
+        "message_template": "Hồ sơ ${profile_code} đổi ngành ${old_major_name} → ${new_major_name}, học phí đã định giá lại (còn phải thu ${delta_amount}). Cần kế toán xác nhận trước khi phát giấy báo.",
+        "notification_type": "warning",
+        "recipient_config": {"resolver_type": "specific_users", "params": {}},
+    },
+    SystemEvents.MAJOR_CHANGE_CONFIRMED: {
+        "title_template": "Đổi ngành — kế toán đã xác nhận",
+        "message_template": "Kế toán đã xác nhận học phí đổi ngành cho hồ sơ ${profile_code} (ngành ${new_major_name}). Có thể tiếp tục phát giấy báo nhập học.",
+        "notification_type": "success",
+        "recipient_config": {"resolver_type": "specific_users", "params": {}},
+    },
     SystemEvents.LEAD_ASSIGNED: {
         "title_template": "New Lead Assigned",
         "message_template": "Lead #${lead_id} (${lead_name}) has been assigned to you.",

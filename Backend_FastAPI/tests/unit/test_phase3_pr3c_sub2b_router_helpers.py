@@ -47,6 +47,11 @@ def _make_profile(*, status="reviewing", uses_choice_engine=True, choices=None):
         # helper raises AttributeError nếu stub thiếu attribute. None làm
         # helper graceful skip (warning log, return False).
         lead=None,
+        # publish_result nay đi qua gate `assert_major_change_cycle_closed`
+        # (F13). Giai đoạn 1 của chu kỳ đọc THẲNG cờ này trên profile — stub
+        # thiếu nó thì `getattr(..., False)` che mất, test không còn phản ánh
+        # model thật.
+        major_change_requested=False,
     )
 
 
@@ -72,6 +77,14 @@ def _make_choice(decision="waitlisted", profile_id=42):
 def db_session():
     s = MagicMock(name="AsyncSession")
     s.flush = AsyncMock()
+    # Gate chu kỳ đổi ngành (F13) truy vấn fee HK1 đang chờ kế toán xác nhận.
+    # MagicMock trần trả MagicMock → `await db.execute(...)` ném TypeError và
+    # test chết vì hạ tầng mock chứ không vì hành vi đang kiểm. Mặc định
+    # "không có fee nào đang chờ" = chu kỳ đóng; test nào cần chu kỳ MỞ thì
+    # bật `profile.major_change_requested = True` (nhánh đọc thẳng, không query).
+    _khong_co_fee_cho = MagicMock()
+    _khong_co_fee_cho.scalar_one_or_none.return_value = None
+    s.execute = AsyncMock(return_value=_khong_co_fee_cho)
     return s
 
 

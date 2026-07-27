@@ -291,6 +291,8 @@ export function InvoiceListClient() {
         result[tab.key] = statusCounts.total
       } else if (tab.overdue) {
         result[tab.key] = statusCounts.overdue_derived
+      } else if (tab.awaitingMajorChange) {
+        result[tab.key] = statusCounts.awaiting_major_change ?? 0
       } else {
         result[tab.key] = tab.statuses.reduce(
           (sum, s) => sum + (statusCounts.counts[s as keyof typeof statusCounts.counts] ?? 0),

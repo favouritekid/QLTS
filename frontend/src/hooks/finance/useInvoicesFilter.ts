@@ -495,6 +495,9 @@ export function useInvoicesFilter(
     const tab = STATUS_TABS.find((t) => t.key === activeTab)
     if (tab?.overdue) {
       params.overdue_only = true
+    } else if (tab?.awaitingMajorChange) {
+      // Lens đổi ngành: cờ nằm trên KHOẢN PHÍ cha, không phải trạng thái hoá đơn.
+      params.awaiting_major_change = true
     } else if (tab && tab.statuses.length > 0) {
       params.status = tab.statuses.join(",")
     }

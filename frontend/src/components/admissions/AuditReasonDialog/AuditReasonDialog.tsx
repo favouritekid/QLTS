@@ -38,6 +38,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   AUDIT_ACTION_CONFIG,
   loadRecentReasons,
@@ -48,10 +49,18 @@ export interface AuditReasonDialogProps {
   action: AuditAction
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Fired only when user clicks confirm and reason passes min length. */
-  onConfirm: (reason: string) => void
+  /**
+   * Fired only when user clicks confirm and reason passes min length.
+   * ``allowMajorChange`` = trạng thái checkbox đổi ngành (false nếu không hiện).
+   */
+  onConfirm: (reason: string, allowMajorChange: boolean) => void
   /** Optional disable state — caller may disable while parent mutation is pending. */
   isSubmitting?: boolean
+  /**
+   * C2: hiện checkbox "Cho phép đổi ngành" (mở chu kỳ định giá lại + kế toán xác
+   * nhận). Chỉ dùng cho request_revision / admin_rollback trên hồ sơ đã đóng HP.
+   */
+  showMajorChangeToggle?: boolean
 }
 
 export function AuditReasonDialog({
@@ -60,9 +69,11 @@ export function AuditReasonDialog({
   onOpenChange,
   onConfirm,
   isSubmitting = false,
+  showMajorChangeToggle = false,
 }: AuditReasonDialogProps) {
   const config = AUDIT_ACTION_CONFIG[action]
   const [reason, setReason] = useState("")
+  const [allowMajorChange, setAllowMajorChange] = useState(false)
   const [recent, setRecent] = useState<string[]>(() =>
     open ? loadRecentReasons(action) : [],
   )
@@ -81,6 +92,7 @@ export function AuditReasonDialog({
     setLastOpenAction({ open, action })
     if (open) {
       setReason("")
+      setAllowMajorChange(false)
       setRecent(loadRecentReasons(action))
     }
   }
@@ -112,7 +124,7 @@ export function AuditReasonDialog({
 
   const handleConfirm = () => {
     if (invalid) return
-    onConfirm(trimmed)
+    onConfirm(trimmed, showMajorChangeToggle ? allowMajorChange : false)
   }
 
   return (
@@ -215,6 +227,26 @@ export function AuditReasonDialog({
               )}
             </div>
           </div>
+
+          {showMajorChangeToggle && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-700 dark:bg-amber-950/40">
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <Checkbox
+                  checked={allowMajorChange}
+                  onCheckedChange={(v) => setAllowMajorChange(v === true)}
+                  disabled={isSubmitting}
+                  className="mt-0.5"
+                  data-testid="allow-major-change-checkbox"
+                />
+                <span className="text-sm">
+                  <span className="font-medium">Cho phép đổi ngành</span> — mở
+                  chu kỳ định giá lại học phí theo ngành mới; kế toán phải xác
+                  nhận trước khi xuất giấy báo. Chỉ chọn khi thí sinh thực sự đổi
+                  ngành.
+                </span>
+              </label>
+            </div>
+          )}
         </div>
 
         <DialogFooter>

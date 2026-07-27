@@ -112,6 +112,14 @@ async def list_invoices(
     unit_id: Optional[int] = Query(
         None, description="Filter theo đơn vị (INTERSECT với scope IDOR)"
     ),
+    awaiting_major_change: Optional[bool] = Query(
+        None,
+        description=(
+            "Lens 'Chờ xác nhận đổi ngành': chỉ hoá đơn có khoản phí cha đang chờ "
+            "kế toán xác nhận đổi ngành. ORTHOGONAL với trạng thái hoá đơn (giống "
+            "lens 'Quá hạn') — nguồn của tab worklist kế toán."
+        ),
+    ),
     due_window: Optional[str] = Query(
         None, description="Hạn: due_soon_7d (đến hạn ≤7 ngày, chưa thu) | overdue"
     ),
@@ -160,6 +168,7 @@ async def list_invoices(
         officer_id=officer_id,
         unit_id_filter=unit_id,
         due_window=due_window,
+        awaiting_major_change=awaiting_major_change,
     )
 
     # Build enriched list rows (identity + derived urgency + role-aware flags).
@@ -202,6 +211,14 @@ async def get_invoice_status_counts(
     unit_id: Optional[int] = Query(
         None, description="Filter theo đơn vị (INTERSECT với scope IDOR)"
     ),
+    awaiting_major_change: Optional[bool] = Query(
+        None,
+        description=(
+            "Lens 'Chờ xác nhận đổi ngành': chỉ hoá đơn có khoản phí cha đang chờ "
+            "kế toán xác nhận đổi ngành. ORTHOGONAL với trạng thái hoá đơn (giống "
+            "lens 'Quá hạn') — nguồn của tab worklist kế toán."
+        ),
+    ),
     due_window: Optional[str] = Query(
         None, description="Hạn: due_soon_7d (đến hạn ≤7 ngày, chưa thu) | overdue"
     ),
@@ -243,6 +260,7 @@ async def get_invoice_status_counts(
         officer_id=officer_id,
         unit_id_filter=unit_id,
         due_window=due_window,
+        awaiting_major_change=awaiting_major_change,
     )
     return finance_schemas.InvoiceStatusCounts(**counts)
 
@@ -684,12 +702,25 @@ def _compute_invoice_permissions(
     )
     is_manager_or_admin = current_user_role in [UserRole.ADMIN, UserRole.MANAGER]
     is_accountant_or_admin = current_user_role in [UserRole.ADMIN, UserRole.ACCOUNTANT]
+    # Đổi ngành: fee cha đang chờ kế toán xác nhận → ``cancel_invoice`` bị service
+    # chặn (huỷ hoá đơn làm chu kỳ không thể chốt: confirm đòi ĐÚNG 1 invoice
+    # active). Hoá đơn 0đ của hồ sơ đổi ngành lọt hết guard cũ nên đây đúng là ca
+    # nút hiện rồi bấm ra 400.
+    # ``__dict__.get`` để KHÔNG trigger lazy-load (MissingGreenlet trong async);
+    # đường nào chưa eager-load ``fee`` thì cờ giữ nguyên như trước — service vẫn
+    # là hàng rào thật, đây chỉ là lớp làm nút không chết.
+    _parent_fee = invoice.__dict__.get("fee")
+    _fee_awaiting_major_change = bool(
+        _parent_fee is not None
+        and getattr(_parent_fee, "awaiting_accountant_confirmation", False)
+    )
     return {
         "can_issue": status_value == "draft" and is_accountant_or_admin,
         "can_cancel": (
             status_value not in ["paid", "cancelled"]
             and invoice.paid_amount == 0
             and is_manager_or_admin
+            and not _fee_awaiting_major_change
         ),
         "can_record_payment": (
             status_value in PAYABLE_INVOICE_STATUSES

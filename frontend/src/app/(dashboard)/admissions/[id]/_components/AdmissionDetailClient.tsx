@@ -61,6 +61,7 @@ import { AdmissionLayout } from "./layout/AdmissionLayout"
 import { derivePriorityIssues, firstAttentionStep, missingRequiredDataSteps } from "./layout/priorityIssues"
 import { AdmissionActions } from "./AdmissionActions"
 import { StatusBanner } from "@/components/ui/StatusBanner"
+import { MajorChangeRecallBanner } from "./MajorChangeRecallBanner"
 
 // Tabs
 import { PersonalInfoTab } from "./tabs/PersonalInfoTab"
@@ -462,10 +463,11 @@ export function AdmissionDetailClient({
   }, [])
 
   const handleConfirmRequestRevision = useCallback(
-    (reason: string) => {
+    (reason: string, allowMajorChange: boolean) => {
       if (!vm?.version) return
       requestRevisionMutation.mutate(
-        { reason, version: vm.version },
+        // C2: allow_major_change mở chu kỳ đổi ngành (BE no-op nếu không đủ ĐK).
+        { reason, version: vm.version, allow_major_change: allowMajorChange },
         {
           onSuccess: () => {
             // #8: remember the reason for this action's "recent reasons" dropdown.
@@ -584,6 +586,15 @@ export function AdmissionDetailClient({
             </div>
           )
         )}
+
+        {/* Đổi ngành: nhắc thu hồi giấy báo cũ + copy câu mẫu (phương án c). */}
+        <MajorChangeRecallBanner
+          cycleOpen={profile.major_change_cycle_open ?? false}
+          awaitingConfirmation={
+            profile.major_change_awaiting_confirmation ?? false
+          }
+          candidateName={profile.lead?.full_name}
+        />
 
         {/* TAB CONTENT — no wrapper card: each tab renders its own Card(s), so an
             outer bg-card/shadow here was a redundant card-in-card that boxed the
@@ -724,6 +735,10 @@ export function AdmissionDetailClient({
         onOpenChange={setRequestRevisionDialogOpen}
         onConfirm={handleConfirmRequestRevision}
         isSubmitting={requestRevisionMutation.isPending}
+        // C2: toggle đổi ngành theo CAPABILITY BE (thin-client) — gate feature
+        // flag + status + choice-engine + có HK1 fee + chưa chờ kế toán. Suy từ
+        // status ở FE là sai: flag OFF thì server trả 400 cho allow_major_change.
+        showMajorChangeToggle={can("can_request_major_change")}
       />
     </FormProvider>
   )

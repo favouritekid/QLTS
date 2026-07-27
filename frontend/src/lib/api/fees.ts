@@ -150,11 +150,29 @@ export async function listCalculableProfiles(
  */
 export async function getTuitionPreview(
   profileId: number,
-  semesterNo: number
+  semesterNo: number,
+  discountPolicyIds?: number[]
 ): Promise<TuitionPreviewResponse> {
   const response = await api.get<TuitionPreviewResponse>(
     API_ENDPOINTS.FINANCE.FEES.TUITION_PREVIEW,
-    { params: { admission_profile_id: profileId, semester_no: semesterNo } }
+    {
+      params: {
+        admission_profile_id: profileId,
+        semester_no: semesterNo,
+        // Query string không phân biệt được "không gửi" với "mảng rỗng" (cả hai
+        // về None ở backend), nên đi kèm cờ tường minh: bỏ tích HẾT ưu đãi vẫn
+        // phải ra số xem trước không giảm, khớp với số lúc bấm Tính phí.
+        ...(discountPolicyIds !== undefined
+          ? {
+              discount_policy_ids: discountPolicyIds,
+              explicit_discount_selection: true,
+            }
+          : {}),
+      },
+      // indexes: null ⇒ ?discount_policy_ids=1&discount_policy_ids=2 (FastAPI
+      // List[int]), thay vì ...[0]=1&...[1]=2 mà backend không parse được.
+      paramsSerializer: { indexes: null },
+    }
   )
   return response.data
 }
@@ -240,6 +258,21 @@ export async function recalculateFee(feeId: number, data: FeeRecalculateRequest)
   return response.data
 }
 
+/**
+ * Đổi ngành: kế toán (hoặc admin) xác nhận học phí đã reprice → clear cờ chờ,
+ * mở lại xuất giấy/duyệt, báo officer. PUT (không body).
+ *
+ * @throws {AxiosError} 403 nếu không có quyền (chỉ accountant + admin)
+ * @throws {AxiosError} 409 nếu fee không đang chờ xác nhận (đã confirm)
+ * @throws {AxiosError} 400 nếu bất biến hoá đơn lệch (cần rà thủ công)
+ */
+export async function confirmMajorChange(feeId: number): Promise<Fee> {
+  const response = await api.put<Fee>(
+    API_ENDPOINTS.FINANCE.FEES.CONFIRM_MAJOR_CHANGE(feeId),
+  )
+  return response.data
+}
+
 // ============================================================================
 // EXPORTED API OBJECT
 // ============================================================================
@@ -258,4 +291,5 @@ export const feesApi = {
   waiveFee,
   cancelFee,
   recalculateFee,
+  confirmMajorChange,
 }

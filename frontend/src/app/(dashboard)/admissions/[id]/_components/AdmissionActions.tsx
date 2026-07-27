@@ -20,7 +20,7 @@
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Save, ClipboardCheck, ArrowRight, ArrowLeft } from "lucide-react"
+import { Loader2, Save, ClipboardCheck, ArrowRight, ArrowLeft, Clock } from "lucide-react"
 import { usePermissions } from "@/hooks/usePermissions"
 import { getStatusConfig } from "@/lib/status-config"
 import { canDecide } from "@/lib/utils/admission-permissions"
@@ -136,6 +136,23 @@ export function AdmissionActions({
               lý do AdmissionActions.test.tsx phải mock nó. */}
           {can('issue_enrollment_letter') && (
             <EnrollmentLetterButton profile={profile} />
+          )}
+          {/* Đổi ngành: badge giải thích vì sao xuất giấy / quyết định bị ẩn khi
+              hồ sơ đang trong chu kỳ đổi ngành (BE-owned major_change_cycle_open).
+              Thin-client: chỉ hiển thị theo cờ BE, không tự suy.
+              Nội dung theo GIAI ĐOẠN — giai đoạn 1 hồ sơ đang chờ OFFICER sửa
+              nguyện vọng + nộp lại, chưa có gì để kế toán xác nhận; nói "chờ kế
+              toán" lúc đó là chỉ sai người đang bị chặn. */}
+          {profile.major_change_cycle_open && (
+            <Badge
+              variant="outline"
+              className="gap-1.5 border-amber-300 bg-amber-50 text-amber-700 whitespace-nowrap dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300"
+            >
+              <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+              {profile.major_change_awaiting_confirmation
+                ? "Chờ kế toán xác nhận đổi ngành"
+                : "Chờ nộp lại để định giá lại học phí"}
+            </Badge>
           )}
         </div>
       </div>

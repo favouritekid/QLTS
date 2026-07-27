@@ -17,6 +17,16 @@ vi.mock("../MinorCorrectionDialog", () => ({
   MinorCorrectionDialog: () => <button data-testid="mock-minor-correction">Sửa nhỏ</button>,
 }))
 
+// C2 — useAdminRollback dùng react-query (cần QueryClient); AuditReasonDialog kéo
+// theo localStorage. Mock cả hai để test menu thuần không cần provider.
+vi.mock("@/hooks/admissions", () => ({
+  useAdminRollback: () => ({ mutate: vi.fn(), isPending: false }),
+}))
+vi.mock("@/components/admissions/AuditReasonDialog", () => ({
+  AuditReasonDialog: () => null,
+  pushRecentReason: vi.fn(),
+}))
+
 // Pass-through AlertDialog mock — keep trigger + action both clickable
 vi.mock("@/components/ui/alert-dialog", () => ({
   AlertDialog: ({ children, open }: { children: React.ReactNode; open?: boolean }) =>
@@ -116,6 +126,36 @@ describe("ProfileActionMenu", () => {
       render(<ProfileActionMenu profile={buildProfile({ permissions: { minor_correction: true } })} />)
       expect(screen.getByTestId("menu-item-minor-correction")).toBeInTheDocument()
       expect(screen.getByTestId("mock-minor-correction")).toBeInTheDocument()
+    })
+
+    // C2 — entry-point admin rollback (+ đổi ngành).
+    it("admin_rollback=true + can_request_major_change=true: nhãn có 'Đổi ngành'", () => {
+      render(
+        <ProfileActionMenu
+          profile={buildProfile({
+            permissions: { admin_rollback: true, can_request_major_change: true },
+          })}
+        />,
+      )
+      expect(screen.getByTestId("menu-item-admin-rollback")).toHaveTextContent(
+        "Đưa về nháp / Đổi ngành",
+      )
+    })
+
+    // RE-GATE: capability false (feature flag OFF / hồ sơ không đủ điều kiện) →
+    // nút rollback GIỮ (chức năng độc lập) nhưng nhãn KHÔNG hứa đổi ngành, vì
+    // server sẽ trả 400 cho allow_major_change=true.
+    it("admin_rollback=true nhưng capability false: nhãn chỉ 'Đưa về nháp'", () => {
+      render(<ProfileActionMenu profile={buildProfile({ permissions: { admin_rollback: true } })} />)
+      const item = screen.getByTestId("menu-item-admin-rollback")
+      expect(item).toBeInTheDocument()
+      expect(item).toHaveTextContent("Đưa về nháp")
+      expect(item.textContent).not.toMatch(/Đổi ngành/)
+    })
+
+    it("admin_rollback vắng mặt: KHÔNG hiển thị item admin-rollback", () => {
+      render(<ProfileActionMenu profile={buildProfile({ permissions: { claim: true } })} onClaim={vi.fn()} />)
+      expect(screen.queryByTestId("menu-item-admin-rollback")).not.toBeInTheDocument()
     })
   })
 

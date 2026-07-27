@@ -17,7 +17,33 @@ const mutateAsync = vi.fn();
 
 // useAuth điều khiển role để test vùng "Miễn/giảm" (chỉ admin/manager/accountant).
 // Mặc định officer → vùng giảm ẩn (các test cũ không đổi). Đổi .role trong test.
-const { mockAuth } = vi.hoisted(() => ({ mockAuth: { role: "officer" } }));
+type PolicyOption = {
+  id: number;
+  name: string;
+  discount_type: string;
+  discount_value: string;
+  amount: string;
+  selectable: boolean;
+  reason: string | null;
+  reason_text: string | null;
+  selected: boolean;
+  applied: boolean;
+};
+
+const { mockAuth, mockPreview } = vi.hoisted(() => ({
+  mockAuth: { role: "officer" },
+  mockPreview: {
+    data: {
+      base_amount: "5000000",
+      total_discount: "0",
+      final_amount: "5000000",
+      semester_no: 1,
+      discount_policies: [] as PolicyOption[],
+    },
+    isLoading: false,
+    isError: false,
+  },
+}));
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: () => ({ user: mockAuth }),
 }));
@@ -29,18 +55,9 @@ vi.mock("@/hooks/finance/useFees", async () => {
   return {
     ...actual,
     useCalculateFee: () => ({ mutateAsync, isPending: false }),
-    // Lịch thu "đóng trước" — stub tổng phải thu (final) để khối preview render
-    // tất định, không gọi mạng, khi bật toggle.
-    useTuitionPreview: () => ({
-      data: {
-        base_amount: "5000000",
-        total_discount: "0",
-        final_amount: "5000000",
-        semester_no: 1,
-      },
-      isLoading: false,
-      isError: false,
-    }),
+    // Lịch thu "đóng trước" + danh sách ưu đãi — stub để khối preview render tất
+    // định, không gọi mạng. Test đổi ``mockPreview.data`` để dựng từng ca.
+    useTuitionPreview: () => mockPreview,
   };
 });
 
@@ -62,6 +79,9 @@ describe("CalculateFeeDialog", () => {
     mutateAsync.mockReset();
     mutateAsync.mockResolvedValue({ id: 1, admission_profile_id: 42 });
     mockAuth.role = "officer"; // mặc định: vùng miễn/giảm ẩn
+    mockPreview.data.discount_policies = []; // mặc định: ngành chưa gắn ưu đãi
+    mockPreview.data.total_discount = "0";
+    mockPreview.data.final_amount = "5000000";
   });
 
   it("renders semester dropdown only for tuition fee_type", () => {
@@ -234,5 +254,131 @@ describe("CalculateFeeDialog", () => {
       target: { value: "Hoc bong dac biet theo quyet dinh" },
     });
     expect(submit).toBeEnabled();
+  });
+
+  // ===================================================================
+  // Ưu đãi theo CHÍNH SÁCH của ngành (owner chốt 26-07)
+  // ===================================================================
+
+  const policy = (over: Partial<PolicyOption> = {}): PolicyOption => ({
+    id: 4,
+    name: "Giảm đăng ký sớm",
+    discount_type: "percentage",
+    discount_value: "10",
+    amount: "500000",
+    selectable: true,
+    reason: null,
+    reason_text: null,
+    selected: true,
+    applied: true,
+    ...over,
+  });
+
+  it("ẩn hẳn khối ưu đãi khi ngành chưa gắn chính sách nào", () => {
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+    expect(screen.queryByText(/ưu đãi học phí/i)).not.toBeInTheDocument();
+  });
+
+  it("hiện lý do và khoá ô tích với chính sách không áp được", () => {
+    mockPreview.data.discount_policies = [
+      policy(),
+      policy({
+        id: 6,
+        name: "Giảm đối tượng ưu tiên",
+        selectable: false,
+        selected: false,
+        applied: false,
+        reason: "khong_thuoc_doi_tuong_da_xac_minh",
+        reason_text: "Hồ sơ không thuộc đối tượng ưu tiên đã được xác minh",
+      }),
+    ];
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+
+    expect(screen.getByText(/ưu đãi học phí/i)).toBeInTheDocument();
+    // Lý do phải HIỆN — "có ưu đãi mà không bấm được" là câu kế toán sẽ hỏi.
+    expect(
+      screen.getByText(/không thuộc đối tượng ưu tiên đã được xác minh/i)
+    ).toBeInTheDocument();
+
+    const disabled = screen.getByLabelText(/giảm đối tượng ưu tiên/i);
+    expect(disabled).toBeDisabled();
+    expect(screen.getByLabelText(/giảm đăng ký sớm/i)).toBeEnabled();
+  });
+
+  it("nói rõ khi ưu đãi đã tích nhưng KHÔNG được áp", () => {
+    // is_stackable mặc định FALSE ở CSDL nên tổ hợp này rất dễ gặp: engine áp
+    // ưu đãi độc quyền rồi dừng, ô tích thứ hai không có hiệu lực. Im lặng thì
+    // tổng tiền bên dưới trông như tính sai.
+    mockPreview.data.discount_policies = [
+      policy({ id: 4, name: "Ưu đãi độc quyền" }),
+      policy({
+        id: 9,
+        name: "Ưu đãi cộng dồn",
+        selected: true,
+        applied: false,
+        reason: "bi_chan_boi_chinh_sach_khong_cong_don",
+        reason_text: "Không cộng dồn được với ưu đãi đã áp trước đó",
+      }),
+    ];
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+
+    expect(screen.getByText(/không được áp/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/không cộng dồn được với ưu đãi đã áp trước đó/i)
+    ).toBeInTheDocument();
+  });
+
+  it("không gửi discount_policy_ids khi người dùng KHÔNG đụng vào ô tích", async () => {
+    mockPreview.data.discount_policies = [policy()];
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+    fireEvent.click(screen.getByRole("button", { name: /^tính học phí$/i }));
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith({
+        admission_profile_id: 42,
+        fee_type: "tuition",
+        semester_no: 1,
+        installment_plan_code: "FULL",
+      });
+    });
+  });
+
+  it("bỏ tích hết thì gửi mảng RỖNG (không áp ưu đãi nào)", async () => {
+    mockPreview.data.discount_policies = [policy()];
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+
+    fireEvent.click(screen.getByLabelText(/giảm đăng ký sớm/i));
+    fireEvent.click(screen.getByRole("button", { name: /^tính học phí$/i }));
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith({
+        admission_profile_id: 42,
+        fee_type: "tuition",
+        semester_no: 1,
+        installment_plan_code: "FULL",
+        discount_policy_ids: [],
+      });
+    });
+  });
+
+  it("tích lại một chính sách đã bỏ thì gửi đúng id đó", async () => {
+    mockPreview.data.discount_policies = [
+      policy({ selected: false }),
+      policy({ id: 9, name: "Giảm con em cán bộ", selected: false }),
+    ];
+    render(<CalculateFeeDialog open onOpenChange={vi.fn()} profileId={42} />);
+
+    fireEvent.click(screen.getByLabelText(/giảm con em cán bộ/i));
+    fireEvent.click(screen.getByRole("button", { name: /^tính học phí$/i }));
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith({
+        admission_profile_id: 42,
+        fee_type: "tuition",
+        semester_no: 1,
+        installment_plan_code: "FULL",
+        discount_policy_ids: [9],
+      });
+    });
   });
 });

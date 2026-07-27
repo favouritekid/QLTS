@@ -1169,6 +1169,17 @@ async def publish_result(
             f"trạng thái hiện tại: '{profile.status}'"
         )
 
+    # Đổi ngành: CHẶN công bố kết quả khi đang chu kỳ đổi ngành (học phí chưa
+    # chốt / chờ kế toán) — không quyết định trúng tuyển với nghĩa vụ tiền chưa
+    # xác nhận. Flag OFF → no-op. Đặt TRƯỚC auto-transition + cascade.
+    from .fee_calculation_service import assert_major_change_cycle_closed
+    await assert_major_change_cycle_closed(  # F13
+        db,
+        profile,
+        message="Không thể công bố kết quả khi hồ sơ đang đổi ngành — chờ kế "
+        "toán xác nhận học phí trước.",
+    )
+
     # Fast-track nợ giấy tờ (C1.5) — DECISION GATE. A multi-NV profile can be
     # submitted WITH a document debt (acknowledge + reason), so it may sit at
     # ``submitted`` with owed docs still unverified. ``publish_result`` is the
@@ -1432,6 +1443,7 @@ async def admin_rollback_profile(
     profile: "AdmissionProfile",
     reason: str,
     actor: Any,
+    allow_major_change: bool = False,
 ) -> Tuple[Dict[str, Any], Optional[Callable[[], Awaitable[None]]]]:
     """T17 admin-rollback: any non-final state → draft (admin-only).
 
@@ -1468,12 +1480,26 @@ async def admin_rollback_profile(
     # → 400 confusing UX ("not allowed"). Sau: 200 với
     # `already_at_target=true` cho FE phân biệt no-op vs actual rollback.
     if rolled_back_from == "draft":
+        # Đổi ngành: PHẢI xử cờ TRƯỚC khi return sớm. Chu kỳ đổi ngành mở qua
+        # admin-rollback đặt hồ sơ ở 'draft', nên nếu bỏ qua nhánh này thì:
+        #   * ``allow=False`` (huỷ chu kỳ) không bao giờ clear được cờ — mà ở
+        #     'draft' cũng không còn đường nào khác (request_revision bất khả từ
+        #     draft) ⇒ hồ sơ KẸT VĨNH VIỄN sau mọi gate, chỉ sửa được bằng SQL;
+        #   * ``allow=True`` im lặng trả 200 với major_change_requested=false —
+        #     đúng kiểu "im lặng bỏ qua" mà bản vá fail-closed đã diệt; giờ
+        #     ``maybe_open_major_change_cycle`` raise 400 (status draft =
+        #     post_decision) nên admin biết chu kỳ KHÔNG mở.
+        from .fee_calculation_service import maybe_open_major_change_cycle
+        _mc_opened_at_target = await maybe_open_major_change_cycle(
+            db, profile, allow_major_change=allow_major_change
+        )
         return (
             {
                 "profile_id": profile.id,
                 "status": "draft",
                 "rolled_back_from": "draft",
                 "already_at_target": True,
+                "major_change_requested": _mc_opened_at_target,
             },
             None,
         )
@@ -1495,6 +1521,14 @@ async def admin_rollback_profile(
             rejector_id=_rej_id,
         )
 
+    # Đổi ngành: mở chu kỳ TRƯỚC transition (đọc status GỐC = rolled_back_from để
+    # kiểm pre-decision). Set major_change_requested nếu đủ điều kiện; raise nếu
+    # còn chu kỳ chờ kế toán. Flag OFF / post-decision → no-op.
+    from .fee_calculation_service import maybe_open_major_change_cycle
+    major_change_opened = await maybe_open_major_change_cycle(
+        db, profile, allow_major_change=allow_major_change
+    )
+
     _, callback = await state_service.transition(
         db, profile, "draft",
         actor=actor,
@@ -1503,6 +1537,7 @@ async def admin_rollback_profile(
         event_metadata={
             "rolled_back_from": rolled_back_from,
             "actor_id": getattr(actor, "id", None),
+            "major_change_requested": major_change_opened,
         },
     )
 
@@ -1511,6 +1546,7 @@ async def admin_rollback_profile(
             "profile_id": profile.id,
             "status": "draft",
             "rolled_back_from": rolled_back_from,
+            "major_change_requested": major_change_opened,
         },
         callback,
     )

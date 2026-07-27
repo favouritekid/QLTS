@@ -84,6 +84,41 @@ async def _get_active_hk1_tuition_fee(db, profile_id: int):
     return (await db.execute(stmt)).scalars().first()
 
 
+async def supersede_current_letter(
+    db, profile_id: int, *, reason: str
+) -> int:
+    """Đóng dấu ``superseded_at`` cho bản giấy báo HIỆN HÀNH của hồ sơ (nếu có).
+
+    Dùng khi ĐỔI NGÀNH (``reprice_for_major_change``): giấy cũ ghi ngành + số
+    tiền CŨ, không còn hiệu lực. Chỉ GIẢI PHÓNG slot "bản hiện hành" (partial
+    unique index ``ix_enrollment_letter_current`` trên ``profile_id WHERE
+    superseded_at IS NULL``) — KHÔNG chèn bản mới (bản mới phát lại sau khi kế
+    toán confirm, qua ``issue_enrollment_letter``). File PDF cũ KHÔNG bị xoá:
+    route download cố ý không lọc ``superseded_at`` (đường phục hồi/đối chiếu).
+
+    Reuse ĐÚNG câu UPDATE mold của ``issue_enrollment_letter`` block (a). Trả về
+    số bản vừa đóng dấu (0 = hồ sơ chưa từng phát giấy → no-op, không lỗi).
+    """
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        update(models.EnrollmentLetter)
+        .where(
+            models.EnrollmentLetter.profile_id == profile_id,
+            models.EnrollmentLetter.superseded_at.is_(None),
+        )
+        .values(superseded_at=now)
+    )
+    n = result.rowcount or 0
+    if n:
+        log.info(
+            "enrollment_letter_superseded",
+            profile_id=profile_id,
+            superseded_count=n,
+            reason=reason,
+        )
+    return n
+
+
 async def _resolve_admitted_major(db, profile, fee):
     """Ngành + trình độ IN LÊN GIẤY, lấy theo NGUYỆN VỌNG (không phải cột
     snapshot trên Fee).
@@ -352,6 +387,21 @@ async def build_letter_data(db, profile) -> dict:
     if fee is None:
         missing.append("phí học kỳ 1 (HK1) — hãy tính học phí trước")
 
+    # Đổi ngành: CHẶN xuất giấy khi đang trong chu kỳ đổi ngành (chờ officer sửa
+    # + nộp lại HOẶC chờ kế toán xác nhận) — giấy sẽ ghi ngành/số tiền sai. Gate
+    # feature-flag-aware (flag OFF → False). Kiểm ở CẢ đây LẪN re-check dưới khoá
+    # (issue_enrollment_letter) chống TOCTOU cửa sổ render.
+    from app.services.fee_calculation_service import (
+        assert_major_change_cycle_closed,
+    )
+    await assert_major_change_cycle_closed(  # F13
+        db,
+        profile,
+        message="Không thể xuất giấy báo nhập học: hồ sơ đang trong quá trình "
+        "đổi ngành, chờ kế toán xác nhận học phí.",
+        exc_type=ValidationError,
+    )
+
     if missing:
         raise ValidationError(
             "Không thể tạo giấy báo nhập học — thiếu dữ liệu: "
@@ -579,6 +629,11 @@ async def issue_enrollment_letter(
             select(
                 models.AdmissionProfile.status,
                 models.AdmissionProfile.is_dropped,
+                # Đọc TƯƠI trong CHÍNH query đã khoá — instance ``profile`` là bản
+                # trước render, ``major_change_requested`` trên đó có thể stale
+                # False sau khi admin mở chu kỳ giữa lúc render. Re-check ở dưới
+                # phải dùng giá trị này, không dùng thuộc tính của instance cũ.
+                models.AdmissionProfile.major_change_requested,
             )
             .where(models.AdmissionProfile.id == profile.id)
             .with_for_update()
@@ -620,6 +675,25 @@ async def issue_enrollment_letter(
         raise BusinessRuleViolation(
             "Học phí của hồ sơ vừa thay đổi trong lúc tạo giấy báo — không phát "
             "hành để tránh in sai số tiền. Hãy thử lại."
+        )
+
+    # Đổi ngành: re-check dưới khoá (TOCTOU) — chu kỳ đổi ngành có thể mở TRONG
+    # lúc render (cửa sổ ~350ms không giữ khoá). Xoá file tạm + fail như nhánh
+    # fee-changed. Flag OFF → False → no-op.
+    # F13 NGOẠI LỆ: KHÔNG dùng assert_major_change_cycle_closed vì phải DỌN file
+    # PDF tạm (_best_effort_delete) TRƯỚC khi raise — helper raise thẳng không cho
+    # chèn cleanup. Giữ check tường minh.
+    # Truyền cờ TƯƠI (đọc trong query đã khoá ở trên) qua một view nhẹ thay vì
+    # ``profile`` — instance cũ có thể còn ``major_change_requested=False`` trong
+    # khi admin vừa mở chu kỳ; phần ``awaiting`` của predicate là query riêng nên
+    # đã tươi sẵn.
+    from app.services.fee_calculation_service import is_major_change_cycle_open
+    _locked_view = SimpleNamespace(id=profile.id, major_change_requested=locked[2])
+    if await is_major_change_cycle_open(db, _locked_view):
+        await to_thread.run_sync(_best_effort_delete, final_path)
+        raise BusinessRuleViolation(
+            "Hồ sơ vừa vào quá trình đổi ngành trong lúc tạo giấy báo — không "
+            "phát hành. Hãy chờ kế toán xác nhận học phí rồi thử lại."
         )
 
     _now = datetime.now(timezone.utc)

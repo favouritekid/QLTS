@@ -34,8 +34,20 @@ export const feesKeys = {
   byProfile: (profileId: number) => [...feesKeys.all, "by-profile", profileId] as const,
   profileSummary: (profileId: number) => [...feesKeys.all, "profile-summary", profileId] as const,
   collection: (profileId: number) => [...feesKeys.all, "collection", profileId] as const,
-  tuitionPreview: (profileId: number, semesterNo: number) =>
-    [...feesKeys.all, "tuition-preview", profileId, semesterNo] as const,
+  tuitionPreview: (
+    profileId: number,
+    semesterNo: number,
+    discountPolicyIds?: number[]
+  ) =>
+    [
+      ...feesKeys.all,
+      "tuition-preview",
+      profileId,
+      semesterNo,
+      // Sắp xếp để thứ tự tích chọn không tạo cache entry khác nhau cho cùng
+      // một tập ưu đãi. undefined (chưa chọn gì) khác hẳn [] (bỏ tích hết).
+      discountPolicyIds ? [...discountPolicyIds].sort((a, b) => a - b) : null,
+    ] as const,
 }
 
 // =====================================================================
@@ -232,11 +244,12 @@ export function useProfileCollection(
 export function useTuitionPreview(
   profileId: number,
   semesterNo: number,
-  options?: { enabled?: boolean }
+  options?: { enabled?: boolean; discountPolicyIds?: number[] }
 ) {
+  const ids = options?.discountPolicyIds
   return useQuery<TuitionPreviewResponse, AxiosError<ApiErrorResponse>>({
-    queryKey: feesKeys.tuitionPreview(profileId, semesterNo),
-    queryFn: () => feesApi.getTuitionPreview(profileId, semesterNo),
+    queryKey: feesKeys.tuitionPreview(profileId, semesterNo, ids),
+    queryFn: () => feesApi.getTuitionPreview(profileId, semesterNo, ids),
     enabled: (options?.enabled ?? true) && !!profileId && !!semesterNo,
     staleTime: 1000 * 60, // 1 minute — giá chuẩn ít đổi
   })
@@ -387,6 +400,39 @@ export function useRecalculateFee() {
       const detail = error.response?.data?.detail
       const message =
         typeof detail === "string" ? detail : "Không thể tính lại phí. Vui lòng thử lại."
+      toast.error(message)
+    },
+  })
+}
+
+/**
+ * Đổi ngành: kế toán xác nhận reprice.
+ *
+ * Invalidate CẢ fee/invoice LẪN admission — vì confirm clear cờ đổi ngành trên
+ * hồ sơ (major_change_cycle_open → false) + mở lại available_actions (xuất giấy/
+ * duyệt). Không refresh admission thì badge + nút giấy trên trang hồ sơ vẫn ẩn.
+ */
+export function useConfirmMajorChange() {
+  const queryClient = useQueryClient()
+
+  return useMutation<Fee, AxiosError<ApiErrorResponse>, { feeId: number }>({
+    mutationFn: ({ feeId }) => feesApi.confirmMajorChange(feeId),
+    onSuccess: (fee) => {
+      toast.success("Đã xác nhận đổi ngành — officer có thể tiếp tục.")
+      invalidateFeeQueries(queryClient, fee.id, {
+        byProfile: fee.admission_profile_id,
+        profileSummary: fee.admission_profile_id,
+      })
+      queryClient.invalidateQueries({ queryKey: ["invoices"] })
+      // Refresh hồ sơ: cờ đổi ngành + available_actions đổi sau confirm.
+      queryClient.invalidateQueries({ queryKey: ["admissions"] })
+    },
+    onError: (error) => {
+      const detail = error.response?.data?.detail
+      const message =
+        typeof detail === "string"
+          ? detail
+          : "Không thể xác nhận đổi ngành. Vui lòng thử lại."
       toast.error(message)
     },
   })

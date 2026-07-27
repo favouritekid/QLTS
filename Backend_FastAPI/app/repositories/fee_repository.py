@@ -318,6 +318,15 @@ class FeeRepository(BaseRepository[Fee]):
         if filters.get("academic_year"):
             base_conditions.append(Fee.academic_year == filters["academic_year"])
 
+        # Đổi ngành: lọc "đang chờ kế toán xác nhận" — nguồn của tab worklist kế
+        # toán. Không có bộ lọc này thì đường DUY NHẤT tới nút xác nhận là
+        # notification; prod chỉ 1 kế toán nên bỏ lỡ thông báo là hồ sơ đứng im
+        # (mọi hành động approve/publish/enroll/xuất-giấy đang bị chặn chờ họ).
+        if filters.get("awaiting_major_change") is True:
+            base_conditions.append(
+                Fee.awaiting_accountant_confirmation.is_(True)
+            )
+
         # Count query
         count_query = (
             select(func.count(Fee.id))
@@ -488,6 +497,45 @@ class FeeRepository(BaseRepository[Fee]):
         )
         result = await self.db.execute(query)
         return result.scalars().first()
+
+    async def get_major_name_by_academic_info(
+        self, academic_info_id: Optional[int]
+    ) -> Optional[str]:
+        """F12 — tên ngành (MajorProgram.name) từ ``offering_academic_info_id``
+        qua join ai → offering → major. Dùng bởi enrich dialog đổi ngành (chuyển
+        SQL khỏi router theo CLAUDE.md 'No direct SQL in Routers')."""
+        if academic_info_id is None:
+            return None
+        return (
+            await self.db.execute(
+                select(models.MajorProgram.name)
+                .select_from(models.OfferingAcademicInfo)
+                .join(
+                    models.ProgramOffering,
+                    models.ProgramOffering.id
+                    == models.OfferingAcademicInfo.offering_id,
+                )
+                .join(
+                    models.MajorProgram,
+                    models.MajorProgram.id == models.ProgramOffering.program_id,
+                )
+                .where(models.OfferingAcademicInfo.id == academic_info_id)
+            )
+        ).scalar_one_or_none()
+
+    async def get_major_name_by_id(
+        self, major_id: Optional[int]
+    ) -> Optional[str]:
+        """F12 — tên ngành trực tiếp theo ``MajorProgram.id``."""
+        if major_id is None:
+            return None
+        return (
+            await self.db.execute(
+                select(models.MajorProgram.name).where(
+                    models.MajorProgram.id == major_id
+                )
+            )
+        ).scalar_one_or_none()
 
 
 class InvoiceRepository(BaseRepository[Invoice]):
@@ -737,6 +785,7 @@ class InvoiceRepository(BaseRepository[Invoice]):
         officer_id: Optional[int] = None,
         unit_id_filter: Optional[int] = None,
         due_window: Optional[str] = None,
+        awaiting_major_change: Optional[bool] = None,
     ) -> list:
         """Build the shared WHERE for the invoice list + status-counts.
 
@@ -786,6 +835,12 @@ class InvoiceRepository(BaseRepository[Invoice]):
             conditions.append(InvoiceRepository._overdue_predicate(today))
         if overdue_only:
             conditions.append(InvoiceRepository._overdue_predicate(today))
+        # Đổi ngành: lens "chờ kế toán xác nhận" — ORTHOGONAL với trạng thái hoá
+        # đơn (một hoá đơn issued/partial vẫn có thể đang chờ), giống lens "Quá
+        # hạn". Đọc cờ trên Fee cha (đã join sẵn) nên list + status-counts dùng
+        # chung điều kiện này ⇒ số trên tab luôn khớp số dòng khi bấm vào.
+        if awaiting_major_change:
+            conditions.append(Fee.awaiting_accountant_confirmation.is_(True))
         if date_from:
             conditions.append(Invoice.due_date >= date_from)
         if date_to:
@@ -888,6 +943,7 @@ class InvoiceRepository(BaseRepository[Invoice]):
         officer_id: Optional[int] = None,
         unit_id_filter: Optional[int] = None,
         due_window: Optional[str] = None,
+        awaiting_major_change: Optional[bool] = None,
     ) -> Tuple[List[Invoice], int]:
         """Filtered + paginated invoice list WITH total count (IDOR by unit)."""
         today = today or date.today()  # one "today" → predicate + sort agree
@@ -898,7 +954,7 @@ class InvoiceRepository(BaseRepository[Invoice]):
             major_id=major_id, degree_level=degree_level,
             academic_year=academic_year, semester_no=semester_no,
             officer_id=officer_id, unit_id_filter=unit_id_filter,
-            due_window=due_window,
+            due_window=due_window, awaiting_major_change=awaiting_major_change,
         )
 
         count_query = (
@@ -949,6 +1005,7 @@ class InvoiceRepository(BaseRepository[Invoice]):
         officer_id: Optional[int] = None,
         unit_id_filter: Optional[int] = None,
         due_window: Optional[str] = None,
+        awaiting_major_change: Optional[bool] = None,
     ) -> dict:
         """Per-status counts + derived overdue count for the workspace tabs.
 
@@ -958,6 +1015,10 @@ class InvoiceRepository(BaseRepository[Invoice]):
         khớp (parity).
         """
         today = today or date.today()
+        # ``awaiting_major_change`` được NHẬN nhưng CỐ Ý bỏ qua ở đây: counts phải
+        # tính cho MỌI tab (kể cả tab đang chọn) nên không được lọc theo lens hiện
+        # tại — giống cách ``overdue_only`` bị truyền None. Số của lens này nằm ở
+        # khoá ``awaiting_major_change`` trong dict trả về.
         conditions = self._build_invoice_list_conditions(
             unit_id=unit_id, statuses=None, fee_id=fee_id, profile_id=profile_id,
             overdue_only=None, search=search, fee_type=fee_type,
@@ -987,9 +1048,28 @@ class InvoiceRepository(BaseRepository[Invoice]):
         )
         overdue_derived = (await self.db.execute(overdue_query)).scalar() or 0
 
+        # Đổi ngành: count cho lens "Chờ xác nhận đổi ngành" — cùng bộ điều kiện
+        # với list (chỉ thêm predicate của lens) nên số trên tab khớp số dòng.
+        awaiting_query = (
+            select(func.count(Invoice.id))
+            .join(Fee).join(models.AdmissionProfile).join(models.Lead)
+            .where(
+                and_(
+                    *(
+                        conditions
+                        + [Fee.awaiting_accountant_confirmation.is_(True)]
+                    )
+                )
+            )
+        )
+        awaiting_major_change = (
+            await self.db.execute(awaiting_query)
+        ).scalar() or 0
+
         return {
             "counts": counts,
             "overdue_derived": int(overdue_derived),
+            "awaiting_major_change": int(awaiting_major_change),
             "total": int(total),
         }
 
