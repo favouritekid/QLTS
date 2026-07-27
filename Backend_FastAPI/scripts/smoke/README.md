@@ -24,20 +24,49 @@ Bộ này **không nằm trong image production** (`.dockerignore` loại
 ## Chạy
 
 ```bash
-docker compose -p qlts-mc -f docker-compose.yml -f docker-compose.smoke.yml \
-  run --rm --no-deps \
-  -e SMOKE_ALLOW_DESTRUCTIVE=1 \
-  -e SMOKE_BASE=http://backend:8000 \
-  -e SMOKE_PASSWORD='<chuỗi dùng-một-lần>' \
-  --entrypoint python backend scripts/smoke/smoke_seed.py   # gieo dữ liệu trước
+DK="-e SMOKE_ALLOW_DESTRUCTIVE=1 -e SMOKE_BASE=http://backend:8000 \
+    -e SMOKE_PASSWORD=<chuỗi dùng-một-lần>"
 
-# rồi từng mục, ví dụ:
-... --entrypoint python backend scripts/smoke/smoke_m9_doinganh.py
+# Bước 1 — gieo dữ liệu. Seed GHI luôn `smoke_ids.json` ở gốc dự án (ghi nguyên
+# tử: file tạm + os.replace) cho các bước sau đọc.
+docker compose -p qlts-mc -f docker-compose.yml -f docker-compose.smoke.yml \
+  run --rm --no-deps $DK --entrypoint python backend scripts/smoke/smoke_seed.py
+
+# Bước 2 — từng mục, ví dụ:
+docker compose -p qlts-mc -f docker-compose.yml -f docker-compose.smoke.yml \
+  run --rm --no-deps $DK --entrypoint python backend scripts/smoke/smoke_m9_doinganh.py
 ```
+
+Chạy một mục khi CHƯA seed sẽ dừng kèm hướng dẫn ("chưa thấy … chạy smoke_seed.py
+trước"), không phải `FileNotFoundError` trần. Đổi chỗ đặt file bằng `SMOKE_IDS_PATH`
+khi chạy nhiều stack song song. File này đã nằm trong `.gitignore`.
 
 **Mã thoát phản ánh kết quả**: 0 khi mọi mục PASS, 1 khi có mục FAIL. Mỗi kịch
 bản phải `return tong_ket(NHAN)` và kết thúc bằng `chay(main)`; nếu quên
 `return`, `chay()` báo lỗi thay vì im lặng báo xanh.
+
+## Cần DB dùng-một-lần còn nguyên
+
+Seed đòi ≥2 ngành có ≥2 hồ sơ chưa thu tiền. Chạy smoke nhiều lượt sẽ làm cạn
+(hồ sơ đã bị gắn học phí), lúc đó seed dừng và chỉ cách nạp lại:
+
+```bash
+PG_DEV=qlts-postgres-1        # DB dev nguồn (chỉ ĐỌC)
+PG_SMOKE=qlts-mc-postgres-1   # DB smoke (bị GHI ĐÈ)
+
+docker exec $PG_DEV pg_dump -U qlts -d qlts_dev -Fc --no-owner --no-acl -f /tmp/dev.dump
+docker cp $PG_DEV:/tmp/dev.dump /tmp/dev.dump && docker cp /tmp/dev.dump $PG_SMOKE:/tmp/dev.dump
+
+docker stop qlts-mc-backend-1          # phải ngắt kết nối trước khi DROP
+docker exec $PG_SMOKE psql -U qlts -d postgres -c "DROP DATABASE IF EXISTS qlts_dev WITH (FORCE);"
+docker exec $PG_SMOKE psql -U qlts -d postgres -c "CREATE DATABASE qlts_dev OWNER qlts;"
+docker exec $PG_SMOKE pg_restore -U qlts -d qlts_dev --no-owner --no-acl /tmp/dev.dump
+docker start qlts-mc-backend-1
+```
+
+⚠️ Vài lỗi khoá ngoại khi nạp là do **dữ liệu dev vốn có dòng mồ côi** (đo 27-07-2026:
+538 dòng `subject_group_subject` trỏ `subject_id` không tồn tại), không phải hỏng quy
+trình nạp.
 
 ## Các mục
 
