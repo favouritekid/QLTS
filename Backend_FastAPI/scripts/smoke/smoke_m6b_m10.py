@@ -6,6 +6,17 @@
     vẫn còn dòng audit, base tăng lại thì phục hồi
 10  refund maker-checker + withdraw hồ sơ đang có tiền
 """
+import os as _os
+import sys as _sys
+
+# Chạy được bằng `python scripts/smoke/<file>.py` từ bất kỳ thư mục nào: cần
+# CẢ gốc dự án (để `import app`) LẪN thư mục này (để `import smoke_lib`).
+_THU_MUC = _os.path.dirname(_os.path.abspath(__file__))
+_GOC = _os.path.dirname(_os.path.dirname(_THU_MUC))
+for _p in (_GOC, _THU_MUC):
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+
 import asyncio
 import json
 from decimal import Decimal

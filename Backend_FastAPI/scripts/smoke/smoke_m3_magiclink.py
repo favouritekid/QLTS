@@ -5,6 +5,17 @@ CCCD, dùng MỘT lần, không dùng chéo hành động, và không tiết l�
 hay không khi sai.
 """
 
+import os as _os
+import sys as _sys
+
+# Chạy được bằng `python scripts/smoke/<file>.py` từ bất kỳ thư mục nào: cần
+# CẢ gốc dự án (để `import app`) LẪN thư mục này (để `import smoke_lib`).
+_THU_MUC = _os.path.dirname(_os.path.abspath(__file__))
+_GOC = _os.path.dirname(_os.path.dirname(_THU_MUC))
+for _p in (_GOC, _THU_MUC):
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+
 import asyncio
 import json
 import secrets
@@ -13,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
-from smoke_lib import BASE, chay, ghi, tao_client, tong_ket
+from smoke_lib import BASE, chay, ghi, tao_client, tong_ket, xoa_tran_gui_lai_link
 
 NHAN = "SMK3-MAGICLINK"
 
@@ -27,7 +38,12 @@ async def sql(q, **kw):
 
 
 async def lay_hoac_duyet(manager, so_luong: int) -> list:
-    """Lấy hồ sơ đã duyệt; nếu chưa có thì DUYỆT qua API thật (không sửa DB tay)."""
+    """Lấy hồ sơ đã duyệt; nếu chưa có thì DUYỆT qua API thật (không sửa DB tay).
+
+    Bỏ qua hồ sơ đã phát hành ≥3 link trong 24h: hệ thống chặn ở mức đó (chống
+    spam thí sinh) và chặn như vậy là ĐÚNG — lần chạy smoke trước để lại token
+    nên nếu không lọc, kịch bản tự bắn vào trần rồi báo lỗi oan cho code.
+    """
     hs = await sql(
         """
         SELECT p.id AS pid, p.citizen_id AS cccd, p.status
@@ -35,6 +51,9 @@ async def lay_hoac_duyet(manager, so_luong: int) -> list:
         JOIN lead l ON l.id = p.lead_id
         WHERE p.status = 'approved' AND p.citizen_id IS NOT NULL
           AND l.deleted_at IS NULL AND l.unit_id = 14
+          AND (SELECT count(*) FROM admission_confirmation_token t
+               WHERE t.profile_id = p.id
+                 AND t.created_at > now() - interval '24 hours') < 3
         ORDER BY p.id DESC LIMIT :n
         """,
         n=so_luong,
@@ -49,6 +68,9 @@ async def lay_hoac_duyet(manager, so_luong: int) -> list:
         JOIN lead l ON l.id = p.lead_id
         WHERE p.status IN ('submitted','resubmitted') AND p.citizen_id IS NOT NULL
           AND l.deleted_at IS NULL AND l.unit_id = 14
+          AND (SELECT count(*) FROM admission_confirmation_token t
+               WHERE t.profile_id = p.id
+                 AND t.created_at > now() - interval '24 hours') < 3
         ORDER BY p.id DESC LIMIT :n
         """,
         n=so_luong * 6,
@@ -86,6 +108,7 @@ async def main():
 
     # Officer chỉ thấy hồ sơ ĐƯỢC PHÂN CÔNG — hồ sơ này không của họ nên phải 404
     # (không phải 403: không tiết lộ hồ sơ có tồn tại).
+    await xoa_tran_gui_lai_link(pid)
     r_off = await officer.post(f"{BASE}/api/admissions/{pid}/send-confirmation")
     ghi(
         "3.8a",
@@ -200,6 +223,7 @@ async def main():
     # Token trên đã bị khoá do thử sai; dùng hồ sơ thứ hai để kiểm tra luồng thuận.
     pid = hs[1]["pid"]
     bon_so_cuoi = hs[1]["cccd"][-4:]
+    await xoa_tran_gui_lai_link(pid)
     r_ph = await manager.post(f"{BASE}/api/admissions/{pid}/send-confirmation")
     tok2 = await sql(
         """
@@ -274,6 +298,7 @@ async def main():
     hs2 = hs[2:3]
     if hs2:
         pid2, cccd2 = hs2[0]["pid"], hs2[0]["cccd"]
+        await xoa_tran_gui_lai_link(pid2)
         r2 = await manager.post(f"{BASE}/api/admissions/{pid2}/send-confirmation")
         t2 = await sql(
             """
@@ -321,6 +346,28 @@ async def main():
         await officer_b.aclose()
     except Exception as e:  # noqa: BLE001
         ghi("3.15", "cán bộ đơn vị KHÁC bị chặn", False, str(e)[:140])
+
+    # ---- 3.16 trần chống spam: phát hành liên tục phải bị chặn ------------
+    pid_tran = hs[0]["pid"]
+    await xoa_tran_gui_lai_link(pid_tran)
+    ma_cuoi = None
+    so_lan_ok = 0
+    for _ in range(5):
+        rt = await manager.post(f"{BASE}/api/admissions/{pid_tran}/send-confirmation")
+        if rt.status_code in (200, 201):
+            so_lan_ok += 1
+            continue
+        if rt.status_code == 400 and "24 giờ" in rt.text:
+            ma_cuoi = rt.text
+            break
+    ghi(
+        "3.16",
+        "phát hành link liên tục cho cùng hồ sơ → chặn ĐÚNG ở lần thứ 4 "
+        "(trần 3 lần/24 giờ, chống spam thí sinh)",
+        ma_cuoi is not None and so_lan_ok == 3,
+        f"cho qua {so_lan_ok} lần rồi chặn :: "
+        + (ma_cuoi or "không thấy trần sau 5 lần phát hành")[:140],
+    )
 
     await khach.aclose()
     await officer.aclose()

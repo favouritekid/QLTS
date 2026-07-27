@@ -142,6 +142,26 @@ async def tao_client(username: str) -> httpx.AsyncClient:
     return c
 
 
+async def xoa_tran_gui_lai_link(profile_id: int) -> None:
+    """Xoá bộ đếm "3 link / 24h" của MỘT hồ sơ trong Redis.
+
+    Trần này nằm ở Redis (``admission:confirm:resend:<id>``), KHÔNG ở bảng token
+    — nên không thể né bằng cách chọn hồ sơ khác trong SQL. Lần chạy smoke trước
+    để lại bộ đếm, làm lần sau bị chặn và báo lỗi oan cho code. Xoá bộ đếm là
+    thao tác của môi trường kiểm thử, giống ``xoa_gioi_han_dang_nhap`` —
+    KHÔNG nới lỏng ứng dụng.
+    """
+    import redis.asyncio as aioredis
+
+    for db in (0, 1, 2, 3):
+        try:
+            r = aioredis.from_url(f"redis://redis:6379/{db}")
+            await r.delete(f"admission:confirm:resend:{profile_id}")
+            await r.aclose()
+        except Exception:
+            pass
+
+
 def tien(x) -> Decimal:
     return Decimal(str(x))
 
