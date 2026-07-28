@@ -229,6 +229,15 @@ def test_batch_size_must_be_positive(bad):
         parse_args(["--academic-year", "2026", "--batch-size", bad])
 
 
+def test_client_token_is_optional_and_passthrough():
+    """Truyền lại dấu cũ là đường phục hồi một lần chạy đứt giữa chừng."""
+    assert parse_args(["--academic-year", "2026"]).client_token is None
+    assert (
+        parse_args(["--academic-year", "2026", "--client-token", "abc"]).client_token
+        == "abc"
+    )
+
+
 def test_batch_size_positive_is_accepted():
     args = parse_args(["--academic-year", "2026", "--batch-size", "50"])
 
@@ -382,6 +391,118 @@ async def test_open_run_says_plainly_when_nothing_was_created():
         await _api_with(client).open_sync_run(2026, "tok")
 
     assert "an toàn" in str(exc.value)
+
+
+@pytest.mark.parametrize("ma_loi", [500, 502, 503, 504, 408])
+async def test_open_run_reconciles_ambiguous_gateway_replies(ma_loi):
+    """5xx/408 KHÔNG phải câu trả lời dứt khoát của database.
+
+    Gateway đứng TRƯỚC database: INSERT có thể đã commit xong rồi phản hồi mới
+    hỏng trên đường về. Ném thẳng ở những mã này là bỏ lại đúng hàng ``running``
+    đang khoá năm học mà cơ chế dấu sinh ra để nhận lại.
+    """
+    client = _RecordingClient(
+        _FakeResponse(payload=[{"id": 77, "status": "running"}]),
+        post_response=_FakeResponse(status_code=ma_loi, payload=[]),
+    )
+
+    assert await _api_with(client).open_sync_run(2026, "tok") == 77
+    assert [c["method"] for c in client.calls] == ["POST", "GET"]
+
+
+@pytest.mark.parametrize("ma_loi", [400, 401, 403])
+async def test_open_run_trusts_definitive_client_errors(ma_loi):
+    """400/401/403 là câu trả lời DỨT KHOÁT — không có hàng nào để đối soát."""
+    client = _RecordingClient(
+        _FakeResponse(payload=[]),
+        post_response=_FakeResponse(status_code=ma_loi, payload=[]),
+    )
+
+    with pytest.raises(RuntimeError):
+        await _api_with(client).open_sync_run(2026, "tok")
+
+    assert [c["method"] for c in client.calls] == ["POST"]
+
+
+async def test_open_run_never_claims_safety_when_the_probe_also_failed():
+    """Mất mạng CẢ HAI CHIỀU thì tuyệt đối không được nói "chạy lại an toàn".
+
+    POST mất ACK rồi GET đối soát cũng hỏng = ta KHÔNG BIẾT hàng đã được tạo hay
+    chưa. Tuyên bố an toàn ở đây là kiểu sai tệ hơn im lặng: người vận hành chạy
+    lại, gặp 409, và không hiểu vì sao.
+    """
+    client = _RecordingClient(
+        post_error=httpx.ConnectError("mất kết nối"),
+        response=_FakeResponse(status_code=503, payload=[]),
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        await _api_with(client).open_sync_run(2026, "tok")
+
+    thong_diep = str(exc.value)
+    assert "an toàn" not in thong_diep
+    assert "CÓ THỂ" in thong_diep
+    assert "client:tok" in thong_diep  # cầm đi tra database được
+    assert "--client-token tok" in thong_diep
+
+
+async def test_open_run_reuses_its_own_running_row_on_conflict():
+    """409 mang DẤU của chính mình = lượt cũ của lần chạy này, dùng tiếp.
+
+    Đây là đường phục hồi khi chạy lại với `--client-token` của một lần đứt
+    giữa chừng — không cần ai vào database sửa tay.
+    """
+    client = _RecordingClient(
+        _FakeResponse(payload=[{"id": 55, "status": "running"}]),
+        post_response=_FakeResponse(status_code=409, payload=[]),
+    )
+
+    assert await _api_with(client).open_sync_run(2026, "tok") == 55
+
+
+async def test_open_run_refuses_a_conflict_it_does_not_own():
+    """409 mà không mang dấu mình = lượt của tiến trình khác. Không được đụng."""
+    client = _RecordingClient(
+        _FakeResponse(payload=[]),
+        post_response=_FakeResponse(status_code=409, payload=[]),
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        await _api_with(client).open_sync_run(2026, "tok")
+
+    assert "KHÔNG mang dấu của lần chạy này" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "response,mong_doi",
+    [
+        (_FakeResponse(payload=[{"id": 1, "status": "running"}]), "found"),
+        (_FakeResponse(payload=[]), "absent"),
+        (_FakeResponse(status_code=500, payload=[]), "unknown"),
+        (_FakeResponse(payload={"message": "không phải danh sách"}), "unknown"),
+    ],
+)
+async def test_find_run_by_token_distinguishes_absent_from_unknown(response, mong_doi):
+    """BA kết quả, không phải hai.
+
+    Gộp "đọc được, không có hàng nào" với "không đọc được" là gốc của lời tuyên
+    bố an toàn sai ở nhánh trên.
+    """
+    outcome, _ = await _api_with(_RecordingClient(response)).find_run_by_token(
+        2026, "tok"
+    )
+
+    assert outcome == mong_doi
+
+
+async def test_find_run_by_token_reports_unknown_on_transport_error():
+    class _DeadClient(_RecordingClient):
+        async def get(self, url, headers=None, params=None):
+            raise httpx.ReadTimeout("hết giờ")
+
+    outcome, run = await _api_with(_DeadClient()).find_run_by_token(2026, "tok")
+
+    assert (outcome, run) == ("unknown", None)
 
 
 def test_open_run_stamps_the_client_token_in_the_insert():

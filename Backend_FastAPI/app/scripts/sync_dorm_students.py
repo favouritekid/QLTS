@@ -231,8 +231,18 @@ class DormApi:
 
     async def find_run_by_token(
         self, academic_year: int, client_token: str
-    ) -> Optional[Dict[str, Any]]:
-        """Tìm lượt mang DẤU của lần chạy này. Best-effort: lỗi thì trả ``None``."""
+    ) -> Tuple[str, Optional[Dict[str, Any]]]:
+        """Tìm lượt mang DẤU của lần chạy này.
+
+        Trả ``("found", hàng)`` | ``("absent", None)`` | ``("unknown", None)``.
+
+        ⚠️ BA kết quả, không phải hai. Gộp "đọc được, không có hàng nào" với
+        "không đọc được" thành cùng một ``None`` sẽ khiến ca mất mạng CẢ HAI
+        CHIỀU (POST mất ACK rồi GET đối soát cũng hỏng) bị tuyên bố là "chưa có
+        gì thay đổi, chạy lại an toàn" — trong khi một hàng ``running`` có thể
+        đang nằm đó và khoá năm học lại. Tuyên bố an toàn khi không biết là kiểu
+        sai tệ hơn cả im lặng.
+        """
         try:
             response = await self._client.get(
                 f"{self._base}/sync_runs",
@@ -244,11 +254,55 @@ class DormApi:
                     "limit": "1",
                 },
             )
-            self._raise_for_status(response, "Tìm lượt theo dấu client")
+        except httpx.HTTPError:
+            return "unknown", None
+
+        if not response.is_success:
+            return "unknown", None
+
+        try:
             rows = response.json()
         except Exception:
-            return None
-        return rows[0] if rows else None
+            return "unknown", None
+
+        if not isinstance(rows, list):
+            return "unknown", None
+
+        return ("found", rows[0]) if rows else ("absent", None)
+
+    async def _recover_open_or_fail(
+        self, academic_year: int, client_token: str, *, ly_do: str
+    ) -> int:
+        """Sau một phản hồi MƠ HỒ ở bước mở lượt: nhận lại hàng, hoặc nói thật.
+
+        Ba nhánh, ba thông điệp khác nhau — người vận hành cần biết mình đang ở
+        nhánh nào để quyết định chạy lại hay đi kiểm database.
+        """
+        outcome, run = await self.find_run_by_token(academic_year, client_token)
+
+        if outcome == "found":
+            log.warning(
+                "dorm_sync_run_recovered", run_id=run["id"], client_token=client_token
+            )
+            return run["id"]
+
+        if outcome == "absent":
+            raise RuntimeError(
+                f"Không mở được lượt đồng bộ ({ly_do}). Đã đối soát: KHÔNG có lượt "
+                f"nào mang dấu '{_client_note(client_token)}' — database chưa nhận "
+                "gì, chạy lại là an toàn."
+            )
+
+        # ⚠️ KHÔNG được nói "an toàn" ở đây. Lần đọc phục hồi cũng hỏng nghĩa là
+        # ta không biết hàng đã được tạo hay chưa.
+        raise RuntimeError(
+            f"Không mở được lượt đồng bộ ({ly_do}) và KHÔNG đối soát được trạng "
+            f"thái (lần đọc phục hồi cũng thất bại). Một lượt mang dấu "
+            f"'{_client_note(client_token)}' CÓ THỂ đang treo 'running' và sẽ chặn "
+            "mọi lần chạy sau cho năm này.\n"
+            "  → Tra bảng sync_runs theo dấu đó TRƯỚC khi chạy lại. Muốn nhận lại "
+            f"đúng lượt cũ thì chạy lại với --client-token {client_token}."
+        )
 
     async def open_sync_run(self, academic_year: int, client_token: str) -> int:
         """Mở một lượt đồng bộ. Chịu được ca phản hồi bị mất.
@@ -260,8 +314,13 @@ class DormApi:
         mà các nhánh đóng sổ phía dưới sinh ra để tránh.
 
         Cách thoát: ghi DẤU của tiến trình vào ``sync_runs.note`` ngay trong câu
-        INSERT, rồi khi phản hồi hỏng thì đọc lại theo dấu đó. Dấu là duy nhất
+        INSERT, rồi khi phản hồi MƠ HỒ thì đọc lại theo dấu đó. Dấu là duy nhất
         cho mỗi lần chạy nên không thể nhận nhầm lượt của tiến trình khác.
+
+        ⚠️ "Mơ hồ" gồm CẢ mã lỗi có phản hồi, không chỉ lỗi kết nối: 5xx và 408
+        thường đến từ gateway đứng TRƯỚC database, nên INSERT có thể đã commit
+        xong rồi phản hồi mới hỏng trên đường về. Ném thẳng ở những mã đó là bỏ
+        lại đúng hàng ``running`` mà cơ chế dấu này sinh ra để nhận lại.
         """
         payload = {
             "academic_year": academic_year,
@@ -277,22 +336,40 @@ class DormApi:
             )
         except httpx.HTTPError:
             # Lỗi TRUYỀN TẢI: không biết database đã tạo hàng hay chưa.
-            recovered = await self.find_run_by_token(academic_year, client_token)
-            if recovered is not None:
-                log.warning("dorm_sync_run_recovered", run_id=recovered["id"])
-                return recovered["id"]
-            raise RuntimeError(
-                "Không mở được lượt đồng bộ (lỗi kết nối) và cũng không tìm thấy "
-                "lượt nào mang dấu của lần chạy này. Chưa có gì thay đổi — chạy "
-                "lại là an toàn."
+            return await self._recover_open_or_fail(
+                academic_year, client_token, ly_do="lỗi kết nối"
             )
 
         if response.status_code == 409:
+            # Có thể chính là hàng của lần chạy này (một lời gọi trước đó đã tới
+            # nơi rồi mất phản hồi). Hỏi theo dấu trước khi kết luận là của người
+            # khác — nếu đúng dấu mình thì cứ dùng tiếp, không cần ai sửa tay.
+            outcome, run = await self.find_run_by_token(academic_year, client_token)
+            if outcome == "found":
+                log.warning(
+                    "dorm_sync_run_recovered",
+                    run_id=run["id"],
+                    client_token=client_token,
+                )
+                return run["id"]
+
             raise RuntimeError(
-                f"Đã có một lượt đồng bộ ĐANG CHẠY cho năm {academic_year}. "
-                "Chờ nó kết thúc hoặc đánh dấu failed trước khi chạy lượt mới. "
+                f"Đã có một lượt đồng bộ ĐANG CHẠY cho năm {academic_year} và nó "
+                "KHÔNG mang dấu của lần chạy này. Chờ nó kết thúc hoặc đánh dấu "
+                "failed trước khi chạy lượt mới. "
                 "(Cột `note` của lượt đó cho biết tiến trình nào đã mở nó.)"
             )
+
+        # Mã MƠ HỒ: gateway/upstream có thể đã commit rồi mới hỏng.
+        if response.status_code == 408 or response.status_code >= 500:
+            return await self._recover_open_or_fail(
+                academic_year,
+                client_token,
+                ly_do=f"HTTP {response.status_code} từ gateway",
+            )
+
+        # Còn lại là câu trả lời DỨT KHOÁT của database (400/401/403…): không có
+        # hàng nào được tạo, không cần đối soát.
         self._raise_for_status(response, "Mở lượt đồng bộ")
 
         try:
@@ -300,14 +377,8 @@ class DormApi:
         except (IndexError, KeyError, TypeError, ValueError):
             # Phản hồi 2xx nhưng thân không đọc được (proxy cắt, JSON hỏng).
             # Hàng gần như chắc chắn ĐÃ được tạo — tìm lại theo dấu.
-            recovered = await self.find_run_by_token(academic_year, client_token)
-            if recovered is not None:
-                log.warning("dorm_sync_run_recovered", run_id=recovered["id"])
-                return recovered["id"]
-            raise RuntimeError(
-                "Mở lượt đồng bộ trả về phản hồi không đọc được và không tìm lại "
-                "được lượt mang dấu của lần chạy này. Kiểm bảng sync_runs trước "
-                "khi chạy lại."
+            return await self._recover_open_or_fail(
+                academic_year, client_token, ly_do="phản hồi không đọc được"
             )
 
     async def get_sync_run(self, run_id: int) -> Optional[Dict[str, Any]]:
@@ -613,6 +684,15 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Số bản ghi mỗi lượt gửi (mặc định 200).",
     )
     parser.add_argument(
+        "--client-token",
+        default=None,
+        help=(
+            "Dấu ghi vào sync_runs.note. Bỏ trống = sinh mới mỗi lần chạy. "
+            "Truyền lại dấu của một lần chạy đứt giữa chừng để NHẬN LẠI đúng "
+            "lượt đó thay vì bị 409 chặn."
+        ),
+    )
+    parser.add_argument(
         "--allow-empty-cohort",
         action="store_true",
         help=(
@@ -722,7 +802,12 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
         # Dấu riêng cho lần chạy này: nếu phản hồi của bước mở lượt bị mất, đây
         # là thứ duy nhất cho phép nhận lại đúng hàng mình vừa tạo.
-        client_token = uuid.uuid4().hex
+        #
+        # In RA MÀN HÌNH trước khi gọi: nếu cả lời gọi lẫn lần đọc phục hồi đều
+        # hỏng, đây là thứ người vận hành cầm đi tra database — mà lúc đó thì
+        # không còn gì in ra được nữa.
+        client_token = args.client_token or uuid.uuid4().hex
+        print(f"  Dấu lượt chạy: {_client_note(client_token)}")
 
         try:
             run_id = await api.open_sync_run(args.academic_year, client_token)
@@ -732,7 +817,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
             print(f"✗ {exc}", file=sys.stderr)
             return 1
 
-        log.info("dorm_sync_run_opened", run_id=run_id)
+        log.info("dorm_sync_run_opened", run_id=run_id, client_token=client_token)
 
         # MỘT mốc thời gian cho cả lượt: mọi hàng của cùng một lượt phải mang
         # cùng ``synced_at``, nếu không thì "đồng bộ lần cuối lúc nào" trở thành
