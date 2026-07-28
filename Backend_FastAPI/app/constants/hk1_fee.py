@@ -11,11 +11,15 @@ CÒN NỢ — các nơi vẫn viết tay vị từ này, CHƯA refactor (để P
 cáo và export là vùng dễ làm lệch số):
 
 * ``repositories/admission_report_repository`` (~:534, ~:580)
-* ``services/admission_summary_export_service`` (SQL thô, ~:183)
+* ``services/admission_summary_export_service`` (SQL thô, ~:183 và ~:314)
 * ``services/admission_service`` (~:5141, ~:5196, ~:6661)
 
 Nghĩa là: đổi phạm vi HK1 ở đây thì ba consumer trên tự đúng theo, nhưng vẫn
 PHẢI rà tay các nơi còn nợ. Đừng đọc file này thành "sửa một chỗ là xong".
+
+⚠️ Không có test nào nối ba consumer đã refactor với năm nơi còn nợ — nới hay
+thu phạm vi ở đây mà quên rà tay sẽ làm DANH SÁCH HỒ SƠ và BÁO CÁO nói hai con
+số khác nhau, và cả hai đều xanh.
 
 ``services/fee_calculation_service.is_hk1_settled`` cố ý KHÔNG dùng file này: nó
 nhận giá trị đã đọc sẵn (không phải biểu thức SQL) và mang nghĩa KHÁC — "đóng ĐỦ

@@ -92,10 +92,14 @@ def _choices_eager_load_options() -> tuple:
 # Học phí HK1 aggregate (Admission List v2)
 # =============================================================================
 # Dùng chung cho: cột tiền "Đã đóng / Còn lại" + filter "Quá hạn" + sort "Còn lại".
-# Phạm vi HK1 nay lấy từ NGUỒN DUY NHẤT ``constants/hk1_fee`` — bản SQL song sinh
+# Phạm vi HK1 lấy từ ``constants/hk1_fee`` — bản SQL song sinh
 # ``services/assignment_service._hk1_fee_exists`` (giảm trừ tải học phí khỏi phân
 # công lead, correlate tới Lead thay vì AdmissionProfile) đã dùng chung cùng hàm,
-# nên không còn phải rà tay hai nơi mỗi lần đổi phạm vi.
+# nên hai nơi này không còn lệch nhau được.
+# ⚠️ ĐÓ LÀ 3 TRONG 8 call site, KHÔNG phải toàn hệ thống: báo cáo, export tổng
+# hợp và ``admission_service`` vẫn viết tay vị từ này. Đổi phạm vi ở
+# ``constants/hk1_fee`` thì VẪN PHẢI rà tay các nơi đó — danh sách đầy đủ nằm
+# trong docstring của chính file hằng số.
 # ⚠️ Dùng tầng SCOPE (không xét đã thu tiền): các subquery cộng tiền bên dưới
 # (Σ paid / Σ remaining / Σ final) sẽ SAI nếu vị từ này lọc ``paid_amount > 0``.
 # Correlate tới AdmissionProfile (outer) để chạy như scalar subquery / EXISTS
