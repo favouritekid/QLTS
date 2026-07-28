@@ -26,6 +26,7 @@ from sqlalchemy import Select, select
 from app import models
 from app.constants.hk1_fee import confirmed_paid_hk1_conditions
 from app.services.admission_state_machine import AdmissionStatus
+from app.utils.exceptions import ValidationError
 
 # Trạng thái hồ sơ được đưa sang hệ KTX.
 #
@@ -56,6 +57,16 @@ DORM_COHORT_STATUSES: tuple = (
     AdmissionStatus.ADMITTED.value,
     AdmissionStatus.CONFIRMED.value,
     AdmissionStatus.ENROLLED.value,
+)
+
+# Tập con của ``DORM_COHORT_STATUSES``: đã đóng học phí HK1 nhưng hồ sơ vẫn ĐANG
+# XÉT. Được giữ trong cohort (bằng chứng là tiền, không phải nhãn) nhưng đáng để
+# người vận hành nhìn trước khi ghi. Ghim bởi test lock-in với allow-list.
+COHORT_ATYPICAL_STATUSES: tuple = (
+    AdmissionStatus.REVIEWING.value,
+    AdmissionStatus.REVISION_REQUESTED.value,
+    AdmissionStatus.RESULT_PUBLISHED.value,
+    AdmissionStatus.WAITLISTED.value,
 )
 
 
@@ -103,13 +114,18 @@ def select_paid_hk1_cohort(academic_year: int) -> Select:
         tên ngành trúng tuyển (có thể ``None``).
 
     Raises:
-        ValueError: khi ``academic_year`` không được truyền hoặc không phải số
-            nguyên — chặn ca gọi nhầm khiến cohort trải khắp mọi năm.
+        ValidationError: khi ``academic_year`` không được truyền hoặc không phải
+            số nguyên — chặn ca gọi nhầm khiến cohort trải khắp mọi năm.
+
+    ⚠️ Dùng ``ValidationError`` (domain exception, ánh xạ 400) chứ KHÔNG phải
+    ``ValueError`` trần. Hôm nay caller duy nhất là script CLI nên khác biệt
+    không thấy được, nhưng ngày query này lộ qua router thì ``ValueError`` thành
+    500 kèm stack trace thay vì 400 — và không có gì báo cho ta biết.
     """
     if academic_year is None or isinstance(academic_year, bool):
-        raise ValueError("academic_year là tham số bắt buộc")
+        raise ValidationError("academic_year là tham số bắt buộc")
     if not isinstance(academic_year, int):
-        raise ValueError("academic_year phải là số nguyên")
+        raise ValidationError("academic_year phải là số nguyên")
 
     return (
         select(
@@ -139,20 +155,34 @@ def select_paid_hk1_cohort(academic_year: int) -> Select:
     )
 
 
-def cohort_status_values() -> List[str]:
-    """Bản sao danh sách trạng thái — cho tầng gọi hiển thị/kiểm tra."""
-    return list(DORM_COHORT_STATUSES)
-
-
 def describe_excluded_statuses() -> List[str]:
-    """Trạng thái KHÔNG thuộc cohort — dùng cho log đối soát khi export."""
+    """Trạng thái KHÔNG thuộc cohort — dùng cho log đối soát khi export.
+
+    ``scripts/sync_dorm_students`` ghi danh sách này vào log mỗi lượt. Đó là
+    thứ trả lời "vì sao em này không có trong danh sách KTX" mà không phải mở
+    code ra đọc.
+    """
     allowed = set(DORM_COHORT_STATUSES)
     return sorted(s.value for s in AdmissionStatus if s.value not in allowed)
 
 
+def count_atypical_statuses(rows: Any) -> int:
+    """Số hàng trong cohort đang ở trạng thái ĐANG XÉT.
+
+    Đây là lý do câu truy vấn trả kèm ``profile_status``: bốn trạng thái đó nằm
+    trong cohort vì tiền đã vào, nhưng chúng BẤT THƯỜNG — người vận hành cần
+    thấy con số trước khi ghi, không phải phát hiện sau.
+
+    Đếm ở đây (chứ không ở script) để danh sách trạng thái bất thường chỉ tồn
+    tại một bản, ngay cạnh allow-list mà nó là tập con.
+    """
+    return sum(1 for r in rows if r.profile_status in COHORT_ATYPICAL_STATUSES)
+
+
 __all__ = [
+    "COHORT_ATYPICAL_STATUSES",
     "DORM_COHORT_STATUSES",
-    "cohort_status_values",
+    "count_atypical_statuses",
     "describe_excluded_statuses",
     "paid_hk1_exists_clause",
     "select_paid_hk1_cohort",

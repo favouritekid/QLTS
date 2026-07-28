@@ -19,9 +19,18 @@ tunnel production đồng nghĩa với việc nâng cấp lược đồ database
 
 ⚠️ Mặc định là DRY-RUN. Muốn ghi phải truyền ``--apply`` tường minh.
 
+⚠️ File này CỐ Ý bị loại khỏi image production (xem ``.dockerignore``). Nó hạ
+được cờ đủ-điều-kiện của cả một khoá học, nên không được nằm sẵn trong container
+đang chạy — chỉ chạy qua bind-mount trên máy quản trị.
+
 Biến môi trường (KHÔNG có giá trị mặc định — thiếu là dừng):
     DORM_SUPABASE_URL         URL project Supabase của hệ KTX
     DORM_SUPABASE_SECRET_KEY  khoá secret; chỉ sống trên máy quản trị
+    DORM_SYNC_SOURCE_ENV      môi trường nguồn mà đích này chấp nhận
+                              (``production`` | ``development`` | …). Phải khớp
+                              ``APP_ENV`` của stack đang chạy — xem
+                              ``assert_source_env_matches``. Chỉ bắt buộc khi
+                              ``--apply``.
 """
 
 from __future__ import annotations
@@ -29,15 +38,22 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import signal
 import sys
-from typing import Any, Dict, List, Optional
+import unicodedata
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 import structlog
 from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
-from app.repositories.dorm_export_repository import select_paid_hk1_cohort
+from app.repositories.dorm_export_repository import (
+    count_atypical_statuses,
+    describe_excluded_statuses,
+    select_paid_hk1_cohort,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -59,13 +75,23 @@ _GENDER_MAP = {
 
 
 def normalize_gender(raw: Optional[str]) -> str:
-    """Quy giới tính nguồn về ``male`` | ``female`` | ``unknown``."""
+    """Quy giới tính nguồn về ``male`` | ``female`` | ``unknown``.
+
+    ⚠️ Chuẩn hoá NFC TRƯỚC khi tra bảng. "Nữ" có hai cách mã hoá Unicode hợp lệ:
+    tổ hợp sẵn (U+1EEF) và phân rã (``u`` + U+031B + U+0303). Hai chuỗi đó hiện
+    ra giống hệt nhau trên màn hình nhưng KHÔNG bằng nhau trong Python, nên bản
+    phân rã — do dán từ máy Mac, từ file import, từ một form web khác — sẽ trượt
+    khoá ``"nữ"`` và rơi xuống ``unknown``, tức bị chặn xếp phòng vì lý do không
+    ai nhìn ra được khi đọc dữ liệu.
+    """
     if not raw:
         return "unknown"
-    return _GENDER_MAP.get(raw.strip().lower(), "unknown")
+    return _GENDER_MAP.get(unicodedata.normalize("NFC", raw).strip().lower(), "unknown")
 
 
-def build_student_payload(row: Any, sync_run_id: int) -> Dict[str, Any]:
+def build_student_payload(
+    row: Any, sync_run_id: int, synced_at: Optional[str] = None
+) -> Dict[str, Any]:
     """Dựng bản ghi gửi sang Supabase.
 
     ⚠️ CHỈ gồm các cột thuộc về NGUỒN. Cố ý không đụng tới:
@@ -75,7 +101,21 @@ def build_student_payload(row: Any, sync_run_id: int) -> Dict[str, Any]:
 
     PostgREST chỉ cập nhật những cột được gửi lên, nên không liệt kê ở đây đồng
     nghĩa với giữ nguyên.
+
+    Args:
+        synced_at: mốc thời gian ISO-8601 của LƯỢT (một giá trị cho cả lượt, để
+            mọi hàng của cùng một lượt có cùng mốc). Bỏ trống thì lấy giờ hiện
+            tại.
+
+    ⚠️ ``synced_at`` BẮT BUỘC nằm trong payload. Cột đó phía KTX chỉ có
+    ``default now()`` của INSERT và không có trigger nào đụng tới, nên nếu không
+    gửi lên thì merge-duplicates giữ nguyên giá trị cũ: mọi hàng đóng băng ở lần
+    đồng bộ ĐẦU TIÊN, mãi mãi. Câu hỏi duy nhất cột đó sinh ra để trả lời —
+    "danh sách này cũ chưa?" — sẽ nhận về ngày nhìn thấy lần đầu.
     """
+    if synced_at is None:
+        synced_at = datetime.now(timezone.utc).isoformat()
+
     return {
         "qlts_profile_id": row.qlts_profile_id,
         "full_name": row.full_name,
@@ -89,6 +129,7 @@ def build_student_payload(row: Any, sync_run_id: int) -> Dict[str, Any]:
         # cho người từng bị hạ cờ rồi quay lại danh sách.
         "source_eligible": True,
         "last_seen_sync_id": sync_run_id,
+        "synced_at": synced_at,
     }
 
 
@@ -176,6 +217,15 @@ class DormApi:
 
         ⚠️ Lọc thêm ``status=eq.running``: chỉ lọc theo ``id`` thì lời gọi này
         đổi được một lượt ĐÃ ``completed`` thành ``failed``.
+
+        ⚠️ ``completed_at`` gửi mốc ISO-8601 tính ở đây, KHÔNG gửi chuỗi
+        ``"now()"``. PostgREST truyền thẳng chuỗi vào câu UPDATE; Postgres nhận
+        các giá trị đặc biệt ``now``/``today``/``epoch``/``infinity`` nhưng
+        KHÔNG nhận ``now()`` — nó trả 400 và cả nhánh đánh dấu thất bại này
+        không bao giờ chạy được, để lượt treo ``running`` và khoá cứng năm học
+        bằng ``uq_sync_run_active_per_year``. Ràng buộc
+        ``chk_sync_run_completed_has_time`` phía KTX bắt buộc cột này có giá trị
+        khi trạng thái là ``failed``, nên không thể bỏ trống.
         """
         response = await self._client.patch(
             f"{self._base}/sync_runs",
@@ -187,7 +237,7 @@ class DormApi:
             },
             json={
                 "status": "failed",
-                "completed_at": "now()",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
                 **counts,
             },
         )
@@ -196,29 +246,35 @@ class DormApi:
 
     async def reconcile_after_failure(
         self, run_id: int, source_count: int, upserted_count: int
-    ) -> str:
+    ) -> Tuple[str, Optional[Dict[str, Any]]]:
         """Xác định lượt thực sự kết thúc ra sao sau khi client gặp lỗi.
 
         Client gặp lỗi KHÔNG đồng nghĩa với việc database chưa làm gì. Ca mất
         ACK là ví dụ: hạ cờ đã commit xong, chỉ phản hồi không về. Tuyên bố
         "thất bại, không hạ cờ ai" trong ca đó là ghi sai sổ sách.
 
-        Trả về: ``finalized`` | ``marked_failed`` | ``unknown``.
+        Trả về ``(kết quả, hàng sync_runs đã đọc)`` với kết quả là
+        ``finalized`` | ``marked_failed`` | ``unknown``.
+
+        ⚠️ Trả kèm HÀNG ĐÃ ĐỌC thay vì để người gọi query lại. Lời gọi thứ hai
+        chạy trong nhánh xử lý lỗi, nơi mạng vốn đang chập chờn: nếu nó ném
+        exception thì một lượt ĐÃ THÀNH CÔNG bị báo thành traceback + thoát 1,
+        và người vận hành tin là dữ liệu chưa đổi trong khi nó đã đổi.
         """
         try:
             run = await self.get_sync_run(run_id)
         except Exception:
-            return "unknown"
+            return "unknown", None
 
         if run is None:
-            return "unknown"
+            return "unknown", None
 
         if run["status"] == "completed":
             # Database đã hoàn tất. Lỗi phía client chỉ là lỗi đường truyền.
-            return "finalized"
+            return "finalized", run
 
         if run["status"] == "failed":
-            return "marked_failed"
+            return "marked_failed", run
 
         try:
             changed = await self.mark_sync_run_failed(
@@ -226,11 +282,11 @@ class DormApi:
                 {"source_count": source_count, "upserted_count": upserted_count},
             )
         except Exception:
-            return "unknown"
+            return "unknown", run
 
         # Đổi được đúng một hàng mới là đã đánh dấu thật. 0 hàng nghĩa là trạng
         # thái đã đổi giữa lúc đọc và lúc ghi — không được tuyên bố bừa.
-        return "marked_failed" if changed == 1 else "unknown"
+        return ("marked_failed" if changed == 1 else "unknown"), run
 
     async def upsert_students(self, rows: List[Dict[str, Any]]) -> None:
         response = await self._client.post(
@@ -244,7 +300,15 @@ class DormApi:
         )
         self._raise_for_status(response, "Ghi danh sách học viên")
 
-    async def count_students(self, academic_year: int) -> int:
+    async def count_students(self, academic_year: int) -> Optional[int]:
+        """Số học viên hệ KTX đang có cho năm học. ``None`` = không đếm được.
+
+        ⚠️ Trả ``None`` thay vì nổ khi phần tổng của ``Content-Range`` không
+        phải số. PostgREST trả ``*/*`` khi không đếm được, và một proxy trung
+        gian có thể gỡ mất header ``Prefer``. Con số này chỉ để người vận hành
+        đối chiếu ở bước XEM TRƯỚC — ném ``ValueError`` từ ``int("*")`` sẽ biến
+        một lần xem trước chỉ-đọc thành traceback trần.
+        """
         response = await self._client.get(
             f"{self._base}/students",
             headers={**self._headers, "Prefer": "count=exact"},
@@ -255,8 +319,8 @@ class DormApi:
             },
         )
         self._raise_for_status(response, "Đếm học viên")
-        content_range = response.headers.get("content-range", "*/0")
-        return int(content_range.split("/")[-1])
+        total = response.headers.get("content-range", "*/0").split("/")[-1]
+        return int(total) if total.isdigit() else None
 
     async def finalize_sync_run(
         self, run_id: int, source_count: int, upserted_count: int
@@ -299,7 +363,10 @@ class DormApi:
                 # là ca phải thử lại.
                 last_error = exc
                 log.warning("dorm_sync_finalize_retry", attempt=attempt)
-                await asyncio.sleep(attempt)
+                # Không ngủ sau lần thử CUỐI: kết quả đã được quyết định, giấc
+                # ngủ đó chỉ kéo dài thêm thời gian lượt treo `running`.
+                if attempt < 3:
+                    await asyncio.sleep(attempt)
                 continue
 
             # Lỗi có phản hồi (4xx/5xx) là câu trả lời dứt khoát từ database —
@@ -333,6 +400,73 @@ def _require_env(name: str) -> str:
     return value
 
 
+def assert_source_env_matches() -> None:
+    """Hai đầu phải cùng một môi trường, nếu không thì dừng.
+
+    ⚠️ Đây là hàng rào cho ca nguy hiểm nhất của công cụ này: nguồn trỏ một
+    môi trường còn đích trỏ môi trường khác. Chạy stack DEV (cohort vài chục
+    hồ sơ thử) với file secret của KTX THẬT sẽ ghi đè danh sách thật rồi hạ cờ
+    toàn bộ những ai không có trong nguồn dev — mà lượt đó vẫn kết thúc
+    ``completed`` và thoát 0.
+
+    ``APP_ENV`` mô tả NGUỒN (do stack backend đang chạy quyết định);
+    ``DORM_SYNC_SOURCE_ENV`` mô tả nguồn mà ĐÍCH chấp nhận và nằm trong chính
+    file secret của hệ KTX. Khớp nhau mới đi tiếp. Không có mặc định: thiếu
+    biến là dừng, vì một hàng rào tự đoán giá trị thì không phải hàng rào.
+    """
+    app_env = os.environ.get("APP_ENV", "development").strip().lower()
+    expected = _require_env("DORM_SYNC_SOURCE_ENV").strip().lower()
+
+    if app_env != expected:
+        print(
+            f"✗ Từ chối ghi: nguồn QLTS đang ở môi trường '{app_env}' nhưng file "
+            f"cấu hình của hệ KTX khai báo DORM_SYNC_SOURCE_ENV='{expected}'.\n"
+            "  Hai đầu lệch nhau nghĩa là đang đẩy dữ liệu của môi trường này "
+            "sang hệ của môi trường khác.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
+# Đặt True khi người vận hành yêu cầu dừng (Ctrl-C / SIGTERM).
+_stop_requested = False
+
+
+def _install_stop_handlers() -> None:
+    """Biến tín hiệu dừng thành "dừng sạch sau lô hiện tại".
+
+    ⚠️ Vì sao không để tín hiệu ném thẳng: ``KeyboardInterrupt`` và
+    ``SystemExit`` KHÔNG phải ``Exception``, nên chúng đi vòng qua mọi nhánh
+    đóng sổ và để lượt treo ``running`` vĩnh viễn. Chỉ số
+    ``uq_sync_run_active_per_year`` phía KTX khi đó từ chối MỌI lần chạy sau
+    cho năm học đó bằng 409 — một cú Ctrl-C giữa lúc chờ mạng đủ để khoá cứng
+    cả năm học cho tới khi có người sửa tay trong database.
+
+    Lần bấm THỨ HAI trả lại hành vi mặc định: người vận hành đang muốn thoát
+    gấp thì không nên bị công cụ giữ lại.
+    """
+
+    def _handler(signum: int, frame: Any) -> None:
+        global _stop_requested
+        if _stop_requested:
+            signal.signal(signum, signal.SIG_DFL)
+            raise KeyboardInterrupt
+        _stop_requested = True
+        print(
+            "\n⏸ Đã nhận tín hiệu dừng — đóng sổ sau khi xong lô hiện tại. "
+            "Bấm lần nữa để thoát ngay (lượt sẽ treo 'running').",
+            file=sys.stderr,
+        )
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _handler)
+        except (AttributeError, OSError, ValueError):
+            # Không chạy ở main thread, hoặc nền tảng không có tín hiệu đó.
+            # Lưới ``except BaseException`` trong ``main`` vẫn còn.
+            pass
+
+
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Đồng bộ cohort đã đóng học phí HK1 sang hệ KTX.",
@@ -362,6 +496,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=200,
         help="Số bản ghi mỗi lượt gửi (mặc định 200).",
     )
+    parser.add_argument(
+        "--allow-empty-cohort",
+        action="store_true",
+        help=(
+            "Cho phép ghi khi nguồn KHÔNG có hồ sơ nào. Không truyền = dừng. "
+            "Chỉ dùng khi thật sự muốn hạ cờ toàn bộ năm học đó."
+        ),
+    )
     args = parser.parse_args(argv)
 
     # Truyền cả hai là mâu thuẫn ý định. Im lặng chọn một bên sẽ dẫn tới ca tệ
@@ -388,22 +530,54 @@ async def main(argv: Optional[List[str]] = None) -> int:
     supabase_url = _require_env("DORM_SUPABASE_URL")
     supabase_key = _require_env("DORM_SUPABASE_SECRET_KEY")
 
+    if args.apply:
+        # Chỉ ràng khi thực sự GHI: một lần xem trước chỉ-đọc không cần khai
+        # báo môi trường, và bắt nó khai báo chỉ khiến người ta bỏ qua bước xem.
+        assert_source_env_matches()
+        _install_stop_handlers()
+
     rows = await fetch_cohort(args.academic_year)
     # Chỉ log SỐ ĐẾM. Tên, số điện thoại, mã hồ sơ của người học không đi vào
     # log — log thường được gom về nơi khác và giữ lại lâu hơn ta nghĩ.
+    #
+    # ``excluded_statuses`` đi kèm để nhật ký tự trả lời được câu hỏi hay gặp
+    # nhất khi đối soát: "vì sao em này không có trong danh sách KTX".
     log.info(
         "dorm_sync_cohort_loaded",
         academic_year=args.academic_year,
         source_count=len(rows),
+        atypical_count=count_atypical_statuses(rows),
+        excluded_statuses=describe_excluded_statuses(),
     )
 
-    async with DormApi(supabase_url, supabase_key) as api:
-        existing = await api.count_students(args.academic_year)
+    # ⚠️ Nguồn RỖNG + ``--apply`` = hạ cờ TOÀN BỘ học viên của năm học đó.
+    #
+    # Đây là cùng một kiểu hỏng với ``--batch-size 0``, chỉ khác đường vào: gõ
+    # nhầm năm, năm chưa mở, hay một thay đổi phía QLTS làm vị từ cohort trả
+    # rỗng. Mọi hàng rào phía database đều lọt vì các con số đều bằng 0 và khớp
+    # nhau, nên lượt kết thúc ``completed``, thoát 0, nhìn y hệt một lần chạy
+    # thành công — trong khi cả năm học vừa bị đánh dấu không còn đủ điều kiện.
+    #
+    # "Năm đó thật sự không còn ai" là ca có thật nhưng hiếm; nó phải được gõ ra
+    # tường minh chứ không phải là hành vi mặc định.
+    if args.apply and not rows and not args.allow_empty_cohort:
+        print(
+            f"✗ Nguồn QLTS không có hồ sơ nào cho năm {args.academic_year}.\n"
+            "  Ghi tiếp sẽ HẠ CỜ ĐỦ ĐIỀU KIỆN của toàn bộ học viên năm này ở hệ "
+            "KTX.\n"
+            "  Kiểm lại --academic-year. Nếu đúng là muốn vậy, truyền thêm "
+            "--allow-empty-cohort.",
+            file=sys.stderr,
+        )
+        return 1
 
+    async with DormApi(supabase_url, supabase_key) as api:
         if not args.apply:
-            # Hai con số này là thứ đáng nhìn nhất trước khi ghi: chúng cho biết
-            # sẽ có bao nhiêu người BỊ CHẶN xếp phòng (giới tính không rõ) và
-            # bao nhiêu người hiện ra không kèm ngành.
+            # Mấy con số này là thứ đáng nhìn nhất trước khi ghi: bao nhiêu
+            # người sẽ BỊ CHẶN xếp phòng (giới tính không rõ), bao nhiêu người
+            # hiện ra không kèm ngành, và bao nhiêu hồ sơ đã đóng tiền nhưng vẫn
+            # đang được xét (bất thường — nằm trong cohort là cố ý).
+            existing = await api.count_students(args.academic_year)
             unknown_gender = sum(
                 1 for r in rows if normalize_gender(r.source_gender_raw) == "unknown"
             )
@@ -412,9 +586,13 @@ async def main(argv: Optional[List[str]] = None) -> int:
             print("── XEM TRƯỚC (không ghi gì) ─────────────────────────")
             print(f"  Năm học              : {args.academic_year}")
             print(f"  Trong nguồn QLTS     : {len(rows)}")
-            print(f"  Đang có ở hệ KTX     : {existing}")
+            print(
+                "  Đang có ở hệ KTX     : "
+                f"{existing if existing is not None else 'không đếm được'}"
+            )
             print(f"  Không rõ giới tính   : {unknown_gender}")
             print(f"  Chưa chốt ngành      : {no_program}")
+            print(f"  Hồ sơ vẫn đang xét   : {count_atypical_statuses(rows)}")
             print("\n  Truyền --apply để thực sự ghi.")
             return 0
 
@@ -428,12 +606,24 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
         log.info("dorm_sync_run_opened", run_id=run_id)
 
+        # MỘT mốc thời gian cho cả lượt: mọi hàng của cùng một lượt phải mang
+        # cùng ``synced_at``, nếu không thì "đồng bộ lần cuối lúc nào" trở thành
+        # một dải giờ trải theo tốc độ chạy của từng lô.
+        synced_at = datetime.now(timezone.utc).isoformat()
+
         upserted = 0
         try:
             for start in range(0, len(rows), args.batch_size):
+                # Dừng GIỮA hai lô, không dừng giữa một lô: mỗi lô là một lời
+                # gọi, dừng ở đây để lại trạng thái rõ ràng để đóng sổ.
+                if _stop_requested:
+                    raise RuntimeError(
+                        "Người vận hành yêu cầu dừng trước khi ghi hết nguồn."
+                    )
+
                 batch = rows[start : start + args.batch_size]
                 await api.upsert_students(
-                    [build_student_payload(r, run_id) for r in batch]
+                    [build_student_payload(r, run_id, synced_at) for r in batch]
                 )
                 upserted += len(batch)
                 log.info("dorm_sync_batch_done", upserted=upserted, total=len(rows))
@@ -445,15 +635,22 @@ async def main(argv: Optional[List[str]] = None) -> int:
                 run_id, source_count=len(rows), upserted_count=upserted
             )
 
-        except Exception as exc:
+        # ⚠️ ``BaseException``, không phải ``Exception``. ``KeyboardInterrupt``,
+        # ``SystemExit`` và ``CancelledError`` không phải ``Exception``, nên bắt
+        # hẹp hơn sẽ để chúng đi vòng qua toàn bộ phần đóng sổ dưới đây và bỏ
+        # lại một lượt treo ``running`` — thứ khoá cứng năm học đó ở hệ KTX.
+        # ``_install_stop_handlers`` là đường xử lý CHÍNH cho Ctrl-C/SIGTERM;
+        # nhánh này là lưới cho những gì lọt qua nó.
+        except BaseException as exc:
             # Lỗi phía client KHÔNG đồng nghĩa với việc database chưa làm gì.
             # Hỏi lại trạng thái thật thay vì tuyên bố bừa.
-            outcome = await api.reconcile_after_failure(run_id, len(rows), upserted)
+            outcome, run = await api.reconcile_after_failure(
+                run_id, len(rows), upserted
+            )
 
             if outcome == "finalized":
                 # Database đã hoàn tất; chỉ phản hồi không về tới đây. Báo thất
                 # bại trong ca này là ghi sai sổ sách.
-                run = await api.get_sync_run(run_id)
                 log.info("dorm_sync_completed_despite_client_error", run_id=run_id)
                 print("── ĐÃ ĐỒNG BỘ (phản hồi tới muộn) ──────────────────")
                 print(f"  Năm học            : {args.academic_year}")
@@ -471,7 +668,14 @@ async def main(argv: Optional[List[str]] = None) -> int:
                 upserted_before_failure=upserted,
                 outcome=outcome,
             )
-            print(f"✗ Đồng bộ thất bại: {exc}", file=sys.stderr)
+            if _stop_requested or isinstance(
+                exc, (KeyboardInterrupt, asyncio.CancelledError)
+            ):
+                # Ngắt theo yêu cầu: ``str(exc)`` của hai loại này thường rỗng,
+                # in ra sẽ thành "✗ Đồng bộ thất bại:" cụt lủn.
+                print("✗ Đồng bộ DỪNG theo yêu cầu người vận hành.", file=sys.stderr)
+            else:
+                print(f"✗ Đồng bộ thất bại: {exc}", file=sys.stderr)
 
             if outcome == "marked_failed":
                 print(

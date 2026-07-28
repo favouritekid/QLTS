@@ -18,10 +18,13 @@ from app import models
 from app.database import AsyncSessionLocal
 from app.models.finance import Fee, FeeStatusEnum
 from app.repositories.dorm_export_repository import (
+    COHORT_ATYPICAL_STATUSES,
     DORM_COHORT_STATUSES,
+    count_atypical_statuses,
     describe_excluded_statuses,
     select_paid_hk1_cohort,
 )
+from app.utils.exceptions import ValidationError
 
 pytestmark = pytest.mark.asyncio
 
@@ -104,14 +107,22 @@ async def _add_tuition_fee(
     status: str = FeeStatusEnum.invoiced.value,
     resolved_major_id=None,
     fee_type: str = "tuition",
+    academic_year: int = 2026,
 ) -> int:
+    """Thêm một dòng phí cho hồ sơ.
+
+    ``academic_year`` phải theo NĂM CỦA HỒ SƠ ở mọi lời gọi. Cố định 2026 cho
+    mọi dòng phí sẽ tạo ra tổ hợp mà luồng tính phí không sinh ra được (hồ sơ
+    2027 mang phí 2026), và test dựng trên dữ liệu bất khả thi thì có xanh cũng
+    không chứng minh được điều nó nói.
+    """
     async with AsyncSessionLocal() as session:
         async with session.begin():
             fee = Fee(
                 admission_profile_id=profile_id,
                 fee_type=fee_type,
                 semester_no=semester_no if fee_type == "tuition" else None,
-                academic_year=2026,
+                academic_year=academic_year,
                 base_amount=Decimal("9200000"),
                 final_amount=Decimal("9200000"),
                 paid_amount=Decimal(paid),
@@ -167,8 +178,8 @@ async def test_year_2026_paid_2027_unpaid_returns_only_2026():
     p2026 = await _make_profile(lead_id, academic_year=2026)
     p2027 = await _make_profile(lead_id, academic_year=2027)
 
-    await _add_tuition_fee(p2026, paid="3000000")
-    await _add_tuition_fee(p2027, paid="0")
+    await _add_tuition_fee(p2026, paid="3000000", academic_year=2026)
+    await _add_tuition_fee(p2027, paid="0", academic_year=2027)
 
     assert await _cohort_ids(2026) == [p2026]
     assert await _cohort_ids(2027) == []
@@ -181,21 +192,23 @@ async def test_year_2026_unpaid_2027_paid_returns_only_2027():
     p2026 = await _make_profile(lead_id, academic_year=2026)
     p2027 = await _make_profile(lead_id, academic_year=2027)
 
-    await _add_tuition_fee(p2026, paid="0")
-    await _add_tuition_fee(p2027, paid="500000")
+    await _add_tuition_fee(p2026, paid="0", academic_year=2026)
+    await _add_tuition_fee(p2027, paid="500000", academic_year=2027)
 
     assert await _cohort_ids(2026) == []
     assert await _cohort_ids(2027) == [p2027]
 
 
 async def test_academic_year_is_mandatory():
-    """Gọi thiếu năm học phải nổ ngay, không lặng lẽ trải khắp mọi mùa."""
-    with pytest.raises(ValueError):
-        select_paid_hk1_cohort(None)
-    with pytest.raises(ValueError):
-        select_paid_hk1_cohort("2026")
-    with pytest.raises(ValueError):
-        select_paid_hk1_cohort(True)
+    """Gọi thiếu năm học phải nổ ngay, không lặng lẽ trải khắp mọi mùa.
+
+    Phải là ``ValidationError`` (domain exception → 400), không phải
+    ``ValueError`` trần: ngày query này lộ qua router thì ``ValueError`` thành
+    500 kèm stack trace, và test ghim sai loại sẽ để việc đó trôi qua im lặng.
+    """
+    for bad in (None, "2026", True):
+        with pytest.raises(ValidationError):
+            select_paid_hk1_cohort(bad)
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +332,45 @@ async def test_excluded_statuses_are_exactly_the_agreed_four():
         "waitlisted",
     ):
         assert still_under_review in DORM_COHORT_STATUSES
+
+
+async def test_atypical_statuses_are_a_subset_of_the_allow_list():
+    """Danh sách "đang xét" phải nằm TRỌN trong allow-list.
+
+    Hai danh sách này tồn tại song song: allow-list quyết định ai được sang hệ
+    KTX, còn danh sách đang-xét quyết định con số cảnh báo người vận hành nhìn
+    trước khi ghi. Nếu chúng lệch nhau thì bước xem trước sẽ đếm những trạng
+    thái không hề có trong cohort — một cảnh báo về người không tồn tại.
+    """
+    assert set(COHORT_ATYPICAL_STATUSES) <= set(DORM_COHORT_STATUSES)
+    assert set(COHORT_ATYPICAL_STATUSES) == {
+        "reviewing",
+        "revision_requested",
+        "result_published",
+        "waitlisted",
+    }
+
+
+async def test_count_atypical_statuses_counts_only_under_review_rows():
+    """``profile_status`` phải thực sự được DÙNG, không chỉ được select.
+
+    Cột này là thứ duy nhất phân biệt một em ``confirmed`` bình thường với một
+    em ``waitlisted`` đã bỏ tiền — ca bất thường mà officer cần biết.
+    """
+    unit_id = await _make_unit()
+    binh_thuong = await _make_profile(
+        await _make_lead(unit_id), academic_year=2026, status="confirmed"
+    )
+    dang_xet = await _make_profile(
+        await _make_lead(unit_id), academic_year=2026, status="waitlisted"
+    )
+    await _add_tuition_fee(binh_thuong, paid="3000000")
+    await _add_tuition_fee(dang_xet, paid="3000000")
+
+    rows = await _cohort_rows(2026)
+
+    assert sorted(r.qlts_profile_id for r in rows) == sorted([binh_thuong, dang_xet])
+    assert count_atypical_statuses(rows) == 1
 
 
 @pytest.mark.parametrize("status", ["draft", "rejected", "withdrawn"])
