@@ -9,9 +9,15 @@ nói hai danh sách khác nhau là kiểu sai không có gì nổ ra.
 Usage (BẮT BUỘC override entrypoint — xem cảnh báo bên dưới):
 
     docker compose run --rm --no-deps --entrypoint python \\
-        --env-file <file-secret-chi-tren-may-quan-tri> \\
+        --env-from-file <file-secret-chi-tren-may-quan-tri> \\
         backend -m app.scripts.sync_dorm_students \\
             --academic-year 2026 --dry-run
+
+⚠️ Là ``--env-from-file``, KHÔNG phải ``--env-file``. Với Compose v2 trở lên
+``--env-file`` là cờ TOÀN CỤC (đứng trước ``run``) và nó chỉ nạp biến cho việc
+nội suy trong file compose — các biến ``DORM_*`` không được khai báo ở đó nên sẽ
+KHÔNG tới được container. Đặt ``--env-file`` sau ``run`` thì Compose báo cờ lạ
+và thoát trước khi container khởi động.
 
 ⚠️ PHẢI override ``--entrypoint``: ``docker-entrypoint.sh`` chạy
 ``alembic upgrade head`` TRƯỚC command. Chạy dạng thường với ``DATABASE_URL`` trỏ
@@ -41,8 +47,10 @@ import os
 import signal
 import sys
 import unicodedata
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
 import structlog
@@ -133,6 +141,46 @@ def build_student_payload(
     }
 
 
+# Chỉ những host này được phép đi bằng ``http://``: Supabase chạy trên chính máy
+# đang phát triển, gói tin không rời khỏi máy.
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def assert_transport_is_encrypted(base_url: str) -> None:
+    """Từ chối đích không mã hoá TRƯỚC khi bí mật nào rời khỏi máy.
+
+    ⚠️ Mọi lời gọi ở đây mang khoá secret của hệ KTX trong HAI header
+    (``apikey`` và ``Authorization``), và khi ``--apply`` thì thân request còn
+    chứa họ tên người học. Qua ``http://`` thì cả hai đi ở dạng đọc được trên
+    đường truyền — một cấu hình gõ nhầm scheme là đủ để rò khoá ghi toàn hệ.
+
+    Loopback được miễn: đó là Supabase local lúc phát triển, gói tin không rời
+    khỏi máy.
+    """
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+
+    if parsed.scheme == "https":
+        return
+    if parsed.scheme == "http" and host in _LOOPBACK_HOSTS:
+        return
+
+    raise ValueError(
+        f"DORM_SUPABASE_URL phải dùng https:// (nhận được '{parsed.scheme}://{host}'). "
+        "Khoá secret và họ tên người học đi trong các lời gọi này; không mã hoá "
+        "đường truyền thì chúng đọc được trên đường đi."
+    )
+
+
+def _client_note(client_token: str) -> str:
+    """Dấu của tiến trình chạy, ghi vào ``sync_runs.note``.
+
+    Đây là thứ duy nhất cho phép nhận lại một lượt mà chính lần chạy này đã tạo
+    khi phản hồi bị mất — xem ``open_sync_run``.
+    """
+    return f"client:{client_token}"
+
+
 class DormApi:
     """Lớp mỏng gọi PostgREST của Supabase.
 
@@ -141,6 +189,7 @@ class DormApi:
     """
 
     def __init__(self, base_url: str, secret_key: str) -> None:
+        assert_transport_is_encrypted(base_url)
         self._base = base_url.rstrip("/") + "/rest/v1"
         self._headers = {
             "apikey": secret_key,
@@ -180,19 +229,86 @@ class DormApi:
             "lỗi có thể chứa dữ liệu cá nhân."
         )
 
-    async def open_sync_run(self, academic_year: int) -> int:
-        response = await self._client.post(
-            f"{self._base}/sync_runs",
-            headers={**self._headers, "Prefer": "return=representation"},
-            json={"academic_year": academic_year, "status": "running"},
-        )
+    async def find_run_by_token(
+        self, academic_year: int, client_token: str
+    ) -> Optional[Dict[str, Any]]:
+        """Tìm lượt mang DẤU của lần chạy này. Best-effort: lỗi thì trả ``None``."""
+        try:
+            response = await self._client.get(
+                f"{self._base}/sync_runs",
+                headers=self._headers,
+                params={
+                    "academic_year": f"eq.{academic_year}",
+                    "note": f"eq.{_client_note(client_token)}",
+                    "select": "id,status",
+                    "limit": "1",
+                },
+            )
+            self._raise_for_status(response, "Tìm lượt theo dấu client")
+            rows = response.json()
+        except Exception:
+            return None
+        return rows[0] if rows else None
+
+    async def open_sync_run(self, academic_year: int, client_token: str) -> int:
+        """Mở một lượt đồng bộ. Chịu được ca phản hồi bị mất.
+
+        ⚠️ Bước này CŨNG có ca mất ACK, và nó là ca tệ nhất: hàng ``running`` đã
+        nằm trong database còn client thì không có ``run_id`` nào để đối soát.
+        Không xử lý thì ``uq_sync_run_active_per_year`` từ chối MỌI lần chạy sau
+        cho năm học đó bằng 409 cho tới khi có người vào sửa tay — đúng cái bẫy
+        mà các nhánh đóng sổ phía dưới sinh ra để tránh.
+
+        Cách thoát: ghi DẤU của tiến trình vào ``sync_runs.note`` ngay trong câu
+        INSERT, rồi khi phản hồi hỏng thì đọc lại theo dấu đó. Dấu là duy nhất
+        cho mỗi lần chạy nên không thể nhận nhầm lượt của tiến trình khác.
+        """
+        payload = {
+            "academic_year": academic_year,
+            "status": "running",
+            "note": _client_note(client_token),
+        }
+
+        try:
+            response = await self._client.post(
+                f"{self._base}/sync_runs",
+                headers={**self._headers, "Prefer": "return=representation"},
+                json=payload,
+            )
+        except httpx.HTTPError:
+            # Lỗi TRUYỀN TẢI: không biết database đã tạo hàng hay chưa.
+            recovered = await self.find_run_by_token(academic_year, client_token)
+            if recovered is not None:
+                log.warning("dorm_sync_run_recovered", run_id=recovered["id"])
+                return recovered["id"]
+            raise RuntimeError(
+                "Không mở được lượt đồng bộ (lỗi kết nối) và cũng không tìm thấy "
+                "lượt nào mang dấu của lần chạy này. Chưa có gì thay đổi — chạy "
+                "lại là an toàn."
+            )
+
         if response.status_code == 409:
             raise RuntimeError(
                 f"Đã có một lượt đồng bộ ĐANG CHẠY cho năm {academic_year}. "
-                "Chờ nó kết thúc hoặc đánh dấu failed trước khi chạy lượt mới."
+                "Chờ nó kết thúc hoặc đánh dấu failed trước khi chạy lượt mới. "
+                "(Cột `note` của lượt đó cho biết tiến trình nào đã mở nó.)"
             )
         self._raise_for_status(response, "Mở lượt đồng bộ")
-        return response.json()[0]["id"]
+
+        try:
+            return response.json()[0]["id"]
+        except (IndexError, KeyError, TypeError, ValueError):
+            # Phản hồi 2xx nhưng thân không đọc được (proxy cắt, JSON hỏng).
+            # Hàng gần như chắc chắn ĐÃ được tạo — tìm lại theo dấu.
+            recovered = await self.find_run_by_token(academic_year, client_token)
+            if recovered is not None:
+                log.warning("dorm_sync_run_recovered", run_id=recovered["id"])
+                return recovered["id"]
+            raise RuntimeError(
+                "Mở lượt đồng bộ trả về phản hồi không đọc được và không tìm lại "
+                "được lượt mang dấu của lần chạy này. Kiểm bảng sync_runs trước "
+                "khi chạy lại."
+            )
 
     async def get_sync_run(self, run_id: int) -> Optional[Dict[str, Any]]:
         """Đọc trạng thái hiện tại của một lượt."""
@@ -571,7 +687,15 @@ async def main(argv: Optional[List[str]] = None) -> int:
         )
         return 1
 
-    async with DormApi(supabase_url, supabase_key) as api:
+    try:
+        api = DormApi(supabase_url, supabase_key)
+    except ValueError as exc:
+        # Cấu hình sai đích đến — dừng trước khi mở kết nối, in gọn thay vì ném
+        # traceback: người vận hành cần sửa biến môi trường, không cần ngăn xếp.
+        print(f"✗ {exc}", file=sys.stderr)
+        return 2
+
+    async with api:
         if not args.apply:
             # Mấy con số này là thứ đáng nhìn nhất trước khi ghi: bao nhiêu
             # người sẽ BỊ CHẶN xếp phòng (giới tính không rõ), bao nhiêu người
@@ -596,8 +720,12 @@ async def main(argv: Optional[List[str]] = None) -> int:
             print("\n  Truyền --apply để thực sự ghi.")
             return 0
 
+        # Dấu riêng cho lần chạy này: nếu phản hồi của bước mở lượt bị mất, đây
+        # là thứ duy nhất cho phép nhận lại đúng hàng mình vừa tạo.
+        client_token = uuid.uuid4().hex
+
         try:
-            run_id = await api.open_sync_run(args.academic_year)
+            run_id = await api.open_sync_run(args.academic_year, client_token)
         except RuntimeError as exc:
             # Chưa mở được lượt thì chưa có gì để dọn. In gọn thay vì ném
             # traceback: người vận hành cần biết PHẢI LÀM GÌ, không cần ngăn xếp.
@@ -627,6 +755,16 @@ async def main(argv: Optional[List[str]] = None) -> int:
                 )
                 upserted += len(batch)
                 log.info("dorm_sync_batch_done", upserted=upserted, total=len(rows))
+
+            # ⚠️ Kiểm LẠI ngay trước bước phá huỷ. Vòng lặp chỉ nhìn cờ ở ĐẦU mỗi
+            # lô, nên hai ca đi thẳng tới đây mà không qua lần kiểm nào: tín hiệu
+            # tới trong lúc chạy lô CUỐI, và cohort rỗng (``--allow-empty-cohort``
+            # → vòng lặp chạy 0 lần). Cả hai đều kết thúc bằng việc hạ cờ SAU KHI
+            # người vận hành đã bấm dừng — ca thứ hai hạ cờ cả năm học.
+            if _stop_requested:
+                raise RuntimeError(
+                    "Người vận hành yêu cầu dừng trước khi hạ cờ đủ điều kiện."
+                )
 
             # CHỈ tới đây — sau khi TOÀN BỘ nguồn đã ghi xong — mới được hạ cờ.
             # Hạ cờ và đóng lượt đi cùng nhau trong một transaction phía database

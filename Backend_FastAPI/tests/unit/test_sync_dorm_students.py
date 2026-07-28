@@ -8,12 +8,14 @@ import unicodedata
 from datetime import datetime
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app.scripts import sync_dorm_students as sync_module
 from app.scripts.sync_dorm_students import (
     DormApi,
     assert_source_env_matches,
+    assert_transport_is_encrypted,
     build_student_payload,
     main,
     normalize_gender,
@@ -264,9 +266,11 @@ class _FakeResponse:
 class _RecordingClient:
     """httpx client giả: ghi lại lời gọi thay vì đi ra mạng."""
 
-    def __init__(self, response=None):
+    def __init__(self, response=None, *, post_response=None, post_error=None):
         self.calls = []
         self._response = response if response is not None else _FakeResponse()
+        self._post_response = post_response
+        self._post_error = post_error
 
     async def patch(self, url, headers=None, params=None, json=None):
         self.calls.append({"method": "PATCH", "url": url, "json": json})
@@ -275,6 +279,14 @@ class _RecordingClient:
     async def get(self, url, headers=None, params=None):
         self.calls.append({"method": "GET", "url": url, "params": params})
         return self._response
+
+    async def post(self, url, headers=None, params=None, json=None):
+        self.calls.append({"method": "POST", "url": url, "json": json})
+        if self._post_error is not None:
+            raise self._post_error
+        return (
+            self._post_response if self._post_response is not None else self._response
+        )
 
 
 def _api_with(client) -> DormApi:
@@ -329,6 +341,89 @@ async def test_reconcile_returns_the_row_it_already_read():
     assert outcome == "finalized"
     assert run["deactivated_count"] == 12
     assert len(client.calls) == 1  # đúng MỘT lần đọc
+
+
+async def test_open_run_recovers_the_row_it_created_after_a_lost_ack():
+    """Mất ACK ở bước MỞ lượt là ca tệ nhất: hàng đã có, client không có id.
+
+    Không nhận lại được thì không có ``run_id`` nào để đối soát, và
+    ``uq_sync_run_active_per_year`` từ chối mọi lần chạy sau cho năm đó bằng 409
+    cho tới khi có người vào database sửa tay.
+    """
+    client = _RecordingClient(
+        _FakeResponse(payload=[{"id": 88, "status": "running"}]),
+        post_error=httpx.ConnectError("mất kết nối"),
+    )
+
+    run_id = await _api_with(client).open_sync_run(2026, "abc123")
+
+    assert run_id == 88
+    # Tìm lại phải theo ĐÚNG dấu của lần chạy này, không phải "lượt running bất kỳ".
+    assert client.calls[1]["params"]["note"] == "eq.client:abc123"
+
+
+async def test_open_run_recovers_from_an_unreadable_body():
+    """2xx nhưng thân không đọc được (proxy cắt, JSON hỏng) — hàng vẫn đã tạo."""
+    client = _RecordingClient(
+        _FakeResponse(payload=[{"id": 91, "status": "running"}]),
+        post_response=_FakeResponse(status_code=201, payload=[]),
+    )
+
+    assert await _api_with(client).open_sync_run(2026, "tok") == 91
+
+
+async def test_open_run_says_plainly_when_nothing_was_created():
+    """Không tìm thấy dấu nào = database chưa nhận gì. Nói rõ để người ta chạy lại."""
+    client = _RecordingClient(
+        _FakeResponse(payload=[]), post_error=httpx.ConnectError("mất kết nối")
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        await _api_with(client).open_sync_run(2026, "tok")
+
+    assert "an toàn" in str(exc.value)
+
+
+def test_open_run_stamps_the_client_token_in_the_insert():
+    """Dấu phải nằm NGAY trong câu INSERT, không phải ghi bổ sung sau đó.
+
+    Ghi sau là để lại đúng khoảng trống mà cơ chế này sinh ra để bịt: hàng tạo
+    xong, chưa kịp đóng dấu, phản hồi mất — không nhận lại được nữa.
+    """
+    from app.scripts.sync_dorm_students import _client_note
+
+    assert _client_note("abc") == "client:abc"
+
+
+# ---------------------------------------------------------------------------
+# Đường truyền
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://ktx.supabase.co", "http://10.0.0.5:8000", "ftp://ktx.supabase.co"],
+)
+def test_plaintext_destination_is_refused(url):
+    """Khoá secret đi trong HAI header và thân request chứa họ tên người học.
+
+    Qua ``http://`` thì cả hai đọc được trên đường truyền — một lần gõ nhầm
+    scheme là đủ để rò khoá ghi toàn hệ KTX.
+    """
+    with pytest.raises(ValueError):
+        assert_transport_is_encrypted(url)
+
+    with pytest.raises(ValueError):
+        DormApi(url, "khoa-that")
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://ktx.supabase.co", "http://localhost:54321", "http://127.0.0.1:54321"],
+)
+def test_https_and_loopback_are_allowed(url):
+    """Loopback được miễn: đó là Supabase local, gói tin không rời khỏi máy."""
+    assert assert_transport_is_encrypted(url) is None
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +544,7 @@ async def test_interrupt_mid_write_still_closes_the_run(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
-        async def open_sync_run(self, academic_year):
+        async def open_sync_run(self, academic_year, client_token):
             return 77
 
         async def upsert_students(self, rows):
@@ -467,6 +562,72 @@ async def test_interrupt_mid_write_still_closes_the_run(monkeypatch):
 
     assert await main(["--academic-year", "2026", "--apply"]) == 1
     assert da_doi_soat["run_id"] == 77
+
+
+async def test_stop_request_blocks_the_finalizer_when_the_loop_never_ran(monkeypatch):
+    """Đã bấm dừng thì KHÔNG được hạ cờ, kể cả khi không có lô nào để chạy.
+
+    Vòng lặp chỉ nhìn cờ dừng ở ĐẦU mỗi lô. Với ``--allow-empty-cohort`` nó chạy
+    0 lần, nên nếu không kiểm lại ngay trước bước hạ cờ thì một cú Ctrl-C vẫn
+    kết thúc bằng việc vô hiệu hoá TOÀN BỘ năm học. Ca "tín hiệu tới trong lúc
+    chạy lô cuối" cũng đi qua đúng khe này.
+    """
+    _set_target_env(monkeypatch)
+    monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
+    monkeypatch.setattr(sync_module, "_stop_requested", True)
+    da_doi_soat = {}
+
+    class _FakeApi:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def open_sync_run(self, academic_year, client_token):
+            return 91
+
+        async def finalize_sync_run(self, run_id, source_count, upserted_count):
+            # ⚠️ KHÔNG raise ở đây: `main` bắt `BaseException`, nên một
+            # `AssertionError` sẽ bị nuốt và test xanh dù hạ cờ ĐÃ chạy. Phải
+            # ghi nhận rồi khẳng định ở ngoài.
+            da_doi_soat["đã_hạ_cờ"] = True
+            return 0
+
+        async def reconcile_after_failure(self, run_id, source_count, upserted_count):
+            da_doi_soat["run_id"] = run_id
+            return "marked_failed", {"id": run_id, "status": "failed"}
+
+    async def _empty_cohort(academic_year):
+        return []
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _empty_cohort)
+    monkeypatch.setattr(sync_module, "DormApi", _FakeApi)
+
+    exit_code = await main(
+        ["--academic-year", "2026", "--apply", "--allow-empty-cohort"]
+    )
+
+    assert "đã_hạ_cờ" not in da_doi_soat
+    assert exit_code == 1
+    assert da_doi_soat["run_id"] == 91  # vẫn đóng sổ, không bỏ lượt treo `running`
+
+
+async def test_plaintext_url_stops_before_any_request(monkeypatch):
+    """Sai scheme phải dừng ở bước cấu hình, không phải sau khi đã gửi gì đó."""
+    _set_target_env(monkeypatch)
+    monkeypatch.setenv("DORM_SUPABASE_URL", "http://ktx.supabase.co")
+    monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
+
+    async def _one_row(academic_year):
+        return [_row()]
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _one_row)
+
+    assert await main(["--academic-year", "2026", "--apply"]) == 2
 
 
 async def test_dry_run_never_needs_the_env_guard(monkeypatch):
