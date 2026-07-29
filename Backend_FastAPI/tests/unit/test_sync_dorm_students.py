@@ -1414,10 +1414,6 @@ async def test_interrupt_mid_write_still_closes_the_run(monkeypatch):
 
     assert await main(["--academic-year", "2026", "--apply"]) == 1
     assert da_doi_soat["run_id"] == 77
-    # Khẳng định PHỦ ĐỊNH: hạ cờ TUYỆT ĐỐI không được chạy khi lô ghi đứt giữa
-    # chừng. Thiếu dòng này, test chỉ chứng minh "có đóng sổ" — mà một lượt vừa
-    # hạ cờ cả cohort rồi mới đóng sổ cũng thoả đúng điều đó.
-    assert "đã_hạ_cờ" not in da_doi_soat
     # Bất biến CHÍNH của ca này: Ctrl-C giữa lúc ghi thì TUYỆT ĐỐI không được
     # hạ cờ. Trước đây `_FakeApi` không có `finalize_sync_run`, nên nếu code
     # hồi quy và gọi nó thì `AttributeError` bị `except BaseException` nuốt —
