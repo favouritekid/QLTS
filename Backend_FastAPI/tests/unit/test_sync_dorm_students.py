@@ -425,7 +425,7 @@ async def test_open_run_recovers_the_row_it_created_after_a_lost_ack():
         post_error=httpx.ConnectError("mất kết nối"),
     )
 
-    run_id = await _api_with(client).open_sync_run(2026, "abc123")
+    run_id = await _api_with(client).open_sync_run(2026, "abc123", raw_count=1)
 
     assert run_id == 88
     # Tìm lại phải theo ĐÚNG dấu của lần chạy này, không phải "lượt running bất kỳ".
@@ -439,7 +439,7 @@ async def test_open_run_recovers_from_an_unreadable_body():
         post_response=_FakeResponse(status_code=201, payload=[]),
     )
 
-    assert await _api_with(client).open_sync_run(2026, "tok") == 91
+    assert await _api_with(client).open_sync_run(2026, "tok", raw_count=1) == 91
 
 
 async def test_open_run_says_plainly_when_nothing_was_created():
@@ -449,7 +449,7 @@ async def test_open_run_says_plainly_when_nothing_was_created():
     )
 
     with pytest.raises(RuntimeError) as exc:
-        await _api_with(client).open_sync_run(2026, "tok")
+        await _api_with(client).open_sync_run(2026, "tok", raw_count=1)
 
     assert "an toàn" in str(exc.value)
 
@@ -467,7 +467,7 @@ async def test_open_run_reconciles_ambiguous_gateway_replies(ma_loi):
         post_response=_FakeResponse(status_code=ma_loi, payload=[]),
     )
 
-    assert await _api_with(client).open_sync_run(2026, "tok") == 77
+    assert await _api_with(client).open_sync_run(2026, "tok", raw_count=1) == 77
     assert [c["method"] for c in client.calls] == ["POST", "GET"]
 
 
@@ -480,7 +480,7 @@ async def test_open_run_trusts_definitive_client_errors(ma_loi):
     )
 
     with pytest.raises(RuntimeError):
-        await _api_with(client).open_sync_run(2026, "tok")
+        await _api_with(client).open_sync_run(2026, "tok", raw_count=1)
 
     assert [c["method"] for c in client.calls] == ["POST"]
 
@@ -498,7 +498,7 @@ async def test_open_run_never_claims_safety_when_the_probe_also_failed():
     )
 
     with pytest.raises(RuntimeError) as exc:
-        await _api_with(client).open_sync_run(2026, "tok")
+        await _api_with(client).open_sync_run(2026, "tok", raw_count=1)
 
     thong_diep = str(exc.value)
     assert "an toàn" not in thong_diep
@@ -518,7 +518,7 @@ async def test_open_run_reuses_its_own_running_row_on_conflict():
         post_response=_FakeResponse(status_code=409, payload=[]),
     )
 
-    assert await _api_with(client).open_sync_run(2026, "tok") == 55
+    assert await _api_with(client).open_sync_run(2026, "tok", raw_count=1) == 55
 
 
 async def test_open_run_refuses_a_conflict_it_does_not_own():
@@ -529,7 +529,7 @@ async def test_open_run_refuses_a_conflict_it_does_not_own():
     )
 
     with pytest.raises(RuntimeError) as exc:
-        await _api_with(client).open_sync_run(2026, "tok")
+        await _api_with(client).open_sync_run(2026, "tok", raw_count=1)
 
     assert "KHÔNG mang dấu của lần chạy này" in str(exc.value)
 
@@ -592,7 +592,7 @@ async def test_open_run_does_not_recover_a_historical_failed_row():
     )
 
     with pytest.raises(RuntimeError) as exc:
-        await _api_with(client).open_sync_run(2026, "tok")
+        await _api_with(client).open_sync_run(2026, "tok", raw_count=1)
 
     assert "chạy lại là an toàn" in str(exc.value)
 
@@ -609,7 +609,7 @@ async def test_open_run_reports_unknown_when_the_conflict_probe_fails():
     )
 
     with pytest.raises(RuntimeError) as exc:
-        await _api_with(client).open_sync_run(2026, "tok")
+        await _api_with(client).open_sync_run(2026, "tok", raw_count=1)
 
     thong_diep = str(exc.value)
     assert "KHÔNG mang dấu" not in thong_diep
@@ -1143,11 +1143,18 @@ async def test_interrupt_mid_write_still_closes_the_run(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
-        async def open_sync_run(self, academic_year, client_token):
+        async def open_sync_run(self, academic_year, client_token, raw_count):
             return 77
 
-        async def upsert_students(self, rows):
+        async def upsert_students(self, run_id, rows):
             raise KeyboardInterrupt
+
+        async def finalize_sync_run(self, run_id, source_count, upserted_count):
+            # ⚠️ KHÔNG raise ở đây: `main` bắt `BaseException`, nên một
+            # `AssertionError` sẽ bị nuốt và test xanh dù hạ cờ ĐÃ chạy. Ghi
+            # nhận rồi khẳng định ở ngoài — cùng lý do với ca dừng bên dưới.
+            da_doi_soat["đã_hạ_cờ"] = True
+            return 0
 
         async def reconcile_after_failure(self, run_id, source_count, upserted_count):
             da_doi_soat["run_id"] = run_id
@@ -1161,6 +1168,11 @@ async def test_interrupt_mid_write_still_closes_the_run(monkeypatch):
 
     assert await main(["--academic-year", "2026", "--apply"]) == 1
     assert da_doi_soat["run_id"] == 77
+    # Bất biến CHÍNH của ca này: Ctrl-C giữa lúc ghi thì TUYỆT ĐỐI không được
+    # hạ cờ. Trước đây `_FakeApi` không có `finalize_sync_run`, nên nếu code
+    # hồi quy và gọi nó thì `AttributeError` bị `except BaseException` nuốt —
+    # test vẫn xanh trong khi bất biến đã vỡ.
+    assert "đã_hạ_cờ" not in da_doi_soat
 
 
 async def test_stop_request_blocks_the_finalizer_when_the_loop_never_ran(monkeypatch):
@@ -1186,7 +1198,7 @@ async def test_stop_request_blocks_the_finalizer_when_the_loop_never_ran(monkeyp
         async def __aexit__(self, *exc):
             return False
 
-        async def open_sync_run(self, academic_year, client_token):
+        async def open_sync_run(self, academic_year, client_token, raw_count):
             return 91
 
         async def finalize_sync_run(self, run_id, source_count, upserted_count):
@@ -1227,6 +1239,109 @@ async def test_plaintext_url_stops_before_any_request(monkeypatch):
     monkeypatch.setattr(sync_module, "fetch_cohort", _one_row)
 
     assert await main(["--academic-year", "2026", "--apply"]) == 2
+
+
+class _ApiGhiNhan:
+    """API giả ghi lại số liệu đưa vào bước đóng sổ."""
+
+    def __init__(self, so_bi_chan=0):
+        self._so_bi_chan = so_bi_chan
+        self.finalize_args = None
+        self.lo_da_gui = []
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def open_sync_run(self, academic_year, client_token, raw_count):
+        self.raw_count = raw_count
+        return 42
+
+    async def upsert_students(self, run_id, rows):
+        self.lo_da_gui.append(rows)
+        # Chặn ở lô ĐẦU cho tới hết hạn mức, phần còn lại ghi bình thường.
+        chan = min(self._so_bi_chan, len(rows))
+        self._so_bi_chan -= chan
+        return len(rows) - chan, chan
+
+    async def finalize_sync_run(self, run_id, source_count, upserted_count):
+        self.finalize_args = (source_count, upserted_count)
+        return 0
+
+
+async def test_finalize_receives_effective_not_raw(monkeypatch):
+    """Có hàng bị chặn thì ``source_count`` phải là EFFECTIVE, không phải nguồn.
+
+    Truyền số nguồn vào đây khi có dù chỉ một hàng bị chặn sẽ làm guard "chưa
+    ghi hết nguồn" phía database từ chối hạ cờ — và thông điệp lúc đó nói về
+    một sự cố không có thật, nên người vận hành sẽ đi tìm lỗi ở chỗ khác.
+    """
+    _set_target_env(monkeypatch)
+    monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
+    api = _ApiGhiNhan(so_bi_chan=1)
+
+    async def _ba_hang(academic_year, **kwargs):
+        return [_row(qlts_profile_id=i) for i in (1, 2, 3)]
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _ba_hang)
+    monkeypatch.setattr(sync_module, "DormApi", api)
+
+    assert await main(["--academic-year", "2026", "--apply"]) == 0
+
+    # raw = 3, blocked = 1 → effective = 2, và hai tham số phải BẰNG NHAU.
+    assert api.raw_count == 3
+    assert api.finalize_args == (2, 2)
+
+
+async def test_batch_mismatch_stops_before_the_destructive_step(monkeypatch):
+    """RPC bỏ sót hàng trong im lặng thì DỪNG, không đi tiếp tới bước hạ cờ."""
+    _set_target_env(monkeypatch)
+    monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
+
+    class _ApiThieu(_ApiGhiNhan):
+        async def upsert_students(self, run_id, rows):
+            # Báo ghi ít hơn số gửi, và KHÔNG khai phần thiếu là bị chặn.
+            return len(rows) - 1, 0
+
+        async def reconcile_after_failure(self, run_id, source_count, upserted_count):
+            return "marked_failed", {"id": run_id, "status": "failed"}
+
+    api = _ApiThieu()
+
+    async def _hai_hang(academic_year, **kwargs):
+        return [_row(qlts_profile_id=i) for i in (1, 2)]
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _hai_hang)
+    monkeypatch.setattr(sync_module, "DormApi", api)
+
+    assert await main(["--academic-year", "2026", "--apply"]) == 1
+    assert api.finalize_args is None  # chưa từng tới bước hạ cờ
+
+
+async def test_raw_count_is_stamped_when_the_run_opens(monkeypatch):
+    """``raw_count`` ghi lúc MỞ lượt, không đợi lúc đóng.
+
+    Để trống tới bước cuối nghĩa là đúng những lượt cần đối soát nhất — lượt
+    hỏng giữa chừng — lại là những lượt không có con số đó.
+    """
+    _set_target_env(monkeypatch)
+    monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
+    api = _ApiGhiNhan()
+
+    async def _bon_hang(academic_year, **kwargs):
+        return [_row(qlts_profile_id=i) for i in range(4)]
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _bon_hang)
+    monkeypatch.setattr(sync_module, "DormApi", api)
+
+    await main(["--academic-year", "2026", "--apply"])
+
+    assert api.raw_count == 4
 
 
 async def test_preview_counts_follow_the_contract(monkeypatch, capsys):

@@ -430,7 +430,9 @@ class DormApi:
             f"đúng lượt cũ thì chạy lại với --client-token {client_token}."
         )
 
-    async def open_sync_run(self, academic_year: int, client_token: str) -> int:
+    async def open_sync_run(
+        self, academic_year: int, client_token: str, raw_count: int
+    ) -> int:
         """Mở một lượt đồng bộ. Chịu được ca phản hồi bị mất.
 
         ⚠️ Bước này CŨNG có ca mất ACK, và nó là ca tệ nhất: hàng ``running`` đã
@@ -452,6 +454,11 @@ class DormApi:
             "academic_year": academic_year,
             "status": "running",
             "note": _client_note(client_token),
+            # Ghi NGAY khi mở lượt, không đợi lúc đóng: một lượt hỏng giữa
+            # chừng vẫn phải trả lời được "nguồn có bao nhiêu". Để trống tới
+            # bước cuối nghĩa là đúng những lượt cần đối soát nhất lại là những
+            # lượt không có con số đó.
+            "raw_count": raw_count,
         }
 
         try:
@@ -616,17 +623,38 @@ class DormApi:
         # thái đã đổi giữa lúc đọc và lúc ghi — không được tuyên bố bừa.
         return ("marked_failed" if changed == 1 else "unknown"), run
 
-    async def upsert_students(self, rows: List[Dict[str, Any]]) -> None:
+    async def upsert_students(
+        self, run_id: int, rows: List[Dict[str, Any]]
+    ) -> Tuple[int, int]:
+        """Ghi một lô qua RPC. Trả ``(đã ghi, bị chặn)``.
+
+        ⚠️ KHÔNG POST thẳng ``/students`` nữa. Ghi thẳng bảng có hai lỗ mà chỉ
+        database bịt được: danh sách chặn tái tạo phải kiểm trong cùng
+        transaction với INSERT, và lời gọi phải bị ràng vào một lượt CÒN SỐNG
+        để một tiến trình đã bị đánh dấu hỏng không ghi đè dấu lượt của tiến
+        trình đang chạy.
+
+        ⚠️ Người gọi PHẢI kiểm ``đã ghi + bị chặn == len(rows)``. Lệch nghĩa là
+        RPC bỏ sót hàng trong im lặng, và con số đó đi thẳng vào phép đối soát
+        ``raw = source + blocked`` ở bước đóng sổ.
+        """
         response = await self._client.post(
-            f"{self._base}/students",
-            headers={
-                **self._headers,
-                "Prefer": "resolution=merge-duplicates,return=minimal",
-            },
-            params={"on_conflict": "qlts_profile_id"},
-            json=rows,
+            f"{self._base}/rpc/upsert_students_batch",
+            headers=self._headers,
+            json={"p_run_id": run_id, "p_rows": rows},
         )
         self._raise_for_status(response, "Ghi danh sách học viên")
+
+        body = response.json()
+        # PostgREST trả `returns table (...)` dưới dạng mảng một phần tử.
+        row = body[0] if isinstance(body, list) and body else body
+        try:
+            return int(row["upserted"]), int(row["blocked"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "Ghi danh sách học viên: phản hồi không đọc được số liệu lô. "
+                "KHÔNG chạy tiếp — hai con số này quyết định bước hạ cờ."
+            ) from exc
 
     async def count_students(self, academic_year: int) -> Optional[int]:
         """Số học viên hệ KTX đang có cho năm học. ``None`` = không đếm được.
@@ -1103,7 +1131,9 @@ async def main(argv: Optional[List[str]] = None) -> int:
         print(f"  Dấu lượt chạy: {_client_note(client_token)}")
 
         try:
-            run_id = await api.open_sync_run(args.academic_year, client_token)
+            run_id = await api.open_sync_run(
+                args.academic_year, client_token, raw_count=len(rows)
+            )
         except RuntimeError as exc:
             # Chưa mở được lượt thì chưa có gì để dọn. In gọn thay vì ném
             # traceback: người vận hành cần biết PHẢI LÀM GÌ, không cần ngăn xếp.
@@ -1118,6 +1148,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
         synced_at = datetime.now(timezone.utc).isoformat()
 
         upserted = 0
+        blocked = 0
         try:
             for start in range(0, len(rows), args.batch_size):
                 # Dừng GIỮA hai lô, không dừng giữa một lô: mỗi lô là một lời
@@ -1128,11 +1159,30 @@ async def main(argv: Optional[List[str]] = None) -> int:
                     )
 
                 batch = rows[start : start + args.batch_size]
-                await api.upsert_students(
-                    [build_student_payload(r, run_id, synced_at) for r in batch]
+                da_ghi, bi_chan = await api.upsert_students(
+                    run_id,
+                    [build_student_payload(r, run_id, synced_at) for r in batch],
                 )
-                upserted += len(batch)
-                log.info("dorm_sync_batch_done", upserted=upserted, total=len(rows))
+
+                # ⚠️ Đối soát TỪNG LÔ, không đợi tới cuối. Lệch nghĩa là RPC bỏ
+                # sót hàng trong im lặng — và hai con số này đi thẳng vào phép
+                # kiểm ``raw = source + blocked`` ở bước hạ cờ, nên phát hiện
+                # muộn đồng nghĩa với hạ cờ theo một con số sai.
+                if da_ghi + bi_chan != len(batch):
+                    raise RuntimeError(
+                        f"Lô {start // args.batch_size + 1}: gửi {len(batch)} hàng "
+                        f"nhưng database báo ghi {da_ghi} + chặn {bi_chan}. "
+                        "Dừng trước khi hạ cờ."
+                    )
+
+                upserted += da_ghi
+                blocked += bi_chan
+                log.info(
+                    "dorm_sync_batch_done",
+                    upserted=upserted,
+                    blocked=blocked,
+                    total=len(rows),
+                )
 
             # ⚠️ Kiểm LẠI ngay trước bước phá huỷ. Vòng lặp chỉ nhìn cờ ở ĐẦU mỗi
             # lô, nên hai ca đi thẳng tới đây mà không qua lần kiểm nào: tín hiệu
@@ -1147,8 +1197,14 @@ async def main(argv: Optional[List[str]] = None) -> int:
             # CHỈ tới đây — sau khi TOÀN BỘ nguồn đã ghi xong — mới được hạ cờ.
             # Hạ cờ và đóng lượt đi cùng nhau trong một transaction phía database
             # (xem `finalize_sync_run`), nên không còn khoảng trống ở giữa.
+            # ⚠️ ``source_count`` là EFFECTIVE total — số hàng thực sự phải ghi
+            # sau khi trừ những hàng bị chặn tái tạo — KHÔNG phải số hàng nguồn.
+            # Truyền ``len(rows)`` vào đây khi có dù chỉ một hàng bị chặn sẽ làm
+            # guard "chưa ghi hết nguồn" phía database từ chối hạ cờ, và thông
+            # điệp lúc đó nói về một sự cố không có thật.
+            effective = len(rows) - blocked
             deactivated = await api.finalize_sync_run(
-                run_id, source_count=len(rows), upserted_count=upserted
+                run_id, source_count=effective, upserted_count=upserted
             )
 
         # ⚠️ ``BaseException``, không phải ``Exception``. ``KeyboardInterrupt``,
@@ -1216,6 +1272,8 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
     print("── ĐÃ ĐỒNG BỘ ──────────────────────────────────────")
     print(f"  Năm học            : {args.academic_year}")
+    print(f"  Nguồn (raw)        : {len(rows)}")
+    print(f"  Bị chặn tái tạo    : {blocked}")
     print(f"  Ghi/cập nhật       : {upserted}")
     print(f"  Hạ cờ đủ điều kiện : {deactivated}")
     return 0
