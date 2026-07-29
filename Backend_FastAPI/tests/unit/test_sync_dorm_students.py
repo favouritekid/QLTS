@@ -359,6 +359,47 @@ class _RecordingClient:
         )
 
 
+class _ClientLocTheoParams(_RecordingClient):
+    """Fake LỌC theo ``params`` thật, thay vì trả sẵn kết quả đã mô phỏng.
+
+    ⚠️ Đây là khác biệt giữa một test chứng minh được điều gì và một test
+    không. ``_RecordingClient`` trả cùng một ``_FakeResponse`` bất kể params,
+    nên khi test dựng sẵn ``payload=[]`` kèm chú thích "server đã lọc status",
+    chính nó đã mô phỏng luôn cái đang cần chứng minh: bỏ hẳn
+    ``status=eq.running`` khỏi client thì fake vẫn trả rỗng, và test vẫn xanh.
+
+    Fake này giữ một tập hàng và tự áp bộ lọc, nên câu hỏi "client có gửi đúng
+    bộ lọc không" mới có chỗ để trả lời sai.
+    """
+
+    def __init__(self, hang, *, post_response=None, post_error=None):
+        super().__init__(post_response=post_response, post_error=post_error)
+        self._hang = hang
+
+    async def get(self, url, headers=None, params=None):
+        self.calls.append(
+            {"method": "GET", "url": url, "params": params, "headers": headers}
+        )
+        khop = [h for h in self._hang if self._khop(h, params or {})]
+        return _FakeResponse(payload=khop)
+
+    @staticmethod
+    def _khop(hang, params) -> bool:
+        for khoa, gia in params.items():
+            # Không phải bộ lọc — chúng chỉ định hình dạng phản hồi.
+            if khoa in {"select", "limit", "order", "offset"}:
+                continue
+            if not isinstance(gia, str):
+                continue
+            if gia.startswith("eq."):
+                if str(hang.get(khoa)) != gia[3:]:
+                    return False
+            elif gia == "is.null":
+                if hang.get(khoa) is not None:
+                    return False
+        return True
+
+
 def _api_with(client) -> DormApi:
     # Loopback: các test dưới đây không đi ra mạng (client là đồ giả), và
     # loopback được miễn CẢ hàng rào đường truyền lẫn hàng rào project ref —
@@ -761,10 +802,22 @@ async def test_open_run_does_not_recover_a_historical_failed_row():
     Nếu lookup nhặt hàng ``failed`` cũ cùng dấu, script chạy tiếp với id sai và
     bỏ lại hàng running thật — năm học vẫn bị khoá, mà nhật ký thì báo đã phục
     hồi xong.
+
+    ⚠️ Fake ở đây LỌC theo params thật. Bản trước dựng sẵn ``payload=[]`` kèm
+    chú thích "server đã lọc status" — tức nó tự mô phỏng luôn điều cần chứng
+    minh, và gỡ hẳn ``status=eq.running`` khỏi client cũng không làm nó đỏ.
     """
-    client = _RecordingClient(
-        # Server đã lọc status nên trả rỗng; hàng failed id 41 không lọt qua.
-        _FakeResponse(payload=[]),
+    client = _ClientLocTheoParams(
+        [
+            # Hàng LỊCH SỬ: đúng dấu, đúng năm, nhưng đã `failed`. Chỉ bộ lọc
+            # `status=eq.running` mới loại nó ra.
+            {
+                "id": 41,
+                "academic_year": 2026,
+                "note": "client:tok",
+                "status": "failed",
+            }
+        ],
         post_response=_FakeResponse(status_code=502, payload=[]),
     )
 
@@ -804,15 +857,29 @@ async def test_find_run_by_token_reports_unknown_on_transport_error():
     assert (outcome, run) == ("unknown", None)
 
 
-def test_open_run_stamps_the_client_token_in_the_insert():
+async def test_open_run_stamps_the_client_token_in_the_insert():
     """Dấu phải nằm NGAY trong câu INSERT, không phải ghi bổ sung sau đó.
 
     Ghi sau là để lại đúng khoảng trống mà cơ chế này sinh ra để bịt: hàng tạo
     xong, chưa kịp đóng dấu, phản hồi mất — không nhận lại được nữa.
-    """
-    from app.scripts.sync_dorm_students import _client_note
 
-    assert _client_note("abc") == "client:abc"
+    ⚠️ Bản trước chỉ assert ``_client_note("abc") == "client:abc"``, tức nó
+    kiểm một hàm thuần và KHÔNG chạm tới câu INSERT. Gỡ hẳn ``note`` khỏi
+    payload thì nó vẫn xanh — đúng thứ nó khai là đang canh.
+    """
+    client = _RecordingClient(
+        post_response=_FakeResponse(status_code=201, payload=[{"id": 7}])
+    )
+
+    assert await _api_with(client).open_sync_run(2026, "abc", raw_count=5) == 7
+
+    insert = client.calls[0]
+    assert insert["method"] == "POST"
+    assert insert["url"].endswith("/sync_runs")
+    assert insert["json"]["note"] == "client:abc"
+    # `raw_count` cũng phải nằm ngay trong INSERT: một lượt hỏng giữa chừng vẫn
+    # phải trả lời được "nguồn có bao nhiêu".
+    assert insert["json"]["raw_count"] == 5
 
 
 # ---------------------------------------------------------------------------
@@ -1347,6 +1414,10 @@ async def test_interrupt_mid_write_still_closes_the_run(monkeypatch):
 
     assert await main(["--academic-year", "2026", "--apply"]) == 1
     assert da_doi_soat["run_id"] == 77
+    # Khẳng định PHỦ ĐỊNH: hạ cờ TUYỆT ĐỐI không được chạy khi lô ghi đứt giữa
+    # chừng. Thiếu dòng này, test chỉ chứng minh "có đóng sổ" — mà một lượt vừa
+    # hạ cờ cả cohort rồi mới đóng sổ cũng thoả đúng điều đó.
+    assert "đã_hạ_cờ" not in da_doi_soat
     # Bất biến CHÍNH của ca này: Ctrl-C giữa lúc ghi thì TUYỆT ĐỐI không được
     # hạ cờ. Trước đây `_FakeApi` không có `finalize_sync_run`, nên nếu code
     # hồi quy và gọi nó thì `AttributeError` bị `except BaseException` nuốt —
