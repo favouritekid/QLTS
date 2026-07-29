@@ -212,10 +212,11 @@ _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 def assert_transport_is_encrypted(base_url: str) -> None:
     """Từ chối đích không mã hoá TRƯỚC khi bí mật nào rời khỏi máy.
 
-    ⚠️ Mọi lời gọi ở đây mang khoá secret của hệ KTX trong HAI header
-    (``apikey`` và ``Authorization``), và khi ``--apply`` thì thân request còn
-    chứa họ tên người học. Qua ``http://`` thì cả hai đi ở dạng đọc được trên
-    đường truyền — một cấu hình gõ nhầm scheme là đủ để rò khoá ghi toàn hệ.
+    ⚠️ Mọi lời gọi ở đây mang khoá secret của hệ KTX trong header ``apikey``
+    (và thêm ``Authorization`` nếu khoá là JWT legacy — xem ``DormApi``), còn
+    khi ``--apply`` thì thân request chứa họ tên và số điện thoại người học.
+    Qua ``http://`` thì tất cả đi ở dạng đọc được trên đường truyền — một cấu
+    hình gõ nhầm scheme là đủ để rò khoá ghi toàn hệ.
 
     Loopback được miễn: đó là Supabase local lúc phát triển, gói tin không rời
     khỏi máy.
