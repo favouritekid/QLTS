@@ -92,23 +92,22 @@ def _choices_eager_load_options() -> tuple:
 # Học phí HK1 aggregate (Admission List v2)
 # =============================================================================
 # Dùng chung cho: cột tiền "Đã đóng / Còn lại" + filter "Quá hạn" + sort "Còn lại".
-# HK1-predicate mirror ``fee_calculation_service.is_hk1_settled_fee``:
-#   tuition + semester_no == 1 + status != cancelled.
-# ⚠️ Bản SQL SONG SINH thứ hai: ``services/assignment_service._hk1_fee_exists``
-# (giảm trừ tải học phí khỏi phân công lead) — correlate tới Lead thay vì
-# AdmissionProfile. Đổi phạm vi HK1 ở đây thì PHẢI sửa cả bên đó, nếu không bảng
-# "điểm bận" và danh sách hồ sơ sẽ nói hai con số khác nhau về cùng một hồ sơ.
+# Phạm vi HK1 lấy từ ``constants/hk1_fee`` — bản SQL song sinh
+# ``services/assignment_service._hk1_fee_exists`` (giảm trừ tải học phí khỏi phân
+# công lead, correlate tới Lead thay vì AdmissionProfile) đã dùng chung cùng hàm,
+# nên hai nơi này không còn lệch nhau được.
+# ⚠️ ĐÓ LÀ 3 TRONG 8 call site, KHÔNG phải toàn hệ thống: báo cáo, export tổng
+# hợp và ``admission_service`` vẫn viết tay vị từ này. Đổi phạm vi ở
+# ``constants/hk1_fee`` thì VẪN PHẢI rà tay các nơi đó — danh sách đầy đủ nằm
+# trong docstring của chính file hằng số.
+# ⚠️ Dùng tầng SCOPE (không xét đã thu tiền): các subquery cộng tiền bên dưới
+# (Σ paid / Σ remaining / Σ final) sẽ SAI nếu vị từ này lọc ``paid_amount > 0``.
 # Correlate tới AdmissionProfile (outer) để chạy như scalar subquery / EXISTS
 # trong query list — KHÔNG N+1 (aggregate, không phải relationship eager-load).
 def _hk1_fee_predicate():
     """Correlated predicate: fee HK1 của AdmissionProfile (outer)."""
-    from app.models.finance import Fee, FeeStatusEnum
-    return and_(
-        Fee.admission_profile_id == models.AdmissionProfile.id,
-        Fee.fee_type == "tuition",
-        Fee.semester_no == 1,
-        Fee.status != FeeStatusEnum.cancelled,
-    )
+    from app.constants.hk1_fee import hk1_fee_scope_conditions
+    return and_(*hk1_fee_scope_conditions(models.AdmissionProfile.id))
 
 
 def _hk1_paid_subquery():
