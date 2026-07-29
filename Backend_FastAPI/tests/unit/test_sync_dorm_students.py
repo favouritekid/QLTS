@@ -14,9 +14,10 @@ import pytest
 from app.scripts import sync_dorm_students as sync_module
 from app.scripts.sync_dorm_students import (
     DormApi,
-    assert_source_env_matches,
+    assert_source_database_matches,
     assert_transport_is_encrypted,
     build_student_payload,
+    database_identity_from_url,
     main,
     normalize_gender,
     parse_args,
@@ -613,43 +614,266 @@ def test_https_and_loopback_are_allowed(url):
 # ---------------------------------------------------------------------------
 
 
-def _set_target_env(monkeypatch, *, app_env="test", source_env="test"):
-    monkeypatch.setenv("DORM_SUPABASE_URL", "https://ktx.test")
+_DEV_DB_URL = "postgresql+asyncpg://qlts:mat-khau@postgres:5432/qlts"
+_PROD_DB_IDENTITY = "postgres:5432/qlts_production"
+
+
+def _set_target_env(
+    monkeypatch,
+    *,
+    source_db="postgres:5432/qlts",
+    system_id="7000000000000000001",
+    target_ref="ktx",
+):
+    monkeypatch.setenv("DORM_SUPABASE_URL", f"https://{target_ref}.supabase.co")
     monkeypatch.setenv("DORM_SUPABASE_SECRET_KEY", "khoa-gia")
-    monkeypatch.setenv("APP_ENV", app_env)
-    monkeypatch.setenv("DORM_SYNC_SOURCE_ENV", source_env)
+    monkeypatch.setenv("DORM_SYNC_SOURCE_DB", source_db)
+    monkeypatch.setenv("DORM_SYNC_SOURCE_SYSTEM_ID", system_id)
+    monkeypatch.setenv("DORM_SYNC_TARGET_PROJECT_REF", target_ref)
+    # Mặc định cho nguồn KHỚP khai báo, để các test về nhánh khác không phải
+    # quan tâm tới hàng rào. Test nào cần ca lệch thì gọi `_patch_database_url`
+    # sau lời gọi này để ghi đè.
+    _patch_database_url(monkeypatch, f"postgresql+asyncpg://u:p@{source_db}")
 
 
-def test_source_env_mismatch_is_refused(monkeypatch):
-    """Nguồn một môi trường, đích một môi trường khác = dừng.
+def _patch_database_url(monkeypatch, url=_DEV_DB_URL):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "DATABASE_URL", url, raising=False)
+
+
+@pytest.mark.parametrize(
+    "url,mong_doi",
+    [
+        (_DEV_DB_URL, "postgres:5432/qlts"),
+        # Không có cổng => mặc định 5432, không phải chuỗi rỗng.
+        (
+            "postgresql+asyncpg://u:p@db.internal/qlts_production",
+            "db.internal:5432/qlts_production",
+        ),
+        # Mật khẩu chứa ký tự mã hoá URL và có query string: hai chỗ mọi parser
+        # viết tay đều sai, mà sai ở đây nghĩa là hàng rào so nhầm.
+        (
+            "postgresql+asyncpg://u:p%40ss%3Aword@postgres:6543/qlts?ssl=require",
+            "postgres:6543/qlts",
+        ),
+    ],
+)
+def test_database_identity_survives_real_url_shapes(url, mong_doi):
+    assert database_identity_from_url(url) == mong_doi
+
+
+def test_source_database_mismatch_is_refused(monkeypatch):
+    """Đọc database này mà đích khai database khác = dừng.
 
     Đây là ca nguy hiểm nhất của công cụ: chạy stack DEV với file secret của KTX
-    THẬT sẽ ghi đè danh sách thật rồi hạ cờ mọi người không có trong nguồn dev.
+    THẬT sẽ ghi đè danh sách thật rồi hạ cờ mọi người không có trong nguồn dev —
+    và lượt đó vẫn kết thúc ``completed``, thoát 0.
     """
-    _set_target_env(monkeypatch, app_env="development", source_env="production")
+    _set_target_env(monkeypatch, source_db=_PROD_DB_IDENTITY)
+    _patch_database_url(monkeypatch)  # thực tế đang đọc dev
 
     with pytest.raises(SystemExit) as exc:
-        assert_source_env_matches()
+        assert_source_database_matches()
 
     assert exc.value.code == 2
 
 
-def test_missing_source_env_is_refused(monkeypatch):
-    """Thiếu khai báo cũng là dừng.
+@pytest.mark.parametrize("thieu", ["DORM_SYNC_SOURCE_DB", "DORM_SYNC_SOURCE_SYSTEM_ID"])
+def test_missing_source_declaration_is_refused(monkeypatch, thieu):
+    """Thiếu khai báo nào cũng là dừng.
 
-    Một hàng rào tự đoán giá trị khi thiếu cấu hình thì không phải hàng rào.
+    ``SYSTEM_ID`` chỉ dùng ở lớp ba (hỏi thẳng database), nhưng phải đòi ngay từ
+    đây: cho chạy tiếp khi thiếu nó nghĩa là lớp mạnh nhất im lặng không chạy,
+    và không có gì trên màn hình nói điều đó.
     """
     _set_target_env(monkeypatch)
-    monkeypatch.delenv("DORM_SYNC_SOURCE_ENV")
+    _patch_database_url(monkeypatch)
+    monkeypatch.delenv(thieu)
 
     with pytest.raises(SystemExit):
-        assert_source_env_matches()
+        assert_source_database_matches()
 
 
-def test_matching_source_env_passes(monkeypatch):
-    _set_target_env(monkeypatch, app_env="production", source_env="production")
+def test_matching_source_database_passes(monkeypatch):
+    _set_target_env(monkeypatch, source_db="postgres:5432/qlts")
+    _patch_database_url(monkeypatch)
 
-    assert_source_env_matches() is None
+    assert assert_source_database_matches() is None
+
+
+class _FakeSession:
+    """Session giả trả lời hai câu hỏi định danh, hoặc ném ở câu thứ hai."""
+
+    def __init__(
+        self, *, dbname="qlts", system_id="7000000000000000001", no_catalog=False
+    ):
+        self._dbname = dbname
+        self._system_id = system_id
+        self._no_catalog = no_catalog
+        self.executed = []
+
+    async def execute(self, stmt):
+        sql = str(stmt)
+        self.executed.append(sql)
+
+        class _Result:
+            def __init__(self, value):
+                self._value = value
+
+            def scalar(self):
+                return self._value
+
+            def all(self):
+                return []
+
+        if "current_database" in sql:
+            return _Result(self._dbname)
+        if "pg_control_system" in sql:
+            if self._no_catalog:
+                raise RuntimeError("permission denied for function pg_control_system")
+            return _Result(self._system_id)
+        return _Result(None)
+
+
+async def test_live_source_accepts_the_declared_cluster(monkeypatch):
+    from app.scripts.sync_dorm_students import assert_live_source_matches
+
+    _set_target_env(monkeypatch, source_db="postgres:5432/qlts")
+
+    assert await assert_live_source_matches(_FakeSession()) is None
+
+
+async def test_live_source_refuses_a_different_database_name(monkeypatch):
+    """Tên trong URL có thể bị pooler viết lại — hỏi thẳng mới biết thật."""
+    from app.scripts.sync_dorm_students import assert_live_source_matches
+
+    _set_target_env(monkeypatch, source_db=_PROD_DB_IDENTITY)
+
+    with pytest.raises(SystemExit) as exc:
+        await assert_live_source_matches(_FakeSession(dbname="qlts"))
+
+    assert exc.value.code == 2
+
+
+async def test_live_source_refuses_a_clone_with_the_same_name(monkeypatch):
+    """Ca mà hai lớp đầu KHÔNG bắt được: bản sao mang đúng tên database.
+
+    Recipe kéo prod về dev giữ nguyên tên, nên ``current_database()`` khớp.
+    ``system_identifier`` sinh lúc ``initdb`` và không đổi qua restore logic —
+    đây là thứ duy nhất phân biệt được hệ thật với bản sao của nó.
+    """
+    from app.scripts.sync_dorm_students import assert_live_source_matches
+
+    _set_target_env(
+        monkeypatch, source_db="postgres:5432/qlts", system_id="7000000000000000001"
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        await assert_live_source_matches(
+            _FakeSession(dbname="qlts", system_id="7999999999999999999")
+        )
+
+    assert exc.value.code == 2
+
+
+async def test_live_source_stops_when_the_cluster_id_cannot_be_read(monkeypatch):
+    """Không đọc được ``system_identifier`` là DỪNG, không phải bỏ qua.
+
+    Một hàng rào tự tắt khi gặp trở ngại thì không phải hàng rào — và ca "thiếu
+    quyền đọc catalog" trùng đúng với ca "đây không phải cluster ta nghĩ".
+    """
+    from app.scripts.sync_dorm_students import assert_live_source_matches
+
+    _set_target_env(monkeypatch, source_db="postgres:5432/qlts")
+
+    with pytest.raises(SystemExit) as exc:
+        await assert_live_source_matches(_FakeSession(no_catalog=True))
+
+    assert exc.value.code == 2
+
+
+async def test_dry_run_does_not_verify_the_live_source(monkeypatch):
+    """Xem trước chỉ-đọc KHÔNG chạm hai lớp hỏi database.
+
+    Bắt một lần xem trước phải khai đủ cấu hình nguồn chỉ khiến người ta bỏ qua
+    bước xem trước — mà đó chính là bước chặn được lần ghi sai.
+    """
+    session = _FakeSession()
+    goi = []
+
+    async def _theo_doi(s):
+        goi.append(s)
+
+    monkeypatch.setattr(sync_module, "assert_live_source_matches", _theo_doi)
+
+    class _CM:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(sync_module, "AsyncSessionLocal", lambda: _CM())
+    monkeypatch.setattr(
+        sync_module, "select_paid_hk1_cohort", lambda year: "SELECT-GIA"
+    )
+
+    await sync_module.fetch_cohort(2026, verify_source=False)
+    assert goi == []
+
+    await sync_module.fetch_cohort(2026, verify_source=True)
+    assert len(goi) == 1
+
+
+async def test_read_only_transaction_is_opened_before_reading(monkeypatch):
+    """``SET TRANSACTION READ ONLY`` chống lưng cho tuyên bố "MỘT CHIỀU, CHỈ ĐỌC".
+
+    Không có nó thì một lỗi lập trình làm lọt câu ghi sẽ sửa thẳng dữ liệu tuyển
+    sinh, và không lớp nào phía dưới chặn lại.
+    """
+    session = _FakeSession()
+
+    class _CM:
+        async def __aenter__(self):
+            return session
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(sync_module, "AsyncSessionLocal", lambda: _CM())
+    monkeypatch.setattr(
+        sync_module, "select_paid_hk1_cohort", lambda year: "SELECT-GIA"
+    )
+
+    await sync_module.fetch_cohort(2026)
+
+    assert "SET TRANSACTION READ ONLY" in session.executed[0]
+
+
+def test_source_guard_compares_database_not_app_env(monkeypatch):
+    """Kiểm NGƯỢC: ``APP_ENV`` không còn ảnh hưởng gì tới hàng rào.
+
+    Bản trước so ``APP_ENV`` với một nhãn khai trong file secret — mà chính file
+    secret đó được nạp bằng ``--env-from-file`` nên nó mang được luôn
+    ``APP_ENV``. Hàng rào khi ấy so hai giá trị đến từ cùng một file.
+
+    Ca dưới đây dựng đúng cái bẫy đó: nhãn nói 'production' ở cả hai đầu, nhưng
+    database thật là dev. Hàng rào cũ cho qua; hàng rào mới phải chặn.
+    """
+    _set_target_env(monkeypatch, source_db=_PROD_DB_IDENTITY)
+    _patch_database_url(monkeypatch)  # dev
+    monkeypatch.setenv("APP_ENV", "production")
+
+    with pytest.raises(SystemExit):
+        assert_source_database_matches()
+
+    # Và chiều ngược lại: database khớp thì ``APP_ENV`` lệch cũng không chặn,
+    # vì nhãn không phải thứ quyết định script đọc dữ liệu ở đâu.
+    _set_target_env(monkeypatch, source_db="postgres:5432/qlts")
+    monkeypatch.setenv("APP_ENV", "development")
+
+    assert assert_source_database_matches() is None
 
 
 async def test_apply_refuses_an_empty_cohort(monkeypatch):
@@ -663,7 +887,7 @@ async def test_apply_refuses_an_empty_cohort(monkeypatch):
     _set_target_env(monkeypatch)
     monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
 
-    async def _empty_cohort(academic_year):
+    async def _empty_cohort(academic_year, **kwargs):
         return []
 
     def _no_network(*args, **kwargs):
@@ -693,7 +917,7 @@ async def test_empty_cohort_proceeds_when_opted_in(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
-    async def _empty_cohort(academic_year):
+    async def _empty_cohort(academic_year, **kwargs):
         return []
 
     monkeypatch.setattr(sync_module, "fetch_cohort", _empty_cohort)
@@ -736,7 +960,7 @@ async def test_interrupt_mid_write_still_closes_the_run(monkeypatch):
             da_doi_soat["run_id"] = run_id
             return "marked_failed", {"id": run_id, "status": "failed"}
 
-    async def _one_row(academic_year):
+    async def _one_row(academic_year, **kwargs):
         return [_row()]
 
     monkeypatch.setattr(sync_module, "fetch_cohort", _one_row)
@@ -783,7 +1007,7 @@ async def test_stop_request_blocks_the_finalizer_when_the_loop_never_ran(monkeyp
             da_doi_soat["run_id"] = run_id
             return "marked_failed", {"id": run_id, "status": "failed"}
 
-    async def _empty_cohort(academic_year):
+    async def _empty_cohort(academic_year, **kwargs):
         return []
 
     monkeypatch.setattr(sync_module, "fetch_cohort", _empty_cohort)
@@ -804,7 +1028,7 @@ async def test_plaintext_url_stops_before_any_request(monkeypatch):
     monkeypatch.setenv("DORM_SUPABASE_URL", "http://ktx.supabase.co")
     monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
 
-    async def _one_row(academic_year):
+    async def _one_row(academic_year, **kwargs):
         return [_row()]
 
     monkeypatch.setattr(sync_module, "fetch_cohort", _one_row)
@@ -812,15 +1036,17 @@ async def test_plaintext_url_stops_before_any_request(monkeypatch):
     assert await main(["--academic-year", "2026", "--apply"]) == 2
 
 
-async def test_dry_run_never_needs_the_env_guard(monkeypatch):
-    """Xem trước chỉ-đọc không đòi khai báo môi trường.
+async def test_dry_run_never_needs_the_source_declaration(monkeypatch):
+    """Xem trước chỉ-đọc không đòi khai báo cấu hình nguồn.
 
     Bắt nó khai báo chỉ khiến người ta bỏ qua bước xem trước — và bước xem
     trước chính là thứ chặn được lần ghi sai.
     """
-    monkeypatch.setenv("DORM_SUPABASE_URL", "https://ktx.test")
+    monkeypatch.setenv("DORM_SUPABASE_URL", "https://ktx.supabase.co")
     monkeypatch.setenv("DORM_SUPABASE_SECRET_KEY", "khoa-gia")
-    monkeypatch.delenv("DORM_SYNC_SOURCE_ENV", raising=False)
+    monkeypatch.setenv("DORM_SYNC_TARGET_PROJECT_REF", "ktx")
+    monkeypatch.delenv("DORM_SYNC_SOURCE_DB", raising=False)
+    monkeypatch.delenv("DORM_SYNC_SOURCE_SYSTEM_ID", raising=False)
 
     class _FakeApi:
         def __init__(self, *args, **kwargs):
@@ -835,7 +1061,7 @@ async def test_dry_run_never_needs_the_env_guard(monkeypatch):
         async def count_students(self, academic_year):
             return 0
 
-    async def _empty_cohort(academic_year):
+    async def _empty_cohort(academic_year, **kwargs):
         return []
 
     monkeypatch.setattr(sync_module, "fetch_cohort", _empty_cohort)

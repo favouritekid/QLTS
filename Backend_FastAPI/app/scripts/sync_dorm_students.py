@@ -30,13 +30,30 @@ tunnel production đồng nghĩa với việc nâng cấp lược đồ database
 đang chạy — chỉ chạy qua bind-mount trên máy quản trị.
 
 Biến môi trường (KHÔNG có giá trị mặc định — thiếu là dừng):
-    DORM_SUPABASE_URL         URL project Supabase của hệ KTX
-    DORM_SUPABASE_SECRET_KEY  khoá secret; chỉ sống trên máy quản trị
-    DORM_SYNC_SOURCE_ENV      môi trường nguồn mà đích này chấp nhận
-                              (``production`` | ``development`` | …). Phải khớp
-                              ``APP_ENV`` của stack đang chạy — xem
-                              ``assert_source_env_matches``. Chỉ bắt buộc khi
-                              ``--apply``.
+    DORM_SUPABASE_URL          URL project Supabase của hệ KTX
+    DORM_SUPABASE_SECRET_KEY   khoá secret; chỉ sống trên máy quản trị
+
+    Ba biến dưới đây định danh NGUỒN — xem ``assert_source_database_matches``.
+    Chỉ bắt buộc khi ``--apply``:
+
+    DORM_SYNC_SOURCE_DB        database nguồn mà đích này chấp nhận, dạng
+                               ``host:port/dbname``
+                               (ví dụ ``postgres:5432/qlts_production``)
+    DORM_SYNC_SOURCE_SYSTEM_ID ``system_identifier`` của cluster nguồn. Lấy bằng:
+                               ``select system_identifier from pg_control_system()``
+
+    Biến dưới đây định danh ĐÍCH — xem ``assert_target_project_matches``.
+    Bắt buộc với mọi đích không phải loopback:
+
+    DORM_SYNC_TARGET_PROJECT_REF  project ref của Supabase nhận dữ liệu; phải
+                               khớp hostname ``<ref>.supabase.co`` của
+                               ``DORM_SUPABASE_URL``
+
+⚠️ ``DORM_SYNC_SOURCE_ENV`` ĐÃ BỎ. Nó so ``APP_ENV`` với một nhãn khai trong
+file secret — mà chính file secret ấy được nạp bằng ``--env-from-file`` nên nó
+mang được luôn ``APP_ENV``. Hàng rào khi đó so hai giá trị đến từ cùng một
+nguồn, và tự vô hiệu đúng ở ca nó sinh ra để chặn: chạy stack DEV với file
+secret của KTX THẬT.
 """
 
 from __future__ import annotations
@@ -613,12 +630,20 @@ class DormApi:
         ) from last_error
 
 
-async def fetch_cohort(academic_year: int) -> List[Any]:
-    """Đọc cohort từ QLTS trong transaction CHỈ ĐỌC."""
+async def fetch_cohort(academic_year: int, *, verify_source: bool = False) -> List[Any]:
+    """Đọc cohort từ QLTS trong transaction CHỈ ĐỌC.
+
+    Args:
+        verify_source: hỏi database xem nó là ai TRƯỚC khi đọc hàng nào. Bật khi
+            ``--apply``; một lần xem trước chỉ-đọc không cần khai báo cấu hình
+            nguồn, và bắt nó khai chỉ khiến người ta bỏ qua bước xem trước.
+    """
     async with AsyncSessionLocal() as session:
         # Chốt chặn ở tầng database: kể cả khi có lỗi lập trình khiến một câu
         # ghi lọt vào, transaction sẽ từ chối thay vì sửa dữ liệu tuyển sinh.
         await session.execute(text("SET TRANSACTION READ ONLY"))
+        if verify_source:
+            await assert_live_source_matches(session)
         result = await session.execute(select_paid_hk1_cohort(academic_year))
         return result.all()
 
@@ -633,29 +658,113 @@ def _require_env(name: str) -> str:
     return value
 
 
-def assert_source_env_matches() -> None:
-    """Hai đầu phải cùng một môi trường, nếu không thì dừng.
+def database_identity_from_url(database_url: str) -> str:
+    """``host:port/dbname`` rút từ chuỗi kết nối, dùng để đối chiếu khai báo.
 
-    ⚠️ Đây là hàng rào cho ca nguy hiểm nhất của công cụ này: nguồn trỏ một
-    môi trường còn đích trỏ môi trường khác. Chạy stack DEV (cohort vài chục
-    hồ sơ thử) với file secret của KTX THẬT sẽ ghi đè danh sách thật rồi hạ cờ
-    toàn bộ những ai không có trong nguồn dev — mà lượt đó vẫn kết thúc
-    ``completed`` và thoát 0.
-
-    ``APP_ENV`` mô tả NGUỒN (do stack backend đang chạy quyết định);
-    ``DORM_SYNC_SOURCE_ENV`` mô tả nguồn mà ĐÍCH chấp nhận và nằm trong chính
-    file secret của hệ KTX. Khớp nhau mới đi tiếp. Không có mặc định: thiếu
-    biến là dừng, vì một hàng rào tự đoán giá trị thì không phải hàng rào.
+    Dùng ``make_url`` của SQLAlchemy thay vì tự tách chuỗi: ``DATABASE_URL``
+    thật có driver (``postgresql+asyncpg``), mật khẩu chứa ký tự đã mã hoá URL,
+    và có thể kèm query string — mọi parser viết tay đều sai ở một trong ba chỗ
+    đó, và sai ở đây nghĩa là hàng rào so nhầm.
     """
-    app_env = os.environ.get("APP_ENV", "development").strip().lower()
-    expected = _require_env("DORM_SYNC_SOURCE_ENV").strip().lower()
+    from sqlalchemy.engine import make_url
 
-    if app_env != expected:
+    url = make_url(database_url)
+    host = (url.host or "").lower()
+    port = url.port or 5432
+    return f"{host}:{port}/{url.database or ''}"
+
+
+def assert_source_database_matches() -> None:
+    """Nguồn phải ĐÚNG DATABASE mà đích khai báo — không phải đúng cái nhãn.
+
+    ⚠️ Đây là hàng rào cho ca nguy hiểm nhất của công cụ: chạy stack DEV (cohort
+    vài chục hồ sơ thử) với file secret của KTX THẬT. Nó ghi đè danh sách thật
+    rồi hạ cờ toàn bộ những ai không có trong nguồn dev — mà lượt đó vẫn kết
+    thúc ``completed`` và thoát 0.
+
+    ⚠️ VÌ SAO KHÔNG SO ``APP_ENV`` NỮA. Bản trước so ``APP_ENV`` với
+    ``DORM_SYNC_SOURCE_ENV``. Cả hai là NHÃN, và file secret được nạp bằng
+    ``--env-from-file`` nên nó mang được luôn ``APP_ENV`` — hàng rào khi đó so
+    hai giá trị đến từ cùng một file, tức tự vô hiệu đúng ở ca nó sinh ra để
+    chặn. Thứ quyết định script đọc database nào là ``DATABASE_URL``.
+
+    Lớp thứ nhất (rẻ, chạy trước khi mở kết nối): so ``host:port/dbname``.
+    Hai lớp còn lại hỏi thẳng database — xem ``assert_live_source_matches``.
+    """
+    expected = _require_env("DORM_SYNC_SOURCE_DB").strip().lower()
+    # Bắt buộc khai từ đây, dù chỉ dùng ở lớp ba: thiếu nó mà vẫn chạy tiếp
+    # nghĩa là lớp mạnh nhất im lặng không chạy.
+    _require_env("DORM_SYNC_SOURCE_SYSTEM_ID")
+
+    from app.config import settings
+
+    actual = database_identity_from_url(settings.DATABASE_URL).lower()
+
+    if actual != expected:
         print(
-            f"✗ Từ chối ghi: nguồn QLTS đang ở môi trường '{app_env}' nhưng file "
-            f"cấu hình của hệ KTX khai báo DORM_SYNC_SOURCE_ENV='{expected}'.\n"
-            "  Hai đầu lệch nhau nghĩa là đang đẩy dữ liệu của môi trường này "
-            "sang hệ của môi trường khác.",
+            f"✗ Từ chối ghi: QLTS đang đọc database '{actual}' nhưng file cấu "
+            f"hình của hệ KTX khai báo DORM_SYNC_SOURCE_DB='{expected}'.\n"
+            "  Hai đầu lệch nhau nghĩa là đang đẩy dữ liệu của database này "
+            "sang hệ ký túc xá của database khác.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
+async def assert_live_source_matches(session: Any) -> None:
+    """Hỏi thẳng database: mày tên gì, và mày là cluster nào.
+
+    Chạy TRONG transaction chỉ-đọc đã mở, trước khi đọc hàng nào.
+
+    ⚠️ Vì sao cần cả hai câu hỏi:
+
+    * ``current_database()`` — chuỗi kết nối có thể bị pooler viết lại, có thể
+      kèm ``?options=``, nên tên trong URL chưa chắc là tên database thật đang
+      phục vụ. Câu này không bị chuỗi cấu hình đánh lừa.
+    * ``system_identifier`` — nhưng tên database TRÙNG NHAU là chuyện thường:
+      recipe kéo prod về dev vẫn giữ nguyên tên. ``system_identifier`` sinh lúc
+      ``initdb`` và KHÔNG đổi qua restore logic, nên nó là thứ duy nhất ở đây
+      chứng minh đang nói chuyện với ĐÚNG MÁY.
+
+    ⚠️ Đọc không được ``system_identifier`` là DỪNG, không phải bỏ qua. Một
+    hàng rào tự tắt khi gặp trở ngại thì không phải hàng rào — và ca "thiếu
+    quyền đọc catalog" trùng đúng với ca "đây không phải cluster ta nghĩ".
+    """
+    expected_db = _require_env("DORM_SYNC_SOURCE_DB").strip().lower()
+    expected_dbname = expected_db.rsplit("/", 1)[-1]
+    expected_system_id = _require_env("DORM_SYNC_SOURCE_SYSTEM_ID").strip()
+
+    actual_dbname = (await session.execute(text("select current_database()"))).scalar()
+    if (actual_dbname or "").strip().lower() != expected_dbname:
+        print(
+            f"✗ Từ chối ghi: database thật tên '{actual_dbname}' nhưng khai báo "
+            f"DORM_SYNC_SOURCE_DB trỏ '{expected_dbname}'.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    try:
+        actual_system_id = (
+            await session.execute(
+                text("select system_identifier from pg_control_system()")
+            )
+        ).scalar()
+    except Exception as exc:
+        print(
+            "✗ Từ chối ghi: không đọc được `system_identifier` của cluster "
+            f"({type(exc).__name__}). Đây là lớp duy nhất chứng minh đúng MÁY, "
+            "nên không đọc được thì dừng — không bỏ qua.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    if str(actual_system_id).strip() != expected_system_id:
+        print(
+            "✗ Từ chối ghi: cluster nguồn có system_identifier "
+            f"'{actual_system_id}' nhưng khai báo DORM_SYNC_SOURCE_SYSTEM_ID là "
+            f"'{expected_system_id}'.\n"
+            "  Tên database khớp mà cluster lệch = đang đọc một BẢN SAO, không "
+            "phải hệ thật.",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -774,11 +883,14 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
     if args.apply:
         # Chỉ ràng khi thực sự GHI: một lần xem trước chỉ-đọc không cần khai
-        # báo môi trường, và bắt nó khai báo chỉ khiến người ta bỏ qua bước xem.
-        assert_source_env_matches()
+        # báo cấu hình nguồn, và bắt nó khai báo chỉ khiến người ta bỏ qua bước
+        # xem trước — mà bước xem trước chính là thứ chặn được lần ghi sai.
+        assert_source_database_matches()
         _install_stop_handlers()
 
-    rows = await fetch_cohort(args.academic_year)
+    # Lớp 2 và 3 của hàng rào nguồn chạy TRONG transaction chỉ-đọc, trước khi
+    # đọc hàng nào — xem ``assert_live_source_matches``.
+    rows = await fetch_cohort(args.academic_year, verify_source=args.apply)
     # Chỉ log SỐ ĐẾM. Tên, số điện thoại, mã hồ sơ của người học không đi vào
     # log — log thường được gom về nơi khác và giữ lại lâu hơn ta nghĩ.
     #
