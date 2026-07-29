@@ -50,6 +50,7 @@ from app.utils.exceptions import (
     ConflictError,
 )
 from app.utils.admission_status import NON_PAYABLE_PROFILE_STATUSES
+from app.utils.refund_reference import build_refund_reference
 from app.config import settings
 
 log = structlog.get_logger(__name__)
@@ -1189,7 +1190,14 @@ class RefundService:
         # Update refund status
         refund.status = RefundStatusEnum.refunded.value
         refund.refunded_at = datetime.now(timezone.utc)
-        refund.refund_reference = refund_reference
+        # Kế toán bỏ trống ô mã tham chiếu ⇒ tự điền theo quy ước, KHÔNG để rỗng:
+        # phiếu chi không có mã thì đối soát sao kê phải dò bằng tay. Mã sinh từ
+        # cùng một helper với ``suggested_reference`` mà API đã trả cho màn hình,
+        # nên cái kế toán nhìn thấy trước khi bấm chính là cái được ghi vào sổ.
+        refund.refund_reference = (
+            refund_reference
+            or build_refund_reference(refund.id, on=refund.refunded_at.date())
+        )
 
         # F2: snapshot BEFORE reverse — reverse_payment_balances recomputes
         # fee.status from paid_amount and reopens the invoice to 'issued'. If the
@@ -1401,6 +1409,32 @@ class RefundService:
             statuses=statuses,
             payment_id=payment_id,
         )
+
+    async def get_status_summary(self, unit_id: Optional[int] = None) -> dict:
+        """Tổng quan hàng chờ hoàn phí cho màn danh sách.
+
+        Trả về dict phẳng khớp ``RefundsSummary`` (đếm + tổng tiền theo trạng
+        thái), tính trên TOÀN phạm vi người dùng thấy chứ không theo bộ lọc đang
+        chọn — mở màn hình ra là biết còn bao nhiêu việc, kể cả khi bộ lọc đang
+        trỏ vào một trạng thái rỗng.
+        """
+        rows = await self.refund_repo.get_status_summary(unit_id=unit_id)
+
+        def _c(status: str) -> int:
+            return int(rows.get(status, {}).get("count", 0))
+
+        def _a(status: str) -> Decimal:
+            return rows.get(status, {}).get("amount", Decimal("0"))
+
+        return {
+            "pending_count": _c(RefundStatusEnum.pending.value),
+            "pending_amount": _a(RefundStatusEnum.pending.value),
+            "approved_count": _c(RefundStatusEnum.approved.value),
+            "approved_amount": _a(RefundStatusEnum.approved.value),
+            "refunded_count": _c(RefundStatusEnum.refunded.value),
+            "refunded_amount": _a(RefundStatusEnum.refunded.value),
+            "rejected_count": _c(RefundStatusEnum.rejected.value),
+        }
 
     async def _get_profile_for_fee(
         self,

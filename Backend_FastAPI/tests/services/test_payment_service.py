@@ -1572,3 +1572,166 @@ class TestPaymentVerifiedNotificationBridge:
             EVENT_GROUP_MAPPING[SystemEvents.PAYMENT_VERIFIED]
             == NotificationEventGroup.FINANCE
         )
+
+
+class TestRefundReferenceAndContext:
+    """Mã tham chiếu tự điền + ngữ cảnh màn Hoàn phí.
+
+    Kế toán trước đây BẮT BUỘC tự nghĩ ra mã tham chiếu mỗi lần chi, và bảng chỉ
+    có ``#id`` trần nên phải mở từng hồ sơ ở tab khác mới biết đang trả cho ai.
+    """
+
+    async def _approved_refund(self, db, pf, amount=Decimal("400000")):
+        """Helper: phiếu thu verified → yêu cầu hoàn → đã duyệt."""
+        payment_service = PaymentService(db)
+        payment, _ = await payment_service.record_manual_payment(
+            invoice_id=pf["invoice"].id,
+            method_id=pf["cash_method"].id,
+            amount=Decimal("1000000"),
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        payment, _ = await payment_service.verify_payment(
+            payment_id=payment.id,
+            verifier_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        refund_service = RefundService(db)
+        refund, _ = await refund_service.request_refund(
+            payment_id=payment.id,
+            amount=amount,
+            reason="Rút hồ sơ",
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        await refund_service.approve_refund(
+            refund_id=refund.id,
+            approver_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        return refund_service, refund, payment
+
+    async def test_process_refund_autofills_reference_when_left_blank(
+        self, db, payment_fixtures
+    ):
+        """Bỏ trống mã tham chiếu ⇒ backend tự điền, KHÔNG để rỗng.
+
+        Phiếu chi không mã thì đối soát sao kê phải dò tay. Mã phải đúng dạng
+        ``HT-<id>-<ngày chi>`` và trùng khít cái ``suggested_reference`` mà API đã
+        trả cho màn hình — kế toán nhìn thấy gì trước khi bấm thì sổ ghi đúng thế.
+        """
+        from app.utils.refund_reference import build_refund_reference
+
+        pf = payment_fixtures
+        refund_service, refund, _ = await self._approved_refund(db, pf)
+
+        processed, _ = await refund_service.process_approved_refund(
+            refund_id=refund.id,
+            processor_id=pf["checker"].id,
+            refund_reference=None,  # kế toán để trống
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        await db.refresh(processed)
+
+        assert processed.status == RefundStatusEnum.refunded.value
+        assert processed.refund_reference, "không được để mã tham chiếu rỗng"
+        assert processed.refund_reference == build_refund_reference(
+            refund.id, on=processed.refunded_at.date()
+        )
+        assert processed.refund_reference.startswith(f"HT-{refund.id}-")
+
+    async def test_process_refund_keeps_reference_typed_by_accountant(
+        self, db, payment_fixtures
+    ):
+        """Có gõ mã (uỷ nhiệm chi ngân hàng) ⇒ giữ NGUYÊN, không đè mã tự sinh."""
+        pf = payment_fixtures
+        refund_service, refund, _ = await self._approved_refund(db, pf)
+
+        processed, _ = await refund_service.process_approved_refund(
+            refund_id=refund.id,
+            processor_id=pf["checker"].id,
+            refund_reference="UNC-VCB-778899",
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        await db.refresh(processed)
+
+        assert processed.refund_reference == "UNC-VCB-778899"
+
+    async def test_blank_reference_normalizes_to_none(self):
+        """Ô nhập bỏ trống gửi lên ``""``/khoảng trắng ⇒ None (để service tự sinh).
+
+        Thiếu bước này thì chuỗi rỗng được ghi thẳng vào sổ — tệ hơn cả bắt buộc
+        nhập, vì phiếu chi mất dấu vết mà không ai báo lỗi.
+        """
+        from app.schemas.finance import RefundProcessRequest
+
+        assert RefundProcessRequest(refund_id=1, refund_reference="   ").refund_reference is None
+        assert RefundProcessRequest(refund_id=1, refund_reference="").refund_reference is None
+        assert RefundProcessRequest(refund_id=1).refund_reference is None
+        assert (
+            RefundProcessRequest(refund_id=1, refund_reference="  UNC-1 ").refund_reference
+            == "UNC-1"
+        )
+
+    async def test_response_carries_decision_context(self, db, payment_fixtures):
+        """Response phải mang đủ ngữ cảnh để quyết NGAY TRÊN BẢNG.
+
+        Trước đây chỉ có ``id`` + ``payment_id``: không biết trả cho ai, phiếu thu
+        gốc bao nhiêu. Cặp (``amount``, ``payment_amount``) là quan trọng nhất —
+        đúng chỗ từng lệch 70.000đ/phiếu trên prod.
+        """
+        from app.routers.refunds import _build_refund_response
+
+        pf = payment_fixtures
+        refund_service, refund, payment = await self._approved_refund(db, pf)
+
+        loaded = await refund_service.get_refund(refund.id, pf["unit_id"])
+        resp = _build_refund_response(loaded, pf["checker"].id, "accountant")
+
+        assert resp.student_name == "Payment Test Student"
+        assert resp.profile_id is not None
+        assert resp.payment_amount == payment.amount, "phải trả tiền phiếu thu gốc"
+        assert resp.payment_status == PaymentStatusEnum.verified.value
+        assert resp.invoice_number
+        assert resp.fee_type == FeeTypeEnum.application.value
+        assert resp.requested_by_name
+        assert resp.approved_by_name
+        assert resp.suggested_reference == f"HT-{refund.id}-{datetime.now(timezone.utc):%Y%m%d}"
+        assert resp.can_process is True
+
+    async def test_status_summary_counts_and_sums(self, db, payment_fixtures):
+        """Dải tổng quan đếm theo TRẠNG THÁI trên toàn phạm vi.
+
+        Đây là thứ chữa lỗi "mở màn hình ra thấy trống nên tưởng hết việc": bộ lọc
+        có thể đang trỏ vào một trạng thái rỗng, nhưng dải này vẫn nói còn bao
+        nhiêu phiếu và bao nhiêu tiền đang treo.
+        """
+        pf = payment_fixtures
+        refund_service, refund, _ = await self._approved_refund(
+            db, pf, amount=Decimal("400000")
+        )
+
+        summary = await refund_service.get_status_summary(unit_id=pf["unit_id"])
+        assert summary["approved_count"] == 1
+        assert summary["approved_amount"] == Decimal("400000")
+        assert summary["refunded_count"] == 0
+
+        await refund_service.process_approved_refund(
+            refund_id=refund.id,
+            processor_id=pf["checker"].id,
+            refund_reference=None,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        after = await refund_service.get_status_summary(unit_id=pf["unit_id"])
+        assert after["approved_count"] == 0, "phiếu đã chi phải rời hàng chờ"
+        assert after["refunded_count"] == 1
+        assert after["refunded_amount"] == Decimal("400000")

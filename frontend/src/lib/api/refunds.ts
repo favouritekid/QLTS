@@ -5,6 +5,7 @@ import type {
   RefundFilters,
   RefundProcessRequest,
   RefundRequest,
+  RefundsSummary,
 } from "@/types/finance.types"
 
 export interface RefundPaginatedResponse {
@@ -14,6 +15,8 @@ export interface RefundPaginatedResponse {
   page_size: number
   /** Page-level capability: officer/accountant/admin may create (manager is approver-only). */
   can_create: boolean
+  /** Đếm + tổng tiền theo trạng thái trên toàn phạm vi, không theo bộ lọc đang chọn. */
+  summary: RefundsSummary
 }
 
 export interface RefundRejectRequest {

@@ -16,6 +16,7 @@ from app.utils.exceptions import (
     BusinessRuleViolation,
     ResourceNotFoundError,
 )
+from app.utils.refund_reference import build_refund_reference
 
 
 router = APIRouter(prefix="/refunds", tags=["Finance - Refunds"])
@@ -50,6 +51,7 @@ async def list_refunds(
         UserRole.ACCOUNTANT,
         UserRole.ADMIN,
     ]
+    summary = await refund_service.get_status_summary(unit_id=unit_id)
     return finance_schemas.RefundsPage(
         items=[
             _build_refund_response(refund, current_user.id, current_user.role)
@@ -59,6 +61,7 @@ async def list_refunds(
         page=page,
         page_size=page_size,
         can_create=can_create,
+        summary=summary,
     )
 
 
@@ -245,7 +248,40 @@ def _build_refund_response(
     is_accountant_or_admin = current_user_role in [UserRole.ACCOUNTANT, UserRole.ADMIN]
     is_different_user = refund.requested_by_id != current_user_id
 
+    # Ngữ cảnh cho màn Hoàn phí. Đi qua chuỗi quan hệ ĐÃ nạp sẵn ở repository;
+    # ``getattr`` phòng thân cho bản ghi cũ / quan hệ bị SET NULL — thiếu tên
+    # học sinh thì cột đó để trống, chứ không được làm hỏng cả trang.
+    payment = getattr(refund, "payment", None)
+    invoice = getattr(payment, "invoice", None) if payment else None
+    fee = getattr(invoice, "fee", None) if invoice else None
+    profile = getattr(fee, "admission_profile", None) if fee else None
+    lead = getattr(profile, "lead", None) if profile else None
+    major = getattr(fee, "resolved_major", None) if fee else None
+    method = getattr(payment, "method", None) if payment else None
+
+    def _name(user) -> Optional[str]:
+        if user is None:
+            return None
+        return user.full_name or user.username
+
     return finance_schemas.RefundRequestResponse(
+        student_name=lead.full_name if lead else None,
+        profile_id=profile.id if profile else None,
+        citizen_id=profile.citizen_id if profile else None,
+        major_name=major.name if major else None,
+        payment_amount=payment.amount if payment else None,
+        payment_date=payment.payment_date if payment else None,
+        payment_status=payment.status if payment else None,
+        payment_method_name=method.name if method else None,
+        payment_reference=payment.reference_code if payment else None,
+        invoice_number=invoice.invoice_number if invoice else None,
+        fee_type=fee.fee_type if fee else None,
+        requested_by_name=_name(getattr(refund, "requested_by", None)),
+        approved_by_name=_name(getattr(refund, "approved_by", None)),
+        rejected_by_name=_name(getattr(refund, "rejected_by", None)),
+        # Điền sẵn cho ô mã tham chiếu; CÙNG helper mà service dùng khi ô đó bỏ
+        # trống, nên gợi ý hiển thị == giá trị thực sự được ghi.
+        suggested_reference=build_refund_reference(refund.id),
         id=refund.id,
         payment_id=refund.payment_id,
         amount=refund.amount,

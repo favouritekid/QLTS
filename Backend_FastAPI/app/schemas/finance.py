@@ -762,9 +762,28 @@ class RefundApproveRequest(BaseModel):
 
 
 class RefundProcessRequest(BaseModel):
-    """Schema for processing approved refund."""
+    """Schema for processing approved refund.
+
+    ``refund_reference`` TÙY CHỌN: bỏ trống thì backend tự điền mã theo quy ước
+    (``utils.refund_reference.build_refund_reference``). Trước đây bắt buộc, nên
+    mỗi lần chi kế toán phải tự nghĩ ra một chuỗi — việc máy làm được và làm nhất
+    quán hơn người. Vẫn gõ đè được khi có mã UNC/ngân hàng thật.
+    """
     refund_id: int
-    refund_reference: str = Field(..., min_length=1, max_length=100)
+    refund_reference: Optional[str] = Field(None, max_length=100)
+
+    @field_validator('refund_reference')
+    @classmethod
+    def normalize_reference(cls, v: Optional[str]) -> Optional[str]:
+        """Chuỗi rỗng / chỉ khoảng trắng ⇒ None (để service tự sinh mã).
+
+        Không có bước này thì ô nhập bỏ trống gửi lên `""` sẽ được ghi thẳng vào
+        sổ thành mã RỖNG — tệ hơn cả bắt buộc nhập, vì phiếu chi mất dấu vết.
+        """
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
 
 
 class RefundRejectRequest(BaseModel):
@@ -799,6 +818,51 @@ class RefundRequestResponse(BaseModel):
     can_approve: bool = False
     can_reject: bool = False
     can_process: bool = False
+
+    # --- Ngữ cảnh để kế toán quyết được NGAY TRÊN BẢNG -------------------------
+    # Trước đây response chỉ có `id` + `payment_id` trần, nên muốn biết đang trả
+    # tiền cho AI, phiếu thu gốc bao nhiêu thì phải mở từng hồ sơ ở tab khác.
+    # Tất cả đều Optional: dữ liệu cũ / quan hệ bị xoá vẫn phải trả về được.
+    student_name: Optional[str] = None
+    profile_id: Optional[int] = None
+    citizen_id: Optional[str] = None
+    major_name: Optional[str] = None
+
+    # Cặp số CỐT LÕI: hoàn bao nhiêu TRÊN phiếu thu bao nhiêu. Đặt cạnh nhau vì
+    # đúng chỗ này từng lệch (phiếu đòi 2.570.000 trên phiếu thu 2.500.000).
+    payment_amount: Optional[Decimal] = None
+    payment_date: Optional[datetime] = None
+    payment_status: Optional[str] = None
+    payment_method_name: Optional[str] = None
+    payment_reference: Optional[str] = None
+    invoice_number: Optional[str] = None
+    fee_type: Optional[str] = None
+
+    requested_by_name: Optional[str] = None
+    approved_by_name: Optional[str] = None
+    rejected_by_name: Optional[str] = None
+
+    # Mã điền sẵn cho ô "Mã tham chiếu" ở dialog chi tiền. Chỉ có ý nghĩa khi
+    # `can_process`; các trạng thái khác vẫn trả để client không phải suy đoán.
+    suggested_reference: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RefundsSummary(BaseModel):
+    """Tổng quan hàng chờ hoàn phí — đếm trên TOÀN BỘ phạm vi người dùng thấy,
+    không phải trang hiện tại.
+
+    Mở màn hình ra là biết còn bao nhiêu việc và bao nhiêu tiền đang treo, kể cả
+    khi bộ lọc đang trỏ vào một trạng thái rỗng.
+    """
+    pending_count: int = 0
+    pending_amount: Decimal = Decimal("0")
+    approved_count: int = 0
+    approved_amount: Decimal = Decimal("0")
+    refunded_count: int = 0
+    refunded_amount: Decimal = Decimal("0")
+    rejected_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1222,6 +1286,8 @@ class RefundsPage(BaseModel):
     # Page-level capability: only officer/accountant/admin may create a refund
     # request (mirror Casbin POST /api/refunds). Manager is approver-only.
     can_create: bool = False
+    # Tổng quan toàn phạm vi (không phụ thuộc bộ lọc/trang đang xem).
+    summary: RefundsSummary = Field(default_factory=RefundsSummary)
 
     model_config = ConfigDict(from_attributes=True)
 
