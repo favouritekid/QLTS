@@ -480,6 +480,14 @@ async def test_open_run_refuses_a_conflict_it_does_not_own():
         (_FakeResponse(payload=[]), "absent"),
         (_FakeResponse(status_code=500, payload=[]), "unknown"),
         (_FakeResponse(payload={"message": "không phải danh sách"}), "unknown"),
+        # Hàng đã đóng KHÔNG phải lượt vừa mở — xem test lọc status bên dưới.
+        (_FakeResponse(payload=[{"id": 41, "status": "failed"}]), "unknown"),
+        (_FakeResponse(payload=[{"id": 41, "status": "completed"}]), "unknown"),
+        # Thân lạ phải ra `unknown`, không được ném KeyError giữa nhánh phục hồi.
+        (_FakeResponse(payload=[{}]), "unknown"),
+        (_FakeResponse(payload=["không phải hàng"]), "unknown"),
+        (_FakeResponse(payload=[{"id": None, "status": "running"}]), "unknown"),
+        (_FakeResponse(payload=[{"id": True, "status": "running"}]), "unknown"),
     ],
 )
 async def test_find_run_by_token_distinguishes_absent_from_unknown(response, mong_doi):
@@ -493,6 +501,59 @@ async def test_find_run_by_token_distinguishes_absent_from_unknown(response, mon
     )
 
     assert outcome == mong_doi
+
+
+async def test_find_run_by_token_asks_only_for_running_rows():
+    """``note`` KHÔNG unique — chỉ lượt ĐANG CHẠY mới được ràng một-mỗi-năm.
+
+    Chạy lại với cùng ``--client-token`` sau một lượt đã ``failed`` để lại hàng
+    lịch sử mang đúng dấu đó. Không lọc thì lời gọi này nhận nhầm hàng cũ, còn
+    hàng ``running`` vừa tạo bị bỏ lại và tiếp tục khoá năm học.
+    """
+    client = _RecordingClient(_FakeResponse(payload=[]))
+
+    await _api_with(client).find_run_by_token(2026, "tok")
+
+    assert client.calls[0]["params"]["status"] == "eq.running"
+
+
+async def test_open_run_does_not_recover_a_historical_failed_row():
+    """Ca đã tái hiện: POST commit hàng running mới rồi trả 502.
+
+    Nếu lookup nhặt hàng ``failed`` cũ cùng dấu, script chạy tiếp với id sai và
+    bỏ lại hàng running thật — năm học vẫn bị khoá, mà nhật ký thì báo đã phục
+    hồi xong.
+    """
+    client = _RecordingClient(
+        # Server đã lọc status nên trả rỗng; hàng failed id 41 không lọt qua.
+        _FakeResponse(payload=[]),
+        post_response=_FakeResponse(status_code=502, payload=[]),
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        await _api_with(client).open_sync_run(2026, "tok")
+
+    assert "chạy lại là an toàn" in str(exc.value)
+
+
+async def test_open_run_reports_unknown_when_the_conflict_probe_fails():
+    """409 + không đọc được ≠ "lượt của người khác".
+
+    Khẳng định nhầm sẽ đẩy người vận hành đi đánh dấu failed một lượt có thể là
+    của chính họ — và lượt đó đang ghi dở.
+    """
+    client = _RecordingClient(
+        _FakeResponse(status_code=503, payload=[]),
+        post_response=_FakeResponse(status_code=409, payload=[]),
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        await _api_with(client).open_sync_run(2026, "tok")
+
+    thong_diep = str(exc.value)
+    assert "KHÔNG mang dấu" not in thong_diep
+    assert "KHÔNG đối soát được" in thong_diep
+    assert "--client-token tok" in thong_diep
 
 
 async def test_find_run_by_token_reports_unknown_on_transport_error():

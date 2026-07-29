@@ -242,6 +242,16 @@ class DormApi:
         gì thay đổi, chạy lại an toàn" — trong khi một hàng ``running`` có thể
         đang nằm đó và khoá năm học lại. Tuyên bố an toàn khi không biết là kiểu
         sai tệ hơn cả im lặng.
+
+        ⚠️ LỌC ``status=running``. ``note`` KHÔNG unique — database chỉ ràng một
+        lượt ĐANG CHẠY mỗi năm. Chạy lại với cùng ``--client-token`` sau một lượt
+        đã ``failed`` sẽ để lại hàng lịch sử mang đúng dấu đó; không lọc thì lời
+        gọi này nhận nhầm hàng cũ, còn hàng ``running`` vừa tạo bị bỏ lại và tiếp
+        tục khoá năm học — đúng thứ cơ chế dấu sinh ra để tránh.
+
+        ⚠️ Hàng đọc về cũng phải được KIỂM HÌNH DẠNG. Chỉ đọc thẳng ``row["id"]``
+        thì một thân phản hồi lạ (``[{}]``) ném ``KeyError`` ra giữa nhánh phục
+        hồi, thay vì trả ``unknown`` để người gọi xử lý tử tế.
         """
         try:
             response = await self._client.get(
@@ -250,7 +260,11 @@ class DormApi:
                 params={
                     "academic_year": f"eq.{academic_year}",
                     "note": f"eq.{_client_note(client_token)}",
+                    "status": "eq.running",
                     "select": "id,status",
+                    # Unique index đã bảo đảm tối đa một lượt running mỗi năm;
+                    # `order` chỉ là chốt an toàn nếu ràng buộc đó đổi.
+                    "order": "id.desc",
                     "limit": "1",
                 },
             )
@@ -268,7 +282,24 @@ class DormApi:
         if not isinstance(rows, list):
             return "unknown", None
 
-        return ("found", rows[0]) if rows else ("absent", None)
+        if not rows:
+            return "absent", None
+
+        row = rows[0]
+        if not isinstance(row, dict):
+            return "unknown", None
+
+        run_id = row.get("id")
+        # ``bool`` là lớp con của ``int`` — ``True`` không phải một id hợp lệ.
+        if not isinstance(run_id, int) or isinstance(run_id, bool):
+            return "unknown", None
+
+        # Vành đai thứ hai sau bộ lọc phía server: nếu vì lý do gì đó vẫn về một
+        # hàng đã đóng, KHÔNG được coi là lượt vừa mở.
+        if row.get("status") != "running":
+            return "unknown", None
+
+        return "found", row
 
     async def _recover_open_or_fail(
         self, academic_year: int, client_token: str, *, ly_do: str
@@ -352,6 +383,21 @@ class DormApi:
                     client_token=client_token,
                 )
                 return run["id"]
+
+            if outcome == "unknown":
+                # ⚠️ Không đọc được KHÔNG phải "không mang dấu". Khẳng định lượt
+                # đang chạy là của người khác trong khi chưa đọc nổi trạng thái
+                # sẽ đẩy người vận hành đi đánh dấu failed một lượt có thể là của
+                # chính họ — và lượt đó đang ghi dở.
+                raise RuntimeError(
+                    f"Đã có một lượt đồng bộ ĐANG CHẠY cho năm {academic_year} "
+                    "nhưng KHÔNG đối soát được nó có phải của lần chạy này hay "
+                    "không (lần đọc phục hồi thất bại).\n"
+                    f"  → Chạy lại với --client-token {client_token} để nhận lại "
+                    "đúng lượt đó nếu là của mình. Nếu vẫn hỏng, tra bảng "
+                    f"sync_runs theo dấu '{_client_note(client_token)}' trước khi "
+                    "đánh dấu failed bất cứ lượt nào."
+                )
 
             raise RuntimeError(
                 f"Đã có một lượt đồng bộ ĐANG CHẠY cho năm {academic_year} và nó "
