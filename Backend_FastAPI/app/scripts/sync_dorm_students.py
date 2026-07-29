@@ -747,9 +747,36 @@ def database_identity_from_url(database_url: str) -> str:
     from sqlalchemy.engine import make_url
 
     url = make_url(database_url)
-    host = (url.host or "").lower()
-    port = url.port or 5432
-    return f"{host}:{port}/{url.database or ''}"
+    return _ghep_dinh_danh(url.host or "", url.port or 5432, url.database or "")
+
+
+def _ghep_dinh_danh(host: str, port: int, dbname: str) -> str:
+    """Ghép định danh, chuẩn hoá ĐÚNG phần được phép chuẩn hoá.
+
+    ⚠️ Hostname không phân biệt hoa/thường theo DNS nên hạ về chữ thường là
+    đúng. TÊN DATABASE thì KHÔNG: PostgreSQL cho phép ``CREATE DATABASE "QLTS"``
+    tồn tại song song với ``qlts`` trong cùng cluster. Hạ cả hai về chữ thường
+    khiến cả ba lớp hàng rào cho qua trong khi đang đọc đúng cái database khác —
+    và đó là ca hàng rào này sinh ra để chặn.
+    """
+    return f"{host.strip().lower()}:{port}/{dbname.strip()}"
+
+
+def _chuan_hoa_dinh_danh_khai_bao(raw: str) -> str:
+    """Chuẩn hoá giá trị khai trong file secret theo đúng quy tắc trên.
+
+    Nhận ``host:port/dbname``; hạ hostname về chữ thường, giữ nguyên tên
+    database. Dạng lạ thì trả về nguyên văn (đã strip) để phép so bên dưới
+    trượt và người vận hành thấy thông điệp lệch, thay vì âm thầm hợp lệ hoá
+    một chuỗi không đọc được.
+    """
+    value = raw.strip()
+    if "/" not in value or ":" not in value.split("/", 1)[0]:
+        return value
+
+    hostport, dbname = value.split("/", 1)
+    host, _, port = hostport.rpartition(":")
+    return f"{host.strip().lower()}:{port.strip()}/{dbname.strip()}"
 
 
 def assert_source_database_matches() -> None:
@@ -769,14 +796,14 @@ def assert_source_database_matches() -> None:
     Lớp thứ nhất (rẻ, chạy trước khi mở kết nối): so ``host:port/dbname``.
     Hai lớp còn lại hỏi thẳng database — xem ``assert_live_source_matches``.
     """
-    expected = _require_env("DORM_SYNC_SOURCE_DB").strip().lower()
+    expected = _chuan_hoa_dinh_danh_khai_bao(_require_env("DORM_SYNC_SOURCE_DB"))
     # Bắt buộc khai từ đây, dù chỉ dùng ở lớp ba: thiếu nó mà vẫn chạy tiếp
     # nghĩa là lớp mạnh nhất im lặng không chạy.
     _require_env("DORM_SYNC_SOURCE_SYSTEM_ID")
 
     from app.config import settings
 
-    actual = database_identity_from_url(settings.DATABASE_URL).lower()
+    actual = database_identity_from_url(settings.DATABASE_URL)
 
     if actual != expected:
         print(
@@ -808,12 +835,13 @@ async def assert_live_source_matches(session: Any) -> None:
     hàng rào tự tắt khi gặp trở ngại thì không phải hàng rào — và ca "thiếu
     quyền đọc catalog" trùng đúng với ca "đây không phải cluster ta nghĩ".
     """
-    expected_db = _require_env("DORM_SYNC_SOURCE_DB").strip().lower()
+    expected_db = _chuan_hoa_dinh_danh_khai_bao(_require_env("DORM_SYNC_SOURCE_DB"))
+    # Tên database so KHỚP CHÍNH XÁC, không hạ chữ — xem `_ghep_dinh_danh`.
     expected_dbname = expected_db.rsplit("/", 1)[-1]
     expected_system_id = _require_env("DORM_SYNC_SOURCE_SYSTEM_ID").strip()
 
     actual_dbname = (await session.execute(text("select current_database()"))).scalar()
-    if (actual_dbname or "").strip().lower() != expected_dbname:
+    if (actual_dbname or "").strip() != expected_dbname:
         print(
             f"✗ Từ chối ghi: database thật tên '{actual_dbname}' nhưng khai báo "
             f"DORM_SYNC_SOURCE_DB trỏ '{expected_dbname}'.",
@@ -1027,15 +1055,26 @@ async def main(argv: Optional[List[str]] = None) -> int:
             # "bao nhiêu em không gọi được" là thứ phải biết TRƯỚC khi ghi, chứ
             # không phải phát hiện lúc ngồi bấm số.
             payloads = [build_student_payload(r, sync_run_id=0) for r in rows]
-            khong_co_so = sum(1 for p in payloads if p["contact_phone"] is None)
+            # "Không có số NÀO" — cả hai ô đều trống. Chỉ đếm ô chính sẽ báo
+            # nhầm những em chỉ khai số phụ là không liên hệ được, trong khi họ
+            # gọi được.
+            khong_co_so = sum(
+                1
+                for p in payloads
+                if p["contact_phone"] is None and p["contact_phone2"] is None
+            )
             co_so_phu = sum(1 for p in payloads if p["contact_phone2"] is not None)
-            # Số nguồn có nhưng bị loại vì vượt trần độ dài — đây là ca im lặng
-            # nhất trong ba: dữ liệu CÓ mà vẫn không gọi được ai.
+            # SỐ bị loại vì vượt trần (không phải số HỒ SƠ) — đếm trên cả hai ô.
+            # Đây là ca im lặng nhất: dữ liệu CÓ mà vẫn không gọi được ai.
+            #
+            # Đếm thẳng trên giá trị nguồn, không suy từ payload: một ô phụ bị
+            # bỏ vì TRÙNG số chính cũng cho `None` ở payload, và gộp nó vào đây
+            # sẽ báo "quá dài" cho một dữ liệu hoàn toàn bình thường.
             so_qua_dai = sum(
                 1
-                for r, p in zip(rows, payloads)
-                if p["contact_phone"] is None
-                and (getattr(r, "contact_phone", None) or "").strip()
+                for r in rows
+                for cot in ("contact_phone", "contact_phone2")
+                if len(str(getattr(r, cot, None) or "").strip()) > _MAX_PHONE_LEN
             )
 
             print("── XEM TRƯỚC (không ghi gì) ─────────────────────────")

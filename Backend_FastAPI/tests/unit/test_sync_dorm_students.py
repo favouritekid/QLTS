@@ -735,9 +735,17 @@ def test_secret_key_never_leaves_the_process_when_the_target_is_wrong(monkeypatc
     """
     monkeypatch.setenv("DORM_SYNC_TARGET_PROJECT_REF", "dung-project")
 
+    # ⚠️ KHÔNG đặt assert bên trong `pytest.raises`: dòng phía trên đã ném, nên
+    # mọi câu sau nó trong cùng block KHÔNG BAO GIỜ CHẠY và test xanh mà chẳng
+    # kiểm gì. Dựng object rỗng rồi gọi `__init__` tường minh để còn cầm được
+    # tham chiếu mà soi sau khi exception đã bay ra.
+    api = object.__new__(DormApi)
+
     with pytest.raises(ValueError):
-        api = DormApi("https://sai-project.supabase.co", "khoa-that")
-        assert not hasattr(api, "_headers")
+        DormApi.__init__(api, "https://sai-project.supabase.co", "khoa-that")
+
+    assert not hasattr(api, "_headers")
+    assert not hasattr(api, "_base")
 
 
 async def test_wrong_target_stops_before_any_request(monkeypatch):
@@ -806,6 +814,46 @@ def _patch_database_url(monkeypatch, url=_DEV_DB_URL):
 )
 def test_database_identity_survives_real_url_shapes(url, mong_doi):
     assert database_identity_from_url(url) == mong_doi
+
+
+def test_database_name_comparison_is_case_sensitive(monkeypatch):
+    """``QLTS`` và ``qlts`` là HAI database khác nhau.
+
+    PostgreSQL cho phép ``CREATE DATABASE "QLTS"`` tồn tại song song với
+    ``qlts`` trong cùng cluster. Hạ tên về chữ thường khiến cả ba lớp hàng rào
+    cho qua trong khi đang đọc đúng cái database khác — tức hàng rào im lặng
+    hỏng ở chính ca nó sinh ra để chặn.
+    """
+    _set_target_env(monkeypatch, source_db="postgres:5432/QLTS")
+    _patch_database_url(monkeypatch, "postgresql+asyncpg://u:p@postgres:5432/qlts")
+
+    with pytest.raises(SystemExit) as exc:
+        assert_source_database_matches()
+
+    assert exc.value.code == 2
+
+
+def test_hostname_comparison_stays_case_insensitive(monkeypatch):
+    """Ngược lại, hostname KHÔNG phân biệt hoa/thường theo DNS.
+
+    Siết cả hostname sẽ chặn oan một cấu hình hoàn toàn hợp lệ.
+    """
+    _set_target_env(monkeypatch, source_db="POSTGRES:5432/qlts")
+    _patch_database_url(monkeypatch, "postgresql+asyncpg://u:p@postgres:5432/qlts")
+
+    assert assert_source_database_matches() is None
+
+
+async def test_live_source_name_comparison_is_case_sensitive(monkeypatch):
+    """Lớp hỏi thẳng database cũng phải phân biệt hoa/thường."""
+    from app.scripts.sync_dorm_students import assert_live_source_matches
+
+    _set_target_env(monkeypatch, source_db="postgres:5432/QLTS")
+
+    with pytest.raises(SystemExit) as exc:
+        await assert_live_source_matches(_FakeSession(dbname="qlts"))
+
+    assert exc.value.code == 2
 
 
 def test_source_database_mismatch_is_refused(monkeypatch):
@@ -1179,6 +1227,68 @@ async def test_plaintext_url_stops_before_any_request(monkeypatch):
     monkeypatch.setattr(sync_module, "fetch_cohort", _one_row)
 
     assert await main(["--academic-year", "2026", "--apply"]) == 2
+
+
+async def test_preview_counts_follow_the_contract(monkeypatch, capsys):
+    """Ba con số liên hệ ở bước XEM TRƯỚC phải nói đúng điều chúng nhận.
+
+    Hai ca dễ sai và đã sai một lần:
+
+    * "Không có số" phải nghĩa là KHÔNG CÓ SỐ NÀO. Chỉ đếm ô chính sẽ báo nhầm
+      những em chỉ khai số phụ là không liên hệ được, trong khi họ gọi được.
+    * "Số bị bỏ vì quá dài" đếm SỐ, không phải HỒ SƠ, và phải phủ cả hai ô.
+      Nó cũng không được tính lây sang ô phụ bị bỏ vì TRÙNG số chính — đó là
+      dữ liệu bình thường.
+    """
+    _set_target_env(monkeypatch)
+
+    dai = "0" * 21
+    rows = [
+        # Không có số nào — đúng một hồ sơ.
+        _row(qlts_profile_id=1, contact_phone=None, contact_phone2=None),
+        # Chỉ có số phụ: KHÔNG được tính là "không có số".
+        _row(qlts_profile_id=2, contact_phone=None, contact_phone2="0900000002"),
+        # Trùng nhau: ô phụ bị bỏ, nhưng KHÔNG phải vì quá dài.
+        _row(
+            qlts_profile_id=3, contact_phone="0900000003", contact_phone2="0900000003"
+        ),
+        # Hai số quá dài trên cùng một hồ sơ = HAI số bị bỏ.
+        _row(qlts_profile_id=4, contact_phone=dai, contact_phone2=dai),
+    ]
+
+    async def _cohort(academic_year, **kwargs):
+        return rows
+
+    class _FakeApi:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def count_students(self, academic_year):
+            return 0
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _cohort)
+    monkeypatch.setattr(sync_module, "DormApi", _FakeApi)
+
+    assert await main(["--academic-year", "2026"]) == 0
+
+    man_hinh = capsys.readouterr().out
+
+    # HAI hồ sơ không liên hệ được: hồ sơ 1 (không khai số nào) và hồ sơ 4 (khai
+    # hai số nhưng cả hai vượt trần nên bị bỏ). Con số này trả lời "bao nhiêu em
+    # KHÔNG GỌI ĐƯỢC", nên một hồ sơ có dữ liệu mà dữ liệu không dùng được thì
+    # vẫn thuộc về nó — đó cũng là lý do "số bị bỏ vì quá dài" đứng riêng, để
+    # người vận hành biết trong hai em đó có một em sửa được bên QLTS.
+    assert "Không có số liên hệ  : 2" in man_hinh
+    assert "Có số phụ            : 1" in man_hinh
+    # ĐẾM SỐ, không đếm hồ sơ: hồ sơ 4 đóng góp hai. Và ô phụ của hồ sơ 3 bị bỏ
+    # vì TRÙNG số chính — không được tính lây vào đây.
+    assert "Số bị bỏ vì quá dài  : 2" in man_hinh
 
 
 async def test_dry_run_never_needs_the_source_declaration(monkeypatch):
