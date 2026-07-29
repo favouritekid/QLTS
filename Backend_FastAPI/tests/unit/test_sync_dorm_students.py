@@ -36,6 +36,8 @@ def _row(**overrides):
         officer_qlts_id=101,
         unit_id=14,
         profile_status="confirmed",
+        contact_phone="0912345678",
+        contact_phone2=None,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -166,6 +168,60 @@ def test_payload_synced_at_defaults_to_a_parseable_timestamp():
 
     # Phải parse được: một chuỗi Postgres không đọc nổi sẽ làm hỏng CẢ lô ghi.
     assert datetime.fromisoformat(payload["synced_at"]).tzinfo is not None
+
+
+def test_phone_longer_than_the_column_is_dropped_not_truncated():
+    """Số vượt trần thì BỎ, không cắt.
+
+    Cột đích có ``check (length <= 20)`` nên một giá trị bẩn làm PostgREST trả
+    400 và hỏng CẢ LÔ 200 hàng, không phải một hàng. Còn cắt thì dựng ra một số
+    khác gọi được — tức người liên hệ sai, và không ai biết.
+    """
+    from app.scripts.sync_dorm_students import chuan_hoa_so
+
+    assert chuan_hoa_so("0912345678") == "0912345678"
+    assert chuan_hoa_so("  0912345678  ") == "0912345678"
+    assert chuan_hoa_so("0" * 20) == "0" * 20  # đúng trần vẫn qua
+    assert chuan_hoa_so("0" * 21) is None
+    assert chuan_hoa_so("   ") is None
+    assert chuan_hoa_so("") is None
+    assert chuan_hoa_so(None) is None
+
+
+def test_payload_carries_both_contact_numbers():
+    payload = build_student_payload(
+        _row(contact_phone="0912345678", contact_phone2="0987654321"), sync_run_id=1
+    )
+
+    assert payload["contact_phone"] == "0912345678"
+    assert payload["contact_phone2"] == "0987654321"
+
+
+def test_payload_drops_a_duplicate_second_number():
+    """Hai ô hiện cùng một số thì ô thứ hai không nói thêm gì.
+
+    Tệ hơn: nó khiến người gọi thử lại đúng số vừa không nghe máy.
+    """
+    payload = build_student_payload(
+        _row(contact_phone="0912345678", contact_phone2="  0912345678 "),
+        sync_run_id=1,
+    )
+
+    assert payload["contact_phone"] == "0912345678"
+    assert payload["contact_phone2"] is None
+
+
+def test_payload_keeps_contact_keys_even_when_empty():
+    """Thiếu số vẫn phải GỬI khoá với giá trị ``None``.
+
+    PostgREST merge-duplicates chỉ cập nhật cột được gửi. Bỏ khoá đi thì một số
+    cũ đã sai ở hệ KTX sẽ nằm lại mãi, dù bên QLTS đã xoá.
+    """
+    payload = build_student_payload(_row(contact_phone=None), sync_run_id=1)
+
+    assert "contact_phone" in payload
+    assert "contact_phone2" in payload
+    assert payload["contact_phone"] is None
 
 
 def test_payload_keeps_raw_gender_even_when_unknown():

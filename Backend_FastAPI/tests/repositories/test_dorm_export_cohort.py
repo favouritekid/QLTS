@@ -57,12 +57,20 @@ async def _make_unit(name: str = "Đơn vị KTX test") -> int:
             return unit.id
 
 
-async def _make_lead(unit_id: int, *, officer_id=None, deleted_at=None) -> int:
+async def _make_lead(
+    unit_id: int,
+    *,
+    officer_id=None,
+    deleted_at=None,
+    phone="0902224444",
+    phone2=None,
+) -> int:
     async with AsyncSessionLocal() as session:
         async with session.begin():
             lead = models.Lead(
                 full_name="Lead KTX",
-                phone="0902224444",
+                phone=phone,
+                phone2=phone2,
                 email=f"dorm_{_next_cccd()}@test.com",
                 source="website",
                 unit_id=unit_id,
@@ -80,6 +88,7 @@ async def _make_profile(
     academic_year: int,
     status: str = "confirmed",
     is_dropped=None,
+    phone=None,
 ) -> int:
     async with AsyncSessionLocal() as session:
         async with session.begin():
@@ -93,6 +102,7 @@ async def _make_profile(
                 full_name="Học viên KTX",
                 gender="Nam",
                 is_dropped=is_dropped,
+                phone=phone,
             )
             session.add(profile)
             await session.flush()
@@ -434,6 +444,60 @@ async def test_officer_and_unit_come_from_lead():
     assert rows[0].unit_id == unit_id
     assert rows[0].officer_qlts_id is None
     assert rows[0].qlts_profile_id == profile_id
+
+
+async def test_contact_phone_prefers_the_profile_number():
+    unit_id = await _make_unit()
+    lead_id = await _make_lead(unit_id, phone="0900000001", phone2="0900000002")
+    profile_id = await _make_profile(lead_id, academic_year=2026, phone="0911111111")
+    await _add_tuition_fee(profile_id, paid="3000000")
+
+    rows = await _cohort_rows(2026)
+    assert rows[0].contact_phone == "0911111111"
+    assert rows[0].contact_phone2 == "0900000002"
+
+
+async def test_contact_phone_falls_back_to_lead_when_profile_is_empty():
+    unit_id = await _make_unit()
+    lead_id = await _make_lead(unit_id, phone="0900000001")
+    profile_id = await _make_profile(lead_id, academic_year=2026, phone=None)
+    await _add_tuition_fee(profile_id, paid="3000000")
+
+    assert (await _cohort_rows(2026))[0].contact_phone == "0900000001"
+
+
+async def test_contact_phone_treats_whitespace_as_missing():
+    """Chuỗi TOÀN KHOẢNG TRẮNG phải lùi về số của lead.
+
+    ``coalesce`` trần KHÔNG lùi khi cột đầu là chuỗi rỗng hay một dấu cách — mà
+    "ô nhập để trống nhưng có dấu cách" là ca thường gặp nhất ở dữ liệu gõ tay.
+    Không có ``nullif(trim(...), '')`` thì hồ sơ này sang hệ KTX với ô liên hệ
+    trống, dù bên lead vẫn có số gọi được.
+
+    Đây là nhánh chỉ kiểm được trên SQL thật: ``nullif``/``trim`` chạy ở
+    database, không phải ở Python.
+    """
+    unit_id = await _make_unit()
+    lead_id = await _make_lead(unit_id, phone="0900000001", phone2="   ")
+    profile_id = await _make_profile(lead_id, academic_year=2026, phone="   ")
+    await _add_tuition_fee(profile_id, paid="3000000")
+
+    rows = await _cohort_rows(2026)
+    assert rows[0].contact_phone == "0900000001"
+    # Số phụ toàn khoảng trắng là "không có số phụ", không phải một ô rỗng gửi đi.
+    assert rows[0].contact_phone2 is None
+
+
+async def test_contact_phone_is_null_when_nobody_has_a_number():
+    """Không ai có số vẫn là hàng hợp lệ — giao diện nói được "chưa có"."""
+    unit_id = await _make_unit()
+    lead_id = await _make_lead(unit_id, phone="")
+    profile_id = await _make_profile(lead_id, academic_year=2026, phone=None)
+    await _add_tuition_fee(profile_id, paid="3000000")
+
+    rows = await _cohort_rows(2026)
+    assert rows[0].contact_phone is None
+    assert rows[0].contact_phone2 is None
 
 
 async def test_one_row_per_profile_even_with_multiple_fee_rows():

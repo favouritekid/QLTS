@@ -21,7 +21,7 @@ tầng hiển thị ghi "(chưa chốt ngành)".
 
 from typing import Any, List
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 
 from app import models
 from app.constants.hk1_fee import confirmed_paid_hk1_conditions
@@ -103,6 +103,40 @@ def _resolved_major_name_subquery() -> Any:
     )
 
 
+def _blank_to_null(column: Any) -> Any:
+    """``NULL`` cho cả giá trị rỗng lẫn chuỗi toàn khoảng trắng.
+
+    ⚠️ Cần thiết vì ``coalesce`` trần KHÔNG lùi về cột sau khi cột trước là
+    chuỗi rỗng — mà "ô nhập để trống nhưng có một dấu cách" là ca thường gặp
+    nhất ở dữ liệu gõ tay. Không có lớp này, một hồ sơ có sẵn số bên lead vẫn
+    sang hệ KTX với ô liên hệ trống.
+    """
+    return func.nullif(func.trim(column), "")
+
+
+def _contact_phone_expr() -> Any:
+    """Số liên hệ chính: ưu tiên số trên hồ sơ, thiếu thì lấy của lead.
+
+    Đo trên prod 29-07: cả 461 hồ sơ của cohort đều có ``AdmissionProfile.phone``
+    nên nhánh lùi hôm nay chưa chạy lần nào. Vẫn viết ra vì cột đó *nullable* —
+    một mùa tuyển sinh khác, một luồng nhập khác là nó trống.
+    """
+    return func.coalesce(
+        _blank_to_null(models.AdmissionProfile.phone),
+        _blank_to_null(models.Lead.phone),
+    )
+
+
+def _contact_phone2_expr() -> Any:
+    """Số liên hệ phụ — chỉ lấy từ lead.
+
+    ⚠️ CỐ Ý không có nhánh lùi: đây là số THỨ HAI, nên nếu nó rỗng thì câu trả
+    lời đúng là "không có số phụ", không phải "lấy tạm số nào đó". Việc loại
+    trùng với số chính làm ở tầng payload, nơi cả hai giá trị đã nằm cạnh nhau.
+    """
+    return _blank_to_null(models.Lead.phone2)
+
+
 def select_paid_hk1_cohort(academic_year: int) -> Select:
     """Câu truy vấn cohort học viên đã đóng học phí HK1 của MỘT năm học.
 
@@ -137,6 +171,8 @@ def select_paid_hk1_cohort(academic_year: int) -> Select:
             models.Lead.assigned_officer_id.label("officer_qlts_id"),
             models.Lead.unit_id.label("unit_id"),
             _resolved_major_name_subquery().label("program_name"),
+            _contact_phone_expr().label("contact_phone"),
+            _contact_phone2_expr().label("contact_phone2"),
         )
         .select_from(models.AdmissionProfile)
         .join(

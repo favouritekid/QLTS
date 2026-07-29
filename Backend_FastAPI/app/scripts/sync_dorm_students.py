@@ -114,6 +114,30 @@ def normalize_gender(raw: Optional[str]) -> str:
     return _GENDER_MAP.get(unicodedata.normalize("NFC", raw).strip().lower(), "unknown")
 
 
+# Trần độ dài của ``students.contact_phone`` / ``contact_phone2`` phía KTX.
+# Giữ HẰNG SỐ ở đây để lý do bỏ số dài đọc được ngay tại chỗ kiểm.
+_MAX_PHONE_LEN = 20
+
+
+def chuan_hoa_so(raw: Optional[str]) -> Optional[str]:
+    """Số điện thoại sạch, hoặc ``None``.
+
+    ⚠️ Số dài quá trần thì BỎ, KHÔNG cắt. Cột đích có
+    ``check (length <= 20)``, nên một giá trị bẩn làm PostgREST trả 400 và hỏng
+    CẢ LÔ 200 hàng — không phải một hàng. Còn cắt thì tạo ra một số điện thoại
+    khác gọi được, tức là dựng ra người liên hệ sai và không ai biết.
+
+    "Không có số" là trạng thái hợp lệ và giao diện nói được điều đó; "số sai"
+    thì không.
+    """
+    if raw is None:
+        return None
+    sach = str(raw).strip()
+    if not sach or len(sach) > _MAX_PHONE_LEN:
+        return None
+    return sach
+
+
 def build_student_payload(
     row: Any, sync_run_id: int, synced_at: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -141,12 +165,21 @@ def build_student_payload(
     if synced_at is None:
         synced_at = datetime.now(timezone.utc).isoformat()
 
+    lien_he = chuan_hoa_so(getattr(row, "contact_phone", None))
+    lien_he_phu = chuan_hoa_so(getattr(row, "contact_phone2", None))
+    # Hai ô hiện cùng một số thì ô thứ hai không nói thêm gì, chỉ khiến người
+    # gọi thử lại đúng số vừa không nghe máy.
+    if lien_he_phu is not None and lien_he_phu == lien_he:
+        lien_he_phu = None
+
     return {
         "qlts_profile_id": row.qlts_profile_id,
         "full_name": row.full_name,
         "source_gender_raw": row.source_gender_raw,
         "normalized_gender": normalize_gender(row.source_gender_raw),
         "program_name": row.program_name,
+        "contact_phone": lien_he,
+        "contact_phone2": lien_he_phu,
         "academic_year": row.academic_year,
         "officer_qlts_id": row.officer_qlts_id,
         "unit_id": row.unit_id,
@@ -990,6 +1023,21 @@ async def main(argv: Optional[List[str]] = None) -> int:
             )
             no_program = sum(1 for r in rows if r.program_name is None)
 
+            # Ba con số về liên hệ. Cán bộ KTX làm việc bằng cách GỌI ĐIỆN, nên
+            # "bao nhiêu em không gọi được" là thứ phải biết TRƯỚC khi ghi, chứ
+            # không phải phát hiện lúc ngồi bấm số.
+            payloads = [build_student_payload(r, sync_run_id=0) for r in rows]
+            khong_co_so = sum(1 for p in payloads if p["contact_phone"] is None)
+            co_so_phu = sum(1 for p in payloads if p["contact_phone2"] is not None)
+            # Số nguồn có nhưng bị loại vì vượt trần độ dài — đây là ca im lặng
+            # nhất trong ba: dữ liệu CÓ mà vẫn không gọi được ai.
+            so_qua_dai = sum(
+                1
+                for r, p in zip(rows, payloads)
+                if p["contact_phone"] is None
+                and (getattr(r, "contact_phone", None) or "").strip()
+            )
+
             print("── XEM TRƯỚC (không ghi gì) ─────────────────────────")
             print(f"  Năm học              : {args.academic_year}")
             print(f"  Trong nguồn QLTS     : {len(rows)}")
@@ -1000,6 +1048,9 @@ async def main(argv: Optional[List[str]] = None) -> int:
             print(f"  Không rõ giới tính   : {unknown_gender}")
             print(f"  Chưa chốt ngành      : {no_program}")
             print(f"  Hồ sơ vẫn đang xét   : {count_atypical_statuses(rows)}")
+            print(f"  Không có số liên hệ  : {khong_co_so}")
+            print(f"  Có số phụ            : {co_so_phu}")
+            print(f"  Số bị bỏ vì quá dài  : {so_qua_dai}")
             print("\n  Truyền --apply để thực sự ghi.")
             return 0
 
