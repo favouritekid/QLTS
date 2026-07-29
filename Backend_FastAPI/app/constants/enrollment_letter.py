@@ -43,12 +43,17 @@ SCHOOL_YEAR = "2025-2026"
 # 5xxxxxx = Trung cấp nên không cần ghép thêm trình độ vào khoá).
 #
 # Mỗi dòng:
-#   hk1               tổng học phí kỳ I — PHẢI khớp ``Fee.final_amount``, lệch
-#                     thì KHÔNG phát giấy (xem ``build_letter_data``)
+#   hk1               học phí GỐC kỳ I — PHẢI khớp ``Fee.base_amount``, lệch thì
+#                     KHÔNG phát giấy (xem ``_resolve_tuition_schedule``)
+#                     ⚠️ Sửa 29-07: trước đây so với ``Fee.final_amount``. Sai
+#                     ngay khi hồ sơ được áp chính sách giảm — ``final_amount``
+#                     khi ấy là số PHẢI NỘP (= "first"), không phải giá gốc.
 #   discount_percent  0 = thu 2 đợt; >0 = ưu đãi nộp-một-lần, chỉ có "first"
 #   first / second    mức đóng từng đợt. Ngành thu 2 đợt: first+second == hk1.
 #                     Ngành ưu đãi: first == hk1 × (100−discount_percent)%,
 #                     second == 0.
+#                     ``first`` (ngành ưu đãi) / ``hk1`` (ngành thu 2 đợt) PHẢI
+#                     khớp ``Fee.final_amount`` — cửa thứ hai của gate.
 # Hai bất biến trên được khoá bằng test (``test_tuition_schedule_is_consistent``)
 # nên một dòng gõ sai số không thể lọt ra giấy chính thức.
 #

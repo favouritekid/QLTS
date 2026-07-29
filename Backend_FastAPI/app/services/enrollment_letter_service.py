@@ -278,11 +278,11 @@ def _vnd(amount) -> str:
 
 
 def _resolve_tuition_schedule(
-    major_code, major_name, degree_level, fee, total: int
+    major_code, major_name, degree_level, fee, base_total: int, payable_total: int
 ) -> dict:
     """Tra bảng thu học phí kỳ I theo MÃ NGÀNH và đối chiếu với Fee.
 
-    FAIL-CLOSED ở cả ba cửa (quyết định 19-07). Giấy báo là văn bản chính thức
+    FAIL-CLOSED ở cả bốn cửa (quyết định 19-07). Giấy báo là văn bản chính thức
     có chữ ký Hiệu trưởng, nên "không phát được, báo lỗi rõ" luôn tốt hơn "phát
     ra một tờ ghi sai số tiền":
 
@@ -290,8 +290,26 @@ def _resolve_tuition_schedule(
        đợt nào để in.
     2. Fee thuộc năm học khác năm của bảng thu — bảng thu chỉ đúng cho MỘT mùa,
        in mức của mùa này lên hồ sơ mùa khác là sai.
-    3. Tổng học phí trong hệ thống lệch tổng của bảng thu — hai nguồn đang nói
-       hai số khác nhau; chọn bừa một bên là đoán.
+    3. Học phí GỐC trong hệ thống lệch ``hk1`` của bảng thu.
+    4. Số PHẢI NỘP lệch mức của bảng thu.
+
+    🔴 Vì sao phải tách 3 và 4 (sửa 29-07). Bản cũ so ``hk1`` với **một** con số
+    là ``fee.final_amount``, tức ngầm giả định *"phải nộp = học phí gốc"*. Giả
+    định đó đúng cho tới khi hệ thống có hồ sơ ĐẦU TIÊN được áp chính sách giảm:
+    khi ấy ``final_amount`` tụt xuống còn phần phải nộp, lệch ``hk1``, và cửa 3
+    chặn sạch mọi hồ sơ của ngành có ưu đãi — dù bảng thu đã khai chính ưu đãi
+    đó (``discount_percent: 30`` ở sáu ngành cao đẳng) và số phải nộp KHỚP đúng
+    ``first``. Ngày 29-07 điều này xảy ra thật trên prod với 74 hồ sơ.
+
+    Bảng thu mô hình hoá ưu đãi bằng cách GIỮ giá gốc rồi hạ mức đợt:
+    ``hk1`` là giá gốc · ``first`` = phải nộp (``hk1 × (100−discount_percent)%``
+    khi có ưu đãi) · ``second`` = 0. Nên đối chiếu đúng phải là **hai** phép:
+    gốc↔gốc và phải-nộp↔mức-đợt. Cách này còn CHẶT HƠN bản cũ: nó bắt được cả
+    ca giá gốc sai lẫn ca mức giảm sai, thay vì chỉ so được một con số.
+
+    Hồ sơ được giảm/chỉnh TAY riêng vẫn bị chặn ở cửa 4 (số phải nộp không rơi
+    vào mức nào của bảng thu) — đúng như trước, vì giấy in bảng thu CHUNG thì
+    không phản ánh được khoản chỉnh riêng của một người.
 
     Trả về dict dòng bảng thu (``hk1``/``discount_percent``/``first``/``second``).
     """
@@ -319,11 +337,11 @@ def _resolve_tuition_schedule(
             f"phận kỹ thuật cập nhật bảng thu."
         )
 
-    if total != row["hk1"]:
+    if base_total != row["hk1"]:
         log.warning(
             "enrollment_letter.tuition_amount_drift",
             major_code=major_code,
-            fee_total=total,
+            fee_base_total=base_total,
             schedule_total=row["hk1"],
         )
         # ⚠️ KHÔNG khuyên "hãy tính lại học phí" ở đây. Lệch số rất có thể là do
@@ -331,12 +349,39 @@ def _resolve_tuition_schedule(
         # source='manual_discount') — bấm tính lại sẽ XOÁ MẤT chính khoản chỉnh
         # tay đó. Lệch ở đây là việc của người, không phải việc của một nút bấm.
         raise ValidationError(
-            f"Không thể tạo giấy báo nhập học — học phí kỳ I của hồ sơ là "
-            f"{_vnd(total)} đồng nhưng bảng thu ngành '{major_name}' ghi "
-            f"{_vnd(row['hk1'])} đồng. Nếu hồ sơ này được giảm/chỉnh học phí "
-            f"riêng thì giấy báo (in theo bảng thu chung) không phản ánh đúng số "
-            f"phải nộp — hãy liên hệ kế toán để đối chiếu. ĐỪNG bấm tính lại học "
-            f"phí: thao tác đó xoá khoản chỉnh tay."
+            f"Không thể tạo giấy báo nhập học — học phí gốc kỳ I của hồ sơ là "
+            f"{_vnd(base_total)} đồng nhưng bảng thu ngành '{major_name}' ghi "
+            f"{_vnd(row['hk1'])} đồng. Hai nguồn đang nói hai số khác nhau — hãy "
+            f"liên hệ kế toán để đối chiếu. ĐỪNG bấm tính lại học phí: thao tác "
+            f"đó xoá khoản chỉnh tay."
+        )
+
+    # Mức PHẢI NỘP theo bảng thu: ngành ưu đãi nộp một lần thì là ``first``
+    # (``second`` = 0); ngành thu hai đợt thì là trọn ``hk1`` (= first + second,
+    # bất biến đã khoá bằng ``test_tuition_schedule_is_consistent``).
+    expected_payable = row["first"] if row["discount_percent"] > 0 else row["hk1"]
+    if payable_total != expected_payable:
+        log.warning(
+            "enrollment_letter.payable_amount_drift",
+            major_code=major_code,
+            fee_payable_total=payable_total,
+            schedule_payable=expected_payable,
+            schedule_discount_percent=row["discount_percent"],
+        )
+        raise ValidationError(
+            f"Không thể tạo giấy báo nhập học — số phải nộp kỳ I của hồ sơ là "
+            f"{_vnd(payable_total)} đồng nhưng theo bảng thu ngành '{major_name}' "
+            f"phải là {_vnd(expected_payable)} đồng"
+            + (
+                f" (học phí {_vnd(row['hk1'])} đã trừ ưu đãi "
+                f"{row['discount_percent']}%)"
+                if row["discount_percent"] > 0
+                else ""
+            )
+            + ". Nếu hồ sơ này được giảm/chỉnh học phí riêng thì giấy báo (in "
+            "theo bảng thu chung) không phản ánh đúng số phải nộp — hãy liên hệ "
+            "kế toán để đối chiếu. ĐỪNG bấm tính lại học phí: thao tác đó xoá "
+            "khoản chỉnh tay."
         )
 
     return row
@@ -448,9 +493,13 @@ async def build_letter_data(db, profile) -> dict:
     # Các mức đợt là mức CHUẨN của bảng thu, KHÔNG trừ phần đã nộp trước (quyết
     # định nghiệp vụ 19-07): phần lớn hồ sơ đã nộp giữ chỗ 2,5tr và việc đối trừ
     # được thực hiện tại quầy khi thí sinh đến đóng, không thể hiện trên giấy.
-    _total = max(0, int(round(fee.final_amount or 0)))
+    # Giấy in HỌC PHÍ GỐC (khớp ``hk1`` bảng thu), ưu đãi thể hiện ở mức đợt —
+    # nên số lên giấy lấy từ ``base_amount``, KHÔNG phải ``final_amount``.
+    # ``final_amount`` là số phải nộp sau ưu đãi, dùng để đối chiếu với mức đợt.
+    _base_total = max(0, int(round(fee.base_amount or 0)))
+    _payable_total = max(0, int(round(fee.final_amount or 0)))
     schedule = _resolve_tuition_schedule(
-        major_code, major_name, degree_level, fee, _total
+        major_code, major_name, degree_level, fee, _base_total, _payable_total
     )
     officer_name, officer_phone = await _resolve_officer(db, profile)
 
@@ -470,7 +519,12 @@ async def build_letter_data(db, profile) -> dict:
         "offering_type": offering_type or C.DEFAULT_OFFERING_TYPE,
         # round (not truncate) so a hypothetical fractional discount never
         # under-states the charge on the official letter; VND fees are whole.
-        "hk1_fee_amount": _total,
+        "hk1_fee_amount": _base_total,
+        # Số PHẢI NỘP sau ưu đãi (= ``first`` của bảng thu với ngành ưu đãi).
+        # Chụp lại để guard trước lúc ghi file so được CẢ HAI con số: ai đó gỡ
+        # ưu đãi giữa lúc render thì ``base`` không đổi nhưng ``final`` đổi —
+        # chỉ so một mình ``hk1_fee_amount`` sẽ không bắt được.
+        "payable_amount": _payable_total,
         # Mã ngành = khoá đã tra bảng thu. Lưu lại để hậu kiểm truy được dòng
         # bảng thu nào đã sinh ra các con số dưới đây.
         "major_code": major_code,
@@ -663,7 +717,8 @@ async def issue_enrollment_letter(
     if (
         fee_now is None
         or fee_now.id != data.get("fee_id")
-        or int(round(fee_now.final_amount or 0)) != data.get("hk1_fee_amount")
+        or int(round(fee_now.base_amount or 0)) != data.get("hk1_fee_amount")
+        or int(round(fee_now.final_amount or 0)) != data.get("payable_amount")
     ):
         await to_thread.run_sync(_best_effort_delete, final_path)
         log.warning(

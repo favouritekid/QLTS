@@ -37,6 +37,15 @@ from tests.fixtures.constants import TestOrgData
 _SCHEDULED_MAJOR_CODE = "5510216"
 _SCHEDULED_MAJOR_ID = 9510216
 
+# Mã ngành CÓ ƯU ĐÃI trong bảng thu: 6340301 = Kế toán, Cao đẳng —
+# hk1 6.500.000 · discount_percent 30 · first 4.550.000 · second 0.
+# Dùng cho nhóm test "ngành ưu đãi": học phí GỐC vẫn 6.500.000, số PHẢI NỘP là
+# 4.550.000, và gate phải chấp nhận đúng cặp đó.
+_DISCOUNTED_MAJOR_CODE = "6340301"
+_DISCOUNTED_MAJOR_ID = 9340301
+_DISCOUNTED_HK1 = 6_500_000
+_DISCOUNTED_PAYABLE = 4_550_000
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -183,6 +192,59 @@ async def _get_or_create_scheduled_major() -> int:
             session.add(major)
             await session.flush()
             return major.id
+
+
+async def _get_or_create_discounted_major() -> int:
+    """MajorProgram mang mã ngành CÓ ƯU ĐÃI trong bảng thu (6340301, Kế toán CĐ).
+
+    Cùng khuôn ``_get_or_create_scheduled_major`` (id tường minh vì sequence
+    major_program đứng ở 1). Tách riêng để nhóm test ưu đãi không phải sửa ngành
+    dùng chung của các test cũ.
+    """
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            existing = (
+                await session.execute(
+                    select(models.MajorProgram).where(
+                        models.MajorProgram.code == _DISCOUNTED_MAJOR_CODE
+                    )
+                )
+            ).scalars().first()
+            if existing is not None:
+                return existing.id
+            major = models.MajorProgram(
+                id=_DISCOUNTED_MAJOR_ID,
+                name="Kế toán",
+                code=_DISCOUNTED_MAJOR_CODE,
+                degree_level="Cao đẳng",
+                unit_id=TestOrgData.UNIT_1["id"],
+            )
+            session.add(major)
+            await session.flush()
+            return major.id
+
+
+async def _seed_discounted_hk1_fee(
+    profile_id: int, *, base: int, final: int
+) -> None:
+    """Fee HK1 của ngành CÓ ưu đãi, cho phép đặt riêng giá gốc và số phải nộp."""
+    major_id = await _get_or_create_discounted_major()
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            session.add(
+                Fee(
+                    admission_profile_id=profile_id,
+                    fee_type="tuition",
+                    academic_year=2026,
+                    semester_no=1,
+                    base_amount=Decimal(str(base)),
+                    final_amount=Decimal(str(final)),
+                    total_discount=Decimal(str(base - final)),
+                    status=FeeStatusEnum.invoiced.value,
+                    resolved_major_id=major_id,
+                    resolved_degree_level="Cao đẳng",
+                )
+            )
 
 
 async def _seed_hk1_fee(profile_id: int, major_id: int | None = None) -> None:
@@ -689,6 +751,106 @@ async def test_amount_drift_error_does_not_advise_recalculating_fee(
     msg = str(exc.value)
     assert "kế toán" in msg, "phải hướng officer sang người, không sang nút bấm"
     assert "ĐỪNG bấm tính lại" in msg
+
+
+async def test_build_letter_data_accepts_discounted_major(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Ngành CÓ ưu đãi: giá gốc khớp ``hk1``, phải nộp khớp ``first`` ⇒ PHÁT ĐƯỢC.
+
+    🔴 Ca hồi quy của sự cố 29-07. Gate cũ so ``hk1`` với ``final_amount``, nên
+    hồ sơ được áp chính sách giảm 30% (``final`` = 4.550.000, ``base`` vẫn
+    6.500.000) bị chặn sạch — dù bảng thu đã khai đúng ưu đãi đó. 74 hồ sơ prod
+    rơi vào ca này. Gate phải so gốc↔``hk1`` và phải-nộp↔``first``.
+
+    Số IN LÊN GIẤY là học phí GỐC (``hk1_fee_amount`` = 6.500.000), khớp các tờ
+    đã phát trước khi áp chính sách — ưu đãi thể hiện ở mức đợt.
+    """
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"disc{uuid.uuid4().hex[:7]}",
+    )
+    await _seed_discounted_hk1_fee(
+        profile_id, base=_DISCOUNTED_HK1, final=_DISCOUNTED_PAYABLE
+    )
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        data = await build_letter_data(session, profile)
+
+    assert data["hk1_fee_amount"] == _DISCOUNTED_HK1, (
+        "giấy phải in HỌC PHÍ GỐC, không phải số sau ưu đãi"
+    )
+    assert data["payable_amount"] == _DISCOUNTED_PAYABLE
+    assert data["tuition_discount_percent"] == 30
+    assert data["first_installment"] == _DISCOUNTED_PAYABLE
+    assert data["second_installment"] == 0, "ngành ưu đãi nộp một lần, không đợt 2"
+
+
+async def test_build_letter_data_rejects_discounted_major_without_discount_applied(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Ngành có ưu đãi nhưng hồ sơ CHƯA được áp giảm ⇒ chặn.
+
+    Chiều ngược của ca trên, và là ca gate CŨ bỏ lọt hoàn toàn: ``final`` bằng
+    ``base`` bằng ``hk1`` nên phép so một-con-số thấy khớp và phát giấy — tờ giấy
+    khi đó ghi "ưu đãi 30%, đợt 1 nộp 4.550.000" trong khi sổ đang đòi thu đủ
+    6.500.000. Cửa thứ hai bắt đúng ca này.
+    """
+    from app.utils.exceptions import ValidationError
+
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"nodisc{uuid.uuid4().hex[:5]}",
+    )
+    await _seed_discounted_hk1_fee(
+        profile_id, base=_DISCOUNTED_HK1, final=_DISCOUNTED_HK1
+    )
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        with pytest.raises(ValidationError) as exc:
+            await build_letter_data(session, profile)
+
+    msg = str(exc.value)
+    assert "6.500.000" in msg and "4.550.000" in msg
+    assert "30%" in msg, "lỗi phải nói rõ mức ưu đãi bảng thu đang khai"
+
+
+async def test_build_letter_data_rejects_discounted_major_wrong_payable(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Ngành có ưu đãi nhưng số phải nộp lệch mức bảng thu (giảm tay) ⇒ chặn."""
+    from app.utils.exceptions import ValidationError
+
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"wrongp{uuid.uuid4().hex[:5]}",
+    )
+    await _seed_discounted_hk1_fee(
+        profile_id, base=_DISCOUNTED_HK1, final=5_000_000
+    )
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        with pytest.raises(ValidationError) as exc:
+            await build_letter_data(session, profile)
+
+    msg = str(exc.value)
+    assert "5.000.000" in msg and "4.550.000" in msg
+    assert "kế toán" in msg and "ĐỪNG bấm tính lại" in msg
 
 
 async def test_build_letter_data_rejects_major_missing_from_schedule(
