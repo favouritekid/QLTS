@@ -74,6 +74,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import signal
 import sys
 import unicodedata
@@ -241,6 +242,12 @@ _TRANG_THAI_SYNC_RUN = {"running", "failed", "completed"}
 # Tập con: lượt đã đóng sổ, không nhận ghi nữa.
 _TRANG_THAI_DA_DONG = {"failed", "completed"}
 
+# Trần một lô gửi lên RPC. PHẢI trùng con số trong `upsert_students_batch`
+# (migration `20260729000002`, guard P0111). Hai đầu lệch nhau thì một giá trị
+# hợp lệ với CLI sẽ mở lượt rồi hỏng ngay ở lô đầu — và bỏ lại một lượt phải
+# đóng sổ vì một con số gõ sai.
+_TRAN_LO = 500
+
 
 def _doc_hang_sync_run(body: Any, run_id: int) -> Dict[str, Any]:
     """Đọc hàng ``sync_runs`` từ phản hồi, kiểm ĐÚNG DANH TÍNH.
@@ -381,6 +388,72 @@ def _client_note(client_token: str) -> str:
     return f"client:{client_token}"
 
 
+# Mã lỗi do CHÍNH TA đặt trong migration `20260729000005`, và thông điệp tiếng
+# Việt nằm ở ĐÂY — phía client.
+#
+# ⚠️ KHÔNG lấy `message` của server. PostgREST trả nguyên văn thông điệp của
+# Postgres, mà thông điệp đó mang theo GIÁ TRỊ gây lỗi (`Key (...)=(...) already
+# exists`, `invalid input syntax for type integer: "1.5"`). Nếu ai đó nhét nhầm
+# số điện thoại vào một trường số thì chính dòng lỗi ấy in dữ liệu cá nhân ra
+# stderr — mà stderr bị CI, cron và container thu gom y như log. Đây cũng là lý
+# do `_raise_for_status` giấu thân phản hồi.
+#
+# Mã SQLSTATE thì ngược lại: nó là hằng số năm ký tự do ta đặt, không mang dữ
+# liệu hàng, nên in ra được.
+_THONG_DIEP_THEO_MA: Dict[str, str] = {
+    # Chung
+    "P0101": "Tham số bắt buộc bị để trống.",
+    "P0002": "Không tìm thấy lượt đồng bộ.",
+    "P0102": "Không tìm thấy lượt đồng bộ.",
+    "P0113": "Lượt đồng bộ không còn ở trạng thái `running`.",
+    # Validate payload của upsert_students_batch
+    "P0110": "Payload gửi lên không phải mảng JSON.",
+    "P0111": "Lô vượt trần 500 hàng.",
+    "P0112": "Payload có khoá mà database không nhận.",
+    "P0114": "Có hàng thiếu `qlts_profile_id`.",
+    "P0115": "Có `qlts_profile_id` trùng trong cùng một lô.",
+    "P0116": "Lô chứa hàng thuộc năm học khác với lượt.",
+    "P0117": "Phần tử của payload không phải object.",
+    "P0118": "Sai kiểu ở một trường của payload.",
+    "P0119": "Một trường số nhận giá trị không phải số nguyên.",
+    "P0121": "Một trường số vượt khoảng cho phép.",
+    # finalize_sync_run
+    "P0130": "`p_run_id` bị để trống.",
+    "P0131": "`p_source_count` bị để trống.",
+    "P0132": "`p_upserted_count` bị để trống.",
+    "P0133": "Lượt đã kết thúc với số liệu khác; database từ chối ghi đè.",
+    "P0135": "Số liệu gửi lên bị âm.",
+    "P0136": "Chưa ghi hết phần đáng ghi (nguồn khác số đã ghi).",
+    "P0137": "Lệch contract: raw khác nguồn cộng phần bị chặn.",
+    "P0138": "Số bản ghi mang dấu lượt không khớp số đã ghi.",
+    "P0139": "Lượt không có `raw_count` — không đối soát được.",
+    # tombstone_student
+    "P0120": "Học viên còn chỗ ở đang hoạt động.",
+}
+
+_DANG_MA_SQLSTATE = re.compile(r"^[0-9A-Z]{5}$")
+
+
+def doc_ma_loi(response: httpx.Response) -> Optional[str]:
+    """Lấy MỖI mã ``code`` từ thân lỗi PostgREST. ``None`` nếu không đọc được.
+
+    Chỉ nhận chuỗi đúng dạng SQLSTATE (năm ký tự chữ hoa/số). Thân phản hồi là
+    dữ liệu do phía kia kiểm soát, nên không tin nó đưa gì cũng in: một
+    ``code`` dài ngoằng chứa văn bản tự do sẽ đi thẳng vào log qua đúng cái cửa
+    ta vừa đóng.
+    """
+    try:
+        than = response.json()
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(than, dict):
+        return None
+    ma = than.get("code")
+    if isinstance(ma, str) and _DANG_MA_SQLSTATE.match(ma):
+        return ma
+    return None
+
+
 class DormApi:
     """Lớp mỏng gọi PostgREST của Supabase.
 
@@ -437,9 +510,26 @@ class DormApi:
             or response.headers.get("sb-request-id")
             or "không có"
         )
+
+        # Mã lỗi thì in được — nó là hằng số ta tự đặt, không mang dữ liệu hàng.
+        # Thông điệp đi kèm lấy từ bảng phía CLIENT, không phải từ phản hồi.
+        #
+        # Mã lạ (Postgres thô như 22P02, hoặc mã ta chưa map) vẫn in ra mã: nó
+        # là thứ duy nhất người vận hành có để tra log Supabase, và nó không
+        # chứa PII. Cái không in là `message`.
+        ma = doc_ma_loi(response)
+        phan_chan_doan = ""
+        if ma is not None:
+            giai_thich = _THONG_DIEP_THEO_MA.get(ma)
+            phan_chan_doan = (
+                f" [{ma}] {giai_thich}"
+                if giai_thich
+                else f" [{ma}] Mã lỗi chưa được map phía client."
+            )
+
         raise RuntimeError(
             f"{action} thất bại (HTTP {response.status_code}, "
-            f"request-id {request_id}). "
+            f"request-id {request_id}).{phan_chan_doan} "
             "Chi tiết nằm ở log phía Supabase — cố ý không in ra đây vì nội dung "
             "lỗi có thể chứa dữ liệu cá nhân."
         )
@@ -516,8 +606,88 @@ class DormApi:
 
         return "found", row
 
+    async def _nhan_lai_hay_thay_the(
+        self,
+        run_cu: Dict[str, Any],
+        academic_year: int,
+        client_token: str,
+        raw_count: int,
+        *,
+        la_lan_chay_lai: bool,
+    ) -> int:
+        """Gặp một lượt ``running`` mang ĐÚNG dấu của mình: dùng lại, hay thay?
+
+        Câu trả lời phụ thuộc dấu đó từ đâu ra, và hai ca khác nhau hoàn toàn:
+
+        **Token TỰ SINH** (không truyền ``--client-token``) — dấu chỉ tồn tại
+        trong tiến trình này, chưa ai khác thấy nó. Một hàng mang dấu đó nghĩa
+        là chính lời gọi mở lượt vừa rồi ĐÃ tới database rồi mất phản hồi trên
+        đường về. Chưa ghi học viên nào. Nhận lại là đúng.
+
+        **Token TRUYỀN TAY** — người vận hành đang chạy lại sau một lần hỏng.
+        Lượt cũ đó có thể đã ghi được một phần, và những hàng ấy VẪN MANG
+        ``last_seen_sync_id`` của nó. Nhận lại rồi đóng sổ bằng số liệu của lần
+        chạy MỚI là trộn hai lần chạy vào một sổ:
+
+        - cohort co lại giữa hai lần → ``v_seen`` (số hàng mang dấu lượt) lớn
+          hơn ``upserted_count`` mới → P0138 từ chối hạ cờ, và lượt treo
+          ``running`` khoá cứng năm học;
+        - cohort giữ nguyên → tệ hơn, vì nó KHÔNG nổ: ``raw_count`` của lượt cũ
+          là con số của lần chạy trước, còn ``blocked_count`` thì cộng dồn qua
+          CẢ HAI lần. Sổ sách khép kín mà sai.
+
+        Nên: đóng sổ lượt cũ, rồi mở lượt MỚI. An toàn dựa trên 1C — một lượt
+        ``failed`` thì ``upsert_students_batch`` từ chối mọi lời gọi mang
+        ``p_run_id`` đó (P0113), kể cả từ tiến trình cũ còn sống.
+        """
+        run_id_cu = run_cu["id"]
+
+        if not la_lan_chay_lai:
+            log.warning(
+                "dorm_sync_run_recovered", run_id=run_id_cu, client_token=client_token
+            )
+            return run_id_cu
+
+        print(
+            f"  ⚠️ Có lượt #{run_id_cu} đang chạy mang dấu "
+            f"'{_client_note(client_token)}' của lần chạy TRƯỚC."
+        )
+        hang = await self.mark_sync_run_failed(run_id_cu)
+        trang_thai = hang.get("status")
+
+        if trang_thai == "completed":
+            # RPC cố ý KHÔNG hạ `completed` xuống `failed`. Lượt trước đã xong
+            # thật; nói rõ để người vận hành biết mình đang chạy lượt thứ hai
+            # chứ không phải sửa một lượt hỏng.
+            print(
+                f"  ⚠️ Lượt #{run_id_cu} hoá ra đã HOÀN TẤT, không phải hỏng. "
+                "Mở lượt mới — đây là một lần đồng bộ nữa, không phải phục hồi."
+            )
+        elif trang_thai == "failed":
+            print(f"  Đã đóng sổ lượt #{run_id_cu} (failed). Mở lượt mới.")
+        else:
+            raise RuntimeError(
+                f"Không đóng được lượt cũ #{run_id_cu}: sau khi gọi fail_sync_run "
+                f"nó vẫn ở trạng thái {trang_thai!r}. Dừng để không mở lượt thứ "
+                "hai chồng lên một lượt đang sống — hai lượt cùng năm sẽ vướng "
+                "uq_sync_run_active_per_year, và lượt cũ vẫn nhận ghi."
+            )
+
+        # ⚠️ Mở lại với `la_lan_chay_lai=False`: từ giây phút này dấu đó thuộc
+        # về lần chạy HIỆN TẠI. Giữ True sẽ đệ quy vô hạn nếu database lại trả
+        # về một hàng mang dấu.
+        return await self.open_sync_run(
+            academic_year, client_token, raw_count, la_lan_chay_lai=False
+        )
+
     async def _recover_open_or_fail(
-        self, academic_year: int, client_token: str, *, ly_do: str
+        self,
+        academic_year: int,
+        client_token: str,
+        raw_count: int,
+        *,
+        ly_do: str,
+        la_lan_chay_lai: bool,
     ) -> int:
         """Sau một phản hồi MƠ HỒ ở bước mở lượt: nhận lại hàng, hoặc nói thật.
 
@@ -527,10 +697,13 @@ class DormApi:
         outcome, run = await self.find_run_by_token(academic_year, client_token)
 
         if outcome == "found":
-            log.warning(
-                "dorm_sync_run_recovered", run_id=run["id"], client_token=client_token
+            return await self._nhan_lai_hay_thay_the(
+                run,
+                academic_year,
+                client_token,
+                raw_count,
+                la_lan_chay_lai=la_lan_chay_lai,
             )
-            return run["id"]
 
         if outcome == "absent":
             raise RuntimeError(
@@ -551,9 +724,18 @@ class DormApi:
         )
 
     async def open_sync_run(
-        self, academic_year: int, client_token: str, raw_count: int
+        self,
+        academic_year: int,
+        client_token: str,
+        raw_count: int,
+        *,
+        la_lan_chay_lai: bool = False,
     ) -> int:
         """Mở một lượt đồng bộ. Chịu được ca phản hồi bị mất.
+
+        ``la_lan_chay_lai`` = người vận hành TỰ truyền ``--client-token``. Nó
+        đổi ý nghĩa của một lượt cũ mang cùng dấu — xem
+        ``_nhan_lai_hay_thay_the``.
 
         ⚠️ Bước này CŨNG có ca mất ACK, và nó là ca tệ nhất: hàng ``running`` đã
         nằm trong database còn client thì không có ``run_id`` nào để đối soát.
@@ -590,7 +772,11 @@ class DormApi:
         except httpx.HTTPError:
             # Lỗi TRUYỀN TẢI: không biết database đã tạo hàng hay chưa.
             return await self._recover_open_or_fail(
-                academic_year, client_token, ly_do="lỗi kết nối"
+                academic_year,
+                client_token,
+                raw_count,
+                ly_do="lỗi kết nối",
+                la_lan_chay_lai=la_lan_chay_lai,
             )
 
         if response.status_code == 409:
@@ -599,12 +785,13 @@ class DormApi:
             # khác — nếu đúng dấu mình thì cứ dùng tiếp, không cần ai sửa tay.
             outcome, run = await self.find_run_by_token(academic_year, client_token)
             if outcome == "found":
-                log.warning(
-                    "dorm_sync_run_recovered",
-                    run_id=run["id"],
-                    client_token=client_token,
+                return await self._nhan_lai_hay_thay_the(
+                    run,
+                    academic_year,
+                    client_token,
+                    raw_count,
+                    la_lan_chay_lai=la_lan_chay_lai,
                 )
-                return run["id"]
 
             if outcome == "unknown":
                 # ⚠️ Không đọc được KHÔNG phải "không mang dấu". Khẳng định lượt
@@ -633,7 +820,9 @@ class DormApi:
             return await self._recover_open_or_fail(
                 academic_year,
                 client_token,
+                raw_count,
                 ly_do=f"HTTP {response.status_code} từ gateway",
+                la_lan_chay_lai=la_lan_chay_lai,
             )
 
         # Còn lại là câu trả lời DỨT KHOÁT của database (400/401/403…): không có
@@ -646,7 +835,11 @@ class DormApi:
             # Phản hồi 2xx nhưng thân không đọc được (proxy cắt, JSON hỏng).
             # Hàng gần như chắc chắn ĐÃ được tạo — tìm lại theo dấu.
             return await self._recover_open_or_fail(
-                academic_year, client_token, ly_do="phản hồi không đọc được"
+                academic_year,
+                client_token,
+                raw_count,
+                ly_do="phản hồi không đọc được",
+                la_lan_chay_lai=la_lan_chay_lai,
             )
 
     async def get_sync_run(self, run_id: int) -> Optional[Dict[str, Any]]:
@@ -847,7 +1040,16 @@ class DormApi:
             },
         )
         self._raise_for_status(response, "Đếm học viên")
-        total = response.headers.get("content-range", "*/0").split("/")[-1]
+
+        # ⚠️ Mặc định KHÔNG được là `"*/0"`. Header `Content-Range` vắng mặt
+        # nghĩa là KHÔNG ĐẾM ĐƯỢC (proxy gỡ mất `Prefer`, PostgREST không trả
+        # count) — mà `"*/0"` biến đúng ca đó thành con số 0, tức "hệ KTX đang
+        # rỗng". Người vận hành đọc số 0 ở bước XEM TRƯỚC sẽ kết luận ngược hẳn:
+        # tưởng chưa có gì bên đích trong khi có thể đã có đủ cohort.
+        #
+        # Chuỗi rỗng không phải chữ số nên rơi đúng vào nhánh `None` = không
+        # biết, và người gọi in "không đếm được" thay vì một con số bịa.
+        total = response.headers.get("content-range", "").split("/")[-1]
         return int(total) if total.isdigit() else None
 
     async def finalize_sync_run(
@@ -871,6 +1073,12 @@ class DormApi:
         rơi vào nhánh xử lý lỗi và đánh dấu `failed` cho một lượt thực ra đã
         thành công — nhật ký nói ngược với dữ liệu. Hàm phía database idempotent
         với cùng bộ số liệu nên gọi lại là an toàn.
+
+        ⚠️ "Mơ hồ" gồm CẢ 408 và 5xx, không chỉ lỗi kết nối — cùng lập luận mà
+        ``open_sync_run`` đã dùng: những mã đó thường đến từ gateway đứng TRƯỚC
+        database. Ở bước hạ cờ thì nhầm lẫn này đắt nhất, vì coi 502 là "database
+        từ chối" sẽ ghi `failed` cho một lượt đã đổi ``source_eligible`` của cả
+        cohort. Gặp chúng thì ĐỐI SOÁT bằng ``get_sync_run`` rồi mới quyết định.
         """
         payload = {
             "p_run_id": run_id,
@@ -897,7 +1105,58 @@ class DormApi:
                     await asyncio.sleep(attempt)
                 continue
 
-            # Lỗi có phản hồi (4xx/5xx) là câu trả lời dứt khoát từ database —
+            # ⚠️ 408 và 5xx KHÔNG dứt khoát, và đây là chỗ nhầm lẫn đắt nhất
+            # trong cả file: `open_sync_run` cách đây hai mươi dòng đã lập luận
+            # đúng điều ngược lại — những mã đó thường đến từ gateway đứng
+            # TRƯỚC database, nên transaction có thể đã commit xong rồi phản hồi
+            # mới hỏng trên đường về.
+            #
+            # Và bước này là bước HẠ CỜ. Coi 502 là "database từ chối" sẽ đẩy
+            # một lượt ĐÃ hạ cờ xong vào nhánh đóng sổ hỏng: sổ sách ghi
+            # `failed` trong khi cả cohort đã bị đổi `source_eligible`. Hỏi lại
+            # trước khi kết luận — hàm phía database idempotent nên đọc lại an
+            # toàn.
+            if response.status_code == 408 or response.status_code >= 500:
+                hang_doi_soat = None
+                try:
+                    hang_doi_soat = await self.get_sync_run(run_id)
+                except Exception:
+                    hang_doi_soat = None
+
+                if (
+                    hang_doi_soat is not None
+                    and hang_doi_soat.get("status") == "completed"
+                ):
+                    log.warning(
+                        "dorm_sync_finalize_reconciled",
+                        run_id=run_id,
+                        http_status=response.status_code,
+                    )
+                    so_ha_co = hang_doi_soat.get("deactivated_count")
+                    if not isinstance(so_ha_co, int) or isinstance(so_ha_co, bool):
+                        raise RuntimeError(
+                            "Kết thúc lượt đồng bộ: đối soát thấy lượt đã "
+                            "`completed` nhưng `deactivated_count` không phải "
+                            "số nguyên."
+                        )
+                    if so_ha_co < 0:
+                        raise RuntimeError(
+                            "Kết thúc lượt đồng bộ: đối soát thấy "
+                            f"`deactivated_count` âm ({so_ha_co})."
+                        )
+                    return so_ha_co
+
+                # Chưa `completed`: thử lại. Lượt vẫn `running` nghĩa là lời gọi
+                # chưa tới đích, và đó đúng ca retry phục vụ.
+                last_error = RuntimeError(
+                    f"HTTP {response.status_code} ở bước kết thúc lượt"
+                )
+                log.warning("dorm_sync_finalize_retry", attempt=attempt)
+                if attempt < 3:
+                    await asyncio.sleep(attempt)
+                continue
+
+            # Còn lại (400/401/403/409…) là câu trả lời DỨT KHOÁT của database —
             # thử lại chỉ lặp lại đúng lỗi đó.
             self._raise_for_status(response, "Kết thúc lượt đồng bộ")
             # Đọc có kiểm: hàm này vừa HẠ CỜ, nên con số trả về đi thẳng vào
@@ -922,7 +1181,8 @@ class DormApi:
             return so_ha_co
 
         raise RuntimeError(
-            "Kết thúc lượt đồng bộ thất bại sau 3 lần thử (lỗi kết nối). "
+            "Kết thúc lượt đồng bộ thất bại sau 3 lần thử (lỗi kết nối hoặc "
+            "408/5xx, đã đối soát nhưng lượt chưa `completed`). "
             "Trạng thái lượt CHƯA rõ — kiểm bảng sync_runs trước khi chạy lại."
         ) from last_error
 
@@ -1161,7 +1421,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--batch-size",
         type=int,
         default=200,
-        help="Số bản ghi mỗi lượt gửi (mặc định 200).",
+        help=f"Số bản ghi mỗi lượt gửi (mặc định 200, tối đa {_TRAN_LO}).",
     )
     parser.add_argument(
         "--client-token",
@@ -1195,6 +1455,16 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     if args.batch_size <= 0:
         parser.error(
             f"--batch-size phải là số nguyên dương, nhận được {args.batch_size}."
+        )
+
+    # ⚠️ Trần PHẢI trùng con số của RPC (`upsert_students_batch` từ chối lô > 500
+    # bằng P0111). Không chặn ở đây thì `--batch-size 501` MỞ LƯỢT trước rồi mới
+    # hỏng ở lô đầu — để lại một lượt phải đóng sổ vì một con số gõ sai. Hai đầu
+    # lệch nhau là kiểu lỗi chỉ lộ ra ở lần chạy thật.
+    if args.batch_size > _TRAN_LO:
+        parser.error(
+            f"--batch-size tối đa {_TRAN_LO} (trần của RPC upsert_students_batch), "
+            f"nhận được {args.batch_size}."
         )
 
     return args
@@ -1318,12 +1588,24 @@ async def main(argv: Optional[List[str]] = None) -> int:
         # In RA MÀN HÌNH trước khi gọi: nếu cả lời gọi lẫn lần đọc phục hồi đều
         # hỏng, đây là thứ người vận hành cầm đi tra database — mà lúc đó thì
         # không còn gì in ra được nữa.
+        # ⚠️ Token TRUYỀN TAY và token TỰ SINH có ý nghĩa khác nhau khi gặp một
+        # lượt cũ mang cùng dấu — xem `_nhan_lai_hay_thay_the`. Phân biệt bằng
+        # `args.client_token`, không phải bằng `client_token` (đã bị `or` lấp).
+        la_lan_chay_lai = args.client_token is not None
         client_token = args.client_token or uuid.uuid4().hex
         print(f"  Dấu lượt chạy: {_client_note(client_token)}")
+        if la_lan_chay_lai:
+            print(
+                "  (dấu do người vận hành truyền vào — lượt cũ mang dấu này sẽ "
+                "được ĐÓNG SỔ rồi mở lượt mới, không nhận lại)"
+            )
 
         try:
             run_id = await api.open_sync_run(
-                args.academic_year, client_token, raw_count=len(rows)
+                args.academic_year,
+                client_token,
+                raw_count=len(rows),
+                la_lan_chay_lai=la_lan_chay_lai,
             )
         except RuntimeError as exc:
             # Chưa mở được lượt thì chưa có gì để dọn. In gọn thay vì ném

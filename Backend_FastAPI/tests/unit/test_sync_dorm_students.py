@@ -343,11 +343,15 @@ class _RecordingClient:
         return self._response
 
     async def get(self, url, headers=None, params=None):
-        self.calls.append({"method": "GET", "url": url, "params": params})
+        self.calls.append(
+            {"method": "GET", "url": url, "params": params, "headers": headers}
+        )
         return self._response
 
     async def post(self, url, headers=None, params=None, json=None):
-        self.calls.append({"method": "POST", "url": url, "json": json})
+        self.calls.append(
+            {"method": "POST", "url": url, "json": json, "headers": headers}
+        )
         if self._post_error is not None:
             raise self._post_error
         return (
@@ -1316,7 +1320,9 @@ async def test_interrupt_mid_write_still_closes_the_run(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
-        async def open_sync_run(self, academic_year, client_token, raw_count):
+        async def open_sync_run(
+            self, academic_year, client_token, raw_count, *, la_lan_chay_lai=False
+        ):
             return 77
 
         async def upsert_students(self, run_id, rows):
@@ -1371,7 +1377,9 @@ async def test_stop_request_blocks_the_finalizer_when_the_loop_never_ran(monkeyp
         async def __aexit__(self, *exc):
             return False
 
-        async def open_sync_run(self, academic_year, client_token, raw_count):
+        async def open_sync_run(
+            self, academic_year, client_token, raw_count, *, la_lan_chay_lai=False
+        ):
             return 91
 
         async def finalize_sync_run(self, run_id, source_count, upserted_count):
@@ -1431,8 +1439,13 @@ class _ApiGhiNhan:
     async def __aexit__(self, *exc):
         return False
 
-    async def open_sync_run(self, academic_year, client_token, raw_count):
+    async def open_sync_run(
+        self, academic_year, client_token, raw_count, *, la_lan_chay_lai=False
+    ):
         self.raw_count = raw_count
+        # Ghi lại để test resume quan sát được: `main` phải truyền True đúng khi
+        # người vận hành tự đưa `--client-token`.
+        self.la_lan_chay_lai = la_lan_chay_lai
         return 42
 
     async def upsert_students(self, run_id, rows):
@@ -1611,3 +1624,309 @@ async def test_dry_run_never_needs_the_source_declaration(monkeypatch):
     monkeypatch.setattr(sync_module, "DormApi", _FakeApi)
 
     assert await main(["--academic-year", "2026"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Bốn thay đổi của `693b9cda` — trước đây chỉ parser có test
+# ---------------------------------------------------------------------------
+
+
+def test_bearer_header_only_for_jwt_keys():
+    """``Authorization: Bearer`` CHỈ gửi khi khoá là JWT.
+
+    Khoá thế hệ mới ``sb_secret_...`` không phải JWT, và đặt nó ở vị trí Bearer
+    là dùng sai contract của header đó. Đo được: Supabase local vẫn trả 200 khi
+    gửi cả hai, nên đây KHÔNG phải lỗi đang hỏng — nó dựa vào việc máy chủ bỏ
+    qua một header sai. Ngày máy chủ siết lại, lượt đồng bộ chết bằng 401 ở
+    đúng thao tác ghi dữ liệu thật.
+    """
+    moi = DormApi("http://127.0.0.1:54321", "sb_secret_ABCdef")
+    assert "Authorization" not in moi._headers
+    assert moi._headers["apikey"] == "sb_secret_ABCdef"
+
+    # Khoá legacy `service_role` là JWT thật (mở đầu `eyJ`) — vẫn phải gửi.
+    cu = DormApi("http://127.0.0.1:54321", "eyJhbGciOiJIUzI1NiJ9.x.y")
+    assert cu._headers["Authorization"] == "Bearer eyJhbGciOiJIUzI1NiJ9.x.y"
+
+
+async def test_count_students_excludes_tombstoned_rows():
+    """Phép đếm đối soát phải BỎ hồ sơ đã gỡ.
+
+    Khoá secret đi vòng qua RLS, nên policy che tombstone không áp cho lời gọi
+    này. Không lọc thì con số "đang có ở hệ KTX" cao hơn danh sách cán bộ thật
+    sự nhìn thấy — mà đó đúng là con số dùng để quyết định trước khi ghi.
+    """
+    client = _RecordingClient(_FakeResponse(headers={"content-range": "0-0/7"}))
+
+    assert await _api_with(client).count_students(2026) == 7
+
+    params = client.calls[0]["params"]
+    assert params["deleted_at"] == "is.null"
+    assert params["academic_year"] == "eq.2026"
+
+
+async def test_finalize_succeeds_on_the_main_path_without_reconciling():
+    """Đóng sổ thành công đi ĐƯỜNG CHÍNH, không rơi vào nhánh xử lý lỗi.
+
+    Đây là ca mà bản trước `693b9cda` hỏng hoàn toàn mà không ai thấy:
+    ``finalize_sync_run`` khai ``returns public.sync_runs`` (composite SCALAR)
+    nên PostgREST trả OBJECT ĐƠN, còn parser thì đòi mảng — nên MỌI lần đóng sổ
+    thành công đều ném tại parser rồi được lần đối soát thứ hai cứu. Kết quả
+    cuối vẫn đúng, nên bề mặt sạch trơn.
+
+    Test này khoá hai điều cùng lúc: trả đúng số, VÀ chỉ tốn đúng một lời gọi.
+    Bỏ vế thứ hai thì nó xanh cả khi đường chính lại hỏng.
+    """
+    client = _RecordingClient(
+        _FakeResponse(payload={"id": 9, "status": "completed", "deactivated_count": 3})
+    )
+
+    assert await _api_with(client).finalize_sync_run(9, 5, 5) == 3
+
+    assert len(client.calls) == 1
+    assert client.calls[0]["url"].endswith("/rpc/finalize_sync_run")
+    assert client.calls[0]["json"] == {
+        "p_run_id": 9,
+        "p_source_count": 5,
+        "p_upserted_count": 5,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 1E — mã lỗi map phía client, và nhánh chạy lại
+# ---------------------------------------------------------------------------
+
+
+async def test_error_maps_the_code_and_never_echoes_the_server_message():
+    """Lỗi in MÃ và thông điệp cố định phía client, KHÔNG in ``message``.
+
+    PostgREST trả nguyên văn thông điệp của Postgres, mà thông điệp đó mang
+    theo giá trị hàng. Một dòng lỗi như thế đi thẳng ra stderr — nơi CI, cron
+    và container thu gom y như log.
+    """
+    client = _RecordingClient(
+        _FakeResponse(
+            status_code=400,
+            payload={
+                "code": "P0136",
+                "message": "Chua ghi het nguon cho Nguyen Van An 0912345678",
+                "details": "hang gay loi: 0912345678",
+            },
+        )
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        await _api_with(client).finalize_sync_run(9, 5, 4)
+
+    loi = str(exc.value)
+    assert "[P0136]" in loi
+    assert "Chưa ghi hết phần đáng ghi" in loi
+    # Không một mảnh nào của thân phản hồi được nhắc lại.
+    assert "Nguyen Van An" not in loi
+    assert "0912345678" not in loi
+    assert "hang gay loi" not in loi
+
+
+async def test_unknown_error_code_is_shown_but_not_invented():
+    """Mã lạ vẫn in ra mã — nó là thứ duy nhất để tra log, và không chứa PII."""
+    client = _RecordingClient(
+        _FakeResponse(
+            status_code=400,
+            payload={"code": "22P02", "message": "invalid input syntax: 1.5"},
+        )
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        await _api_with(client).count_students(2026)
+
+    loi = str(exc.value)
+    assert "[22P02]" in loi
+    assert "chưa được map" in loi
+    assert "invalid input syntax" not in loi
+
+
+async def test_malformed_error_body_does_not_break_the_error_path():
+    """Thân lỗi không phải JSON thì vẫn ném lỗi tử tế, không nổ tại parser."""
+
+    class _ThanHong(_FakeResponse):
+        def json(self):
+            raise ValueError("không phải JSON")
+
+    client = _RecordingClient(_ThanHong(status_code=500))
+
+    with pytest.raises(RuntimeError) as exc:
+        await _api_with(client).count_students(2026)
+
+    assert "HTTP 500" in str(exc.value)
+
+
+class _ClientTheoUrl:
+    """Client giả ĐỊNH TUYẾN THEO URL — nhánh chạy lại đụng ba endpoint.
+
+    Trả cùng một phản hồi cho mọi URL (như ``_RecordingClient``) sẽ làm test
+    resume xanh giả: lời gọi đóng sổ và lời gọi mở lượt không phân biệt được.
+    """
+
+    def __init__(self, *, run_dang_chay, post_sync_runs=None):
+        self.calls = []
+        self._run_dang_chay = run_dang_chay
+        self._post_sync_runs = post_sync_runs
+
+    async def get(self, url, headers=None, params=None):
+        self.calls.append({"method": "GET", "url": url, "params": params})
+        return _FakeResponse(payload=self._run_dang_chay)
+
+    async def post(self, url, headers=None, params=None, json=None):
+        self.calls.append({"method": "POST", "url": url, "json": json})
+        if url.endswith("/rpc/fail_sync_run"):
+            return _FakeResponse(payload={"id": json["p_run_id"], "status": "failed"})
+        if url.endswith("/sync_runs"):
+            if self._post_sync_runs is not None:
+                return self._post_sync_runs
+            return _FakeResponse(status_code=409)
+        raise AssertionError(f"URL không mong đợi: {url}")
+
+    def urls(self):
+        return [c["url"].rsplit("/rest/v1", 1)[-1] for c in self.calls]
+
+
+async def test_manual_token_closes_the_old_run_and_opens_a_new_one():
+    """``--client-token`` TRUYỀN TAY: đóng sổ lượt cũ rồi mở lượt MỚI.
+
+    Nhận lại lượt cũ là trộn hai lần chạy vào một sổ. Hàng đã ghi ở lần trước
+    vẫn mang ``last_seen_sync_id`` của lượt đó, nên hoặc guard đếm lại từ chối
+    hạ cờ (P0138) và lượt treo ``running`` khoá cứng năm học, hoặc — tệ hơn —
+    nó KHÔNG nổ và ``blocked_count`` cộng dồn qua cả hai lần, cho ra một quyển
+    sổ khép kín mà sai.
+    """
+    client = _ClientTheoUrl(run_dang_chay=[{"id": 11, "status": "running"}])
+    api = _api_with(client)
+
+    # POST /sync_runs: lần đầu 409 (lượt cũ còn sống), lần sau mở được lượt mới.
+    dem = {"n": 0}
+    post_goc = client.post
+
+    async def _post(url, headers=None, params=None, json=None):
+        if url.endswith("/sync_runs"):
+            dem["n"] += 1
+            client.calls.append({"method": "POST", "url": url, "json": json})
+            if dem["n"] == 1:
+                return _FakeResponse(status_code=409)
+            return _FakeResponse(status_code=201, payload=[{"id": 12}])
+        return await post_goc(url, headers=headers, params=params, json=json)
+
+    client.post = _post
+
+    run_id = await api.open_sync_run(2026, "tay", raw_count=5, la_lan_chay_lai=True)
+
+    assert run_id == 12, "phải là lượt MỚI, không phải lượt cũ 11"
+    assert "/rpc/fail_sync_run" in client.urls(), "lượt cũ phải được đóng sổ"
+    # Đóng ĐÚNG lượt cũ, không phải lượt nào khác.
+    dong = [c for c in client.calls if c["url"].endswith("/rpc/fail_sync_run")]
+    assert dong[0]["json"] == {"p_run_id": 11}
+
+
+async def test_generated_token_reuses_the_recovered_run():
+    """Token TỰ SINH: nhận lại lượt cũ, KHÔNG đóng sổ nó.
+
+    Dấu tự sinh chỉ tồn tại trong tiến trình này, nên một hàng mang dấu đó
+    nghĩa là chính lời gọi mở lượt vừa rồi đã tới database rồi mất phản hồi —
+    chưa ghi học viên nào. Đóng sổ nó rồi mở lượt mới là bỏ đi đúng cơ chế phục
+    hồi mà cái dấu sinh ra để phục vụ.
+    """
+    client = _ClientTheoUrl(run_dang_chay=[{"id": 11, "status": "running"}])
+
+    run_id = await _api_with(client).open_sync_run(
+        2026, "tu-sinh", raw_count=5, la_lan_chay_lai=False
+    )
+
+    assert run_id == 11
+    assert "/rpc/fail_sync_run" not in client.urls()
+
+
+async def test_main_flags_a_manual_token_as_a_rerun(monkeypatch):
+    """``main`` phải phân biệt token truyền tay với token tự sinh."""
+    _set_target_env(monkeypatch)
+    monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
+
+    async def _mot_hang(academic_year, **kwargs):
+        return [_row(qlts_profile_id=1)]
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _mot_hang)
+
+    tu_sinh = _ApiGhiNhan()
+    monkeypatch.setattr(sync_module, "DormApi", tu_sinh)
+    assert await main(["--academic-year", "2026", "--apply"]) == 0
+    assert tu_sinh.la_lan_chay_lai is False
+
+    truyen_tay = _ApiGhiNhan()
+    monkeypatch.setattr(sync_module, "DormApi", truyen_tay)
+    assert (
+        await main(["--academic-year", "2026", "--apply", "--client-token", "abc123"])
+        == 0
+    )
+    assert truyen_tay.la_lan_chay_lai is True
+
+
+# ---------------------------------------------------------------------------
+# 1F — ba vá nhỏ
+# ---------------------------------------------------------------------------
+
+
+def test_batch_size_ceiling_matches_the_rpc():
+    """``--batch-size`` khoá trong 1..500, cùng trần với RPC.
+
+    RPC từ chối lô > 500 (P0111). CLI không chặn thì ``--batch-size 501`` MỞ
+    LƯỢT trước rồi mới hỏng ở lô đầu — để lại một lượt phải đóng sổ vì một con
+    số gõ sai.
+    """
+    hop_le = parse_args(["--academic-year", "2026", "--batch-size", "500"])
+    assert hop_le.batch_size == 500
+
+    with pytest.raises(SystemExit):
+        parse_args(["--academic-year", "2026", "--batch-size", "501"])
+
+    with pytest.raises(SystemExit):
+        parse_args(["--academic-year", "2026", "--batch-size", "0"])
+
+
+async def test_missing_content_range_is_unknown_not_empty():
+    """Thiếu hẳn header đếm = KHÔNG BIẾT, không phải "hệ KTX rỗng".
+
+    Mặc định cũ ``"*/0"`` biến đúng ca này thành con số 0, và người vận hành
+    đọc số 0 ở bước xem trước sẽ kết luận ngược hẳn với thực tế.
+    """
+    client = _RecordingClient(_FakeResponse(headers={}))
+
+    assert await _api_with(client).count_students(2026) is None
+
+
+async def test_finalize_reconciles_a_gateway_5xx_instead_of_declaring_failure():
+    """502 ở bước hạ cờ thì ĐỐI SOÁT, không kết luận là database từ chối.
+
+    408/5xx thường đến từ gateway đứng TRƯỚC database, nên transaction có thể
+    đã commit xong rồi phản hồi mới hỏng. Đây LÀ bước hạ cờ: coi 502 là câu trả
+    lời dứt khoát sẽ ghi ``failed`` cho một lượt đã đổi ``source_eligible`` của
+    cả cohort — và ``open_sync_run`` cách đó hai mươi dòng đã lập luận ngược lại.
+    """
+
+    class _GatewayHongRoiDoiSoat:
+        def __init__(self):
+            self.calls = []
+
+        async def post(self, url, headers=None, params=None, json=None):
+            self.calls.append({"method": "POST", "url": url})
+            return _FakeResponse(status_code=502)
+
+        async def get(self, url, headers=None, params=None):
+            self.calls.append({"method": "GET", "url": url})
+            return _FakeResponse(
+                payload=[{"id": 9, "status": "completed", "deactivated_count": 4}]
+            )
+
+    client = _GatewayHongRoiDoiSoat()
+
+    assert await _api_with(client).finalize_sync_run(9, 5, 5) == 4
+
+    # Đã hỏi lại thay vì ném thẳng.
+    assert any(c["method"] == "GET" for c in client.calls)
