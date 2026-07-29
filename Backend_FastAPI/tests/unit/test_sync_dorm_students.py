@@ -442,16 +442,35 @@ def test_batch_counts_accept_the_valid_shape():
     assert _doc_so_lieu_lo([{"upserted": 198, "blocked": 2}]) == (198, 2)
 
 
+def test_close_response_accepts_the_shape_postgrest_really_returns():
+    """`returns public.sync_runs` là composite SCALAR → PostgREST trả OBJECT ĐƠN.
+
+    Đo trên PostgREST thật. Bản trước đòi mảng đúng một phần tử, nên MỌI lần
+    đóng sổ thành công đều ném ngay rồi rơi xuống nhánh xử lý lỗi — vẫn ra kết
+    quả đúng nhờ lần đối soát thứ hai, nhưng đường chính hỏng hoàn toàn và
+    không có gì nói ra điều đó.
+
+    Mảng một phần tử vẫn nhận, phòng khi ai đó đổi sang `returns setof` hoặc
+    bật `Accept: application/vnd.pgrst.object`.
+    """
+    from app.scripts.sync_dorm_students import _doc_hang_sync_run
+
+    doi_tuong = {"id": 9, "status": "failed", "upserted_count": 3}
+    assert _doc_hang_sync_run(doi_tuong, 9) == doi_tuong
+    assert _doc_hang_sync_run([doi_tuong], 9) == doi_tuong
+
+
 @pytest.mark.parametrize(
     "body",
     [
-        [{"id": 999, "status": "failed"}],  # hàng của lượt KHÁC
-        [{"id": 9, "status": "running"}],  # chưa đóng mà nhận là đã đóng
+        {"id": 999, "status": "failed"},  # hàng của lượt KHÁC
+        {"id": 9, "status": "running"},  # chưa đóng mà nhận là đã đóng
         [{"id": 9, "status": "failed"}, {"id": 10, "status": "failed"}],  # hai hàng
-        [{"status": "failed"}],  # thiếu id
-        [{"id": True, "status": "failed"}],  # bool không phải id
-        [{}],
+        {"status": "failed"},  # thiếu id
+        {"id": True, "status": "failed"},  # bool không phải id
+        {},
         [],
+        "không phải object",
     ],
 )
 def test_close_response_is_read_fail_closed(body):

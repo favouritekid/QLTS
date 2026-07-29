@@ -256,12 +256,26 @@ def _doc_hang_sync_run(body: Any, run_id: int) -> Dict[str, Any]:
     def _hong(vi_sao: str) -> RuntimeError:
         return RuntimeError(f"Đóng sổ lượt hỏng: {vi_sao}.")
 
-    if not isinstance(body, list) or len(body) != 1:
-        raise _hong("phản hồi không phải mảng đúng một phần tử")
+    # ⚠️ ĐO TRÊN POSTGREST THẬT: hàm `returns public.sync_runs` là composite
+    # SCALAR, không phải `setof`, nên PostgREST trả về một OBJECT ĐƠN — khác
+    # `upsert_students_batch` (`returns table (...)`) vốn trả mảng.
+    #
+    # Bản trước đòi mảng đúng một phần tử, nên MỌI lần đóng sổ thành công đều
+    # ném ngay tại đây rồi rơi xuống nhánh xử lý lỗi. Nó vẫn ra kết quả đúng
+    # nhờ lần đối soát thứ hai, nhưng đường chính thì hỏng hoàn toàn và không
+    # có gì trên màn hình nói ra điều đó.
+    #
+    # Vẫn nhận mảng một phần tử: nếu sau này ai đó đổi sang `returns setof`
+    # hoặc bật `Accept: application/vnd.pgrst.object`, contract vẫn chạy.
+    if isinstance(body, list):
+        if len(body) != 1:
+            raise _hong("phản hồi là mảng nhưng không có đúng một phần tử")
+        row = body[0]
+    else:
+        row = body
 
-    row = body[0]
     if not isinstance(row, dict):
-        raise _hong("phần tử phản hồi không phải object")
+        raise _hong("phản hồi không phải object")
 
     got_id = row.get("id")
     if not isinstance(got_id, int) or isinstance(got_id, bool):
@@ -382,9 +396,20 @@ class DormApi:
         self._base = base_url.rstrip("/") + "/rest/v1"
         self._headers = {
             "apikey": secret_key,
-            "Authorization": f"Bearer {secret_key}",
             "Content-Type": "application/json",
         }
+
+        # ⚠️ `Authorization: Bearer` CHỈ cho khoá dạng JWT (legacy
+        # `service_role`). Khoá thế hệ mới `sb_secret_...` không phải JWT, và
+        # gửi nó ở vị trí Bearer là dùng sai contract của header đó.
+        #
+        # Đo trên PostgREST của Supabase local: gửi cả hai header với khoá
+        # `sb_secret_` vẫn trả 200, nên đây KHÔNG phải lỗi đang hỏng. Nhưng nó
+        # dựa vào việc máy chủ bỏ qua một header sai — một hành vi không có gì
+        # bảo đảm, và ngày nó siết lại thì lượt đồng bộ chết bằng 401 ở đúng
+        # thao tác ghi dữ liệu thật.
+        if secret_key.startswith("eyJ"):
+            self._headers["Authorization"] = f"Bearer {secret_key}"
 
     async def __aenter__(self) -> "DormApi":
         self._client = httpx.AsyncClient(timeout=60.0)
@@ -811,6 +836,11 @@ class DormApi:
             headers={**self._headers, "Prefer": "count=exact"},
             params={
                 "academic_year": f"eq.{academic_year}",
+                # ⚠️ Bỏ hồ sơ đã gỡ. Khoá secret đi vòng qua RLS, nên policy
+                # che tombstone KHÔNG áp cho lời gọi này — con số ở đây sẽ cao
+                # hơn danh sách cán bộ thật sự nhìn thấy, và đó đúng là con số
+                # người vận hành dùng để đối soát trước khi ghi.
+                "deleted_at": "is.null",
                 "select": "qlts_profile_id",
                 "limit": "1",
             },
@@ -869,7 +899,26 @@ class DormApi:
             # Lỗi có phản hồi (4xx/5xx) là câu trả lời dứt khoát từ database —
             # thử lại chỉ lặp lại đúng lỗi đó.
             self._raise_for_status(response, "Kết thúc lượt đồng bộ")
-            return response.json()["deactivated_count"]
+            # Đọc có kiểm: hàm này vừa HẠ CỜ, nên con số trả về đi thẳng vào
+            # nhật ký đối soát. Một thân phản hồi lạ mà nhận bừa sẽ ghi sai số
+            # người bị loại khỏi danh sách.
+            hang = _doc_hang_sync_run(response.json(), run_id)
+            if hang.get("status") != "completed":
+                raise RuntimeError(
+                    "Kết thúc lượt đồng bộ: lượt không ở trạng thái "
+                    f"`completed` sau khi gọi ({hang.get('status')!r})."
+                )
+            so_ha_co = hang.get("deactivated_count")
+            if not isinstance(so_ha_co, int) or isinstance(so_ha_co, bool):
+                raise RuntimeError(
+                    "Kết thúc lượt đồng bộ: `deactivated_count` không phải số "
+                    "nguyên."
+                )
+            if so_ha_co < 0:
+                raise RuntimeError(
+                    f"Kết thúc lượt đồng bộ: `deactivated_count` âm ({so_ha_co})."
+                )
+            return so_ha_co
 
         raise RuntimeError(
             "Kết thúc lượt đồng bộ thất bại sau 3 lần thử (lỗi kết nối). "
