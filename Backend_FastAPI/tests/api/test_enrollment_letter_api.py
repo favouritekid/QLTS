@@ -19,6 +19,7 @@ import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -36,6 +37,15 @@ from tests.fixtures.constants import TestOrgData
 # 5510216 = Công nghệ ô tô, Trung cấp, học phí HK1 = 9.200.000.
 _SCHEDULED_MAJOR_CODE = "5510216"
 _SCHEDULED_MAJOR_ID = 9510216
+
+# Mã ngành CÓ ƯU ĐÃI trong bảng thu: 6340301 = Kế toán, Cao đẳng —
+# hk1 6.500.000 · discount_percent 30 · first 4.550.000 · second 0.
+# Dùng cho nhóm test "ngành ưu đãi": học phí GỐC vẫn 6.500.000, số PHẢI NỘP là
+# 4.550.000, và gate phải chấp nhận đúng cặp đó.
+_DISCOUNTED_MAJOR_CODE = "6340301"
+_DISCOUNTED_MAJOR_ID = 9340301
+_DISCOUNTED_HK1 = 6_500_000
+_DISCOUNTED_PAYABLE = 4_550_000
 
 pytestmark = pytest.mark.asyncio
 
@@ -183,6 +193,59 @@ async def _get_or_create_scheduled_major() -> int:
             session.add(major)
             await session.flush()
             return major.id
+
+
+async def _get_or_create_discounted_major() -> int:
+    """MajorProgram mang mã ngành CÓ ƯU ĐÃI trong bảng thu (6340301, Kế toán CĐ).
+
+    Cùng khuôn ``_get_or_create_scheduled_major`` (id tường minh vì sequence
+    major_program đứng ở 1). Tách riêng để nhóm test ưu đãi không phải sửa ngành
+    dùng chung của các test cũ.
+    """
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            existing = (
+                await session.execute(
+                    select(models.MajorProgram).where(
+                        models.MajorProgram.code == _DISCOUNTED_MAJOR_CODE
+                    )
+                )
+            ).scalars().first()
+            if existing is not None:
+                return existing.id
+            major = models.MajorProgram(
+                id=_DISCOUNTED_MAJOR_ID,
+                name="Kế toán",
+                code=_DISCOUNTED_MAJOR_CODE,
+                degree_level="Cao đẳng",
+                unit_id=TestOrgData.UNIT_1["id"],
+            )
+            session.add(major)
+            await session.flush()
+            return major.id
+
+
+async def _seed_discounted_hk1_fee(
+    profile_id: int, *, base: int, final: int
+) -> None:
+    """Fee HK1 của ngành CÓ ưu đãi, cho phép đặt riêng giá gốc và số phải nộp."""
+    major_id = await _get_or_create_discounted_major()
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            session.add(
+                Fee(
+                    admission_profile_id=profile_id,
+                    fee_type="tuition",
+                    academic_year=2026,
+                    semester_no=1,
+                    base_amount=Decimal(str(base)),
+                    final_amount=Decimal(str(final)),
+                    total_discount=Decimal(str(base - final)),
+                    status=FeeStatusEnum.invoiced.value,
+                    resolved_major_id=major_id,
+                    resolved_degree_level="Cao đẳng",
+                )
+            )
 
 
 async def _seed_hk1_fee(profile_id: int, major_id: int | None = None) -> None:
@@ -688,7 +751,185 @@ async def test_amount_drift_error_does_not_advise_recalculating_fee(
 
     msg = str(exc.value)
     assert "kế toán" in msg, "phải hướng officer sang người, không sang nút bấm"
-    assert "ĐỪNG bấm tính lại" in msg
+    # ⚠️ Sửa 29-07: KHÔNG còn khẳng định "ĐỪNG bấm tính lại — thao tác đó xoá
+    # khoản chỉnh tay". Câu đó SAI từ 26-07: cả ba đường định giá lại đều giữ
+    # nguyên khoản giảm tay ở mức đã duyệt (``fee_pricing.resolve_repricing``).
+    # Điều test này khoá vẫn nguyên: thông báo hướng người dùng sang NGƯỜI, và
+    # tuyệt đối không xui họ bấm một nút nào để "sửa" con số.
+    assert "tính lại" not in msg, (
+        "không được nhắc tới nút tính lại — dù để khuyên hay để cấm"
+    )
+
+
+async def test_build_letter_data_accepts_discounted_major(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Ngành CÓ ưu đãi: giá gốc khớp ``hk1``, phải nộp khớp ``first`` ⇒ PHÁT ĐƯỢC.
+
+    🔴 Ca hồi quy của sự cố 29-07. Gate cũ so ``hk1`` với ``final_amount``, nên
+    hồ sơ được áp chính sách giảm 30% (``final`` = 4.550.000, ``base`` vẫn
+    6.500.000) bị chặn sạch — dù bảng thu đã khai đúng ưu đãi đó. 74 hồ sơ prod
+    rơi vào ca này. Gate phải so gốc↔``hk1`` và phải-nộp↔``first``.
+
+    Số IN LÊN GIẤY là học phí GỐC (``hk1_fee_amount`` = 6.500.000), khớp các tờ
+    đã phát trước khi áp chính sách — ưu đãi thể hiện ở mức đợt.
+    """
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"disc{uuid.uuid4().hex[:7]}",
+    )
+    await _seed_discounted_hk1_fee(
+        profile_id, base=_DISCOUNTED_HK1, final=_DISCOUNTED_PAYABLE
+    )
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        data = await build_letter_data(session, profile)
+
+    assert data["hk1_fee_amount"] == _DISCOUNTED_HK1, (
+        "giấy phải in HỌC PHÍ GỐC, không phải số sau ưu đãi"
+    )
+    assert data["payable_amount"] == _DISCOUNTED_PAYABLE
+    assert data["tuition_discount_percent"] == 30
+    assert data["first_installment"] == _DISCOUNTED_PAYABLE
+    assert data["second_installment"] == 0, "ngành ưu đãi nộp một lần, không đợt 2"
+
+
+async def test_build_letter_data_rejects_discounted_major_without_discount_applied(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Ngành có ưu đãi nhưng hồ sơ CHƯA được áp giảm ⇒ chặn.
+
+    Chiều ngược của ca trên, và là ca gate CŨ bỏ lọt hoàn toàn: ``final`` bằng
+    ``base`` bằng ``hk1`` nên phép so một-con-số thấy khớp và phát giấy — tờ giấy
+    khi đó ghi "ưu đãi 30%, đợt 1 nộp 4.550.000" trong khi sổ đang đòi thu đủ
+    6.500.000. Cửa thứ hai bắt đúng ca này.
+    """
+    from app.utils.exceptions import ValidationError
+
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"nodisc{uuid.uuid4().hex[:5]}",
+    )
+    await _seed_discounted_hk1_fee(
+        profile_id, base=_DISCOUNTED_HK1, final=_DISCOUNTED_HK1
+    )
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        with pytest.raises(ValidationError) as exc:
+            await build_letter_data(session, profile)
+
+    msg = str(exc.value)
+    assert "6.500.000" in msg and "4.550.000" in msg
+    assert "30%" in msg, "lỗi phải nói rõ mức ưu đãi bảng thu đang khai"
+
+
+async def test_build_letter_data_rejects_discounted_major_wrong_payable(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """Ngành có ưu đãi nhưng số phải nộp lệch mức bảng thu (giảm tay) ⇒ chặn."""
+    from app.utils.exceptions import ValidationError
+
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"wrongp{uuid.uuid4().hex[:5]}",
+    )
+    await _seed_discounted_hk1_fee(
+        profile_id, base=_DISCOUNTED_HK1, final=5_000_000
+    )
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        with pytest.raises(ValidationError) as exc:
+            await build_letter_data(session, profile)
+
+    msg = str(exc.value)
+    assert "5.000.000" in msg and "4.550.000" in msg
+    assert "kế toán" in msg
+    assert "tính lại" not in msg, "lời khuyên cũ đã sai từ 26-07, không được tái xuất"
+
+
+async def test_build_letter_data_rejects_base_drift_while_payable_matches(
+    seed_lead_dependencies: dict,
+    officer_user_in_db: dict,
+):
+    """CỬA 3 (giá gốc) bị cô lập: base lệch ``hk1`` NHƯNG payable khớp mức đợt.
+
+    Không có ca này thì cửa 3 xoá đi cả khối mà suite vẫn xanh — mọi test lệch
+    tiền khác đều rơi vào cửa 4 trước. Đây là hình dạng DUY NHẤT chỉ cửa 3 bắt
+    được: bảng giá học kỳ trong CSDL đã đổi (7.000.000) mà bảng thu hằng số vẫn
+    ghi 6.500.000, trong khi số phải nộp tình cờ vẫn đúng ``first``.
+
+    Lỗi phải chỉ sang BỘ PHẬN KỸ THUẬT (lệch cấu hình), không phải kế toán —
+    giá gốc không do ưu đãi hay giảm tay chạm vào.
+    """
+    from app.utils.exceptions import ValidationError
+
+    from app.services.enrollment_letter_service import build_letter_data
+
+    profile_id = await _seed_approved_profile(
+        seed_lead_dependencies["unit_id"],
+        officer_user_in_db["id"],
+        f"basedr{uuid.uuid4().hex[:5]}",
+    )
+    await _seed_discounted_hk1_fee(
+        profile_id, base=7_000_000, final=_DISCOUNTED_PAYABLE
+    )
+
+    async with AsyncSessionLocal() as session:
+        profile = await session.get(models.AdmissionProfile, profile_id)
+        with pytest.raises(ValidationError) as exc:
+            await build_letter_data(session, profile)
+
+    msg = str(exc.value)
+    assert "7.000.000" in msg and "6.500.000" in msg
+    assert "kỹ thuật" in msg, "lệch giá gốc là việc của cấu hình, không phải kế toán"
+    assert "ĐỪNG bấm tính lại" not in msg, (
+        "lời khuyên này đã sai từ 26-07: resolve_repricing GIỮ khoản giảm tay"
+    )
+
+
+async def test_resolve_tuition_schedule_tolerates_null_discount_percent():
+    """``discount_percent: None`` (mùa sau khai 'chưa quyết') KHÔNG được 500.
+
+    ``None > 0`` là TypeError — không phải domain exception — nên sẽ thoát ra
+    thành HTTP 500 trống trơn, mất đúng câu lỗi tiếng Việt mà cả module này sinh
+    ra để có. Renderer đã ``or 0`` sẵn nên bản trước không vấp; cửa 4 mới là chỗ
+    đầu tiên SO SÁNH giá trị này.
+    """
+    from types import SimpleNamespace
+
+    from app.utils.exceptions import ValidationError
+    from app.services import enrollment_letter_service as svc
+
+    row = {"hk1": 6_500_000, "discount_percent": None, "first": 6_500_000, "second": 0}
+    fee = SimpleNamespace(academic_year=2026)
+
+    # Khớp cả hai cửa ⇒ đi qua trọn vẹn, không TypeError.
+    with patch.dict(svc.C.TUITION_SCHEDULE, {"_NULLPC": row}, clear=False):
+        out = svc._resolve_tuition_schedule(
+            "_NULLPC", "Ngành thử", "Cao đẳng", fee, 6_500_000, 6_500_000
+        )
+        assert out is row
+
+        # Lệch số phải nộp ⇒ vẫn là lỗi CÓ CHỮ, không phải TypeError.
+        with pytest.raises(ValidationError):
+            svc._resolve_tuition_schedule(
+                "_NULLPC", "Ngành thử", "Cao đẳng", fee, 6_500_000, 4_550_000
+            )
 
 
 async def test_build_letter_data_rejects_major_missing_from_schedule(
@@ -1078,6 +1319,88 @@ async def test_third_issue_extends_expiry_of_ALL_previous_letters(
 # --------------------------------------------------------------------------- #
 # Đổi ngành — TOCTOU: chu kỳ mở TRONG lúc render PDF
 # --------------------------------------------------------------------------- #
+async def test_issue_blocked_when_discount_removed_during_render(
+    officer_user_in_db: dict,
+    seed_lead_dependencies: dict,
+    monkeypatch,
+):
+    """Gỡ ưu đãi giữa lúc render ⇒ KHÔNG phát hành.
+
+    🔴 Đây là ca mà khoá snapshot ``payable_amount`` sinh ra để bắt, và là ca
+    mà bản re-check CŨ (chỉ so MỘT con số) không thể thấy: ``base_amount`` giữ
+    nguyên 6.500.000 nên phép so ``hk1_fee_amount`` vẫn khớp, chỉ ``final_amount``
+    nhảy từ 4.550.000 lên 6.500.000. Không có test này thì xoá vế
+    ``payable_amount`` ở re-check vẫn xanh suite.
+
+    Tờ giấy đã render hứa "chỉ phải nộp 4.550.000"; nếu phát hành, sổ lại đòi
+    6.500.000 — đúng loại mâu thuẫn mà toàn bộ gate này tồn tại để chặn.
+    """
+    from sqlalchemy import update as sa_update
+
+    from app.services import enrollment_letter_service as svc
+    from app.services.enrollment_letter_service import issue_enrollment_letter
+    from app.utils.exceptions import BusinessRuleViolation
+
+    pid = await _seed_approved_profile(
+        unit_id=seed_lead_dependencies["unit_id"],
+        officer_id=officer_user_in_db["id"],
+        citizen_id=f"rmdis{uuid.uuid4().hex[:7]}",
+    )
+    await _seed_discounted_hk1_fee(
+        pid, base=_DISCOUNTED_HK1, final=_DISCOUNTED_PAYABLE
+    )
+
+    # Gỡ ưu đãi NGAY SAU khi snapshot đã chốt, TRƯỚC khi re-check chạy — đúng cửa
+    # sổ ~350ms không giữ khoá. Đổi trước khi gọi thì cửa 4 của build_letter_data
+    # chặn mất, không chạm tới re-check (đó là ca đã có test riêng).
+    _orig_build = svc.build_letter_data
+
+    async def _build_then_remove_discount(db_, profile_):
+        data = await _orig_build(db_, profile_)
+        async with AsyncSessionLocal() as other:
+            async with other.begin():
+                await other.execute(
+                    sa_update(models.Fee)
+                    .where(models.Fee.admission_profile_id == pid)
+                    .values(
+                        final_amount=Decimal(str(_DISCOUNTED_HK1)),
+                        total_discount=Decimal("0"),
+                    )
+                )
+        return data
+
+    monkeypatch.setattr(svc, "build_letter_data", _build_then_remove_discount)
+
+    async with AsyncSessionLocal() as db:
+        profile = (
+            await db.execute(
+                select(models.AdmissionProfile).where(
+                    models.AdmissionProfile.id == pid
+                )
+            )
+        ).scalar_one()
+        actor = await db.get(models.User, officer_user_in_db["id"])
+
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await issue_enrollment_letter(
+                db, profile,
+                date(2026, 8, 5), date(2026, 8, 10),
+                actor,
+            )
+    assert "học phí" in str(exc.value).lower()
+
+    # Không để lại bản ghi giấy nào.
+    async with AsyncSessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(models.EnrollmentLetter.id).where(
+                    models.EnrollmentLetter.profile_id == pid
+                )
+            )
+        ).scalars().all()
+    assert rows == []
+
+
 async def test_issue_blocked_when_cycle_opens_during_render(
     officer_user_in_db: dict,
     seed_lead_dependencies: dict,

@@ -92,7 +92,8 @@ class EnrollmentLetter(Base):
     # --- Reproducibility snapshot of the exact data rendered onto the PDF ---
     # Keys: full_name · dob · permanent_address · phone · major_name ·
     # major_code · degree_level · offering_type · school_year · fee_id ·
-    # hk1_fee_amount · tuition_discount_percent · first_installment ·
+    # hk1_fee_amount (học phí GỐC) · payable_amount (số phải nộp sau ưu đãi) ·
+    # tuition_discount_percent · first_installment ·
     # second_installment · first_installment_due · second_installment_due ·
     # required_documents · early_enrollment_bonus · benefits · closing_note ·
     # bank_account_number · bank_account_name · bank_name · signatory_title ·
