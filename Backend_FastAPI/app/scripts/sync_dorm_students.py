@@ -6,12 +6,25 @@ Vị từ cohort lấy từ ``repositories/dorm_export_repository.select_paid_hk
 — cùng hàm mà test lock-in đang canh. KHÔNG viết lại điều kiện tại đây: hai hệ
 nói hai danh sách khác nhau là kiểu sai không có gì nổ ra.
 
-Usage (BẮT BUỘC override entrypoint — xem cảnh báo bên dưới):
+Usage (ba cờ dưới đây đều BẮT BUỘC — xem cảnh báo bên dưới):
 
-    docker compose run --rm --no-deps --entrypoint python \\
+    docker compose -f docker-compose.yml run --rm --no-deps --entrypoint python \\
+        -v <duong-dan>/sync_dorm_students.py:/app/app/scripts/sync_dorm_students.py \\
         --env-from-file <file-secret-chi-tren-may-quan-tri> \\
         backend -m app.scripts.sync_dorm_students \\
             --academic-year 2026 --dry-run
+
+⚠️ ``-f docker-compose.yml`` BẮT BUỘC. Thiếu nó, Compose tự nạp
+``docker-compose.override.yml`` — file đó đặt ``APP_ENV=development``, trỏ
+``DATABASE_URL`` sang database dev, và bind-mount TOÀN BỘ source. Chạy lệnh đồng
+bộ production trong cấu hình đó là đọc nhầm nguồn ngay từ đầu.
+
+⚠️ ``-v ...sync_dorm_students.py`` BẮT BUỘC, và mount ĐÚNG MỘT FILE. File này
+cố ý bị loại khỏi image (xem ``.dockerignore``) nên không có sẵn trong
+container; còn hai module nó dùng — ``repositories/dorm_export_repository`` và
+``constants/hk1_fee`` — thì ĐÃ được deploy trong image. Mount cả cây source để
+"cho tiện" sẽ chạy code đang checkout trên máy, không phải code đã qua CI và
+deploy.
 
 ⚠️ Là ``--env-from-file``, KHÔNG phải ``--env-file``. Với Compose v2 trở lên
 ``--env-file`` là cờ TOÀN CỤC (đứng trước ``run``) và nó chỉ nạp biến cho việc
@@ -220,6 +233,45 @@ def assert_transport_is_encrypted(base_url: str) -> None:
         "Khoá secret và họ tên người học đi trong các lời gọi này; không mã hoá "
         "đường truyền thì chúng đọc được trên đường đi."
     )
+
+
+_TRANG_THAI_DA_DONG = {"failed", "completed"}
+
+
+def _doc_hang_sync_run(body: Any, run_id: int) -> Dict[str, Any]:
+    """Đọc hàng ``sync_runs`` từ phản hồi, kiểm ĐÚNG DANH TÍNH.
+
+    ⚠️ Không chỉ kiểm hình dạng mà kiểm cả ``id``. Một phản hồi mang hàng của
+    lượt KHÁC — proxy trả nhầm, RPC đổi hành vi, nhiều hàng — mà ta nhận bừa
+    thì kết luận "lượt này đã đóng" nói về một lượt không phải nó, và lượt thật
+    vẫn treo ``running`` khoá năm học.
+
+    ⚠️ Cũng kiểm ``status`` thuộc tập đã đóng. Nhận một hàng còn ``running``
+    làm bằng chứng đã đóng sổ là tự tuyên bố xong việc chưa làm.
+    """
+
+    def _hong(vi_sao: str) -> RuntimeError:
+        return RuntimeError(f"Đóng sổ lượt hỏng: {vi_sao}.")
+
+    if not isinstance(body, list) or len(body) != 1:
+        raise _hong("phản hồi không phải mảng đúng một phần tử")
+
+    row = body[0]
+    if not isinstance(row, dict):
+        raise _hong("phần tử phản hồi không phải object")
+
+    got_id = row.get("id")
+    if not isinstance(got_id, int) or isinstance(got_id, bool):
+        raise _hong("thiếu `id` hoặc `id` không phải số nguyên")
+    if got_id != run_id:
+        raise _hong(f"phản hồi mang lượt {got_id}, không phải {run_id}")
+
+    if row.get("status") not in _TRANG_THAI_DA_DONG:
+        raise _hong(
+            f"trạng thái trả về không phải lượt đã đóng ({row.get('status')!r})"
+        )
+
+    return row
 
 
 def _doc_so_lieu_lo(body: Any) -> Tuple[int, int]:
@@ -569,7 +621,17 @@ class DormApi:
             )
 
     async def get_sync_run(self, run_id: int) -> Optional[Dict[str, Any]]:
-        """Đọc trạng thái hiện tại của một lượt."""
+        """Đọc trạng thái hiện tại của một lượt. ``None`` = không đọc được.
+
+        ⚠️ KIỂM HÌNH DẠNG, không chỉ lấy phần tử đầu. Hàm anh em
+        ``find_run_by_token`` đã được siết đúng chỗ này; ở đây thì chưa, và một
+        thân phản hồi lạ (``[{}]``, proxy cắt, JSON hỏng) ném ``KeyError`` ra
+        GIỮA nhánh xử lý lỗi — nơi mọi lời gọi đều đang chạy vì có gì đó đã
+        hỏng sẵn. Trả ``None`` để người gọi xử lý tử tế thay vì nổ.
+
+        ⚠️ Kiểm cả ``id``: một phản hồi mang hàng của lượt khác mà nhận bừa thì
+        mọi kết luận sau đó nói về sai lượt.
+        """
         response = await self._client.get(
             f"{self._base}/sync_runs",
             headers=self._headers,
@@ -579,8 +641,26 @@ class DormApi:
             },
         )
         self._raise_for_status(response, "Đọc lượt đồng bộ")
-        rows = response.json()
-        return rows[0] if rows else None
+
+        try:
+            rows = response.json()
+        except Exception:
+            return None
+
+        if not isinstance(rows, list) or not rows:
+            return None
+
+        row = rows[0]
+        if not isinstance(row, dict):
+            return None
+
+        got_id = row.get("id")
+        if not isinstance(got_id, int) or isinstance(got_id, bool) or got_id != run_id:
+            return None
+        if not isinstance(row.get("status"), str):
+            return None
+
+        return row
 
     async def mark_sync_run_failed(self, run_id: int) -> Dict[str, Any]:
         """Đóng sổ một lượt hỏng, qua RPC. Trả hàng ``sync_runs`` sau khi gọi.
@@ -606,14 +686,7 @@ class DormApi:
             json={"p_run_id": run_id},
         )
         self._raise_for_status(response, "Đóng sổ lượt hỏng")
-
-        body = response.json()
-        row = body[0] if isinstance(body, list) and body else body
-        if not isinstance(row, dict) or "status" not in row:
-            raise RuntimeError(
-                "Đóng sổ lượt hỏng: phản hồi không đọc được trạng thái lượt."
-            )
-        return row
+        return _doc_hang_sync_run(response.json(), run_id)
 
     async def reconcile_after_failure(
         self, run_id: int
@@ -650,7 +723,30 @@ class DormApi:
         try:
             sau_khi_dong = await self.mark_sync_run_failed(run_id)
         except Exception:
-            return "unknown", run
+            # ⚠️ Lỗi ở BƯỚC ĐÓNG SỔ cũng là trạng thái mơ hồ, y như ở bước mở
+            # lượt. Mất kết nối, 408, 5xx — cả ba đều có thể xảy ra SAU khi
+            # database đã commit. Trả "unknown" ngay ở đây là bỏ mất chính cái
+            # cơ chế đối soát mà `open_sync_run` đã có: lượt có thể đã `failed`
+            # thật, hoặc vẫn `running` và đang khoá năm học, và hai ca đó cần
+            # hai hành động khác nhau.
+            #
+            # Hỏi lại một lần. RPC idempotent nên đọc lại là an toàn.
+            try:
+                lan_hai = await self.get_sync_run(run_id)
+            except Exception:
+                return "unknown", run
+
+            if isinstance(lan_hai, dict):
+                trang_thai_that = lan_hai.get("status")
+                if trang_thai_that == "completed":
+                    return "finalized", lan_hai
+                if trang_thai_that == "failed":
+                    # POST đã tới nơi và commit; chỉ phản hồi không về.
+                    return "marked_failed", lan_hai
+
+            # Đọc được mà vẫn `running`, hoặc thân phản hồi lạ: KHÔNG biết.
+            # Tuyệt đối không tuyên bố đã đóng sổ.
+            return "unknown", lan_hai if isinstance(lan_hai, dict) else run
 
         # ⚠️ Tin TRẠNG THÁI TRẢ VỀ, không tin việc lời gọi không ném.
         #

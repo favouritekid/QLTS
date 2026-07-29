@@ -442,6 +442,94 @@ def test_batch_counts_accept_the_valid_shape():
     assert _doc_so_lieu_lo([{"upserted": 198, "blocked": 2}]) == (198, 2)
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        [{"id": 999, "status": "failed"}],  # hàng của lượt KHÁC
+        [{"id": 9, "status": "running"}],  # chưa đóng mà nhận là đã đóng
+        [{"id": 9, "status": "failed"}, {"id": 10, "status": "failed"}],  # hai hàng
+        [{"status": "failed"}],  # thiếu id
+        [{"id": True, "status": "failed"}],  # bool không phải id
+        [{}],
+        [],
+    ],
+)
+def test_close_response_is_read_fail_closed(body):
+    """Phản hồi đóng sổ phải mang ĐÚNG lượt và ĐÚNG trạng thái đã đóng.
+
+    Nhận bừa một hàng của lượt khác thì kết luận "lượt này đã đóng" nói về một
+    lượt không phải nó, còn lượt thật vẫn treo ``running`` và khoá năm học.
+    Nhận một hàng còn ``running`` làm bằng chứng đã đóng sổ là tự tuyên bố xong
+    việc chưa làm.
+    """
+    from app.scripts.sync_dorm_students import _doc_hang_sync_run
+
+    with pytest.raises(RuntimeError):
+        _doc_hang_sync_run(body, 9)
+
+
+async def test_reconcile_probes_again_when_closing_is_ambiguous():
+    """Mất ACK ở BƯỚC ĐÓNG SỔ cũng phải đối soát lại.
+
+    Mất kết nối, 408, 5xx — cả ba đều có thể xảy ra SAU khi database đã commit.
+    Trả "không xác định" ngay là bỏ mất chính cơ chế đối soát mà bước MỞ lượt đã
+    có, và hai ca "chưa tới database" với "đã commit rồi mất phản hồi" cần hai
+    hành động khác hẳn nhau.
+    """
+
+    class _MatAckKhiDong(_RecordingClient):
+        def __init__(self):
+            super().__init__()
+            self.lan_get = 0
+
+        async def get(self, url, headers=None, params=None):
+            self.lan_get += 1
+            self.calls.append({"method": "GET", "url": url, "params": params})
+            # Lần đầu: lượt còn chạy. Lần hai (sau khi POST hỏng): đã `failed`
+            # — tức POST đã tới nơi và commit, chỉ phản hồi không về.
+            trang_thai = "running" if self.lan_get == 1 else "failed"
+            return _FakeResponse(payload=[{"id": 9, "status": trang_thai}])
+
+        async def post(self, url, headers=None, params=None, json=None):
+            self.calls.append({"method": "POST", "url": url, "json": json})
+            raise httpx.ConnectError("mất kết nối")
+
+    client = _MatAckKhiDong()
+    outcome, run = await _api_with(client).reconcile_after_failure(9)
+
+    assert outcome == "marked_failed"
+    assert run["status"] == "failed"
+    assert [c["method"] for c in client.calls] == ["GET", "POST", "GET"]
+
+
+async def test_reconcile_stays_unknown_when_the_run_is_still_running():
+    """Đọc lại được mà lượt VẪN chạy = POST chưa tới nơi. Không tuyên bố bừa."""
+
+    class _PostHong(_RecordingClient):
+        async def get(self, url, headers=None, params=None):
+            self.calls.append({"method": "GET", "url": url, "params": params})
+            return _FakeResponse(payload=[{"id": 9, "status": "running"}])
+
+        async def post(self, url, headers=None, params=None, json=None):
+            self.calls.append({"method": "POST", "url": url, "json": json})
+            raise httpx.ReadTimeout("hết giờ")
+
+    outcome, _ = await _api_with(_PostHong()).reconcile_after_failure(9)
+
+    assert outcome == "unknown"
+
+
+async def test_get_sync_run_returns_none_for_a_strange_body():
+    """``[{}]`` không được ném ``KeyError`` giữa nhánh xử lý lỗi.
+
+    Mọi lời gọi ở nhánh đó chạy vì có gì đó đã hỏng sẵn; ném thêm một exception
+    lạ ở đây là biến một lượt cần đối soát thành traceback.
+    """
+    for than in ([{}], [], [{"id": 999, "status": "failed"}], ["lạ"], {"id": 9}):
+        client = _RecordingClient(_FakeResponse(payload=than))
+        assert await _api_with(client).get_sync_run(9) is None
+
+
 async def test_count_students_returns_none_for_non_numeric_range():
     """``Content-Range: */*`` không được làm sập một lần XEM TRƯỚC chỉ-đọc."""
     client = _RecordingClient(_FakeResponse(headers={"content-range": "*/*"}))
