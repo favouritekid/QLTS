@@ -11,8 +11,9 @@ logic. When these graduate to a runtime store, move them to system_config
 
 ⚠️ Khối HỌC PHÍ trên giấy đọc từ ``TUITION_SCHEDULE`` bên dưới — bảng thu do
 Nhà trường ban hành, tra theo MÃ NGÀNH. Fee của hồ sơ vẫn là hàng rào bắt buộc
-(xác định ngành/trình độ + đối chiếu tổng học phí), nhưng CÁC MỨC ĐỢT in trên
-giấy là mức chuẩn của bảng thu, KHÔNG trừ phần thí sinh đã nộp trước.
+(xác định ngành/trình độ + đối chiếu HỌC PHÍ GỐC với ``hk1`` VÀ SỐ PHẢI NỘP với
+mức đợt), nhưng CÁC MỨC ĐỢT in trên giấy là mức chuẩn của bảng thu, KHÔNG trừ
+phần thí sinh đã nộp trước.
 """
 
 from datetime import date
@@ -54,8 +55,10 @@ SCHOOL_YEAR = "2025-2026"
 #                     second == 0.
 #                     ``first`` (ngành ưu đãi) / ``hk1`` (ngành thu 2 đợt) PHẢI
 #                     khớp ``Fee.final_amount`` — cửa thứ hai của gate.
-# Hai bất biến trên được khoá bằng test (``test_tuition_schedule_is_consistent``)
-# nên một dòng gõ sai số không thể lọt ra giấy chính thức.
+# Hai bất biến trên được khoá bằng test
+# (``test_tuition_schedule_is_internally_consistent`` — tests/unit/
+# test_enrollment_letter_pdf.py) nên một dòng gõ sai số không thể lọt ra giấy
+# chính thức.
 #
 # ⚠️ MÙA SAU phải sửa Ở ĐÂY rồi deploy lại (bảng là hằng số Python theo quyết
 # định 19-07). Đổi mức thu / hạn nộp mà quên file này thì giấy in số của mùa cũ.
