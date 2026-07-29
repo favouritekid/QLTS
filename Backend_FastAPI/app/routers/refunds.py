@@ -1,5 +1,6 @@
 """Refund request API."""
 
+from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -51,10 +52,21 @@ async def list_refunds(
         UserRole.ACCOUNTANT,
         UserRole.ADMIN,
     ]
-    summary = await refund_service.get_status_summary(unit_id=unit_id)
+    # Cùng bộ lọc với bảng: lọc theo một phiếu thu mà dải vẫn đếm cả đơn vị thì
+    # hai con số nói về hai tập khác nhau.
+    summary = await refund_service.get_status_summary(
+        unit_id=unit_id, payment_id=payment_id
+    )
+    # Một query cho cả trang (không N+1): phần đã chi hoàn của từng phiếu thu, để
+    # mỗi dòng biết còn hoàn được bao nhiêu.
+    refunded_totals = await refund_service.get_refunded_totals(
+        [r.payment_id for r in refunds]
+    )
     return finance_schemas.RefundsPage(
         items=[
-            _build_refund_response(refund, current_user.id, current_user.role)
+            _build_refund_response(
+                refund, current_user.id, current_user.role, refunded_totals
+            )
             for refund in refunds
         ],
         total=total,
@@ -97,7 +109,10 @@ async def create_refund(
         if callback:
             await callback()
         refund = await refund_service.get_refund(refund.id, unit_id)
-        return _build_refund_response(refund, current_user.id, current_user.role)
+        totals = await refund_service.get_refunded_totals([refund.payment_id])
+        return _build_refund_response(
+            refund, current_user.id, current_user.role, totals
+        )
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except (BadRequest, BusinessRuleViolation) as e:
@@ -120,7 +135,10 @@ async def get_refund(
     unit_id = finance_scope_unit_id(current_user)
     try:
         refund = await refund_service.get_refund(refund_id, unit_id)
-        return _build_refund_response(refund, current_user.id, current_user.role)
+        totals = await refund_service.get_refunded_totals([refund.payment_id])
+        return _build_refund_response(
+            refund, current_user.id, current_user.role, totals
+        )
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
@@ -149,7 +167,10 @@ async def approve_refund(
         if callback:
             await callback()
         refund = await refund_service.get_refund(refund.id, unit_id)
-        return _build_refund_response(refund, current_user.id, current_user.role)
+        totals = await refund_service.get_refunded_totals([refund.payment_id])
+        return _build_refund_response(
+            refund, current_user.id, current_user.role, totals
+        )
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except BusinessRuleViolation as e:
@@ -182,7 +203,10 @@ async def reject_refund(
         if callback:
             await callback()
         refund = await refund_service.get_refund(refund.id, unit_id)
-        return _build_refund_response(refund, current_user.id, current_user.role)
+        totals = await refund_service.get_refunded_totals([refund.payment_id])
+        return _build_refund_response(
+            refund, current_user.id, current_user.role, totals
+        )
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except (BadRequest, BusinessRuleViolation) as e:
@@ -221,23 +245,54 @@ async def process_refund(
         if callback:
             await callback()
         refund = await refund_service.get_refund(refund.id, unit_id)
-        return _build_refund_response(refund, current_user.id, current_user.role)
+        totals = await refund_service.get_refunded_totals([refund.payment_id])
+        return _build_refund_response(
+            refund, current_user.id, current_user.role, totals
+        )
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except BusinessRuleViolation as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+_VALID_REFUND_STATUSES = {s.value for s in finance_schemas.RefundStatusEnum}
+
+
 def _parse_status_filter(status_filter: Optional[str]) -> Optional[List[str]]:
+    """Tách ``?status=pending,approved`` thành danh sách, TỪ CHỐI giá trị lạ.
+
+    Trước đây không kiểm gì: ``?status=aproved`` (gõ nhầm / client cũ) cho ra
+    ``IN ('aproved')`` ⇒ HTTP 200 với bảng rỗng nằm dưới dải tổng quan đang báo
+    còn việc — đúng cái ảo giác "hết việc rồi" mà màn hình này sinh ra để chữa.
+
+    Và trả None chứ KHÔNG trả danh sách rỗng: ``get_filtered_with_count`` hiểu
+    danh sách rỗng là "không lọc gì" (trả về cả phiếu đã từ chối/đã chi), trong khi
+    ``get_total_refunds_for_payment`` lại hiểu là ``IN ()`` = không khớp gì. Cùng
+    một tên tham số, hai nghĩa ngược nhau — nên đường này không bao giờ được đẻ ra
+    danh sách rỗng.
+    """
     if not status_filter:
         return None
-    return [part.strip() for part in status_filter.split(",") if part.strip()]
+    parts = [part.strip() for part in status_filter.split(",") if part.strip()]
+    if not parts:
+        return None
+    invalid = [p for p in parts if p not in _VALID_REFUND_STATUSES]
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Trạng thái không hợp lệ: {', '.join(invalid)}. "
+                f"Hợp lệ: {', '.join(sorted(_VALID_REFUND_STATUSES))}."
+            ),
+        )
+    return parts
 
 
 def _build_refund_response(
     refund,
     current_user_id: int,
     current_user_role: str,
+    refunded_totals: Optional[dict] = None,
 ) -> finance_schemas.RefundRequestResponse:
     status_value = (
         refund.status.value if hasattr(refund.status, "value") else refund.status
@@ -247,6 +302,18 @@ def _build_refund_response(
     is_manager_or_admin = current_user_role in [UserRole.MANAGER, UserRole.ADMIN]
     is_accountant_or_admin = current_user_role in [UserRole.ACCOUNTANT, UserRole.ADMIN]
     is_different_user = refund.requested_by_id != current_user_id
+
+    # Số còn hoàn được = tiền phiếu thu − phần ĐÃ CHI hoàn. Đây đúng là phép tính
+    # ``process_approved_refund`` dùng để gác, nên ``can_process`` phải soi vào nó:
+    # nếu không, API hứa một cái nút mà bấm vào luôn 400, trong khi ``can_reject``
+    # đồng thời là false ⇒ dòng trông có thể thao tác nhưng thực chất chết cứng.
+    _payment = getattr(refund, "payment", None)
+    _payment_amount = _payment.amount if _payment else None
+    _already_refunded = (refunded_totals or {}).get(refund.payment_id)
+    _refundable = None
+    if _payment_amount is not None:
+        _refundable = _payment_amount - (_already_refunded or Decimal("0"))
+    _amount_ok = _refundable is None or refund.amount <= _refundable
 
     # Ngữ cảnh cho màn Hoàn phí. Đi qua chuỗi quan hệ ĐÃ nạp sẵn ở repository;
     # ``getattr`` phòng thân cho bản ghi cũ / quan hệ bị SET NULL — thiếu tên
@@ -267,9 +334,10 @@ def _build_refund_response(
     return finance_schemas.RefundRequestResponse(
         student_name=lead.full_name if lead else None,
         profile_id=profile.id if profile else None,
-        citizen_id=profile.citizen_id if profile else None,
         major_name=major.name if major else None,
-        payment_amount=payment.amount if payment else None,
+        payment_amount=_payment_amount,
+        already_refunded_amount=_already_refunded,
+        refundable_amount=_refundable,
         payment_date=payment.payment_date if payment else None,
         payment_status=payment.status if payment else None,
         payment_method_name=method.name if method else None,
@@ -301,5 +369,6 @@ def _build_refund_response(
         updated_at=refund.updated_at,
         can_approve=is_pending and is_manager_or_admin and is_different_user,
         can_reject=is_pending and is_manager_or_admin and is_different_user,
-        can_process=is_approved and is_accountant_or_admin,
+        # Gồm cả phép kiểm số tiền: nút chỉ hiện khi thực sự chi được.
+        can_process=is_approved and is_accountant_or_admin and _amount_ok,
     )

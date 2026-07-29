@@ -432,10 +432,16 @@ export interface RefundRequest {
   // từng hồ sơ ở tab khác). Nullable: bản ghi cũ / quan hệ đã bị gỡ.
   student_name: string | null
   profile_id: number | null
-  citizen_id: string | null
   major_name: string | null
   /** Số tiền của phiếu thu gốc — luôn đọc CÙNG `amount` để thấy hoàn bao nhiêu trên tổng. */
   payment_amount: string | null
+  /** Phần đã chi hoàn của phiếu thu này. */
+  already_refunded_amount: string | null
+  /**
+   * Số còn hoàn được = phiếu thu − đã chi hoàn. Đây là ngưỡng backend THỰC SỰ gác
+   * lúc chi; cảnh báo trên bảng phải so với con số này, không phải `payment_amount`.
+   */
+  refundable_amount: string | null
   payment_date: string | null
   payment_status: string | null
   payment_method_name: string | null

@@ -1262,10 +1262,10 @@ class RefundService:
         # phiếu chi không có mã thì đối soát sao kê phải dò bằng tay. Mã sinh từ
         # cùng một helper với ``suggested_reference`` mà API đã trả cho màn hình,
         # nên cái kế toán nhìn thấy trước khi bấm chính là cái được ghi vào sổ.
-        refund.refund_reference = (
-            refund_reference
-            or build_refund_reference(refund.id, on=refund.refunded_at.date())
-        )
+        # Ngày trong mã là ngày CHI theo giờ VN (mặc định của helper), không lấy từ
+        # ``refunded_at.date()``: cột đó lưu UTC nên trước 07:00 sáng VN nó còn là
+        # ngày hôm trước, và mã này dùng để đối chiếu sao kê theo ngày làm việc.
+        refund.refund_reference = refund_reference or build_refund_reference(refund.id)
 
         # F2: snapshot BEFORE reverse — reverse_payment_balances recomputes
         # fee.status from paid_amount and reopens the invoice to 'issued'. If the
@@ -1478,7 +1478,21 @@ class RefundService:
             payment_id=payment_id,
         )
 
-    async def get_status_summary(self, unit_id: Optional[int] = None) -> dict:
+    async def get_refunded_totals(self, payment_ids: List[int]) -> dict:
+        """``{payment_id: tổng đã CHI hoàn}`` cho cả lô — một query.
+
+        Router dùng để tính ``refundable`` của từng dòng, tức đúng con số mà
+        ``process_approved_refund`` gác. Nếu không trả ra, giao diện buộc phải tự
+        đoán bằng ``payment.amount`` và sẽ báo "an toàn" cho chính những phiếu
+        backend sắp từ chối.
+        """
+        return await self.refund_repo.get_refunded_totals_for_payments(payment_ids)
+
+    async def get_status_summary(
+        self,
+        unit_id: Optional[int] = None,
+        payment_id: Optional[int] = None,
+    ) -> dict:
         """Tổng quan hàng chờ hoàn phí cho màn danh sách.
 
         Trả về dict phẳng khớp ``RefundsSummary`` (đếm + tổng tiền theo trạng
@@ -1486,7 +1500,9 @@ class RefundService:
         chọn — mở màn hình ra là biết còn bao nhiêu việc, kể cả khi bộ lọc đang
         trỏ vào một trạng thái rỗng.
         """
-        rows = await self.refund_repo.get_status_summary(unit_id=unit_id)
+        rows = await self.refund_repo.get_status_summary(
+            unit_id=unit_id, payment_id=payment_id
+        )
 
         def _c(status: str) -> int:
             return int(rows.get(status, {}).get("count", 0))

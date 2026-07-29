@@ -825,12 +825,22 @@ class RefundRequestResponse(BaseModel):
     # Tất cả đều Optional: dữ liệu cũ / quan hệ bị xoá vẫn phải trả về được.
     student_name: Optional[str] = None
     profile_id: Optional[int] = None
-    citizen_id: Optional[str] = None
+    # CỐ Ý KHÔNG trả ``citizen_id``: màn Hoàn phí không hiển thị CCCD ở bất kỳ ô
+    # nào, nên trả ra chỉ để nằm trong cache React Query + log proxy/APM. Cần định
+    # danh thì đã có tên + mã hồ sơ. (Convention của repo cho ca thực sự cần: dùng
+    # ``mask_citizen_id`` và đặt tên trường ``*_full`` kèm lý do — xem
+    # ``ProfileCollectionIdentity``.)
     major_name: Optional[str] = None
 
     # Cặp số CỐT LÕI: hoàn bao nhiêu TRÊN phiếu thu bao nhiêu. Đặt cạnh nhau vì
     # đúng chỗ này từng lệch (phiếu đòi 2.570.000 trên phiếu thu 2.500.000).
     payment_amount: Optional[Decimal] = None
+    # Con số backend THỰC SỰ gác lúc chi (``process_approved_refund``): phần đã chi
+    # hoàn của phiếu thu, và phần còn hoàn được. Trả ra để giao diện cảnh báo theo
+    # ĐÚNG ngưỡng đó thay vì tự suy từ ``payment_amount`` — tự suy thì một phiếu đã
+    # hoàn dở sẽ hiện "an toàn" rồi bấm vào là 400.
+    already_refunded_amount: Optional[Decimal] = None
+    refundable_amount: Optional[Decimal] = None
     payment_date: Optional[datetime] = None
     payment_status: Optional[str] = None
     payment_method_name: Optional[str] = None

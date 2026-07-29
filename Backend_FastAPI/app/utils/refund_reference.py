@@ -17,8 +17,10 @@ Dạng: ``HT-<id phiếu hoàn>-<ngày chi YYYYMMDD>`` → ``HT-9-20260729``.
 Không đặt UNIQUE ở DB: kế toán vẫn được gõ đè mã của ngân hàng/UNC, và một phiếu
 chi làm hai lần (hiếm, sau khi đảo) có thể chính đáng dùng lại mã cũ.
 """
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Optional
+
+from app.utils.datetime_helpers import today_vn
 
 REFUND_REFERENCE_PREFIX = "HT"
 
@@ -28,8 +30,11 @@ def build_refund_reference(refund_id: int, on: Optional[date] = None) -> str:
 
     Args:
         refund_id: id phiếu hoàn.
-        on: ngày chi; mặc định hôm nay (UTC — khớp cách toàn hệ thống đóng dấu
-            thời gian, xem ``refunded_at``).
+        on: ngày chi. Mặc định hôm nay theo **giờ Việt Nam** (``today_vn``), không
+            phải UTC: container chạy giờ UTC nên ``datetime.now(timezone.utc).date()``
+            sang ngày mới lúc 07:00 sáng VN — giữa giờ làm việc. Kế toán chi lúc
+            08:00 sáng sẽ thấy mã mang ngày HÔM SAU, và đó chính là con số dùng để
+            đối chiếu sao kê theo ngày.
     """
-    day = on or datetime.now(timezone.utc).date()
+    day = on or today_vn()
     return f"{REFUND_REFERENCE_PREFIX}-{refund_id}-{day:%Y%m%d}"

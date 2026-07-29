@@ -30,6 +30,7 @@ from app.services.invoice_service import InvoiceService
 from app.services.overpayment_service import OverpaymentService
 from app.services.payment_service import PaymentService, RefundService
 from app.security import get_password_hash
+from app.utils.datetime_helpers import today_vn
 from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -1641,10 +1642,16 @@ class TestRefundReferenceAndContext:
 
         assert processed.status == RefundStatusEnum.refunded.value
         assert processed.refund_reference, "không được để mã tham chiếu rỗng"
-        assert processed.refund_reference == build_refund_reference(
-            refund.id, on=processed.refunded_at.date()
-        )
-        assert processed.refund_reference.startswith(f"HT-{refund.id}-")
+        # So với ngày VN dựng ĐỘC LẬP, không gọi lại chính helper với cùng tham số
+        # (so một giá trị với chính nó thì mọi thay đổi công thức đều lọt).
+        assert processed.refund_reference == f"HT-{refund.id}-{today_vn():%Y%m%d}"
+        # Và KHÔNG được mang ngày UTC: trước 07:00 sáng VN hai ngày này lệch nhau,
+        # đúng khung giờ kế toán bắt đầu làm việc.
+        _utc_day = datetime.now(timezone.utc).date()
+        if _utc_day != today_vn():
+            assert not processed.refund_reference.endswith(f"{_utc_day:%Y%m%d}"), (
+                "mã đang dùng ngày UTC thay vì ngày làm việc VN"
+            )
 
     async def test_process_refund_keeps_reference_typed_by_accountant(
         self, db, payment_fixtures
@@ -1703,7 +1710,7 @@ class TestRefundReferenceAndContext:
         assert resp.fee_type == FeeTypeEnum.application.value
         assert resp.requested_by_name
         assert resp.approved_by_name
-        assert resp.suggested_reference == f"HT-{refund.id}-{datetime.now(timezone.utc):%Y%m%d}"
+        assert resp.suggested_reference == f"HT-{refund.id}-{today_vn():%Y%m%d}"
         assert resp.can_process is True
 
     async def test_status_summary_counts_and_sums(self, db, payment_fixtures):
@@ -1902,3 +1909,124 @@ class TestRefundNoDeadEnd:
         assert count == 1
         await db.refresh(refund)
         assert refund.status == RefundStatusEnum.rejected.value
+
+
+class TestRefundSummaryIdor:
+    """Dải tổng quan KHÔNG được nhìn thấy phiếu của đơn vị khác.
+
+    Test cũ của ``get_status_summary`` chỉ đếm số lượng trên một DB chỉ có đúng một
+    đơn vị, nên xoá sạch bộ lọc ``unit_id`` (thậm chí cả 5 phép nối) nó vẫn xanh —
+    một lỗ IDOR trên màn hình tiền sẽ ship mà không ai biết. Ở đây dựng HAI đơn vị.
+    """
+
+    async def test_summary_does_not_count_other_units(
+        self, db, payment_fixtures, seeded_dependencies, admin_user
+    ):
+        """Phiếu hoàn của đơn vị khác KHÔNG được lọt vào dải tổng quan.
+
+        Gỡ ``if unit_id is not None: ... Lead.unit_id == unit_id`` khỏi
+        ``RefundRepository.get_status_summary`` là test này đỏ.
+        """
+        pf = payment_fixtures
+        refund_service = RefundService(db)
+
+        # --- phiếu hoàn thuộc ĐƠN VỊ CỦA TA ---
+        pay_service = PaymentService(db)
+        mine, _ = await pay_service.record_manual_payment(
+            invoice_id=pf["invoice"].id,
+            method_id=pf["cash_method"].id,
+            amount=Decimal("1000000"),
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        await pay_service.verify_payment(
+            payment_id=mine.id,
+            verifier_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        await refund_service.request_refund(
+            payment_id=mine.id,
+            amount=Decimal("300000"),
+            reason="Của đơn vị mình",
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        # --- phiếu hoàn thuộc ĐƠN VỊ KHÁC (chèn thẳng, không qua service) ---
+        other_unit = models.OrganizationUnit(
+            id=pf["unit_id"] + 777, name="Đơn vị khác", type="department",
+        )
+        db.add(other_unit)
+        await db.flush()
+        other_lead = models.Lead(
+            full_name="Học sinh đơn vị khác",
+            phone="0909999888",
+            source="test",
+            unit_id=other_unit.id,
+            consultation_status_id=seeded_dependencies["initial_status_id"],
+        )
+        db.add(other_lead)
+        await db.flush()
+        other_profile = models.AdmissionProfile(
+            lead_id=other_lead.id, status="submitted", academic_year=2025, applied_rules={},
+        )
+        db.add(other_profile)
+        await db.flush()
+        other_fee = Fee(
+            admission_profile_id=other_profile.id,
+            fee_type=FeeTypeEnum.application.value,
+            academic_year=2025,
+            base_amount=Decimal("2000000"),
+            final_amount=Decimal("2000000"),
+            status=FeeStatusEnum.invoiced.value,
+        )
+        db.add(other_fee)
+        await db.flush()
+        other_invoice = Invoice(
+            fee_id=other_fee.id,
+            invoice_number="INV-OTHER-UNIT-1",
+            installment_no=1,
+            amount=Decimal("2000000"),
+            due_date=date.today() + timedelta(days=30),
+            status=InvoiceStatusEnum.issued.value,
+        )
+        db.add(other_invoice)
+        await db.flush()
+        other_payment = Payment(
+            invoice_id=other_invoice.id,
+            method_id=pf["cash_method"].id,
+            amount=Decimal("2000000"),
+            status=PaymentStatusEnum.verified.value,
+            payment_date=datetime.now(timezone.utc),
+            created_by_id=pf["maker"].id,
+            verified_by_id=pf["checker"].id,
+        )
+        db.add(other_payment)
+        await db.flush()
+        db.add(
+            RefundRequest(
+                payment_id=other_payment.id,
+                amount=Decimal("1500000"),
+                reason="Của đơn vị KHÁC",
+                status=RefundStatusEnum.pending.value,
+                source=RefundSourceEnum.manual.value,
+                requested_by_id=pf["maker"].id,
+            )
+        )
+        await db.commit()
+
+        # Người dùng bị giới hạn theo đơn vị: chỉ thấy phiếu của mình.
+        scoped = await refund_service.get_status_summary(unit_id=pf["unit_id"])
+        assert scoped["pending_count"] == 1, "đang đếm cả phiếu của đơn vị khác"
+        assert scoped["pending_amount"] == Decimal("300000"), (
+            "tổng tiền đang gộp cả đơn vị khác — lộ số liệu tài chính chéo đơn vị"
+        )
+
+        # Admin (unit_id=None) thì thấy cả hai — chứng minh dữ liệu THỰC SỰ tồn tại,
+        # nên phép so ở trên xanh là nhờ bộ lọc chứ không phải nhờ DB rỗng.
+        everything = await refund_service.get_status_summary(unit_id=None)
+        assert everything["pending_count"] == 2
+        assert everything["pending_amount"] == Decimal("1800000")

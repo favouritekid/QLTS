@@ -41,7 +41,13 @@ import {
   useRefunds,
   useRejectRefund,
 } from "@/hooks/finance/useRefunds"
-import type { RefundFilters, RefundRequest, RefundStatus } from "@/types/finance.types"
+import {
+  FEE_TYPE_LABELS,
+  type FeeType,
+  type RefundFilters,
+  type RefundRequest,
+  type RefundStatus,
+} from "@/types/finance.types"
 
 const STATUS_LABELS: Record<RefundStatus, string> = {
   pending: "Chờ duyệt",
@@ -62,13 +68,6 @@ const FILTER_TO_PARAM: Record<FilterKey, RefundFilters["status"]> = {
   rejected: "rejected",
   refunded: "refunded",
   all: undefined,
-}
-
-const FEE_TYPE_LABELS: Record<string, string> = {
-  tuition: "Học phí",
-  application: "Lệ phí xét tuyển",
-  dormitory: "Ký túc xá",
-  other: "Khoản khác",
 }
 
 const currency = new Intl.NumberFormat("vi-VN")
@@ -102,6 +101,7 @@ function daysWaiting(refund: RefundRequest): number | null {
 
 export function RefundListClient() {
   const [filter, setFilter] = React.useState<FilterKey>("needs_action")
+  const [page, setPage] = React.useState(1)
   const [query, setQuery] = React.useState("")
   const [createOpen, setCreateOpen] = React.useState(false)
   const [action, setAction] = React.useState<
@@ -111,10 +111,11 @@ export function RefundListClient() {
   const [rejectionReason, setRejectionReason] = React.useState("")
   const [refundReference, setRefundReference] = React.useState("")
 
+  const PAGE_SIZE = 50
   const { data, isLoading, error, refetch } = useRefunds({
     status: FILTER_TO_PARAM[filter],
-    page: 1,
-    page_size: 50,
+    page,
+    page_size: PAGE_SIZE,
   })
   const createRefund = useCreateRefund()
   const approveRefund = useApproveRefund()
@@ -122,6 +123,10 @@ export function RefundListClient() {
   const processRefund = useProcessRefund()
 
   const summary = data?.summary
+  const total = data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const rangeFrom = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
+  const rangeTo = Math.min(page * PAGE_SIZE, total)
 
   // Tìm nhanh trong trang đang tải — nhãn dưới ô nhập nói rõ phạm vi này.
   const items = React.useMemo(() => {
@@ -129,11 +134,31 @@ export function RefundListClient() {
     const q = query.trim().toLowerCase()
     if (!q) return list
     return list.filter((r) =>
-      [r.student_name, r.citizen_id, r.profile_id ? `#${r.profile_id}` : null, r.invoice_number, r.reason]
+      [
+        r.student_name,
+        // Mã phiếu hoàn + mã tham chiếu: kế toán cầm "HT-42-20260729" trên sao kê
+        // phải tra ngược được về đúng dòng này — đó là lý do mã đó tồn tại.
+        `#${r.id}`,
+        String(r.id),
+        r.refund_reference,
+        r.suggested_reference,
+        `#${r.payment_id}`,
+        r.profile_id ? `#${r.profile_id}` : null,
+        r.invoice_number,
+        r.reason,
+      ]
         .filter(Boolean)
         .some((field) => String(field).toLowerCase().includes(q)),
     )
   }, [data?.items, query])
+
+  const openReject = (refund: RefundRequest) => {
+    // Xoá lý do của dòng trước. Không có bước này thì bấm Huỷ ở dòng A rồi mở dòng
+    // B sẽ thấy nguyên văn lý do của A, nút gửi đang bật — một cú click là gán lý
+    // do của A cho B và báo cho người yêu cầu của B.
+    setRejectionReason("")
+    setAction({ type: "reject", refund })
+  }
 
   const openProcess = (refund: RefundRequest) => {
     // Điền sẵn mã backend gợi ý. Kế toán gõ đè khi có mã UNC thật; để nguyên
@@ -165,12 +190,18 @@ export function RefundListClient() {
   const handleProcess = async () => {
     if (!action || action.type !== "process") return
     const trimmed = refundReference.trim()
+    // Gửi mã CHỈ KHI kế toán thực sự sửa. Nếu ô còn nguyên gợi ý (hoặc để trống),
+    // không gửi khoá — để backend tự sinh tại thời điểm chi.
+    //
+    // Gợi ý được sinh lúc TẢI TRANG: một tab mở từ hôm qua vẫn hiển thị mã mang
+    // ngày hôm qua, gửi lại nguyên si là ghi sai ngày vào sổ, mà mã này dùng đúng
+    // để đối chiếu sao kê theo ngày.
+    const edited = trimmed !== "" && trimmed !== (action.refund.suggested_reference ?? "")
     await processRefund.mutateAsync({
       id: action.refund.id,
       data: {
         refund_id: action.refund.id,
-        // Bỏ trống ⇒ không gửi khoá, backend tự điền theo quy ước.
-        ...(trimmed ? { refund_reference: trimmed } : {}),
+        ...(edited ? { refund_reference: trimmed } : {}),
       },
     })
     setAction(null)
@@ -219,26 +250,38 @@ export function RefundListClient() {
           sáng — còn bao nhiêu việc, bao nhiêu tiền đang treo. */}
       <div className="grid gap-3 sm:grid-cols-3">
         <QueueTile
+          loading={isLoading}
           label="Chờ duyệt"
           count={summary?.pending_count ?? 0}
           amount={summary?.pending_amount}
           active={filter === "pending"}
-          onClick={() => setFilter("pending")}
+          onClick={() => {
+            setFilter("pending")
+            setPage(1)
+          }}
         />
         <QueueTile
+          loading={isLoading}
           label="Chờ chi tiền"
           count={summary?.approved_count ?? 0}
           amount={summary?.approved_amount}
           active={filter === "approved"}
           emphasis
-          onClick={() => setFilter("approved")}
+          onClick={() => {
+            setFilter("approved")
+            setPage(1)
+          }}
         />
         <QueueTile
+          loading={isLoading}
           label="Đã chi"
           count={summary?.refunded_count ?? 0}
           amount={summary?.refunded_amount}
           active={filter === "refunded"}
-          onClick={() => setFilter("refunded")}
+          onClick={() => {
+            setFilter("refunded")
+            setPage(1)
+          }}
         />
       </div>
 
@@ -255,7 +298,10 @@ export function RefundListClient() {
               key={key}
               size="sm"
               variant={filter === key ? "default" : "ghost"}
-              onClick={() => setFilter(key)}
+              onClick={() => {
+                setFilter(key)
+                setPage(1)
+              }}
             >
               {label}
             </Button>
@@ -265,7 +311,7 @@ export function RefundListClient() {
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             className="pl-9"
-            placeholder="Tìm tên, CCCD, mã hồ sơ, hoá đơn"
+            placeholder="Tìm tên, mã phiếu, mã hồ sơ, hoá đơn"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             aria-label="Tìm trong danh sách đang hiển thị"
@@ -299,7 +345,7 @@ export function RefundListClient() {
                     key={refund.id}
                     refund={refund}
                     onApprove={() => approveRefund.mutate(refund.id)}
-                    onReject={() => setAction({ type: "reject", refund })}
+                    onReject={() => openReject(refund)}
                     onProcess={() => openProcess(refund)}
                   />
                 ))
@@ -334,11 +380,48 @@ export function RefundListClient() {
         </CardContent>
       </Card>
 
-      {query && data?.items.length ? (
-        <p className="text-xs text-muted-foreground">
-          Đang tìm trong {data.items.length} phiếu của mục đang chọn, không phải toàn bộ hệ thống.
-        </p>
-      ) : null}
+      {/* Dải tổng quan đếm toàn phạm vi, nên phải với tới được dòng thứ 51 trở đi —
+          nếu không thì những phiếu CŨ NHẤT (đúng thứ badge "chờ N ngày" muốn nêu)
+          nằm ngoài tầm với mà màn hình vẫn khẳng định chúng tồn tại. */}
+      {total > 0 && (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-muted-foreground">
+            {query ? (
+              <>
+                Tìm thấy {items.length} trong {data?.items.length ?? 0} phiếu đang hiển thị.
+                Ô tìm chỉ lọc trang này, không phải toàn bộ hệ thống.
+              </>
+            ) : (
+              <>
+                Hiển thị {rangeFrom}–{rangeTo} trên {total} phiếu
+              </>
+            )}
+          </p>
+          {totalPages > 1 && !query && (
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={page <= 1 || isLoading}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Trang trước
+              </Button>
+              <span className="text-sm tabular-nums text-muted-foreground">
+                {page}/{totalPages}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={page >= totalPages || isLoading}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              >
+                Trang sau
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
@@ -490,6 +573,7 @@ function QueueTile({
   amount,
   active,
   emphasis,
+  loading,
   onClick,
 }: {
   label: string
@@ -497,6 +581,7 @@ function QueueTile({
   amount: string | undefined
   active: boolean
   emphasis?: boolean
+  loading?: boolean
   onClick: () => void
 }) {
   return (
@@ -511,6 +596,14 @@ function QueueTile({
       )}
     >
       <div className="text-sm text-muted-foreground">{label}</div>
+      {loading ? (
+        // Lần tải đầu chưa có số: hiện khung chờ thay vì khẳng định "0 phiếu" —
+        // con số 0 sai ở đây đúng bằng việc nói với kế toán là hết việc.
+        <>
+          <div className="mt-2 h-7 w-16 animate-pulse rounded bg-muted" />
+          <div className="mt-1.5 h-4 w-24 animate-pulse rounded bg-muted" />
+        </>
+      ) : (
       <div className="mt-1 flex items-baseline gap-2">
         <span
           className={cn(
@@ -522,7 +615,12 @@ function QueueTile({
         </span>
         <span className="text-sm text-muted-foreground">phiếu</span>
       </div>
-      <div className="mt-0.5 text-sm tabular-nums text-muted-foreground">{money(amount)} đ</div>
+      )}
+      {!loading && (
+        <div className="mt-0.5 text-sm tabular-nums text-muted-foreground">
+          {money(amount)} đ
+        </div>
+      )}
     </button>
   )
 }
@@ -539,13 +637,17 @@ function RefundRow({
   onProcess: () => void
 }) {
   const waited = daysWaiting(refund)
-  const paid = Number(refund.payment_amount ?? 0)
   const asked = Number(refund.amount ?? 0)
-  // Tỉ lệ hoàn trên phiếu thu. Đặt ngay dưới cặp số vì đây đúng là chỗ từng
-  // lệch: một phiếu đòi 2.570.000 trên phiếu thu 2.500.000 nhìn bằng mắt
-  // không ra, nhưng thanh tràn màu đỏ thì thấy ngay.
-  const ratio = paid > 0 ? Math.min(asked / paid, 1) : 0
-  const overAsking = paid > 0 && asked > paid
+  // So với SỐ CÒN HOÀN ĐƯỢC do backend tính (phiếu thu − phần đã chi hoàn), không
+  // phải tổng phiếu thu. Đó đúng là ngưỡng `process_approved_refund` gác: một
+  // phiếu thu 1.000.000 đã hoàn 600.000 thì phiếu 500.000 sẽ bị từ chối, dù so với
+  // tổng thu nó trông vô hại. Tự suy ở đây là đẩy phép tính tiền vào giao diện rồi
+  // lệch với backend.
+  const refundable =
+    refund.refundable_amount !== null ? Number(refund.refundable_amount) : null
+  const alreadyRefunded = Number(refund.already_refunded_amount ?? 0)
+  const ratio = refundable && refundable > 0 ? Math.min(asked / refundable, 1) : 0
+  const overAsking = refundable !== null && asked > refundable
 
   return (
     <TableRow>
@@ -559,7 +661,9 @@ function RefundRow({
 
       <TableCell className="hidden lg:table-cell">
         <div className="text-sm">
-          {refund.fee_type ? FEE_TYPE_LABELS[refund.fee_type] ?? refund.fee_type : "—"}
+          {refund.fee_type
+            ? FEE_TYPE_LABELS[refund.fee_type as FeeType] ?? refund.fee_type
+            : "—"}
         </div>
         <div className="text-xs text-muted-foreground">
           {refund.invoice_number ?? "—"}
@@ -574,6 +678,7 @@ function RefundRow({
         </div>
         <div className="text-xs tabular-nums text-muted-foreground">
           trên {money(refund.payment_amount)}
+          {alreadyRefunded > 0 ? ` · đã hoàn ${money(alreadyRefunded)}` : ""}
         </div>
         <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
           <div
@@ -582,7 +687,9 @@ function RefundRow({
           />
         </div>
         {overAsking && (
-          <div className="mt-1 text-xs font-medium text-destructive">Đòi vượt phiếu thu</div>
+          <div className="mt-1 text-xs font-medium text-destructive">
+            Vượt số còn hoàn được ({money(refundable)})
+          </div>
         )}
       </TableCell>
 
