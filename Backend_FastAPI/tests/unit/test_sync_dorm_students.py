@@ -300,7 +300,11 @@ class _RecordingClient:
 
 
 def _api_with(client) -> DormApi:
-    api = DormApi("https://ktx.test", "khoa-gia")
+    # Loopback: các test dưới đây không đi ra mạng (client là đồ giả), và
+    # loopback được miễn CẢ hàng rào đường truyền lẫn hàng rào project ref —
+    # Supabase local không có ref. Dùng một hostname bịa như `ktx.test` sẽ vướng
+    # hàng rào đích, và vướng vì đúng lý do nó tồn tại.
+    api = DormApi("http://127.0.0.1:54321", "khoa-gia")
     api._client = client
     return api
 
@@ -607,6 +611,91 @@ def test_plaintext_destination_is_refused(url):
 def test_https_and_loopback_are_allowed(url):
     """Loopback được miễn: đó là Supabase local, gói tin không rời khỏi máy."""
     assert assert_transport_is_encrypted(url) is None
+
+
+# ---------------------------------------------------------------------------
+# Hàng rào ĐÍCH — project nào nhận dữ liệu
+# ---------------------------------------------------------------------------
+
+
+def test_target_project_ref_must_match_the_host(monkeypatch):
+    """Sai MỘT ký tự trong ref là dừng.
+
+    Hàng rào nguồn bảo vệ việc đọc đúng database. Nhưng đích thì trước đây chỉ
+    kiểm scheme https, nên một cặp URL + secret key hợp lệ của project KHÁC vẫn
+    nhận trọn cohort và báo thành công.
+    """
+    from app.scripts.sync_dorm_students import assert_target_project_matches
+
+    monkeypatch.setenv("DORM_SYNC_TARGET_PROJECT_REF", "wkrwceedapisacgyujtg")
+
+    assert (
+        assert_target_project_matches("https://wkrwceedapisacgyujtg.supabase.co")
+        is None
+    )
+
+    with pytest.raises(ValueError) as exc:
+        # Thiếu đúng một ký tự cuối.
+        assert_target_project_matches("https://wkrwceedapisacgyujt.supabase.co")
+
+    assert "wkrwceedapisacgyujtg" in str(exc.value)
+
+
+def test_target_guard_refuses_a_custom_domain_it_cannot_verify(monkeypatch):
+    """Domain lạ KHÔNG được suy ra ref — phải khai allowlist riêng."""
+    from app.scripts.sync_dorm_students import assert_target_project_matches
+
+    monkeypatch.setenv("DORM_SYNC_TARGET_PROJECT_REF", "ktx")
+
+    with pytest.raises(ValueError):
+        assert_target_project_matches("https://ktx.truong-cd.edu.vn")
+
+
+def test_target_guard_skips_loopback(monkeypatch):
+    """Supabase local không có project ref, và gói tin không rời khỏi máy."""
+    from app.scripts.sync_dorm_students import assert_target_project_matches
+
+    monkeypatch.delenv("DORM_SYNC_TARGET_PROJECT_REF", raising=False)
+
+    assert assert_target_project_matches("http://127.0.0.1:54321") is None
+
+
+def test_target_guard_requires_the_declaration(monkeypatch):
+    """Thiếu khai báo là dừng — không đoán project từ URL."""
+    from app.scripts.sync_dorm_students import assert_target_project_matches
+
+    monkeypatch.delenv("DORM_SYNC_TARGET_PROJECT_REF", raising=False)
+
+    with pytest.raises(SystemExit):
+        assert_target_project_matches("https://ktx.supabase.co")
+
+
+def test_secret_key_never_leaves_the_process_when_the_target_is_wrong(monkeypatch):
+    """Kiểm NGƯỢC: đích sai thì khoá secret chưa vào bất kỳ cấu trúc nào.
+
+    Thứ tự trong ``DormApi.__init__`` là có chủ đích — đường truyền, rồi đích,
+    rồi mới tới headers. Nếu ai đó đảo lại, headers mang khoá đã được dựng xong
+    trước khi biết nó đi tới đâu, và ca này bắt được điều đó.
+    """
+    monkeypatch.setenv("DORM_SYNC_TARGET_PROJECT_REF", "dung-project")
+
+    with pytest.raises(ValueError):
+        api = DormApi("https://sai-project.supabase.co", "khoa-that")
+        assert not hasattr(api, "_headers")
+
+
+async def test_wrong_target_stops_before_any_request(monkeypatch):
+    """Đi hết ``main``: ref sai → thoát 2, không request nào được gửi."""
+    _set_target_env(monkeypatch, target_ref="dung-project")
+    monkeypatch.setenv("DORM_SUPABASE_URL", "https://sai-project.supabase.co")
+    monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
+
+    async def _one_row(academic_year, **kwargs):
+        return [_row()]
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _one_row)
+
+    assert await main(["--academic-year", "2026", "--apply"]) == 2
 
 
 # ---------------------------------------------------------------------------

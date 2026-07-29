@@ -189,6 +189,47 @@ def assert_transport_is_encrypted(base_url: str) -> None:
     )
 
 
+def assert_target_project_matches(base_url: str) -> None:
+    """Đích phải là ĐÚNG project Supabase đã được duyệt.
+
+    ⚠️ Hàng rào ở ``assert_source_database_matches`` bảo vệ NGUỒN — đọc đúng
+    database. Nhưng ĐÍCH thì trước đây chỉ kiểm mỗi scheme https, nên một cặp
+    URL + secret key hợp lệ của một project Supabase KHÁC vẫn nhận trọn cả
+    cohort và báo thành công. Nguồn đúng + đích sai là ca không hàng rào nào
+    khác chạm tới.
+
+    Project ref nằm trong hostname của endpoint REST chuẩn:
+    ``https://<ref>.supabase.co/rest/v1``.
+
+    ⚠️ Gọi TRƯỚC khi dựng headers — khoá secret không được rời khỏi tiến trình
+    trước khi biết nó đi tới đâu.
+
+    Loopback được miễn: Supabase local không có project ref, và gói tin không
+    rời khỏi máy.
+
+    ⚠️ Custom domain KHÔNG được suy đoán. Nếu về sau dùng domain riêng thì phải
+    khai một allowlist ánh xạ ``domain -> ref`` được duyệt riêng; đoán ref từ
+    một hostname bất kỳ là bỏ đúng lớp bảo vệ này.
+    """
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+
+    if host in _LOOPBACK_HOSTS:
+        return
+
+    expected_ref = _require_env("DORM_SYNC_TARGET_PROJECT_REF").strip().lower()
+    expected_host = f"{expected_ref}.supabase.co"
+
+    if host != expected_host:
+        raise ValueError(
+            f"DORM_SUPABASE_URL trỏ tới '{host}' nhưng project được duyệt là "
+            f"'{expected_ref}' (mong đợi '{expected_host}').\n"
+            "  Đây là đích NHẬN dữ liệu cá nhân — sai project nghĩa là gửi cả "
+            "cohort sang một hệ khác. Dùng domain riêng thì phải khai allowlist "
+            "ánh xạ domain sang ref, không đoán."
+        )
+
+
 def _client_note(client_token: str) -> str:
     """Dấu của tiến trình chạy, ghi vào ``sync_runs.note``.
 
@@ -206,7 +247,11 @@ class DormApi:
     """
 
     def __init__(self, base_url: str, secret_key: str) -> None:
+        # Thứ tự có chủ đích: đường truyền, rồi ĐÍCH, rồi mới tới headers mang
+        # khoá secret. Khoá không được nằm trong bất kỳ cấu trúc nào trước khi
+        # cả hai câu hỏi "đi bằng gì" và "đi tới đâu" đã có câu trả lời đúng.
         assert_transport_is_encrypted(base_url)
+        assert_target_project_matches(base_url)
         self._base = base_url.rstrip("/") + "/rest/v1"
         self._headers = {
             "apikey": secret_key,
