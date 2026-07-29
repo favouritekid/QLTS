@@ -365,25 +365,81 @@ def _api_with(client) -> DormApi:
     return api
 
 
-async def test_mark_failed_sends_a_timestamp_postgres_accepts():
-    """``completed_at`` phải là mốc ISO, KHÔNG phải chuỗi ``"now()"``.
+async def test_mark_failed_goes_through_the_rpc_without_source_count():
+    """Đóng sổ lượt hỏng đi qua RPC, và KHÔNG gửi ``source_count``.
 
-    PostgREST truyền thẳng chuỗi vào câu UPDATE. Postgres nhận ``now``,
-    ``today``, ``epoch``, ``infinity`` nhưng KHÔNG nhận ``now()`` — nó trả 400,
-    nhánh đánh dấu thất bại không bao giờ chạy được, lượt treo ``running`` và
-    ``uq_sync_run_active_per_year`` khoá cứng năm học đó cho tới khi có người
-    sửa tay trong database.
+    Contract mới ràng ``failed ⇒ source_count IS NULL`` ở tầng database. Một
+    PATCH mang theo con số đó sẽ vướng CHECK, và khi ấy MỌI lỗi sau lúc mở lượt
+    đều để lại một lượt treo ``running`` — thứ khoá cứng năm học bằng
+    ``uq_sync_run_active_per_year``. Đây là chế độ hỏng tệ hơn hẳn cái nó thay.
     """
-    client = _RecordingClient(_FakeResponse(payload=[{"id": 5}]))
-
-    changed = await _api_with(client).mark_sync_run_failed(
-        5, {"source_count": 3, "upserted_count": 0}
+    client = _RecordingClient(
+        _FakeResponse(payload=[{"id": 5, "status": "failed", "upserted_count": 7}])
     )
 
-    assert changed == 1
-    sent = client.calls[0]["json"]["completed_at"]
-    assert sent != "now()"
-    assert datetime.fromisoformat(sent).tzinfo is not None
+    run = await _api_with(client).mark_sync_run_failed(5)
+
+    assert run["status"] == "failed"
+    goi = client.calls[0]
+    assert goi["url"].endswith("/rpc/fail_sync_run")
+    assert goi["json"] == {"p_run_id": 5}
+
+
+async def test_reconcile_trusts_the_status_the_rpc_returns():
+    """Lượt vừa `completed` xong giữa chừng KHÔNG được ghi thành thất bại.
+
+    RPC có nhánh trả nguyên hàng mà không đổi gì. Nếu người gọi chỉ nhìn việc
+    lời gọi không ném, một lượt đã hạ cờ xong sẽ bị ghi sổ là "đã đánh dấu thất
+    bại" — đúng ở ca dễ xảy ra nhất, mất ACK sau khi commit.
+    """
+
+    class _DoiTrangThai(_RecordingClient):
+        async def get(self, url, headers=None, params=None):
+            self.calls.append({"method": "GET", "url": url, "params": params})
+            return _FakeResponse(payload=[{"id": 9, "status": "running"}])
+
+        async def post(self, url, headers=None, params=None, json=None):
+            self.calls.append({"method": "POST", "url": url, "json": json})
+            return _FakeResponse(payload=[{"id": 9, "status": "completed"}])
+
+    outcome, run = await _api_with(_DoiTrangThai()).reconcile_after_failure(9)
+
+    assert outcome == "finalized"
+    assert run["status"] == "completed"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        [],  # mảng rỗng
+        [{"upserted": 1, "blocked": 0}, {"upserted": 2, "blocked": 0}],  # hai hàng
+        [{"upserted": "3", "blocked": 0}],  # chuỗi số
+        [{"upserted": True, "blocked": 0}],  # bool là lớp con của int
+        [{"upserted": 2.9, "blocked": 0}],  # số thực bị cắt
+        [{"upserted": -1, "blocked": 0}],  # âm
+        [{"upserted": 1}],  # thiếu khoá
+        ["không phải object"],
+        {"upserted": 1, "blocked": 0},  # không phải mảng
+    ],
+)
+def test_batch_counts_are_read_fail_closed(body):
+    """Số liệu lô đọc sai kiểu là DỪNG, không đoán.
+
+    Hai con số này quyết định phép kiểm ``raw = source + blocked`` ở bước hạ
+    cờ. ``int(...)`` trần nhận cả ``True``, chuỗi ``"3"`` và ``2.9`` — cả ba
+    đều nghĩa là hai đầu đang hiểu nhau khác đi, và nhận bừa ở đây là hạ cờ
+    theo một con số sai.
+    """
+    from app.scripts.sync_dorm_students import _doc_so_lieu_lo
+
+    with pytest.raises(RuntimeError):
+        _doc_so_lieu_lo(body)
+
+
+def test_batch_counts_accept_the_valid_shape():
+    from app.scripts.sync_dorm_students import _doc_so_lieu_lo
+
+    assert _doc_so_lieu_lo([{"upserted": 198, "blocked": 2}]) == (198, 2)
 
 
 async def test_count_students_returns_none_for_non_numeric_range():
@@ -406,7 +462,7 @@ async def test_reconcile_returns_the_row_it_already_read():
         )
     )
 
-    outcome, run = await _api_with(client).reconcile_after_failure(5, 10, 10)
+    outcome, run = await _api_with(client).reconcile_after_failure(5)
 
     assert outcome == "finalized"
     assert run["deactivated_count"] == 12
@@ -1156,7 +1212,7 @@ async def test_interrupt_mid_write_still_closes_the_run(monkeypatch):
             da_doi_soat["đã_hạ_cờ"] = True
             return 0
 
-        async def reconcile_after_failure(self, run_id, source_count, upserted_count):
+        async def reconcile_after_failure(self, run_id):
             da_doi_soat["run_id"] = run_id
             return "marked_failed", {"id": run_id, "status": "failed"}
 
@@ -1208,7 +1264,7 @@ async def test_stop_request_blocks_the_finalizer_when_the_loop_never_ran(monkeyp
             da_doi_soat["đã_hạ_cờ"] = True
             return 0
 
-        async def reconcile_after_failure(self, run_id, source_count, upserted_count):
+        async def reconcile_after_failure(self, run_id):
             da_doi_soat["run_id"] = run_id
             return "marked_failed", {"id": run_id, "status": "failed"}
 
@@ -1308,7 +1364,7 @@ async def test_batch_mismatch_stops_before_the_destructive_step(monkeypatch):
             # Báo ghi ít hơn số gửi, và KHÔNG khai phần thiếu là bị chặn.
             return len(rows) - 1, 0
 
-        async def reconcile_after_failure(self, run_id, source_count, upserted_count):
+        async def reconcile_after_failure(self, run_id):
             return "marked_failed", {"id": run_id, "status": "failed"}
 
     api = _ApiThieu()

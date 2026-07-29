@@ -222,6 +222,45 @@ def assert_transport_is_encrypted(base_url: str) -> None:
     )
 
 
+def _doc_so_lieu_lo(body: Any) -> Tuple[int, int]:
+    """Đọc ``(đã ghi, bị chặn)`` từ phản hồi RPC — fail-closed từng bước.
+
+    ⚠️ ``int(...)`` trần KHÔNG đủ. Nó nhận ``True`` (thành 1), nhận chuỗi
+    ``"3"``, và cắt ``2.9`` thành 2. Cả ba đều nghĩa là database và client đang
+    hiểu nhau khác đi, mà hai con số này quyết định phép kiểm
+    ``raw = source + blocked`` ở bước hạ cờ — nhận bừa ở đây là hạ cờ theo một
+    con số sai.
+
+    ⚠️ Mảng phải có ĐÚNG một phần tử. Nhiều hơn nghĩa là RPC trả nhiều hàng —
+    lấy hàng đầu và bỏ qua phần còn lại là giấu đúng điều bất thường đó.
+    """
+
+    def _khong_doc_duoc(vi_sao: str) -> RuntimeError:
+        return RuntimeError(
+            f"Ghi danh sách học viên: {vi_sao}. KHÔNG chạy tiếp — hai con số "
+            "này quyết định bước hạ cờ."
+        )
+
+    if not isinstance(body, list) or len(body) != 1:
+        raise _khong_doc_duoc("phản hồi không phải mảng đúng một phần tử")
+
+    row = body[0]
+    if not isinstance(row, dict):
+        raise _khong_doc_duoc("phần tử phản hồi không phải object")
+
+    ket_qua = []
+    for khoa in ("upserted", "blocked"):
+        gia_tri = row.get(khoa)
+        # `bool` là lớp con của `int` — `True` không phải một số đếm hợp lệ.
+        if not isinstance(gia_tri, int) or isinstance(gia_tri, bool):
+            raise _khong_doc_duoc(f"`{khoa}` không phải số nguyên")
+        if gia_tri < 0:
+            raise _khong_doc_duoc(f"`{khoa}` âm ({gia_tri})")
+        ket_qua.append(gia_tri)
+
+    return ket_qua[0], ket_qua[1]
+
+
 def assert_target_project_matches(base_url: str) -> None:
     """Đích phải là ĐÚNG project Supabase đã được duyệt.
 
@@ -543,44 +582,41 @@ class DormApi:
         rows = response.json()
         return rows[0] if rows else None
 
-    async def mark_sync_run_failed(self, run_id: int, counts: Dict[str, int]) -> int:
-        """Đánh dấu một lượt ĐANG CHẠY là thất bại. Trả về SỐ HÀNG đã đổi.
+    async def mark_sync_run_failed(self, run_id: int) -> Dict[str, Any]:
+        """Đóng sổ một lượt hỏng, qua RPC. Trả hàng ``sync_runs`` sau khi gọi.
 
-        ⚠️ Phải trả về số hàng và người gọi phải kiểm. PostgREST coi PATCH khớp
-        0 hàng là THÀNH CÔNG, nên chỉ nhìn mã HTTP thì một lời gọi không đổi gì
-        vẫn được ghi nhận là "đã đánh dấu thất bại".
+        ⚠️ KHÔNG PATCH thẳng bảng nữa. Hai lý do, cả hai đều nghiêm trọng:
 
-        ⚠️ Lọc thêm ``status=eq.running``: chỉ lọc theo ``id`` thì lời gọi này
-        đổi được một lượt ĐÃ ``completed`` thành ``failed``.
+        1. Contract mới ràng ``failed ⇒ source_count IS NULL`` ở tầng database.
+           Một PATCH mang theo ``source_count`` sẽ vướng CHECK, và khi đó MỌI
+           lỗi sau lúc mở lượt đều để lại một lượt treo ``running`` — thứ khoá
+           cứng năm học bằng ``uq_sync_run_active_per_year``.
+        2. ``upserted_count`` của lượt hỏng trước đây lấy từ bộ đếm trong tiến
+           trình này. Một lô đã commit rồi mất ACK, hoặc một lượt được tiến
+           trình khác nhận lại, đều làm con số đó THẤP HƠN thực tế — và nó đi
+           thẳng vào sổ sách. RPC đếm lại từ ``students.last_seen_sync_id``
+           trong cùng transaction với việc đổi trạng thái.
 
-        ⚠️ ``completed_at`` gửi mốc ISO-8601 tính ở đây, KHÔNG gửi chuỗi
-        ``"now()"``. PostgREST truyền thẳng chuỗi vào câu UPDATE; Postgres nhận
-        các giá trị đặc biệt ``now``/``today``/``epoch``/``infinity`` nhưng
-        KHÔNG nhận ``now()`` — nó trả 400 và cả nhánh đánh dấu thất bại này
-        không bao giờ chạy được, để lượt treo ``running`` và khoá cứng năm học
-        bằng ``uq_sync_run_active_per_year``. Ràng buộc
-        ``chk_sync_run_completed_has_time`` phía KTX bắt buộc cột này có giá trị
-        khi trạng thái là ``failed``, nên không thể bỏ trống.
+        RPC cũng tự phân loại: lượt đã ``completed`` được trả nguyên hàng, không
+        bị hạ cấp; lượt đã ``failed`` trả nguyên hàng và KHÔNG đếm lại.
         """
-        response = await self._client.patch(
-            f"{self._base}/sync_runs",
-            headers={**self._headers, "Prefer": "return=representation"},
-            params={
-                "id": f"eq.{run_id}",
-                "status": "eq.running",
-                "select": "id",
-            },
-            json={
-                "status": "failed",
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-                **counts,
-            },
+        response = await self._client.post(
+            f"{self._base}/rpc/fail_sync_run",
+            headers=self._headers,
+            json={"p_run_id": run_id},
         )
-        self._raise_for_status(response, "Đánh dấu lượt thất bại")
-        return len(response.json())
+        self._raise_for_status(response, "Đóng sổ lượt hỏng")
+
+        body = response.json()
+        row = body[0] if isinstance(body, list) and body else body
+        if not isinstance(row, dict) or "status" not in row:
+            raise RuntimeError(
+                "Đóng sổ lượt hỏng: phản hồi không đọc được trạng thái lượt."
+            )
+        return row
 
     async def reconcile_after_failure(
-        self, run_id: int, source_count: int, upserted_count: int
+        self, run_id: int
     ) -> Tuple[str, Optional[Dict[str, Any]]]:
         """Xác định lượt thực sự kết thúc ra sao sau khi client gặp lỗi.
 
@@ -612,16 +648,22 @@ class DormApi:
             return "marked_failed", run
 
         try:
-            changed = await self.mark_sync_run_failed(
-                run_id,
-                {"source_count": source_count, "upserted_count": upserted_count},
-            )
+            sau_khi_dong = await self.mark_sync_run_failed(run_id)
         except Exception:
             return "unknown", run
 
-        # Đổi được đúng một hàng mới là đã đánh dấu thật. 0 hàng nghĩa là trạng
-        # thái đã đổi giữa lúc đọc và lúc ghi — không được tuyên bố bừa.
-        return ("marked_failed" if changed == 1 else "unknown"), run
+        # ⚠️ Tin TRẠNG THÁI TRẢ VỀ, không tin việc lời gọi không ném.
+        #
+        # RPC tự phân loại và có nhánh trả nguyên hàng mà không đổi gì: một lượt
+        # vừa `completed` xong ngay giữa lúc ta đọc và lúc ta gọi sẽ về đây với
+        # `completed`. Ghi nó thành "đã đánh dấu thất bại" là ghi sai sổ sách
+        # đúng ở ca dễ xảy ra nhất — mất ACK sau khi hạ cờ đã commit.
+        trang_thai = sau_khi_dong.get("status")
+        if trang_thai == "completed":
+            return "finalized", sau_khi_dong
+        if trang_thai == "failed":
+            return "marked_failed", sau_khi_dong
+        return "unknown", sau_khi_dong
 
     async def upsert_students(
         self, run_id: int, rows: List[Dict[str, Any]]
@@ -645,16 +687,7 @@ class DormApi:
         )
         self._raise_for_status(response, "Ghi danh sách học viên")
 
-        body = response.json()
-        # PostgREST trả `returns table (...)` dưới dạng mảng một phần tử.
-        row = body[0] if isinstance(body, list) and body else body
-        try:
-            return int(row["upserted"]), int(row["blocked"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError(
-                "Ghi danh sách học viên: phản hồi không đọc được số liệu lô. "
-                "KHÔNG chạy tiếp — hai con số này quyết định bước hạ cờ."
-            ) from exc
+        return _doc_so_lieu_lo(response.json())
 
     async def count_students(self, academic_year: int) -> Optional[int]:
         """Số học viên hệ KTX đang có cho năm học. ``None`` = không đếm được.
@@ -1216,9 +1249,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
         except BaseException as exc:
             # Lỗi phía client KHÔNG đồng nghĩa với việc database chưa làm gì.
             # Hỏi lại trạng thái thật thay vì tuyên bố bừa.
-            outcome, run = await api.reconcile_after_failure(
-                run_id, len(rows), upserted
-            )
+            outcome, run = await api.reconcile_after_failure(run_id)
 
             if outcome == "finalized":
                 # Database đã hoàn tất; chỉ phản hồi không về tới đây. Báo thất
