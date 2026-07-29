@@ -1159,6 +1159,33 @@ class RefundService:
                 "Payment có thể đã bị đảo qua void lô import."
             )
 
+        # 🔴 KIỂM LẠI SỐ TIỀN TẠI THỜI ĐIỂM CHI, không tin phép kiểm lúc TẠO.
+        # ``request_refund`` đã chặn ``amount > payment.amount − đã cam kết``, nhưng đó
+        # là ảnh chụp lúc lập yêu cầu: ``refund_request.amount`` là SỐ CHỐT CỨNG, không
+        # phải khoá ngoại, nên ``payment.amount`` đổi sau đó thì nó KHÔNG theo.
+        #
+        # Đã xảy ra thật (prod 29-07): đợt dọn lệ phí 70k sửa thẳng ``payment.amount``
+        # xuống, ba yêu cầu hoàn lập trước đó vẫn giữ số cũ ⇒ mỗi phiếu đòi dư 70.000đ.
+        # Không có phép kiểm nào ở đây nên bấm "Xử lý" là chi dư tiền mặt THẬT, đồng
+        # thời ``reverse_payment_balances`` rút dư khỏi ``fee.paid_amount`` (nó clamp về
+        # 0 nên số không âm — chỉ âm thầm lệch với Σ phiếu verified).
+        #
+        # Chỉ trừ phần ĐÃ CHI của các yêu cầu khác: pending/approved chưa ra tiền, và
+        # chính ``refund`` này đang mang trạng thái approved nên không được tự trừ mình.
+        already_refunded = await self.payment_repo.get_total_refunds_for_payment(
+            payment.id, statuses=[RefundStatusEnum.refunded.value]
+        )
+        refundable = payment.amount - already_refunded
+        if refund.amount > refundable:
+            raise BusinessRuleViolation(
+                f"Không thể chi hoàn {refund.amount} — phiếu thu chỉ còn hoàn được "
+                f"{refundable} (số tiền phiếu thu {payment.amount}"
+                + (f", đã hoàn {already_refunded}" if already_refunded else "")
+                + "). Số tiền trên yêu cầu hoàn được chốt lúc lập và có thể đã cũ nếu "
+                "phiếu thu bị điều chỉnh sau đó — hãy đối chiếu rồi lập lại yêu cầu "
+                "với số đúng."
+            )
+
         # Update refund status
         refund.status = RefundStatusEnum.refunded.value
         refund.refunded_at = datetime.now(timezone.utc)

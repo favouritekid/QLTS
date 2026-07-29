@@ -452,29 +452,42 @@ class PaymentRepository(BaseRepository[Payment]):
 
     async def get_total_refunds_for_payment(
         self,
-        payment_id: int
+        payment_id: int,
+        statuses: Optional[List[str]] = None,
     ) -> Decimal:
         """
-        Get the total committed refund amount for a payment.
+        Get the total refund amount for a payment.
 
-        Counts every non-rejected request (pending + approved + refunded) so
-        that open requests are *reserved* against the payment. Used to enforce
-        ``total_committed_refunds <= payment.amount`` — this prevents creating
-        a second open refund whose amount would exceed what remains once the
-        already-open requests are processed (Finance Phase 1 F2).
+        Mặc định (``statuses=None``) đếm mọi yêu cầu KHÔNG bị từ chối (pending +
+        approved + refunded) để các yêu cầu đang mở được *giữ chỗ* trên payment.
+        Dùng khi TẠO yêu cầu, ép ``total_committed_refunds <= payment.amount``
+        (Finance Phase 1 F2).
+
+        Truyền ``statuses`` để đếm hẹp hơn. Ca thật: lúc CHI
+        (``process_approved_refund``) chỉ được trừ phần **đã thực sự ra tiền**
+        (``refunded``) — pending/approved chưa chi đồng nào, và chính yêu cầu
+        đang xử lý cũng mang trạng thái ``approved`` nên đếm rộng sẽ khiến nó
+        tự trừ mình rồi từ chối oan.
 
         Args:
             payment_id: Payment ID
+            statuses: Danh sách trạng thái cần cộng; None = mọi trạng thái
+                không phải ``rejected``.
 
         Returns:
-            Total committed (non-rejected) refund amount
+            Tổng số tiền hoàn theo phạm vi trạng thái đã chọn
         """
+        status_filter = (
+            RefundRequest.status.in_(statuses)
+            if statuses is not None
+            else RefundRequest.status != RefundStatusEnum.rejected.value
+        )
         query = (
             select(func.coalesce(func.sum(RefundRequest.amount), 0))
             .where(
                 and_(
                     RefundRequest.payment_id == payment_id,
-                    RefundRequest.status != RefundStatusEnum.rejected.value
+                    status_filter,
                 )
             )
         )
