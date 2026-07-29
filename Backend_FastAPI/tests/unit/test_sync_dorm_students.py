@@ -468,13 +468,28 @@ def test_close_response_is_read_fail_closed(body):
         _doc_hang_sync_run(body, 9)
 
 
-async def test_reconcile_probes_again_when_closing_is_ambiguous():
-    """Mất ACK ở BƯỚC ĐÓNG SỔ cũng phải đối soát lại.
+@pytest.mark.parametrize(
+    "trang_thai_lan_hai,mong_doi",
+    [
+        # POST đã tới nơi và commit, chỉ phản hồi không về.
+        ("failed", "marked_failed"),
+        # Lượt đã HOÀN TẤT trước đó — mất ACK sau khi hạ cờ xong. Báo thất bại
+        # ở đây là ghi sai sổ theo chiều ngược hẳn: dữ liệu ĐÃ đổi.
+        ("completed", "finalized"),
+        # POST chưa tới database. Lượt vẫn khoá năm học, và người vận hành cần
+        # biết điều đó thay vì tin là đã đóng sổ.
+        ("running", "unknown"),
+    ],
+)
+async def test_reconcile_probes_again_when_closing_is_ambiguous(
+    trang_thai_lan_hai, mong_doi
+):
+    """Mất ACK ở BƯỚC ĐÓNG SỔ cũng phải đối soát lại, và phân loại đúng cả ba.
 
     Mất kết nối, 408, 5xx — cả ba đều có thể xảy ra SAU khi database đã commit.
     Trả "không xác định" ngay là bỏ mất chính cơ chế đối soát mà bước MỞ lượt đã
-    có, và hai ca "chưa tới database" với "đã commit rồi mất phản hồi" cần hai
-    hành động khác hẳn nhau.
+    có. Ba trạng thái đọc được ở lần hai dẫn tới ba kết luận khác nhau, và hai
+    trong số đó là báo thành công / báo thất bại ngược hẳn nhau.
     """
 
     class _MatAckKhiDong(_RecordingClient):
@@ -485,9 +500,7 @@ async def test_reconcile_probes_again_when_closing_is_ambiguous():
         async def get(self, url, headers=None, params=None):
             self.lan_get += 1
             self.calls.append({"method": "GET", "url": url, "params": params})
-            # Lần đầu: lượt còn chạy. Lần hai (sau khi POST hỏng): đã `failed`
-            # — tức POST đã tới nơi và commit, chỉ phản hồi không về.
-            trang_thai = "running" if self.lan_get == 1 else "failed"
+            trang_thai = "running" if self.lan_get == 1 else trang_thai_lan_hai
             return _FakeResponse(payload=[{"id": 9, "status": trang_thai}])
 
         async def post(self, url, headers=None, params=None, json=None):
@@ -495,28 +508,12 @@ async def test_reconcile_probes_again_when_closing_is_ambiguous():
             raise httpx.ConnectError("mất kết nối")
 
     client = _MatAckKhiDong()
-    outcome, run = await _api_with(client).reconcile_after_failure(9)
+    outcome, _ = await _api_with(client).reconcile_after_failure(9)
 
-    assert outcome == "marked_failed"
-    assert run["status"] == "failed"
+    assert outcome == mong_doi
+    # Đúng ba lời gọi: đọc → thử đóng → đọc lại. Thiếu lời gọi cuối là quay về
+    # đúng lỗi vừa vá.
     assert [c["method"] for c in client.calls] == ["GET", "POST", "GET"]
-
-
-async def test_reconcile_stays_unknown_when_the_run_is_still_running():
-    """Đọc lại được mà lượt VẪN chạy = POST chưa tới nơi. Không tuyên bố bừa."""
-
-    class _PostHong(_RecordingClient):
-        async def get(self, url, headers=None, params=None):
-            self.calls.append({"method": "GET", "url": url, "params": params})
-            return _FakeResponse(payload=[{"id": 9, "status": "running"}])
-
-        async def post(self, url, headers=None, params=None, json=None):
-            self.calls.append({"method": "POST", "url": url, "json": json})
-            raise httpx.ReadTimeout("hết giờ")
-
-    outcome, _ = await _api_with(_PostHong()).reconcile_after_failure(9)
-
-    assert outcome == "unknown"
 
 
 async def test_get_sync_run_returns_none_for_a_strange_body():
@@ -525,7 +522,20 @@ async def test_get_sync_run_returns_none_for_a_strange_body():
     Mọi lời gọi ở nhánh đó chạy vì có gì đó đã hỏng sẵn; ném thêm một exception
     lạ ở đây là biến một lượt cần đối soát thành traceback.
     """
-    for than in ([{}], [], [{"id": 999, "status": "failed"}], ["lạ"], {"id": 9}):
+    than_la = [
+        [{}],
+        [],
+        [{"id": 999, "status": "failed"}],  # hàng của lượt khác
+        ["lạ"],
+        {"id": 9},  # không phải mảng
+        [{"id": 9, "status": "dang_nghi"}],  # trạng thái ngoài state machine
+        # Hai hàng MÂU THUẪN. Lọc là `id=eq.<run_id>` trên khoá chính nên điều
+        # này không thể xảy ra khi mọi thứ bình thường — và chính vì thế, lấy
+        # `rows[0]` ở đây là bỏ qua đúng lúc phải dừng. Đã tái hiện: nhánh phục
+        # hồi nhận hàng đầu và tuyên bố lượt đã xong.
+        [{"id": 9, "status": "completed"}, {"id": 9, "status": "running"}],
+    ]
+    for than in than_la:
         client = _RecordingClient(_FakeResponse(payload=than))
         assert await _api_with(client).get_sync_run(9) is None
 

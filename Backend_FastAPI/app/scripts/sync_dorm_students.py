@@ -235,6 +235,9 @@ def assert_transport_is_encrypted(base_url: str) -> None:
     )
 
 
+# Toàn bộ state machine của một lượt đồng bộ.
+_TRANG_THAI_SYNC_RUN = {"running", "failed", "completed"}
+# Tập con: lượt đã đóng sổ, không nhận ghi nữa.
 _TRANG_THAI_DA_DONG = {"failed", "completed"}
 
 
@@ -647,7 +650,12 @@ class DormApi:
         except Exception:
             return None
 
-        if not isinstance(rows, list) or not rows:
+        # ⚠️ ĐÚNG MỘT phần tử. Lọc là `id=eq.<run_id>` trên khoá chính nên
+        # nhiều hơn một hàng là điều không thể xảy ra nếu mọi thứ bình thường —
+        # và chính vì thế, gặp nó mà vẫn lấy `rows[0]` là bỏ qua đúng lúc phải
+        # dừng. Đã tái hiện: hai hàng mâu thuẫn `completed` và `running` thì
+        # nhánh phục hồi nhận hàng đầu và tuyên bố lượt đã xong.
+        if not isinstance(rows, list) or len(rows) != 1:
             return None
 
         row = rows[0]
@@ -657,7 +665,11 @@ class DormApi:
         got_id = row.get("id")
         if not isinstance(got_id, int) or isinstance(got_id, bool) or got_id != run_id:
             return None
-        if not isinstance(row.get("status"), str):
+
+        # Trạng thái phải nằm trong state machine. Một chuỗi bất kỳ lọt qua sẽ
+        # rơi xuống nhánh "không xác định" ở người gọi — đúng, nhưng muộn hơn
+        # một tầng và không nói được vì sao.
+        if row.get("status") not in _TRANG_THAI_SYNC_RUN:
             return None
 
         return row
