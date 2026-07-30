@@ -829,6 +829,9 @@ class RefundService:
         self.refund_repo = RefundRepository(db)
         self.payment_repo = PaymentRepository(db)
         self.fee_repo = FeeRepository(db)
+        # Khoá hoá đơn trước khoá khoản phí lúc chi hoàn — xem
+        # ``process_approved_refund``.
+        self.invoice_repo = InvoiceRepository(db)
 
     async def request_refund(
         self,
@@ -949,6 +952,39 @@ class RefundService:
                 "Cannot approve your own refund request (maker-checker violation)"
             )
 
+        # 🔴 Kiểm số tiền NGAY TẠI ĐÂY, không đợi tới lúc chi.
+        #
+        # ``process_approved_refund`` cũng kiểm, nhưng nó kiểm ở cửa RA: một phiếu
+        # ``approved`` bị chặn ở đó là KẸT CỨNG — không chi được, mà từ chối lẻ thì
+        # bị guard F1 chặn nếu hồ sơ đang rút, và bản thân nó vẫn giữ chỗ trên phiếu
+        # thu nên phiếu thay thế cũng không lập nổi. Chỉ SQL mới gỡ được.
+        #
+        # ``approve`` mới là bước đẩy phiếu từ ``pending`` (còn từ chối được) sang
+        # ``approved``, nên đây là chỗ đúng để chặn: phiếu quá số thì không bao giờ
+        # bước vào trạng thái không lối ra.
+        #
+        # Trừ phần ĐÃ CHI **và** phần đã duyệt của các yêu cầu KHÁC (chúng sẽ chi
+        # trước, tiêu vào cùng phiếu thu). Chính ``refund`` này đang ``pending`` nên
+        # không nằm trong tập đó — không tự trừ mình.
+        payment = refund.payment
+        committed = await self.payment_repo.get_total_refunds_for_payment(
+            payment.id,
+            statuses=[
+                RefundStatusEnum.refunded.value,
+                RefundStatusEnum.approved.value,
+            ],
+        )
+        refundable = payment.amount - committed
+        if refund.amount > refundable:
+            raise BusinessRuleViolation(
+                f"Không thể duyệt hoàn {refund.amount} — phiếu thu chỉ còn hoàn được "
+                f"{refundable} (số tiền phiếu thu {payment.amount}"
+                + (f", đã cam kết hoàn {committed}" if committed else "")
+                + "). Số tiền trên yêu cầu được chốt lúc lập và có thể đã cũ nếu "
+                "phiếu thu bị điều chỉnh sau đó — hãy từ chối yêu cầu này rồi lập "
+                "lại với số đúng."
+            )
+
         # Update refund status
         refund.status = RefundStatusEnum.approved.value
         refund.approved_by_id = approver_id
@@ -996,9 +1032,23 @@ class RefundService:
         if not refund:
             raise ResourceNotFoundError("Refund request not found")
 
-        if refund.status != RefundStatusEnum.pending.value:
+        # Nhận CẢ ``approved``, không chỉ ``pending``.
+        #
+        # Trước đây chỉ ``pending``: một phiếu đã duyệt mà không chi được nữa (phiếu
+        # thu bị điều chỉnh giảm, hoặc phiếu thu bị bỏ trong đợt dọn dữ liệu) sẽ nằm
+        # lại vĩnh viễn — không chi, không từ chối, không có route sửa. Đã xảy ra
+        # thật trên prod 29-07: hai phiếu hoàn 70k trỏ vào phiếu thu đã bỏ, phải gỡ
+        # bằng SQL vì giao diện không có đường nào.
+        #
+        # Từ chối một phiếu ĐÃ DUYỆT không đụng tới tiền: chi tiền là việc của
+        # ``process_approved_refund``, ``approved`` mới chỉ là "được phép chi".
+        if refund.status not in (
+            RefundStatusEnum.pending.value,
+            RefundStatusEnum.approved.value,
+        ):
             raise BusinessRuleViolation(
-                f"Can only reject pending refunds. Current status: {refund.status}"
+                "Chỉ từ chối được yêu cầu đang chờ duyệt hoặc đã duyệt nhưng chưa "
+                f"chi. Trạng thái hiện tại: {refund.status}"
             )
 
         if not reason or not reason.strip():
@@ -1064,11 +1114,21 @@ class RefundService:
         ``source='withdrawal'`` refunds are touched — a manual or overpayment
         refund is independently managed and left as-is.
 
-        Raises ``BusinessRuleViolation`` if any refund is already APPROVED
-        (awaiting processing): that cannot be silently cancelled here — the
-        operator must process or reject it first — so the caller (cancel/rollback)
-        surfaces a 400 instead of orphaning an in-flight refund. Returns the
-        number of refunds rejected.
+        Từ chối CẢ phiếu ``approved`` chưa chi, không chỉ ``pending``.
+
+        Trước đây gặp phiếu ``approved`` là raise, bắt operator "xử lý hoặc từ chối
+        yêu cầu đó trước". Nhưng cả hai lối ấy đều có thể đã bị bịt: chi thì bị chốt
+        số tiền ở ``process_approved_refund`` chặn, còn từ chối lẻ thì guard F1 chặn
+        vì hồ sơ đang ``withdrawal_pending``. Kết quả là hồ sơ kẹt vĩnh viễn ở trạng
+        thái không thu được, không hoàn được, không rút xong được — chỉ SQL mới gỡ.
+
+        Đây là đường thoát CÓ KIỂM SOÁT: nó từ chối TOÀN BỘ phiếu hoàn của luồng rút
+        trong cùng một giao dịch rồi đưa hồ sơ về ``draft``, nên không có chuyện bỏ
+        sót một phiếu rồi hồ sơ vẫn treo. ``reason`` do caller truyền xuống được ghi
+        vào ``rejection_reason`` của từng phiếu nên vẫn còn dấu vết ai huỷ và vì sao.
+        Không đụng tới tiền: ``approved`` mới là "được phép chi", chưa chi đồng nào.
+
+        Returns the number of refunds rejected.
         """
         stmt = (
             select(RefundRequest)
@@ -1090,14 +1150,6 @@ class RefundService:
             )
         )
         open_refunds = list((await self.db.execute(stmt)).scalars().all())
-
-        if any(
-            r.status == RefundStatusEnum.approved.value for r in open_refunds
-        ):
-            raise BusinessRuleViolation(
-                "Không thể hủy quy trình rút: còn yêu cầu hoàn tiền ĐÃ DUYỆT "
-                "đang chờ xử lý. Hãy xử lý (hoặc từ chối) yêu cầu hoàn đó trước."
-            )
 
         count = 0
         for r in open_refunds:
@@ -1142,7 +1194,23 @@ class RefundService:
             )
 
         payment = refund.payment
-        invoice = payment.invoice
+        # 🔴 KHOÁ hoá đơn TRƯỚC khoản phí (thứ tự invoice→fee, khớp
+        # ``verify_payment`` và ``payment_import_service.commit_batch``).
+        #
+        # Trước đây ``invoice`` lấy thẳng từ eager-load của ``refund_repo``, tức một
+        # ảnh chụp đọc TRƯỚC khi có khoá nào, và không bao giờ được refresh —
+        # ``db.refresh(payment)`` bên dưới chỉ làm mới Payment, Invoice đi kèm giữ
+        # nguyên ``paid_amount`` cũ. Hai phiếu hoàn trên CÙNG một hoá đơn (hai phiếu
+        # thu khác nhau) chạy song song sẽ cùng đọc paid=1.000.000; cái sau ghi đè
+        # cái trước ⇒ hoá đơn mất một lần trừ, kèm status/paid_at sai theo.
+        #
+        # Khoá theo đúng thứ tự này còn tránh deadlock ABBA với luồng đảo lô import
+        # (nó cũng khoá invoice rồi mới fee).
+        invoice = await self.invoice_repo.get_for_update(payment.invoice_id, unit_id)
+        if not invoice:
+            raise ResourceNotFoundError("Invoice not found")
+        await self.db.refresh(invoice)
+
         fee = await self.fee_repo.get_for_update(invoice.fee_id, unit_id)
         if not fee:
             raise ResourceNotFoundError("Fee not found")
@@ -1157,6 +1225,33 @@ class RefundService:
             raise BusinessRuleViolation(
                 f"Chỉ hoàn được payment đã verified (hiện: {payment.status}). "
                 "Payment có thể đã bị đảo qua void lô import."
+            )
+
+        # 🔴 KIỂM LẠI SỐ TIỀN TẠI THỜI ĐIỂM CHI, không tin phép kiểm lúc TẠO.
+        # ``request_refund`` đã chặn ``amount > payment.amount − đã cam kết``, nhưng đó
+        # là ảnh chụp lúc lập yêu cầu: ``refund_request.amount`` là SỐ CHỐT CỨNG, không
+        # phải khoá ngoại, nên ``payment.amount`` đổi sau đó thì nó KHÔNG theo.
+        #
+        # Đã xảy ra thật (prod 29-07): đợt dọn lệ phí 70k sửa thẳng ``payment.amount``
+        # xuống, ba yêu cầu hoàn lập trước đó vẫn giữ số cũ ⇒ mỗi phiếu đòi dư 70.000đ.
+        # Không có phép kiểm nào ở đây nên bấm "Xử lý" là chi dư tiền mặt THẬT, đồng
+        # thời ``reverse_payment_balances`` rút dư khỏi ``fee.paid_amount`` (nó clamp về
+        # 0 nên số không âm — chỉ âm thầm lệch với Σ phiếu verified).
+        #
+        # Chỉ trừ phần ĐÃ CHI của các yêu cầu khác: pending/approved chưa ra tiền, và
+        # chính ``refund`` này đang mang trạng thái approved nên không được tự trừ mình.
+        already_refunded = await self.payment_repo.get_total_refunds_for_payment(
+            payment.id, statuses=[RefundStatusEnum.refunded.value]
+        )
+        refundable = payment.amount - already_refunded
+        if refund.amount > refundable:
+            raise BusinessRuleViolation(
+                f"Không thể chi hoàn {refund.amount} — phiếu thu chỉ còn hoàn được "
+                f"{refundable} (số tiền phiếu thu {payment.amount}"
+                + (f", đã hoàn {already_refunded}" if already_refunded else "")
+                + "). Số tiền trên yêu cầu hoàn được chốt lúc lập và có thể đã cũ nếu "
+                "phiếu thu bị điều chỉnh sau đó — hãy đối chiếu rồi lập lại yêu cầu "
+                "với số đúng."
             )
 
         # Update refund status

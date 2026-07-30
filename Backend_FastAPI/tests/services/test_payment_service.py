@@ -23,7 +23,7 @@ from app.models.finance import (
     Fee, Invoice, Payment, PaymentMethod, InstallmentPlan,
     FeeTypeEnum, FeeStatusEnum, InvoiceStatusEnum, PaymentStatusEnum,
     OverpaymentRecord, OverpaymentStatusEnum, ResolutionTypeEnum,
-    RefundRequest, RefundStatusEnum,
+    RefundRequest, RefundStatusEnum, RefundSourceEnum,
 )
 from app.services.fee_calculation_service import FeeCalculationService
 from app.services.invoice_service import InvoiceService
@@ -919,6 +919,127 @@ class TestRefundService:
 
         return verified
 
+    async def test_process_refund_blocked_when_payment_amount_shrank(
+        self, db, payment_fixtures
+    ):
+        """Phiếu thu bị điều chỉnh GIẢM sau khi yêu cầu hoàn đã duyệt ⇒ CHẶN chi.
+
+        🔴 Ca thật trên prod 29-07: đợt dọn lệ phí 70k sửa thẳng ``payment.amount``
+        xuống, ba yêu cầu hoàn lập trước đó vẫn giữ số cũ nên mỗi phiếu đòi dư
+        70.000đ. ``request_refund`` có kiểm số tiền, nhưng đó là ảnh chụp LÚC LẬP —
+        ``refund_request.amount`` là số chốt cứng, không phải khoá ngoại, nên
+        ``payment.amount`` đổi sau đó thì nó KHÔNG theo.
+
+        Không có phép kiểm ở bước chi thì bấm "Xử lý" là chi dư tiền mặt THẬT, đồng
+        thời ``reverse_payment_balances`` rút dư khỏi ``fee.paid_amount`` (nó clamp
+        về 0 nên số không âm — chỉ âm thầm lệch với Σ phiếu verified).
+        """
+        pf = payment_fixtures
+        payment = await self._create_verified_payment(db, pf)
+
+        refund_service = RefundService(db)
+        refund, _ = await refund_service.request_refund(
+            payment_id=payment.id,
+            amount=Decimal("1000000"),  # đúng bằng phiếu thu tại thời điểm lập
+            reason="Rút hồ sơ",
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        await refund_service.approve_refund(
+            refund_id=refund.id,
+            approver_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        # Phiếu thu bị điều chỉnh giảm SAU khi yêu cầu đã duyệt (mô phỏng đợt dọn
+        # lệ phí 70k sửa thẳng payment.amount).
+        payment.amount = Decimal("930000")
+        await db.commit()
+
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await refund_service.process_approved_refund(
+                refund_id=refund.id,
+                processor_id=pf["checker"].id,
+                refund_reference="BANK-SHRANK-001",
+                unit_id=pf["unit_id"],
+            )
+
+        msg = str(exc.value)
+        assert "930000" in msg, "lỗi phải nói rõ phiếu thu còn hoàn được bao nhiêu"
+        assert "1000000" in msg, "và số đang đòi hoàn"
+
+        # KHÔNG được chi: trạng thái giữ nguyên, không sinh bút toán hoàn.
+        await db.refresh(refund)
+        assert refund.status == RefundStatusEnum.approved.value
+        assert refund.refunded_at is None
+
+    async def test_process_refund_blocked_when_earlier_refund_used_the_money(
+        self, db, payment_fixtures
+    ):
+        """Phần ĐÃ CHI của yêu cầu trước phải bị trừ khỏi hạn mức của yêu cầu sau.
+
+        Hai yêu cầu cùng một phiếu thu, mỗi cái 600.000 trên phiếu 1.000.000: lập và
+        duyệt được (tổng 1.200.000 vượt, nhưng ``request_refund`` giữ chỗ nên yêu cầu
+        thứ hai đã bị chặn ở đó — nên ở đây lập yêu cầu thứ hai SAU khi cái đầu đã chi
+        xong, lúc phần giữ chỗ đã giải phóng). Sau khi cái đầu chi 600.000, phiếu chỉ
+        còn hoàn được 400.000.
+
+        Khoá luôn chiều ngược của phép trừ: chốt mới CHỈ trừ phần ``refunded``, nếu
+        trừ cả ``approved`` thì chính yêu cầu đang xử lý sẽ tự trừ mình và bị từ chối oan
+        (test ở trên sẽ đỏ).
+        """
+        pf = payment_fixtures
+        payment = await self._create_verified_payment(db, pf)
+        refund_service = RefundService(db)
+
+        first, _ = await refund_service.request_refund(
+            payment_id=payment.id,
+            amount=Decimal("600000"),
+            reason="Hoàn đợt 1",
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        await refund_service.approve_refund(
+            refund_id=first.id, approver_id=pf["checker"].id, unit_id=pf["unit_id"]
+        )
+        await db.commit()
+        await refund_service.process_approved_refund(
+            refund_id=first.id,
+            processor_id=pf["checker"].id,
+            refund_reference="BANK-1",
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        # Yêu cầu thứ hai vượt phần còn lại — dựng thẳng ở trạng thái approved để
+        # kiểm ĐÚNG chốt lúc chi (request_refund đã có chốt riêng của nó).
+        second = RefundRequest(
+            payment_id=payment.id,
+            amount=Decimal("600000"),
+            reason="Hoàn đợt 2",
+            status=RefundStatusEnum.approved.value,
+            requested_by_id=pf["maker"].id,
+            approved_by_id=pf["checker"].id,
+            requested_at=datetime.now(timezone.utc),
+            approved_at=datetime.now(timezone.utc),
+        )
+        db.add(second)
+        await db.commit()
+        await db.refresh(second)
+
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await refund_service.process_approved_refund(
+                refund_id=second.id,
+                processor_id=pf["checker"].id,
+                refund_reference="BANK-2",
+                unit_id=pf["unit_id"],
+            )
+        assert "400000" in str(exc.value), "phải trừ phần đã chi của yêu cầu trước"
+
     async def test_request_refund_success(self, db, payment_fixtures):
         """Request refund for verified payment succeeds."""
         pf = payment_fixtures
@@ -1451,3 +1572,170 @@ class TestPaymentVerifiedNotificationBridge:
             EVENT_GROUP_MAPPING[SystemEvents.PAYMENT_VERIFIED]
             == NotificationEventGroup.FINANCE
         )
+
+
+class TestRefundNoDeadEnd:
+    """Phiếu hoàn không được rơi vào trạng thái KHÔNG LỐI RA.
+
+    Chốt số tiền ở ``process_approved_refund`` bảo vệ đúng, nhưng nó kiểm ở cửa RA:
+    phiếu ``approved`` bị nó chặn thì không chi được, không từ chối lẻ được (guard
+    F1 khi hồ sơ đang rút), và vẫn giữ chỗ trên phiếu thu nên phiếu thay thế cũng
+    không lập nổi. Đã phải gỡ bằng SQL trên prod 29-07 (hai phiếu 70k mồ côi).
+    """
+
+    async def _pending_refund(self, db, pf, amount=Decimal("1000000")):
+        pay_service = PaymentService(db)
+        payment, _ = await pay_service.record_manual_payment(
+            invoice_id=pf["invoice"].id,
+            method_id=pf["cash_method"].id,
+            amount=Decimal("1000000"),
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        await pay_service.verify_payment(
+            payment_id=payment.id,
+            verifier_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        refund_service = RefundService(db)
+        refund, _ = await refund_service.request_refund(
+            payment_id=payment.id,
+            amount=amount,
+            reason="Rút hồ sơ",
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        return refund_service, refund, payment
+
+    async def test_approve_blocked_when_payment_shrank(self, db, payment_fixtures):
+        """Phiếu thu giảm SAU khi lập yêu cầu ⇒ chặn ngay ở DUYỆT.
+
+        Chặn ở đây thì phiếu còn ``pending`` — vẫn từ chối được và lập lại được.
+        Nếu để lọt sang ``approved`` rồi mới chặn ở bước chi thì hết đường.
+        """
+        pf = payment_fixtures
+        refund_service, refund, payment = await self._pending_refund(db, pf)
+
+        payment.amount = Decimal("930000")
+        await db.commit()
+
+        with pytest.raises(BusinessRuleViolation) as exc:
+            await refund_service.approve_refund(
+                refund_id=refund.id,
+                approver_id=pf["checker"].id,
+                unit_id=pf["unit_id"],
+            )
+        assert "930000" in str(exc.value)
+
+        await db.refresh(refund)
+        assert refund.status == RefundStatusEnum.pending.value, (
+            "phải giữ ở pending để còn từ chối được"
+        )
+
+    async def test_rejected_refund_frees_the_payment_for_a_new_request(
+        self, db, payment_fixtures
+    ):
+        """Từ chối phiếu quá số ⇒ giải phóng chỗ, lập lại được với số đúng.
+
+        Đây là toàn bộ lối thoát: từ chối → lập lại → duyệt → chi.
+        """
+        pf = payment_fixtures
+        refund_service, refund, payment = await self._pending_refund(db, pf)
+        payment.amount = Decimal("930000")
+        await db.commit()
+
+        await refund_service.reject_refund(
+            refund_id=refund.id,
+            reason="Phiếu thu đã điều chỉnh giảm",
+            rejector_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        replacement, _ = await refund_service.request_refund(
+            payment_id=payment.id,
+            amount=Decimal("930000"),
+            reason="Lập lại với số đúng",
+            user_id=pf["maker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        approved, _ = await refund_service.approve_refund(
+            refund_id=replacement.id,
+            approver_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+        assert approved.status == RefundStatusEnum.approved.value
+
+    async def test_approved_refund_can_still_be_rejected(self, db, payment_fixtures):
+        """Phiếu ĐÃ DUYỆT nhưng chưa chi vẫn từ chối được — cứu ca đã kẹt.
+
+        ``approved`` mới là "được phép chi", chưa chi đồng nào, nên từ chối nó không
+        đụng tới tiền. Trước đây ``reject_refund`` chỉ nhận ``pending``.
+        """
+        pf = payment_fixtures
+        refund_service, refund, payment = await self._pending_refund(
+            db, pf, amount=Decimal("500000")
+        )
+        await refund_service.approve_refund(
+            refund_id=refund.id,
+            approver_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        # Phiếu thu bị bỏ sau khi đã duyệt (mô phỏng đợt dọn lệ phí 70k) ⇒ không
+        # còn gì để chi, phiếu hoàn thành vô nghĩa.
+        payment.status = PaymentStatusEnum.rejected.value
+        await db.commit()
+
+        rejected, _ = await refund_service.reject_refund(
+            refund_id=refund.id,
+            reason="Phiếu thu gốc đã bị bỏ",
+            rejector_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        assert rejected.status == RefundStatusEnum.rejected.value
+        assert rejected.rejection_reason == "Phiếu thu gốc đã bị bỏ"
+        assert rejected.refunded_at is None, "từ chối KHÔNG được đụng tới tiền"
+
+    async def test_cancel_withdrawal_clears_approved_refunds(
+        self, db, payment_fixtures
+    ):
+        """Huỷ quy trình rút phải dọn được CẢ phiếu đã duyệt.
+
+        Đây là lối ra duy nhất của hồ sơ ``withdrawal_pending``. Trước đây gặp phiếu
+        ``approved`` là raise, bắt "xử lý hoặc từ chối trước" — mà cả hai lối ấy đều
+        có thể đã bị bịt ⇒ hồ sơ kẹt vĩnh viễn.
+        """
+        pf = payment_fixtures
+        refund_service, refund, _ = await self._pending_refund(
+            db, pf, amount=Decimal("500000")
+        )
+        refund.source = RefundSourceEnum.withdrawal.value
+        await db.commit()
+
+        await refund_service.approve_refund(
+            refund_id=refund.id,
+            approver_id=pf["checker"].id,
+            unit_id=pf["unit_id"],
+        )
+        await db.commit()
+
+        count = await refund_service.reject_open_refunds_for_profile(
+            profile_id=pf["profile"].id,
+            reason="Huỷ quy trình rút hồ sơ",
+            rejector_id=pf["checker"].id,
+        )
+        await db.commit()
+
+        assert count == 1
+        await db.refresh(refund)
+        assert refund.status == RefundStatusEnum.rejected.value
