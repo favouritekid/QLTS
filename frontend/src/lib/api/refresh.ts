@@ -25,6 +25,89 @@ let inflight: Promise<void> | null = null;
  */
 const TRANSIENT_RATE_LIMIT_CODE = "RATE_LIMITED";
 
+// ============================================================================
+// COOLDOWN sau khi bị rate limit
+// ============================================================================
+// Giữ phiên khi 429 làm MẤT cái phanh cũ: trước đây một lần refresh hỏng là
+// `setApiLoggedOut(true)`, và request interceptor sẽ huỷ mọi request sau đó —
+// tối đa MỘT POST /auth/refresh cho một phiên chết. Nay phiên còn sống nên mọi
+// query tiếp tục chạy: riêng `useNotificationDeliveries` đã có 6 query
+// `refetchInterval: 30s`, cộng dashboard 60s và `refetchOnReconnect` — mỗi lần
+// 401 lại đẻ một POST /auth/refresh nữa, vào đúng cái bucket 20/giờ dùng chung
+// cho cả trường. Single-flight KHÔNG cứu được: nó chỉ gộp các lời gọi ĐỒNG
+// THỜI, `inflight` được xoá ngay khi settle.
+//
+// Vì vậy sau một verdict RATE_LIMITED, chặn tại chỗ (không chạm mạng) cho tới
+// khi hết cooldown.
+const DEFAULT_COOLDOWN_MS = 60_000;
+const MAX_COOLDOWN_MS = 5 * 60_000;
+
+let blockedUntil = 0;
+
+/** Đọc `Retry-After` (giây) nếu backend có gửi; hiện slowapi chưa bật header. */
+function cooldownFromError(error: unknown): number {
+  const headers = axios.isAxiosError(error) ? error.response?.headers : undefined;
+  const retryAfter = headers?.["retry-after"] ?? headers?.["Retry-After"];
+  const seconds = Number(retryAfter);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return Math.min(seconds * 1000, MAX_COOLDOWN_MS);
+  }
+  return DEFAULT_COOLDOWN_MS;
+}
+
+function isTransientRateLimit(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) return false;
+  if (error.response?.status !== 429) return false;
+  const errorCode = (error.response?.data as { error_code?: string } | undefined)?.error_code;
+  return errorCode === TRANSIENT_RATE_LIMIT_CODE;
+}
+
+/** Còn trong cooldown do vừa bị rate limit? (dùng cho hook proactive) */
+export function isRefreshRateLimited(): boolean {
+  return Date.now() < blockedUntil;
+}
+
+/**
+ * Cờ interceptor gắn lên lỗi khi nó CỐ Ý giữ phiên sau một refresh hỏng tạm
+ * thời. Cần vì quyết định logout không chỉ nằm ở interceptor: query
+ * `/users/me` trong `useAuth` cũng tự đăng xuất khi thấy 401, và nó nhận đúng
+ * lỗi 401 mà interceptor vừa quyết định là "không phải phiên chết". Không có
+ * cờ này thì hai nơi mâu thuẫn nhau và người dùng vẫn bị đá ra.
+ */
+const SESSION_KEPT_ALIVE = "__qltsSessionKeptAlive";
+
+export function markSessionKeptAlive<T>(error: T): T {
+  if (error && typeof error === "object") {
+    (error as Record<string, unknown>)[SESSION_KEPT_ALIVE] = true;
+  }
+  return error;
+}
+
+export function isSessionKeptAliveError(error: unknown): boolean {
+  return (
+    !!error &&
+    typeof error === "object" &&
+    (error as Record<string, unknown>)[SESSION_KEPT_ALIVE] === true
+  );
+}
+
+/**
+ * Lỗi "đang trong cooldown" — mang hình dạng AxiosError 429 + RATE_LIMITED để
+ * caller phân loại y hệt một 429 thật (giữ phiên, toast "thử lại sau"), nhưng
+ * KHÔNG tốn một request nào. Tạo mới mỗi lần để nhiều caller không dùng chung
+ * một object mà annotate chồng lên nhau.
+ */
+function rateLimitedLocally() {
+  return Object.assign(new Error("Refresh đang trong cooldown do rate limit"), {
+    isAxiosError: true,
+    response: {
+      status: 429,
+      data: { error_code: TRANSIENT_RATE_LIMIT_CODE, detail: "Quá nhiều yêu cầu. Vui lòng thử lại sau." },
+      headers: {},
+    },
+  });
+}
+
 /**
  * Refresh thất bại có nghĩa là "phiên đã chết" hay chỉ là "lỗi tạm thời"?
  *
@@ -81,16 +164,31 @@ export function shouldLogoutAfterRefreshFailure(error: unknown): boolean {
  * resolve khi xong, reject khi thất bại, rồi `inflight` reset để lần sau
  * phát request mới. KHÔNG side-effect logout/redirect — caller tự quyết
  * (interceptor 401 logout, hook proactive im lặng).
+ *
+ * Trong cooldown sau một 429 RATE_LIMITED thì reject NGAY, không chạm mạng —
+ * xem khối COOLDOWN ở đầu file.
  */
 export function refreshAccessToken(): Promise<void> {
   if (inflight) return inflight;
+  if (isRefreshRateLimited()) {
+    return Promise.reject(rateLimitedLocally());
+  }
   inflight = (async () => {
-    // Tokens gửi/nhận qua httpOnly cookie.
-    await axios.post(
-      `${env.NEXT_PUBLIC_API_URL}${API_ENDPOINTS.AUTH.REFRESH}`,
-      {},
-      { withCredentials: true },
-    );
+    try {
+      // Tokens gửi/nhận qua httpOnly cookie.
+      await axios.post(
+        `${env.NEXT_PUBLIC_API_URL}${API_ENDPOINTS.AUTH.REFRESH}`,
+        {},
+        { withCredentials: true },
+      );
+    } catch (err) {
+      if (isTransientRateLimit(err)) {
+        blockedUntil = Date.now() + cooldownFromError(err);
+      }
+      throw err;
+    }
+    // Refresh thành công → quota còn chỗ, gỡ cooldown nếu đang treo.
+    blockedUntil = 0;
     // ⚠️ DEFENSIVE: chờ browser persist cookie mới trước khi caller retry.
     await new Promise((r) => setTimeout(r, 100));
   })().finally(() => {

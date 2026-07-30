@@ -27,7 +27,11 @@ import {
 } from "./csrf";
 import { env } from "@/lib/config/env";
 import { inspectVersionHeaders } from "@/lib/api/api-versioning";
-import { refreshAccessToken, shouldLogoutAfterRefreshFailure } from "./refresh";
+import {
+  markSessionKeptAlive,
+  refreshAccessToken,
+  shouldLogoutAfterRefreshFailure,
+} from "./refresh";
 import { buildLoginRedirect } from "@/lib/auth/login-redirect";
 export const API_BASE_URL = env.NEXT_PUBLIC_API_URL;
 
@@ -144,7 +148,12 @@ function triageRefreshFailure(
   const isClientError = status !== undefined && status >= 400 && status < 500;
 
   console.warn(`[API Client] ⏳ ${tag}: refresh lỗi tạm thời — giữ phiên, không logout`);
-  return { action: "reject", error: isClientError ? refreshError : serverErrorFallback };
+  // Đánh dấu để các consumer khác (vd query /users/me trong useAuth) không tự
+  // đăng xuất khi thấy 401 — quyết định "giữ phiên" đã được đưa ra ở đây.
+  return {
+    action: "reject",
+    error: markSessionKeptAlive(isClientError ? refreshError : serverErrorFallback),
+  };
 }
 
 /**

@@ -111,19 +111,22 @@ async def rate_limit_exceeded_handler(
     (hoặc mã khác) thì client coi là phiên đã chết và đăng xuất — fail-safe
     theo hướng an toàn.
     """
-    response = JSONResponse(
+    # ⚠️ KHÔNG gọi `limiter._inject_headers(response, request.state.view_rate_limit)`:
+    # đo thực tế (dev, 2026-07-30) cho thấy nó là NO-OP vì `Limiter(...)` không
+    # bật `headers_enabled` — response chưa bao giờ có `Retry-After` /
+    # `X-RateLimit-*`. Đổi lại, nó chạm hai mẩu state riêng tư của slowapi
+    # (`app.state.limiter`, `request.state.view_rate_limit`) và cả hai được
+    # evaluate TRƯỚC khi hàm kịp short-circuit; `State.__getattr__` ném
+    # AttributeError khi thiếu key, mà exception ném từ trong một exception
+    # handler thì không được ExceptionMiddleware bắt → 500 thay cho 429, đúng
+    # trên endpoint mà cả thay đổi này sinh ra để bảo đảm contract 429.
+    # Muốn có `Retry-After` thì bật `headers_enabled=True` ở Limiter trước.
+    return JSONResponse(
         status_code=429,
         content={
             "detail": "Quá nhiều yêu cầu. Vui lòng thử lại sau.",
             "error_code": RATE_LIMITED_ERROR_CODE,
         },
-    )
-    # ⚠️ Đo thực tế (dev, 2026-07-30): `_inject_headers` là NO-OP với limiter
-    # hiện tại vì `Limiter(...)` không bật `headers_enabled`, nên response
-    # KHÔNG có `Retry-After` / `X-RateLimit-*`. Giữ lời gọi để header tự xuất
-    # hiện nếu sau này bật cờ đó; client hiện chưa thể backoff theo header.
-    return request.app.state.limiter._inject_headers(
-        response, request.state.view_rate_limit
     )
 
 

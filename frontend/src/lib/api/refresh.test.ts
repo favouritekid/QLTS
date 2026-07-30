@@ -1,7 +1,7 @@
 /**
  * Tests cho refreshAccessToken — single-flight refresh.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("axios", () => {
   const post = vi.fn();
@@ -12,7 +12,13 @@ vi.mock("axios", () => {
 });
 
 import axios from "axios";
-import { refreshAccessToken, shouldLogoutAfterRefreshFailure } from "./refresh";
+import {
+  isRefreshRateLimited,
+  isSessionKeptAliveError,
+  markSessionKeptAlive,
+  refreshAccessToken,
+  shouldLogoutAfterRefreshFailure,
+} from "./refresh";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockPost = axios.post as any;
@@ -50,6 +56,91 @@ describe("refreshAccessToken — single-flight", () => {
     mockPost.mockResolvedValueOnce({ data: {} });
     await refreshAccessToken();
     expect(mockPost).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("cooldown sau 429 RATE_LIMITED", () => {
+  // `blockedUntil` là state module-level. `useFakeTimers()` đặt lại đồng hồ ảo
+  // về thời điểm THẬT ở mỗi test, nên chỉ `advanceTimersByTime` là không đủ:
+  // cooldown do test trước ghi (đã tính trên đồng hồ đã tua) vẫn nằm ở tương
+  // lai. Dùng một mốc thời gian tự tăng để mỗi test bắt đầu sau mọi cooldown
+  // có thể còn treo.
+  let clock = new Date("2030-01-01T00:00:00Z").getTime();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    clock += 60 * 60_000; // cách test trước 1 giờ >> cooldown tối đa 5 phút
+    vi.setSystemTime(clock);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function rateLimited() {
+    return {
+      isAxiosError: true,
+      response: { status: 429, data: { error_code: "RATE_LIMITED" }, headers: {} },
+    };
+  }
+
+  // Giữ phiên đã bỏ mất cái phanh cũ (setApiLoggedOut chặn mọi request). Không
+  // có cooldown thì 6 query refetchInterval 30s cứ đẻ thêm POST /auth/refresh
+  // vào đúng bucket vừa cạn.
+  it("sau 429 RATE_LIMITED: lời gọi kế tiếp reject NGAY, không phát request", async () => {
+    mockPost.mockRejectedValueOnce(rateLimited());
+    await expect(refreshAccessToken()).rejects.toBeTruthy();
+    expect(mockPost).toHaveBeenCalledTimes(1);
+
+    await expect(refreshAccessToken()).rejects.toMatchObject({
+      response: { status: 429, data: { error_code: "RATE_LIMITED" } },
+    });
+    expect(mockPost).toHaveBeenCalledTimes(1); // vẫn 1 — không chạm mạng
+    expect(isRefreshRateLimited()).toBe(true);
+  });
+
+  it("lỗi KHÁC 429 không bật cooldown", async () => {
+    mockPost.mockRejectedValueOnce({
+      isAxiosError: true,
+      response: { status: 503, data: {}, headers: {} },
+    });
+    await expect(refreshAccessToken()).rejects.toBeTruthy();
+
+    expect(isRefreshRateLimited()).toBe(false);
+    mockPost.mockResolvedValueOnce({ data: {} });
+    const p = refreshAccessToken();
+    await vi.advanceTimersByTimeAsync(200); // qua delay persist cookie
+    await p;
+    expect(mockPost).toHaveBeenCalledTimes(2);
+  });
+
+  it("hết cooldown thì được phát request lại; thành công thì gỡ hẳn", async () => {
+    mockPost.mockRejectedValueOnce(rateLimited());
+    await expect(refreshAccessToken()).rejects.toBeTruthy();
+    expect(isRefreshRateLimited()).toBe(true);
+
+    vi.advanceTimersByTime(61_000); // hết cooldown mặc định 60s
+    expect(isRefreshRateLimited()).toBe(false);
+
+    mockPost.mockResolvedValueOnce({ data: {} });
+    const p = refreshAccessToken();
+    await vi.advanceTimersByTimeAsync(200);
+    await p;
+    expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(isRefreshRateLimited()).toBe(false);
+  });
+});
+
+describe("cờ session-kept-alive", () => {
+  it("markSessionKeptAlive → isSessionKeptAliveError nhận ra", () => {
+    const err = markSessionKeptAlive({ response: { status: 401 } });
+    expect(isSessionKeptAliveError(err)).toBe(true);
+  });
+
+  it("lỗi thường KHÔNG mang cờ (useAuth vẫn logout như cũ)", () => {
+    expect(isSessionKeptAliveError({ response: { status: 401 } })).toBe(false);
+    expect(isSessionKeptAliveError(undefined)).toBe(false);
   });
 });
 

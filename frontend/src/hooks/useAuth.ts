@@ -1,6 +1,7 @@
 // src/hooks/useAuth.ts
 import { useAuthStore } from "@/lib/stores/auth.store";
 import { api, setApiLoggedOut } from "@/lib/api/client";
+import { isSessionKeptAliveError } from "@/lib/api/refresh";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -474,7 +475,16 @@ export function useAuth(options?: UseAuthOptions) {
   useEffect(() => {
     if (isUserError && userError) {
       console.warn("[useAuth] Failed to fetch current user:", userError.response?.status, userError.message);
-      if (userError.response?.status === 401) {
+      // Điểm quyết định logout THỨ HAI (ngoài interceptor). Khi interceptor đã
+      // cố ý giữ phiên — refresh hỏng vì 429 RATE_LIMITED / 5xx / mạng đứt —
+      // nó reject chính lỗi 401 gốc kèm cờ; đăng xuất ở đây sẽ xoá sạch cache
+      // và đá officer về /login đúng tình huống vừa được quyết định là tạm
+      // thời (nginx `limit_req` trên /api/ còn trả 503, mà 503 được xếp loại
+      // transient). Chỉ báo lỗi nhẹ và để lần thử sau tự phục hồi.
+      if (userError.response?.status === 401 && isSessionKeptAliveError(userError)) {
+        console.warn("[useAuth] 401 nhưng phiên được giữ (refresh lỗi tạm thời) — không logout");
+        toast.error("Hệ thống đang bận. Vui lòng thử lại sau ít phút.");
+      } else if (userError.response?.status === 401) {
         toast.error("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
         logoutStore();
         queryClient.clear();
