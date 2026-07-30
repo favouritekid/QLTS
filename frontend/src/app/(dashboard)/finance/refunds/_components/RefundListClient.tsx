@@ -48,6 +48,7 @@ import {
   type RefundRequest,
   type RefundStatus,
 } from "@/types/finance.types"
+import { isOverAsking } from "./refundWarnings"
 
 const STATUS_LABELS: Record<RefundStatus, string> = {
   pending: "Chờ duyệt",
@@ -112,7 +113,7 @@ export function RefundListClient() {
   const [refundReference, setRefundReference] = React.useState("")
 
   const PAGE_SIZE = 50
-  const { data, isLoading, error, refetch } = useRefunds({
+  const { data, isLoading, isPlaceholderData, error, refetch } = useRefunds({
     status: FILTER_TO_PARAM[filter],
     page,
     page_size: PAGE_SIZE,
@@ -161,9 +162,13 @@ export function RefundListClient() {
   }
 
   const openProcess = (refund: RefundRequest) => {
-    // Điền sẵn mã backend gợi ý. Kế toán gõ đè khi có mã UNC thật; để nguyên
-    // hoặc xoá trắng thì backend ghi đúng mã đang hiển thị ở đây.
-    setRefundReference(refund.suggested_reference ?? "")
+    // KHÔNG điền sẵn vào ô. Mã gợi ý được sinh lúc TẢI TRANG, nên một tab mở qua
+    // ranh giới ngày Việt Nam sẽ hiển thị mã của hôm qua trong khi backend ghi mã
+    // của hôm nay — ô nhập hoá ra hứa một chuỗi rồi sổ lưu chuỗi khác.
+    //
+    // Để trống + placeholder: backend luôn là nơi chốt mã tại thời điểm chi, và
+    // kế toán vẫn không phải gõ gì. Ai có mã uỷ nhiệm chi thật thì nhập vào.
+    setRefundReference("")
     setAction({ type: "process", refund })
   }
 
@@ -190,18 +195,13 @@ export function RefundListClient() {
   const handleProcess = async () => {
     if (!action || action.type !== "process") return
     const trimmed = refundReference.trim()
-    // Gửi mã CHỈ KHI kế toán thực sự sửa. Nếu ô còn nguyên gợi ý (hoặc để trống),
-    // không gửi khoá — để backend tự sinh tại thời điểm chi.
-    //
-    // Gợi ý được sinh lúc TẢI TRANG: một tab mở từ hôm qua vẫn hiển thị mã mang
-    // ngày hôm qua, gửi lại nguyên si là ghi sai ngày vào sổ, mà mã này dùng đúng
-    // để đối chiếu sao kê theo ngày.
-    const edited = trimmed !== "" && trimmed !== (action.refund.suggested_reference ?? "")
+    // Ô trống ⇒ không gửi khoá, backend chốt mã theo NGÀY CHI. Chỉ gửi khi kế toán
+    // tự nhập (mã uỷ nhiệm chi của ngân hàng).
     await processRefund.mutateAsync({
       id: action.refund.id,
       data: {
         refund_id: action.refund.id,
-        ...(edited ? { refund_reference: trimmed } : {}),
+        ...(trimmed ? { refund_reference: trimmed } : {}),
       },
     })
     setAction(null)
@@ -320,7 +320,18 @@ export function RefundListClient() {
       </div>
 
       <Card>
-        <CardContent className="overflow-x-auto p-0">
+        <CardContent
+          className={cn(
+            "overflow-x-auto p-0 transition-opacity",
+            // Bảng đang là dữ liệu của LẦN LỌC TRƯỚC: `keepPreviousData` giữ dòng cũ
+            // để dải tổng quan không nháy về 0, nhưng `isLoading` lúc này là false
+            // nên nếu không đánh dấu thì kế toán tưởng đang xem nhóm mới và bấm chi
+            // tiền cho một dòng thuộc danh sách cũ — dòng còn có thể đổi vị trí ngay
+            // dưới con trỏ khi dữ liệu mới về.
+            isPlaceholderData && "pointer-events-none opacity-60",
+          )}
+          aria-busy={isPlaceholderData}
+        >
           <Table>
             <TableHeader>
               <TableRow>
@@ -344,6 +355,7 @@ export function RefundListClient() {
                   <RefundRow
                     key={refund.id}
                     refund={refund}
+                    stale={isPlaceholderData}
                     onApprove={() => approveRefund.mutate(refund.id)}
                     onReject={() => openReject(refund)}
                     onProcess={() => openProcess(refund)}
@@ -379,6 +391,12 @@ export function RefundListClient() {
           </Table>
         </CardContent>
       </Card>
+
+      {isPlaceholderData && (
+        <p className="text-xs text-muted-foreground">
+          Đang tải danh sách mới — bảng dưới vẫn là kết quả trước đó, tạm khoá thao tác.
+        </p>
+      )}
 
       {/* Dải tổng quan đếm toàn phạm vi, nên phải với tới được dòng thứ 51 trở đi —
           nếu không thì những phiếu CŨ NHẤT (đúng thứ badge "chờ N ngày" muốn nêu)
@@ -544,13 +562,13 @@ export function RefundListClient() {
             <Input
               value={refundReference}
               onChange={(event) => setRefundReference(event.target.value)}
-              placeholder={action?.refund.suggested_reference ?? "Để trống để dùng mã gợi ý"}
+              placeholder={action?.refund.suggested_reference ?? "Để trống — hệ thống tự sinh"}
             />
           </Field>
           <p className="-mt-1 text-xs text-muted-foreground">
-            Đã điền sẵn mã gợi ý. Xoá trắng cũng được — hệ thống sẽ dùng{" "}
-            <span className="font-mono">{action?.refund.suggested_reference ?? "mã tự sinh"}</span>.
-            Nhập mã uỷ nhiệm chi của ngân hàng nếu có.
+            Để trống thì hệ thống tự ghi mã theo mẫu{" "}
+            <span className="font-mono">HT-{action?.refund.id ?? "…"}-&lt;ngày chi&gt;</span> — không
+            cần nhập gì. Chỉ nhập khi có mã uỷ nhiệm chi của ngân hàng.
           </p>
 
           <DialogFooter>
@@ -627,11 +645,14 @@ function QueueTile({
 
 function RefundRow({
   refund,
+  stale,
   onApprove,
   onReject,
   onProcess,
 }: {
   refund: RefundRequest
+  /** Dòng thuộc kết quả của lần lọc TRƯỚC — khoá mọi thao tác tiền. */
+  stale?: boolean
   onApprove: () => void
   onReject: () => void
   onProcess: () => void
@@ -647,7 +668,9 @@ function RefundRow({
     refund.refundable_amount !== null ? Number(refund.refundable_amount) : null
   const alreadyRefunded = Number(refund.already_refunded_amount ?? 0)
   const ratio = refundable && refundable > 0 ? Math.min(asked / refundable, 1) : 0
-  const overAsking = refundable !== null && asked > refundable
+  // Phép so nằm ở `refundWarnings.ts` — một nguồn cho cả UI và test, vì đây đúng
+  // là chỗ đã sai một lần (xem docstring: refundable đã trừ CHÍNH dòng này).
+  const overAsking = isOverAsking(refund)
 
   return (
     <TableRow>
@@ -730,19 +753,19 @@ function RefundRow({
       <TableCell>
         <div className="flex justify-end gap-2">
           {refund.can_approve && (
-            <Button size="sm" variant="outline" onClick={onApprove}>
+            <Button size="sm" variant="outline" disabled={stale} onClick={onApprove}>
               <CheckCircle className="mr-2 h-4 w-4" />
               Duyệt
             </Button>
           )}
           {refund.can_reject && (
-            <Button size="sm" variant="outline" onClick={onReject}>
+            <Button size="sm" variant="outline" disabled={stale} onClick={onReject}>
               <XCircle className="mr-2 h-4 w-4" />
               Từ chối
             </Button>
           )}
           {refund.can_process && (
-            <Button size="sm" onClick={onProcess}>
+            <Button size="sm" disabled={stale} onClick={onProcess}>
               <RotateCcw className="mr-2 h-4 w-4" />
               Chi tiền
             </Button>
