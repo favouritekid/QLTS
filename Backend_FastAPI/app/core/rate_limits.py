@@ -74,6 +74,30 @@ limiter = Limiter(
 # ============================================================================
 
 
+def configure_rate_limiting(app) -> bool:
+    """Gắn limiter + handler 429 vào app. PHẢI gọi ở MODULE LEVEL.
+
+    🔴 KHÔNG được gọi trong ``lifespan``. Starlette dựng middleware stack ở
+    lần ``__call__`` đầu tiên — chính là scope ``lifespan`` — và
+    ``build_middleware_stack()`` COPY ``self.exception_handlers`` sang một dict
+    mới đưa cho ``ExceptionMiddleware``. Mọi ``add_exception_handler`` chạy sau
+    thời điểm đó chỉ sửa dict gốc và KHÔNG bao giờ có hiệu lực.
+
+    Bằng chứng thực nghiệm (dev, 2026-07-30) khi handler còn đăng ký trong
+    lifespan: request thứ 21 trả ``{"detail":"20 per 1 hour",
+    "error_code":"HTTP_429"}`` — tức ``RateLimitExceeded`` (kế thừa Starlette
+    ``HTTPException``) rơi vào ``http_exception_handler`` mặc định; câu tiếng
+    Việt và header ``Retry-After`` chưa bao giờ xuất hiện.
+
+    Trả về True nếu đã gắn (bỏ qua ở APP_ENV=test như trước).
+    """
+    if settings.APP_ENV == "test":
+        return False
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+    return True
+
+
 async def rate_limit_exceeded_handler(
     request: Request, exc: RateLimitExceeded
 ) -> JSONResponse:
@@ -94,7 +118,10 @@ async def rate_limit_exceeded_handler(
             "error_code": RATE_LIMITED_ERROR_CODE,
         },
     )
-    # Inject Retry-After header via slowapi limiter (accurate remaining time)
+    # ⚠️ Đo thực tế (dev, 2026-07-30): `_inject_headers` là NO-OP với limiter
+    # hiện tại vì `Limiter(...)` không bật `headers_enabled`, nên response
+    # KHÔNG có `Retry-After` / `X-RateLimit-*`. Giữ lời gọi để header tự xuất
+    # hiện nếu sau này bật cờ đó; client hiện chưa thể backoff theo header.
     return request.app.state.limiter._inject_headers(
         response, request.state.view_rate_limit
     )

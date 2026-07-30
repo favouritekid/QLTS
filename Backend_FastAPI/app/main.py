@@ -32,8 +32,8 @@ from .database import redis_client as main_redis_client
 from .database import safe_redis_ping
 from .database import AsyncSessionLocal  # For auto-sync templates
 from .core.rate_limits import (  # ✅ MIGRATED: Use new centralized rate limits module
+    configure_rate_limiting,
     limiter,
-    rate_limit_exceeded_handler,
 )
 from .middleware.admission_freeze import AdmissionFreezeMiddleware  # ✅ T0-2 cold cutover freeze
 from .middleware.csrf import CSRFMiddleware  # ✅ CSRF Protection
@@ -512,13 +512,10 @@ async def lifespan(app: FastAPI):
         # ✅ FIX: Re-raise to prevent app from starting without authorization
         raise
 
-    # (Giữ nguyên logic Rate Limiter)
-    if settings.APP_ENV != "test":
-        fastapi_app.state.limiter = limiter
-        fastapi_app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
-        log.info("SlowAPI rate limiter INITIALIZED for non-test environment.")
-    else:
-        log.info("APP_ENV is 'test', skipping SlowAPI rate limiter setup.")
+    # Rate limiter KHÔNG còn cấu hình ở đây — xem `configure_rate_limiting`
+    # gọi ở module level bên dưới. Đăng ký exception handler trong lifespan
+    # là vô hiệu: middleware stack đã được dựng (và đã copy bảng handler)
+    # trước khi thân lifespan chạy.
 
     # --- Kiểm tra Redis ---
     try:
@@ -678,6 +675,16 @@ fastapi_app = FastAPI(
 # See: app/middleware/exception_handlers.py for implementation
 register_exception_handlers(fastapi_app)
 log.info("✅ Custom exception handlers registered")
+
+# Rate limiter: PHẢI ở module level, KHÔNG trong lifespan — Starlette dựng
+# middleware stack (copy bảng exception handler) ngay ở scope lifespan, nên
+# handler đăng ký trong thân lifespan không bao giờ được dùng. Trước khi sửa,
+# 429 thật trả ``{"detail":"20 per 1 hour","error_code":"HTTP_429"}`` thay vì
+# body của handler này.
+if configure_rate_limiting(fastapi_app):
+    log.info("SlowAPI rate limiter INITIALIZED for non-test environment.")
+else:
+    log.info("APP_ENV is 'test', skipping SlowAPI rate limiter setup.")
 
 
 # ===============================================================

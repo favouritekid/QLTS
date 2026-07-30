@@ -103,6 +103,12 @@ describe("shouldLogoutAfterRefreshFailure", () => {
     expect(shouldLogoutAfterRefreshFailure(axiosErrorWithStatus(undefined))).toBe(false);
   });
 
+  // Liệt kê xuôi (chỉ 401/403/429) sẽ để lọt các mã này và giữ phiên vĩnh viễn
+  // với access token đã chết — vd sai NEXT_PUBLIC_API_URL hoặc đổi route proxy.
+  it.each([400, 404, 410, 422])("%i (4xx khác) → logout", (status) => {
+    expect(shouldLogoutAfterRefreshFailure(axiosErrorWithStatus(status))).toBe(true);
+  });
+
   it("lỗi không phải Axios → GIỮ phiên", () => {
     expect(shouldLogoutAfterRefreshFailure(new Error("boom"))).toBe(false);
     expect(shouldLogoutAfterRefreshFailure(undefined)).toBe(false);

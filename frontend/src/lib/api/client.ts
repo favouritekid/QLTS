@@ -102,26 +102,34 @@ api.interceptors.request.use(
 // ============================================
 // 🔁 REFRESH FAILURE TRIAGE (dùng chung 2 nhánh)
 // ============================================
+type RefreshTriage =
+  | { action: "logout" }
+  | { action: "reject"; error: unknown };
+
 /**
- * Refresh thất bại vì lý do TẠM THỜI → trả về lỗi để reject, giữ phiên.
- * Trả `null` nghĩa là phiên đã chết, caller phải chạy đường logout.
+ * Refresh thất bại: phiên đã chết (logout) hay lỗi tạm thời (giữ phiên)?
+ *
+ * Trả về kết quả có nhãn thay vì một sentinel `null` — với sentinel, kiểu
+ * `AxiosError | unknown | null` bị TypeScript thu về `unknown` nên guard
+ * `!== null` không được kiểm tra gì ở compile time.
  *
  * Chọn lỗi để reject không tuỳ tiện: retry predicate ở `providers.tsx` chỉ
  * chặn retry với AxiosError 4xx CÓ response. Nếu reject một refreshError
  * không-có-response (mạng đứt) hoặc 5xx, React Query sẽ retry query 3 lần,
  * mỗi lần lại bắn thêm một `POST /auth/refresh` — đúng thứ đang làm cạn
  * quota 20/giờ dùng chung của cả trường. Nên:
- *  - refreshError là 4xx có response (điển hình 429 RATE_LIMITED) → reject
- *    chính nó để toast hiện đúng nhãn "quá nhiều yêu cầu".
- *  - còn lại → reject lỗi GỐC (401, 4xx) để không kích retry storm.
+ *  - refreshError là 4xx có response (chỉ còn 429 RATE_LIMITED sau khi
+ *    `shouldLogoutAfterRefreshFailure` đã bắt mọi 4xx khác) → reject chính nó
+ *    để toast hiện đúng nhãn "quá nhiều yêu cầu".
+ *  - còn lại → reject lỗi GỐC (401) để không kích retry storm.
  */
 function triageRefreshFailure(
   originalError: AxiosError,
   refreshError: unknown,
   tag: string,
-): AxiosError | unknown | null {
+): RefreshTriage {
   if (shouldLogoutAfterRefreshFailure(refreshError)) {
-    return null;
+    return { action: "logout" };
   }
 
   const status = axios.isAxiosError(refreshError)
@@ -130,7 +138,7 @@ function triageRefreshFailure(
   const isClientError = status !== undefined && status >= 400 && status < 500;
 
   console.warn(`[API Client] ⏳ ${tag}: refresh lỗi tạm thời — giữ phiên, không logout`);
-  return isClientError ? refreshError : originalError;
+  return { action: "reject", error: isClientError ? refreshError : originalError };
 }
 
 // ============================================
@@ -204,9 +212,9 @@ api.interceptors.response.use(
         // đây một lần 429 trên /auth/refresh là đủ đá officer về /login giữa
         // lúc nhập liệu (audit prod 2026-07-30). Phân loại TRƯỚC khi log để
         // một 429 bình thường không đổ console.error vào monitoring.
-        const transientError = triageRefreshFailure(error, refreshError, "401");
-        if (transientError !== null) {
-          return Promise.reject(transientError);
+        const triage = triageRefreshFailure(error, refreshError, "401");
+        if (triage.action === "reject") {
+          return Promise.reject(triage.error);
         }
 
         console.error("[API Client] ❌ Refresh failed:", refreshError);
@@ -298,9 +306,9 @@ api.interceptors.response.use(
           // Cùng một triage với nhánh 401 — hai nhánh này đã từng drift nhau
           // (xem comment "Dùng chung refreshAccessToken()" phía trên), nên
           // quyết định logout nằm ở MỘT chỗ duy nhất.
-          const transientError = triageRefreshFailure(error, refreshError, "CSRF recovery");
-          if (transientError !== null) {
-            return Promise.reject(transientError);
+          const triage = triageRefreshFailure(error, refreshError, "CSRF recovery");
+          if (triage.action === "reject") {
+            return Promise.reject(triage.error);
           }
 
           console.warn("[API Client] ❌ CSRF recovery failed (refresh rejected) — redirecting to login");

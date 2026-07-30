@@ -1,5 +1,5 @@
 """Contract test — hai loại 429 trên đường refresh PHẢI mang ``error_code``
-top-level khác nhau.
+top-level khác nhau, và handler PHẢI thực sự được gắn vào app.
 
 Bối cảnh (audit prod 2026-07-30): client phân loại 429 để quyết định có đăng
 xuất người dùng hay không.
@@ -11,19 +11,26 @@ xuất người dùng hay không.
   ngưỡng đã gọi ``invalidate_all_sessions`` rồi trả 401; các lần sau mới nhận
   429 này, tức phiên ĐÃ chết → client PHẢI đăng xuất.
 
-Nếu mã bị mất (vd ai đó quay lại raise ``HTTPException`` trần, khi đó
-``http_exception_handler`` trả ``HTTP_429``) thì client sẽ giữ phiên cho một
-session đã bị thu hồi và lặp 401→429→401 vô hạn. Test này khoá contract đó.
+🔴 Bài học đắt nhất của đợt này: contract mã lỗi có thể ĐÚNG trong unit test mà
+vẫn SAI ở runtime, vì ``add_exception_handler`` gọi trong ``lifespan`` không
+bao giờ có hiệu lực (Starlette đã copy bảng handler khi dựng middleware stack).
+Đo thực tế trên dev trước khi sửa: request thứ 21 trả
+``{"detail":"20 per 1 hour","error_code":"HTTP_429"}``. Vì vậy ở đây có HAI lớp
+kiểm: một test chạy 429 THẬT qua ASGI, và một test khẳng định lời gọi
+``configure_rate_limiting`` nằm ở module level chứ không thụt vào trong lifespan.
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
+import re
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from httpx import AsyncClient
+from fastapi import FastAPI, Request
+from httpx import ASGITransport, AsyncClient
 
-from app.core.rate_limits import RATE_LIMITED_ERROR_CODE, rate_limit_exceeded_handler
+from app.core import rate_limits as rl
+from app.core.rate_limits import RATE_LIMITED_ERROR_CODE
 from app.routers.auth import RefreshAbuseLocked
 
 LOGIN = "/api/auth/login"
@@ -31,31 +38,62 @@ REFRESH = "/api/auth/refresh"
 
 
 @pytest.mark.asyncio
-async def test_slowapi_429_carries_top_level_rate_limited_code():
-    """slowapi handler trả ``error_code: RATE_LIMITED`` ở TOP-LEVEL body.
+async def test_slowapi_429_carries_rate_limited_code_through_asgi(monkeypatch):
+    """429 THẬT (đi qua ASGI + ExceptionMiddleware) mang ``RATE_LIMITED``.
 
-    Gọi handler trực tiếp (nó là hàm module-level chính vì lý do này) — không
-    cần làm cạn một bucket thật, và ``APP_ENV=test`` vốn không đăng ký handler.
+    Test đi qua stack thật thay vì gọi handler trực tiếp: nếu handler không
+    được gắn, ``RateLimitExceeded`` (kế thừa Starlette ``HTTPException``) rơi
+    vào ``http_exception_handler`` và body thành ``HTTP_429`` — đúng lỗi đã xảy
+    ra ở prod.
     """
-    injected = {}
+    # configure_rate_limiting bỏ qua ở APP_ENV=test; tạm bật để dựng app thật.
+    monkeypatch.setattr(rl.settings, "APP_ENV", "development", raising=False)
 
-    def _inject_headers(response, view_rate_limit):
-        injected["called"] = True
-        return response
+    app = FastAPI()
+    assert rl.configure_rate_limiting(app) is True
 
-    request = SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(limiter=SimpleNamespace(_inject_headers=_inject_headers))),
-        state=SimpleNamespace(view_rate_limit=object()),
-    )
+    @app.get("/ping")
+    @rl.limiter.limit("1/hour")
+    async def ping(request: Request):  # noqa: ARG001 — slowapi cần tham số này
+        return {"ok": True}
 
-    response = await rate_limit_exceeded_handler(request, exc=Exception("rate limited"))
+    headers = {"X-Real-IP": "10.111.222.33"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://ratelimit.test") as client:
+        first = await client.get("/ping", headers=headers)
+        second = await client.get("/ping", headers=headers)
 
-    assert response.status_code == 429
-    body = response.body.decode()
-    assert f'"error_code":"{RATE_LIMITED_ERROR_CODE}"' in body.replace(" ", "")
-    assert RATE_LIMITED_ERROR_CODE == "RATE_LIMITED"
-    # Retry-After vẫn được inject qua limiter (thông tin cho client backoff).
-    assert injected.get("called") is True
+    assert first.status_code == 200, first.text
+    assert second.status_code == 429, second.text
+
+    body = second.json()
+    assert body["error_code"] == RATE_LIMITED_ERROR_CODE == "RATE_LIMITED", body
+    # Không phải mã mặc định của http_exception_handler — đó chính là triệu
+    # chứng của lỗi "đăng ký handler quá muộn".
+    assert body["error_code"] != "HTTP_429"
+
+
+def test_rate_limiting_is_configured_at_module_level():
+    """Lời gọi ``configure_rate_limiting`` KHÔNG được nằm trong ``lifespan``.
+
+    Starlette dựng middleware stack ngay ở scope lifespan và COPY bảng
+    exception handler; đăng ký sau thời điểm đó là vô hiệu (im lặng). Test
+    tĩnh vì runtime không phân biệt được: app vẫn chạy, chỉ có body 429 sai.
+    """
+    source = Path(__file__).resolve().parents[2] / "app" / "main.py"
+    calls = [
+        line
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if re.match(r"\s*(if\s+)?configure_rate_limiting\(", line)
+    ]
+
+    assert calls, "main.py phải gọi configure_rate_limiting"
+    for line in calls:
+        indent = len(line) - len(line.lstrip())
+        assert indent == 0, (
+            "configure_rate_limiting bị thụt vào (khả năng cao nằm trong "
+            f"lifespan hoặc một hàm) → handler 429 sẽ không có hiệu lực: {line!r}"
+        )
 
 
 def test_refresh_abuse_locked_declares_its_own_error_code():
@@ -81,8 +119,8 @@ async def test_abuse_gate_response_has_error_code_not_http_429(
 ):
     """Đi qua HTTP thật: bộ đếm đã chạm ngưỡng → 429 + ``REFRESH_ABUSE_LOCKED``.
 
-    Đây là phép kiểm quan trọng nhất: nó chạy qua ``http_exception_handler``,
-    nơi mặc định sẽ ghi ``HTTP_429`` và làm client hiểu sai thành "lỗi tạm thời".
+    Chạy qua ``http_exception_handler``, nơi mặc định sẽ ghi ``HTTP_429`` và
+    làm client hiểu sai thành "lỗi tạm thời" rồi giữ một phiên đã bị thu hồi.
     """
     login = await client.post(
         LOGIN,

@@ -75,7 +75,12 @@ export interface HandleErrorOptions {
   queryClient?: QueryClient
   /** Query keys to invalidate on conflict */
   invalidateKeys?: unknown[][]
-  /** Callback when conflict (409) occurs */
+  /**
+   * Callback khi gặp 409. ⚠️ Chạy TỰ ĐỘNG trên mọi 409 (trước đây chỉ chạy
+   * khi user bấm nút "Làm mới" — nút đó đã bỏ). Không dùng cho hành động phá
+   * huỷ (đóng dialog, điều hướng, huỷ draft): một 409 trùng số điện thoại sẽ
+   * kích hoạt nó và xoá mất form officer đang nhập.
+   */
   onConflict?: () => void
   /** Callback when validation error (400) occurs with field errors */
   onValidation?: (errors: Record<string, string[]>) => void

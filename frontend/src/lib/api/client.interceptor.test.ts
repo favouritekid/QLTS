@@ -168,3 +168,52 @@ describe("interceptor 401 — quyết định logout khi refresh thất bại", 
     expect(window.location.href).toBe("");
   });
 });
+
+// Nhánh CSRF-recovery dùng CHUNG triage với nhánh 401 — và hai nhánh này đã
+// từng drift nhau. Không có test ở đây thì xoá/đảo lời gọi triage bên nhánh
+// CSRF vẫn xanh toàn suite, trong khi một 429 RATE_LIMITED lại hard-redirect
+// officer về /login giữa lúc nhập liệu.
+describe("interceptor CSRF-recovery — cùng một triage với nhánh 401", () => {
+  function csrfError403() {
+    return {
+      isAxiosError: true,
+      message: "CSRF token invalid",
+      response: { status: 403, data: { error_code: "CSRF_TOKEN_INVALID" } },
+      config: { url: "/api/admissions/611", headers: {} },
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setApiLoggedOut(false);
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: { pathname: "/admissions/611", search: "", href: "" },
+    });
+  });
+
+  afterEach(() => {
+    setApiLoggedOut(false);
+  });
+
+  it("429 RATE_LIMITED → GIỮ phiên, không redirect", async () => {
+    mockedRefresh.mockRejectedValueOnce(refreshFailure(429, { error_code: "RATE_LIMITED" }));
+
+    await expect(captured.onError!(csrfError403())).rejects.toMatchObject({
+      response: { status: 429 },
+    });
+
+    expect(isApiLoggedOut()).toBe(false);
+    expect(window.location.href).toBe("");
+  });
+
+  it("401 → logout + redirect /login", async () => {
+    mockedRefresh.mockRejectedValueOnce(refreshFailure(401));
+
+    await expect(captured.onError!(csrfError403())).rejects.toBeTruthy();
+
+    expect(isApiLoggedOut()).toBe(true);
+    expect(window.location.href).toContain("/login");
+  });
+});

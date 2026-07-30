@@ -28,8 +28,16 @@ const TRANSIENT_RATE_LIMIT_CODE = "RATE_LIMITED";
 /**
  * Refresh thất bại có nghĩa là "phiên đã chết" hay chỉ là "lỗi tạm thời"?
  *
+ * Quy tắc là ĐẢO NGƯỢC của whitelist: MỌI lỗi 4xx đều coi là phiên chết, trừ
+ * đúng một ngoại lệ 429 + `RATE_LIMITED`. Liệt kê xuôi (chỉ 401/403/429) để
+ * sót 400/404/410/422 — vd sai `NEXT_PUBLIC_API_URL`, đổi route proxy, hay
+ * một validation deny mới thêm vào endpoint — và khi đó client giữ phiên với
+ * access token đã chết, lặp 401→refresh→4xx vô hạn không lối thoát.
+ *
  * Logout khi:
  *  - 401/403: refresh token không còn hiệu lực.
+ *  - mọi 4xx khác (400/404/410/422…): endpoint từ chối theo cách client không
+ *    tự phục hồi được → đăng nhập lại là đường thoát duy nhất.
  *  - 429 mà KHÔNG phải rate limit hạ tầng. `POST /auth/refresh` phát 429 cho
  *    HAI nghĩa khác nhau: quota IP của slowapi (`RATE_LIMITED`, tạm thời) và
  *    cổng chống lạm dụng M4 (`REFRESH_ABUSE_LOCKED`, `app/routers/auth.py`).
@@ -57,13 +65,13 @@ const TRANSIENT_RATE_LIMIT_CODE = "RATE_LIMITED";
 export function shouldLogoutAfterRefreshFailure(error: unknown): boolean {
   if (!axios.isAxiosError(error)) return false;
   const status = error.response?.status;
-  if (status === 401 || status === 403) return true;
+  if (status === undefined) return false; // mạng đứt/timeout/CORS — không biết gì về phiên
   if (status === 429) {
     const errorCode = (error.response?.data as { error_code?: string } | undefined)
       ?.error_code;
     return errorCode !== TRANSIENT_RATE_LIMIT_CODE;
   }
-  return false;
+  return status >= 400 && status < 500;
 }
 
 /**
