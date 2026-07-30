@@ -472,15 +472,18 @@ export function useAuth(options?: UseAuthOptions) {
     },
   });
 
-  // 401 mà interceptor CỐ Ý giữ phiên (refresh hỏng vì 429 RATE_LIMITED / 5xx /
+  // Lỗi mà interceptor CỐ Ý giữ phiên (refresh hỏng vì 429 RATE_LIMITED / 5xx /
   // mạng đứt → `markSessionKeptAlive`). MỘT nguồn quyết định, dùng cho cả
   // useEffect bên dưới lẫn `isAuthenticated` trả ra: nếu chỉ chặn logout mà vẫn
   // trả `isAuthenticated=false` thì consumer nào đọc cờ đó vẫn coi như đã hết
   // phiên — trái hẳn quyết định "giữ phiên".
-  const isUserErrorTransient =
-    isUserError &&
-    userError?.response?.status === 401 &&
-    isSessionKeptAliveError(userError);
+  //
+  // KHÔNG kèm điều kiện status: interceptor reject CHÍNH refreshError khi nó là
+  // 4xx, nên luồng chính của sự cố (429 RATE_LIMITED) tới đây mang status 429,
+  // không phải 401; chỉ nhánh 5xx/mạng-đứt mới trả về lỗi gốc 401. Marker tự nó
+  // là bằng chứng đủ — production chỉ có `triageRefreshFailure()` gắn nó, và
+  // chỉ sau khi đã phân loại là KHÔNG đăng xuất.
+  const isUserErrorTransient = isUserError && isSessionKeptAliveError(userError);
 
   useEffect(() => {
     if (isUserError && userError) {

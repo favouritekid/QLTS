@@ -77,16 +77,27 @@ vi.mock("@/components/layouts/SecurityBanner", () => ({
 
 import { useAuth } from "./useAuth";
 
-function unauthorizedError(): AxiosError {
+function axiosError(status: number, data: Record<string, unknown> = {}): AxiosError {
   return {
     isAxiosError: true,
     name: "AxiosError",
-    message: "Unauthorized",
-    response: { status: 401, data: {}, statusText: "", headers: {}, config: {} },
+    message: `HTTP ${status}`,
+    response: { status, data, statusText: "", headers: {}, config: {} },
     config: {},
     toJSON: () => ({}),
   } as unknown as AxiosError;
 }
+
+const unauthorizedError = () => axiosError(401);
+
+/**
+ * Lỗi mà interceptor trả về ở ĐÚNG luồng sự cố: refresh bị slowapi chặn.
+ * `triageRefreshFailure` reject CHÍNH refreshError khi nó là 4xx, nên thứ tới
+ * `useAuth` mang status **429**, không phải 401 — điều kiện lọc theo status sẽ
+ * bỏ sót đúng ca này.
+ */
+const rateLimitedRefreshError = () =>
+  axiosError(429, { error_code: "RATE_LIMITED" });
 
 describe("useAuth — 401 và quyết định đăng xuất", () => {
   beforeEach(() => {
@@ -134,6 +145,49 @@ describe("useAuth — 401 và quyết định đăng xuất", () => {
   it("401 THƯỜNG → isAuthenticated false", () => {
     queryState.isError = true;
     queryState.error = unauthorizedError();
+
+    const { result } = renderHook(() => useAuth());
+
+    expect(result.current.isAuthenticated).toBe(false);
+  });
+
+  // ⭐ LUỒNG CHÍNH của sự cố. Interceptor reject chính refreshError khi nó là
+  // 4xx, nên lỗi tới đây mang status 429 chứ KHÔNG phải 401 — một điều kiện
+  // lọc theo status sẽ bỏ sót đúng ca này và officer nhận toast sai kèm
+  // isAuthenticated=false, dù interceptor vừa quyết định giữ phiên.
+  it("429 RATE_LIMITED CÓ CỜ → KHÔNG logout/clear/redirect", () => {
+    queryState.isError = true;
+    queryState.error = markSessionKeptAlive(rateLimitedRefreshError());
+
+    renderHook(() => useAuth());
+
+    expect(logoutStore).not.toHaveBeenCalled();
+    expect(queryClientClear).not.toHaveBeenCalled();
+    expect(routerPush).not.toHaveBeenCalled();
+  });
+
+  it("429 RATE_LIMITED CÓ CỜ → isAuthenticated vẫn true", () => {
+    queryState.isError = true;
+    queryState.error = markSessionKeptAlive(rateLimitedRefreshError());
+
+    const { result } = renderHook(() => useAuth());
+
+    expect(result.current.isAuthenticated).toBe(true);
+  });
+
+  it("429 RATE_LIMITED CÓ CỜ → báo 'hệ thống đang bận', không phải lỗi tải dữ liệu", async () => {
+    const { toast } = await import("sonner");
+    queryState.isError = true;
+    queryState.error = markSessionKeptAlive(rateLimitedRefreshError());
+
+    renderHook(() => useAuth());
+
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("đang bận"));
+  });
+
+  it("429 KHÔNG có cờ (không qua triage) → xử lý như lỗi thường, không giữ phiên", () => {
+    queryState.isError = true;
+    queryState.error = rateLimitedRefreshError();
 
     const { result } = renderHook(() => useAuth());
 
