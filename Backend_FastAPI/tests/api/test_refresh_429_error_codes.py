@@ -21,8 +21,6 @@ kiểm: một test chạy 429 THẬT qua ASGI, và một test khẳng định l�
 """
 from __future__ import annotations
 
-import re
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -73,27 +71,51 @@ async def test_slowapi_429_carries_rate_limited_code_through_asgi(monkeypatch):
     assert body["error_code"] != "HTTP_429"
 
 
-def test_rate_limiting_is_configured_at_module_level():
-    """Lời gọi ``configure_rate_limiting`` KHÔNG được nằm trong ``lifespan``.
+def test_rate_limiting_is_not_configured_inside_lifespan():
+    """``configure_rate_limiting`` KHÔNG được gọi bên trong ``lifespan``.
 
-    Starlette dựng middleware stack ngay ở scope lifespan và COPY bảng
-    exception handler; đăng ký sau thời điểm đó là vô hiệu (im lặng). Test
-    tĩnh vì runtime không phân biệt được: app vẫn chạy, chỉ có body 429 sai.
+    Bất biến ở đây là THỜI ĐIỂM, không phải thụt lề: Starlette dựng middleware
+    stack ngay ở scope lifespan và COPY bảng exception handler, nên mọi đăng ký
+    xảy ra trong thân lifespan đều vô hiệu — im lặng, app vẫn chạy, chỉ body 429
+    sai. Kiểm bằng source của chính hàm ``lifespan`` (không phải regex trên cả
+    file theo indent: cách đó vừa đỏ oan khi refactor đúng — ``enabled =
+    configure_rate_limiting(app)`` hay tách sang module bootstrap — vừa xanh oan
+    vì một lời gọi ở indent 0 vẫn có thể nằm sau chỗ app đã bắt đầu phục vụ).
     """
-    source = Path(__file__).resolve().parents[2] / "app" / "main.py"
-    calls = [
-        line
-        for line in source.read_text(encoding="utf-8").splitlines()
-        if re.match(r"\s*(if\s+)?configure_rate_limiting\(", line)
-    ]
+    import ast
+    import inspect
 
-    assert calls, "main.py phải gọi configure_rate_limiting"
-    for line in calls:
-        indent = len(line) - len(line.lstrip())
-        assert indent == 0, (
-            "configure_rate_limiting bị thụt vào (khả năng cao nằm trong "
-            f"lifespan hoặc một hàm) → handler 429 sẽ không có hiệu lực: {line!r}"
-        )
+    from app import main as main_module
+
+    tree = ast.parse(inspect.getsource(main_module))
+
+    def called_names(node) -> set[str]:
+        """Tên các hàm được GỌI trong node (bỏ qua comment/chuỗi)."""
+        return {
+            n.func.id
+            for n in ast.walk(node)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+        }
+
+    lifespans = [
+        n
+        for n in tree.body
+        if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef)) and n.name == "lifespan"
+    ]
+    assert lifespans, "main.py phải có hàm lifespan"
+    assert "configure_rate_limiting" not in called_names(lifespans[0]), (
+        "configure_rate_limiting bị gọi TRONG lifespan → handler 429 sẽ không "
+        "bao giờ có hiệu lực (Starlette đã copy bảng handler trước đó)"
+    )
+
+    module_level_calls: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef, ast.ClassDef)):
+            continue
+        module_level_calls |= called_names(node)
+    assert "configure_rate_limiting" in module_level_calls, (
+        "main.py phải gọi configure_rate_limiting ở MODULE LEVEL"
+    )
 
 
 def test_refresh_abuse_locked_declares_its_own_error_code():

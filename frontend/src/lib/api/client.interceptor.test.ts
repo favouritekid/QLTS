@@ -56,8 +56,12 @@ vi.mock("./refresh", async (importOriginal) => {
 });
 
 // Store thật khởi tạo zustand + persist; nhánh logout chỉ cần nó không nổ.
+// `logout` phải là MỘT spy ổn định — nếu `getState()` tạo spy mới mỗi lần gọi
+// thì không test nào giữ được tham chiếu tới hàm client.ts thực sự gọi, và
+// việc xoá lời gọi `logout()` sẽ không làm đỏ test nào.
+const authStore = vi.hoisted(() => ({ logout: vi.fn() }));
 vi.mock("@/lib/stores/auth.store", () => ({
-  useAuthStore: { getState: () => ({ logout: vi.fn() }) },
+  useAuthStore: { getState: () => authStore },
 }));
 
 import { refreshAccessToken } from "./refresh";
@@ -123,6 +127,9 @@ describe("interceptor 401 — quyết định logout khi refresh thất bại", 
 
     expect(isApiLoggedOut()).toBe(true);
     expect(window.location.href).toContain("/login");
+    // Không clear store thì user cũ vẫn rehydrate từ localStorage và boot lại
+    // như đang đăng nhập sau khi redirect.
+    expect(authStore.logout).toHaveBeenCalled();
   });
 
   it("429 thiếu error_code → logout (fail-safe)", async () => {
@@ -208,12 +215,26 @@ describe("interceptor CSRF-recovery — cùng một triage với nhánh 401", ()
     expect(window.location.href).toBe("");
   });
 
-  it("401 → logout + redirect /login", async () => {
+  it("401 → logout + redirect /login + clear store (như nhánh 401)", async () => {
     mockedRefresh.mockRejectedValueOnce(refreshFailure(401));
 
     await expect(captured.onError!(csrfError403())).rejects.toBeTruthy();
 
     expect(isApiLoggedOut()).toBe(true);
     expect(window.location.href).toContain("/login");
+    expect(authStore.logout).toHaveBeenCalled();
+  });
+
+  // 5xx/mạng đứt: KHÔNG được để lỗi 403 CSRF gốc nổi lên — handleApiError sẽ
+  // map thành PERMISSION_DENIED và báo "Bạn không có quyền" cho một sự cố hạ tầng.
+  it("refresh 5xx → giữ phiên và KHÔNG trả lại lỗi 403 gốc", async () => {
+    mockedRefresh.mockRejectedValueOnce(refreshFailure(502));
+
+    await expect(captured.onError!(csrfError403())).rejects.not.toMatchObject({
+      response: { status: 403 },
+    });
+
+    expect(isApiLoggedOut()).toBe(false);
+    expect(window.location.href).toBe("");
   });
 });

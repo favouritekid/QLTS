@@ -20,7 +20,6 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles  # ✅ Import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import ValidationError
-from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,7 +32,6 @@ from .database import safe_redis_ping
 from .database import AsyncSessionLocal  # For auto-sync templates
 from .core.rate_limits import (  # ✅ MIGRATED: Use new centralized rate limits module
     configure_rate_limiting,
-    limiter,
 )
 from .middleware.admission_freeze import AdmissionFreezeMiddleware  # ✅ T0-2 cold cutover freeze
 from .middleware.csrf import CSRFMiddleware  # ✅ CSRF Protection
