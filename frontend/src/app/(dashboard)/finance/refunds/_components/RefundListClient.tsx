@@ -558,11 +558,17 @@ export function RefundListClient() {
             </dl>
           )}
 
+          {/*
+            Placeholder CHUNG, cố ý KHÔNG dùng `suggested_reference`: mã đó sinh lúc
+            tải trang, nên qua ranh giới ngày VN nó là mã của hôm qua — phô ra là ô
+            nhập lại chỉ vào một chuỗi khác chuỗi thực sự được ghi vào sổ. Mã chỉ
+            tồn tại thật ở thời điểm chi, nên đừng hiển thị mã nào trước đó.
+          */}
           <Field label="Mã tham chiếu">
             <Input
               value={refundReference}
               onChange={(event) => setRefundReference(event.target.value)}
-              placeholder={action?.refund.suggested_reference ?? "Để trống — hệ thống tự sinh"}
+              placeholder="Để trống — hệ thống tự sinh theo ngày chi"
             />
           </Field>
           <p className="-mt-1 text-xs text-muted-foreground">
