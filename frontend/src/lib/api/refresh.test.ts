@@ -54,11 +54,11 @@ describe("refreshAccessToken — single-flight", () => {
 });
 
 describe("shouldLogoutAfterRefreshFailure", () => {
-  function axiosErrorWithStatus(status?: number) {
+  function axiosErrorWithStatus(status?: number, data: Record<string, unknown> = {}) {
     return {
       isAxiosError: true,
       message: "Request failed",
-      response: status === undefined ? undefined : { status, data: {} },
+      response: status === undefined ? undefined : { status, data },
     };
   }
 
@@ -73,8 +73,26 @@ describe("shouldLogoutAfterRefreshFailure", () => {
   // Regression: audit prod 2026-07-30 — 86/270 request /auth/refresh trong 24h
   // bị 429 (limit 20/giờ theo IP, cả trường dùng chung một IP NAT). Một lần 429
   // từng đủ để đá officer về /login và mất form đang nhập.
-  it("429 → GIỮ phiên", () => {
-    expect(shouldLogoutAfterRefreshFailure(axiosErrorWithStatus(429))).toBe(false);
+  it("429 RATE_LIMITED (slowapi) → GIỮ phiên", () => {
+    const err = axiosErrorWithStatus(429, { error_code: "RATE_LIMITED" });
+    expect(shouldLogoutAfterRefreshFailure(err)).toBe(false);
+  });
+
+  // Cổng M4: lần lỗi chạm ngưỡng đã invalidate_all_sessions rồi trả 401; các
+  // lần sau mới nhận 429 này. Phiên đã chết → giữ phiên sẽ tạo vòng lặp
+  // 401→429→401 mà UI vẫn báo đang đăng nhập.
+  it("429 REFRESH_ABUSE_LOCKED (M4) → logout", () => {
+    const err = axiosErrorWithStatus(429, { error_code: "REFRESH_ABUSE_LOCKED" });
+    expect(shouldLogoutAfterRefreshFailure(err)).toBe(true);
+  });
+
+  it("429 thiếu error_code → logout (fail-safe)", () => {
+    expect(shouldLogoutAfterRefreshFailure(axiosErrorWithStatus(429))).toBe(true);
+  });
+
+  it("429 mã lạ → logout (fail-safe)", () => {
+    const err = axiosErrorWithStatus(429, { error_code: "HTTP_429" });
+    expect(shouldLogoutAfterRefreshFailure(err)).toBe(true);
   });
 
   it.each([500, 502, 503, 504])("%i → GIỮ phiên", (status) => {

@@ -49,6 +49,38 @@ router = APIRouter(tags=["Authentication"])
 log = structlog.get_logger(__name__)
 
 
+class RefreshAbuseLocked(HTTPException):
+    """429 của cổng chống lạm dụng refresh (M4) — KHÁC 429 rate limit hạ tầng.
+
+    Hai loại 429 rất khác nhau cùng xuất hiện trên ``POST /auth/refresh``:
+
+    * ``RATE_LIMITED`` (slowapi, ``app/core/rate_limits.py``): quota theo IP
+      hết → TẠM THỜI. Client giữ phiên và thử lại sau.
+    * ``REFRESH_ABUSE_LOCKED`` (đây): ``refresh_fail:{username}`` đã chạm
+      ``REFRESH_MAX_FAILURES``. Chính lần lỗi chạm ngưỡng đã gọi
+      ``invalidate_all_sessions`` và trả 401; các lần refresh SAU đó rơi vào
+      cổng này. Nghĩa là session đã bị thu hồi phía server → client PHẢI đăng
+      xuất, không được giữ phiên.
+
+    Vì client phân loại theo ``error_code`` (không theo chuỗi thông báo), mã
+    phải nằm TOP-LEVEL trong body. ``http_exception_handler`` đọc thuộc tính
+    ``error_code`` dưới đây thay cho mặc định ``HTTP_429``.
+
+    Cố ý subclass ``HTTPException`` chứ không phải ``BaseAppException``: luồng
+    ``refresh_access_token`` có nhiều tầng ``except HTTPException: raise`` để
+    cho một deny hợp lệ đi thẳng ra ngoài mà KHÔNG bị đếm vào bộ đếm lạm dụng.
+    Một domain exception sẽ rơi vào ``except Exception`` gần nhất và bị nuốt.
+    """
+
+    error_code = "REFRESH_ABUSE_LOCKED"
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed refresh attempts. Please login again.",
+        )
+
+
 def _suspicious_login_only_channels(risk_score: int) -> Optional[List[str]]:
     """Channel filter for a suspicious-login dispatch, by risk score.
 
@@ -913,10 +945,7 @@ async def refresh_access_token(
                     fail_count=fail_count,
                     security_event="REFRESH_RATE_LIMITED",
                 )
-                raise HTTPException(
-                    status_code=429,
-                    detail="Too many failed refresh attempts. Please login again.",
-                )
+                raise RefreshAbuseLocked()
         except HTTPException:
             raise
         except Exception as e:

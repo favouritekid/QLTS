@@ -13,10 +13,19 @@ Usage:
         pass
 """
 from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
 from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from ..config import settings
 from .client_ip import get_client_ip
+
+# Mã lỗi máy-đọc cho 429 do rate limit HẠ TẦNG (slowapi). Client dùng mã này
+# để phân biệt với 429 nghiệp vụ — cụ thể `REFRESH_ABUSE_LOCKED` của
+# ``/auth/refresh`` (xem ``app/routers/auth.py``), nơi backend ĐÃ thu hồi
+# session nên client PHẢI đăng xuất. Chỉ mã dưới đây mới có nghĩa "tạm thời,
+# giữ phiên và thử lại sau".
+RATE_LIMITED_ERROR_CODE = "RATE_LIMITED"
 
 
 # ============================================================================
@@ -58,6 +67,37 @@ limiter = Limiter(
     storage_uri=STORAGE_URI,
     in_memory_fallback_enabled=True,
 )
+
+
+# ============================================================================
+# 429 RESPONSE HANDLER
+# ============================================================================
+
+
+async def rate_limit_exceeded_handler(
+    request: Request, exc: RateLimitExceeded
+) -> JSONResponse:
+    """Body cho 429 do slowapi — LUÔN kèm ``error_code`` top-level.
+
+    Đây là hàm module-level (không phải closure trong ``main.py``) để test
+    khẳng định được contract mã lỗi mà không phải làm cạn một bucket thật.
+
+    ``error_code`` bắt buộc vì client phân loại 429 theo mã, không theo chuỗi
+    thông báo: chỉ ``RATE_LIMITED`` mới là "tạm thời, giữ phiên". Không có mã
+    (hoặc mã khác) thì client coi là phiên đã chết và đăng xuất — fail-safe
+    theo hướng an toàn.
+    """
+    response = JSONResponse(
+        status_code=429,
+        content={
+            "detail": "Quá nhiều yêu cầu. Vui lòng thử lại sau.",
+            "error_code": RATE_LIMITED_ERROR_CODE,
+        },
+    )
+    # Inject Retry-After header via slowapi limiter (accurate remaining time)
+    return request.app.state.limiter._inject_headers(
+        response, request.state.view_rate_limit
+    )
 
 
 # ============================================================================

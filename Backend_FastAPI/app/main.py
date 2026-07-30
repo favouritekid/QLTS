@@ -31,7 +31,10 @@ from .database import engine as async_db_engine
 from .database import redis_client as main_redis_client
 from .database import safe_redis_ping
 from .database import AsyncSessionLocal  # For auto-sync templates
-from .core.rate_limits import limiter  # ✅ MIGRATED: Use new centralized rate limits module
+from .core.rate_limits import (  # ✅ MIGRATED: Use new centralized rate limits module
+    limiter,
+    rate_limit_exceeded_handler,
+)
 from .middleware.admission_freeze import AdmissionFreezeMiddleware  # ✅ T0-2 cold cutover freeze
 from .middleware.csrf import CSRFMiddleware  # ✅ CSRF Protection
 from .utils.redis_lock import init_redis_client, close_redis_client
@@ -512,20 +515,7 @@ async def lifespan(app: FastAPI):
     # (Giữ nguyên logic Rate Limiter)
     if settings.APP_ENV != "test":
         fastapi_app.state.limiter = limiter
-        async def _custom_rate_limit_handler(request: Request, exc: RateLimitExceeded):
-            response = JSONResponse(
-                status_code=429,
-                content={
-                    "detail": "Quá nhiều yêu cầu. Vui lòng thử lại sau.",
-                },
-            )
-            # Inject Retry-After header via slowapi limiter (accurate remaining time)
-            response = request.app.state.limiter._inject_headers(
-                response, request.state.view_rate_limit
-            )
-            return response
-
-        fastapi_app.add_exception_handler(RateLimitExceeded, _custom_rate_limit_handler)
+        fastapi_app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
         log.info("SlowAPI rate limiter INITIALIZED for non-test environment.")
     else:
         log.info("APP_ENV is 'test', skipping SlowAPI rate limiter setup.")

@@ -48,7 +48,7 @@ describe("handleApiError", () => {
   describe("409 Conflict (STATE_CONFLICT)", () => {
     // Regression: audit prod 2026-07-30 — 20 lần 409 "trùng số điện thoại" trong
     // 6 phút vì toast hiện thông báo optimistic-lock cứng và ném đi `detail` thật.
-    it("should show the backend detail for a non-version conflict", () => {
+    it("hiện detail của DUPLICATE_RESOURCE (message viết cho người dùng)", () => {
       const detail =
         "Số điện thoại này đã được sử dụng. Lead: Quỳnh Anh (SĐT: 0972159242) - Đơn vị: Phòng Tuyển Sinh"
       const error = createAxiosError(409, { detail, error_code: "DUPLICATE_RESOURCE" })
@@ -61,7 +61,7 @@ describe("handleApiError", () => {
       )
     })
 
-    it("should NOT offer a refresh action for a non-version conflict", () => {
+    it("DUPLICATE_RESOURCE vẫn background-invalidate và không có nút Làm mới", () => {
       const mockQueryClient = { invalidateQueries: vi.fn() }
       const onConflict = vi.fn()
       const error = createAxiosError(409, {
@@ -80,61 +80,47 @@ describe("handleApiError", () => {
 
       // Nút "Làm mới" chỉ refetch rồi để user bấm Lưu lại y nguyên → vòng lặp.
       expect(options?.action).toBeUndefined()
-      expect(mockQueryClient.invalidateQueries).not.toHaveBeenCalled()
-      expect(onConflict).not.toHaveBeenCalled()
+      // …nhưng refetch vẫn phải xảy ra, im lặng.
+      expect(mockQueryClient.invalidateQueries).toHaveBeenCalledWith({
+        queryKey: ["admissions", "detail", 1],
+      })
+      expect(onConflict).toHaveBeenCalled()
     })
 
-    it("should fall back to a generic description when backend sends no detail", () => {
+    // CONFLICT dùng chung cho version mismatch, xung đột trạng thái VÀ các lỗi
+    // nội bộ ("Technical user 'system' is not configured") → không pass-through.
+    it("CONFLICT có message nội bộ: KHÔNG pass-through, nhưng vẫn invalidate", () => {
+      const mockQueryClient = { invalidateQueries: vi.fn() }
+      const error = createAxiosError(409, {
+        detail: "Inconsistent application fee ledger: payment method",
+        error_code: "CONFLICT",
+      })
+
+      handleApiError(error, {
+        queryClient: mockQueryClient as unknown as HandleErrorOptions["queryClient"],
+        invalidateKeys: [["admissions", "detail", 1]],
+        context: "thu lệ phí",
+      })
+
+      const toastCall = vi.mocked(toast.error).mock.calls[0]
+      const description = (toastCall[1] as { description?: string } | undefined)?.description
+
+      expect(description).not.toContain("Inconsistent application fee ledger")
+      expect(description).toContain("trùng hoặc đã thay đổi")
+      expect(mockQueryClient.invalidateQueries).toHaveBeenCalled()
+    })
+
+    it("tiêu đề 409 không trùng tiêu đề của 422 khi thiếu context", () => {
       const error = createAxiosError(409)
 
       handleApiError(error)
 
       expect(toast.error).toHaveBeenCalledWith(
-        "Không thể thực hiện",
+        "Dữ liệu bị trùng hoặc đã thay đổi",
         expect.objectContaining({
-          description: expect.stringContaining("xung đột với dữ liệu đang có"),
+          description: expect.stringContaining("trùng hoặc đã thay đổi"),
         })
       )
-    })
-
-    it("should keep the refresh action for an explicit version conflict", () => {
-      const error = createAxiosError(409, { error_code: "VERSION_CONFLICT" })
-
-      handleApiError(error)
-
-      expect(toast.error).toHaveBeenCalledWith(
-        "Dữ liệu đã được cập nhật bởi người khác",
-        expect.objectContaining({
-          action: expect.any(Object),
-          duration: 10000,
-        })
-      )
-    })
-
-    it("should invalidate queries when the version-conflict action is clicked", () => {
-      const mockQueryClient = {
-        invalidateQueries: vi.fn(),
-      }
-      const onConflict = vi.fn()
-      const error = createAxiosError(409, { error_code: "VERSION_CONFLICT" })
-
-      handleApiError(error, {
-        queryClient: mockQueryClient as unknown as HandleErrorOptions["queryClient"],
-        invalidateKeys: [["admissions", "detail", 1]],
-        onConflict,
-      })
-
-      // Get the action callback from the toast call
-      const toastCall = vi.mocked(toast.error).mock.calls[0]
-      const actionConfig = (toastCall[1] as { action?: { onClick?: () => void } } | undefined)?.action
-
-      // Simulate clicking the action
-      if (actionConfig?.onClick) {
-        actionConfig.onClick()
-      }
-
-      expect(mockQueryClient.invalidateQueries).toHaveBeenCalled()
-      expect(onConflict).toHaveBeenCalled()
     })
   })
 
@@ -289,7 +275,7 @@ describe("handleApiError", () => {
       handleApiError(error)
 
       expect(toast.error).toHaveBeenCalledWith(
-        "Không thể thực hiện",
+        "Dữ liệu bị trùng hoặc đã thay đổi",
         expect.any(Object)
       )
     })

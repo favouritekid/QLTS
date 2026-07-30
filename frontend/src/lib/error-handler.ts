@@ -51,15 +51,20 @@ export interface ApiErrorResponse {
 }
 
 /**
- * Các `error_code` backend dùng cho xung đột PHIÊN BẢN (optimistic locking) —
- * trường hợp DUY NHẤT mà "làm mới rồi thử lại" là cách xử lý đúng.
+ * `error_code` của backend mà message ĐÃ được viết cho người dùng cuối:
+ * tiếng Việt, nói rõ phải làm gì. Chỉ những mã này được hiện `detail` thô.
  *
- * Hiện tại `ConflictError` của backend phát chung một mã `CONFLICT` cho cả
- * version mismatch, trùng dữ liệu (vd trùng số điện thoại) và xung đột trạng
- * thái (`app/utils/exceptions.py`), nên KHÔNG mã nào đủ chuyên biệt để bật
- * nút "Làm mới". Khi backend tách mã riêng, thêm mã đó vào đây.
+ * `DuplicateResourceError` (`app/utils/exceptions.py`) là mã như vậy — vd
+ * "Số điện thoại này đã được sử dụng. Lead: … - Đơn vị: … - Quản lý bởi: …",
+ * và backend CỐ Ý kèm tên/đơn vị/officer để officer xử lý được ca cross-unit
+ * (`app/services/lead_service.py:1564`).
+ *
+ * Ngược lại `ConflictError` dùng chung mã `CONFLICT` cho nhiều thứ, trong đó
+ * có chuỗi nội bộ/tiếng Anh không được để lộ ra UI: "Technical user 'system'
+ * is not configured", "Inconsistent application fee ledger: payment method",
+ * "Multiple application fee rows exist for this profile".
  */
-const VERSION_CONFLICT_ERROR_CODES = new Set<string>(['VERSION_CONFLICT'])
+const USER_FACING_CONFLICT_CODES = new Set<string>(['DUPLICATE_RESOURCE'])
 
 // =============================================================================
 // HANDLER OPTIONS
@@ -159,52 +164,54 @@ export function handleApiError(
 // =============================================================================
 
 /**
- * 409 — hai nghĩa rất khác nhau dùng chung một HTTP status.
+ * 409 — nhiều nghĩa rất khác nhau dùng chung một HTTP status: trùng dữ liệu
+ * (`DUPLICATE_RESOURCE`), xung đột phiên bản và xung đột trạng thái (cả hai
+ * đều là `CONFLICT`).
  *
- * 1. Xung đột PHIÊN BẢN (optimistic locking): dữ liệu đã bị người khác sửa →
- *    làm mới rồi thử lại là đúng → giữ nút "Làm mới".
- * 2. Mọi conflict KHÁC (trùng số điện thoại / CCCD, xung đột trạng thái…):
- *    làm mới KHÔNG giải quyết được gì — dữ liệu người dùng vừa nhập mới là
- *    thứ phải sửa. Ở đây nút "Làm mới" chính là thứ khuyến khích vòng lặp
- *    bấm-lại: audit prod 2026-07-30 ghi nhận 20 lần 409 trong 6 phút trên
- *    một hồ sơ vì toast hiện "Dữ liệu đã được cập nhật bởi người khác" và
- *    NÉM ĐI message thật của backend ("Số điện thoại này đã được sử dụng.
- *    Lead: … - Quản lý bởi: …"), khiến officer không hề biết mình sai ở đâu.
+ * Trước đây handler chỉ xử lý theo một nghĩa: toast cứng "Dữ liệu đã được cập
+ * nhật bởi người khác" + nút "Làm mới", và NÉM ĐI `detail` của backend. Audit
+ * prod 2026-07-30: một hồ sơ nhận 20 lần 409 trong 6 phút vì officer nhập số
+ * điện thoại của phụ huynh vào ô SĐT thí sinh — backend nói rõ lý do, nhưng
+ * officer chỉ thấy câu về "người khác cập nhật" nên bấm Làm mới rồi Lưu lại,
+ * y hệt, hàng chục lần.
  *
- * Vì vậy: luôn hiện `detail` của backend, và chỉ đưa action khi mã lỗi nói rõ
- * đây là xung đột phiên bản.
+ * Nay:
+ *  - LUÔN background-invalidate (im lặng, không cần user bấm gì) để màn hình
+ *    tự sửa ở các ca refetch giải quyết được — vd xung đột trạng thái sau khi
+ *    người khác đã duyệt. An toàn với form đang nhập dở: effect reset form ở
+ *    `AdmissionDetailClient.tsx:200` có guard `!isDirty` nên draft được giữ.
+ *  - Chỉ hiện `detail` thô khi mã lỗi nằm trong `USER_FACING_CONFLICT_CODES`;
+ *    các mã khác dùng câu tiếng Việt chung để không lộ chuỗi nội bộ.
+ *  - KHÔNG có nút "Làm mới": nút đó vốn không thoát được bế tắc (guard
+ *    `!isDirty` giữ `version` cũ trong form) mà chỉ khuyến khích bấm lại.
+ *    Nút làm mới hiệu quả cần một `error_code` riêng cho optimistic-lock —
+ *    thuộc đợt đồng bộ contract, không làm ở hotfix này.
  */
 function handleConflictError(
   data: ApiErrorResponse | undefined,
   options: HandleErrorOptions
 ): void {
-  const message = extractMessage(data)
-  const isVersionConflict =
-    !!data?.error_code && VERSION_CONFLICT_ERROR_CODES.has(data.error_code)
+  // Background-invalidate: cache có thể đã cũ so với server ở mọi loại 409.
+  options.invalidateKeys?.forEach(key =>
+    options.queryClient?.invalidateQueries({ queryKey: key })
+  )
+  options.onConflict?.()
 
-  if (!isVersionConflict) {
-    const title = options.context ? `Không thể ${options.context}` : 'Không thể thực hiện'
-    toast.error(title, {
-      description:
-        message ||
-        'Dữ liệu vừa nhập xung đột với dữ liệu đang có. Vui lòng kiểm tra lại.',
-      duration: 10000, // Message backend thường dài — để user đọc kịp
-    })
-    return
-  }
+  const isUserFacing =
+    data?.error_code !== undefined && USER_FACING_CONFLICT_CODES.has(data.error_code)
+  const message = isUserFacing ? extractMessage(data) : ''
+  // Không dùng 'Không thể thực hiện' khi thiếu context — đó là tiêu đề của 422
+  // BUSINESS_RULE_VIOLATION; trùng tiêu đề thì user (và screenshot hỗ trợ)
+  // không phân biệt được "xung đột dữ liệu" với "nghiệp vụ từ chối".
+  const title = options.context
+    ? `Không thể ${options.context}`
+    : 'Dữ liệu bị trùng hoặc đã thay đổi'
 
-  toast.error('Dữ liệu đã được cập nhật bởi người khác', {
-    description: message || undefined,
-    action: {
-      label: 'Làm mới',
-      onClick: () => {
-        options.invalidateKeys?.forEach(key =>
-          options.queryClient?.invalidateQueries({ queryKey: key })
-        )
-        options.onConflict?.()
-      }
-    },
-    duration: 10000, // Keep visible longer for user action
+  toast.error(title, {
+    description:
+      message ||
+      'Dữ liệu vừa nhập bị trùng hoặc đã thay đổi trên hệ thống. Vui lòng kiểm tra lại.',
+    duration: 10000, // Message backend thường dài — để user đọc kịp
   })
 }
 
