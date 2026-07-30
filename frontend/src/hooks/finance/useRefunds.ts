@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { AxiosError } from "axios"
 import { toast } from "sonner"
 import { refundsApi, type RefundPaginatedResponse, type RefundRejectRequest } from "@/lib/api/refunds"
@@ -40,6 +40,10 @@ export function useRefunds(filters?: RefundFilters, options?: { enabled?: boolea
     queryFn: () => refundsApi.getRefunds(filters),
     enabled: options?.enabled ?? true,
     staleTime: 1000 * 20,
+    // Đổi bộ lọc / trang → giữ dữ liệu cũ thay vì rơi về undefined. Không có nó,
+    // dải tổng quan (vốn KHÔNG phụ thuộc bộ lọc) sẽ nháy về "0 phiếu / — đ" mỗi
+    // lần bấm lọc — đúng cái ảo giác "hết việc rồi" mà màn hình này sinh ra để chữa.
+    placeholderData: keepPreviousData,
   })
 }
 

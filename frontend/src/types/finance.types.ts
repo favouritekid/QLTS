@@ -427,6 +427,43 @@ export interface RefundRequest {
   can_approve: boolean
   can_reject: boolean
   can_process: boolean
+
+  // Ngữ cảnh do backend trả kèm để quyết được ngay trên bảng (không phải mở
+  // từng hồ sơ ở tab khác). Nullable: bản ghi cũ / quan hệ đã bị gỡ.
+  student_name: string | null
+  profile_id: number | null
+  major_name: string | null
+  /** Số tiền của phiếu thu gốc — luôn đọc CÙNG `amount` để thấy hoàn bao nhiêu trên tổng. */
+  payment_amount: string | null
+  /** Phần đã chi hoàn của phiếu thu này. */
+  already_refunded_amount: string | null
+  /**
+   * Số còn hoàn được = phiếu thu − đã chi hoàn. Đây là ngưỡng backend THỰC SỰ gác
+   * lúc chi; cảnh báo trên bảng phải so với con số này, không phải `payment_amount`.
+   */
+  refundable_amount: string | null
+  payment_date: string | null
+  payment_status: string | null
+  payment_method_name: string | null
+  payment_reference: string | null
+  invoice_number: string | null
+  fee_type: string | null
+  requested_by_name: string | null
+  approved_by_name: string | null
+  rejected_by_name: string | null
+  /** Mã điền sẵn cho ô mã tham chiếu; chính là mã backend ghi nếu để trống. */
+  suggested_reference: string | null
+}
+
+/** Tổng quan hàng chờ, tính trên toàn phạm vi — không theo bộ lọc đang chọn. */
+export interface RefundsSummary {
+  pending_count: number
+  pending_amount: string
+  approved_count: number
+  approved_amount: string
+  refunded_count: number
+  refunded_amount: string
+  rejected_count: number
 }
 
 export interface VietQRBankAccount {
@@ -718,7 +755,8 @@ export interface RefundApproveRequest {
 
 export interface RefundProcessRequest {
   refund_id: number
-  refund_reference: string
+  /** Bỏ trống thì backend tự điền mã theo quy ước (xem `suggested_reference`). */
+  refund_reference?: string
 }
 
 export interface AccountingPeriodCloseRequest {
@@ -1046,7 +1084,11 @@ export interface DebtReportFilters {
 
 export interface RefundFilters {
   payment_id?: number
-  status?: RefundStatus
+  /**
+   * Một trạng thái, hoặc nhiều trạng thái phân tách bằng dấu phẩy
+   * (`"pending,approved"`) — backend tách chuỗi này ra danh sách.
+   */
+  status?: RefundStatus | `${RefundStatus},${RefundStatus}`
   page?: number
   page_size?: number
 }

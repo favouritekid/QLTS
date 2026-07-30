@@ -162,13 +162,16 @@ jobs:
       # =====================================================================
       # Tier 1: Phase 3 multi-NV core — Wave A/B acceptance gates
       # =====================================================================
-      # Hai lớp `TestRefund*` canh đường TIỀN RA khỏi két, canh những thứ chỉ lộ ra
+      # Bốn lớp `TestRefund*` canh đường TIỀN RA khỏi két, canh những thứ chỉ lộ ra
       # khi đã mất tiền hoặc đã kẹt hồ sơ:
       #   * TestRefundService — chốt số tiền lúc CHI (phiếu thu bị điều chỉnh giảm
       #     sau khi duyệt thì không được chi theo số cũ);
       #   * TestRefundNoDeadEnd — phiếu quá số bị chặn ở DUYỆT chứ không ở chi, và
       #     phiếu đã duyệt vẫn từ chối được; thiếu hai lối này thì phiếu kẹt vĩnh
       #     viễn, chỉ SQL mới gỡ (đã xảy ra thật trên prod 29-07);
+      #   * TestRefundReferenceAndContext — mã tham chiếu tự điền theo ngày VN,
+      #     và response mang đủ ngữ cảnh để kế toán quyết trên bảng;
+      #   * TestRefundSummaryIdor — dải tổng quan không đếm phiếu của đơn vị khác.
       # Chọn theo LỚP chứ không cả file: các lớp payment còn lại (record/verify/
       # overpayment) tốn thêm vài phút mà không canh đường tiền-ra, để nightly.
       # Ba tập cuối (cohort đưa sang hệ ký túc xá) canh những thứ hỏng ÂM THẦM:
@@ -211,6 +214,8 @@ jobs:
           tests/unit/test_sync_dorm_students.py
           tests/services/test_payment_service.py::TestRefundService
           tests/services/test_payment_service.py::TestRefundNoDeadEnd
+          tests/services/test_payment_service.py::TestRefundReferenceAndContext
+          tests/services/test_payment_service.py::TestRefundSummaryIdor
           -q --tb=short --timeout=60
 
       # =====================================================================

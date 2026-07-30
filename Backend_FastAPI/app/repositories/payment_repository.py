@@ -705,9 +705,23 @@ class RefundRepository(BaseRepository[RefundRequest]):
             .join(models.AdmissionProfile)
             .join(models.Lead)
             .options(
-                joinedload(RefundRequest.payment).joinedload(Payment.invoice),
+                # Cùng bộ nạp sẵn với ``get_filtered_with_count`` — router dựng
+                # CÙNG một response schema từ cả hai đường (list và detail/sau
+                # mutation). Lệch bộ options ⇒ list đủ field còn detail thiếu,
+                # hoặc tệ hơn: MissingGreenlet khi router chạm quan hệ chưa nạp.
+                joinedload(RefundRequest.payment)
+                .joinedload(Payment.invoice)
+                .joinedload(Invoice.fee)
+                .joinedload(Fee.admission_profile)
+                .joinedload(models.AdmissionProfile.lead),
+                joinedload(RefundRequest.payment)
+                .joinedload(Payment.invoice)
+                .joinedload(Invoice.fee)
+                .joinedload(Fee.resolved_major),
+                joinedload(RefundRequest.payment).joinedload(Payment.method),
                 joinedload(RefundRequest.requested_by),
                 joinedload(RefundRequest.approved_by),
+                joinedload(RefundRequest.rejected_by),
             )
             .where(RefundRequest.id == refund_id)
         )
@@ -903,9 +917,20 @@ class RefundRepository(BaseRepository[RefundRequest]):
             .join(models.AdmissionProfile)
             .join(models.Lead)
             .options(
+                # Chuỗi fee→hồ sơ→lead + ngành + hình thức thu: màn Hoàn phí hiển
+                # thị tên học sinh / ngành / phiếu thu gốc ngay trên bảng. Nạp sẵn
+                # ở đây (không lazy) vì router dựng response NGOÀI transaction —
+                # lazy load sẽ ném MissingGreenlet chứ không âm thầm chậm.
                 joinedload(RefundRequest.payment)
                 .joinedload(Payment.invoice)
-                .joinedload(Invoice.fee),
+                .joinedload(Invoice.fee)
+                .joinedload(Fee.admission_profile)
+                .joinedload(models.AdmissionProfile.lead),
+                joinedload(RefundRequest.payment)
+                .joinedload(Payment.invoice)
+                .joinedload(Invoice.fee)
+                .joinedload(Fee.resolved_major),
+                joinedload(RefundRequest.payment).joinedload(Payment.method),
                 joinedload(RefundRequest.requested_by),
                 joinedload(RefundRequest.approved_by),
                 joinedload(RefundRequest.rejected_by),
@@ -919,6 +944,84 @@ class RefundRepository(BaseRepository[RefundRequest]):
 
         result = await self.db.execute(data_query)
         return list(result.scalars().all()), total
+
+    async def get_refunded_totals_for_payments(
+        self,
+        payment_ids: List[int],
+    ) -> dict:
+        """Tổng tiền ĐÃ CHI hoàn theo từng phiếu thu — một query cho cả lô.
+
+        Router cần con số này để tính ``refundable`` cho mỗi dòng (số mà
+        ``process_approved_refund`` thực sự gác). Gọi lẻ từng dòng sẽ thành N+1
+        trên một màn hình 50 dòng.
+
+        Chỉ cộng ``refunded``: ``pending``/``approved`` chưa ra tiền, và cộng chúng
+        vào sẽ khiến chính phiếu đang xem tự trừ mình — đúng cái bẫy mà chốt ở
+        ``process_approved_refund`` phải tránh.
+
+        Returns:
+            ``{payment_id: Decimal}``; phiếu chưa hoàn đồng nào thì KHÔNG có khoá
+            (caller dùng ``.get(pid, Decimal("0"))``).
+        """
+        if not payment_ids:
+            return {}
+        rows = (
+            await self.db.execute(
+                select(
+                    RefundRequest.payment_id,
+                    func.coalesce(func.sum(RefundRequest.amount), 0),
+                )
+                .where(
+                    RefundRequest.payment_id.in_(payment_ids),
+                    RefundRequest.status == RefundStatusEnum.refunded.value,
+                )
+                .group_by(RefundRequest.payment_id)
+            )
+        ).all()
+        return {pid: Decimal(str(total or 0)) for pid, total in rows}
+
+    async def get_status_summary(
+        self,
+        unit_id: Optional[int] = None,
+        payment_id: Optional[int] = None,
+    ) -> dict:
+        """Đếm + cộng tiền theo trạng thái trên TOÀN phạm vi người dùng thấy.
+
+        Một query gộp (``GROUP BY status``) thay vì bốn lần đếm. Cùng phép nối +
+        cùng bộ lọc IDOR **và cùng bộ lọc ``payment_id``** với
+        ``get_filtered_with_count`` — nếu hai bên lệch nhau thì con số ở dải tổng
+        quan sẽ mâu thuẫn với chính cái bảng bên dưới nó (lọc theo một phiếu thu mà
+        dải vẫn đếm cả đơn vị ⇒ bảng một dòng, dải nói "47 phiếu chờ duyệt").
+
+        Cố ý KHÔNG nhận ``statuses``: dải tổng quan phải nói về mọi trạng thái, kể
+        cả trạng thái đang không được chọn — đó là điểm của nó.
+
+        Returns:
+            ``{status: {"count": int, "amount": Decimal}}``
+        """
+        query = (
+            select(
+                RefundRequest.status,
+                func.count(RefundRequest.id),
+                func.coalesce(func.sum(RefundRequest.amount), 0),
+            )
+            .join(Payment)
+            .join(Invoice)
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .group_by(RefundRequest.status)
+        )
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+        if payment_id:
+            query = query.where(RefundRequest.payment_id == payment_id)
+
+        rows = (await self.db.execute(query)).all()
+        return {
+            status: {"count": count, "amount": Decimal(str(amount or 0))}
+            for status, count, amount in rows
+        }
 
 
 class OverpaymentRepository(BaseRepository[OverpaymentRecord]):
