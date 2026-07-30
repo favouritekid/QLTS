@@ -472,6 +472,16 @@ export function useAuth(options?: UseAuthOptions) {
     },
   });
 
+  // 401 mà interceptor CỐ Ý giữ phiên (refresh hỏng vì 429 RATE_LIMITED / 5xx /
+  // mạng đứt → `markSessionKeptAlive`). MỘT nguồn quyết định, dùng cho cả
+  // useEffect bên dưới lẫn `isAuthenticated` trả ra: nếu chỉ chặn logout mà vẫn
+  // trả `isAuthenticated=false` thì consumer nào đọc cờ đó vẫn coi như đã hết
+  // phiên — trái hẳn quyết định "giữ phiên".
+  const isUserErrorTransient =
+    isUserError &&
+    userError?.response?.status === 401 &&
+    isSessionKeptAliveError(userError);
+
   useEffect(() => {
     if (isUserError && userError) {
       console.warn("[useAuth] Failed to fetch current user:", userError.response?.status, userError.message);
@@ -481,7 +491,7 @@ export function useAuth(options?: UseAuthOptions) {
       // và đá officer về /login đúng tình huống vừa được quyết định là tạm
       // thời (nginx `limit_req` trên /api/ còn trả 503, mà 503 được xếp loại
       // transient). Chỉ báo lỗi nhẹ và để lần thử sau tự phục hồi.
-      if (userError.response?.status === 401 && isSessionKeptAliveError(userError)) {
+      if (isUserErrorTransient) {
         console.warn("[useAuth] 401 nhưng phiên được giữ (refresh lỗi tạm thời) — không logout");
         toast.error("Hệ thống đang bận. Vui lòng thử lại sau ít phút.");
       } else if (userError.response?.status === 401) {
@@ -498,7 +508,7 @@ export function useAuth(options?: UseAuthOptions) {
         toast.error("Không thể tải thông tin người dùng.");
       }
     }
-  }, [isUserError, userError, logoutStore, queryClient, router]);
+  }, [isUserError, userError, isUserErrorTransient, logoutStore, queryClient, router]);
 
   useEffect(() => {
     if (currentUser && JSON.stringify(currentUser) !== JSON.stringify(userFromStore)) {
@@ -520,7 +530,10 @@ export function useAuth(options?: UseAuthOptions) {
 
   return {
     user: currentUser ?? userFromStore,
-    isAuthenticated: isAuthenticated && !isUserError, // ✅ SECURITY FIX: No longer check token from localStorage
+    // ✅ SECURITY FIX: No longer check token from localStorage.
+    // Ngoại lệ `isUserErrorTransient`: phiên vẫn sống, chỉ là refresh tạm thời
+    // hỏng — trả false ở đây sẽ mâu thuẫn với chính quyết định giữ phiên.
+    isAuthenticated: isAuthenticated && (!isUserError || isUserErrorTransient),
     isLoading,
     login: (
       credentials: LoginRequest,
