@@ -27,7 +27,7 @@ import {
 } from "./csrf";
 import { env } from "@/lib/config/env";
 import { inspectVersionHeaders } from "@/lib/api/api-versioning";
-import { refreshAccessToken } from "./refresh";
+import { refreshAccessToken, shouldLogoutAfterRefreshFailure } from "./refresh";
 import { buildLoginRedirect } from "@/lib/auth/login-redirect";
 export const API_BASE_URL = env.NEXT_PUBLIC_API_URL;
 
@@ -167,6 +167,17 @@ api.interceptors.response.use(
       } catch (refreshError) {
         console.error("[API Client] ❌ Refresh failed:", refreshError);
 
+        // Lỗi TẠM THỜI (429 rate limit / 5xx / mạng đứt) KHÔNG phải bằng chứng
+        // phiên đã chết → giữ phiên, chỉ để request gốc thất bại. Trước đây một
+        // lần 429 trên /auth/refresh là đủ đá officer về /login giữa lúc nhập
+        // liệu (audit prod 2026-07-30).
+        if (!shouldLogoutAfterRefreshFailure(refreshError)) {
+          console.warn(
+            "[API Client] ⏳ Refresh lỗi tạm thời — giữ phiên, không logout",
+          );
+          return Promise.reject(refreshError);
+        }
+
         // Fallback Logout: chặn API tiếp theo, clear store, rồi hard
         // redirect KÈM return-url để sau khi đăng nhập lại quay về đúng trang.
         if (typeof window !== "undefined" && !publicPages.includes(currentPath)) {
@@ -251,6 +262,15 @@ api.interceptors.response.use(
           // Retry — interceptor sẽ đọc lại csrf_token mới từ document.cookie.
           return api(originalRequest);
         } catch (refreshError) {
+          // Cùng phân loại như nhánh 401: chỉ 401/403 mới là phiên chết.
+          // 429/5xx/mạng đứt → giữ phiên, để request gốc thất bại và thử lại sau.
+          if (!shouldLogoutAfterRefreshFailure(refreshError)) {
+            console.warn(
+              "[API Client] ⏳ CSRF recovery: refresh lỗi tạm thời — giữ phiên, không logout",
+            );
+            return Promise.reject(refreshError);
+          }
+
           console.warn("[API Client] ❌ CSRF recovery failed (refresh rejected) — redirecting to login");
 
           if (typeof window !== "undefined") {

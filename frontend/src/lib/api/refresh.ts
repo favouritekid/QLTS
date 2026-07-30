@@ -26,6 +26,29 @@ let inflight: Promise<void> | null = null;
  * phát request mới. KHÔNG side-effect logout/redirect — caller tự quyết
  * (interceptor 401 logout, hook proactive im lặng).
  */
+/**
+ * Refresh thất bại có nghĩa là "phiên đã chết" hay chỉ là "lỗi tạm thời"?
+ *
+ * Chỉ 401/403 mới là bằng chứng refresh token không còn hiệu lực → logout.
+ * Mọi trường hợp khác PHẢI giữ phiên:
+ *  - 429: rate limit. Audit prod 2026-07-30 — `/api/auth/refresh` bị chặn
+ *    32% (86/270 request trong 24h) vì limit 20/giờ tính THEO IP, mà cả
+ *    trường ra Internet qua một IP NAT. Trước đây một lần 429 = officer bị
+ *    đá về /login giữa lúc nhập liệu, mất luôn form đang mở.
+ *  - 5xx: backend/proxy lỗi tạm thời.
+ *  - không có `response` (mạng đứt, timeout, CORS) hoặc lỗi không phải Axios:
+ *    không biết gì về phiên → không được suy ra là phiên chết.
+ *
+ * Dùng chung cho MỌI caller của `refreshAccessToken` (interceptor 401 và
+ * CSRF-recovery) để hai nhánh không phân loại lệch nhau.
+ */
+export function shouldLogoutAfterRefreshFailure(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) return false;
+  const status = error.response?.status;
+  if (status === undefined) return false;
+  return status === 401 || status === 403;
+}
+
 export function refreshAccessToken(): Promise<void> {
   if (inflight) return inflight;
   inflight = (async () => {
