@@ -36,10 +36,30 @@ export type ErrorCode =
 
 export interface ApiErrorResponse {
   code?: ErrorCode
+  /**
+   * Mã lỗi máy-đọc do backend gửi (`base_app_exception_handler` trả
+   * `{detail, error_code}` — xem `app/middleware/exception_handlers.py`).
+   * KHÁC `code` ở trên: `code` là taxonomy của frontend và backend hiện
+   * KHÔNG gửi field đó. Chỉ dùng `error_code` để phân biệt các nghĩa khác
+   * nhau của cùng một HTTP status (xem `handleConflictError`) — việc map
+   * toàn bộ taxonomy sang `error_code` là một thay đổi riêng.
+   */
+  error_code?: string
   message?: string
   detail?: string | Array<{ msg: string; loc: string[] }>
   field_errors?: Record<string, string[]>
 }
+
+/**
+ * Các `error_code` backend dùng cho xung đột PHIÊN BẢN (optimistic locking) —
+ * trường hợp DUY NHẤT mà "làm mới rồi thử lại" là cách xử lý đúng.
+ *
+ * Hiện tại `ConflictError` của backend phát chung một mã `CONFLICT` cho cả
+ * version mismatch, trùng dữ liệu (vd trùng số điện thoại) và xung đột trạng
+ * thái (`app/utils/exceptions.py`), nên KHÔNG mã nào đủ chuyên biệt để bật
+ * nút "Làm mới". Khi backend tách mã riêng, thêm mã đó vào đây.
+ */
+const VERSION_CONFLICT_ERROR_CODES = new Set<string>(['VERSION_CONFLICT'])
 
 // =============================================================================
 // HANDLER OPTIONS
@@ -87,7 +107,7 @@ export function handleApiError(
   
   switch (code) {
     case 'STATE_CONFLICT':
-      handleConflictError(options)
+      handleConflictError(data, options)
       break
       
     case 'VALIDATION_FAILED':
@@ -138,12 +158,47 @@ export function handleApiError(
 // SPECIALIZED HANDLERS
 // =============================================================================
 
-function handleConflictError(options: HandleErrorOptions): void {
+/**
+ * 409 — hai nghĩa rất khác nhau dùng chung một HTTP status.
+ *
+ * 1. Xung đột PHIÊN BẢN (optimistic locking): dữ liệu đã bị người khác sửa →
+ *    làm mới rồi thử lại là đúng → giữ nút "Làm mới".
+ * 2. Mọi conflict KHÁC (trùng số điện thoại / CCCD, xung đột trạng thái…):
+ *    làm mới KHÔNG giải quyết được gì — dữ liệu người dùng vừa nhập mới là
+ *    thứ phải sửa. Ở đây nút "Làm mới" chính là thứ khuyến khích vòng lặp
+ *    bấm-lại: audit prod 2026-07-30 ghi nhận 20 lần 409 trong 6 phút trên
+ *    một hồ sơ vì toast hiện "Dữ liệu đã được cập nhật bởi người khác" và
+ *    NÉM ĐI message thật của backend ("Số điện thoại này đã được sử dụng.
+ *    Lead: … - Quản lý bởi: …"), khiến officer không hề biết mình sai ở đâu.
+ *
+ * Vì vậy: luôn hiện `detail` của backend, và chỉ đưa action khi mã lỗi nói rõ
+ * đây là xung đột phiên bản.
+ */
+function handleConflictError(
+  data: ApiErrorResponse | undefined,
+  options: HandleErrorOptions
+): void {
+  const message = extractMessage(data)
+  const isVersionConflict =
+    !!data?.error_code && VERSION_CONFLICT_ERROR_CODES.has(data.error_code)
+
+  if (!isVersionConflict) {
+    const title = options.context ? `Không thể ${options.context}` : 'Không thể thực hiện'
+    toast.error(title, {
+      description:
+        message ||
+        'Dữ liệu vừa nhập xung đột với dữ liệu đang có. Vui lòng kiểm tra lại.',
+      duration: 10000, // Message backend thường dài — để user đọc kịp
+    })
+    return
+  }
+
   toast.error('Dữ liệu đã được cập nhật bởi người khác', {
+    description: message || undefined,
     action: {
       label: 'Làm mới',
       onClick: () => {
-        options.invalidateKeys?.forEach(key => 
+        options.invalidateKeys?.forEach(key =>
           options.queryClient?.invalidateQueries({ queryKey: key })
         )
         options.onConflict?.()

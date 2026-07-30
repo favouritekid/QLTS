@@ -46,9 +46,60 @@ describe("handleApiError", () => {
   })
 
   describe("409 Conflict (STATE_CONFLICT)", () => {
-    it("should show conflict error with refresh action", () => {
+    // Regression: audit prod 2026-07-30 — 20 lần 409 "trùng số điện thoại" trong
+    // 6 phút vì toast hiện thông báo optimistic-lock cứng và ném đi `detail` thật.
+    it("should show the backend detail for a non-version conflict", () => {
+      const detail =
+        "Số điện thoại này đã được sử dụng. Lead: Quỳnh Anh (SĐT: 0972159242) - Đơn vị: Phòng Tuyển Sinh"
+      const error = createAxiosError(409, { detail, error_code: "DUPLICATE_RESOURCE" })
+
+      handleApiError(error, { context: "cập nhật hồ sơ" })
+
+      expect(toast.error).toHaveBeenCalledWith(
+        "Không thể cập nhật hồ sơ",
+        expect.objectContaining({ description: detail, duration: 10000 })
+      )
+    })
+
+    it("should NOT offer a refresh action for a non-version conflict", () => {
+      const mockQueryClient = { invalidateQueries: vi.fn() }
+      const onConflict = vi.fn()
+      const error = createAxiosError(409, {
+        detail: "Số điện thoại này đã được sử dụng.",
+        error_code: "DUPLICATE_RESOURCE",
+      })
+
+      handleApiError(error, {
+        queryClient: mockQueryClient as unknown as HandleErrorOptions["queryClient"],
+        invalidateKeys: [["admissions", "detail", 1]],
+        onConflict,
+      })
+
+      const toastCall = vi.mocked(toast.error).mock.calls[0]
+      const options = toastCall[1] as { action?: unknown } | undefined
+
+      // Nút "Làm mới" chỉ refetch rồi để user bấm Lưu lại y nguyên → vòng lặp.
+      expect(options?.action).toBeUndefined()
+      expect(mockQueryClient.invalidateQueries).not.toHaveBeenCalled()
+      expect(onConflict).not.toHaveBeenCalled()
+    })
+
+    it("should fall back to a generic description when backend sends no detail", () => {
       const error = createAxiosError(409)
-      
+
+      handleApiError(error)
+
+      expect(toast.error).toHaveBeenCalledWith(
+        "Không thể thực hiện",
+        expect.objectContaining({
+          description: expect.stringContaining("xung đột với dữ liệu đang có"),
+        })
+      )
+    })
+
+    it("should keep the refresh action for an explicit version conflict", () => {
+      const error = createAxiosError(409, { error_code: "VERSION_CONFLICT" })
+
       handleApiError(error)
 
       expect(toast.error).toHaveBeenCalledWith(
@@ -60,12 +111,12 @@ describe("handleApiError", () => {
       )
     })
 
-    it("should invalidate queries when action clicked", () => {
+    it("should invalidate queries when the version-conflict action is clicked", () => {
       const mockQueryClient = {
         invalidateQueries: vi.fn(),
       }
       const onConflict = vi.fn()
-      const error = createAxiosError(409)
+      const error = createAxiosError(409, { error_code: "VERSION_CONFLICT" })
 
       handleApiError(error, {
         queryClient: mockQueryClient as unknown as HandleErrorOptions["queryClient"],
@@ -76,7 +127,7 @@ describe("handleApiError", () => {
       // Get the action callback from the toast call
       const toastCall = vi.mocked(toast.error).mock.calls[0]
       const actionConfig = (toastCall[1] as { action?: { onClick?: () => void } } | undefined)?.action
-      
+
       // Simulate clicking the action
       if (actionConfig?.onClick) {
         actionConfig.onClick()
@@ -229,7 +280,8 @@ describe("handleApiError", () => {
 
   describe("Backend code field", () => {
     it("should prefer backend code over HTTP status", () => {
-      // Backend returns 400 but with STATE_CONFLICT code
+      // Backend returns 400 but with STATE_CONFLICT code. Không kèm
+      // `error_code` version-conflict → đi nhánh conflict-không-xác-định.
       const error = createAxiosError(400, {
         code: "STATE_CONFLICT",
       })
@@ -237,7 +289,7 @@ describe("handleApiError", () => {
       handleApiError(error)
 
       expect(toast.error).toHaveBeenCalledWith(
-        "Dữ liệu đã được cập nhật bởi người khác",
+        "Không thể thực hiện",
         expect.any(Object)
       )
     })
