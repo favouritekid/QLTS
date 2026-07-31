@@ -12,6 +12,8 @@ Usage:
     async def endpoint(...):
         pass
 """
+import jwt
+from jwt.exceptions import PyJWTError as JWTError
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from starlette.requests import Request
@@ -169,6 +171,79 @@ def get_user_id_key(request: Request) -> str:
         return get_client_ip(request)
 
 
+def get_refresh_identity_key(request: Request) -> str:
+    """Khoá rate-limit cho ``POST /auth/refresh``: theo NGƯỜI DÙNG nếu chứng
+    minh được, không thì theo IP.
+
+    ``/auth/refresh`` không đi qua ``get_current_user`` (nó chạy TRƯỚC khi có
+    access token hợp lệ) nên ``request.state.user`` luôn trống — ``get_user_id_key``
+    ở trên vô dụng ở đây và mọi request rơi về IP. Audit prod 2026-07-30: cả
+    trường ra Internet qua MỘT IP NAT, nên hạn mức 20/giờ theo IP là quota
+    CHUNG cho toàn bộ nhân sự — 32% request refresh (86/270 trong 24h) bị chặn,
+    và mỗi lần chặn là một officer bị đá ra giữa lúc nhập liệu.
+
+    Danh tính chỉ được công nhận khi ĐỦ SÁU điều kiện, vì khoá này quyết định
+    hạn mức nào được áp:
+
+    1. có cookie ``refresh_token``;
+    2. ``jwt.decode`` với ``algorithms`` TƯỜNG MINH — thiếu tham số này là mở
+       đường cho token ``alg: none``, và khi đó bất kỳ ai cũng tự đúc được một
+       ``sub`` để mượn xô 120/giờ của người khác (hoặc để mỗi request một xô mới);
+    3. còn hạn — ``jwt.decode`` tự kiểm ``exp`` và ném ``ExpiredSignatureError``;
+    4. ``type == "refresh"`` — không nhận access token;
+    5. ``sub`` không rỗng;
+    6. ``jti`` không rỗng.
+
+    Sai bất kỳ điều nào → về khoá IP. Fail-safe theo hướng SIẾT: token không
+    chứng minh được danh tính thì phải chịu hạn mức chặt hơn, không được
+    hưởng hạn mức rộng.
+    """
+    ip_key = f"refresh:ip:{get_client_ip(request)}"
+    try:
+        token = request.cookies.get("refresh_token")
+        if not token:
+            return ip_key
+
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+        )
+        if payload.get("type") != "refresh":
+            return ip_key
+
+        sub = payload.get("sub")
+        jti = payload.get("jti")
+        if not sub or not jti:
+            return ip_key
+
+        return f"refresh:user:{sub}"
+    except JWTError:
+        # Hết hạn / chữ ký sai / payload hỏng — không chứng minh được danh tính.
+        return ip_key
+    except Exception:
+        # Bất kỳ sự cố nào khác (cookie dị dạng, settings thiếu…) cũng phải trả
+        # về một khoá hợp lệ: ném ra từ key_func sẽ làm hỏng cả request.
+        return ip_key
+
+
+def refresh_limit(key: str) -> str:
+    """Hạn mức động cho ``/auth/refresh`` theo loại khoá.
+
+    ⚠️ Tham số PHẢI tên là ``key``: ``slowapi/wrappers.py:86`` kiểm
+    ``"key" in inspect.signature(limit_provider).parameters`` để quyết định gọi
+    ``limit_provider(key_func(request))`` hay ``limit_provider()``. Đổi tên
+    tham số là lặng lẽ rơi về nhánh không-đối-số và ``TypeError`` lúc chạy.
+
+    Hai hạn mức lấy thẳng từ ``RateLimits`` (đọc lúc GỌI, nên không vướng thứ
+    tự định nghĩa trong tệp) — không chép lại con số ở đây, kẻo sửa một nơi mà
+    nơi kia ở lại.
+    """
+    if key.startswith("refresh:user:"):
+        return RateLimits.AUTH_REFRESH_TOKEN_IDENTIFIED
+    return RateLimits.AUTH_REFRESH_TOKEN
+
+
 # ============================================================================
 # RATE LIMIT TIERS
 # ============================================================================
@@ -198,7 +273,18 @@ class RateLimits:
     AUTH_REGISTER = "3/minute" if settings.APP_ENV != "test" else "1000/minute"
     AUTH_PASSWORD_RESET = "3/hour" if settings.APP_ENV != "test" else "10000/hour"
     AUTH_PASSWORD_CHANGE = "10/hour" if settings.APP_ENV != "test" else "10000/hour"
+    # ``POST /auth/refresh`` KHÔNG dùng trực tiếp hằng nào dưới đây — nó đi qua
+    # ``refresh_limit(key)``, hàm này chọn một trong hai tuỳ khoá chứng minh
+    # được danh tính hay không. Đây vẫn là nơi duy nhất giữ hai con số.
+    #
+    # Nhánh IP: request KHÔNG chứng minh được là ai. Siết như cũ.
     AUTH_REFRESH_TOKEN = "20/hour" if settings.APP_ENV != "test" else "10000/hour"
+    # Nhánh chủ thể: ANOMALY_MAX_SESSIONS_PER_USER = 10 phiên × refresh chủ động
+    # ~4.6 lần/giờ/phiên ≈ 46 lần nền, cộng bootstrap + reactive 401 +
+    # CSRF-recovery, chừa biên ~2×.
+    AUTH_REFRESH_TOKEN_IDENTIFIED = (
+        "120/hour" if settings.APP_ENV != "test" else "10000/hour"
+    )
 
     # ============================================================================
     # ADMIN ENDPOINTS (MODERATE)
