@@ -2,7 +2,15 @@ import { Suspense } from "react";
 
 import { SessionRefreshBootstrap } from "./SessionRefreshBootstrap";
 
-export const dynamic = "force-dynamic";
+// KHÔNG khai báo ``export const dynamic``: Next.js 16 với
+// ``cacheComponents: true`` (next.config.ts) không tương thích với route
+// segment config đó — trang sẽ hỏng biên dịch và trả 500, tức đúng cái trang
+// lẽ ra phải cứu phiên lại là trang chết. Cùng lý do đã ghi ở
+// ``app/magic-link/[action]/[token]/page.tsx``.
+//
+// Không cần khai báo gì thêm: trang chỉ opt vào cache khi có chỉ thị
+// ``"use cache"``, mà ở đây thì không — và toàn bộ phần đọc query nằm trong
+// một client component dưới ``Suspense``, nên nó vốn đã động theo từng request.
 
 /**
  * `/session-refresh` — trang bootstrap làm mới phiên (public, xem
