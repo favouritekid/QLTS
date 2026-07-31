@@ -4215,6 +4215,14 @@ def _bo_chu_thich_dau_tep(noi_dung: bytes) -> bytes:
     🔴 KHÔNG dùng tham số ``comment="#"`` của pandas: nó cắt từ dấu ``#`` ở BẤT KỲ
     đâu trong dòng, nên một địa chỉ như "Số 5 # ngõ 3" sẽ mất phần đuôi mà không
     báo gì. Ở đây chỉ bỏ những dòng ĐẦU TỆP, dữ liệu bên dưới không bị đụng tới.
+
+    🔴 CHỈ ĐƯỢC GỌI KHI ``pd.read_csv`` ĐÃ THẤT BẠI trên nội dung gốc — xem chỗ
+    gọi. Không có điều kiện đó thì chính hàm này là một lỗi: bản xuất Excel tiếng
+    Việt rất hay có cột số thứ tự tên ``#`` hoặc ``#STT`` ở đầu, và khi ấy HÀNG
+    TIÊU ĐỀ bắt đầu bằng ``#``. Đo được: ``#,full_name,phone,source,unit_id`` +
+    1 dòng dữ liệu → sau khi lọc, pandas lấy dòng dữ liệu làm tiêu đề và còn 0
+    dòng; trước đó nó đọc đúng 5 cột / 1 dòng. Gọi có điều kiện thì mọi tệp vốn
+    đọc được đều không bị đụng tới, nên bản vá này không có mặt phơi nhiễm nào.
     """
     cac_dong = noi_dung.split(b"\n")
     i = 0
@@ -4324,7 +4332,21 @@ async def import_leads_from_file_content(
         # Forcing string dtype keeps every column as-typed; Pydantic
         # downstream coerces what needs coercing.
         if file_extension == "csv":
-            df = pd.read_csv(io.BytesIO(_bo_chu_thich_dau_tep(file_content)), dtype=str)
+            try:
+                df = pd.read_csv(io.BytesIO(file_content), dtype=str)
+            except Exception:
+                # Chỉ tới đây khi tệp KHÔNG đọc được như hiện trạng — ca điển hình
+                # là template hệ thống phát ra, mở đầu bằng các dòng chú thích "#".
+                #
+                # Thử-rồi-mới-lọc chứ không lọc thẳng: hàng tiêu đề hoàn toàn có
+                # thể bắt đầu bằng "#" (cột số thứ tự "#"/"#STT" ở bản xuất Excel),
+                # và lọc thẳng thì tệp đó mất hàng tiêu đề — nó vốn đọc được, nay
+                # thành 400. Đặt sau một lần đọc thất bại thì mọi tệp đang chạy
+                # được đều không đi qua nhánh này.
+                khong_chu_thich = _bo_chu_thich_dau_tep(file_content)
+                if khong_chu_thich == file_content:
+                    raise  # không có dòng chú thích nào — lỗi là lỗi thật
+                df = pd.read_csv(io.BytesIO(khong_chu_thich), dtype=str)
         else:  # xlsx
             df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl", dtype=str)
 

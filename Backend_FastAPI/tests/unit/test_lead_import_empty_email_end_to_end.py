@@ -653,6 +653,54 @@ async def test_cot_email_go_sai_ten_bi_chan_chu_khong_nhap_am_tham(repo_gia, db_
 
 
 # ---------------------------------------------------------------------------
+# Hàng tiêu đề bắt đầu bằng "#" — KHÔNG được nhầm là dòng chú thích
+# ---------------------------------------------------------------------------
+
+CSV_COT_DAU_TEN_THANG = (
+    "#,full_name,phone,source,unit_id\n"
+    "1,Nguyễn Văn A,0900000001,website,14\n"
+    "2,Trần Thị B,0900000002,website,14\n"
+)
+
+CSV_COT_DAU_TEN_STT = (
+    "#STT,full_name,phone,source,unit_id\n"
+    "1,Lê Văn C,0900000003,website,14\n"
+)
+
+
+@pytest.mark.parametrize(
+    "ten,noi_dung,so_dong",
+    [
+        ("cột '#'", CSV_COT_DAU_TEN_THANG, 2),
+        ("cột '#STT'", CSV_COT_DAU_TEN_STT, 1),
+    ],
+)
+async def test_hang_tieu_de_bat_dau_bang_thang_van_nhap_duoc(
+    repo_gia, db_gia, ten, noi_dung, so_dong
+):
+    """Cột số thứ tự tên ``#``/``#STT`` không được làm mất hàng tiêu đề.
+
+    🔴 Ca này canh chính bản vá bỏ dòng chú thích ``#`` của template. Bản xuất
+    Excel tiếng Việt rất hay có cột số thứ tự tên ``#`` hoặc ``#STT`` ở đầu, tức
+    HÀNG TIÊU ĐỀ bắt đầu bằng ``#``. Nếu lọc thẳng mọi dòng ``#`` ở đầu tệp thì
+    pandas lấy dòng dữ liệu đầu tiên làm tiêu đề: đo được ``#,full_name,phone,
+    source,unit_id`` + 1 dòng → còn **0 dòng**, tên cột thành dữ liệu, và tệp vốn
+    nhập được nay ăn 400 "thiếu cột bắt buộc".
+
+    Vì vậy chỗ gọi chỉ lọc SAU KHI ``pd.read_csv`` thất bại trên nội dung gốc.
+    Tệp này đọc được ngay từ đầu nên không đi qua nhánh lọc.
+    """
+    kq = await _chay_bytes(db_gia, noi_dung.encode("utf-8"), "co_cot_stt.csv")
+
+    assert kq.successful_imports == so_dong, (
+        f"{ten}: mất hàng tiêu đề vì bị nhầm là dòng chú thích — {kq.errors}"
+    )
+    assert kq.total_rows_processed == so_dong
+    ten_da_chen = [d.get("full_name") for d in repo_gia["repo"].da_chen]
+    assert "Nguyễn Văn A" in ten_da_chen or "Lê Văn C" in ten_da_chen
+
+
+# ---------------------------------------------------------------------------
 # SĐT giữ số 0 đầu (W9-N.1.2) — khoá bằng HÀNH VI, không bằng chuỗi mã nguồn
 # ---------------------------------------------------------------------------
 
