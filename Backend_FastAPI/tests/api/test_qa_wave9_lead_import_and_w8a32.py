@@ -64,20 +64,31 @@ async def test_w9_n13_officer_import_no_nameerror_codepath():
 
 
 def test_w9_n12_csv_read_uses_dtype_str():
-    """W9-N.1.2 anchor: pd.read_csv must use dtype=str so VN phones with
-    leading 0 don't get pandas-inferred as int → stripped.
+    """W9-N.1.2 anchor: cả hai đường đọc file phải giữ `dtype=str`.
+
+    Không có nó, pandas suy kiểu cột phone thành int64 → `0900000111` thành
+    `900000111` → 9 chữ số → trượt regex SĐT Việt Nam → mọi file CSV xuất chuẩn
+    bị loại 100%.
+
+    🔴 Bản đầu so NGUYÊN VĂN `pd.read_csv(io.BytesIO(file_content), dtype=str)`,
+    nên chỉ cần bọc thêm một hàm quanh `file_content` — như bản vá bỏ dòng chú
+    thích `#` của template — là nó đỏ dù `dtype=str` vẫn còn nguyên. Nay chỉ khoá
+    ĐÚNG THỨ nó khai là khoá.
+
+    Hành vi thật (SĐT giữ được số 0 đầu qua trọn luồng nhập) được khoá riêng ở
+    `tests/unit/test_lead_import_empty_email_end_to_end.py`
+    ::test_sdt_giu_duoc_so_0_dau_qua_duong_nhap — đó mới là phép kiểm không bị
+    ảnh hưởng bởi cách viết mã.
     """
     import inspect
     from app.services import lead_service
 
     source = inspect.getsource(lead_service.import_leads_from_file_content)
-    # Must contain dtype=str on read_csv
-    assert "pd.read_csv(io.BytesIO(file_content), dtype=str)" in source, (
-        "W9-N.1.2 regression: pd.read_csv missing dtype=str → pandas "
-        "strips leading 0 from phone column → 100% VN phone rejection."
-    )
-    assert "pd.read_excel(io.BytesIO(file_content), engine=\"openpyxl\", dtype=str)" in source, (
-        "Same fix needed for Excel path."
+    for ham in ("pd.read_csv(", "pd.read_excel("):
+        assert ham in source, f"không còn đường đọc {ham}"
+    assert source.count("dtype=str") >= 2, (
+        "W9-N.1.2 regression: thiếu dtype=str ở một trong hai đường đọc → pandas "
+        "cắt số 0 đầu của cột phone → 100% SĐT Việt Nam bị loại."
     )
 
 

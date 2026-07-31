@@ -14,7 +14,7 @@ import io
 import pandas as pd
 import pytest
 
-from app.services.lead_service import _cell_or_none
+from app.services.lead_service import _bo_chu_thich_dau_tep, _cell_or_none
 
 pytestmark = pytest.mark.unit
 
@@ -78,6 +78,45 @@ def test_helper_giu_nguyen_gia_tri_that():
 )
 def test_helper_bien_bao(vao, ra):
     assert _cell_or_none(vao) == ra
+
+
+def test_bo_chu_thich_dau_tep_bo_dung_phan_dau():
+    """Chỉ bỏ dòng ``#`` Ở ĐẦU tệp, không đụng gì phía dưới."""
+    tep = (
+        b"# Lead Import Template\n"
+        b"# Required columns: full_name, phone, source, unit_id\n"
+        b"#\n"
+        b"full_name,phone,source\n"
+        b"Nguyen Van A,0900000001,website\n"
+    )
+    ra = _bo_chu_thich_dau_tep(tep)
+    assert ra.startswith(b"full_name,phone,source\n")
+    assert b"Nguyen Van A" in ra
+    assert b"#" not in ra
+
+
+def test_bo_chu_thich_khong_cat_du_lieu_co_dau_thang():
+    """🔴 Vì sao KHÔNG dùng ``comment="#"`` của pandas.
+
+    Tham số đó cắt từ dấu ``#`` ở BẤT KỲ đâu trong dòng, nên một địa chỉ như
+    "Số 5 # ngõ 3" mất phần đuôi mà không báo gì. Ở đây dữ liệu phải nguyên vẹn.
+    """
+    tep = (
+        b"# chu thich\n"
+        b"full_name,phone,source,location\n"
+        b"Nguyen Van A,0900000001,website,So 5 # ngo 3\n"
+    )
+    ra = _bo_chu_thich_dau_tep(tep)
+    assert b"So 5 # ngo 3" in ra, "dữ liệu chứa dấu # bị cắt mất"
+
+    # Và đọc bằng pandas thì ô đó phải còn nguyên.
+    df = pd.read_csv(io.BytesIO(ra), dtype=str)
+    assert df.iloc[0]["location"] == "So 5 # ngo 3"
+
+
+def test_bo_chu_thich_khong_lam_gi_voi_tep_khong_co_chu_thich():
+    tep = b"full_name,phone\nA,0900000001\n"
+    assert _bo_chu_thich_dau_tep(tep) == tep
 
 
 def test_moi_truong_chuoi_deu_di_qua_helper():

@@ -447,6 +447,87 @@ async def test_officer_import_thieu_email_va_dem_dung(
     log.info("--- Finished: test_officer_import_thieu_email_va_dem_dung ---")
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_template_tai_ve_phai_nhap_lai_duoc_va_khong_doi_email(
+    client: AsyncClient,
+    officer_token_headers: dict,
+    seed_lead_dependencies: dict,
+    _initial_status_legacy_marker,
+    setup_test_database,
+):
+    """Template chính thức phải nhập lại được, và không được đòi email nữa.
+
+    🔴 Hai lỗi cùng nằm trên mấy dòng này:
+
+    1. Template CSV mở đầu bằng các dòng chú thích ``#``, mà ``pd.read_csv`` không
+       biết — nó lấy dòng ``# Lead Import Template`` làm tiêu đề rồi nghẹn ở dòng
+       chú thích có dấu phẩy, trả về 400 kèm thông báo C-tokenizer trông như tệp
+       hỏng. Tức là cửa vào chính thức của luồng nhập lead không dùng được.
+    2. Sau khi ``email`` thôi bắt buộc, mọi thứ NGƯỜI DÙNG ĐỌC vẫn ghi email là
+       cột bắt buộc. Hành vi đổi mà tài liệu không đổi thì officer vẫn hoặc bỏ
+       cuộc, hoặc bịa email giả — rồi những email bịa đó đâm
+       ``uq_lead_email_unit_active`` và bị loại vì trùng.
+
+    Đi vòng GET → POST nên nó khoá được CẢ HAI đầu: đổi template mà quên đường
+    đọc, hoặc ngược lại, đều đỏ.
+    """
+    log.info("--- Running: test_template_tai_ve_phai_nhap_lai_duoc ---")
+
+    r = await client.get(
+        f"{LeadsURLs.LEADS}/import/template?format=csv", headers=officer_token_headers
+    )
+    assert r.status_code == 200, f"Không tải được template: {r.text}"
+    noi_dung = r.content
+
+    # --- Tài liệu trong chính tệp template ---
+    van_ban = noi_dung.decode("utf-8")
+    dong_bat_buoc = [
+        d for d in van_ban.splitlines() if d.startswith("# Required columns:")
+    ]
+    assert dong_bat_buoc, "template không còn dòng liệt kê cột bắt buộc"
+    assert "email" not in dong_bat_buoc[0], (
+        f"template vẫn bảo email là cột bắt buộc: {dong_bat_buoc[0]!r}"
+    )
+
+    # --- Nhập ngược lại chính tệp vừa tải ---
+    resp = await client.post(
+        f"{LeadsURLs.LEADS}/import",
+        files={"file": ("template.csv", io.BytesIO(noi_dung), "text/csv")},
+        headers=officer_token_headers,
+    )
+    assert resp.status_code == 200, (
+        f"template chính hệ thống phát ra lại không nhập được: {resp.text}"
+    )
+    kq = resp.json()
+    assert kq["successful_imports"] == 1, (
+        f"dòng ví dụ trong template bị loại: {kq['errors']}"
+    )
+
+    # --- Và bỏ HẲN cột email thì vẫn phải nhập được ---
+    cac_dong = [d for d in van_ban.splitlines() if d and not d.startswith("#")]
+    cot = cac_dong[0].split(",")
+    vi_tri_email = cot.index("email")
+    bo_email = "\n".join(
+        ",".join(v for j, v in enumerate(d.split(",")) if j != vi_tri_email)
+        for d in cac_dong
+    )
+    # Đổi SĐT để không đụng dòng vừa nhập ở trên.
+    bo_email = bo_email.replace("0901234567", "0901234599")
+
+    resp2 = await client.post(
+        f"{LeadsURLs.LEADS}/import",
+        files={"file": ("khong_email.csv", io.BytesIO(bo_email.encode("utf-8")), "text/csv")},
+        headers=officer_token_headers,
+    )
+    assert resp2.status_code == 200, f"bỏ cột email thì hỏng: {resp2.text}"
+    assert resp2.json()["successful_imports"] == 1, (
+        f"template bỏ cột email bị loại: {resp2.json()['errors']}"
+    )
+
+    log.info("--- Finished: test_template_tai_ve_phai_nhap_lai_duoc ---")
+
+
 # --- Các Test Case Lỗi Khác ---
 
 

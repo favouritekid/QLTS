@@ -4202,6 +4202,27 @@ def _cell_or_none(value) -> Optional[str]:
     return s or None
 
 
+def _bo_chu_thich_dau_tep(noi_dung: bytes) -> bytes:
+    """Bỏ các dòng bắt đầu bằng ``#`` ở ĐẦU tệp CSV.
+
+    Template tải về từ ``GET /api/leads/import/template`` mở đầu bằng 6 dòng chú
+    thích ``#`` rồi mới tới hàng tiêu đề. ``pd.read_csv`` không biết điều đó: nó
+    lấy dòng ``# Lead Import Template`` làm tiêu đề rồi nghẹn ở dòng chú thích có
+    dấu phẩy — ``ParserError: Expected 5 fields in line 5, saw 8`` — và người dùng
+    nhận về một thông báo trông như tệp hỏng. Tức là template chính thức của hệ
+    thống không nhập lại được, đúng cửa vào của việc đang cần làm.
+
+    🔴 KHÔNG dùng tham số ``comment="#"`` của pandas: nó cắt từ dấu ``#`` ở BẤT KỲ
+    đâu trong dòng, nên một địa chỉ như "Số 5 # ngõ 3" sẽ mất phần đuôi mà không
+    báo gì. Ở đây chỉ bỏ những dòng ĐẦU TỆP, dữ liệu bên dưới không bị đụng tới.
+    """
+    cac_dong = noi_dung.split(b"\n")
+    i = 0
+    while i < len(cac_dong) and cac_dong[i].lstrip().startswith(b"#"):
+        i += 1
+    return b"\n".join(cac_dong[i:]) if i else noi_dung
+
+
 async def import_leads_from_file_content(
     file_content: bytes,
     filename: str,
@@ -4217,8 +4238,12 @@ async def import_leads_from_file_content(
 
     Business Rules:
     - Supports CSV (.csv) and Excel (.xlsx) files
-    - Required columns: full_name, email, phone, source, unit_id
-    - Optional columns: offering_id
+    - Required columns: full_name, phone, source, unit_id
+      (unit_id thôi bắt buộc khi caller truyền `default_unit_id`)
+    - Optional columns: email, phone2, offering_id, education_level, gpa, location
+    - Cột `email` vắng mặt hoặc ô trống đều hợp lệ; nhưng nếu file có một cột
+      CHỨA địa chỉ email mà không mang tên `email` thì cả file bị từ chối
+    - Dòng chú thích `#` ở đầu tệp CSV được bỏ qua (template tải về có 6 dòng)
     - Email must be unique (checks both DB and current file)
     - Leads are created with default initial status
     - Batch insertion with error collection (doesn't fail fast)
@@ -4299,7 +4324,7 @@ async def import_leads_from_file_content(
         # Forcing string dtype keeps every column as-typed; Pydantic
         # downstream coerces what needs coercing.
         if file_extension == "csv":
-            df = pd.read_csv(io.BytesIO(file_content), dtype=str)
+            df = pd.read_csv(io.BytesIO(_bo_chu_thich_dau_tep(file_content)), dtype=str)
         else:  # xlsx
             df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl", dtype=str)
 

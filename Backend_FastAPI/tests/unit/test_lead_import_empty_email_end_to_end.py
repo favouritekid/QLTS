@@ -652,6 +652,35 @@ async def test_cot_email_go_sai_ten_bi_chan_chu_khong_nhap_am_tham(repo_gia, db_
     )
 
 
+# ---------------------------------------------------------------------------
+# SĐT giữ số 0 đầu (W9-N.1.2) — khoá bằng HÀNH VI, không bằng chuỗi mã nguồn
+# ---------------------------------------------------------------------------
+
+CSV_SDT_SO_0_DAU = (
+    "full_name,phone,source,unit_id\n"
+    "Nguyễn Văn A,0900000111,website,14\n"
+)
+
+
+async def test_sdt_giu_duoc_so_0_dau_qua_duong_nhap(repo_gia, db_gia):
+    """Số 0 đầu của SĐT phải sống sót qua trọn đường nhập.
+
+    Không có ``dtype=str`` lúc đọc file, pandas suy cột phone thành int64:
+    ``0900000111`` thành ``900000111``, còn 9 chữ số, trượt regex SĐT Việt Nam
+    ``^0(3|5|7|8|9|2)\\d{8,9}$`` ⇒ mọi file CSV xuất chuẩn bị loại sạch.
+
+    Ca này thay cho phép so chuỗi mã nguồn ở
+    ``tests/api/test_qa_wave9_lead_import_and_w8a32.py``: nó khoá KẾT QUẢ nên
+    không đỏ oan khi ai đó đổi cách viết lời gọi ``pd.read_csv``.
+    """
+    kq = await _chay_bytes(db_gia, CSV_SDT_SO_0_DAU.encode("utf-8"), "sdt.csv")
+
+    assert kq.successful_imports == 1, f"SĐT bị loại: {kq.errors}"
+    lead = repo_gia["repo"].da_chen[0]
+    sdt = lead.get("phone") if isinstance(lead, dict) else getattr(lead, "phone", None)
+    assert sdt == "0900000111", f"SĐT bị cắt số 0 đầu: {sdt!r}"
+
+
 CSV_COT_MAIL_KHONG_PHAI_EMAIL = (
     "full_name,phone,source,unit_id,mail_sent_at\n"
     "Nguyễn Văn A,0900000001,website,14,2026-07-30\n"
