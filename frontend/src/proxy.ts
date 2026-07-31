@@ -26,6 +26,14 @@ import { buildLoginRedirect } from "@/lib/auth/login-redirect";
 /**
  * Public routes that don't require authentication
  */
+/**
+ * Tuổi thọ `refresh_token` phía backend (`REFRESH_TOKEN_EXPIRE_DAYS`, mặc định
+ * 30 ngày). Middleware không đọc được cookie đó (Path=/api) nên dùng con số
+ * này làm cận trên: access token hết hạn LÂU HƠN mốc này thì refresh_token
+ * chắc chắn cũng đã chết, không còn gì để client cứu.
+ */
+const REFRESH_TOKEN_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
+
 const EXACT_PUBLIC_ROUTES = ["/"];
 
 const PUBLIC_ROUTE_PREFIXES = [
@@ -157,9 +165,39 @@ export function proxy(request: NextRequest) {
     return response;
   }
 
-  // Check if token is expired
+  // Access token hết hạn KHÔNG đồng nghĩa phiên đã chết.
+  //
+  // `refresh_token` sống 30 ngày (REFRESH_TOKEN_EXPIRE_DAYS) và backend set nó
+  // với `Path=/api` (auth.py `set_cookie`), nên trình duyệt KHÔNG gửi kèm khi
+  // request tới `/admissions/...` hay `/dashboard`: middleware này không hề
+  // nhìn thấy nó và do đó không có dữ liệu để kết luận "hết phiên". Trước đây
+  // nó vẫn xoá `access_token` rồi đá về /login — một quyết định dựa trên thông
+  // tin thiếu, và là đường thoát duy nhất còn lại sau khi client đã cố ý giữ
+  // phiên qua một refresh hỏng tạm thời: chỉ cần F5, mở hồ sơ ở tab mới hay
+  // bấm một link gây full document load là officer mất phiên (và mất form đang
+  // nhập). Access token chỉ sống 15 phút nên chỉ cần rời máy một lúc là dính.
+  //
+  // Nay để CLIENT quyết định — nó gọi được `/api/auth/refresh` (cookie khớp
+  // path) và đã có single-flight cho việc đó. Middleware chỉ còn chặn khi
+  // token hết hạn quá lâu tới mức refresh_token chắc chắn cũng đã chết, để
+  // không bắt người dùng nhìn một trang rỗng rồi mới bị đá ra.
+  //
+  // KHÔNG phải lỗ hổng: middleware là gate UX (xem ghi chú RBAC bên dưới),
+  // backend Casbin mới là gate thật. Token hết hạn thì mọi API call vẫn 401.
   if (isTokenExpired(accessToken)) {
-    console.warn(`[Proxy] ❌ Expired token for: ${pathname}`);
+    const expiredForMs = payload.exp ? Date.now() - payload.exp * 1000 : Infinity;
+
+    if (expiredForMs < REFRESH_TOKEN_LIFETIME_MS) {
+      console.warn(
+        `[Proxy] ⏳ Access token hết hạn (${Math.round(expiredForMs / 1000)}s) — ` +
+          `để client tự refresh, KHÔNG đá về /login: ${pathname}`,
+      );
+      return NextResponse.next();
+    }
+
+    console.warn(
+      `[Proxy] ❌ Token hết hạn quá cửa sổ refresh (refresh_token cũng đã chết): ${pathname}`,
+    );
 
     // Clear expired cookie and redirect (giữ return-url để login xong quay lại)
     const response = NextResponse.redirect(

@@ -1,0 +1,115 @@
+/**
+ * Tests cho middleware `proxy` — trọng tâm: access token HẾT HẠN không còn tự
+ * kết luận "hết phiên".
+ *
+ * Bối cảnh: `refresh_token` sống 30 ngày nhưng backend set `Path=/api`, nên
+ * middleware (chạy trên `/dashboard`, `/admissions/...`) KHÔNG bao giờ nhận
+ * được cookie đó — nó không có dữ liệu để kết luận phiên đã chết. Trước đây nó
+ * vẫn xoá `access_token` và 307 về /login, biến mọi lần F5 / mở tab mới sau 15
+ * phút thành một lần đăng nhập lại, kể cả khi client vừa cố ý giữ phiên qua
+ * một refresh hỏng tạm thời.
+ *
+ * Chạy middleware THẬT với `NextRequest` thay vì tách một hàm thuần ra test:
+ * quyết định nằm ở chính nhánh này, và một test trên hàm phụ sẽ vẫn xanh khi
+ * nhánh trong middleware bị đổi.
+ */
+import { describe, it, expect } from "vitest";
+import { NextRequest } from "next/server";
+
+import { proxy } from "./proxy";
+
+const BASE = "https://qlts.tnpc.edu.vn";
+
+/** JWT không ký (middleware chỉ decode payload, không verify chữ ký). */
+function makeToken(payload: Record<string, unknown>): string {
+  const b64 = (obj: unknown) =>
+    Buffer.from(JSON.stringify(obj))
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+  return `${b64({ alg: "HS256", typ: "JWT" })}.${b64(payload)}.sig`;
+}
+
+function accessToken(expiresInSeconds: number, role = "officer") {
+  return makeToken({
+    sub: "officer1",
+    user_id: 25,
+    role,
+    type: "access",
+    exp: Math.floor(Date.now() / 1000) + expiresInSeconds,
+  });
+}
+
+function requestWith(token: string | undefined, path = "/admissions/611") {
+  const req = new NextRequest(new URL(path, BASE));
+  if (token) req.cookies.set("access_token", token);
+  return req;
+}
+
+describe("proxy — access token hết hạn", () => {
+  // Ca sự cố: officer rời máy hơn 15 phút rồi F5 (hoặc mở hồ sơ ở tab mới).
+  it("hết hạn gần đây → CHO QUA để client tự refresh, không redirect", () => {
+    const res = proxy(requestWith(accessToken(-120))); // hết hạn 2 phút trước
+
+    expect(res.status).toBe(200); // NextResponse.next()
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("hết hạn gần đây → KHÔNG xoá cookie access_token", () => {
+    const res = proxy(requestWith(accessToken(-120)));
+
+    // Xoá cookie là thứ khiến request kế tiếp của SPA chắc chắn 401.
+    const setCookie = res.headers.get("set-cookie") ?? "";
+    expect(setCookie).not.toContain("access_token=;");
+  });
+
+  it("hết hạn cả tuần (refresh_token vẫn còn) → vẫn CHO QUA", () => {
+    const res = proxy(requestWith(accessToken(-7 * 24 * 3600)));
+
+    expect(res.status).toBe(200);
+  });
+
+  // Quá cửa sổ refresh_token (30 ngày) → không còn gì để cứu, đá về login luôn
+  // thay vì cho user nhìn trang rỗng rồi mới bị đá.
+  it("hết hạn quá 30 ngày → redirect /login kèm return-url", () => {
+    const res = proxy(requestWith(accessToken(-31 * 24 * 3600)));
+
+    expect(res.status).toBe(307);
+    const location = res.headers.get("location") ?? "";
+    expect(location).toContain("/login");
+    expect(location).toContain("redirect=");
+  });
+});
+
+describe("proxy — các nhánh KHÔNG được nới lỏng", () => {
+  it("không có access_token → vẫn redirect /login", () => {
+    const res = proxy(requestWith(undefined));
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location") ?? "").toContain("/login");
+  });
+
+  it("token sai định dạng → vẫn redirect /login", () => {
+    const res = proxy(requestWith("khong-phai-jwt"));
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location") ?? "").toContain("/login");
+  });
+
+  it("token còn hạn → đi tiếp bình thường", () => {
+    const res = proxy(requestWith(accessToken(600)));
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  // RBAC vẫn chạy trên token còn hạn: đây là gate UX, backend Casbin là gate
+  // thật, nhưng nới nhánh hết-hạn không được phép làm hỏng nhánh này.
+  it("officer vào route admin → vẫn bị đẩy khỏi trang admin", () => {
+    const res = proxy(requestWith(accessToken(600, "officer"), "/admin/users"));
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location") ?? "").not.toContain("/admin/users");
+  });
+});
