@@ -19,10 +19,14 @@ from app.services import lead_service
 
 pytestmark = pytest.mark.unit
 
+# Dòng 2 để trống email, education_level VÀ location — ba trường từng bị ép kiểu
+# thành chuỗi "nan". Hai trường sau KHÔNG qua validator nào nên trước đây chúng
+# lặng lẽ ghi rác vào cơ sở dữ liệu; phải CÓ MẶT trong CSV thì test mới chạm tới
+# (thiếu cột thì `lead.get("location")` trả None và assert đúng một cách vô nghĩa).
 CSV = (
-    "full_name,email,phone,source,unit_id\n"
-    "Có Email,co@example.com,0900000001,website,14\n"
-    "Không Email,,0900000002,website,14\n"
+    "full_name,email,phone,source,education_level,location,unit_id\n"
+    "Có Email,co@example.com,0900000001,website,THPT,Đắk Lắk,14\n"
+    "Không Email,,0900000002,website,,,14\n"
 )
 
 
@@ -136,7 +140,15 @@ async def test_khong_dong_nao_mang_chuoi_nan(repo_gia, db_gia):
     ), patch.object(
         lead_service, "calculate_lead_score", AsyncMock(return_value=20)
     ):
-        await _chay(db_gia)
+        res = await _chay(db_gia)
+
+    # Đọc KẾT QUẢ SERVICE TRẢ VỀ, không chỉ danh sách của repo giả: `da_chen`
+    # được append ngay trong `bulk_insert_leads`, tức TRƯỚC mọi thứ có thể hỏng
+    # sau đó, nên một mình nó không chứng minh service báo cáo đúng.
+    kq = res[0] if isinstance(res, tuple) else res
+    assert kq.successful_imports == 2, f"service báo {kq.successful_imports}: {kq.errors}"
+    assert kq.failed_imports == 0
+    assert len(kq.created_lead_ids) == 2
 
     da_chen = repo_gia["repo"].da_chen
     assert len(da_chen) == 2, (
@@ -202,3 +214,38 @@ async def test_o_bat_buoc_trong_thi_bao_loi_chu_khong_tao_lead_ten_nan(repo_gia,
         for truong in ("full_name", "source"):
             gt = lead.get(truong) if isinstance(lead, dict) else getattr(lead, truong, None)
             assert gt != "nan", f"{truong} = 'nan' — rác lọt vào cơ sở dữ liệu"
+
+
+CSV_KHONG_CO_COT_EMAIL = (
+    "full_name,phone,source,unit_id\n"
+    "Không Cột Email,0900000001,website,14\n"
+    "Cũng Không,0900000002,website,14\n"
+)
+
+
+async def test_file_khong_co_cot_email_van_nhap_duoc(repo_gia, db_gia):
+    """File THIẾU HẲN cột email vẫn phải nhập được.
+
+    Ô email trống đã xử lý ở các ca trên; đây là ca khác: cột không tồn tại. Bắt
+    buộc phải có cột `email` nghĩa là chính nhóm đông nhất — 2425/2535 lead trên
+    production không có email — lại là nhóm không lập nổi file import.
+    """
+    with patch.object(
+        lead_service.StatusHelper, "get_initial_status",
+        AsyncMock(return_value=SimpleNamespace(
+            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+        )),
+    ), patch.object(
+        lead_service, "calculate_lead_score", AsyncMock(return_value=20)
+    ):
+        res = await lead_service.import_leads_from_file_content(
+            file_content=CSV_KHONG_CO_COT_EMAIL.encode("utf-8"),
+            filename="khong_cot_email.csv", db=db_gia,
+            default_unit_id=14, auto_assign_officer_id=None,
+        )
+
+    kq = res[0] if isinstance(res, tuple) else res
+    assert kq.successful_imports == 2, f"bị từ chối vì thiếu cột email: {kq.errors}"
+    for lead in repo_gia["repo"].da_chen:
+        gt = lead.get("email") if isinstance(lead, dict) else getattr(lead, "email", None)
+        assert gt is None

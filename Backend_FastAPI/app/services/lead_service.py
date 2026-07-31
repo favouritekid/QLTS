@@ -4333,7 +4333,12 @@ async def import_leads_from_file_content(
     # trong CSV bị ignore. Docstring router nói "auto-set từ officer"
     # → contract đúng. Trước fix, officer CSV thiếu unit_id column →
     # 400 "Missing required columns: unit_id" → user khó khăn tạo CSV.
-    base_required = {"full_name", "email", "phone", "source"}
+    # `email` KHÔNG nằm trong nhóm bắt buộc: cột có thể vắng mặt hoàn toàn.
+    # `Lead.email` nullable, `LeadCreate.email` Optional, và 2425/2535 lead trên
+    # production không có email — bắt buộc phải CÓ CỘT email thì chính nhóm đông
+    # nhất lại là nhóm không lập nổi file. Dòng nào có email vẫn được validate
+    # bình thường; vắng cột thì mọi dòng hiểu là không có email.
+    base_required = {"full_name", "phone", "source"}
     if default_unit_id is None:
         required_columns = base_required | {"unit_id"}
     else:
