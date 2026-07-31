@@ -19,12 +19,54 @@
  * Cũng reject các public auth path (/login, /register, ...) làm return-url —
  * tránh vòng lặp redirect về chính trang đăng nhập.
  */
-const AUTH_PATHS = ["/login", "/register", "/forgot-password", "/reset-password"];
+const AUTH_PATHS = [
+  "/login",
+  "/register",
+  "/forgot-password",
+  "/reset-password",
+  // Trang bootstrap làm mới phiên: nó NHẬN return-url của trang khác, nên bản
+  // thân nó không được làm return-url (`?redirect=/session-refresh` = vòng lặp).
+  "/session-refresh",
+];
+
+/** Ranh giới dải điều khiển ASCII: C0 là 0x00–0x1F, DEL là 0x7F. */
+const C0_MAX = 0x1f;
+const DEL = 0x7f;
+
+/**
+ * Chuỗi có chứa ký tự điều khiển ASCII (C0 hoặc DEL) không.
+ *
+ * URL parser của WHATWG XOÁ mọi TAB/CR/LF (0x09, 0x0A, 0x0D) TRƯỚC khi phân
+ * giải, nên chuỗi ta nhìn thấy khác chuỗi trình duyệt thật sự dùng:
+ * `"/<TAB>//evil.com"` lọt qua cả `startsWith("//")` lẫn mọi kiểm tra
+ * path-part bên dưới, rồi `new URL(...)` cho ra `https://evil.com/`. Đường tới
+ * đây là `?redirect=%2F%09%2F%2Fevil.com` — `URLSearchParams` tự giải mã nên
+ * hàm này nhận TAB THẬT, không phải chuỗi `"%09"` (một test viết literal
+ * `"%09"` sẽ xanh mà không hề chạm tới lỗ hổng).
+ *
+ * Quét TOÀN chuỗi (không riêng path-part) vì ranh giới `?`/`#` mà ta tự cắt
+ * cũng hết đáng tin một khi trong chuỗi có ký tự sẽ bốc hơi lúc parse. Một
+ * return-url hợp lệ không bao giờ chứa ký tự điều khiển THÔ — chúng phải được
+ * percent-encode.
+ *
+ * Duyệt bằng `charCodeAt` thay vì regex literal: viết dải điều khiển vào một
+ * regex đòi hoặc ký tự thô trong tệp nguồn (dễ mất khi sao chép, làm tệp thành
+ * binary với `grep`), hoặc escape kèm `eslint-disable no-control-regex`. Vòng
+ * lặp này không cần cả hai.
+ */
+function hasControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code <= C0_MAX || code === DEL) return true;
+  }
+  return false;
+}
 
 export function isValidRedirect(
   url: string | null | undefined,
 ): url is string {
   if (!url) return false;
+  if (hasControlChar(url)) return false;
   if (!url.startsWith("/")) return false;
   if (url.startsWith("//")) return false;
   // Chỉ xét path-part (đoạn trước query/hash).
