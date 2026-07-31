@@ -10,6 +10,9 @@ conftest truncate toàn bộ bảng giữa các test nên mỗi test tự dựng
 """
 
 from decimal import Decimal
+from typing import Optional
+
+from sqlalchemy.exc import IntegrityError
 
 import pytest
 import pytest_asyncio
@@ -145,12 +148,36 @@ async def _add_tuition_fee(
             return fee.id
 
 
-async def _make_major(unit_id: int, name: str = "Cao đẳng Điều dưỡng") -> int:
+async def _make_degree_level(name: str) -> int:
+    """Một bậc trong ``config_degree_level`` — nguồn CANONICAL của trình độ."""
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            level = models.ConfigDegreeLevel(
+                code=f"DL{next(_CCCD_SEQ)}",
+                name=name,
+                display_order=1,
+                is_active=True,
+            )
+            session.add(level)
+            await session.flush()
+            return level.id
+
+
+async def _make_major(
+    unit_id: int,
+    name: str = "Cao đẳng Điều dưỡng",
+    degree_level_id: Optional[int] = None,
+    degree_level_text: str = "Cao đẳng",
+) -> int:
     async with AsyncSessionLocal() as session:
         async with session.begin():
             major = models.MajorProgram(
                 name=name,
-                degree_level="Cao đẳng",
+                # Cột TEXT legacy. Cố ý để mặc định có giá trị và tách rời khỏi
+                # ``degree_level_id``: đó là thứ làm phép kiểm "đọc đúng nguồn"
+                # bên dưới quan sát được.
+                degree_level=degree_level_text,
+                degree_level_id=degree_level_id,
                 code=f"MJ{next(_CCCD_SEQ)}",
                 is_active=True,
                 is_heavy=False,
@@ -432,6 +459,161 @@ async def test_resolved_major_name_is_returned():
 
     rows = await _cohort_rows(2026)
     assert rows[0].program_name == "Cao đẳng Dược"
+
+
+# ---------------------------------------------------------------------------
+# Trình độ của ngành trúng tuyển
+# ---------------------------------------------------------------------------
+
+
+async def test_degree_level_is_returned():
+    unit_id = await _make_unit()
+    cao_dang = await _make_degree_level("Cao đẳng")
+    major_id = await _make_major(unit_id, name="Dược", degree_level_id=cao_dang)
+    lead_id = await _make_lead(unit_id)
+    profile_id = await _make_profile(lead_id, academic_year=2026)
+    await _add_tuition_fee(profile_id, paid="3000000", resolved_major_id=major_id)
+
+    rows = await _cohort_rows(2026)
+    assert rows[0].degree_level == "Cao đẳng"
+
+
+async def test_same_program_name_at_two_levels_stays_separated():
+    """🔴 Lý do TỒN TẠI của cột này.
+
+    Trên dữ liệu thật, "Công nghệ ô tô", "Chăn nuôi - Thú y" và "Kế toán" mỗi
+    cái có cả bản Trung cấp lẫn Cao đẳng — phủ 257/457 hồ sơ khối KTX. Nếu
+    trình độ bị lấy nhầm từ ngành CÙNG TÊN nhưng khác bậc, thống kê vẫn ra một
+    bảng trông hoàn toàn bình thường và không có gì báo.
+
+    Hai hồ sơ, cùng tên ngành, hai bậc — mỗi hồ sơ phải giữ đúng bậc của mình.
+    """
+    unit_id = await _make_unit()
+    trung_cap = await _make_degree_level("Trung cấp")
+    cao_dang = await _make_degree_level("Cao đẳng")
+
+    major_tc = await _make_major(
+        unit_id, name="Công nghệ ô tô", degree_level_id=trung_cap
+    )
+    major_cd = await _make_major(
+        unit_id, name="Công nghệ ô tô", degree_level_id=cao_dang
+    )
+
+    lead_tc = await _make_lead(unit_id)
+    ho_so_tc = await _make_profile(lead_tc, academic_year=2026)
+    await _add_tuition_fee(ho_so_tc, paid="3000000", resolved_major_id=major_tc)
+
+    lead_cd = await _make_lead(unit_id)
+    ho_so_cd = await _make_profile(lead_cd, academic_year=2026)
+    await _add_tuition_fee(ho_so_cd, paid="3000000", resolved_major_id=major_cd)
+
+    theo_ho_so = {r.qlts_profile_id: r for r in await _cohort_rows(2026)}
+
+    assert theo_ho_so[ho_so_tc].program_name == "Công nghệ ô tô"
+    assert theo_ho_so[ho_so_tc].degree_level == "Trung cấp"
+    assert theo_ho_so[ho_so_cd].program_name == "Công nghệ ô tô"
+    assert theo_ho_so[ho_so_cd].degree_level == "Cao đẳng"
+
+
+async def test_degree_level_reads_the_canonical_source_not_the_legacy_text():
+    """Trình độ đến từ ``degree_level_id`` → ``config_degree_level``.
+
+    Ngành dưới đây có cột TEXT legacy ghi "Cao đẳng" nhưng KHÔNG có FK. Kỳ vọng
+    là ``NULL``: đọc được "Cao đẳng" nghĩa là ai đó đã đổi sang cột legacy.
+
+    Không phải chuyện thẩm mỹ. Chính model khai cột text là LEGACY, và hôm nay
+    hai nguồn khớp nhau tuyệt đối trên prod — nên nếu đổi nguồn, KHÔNG có phép
+    kiểm nào khác đỏ. Test này là thứ duy nhất quan sát được lựa chọn đó.
+    """
+    unit_id = await _make_unit()
+    major_id = await _make_major(
+        unit_id,
+        name="Ngành thiếu FK trình độ",
+        degree_level_id=None,
+        degree_level_text="Cao đẳng",
+    )
+    lead_id = await _make_lead(unit_id)
+    profile_id = await _make_profile(lead_id, academic_year=2026)
+    await _add_tuition_fee(profile_id, paid="3000000", resolved_major_id=major_id)
+
+    rows = await _cohort_rows(2026)
+    # Vẫn TRONG cohort — thiếu trình độ không được làm mất người.
+    assert [r.qlts_profile_id for r in rows] == [profile_id]
+    assert rows[0].program_name == "Ngành thiếu FK trình độ"
+    assert rows[0].degree_level is None
+
+
+async def test_at_most_one_paid_hk1_fee_row_can_exist():
+    """🔴 Điều THẬT SỰ giữ cho tên ngành và trình độ cùng một dòng phí.
+
+    Hai truy vấn con chạy ĐỘC LẬP; dùng chung khuôn ``_resolved_major_scalar``
+    chỉ bảo đảm cùng HÌNH DẠNG, không bảo đảm cùng HÀNG. Thứ bảo đảm cùng hàng
+    là ràng buộc ``uq_fee_profile_type_semester_tuition``: unique từng phần
+    trên ``(admission_profile_id, fee_type, semester_no)`` với điều kiện
+    ``fee_type = 'tuition' and status <> 'cancelled'`` — nên vị từ cohort chỉ
+    còn tối đa MỘT dòng để chọn.
+
+    Ca này đo chính ràng buộc đó. Nếu nó bị nới, hai truy vấn con có thể chọn
+    hai dòng khác nhau và cho ra một hồ sơ mang nhãn ghép từ hai chương trình
+    ("Công nghệ ô tô — Cao đẳng" trên hồ sơ học Trung cấp), không có gì báo.
+
+    ``order_by(Fee.id)`` và ``outerjoin`` trong helper là lưới THỨ HAI cho đúng
+    ngày đó, không phải lưới thứ nhất.
+    """
+    unit_id = await _make_unit()
+    major_id = await _make_major(unit_id)
+    lead_id = await _make_lead(unit_id)
+    profile_id = await _make_profile(lead_id, academic_year=2026)
+    await _add_tuition_fee(profile_id, paid="3000000", resolved_major_id=major_id)
+
+    with pytest.raises(IntegrityError) as loi:
+        await _add_tuition_fee(profile_id, paid="3000000", resolved_major_id=major_id)
+
+    assert "uq_fee_profile_type_semester_tuition" in str(loi.value)
+
+
+async def test_cancelled_fee_row_does_not_confuse_the_two_subqueries():
+    """Dòng phí ĐÃ HUỶ mang ngành khác không được lọt vào nhãn.
+
+    Đây là cách hợp lệ duy nhất để một hồ sơ có hai dòng phí HK1 mang hai ngành
+    khác nhau (đổi ngành: huỷ dòng cũ, tạo dòng mới). Cả hai truy vấn con phải
+    cùng bỏ qua dòng đã huỷ — nếu một trong hai quên vế ``status``, nhãn sẽ ghép
+    ngành cũ với bậc mới.
+    """
+    unit_id = await _make_unit()
+    trung_cap = await _make_degree_level("Trung cấp")
+    cao_dang = await _make_degree_level("Cao đẳng")
+
+    nganh_cu = await _make_major(unit_id, name="Ngành CŨ", degree_level_id=trung_cap)
+    nganh_moi = await _make_major(unit_id, name="Ngành MỚI", degree_level_id=cao_dang)
+
+    lead_id = await _make_lead(unit_id)
+    profile_id = await _make_profile(lead_id, academic_year=2026)
+    await _add_tuition_fee(
+        profile_id,
+        paid="3000000",
+        resolved_major_id=nganh_cu,
+        status=FeeStatusEnum.cancelled.value,
+    )
+    await _add_tuition_fee(profile_id, paid="3000000", resolved_major_id=nganh_moi)
+
+    rows = await _cohort_rows(2026)
+    assert [r.qlts_profile_id for r in rows] == [profile_id]
+    assert rows[0].program_name == "Ngành MỚI"
+    assert rows[0].degree_level == "Cao đẳng"
+
+
+async def test_profile_without_resolved_major_has_null_degree_level():
+    """Chưa chốt ngành thì cả hai cột đều trống, và hồ sơ vẫn ở lại."""
+    unit_id = await _make_unit()
+    lead_id = await _make_lead(unit_id)
+    profile_id = await _make_profile(lead_id, academic_year=2026)
+    await _add_tuition_fee(profile_id, paid="3000000", resolved_major_id=None)
+
+    rows = await _cohort_rows(2026)
+    assert [r.qlts_profile_id for r in rows] == [profile_id]
+    assert rows[0].program_name is None
+    assert rows[0].degree_level is None
 
 
 async def test_officer_and_unit_come_from_lead():

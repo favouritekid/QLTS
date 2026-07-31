@@ -81,25 +81,93 @@ def paid_hk1_exists_clause() -> Any:
     )
 
 
-def _resolved_major_name_subquery() -> Any:
-    """Tên ngành TRÚNG TUYỂN, lấy từ ``fee.resolved_major_id``.
+def _resolved_major_scalar(column: Any, *extra_joins: Any) -> Any:
+    """Một giá trị lấy từ ngành TRÚNG TUYỂN (``fee.resolved_major_id``).
 
     Trả ``NULL`` khi hồ sơ chưa chốt ngành — KHÔNG loại hồ sơ đó khỏi cohort.
     ``limit(1)`` phòng ca dữ liệu có nhiều dòng phí HK1 (ví dụ một dòng đã huỷ
     và một dòng mới): vị từ đã loại ``cancelled`` nên còn lại tối đa một dòng,
     ``limit`` chỉ là chốt an toàn để subquery không bao giờ trả nhiều hàng.
+
+    🔴 Thứ THẬT SỰ giữ cho mọi cột đến từ CÙNG MỘT dòng phí là ràng buộc
+    ``uq_fee_profile_type_semester_tuition`` — unique từng phần trên
+    ``(admission_profile_id, fee_type, semester_no)`` với điều kiện
+    ``fee_type = 'tuition' and status <> 'cancelled'`` — nên vị từ cohort chỉ
+    còn tối đa MỘT dòng để chọn. Dùng chung khuôn này KHÔNG bảo đảm điều đó:
+    khuôn chung chỉ cho cùng HÌNH DẠNG, không cho cùng HÀNG.
+
+    Hai điều dưới đây là lưới THỨ HAI, cho ngày ràng buộc kia bị nới:
+
+      * ``order_by(Fee.id)`` — ``limit(1)`` không kèm ``order by`` cho phép
+        PostgreSQL trả hàng nào tuỳ kế hoạch thực thi. Với hai truy vấn con
+        chạy độc lập, hai lần chọn có thể ra hai dòng phí khác nhau.
+      * ``outerjoin`` cho các bảng tra — ``join`` trong sẽ LOẠI dòng phí có
+        khoá ngoại rỗng, làm truy vấn con này chọn dòng khác hẳn truy vấn kia.
+        Ví dụ thật: hồ sơ có hai dòng phí HK1 chưa huỷ (đổi ngành xong tính
+        lại), ngành của dòng A không có ``degree_level_id`` còn dòng B có.
+        Truy vấn tên trả tên của A, truy vấn trình độ buộc phải trả bậc của B.
+
+    Kết quả của việc thiếu chúng, NẾU ràng buộc kia mất, là "Công nghệ ô tô —
+    Cao đẳng" trên một hồ sơ thực ra học Trung cấp, mà không có gì báo. Ràng
+    buộc được đo trực tiếp ở
+    ``test_at_most_one_paid_hk1_fee_row_can_exist``.
+
+    Args:
+        column: cột cần lấy.
+        extra_joins: các cặp ``(target, onclause)`` nối thêm sau
+            ``major_program``. Luôn nối NGOÀI, xem trên.
     """
-    return (
-        select(models.MajorProgram.name)
+    query = (
+        select(column)
         .select_from(models.Fee)
         .join(
             models.MajorProgram,
             models.MajorProgram.id == models.Fee.resolved_major_id,
         )
-        .where(*confirmed_paid_hk1_conditions(models.AdmissionProfile.id))
+    )
+    for target, onclause in extra_joins:
+        query = query.outerjoin(target, onclause)
+
+    return (
+        query.where(*confirmed_paid_hk1_conditions(models.AdmissionProfile.id))
         .correlate(models.AdmissionProfile)
+        .order_by(models.Fee.id)
         .limit(1)
         .scalar_subquery()
+    )
+
+
+def _resolved_major_name_subquery() -> Any:
+    """Tên ngành TRÚNG TUYỂN."""
+    return _resolved_major_scalar(models.MajorProgram.name)
+
+
+def _resolved_degree_level_subquery() -> Any:
+    """Trình độ của ngành TRÚNG TUYỂN — "Trung cấp", "Cao đẳng"…
+
+    🔴 Vì sao KTX cần cột này thay vì tự suy từ tên ngành: CÙNG MỘT TÊN tồn tại
+    ở HAI trình độ. Trên dữ liệu thật, "Công nghệ ô tô", "Chăn nuôi - Thú y" và
+    "Kế toán" mỗi cái có cả bản Trung cấp lẫn Cao đẳng, phủ 257/457 hồ sơ của
+    khối KTX. Gộp theo tên là gộp hai chương trình khác nhau vào một dòng.
+
+    ⚠️ Đọc qua ``degree_level_id`` → ``config_degree_level``, KHÔNG dùng cột
+    ``major_program.degree_level``: chính model khai cột text đó là LEGACY.
+    Hôm nay hai nguồn khớp nhau tuyệt đối trên prod (0 hàng lệch), nhưng chọn
+    nguồn phụ thuộc vào việc chúng còn khớp là một quả bom hẹn giờ.
+
+    Nối NGOÀI: ngành thiếu FK trình độ vẫn giữ dòng phí lại và cho ``NULL``.
+    Nối trong sẽ LOẠI dòng đó, khiến truy vấn con này chọn một dòng phí khác
+    với truy vấn tên ngành — xem ``_resolved_major_scalar``. ``NULL`` ở đây
+    nghĩa là "không tra được", giống hệt nghĩa của ``NULL`` khi hồ sơ chưa chốt
+    ngành; KTX phải hiển thị được cả hai ca đó chứ không lặng lẽ đếm chúng vào
+    một trình độ nào.
+    """
+    return _resolved_major_scalar(
+        models.ConfigDegreeLevel.name,
+        (
+            models.ConfigDegreeLevel,
+            models.ConfigDegreeLevel.id == models.MajorProgram.degree_level_id,
+        ),
     )
 
 
@@ -171,6 +239,7 @@ def select_paid_hk1_cohort(academic_year: int) -> Select:
             models.Lead.assigned_officer_id.label("officer_qlts_id"),
             models.Lead.unit_id.label("unit_id"),
             _resolved_major_name_subquery().label("program_name"),
+            _resolved_degree_level_subquery().label("degree_level"),
             _contact_phone_expr().label("contact_phone"),
             _contact_phone2_expr().label("contact_phone2"),
         )

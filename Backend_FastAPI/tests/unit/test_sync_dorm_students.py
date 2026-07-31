@@ -14,6 +14,7 @@ import pytest
 from app.scripts import sync_dorm_students as sync_module
 from app.scripts.sync_dorm_students import (
     DormApi,
+    assert_payload_contract,
     assert_source_database_matches,
     assert_transport_is_encrypted,
     build_student_payload,
@@ -32,6 +33,7 @@ def _row(**overrides):
         full_name="Nguyễn Văn An",
         source_gender_raw="Nam",
         program_name="Cao đẳng Điều dưỡng",
+        degree_level="Cao đẳng",
         academic_year=2026,
         officer_qlts_id=101,
         unit_id=14,
@@ -146,6 +148,96 @@ def test_payload_keeps_null_program_name():
 
     assert "program_name" in payload
     assert payload["program_name"] is None
+
+
+def test_payload_carries_degree_level():
+    """Trình độ đi CÙNG tên ngành, không tách.
+
+    Cùng một tên ngành tồn tại ở hai bậc, nên thiếu cột này thì phía KTX gộp
+    hai chương trình khác nhau thành một dòng thống kê — và dòng đó trông hoàn
+    toàn bình thường.
+    """
+    payload = build_student_payload(
+        _row(program_name="Công nghệ ô tô", degree_level="Trung cấp"), sync_run_id=1
+    )
+
+    assert payload["program_name"] == "Công nghệ ô tô"
+    assert payload["degree_level"] == "Trung cấp"
+
+
+def test_payload_keeps_null_degree_level():
+    """Ngành thiếu trình độ vẫn đi qua, ô để trống chứ không đoán."""
+    payload = build_student_payload(_row(degree_level=None), sync_run_id=1)
+
+    assert "degree_level" in payload
+    assert payload["degree_level"] is None
+
+
+def test_contract_gate_rejects_a_row_missing_degree_level():
+    """🔴 Hàng nguồn THIẾU HẲN thuộc tính phải DỪNG lượt, không suy ra NULL.
+
+    Bản trước dùng ``getattr(row, "degree_level", None)`` và gọi đó là
+    fail-soft. Nó không phải. Thiếu thuộc tính nghĩa là script và repository
+    lệch phiên bản, còn ``None`` gửi đi sẽ đi thẳng vào nhánh ``do update`` phía
+    KTX và XOÁ trình độ của cả lô: hàng đang mang "Trung cấp" trở thành NULL,
+    RPC trả về thành công, lượt đồng bộ báo hoàn tất.
+
+    Cổng này chạy TRƯỚC khi mở lượt nên hoặc chạy trọn, hoặc chưa ghi gì.
+    """
+    row = _row()
+    del row.degree_level
+
+    with pytest.raises(RuntimeError) as loi:
+        assert_payload_contract([_row(), row])
+
+    assert "degree_level" in str(loi.value)
+    # Nêu SỐ hàng để người vận hành biết quy mô, KHÔNG nêu danh tính người học.
+    assert "1 hàng" in str(loi.value)
+
+
+def test_contract_gate_accepts_degree_level_none():
+    """Giá trị ``None`` là hợp lệ — chỉ SỰ VẮNG MẶT của trường mới là lỗi.
+
+    Ngành chưa chốt, hoặc ngành thiếu FK trình độ bên QLTS, đều cho ``None`` một
+    cách hoàn toàn bình thường. Lẫn hai thứ này sẽ chặn đúng những lượt hợp lệ.
+    """
+    assert_payload_contract([_row(degree_level=None)]) is None
+
+
+def test_contract_gate_names_every_missing_field():
+    """Báo ĐỦ các trường thiếu trong một lần, không bắt sửa từng cái một."""
+    row = _row()
+    del row.degree_level
+    del row.program_name
+
+    with pytest.raises(RuntimeError) as loi:
+        assert_payload_contract([row])
+
+    assert "degree_level" in str(loi.value)
+    assert "program_name" in str(loi.value)
+
+
+def test_contract_gate_passes_a_healthy_cohort():
+
+    assert assert_payload_contract([_row(), _row(qlts_profile_id=9002)]) is None
+
+
+def test_payload_refuses_a_row_without_degree_level():
+    """Lớp THỨ HAI: `build_student_payload` cũng phải nổ, không suy ra None.
+
+    `assert_payload_contract` chạy trước và bắt được ca này, nên hàm dưới đây
+    lẽ ra không bao giờ nhận hàng thiếu trường. Test này canh điều xảy ra khi
+    lớp đầu bị gỡ hoặc bị quên gọi ở một call site mới.
+
+    ⚠️ Đo được: trả lại `getattr(row, "degree_level", None)` thì toàn bộ test
+    của cổng hợp đồng VẪN XANH — chúng gọi thẳng cổng, không đi qua hàm này.
+    Không có ca này thì lớp thứ hai chỉ là một lời khẳng định.
+    """
+    row = _row()
+    del row.degree_level
+
+    with pytest.raises(AttributeError):
+        build_student_payload(row, sync_run_id=1)
 
 
 def test_payload_carries_synced_at():
@@ -1997,3 +2089,115 @@ async def test_finalize_reconciles_a_gateway_5xx_instead_of_declaring_failure():
 
     # Đã hỏi lại thay vì ném thẳng.
     assert any(c["method"] == "GET" for c in client.calls)
+
+
+# ---------------------------------------------------------------------------
+# Cổng hợp đồng phải được NỐI vào main(), đúng thứ tự
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_main_stops_before_touching_the_dorm_api_when_a_row_is_incomplete(
+    monkeypatch,
+):
+    """🔴 Không chỉ kiểm hàm — kiểm CHỖ NỐI, và kiểm THỨ TỰ.
+
+    ``assert_payload_contract`` có test riêng, nhưng chúng gọi thẳng vào hàm.
+    Xoá lời gọi ở ``main``, hoặc dời nó xuống SAU ``open_sync_run``, thì mọi
+    test đó vẫn xanh — và cái giá của việc dời là một lượt ``running`` bỏ dở
+    giữa chừng, đúng trạng thái mà cổng này sinh ra để tránh.
+
+    Nên phép kiểm ở đây không phải "có ném lỗi không" mà là "đã chạm tới hệ KTX
+    chưa": ``DormApi`` phải CHƯA TỪNG được dựng.
+    """
+    thieu = _row()
+    del thieu.degree_level
+
+    async def fake_fetch(academic_year, *, verify_source=False):
+        return [_row(), thieu]
+
+    da_dung_api = []
+
+    class ApiKhongDuocDung:
+        def __init__(self, *a, **kw):
+            da_dung_api.append(True)
+            raise AssertionError(
+                "main() đã dựng DormApi TRƯỚC khi kiểm hợp đồng — "
+                "một lượt đồng bộ có thể đã được mở."
+            )
+
+    monkeypatch.setenv("DORM_SUPABASE_URL", "https://abc.supabase.co")
+    monkeypatch.setenv("DORM_SUPABASE_SECRET_KEY", "sb_secret_x")
+    monkeypatch.setattr(sync_module, "fetch_cohort", fake_fetch)
+    monkeypatch.setattr(sync_module, "DormApi", ApiKhongDuocDung)
+    # Hai hàng rào nguồn không thuộc phạm vi ca này; để nguyên sẽ đỏ vì thiếu
+    # cấu hình chứ không vì thứ đang được kiểm.
+    monkeypatch.setattr(sync_module, "assert_source_database_matches", lambda: None)
+    monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
+
+    ma = await main(["--academic-year", "2026", "--apply"])
+
+    assert ma == 2
+    assert da_dung_api == [], "DormApi KHÔNG được dựng khi hợp đồng payload sai"
+
+
+@pytest.mark.asyncio
+async def test_main_also_stops_in_preview_mode(monkeypatch):
+    """Xem trước cũng phải đỏ.
+
+    Nếu script và repository lệch phiên bản, bản xem trước in ra những con số
+    KHÔNG phải thứ ``--apply`` sẽ ghi. Người vận hành duyệt một thứ rồi chạy
+    một thứ khác — và bước xem trước, vốn là hàng rào cuối trước khi ghi, trở
+    thành thứ tạo ra sự yên tâm sai.
+    """
+    thieu = _row()
+    del thieu.degree_level
+
+    async def fake_fetch(academic_year, *, verify_source=False):
+        return [thieu]
+
+    class ApiKhongDuocDung:
+        def __init__(self, *a, **kw):
+            raise AssertionError("main() đã dựng DormApi ở chế độ xem trước")
+
+    monkeypatch.setenv("DORM_SUPABASE_URL", "https://abc.supabase.co")
+    monkeypatch.setenv("DORM_SUPABASE_SECRET_KEY", "sb_secret_x")
+    monkeypatch.setattr(sync_module, "fetch_cohort", fake_fetch)
+    monkeypatch.setattr(sync_module, "DormApi", ApiKhongDuocDung)
+
+    assert await main(["--academic-year", "2026"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_main_goes_on_when_the_cohort_is_complete(monkeypatch):
+    """Chốt chặn ĐẢO: cohort đủ trường thì cổng KHÔNG chặn.
+
+    Không có ca này thì một cổng viết quá tay — chặn mọi lượt — vẫn xanh, và ta
+    chỉ phát hiện lúc chạy thật.
+    """
+
+    async def fake_fetch(academic_year, *, verify_source=False):
+        return [_row(), _row(qlts_profile_id=9002, degree_level=None)]
+
+    da_dung_api = []
+
+    class ApiGia:
+        def __init__(self, *a, **kw):
+            da_dung_api.append(True)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def count_students(self, nam):
+            return 0
+
+    monkeypatch.setenv("DORM_SUPABASE_URL", "https://abc.supabase.co")
+    monkeypatch.setenv("DORM_SUPABASE_SECRET_KEY", "sb_secret_x")
+    monkeypatch.setattr(sync_module, "fetch_cohort", fake_fetch)
+    monkeypatch.setattr(sync_module, "DormApi", ApiGia)
+
+    assert await main(["--academic-year", "2026"]) == 0
+    assert da_dung_api == [True], "cohort hợp lệ phải đi tiếp tới bước xem trước"
