@@ -4343,8 +4343,17 @@ async def import_leads_from_file_content(
     else:
         required_columns = base_required
 
-    # Normalize column names (lowercase, strip, replace spaces)
-    df.columns = df.columns.str.lower().str.strip().str.replace(" ", "_")
+    # Chuẩn hoá tên cột.
+    #
+    # 🔴 Phải ép ``str(c)`` TRƯỚC: ``df.columns.str.*`` chỉ chạy trên tên kiểu
+    # chuỗi, header là ô số hoặc ô ngày thì cho ra ``NaN``. ``dtype=str`` lúc đọc
+    # file áp cho DỮ LIỆU, không áp cho hàng tiêu đề — nên một .xlsx có cột tên
+    # "2026" là đủ. Khi đó khối kiểm cột trùng ngay dưới ném ``TypeError``
+    # (``', '.join({nan})``, hoặc ``sorted`` so sánh float với str) NGOÀI mọi
+    # try/except → HTTP 500 trống trơn, đúng cái mà khối đó sinh ra để chặn.
+    # ``payment_import_service.py`` ép ``str(c)`` trước cùng khối này vì lẽ đó;
+    # bản sao ở đây từng bỏ sót dòng ép kiểu.
+    df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
 
     # Chuẩn hoá có thể làm HAI cột khác nhau thành TRÙNG tên: "Full Name" và
     # "full_name" cùng ra "full_name". Khi đó ``df[cột]`` trả DataFrame chứ không
@@ -4375,7 +4384,35 @@ async def import_leads_from_file_content(
             f"File is missing required columns: {', '.join(missing_cols)}"
         )
 
+    # `email` không còn bắt buộc (xem chú thích ở `base_required`) — nhưng vì thế
+    # một header GÕ SAI cũng không còn bị chặn: "Email Address" chuẩn hoá thành
+    # `email_address`, cột `email` vắng mặt, và CẢ FILE nhập trót lọt với email
+    # NULL — bỏ qua luôn phép kiểm trùng email, `errors` rỗng, giao diện báo xanh
+    # 100%. Trước khi nới điều kiện thì file đó bị 400 và người dùng sửa header
+    # trong 5 giây; mất dữ liệu im lặng của 211 dòng thì không ai phát hiện ra.
+    #
+    # Chỉ chặn khi CHẮC CHẮN, để không cản file có cột kiểu `mail_sent_at`: tên
+    # cột phải chứa "mail" VÀ dữ liệu trong cột phải có ký tự "@".
+    if "email" not in df.columns:
+        for _cot in df.columns:
+            if "mail" not in _cot:
+                continue
+            _mau = df[_cot].dropna().astype(str)
+            if not any("@" in v for v in _mau):
+                continue
+            log.warning("Import failed: email-like column not named 'email'", column=_cot)
+            raise ValueError(
+                f"Cột '{_cot}' chứa địa chỉ email nhưng không mang tên 'email', "
+                "nên toàn bộ dòng sẽ được nhập THIẾU email và phép kiểm trùng email "
+                f"bị bỏ qua. Hãy đổi tên cột '{_cot}' thành 'email' rồi tải lại. "
+                "(Nếu file thật sự không có email thì bỏ hẳn cột này đi.)"
+            )
+
     leads_to_insert = []
+    # Số dòng trong file của từng phần tử ``leads_to_insert``, song song 1-1.
+    # Cần cho lúc một LÔ bị lùi: nếu không có nó thì 100 dòng mất trắng chỉ được
+    # báo bằng một dòng "Lô 2 lỗi", người nhập không biết phải xem lại dòng nào.
+    row_numbers_to_insert: List[int] = []
     errors: List[schemas.LeadImportError] = []
     processed_row_count = 0
 
@@ -4606,6 +4643,7 @@ async def import_leads_from_file_content(
 
             lead_dict["created_via"] = "import"
             leads_to_insert.append(lead_dict)
+            row_numbers_to_insert.append(row_number)  # giữ song song 1-1
 
         except (ValueError, TypeError) as e:
             errors.append(
@@ -4632,20 +4670,15 @@ async def import_leads_from_file_content(
         try:
             for i in range(0, len(leads_to_insert), batch_size):
                 batch = leads_to_insert[i : i + batch_size]
-                
+                so_dong_cua_lo = row_numbers_to_insert[i : i + batch_size]
+
                 if not batch:
                     continue
 
-                # Mốc để cắt lại nếu savepoint bị rollback: ``extend`` nằm TRONG
-                # savepoint nên khi ``IntegrityError`` nổ, cơ sở dữ liệu đã lùi
-                # còn danh sách Python thì không — báo cáo sẽ đếm cả lô đã mất và
-                # trả về id không tồn tại (router còn phát LEAD_IMPORTED theo đó).
-                moc_truoc_lo = len(created_lead_ids)
                 try:
                     async with db.begin_nested():  # Start nested transaction
                         # Insert batch and get IDs
                         batch_ids = await repo.bulk_insert_leads(batch)
-                        created_lead_ids.extend(batch_ids)
 
                         # ✅ PR3: Register phone identities for each lead in batch
                         for lead_dict, lead_id in zip(batch, batch_ids):
@@ -4655,18 +4688,36 @@ async def import_leads_from_file_content(
                                 phone2=lead_dict.get("phone2"),
                             )
                 except IntegrityError as exc:
-                    # Savepoint đã lùi → cắt lại đúng phần vừa thêm.
-                    del created_lead_ids[moc_truoc_lo:]
                     detail = str(exc.orig) if exc.orig else str(exc)
                     log.warning("Batch insert IntegrityError", batch_offset=i, detail=detail)
-                    errors.append(
+                    # Một dòng lỗi CHO MỖI DÒNG bị mất, không phải một dòng cho cả
+                    # lô: ``failed_imports`` và giao diện đều đọc theo dòng, nên gộp
+                    # 100 dòng thành 1 thông báo là nói với người nhập rằng chỉ có
+                    # 1 dòng hỏng — họ đi tìm 1 dòng trong khi 100 dòng biến mất.
+                    errors.extend(
                         schemas.LeadImportError(
-                            row_number=-1,
-                            error_message=f"Batch {i // batch_size + 1} bị trùng dữ liệu (email/phone): {detail[:200]}",
+                            row_number=so_dong,
+                            error_message=(
+                                "Dòng nằm trong lô bị huỷ do đụng dữ liệu đã có "
+                                "(email hoặc số điện thoại trùng). Kiểm tra lại email/SĐT "
+                                "của các dòng trong lô rồi nhập lại phần này."
+                            ),
                             row_data={},
                         )
+                        for so_dong in so_dong_cua_lo
                     )
                     continue
+
+                # 🔴 ``extend`` phải nằm NGOÀI ``async with``. Trong khối, mọi thứ
+                # đã ghi vẫn có thể bị lùi: ``register_phone_identities`` chỉ
+                # ``db.add(...)`` nên lần ghi thật xảy ra lúc THOÁT savepoint, và
+                # lỗi ở đó (``DataError`` khi một ô dài quá cột, ``OperationalError``
+                # khi deadlock/timeout — đều KHÔNG phải con của ``IntegrityError``)
+                # rơi xuống ``except Exception`` bên dưới. Nếu id đã kịp vào danh
+                # sách thì phản hồi trả về id của những dòng vừa bị rollback, và
+                # router phát ``LEAD_IMPORTED`` kèm đúng những id không tồn tại đó.
+                # Đặt ở đây thì không nhánh lỗi nào phải nhớ dọn dẹp.
+                created_lead_ids.extend(batch_ids)
 
                 log.info(
                     f"Committed batch {i // batch_size + 1}, {len(batch_ids)} leads inserted."
@@ -4695,12 +4746,24 @@ async def import_leads_from_file_content(
             # ``await db.commit()`` VÔ ĐIỀU KIỆN — nên các lô đã flush trước lỗi
             # vẫn vào cơ sở dữ liệu, trong khi phản hồi báo 0 lead được tạo.
             # Giữ nguyên id của những lô THẬT SỰ đã ghi mới là đúng sự thật.
+            #
+            # Ở đây KHÔNG cần cắt bớt gì: ``created_lead_ids`` chỉ nhận id sau khi
+            # savepoint của lô đó release trót lọt, nên lô đang hỏng chưa từng vào
+            # danh sách. Chỗ này từng phải tự dọn, và đó chính là chỗ ``DataError``
+            # lọt qua được vì phần dọn chỉ nằm ở nhánh ``IntegrityError``.
 
     # --- 6. Build result ---
+    # ``failed_imports`` đếm theo DÒNG, suy ra từ hai con số kia chứ không phải
+    # ``len(errors)``. Hai lẽ: (1) ``errors`` có thể mang mục không gắn với dòng
+    # nào (row_number=-1, ví dụ lỗi cả mẻ chèn) → đếm thừa; (2) một sự cố có thể
+    # làm mất nhiều dòng mà chỉ sinh một mục → đếm thiếu. Cả hai đều làm ba con số
+    # trong cùng một phản hồi không cộng khớp, và giao diện nêu thẳng con số này
+    # lên tiêu đề thông báo. Suy ra từ tổng thì bất biến
+    # ``tổng = thành công + thất bại`` luôn đúng, dù nhánh lỗi nào chạy.
     result = schemas.LeadImportResult(
         total_rows_processed=processed_row_count,
         successful_imports=len(created_lead_ids),
-        failed_imports=len(errors),
+        failed_imports=max(0, processed_row_count - len(created_lead_ids)),
         created_lead_ids=created_lead_ids,
         errors=errors,
     )

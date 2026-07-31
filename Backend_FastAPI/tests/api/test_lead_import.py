@@ -333,7 +333,26 @@ async def test_import_with_errors(
             )
         ).scalar_one_or_none()
         assert created_lead is not None
-        assert created_lead.id == import_result["created_lead_ids"][0]
+        # `in` chứ không phải `[0]`: nay có HAI dòng thành công nên thứ tự trong
+        # `created_lead_ids` phụ thuộc thứ tự `RETURNING` của một lệnh chèn nhiều
+        # dòng — không có gì bảo đảm, và đây là một cổng CI bắt buộc.
+        assert created_lead.id in import_result["created_lead_ids"]
+
+        # 🔴 Đây là chỗ DUY NHẤT trong cả bản vá chạm Postgres thật. Mọi chứng cứ
+        # "email trống lưu thành NULL" khác đều đọc dict của một repository giả,
+        # không phải một CỘT. Nếu ô trống lùi về lưu chuỗi rỗng — cột nullable
+        # nhận hết, và ``_cell_or_none(...) or ""`` ngay cạnh đó vốn đã làm vậy
+        # cho full_name/source — thì toàn bộ suite vẫn xanh trong khi hành vi
+        # đứng tên bản vá đã hỏng.
+        lead_thieu_email = (
+            await session.execute(
+                select(models.Lead).where(models.Lead.full_name == "Missing Email")
+            )
+        ).scalar_one_or_none()
+        assert lead_thieu_email is not None, "dòng thiếu email không vào được DB"
+        assert lead_thieu_email.email is None, (
+            f"email trống phải lưu NULL, đang lưu {lead_thieu_email.email!r}"
+        )
 
         total_leads_in_db = (
             await session.execute(select(func.count(models.Lead.id)))
@@ -341,6 +360,91 @@ async def test_import_with_errors(
         assert total_leads_in_db == expected_success
     log.info("DB state verified: Only valid lead was created.")
     log.info("--- Finished: test_import_with_errors ---")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_officer_import_thieu_email_va_dem_dung(
+    client: AsyncClient,
+    officer_token_headers: dict,
+    officer_user_in_db: dict,
+    seed_lead_dependencies: dict,
+    _initial_status_legacy_marker,
+    setup_test_database,
+):
+    """Đường nhập của OFFICER — đường mà giao diện thật sự gọi.
+
+    🔴 Mọi test khác trong tệp này đều bắn vào ``/api/admin/users/leads/import``,
+    còn ``frontend/src/lib/api/leads.ts`` gọi ``/api/leads/import``. Endpoint
+    officer là nhánh DUY NHẤT truyền ``default_unit_id`` (làm ``unit_id`` thôi bắt
+    buộc — đúng nhánh bản vá này chạm), duy nhất truyền ``auto_assign_officer_id``,
+    và duy nhất phát ``LEAD_IMPORTED`` kèm ``created_lead_ids``. Nói cách khác,
+    hậu quả nặng nhất của lỗi id-ma nằm ở nhánh chưa từng có test API nào.
+    """
+    log.info("--- Running: test_officer_import_thieu_email_va_dem_dung ---")
+
+    # KHÔNG có cột unit_id: officer flow tự gán unit của officer. Dòng 2 thiếu email.
+    file_data = [
+        {
+            "full_name": "Officer Import 1",
+            "email": "officer1@example.com",
+            "phone": "+84911200001",
+            "source": "file_import",
+        },
+        {
+            "full_name": "Officer Import Khong Email",
+            "phone": "+84911200002",
+            "source": "file_import",
+        },
+    ]
+    mock_file_tuple = create_mock_lead_file(file_data, file_format="csv")
+
+    response = await client.post(
+        f"{LeadsURLs.LEADS}/import",
+        files={"file": mock_file_tuple},
+        headers=officer_token_headers,
+    )
+    assert response.status_code == 200, f"Officer import failed: {response.text}"
+    kq = response.json()
+
+    assert kq["total_rows_processed"] == 2
+    assert kq["successful_imports"] == 2, f"dòng thiếu email bị loại: {kq['errors']}"
+    # Ba con số phải cộng khớp — giao diện nêu thẳng `failed_imports` lên tiêu đề.
+    assert kq["successful_imports"] + kq["failed_imports"] == kq["total_rows_processed"]
+    assert len(kq["created_lead_ids"]) == 2
+
+    # `created_lead_ids` được ném thẳng vào payload LEAD_IMPORTED → mọi id trong đó
+    # phải là id CÓ THẬT trong cơ sở dữ liệu.
+    async with AsyncSessionLocal() as session:
+        so_ton_tai = (
+            await session.execute(
+                select(func.count(models.Lead.id)).where(
+                    models.Lead.id.in_(kq["created_lead_ids"])
+                )
+            )
+        ).scalar_one()
+        assert so_ton_tai == len(kq["created_lead_ids"]), (
+            "created_lead_ids chứa id không tồn tại — LEAD_IMPORTED sẽ trỏ vào hư không"
+        )
+
+        lead_khong_email = (
+            await session.execute(
+                select(models.Lead).where(
+                    models.Lead.full_name == "Officer Import Khong Email"
+                )
+            )
+        ).scalar_one_or_none()
+        assert lead_khong_email is not None
+        assert lead_khong_email.email is None
+        # Hai thứ chỉ nhánh officer mới làm — file không có cột unit_id nào:
+        assert lead_khong_email.unit_id == seed_lead_dependencies["unit_id"], (
+            "officer import phải tự điền unit của officer khi file không có cột unit_id"
+        )
+        assert lead_khong_email.assigned_officer_id == officer_user_in_db["id"], (
+            "officer import phải tự gán lead cho chính officer đó"
+        )
+
+    log.info("--- Finished: test_officer_import_thieu_email_va_dem_dung ---")
 
 
 # --- Các Test Case Lỗi Khác ---

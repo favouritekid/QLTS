@@ -86,14 +86,28 @@ def test_moi_truong_chuoi_deu_di_qua_helper():
     Yếu hơn test hành vi ở trên, nhưng bắt được ca thêm trường MỚI vào vòng lặp
     mà quên xử lý ô trống — đúng cách bug này ra đời (``phone2`` làm đúng,
     ``email`` ngay trên nó thì không).
+
+    🔴 Khớp bằng BIỂU THỨC CHÍNH QUY chịu được khoảng trắng, không so chuỗi
+    nguyên văn. ``pyproject.toml`` đặt ``line_length = 88`` còn dòng
+    ``education_level`` dài 92 ký tự, nên chỉ cần chạy ``black .`` — lệnh nằm
+    ngay trong CLAUDE.md như việc thường ngày — là black ngắt dòng đó ra và phép
+    so nguyên văn thất bại, kéo theo một cổng CI bắt buộc đỏ với thông báo nói
+    rằng ô trống sắp thành chuỗi "nan". Định dạng lại mã không được phép là một
+    lỗi nghiệp vụ.
     """
     import inspect
+    import re
 
     from app.services import lead_service
 
     src = inspect.getsource(lead_service.import_leads_from_file_content)
     for truong in ("full_name", "email", "source", "education_level", "location"):
-        assert f'_cell_or_none(row_data.get("{truong}"))' in src, (
+        mau = re.compile(
+            r"_cell_or_none\(\s*row_data\.get\(\s*"
+            + re.escape(f'"{truong}"')
+            + r"\s*,?\s*\)\s*,?\s*\)"
+        )
+        assert mau.search(src), (
             f"trường {truong!r} không đi qua _cell_or_none → ô trống sẽ thành "
             f'chuỗi "nan"'
         )
