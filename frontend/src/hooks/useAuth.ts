@@ -1,6 +1,7 @@
 // src/hooks/useAuth.ts
 import { useAuthStore } from "@/lib/stores/auth.store";
 import { api, setApiLoggedOut } from "@/lib/api/client";
+import { isSessionKeptAliveError } from "@/lib/api/refresh";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -471,10 +472,32 @@ export function useAuth(options?: UseAuthOptions) {
     },
   });
 
+  // Lỗi mà interceptor CỐ Ý giữ phiên (refresh hỏng vì 429 RATE_LIMITED / 5xx /
+  // mạng đứt → `markSessionKeptAlive`). MỘT nguồn quyết định, dùng cho cả
+  // useEffect bên dưới lẫn `isAuthenticated` trả ra: nếu chỉ chặn logout mà vẫn
+  // trả `isAuthenticated=false` thì consumer nào đọc cờ đó vẫn coi như đã hết
+  // phiên — trái hẳn quyết định "giữ phiên".
+  //
+  // KHÔNG kèm điều kiện status: interceptor reject CHÍNH refreshError khi nó là
+  // 4xx, nên luồng chính của sự cố (429 RATE_LIMITED) tới đây mang status 429,
+  // không phải 401; chỉ nhánh 5xx/mạng-đứt mới trả về lỗi gốc 401. Marker tự nó
+  // là bằng chứng đủ — production chỉ có `triageRefreshFailure()` gắn nó, và
+  // chỉ sau khi đã phân loại là KHÔNG đăng xuất.
+  const isUserErrorTransient = isUserError && isSessionKeptAliveError(userError);
+
   useEffect(() => {
     if (isUserError && userError) {
       console.warn("[useAuth] Failed to fetch current user:", userError.response?.status, userError.message);
-      if (userError.response?.status === 401) {
+      // Điểm quyết định logout THỨ HAI (ngoài interceptor). Khi interceptor đã
+      // cố ý giữ phiên — refresh hỏng vì 429 RATE_LIMITED / 5xx / mạng đứt —
+      // nó reject chính lỗi 401 gốc kèm cờ; đăng xuất ở đây sẽ xoá sạch cache
+      // và đá officer về /login đúng tình huống vừa được quyết định là tạm
+      // thời (nginx `limit_req` trên /api/ còn trả 503, mà 503 được xếp loại
+      // transient). Chỉ báo lỗi nhẹ và để lần thử sau tự phục hồi.
+      if (isUserErrorTransient) {
+        console.warn("[useAuth] 401 nhưng phiên được giữ (refresh lỗi tạm thời) — không logout");
+        toast.error("Hệ thống đang bận. Vui lòng thử lại sau ít phút.");
+      } else if (userError.response?.status === 401) {
         toast.error("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
         logoutStore();
         queryClient.clear();
@@ -488,7 +511,7 @@ export function useAuth(options?: UseAuthOptions) {
         toast.error("Không thể tải thông tin người dùng.");
       }
     }
-  }, [isUserError, userError, logoutStore, queryClient, router]);
+  }, [isUserError, userError, isUserErrorTransient, logoutStore, queryClient, router]);
 
   useEffect(() => {
     if (currentUser && JSON.stringify(currentUser) !== JSON.stringify(userFromStore)) {
@@ -510,7 +533,10 @@ export function useAuth(options?: UseAuthOptions) {
 
   return {
     user: currentUser ?? userFromStore,
-    isAuthenticated: isAuthenticated && !isUserError, // ✅ SECURITY FIX: No longer check token from localStorage
+    // ✅ SECURITY FIX: No longer check token from localStorage.
+    // Ngoại lệ `isUserErrorTransient`: phiên vẫn sống, chỉ là refresh tạm thời
+    // hỏng — trả false ở đây sẽ mâu thuẫn với chính quyết định giữ phiên.
+    isAuthenticated: isAuthenticated && (!isUserError || isUserErrorTransient),
     isLoading,
     login: (
       credentials: LoginRequest,

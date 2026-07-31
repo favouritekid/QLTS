@@ -27,7 +27,11 @@ import {
 } from "./csrf";
 import { env } from "@/lib/config/env";
 import { inspectVersionHeaders } from "@/lib/api/api-versioning";
-import { refreshAccessToken } from "./refresh";
+import {
+  markSessionKeptAlive,
+  refreshAccessToken,
+  shouldLogoutAfterRefreshFailure,
+} from "./refresh";
 import { buildLoginRedirect } from "@/lib/auth/login-redirect";
 export const API_BASE_URL = env.NEXT_PUBLIC_API_URL;
 
@@ -100,6 +104,84 @@ api.interceptors.request.use(
 );
 
 // ============================================
+// 🔁 REFRESH FAILURE TRIAGE (dùng chung 2 nhánh)
+// ============================================
+type RefreshTriage =
+  | { action: "logout" }
+  | { action: "reject"; error: unknown };
+
+/**
+ * Refresh thất bại: phiên đã chết (logout) hay lỗi tạm thời (giữ phiên)?
+ *
+ * Trả về kết quả có nhãn thay vì một sentinel `null` — với sentinel, kiểu
+ * `AxiosError | unknown | null` bị TypeScript thu về `unknown` nên guard
+ * `!== null` không được kiểm tra gì ở compile time.
+ *
+ * Chọn lỗi để reject không tuỳ tiện:
+ *  - refreshError là 4xx có response (chỉ còn 429 RATE_LIMITED sau khi
+ *    `shouldLogoutAfterRefreshFailure` đã bắt mọi 4xx khác) → reject chính nó
+ *    để toast hiện đúng nhãn "quá nhiều yêu cầu".
+ *  - còn lại (5xx, mạng đứt) → reject `serverErrorFallback` do call site đưa,
+ *    vì mỗi nhánh cần một thứ khác nhau:
+ *      • nhánh 401 đưa lỗi GỐC 401 — retry predicate ở `providers.tsx` chỉ
+ *        chặn retry với AxiosError 4xx CÓ response, nên reject một lỗi
+ *        không-có-response sẽ khiến React Query retry 3 lần và mỗi lần bắn
+ *        thêm một `POST /auth/refresh`, làm cạn quota dùng chung của cả trường.
+ *      • nhánh CSRF đưa chính refreshError — lỗi gốc ở đó là 403 CSRF, mà
+ *        `handleApiError` map 403 → "Bạn không có quyền thực hiện thao tác
+ *        này": báo sai hoàn toàn khi nguyên nhân thật là backend 5xx. Nhánh
+ *        này chạy cho mutation và `mutations: { retry: false }` nên không có
+ *        nguy cơ retry storm.
+ */
+function triageRefreshFailure(
+  serverErrorFallback: unknown,
+  refreshError: unknown,
+  tag: string,
+): RefreshTriage {
+  if (shouldLogoutAfterRefreshFailure(refreshError)) {
+    return { action: "logout" };
+  }
+
+  const status = axios.isAxiosError(refreshError)
+    ? refreshError.response?.status
+    : undefined;
+  const isClientError = status !== undefined && status >= 400 && status < 500;
+
+  console.warn(`[API Client] ⏳ ${tag}: refresh lỗi tạm thời — giữ phiên, không logout`);
+  // Đánh dấu để các consumer khác (vd query /users/me trong useAuth) không tự
+  // đăng xuất khi thấy 401 — quyết định "giữ phiên" đã được đưa ra ở đây.
+  return {
+    action: "reject",
+    error: markSessionKeptAlive(isClientError ? refreshError : serverErrorFallback),
+  };
+}
+
+/**
+ * Đăng xuất cứng khi phiên đã chết: chặn request kế tiếp, XOÁ store, rồi hard
+ * redirect kèm return-url.
+ *
+ * Dùng chung cho cả hai nhánh. Trước đây nhánh CSRF thiếu bước clear store,
+ * nên sau redirect `auth.store` vẫn rehydrate `user` từ localStorage
+ * (`partialize` giữ `user`, và `isAuthenticated = !!user`) → app khởi động lại
+ * như đang đăng nhập trên một session đã bị thu hồi.
+ */
+async function performSessionExpiredLogout(pathname: string, search: string) {
+  if (typeof window === "undefined") return;
+
+  setApiLoggedOut(true);
+  try {
+    const { useAuthStore } = await import("@/lib/stores/auth.store");
+    useAuthStore.getState().logout();
+  } catch {
+    // Best-effort
+  }
+  window.location.href = buildLoginRedirect(pathname + search, {
+    forceLogin: true,
+    reason: "session_expired",
+  });
+}
+
+// ============================================
 // 📥 RESPONSE INTERCEPTOR WITH AUTO-REFRESH
 // ============================================
 
@@ -165,26 +247,23 @@ api.interceptors.response.use(
         // Refresh thành công → retry request gốc với cookie mới.
         return api(originalRequest);
       } catch (refreshError) {
+        // Lỗi TẠM THỜI (429 RATE_LIMITED / 5xx / mạng đứt) KHÔNG phải bằng
+        // chứng phiên đã chết → giữ phiên, chỉ để request gốc thất bại. Trước
+        // đây một lần 429 trên /auth/refresh là đủ đá officer về /login giữa
+        // lúc nhập liệu (audit prod 2026-07-30). Phân loại TRƯỚC khi log để
+        // một 429 bình thường không đổ console.error vào monitoring.
+        const triage = triageRefreshFailure(error, refreshError, "401");
+        if (triage.action === "reject") {
+          return Promise.reject(triage.error);
+        }
+
         console.error("[API Client] ❌ Refresh failed:", refreshError);
 
         // Fallback Logout: chặn API tiếp theo, clear store, rồi hard
         // redirect KÈM return-url để sau khi đăng nhập lại quay về đúng trang.
         if (typeof window !== "undefined" && !publicPages.includes(currentPath)) {
           console.log("[API Client] 🚪 Session invalid — logging out...");
-          setApiLoggedOut(true);
-
-          // Clear Zustand auth store
-          try {
-            const { useAuthStore } = await import("@/lib/stores/auth.store");
-            useAuthStore.getState().logout();
-          } catch {
-            // Best-effort
-          }
-
-          // force_login → middleware xoá cookie cũ mà JS không xoá được.
-          window.location.href = buildLoginRedirect(currentPath + currentSearch, {
-            forceLogin: true,
-          });
+          await performSessionExpiredLogout(currentPath, currentSearch);
         }
 
         return Promise.reject(refreshError);
@@ -228,11 +307,16 @@ api.interceptors.response.use(
       if (isCSRFError(errorCode) && originalRequest && !originalRequest._retry) {
         console.warn("[API Client] 🛡️ CSRF error detected:", errorCode, "— attempting recovery via refresh");
 
+        // Capture path/search TRƯỚC await refresh — cùng lý do với nhánh 401:
+        // user có thể điều hướng client-side trong lúc refresh đang bay, và
+        // return-url sẽ trộn pathname cũ với query mới.
+        const csrfPath = typeof window !== "undefined" ? window.location.pathname : "";
+        const csrfSearch = typeof window !== "undefined" ? window.location.search : "";
+
         // Skip recovery on public pages or during logout
         if (typeof window !== "undefined") {
-          const currentPath = window.location.pathname;
           const publicPages = ["/login", "/register", "/forgot-password", "/reset-password"];
-          if (publicPages.includes(currentPath) || isApiLoggedOut()) {
+          if (publicPages.includes(csrfPath) || isApiLoggedOut()) {
             return Promise.reject(error);
           }
         }
@@ -251,17 +335,24 @@ api.interceptors.response.use(
           // Retry — interceptor sẽ đọc lại csrf_token mới từ document.cookie.
           return api(originalRequest);
         } catch (refreshError) {
+          // Cùng một triage với nhánh 401 — hai nhánh này đã từng drift nhau
+          // (xem comment "Dùng chung refreshAccessToken()" phía trên), nên
+          // quyết định logout nằm ở MỘT chỗ duy nhất.
+          //
+          // Fallback là refreshError chứ KHÔNG phải `error`: lỗi gốc ở nhánh
+          // này là 403 CSRF, mà handleApiError map 403 → "Bạn không có quyền
+          // thực hiện thao tác này" — báo sai hẳn nguyên nhân khi thực chất
+          // backend đang 5xx. Mutation không retry nên không sợ retry storm.
+          const triage = triageRefreshFailure(refreshError, refreshError, "CSRF recovery");
+          if (triage.action === "reject") {
+            return Promise.reject(triage.error);
+          }
+
           console.warn("[API Client] ❌ CSRF recovery failed (refresh rejected) — redirecting to login");
 
-          if (typeof window !== "undefined") {
-            setApiLoggedOut(true);
-            // forceLogin → middleware xoá httpOnly cookie chết (giống nhánh 401);
-            // CSRF-recovery fail nghĩa session đã hết hiệu lực.
-            window.location.href = buildLoginRedirect(
-              window.location.pathname + window.location.search,
-              { forceLogin: true, reason: "session_expired" },
-            );
-          }
+          // Dùng chung đường logout với nhánh 401 — trước đây nhánh này quên
+          // clear store nên user cũ vẫn rehydrate như đang đăng nhập.
+          await performSessionExpiredLogout(csrfPath, csrfSearch);
 
           return Promise.reject(refreshError);
         }

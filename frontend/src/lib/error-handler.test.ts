@@ -46,26 +46,28 @@ describe("handleApiError", () => {
   })
 
   describe("409 Conflict (STATE_CONFLICT)", () => {
-    it("should show conflict error with refresh action", () => {
-      const error = createAxiosError(409)
-      
-      handleApiError(error)
+    // Regression: audit prod 2026-07-30 — 20 lần 409 "trùng số điện thoại" trong
+    // 6 phút vì toast hiện thông báo optimistic-lock cứng và ném đi `detail` thật.
+    it("hiện detail của DUPLICATE_RESOURCE (message viết cho người dùng)", () => {
+      const detail =
+        "Số điện thoại này đã được sử dụng. Lead: Quỳnh Anh (SĐT: 0972159242) - Đơn vị: Phòng Tuyển Sinh"
+      const error = createAxiosError(409, { detail, error_code: "DUPLICATE_RESOURCE" })
+
+      handleApiError(error, { context: "cập nhật hồ sơ" })
 
       expect(toast.error).toHaveBeenCalledWith(
-        "Dữ liệu đã được cập nhật bởi người khác",
-        expect.objectContaining({
-          action: expect.any(Object),
-          duration: 10000,
-        })
+        "Không thể cập nhật hồ sơ",
+        expect.objectContaining({ description: detail, duration: 10000 })
       )
     })
 
-    it("should invalidate queries when action clicked", () => {
-      const mockQueryClient = {
-        invalidateQueries: vi.fn(),
-      }
+    it("DUPLICATE_RESOURCE vẫn background-invalidate và không có nút Làm mới", () => {
+      const mockQueryClient = { invalidateQueries: vi.fn() }
       const onConflict = vi.fn()
-      const error = createAxiosError(409)
+      const error = createAxiosError(409, {
+        detail: "Số điện thoại này đã được sử dụng.",
+        error_code: "DUPLICATE_RESOURCE",
+      })
 
       handleApiError(error, {
         queryClient: mockQueryClient as unknown as HandleErrorOptions["queryClient"],
@@ -73,17 +75,52 @@ describe("handleApiError", () => {
         onConflict,
       })
 
-      // Get the action callback from the toast call
       const toastCall = vi.mocked(toast.error).mock.calls[0]
-      const actionConfig = (toastCall[1] as { action?: { onClick?: () => void } } | undefined)?.action
-      
-      // Simulate clicking the action
-      if (actionConfig?.onClick) {
-        actionConfig.onClick()
-      }
+      const options = toastCall[1] as { action?: unknown } | undefined
 
-      expect(mockQueryClient.invalidateQueries).toHaveBeenCalled()
+      // Nút "Làm mới" chỉ refetch rồi để user bấm Lưu lại y nguyên → vòng lặp.
+      expect(options?.action).toBeUndefined()
+      // …nhưng refetch vẫn phải xảy ra, im lặng.
+      expect(mockQueryClient.invalidateQueries).toHaveBeenCalledWith({
+        queryKey: ["admissions", "detail", 1],
+      })
       expect(onConflict).toHaveBeenCalled()
+    })
+
+    // CONFLICT dùng chung cho version mismatch, xung đột trạng thái VÀ các lỗi
+    // nội bộ ("Technical user 'system' is not configured") → không pass-through.
+    it("CONFLICT có message nội bộ: KHÔNG pass-through, nhưng vẫn invalidate", () => {
+      const mockQueryClient = { invalidateQueries: vi.fn() }
+      const error = createAxiosError(409, {
+        detail: "Inconsistent application fee ledger: payment method",
+        error_code: "CONFLICT",
+      })
+
+      handleApiError(error, {
+        queryClient: mockQueryClient as unknown as HandleErrorOptions["queryClient"],
+        invalidateKeys: [["admissions", "detail", 1]],
+        context: "thu lệ phí",
+      })
+
+      const toastCall = vi.mocked(toast.error).mock.calls[0]
+      const description = (toastCall[1] as { description?: string } | undefined)?.description
+
+      expect(description).not.toContain("Inconsistent application fee ledger")
+      expect(description).toContain("trùng hoặc đã thay đổi")
+      expect(mockQueryClient.invalidateQueries).toHaveBeenCalled()
+    })
+
+    it("tiêu đề 409 không trùng tiêu đề của 422 khi thiếu context", () => {
+      const error = createAxiosError(409)
+
+      handleApiError(error)
+
+      expect(toast.error).toHaveBeenCalledWith(
+        "Dữ liệu bị trùng hoặc đã thay đổi",
+        expect.objectContaining({
+          description: expect.stringContaining("trùng hoặc đã thay đổi"),
+        })
+      )
     })
   })
 
@@ -229,7 +266,8 @@ describe("handleApiError", () => {
 
   describe("Backend code field", () => {
     it("should prefer backend code over HTTP status", () => {
-      // Backend returns 400 but with STATE_CONFLICT code
+      // Backend returns 400 but with STATE_CONFLICT code. Không kèm
+      // `error_code` version-conflict → đi nhánh conflict-không-xác-định.
       const error = createAxiosError(400, {
         code: "STATE_CONFLICT",
       })
@@ -237,7 +275,7 @@ describe("handleApiError", () => {
       handleApiError(error)
 
       expect(toast.error).toHaveBeenCalledWith(
-        "Dữ liệu đã được cập nhật bởi người khác",
+        "Dữ liệu bị trùng hoặc đã thay đổi",
         expect.any(Object)
       )
     })

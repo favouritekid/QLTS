@@ -321,11 +321,17 @@ async def http_exception_handler(
         },
     )
 
+    # Một số HTTPException chuyên biệt mang sẵn ``error_code`` (vd
+    # ``RefreshAbuseLocked`` ở routers/auth.py) vì client phải phân biệt được
+    # nhiều nghĩa của cùng một status. Tôn trọng mã đó; mọi HTTPException
+    # thường vẫn nhận mã mặc định ``HTTP_<status>`` như trước.
+    error_code = getattr(exc, "error_code", None) or f"HTTP_{exc.status_code}"
+
     return JSONResponse(
         status_code=exc.status_code,
         content={
             "detail": exc.detail,
-            "error_code": f"HTTP_{exc.status_code}",
+            "error_code": error_code,
         },
         headers=getattr(exc, "headers", None),
     )
