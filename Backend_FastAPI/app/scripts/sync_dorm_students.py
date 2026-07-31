@@ -192,6 +192,16 @@ def build_student_payload(
         "source_gender_raw": row.source_gender_raw,
         "normalized_gender": normalize_gender(row.source_gender_raw),
         "program_name": row.program_name,
+        # ⚠️ Đi CÙNG `program_name`, không tách. Cùng một tên ngành tồn tại ở
+        # hai trình độ (xem `_resolved_degree_level_subquery`), nên thiếu cột
+        # này thì phía KTX gộp hai chương trình khác nhau thành một dòng thống
+        # kê — và dòng đó trông hoàn toàn bình thường.
+        #
+        # `getattr` có mặc định: hàm này còn được gọi với hàng giả trong test và
+        # với kết quả của lượt export CŨ nếu ai đó chạy bản script mới trên một
+        # nhánh backend chưa có cột. Thiếu cột thì gửi NULL — phía KTX hiển thị
+        # "chưa rõ" — chứ không nổ giữa lượt ghi đã mở.
+        "degree_level": getattr(row, "degree_level", None),
         "contact_phone": lien_he,
         "contact_phone2": lien_he_phu,
         "academic_year": row.academic_year,

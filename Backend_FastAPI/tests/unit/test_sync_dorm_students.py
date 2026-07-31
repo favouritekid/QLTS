@@ -32,6 +32,7 @@ def _row(**overrides):
         full_name="Nguyễn Văn An",
         source_gender_raw="Nam",
         program_name="Cao đẳng Điều dưỡng",
+        degree_level="Cao đẳng",
         academic_year=2026,
         officer_qlts_id=101,
         unit_id=14,
@@ -146,6 +147,44 @@ def test_payload_keeps_null_program_name():
 
     assert "program_name" in payload
     assert payload["program_name"] is None
+
+
+def test_payload_carries_degree_level():
+    """Trình độ đi CÙNG tên ngành, không tách.
+
+    Cùng một tên ngành tồn tại ở hai bậc, nên thiếu cột này thì phía KTX gộp
+    hai chương trình khác nhau thành một dòng thống kê — và dòng đó trông hoàn
+    toàn bình thường.
+    """
+    payload = build_student_payload(
+        _row(program_name="Công nghệ ô tô", degree_level="Trung cấp"), sync_run_id=1
+    )
+
+    assert payload["program_name"] == "Công nghệ ô tô"
+    assert payload["degree_level"] == "Trung cấp"
+
+
+def test_payload_keeps_null_degree_level():
+    """Ngành thiếu trình độ vẫn đi qua, ô để trống chứ không đoán."""
+    payload = build_student_payload(_row(degree_level=None), sync_run_id=1)
+
+    assert "degree_level" in payload
+    assert payload["degree_level"] is None
+
+
+def test_payload_survives_a_row_without_the_degree_level_column():
+    """Hàng nguồn THIẾU HẲN thuộc tính vẫn gửi được, giá trị NULL.
+
+    ⚠️ Ca này có thật: chạy bản script mới trên một nhánh backend chưa có cột
+    thì ``row`` không có thuộc tính đó. Nổ ở đây là nổ GIỮA một lượt ghi đã mở
+    — trạng thái tệ hơn nhiều so với một cột để trống.
+    """
+    row = _row()
+    del row.degree_level
+
+    payload = build_student_payload(row, sync_run_id=1)
+
+    assert payload["degree_level"] is None
 
 
 def test_payload_carries_synced_at():
