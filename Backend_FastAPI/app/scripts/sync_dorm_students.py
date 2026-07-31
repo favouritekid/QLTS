@@ -152,6 +152,57 @@ def chuan_hoa_so(raw: Optional[str]) -> Optional[str]:
     return sach
 
 
+def assert_payload_contract(rows: List[Any]) -> None:
+    """Mọi hàng nguồn phải mang ĐỦ các trường mà payload cần.
+
+    🔴 Chạy TRƯỚC khi mở lượt đồng bộ, trên TOÀN BỘ hàng.
+
+    Vì sao không để `build_student_payload` tự nổ: nó được gọi theo từng lô,
+    sau khi lượt đã mở. Một `AttributeError` ở lô thứ ba để lại một lượt
+    `running` với hai lô đã ghi — trạng thái nửa vời mà người vận hành phải đi
+    dọn tay. Kiểm hết ở đây thì hoặc chạy trọn, hoặc chưa ghi gì.
+
+    Vì sao không dùng `getattr(..., None)`: hàng thiếu thuộc tính nghĩa là
+    script và repository lệch phiên bản (chạy bản script mới trên image backend
+    cũ). Suy ra `None` rồi gửi đi là XOÁ dữ liệu đã có ở đầu kia — nhánh
+    `do update` của `upsert_students_batch` ghi đè `degree_level` cho cả lô.
+    Đã tái hiện: hàng "Trung cấp" + payload thiếu khoá → RPC trả thành công,
+    giá trị thành NULL.
+
+    ⚠️ Chỉ kiểm SỰ CÓ MẶT của thuộc tính, không kiểm giá trị. `degree_level =
+    None` là hợp lệ và có thật: ngành chưa chốt, hoặc ngành thiếu FK trình độ
+    bên QLTS.
+
+    Raises:
+        RuntimeError: khi có hàng thiếu trường — kèm TÊN TRƯỜNG và SỐ hàng, không
+            kèm danh tính người học.
+    """
+    bat_buoc = (
+        "qlts_profile_id",
+        "full_name",
+        "source_gender_raw",
+        "program_name",
+        "degree_level",
+        "academic_year",
+        "officer_qlts_id",
+        "unit_id",
+    )
+
+    thieu: Dict[str, int] = {}
+    for row in rows:
+        for truong in bat_buoc:
+            if not hasattr(row, truong):
+                thieu[truong] = thieu.get(truong, 0) + 1
+
+    if thieu:
+        chi_tiet = ", ".join(f"{k} ({v} hàng)" for k, v in sorted(thieu.items()))
+        raise RuntimeError(
+            "Hàng nguồn thiếu trường mà payload cần: "
+            f"{chi_tiet}. Script và repository đang lệch phiên bản — "
+            "KHÔNG ghi tiếp, vì gửi giá trị rỗng sẽ xoá dữ liệu đã có ở hệ KTX."
+        )
+
+
 def build_student_payload(
     row: Any, sync_run_id: int, synced_at: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -197,11 +248,19 @@ def build_student_payload(
         # này thì phía KTX gộp hai chương trình khác nhau thành một dòng thống
         # kê — và dòng đó trông hoàn toàn bình thường.
         #
-        # `getattr` có mặc định: hàm này còn được gọi với hàng giả trong test và
-        # với kết quả của lượt export CŨ nếu ai đó chạy bản script mới trên một
-        # nhánh backend chưa có cột. Thiếu cột thì gửi NULL — phía KTX hiển thị
-        # "chưa rõ" — chứ không nổ giữa lượt ghi đã mở.
-        "degree_level": getattr(row, "degree_level", None),
+        # 🔴 Truy cập THẲNG, KHÔNG `getattr(..., None)`.
+        #
+        # Bản trước dùng `getattr` với mặc định `None` và gọi đó là fail-soft.
+        # Nó không phải: hàng nguồn thiếu thuộc tính nghĩa là script và
+        # repository lệch phiên bản, mà `None` ở đây đi thẳng vào nhánh
+        # `do update` phía KTX và XOÁ trình độ của toàn bộ lô. Đã tái hiện: hàng
+        # đang mang "Trung cấp", payload thiếu khoá, RPC trả về thành công, giá
+        # trị sau đó là NULL. Lượt đồng bộ báo THÀNH CÔNG trong khi vừa đưa 457
+        # học viên về "chưa rõ trình độ".
+        #
+        # Lệch phiên bản phải nổ, và nổ ở `assert_payload_contract` TRƯỚC khi
+        # mở lượt — không phải giữa một lượt ghi đã mở.
+        "degree_level": row.degree_level,
         "contact_phone": lien_he,
         "contact_phone2": lien_he_phu,
         "academic_year": row.academic_year,
@@ -426,6 +485,7 @@ _THONG_DIEP_THEO_MA: Dict[str, str] = {
     "P0117": "Phần tử của payload không phải object.",
     "P0118": "Sai kiểu ở một trường của payload.",
     "P0119": "Một trường số nhận giá trị không phải số nguyên.",
+    "P0122": "Payload thiếu khoá bắt buộc (vắng khoá KHÁC null).",
     "P0121": "Một trường số vượt khoảng cho phép.",
     # finalize_sync_run
     "P0130": "`p_run_id` bị để trống.",
@@ -1509,6 +1569,17 @@ async def main(argv: Optional[List[str]] = None) -> int:
         excluded_statuses=describe_excluded_statuses(),
     )
 
+    # 🔴 Cổng hợp đồng — TRƯỚC khi mở lượt, và chạy cả ở chế độ xem trước.
+    #
+    # Xem trước cũng phải đỏ: nếu script và repository lệch phiên bản thì bản
+    # xem trước in ra những con số KHÔNG phải thứ `--apply` sẽ ghi, và người
+    # vận hành duyệt một thứ rồi chạy một thứ khác.
+    try:
+        assert_payload_contract(rows)
+    except RuntimeError as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 2
+
     # ⚠️ Nguồn RỖNG + ``--apply`` = hạ cờ TOÀN BỘ học viên của năm học đó.
     #
     # Đây là cùng một kiểu hỏng với ``--batch-size 0``, chỉ khác đường vào: gõ
@@ -1549,6 +1620,11 @@ async def main(argv: Optional[List[str]] = None) -> int:
                 1 for r in rows if normalize_gender(r.source_gender_raw) == "unknown"
             )
             no_program = sum(1 for r in rows if r.program_name is None)
+            # Chất lượng nguồn của chiều TRÌNH ĐỘ. Con số này phải nhìn được
+            # TRƯỚC `--apply`: cột đó nuôi bảng dùng để quyết định quy mô đầu
+            # tư, và một nguồn hỏng ở đây cho ra bảng toàn "(chưa rõ trình độ)"
+            # — vẫn vẽ ra được, vẫn cộng ra tổng đúng, chỉ là vô dụng.
+            no_degree = sum(1 for r in rows if r.degree_level is None)
 
             # Ba con số về liên hệ. Cán bộ KTX làm việc bằng cách GỌI ĐIỆN, nên
             # "bao nhiêu em không gọi được" là thứ phải biết TRƯỚC khi ghi, chứ
@@ -1585,6 +1661,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
             )
             print(f"  Không rõ giới tính   : {unknown_gender}")
             print(f"  Chưa chốt ngành      : {no_program}")
+            print(f"  Chưa rõ trình độ     : {no_degree}")
             print(f"  Hồ sơ vẫn đang xét   : {count_atypical_statuses(rows)}")
             print(f"  Không có số liên hệ  : {khong_co_so}")
             print(f"  Có số phụ            : {co_so_phu}")

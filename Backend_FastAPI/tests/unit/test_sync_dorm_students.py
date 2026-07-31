@@ -14,6 +14,7 @@ import pytest
 from app.scripts import sync_dorm_students as sync_module
 from app.scripts.sync_dorm_students import (
     DormApi,
+    assert_payload_contract,
     assert_source_database_matches,
     assert_transport_is_encrypted,
     build_student_payload,
@@ -172,19 +173,71 @@ def test_payload_keeps_null_degree_level():
     assert payload["degree_level"] is None
 
 
-def test_payload_survives_a_row_without_the_degree_level_column():
-    """Hàng nguồn THIẾU HẲN thuộc tính vẫn gửi được, giá trị NULL.
+def test_contract_gate_rejects_a_row_missing_degree_level():
+    """🔴 Hàng nguồn THIẾU HẲN thuộc tính phải DỪNG lượt, không suy ra NULL.
 
-    ⚠️ Ca này có thật: chạy bản script mới trên một nhánh backend chưa có cột
-    thì ``row`` không có thuộc tính đó. Nổ ở đây là nổ GIỮA một lượt ghi đã mở
-    — trạng thái tệ hơn nhiều so với một cột để trống.
+    Bản trước dùng ``getattr(row, "degree_level", None)`` và gọi đó là
+    fail-soft. Nó không phải. Thiếu thuộc tính nghĩa là script và repository
+    lệch phiên bản, còn ``None`` gửi đi sẽ đi thẳng vào nhánh ``do update`` phía
+    KTX và XOÁ trình độ của cả lô: hàng đang mang "Trung cấp" trở thành NULL,
+    RPC trả về thành công, lượt đồng bộ báo hoàn tất.
+
+    Cổng này chạy TRƯỚC khi mở lượt nên hoặc chạy trọn, hoặc chưa ghi gì.
     """
     row = _row()
     del row.degree_level
 
-    payload = build_student_payload(row, sync_run_id=1)
+    with pytest.raises(RuntimeError) as loi:
+        assert_payload_contract([_row(), row])
 
-    assert payload["degree_level"] is None
+    assert "degree_level" in str(loi.value)
+    # Nêu SỐ hàng để người vận hành biết quy mô, KHÔNG nêu danh tính người học.
+    assert "1 hàng" in str(loi.value)
+
+
+def test_contract_gate_accepts_degree_level_none():
+    """Giá trị ``None`` là hợp lệ — chỉ SỰ VẮNG MẶT của trường mới là lỗi.
+
+    Ngành chưa chốt, hoặc ngành thiếu FK trình độ bên QLTS, đều cho ``None`` một
+    cách hoàn toàn bình thường. Lẫn hai thứ này sẽ chặn đúng những lượt hợp lệ.
+    """
+    assert_payload_contract([_row(degree_level=None)]) is None
+
+
+def test_contract_gate_names_every_missing_field():
+    """Báo ĐỦ các trường thiếu trong một lần, không bắt sửa từng cái một."""
+    row = _row()
+    del row.degree_level
+    del row.program_name
+
+    with pytest.raises(RuntimeError) as loi:
+        assert_payload_contract([row])
+
+    assert "degree_level" in str(loi.value)
+    assert "program_name" in str(loi.value)
+
+
+def test_contract_gate_passes_a_healthy_cohort():
+
+    assert assert_payload_contract([_row(), _row(qlts_profile_id=9002)]) is None
+
+
+def test_payload_refuses_a_row_without_degree_level():
+    """Lớp THỨ HAI: `build_student_payload` cũng phải nổ, không suy ra None.
+
+    `assert_payload_contract` chạy trước và bắt được ca này, nên hàm dưới đây
+    lẽ ra không bao giờ nhận hàng thiếu trường. Test này canh điều xảy ra khi
+    lớp đầu bị gỡ hoặc bị quên gọi ở một call site mới.
+
+    ⚠️ Đo được: trả lại `getattr(row, "degree_level", None)` thì toàn bộ test
+    của cổng hợp đồng VẪN XANH — chúng gọi thẳng cổng, không đi qua hàm này.
+    Không có ca này thì lớp thứ hai chỉ là một lời khẳng định.
+    """
+    row = _row()
+    del row.degree_level
+
+    with pytest.raises(AttributeError):
+        build_student_payload(row, sync_run_id=1)
 
 
 def test_payload_carries_synced_at():
