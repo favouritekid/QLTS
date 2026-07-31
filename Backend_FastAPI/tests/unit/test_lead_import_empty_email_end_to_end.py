@@ -396,3 +396,52 @@ async def test_trung_cot_email_khong_con_no_HTTP_500(repo_gia, db_gia):
     # ValueError → router đổi thành 400 kèm thông báo; AttributeError thì thành 500.
     assert not isinstance(exc.value, AttributeError)
     assert "trùng tên" in str(exc.value)
+
+
+CSV_KY_TU_DAU_DAC_BIET = (
+    "full_name,email,phone,source,location,unit_id\n"
+    "-Trang Nguyễn,a@example.com,0900000001,website,-,14\n"
+    "+Minh Hoàng,b@example.com,0900000002,website,=A1,14\n"
+)
+
+
+async def test_khong_chen_dau_nhay_vao_du_lieu_luc_nhap(repo_gia, db_gia):
+    """Dữ liệu vào cơ sở dữ liệu phải NGUYÊN VẸN, không bị chèn dấu nháy.
+
+    ``sanitize_csv_cell`` là hàng rào của tầng XUẤT: nó thêm dấu ' trước các ký tự
+    mở đầu công thức (``= + - @``) để bảng tính không diễn giải ô đó. Áp vào lúc
+    NHẬP thì dữ liệu bẩn vĩnh viễn — người tên "-Trang" thành "'-Trang" trên mọi
+    màn hình, `location` ghi "-" (nghĩa là không có) thành "'-" — mà chẳng bảo vệ
+    được gì, vì đường xuất (``routers/leads.py``) vốn đã sanitize.
+
+    ``payment_import_service`` ghi rõ cùng quy ước ở bước ingest của nó.
+    """
+    with patch.object(
+        lead_service.StatusHelper, "get_initial_status",
+        AsyncMock(return_value=SimpleNamespace(
+            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+        )),
+    ), patch.object(
+        lead_service, "calculate_lead_score", AsyncMock(return_value=20)
+    ):
+        await lead_service.import_leads_from_file_content(
+            file_content=CSV_KY_TU_DAU_DAC_BIET.encode("utf-8"),
+            filename="dac_biet.csv", db=db_gia,
+            default_unit_id=14, auto_assign_officer_id=None,
+        )
+
+    da_chen = repo_gia["repo"].da_chen
+    assert len(da_chen) == 2, "cả hai dòng phải vào được"
+    lay = lambda d, k: d.get(k) if isinstance(d, dict) else getattr(d, k, None)
+
+    assert lay(da_chen[0], "full_name") == "-Trang Nguyễn"
+    assert lay(da_chen[0], "location") == "-"
+    assert lay(da_chen[1], "full_name") == "+Minh Hoàng"
+    assert lay(da_chen[1], "location") == "=A1"
+
+    for lead in da_chen:
+        for truong in ("full_name", "source", "location"):
+            gt = lay(lead, truong)
+            assert not (gt or "").startswith("'"), (
+                f"{truong} bị chèn dấu nháy lúc nhập: {gt!r}"
+            )

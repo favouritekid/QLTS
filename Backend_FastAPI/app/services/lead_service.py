@@ -35,7 +35,6 @@ from .assignment_reason import build_assignment_reason
 from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
 from ..repositories.collaborator_repository import CollaboratorRepository
 from .lead_profile_sync import sync_profile_from_lead, detect_changed_personal_fields, SYNCABLE_FIELDS
-from ..utils.csv_helpers import sanitize_csv_cell
 from ..core.events import SystemEvents
 from .notification_dispatcher import dispatch
 from .notification_payloads import EventPayload
@@ -4449,7 +4448,13 @@ async def import_leads_from_file_content(
         try:
             # Bắt buộc — nhưng ô trống phải thành "" để validator bắt được,
             # chứ để lọt chuỗi "nan" thì nó thành một cái tên hợp lệ.
-            cleaned_data["full_name"] = sanitize_csv_cell(_cell_or_none(row_data.get("full_name")) or "")
+            #
+            # KHÔNG sanitize-CSV ở đây: đó là việc của tầng XUẤT. Chèn dấu ' vào
+            # lúc nhập thì dữ liệu bẩn VĨNH VIỄN trong cơ sở dữ liệu — một người
+            # tên "-Trang" thành "'-Trang" trên mọi màn hình — mà vẫn không giải
+            # quyết được gì, vì đường xuất (`routers/leads.py`) đã sanitize sẵn.
+            # `payment_import_service` ghi rõ cùng quy ước này ở bước ingest.
+            cleaned_data["full_name"] = _cell_or_none(row_data.get("full_name")) or ""
             # Ô trống ⇒ None. Model + LeadCreate đều khai email optional; ép
             # thành chuỗi "nan" là tự dựng lên một ràng buộc không ai đặt ra.
             cleaned_data["email"] = _cell_or_none(row_data.get("email"))
@@ -4476,11 +4481,10 @@ async def import_leads_from_file_content(
             else:
                 cleaned_data["phone2"] = None
 
-            cleaned_data["source"] = sanitize_csv_cell(_cell_or_none(row_data.get("source")) or "")
+            cleaned_data["source"] = _cell_or_none(row_data.get("source")) or ""
 
             # ✅ Extract optional fields for Scoring
-            _edu = _cell_or_none(row_data.get("education_level"))
-            cleaned_data["education_level"] = sanitize_csv_cell(_edu) if _edu else None
+            cleaned_data["education_level"] = _cell_or_none(row_data.get("education_level"))
             
             gpa_val = row_data.get("gpa")
             if pd.notna(gpa_val):
@@ -4492,8 +4496,7 @@ async def import_leads_from_file_content(
             else:
                 cleaned_data["gpa"] = None
                 
-            _loc = _cell_or_none(row_data.get("location"))
-            cleaned_data["location"] = sanitize_csv_cell(_loc) if _loc else None
+            cleaned_data["location"] = _cell_or_none(row_data.get("location"))
 
 
             # Convert 'unit_id' to int (or use default if provided)
