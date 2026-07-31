@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { refreshAccessToken } from "@/lib/api/refresh";
+import { isRefreshRateLimited, refreshAccessToken } from "@/lib/api/refresh";
 import { isApiLoggedOut } from "@/lib/api/client";
 
 // Access token sống 15' (backend). Refresh chủ động mỗi 13' để luôn còn
@@ -42,6 +42,10 @@ export function useProactiveTokenRefresh(enabled: boolean) {
       if (isApiLoggedOut()) return;
       if (runningRef.current) return; // tránh chồng trong cùng tab
 
+      // Đang trong cooldown sau 429 → khỏi chạm mạng, và QUAN TRỌNG hơn: khỏi
+      // đi vào nhánh catch bên dưới (nhánh đó rollback timestamp).
+      if (isRefreshRateLimited()) return;
+
       const now = Date.now();
       const prevRaw = window.localStorage.getItem(LAST_REFRESH_KEY);
       const prevNum = prevRaw ? Number(prevRaw) : 0;
@@ -64,6 +68,14 @@ export function useProactiveTokenRefresh(enabled: boolean) {
         // tiếp sẽ xử lý). Rollback CAS: chỉ khôi phục nếu slot vẫn là `stamp`
         // mình vừa ghi (chưa tab/lần khác ghi đè) → cho phép thử lại sớm
         // sau lỗi mạng tạm, KHÔNG đạp lên refresh thành công của tab khác.
+        //
+        // NGOẠI LỆ: vừa bị rate limit thì KHÔNG rollback. Rollback sẽ xoá luôn
+        // throttle 12 phút, mà `onWake` gắn với cả `visibilitychange` lẫn
+        // `focus` → mười lần alt-tab là mười POST /auth/refresh nữa vào đúng
+        // cái bucket vừa cạn. Giữ nguyên timestamp = tôn trọng throttle.
+        if (isRefreshRateLimited()) {
+          return;
+        }
         if (window.localStorage.getItem(LAST_REFRESH_KEY) === stamp) {
           // Khôi phục prev hợp lệ; nếu prev corrupt/null → xoá (lần sau coi như
           // chưa refresh, tự lành sau 1 refresh thành công).
