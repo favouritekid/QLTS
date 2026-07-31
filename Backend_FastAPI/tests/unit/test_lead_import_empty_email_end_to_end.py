@@ -322,3 +322,77 @@ async def test_lo_bi_rollback_khong_duoc_dem_la_da_nhap(monkeypatch, db_gia):
         f"trả về {len(kq.created_lead_ids)} id, trong đó có id không tồn tại"
     )
     assert kq.failed_imports >= 1
+
+
+# ---------------------------------------------------------------------------
+# Cột trùng tên sau chuẩn hoá
+# ---------------------------------------------------------------------------
+
+CSV_COT_TRUNG = (
+    "Full Name,full_name,email,phone,source,unit_id\n"
+    "Tên A,Tên B,a@example.com,0900000001,website,14\n"
+)
+
+
+async def test_cot_trung_sau_chuan_hoa_bi_tu_choi_ro_rang(repo_gia, db_gia):
+    """Hai cột hoá trùng tên phải bị từ chối bằng thông báo đọc được, không phải 500.
+
+    "Full Name" và "full_name" cùng ra "full_name" sau chuẩn hoá. Khi đó
+    ``df['email']`` trả DataFrame chứ không phải Series, và ``.dropna().astype(str)``
+    ở đoạn gom email ném ``AttributeError`` NGOÀI mọi try/except của vòng lặp dòng
+    → người dùng nhận HTTP 500 trống trơn. Ngoài ra ``row.to_dict()`` âm thầm bỏ
+    mất một trong hai cột, tức dữ liệu biến mất không dấu vết.
+    """
+    with patch.object(
+        lead_service.StatusHelper, "get_initial_status",
+        AsyncMock(return_value=SimpleNamespace(
+            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+        )),
+    ), patch.object(
+        lead_service, "calculate_lead_score", AsyncMock(return_value=20)
+    ):
+        with pytest.raises(ValueError) as exc:
+            await lead_service.import_leads_from_file_content(
+                file_content=CSV_COT_TRUNG.encode("utf-8"), filename="trung.csv",
+                db=db_gia, default_unit_id=14, auto_assign_officer_id=None,
+            )
+
+    tin = str(exc.value)
+    assert "trùng tên" in tin, f"thông báo không nói rõ vấn đề: {tin}"
+    assert "full_name" in tin, "phải chỉ đúng cột nào trùng"
+    assert repo_gia["repo"].da_chen == [] if "repo" in repo_gia else True
+
+
+CSV_TRUNG_COT_EMAIL = (
+    "full_name,Email,email,phone,source,unit_id\n"
+    "Tên A,a@example.com,b@example.com,0900000001,website,14\n"
+)
+
+
+async def test_trung_cot_email_khong_con_no_HTTP_500(repo_gia, db_gia):
+    """Trùng đúng cột ``email`` là ca nổ nặng nhất — phải thành lỗi đọc được.
+
+    "Email" và "email" cùng ra "email". Đoạn gom email để kiểm trùng chạy
+    ``df['email'].dropna().astype(str).tolist()`` — với cột trùng, ``df['email']``
+    là DataFrame nên ``.tolist()`` ném ``AttributeError``. Chỗ đó nằm NGOÀI mọi
+    try/except của vòng lặp dòng, nên nó thoát thẳng ra router thành HTTP 500
+    trống trơn, không nói người dùng phải sửa gì.
+    """
+    with patch.object(
+        lead_service.StatusHelper, "get_initial_status",
+        AsyncMock(return_value=SimpleNamespace(
+            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+        )),
+    ), patch.object(
+        lead_service, "calculate_lead_score", AsyncMock(return_value=20)
+    ):
+        with pytest.raises(ValueError) as exc:
+            await lead_service.import_leads_from_file_content(
+                file_content=CSV_TRUNG_COT_EMAIL.encode("utf-8"),
+                filename="trung_email.csv", db=db_gia,
+                default_unit_id=14, auto_assign_officer_id=None,
+            )
+
+    # ValueError → router đổi thành 400 kèm thông báo; AttributeError thì thành 500.
+    assert not isinstance(exc.value, AttributeError)
+    assert "trùng tên" in str(exc.value)

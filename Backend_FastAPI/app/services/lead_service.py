@@ -4347,6 +4347,25 @@ async def import_leads_from_file_content(
     # Normalize column names (lowercase, strip, replace spaces)
     df.columns = df.columns.str.lower().str.strip().str.replace(" ", "_")
 
+    # Chuẩn hoá có thể làm HAI cột khác nhau thành TRÙNG tên: "Full Name" và
+    # "full_name" cùng ra "full_name". Khi đó ``df[cột]`` trả DataFrame chứ không
+    # phải Series, và ``row.to_dict()`` âm thầm bỏ mất một trong hai — dữ liệu
+    # người dùng biến mất không báo gì. Tệ hơn, ``df['email'].dropna()`` ở đoạn
+    # gom email phía dưới sẽ ném ``AttributeError`` NGOÀI mọi try/except của vòng
+    # lặp dòng → HTTP 500 thay vì một thông báo đọc được.
+    #
+    # Từ chối thẳng thay vì đoán xem cột nào là thật — file có cột trùng là file
+    # nhập nhằng, người lập phải sửa. ``payment_import_service`` đã chặn y hệt.
+    _cols = list(df.columns)
+    _dups = sorted({c for c in _cols if _cols.count(c) > 1})
+    if _dups:
+        log.warning("Import failed: Duplicate columns after normalize", dups=_dups)
+        raise ValueError(
+            f"File có cột trùng tên sau khi chuẩn hoá: {', '.join(_dups)}. "
+            "Ví dụ 'Full Name' và 'full_name' cùng thành 'full_name' — hãy bỏ bớt "
+            "một cột rồi tải lại."
+        )
+
     # Check required columns
     missing_cols = required_columns - set(df.columns)
     if missing_cols:
