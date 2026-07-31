@@ -120,7 +120,14 @@ async def test_dong_thieu_email_van_tao_duoc_lead(repo_gia, db_gia):
 
 
 async def test_khong_dong_nao_mang_chuoi_nan(repo_gia, db_gia):
-    """Không trường chuỗi nào được mang giá trị 'nan' vào cơ sở dữ liệu."""
+    """Không trường chuỗi nào được mang giá trị 'nan' vào cơ sở dữ liệu.
+
+    🔴 Bản đầu của ca này PASS cả trên code chưa sửa, vì hai lẽ: CSV lúc đó không
+    có cột ``education_level``/``location`` để mà kiểm, và trên code cũ dòng thiếu
+    email bị loại từ vòng validate nên danh sách chèn chỉ còn dòng đầy đủ — không
+    còn ô trống nào để lộ chuỗi "nan". Nay CSV có đủ hai cột đó và ca này khẳng
+    định **cả hai dòng** đều được chèn.
+    """
     with patch.object(
         lead_service.StatusHelper, "get_initial_status",
         AsyncMock(return_value=SimpleNamespace(
@@ -132,8 +139,66 @@ async def test_khong_dong_nao_mang_chuoi_nan(repo_gia, db_gia):
         await _chay(db_gia)
 
     da_chen = repo_gia["repo"].da_chen
-    assert da_chen, "không dòng nào được chèn — test này sẽ pass giả nếu bỏ qua"
+    assert len(da_chen) == 2, (
+        f"phải chèn CẢ HAI dòng mới chạm được ô trống; đang chèn {len(da_chen)}"
+    )
     for lead in da_chen:
         for truong in ("full_name", "email", "source", "education_level", "location"):
             gia_tri = lead.get(truong) if isinstance(lead, dict) else getattr(lead, truong, None)
             assert gia_tri != "nan", f"{truong} mang chuỗi 'nan'"
+
+    # Dòng 2 để trống ba trường — chúng phải là None, không phải "nan" cũng không
+    # phải chuỗi rỗng lửng lơ.
+    dong_trong = da_chen[1]
+    for truong in ("email", "education_level", "location"):
+        gia_tri = (dong_trong.get(truong) if isinstance(dong_trong, dict)
+                   else getattr(dong_trong, truong, None))
+        assert gia_tri is None, f"{truong} phải là None, đang là {gia_tri!r}"
+
+
+CSV_THIEU_BAT_BUOC = (
+    "full_name,email,phone,source,unit_id\n"
+    "Có Tên,a@example.com,0900000001,website,14\n"
+    ",b@example.com,0900000002,website,14\n"        # full_name TRỐNG
+    "Thiếu Nguồn,c@example.com,0900000003,,14\n"    # source TRỐNG
+)
+
+
+async def test_o_bat_buoc_trong_thi_bao_loi_chu_khong_tao_lead_ten_nan(repo_gia, db_gia):
+    """ĐỔI HÀNH VI có chủ đích: ô bắt buộc trống nay báo lỗi dòng.
+
+    Trước bản vá, ``full_name``/``source`` trống được ép thành chuỗi "nan" và
+    **lọt qua validator** — hệ thống nhận về một lead tên "nan", nguồn "nan".
+    Nhập được, nhưng nhập rác: cái tên đó rồi sẽ hiện trên màn hình officer và
+    trong báo cáo nguồn tuyển sinh.
+
+    Nay chúng thành chuỗi rỗng nên validator bắt được và người import biết dòng
+    nào hỏng để sửa. Đây là ĐÁNH ĐỔI: hai dòng kiểu này chuyển từ "nhập được"
+    sang "bị loại" — cố ý, và chỉ ảnh hưởng dòng đó chứ không hỏng cả file.
+    """
+    with patch.object(
+        lead_service.StatusHelper, "get_initial_status",
+        AsyncMock(return_value=SimpleNamespace(
+            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+        )),
+    ), patch.object(
+        lead_service, "calculate_lead_score", AsyncMock(return_value=20)
+    ):
+        res = await lead_service.import_leads_from_file_content(
+            file_content=CSV_THIEU_BAT_BUOC.encode("utf-8"),
+            filename="thieu.csv", db=db_gia,
+            default_unit_id=14, auto_assign_officer_id=None,
+        )
+
+    kq = res[0] if isinstance(res, tuple) else res
+    assert kq.successful_imports == 1, f"chỉ dòng đầy đủ được nhận: {kq.errors}"
+    assert kq.failed_imports == 2
+
+    loi = " ".join(e.error_message for e in kq.errors)
+    assert "'nan'" not in loi, "ô trống vẫn bị ép thành chuỗi 'nan'"
+
+    # Và tuyệt đối không có lead nào mang tên/nguồn "nan" lọt vào lô chèn.
+    for lead in repo_gia["repo"].da_chen:
+        for truong in ("full_name", "source"):
+            gt = lead.get(truong) if isinstance(lead, dict) else getattr(lead, truong, None)
+            assert gt != "nan", f"{truong} = 'nan' — rác lọt vào cơ sở dữ liệu"

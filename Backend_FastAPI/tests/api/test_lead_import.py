@@ -279,8 +279,12 @@ async def test_import_with_errors(
     import_result = import_response.json()
     log.debug(f"Import response (with errors): {import_result}")
 
-    expected_success = 1
-    expected_fails = 3
+    # Dòng "Missing Email" nay NHẬP ĐƯỢC: `Lead.email` nullable và LeadCreate.email
+    # Optional, nên ô email trống là hợp lệ. Trước đây nó bị loại chỉ vì pandas đọc
+    # ô trống thành NaN rồi `str(NaN)` cho ra chuỗi "nan" — một ràng buộc không tầng
+    # nào đặt ra (2425/2535 lead trên production không có email).
+    expected_success = 2  # dòng hợp lệ + dòng thiếu email
+    expected_fails = 2    # email sai định dạng + email trùng trong file
     total_processed = expected_success + expected_fails
 
     assert import_result["total_rows_processed"] == total_processed
@@ -289,34 +293,32 @@ async def test_import_with_errors(
     assert len(import_result["created_lead_ids"]) == expected_success  # 1
     assert len(import_result["errors"]) == expected_fails  # 3
 
-    # --- ✅ SỬA LẠI ASSERTIONS CHO ĐÚNG THỨ TỰ LỖI ---
     errors = import_result["errors"]
 
-    # Lỗi 1: Dòng 3 (Missing Email) -> Bị ép kiểu thành 'nan' -> Lỗi format
-    assert errors[0]["row_number"] == 3
+    # Không dòng nào được hỏng vì chuỗi "nan" nữa — đó là dấu hiệu ô trống lại bị
+    # ép kiểu thành chuỗi.
+    assert not any("'nan'" in e["error_message"] for e in errors), (
+        f"ô trống lại biến thành chuỗi 'nan': {errors}"
+    )
+
+    # Lỗi 1: Dòng 4 (Bad Email Format) — email có giá trị nhưng sai định dạng
+    assert errors[0]["row_number"] == 4
     assert (
         "email" in errors[0]["error_message"]
         and "valid email address" in errors[0]["error_message"]
     )
-    assert (
-        "input_value='nan'" in errors[0]["error_message"]
-    )  # Kiểm tra lỗi cụ thể 'nan'
+    assert "input_value='bad-email'" in errors[0]["error_message"]
 
-    # Lỗi 2: Dòng 4 (Bad Email Format)
-    assert errors[1]["row_number"] == 4
+    # Lỗi 2: Dòng 5 (Duplicate Email — tin Việt: "Email '...' đã tồn tại...")
+    assert errors[1]["row_number"] == 5
     assert (
-        "email" in errors[1]["error_message"]
-        and "valid email address" in errors[1]["error_message"]
+        "Email" in errors[1]["error_message"]
+        and "đã tồn tại" in errors[1]["error_message"]
     )
-    assert (
-        "input_value='bad-email'" in errors[1]["error_message"]
-    )  # Kiểm tra lỗi 'bad-email'
 
-    # Lỗi 3: Dòng 5 (Duplicate Email — tin Việt: "Email '...' đã tồn tại...")
-    assert errors[2]["row_number"] == 5
-    assert (
-        "Email" in errors[2]["error_message"]
-        and "đã tồn tại" in errors[2]["error_message"]
+    # Dòng 3 (Missing Email) phải NẰM TRONG nhóm thành công, không phải nhóm lỗi
+    assert all(e["row_number"] != 3 for e in errors), (
+        f"dòng thiếu email vẫn bị loại: {errors}"
     )
 
     log.info("Import with errors handled correctly. Response verified.")

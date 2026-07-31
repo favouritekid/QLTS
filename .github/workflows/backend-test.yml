@@ -172,6 +172,10 @@ jobs:
       #   * TestRefundReferenceAndContext — mã tham chiếu tự điền theo ngày VN,
       #     và response mang đủ ngữ cảnh để kế toán quyết trên bảng;
       #   * TestRefundSummaryIdor — dải tổng quan không đếm phiếu của đơn vị khác.
+      # `test_lead_import.py` vào đây vì nó KHOÁ HÀNH VI của đường nhập lead từ
+      # file — và nó vừa vỡ thật khi ô trống thôi bị ép thành chuỗi "nan". Trước
+      # đó nó chỉ chạy nightly, tức cổng PR xanh còn lỗi rơi xuống sau khi merge.
+      # Hai tệp `test_lead_import_empty_*` canh chính bản vá đó.
       # Chọn theo LỚP chứ không cả file: các lớp payment còn lại (record/verify/
       # overpayment) tốn thêm vài phút mà không canh đường tiền-ra, để nightly.
       # Ba tập cuối (cohort đưa sang hệ ký túc xá) canh những thứ hỏng ÂM THẦM:
@@ -214,6 +218,9 @@ jobs:
           tests/unit/test_sync_dorm_students.py
           tests/services/test_payment_service.py::TestRefundService
           tests/services/test_payment_service.py::TestRefundNoDeadEnd
+          tests/api/test_lead_import.py
+          tests/unit/test_lead_import_empty_cells.py
+          tests/unit/test_lead_import_empty_email_end_to_end.py
           tests/services/test_payment_service.py::TestRefundReferenceAndContext
           tests/services/test_payment_service.py::TestRefundSummaryIdor
           -q --tb=short --timeout=60
