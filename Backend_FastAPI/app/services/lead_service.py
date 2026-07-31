@@ -4175,6 +4175,34 @@ async def revert_last_status(
 # PHASE 1 - Task 1.8: LEAD IMPORT (EXTRACTED FROM ROUTER)
 # =============================================================================
 
+def _cell_or_none(value) -> Optional[str]:
+    """Ô của pandas → chuỗi đã strip, hoặc None khi ô TRỐNG.
+
+    🔴 ``str(value)`` trên một ô trống KHÔNG cho chuỗi rỗng: pandas đọc ô trống
+    thành ``NaN`` (float), và ``str(NaN)`` cho ra **chuỗi "nan"** — bốn ký tự
+    hợp lệ hoàn toàn. Nên phép ``... .strip() or None`` quen thuộc không cứu
+    được: ``"nan"`` là giá trị thật, không phải chuỗi rỗng.
+
+    Hậu quả đã đo trên chính hàm này: ô email trống làm pydantic từ chối cả
+    dòng (*"value is not a valid email address: 'nan'"*) dù model khai
+    ``email`` nullable và 95,7% lead trên production không có email; còn
+    ``education_level``/``location`` thì im lặng ghi chuỗi "nan" vào cơ sở dữ
+    liệu vì chúng không qua validator nào.
+
+    ``phone``/``phone2``/``gpa``/``unit_id`` ngay cạnh vốn đã dùng
+    ``pd.notna`` — helper này chỉ đưa những trường còn lại về cùng một lối.
+
+    pandas import cục bộ trong ``import_leads_from_file_content`` (giữ nguyên để
+    không kéo pandas vào mọi lần nạp module), nên import lại ở đây.
+    """
+    import pandas as pd
+
+    if not pd.notna(value):
+        return None
+    s = str(value).strip()
+    return s or None
+
+
 async def import_leads_from_file_content(
     file_content: bytes,
     filename: str,
@@ -4395,8 +4423,12 @@ async def import_leads_from_file_content(
 
         # Type conversion for required fields
         try:
-            cleaned_data["full_name"] = sanitize_csv_cell(str(row_data.get("full_name", "")).strip())
-            cleaned_data["email"] = str(row_data.get("email", "")).strip()
+            # Bắt buộc — nhưng ô trống phải thành "" để validator bắt được,
+            # chứ để lọt chuỗi "nan" thì nó thành một cái tên hợp lệ.
+            cleaned_data["full_name"] = sanitize_csv_cell(_cell_or_none(row_data.get("full_name")) or "")
+            # Ô trống ⇒ None. Model + LeadCreate đều khai email optional; ép
+            # thành chuỗi "nan" là tự dựng lên một ràng buộc không ai đặt ra.
+            cleaned_data["email"] = _cell_or_none(row_data.get("email"))
 
             # Special handling for 'phone': convert to string, strip Excel float ".0"
             phone_val = row_data.get("phone")
@@ -4420,10 +4452,11 @@ async def import_leads_from_file_content(
             else:
                 cleaned_data["phone2"] = None
 
-            cleaned_data["source"] = sanitize_csv_cell(str(row_data.get("source", "")).strip())
+            cleaned_data["source"] = sanitize_csv_cell(_cell_or_none(row_data.get("source")) or "")
 
             # ✅ Extract optional fields for Scoring
-            cleaned_data["education_level"] = sanitize_csv_cell(str(row_data.get("education_level", "")).strip()) or None
+            _edu = _cell_or_none(row_data.get("education_level"))
+            cleaned_data["education_level"] = sanitize_csv_cell(_edu) if _edu else None
             
             gpa_val = row_data.get("gpa")
             if pd.notna(gpa_val):
@@ -4435,7 +4468,8 @@ async def import_leads_from_file_content(
             else:
                 cleaned_data["gpa"] = None
                 
-            cleaned_data["location"] = sanitize_csv_cell(str(row_data.get("location", "")).strip()) or None
+            _loc = _cell_or_none(row_data.get("location"))
+            cleaned_data["location"] = sanitize_csv_cell(_loc) if _loc else None
 
 
             # Convert 'unit_id' to int (or use default if provided)
