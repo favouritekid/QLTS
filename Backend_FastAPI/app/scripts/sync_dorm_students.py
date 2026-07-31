@@ -183,6 +183,19 @@ def assert_payload_contract(rows: List[Any]) -> None:
         "source_gender_raw",
         "program_name",
         "degree_level",
+        # 🔴 Hai cột điện thoại nằm ĐÂY, không phải chỗ khác.
+        #
+        # Bản trước vá `degree_level` rồi để nguyên `getattr(..., None)` cho hai
+        # cột này — tức chừa nguyên lỗ hổng vừa bịt, cho đúng những cột mà cán
+        # bộ KTX dùng để GỌI ĐIỆN. `contact_phone2` mới có từ `20260729000001`,
+        # nên "script mới trên image backend cũ" là ca có thật với chúng hơn cả
+        # với `degree_level`.
+        #
+        # Guard P0122 phía KTX chỉ bắt buộc `degree_level`, nên nếu payload
+        # thiếu khoá điện thoại thì RPC nhận, nhánh `do update` ghi
+        # `contact_phone2 = null` cho CẢ LÔ, và lượt đồng bộ báo thành công.
+        "contact_phone",
+        "contact_phone2",
         "academic_year",
         "officer_qlts_id",
         "unit_id",
@@ -230,8 +243,10 @@ def build_student_payload(
     if synced_at is None:
         synced_at = datetime.now(timezone.utc).isoformat()
 
-    lien_he = chuan_hoa_so(getattr(row, "contact_phone", None))
-    lien_he_phu = chuan_hoa_so(getattr(row, "contact_phone2", None))
+    # Truy cập THẲNG — cùng lý do với `degree_level` bên dưới. Hàng thiếu
+    # thuộc tính đã bị `assert_payload_contract` chặn TRƯỚC khi mở lượt.
+    lien_he = chuan_hoa_so(row.contact_phone)
+    lien_he_phu = chuan_hoa_so(row.contact_phone2)
     # Hai ô hiện cùng một số thì ô thứ hai không nói thêm gì, chỉ khiến người
     # gọi thử lại đúng số vừa không nghe máy.
     if lien_he_phu is not None and lien_he_phu == lien_he:

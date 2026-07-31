@@ -10,6 +10,9 @@ conftest truncate toàn bộ bảng giữa các test nên mỗi test tự dựng
 """
 
 from decimal import Decimal
+from typing import Optional
+
+from sqlalchemy.exc import IntegrityError
 
 import pytest
 import pytest_asyncio
@@ -163,7 +166,7 @@ async def _make_degree_level(name: str) -> int:
 async def _make_major(
     unit_id: int,
     name: str = "Cao đẳng Điều dưỡng",
-    degree_level_id: int = None,
+    degree_level_id: Optional[int] = None,
     degree_level_text: str = "Cao đẳng",
 ) -> int:
     async with AsyncSessionLocal() as session:
@@ -538,6 +541,66 @@ async def test_degree_level_reads_the_canonical_source_not_the_legacy_text():
     assert [r.qlts_profile_id for r in rows] == [profile_id]
     assert rows[0].program_name == "Ngành thiếu FK trình độ"
     assert rows[0].degree_level is None
+
+
+async def test_at_most_one_paid_hk1_fee_row_can_exist():
+    """🔴 Điều THẬT SỰ giữ cho tên ngành và trình độ cùng một dòng phí.
+
+    Hai truy vấn con chạy ĐỘC LẬP; dùng chung khuôn ``_resolved_major_scalar``
+    chỉ bảo đảm cùng HÌNH DẠNG, không bảo đảm cùng HÀNG. Thứ bảo đảm cùng hàng
+    là ràng buộc ``uq_fee_profile_type_semester_tuition``: unique từng phần
+    trên ``(admission_profile_id, fee_type, semester_no)`` với điều kiện
+    ``fee_type = 'tuition' and status <> 'cancelled'`` — nên vị từ cohort chỉ
+    còn tối đa MỘT dòng để chọn.
+
+    Ca này đo chính ràng buộc đó. Nếu nó bị nới, hai truy vấn con có thể chọn
+    hai dòng khác nhau và cho ra một hồ sơ mang nhãn ghép từ hai chương trình
+    ("Công nghệ ô tô — Cao đẳng" trên hồ sơ học Trung cấp), không có gì báo.
+
+    ``order_by(Fee.id)`` và ``outerjoin`` trong helper là lưới THỨ HAI cho đúng
+    ngày đó, không phải lưới thứ nhất.
+    """
+    unit_id = await _make_unit()
+    major_id = await _make_major(unit_id)
+    lead_id = await _make_lead(unit_id)
+    profile_id = await _make_profile(lead_id, academic_year=2026)
+    await _add_tuition_fee(profile_id, paid="3000000", resolved_major_id=major_id)
+
+    with pytest.raises(IntegrityError) as loi:
+        await _add_tuition_fee(profile_id, paid="3000000", resolved_major_id=major_id)
+
+    assert "uq_fee_profile_type_semester_tuition" in str(loi.value)
+
+
+async def test_cancelled_fee_row_does_not_confuse_the_two_subqueries():
+    """Dòng phí ĐÃ HUỶ mang ngành khác không được lọt vào nhãn.
+
+    Đây là cách hợp lệ duy nhất để một hồ sơ có hai dòng phí HK1 mang hai ngành
+    khác nhau (đổi ngành: huỷ dòng cũ, tạo dòng mới). Cả hai truy vấn con phải
+    cùng bỏ qua dòng đã huỷ — nếu một trong hai quên vế ``status``, nhãn sẽ ghép
+    ngành cũ với bậc mới.
+    """
+    unit_id = await _make_unit()
+    trung_cap = await _make_degree_level("Trung cấp")
+    cao_dang = await _make_degree_level("Cao đẳng")
+
+    nganh_cu = await _make_major(unit_id, name="Ngành CŨ", degree_level_id=trung_cap)
+    nganh_moi = await _make_major(unit_id, name="Ngành MỚI", degree_level_id=cao_dang)
+
+    lead_id = await _make_lead(unit_id)
+    profile_id = await _make_profile(lead_id, academic_year=2026)
+    await _add_tuition_fee(
+        profile_id,
+        paid="3000000",
+        resolved_major_id=nganh_cu,
+        status=FeeStatusEnum.cancelled.value,
+    )
+    await _add_tuition_fee(profile_id, paid="3000000", resolved_major_id=nganh_moi)
+
+    rows = await _cohort_rows(2026)
+    assert [r.qlts_profile_id for r in rows] == [profile_id]
+    assert rows[0].program_name == "Ngành MỚI"
+    assert rows[0].degree_level == "Cao đẳng"
 
 
 async def test_profile_without_resolved_major_has_null_degree_level():

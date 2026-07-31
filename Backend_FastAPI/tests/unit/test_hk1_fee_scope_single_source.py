@@ -250,6 +250,21 @@ def test_resolved_major_subquery_really_calls_the_paid_helper(monkeypatch):
     assert _SENTINEL_PAID in _sql(dorm_repo._resolved_major_name_subquery())
 
 
+def test_resolved_degree_level_subquery_really_calls_the_paid_helper(monkeypatch):
+    """Mảnh TRÌNH ĐỘ cũng phải soi đúng dòng phí HK1 đã thu tiền.
+
+    Kiểm RIÊNG, không dựa vào câu tổng: ``select_paid_hk1_cohort`` ghép nhiều
+    mảnh cùng dùng helper, nên sentinel xuất hiện trong câu tổng không chứng
+    minh được MẢNH NÀO đã gọi nó. Nếu mảnh này tự viết vị từ riêng, trình độ có
+    thể lấy từ một dòng phí khác với dòng đã quyết định em ấy vào cohort — và
+    một nhãn ghép từ hai chương trình thì không có gì nổ ra.
+    """
+    from app.repositories import dorm_export_repository as dorm_repo
+
+    monkeypatch.setattr(dorm_repo, "confirmed_paid_hk1_conditions", _sentinel_paid)
+    assert _SENTINEL_PAID in _sql(dorm_repo._resolved_degree_level_subquery())
+
+
 def test_sentinel_patch_actually_takes_effect():
     """Chốt an toàn cho chính bộ test: không vá thì KHÔNG sentinel nào xuất hiện.
 
@@ -267,6 +282,7 @@ def test_sentinel_patch_actually_takes_effect():
     for clause in (
         dorm_repo.paid_hk1_exists_clause(),
         dorm_repo._resolved_major_name_subquery(),
+        dorm_repo._resolved_degree_level_subquery(),
         dorm_repo.select_paid_hk1_cohort(2026),
     ):
         rendered = _sql(clause)
