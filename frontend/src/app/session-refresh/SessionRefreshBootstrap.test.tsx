@@ -13,7 +13,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 
 const refreshAccessToken = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/api/refresh", () => ({ refreshAccessToken }));
+// Chỉ thay `refreshAccessToken` (thứ cần điều khiển), GIỮ NGUYÊN phần còn lại
+// của module — nhất là `shouldLogoutAfterRefreshFailure`. Mock cả module sẽ
+// biến mọi test phân loại lỗi dưới đây thành test cho một hàm giả: chúng vẫn
+// xanh kể cả khi classifier thật đảo ngược kết luận.
+vi.mock("@/lib/api/refresh", async (importActual) => ({
+  ...(await importActual<typeof import("@/lib/api/refresh")>()),
+  refreshAccessToken,
+}));
 
 const searchParams = vi.hoisted(() => new URLSearchParams());
 vi.mock("next/navigation", () => ({

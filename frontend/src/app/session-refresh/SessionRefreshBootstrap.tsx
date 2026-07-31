@@ -17,52 +17,23 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
-import { refreshAccessToken } from "@/lib/api/refresh";
+import {
+  refreshAccessToken,
+  shouldLogoutAfterRefreshFailure,
+} from "@/lib/api/refresh";
 import { buildLoginRedirect, isValidRedirect } from "@/lib/auth/login-redirect";
 import { Button } from "@/components/ui/button";
 
 const DEFAULT_TARGET = "/dashboard";
 
-/**
- * `error_code` backend gửi cho 429 do rate limit HẠ TẦNG (slowapi). Đây là
- * trường hợp DUY NHẤT khiến một 429 được coi là tạm thời.
- */
-const TRANSIENT_RATE_LIMIT_CODE = "RATE_LIMITED";
-
-/**
- * Lỗi refresh nào là "phiên đã chết thật"?
- *
- * ⚠️ Quy tắc là BLACKLIST, không phải whitelist 401/403: `/auth/refresh` phát
- * 429 cho HAI nghĩa khác nhau — quota IP của slowapi (`RATE_LIMITED`, tạm
- * thời) và cổng chống lạm dụng M4 (`REFRESH_ABUSE_LOCKED`), mà nhánh sau nghĩa
- * là backend ĐÃ thu hồi toàn bộ session. Coi mọi 429 là tạm thời sẽ hiện "phiên
- * vẫn còn hiệu lực" cho một phiên đã chết và mời người dùng bấm Thử lại mãi.
- * Tương tự, 400/404/422 (sai NEXT_PUBLIC_API_URL, đổi route proxy, validation
- * deny mới) không tự phục hồi được — đăng nhập lại là đường thoát duy nhất.
- *
- * Thiếu mã hoặc mã lạ → coi là phiên chết: fail-safe nghiêng về phía an toàn.
- *
- * 🔁 TODO sau khi PR #525 merge: xoá hàm này và dùng thẳng
- * `shouldLogoutAfterRefreshFailure()` trong `@/lib/api/refresh` — nó là cùng
- * một quyết định, chỉ đang nằm trên nhánh chưa merge nên chưa import được.
- */
-function isTerminalRefreshFailure(error: unknown): boolean {
-  const response = (
-    error as { response?: { status?: number; data?: { error_code?: string } } } | undefined
-  )?.response;
-  const status = response?.status;
-
-  // Không có response (mạng đứt / timeout / CORS) hoặc không phải lỗi HTTP:
-  // không biết gì về phiên → không được suy ra là phiên chết.
-  if (status === undefined) return false;
-
-  if (status === 429) {
-    return response?.data?.error_code !== TRANSIENT_RATE_LIMIT_CODE;
-  }
-
-  // 5xx là lỗi phía server, tạm thời.
-  return status >= 400 && status < 500;
-}
+// Phân loại "phiên đã chết thật" hay "lỗi tạm thời" dùng CHUNG
+// `shouldLogoutAfterRefreshFailure` với interceptor 401 và CSRF-recovery trong
+// `lib/api/client.ts`. Trang này từng giữ một bản sao vì hàm kia nằm trên
+// nhánh #525 chưa merge; #525 đã vào `main` (ba057061) nên bản sao đã được gỡ.
+//
+// Hai bản sao của cùng một quyết định là thứ tự nó sẽ lệch: chỉ cần thêm một mã
+// terminal ở một nơi là bootstrap và interceptor kết luận khác nhau về CÙNG một
+// lỗi, và người dùng gặp hành vi khác nhau tuỳ chỗ lỗi nổ ra.
 
 export function SessionRefreshBootstrap() {
   const router = useRouter();
@@ -91,7 +62,7 @@ export function SessionRefreshBootstrap() {
       } catch (error) {
         if (cancelled) return;
 
-        if (isTerminalRefreshFailure(error)) {
+        if (shouldLogoutAfterRefreshFailure(error)) {
           // Hết phiên thật → đường đăng nhập lại, giữ return-url.
           window.location.replace(
             buildLoginRedirect(target, { forceLogin: true, reason: "session_expired" }),

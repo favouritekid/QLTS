@@ -103,14 +103,43 @@ describe("proxy — access token hết hạn", () => {
   });
 });
 
-describe("proxy — các nhánh KHÔNG được nới lỏng", () => {
-  it("không có access_token → vẫn redirect /login", () => {
+describe("proxy — không có access cookie", () => {
+  // "Không có cookie ⇒ chưa từng đăng nhập" là suy luận SAI với đúng những
+  // người đang dùng hệ thống: mọi phiên tạo TRƯỚC khi cookie được nới tuổi thọ
+  // vẫn mất cookie sau 15 phút (cả cơ sở người dùng, trong 30 ngày đầu sau
+  // deploy), chưa kể eviction. `refresh_token` (Path=/api) có thể vẫn sống mà
+  // middleware không nhìn thấy.
+  it("không có access_token → sang /session-refresh kèm return-url", () => {
     const res = proxy(requestWith(undefined));
 
     expect(res.status).toBe(307);
-    expect(res.headers.get("location") ?? "").toContain("/login");
+    const location = res.headers.get("location") ?? "";
+    expect(location).toContain("/session-refresh");
+    expect(location).toContain("redirect=");
+    expect(location).toContain("admissions");
   });
 
+  it("không có access_token → KHÔNG xoá cookie nào", () => {
+    const res = proxy(requestWith(undefined));
+
+    const setCookie = res.headers.get("set-cookie") ?? "";
+    expect(setCookie).not.toContain("refresh_token=;");
+    expect(setCookie).not.toContain("access_token=;");
+  });
+
+  // Cùng một hàm dựng URL cho mọi nhánh, nên return-url ngoại lai bị loại ở
+  // MỌI lối vào — không nhánh nào được quên `isValidRedirect`.
+  it("return-url ngoại lai bị loại bỏ, không đính vào /session-refresh", () => {
+    const req = new NextRequest(new URL("/admissions/611", BASE));
+    const res = proxy(req);
+    const location = res.headers.get("location") ?? "";
+
+    expect(location).toContain("/session-refresh");
+    expect(location).not.toContain("evil.com");
+  });
+});
+
+describe("proxy — các nhánh KHÔNG được nới lỏng", () => {
   it("token sai định dạng → vẫn redirect /login", () => {
     const res = proxy(requestWith("khong-phai-jwt"));
 

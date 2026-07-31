@@ -87,6 +87,20 @@ const IGNORED_ROUTES = ["/.well-known"];
 // 🔐 PROXY LOGIC
 // ============================================
 
+/**
+ * URL tới trang bootstrap làm mới phiên, kèm return-url nếu nó hợp lệ.
+ *
+ * Dùng chung cho MỌI nhánh đưa người dùng sang `/session-refresh`. Nếu mỗi
+ * nhánh tự dựng URL thì sớm muộn chúng lệch nhau ở đúng chỗ nguy hiểm nhất —
+ * việc lọc return-url — và một nhánh quên `isValidRedirect` là một open
+ * redirect.
+ */
+function buildSessionRefreshUrl(request: NextRequest, returnTo: string): URL {
+  const url = new URL(SESSION_REFRESH_PATH, request.url);
+  if (isValidRedirect(returnTo)) url.searchParams.set("redirect", returnTo);
+  return url;
+}
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -152,10 +166,27 @@ export function proxy(request: NextRequest) {
   const accessToken = request.cookies.get("access_token")?.value;
 
   if (!accessToken) {
-    // Expected for unauthenticated visitors — redirect silently, giữ cả query
-    // (nhất quán với nhánh token invalid/expired bên dưới).
+    // "Không có cookie ⇒ chưa từng đăng nhập" là một suy luận SAI, và sai với
+    // đúng những người đang dùng hệ thống:
+    //
+    //  * mọi phiên tạo TRƯỚC khi cookie được nới tuổi thọ (auth.py) vẫn mang
+    //    cookie hết hạn sau 15 phút — cả cơ sở người dùng hiện tại rơi vào đây
+    //    trong 30 ngày đầu sau deploy;
+    //  * trình duyệt evict cookie khi hết dung lượng, xoá theo chính sách, hoặc
+    //    người dùng dọn cookie site.
+    //
+    // Trong cả ba ca, `refresh_token` (Path=/api, 30 ngày) có thể vẫn sống mà
+    // middleware KHÔNG nhìn thấy được. Nên ở đây ta cũng không kết luận, mà đưa
+    // sang trang bootstrap để client tự hỏi backend — đúng như nhánh token hết
+    // hạn bên dưới.
+    //
+    // Cái giá: khách vãng lai và bot quét cũng đi qua một lần POST
+    // /api/auth/refresh. Chấp nhận được vì xô rate-limit đã tách theo chủ thể
+    // (`get_refresh_identity_key`): request không chứng minh được danh tính rơi
+    // vào nhánh IP 20/giờ và KHÔNG còn ăn vào quota của người dùng thật.
+    console.warn(`[Proxy] ⏳ Không có access cookie — thử làm mới phiên: ${pathname}`);
     return NextResponse.redirect(
-      new URL(buildLoginRedirect(pathname + request.nextUrl.search), request.url),
+      buildSessionRefreshUrl(request, pathname + request.nextUrl.search),
     );
   }
 
@@ -209,11 +240,9 @@ export function proxy(request: NextRequest) {
         `[Proxy] ⏳ Access token hết hạn (${Math.round(expiredForMs / 1000)}s) — ` +
           `chuyển sang ${SESSION_REFRESH_PATH} để làm mới, KHÔNG xoá cookie: ${pathname}`,
       );
-      const url = new URL(SESSION_REFRESH_PATH, request.url);
-      if (isValidRedirect(returnTo)) url.searchParams.set("redirect", returnTo);
       // Cố ý KHÔNG xoá cookie nào: `refresh_token` là thứ sẽ cứu phiên, và
       // `access_token` hết hạn vốn vô hại (backend luôn tự kiểm hạn).
-      return NextResponse.redirect(url);
+      return NextResponse.redirect(buildSessionRefreshUrl(request, returnTo));
     }
 
     console.warn(
