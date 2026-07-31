@@ -49,25 +49,46 @@ function requestWith(token: string | undefined, path = "/admissions/611") {
 
 describe("proxy — access token hết hạn", () => {
   // Ca sự cố: officer rời máy hơn 15 phút rồi F5 (hoặc mở hồ sơ ở tab mới).
-  it("hết hạn gần đây → CHO QUA để client tự refresh, không redirect", () => {
+  it("hết hạn gần đây → sang /session-refresh kèm return-url", () => {
     const res = proxy(requestWith(accessToken(-120))); // hết hạn 2 phút trước
 
-    expect(res.status).toBe(200); // NextResponse.next()
-    expect(res.headers.get("location")).toBeNull();
+    expect(res.status).toBe(307);
+    const location = res.headers.get("location") ?? "";
+    expect(location).toContain("/session-refresh");
+    expect(location).toContain("redirect=");
+    expect(location).toContain("admissions");
   });
 
-  it("hết hạn gần đây → KHÔNG xoá cookie access_token", () => {
+  // KHÔNG được `next()`: Server Component sẽ fetch ngay bằng token hết hạn →
+  // 401 → server.ts redirect /login?force_login=true → nhánh force_login xoá
+  // SẠCH cả refresh_token, mất phiên trước khi client kịp hydrate.
+  it("hết hạn gần đây → KHÔNG cho request đi thẳng vào route SSR", () => {
     const res = proxy(requestWith(accessToken(-120)));
 
-    // Xoá cookie là thứ khiến request kế tiếp của SPA chắc chắn 401.
-    const setCookie = res.headers.get("set-cookie") ?? "";
-    expect(setCookie).not.toContain("access_token=;");
+    expect(res.status).not.toBe(200);
+    expect(res.headers.get("location") ?? "").not.toContain("/login");
   });
 
-  it("hết hạn cả tuần (refresh_token vẫn còn) → vẫn CHO QUA", () => {
+  it("hết hạn gần đây → KHÔNG xoá cookie nào (refresh_token là thứ cứu phiên)", () => {
+    const res = proxy(requestWith(accessToken(-120)));
+
+    const setCookie = res.headers.get("set-cookie") ?? "";
+    expect(setCookie).not.toContain("access_token=;");
+    expect(setCookie).not.toContain("refresh_token=;");
+  });
+
+  it("hết hạn cả tuần (refresh_token vẫn còn) → vẫn sang /session-refresh", () => {
     const res = proxy(requestWith(accessToken(-7 * 24 * 3600)));
 
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location") ?? "").toContain("/session-refresh");
+  });
+
+  it("trang /session-refresh phải công khai (nếu không sẽ tự đá chính nó → vòng lặp)", () => {
+    const res = proxy(new NextRequest(new URL("/session-refresh?redirect=/admissions/611", BASE)));
+
     expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
   });
 
   // Quá cửa sổ refresh_token (30 ngày) → không còn gì để cứu, đá về login luôn
@@ -108,6 +129,15 @@ describe("proxy — các nhánh KHÔNG được nới lỏng", () => {
   // thật, nhưng nới nhánh hết-hạn không được phép làm hỏng nhánh này.
   it("officer vào route admin → vẫn bị đẩy khỏi trang admin", () => {
     const res = proxy(requestWith(accessToken(600, "officer"), "/admin/users"));
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location") ?? "").not.toContain("/admin/users");
+  });
+
+  // Nhánh hết-hạn nằm TRƯỚC bước RBAC, nên nếu nó `next()` thì một token hết
+  // hạn sẽ vào thẳng vỏ trang admin mà không qua kiểm quyền.
+  it("token HẾT HẠN vào route admin → không được vào vỏ trang admin", () => {
+    const res = proxy(requestWith(accessToken(-120, "officer"), "/admin/users"));
 
     expect(res.status).toBe(307);
     expect(res.headers.get("location") ?? "").not.toContain("/admin/users");

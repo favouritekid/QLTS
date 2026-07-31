@@ -17,7 +17,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { decodeJWT, isTokenExpired } from "@/lib/auth/jwt-decode";
 import { hasAdminAccess, hasFinanceAccess } from "@/lib/config/roles";
-import { buildLoginRedirect } from "@/lib/auth/login-redirect";
+import { buildLoginRedirect, isValidRedirect } from "@/lib/auth/login-redirect";
 
 // ============================================
 // 🛣️ ROUTE CONFIGURATION
@@ -33,6 +33,13 @@ import { buildLoginRedirect } from "@/lib/auth/login-redirect";
  * chắc chắn cũng đã chết, không còn gì để client cứu.
  */
 const REFRESH_TOKEN_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Trang bootstrap công khai: gọi `/api/auth/refresh` rồi quay lại URL cũ.
+ * PHẢI nằm trong `PUBLIC_ROUTE_PREFIXES`, nếu không middleware sẽ tự đá chính
+ * nó về /login và tạo vòng lặp.
+ */
+const SESSION_REFRESH_PATH = "/session-refresh";
 
 const EXACT_PUBLIC_ROUTES = ["/"];
 
@@ -54,6 +61,10 @@ const PUBLIC_ROUTE_PREFIXES = [
   // SMS Marketing landing (PR-5): /lp/{code} — người nhận tới từ link SMS,
   // KHÔNG đăng nhập. Backend /api/public/sms/* CSRF-exempt; trang phải render.
   "/lp",
+  // Trang bootstrap làm mới phiên. Phải công khai: người dùng tới đây CHÍNH VÌ
+  // access token đã hết hạn, nếu đòi auth thì middleware đá nó về /login và
+  // luồng cứu phiên không bao giờ chạy.
+  "/session-refresh",
 ];
 
 /**
@@ -171,28 +182,38 @@ export function proxy(request: NextRequest) {
   // với `Path=/api` (auth.py `set_cookie`), nên trình duyệt KHÔNG gửi kèm khi
   // request tới `/admissions/...` hay `/dashboard`: middleware này không hề
   // nhìn thấy nó và do đó không có dữ liệu để kết luận "hết phiên". Trước đây
-  // nó vẫn xoá `access_token` rồi đá về /login — một quyết định dựa trên thông
-  // tin thiếu, và là đường thoát duy nhất còn lại sau khi client đã cố ý giữ
-  // phiên qua một refresh hỏng tạm thời: chỉ cần F5, mở hồ sơ ở tab mới hay
-  // bấm một link gây full document load là officer mất phiên (và mất form đang
-  // nhập). Access token chỉ sống 15 phút nên chỉ cần rời máy một lúc là dính.
+  // nó vẫn xoá `access_token` rồi đá về /login — quyết định dựa trên thông tin
+  // thiếu. Access token chỉ sống 15 phút, nên chỉ cần rời máy một lúc rồi F5,
+  // mở hồ sơ ở tab mới hay bấm link gây full document load là officer bị bắt
+  // đăng nhập lại (và mất form đang nhập) dù phiên còn hiệu lực hàng tuần.
   //
-  // Nay để CLIENT quyết định — nó gọi được `/api/auth/refresh` (cookie khớp
-  // path) và đã có single-flight cho việc đó. Middleware chỉ còn chặn khi
-  // token hết hạn quá lâu tới mức refresh_token chắc chắn cũng đã chết, để
-  // không bắt người dùng nhìn một trang rỗng rồi mới bị đá ra.
+  // Cách xử lý: đưa sang trang bootstrap công khai `/session-refresh`, nơi
+  // client gọi được `/api/auth/refresh` (cookie khớp path) rồi quay lại đúng
+  // URL cũ.
   //
-  // KHÔNG phải lỗ hổng: middleware là gate UX (xem ghi chú RBAC bên dưới),
-  // backend Casbin mới là gate thật. Token hết hạn thì mọi API call vẫn 401.
+  // ⚠️ KHÔNG `NextResponse.next()` ở đây, dù nghe có vẻ "để client tự lo":
+  //  1. Server Component sẽ fetch NGAY với access token đã hết hạn (vd
+  //     `admissions/[id]/page.tsx` gọi `serverApi`), backend trả 401 và
+  //     `lib/api/server.ts` redirect `/login?force_login=true` — mà nhánh
+  //     `force_login` phía trên xoá SẠCH cả `refresh_token`. Phiên mất hẳn
+  //     trước khi client kịp hydrate: tệ hơn cả hành vi cũ.
+  //  2. `next()` nằm TRƯỚC bước RBAC bên dưới, nên một token hết hạn sẽ đi
+  //     thẳng vào `/admin/*` mà không qua kiểm quyền. Backend Casbin vẫn chặn
+  //     dữ liệu, nhưng vỏ trang thì không nên lộ.
   if (isTokenExpired(accessToken)) {
     const expiredForMs = payload.exp ? Date.now() - payload.exp * 1000 : Infinity;
+    const returnTo = pathname + request.nextUrl.search;
 
     if (expiredForMs < REFRESH_TOKEN_LIFETIME_MS) {
       console.warn(
         `[Proxy] ⏳ Access token hết hạn (${Math.round(expiredForMs / 1000)}s) — ` +
-          `để client tự refresh, KHÔNG đá về /login: ${pathname}`,
+          `chuyển sang ${SESSION_REFRESH_PATH} để làm mới, KHÔNG xoá cookie: ${pathname}`,
       );
-      return NextResponse.next();
+      const url = new URL(SESSION_REFRESH_PATH, request.url);
+      if (isValidRedirect(returnTo)) url.searchParams.set("redirect", returnTo);
+      // Cố ý KHÔNG xoá cookie nào: `refresh_token` là thứ sẽ cứu phiên, và
+      // `access_token` hết hạn vốn vô hại (backend luôn tự kiểm hạn).
+      return NextResponse.redirect(url);
     }
 
     console.warn(
@@ -201,7 +222,7 @@ export function proxy(request: NextRequest) {
 
     // Clear expired cookie and redirect (giữ return-url để login xong quay lại)
     const response = NextResponse.redirect(
-      new URL(buildLoginRedirect(pathname + request.nextUrl.search), request.url),
+      new URL(buildLoginRedirect(returnTo), request.url),
     );
     response.cookies.delete("access_token");
     return response;
