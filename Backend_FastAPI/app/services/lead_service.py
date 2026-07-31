@@ -4614,6 +4614,11 @@ async def import_leads_from_file_content(
                 if not batch:
                     continue
 
+                # Mốc để cắt lại nếu savepoint bị rollback: ``extend`` nằm TRONG
+                # savepoint nên khi ``IntegrityError`` nổ, cơ sở dữ liệu đã lùi
+                # còn danh sách Python thì không — báo cáo sẽ đếm cả lô đã mất và
+                # trả về id không tồn tại (router còn phát LEAD_IMPORTED theo đó).
+                moc_truoc_lo = len(created_lead_ids)
                 try:
                     async with db.begin_nested():  # Start nested transaction
                         # Insert batch and get IDs
@@ -4628,6 +4633,8 @@ async def import_leads_from_file_content(
                                 phone2=lead_dict.get("phone2"),
                             )
                 except IntegrityError as exc:
+                    # Savepoint đã lùi → cắt lại đúng phần vừa thêm.
+                    del created_lead_ids[moc_truoc_lo:]
                     detail = str(exc.orig) if exc.orig else str(exc)
                     log.warning("Batch insert IntegrityError", batch_offset=i, detail=detail)
                     errors.append(
@@ -4661,7 +4668,11 @@ async def import_leads_from_file_content(
                     row_data={},
                 )
             )
-            created_lead_ids = []  # Reset IDs due to rollback
+            # KHÔNG xoá trắng danh sách. Chú thích cũ ("Reset IDs due to rollback")
+            # giả định router sẽ rollback, nhưng cả hai router gọi hàm này đều
+            # ``await db.commit()`` VÔ ĐIỀU KIỆN — nên các lô đã flush trước lỗi
+            # vẫn vào cơ sở dữ liệu, trong khi phản hồi báo 0 lead được tạo.
+            # Giữ nguyên id của những lô THẬT SỰ đã ghi mới là đúng sự thật.
 
     # --- 6. Build result ---
     result = schemas.LeadImportResult(

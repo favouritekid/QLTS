@@ -249,3 +249,76 @@ async def test_file_khong_co_cot_email_van_nhap_duoc(repo_gia, db_gia):
     for lead in repo_gia["repo"].da_chen:
         gt = lead.get("email") if isinstance(lead, dict) else getattr(lead, "email", None)
         assert gt is None
+
+
+# ---------------------------------------------------------------------------
+# Báo cáo trả về phải khớp thứ THẬT SỰ nằm trong cơ sở dữ liệu
+# ---------------------------------------------------------------------------
+
+CSV_HAI_LO = "full_name,email,phone,source,unit_id\n" + "".join(
+    f"Người {i},nguoi{i}@example.com,09{i:08d},website,14\n" for i in range(1, 151)
+)
+
+
+class _RepoLoHai_Hong(_RepoGia):
+    """Lô đầu ghi được; lô thứ hai chèn xong mới đâm ràng buộc UNIQUE.
+
+    🔑 Lỗi phải nổ SAU ``bulk_insert_leads`` — tức sau khi service đã chạy
+    ``created_lead_ids.extend(batch_ids)``. Nếu cho ``bulk_insert_leads`` raise
+    ngay thì ``extend`` chưa kịp chạy, danh sách không nhiễm, và test sẽ pass cả
+    trên code chưa sửa (tôi đã mắc đúng lỗi này ở bản đầu). Ngoài đời
+    ``IntegrityError`` cũng nổ muộn như vậy: ở ``register_phone_identities`` hoặc
+    lúc thoát savepoint.
+    """
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.so_lo = 0
+
+    async def bulk_insert_leads(self, batch):
+        self.so_lo += 1
+        return await super().bulk_insert_leads(batch)
+
+    async def register_phone_identities(self, *a, **kw):
+        if self.so_lo >= 2:  # lô thứ hai
+            from sqlalchemy.exc import IntegrityError
+
+            raise IntegrityError("INSERT ...", {}, Exception("duplicate key"))
+        return None
+
+
+async def test_lo_bi_rollback_khong_duoc_dem_la_da_nhap(monkeypatch, db_gia):
+    """Lô nổ IntegrityError phải BIẾN MẤT khỏi báo cáo, không chỉ ghi thêm dòng lỗi.
+
+    ``created_lead_ids.extend()`` nằm TRONG savepoint: khi savepoint lùi, cơ sở dữ
+    liệu quay lại còn danh sách Python thì không. Trước bản vá, 150 dòng chia hai
+    lô mà lô hai hỏng vẫn báo 150 thành công, và router phát ``LEAD_IMPORTED`` kèm
+    50 id không tồn tại.
+    """
+    holder = {}
+    monkeypatch.setattr(
+        lead_service, "LeadRepository",
+        lambda *a, **kw: holder.setdefault("repo", _RepoLoHai_Hong()),
+    )
+    with patch.object(
+        lead_service.StatusHelper, "get_initial_status",
+        AsyncMock(return_value=SimpleNamespace(
+            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+        )),
+    ), patch.object(
+        lead_service, "calculate_lead_score", AsyncMock(return_value=20)
+    ):
+        res = await lead_service.import_leads_from_file_content(
+            file_content=CSV_HAI_LO.encode("utf-8"), filename="hai_lo.csv",
+            db=db_gia, default_unit_id=14, auto_assign_officer_id=None,
+        )
+
+    kq = res[0] if isinstance(res, tuple) else res
+    # Lô 1 (100 dòng) ghi được, lô 2 (50 dòng) rollback.
+    assert kq.successful_imports == 100, (
+        f"đang đếm cả lô đã rollback: {kq.successful_imports}"
+    )
+    assert len(kq.created_lead_ids) == 100, (
+        f"trả về {len(kq.created_lead_ids)} id, trong đó có id không tồn tại"
+    )
+    assert kq.failed_imports >= 1
