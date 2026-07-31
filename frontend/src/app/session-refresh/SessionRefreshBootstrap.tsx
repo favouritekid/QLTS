@@ -13,7 +13,7 @@
  * `lib/api/server.ts` redirect `/login?force_login=true` — nhánh đó xoá sạch
  * cả `refresh_token`, tức mất phiên trước khi client kịp hydrate.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
@@ -23,12 +23,45 @@ import { Button } from "@/components/ui/button";
 
 const DEFAULT_TARGET = "/dashboard";
 
-/** Lỗi refresh nào là "phiên đã chết thật" (khác lỗi tạm thời). */
+/**
+ * `error_code` backend gửi cho 429 do rate limit HẠ TẦNG (slowapi). Đây là
+ * trường hợp DUY NHẤT khiến một 429 được coi là tạm thời.
+ */
+const TRANSIENT_RATE_LIMIT_CODE = "RATE_LIMITED";
+
+/**
+ * Lỗi refresh nào là "phiên đã chết thật"?
+ *
+ * ⚠️ Quy tắc là BLACKLIST, không phải whitelist 401/403: `/auth/refresh` phát
+ * 429 cho HAI nghĩa khác nhau — quota IP của slowapi (`RATE_LIMITED`, tạm
+ * thời) và cổng chống lạm dụng M4 (`REFRESH_ABUSE_LOCKED`), mà nhánh sau nghĩa
+ * là backend ĐÃ thu hồi toàn bộ session. Coi mọi 429 là tạm thời sẽ hiện "phiên
+ * vẫn còn hiệu lực" cho một phiên đã chết và mời người dùng bấm Thử lại mãi.
+ * Tương tự, 400/404/422 (sai NEXT_PUBLIC_API_URL, đổi route proxy, validation
+ * deny mới) không tự phục hồi được — đăng nhập lại là đường thoát duy nhất.
+ *
+ * Thiếu mã hoặc mã lạ → coi là phiên chết: fail-safe nghiêng về phía an toàn.
+ *
+ * 🔁 TODO sau khi PR #525 merge: xoá hàm này và dùng thẳng
+ * `shouldLogoutAfterRefreshFailure()` trong `@/lib/api/refresh` — nó là cùng
+ * một quyết định, chỉ đang nằm trên nhánh chưa merge nên chưa import được.
+ */
 function isTerminalRefreshFailure(error: unknown): boolean {
-  const status = (error as { response?: { status?: number } } | undefined)?.response?.status;
-  // 401/403 = refresh token không còn hiệu lực. 429 (rate limit) / 5xx / mạng
-  // đứt chỉ là tạm thời — bắt đăng nhập lại lúc đó là làm mất phiên còn sống.
-  return status === 401 || status === 403;
+  const response = (
+    error as { response?: { status?: number; data?: { error_code?: string } } } | undefined
+  )?.response;
+  const status = response?.status;
+
+  // Không có response (mạng đứt / timeout / CORS) hoặc không phải lỗi HTTP:
+  // không biết gì về phiên → không được suy ra là phiên chết.
+  if (status === undefined) return false;
+
+  if (status === 429) {
+    return response?.data?.error_code !== TRANSIENT_RATE_LIMIT_CODE;
+  }
+
+  // 5xx là lỗi phía server, tạm thời.
+  return status >= 400 && status < 500;
 }
 
 export function SessionRefreshBootstrap() {
@@ -36,16 +69,17 @@ export function SessionRefreshBootstrap() {
   const searchParams = useSearchParams();
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const startedRef = useRef(false);
 
   const requested = searchParams.get("redirect");
   const target = isValidRedirect(requested) ? requested : DEFAULT_TARGET;
 
   useEffect(() => {
-    // Chạy đúng một lần cho mỗi lần bấm "Thử lại" (React StrictMode mount đôi).
-    if (startedRef.current) return;
-    startedRef.current = true;
-
+    // ⚠️ KHÔNG dùng ref "đã chạy rồi" để chặn lần mount thứ hai của StrictMode:
+    // effect đầu bị cleanup (cancelled = true) nên kết quả của nó bị bỏ qua,
+    // còn effect thứ hai lại thấy ref đã bật và không làm gì → trang treo vĩnh
+    // viễn ở "Đang làm mới phiên đăng nhập…".
+    // `refreshAccessToken()` vốn đã single-flight: lần gọi thứ hai chia sẻ
+    // đúng promise đang bay, nên để nó chạy là an toàn và tự khỏi treo.
     let cancelled = false;
 
     (async () => {
@@ -87,7 +121,6 @@ export function SessionRefreshBootstrap() {
         <div className="flex gap-3">
           <Button
             onClick={() => {
-              startedRef.current = false;
               setFailed(false);
               setAttempt((n) => n + 1);
             }}

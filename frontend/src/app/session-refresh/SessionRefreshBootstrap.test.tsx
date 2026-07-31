@@ -8,6 +8,7 @@
  *     /login. Phiên vẫn còn hiệu lực; bắt đăng nhập lại là làm mất nó.
  *  3. Refresh hỏng THẬT (401/403) → mới sang /login?force_login=true.
  */
+import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 
@@ -29,8 +30,11 @@ function setRedirect(value: string | null) {
   if (value !== null) searchParams.set("redirect", value);
 }
 
-function axiosLikeError(status?: number) {
-  return { isAxiosError: true, response: status === undefined ? undefined : { status } };
+function axiosLikeError(status?: number, data: Record<string, unknown> = {}) {
+  return {
+    isAxiosError: true,
+    response: status === undefined ? undefined : { status, data },
+  };
 }
 
 describe("SessionRefreshBootstrap", () => {
@@ -54,13 +58,53 @@ describe("SessionRefreshBootstrap", () => {
   });
 
   // Ca trung tâm: 429 RATE_LIMITED trên bucket dùng chung của cả trường.
-  it("refresh 429 → hiện nút thử lại, KHÔNG đá về /login", async () => {
-    refreshAccessToken.mockRejectedValueOnce(axiosLikeError(429));
+  it("429 RATE_LIMITED → hiện nút thử lại, KHÔNG đá về /login", async () => {
+    refreshAccessToken.mockRejectedValueOnce(axiosLikeError(429, { error_code: "RATE_LIMITED" }));
 
     render(<SessionRefreshBootstrap />);
 
     await waitFor(() => expect(screen.getByRole("button", { name: /^Thử lại$/i })).toBeInTheDocument());
     expect(replace).not.toHaveBeenCalled();
+  });
+
+  // 429 KHÔNG phải mã nào cũng như nhau: cổng chống lạm dụng M4 đã thu hồi
+  // toàn bộ session trước đó. Mời "Thử lại" ở đây là nói dối người dùng.
+  it("429 REFRESH_ABUSE_LOCKED → sang /login (phiên đã bị thu hồi)", async () => {
+    refreshAccessToken.mockRejectedValueOnce(
+      axiosLikeError(429, { error_code: "REFRESH_ABUSE_LOCKED" }),
+    );
+
+    render(<SessionRefreshBootstrap />);
+
+    await waitFor(() => expect(replace).toHaveBeenCalled());
+    expect(replace.mock.calls[0][0]).toContain("/login");
+  });
+
+  it("429 thiếu error_code → sang /login (fail-safe)", async () => {
+    refreshAccessToken.mockRejectedValueOnce(axiosLikeError(429));
+
+    render(<SessionRefreshBootstrap />);
+
+    await waitFor(() => expect(replace).toHaveBeenCalled());
+    expect(replace.mock.calls[0][0]).toContain("/login");
+  });
+
+  it("429 mã lạ → sang /login (fail-safe)", async () => {
+    refreshAccessToken.mockRejectedValueOnce(axiosLikeError(429, { error_code: "HTTP_429" }));
+
+    render(<SessionRefreshBootstrap />);
+
+    await waitFor(() => expect(replace).toHaveBeenCalled());
+    expect(replace.mock.calls[0][0]).toContain("/login");
+  });
+
+  it.each([400, 404, 422])("%i (4xx khác) → sang /login, không mời thử lại", async (status) => {
+    refreshAccessToken.mockRejectedValueOnce(axiosLikeError(status));
+
+    render(<SessionRefreshBootstrap />);
+
+    await waitFor(() => expect(replace).toHaveBeenCalled());
+    expect(replace.mock.calls[0][0]).toContain("/login");
   });
 
   it("refresh 5xx → hiện nút thử lại, KHÔNG đá về /login", async () => {
@@ -110,5 +154,33 @@ describe("SessionRefreshBootstrap", () => {
     render(<SessionRefreshBootstrap />);
 
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/dashboard"));
+  });
+
+  // StrictMode mount effect hai lần và cleanup lần đầu. Nếu chặn lần hai bằng
+  // một ref "đã chạy rồi", kết quả lần đầu bị `cancelled` bỏ qua còn lần hai
+  // không làm gì → trang treo mãi ở "Đang làm mới phiên đăng nhập…".
+  it("dưới StrictMode → vẫn quay lại URL cũ, không treo", async () => {
+    refreshAccessToken.mockResolvedValue(undefined);
+
+    render(
+      <StrictMode>
+        <SessionRefreshBootstrap />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/admissions/611"));
+  });
+
+  it("dưới StrictMode + lỗi tạm thời → vẫn hiện nút thử lại", async () => {
+    refreshAccessToken.mockRejectedValue(axiosLikeError(503));
+
+    render(
+      <StrictMode>
+        <SessionRefreshBootstrap />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Thử lại$/i })).toBeInTheDocument());
+    expect(replace).not.toHaveBeenCalled();
   });
 });
