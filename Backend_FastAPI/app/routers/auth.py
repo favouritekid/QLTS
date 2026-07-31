@@ -37,7 +37,12 @@ from ..database import (
     safe_redis_set,
     safe_redis_ttl,
 )
-from ..core.rate_limits import limiter, RateLimits  # ✅ MIGRATED: Use new rate limits module
+from ..core.rate_limits import (  # ✅ MIGRATED: Use new rate limits module
+    limiter,
+    RateLimits,
+    get_refresh_identity_key,
+    refresh_limit,
+)
 from ..services import session_service, user_service
 from ..services import login_history_service  # Security: Persistent login audit trail
 from ..services.notification_dispatcher import safe_dispatch  # Security: Suspicious login alerts
@@ -882,7 +887,14 @@ async def perform_change_password(
 
 
 @router.post("/refresh")
-@limiter.limit(RateLimits.AUTH_REFRESH_TOKEN)  # ✅ RATE LIMIT: 20/hour - Higher for token refresh
+# Khoá theo CHỦ THỂ, không theo IP: cả trường ra Internet qua một IP NAT nên
+# xô 20/giờ theo IP là quota chung cho toàn bộ nhân sự (32% request refresh bị
+# chặn trong audit prod 2026-07-30). ``refresh_limit`` cấp 120/giờ khi khoá
+# chứng minh được danh tính, giữ 20/giờ cho nhánh IP. Thứ tự decorator hiện tại
+# là ĐÚNG — ``@limiter.limit`` nằm DƯỚI ``@router.post`` nên slowapi chặn trước
+# khi thân hàm chạy, tức trước khi rotation chạm Redis/DB; đảo hai dòng này là
+# biến 429 từ "chắc chắn chưa chạm rotation" thành "không biết".
+@limiter.limit(refresh_limit, key_func=get_refresh_identity_key)
 async def refresh_access_token(
     request: Request,
     refresh_token: str = Cookie(None, alias="refresh_token"),

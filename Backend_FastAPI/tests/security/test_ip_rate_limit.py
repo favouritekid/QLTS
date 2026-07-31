@@ -15,13 +15,28 @@ Architecture note:
 How it works:
     slowapi's @limiter.limit() decorator WRAPS each endpoint function.
     On every request, the wrapper calls limiter._check_request_limit()
-    which reads limits from limiter._route_limits[func_name] and checks
-    the in-memory (test) or Redis (prod) storage.
+    which reads the limits registered for that function and checks the
+    in-memory (test) or Redis (prod) storage.
+
+    ⚠️ slowapi cất limit ở HAI registry khác nhau, tuỳ dạng khai báo:
+
+    * ``_route_limits``          — limit TĨNH: @limiter.limit("20/hour")
+    * ``_dynamic_route_limits``  — limit ĐỘNG: @limiter.limit(callable), dùng
+      khi hạn mức phụ thuộc khoá. Ví dụ ``/auth/refresh`` cấp 120/giờ cho khoá
+      chứng minh được danh tính và 20/giờ cho khoá IP, nên nó nằm ở registry
+      NÀY chứ không phải registry trên.
+
+    Bất kỳ phép kiểm nào hỏi "endpoint đã có rate limit chưa" đều phải nhìn CẢ
+    HAI. Chỉ nhìn ``_route_limits`` thì việc đổi một endpoint từ tĩnh sang động
+    làm phép kiểm đỏ oan, và một endpoint sinh ra đã dùng limit động sẽ lọt qua
+    mà không ai biết nó chưa từng được bảo vệ.
 
     In test mode (APP_ENV="test"), main.py skips registering the 429
     exception handler and sets limits to 1000/minute. This fixture:
     - Registers the exception handler so RateLimitExceeded -> 429
-    - Overrides _route_limits with tight limits (3/minute)
+    - Overrides _route_limits with tight limits (3/minute) for the endpoints
+      in ``_OVERRIDDEN_ENDPOINTS`` — tất cả chúng đều dùng limit TĨNH, nên
+      ghi đè ở ``_route_limits`` là đủ
     - Uses a controllable key_func to simulate different client IPs
 """
 
@@ -358,14 +373,28 @@ class TestRateLimitConfiguration:
         ],
     )
     def test_endpoint_has_rate_limit(self, endpoint_key: str):
-        """Each security-sensitive endpoint must have rate limit registered."""
+        """Each security-sensitive endpoint must have rate limit registered.
+
+        slowapi cất limit ở HAI chỗ khác nhau tuỳ dạng khai báo:
+
+        * limit TĨNH — ``@limiter.limit("20/hour")`` → ``_route_limits``;
+        * limit ĐỘNG — ``@limiter.limit(refresh_limit)`` với một callable, dùng
+          khi hạn mức phụ thuộc khoá (``/auth/refresh`` cấp 120/giờ cho khoá
+          chứng minh được danh tính, 20/giờ cho khoá IP) → ``_dynamic_route_limits``.
+
+        Câu hỏi guard này đặt ra là "endpoint có rate limit hay không", nên nó
+        phải nhìn CẢ HAI. Chỉ nhìn ``_route_limits`` thì việc đổi một endpoint
+        từ tĩnh sang động làm guard đỏ oan — và ngược lại, một endpoint sinh ra
+        đã dùng limit động sẽ lọt qua mà không ai biết nó chưa từng được bảo vệ.
+        """
         from app.core.rate_limits import limiter
 
-        assert endpoint_key in limiter._route_limits, (
-            f"Endpoint '{endpoint_key}' is missing @limiter.limit() decorator"
-        )
-        assert len(limiter._route_limits[endpoint_key]) > 0, (
-            f"Endpoint '{endpoint_key}' has empty rate limit list"
+        static_limits = limiter._route_limits.get(endpoint_key, [])
+        dynamic_limits = limiter._dynamic_route_limits.get(endpoint_key, [])
+
+        assert static_limits or dynamic_limits, (
+            f"Endpoint '{endpoint_key}' is missing @limiter.limit() decorator "
+            f"(không có trong _route_limits lẫn _dynamic_route_limits)"
         )
 
     def test_production_login_limit_is_strict(self):
