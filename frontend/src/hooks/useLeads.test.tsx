@@ -416,13 +416,23 @@ describe("useLeads Hook", () => {
       it("should import leads from file", async () => {
         server.use(
           http.post(`${API_BASE_URL}/api/leads/import`, async () => {
+            // Tên trường phải khớp `LeadImportError` của backend
+            // (`row_number`/`error_message`). Bản cũ dùng `row`/`error` nên hook
+            // đọc ra `undefined` và in thẳng chuỗi "undefined" vào thông báo —
+            // fixture sai làm test mất khả năng phát hiện chính lỗi đó.
             return HttpResponse.json({
+              total_rows_processed: 12,
               successful_imports: 10,
               failed_imports: 2,
+              created_lead_ids: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
               errors: [
                 {
-                  row: 5,
-                  error: "Invalid email format",
+                  row_number: 5,
+                  error_message: "Invalid email format",
+                },
+                {
+                  row_number: 6,
+                  error_message: "Invalid email format",
                 },
               ],
             });
@@ -531,6 +541,68 @@ describe("useLeads Hook", () => {
         expect(toast.success).toHaveBeenCalledTimes(1);
         expect(toast.warning).not.toHaveBeenCalled();
         expect(toast.error).not.toHaveBeenCalled();
+      });
+
+      it("tep khong co dong du lieu nao thi KHONG duoc bao xanh", async () => {
+        // 🔴 Ca lot luoi cua ban truoc: nhanh `hong === 0` dung TRUOC nhanh
+        // `ok === 0`, nen tep chi con hang tieu de (0 nhap / 0 hong) roi vao
+        // nhanh xanh va bao "thanh cong: 0 lead da nhap" — dung cai bao xanh sai
+        // ma commit nay sinh ra de go. Nguoi dung tai template ve, xoa dong vi du
+        // roi tai len la ra ca nay.
+        server.use(
+          http.post(`${API_BASE_URL}/api/leads/import`, async () =>
+            HttpResponse.json({
+              total_rows_processed: 0,
+              successful_imports: 0,
+              failed_imports: 0,
+              created_lead_ids: [],
+              errors: [],
+            }),
+          ),
+        );
+
+        const { result } = renderHook(() => useImportLeads(), {
+          wrapper: createWrapper(),
+        });
+        result.current.mutate(new File(["x"], "leads.csv", { type: "text/csv" }));
+        await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+        expect(toast.success).not.toHaveBeenCalled();
+        expect(toast.error).toHaveBeenCalledTimes(1);
+        const [tieuDe] = (toast.error as ReturnType<typeof vi.fn>).mock
+          .calls[0] as [string, { description?: string }];
+        expect(tieuDe).toContain("không có dòng dữ liệu");
+      });
+
+      it("moi dong vao duoc nhung con canh bao thi van khong bao xanh", async () => {
+        // `failed_imports === 0` khong con dong nghia voi "khong co gi de noi":
+        // backend co the kem canh bao muc file (row_number = -1). Bao xanh luc do
+        // la nuot mat canh bao duy nhat nguoi dung nhan duoc.
+        server.use(
+          http.post(`${API_BASE_URL}/api/leads/import`, async () =>
+            HttpResponse.json({
+              total_rows_processed: 2,
+              successful_imports: 2,
+              failed_imports: 0,
+              created_lead_ids: [1, 2],
+              errors: [
+                { row_number: -1, error_message: "canh bao muc tep" },
+              ],
+            }),
+          ),
+        );
+
+        const { result } = renderHook(() => useImportLeads(), {
+          wrapper: createWrapper(),
+        });
+        result.current.mutate(new File(["x"], "leads.csv", { type: "text/csv" }));
+        await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+        expect(toast.success).not.toHaveBeenCalled();
+        expect(toast.warning).toHaveBeenCalledTimes(1);
+        const [, tuyChon] = (toast.warning as ReturnType<typeof vi.fn>).mock
+          .calls[0] as [string, { description?: string }];
+        expect(tuyChon.description).toContain("canh bao muc tep");
       });
     });
 
