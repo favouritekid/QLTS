@@ -261,6 +261,21 @@ describe("proxy — /login?reauth=true đăng nhập lại mà KHÔNG bỏ phiê
     expect(res.headers.get("location") ?? "").toContain("/dashboard/officer");
   });
 
+  // `/register` cũng là auth route, nên dùng `isAuthRoute` làm điều kiện sẽ
+  // cho `/register?reauth=true` vừa xoá cookie vừa vượt qua nhánh
+  // đẩy-về-dashboard — người đang đăng nhập bị đưa thẳng vào màn đăng ký.
+  it("/register?reauth=true KHÔNG được hưởng nhánh reauth", () => {
+    const req = new NextRequest(new URL("/register?reauth=true", BASE));
+    req.cookies.set("access_token", accessToken(600, "officer"));
+    req.cookies.set("refresh_token", "refresh-song-30-ngay");
+    req.cookies.set("csrf_token", "gen-1");
+    const res = proxy(req);
+
+    expect(deletedCookieNames(res)).toEqual([]);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location") ?? "").toContain("/dashboard/officer");
+  });
+
   // Cờ này chỉ có nghĩa ở trang login. Trên route được bảo vệ nó không được
   // biến thành một cách xoá cookie của người khác qua link.
   it("reauth trên route được bảo vệ KHÔNG xoá cookie nào", () => {

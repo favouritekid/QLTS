@@ -140,11 +140,20 @@ export function proxy(request: NextRequest) {
   // có token mới hay chưa (`refresh-coordination/lifecycle.ts`) — xoá nó vừa
   // giết phiên vừa làm mù nhật ký, đúng hai thứ `reauth` sinh ra để giữ.
   //
-  // Hai cờ cùng có mặt thì cờ XOÁ SẠCH thắng: `force_login` do backend/logout
-  // phát ra khi phiên đã chết hẳn phía server, còn `reauth` chỉ là phỏng đoán
-  // của client. Nghiêng về phía xoá là nghiêng về phía an toàn.
+  // Hai cờ cùng có mặt thì cờ XOÁ SẠCH thắng. KHÔNG phải vì `force_login` đáng
+  // tin hơn — cả hai đều chỉ là query param, bất kỳ link nào cũng gắn được và
+  // middleware không có cách nào xác thực nguồn. Lý do là hướng fail: nhầm sang
+  // xoá sạch thì người dùng đăng nhập lại; nhầm sang giữ thì một phiên lẽ ra
+  // phải chết vẫn còn cookie. (Việc `force_login` tự nó là logout-CSRF sẵn có
+  // nằm ngoài phạm vi 2b — 2b không nới thêm gì cho nó.)
   const isReauth = request.nextUrl.searchParams.get("reauth") === "true";
-  if (isAuthRoute && isReauth && !forceLogin) {
+
+  // ⚠️ `isLoginPage`, KHÔNG phải `isAuthRoute`. `isAuthRoute` còn gồm
+  // `/register` và các nhánh con, nên dùng nó thì `/register?reauth=true` cũng
+  // xoá cookie VÀ vượt qua nhánh đẩy-về-dashboard — tức một người đang đăng
+  // nhập bị đưa vào màn đăng ký. `reauth` chỉ có nghĩa ở đúng trang đăng nhập.
+  const isLoginPage = pathname === "/login";
+  if (isLoginPage && isReauth && !forceLogin) {
     const response = NextResponse.next();
     response.cookies.delete({ name: "access_token", path: "/" });
     return response;
