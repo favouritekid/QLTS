@@ -89,10 +89,13 @@ def test_bo_chu_thich_dau_tep_bo_dung_phan_dau():
         b"full_name,phone,source\n"
         b"Nguyen Van A,0900000001,website\n"
     )
-    ra = _bo_chu_thich_dau_tep(tep)
+    ra, so_dong_bo = _bo_chu_thich_dau_tep(tep)
     assert ra.startswith(b"full_name,phone,source\n")
     assert b"Nguyen Van A" in ra
     assert b"#" not in ra
+    # Số dòng đã bỏ là phần BẮT BUỘC của kết quả: chỗ gọi cộng nó vào
+    # `row_number`, không có thì mọi thông báo lỗi chỉ sai dòng.
+    assert so_dong_bo == 3
 
 
 def test_bo_chu_thich_khong_cat_du_lieu_co_dau_thang():
@@ -106,7 +109,8 @@ def test_bo_chu_thich_khong_cat_du_lieu_co_dau_thang():
         b"full_name,phone,source,location\n"
         b"Nguyen Van A,0900000001,website,So 5 # ngo 3\n"
     )
-    ra = _bo_chu_thich_dau_tep(tep)
+    ra, so_dong_bo = _bo_chu_thich_dau_tep(tep)
+    assert so_dong_bo == 1
     assert b"So 5 # ngo 3" in ra, "dữ liệu chứa dấu # bị cắt mất"
 
     # Và đọc bằng pandas thì ô đó phải còn nguyên.
@@ -116,7 +120,7 @@ def test_bo_chu_thich_khong_cat_du_lieu_co_dau_thang():
 
 def test_bo_chu_thich_khong_lam_gi_voi_tep_khong_co_chu_thich():
     tep = b"full_name,phone\nA,0900000001\n"
-    assert _bo_chu_thich_dau_tep(tep) == tep
+    assert _bo_chu_thich_dau_tep(tep) == (tep, 0)
 
 
 def test_moi_truong_chuoi_deu_di_qua_helper():

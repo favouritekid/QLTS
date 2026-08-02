@@ -269,9 +269,14 @@ class LeadCreate(LeadBase):
     - None (default): Use automatic distribution/assignment (Celery task)
     - Integer: Directly assign to specified officer (skip auto-assignment)
     """
-    education_level: Optional[str] = None
+    # 🔴 `max_length` phải khớp cột DB (`models/lead.py`: String(100) / String(255)).
+    # Thiếu nó, một ô 101 ký tự qua được Pydantic rồi mới chết ở tầng DB bằng
+    # `DataError` — mà `bulk_insert_leads` bắt lỗi theo LÔ, nên một dòng quá dài
+    # kéo đổ cả lô đang chạy và dừng các lô sau. Chặn ở schema thì dòng đó hỏng
+    # một mình và báo đúng số dòng.
+    education_level: Optional[str] = Field(None, max_length=100)
     gpa: Optional[float] = Field(None, ge=0.0, le=10.0, description="GPA on 0-10 scale")
-    location: Optional[str] = None
+    location: Optional[str] = Field(None, max_length=255)
     assigned_officer_id: Optional[int] = None  # None = auto-assign, Integer = direct assign
     referrer_id: Optional[int] = None  # CTV referrer for source="referral"
     # Fit Score fields (Officer input)
@@ -297,12 +302,21 @@ class LeadCreate(LeadBase):
         if v is None:
             return None
 
-        # Allow empty string for phone2, convert to None
-        if isinstance(v, str) and v.strip() == "":
+        # 🔴 Đầu vào KHÔNG phải chuỗi (JSON number qua `POST /api/leads`) thì
+        # `.strip()` bên dưới ném `AttributeError` — Pydantic để lọt ra ngoài
+        # thành **500**, không phải 422. Ép về chuỗi rồi để chính các bước dưới
+        # phán quyết: `901234567` (mất số 0 đầu) sẽ trượt regex và báo lỗi rõ.
+        if not isinstance(v, str):
+            v = str(v)
+
+        if v.strip() == "":
             if info.field_name == "phone2":
                 return None
-            # phone is required, empty string will fail min_length validation
-            return v
+            # 🔴 SĐT chính chỉ gồm khoảng trắng: `min_length=1` KHÔNG chặn được
+            # (`"   "` dài 3), nên trả nguyên là ghi thẳng khoảng trắng vào cơ sở
+            # dữ liệu qua `POST /api/leads`. Đường nhập từ tệp không lộ ca này vì
+            # service đã strip từ trước — nên nó chỉ hiện ra ở đường API trực tiếp.
+            raise ValueError("Số điện thoại không được để trống")
 
         # Normalize the phone number
         normalized = normalize_vietnam_phone(v)
@@ -354,9 +368,10 @@ class LeadUpdate(BaseModel):
     unit_id: Optional[int] = None
     offering_id: Optional[int] = None
     consultation_status_id: Optional[str] = None
-    education_level: Optional[str] = None
+    # Cùng lý do như `LeadCreate`: khớp cột DB để lỗi hiện ở tầng validate.
+    education_level: Optional[str] = Field(None, max_length=100)
     gpa: Optional[float] = Field(None, ge=0.0, le=10.0, description="GPA on 0-10 scale")
-    location: Optional[str] = None
+    location: Optional[str] = Field(None, max_length=255)
     officer_rating: Optional[int] = Field(None, ge=1, le=5, description="Officer rating 1-5 stars")
     officer_summary: Optional[str] = None
     # Fit Score fields
@@ -401,8 +416,13 @@ class LeadUpdate(BaseModel):
         if v is None:
             return None
 
+        # Xem chú thích cùng chỗ ở `LeadCreate`: đầu vào không phải chuỗi sẽ nổ
+        # `AttributeError` trong `normalize_vietnam_phone` và thoát ra thành 500.
+        if not isinstance(v, str):
+            v = str(v)
+
         # For primary phone, reject empty string instead of coercing to None
-        if isinstance(v, str) and v.strip() == "":
+        if v.strip() == "":
             if info.field_name == "phone":
                 raise ValueError("Số điện thoại chính không được để trống")
             return None

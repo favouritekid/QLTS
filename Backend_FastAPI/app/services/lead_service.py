@@ -4202,8 +4202,14 @@ def _cell_or_none(value) -> Optional[str]:
     return s or None
 
 
-def _bo_chu_thich_dau_tep(noi_dung: bytes) -> bytes:
+def _bo_chu_thich_dau_tep(noi_dung: bytes) -> Tuple[bytes, int]:
     """Bỏ các dòng bắt đầu bằng ``#`` ở ĐẦU tệp CSV.
+
+    Trả về ``(nội_dung_đã_bỏ, số_dòng_đã_bỏ)``. **Số dòng là phần bắt buộc**, không
+    phải tiện thể: sau khi cắt phần đầu, chỉ số dòng của pandas lùi đi đúng bấy
+    nhiêu, nên nếu chỗ gọi không cộng lại thì mọi thông báo lỗi đều chỉ sai dòng.
+    Template hệ thống có 7 dòng ``#``, tức dòng dữ liệu đầu tiên nằm ở dòng 9 của
+    tệp mà người dùng mở ra, trong khi thông báo nói "Dòng 2".
 
     Template tải về từ ``GET /api/leads/import/template`` mở đầu bằng 6 dòng chú
     thích ``#`` rồi mới tới hàng tiêu đề. ``pd.read_csv`` không biết điều đó: nó
@@ -4228,7 +4234,7 @@ def _bo_chu_thich_dau_tep(noi_dung: bytes) -> bytes:
     i = 0
     while i < len(cac_dong) and cac_dong[i].lstrip().startswith(b"#"):
         i += 1
-    return b"\n".join(cac_dong[i:]) if i else noi_dung
+    return (b"\n".join(cac_dong[i:]), i) if i else (noi_dung, 0)
 
 
 async def import_leads_from_file_content(
@@ -4321,6 +4327,11 @@ async def import_leads_from_file_content(
         )
 
     # --- 2. Read file content into DataFrame ---
+    # Số dòng chú thích `#` đã bị cắt khỏi đầu tệp. Chỉ số dòng của pandas lùi đi
+    # đúng bấy nhiêu, nên mọi `row_number` báo cho người dùng phải cộng lại — nếu
+    # không, tệp tải từ chính hệ thống (7 dòng `#`) sẽ báo "Dòng 2" cho thứ nằm ở
+    # dòng 9 trong trình soạn thảo của họ.
+    so_dong_chu_thich = 0
     try:
         if not file_content:
             raise ValueError("Empty file uploaded.")
@@ -4343,7 +4354,7 @@ async def import_leads_from_file_content(
                 # và lọc thẳng thì tệp đó mất hàng tiêu đề — nó vốn đọc được, nay
                 # thành 400. Đặt sau một lần đọc thất bại thì mọi tệp đang chạy
                 # được đều không đi qua nhánh này.
-                khong_chu_thich = _bo_chu_thich_dau_tep(file_content)
+                khong_chu_thich, so_dong_chu_thich = _bo_chu_thich_dau_tep(file_content)
                 if khong_chu_thich == file_content:
                     raise  # không có dòng chú thích nào — lỗi là lỗi thật
                 df = pd.read_csv(io.BytesIO(khong_chu_thich), dtype=str)
@@ -4523,7 +4534,9 @@ async def import_leads_from_file_content(
     # --- 4. Process each row ---
     for index, row in df.iterrows():
         processed_row_count += 1
-        row_number = index + 2  # Excel row number (header is row 1)
+        # +2: pandas đếm từ 0 và hàng tiêu đề là dòng 1.
+        # +`so_dong_chu_thich`: bù đúng phần đầu tệp đã bị cắt (xem mục 2).
+        row_number = index + 2 + so_dong_chu_thich
         row_data = row.to_dict()
         cleaned_data = {}
         validation_errors_for_row = []
@@ -4780,11 +4793,20 @@ async def import_leads_from_file_content(
                 error=str(e),
                 exc_info=True,
             )
-            # Record error
+            # 🔴 KHÔNG đưa `str(e)` vào phản hồi. Chuỗi đó là thông báo thô của
+            # driver: tên ràng buộc, `DETAIL:` tiếng Anh, và trong vài ca cả câu
+            # SQL kèm tham số — tức dữ liệu của chính người khác. Giao diện in
+            # thẳng nội dung này lên toast (`useLeads.ts`), nên nó là đường rò ra
+            # tận màn hình người dùng. Chi tiết đầy đủ đã nằm trong log máy chủ ở
+            # ngay trên (`log.error(..., exc_info=True)`), đúng chỗ để chẩn đoán.
             errors.append(
                 schemas.LeadImportError(
                     row_number=-1,
-                    error_message=f"Database bulk insert error (batch failed): {e}",
+                    error_message=(
+                        "Lô này không ghi được vào cơ sở dữ liệu. Các dòng trong lô "
+                        "chưa được tạo; hãy kiểm tra lại dữ liệu rồi nhập lại phần "
+                        "còn thiếu."
+                    ),
                     row_data={},
                 )
             )
