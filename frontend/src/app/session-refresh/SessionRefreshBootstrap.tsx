@@ -19,7 +19,7 @@ import { Loader2 } from "lucide-react";
 
 import {
   refreshAccessToken,
-  shouldLogoutAfterRefreshFailure,
+  shouldClearAuthCookies,
 } from "@/lib/api/refresh";
 import { buildLoginRedirect, isValidRedirect } from "@/lib/auth/login-redirect";
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,7 @@ import { Button } from "@/components/ui/button";
 const DEFAULT_TARGET = "/dashboard";
 
 // Phân loại "phiên đã chết thật" hay "lỗi tạm thời" dùng CHUNG
-// `shouldLogoutAfterRefreshFailure` với interceptor 401 và CSRF-recovery trong
+// `shouldClearAuthCookies` với interceptor 401 và CSRF-recovery trong
 // `lib/api/client.ts`. Trang này từng giữ một bản sao vì hàm kia nằm trên
 // nhánh #525 chưa merge; #525 đã vào `main` (ba057061) nên bản sao đã được gỡ.
 //
@@ -62,7 +62,7 @@ export function SessionRefreshBootstrap() {
       } catch (error) {
         if (cancelled) return;
 
-        if (shouldLogoutAfterRefreshFailure(error)) {
+        if (shouldClearAuthCookies(error)) {
           // Hết phiên thật → đường đăng nhập lại, giữ return-url.
           window.location.replace(
             buildLoginRedirect(target, { forceLogin: true, reason: "session_expired" }),

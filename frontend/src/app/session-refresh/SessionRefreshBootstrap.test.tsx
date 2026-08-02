@@ -6,7 +6,9 @@
  *  1. Refresh xong → quay lại ĐÚNG URL cũ (đây là lý do trang này tồn tại).
  *  2. Refresh hỏng TẠM THỜI (429 rate limit / 5xx / mạng đứt) → KHÔNG đá về
  *     /login. Phiên vẫn còn hiệu lực; bắt đăng nhập lại là làm mất nó.
- *  3. Refresh hỏng THẬT (401/403) → mới sang /login?force_login=true.
+ *  3. Refresh hỏng THẬT (chỉ `terminal`: 401 / REFRESH_ABUSE_LOCKED) → mới
+ *     sang /login?force_login=true. ⚠️ `403` lạ nay là `nonterminal-stop` —
+ *     GIỮ phiên, xem `fail-preserve` trong `lib/api/refresh.ts`.
  */
 import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -14,7 +16,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 
 const refreshAccessToken = vi.hoisted(() => vi.fn());
 // Chỉ thay `refreshAccessToken` (thứ cần điều khiển), GIỮ NGUYÊN phần còn lại
-// của module — nhất là `shouldLogoutAfterRefreshFailure`. Mock cả module sẽ
+// của module — nhất là classifier. Mock cả module sẽ
 // biến mọi test phân loại lỗi dưới đây thành test cho một hàm giả: chúng vẫn
 // xanh kể cả khi classifier thật đảo ngược kết luận.
 vi.mock("@/lib/api/refresh", async (importActual) => ({
@@ -28,6 +30,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 
+import { RefreshFailure } from "@/lib/api/refresh";
 import { SessionRefreshBootstrap } from "./SessionRefreshBootstrap";
 
 const replace = vi.fn();
@@ -37,11 +40,13 @@ function setRedirect(value: string | null) {
   if (value !== null) searchParams.set("redirect", value);
 }
 
-function axiosLikeError(status?: number, data: Record<string, unknown> = {}) {
-  return {
-    isAxiosError: true,
-    response: status === undefined ? undefined : { status, data },
-  };
+/**
+ * Lỗi KHÔNG phải `RefreshFailure` — chỉ dùng cho ca phòng thủ duy nhất bên
+ * dưới. Mọi ca còn lại dựng `new RefreshFailure(...)` vì đó mới là thứ
+ * `refreshAccessToken()` thật sự ném ở production.
+ */
+function nonRefreshFailureError() {
+  return { isAxiosError: true, response: undefined };
 }
 
 describe("SessionRefreshBootstrap", () => {
@@ -66,7 +71,9 @@ describe("SessionRefreshBootstrap", () => {
 
   // Ca trung tâm: 429 RATE_LIMITED trên bucket dùng chung của cả trường.
   it("429 RATE_LIMITED → hiện nút thử lại, KHÔNG đá về /login", async () => {
-    refreshAccessToken.mockRejectedValueOnce(axiosLikeError(429, { error_code: "RATE_LIMITED" }));
+    refreshAccessToken.mockRejectedValueOnce(
+      new RefreshFailure({ kind: "safe-retryable", retryAt: Date.now() + 60_000 }),
+    );
 
     render(<SessionRefreshBootstrap />);
 
@@ -78,7 +85,11 @@ describe("SessionRefreshBootstrap", () => {
   // toàn bộ session trước đó. Mời "Thử lại" ở đây là nói dối người dùng.
   it("429 REFRESH_ABUSE_LOCKED → sang /login (phiên đã bị thu hồi)", async () => {
     refreshAccessToken.mockRejectedValueOnce(
-      axiosLikeError(429, { error_code: "REFRESH_ABUSE_LOCKED" }),
+      new RefreshFailure({
+        kind: "terminal",
+        status: 429,
+        errorCode: "REFRESH_ABUSE_LOCKED",
+      }),
     );
 
     render(<SessionRefreshBootstrap />);
@@ -87,35 +98,55 @@ describe("SessionRefreshBootstrap", () => {
     expect(replace.mock.calls[0][0]).toContain("/login");
   });
 
-  it("429 thiếu error_code → sang /login (fail-safe)", async () => {
-    refreshAccessToken.mockRejectedValueOnce(axiosLikeError(429));
+  /**
+   * ⚠️ Contract ĐỔI: `nonterminal-stop` và `ambiguous` KHÔNG còn xoá phiên.
+   *
+   * Trước đây mọi 4xx lạ đều `force_login` (fail-safe). Nay chỉ `terminal` mới
+   * được xoá cookie — một 404 vì sai `NEXT_PUBLIC_API_URL` hay một 403 từ WAF
+   * không chứng minh refresh token 30 ngày đã chết.
+   *
+   * 🚧 Ở đây CHỈ khoá phần đã chốt: **không `force_login`, không xoá phiên**.
+   * Giao diện cuối cho hai loại này là màn "Không xác định được trạng thái
+   * phiên" với DUY NHẤT nút *Đăng nhập lại* (`reauth`) — thuộc hạng mục `2b`,
+   * chưa triển khai. Cố ý KHÔNG assert giao diện tạm thời hiện có, để nó không
+   * biến thành contract vĩnh viễn rồi chặn `2b`.
+   */
+  it.each([
+    ["nonterminal-stop", { kind: "nonterminal-stop", status: 429 } as const],
+    ["ambiguous", { kind: "ambiguous", reason: "server" } as const],
+  ])("%s → GIỮ phiên: không force_login, không xoá cookie", async (_label, outcome) => {
+    refreshAccessToken.mockRejectedValueOnce(new RefreshFailure(outcome));
 
     render(<SessionRefreshBootstrap />);
+    await waitFor(() => expect(refreshAccessToken).toHaveBeenCalled());
 
-    await waitFor(() => expect(replace).toHaveBeenCalled());
-    expect(replace.mock.calls[0][0]).toContain("/login");
+    // Nếu có điều hướng thì tuyệt đối không được kèm `force_login` — nhánh đó
+    // xoá sạch cả `refresh_token`.
+    const target = (replace.mock.calls[0]?.[0] as string | undefined) ?? "";
+    expect(target).not.toContain("force_login");
   });
 
-  it("429 mã lạ → sang /login (fail-safe)", async () => {
-    refreshAccessToken.mockRejectedValueOnce(axiosLikeError(429, { error_code: "HTTP_429" }));
+  it.each([400, 404, 422])(
+    "%i (4xx khác) → GIỮ phiên: không force_login",
+    async (status) => {
+      // Cùng lý do như khối trên: `400`/`404`/`422` nay là `nonterminal-stop`.
+      // Giao diện cuối (`reauth`) thuộc `2b`, chưa chốt ở vòng này.
+      refreshAccessToken.mockRejectedValueOnce(
+        new RefreshFailure({ kind: "nonterminal-stop", status }),
+      );
 
-    render(<SessionRefreshBootstrap />);
+      render(<SessionRefreshBootstrap />);
+      await waitFor(() => expect(refreshAccessToken).toHaveBeenCalled());
 
-    await waitFor(() => expect(replace).toHaveBeenCalled());
-    expect(replace.mock.calls[0][0]).toContain("/login");
-  });
-
-  it.each([400, 404, 422])("%i (4xx khác) → sang /login, không mời thử lại", async (status) => {
-    refreshAccessToken.mockRejectedValueOnce(axiosLikeError(status));
-
-    render(<SessionRefreshBootstrap />);
-
-    await waitFor(() => expect(replace).toHaveBeenCalled());
-    expect(replace.mock.calls[0][0]).toContain("/login");
-  });
+      const target = (replace.mock.calls[0]?.[0] as string | undefined) ?? "";
+      expect(target).not.toContain("force_login");
+    },
+  );
 
   it("refresh 5xx → hiện nút thử lại, KHÔNG đá về /login", async () => {
-    refreshAccessToken.mockRejectedValueOnce(axiosLikeError(503));
+    refreshAccessToken.mockRejectedValueOnce(
+      new RefreshFailure({ kind: "ambiguous", reason: "server" }),
+    );
 
     render(<SessionRefreshBootstrap />);
 
@@ -123,8 +154,10 @@ describe("SessionRefreshBootstrap", () => {
     expect(replace).not.toHaveBeenCalled();
   });
 
-  it("mạng đứt (không có response) → hiện nút thử lại", async () => {
-    refreshAccessToken.mockRejectedValueOnce(axiosLikeError(undefined));
+  // Ca PHÒNG THỦ: production luôn ném `RefreshFailure`. Ở đây cố tình ném một
+  // lỗi khác kiểu để chắc rằng mặc định vẫn là GIỮ phiên, không xoá cookie.
+  it("lỗi lạ KHÔNG phải RefreshFailure → giữ phiên, không force_login", async () => {
+    refreshAccessToken.mockRejectedValueOnce(nonRefreshFailureError());
 
     render(<SessionRefreshBootstrap />);
 
@@ -133,7 +166,9 @@ describe("SessionRefreshBootstrap", () => {
   });
 
   it("refresh 401 → sang /login?force_login=true kèm return-url", async () => {
-    refreshAccessToken.mockRejectedValueOnce(axiosLikeError(401));
+    refreshAccessToken.mockRejectedValueOnce(
+      new RefreshFailure({ kind: "terminal", status: 401 }),
+    );
 
     render(<SessionRefreshBootstrap />);
 
@@ -179,7 +214,9 @@ describe("SessionRefreshBootstrap", () => {
   });
 
   it("dưới StrictMode + lỗi tạm thời → vẫn hiện nút thử lại", async () => {
-    refreshAccessToken.mockRejectedValue(axiosLikeError(503));
+    refreshAccessToken.mockRejectedValue(
+      new RefreshFailure({ kind: "ambiguous", reason: "server" }),
+    );
 
     render(
       <StrictMode>

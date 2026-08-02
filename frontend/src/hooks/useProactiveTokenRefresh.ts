@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { isRefreshRateLimited, refreshAccessToken } from "@/lib/api/refresh";
+import { refreshAccessToken, isRefreshFailure } from "@/lib/api/refresh";
 import { isApiLoggedOut } from "@/lib/api/client";
 
 // Access token sống 15' (backend). Refresh chủ động mỗi 13' để luôn còn
@@ -42,10 +42,10 @@ export function useProactiveTokenRefresh(enabled: boolean) {
       if (isApiLoggedOut()) return;
       if (runningRef.current) return; // tránh chồng trong cùng tab
 
-      // Đang trong cooldown sau 429 → khỏi chạm mạng, và QUAN TRỌNG hơn: khỏi
-      // đi vào nhánh catch bên dưới (nhánh đó rollback timestamp).
-      if (isRefreshRateLimited()) return;
-
+      // KHÔNG còn kiểm cooldown ở đây: cooldown nay nằm trong nhật ký dùng
+      // chung giữa các tab, và `refreshAccessToken()` tự dừng trước khi chạm
+      // mạng khi chưa tới `retryAt`. Giữ một bản sao cooldown cục bộ ở hook là
+      // tạo nguồn thứ hai, và hai nguồn sẽ trôi lệch nhau.
       const now = Date.now();
       const prevRaw = window.localStorage.getItem(LAST_REFRESH_KEY);
       const prevNum = prevRaw ? Number(prevRaw) : 0;
@@ -63,17 +63,23 @@ export function useProactiveTokenRefresh(enabled: boolean) {
       runningRef.current = true;
       try {
         await refreshAccessToken();
-      } catch {
+      } catch (error) {
         // Nuốt lỗi — KHÔNG logout/redirect (reactive 401 của request kế
         // tiếp sẽ xử lý). Rollback CAS: chỉ khôi phục nếu slot vẫn là `stamp`
         // mình vừa ghi (chưa tab/lần khác ghi đè) → cho phép thử lại sớm
         // sau lỗi mạng tạm, KHÔNG đạp lên refresh thành công của tab khác.
         //
-        // NGOẠI LỆ: vừa bị rate limit thì KHÔNG rollback. Rollback sẽ xoá luôn
+        // NGOẠI LỆ: rate limit thì KHÔNG rollback. Rollback sẽ xoá luôn
         // throttle 12 phút, mà `onWake` gắn với cả `visibilitychange` lẫn
         // `focus` → mười lần alt-tab là mười POST /auth/refresh nữa vào đúng
         // cái bucket vừa cạn. Giữ nguyên timestamp = tôn trọng throttle.
-        if (isRefreshRateLimited()) {
+        //
+        // Đọc thẳng `outcome` đã phân loại thay vì hỏi lại một hàm trạng thái:
+        // outcome đi kèm chính lần thử này, không thể trôi lệch.
+        if (
+          isRefreshFailure(error) &&
+          error.outcome.kind === "safe-retryable"
+        ) {
           return;
         }
         if (window.localStorage.getItem(LAST_REFRESH_KEY) === stamp) {
