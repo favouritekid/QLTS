@@ -40,14 +40,34 @@ class TestSoDienThoaiChinh:
         with pytest.raises(ValidationError):
             schemas.LeadCreate(**_base(phone=gia_tri))
 
-    def test_dau_vao_khong_phai_chuoi_thanh_loi_validate_chu_khong_phai_500(self):
-        """JSON number: ``.strip()`` trên ``int`` ném ``AttributeError``.
+    @pytest.mark.parametrize(
+        "gia_tri",
+        [
+            901234567,        # mất số 0 đầu
+            84901234567,      # ép chuỗi sẽ thành "0901234567" — nghe HỢP LỆ
+            84901234567.0,    # ép chuỗi thành "09012345670" — THỪA một chữ số
+            0o11,             # literal bát phân: người gửi thấy 011, Python thấy 9
+        ],
+    )
+    def test_dau_vao_khong_phai_chuoi_bi_TU_CHOI_chu_khong_ep_kieu(self, gia_tri):
+        """🔴 Từ chối, KHÔNG ép kiểu — và đây là hai chuyện rất khác nhau.
 
-        Pydantic để lọt lỗi đó ra ngoài thành **500**, trong khi đây là dữ liệu
-        người dùng gửi sai — nó phải là 422 kèm thông báo đọc được.
+        ``.strip()`` trên ``int`` ném ``AttributeError`` → 500, nên phải xử lý.
+        Nhưng chữa bằng ``str(v)`` thì tệ hơn: nó ĐOÁN.
+
+        ``84901234567.0`` → ``"84901234567.0"`` → gỡ dấu chấm → ``"849012345670"``
+        → tiền tố ``84`` đổi thành ``0`` → ``"09012345670"``: **thừa một chữ số so
+        với thứ người dùng gửi**, mà vẫn khớp regex nên được nhận. Số điện thoại là
+        khoá định danh (unique index, dedup, tra cứu) — nhận một giá trị đã biến
+        dạng còn tệ hơn từ chối thẳng.
         """
         with pytest.raises(ValidationError):
-            schemas.LeadCreate(**_base(phone=901234567))
+            schemas.LeadCreate(**_base(phone=gia_tri))
+
+    @pytest.mark.parametrize("gia_tri", [84901234567, 84901234567.0])
+    def test_phone2_cung_khong_ep_kieu(self, gia_tri):
+        with pytest.raises(ValidationError):
+            schemas.LeadCreate(**_base(phone2=gia_tri))
 
     def test_so_hop_le_van_qua(self):
         lead = schemas.LeadCreate(**_base(phone="+84 901 234 567"))
@@ -111,9 +131,17 @@ class TestDuongCapNhat:
         with pytest.raises(ValidationError):
             schemas.LeadUpdate(phone="   ")
 
-    def test_dau_vao_khong_phai_chuoi_thanh_loi_validate(self):
+    @pytest.mark.parametrize("gia_tri", [901234567, 84901234567, 84901234567.0])
+    def test_dau_vao_khong_phai_chuoi_bi_tu_choi(self, gia_tri):
+        """Cùng lý do như `LeadCreate`: ép kiểu sẽ ghi đè SĐT thật bằng một số đã
+        biến dạng, trên một bản ghi ĐANG CÓ."""
         with pytest.raises(ValidationError):
-            schemas.LeadUpdate(phone=901234567)
+            schemas.LeadUpdate(phone=gia_tri)
+
+    @pytest.mark.parametrize("gia_tri", [84901234567, 84901234567.0])
+    def test_phone2_cung_khong_ep_kieu(self, gia_tri):
+        with pytest.raises(ValidationError):
+            schemas.LeadUpdate(phone2=gia_tri)
 
     def test_phone2_o_trong_van_ve_None(self):
         assert schemas.LeadUpdate(phone2="").phone2 is None

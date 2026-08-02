@@ -559,7 +559,9 @@ async def test_import_empty_file(client: AsyncClient, admin_token_headers: dict)
         import_url, files={"file": mock_file_tuple}, headers=admin_token_headers
     )
     assert response.status_code == 400
-    assert "Empty file uploaded" in response.json()["detail"]
+    # Thông báo nay là tiếng Việt: lỗi mức tệp do chính service phát ra
+    # (`_LoiTepNhapLead`) là thứ NGƯỜI DÙNG đọc, nên nó phải đọc được.
+    assert "rỗng" in response.json()["detail"].lower()
     log.info("Empty file correctly blocked (400).")
 
 

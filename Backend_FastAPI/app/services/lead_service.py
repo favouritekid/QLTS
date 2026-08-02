@@ -4,6 +4,8 @@ from datetime import (
 )
 from typing import Callable, List, Optional, Tuple
 
+from pydantic import ValidationError as PydanticValidationError
+
 import math
 import structlog
 from sqlalchemy import case, func, or_, select  # ✅ SỬA LỖI: Thêm 'desc' vào import và xóa comment
@@ -4202,6 +4204,30 @@ def _cell_or_none(value) -> Optional[str]:
     return s or None
 
 
+class _LoiTepNhapLead(ValueError):
+    """Lỗi ở mức TỆP, do chính hàm này CỐ Ý phát ra: tệp rỗng, quá số dòng cho
+    phép, thiếu cột bắt buộc…
+
+    🔴 Cùng lý do với `_LoiDongNhapLead`, và ở đây cái bẫy còn kín hơn:
+    ``pandas.errors.ParserError`` **kế thừa ``ValueError``**. Nên một mệnh đề
+    ``except ValueError: raise`` tưởng là "chuyển tiếp lỗi kiểm tra của mình" lại
+    chuyển thẳng cả thông điệp của pandas ra ngoài — thứ mang một phần NỘI DUNG
+    tệp (``Expected 2 fields in line 3, saw 3``).
+    """
+
+
+class _LoiDongNhapLead(ValueError):
+    """Lỗi dữ liệu của MỘT dòng, do tầng validate CỐ Ý phát ra.
+
+    🔴 Tồn tại chỉ để phân biệt "lỗi ta chủ động tạo, thông điệp viết cho người
+    nhập đọc" với "ngoại lệ lọt vào từ nơi khác". Lớp ngoại lệ dựng sẵn không làm
+    được việc đó: ``calculate_lead_score()`` trong cùng khối ``try`` có truy vấn cơ
+    sở dữ liệu, và nó cũng có thể ném ``ValueError``/``TypeError`` mang theo câu
+    SQL kèm tham số. Bắt theo lớp dựng sẵn rồi trả nguyên văn là để lại đúng đường
+    rò, chỉ đổi tên lớp.
+    """
+
+
 def _bo_chu_thich_dau_tep(noi_dung: bytes) -> Tuple[bytes, int]:
     """Bỏ các dòng bắt đầu bằng ``#`` ở ĐẦU tệp CSV.
 
@@ -4334,7 +4360,7 @@ async def import_leads_from_file_content(
     so_dong_chu_thich = 0
     try:
         if not file_content:
-            raise ValueError("Empty file uploaded.")
+            raise _LoiTepNhapLead("Tệp rỗng — không có nội dung để nhập.")
 
         # W9-N.1.2 fix 2026-05-16: force `dtype=str` on read so pandas
         # doesn't infer phone column as int64 → strip leading 0 →
@@ -4366,12 +4392,15 @@ async def import_leads_from_file_content(
         # --- 2b. Validate row count ---
         MAX_IMPORT_ROWS = 10000
         if len(df) > MAX_IMPORT_ROWS:
-            raise ValueError(
-                f"File chứa {len(df)} dòng, vượt quá giới hạn {MAX_IMPORT_ROWS} dòng/lần import."
+            raise _LoiTepNhapLead(
+                f"Tệp chứa {len(df)} dòng, vượt quá giới hạn {MAX_IMPORT_ROWS} dòng mỗi lần nhập."
             )
 
-    except ValueError as e:
-        raise e  # Re-raise validation errors
+    except _LoiTepNhapLead:
+        # CHỈ lỗi do chính hàm này phát ra mới đi thẳng ra ngoài. Bắt `ValueError`
+        # trần ở đây là để lọt `pandas.errors.ParserError` — nó KẾ THỪA
+        # `ValueError`, nên nó trông y hệt một lỗi kiểm tra của ta.
+        raise
     except Exception as e:
         log.error(
             "Failed to read or parse file content",
@@ -4379,8 +4408,12 @@ async def import_leads_from_file_content(
             error=str(e),
             exc_info=True,
         )
+        # KHÔNG ghép `{e}`: đây là thông điệp của pandas/openpyxl, tiếng Anh và
+        # thường kèm một phần NỘI DUNG tệp (ví dụ `Expected 5 fields in line 5,
+        # saw 8`). Chi tiết đã vào log ngay trên với `exc_info=True`.
         raise ValueError(
-            f"Could not read or parse the file. Ensure it is a valid {file_extension} file. Error: {e}"
+            f"Không đọc được tệp. Hãy kiểm tra đây có đúng là tệp {file_extension} "
+            f"hợp lệ không (đúng định dạng, không hỏng, không bị khoá)."
         )
 
     # --- 3. Validate columns and process data ---
@@ -4607,8 +4640,18 @@ async def import_leads_from_file_content(
                 else:
                     cleaned_data["unit_id"] = None
 
-        except (ValueError, TypeError, Exception) as e:
-            validation_errors_for_row.append(f"Type conversion error: {e}")
+        except (ValueError, TypeError):
+            # Chỉ ép kiểu số cho `unit_id` — hỏng thì là ô không phải số, và câu
+            # dưới đã nói đủ. KHÔNG ghép `{e}`: thông điệp gốc là tiếng Anh của
+            # Python (`invalid literal for int() with base 10: ...`), không giúp
+            # người nhập, mà lại kéo theo nguyên nội dung ô vào thông báo.
+            #
+            # Và KHÔNG bắt `Exception`: mệnh đề cũ `(ValueError, TypeError,
+            # Exception)` thực chất bắt TẤT CẢ — một lỗi hạ tầng ở đây sẽ bị dán
+            # nhãn "lỗi dữ liệu của dòng" rồi trả chi tiết ra ngoài.
+            validation_errors_for_row.append(
+                "Giá trị 'unit_id' không hợp lệ, cần là một số."
+            )
 
         # Type conversion for optional 'offering_id'
         offering_id_val = row_data.get("offering_id")
@@ -4626,7 +4669,7 @@ async def import_leads_from_file_content(
         try:
             # If there are type conversion errors, raise them
             if validation_errors_for_row:
-                raise ValueError(", ".join(validation_errors_for_row))
+                raise _LoiDongNhapLead(", ".join(validation_errors_for_row))
 
             lead_in = schemas.LeadCreate(**cleaned_data)
 
@@ -4636,7 +4679,7 @@ async def import_leads_from_file_content(
                 email_lower in existing_emails_in_db
                 or email_lower in emails_in_current_file
             ):
-                raise ValueError(
+                raise _LoiDongNhapLead(
                     f"Email '{lead_in.email}' đã tồn tại trong cơ sở dữ liệu hoặc file này."
                 )
 
@@ -4651,12 +4694,12 @@ async def import_leads_from_file_content(
 
             if phone_norm:
                 if phone_norm in existing_phones_in_db or phone_norm in phones_in_current_file:
-                    raise ValueError(f"SĐT '{phone_raw}' đã tồn tại trong hệ thống hoặc file này.")
+                    raise _LoiDongNhapLead(f"SĐT '{phone_raw}' đã tồn tại trong hệ thống hoặc file này.")
             if phone2_norm:
                 if phone2_norm in existing_phones_in_db or phone2_norm in phones_in_current_file:
-                    raise ValueError(f"SĐT phụ '{phone2_raw}' đã tồn tại trong hệ thống hoặc file này.")
+                    raise _LoiDongNhapLead(f"SĐT phụ '{phone2_raw}' đã tồn tại trong hệ thống hoặc file này.")
                 if phone2_norm == phone_norm:
-                    raise ValueError(f"SĐT phụ '{phone2_raw}' trùng với SĐT chính.")
+                    raise _LoiDongNhapLead(f"SĐT phụ '{phone2_raw}' trùng với SĐT chính.")
 
             # Register normalized phones for cross-row dedup
             if phone_norm:
@@ -4705,19 +4748,48 @@ async def import_leads_from_file_content(
             leads_to_insert.append(lead_dict)
             row_numbers_to_insert.append(row_number)  # giữ song song 1-1
 
-        except (ValueError, TypeError) as e:
+        except (_LoiDongNhapLead, PydanticValidationError) as e:
+            # ⚠️ CHỈ hai lớp này — cố ý KHÔNG bắt `ValueError`/`TypeError` trần.
+            #
+            # Chỉ hai nguồn được trả nguyên văn: `ValidationError` của Pydantic
+            # (từ `LeadCreate(**cleaned_data)`) và `_LoiDongNhapLead` mà chính các
+            # phép kiểm trùng email/SĐT ở trên phát ra. Cả hai đều là câu tiếng
+            # Việt viết cho người nhập, giúp họ sửa đúng ô.
+            #
+            # Bắt `ValueError` trần thì KHÔNG đủ hẹp: `calculate_lead_score()`
+            # trong cùng khối này có truy vấn cơ sở dữ liệu và cũng ném được
+            # `ValueError`/`TypeError` mang câu SQL kèm tham số. Phân loại theo lớp
+            # dựng sẵn là để lại đúng đường rò, chỉ đổi tên lớp ngoại lệ.
             errors.append(
                 schemas.LeadImportError(
                     row_number=row_number,
-                    error_message=f"Data validation failed: {e}",
+                    error_message=f"Dữ liệu không hợp lệ: {e}",
                     row_data=row_data,
                 )
             )
         except Exception as e:
+            # 🔴 Mọi thứ còn lại là lỗi HẠ TẦNG, không phải lỗi dữ liệu của người
+            # nhập. Đáng chú ý: `calculate_lead_score()` trong khối này có truy vấn
+            # cơ sở dữ liệu, nên một `OperationalError`/`DBAPIError` rơi xuống đây
+            # mang theo câu SQL kèm tham số — tức dữ liệu của người khác — và giao
+            # diện in thẳng `error_message` lên thông báo.
+            #
+            # Chi tiết đầy đủ đi vào log máy chủ (`exc_info=True`), đúng chỗ để
+            # chẩn đoán; người dùng nhận một câu nói rõ phải làm gì.
+            log.error(
+                "Unexpected error while processing import row",
+                row_number=row_number,
+                error_type=type(e).__name__,
+                exc_info=True,
+            )
             errors.append(
                 schemas.LeadImportError(
                     row_number=row_number,
-                    error_message=f"Unexpected error processing row: {e}",
+                    error_message=(
+                        "Dòng này gặp lỗi không xác định phía hệ thống và chưa được "
+                        "tạo. Vui lòng thử lại; nếu vẫn lỗi, báo quản trị viên kèm "
+                        "số dòng."
+                    ),
                     row_data=row_data,
                 )
             )

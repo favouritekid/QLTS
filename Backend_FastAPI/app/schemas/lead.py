@@ -302,12 +302,22 @@ class LeadCreate(LeadBase):
         if v is None:
             return None
 
-        # 🔴 Đầu vào KHÔNG phải chuỗi (JSON number qua `POST /api/leads`) thì
-        # `.strip()` bên dưới ném `AttributeError` — Pydantic để lọt ra ngoài
-        # thành **500**, không phải 422. Ép về chuỗi rồi để chính các bước dưới
-        # phán quyết: `901234567` (mất số 0 đầu) sẽ trượt regex và báo lỗi rõ.
+        # 🔴 TỪ CHỐI thẳng, KHÔNG ép kiểu.
+        #
+        # `.strip()` bên dưới ném `AttributeError` với đầu vào không phải chuỗi và
+        # Pydantic để lọt ra thành 500 — nhưng `str(v)` để chữa việc đó lại tệ hơn
+        # nhiều: nó ĐOÁN. `84901234567` thành `"0901234567"` (nghe hợp lý), còn
+        # `84901234567.0` thành `"849012345670"` sau khi gỡ dấu chấm, rồi tiền tố
+        # `84` bị đổi thành `0` — ra `"09012345670"`, **thừa một chữ số so với số
+        # người dùng gửi**, mà vẫn khớp regex nên được nhận.
+        #
+        # Số điện thoại là khoá định danh (unique index, dedup, tra cứu). Nhận một
+        # giá trị đã bị biến dạng còn tệ hơn từ chối thẳng.
         if not isinstance(v, str):
-            v = str(v)
+            raise ValueError(
+                "Số điện thoại phải là chuỗi. Số dạng JSON number sẽ mất số 0 đầu "
+                "hoặc bị thêm chữ số khi chuyển đổi — vui lòng gửi dạng chuỗi."
+            )
 
         if v.strip() == "":
             if info.field_name == "phone2":
@@ -416,10 +426,13 @@ class LeadUpdate(BaseModel):
         if v is None:
             return None
 
-        # Xem chú thích cùng chỗ ở `LeadCreate`: đầu vào không phải chuỗi sẽ nổ
-        # `AttributeError` trong `normalize_vietnam_phone` và thoát ra thành 500.
+        # Xem chú thích cùng chỗ ở `LeadCreate`: ép kiểu sẽ ĐOÁN và có thể đổi
+        # chính chữ số của người dùng (`84901234567.0` → `"09012345670"`).
         if not isinstance(v, str):
-            v = str(v)
+            raise ValueError(
+                "Số điện thoại phải là chuỗi. Số dạng JSON number sẽ mất số 0 đầu "
+                "hoặc bị thêm chữ số khi chuyển đổi — vui lòng gửi dạng chuỗi."
+            )
 
         # For primary phone, reject empty string instead of coercing to None
         if v.strip() == "":

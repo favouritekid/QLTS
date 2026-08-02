@@ -183,7 +183,11 @@ jobs:
       #     đi thẳng vào đây, không qua bước strip của service): khoảng trắng
       #     trần, đầu vào không phải chuỗi, và độ dài phải khớp cột DB;
       #   * test_lead_import_row_number_offset — số dòng báo cho người dùng phải
-      #     khớp dòng trong tệp họ mở, sau khi phần đầu `#` bị cắt.
+      #     khớp dòng trong tệp họ mở, sau khi phần đầu `#` bị cắt;
+      #   * test_lead_import_error_leak — chi tiết lỗi hạ tầng (SQL + tham số)
+      #     không được đi ra tới thông báo trên màn hình;
+      #   * test_qa_wave9_lead_import_and_w8a32 — PR có SỬA tệp này, nên nó phải
+      #     chạy ở cổng PR chứ không chỉ nightly.
       # 🔴 Thêm tệp test nhập-lead mới thì PHẢI thêm vào đây — allowlist là hàng
       # thủ công, và chính chỗ này là lý do lô lỗi trên lọt được cổng PR.
       # Chọn theo LỚP chứ không cả file: các lớp payment còn lại (record/verify/
@@ -229,8 +233,10 @@ jobs:
           tests/services/test_payment_service.py::TestRefundService
           tests/services/test_payment_service.py::TestRefundNoDeadEnd
           tests/api/test_lead_import.py
+          tests/api/test_lead_import_error_leak.py
           tests/api/test_lead_import_phone_separators.py
           tests/api/test_lead_import_row_number_offset.py
+          tests/api/test_qa_wave9_lead_import_and_w8a32.py
           tests/unit/test_lead_import_empty_cells.py
           tests/unit/test_lead_import_empty_email_end_to_end.py
           tests/unit/test_lead_schema_phone_and_limits.py
