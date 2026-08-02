@@ -50,6 +50,15 @@ function locationOf(res: Response): string {
   return decodeURIComponent(res.headers.get("location") ?? "");
 }
 
+/**
+ * ⚠️ PHẠM VI CỦA TỆP NÀY: nó kiểm **chính sách sau khi header đã tới proxy**.
+ *
+ * Nó KHÔNG chứng minh được header có tới nơi hay không — `NextRequest` ở đây do
+ * test tự dựng nên header luôn nguyên vẹn, còn production thì Next gỡ các Flight
+ * header trước khi gọi Proxy trừ khi `skipProxyUrlNormalize` được bật
+ * (`proxy.config.contract.test.ts` khoá cờ đó, và smoke production là trọng tài
+ * cuối). Hai lớp này bù cho nhau; thiếu một lớp là mù đúng chỗ vừa hỏng.
+ */
 describe("ma trận loại request khi cần cứu phiên", () => {
   it("full document → sang /session-refresh", async () => {
     const res = await proxy(requestWithHeaders({ "sec-fetch-dest": "document" }));
@@ -115,6 +124,47 @@ describe("ma trận loại request khi cần cứu phiên", () => {
     );
 
     expect(res.status).toBe(204);
+  });
+});
+
+/**
+ * 🔴 Marker prefetch là thứ CLIENT tự gửi, nên nó chỉ được phép làm một việc:
+ * đổi một lượt cứu phiên thành `204`. Nó KHÔNG bao giờ được biến thành
+ * `NextResponse.next()` — nếu không, gắn thêm một header là vượt được auth.
+ *
+ * Nói cách khác: header giả chỉ có thể khiến chính request đó **không nhận được
+ * gì**; nó không mở được cửa nào.
+ */
+describe("marker prefetch KHÔNG được dùng để vượt auth", () => {
+  it.each([
+    ["prefetch=1", { "next-router-prefetch": "1" }],
+    ["prefetch=2", { "next-router-prefetch": "2" }],
+    ["segment-prefetch", { "next-router-segment-prefetch": "/leads" }],
+    ["prefetch + rsc", { rsc: "1", "next-router-prefetch": "1" }],
+  ])("%s không có access token ⇒ KHÔNG trả nội dung protected", async (_l, headers) => {
+    const res = await proxy(requestWithHeaders(headers, undefined, "/admissions/611"));
+
+    // 204 = rỗng (đúng), 307 = đẩy đi cứu phiên (đúng). Điều DUY NHẤT bị cấm là
+    // 200 — tức middleware cho request đi tiếp vào trang được bảo vệ.
+    expect(res.status).not.toBe(200);
+    expect([204, 307]).toContain(res.status);
+  });
+
+  /**
+   * Biến thể transport: Next phục vụ payload RSC qua nhiều dạng đường dẫn
+   * (`.rsc`, segment prefetch path). Chúng vẫn phải đi qua ranh giới auth —
+   * advisory GHSA-267c-6grr-h53f là đúng lớp lỗi này.
+   */
+  it.each([
+    ["đuôi .rsc", "/admissions/611.rsc"],
+    ["segment path", "/admissions/611/__PAGE__.segment.rsc"],
+    ["đuôi .rsc + prefetch marker", "/leads.rsc"],
+  ])("%s không có access token ⇒ KHÔNG trả nội dung protected", async (_l, path) => {
+    const res = await proxy(
+      requestWithHeaders({ "next-router-prefetch": "1" }, undefined, path),
+    );
+
+    expect(res.status).not.toBe(200);
   });
 });
 
