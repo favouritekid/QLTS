@@ -137,6 +137,39 @@ describe("nhật ký CŨ không được biến chu kỳ refresh mới thành no
     // Đúng MỘT POST: nhật ký cũ bị dọn, rồi một attempt mới thật sự chạy.
     expect(post).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * Cùng một lỗi no-op, nhưng tới từ phía ÂM của trục thời gian.
+   *
+   * `clearedAt` là `updatedAt` mà TAB KHÁC ghi bằng đồng hồ của nó; giữa hai
+   * chu kỳ người dùng còn có thể chỉnh giờ lùi. Nếu chỉ chặn cận trên thì một
+   * bản ghi mang mốc tương lai luôn cho ra tuổi âm, luôn "tươi", và mọi chu kỳ
+   * refresh sau đó đều thành no-op — trong khi hook đã ghi timestamp throttle.
+   */
+  it("bản ghi mang mốc TƯƠNG LAI (đồng hồ lệch rồi chỉnh lùi) ⇒ vẫn phải POST một lần", async () => {
+    // Tab kia ghi nhật ký khi đồng hồ đang chạy nhanh 5 phút.
+    const skewed = T0 + 5 * 60_000;
+    vi.setSystemTime(skewed);
+    setCsrf("gen-old");
+    const leader = await acquireRefreshLock("gen-old", skewed);
+    if (leader.status !== "acquired") throw new Error("không giành được lease");
+    await leader.handle.update({ phase: "in-flight" });
+    await leader.handle.update({ resultKind: "success" });
+    await leader.handle.release();
+
+    // Đồng hồ về đúng giờ ⇒ bản ghi nằm ở tương lai ⇒ tuổi âm.
+    vi.setSystemTime(T0);
+    setCsrf("gen-new");
+
+    const post = vi.spyOn(axios, "post").mockImplementation(async () => {
+      setCsrf("gen-newer");
+      return { status: 200, data: {} } as never;
+    });
+    const { refreshAccessToken } = await import("./refresh");
+
+    await expect(refreshAccessToken()).resolves.toBeUndefined();
+    expect(post).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("follower thấy generation đổi GIỮA LÚC CHỜ", () => {

@@ -447,11 +447,18 @@ async function doRefresh(): Promise<void> {
   //
   // Phân biệt bằng TUỔI: "generation đã đổi" chỉ chứng minh có token mới TẠI
   // THỜI ĐIỂM bản ghi được viết, không chứng minh token ấy còn hạn bây giờ.
-  if (
-    superseded.status === "cleared" &&
-    Date.now() - superseded.clearedAt <= FRESH_PROOF_WINDOW_MS
-  ) {
-    return;
+  //
+  // ⚠️ Và tuổi phải bị chặn ở CẢ HAI phía. `clearedAt` là `updatedAt` do TAB
+  // KHÁC ghi, tức đọc từ một đồng hồ khác; người dùng cũng có thể chỉnh giờ lùi
+  // giữa hai chu kỳ. Tuổi âm nghĩa là bản ghi "đến từ tương lai" — nó không nói
+  // được gì về việc token nó chứng minh còn hạn hay không. Bỏ vế dưới thì mọi
+  // bản ghi lệch giờ về phía tương lai đều lọt qua như bằng chứng tươi, và ta
+  // rơi lại đúng ca (b): no-op, throttle đã ghi, token chết ở phút 15.
+  if (superseded.status === "cleared") {
+    const proofAge = Date.now() - superseded.clearedAt;
+    if (proofAge >= 0 && proofAge <= FRESH_PROOF_WINDOW_MS) {
+      return;
+    }
   }
 
   const acquired = await acquireRefreshLock(baseline);
