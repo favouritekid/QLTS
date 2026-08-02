@@ -125,10 +125,34 @@ export function proxy(request: NextRequest) {
   const isAdminRoute = ADMIN_ROUTES.some((route) => pathname.startsWith(route));
   const isFinanceRoute = FINANCE_ROUTES.some((route) => pathname.startsWith(route));
 
+  const forceLogin = request.nextUrl.searchParams.get("force_login") === "true";
+
+  // ── Reauth: đăng nhập lại mà KHÔNG bỏ phiên 30 ngày ─────────────────────
+  //
+  // Phải nằm TRƯỚC nhánh `isAuthRoute`. Trong nhánh đó một access token CÒN
+  // HẠN bị đẩy thẳng về dashboard — nhưng người tới đây là vì tầng SSR/API vừa
+  // từ chối họ dù token còn hạn, nên đẩy về dashboard là ném họ trở lại đúng
+  // chỗ vừa hỏng, và cái vòng đó không có điểm dừng. Ở lại `/login` mới là
+  // điểm dừng.
+  //
+  // Chỉ xoá `access_token`. `refresh_token` là thứ giữ phiên 30 ngày; còn
+  // `csrf_token` là bằng chứng THẾ HỆ mà lớp phối hợp liên-tab đọc để biết đã
+  // có token mới hay chưa (`refresh-coordination/lifecycle.ts`) — xoá nó vừa
+  // giết phiên vừa làm mù nhật ký, đúng hai thứ `reauth` sinh ra để giữ.
+  //
+  // Hai cờ cùng có mặt thì cờ XOÁ SẠCH thắng: `force_login` do backend/logout
+  // phát ra khi phiên đã chết hẳn phía server, còn `reauth` chỉ là phỏng đoán
+  // của client. Nghiêng về phía xoá là nghiêng về phía an toàn.
+  const isReauth = request.nextUrl.searchParams.get("reauth") === "true";
+  if (isAuthRoute && isReauth && !forceLogin) {
+    const response = NextResponse.next();
+    response.cookies.delete({ name: "access_token", path: "/" });
+    return response;
+  }
+
   // Auth routes: redirect authenticated users to dashboard, handle force_login
   if (isAuthRoute) {
     // Force login: clear stale cookies (used by logout redirect)
-    const forceLogin = request.nextUrl.searchParams.get("force_login") === "true";
     if (forceLogin) {
       const response = NextResponse.next();
       response.cookies.delete({ name: "access_token", path: "/" });
