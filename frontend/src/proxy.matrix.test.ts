@@ -56,7 +56,7 @@ function locationOf(res: Response): string {
  * Nó KHÔNG chứng minh được header có tới nơi hay không — `NextRequest` ở đây do
  * test tự dựng nên header luôn nguyên vẹn, còn production thì Next gỡ các Flight
  * header trước khi gọi Proxy trừ khi `skipProxyUrlNormalize` được bật
- * (`proxy.config.contract.test.ts` khoá cờ đó, và smoke production là trọng tài
+ * (`proxy.required-flags.test.ts` khoá cờ đó, và smoke production là trọng tài
  * cuối). Hai lớp này bù cho nhau; thiếu một lớp là mù đúng chỗ vừa hỏng.
  */
 describe("ma trận loại request khi cần cứu phiên", () => {
@@ -154,6 +154,12 @@ describe("marker prefetch KHÔNG được dùng để vượt auth", () => {
    * Biến thể transport: Next phục vụ payload RSC qua nhiều dạng đường dẫn
    * (`.rsc`, segment prefetch path). Chúng vẫn phải đi qua ranh giới auth —
    * advisory GHSA-267c-6grr-h53f là đúng lớp lỗi này.
+   *
+   * ⚠️ GIỚI HẠN: các ca dưới gọi `proxy()` TRỰC TIẾP, nên chúng chỉ chứng minh
+   * **chính sách sau khi Proxy được gọi**. Chúng KHÔNG chứng minh matcher của
+   * framework thật sự định tuyến các đường dẫn đó qua Proxy — điều đó phụ thuộc
+   * phiên bản Next (16.2.11 đang dùng đã qua cả hai bản vá 16.2.5 và 16.2.6) và
+   * chỉ đo được bằng probe trên artifact production.
    */
   it.each([
     ["đuôi .rsc", "/admissions/611.rsc"],
@@ -246,6 +252,66 @@ describe("/session-refresh — nắp chống lặp và shortcut", () => {
     const location = locationOf(res);
     expect(location).toContain("/admissions/611");
     expect(location).toContain("_sr=1");
+  });
+
+  /** Vân tay `at` mà proxy tính cho một `jti` — dùng để dựng ca "at KHỚP". */
+  async function fingerprint(jti: string): Promise<string> {
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(jti),
+    );
+    let binary = "";
+    for (const byte of new Uint8Array(digest)) binary += String.fromCharCode(byte);
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "").slice(0, 16);
+  }
+
+  // `at` KHỚP nghĩa là token chưa đổi kể từ lúc rời trang ⇒ bootstrap vẫn phải
+  // chạy. Shortcut ở đây là quay lại một trang mà token của nó vẫn hết hạn —
+  // đúng vòng lặp mà nắp `_sr` sinh ra để chặn.
+  it("`at` KHỚP vân tay hiện tại → KHÔNG shortcut, vào bootstrap", async () => {
+    const at = await fingerprint("jti-goc");
+    const res = await proxy(
+      refreshPage(`?redirect=%2Fadmissions%2F611&at=${at}`, accessToken(600)),
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  /**
+   * Vòng lặp thật: mỗi lần proxy shortcut là một vòng, và `_sr` phải tăng dần
+   * cho tới khi chạm nắp. Ca này chạy proxy BA lần liên tiếp, mỗi lần lấy đúng
+   * target mà lần trước trả về — không có nó thì `_sr` có thể tăng đúng một lần
+   * rồi đứng im mà mọi test đơn lẻ vẫn xanh.
+   */
+  it("ba vòng liên tiếp → vòng thứ ba dừng ở /login?reauth=true", async () => {
+    const token = accessToken(600);
+    let target = "/admissions/611";
+    const chang: number[] = [];
+
+    for (let i = 0; i < 3; i++) {
+      const res = await proxy(
+        refreshPage(
+          `?redirect=${encodeURIComponent(target)}&at=van-tay-cu`,
+          token,
+        ),
+      );
+      chang.push(res.status);
+      const loc = locationOf(res);
+      if (loc.includes("/login")) {
+        expect(loc).toContain("reauth=true");
+        break;
+      }
+      // Lần sau đi tiếp từ đúng target vừa nhận.
+      target = loc.replace("https://qlts.tnpc.edu.vn", "");
+    }
+
+    // Hai vòng đầu shortcut (307), vòng thứ ba chạm nắp và vẫn 307 nhưng về
+    // /login — điều cần khoá là nó DỪNG, không quay vòng mãi.
+    expect(chang).toEqual([307, 307, 307]);
+    const cuoi = await proxy(
+      refreshPage(`?redirect=${encodeURIComponent(target)}&at=van-tay-cu`, token),
+    );
+    expect(locationOf(cuoi)).toContain("/login");
   });
 
   it("không có `at` → không shortcut, vào bootstrap", async () => {

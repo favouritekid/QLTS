@@ -26,6 +26,7 @@ import {
   type ClearTrigger,
 } from "./refresh-coordination/lifecycle";
 import { selectJournalStore } from "./refresh-coordination/storage";
+import { writeThrottleAt } from "./session-flags";
 import type { JournalRecord, ResultKind } from "./refresh-coordination/types";
 
 /** `error_code` của 429 do rate limit hạ tầng (slowapi). */
@@ -347,6 +348,13 @@ async function runAsLeader(handle: LockHandle, baseline: string | null) {
       after !== null && after !== baseline
         ? { kind: "success" }
         : { kind: "ambiguous", reason: "no-proof" };
+
+    // 🔑 Nơi DUY NHẤT ghi mốc throttle của hook proactive, và chỉ khi đã có
+    // BẰNG CHỨNG token mới. Mốc ấy nghĩa là "lần làm mới THÀNH CÔNG gần nhất";
+    // ghi nó ở chỗ khác — nhất là trước `await` như bản cũ của hook — làm một
+    // lần thử HỎNG cũng đặt mốc, và mọi tab bị hoãn 12 phút vì một lần refresh
+    // chưa từng thành công.
+    if (outcome.kind === "success") writeThrottleAt(Date.now());
   } catch (error) {
     outcome = classify(error, Date.now());
   }
@@ -440,10 +448,9 @@ async function doRefresh(): Promise<void> {
   //
   //  (b) Bản ghi còn sót từ chu kỳ TRƯỚC (13 phút trước, khi hook proactive
   //      chạy lần cuối) ⇒ access token của chu kỳ đó sắp hết hạn. Coi nó là
-  //      bằng chứng thì lần refresh này thành no-op: hook đã ghi timestamp
-  //      throttle TRƯỚC khi gọi, nên lần thử kế tiếp mãi tới phút ~26, trong
-  //      khi token chết ở phút 15. Người dùng gặp lại đúng triệu chứng mà cả
-  //      kế hoạch này sinh ra để chữa.
+  //      bằng chứng thì lần refresh này trả về "xong" mà chưa POST gì, trong
+  //      khi token thật chết ở phút 15 — người dùng gặp lại đúng triệu chứng mà
+  //      cả kế hoạch này sinh ra để chữa.
   //
   // Phân biệt bằng TUỔI: "generation đã đổi" chỉ chứng minh có token mới TẠI
   // THỜI ĐIỂM bản ghi được viết, không chứng minh token ấy còn hạn bây giờ.
@@ -453,7 +460,7 @@ async function doRefresh(): Promise<void> {
   // giữa hai chu kỳ. Tuổi âm nghĩa là bản ghi "đến từ tương lai" — nó không nói
   // được gì về việc token nó chứng minh còn hạn hay không. Bỏ vế dưới thì mọi
   // bản ghi lệch giờ về phía tương lai đều lọt qua như bằng chứng tươi, và ta
-  // rơi lại đúng ca (b): no-op, throttle đã ghi, token chết ở phút 15.
+  // rơi lại đúng ca (b): báo xong mà chưa POST, token chết ở phút 15.
   if (superseded.status === "cleared") {
     const proofAge = Date.now() - superseded.clearedAt;
     if (proofAge >= 0 && proofAge <= FRESH_PROOF_WINDOW_MS) {

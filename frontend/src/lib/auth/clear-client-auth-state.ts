@@ -17,7 +17,7 @@
  * giữa là một cửa sổ để `useQuery(["auth","me"])` kịp phát request bằng danh
  * tính của phiên vừa chết.
  */
-import { setApiLoggedOut } from "@/lib/api/session-flags";
+import { clearThrottleAt, setApiLoggedOut } from "@/lib/api/session-flags";
 import { useAuthStore } from "@/lib/stores/auth.store";
 
 export function clearClientAuthState(): void {
@@ -32,4 +32,8 @@ export function clearClientAuthState(): void {
   } catch {
     // Best-effort: store hỏng thì cờ chặn request ở trên vẫn còn tác dụng.
   }
+
+  // Mốc throttle của phiên cũ không còn nghĩa gì với phiên sau. Giữ lại thì lần
+  // đăng nhập kế tiếp bị hoãn refresh chủ động tới 12 phút mà không vì lý do gì.
+  clearThrottleAt();
 }

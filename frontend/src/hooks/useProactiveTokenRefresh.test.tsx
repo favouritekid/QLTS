@@ -50,10 +50,19 @@ describe("useProactiveTokenRefresh", () => {
     setVisibility("visible");
   });
 
-  it("refresh on mount khi visible + chưa có timestamp; có ghi timestamp", async () => {
+  /**
+   * ⚠️ Contract ĐỔI ở `2e`: hook chỉ ĐỌC mốc throttle, nơi duy nhất GHI là
+   * `refresh.ts` — và chỉ sau khi POST thành công.
+   *
+   * Mốc ấy biểu diễn "lần làm mới THÀNH CÔNG gần nhất". Bản cũ ghi trước
+   * `await` để thu hẹp cửa sổ đua cross-tab; nay cửa sổ đó do nhật ký dùng chung
+   * lo, nên ghi sớm chỉ còn tác dụng phụ — một lần thử HỎNG cũng đặt mốc và
+   * hoãn mọi tab 12 phút vì một lần refresh chưa từng thành công.
+   */
+  it("refresh on mount khi visible + chưa có mốc; hook KHÔNG tự ghi mốc", async () => {
     renderHook(() => useProactiveTokenRefresh(true));
     await waitFor(() => expect(refreshAccessToken).toHaveBeenCalledTimes(1));
-    expect(localStorage.getItem(KEY)).not.toBeNull();
+    expect(localStorage.getItem(KEY)).toBeNull();
   });
 
   it("KHÔNG refresh nếu timestamp < 12' (cross-tab guard)", async () => {
@@ -96,7 +105,7 @@ describe("useProactiveTokenRefresh", () => {
    *
    * Hai nguồn cooldown là hai thứ sẽ trôi lệch nhau — đó là lý do bỏ cái ở hook.
    */
-  it("refresh trả `safe-retryable` → GIỮ timestamp, không rollback", async () => {
+  it("refresh HỎNG → mốc cũ còn NGUYÊN, hook không đụng vào", async () => {
     const prev = String(Date.now() - 20 * 60_000); // đủ cũ để bình thường sẽ refresh
     localStorage.setItem(KEY, prev);
     refreshAccessToken.mockRejectedValue(
@@ -107,11 +116,12 @@ describe("useProactiveTokenRefresh", () => {
     await waitFor(() => expect(refreshAccessToken).toHaveBeenCalledTimes(1));
     await tick();
 
-    // Rollback ở đây sẽ xoá throttle 12' đúng lúc bucket vừa cạn, mà `onWake`
-    // gắn cả `visibilitychange` lẫn `focus` → mười lần alt-tab là mười request
-    // nữa vào đúng cái xô đang hết.
-    expect(localStorage.getItem(KEY)).not.toBe(prev);
-    expect(localStorage.getItem(KEY)).not.toBeNull();
+    // `2e` gỡ cả rollback lẫn claim-slot: hook không ghi gì nên cũng chẳng có gì
+    // để hoàn tác. Bất biến cũ vẫn được giữ — và giữ CHẶT hơn: sau một
+    // `safe-retryable`, mốc throttle KHÔNG bị xoá, nên `onWake` (gắn cả
+    // `visibilitychange` lẫn `focus`) không biến mười lần alt-tab thành mười
+    // POST nữa vào đúng cái xô vừa cạn.
+    expect(localStorage.getItem(KEY)).toBe(prev);
   });
 
   it.each([
