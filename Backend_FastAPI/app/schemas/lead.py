@@ -307,7 +307,19 @@ class LeadCreate(LeadBase):
         # Normalize the phone number
         normalized = normalize_vietnam_phone(v)
         if normalized is None:
-            return v  # Let min_length validation handle it
+            # 🔴 `normalize_vietnam_phone` chỉ trả `None` khi gỡ hết ký tự phân
+            # cách (` \t\n\r.-()/`) thì KHÔNG còn gì — tức chuỗi kiểu `"---"`,
+            # `"..."`, `"( )"`. Ô TRỐNG thật đã được xử lý ở nhánh trên.
+            #
+            # Trả nguyên chuỗi gốc ở đây (với lời hẹn "để min_length lo") là để
+            # lọt: `min_length=1` thấy `"---"` dài 3 nên cho qua, rồi ở đường
+            # nhập từ tệp cả HAI lớp chống trùng đều so trên bản chuẩn hoá —
+            # vốn là `None` — nên chúng bỏ qua luôn. Giá trị rác đi thẳng tới
+            # unique index và làm hỏng CẢ LÔ, không riêng dòng của nó.
+            raise ValueError(
+                f"Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam "
+                f"(VD: 0901234567, +84901234567)"
+            )
 
         # Validate against Vietnam format
         if not validate_vietnam_phone(normalized, normalize=False):
@@ -398,7 +410,16 @@ class LeadUpdate(BaseModel):
         # Normalize the phone number
         normalized = normalize_vietnam_phone(v)
         if normalized is None:
-            return None
+            # Cùng lớp lỗi với `LeadCreate`, nhưng hậu quả khác: ở đường CẬP
+            # NHẬT, trả `None` cho một chuỗi rác như `"---"` nghĩa là âm thầm
+            # XOÁ số điện thoại đang có. Người dùng gõ nhầm một gạch nối và mất
+            # dữ liệu mà không có thông báo nào.
+            #
+            # Ô trống thật đã được xử lý ở nhánh trên (phone ⇒ lỗi, phone2 ⇒ None).
+            raise ValueError(
+                f"Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam "
+                f"(VD: 0901234567, +84901234567)"
+            )
 
         # Validate against Vietnam format
         if not validate_vietnam_phone(normalized, normalize=False):
