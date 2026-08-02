@@ -80,6 +80,27 @@ export function isValidRedirect(
   return true;
 }
 
+/**
+ * Gỡ `_rsc` khỏi một return-url.
+ *
+ * ⚠️ Bắt buộc dùng `URLSearchParams.delete`, KHÔNG regex: `_rsc` có thể xuất
+ * hiện **không kèm `=`** (`?a=1&_rsc`), nên `_rsc=[^&]*` bỏ sót đúng dạng đó và
+ * ta mang một tham số nội bộ của RSC vào URL người dùng nhìn thấy.
+ *
+ * Đặt ở đây — cạnh `isValidRedirect` — vì cả `proxy.ts` (middleware) lẫn
+ * `lib/api/server.ts` (Server Component) đều cần. Hai bản sao là hai chỗ sẽ
+ * lệch nhau đúng ở khâu lọc return-url.
+ */
+export function stripRsc(target: string): string {
+  try {
+    const url = new URL(target, "https://placeholder.invalid");
+    url.searchParams.delete("_rsc");
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return target;
+  }
+}
+
 export interface BuildLoginRedirectOptions {
   /** Thêm `force_login=true` (proxy middleware sẽ xoá cookie cũ). */
   forceLogin?: boolean;

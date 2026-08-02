@@ -49,8 +49,8 @@ function requestWith(token: string | undefined, path = "/admissions/611") {
 
 describe("proxy — access token hết hạn", () => {
   // Ca sự cố: officer rời máy hơn 15 phút rồi F5 (hoặc mở hồ sơ ở tab mới).
-  it("hết hạn gần đây → sang /session-refresh kèm return-url", () => {
-    const res = proxy(requestWith(accessToken(-120))); // hết hạn 2 phút trước
+  it("hết hạn gần đây → sang /session-refresh kèm return-url", async () => {
+    const res = await proxy(requestWith(accessToken(-120))); // hết hạn 2 phút trước
 
     expect(res.status).toBe(307);
     const location = res.headers.get("location") ?? "";
@@ -62,30 +62,30 @@ describe("proxy — access token hết hạn", () => {
   // KHÔNG được `next()`: Server Component sẽ fetch ngay bằng token hết hạn →
   // 401 → server.ts redirect /login?force_login=true → nhánh force_login xoá
   // SẠCH cả refresh_token, mất phiên trước khi client kịp hydrate.
-  it("hết hạn gần đây → KHÔNG cho request đi thẳng vào route SSR", () => {
-    const res = proxy(requestWith(accessToken(-120)));
+  it("hết hạn gần đây → KHÔNG cho request đi thẳng vào route SSR", async () => {
+    const res = await proxy(requestWith(accessToken(-120)));
 
     expect(res.status).not.toBe(200);
     expect(res.headers.get("location") ?? "").not.toContain("/login");
   });
 
-  it("hết hạn gần đây → KHÔNG xoá cookie nào (refresh_token là thứ cứu phiên)", () => {
-    const res = proxy(requestWith(accessToken(-120)));
+  it("hết hạn gần đây → KHÔNG xoá cookie nào (refresh_token là thứ cứu phiên)", async () => {
+    const res = await proxy(requestWith(accessToken(-120)));
 
     const setCookie = res.headers.get("set-cookie") ?? "";
     expect(setCookie).not.toContain("access_token=;");
     expect(setCookie).not.toContain("refresh_token=;");
   });
 
-  it("hết hạn cả tuần (refresh_token vẫn còn) → vẫn sang /session-refresh", () => {
-    const res = proxy(requestWith(accessToken(-7 * 24 * 3600)));
+  it("hết hạn cả tuần (refresh_token vẫn còn) → vẫn sang /session-refresh", async () => {
+    const res = await proxy(requestWith(accessToken(-7 * 24 * 3600)));
 
     expect(res.status).toBe(307);
     expect(res.headers.get("location") ?? "").toContain("/session-refresh");
   });
 
-  it("trang /session-refresh phải công khai (nếu không sẽ tự đá chính nó → vòng lặp)", () => {
-    const res = proxy(new NextRequest(new URL("/session-refresh?redirect=/admissions/611", BASE)));
+  it("trang /session-refresh phải công khai (nếu không sẽ tự đá chính nó → vòng lặp)", async () => {
+    const res = await proxy(new NextRequest(new URL("/session-refresh?redirect=/admissions/611", BASE)));
 
     expect(res.status).toBe(200);
     expect(res.headers.get("location")).toBeNull();
@@ -93,8 +93,8 @@ describe("proxy — access token hết hạn", () => {
 
   // Quá cửa sổ refresh_token (30 ngày) → không còn gì để cứu, đá về login luôn
   // thay vì cho user nhìn trang rỗng rồi mới bị đá.
-  it("hết hạn quá 30 ngày → redirect /login kèm return-url", () => {
-    const res = proxy(requestWith(accessToken(-31 * 24 * 3600)));
+  it("hết hạn quá 30 ngày → redirect /login kèm return-url", async () => {
+    const res = await proxy(requestWith(accessToken(-31 * 24 * 3600)));
 
     expect(res.status).toBe(307);
     const location = res.headers.get("location") ?? "";
@@ -109,8 +109,8 @@ describe("proxy — không có access cookie", () => {
   // vẫn mất cookie sau 15 phút (cả cơ sở người dùng, trong 30 ngày đầu sau
   // deploy), chưa kể eviction. `refresh_token` (Path=/api) có thể vẫn sống mà
   // middleware không nhìn thấy.
-  it("không có access_token → sang /session-refresh kèm return-url", () => {
-    const res = proxy(requestWith(undefined));
+  it("không có access_token → sang /session-refresh kèm return-url", async () => {
+    const res = await proxy(requestWith(undefined));
 
     expect(res.status).toBe(307);
     const location = res.headers.get("location") ?? "";
@@ -119,8 +119,8 @@ describe("proxy — không có access cookie", () => {
     expect(location).toContain("admissions");
   });
 
-  it("không có access_token → KHÔNG xoá cookie nào", () => {
-    const res = proxy(requestWith(undefined));
+  it("không có access_token → KHÔNG xoá cookie nào", async () => {
+    const res = await proxy(requestWith(undefined));
 
     const setCookie = res.headers.get("set-cookie") ?? "";
     expect(setCookie).not.toContain("refresh_token=;");
@@ -129,9 +129,9 @@ describe("proxy — không có access cookie", () => {
 
   // Cùng một hàm dựng URL cho mọi nhánh, nên return-url ngoại lai bị loại ở
   // MỌI lối vào — không nhánh nào được quên `isValidRedirect`.
-  it("return-url ngoại lai bị loại bỏ, không đính vào /session-refresh", () => {
+  it("return-url ngoại lai bị loại bỏ, không đính vào /session-refresh", async () => {
     const req = new NextRequest(new URL("/admissions/611", BASE));
-    const res = proxy(req);
+    const res = await proxy(req);
     const location = res.headers.get("location") ?? "";
 
     expect(location).toContain("/session-refresh");
@@ -140,15 +140,15 @@ describe("proxy — không có access cookie", () => {
 });
 
 describe("proxy — các nhánh KHÔNG được nới lỏng", () => {
-  it("token sai định dạng → vẫn redirect /login", () => {
-    const res = proxy(requestWith("khong-phai-jwt"));
+  it("token sai định dạng → vẫn redirect /login", async () => {
+    const res = await proxy(requestWith("khong-phai-jwt"));
 
     expect(res.status).toBe(307);
     expect(res.headers.get("location") ?? "").toContain("/login");
   });
 
-  it("token còn hạn → đi tiếp bình thường", () => {
-    const res = proxy(requestWith(accessToken(600)));
+  it("token còn hạn → đi tiếp bình thường", async () => {
+    const res = await proxy(requestWith(accessToken(600)));
 
     expect(res.status).toBe(200);
     expect(res.headers.get("location")).toBeNull();
@@ -156,8 +156,8 @@ describe("proxy — các nhánh KHÔNG được nới lỏng", () => {
 
   // RBAC vẫn chạy trên token còn hạn: đây là gate UX, backend Casbin là gate
   // thật, nhưng nới nhánh hết-hạn không được phép làm hỏng nhánh này.
-  it("officer vào route admin → vẫn bị đẩy khỏi trang admin", () => {
-    const res = proxy(requestWith(accessToken(600, "officer"), "/admin/users"));
+  it("officer vào route admin → vẫn bị đẩy khỏi trang admin", async () => {
+    const res = await proxy(requestWith(accessToken(600, "officer"), "/admin/users"));
 
     expect(res.status).toBe(307);
     expect(res.headers.get("location") ?? "").not.toContain("/admin/users");
@@ -165,8 +165,8 @@ describe("proxy — các nhánh KHÔNG được nới lỏng", () => {
 
   // Nhánh hết-hạn nằm TRƯỚC bước RBAC, nên nếu nó `next()` thì một token hết
   // hạn sẽ vào thẳng vỏ trang admin mà không qua kiểm quyền.
-  it("token HẾT HẠN vào route admin → không được vào vỏ trang admin", () => {
-    const res = proxy(requestWith(accessToken(-120, "officer"), "/admin/users"));
+  it("token HẾT HẠN vào route admin → không được vào vỏ trang admin", async () => {
+    const res = await proxy(requestWith(accessToken(-120, "officer"), "/admin/users"));
 
     expect(res.status).toBe(307);
     expect(res.headers.get("location") ?? "").not.toContain("/admin/users");
@@ -211,8 +211,8 @@ describe("proxy — /login?reauth=true đăng nhập lại mà KHÔNG bỏ phiê
     return req;
   }
 
-  it("xoá ĐÚNG access_token — giữ refresh_token và csrf_token", () => {
-    const res = proxy(loginRequest("?reauth=true", accessToken(600)));
+  it("xoá ĐÚNG access_token — giữ refresh_token và csrf_token", async () => {
+    const res = await proxy(loginRequest("?reauth=true", accessToken(600)));
 
     expect(deletedCookieNames(res)).toEqual(["access_token"]);
   });
@@ -220,22 +220,22 @@ describe("proxy — /login?reauth=true đăng nhập lại mà KHÔNG bỏ phiê
   // Đây là lý do khối `reauth` phải nằm TRƯỚC nhánh `isAuthRoute`: nhánh đó
   // thấy token còn hạn là đẩy về dashboard, tức ném người dùng trở lại đúng
   // trang vừa từ chối họ.
-  it("access token CÒN HẠN vẫn ở lại /login, không bị đẩy về dashboard", () => {
-    const res = proxy(loginRequest("?reauth=true", accessToken(600)));
+  it("access token CÒN HẠN vẫn ở lại /login, không bị đẩy về dashboard", async () => {
+    const res = await proxy(loginRequest("?reauth=true", accessToken(600)));
 
     expect(res.status).toBe(200);
     expect(res.headers.get("location")).toBeNull();
   });
 
-  it("access token đã HẾT HẠN cũng ở lại /login", () => {
-    const res = proxy(loginRequest("?reauth=true", accessToken(-120)));
+  it("access token đã HẾT HẠN cũng ở lại /login", async () => {
+    const res = await proxy(loginRequest("?reauth=true", accessToken(-120)));
 
     expect(res.status).toBe(200);
     expect(deletedCookieNames(res)).toEqual(["access_token"]);
   });
 
-  it("không còn access cookie ⇒ vẫn vào được /login, không xoá gì thêm", () => {
-    const res = proxy(loginRequest("?reauth=true"));
+  it("không còn access cookie ⇒ vẫn vào được /login, không xoá gì thêm", async () => {
+    const res = await proxy(loginRequest("?reauth=true"));
 
     expect(res.status).toBe(200);
     expect(deletedCookieNames(res)).not.toContain("refresh_token");
@@ -247,8 +247,8 @@ describe("proxy — /login?reauth=true đăng nhập lại mà KHÔNG bỏ phiê
   // không xác thực được nguồn của cờ nào cả. Chọn theo HƯỚNG FAIL: nhầm sang
   // xoá sạch thì người dùng đăng nhập lại, nhầm sang giữ thì một phiên lẽ ra
   // phải chết vẫn còn cookie.
-  it("đi kèm force_login ⇒ xoá SẠCH cả ba, reauth không được cứu phiên", () => {
-    const res = proxy(loginRequest("?reauth=true&force_login=true", accessToken(600)));
+  it("đi kèm force_login ⇒ xoá SẠCH cả ba, reauth không được cứu phiên", async () => {
+    const res = await proxy(loginRequest("?reauth=true&force_login=true", accessToken(600)));
 
     expect(deletedCookieNames(res)).toEqual([
       "access_token",
@@ -257,8 +257,8 @@ describe("proxy — /login?reauth=true đăng nhập lại mà KHÔNG bỏ phiê
     ]);
   });
 
-  it("KHÔNG có reauth ⇒ nhánh cũ giữ nguyên: token còn hạn vẫn về dashboard", () => {
-    const res = proxy(loginRequest("", accessToken(600, "officer")));
+  it("KHÔNG có reauth ⇒ nhánh cũ giữ nguyên: token còn hạn vẫn về dashboard", async () => {
+    const res = await proxy(loginRequest("", accessToken(600, "officer")));
 
     expect(res.status).toBe(307);
     expect(res.headers.get("location") ?? "").toContain("/dashboard/officer");
@@ -267,12 +267,12 @@ describe("proxy — /login?reauth=true đăng nhập lại mà KHÔNG bỏ phiê
   // `/register` cũng là auth route, nên dùng `isAuthRoute` làm điều kiện sẽ
   // cho `/register?reauth=true` vừa xoá cookie vừa vượt qua nhánh
   // đẩy-về-dashboard — người đang đăng nhập bị đưa thẳng vào màn đăng ký.
-  it("/register?reauth=true KHÔNG được hưởng nhánh reauth", () => {
+  it("/register?reauth=true KHÔNG được hưởng nhánh reauth", async () => {
     const req = new NextRequest(new URL("/register?reauth=true", BASE));
     req.cookies.set("access_token", accessToken(600, "officer"));
     req.cookies.set("refresh_token", "refresh-song-30-ngay");
     req.cookies.set("csrf_token", "gen-1");
-    const res = proxy(req);
+    const res = await proxy(req);
 
     expect(deletedCookieNames(res)).toEqual([]);
     expect(res.status).toBe(307);
@@ -281,10 +281,10 @@ describe("proxy — /login?reauth=true đăng nhập lại mà KHÔNG bỏ phiê
 
   // Cờ này chỉ có nghĩa ở trang login. Trên route được bảo vệ nó không được
   // biến thành một cách xoá cookie của người khác qua link.
-  it("reauth trên route được bảo vệ KHÔNG xoá cookie nào", () => {
+  it("reauth trên route được bảo vệ KHÔNG xoá cookie nào", async () => {
     const req = new NextRequest(new URL("/admissions/611?reauth=true", BASE));
     req.cookies.set("access_token", accessToken(-120));
-    const res = proxy(req);
+    const res = await proxy(req);
 
     expect(deletedCookieNames(res)).toEqual([]);
     expect(res.headers.get("location") ?? "").toContain("/session-refresh");

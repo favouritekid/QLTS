@@ -14,7 +14,7 @@
  * cả `refresh_token`, tức mất phiên trước khi client kịp hydrate.
  */
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
 import {
@@ -37,7 +37,9 @@ const DEFAULT_TARGET = "/dashboard";
 // lỗi, và người dùng gặp hành vi khác nhau tuỳ chỗ lỗi nổ ra.
 
 export function SessionRefreshBootstrap() {
-  const router = useRouter();
+  // Không dùng `router` nữa: mọi lối rời trang này đều là hard navigation
+  // (`window.location`) để cả state client lẫn module-level cache chết theo
+  // document — đúng giả định mà `2c` dựa vào khi bỏ `queryClient.clear()`.
   const searchParams = useSearchParams();
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -64,7 +66,9 @@ export function SessionRefreshBootstrap() {
         if (cancelled) return;
 
         if (shouldClearAuthCookies(error)) {
-          // Hết phiên thật → đường đăng nhập lại, giữ return-url.
+          // Hết phiên THẬT (chỉ `terminal`: 401 / REFRESH_ABUSE_LOCKED) → đây là
+          // lối DUY NHẤT được dùng `force_login`, và nó giữ return-url để đăng
+          // nhập xong quay lại đúng chỗ.
           //
           // Dọn state client NGAY, không đợi `LoginSessionResetGate`. Gate là
           // lớp ngoài và nó chỉ chạy sau khi `/login` đã mount; từ đây tới đó
@@ -112,7 +116,24 @@ export function SessionRefreshBootstrap() {
           >
             Thử lại
           </Button>
-          <Button variant="outline" onClick={() => router.push("/login")}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              // 🔴 `reauth`, KHÔNG phải `force_login`.
+              //
+              // Tới được màn này nghĩa là lỗi KHÔNG terminal (nhánh terminal đã
+              // điều hướng thẳng ở effect trên). Phiên vẫn còn hiệu lực, nên
+              // đăng nhập lại ở đây phải giữ `refresh_token` — dùng
+              // `force_login` là tự tay biến một lỗi tạm thời thành mất phiên
+              // 30 ngày, đúng triệu chứng cả kế hoạch này sinh ra để chữa.
+              const url = new URL("/login", window.location.origin);
+              url.searchParams.set("reauth", "true");
+              if (isValidRedirect(target)) {
+                url.searchParams.set("redirect", target);
+              }
+              window.location.assign(url.toString());
+            }}
+          >
             Đăng nhập lại
           </Button>
         </div>

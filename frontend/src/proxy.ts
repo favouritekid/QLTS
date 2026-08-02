@@ -17,7 +17,11 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { decodeJWT, isTokenExpired } from "@/lib/auth/jwt-decode";
 import { hasAdminAccess, hasFinanceAccess } from "@/lib/config/roles";
-import { buildLoginRedirect, isValidRedirect } from "@/lib/auth/login-redirect";
+import {
+  buildLoginRedirect,
+  isValidRedirect,
+  stripRsc,
+} from "@/lib/auth/login-redirect";
 
 // ============================================
 // 🛣️ ROUTE CONFIGURATION
@@ -83,6 +87,17 @@ const FINANCE_ROUTES = ["/finance"];
  */
 const IGNORED_ROUTES = ["/.well-known"];
 
+/** Đích mặc định khi return-url không dùng được. */
+const DEFAULT_TARGET = "/dashboard";
+
+/**
+ * Đi qua vòng cứu phiên tối đa mấy lần trước khi bắt đăng nhập lại.
+ *
+ * `2` là con số nhỏ nhất còn cho phép một lần thử lại hợp lệ (vòng 0 → 1), và
+ * đủ để một endpoint SSR luôn trả 401 không quay mãi.
+ */
+const SR_MAX = 2;
+
 // ============================================
 // 🔐 PROXY LOGIC
 // ============================================
@@ -95,13 +110,188 @@ const IGNORED_ROUTES = ["/.well-known"];
  * việc lọc return-url — và một nhánh quên `isValidRedirect` là một open
  * redirect.
  */
-function buildSessionRefreshUrl(request: NextRequest, returnTo: string): URL {
+function buildSessionRefreshUrl(
+  request: NextRequest,
+  returnTo: string,
+  at?: string,
+): URL {
   const url = new URL(SESSION_REFRESH_PATH, request.url);
-  if (isValidRedirect(returnTo)) url.searchParams.set("redirect", returnTo);
+  // LỌC trước, strip sau — `stripRsc()` parse qua `new URL()` nên nó biến
+  // `//evil.com/x` thành `/x`, tức "rửa" một giá trị ngoại lai thành path nội
+  // bộ trông hợp lệ. Đảo thứ tự là mất luôn guard.
+  if (isValidRedirect(returnTo)) {
+    url.searchParams.set("redirect", stripRsc(returnTo));
+  }
+  if (at) url.searchParams.set("at", at);
   return url;
 }
 
-export function proxy(request: NextRequest) {
+/**
+ * Request này chỉ là PREFETCH của Next router hay là một lần điều hướng thật?
+ *
+ * 🔴 Vị từ này phải được hỏi TRƯỚC mọi phân loại khác. Một request prefetch mang
+ * ĐỒNG THỜI `rsc: 1` và `next-router-prefetch: 1`; nếu kiểm `rsc` trước thì mỗi
+ * lần người dùng rê chuột qua một link là một redirect sang `/session-refresh`
+ * và một POST `/api/auth/refresh` — trong khi họ còn chưa bấm gì.
+ *
+ * `next-router-prefetch` nhận **cả `1` lẫn `2`** (Next đổi giá trị theo loại
+ * prefetch), và `next-router-segment-prefetch` là dạng riêng của PPR/segment —
+ * chỉ cần CÓ MẶT là đủ, không so giá trị.
+ */
+function isPrefetchRequest(request: NextRequest): boolean {
+  const prefetch = request.headers.get("next-router-prefetch");
+  if (prefetch === "1" || prefetch === "2") return true;
+  return request.headers.get("next-router-segment-prefetch") !== null;
+}
+
+/**
+ * Trả lời một prefetch mà KHÔNG làm mới phiên.
+ *
+ * `204` + `no-store`: Next coi đây là cache miss và sẽ thử lại khi người dùng
+ * thật sự điều hướng. Không được redirect — redirect ở đây là ép cả cây
+ * prefetch đi qua đường cứu phiên.
+ */
+function prefetchNoStore(): NextResponse {
+  return new NextResponse(null, {
+    status: 204,
+    headers: { "Cache-Control": "private, no-store" },
+  });
+}
+
+/** Đếm số vòng đã đi qua `/session-refresh`, đọc TỪ TRONG target. */
+function parseSr(target: string): number {
+  try {
+    const url = new URL(target, "https://placeholder.invalid");
+    const all = url.searchParams.getAll("_sr");
+    // Khoá trùng ⇒ không tin được cái nào ⇒ coi như chưa đi vòng nào. Đây là
+    // phía an toàn: nắp vẫn đóng ở vòng sau, còn tin nhầm thì mất nắp.
+    if (all.length !== 1) return 0;
+    const n = Number(all[0]);
+    if (!Number.isInteger(n) || n < 0) return 0;
+    return Math.min(n, SR_MAX);
+  } catch {
+    return 0;
+  }
+}
+
+/** Ghi lại số vòng vào target — `delete` rồi `set`, không `append`. */
+function withSr(target: string, n: number): string {
+  try {
+    const url = new URL(target, "https://placeholder.invalid");
+    url.searchParams.delete("_sr");
+    url.searchParams.set("_sr", String(Math.min(n, SR_MAX)));
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return target;
+  }
+}
+
+/**
+ * Access token có dùng được không — bốn điều kiện, thiếu một là không.
+ *
+ * `decodeJWT` KHÔNG verify chữ ký (`jwt-decode.ts`), nó chỉ giải mã payload.
+ * Nên mọi thứ ta suy ra từ đây chỉ dùng cho quyết định ĐIỀU HƯỚNG, và phải tự
+ * kiểm đủ: đúng loại token, còn hạn, và có `jti` để lấy vân tay.
+ */
+function usableAccessToken(token: string | undefined): { jti: string } | null {
+  if (!token) return null;
+  const payload = decodeJWT(token) as
+    | (ReturnType<typeof decodeJWT> & { type?: string; jti?: string })
+    | null;
+  if (!payload) return null;
+  if (payload.type !== "access") return null;
+  if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) return null;
+  if (isTokenExpired(token)) return null;
+  if (typeof payload.jti !== "string" || payload.jti.length === 0) return null;
+  return { jti: payload.jti };
+}
+
+/**
+ * Vân tay của `jti` để so "token đã đổi chưa" mà không lộ chính `jti` lên URL.
+ */
+async function fingerprintJti(jti: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(jti),
+  );
+  const bytes = new Uint8Array(digest);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "")
+    .slice(0, 16);
+}
+
+/**
+ * Xử lý chính trang `/session-refresh`.
+ *
+ * PHẢI chạy trước nhánh public, nếu không trang này rơi vào `next()` chung và
+ * cả nắp chống lặp lẫn shortcut đều không bao giờ chạy.
+ */
+async function handleSessionRefresh(request: NextRequest): Promise<NextResponse> {
+  const params = request.nextUrl.searchParams;
+  const rawTarget = params.get("redirect");
+  const target =
+    rawTarget && isValidRedirect(rawTarget) ? stripRsc(rawTarget) : DEFAULT_TARGET;
+  const hops = parseSr(target);
+
+  // Nắp chống lặp đứng TRƯỚC mọi nhánh khác — kể cả `source=server_401`. Nếu để
+  // sau, nhánh SSR sẽ không bao giờ chạm nắp và một endpoint luôn trả 401 sẽ
+  // quay vòng mãi giữa trang và bootstrap.
+  if (hops >= SR_MAX) {
+    console.warn(`[Proxy] 🔁 Đã lặp ${hops} vòng cứu phiên — chuyển sang đăng nhập lại`);
+    const url = new URL("/login", request.url);
+    url.searchParams.set("reauth", "true");
+    const clean = stripSr(target);
+    if (isValidRedirect(clean)) url.searchParams.set("redirect", clean);
+    return NextResponse.redirect(url);
+  }
+
+  // Tới từ SSR 401: server đã nói thẳng là request của nó bị từ chối, nên bằng
+  // chứng "token còn hạn" ở đây vô nghĩa — không bao giờ shortcut.
+  if (params.get("source") === "server_401") {
+    return sessionRefreshPage();
+  }
+
+  // Token đã đổi so với lúc rời trang ⇒ không cần bootstrap nữa, quay lại luôn.
+  const usable = usableAccessToken(request.cookies.get("access_token")?.value);
+  if (usable) {
+    const at = params.get("at");
+    const current = await fingerprintJti(usable.jti);
+    if (at && at !== current) {
+      return NextResponse.redirect(
+        new URL(withSr(target, hops + 1), request.url),
+      );
+    }
+  }
+
+  return sessionRefreshPage();
+}
+
+/** Gỡ marker `_sr` — dùng khi rời khỏi vòng cứu phiên. */
+function stripSr(target: string): string {
+  try {
+    const url = new URL(target, "https://placeholder.invalid");
+    url.searchParams.delete("_sr");
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return target;
+  }
+}
+
+/**
+ * Cho trang bootstrap render. Response mang baseline CSRF nên tuyệt đối không
+ * được cache dùng chung.
+ */
+function sessionRefreshPage(): NextResponse {
+  const response = NextResponse.next();
+  response.headers.set("Cache-Control", "private, no-store");
+  return response;
+}
+
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // ========================================
@@ -124,6 +314,13 @@ export function proxy(request: NextRequest) {
     PUBLIC_ROUTE_PREFIXES.some((route) => pathname.startsWith(route));
   const isAdminRoute = ADMIN_ROUTES.some((route) => pathname.startsWith(route));
   const isFinanceRoute = FINANCE_ROUTES.some((route) => pathname.startsWith(route));
+
+  // Trang cứu phiên xử lý TRƯỚC nhánh public: nó nằm trong
+  // `PUBLIC_ROUTE_PREFIXES` nên nếu để sau, nó rơi vào `next()` chung và cả nắp
+  // chống lặp lẫn shortcut đều không bao giờ chạy.
+  if (pathname === SESSION_REFRESH_PATH) {
+    return handleSessionRefresh(request);
+  }
 
   const forceLogin = request.nextUrl.searchParams.get("force_login") === "true";
 
@@ -217,6 +414,11 @@ export function proxy(request: NextRequest) {
     // /api/auth/refresh. Chấp nhận được vì xô rate-limit đã tách theo chủ thể
     // (`get_refresh_identity_key`): request không chứng minh được danh tính rơi
     // vào nhánh IP 20/giờ và KHÔNG còn ăn vào quota của người dùng thật.
+    // Prefetch thì KHÔNG cứu phiên: mỗi lần hover một link là một request loại
+    // này, và biến chúng thành refresh nghĩa là tự tay bơm tải vào đúng endpoint
+    // mà cả kế hoạch này đang cố giữ cho thưa.
+    if (isPrefetchRequest(request)) return prefetchNoStore();
+
     console.warn(`[Proxy] ⏳ Không có access cookie — thử làm mới phiên: ${pathname}`);
     return NextResponse.redirect(
       buildSessionRefreshUrl(request, pathname + request.nextUrl.search),
@@ -269,13 +471,23 @@ export function proxy(request: NextRequest) {
     const returnTo = pathname + request.nextUrl.search;
 
     if (expiredForMs < REFRESH_TOKEN_LIFETIME_MS) {
+      // Xem chú thích ở nhánh "không có access cookie": prefetch không được
+      // biến thành refresh.
+      if (isPrefetchRequest(request)) return prefetchNoStore();
+
       console.warn(
         `[Proxy] ⏳ Access token hết hạn (${Math.round(expiredForMs / 1000)}s) — ` +
           `chuyển sang ${SESSION_REFRESH_PATH} để làm mới, KHÔNG xoá cookie: ${pathname}`,
       );
       // Cố ý KHÔNG xoá cookie nào: `refresh_token` là thứ sẽ cứu phiên, và
       // `access_token` hết hạn vốn vô hại (backend luôn tự kiểm hạn).
-      return NextResponse.redirect(buildSessionRefreshUrl(request, returnTo));
+      //
+      // `at` = vân tay `jti` của chính token đang hết hạn. Khi bootstrap quay
+      // lại, proxy so vân tay mới với nó: khác nghĩa là đã có token mới và
+      // không cần vào bootstrap lần nữa.
+      const expiringJti = (decodeJWT(accessToken) as { jti?: string } | null)?.jti;
+      const at = expiringJti ? await fingerprintJti(expiringJti) : undefined;
+      return NextResponse.redirect(buildSessionRefreshUrl(request, returnTo, at));
     }
 
     console.warn(
@@ -345,8 +557,16 @@ export function proxy(request: NextRequest) {
   // STEP 6: Allow access
   // ========================================
 
-  // Access granted — pass through
-  return NextResponse.next();
+  // 🔴 `x-qlts-pathname` phải là REQUEST header được chuyển tiếp, không phải
+  // header của response: `nextHeaders()` trong Server Component chỉ đọc được
+  // header của request. Đặt nhầm lên response thì `server.ts` luôn thấy thiếu,
+  // im lặng đi đường fallback, và ta mất return-url mà không có dấu hiệu nào.
+  //
+  // Và phải GHI ĐÈ, không `append`: đây là header điều khiển redirect, client
+  // hoàn toàn có thể tự gửi một giá trị giả để lái người dùng đi nơi khác.
+  const headers = new Headers(request.headers);
+  headers.set("x-qlts-pathname", pathname + request.nextUrl.search);
+  return NextResponse.next({ request: { headers } });
 }
 
 // ============================================

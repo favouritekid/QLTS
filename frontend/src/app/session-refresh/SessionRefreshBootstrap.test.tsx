@@ -12,7 +12,7 @@
  */
 import { StrictMode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 
 const refreshAccessToken = vi.hoisted(() => vi.fn());
 // Chỉ thay `refreshAccessToken` (thứ cần điều khiển), GIỮ NGUYÊN phần còn lại
@@ -35,6 +35,7 @@ import { useAuthStore } from "@/lib/stores/auth.store";
 import { SessionRefreshBootstrap } from "./SessionRefreshBootstrap";
 
 const replace = vi.fn();
+const assign = vi.fn();
 
 function setRedirect(value: string | null) {
   searchParams.delete("redirect");
@@ -54,10 +55,18 @@ describe("SessionRefreshBootstrap", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     replace.mockClear();
+    assign.mockClear();
     Object.defineProperty(window, "location", {
       configurable: true,
       writable: true,
-      value: { replace, pathname: "/session-refresh", search: "", href: "" },
+      value: {
+        replace,
+        assign,
+        origin: "https://qlts.tnpc.edu.vn",
+        pathname: "/session-refresh",
+        search: "",
+        href: "",
+      },
     });
     setRedirect("/admissions/611");
   });
@@ -104,6 +113,51 @@ describe("SessionRefreshBootstrap", () => {
     await waitFor(() => expect(replace).toHaveBeenCalled());
     expect(useAuthStore.getState().user).toBeNull();
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
+  });
+
+  /**
+   * 🔴 Hai nút này là caller DUY NHẤT của `?reauth=true` trong toàn ứng dụng —
+   * trước đó cờ ấy chỉ có phía nhận ở `proxy.ts`, không ai phát.
+   *
+   * Và chúng phải được BẤM THẬT: `SessionRefreshBootstrap.test.tsx` trước đây
+   * có 0 `fireEvent`, nên mọi assert chỉ chứng minh chữ hiện ra đúng, không
+   * chứng minh bấm vào thì đi đâu.
+   */
+  describe("hai nút của màn lỗi tạm thời", () => {
+    async function renderFailedScreen() {
+      refreshAccessToken.mockRejectedValueOnce(
+        new RefreshFailure({ kind: "safe-retryable", retryAt: Date.now() + 60_000 }),
+      );
+      render(<SessionRefreshBootstrap />);
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /^Thử lại$/i })).toBeInTheDocument(),
+      );
+    }
+
+    it("bấm *Đăng nhập lại* → /login?reauth=true, GIỮ return-url", async () => {
+      await renderFailedScreen();
+
+      fireEvent.click(screen.getByRole("button", { name: /Đăng nhập lại/i }));
+
+      expect(assign).toHaveBeenCalledTimes(1);
+      const target = decodeURIComponent(String(assign.mock.calls[0][0]));
+      expect(target).toContain("/login");
+      expect(target).toContain("reauth=true");
+      expect(target).toContain("/admissions/611");
+      // `force_login` ở đây là xoá phiên 30 ngày cho một lỗi TẠM THỜI.
+      expect(target).not.toContain("force_login");
+    });
+
+    it("bấm *Thử lại* → sinh ĐÚNG MỘT attempt mới", async () => {
+      await renderFailedScreen();
+      const before = refreshAccessToken.mock.calls.length;
+      refreshAccessToken.mockResolvedValueOnce(undefined);
+
+      fireEvent.click(screen.getByRole("button", { name: /^Thử lại$/i }));
+
+      await waitFor(() => expect(replace).toHaveBeenCalled());
+      expect(refreshAccessToken.mock.calls.length - before).toBe(1);
+    });
   });
 
   // Lỗi TẠM THỜI thì phiên vẫn còn — dọn state ở đây là tự tay đăng xuất một
