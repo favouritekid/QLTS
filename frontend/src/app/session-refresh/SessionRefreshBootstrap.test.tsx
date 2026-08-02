@@ -31,6 +31,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { RefreshFailure } from "@/lib/api/refresh";
+import { useAuthStore } from "@/lib/stores/auth.store";
 import { SessionRefreshBootstrap } from "./SessionRefreshBootstrap";
 
 const replace = vi.fn();
@@ -79,6 +80,49 @@ describe("SessionRefreshBootstrap", () => {
 
     await waitFor(() => expect(screen.getByRole("button", { name: /^Thử lại$/i })).toBeInTheDocument());
     expect(replace).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Lớp dọn state BÊN TRONG — không được để dành cho `LoginSessionResetGate`.
+   *
+   * Gate là lớp ngoài và chỉ chạy sau khi `/login` đã mount. Từ lúc quyết định
+   * "phiên chết thật" tới lúc đó là một quãng hard navigation mà `auth.store`
+   * vẫn còn `user` của phiên đã chết — đủ để bất kỳ component nào còn sống kịp
+   * hỏi `/users/me` bằng danh tính đó.
+   */
+  it("terminal → dọn state client NGAY, không đợi trang /login mount", async () => {
+    useAuthStore.setState({
+      user: { id: 25, username: "officer1" } as never,
+      isAuthenticated: true,
+    });
+    refreshAccessToken.mockRejectedValueOnce(
+      new RefreshFailure({ kind: "terminal", status: 401 }),
+    );
+
+    render(<SessionRefreshBootstrap />);
+
+    await waitFor(() => expect(replace).toHaveBeenCalled());
+    expect(useAuthStore.getState().user).toBeNull();
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+  });
+
+  // Lỗi TẠM THỜI thì phiên vẫn còn — dọn state ở đây là tự tay đăng xuất một
+  // người dùng mà ta vừa kết luận là chưa mất phiên.
+  it("lỗi tạm thời → KHÔNG dọn state client", async () => {
+    useAuthStore.setState({
+      user: { id: 25, username: "officer1" } as never,
+      isAuthenticated: true,
+    });
+    refreshAccessToken.mockRejectedValueOnce(
+      new RefreshFailure({ kind: "safe-retryable", retryAt: Date.now() + 60_000 }),
+    );
+
+    render(<SessionRefreshBootstrap />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Thử lại$/i })).toBeInTheDocument(),
+    );
+    expect(useAuthStore.getState().user).not.toBeNull();
   });
 
   // 429 KHÔNG phải mã nào cũng như nhau: cổng chống lạm dụng M4 đã thu hồi

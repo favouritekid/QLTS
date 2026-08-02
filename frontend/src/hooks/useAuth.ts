@@ -1,7 +1,8 @@
 // src/hooks/useAuth.ts
 import { useAuthStore } from "@/lib/stores/auth.store";
 import { api, setApiLoggedOut } from "@/lib/api/client";
-import { isSessionKeptAliveError } from "@/lib/api/refresh";
+import { isSessionKeptAliveError, noteSessionTransition } from "@/lib/api/refresh";
+import { clearClientAuthState } from "@/lib/auth/clear-client-auth-state";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -76,6 +77,14 @@ export function useAuth(options?: UseAuthOptions) {
       queryClient.clear();
       setApiLoggedOut(false); // Re-enable API requests
 
+      // Nửa sau của vòng đời nhật ký refresh. Nhánh `reauth` CỐ Ý giữ một bản
+      // ghi `ambiguous` (nó đang cấm mọi tab POST) — và lối thoát duy nhất
+      // đúng cho bản ghi đó là đăng nhập thành công: lúc này cookie/CSRF mới đã
+      // được áp nên nó hết ý nghĩa. Không phát ở đây thì bản ghi chỉ biến mất
+      // nhờ lần refresh sau tự supersede theo generation mới — đó là đường
+      // phục hồi dự phòng, không phải vòng đời đã thiết kế.
+      await noteSessionTransition("login-success");
+
       const { user, login_notification, suspicious_login_count } = loginResponse;
 
       setAuth(user);
@@ -147,6 +156,10 @@ export function useAuth(options?: UseAuthOptions) {
       queryClient.clear();
       setApiLoggedOut(false); // Re-enable API requests
 
+      // MFA là lối đăng nhập thành công THỨ HAI. Bỏ sót ở đây thì mọi tài khoản
+      // bật MFA rơi vào đúng ca mà `login-success` sinh ra để đóng.
+      await noteSessionTransition("login-success");
+
       const { user, login_notification, suspicious_login_count } = loginResponse;
 
       setAuth(user);
@@ -186,18 +199,29 @@ export function useAuth(options?: UseAuthOptions) {
       //
       // Cache is cleared on next LOGIN to avoid data leakage between users.
 
-      // 🚫 STEP 1: Block all non-auth API requests immediately
-      setApiLoggedOut(true);
-
-      // 🧹 STEP 2: Clear client state (isAuthenticated=false)
-      logoutStore();
+      // 🚫 STEP 1+2: Chặn request rồi dọn state client — cùng một
+      // `clearClientAuthState()` mà `LoginSessionResetGate` và
+      // `performSessionExpiredLogout` dùng. Trước đây ba nơi cùng viết tay đúng
+      // cặp lệnh này, và chỉ cần một nơi quên thứ tự là hở cửa sổ store-trống
+      // -nhưng-request-vẫn-đi.
+      clearClientAuthState();
 
       // 📡 STEP 3: Call logout API (cookies still present, server clears them)
+      let backendConfirmed = false;
       try {
         await api.post(API_ENDPOINTS.AUTH.LOGOUT, {}, { withCredentials: true });
+        backendConfirmed = true;
       } catch {
         // Ignore - user will be redirected regardless
       }
+
+      // Chỉ khi backend XÁC NHẬN thì phiên mới chắc chắn chết và nhật ký mới
+      // được dọn. Logout hỏng ⇒ chưa biết phiên còn hay mất ⇒ giữ nhật ký, vì
+      // một bản ghi `ambiguous` bị xoá oan sẽ mở đường cho tab khác POST lại
+      // một refresh token mà server có thể đã rotate.
+      await noteSessionTransition(
+        backendConfirmed ? "logout-success" : "logout-failed",
+      );
 
       // 🚀 STEP 4: Hard redirect - more reliable than router.replace()
       // which can fail if the component unmounts during React re-render.

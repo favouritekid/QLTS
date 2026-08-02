@@ -22,6 +22,7 @@ import {
   shouldClearAuthCookies,
 } from "@/lib/api/refresh";
 import { buildLoginRedirect, isValidRedirect } from "@/lib/auth/login-redirect";
+import { clearClientAuthState } from "@/lib/auth/clear-client-auth-state";
 import { Button } from "@/components/ui/button";
 
 const DEFAULT_TARGET = "/dashboard";
@@ -64,6 +65,19 @@ export function SessionRefreshBootstrap() {
 
         if (shouldClearAuthCookies(error)) {
           // Hết phiên thật → đường đăng nhập lại, giữ return-url.
+          //
+          // Dọn state client NGAY, không đợi `LoginSessionResetGate`. Gate là
+          // lớp ngoài và nó chỉ chạy sau khi `/login` đã mount; từ đây tới đó
+          // là một quãng hard navigation mà `auth.store` vẫn còn `user` của
+          // phiên đã chết — đủ để bất kỳ component nào còn sống kịp hỏi
+          // `/users/me` bằng danh tính đó. Hai lớp cùng gọi MỘT hàm nên chúng
+          // không thể lệch nhau.
+          //
+          // Cố ý KHÔNG `noteSessionTransition` ở đây: cookie chưa bị xoá tại
+          // thời điểm này (proxy mới là nơi xoá, khi `/login?force_login=true`
+          // được xử lý), nên điều kiện của `force-login-cookies-cleared` chưa
+          // thoả. Gate phát trigger đó sau, đúng lúc.
+          clearClientAuthState();
           window.location.replace(
             buildLoginRedirect(target, { forceLogin: true, reason: "session_expired" }),
           );
