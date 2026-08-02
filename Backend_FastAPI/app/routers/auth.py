@@ -377,10 +377,20 @@ async def _complete_login_flow(
         },
         status_code=200,
     )
+    # ⚠️ max_age = TTL của REFRESH token, KHÔNG phải của access token.
+    #
+    # Token vẫn hết hạn sau ACCESS_TOKEN_EXPIRE_MINUTES — backend luôn kiểm
+    # ``exp`` nên một cookie quá hạn là vô hại. Nhưng nếu cookie CHẾT cùng lúc
+    # với token thì trình duyệt xoá nó sau 15 phút, và request kế tiếp tới
+    # middleware không còn cookie nào để phân biệt hai ca hoàn toàn khác nhau:
+    # "chưa từng đăng nhập" và "phiên còn sống 30 ngày, chỉ access token cũ".
+    # Middleware buộc phải đoán, và nó đoán sai theo hướng đắt nhất — đá người
+    # dùng về /login giữa lúc nhập liệu. Giữ cookie sống bằng refresh token để
+    # middleware còn dữ liệu mà quyết định.
     response.set_cookie(
         key="access_token", value=access_token,
         httponly=True, secure=settings.APP_ENV == "production",
-        samesite="lax", max_age=int(access_ttl) if access_ttl else settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        samesite="lax", max_age=int(refresh_ttl),
         path="/",
     )
     response.set_cookie(
@@ -1199,14 +1209,16 @@ async def refresh_access_token(
         )
 
         # ✅ SECURITY FIX: Set new access_token in httpOnly cookie
-        new_access_ttl = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        # ⚠️ max_age = TTL của REFRESH token mới (xem ghi chú ở nhánh login).
+        # Cookie phải sống lâu hơn token, nếu không thì sau 15 phút middleware
+        # mất luôn dữ liệu để phân biệt "chưa đăng nhập" với "phiên còn sống".
         response.set_cookie(
             key="access_token",
             value=new_access_token,
             httponly=True,
             secure=settings.APP_ENV == "production",
             samesite="lax",
-            max_age=int(new_access_ttl),
+            max_age=int(new_refresh_ttl),
             path="/",
         )
         response.set_cookie(

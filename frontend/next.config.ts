@@ -6,6 +6,21 @@ const isDev = process.env.NODE_ENV === "development";
 const nextConfig: NextConfig = {
   /* config options here */
   output: "standalone",
+
+  // 🔴 BẮT BUỘC cho `src/proxy.ts` — đừng gỡ.
+  //
+  // Mặc định Next NORMALIZE request trước khi gọi Proxy: nó gỡ các Flight header
+  // (`rsc`, `next-router-prefetch`, `next-router-segment-prefetch`,
+  // `next-router-state-tree`) ra khỏi `request.headers` và cất riêng. Hệ quả:
+  // `request.headers.get("next-router-prefetch")` LUÔN `null` ở production, nên
+  // mọi vị từ phân loại request trong proxy im lặng trả `false` — mỗi lần người
+  // dùng rê chuột qua một link lại thành một lượt cứu phiên kèm một POST
+  // `/api/auth/refresh`.
+  //
+  // Điều này KHÔNG lộ ra ở unit test: test tự dựng `NextRequest` với header
+  // nguyên vẹn, tức chạy trên một request khác với request thật. Nó chỉ lộ khi
+  // smoke trên artifact production (đo 02-08-2026: 4/4 loại request nhận 307).
+  skipProxyUrlNormalize: true,
   // React Compiler: enabled only in production builds for runtime performance
   // Disabled in dev to reduce compilation time by ~33% (8.4s → 6.3s measured)
   reactCompiler: !isDev,

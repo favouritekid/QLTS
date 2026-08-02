@@ -8,16 +8,20 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 
 const refreshAccessToken = vi.fn();
-const isRefreshRateLimitedMock = vi.fn(() => false);
-vi.mock("@/lib/api/refresh", () => ({
-  refreshAccessToken: () => refreshAccessToken(),
-  isRefreshRateLimited: () => isRefreshRateLimitedMock(),
-}));
+// Chỉ thay việc GỌI refresh; `RefreshFailure` và `isRefreshFailure` giữ bản
+// THẬT. Hook phân biệt "rate limit" bằng chính `outcome` của lỗi, nên mock lại
+// classifier là test một hàm giả — và đó cũng là cách bản cũ bỏ sót: nó mock
+// đúng hàm trạng thái cooldown nay đã không còn tồn tại.
+vi.mock("@/lib/api/refresh", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/api/refresh")>();
+  return { ...actual, refreshAccessToken: () => refreshAccessToken() };
+});
 const isApiLoggedOutMock = vi.fn(() => false);
 vi.mock("@/lib/api/client", () => ({
   isApiLoggedOut: () => isApiLoggedOutMock(),
 }));
 
+import { RefreshFailure } from "@/lib/api/refresh";
 import { useProactiveTokenRefresh } from "./useProactiveTokenRefresh";
 
 const KEY = "qlts_last_refresh_at";
@@ -38,7 +42,6 @@ describe("useProactiveTokenRefresh", () => {
     setVisibility("visible");
     refreshAccessToken.mockResolvedValue(undefined);
     isApiLoggedOutMock.mockReturnValue(false);
-    isRefreshRateLimitedMock.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -47,10 +50,19 @@ describe("useProactiveTokenRefresh", () => {
     setVisibility("visible");
   });
 
-  it("refresh on mount khi visible + chưa có timestamp; có ghi timestamp", async () => {
+  /**
+   * ⚠️ Contract ĐỔI ở `2e`: hook chỉ ĐỌC mốc throttle, nơi duy nhất GHI là
+   * `refresh.ts` — và chỉ sau khi POST thành công.
+   *
+   * Mốc ấy biểu diễn "lần làm mới THÀNH CÔNG gần nhất". Bản cũ ghi trước
+   * `await` để thu hẹp cửa sổ đua cross-tab; nay cửa sổ đó do nhật ký dùng chung
+   * lo, nên ghi sớm chỉ còn tác dụng phụ — một lần thử HỎNG cũng đặt mốc và
+   * hoãn mọi tab 12 phút vì một lần refresh chưa từng thành công.
+   */
+  it("refresh on mount khi visible + chưa có mốc; hook KHÔNG tự ghi mốc", async () => {
     renderHook(() => useProactiveTokenRefresh(true));
     await waitFor(() => expect(refreshAccessToken).toHaveBeenCalledTimes(1));
-    expect(localStorage.getItem(KEY)).not.toBeNull();
+    expect(localStorage.getItem(KEY)).toBeNull();
   });
 
   it("KHÔNG refresh nếu timestamp < 12' (cross-tab guard)", async () => {
@@ -81,49 +93,70 @@ describe("useProactiveTokenRefresh", () => {
     await waitFor(() => expect(localStorage.getItem(KEY)).toBeNull());
   });
 
-  // Cooldown sau 429 RATE_LIMITED (xem lib/api/refresh.ts). Hook là nguồn phát
-  // request nền lớn nhất — onWake gắn cả visibilitychange lẫn focus — nên nó
-  // phải im lặng hẳn khi bucket đã cạn, và KHÔNG được đụng vào timestamp.
-  it("đang cooldown → không gọi refresh và không ghi timestamp", async () => {
-    isRefreshRateLimitedMock.mockReturnValue(true);
-
-    renderHook(() => useProactiveTokenRefresh(true));
-    await tick();
-
-    expect(refreshAccessToken).not.toHaveBeenCalled();
-    expect(localStorage.getItem(KEY)).toBeNull();
-  });
-
-  it("đang cooldown → KHÔNG xoá timestamp đang có (giữ throttle 12')", async () => {
+  /**
+   * ⚠️ Ba ca cooldown cũ đã ĐỔI BẢN CHẤT, không phải bị bỏ.
+   *
+   * Trước đây hook tự hỏi một hàm trạng thái cooldown trước khi gọi — một nguồn
+   * cooldown thứ hai, sống song song với nguồn trong `refresh.ts`. Nay cooldown
+   * nằm trong nhật ký dùng chung giữa các tab, và `refreshAccessToken()` tự
+   * dừng trước khi chạm mạng khi chưa tới `retryAt`. Hook không còn kiểm gì
+   * trước; nó chỉ ĐỌC `outcome` của lỗi để quyết định có rollback timestamp hay
+   * không.
+   *
+   * Hai nguồn cooldown là hai thứ sẽ trôi lệch nhau — đó là lý do bỏ cái ở hook.
+   */
+  it("refresh HỎNG → mốc cũ còn NGUYÊN, hook không đụng vào", async () => {
     const prev = String(Date.now() - 20 * 60_000); // đủ cũ để bình thường sẽ refresh
     localStorage.setItem(KEY, prev);
-    isRefreshRateLimitedMock.mockReturnValue(true);
-
-    renderHook(() => useProactiveTokenRefresh(true));
-    await tick();
-
-    expect(refreshAccessToken).not.toHaveBeenCalled();
-    expect(localStorage.getItem(KEY)).toBe(prev);
-  });
-
-  // Race thật: lúc pre-check chưa bị chặn, nhưng chính request này ăn 429 và
-  // bật cooldown. Nếu vẫn rollback theo CAS thì throttle 12' bị xoá đúng lúc
-  // bucket vừa cạn, và mỗi lần alt-tab lại phát thêm một request.
-  it("refresh trả 429 (cooldown bật sau đó) → GIỮ timestamp, không rollback", async () => {
-    const prev = String(Date.now() - 20 * 60_000);
-    localStorage.setItem(KEY, prev);
-    isRefreshRateLimitedMock.mockReturnValueOnce(false); // pre-check: chưa bị chặn
-    refreshAccessToken.mockImplementation(() => {
-      isRefreshRateLimitedMock.mockReturnValue(true); // 429 → cooldown bật
-      return Promise.reject(new Error("429"));
-    });
+    refreshAccessToken.mockRejectedValue(
+      new RefreshFailure({ kind: "safe-retryable", retryAt: Date.now() + 60_000 }),
+    );
 
     renderHook(() => useProactiveTokenRefresh(true));
     await waitFor(() => expect(refreshAccessToken).toHaveBeenCalledTimes(1));
     await tick();
 
-    // Slot đã được claim trước await; KHÔNG rollback về prev.
-    expect(localStorage.getItem(KEY)).not.toBe(prev);
-    expect(localStorage.getItem(KEY)).not.toBeNull();
+    // `2e` gỡ cả rollback lẫn claim-slot: hook không ghi gì nên cũng chẳng có gì
+    // để hoàn tác. Bất biến cũ vẫn được giữ — và giữ CHẶT hơn: sau một
+    // `safe-retryable`, mốc throttle KHÔNG bị xoá, nên `onWake` (gắn cả
+    // `visibilitychange` lẫn `focus`) không biến mười lần alt-tab thành mười
+    // POST nữa vào đúng cái xô vừa cạn.
+    expect(localStorage.getItem(KEY)).toBe(prev);
+  });
+
+  it.each([
+    ["ambiguous", { kind: "ambiguous", reason: "network" } as const],
+    ["nonterminal-stop", { kind: "nonterminal-stop", status: 404 } as const],
+    ["terminal", { kind: "terminal", status: 401 } as const],
+  ])(
+    "refresh trả `%s` → rollback timestamp (cho phép thử lại sớm)",
+    async (_label, outcome) => {
+      const prev = String(Date.now() - 20 * 60_000);
+      localStorage.setItem(KEY, prev);
+      refreshAccessToken.mockRejectedValue(new RefreshFailure(outcome));
+
+      renderHook(() => useProactiveTokenRefresh(true));
+      await waitFor(() => expect(refreshAccessToken).toHaveBeenCalledTimes(1));
+      await tick();
+
+      // Chỉ `safe-retryable` mới phải giữ throttle; các lỗi khác không liên
+      // quan tới quota nên khôi phục mốc cũ là đúng.
+      expect(localStorage.getItem(KEY)).toBe(prev);
+    },
+  );
+
+  it("hook KHÔNG tự đăng xuất dù lỗi là terminal", async () => {
+    refreshAccessToken.mockRejectedValue(
+      new RefreshFailure({ kind: "terminal", status: 401 }),
+    );
+
+    renderHook(() => useProactiveTokenRefresh(true));
+    await waitFor(() => expect(refreshAccessToken).toHaveBeenCalledTimes(1));
+    await tick();
+
+    // Quyết định đăng xuất thuộc về reactive 401 của request kế tiếp, không
+    // thuộc một hook chạy nền — nếu không, một lỗi nền im lặng sẽ đá người
+    // dùng ra giữa lúc họ đang nhập liệu.
+    expect(isApiLoggedOutMock).not.toHaveBeenCalledWith(true);
   });
 });

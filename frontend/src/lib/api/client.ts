@@ -30,24 +30,21 @@ import { inspectVersionHeaders } from "@/lib/api/api-versioning";
 import {
   markSessionKeptAlive,
   refreshAccessToken,
-  shouldLogoutAfterRefreshFailure,
+  shouldClearAuthCookies,
+  isRefreshFailure,
 } from "./refresh";
 import { buildLoginRedirect } from "@/lib/auth/login-redirect";
+import { isApiLoggedOut, setApiLoggedOut } from "./session-flags";
+import { clearClientAuthState } from "@/lib/auth/clear-client-auth-state";
 export const API_BASE_URL = env.NEXT_PUBLIC_API_URL;
 
 // ============================================
 // 🚫 LOGOUT GUARD (window-level flag)
 // ============================================
-// Uses window global to survive Turbopack HMR module reloads.
-// Set by logoutMutation in useAuth.ts, reset on login success.
-export function isApiLoggedOut(): boolean {
-  return typeof window !== "undefined" && !!(window as unknown as Record<string, unknown>).__qlts_logged_out;
-}
-export function setApiLoggedOut(value: boolean) {
-  if (typeof window !== "undefined") {
-    (window as unknown as Record<string, unknown>).__qlts_logged_out = value;
-  }
-}
+// Định nghĩa đã dời sang `./session-flags` để `refresh.ts` và các lối dọn phiên
+// dùng được mà không phải import cả axios client (contract ở đầu `refresh.ts`).
+// Re-export để mọi caller sẵn có giữ nguyên đường import.
+export { isApiLoggedOut, setApiLoggedOut };
 
 // Create axios instance
 export const api = axios.create({
@@ -113,46 +110,49 @@ type RefreshTriage =
 /**
  * Refresh thất bại: phiên đã chết (logout) hay lỗi tạm thời (giữ phiên)?
  *
- * Trả về kết quả có nhãn thay vì một sentinel `null` — với sentinel, kiểu
- * `AxiosError | unknown | null` bị TypeScript thu về `unknown` nên guard
- * `!== null` không được kiểm tra gì ở compile time.
+ * Quyết định LOGOUT đọc thẳng `outcome` đã phân loại qua `shouldClearAuthCookies`
+ * — chỉ `terminal` mới được xoá cookie. Ba loại còn lại (`safe-retryable`,
+ * `nonterminal-stop`, `ambiguous`) đều giữ phiên.
  *
- * Chọn lỗi để reject không tuỳ tiện:
- *  - refreshError là 4xx có response (chỉ còn 429 RATE_LIMITED sau khi
- *    `shouldLogoutAfterRefreshFailure` đã bắt mọi 4xx khác) → reject chính nó
- *    để toast hiện đúng nhãn "quá nhiều yêu cầu".
- *  - còn lại (5xx, mạng đứt) → reject `serverErrorFallback` do call site đưa,
- *    vì mỗi nhánh cần một thứ khác nhau:
- *      • nhánh 401 đưa lỗi GỐC 401 — retry predicate ở `providers.tsx` chỉ
- *        chặn retry với AxiosError 4xx CÓ response, nên reject một lỗi
- *        không-có-response sẽ khiến React Query retry 3 lần và mỗi lần bắn
- *        thêm một `POST /auth/refresh`, làm cạn quota dùng chung của cả trường.
- *      • nhánh CSRF đưa chính refreshError — lỗi gốc ở đó là 403 CSRF, mà
- *        `handleApiError` map 403 → "Bạn không có quyền thực hiện thao tác
- *        này": báo sai hoàn toàn khi nguyên nhân thật là backend 5xx. Nhánh
- *        này chạy cho mutation và `mutations: { retry: false }` nên không có
- *        nguy cơ retry storm.
+ * Chọn lỗi để reject thì phụ thuộc CALL SITE, không suy từ status:
+ *
+ *  - `reject: "original"` (nhánh 401) — trả lại chính `AxiosError 401` gốc.
+ *    Retry predicate ở `providers.tsx` chỉ chặn retry khi thấy một
+ *    **`AxiosError` thật, 4xx, có `response`**. Trả `RefreshFailure` ở đây là
+ *    trả một lỗi không phải AxiosError ⇒ React Query retry 3 lần, mỗi lần bắn
+ *    thêm một `POST /auth/refresh` vào đúng quota dùng chung của cả trường.
+ *
+ *  - `reject: "cause"` (nhánh CSRF) — trả `RefreshFailure` để giữ NGUYÊN NHÂN
+ *    thật. Lỗi gốc ở đó là 403 CSRF, mà `handleApiError` map 403 → "Bạn không
+ *    có quyền thực hiện thao tác này": báo sai hoàn toàn khi nguyên nhân thật
+ *    là backend 5xx. Nhánh này chạy cho mutation và `mutations: { retry: false }`
+ *    nên không có nguy cơ retry storm.
+ *
+ * Trả kết quả có nhãn thay vì sentinel `null`: với sentinel, kiểu
+ * `AxiosError | unknown | null` bị TypeScript thu về `unknown` nên guard
+ * `!== null` không kiểm được gì ở compile time.
  */
 function triageRefreshFailure(
-  serverErrorFallback: unknown,
+  originalError: unknown,
   refreshError: unknown,
-  tag: string,
+  opts: { tag: string; reject: "original" | "cause" },
 ): RefreshTriage {
-  if (shouldLogoutAfterRefreshFailure(refreshError)) {
+  if (shouldClearAuthCookies(refreshError)) {
     return { action: "logout" };
   }
 
-  const status = axios.isAxiosError(refreshError)
-    ? refreshError.response?.status
-    : undefined;
-  const isClientError = status !== undefined && status >= 400 && status < 500;
+  const kind = isRefreshFailure(refreshError) ? refreshError.outcome.kind : "unknown";
+  console.warn(
+    `[API Client] ⏳ ${opts.tag}: refresh không thành công (${kind}) — giữ phiên, không logout`,
+  );
 
-  console.warn(`[API Client] ⏳ ${tag}: refresh lỗi tạm thời — giữ phiên, không logout`);
   // Đánh dấu để các consumer khác (vd query /users/me trong useAuth) không tự
   // đăng xuất khi thấy 401 — quyết định "giữ phiên" đã được đưa ra ở đây.
   return {
     action: "reject",
-    error: markSessionKeptAlive(isClientError ? refreshError : serverErrorFallback),
+    error: markSessionKeptAlive(
+      opts.reject === "original" ? originalError : refreshError,
+    ),
   };
 }
 
@@ -168,13 +168,12 @@ function triageRefreshFailure(
 async function performSessionExpiredLogout(pathname: string, search: string) {
   if (typeof window === "undefined") return;
 
-  setApiLoggedOut(true);
-  try {
-    const { useAuthStore } = await import("@/lib/stores/auth.store");
-    useAuthStore.getState().logout();
-  } catch {
-    // Best-effort
-  }
+  // Cùng một `clearClientAuthState()` với `LoginSessionResetGate`. Trước đây
+  // logic này nằm inline ở đây, nên khi gate ra đời sẽ có HAI bản dọn state —
+  // và chúng chỉ cần lệch nhau một bước là trang login lại rehydrate `user` của
+  // phiên vừa chết.
+  clearClientAuthState();
+
   window.location.href = buildLoginRedirect(pathname + search, {
     forceLogin: true,
     reason: "session_expired",
@@ -252,7 +251,12 @@ api.interceptors.response.use(
         // đây một lần 429 trên /auth/refresh là đủ đá officer về /login giữa
         // lúc nhập liệu (audit prod 2026-07-30). Phân loại TRƯỚC khi log để
         // một 429 bình thường không đổ console.error vào monitoring.
-        const triage = triageRefreshFailure(error, refreshError, "401");
+        const triage = triageRefreshFailure(error, refreshError, {
+          tag: "401",
+          // Trả lại chính AxiosError 401 gốc: predicate retry ở providers.tsx
+          // chỉ chặn retry khi thấy AxiosError 4xx CÓ response.
+          reject: "original",
+        });
         if (triage.action === "reject") {
           return Promise.reject(triage.error);
         }
@@ -343,7 +347,12 @@ api.interceptors.response.use(
           // này là 403 CSRF, mà handleApiError map 403 → "Bạn không có quyền
           // thực hiện thao tác này" — báo sai hẳn nguyên nhân khi thực chất
           // backend đang 5xx. Mutation không retry nên không sợ retry storm.
-          const triage = triageRefreshFailure(refreshError, refreshError, "CSRF recovery");
+          const triage = triageRefreshFailure(error, refreshError, {
+            tag: "CSRF recovery",
+            // Mutation đã `retry: false`, nên giữ NGUYÊN NHÂN thật quan trọng
+            // hơn — 403 CSRF gốc sẽ báo sai thành "không có quyền".
+            reject: "cause",
+          });
           if (triage.action === "reject") {
             return Promise.reject(triage.error);
           }

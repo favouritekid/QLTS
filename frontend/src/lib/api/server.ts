@@ -30,6 +30,7 @@
 
 import { cookies, headers as nextHeaders } from 'next/headers';
 import { redirect, unstable_rethrow } from 'next/navigation';
+import { isValidRedirect, stripRsc } from '@/lib/auth/login-redirect';
 import type {
   Lead,
   LeadDetail,
@@ -100,6 +101,43 @@ function getBackendUrl(): string {
 
 interface FetchOptions extends RequestInit {
   params?: Record<string, unknown>; // Generic query parameters - type varies by endpoint
+}
+
+/** Đích mặc định khi không xác định được trang người dùng đang xem. */
+const SERVER_401_FALLBACK_TARGET = '/dashboard';
+
+/**
+ * URL trang cứu phiên cho một 401 phát sinh trong Server Component.
+ *
+ * Return-url lấy từ `x-qlts-pathname` — header do `proxy.ts` **chuyển tiếp vào
+ * request** (`NextResponse.next({ request: { headers } })`); header đặt lên
+ * response sẽ không đọc được ở đây.
+ *
+ * 🔴 Giá trị đó KHÔNG được tin thẳng. Proxy ghi đè nó ở mọi request đi qua,
+ * nhưng nếu một đường nào đó lọt (matcher không phủ, request nội bộ), client có
+ * thể tự gửi `x-qlts-pathname: //evil.com` và biến trang cứu phiên thành open
+ * redirect. Nên vẫn lọc `isValidRedirect` rồi mới dùng, thiếu/hỏng thì về đích
+ * mặc định.
+ */
+async function buildSessionRefreshRedirect(): Promise<string> {
+  let raw: string | null = null;
+  try {
+    raw = (await nextHeaders()).get('x-qlts-pathname');
+  } catch {
+    // Ngoài ngữ cảnh request (build tĩnh) — dùng đích mặc định.
+  }
+
+  // 🔴 Thứ tự: LỌC trước, strip sau.
+  //
+  // `stripRsc()` chạy qua `new URL(value, base)`, nên `//evil.com/x` được parse
+  // thành một URL tuyệt đối rồi trả về `pathname` — tức `/x`. Strip trước thì
+  // giá trị ngoại lai bị "rửa" thành một path nội bộ trông hợp lệ và
+  // `isValidRedirect` không còn gì để từ chối.
+  const target =
+    raw && isValidRedirect(raw) ? stripRsc(raw) : SERVER_401_FALLBACK_TARGET;
+
+  const params = new URLSearchParams({ redirect: target, source: 'server_401' });
+  return `/session-refresh?${params.toString()}`;
 }
 
 /**
@@ -210,13 +248,15 @@ async function serverFetch<T>(
 
   // Handle non-OK responses
   if (!response.ok) {
-    // 401 Unauthorized — token expired/blacklisted → redirect to login.
-    // LIMITATION (scope return-url): RSC serverFetch không có request path nên
-    // không đính được ?redirect=<trang đang xem>; user về dashboard mặc định
-    // sau khi đăng nhập lại. Client-side navigation (case phổ biến nhất) đã giữ
-    // return-url qua proxy.ts + client.ts interceptor (buildLoginRedirect).
+    // 401 Unauthorized — nhưng KHÔNG kết luận phiên đã chết.
+    //
+    // `force_login` xoá sạch cả `refresh_token`, tức biến một access token hết
+    // hạn 15 phút thành mất phiên 30 ngày. Server Component không có cách nào
+    // phân biệt hai thứ đó, nên nó phải chuyển sang trang cứu phiên và để
+    // client hỏi backend — `source=server_401` báo cho proxy biết đừng shortcut
+    // (server vừa từ chối thật, bằng chứng "token còn hạn" ở đó vô nghĩa).
     if (response.status === 401) {
-      redirect('/login?force_login=true');
+      redirect(await buildSessionRefreshRedirect());
     }
 
     const errorText = await response.text();

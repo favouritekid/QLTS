@@ -1,7 +1,8 @@
 // src/hooks/useAuth.ts
 import { useAuthStore } from "@/lib/stores/auth.store";
 import { api, setApiLoggedOut } from "@/lib/api/client";
-import { isSessionKeptAliveError } from "@/lib/api/refresh";
+import { isSessionKeptAliveError, noteSessionTransition } from "@/lib/api/refresh";
+import { clearClientAuthState } from "@/lib/auth/clear-client-auth-state";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -39,7 +40,8 @@ export function useAuth(options?: UseAuthOptions) {
   const userFromStore = useAuthStore(s => s.user);
   const isAuthenticated = useAuthStore(s => s.isAuthenticated);
   const setAuth = useAuthStore(s => s.setAuth);
-  const logoutStore = useAuthStore(s => s.logout);
+  // Không giữ selector `logout` nữa: mọi lối thoát phiên đi qua
+  // `clearClientAuthState()` để cờ chặn request và store luôn đổi cùng nhau.
 
   // MFA callback ref - set by LoginForm to intercept MFA responses
   const mfaCallbackRef = React.useRef<{
@@ -75,6 +77,14 @@ export function useAuth(options?: UseAuthOptions) {
       // avoids clearing during logout (which causes 401 race conditions).
       queryClient.clear();
       setApiLoggedOut(false); // Re-enable API requests
+
+      // Nửa sau của vòng đời nhật ký refresh. Nhánh `reauth` CỐ Ý giữ một bản
+      // ghi `ambiguous` (nó đang cấm mọi tab POST) — và lối thoát duy nhất
+      // đúng cho bản ghi đó là đăng nhập thành công: lúc này cookie/CSRF mới đã
+      // được áp nên nó hết ý nghĩa. Không phát ở đây thì bản ghi chỉ biến mất
+      // nhờ lần refresh sau tự supersede theo generation mới — đó là đường
+      // phục hồi dự phòng, không phải vòng đời đã thiết kế.
+      await noteSessionTransition("login-success");
 
       const { user, login_notification, suspicious_login_count } = loginResponse;
 
@@ -147,6 +157,10 @@ export function useAuth(options?: UseAuthOptions) {
       queryClient.clear();
       setApiLoggedOut(false); // Re-enable API requests
 
+      // MFA là lối đăng nhập thành công THỨ HAI. Bỏ sót ở đây thì mọi tài khoản
+      // bật MFA rơi vào đúng ca mà `login-success` sinh ra để đóng.
+      await noteSessionTransition("login-success");
+
       const { user, login_notification, suspicious_login_count } = loginResponse;
 
       setAuth(user);
@@ -174,7 +188,12 @@ export function useAuth(options?: UseAuthOptions) {
     // No toast here - LoginForm shows inline error via verifyMfaError
   });
 
-  const logoutMutation = useMutation<void, AxiosError<ApiErrorResponse>>({
+  // Trả `true` khi backend XÁC NHẬN đã đăng xuất. `mutationFn` nuốt lỗi mạng
+  // (người dùng phải rời được trong mọi trường hợp), nên nếu không mang kết quả
+  // ra ngoài thì `onSuccess` sẽ báo "đăng xuất thành công" cả khi backend chưa
+  // hề nhận được gì — và người đọc log đi điều tra một phiên còn sống sẽ bị
+  // dẫn sai hướng ngay từ dòng đầu.
+  const logoutMutation = useMutation<boolean, AxiosError<ApiErrorResponse>, void>({
     mutationFn: async () => {
       // ========================================
       // OPTIMISTIC LOGOUT
@@ -186,28 +205,43 @@ export function useAuth(options?: UseAuthOptions) {
       //
       // Cache is cleared on next LOGIN to avoid data leakage between users.
 
-      // 🚫 STEP 1: Block all non-auth API requests immediately
-      setApiLoggedOut(true);
-
-      // 🧹 STEP 2: Clear client state (isAuthenticated=false)
-      logoutStore();
+      // 🚫 STEP 1+2: Chặn request rồi dọn state client — cùng một
+      // `clearClientAuthState()` mà `LoginSessionResetGate` và
+      // `performSessionExpiredLogout` dùng. Trước đây ba nơi cùng viết tay đúng
+      // cặp lệnh này, và chỉ cần một nơi quên thứ tự là hở cửa sổ store-trống
+      // -nhưng-request-vẫn-đi.
+      clearClientAuthState();
 
       // 📡 STEP 3: Call logout API (cookies still present, server clears them)
+      let backendConfirmed = false;
       try {
         await api.post(API_ENDPOINTS.AUTH.LOGOUT, {}, { withCredentials: true });
+        backendConfirmed = true;
       } catch {
         // Ignore - user will be redirected regardless
       }
+
+      // Chỉ khi backend XÁC NHẬN thì phiên mới chắc chắn chết và nhật ký mới
+      // được dọn. Logout hỏng ⇒ chưa biết phiên còn hay mất ⇒ giữ nhật ký, vì
+      // một bản ghi `ambiguous` bị xoá oan sẽ mở đường cho tab khác POST lại
+      // một refresh token mà server có thể đã rotate.
+      await noteSessionTransition(
+        backendConfirmed ? "logout-success" : "logout-failed",
+      );
 
       // 🚀 STEP 4: Hard redirect - more reliable than router.replace()
       // which can fail if the component unmounts during React re-render.
       // Also clears all JS state (module vars, React state) for a clean login page.
       window.location.href = "/login";
+      return backendConfirmed;
     },
-    onSuccess: () => {
-      // User won't see this toast because they're already on login page
-      // But it's good for debugging in console
-      console.log("[Logout] Successfully logged out");
+    onSuccess: (backendConfirmed: boolean) => {
+      // User won't see this because they're already on login page.
+      console.log(
+        backendConfirmed
+          ? "[Logout] Backend đã xác nhận đăng xuất"
+          : "[Logout] Đã dọn phía client; backend CHƯA xác nhận",
+      );
     },
     onError: (error) => {
       // This should rarely happen since we handle errors in mutationFn
@@ -377,9 +411,9 @@ export function useAuth(options?: UseAuthOptions) {
     // 3. Xử lý thành công
     onSuccess: async () => {
       toast.success("Đổi mật khẩu thành công! Đang đăng xuất…");
-      setApiLoggedOut(true); // Block API requests trước khi clear
-      // 4b. Dọn dẹp state client (Zustand)
-      logoutStore();
+      // 4b. Cùng một hàm dọn với mọi lối thoát phiên khác — cờ chặn request và
+      // store phải luôn đổi cùng nhau, đúng thứ tự.
+      clearClientAuthState();
       // 4c. Dọn dẹp cache (React Query)
       queryClient.clear();
       // 4d. Chuyển hướng
@@ -499,7 +533,11 @@ export function useAuth(options?: UseAuthOptions) {
         toast.error("Hệ thống đang bận. Vui lòng thử lại sau ít phút.");
       } else if (userError.response?.status === 401) {
         toast.error("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
-        logoutStore();
+        // Nhánh này trước đây chỉ dọn store mà KHÔNG bật cờ chặn request —
+        // trong khi nó điều hướng bằng `router.push` (client nav, không hard
+        // navigation), nên mọi component còn mount vẫn sống và vẫn refetch
+        // được. Đó đúng là cửa sổ mà `clearClientAuthState()` sinh ra để đóng.
+        clearClientAuthState();
         queryClient.clear();
         router.push(
           buildLoginRedirect(
@@ -511,7 +549,7 @@ export function useAuth(options?: UseAuthOptions) {
         toast.error("Không thể tải thông tin người dùng.");
       }
     }
-  }, [isUserError, userError, isUserErrorTransient, logoutStore, queryClient, router]);
+  }, [isUserError, userError, isUserErrorTransient, queryClient, router]);
 
   useEffect(() => {
     if (currentUser && JSON.stringify(currentUser) !== JSON.stringify(userFromStore)) {
