@@ -34,21 +34,17 @@ import {
   isRefreshFailure,
 } from "./refresh";
 import { buildLoginRedirect } from "@/lib/auth/login-redirect";
+import { isApiLoggedOut, setApiLoggedOut } from "./session-flags";
+import { clearClientAuthState } from "@/lib/auth/clear-client-auth-state";
 export const API_BASE_URL = env.NEXT_PUBLIC_API_URL;
 
 // ============================================
 // 🚫 LOGOUT GUARD (window-level flag)
 // ============================================
-// Uses window global to survive Turbopack HMR module reloads.
-// Set by logoutMutation in useAuth.ts, reset on login success.
-export function isApiLoggedOut(): boolean {
-  return typeof window !== "undefined" && !!(window as unknown as Record<string, unknown>).__qlts_logged_out;
-}
-export function setApiLoggedOut(value: boolean) {
-  if (typeof window !== "undefined") {
-    (window as unknown as Record<string, unknown>).__qlts_logged_out = value;
-  }
-}
+// Định nghĩa đã dời sang `./session-flags` để `refresh.ts` và các lối dọn phiên
+// dùng được mà không phải import cả axios client (contract ở đầu `refresh.ts`).
+// Re-export để mọi caller sẵn có giữ nguyên đường import.
+export { isApiLoggedOut, setApiLoggedOut };
 
 // Create axios instance
 export const api = axios.create({
@@ -172,13 +168,12 @@ function triageRefreshFailure(
 async function performSessionExpiredLogout(pathname: string, search: string) {
   if (typeof window === "undefined") return;
 
-  setApiLoggedOut(true);
-  try {
-    const { useAuthStore } = await import("@/lib/stores/auth.store");
-    useAuthStore.getState().logout();
-  } catch {
-    // Best-effort
-  }
+  // Cùng một `clearClientAuthState()` với `LoginSessionResetGate`. Trước đây
+  // logic này nằm inline ở đây, nên khi gate ra đời sẽ có HAI bản dọn state —
+  // và chúng chỉ cần lệch nhau một bước là trang login lại rehydrate `user` của
+  // phiên vừa chết.
+  clearClientAuthState();
+
   window.location.href = buildLoginRedirect(pathname + search, {
     forceLogin: true,
     reason: "session_expired",

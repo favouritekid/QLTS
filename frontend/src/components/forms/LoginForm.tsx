@@ -20,6 +20,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
 import { useCountdown } from "@/hooks/useCountdown";
+import { clearClientAuthState } from "@/lib/auth/clear-client-auth-state";
+import { noteSessionTransition } from "@/lib/api/refresh";
+import type { ClearTrigger } from "@/lib/api/refresh-coordination/lifecycle";
 import { MfaVerifyForm } from "./MfaVerifyForm";
 import type { LoginRequest } from "@/types/api.types";
 
@@ -97,7 +100,76 @@ function isMfaTokenInvalid(error: unknown): boolean {
   );
 }
 
+/**
+ * Cổng dọn state client TRƯỚC khi trang đăng nhập chạm vào `useAuth()`.
+ *
+ * `auth.store` giữ `user` trong localStorage và `onRehydrateStorage` đặt
+ * `isAuthenticated = !!state.user` (`auth.store.ts:85`). `useAuth()` lại có
+ * `useQuery(["auth","me"], { enabled: isAuthenticated })`. Ghép hai điều đó
+ * lại: mở `/login` với một phiên vừa chết là lập tức bắn `/users/me` bằng danh
+ * tính cũ — request đó 401, đi vào đường refresh, và ở nhánh `reauth` thì đó
+ * đúng là thứ ta vừa cố tránh.
+ *
+ * Vì vậy state phải sạch trước khi `LoginFormInner` — nơi DUY NHẤT gọi
+ * `useAuth()` — được mount. Dọn trong `useEffect` chứ không trong render:
+ * `clearClientAuthState()` ghi vào store, mà ghi store trong lúc render là
+ * mutation giữa render pass.
+ *
+ * Đây là điểm hội tụ của MỌI lối terminal, kể cả nhánh middleware
+ * `n>=2 → /login?reauth=true` vốn không hề mount trang bootstrap.
+ */
 export function LoginForm() {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    // Đọc query bằng `window.location.search`, không `useSearchParams()`: hook
+    // đó buộc trang phải có Suspense boundary và kéo cả trang login sang
+    // client-side rendering. Effect thì luôn chạy phía client nên không cần.
+    const query = new URLSearchParams(window.location.search);
+    const trigger: ClearTrigger =
+      query.get("force_login") === "true"
+        ? "force-login-cookies-cleared"
+        : query.get("reauth") === "true"
+          ? "reauth"
+          : "client-state-only";
+
+    clearClientAuthState();
+
+    // Rule này cảnh báo cascading render — ở đây render thứ hai chính là MỤC
+    // ĐÍCH, không phải tác dụng phụ: pass đầu cố ý không mount `LoginFormInner`
+    // để `useAuth()` chưa chạy khi store còn bẩn. Hai lựa chọn thay thế đều tệ
+    // hơn: dọn trong render (mutation giữa render pass, StrictMode gọi hai
+    // lần), hoặc hoãn `setReady` qua `setTimeout` (đúng cùng một cascading
+    // render, chỉ chậm thêm một tick và giấu ý định).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setReady(true);
+
+    // 🔴 Nhật ký refresh có vòng đời RIÊNG và hẹp hơn nhiều. Chỉ `force_login`
+    // — lối đã thực sự xoá cookie refresh — mới được dọn nó. `reauth` CỐ Ý giữ
+    // cookie, nên một bản ghi `ambiguous` đang cấm POST phải sống tới khi đăng
+    // nhập thành công. Việc phân loại nằm trong `clearJournalAfter`, ở đây chỉ
+    // khai báo đúng mình tới từ lối nào.
+    //
+    // `.catch()` không phải phòng thủ thừa: promise bị bỏ rơi mà ném thì thành
+    // unhandled rejection, và không ai bắt.
+    void noteSessionTransition(trigger).catch(() => {});
+  }, []);
+
+  // Giữ khung để không nháy layout giữa lần render đầu và lúc form hiện ra.
+  if (!ready) {
+    return (
+      <div
+        aria-busy="true"
+        aria-label="Đang chuẩn bị trang đăng nhập"
+        className="min-h-[420px]"
+      />
+    );
+  }
+
+  return <LoginFormInner />;
+}
+
+function LoginFormInner() {
   const {
     login,
     verifyMfa,
