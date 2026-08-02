@@ -242,8 +242,11 @@ describe("proxy — /login?reauth=true đăng nhập lại mà KHÔNG bỏ phiê
     expect(deletedCookieNames(res)).not.toContain("csrf_token");
   });
 
-  // `force_login` do backend/logout phát ra khi phiên đã chết hẳn phía server;
-  // `reauth` chỉ là phỏng đoán của client. Cùng có mặt thì cờ xoá sạch thắng.
+  // Cùng có mặt thì cờ XOÁ SẠCH thắng — không phải vì `force_login` đáng tin
+  // hơn. Cả hai đều là query param, bất kỳ link nào cũng gắn được và middleware
+  // không xác thực được nguồn của cờ nào cả. Chọn theo HƯỚNG FAIL: nhầm sang
+  // xoá sạch thì người dùng đăng nhập lại, nhầm sang giữ thì một phiên lẽ ra
+  // phải chết vẫn còn cookie.
   it("đi kèm force_login ⇒ xoá SẠCH cả ba, reauth không được cứu phiên", () => {
     const res = proxy(loginRequest("?reauth=true&force_login=true", accessToken(600)));
 
