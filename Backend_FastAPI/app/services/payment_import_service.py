@@ -53,6 +53,12 @@ from app.models.finance import (
     RefundStatusEnum,
     TransactionTypeEnum,
 )
+from app.constants.export_formats import (
+    CSV_MEDIA_TYPE,
+    CSV_UTF8_BOM,
+    TEXT_NUMBER_FORMAT,
+    XLSX_MEDIA_TYPE,
+)
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.utils.admission_status import NON_PAYABLE_PROFILE_STATUSES
 from app.utils.csv_helpers import sanitize_csv_row
@@ -898,7 +904,9 @@ _TEMPLATE_DESCRIPTIONS = [
     "Mã tham chiếu phiếu thu/UNC (tùy chọn) — định dạng TEXT.",
     "Ghi chú (tùy chọn).",
 ]
-_XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+# Giữ tên cũ làm alias để không phải sửa mọi call site trong file này;
+# nguồn sự thật là app/constants/export_formats.py.
+_XLSX_MEDIA = XLSX_MEDIA_TYPE
 
 
 def build_template(fmt: str) -> Tuple[bytes, str, str]:
@@ -916,8 +924,8 @@ def build_template(fmt: str) -> Tuple[bytes, str, str]:
         writer.writerow(TEMPLATE_COLS)
         writer.writerow(_TEMPLATE_EXAMPLE)
         # BOM (utf-8-sig) để Excel locale VN không đọc mojibake header tiếng Việt.
-        content = ("﻿" + buf.getvalue()).encode("utf-8")
-        return content, "text/csv; charset=utf-8", "mau_import_thu_hoc_phi.csv"
+        content = (CSV_UTF8_BOM + buf.getvalue()).encode("utf-8")
+        return content, CSV_MEDIA_TYPE, "mau_import_thu_hoc_phi.csv"
 
     from openpyxl import Workbook
     from openpyxl.comments import Comment
@@ -946,7 +954,7 @@ def build_template(fmt: str) -> Tuple[bytes, str, str]:
     for col_idx in (cccd_col, ref_col):
         letter = ws.cell(row=1, column=col_idx).column_letter
         for r in range(2, MAX_IMPORT_ROWS + 2):
-            ws[f"{letter}{r}"].number_format = "@"
+            ws[f"{letter}{r}"].number_format = TEXT_NUMBER_FORMAT
 
     widths = [16, 22, 18, 14, 12, 18, 24]
     for i, w in enumerate(widths):
@@ -1919,8 +1927,8 @@ async def build_result_file(
         writer.writerow(sanitize_csv_row(header))
         for r in rows:
             writer.writerow(_row_cells(r))
-        content = ("﻿" + buf.getvalue()).encode("utf-8")  # BOM
-        return content, "text/csv; charset=utf-8", f"{fname}.csv"
+        content = (CSV_UTF8_BOM + buf.getvalue()).encode("utf-8")  # BOM
+        return content, CSV_MEDIA_TYPE, f"{fname}.csv"
 
     from openpyxl import Workbook
 
@@ -1933,7 +1941,7 @@ async def build_result_file(
     # Force TEXT mọi ô (chống injection + giữ số 0 đầu CCCD).
     for ws_row in ws.iter_rows():
         for cell in ws_row:
-            cell.number_format = "@"
+            cell.number_format = TEXT_NUMBER_FORMAT
     bio = io.BytesIO()
     wb.save(bio)
     return bio.getvalue(), _XLSX_MEDIA, f"{fname}.xlsx"
