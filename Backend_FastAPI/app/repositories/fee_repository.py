@@ -362,6 +362,37 @@ class FeeRepository(BaseRepository[Fee]):
 
         return fees, total
 
+    async def get_many_for_export(self, fee_ids: List[int]) -> List[Fee]:
+        """Nạp khoản phí theo id, eager-load đủ mọi thứ file xuất cần đọc.
+
+        Eager-load là BẮT BUỘC, không phải tối ưu: file xuất đọc tên officer,
+        tên thí sinh, tên ngành và tên đơn vị cho TỪNG dòng — lazy-load sẽ thành
+        4 truy vấn mỗi dòng (và ``MissingGreenlet`` ngoài session async).
+
+        ⚠️ Sắp xếp theo ``Fee.admission_profile_id`` (cột FK có sẵn trên Fee),
+        KHÔNG phải ``AdmissionProfile.id``: bảng đó chỉ xuất hiện qua eager-load
+        nên không nằm trong FROM của câu SELECT này.
+        """
+        if not fee_ids:
+            return []
+
+        query = (
+            select(Fee)
+            .where(Fee.id.in_(fee_ids))
+            .options(
+                joinedload(Fee.admission_profile)
+                .joinedload(models.AdmissionProfile.lead)
+                .joinedload(models.Lead.assigned_officer),
+                joinedload(Fee.admission_profile)
+                .joinedload(models.AdmissionProfile.lead)
+                .joinedload(models.Lead.unit),
+                joinedload(Fee.resolved_major),
+            )
+            .order_by(Fee.admission_profile_id.asc(), Fee.id.asc())
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().unique().all())
+
     async def check_duplicate(
         self,
         profile_id: int,
@@ -1072,6 +1103,71 @@ class InvoiceRepository(BaseRepository[Invoice]):
             "awaiting_major_change": int(awaiting_major_change),
             "total": int(total),
         }
+
+    async def get_distinct_fee_ids_for_filter(
+        self,
+        limit: int,
+        unit_id: Optional[int] = None,
+        statuses: Optional[List[str]] = None,
+        fee_id: Optional[int] = None,
+        profile_id: Optional[int] = None,
+        overdue_only: Optional[bool] = None,
+        search: Optional[str] = None,
+        fee_type: Optional[str] = None,
+        date_from: Optional[date] = None,
+        date_to: Optional[date] = None,
+        today: Optional[date] = None,
+        major_id: Optional[int] = None,
+        degree_level: Optional[str] = None,
+        academic_year: Optional[int] = None,
+        semester_no: Optional[int] = None,
+        officer_id: Optional[int] = None,
+        unit_id_filter: Optional[int] = None,
+        due_window: Optional[str] = None,
+        awaiting_major_change: Optional[bool] = None,
+    ) -> List[int]:
+        """Tập ``fee_id`` DISTINCT khớp bộ lọc workspace — phục vụ EXPORT.
+
+        Vì sao DISTINCT fee mà không phải danh sách hoá đơn: file xuất có 3 cột
+        tiền ở mức KHOẢN PHÍ (học phí / đã đóng / còn lại). Một khoản phí nhiều
+        đợt sẽ ra nhiều hoá đơn; xuất theo hoá đơn là lặp lại cùng số tiền, kế
+        toán bôi đen cột cộng sẽ ra gấp đôi mà không có dấu hiệu gì trên màn hình.
+
+        ⚠️ Ngữ nghĩa lọc là ANY-match: một khoản phí lọt vào nếu **ít nhất một**
+        hoá đơn của nó khớp bộ lọc, nhưng số tiền xuất ra là của CẢ khoản phí.
+        Sheet "Thong tin xuat" trong file phải nói rõ điều này.
+
+        ``limit`` nên truyền ``MAX_EXPORT_ROWS + 1``: gọi một lần rồi đếm độ dài
+        để biết có vượt trần không — không dùng cặp count-rồi-fetch (hai câu
+        truy vấn có khe TOCTOU, và cắt im lặng thì file thiếu trông y hệt file đủ).
+
+        Dùng CHUNG ``_build_invoice_list_conditions`` với list + status-counts nên
+        tập hàng xuất ra luôn khớp tập hàng đang hiển thị.
+        """
+        today = today or date.today()
+        conditions = self._build_invoice_list_conditions(
+            unit_id=unit_id, statuses=statuses, fee_id=fee_id,
+            profile_id=profile_id, overdue_only=overdue_only, search=search,
+            fee_type=fee_type, date_from=date_from, date_to=date_to, today=today,
+            major_id=major_id, degree_level=degree_level,
+            academic_year=academic_year, semester_no=semester_no,
+            officer_id=officer_id, unit_id_filter=unit_id_filter,
+            due_window=due_window, awaiting_major_change=awaiting_major_change,
+        )
+
+        # Chuỗi join PHẢI khớp get_filtered_with_count — builder điều kiện ở trên
+        # giả định query đã join Invoice → Fee → AdmissionProfile → Lead.
+        query = (
+            select(Invoice.fee_id)
+            .join(Fee).join(models.AdmissionProfile).join(models.Lead)
+            .distinct()
+        )
+        if conditions:
+            query = query.where(and_(*conditions))
+        query = query.limit(limit)
+
+        result = await self.db.execute(query)
+        return [row for row in result.scalars().all()]
 
     async def get_collection_money_totals(
         self,

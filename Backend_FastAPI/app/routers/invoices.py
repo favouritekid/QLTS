@@ -22,7 +22,15 @@ import base64
 from datetime import date
 from decimal import Decimal
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -41,6 +49,7 @@ from app.models.finance import (
     OVERDUE_DERIVED_STATUSES,
 )
 from app.services.invoice_service import InvoiceService
+from app.services.tuition_export_service import build_tuition_export
 from app.services.system_config_service import SystemConfigService
 from app.repositories.fee_repository import InvoiceRepository
 from app.utils.id_helpers import format_profile_code
@@ -263,6 +272,115 @@ async def get_invoice_status_counts(
         awaiting_major_change=awaiting_major_change,
     )
     return finance_schemas.InvoiceStatusCounts(**counts)
+
+
+# ==============================================================================
+# EXPORT
+# ==============================================================================
+# 🔴 Route-order: khai /export TRƯỚC /{invoice_id}. Nếu đặt sau, FastAPI khớp
+# "/export" vào /{invoice_id} rồi ép "export" thành int → 422 khó đoán (không
+# phải 404). Cùng bẫy đã gặp ở payments.py với /import/batches.
+
+@limiter.limit(RateLimits.DATA_EXPORT)
+@router.get(
+    "/export",
+    summary="Xuất danh sách học phí theo bộ lọc màn hình Thu học phí",
+)
+async def export_tuition_list(
+    request: Request,
+    format: str = Query(
+        "xlsx", pattern="^(xlsx|csv)$", description="xlsx (mặc định) | csv"
+    ),
+    status: Optional[str] = Query(
+        None, description="Filter by status (comma-separated)"
+    ),
+    fee_id: Optional[int] = Query(None, description="Filter by fee ID"),
+    profile_id: Optional[int] = Query(None, description="Filter by profile ID"),
+    fee_type: Optional[str] = Query(None, description="Filter by fee type"),
+    overdue_only: Optional[bool] = Query(None),
+    search: Optional[str] = Query(None),
+    major_id: Optional[int] = Query(None),
+    degree_level: Optional[str] = Query(None),
+    academic_year: Optional[int] = Query(None),
+    semester_no: Optional[int] = Query(None),
+    officer_id: Optional[int] = Query(None),
+    unit_id: Optional[int] = Query(None),
+    awaiting_major_change: Optional[bool] = Query(None),
+    due_window: Optional[str] = Query(None),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    _finance_staff: models.User = Depends(require_finance_staff),
+) -> Response:
+    """Xuất danh sách học phí (xlsx/csv) theo ĐÚNG bộ lọc đang xem.
+
+    Nhận cùng bộ tham số lọc với ``GET /api/invoices``, TRỪ phân trang và sắp
+    xếp: file xuất trọn kết quả lọc và tự sắp theo mã hồ sơ.
+
+    **Grain**: mỗi dòng là MỘT KHOẢN PHÍ (không phải một hoá đơn) — xem
+    docstring ``tuition_export_service``.
+
+    **Security**: dual-gate (Casbin + require_finance_staff); IDOR qua
+    ``finance_scope_unit_id``.
+    """
+    scope_unit_id = finance_scope_unit_id(current_user)
+
+    statuses: Optional[List[str]] = None
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+
+    # Nhãn tiếng Việt cho sheet "Thong tin xuat" — router biết tên tham số mà
+    # người dùng nhìn thấy, service chỉ in ra.
+    applied_filters = {
+        label: value
+        for label, value in (
+            ("Trạng thái", status),
+            ("Loại phí", fee_type),
+            ("Chỉ quá hạn", "có" if overdue_only else None),
+            ("Tìm kiếm", search),
+            ("Ngành", major_id),
+            ("Trình độ", degree_level),
+            ("Năm học", academic_year),
+            ("Học kỳ", semester_no),
+            ("TVV phụ trách", officer_id),
+            ("Đơn vị", unit_id),
+            ("Chờ xác nhận đổi ngành", "có" if awaiting_major_change else None),
+            ("Hạn", due_window),
+        )
+        if value not in (None, "")
+    }
+
+    try:
+        content, media_type, filename = await build_tuition_export(
+            db,
+            fmt=format,
+            unit_id=scope_unit_id,
+            exporter_name=current_user.full_name or current_user.username,
+            applied_filters=applied_filters,
+            statuses=statuses,
+            fee_id=fee_id,
+            profile_id=profile_id,
+            fee_type=fee_type,
+            overdue_only=overdue_only,
+            search=search,
+            major_id=major_id,
+            degree_level=degree_level,
+            academic_year=academic_year,
+            semester_no=semester_no,
+            officer_id=officer_id,
+            unit_id_filter=unit_id,
+            due_window=due_window,
+            awaiting_major_change=awaiting_major_change,
+        )
+    except BadRequest as exc:
+        raise HTTPException(status_code=400, detail=exc.detail)
+
+    # Plain Response (không StreamingResponse) để có Content-Length — trình
+    # duyệt hiện được tiến độ tải.
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ==============================================================================

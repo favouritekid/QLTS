@@ -409,6 +409,8 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # Workspace tab badges — EXPLICIT (don't rely on the keyMatch4 collision
         # with /api/invoices/{id}); mirrors /api/admissions/status-counts.
         {"subject": "{role}", "object": "/api/invoices/status-counts", "action": "GET"},
+        # Xuất danh sách học phí — EXPLICIT vì cùng lý do với status-counts.
+        {"subject": "{role}", "object": "/api/invoices/export", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/{id}/vietqr", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/by-fee/{fee_id}", "action": "GET"},
@@ -684,6 +686,7 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         # the workspace list 403s for manager.
         {"subject": "{role}", "object": "/api/invoices", "action": "GET"},  # Workspace list
         {"subject": "{role}", "object": "/api/invoices/status-counts", "action": "GET"},  # Tab badges
+        {"subject": "{role}", "object": "/api/invoices/export", "action": "GET"},  # Xuất danh sách học phí
         {"subject": "{role}", "object": "/api/fees/collection/{profile_id}", "action": "GET"},  # Workspace drawer
         {"subject": "{role}", "object": "/api/fees/calculable-profiles", "action": "GET"},  # Tính phí picker
         {"subject": "{role}", "object": "/api/fees/{id}/waive", "action": "POST"},  # Waive fee
