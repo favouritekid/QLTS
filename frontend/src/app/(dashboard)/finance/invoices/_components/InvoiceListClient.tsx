@@ -14,7 +14,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Receipt, Plus, ClipboardCheck } from "lucide-react"
+import { Receipt, Plus, ClipboardCheck, Download } from "lucide-react"
 import { useMajorPrograms } from "@/hooks/admissions/useProgramData"
 import { useAdminUsersList } from "@/hooks/useAdminUsers"
 import { flattenOrganizationTree, useOrganizationUnits } from "@/hooks/useOrganization"
@@ -24,6 +24,13 @@ import { PageContainer } from "@/components/layouts/PageContainer"
 import { EmptyState, ErrorEmptyState } from "@/components/common/EmptyState"
 import { Pagination } from "@/components/common/table/Pagination"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { useTuitionExport } from "@/hooks/finance/useTuitionExport"
 import { cn } from "@/lib/utils"
 import { formatVND } from "@/lib/zod/finance"
 import { getInvoiceStatusSpineColor } from "@/lib/status-config"
@@ -89,7 +96,8 @@ function activateRow(e: React.KeyboardEvent, fn: () => void) {
 
 export function InvoiceListClient() {
   // ── Filter state (URL + localStorage) ──────────────────────────────────
-  const { state, handlers, hasActiveFilters, apiFilters, countFilters } = useInvoicesFilter()
+  const { state, handlers, hasActiveFilters, apiFilters, countFilters, exportFilters } =
+    useInvoicesFilter()
 
   // "Chờ duyệt" is a payment queue (different grain) — switches the whole
   // content area + suppresses the invoice query while it's active.
@@ -277,6 +285,16 @@ export function InvoiceListClient() {
     }
   }, [drawerProfileId])
 
+  // Xuất danh sách học phí theo ĐÚNG bộ lọc đang xem (exportFilters = apiFilters
+  // bỏ phân trang/sắp xếp — derive từ cùng một nguồn nên không thể lệch).
+  const exportMutation = useTuitionExport()
+  const handleExport = useCallback(
+    (format: "xlsx" | "csv") => {
+      exportMutation.mutate({ format, filters: exportFilters })
+    },
+    [exportMutation, exportFilters],
+  )
+
   // ── Tab counts ──────────────────────────────────────────────────────────
   // NOTE: "Quá hạn" is an ORTHOGONAL lens (overdue_derived), not a partition —
   // an issued-overdue invoice is counted in BOTH "Chờ thu" and "Quá hạn". So the
@@ -338,6 +356,37 @@ export function InvoiceListClient() {
           </div>
 
           <div className="flex items-center gap-2 self-start sm:self-auto">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="gap-1.5"
+                  // Tab "Chờ duyệt" là hàng đợi PHIẾU THU (grain khác) và nó
+                  // tắt hẳn invoice query → bộ lọc lúc này không mô tả tập hoá
+                  // đơn nào cả; xuất sẽ ra "toàn bộ hoá đơn" mà người dùng
+                  // tưởng là danh sách đang xem.
+                  disabled={
+                    exportMutation.isPending || isPendingTab || totalCount === 0
+                  }
+                  title={
+                    isPendingTab
+                      ? "Tab này liệt kê phiếu thu, chưa hỗ trợ xuất"
+                      : undefined
+                  }
+                >
+                  <Download className="size-4" aria-hidden="true" />
+                  {exportMutation.isPending ? "Đang xuất…" : "Xuất"}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => handleExport("xlsx")}>
+                  Excel (.xlsx)
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => handleExport("csv")}>
+                  CSV (.csv)
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button onClick={handleCalculateFee} className="gap-1.5">
               <Plus className="size-4" aria-hidden="true" />
               Tính phí

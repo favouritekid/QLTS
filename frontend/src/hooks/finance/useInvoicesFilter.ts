@@ -20,6 +20,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react"
 import { useSearchParams, usePathname } from "next/navigation"
 import type {
   FeeType,
+  InvoiceExportFilters,
   InvoiceFilters,
   InvoiceStatusCountFilters,
   InvoiceWorkspaceFilters,
@@ -84,6 +85,8 @@ export interface UseInvoicesFilterReturn {
   hasActiveFilters: boolean
   apiFilters: InvoiceFilters
   countFilters: InvoiceStatusCountFilters
+  /** = apiFilters bỏ phân trang/sắp xếp — dùng cho `GET /api/invoices/export`. */
+  exportFilters: InvoiceExportFilters
 }
 
 // =============================================================================
@@ -522,6 +525,22 @@ export function useInvoicesFilter(
     return params
   }, [search, feeType, feeId, profileId, workspaceFilters])
 
+  /**
+   * Params cho `GET /api/invoices/export`.
+   *
+   * PARITY: phải là ĐÚNG `apiFilters` bỏ phân trang + sắp xếp, nếu không file
+   * xuất ra khác tập hàng đang hiển thị — mà người dùng không có cách nào
+   * biết. Derive thẳng từ `apiFilters` (không dựng lại) để không thể lệch.
+   */
+  const exportFilters: InvoiceExportFilters = useMemo(() => {
+    const rest: Partial<InvoiceFilters> = { ...apiFilters }
+    delete rest.page
+    delete rest.page_size
+    delete rest.sort_by
+    delete rest.sort_order
+    return rest as InvoiceExportFilters
+  }, [apiFilters])
+
   // ── RETURN ────────────────────────────────────────────────────────────
   return {
     state: {
@@ -542,6 +561,7 @@ export function useInvoicesFilter(
     hasActiveFilters,
     apiFilters,
     countFilters,
+    exportFilters,
   }
 }
 
