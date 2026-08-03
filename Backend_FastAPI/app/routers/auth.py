@@ -37,7 +37,12 @@ from ..database import (
     safe_redis_set,
     safe_redis_ttl,
 )
-from ..core.rate_limits import limiter, RateLimits  # ✅ MIGRATED: Use new rate limits module
+from ..core.rate_limits import (  # ✅ MIGRATED: Use new rate limits module
+    limiter,
+    RateLimits,
+    get_refresh_identity_key,
+    refresh_limit,
+)
 from ..services import session_service, user_service
 from ..services import login_history_service  # Security: Persistent login audit trail
 from ..services.notification_dispatcher import safe_dispatch  # Security: Suspicious login alerts
@@ -47,6 +52,38 @@ from ..core.events import SystemEvents  # Security: Event registry
 
 router = APIRouter(tags=["Authentication"])
 log = structlog.get_logger(__name__)
+
+
+class RefreshAbuseLocked(HTTPException):
+    """429 của cổng chống lạm dụng refresh (M4) — KHÁC 429 rate limit hạ tầng.
+
+    Hai loại 429 rất khác nhau cùng xuất hiện trên ``POST /auth/refresh``:
+
+    * ``RATE_LIMITED`` (slowapi, ``app/core/rate_limits.py``): quota theo IP
+      hết → TẠM THỜI. Client giữ phiên và thử lại sau.
+    * ``REFRESH_ABUSE_LOCKED`` (đây): ``refresh_fail:{username}`` đã chạm
+      ``REFRESH_MAX_FAILURES``. Chính lần lỗi chạm ngưỡng đã gọi
+      ``invalidate_all_sessions`` và trả 401; các lần refresh SAU đó rơi vào
+      cổng này. Nghĩa là session đã bị thu hồi phía server → client PHẢI đăng
+      xuất, không được giữ phiên.
+
+    Vì client phân loại theo ``error_code`` (không theo chuỗi thông báo), mã
+    phải nằm TOP-LEVEL trong body. ``http_exception_handler`` đọc thuộc tính
+    ``error_code`` dưới đây thay cho mặc định ``HTTP_429``.
+
+    Cố ý subclass ``HTTPException`` chứ không phải ``BaseAppException``: luồng
+    ``refresh_access_token`` có nhiều tầng ``except HTTPException: raise`` để
+    cho một deny hợp lệ đi thẳng ra ngoài mà KHÔNG bị đếm vào bộ đếm lạm dụng.
+    Một domain exception sẽ rơi vào ``except Exception`` gần nhất và bị nuốt.
+    """
+
+    error_code = "REFRESH_ABUSE_LOCKED"
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed refresh attempts. Please login again.",
+        )
 
 
 def _suspicious_login_only_channels(risk_score: int) -> Optional[List[str]]:
@@ -340,10 +377,20 @@ async def _complete_login_flow(
         },
         status_code=200,
     )
+    # ⚠️ max_age = TTL của REFRESH token, KHÔNG phải của access token.
+    #
+    # Token vẫn hết hạn sau ACCESS_TOKEN_EXPIRE_MINUTES — backend luôn kiểm
+    # ``exp`` nên một cookie quá hạn là vô hại. Nhưng nếu cookie CHẾT cùng lúc
+    # với token thì trình duyệt xoá nó sau 15 phút, và request kế tiếp tới
+    # middleware không còn cookie nào để phân biệt hai ca hoàn toàn khác nhau:
+    # "chưa từng đăng nhập" và "phiên còn sống 30 ngày, chỉ access token cũ".
+    # Middleware buộc phải đoán, và nó đoán sai theo hướng đắt nhất — đá người
+    # dùng về /login giữa lúc nhập liệu. Giữ cookie sống bằng refresh token để
+    # middleware còn dữ liệu mà quyết định.
     response.set_cookie(
         key="access_token", value=access_token,
         httponly=True, secure=settings.APP_ENV == "production",
-        samesite="lax", max_age=int(access_ttl) if access_ttl else settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        samesite="lax", max_age=int(refresh_ttl),
         path="/",
     )
     response.set_cookie(
@@ -850,7 +897,14 @@ async def perform_change_password(
 
 
 @router.post("/refresh")
-@limiter.limit(RateLimits.AUTH_REFRESH_TOKEN)  # ✅ RATE LIMIT: 20/hour - Higher for token refresh
+# Khoá theo CHỦ THỂ, không theo IP: cả trường ra Internet qua một IP NAT nên
+# xô 20/giờ theo IP là quota chung cho toàn bộ nhân sự (32% request refresh bị
+# chặn trong audit prod 2026-07-30). ``refresh_limit`` cấp 120/giờ khi khoá
+# chứng minh được danh tính, giữ 20/giờ cho nhánh IP. Thứ tự decorator hiện tại
+# là ĐÚNG — ``@limiter.limit`` nằm DƯỚI ``@router.post`` nên slowapi chặn trước
+# khi thân hàm chạy, tức trước khi rotation chạm Redis/DB; đảo hai dòng này là
+# biến 429 từ "chắc chắn chưa chạm rotation" thành "không biết".
+@limiter.limit(refresh_limit, key_func=get_refresh_identity_key)
 async def refresh_access_token(
     request: Request,
     refresh_token: str = Cookie(None, alias="refresh_token"),
@@ -913,10 +967,7 @@ async def refresh_access_token(
                     fail_count=fail_count,
                     security_event="REFRESH_RATE_LIMITED",
                 )
-                raise HTTPException(
-                    status_code=429,
-                    detail="Too many failed refresh attempts. Please login again.",
-                )
+                raise RefreshAbuseLocked()
         except HTTPException:
             raise
         except Exception as e:
@@ -1158,14 +1209,16 @@ async def refresh_access_token(
         )
 
         # ✅ SECURITY FIX: Set new access_token in httpOnly cookie
-        new_access_ttl = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        # ⚠️ max_age = TTL của REFRESH token mới (xem ghi chú ở nhánh login).
+        # Cookie phải sống lâu hơn token, nếu không thì sau 15 phút middleware
+        # mất luôn dữ liệu để phân biệt "chưa đăng nhập" với "phiên còn sống".
         response.set_cookie(
             key="access_token",
             value=new_access_token,
             httponly=True,
             secure=settings.APP_ENV == "production",
             samesite="lax",
-            max_age=int(new_access_ttl),
+            max_age=int(new_refresh_ttl),
             path="/",
         )
         response.set_cookie(

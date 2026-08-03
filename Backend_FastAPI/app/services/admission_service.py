@@ -71,6 +71,7 @@ from ..utils.exceptions import (
     BusinessRuleViolation,
     PermissionDeniedError,
     ConflictError,
+    DuplicateResourceError,
     ValidationError,
 )
 from ..utils.admission_round_guards import assert_round_open
@@ -5748,7 +5749,13 @@ async def update_profile(
                     academic_year=profile.academic_year,
                     duplicate_profile_id=duplicate_profile.id,
                 )
-                raise ConflictError(
+                # DuplicateResourceError (không phải ConflictError): message này
+                # viết cho người dùng cuối và client chỉ hiện nguyên văn những
+                # mã nằm trong allowlist user-facing. Dùng ConflictError ở đây
+                # thì officer chỉ nhận câu chung chung và không biết sai ở đâu —
+                # đúng kiểu bế tắc của sự cố 30-07 (xem frontend
+                # `USER_FACING_CONFLICT_CODES`). Cả hai đều trả HTTP 409.
+                raise DuplicateResourceError(
                     f"CCCD {new_citizen_id} đã được sử dụng bởi hồ sơ khác "
                     f"trong năm {profile.academic_year} (ID: {duplicate_profile.id})"
                 )
@@ -5762,7 +5769,7 @@ async def update_profile(
                     new_citizen_id=new_citizen_id,
                     student_code=existing_student.student_code,
                 )
-                raise ConflictError(
+                raise DuplicateResourceError(
                     f"CCCD {new_citizen_id} đã được sử dụng bởi học viên "
                     f"(Mã SV: {existing_student.student_code})"
                 )
@@ -5961,9 +5968,13 @@ async def update_profile(
         )
 
         if "citizen_id" in error_msg.lower():
-            raise ConflictError(f"CCCD {profile.citizen_id} đã tồn tại trong hệ thống")
+            raise DuplicateResourceError(
+                f"CCCD {profile.citizen_id} đã tồn tại trong hệ thống"
+            )
         elif "unique constraint" in error_msg.lower():
-            raise ConflictError("Dữ liệu trùng lặp (CCCD hoặc thông tin đã tồn tại)")
+            raise DuplicateResourceError(
+                "Dữ liệu trùng lặp (CCCD hoặc thông tin đã tồn tại)"
+            )
         else:
             raise ConflictError(f"Vi phạm ràng buộc dữ liệu: {error_msg}")
 

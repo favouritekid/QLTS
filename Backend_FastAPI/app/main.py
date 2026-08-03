@@ -20,7 +20,6 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles  # ✅ Import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import ValidationError
-from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,7 +30,9 @@ from .database import engine as async_db_engine
 from .database import redis_client as main_redis_client
 from .database import safe_redis_ping
 from .database import AsyncSessionLocal  # For auto-sync templates
-from .core.rate_limits import limiter  # ✅ MIGRATED: Use new centralized rate limits module
+from .core.rate_limits import (  # ✅ MIGRATED: Use new centralized rate limits module
+    configure_rate_limiting,
+)
 from .middleware.admission_freeze import AdmissionFreezeMiddleware  # ✅ T0-2 cold cutover freeze
 from .middleware.csrf import CSRFMiddleware  # ✅ CSRF Protection
 from .utils.redis_lock import init_redis_client, close_redis_client
@@ -509,26 +510,10 @@ async def lifespan(app: FastAPI):
         # ✅ FIX: Re-raise to prevent app from starting without authorization
         raise
 
-    # (Giữ nguyên logic Rate Limiter)
-    if settings.APP_ENV != "test":
-        fastapi_app.state.limiter = limiter
-        async def _custom_rate_limit_handler(request: Request, exc: RateLimitExceeded):
-            response = JSONResponse(
-                status_code=429,
-                content={
-                    "detail": "Quá nhiều yêu cầu. Vui lòng thử lại sau.",
-                },
-            )
-            # Inject Retry-After header via slowapi limiter (accurate remaining time)
-            response = request.app.state.limiter._inject_headers(
-                response, request.state.view_rate_limit
-            )
-            return response
-
-        fastapi_app.add_exception_handler(RateLimitExceeded, _custom_rate_limit_handler)
-        log.info("SlowAPI rate limiter INITIALIZED for non-test environment.")
-    else:
-        log.info("APP_ENV is 'test', skipping SlowAPI rate limiter setup.")
+    # Rate limiter KHÔNG còn cấu hình ở đây — xem `configure_rate_limiting`
+    # gọi ở module level bên dưới. Đăng ký exception handler trong lifespan
+    # là vô hiệu: middleware stack đã được dựng (và đã copy bảng handler)
+    # trước khi thân lifespan chạy.
 
     # --- Kiểm tra Redis ---
     try:
@@ -688,6 +673,16 @@ fastapi_app = FastAPI(
 # See: app/middleware/exception_handlers.py for implementation
 register_exception_handlers(fastapi_app)
 log.info("✅ Custom exception handlers registered")
+
+# Rate limiter: PHẢI ở module level, KHÔNG trong lifespan — Starlette dựng
+# middleware stack (copy bảng exception handler) ngay ở scope lifespan, nên
+# handler đăng ký trong thân lifespan không bao giờ được dùng. Trước khi sửa,
+# 429 thật trả ``{"detail":"20 per 1 hour","error_code":"HTTP_429"}`` thay vì
+# body của handler này.
+if configure_rate_limiting(fastapi_app):
+    log.info("SlowAPI rate limiter INITIALIZED for non-test environment.")
+else:
+    log.info("APP_ENV is 'test', skipping SlowAPI rate limiter setup.")
 
 
 # ===============================================================

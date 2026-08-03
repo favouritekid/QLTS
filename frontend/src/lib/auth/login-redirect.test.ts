@@ -7,6 +7,14 @@
 import { describe, it, expect } from "vitest";
 import { isValidRedirect, buildLoginRedirect } from "./login-redirect";
 
+// Ký tự điều khiển dựng qua fromCharCode: giữ tệp nguồn không chứa ký tự thô
+// (grep/diff sẽ coi tệp là binary) mà vẫn truyền được KÝ TỰ THẬT vào hàm.
+const NUL = String.fromCharCode(0);
+const TAB = String.fromCharCode(9);
+const LF = String.fromCharCode(10);
+const CR = String.fromCharCode(13);
+const DEL = String.fromCharCode(127);
+
 describe("isValidRedirect", () => {
   it("accept path nội bộ thường", () => {
     expect(isValidRedirect("/leads/1")).toBe(true);
@@ -42,6 +50,52 @@ describe("isValidRedirect", () => {
     expect(isValidRedirect("/reset-password")).toBe(false);
     // Không nhầm prefix: '/loginx' KHÔNG phải '/login' hay '/login/'
     expect(isValidRedirect("/loginx")).toBe(true);
+  });
+
+  it("reject /session-refresh (trang bootstrap nhận return-url, không được làm return-url)", () => {
+    expect(isValidRedirect("/session-refresh")).toBe(false);
+    expect(isValidRedirect("/session-refresh?redirect=/leads/1")).toBe(false);
+    expect(isValidRedirect("/session-refreshed")).toBe(true); // không nhầm prefix
+  });
+
+  it("reject ký tự điều khiển THẬT ở path-part", () => {
+    // Ký tự thật qua fromCharCode, KHÔNG viết literal "%09": URLSearchParams đã
+    // giải mã trước khi giá trị tới hàm này, nên literal "%09" không hề chạm
+    // tới lỗ hổng (nó chỉ là chuỗi 3 ký tự vô hại và vốn đã được accept).
+    expect(isValidRedirect(`/${TAB}//evil.com`)).toBe(false);
+    expect(isValidRedirect(`/${CR}${LF}//evil.com`)).toBe(false);
+    expect(isValidRedirect(`/${LF}//evil.com`)).toBe(false);
+    expect(isValidRedirect(`/${NUL}//evil.com`)).toBe(false);
+    expect(isValidRedirect(`/x${DEL}/y`)).toBe(false);
+  });
+
+  it("reject ký tự điều khiển cả ở query/hash (ranh giới ?/# hết đáng tin)", () => {
+    expect(isValidRedirect(`/leads?q=a${TAB}b`)).toBe(false);
+    expect(isValidRedirect(`/x#sec${LF}`)).toBe(false);
+  });
+
+  it("KIỂM NGƯỢC: chính payload đó thoát ra origin ngoài nếu lọt qua validate", () => {
+    // Chứng minh guard đang chặn thứ NGUY HIỂM THẬT, không phải chuỗi vô hại:
+    // WHATWG URL parser xoá TAB/CR/LF trước khi parse, nên "/<TAB>//evil.com"
+    // trở thành "///evil.com" và phân giải ra host evil.com.
+    expect(new URL(`/${TAB}//evil.com`, "https://qlts.example").origin).toBe(
+      "https://evil.com",
+    );
+    expect(new URL(`/${CR}${LF}//evil.com`, "https://qlts.example").origin).toBe(
+      "https://evil.com",
+    );
+    // …và guard chặn được cả hai.
+    expect(isValidRedirect(`/${TAB}//evil.com`)).toBe(false);
+    expect(isValidRedirect(`/${CR}${LF}//evil.com`)).toBe(false);
+  });
+
+  it("đường đi THẬT: ?redirect=%2F%09%2F%2Fevil.com qua URLSearchParams", () => {
+    // Đúng cách useAuth.ts:127/:171 đọc param — URLSearchParams tự giải mã.
+    const decoded = new URLSearchParams(
+      "redirect=%2F%09%2F%2Fevil.com",
+    ).get("redirect");
+    expect(decoded).toBe(`/${TAB}//evil.com`); // đã là TAB thật, không còn "%09"
+    expect(isValidRedirect(decoded)).toBe(false);
   });
 });
 

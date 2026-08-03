@@ -1,51 +1,50 @@
+// src/lib/api/refresh.test.ts
 /**
- * Tests cho refreshAccessToken — single-flight refresh.
+ * Cờ "đã cố ý giữ phiên" — phần của `refresh.ts` nằm ngoài luồng phối hợp.
+ *
+ * ⚠️ Phần lớn nội dung cũ của tệp này đã CHUYỂN chỗ, không phải bị bỏ:
+ *
+ *  - single-flight "nhiều lời gọi ⇒ một POST" → `refresh.cross-tab.test.ts`.
+ *    Ở đó dùng HAI module context nên chứng minh được khoá liên-tab thật, chứ
+ *    không chỉ chứng minh `inflight` nội module (bản cũ gọi hai lần trong cùng
+ *    module nên xanh kể cả khi khoá liên-tab hỏng hoàn toàn).
+ *  - cooldown sau `429 RATE_LIMITED` → `lock.contract.test.ts` (tôn trọng
+ *    `retryAt`) và `refresh.outcome-matrix.test.ts` (ghi đủ vào nhật ký). Biến
+ *    `blockedUntil` cục bộ đã bỏ hẳn: cooldown nay nằm trong nhật ký dùng
+ *    chung, một nguồn duy nhất.
+ *  - phân loại lỗi: predicate cũ đã thay bằng `shouldClearAuthCookies`,
+ *    phủ ở `refresh.brand.test.ts` và `refresh.outcome-matrix.test.ts`.
+ *    ⚠️ Contract đã ĐỔI có chủ đích: `403` không còn là bằng chứng phiên chết
+ *    (nay là `nonterminal-stop`, GIỮ cookie) — xem `fail-preserve` trong
+ *    `refresh.ts`.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 
-vi.mock("axios", () => {
-  const post = vi.fn();
-  return { default: { post }, post };
-});
+import { markSessionKeptAlive, isSessionKeptAliveError } from "./refresh";
 
-import axios from "axios";
-import { refreshAccessToken } from "./refresh";
+describe("cờ session-kept-alive", () => {
+  it("đánh dấu rồi thì nhận ra được", () => {
+    const error = markSessionKeptAlive(new Error("tạm thời"));
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockPost = axios.post as any;
-
-describe("refreshAccessToken — single-flight", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+    expect(isSessionKeptAliveError(error)).toBe(true);
   });
 
-  it("nhiều lời gọi đồng thời → chỉ 1 POST /api/auth/refresh", async () => {
-    mockPost.mockResolvedValue({ data: {} });
-
-    const callers = [
-      refreshAccessToken(),
-      refreshAccessToken(),
-      refreshAccessToken(),
-    ];
-    await Promise.all(callers);
-
-    expect(mockPost).toHaveBeenCalledTimes(1);
-    expect(mockPost).toHaveBeenCalledWith(
-      expect.stringContaining("/api/auth/refresh"),
-      {},
-      expect.objectContaining({ withCredentials: true }),
-    );
+  it("lỗi thường KHÔNG mang cờ", () => {
+    // `useAuth` dựa vào cờ này để bỏ qua một 401 mà interceptor đã cố ý giữ
+    // phiên. Nếu lỗi thường cũng mang cờ thì một 401 thật sẽ không còn đăng
+    // xuất được nữa.
+    expect(isSessionKeptAliveError(new Error("bình thường"))).toBe(false);
+    expect(isSessionKeptAliveError(null)).toBe(false);
+    expect(isSessionKeptAliveError(undefined)).toBe(false);
+    expect(isSessionKeptAliveError("chuỗi")).toBe(false);
   });
 
-  it("fail → mọi caller reject + mutex reset (lần sau phát POST mới)", async () => {
-    mockPost.mockRejectedValueOnce(new Error("boom"));
+  it("trả lại CHÍNH object đã truyền vào, không sao chép", () => {
+    // Interceptor đánh dấu rồi `Promise.reject` chính nó. Sao chép sẽ làm mất
+    // các trường của `AxiosError` mà tầng trên còn đọc — nhất là `response`,
+    // thứ mà predicate retry của React Query dựa vào.
+    const error = new Error("gốc");
 
-    const callers = [refreshAccessToken(), refreshAccessToken()];
-    await expect(Promise.all(callers)).rejects.toThrow("boom");
-
-    // Mutex đã reset → lời gọi mới tạo POST mới (không bị kẹt isRefreshing).
-    mockPost.mockResolvedValueOnce({ data: {} });
-    await refreshAccessToken();
-    expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(markSessionKeptAlive(error)).toBe(error);
   });
 });

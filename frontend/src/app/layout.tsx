@@ -2,6 +2,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Plus_Jakarta_Sans } from "next/font/google";
 import { Providers } from "./providers"; // Import the Providers component
+import { SessionRefreshMarkerCleanup } from "@/components/layouts/SessionRefreshMarkerCleanup";
 import "../styles/globals.css"; // Ensure global styles are imported
 
 const inter = Inter({
@@ -54,7 +55,12 @@ export default function RootLayout({
       </head>
       <body className={`${inter.variable} ${plusJakarta.variable} font-sans antialiased`}>
         {/* Wrap the children with Providers */}
-        <Providers>{children}</Providers>
+        <Providers>
+          {/* Gỡ marker `_sr` của vòng cứu phiên. Ở root layout để phủ CẢ những
+              route được bảo vệ nằm ngoài nhóm `(dashboard)` — `/403`, `/test`. */}
+          <SessionRefreshMarkerCleanup />
+          {children}
+        </Providers>
       </body>
     </html>
   );
