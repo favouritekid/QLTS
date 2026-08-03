@@ -77,6 +77,13 @@ vi.mock("@/hooks/useOrganization", () => ({
   useOrganizationUnits: () => ({ data: undefined }),
   flattenOrganizationTree: () => [],
 }))
+// Không mock hook này thì component gọi thật /api/admission-config/years →
+// MSW cảnh báo request ngoài phạm vi + AggregateError bẩn stderr, và test hết
+// deterministic (phụ thuộc handler mặc định).
+vi.mock("@/hooks/finance/useInvoiceFilterOptions", () => ({
+  useInvoiceAcademicYears: () => ({ data: [] }),
+  INVOICE_SEMESTER_OPTIONS: [1, 2, 3, 4, 5, 6, 7, 8] as const,
+}))
 
 // Tab "Chờ duyệt" render PendingPaymentsTab (dùng useRouter + hàng đợi riêng).
 vi.mock("next/navigation", () => ({

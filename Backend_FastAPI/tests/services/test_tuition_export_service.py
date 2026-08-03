@@ -314,7 +314,7 @@ class TestFileShape:
         content, media, filename = await _export(
             db, fmt="xlsx", applied_filters={"Năm học": 2026},
         )
-        assert filename.startswith("danh_sach_hoc_phi_")
+        assert filename.startswith("danh_sach_khoan_phi_")
         assert filename.endswith(".xlsx")
         assert "spreadsheetml" in media
 
@@ -336,3 +336,94 @@ class TestFileShape:
         )
         content, _, _ = await _export(db)
         assert _csv_rows(content)[0] == tes.COLUMNS
+
+
+class TestMixedFeeTypes:
+    """File có thể trộn nhiều loại phí — nhãn và cảnh báo phải nói đúng.
+
+    Bộ lọc workspace KHÔNG mặc định lọc loại phí (đúng nguyên tắc "xuất đúng
+    cái đang xem"), nên file thường có cả học phí lẫn lệ phí xét tuyển. Rủi ro:
+    kế toán bôi đen cột tiền mà quên lọc → cộng trộn hai loại.
+    """
+
+    async def _seed_two_fee_types(self, db, deps):
+        profile, _fee = await _seed_fee(
+            db, deps,
+            invoices=[(1, "9000000", "partial", "2000000")],
+            final_amount="9000000", paid_amount="2000000",
+        )
+        # Thêm khoản lệ phí xét tuyển cho CÙNG hồ sơ.
+        app_fee = Fee(
+            admission_profile_id=profile.id,
+            fee_type="application",
+            academic_year=2026,
+            semester_no=None,
+            base_amount=Decimal("70000"),
+            final_amount=Decimal("70000"),
+            paid_amount=Decimal("70000"),
+            status="paid",
+        )
+        db.add(app_fee)
+        await db.flush()
+        db.add(
+            Invoice(
+                fee_id=app_fee.id,
+                invoice_number=f"APP-{profile.id}",
+                installment_no=1,
+                amount=Decimal("70000"),
+                paid_amount=Decimal("70000"),
+                penalty_amount=Decimal("0"),
+                status="paid",
+                due_date=date(2026, 9, 5),
+            )
+        )
+        await db.flush()
+
+    async def test_csv_header_is_fee_type_neutral(self, db, seeded_dependencies):
+        """[N] Tiêu đề CSV KHÔNG được gọi mọi khoản là "học phí".
+
+        CSV không có sheet phụ nên nhãn trung tính là lớp bảo vệ duy nhất —
+        đây là lý do hai cột đổi thành "Giá trị khoản phí" / "Tổng đã đóng".
+        """
+        await self._seed_two_fee_types(db, seeded_dependencies)
+        content, _, filename = await _export(db)
+        header = _csv_rows(content)[0]
+        assert "Giá trị khoản phí" in header
+        assert "Tổng đã đóng" in header
+        assert "Học phí ngành học" not in header
+        assert "Tổng học phí đã đóng" not in header
+        assert filename.startswith("danh_sach_khoan_phi_")
+
+    async def test_xlsx_warns_when_multiple_fee_types(
+        self, db, seeded_dependencies
+    ):
+        """[N] Trộn loại phí → sheet phụ phải có cảnh báo động, liệt kê loại."""
+        await self._seed_two_fee_types(db, seeded_dependencies)
+        content, _, _ = await _export(db, fmt="xlsx")
+        wb = load_workbook(io.BytesIO(content))
+        meta = "\n".join(
+            str(c.value or "")
+            for row in wb[tes.SHEET_META].iter_rows()
+            for c in row
+        )
+        assert "NHIỀU LOẠI PHÍ" in meta
+        assert "Học phí" in meta
+        assert "Lệ phí xét tuyển" in meta
+
+    async def test_xlsx_no_warning_for_single_fee_type(
+        self, db, seeded_dependencies
+    ):
+        """Chỉ một loại phí → KHÔNG cảnh báo (tránh nhiễu, cảnh báo thừa sẽ bị bỏ qua)."""
+        await _seed_fee(
+            db, seeded_dependencies,
+            invoices=[(1, "9000000", "partial", "2000000")],
+            final_amount="9000000", paid_amount="2000000",
+        )
+        content, _, _ = await _export(db, fmt="xlsx")
+        wb = load_workbook(io.BytesIO(content))
+        meta = "\n".join(
+            str(c.value or "")
+            for row in wb[tes.SHEET_META].iter_rows()
+            for c in row
+        )
+        assert "NHIỀU LOẠI PHÍ" not in meta

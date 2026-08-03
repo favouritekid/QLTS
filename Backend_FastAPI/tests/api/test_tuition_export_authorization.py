@@ -95,7 +95,7 @@ class TestExportRouteShape:
         r = await client.get(EXPORT_URL, headers=admin_token_headers)
         assert r.status_code == 200
         assert "spreadsheetml" in r.headers["content-type"]
-        assert "danh_sach_hoc_phi_" in r.headers["content-disposition"]
+        assert "danh_sach_khoan_phi_" in r.headers["content-disposition"]
 
     async def test_csv_format_has_bom(self, client, admin_token_headers):
         r = await client.get(

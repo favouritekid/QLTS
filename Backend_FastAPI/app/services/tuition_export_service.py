@@ -44,7 +44,7 @@ VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 # nuốt hết bộ nhớ, không phải chính sách nghiệp vụ.
 MAX_EXPORT_ROWS = 10_000
 
-SHEET_DATA = "Danh sach hoc phi"
+SHEET_DATA = "Danh sach khoan phi"
 # SHEET_META tái xuất từ export_builder (một nguồn tên sheet phụ).
 
 COLUMNS: List[str] = [
@@ -59,8 +59,8 @@ COLUMNS: List[str] = [
     "Năm học",                  # 8
     "Học kỳ",                   # 9
     "Trạng thái khoản phí",     # 10
-    "Học phí ngành học",        # 11
-    "Tổng học phí đã đóng",     # 12
+    "Giá trị khoản phí",        # 11
+    "Tổng đã đóng",             # 12
     "Đã miễn giảm",             # 13
     "Số tiền còn lại",          # 14
     "Đơn vị",                   # 15
@@ -75,6 +75,9 @@ _FORCE_TEXT_INDEXES = {0, 4, 8}
 
 # Ô tiền — ghi kiểu số + number_format nghìn.
 _MONEY_INDEXES = {11, 12, 13, 14}
+
+# Cột "Loại phí" — dùng để phát hiện file trộn nhiều loại.
+_FEE_TYPE_COL = 7
 
 _FEE_TYPE_LABELS = {
     "tuition": "Học phí",
@@ -194,6 +197,22 @@ async def build_tuition_export(
     fees = await fee_repo.get_many_for_export(fee_ids)
     rows = [_row_for(fee) for fee in fees]
 
+    # Bộ lọc workspace không mặc định lọc loại phí, nên file có thể trộn học
+    # phí với lệ phí xét tuyển / bảo hiểm… Cột "Loại phí" phân biệt được, nhưng
+    # ai bôi đen cột tiền mà quên lọc thì cộng nhầm — nên nói thẳng ra.
+    fee_type_labels = sorted({row[_FEE_TYPE_COL] for row in rows if row[_FEE_TYPE_COL]})
+    notes = list(_EXPORT_NOTES)
+    if len(fee_type_labels) > 1:
+        notes.insert(
+            0,
+            (
+                "⚠ File gồm NHIỀU LOẠI PHÍ",
+                "Kết quả có " + ", ".join(fee_type_labels) + ". Cột tiền là giá "
+                "trị của TỪNG khoản phí theo loại của nó — cộng cả cột sẽ trộn "
+                "các loại với nhau. Lọc theo cột 'Loại phí' trước khi cộng.",
+            ),
+        )
+
     # Ghi cả người xuất: đây là tệp mang dữ liệu cá nhân (họ tên + CCCD của
     # hàng trăm thí sinh), nên tối thiểu phải truy được AI đã tải và tải bao
     # nhiêu dòng. (Chưa dùng audit_service — xem ghi chú ở mô tả PR.)
@@ -212,10 +231,10 @@ async def build_tuition_export(
         text_indexes=_TEXT_COLUMN_INDEXES,
         force_text_indexes=_FORCE_TEXT_INDEXES,
         fmt=fmt,
-        filename_stem="danh_sach_hoc_phi",
+        filename_stem="danh_sach_khoan_phi",
         sheet_title=SHEET_DATA,
         exporter_name=exporter_name,
         applied_filters=applied_filters or {},
         column_widths=_COLUMN_WIDTHS,
-        notes=_EXPORT_NOTES,
+        notes=notes,
     )
