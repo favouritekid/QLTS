@@ -1326,8 +1326,15 @@ async def download_import_template(
     - `format`: "csv" or "xlsx" (default: csv)
 
     **Template Columns:**
-    - Required: full_name, email, phone, source, unit_id
-    - Optional: offering_id, education_level, gpa, location
+    - Required: full_name, phone, source, unit_id
+      (unit_id KHÔNG bắt buộc khi nhập qua `POST /api/leads/import` — cột đó bị
+      bỏ qua và mọi lead vào unit của officer đang nhập)
+    - Optional: email, offering_id, education_level, gpa, location
+
+    **Về cột `email`:** để trống ô, hoặc bỏ hẳn cột, đều được. 2425/2535 lead trên
+    production không có email nên đây là chuyện bình thường, không phải lỗi dữ
+    liệu. Nhưng cột email PHẢI mang đúng tên `email`: một tên khác ("Email
+    Address") sẽ bị từ chối chứ không nhập âm thầm với email rỗng.
 
     **Usage:**
     1. Download template
@@ -1356,9 +1363,13 @@ async def download_import_template(
         writer = csv.writer(output)
 
         # Add header comment
+        # Các dòng "#" này bị `lead_service._bo_chu_thich_dau_tep` bỏ đi lúc nhập
+        # lại — trước khi có hàm đó, chính template này không nhập lại được
+        # (`pd.read_csv` lấy dòng đầu làm tiêu đề rồi nghẹn ở dòng có dấu phẩy).
         output.write("# Lead Import Template\n")
-        output.write("# Required columns: full_name, email, phone, source, unit_id\n")
-        output.write("# Optional columns: offering_id, education_level, gpa, location\n")
+        output.write("# Required columns: full_name, phone, source, unit_id\n")
+        output.write("# Optional columns: email, offering_id, education_level, gpa, location\n")
+        output.write("# Email: de trong o hoac bo han cot deu duoc, nhung cot email phai dung ten 'email'\n")
         output.write("# Education levels: high_school, bachelor, master, phd\n")
         output.write("# Sources: website, referral, social_media, walk_in, email, phone, event, other\n")
         output.write("#\n")
@@ -1393,7 +1404,7 @@ async def download_import_template(
 
         column_descriptions = [
             "Full name (required)",
-            "Email address (required, unique per unit)",
+            "Email address (optional, unique per unit): de trong neu khong co. Cot phai dung ten 'email'",
             "Phone number (required)",
             "Lead source (required): website, referral, social_media, walk_in, email, phone, event, other",
             "Organization Unit ID (required): Get from /api/organization-units",
@@ -1629,10 +1640,15 @@ async def officer_import_leads(
     - Leads được tự động gán cho officer đang import
     - Officer chỉ có thể import vào unit của mình
 
-    **Required columns:** full_name, email, phone, source
-    **Optional columns:** phone2, offering_id, education_level, gpa, location
+    **Required columns:** full_name, phone, source
+    **Optional columns:** email, phone2, offering_id, education_level, gpa, location
 
     **Note:** unit_id sẽ được tự động set thành unit của officer.
+
+    **Về cột `email`:** ô để trống, hoặc bỏ hẳn cột, đều hợp lệ — 2425/2535 lead
+    trên production không có email. Nhưng cột email phải mang đúng tên `email`:
+    một tên khác ("Email Address") sẽ bị từ chối bằng 400 chứ không nhập âm thầm
+    với email rỗng, vì mất dữ liệu im lặng khó phát hiện hơn nhiều so với một lỗi.
     """
     log.info(
         "Received officer lead import request",
@@ -1656,10 +1672,11 @@ async def officer_import_leads(
             "Failed to read uploaded file",
             filename=file.filename,
             error=str(e),
+            exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to read uploaded file. Please check the file format and try again."
+            detail=lead_service.LOI_KHONG_DOC_DUOC_TEP_TAI_LEN,
         )
 
     # Call service with auto-assign parameters

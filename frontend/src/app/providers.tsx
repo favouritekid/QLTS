@@ -86,6 +86,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
           // Làm mới, Tải lại, Xem Lead, Xem chi tiết) không bấm được khi có modal.
           classNames: {
             actionButton: "pointer-events-auto",
+            // sonner không đặt quy tắc `white-space` nào (đã kiểm
+            // `node_modules/sonner/dist/styles.css`), nên mặc định của trình
+            // duyệt là `normal` và mọi `\n` trong `description` bị gộp thành dấu
+            // cách. Chỗ nào ghi nhiều dòng — như kết quả nhập lead liệt kê từng
+            // dòng hỏng — sẽ dồn thành một đoạn văn chạy dài trong hộp rộng
+            // 400px. Nơi khác trong mã đã dùng `whitespace-pre-line` đúng với ý
+            // này (`AdaptiveAddressSelect.tsx`, `SmsBuildPreflightSection.tsx`).
+            description: "whitespace-pre-line",
           },
         }}
       />

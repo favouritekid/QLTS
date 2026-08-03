@@ -4,6 +4,8 @@ from datetime import (
 )
 from typing import Callable, List, Optional, Tuple
 
+from pydantic import ValidationError as PydanticValidationError
+
 import math
 import structlog
 from sqlalchemy import case, func, or_, select  # ✅ SỬA LỖI: Thêm 'desc' vào import và xóa comment
@@ -35,7 +37,6 @@ from .assignment_reason import build_assignment_reason
 from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
 from ..repositories.collaborator_repository import CollaboratorRepository
 from .lead_profile_sync import sync_profile_from_lead, detect_changed_personal_fields, SYNCABLE_FIELDS
-from ..utils.csv_helpers import sanitize_csv_cell
 from ..core.events import SystemEvents
 from .notification_dispatcher import dispatch
 from .notification_payloads import EventPayload
@@ -4175,6 +4176,108 @@ async def revert_last_status(
 # PHASE 1 - Task 1.8: LEAD IMPORT (EXTRACTED FROM ROUTER)
 # =============================================================================
 
+def _cell_or_none(value) -> Optional[str]:
+    """Ô của pandas → chuỗi đã strip, hoặc None khi ô TRỐNG.
+
+    🔴 ``str(value)`` trên một ô trống KHÔNG cho chuỗi rỗng: pandas đọc ô trống
+    thành ``NaN`` (float), và ``str(NaN)`` cho ra **chuỗi "nan"** — bốn ký tự
+    hợp lệ hoàn toàn. Nên phép ``... .strip() or None`` quen thuộc không cứu
+    được: ``"nan"`` là giá trị thật, không phải chuỗi rỗng.
+
+    Hậu quả đã đo trên chính hàm này: ô email trống làm pydantic từ chối cả
+    dòng (*"value is not a valid email address: 'nan'"*) dù model khai
+    ``email`` nullable và 95,7% lead trên production không có email; còn
+    ``education_level``/``location`` thì im lặng ghi chuỗi "nan" vào cơ sở dữ
+    liệu vì chúng không qua validator nào.
+
+    ``phone``/``phone2``/``gpa``/``unit_id`` ngay cạnh vốn đã dùng
+    ``pd.notna`` — helper này chỉ đưa những trường còn lại về cùng một lối.
+
+    pandas import cục bộ trong ``import_leads_from_file_content`` (giữ nguyên để
+    không kéo pandas vào mọi lần nạp module), nên import lại ở đây.
+    """
+    import pandas as pd
+
+    if not pd.notna(value):
+        return None
+    s = str(value).strip()
+    return s or None
+
+
+# Thông báo cho ca KHÔNG đọc nổi luồng tải lên ở tầng HTTP (``UploadFile.read()``
+# ném) — khác với ca đọc được luồng nhưng pandas không phân tích nổi (đã bịt ở
+# nhánh ``except Exception`` trong ``import_leads_from_file_content``).
+#
+# 🔴 Là hằng số vì có HAI endpoint nhập lead: officer ``POST /api/leads/import``
+# (``routers/leads.py``) và admin ``POST /api/admin/users/leads/import``
+# (``routers/admin/users.py``). Chúng đã từng trôi khác nhau — bản admin ghép
+# ``{e}`` trong khi bản officer dùng câu chung — và ngoại lệ của ``read()`` có thể
+# mang đường dẫn tệp tạm hoặc chi tiết I/O nội bộ. Viết chuỗi lần thứ hai là dựng
+# lại đúng điều kiện đã sinh ra lỗ hổng.
+LOI_KHONG_DOC_DUOC_TEP_TAI_LEN = (
+    "Failed to read uploaded file. Please check the file format and try again."
+)
+
+
+class _LoiTepNhapLead(ValueError):
+    """Lỗi ở mức TỆP, do chính hàm này CỐ Ý phát ra: tệp rỗng, quá số dòng cho
+    phép, thiếu cột bắt buộc…
+
+    🔴 Cùng lý do với `_LoiDongNhapLead`, và ở đây cái bẫy còn kín hơn:
+    ``pandas.errors.ParserError`` **kế thừa ``ValueError``**. Nên một mệnh đề
+    ``except ValueError: raise`` tưởng là "chuyển tiếp lỗi kiểm tra của mình" lại
+    chuyển thẳng cả thông điệp của pandas ra ngoài — thứ mang một phần NỘI DUNG
+    tệp (``Expected 2 fields in line 3, saw 3``).
+    """
+
+
+class _LoiDongNhapLead(ValueError):
+    """Lỗi dữ liệu của MỘT dòng, do tầng validate CỐ Ý phát ra.
+
+    🔴 Tồn tại chỉ để phân biệt "lỗi ta chủ động tạo, thông điệp viết cho người
+    nhập đọc" với "ngoại lệ lọt vào từ nơi khác". Lớp ngoại lệ dựng sẵn không làm
+    được việc đó: ``calculate_lead_score()`` trong cùng khối ``try`` có truy vấn cơ
+    sở dữ liệu, và nó cũng có thể ném ``ValueError``/``TypeError`` mang theo câu
+    SQL kèm tham số. Bắt theo lớp dựng sẵn rồi trả nguyên văn là để lại đúng đường
+    rò, chỉ đổi tên lớp.
+    """
+
+
+def _bo_chu_thich_dau_tep(noi_dung: bytes) -> Tuple[bytes, int]:
+    """Bỏ các dòng bắt đầu bằng ``#`` ở ĐẦU tệp CSV.
+
+    Trả về ``(nội_dung_đã_bỏ, số_dòng_đã_bỏ)``. **Số dòng là phần bắt buộc**, không
+    phải tiện thể: sau khi cắt phần đầu, chỉ số dòng của pandas lùi đi đúng bấy
+    nhiêu, nên nếu chỗ gọi không cộng lại thì mọi thông báo lỗi đều chỉ sai dòng.
+    Template hệ thống có 7 dòng ``#``, tức dòng dữ liệu đầu tiên nằm ở dòng 9 của
+    tệp mà người dùng mở ra, trong khi thông báo nói "Dòng 2".
+
+    Template tải về từ ``GET /api/leads/import/template`` mở đầu bằng 6 dòng chú
+    thích ``#`` rồi mới tới hàng tiêu đề. ``pd.read_csv`` không biết điều đó: nó
+    lấy dòng ``# Lead Import Template`` làm tiêu đề rồi nghẹn ở dòng chú thích có
+    dấu phẩy — ``ParserError: Expected 5 fields in line 5, saw 8`` — và người dùng
+    nhận về một thông báo trông như tệp hỏng. Tức là template chính thức của hệ
+    thống không nhập lại được, đúng cửa vào của việc đang cần làm.
+
+    🔴 KHÔNG dùng tham số ``comment="#"`` của pandas: nó cắt từ dấu ``#`` ở BẤT KỲ
+    đâu trong dòng, nên một địa chỉ như "Số 5 # ngõ 3" sẽ mất phần đuôi mà không
+    báo gì. Ở đây chỉ bỏ những dòng ĐẦU TỆP, dữ liệu bên dưới không bị đụng tới.
+
+    🔴 CHỈ ĐƯỢC GỌI KHI ``pd.read_csv`` ĐÃ THẤT BẠI trên nội dung gốc — xem chỗ
+    gọi. Không có điều kiện đó thì chính hàm này là một lỗi: bản xuất Excel tiếng
+    Việt rất hay có cột số thứ tự tên ``#`` hoặc ``#STT`` ở đầu, và khi ấy HÀNG
+    TIÊU ĐỀ bắt đầu bằng ``#``. Đo được: ``#,full_name,phone,source,unit_id`` +
+    1 dòng dữ liệu → sau khi lọc, pandas lấy dòng dữ liệu làm tiêu đề và còn 0
+    dòng; trước đó nó đọc đúng 5 cột / 1 dòng. Gọi có điều kiện thì mọi tệp vốn
+    đọc được đều không bị đụng tới, nên bản vá này không có mặt phơi nhiễm nào.
+    """
+    cac_dong = noi_dung.split(b"\n")
+    i = 0
+    while i < len(cac_dong) and cac_dong[i].lstrip().startswith(b"#"):
+        i += 1
+    return (b"\n".join(cac_dong[i:]), i) if i else (noi_dung, 0)
+
+
 async def import_leads_from_file_content(
     file_content: bytes,
     filename: str,
@@ -4190,8 +4293,12 @@ async def import_leads_from_file_content(
 
     Business Rules:
     - Supports CSV (.csv) and Excel (.xlsx) files
-    - Required columns: full_name, email, phone, source, unit_id
-    - Optional columns: offering_id
+    - Required columns: full_name, phone, source, unit_id
+      (unit_id thôi bắt buộc khi caller truyền `default_unit_id`)
+    - Optional columns: email, phone2, offering_id, education_level, gpa, location
+    - Cột `email` vắng mặt hoặc ô trống đều hợp lệ; nhưng nếu file có một cột
+      CHỨA địa chỉ email mà không mang tên `email` thì cả file bị từ chối
+    - Dòng chú thích `#` ở đầu tệp CSV được bỏ qua (template tải về có 6 dòng)
     - Email must be unique (checks both DB and current file)
     - Leads are created with default initial status
     - Batch insertion with error collection (doesn't fail fast)
@@ -4261,9 +4368,14 @@ async def import_leads_from_file_content(
         )
 
     # --- 2. Read file content into DataFrame ---
+    # Số dòng chú thích `#` đã bị cắt khỏi đầu tệp. Chỉ số dòng của pandas lùi đi
+    # đúng bấy nhiêu, nên mọi `row_number` báo cho người dùng phải cộng lại — nếu
+    # không, tệp tải từ chính hệ thống (7 dòng `#`) sẽ báo "Dòng 2" cho thứ nằm ở
+    # dòng 9 trong trình soạn thảo của họ.
+    so_dong_chu_thich = 0
     try:
         if not file_content:
-            raise ValueError("Empty file uploaded.")
+            raise _LoiTepNhapLead("Tệp rỗng — không có nội dung để nhập.")
 
         # W9-N.1.2 fix 2026-05-16: force `dtype=str` on read so pandas
         # doesn't infer phone column as int64 → strip leading 0 →
@@ -4272,7 +4384,21 @@ async def import_leads_from_file_content(
         # Forcing string dtype keeps every column as-typed; Pydantic
         # downstream coerces what needs coercing.
         if file_extension == "csv":
-            df = pd.read_csv(io.BytesIO(file_content), dtype=str)
+            try:
+                df = pd.read_csv(io.BytesIO(file_content), dtype=str)
+            except Exception:
+                # Chỉ tới đây khi tệp KHÔNG đọc được như hiện trạng — ca điển hình
+                # là template hệ thống phát ra, mở đầu bằng các dòng chú thích "#".
+                #
+                # Thử-rồi-mới-lọc chứ không lọc thẳng: hàng tiêu đề hoàn toàn có
+                # thể bắt đầu bằng "#" (cột số thứ tự "#"/"#STT" ở bản xuất Excel),
+                # và lọc thẳng thì tệp đó mất hàng tiêu đề — nó vốn đọc được, nay
+                # thành 400. Đặt sau một lần đọc thất bại thì mọi tệp đang chạy
+                # được đều không đi qua nhánh này.
+                khong_chu_thich, so_dong_chu_thich = _bo_chu_thich_dau_tep(file_content)
+                if khong_chu_thich == file_content:
+                    raise  # không có dòng chú thích nào — lỗi là lỗi thật
+                df = pd.read_csv(io.BytesIO(khong_chu_thich), dtype=str)
         else:  # xlsx
             df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl", dtype=str)
 
@@ -4281,12 +4407,15 @@ async def import_leads_from_file_content(
         # --- 2b. Validate row count ---
         MAX_IMPORT_ROWS = 10000
         if len(df) > MAX_IMPORT_ROWS:
-            raise ValueError(
-                f"File chứa {len(df)} dòng, vượt quá giới hạn {MAX_IMPORT_ROWS} dòng/lần import."
+            raise _LoiTepNhapLead(
+                f"Tệp chứa {len(df)} dòng, vượt quá giới hạn {MAX_IMPORT_ROWS} dòng mỗi lần nhập."
             )
 
-    except ValueError as e:
-        raise e  # Re-raise validation errors
+    except _LoiTepNhapLead:
+        # CHỈ lỗi do chính hàm này phát ra mới đi thẳng ra ngoài. Bắt `ValueError`
+        # trần ở đây là để lọt `pandas.errors.ParserError` — nó KẾ THỪA
+        # `ValueError`, nên nó trông y hệt một lỗi kiểm tra của ta.
+        raise
     except Exception as e:
         log.error(
             "Failed to read or parse file content",
@@ -4294,8 +4423,12 @@ async def import_leads_from_file_content(
             error=str(e),
             exc_info=True,
         )
+        # KHÔNG ghép `{e}`: đây là thông điệp của pandas/openpyxl, tiếng Anh và
+        # thường kèm một phần NỘI DUNG tệp (ví dụ `Expected 5 fields in line 5,
+        # saw 8`). Chi tiết đã vào log ngay trên với `exc_info=True`.
         raise ValueError(
-            f"Could not read or parse the file. Ensure it is a valid {file_extension} file. Error: {e}"
+            f"Không đọc được tệp. Hãy kiểm tra đây có đúng là tệp {file_extension} "
+            f"hợp lệ không (đúng định dạng, không hỏng, không bị khoá)."
         )
 
     # --- 3. Validate columns and process data ---
@@ -4305,14 +4438,47 @@ async def import_leads_from_file_content(
     # trong CSV bị ignore. Docstring router nói "auto-set từ officer"
     # → contract đúng. Trước fix, officer CSV thiếu unit_id column →
     # 400 "Missing required columns: unit_id" → user khó khăn tạo CSV.
-    base_required = {"full_name", "email", "phone", "source"}
+    # `email` KHÔNG nằm trong nhóm bắt buộc: cột có thể vắng mặt hoàn toàn.
+    # `Lead.email` nullable, `LeadCreate.email` Optional, và 2425/2535 lead trên
+    # production không có email — bắt buộc phải CÓ CỘT email thì chính nhóm đông
+    # nhất lại là nhóm không lập nổi file. Dòng nào có email vẫn được validate
+    # bình thường; vắng cột thì mọi dòng hiểu là không có email.
+    base_required = {"full_name", "phone", "source"}
     if default_unit_id is None:
         required_columns = base_required | {"unit_id"}
     else:
         required_columns = base_required
 
-    # Normalize column names (lowercase, strip, replace spaces)
-    df.columns = df.columns.str.lower().str.strip().str.replace(" ", "_")
+    # Chuẩn hoá tên cột.
+    #
+    # 🔴 Phải ép ``str(c)`` TRƯỚC: ``df.columns.str.*`` chỉ chạy trên tên kiểu
+    # chuỗi, header là ô số hoặc ô ngày thì cho ra ``NaN``. ``dtype=str`` lúc đọc
+    # file áp cho DỮ LIỆU, không áp cho hàng tiêu đề — nên một .xlsx có cột tên
+    # "2026" là đủ. Khi đó khối kiểm cột trùng ngay dưới ném ``TypeError``
+    # (``', '.join({nan})``, hoặc ``sorted`` so sánh float với str) NGOÀI mọi
+    # try/except → HTTP 500 trống trơn, đúng cái mà khối đó sinh ra để chặn.
+    # ``payment_import_service.py`` ép ``str(c)`` trước cùng khối này vì lẽ đó;
+    # bản sao ở đây từng bỏ sót dòng ép kiểu.
+    df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
+
+    # Chuẩn hoá có thể làm HAI cột khác nhau thành TRÙNG tên: "Full Name" và
+    # "full_name" cùng ra "full_name". Khi đó ``df[cột]`` trả DataFrame chứ không
+    # phải Series, và ``row.to_dict()`` âm thầm bỏ mất một trong hai — dữ liệu
+    # người dùng biến mất không báo gì. Tệ hơn, ``df['email'].dropna()`` ở đoạn
+    # gom email phía dưới sẽ ném ``AttributeError`` NGOÀI mọi try/except của vòng
+    # lặp dòng → HTTP 500 thay vì một thông báo đọc được.
+    #
+    # Từ chối thẳng thay vì đoán xem cột nào là thật — file có cột trùng là file
+    # nhập nhằng, người lập phải sửa. ``payment_import_service`` đã chặn y hệt.
+    _cols = list(df.columns)
+    _dups = sorted({c for c in _cols if _cols.count(c) > 1})
+    if _dups:
+        log.warning("Import failed: Duplicate columns after normalize", dups=_dups)
+        raise ValueError(
+            f"File có cột trùng tên sau khi chuẩn hoá: {', '.join(_dups)}. "
+            "Ví dụ 'Full Name' và 'full_name' cùng thành 'full_name' — hãy bỏ bớt "
+            "một cột rồi tải lại."
+        )
 
     # Check required columns
     missing_cols = required_columns - set(df.columns)
@@ -4324,7 +4490,35 @@ async def import_leads_from_file_content(
             f"File is missing required columns: {', '.join(missing_cols)}"
         )
 
+    # `email` không còn bắt buộc (xem chú thích ở `base_required`) — nhưng vì thế
+    # một header GÕ SAI cũng không còn bị chặn: "Email Address" chuẩn hoá thành
+    # `email_address`, cột `email` vắng mặt, và CẢ FILE nhập trót lọt với email
+    # NULL — bỏ qua luôn phép kiểm trùng email, `errors` rỗng, giao diện báo xanh
+    # 100%. Trước khi nới điều kiện thì file đó bị 400 và người dùng sửa header
+    # trong 5 giây; mất dữ liệu im lặng của 211 dòng thì không ai phát hiện ra.
+    #
+    # Chỉ chặn khi CHẮC CHẮN, để không cản file có cột kiểu `mail_sent_at`: tên
+    # cột phải chứa "mail" VÀ dữ liệu trong cột phải có ký tự "@".
+    if "email" not in df.columns:
+        for _cot in df.columns:
+            if "mail" not in _cot:
+                continue
+            _mau = df[_cot].dropna().astype(str)
+            if not any("@" in v for v in _mau):
+                continue
+            log.warning("Import failed: email-like column not named 'email'", column=_cot)
+            raise ValueError(
+                f"Cột '{_cot}' chứa địa chỉ email nhưng không mang tên 'email', "
+                "nên toàn bộ dòng sẽ được nhập THIẾU email và phép kiểm trùng email "
+                f"bị bỏ qua. Hãy đổi tên cột '{_cot}' thành 'email' rồi tải lại. "
+                "(Nếu file thật sự không có email thì bỏ hẳn cột này đi.)"
+            )
+
     leads_to_insert = []
+    # Số dòng trong file của từng phần tử ``leads_to_insert``, song song 1-1.
+    # Cần cho lúc một LÔ bị lùi: nếu không có nó thì 100 dòng mất trắng chỉ được
+    # báo bằng một dòng "Lô 2 lỗi", người nhập không biết phải xem lại dòng nào.
+    row_numbers_to_insert: List[int] = []
     errors: List[schemas.LeadImportError] = []
     processed_row_count = 0
 
@@ -4388,15 +4582,27 @@ async def import_leads_from_file_content(
     # --- 4. Process each row ---
     for index, row in df.iterrows():
         processed_row_count += 1
-        row_number = index + 2  # Excel row number (header is row 1)
+        # +2: pandas đếm từ 0 và hàng tiêu đề là dòng 1.
+        # +`so_dong_chu_thich`: bù đúng phần đầu tệp đã bị cắt (xem mục 2).
+        row_number = index + 2 + so_dong_chu_thich
         row_data = row.to_dict()
         cleaned_data = {}
         validation_errors_for_row = []
 
         # Type conversion for required fields
         try:
-            cleaned_data["full_name"] = sanitize_csv_cell(str(row_data.get("full_name", "")).strip())
-            cleaned_data["email"] = str(row_data.get("email", "")).strip()
+            # Bắt buộc — nhưng ô trống phải thành "" để validator bắt được,
+            # chứ để lọt chuỗi "nan" thì nó thành một cái tên hợp lệ.
+            #
+            # KHÔNG sanitize-CSV ở đây: đó là việc của tầng XUẤT. Chèn dấu ' vào
+            # lúc nhập thì dữ liệu bẩn VĨNH VIỄN trong cơ sở dữ liệu — một người
+            # tên "-Trang" thành "'-Trang" trên mọi màn hình — mà vẫn không giải
+            # quyết được gì, vì đường xuất (`routers/leads.py`) đã sanitize sẵn.
+            # `payment_import_service` ghi rõ cùng quy ước này ở bước ingest.
+            cleaned_data["full_name"] = _cell_or_none(row_data.get("full_name")) or ""
+            # Ô trống ⇒ None. Model + LeadCreate đều khai email optional; ép
+            # thành chuỗi "nan" là tự dựng lên một ràng buộc không ai đặt ra.
+            cleaned_data["email"] = _cell_or_none(row_data.get("email"))
 
             # Special handling for 'phone': convert to string, strip Excel float ".0"
             phone_val = row_data.get("phone")
@@ -4420,10 +4626,10 @@ async def import_leads_from_file_content(
             else:
                 cleaned_data["phone2"] = None
 
-            cleaned_data["source"] = sanitize_csv_cell(str(row_data.get("source", "")).strip())
+            cleaned_data["source"] = _cell_or_none(row_data.get("source")) or ""
 
             # ✅ Extract optional fields for Scoring
-            cleaned_data["education_level"] = sanitize_csv_cell(str(row_data.get("education_level", "")).strip()) or None
+            cleaned_data["education_level"] = _cell_or_none(row_data.get("education_level"))
             
             gpa_val = row_data.get("gpa")
             if pd.notna(gpa_val):
@@ -4435,7 +4641,7 @@ async def import_leads_from_file_content(
             else:
                 cleaned_data["gpa"] = None
                 
-            cleaned_data["location"] = sanitize_csv_cell(str(row_data.get("location", "")).strip()) or None
+            cleaned_data["location"] = _cell_or_none(row_data.get("location"))
 
 
             # Convert 'unit_id' to int (or use default if provided)
@@ -4449,8 +4655,18 @@ async def import_leads_from_file_content(
                 else:
                     cleaned_data["unit_id"] = None
 
-        except (ValueError, TypeError, Exception) as e:
-            validation_errors_for_row.append(f"Type conversion error: {e}")
+        except (ValueError, TypeError):
+            # Chỉ ép kiểu số cho `unit_id` — hỏng thì là ô không phải số, và câu
+            # dưới đã nói đủ. KHÔNG ghép `{e}`: thông điệp gốc là tiếng Anh của
+            # Python (`invalid literal for int() with base 10: ...`), không giúp
+            # người nhập, mà lại kéo theo nguyên nội dung ô vào thông báo.
+            #
+            # Và KHÔNG bắt `Exception`: mệnh đề cũ `(ValueError, TypeError,
+            # Exception)` thực chất bắt TẤT CẢ — một lỗi hạ tầng ở đây sẽ bị dán
+            # nhãn "lỗi dữ liệu của dòng" rồi trả chi tiết ra ngoài.
+            validation_errors_for_row.append(
+                "Giá trị 'unit_id' không hợp lệ, cần là một số."
+            )
 
         # Type conversion for optional 'offering_id'
         offering_id_val = row_data.get("offering_id")
@@ -4468,7 +4684,7 @@ async def import_leads_from_file_content(
         try:
             # If there are type conversion errors, raise them
             if validation_errors_for_row:
-                raise ValueError(", ".join(validation_errors_for_row))
+                raise _LoiDongNhapLead(", ".join(validation_errors_for_row))
 
             lead_in = schemas.LeadCreate(**cleaned_data)
 
@@ -4478,7 +4694,7 @@ async def import_leads_from_file_content(
                 email_lower in existing_emails_in_db
                 or email_lower in emails_in_current_file
             ):
-                raise ValueError(
+                raise _LoiDongNhapLead(
                     f"Email '{lead_in.email}' đã tồn tại trong cơ sở dữ liệu hoặc file này."
                 )
 
@@ -4493,12 +4709,12 @@ async def import_leads_from_file_content(
 
             if phone_norm:
                 if phone_norm in existing_phones_in_db or phone_norm in phones_in_current_file:
-                    raise ValueError(f"SĐT '{phone_raw}' đã tồn tại trong hệ thống hoặc file này.")
+                    raise _LoiDongNhapLead(f"SĐT '{phone_raw}' đã tồn tại trong hệ thống hoặc file này.")
             if phone2_norm:
                 if phone2_norm in existing_phones_in_db or phone2_norm in phones_in_current_file:
-                    raise ValueError(f"SĐT phụ '{phone2_raw}' đã tồn tại trong hệ thống hoặc file này.")
+                    raise _LoiDongNhapLead(f"SĐT phụ '{phone2_raw}' đã tồn tại trong hệ thống hoặc file này.")
                 if phone2_norm == phone_norm:
-                    raise ValueError(f"SĐT phụ '{phone2_raw}' trùng với SĐT chính.")
+                    raise _LoiDongNhapLead(f"SĐT phụ '{phone2_raw}' trùng với SĐT chính.")
 
             # Register normalized phones for cross-row dedup
             if phone_norm:
@@ -4545,20 +4761,50 @@ async def import_leads_from_file_content(
 
             lead_dict["created_via"] = "import"
             leads_to_insert.append(lead_dict)
+            row_numbers_to_insert.append(row_number)  # giữ song song 1-1
 
-        except (ValueError, TypeError) as e:
+        except (_LoiDongNhapLead, PydanticValidationError) as e:
+            # ⚠️ CHỈ hai lớp này — cố ý KHÔNG bắt `ValueError`/`TypeError` trần.
+            #
+            # Chỉ hai nguồn được trả nguyên văn: `ValidationError` của Pydantic
+            # (từ `LeadCreate(**cleaned_data)`) và `_LoiDongNhapLead` mà chính các
+            # phép kiểm trùng email/SĐT ở trên phát ra. Cả hai đều là câu tiếng
+            # Việt viết cho người nhập, giúp họ sửa đúng ô.
+            #
+            # Bắt `ValueError` trần thì KHÔNG đủ hẹp: `calculate_lead_score()`
+            # trong cùng khối này có truy vấn cơ sở dữ liệu và cũng ném được
+            # `ValueError`/`TypeError` mang câu SQL kèm tham số. Phân loại theo lớp
+            # dựng sẵn là để lại đúng đường rò, chỉ đổi tên lớp ngoại lệ.
             errors.append(
                 schemas.LeadImportError(
                     row_number=row_number,
-                    error_message=f"Data validation failed: {e}",
+                    error_message=f"Dữ liệu không hợp lệ: {e}",
                     row_data=row_data,
                 )
             )
         except Exception as e:
+            # 🔴 Mọi thứ còn lại là lỗi HẠ TẦNG, không phải lỗi dữ liệu của người
+            # nhập. Đáng chú ý: `calculate_lead_score()` trong khối này có truy vấn
+            # cơ sở dữ liệu, nên một `OperationalError`/`DBAPIError` rơi xuống đây
+            # mang theo câu SQL kèm tham số — tức dữ liệu của người khác — và giao
+            # diện in thẳng `error_message` lên thông báo.
+            #
+            # Chi tiết đầy đủ đi vào log máy chủ (`exc_info=True`), đúng chỗ để
+            # chẩn đoán; người dùng nhận một câu nói rõ phải làm gì.
+            log.error(
+                "Unexpected error while processing import row",
+                row_number=row_number,
+                error_type=type(e).__name__,
+                exc_info=True,
+            )
             errors.append(
                 schemas.LeadImportError(
                     row_number=row_number,
-                    error_message=f"Unexpected error processing row: {e}",
+                    error_message=(
+                        "Dòng này gặp lỗi không xác định phía hệ thống và chưa được "
+                        "tạo. Vui lòng thử lại; nếu vẫn lỗi, báo quản trị viên kèm "
+                        "số dòng."
+                    ),
                     row_data=row_data,
                 )
             )
@@ -4571,7 +4817,8 @@ async def import_leads_from_file_content(
         try:
             for i in range(0, len(leads_to_insert), batch_size):
                 batch = leads_to_insert[i : i + batch_size]
-                
+                so_dong_cua_lo = row_numbers_to_insert[i : i + batch_size]
+
                 if not batch:
                     continue
 
@@ -4579,7 +4826,6 @@ async def import_leads_from_file_content(
                     async with db.begin_nested():  # Start nested transaction
                         # Insert batch and get IDs
                         batch_ids = await repo.bulk_insert_leads(batch)
-                        created_lead_ids.extend(batch_ids)
 
                         # ✅ PR3: Register phone identities for each lead in batch
                         for lead_dict, lead_id in zip(batch, batch_ids):
@@ -4591,14 +4837,34 @@ async def import_leads_from_file_content(
                 except IntegrityError as exc:
                     detail = str(exc.orig) if exc.orig else str(exc)
                     log.warning("Batch insert IntegrityError", batch_offset=i, detail=detail)
-                    errors.append(
+                    # Một dòng lỗi CHO MỖI DÒNG bị mất, không phải một dòng cho cả
+                    # lô: ``failed_imports`` và giao diện đều đọc theo dòng, nên gộp
+                    # 100 dòng thành 1 thông báo là nói với người nhập rằng chỉ có
+                    # 1 dòng hỏng — họ đi tìm 1 dòng trong khi 100 dòng biến mất.
+                    errors.extend(
                         schemas.LeadImportError(
-                            row_number=-1,
-                            error_message=f"Batch {i // batch_size + 1} bị trùng dữ liệu (email/phone): {detail[:200]}",
+                            row_number=so_dong,
+                            error_message=(
+                                "Dòng nằm trong lô bị huỷ do đụng dữ liệu đã có "
+                                "(email hoặc số điện thoại trùng). Kiểm tra lại email/SĐT "
+                                "của các dòng trong lô rồi nhập lại phần này."
+                            ),
                             row_data={},
                         )
+                        for so_dong in so_dong_cua_lo
                     )
                     continue
+
+                # 🔴 ``extend`` phải nằm NGOÀI ``async with``. Trong khối, mọi thứ
+                # đã ghi vẫn có thể bị lùi: ``register_phone_identities`` chỉ
+                # ``db.add(...)`` nên lần ghi thật xảy ra lúc THOÁT savepoint, và
+                # lỗi ở đó (``DataError`` khi một ô dài quá cột, ``OperationalError``
+                # khi deadlock/timeout — đều KHÔNG phải con của ``IntegrityError``)
+                # rơi xuống ``except Exception`` bên dưới. Nếu id đã kịp vào danh
+                # sách thì phản hồi trả về id của những dòng vừa bị rollback, và
+                # router phát ``LEAD_IMPORTED`` kèm đúng những id không tồn tại đó.
+                # Đặt ở đây thì không nhánh lỗi nào phải nhớ dọn dẹp.
+                created_lead_ids.extend(batch_ids)
 
                 log.info(
                     f"Committed batch {i // batch_size + 1}, {len(batch_ids)} leads inserted."
@@ -4614,21 +4880,46 @@ async def import_leads_from_file_content(
                 error=str(e),
                 exc_info=True,
             )
-            # Record error
+            # 🔴 KHÔNG đưa `str(e)` vào phản hồi. Chuỗi đó là thông báo thô của
+            # driver: tên ràng buộc, `DETAIL:` tiếng Anh, và trong vài ca cả câu
+            # SQL kèm tham số — tức dữ liệu của chính người khác. Giao diện in
+            # thẳng nội dung này lên toast (`useLeads.ts`), nên nó là đường rò ra
+            # tận màn hình người dùng. Chi tiết đầy đủ đã nằm trong log máy chủ ở
+            # ngay trên (`log.error(..., exc_info=True)`), đúng chỗ để chẩn đoán.
             errors.append(
                 schemas.LeadImportError(
                     row_number=-1,
-                    error_message=f"Database bulk insert error (batch failed): {e}",
+                    error_message=(
+                        "Lô này không ghi được vào cơ sở dữ liệu. Các dòng trong lô "
+                        "chưa được tạo; hãy kiểm tra lại dữ liệu rồi nhập lại phần "
+                        "còn thiếu."
+                    ),
                     row_data={},
                 )
             )
-            created_lead_ids = []  # Reset IDs due to rollback
+            # KHÔNG xoá trắng danh sách. Chú thích cũ ("Reset IDs due to rollback")
+            # giả định router sẽ rollback, nhưng cả hai router gọi hàm này đều
+            # ``await db.commit()`` VÔ ĐIỀU KIỆN — nên các lô đã flush trước lỗi
+            # vẫn vào cơ sở dữ liệu, trong khi phản hồi báo 0 lead được tạo.
+            # Giữ nguyên id của những lô THẬT SỰ đã ghi mới là đúng sự thật.
+            #
+            # Ở đây KHÔNG cần cắt bớt gì: ``created_lead_ids`` chỉ nhận id sau khi
+            # savepoint của lô đó release trót lọt, nên lô đang hỏng chưa từng vào
+            # danh sách. Chỗ này từng phải tự dọn, và đó chính là chỗ ``DataError``
+            # lọt qua được vì phần dọn chỉ nằm ở nhánh ``IntegrityError``.
 
     # --- 6. Build result ---
+    # ``failed_imports`` đếm theo DÒNG, suy ra từ hai con số kia chứ không phải
+    # ``len(errors)``. Hai lẽ: (1) ``errors`` có thể mang mục không gắn với dòng
+    # nào (row_number=-1, ví dụ lỗi cả mẻ chèn) → đếm thừa; (2) một sự cố có thể
+    # làm mất nhiều dòng mà chỉ sinh một mục → đếm thiếu. Cả hai đều làm ba con số
+    # trong cùng một phản hồi không cộng khớp, và giao diện nêu thẳng con số này
+    # lên tiêu đề thông báo. Suy ra từ tổng thì bất biến
+    # ``tổng = thành công + thất bại`` luôn đúng, dù nhánh lỗi nào chạy.
     result = schemas.LeadImportResult(
         total_rows_processed=processed_row_count,
         successful_imports=len(created_lead_ids),
-        failed_imports=len(errors),
+        failed_imports=max(0, processed_row_count - len(created_lead_ids)),
         created_lead_ids=created_lead_ids,
         errors=errors,
     )

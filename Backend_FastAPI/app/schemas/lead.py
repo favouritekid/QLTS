@@ -269,9 +269,14 @@ class LeadCreate(LeadBase):
     - None (default): Use automatic distribution/assignment (Celery task)
     - Integer: Directly assign to specified officer (skip auto-assignment)
     """
-    education_level: Optional[str] = None
+    # 🔴 `max_length` phải khớp cột DB (`models/lead.py`: String(100) / String(255)).
+    # Thiếu nó, một ô 101 ký tự qua được Pydantic rồi mới chết ở tầng DB bằng
+    # `DataError` — mà `bulk_insert_leads` bắt lỗi theo LÔ, nên một dòng quá dài
+    # kéo đổ cả lô đang chạy và dừng các lô sau. Chặn ở schema thì dòng đó hỏng
+    # một mình và báo đúng số dòng.
+    education_level: Optional[str] = Field(None, max_length=100)
     gpa: Optional[float] = Field(None, ge=0.0, le=10.0, description="GPA on 0-10 scale")
-    location: Optional[str] = None
+    location: Optional[str] = Field(None, max_length=255)
     assigned_officer_id: Optional[int] = None  # None = auto-assign, Integer = direct assign
     referrer_id: Optional[int] = None  # CTV referrer for source="referral"
     # Fit Score fields (Officer input)
@@ -297,17 +302,48 @@ class LeadCreate(LeadBase):
         if v is None:
             return None
 
-        # Allow empty string for phone2, convert to None
-        if isinstance(v, str) and v.strip() == "":
+        # 🔴 TỪ CHỐI thẳng, KHÔNG ép kiểu.
+        #
+        # `.strip()` bên dưới ném `AttributeError` với đầu vào không phải chuỗi và
+        # Pydantic để lọt ra thành 500 — nhưng `str(v)` để chữa việc đó lại tệ hơn
+        # nhiều: nó ĐOÁN. `84901234567` thành `"0901234567"` (nghe hợp lý), còn
+        # `84901234567.0` thành `"849012345670"` sau khi gỡ dấu chấm, rồi tiền tố
+        # `84` bị đổi thành `0` — ra `"09012345670"`, **thừa một chữ số so với số
+        # người dùng gửi**, mà vẫn khớp regex nên được nhận.
+        #
+        # Số điện thoại là khoá định danh (unique index, dedup, tra cứu). Nhận một
+        # giá trị đã bị biến dạng còn tệ hơn từ chối thẳng.
+        if not isinstance(v, str):
+            raise ValueError(
+                "Số điện thoại phải là chuỗi. Số dạng JSON number sẽ mất số 0 đầu "
+                "hoặc bị thêm chữ số khi chuyển đổi — vui lòng gửi dạng chuỗi."
+            )
+
+        if v.strip() == "":
             if info.field_name == "phone2":
                 return None
-            # phone is required, empty string will fail min_length validation
-            return v
+            # 🔴 SĐT chính chỉ gồm khoảng trắng: `min_length=1` KHÔNG chặn được
+            # (`"   "` dài 3), nên trả nguyên là ghi thẳng khoảng trắng vào cơ sở
+            # dữ liệu qua `POST /api/leads`. Đường nhập từ tệp không lộ ca này vì
+            # service đã strip từ trước — nên nó chỉ hiện ra ở đường API trực tiếp.
+            raise ValueError("Số điện thoại không được để trống")
 
         # Normalize the phone number
         normalized = normalize_vietnam_phone(v)
         if normalized is None:
-            return v  # Let min_length validation handle it
+            # 🔴 `normalize_vietnam_phone` chỉ trả `None` khi gỡ hết ký tự phân
+            # cách (` \t\n\r.-()/`) thì KHÔNG còn gì — tức chuỗi kiểu `"---"`,
+            # `"..."`, `"( )"`. Ô TRỐNG thật đã được xử lý ở nhánh trên.
+            #
+            # Trả nguyên chuỗi gốc ở đây (với lời hẹn "để min_length lo") là để
+            # lọt: `min_length=1` thấy `"---"` dài 3 nên cho qua, rồi ở đường
+            # nhập từ tệp cả HAI lớp chống trùng đều so trên bản chuẩn hoá —
+            # vốn là `None` — nên chúng bỏ qua luôn. Giá trị rác đi thẳng tới
+            # unique index và làm hỏng CẢ LÔ, không riêng dòng của nó.
+            raise ValueError(
+                f"Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam "
+                f"(VD: 0901234567, +84901234567)"
+            )
 
         # Validate against Vietnam format
         if not validate_vietnam_phone(normalized, normalize=False):
@@ -342,9 +378,10 @@ class LeadUpdate(BaseModel):
     unit_id: Optional[int] = None
     offering_id: Optional[int] = None
     consultation_status_id: Optional[str] = None
-    education_level: Optional[str] = None
+    # Cùng lý do như `LeadCreate`: khớp cột DB để lỗi hiện ở tầng validate.
+    education_level: Optional[str] = Field(None, max_length=100)
     gpa: Optional[float] = Field(None, ge=0.0, le=10.0, description="GPA on 0-10 scale")
-    location: Optional[str] = None
+    location: Optional[str] = Field(None, max_length=255)
     officer_rating: Optional[int] = Field(None, ge=1, le=5, description="Officer rating 1-5 stars")
     officer_summary: Optional[str] = None
     # Fit Score fields
@@ -389,8 +426,16 @@ class LeadUpdate(BaseModel):
         if v is None:
             return None
 
+        # Xem chú thích cùng chỗ ở `LeadCreate`: ép kiểu sẽ ĐOÁN và có thể đổi
+        # chính chữ số của người dùng (`84901234567.0` → `"09012345670"`).
+        if not isinstance(v, str):
+            raise ValueError(
+                "Số điện thoại phải là chuỗi. Số dạng JSON number sẽ mất số 0 đầu "
+                "hoặc bị thêm chữ số khi chuyển đổi — vui lòng gửi dạng chuỗi."
+            )
+
         # For primary phone, reject empty string instead of coercing to None
-        if isinstance(v, str) and v.strip() == "":
+        if v.strip() == "":
             if info.field_name == "phone":
                 raise ValueError("Số điện thoại chính không được để trống")
             return None
@@ -398,7 +443,16 @@ class LeadUpdate(BaseModel):
         # Normalize the phone number
         normalized = normalize_vietnam_phone(v)
         if normalized is None:
-            return None
+            # Cùng lớp lỗi với `LeadCreate`, nhưng hậu quả khác: ở đường CẬP
+            # NHẬT, trả `None` cho một chuỗi rác như `"---"` nghĩa là âm thầm
+            # XOÁ số điện thoại đang có. Người dùng gõ nhầm một gạch nối và mất
+            # dữ liệu mà không có thông báo nào.
+            #
+            # Ô trống thật đã được xử lý ở nhánh trên (phone ⇒ lỗi, phone2 ⇒ None).
+            raise ValueError(
+                f"Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam "
+                f"(VD: 0901234567, +84901234567)"
+            )
 
         # Validate against Vietnam format
         if not validate_vietnam_phone(normalized, normalize=False):

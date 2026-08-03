@@ -756,7 +756,10 @@ async def import_leads_from_file(
 ):
     """
     (Admin only) Import leads từ file CSV hoặc Excel.
-    File cần có các cột: 'full_name', 'email', 'phone', 'source', 'unit_id', 'offering_id' (tùy chọn).
+    File cần có các cột: 'full_name', 'phone', 'source', 'unit_id'.
+    Tùy chọn: 'email', 'offering_id', 'phone2', 'education_level', 'gpa', 'location'.
+    Cột 'email' để trống hoặc vắng mặt đều hợp lệ, nhưng nếu có thì phải đúng tên
+    'email' — tên khác sẽ bị từ chối chứ không nhập âm thầm với email rỗng.
     Endpoint sẽ tạo leads trong DB nhưng **không** tự động phân công.
     Trả về kết quả import bao gồm ID các lead đã tạo và danh sách lỗi.
 
@@ -779,9 +782,13 @@ async def import_leads_from_file(
             error=str(e),
             exc_info=True,
         )
+        # KHÔNG ghép `{e}`: ngoại lệ của `UploadFile.read()` có thể mang đường dẫn
+        # tệp tạm hoặc chi tiết I/O nội bộ. Chi tiết đã vào log ngay trên với
+        # `exc_info=True`. Dùng chung câu với endpoint officer để hai đường nhập
+        # không trôi khác nhau lần nữa.
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to read uploaded file: {e}",
+            detail=lead_service.LOI_KHONG_DOC_DUOC_TEP_TAI_LEN,
         )
     finally:
         await file.close()

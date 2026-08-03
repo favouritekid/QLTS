@@ -1246,9 +1246,63 @@ export function useImportLeads() {
     },
 
     onSuccess: (result) => {
-      toast.success("Nhập dữ liệu thành công!", {
-        description: `${result.successful_imports} lead đã nhập, ${result.failed_imports} thất bại`,
-      });
+      // HTTP 200 KHÔNG có nghĩa là mọi dòng đều vào được: backend trả 200 kèm
+      // `errors[]` cho từng dòng hỏng. Báo xanh "thành công" trong khi 8/10 dòng
+      // rơi là nói sai với người vừa tải tệp lên — và họ không có cách nào khác
+      // để biết, vì `errors[]` trước đây không được đọc ở đâu cả.
+      const {
+        successful_imports: ok,
+        failed_imports: hong,
+        errors,
+        total_rows_processed: tong,
+      } = result;
+      const soLoi = errors?.length ?? 0;
+
+      // Vài dòng đầu để người dùng biết PHẢI SỬA GÌ, không chỉ biết là có hỏng.
+      const chiTiet = (errors ?? [])
+        .slice(0, 3)
+        .map((e) =>
+          e.row_number > 0
+            ? `Dòng ${e.row_number}: ${e.error_message}`
+            : e.error_message,
+        )
+        .join("\n");
+      const conLai = Math.max(0, soLoi - 3);
+      const duoi = conLai > 0 ? `\n…và ${conLai} dòng khác` : "";
+
+      // Thứ tự nhánh có ý nghĩa. Bản trước xét `hong === 0` TRƯỚC nên tệp không
+      // có dòng dữ liệu nào (0 nhập / 0 hỏng — chỉ còn hàng tiêu đề) rơi vào
+      // nhánh xanh và báo "thành công: 0 lead đã nhập"; nhánh `ok === 0` nằm sau
+      // nên không bao giờ với tới. Đi từ ca xấu nhất trở xuống thì nhánh xanh chỉ
+      // còn đúng một lối vào: mọi dòng đều vào được và không có cảnh báo nào.
+      if (tong === 0) {
+        toast.error("Tệp không có dòng dữ liệu nào", {
+          description:
+            "Chỉ đọc được hàng tiêu đề. Kiểm tra lại tệp rồi tải lên lần nữa.",
+          duration: 12000,
+        });
+      } else if (ok === 0) {
+        toast.error("Không nhập được dòng nào", {
+          description: `${hong} dòng lỗi.\n${chiTiet}${duoi}`,
+          duration: 12000,
+        });
+      } else if (hong > 0) {
+        toast.warning(`Nhập được ${ok}, bỏ qua ${hong} dòng`, {
+          description: `${chiTiet}${duoi}`,
+          duration: 12000,
+        });
+      } else if (soLoi > 0) {
+        // Mọi dòng đều vào được nhưng backend vẫn gửi kèm cảnh báo — vẫn không
+        // được báo xanh, kẻo cảnh báo duy nhất người dùng nhận được lại bị nuốt.
+        toast.warning(`Nhập được ${ok} lead, có cảnh báo`, {
+          description: `${chiTiet}${duoi}`,
+          duration: 12000,
+        });
+      } else {
+        toast.success("Nhập dữ liệu thành công", {
+          description: `${ok} lead đã nhập`,
+        });
+      }
 
       // Invalidate all lead lists
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists(), refetchType: 'active' });
