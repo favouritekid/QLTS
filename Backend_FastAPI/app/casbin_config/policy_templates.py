@@ -368,6 +368,9 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # DASHBOARD - Finance overview
         {"subject": "{role}", "object": "/api/finance/dashboard", "action": "GET"},
         {"subject": "{role}", "object": "/api/finance/debt-report", "action": "GET"},
+        # Xuất tệp — EXPLICIT: policy trên là literal nên thêm segment là hết
+        # khớp keyMatch4; thiếu dòng này accountant/manager nhận 403 THẬT.
+        {"subject": "{role}", "object": "/api/finance/debt-report/export", "action": "GET"},
 
         # Picker data for finance filters. The route returns UserPickerSchema
         # for non-admin roles, so accountant can load TVV dropdowns without PII.
@@ -681,6 +684,9 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         # Finance Module - Manager can verify/reject payments, waive fees, apply penalties
         {"subject": "{role}", "object": "/api/finance/dashboard", "action": "GET"},  # Finance overview
         {"subject": "{role}", "object": "/api/finance/debt-report", "action": "GET"},
+        # Xuất tệp — EXPLICIT: policy trên là literal nên thêm segment là hết
+        # khớp keyMatch4; thiếu dòng này accountant/manager nhận 403 THẬT.
+        {"subject": "{role}", "object": "/api/finance/debt-report/export", "action": "GET"},
         # Collection workspace ("Thu học phí") — manager is in FINANCE_ROLES (FE),
         # but does NOT inherit accountant, so grant the list + tab badges here or
         # the workspace list 403s for manager.

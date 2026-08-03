@@ -191,6 +191,7 @@ def test_casbin_migrations_seed_eft_v3():
         "bvj20260625001_casbin_payment_import_void_grant.py",
         "bvk20260626001_casbin_payment_import_read_grants.py",
         "texp20260803001_casbin_tuition_export_grant.py",
+        "dbte20260803002_casbin_debt_report_export_grant.py",
     ):
         content = (versions / name).read_text(encoding="utf-8")
         assert "v2, v3, template_id" in content, f"{name} thiếu cột v3 (eft)"

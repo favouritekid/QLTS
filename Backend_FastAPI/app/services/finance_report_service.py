@@ -14,7 +14,38 @@ from sqlalchemy.orm import joinedload
 from app import models
 from app.models.finance import Fee, Invoice, PAYABLE_INVOICE_STATUSES
 from app.schemas import finance as finance_schemas
+from app.utils.export_builder import build_simple_export
 from app.utils.id_helpers import format_profile_code
+
+# Nhãn cột file xuất công nợ.
+# ⚠️ Hai cột tiền ghi rõ "(đợt còn nợ)": truy vấn CHỈ lấy hoá đơn còn dư nợ nên
+# tiền của đợt đã trả xong không có ở đây. Nhãn cũ ("Phải thu"/"Đã thu") khiến
+# người đọc tưởng là tổng của cả hồ sơ.
+DEBT_REPORT_COLUMNS = [
+    "Mã hồ sơ",                 # 0
+    "Họ và tên",                # 1
+    "Đơn vị",                   # 2
+    "Năm học",                  # 3
+    "Đợt tuyển sinh",           # 4
+    "Loại phí",                 # 5
+    "Số hoá đơn còn nợ",        # 6
+    "Phải thu (đợt còn nợ)",    # 7
+    "Đã thu (đợt còn nợ)",      # 8
+    "Còn nợ",                   # 9
+    "Số ngày quá hạn",          # 10
+    "Nhóm tuổi nợ",             # 11
+]
+_DEBT_MONEY_INDEXES = {7, 8, 9}
+_DEBT_TEXT_INDEXES = {1, 2, 5}
+_DEBT_FORCE_TEXT_INDEXES = {0, 3}
+_DEBT_COLUMN_WIDTHS = [12, 26, 20, 12, 16, 22, 18, 20, 20, 18, 16, 18]
+
+_AGING_LABELS = {
+    "0_30": "0–30 ngày",
+    "31_60": "31–60 ngày",
+    "over_60": "Trên 60 ngày",
+    "current": "Chưa quá hạn",
+}
 
 
 @dataclass
@@ -148,6 +179,89 @@ class FinanceReportService:
 
         summary = self._build_summary(rows)
         return finance_schemas.DebtReportResponse(items=rows, summary=summary)
+
+    async def build_debt_report_export(
+        self,
+        *,
+        fmt: str,
+        exporter_name: str,
+        unit_id: Optional[int] = None,
+        academic_year: Optional[int] = None,
+        round_id: Optional[int] = None,
+        fee_type: Optional[str] = None,
+        aging: Optional[str] = None,
+    ) -> tuple[bytes, str, str]:
+        """Báo cáo công nợ → tệp xuất ``(content, media_type, filename)``.
+
+        Gọi thẳng ``get_debt_report`` để file xuất và màn hình **không thể lệch
+        nhau** — trước đây CSV được dựng ở trình duyệt từ dữ liệu đã tải, mà
+        header là khoá kỹ thuật tiếng Anh, không có BOM (Excel tiếng Việt đọc
+        mojibake) và ô tiền bị bọc thành chuỗi nên không cộng được.
+
+        ⚠️ Nhãn hai cột tiền nói rõ "đợt còn nợ": truy vấn CHỈ lấy hoá đơn còn
+        dư nợ, nên tiền của các đợt đã trả xong không nằm trong đây. Báo cáo tự
+        nhất quán (phải thu − đã thu = còn nợ) nhưng nếu đọc "Đã thu" là "tổng
+        đã thu của hồ sơ" thì sai.
+        """
+        report = await self.get_debt_report(
+            unit_id=unit_id,
+            academic_year=academic_year,
+            round_id=round_id,
+            fee_type=fee_type,
+            aging=aging,
+        )
+
+        rows: list[list] = []
+        for item in report.items:
+            rows.append(
+                [
+                    item.profile_code,
+                    item.profile_name,
+                    item.unit_name or "",
+                    item.academic_year,
+                    item.admission_round_id if item.admission_round_id else "",
+                    " | ".join(sorted(item.fee_types)),
+                    item.invoice_count,
+                    Decimal(item.total_expected),
+                    Decimal(item.total_paid),
+                    Decimal(item.total_outstanding),
+                    item.days_overdue,
+                    _AGING_LABELS.get(item.aging_bucket, item.aging_bucket),
+                ]
+            )
+
+        applied_filters = {
+            label: value
+            for label, value in (
+                ("Năm học", academic_year),
+                ("Đợt tuyển sinh", round_id),
+                ("Loại phí", fee_type),
+                ("Nhóm tuổi nợ", _AGING_LABELS.get(aging or "", aging)),
+            )
+            if value not in (None, "")
+        }
+
+        return build_simple_export(
+            columns=DEBT_REPORT_COLUMNS,
+            rows=rows,
+            money_indexes=_DEBT_MONEY_INDEXES,
+            text_indexes=_DEBT_TEXT_INDEXES,
+            force_text_indexes=_DEBT_FORCE_TEXT_INDEXES,
+            fmt=fmt,
+            filename_stem="bao_cao_cong_no",
+            sheet_title="Bao cao cong no",
+            exporter_name=exporter_name,
+            applied_filters=applied_filters,
+            column_widths=_DEBT_COLUMN_WIDTHS,
+            notes=[
+                (
+                    "Phạm vi số liệu",
+                    "Chỉ gồm các ĐỢT THU CÒN NỢ. Tiền của đợt đã trả xong không "
+                    "nằm trong hai cột 'Phải thu' và 'Đã thu' — vì vậy 'Đã thu' "
+                    "ở đây KHÔNG phải tổng đã thu của hồ sơ.",
+                ),
+            ],
+        )
 
     @staticmethod
     def _build_row(accumulator: _DebtAccumulator) -> finance_schemas.DebtReportRow:

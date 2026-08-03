@@ -236,6 +236,7 @@ export const API_ENDPOINTS = {
   FINANCE: {
     DASHBOARD: "/api/finance/dashboard",
     DEBT_REPORT: "/api/finance/debt-report",
+    DEBT_REPORT_EXPORT: "/api/finance/debt-report/export",
 
     FEES: {
       LIST: "/api/fees",

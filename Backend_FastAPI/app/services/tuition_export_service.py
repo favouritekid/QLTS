@@ -21,8 +21,6 @@ Hai quyết định định hình toàn bộ file, đừng đổi mà không đ�
    người dùng nhập — xem ``_TEXT_COLUMN_INDEXES``.
 """
 
-import csv
-import io
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -30,17 +28,13 @@ from zoneinfo import ZoneInfo
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants.export_formats import (
-    CSV_MEDIA_TYPE,
-    CSV_UTF8_BOM,
-    MONEY_NUMBER_FORMAT,
-    TEXT_NUMBER_FORMAT,
-    XLSX_MEDIA_TYPE,
-)
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
-from app.utils.csv_helpers import sanitize_csv_cell
 from app.utils.exceptions import BadRequest
+from app.utils.export_builder import SHEET_META, build_simple_export
 from app.utils.id_helpers import format_profile_code
+
+__all__ = ["MAX_EXPORT_ROWS", "COLUMNS", "SHEET_DATA", "SHEET_META",
+           "build_tuition_export"]
 
 log = structlog.get_logger(__name__)
 
@@ -51,7 +45,7 @@ VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 MAX_EXPORT_ROWS = 10_000
 
 SHEET_DATA = "Danh sach hoc phi"
-SHEET_META = "Thong tin xuat"
+# SHEET_META tái xuất từ export_builder (một nguồn tên sheet phụ).
 
 COLUMNS: List[str] = [
     "Mã hồ sơ",                 # 0
@@ -102,6 +96,27 @@ _FEE_STATUS_LABELS = {
     "cancelled": "Đã huỷ",
 }
 
+_COLUMN_WIDTHS = [12, 18, 22, 26, 16, 20, 30, 18, 12, 10, 22, 18, 20, 16, 18, 20]
+
+# Cảnh báo in vào sheet phụ — người mở file sau vài tuần phải đọc được vì sao
+# tổng ở đây có thể khác con số trên màn hình.
+_EXPORT_NOTES = (
+    (
+        "Mỗi dòng là MỘT KHOẢN PHÍ",
+        "Ba cột tiền là của cả khoản phí, không phải của riêng một đợt thu.",
+    ),
+    (
+        "Bộ lọc áp ở mức hoá đơn",
+        "Một khoản phí có mặt nếu ít nhất một đợt của nó khớp bộ lọc. Vì vậy "
+        "tổng cột 'Số tiền còn lại' ở đây có thể KHÁC ô 'Còn phải thu' trên "
+        "màn hình (ô đó cộng theo từng đợt).",
+    ),
+    (
+        "Số tiền âm",
+        "Là hồ sơ đã đóng dư, giữ nguyên dấu âm chứ không làm tròn về 0.",
+    ),
+)
+
 _NOT_DECIDED = "(chưa chốt ngành)"
 _NO_OFFICER = "(chưa phân công)"
 
@@ -142,135 +157,6 @@ def _row_for(fee: Any) -> List[Any]:
         remaining,
         (unit.name if unit else "") or "",
     ]
-
-
-def _meta_rows(
-    *,
-    exporter_name: str,
-    applied_filters: Dict[str, Any],
-    row_count: int,
-) -> List[List[str]]:
-    """Nội dung sheet phụ — người mở file sau vài tuần phải biết đây là gì."""
-    now_vn = datetime.now(VN_TZ).strftime("%d/%m/%Y %H:%M")
-    rows: List[List[str]] = [
-        ["Thông tin lần xuất", ""],
-        ["Thời điểm xuất", now_vn],
-        ["Người xuất", exporter_name or ""],
-        ["Số dòng", str(row_count)],
-        ["", ""],
-        ["Bộ lọc đã áp dụng", ""],
-    ]
-    if applied_filters:
-        for label, value in applied_filters.items():
-            rows.append([str(label), "" if value is None else str(value)])
-    else:
-        rows.append(["(không lọc)", "toàn bộ phạm vi được phép xem"])
-
-    rows += [
-        ["", ""],
-        ["Lưu ý khi đối chiếu số liệu", ""],
-        [
-            "Mỗi dòng là MỘT KHOẢN PHÍ",
-            "Ba cột tiền là của cả khoản phí, không phải của riêng đợt thu.",
-        ],
-        [
-            "Bộ lọc áp ở mức hoá đơn",
-            "Một khoản phí có mặt nếu ít nhất một đợt của nó khớp bộ lọc. "
-            "Vì vậy tổng cột 'Số tiền còn lại' ở đây có thể KHÁC ô 'Còn phải "
-            "thu' trên màn hình (ô đó cộng theo từng đợt).",
-        ],
-        [
-            "Số tiền âm",
-            "Là hồ sơ đã đóng dư, giữ nguyên dấu âm chứ không làm tròn về 0.",
-        ],
-    ]
-    return rows
-
-
-def _build_csv(rows: List[List[Any]]) -> bytes:
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow([sanitize_csv_cell(c) for c in COLUMNS])
-    for row in rows:
-        out: List[str] = []
-        for idx, value in enumerate(row):
-            if idx in _MONEY_INDEXES:
-                # Ô tiền: ghi thẳng, KHÔNG sanitize (dấu '-' của số âm sẽ bị
-                # helper thêm dấu nháy → Excel đọc thành text).
-                out.append("" if value is None else str(value))
-            elif idx in _TEXT_COLUMN_INDEXES:
-                out.append(sanitize_csv_cell(value))
-            else:
-                out.append("" if value is None else str(value))
-        writer.writerow(out)
-    return (CSV_UTF8_BOM + buf.getvalue()).encode("utf-8")
-
-
-def _build_xlsx(
-    rows: List[List[Any]],
-    *,
-    exporter_name: str,
-    applied_filters: Dict[str, Any],
-) -> bytes:
-    from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font, PatternFill
-    from openpyxl.utils import get_column_letter
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = SHEET_DATA
-
-    ws.append([sanitize_csv_cell(c) for c in COLUMNS])
-    head_fill = PatternFill("solid", fgColor="2F5496")
-    head_font = Font(bold=True, color="FFFFFF")
-    for col_idx in range(1, len(COLUMNS) + 1):
-        cell = ws.cell(row=1, column=col_idx)
-        cell.fill = head_fill
-        cell.font = head_font
-        cell.alignment = Alignment(
-            horizontal="center", vertical="center", wrap_text=True
-        )
-
-    for row in rows:
-        ws.append(
-            [
-                sanitize_csv_cell(v) if idx in _TEXT_COLUMN_INDEXES else v
-                for idx, v in enumerate(row)
-            ]
-        )
-
-    last_row = ws.max_row
-    for idx in _MONEY_INDEXES:
-        letter = get_column_letter(idx + 1)
-        for r in range(2, last_row + 1):
-            ws[f"{letter}{r}"].number_format = MONEY_NUMBER_FORMAT
-    for idx in _FORCE_TEXT_INDEXES:
-        letter = get_column_letter(idx + 1)
-        for r in range(2, last_row + 1):
-            ws[f"{letter}{r}"].number_format = TEXT_NUMBER_FORMAT
-
-    widths = [12, 18, 22, 26, 16, 20, 30, 18, 12, 10, 22, 18, 20, 16, 18, 20]
-    for i, width in enumerate(widths, start=1):
-        ws.column_dimensions[get_column_letter(i)].width = width
-
-    ws.freeze_panes = ws.cell(row=2, column=1).coordinate
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}{last_row}"
-
-    meta = wb.create_sheet(SHEET_META)
-    for meta_row in _meta_rows(
-        exporter_name=exporter_name,
-        applied_filters=applied_filters,
-        row_count=len(rows),
-    ):
-        meta.append([sanitize_csv_cell(c) for c in meta_row])
-    meta.column_dimensions["A"].width = 30
-    meta.column_dimensions["B"].width = 80
-    for r in range(1, meta.max_row + 1):
-        meta.cell(row=r, column=2).alignment = Alignment(wrap_text=True)
-
-    bio = io.BytesIO()
-    wb.save(bio)
-    return bio.getvalue()
 
 
 async def build_tuition_export(
@@ -315,13 +201,17 @@ async def build_tuition_export(
         unit_id=unit_id,
     )
 
-    ts = datetime.now(VN_TZ).strftime("%Y%m%d_%H%M%S")
-    if (fmt or "").lower() == "csv":
-        return _build_csv(rows), CSV_MEDIA_TYPE, f"danh_sach_hoc_phi_{ts}.csv"
-
-    content = _build_xlsx(
-        rows,
+    return build_simple_export(
+        columns=COLUMNS,
+        rows=rows,
+        money_indexes=_MONEY_INDEXES,
+        text_indexes=_TEXT_COLUMN_INDEXES,
+        force_text_indexes=_FORCE_TEXT_INDEXES,
+        fmt=fmt,
+        filename_stem="danh_sach_hoc_phi",
+        sheet_title=SHEET_DATA,
         exporter_name=exporter_name,
         applied_filters=applied_filters or {},
+        column_widths=_COLUMN_WIDTHS,
+        notes=_EXPORT_NOTES,
     )
-    return content, XLSX_MEDIA_TYPE, f"danh_sach_hoc_phi_{ts}.xlsx"
