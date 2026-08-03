@@ -4204,6 +4204,21 @@ def _cell_or_none(value) -> Optional[str]:
     return s or None
 
 
+# Thông báo cho ca KHÔNG đọc nổi luồng tải lên ở tầng HTTP (``UploadFile.read()``
+# ném) — khác với ca đọc được luồng nhưng pandas không phân tích nổi (đã bịt ở
+# nhánh ``except Exception`` trong ``import_leads_from_file_content``).
+#
+# 🔴 Là hằng số vì có HAI endpoint nhập lead: officer ``POST /api/leads/import``
+# (``routers/leads.py``) và admin ``POST /api/admin/users/leads/import``
+# (``routers/admin/users.py``). Chúng đã từng trôi khác nhau — bản admin ghép
+# ``{e}`` trong khi bản officer dùng câu chung — và ngoại lệ của ``read()`` có thể
+# mang đường dẫn tệp tạm hoặc chi tiết I/O nội bộ. Viết chuỗi lần thứ hai là dựng
+# lại đúng điều kiện đã sinh ra lỗ hổng.
+LOI_KHONG_DOC_DUOC_TEP_TAI_LEN = (
+    "Failed to read uploaded file. Please check the file format and try again."
+)
+
+
 class _LoiTepNhapLead(ValueError):
     """Lỗi ở mức TỆP, do chính hàm này CỐ Ý phát ra: tệp rỗng, quá số dòng cho
     phép, thiếu cột bắt buộc…

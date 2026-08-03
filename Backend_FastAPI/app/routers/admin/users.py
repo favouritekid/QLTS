@@ -782,9 +782,13 @@ async def import_leads_from_file(
             error=str(e),
             exc_info=True,
         )
+        # KHÔNG ghép `{e}`: ngoại lệ của `UploadFile.read()` có thể mang đường dẫn
+        # tệp tạm hoặc chi tiết I/O nội bộ. Chi tiết đã vào log ngay trên với
+        # `exc_info=True`. Dùng chung câu với endpoint officer để hai đường nhập
+        # không trôi khác nhau lần nữa.
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to read uploaded file: {e}",
+            detail=lead_service.LOI_KHONG_DOC_DUOC_TEP_TAI_LEN,
         )
     finally:
         await file.close()

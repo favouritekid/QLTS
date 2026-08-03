@@ -24,7 +24,7 @@ from app.database import AsyncSessionLocal
 from app.services import lead_service
 from tests._lead_status_test_ids import INITIAL_LEAD_STATUS_ID
 from tests.conftest import create_mock_lead_file
-from tests.fixtures.constants import LeadsURLs
+from tests.fixtures.constants import AdminURLs, LeadsURLs
 
 log = logging.getLogger(__name__)
 
@@ -193,6 +193,14 @@ async def test_loi_doc_tep_khong_lot_ra_phan_hoi(
     )
     assert "tokenizing" not in phan_hoi.text.lower()
 
+    # 🔴 Chỉ kiểm "mồi không lọt" là chưa đủ: một phản hồi 500 rỗng cũng thoả điều
+    # kiện ấy trong khi đường lỗi đã hỏng theo kiểu khác. Khoá luôn mã trạng thái
+    # và câu chung, để test chỉ xanh khi người nhập THẬT SỰ nhận được câu dùng được.
+    assert phan_hoi.status_code == 400, phan_hoi.text
+    assert "Không đọc được tệp" in phan_hoi.text, (
+        "thông báo chung bị thay mất: " + phan_hoi.text[:400]
+    )
+
 
 async def test_loi_tep_co_y_van_giu_nguyen_thong_bao(
     client: AsyncClient,
@@ -212,4 +220,85 @@ async def test_loi_tep_co_y_van_giu_nguyen_thong_bao(
     assert phan_hoi.status_code >= 400
     assert "rỗng" in phan_hoi.text.lower(), (
         f"thông báo hữu ích bị bịt mất: {phan_hoi.text[:300]}"
+    )
+
+
+# Mô phỏng phần nguy hiểm của một lỗi I/O khi đọc luồng tải lên: đường dẫn tệp tạm
+# trên máy chủ. Ngoại lệ của ``UploadFile.read()`` mang đúng loại chi tiết này.
+MOI_DUONG_DAN_TAM = "SECRET_TMP_PATH"
+
+
+async def _no_khi_doc_luong(*args, **kwargs):
+    raise OSError(
+        f"[Errno 5] Input/output error: '/tmp/{MOI_DUONG_DAN_TAM}/upload_9f3c.csv'"
+    )
+
+
+async def test_loi_doc_luong_tai_len_admin_khong_lot_ra_phan_hoi(
+    monkeypatch: pytest.MonkeyPatch,
+    client: AsyncClient,
+    admin_token_headers: dict,
+    setup_test_database,
+):
+    """🔴 Đường nhập của ADMIN, khối đọc luồng tải lên ở tầng HTTP.
+
+    Khác với lỗi phân tích của pandas (đã bịt trong service), khối này nằm ở
+    router: ``await file.read()``. Bản admin từng ghép ``{e}`` trong khi bản
+    officer đã dùng câu chung — hai đường song song trôi khác nhau, và ngoại lệ
+    của ``read()`` mang đường dẫn tệp tạm/chi tiết I/O của máy chủ.
+    """
+    import starlette.datastructures
+
+    monkeypatch.setattr(
+        starlette.datastructures.UploadFile, "read", _no_khi_doc_luong
+    )
+
+    phan_hoi = await client.post(
+        f"{AdminURLs.BASE}/users/leads/import",
+        files={"file": ("hong.csv", b"full_name,phone\nA,0900000001\n", "text/csv")},
+        headers=admin_token_headers,
+    )
+
+    assert phan_hoi.status_code == 400, phan_hoi.text
+    assert MOI_DUONG_DAN_TAM not in phan_hoi.text, (
+        "đường dẫn tệp tạm lọt ra phản hồi: " + phan_hoi.text[:400]
+    )
+    assert "Errno" not in phan_hoi.text
+    assert lead_service.LOI_KHONG_DOC_DUOC_TEP_TAI_LEN in phan_hoi.text, (
+        "thông báo chung bị thay mất: " + phan_hoi.text[:400]
+    )
+
+
+async def test_loi_doc_luong_tai_len_officer_khong_lot_ra_phan_hoi(
+    monkeypatch: pytest.MonkeyPatch,
+    client: AsyncClient,
+    officer_token_headers: dict,
+    officer_user_in_db: dict,
+    seed_lead_dependencies: dict,
+    setup_test_database,
+):
+    """Cùng phép kiểm cho đường OFFICER.
+
+    Hai endpoint dùng chung ``LOI_KHONG_DOC_DUOC_TEP_TAI_LEN``; chỉ khoá một đầu
+    thì đầu kia lại trôi đi như đã từng.
+    """
+    import starlette.datastructures
+
+    monkeypatch.setattr(
+        starlette.datastructures.UploadFile, "read", _no_khi_doc_luong
+    )
+
+    phan_hoi = await client.post(
+        f"{LeadsURLs.LEADS}/import",
+        files={"file": ("hong.csv", b"full_name,phone\nA,0900000001\n", "text/csv")},
+        headers=officer_token_headers,
+    )
+
+    assert phan_hoi.status_code == 400, phan_hoi.text
+    assert MOI_DUONG_DAN_TAM not in phan_hoi.text, (
+        "đường dẫn tệp tạm lọt ra phản hồi: " + phan_hoi.text[:400]
+    )
+    assert "Errno" not in phan_hoi.text
+    assert lead_service.LOI_KHONG_DOC_DUOC_TEP_TAI_LEN in phan_hoi.text, (
+        "thông báo chung bị thay mất: " + phan_hoi.text[:400]
     )
