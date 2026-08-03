@@ -20,6 +20,7 @@ from tests.fixtures.constants import AuthURLs
 from tests.fixtures.users import create_user_with_role, get_auth_headers
 
 EXPORT_URL = "/api/invoices/export"
+DEBT_EXPORT_URL = "/api/finance/debt-report/export"
 
 
 @pytest_asyncio.fixture
@@ -103,3 +104,66 @@ class TestExportRouteShape:
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/csv")
         assert r.content.startswith("﻿".encode("utf-8"))
+
+
+class TestDebtReportExportAuthz:
+    """`GET /api/finance/debt-report/export` — quyền qua Casbin THẬT.
+
+    🔴 Route này KHÁC /api/invoices/export: policy sẵn có cho báo cáo công nợ là
+    literal '/api/finance/debt-report', thêm một segment là **hết khớp
+    keyMatch4** ⇒ không có va chạm nào che, thiếu grant là accountant/manager
+    403 thật. Vì vậy phải kiểm bằng request thật qua ASGI, không chỉ test
+    service.
+    """
+
+    async def test_officer_denied(self, client, officer_token_headers):
+        r = await client.get(DEBT_EXPORT_URL, headers=officer_token_headers)
+        assert r.status_code == 403
+
+    async def test_regular_user_denied(self, client, regular_user_token_headers):
+        r = await client.get(DEBT_EXPORT_URL, headers=regular_user_token_headers)
+        assert r.status_code == 403
+
+    async def test_accountant_passes_gate(self, client, accountant_token_headers):
+        """[N] Bỏ grant accountant khỏi template là ca này đỏ."""
+        r = await client.get(DEBT_EXPORT_URL, headers=accountant_token_headers)
+        assert r.status_code != 403, r.text
+        assert r.status_code == 200
+
+    async def test_manager_passes_gate(self, client, manager_token_headers):
+        r = await client.get(DEBT_EXPORT_URL, headers=manager_token_headers)
+        assert r.status_code != 403, r.text
+        assert r.status_code == 200
+
+    async def test_admin_passes_gate(self, client, admin_token_headers):
+        r = await client.get(DEBT_EXPORT_URL, headers=admin_token_headers)
+        assert r.status_code == 200, r.text
+
+    async def test_not_shadowed_by_debt_report_route(
+        self, client, admin_token_headers
+    ):
+        """/debt-report/export không bị /debt-report nuốt (trả JSON thay vì tệp)."""
+        r = await client.get(DEBT_EXPORT_URL, headers=admin_token_headers)
+        assert r.status_code == 200
+        assert "spreadsheetml" in r.headers["content-type"]
+        assert "bao_cao_cong_no_" in r.headers["content-disposition"]
+
+    async def test_csv_has_bom_and_vietnamese_header(
+        self, client, admin_token_headers
+    ):
+        r = await client.get(
+            DEBT_EXPORT_URL, params={"format": "csv"}, headers=admin_token_headers
+        )
+        assert r.status_code == 200
+        assert r.content.startswith("﻿".encode("utf-8"))
+        head_line = r.content.decode("utf-8").splitlines()[0]
+        assert "Mã hồ sơ" in head_line
+        assert "total_outstanding" not in head_line  # hết khoá kỹ thuật
+
+    async def test_invalid_format_rejected(self, client, admin_token_headers):
+        r = await client.get(
+            DEBT_EXPORT_URL,
+            params={"format": "pdf"},
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 422

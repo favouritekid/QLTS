@@ -194,11 +194,15 @@ async def build_tuition_export(
     fees = await fee_repo.get_many_for_export(fee_ids)
     rows = [_row_for(fee) for fee in fees]
 
+    # Ghi cả người xuất: đây là tệp mang dữ liệu cá nhân (họ tên + CCCD của
+    # hàng trăm thí sinh), nên tối thiểu phải truy được AI đã tải và tải bao
+    # nhiêu dòng. (Chưa dùng audit_service — xem ghi chú ở mô tả PR.)
     log.info(
         "tuition_export_built",
         row_count=len(rows),
         fmt=fmt,
         unit_id=unit_id,
+        exporter=exporter_name,
     )
 
     return build_simple_export(

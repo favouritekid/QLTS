@@ -7,6 +7,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
+import structlog
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
@@ -16,6 +17,8 @@ from app.models.finance import Fee, Invoice, PAYABLE_INVOICE_STATUSES
 from app.schemas import finance as finance_schemas
 from app.utils.export_builder import build_simple_export
 from app.utils.id_helpers import format_profile_code
+
+log = structlog.get_logger(__name__)
 
 # Nhãn cột file xuất công nợ.
 # ⚠️ Hai cột tiền ghi rõ "(đợt còn nợ)": truy vấn CHỈ lấy hoá đơn còn dư nợ nên
@@ -240,6 +243,14 @@ class FinanceReportService:
             )
             if value not in (None, "")
         }
+
+        log.info(
+            "debt_report_export_built",
+            row_count=len(rows),
+            fmt=fmt,
+            unit_id=unit_id,
+            exporter=exporter_name,
+        )
 
         return build_simple_export(
             columns=DEBT_REPORT_COLUMNS,
