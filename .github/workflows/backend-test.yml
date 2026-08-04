@@ -190,8 +190,18 @@ jobs:
       #     chạy ở cổng PR chứ không chỉ nightly.
       # 🔴 Thêm tệp test nhập-lead mới thì PHẢI thêm vào đây — allowlist là hàng
       # thủ công, và chính chỗ này là lý do lô lỗi trên lọt được cổng PR.
-      # Chọn theo LỚP chứ không cả file: các lớp payment còn lại (record/verify/
+      # Chọn theo LỚP chứ không cả file: các lớp payment còn lại (record/
       # overpayment) tốn thêm vài phút mà không canh đường tiền-ra, để nightly.
+      # `TestVerifyPayment` + `TestRejectPayment` + `test_payment_lock_order.py`
+      # thêm 04-08 vì đường XÁC MINH cũng là đường tiền, chỉ là tiền VÀO:
+      #   * trước bản vá khoá-phiếu-trước, hai lượt duyệt song song cùng đọc
+      #     'pending' rồi cùng cộng tiền — sổ ghi gấp đôi mà không ai bấm gì lạ;
+      #   * `test_payment_lock_order.py` canh cả kết quả (đúng một lượt thắng)
+      #     LẪN thứ tự lấy khoá (payment trước invoice trước fee) — thiếu vế
+      #     thứ hai thì ai đó đảo lại thứ tự vẫn xanh, và cửa kẹt chéo với
+      #     đường đảo tiền mở lại mà không phép kiểm nào kêu.
+      # Hai lớp verify/reject vào cùng vì chúng là hành vi đơn luồng mà bản vá
+      # đó chạm tới; để nightly thì hồi quy chỉ lộ ra sau khi đã merge.
       # Ba tập cuối (cohort đưa sang hệ ký túc xá) canh những thứ hỏng ÂM THẦM:
       #   * test_hk1_fee_scope_single_source — structural lock-in buộc các call
       #     site thật sự gọi helper chung, không chép tay lại vị từ HK1;
@@ -242,6 +252,9 @@ jobs:
           tests/unit/test_lead_schema_phone_and_limits.py
           tests/services/test_payment_service.py::TestRefundReferenceAndContext
           tests/services/test_payment_service.py::TestRefundSummaryIdor
+          tests/services/test_payment_service.py::TestVerifyPayment
+          tests/services/test_payment_service.py::TestRejectPayment
+          tests/services/test_payment_lock_order.py
           -q --tb=short --timeout=60
 
       # =====================================================================

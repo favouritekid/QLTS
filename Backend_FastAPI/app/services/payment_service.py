@@ -390,11 +390,36 @@ class PaymentService:
             ResourceNotFoundError: If payment not found
             BusinessRuleViolation: If self-approval or not pending
         """
-        payment = await self.payment_repo.get_by_id_with_relations(payment_id, unit_id)
+        # 🔒 Khoá payment TRƯỚC invoice và fee. Một lỗi đang xảy ra, một việc
+        # phòng ngừa — nói rõ để người sau không lẫn:
+        #
+        # 1. ĐANG HỎNG: cộng tiền hai lần. Đọc không khoá thì hai lượt xác minh
+        #    chạy song song cùng thấy 'pending', cùng đi qua phép kiểm bên dưới,
+        #    rồi cùng cộng vào invoice/fee. Chỉ cần hai người cùng bấm duyệt một
+        #    phiếu. Khoá ở đây buộc lượt thứ hai chờ, và khi vào được nó đọc lại
+        #    trạng thái đã commit nên thấy 'verified' và dừng. Ca xác minh đối
+        #    đầu từ chối hỏng theo đúng cơ chế đó.
+        #
+        # 2. PHÒNG NGỪA: chuẩn hoá thứ tự khoá. Trước đây hàm này giữ invoice
+        #    rồi fee và chỉ chạm hàng payment lúc flush — ngược chiều với đường
+        #    đảo tiền (payment trước). Với `void_batch` hiện tại thì vòng chờ
+        #    KHÔNG khép được: nó chỉ đảo phiếu 'verified', còn hàm này chỉ nhận
+        #    'pending', nên hai bên không bao giờ tranh cùng một hàng payment.
+        #    Nhưng khi đường void MỘT phiếu ra đời, thứ tự ngược chiều sẽ thành
+        #    kẹt chéo thật. Đặt payment lên đầu ngay bây giờ để lúc đó không cần
+        #    sửa lại hàm này nữa.
+        #
+        # Thứ tự thống nhất toàn hệ: batch (nếu có) → payment → invoice → fee.
+        # get_for_update chỉ lấy cột của chính bảng Payment (FOR UPDATE không
+        # áp được lên nhánh nullable của outer join) — đủ dùng, vì cả hàm này
+        # chỉ đọc status / intent_id / created_by_id / invoice_id / amount /
+        # reference_code, không đụng quan hệ nào của payment.
+        payment = await self.payment_repo.get_for_update(payment_id, unit_id)
         if not payment:
             raise ResourceNotFoundError("Payment not found")
 
-        # Check payment is pending
+        # Check payment is pending — đọc DƯỚI khoá, nên đây là trạng thái đã
+        # commit mới nhất chứ không phải ảnh chụp cũ.
         if payment.status != PaymentStatusEnum.pending.value:
             raise BusinessRuleViolation(
                 f"Can only verify pending payments. Current status: {payment.status}"
@@ -593,10 +618,16 @@ class PaymentService:
             ResourceNotFoundError: If payment not found
             BusinessRuleViolation: If not pending
         """
-        payment = await self.payment_repo.get_by_id_with_relations(payment_id, unit_id)
+        # 🔒 Khoá payment trước, cùng thứ tự với verify_payment (batch → payment
+        # → invoice → fee). Từ chối không đụng tiền nên chỉ cần khoá payment,
+        # nhưng vẫn phải khoá: nếu không, từ chối và xác minh chạy song song đều
+        # thấy 'pending' rồi mỗi bên ghi một trạng thái cuối khác nhau.
+        payment = await self.payment_repo.get_for_update(payment_id, unit_id)
         if not payment:
             raise ResourceNotFoundError("Payment not found")
 
+        # Mọi phép kiểm chạy DƯỚI khoá, trước khi nạp quan hệ — hỏng thì thoát
+        # sớm mà không tốn thêm truy vấn nào.
         if payment.status != PaymentStatusEnum.pending.value:
             raise BusinessRuleViolation(
                 f"Can only reject pending payments. Current status: {payment.status}"
@@ -612,6 +643,13 @@ class PaymentService:
 
         if not reason or not reason.strip():
             raise BadRequest("Rejection reason is required")
+
+        # Đã hợp lệ → giờ mới nạp quan hệ. get_for_update cố ý không joinedload,
+        # mà payload thông báo bên dưới đọc `payment.invoice.fee`; thiếu bước
+        # này thì chỗ đó lazy-load trong ngữ cảnh async và nổ MissingGreenlet.
+        # Identity map của SQLAlchemy trả về CHÍNH object vừa khoá — không sinh
+        # bản thứ hai, và khoá vẫn giữ tới hết giao dịch.
+        await self.payment_repo.get_by_id_with_relations(payment_id, unit_id)
 
         # Update payment status
         payment.status = PaymentStatusEnum.rejected.value

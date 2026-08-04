@@ -1009,8 +1009,15 @@ async def auto_verify_payment(
     Payment verified NGAY (không từ pending) và KHÔNG dispatch/lead-sync. Idempotent:
     idempotency_key đã có → trả ``None`` (re-commit an toàn).
 
-    ⚠️ Caller PHẢI đã get_for_update + refresh ``invoice`` rồi ``fee`` (lock order
-    invoice→fee, khớp verify_payment → tránh deadlock).
+    ⚠️ Caller PHẢI đã get_for_update + refresh ``invoice`` rồi ``fee``.
+
+    Ở đây chỉ có ĐUÔI ``invoice → fee`` của thứ tự khoá chung, và điều đó đúng: hàm
+    này TẠO một Payment mới ở trạng thái 'verified' ngay tại chỗ, nên không có hàng
+    payment nào đang tồn tại để tranh chấp — không có bậc "payment" để khoá trước.
+    Thứ tự đầy đủ toàn hệ là batch → payment → invoice → fee; đường bulk vào từ bậc
+    thứ ba trở đi nên vẫn nhất quán, không đảo chiều với ``verify_payment``.
+    (Đừng đọc dòng này thành "verify cũng chỉ khoá invoice→fee" — verify khoá payment
+    trước, xem payment_service.verify_payment.)
     """
     dup = (
         await db.execute(
@@ -1522,8 +1529,14 @@ async def void_batch(
     re-import được.
 
     ATOMIC (KHÔNG savepoint per-row): void phải đảo TRỌN lô — 1 lỗi → rollback cả
-    (router get_db không commit). Lock TẤT CẢ invoice (asc id) RỒI fee (asc id) —
-    khớp lock-order invoice→fee, tránh deadlock ABBA với verify/commit đồng thời.
+    (router get_db không commit).
+
+    Thứ tự khoá: **batch → payments → invoices (asc id) → fees (asc id)**. Khớp thứ
+    tự thống nhất toàn hệ (batch → payment → invoice → fee); ``verify_payment`` và
+    ``reject_payment`` nay cũng khoá payment TRƯỚC invoice và fee.
+    (Trước đây dòng này chỉ ghi "invoice → fee" — thiếu hai bậc đầu khiến người đọc
+    tưởng đường void chỉ bắt đầu từ invoice. Lưu ý hàm này KHÔNG tranh chấp với
+    verify: nó chỉ đảo phiếu 'verified', còn verify chỉ nhận 'pending'.)
 
     Lead-status: void TỰ lùi lead khỏi sts10 ("Đã hoàn tất học phí") về status TRƯỚC
     (đối xứng forward sync) cho hồ sơ HK1 KHÔNG còn cleared sau đảo — qua
