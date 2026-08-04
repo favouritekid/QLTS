@@ -224,7 +224,8 @@ class PaymentRepository(BaseRepository[Payment]):
         self,
         unit_id: Optional[int] = None,
         skip: int = 0,
-        limit: int = 50
+        limit: int = 50,
+        fee_id: Optional[int] = None,
     ) -> Tuple[List[Payment], int]:
         """
         Get payments pending verification (maker-checker workflow).
@@ -233,6 +234,12 @@ class PaymentRepository(BaseRepository[Payment]):
             unit_id: Filter by lead.unit_id (for IDOR protection)
             skip: Number of records to skip
             limit: Maximum records to return
+            fee_id: Thu hẹp về MỘT khoản phí (mọi đợt của nó). Ô "đang chờ
+                duyệt" ở form ghi tiền phải hỏi đúng câu hỏi mà hàng đợi
+                maker-checker trả lời — phiếu TAY chưa duyệt — chứ không phải
+                ``status=pending`` chung, vì bộ lọc chung còn trả cả phiếu
+                ONLINE đang treo (``intent_id`` khác NULL), thứ kế toán không
+                nhập tay và không được tính vào cảnh báo trùng.
 
         Returns:
             Tuple of (List of pending payments, total_count)
@@ -245,6 +252,12 @@ class PaymentRepository(BaseRepository[Payment]):
         # IDOR Filter
         if unit_id is not None:
             base_conditions.append(models.Lead.unit_id == unit_id)
+
+        # `is not None` chứ KHÔNG phải `if fee_id:` — cùng lý do như
+        # get_filtered_with_count: id 0 falsy sẽ bị hiểu thành "không lọc" rồi
+        # trả toàn bộ hàng đợi trong phạm vi quyền.
+        if fee_id is not None:
+            base_conditions.append(Invoice.fee_id == fee_id)
 
         # Count query
         count_query = (

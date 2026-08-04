@@ -79,17 +79,22 @@ async def list_payments(
     fee_id: Optional[int] = Query(
         None,
         ge=1,
+        # Trần = INT4 max. Không có trần thì một số nguyên lớn hơn 2^31-1 lọt
+        # qua Pydantic rồi vỡ ở tầng PostgreSQL/asyncpg ("integer out of
+        # range") — người dùng nhận 500 cho một đầu vào đáng lẽ là 422.
+        le=2_147_483_647,
         description="Filter by fee ID — trả phiếu thu của MỌI hoá đơn thuộc "
         "khoản phí đó. Dùng cho ô 'đang chờ duyệt' ở form ghi tiền: khoản phí "
         "nhiều đợt thì phiếu vừa nhập có thể nằm ở hoá đơn khác, lọc theo "
-        "invoice_id sẽ không thấy.",
+        "invoice_id sẽ không thấy. Kết hợp được với pending_manual_only.",
     ),
     method_id: Optional[int] = Query(None, description="Filter by payment method ID"),
     pending_manual_only: bool = Query(
         False,
         description="Maker-checker queue: only manual payments (intent_id IS "
         "NULL) awaiting verification. Online/gateway payments auto-verify and "
-        "must NOT appear here. Ignores status/method_id when set.",
+        "must NOT appear here. Ignores status/method_id when set; fee_id is "
+        "still honoured (AND) so a single fee's queue can be read.",
     ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
@@ -120,10 +125,14 @@ async def list_payments(
         # payments never reach the manual verification queue — do NOT emulate it
         # with a generic status=pending filter, which would also surface a
         # pending online payment.
+        # `fee_id` được AND vào (không phải bỏ qua): form ghi tiền cần đúng
+        # hàng đợi này nhưng chỉ của một khoản phí, và nếu nó phải quay về
+        # `status=pending` thì lại đếm nhầm cả phiếu online đang treo.
         payments, total = await payment_repo.get_pending_verification(
             unit_id=unit_id,
             skip=skip,
             limit=limit,
+            fee_id=fee_id,
         )
     else:
         # Parse comma-separated values

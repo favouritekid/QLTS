@@ -11,7 +11,7 @@ Ca quyết định ở đây là ``test_fee_id_thay_ca_hai_dot``: nó chỉ xanh
 về CẢ phiếu của khoản phí khác và ca này đỏ.
 """
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -25,11 +25,15 @@ from app.models.finance import (
     FeeTypeEnum,
     Invoice,
     InvoiceStatusEnum,
+    Payment,
+    PaymentIntent,
     PaymentMethod,
 )
 from app.security import get_password_hash
 from app.services.fee_calculation_service import FeeCalculationService
 from app.services.payment_service import PaymentService
+from tests.fixtures.constants import AuthURLs
+from tests.fixtures.users import get_auth_headers
 
 pytestmark = pytest.mark.asyncio
 
@@ -161,6 +165,52 @@ async def two_fees_ctx(seed_lead_dependencies: dict, admin_user_in_db: dict):
         }
 
 
+@pytest_asyncio.fixture
+async def online_pending_on_fee_a(two_fees_ctx: dict, admin_user_in_db: dict):
+    """Thêm vào khoản phí A một phiếu ONLINE đang treo (``intent_id`` khác NULL).
+
+    Đây là con dao phân biệt hai hợp đồng nghiệp vụ mà FE dễ nhầm:
+    ``status=pending`` trả về MỌI phiếu chờ — kể cả phiếu online do người học
+    tự bấm thanh toán rồi bỏ dở — còn hàng đợi maker-checker
+    (``pending_manual_only``) chỉ trả phiếu TAY. Ô "đang chờ duyệt" ở form ghi
+    tiền nói về việc *kế toán đã nhập mà chưa ai duyệt*, nên đếm nhầm phiếu
+    online vào đó là dựng cảnh báo trên dữ liệu sai loại.
+    """
+    ctx = dict(two_fees_ctx)
+    async with AsyncSessionLocal() as db:
+        method = PaymentMethod(
+            code="listfilter_gw", name="Gateway", is_online=True, is_active=True
+        )
+        db.add(method)
+        await db.flush()
+
+        intent = PaymentIntent(
+            invoice_id=ctx["inv_a_ids"][0],
+            method_id=method.id,
+            amount=Decimal("300000"),
+            idempotency_key="listfilter-intent-1",
+            status="pending",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        db.add(intent)
+        await db.flush()
+
+        online = Payment(
+            invoice_id=ctx["inv_a_ids"][0],
+            method_id=method.id,
+            intent_id=intent.id,
+            amount=Decimal("300000"),
+            status="pending",
+            created_by_id=admin_user_in_db["id"],
+        )
+        db.add(online)
+        await db.flush()
+        ctx["online_pay_id"] = online.id
+        await db.commit()
+
+    return ctx
+
+
 class TestListPaymentsByFee:
     async def test_fee_id_thay_ca_hai_dot(
         self, client: AsyncClient, admin_token_headers: dict, two_fees_ctx
@@ -239,3 +289,136 @@ class TestListPaymentsByFee:
         assert r.status_code == 200, r.text
         assert r.json()["items"] == []
         assert r.json()["total"] == 0
+
+    async def test_fee_id_vuot_tran_int4_bi_tu_choi_khong_phai_500(
+        self, client: AsyncClient, admin_token_headers: dict, two_fees_ctx
+    ):
+        """Số lớn hơn 2^31-1 phải bị chặn ở tầng validate.
+
+        Không có ``le`` thì Pydantic cho qua (int Python vô hạn) và câu lệnh
+        vỡ dưới PostgreSQL với "integer out of range" — người gọi nhận **500**
+        cho một đầu vào đáng lẽ là 422, kèm một traceback trong log lỗi.
+        """
+        r = await client.get(
+            "/api/payments?fee_id=2147483648&page_size=100",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 422, (
+            f"fee_id vượt trần INT4 phải là 422, nhận {r.status_code}: {r.text[:300]}"
+        )
+
+    async def test_fee_id_don_vi_khac_tra_rong_khong_ro_ton_tai(
+        self,
+        client: AsyncClient,
+        manager_other_unit_user_in_db: dict,
+        two_fees_ctx,
+    ):
+        """IDOR: manager đơn vị khác hỏi đúng ``fee_id`` thật → rỗng.
+
+        Bộ lọc mới không được trở thành cửa sau: ``fee_id`` là số đoán được,
+        nên nếu điều kiện đơn vị bị bỏ thì bất kỳ ai cũng dò được phiếu thu và
+        tên người nộp của đơn vị khác.
+        """
+        headers = await get_auth_headers(
+            client, manager_other_unit_user_in_db, AuthURLs.LOGIN
+        )
+        r = await client.get(
+            f"/api/payments?fee_id={two_fees_ctx['fee_a_id']}&page_size=100",
+            headers=headers,
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["items"] == [], f"rò phiếu sang đơn vị khác: {body['items']}"
+        assert body["total"] == 0
+
+
+class TestPendingManualOnlyByFee:
+    """Hàng đợi maker-checker của MỘT khoản phí — nguồn cho ô 'đang chờ duyệt'.
+
+    Ô đó phải trả lời đúng câu "kế toán đã nhập gì mà chưa ai duyệt", nên nó
+    phải hỏi hàng đợi maker-checker chứ không phải ``status=pending`` chung.
+    """
+
+    async def test_loai_phieu_online_khoi_o_cho_duyet(
+        self, client: AsyncClient, admin_token_headers: dict, online_pending_on_fee_a
+    ):
+        ctx = online_pending_on_fee_a
+        r = await client.get(
+            f"/api/payments?fee_id={ctx['fee_a_id']}&pending_manual_only=true"
+            "&page_size=100",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 200, r.text
+        ids = sorted(item["id"] for item in r.json()["items"])
+
+        assert ids == ctx["pay_a_ids"], (
+            f"phải đúng hai phiếu TAY {ctx['pay_a_ids']}, nhận {ids}"
+        )
+        assert ctx["online_pay_id"] not in ids, (
+            "phiếu ONLINE đang treo lọt vào ô 'đang chờ duyệt' — kế toán sẽ "
+            "thấy một khoản mình chưa từng nhập"
+        )
+
+    async def test_status_pending_van_lot_phieu_online(
+        self, client: AsyncClient, admin_token_headers: dict, online_pending_on_fee_a
+    ):
+        """Đối chứng — vì sao không được dùng ``status=pending`` cho ô đó.
+
+        Ca này khoá sự KHÁC BIỆT giữa hai đường. Nếu nó đỏ thì hoặc
+        ``status=pending`` đã âm thầm đổi nghĩa, hoặc hai bộ lọc đã trùng nhau
+        và cái tên ``pending_manual_only`` không còn bảo đảm điều nó hứa.
+        """
+        ctx = online_pending_on_fee_a
+        r = await client.get(
+            f"/api/payments?fee_id={ctx['fee_a_id']}&status=pending&page_size=100",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 200, r.text
+        ids = {item["id"] for item in r.json()["items"]}
+
+        assert ctx["online_pay_id"] in ids, (
+            "status=pending phải trả CẢ phiếu online — đó chính là lý do ô "
+            "'đang chờ duyệt' không được dùng bộ lọc này"
+        )
+
+    async def test_khong_ro_sang_khoan_phi_khac(
+        self, client: AsyncClient, admin_token_headers: dict, online_pending_on_fee_a
+    ):
+        """``fee_id`` phải được AND vào hàng đợi, không bị bỏ qua.
+
+        Ca quyết định: nếu nhánh ``pending_manual_only`` phớt lờ ``fee_id``
+        (như bản đầu) thì nó trả toàn bộ hàng đợi trong phạm vi quyền — phiếu
+        của khoản phí B lọt vào và bảng công nợ của hồ sơ A cộng cả tiền của
+        người khác.
+        """
+        ctx = online_pending_on_fee_a
+        r = await client.get(
+            f"/api/payments?fee_id={ctx['fee_b_id']}&pending_manual_only=true"
+            "&page_size=100",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 200, r.text
+        ids = [item["id"] for item in r.json()["items"]]
+
+        assert ids == [ctx["pay_b_id"]], (
+            f"chỉ được thấy phiếu của khoản phí B, nhận {ids}"
+        )
+        assert r.json()["total"] == 1, (
+            f"total cũng phải bị lọc theo fee, nhận {r.json()['total']}"
+        )
+
+    async def test_khong_truyen_fee_id_thi_hang_doi_giu_nguyen_hanh_vi_cu(
+        self, client: AsyncClient, admin_token_headers: dict, online_pending_on_fee_a
+    ):
+        """Tab 'Chờ duyệt' của workspace không truyền fee_id — không được đổi."""
+        ctx = online_pending_on_fee_a
+        r = await client.get(
+            "/api/payments?pending_manual_only=true&page_size=100",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 200, r.text
+        ids = {item["id"] for item in r.json()["items"]}
+
+        assert set(ctx["pay_a_ids"]).issubset(ids)
+        assert ctx["pay_b_id"] in ids
+        assert ctx["online_pay_id"] not in ids
