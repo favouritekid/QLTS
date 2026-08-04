@@ -76,6 +76,13 @@ async def list_payments(
     page_size: int = Query(50, ge=1, le=100, description="Items per page"),
     status: Optional[str] = Query(None, description="Filter by status (comma-separated)"),
     invoice_id: Optional[int] = Query(None, description="Filter by invoice ID"),
+    fee_id: Optional[int] = Query(
+        None,
+        description="Filter by fee ID — trả phiếu thu của MỌI hoá đơn thuộc "
+        "khoản phí đó. Dùng cho ô 'đang chờ duyệt' ở form ghi tiền: khoản phí "
+        "nhiều đợt thì phiếu vừa nhập có thể nằm ở hoá đơn khác, lọc theo "
+        "invoice_id sẽ không thấy.",
+    ),
     method_id: Optional[int] = Query(None, description="Filter by payment method ID"),
     pending_manual_only: bool = Query(
         False,
@@ -130,6 +137,7 @@ async def list_payments(
             statuses=statuses,
             invoice_id=invoice_id,
             method_id=method_id,
+            fee_id=fee_id,
         )
 
     items = [

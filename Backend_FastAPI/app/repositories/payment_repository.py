@@ -349,6 +349,7 @@ class PaymentRepository(BaseRepository[Payment]):
         statuses: Optional[List[str]] = None,
         invoice_id: Optional[int] = None,
         method_id: Optional[int] = None,
+        fee_id: Optional[int] = None,
     ) -> Tuple[List[Payment], int]:
         """
         Get filtered list of payments with pagination AND total count.
@@ -360,6 +361,11 @@ class PaymentRepository(BaseRepository[Payment]):
             statuses: List of statuses to filter
             invoice_id: Filter by invoice ID
             method_id: Filter by payment method ID
+            fee_id: Filter by fee — trả phiếu thu của MỌI hoá đơn thuộc khoản
+                phí đó, không chỉ một đợt. Cần cho ô "đang chờ duyệt" ở form
+                ghi tiền: khoản phí nhiều đợt thì phiếu vừa nhập có thể nằm ở
+                hoá đơn khác, lọc theo ``invoice_id`` sẽ không thấy và kế toán
+                lại tưởng chưa ai nhập.
 
         Returns:
             Tuple of (List of Payment instances, total_count)
@@ -378,6 +384,12 @@ class PaymentRepository(BaseRepository[Payment]):
 
         if method_id:
             base_conditions.append(Payment.method_id == method_id)
+
+        # Lọc ở mức KHOẢN PHÍ: Invoice đã nằm trong join bên dưới nên không cần
+        # thêm bảng. Đi qua Invoice.fee_id chứ không phải Fee.id để tránh phụ
+        # thuộc thứ tự join.
+        if fee_id:
+            base_conditions.append(Invoice.fee_id == fee_id)
 
         # Count query
         count_query = (
