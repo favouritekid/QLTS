@@ -326,10 +326,14 @@ async def _build_export_filter_labels(
         ``unit_id`` của B thì dữ liệu ra rỗng (điều kiện lọc AND cả hai) nhưng
         tệp vẫn in TÊN của B — rò rỉ danh mục đơn vị qua chính tệp xuất.
         """
+        # MỘT chuỗi duy nhất cho cả "không tồn tại" lẫn "ngoài phạm vi".
+        # Trả hai chuỗi khác nhau là biến tệp xuất thành máy dò: người xem đoán
+        # được một ID có tồn tại hay không dù không được xem dữ liệu của nó.
+        opaque = f"#{target_id} (ngoài phạm vi hoặc không tồn tại)"
         if scope_unit_id is not None and target_id != scope_unit_id:
-            return f"đơn vị #{target_id} (ngoài phạm vi)"
+            return opaque
         unit = await db.get(models.OrganizationUnit, target_id)
-        return unit.name if unit else f"đơn vị #{target_id}"
+        return unit.name if unit else opaque
 
     # Hai khái niệm KHÁC NHAU, phải ghi tách:
     #  * "Phạm vi quyền" = giới hạn do vai trò áp, người dùng không đổi được;
@@ -367,10 +371,11 @@ async def _build_export_filter_labels(
     if officer_id is not None:
         # Cùng lý do với đơn vị: không lộ tên người ngoài phạm vi quyền.
         officer = await db.get(models.User, officer_id)
+        opaque_officer = f"#{officer_id} (ngoài phạm vi hoặc không tồn tại)"
         if officer is None:
-            labels["TVV phụ trách"] = f"người dùng #{officer_id}"
+            labels["TVV phụ trách"] = opaque_officer
         elif scope_unit_id is not None and officer.unit_id != scope_unit_id:
-            labels["TVV phụ trách"] = f"người dùng #{officer_id} (ngoài phạm vi)"
+            labels["TVV phụ trách"] = opaque_officer
         else:
             labels["TVV phụ trách"] = officer.full_name or officer.username
     if awaiting_major_change:

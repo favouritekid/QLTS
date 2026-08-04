@@ -20,6 +20,8 @@ from app import models
 from app.models.finance import Fee, Invoice
 from app.services import finance_report_service as frs
 from app.services.finance_report_service import FinanceReportService
+from app.utils.exceptions import BadRequest
+import pytest
 
 _phone_seq = itertools.count(1)
 
@@ -196,3 +198,94 @@ class TestDebtExportContent:
         )
         row = _csv_rows(content)[1]
         assert row[1].startswith("'"), row[1]
+
+
+class TestDebtExportCap:
+    """Trần dòng: phải chặn TRƯỚC khi nạp, nhưng KHÔNG được từ chối oan.
+
+    Ba hợp đồng ở đây tương ứng ba cách hỏng khác nhau:
+      * bỏ ``aging`` khỏi preflight → từ chối oan người lọc nhóm nhỏ;
+      * kiểm sau khi nạp → cap không chặn được truy vấn, chỉ chặn dựng workbook;
+      * bỏ hậu kiểm → khe TOCTOU giữa đếm và nạp cho lọt quá trần.
+    """
+
+    async def _seed_n(self, db, deps, n: int, *, days_overdue: int, tag: str):
+        from datetime import timedelta
+        due = date.today() - timedelta(days=days_overdue)
+        for i in range(n):
+            await _seed_debtor(
+                db, deps, amount="9000000", paid="2000000",
+                citizen_id=f"{tag}{i:05d}"[:12], due_date=due,
+            )
+
+    async def test_total_over_cap_but_selected_aging_under_cap_still_exports(
+        self, db, seeded_dependencies, monkeypatch
+    ):
+        """[N] Bỏ aging khỏi preflight là ca này đỏ (từ chối oan).
+
+        Tổng vượt trần, nhưng nhóm tuổi nợ người dùng chọn thì dưới trần.
+        """
+        monkeypatch.setattr(frs, "MAX_EXPORT_ROWS", 3)
+        # 4 hồ sơ quá hạn >60 ngày (vượt trần nếu tính TỔNG)
+        await self._seed_n(db, seeded_dependencies, 4, days_overdue=90, tag="0711")
+        # 2 hồ sơ quá hạn 40 ngày → bucket 31_60, dưới trần
+        await self._seed_n(db, seeded_dependencies, 2, days_overdue=40, tag="0722")
+
+        service = FinanceReportService(db)
+        content, _, _ = await service.build_debt_report_export(
+            fmt="csv", exporter_name="Kế toán A", aging="31_60",
+        )
+        rows = _csv_rows(content)[1:]
+        assert len(rows) == 2, f"phải xuất đúng nhóm đã chọn, thực tế {len(rows)}"
+
+    async def test_selected_aging_over_cap_refuses_before_fetch(
+        self, db, seeded_dependencies, monkeypatch
+    ):
+        """[N] Từ chối phải xảy ra TRƯỚC khi gọi get_debt_report.
+
+        Kiểm sau khi nạp thì cap chỉ chặn bước RẺ NHẤT (dựng workbook) mà
+        không chặn truy vấn/hydrate — đúng thứ cap sinh ra để chặn.
+        """
+        monkeypatch.setattr(frs, "MAX_EXPORT_ROWS", 2)
+        await self._seed_n(db, seeded_dependencies, 4, days_overdue=90, tag="0733")
+
+        service = FinanceReportService(db)
+        called = {"n": 0}
+        original = service.get_debt_report
+
+        async def _spy(*a, **kw):
+            called["n"] += 1
+            return await original(*a, **kw)
+
+        monkeypatch.setattr(service, "get_debt_report", _spy)
+
+        with pytest.raises(BadRequest) as exc:
+            await service.build_debt_report_export(
+                fmt="csv", exporter_name="Kế toán A", aging="over_60",
+            )
+        assert "thu hẹp bộ lọc" in str(exc.value.detail)
+        assert called["n"] == 0, "get_debt_report bị gọi dù đã vượt trần"
+
+    async def test_toctou_postcheck_refuses_when_fetch_exceeds_cap(
+        self, db, seeded_dependencies, monkeypatch
+    ):
+        """[N] Preflight dưới trần nhưng dữ liệu thật vượt → hậu kiểm chặn.
+
+        Mô phỏng khe TOCTOU: giữa lúc đếm và lúc nạp, kế toán khác phát hành
+        thêm hoá đơn. Bỏ hậu kiểm là ca này đỏ.
+        """
+        monkeypatch.setattr(frs, "MAX_EXPORT_ROWS", 2)
+        await self._seed_n(db, seeded_dependencies, 4, days_overdue=90, tag="0744")
+
+        service = FinanceReportService(db)
+
+        async def _stale_count(**kw):
+            return 1  # số đếm CŨ, dưới trần
+
+        monkeypatch.setattr(service, "_count_debt_report_rows", _stale_count)
+
+        with pytest.raises(BadRequest) as exc:
+            await service.build_debt_report_export(
+                fmt="csv", exporter_name="Kế toán A",
+            )
+        assert "thu hẹp bộ lọc" in str(exc.value.detail)

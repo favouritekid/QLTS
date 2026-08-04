@@ -301,9 +301,10 @@ class FinanceReportService:
         đã thu của hồ sơ" thì sai.
         """
         # PREFLIGHT: đếm bằng một truy vấn COUNT rẻ, TRƯỚC khi hydrate bất kỳ
-        # entity nào. ``aging`` chỉ lọc BỚT sau khi gom nhóm nên bỏ qua ở đây là
-        # fail-safe (số đếm ≥ số dòng thật → có thể từ chối sớm, không bao giờ
-        # cho lọt quá trần).
+        # entity nào.
+        # ⚠️ PHẢI truyền ``aging`` xuống. Từng bỏ qua nó với lý do "fail-safe",
+        # nhưng đó là TỪ CHỐI OAN: toàn hệ 12.000 dòng mà người dùng lọc đúng
+        # một nhóm tuổi nợ 500 dòng thì vẫn ăn 400. Đừng "khôi phục" hành vi cũ.
         estimated_rows = await self._count_debt_report_rows(
             unit_id=unit_id,
             academic_year=academic_year,
