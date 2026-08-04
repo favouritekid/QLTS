@@ -67,13 +67,22 @@ jobs:
           #     at time of pinning. Re-evaluate on next pip-audit DB refresh.
           #   - PYSEC-2025-183: pyjwt weak-encryption DISPUTED by supplier
           #     (key length is application's responsibility, not library)
-          #   - GHSA-537c-gmf6-5ccf: cryptography <48.0.1 — OpenSSL statically
-          #     linked in the wheel, availability-only DoS (CVSS 7.5). BLOCKED:
-          #     fastapi-mail 1.6.4 (latest) hard-pins cryptography>=47.0.0,<48.0.0
-          #     and no fastapi-mail release supports cryptography 48 yet, so the
-          #     fix (48.0.1) is uninstallable without dropping fastapi-mail. Low
-          #     practical risk for transitive JWT/TLS usage. Re-evaluate when
-          #     fastapi-mail relaxes the cryptography pin.
+          #   - CVE-2026-69247: cryptography <50.0.0 — Bleichenbacher oracle in
+          #     pkcs7_decrypt_der / _pem / _smime (RecipientInfo encryptedKey
+          #     outcome distinguishable by message and by timing). NOT APPLICABLE
+          #     — this app never decrypts PKCS#7 EnvelopedData: grep over
+          #     Backend_FastAPI/app for pkcs7 / PKCS7 / EnvelopedData /
+          #     load_pem_pkcs7 / smime returns zero hits, and the only
+          #     `cryptography` imports are Fernet (config.py:381,814 ·
+          #     mfa_service.py:27 · sms_token.py:20). Exploitation additionally
+          #     requires a service that auto-decrypts attacker-supplied
+          #     EnvelopedData and answers adaptively (S/MIME gateway, mail
+          #     filter) — no such surface exists here.
+          #     BLOCKED from a real fix: the patch lands in cryptography 50.0.0,
+          #     but fastapi-mail 1.6.5 (latest) pins cryptography>=49.0.0,<50.0.0
+          #     so 50 is uninstallable without dropping fastapi-mail.
+          #     RE-EVALUATE when fastapi-mail allows cryptography 50, or
+          #     IMMEDIATELY if any PKCS#7 / S/MIME decryption is introduced.
           #   - GHSA-4xgf-cpjx-pc3j: pydantic-settings <2.14.2 symlink traversal
           #     in NestedSecretsSettingsSource. NOT APPLICABLE — app uses env
           #     config only; grep finds zero NestedSecretsSettingsSource /
@@ -88,7 +97,18 @@ jobs:
           #     0.136.1 + fastapi-mail 1.6.2 → 1.6.4 in this PR. Defence-in-
           #     depth (nginx default_server 444 + ssl_reject_handshake)
           #     already shipped in PR #325.
-          IGNORE_ARGS="--ignore-vuln CVE-2024-23342 --ignore-vuln PYSEC-2026-89 --ignore-vuln PYSEC-2025-183 --ignore-vuln GHSA-537c-gmf6-5ccf --ignore-vuln GHSA-4xgf-cpjx-pc3j --ignore-vuln CVE-2026-54911"
+          # REMOVED 2026-08-04 (this PR):
+          #   - GHSA-537c-gmf6-5ccf (cryptography <48.0.1 statically-linked
+          #     OpenSSL DoS) — no longer suppressed, it is genuinely FIXED.
+          #     It was only ever ignored because fastapi-mail 1.6.4 hard-pinned
+          #     cryptography<48.0.0; 1.6.5 moves the pin to >=49,<50, so
+          #     cryptography 49.0.0 installs and carries the fix. Leaving the
+          #     ignore in place would silently mask a patched hole.
+          #   - CVE-2026-59881 / CVE-2026-69243 / CVE-2026-69244 (aiohttp) were
+          #     never on the allowlist — closed outright by 3.14.1 → 3.14.3.
+          #   - CVE-2026-69248 / CVE-2026-69249 (cryptography name-constraint
+          #     wildcard escape + chain-building DoS) — closed by 49.0.0.
+          IGNORE_ARGS="--ignore-vuln CVE-2024-23342 --ignore-vuln PYSEC-2026-89 --ignore-vuln PYSEC-2025-183 --ignore-vuln CVE-2026-69247 --ignore-vuln GHSA-4xgf-cpjx-pc3j --ignore-vuln CVE-2026-54911"
           pip-audit -r requirements.txt --format json --output audit-results.json \
             $IGNORE_ARGS || true
 
