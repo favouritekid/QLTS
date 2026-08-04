@@ -1,5 +1,5 @@
 /**
- * Test hook xuất danh sách học phí (PR-A / H1).
+ * Test hook xuất danh sách khoản phí (PR-A / H1).
  *
  * Ca quan trọng nhất: **lỗi phải đi qua `blobErrorMessage`**. Vì
  * `responseType:'blob'`, axios bọc body lỗi JSON thành Blob nên đọc thẳng
@@ -63,7 +63,7 @@ describe("useTuitionExport", () => {
           headers: {
             "Content-Type": "text/csv; charset=utf-8",
             "Content-Disposition":
-              'attachment; filename="danh_sach_hoc_phi_20260803_101500.csv"',
+              'attachment; filename="danh_sach_khoan_phi_20260803_101500.csv"',
           },
         }),
       ),
@@ -77,8 +77,28 @@ describe("useTuitionExport", () => {
     await waitFor(() => expect(downloadBlobSpy).toHaveBeenCalled())
     // Tên phải là tên server đặt (có mốc thời gian), không phải tên cứng ở client
     expect(downloadBlobSpy.mock.calls[0][1]).toBe(
-      "danh_sach_hoc_phi_20260803_101500.csv",
+      "danh_sach_khoan_phi_20260803_101500.csv",
     )
+  })
+
+  it("[N] thiếu Content-Disposition → fallback dùng tên KHOẢN PHÍ", async () => {
+    // Tên fallback phải theo bản đổi tên (khoản phí), không phải tên cũ
+    // "danh_sach_hoc_phi" — tệp gồm cả lệ phí hồ sơ nên gọi là học phí là sai.
+    server.use(
+      http.get(`${API_BASE_URL}/api/invoices/export`, () =>
+        HttpResponse.arrayBuffer(new TextEncoder().encode("x").buffer, {
+          headers: { "Content-Type": "text/csv; charset=utf-8" }, // KHÔNG có Content-Disposition
+        }),
+      ),
+    )
+
+    const { result } = renderHook(() => useTuitionExport(), {
+      wrapper: createWrapper(),
+    })
+    result.current.mutate({ format: "csv", filters: {} })
+
+    await waitFor(() => expect(downloadBlobSpy).toHaveBeenCalled())
+    expect(downloadBlobSpy.mock.calls[0][1]).toBe("danh_sach_khoan_phi.csv")
   })
 
   it("[N] lỗi phải đi qua blobErrorMessage, không đọc thẳng data.detail", async () => {
@@ -105,7 +125,7 @@ describe("useTuitionExport", () => {
     expect(blobErrorMessageSpy).toHaveBeenCalledTimes(1)
     // Fallback truyền vào phải là câu tiếng Việt của tính năng này.
     expect(blobErrorMessageSpy.mock.calls[0][1]).toBe(
-      "Không xuất được danh sách học phí",
+      "Không xuất được danh sách khoản phí",
     )
     // Toast hiện ĐÚNG chuỗi mà blobErrorMessage trả về.
     expect(toastError).toHaveBeenCalledWith(detail)

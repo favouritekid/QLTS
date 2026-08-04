@@ -84,9 +84,21 @@ async def _seed_debtor(
 
 
 def _csv_rows(content: bytes) -> list:
+    """Chỉ phần BẢNG — CSV nay nối khối "Thong tin xuat" sau một dòng trống."""
     text = content.decode("utf-8")
     assert text.startswith("﻿"), "CSV phải mở đầu bằng BOM UTF-8"
-    return list(csv.reader(io.StringIO(text[1:])))
+    out = []
+    for r in csv.reader(io.StringIO(text[1:])):
+        if not any(c.strip() for c in r):
+            break
+        out.append(r)
+    return out
+
+
+def _unquote_forced(value: str) -> str:
+    if value.startswith('="') and value.endswith('"'):
+        return value[2:-1].replace('""', '"')
+    return value
 
 
 class TestDebtExportContent:
@@ -110,7 +122,7 @@ class TestDebtExportContent:
 
         assert len(rows) == len(report.items)
         for row, item in zip(rows, report.items):
-            assert row[0] == item.profile_code
+            assert _unquote_forced(row[0]) == item.profile_code
             assert row[1] == item.profile_name
             assert Decimal(row[9]) == Decimal(item.total_outstanding)
 

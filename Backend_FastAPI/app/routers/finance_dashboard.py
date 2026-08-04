@@ -26,7 +26,7 @@ from app.core.deps import (
     finance_scope_unit_id,
     require_finance_staff,
 )
-from app.core.rate_limits import limiter, RateLimits
+from app.core.rate_limits import get_user_id_key, limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.services.finance_report_service import FinanceReportService
 from app.repositories.fee_repository import InvoiceRepository
@@ -82,11 +82,13 @@ async def get_debt_report(
     )
 
 
-@limiter.limit(RateLimits.DATA_EXPORT)
 @router.get(
     "/debt-report/export",
     summary="Xuất báo cáo công nợ (xlsx/csv)",
 )
+# Thứ tự @router trên / @limiter dưới + khoá per-user — xem ghi chú ở
+# invoices.py::export_tuition_list.
+@limiter.limit(RateLimits.DATA_EXPORT, key_func=get_user_id_key)
 async def export_debt_report(
     request: Request,
     format: str = Query(

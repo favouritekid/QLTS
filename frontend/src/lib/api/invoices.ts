@@ -169,7 +169,7 @@ export async function applyPenalty(invoiceId: number, data: InvoicePenaltyReques
 }
 
 /**
- * Xuất danh sách học phí theo bộ lọc đang xem.
+ * Xuất danh sách khoản phí theo bộ lọc đang xem.
  *
  * Trả kèm `filename` đọc từ `Content-Disposition` — backend đặt tên có mốc
  * thời gian nên không được hard-code ở client (xuất 2 lần sẽ đè lên nhau).
@@ -189,7 +189,7 @@ export async function exportTuitionList(
     blob: response.data,
     filename: filenameFromDisposition(
       response.headers["content-disposition"],
-      `danh_sach_hoc_phi.${format}`,
+      `danh_sach_khoan_phi.${format}`,
     ),
   }
 }

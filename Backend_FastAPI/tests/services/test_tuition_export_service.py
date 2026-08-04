@@ -107,10 +107,32 @@ async def _seed_fee(
     return profile, fee
 
 
-def _csv_rows(content: bytes) -> list:
+def _csv_all_rows(content: bytes) -> list:
     text = content.decode("utf-8")
     assert text.startswith("﻿"), "CSV phải mở đầu bằng BOM UTF-8"
     return list(csv.reader(io.StringIO(text[1:])))
+
+
+def _csv_rows(content: bytes) -> list:
+    """Chỉ phần BẢNG (header + dữ liệu), bỏ khối ghi chú ở cuối.
+
+    CSV nay có "Thong tin xuat" nối sau dữ liệu (CSV không có sheet phụ), phân
+    tách bằng một dòng trống.
+    """
+    rows = _csv_all_rows(content)
+    out = []
+    for r in rows:
+        if not any(c.strip() for c in r):
+            break
+        out.append(r)
+    return out
+
+
+def _unquote_forced(value: str) -> str:
+    """Bóc dạng ="..." mà CSV dùng để ép TEXT."""
+    if value.startswith('="') and value.endswith('"'):
+        return value[2:-1].replace('""', '"')
+    return value
 
 
 async def _export(db, **kw):
@@ -180,6 +202,7 @@ class TestMoneyCells:
             f"ô tiền bị sanitize thành text: {row[14]!r}"
         )
         assert Decimal(row[14]) == Decimal("-50000"), row[14]
+        assert "." not in row[14], f"CSV phải ghi số nguyên đồng: {row[14]!r}"
 
     async def test_money_cells_are_numbers_in_xlsx(self, db, seeded_dependencies):
         """[N] Ô tiền trong xlsx là SỐ + number_format nghìn (Excel cộng được)."""
@@ -207,6 +230,75 @@ class TestMoneyCells:
         ws = load_workbook(io.BytesIO(content))[tes.SHEET_DATA]
         assert ws.cell(row=2, column=5).number_format == "@"
         assert ws.cell(row=2, column=5).value == "001234567890"
+
+
+class TestCsvParity:
+    """CSV phải được bảo vệ ngang XLSX — trước đây nó bị bỏ quên.
+
+    Ba lỗ đã vá: mất số 0 đầu CCCD (force_text chỉ chạy nhánh xlsx), mất toàn
+    bộ ghi chú/bộ lọc (CSV return trước khi dựng sheet phụ), và ô tiền ghi
+    "9000000.00" mà Excel bản tiếng Việt nhập thành TEXT.
+    """
+
+    async def test_csv_keeps_leading_zero_cccd(self, db, seeded_dependencies):
+        """[N] CCCD trong CSV phải ép TEXT, nếu không Excel cắt số 0 đầu."""
+        await _seed_fee(
+            db, seeded_dependencies,
+            invoices=[(1, "1000000", "issued", "0")],
+            citizen_id="001234567890",
+        )
+        content, _, _ = await _export(db)
+        cell = _csv_rows(content)[1][4]
+        assert _unquote_forced(cell) == "001234567890", cell
+        assert cell.startswith('="'), f"ô CCCD chưa ép TEXT: {cell!r}"
+
+    async def test_csv_money_has_no_decimal_tail(self, db, seeded_dependencies):
+        """[N] Ô tiền CSV là số nguyên đồng.
+
+        "9000000.00" dưới locale vi-VN là nhóm nghìn sai (dấu '.' là phân tách
+        nghìn) nên Excel nhập thành TEXT — đúng lỗi tính năng này sinh ra để dẹp.
+        """
+        await _seed_fee(
+            db, seeded_dependencies,
+            invoices=[(1, "9000000", "partial", "2000000")],
+            final_amount="9000000", paid_amount="2000000",
+        )
+        content, _, _ = await _export(db)
+        row = _csv_rows(content)[1]
+        assert row[11] == "9000000", row[11]
+        assert row[12] == "2000000", row[12]
+
+    async def test_csv_carries_meta_and_filters(self, db, seeded_dependencies):
+        """[N] CSV phải mang khối 'Thông tin lần xuất' + bộ lọc + ghi chú.
+
+        CSV không có sheet phụ; trước đây notes/applied_filters/exporter được
+        nhận rồi vứt im lặng, nên người dùng CSV không thấy cảnh báo nào.
+        """
+        await _seed_fee(
+            db, seeded_dependencies,
+            invoices=[(1, "1000000", "issued", "0")],
+        )
+        content, _, _ = await _export(
+            db, applied_filters={"Năm học": 2026}, exporter_name="Kế toán A",
+        )
+        text = content.decode("utf-8")
+        assert "Thông tin lần xuất" in text
+        assert "Kế toán A" in text
+        assert "Năm học" in text
+        assert "MỘT KHOẢN PHÍ" in text   # ghi chú grain
+        assert "đóng dư" in text          # ghi chú số âm
+
+    async def test_csv_meta_does_not_pollute_data_rows(
+        self, db, seeded_dependencies
+    ):
+        """Khối ghi chú nằm SAU dòng trống → không lọt vào vùng dữ liệu."""
+        await _seed_fee(
+            db, seeded_dependencies,
+            invoices=[(1, "1000000", "issued", "0")],
+        )
+        content, _, _ = await _export(db)
+        assert len(_csv_rows(content)) == 2          # header + 1 dòng
+        assert len(_csv_all_rows(content)) > 3       # còn khối ghi chú phía sau
 
 
 class TestSanitize:
@@ -408,7 +500,7 @@ class TestMixedFeeTypes:
         )
         assert "NHIỀU LOẠI PHÍ" in meta
         assert "Học phí" in meta
-        assert "Lệ phí xét tuyển" in meta
+        assert "Lệ phí hồ sơ" in meta
 
     async def test_xlsx_no_warning_for_single_fee_type(
         self, db, seeded_dependencies

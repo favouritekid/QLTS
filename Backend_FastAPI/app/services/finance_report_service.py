@@ -15,7 +15,10 @@ from sqlalchemy.orm import joinedload
 from app import models
 from app.models.finance import Fee, Invoice, PAYABLE_INVOICE_STATUSES
 from app.schemas import finance as finance_schemas
+from app.constants.fee_labels import FEE_TYPE_LABELS
+from app.utils.exceptions import BadRequest
 from app.utils.export_builder import build_simple_export
+from app.services.tuition_export_service import MAX_EXPORT_ROWS
 from app.utils.id_helpers import format_profile_code
 
 log = structlog.get_logger(__name__)
@@ -43,11 +46,15 @@ _DEBT_TEXT_INDEXES = {1, 2, 5}
 _DEBT_FORCE_TEXT_INDEXES = {0, 3}
 _DEBT_COLUMN_WIDTHS = [12, 26, 20, 12, 16, 22, 18, 20, 20, 18, 16, 18]
 
+# ⚠️ ``_aging_bucket`` (code có sẵn) trả "0_30" cho CẢ days_overdue == 0, tức
+# khoản CHƯA đến hạn cũng rơi vào nhóm này — không có bucket "chưa quá hạn".
+# Nhãn dưới đây phải nói đúng điều đó, nếu không kế toán đọc "0–30 ngày" sẽ đi
+# đòi một khoản chưa tới hạn (cột "Số ngày quá hạn" bên cạnh ghi 0).
+# Sửa phân nhóm là đổi số trên màn hình đang chạy → tách thành việc riêng.
 _AGING_LABELS = {
-    "0_30": "0–30 ngày",
+    "0_30": "Đến 30 ngày (gồm chưa tới hạn)",
     "31_60": "31–60 ngày",
     "over_60": "Trên 60 ngày",
-    "current": "Chưa quá hạn",
 }
 
 
@@ -214,6 +221,17 @@ class FinanceReportService:
             aging=aging,
         )
 
+        # Trần dòng như đường xuất học phí: ``get_debt_report`` không phân trang
+        # và ``finance_scope_unit_id`` trả None cho cả admin lẫn kế toán, nên
+        # một lần gọi không lọc sẽ nạp mọi hoá đơn còn nợ toàn hệ rồi dựng cả
+        # workbook trong bộ nhớ. Từ chối, KHÔNG cắt bớt.
+        if len(report.items) > MAX_EXPORT_ROWS:
+            cap_vn = f"{MAX_EXPORT_ROWS:,}".replace(",", ".")
+            raise BadRequest(
+                f"Kết quả lọc vượt quá {cap_vn} dòng cho một lần xuất. "
+                "Hãy thu hẹp bộ lọc (năm học / đợt / đơn vị / loại phí) rồi xuất lại."
+            )
+
         rows: list[list] = []
         for item in report.items:
             rows.append(
@@ -223,7 +241,11 @@ class FinanceReportService:
                     item.unit_name or "",
                     item.academic_year,
                     item.admission_round_id if item.admission_round_id else "",
-                    " | ".join(sorted(item.fee_types)),
+                    # Nhãn tiếng Việt — cột này từng in thẳng khoá enum tiếng Anh
+                    # ("application | tuition") dưới tiêu đề tiếng Việt.
+                    " | ".join(
+                        FEE_TYPE_LABELS.get(t, t) for t in sorted(item.fee_types)
+                    ),
                     item.invoice_count,
                     Decimal(item.total_expected),
                     Decimal(item.total_paid),

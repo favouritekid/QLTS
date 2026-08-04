@@ -42,7 +42,7 @@ from app.core.deps import (
     finance_scope_unit_id,
     require_finance_staff,
 )
-from app.core.rate_limits import limiter, RateLimits
+from app.core.rate_limits import get_user_id_key, limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.models.finance import (
     PAYABLE_INVOICE_STATUSES,
@@ -281,11 +281,18 @@ async def get_invoice_status_counts(
 # "/export" vào /{invoice_id} rồi ép "export" thành int → 422 khó đoán (không
 # phải 404). Cùng bẫy đã gặp ở payments.py với /import/batches.
 
-@limiter.limit(RateLimits.DATA_EXPORT)
 @router.get(
     "/export",
-    summary="Xuất danh sách học phí theo bộ lọc màn hình Thu học phí",
+    summary="Xuất danh sách khoản phí theo bộ lọc màn hình Thu học phí",
 )
+# 🔴 Thứ tự BẮT BUỘC: @router.* ở TRÊN, @limiter.limit ở DƯỚI (limiter trong
+# cùng). Python áp decorator từ dưới lên; đảo lại là @router đăng ký hàm CHƯA
+# bọc và hạn mức im lặng không chạy — xem tests/security/test_ratelimit_order_guard.py.
+#
+# key_func per-user: hạn mức mặc định khoá theo IP, mà cả trường đi chung một
+# IP NAT nên 20 lượt/giờ sẽ là quota DÙNG CHUNG — đúng hình dạng sự cố
+# /auth/refresh đã gặp trên prod. Route này đã xác thực nên khoá theo người.
+@limiter.limit(RateLimits.DATA_EXPORT, key_func=get_user_id_key)
 async def export_tuition_list(
     request: Request,
     format: str = Query(
@@ -311,7 +318,7 @@ async def export_tuition_list(
     current_user: models.User = CasbinAuth,
     _finance_staff: models.User = Depends(require_finance_staff),
 ) -> Response:
-    """Xuất danh sách học phí (xlsx/csv) theo ĐÚNG bộ lọc đang xem.
+    """Xuất danh sách khoản phí (xlsx/csv) theo ĐÚNG bộ lọc đang xem.
 
     Nhận cùng bộ tham số lọc với ``GET /api/invoices``, TRỪ phân trang và sắp
     xếp: file xuất trọn kết quả lọc và tự sắp theo mã hồ sơ.

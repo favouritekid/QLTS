@@ -1,5 +1,8 @@
 # app/services/tuition_export_service.py
-"""Xuất danh sách học phí theo bộ lọc màn hình "Thu học phí".
+"""Xuất danh sách KHOẢN PHÍ theo bộ lọc màn hình "Thu học phí".
+
+Gọi là "khoản phí" chứ không phải "học phí": bộ lọc màn hình không mặc định
+lọc loại phí nên tệp có thể gồm cả lệ phí hồ sơ, bảo hiểm…
 
 Vì sao có service này: trước đây muốn lấy bảng "hồ sơ × học phí × đã đóng ×
 còn lại" thì phải SSH vào máy chủ chạy SQL tay rồi ghép file — không audit,
@@ -29,6 +32,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
+from app.constants.fee_labels import FEE_STATUS_LABELS, FEE_TYPE_LABELS
 from app.utils.exceptions import BadRequest
 from app.utils.export_builder import SHEET_META, build_simple_export
 from app.utils.id_helpers import format_profile_code
@@ -78,26 +82,6 @@ _MONEY_INDEXES = {11, 12, 13, 14}
 
 # Cột "Loại phí" — dùng để phát hiện file trộn nhiều loại.
 _FEE_TYPE_COL = 7
-
-_FEE_TYPE_LABELS = {
-    "tuition": "Học phí",
-    "application": "Lệ phí xét tuyển",
-    "enrollment": "Phí nhập học",
-    "insurance": "Bảo hiểm",
-    "dormitory": "Ký túc xá",
-    "other": "Khác",
-}
-
-_FEE_STATUS_LABELS = {
-    "pending": "Chờ tính",
-    "calculated": "Đã tính",
-    "invoiced": "Đã phát hành hoá đơn",
-    "partial": "Đã thu một phần",
-    "paid": "Đã thu đủ",
-    "overdue": "Quá hạn",
-    "waived": "Được miễn",
-    "cancelled": "Đã huỷ",
-}
 
 _COLUMN_WIDTHS = [12, 18, 22, 26, 16, 20, 30, 18, 12, 10, 22, 18, 20, 16, 18, 20]
 
@@ -150,10 +134,10 @@ def _row_for(fee: Any) -> List[Any]:
         profile.citizen_id if profile and profile.citizen_id else "",
         degree,
         major,
-        _FEE_TYPE_LABELS.get(fee.fee_type, fee.fee_type),
+        FEE_TYPE_LABELS.get(fee.fee_type, fee.fee_type),
         f"{fee.academic_year}-{fee.academic_year + 1}",
         fee.semester_no if fee.semester_no is not None else "",
-        _FEE_STATUS_LABELS.get(fee.status, fee.status),
+        FEE_STATUS_LABELS.get(fee.status, fee.status),
         fee.final_amount,
         fee.paid_amount,
         fee.waived_amount,

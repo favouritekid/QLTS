@@ -1,5 +1,5 @@
 /**
- * Xuất danh sách học phí (PR-A / H1).
+ * Xuất danh sách khoản phí (PR-A / H1).
  *
  * @see Backend_FastAPI/app/services/tuition_export_service.py
  */
@@ -18,7 +18,10 @@ interface ExportVariables {
 }
 
 /**
- * Tải file danh sách học phí theo bộ lọc đang xem.
+ * Tải file danh sách khoản phí theo bộ lọc đang xem.
+ *
+ * Tên gọi "khoản phí" chứ không phải "học phí": bộ lọc màn hình không mặc
+ * định lọc loại phí nên tệp có thể gồm cả lệ phí hồ sơ, bảo hiểm…
  *
  * ⚠️ Lỗi PHẢI đọc qua `blobErrorMessage`: vì `responseType:'blob'`, axios bọc
  * body lỗi JSON thành Blob nên `error.response.data.detail` luôn undefined —
@@ -37,11 +40,11 @@ export function useTuitionExport() {
       // filename lấy từ Content-Disposition (backend gắn mốc thời gian) nên
       // xuất nhiều lần không đè lên nhau.
       downloadBlob(blob, filename)
-      toast.success("Đã tải danh sách học phí")
+      toast.success("Đã tải danh sách khoản phí")
     },
     onError: async (error) =>
       toast.error(
-        await blobErrorMessage(error, "Không xuất được danh sách học phí"),
+        await blobErrorMessage(error, "Không xuất được danh sách khoản phí"),
       ),
   })
 }

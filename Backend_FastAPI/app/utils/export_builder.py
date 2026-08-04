@@ -19,6 +19,7 @@ chép lại vòng lặp openpyxl.
 import csv
 import io
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
@@ -34,6 +35,32 @@ from app.utils.csv_helpers import sanitize_csv_cell
 VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 SHEET_META = "Thong tin xuat"
+
+
+def _csv_money(value: Any) -> str:
+    """Ô tiền cho CSV: số nguyên đồng, không phần thập phân.
+
+    ``Decimal('9000000.00')`` in ra "9000000.00"; dưới locale vi-VN dấu ``.``
+    là phân tách nghìn nên nhóm 2 chữ số cuối là sai định dạng và Excel nhập ô
+    đó thành TEXT (lệch trái, không vào SUM). VND không có phần lẻ nên bỏ hẳn
+    đuôi là an toàn và đọc được ở mọi locale.
+    """
+    if value is None or value == "":
+        return ""
+    if isinstance(value, Decimal):
+        return str(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    if isinstance(value, float):
+        return str(int(round(value)))
+    return str(value)
+
+
+def _csv_force_text(value: Any) -> str:
+    """Ô buộc TEXT cho CSV: bọc ``="..."`` để Excel không cắt số 0 đầu."""
+    if value is None or value == "":
+        return ""
+    raw = sanitize_csv_cell(value)
+    # Escape dấu " bên trong để không thoát khỏi chuỗi của công thức.
+    return '="' + raw.replace('"', '""') + '"'
 
 
 def _meta_rows(
@@ -101,12 +128,38 @@ def build_simple_export(
             for idx, value in enumerate(row):
                 if idx in money_indexes:
                     # KHÔNG sanitize: dấu '-' của số âm sẽ bị thêm dấu nháy.
-                    out.append("" if value is None else str(value))
+                    # Ghi số NGUYÊN đồng: "9000000.00" bị Excel bản tiếng Việt
+                    # coi là nhóm nghìn sai (dấu '.' là phân tách nghìn) nên
+                    # nhập thành TEXT — đúng lỗi "ô tiền không cộng được" mà
+                    # bản xuất này sinh ra để dẹp.
+                    out.append(_csv_money(value))
+                elif idx in force_text_indexes:
+                    # Ép TEXT cho mã hồ sơ / CCCD / năm học. Không có bước này,
+                    # CCCD "001234567890" vào Excel thành 1234567890 — mất số 0
+                    # đầu ở mọi tỉnh 001-096, trong chính tệp dùng để đối chiếu
+                    # người nộp. Dạng ="..." là quy ước Excel/LibreOffice đều
+                    # hiểu; giá trị được sanitize trước nên không mở đường
+                    # chèn công thức.
+                    out.append(_csv_force_text(value))
                 elif idx in text_indexes:
                     out.append(sanitize_csv_cell(value))
                 else:
                     out.append("" if value is None else str(value))
             writer.writerow(out)
+
+        # Ghi chú + bộ lọc: XLSX có sheet phụ, CSV thì không có chỗ nào khác.
+        # Đặt SAU dữ liệu và chỉ ở cột đầu → Excel vẫn đọc đúng tiêu đề, và
+        # bôi đen cột tiền không dính (các ô này rỗng).
+        meta = _meta_rows(
+            exporter_name=exporter_name,
+            applied_filters=applied_filters,
+            row_count=len(rows),
+            notes=notes,
+        )
+        writer.writerow([])
+        for meta_row in meta:
+            writer.writerow([sanitize_csv_cell(c) for c in meta_row])
+
         content = (CSV_UTF8_BOM + buf.getvalue()).encode("utf-8")
         return content, CSV_MEDIA_TYPE, f"{filename_stem}_{ts}.csv"
 
