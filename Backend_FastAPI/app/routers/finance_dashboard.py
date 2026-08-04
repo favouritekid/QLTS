@@ -14,15 +14,19 @@ Endpoints:
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Optional
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 import structlog
 
 from app import database, models
 from app.core.constants import UserRole
-from app.core.deps import CasbinAuth, finance_scope_unit_id
-from app.core.rate_limits import limiter, RateLimits
+from app.core.deps import (
+    CasbinAuth,
+    finance_scope_unit_id,
+    require_finance_staff,
+)
+from app.core.rate_limits import get_user_id_key, limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.services.finance_report_service import FinanceReportService
 from app.repositories.fee_repository import InvoiceRepository
@@ -75,6 +79,67 @@ async def get_debt_report(
         round_id=round_id,
         fee_type=fee_type,
         aging=aging,
+    )
+
+
+@router.get(
+    "/debt-report/export",
+    summary="Xuất báo cáo công nợ (xlsx/csv)",
+)
+# Thứ tự @router trên / @limiter dưới + khoá per-user — xem ghi chú ở
+# invoices.py::export_tuition_list.
+@limiter.limit(RateLimits.DATA_EXPORT, key_func=get_user_id_key)
+async def export_debt_report(
+    request: Request,
+    format: str = Query(
+        "xlsx", pattern="^(xlsx|csv)$", description="xlsx (mặc định) | csv"
+    ),
+    unit_id: Optional[int] = Query(None, description="Admin-only unit filter"),
+    academic_year: Optional[int] = Query(None),
+    round_id: Optional[int] = Query(None),
+    fee_type: Optional[str] = Query(None),
+    aging: Optional[str] = Query(None, pattern="^(0_30|31_60|over_60)$"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    _finance_staff: models.User = Depends(require_finance_staff),
+) -> Response:
+    """Xuất báo cáo công nợ ra tệp — cùng nguồn số liệu với màn hình.
+
+    Trước đây CSV được dựng ở TRÌNH DUYỆT: header là khoá kỹ thuật tiếng Anh,
+    không BOM (Excel tiếng Việt mojibake), ô tiền bọc thành chuỗi nên không
+    cộng được, tên tệp cố định nên xuất nhiều lần đè lên nhau.
+
+    Scope giống hệt ``get_debt_report``: admin có thể chọn đơn vị, người khác bị
+    ép về đơn vị của mình.
+    """
+    if current_user.role == UserRole.ADMIN:
+        scoped_unit_id = unit_id
+    else:
+        scoped_unit_id = finance_scope_unit_id(current_user)
+
+    report_service = FinanceReportService(db)
+    content, media_type, filename = await report_service.build_debt_report_export(
+        fmt=format,
+        exporter_name=current_user.full_name or current_user.username,
+        unit_id=scoped_unit_id,
+        academic_year=academic_year,
+        round_id=round_id,
+        fee_type=fee_type,
+        aging=aging,
+    )
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # Tệp chứa họ tên + CCCD hàng trăm thí sinh. Không có Cache-Control
+            # thì RFC 7234 §4.2.2 cho phép cache theo suy nghiệm, mà hệ này xác
+            # thực bằng cookie nên cache dùng chung không bị cấm lưu — trên máy
+            # dùng chung ở quầy, người sau mở lại từ lịch sử là có tệp.
+            # Cùng quy ước với sms_export / enrollment_letters / admissions.
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

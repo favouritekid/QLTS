@@ -236,6 +236,7 @@ export const API_ENDPOINTS = {
   FINANCE: {
     DASHBOARD: "/api/finance/dashboard",
     DEBT_REPORT: "/api/finance/debt-report",
+    DEBT_REPORT_EXPORT: "/api/finance/debt-report/export",
 
     FEES: {
       LIST: "/api/fees",
@@ -257,6 +258,7 @@ export const API_ENDPOINTS = {
     INVOICES: {
       LIST: "/api/invoices",
       STATUS_COUNTS: "/api/invoices/status-counts",
+      EXPORT: "/api/invoices/export",
       BY_FEE: (feeId: number) => `/api/invoices/by-fee/${feeId}`,
       DETAIL: (invoiceId: number) => `/api/invoices/${invoiceId}`,
       VIETQR: (invoiceId: number) => `/api/invoices/${invoiceId}/vietqr`,

@@ -22,7 +22,15 @@ import base64
 from datetime import date
 from decimal import Decimal
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -34,13 +42,15 @@ from app.core.deps import (
     finance_scope_unit_id,
     require_finance_staff,
 )
-from app.core.rate_limits import limiter, RateLimits
+from app.core.rate_limits import get_user_id_key, limiter, RateLimits
 from app.schemas import finance as finance_schemas
 from app.models.finance import (
     PAYABLE_INVOICE_STATUSES,
     OVERDUE_DERIVED_STATUSES,
 )
+from app.constants.fee_labels import FEE_TYPE_LABELS
 from app.services.invoice_service import InvoiceService
+from app.services.tuition_export_service import build_tuition_export
 from app.services.system_config_service import SystemConfigService
 from app.repositories.fee_repository import InvoiceRepository
 from app.utils.id_helpers import format_profile_code
@@ -263,6 +273,243 @@ async def get_invoice_status_counts(
         awaiting_major_change=awaiting_major_change,
     )
     return finance_schemas.InvoiceStatusCounts(**counts)
+
+
+
+# =============================================================================
+# EXPORT — nhãn bộ lọc cho sheet "Thong tin xuat"
+# =============================================================================
+
+_FEE_TYPE_FILTER_LABELS = FEE_TYPE_LABELS
+_INVOICE_STATUS_FILTER_LABELS = {
+    "draft": "Nháp",
+    "issued": "Chờ thu",
+    "partial": "Một phần",
+    "paid": "Đã thu",
+    "overdue": "Quá hạn",
+    "cancelled": "Đã hủy",
+}
+_DUE_WINDOW_LABELS = {
+    "due_soon_7d": "Đến hạn ≤7 ngày",
+    "overdue": "Đã quá hạn",
+}
+
+
+async def _build_export_filter_labels(
+    db: AsyncSession,
+    *,
+    scope_unit_id: Optional[int],
+    status: Optional[str],
+    fee_type: Optional[str],
+    overdue_only: Optional[bool],
+    search: Optional[str],
+    major_id: Optional[int],
+    degree_level: Optional[str],
+    academic_year: Optional[int],
+    semester_no: Optional[int],
+    officer_id: Optional[int],
+    unit_id: Optional[int],
+    awaiting_major_change: Optional[bool],
+    due_window: Optional[str],
+) -> dict:
+    """Dựng bảng "Bộ lọc đã áp dụng" cho tệp xuất — TÊN thật, không phải ID.
+
+    Ghi cả phạm vi quyền hiệu lực: người đọc tệp sau này phải biết số liệu bao
+    trọn hệ hay chỉ một đơn vị, kể cả khi người xuất không tự gõ bộ lọc nào.
+    """
+    labels: dict = {}
+
+    async def _unit_name_in_scope(target_id: int) -> str:
+        """Tên đơn vị — CHỈ khi nằm trong phạm vi quyền của người xuất.
+
+        🔴 Không ``db.get`` tuỳ ý: manager phạm vi đơn vị A truyền
+        ``unit_id`` của B thì dữ liệu ra rỗng (điều kiện lọc AND cả hai) nhưng
+        tệp vẫn in TÊN của B — rò rỉ danh mục đơn vị qua chính tệp xuất.
+        """
+        # MỘT chuỗi duy nhất cho cả "không tồn tại" lẫn "ngoài phạm vi".
+        # Trả hai chuỗi khác nhau là biến tệp xuất thành máy dò: người xem đoán
+        # được một ID có tồn tại hay không dù không được xem dữ liệu của nó.
+        opaque = f"#{target_id} (ngoài phạm vi hoặc không tồn tại)"
+        if scope_unit_id is not None and target_id != scope_unit_id:
+            return opaque
+        unit = await db.get(models.OrganizationUnit, target_id)
+        return unit.name if unit else opaque
+
+    # Hai khái niệm KHÁC NHAU, phải ghi tách:
+    #  * "Phạm vi quyền" = giới hạn do vai trò áp, người dùng không đổi được;
+    #  * "Bộ lọc đơn vị" = thứ người dùng tự chọn (giao với phạm vi trên).
+    # Gộp chúng như bản đầu thì tệp ghi sai phạm vi thật khi hai bên khác nhau.
+    if scope_unit_id is None:
+        labels["Phạm vi quyền"] = "Toàn hệ thống"
+    else:
+        labels["Phạm vi quyền"] = await _unit_name_in_scope(scope_unit_id)
+
+    if unit_id is not None:
+        labels["Bộ lọc đơn vị"] = await _unit_name_in_scope(unit_id)
+
+    if status:
+        labels["Trạng thái hoá đơn"] = ", ".join(
+            _INVOICE_STATUS_FILTER_LABELS.get(s.strip(), s.strip())
+            for s in status.split(",")
+            if s.strip()
+        )
+    if fee_type:
+        labels["Loại phí"] = _FEE_TYPE_FILTER_LABELS.get(fee_type, fee_type)
+    if overdue_only:
+        labels["Chỉ quá hạn"] = "Có"
+    if search:
+        labels["Từ khoá tìm kiếm"] = search
+    if major_id is not None:
+        major = await db.get(models.MajorProgram, major_id)
+        labels["Ngành"] = major.name if major else f"ngành #{major_id}"
+    if degree_level:
+        labels["Trình độ"] = degree_level
+    if academic_year is not None:
+        labels["Năm học"] = f"{academic_year}-{academic_year + 1}"
+    if semester_no is not None:
+        labels["Học kỳ"] = f"HK{semester_no}"
+    if officer_id is not None:
+        # Cùng lý do với đơn vị: không lộ tên người ngoài phạm vi quyền.
+        officer = await db.get(models.User, officer_id)
+        opaque_officer = f"#{officer_id} (ngoài phạm vi hoặc không tồn tại)"
+        if officer is None:
+            labels["TVV phụ trách"] = opaque_officer
+        elif scope_unit_id is not None and officer.unit_id != scope_unit_id:
+            labels["TVV phụ trách"] = opaque_officer
+        else:
+            labels["TVV phụ trách"] = officer.full_name or officer.username
+    if awaiting_major_change:
+        labels["Chờ xác nhận đổi ngành"] = "Có"
+    if due_window:
+        labels["Hạn"] = _DUE_WINDOW_LABELS.get(due_window, due_window)
+
+    return labels
+
+
+# ==============================================================================
+# EXPORT
+# ==============================================================================
+# 🔴 Route-order: khai /export TRƯỚC /{invoice_id}. Nếu đặt sau, FastAPI khớp
+# "/export" vào /{invoice_id} rồi ép "export" thành int → 422 khó đoán (không
+# phải 404). Cùng bẫy đã gặp ở payments.py với /import/batches.
+
+@router.get(
+    "/export",
+    summary="Xuất danh sách khoản phí theo bộ lọc màn hình Thu học phí",
+)
+# 🔴 Thứ tự BẮT BUỘC: @router.* ở TRÊN, @limiter.limit ở DƯỚI (limiter trong
+# cùng). Python áp decorator từ dưới lên; đảo lại là @router đăng ký hàm CHƯA
+# bọc và hạn mức im lặng không chạy — xem tests/security/test_ratelimit_order_guard.py.
+#
+# key_func per-user: hạn mức mặc định khoá theo IP, mà cả trường đi chung một
+# IP NAT nên 20 lượt/giờ sẽ là quota DÙNG CHUNG — đúng hình dạng sự cố
+# /auth/refresh đã gặp trên prod. Route này đã xác thực nên khoá theo người.
+@limiter.limit(RateLimits.DATA_EXPORT, key_func=get_user_id_key)
+async def export_tuition_list(
+    request: Request,
+    format: str = Query(
+        "xlsx", pattern="^(xlsx|csv)$", description="xlsx (mặc định) | csv"
+    ),
+    status: Optional[str] = Query(
+        None, description="Filter by status (comma-separated)"
+    ),
+    fee_id: Optional[int] = Query(None, description="Filter by fee ID"),
+    profile_id: Optional[int] = Query(None, description="Filter by profile ID"),
+    fee_type: Optional[str] = Query(None, description="Filter by fee type"),
+    overdue_only: Optional[bool] = Query(None),
+    search: Optional[str] = Query(None),
+    major_id: Optional[int] = Query(None),
+    degree_level: Optional[str] = Query(None),
+    academic_year: Optional[int] = Query(None),
+    semester_no: Optional[int] = Query(None),
+    officer_id: Optional[int] = Query(None),
+    unit_id: Optional[int] = Query(None),
+    awaiting_major_change: Optional[bool] = Query(None),
+    due_window: Optional[str] = Query(None),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    _finance_staff: models.User = Depends(require_finance_staff),
+) -> Response:
+    """Xuất danh sách khoản phí (xlsx/csv) theo ĐÚNG bộ lọc đang xem.
+
+    Nhận cùng bộ tham số lọc với ``GET /api/invoices``, TRỪ phân trang và sắp
+    xếp: file xuất trọn kết quả lọc và tự sắp theo mã hồ sơ.
+
+    **Grain**: mỗi dòng là MỘT KHOẢN PHÍ (không phải một hoá đơn) — xem
+    docstring ``tuition_export_service``.
+
+    **Security**: dual-gate (Casbin + require_finance_staff); IDOR qua
+    ``finance_scope_unit_id``.
+    """
+    scope_unit_id = finance_scope_unit_id(current_user)
+
+    statuses: Optional[List[str]] = None
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+
+    # Sheet "Thong tin xuat" phải đọc được sau vài tuần, nên:
+    #  * ghi PHẠM VI QUYỀN hiệu lực, không chỉ tham số người dùng gõ — admin
+    #    lọc unit_id=14 mà sheet ghi "(không lọc)" là nói sai phạm vi;
+    #  * resolve ID sang TÊN (ngành / TVV / đơn vị) và map enum sang nhãn UI —
+    #    "Ngành | 37" thì không ai dựng lại được bối cảnh.
+    applied_filters = await _build_export_filter_labels(
+        db,
+        scope_unit_id=scope_unit_id,
+        status=status,
+        fee_type=fee_type,
+        overdue_only=overdue_only,
+        search=search,
+        major_id=major_id,
+        degree_level=degree_level,
+        academic_year=academic_year,
+        semester_no=semester_no,
+        officer_id=officer_id,
+        unit_id=unit_id,
+        awaiting_major_change=awaiting_major_change,
+        due_window=due_window,
+    )
+
+    try:
+        content, media_type, filename = await build_tuition_export(
+            db,
+            fmt=format,
+            unit_id=scope_unit_id,
+            exporter_name=current_user.full_name or current_user.username,
+            applied_filters=applied_filters,
+            statuses=statuses,
+            fee_id=fee_id,
+            profile_id=profile_id,
+            fee_type=fee_type,
+            overdue_only=overdue_only,
+            search=search,
+            major_id=major_id,
+            degree_level=degree_level,
+            academic_year=academic_year,
+            semester_no=semester_no,
+            officer_id=officer_id,
+            unit_id_filter=unit_id,
+            due_window=due_window,
+            awaiting_major_change=awaiting_major_change,
+        )
+    except BadRequest as exc:
+        raise HTTPException(status_code=400, detail=exc.detail)
+
+    # Plain Response (không StreamingResponse) để có Content-Length — trình
+    # duyệt hiện được tiến độ tải.
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # Tệp chứa họ tên + CCCD hàng trăm thí sinh. Không có Cache-Control
+            # thì RFC 7234 §4.2.2 cho phép cache theo suy nghiệm, mà hệ này xác
+            # thực bằng cookie nên cache dùng chung không bị cấm lưu — trên máy
+            # dùng chung ở quầy, người sau mở lại từ lịch sử là có tệp.
+            # Cùng quy ước với sms_export / enrollment_letters / admissions.
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 # ==============================================================================

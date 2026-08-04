@@ -286,12 +286,33 @@ jobs:
           tests/integration/test_casbin_lead_static_route_collision.py
           tests/api/test_fees_calculate_authorization.py
           tests/api/test_finance_api.py::TestDiamondInheritance
+          tests/api/test_tuition_export_authorization.py
           tests/security/test_ratelimit_order_guard.py
           tests/security/test_ip_rate_limit.py
           tests/security/test_ratelimit_per_user_key.py
           tests/api/test_consultation_security.py
           tests/unit/test_casbin_enrollment_letter_routes.py
           tests/api/test_enrollment_letter_api.py
+          -q --tb=short --timeout=60
+
+      # =====================================================================
+      # Tier 2b: Luồng XUẤT tệp (danh sách khoản phí + báo cáo công nợ)
+      #
+      # Ba thứ ở đây hỏng ÂM THẦM nên phải chặn trước merge, không đợi nightly:
+      #   * grain DISTINCT fee — xuất theo hoá đơn làm cột tiền cộng ra gấp đôi
+      #     mà không có dấu hiệu nào trên màn hình;
+      #   * ô tiền / CCCD trong CSV — sanitize làm số âm thành text và mất số 0
+      #     đầu CCCD, tệp trông vẫn "đủ" nhưng số sai;
+      #   * fee_labels khớp frontend — tệp ghi một tên, màn hình ghi tên khác
+      #     thì lời khuyên "lọc theo cột Loại phí" trong tệp thành vô dụng.
+      # =====================================================================
+      - name: pytest — Export danh sách khoản phí + công nợ
+        working-directory: Backend_FastAPI
+        run: >-
+          python -m pytest
+          tests/services/test_tuition_export_service.py
+          tests/services/test_finance_report_export.py
+          tests/unit/test_fee_labels_match_frontend.py
           -q --tb=short --timeout=60
 
       # =====================================================================

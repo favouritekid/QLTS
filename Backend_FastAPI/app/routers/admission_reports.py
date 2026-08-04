@@ -25,13 +25,14 @@ from app.schemas.admission_report import (
     ReportFilters,
 )
 from app.services.admission_report_service import AdmissionReportService
+from app.constants.export_formats import XLSX_MEDIA_TYPE
 from app.services.admission_summary_export_service import (
     AdmissionSummaryExportService,
 )
 
 router = APIRouter(prefix="/api/v2/admin/reports", tags=["Admin v2 - Reports"])
 
-_XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_XLSX_MEDIA = XLSX_MEDIA_TYPE
 
 
 @router.get("/admission-weekly", response_model=AdmissionWeeklyReportResponse)

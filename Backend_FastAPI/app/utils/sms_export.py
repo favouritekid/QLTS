@@ -17,11 +17,10 @@ from typing import Optional, Sequence, Tuple
 
 from openpyxl import Workbook
 
+from app.constants.export_formats import XLSX_MEDIA_TYPE
 from app.utils.sms_token import LINK_SENTINEL, build_link, decrypt_code
 
-XLSX_MEDIA = (
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+XLSX_MEDIA = XLSX_MEDIA_TYPE
 # Tiền tố file staging (ghi dở) — DÙNG CHUNG service (ghi) + cleanup task (quét
 # orphan) để không lệch quy ước. §8.3.
 STAGING_PREFIX = ".staging."

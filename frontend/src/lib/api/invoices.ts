@@ -8,9 +8,11 @@
 import { api } from "./client"
 import { API_ENDPOINTS } from "./endpoints"
 import { vietQRResponseSchema } from "@/lib/zod/finance"
+import { filenameFromDisposition } from "@/lib/utils/download-blob"
 import type {
   Invoice,
   InvoiceDetail,
+  InvoiceExportFilters,
   InvoiceFilters,
   InvoiceListItem,
   InvoicePenaltyRequest,
@@ -166,6 +168,32 @@ export async function applyPenalty(invoiceId: number, data: InvoicePenaltyReques
   return response.data
 }
 
+/**
+ * Xuất danh sách khoản phí theo bộ lọc đang xem.
+ *
+ * Trả kèm `filename` đọc từ `Content-Disposition` — backend đặt tên có mốc
+ * thời gian nên không được hard-code ở client (xuất 2 lần sẽ đè lên nhau).
+ *
+ * @throws {AxiosError} 400 nếu kết quả lọc vượt trần dòng — body lỗi là Blob,
+ *   phải dùng `blobErrorMessage` mới lấy được câu tiếng Việt.
+ */
+export async function exportTuitionList(
+  format: "xlsx" | "csv",
+  filters: InvoiceExportFilters,
+): Promise<{ blob: Blob; filename: string }> {
+  const response = await api.get<Blob>(API_ENDPOINTS.FINANCE.INVOICES.EXPORT, {
+    params: { ...filters, format },
+    responseType: "blob",
+  })
+  return {
+    blob: response.data,
+    filename: filenameFromDisposition(
+      response.headers["content-disposition"],
+      `danh_sach_khoan_phi.${format}`,
+    ),
+  }
+}
+
 // ============================================================================
 // EXPORTED API OBJECT
 // ============================================================================
@@ -181,4 +209,5 @@ export const invoicesApi = {
   issueInvoice,
   cancelInvoice,
   applyPenalty,
+  exportTuitionList,
 }

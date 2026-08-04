@@ -22,7 +22,13 @@ import {
 } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { AmountDisplay } from "@/components/finance"
-import { useDebtReport } from "@/hooks/finance/useDebtReport"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { useDebtReport, useDebtReportExport } from "@/hooks/finance/useDebtReport"
 import type { DebtAgingBucket, DebtReportFilters, FeeType } from "@/types/finance.types"
 
 const AGING_LABELS: Record<DebtAgingBucket, string> = {
@@ -46,54 +52,12 @@ export function DebtReportClient() {
 
   const { data, isLoading, error, refetch } = useDebtReport(filters)
 
-  const exportCsv = () => {
-    if (!data?.items?.length) return
-    const header = [
-      "profile_code",
-      "profile_name",
-      "unit_name",
-      "academic_year",
-      "admission_round_id",
-      "fee_types",
-      "invoice_count",
-      "total_expected",
-      "total_paid",
-      "total_outstanding",
-      "days_overdue",
-      "aging_bucket",
-    ]
-    const rows = data.items.map((item) => [
-      item.profile_code,
-      item.profile_name,
-      item.unit_name ?? "",
-      item.academic_year,
-      item.admission_round_id ?? "",
-      item.fee_types.join("|"),
-      item.invoice_count,
-      item.total_expected,
-      item.total_paid,
-      item.total_outstanding,
-      item.days_overdue,
-      item.aging_bucket,
-    ])
-    // Neutralize CSV/formula injection: a cell starting with = + - @ (or tab/CR)
-    // is treated as a formula by Excel/Sheets. profile_name is user-controlled
-    // (lead full_name), so prefix risky cells with a single quote before quoting.
-    const escapeCell = (cell: string | number) => {
-      let s = String(cell)
-      if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`
-      return `"${s.replaceAll('"', '""')}"`
-    }
-    const csv = [header, ...rows]
-      .map((row) => row.map(escapeCell).join(","))
-      .join("\n")
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement("a")
-    link.href = url
-    link.download = "debt-report.csv"
-    link.click()
-    URL.revokeObjectURL(url)
+  // Xuất từ MÁY CHỦ (không dựng CSV ở trình duyệt nữa): server đặt tiêu đề
+  // tiếng Việt, thêm BOM cho Excel, ghi ô tiền kiểu số và gắn mốc thời gian
+  // vào tên tệp.
+  const exportMutation = useDebtReportExport()
+  const handleExport = (format: "xlsx" | "csv") => {
+    exportMutation.mutate({ format, filters })
   }
 
   if (error) {
@@ -125,18 +89,39 @@ export function DebtReportClient() {
             <RefreshCw className="mr-2 h-4 w-4" />
             Làm mới
           </Button>
-          <Button variant="outline" onClick={exportCsv} disabled={!data?.items?.length}>
-            <Download className="mr-2 h-4 w-4" />
-            CSV
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                disabled={exportMutation.isPending || !data?.items?.length}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                {exportMutation.isPending ? "Đang xuất…" : "Xuất"}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => handleExport("xlsx")}>
+                Excel (.xlsx)
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => handleExport("csv")}>
+                CSV (.csv)
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {/*
+          Hai ô giữa ghi rõ "(đợt còn nợ)": truy vấn CHỈ lấy hoá đơn còn dư nợ,
+          nên tiền của các đợt ĐÃ TRẢ XONG không nằm trong đây. Nhãn cũ ("Dự
+          thu" / "Đã thu") khiến người đọc tưởng là tổng của cả hồ sơ — hồ sơ
+          trả xong đợt 1 và còn nợ đợt 2 sẽ thấy "Đã thu" thiếu hẳn tiền đợt 1.
+        */}
         <SummaryCard title="Hồ sơ nợ" value={data?.summary.debtor_count ?? 0} />
-        <SummaryCard title="Dự thu" amount={data?.summary.total_expected ?? "0"} />
-        <SummaryCard title="Đã thu" amount={data?.summary.total_paid ?? "0"} />
-        <SummaryCard title="Còn lại" amount={data?.summary.total_outstanding ?? "0"} emphasis />
+        <SummaryCard title="Phải thu (đợt còn nợ)" amount={data?.summary.total_expected ?? "0"} />
+        <SummaryCard title="Đã thu (đợt còn nợ)" amount={data?.summary.total_paid ?? "0"} />
+        <SummaryCard title="Còn nợ" amount={data?.summary.total_outstanding ?? "0"} emphasis />
       </div>
 
       <Card>

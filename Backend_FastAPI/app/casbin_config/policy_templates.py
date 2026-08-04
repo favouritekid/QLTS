@@ -368,6 +368,9 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # DASHBOARD - Finance overview
         {"subject": "{role}", "object": "/api/finance/dashboard", "action": "GET"},
         {"subject": "{role}", "object": "/api/finance/debt-report", "action": "GET"},
+        # Xuất tệp — EXPLICIT: policy trên là literal nên thêm segment là hết
+        # khớp keyMatch4; thiếu dòng này accountant/manager nhận 403 THẬT.
+        {"subject": "{role}", "object": "/api/finance/debt-report/export", "action": "GET"},
 
         # Picker data for finance filters. The route returns UserPickerSchema
         # for non-admin roles, so accountant can load TVV dropdowns without PII.
@@ -409,6 +412,8 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # Workspace tab badges — EXPLICIT (don't rely on the keyMatch4 collision
         # with /api/invoices/{id}); mirrors /api/admissions/status-counts.
         {"subject": "{role}", "object": "/api/invoices/status-counts", "action": "GET"},
+        # Xuất danh sách học phí — EXPLICIT vì cùng lý do với status-counts.
+        {"subject": "{role}", "object": "/api/invoices/export", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/{id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/{id}/vietqr", "action": "GET"},
         {"subject": "{role}", "object": "/api/invoices/by-fee/{fee_id}", "action": "GET"},
@@ -679,11 +684,15 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         # Finance Module - Manager can verify/reject payments, waive fees, apply penalties
         {"subject": "{role}", "object": "/api/finance/dashboard", "action": "GET"},  # Finance overview
         {"subject": "{role}", "object": "/api/finance/debt-report", "action": "GET"},
+        # Xuất tệp — EXPLICIT: policy trên là literal nên thêm segment là hết
+        # khớp keyMatch4; thiếu dòng này accountant/manager nhận 403 THẬT.
+        {"subject": "{role}", "object": "/api/finance/debt-report/export", "action": "GET"},
         # Collection workspace ("Thu học phí") — manager is in FINANCE_ROLES (FE),
         # but does NOT inherit accountant, so grant the list + tab badges here or
         # the workspace list 403s for manager.
         {"subject": "{role}", "object": "/api/invoices", "action": "GET"},  # Workspace list
         {"subject": "{role}", "object": "/api/invoices/status-counts", "action": "GET"},  # Tab badges
+        {"subject": "{role}", "object": "/api/invoices/export", "action": "GET"},  # Xuất danh sách học phí
         {"subject": "{role}", "object": "/api/fees/collection/{profile_id}", "action": "GET"},  # Workspace drawer
         {"subject": "{role}", "object": "/api/fees/calculable-profiles", "action": "GET"},  # Tính phí picker
         {"subject": "{role}", "object": "/api/fees/{id}/waive", "action": "POST"},  # Waive fee

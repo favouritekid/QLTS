@@ -1062,6 +1062,18 @@ export interface InvoiceStatusCountFilters extends InvoiceWorkspaceFilters {
   search?: string
 }
 
+/**
+ * Query params cho `GET /api/invoices/export`.
+ *
+ * = `InvoiceFilters` TRỪ phân trang và sắp xếp: file xuất trọn kết quả lọc và
+ * tự sắp theo mã hồ sơ (sort của màn hình vô nghĩa vì mỗi dòng là một KHOẢN
+ * PHÍ, không phải một hoá đơn).
+ */
+export type InvoiceExportFilters = Omit<
+  InvoiceFilters,
+  "page" | "page_size" | "sort_by" | "sort_order"
+>
+
 export interface PaymentFilters {
   invoice_id?: number
   status?: PaymentStatus
