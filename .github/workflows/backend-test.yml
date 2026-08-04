@@ -288,6 +288,7 @@ jobs:
               tests/services/test_tuition_export_service.py
               tests/services/test_finance_report_export.py
               tests/unit/test_fee_labels_match_frontend.py
+              tests/unit/test_KIEM_NGUOC_XOA_NGAY_khong_ton_tai.py
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability
