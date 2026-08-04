@@ -213,6 +213,22 @@ class TestListPaymentsByFee:
         assert set(ctx["pay_a_ids"]).issubset(ids)
         assert ctx["pay_b_id"] in ids
 
+    async def test_fee_id_bang_khong_bi_tu_choi(
+        self, client: AsyncClient, admin_token_headers: dict, two_fees_ctx
+    ):
+        """fee_id=0 phải bị TỪ CHỐI, không được coi như 'không lọc'.
+
+        Đây là ca biên thật, không phải bắt bẻ: viết ``if fee_id:`` thì 0 là
+        falsy nên bộ lọc bị bỏ qua **im lặng** và API trả về toàn bộ phiếu
+        trong phạm vi quyền — người gọi tưởng đang xem một khoản phí.
+        """
+        r = await client.get(
+            "/api/payments?fee_id=0&page_size=100", headers=admin_token_headers
+        )
+        assert r.status_code == 422, (
+            f"fee_id=0 phải bị chặn ở tầng validate, nhận {r.status_code}: {r.text[:200]}"
+        )
+
     async def test_fee_id_khong_ton_tai_tra_rong(
         self, client: AsyncClient, admin_token_headers: dict, two_fees_ctx
     ):

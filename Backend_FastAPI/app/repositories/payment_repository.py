@@ -388,7 +388,11 @@ class PaymentRepository(BaseRepository[Payment]):
         # Lọc ở mức KHOẢN PHÍ: Invoice đã nằm trong join bên dưới nên không cần
         # thêm bảng. Đi qua Invoice.fee_id chứ không phải Fee.id để tránh phụ
         # thuộc thứ tự join.
-        if fee_id:
+        # `is not None` chứ KHÔNG phải `if fee_id:` — id 0 không hợp lệ nhưng
+        # nếu ai đó gửi tới đây thì falsy sẽ bị hiểu thành "không lọc" và trả
+        # về toàn bộ phiếu trong phạm vi quyền. Router chặn bằng ge=1; đây là
+        # lớp thứ hai cho các caller gọi thẳng repository.
+        if fee_id is not None:
             base_conditions.append(Invoice.fee_id == fee_id)
 
         # Count query

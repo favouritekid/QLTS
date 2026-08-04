@@ -78,6 +78,7 @@ async def list_payments(
     invoice_id: Optional[int] = Query(None, description="Filter by invoice ID"),
     fee_id: Optional[int] = Query(
         None,
+        ge=1,
         description="Filter by fee ID — trả phiếu thu của MỌI hoá đơn thuộc "
         "khoản phí đó. Dùng cho ô 'đang chờ duyệt' ở form ghi tiền: khoản phí "
         "nhiều đợt thì phiếu vừa nhập có thể nằm ở hoá đơn khác, lọc theo "
