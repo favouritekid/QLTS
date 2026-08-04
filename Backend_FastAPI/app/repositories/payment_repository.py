@@ -117,11 +117,29 @@ class PaymentRepository(BaseRepository[Payment]):
     ) -> Optional[Payment]:
         """Get a payment with a pessimistic row lock (SELECT FOR UPDATE).
 
-        Used by refund creation to serialize concurrent requests against the
-        same payment: the second request blocks until the first commits, then
-        re-reads the committed-refund total and cannot over-commit. No nullable
-        joinedloads (FOR UPDATE can't apply to the nullable side of an outer
-        join); only the row's own columns (amount/status) are needed.
+        Three callers, all serializing writes against the same payment row:
+
+        * refund creation — the second request blocks until the first commits,
+          then re-reads the committed-refund total and cannot over-commit;
+        * ``verify_payment`` — without the lock two concurrent verifications
+          both read 'pending' and both add the amount to invoice/fee, i.e.
+          money counted twice. Taking the payment row first ALSO normalises
+          lock order (verify used to take invoice → fee and only reach the
+          payment row at flush time). That part is preventive, not a live
+          fix: today's ``void_batch`` only reverses 'verified' payments while
+          verify only accepts 'pending', so the two can never contend for the
+          same payment row. A single-payment void would close that cycle;
+        * ``reject_payment`` — same reason, so that reject racing verify
+          cannot leave two different final states.
+
+        Lock order across the whole system: batch (if any) → payment →
+        invoice → fee.
+
+        No nullable joinedloads (FOR UPDATE can't apply to the nullable side of
+        an outer join); only the row's own columns are returned. A caller that
+        needs relations must hydrate them AFTER the checks pass — see
+        ``reject_payment``, which calls ``get_by_id_with_relations`` on the
+        already-locked row (the identity map returns the same instance).
         """
         query = (
             select(Payment)
