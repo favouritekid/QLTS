@@ -1076,6 +1076,10 @@ export type InvoiceExportFilters = Omit<
 
 export interface PaymentFilters {
   invoice_id?: number
+  // Lọc ở mức KHOẢN PHÍ: trả phiếu thu của mọi đợt thuộc khoản phí đó. Cần cho
+  // ô "đang chờ duyệt" ở form ghi tiền — khoản phí nhiều đợt thì phiếu vừa nhập
+  // có thể nằm ở hoá đơn khác, lọc theo invoice_id sẽ không thấy.
+  fee_id?: number
   status?: PaymentStatus
   method_id?: number
   page?: number

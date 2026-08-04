@@ -217,6 +217,36 @@ export function usePaymentDetail(
  * const { data: payments } = usePaymentsByInvoice(456)
  * ```
  */
+/**
+ * Phiếu thu ĐANG CHỜ DUYỆT của một KHOẢN PHÍ (mọi đợt, không chỉ đợt đang mở).
+ *
+ * Dùng cho ô "đang chờ duyệt" ở form ghi tiền. Vì sao phải theo khoản phí chứ
+ * không theo hoá đơn: `fee.paid_amount` chỉ tăng khi phiếu được DUYỆT, nên sau
+ * khi nhập lần đầu mà chưa ai duyệt, mọi màn hình vẫn hiện y như chưa thu —
+ * kế toán tưởng lần nhập trước trượt nên nhập lại. Mà phiếu vừa nhập rất dễ
+ * nằm ở đợt khác với đợt đang mở, lọc theo `invoice_id` sẽ không thấy nó.
+ *
+ * `page_size` 100: một khoản phí thực tế có vài phiếu; đặt trần để nếu dữ liệu
+ * bất thường thì cũng không kéo về cả nghìn dòng chỉ để đếm.
+ */
+export function usePendingPaymentsByFee(
+  feeId: number | undefined,
+  options?: { enabled?: boolean }
+) {
+  const filters: PaymentFilters = {
+    fee_id: feeId,
+    status: "pending",
+    page: 1,
+    page_size: 100,
+  }
+  return useQuery<PaymentListPaginatedResponse, AxiosError<ApiErrorResponse>>({
+    queryKey: paymentsKeys.list(filters),
+    queryFn: () => paymentsApi.getPayments(filters),
+    enabled: (options?.enabled ?? true) && !!feeId,
+    staleTime: 1000 * 15,
+  })
+}
+
 export function usePaymentsByInvoice(invoiceId: number, options?: { enabled?: boolean }) {
   return useQuery<Payment[], AxiosError<ApiErrorResponse>>({
     queryKey: paymentsKeys.byInvoice(invoiceId),

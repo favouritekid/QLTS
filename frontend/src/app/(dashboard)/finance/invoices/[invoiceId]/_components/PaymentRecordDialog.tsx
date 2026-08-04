@@ -35,8 +35,10 @@ import { Button } from "@/components/ui/button"
 import { CurrencyInput } from "@/components/ui/currency-input"
 import { DatePicker } from "@/components/common/form/DatePicker"
 import { CreditCard, Loader2 } from "lucide-react"
-import { useCreatePayment } from "@/hooks/finance/usePayments"
+import { useCreatePayment, usePendingPaymentsByFee } from "@/hooks/finance/usePayments"
 import { usePaymentMethods } from "@/hooks/finance/usePaymentMethods"
+import { useInvoiceDetail } from "@/hooks/finance/useInvoices"
+import { AmountDisplay } from "@/components/finance"
 import { parseVNDDisplayAmount } from "@/lib/zod/finance"
 import { toast } from "sonner"
 
@@ -100,6 +102,24 @@ export function PaymentRecordDialog({
   const createMutation = useCreatePayment()
   const { data: paymentMethods, isLoading: methodsLoading } = usePaymentMethods()
 
+  // Số thật để dựng bảng công nợ. Chỉ fetch khi dialog mở — không tốn request
+  // cho mọi dòng trong danh sách.
+  const { data: invoice, isLoading: invoiceLoading } = useInvoiceDetail(invoiceId, {
+    enabled: open,
+  })
+  // Phiếu ĐANG CHỜ DUYỆT của cả khoản phí (mọi đợt). Đây là dòng chữa bệnh:
+  // `fee.paid_amount` chỉ tăng khi phiếu được duyệt, nên nếu không hiện phần
+  // đang chờ thì màn hình trông y như chưa ai thu — và kế toán nhập lại.
+  const { data: pendingPage, isLoading: pendingLoading } = usePendingPaymentsByFee(feeId, {
+    enabled: open,
+  })
+
+  const pendingItems = pendingPage?.items ?? []
+  const pendingTotal = React.useMemo(
+    () => pendingItems.reduce((sum, p) => sum + Number(p.amount ?? 0), 0),
+    [pendingItems]
+  )
+
   // Filter to offline methods only (online has separate flow)
   const offlineMethods = React.useMemo(() => {
     return paymentMethods?.filter((m) => !m.is_online && m.is_active) || []
@@ -119,8 +139,13 @@ export function PaymentRecordDialog({
   })
 
   const onSubmit = async (values: PaymentFormValues) => {
-    const maxAmountNum = parseVNDDisplayAmount(maxAmount)
-    if (!isNaN(maxAmountNum) && values.amount > maxAmountNum) {
+    // Chặn theo SỐ THẬT từ máy chủ khi đã có; `maxAmount` là chuỗi hiển thị
+    // truyền qua prop, chỉ dùng để vẽ ngay lúc mở và làm phương án dự phòng
+    // khi chưa fetch xong. Parse lại chuỗi đã định dạng là đường vòng dễ lệch.
+    const limit = invoice?.remaining_amount
+      ? Number(invoice.remaining_amount)
+      : parseVNDDisplayAmount(maxAmount)
+    if (!isNaN(limit) && values.amount > limit) {
       form.setError("amount", { message: `Số tiền không được vượt quá số dư (${maxAmount})` });
       return;
     }
@@ -168,6 +193,55 @@ export function PaymentRecordDialog({
             <span className="font-medium">Số tiền còn lại: {maxAmount}</span>
           </DialogDescription>
         </DialogHeader>
+
+        {/*
+          Bảng công nợ. Dòng "đang chờ duyệt" là lý do cả khối này tồn tại:
+          tiền chỉ vào sổ khi phiếu được DUYỆT, nên nếu không nói ra thì màn
+          hình hiện y như chưa ai thu và kế toán nhập lại — prod đã có 9 phiếu
+          nghi trùng theo đúng đường đó.
+          Đang tải thì hiện khung mờ, KHÔNG chặn form: người dùng vẫn gõ được.
+        */}
+        <div
+          className="rounded-md border bg-muted/40 p-3 text-sm"
+          data-testid="payment-debt-panel"
+        >
+          {invoiceLoading || pendingLoading ? (
+            <div className="space-y-2" aria-hidden>
+              <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+              <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
+            </div>
+          ) : (
+            <dl className="space-y-1">
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">Tổng hoá đơn</dt>
+                <dd><AmountDisplay amount={invoice?.total_due ?? "0"} /></dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">Đã thu (đã duyệt)</dt>
+                <dd><AmountDisplay amount={invoice?.paid_amount ?? "0"} /></dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">Còn phải thu</dt>
+                <dd className="font-medium">
+                  <AmountDisplay amount={invoice?.remaining_amount ?? "0"} />
+                </dd>
+              </div>
+              {pendingItems.length > 0 && (
+                <div
+                  className="flex justify-between gap-4 border-t pt-1 text-amber-700 dark:text-amber-500"
+                  data-testid="payment-pending-row"
+                >
+                  <dt className="font-medium">
+                    Chờ duyệt: {pendingItems.length} phiếu
+                  </dt>
+                  <dd className="font-medium">
+                    <AmountDisplay amount={String(pendingTotal)} />
+                  </dd>
+                </div>
+              )}
+            </dl>
+          )}
+        </div>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
