@@ -39,7 +39,7 @@ import { useCreatePayment, usePendingPaymentsByFee } from "@/hooks/finance/usePa
 import { usePaymentMethods } from "@/hooks/finance/usePaymentMethods"
 import { useInvoiceDetail } from "@/hooks/finance/useInvoices"
 import { AmountDisplay } from "@/components/finance"
-import { parseVNDDisplayAmount } from "@/lib/zod/finance"
+import { formatVND, parseVNDDisplayAmount } from "@/lib/zod/finance"
 import { toast } from "sonner"
 
 // =============================================================================
@@ -68,8 +68,21 @@ interface PaymentRecordDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   invoiceId: number
+  /**
+   * Số dư ĐÃ ĐỊNH DẠNG, chụp tại nơi mở form. Chỉ để vẽ ngay lúc mở (tránh
+   * nhảy layout) và làm phương án dự phòng khi chưa có số máy chủ. KHÔNG được
+   * dùng trực tiếp ở bất kỳ chỗ nào khác — mọi con số hiện ra và mọi phép
+   * kiểm tra đều đi qua `remainingLabel` / `remainingLimit` bên dưới, nếu
+   * không dialog sẽ nói hai số "còn lại" khác nhau ở hai chỗ.
+   */
   maxAmount: string
-  feeId?: number
+  /**
+   * BẮT BUỘC: ô "đang chờ duyệt" hỏi theo KHOẢN PHÍ (mọi đợt), không theo một
+   * hoá đơn. Thiếu nó thì ô đếm im lặng trống rỗng và dialog quay về đúng
+   * trạng thái nói dối mà B1 sinh ra để xoá — nên đây là lỗi biên dịch, không
+   * phải giá trị tuỳ chọn.
+   */
+  feeId: number
   /** Prefill the payer name (student/parent, known from the collection drawer). */
   defaultPayerName?: string
   /**
@@ -104,21 +117,50 @@ export function PaymentRecordDialog({
 
   // Số thật để dựng bảng công nợ. Chỉ fetch khi dialog mở — không tốn request
   // cho mọi dòng trong danh sách.
-  const { data: invoice, isLoading: invoiceLoading } = useInvoiceDetail(invoiceId, {
+  const {
+    data: invoice,
+    isLoading: invoiceLoading,
+    isError: invoiceFailed,
+  } = useInvoiceDetail(invoiceId, {
     enabled: open,
+    // `enabled: open` KHÔNG đủ để có số mới: trang cha dùng chung query key
+    // này với độ tươi mặc định 30 giây, nên mở lại form trong 30 giây sẽ đọc
+    // lại đúng bản cache cũ — trong khi hàng đợi chờ duyệt đã tươi. Kết quả là
+    // panel nói "không còn phiếu chờ" kèm một số dư từ trước lúc duyệt, tức
+    // vẫn đúng cái màn hình nói dối mà B1 sinh ra để xoá.
+    staleTime: 0,
   })
-  // Phiếu ĐANG CHỜ DUYỆT của cả khoản phí (mọi đợt). Đây là dòng chữa bệnh:
-  // `fee.paid_amount` chỉ tăng khi phiếu được duyệt, nên nếu không hiện phần
-  // đang chờ thì màn hình trông y như chưa ai thu — và kế toán nhập lại.
-  const { data: pendingPage, isLoading: pendingLoading } = usePendingPaymentsByFee(feeId, {
+  // Phiếu TAY ĐANG CHỜ DUYỆT của cả khoản phí (mọi đợt). Đây là dòng chữa
+  // bệnh: `fee.paid_amount` chỉ tăng khi phiếu được duyệt, nên nếu không hiện
+  // phần đang chờ thì màn hình trông y như chưa ai thu — và kế toán nhập lại.
+  const {
+    data: pendingPage,
+    isLoading: pendingLoading,
+    isError: pendingFailed,
+  } = usePendingPaymentsByFee(feeId, {
     enabled: open,
   })
 
   const pendingItems = pendingPage?.items ?? []
-  const pendingTotal = React.useMemo(
-    () => pendingItems.reduce((sum, p) => sum + Number(p.amount ?? 0), 0),
-    [pendingItems]
-  )
+  // Cộng tối đa 100 phần tử số — rẻ hơn hẳn chi phí giữ một mảng ổn định qua
+  // các lần render, nên không memo hoá.
+  const pendingSum = pendingItems.reduce((sum, p) => sum + Number(p.amount ?? 0), 0)
+  // Máy chủ trả `total` của cả khoản phí, còn `items` bị cắt theo page_size.
+  // Nếu cắt thì con số cộng được KHÔNG phải tổng thật — phải nói ra, chứ trình
+  // bày một tổng thiếu như thể đầy đủ cũng là một kiểu nói dối.
+  const pendingTruncated = (pendingPage?.total ?? pendingItems.length) > pendingItems.length
+
+  // MỘT nguồn duy nhất cho "còn phải thu": số máy chủ nếu đã tải được, nếu
+  // chưa thì rơi về ảnh chụp truyền qua prop. Cả tiêu đề, dòng mô tả ô nhập,
+  // thông báo lỗi lẫn phép chặn đều đọc ở đây — trước đó phép chặn dùng số
+  // máy chủ còn chữ hiển thị dùng prop, nên form từ chối một số tiền mà chính
+  // nó vừa nói là hợp lệ.
+  const serverRemaining = invoice?.remaining_amount
+  const hasServerRemaining = serverRemaining !== undefined && serverRemaining !== null
+  const remainingLimit = hasServerRemaining
+    ? Number(serverRemaining)
+    : parseVNDDisplayAmount(maxAmount)
+  const remainingLabel = hasServerRemaining ? formatVND(serverRemaining) : maxAmount
 
   // Filter to offline methods only (online has separate flow)
   const offlineMethods = React.useMemo(() => {
@@ -139,14 +181,11 @@ export function PaymentRecordDialog({
   })
 
   const onSubmit = async (values: PaymentFormValues) => {
-    // Chặn theo SỐ THẬT từ máy chủ khi đã có; `maxAmount` là chuỗi hiển thị
-    // truyền qua prop, chỉ dùng để vẽ ngay lúc mở và làm phương án dự phòng
-    // khi chưa fetch xong. Parse lại chuỗi đã định dạng là đường vòng dễ lệch.
-    const limit = invoice?.remaining_amount
-      ? Number(invoice.remaining_amount)
-      : parseVNDDisplayAmount(maxAmount)
-    if (!isNaN(limit) && values.amount > limit) {
-      form.setError("amount", { message: `Số tiền không được vượt quá số dư (${maxAmount})` });
+    // Chặn theo đúng con số mà form vừa hiển thị — cùng biến, không tính lại.
+    if (!isNaN(remainingLimit) && values.amount > remainingLimit) {
+      form.setError("amount", {
+        message: `Số tiền không được vượt quá số dư (${remainingLabel})`,
+      });
       return;
     }
     try {
@@ -190,7 +229,10 @@ export function PaymentRecordDialog({
           <DialogDescription>
             Nhập thông tin thanh toán. Sau khi ghi nhận, thanh toán sẽ chờ xác minh từ người quản lý.
             <br />
-            <span className="font-medium">Số tiền còn lại: {maxAmount}</span>
+            <span className="font-medium">Số tiền còn lại: {remainingLabel}</span>
+            {!hasServerRemaining && !invoiceLoading && (
+              <span className="text-muted-foreground"> (chưa đối chiếu lại)</span>
+            )}
           </DialogDescription>
         </DialogHeader>
 
@@ -210,6 +252,21 @@ export function PaymentRecordDialog({
               <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
               <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
             </div>
+          ) : invoiceFailed ? (
+            /*
+              Request hỏng thì TUYỆT ĐỐI không vẽ 0. Một bảng công nợ toàn số 0
+              trông y hệt "hồ sơ này chưa nợ gì" — kế toán tin là đã đối chiếu
+              xong rồi nhập tiếp, tức lỗi tải trở thành đúng cái nguyên nhân mà
+              ô này sinh ra để chặn.
+            */
+            <p
+              role="alert"
+              className="text-destructive"
+              data-testid="payment-debt-error"
+            >
+              Không tải được dữ liệu đối chiếu. Vui lòng đóng và mở lại form —
+              đừng ghi tiền khi chưa thấy số dư và các phiếu đang chờ duyệt.
+            </p>
           ) : (
             <dl className="space-y-1">
               <div className="flex justify-between gap-4">
@@ -226,18 +283,46 @@ export function PaymentRecordDialog({
                   <AmountDisplay amount={invoice?.remaining_amount ?? "0"} />
                 </dd>
               </div>
-              {pendingItems.length > 0 && (
+              {/*
+                Ô "chờ duyệt" hỏng thì phải NÓI hỏng. Ẩn đi là trình bày "không
+                có phiếu nào đang chờ" — đúng câu trả lời sai nguy hiểm nhất ở
+                đây, vì nó cấp phép cho lần nhập thứ hai.
+              */}
+              {pendingFailed ? (
                 <div
-                  className="flex justify-between gap-4 border-t pt-1 text-amber-700 dark:text-amber-500"
-                  data-testid="payment-pending-row"
+                  className="border-t pt-1 text-destructive"
+                  role="alert"
+                  data-testid="payment-pending-error"
                 >
-                  <dt className="font-medium">
-                    Chờ duyệt: {pendingItems.length} phiếu
-                  </dt>
-                  <dd className="font-medium">
-                    <AmountDisplay amount={String(pendingTotal)} />
-                  </dd>
+                  Không tải được danh sách phiếu đang chờ duyệt — chưa thể
+                  khẳng định khoản này đã được nhập hay chưa.
                 </div>
+              ) : (
+                pendingItems.length > 0 && (
+                  <div
+                    className="border-t pt-1 text-amber-700 dark:text-amber-500"
+                    data-testid="payment-pending-row"
+                  >
+                    <div className="flex justify-between gap-4">
+                      <dt className="font-medium">
+                        Chờ duyệt: {pendingItems.length} phiếu
+                      </dt>
+                      <dd className="font-medium">
+                        <AmountDisplay amount={String(pendingSum)} />
+                      </dd>
+                    </div>
+                    {pendingTruncated && (
+                      <p
+                        className="text-xs font-normal"
+                        data-testid="payment-pending-truncated"
+                      >
+                        Danh sách bị giới hạn {pendingItems.length} phiếu trên
+                        tổng {pendingPage?.total} — số cộng ở đây chưa phải tổng
+                        đầy đủ.
+                      </p>
+                    )}
+                  </div>
+                )
               )}
             </dl>
           )}
@@ -306,7 +391,7 @@ export function PaymentRecordDialog({
                       className="h-11"
                     />
                   </FormControl>
-                  <FormDescription>Số tiền còn lại: {maxAmount}</FormDescription>
+                  <FormDescription>Số tiền còn lại: {remainingLabel}</FormDescription>
                   <FormMessage />
                 </FormItem>
               )}

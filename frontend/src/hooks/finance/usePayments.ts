@@ -218,7 +218,7 @@ export function usePaymentDetail(
  * ```
  */
 /**
- * Phiếu thu ĐANG CHỜ DUYỆT của một KHOẢN PHÍ (mọi đợt, không chỉ đợt đang mở).
+ * Phiếu thu TAY ĐANG CHỜ DUYỆT của một KHOẢN PHÍ (mọi đợt, không chỉ đợt đang mở).
  *
  * Dùng cho ô "đang chờ duyệt" ở form ghi tiền. Vì sao phải theo khoản phí chứ
  * không theo hoá đơn: `fee.paid_amount` chỉ tăng khi phiếu được DUYỆT, nên sau
@@ -226,8 +226,20 @@ export function usePaymentDetail(
  * kế toán tưởng lần nhập trước trượt nên nhập lại. Mà phiếu vừa nhập rất dễ
  * nằm ở đợt khác với đợt đang mở, lọc theo `invoice_id` sẽ không thấy nó.
  *
+ * `pending_manual_only` chứ KHÔNG phải `status: "pending"`: bộ lọc trạng thái
+ * chung còn trả về phiếu ONLINE người học tự bấm rồi bỏ dở (`intent_id` khác
+ * NULL). Ô này nói về việc *kế toán đã nhập mà chưa ai duyệt*, nên đếm phiếu
+ * online vào đó là dựng cảnh báo trên dữ liệu sai loại.
+ *
+ * `staleTime: 0` là điều kiện sống của tính năng, không phải chỉnh tinh: mục
+ * đích của ô này là chống nhập trùng, mà ca trùng kinh điển là đóng rồi mở
+ * lại form ngay sau khi một kế toán khác vừa tạo phiếu. Cache dù chỉ vài giây
+ * cũng dựng lại đúng màn hình nói dối mà B1 sinh ra để xoá. Một request thừa
+ * rẻ hơn một phiếu thu trùng.
+ *
  * `page_size` 100: một khoản phí thực tế có vài phiếu; đặt trần để nếu dữ liệu
- * bất thường thì cũng không kéo về cả nghìn dòng chỉ để đếm.
+ * bất thường thì cũng không kéo về cả nghìn dòng chỉ để đếm — người gọi đọc
+ * `total` để biết danh sách có bị cắt hay không.
  */
 export function usePendingPaymentsByFee(
   feeId: number | undefined,
@@ -235,7 +247,7 @@ export function usePendingPaymentsByFee(
 ) {
   const filters: PaymentFilters = {
     fee_id: feeId,
-    status: "pending",
+    pending_manual_only: true,
     page: 1,
     page_size: 100,
   }
@@ -243,7 +255,7 @@ export function usePendingPaymentsByFee(
     queryKey: paymentsKeys.list(filters),
     queryFn: () => paymentsApi.getPayments(filters),
     enabled: (options?.enabled ?? true) && !!feeId,
-    staleTime: 1000 * 15,
+    staleTime: 0,
   })
 }
 

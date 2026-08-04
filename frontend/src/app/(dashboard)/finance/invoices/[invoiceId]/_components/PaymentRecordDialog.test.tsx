@@ -7,9 +7,22 @@
  * vào sổ khi phiếu được DUYỆT, nên nếu không nói ra thì màn hình hiện y như
  * chưa ai thu và kế toán nhập lại — prod đã có 9 phiếu nghi trùng theo đúng
  * đường đó.
+ *
+ * Vòng review 04/08 chỉ ra rằng bộ test cũ **không thể đỏ** ở những chỗ quan
+ * trọng nhất: mock hook bỏ qua đối số, nên nó xanh y hệt dù dialog hỏi khoản
+ * phí nào, và nó chỉ soi cái panel chứ không soi phần còn lại của dialog — nơi
+ * con số "còn lại" thứ hai đang sống. Ba lớp được bổ sung ở đây:
+ *
+ *  - **đối số truyền cho hook** (khoản phí nào, mở hay đóng);
+ *  - **lỗi tải phải hiện ra là lỗi**, không được vẽ thành 0 hay thành "không có
+ *    phiếu nào chờ" — đó là câu trả lời sai nguy hiểm nhất, vì nó cấp phép cho
+ *    lần nhập thứ hai;
+ *  - **một con số duy nhất**: chặn theo số máy chủ thì phải HIỆN số máy chủ ở
+ *    mọi chỗ, kể cả ô nhập và thông báo lỗi.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
-import { render, screen } from "@/test/utils/test-utils"
+import userEvent from "@testing-library/user-event"
+import { render, screen, waitFor, within } from "@/test/utils/test-utils"
 
 import { PaymentRecordDialog } from "./PaymentRecordDialog"
 
@@ -22,20 +35,45 @@ const state = {
     remaining_amount: "4000000",
   } as Record<string, string> | undefined,
   invoiceLoading: false,
+  invoiceFailed: false,
   pendingItems: [] as Array<{ id: number; amount: string }>,
+  pendingTotal: undefined as number | undefined,
   pendingLoading: false,
+  pendingFailed: false,
 }
 
+/** Đối số THẬT mà dialog truyền cho hook — thứ bộ test cũ không hề nhìn. */
+const pendingHookCalls: Array<{ feeId: unknown; options: unknown }> = []
+const invoiceHookCalls: Array<{ invoiceId: unknown; options: unknown }> = []
+const createPayment = vi.fn()
+
 vi.mock("@/hooks/finance/usePayments", () => ({
-  useCreatePayment: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  usePendingPaymentsByFee: () => ({
-    data: { items: state.pendingItems, total: state.pendingItems.length },
-    isLoading: state.pendingLoading,
+  useCreatePayment: () => ({
+    mutateAsync: (...args: unknown[]) => createPayment(...args),
+    isPending: false,
   }),
+  usePendingPaymentsByFee: (feeId: unknown, options: unknown) => {
+    pendingHookCalls.push({ feeId, options })
+    return {
+      data: {
+        items: state.pendingItems,
+        total: state.pendingTotal ?? state.pendingItems.length,
+      },
+      isLoading: state.pendingLoading,
+      isError: state.pendingFailed,
+    }
+  },
 }))
 
 vi.mock("@/hooks/finance/useInvoices", () => ({
-  useInvoiceDetail: () => ({ data: state.invoice, isLoading: state.invoiceLoading }),
+  useInvoiceDetail: (invoiceId: unknown, options: unknown) => {
+    invoiceHookCalls.push({ invoiceId, options })
+    return {
+      data: state.invoiceFailed ? undefined : state.invoice,
+      isLoading: state.invoiceLoading,
+      isError: state.invoiceFailed,
+    }
+  },
 }))
 
 vi.mock("@/hooks/finance/usePaymentMethods", () => ({
@@ -47,15 +85,35 @@ vi.mock("@/hooks/finance/usePaymentMethods", () => ({
   }),
 }))
 
+/**
+ * Radix Select dùng Pointer Capture và `scrollIntoView`, cả hai đều không có
+ * trong jsdom. Gán hàm THƯỜNG (không phải `vi.fn`) vì vitest config bật
+ * `mockReset`/`restoreMocks`, sẽ xoá sạch thân mock giữa các ca.
+ */
+function installPointerStubs() {
+  Element.prototype.scrollIntoView = function scrollIntoView() {}
+  Element.prototype.hasPointerCapture = function hasPointerCapture() {
+    return false
+  }
+  Element.prototype.setPointerCapture = function setPointerCapture() {}
+  Element.prototype.releasePointerCapture = function releasePointerCapture() {}
+}
+
 beforeEach(() => {
+  installPointerStubs()
+  pendingHookCalls.length = 0
+  invoiceHookCalls.length = 0
   state.invoice = {
     total_due: "5000000",
     paid_amount: "1000000",
     remaining_amount: "4000000",
   }
   state.invoiceLoading = false
+  state.invoiceFailed = false
   state.pendingItems = []
+  state.pendingTotal = undefined
   state.pendingLoading = false
+  state.pendingFailed = false
 })
 
 describe("PaymentRecordDialog", () => {
@@ -65,6 +123,7 @@ describe("PaymentRecordDialog", () => {
         open
         onOpenChange={vi.fn()}
         invoiceId={19}
+        feeId={7}
         maxAmount="4.200.000 ₫"
         defaultPayerName="Nguyễn Thế Đạt"
         defaultReference="HS-000025"
@@ -80,6 +139,7 @@ describe("PaymentRecordDialog", () => {
         open
         onOpenChange={vi.fn()}
         invoiceId={19}
+        feeId={7}
         maxAmount="4.200.000 ₫"
       />,
     )
@@ -165,5 +225,197 @@ describe("PaymentRecordDialog — bảng công nợ", () => {
     expect(panel).toHaveTextContent(/1\D?000\D?000/)
     expect(panel).toHaveTextContent(/4\D?000\D?000/)
     expect(panel).not.toHaveTextContent(/9\D?999\D?999/)
+  })
+
+  it("nói rõ khi danh sách phiếu chờ bị cắt bớt, không trình bày tổng thiếu như tổng đủ", () => {
+    state.pendingItems = [{ id: 1, amount: "2000000" }]
+    state.pendingTotal = 120
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    expect(screen.getByTestId("payment-pending-truncated")).toHaveTextContent(/120/)
+  })
+})
+
+describe("PaymentRecordDialog — hỏi đúng khoản phí, đúng lúc", () => {
+  it("truyền feeId của form xuống hook, kèm cờ mở/đóng", () => {
+    const { rerender } = render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={77}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    // Hook phải nhận ĐÚNG khoản phí — không phải invoiceId, không phải
+    // undefined. Bộ test cũ mock hook mà bỏ qua đối số nên truyền gì cũng xanh.
+    expect(pendingHookCalls.length).toBeGreaterThan(0)
+    expect(pendingHookCalls.at(-1)).toEqual({
+      feeId: 77,
+      options: { enabled: true },
+    })
+
+    pendingHookCalls.length = 0
+    rerender(
+      <PaymentRecordDialog
+        open={false}
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={77}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    // Đóng form thì không được giữ query chạy — và quan trọng hơn, `enabled`
+    // đổi theo `open` chính là cơ chế khiến mở lại sẽ hỏi lại máy chủ.
+    expect(pendingHookCalls.at(-1)?.options).toEqual({ enabled: false })
+  })
+
+  it("bắt hoá đơn phải TƯƠI, không nhận lại bản cache 30 giây của trang cha", () => {
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={77}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    // `enabled: open` một mình KHÔNG đủ: trang cha dùng chung query key với độ
+    // tươi mặc định 30 giây, nên mở lại trong 30 giây sẽ đọc đúng bản cache
+    // cũ — trong khi hàng đợi chờ duyệt đã tươi. Panel khi ấy nói "không còn
+    // phiếu chờ" kèm số dư của lúc trước khi duyệt.
+    // (Việc `staleTime: 0` THỰC SỰ ép hỏi lại máy chủ được chứng minh riêng ở
+    // `useInvoiceDetail.freshness.test.tsx`; ca này khoá mắt xích nối hai đầu.)
+    expect(invoiceHookCalls.at(-1)).toEqual({
+      invoiceId: 19,
+      options: { enabled: true, staleTime: 0 },
+    })
+  })
+})
+
+describe("PaymentRecordDialog — lỗi tải KHÔNG được vẽ thành số 0", () => {
+  it("hỏng hoá đơn thì báo không đối chiếu được, không hiện bảng toàn số 0", () => {
+    state.invoiceFailed = true
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    const panel = screen.getByTestId("payment-debt-panel")
+    expect(screen.getByTestId("payment-debt-error")).toBeInTheDocument()
+    // Ca quyết định: một bảng "Còn phải thu: 0 ₫" trông y hệt "hồ sơ này hết
+    // nợ" — kế toán tin là đã đối chiếu xong rồi nhập tiếp.
+    expect(panel).not.toHaveTextContent(/Còn phải thu/)
+    expect(panel).not.toHaveTextContent(/\b0\s*₫/)
+  })
+
+  it("hỏng danh sách phiếu chờ thì NÓI hỏng, không im lặng như 'không có phiếu nào'", () => {
+    state.pendingFailed = true
+    state.pendingItems = []
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    expect(screen.getByTestId("payment-pending-error")).toBeInTheDocument()
+    // Ba dòng công nợ vẫn hiện (hoá đơn tải được) — chỉ phần chờ duyệt là chưa
+    // biết, và cái chưa biết phải được nói ra.
+    expect(screen.getByTestId("payment-debt-panel")).toHaveTextContent(/Còn phải thu/)
+  })
+})
+
+describe("PaymentRecordDialog — MỘT con số 'còn lại' duy nhất", () => {
+  it("mọi chỗ trong dialog đều dùng số máy chủ, không chỗ nào dùng prop lệch", () => {
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="9.999.999 ₫"
+      />,
+    )
+    // Soi TOÀN dialog, không chỉ panel: trước đây tiêu đề và dòng mô tả ô nhập
+    // vẫn đọc prop, nên form nói "tối đa 9.999.999" trong khi nó chặn ở
+    // 4.000.000.
+    const dialog = screen.getByRole("dialog")
+    expect(dialog).not.toHaveTextContent(/9\D?999\D?999/)
+    expect(within(dialog).getAllByText(/4\D?000\D?000/).length).toBeGreaterThan(1)
+  })
+
+  it("chặn số tiền vượt số dư THẬT dù nó nhỏ hơn con số truyền qua prop", async () => {
+    const user = userEvent.setup()
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        // Prop nói còn 9.999.999 (ảnh chụp cũ), máy chủ nói còn 4.000.000.
+        maxAmount="9.999.999 ₫"
+      />,
+    )
+
+    await user.click(
+      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
+    )
+    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
+    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "5000000")
+    await user.click(screen.getByRole("button", { name: /ghi nhận thanh toán/i }))
+
+    // 5.000.000 < prop nhưng > số dư thật ⇒ phải bị chặn TẠI CHỖ, không được
+    // gửi lên máy chủ rồi mới bị từ chối.
+    await waitFor(() =>
+      expect(screen.getByText(/không được vượt quá số dư/i)).toBeInTheDocument(),
+    )
+    expect(createPayment).not.toHaveBeenCalled()
+    // Và câu từ chối phải nêu đúng con số vừa dùng để từ chối.
+    expect(screen.getByText(/không được vượt quá số dư/i)).toHaveTextContent(
+      /4\D?000\D?000/,
+    )
+  })
+
+  it("gửi được số tiền nằm trong số dư thật", async () => {
+    const user = userEvent.setup()
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="9.999.999 ₫"
+      />,
+    )
+
+    await user.click(
+      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
+    )
+    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
+    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "3000000")
+    await user.click(screen.getByRole("button", { name: /ghi nhận thanh toán/i }))
+
+    // Đối chứng cho ca trên: nếu ca này cũng bị chặn thì phép chặn đang sai
+    // chiều chứ không phải đang bảo vệ ai.
+    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(1))
+    expect(createPayment.mock.calls[0][0]).toMatchObject({
+      invoiceId: 19,
+      feeId: 7,
+      data: expect.objectContaining({ invoice_id: 19, amount: "3000000" }),
+    })
   })
 })
