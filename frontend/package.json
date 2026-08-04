@@ -128,14 +128,15 @@
     ]
   },
   "overrides": {
-    "fast-uri": "^3.1.4",
+    "fast-uri": "^3.1.5",
     "sharp": "^0.35.0",
     "postcss": "^8.5.18",
     "form-data": "^4.0.6",
     "ws": "^8.21.0",
     "js-yaml": "^4.2.0",
+    "socket.io-parser": "^4.2.7",
     "glob": {
-      "brace-expansion": "^5.0.8"
+      "brace-expansion": "^5.0.9"
     }
   }
 }
