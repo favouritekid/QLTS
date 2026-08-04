@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Optional
 
 import structlog
-from sqlalchemy import and_, select
+from sqlalchemy import Integer, and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -190,6 +190,87 @@ class FinanceReportService:
         summary = self._build_summary(rows)
         return finance_schemas.DebtReportResponse(items=rows, summary=summary)
 
+    async def _count_debt_report_rows(
+        self,
+        *,
+        unit_id: Optional[int] = None,
+        academic_year: Optional[int] = None,
+        round_id: Optional[int] = None,
+        fee_type: Optional[str] = None,
+        aging: Optional[str] = None,
+    ) -> int:
+        """Đếm số DÒNG báo cáo (grain = hồ sơ × năm học) mà KHÔNG nạp entity.
+
+        Điều kiện WHERE phải khớp ``get_debt_report``; grain khớp khoá gom nhóm
+        ``(profile.id, fee.academic_year)`` ở đó.
+
+        🔴 ``aging`` PHẢI được áp ở đây. Bản đầu bỏ qua nó với lý do "fail-safe",
+        nhưng thực tế là từ chối OAN: toàn hệ 12.000 dòng mà người dùng lọc
+        đúng một nhóm tuổi nợ 500 dòng thì vẫn ăn 400. Nhóm tuổi nợ chỉ biết
+        được SAU khi gom nhóm nên tái tạo bằng HAVING trên ``max(days_overdue)``
+        — công thức phải khớp ``_aging_bucket``.
+        """
+        conditions = [
+            Invoice.status.in_(PAYABLE_INVOICE_STATUSES),
+            (Invoice.amount + Invoice.penalty_amount - Invoice.paid_amount) > 0,
+        ]
+        if unit_id is not None:
+            conditions.append(models.Lead.unit_id == unit_id)
+        if academic_year is not None:
+            conditions.append(Fee.academic_year == academic_year)
+        if round_id is not None:
+            conditions.append(
+                models.AdmissionProfile.applied_rules["admission_round_id"].astext
+                == str(round_id)
+            )
+        if fee_type:
+            conditions.append(Fee.fee_type == fee_type)
+
+        today = date.today()
+        # days_overdue của một NHÓM = số ngày quá hạn LỚN NHẤT trong nhóm; hoá
+        # đơn chưa tới hạn đóng góp 0 (khớp vòng lặp trong get_debt_report).
+        days_overdue_expr = func.coalesce(
+            func.max(
+                case(
+                    (
+                        Invoice.due_date < today,
+                        func.cast(today - Invoice.due_date, Integer),
+                    ),
+                    else_=0,
+                )
+            ),
+            0,
+        )
+
+        grouped = (
+            select(
+                models.AdmissionProfile.id.label("profile_id"),
+                Fee.academic_year.label("academic_year"),
+                days_overdue_expr.label("days_overdue"),
+            )
+            .select_from(Invoice)
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .where(and_(*conditions))
+            .group_by(models.AdmissionProfile.id, Fee.academic_year)
+        )
+
+        # HAVING khớp _aging_bucket: >60 → over_60; >30 → 31_60; còn lại → 0_30.
+        if aging == "over_60":
+            grouped = grouped.having(days_overdue_expr > 60)
+        elif aging == "31_60":
+            grouped = grouped.having(
+                and_(days_overdue_expr > 30, days_overdue_expr <= 60)
+            )
+        elif aging == "0_30":
+            grouped = grouped.having(days_overdue_expr <= 30)
+
+        result = await self.db.execute(
+            select(func.count()).select_from(grouped.subquery())
+        )
+        return int(result.scalar() or 0)
+
     async def build_debt_report_export(
         self,
         *,
@@ -208,11 +289,35 @@ class FinanceReportService:
         header là khoá kỹ thuật tiếng Anh, không có BOM (Excel tiếng Việt đọc
         mojibake) và ô tiền bị bọc thành chuỗi nên không cộng được.
 
+        🔴 Trần dòng kiểm TRƯỚC khi nạp dữ liệu. ``get_debt_report`` không phân
+        trang và ``finance_scope_unit_id`` trả None cho cả admin lẫn kế toán,
+        nên một lần gọi không lọc sẽ hydrate mọi hoá đơn còn nợ toàn hệ cùng
+        chuỗi joinedload. Đếm sau khi đã nạp thì cap chỉ chặn việc dựng
+        workbook — đúng thứ RẺ NHẤT trong ba bước — mà không chặn truy vấn.
+
         ⚠️ Nhãn hai cột tiền nói rõ "đợt còn nợ": truy vấn CHỈ lấy hoá đơn còn
         dư nợ, nên tiền của các đợt đã trả xong không nằm trong đây. Báo cáo tự
         nhất quán (phải thu − đã thu = còn nợ) nhưng nếu đọc "Đã thu" là "tổng
         đã thu của hồ sơ" thì sai.
         """
+        # PREFLIGHT: đếm bằng một truy vấn COUNT rẻ, TRƯỚC khi hydrate bất kỳ
+        # entity nào. ``aging`` chỉ lọc BỚT sau khi gom nhóm nên bỏ qua ở đây là
+        # fail-safe (số đếm ≥ số dòng thật → có thể từ chối sớm, không bao giờ
+        # cho lọt quá trần).
+        estimated_rows = await self._count_debt_report_rows(
+            unit_id=unit_id,
+            academic_year=academic_year,
+            round_id=round_id,
+            fee_type=fee_type,
+            aging=aging,
+        )
+        if estimated_rows > MAX_EXPORT_ROWS:
+            cap_vn = f"{MAX_EXPORT_ROWS:,}".replace(",", ".")
+            raise BadRequest(
+                f"Kết quả lọc vượt quá {cap_vn} dòng cho một lần xuất. "
+                "Hãy thu hẹp bộ lọc (năm học / đợt / đơn vị / loại phí) rồi xuất lại."
+            )
+
         report = await self.get_debt_report(
             unit_id=unit_id,
             academic_year=academic_year,
@@ -221,10 +326,8 @@ class FinanceReportService:
             aging=aging,
         )
 
-        # Trần dòng như đường xuất học phí: ``get_debt_report`` không phân trang
-        # và ``finance_scope_unit_id`` trả None cho cả admin lẫn kế toán, nên
-        # một lần gọi không lọc sẽ nạp mọi hoá đơn còn nợ toàn hệ rồi dựng cả
-        # workbook trong bộ nhớ. Từ chối, KHÔNG cắt bớt.
+        # Hậu kiểm: giữa lúc đếm và lúc nạp, kế toán khác có thể phát hành thêm
+        # hoá đơn. Kiểm lại trên số dòng THẬT để khe TOCTOU không cho lọt quá trần.
         if len(report.items) > MAX_EXPORT_ROWS:
             cap_vn = f"{MAX_EXPORT_ROWS:,}".replace(",", ".")
             raise BadRequest(

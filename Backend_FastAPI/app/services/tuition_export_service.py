@@ -66,7 +66,7 @@ COLUMNS: List[str] = [
     "Giá trị khoản phí",        # 11
     "Tổng đã đóng",             # 12
     "Đã miễn giảm",             # 13
-    "Số tiền còn lại",          # 14
+    "Còn lại khoản phí (chưa gồm phạt)",  # 14
     "Đơn vị",                   # 15
 ]
 
@@ -95,12 +95,19 @@ _EXPORT_NOTES = (
     (
         "Bộ lọc áp ở mức hoá đơn",
         "Một khoản phí có mặt nếu ít nhất một đợt của nó khớp bộ lọc. Vì vậy "
-        "tổng cột 'Số tiền còn lại' ở đây có thể KHÁC ô 'Còn phải thu' trên "
+        "tổng cột 'Còn lại khoản phí' ở đây có thể KHÁC ô 'Còn phải thu' trên "
         "màn hình (ô đó cộng theo từng đợt).",
     ),
     (
         "Số tiền âm",
         "Là hồ sơ đã đóng dư, giữ nguyên dấu âm chứ không làm tròn về 0.",
+    ),
+    (
+        "Cột 'Còn lại khoản phí' CHƯA gồm tiền phạt",
+        "Công thức là học phí − đã đóng − miễn giảm. Tiền phạt trễ hạn nằm trên "
+        "HOÁ ĐƠN nên không có ở đây; ô 'Còn phải thu' trên màn hình thì có tính "
+        "phạt và không cho số âm. Vì vậy hai con số có thể khác nhau ở hồ sơ bị "
+        "phạt hoặc đóng dư.",
     ),
 )
 

@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.models.finance import Fee, Invoice
-from app.repositories.fee_repository import InvoiceRepository
+from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.services import tuition_export_service as tes
 from app.utils.exceptions import BadRequest
 
@@ -268,11 +268,14 @@ class TestCsvParity:
         assert row[11] == "9000000", row[11]
         assert row[12] == "2000000", row[12]
 
-    async def test_csv_carries_meta_and_filters(self, db, seeded_dependencies):
-        """[N] CSV phải mang khối 'Thông tin lần xuất' + bộ lọc + ghi chú.
+    async def test_csv_is_pure_tabular_data(self, db, seeded_dependencies):
+        """[N] CSV chỉ có header + dữ liệu — KHÔNG khối ghi chú nào.
 
-        CSV không có sheet phụ; trước đây notes/applied_filters/exporter được
-        nhận rồi vứt im lặng, nên người dùng CSV không thấy cảnh báo nào.
+        Bản trước từng nối "Thông tin lần xuất" vào cuối CSV sau một dòng
+        trống. Phải gỡ: các dòng đó có SỐ CỘT KHÁC nên tệp thôi là bảng dữ
+        liệu thuần, mọi trình đọc/import CSV chuẩn (pandas, Power Query, chính
+        đường nhập lô của hệ này) đọc rác hoặc vỡ. Ghi chú/bộ lọc sống ở sheet
+        phụ của bản .xlsx.
         """
         await _seed_fee(
             db, seeded_dependencies,
@@ -281,25 +284,15 @@ class TestCsvParity:
         content, _, _ = await _export(
             db, applied_filters={"Năm học": 2026}, exporter_name="Kế toán A",
         )
+        rows = _csv_all_rows(content)
+
+        # Đúng header + 1 dòng dữ liệu, không thừa dòng nào.
+        assert len(rows) == 2, f"CSV có dòng lạ: {rows[2:]}"
+        # Mọi dòng cùng số cột → còn là bảng hợp lệ.
+        assert {len(r) for r in rows} == {len(tes.COLUMNS)}
         text = content.decode("utf-8")
-        assert "Thông tin lần xuất" in text
-        assert "Kế toán A" in text
-        assert "Năm học" in text
-        assert "MỘT KHOẢN PHÍ" in text   # ghi chú grain
-        assert "đóng dư" in text          # ghi chú số âm
-
-    async def test_csv_meta_does_not_pollute_data_rows(
-        self, db, seeded_dependencies
-    ):
-        """Khối ghi chú nằm SAU dòng trống → không lọt vào vùng dữ liệu."""
-        await _seed_fee(
-            db, seeded_dependencies,
-            invoices=[(1, "1000000", "issued", "0")],
-        )
-        content, _, _ = await _export(db)
-        assert len(_csv_rows(content)) == 2          # header + 1 dòng
-        assert len(_csv_all_rows(content)) > 3       # còn khối ghi chú phía sau
-
+        assert "Thông tin lần xuất" not in text
+        assert "Kế toán A" not in text
 
 class TestSanitize:
     async def test_formula_injection_in_name_is_neutralised(
@@ -348,19 +341,36 @@ class TestCap:
 
 
 class TestFilterParity:
-    async def test_export_fee_set_equals_list_fee_set(
+    async def test_export_fee_set_equals_list_fee_set_UNDER_FILTER(
         self, db, seeded_dependencies
     ):
-        """[N] Tập fee xuất ra == tập fee DISTINCT của danh sách (đẳng thức).
+        """[N] Tập fee xuất ra == tập của danh sách, DƯỚI BỘ LỌC THẬT.
 
-        Đỏ nếu ai đó khai lại điều kiện lọc thay vì gọi
-        ``_build_invoice_list_conditions``.
+        ⚠️ Phải truyền bộ lọc LOẠI BỚT ít nhất một dòng. Bản đầu của test này
+        gọi cả hai bên không kèm filter nào, nên ``_build_invoice_list_conditions``
+        trả [] ở cả hai phía và phép so thành ``{a,b} == {a,b}`` — xoá hẳn
+        ``officer_id=``/``search=`` khỏi repository vẫn xanh.
         """
+        officer = models.User(
+            username="officer_parity",
+            email="officer_parity@test.com",
+            password_hash="x" * 60,
+            full_name="Nguyễn Officer",
+            role="officer",
+            status="active",
+            unit_id=seeded_dependencies["unit_id"],
+        )
+        db.add(officer)
+        await db.flush()
+
+        # Dòng KHỚP bộ lọc
         await _seed_fee(
             db, seeded_dependencies,
             invoices=[(1, "3000000", "partial", "1000000")],
             citizen_id="011111111111",
+            officer_id=officer.id,
         )
+        # Dòng KHÔNG khớp (khác officer + khác trạng thái) — phải bị loại
         await _seed_fee(
             db, seeded_dependencies,
             invoices=[(1, "4000000", "issued", "0")],
@@ -368,11 +378,18 @@ class TestFilterParity:
         )
 
         repo = InvoiceRepository(db)
-        invoices, _ = await repo.get_filtered_with_count(skip=0, limit=1000)
+        filters = dict(officer_id=officer.id, statuses=["partial"])
+
+        invoices, _ = await repo.get_filtered_with_count(
+            skip=0, limit=1000, **filters
+        )
         from_list = {inv.fee_id for inv in invoices}
         from_export = set(
-            await repo.get_distinct_fee_ids_for_filter(limit=1000)
+            await repo.get_distinct_fee_ids_for_filter(limit=1000, **filters)
         )
+
+        # Bộ lọc phải THẬT SỰ loại bớt, nếu không phép so lại vô nghĩa.
+        assert len(from_list) == 1, f"bộ lọc không loại được dòng nào: {from_list}"
         assert from_export == from_list
 
 
@@ -519,3 +536,63 @@ class TestMixedFeeTypes:
             for c in row
         )
         assert "NHIỀU LOẠI PHÍ" not in meta
+
+
+class TestQueryBudget:
+    """Số truy vấn KHÔNG được tăng theo số dòng."""
+
+    async def test_query_count_does_not_grow_with_rows(
+        self, db, seeded_dependencies
+    ):
+        """[N] Số truy vấn là HẰNG SỐ, không tăng theo số dòng.
+
+        Đây mới là phép đo đúng bản chất của "query budget": đếm tuyệt đối sẽ
+        vỡ mỗi lần ai đó thêm một quan hệ ``selectin`` ở tầng khác, còn phép so
+        3-dòng vs 6-dòng thì chỉ đỏ khi thật sự có fan-out theo dòng.
+
+        Kèm khẳng định KHÔNG chạm invoice/payment — tệp xuất không đọc ô nào
+        của chúng, mà chúng là nhánh phình to nhất (mỗi hoá đơn kéo theo mọi
+        payment + intent + transaction).
+        """
+        from sqlalchemy import event
+
+        async def _count_selects(n_fees: int, tag: str) -> tuple[int, str]:
+            for i in range(n_fees):
+                await _seed_fee(
+                    db, seeded_dependencies,
+                    invoices=[(1, "3000000", "partial", "1000000"),
+                              (2, "3000000", "issued", "0")],
+                    final_amount="6000000", paid_amount="1000000",
+                    citizen_id=f"{tag}{i:07d}"[:12],
+                )
+            repo = FeeRepository(db)
+            fee_ids = await InvoiceRepository(db).get_distinct_fee_ids_for_filter(
+                limit=1000
+            )
+            statements: list[str] = []
+
+            def _before(conn, cursor, statement, params, context, many):
+                statements.append(statement)
+
+            bind = db.get_bind()
+            sync_engine = getattr(bind, "sync_engine", bind)
+            event.listen(sync_engine, "before_cursor_execute", _before)
+            try:
+                await repo.get_many_for_export(fee_ids)
+            finally:
+                event.remove(sync_engine, "before_cursor_execute", _before)
+
+            selects = [
+                st for st in statements if st.lstrip().upper().startswith("SELECT")
+            ]
+            return len(selects), " ".join(selects).lower()
+
+        n_small, sql_small = await _count_selects(3, "06111")
+        n_large, _ = await _count_selects(5, "06222")  # tổng 8 khoản phí
+
+        assert n_small == n_large, (
+            f"số truy vấn tăng theo số dòng: {n_small} → {n_large} "
+            "(fan-out theo dòng — kiểm lại noload/eager-load)"
+        )
+        for leaked in ("from payment", "from payment_transaction", "from invoice"):
+            assert leaked not in sql_small, f"nạp thừa {leaked}"

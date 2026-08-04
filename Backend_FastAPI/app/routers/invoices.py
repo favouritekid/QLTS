@@ -48,6 +48,7 @@ from app.models.finance import (
     PAYABLE_INVOICE_STATUSES,
     OVERDUE_DERIVED_STATUSES,
 )
+from app.constants.fee_labels import FEE_TYPE_LABELS
 from app.services.invoice_service import InvoiceService
 from app.services.tuition_export_service import build_tuition_export
 from app.services.system_config_service import SystemConfigService
@@ -274,6 +275,112 @@ async def get_invoice_status_counts(
     return finance_schemas.InvoiceStatusCounts(**counts)
 
 
+
+# =============================================================================
+# EXPORT — nhãn bộ lọc cho sheet "Thong tin xuat"
+# =============================================================================
+
+_FEE_TYPE_FILTER_LABELS = FEE_TYPE_LABELS
+_INVOICE_STATUS_FILTER_LABELS = {
+    "draft": "Nháp",
+    "issued": "Chờ thu",
+    "partial": "Một phần",
+    "paid": "Đã thu",
+    "overdue": "Quá hạn",
+    "cancelled": "Đã hủy",
+}
+_DUE_WINDOW_LABELS = {
+    "due_soon_7d": "Đến hạn ≤7 ngày",
+    "overdue": "Đã quá hạn",
+}
+
+
+async def _build_export_filter_labels(
+    db: AsyncSession,
+    *,
+    scope_unit_id: Optional[int],
+    status: Optional[str],
+    fee_type: Optional[str],
+    overdue_only: Optional[bool],
+    search: Optional[str],
+    major_id: Optional[int],
+    degree_level: Optional[str],
+    academic_year: Optional[int],
+    semester_no: Optional[int],
+    officer_id: Optional[int],
+    unit_id: Optional[int],
+    awaiting_major_change: Optional[bool],
+    due_window: Optional[str],
+) -> dict:
+    """Dựng bảng "Bộ lọc đã áp dụng" cho tệp xuất — TÊN thật, không phải ID.
+
+    Ghi cả phạm vi quyền hiệu lực: người đọc tệp sau này phải biết số liệu bao
+    trọn hệ hay chỉ một đơn vị, kể cả khi người xuất không tự gõ bộ lọc nào.
+    """
+    labels: dict = {}
+
+    async def _unit_name_in_scope(target_id: int) -> str:
+        """Tên đơn vị — CHỈ khi nằm trong phạm vi quyền của người xuất.
+
+        🔴 Không ``db.get`` tuỳ ý: manager phạm vi đơn vị A truyền
+        ``unit_id`` của B thì dữ liệu ra rỗng (điều kiện lọc AND cả hai) nhưng
+        tệp vẫn in TÊN của B — rò rỉ danh mục đơn vị qua chính tệp xuất.
+        """
+        if scope_unit_id is not None and target_id != scope_unit_id:
+            return f"đơn vị #{target_id} (ngoài phạm vi)"
+        unit = await db.get(models.OrganizationUnit, target_id)
+        return unit.name if unit else f"đơn vị #{target_id}"
+
+    # Hai khái niệm KHÁC NHAU, phải ghi tách:
+    #  * "Phạm vi quyền" = giới hạn do vai trò áp, người dùng không đổi được;
+    #  * "Bộ lọc đơn vị" = thứ người dùng tự chọn (giao với phạm vi trên).
+    # Gộp chúng như bản đầu thì tệp ghi sai phạm vi thật khi hai bên khác nhau.
+    if scope_unit_id is None:
+        labels["Phạm vi quyền"] = "Toàn hệ thống"
+    else:
+        labels["Phạm vi quyền"] = await _unit_name_in_scope(scope_unit_id)
+
+    if unit_id is not None:
+        labels["Bộ lọc đơn vị"] = await _unit_name_in_scope(unit_id)
+
+    if status:
+        labels["Trạng thái hoá đơn"] = ", ".join(
+            _INVOICE_STATUS_FILTER_LABELS.get(s.strip(), s.strip())
+            for s in status.split(",")
+            if s.strip()
+        )
+    if fee_type:
+        labels["Loại phí"] = _FEE_TYPE_FILTER_LABELS.get(fee_type, fee_type)
+    if overdue_only:
+        labels["Chỉ quá hạn"] = "Có"
+    if search:
+        labels["Từ khoá tìm kiếm"] = search
+    if major_id is not None:
+        major = await db.get(models.MajorProgram, major_id)
+        labels["Ngành"] = major.name if major else f"ngành #{major_id}"
+    if degree_level:
+        labels["Trình độ"] = degree_level
+    if academic_year is not None:
+        labels["Năm học"] = f"{academic_year}-{academic_year + 1}"
+    if semester_no is not None:
+        labels["Học kỳ"] = f"HK{semester_no}"
+    if officer_id is not None:
+        # Cùng lý do với đơn vị: không lộ tên người ngoài phạm vi quyền.
+        officer = await db.get(models.User, officer_id)
+        if officer is None:
+            labels["TVV phụ trách"] = f"người dùng #{officer_id}"
+        elif scope_unit_id is not None and officer.unit_id != scope_unit_id:
+            labels["TVV phụ trách"] = f"người dùng #{officer_id} (ngoài phạm vi)"
+        else:
+            labels["TVV phụ trách"] = officer.full_name or officer.username
+    if awaiting_major_change:
+        labels["Chờ xác nhận đổi ngành"] = "Có"
+    if due_window:
+        labels["Hạn"] = _DUE_WINDOW_LABELS.get(due_window, due_window)
+
+    return labels
+
+
 # ==============================================================================
 # EXPORT
 # ==============================================================================
@@ -335,26 +442,27 @@ async def export_tuition_list(
     if status:
         statuses = [s.strip() for s in status.split(",") if s.strip()]
 
-    # Nhãn tiếng Việt cho sheet "Thong tin xuat" — router biết tên tham số mà
-    # người dùng nhìn thấy, service chỉ in ra.
-    applied_filters = {
-        label: value
-        for label, value in (
-            ("Trạng thái", status),
-            ("Loại phí", fee_type),
-            ("Chỉ quá hạn", "có" if overdue_only else None),
-            ("Tìm kiếm", search),
-            ("Ngành", major_id),
-            ("Trình độ", degree_level),
-            ("Năm học", academic_year),
-            ("Học kỳ", semester_no),
-            ("TVV phụ trách", officer_id),
-            ("Đơn vị", unit_id),
-            ("Chờ xác nhận đổi ngành", "có" if awaiting_major_change else None),
-            ("Hạn", due_window),
-        )
-        if value not in (None, "")
-    }
+    # Sheet "Thong tin xuat" phải đọc được sau vài tuần, nên:
+    #  * ghi PHẠM VI QUYỀN hiệu lực, không chỉ tham số người dùng gõ — admin
+    #    lọc unit_id=14 mà sheet ghi "(không lọc)" là nói sai phạm vi;
+    #  * resolve ID sang TÊN (ngành / TVV / đơn vị) và map enum sang nhãn UI —
+    #    "Ngành | 37" thì không ai dựng lại được bối cảnh.
+    applied_filters = await _build_export_filter_labels(
+        db,
+        scope_unit_id=scope_unit_id,
+        status=status,
+        fee_type=fee_type,
+        overdue_only=overdue_only,
+        search=search,
+        major_id=major_id,
+        degree_level=degree_level,
+        academic_year=academic_year,
+        semester_no=semester_no,
+        officer_id=officer_id,
+        unit_id=unit_id,
+        awaiting_major_change=awaiting_major_change,
+        due_window=due_window,
+    )
 
     try:
         content, media_type, filename = await build_tuition_export(
@@ -386,7 +494,16 @@ async def export_tuition_list(
     return Response(
         content=content,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # Tệp chứa họ tên + CCCD hàng trăm thí sinh. Không có Cache-Control
+            # thì RFC 7234 §4.2.2 cho phép cache theo suy nghiệm, mà hệ này xác
+            # thực bằng cookie nên cache dùng chung không bị cấm lưu — trên máy
+            # dùng chung ở quầy, người sau mở lại từ lịch sử là có tệp.
+            # Cùng quy ước với sms_export / enrollment_letters / admissions.
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

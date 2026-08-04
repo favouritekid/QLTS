@@ -9,7 +9,7 @@
 
 import type { ReactNode } from "react"
 import { describe, expect, it, vi, beforeEach } from "vitest"
-import { render, screen } from "@/test/utils/test-utils"
+import { fireEvent, render, screen } from "@/test/utils/test-utils"
 
 const exportMutate = vi.fn()
 
@@ -17,6 +17,13 @@ const exportMutate = vi.fn()
 vi.mock("@/hooks/finance/useTuitionExport", () => ({
   useTuitionExport: () => ({ mutate: exportMutate, isPending: false }),
 }))
+
+const mockExportFilters = {
+  status: "issued,partial",
+  major_id: 37,
+  officer_id: 12,
+  academic_year: 2026,
+}
 
 const mockFilterState = {
   activeTab: "all",
@@ -49,7 +56,9 @@ vi.mock("@/hooks/finance/useInvoicesFilter", () => ({
     hasActiveFilters: false,
     apiFilters: {},
     countFilters: {},
-    exportFilters: {},
+    // KHÁC RỖNG: nếu để {} thì assert payload không chứng minh được gì —
+    // truyền nhầm bộ lọc rỗng vẫn xanh.
+    exportFilters: mockExportFilters,
   }),
 }))
 
@@ -98,8 +107,18 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuContent: ({ children }: { children: ReactNode }) => (
     <div>{children}</div>
   ),
-  DropdownMenuItem: ({ children }: { children: ReactNode }) => (
-    <button type="button">{children}</button>
+  // PHẢI forward onSelect: bỏ nó đi thì không có cách nào bấm được mục trong
+  // menu, và test "gửi đúng bộ lọc" trở thành không thể viết.
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+  }: {
+    children: ReactNode
+    onSelect?: () => void
+  }) => (
+    <button type="button" onClick={() => onSelect?.()}>
+      {children}
+    </button>
   ),
 }))
 
@@ -123,6 +142,36 @@ describe("InvoiceListClient — nút Xuất", () => {
     const btn = exportButton()
     expect(btn).toBeDefined()
     expect(btn).not.toBeDisabled()
+  })
+
+  it("[N] bấm Excel gửi ĐÚNG bộ lọc đang xem", async () => {
+    mockFilterState.activeTab = "all"
+    render(<InvoiceListClient />)
+    const excelItem = screen
+      .getAllByRole("button")
+      .find((b) => /Excel/.test(b.textContent ?? ""))
+    expect(excelItem).toBeDefined()
+    fireEvent.click(excelItem!)
+
+    expect(exportMutate).toHaveBeenCalledTimes(1)
+    // Đổi InvoiceListClient thành mutate({format, filters: {}}) là ca này đỏ.
+    expect(exportMutate).toHaveBeenCalledWith({
+      format: "xlsx",
+      filters: mockExportFilters,
+    })
+  })
+
+  it("bấm CSV gửi đúng định dạng csv", () => {
+    mockFilterState.activeTab = "all"
+    render(<InvoiceListClient />)
+    const csvItem = screen
+      .getAllByRole("button")
+      .find((b) => /CSV/.test(b.textContent ?? ""))
+    fireEvent.click(csvItem!)
+    expect(exportMutate).toHaveBeenCalledWith({
+      format: "csv",
+      filters: mockExportFilters,
+    })
   })
 
   it("[N] TẮT ở tab 'Chờ duyệt' (hàng đợi phiếu thu, grain khác)", () => {

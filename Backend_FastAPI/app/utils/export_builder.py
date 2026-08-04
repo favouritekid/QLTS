@@ -19,7 +19,7 @@ chép lại vòng lặp openpyxl.
 import csv
 import io
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
@@ -38,19 +38,28 @@ SHEET_META = "Thong tin xuat"
 
 
 def _csv_money(value: Any) -> str:
-    """Ô tiền cho CSV: số nguyên đồng, không phần thập phân.
+    """Ô tiền cho CSV: bỏ đuôi ``.00`` thừa, **KHÔNG BAO GIỜ làm tròn**.
 
-    ``Decimal('9000000.00')`` in ra "9000000.00"; dưới locale vi-VN dấu ``.``
-    là phân tách nghìn nên nhóm 2 chữ số cuối là sai định dạng và Excel nhập ô
-    đó thành TEXT (lệch trái, không vào SUM). VND không có phần lẻ nên bỏ hẳn
-    đuôi là an toàn và đọc được ở mọi locale.
+    Vì sao bỏ ``.00``: ``Decimal('9000000.00')`` in ra "9000000.00", mà dưới
+    locale vi-VN dấu ``.`` là phân tách nghìn nên nhóm 2 chữ số cuối là sai
+    định dạng và Excel nhập ô đó thành TEXT (lệch trái, không vào SUM).
+
+    🔴 Vì sao KHÔNG làm tròn: cột tiền là ``Numeric(15, 2)`` và đường nhập lô
+    chấp nhận số lẻ tới 2 chữ số thập phân, nên 7.200.000,50 là giá trị hợp lệ.
+    Bản đầu dùng ``quantize(1, ROUND_HALF_UP)`` — tức tệp sẽ ghi 7.200.001 và
+    kế toán đối chiếu ra lệch 0,5 đ mà không có gì báo. Giá trị lẻ giữ NGUYÊN;
+    Excel đọc "…50" thành text thì thà lệch định dạng còn hơn lệch tiền.
     """
     if value is None or value == "":
         return ""
     if isinstance(value, Decimal):
-        return str(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        # normalize() bỏ số 0 đuôi (9000000.00 → 9E+6) nên phải tự cắt: chỉ bỏ
+        # phần thập phân khi nó ĐÚNG BẰNG 0.
+        if value == value.to_integral_value():
+            return str(value.to_integral_value())
+        return format(value.normalize(), "f")
     if isinstance(value, float):
-        return str(int(round(value)))
+        return str(int(value)) if float(value).is_integer() else repr(value)
     return str(value)
 
 
@@ -147,19 +156,14 @@ def build_simple_export(
                     out.append("" if value is None else str(value))
             writer.writerow(out)
 
-        # Ghi chú + bộ lọc: XLSX có sheet phụ, CSV thì không có chỗ nào khác.
-        # Đặt SAU dữ liệu và chỉ ở cột đầu → Excel vẫn đọc đúng tiêu đề, và
-        # bôi đen cột tiền không dính (các ô này rỗng).
-        meta = _meta_rows(
-            exporter_name=exporter_name,
-            applied_filters=applied_filters,
-            row_count=len(rows),
-            notes=notes,
-        )
-        writer.writerow([])
-        for meta_row in meta:
-            writer.writerow([sanitize_csv_cell(c) for c in meta_row])
-
+        # 🔴 CỐ Ý KHÔNG nối khối "Thông tin lần xuất" vào CSV.
+        # Từng thử (commit 7) và phải gỡ: nối thêm các dòng có SỐ CỘT KHÁC sau
+        # một dòng trống làm tệp thôi là bảng dữ liệu thuần — mọi trình đọc/
+        # import CSV chuẩn (pandas, Power Query, chính đường nhập lô của hệ này)
+        # sẽ vỡ hoặc đọc rác. Tệ hơn: test tự cắt dữ liệu tại dòng trống nên
+        # chính nó che mất regression.
+        # CSV dựa vào TIÊU ĐỀ TRUNG TÍNH để không nói sai phạm vi; truy vết
+        # nằm ở log phía máy chủ. Ai cần ghi chú/bộ lọc thì tải bản .xlsx.
         content = (CSV_UTF8_BOM + buf.getvalue()).encode("utf-8")
         return content, CSV_MEDIA_TYPE, f"{filename_stem}_{ts}.csv"
 

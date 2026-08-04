@@ -167,3 +167,25 @@ class TestDebtReportExportAuthz:
             headers=admin_token_headers,
         )
         assert r.status_code == 422
+
+
+class TestExportCacheHeaders:
+    """Tệp xuất mang PII (họ tên + CCCD) nên không được để cache lưu.
+
+    Không có Cache-Control thì RFC 7234 §4.2.2 cho phép cache theo suy nghiệm;
+    hệ này xác thực bằng cookie nên cache dùng chung không bị cấm lưu. Trên máy
+    dùng chung ở quầy, người sau mở lại từ lịch sử là có tệp mà không cần đăng
+    nhập lại. Cùng quy ước với sms_export / enrollment_letters / admissions.
+    """
+
+    async def test_tuition_export_sets_no_store(self, client, admin_token_headers):
+        r = await client.get(EXPORT_URL, headers=admin_token_headers)
+        assert r.status_code == 200
+        assert r.headers.get("cache-control") == "private, no-store"
+        assert r.headers.get("x-content-type-options") == "nosniff"
+
+    async def test_debt_export_sets_no_store(self, client, admin_token_headers):
+        r = await client.get(DEBT_EXPORT_URL, headers=admin_token_headers)
+        assert r.status_code == 200
+        assert r.headers.get("cache-control") == "private, no-store"
+        assert r.headers.get("x-content-type-options") == "nosniff"

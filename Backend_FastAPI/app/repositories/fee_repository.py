@@ -21,7 +21,7 @@ from typing import List, Optional, Tuple, Union
 
 from sqlalchemy import select, and_, or_, func, desc, asc, case
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import joinedload, noload, selectinload
 
 from app import models
 from app.models.finance import (
@@ -387,6 +387,14 @@ class FeeRepository(BaseRepository[Fee]):
                 .joinedload(models.AdmissionProfile.lead)
                 .joinedload(models.Lead.unit),
                 joinedload(Fee.resolved_major),
+                # 🔴 Chặn các quan hệ khai ``lazy="selectin"`` — chúng tự bắn
+                # truy vấn dù KHÔNG có trong options() và tệp xuất không đọc ô
+                # nào của chúng. Đo trên dev: 3 khoản phí → 9 SELECT (invoice,
+                # fee_applied_discount, payment, payment_intent,
+                # payment_transaction…). Ở mức trần 10.000 dòng, phần thừa này
+                # còn kéo theo mọi hoá đơn/giao dịch của chúng.
+                noload(Fee.invoices),
+                noload(Fee.applied_discounts),
             )
             .order_by(Fee.admission_profile_id.asc(), Fee.id.asc())
         )

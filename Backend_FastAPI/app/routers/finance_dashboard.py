@@ -130,7 +130,16 @@ async def export_debt_report(
     return Response(
         content=content,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            # Tệp chứa họ tên + CCCD hàng trăm thí sinh. Không có Cache-Control
+            # thì RFC 7234 §4.2.2 cho phép cache theo suy nghiệm, mà hệ này xác
+            # thực bằng cookie nên cache dùng chung không bị cấm lưu — trên máy
+            # dùng chung ở quầy, người sau mở lại từ lịch sử là có tệp.
+            # Cùng quy ước với sms_export / enrollment_letters / admissions.
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
