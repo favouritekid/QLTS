@@ -142,7 +142,7 @@ jobs:
   # ⚠️ `fail-fast: false` là CỐ Ý. Mặc định của GitHub là huỷ mọi shard
   # còn lại ngay khi một shard đỏ — nghĩa là mỗi lượt chỉ biết được MỘT
   # tier hỏng, sửa xong lại chờ nguyên lượt nữa để lộ tier kế tiếp. Với
-  # gate 28 phút thì đó là cách nhanh nhất để đốt cả buổi.
+  # gate ~29 phút thì đó là cách nhanh nhất để đốt cả buổi.
   pytest-shard:
     name: pytest shard — ${{ matrix.tier }}
     runs-on: ubuntu-latest
