@@ -30,7 +30,26 @@ name: Backend Test (PR Gate)
 # Trigger: ANY change under Backend_FastAPI/** — including tests/. No
 # path-filter loophole.
 #
-# Performance budget: <10 phút median.
+# Performance budget: ~36 phút (đo thật 04-08-2026), KHÔNG phải <10 phút.
+#
+# Con số <10 phút ghi ở đây từ 2026-05-24 đã lạc hậu từ lâu: các tier lớn
+# dần theo từng đợt bổ sung, và tới 04-08 một lượt nối đuôi mất 70m12s.
+# Sau khi tách sáu lát chạy song song, wall-clock bằng lát dài nhất.
+#
+# ⚠️ Đừng tin con số dự đoán — Tier 2 đo được 1731 giây (28m51) ở một lượt,
+# rồi 2164 giây (36m04) ở lượt ngay sau đó, CÙNG một tập test. Runner dùng
+# chung của GitHub dao động mạnh, nên coi ~36 phút là mốc thực tế và đừng
+# ngạc nhiên khi thấy 29 hay 40.
+#
+# Wall-clock đo được của lượt song song đầu tiên: 36m13s (12:49:45 →
+# 13:25:58), so với 70m12s của lần nối đuôi gần nhất. Lưu ý phép so này
+# KHÔNG hoàn toàn công bằng: hai lượt chạy trên runner khác nhau, và nếu
+# lượt nối đuôi rơi vào runner chậm như lượt này thì nó đã lâu hơn 70 phút.
+#
+# 🔴 Muốn kéo xuống nữa thì phải chẻ chính Tier 2, không phải thêm shard
+# cho các lát vốn đã nhanh. Tier 2b tốn 1m44s trong đó phần lớn là dựng
+# máy (test chỉ ~40 giây) — chẻ nhỏ nữa thì overhead setup nuốt hết phần
+# tiết kiệm.
 #
 # DESIGN — BOUNDED RISK GATE (PR-1.6, 2026-05-24):
 # This is a SOLO-DEV velocity-optimized PR gate. It is intentionally
@@ -40,8 +59,11 @@ name: Backend Test (PR Gate)
 # a per-PR gate. Memory ``ci-pytest-selective-allowlist-pattern`` +
 # ``solo-dev-batch-prs-to-reduce-ci-overhead``: per-PR CI overhead at
 # 30-60 phút × N PR-a-week is the actual cost driver for a solo dev;
-# a bounded curated gate that catches release-blockers in <10 phút is
-# the right trade-off vs an exhaustive 25-30 phút full suite per PR.
+# a bounded curated gate that catches release-blockers quickly is the
+# right trade-off vs an exhaustive full suite per PR.
+# (Mốc "<10 phút" viết ở đây năm 2026-05 nay không còn đúng — xem khối
+# Performance budget bên trên. Lập luận thì vẫn nguyên: cổng có phạm vi
+# giới hạn, không chạy toàn bộ tests/.)
 #
 # Per-test ``--timeout=60`` (pytest-timeout, added in prior commit)
 # guards each tier against a future regression that re-introduces a
@@ -103,9 +125,251 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pytest:
-    name: pytest
+  # =======================================================================
+  # SHARD — mỗi tier một runner, chạy SONG SONG
+  # =======================================================================
+  # Trước 04-08 sáu lát này chạy nối đuôi trong MỘT job. Đo từ run của PR
+  # #533 (giây): 1330 + 1731 + 40 + 139 + 2 + 807 + 163 = 4212, tức 70m12s
+  # — bảy mục vì Tier 3 kéo theo script kiểm notification (2 giây).
+  #   Tier 1  1330s (22m10)     Tier 3   139s (2m19)
+  #   Tier 2  1731s (28m51)     script     2s
+  #   Tier 2b   40s             Tier 4   807s (13m27)
+  #                             Tier 5   163s (2m43)
+  # Chúng độc lập nhau (không lát nào đọc kết quả của lát khác), nên nối
+  # đuôi chỉ là quán tính. Tách ra matrix thì wall-clock rút về lát dài
+  # nhất — Tier 2.
+  #
+  # Đo thật lượt song song đầu tiên (04-08): Tier 1 24m47 · Tier 2 36m04 ·
+  # Tier 2b 1m44 · Tier 3 3m33 · Tier 4 13m14 · Tier 5 3m58 · job gom 3s.
+  # Wall-clock 36m13s. Mỗi lát chậm hơn số nối đuôi khoảng 1-1,5 phút vì
+  # nay phải tự checkout + `pip install` — bản nối đuôi chỉ trả một lần.
+  #
+  # Vì sao đáng làm: ruleset của main bật strict_required_status_checks,
+  # nên mỗi lần main nhích là MỌI PR đang mở phải chạy lại từ đầu. Riêng
+  # PR #533 đã chạy ba lượt trong một ngày (~3,5 giờ). 42 phút tiết kiệm
+  # mỗi lượt được nhân lên theo số lần chạy lại, không phải một lần.
+  #
+  # Giá phải trả: 6 runner cùng `pip install` thay vì 1 (~+10-15 phút
+  # Actions minutes mỗi lượt). Đổi thời gian chờ lấy compute — với solo
+  # dev thì thời gian chờ đắt hơn.
+  #
+  # ⚠️ `fail-fast: false` là CỐ Ý. Mặc định của GitHub là huỷ mọi shard
+  # còn lại ngay khi một shard đỏ — nghĩa là mỗi lượt chỉ biết được MỘT
+  # tier hỏng, sửa xong lại chờ nguyên lượt nữa để lộ tier kế tiếp. Với
+  # gate ~36 phút thì đó là cách nhanh nhất để đốt cả buổi.
+  pytest-shard:
+    name: pytest shard — ${{ matrix.tier }}
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ---------------------------------------------------------------
+          # Tier 1: Phase 3 multi-NV core — Wave A/B acceptance gates
+          # ---------------------------------------------------------------
+          # Bốn lớp `TestRefund*` canh đường TIỀN RA khỏi két, canh những thứ
+          # chỉ lộ ra khi đã mất tiền hoặc đã kẹt hồ sơ:
+          #   * TestRefundService — chốt số tiền lúc CHI (phiếu thu bị điều
+          #     chỉnh giảm sau khi duyệt thì không được chi theo số cũ);
+          #   * TestRefundNoDeadEnd — phiếu quá số bị chặn ở DUYỆT chứ không
+          #     ở chi, và phiếu đã duyệt vẫn từ chối được; thiếu hai lối này
+          #     thì phiếu kẹt vĩnh viễn, chỉ SQL mới gỡ (đã xảy ra thật trên
+          #     prod 29-07);
+          #   * TestRefundReferenceAndContext — mã tham chiếu tự điền theo
+          #     ngày VN, và response mang đủ ngữ cảnh để kế toán quyết;
+          #   * TestRefundSummaryIdor — dải tổng quan không đếm phiếu của
+          #     đơn vị khác.
+          # `test_lead_import.py` vào đây vì nó KHOÁ HÀNH VI của đường nhập
+          # lead từ file — và nó vừa vỡ thật khi ô trống bị ép thành chuỗi
+          # "nan". Trước đó nó chỉ chạy nightly, tức cổng PR xanh còn lỗi rơi
+          # xuống sau khi merge. Hai tệp `test_lead_import_empty_*` canh chính
+          # bản vá đó. Ba tệp thêm 02-08 canh những lỗ mà bản vá trên để lọt:
+          #   * test_lead_import_phone_separators — SĐT toàn dấu phân cách lọt
+          #     cả validator lẫn hai lớp chống trùng rồi đâm unique index, kéo
+          #     đổ CẢ LÔ;
+          #   * test_lead_schema_phone_and_limits — tầng schema (đường POST
+          #     /api/leads đi thẳng vào đây, không qua bước strip của service);
+          #   * test_lead_import_row_number_offset — số dòng báo cho người dùng
+          #     phải khớp dòng trong tệp họ mở, sau khi phần đầu `#` bị cắt;
+          #   * test_lead_import_error_leak — chi tiết lỗi hạ tầng (SQL + tham
+          #     số) không được đi ra tới thông báo trên màn hình;
+          #   * test_qa_wave9_lead_import_and_w8a32 — PR có SỬA tệp này.
+          # 🔴 Thêm tệp test nhập-lead mới thì PHẢI thêm vào đây — allowlist là
+          # hàng thủ công, và chính chỗ này là lý do lô lỗi trên lọt cổng PR.
+          # Chọn theo LỚP chứ không cả file: các lớp payment còn lại (record/
+          # overpayment) tốn thêm vài phút mà không canh đường tiền-ra.
+          # `TestVerifyPayment` + `TestRejectPayment` + `test_payment_lock_order`
+          # thêm 04-08 vì đường XÁC MINH cũng là đường tiền, chỉ là tiền VÀO:
+          #   * trước bản vá khoá-phiếu-trước, hai lượt duyệt song song cùng
+          #     đọc 'pending' rồi cùng cộng tiền — sổ ghi gấp đôi mà không ai
+          #     bấm gì lạ;
+          #   * `test_payment_lock_order.py` canh cả kết quả (đúng một lượt
+          #     thắng) LẪN thứ tự lấy khoá (payment trước invoice trước fee) —
+          #     thiếu vế thứ hai thì ai đó đảo lại thứ tự vẫn xanh.
+          # Ba tập cuối (cohort đưa sang hệ ký túc xá) canh thứ hỏng ÂM THẦM:
+          #   * test_hk1_fee_scope_single_source — structural lock-in buộc các
+          #     call site thật sự gọi helper chung;
+          #   * test_dorm_export_cohort — cohort bám đúng năm học được hỏi;
+          #   * test_sync_dorm_students — chặn --batch-size <= 0, thứ từng
+          #     khiến một lượt đồng bộ ghi 0 hồ sơ rồi vẫn báo thành công.
+          #
+          # ⚠️ TUYỆT ĐỐI không đặt comment BÊN TRONG `tests: >-`. YAML gấp
+          # folded scalar thành MỘT dòng, nên dấu `#` đầu tiên biến toàn bộ
+          # phần còn lại thành comment của shell — nuốt cả danh sách test lẫn
+          # `--timeout=60`, và workflow vẫn xanh vì lệnh vẫn chạy (chạy thiếu).
+          - tier: Tier 1 — Phase 3 multi-NV core
+            tests: >-
+              tests/unit/test_phase3_pr3a_choice_and_score.py
+              tests/unit/test_phase3_pr3b_state_machine.py
+              tests/unit/test_phase3_pr3c_sub1_scoring_gates.py
+              tests/unit/test_phase3_pr3c_sub2_choice_engine.py
+              tests/unit/test_phase3_pr3c_sub2b_router_helpers.py
+              tests/unit/test_phase3_pr3c_sub3_router_registration.py
+              tests/api/test_phase3_pr3c_routers_integration.py
+              tests/integration/test_choice_engine_quota_concurrent.py
+              tests/api/test_phase3_pr3d_b_choice_crud.py
+              tests/api/test_phase3_pr3d_b_admin_backfill.py
+              tests/api/test_phase3_pr3e_magic_link.py
+              tests/api/test_magic_link_3_actions_wire.py
+              tests/services/test_phase3_create_profile_inherits_multi_nv.py
+              tests/unit/test_admission_path_service_field_drift.py
+              tests/integration/test_admission_path_method_filter_and_activator.py
+              tests/unit/test_delete_profile_file_cleanup.py
+              tests/unit/test_enrollment_letter_pdf.py
+              tests/unit/test_enrollment_letter_cleanup.py
+              tests/unit/test_hk1_fee_scope_single_source.py
+              tests/repositories/test_dorm_export_cohort.py
+              tests/unit/test_sync_dorm_students.py
+              tests/services/test_payment_service.py::TestRefundService
+              tests/services/test_payment_service.py::TestRefundNoDeadEnd
+              tests/api/test_lead_import.py
+              tests/api/test_lead_import_error_leak.py
+              tests/api/test_lead_import_phone_separators.py
+              tests/api/test_lead_import_row_number_offset.py
+              tests/api/test_qa_wave9_lead_import_and_w8a32.py
+              tests/unit/test_lead_import_empty_cells.py
+              tests/unit/test_lead_import_empty_email_end_to_end.py
+              tests/unit/test_lead_schema_phone_and_limits.py
+              tests/services/test_payment_service.py::TestRefundReferenceAndContext
+              tests/services/test_payment_service.py::TestRefundSummaryIdor
+              tests/services/test_payment_service.py::TestVerifyPayment
+              tests/services/test_payment_service.py::TestRejectPayment
+              tests/services/test_payment_lock_order.py
+
+          # ---------------------------------------------------------------
+          # Tier 2: RBAC + CCCD lock + CSRF
+          # ---------------------------------------------------------------
+          # EXPANDED 2026-05-24 để gồm permission_matrix + lead static-route
+          # collision + fee auth + diamond inheritance, vì PR #329 đã dàn xếp
+          # lại những mặt rủi ro đó và cổng phải kiểm chúng trên MỌI PR.
+          - tier: Tier 2 — RBAC + security + CCCD lock
+            tests: >-
+              tests/unit/test_casbin_phase3_routes.py
+              tests/integration/test_casbin_b1_4x14_matrix.py
+              tests/unit/test_csrf_middleware.py
+              tests/integration/test_admission_confirmation_lock_ladder.py
+              tests/integration/test_admission_confirm_lock.py
+              tests/unit/test_admission_state_service_event_mapping.py
+              tests/unit/test_client_ip_helper.py
+              tests/unit/test_admission_confirmation_cooldown.py
+              tests/unit/test_magic_link_rate_limit_key_hashing.py
+              tests/api/test_admin_v2_admission_round_phase3_flags.py
+              tests/security/test_permissions_matrix.py
+              tests/integration/test_casbin_lead_static_route_collision.py
+              tests/api/test_fees_calculate_authorization.py
+              tests/api/test_finance_api.py::TestDiamondInheritance
+              tests/api/test_tuition_export_authorization.py
+              tests/security/test_ratelimit_order_guard.py
+              tests/security/test_ip_rate_limit.py
+              tests/security/test_ratelimit_per_user_key.py
+              tests/api/test_consultation_security.py
+              tests/unit/test_casbin_enrollment_letter_routes.py
+              tests/api/test_enrollment_letter_api.py
+
+          # ---------------------------------------------------------------
+          # Tier 2b: Luồng XUẤT tệp (danh sách khoản phí + báo cáo công nợ)
+          # ---------------------------------------------------------------
+          # Ba thứ ở đây hỏng ÂM THẦM nên phải chặn trước merge:
+          #   * grain DISTINCT fee — xuất theo hoá đơn làm cột tiền cộng ra
+          #     gấp đôi mà không có dấu hiệu nào trên màn hình;
+          #   * ô tiền / CCCD trong CSV — sanitize làm số âm thành text và mất
+          #     số 0 đầu CCCD, tệp trông vẫn "đủ" nhưng số sai;
+          #   * fee_labels khớp frontend — tệp ghi một tên, màn hình ghi tên
+          #     khác thì lời khuyên "lọc theo cột Loại phí" thành vô dụng.
+          - tier: Tier 2b — Export khoản phí + công nợ
+            tests: >-
+              tests/services/test_tuition_export_service.py
+              tests/services/test_finance_report_export.py
+              tests/unit/test_fee_labels_match_frontend.py
+
+          # ---------------------------------------------------------------
+          # Tier 3: Notification reliability
+          # ---------------------------------------------------------------
+          # `coverage_script: true` bật thêm bước chạy
+          # `app.scripts.check_notification_event_coverage` NGAY SAU pytest của
+          # lát này. Để chung shard vì nó soi cùng một mặt rủi ro (sự kiện khai
+          # trong catalog mà thiếu rule row thì dispatch im lặng về 0), và tách
+          # thành shard riêng thì tốn nguyên một runner cho một lệnh vài giây.
+          - tier: Tier 3 — Notification reliability
+            coverage_script: true
+            tests: >-
+              tests/unit/test_notification_parity.py
+              tests/services/test_notification_dispatcher.py
+              tests/integration/test_notification_core_v2.py
+              tests/services/test_notification_bundle.py
+              tests/services/test_admission_bundle_contract.py
+              tests/integration/test_condition_dispatch.py
+              tests/unit/test_outbox_worker.py
+              tests/unit/test_outbox_skeleton.py
+              tests/unit/test_check_notification_event_coverage_deferred.py
+
+          # ---------------------------------------------------------------
+          # Tier 4: Admission + lead workflow contract
+          # ---------------------------------------------------------------
+          - tier: Tier 4 — Admission + lead workflow contract
+            tests: >-
+              tests/api/test_admission_workflow_api.py
+              tests/api/test_lead_assignment_api.py::test_lead_assignment_lifecycle_end_to_end
+              tests/services/test_assignment.py
+              tests/unit/test_lead_action_permissions.py
+              tests/integration/test_reassign_terminal_guard.py
+              tests/integration/test_delete_consultation_revert.py
+              tests/integration/test_restore_consultation_revert.py
+              tests/integration/test_add_restore_consultation_latest.py
+              tests/integration/test_consultation_system_immutable.py
+              tests/unit/test_consultation_schema_validation.py
+              tests/repositories/test_consultation_system_excluded_nhom3.py
+              tests/unit/test_consultation_action_permissions.py
+              tests/integration/test_lead_timeline_permissions.py
+              tests/services/test_assignment_self_sourced.py
+              tests/unit/test_admission_state_machine.py
+              tests/unit/test_b2_1_admission_milestone_events.py
+              tests/integration/test_delete_profile_revert.py
+              tests/repositories/test_admission_soft_delete_excluded.py
+              tests/unit/test_admission_report_helpers.py
+              tests/repositories/test_admission_report_integration.py
+              tests/api/test_admission_report_api.py
+              tests/integration/test_sts20_consult_giveup.py
+
+          # ---------------------------------------------------------------
+          # Tier 5: Phase 2 engine prereqs
+          # ---------------------------------------------------------------
+          - tier: Tier 5 — Phase 2 engine prereqs
+            tests: >-
+              tests/unit/test_phase2_engine_3tier_resolution.py
+              tests/unit/test_phase2_engine_quota_chain_v8.py
+              tests/unit/test_phase2_engine_snapshot_integrity.py
+              tests/unit/test_phase2_pr2c_three_col_unique.py
+              tests/services/test_phase2_admission_path_quota_integration.py
+              tests/services/test_quota_matrix_funnel.py
+              tests/services/test_coverage_round_info.py
+              tests/services/test_can_edit_governance.py
+              tests/unit/test_public_admissions_phase1_wave6.py
+              tests/unit/test_document_resolution_service.py
+              tests/integration/test_document_audience_reresolve.py
+              tests/unit/test_docgrp_audience_backfill_migration.py
+              tests/integration/test_document_audience_config_panel.py
 
     env:
       APP_ENV: test
@@ -120,6 +384,10 @@ jobs:
       MAIL_FROM: ci-test@example.com
       MAIL_SERVER: smtp.example.com
 
+    # Mỗi shard là một job riêng nên GitHub dựng CẶP Postgres+Redis RIÊNG cho
+    # từng shard. Đây là điều kiện bắt buộc, không phải tối ưu: các lát này
+    # DROP/CREATE schema `qlts_test` và TRUNCATE toàn bộ bảng giữa các test —
+    # dùng chung một DB thì chúng xoá dữ liệu của nhau giữa chừng.
     services:
       postgres:
         image: postgres:16-alpine
@@ -159,238 +427,44 @@ jobs:
         working-directory: Backend_FastAPI
         run: pip install -r requirements-dev.txt
 
-      # =====================================================================
-      # Tier 1: Phase 3 multi-NV core — Wave A/B acceptance gates
-      # =====================================================================
-      # Bốn lớp `TestRefund*` canh đường TIỀN RA khỏi két, canh những thứ chỉ lộ ra
-      # khi đã mất tiền hoặc đã kẹt hồ sơ:
-      #   * TestRefundService — chốt số tiền lúc CHI (phiếu thu bị điều chỉnh giảm
-      #     sau khi duyệt thì không được chi theo số cũ);
-      #   * TestRefundNoDeadEnd — phiếu quá số bị chặn ở DUYỆT chứ không ở chi, và
-      #     phiếu đã duyệt vẫn từ chối được; thiếu hai lối này thì phiếu kẹt vĩnh
-      #     viễn, chỉ SQL mới gỡ (đã xảy ra thật trên prod 29-07);
-      #   * TestRefundReferenceAndContext — mã tham chiếu tự điền theo ngày VN,
-      #     và response mang đủ ngữ cảnh để kế toán quyết trên bảng;
-      #   * TestRefundSummaryIdor — dải tổng quan không đếm phiếu của đơn vị khác.
-      # `test_lead_import.py` vào đây vì nó KHOÁ HÀNH VI của đường nhập lead từ
-      # file — và nó vừa vỡ thật khi ô trống thôi bị ép thành chuỗi "nan". Trước
-      # đó nó chỉ chạy nightly, tức cổng PR xanh còn lỗi rơi xuống sau khi merge.
-      # Hai tệp `test_lead_import_empty_*` canh chính bản vá đó.
-      # Ba tệp thêm 02-08 canh những lỗ mà chính bản vá trên để lọt:
-      #   * test_lead_import_phone_separators — SĐT toàn dấu phân cách lọt cả
-      #     validator lẫn hai lớp chống trùng rồi đâm unique index, kéo đổ CẢ LÔ;
-      #   * test_lead_schema_phone_and_limits — tầng schema (đường POST /api/leads
-      #     đi thẳng vào đây, không qua bước strip của service): khoảng trắng
-      #     trần, đầu vào không phải chuỗi, và độ dài phải khớp cột DB;
-      #   * test_lead_import_row_number_offset — số dòng báo cho người dùng phải
-      #     khớp dòng trong tệp họ mở, sau khi phần đầu `#` bị cắt;
-      #   * test_lead_import_error_leak — chi tiết lỗi hạ tầng (SQL + tham số)
-      #     không được đi ra tới thông báo trên màn hình;
-      #   * test_qa_wave9_lead_import_and_w8a32 — PR có SỬA tệp này, nên nó phải
-      #     chạy ở cổng PR chứ không chỉ nightly.
-      # 🔴 Thêm tệp test nhập-lead mới thì PHẢI thêm vào đây — allowlist là hàng
-      # thủ công, và chính chỗ này là lý do lô lỗi trên lọt được cổng PR.
-      # Chọn theo LỚP chứ không cả file: các lớp payment còn lại (record/
-      # overpayment) tốn thêm vài phút mà không canh đường tiền-ra, để nightly.
-      # `TestVerifyPayment` + `TestRejectPayment` + `test_payment_lock_order.py`
-      # thêm 04-08 vì đường XÁC MINH cũng là đường tiền, chỉ là tiền VÀO:
-      #   * trước bản vá khoá-phiếu-trước, hai lượt duyệt song song cùng đọc
-      #     'pending' rồi cùng cộng tiền — sổ ghi gấp đôi mà không ai bấm gì lạ;
-      #   * `test_payment_lock_order.py` canh cả kết quả (đúng một lượt thắng)
-      #     LẪN thứ tự lấy khoá (payment trước invoice trước fee) — thiếu vế
-      #     thứ hai thì ai đó đảo lại thứ tự vẫn xanh, và cửa kẹt chéo với
-      #     đường đảo tiền mở lại mà không phép kiểm nào kêu.
-      # Hai lớp verify/reject vào cùng vì chúng là hành vi đơn luồng mà bản vá
-      # đó chạm tới; để nightly thì hồi quy chỉ lộ ra sau khi đã merge.
-      # Ba tập cuối (cohort đưa sang hệ ký túc xá) canh những thứ hỏng ÂM THẦM:
-      #   * test_hk1_fee_scope_single_source — structural lock-in buộc các call
-      #     site thật sự gọi helper chung, không chép tay lại vị từ HK1;
-      #   * test_dorm_export_cohort — cohort bám đúng năm học được hỏi (mượn
-      #     max(academic_year) sẽ làm hồ sơ mùa cũ biến mất);
-      #   * test_sync_dorm_students — chặn --batch-size <= 0, thứ từng khiến một
-      #     lượt đồng bộ ghi 0 hồ sơ rồi vẫn hạ cờ 7 người và báo thành công.
-      # Không có ở đây thì chúng chỉ chạy nightly, tức là SAU khi đã merge.
-      #
-      # ⚠️ TUYỆT ĐỐI không đặt comment BÊN TRONG `run: >-`. YAML gấp folded
-      # scalar thành MỘT dòng, nên dấu `#` đầu tiên biến toàn bộ phần còn lại
-      # thành comment của shell — nuốt cả danh sách test lẫn `--timeout=60`, và
-      # workflow vẫn xanh vì lệnh vẫn chạy (chỉ là chạy thiếu).
-      - name: pytest — Phase 3 multi-NV core
+      - name: pytest — ${{ matrix.tier }}
         working-directory: Backend_FastAPI
-        run: >-
-          python -m pytest
-          tests/unit/test_phase3_pr3a_choice_and_score.py
-          tests/unit/test_phase3_pr3b_state_machine.py
-          tests/unit/test_phase3_pr3c_sub1_scoring_gates.py
-          tests/unit/test_phase3_pr3c_sub2_choice_engine.py
-          tests/unit/test_phase3_pr3c_sub2b_router_helpers.py
-          tests/unit/test_phase3_pr3c_sub3_router_registration.py
-          tests/api/test_phase3_pr3c_routers_integration.py
-          tests/integration/test_choice_engine_quota_concurrent.py
-          tests/api/test_phase3_pr3d_b_choice_crud.py
-          tests/api/test_phase3_pr3d_b_admin_backfill.py
-          tests/api/test_phase3_pr3e_magic_link.py
-          tests/api/test_magic_link_3_actions_wire.py
-          tests/services/test_phase3_create_profile_inherits_multi_nv.py
-          tests/unit/test_admission_path_service_field_drift.py
-          tests/integration/test_admission_path_method_filter_and_activator.py
-          tests/unit/test_delete_profile_file_cleanup.py
-          tests/unit/test_enrollment_letter_pdf.py
-          tests/unit/test_enrollment_letter_cleanup.py
-          tests/unit/test_hk1_fee_scope_single_source.py
-          tests/repositories/test_dorm_export_cohort.py
-          tests/unit/test_sync_dorm_students.py
-          tests/services/test_payment_service.py::TestRefundService
-          tests/services/test_payment_service.py::TestRefundNoDeadEnd
-          tests/api/test_lead_import.py
-          tests/api/test_lead_import_error_leak.py
-          tests/api/test_lead_import_phone_separators.py
-          tests/api/test_lead_import_row_number_offset.py
-          tests/api/test_qa_wave9_lead_import_and_w8a32.py
-          tests/unit/test_lead_import_empty_cells.py
-          tests/unit/test_lead_import_empty_email_end_to_end.py
-          tests/unit/test_lead_schema_phone_and_limits.py
-          tests/services/test_payment_service.py::TestRefundReferenceAndContext
-          tests/services/test_payment_service.py::TestRefundSummaryIdor
-          tests/services/test_payment_service.py::TestVerifyPayment
-          tests/services/test_payment_service.py::TestRejectPayment
-          tests/services/test_payment_lock_order.py
-          -q --tb=short --timeout=60
+        run: python -m pytest ${{ matrix.tests }} -q --tb=short --timeout=60
 
-      # =====================================================================
-      # Tier 2: RBAC + security + CCCD lock + CSRF
-      #
-      # PR-1.6 (2026-05-24) — added 4 surfaces that PR #329 reconciled and
-      # the prior allowlist did not execute (memory
-      # ``auto-merge-requires-full-ci-not-just-green`` flagged this gap):
-      #   * test_permissions_matrix.py — role/route assertion matrix
-      #   * test_casbin_lead_static_route_collision.py — keyMatch4 leak guard
-      #   * test_fees_calculate_authorization.py — officer scoped fee auth
-      #   * test_finance_api.py::TestDiamondInheritance — allow/deny semantics
-      # =====================================================================
-      - name: pytest — RBAC + security + CCCD lock
+      - name: Notification event coverage script
+        if: matrix.coverage_script
         working-directory: Backend_FastAPI
-        run: >-
-          python -m pytest
-          tests/unit/test_casbin_phase3_routes.py
-          tests/integration/test_casbin_b1_4x14_matrix.py
-          tests/unit/test_csrf_middleware.py
-          tests/integration/test_admission_confirmation_lock_ladder.py
-          tests/integration/test_admission_confirm_lock.py
-          tests/unit/test_admission_state_service_event_mapping.py
-          tests/unit/test_client_ip_helper.py
-          tests/unit/test_admission_confirmation_cooldown.py
-          tests/unit/test_magic_link_rate_limit_key_hashing.py
-          tests/api/test_admin_v2_admission_round_phase3_flags.py
-          tests/security/test_permissions_matrix.py
-          tests/integration/test_casbin_lead_static_route_collision.py
-          tests/api/test_fees_calculate_authorization.py
-          tests/api/test_finance_api.py::TestDiamondInheritance
-          tests/api/test_tuition_export_authorization.py
-          tests/security/test_ratelimit_order_guard.py
-          tests/security/test_ip_rate_limit.py
-          tests/security/test_ratelimit_per_user_key.py
-          tests/api/test_consultation_security.py
-          tests/unit/test_casbin_enrollment_letter_routes.py
-          tests/api/test_enrollment_letter_api.py
-          -q --tb=short --timeout=60
+        run: python -m app.scripts.check_notification_event_coverage
 
-      # =====================================================================
-      # Tier 2b: Luồng XUẤT tệp (danh sách khoản phí + báo cáo công nợ)
-      #
-      # Ba thứ ở đây hỏng ÂM THẦM nên phải chặn trước merge, không đợi nightly:
-      #   * grain DISTINCT fee — xuất theo hoá đơn làm cột tiền cộng ra gấp đôi
-      #     mà không có dấu hiệu nào trên màn hình;
-      #   * ô tiền / CCCD trong CSV — sanitize làm số âm thành text và mất số 0
-      #     đầu CCCD, tệp trông vẫn "đủ" nhưng số sai;
-      #   * fee_labels khớp frontend — tệp ghi một tên, màn hình ghi tên khác
-      #     thì lời khuyên "lọc theo cột Loại phí" trong tệp thành vô dụng.
-      # =====================================================================
-      - name: pytest — Export danh sách khoản phí + công nợ
-        working-directory: Backend_FastAPI
-        run: >-
-          python -m pytest
-          tests/services/test_tuition_export_service.py
-          tests/services/test_finance_report_export.py
-          tests/unit/test_fee_labels_match_frontend.py
-          -q --tb=short --timeout=60
-
-      # =====================================================================
-      # Tier 3: Notification reliability (legacy deploy.yml subset)
-      # =====================================================================
-      - name: pytest — Notification reliability
-        working-directory: Backend_FastAPI
-        run: >-
-          python -m pytest
-          tests/unit/test_notification_parity.py
-          tests/services/test_notification_dispatcher.py
-          tests/integration/test_notification_core_v2.py
-          tests/services/test_notification_bundle.py
-          tests/services/test_admission_bundle_contract.py
-          tests/integration/test_condition_dispatch.py
-          tests/unit/test_outbox_worker.py
-          tests/unit/test_outbox_skeleton.py
-          tests/unit/test_check_notification_event_coverage_deferred.py
-          -q --tb=short --timeout=60
-
-      - name: pytest — Notification event coverage script
-        working-directory: Backend_FastAPI
-        # Wave 3 (2026-05-19): all 3 PRIORITY_* events wired via outbox
-        # → no more --allow-deferred needed. Sync với
-        # admission-contract-check.yml per memory
-        # `ci-workflow-flag-cross-file-sync`.
+  # =======================================================================
+  # GATE — required status check, tên phải giữ NGUYÊN là `pytest`
+  # =======================================================================
+  # Ruleset 16381130 đòi đúng chuỗi `pytest`. Job này gom kết quả của mọi
+  # shard lại dưới đúng cái tên đó, nên KHÔNG phải sửa ruleset — và cũng
+  # không phải sửa lại mỗi lần thêm/bớt một shard.
+  #
+  # 🔴 `if: always()` là con dao hai lưỡi. Không có nó thì job bị skip khi
+  # một shard đỏ, mà check bị skip KHÔNG làm PR đỏ — cổng biến mất đúng lúc
+  # cần nó nhất. Có nó thì job luôn chạy, nên thân job BẮT BUỘC phải tự kiểm
+  # kết quả; nếu chỉ `echo "ok"` thì cổng xanh vĩnh viễn kể cả khi mọi shard
+  # đều đỏ. Đó là lý do có bước so `needs.pytest-shard.result` bên dưới.
+  #
+  # Với matrix, `needs.<job>.result` là kết quả GỘP: 'success' chỉ khi TOÀN
+  # BỘ shard success. Một shard đỏ ⇒ 'failure'; bị huỷ ⇒ 'cancelled'; bị bỏ
+  # qua ⇒ 'skipped'. Nên điều kiện đúng là `!= 'success'`, không phải
+  # `== 'failure'` — viết kiểu sau thì lượt bị huỷ giữa chừng sẽ lọt qua.
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    needs: [pytest-shard]
+    if: always()
+    steps:
+      - name: Gom kết quả các shard
         run: |
-          python -m app.scripts.check_notification_event_coverage
-
-      # =====================================================================
-      # Tier 4: Admission + lead workflow contract (legacy deploy.yml subset)
-      # =====================================================================
-      - name: pytest — Admission + lead workflow contract
-        working-directory: Backend_FastAPI
-        run: >-
-          python -m pytest
-          tests/api/test_admission_workflow_api.py
-          tests/api/test_lead_assignment_api.py::test_lead_assignment_lifecycle_end_to_end
-          tests/services/test_assignment.py
-          tests/unit/test_lead_action_permissions.py
-          tests/integration/test_reassign_terminal_guard.py
-          tests/integration/test_delete_consultation_revert.py
-          tests/integration/test_restore_consultation_revert.py
-          tests/integration/test_add_restore_consultation_latest.py
-          tests/integration/test_consultation_system_immutable.py
-          tests/unit/test_consultation_schema_validation.py
-          tests/repositories/test_consultation_system_excluded_nhom3.py
-          tests/unit/test_consultation_action_permissions.py
-          tests/integration/test_lead_timeline_permissions.py
-          tests/services/test_assignment_self_sourced.py
-          tests/unit/test_admission_state_machine.py
-          tests/unit/test_b2_1_admission_milestone_events.py
-          tests/integration/test_delete_profile_revert.py
-          tests/repositories/test_admission_soft_delete_excluded.py
-          tests/unit/test_admission_report_helpers.py
-          tests/repositories/test_admission_report_integration.py
-          tests/api/test_admission_report_api.py
-          tests/integration/test_sts20_consult_giveup.py
-          -q --tb=short --timeout=60
-
-      # =====================================================================
-      # Tier 5: Phase 2 engine prereqs (Phase 3 builds laterally on these)
-      # =====================================================================
-      - name: pytest — Phase 2 engine prereqs
-        working-directory: Backend_FastAPI
-        run: >-
-          python -m pytest
-          tests/unit/test_phase2_engine_3tier_resolution.py
-          tests/unit/test_phase2_engine_quota_chain_v8.py
-          tests/unit/test_phase2_engine_snapshot_integrity.py
-          tests/unit/test_phase2_pr2c_three_col_unique.py
-          tests/services/test_phase2_admission_path_quota_integration.py
-          tests/services/test_quota_matrix_funnel.py
-          tests/services/test_coverage_round_info.py
-          tests/services/test_can_edit_governance.py
-          tests/unit/test_public_admissions_phase1_wave6.py
-          tests/unit/test_document_resolution_service.py
-          tests/integration/test_document_audience_reresolve.py
-          tests/unit/test_docgrp_audience_backfill_migration.py
-          tests/integration/test_document_audience_config_panel.py
-          -q --tb=short --timeout=60
+          RESULT="${{ needs.pytest-shard.result }}"
+          echo "Kết quả gộp của pytest-shard: $RESULT"
+          if [ "$RESULT" != "success" ]; then
+            echo "::error::Có shard pytest KHÔNG thành công (kết quả gộp: $RESULT). Mở job 'pytest shard — ...' tương ứng để xem lát nào hỏng."
+            exit 1
+          fi
+          echo "✅ Toàn bộ shard pytest đã thành công."
