@@ -30,17 +30,26 @@ name: Backend Test (PR Gate)
 # Trigger: ANY change under Backend_FastAPI/** — including tests/. No
 # path-filter loophole.
 #
-# Performance budget: ~29 phút median (04-08-2026).
+# Performance budget: ~36 phút (đo thật 04-08-2026), KHÔNG phải <10 phút.
 #
 # Con số <10 phút ghi ở đây từ 2026-05-24 đã lạc hậu từ lâu: các tier lớn
 # dần theo từng đợt bổ sung, và tới 04-08 một lượt nối đuôi mất 70m12s.
-# Sau khi tách sáu lát chạy song song, wall-clock bằng lát dài nhất —
-# Tier 2 (RBAC + security) ở 1731 giây, tức ~29 phút. Đó là trần thực tế
-# của cổng này, không phải mục tiêu 10 phút cũ.
+# Sau khi tách sáu lát chạy song song, wall-clock bằng lát dài nhất.
+#
+# ⚠️ Đừng tin con số dự đoán — Tier 2 đo được 1731 giây (28m51) ở một lượt,
+# rồi 2164 giây (36m04) ở lượt ngay sau đó, CÙNG một tập test. Runner dùng
+# chung của GitHub dao động mạnh, nên coi ~36 phút là mốc thực tế và đừng
+# ngạc nhiên khi thấy 29 hay 40.
+#
+# Wall-clock đo được của lượt song song đầu tiên: 36m13s (12:49:45 →
+# 13:25:58), so với 70m12s của lần nối đuôi gần nhất. Lưu ý phép so này
+# KHÔNG hoàn toàn công bằng: hai lượt chạy trên runner khác nhau, và nếu
+# lượt nối đuôi rơi vào runner chậm như lượt này thì nó đã lâu hơn 70 phút.
 #
 # 🔴 Muốn kéo xuống nữa thì phải chẻ chính Tier 2, không phải thêm shard
-# cho các lát vốn đã nhanh — Tier 2b chỉ 40 giây, Tier 3 139 giây, script
-# notification 2 giây. Chẻ chúng nữa không thay đổi gì cả.
+# cho các lát vốn đã nhanh. Tier 2b tốn 1m44s trong đó phần lớn là dựng
+# máy (test chỉ ~40 giây) — chẻ nhỏ nữa thì overhead setup nuốt hết phần
+# tiết kiệm.
 #
 # DESIGN — BOUNDED RISK GATE (PR-1.6, 2026-05-24):
 # This is a SOLO-DEV velocity-optimized PR gate. It is intentionally
@@ -128,7 +137,12 @@ jobs:
   #                             Tier 5   163s (2m43)
   # Chúng độc lập nhau (không lát nào đọc kết quả của lát khác), nên nối
   # đuôi chỉ là quán tính. Tách ra matrix thì wall-clock rút về lát dài
-  # nhất — Tier 2, 1731 giây, tức ~29 phút.
+  # nhất — Tier 2.
+  #
+  # Đo thật lượt song song đầu tiên (04-08): Tier 1 24m47 · Tier 2 36m04 ·
+  # Tier 2b 1m44 · Tier 3 3m33 · Tier 4 13m14 · Tier 5 3m58 · job gom 3s.
+  # Wall-clock 36m13s. Mỗi lát chậm hơn số nối đuôi khoảng 1-1,5 phút vì
+  # nay phải tự checkout + `pip install` — bản nối đuôi chỉ trả một lần.
   #
   # Vì sao đáng làm: ruleset của main bật strict_required_status_checks,
   # nên mỗi lần main nhích là MỌI PR đang mở phải chạy lại từ đầu. Riêng
@@ -142,7 +156,7 @@ jobs:
   # ⚠️ `fail-fast: false` là CỐ Ý. Mặc định của GitHub là huỷ mọi shard
   # còn lại ngay khi một shard đỏ — nghĩa là mỗi lượt chỉ biết được MỘT
   # tier hỏng, sửa xong lại chờ nguyên lượt nữa để lộ tier kế tiếp. Với
-  # gate ~29 phút thì đó là cách nhanh nhất để đốt cả buổi.
+  # gate ~36 phút thì đó là cách nhanh nhất để đốt cả buổi.
   pytest-shard:
     name: pytest shard — ${{ matrix.tier }}
     runs-on: ubuntu-latest
