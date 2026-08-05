@@ -7,6 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
+import { calendarDateToISO, parseNgayLich } from "@/lib/utils/vn-date";
 import { CalendarIcon, Loader2, Pencil, Plus, Trash2, Percent, Banknote, MoreVertical } from "lucide-react";
 import {
   BaseCard,
@@ -153,9 +154,9 @@ function MobilePolicyCard({ policy, onEdit, onDelete, formatCurrency }: MobilePo
             label="Hiệu lực"
             value={
               <>
-                {policy.valid_from && format(new Date(policy.valid_from), "dd/MM/yyyy")}
+                {policy.valid_from && format(parseNgayLich(policy.valid_from), "dd/MM/yyyy")}
                 {policy.valid_from && policy.valid_to && " - "}
-                {policy.valid_to && format(new Date(policy.valid_to), "dd/MM/yyyy")}
+                {policy.valid_to && format(parseNgayLich(policy.valid_to), "dd/MM/yyyy")}
               </>
             }
           />
@@ -298,8 +299,8 @@ export function TuitionDiscountClient({ initialData }: TuitionDiscountClientProp
       // validate ("expected number, received string"). Chế độ TẠO không lộ vì nó
       // khởi tạo bằng số 0.
       discount_value: Number(policy.discount_value),
-      valid_from: policy.valid_from ? new Date(policy.valid_from) : null,
-      valid_to: policy.valid_to ? new Date(policy.valid_to) : null,
+      valid_from: policy.valid_from ? parseNgayLich(policy.valid_from) : null,
+      valid_to: policy.valid_to ? parseNgayLich(policy.valid_to) : null,
       is_stackable: policy.is_stackable,
       priority: policy.priority,
       max_usage: policy.max_usage,
@@ -326,8 +327,12 @@ export function TuitionDiscountClient({ initialData }: TuitionDiscountClientProp
       description: values.description || null,
       discount_type: values.discount_type as DiscountType,
       discount_value: values.discount_value,
-      valid_from: values.valid_from?.toISOString().split("T")[0] || null,
-      valid_to: values.valid_to?.toISOString().split("T")[0] || null,
+      // Ngày hiệu lực đọc thẳng ô lịch người dùng bấm. `toISOString()` quy về
+      // UTC, mà DatePicker trả 00:00 GIỜ ĐỊA PHƯƠNG — ở Việt Nam nó lùi đúng
+      // một ngày: chính sách đặt hiệu lực từ 05/08 được lưu là 04/08 (áp sớm
+      // một ngày), và `valid_to` 31/08 thành 30/08 (hết hạn sớm một ngày).
+      valid_from: values.valid_from ? calendarDateToISO(values.valid_from) : null,
+      valid_to: values.valid_to ? calendarDateToISO(values.valid_to) : null,
       is_stackable: values.is_stackable,
       priority: values.priority,
       max_usage: values.max_usage || null,
@@ -455,10 +460,10 @@ export function TuitionDiscountClient({ initialData }: TuitionDiscountClientProp
                           {policy.valid_from || policy.valid_to ? (
                             <div className="text-xs">
                               {policy.valid_from && (
-                                <div>Từ: {format(new Date(policy.valid_from), "dd/MM/yyyy")}</div>
+                                <div>Từ: {format(parseNgayLich(policy.valid_from), "dd/MM/yyyy")}</div>
                               )}
                               {policy.valid_to && (
-                                <div>Đến: {format(new Date(policy.valid_to), "dd/MM/yyyy")}</div>
+                                <div>Đến: {format(parseNgayLich(policy.valid_to), "dd/MM/yyyy")}</div>
                               )}
                             </div>
                           ) : (

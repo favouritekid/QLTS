@@ -38,6 +38,7 @@ import { CreditCard, Loader2 } from "lucide-react"
 import { useCreatePayment } from "@/hooks/finance/usePayments"
 import { usePaymentMethods } from "@/hooks/finance/usePaymentMethods"
 import { parseVNDDisplayAmount } from "@/lib/zod/finance"
+import { calendarDateToISO } from "@/lib/utils/vn-date"
 import { toast } from "sonner"
 
 // =============================================================================
@@ -132,7 +133,13 @@ export function PaymentRecordDialog({
           invoice_id: invoiceId,
           method_id: values.method_id,
           amount: values.amount.toString(),
-          payment_date: values.payment_date?.toISOString().split("T")[0],
+          // Đọc thẳng ô ngày kế toán bấm. `toISOString()` quy về UTC, mà
+          // lịch trả `Date` 00:00 GIỜ ĐỊA PHƯƠNG — ở Việt Nam nó ghi LÙI MỘT
+          // NGÀY, và sau khi lưu màn hình hiện đúng cái đã lưu nên người ghi
+          // thấy ngày mình vừa chọn bị lùi. Xem `calendarDateToISO`.
+          payment_date: values.payment_date
+            ? calendarDateToISO(values.payment_date)
+            : undefined,
           reference_code: values.reference_code || undefined,
           payer_name: values.payer_name || undefined,
           payer_account: values.payer_account || undefined,

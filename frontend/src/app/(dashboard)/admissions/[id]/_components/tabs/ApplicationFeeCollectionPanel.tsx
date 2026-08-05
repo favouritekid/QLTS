@@ -4,6 +4,7 @@ import { type FormEvent, type ReactNode, useState } from "react"
 import { AlertCircle, CheckCircle2, Clock, Loader2, Receipt } from "lucide-react"
 
 import { AmountDisplay, FeeStatusBadge } from "@/components/finance"
+import { todayVN } from "@/lib/utils/vn-date"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -30,12 +31,17 @@ interface ApplicationFeeCollectionPanelProps {
 const RECEIPT_MIN_LENGTH = 6
 const RECEIPT_MAX_LENGTH = 80
 
-function suggestReceiptCode(profileId: number): string {
+export function suggestReceiptCode(profileId: number, now: Date = new Date()): string {
   // Pre-fill an editable default so the officer isn't stuck on a blank,
   // required field ("không biết nhập gì"). Unique per (hồ sơ, ngày) → thỏa
   // ràng buộc chống trùng biên lai của backend. Officer giữ nguyên khi thu
   // tiền mặt tại quầy, hoặc thay bằng số phiếu thu giấy thực tế.
-  const today = new Date().toISOString().slice(0, 10).replace(/-/g, "")
+  //
+  // Ngày lấy theo LỊCH VIỆT NAM, không phải `toISOString()`. Máy chủ chạy UTC
+  // và giao dịch trước 07:00 sáng rơi vào ngày hôm trước theo UTC — mã sinh ra
+  // sẽ mang ngày cũ, và vì ràng buộc chống trùng là theo (hồ sơ, ngày) nên nó
+  // có thể đụng đúng biên lai của hôm qua.
+  const today = todayVN(now).replace(/-/g, "")
   return `PT-${profileId}-${today}`
 }
 
