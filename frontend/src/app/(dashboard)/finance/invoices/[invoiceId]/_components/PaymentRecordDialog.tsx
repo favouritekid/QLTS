@@ -46,7 +46,7 @@ import { usePaymentMethods } from "@/hooks/finance/usePaymentMethods"
 import { useInvoiceDetail } from "@/hooks/finance/useInvoices"
 import { AmountDisplay } from "@/components/finance"
 import { formatVND, parseVNDDisplayAmount } from "@/lib/zod/finance"
-import { calendarDateToISO } from "@/lib/utils/vn-date"
+import { calendarDateToISO, formatNgayVN } from "@/lib/utils/vn-date"
 import {
   capSoPhienMoi,
   parseDuplicateSuspected,
@@ -233,7 +233,7 @@ export function PaymentRecordDialog({
   // dùng, thay vì dựng lại luật ở đây. Giao diện không thể tự tính đúng: nó
   // không thấy tổng tiền đã hoàn của từng phiếu, và "ngày lịch Việt Nam" ở
   // trình duyệt là múi giờ máy người dùng.
-  const { data: previewPage } = useDuplicatePreview(
+  const { data: previewPage, isError: previewFailed } = useDuplicatePreview(
     {
       feeId,
       amount: soTienDangGo ?? null,
@@ -244,6 +244,12 @@ export function PaymentRecordDialog({
   )
   const ungVienSom = previewPage?.items ?? []
   const ungVienSomBiCat = (previewPage?.total ?? 0) > ungVienSom.length
+  // Hỏi máy chủ mà hỏng thì KHÔNG được im lặng. Một form sạch bong sau khi gõ
+  // đủ số tiền đọc y như "đã đối chiếu, không trùng" — đúng câu trả lời sai
+  // nguy hiểm nhất, và là lý do bảng công nợ phía trên có trạng thái lỗi riêng.
+  // Không chặn nút Lưu: hàng rào thật nằm ở máy chủ (409 lúc ghi), nên chặn ở
+  // đây chỉ khoá tay người dùng mà không thêm an toàn nào.
+  const khongKiemTraDuoc = previewFailed && !canhBaoConHieuLuc
   const coNghiTrung = Boolean(canhBaoConHieuLuc) || ungVienSom.length > 0
   // Cờ "còn nữa" phải lấy từ ĐÚNG nguồn đang hiện. Danh sách 409 và danh sách
   // xem trước đều có thể bị cắt, mà chúng đếm bằng hai cách khác nhau — đọc
@@ -572,7 +578,7 @@ export function PaymentRecordDialog({
                         {d.ngay && (
                           <span className="text-muted-foreground">
                             {" "}
-                            · {d.ngay.slice(0, 10)}
+                            · {formatNgayVN(d.ngay)}
                           </span>
                         )}
                         {d.soHoaDon && (
@@ -609,6 +615,17 @@ export function PaymentRecordDialog({
                   <span>Tôi xác nhận đây là khoản thu khác, không phải nhập trùng</span>
                 </label>
               </div>
+            )}
+
+            {khongKiemTraDuoc && (
+              <p
+                role="alert"
+                className="rounded-md border border-destructive/50 p-3 text-sm text-destructive"
+                data-testid="payment-duplicate-preview-error"
+              >
+                Không kiểm tra được trùng lặp (không tải được danh sách phiếu đã
+                ghi). Vẫn lưu được, nhưng máy chủ sẽ chặn nếu phát hiện trùng.
+              </p>
             )}
 
             {/* Reference Code */}

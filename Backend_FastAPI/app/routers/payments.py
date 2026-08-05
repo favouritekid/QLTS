@@ -97,6 +97,13 @@ async def list_payments(
     duplicate_amount: Optional[Decimal] = Query(
         None,
         gt=0,
+        # Cùng trần với `PaymentCreate.amount`. Đường xem trước hứa trả "đúng
+        # tập ứng viên mà POST sẽ dùng", nên miền giá trị của nó không được
+        # rộng hơn miền của POST: một số vượt trần lọt tới `Payment.amount ==`
+        # rồi vỡ ở PostgreSQL ("numeric field overflow") — 500 cho một đầu vào
+        # đáng lẽ là 422. Đúng lớp lỗi mà `fee_id` đã đóng bằng `le` ngay phía
+        # trên, chỉ khác tham số.
+        le=finance_schemas.MAX_AMOUNT,
         description="Xem trước phiếu NGHI TRÙNG: đi kèm duplicate_date và "
         "fee_id. Trả về đúng tập ứng viên mà POST /api/payments sẽ dùng để "
         "cảnh báo, theo cùng một luật ở cùng một chỗ — giao diện chỉ hiển thị, "
@@ -155,6 +162,15 @@ async def list_payments(
                     "Xem trước phiếu nghi trùng cần đủ fee_id, duplicate_amount "
                     "và duplicate_date."
                 ),
+            )
+        # Chặn năm ngoài tầm nghiệp vụ. Cửa sổ dò trùng cộng/trừ vài ngày quanh
+        # mốc này, nên `9999-12-31` làm phép cộng tràn khỏi `date.max` và
+        # `0001-01-01` tràn khi quy về múi giờ — cả hai thành `OverflowError`,
+        # tức 500 cho một chuỗi ngày mà người gọi tự gõ.
+        if not (1900 <= duplicate_date.year <= 2100):
+            raise HTTPException(
+                status_code=HTTP_422_UNPROCESSABLE,
+                detail="duplicate_date nằm ngoài khoảng năm hợp lệ (1900–2100).",
             )
         candidates, truncated = await payment_repo.find_duplicate_candidates(
             fee_id=fee_id,

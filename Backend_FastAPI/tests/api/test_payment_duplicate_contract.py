@@ -484,3 +484,69 @@ class TestXemTruocUngVienTrung:
         )
         assert r.status_code == 200, r.text
         assert r.json()["items"] == []
+
+
+class TestBienDauVaoXemTruoc:
+    """Đầu vào biên của đường XEM TRƯỚC phải là 422, không phải 500.
+
+    Cả hai tham số dưới đây do người gọi tự gõ trong URL. Một chuỗi hợp lệ về
+    cú pháp nhưng vô lý về giá trị mà làm vỡ câu lệnh ở tầng dưới thì lỗi hiện
+    ra là 500 kèm traceback trong log — trong khi điều duy nhất đáng nói là
+    "đầu vào này không dùng được".
+    """
+
+    @pytest.mark.parametrize(
+        "amount",
+        ["1000000000000", "1e20", "99999999999999999999"],
+    )
+    async def test_so_tien_vuot_tran_bi_tu_choi(
+        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment, amount
+    ):
+        """Miền của xem trước không được rộng hơn miền của POST.
+
+        Đường này hứa trả "đúng tập ứng viên mà POST sẽ dùng"; một số tiền POST
+        không nhận mà xem trước lại nhận thì hai bên đang nói về hai thứ khác
+        nhau — và ở đây nó còn vỡ thành 500 vì `numeric field overflow`.
+        """
+        r = await client.get(
+            f"/api/payments?fee_id={fee_with_one_payment['fee_id']}"
+            f"&duplicate_amount={amount}"
+            "&duplicate_date=2026-08-05T03:00:00%2B00:00",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 422, (
+            f"amount={amount} phải là 422, nhận {r.status_code}: {r.text[:200]}"
+        )
+
+    @pytest.mark.parametrize(
+        "ngay",
+        ["9999-12-31T23:00:00", "0001-01-01T00:00:00", "1800-06-15T10:00:00"],
+    )
+    async def test_ngay_ngoai_tam_bi_tu_choi(
+        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment, ngay
+    ):
+        """Cửa sổ dò cộng/trừ vài ngày quanh mốc này.
+
+        `9999-12-31` làm phép cộng tràn khỏi `date.max`; `0001-01-01` tràn khi
+        quy về múi giờ. Cả hai đều là `OverflowError` — tức 500.
+        """
+        r = await client.get(
+            f"/api/payments?fee_id={fee_with_one_payment['fee_id']}"
+            f"&duplicate_amount=1000000&duplicate_date={ngay}",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 422, (
+            f"ngày {ngay} phải là 422, nhận {r.status_code}: {r.text[:200]}"
+        )
+
+    async def test_bien_trong_tam_van_chay_binh_thuong(
+        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
+    ):
+        """Đối chứng: chặn biên KHÔNG được chặn nhầm ngày thật."""
+        r = await client.get(
+            f"/api/payments?fee_id={fee_with_one_payment['fee_id']}"
+            "&duplicate_amount=1000000&duplicate_date=2026-08-05T03:00:00%2B00:00",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 200, r.text
+        assert len(r.json()["items"]) == 1

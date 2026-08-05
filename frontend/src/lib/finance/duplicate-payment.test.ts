@@ -136,12 +136,19 @@ describe("parseDuplicateSuspected — kiểm Ý NGHĨA, không chỉ kiểu", ()
     expect(parseDuplicateSuspected(than409({ duplicates: [] }))).toBeNull()
   })
 
-  it("từ chối khi vượt trần của máy chủ", () => {
-    const qua = Array.from({ length: MAX_DUPLICATE_ITEMS + 1 }, (_, i) => ({
+  it("vượt trần thì CẮT và báo bị cắt, không từ chối cả khối", () => {
+    // Trần ở giao diện là bản sao hằng số của máy chủ. Nâng
+    // `MAX_DUPLICATE_CANDIDATES` bên đó là một dòng sửa hiển nhiên vô hại; từ
+    // chối cứng sẽ biến nó thành "khối cảnh báo im lặng biến mất", tức hàng
+    // rào tự tắt vì một thay đổi không liên quan.
+    const qua = Array.from({ length: MAX_DUPLICATE_ITEMS + 5 }, (_, i) => ({
       ...PHIEU_HOP_LE,
       payment_id: i + 1,
     }))
-    expect(parseDuplicateSuspected(than409({ duplicates: qua }))).toBeNull()
+    const r = parseDuplicateSuspected(than409({ duplicates: qua }))
+    expect(r).not.toBeNull()
+    expect(r!.duplicates).toHaveLength(MAX_DUPLICATE_ITEMS)
+    expect(r!.duplicates_truncated).toBe(true)
   })
 
   it("chấp nhận đúng trần", () => {

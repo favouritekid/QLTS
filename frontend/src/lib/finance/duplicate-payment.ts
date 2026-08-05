@@ -143,15 +143,23 @@ export function parseDuplicateSuspected(
   if (o.error_code !== PAYMENT_DUPLICATE_ERROR_CODE) return null
   if (!Array.isArray(o.duplicates)) return null
   if (typeof o.duplicates_truncated !== "boolean") return null
-  // Rỗng cũng là méo: máy chủ chỉ ném lỗi này KHI có ứng viên, nên một danh
-  // sách rỗng nghĩa là ta đang hiểu sai thân lỗi. Quá trần cũng vậy — máy chủ
-  // cắt ở 20; nhiều hơn thế là dữ liệu không đến từ đường ta nghĩ.
+  // Rỗng là méo: máy chủ chỉ ném lỗi này KHI có ứng viên, nên danh sách rỗng
+  // nghĩa là ta đang hiểu sai thân lỗi.
   if (o.duplicates.length === 0) return null
-  if (o.duplicates.length > MAX_DUPLICATE_ITEMS) return null
   if (!o.duplicates.every(isDuplicateInfo)) return null
+  // Dài hơn trần thì CẮT, không từ chối. Trần ở đây là bản sao hằng số của máy
+  // chủ; nâng `MAX_DUPLICATE_CANDIDATES` bên đó là một dòng sửa hiển nhiên vô
+  // hại, mà từ chối cứng sẽ biến nó thành "khối cảnh báo im lặng biến mất" —
+  // hàng rào tự tắt vì một thay đổi không liên quan. Cắt bớt vẫn chặn được
+  // thân lỗi khổng lồ, mà không đánh đổi bằng việc mất cả cảnh báo.
+  const duplicates = (o.duplicates as DuplicatePaymentInfo[]).slice(
+    0,
+    MAX_DUPLICATE_ITEMS,
+  )
   return {
-    duplicates: o.duplicates as DuplicatePaymentInfo[],
-    duplicates_truncated: o.duplicates_truncated,
+    duplicates,
+    duplicates_truncated:
+      o.duplicates_truncated || o.duplicates.length > MAX_DUPLICATE_ITEMS,
   }
 }
 

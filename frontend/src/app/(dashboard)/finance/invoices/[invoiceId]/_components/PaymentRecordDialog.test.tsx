@@ -54,6 +54,7 @@ const state = {
     payment_date: string | null
   }>,
   activeTruncated: false,
+  previewFailed: false,
 }
 
 /** Đối số THẬT mà dialog truyền cho hook — thứ bộ test cũ không hề nhìn. */
@@ -92,12 +93,14 @@ vi.mock("@/hooks/finance/usePayments", () => ({
       input.amount != null &&
       input.amount > 0 &&
       !!input.paymentDate
-    if (!duCanCu) return { data: undefined }
+    if (!duCanCu) return { data: undefined, isError: false }
+    if (state.previewFailed) return { data: undefined, isError: true }
     const items = state.activeItems.filter(
       (p) => Number(p.amount) === input.amount,
     )
     return {
       data: { items, total: items.length + (state.activeTruncated ? 1 : 0) },
+      isError: false,
     }
   },
 }))
@@ -161,6 +164,7 @@ beforeEach(() => {
   state.pendingFailed = false
   state.activeItems = []
   state.activeTruncated = false
+  state.previewFailed = false
 })
 
 describe("PaymentRecordDialog", () => {
@@ -906,5 +910,110 @@ describe("PaymentRecordDialog — phản hồi của phiên trước không số
     // chủ, nên hiện một danh sách cũ là nói về dữ liệu không còn ai bảo đảm.
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(screen.queryByText(/INV-PHIEN-TRUOC/)).not.toBeInTheDocument()
+  })
+})
+
+describe("PaymentRecordDialog — ngày trong khối cảnh báo", () => {
+  it("hiện NGÀY LỊCH VIỆT NAM, không phải mười ký tự đầu của chuỗi UTC", async () => {
+    // Mốc này là 05/08 giờ Việt Nam (00:00 VN = 04/08 17:00Z) — đúng cách một
+    // phiếu ghi ngày 05/08 qua chính form này được lưu. Cắt chuỗi cho ra
+    // "2026-08-04": người ghi đang nhập 05/08 sẽ thấy "phiếu kia ngày 04/08"
+    // và kết luận đây là hai khoản khác nhau. Lùi đúng một ngày, cho mọi phiếu.
+    const user = userEvent.setup()
+    state.activeItems = []
+    createPayment.mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: {
+          detail: "trùng",
+          error_code: "PAYMENT_DUPLICATE_SUSPECTED",
+          duplicates: [
+            {
+              payment_id: 91,
+              amount: "1000000",
+              payment_date: "2026-08-04T17:00:00+00:00",
+              status: "pending",
+              invoice_number: "INV-XYZ",
+            },
+          ],
+          duplicates_truncated: false,
+        },
+      },
+    })
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    await user.click(
+      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
+    )
+    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
+    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "1000000")
+    await user.click(screen.getByRole("button", { name: /ghi nhận thanh toán/i }))
+
+    const khoi = await screen.findByTestId("payment-duplicate-warning")
+    expect(khoi).toHaveTextContent("05/08/2026")
+    expect(khoi).not.toHaveTextContent("2026-08-04")
+    expect(khoi).not.toHaveTextContent("04/08/2026")
+  })
+})
+
+describe("PaymentRecordDialog — hỏi máy chủ mà hỏng thì phải nói ra", () => {
+  it("preview lỗi ⇒ hiện cảnh báo 'không kiểm tra được', KHÔNG im lặng", async () => {
+    // Một form sạch bong sau khi gõ đủ số tiền đọc y như "đã đối chiếu, không
+    // trùng" — đúng câu trả lời sai nguy hiểm nhất, và là lý do bảng công nợ
+    // phía trên có trạng thái lỗi riêng.
+    const user = userEvent.setup()
+    state.previewFailed = true
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    await user.click(
+      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
+    )
+    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
+    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "1000000")
+
+    expect(
+      await screen.findByTestId("payment-duplicate-preview-error"),
+    ).toBeInTheDocument()
+    // KHÔNG chặn Lưu: hàng rào thật nằm ở máy chủ (409 lúc ghi), chặn ở đây
+    // chỉ khoá tay người dùng mà không thêm an toàn nào.
+    expect(screen.getByRole("button", { name: /ghi nhận thanh toán/i })).toBeEnabled()
+  })
+
+  it("preview chạy bình thường thì KHÔNG hiện cảnh báo thừa", async () => {
+    const user = userEvent.setup()
+    state.previewFailed = false
+    state.activeItems = []
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    await user.click(
+      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
+    )
+    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
+    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "1000000")
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(
+      screen.queryByTestId("payment-duplicate-preview-error"),
+    ).not.toBeInTheDocument()
   })
 })
