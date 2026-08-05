@@ -261,37 +261,47 @@ export function usePendingPaymentsByFee(
 }
 
 /**
- * Phiếu thu CÒN HIỆU LỰC (`pending` + `verified`) của một khoản phí — nguồn
- * cho lớp cảnh báo trùng SỚM ở form ghi tiền.
+ * XEM TRƯỚC phiếu nghi trùng cho một khoản thu sắp ghi.
  *
- * Vì sao KHÔNG dùng chung với `usePendingPaymentsByFee`: hook kia cố ý chỉ hỏi
- * hàng đợi maker-checker (phiếu TAY chờ duyệt) để trả lời câu "kế toán đã nhập
- * gì mà chưa ai duyệt". Luật dò trùng lại cần cả phiếu **đã duyệt** — tiền đã
- * vào sổ vẫn có thể bị thu lần nữa. Mở rộng hook kia để dùng chung là làm sai
- * nghĩa của ô "đang chờ duyệt" và kéo cả phiếu online vào đó — đúng lỗi vừa
- * sửa ở B1.
+ * Hỏi **chính luật đang chạy ở máy chủ** (`find_duplicate_candidates`) thay vì
+ * dựng lại luật ở giao diện. Bản dựng lại đã được thử và lệch ngay lập tức ở
+ * hai chỗ giao diện không thể biết: tổng tiền **đã hoàn** của từng phiếu
+ * (đường hoàn thường không đổi `Payment.status`), và **ngày lịch Việt Nam**
+ * (trình duyệt tính theo múi giờ máy người dùng, máy chủ cố định
+ * `Asia/Ho_Chi_Minh`).
  *
- * `staleTime: 0` cùng lý do với hook kia: mục đích là chống trùng, mà ca trùng
- * kinh điển là mở lại form ngay sau khi người khác vừa ghi.
+ * Dùng lại đường `GET /api/payments` chứ không thêm route mới: Casbin ở repo
+ * này cấp quyền theo TỪNG path tường minh, nên một path mới kéo theo policy +
+ * migration + test phân quyền, và sai sót ở đó là 403 im lặng trên production.
  *
- * ⚠️ Đây chỉ là cảnh báo SỚM. Danh sách bị cắt theo trang, và luật lọc ở giao
- * diện là bản sao của luật máy chủ — **máy chủ vẫn giữ quyền quyết định cuối**
- * bằng lỗi 409, kể cả khi lớp này không hiện gì.
+ * `staleTime: 0` cùng lý do với các hook kia: ca trùng kinh điển là mở lại form
+ * ngay sau khi người khác vừa ghi.
+ *
+ * ⚠️ Vẫn chỉ là cảnh báo SỚM: **máy chủ giữ quyền quyết định cuối** bằng lỗi
+ * 409 lúc ghi, kể cả khi lớp này không hiện gì (dữ liệu có thể đổi giữa hai
+ * lần gọi).
  */
-export function useActivePaymentsByFee(
-  feeId: number | undefined,
+export function useDuplicatePreview(
+  input: {
+    feeId: number | undefined
+    amount: number | null
+    paymentDate: string | null
+  },
   options?: { enabled?: boolean }
 ) {
+  const { feeId, amount, paymentDate } = input
+  const duCanCu = !!feeId && amount != null && amount > 0 && !!paymentDate
   const filters: PaymentFilters = {
     fee_id: feeId,
-    status: "pending,verified" as PaymentFilters["status"],
-    page: 1,
-    page_size: 100,
+    duplicate_amount: amount ?? undefined,
+    duplicate_date: paymentDate ?? undefined,
   }
   return useQuery<PaymentListPaginatedResponse, AxiosError<ApiErrorResponse>>({
     queryKey: paymentsKeys.list(filters),
     queryFn: () => paymentsApi.getPayments(filters),
-    enabled: (options?.enabled ?? true) && !!feeId,
+    // Chưa gõ đủ số tiền và ngày thì KHÔNG hỏi: câu hỏi thiếu vế bị máy chủ
+    // từ chối 422, và một lỗi đỏ trong lúc người dùng đang gõ dở là nhiễu.
+    enabled: (options?.enabled ?? true) && duCanCu,
     staleTime: 0,
   })
 }

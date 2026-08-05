@@ -38,8 +38,8 @@ import { DatePicker } from "@/components/common/form/DatePicker"
 import { CreditCard, Loader2 } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
-  useActivePaymentsByFee,
   useCreatePayment,
+  useDuplicatePreview,
   usePendingPaymentsByFee,
 } from "@/hooks/finance/usePayments"
 import { usePaymentMethods } from "@/hooks/finance/usePaymentMethods"
@@ -48,7 +48,6 @@ import { AmountDisplay } from "@/components/finance"
 import { formatVND, parseVNDDisplayAmount } from "@/lib/zod/finance"
 import { calendarDateToISO } from "@/lib/utils/vn-date"
 import {
-  locUngVienTrung,
   parseDuplicateSuspected,
   paymentFingerprint,
   type DuplicateSuspectedPayload,
@@ -154,10 +153,6 @@ export function PaymentRecordDialog({
   } = usePendingPaymentsByFee(feeId, {
     enabled: open,
   })
-  // Nguồn RIÊNG cho cảnh báo trùng: cần cả phiếu đã duyệt, thứ mà ô "đang chờ
-  // duyệt" cố ý không có. Xem ghi chú ở `useActivePaymentsByFee`.
-  const { data: activePage } = useActivePaymentsByFee(feeId, { enabled: open })
-  const activeItems = activePage?.items ?? []
 
   const pendingItems = pendingPage?.items ?? []
   // Cộng tối đa 100 phần tử số — rẻ hơn hẳn chi phí giữ một mảng ổn định qua
@@ -189,6 +184,9 @@ export function PaymentRecordDialog({
   // Cờ boolean phải được "nhớ xoá" ở mọi chỗ dữ liệu đổi — và chỗ quên xoá
   // chính là chỗ gửi xác nhận cho một số tiền chưa ai xem. Dấu vân tay thì tự
   // hết hiệu lực: nó chỉ khớp đúng bộ dữ liệu đã sinh ra nó.
+  // Mỗi lần mở form là một PHIÊN. Phản hồi của phiên trước không được nói
+  // chuyện với phiên này — xem `paymentFingerprint`.
+  const [phienMoForm, setPhienMoForm] = React.useState(0)
   const [vanTayDaXacNhan, setVanTayDaXacNhan] = React.useState<string | null>(null)
   const [canhBaoTrung, setCanhBaoTrung] = React.useState<
     (DuplicateSuspectedPayload & { vanTay: string }) | null
@@ -214,6 +212,7 @@ export function PaymentRecordDialog({
   const ngayHienTai = ngayDangChon ? calendarDateToISO(ngayDangChon) : null
 
   const vanTayHienTai = paymentFingerprint({
+    sessionId: phienMoForm,
     invoiceId,
     feeId,
     amount: soTienDangGo ?? null,
@@ -225,13 +224,16 @@ export function PaymentRecordDialog({
     canhBaoTrung && canhBaoTrung.vanTay === vanTayHienTai ? canhBaoTrung : null
   const daXacNhan = vanTayDaXacNhan === vanTayHienTai
 
-  // Lớp cảnh báo SỚM: hiện ngay khi người dùng vừa gõ đủ số tiền + ngày, trước
-  // cả khi bấm Lưu. Máy chủ vẫn là nơi quyết định — lớp này chỉ để người ghi
-  // đỡ phải gửi đi rồi mới biết.
-  const ungVienSom = locUngVienTrung(activeItems, {
-    amount: soTienDangGo ?? null,
-    paymentDate: ngayHienTai,
-  })
+  // Lớp cảnh báo SỚM: hỏi CHÍNH máy chủ bằng đúng luật mà lần ghi sắp tới sẽ
+  // dùng, thay vì dựng lại luật ở đây. Giao diện không thể tự tính đúng: nó
+  // không thấy tổng tiền đã hoàn của từng phiếu, và "ngày lịch Việt Nam" ở
+  // trình duyệt là múi giờ máy người dùng.
+  const { data: previewPage } = useDuplicatePreview(
+    { feeId, amount: soTienDangGo ?? null, paymentDate: ngayHienTai },
+    { enabled: open },
+  )
+  const ungVienSom = previewPage?.items ?? []
+  const ungVienSomBiCat = (previewPage?.total ?? 0) > ungVienSom.length
   const coNghiTrung = Boolean(canhBaoConHieuLuc) || ungVienSom.length > 0
   const chanLuu = coNghiTrung && !daXacNhan
 
@@ -251,6 +253,7 @@ export function PaymentRecordDialog({
     // đã cũ, và hiện nó ra (hay tệ hơn, cấp xác nhận cho nó) là cấp phép cho
     // thứ chưa ai xem.
     const vanTayGui = paymentFingerprint({
+      sessionId: phienMoForm,
       invoiceId,
       feeId,
       amount: values.amount,
@@ -306,6 +309,9 @@ export function PaymentRecordDialog({
       // này.
       setVanTayDaXacNhan(null)
       setCanhBaoTrung(null)
+      // Sang phiên mới: mọi dấu vân tay của phiên cũ vĩnh viễn không khớp nữa,
+      // kể cả khi một phản hồi đến muộn còn kịp ghi state.
+      setPhienMoForm((n) => n + 1)
     }
   }, [open, form])
 

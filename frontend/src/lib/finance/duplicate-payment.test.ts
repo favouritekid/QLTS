@@ -1,20 +1,18 @@
 // src/lib/finance/duplicate-payment.test.ts
 /**
- * Ba việc thuần của cảnh báo ghi trùng.
+ * Hai việc thuần của cảnh báo ghi trùng: dấu vân tay của một lần ghi, và đọc
+ * thân lỗi 409 một cách phòng thủ.
  *
- * Bộ ca biên ở `locUngVienTrung` là **bản sao có chủ ý** của bộ ca đang canh
- * luật máy chủ (`tests/services/test_payment_duplicate_guard.py`): 0 / 3 / 4
- * ngày, bằng tiền / khác tiền, pending / verified / rejected. Hai bản luật
- * không dùng chung được vì khác ngôn ngữ, nên chúng phải được canh bằng cùng
- * một bộ ca — lệch một bên là giao diện báo oan hoặc bỏ sót.
+ * KHÔNG có luật dò trùng ở đây — nó sống ở máy chủ
+ * (`payment_repository.find_duplicate_candidates`). Một bản sao ở giao diện đã
+ * được thử và lệch ngay lập tức: nó không thấy tổng tiền đã hoàn của từng
+ * phiếu, và "ngày lịch Việt Nam" tính theo múi giờ máy người dùng.
  */
 import { describe, it, expect } from "vitest"
 
 import {
-  DUPLICATE_WINDOW_DAYS,
+  MAX_DUPLICATE_ITEMS,
   PAYMENT_DUPLICATE_ERROR_CODE,
-  calendarDaysApart,
-  locUngVienTrung,
   parseDuplicateSuspected,
   paymentFingerprint,
 } from "./duplicate-payment"
@@ -38,7 +36,13 @@ function than409(over: Record<string, unknown> = {}) {
 }
 
 describe("paymentFingerprint", () => {
-  const goc = { invoiceId: 1, feeId: 2, amount: 1000, paymentDate: "2026-08-05" }
+  const goc = {
+    sessionId: 0,
+    invoiceId: 1,
+    feeId: 2,
+    amount: 1000,
+    paymentDate: "2026-08-05",
+  }
 
   it("cùng dữ liệu thì cùng dấu vân tay", () => {
     expect(paymentFingerprint(goc)).toBe(paymentFingerprint({ ...goc }))
@@ -49,6 +53,9 @@ describe("paymentFingerprint", () => {
     ["ngày", { paymentDate: "2026-08-06" }],
     ["hoá đơn", { invoiceId: 99 }],
     ["khoản phí", { feeId: 99 }],
+    // Cùng dữ liệu nhưng khác LẦN MỞ form là hai lần ghi khác nhau: phản hồi
+    // đến muộn của phiên trước không được nói chuyện với phiên này.
+    ["lần mở form", { sessionId: 1 }],
   ])("đổi %s thì dấu vân tay đổi", (_ten, doi) => {
     expect(paymentFingerprint({ ...goc, ...doi })).not.toBe(
       paymentFingerprint(goc),
@@ -89,86 +96,47 @@ describe("parseDuplicateSuspected", () => {
   })
 })
 
-describe("calendarDaysApart", () => {
-  it("đếm theo NGÀY LỊCH, không theo số giờ", () => {
-    // Cách nhau 2 giờ nhưng khác ngày ⇒ 1 ngày lịch.
-    expect(
-      calendarDaysApart("2026-08-05T23:00:00", "2026-08-06T01:00:00"),
-    ).toBe(1)
-    // Cách nhau 23 giờ nhưng cùng ngày ⇒ 0.
-    expect(
-      calendarDaysApart("2026-08-05T00:30:00", "2026-08-05T23:30:00"),
-    ).toBe(0)
+describe("parseDuplicateSuspected — kiểm Ý NGHĨA, không chỉ kiểu", () => {
+  it.each([
+    ["id không dương", { ...PHIEU_HOP_LE, payment_id: -1 }],
+    ["id không nguyên", { ...PHIEU_HOP_LE, payment_id: 1.5 }],
+    ["số tiền không đọc được", { ...PHIEU_HOP_LE, amount: "không-phải-tiền" }],
+    ["ngày không đọc được", { ...PHIEU_HOP_LE, payment_date: "hôm-qua" }],
+    ["trạng thái ngoài danh sách", { ...PHIEU_HOP_LE, status: "bất-kỳ" }],
+  ])("từ chối khi %s", (_ten, phieu) => {
+    // `typeof` một mình vẫn nhận hết những thứ này, rồi giao diện dựng khối
+    // cảnh báo từ rác VÀ tắt thông báo lỗi chung — người dùng bấm Lưu và không
+    // hiểu chuyện gì đang xảy ra.
+    expect(parseDuplicateSuspected(than409({ duplicates: [phieu] }))).toBeNull()
   })
 
-  it("trả null khi không đọc được", () => {
-    expect(calendarDaysApart("không phải ngày", "2026-08-05")).toBeNull()
-  })
-})
-
-describe("locUngVienTrung", () => {
-  const ngay = "2026-08-05T10:00:00"
-  const phieu = (over: Partial<Parameters<typeof locUngVienTrung>[0][0]> = {}) => ({
-    id: 1,
-    amount: "1000000",
-    status: "pending",
-    payment_date: "2026-08-05T10:00:00",
-    ...over,
+  it("từ chối danh sách RỖNG", () => {
+    // Máy chủ chỉ ném lỗi này KHI có ứng viên; rỗng nghĩa là ta đang hiểu sai
+    // thân lỗi, và một khối cảnh báo trống thì không nói được điều gì.
+    expect(parseDuplicateSuspected(than409({ duplicates: [] }))).toBeNull()
   })
 
-  it("cùng tiền, cùng ngày ⇒ là ứng viên", () => {
+  it("từ chối khi vượt trần của máy chủ", () => {
+    const qua = Array.from({ length: MAX_DUPLICATE_ITEMS + 1 }, (_, i) => ({
+      ...PHIEU_HOP_LE,
+      payment_id: i + 1,
+    }))
+    expect(parseDuplicateSuspected(than409({ duplicates: qua }))).toBeNull()
+  })
+
+  it("chấp nhận đúng trần", () => {
+    const vua = Array.from({ length: MAX_DUPLICATE_ITEMS }, (_, i) => ({
+      ...PHIEU_HOP_LE,
+      payment_id: i + 1,
+    }))
+    expect(parseDuplicateSuspected(than409({ duplicates: vua }))).not.toBeNull()
+  })
+
+  it("chấp nhận ngày null (phiếu chưa có ngày thu)", () => {
     expect(
-      locUngVienTrung([phieu()], { amount: 1_000_000, paymentDate: ngay }),
-    ).toHaveLength(1)
-  })
-
-  it(`đúng ${DUPLICATE_WINDOW_DAYS} ngày vẫn là ứng viên (biên NẰM TRONG)`, () => {
-    expect(
-      locUngVienTrung([phieu({ payment_date: "2026-08-08T10:00:00" })], {
-        amount: 1_000_000,
-        paymentDate: ngay,
-      }),
-    ).toHaveLength(1)
-  })
-
-  it("quá cửa sổ thì thôi", () => {
-    expect(
-      locUngVienTrung([phieu({ payment_date: "2026-08-09T10:00:00" })], {
-        amount: 1_000_000,
-        paymentDate: ngay,
-      }),
-    ).toHaveLength(0)
-  })
-
-  it("khác số tiền thì không phải ứng viên", () => {
-    expect(
-      locUngVienTrung([phieu({ amount: "500000" })], {
-        amount: 1_000_000,
-        paymentDate: ngay,
-      }),
-    ).toHaveLength(0)
-  })
-
-  it("phiếu đã từ chối / đã đảo không còn là tiền", () => {
-    const items = [phieu({ status: "rejected" }), phieu({ status: "refunded" })]
-    expect(
-      locUngVienTrung(items, { amount: 1_000_000, paymentDate: ngay }),
-    ).toHaveLength(0)
-  })
-
-  it("phiếu đã duyệt vẫn tính", () => {
-    expect(
-      locUngVienTrung([phieu({ status: "verified" })], {
-        amount: 1_000_000,
-        paymentDate: ngay,
-      }),
-    ).toHaveLength(1)
-  })
-
-  it("chưa nhập đủ số tiền / ngày thì không cảnh báo gì", () => {
-    expect(locUngVienTrung([phieu()], { amount: null, paymentDate: ngay })).toEqual([])
-    expect(
-      locUngVienTrung([phieu()], { amount: 1_000_000, paymentDate: null }),
-    ).toEqual([])
+      parseDuplicateSuspected(
+        than409({ duplicates: [{ ...PHIEU_HOP_LE, payment_date: null }] }),
+      ),
+    ).not.toBeNull()
   })
 })

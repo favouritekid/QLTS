@@ -55,6 +55,11 @@ from app.utils.exceptions import (
     ConflictError,
 )
 
+# 422 viết thành số, không nhập từ `starlette.status`: Starlette đang đổi tên
+# hằng này (`..._ENTITY` → `..._CONTENT`) và nhập nó thêm một cảnh báo
+# deprecation vào mọi lượt chạy. Con số thì không đổi tên.
+HTTP_422_UNPROCESSABLE = 422
+
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/payments", tags=["Finance - Payments"])
@@ -89,6 +94,19 @@ async def list_payments(
         "invoice_id sẽ không thấy. Kết hợp được với pending_manual_only.",
     ),
     method_id: Optional[int] = Query(None, description="Filter by payment method ID"),
+    duplicate_amount: Optional[Decimal] = Query(
+        None,
+        gt=0,
+        description="Xem trước phiếu NGHI TRÙNG: đi kèm duplicate_date và "
+        "fee_id. Trả về đúng tập ứng viên mà POST /api/payments sẽ dùng để "
+        "cảnh báo, theo cùng một luật ở cùng một chỗ — giao diện chỉ hiển thị, "
+        "không tự dựng lại luật (nó sẽ lệch: FE không thấy tổng tiền đã hoàn, "
+        "và 'ngày lịch VN' ở FE là múi giờ máy người dùng).",
+    ),
+    duplicate_date: Optional[datetime] = Query(
+        None,
+        description="Mốc thời gian của khoản thu sắp ghi (xem duplicate_amount).",
+    ),
     pending_manual_only: bool = Query(
         False,
         description="Maker-checker queue: only manual payments (intent_id IS "
@@ -118,6 +136,44 @@ async def list_payments(
     # Convert page/page_size to skip/limit
     skip = (page - 1) * page_size
     limit = min(page_size, 100)
+
+    if duplicate_amount is not None or duplicate_date is not None:
+        # Xem trước ứng viên trùng. Đặt ở ĐÂY chứ không thành một route riêng
+        # là có chủ ý: Casbin trong repo này cấp quyền theo TỪNG path tường
+        # minh, nên một path mới kéo theo policy + migration + test phân quyền,
+        # và một sai sót ở đó là 403 im lặng trên production. Path này đã có
+        # grant cho đúng nhóm người ghi phiếu.
+        if duplicate_amount is None or duplicate_date is None or fee_id is None:
+            # `HTTP_422_UNPROCESSABLE_ENTITY` nhập thẳng, KHÔNG qua
+            # `status.HTTP_...`: hàm này có một tham số query tên `status`, và
+            # nó che mất module `status` của FastAPI trong toàn bộ thân hàm.
+            # Viết `status.HTTP_422_...` ở đây ném `AttributeError` trên
+            # `None` — tức một lỗi 500 thay cho lời từ chối 422.
+            raise HTTPException(
+                status_code=HTTP_422_UNPROCESSABLE,
+                detail=(
+                    "Xem trước phiếu nghi trùng cần đủ fee_id, duplicate_amount "
+                    "và duplicate_date."
+                ),
+            )
+        candidates, truncated = await payment_repo.find_duplicate_candidates(
+            fee_id=fee_id,
+            amount=duplicate_amount,
+            payment_date=duplicate_date,
+            unit_id=unit_id,
+        )
+        items = [
+            _build_payment_list_item(p, current_user.id, current_user.role)
+            for p in candidates
+        ]
+        return finance_schemas.PaymentsPage(
+            items=items,
+            # `total` lớn hơn số dòng trả về = "còn nữa" — cùng quy ước với các
+            # danh sách khác, nên giao diện không phải học thêm cách đọc mới.
+            total=len(items) + (1 if truncated else 0),
+            page=1,
+            page_size=len(items),
+        )
 
     if pending_manual_only:
         # Maker-checker queue: status=pending AND intent_id IS NULL, oldest-first.

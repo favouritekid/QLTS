@@ -26,9 +26,13 @@ from app.models.finance import (
     InvoiceStatusEnum,
     Payment,
     PaymentMethod,
+    RefundRequest,
+    RefundStatusEnum,
 )
 from app.repositories.payment_repository import MAX_DUPLICATE_CANDIDATES
 from app.security import get_password_hash
+from tests.fixtures.constants import AuthURLs
+from tests.fixtures.users import get_auth_headers
 from app.services.fee_calculation_service import FeeCalculationService
 from app.services.payment_service import PaymentService
 
@@ -330,3 +334,153 @@ class TestCatDanhSachTrongThanLoi:
         assert body["duplicates_truncated"] is True
         # Bị cắt thì câu chữ không được tuyên bố con số.
         assert "20" not in body["detail"], body["detail"]
+
+
+class TestXemTruocUngVienTrung:
+    """Nhánh XEM TRƯỚC: giao diện hỏi đúng luật đang chạy ở máy chủ.
+
+    Vì sao không để giao diện tự lọc: nó không thấy tổng tiền đã hoàn (phiếu
+    hoàn ĐỦ phải bị loại), và "ngày lịch Việt Nam" ở trình duyệt là múi giờ của
+    máy người dùng — hai chỗ đó lệch ngay lập tức. Một luật, một nơi.
+    """
+
+    async def test_tra_dung_ung_vien_theo_luat(
+        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
+    ):
+        ctx = fee_with_one_payment
+        r = await client.get(
+            f"/api/payments?fee_id={ctx['fee_id']}&duplicate_amount=1000000"
+            "&duplicate_date=2026-08-05T03:00:00%2B00:00",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert [i["id"] for i in body["items"]] == [ctx["phieu_cu_id"]]
+        # `total` == số dòng ⇒ chưa bị cắt, cùng quy ước với các danh sách khác.
+        assert body["total"] == 1
+
+    async def test_khac_so_tien_thi_khong_co_ung_vien(
+        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
+    ):
+        ctx = fee_with_one_payment
+        r = await client.get(
+            f"/api/payments?fee_id={ctx['fee_id']}&duplicate_amount=999999"
+            "&duplicate_date=2026-08-05T03:00:00%2B00:00",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["items"] == []
+
+    async def test_qua_cua_so_ngay_thi_khong_co_ung_vien(
+        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
+    ):
+        ctx = fee_with_one_payment
+        r = await client.get(
+            f"/api/payments?fee_id={ctx['fee_id']}&duplicate_amount=1000000"
+            "&duplicate_date=2026-08-10T03:00:00%2B00:00",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["items"] == []
+
+    async def test_thieu_tham_so_thi_422_khong_am_tham_tra_danh_sach_thuong(
+        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
+    ):
+        """Nửa vời phải bị từ chối.
+
+        Thiếu một tham số mà vẫn trả danh sách thường là trả về một tập KHÁC
+        hẳn dưới cùng một hình dạng — giao diện sẽ hiện nó như "phiếu nghi
+        trùng" và cảnh báo oan mọi lần thu.
+        """
+        ctx = fee_with_one_payment
+        r = await client.get(
+            f"/api/payments?fee_id={ctx['fee_id']}&duplicate_amount=1000000",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 422, r.text
+
+    async def test_thieu_fee_id_cung_422(
+        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
+    ):
+        r = await client.get(
+            "/api/payments?duplicate_amount=1000000"
+            "&duplicate_date=2026-08-05T03:00:00%2B00:00",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 422, r.text
+
+    async def test_don_vi_khac_khong_do_duoc(
+        self,
+        client: AsyncClient,
+        manager_other_unit_user_in_db: dict,
+        fee_with_one_payment,
+    ):
+        """IDOR: `fee_id` là số đoán được, và đây là đường ĐỌC.
+
+        Đường ghi được che nhờ khoá `Fee` theo đơn vị; đường đọc thì không có
+        gì che nếu quên điều kiện này — ai cũng dò được số tiền, ngày thu và
+        tên người nộp của đơn vị khác.
+        """
+        headers = await get_auth_headers(
+            client, manager_other_unit_user_in_db, AuthURLs.LOGIN
+        )
+        r = await client.get(
+            f"/api/payments?fee_id={fee_with_one_payment['fee_id']}"
+            "&duplicate_amount=1000000&duplicate_date=2026-08-05T03:00:00%2B00:00",
+            headers=headers,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["items"] == [], "rò phiếu sang đơn vị khác"
+
+    async def test_bi_cat_thi_total_lon_hon_so_dong(
+        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
+    ):
+        ctx = fee_with_one_payment
+        for _ in range(MAX_DUPLICATE_CANDIDATES):
+            r = await client.post(
+                "/api/payments",
+                json=_body(ctx, confirm=True),
+                headers=admin_token_headers,
+            )
+            assert r.status_code == 201, r.text
+
+        r = await client.get(
+            f"/api/payments?fee_id={ctx['fee_id']}&duplicate_amount=1000000"
+            "&duplicate_date=2026-08-05T03:00:00%2B00:00",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert len(body["items"]) == MAX_DUPLICATE_CANDIDATES
+        assert body["total"] > len(body["items"]), "phải nói ra là còn nữa"
+
+    async def test_hoan_du_thi_KHONG_con_la_ung_vien(
+        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
+    ):
+        """Đúng chỗ mà một bản sao luật ở giao diện sẽ lệch.
+
+        Đường hoàn tiền thường chỉ đổi ``RefundRequest.status``; ``Payment``
+        vẫn ``verified``. Giao diện không thấy tổng đã hoàn nên sẽ cảnh báo và
+        khoá nút Lưu, trong khi máy chủ đã bỏ qua phiếu này từ lâu.
+        """
+        ctx = fee_with_one_payment
+        async with AsyncSessionLocal() as db:
+            p = await db.get(Payment, ctx["phieu_cu_id"])
+            db.add(
+                RefundRequest(
+                    payment_id=p.id,
+                    reason="hoàn đủ",
+                    amount=p.amount,
+                    status=RefundStatusEnum.refunded.value,
+                    requested_by_id=p.created_by_id,
+                )
+            )
+            await db.commit()
+
+        r = await client.get(
+            f"/api/payments?fee_id={ctx['fee_id']}&duplicate_amount=1000000"
+            "&duplicate_date=2026-08-05T03:00:00%2B00:00",
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["items"] == []

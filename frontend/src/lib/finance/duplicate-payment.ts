@@ -2,24 +2,14 @@
 /**
  * Cảnh báo ghi trùng phiếu thu — phần thuần tuý, không React.
  *
- * Ba việc, tách khỏi component để kiểm được từng cái một:
+ * Hai việc, tách khỏi component để kiểm được từng cái một:
  *  1. **Dấu vân tay** của một lần ghi — thứ quyết định một xác nhận còn hiệu
  *     lực hay đã hết hạn;
  *  2. **Đọc thân lỗi 409** một cách phòng thủ — payload méo phải bị từ chối
- *     thẳng, không được đoán;
- *  3. **Luật lọc ứng viên** cho lớp cảnh báo sớm ở giao diện.
+ *     thẳng, không được đoán.
  *
- * ⚠️ Điều 3 là bản SAO của luật đang chạy ở máy chủ
- * (`payment_repository.find_duplicate_candidates`). Hai bản không dùng chung
- * được vì khác ngôn ngữ, nên chúng phải được canh bằng **cùng một bộ ca biên**
- * (0 / 3 / 4 ngày, bằng tiền / khác tiền) ở cả hai phía. Lệch một trong hai
- * bên là giao diện báo oan hoặc bỏ sót — nhưng **máy chủ vẫn là nơi quyết
- * định cuối**: lớp này chỉ để người ghi thấy sớm, danh sách của nó có thể bị
- * cắt theo trang.
+ * Luật dò trùng KHÔNG ở đây: xem ghi chú dưới cùng.
  */
-
-/** Cửa sổ dò trùng, tính bằng NGÀY LỊCH. Phải khớp `window_days` ở máy chủ. */
-export const DUPLICATE_WINDOW_DAYS = 3
 
 /** Một phiếu nghi trùng do máy chủ trả về trong thân lỗi 409. */
 export interface DuplicatePaymentInfo {
@@ -46,12 +36,21 @@ export const PAYMENT_DUPLICATE_ERROR_CODE = "PAYMENT_DUPLICATE_SUSPECTED"
  * hoá đơn này không được mang sang hoá đơn khác.
  */
 export function paymentFingerprint(input: {
+  /**
+   * Số thứ tự LẦN MỞ form. Cùng bộ dữ liệu nhưng khác lần mở là hai lần ghi
+   * khác nhau: người dùng có thể đóng form giữa lúc request đang bay, và phản
+   * hồi 409 về muộn sẽ gọi `setState` sau khi hiệu ứng dọn dẹp đã chạy. Không
+   * có số này thì mở lại rồi gõ đúng số tiền cũ sẽ thấy danh sách của phiên
+   * trước sống dậy — một cảnh báo về dữ liệu mà lần này chưa ai hỏi.
+   */
+  sessionId: number
   invoiceId: number
   feeId: number
   amount?: number | null
   paymentDate?: string | null
 }): string {
   return [
+    input.sessionId,
     input.invoiceId,
     input.feeId,
     input.amount ?? "",
@@ -59,16 +58,28 @@ export function paymentFingerprint(input: {
   ].join("|")
 }
 
+/** Trạng thái phiếu mà luật dò trùng công nhận — khớp danh sách ở máy chủ. */
+const TRANG_THAI_HOP_LE = new Set(["pending", "verified"])
+
+/** Trần số phần tử, khớp `MAX_DUPLICATE_CANDIDATES` ở máy chủ. */
+export const MAX_DUPLICATE_ITEMS = 20
+
 function isDuplicateInfo(v: unknown): v is DuplicatePaymentInfo {
   if (typeof v !== "object" || v === null) return false
   const o = v as Record<string, unknown>
-  return (
-    typeof o.payment_id === "number" &&
-    typeof o.amount === "string" &&
-    (o.payment_date === null || typeof o.payment_date === "string") &&
-    typeof o.status === "string" &&
-    (o.invoice_number === null || typeof o.invoice_number === "string")
-  )
+  // Kiểm cả Ý NGHĨA, không chỉ kiểu. `typeof` một mình vẫn nhận
+  // `payment_id: -1`, `amount: "không-phải-tiền"`, `payment_date` là chuỗi bất
+  // kỳ — rồi giao diện dựng một khối cảnh báo từ rác và TẮT thông báo lỗi
+  // chung. Không đọc được thì phải nói là không đọc được.
+  if (!Number.isInteger(o.payment_id) || (o.payment_id as number) <= 0) return false
+  if (typeof o.amount !== "string" || !Number.isFinite(Number(o.amount))) return false
+  if (o.payment_date !== null) {
+    if (typeof o.payment_date !== "string") return false
+    if (Number.isNaN(Date.parse(o.payment_date))) return false
+  }
+  if (typeof o.status !== "string" || !TRANG_THAI_HOP_LE.has(o.status)) return false
+  if (o.invoice_number !== null && typeof o.invoice_number !== "string") return false
+  return true
 }
 
 /**
@@ -89,6 +100,11 @@ export function parseDuplicateSuspected(
   if (o.error_code !== PAYMENT_DUPLICATE_ERROR_CODE) return null
   if (!Array.isArray(o.duplicates)) return null
   if (typeof o.duplicates_truncated !== "boolean") return null
+  // Rỗng cũng là méo: máy chủ chỉ ném lỗi này KHI có ứng viên, nên một danh
+  // sách rỗng nghĩa là ta đang hiểu sai thân lỗi. Quá trần cũng vậy — máy chủ
+  // cắt ở 20; nhiều hơn thế là dữ liệu không đến từ đường ta nghĩ.
+  if (o.duplicates.length === 0) return null
+  if (o.duplicates.length > MAX_DUPLICATE_ITEMS) return null
   if (!o.duplicates.every(isDuplicateInfo)) return null
   return {
     duplicates: o.duplicates as DuplicatePaymentInfo[],
@@ -96,53 +112,22 @@ export function parseDuplicateSuspected(
   }
 }
 
-/** "YYYY-MM-DD" hoặc ISO đầy đủ → số ngày kể từ mốc, theo LỊCH ĐỊA PHƯƠNG. */
-function toLocalDayIndex(value: string): number | null {
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return null
-  return Math.floor(
-    Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86_400_000,
-  )
-}
-
-/** Lệch bao nhiêu NGÀY LỊCH giữa hai mốc; `null` nếu không đọc được. */
-export function calendarDaysApart(a: string, b: string): number | null {
-  const ia = toLocalDayIndex(a)
-  const ib = toLocalDayIndex(b)
-  if (ia === null || ib === null) return null
-  return Math.abs(ia - ib)
-}
-
-/** Trạng thái phiếu còn được coi là tiền — khớp luật máy chủ. */
-const TRANG_THAI_CON_HIEU_LUC = new Set(["pending", "verified"])
-
-export interface UngVienTrungInput {
-  id: number
-  amount: string
-  status: string
-  payment_date: string | null
-}
-
-/**
- * Lọc những phiếu mà một khoản thu sắp ghi có thể đang lặp lại.
+/*
+ * 🔴 KHÔNG dựng lại luật dò trùng ở đây.
  *
- * Cùng luật với máy chủ: **số tiền bằng nhau** và lệch không quá
- * `DUPLICATE_WINDOW_DAYS` **ngày lịch**, chỉ `pending`/`verified`. Cố tình
- * KHÔNG có luật theo mã tham chiếu — form prefill mã hồ sơ nên mọi lần thu góp
- * của cùng hồ sơ đều trùng mã, và cảnh báo oan mọi lần thu thứ hai là cách
- * nhanh nhất khiến người dùng ngừng đọc cảnh báo.
+ * Bản trước có một `locUngVienTrung` lọc theo số tiền + ngày lịch, và nó lệch
+ * khỏi máy chủ ngay trong lần viết đầu tiên, ở hai chỗ mà giao diện **không
+ * thể** biết:
+ *
+ *  - **tiền đã hoàn**: đường hoàn thường chỉ đổi `RefundRequest.status`, còn
+ *    `Payment.status` vẫn là `verified`. Máy chủ loại phiếu đã hoàn ĐỦ bằng
+ *    tổng `refunded`; giao diện không có con số đó nên sẽ cảnh báo và khoá nút
+ *    Lưu cho một phiếu mà máy chủ đã bỏ qua từ lâu;
+ *  - **"ngày lịch Việt Nam"**: `getFullYear()` đọc theo múi giờ MÁY NGƯỜI
+ *    DÙNG, còn máy chủ cố định `Asia/Ho_Chi_Minh`. Một máy đặt UTC sẽ tính
+ *    lệch một ngày và bỏ sót đúng ca sát biên.
+ *
+ * Luật sống ở một chỗ: `payment_repository.find_duplicate_candidates`. Giao
+ * diện hỏi chính nó qua `GET /api/payments?fee_id=&duplicate_amount=
+ * &duplicate_date=` rồi chỉ hiển thị kết quả.
  */
-export function locUngVienTrung(
-  items: UngVienTrungInput[],
-  input: { amount?: number | null; paymentDate?: string | null },
-): UngVienTrungInput[] {
-  const { amount, paymentDate } = input
-  if (amount == null || !paymentDate) return []
-  return items.filter((p) => {
-    if (!TRANG_THAI_CON_HIEU_LUC.has(p.status)) return false
-    if (Number(p.amount) !== amount) return false
-    if (!p.payment_date) return false
-    const lech = calendarDaysApart(p.payment_date, paymentDate)
-    return lech !== null && lech <= DUPLICATE_WINDOW_DAYS
-  })
-}

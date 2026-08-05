@@ -1092,6 +1092,11 @@ export interface PaymentFilters {
   // verification. When true the backend ignores status/method_id. Online
   // (auto-verified) payments never appear here.
   pending_manual_only?: boolean
+  // XEM TRƯỚC phiếu nghi trùng cho một khoản thu sắp ghi. Đi THÀNH BỘ với
+  // fee_id — thiếu một vế thì máy chủ trả 422 chứ không âm thầm trả danh sách
+  // thường (một tập khác hẳn dưới cùng hình dạng).
+  duplicate_amount?: number
+  duplicate_date?: string
 }
 
 export interface DebtReportFilters {

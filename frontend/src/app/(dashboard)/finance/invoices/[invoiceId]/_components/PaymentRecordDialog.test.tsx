@@ -53,12 +53,13 @@ const state = {
     status: string
     payment_date: string | null
   }>,
+  activeTruncated: false,
 }
 
 /** Đối số THẬT mà dialog truyền cho hook — thứ bộ test cũ không hề nhìn. */
 const pendingHookCalls: Array<{ feeId: unknown; options: unknown }> = []
 const invoiceHookCalls: Array<{ invoiceId: unknown; options: unknown }> = []
-const activeHookCalls: Array<{ feeId: unknown; options: unknown }> = []
+const activeHookCalls: Array<{ input: unknown; options: unknown }> = []
 const createPayment = vi.fn()
 
 vi.mock("@/hooks/finance/usePayments", () => ({
@@ -77,9 +78,27 @@ vi.mock("@/hooks/finance/usePayments", () => ({
       isError: state.pendingFailed,
     }
   },
-  useActivePaymentsByFee: (feeId: unknown, options: unknown) => {
-    activeHookCalls.push({ feeId, options })
-    return { data: { items: state.activeItems, total: state.activeItems.length } }
+  // Mô phỏng tối thiểu hành vi máy chủ: chỉ trả lời khi câu hỏi đủ vế, và lọc
+  // theo số tiền. Luật thật sống ở máy chủ (test riêng bên backend); ở đây chỉ
+  // cần phân biệt "có ứng viên" với "không có".
+  useDuplicatePreview: (
+    input: { feeId?: number; amount: number | null; paymentDate: string | null },
+    options: { enabled?: boolean },
+  ) => {
+    activeHookCalls.push({ input, options })
+    const duCanCu =
+      (options?.enabled ?? true) &&
+      !!input.feeId &&
+      input.amount != null &&
+      input.amount > 0 &&
+      !!input.paymentDate
+    if (!duCanCu) return { data: undefined }
+    const items = state.activeItems.filter(
+      (p) => Number(p.amount) === input.amount,
+    )
+    return {
+      data: { items, total: items.length + (state.activeTruncated ? 1 : 0) },
+    }
   },
 }))
 
@@ -141,6 +160,7 @@ beforeEach(() => {
   state.pendingLoading = false
   state.pendingFailed = false
   state.activeItems = []
+  state.activeTruncated = false
 })
 
 describe("PaymentRecordDialog", () => {
@@ -749,9 +769,99 @@ describe("PaymentRecordDialog — cảnh báo ghi trùng", () => {
         maxAmount="4.000.000 ₫"
       />,
     )
-    // Hai nguồn tách bạch: ô "đang chờ duyệt" hỏi hàng đợi maker-checker, còn
-    // luật dò trùng cần cả phiếu đã duyệt.
-    expect(activeHookCalls.at(-1)).toEqual({ feeId: 7, options: { enabled: true } })
+    // Hai nguồn tách bạch: ô "đang chờ duyệt" hỏi hàng đợi maker-checker; cảnh
+    // báo trùng hỏi CHÍNH luật của máy chủ bằng bộ ba fee + tiền + ngày.
+    expect(activeHookCalls.at(-1)?.options).toEqual({ enabled: true })
+    expect(activeHookCalls.at(-1)?.input).toMatchObject({ feeId: 7 })
     expect(pendingHookCalls.at(-1)).toEqual({ feeId: 7, options: { enabled: true } })
+  })
+})
+
+describe("PaymentRecordDialog — phản hồi của phiên trước không sống lại", () => {
+  it("đóng form khi request đang bay, mở lại cùng dữ liệu ⇒ không thấy cảnh báo cũ", async () => {
+    const user = userEvent.setup()
+    state.activeItems = []
+
+    // Giữ phản hồi lại: mô phỏng người dùng bấm X trong lúc máy chủ chưa trả
+    // lời. Hiệu ứng dọn dẹp chạy trước, rồi `catch` của request cũ mới chạy —
+    // nếu nó ghi state vô điều kiện thì danh sách của phiên trước sẽ nằm sẵn ở
+    // đó chờ phiên sau.
+    let tuChoi: (e: unknown) => void = () => {}
+    createPayment.mockImplementationOnce(
+      () => new Promise((_, reject) => { tuChoi = reject }),
+    )
+
+    const onOpenChange = vi.fn()
+    const { rerender } = render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={onOpenChange}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+
+    await user.click(
+      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
+    )
+    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
+    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "1000000")
+    await user.click(screen.getByRole("button", { name: /ghi nhận thanh toán/i }))
+    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(1))
+
+    // Người dùng đóng form trong lúc chờ.
+    rerender(
+      <PaymentRecordDialog
+        open={false}
+        onOpenChange={onOpenChange}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+
+    // Máy chủ trả lời MUỘN, sau khi form đã đóng.
+    tuChoi({
+      response: {
+        status: 409,
+        data: {
+          detail: "trùng",
+          error_code: "PAYMENT_DUPLICATE_SUSPECTED",
+          duplicates: [
+            {
+              payment_id: 91,
+              amount: "1000000",
+              payment_date: null,
+              status: "pending",
+              invoice_number: "INV-PHIEN-TRUOC",
+            },
+          ],
+          duplicates_truncated: false,
+        },
+      },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    // Mở lại và nhập ĐÚNG dữ liệu cũ.
+    rerender(
+      <PaymentRecordDialog
+        open
+        onOpenChange={onOpenChange}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    await user.click(
+      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
+    )
+    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
+    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "1000000")
+
+    // Cảnh báo của phiên trước KHÔNG được sống dậy: lần này chưa ai hỏi máy
+    // chủ, nên hiện một danh sách cũ là nói về dữ liệu không còn ai bảo đảm.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(screen.queryByText(/INV-PHIEN-TRUOC/)).not.toBeInTheDocument()
   })
 })

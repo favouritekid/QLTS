@@ -316,6 +316,7 @@ class PaymentRepository(BaseRepository[Payment]):
         window_days: int = 3,
         exclude_payment_id: Optional[int] = None,
         limit: int = MAX_DUPLICATE_CANDIDATES,
+        unit_id: Optional[int] = None,
     ) -> Tuple[List[Payment], bool]:
         """Phiếu thu đã có mà một khoản thu mới có thể đang lặp lại.
 
@@ -396,11 +397,37 @@ class PaymentRepository(BaseRepository[Payment]):
         query = (
             select(Payment)
             .join(Invoice, Payment.invoice_id == Invoice.id)
-            .options(joinedload(Payment.invoice))
-            .where(and_(*conditions))
+            .options(
+                # Nạp sẵn cả chuỗi tới `lead`: đường XEM TRƯỚC dựng
+                # `PaymentListItem` (cần `profile_name`, `method_name`,
+                # `created_by_name`), và mọi truy cập quan hệ phải xảy ra
+                # trong ngữ cảnh async ở đây — chạm tới nó lúc serialize là
+                # `MissingGreenlet`. Tối đa 21 dòng nên chi phí không đáng kể.
+                joinedload(Payment.invoice)
+                .joinedload(Invoice.fee)
+                .joinedload(Fee.admission_profile)
+                .joinedload(models.AdmissionProfile.lead),
+                joinedload(Payment.method),
+                joinedload(Payment.created_by),
+            )
             .order_by(Payment.payment_date.desc(), Payment.id.desc())
             .limit(limit + 1)  # +1 chỉ để biết còn nữa hay không
         )
+
+        # IDOR. Đường gọi từ service đã khoá `Fee` theo `unit_id` nên fee ở đó
+        # chắc chắn thuộc phạm vi người gọi; nhưng hàm này còn phục vụ đường
+        # ĐỌC (xem trước) nơi `fee_id` đến thẳng từ query string — một số đoán
+        # được. Không có điều kiện này thì ai cũng dò được phiếu thu, tên người
+        # nộp và mã tham chiếu của đơn vị khác.
+        if unit_id is not None:
+            query = (
+                query.join(Fee, Invoice.fee_id == Fee.id)
+                .join(models.AdmissionProfile)
+                .join(models.Lead)
+            )
+            conditions.append(models.Lead.unit_id == unit_id)
+
+        query = query.where(and_(*conditions))
 
         result = await self.db.execute(query)
         rows = list(result.scalars().unique().all())
