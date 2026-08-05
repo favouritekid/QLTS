@@ -7,6 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
+import { calendarDateToISO } from "@/lib/utils/vn-date";
 import { CalendarIcon, Loader2, Pencil, Plus, Trash2, Percent, Banknote, MoreVertical } from "lucide-react";
 import {
   BaseCard,
@@ -326,8 +327,12 @@ export function TuitionDiscountClient({ initialData }: TuitionDiscountClientProp
       description: values.description || null,
       discount_type: values.discount_type as DiscountType,
       discount_value: values.discount_value,
-      valid_from: values.valid_from?.toISOString().split("T")[0] || null,
-      valid_to: values.valid_to?.toISOString().split("T")[0] || null,
+      // Ngày hiệu lực đọc thẳng ô lịch người dùng bấm. `toISOString()` quy về
+      // UTC, mà DatePicker trả 00:00 GIỜ ĐỊA PHƯƠNG — ở Việt Nam nó lùi đúng
+      // một ngày: chính sách đặt hiệu lực từ 05/08 được lưu là 04/08 (áp sớm
+      // một ngày), và `valid_to` 31/08 thành 30/08 (hết hạn sớm một ngày).
+      valid_from: values.valid_from ? calendarDateToISO(values.valid_from) : null,
+      valid_to: values.valid_to ? calendarDateToISO(values.valid_to) : null,
       is_stackable: values.is_stackable,
       priority: values.priority,
       max_usage: values.max_usage || null,

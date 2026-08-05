@@ -35,6 +35,20 @@ class TestPaymentAmountPrecision:
 
     @pytest.mark.parametrize(
         "amount",
+        ["1000.000", "1000.0000", "100.500", "0.10000", "1000000.00000000"],
+    )
+    def test_so_khong_o_duoi_khong_bi_tu_choi_oan(self, amount):
+        """Câu hỏi đúng là "làm tròn có MẤT giá trị không", không phải "gõ mấy chữ số".
+
+        `1000.000` đúng bằng `1000.00` và ghi xuống `Numeric(15,2)` không mất
+        gì. Đếm chữ số thì nó bị chặn — và bất kỳ client nào định dạng tiền với
+        số chữ số lẻ cố định (hoặc một luồng đối soát) đều bị chặn ở một giá
+        trị không có gì sai.
+        """
+        assert PaymentCreate(**_payload(amount)).amount == Decimal(amount)
+
+    @pytest.mark.parametrize(
+        "amount",
         ["100.001", "100.999", "0.005", "1000000.123456"],
     )
     def test_qua_hai_chu_so_le_bi_tu_choi(self, amount):

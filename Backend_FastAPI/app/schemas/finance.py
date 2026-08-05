@@ -14,7 +14,7 @@ Architecture Compliance:
 """
 
 from datetime import datetime, date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import List, Optional, Dict, Any, Literal
 import html
 
@@ -635,15 +635,23 @@ class PaymentCreate(BaseModel):
         # nên 100.001 không khớp phiếu 100.00 đã có — trong khi hai bản ghi
         # nằm cạnh nhau trong DB thì y hệt nhau. Từ chối thẳng, đừng làm tròn
         # hộ rồi để hai tầng nhìn thấy hai giá trị khác nhau.
-        # `exponent` là int với số hữu hạn, nhưng là chuỗi ('n'/'N'/'F') với
-        # NaN/Infinity — so sánh thẳng sẽ ném TypeError thành 500. Hai giá trị
-        # đó đã bị chặn bởi `gt=0`/`le=MAX_AMOUNT` phía trên; `isinstance` ở
-        # đây là để một lần nới lỏng ràng buộc kia không biến thành lỗi 500.
-        exponent = v.as_tuple().exponent
-        if isinstance(exponent, int) and exponent < -2:
-            raise ValueError(
-                "Payment amount must not have more than 2 decimal places"
-            )
+        # Câu hỏi đúng là "làm tròn về 2 chữ số có MẤT giá trị không", không
+        # phải "người gửi gõ bao nhiêu chữ số". Đếm chữ số thì `1000.000` bị
+        # từ chối oan — nó đúng bằng 1000.00 và ghi xuống `Numeric(15,2)`
+        # không mất gì; bất kỳ client nào định dạng tiền với số chữ số lẻ cố
+        # định (hoặc một luồng đối soát) sẽ bị chặn ở một giá trị không có gì
+        # sai.
+        #
+        # `quantize` ném `InvalidOperation` với NaN/Infinity — hai giá trị đó
+        # đã bị `gt=0`/`le=MAX_AMOUNT` chặn phía trên, nhưng bắt ở đây để một
+        # lần nới lỏng ràng buộc kia không biến thành lỗi 500.
+        try:
+            if v != v.quantize(Decimal("0.01")):
+                raise ValueError(
+                    "Payment amount must not have more than 2 decimal places"
+                )
+        except InvalidOperation:
+            raise ValueError("Payment amount is not a valid decimal")
         return v
 
     @field_validator('payer_name', 'notes')
