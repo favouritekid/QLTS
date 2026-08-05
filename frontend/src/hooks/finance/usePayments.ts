@@ -24,6 +24,7 @@ import type {
 } from "@/types/finance.types"
 import { invoicesKeys } from "./useInvoices"
 import { feesKeys } from "./useFees"
+import { parseDuplicateSuspected } from "@/lib/finance/duplicate-payment"
 
 // =====================================================================
 // QUERY KEYS
@@ -259,6 +260,42 @@ export function usePendingPaymentsByFee(
   })
 }
 
+/**
+ * Phiếu thu CÒN HIỆU LỰC (`pending` + `verified`) của một khoản phí — nguồn
+ * cho lớp cảnh báo trùng SỚM ở form ghi tiền.
+ *
+ * Vì sao KHÔNG dùng chung với `usePendingPaymentsByFee`: hook kia cố ý chỉ hỏi
+ * hàng đợi maker-checker (phiếu TAY chờ duyệt) để trả lời câu "kế toán đã nhập
+ * gì mà chưa ai duyệt". Luật dò trùng lại cần cả phiếu **đã duyệt** — tiền đã
+ * vào sổ vẫn có thể bị thu lần nữa. Mở rộng hook kia để dùng chung là làm sai
+ * nghĩa của ô "đang chờ duyệt" và kéo cả phiếu online vào đó — đúng lỗi vừa
+ * sửa ở B1.
+ *
+ * `staleTime: 0` cùng lý do với hook kia: mục đích là chống trùng, mà ca trùng
+ * kinh điển là mở lại form ngay sau khi người khác vừa ghi.
+ *
+ * ⚠️ Đây chỉ là cảnh báo SỚM. Danh sách bị cắt theo trang, và luật lọc ở giao
+ * diện là bản sao của luật máy chủ — **máy chủ vẫn giữ quyền quyết định cuối**
+ * bằng lỗi 409, kể cả khi lớp này không hiện gì.
+ */
+export function useActivePaymentsByFee(
+  feeId: number | undefined,
+  options?: { enabled?: boolean }
+) {
+  const filters: PaymentFilters = {
+    fee_id: feeId,
+    status: "pending,verified" as PaymentFilters["status"],
+    page: 1,
+    page_size: 100,
+  }
+  return useQuery<PaymentListPaginatedResponse, AxiosError<ApiErrorResponse>>({
+    queryKey: paymentsKeys.list(filters),
+    queryFn: () => paymentsApi.getPayments(filters),
+    enabled: (options?.enabled ?? true) && !!feeId,
+    staleTime: 0,
+  })
+}
+
 export function usePaymentsByInvoice(invoiceId: number, options?: { enabled?: boolean }) {
   return useQuery<Payment[], AxiosError<ApiErrorResponse>>({
     queryKey: paymentsKeys.byInvoice(invoiceId),
@@ -337,6 +374,15 @@ export function useCreatePayment() {
       })
     },
     onError: (error) => {
+      // Ca "nghi trùng" KHÔNG phải lỗi để báo đỏ: form sẽ hiện khối cảnh báo
+      // kèm danh sách phiếu và một ô xác nhận. Bắn thêm toast đỏ ở đây là vừa
+      // doạ người dùng vừa che mất thứ họ cần đọc.
+      //
+      // Nhưng chỉ im lặng khi payload ĐÚNG cấu trúc — nếu nó méo thì form
+      // không có gì để hiện, và im lặng biến thành "bấm Lưu mà không có phản
+      // hồi nào". Payload méo ⇒ rơi về thông báo chung, tức fail-closed.
+      if (parseDuplicateSuspected(error.response?.data)) return
+
       const detail = error.response?.data?.detail
       const message =
         typeof detail === "string" ? detail : "Không thể ghi nhận thanh toán. Vui lòng thử lại."

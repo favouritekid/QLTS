@@ -47,11 +47,18 @@ const state = {
   pendingTotal: undefined as number | undefined,
   pendingLoading: false,
   pendingFailed: false,
+  activeItems: [] as Array<{
+    id: number
+    amount: string
+    status: string
+    payment_date: string | null
+  }>,
 }
 
 /** Đối số THẬT mà dialog truyền cho hook — thứ bộ test cũ không hề nhìn. */
 const pendingHookCalls: Array<{ feeId: unknown; options: unknown }> = []
 const invoiceHookCalls: Array<{ invoiceId: unknown; options: unknown }> = []
+const activeHookCalls: Array<{ feeId: unknown; options: unknown }> = []
 const createPayment = vi.fn()
 
 vi.mock("@/hooks/finance/usePayments", () => ({
@@ -69,6 +76,10 @@ vi.mock("@/hooks/finance/usePayments", () => ({
       isLoading: state.pendingLoading,
       isError: state.pendingFailed,
     }
+  },
+  useActivePaymentsByFee: (feeId: unknown, options: unknown) => {
+    activeHookCalls.push({ feeId, options })
+    return { data: { items: state.activeItems, total: state.activeItems.length } }
   },
 }))
 
@@ -117,6 +128,7 @@ beforeEach(() => {
   installPointerStubs()
   pendingHookCalls.length = 0
   invoiceHookCalls.length = 0
+  activeHookCalls.length = 0
   state.invoice = {
     total_due: "5000000",
     paid_amount: "1000000",
@@ -128,6 +140,7 @@ beforeEach(() => {
   state.pendingTotal = undefined
   state.pendingLoading = false
   state.pendingFailed = false
+  state.activeItems = []
 })
 
 describe("PaymentRecordDialog", () => {
@@ -404,7 +417,7 @@ describe("PaymentRecordDialog — MỘT con số 'còn lại' duy nhất", () =>
     )
   })
 
-  it("guard: bộ test chạy ở múi giờ Việt Nam", () => {
+  it("guard: bộ test chạy ở múi giờ Việt Nam (dùng chung cho nhóm dưới)", () => {
     // -420 phút = UTC+7. Ở UTC (0) thì ca ngày bên dưới mất khả năng phân biệt
     // bản cũ với bản mới.
     expect(new Date(2026, 7, 5).getTimezoneOffset()).toBe(-420)
@@ -487,5 +500,258 @@ describe("PaymentRecordDialog — MỘT con số 'còn lại' duy nhất", () =>
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe("PaymentRecordDialog — cảnh báo ghi trùng", () => {
+  /** Điền phương thức + số tiền. */
+  async function dienForm(user: ReturnType<typeof userEvent.setup>, soTien: string) {
+    await user.click(
+      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
+    )
+    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
+    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), soTien)
+  }
+
+  const nutLuu = () => screen.getByRole("button", { name: /ghi nhận thanh toán/i })
+
+  function phieuDaCo(over: Partial<(typeof state.activeItems)[number]> = {}) {
+    return {
+      id: 5,
+      amount: "1000000",
+      status: "pending",
+      payment_date: new Date().toISOString(),
+      ...over,
+    }
+  }
+
+  it("gõ số tiền trùng một phiếu đã có thì cảnh báo SỚM và chặn Lưu", async () => {
+    const user = userEvent.setup()
+    state.activeItems = [phieuDaCo()]
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    expect(screen.queryByTestId("payment-duplicate-warning")).not.toBeInTheDocument()
+
+    await dienForm(user, "1000000")
+
+    // Hiện TRƯỚC khi bấm Lưu — người ghi không phải gửi đi rồi mới biết.
+    expect(await screen.findByTestId("payment-duplicate-warning")).toBeInTheDocument()
+    expect(nutLuu()).toBeDisabled()
+    expect(createPayment).not.toHaveBeenCalled()
+  })
+
+  it("tick xác nhận rồi bấm Lưu thì gửi confirm_duplicate=true, KHÔNG tự gửi lại", async () => {
+    const user = userEvent.setup()
+    state.activeItems = [phieuDaCo({ status: "verified" })]
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    await dienForm(user, "1000000")
+    await screen.findByTestId("payment-duplicate-warning")
+
+    await user.click(screen.getByTestId("payment-duplicate-confirm"))
+    // Tick KHÔNG được tự gửi: hành động cuối vẫn phải là một quyết định.
+    expect(createPayment).not.toHaveBeenCalled()
+
+    await user.click(nutLuu())
+    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(1))
+    expect(createPayment.mock.calls[0][0].data.confirm_duplicate).toBe(true)
+  })
+
+  it("đổi số tiền sau khi đã tick thì xác nhận hết hiệu lực", async () => {
+    const user = userEvent.setup()
+    state.activeItems = [phieuDaCo(), phieuDaCo({ id: 6, amount: "2000000" })]
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    const oSoTien = screen.getByPlaceholderText(/nhập số tiền/i)
+    await dienForm(user, "1000000")
+    await screen.findByTestId("payment-duplicate-warning")
+    await user.click(screen.getByTestId("payment-duplicate-confirm"))
+    expect(nutLuu()).toBeEnabled()
+
+    // Tick được cấp cho 1.000.000. Mang nó sang 2.000.000 là bỏ qua cảnh báo
+    // cho một số tiền chưa ai xem.
+    await user.clear(oSoTien)
+    await user.type(oSoTien, "2000000")
+
+    await waitFor(() => expect(nutLuu()).toBeDisabled())
+    expect(screen.getByTestId("payment-duplicate-confirm")).not.toBeChecked()
+  })
+
+  it("số tiền không trùng phiếu nào thì không cảnh báo, gửi confirm_duplicate=false", async () => {
+    const user = userEvent.setup()
+    state.activeItems = [phieuDaCo()]
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    await dienForm(user, "500000")
+    expect(screen.queryByTestId("payment-duplicate-warning")).not.toBeInTheDocument()
+
+    await user.click(nutLuu())
+    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(1))
+    expect(createPayment.mock.calls[0][0].data.confirm_duplicate).toBe(false)
+  })
+
+  it("máy chủ trả 409 thì hiện danh sách của máy chủ, kèm ghi chú khi bị cắt", async () => {
+    const user = userEvent.setup()
+    // Giao diện KHÔNG thấy gì — máy chủ vẫn là nơi quyết định cuối.
+    state.activeItems = []
+    createPayment.mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: {
+          detail: "Đã có nhiều phiếu thu cùng số tiền",
+          error_code: "PAYMENT_DUPLICATE_SUSPECTED",
+          duplicates: [
+            {
+              payment_id: 91,
+              amount: "1000000",
+              payment_date: "2026-08-05T03:00:00+00:00",
+              status: "verified",
+              invoice_number: "INV-XYZ",
+            },
+          ],
+          duplicates_truncated: true,
+        },
+      },
+    })
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    await dienForm(user, "1000000")
+    expect(screen.queryByTestId("payment-duplicate-warning")).not.toBeInTheDocument()
+
+    await user.click(nutLuu())
+
+    const khoi = await screen.findByTestId("payment-duplicate-warning")
+    expect(khoi).toHaveTextContent("INV-XYZ")
+    expect(screen.getByTestId("payment-duplicate-truncated")).toBeInTheDocument()
+    expect(nutLuu()).toBeDisabled()
+  })
+
+  it("409 rồi đổi số tiền thì danh sách của máy chủ không còn hiện", async () => {
+    const user = userEvent.setup()
+    state.activeItems = []
+    createPayment.mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: {
+          detail: "trùng",
+          error_code: "PAYMENT_DUPLICATE_SUSPECTED",
+          duplicates: [
+            {
+              payment_id: 91,
+              amount: "1000000",
+              payment_date: null,
+              status: "pending",
+              invoice_number: "INV-XYZ",
+            },
+          ],
+          duplicates_truncated: false,
+        },
+      },
+    })
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    const oSoTien = screen.getByPlaceholderText(/nhập số tiền/i)
+    await dienForm(user, "1000000")
+    await user.click(nutLuu())
+    await screen.findByTestId("payment-duplicate-warning")
+
+    // Cảnh báo nói về 1.000.000. Đổi số tiền thì nó phải biến mất — hiện danh
+    // sách của một số tiền khác với số đang trên màn hình là nói dối.
+    await user.clear(oSoTien)
+    await user.type(oSoTien, "1500000")
+    await waitFor(() =>
+      expect(screen.queryByTestId("payment-duplicate-warning")).not.toBeInTheDocument(),
+    )
+    expect(nutLuu()).toBeEnabled()
+  })
+
+  it("409 với payload MÉO thì không hiện khối cảnh báo (rơi về lỗi chung)", async () => {
+    const user = userEvent.setup()
+    state.activeItems = []
+    createPayment.mockRejectedValueOnce({
+      response: {
+        status: 409,
+        data: {
+          detail: "trùng",
+          error_code: "PAYMENT_DUPLICATE_SUSPECTED",
+          duplicates: [{ payment_id: 91 }], // thiếu trường
+          duplicates_truncated: false,
+        },
+      },
+    })
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    await dienForm(user, "1000000")
+    await user.click(nutLuu())
+    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(1))
+
+    // Không dựng khối cảnh báo từ dữ liệu không đọc được: người dùng thấy
+    // thông báo lỗi chung (hook bắn), form không giả vờ hiểu.
+    expect(screen.queryByTestId("payment-duplicate-warning")).not.toBeInTheDocument()
+  })
+
+  it("hỏi hook nguồn RIÊNG cho cảnh báo trùng, không mượn ô chờ duyệt", () => {
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    // Hai nguồn tách bạch: ô "đang chờ duyệt" hỏi hàng đợi maker-checker, còn
+    // luật dò trùng cần cả phiếu đã duyệt.
+    expect(activeHookCalls.at(-1)).toEqual({ feeId: 7, options: { enabled: true } })
+    expect(pendingHookCalls.at(-1)).toEqual({ feeId: 7, options: { enabled: true } })
   })
 })

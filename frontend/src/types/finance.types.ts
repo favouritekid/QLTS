@@ -698,6 +698,10 @@ export interface PaymentCreateRequest {
   payer_name?: string
   payer_account?: string
   notes?: string
+  // Người ghi đã xem danh sách phiếu nghi trùng và khẳng định đây là khoản thu
+  // khác. Hàng rào chống trùng là hàng rào MỀM. Cờ này chỉ được bật ở lần gửi
+  // THỨ HAI, cho ĐÚNG bộ dữ liệu đã hiện cảnh báo — xem `paymentFingerprint`.
+  confirm_duplicate?: boolean
 }
 
 export interface PaymentIntentCreateRequest {
