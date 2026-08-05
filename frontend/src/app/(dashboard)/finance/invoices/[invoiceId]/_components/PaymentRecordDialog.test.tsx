@@ -29,7 +29,7 @@ process.env.TZ = "Asia/Ho_Chi_Minh"
 
 import { afterAll, describe, it, expect, vi, beforeEach } from "vitest"
 import userEvent from "@testing-library/user-event"
-import { render, screen, waitFor, within } from "@/test/utils/test-utils"
+import { act, render, screen, waitFor, within } from "@/test/utils/test-utils"
 
 import { PaymentRecordDialog } from "./PaymentRecordDialog"
 
@@ -860,27 +860,31 @@ describe("PaymentRecordDialog — phản hồi của phiên trước không số
       />,
     )
 
-    // Máy chủ trả lời MUỘN, sau khi form đã đóng.
-    tuChoi({
-      response: {
-        status: 409,
-        data: {
-          detail: "trùng",
-          error_code: "PAYMENT_DUPLICATE_SUSPECTED",
-          duplicates: [
-            {
-              payment_id: 91,
-              amount: "1000000",
-              payment_date: null,
-              status: "pending",
-              invoice_number: "INV-PHIEN-TRUOC",
-            },
-          ],
-          duplicates_truncated: false,
+    // Máy chủ trả lời MUỘN, sau khi form đã đóng. Bọc `act` vì lời từ chối này
+    // kích hoạt `setState` bên trong component — không bọc thì React cảnh báo
+    // và ta đang đo một cây giao diện chưa ổn định.
+    await act(async () => {
+      tuChoi({
+        response: {
+          status: 409,
+          data: {
+            detail: "trùng",
+            error_code: "PAYMENT_DUPLICATE_SUSPECTED",
+            duplicates: [
+              {
+                payment_id: 91,
+                amount: "1000000",
+                payment_date: null,
+                status: "pending",
+                invoice_number: "INV-PHIEN-TRUOC",
+              },
+            ],
+            duplicates_truncated: false,
+          },
         },
-      },
+      })
+      await Promise.resolve()
     })
-    await new Promise((resolve) => setTimeout(resolve, 20))
 
     // Mở lại và nhập ĐÚNG dữ liệu cũ.
     rerender(

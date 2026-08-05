@@ -112,6 +112,11 @@ describe("parseDuplicateSuspected — kiểm Ý NGHĨA, không chỉ kiểu", ()
     ["số tiền dạng mũ", { ...PHIEU_HOP_LE, amount: "1e3" }],
     ["số tiền có dấu cộng", { ...PHIEU_HOP_LE, amount: "+1000" }],
     ["số tiền có khoảng trắng", { ...PHIEU_HOP_LE, amount: " 1000 " }],
+    // `Number("9".repeat(400))` là `Infinity`: nó vượt mọi phép so, hiện ra
+    // màn hình thành "∞ ₫", mà vẫn qua được một phép kiểm `> 0`.
+    ["số tiền dài vô lý", { ...PHIEU_HOP_LE, amount: "9".repeat(400) }],
+    ["số tiền quá 18 chữ số", { ...PHIEU_HOP_LE, amount: "1".repeat(19) }],
+    ["phần lẻ quá 6 chữ số", { ...PHIEU_HOP_LE, amount: "100.1234567" }],
     ["ngày không đọc được", { ...PHIEU_HOP_LE, payment_date: "hôm-qua" }],
     // `Date.parse` hiểu được dạng này, nhưng nó KHÔNG phải ISO-8601 — mỗi
     // trình duyệt đọc một kiểu, nên nó không thể là một hợp đồng.
@@ -145,6 +150,16 @@ describe("parseDuplicateSuspected — kiểm Ý NGHĨA, không chỉ kiểu", ()
       payment_id: i + 1,
     }))
     expect(parseDuplicateSuspected(than409({ duplicates: vua }))).not.toBeNull()
+  })
+
+  it("chấp nhận số tiền lớn nhưng còn trong tầm cột tiền", () => {
+    // Trần rộng hơn `Numeric(15,2)` một chút để không từ chối oan, nhưng hữu
+    // hạn — đó mới là điều quan trọng.
+    expect(
+      parseDuplicateSuspected(
+        than409({ duplicates: [{ ...PHIEU_HOP_LE, amount: "999999999999.99" }] }),
+      ),
+    ).not.toBeNull()
   })
 
   it("chấp nhận ngày null (phiếu chưa có ngày thu)", () => {

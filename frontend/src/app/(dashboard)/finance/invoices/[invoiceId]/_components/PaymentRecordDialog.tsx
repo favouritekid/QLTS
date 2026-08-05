@@ -454,7 +454,12 @@ export function PaymentRecordDialog({
                     Phương thức thanh toán <span className="text-destructive">*</span>
                   </FormLabel>
                   <Select
-                    value={field.value?.toString()}
+                    // `?? ""` chứ không để `undefined`: ô này bắt đầu trống và
+                    // trở lại trống sau `form.reset()`, nên nếu để undefined
+                    // thì React thấy component nhảy qua lại giữa uncontrolled
+                    // và controlled — cảnh báo thật, không phải nhiễu của môi
+                    // trường test.
+                    value={field.value?.toString() ?? ""}
                     onValueChange={(v) => field.onChange(parseInt(v))}
                     disabled={methodsLoading}
                   >

@@ -81,8 +81,13 @@ const TRANG_THAI_HOP_LE = new Set(["pending", "verified"])
  * phân. Cố tình không nhận `0x10`, `1e3`, `+1` — `Number()` hiểu hết những
  * dạng đó (`Number("0x10") === 16`), nhưng máy chủ không bao giờ sinh ra
  * chúng, nên gặp một trong số đó nghĩa là dữ liệu không tới từ đường ta nghĩ.
+ *
+ * Số chữ số cũng có trần. Cột tiền là `Numeric(15,2)`, còn `Number()` biến một
+ * chuỗi vài trăm chữ số thành `Infinity` — nó vượt mọi phép so, hiện ra màn
+ * hình thành "∞ ₫", và vẫn là một giá trị "dương hữu hạn" dưới con mắt của
+ * `> 0`. Cho rộng hơn cột thật một chút để không từ chối oan, nhưng hữu hạn.
  */
-const DECIMAL_DUONG = /^\d+(\.\d+)?$/
+const DECIMAL_DUONG = /^\d{1,18}(\.\d{1,6})?$/
 
 /**
  * ISO-8601 dạng máy chủ sinh ra: `YYYY-MM-DDTHH:MM:SS` kèm phần giây lẻ tuỳ ý
@@ -105,7 +110,8 @@ function isDuplicateInfo(v: unknown): v is DuplicatePaymentInfo {
   // sang số. `Number()` một mình quá dễ dãi: `""` thành 0, `"0x10"` thành 16,
   // `"1e3"` thành 1000 — không dạng nào trong số đó là thứ máy chủ sinh ra.
   if (typeof o.amount !== "string" || !DECIMAL_DUONG.test(o.amount)) return false
-  if (Number(o.amount) <= 0) return false
+  const soTien = Number(o.amount)
+  if (!Number.isFinite(soTien) || soTien <= 0) return false
   if (o.payment_date !== null) {
     if (typeof o.payment_date !== "string") return false
     // Đòi ISO-8601 thật, không chỉ "thứ `Date.parse` hiểu được": `Date.parse`
