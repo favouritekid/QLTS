@@ -621,6 +621,21 @@ class PaymentCreate(BaseModel):
             raise ValueError("Payment amount must be positive")
         if v > MAX_AMOUNT:
             raise ValueError("Payment amount exceeds maximum")
+        # Cột là Numeric(15,2): số lẻ quá 2 chữ số KHÔNG bị từ chối mà bị làm
+        # tròn ÂM THẦM khi ghi. Hệ quả không chỉ là vài xu: mọi phép so khớp
+        # trên `amount` (đối soát, dò trùng) chạy trên con số người dùng gửi,
+        # nên 100.001 không khớp phiếu 100.00 đã có — trong khi hai bản ghi
+        # nằm cạnh nhau trong DB thì y hệt nhau. Từ chối thẳng, đừng làm tròn
+        # hộ rồi để hai tầng nhìn thấy hai giá trị khác nhau.
+        # `exponent` là int với số hữu hạn, nhưng là chuỗi ('n'/'N'/'F') với
+        # NaN/Infinity — so sánh thẳng sẽ ném TypeError thành 500. Hai giá trị
+        # đó đã bị chặn bởi `gt=0`/`le=MAX_AMOUNT` phía trên; `isinstance` ở
+        # đây là để một lần nới lỏng ràng buộc kia không biến thành lỗi 500.
+        exponent = v.as_tuple().exponent
+        if isinstance(exponent, int) and exponent < -2:
+            raise ValueError(
+                "Payment amount must not have more than 2 decimal places"
+            )
         return v
 
     @field_validator('payer_name', 'notes')

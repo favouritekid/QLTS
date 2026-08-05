@@ -20,6 +20,12 @@
  *  - **một con số duy nhất**: chặn theo số máy chủ thì phải HIỆN số máy chủ ở
  *    mọi chỗ, kể cả ô nhập và thông báo lỗi.
  */
+// 🔴 Đặt TRƯỚC mọi import — ca "ngày gửi lên" chỉ phân biệt được đúng/sai ở
+// múi giờ dương. Ở UTC mặc định của Vitest, bản cũ (`toISOString`) và bản mới
+// cho cùng kết quả, nên bài kiểm tra sẽ không thể đỏ. Ca `guard` bên dưới xác
+// nhận điều này thay vì tin suông.
+process.env.TZ = "Asia/Ho_Chi_Minh"
+
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import userEvent from "@testing-library/user-event"
 import { render, screen, waitFor, within } from "@/test/utils/test-utils"
@@ -390,6 +396,12 @@ describe("PaymentRecordDialog — MỘT con số 'còn lại' duy nhất", () =>
     )
   })
 
+  it("guard: bộ test chạy ở múi giờ Việt Nam", () => {
+    // -420 phút = UTC+7. Ở UTC (0) thì ca ngày bên dưới mất khả năng phân biệt
+    // bản cũ với bản mới.
+    expect(new Date(2026, 7, 5).getTimezoneOffset()).toBe(-420)
+  })
+
   it("gửi được số tiền nằm trong số dư thật", async () => {
     const user = userEvent.setup()
     render(
@@ -417,5 +429,41 @@ describe("PaymentRecordDialog — MỘT con số 'còn lại' duy nhất", () =>
       feeId: 7,
       data: expect.objectContaining({ invoice_id: 19, amount: "3000000" }),
     })
+  })
+
+  it("gửi ĐÚNG ô ngày người dùng bấm, không lùi một ngày", async () => {
+    // 🔴 Đồng hồ CỐ ĐỊNH ở 05/08 03:00 giờ VN (= 04/08 20:00Z). Không cố định
+    // thì ca này chỉ đỏ được khi tình cờ chạy trước 07:00 VN — sau đó ngày UTC
+    // và ngày VN trùng nhau nên bản cũ cũng xanh. Một bài kiểm tra chỉ đỏ vào
+    // ban đêm thì coi như không có.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(new Date("2026-08-04T20:00:00Z"))
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    try {
+      render(
+        <PaymentRecordDialog
+          open
+          onOpenChange={vi.fn()}
+          invoiceId={19}
+          feeId={7}
+          maxAmount="9.999.999 ₫"
+        />,
+      )
+
+      await user.click(
+        screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
+      )
+      await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
+      await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "1000000")
+      await user.click(screen.getByRole("button", { name: /ghi nhận thanh toán/i }))
+
+      await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(1))
+
+      // Ở thời điểm này người dùng đang sống ngày 05/08 (03:00 sáng), còn UTC
+      // vẫn là 04/08. `toISOString()` trả về ngày của UTC ⇒ ghi lùi một ngày.
+      expect(createPayment.mock.calls[0][0].data.payment_date).toBe("2026-08-05")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

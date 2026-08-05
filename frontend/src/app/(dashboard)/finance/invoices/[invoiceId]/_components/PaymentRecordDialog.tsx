@@ -40,6 +40,7 @@ import { usePaymentMethods } from "@/hooks/finance/usePaymentMethods"
 import { useInvoiceDetail } from "@/hooks/finance/useInvoices"
 import { AmountDisplay } from "@/components/finance"
 import { formatVND, parseVNDDisplayAmount } from "@/lib/zod/finance"
+import { calendarDateToISO } from "@/lib/utils/vn-date"
 import { toast } from "sonner"
 
 // =============================================================================
@@ -196,7 +197,12 @@ export function PaymentRecordDialog({
           invoice_id: invoiceId,
           method_id: values.method_id,
           amount: values.amount.toString(),
-          payment_date: values.payment_date?.toISOString().split("T")[0],
+          // Đọc thẳng ô ngày người dùng bấm. `toISOString()` quy về UTC nên ở
+          // Việt Nam nó ghi LÙI MỘT NGÀY mọi lần kế toán tự chọn ngày —
+          // xem `calendarDateToISO`.
+          payment_date: values.payment_date
+            ? calendarDateToISO(values.payment_date)
+            : undefined,
           reference_code: values.reference_code || undefined,
           payer_name: values.payer_name || undefined,
           payer_account: values.payer_account || undefined,
