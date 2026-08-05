@@ -110,15 +110,20 @@ async def base_app_exception_handler(
         },
     )
 
-    # Build response payload
-    response_data = {
-        "detail": exc.detail,
-        "error_code": exc.error_code,
-    }
-
-    # Include context in development mode (optional)
-    # if settings.APP_ENV == "development" and exc.context:
-    #     response_data["context"] = exc.context
+    # Build response payload.
+    #
+    # Thứ tự ở đây là một hàng rào, không phải thói quen viết code: payload
+    # công khai đổ vào TRƯỚC, rồi `detail`/`error_code` chuẩn của máy chủ ghi
+    # đè lên. Ngược lại thì một payload lỡ mang khoá `error_code` sẽ đổi được
+    # mã lỗi mà client dùng để rẽ nhánh — và mã lỗi là thứ duy nhất client
+    # được phép tin.
+    #
+    # `context` KHÔNG bao giờ đi ra: nó là chỗ chứa dữ liệu debug (id nội bộ,
+    # tham số truy vấn). Cái đi ra là `public_payload`, một trường tách riêng
+    # mà người ném lỗi phải chủ động điền — mặc định rỗng, tức fail-closed.
+    response_data = dict(getattr(exc, "public_payload", None) or {})
+    response_data["detail"] = exc.detail
+    response_data["error_code"] = exc.error_code
 
     # Add headers if present (e.g., WWW-Authenticate for 401)
     headers = getattr(exc, "headers", None)

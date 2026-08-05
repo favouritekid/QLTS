@@ -38,6 +38,7 @@ from app.models.finance import (
     OverpaymentRecord, OverpaymentStatusEnum, ResolutionTypeEnum,
     PAYABLE_INVOICE_STATUSES,
 )
+from app.schemas import finance as finance_schemas
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.repositories.payment_repository import (
     PaymentRepository,
@@ -356,9 +357,29 @@ class PaymentService:
                 so_luong = (
                     "nhiều" if truncated else str(len(candidates))
                 )
+                # Serialize NGAY TẠI ĐÂY, trước khi ném. Exception không được
+                # mang ORM object hay Decimal/datetime: handler đưa thẳng vào
+                # JSONResponse, nên một giá trị chưa serialize sẽ biến chính
+                # cảnh báo 409 này thành lỗi 500 — hàng rào tự bắn vào chân nó.
+                # `DuplicatePaymentInfo` cũng là danh sách trắng các trường
+                # được phép ra ngoài; đừng thay nó bằng một dict dựng tay.
+                duplicates = [
+                    finance_schemas.DuplicatePaymentInfo(
+                        payment_id=p.id,
+                        amount=p.amount,
+                        payment_date=p.payment_date,
+                        status=p.status,
+                        invoice_number=(
+                            p.invoice.invoice_number if p.invoice else None
+                        ),
+                    ).model_dump(mode="json")
+                    for p in candidates
+                ]
                 raise PaymentDuplicateSuspected(
                     f"Đã có {so_luong} phiếu thu cùng số tiền cho khoản phí "
-                    f"này trong vòng 3 ngày. Kiểm tra lại trước khi ghi tiếp."
+                    f"này trong vòng 3 ngày. Kiểm tra lại trước khi ghi tiếp.",
+                    duplicates=duplicates,
+                    duplicates_truncated=truncated,
                 )
 
         # Create payment (pending status)

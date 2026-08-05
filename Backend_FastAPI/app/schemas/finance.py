@@ -656,6 +656,32 @@ class PaymentCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class DuplicatePaymentInfo(BaseModel):
+    """Một phiếu thu nghi trùng, ở dạng ĐƯỢC PHÉP đi ra tới client.
+
+    Đây là **danh sách trắng**, không phải bản rút gọn tiện tay: mọi trường
+    khác của ``Payment`` (người ghi, ghi chú, số tài khoản người nộp, id nội
+    bộ của hoá đơn…) đều nằm ngoài. Thân một lỗi 409 là chỗ dễ quên rà soát
+    nhất — nó không đi qua ``response_model`` nào cả.
+
+    ``amount`` là **chuỗi**: khớp quy ước Decimal→string mà giao diện đang
+    dùng cho mọi số tiền, và tránh mất chính xác khi qua JSON number.
+    """
+
+    payment_id: int
+    amount: str
+    payment_date: Optional[datetime] = None
+    status: str
+    invoice_number: Optional[str] = None
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def amount_to_string(cls, v: Any) -> str:
+        return str(v)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class PaymentVerifyRequest(BaseModel):
     """Schema for verifying manual payment (maker-checker)."""
     payment_id: int

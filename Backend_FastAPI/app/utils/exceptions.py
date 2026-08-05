@@ -72,6 +72,7 @@ class BaseAppException(Exception):
         self,
         detail: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
+        public_payload: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize exception with custom detail message and context.
@@ -79,10 +80,25 @@ class BaseAppException(Exception):
         Args:
             detail: Custom error message (overrides class default)
             context: Additional context data (e.g., {"user_id": 123})
+            public_payload: Dữ liệu ĐƯỢC PHÉP đi ra tới client, tách hẳn khỏi
+                ``context``. Hai thứ này phục vụ hai mục đích đối lập nhau:
+                ``context`` là để người vận hành đọc log (có thể chứa id nội
+                bộ, tham số truy vấn, dữ liệu nhạy cảm), còn cái này là một
+                phần của hợp đồng API. Trộn chúng lại là cách rò dữ liệu debug
+                ra ngoài mà không ai kịp nhận ra.
+                Giá trị phải **đã serialize sẵn** (JSON thuần): handler đưa
+                thẳng vào ``JSONResponse``, nên một ``Decimal`` hay
+                ``datetime`` lọt vào đây sẽ biến chính thông báo lỗi thành
+                lỗi 500.
         """
         if detail is not None:
             self.detail = detail
+        # Khởi tạo theo TỪNG instance. Đặt mặc định ở cấp lớp (kiểu
+        # `public_payload: dict = {}`) là chia sẻ MỘT dict cho mọi lần ném:
+        # hai lỗi liên tiếp sẽ đắp dữ liệu của nhau, và người dùng thứ hai
+        # thấy danh sách phiếu của người thứ nhất.
         self.context = context or {}
+        self.public_payload: Dict[str, Any] = public_payload or {}
         super().__init__(self.detail)
 
     def __str__(self) -> str:
@@ -166,10 +182,34 @@ class PaymentDuplicateSuspected(ConflictError):
     ``confirm_duplicate=True`` là ghi được. Có mã riêng (không dùng chung
     ``CONFLICT``) vì giao diện phải phân biệt được ca này để hiện danh sách
     phiếu nghi trùng thay vì một thông báo đỏ chung chung.
+
+    Mang theo ``duplicates`` để người ghi **nhìn thấy thứ mình đang bị so
+    sánh** rồi mới quyết định — một cảnh báo không kèm bằng chứng thì chỉ còn
+    là một cánh cửa để bấm qua.
+
+    ``duplicates`` phải là JSON thuần **đã serialize sẵn** (xem
+    ``schemas.finance.DuplicatePaymentInfo``); nhận thẳng ORM object hay
+    ``Decimal`` ở đây là biến 409 thành 500 tại tầng handler.
     """
 
     detail = "Khoản thu này trùng với một phiếu đã ghi nhận gần đây."
     error_code = "PAYMENT_DUPLICATE_SUSPECTED"
+
+    def __init__(
+        self,
+        detail: Optional[str] = None,
+        duplicates: Optional[list] = None,
+        duplicates_truncated: bool = False,
+        context: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            detail=detail,
+            context=context,
+            public_payload={
+                "duplicates": duplicates or [],
+                "duplicates_truncated": duplicates_truncated,
+            },
+        )
 
 
 # ============================================================================
