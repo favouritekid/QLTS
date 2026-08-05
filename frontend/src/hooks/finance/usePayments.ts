@@ -286,10 +286,21 @@ export function useDuplicatePreview(
     feeId: number | undefined
     amount: number | null
     paymentDate: string | null
+    /**
+     * Số thứ tự LẦN MỞ form. Nằm trong query key nhưng KHÔNG gửi lên máy chủ.
+     *
+     * `staleTime: 0` chỉ buộc *hỏi lại*, nó không xoá dữ liệu cũ: React Query
+     * vẫn trả bản cache của lần mở trước ngay lập tức trong lúc request mới
+     * đang bay. Với một cảnh báo chống trùng thì đó là câu trả lời sai — form
+     * hiện danh sách cũ, người dùng tick, và cờ xác nhận đi kèm một bộ dữ liệu
+     * chưa ai kiểm lại. Đổi khoá theo từng lần mở là cách duy nhất để lần này
+     * bắt đầu từ chỗ trống.
+     */
+    sessionId: number
   },
   options?: { enabled?: boolean }
 ) {
-  const { feeId, amount, paymentDate } = input
+  const { feeId, amount, paymentDate, sessionId } = input
   const duCanCu = !!feeId && amount != null && amount > 0 && !!paymentDate
   const filters: PaymentFilters = {
     fee_id: feeId,
@@ -297,7 +308,9 @@ export function useDuplicatePreview(
     duplicate_date: paymentDate ?? undefined,
   }
   return useQuery<PaymentListPaginatedResponse, AxiosError<ApiErrorResponse>>({
-    queryKey: paymentsKeys.list(filters),
+    // `sessionId` chỉ ở KHOÁ, không ở `filters` — máy chủ không cần biết đây
+    // là lần mở thứ mấy.
+    queryKey: [...paymentsKeys.list(filters), "phien", sessionId],
     queryFn: () => paymentsApi.getPayments(filters),
     // Chưa gõ đủ số tiền và ngày thì KHÔNG hỏi: câu hỏi thiếu vế bị máy chủ
     // từ chối 422, và một lỗi đỏ trong lúc người dùng đang gõ dở là nhiễu.

@@ -638,6 +638,45 @@ describe("PaymentRecordDialog — cảnh báo ghi trùng", () => {
     expect(createPayment.mock.calls[0][0].data.confirm_duplicate).toBe(false)
   })
 
+  it("cảnh báo SỚM bị cắt cũng phải nói ra", async () => {
+    // Hai nguồn (xem trước và 409) đếm "còn nữa" bằng hai cách khác nhau. Đọc
+    // nhầm nguồn là im lặng đúng lúc cần nói: người ghi thấy 20 phiếu và tưởng
+    // đó là tất cả.
+    const user = userEvent.setup()
+    state.activeItems = Array.from({ length: 20 }, (_, i) => phieuDaCo({ id: i + 1 }))
+    state.activeTruncated = true
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    await dienForm(user, "1000000")
+    await screen.findByTestId("payment-duplicate-warning")
+    expect(screen.getByTestId("payment-duplicate-truncated")).toBeInTheDocument()
+  })
+
+  it("cảnh báo SỚM chưa bị cắt thì KHÔNG nói thừa", async () => {
+    const user = userEvent.setup()
+    state.activeItems = [phieuDaCo()]
+    state.activeTruncated = false
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="4.000.000 ₫"
+      />,
+    )
+    await dienForm(user, "1000000")
+    await screen.findByTestId("payment-duplicate-warning")
+    expect(screen.queryByTestId("payment-duplicate-truncated")).not.toBeInTheDocument()
+  })
+
   it("máy chủ trả 409 thì hiện danh sách của máy chủ, kèm ghi chú khi bị cắt", async () => {
     const user = userEvent.setup()
     // Giao diện KHÔNG thấy gì — máy chủ vẫn là nơi quyết định cuối.

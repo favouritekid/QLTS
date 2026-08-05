@@ -37,7 +37,12 @@ function createWrapper() {
   return Wrapper
 }
 
-const DU_CAN_CU = { feeId: 7, amount: 1_000_000, paymentDate: "2026-08-05" }
+const DU_CAN_CU = {
+  feeId: 7,
+  amount: 1_000_000,
+  paymentDate: "2026-08-05",
+  sessionId: 0,
+}
 
 beforeEach(() => {
   getPayments.mockReset()
@@ -113,5 +118,55 @@ describe("useDuplicatePreview", () => {
     rerender({ amount: 2_000_000 })
     await waitFor(() => expect(getPayments).toHaveBeenCalledTimes(2))
     expect(getPayments.mock.calls[1][0]).toMatchObject({ duplicate_amount: 2_000_000 })
+  })
+
+  it("mở lại (phiên mới) thì KHÔNG trả dữ liệu của phiên trước trong lúc chờ", async () => {
+    // `staleTime: 0` chỉ buộc HỎI LẠI; nó không xoá dữ liệu cũ. Nếu khoá truy
+    // vấn không đổi theo lần mở, React Query trả ngay bản cache của phiên
+    // trước trong lúc request mới đang bay — form dựng cảnh báo từ dữ liệu
+    // chưa ai kiểm lại, người dùng tick, và cờ xác nhận đi kèm một bộ dữ liệu
+    // của lần khác.
+    const wrapper = createWrapper()
+    getPayments.mockResolvedValueOnce({
+      items: [{ id: 91, amount: "1000000", status: "pending", payment_date: null }],
+      total: 1,
+      page: 1,
+      page_size: 1,
+    })
+
+    const { result, rerender } = renderHook(
+      ({ sessionId, open }: { sessionId: number; open: boolean }) =>
+        useDuplicatePreview({ ...DU_CAN_CU, sessionId }, { enabled: open }),
+      { wrapper, initialProps: { sessionId: 0, open: true } },
+    )
+    await waitFor(() => expect(result.current.data?.items).toHaveLength(1))
+
+    // Phản hồi của lần hỏi kế tiếp bị giữ lại — mô phỏng lúc request đang bay.
+    let traLoi: (v: unknown) => void = () => {}
+    getPayments.mockImplementationOnce(
+      () => new Promise((resolve) => { traLoi = resolve }),
+    )
+
+    rerender({ sessionId: 0, open: false })
+    rerender({ sessionId: 1, open: true }) // đóng rồi mở lại = phiên mới
+
+    // Đang chờ: KHÔNG được có dữ liệu nào.
+    expect(result.current.data).toBeUndefined()
+
+    traLoi({ items: [], total: 0, page: 1, page_size: 0 })
+    await waitFor(() => expect(result.current.data?.items).toEqual([]))
+  })
+
+  it("số thứ tự phiên KHÔNG được gửi lên máy chủ", async () => {
+    const wrapper = createWrapper()
+    renderHook(
+      () => useDuplicatePreview({ ...DU_CAN_CU, sessionId: 7 }, { enabled: true }),
+      { wrapper },
+    )
+    await waitFor(() => expect(getPayments).toHaveBeenCalledTimes(1))
+    // Máy chủ không cần biết đây là lần mở thứ mấy; gửi thừa tham số là mời
+    // một cuộc tranh luận không cần thiết ở tầng validate.
+    expect(getPayments.mock.calls[0][0]).not.toHaveProperty("sessionId")
+    expect(JSON.stringify(getPayments.mock.calls[0][0])).not.toContain("phien")
   })
 })

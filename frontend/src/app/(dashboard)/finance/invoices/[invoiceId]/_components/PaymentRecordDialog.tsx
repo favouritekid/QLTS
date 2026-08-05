@@ -229,12 +229,23 @@ export function PaymentRecordDialog({
   // không thấy tổng tiền đã hoàn của từng phiếu, và "ngày lịch Việt Nam" ở
   // trình duyệt là múi giờ máy người dùng.
   const { data: previewPage } = useDuplicatePreview(
-    { feeId, amount: soTienDangGo ?? null, paymentDate: ngayHienTai },
+    {
+      feeId,
+      amount: soTienDangGo ?? null,
+      paymentDate: ngayHienTai,
+      sessionId: phienMoForm,
+    },
     { enabled: open },
   )
   const ungVienSom = previewPage?.items ?? []
   const ungVienSomBiCat = (previewPage?.total ?? 0) > ungVienSom.length
   const coNghiTrung = Boolean(canhBaoConHieuLuc) || ungVienSom.length > 0
+  // Cờ "còn nữa" phải lấy từ ĐÚNG nguồn đang hiện. Danh sách 409 và danh sách
+  // xem trước đều có thể bị cắt, mà chúng đếm bằng hai cách khác nhau — đọc
+  // nhầm nguồn là im lặng đúng lúc cần nói.
+  const danhSachBiCat = canhBaoConHieuLuc
+    ? canhBaoConHieuLuc.duplicates_truncated
+    : ungVienSomBiCat
   const chanLuu = coNghiTrung && !daXacNhan
 
   const onSubmit = async (values: PaymentFormValues) => {
@@ -564,7 +575,7 @@ export function PaymentRecordDialog({
                     </li>
                   ))}
                 </ul>
-                {canhBaoConHieuLuc?.duplicates_truncated && (
+                {danhSachBiCat && (
                   <p
                     className="text-xs text-muted-foreground"
                     data-testid="payment-duplicate-truncated"

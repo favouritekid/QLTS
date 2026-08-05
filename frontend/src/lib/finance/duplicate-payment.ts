@@ -61,6 +61,12 @@ export function paymentFingerprint(input: {
 /** Trạng thái phiếu mà luật dò trùng công nhận — khớp danh sách ở máy chủ. */
 const TRANG_THAI_HOP_LE = new Set(["pending", "verified"])
 
+/**
+ * ISO-8601 dạng máy chủ sinh ra: `YYYY-MM-DDTHH:MM:SS` kèm phần giây lẻ tuỳ ý
+ * và múi giờ tuỳ ý (`Z`, `+07:00`, hoặc không có).
+ */
+const ISO_8601 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/
+
 /** Trần số phần tử, khớp `MAX_DUPLICATE_CANDIDATES` ở máy chủ. */
 export const MAX_DUPLICATE_ITEMS = 20
 
@@ -72,9 +78,18 @@ function isDuplicateInfo(v: unknown): v is DuplicatePaymentInfo {
   // kỳ — rồi giao diện dựng một khối cảnh báo từ rác và TẮT thông báo lỗi
   // chung. Không đọc được thì phải nói là không đọc được.
   if (!Number.isInteger(o.payment_id) || (o.payment_id as number) <= 0) return false
-  if (typeof o.amount !== "string" || !Number.isFinite(Number(o.amount))) return false
+  // Số tiền phải là một Decimal DƯƠNG. `Number.isFinite` một mình vẫn nhận ""
+  // (thành 0), "0" và "-1" — ba giá trị không thể là một khoản thu đã ghi, và
+  // hiện chúng ra là dựng cảnh báo trên dữ liệu vô nghĩa.
+  if (typeof o.amount !== "string" || o.amount.trim() === "") return false
+  const soTien = Number(o.amount)
+  if (!Number.isFinite(soTien) || soTien <= 0) return false
   if (o.payment_date !== null) {
     if (typeof o.payment_date !== "string") return false
+    // Đòi ISO-8601 thật, không chỉ "thứ `Date.parse` hiểu được": `Date.parse`
+    // nhận cả "March 5, 2026" lẫn vài dạng riêng của từng trình duyệt, nên nó
+    // không phải một hợp đồng — hai máy khác nhau sẽ đọc ra hai kết quả.
+    if (!ISO_8601.test(o.payment_date)) return false
     if (Number.isNaN(Date.parse(o.payment_date))) return false
   }
   if (typeof o.status !== "string" || !TRANG_THAI_HOP_LE.has(o.status)) return false

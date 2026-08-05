@@ -101,7 +101,15 @@ describe("parseDuplicateSuspected — kiểm Ý NGHĨA, không chỉ kiểu", ()
     ["id không dương", { ...PHIEU_HOP_LE, payment_id: -1 }],
     ["id không nguyên", { ...PHIEU_HOP_LE, payment_id: 1.5 }],
     ["số tiền không đọc được", { ...PHIEU_HOP_LE, amount: "không-phải-tiền" }],
+    ["số tiền rỗng", { ...PHIEU_HOP_LE, amount: "" }],
+    ["số tiền khoảng trắng", { ...PHIEU_HOP_LE, amount: "   " }],
+    ["số tiền bằng 0", { ...PHIEU_HOP_LE, amount: "0" }],
+    ["số tiền âm", { ...PHIEU_HOP_LE, amount: "-1" }],
     ["ngày không đọc được", { ...PHIEU_HOP_LE, payment_date: "hôm-qua" }],
+    // `Date.parse` hiểu được dạng này, nhưng nó KHÔNG phải ISO-8601 — mỗi
+    // trình duyệt đọc một kiểu, nên nó không thể là một hợp đồng.
+    ["ngày dạng tự do", { ...PHIEU_HOP_LE, payment_date: "March 5, 2026" }],
+    ["ngày thiếu phần giờ", { ...PHIEU_HOP_LE, payment_date: "2026-08-05" }],
     ["trạng thái ngoài danh sách", { ...PHIEU_HOP_LE, status: "bất-kỳ" }],
   ])("từ chối khi %s", (_ten, phieu) => {
     // `typeof` một mình vẫn nhận hết những thứ này, rồi giao diện dựng khối
@@ -136,6 +144,21 @@ describe("parseDuplicateSuspected — kiểm Ý NGHĨA, không chỉ kiểu", ()
     expect(
       parseDuplicateSuspected(
         than409({ duplicates: [{ ...PHIEU_HOP_LE, payment_date: null }] }),
+      ),
+    ).not.toBeNull()
+  })
+})
+
+describe("parseDuplicateSuspected — các dạng ISO hợp lệ", () => {
+  it.each([
+    ["có Z", "2026-08-05T03:00:00Z"],
+    ["có offset", "2026-08-05T10:00:00+07:00"],
+    ["có giây lẻ", "2026-08-05T03:00:00.123456+00:00"],
+    ["không múi giờ", "2026-08-05T03:00:00"],
+  ])("chấp nhận %s", (_ten, ngay) => {
+    expect(
+      parseDuplicateSuspected(
+        than409({ duplicates: [{ ...PHIEU_HOP_LE, payment_date: ngay }] }),
       ),
     ).not.toBeNull()
   })
