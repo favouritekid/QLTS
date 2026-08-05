@@ -144,6 +144,14 @@ async def two_fees_ctx(seed_lead_dependencies: dict, admin_user_in_db: dict):
                 amount=Decimal("1000000"),
                 user_id=maker.id,
                 unit_id=seeded["unit_id"],
+                # Fixture này CỐ Ý dựng hai phiếu cùng số tiền trên hai đợt của
+                # cùng một khoản phí — đúng hình dạng mà hàng rào chống trùng
+                # (B2) chặn lại. Ở đây ta đang dựng dữ liệu cho bài kiểm bộ
+                # LỌC, không kiểm hàng rào, nên xác nhận luôn. Việc phải thêm
+                # cờ này chính là bằng chứng hàng rào đang chạy trên đường
+                # thật; luật của nó được canh ở
+                # `tests/services/test_payment_duplicate_guard.py`.
+                confirm_duplicate=True,
             )
             pay_a.append(p)
         # Khoản phí B chỉ một phiếu — đủ để phát hiện rò sang khoản phí khác.

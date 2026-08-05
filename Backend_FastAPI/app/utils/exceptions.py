@@ -158,6 +158,20 @@ class ConflictError(BaseAppException):
     error_code = "CONFLICT"
 
 
+class PaymentDuplicateSuspected(ConflictError):
+    """Phiếu thu nghi TRÙNG với một phiếu đã có (HTTP 409).
+
+    Không phải lỗi dữ liệu: nộp hai lần cùng số tiền là chuyện có thật, nên
+    đây là hàng rào MỀM — người ghi xác nhận rồi gửi lại với
+    ``confirm_duplicate=True`` là ghi được. Có mã riêng (không dùng chung
+    ``CONFLICT``) vì giao diện phải phân biệt được ca này để hiện danh sách
+    phiếu nghi trùng thay vì một thông báo đỏ chung chung.
+    """
+
+    detail = "Khoản thu này trùng với một phiếu đã ghi nhận gần đây."
+    error_code = "PAYMENT_DUPLICATE_SUSPECTED"
+
+
 # ============================================================================
 # GONE / CLOSED RESOURCES (410)
 # ============================================================================

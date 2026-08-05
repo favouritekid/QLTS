@@ -48,6 +48,7 @@ from app.utils.exceptions import (
     BadRequest,
     BusinessRuleViolation,
     ConflictError,
+    PaymentDuplicateSuspected,
 )
 from app.utils.admission_status import NON_PAYABLE_PROFILE_STATUSES
 from app.utils.refund_reference import build_refund_reference
@@ -221,6 +222,7 @@ class PaymentService:
         payer_name: Optional[str] = None,
         payer_account: Optional[str] = None,
         notes: Optional[str] = None,
+        confirm_duplicate: bool = False,
     ) -> Tuple[Payment, Optional[Callable]]:
         """
         Record a manual payment (cash, bank transfer, etc.).
@@ -269,7 +271,31 @@ class PaymentService:
         # profile (withdraw does not cancel fees), so the payable-status check
         # above is not enough — resolve the fee/profile ONCE here, refuse up
         # front, and reuse them for the notification payload below.
-        fee = await self.db.get(Fee, invoice.fee_id) if invoice.fee_id else None
+        #
+        # 🔒 KHOÁ fee, không chỉ đọc. Luật dò trùng bên dưới quét MỌI hoá đơn
+        # của khoản phí này, nên khoá riêng hoá đơn hiện tại là chưa đủ về mặt
+        # hợp đồng: hai request ghi vào hai đợt khác nhau của cùng một khoản
+        # phí cần một điểm gặp chung, và khoản phí là điểm đó.
+        #
+        # ⚠️ Nói cho đúng, kẻo người sau hiểu sai vai trò của dòng này: hàng
+        # `fee` THỰC RA đã bị khoá từ dòng trên rồi. `invoice_repo.get_for_update`
+        # dựng `select(Invoice).join(Fee).join(...).with_for_update()`, mà
+        # `FOR UPDATE` không kèm `OF` thì PostgreSQL khoá hàng của MỌI bảng
+        # trong FROM — gồm cả `fee`. Nghĩa là tính tuần tự ở đây đang do một
+        # chi tiết NGẦM của câu lệnh bên cạnh mang lại. Khoá tường minh này để
+        # hợp đồng không treo trên chi tiết ngầm ấy: thêm một `OF invoice` vào
+        # câu kia — một tối ưu hoàn toàn hợp lý — sẽ lặng lẽ tháo hàng rào nếu
+        # không có dòng này.
+        #
+        # Thứ tự ở ĐƯỜNG TẠO MỚI là invoice → fee (phiếu chưa tồn tại nên
+        # không có gì để khoá trước đó). Đường thao tác trên phiếu đã có
+        # (verify/reject/đảo) giữ thứ tự payment → invoice → fee — xem
+        # `verify_payment`. Đừng trộn hai chuỗi này với nhau.
+        fee = (
+            await self.fee_repo.get_for_update(invoice.fee_id, unit_id)
+            if invoice.fee_id
+            else None
+        )
         profile = (
             await self._get_profile_for_fee(fee) if fee is not None else None
         )
@@ -291,6 +317,33 @@ class PaymentService:
         if not method.is_active:
             raise BadRequest(f"Payment method '{method.name}' is not active")
 
+        # Hàng rào MỀM chống ghi trùng. Đặt ở đây — sau khi đã khoá khoản phí,
+        # ngay trước khi ghi — vì đó là chỗ duy nhất vừa có khoá vừa còn kịp
+        # từ chối. Không chặn cứng: nộp hai lần cùng số tiền là chuyện có thật
+        # (prod có ca như vậy), nên người ghi xác nhận rồi gửi lại là qua.
+        effective_payment_date = payment_date or datetime.now(timezone.utc)
+        if not confirm_duplicate and fee is not None:
+            candidates = await self.payment_repo.find_duplicate_candidates(
+                fee_id=fee.id,
+                amount=amount,
+                payment_date=effective_payment_date,
+            )
+            if candidates:
+                log.info(
+                    "payment_duplicate_suspected",
+                    invoice_id=invoice_id,
+                    fee_id=fee.id,
+                    amount=str(amount),
+                    # Chỉ ĐẾM, không ghi chi tiết phiếu: nhật ký không phải chỗ
+                    # chứa tên người nộp và mã tham chiếu.
+                    candidate_count=len(candidates),
+                    created_by=user_id,
+                )
+                raise PaymentDuplicateSuspected(
+                    f"Đã có {len(candidates)} phiếu thu cùng số tiền cho khoản "
+                    f"phí này trong vòng 3 ngày. Kiểm tra lại trước khi ghi tiếp."
+                )
+
         # Create payment (pending status)
         payment = Payment(
             invoice_id=invoice_id,
@@ -300,7 +353,7 @@ class PaymentService:
             payer_name=payer_name,
             payer_account=payer_account,
             status=PaymentStatusEnum.pending.value,
-            payment_date=payment_date or datetime.now(timezone.utc),
+            payment_date=effective_payment_date,
             created_by_id=user_id,
             notes=notes,
         )

@@ -613,6 +613,14 @@ class PaymentCreate(BaseModel):
     payer_name: Optional[str] = Field(None, max_length=200)
     payer_account: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = Field(None, max_length=500)
+    confirm_duplicate: bool = Field(
+        False,
+        description="Người ghi đã xem danh sách phiếu nghi trùng và khẳng "
+        "định đây là khoản thu khác. Hàng rào chống trùng là hàng rào MỀM: "
+        "nộp hai lần cùng số tiền là chuyện có thật, nên xác nhận thì ghi "
+        "được. Mặc định False — cờ này phải do người dùng bật ở lần gửi thứ "
+        "hai, không được đính sẵn.",
+    )
 
     @field_validator('amount')
     @classmethod

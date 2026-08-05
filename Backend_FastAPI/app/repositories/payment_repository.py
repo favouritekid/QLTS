@@ -13,9 +13,10 @@ Architecture:
 - Supports both online (PaymentIntent) and manual (Payment) flows
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, and_, or_, func, desc, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +38,21 @@ from app.models.finance import (
     OverpaymentStatusEnum,
 )
 from app.repositories.base import BaseRepository
+
+VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+
+
+def _vn_calendar_date(dt: datetime) -> date:
+    """Ngày lịch Việt Nam của một mốc thời gian.
+
+    Mốc **naive** được hiểu là UTC — đó đúng là cách nó nằm trong DB: cột là
+    ``timestamptz`` và phiên làm việc chạy ở UTC, nên một datetime không mang
+    múi giờ đi vào sẽ được ghi như UTC. Đọc nó theo giờ máy chủ (có thể là bất
+    kỳ đâu) sẽ cho ra một ngày khác với ngày mà câu SQL bên cạnh tính được.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(VN_TZ).date()
 
 
 class PaymentRepository(BaseRepository[Payment]):
@@ -298,6 +314,93 @@ class PaymentRepository(BaseRepository[Payment]):
         payments = list(result.scalars().all())
 
         return payments, total
+
+    async def find_duplicate_candidates(
+        self,
+        fee_id: int,
+        amount: Decimal,
+        payment_date: datetime,
+        window_days: int = 3,
+        exclude_payment_id: Optional[int] = None,
+    ) -> List[Payment]:
+        """Phiếu thu đã có mà một khoản thu mới có thể đang lặp lại.
+
+        Luật (chốt ở plan PR B, mục B2):
+
+        * **phạm vi = KHOẢN PHÍ**, mọi hoá đơn của nó — ca ghi nhầm sang đợt
+          khác là ca thật, lọc theo ``invoice_id`` sẽ bỏ sót;
+        * ``amount`` **bằng nhau** — không có "xấp xỉ", vì thu góp hợp lệ
+          thường khác số tiền;
+        * lệch **NGÀY LỊCH Việt Nam** không quá ``window_days`` — không phải
+          72 giờ. Hai phiếu cùng một ngày làm việc phải dính nhau kể cả khi
+          một cái ghi 07:00 và cái kia 16:00, mà chênh giờ thì không nói lên
+          điều đó;
+        * chỉ ``pending`` và ``verified`` — phiếu đã từ chối/đã đảo không còn
+          là tiền, cảnh báo về nó là cảnh báo oan;
+        * **không** có luật theo ``reference_code``: dialog prefill mã hồ sơ
+          làm tham chiếu, nên mọi lần thu góp của cùng hồ sơ đều trùng mã —
+          áp luật đó là bắn cảnh báo vào mọi lần thu thứ hai trở đi, cách
+          nhanh nhất khiến kế toán ngừng đọc cảnh báo.
+
+        Phiếu đã **hoàn đủ** bị loại: ``RefundRequest`` cho hoàn một phần, nên
+        "có một yêu cầu hoàn đã chi" chưa đủ — hoàn 1 trên 5 triệu thì 4 triệu
+        còn lại vẫn là tiền thật và vẫn phải cảnh báo. Chỉ khi tổng đã chi
+        ``>=`` số tiền phiếu thì phiếu đó mới hết đóng góp. Dùng ``>=`` (không
+        phải ``==``) để fail-safe trước dữ liệu lịch sử bất thường.
+
+        ⚠️ Gọi hàm này **sau** khi đã khoá ``Fee``: nó đọc mọi hoá đơn của
+        khoản phí, nên nếu không có điểm gặp chung thì hai request ghi vào hai
+        hoá đơn khác nhau cùng thấy "chưa trùng" rồi cùng ghi.
+
+        Thứ tự trả về ổn định (``payment_date`` mới nhất trước, rồi ``id``) để
+        danh sách hiện ra không nhảy giữa hai lần gọi.
+        """
+        vn_day = func.date(
+            func.timezone("Asia/Ho_Chi_Minh", Payment.payment_date)
+        )
+        target_day = _vn_calendar_date(payment_date)
+        day_from = target_day - timedelta(days=window_days)
+        day_to = target_day + timedelta(days=window_days)
+
+        # Tổng tiền ĐÃ CHI của từng phiếu. Tương quan với hàng Payment bên
+        # ngoài nên tính đúng theo từng ứng viên, không cần gom nhóm riêng.
+        refunded_total = (
+            select(func.coalesce(func.sum(RefundRequest.amount), 0))
+            .where(
+                RefundRequest.payment_id == Payment.id,
+                RefundRequest.status == RefundStatusEnum.refunded.value,
+            )
+            .correlate(Payment)
+            .scalar_subquery()
+        )
+
+        conditions = [
+            Invoice.fee_id == fee_id,
+            Payment.amount == amount,
+            Payment.status.in_(
+                [
+                    PaymentStatusEnum.pending.value,
+                    PaymentStatusEnum.verified.value,
+                ]
+            ),
+            Payment.payment_date.is_not(None),
+            vn_day >= day_from,
+            vn_day <= day_to,
+            refunded_total < Payment.amount,
+        ]
+        if exclude_payment_id is not None:
+            conditions.append(Payment.id != exclude_payment_id)
+
+        query = (
+            select(Payment)
+            .join(Invoice, Payment.invoice_id == Invoice.id)
+            .options(joinedload(Payment.invoice))
+            .where(and_(*conditions))
+            .order_by(Payment.payment_date.desc(), Payment.id.desc())
+        )
+
+        result = await self.db.execute(query)
+        return list(result.scalars().unique().all())
 
     async def get_filtered(
         self,
