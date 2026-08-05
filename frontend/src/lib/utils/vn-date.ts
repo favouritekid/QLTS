@@ -38,6 +38,26 @@ export function calendarDateToISO(d: Date): string {
 }
 
 /**
+ * Chuỗi `"YYYY-MM-DD"` từ máy chủ → `Date` của **đúng ô lịch đó**.
+ *
+ * `new Date("2026-08-05")` là bẫy: JavaScript parse chuỗi chỉ-có-ngày thành
+ * **UTC nửa đêm**, nên ở múi giờ âm nó lùi về hôm trước. Đo thật:
+ *
+ * ```
+ * TZ=Asia/Ho_Chi_Minh  new Date("2026-08-05") → 05/08 07:00  getDate() = 5
+ * TZ=America/New_York  new Date("2026-08-05") → 04/08 20:00  getDate() = 4
+ * ```
+ *
+ * Cột `Date` trong cơ sở dữ liệu không mang giờ và không mang múi giờ — nó là
+ * một ô lịch. Đưa nó qua một phép quy đổi múi giờ là gán cho nó thứ nó không
+ * có, rồi nhận về một ô lịch khác.
+ */
+export function parseNgayLich(s: string): Date {
+  // Thêm phần giờ để JavaScript parse theo LỊCH ĐỊA PHƯƠNG thay vì UTC.
+  return new Date(`${s}T00:00:00`);
+}
+
+/**
  * Mốc ISO từ máy chủ → `DD/MM/YYYY` theo **ngày lịch Việt Nam**.
  *
  * Đừng cắt chuỗi (`iso.slice(0, 10)`): mốc trong cơ sở dữ liệu là UTC, và một

@@ -65,6 +65,16 @@ describe("call site của form ưu đãi", () => {
     expect(nguon).toMatch(/valid_to:.*calendarDateToISO\(/)
   })
 
+  it("đường ĐỌC dùng parseNgayLich, không dùng new Date thẳng", () => {
+    // Vá một nửa vòng thì vẫn lệch: `new Date("2026-08-05")` là UTC nửa đêm,
+    // nên mở một chính sách cũ ra sửa (dù không đụng ô ngày) sẽ lùi ngày trên
+    // mọi máy ở múi giờ âm — và bản CŨ lại đúng ở chính đường này, vì hai đầu
+    // cùng quy về UTC.
+    expect(nguon).not.toMatch(/new Date\(policy\.valid_(from|to)\)/)
+    expect(nguon).toMatch(/parseNgayLich\(policy\.valid_from\)/)
+    expect(nguon).toMatch(/parseNgayLich\(policy\.valid_to\)/)
+  })
+
   it("không còn LỜI GỌI toISOString nào trong file", () => {
     // Bất kỳ ngày nào gửi lên từ màn này đều phải đi qua lịch địa phương.
     // Khớp lời gọi (`x.toISOString()`) chứ không khớp chữ trong ghi chú —
