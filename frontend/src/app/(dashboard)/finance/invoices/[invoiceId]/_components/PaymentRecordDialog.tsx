@@ -48,6 +48,7 @@ import { AmountDisplay } from "@/components/finance"
 import { formatVND, parseVNDDisplayAmount } from "@/lib/zod/finance"
 import { calendarDateToISO } from "@/lib/utils/vn-date"
 import {
+  capSoPhienMoi,
   parseDuplicateSuspected,
   paymentFingerprint,
   type DuplicateSuspectedPayload,
@@ -186,7 +187,11 @@ export function PaymentRecordDialog({
   // hết hiệu lực: nó chỉ khớp đúng bộ dữ liệu đã sinh ra nó.
   // Mỗi lần mở form là một PHIÊN. Phản hồi của phiên trước không được nói
   // chuyện với phiên này — xem `paymentFingerprint`.
-  const [phienMoForm, setPhienMoForm] = React.useState(0)
+  //
+  // Số cấp từ bộ đếm ở MODULE, không phải `useState(0)`: màn Thu học phí
+  // unmount hẳn form khi đóng, nên một giá trị khởi tạo cố định sẽ lặp lại ở
+  // lần mở sau và cache của phiên trước sống dậy.
+  const [phienMoForm, setPhienMoForm] = React.useState(capSoPhienMoi)
   const [vanTayDaXacNhan, setVanTayDaXacNhan] = React.useState<string | null>(null)
   const [canhBaoTrung, setCanhBaoTrung] = React.useState<
     (DuplicateSuspectedPayload & { vanTay: string }) | null
@@ -321,8 +326,9 @@ export function PaymentRecordDialog({
       setVanTayDaXacNhan(null)
       setCanhBaoTrung(null)
       // Sang phiên mới: mọi dấu vân tay của phiên cũ vĩnh viễn không khớp nữa,
-      // kể cả khi một phản hồi đến muộn còn kịp ghi state.
-      setPhienMoForm((n) => n + 1)
+      // kể cả khi một phản hồi đến muộn còn kịp ghi state. (Đường này dành cho
+      // caller GIỮ form mounted; caller unmount thì lần mở sau tự lấy số mới.)
+      setPhienMoForm(capSoPhienMoi())
     }
   }, [open, form])
 

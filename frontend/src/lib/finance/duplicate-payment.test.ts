@@ -105,6 +105,13 @@ describe("parseDuplicateSuspected — kiểm Ý NGHĨA, không chỉ kiểu", ()
     ["số tiền khoảng trắng", { ...PHIEU_HOP_LE, amount: "   " }],
     ["số tiền bằng 0", { ...PHIEU_HOP_LE, amount: "0" }],
     ["số tiền âm", { ...PHIEU_HOP_LE, amount: "-1" }],
+    // `Number()` hiểu hết mấy dạng này (`Number("0x10") === 16`), nhưng máy
+    // chủ không bao giờ sinh ra chúng — gặp một trong số đó nghĩa là dữ liệu
+    // không tới từ đường ta nghĩ.
+    ["số tiền dạng hex", { ...PHIEU_HOP_LE, amount: "0x10" }],
+    ["số tiền dạng mũ", { ...PHIEU_HOP_LE, amount: "1e3" }],
+    ["số tiền có dấu cộng", { ...PHIEU_HOP_LE, amount: "+1000" }],
+    ["số tiền có khoảng trắng", { ...PHIEU_HOP_LE, amount: " 1000 " }],
     ["ngày không đọc được", { ...PHIEU_HOP_LE, payment_date: "hôm-qua" }],
     // `Date.parse` hiểu được dạng này, nhưng nó KHÔNG phải ISO-8601 — mỗi
     // trình duyệt đọc một kiểu, nên nó không thể là một hợp đồng.

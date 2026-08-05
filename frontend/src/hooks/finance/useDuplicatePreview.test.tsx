@@ -16,6 +16,7 @@ import { renderHook, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactNode } from "react"
 
+import { capSoPhienMoi } from "@/lib/finance/duplicate-payment"
 import { useDuplicatePreview } from "./usePayments"
 
 const getPayments = vi.fn()
@@ -168,5 +169,69 @@ describe("useDuplicatePreview", () => {
     // một cuộc tranh luận không cần thiết ở tầng validate.
     expect(getPayments.mock.calls[0][0]).not.toHaveProperty("sessionId")
     expect(JSON.stringify(getPayments.mock.calls[0][0])).not.toContain("phien")
+  })
+})
+
+describe("useDuplicatePreview — dialog bị UNMOUNT rồi mở lại", () => {
+  it("phiên mới sau khi unmount vẫn không thấy dữ liệu cũ", async () => {
+    // Đường THẬT ở màn Thu học phí: `WorkspaceActionDialogs` chỉ render form
+    // khi `dialog.type === "record"`, nên đóng form là unmount hẳn. Một
+    // `useState(0)` sẽ lại là 0 ở lần mở sau, khoá truy vấn trùng khít phiên
+    // trước, và bản cache cũ sống dậy — ca rerender trong cùng một hook KHÔNG
+    // mô phỏng được chuyện này.
+    //
+    // Dùng CHUNG một QueryClient qua hai lần mount: đó là điều kiện để cache
+    // của phiên trước còn sống mà thử.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 5 * 60 * 1000 } },
+    })
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+
+    getPayments.mockResolvedValueOnce({
+      items: [{ id: 91, amount: "1000000", status: "pending", payment_date: null }],
+      total: 1,
+      page: 1,
+      page_size: 1,
+    })
+
+    // Cấp số MỘT lần cho mỗi lần mount — đúng cách component dùng
+    // (`useState(capSoPhienMoi)`). Gọi trong thân render sẽ cấp số mới mỗi lần
+    // render, khoá truy vấn đổi liên tục và hook không bao giờ có dữ liệu.
+    const soPhien1 = capSoPhienMoi()
+    const phien1 = renderHook(
+      () =>
+        useDuplicatePreview({ ...DU_CAN_CU, sessionId: soPhien1 }, { enabled: true }),
+      { wrapper },
+    )
+    await waitFor(() => expect(phien1.result.current.data?.items).toHaveLength(1))
+    phien1.unmount()
+
+    // Phản hồi của phiên 2 bị giữ lại: mô phỏng lúc request mới còn đang bay.
+    let traLoi: (v: unknown) => void = () => {}
+    getPayments.mockImplementationOnce(
+      () => new Promise((resolve) => { traLoi = resolve }),
+    )
+
+    // Phiên 2 — mount MỚI hoàn toàn, cùng fee/tiền/ngày.
+    const soPhien2 = capSoPhienMoi()
+    const phien2 = renderHook(
+      () =>
+        useDuplicatePreview({ ...DU_CAN_CU, sessionId: soPhien2 }, { enabled: true }),
+      { wrapper },
+    )
+
+    expect(phien2.result.current.data).toBeUndefined()
+
+    traLoi({ items: [], total: 0, page: 1, page_size: 0 })
+    await waitFor(() => expect(phien2.result.current.data?.items).toEqual([]))
+  })
+
+  it("capSoPhienMoi không bao giờ cấp lại một số đã cấp", () => {
+    const day = Array.from({ length: 5 }, () => capSoPhienMoi())
+    expect(new Set(day).size).toBe(day.length)
+    // Tăng dần: một bộ đếm quay vòng cũng sẽ trùng khoá y như hằng số.
+    expect([...day].sort((a, b) => a - b)).toEqual(day)
   })
 })

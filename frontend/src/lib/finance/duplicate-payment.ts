@@ -58,8 +58,31 @@ export function paymentFingerprint(input: {
   ].join("|")
 }
 
+/**
+ * Cấp một số phiên MỚI, không bao giờ lặp trong vòng đời trang.
+ *
+ * Bộ đếm nằm ở MODULE, không phải trong component: form ghi tiền bị **unmount
+ * hẳn** khi đóng ở màn Thu học phí (`WorkspaceActionDialogs` chỉ render nó khi
+ * `dialog.type === "record"`). Một `useState(0)` sẽ lại là 0 ở lần mở kế tiếp,
+ * nên khoá truy vấn trùng khít với phiên trước và bản cache cũ sống lại —
+ * đúng thứ số phiên sinh ra để chặn.
+ */
+let _boDemPhien = 0
+export function capSoPhienMoi(): number {
+  _boDemPhien += 1
+  return _boDemPhien
+}
+
 /** Trạng thái phiếu mà luật dò trùng công nhận — khớp danh sách ở máy chủ. */
 const TRANG_THAI_HOP_LE = new Set(["pending", "verified"])
+
+/**
+ * Chuỗi Decimal DƯƠNG theo hợp đồng của máy chủ: chữ số, tuỳ chọn phần thập
+ * phân. Cố tình không nhận `0x10`, `1e3`, `+1` — `Number()` hiểu hết những
+ * dạng đó (`Number("0x10") === 16`), nhưng máy chủ không bao giờ sinh ra
+ * chúng, nên gặp một trong số đó nghĩa là dữ liệu không tới từ đường ta nghĩ.
+ */
+const DECIMAL_DUONG = /^\d+(\.\d+)?$/
 
 /**
  * ISO-8601 dạng máy chủ sinh ra: `YYYY-MM-DDTHH:MM:SS` kèm phần giây lẻ tuỳ ý
@@ -78,12 +101,11 @@ function isDuplicateInfo(v: unknown): v is DuplicatePaymentInfo {
   // kỳ — rồi giao diện dựng một khối cảnh báo từ rác và TẮT thông báo lỗi
   // chung. Không đọc được thì phải nói là không đọc được.
   if (!Number.isInteger(o.payment_id) || (o.payment_id as number) <= 0) return false
-  // Số tiền phải là một Decimal DƯƠNG. `Number.isFinite` một mình vẫn nhận ""
-  // (thành 0), "0" và "-1" — ba giá trị không thể là một khoản thu đã ghi, và
-  // hiện chúng ra là dựng cảnh báo trên dữ liệu vô nghĩa.
-  if (typeof o.amount !== "string" || o.amount.trim() === "") return false
-  const soTien = Number(o.amount)
-  if (!Number.isFinite(soTien) || soTien <= 0) return false
+  // Số tiền phải là một Decimal DƯƠNG, kiểm bằng HÌNH DẠNG trước rồi mới đổi
+  // sang số. `Number()` một mình quá dễ dãi: `""` thành 0, `"0x10"` thành 16,
+  // `"1e3"` thành 1000 — không dạng nào trong số đó là thứ máy chủ sinh ra.
+  if (typeof o.amount !== "string" || !DECIMAL_DUONG.test(o.amount)) return false
+  if (Number(o.amount) <= 0) return false
   if (o.payment_date !== null) {
     if (typeof o.payment_date !== "string") return false
     // Đòi ISO-8601 thật, không chỉ "thứ `Date.parse` hiểu được": `Date.parse`
