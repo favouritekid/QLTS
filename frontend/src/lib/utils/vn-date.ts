@@ -18,6 +18,46 @@ export function todayVN(now: Date = new Date()): string {
 }
 
 /**
+ * `Date` người dùng bấm trên lịch → `"YYYY-MM-DD"` của **đúng ô ngày họ bấm**.
+ *
+ * Không dùng `toISOString()` cho việc này. `react-day-picker` trả về 00:00 giờ
+ * địa phương, mà `toISOString()` quy về UTC — ở Việt Nam (UTC+7) thì 05/08
+ * 00:00 thành `2026-08-04T17:00:00Z`, và `.split("T")[0]` cho ra **04/08**.
+ * Nghĩa là mọi lần kế toán tự chọn ngày, hệ thống ghi lùi một ngày. Đã đo:
+ * `TZ=Asia/Ho_Chi_Minh`, `new Date(2026, 7, 5).toISOString()` → `2026-08-04T17:00:00.000Z`.
+ *
+ * Đọc thẳng các thành phần địa phương là cách duy nhất giữ nguyên ý định của
+ * người bấm — chuyển múi giờ ở đây bao giờ cũng là chuyển sai thứ gì đó, vì
+ * "ngày trên tờ giấy nộp tiền" không phải một mốc thời gian, nó là một ô lịch.
+ */
+export function calendarDateToISO(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Chuỗi `"YYYY-MM-DD"` từ máy chủ → `Date` của **đúng ô lịch đó**.
+ *
+ * `new Date("2026-08-05")` là bẫy: JavaScript parse chuỗi chỉ-có-ngày thành
+ * **UTC nửa đêm**, nên ở múi giờ âm nó lùi về hôm trước. Đo thật:
+ *
+ * ```
+ * TZ=Asia/Ho_Chi_Minh  new Date("2026-08-05") → 05/08 07:00  getDate() = 5
+ * TZ=America/New_York  new Date("2026-08-05") → 04/08 20:00  getDate() = 4
+ * ```
+ *
+ * Cột `Date` trong cơ sở dữ liệu không mang giờ và không mang múi giờ — nó là
+ * một ô lịch. Đưa nó qua một phép quy đổi múi giờ là gán cho nó thứ nó không
+ * có, rồi nhận về một ô lịch khác.
+ */
+export function parseNgayLich(s: string): Date {
+  // Thêm phần giờ để JavaScript parse theo LỊCH ĐỊA PHƯƠNG thay vì UTC.
+  return new Date(`${s}T00:00:00`);
+}
+
+/**
  * Subtract `days` from a Vietnam-local date string and return YYYY-MM-DD.
  */
 export function subDaysVN(dateStr: string, days: number): string {
