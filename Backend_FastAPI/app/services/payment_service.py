@@ -51,6 +51,7 @@ from app.utils.exceptions import (
     PaymentDuplicateSuspected,
 )
 from app.utils.admission_status import NON_PAYABLE_PROFILE_STATUSES
+from app.utils.datetime_helpers import normalize_to_utc
 from app.utils.refund_reference import build_refund_reference
 from app.config import settings
 
@@ -321,9 +322,18 @@ class PaymentService:
         # ngay trước khi ghi — vì đó là chỗ duy nhất vừa có khoá vừa còn kịp
         # từ chối. Không chặn cứng: nộp hai lần cùng số tiền là chuyện có thật
         # (prod có ca như vậy), nên người ghi xác nhận rồi gửi lại là qua.
-        effective_payment_date = payment_date or datetime.now(timezone.utc)
+        # Chuẩn hoá MỘT LẦN rồi dùng cho cả phép dò lẫn bản ghi. Nếu hai chỗ
+        # tự diễn giải lấy thì chúng nói hai thời điểm khác nhau: giá trị
+        # naive (FE gửi "2026-08-05", hoặc ai đó gửi "2026-08-05T23:30") là
+        # giờ Việt Nam theo quy ước của repo, coi nó là UTC sẽ đẩy sang ngày
+        # hôm sau — và phép so theo ngày lịch lệch đúng một ngày.
+        effective_payment_date = (
+            normalize_to_utc(payment_date)
+            if payment_date is not None
+            else datetime.now(timezone.utc)
+        )
         if not confirm_duplicate and fee is not None:
-            candidates = await self.payment_repo.find_duplicate_candidates(
+            candidates, truncated = await self.payment_repo.find_duplicate_candidates(
                 fee_id=fee.id,
                 amount=amount,
                 payment_date=effective_payment_date,
@@ -337,11 +347,18 @@ class PaymentService:
                     # Chỉ ĐẾM, không ghi chi tiết phiếu: nhật ký không phải chỗ
                     # chứa tên người nộp và mã tham chiếu.
                     candidate_count=len(candidates),
+                    candidates_truncated=truncated,
                     created_by=user_id,
                 )
+                # Danh sách bị cắt thì KHÔNG nói con số — "20 phiếu" trong khi
+                # thực tế có thể là 200 là một câu sai, và người đọc sẽ dựa vào
+                # nó để quyết định.
+                so_luong = (
+                    "nhiều" if truncated else str(len(candidates))
+                )
                 raise PaymentDuplicateSuspected(
-                    f"Đã có {len(candidates)} phiếu thu cùng số tiền cho khoản "
-                    f"phí này trong vòng 3 ngày. Kiểm tra lại trước khi ghi tiếp."
+                    f"Đã có {so_luong} phiếu thu cùng số tiền cho khoản phí "
+                    f"này trong vòng 3 ngày. Kiểm tra lại trước khi ghi tiếp."
                 )
 
         # Create payment (pending status)

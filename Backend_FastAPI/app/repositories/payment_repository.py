@@ -16,7 +16,6 @@ Architecture:
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List, Optional, Tuple
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, and_, or_, func, desc, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,21 +37,15 @@ from app.models.finance import (
     OverpaymentStatusEnum,
 )
 from app.repositories.base import BaseRepository
+from app.utils.datetime_helpers import vn_calendar_date
 
-VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
-
-
-def _vn_calendar_date(dt: datetime) -> date:
-    """Ngày lịch Việt Nam của một mốc thời gian.
-
-    Mốc **naive** được hiểu là UTC — đó đúng là cách nó nằm trong DB: cột là
-    ``timestamptz`` và phiên làm việc chạy ở UTC, nên một datetime không mang
-    múi giờ đi vào sẽ được ghi như UTC. Đọc nó theo giờ máy chủ (có thể là bất
-    kỳ đâu) sẽ cho ra một ngày khác với ngày mà câu SQL bên cạnh tính được.
-    """
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(VN_TZ).date()
+#: Trần số ứng viên trùng đọc lên. Không phải tối ưu — là hàng rào: người ghi
+#: có thể xác nhận rồi tạo bao nhiêu phiếu ``pending`` giống nhau tuỳ ý (phiếu
+#: chờ duyệt chưa làm giảm số dư nên không có gì chặn), và lần gửi KHÔNG xác
+#: nhận kế tiếp sẽ nạp toàn bộ chúng lên rồi (ở bước sau) đưa hết vào thân lỗi
+#: 409. Một thông báo lỗi không có kích thước tối đa là một thông báo lỗi có
+#: thể bị dùng làm vũ khí.
+MAX_DUPLICATE_CANDIDATES = 20
 
 
 class PaymentRepository(BaseRepository[Payment]):
@@ -322,7 +315,8 @@ class PaymentRepository(BaseRepository[Payment]):
         payment_date: datetime,
         window_days: int = 3,
         exclude_payment_id: Optional[int] = None,
-    ) -> List[Payment]:
+        limit: int = MAX_DUPLICATE_CANDIDATES,
+    ) -> Tuple[List[Payment], bool]:
         """Phiếu thu đã có mà một khoản thu mới có thể đang lặp lại.
 
         Luật (chốt ở plan PR B, mục B2):
@@ -354,11 +348,19 @@ class PaymentRepository(BaseRepository[Payment]):
 
         Thứ tự trả về ổn định (``payment_date`` mới nhất trước, rồi ``id``) để
         danh sách hiện ra không nhảy giữa hai lần gọi.
+
+        Trả ``(ứng_viên, bị_cắt)``. Đọc tối đa ``limit`` dòng và hỏi thêm MỘT
+        dòng nữa chỉ để biết có bị cắt hay không — người gọi cần phân biệt
+        "đúng 20 phiếu" với "ít nhất 20 phiếu", vì một câu thông báo nói con số
+        chính xác trong khi danh sách đã bị cắt là một câu sai.
         """
         vn_day = func.date(
             func.timezone("Asia/Ho_Chi_Minh", Payment.payment_date)
         )
-        target_day = _vn_calendar_date(payment_date)
+        # Cùng một quy ước đọc naive với `normalize_to_utc` mà service dùng để
+        # dựng giá trị sắp GHI — nếu hai bên đọc khác nhau thì phép so và bản
+        # ghi nói hai ngày khác nhau.
+        target_day = vn_calendar_date(payment_date)
         day_from = target_day - timedelta(days=window_days)
         day_to = target_day + timedelta(days=window_days)
 
@@ -397,10 +399,13 @@ class PaymentRepository(BaseRepository[Payment]):
             .options(joinedload(Payment.invoice))
             .where(and_(*conditions))
             .order_by(Payment.payment_date.desc(), Payment.id.desc())
+            .limit(limit + 1)  # +1 chỉ để biết còn nữa hay không
         )
 
         result = await self.db.execute(query)
-        return list(result.scalars().unique().all())
+        rows = list(result.scalars().unique().all())
+        truncated = len(rows) > limit
+        return rows[:limit], truncated
 
     async def get_filtered(
         self,

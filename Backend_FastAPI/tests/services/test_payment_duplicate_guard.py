@@ -41,10 +41,14 @@ from app.models.finance import (
     RefundRequest,
     RefundStatusEnum,
 )
-from app.repositories.payment_repository import PaymentRepository
+from app.repositories.payment_repository import (
+    MAX_DUPLICATE_CANDIDATES,
+    PaymentRepository,
+)
 from app.security import get_password_hash
 from app.services.fee_calculation_service import FeeCalculationService
 from app.services.payment_service import PaymentService
+from app.utils.datetime_helpers import vn_calendar_date
 from app.utils.exceptions import PaymentDuplicateSuspected
 
 pytestmark = pytest.mark.asyncio
@@ -340,6 +344,188 @@ class TestHoanTien:
         await self._them_refund(db, cu, _HALF, status)
         with pytest.raises(PaymentDuplicateSuspected):
             await _ghi(db, fee_two_invoices, invoice_idx=1)
+
+
+class TestMocThoiGianNaive:
+    """Giá trị KHÔNG mang múi giờ là giờ Việt Nam, không phải UTC.
+
+    Quy ước của repo (``utils/datetime_helpers``, khớp ``notification_tasks``):
+    naive = giờ app = ``Asia/Ho_Chi_Minh``. Đọc nó thành UTC thì
+    ``2026-08-05T23:30`` — người dùng gõ giờ Việt Nam — biến thành 06:30 sáng
+    **hôm sau**, và mọi phép so theo ngày lịch lệch đúng một ngày.
+
+    Nguy hiểm hơn cả việc lệch: nếu phép dò và bản ghi tự diễn giải lấy thì
+    chúng nói hai thời điểm khác nhau — cảnh báo tính trên một ngày, sổ lưu
+    một ngày khác.
+    """
+
+    async def test_naive_sat_nua_dem_van_thuoc_ngay_hom_do(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """Ca quyết định của quy ước naive.
+
+        Phiếu cũ ``2026-08-05T23:30`` naive:
+        * hiểu đúng (giờ VN) ⇒ ngày lịch **05/08**, cách 09/08 **bốn** ngày ⇒
+          KHÔNG cảnh báo;
+        * hiểu sai (UTC)     ⇒ ngày lịch 06/08, cách 09/08 ba ngày ⇒ cảnh báo.
+        """
+        await _ghi(db, fee_two_invoices, when=datetime(2026, 8, 5, 23, 30))
+        p = await _ghi(
+            db,
+            fee_two_invoices,
+            invoice_idx=1,
+            when=datetime(2026, 8, 9, 10, 0),
+        )
+        assert p.id is not None
+
+    async def test_naive_sat_nua_dem_van_dinh_trong_cua_so(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """Đối chứng: vẫn phải dính khi thật sự nằm trong cửa sổ 3 ngày."""
+        await _ghi(db, fee_two_invoices, when=datetime(2026, 8, 5, 23, 30))
+        with pytest.raises(PaymentDuplicateSuspected):
+            await _ghi(
+                db,
+                fee_two_invoices,
+                invoice_idx=1,
+                when=datetime(2026, 8, 8, 10, 0),
+            )
+
+    async def test_chi_co_ngay_khong_gio_van_thuoc_dung_ngay(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """Đường thật của giao diện: FE gửi "2026-08-05", Pydantic ra naive 00:00."""
+        p = await _ghi(db, fee_two_invoices, when=datetime(2026, 8, 5, 0, 0))
+        assert vn_calendar_date(p.payment_date) == date(2026, 8, 5)
+
+    async def test_aware_giu_dung_moc_khi_doi_sang_ngay_vn(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """``18:00Z`` là 01:00 **hôm sau** giờ VN — mốc mang múi giờ thì tôn trọng nó."""
+        p = await _ghi(
+            db,
+            fee_two_invoices,
+            when=datetime(2026, 8, 5, 18, 0, tzinfo=timezone.utc),
+        )
+        assert vn_calendar_date(p.payment_date) == date(2026, 8, 6)
+
+    async def test_gia_tri_luu_va_lan_do_ke_tiep_cung_mot_ngay_lich(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """Phép dò và bản ghi phải nói CÙNG một ngày.
+
+        Ghi bằng giá trị naive sát nửa đêm, rồi hỏi lại kho dữ liệu bằng chính
+        giá trị ấy: phải tìm thấy đúng phiếu vừa ghi. Nếu hai bên đọc naive
+        theo hai quy ước thì câu truy vấn trượt khỏi bản ghi của chính nó.
+        """
+        goc = datetime(2026, 8, 5, 23, 30)
+        p = await _ghi(db, fee_two_invoices, when=goc)
+
+        ung_vien, bi_cat = await PaymentRepository(db).find_duplicate_candidates(
+            fee_id=fee_two_invoices["fee_id"], amount=_HALF, payment_date=goc
+        )
+        assert [x.id for x in ung_vien] == [p.id]
+        assert bi_cat is False
+        assert vn_calendar_date(p.payment_date) == date(2026, 8, 5)
+
+
+class TestTranSoUngVien:
+    """Danh sách ứng viên phải có kích thước tối đa.
+
+    Xác nhận trùng là hợp lệ và phiếu ``pending`` chưa làm giảm số dư, nên một
+    người ghi có thể tạo bao nhiêu phiếu giống nhau tuỳ ý. Lần gửi KHÔNG xác
+    nhận kế tiếp sẽ nạp tất cả lên — và ở bước sau, đưa hết vào thân lỗi 409.
+    Một thông báo lỗi không có kích thước tối đa là một thông báo lỗi có thể bị
+    dùng làm vũ khí.
+    """
+
+    async def _tao_nhieu_phieu(self, db: AsyncSession, ctx: dict, n: int):
+        for _ in range(n):
+            await _ghi(db, ctx, confirm=True)
+
+    async def test_doc_toi_da_20_va_bao_bi_cat(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        await self._tao_nhieu_phieu(db, fee_two_invoices, 21)
+        ung_vien, bi_cat = await PaymentRepository(db).find_duplicate_candidates(
+            fee_id=fee_two_invoices["fee_id"], amount=_HALF, payment_date=_BASE
+        )
+        assert len(ung_vien) == MAX_DUPLICATE_CANDIDATES
+        assert bi_cat is True
+
+    async def test_dung_20_thi_khong_bao_bi_cat(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """Biên: đúng trần thì chưa cắt. Hỏi thừa một dòng chính là để biết điều này."""
+        await self._tao_nhieu_phieu(db, fee_two_invoices, MAX_DUPLICATE_CANDIDATES)
+        ung_vien, bi_cat = await PaymentRepository(db).find_duplicate_candidates(
+            fee_id=fee_two_invoices["fee_id"], amount=_HALF, payment_date=_BASE
+        )
+        assert len(ung_vien) == MAX_DUPLICATE_CANDIDATES
+        assert bi_cat is False
+
+    async def test_bi_cat_thi_thong_bao_KHONG_noi_con_so(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """Nói "20 phiếu" trong khi thực tế có thể 200 là một câu SAI.
+
+        Người đọc dựa vào con số đó để quyết định có ghi tiếp hay không.
+        """
+        await self._tao_nhieu_phieu(db, fee_two_invoices, 21)
+        with pytest.raises(PaymentDuplicateSuspected) as exc:
+            await _ghi(db, fee_two_invoices, invoice_idx=1)
+        loi = str(exc.value)
+        assert "nhiều" in loi, loi
+        assert "20" not in loi, loi
+
+    async def test_chua_bi_cat_thi_noi_dung_con_so(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        await self._tao_nhieu_phieu(db, fee_two_invoices, 2)
+        with pytest.raises(PaymentDuplicateSuspected) as exc:
+            await _ghi(db, fee_two_invoices, invoice_idx=1)
+        assert "2 phiếu" in str(exc.value)
+
+    async def test_tran_nam_trong_CAU_LENH_khong_phai_cat_sau_khi_da_nap(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """Trần phải ở tầng SQL, không phải ``rows[:20]`` sau khi đã nạp hết.
+
+        Cắt ở Python cho ra **cùng một kết quả** nên mọi ca ở trên vẫn xanh —
+        đã kiểm chứng: gỡ ``LIMIT`` khỏi câu lệnh, cả bốn ca kia vẫn xanh. Mà
+        thứ cần chặn lại chính là việc nạp: hydrate hàng nghìn ORM object vào
+        bộ nhớ chỉ để vứt đi tất cả trừ hai mươi cái. Ca này soi đúng câu lệnh
+        được gửi xuống.
+        """
+        cac_cau: list[str] = []
+        goc_execute = db.execute
+
+        async def execute_spy(stmt, *a, **k):
+            try:
+                cac_cau.append(
+                    str(stmt.compile(compile_kwargs={"literal_binds": True}))
+                )
+            except Exception:  # noqa: BLE001 — câu không compile được thì bỏ qua
+                cac_cau.append(str(stmt))
+            return await goc_execute(stmt, *a, **k)
+
+        db.execute = execute_spy
+        try:
+            await PaymentRepository(db).find_duplicate_candidates(
+                fee_id=fee_two_invoices["fee_id"],
+                amount=_HALF,
+                payment_date=_BASE,
+            )
+        finally:
+            db.execute = goc_execute
+
+        assert cac_cau, "không bắt được câu lệnh nào"
+        cau = cac_cau[-1]
+        assert "LIMIT" in cau.upper(), f"câu truy vấn không có LIMIT:\n{cau}"
+        # +1 để phân biệt "đúng trần" với "còn nữa" — xem docstring của repo.
+        assert f"LIMIT {MAX_DUPLICATE_CANDIDATES + 1}" in cau.upper().replace(
+            "LIMIT  ", "LIMIT "
+        ), f"LIMIT phải là {MAX_DUPLICATE_CANDIDATES + 1}:\n{cau}"
 
 
 class TestThuTuKhoa:
