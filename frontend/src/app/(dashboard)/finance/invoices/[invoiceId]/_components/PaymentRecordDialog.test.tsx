@@ -24,9 +24,10 @@
 // múi giờ dương. Ở UTC mặc định của Vitest, bản cũ (`toISOString`) và bản mới
 // cho cùng kết quả, nên bài kiểm tra sẽ không thể đỏ. Ca `guard` bên dưới xác
 // nhận điều này thay vì tin suông.
+const TZ_GOC = process.env.TZ
 process.env.TZ = "Asia/Ho_Chi_Minh"
 
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { afterAll, describe, it, expect, vi, beforeEach } from "vitest"
 import userEvent from "@testing-library/user-event"
 import { render, screen, waitFor, within } from "@/test/utils/test-utils"
 
@@ -104,6 +105,13 @@ function installPointerStubs() {
   Element.prototype.setPointerCapture = function setPointerCapture() {}
   Element.prototype.releasePointerCapture = function releasePointerCapture() {}
 }
+
+// Worker của Vitest được dùng lại giữa các file — trả TZ về nguyên trạng, kẻo
+// file chạy sau thừa hưởng múi giờ mà nó không hề khai báo.
+afterAll(() => {
+  if (TZ_GOC === undefined) delete process.env.TZ
+  else process.env.TZ = TZ_GOC
+})
 
 beforeEach(() => {
   installPointerStubs()
@@ -431,13 +439,11 @@ describe("PaymentRecordDialog — MỘT con số 'còn lại' duy nhất", () =>
     })
   })
 
-  it("gửi ĐÚNG ô ngày người dùng bấm, không lùi một ngày", async () => {
-    // 🔴 Đồng hồ CỐ ĐỊNH ở 05/08 03:00 giờ VN (= 04/08 20:00Z). Không cố định
-    // thì ca này chỉ đỏ được khi tình cờ chạy trước 07:00 VN — sau đó ngày UTC
-    // và ngày VN trùng nhau nên bản cũ cũng xanh. Một bài kiểm tra chỉ đỏ vào
-    // ban đêm thì coi như không có.
+  it("BẤM một ngày trong lịch thì gửi đúng ngày đó, không lùi một ngày", async () => {
+    // Đồng hồ cố định để "tháng đang mở" của lịch là 08/2026 và ca này không
+    // phụ thuộc lúc chạy thật.
     vi.useFakeTimers({ shouldAdvanceTime: true })
-    vi.setSystemTime(new Date("2026-08-04T20:00:00Z"))
+    vi.setSystemTime(new Date("2026-08-12T09:00:00+07:00"))
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
     try {
       render(
@@ -455,12 +461,28 @@ describe("PaymentRecordDialog — MỘT con số 'còn lại' duy nhất", () =>
       )
       await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
       await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "1000000")
-      await user.click(screen.getByRole("button", { name: /ghi nhận thanh toán/i }))
 
+      // Mở lịch và bấm ngày 05 — thao tác thật của kế toán ghi một khoản thu
+      // mấy hôm trước. Đây là đường sinh ra lỗi: `react-day-picker` trả
+      // `Date` 00:00 GIỜ ĐỊA PHƯƠNG, và lỗi lùi ngày ở đường này KHÔNG phụ
+      // thuộc giờ trong ngày (khác với ca để nguyên mặc định).
+      // Nút mở lịch là combobox thứ hai (thứ nhất là phương thức thanh toán).
+      // Khẳng định nhãn của nó trước khi bấm: form phải đang hiển thị đúng
+      // ngày mặc định, nếu không thì ca này đang đo một màn hình khác.
+      const nutLich = screen.getAllByRole("combobox")[1]
+      expect(nutLich).toHaveTextContent("12/08/2026")
+      await user.click(nutLich)
+      const lich = await screen.findByRole("grid")
+      // Lịch còn hiển thị ngày của tháng liền kề nên tìm theo chữ số "5" sẽ
+      // dính nhiều ô. `data-day` là khoá ngày do react-day-picker gắn sẵn —
+      // xác định và không phụ thuộc cách nó dựng nhãn tiếng Việt.
+      const oNgay5 = lich.querySelector<HTMLElement>('[data-day="2026-08-05"] button')
+      expect(oNgay5).not.toBeNull()
+      await user.click(oNgay5!)
+
+      await user.click(screen.getByRole("button", { name: /ghi nhận thanh toán/i }))
       await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(1))
 
-      // Ở thời điểm này người dùng đang sống ngày 05/08 (03:00 sáng), còn UTC
-      // vẫn là 04/08. `toISOString()` trả về ngày của UTC ⇒ ghi lùi một ngày.
       expect(createPayment.mock.calls[0][0].data.payment_date).toBe("2026-08-05")
     } finally {
       vi.useRealTimers()

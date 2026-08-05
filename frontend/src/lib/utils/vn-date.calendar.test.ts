@@ -16,10 +16,18 @@
 
 // Đặt TRƯỚC mọi lần tạo Date. Node đọc `process.env.TZ` động, nên gán ở đây là
 // đủ; ca `guard` bên dưới xác nhận điều đó thay vì tin suông.
+const TZ_GOC = process.env.TZ;
 process.env.TZ = "Asia/Ho_Chi_Minh";
 
-import { describe, it, expect } from "vitest";
+import { afterAll, describe, it, expect } from "vitest";
 import { calendarDateToISO } from "./vn-date";
+
+// Trả môi trường về nguyên trạng: worker của Vitest được dùng lại giữa các file,
+// nên một biến TZ bỏ quên ở đây sẽ âm thầm đổi kết quả của file chạy sau.
+afterAll(() => {
+  if (TZ_GOC === undefined) delete process.env.TZ;
+  else process.env.TZ = TZ_GOC;
+});
 
 describe("calendarDateToISO — môi trường", () => {
   it("guard: test phải chạy ở múi giờ Việt Nam, nếu không nó vô nghĩa", () => {
