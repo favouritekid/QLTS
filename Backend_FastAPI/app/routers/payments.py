@@ -55,6 +55,11 @@ from app.utils.exceptions import (
     ConflictError,
 )
 
+# 422 viết thành số, không nhập từ `starlette.status`: Starlette đang đổi tên
+# hằng này (`..._ENTITY` → `..._CONTENT`) và nhập nó thêm một cảnh báo
+# deprecation vào mọi lượt chạy. Con số thì không đổi tên.
+HTTP_422_UNPROCESSABLE = 422
+
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/payments", tags=["Finance - Payments"])
@@ -76,12 +81,51 @@ async def list_payments(
     page_size: int = Query(50, ge=1, le=100, description="Items per page"),
     status: Optional[str] = Query(None, description="Filter by status (comma-separated)"),
     invoice_id: Optional[int] = Query(None, description="Filter by invoice ID"),
+    fee_id: Optional[int] = Query(
+        None,
+        ge=1,
+        # Trần = INT4 max. Không có trần thì một số nguyên lớn hơn 2^31-1 lọt
+        # qua Pydantic rồi vỡ ở tầng PostgreSQL/asyncpg ("integer out of
+        # range") — người dùng nhận 500 cho một đầu vào đáng lẽ là 422.
+        le=2_147_483_647,
+        description="Filter by fee ID — trả phiếu thu của MỌI hoá đơn thuộc "
+        "khoản phí đó. Dùng cho ô 'đang chờ duyệt' ở form ghi tiền: khoản phí "
+        "nhiều đợt thì phiếu vừa nhập có thể nằm ở hoá đơn khác, lọc theo "
+        "invoice_id sẽ không thấy. Kết hợp được với pending_manual_only.",
+    ),
     method_id: Optional[int] = Query(None, description="Filter by payment method ID"),
+    duplicate_amount: Optional[Decimal] = Query(
+        None,
+        gt=0,
+        # Cùng trần với `PaymentCreate.amount`. Đường xem trước hứa trả "đúng
+        # tập ứng viên mà POST sẽ dùng", nên miền giá trị của nó không được
+        # rộng hơn miền của POST: một số vượt trần lọt tới `Payment.amount ==`
+        # rồi vỡ ở PostgreSQL ("numeric field overflow") — 500 cho một đầu vào
+        # đáng lẽ là 422. Đúng lớp lỗi mà `fee_id` đã đóng bằng `le` ngay phía
+        # trên, chỉ khác tham số.
+        le=finance_schemas.MAX_AMOUNT,
+        # Và cùng SỐ LẺ với `PaymentCreate.amount` (validator từ chối gì khác
+        # `quantize(0.01)`). Nửa còn lại của cùng lời hứa: `100.001` mà lọt qua
+        # đây thì so với cột `Numeric(15,2)` không khớp phiếu nào → xem trước
+        # nói "không trùng", rồi POST cùng số đó lại 422. Người dùng nhận hai
+        # câu trả lời khác nhau cho một con số.
+        decimal_places=2,
+        description="Xem trước phiếu NGHI TRÙNG: đi kèm duplicate_date và "
+        "fee_id. Trả về đúng tập ứng viên mà POST /api/payments sẽ dùng để "
+        "cảnh báo, theo cùng một luật ở cùng một chỗ — giao diện chỉ hiển thị, "
+        "không tự dựng lại luật (nó sẽ lệch: FE không thấy tổng tiền đã hoàn, "
+        "và 'ngày lịch VN' ở FE là múi giờ máy người dùng).",
+    ),
+    duplicate_date: Optional[datetime] = Query(
+        None,
+        description="Mốc thời gian của khoản thu sắp ghi (xem duplicate_amount).",
+    ),
     pending_manual_only: bool = Query(
         False,
         description="Maker-checker queue: only manual payments (intent_id IS "
         "NULL) awaiting verification. Online/gateway payments auto-verify and "
-        "must NOT appear here. Ignores status/method_id when set.",
+        "must NOT appear here. Ignores status/method_id when set; fee_id is "
+        "still honoured (AND) so a single fee's queue can be read.",
     ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
@@ -106,16 +150,67 @@ async def list_payments(
     skip = (page - 1) * page_size
     limit = min(page_size, 100)
 
+    if duplicate_amount is not None or duplicate_date is not None:
+        # Xem trước ứng viên trùng. Đặt ở ĐÂY chứ không thành một route riêng
+        # là có chủ ý: Casbin trong repo này cấp quyền theo TỪNG path tường
+        # minh, nên một path mới kéo theo policy + migration + test phân quyền,
+        # và một sai sót ở đó là 403 im lặng trên production. Path này đã có
+        # grant cho đúng nhóm người ghi phiếu.
+        if duplicate_amount is None or duplicate_date is None or fee_id is None:
+            # `HTTP_422_UNPROCESSABLE_ENTITY` nhập thẳng, KHÔNG qua
+            # `status.HTTP_...`: hàm này có một tham số query tên `status`, và
+            # nó che mất module `status` của FastAPI trong toàn bộ thân hàm.
+            # Viết `status.HTTP_422_...` ở đây ném `AttributeError` trên
+            # `None` — tức một lỗi 500 thay cho lời từ chối 422.
+            raise HTTPException(
+                status_code=HTTP_422_UNPROCESSABLE,
+                detail=(
+                    "Xem trước phiếu nghi trùng cần đủ fee_id, duplicate_amount "
+                    "và duplicate_date."
+                ),
+            )
+        # Chặn năm ngoài tầm nghiệp vụ. Cửa sổ dò trùng cộng/trừ vài ngày quanh
+        # mốc này, nên `9999-12-31` làm phép cộng tràn khỏi `date.max` và
+        # `0001-01-01` tràn khi quy về múi giờ — cả hai thành `OverflowError`,
+        # tức 500 cho một chuỗi ngày mà người gọi tự gõ.
+        if not (1900 <= duplicate_date.year <= 2100):
+            raise HTTPException(
+                status_code=HTTP_422_UNPROCESSABLE,
+                detail="duplicate_date nằm ngoài khoảng năm hợp lệ (1900–2100).",
+            )
+        candidates, truncated = await payment_repo.find_duplicate_candidates(
+            fee_id=fee_id,
+            amount=duplicate_amount,
+            payment_date=duplicate_date,
+            unit_id=unit_id,
+        )
+        items = [
+            _build_payment_list_item(p, current_user.id, current_user.role)
+            for p in candidates
+        ]
+        return finance_schemas.PaymentsPage(
+            items=items,
+            # `total` lớn hơn số dòng trả về = "còn nữa" — cùng quy ước với các
+            # danh sách khác, nên giao diện không phải học thêm cách đọc mới.
+            total=len(items) + (1 if truncated else 0),
+            page=1,
+            page_size=len(items),
+        )
+
     if pending_manual_only:
         # Maker-checker queue: status=pending AND intent_id IS NULL, oldest-first.
         # This is the ONLY path that guarantees online (gateway, auto-verified)
         # payments never reach the manual verification queue — do NOT emulate it
         # with a generic status=pending filter, which would also surface a
         # pending online payment.
+        # `fee_id` được AND vào (không phải bỏ qua): form ghi tiền cần đúng
+        # hàng đợi này nhưng chỉ của một khoản phí, và nếu nó phải quay về
+        # `status=pending` thì lại đếm nhầm cả phiếu online đang treo.
         payments, total = await payment_repo.get_pending_verification(
             unit_id=unit_id,
             skip=skip,
             limit=limit,
+            fee_id=fee_id,
         )
     else:
         # Parse comma-separated values
@@ -130,6 +225,7 @@ async def list_payments(
             statuses=statuses,
             invoice_id=invoice_id,
             method_id=method_id,
+            fee_id=fee_id,
         )
 
     items = [
@@ -189,6 +285,7 @@ async def record_payment(
             payer_account=data.payer_account,
             notes=data.notes,
             unit_id=unit_id,
+            confirm_duplicate=data.confirm_duplicate,
         )
 
         await db.commit()
@@ -766,17 +863,32 @@ async def preview_payment_import(
 async def commit_payment_import(
     request: Request,
     batch_id: int,
+    confirm_duplicates: bool = Query(
+        False,
+        description=(
+            "Bỏ qua hàng rào nghi trùng cho TOÀN LÔ. Chỉ bật khi kế toán đã soát "
+            "và xác nhận đây là những khoản thu riêng biệt."
+        ),
+    ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
     _finance_staff: models.User = Depends(require_finance_staff),
 ):
     """Pha 2: re-validate TOCTOU dưới khóa + auto-verify từng dòng (kế toán=maker,
     system_user=checker) + gộp lead-sync. Lô đã committed → 409 (không ghi lại).
+
+    Dòng nghi trùng với phiếu đã ghi bị BỎ QUA (không ghi) và tính vào
+    ``failed_count`` kèm lý do; phần còn lại của lô vẫn vào. Muốn ghi cả những
+    dòng đó thì gọi lại với ``confirm_duplicates=true``.
     """
     unit_id = finance_scope_unit_id(current_user)
     try:
         result, callback = await payment_import_service.commit_batch(
-            db, batch_id=batch_id, importer_id=current_user.id, unit_id=unit_id
+            db,
+            batch_id=batch_id,
+            importer_id=current_user.id,
+            unit_id=unit_id,
+            confirm_duplicates=confirm_duplicates,
         )
         await db.commit()
         if callback:

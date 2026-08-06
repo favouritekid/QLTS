@@ -38,8 +38,10 @@ from app.models.finance import (
     OverpaymentRecord, OverpaymentStatusEnum, ResolutionTypeEnum,
     PAYABLE_INVOICE_STATUSES,
 )
+from app.schemas import finance as finance_schemas
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.repositories.payment_repository import (
+    WINDOW_DO_TRUNG_NGAY,
     PaymentRepository,
     PaymentTransactionRepository,
 )
@@ -48,8 +50,10 @@ from app.utils.exceptions import (
     BadRequest,
     BusinessRuleViolation,
     ConflictError,
+    PaymentDuplicateSuspected,
 )
 from app.utils.admission_status import NON_PAYABLE_PROFILE_STATUSES
+from app.utils.datetime_helpers import normalize_to_utc
 from app.utils.refund_reference import build_refund_reference
 from app.config import settings
 
@@ -221,6 +225,7 @@ class PaymentService:
         payer_name: Optional[str] = None,
         payer_account: Optional[str] = None,
         notes: Optional[str] = None,
+        confirm_duplicate: bool = False,
     ) -> Tuple[Payment, Optional[Callable]]:
         """
         Record a manual payment (cash, bank transfer, etc.).
@@ -269,7 +274,31 @@ class PaymentService:
         # profile (withdraw does not cancel fees), so the payable-status check
         # above is not enough — resolve the fee/profile ONCE here, refuse up
         # front, and reuse them for the notification payload below.
-        fee = await self.db.get(Fee, invoice.fee_id) if invoice.fee_id else None
+        #
+        # 🔒 KHOÁ fee, không chỉ đọc. Luật dò trùng bên dưới quét MỌI hoá đơn
+        # của khoản phí này, nên khoá riêng hoá đơn hiện tại là chưa đủ về mặt
+        # hợp đồng: hai request ghi vào hai đợt khác nhau của cùng một khoản
+        # phí cần một điểm gặp chung, và khoản phí là điểm đó.
+        #
+        # ⚠️ Nói cho đúng, kẻo người sau hiểu sai vai trò của dòng này: hàng
+        # `fee` THỰC RA đã bị khoá từ dòng trên rồi. `invoice_repo.get_for_update`
+        # dựng `select(Invoice).join(Fee).join(...).with_for_update()`, mà
+        # `FOR UPDATE` không kèm `OF` thì PostgreSQL khoá hàng của MỌI bảng
+        # trong FROM — gồm cả `fee`. Nghĩa là tính tuần tự ở đây đang do một
+        # chi tiết NGẦM của câu lệnh bên cạnh mang lại. Khoá tường minh này để
+        # hợp đồng không treo trên chi tiết ngầm ấy: thêm một `OF invoice` vào
+        # câu kia — một tối ưu hoàn toàn hợp lý — sẽ lặng lẽ tháo hàng rào nếu
+        # không có dòng này.
+        #
+        # Thứ tự ở ĐƯỜNG TẠO MỚI là invoice → fee (phiếu chưa tồn tại nên
+        # không có gì để khoá trước đó). Đường thao tác trên phiếu đã có
+        # (verify/reject/đảo) giữ thứ tự payment → invoice → fee — xem
+        # `verify_payment`. Đừng trộn hai chuỗi này với nhau.
+        fee = (
+            await self.fee_repo.get_for_update(invoice.fee_id, unit_id)
+            if invoice.fee_id
+            else None
+        )
         profile = (
             await self._get_profile_for_fee(fee) if fee is not None else None
         )
@@ -291,6 +320,70 @@ class PaymentService:
         if not method.is_active:
             raise BadRequest(f"Payment method '{method.name}' is not active")
 
+        # Hàng rào MỀM chống ghi trùng. Đặt ở đây — sau khi đã khoá khoản phí,
+        # ngay trước khi ghi — vì đó là chỗ duy nhất vừa có khoá vừa còn kịp
+        # từ chối. Không chặn cứng: nộp hai lần cùng số tiền là chuyện có thật
+        # (prod có ca như vậy), nên người ghi xác nhận rồi gửi lại là qua.
+        # Chuẩn hoá MỘT LẦN rồi dùng cho cả phép dò lẫn bản ghi. Nếu hai chỗ
+        # tự diễn giải lấy thì chúng nói hai thời điểm khác nhau: giá trị
+        # naive (FE gửi "2026-08-05", hoặc ai đó gửi "2026-08-05T23:30") là
+        # giờ Việt Nam theo quy ước của repo, coi nó là UTC sẽ đẩy sang ngày
+        # hôm sau — và phép so theo ngày lịch lệch đúng một ngày.
+        effective_payment_date = (
+            normalize_to_utc(payment_date)
+            if payment_date is not None
+            else datetime.now(timezone.utc)
+        )
+        if not confirm_duplicate and fee is not None:
+            candidates, truncated = await self.payment_repo.find_duplicate_candidates(
+                fee_id=fee.id,
+                amount=amount,
+                payment_date=effective_payment_date,
+            )
+            if candidates:
+                log.info(
+                    "payment_duplicate_suspected",
+                    invoice_id=invoice_id,
+                    fee_id=fee.id,
+                    amount=str(amount),
+                    # Chỉ ĐẾM, không ghi chi tiết phiếu: nhật ký không phải chỗ
+                    # chứa tên người nộp và mã tham chiếu.
+                    candidate_count=len(candidates),
+                    candidates_truncated=truncated,
+                    created_by=user_id,
+                )
+                # Danh sách bị cắt thì KHÔNG nói con số — "20 phiếu" trong khi
+                # thực tế có thể là 200 là một câu sai, và người đọc sẽ dựa vào
+                # nó để quyết định.
+                so_luong = (
+                    "nhiều" if truncated else str(len(candidates))
+                )
+                # Serialize NGAY TẠI ĐÂY, trước khi ném. Exception không được
+                # mang ORM object hay Decimal/datetime: handler đưa thẳng vào
+                # JSONResponse, nên một giá trị chưa serialize sẽ biến chính
+                # cảnh báo 409 này thành lỗi 500 — hàng rào tự bắn vào chân nó.
+                # `DuplicatePaymentInfo` cũng là danh sách trắng các trường
+                # được phép ra ngoài; đừng thay nó bằng một dict dựng tay.
+                duplicates = [
+                    finance_schemas.DuplicatePaymentInfo(
+                        payment_id=p.id,
+                        amount=p.amount,
+                        payment_date=p.payment_date,
+                        status=p.status,
+                        invoice_number=(
+                            p.invoice.invoice_number if p.invoice else None
+                        ),
+                    ).model_dump(mode="json")
+                    for p in candidates
+                ]
+                raise PaymentDuplicateSuspected(
+                    f"Đã có {so_luong} phiếu thu cùng số tiền cho khoản phí "
+                    f"này, lệch không quá {WINDOW_DO_TRUNG_NGAY} ngày. "
+                    f"Kiểm tra lại trước khi ghi tiếp.",
+                    duplicates=duplicates,
+                    duplicates_truncated=truncated,
+                )
+
         # Create payment (pending status)
         payment = Payment(
             invoice_id=invoice_id,
@@ -300,7 +393,7 @@ class PaymentService:
             payer_name=payer_name,
             payer_account=payer_account,
             status=PaymentStatusEnum.pending.value,
-            payment_date=payment_date or datetime.now(timezone.utc),
+            payment_date=effective_payment_date,
             created_by_id=user_id,
             notes=notes,
         )

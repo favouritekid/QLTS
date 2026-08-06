@@ -13,11 +13,13 @@ Architecture:
 - Supports both online (PaymentIntent) and manual (Payment) flows
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import select, and_, or_, func, desc, text
+from sqlalchemy import Date, Integer, Numeric
+from sqlalchemy import column as sa_column, values as sa_values
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -37,6 +39,62 @@ from app.models.finance import (
     OverpaymentStatusEnum,
 )
 from app.repositories.base import BaseRepository
+from app.utils.datetime_helpers import vn_calendar_date
+
+#: Trần số ứng viên trùng đọc lên. Không phải tối ưu — là hàng rào: người ghi
+#: có thể xác nhận rồi tạo bao nhiêu phiếu ``pending`` giống nhau tuỳ ý (phiếu
+#: chờ duyệt chưa làm giảm số dư nên không có gì chặn), và lần gửi KHÔNG xác
+#: nhận kế tiếp sẽ nạp toàn bộ chúng lên rồi (ở bước sau) đưa hết vào thân lỗi
+#: 409. Một thông báo lỗi không có kích thước tối đa là một thông báo lỗi có
+#: thể bị dùng làm vũ khí.
+MAX_DUPLICATE_CANDIDATES = 20
+
+#: Cửa sổ dò trùng, tính bằng NGÀY LỊCH Việt Nam. Là hằng dùng chung chứ không
+#: phải mặc định của riêng hàm: câu thông báo gửi cho kế toán cũng phải nói đúng
+#: con số này. Viết "3 ngày" thẳng vào câu chữ thì đổi cửa sổ ở đây sẽ để lại
+#: một lời nhắn nói sai về chính hàng rào vừa chạy.
+WINDOW_DO_TRUNG_NGAY = 3
+
+
+def _dieu_kien_nghi_trung(fee_id_expr, amount_expr, day_from_expr, day_to_expr):
+    """MỘT định nghĩa duy nhất của "hai phiếu có thể là cùng một lần thu".
+
+    Nhận **biểu thức** chứ không phải giá trị, nên dùng được cho cả đường một
+    phiếu (giá trị Python) lẫn đường bó nhiều dòng (cột của bảng ``VALUES``).
+    Luật nghiệp vụ ở ngay đây và chỉ ở đây — đường nhập lô mà chép lại điều
+    kiện thì hai hàng rào sẽ trôi khỏi nhau đúng vào lúc không ai để ý, và
+    hàng rào lỏng hơn mới là hàng rào quyết định.
+
+    Ý nghĩa từng vế xem docstring của :meth:`PaymentRepository.find_duplicate_candidates`.
+    """
+    vn_day = func.date(func.timezone("Asia/Ho_Chi_Minh", Payment.payment_date))
+
+    # Tổng tiền ĐÃ CHI của từng phiếu. Tương quan với hàng Payment bên ngoài
+    # nên tính đúng theo từng ứng viên, không cần gom nhóm riêng.
+    refunded_total = (
+        select(func.coalesce(func.sum(RefundRequest.amount), 0))
+        .where(
+            RefundRequest.payment_id == Payment.id,
+            RefundRequest.status == RefundStatusEnum.refunded.value,
+        )
+        .correlate(Payment)
+        .scalar_subquery()
+    )
+
+    return [
+        Invoice.fee_id == fee_id_expr,
+        Payment.amount == amount_expr,
+        Payment.status.in_(
+            [
+                PaymentStatusEnum.pending.value,
+                PaymentStatusEnum.verified.value,
+            ]
+        ),
+        Payment.payment_date.is_not(None),
+        vn_day >= day_from_expr,
+        vn_day <= day_to_expr,
+        refunded_total < Payment.amount,
+    ]
 
 
 class PaymentRepository(BaseRepository[Payment]):
@@ -224,7 +282,8 @@ class PaymentRepository(BaseRepository[Payment]):
         self,
         unit_id: Optional[int] = None,
         skip: int = 0,
-        limit: int = 50
+        limit: int = 50,
+        fee_id: Optional[int] = None,
     ) -> Tuple[List[Payment], int]:
         """
         Get payments pending verification (maker-checker workflow).
@@ -233,6 +292,12 @@ class PaymentRepository(BaseRepository[Payment]):
             unit_id: Filter by lead.unit_id (for IDOR protection)
             skip: Number of records to skip
             limit: Maximum records to return
+            fee_id: Thu hẹp về MỘT khoản phí (mọi đợt của nó). Ô "đang chờ
+                duyệt" ở form ghi tiền phải hỏi đúng câu hỏi mà hàng đợi
+                maker-checker trả lời — phiếu TAY chưa duyệt — chứ không phải
+                ``status=pending`` chung, vì bộ lọc chung còn trả cả phiếu
+                ONLINE đang treo (``intent_id`` khác NULL), thứ kế toán không
+                nhập tay và không được tính vào cảnh báo trùng.
 
         Returns:
             Tuple of (List of pending payments, total_count)
@@ -245,6 +310,12 @@ class PaymentRepository(BaseRepository[Payment]):
         # IDOR Filter
         if unit_id is not None:
             base_conditions.append(models.Lead.unit_id == unit_id)
+
+        # `is not None` chứ KHÔNG phải `if fee_id:` — cùng lý do như
+        # get_filtered_with_count: id 0 falsy sẽ bị hiểu thành "không lọc" rồi
+        # trả toàn bộ hàng đợi trong phạm vi quyền.
+        if fee_id is not None:
+            base_conditions.append(Invoice.fee_id == fee_id)
 
         # Count query
         count_query = (
@@ -285,6 +356,209 @@ class PaymentRepository(BaseRepository[Payment]):
         payments = list(result.scalars().all())
 
         return payments, total
+
+    async def find_duplicate_candidates(
+        self,
+        fee_id: int,
+        amount: Decimal,
+        payment_date: datetime,
+        window_days: int = WINDOW_DO_TRUNG_NGAY,
+        exclude_payment_id: Optional[int] = None,
+        limit: int = MAX_DUPLICATE_CANDIDATES,
+        unit_id: Optional[int] = None,
+    ) -> Tuple[List[Payment], bool]:
+        """Phiếu thu đã có mà một khoản thu mới có thể đang lặp lại.
+
+        Luật (chốt ở plan PR B, mục B2):
+
+        * **phạm vi = KHOẢN PHÍ**, mọi hoá đơn của nó — ca ghi nhầm sang đợt
+          khác là ca thật, lọc theo ``invoice_id`` sẽ bỏ sót;
+        * ``amount`` **bằng nhau** — không có "xấp xỉ", vì thu góp hợp lệ
+          thường khác số tiền;
+        * lệch **NGÀY LỊCH Việt Nam** không quá ``window_days`` — không phải
+          72 giờ. Hai phiếu cùng một ngày làm việc phải dính nhau kể cả khi
+          một cái ghi 07:00 và cái kia 16:00, mà chênh giờ thì không nói lên
+          điều đó;
+        * chỉ ``pending`` và ``verified`` — phiếu đã từ chối/đã đảo không còn
+          là tiền, cảnh báo về nó là cảnh báo oan;
+        * **không** có luật theo ``reference_code``: dialog prefill mã hồ sơ
+          làm tham chiếu, nên mọi lần thu góp của cùng hồ sơ đều trùng mã —
+          áp luật đó là bắn cảnh báo vào mọi lần thu thứ hai trở đi, cách
+          nhanh nhất khiến kế toán ngừng đọc cảnh báo.
+
+        Phiếu đã **hoàn đủ** bị loại: ``RefundRequest`` cho hoàn một phần, nên
+        "có một yêu cầu hoàn đã chi" chưa đủ — hoàn 1 trên 5 triệu thì 4 triệu
+        còn lại vẫn là tiền thật và vẫn phải cảnh báo. Chỉ khi tổng đã chi
+        ``>=`` số tiền phiếu thì phiếu đó mới hết đóng góp. Dùng ``>=`` (không
+        phải ``==``) để fail-safe trước dữ liệu lịch sử bất thường.
+
+        ⚠️ Gọi hàm này **sau** khi đã khoá ``Fee``: nó đọc mọi hoá đơn của
+        khoản phí, nên nếu không có điểm gặp chung thì hai request ghi vào hai
+        hoá đơn khác nhau cùng thấy "chưa trùng" rồi cùng ghi.
+
+        Thứ tự trả về ổn định (``payment_date`` mới nhất trước, rồi ``id``) để
+        danh sách hiện ra không nhảy giữa hai lần gọi.
+
+        Trả ``(ứng_viên, bị_cắt)``. Đọc tối đa ``limit`` dòng và hỏi thêm MỘT
+        dòng nữa chỉ để biết có bị cắt hay không — người gọi cần phân biệt
+        "đúng 20 phiếu" với "ít nhất 20 phiếu", vì một câu thông báo nói con số
+        chính xác trong khi danh sách đã bị cắt là một câu sai.
+        """
+        # Cùng một quy ước đọc naive với `normalize_to_utc` mà service dùng để
+        # dựng giá trị sắp GHI — nếu hai bên đọc khác nhau thì phép so và bản
+        # ghi nói hai ngày khác nhau.
+        target_day = vn_calendar_date(payment_date)
+        day_from = target_day - timedelta(days=window_days)
+        day_to = target_day + timedelta(days=window_days)
+
+        conditions = _dieu_kien_nghi_trung(fee_id, amount, day_from, day_to)
+        if exclude_payment_id is not None:
+            conditions.append(Payment.id != exclude_payment_id)
+
+        query = (
+            select(Payment)
+            .join(Invoice, Payment.invoice_id == Invoice.id)
+            .options(
+                # Nạp sẵn cả chuỗi tới `lead`: đường XEM TRƯỚC dựng
+                # `PaymentListItem` (cần `profile_name`, `method_name`,
+                # `created_by_name`), và mọi truy cập quan hệ phải xảy ra
+                # trong ngữ cảnh async ở đây — chạm tới nó lúc serialize là
+                # `MissingGreenlet`. Tối đa 21 dòng nên chi phí không đáng kể.
+                joinedload(Payment.invoice)
+                .joinedload(Invoice.fee)
+                .joinedload(Fee.admission_profile)
+                .joinedload(models.AdmissionProfile.lead),
+                joinedload(Payment.method),
+                joinedload(Payment.created_by),
+            )
+            .order_by(Payment.payment_date.desc(), Payment.id.desc())
+            .limit(limit + 1)  # +1 chỉ để biết còn nữa hay không
+        )
+
+        # IDOR. Đường gọi từ service đã khoá `Fee` theo `unit_id` nên fee ở đó
+        # chắc chắn thuộc phạm vi người gọi; nhưng hàm này còn phục vụ đường
+        # ĐỌC (xem trước) nơi `fee_id` đến thẳng từ query string — một số đoán
+        # được. Không có điều kiện này thì ai cũng dò được phiếu thu, tên người
+        # nộp và mã tham chiếu của đơn vị khác.
+        if unit_id is not None:
+            query = (
+                query.join(Fee, Invoice.fee_id == Fee.id)
+                .join(models.AdmissionProfile)
+                .join(models.Lead)
+            )
+            conditions.append(models.Lead.unit_id == unit_id)
+
+        query = query.where(and_(*conditions))
+
+        result = await self.db.execute(query)
+        rows = list(result.scalars().unique().all())
+        truncated = len(rows) > limit
+        return rows[:limit], truncated
+
+    async def find_duplicate_candidates_bulk(
+        self,
+        keys: Sequence[Tuple[int, int, Decimal, datetime]],
+        window_days: int = WINDOW_DO_TRUNG_NGAY,
+        exclude_payment_ids: Optional[Set[int]] = None,
+    ) -> Dict[int, List[int]]:
+        """Bản BÓ của :meth:`find_duplicate_candidates` cho đường nhập lô.
+
+        ``keys`` là dãy ``(idx, fee_id, amount, payment_date)``; trả về map
+        ``idx -> [payment_id…]``. ``idx`` do người gọi đặt (thường là số thứ tự
+        dòng trong tệp) vì hai dòng khác nhau có thể trùng cả ba tham số còn
+        lại — gộp theo ``(fee, tiền, ngày)`` sẽ làm hai dòng đó dính vào nhau.
+
+        Mỗi dòng trả tối đa ``MAX_DUPLICATE_CANDIDATES + 1`` mã phiếu: quá trần
+        nghĩa là danh sách đã bị cắt, người gọi phải nói "nhiều" chứ không nói
+        một con số.
+
+        Vì sao không gọi hàm một-phiếu trong vòng lặp: một tệp nhập lô có tới
+        vài trăm dòng, mỗi dòng một lượt đi-về cơ sở dữ liệu. Kiến trúc của
+        repo này cấm N+1 và đường xem trước đã prefetch mọi thứ khác theo lô.
+
+        Luật so khớp **không** viết lại ở đây — dùng chung
+        :func:`_dieu_kien_nghi_trung` với đường một phiếu.
+
+        Không nạp quan hệ: người gọi chỉ cần biết *có trùng hay không* và mấy
+        mã phiếu để nêu trong thông báo. Muốn chi tiết đầy đủ (tên người nộp,
+        số hoá đơn) thì gọi hàm một-phiếu cho đúng dòng đang xét.
+        """
+        if not keys:
+            return {}
+
+        # Quy đổi ngày ở Python bằng đúng helper mà đường một phiếu dùng, thay
+        # vì để Postgres tự diễn giải: naive datetime trong repo này là GIỜ VN,
+        # còn cột thì timestamptz — đẩy phép quy đổi xuống SQL là mời thêm một
+        # cách đọc thứ hai vào chính chỗ vừa sửa vì lệch ngày.
+        rows = [
+            {
+                "idx": idx,
+                "fee_id": fee_id,
+                "amount": amount,
+                "day_from": vn_calendar_date(pay_date) - timedelta(days=window_days),
+                "day_to": vn_calendar_date(pay_date) + timedelta(days=window_days),
+            }
+            for idx, fee_id, amount, pay_date in keys
+        ]
+
+        k = sa_values(
+            sa_column("idx", Integer),
+            sa_column("fee_id", Integer),
+            sa_column("amount", Numeric(15, 2)),
+            sa_column("day_from", Date),
+            sa_column("day_to", Date),
+            name="k",
+        ).data(
+            [
+                (r["idx"], r["fee_id"], r["amount"], r["day_from"], r["day_to"])
+                for r in rows
+            ]
+        )
+
+        conditions = _dieu_kien_nghi_trung(
+            k.c.fee_id, k.c.amount, k.c.day_from, k.c.day_to
+        )
+        if exclude_payment_ids:
+            conditions.append(Payment.id.notin_(exclude_payment_ids))
+
+        # Trần đánh theo TỪNG DÒNG, ngay trong câu lệnh.
+        #
+        # Bản đầu dùng một `LIMIT` tổng (`số_dòng * MAX`) cộng `ORDER BY idx`.
+        # Sai kín: hạn ngạch bị tiêu thụ theo thứ tự idx, nên một dòng đầu tệp
+        # có nhiều ứng viên ăn hết phần của các dòng sau, và những dòng đó nhận
+        # danh sách RỖNG — tức là im lặng báo "không trùng" ở đúng nơi đang cần
+        # cảnh báo. Cắt bằng `row_number()` theo partition thì mỗi dòng có trần
+        # riêng và không dòng nào bỏ đói dòng nào.
+        #
+        # Lấy MAX+1 (cùng mẹo với đường một phiếu): người gọi thấy quá MAX thì
+        # biết danh sách đã bị cắt và phải nói "nhiều" thay vì một con số sai.
+        thu_tu_trong_dong = (
+            func.row_number()
+            .over(partition_by=k.c.idx, order_by=Payment.id)
+            .label("thu_tu")
+        )
+        sub = (
+            select(
+                k.c.idx.label("idx"),
+                Payment.id.label("payment_id"),
+                thu_tu_trong_dong,
+            )
+            .select_from(k)
+            .join(Invoice, Invoice.fee_id == k.c.fee_id)
+            .join(Payment, Payment.invoice_id == Invoice.id)
+            .where(and_(*conditions))
+            .subquery()
+        )
+        query = (
+            select(sub.c.idx, sub.c.payment_id)
+            .where(sub.c.thu_tu <= MAX_DUPLICATE_CANDIDATES + 1)
+            .order_by(sub.c.idx, sub.c.payment_id)
+        )
+
+        ket_qua: Dict[int, List[int]] = {}
+        for idx, payment_id in (await self.db.execute(query)).all():
+            ket_qua.setdefault(idx, []).append(payment_id)
+        return ket_qua
 
     async def get_filtered(
         self,
@@ -349,6 +623,7 @@ class PaymentRepository(BaseRepository[Payment]):
         statuses: Optional[List[str]] = None,
         invoice_id: Optional[int] = None,
         method_id: Optional[int] = None,
+        fee_id: Optional[int] = None,
     ) -> Tuple[List[Payment], int]:
         """
         Get filtered list of payments with pagination AND total count.
@@ -360,6 +635,11 @@ class PaymentRepository(BaseRepository[Payment]):
             statuses: List of statuses to filter
             invoice_id: Filter by invoice ID
             method_id: Filter by payment method ID
+            fee_id: Filter by fee — trả phiếu thu của MỌI hoá đơn thuộc khoản
+                phí đó, không chỉ một đợt. Cần cho ô "đang chờ duyệt" ở form
+                ghi tiền: khoản phí nhiều đợt thì phiếu vừa nhập có thể nằm ở
+                hoá đơn khác, lọc theo ``invoice_id`` sẽ không thấy và kế toán
+                lại tưởng chưa ai nhập.
 
         Returns:
             Tuple of (List of Payment instances, total_count)
@@ -378,6 +658,16 @@ class PaymentRepository(BaseRepository[Payment]):
 
         if method_id:
             base_conditions.append(Payment.method_id == method_id)
+
+        # Lọc ở mức KHOẢN PHÍ: Invoice đã nằm trong join bên dưới nên không cần
+        # thêm bảng. Đi qua Invoice.fee_id chứ không phải Fee.id để tránh phụ
+        # thuộc thứ tự join.
+        # `is not None` chứ KHÔNG phải `if fee_id:` — id 0 không hợp lệ nhưng
+        # nếu ai đó gửi tới đây thì falsy sẽ bị hiểu thành "không lọc" và trả
+        # về toàn bộ phiếu trong phạm vi quyền. Router chặn bằng ge=1; đây là
+        # lớp thứ hai cho các caller gọi thẳng repository.
+        if fee_id is not None:
+            base_conditions.append(Invoice.fee_id == fee_id)
 
         # Count query
         count_query = (

@@ -9,7 +9,7 @@ localises naive ``Consultation.scheduled_at`` with
 Used by notification payload builders when rendering into channels that
 require specific formats (e.g., Zalo ZNS DATE fields capped at 20 chars).
 """
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional, Union
 from zoneinfo import ZoneInfo
 
@@ -24,6 +24,33 @@ def _to_display(dt: datetime) -> datetime:
         # Naive values are app-local time — matches notification_tasks.py:239-240.
         dt = dt.replace(tzinfo=_APP_TZ)
     return dt.astimezone(_VN_TZ)
+
+
+def normalize_to_utc(dt: datetime) -> datetime:
+    """Đưa một mốc thời gian về UTC **có múi giờ**, theo quy ước của repo.
+
+    Naive = giờ app (``settings.TIMEZONE``) — cùng quy ước với ``_to_display``
+    và ``notification_tasks.py``. Đây là chỗ dễ sai một cách âm thầm: coi naive
+    là UTC thì một giá trị như ``2026-08-05T23:30`` (người dùng gõ giờ Việt
+    Nam) sẽ được hiểu thành 06:30 sáng **hôm sau** giờ VN, và mọi phép so theo
+    ngày lịch lệch đúng một ngày.
+
+    Dùng khi một giá trị vừa phải đem đi SO SÁNH vừa phải được GHI XUỐNG: chuẩn
+    hoá một lần rồi dùng chung, để phép so và giá trị lưu không bao giờ nói hai
+    thời điểm khác nhau.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_APP_TZ)
+    return dt.astimezone(timezone.utc)
+
+
+def vn_calendar_date(dt: datetime) -> date:
+    """Ngày lịch Việt Nam của một mốc thời gian (naive = giờ app).
+
+    Cặp với ``normalize_to_utc``: cả hai đọc naive theo cùng một quy ước, nên
+    "ngày lịch của giá trị sắp ghi" và "ngày lịch của giá trị đã ghi" luôn khớp.
+    """
+    return normalize_to_utc(dt).astimezone(_VN_TZ).date()
 
 
 def today_vn() -> date:

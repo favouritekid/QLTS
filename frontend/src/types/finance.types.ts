@@ -698,6 +698,10 @@ export interface PaymentCreateRequest {
   payer_name?: string
   payer_account?: string
   notes?: string
+  // Người ghi đã xem danh sách phiếu nghi trùng và khẳng định đây là khoản thu
+  // khác. Hàng rào chống trùng là hàng rào MỀM. Cờ này chỉ được bật ở lần gửi
+  // THỨ HAI, cho ĐÚNG bộ dữ liệu đã hiện cảnh báo — xem `paymentFingerprint`.
+  confirm_duplicate?: boolean
 }
 
 export interface PaymentIntentCreateRequest {
@@ -1076,6 +1080,10 @@ export type InvoiceExportFilters = Omit<
 
 export interface PaymentFilters {
   invoice_id?: number
+  // Lọc ở mức KHOẢN PHÍ: trả phiếu thu của mọi đợt thuộc khoản phí đó. Cần cho
+  // ô "đang chờ duyệt" ở form ghi tiền — khoản phí nhiều đợt thì phiếu vừa nhập
+  // có thể nằm ở hoá đơn khác, lọc theo invoice_id sẽ không thấy.
+  fee_id?: number
   status?: PaymentStatus
   method_id?: number
   page?: number
@@ -1084,6 +1092,11 @@ export interface PaymentFilters {
   // verification. When true the backend ignores status/method_id. Online
   // (auto-verified) payments never appear here.
   pending_manual_only?: boolean
+  // XEM TRƯỚC phiếu nghi trùng cho một khoản thu sắp ghi. Đi THÀNH BỘ với
+  // fee_id — thiếu một vế thì máy chủ trả 422 chứ không âm thầm trả danh sách
+  // thường (một tập khác hẳn dưới cùng hình dạng).
+  duplicate_amount?: number
+  duplicate_date?: string
 }
 
 export interface DebtReportFilters {

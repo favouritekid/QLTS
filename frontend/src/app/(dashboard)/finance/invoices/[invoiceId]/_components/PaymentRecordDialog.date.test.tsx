@@ -21,11 +21,28 @@ import { PaymentRecordDialog } from "./PaymentRecordDialog"
 
 const createPayment = vi.fn()
 
+// Khối cảnh báo trùng (nhánh PR B) gọi thêm hai hook cùng module — mock thiếu
+// một cái là component ném "not a function" trước khi tới được phần ngày.
 vi.mock("@/hooks/finance/usePayments", () => ({
   useCreatePayment: () => ({
     mutateAsync: (...args: unknown[]) => createPayment(...args),
     isPending: false,
   }),
+  usePendingPaymentsByFee: () => ({
+    data: { items: [], total: 0 },
+    isLoading: false,
+    isError: false,
+  }),
+  useDuplicatePreview: () => ({ data: undefined }),
+}))
+
+vi.mock("@/hooks/finance/useInvoices", () => ({
+  useInvoiceDetail: () => ({
+    data: { total_due: "9999999", paid_amount: "0", remaining_amount: "9999999" },
+    isLoading: false,
+    isError: false,
+  }),
+  useInvoiceVietQR: () => ({ data: undefined, isLoading: false }),
 }))
 
 vi.mock("@/hooks/finance/usePaymentMethods", () => ({
@@ -73,6 +90,7 @@ describe("PaymentRecordDialog — ngày thu", () => {
           open
           onOpenChange={vi.fn()}
           invoiceId={19}
+          feeId={7}
           maxAmount="9.999.999 ₫"
         />,
       )

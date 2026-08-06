@@ -58,6 +58,31 @@ export function parseNgayLich(s: string): Date {
 }
 
 /**
+ * Mốc ISO từ máy chủ → `DD/MM/YYYY` theo **ngày lịch Việt Nam**.
+ *
+ * Đừng cắt chuỗi (`iso.slice(0, 10)`): mốc trong cơ sở dữ liệu là UTC, và một
+ * khoản thu ngày 05/08 giờ Việt Nam được lưu là `2026-08-04T17:00:00Z` — cắt
+ * mười ký tự đầu cho ra **04/08**, tức lùi đúng một ngày cho mọi phiếu ghi
+ * trong ngày. Ở khối cảnh báo trùng thì đó là lỗi chí mạng: người ghi thấy
+ * "phiếu kia ngày 04/08" trong khi mình đang nhập 05/08 và kết luận đây là hai
+ * khoản khác nhau.
+ *
+ * `timeZone` cố định (không theo máy người dùng) để khớp đúng múi giờ mà luật
+ * dò trùng ở máy chủ đang dùng.
+ */
+export function formatNgayVN(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("vi-VN", {
+    timeZone: VN_TZ,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(d);
+}
+
+/**
  * Subtract `days` from a Vietnam-local date string and return YYYY-MM-DD.
  */
 export function subDaysVN(dateStr: string, days: number): string {

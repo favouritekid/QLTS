@@ -14,7 +14,7 @@ Architecture Compliance:
 """
 
 from datetime import datetime, date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import List, Optional, Dict, Any, Literal
 import html
 
@@ -613,6 +613,31 @@ class PaymentCreate(BaseModel):
     payer_name: Optional[str] = Field(None, max_length=200)
     payer_account: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = Field(None, max_length=500)
+    confirm_duplicate: bool = Field(
+        False,
+        description="Người ghi đã xem danh sách phiếu nghi trùng và khẳng "
+        "định đây là khoản thu khác. Hàng rào chống trùng là hàng rào MỀM: "
+        "nộp hai lần cùng số tiền là chuyện có thật, nên xác nhận thì ghi "
+        "được. Mặc định False — cờ này phải do người dùng bật ở lần gửi thứ "
+        "hai, không được đính sẵn.",
+    )
+
+    @field_validator('payment_date')
+    @classmethod
+    def validate_payment_date(cls, v: Optional[datetime]) -> Optional[datetime]:
+        """Chặn năm ngoài tầm nghiệp vụ — nếu không thì 500 thay vì 422.
+
+        Hàng rào dò trùng cộng/trừ vài ngày quanh mốc này rồi quy về múi giờ
+        Việt Nam, nên ``9999-12-31`` làm phép cộng tràn khỏi ``date.max`` còn
+        ``0001-01-01`` tràn lúc đổi múi giờ — cả hai ném ``OverflowError``,
+        thứ mà router không bắt, cho một chuỗi ngày người gọi tự gõ.
+
+        Đường XEM TRƯỚC đã chặn khoảng năm này (``routers/payments.py``); đặt ở
+        schema để đường GHI không phải nhớ lại điều tương tự lần nữa.
+        """
+        if v is not None and not (1900 <= v.year <= 2100):
+            raise ValueError("payment_date nằm ngoài khoảng năm hợp lệ (1900–2100)")
+        return v
 
     @field_validator('amount')
     @classmethod
@@ -621,6 +646,29 @@ class PaymentCreate(BaseModel):
             raise ValueError("Payment amount must be positive")
         if v > MAX_AMOUNT:
             raise ValueError("Payment amount exceeds maximum")
+        # Cột là Numeric(15,2): số lẻ quá 2 chữ số KHÔNG bị từ chối mà bị làm
+        # tròn ÂM THẦM khi ghi. Hệ quả không chỉ là vài xu: mọi phép so khớp
+        # trên `amount` (đối soát, dò trùng) chạy trên con số người dùng gửi,
+        # nên 100.001 không khớp phiếu 100.00 đã có — trong khi hai bản ghi
+        # nằm cạnh nhau trong DB thì y hệt nhau. Từ chối thẳng, đừng làm tròn
+        # hộ rồi để hai tầng nhìn thấy hai giá trị khác nhau.
+        # Câu hỏi đúng là "làm tròn về 2 chữ số có MẤT giá trị không", không
+        # phải "người gửi gõ bao nhiêu chữ số". Đếm chữ số thì `1000.000` bị
+        # từ chối oan — nó đúng bằng 1000.00 và ghi xuống `Numeric(15,2)`
+        # không mất gì; bất kỳ client nào định dạng tiền với số chữ số lẻ cố
+        # định (hoặc một luồng đối soát) sẽ bị chặn ở một giá trị không có gì
+        # sai.
+        #
+        # `quantize` ném `InvalidOperation` với NaN/Infinity — hai giá trị đó
+        # đã bị `gt=0`/`le=MAX_AMOUNT` chặn phía trên, nhưng bắt ở đây để một
+        # lần nới lỏng ràng buộc kia không biến thành lỗi 500.
+        try:
+            if v != v.quantize(Decimal("0.01")):
+                raise ValueError(
+                    "Payment amount must not have more than 2 decimal places"
+                )
+        except InvalidOperation:
+            raise ValueError("Payment amount is not a valid decimal")
         return v
 
     @field_validator('payer_name', 'notes')
@@ -629,6 +677,32 @@ class PaymentCreate(BaseModel):
         if v is None:
             return v
         return html.escape(v.strip())
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DuplicatePaymentInfo(BaseModel):
+    """Một phiếu thu nghi trùng, ở dạng ĐƯỢC PHÉP đi ra tới client.
+
+    Đây là **danh sách trắng**, không phải bản rút gọn tiện tay: mọi trường
+    khác của ``Payment`` (người ghi, ghi chú, số tài khoản người nộp, id nội
+    bộ của hoá đơn…) đều nằm ngoài. Thân một lỗi 409 là chỗ dễ quên rà soát
+    nhất — nó không đi qua ``response_model`` nào cả.
+
+    ``amount`` là **chuỗi**: khớp quy ước Decimal→string mà giao diện đang
+    dùng cho mọi số tiền, và tránh mất chính xác khi qua JSON number.
+    """
+
+    payment_id: int
+    amount: str
+    payment_date: Optional[datetime] = None
+    status: str
+    invoice_number: Optional[str] = None
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def amount_to_string(cls, v: Any) -> str:
+        return str(v)
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -425,7 +425,9 @@ export function InvoiceDetailClient({ invoiceId }: InvoiceDetailClientProps) {
         }}
         invoiceId={invoiceId}
         maxAmount={invoice.remaining_amount_formatted}
-        feeId={invoice.fee?.id}
+        // `fee_id` là khoá ngoại luôn có trên hoá đơn; `fee?.id` là quan hệ
+        // nạp kèm, vắng mặt thì ô "đang chờ duyệt" im lặng trống rỗng.
+        feeId={invoice.fee_id}
       />
 
       <InvoiceIssueDialog

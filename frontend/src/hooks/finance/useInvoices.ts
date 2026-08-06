@@ -181,14 +181,26 @@ export function useInvoiceStatusCounts(
  */
 export function useInvoiceDetail(
   id: number,
-  options?: { enabled?: boolean; initialData?: InvoiceDetail }
+  options?: {
+    enabled?: boolean
+    initialData?: InvoiceDetail
+    /**
+     * Ghi đè độ tươi. Mặc định 30 giây là đủ cho màn xem, nhưng chỗ nào lấy số
+     * dư ra để QUYẾT ĐỊNH — form ghi tiền — phải truyền 0: trang cha dùng
+     * chung query key này, nên dialog mở lại trong 30 giây sẽ đọc lại đúng bản
+     * cache đã cũ. Ca hỏng: người khác vừa duyệt phiếu, hàng đợi chờ duyệt
+     * (staleTime 0) đã trống, còn "còn phải thu" vẫn là số trước khi duyệt —
+     * hai nửa của cùng một panel nói hai thời điểm khác nhau.
+     */
+    staleTime?: number
+  }
 ) {
   return useQuery<InvoiceDetail, AxiosError<ApiErrorResponse>>({
     queryKey: invoicesKeys.detail(id),
     queryFn: () => invoicesApi.getInvoice(id),
     enabled: (options?.enabled ?? true) && !!id,
     initialData: options?.initialData,
-    staleTime: 1000 * 30,
+    staleTime: options?.staleTime ?? 1000 * 30,
   })
 }
 

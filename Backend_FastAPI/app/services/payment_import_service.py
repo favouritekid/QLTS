@@ -26,7 +26,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 import structlog
@@ -60,6 +60,11 @@ from app.constants.export_formats import (
     XLSX_MEDIA_TYPE,
 )
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
+from app.repositories.payment_repository import (
+    MAX_DUPLICATE_CANDIDATES,
+    WINDOW_DO_TRUNG_NGAY,
+    PaymentRepository,
+)
 from app.utils.admission_status import NON_PAYABLE_PROFILE_STATUSES
 from app.utils.csv_helpers import sanitize_csv_row
 from app.utils.exceptions import (
@@ -114,6 +119,16 @@ MAX_AMOUNT = Decimal("9999999999999.99")
 # = String(100). Ref dài hơn → DataError ở flush → 500 không bắt → chặn sớm thành
 # lỗi dòng sạch.
 MAX_REF_LEN = 100
+
+
+class _NghiTrungBiChan(BusinessRuleViolation):
+    """Dòng bị hàng rào nghi trùng giữ lại — KHÔNG phải dòng hỏng.
+
+    Tách riêng khỏi ``BusinessRuleViolation`` vì hai thứ này cần kết cục khác
+    nhau: dòng hỏng thật (số dư đổi, hồ sơ bị xoá) thành ``error`` và dừng ở
+    đó, còn dòng này chỉ đang chờ kế toán soát — nó phải giữ trạng thái
+    commit-được để lượt gửi lại kèm xác nhận còn chọn tới nó.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +501,12 @@ async def resolve_and_validate(
     # Sổ phân bổ trong batch: invoice_id -> tổng đã phân bổ ở các dòng TRƯỚC.
     batch_alloc: Dict[int, Decimal] = {}
     results: List[RowResult] = []
+    # (B3) hàng đợi dò trùng với phiếu ĐÃ GHI — hỏi một lượt sau vòng lặp.
+    # Khoá theo ``row_no`` chứ không theo (khoản phí, tiền, ngày): một tệp thu
+    # hai lần cùng số tiền cho cùng hồ sơ trong cùng ngày là ca có thật, gom
+    # theo bộ ba đó thì hai dòng dính làm một.
+    khoa_do_trung: List[Tuple[int, int, Decimal, datetime]] = []
+    res_theo_dong: Dict[int, RowResult] = {}
 
     for d in drafts:
         res = RowResult(
@@ -607,14 +628,42 @@ async def resolve_and_validate(
         # Khớp (hồ sơ, mã tham chiếu, tổng đã ghi == số tiền dòng): thu góp hợp lệ
         # khác số tiền nên KHÔNG dính. Bỏ ref rỗng/synthetic (không dedup được).
         _ref = _norm(d.reference or "")
+        _da_bao_trung_theo_ref = False
         if _ref and not _ref.startswith(("BULK-", "PAY-")):
             _prior = existing_ref_sums.get((profile.id, _ref))
             if _prior is not None and _prior == d.amount:
+                _da_bao_trung_theo_ref = True
                 warnings.append(
                     f"nghi trùng giao dịch: mã tham chiếu '{_ref}' + số tiền "
                     f"{_money(d.amount)} đã ghi nhận cho hồ sơ này — kiểm tra "
                     "trước khi thu lại (re-import?)"
                 )
+
+        # (B3) Góc mà luật theo mã tham chiếu ở trên KHÔNG thấy: cùng khoản phí,
+        # cùng số tiền, gần ngày, nhưng mã tham chiếu khác nhau — hoặc rỗng, hoặc
+        # tự sinh 'BULK-'. Đây chính là hình dạng của một tệp bị nhập hai lần sau
+        # khi ai đó sửa cột mã.
+        #
+        # Xếp hàng lại để hỏi MỘT lượt cho cả tệp sau vòng lặp: một tệp có vài
+        # trăm dòng, hỏi từng dòng là N+1 mà cả hàm này dựng lên để tránh.
+        #
+        # Chỉ xếp hàng khi luật theo mã CHƯA bắn cho dòng này: hai câu cảnh báo
+        # cho cùng một nghi ngờ chỉ làm kế toán đọc lướt cả hai.
+        if d.payment_date and not _da_bao_trung_theo_ref:
+            khoa_do_trung.append(
+                (
+                    d.row_no,
+                    fee.id,
+                    d.amount,
+                    datetime(
+                        d.payment_date.year,
+                        d.payment_date.month,
+                        d.payment_date.day,
+                        tzinfo=timezone.utc,
+                    ),
+                )
+            )
+            res_theo_dong[d.row_no] = res
 
         # FIFO allocate
         left = d.amount
@@ -641,6 +690,32 @@ async def resolve_and_validate(
         else:
             res.status = PaymentImportRowStatusEnum.matched.value
         results.append(res)
+
+    # (B3) Một lượt hỏi cho cả tệp, dùng chung luật dò trùng với đường ghi tay.
+    if khoa_do_trung:
+        ung_vien = await PaymentRepository(db).find_duplicate_candidates_bulk(
+            keys=khoa_do_trung,
+            window_days=WINDOW_DO_TRUNG_NGAY,
+        )
+        for row_no, payment_ids in ung_vien.items():
+            r = res_theo_dong.get(row_no)
+            if r is None or not payment_ids:
+                continue
+            # Nêu vài mã phiếu để kế toán tra được, nhưng không đổ cả danh sách:
+            # câu cảnh báo dài quá thì không ai đọc, mà số lượng mới là thứ
+            # quyết định có nên dừng lại hay không.
+            ma_phieu = ", ".join(f"#{i}" for i in payment_ids[:3])
+            neu_them = "…" if len(payment_ids) > 3 else ""
+            cau = (
+                f"nghi trùng với {len(payment_ids)} phiếu đã ghi cho cùng khoản "
+                f"phí — cùng số tiền {_money(r.amount)}, lệch không quá "
+                f"{WINDOW_DO_TRUNG_NGAY} ngày ({ma_phieu}{neu_them})"
+            )
+            r.message = f"{r.message} · {cau}" if r.message else cau
+            # Chỉ NÂNG matched → warned. Dòng đang ở trạng thái lỗi thì lỗi đó
+            # mới là việc kế toán phải xử lý trước, đừng che nó bằng cảnh báo.
+            if r.status == PaymentImportRowStatusEnum.matched.value:
+                r.status = PaymentImportRowStatusEnum.warned.value
 
     matched = sum(
         1 for r in results if r.status == PaymentImportRowStatusEnum.matched.value
@@ -1177,6 +1252,7 @@ async def commit_batch(
     batch_id: int,
     importer_id: int,
     unit_id: Optional[int],
+    confirm_duplicates: bool = False,
 ) -> Tuple[CommitResult, Callable]:
     """Pha 2 — GHI TIỀN. RE-VALIDATE TOCTOU dưới khóa + savepoint per-row + idempotency
     + GỘP lead-sync 1 lần/hồ-sơ. Trả ``(CommitResult, post_commit)``.
@@ -1253,6 +1329,11 @@ async def commit_batch(
     payment_count = 0
     total_amount = Decimal("0")
     cleared_profiles: Dict[int, str] = {}
+    # (B3) Phiếu do CHÍNH lô này ghi — để dòng sau không tự tố dòng trước.
+    payment_ids_cua_lo: Set[int] = set()
+    # Đếm riêng dòng bị hàng rào trùng chặn: chúng là thứ DUY NHẤT commit lại
+    # với cờ xác nhận sẽ cứu được, nên lô còn dòng như vậy thì chưa được đóng.
+    so_dong_chan_trung = 0
 
     for row in rows:
         row_payment_ids: List[int] = []
@@ -1358,6 +1439,42 @@ async def commit_batch(
                         "học phí đang chờ kế toán xác nhận đổi ngành — "
                         "xác nhận trước khi thu tiền"
                     )
+                # (B3) Hàng rào chống ghi trùng, đặt SAU khi đã khoá `fee`: luật
+                # đọc mọi hoá đơn của khoản phí, nên không có điểm gặp chung thì
+                # hai lô chạy song song đều thấy "chưa trùng" rồi cùng ghi.
+                #
+                # Bỏ qua DÒNG chứ không chặn cả lô: raise ở đây rơi vào savepoint
+                # của riêng dòng này, phần còn lại của tệp vẫn vào bình thường.
+                # Chặn cả lô vì một dòng nghi ngờ sẽ biến mọi tệp lớn thành ngõ cụt.
+                if not confirm_duplicates:
+                    # Loại trừ phiếu do CHÍNH LÔ NÀY vừa ghi. Không có vế này thì
+                    # dòng 2 của một tệp có hai dòng giống hệt nhau sẽ đụng phải
+                    # phiếu mà dòng 1 vừa flush và bị từ chối — trong khi xem
+                    # trước đã cố ý coi hai dòng đó là hai khoản thu riêng (map
+                    # dò trùng khoá theo `row_no` chính vì lẽ đó). Hai pha nói
+                    # ngược nhau thì pha ghi là pha thắng, và tiền rơi mất.
+                    ket_do = await PaymentRepository(db).find_duplicate_candidates_bulk(
+                        keys=[(row.row_no, fee.id, amount, pay_dt)],
+                        exclude_payment_ids=payment_ids_cua_lo or None,
+                    )
+                    ung_vien_ids = ket_do.get(row.row_no, [])
+                    if ung_vien_ids:
+                        bi_cat = len(ung_vien_ids) > MAX_DUPLICATE_CANDIDATES
+                        so_luong = (
+                            f"hơn {MAX_DUPLICATE_CANDIDATES}"
+                            if bi_cat
+                            else str(len(ung_vien_ids))
+                        )
+                        ma_phieu = ", ".join(f"#{i}" for i in ung_vien_ids[:3])
+                        them = "…" if len(ung_vien_ids) > 3 else ""
+                        raise _NghiTrungBiChan(
+                            f"nghi trùng với {so_luong} phiếu đã ghi cho cùng "
+                            f"khoản phí — cùng số tiền, lệch không quá "
+                            f"{WINDOW_DO_TRUNG_NGAY} ngày ({ma_phieu}{them}). "
+                            f"Soát lại; nếu đúng là khoản thu riêng thì commit lại "
+                            f"với xác nhận bỏ qua cảnh báo trùng."
+                        )
+
                 was_hk1 = is_hk1_settled_fee(fee)
 
                 left = amount
@@ -1406,10 +1523,22 @@ async def commit_batch(
                 row.payment_ids = row_payment_ids
             # savepoint committed → giờ mới cộng tổng (raise giữa chừng đã rollback DB).
             committed_count += 1
+            # Chỉ ghi nhận SAU khi savepoint qua: dòng bị rollback không để lại
+            # phiếu nào, đưa id của nó vào tập loại trừ là loại trừ thứ không tồn tại.
+            payment_ids_cua_lo.update(row_payment_ids)
             payment_count += len(row_payment_ids)
             total_amount += row_total
             if row_cleared:
                 cleared_profiles[row_cleared[0]] = row_cleared[1]
+        except _NghiTrungBiChan as exc:
+            # KHÁC hẳn lỗi thật: dòng này ghi lại được, chỉ cần kế toán soát rồi
+            # xác nhận. Giữ nguyên trạng thái commit-được ('warned') — hạ xuống
+            # 'error' thì lượt commit sau KHÔNG chọn nó nữa (vòng lặp chỉ lấy
+            # matched/warned), và cờ xác nhận trở thành nút bấm không làm gì.
+            failed_count += 1
+            so_dong_chan_trung += 1
+            row.status = PaymentImportRowStatusEnum.warned.value
+            row.message = str(exc)[:500]
         except (
             BusinessRuleViolation,
             ResourceNotFoundError,
@@ -1478,7 +1607,14 @@ async def commit_batch(
     # Chỉ đánh dấu 'committed' khi THỰC SỰ ghi được tiền. 0 dòng ghi (tất cả fail
     # TOCTOU) → GIỮ 'preview' để re-import được (chưa có endpoint void; tránh khóa
     # file vĩnh viễn qua partial-unique).
-    if committed_count > 0:
+    #
+    # (B3) Còn dòng bị hàng rào trùng chặn thì CŨNG giữ 'preview'. Đóng lô ở đây
+    # là dựng ngõ cụt: lô 'committed' từ chối commit lại (409), nên những dòng
+    # kia vĩnh viễn không vào được — mà chúng là tiền thật kế toán đã thu. Giữ
+    # 'preview' cho phép soát rồi commit lại với `confirm_duplicates`; các dòng
+    # đã ghi ở lượt này không bị ghi hai lần vì idempotency key
+    # `bulkimport:{lô}:{dòng}:{hoá đơn}` đã chặn sẵn.
+    if committed_count > 0 and so_dong_chan_trung == 0:
         batch.status = PaymentImportBatchStatusEnum.committed.value
         batch.committed_at = datetime.now(timezone.utc)
     await db.flush()

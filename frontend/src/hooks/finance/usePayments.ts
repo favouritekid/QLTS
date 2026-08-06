@@ -24,6 +24,7 @@ import type {
 } from "@/types/finance.types"
 import { invoicesKeys } from "./useInvoices"
 import { feesKeys } from "./useFees"
+import { parseDuplicateSuspected } from "@/lib/finance/duplicate-payment"
 
 // =====================================================================
 // QUERY KEYS
@@ -217,6 +218,107 @@ export function usePaymentDetail(
  * const { data: payments } = usePaymentsByInvoice(456)
  * ```
  */
+/**
+ * Phiếu thu TAY ĐANG CHỜ DUYỆT của một KHOẢN PHÍ (mọi đợt, không chỉ đợt đang mở).
+ *
+ * Dùng cho ô "đang chờ duyệt" ở form ghi tiền. Vì sao phải theo khoản phí chứ
+ * không theo hoá đơn: `fee.paid_amount` chỉ tăng khi phiếu được DUYỆT, nên sau
+ * khi nhập lần đầu mà chưa ai duyệt, mọi màn hình vẫn hiện y như chưa thu —
+ * kế toán tưởng lần nhập trước trượt nên nhập lại. Mà phiếu vừa nhập rất dễ
+ * nằm ở đợt khác với đợt đang mở, lọc theo `invoice_id` sẽ không thấy nó.
+ *
+ * `pending_manual_only` chứ KHÔNG phải `status: "pending"`: bộ lọc trạng thái
+ * chung còn trả về phiếu ONLINE người học tự bấm rồi bỏ dở (`intent_id` khác
+ * NULL). Ô này nói về việc *kế toán đã nhập mà chưa ai duyệt*, nên đếm phiếu
+ * online vào đó là dựng cảnh báo trên dữ liệu sai loại.
+ *
+ * `staleTime: 0` là điều kiện sống của tính năng, không phải chỉnh tinh: mục
+ * đích của ô này là chống nhập trùng, mà ca trùng kinh điển là đóng rồi mở
+ * lại form ngay sau khi một kế toán khác vừa tạo phiếu. Cache dù chỉ vài giây
+ * cũng dựng lại đúng màn hình nói dối mà B1 sinh ra để xoá. Một request thừa
+ * rẻ hơn một phiếu thu trùng.
+ *
+ * `page_size` 100: một khoản phí thực tế có vài phiếu; đặt trần để nếu dữ liệu
+ * bất thường thì cũng không kéo về cả nghìn dòng chỉ để đếm — người gọi đọc
+ * `total` để biết danh sách có bị cắt hay không.
+ */
+export function usePendingPaymentsByFee(
+  feeId: number | undefined,
+  options?: { enabled?: boolean }
+) {
+  const filters: PaymentFilters = {
+    fee_id: feeId,
+    pending_manual_only: true,
+    page: 1,
+    page_size: 100,
+  }
+  return useQuery<PaymentListPaginatedResponse, AxiosError<ApiErrorResponse>>({
+    queryKey: paymentsKeys.list(filters),
+    queryFn: () => paymentsApi.getPayments(filters),
+    enabled: (options?.enabled ?? true) && !!feeId,
+    staleTime: 0,
+  })
+}
+
+/**
+ * XEM TRƯỚC phiếu nghi trùng cho một khoản thu sắp ghi.
+ *
+ * Hỏi **chính luật đang chạy ở máy chủ** (`find_duplicate_candidates`) thay vì
+ * dựng lại luật ở giao diện. Bản dựng lại đã được thử và lệch ngay lập tức ở
+ * hai chỗ giao diện không thể biết: tổng tiền **đã hoàn** của từng phiếu
+ * (đường hoàn thường không đổi `Payment.status`), và **ngày lịch Việt Nam**
+ * (trình duyệt tính theo múi giờ máy người dùng, máy chủ cố định
+ * `Asia/Ho_Chi_Minh`).
+ *
+ * Dùng lại đường `GET /api/payments` chứ không thêm route mới: Casbin ở repo
+ * này cấp quyền theo TỪNG path tường minh, nên một path mới kéo theo policy +
+ * migration + test phân quyền, và sai sót ở đó là 403 im lặng trên production.
+ *
+ * `staleTime: 0` cùng lý do với các hook kia: ca trùng kinh điển là mở lại form
+ * ngay sau khi người khác vừa ghi.
+ *
+ * ⚠️ Vẫn chỉ là cảnh báo SỚM: **máy chủ giữ quyền quyết định cuối** bằng lỗi
+ * 409 lúc ghi, kể cả khi lớp này không hiện gì (dữ liệu có thể đổi giữa hai
+ * lần gọi).
+ */
+export function useDuplicatePreview(
+  input: {
+    feeId: number | undefined
+    amount: number | null
+    paymentDate: string | null
+    /**
+     * Số thứ tự LẦN MỞ form. Nằm trong query key nhưng KHÔNG gửi lên máy chủ.
+     *
+     * `staleTime: 0` chỉ buộc *hỏi lại*, nó không xoá dữ liệu cũ: React Query
+     * vẫn trả bản cache của lần mở trước ngay lập tức trong lúc request mới
+     * đang bay. Với một cảnh báo chống trùng thì đó là câu trả lời sai — form
+     * hiện danh sách cũ, người dùng tick, và cờ xác nhận đi kèm một bộ dữ liệu
+     * chưa ai kiểm lại. Đổi khoá theo từng lần mở là cách duy nhất để lần này
+     * bắt đầu từ chỗ trống.
+     */
+    sessionId: number
+  },
+  options?: { enabled?: boolean }
+) {
+  const { feeId, amount, paymentDate, sessionId } = input
+  const duCanCu = !!feeId && amount != null && amount > 0 && !!paymentDate
+  const filters: PaymentFilters = {
+    fee_id: feeId,
+    duplicate_amount: amount ?? undefined,
+    duplicate_date: paymentDate ?? undefined,
+  }
+  return useQuery<PaymentListPaginatedResponse, AxiosError<ApiErrorResponse>>({
+    // `sessionId` chỉ ở KHOÁ, không ở `filters` — máy chủ không cần biết đây
+    // là lần mở thứ mấy.
+    queryKey: [...paymentsKeys.list(filters), "phien", sessionId],
+    queryFn: () => paymentsApi.getPayments(filters),
+    // Chưa gõ đủ số tiền và ngày thì KHÔNG hỏi: câu hỏi thiếu vế bị máy chủ
+    // từ chối 422, và một lỗi đỏ trong lúc người dùng đang gõ dở là nhiễu.
+    enabled: (options?.enabled ?? true) && duCanCu,
+    staleTime: 0,
+  })
+}
+
 export function usePaymentsByInvoice(invoiceId: number, options?: { enabled?: boolean }) {
   return useQuery<Payment[], AxiosError<ApiErrorResponse>>({
     queryKey: paymentsKeys.byInvoice(invoiceId),
@@ -295,6 +397,15 @@ export function useCreatePayment() {
       })
     },
     onError: (error) => {
+      // Ca "nghi trùng" KHÔNG phải lỗi để báo đỏ: form sẽ hiện khối cảnh báo
+      // kèm danh sách phiếu và một ô xác nhận. Bắn thêm toast đỏ ở đây là vừa
+      // doạ người dùng vừa che mất thứ họ cần đọc.
+      //
+      // Nhưng chỉ im lặng khi payload ĐÚNG cấu trúc — nếu nó méo thì form
+      // không có gì để hiện, và im lặng biến thành "bấm Lưu mà không có phản
+      // hồi nào". Payload méo ⇒ rơi về thông báo chung, tức fail-closed.
+      if (parseDuplicateSuspected(error.response?.data)) return
+
       const detail = error.response?.data?.detail
       const message =
         typeof detail === "string" ? detail : "Không thể ghi nhận thanh toán. Vui lòng thử lại."

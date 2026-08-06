@@ -207,6 +207,37 @@ jobs:
           #   * `test_payment_lock_order.py` canh cả kết quả (đúng một lượt
           #     thắng) LẪN thứ tự lấy khoá (payment trước invoice trước fee) —
           #     thiếu vế thứ hai thì ai đó đảo lại thứ tự vẫn xanh.
+          # `test_payments_list_filter.py` thêm 05-08: nó là hợp đồng của bộ
+          # lọc nuôi ô "đang chờ duyệt" ở form ghi tiền — thứ sinh ra để chặn
+          # nhập trùng, nên nó sai thì màn hình lại nói dối đúng kiểu cũ. Bốn
+          # mặt nó khoá, mỗi mặt đã đỏ được ít nhất một lần khi gỡ guard:
+          #   * phạm vi theo KHOẢN PHÍ (mọi đợt), không phải một hoá đơn;
+          #   * IDOR — `fee_id` là số đoán được, đơn vị khác hỏi phải ra rỗng;
+          #   * `pending_manual_only` AND `fee_id` — hàng đợi maker-checker
+          #     không được lẫn phiếu ONLINE đang treo, và không được bỏ qua
+          #     `fee_id` rồi trả cả hàng đợi trong phạm vi quyền;
+          #   * biên int32 — `fee_id` quá lớn phải là 422, không phải 500 do
+          #     asyncpg "value out of int32 range".
+          # Ba tệp B2 (hàng rào chống GHI TRÙNG phiếu thu) thêm 05-08. Cùng một
+          # đường tiền vào, nhưng canh ba mặt khác nhau — bỏ tệp nào thì mặt đó
+          # không còn ai canh trên PR:
+          #   * test_payment_amount_precision — `100.001` né được phép so khớp
+          #     rồi vẫn bị Numeric(15,2) làm tròn thành `100.00`; tức hàng rào
+          #     chống trùng có thể bị đi vòng bằng cách gõ thêm một chữ số;
+          #   * test_payment_duplicate_guard — luật dò (phạm vi KHOẢN PHÍ, số
+          #     tiền bằng nhau, ±3 NGÀY LỊCH VN, loại phiếu đã hoàn ĐỦ), thứ tự
+          #     khoá invoice→fee→quét→ghi, và ca ĐỒNG THỜI hai hoá đơn cùng một
+          #     khoản phí. Ca đồng thời cần PostgreSQL thật nên chỉ sống ở đây;
+          #   * test_payment_duplicate_contract — thân JSON của lỗi 409 (không
+          #     đi qua `response_model` nào cả, nên không ai rà hộ): đúng tập
+          #     khoá, số tiền là chuỗi, ngày ISO, tối đa 20 phần tử, không rò
+          #     `context`, và 409 không được sinh thêm phiếu;
+          #   * test_payment_import_service — ĐƯỜNG NHẬP LÔ, nơi 286 phiếu prod
+          #     đi vào. Canh hai thứ không đường nào khác canh hộ: bản BÓ của
+          #     luật dò trùng phải cho cùng kết quả với bản một-phiếu (chép lệch
+          #     là có hai hàng rào, và bản lỏng hơn thắng), và hàng rào ở bước
+          #     ghi phải bỏ ĐÚNG dòng nghi trùng chứ không bỏ cả lô — cũng không
+          #     được tự tố phiếu mà chính lô này vừa ghi.
           # Ba tập cuối (cohort đưa sang hệ ký túc xá) canh thứ hỏng ÂM THẦM:
           #   * test_hk1_fee_scope_single_source — structural lock-in buộc các
           #     call site thật sự gọi helper chung;
@@ -256,6 +287,11 @@ jobs:
               tests/services/test_payment_service.py::TestVerifyPayment
               tests/services/test_payment_service.py::TestRejectPayment
               tests/services/test_payment_lock_order.py
+              tests/api/test_payments_list_filter.py
+              tests/unit/test_payment_amount_precision.py
+              tests/services/test_payment_duplicate_guard.py
+              tests/api/test_payment_duplicate_contract.py
+              tests/services/test_payment_import_service.py
 
           # ---------------------------------------------------------------
           # Tier 2: RBAC + CCCD lock + CSRF
