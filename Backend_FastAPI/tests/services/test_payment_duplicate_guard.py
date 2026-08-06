@@ -694,3 +694,120 @@ class TestDongThoiHaiHoaDonCungKhoanPhi:
                 )
             ).scalars().all()
         assert len(rows) == 1, f"chỉ được ghi một phiếu, DB có {len(rows)}"
+
+
+class TestDoTrungTheoLo:
+    """Bản BÓ dùng cho đường nhập lô (B3).
+
+    Một tệp nhập lô có vài trăm dòng; gọi hàm một-phiếu trong vòng lặp là N+1
+    mà kiến trúc repo cấm. Nhưng bó lại thì dễ sinh ra một BẢN SAO của luật dò
+    trùng, và bản lỏng hơn sẽ là bản quyết định. Các ca dưới khoá hai đường vào
+    cùng một định nghĩa: hễ đường một-phiếu đổi mà bó không đổi (hoặc ngược
+    lại) thì đỏ.
+    """
+
+    async def test_bo_va_mot_phieu_cho_CUNG_ket_qua(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """Ca lock-in: đây là ca sẽ đỏ nếu ai đó chép luật sang bó rồi sửa lệch."""
+        p1 = await _ghi(db, fee_two_invoices)
+        p2 = await _ghi(db, fee_two_invoices, when=_BASE + timedelta(days=1), confirm=True)
+        await db.commit()
+
+        repo = PaymentRepository(db)
+        mot_phieu, _ = await repo.find_duplicate_candidates(
+            fee_id=fee_two_invoices["fee_id"], amount=_HALF, payment_date=_BASE
+        )
+        theo_lo = await repo.find_duplicate_candidates_bulk(
+            keys=[(0, fee_two_invoices["fee_id"], _HALF, _BASE)]
+        )
+
+        assert sorted(p.id for p in mot_phieu) == sorted(theo_lo[0])
+        assert sorted(theo_lo[0]) == sorted([p1.id, p2.id])
+
+    async def test_hai_dong_giong_HET_nhau_van_la_hai_dong(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """Khoá lại lý do khoá map là ``idx`` chứ không phải (phí, tiền, ngày).
+
+        Một tệp thu hai lần cùng số tiền cho cùng hồ sơ trong cùng ngày là ca
+        có thật. Gom theo bộ ba kia thì hai dòng đó dính làm một, và dòng thứ
+        hai sẽ đi tiếp mà không ai cảnh báo — đúng cái lỗ hổng B3 sinh ra để bịt.
+        """
+        await _ghi(db, fee_two_invoices)
+        await db.commit()
+
+        khoa = fee_two_invoices["fee_id"]
+        res = await PaymentRepository(db).find_duplicate_candidates_bulk(
+            keys=[(0, khoa, _HALF, _BASE), (1, khoa, _HALF, _BASE)]
+        )
+        assert set(res) == {0, 1}
+        assert res[0] == res[1] and res[0]
+
+    async def test_loai_tru_phieu_do_chinh_lo_nay_sinh_ra(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """Xem lại một lô ĐÃ ghi thì không được tự tố chính mình."""
+        p1 = await _ghi(db, fee_two_invoices)
+        await db.commit()
+
+        repo = PaymentRepository(db)
+        khoa = fee_two_invoices["fee_id"]
+        assert repo  # rõ ràng hoá: cùng một repo cho cả hai lượt gọi
+        co = await repo.find_duplicate_candidates_bulk(keys=[(0, khoa, _HALF, _BASE)])
+        khong = await repo.find_duplicate_candidates_bulk(
+            keys=[(0, khoa, _HALF, _BASE)], exclude_payment_ids={p1.id}
+        )
+        assert co[0] == [p1.id]
+        assert khong.get(0, []) == []
+
+    async def test_phieu_da_tu_choi_khong_tinh_o_duong_bo(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """Trạng thái phải được lọc ở CẢ hai đường, không riêng đường một phiếu."""
+        p1 = await _ghi(db, fee_two_invoices)
+        p1.status = PaymentStatusEnum.rejected.value
+        await db.commit()
+
+        res = await PaymentRepository(db).find_duplicate_candidates_bulk(
+            keys=[(0, fee_two_invoices["fee_id"], _HALF, _BASE)]
+        )
+        assert res.get(0, []) == []
+
+    async def test_hoan_du_thi_loai_o_duong_bo(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """Phiếu đã hoàn đủ hết là tiền — bó cũng phải thôi cảnh báo về nó."""
+        p1 = await _ghi(db, fee_two_invoices)
+        db.add(
+            RefundRequest(
+                payment_id=p1.id,
+                amount=_HALF,
+                status=RefundStatusEnum.refunded.value,
+                reason="test",
+                requested_by_id=fee_two_invoices["maker_id"],
+            )
+        )
+        await db.commit()
+
+        res = await PaymentRepository(db).find_duplicate_candidates_bulk(
+            keys=[(0, fee_two_invoices["fee_id"], _HALF, _BASE)]
+        )
+        assert res.get(0, []) == []
+
+    async def test_ngoai_cua_so_ngay_thi_khong_dinh(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        await _ghi(db, fee_two_invoices)
+        await db.commit()
+
+        res = await PaymentRepository(db).find_duplicate_candidates_bulk(
+            keys=[(0, fee_two_invoices["fee_id"], _HALF, _BASE + timedelta(days=4))]
+        )
+        assert res.get(0, []) == []
+
+    async def test_khong_co_khoa_thi_khong_cham_co_so_du_lieu(
+        self, db: AsyncSession, fee_two_invoices
+    ):
+        """Danh sách rỗng phải trả rỗng NGAY, không dựng câu VALUES rỗng (lỗi cú pháp)."""
+        assert await PaymentRepository(db).find_duplicate_candidates_bulk(keys=[]) == {}

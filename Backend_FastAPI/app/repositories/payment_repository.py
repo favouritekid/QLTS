@@ -15,9 +15,11 @@ Architecture:
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from sqlalchemy import select, and_, or_, func, desc, text
+from sqlalchemy import Date, Integer, Numeric
+from sqlalchemy import column as sa_column, values as sa_values
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -46,6 +48,47 @@ from app.utils.datetime_helpers import vn_calendar_date
 #: 409. Một thông báo lỗi không có kích thước tối đa là một thông báo lỗi có
 #: thể bị dùng làm vũ khí.
 MAX_DUPLICATE_CANDIDATES = 20
+
+
+def _dieu_kien_nghi_trung(fee_id_expr, amount_expr, day_from_expr, day_to_expr):
+    """MỘT định nghĩa duy nhất của "hai phiếu có thể là cùng một lần thu".
+
+    Nhận **biểu thức** chứ không phải giá trị, nên dùng được cho cả đường một
+    phiếu (giá trị Python) lẫn đường bó nhiều dòng (cột của bảng ``VALUES``).
+    Luật nghiệp vụ ở ngay đây và chỉ ở đây — đường nhập lô mà chép lại điều
+    kiện thì hai hàng rào sẽ trôi khỏi nhau đúng vào lúc không ai để ý, và
+    hàng rào lỏng hơn mới là hàng rào quyết định.
+
+    Ý nghĩa từng vế xem docstring của :meth:`PaymentRepository.find_duplicate_candidates`.
+    """
+    vn_day = func.date(func.timezone("Asia/Ho_Chi_Minh", Payment.payment_date))
+
+    # Tổng tiền ĐÃ CHI của từng phiếu. Tương quan với hàng Payment bên ngoài
+    # nên tính đúng theo từng ứng viên, không cần gom nhóm riêng.
+    refunded_total = (
+        select(func.coalesce(func.sum(RefundRequest.amount), 0))
+        .where(
+            RefundRequest.payment_id == Payment.id,
+            RefundRequest.status == RefundStatusEnum.refunded.value,
+        )
+        .correlate(Payment)
+        .scalar_subquery()
+    )
+
+    return [
+        Invoice.fee_id == fee_id_expr,
+        Payment.amount == amount_expr,
+        Payment.status.in_(
+            [
+                PaymentStatusEnum.pending.value,
+                PaymentStatusEnum.verified.value,
+            ]
+        ),
+        Payment.payment_date.is_not(None),
+        vn_day >= day_from_expr,
+        vn_day <= day_to_expr,
+        refunded_total < Payment.amount,
+    ]
 
 
 class PaymentRepository(BaseRepository[Payment]):
@@ -355,9 +398,6 @@ class PaymentRepository(BaseRepository[Payment]):
         "đúng 20 phiếu" với "ít nhất 20 phiếu", vì một câu thông báo nói con số
         chính xác trong khi danh sách đã bị cắt là một câu sai.
         """
-        vn_day = func.date(
-            func.timezone("Asia/Ho_Chi_Minh", Payment.payment_date)
-        )
         # Cùng một quy ước đọc naive với `normalize_to_utc` mà service dùng để
         # dựng giá trị sắp GHI — nếu hai bên đọc khác nhau thì phép so và bản
         # ghi nói hai ngày khác nhau.
@@ -365,32 +405,7 @@ class PaymentRepository(BaseRepository[Payment]):
         day_from = target_day - timedelta(days=window_days)
         day_to = target_day + timedelta(days=window_days)
 
-        # Tổng tiền ĐÃ CHI của từng phiếu. Tương quan với hàng Payment bên
-        # ngoài nên tính đúng theo từng ứng viên, không cần gom nhóm riêng.
-        refunded_total = (
-            select(func.coalesce(func.sum(RefundRequest.amount), 0))
-            .where(
-                RefundRequest.payment_id == Payment.id,
-                RefundRequest.status == RefundStatusEnum.refunded.value,
-            )
-            .correlate(Payment)
-            .scalar_subquery()
-        )
-
-        conditions = [
-            Invoice.fee_id == fee_id,
-            Payment.amount == amount,
-            Payment.status.in_(
-                [
-                    PaymentStatusEnum.pending.value,
-                    PaymentStatusEnum.verified.value,
-                ]
-            ),
-            Payment.payment_date.is_not(None),
-            vn_day >= day_from,
-            vn_day <= day_to,
-            refunded_total < Payment.amount,
-        ]
+        conditions = _dieu_kien_nghi_trung(fee_id, amount, day_from, day_to)
         if exclude_payment_id is not None:
             conditions.append(Payment.id != exclude_payment_id)
 
@@ -433,6 +448,90 @@ class PaymentRepository(BaseRepository[Payment]):
         rows = list(result.scalars().unique().all())
         truncated = len(rows) > limit
         return rows[:limit], truncated
+
+    async def find_duplicate_candidates_bulk(
+        self,
+        keys: Sequence[Tuple[int, int, Decimal, datetime]],
+        window_days: int = 3,
+        exclude_payment_ids: Optional[Set[int]] = None,
+    ) -> Dict[int, List[int]]:
+        """Bản BÓ của :meth:`find_duplicate_candidates` cho đường nhập lô.
+
+        ``keys`` là dãy ``(idx, fee_id, amount, payment_date)``; trả về map
+        ``idx -> [payment_id…]``. ``idx`` do người gọi đặt (thường là số thứ tự
+        dòng trong tệp) vì hai dòng khác nhau có thể trùng cả ba tham số còn
+        lại — gộp theo ``(fee, tiền, ngày)`` sẽ làm hai dòng đó dính vào nhau.
+
+        Vì sao không gọi hàm một-phiếu trong vòng lặp: một tệp nhập lô có tới
+        vài trăm dòng, mỗi dòng một lượt đi-về cơ sở dữ liệu. Kiến trúc của
+        repo này cấm N+1 và đường xem trước đã prefetch mọi thứ khác theo lô.
+
+        Luật so khớp **không** viết lại ở đây — dùng chung
+        :func:`_dieu_kien_nghi_trung` với đường một phiếu.
+
+        Không nạp quan hệ: người gọi chỉ cần biết *có trùng hay không* và mấy
+        mã phiếu để nêu trong thông báo. Muốn chi tiết đầy đủ (tên người nộp,
+        số hoá đơn) thì gọi hàm một-phiếu cho đúng dòng đang xét.
+        """
+        if not keys:
+            return {}
+
+        # Quy đổi ngày ở Python bằng đúng helper mà đường một phiếu dùng, thay
+        # vì để Postgres tự diễn giải: naive datetime trong repo này là GIỜ VN,
+        # còn cột thì timestamptz — đẩy phép quy đổi xuống SQL là mời thêm một
+        # cách đọc thứ hai vào chính chỗ vừa sửa vì lệch ngày.
+        rows = [
+            {
+                "idx": idx,
+                "fee_id": fee_id,
+                "amount": amount,
+                "day_from": vn_calendar_date(pay_date) - timedelta(days=window_days),
+                "day_to": vn_calendar_date(pay_date) + timedelta(days=window_days),
+            }
+            for idx, fee_id, amount, pay_date in keys
+        ]
+
+        k = sa_values(
+            sa_column("idx", Integer),
+            sa_column("fee_id", Integer),
+            sa_column("amount", Numeric(15, 2)),
+            sa_column("day_from", Date),
+            sa_column("day_to", Date),
+            name="k",
+        ).data(
+            [
+                (r["idx"], r["fee_id"], r["amount"], r["day_from"], r["day_to"])
+                for r in rows
+            ]
+        )
+
+        conditions = _dieu_kien_nghi_trung(
+            k.c.fee_id, k.c.amount, k.c.day_from, k.c.day_to
+        )
+        if exclude_payment_ids:
+            conditions.append(Payment.id.notin_(exclude_payment_ids))
+
+        # Trần tổng: hàng rào chống một tệp bệnh kéo cả bảng lên bộ nhớ. Cắt ở
+        # đây làm danh sách của MỘT SỐ dòng ngắn đi, nhưng người gọi chỉ dùng
+        # nó để cảnh báo "có trùng" nên cắt bớt mã phiếu không đổi kết luận.
+        tran_tong = len(rows) * MAX_DUPLICATE_CANDIDATES
+
+        query = (
+            select(k.c.idx, Payment.id)
+            .select_from(k)
+            .join(Invoice, Invoice.fee_id == k.c.fee_id)
+            .join(Payment, Payment.invoice_id == Invoice.id)
+            .where(and_(*conditions))
+            .order_by(k.c.idx, Payment.id)
+            .limit(tran_tong)
+        )
+
+        ket_qua: Dict[int, List[int]] = {}
+        for idx, payment_id in (await self.db.execute(query)).all():
+            ds = ket_qua.setdefault(idx, [])
+            if len(ds) < MAX_DUPLICATE_CANDIDATES:
+                ds.append(payment_id)
+        return ket_qua
 
     async def get_filtered(
         self,
