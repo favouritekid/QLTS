@@ -126,6 +126,9 @@ from .vn_school import VnSchool, VnSchoolNameHistory, VnSchoolKvAssignment
 # Q9 #07 Phase E Foundation (q9_07_e0a) — priority bonus intervention audit log.
 from .priority_audit import PriorityAuditLog
 
+# Gate 2 — sổ cái idempotency cho lượt đồng bộ ký túc xá (dorm_sync_operations).
+from .dorm_sync_operation import DormSyncOperation
+
 # Finance Module (Phase 0+1: Foundation)
 from .finance import (
     # Enums
@@ -274,6 +277,7 @@ __all__ = [
     "VnSchoolKvAssignment",
     # Q9 #07 Phase E Foundation
     "PriorityAuditLog",
+    "DormSyncOperation",
     # Finance Module (Phase 0+1: Foundation)
     # Enums
     "FeeTypeEnum",

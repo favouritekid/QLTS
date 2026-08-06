@@ -334,6 +334,36 @@ class Settings(BaseSettings):
     # sms_program_view cascade) cũ hơn ngần này; GIỮ aggregate
     # sms_contact_program_interest (recency_weight khiến view quá cũ ≈0)
 
+    # -- Đồng bộ ký túc xá (KTX) --
+    # 🔴 CẢ SÁU PHẢI OPTIONAL, default rỗng, và KHÔNG được đưa vào
+    # ``_validate_production_secrets()``. ``celery-worker`` và ``celery-beat``
+    # dùng chung lớp Settings này nhưng KHÔNG nhận các biến đó và cũng không cần
+    # — khai bắt buộc thì hai container ấy không khởi động nổi.
+    #
+    # Fail-closed nằm ở tầng khác: ``DormSyncConfig.from_settings()``
+    # (``app/services/dorm_sync_config.py``) đòi đủ năm giá trị khi cờ bật.
+    DORM_SYNC_ENABLED: bool = Field(
+        default=False, validation_alias="DORM_SYNC_ENABLED"
+    )
+    DORM_SUPABASE_URL: str = Field(
+        default="", validation_alias="DORM_SUPABASE_URL"
+    )
+    DORM_SUPABASE_SECRET_KEY: str = Field(
+        default="", validation_alias="DORM_SUPABASE_SECRET_KEY"
+    )
+    DORM_SYNC_TARGET_PROJECT_REF: str = Field(
+        default="", validation_alias="DORM_SYNC_TARGET_PROJECT_REF"
+    )
+    # Hai biến dưới định danh NGUỒN. Chúng là thứ chặn một backend dev trỏ nhầm
+    # hạ cờ cohort production — ``APP_ENV`` chỉ là nhãn trong file env nên KHÔNG
+    # thay thế được.
+    DORM_SYNC_SOURCE_DB: str = Field(
+        default="", validation_alias="DORM_SYNC_SOURCE_DB"
+    )
+    DORM_SYNC_SOURCE_SYSTEM_ID: str = Field(
+        default="", validation_alias="DORM_SYNC_SOURCE_SYSTEM_ID"
+    )
+
     # -- Docker self-hosted deployment --
     # When True, skip TLS enforcement for DB/Redis connections.
     # Use ONLY when PostgreSQL and Redis run on the same Docker network (no external exposure).

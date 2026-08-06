@@ -470,6 +470,35 @@ class NotificationConfigError(ServiceError):
     error_code = "NOTIFICATION_CONFIG_ERROR"
 
 
+class DormSyncDisabledError(ServiceError):
+    """
+    Raised when the dorm sync feature is called while ``DORM_SYNC_ENABLED`` is off.
+
+    🔴 Tách RIÊNG khỏi ``DormSyncConfigError``: "chưa bật tính năng" là trạng
+    thái bình thường của mọi môi trường dev/CI, còn "bật mà thiếu khoá" là cấu
+    hình hỏng cần người sửa. Gộp hai ca vào một mã lỗi thì người vận hành không
+    phân biệt được "chưa cấu hình" với "cấu hình sai".
+    """
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    detail = "Tính năng đồng bộ ký túc xá chưa được bật trên máy chủ này."
+    error_code = "DORM_SYNC_DISABLED"
+
+
+class DormSyncConfigError(ServiceError):
+    """
+    Raised when ``DORM_SYNC_ENABLED`` is on but required settings are missing.
+
+    Fail-closed: không đoán giá trị nào cả. Một đường ghi có thể hạ cờ
+    đủ-điều-kiện của cả một khoá học mà tự đoán đích đến là đường sẽ ghi nhầm
+    chỗ vào một ngày nào đó.
+    """
+
+    status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+    detail = "Cấu hình đồng bộ ký túc xá không đầy đủ."
+    error_code = "DORM_SYNC_CONFIG_ERROR"
+
+
 # ============================================================================
 # LEGACY SUPPORT (Deprecated)
 # ============================================================================

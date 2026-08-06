@@ -91,6 +91,25 @@ services:
       RUN_MIGRATIONS_ON_STARTUP: ${RUN_MIGRATIONS_ON_STARTUP:-true}
       RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: ${RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP:-true}
       RUN_CASBIN_LOAD_ON_STARTUP: ${RUN_CASBIN_LOAD_ON_STARTUP:-true}
+      # --- Đồng bộ ký túc xá (KTX) ---
+      # 🔴 Dùng ``:-`` (default rỗng), TUYỆT ĐỐI không ``:?``. File này cũng là
+      # file dev và CI dùng — ``docker-compose.ci.yml`` gần như chỉ đổi port, và
+      # CI cố ý chạy ``-f docker-compose.yml`` để bỏ qua override. Compose expand
+      # biến TRƯỚC khi chạy service, nên ``${VAR:?missing}`` sẽ giết mọi lệnh
+      # dev/CI chỉ vì thiếu khoá của một tính năng chúng không dùng.
+      #
+      # Fail-closed nằm ở ``DormSyncConfig.from_settings()``: bật cờ mà thiếu
+      # giá trị thì endpoint từ chối, KHÔNG chạm KTX.
+      #
+      # ⚠️ Chỉ khai ở ĐÂY. ``celery-worker`` và ``celery-beat`` không nhận các
+      # biến này và cũng không cần — chúng không gọi sang KTX.
+      # ⚠️ Không ghi giá trị thật vào YAML, và không thêm vào ``env_file`` chung.
+      DORM_SYNC_ENABLED: ${DORM_SYNC_ENABLED:-false}
+      DORM_SUPABASE_URL: ${DORM_SUPABASE_URL:-}
+      DORM_SUPABASE_SECRET_KEY: ${DORM_SUPABASE_SECRET_KEY:-}
+      DORM_SYNC_TARGET_PROJECT_REF: ${DORM_SYNC_TARGET_PROJECT_REF:-}
+      DORM_SYNC_SOURCE_DB: ${DORM_SYNC_SOURCE_DB:-}
+      DORM_SYNC_SOURCE_SYSTEM_ID: ${DORM_SYNC_SOURCE_SYSTEM_ID:-}
     volumes:
       - backend_uploads:/app/uploads
       - backend_static_uploads:/app/app/static/uploads
