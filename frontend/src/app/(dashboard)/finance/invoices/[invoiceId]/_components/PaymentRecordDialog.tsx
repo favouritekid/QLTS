@@ -47,6 +47,7 @@ import { useInvoiceDetail } from "@/hooks/finance/useInvoices"
 import { AmountDisplay } from "@/components/finance"
 import { formatVND, parseVNDDisplayAmount } from "@/lib/zod/finance"
 import { calendarDateToISO, formatNgayVN } from "@/lib/utils/vn-date"
+import { useDebouncedValue } from "@/lib/hooks/use-debounced-value"
 import {
   capSoPhienMoi,
   parseDuplicateSuspected,
@@ -233,17 +234,32 @@ export function PaymentRecordDialog({
   // dùng, thay vì dựng lại luật ở đây. Giao diện không thể tự tính đúng: nó
   // không thấy tổng tiền đã hoàn của từng phiếu, và "ngày lịch Việt Nam" ở
   // trình duyệt là múi giờ máy người dùng.
+  // Hỏi theo số tiền ĐÃ NGỪNG GÕ, không theo từng phím. `CurrencyInput` phát
+  // `onChange` mỗi ký tự, mà số tiền nằm trong khoá truy vấn — gõ "2.000.000"
+  // sinh bảy lượt hỏi (2, 20, 200, … 2000000), mỗi lượt chạy trọn phép nối
+  // Payment→Invoice→Fee→Hồ sơ→Lead kèm truy vấn con tiền đã hoàn. Đã đo thật
+  // trên trình duyệt, không phải suy đoán.
+  //
+  // KHÔNG debounce dấu vân tay ở trên: vân tay phải bám giá trị thật ngay, nếu
+  // không thì cảnh báo cũ còn được coi là hợp lệ sau khi người dùng đã đổi số.
+  const soTienDeHoi = useDebouncedValue(soTienDangGo ?? null, 400)
   const { data: previewPage, isError: previewFailed } = useDuplicatePreview(
     {
       feeId,
-      amount: soTienDangGo ?? null,
+      amount: soTienDeHoi,
       paymentDate: ngayHienTai,
       sessionId: phienMoForm,
     },
     { enabled: open },
   )
-  const ungVienSom = previewPage?.items ?? []
-  const ungVienSomBiCat = (previewPage?.total ?? 0) > ungVienSom.length
+  // Kết quả chỉ dùng được khi nó ứng với ĐÚNG số tiền đang hiện trên form.
+  // Giữa hai nhịp gõ, một con số dở dang (vd 500.000 trên đường tới 5.000.000)
+  // có thể khớp một phiếu thật — cảnh báo loé lên rồi tắt, và tệ hơn: nút Lưu
+  // bị khoá oan vì `chanLuu` bên dưới đọc chính danh sách này.
+  const ketQuaUngVoiSoDangGo = (soTienDangGo ?? null) === soTienDeHoi
+  const ungVienSom = ketQuaUngVoiSoDangGo ? (previewPage?.items ?? []) : []
+  const ungVienSomBiCat =
+    ketQuaUngVoiSoDangGo && (previewPage?.total ?? 0) > ungVienSom.length
   // Hỏi máy chủ mà hỏng thì KHÔNG được im lặng. Một form sạch bong sau khi gõ
   // đủ số tiền đọc y như "đã đối chiếu, không trùng" — đúng câu trả lời sai
   // nguy hiểm nhất, và là lý do bảng công nợ phía trên có trạng thái lỗi riêng.

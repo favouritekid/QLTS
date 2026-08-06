@@ -1017,3 +1017,84 @@ describe("PaymentRecordDialog — hỏi máy chủ mà hỏng thì phải nói r
     ).not.toBeInTheDocument()
   })
 })
+
+describe("PaymentRecordDialog — hỏi theo số tiền đã ngừng gõ", () => {
+  async function dienForm(user: ReturnType<typeof userEvent.setup>, soTien: string) {
+    await user.click(
+      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
+    )
+    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
+    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), soTien)
+  }
+
+  const nutLuu = () => screen.getByRole("button", { name: /ghi nhận thanh toán/i })
+
+  /** Tập số tiền KHÁC NHAU mà hook đã hỏi (bỏ các lượt chưa có số). */
+  const soTienDaHoi = () =>
+    new Set(
+      activeHookCalls
+        .map((c) => (c.input as { amount: number | null }).amount)
+        .filter((a): a is number => a != null),
+    )
+
+  it("gõ một số dài KHÔNG sinh một lượt hỏi cho mỗi phím", async () => {
+    const user = userEvent.setup()
+    state.activeItems = []
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="9.999.999 ₫"
+      />,
+    )
+    activeHookCalls.length = 0
+
+    await dienForm(user, "2000000")
+    // Chờ quá cửa sổ trễ để lượt hỏi thật sự xảy ra.
+    await waitFor(
+      () => {
+        const soDaHoi = soTienDaHoi()
+        expect(soDaHoi.has(2000000)).toBe(true)
+      },
+      { timeout: 2000 },
+    )
+
+    const soDaHoi = soTienDaHoi()
+    // Bảy ký tự → bảy con số dở dang (2, 20, 200 … 2000000) nếu hỏi theo phím.
+    // Mỗi lượt chạy trọn phép nối Payment→Invoice→Fee→Hồ sơ→Lead ở máy chủ.
+    expect(
+      soDaHoi.size,
+      `hỏi ${soDaHoi.size} giá trị khác nhau: ${[...soDaHoi].join(", ")}`,
+    ).toBeLessThanOrEqual(2)
+  })
+
+  it("đổi số tiền thì cảnh báo cũ tắt NGAY, không chờ hết cửa sổ trễ", async () => {
+    const user = userEvent.setup()
+    state.activeItems = [
+      { id: 5, amount: "1000000", status: "pending", payment_date: new Date().toISOString() },
+    ]
+    render(
+      <PaymentRecordDialog
+        open
+        onOpenChange={vi.fn()}
+        invoiceId={19}
+        feeId={7}
+        maxAmount="99.999.999 ₫"
+      />,
+    )
+
+    await dienForm(user, "1000000")
+    expect(await screen.findByTestId("payment-duplicate-warning")).toBeInTheDocument()
+    expect(nutLuu()).toBeDisabled()
+
+    // Gõ thêm một số 0 → 10.000.000, không còn trùng phiếu nào. Cảnh báo phải
+    // biến mất NGAY: giữ nó lại nửa giây nữa nghĩa là khoá nút Lưu oan cho một
+    // con số chẳng trùng gì cả — đúng thứ xảy ra nếu chỉ debounce khoá truy vấn
+    // mà vẫn dùng kết quả của số tiền cũ.
+    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "0")
+    expect(screen.queryByTestId("payment-duplicate-warning")).not.toBeInTheDocument()
+    expect(nutLuu()).toBeEnabled()
+  })
+})
