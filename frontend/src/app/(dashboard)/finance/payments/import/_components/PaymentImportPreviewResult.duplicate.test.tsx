@@ -49,18 +49,25 @@ const PREVIEW: PaymentImportPreview = {
   rows: [],
 }
 
-/** Kết quả commit có 1 dòng bị hàng rào trùng giữ lại. */
+/** Kết quả commit có 1 dòng bị hàng rào trùng giữ lại.
+ *
+ * 🔴 `status` phải là **"warned"**, không phải "error". Máy chủ cố ý giữ những
+ * dòng này ở trạng thái commit-được để lượt gửi lại kèm xác nhận còn chọn tới
+ * chúng. Bản test đầu tiên dựng "error" theo phỏng đoán, nên nó xanh trong khi
+ * giao diện thật KHÔNG hiện nút ghi tiếp — lỗi chỉ lộ ra khi bấm tay trên trình
+ * duyệt. Dữ liệu giả phải khớp đầu ra THẬT của máy chủ, không khớp giả định.
+ */
 const KET_QUA_CO_NGHI_TRUNG: PaymentImportCommit = {
   batch_id: 7,
   status: "preview",
-  committed_count: 1,
+  committed_count: 0,
   failed_count: 1,
-  payment_count: 1,
-  total_amount: "5000000",
+  payment_count: 0,
+  total_amount: "0",
   rows: [
     {
       row_no: 3,
-      status: "error",
+      status: "warned",
       message:
         "nghi trùng với 1 phiếu đã ghi cho cùng khoản phí — cùng số tiền, " +
         "lệch không quá 3 ngày (#41).",
@@ -149,6 +156,23 @@ describe("PaymentImportPreviewResult — dòng nghi trùng", () => {
       batchId: 7,
       confirmDuplicates: true,
     })
+  })
+
+  it("mọi dòng đều bị giữ vì nghi trùng thì VẪN hiện nút (không có lỗi thật nào)", async () => {
+    // Ca này khoá đúng thứ đã hỏng thật: khối nghi trùng từng nằm lồng trong
+    // khối "dòng lỗi", nên lô không có lỗi thật nào thì chẳng hiện gì cả.
+    await commitRoi(KET_QUA_CO_NGHI_TRUNG)
+    expect(
+      screen.queryByText(/dòng KHÔNG ghi được/i),
+      "không có lỗi thật thì đừng hiện khối lỗi",
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/tất cả dòng hợp lệ đã ghi thành công/i),
+      "không dòng nào vào sổ mà vẫn báo thành công là nói dối",
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: /đã soát — ghi tiếp/i }),
+    ).toBeInTheDocument()
   })
 
   it("dòng hỏng vì lý do khác thì KHÔNG mời bấm ghi tiếp", async () => {

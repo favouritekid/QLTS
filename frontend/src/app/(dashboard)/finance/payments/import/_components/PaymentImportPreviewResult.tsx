@@ -77,14 +77,23 @@ export function PaymentImportPreviewResult({
 
   // ── Sau commit: hiện kết quả + dòng KHÔNG ghi được (TOCTOU) thay vì giấu ──
   if (committed) {
-    const errorRows = committed.rows.filter((r) => r.status === "error")
     // Dòng bị hàng rào nghi trùng giữ lại — khác hẳn dòng hỏng vì số dư đổi:
     // chúng ghi lại được, và máy chủ cố ý KHÔNG đóng lô khi còn dòng như vậy.
-    // Nhận dạng qua câu lý do máy chủ sinh (có ca kiểm khoá đúng câu này ở
-    // `test_payment_import_service.py`); phần còn lại của thân trả về không
-    // mang cờ riêng nào cho tình huống này.
-    const dongNghiTrung = errorRows.filter((r) =>
+    //
+    // 🔴 Lọc trên TOÀN BỘ `rows`, KHÔNG lọc trong nhóm `error`: máy chủ giữ
+    // những dòng này ở trạng thái `warned` chính vì lượt commit sau chỉ chọn
+    // `matched`/`warned`. Lọc theo `error` thì chúng vô hình — nút ghi tiếp
+    // không bao giờ hiện, và người dùng thấy "tất cả đã ghi thành công" trong
+    // khi không dòng nào vào sổ. (Đã gặp thật khi smoke trên trình duyệt.)
+    //
+    // Nhận dạng qua câu lý do máy chủ sinh; thân trả về không mang cờ riêng.
+    const dongNghiTrung = committed.rows.filter((r) =>
       (r.message ?? "").includes("nghi trùng"),
+    )
+    const dongNghiTrungIds = new Set(dongNghiTrung.map((r) => r.row_no))
+    // Dòng hỏng THẬT = không ghi được và cũng không phải ca chờ xác nhận.
+    const errorRows = committed.rows.filter(
+      (r) => r.status === "error" && !dongNghiTrungIds.has(r.row_no),
     )
     return (
       <Card>
@@ -109,41 +118,48 @@ export function PaymentImportPreviewResult({
               value={formatAmount(committed.total_amount)}
             />
           </div>
-          {errorRows.length > 0 ? (
+          {errorRows.length > 0 && (
             <>
               <p className="text-sm font-medium text-red-700">
                 {errorRows.length} dòng KHÔNG ghi được (số dư đổi giữa preview→commit):
               </p>
               <ImportRowsTable rows={errorRows} />
-              {dongNghiTrung.length > 0 && (
-                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40">
-                  <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
-                    {dongNghiTrung.length} dòng bị giữ lại vì nghi trùng phiếu đã ghi
-                  </p>
-                  <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
-                    Lô vẫn ở trạng thái xem trước nên những dòng này ghi lại được.
-                    Đối chiếu với phiếu đã nêu trong cột lý do; nếu đúng là khoản
-                    thu riêng thì ghi tiếp. Các dòng đã vào sổ sẽ không bị ghi hai lần.
-                  </p>
-                  <Button
-                    variant="outline"
-                    className="mt-2 border-amber-400 text-amber-900 hover:bg-amber-100 dark:text-amber-200"
-                    disabled={commit.isPending}
-                    onClick={() => handleCommit(true)}
-                  >
-                    {commit.isPending ? (
-                      <>
-                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                        Đang ghi…
-                      </>
-                    ) : (
-                      "Đã soát — ghi tiếp các dòng nghi trùng"
-                    )}
-                  </Button>
-                </div>
-              )}
             </>
-          ) : (
+          )}
+
+          {/* Khối này phải đứng ĐỘC LẬP với khối lỗi ở trên. Lồng vào trong thì
+              một lô mà mọi dòng đều bị giữ vì nghi trùng (không có lỗi thật nào)
+              sẽ chẳng hiện gì — đúng ca đã gặp khi smoke. */}
+          {dongNghiTrung.length > 0 && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40">
+              <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                {dongNghiTrung.length} dòng bị giữ lại vì nghi trùng phiếu đã ghi
+              </p>
+              <ImportRowsTable rows={dongNghiTrung} />
+              <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
+                Lô vẫn ở trạng thái xem trước nên những dòng này ghi lại được.
+                Đối chiếu với phiếu đã nêu trong cột lý do; nếu đúng là khoản
+                thu riêng thì ghi tiếp. Các dòng đã vào sổ sẽ không bị ghi hai lần.
+              </p>
+              <Button
+                variant="outline"
+                className="mt-2 border-amber-400 text-amber-900 hover:bg-amber-100 dark:text-amber-200"
+                disabled={commit.isPending}
+                onClick={() => handleCommit(true)}
+              >
+                {commit.isPending ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                    Đang ghi…
+                  </>
+                ) : (
+                  "Đã soát — ghi tiếp các dòng nghi trùng"
+                )}
+              </Button>
+            </div>
+          )}
+
+          {errorRows.length === 0 && dongNghiTrung.length === 0 && (
             <p className="text-sm text-green-700">
               Tất cả dòng hợp lệ đã ghi thành công.
             </p>
