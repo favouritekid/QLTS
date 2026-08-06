@@ -2666,3 +2666,271 @@ class TestDuplicateTransactionWarning:
             db, [_draft(cccd, "5000000", reference="PT-DUP-1")], 2026, 1, None
         )
         assert "nghi trùng giao dịch" not in (res.rows[0].message or ""), res.rows[0].message
+
+
+class TestCanhBaoNghiTrungOXemTruoc:
+    """B3 — xem trước phải nói ra khi một dòng trùng phiếu ĐÃ GHI.
+
+    Luật theo mã tham chiếu có sẵn chỉ bắt được khi mã KHỚP. Góc nó không thấy,
+    và cũng là hình dạng thật của một tệp bị nhập hai lần sau khi ai đó sửa cột
+    mã: cùng khoản phí, cùng số tiền, gần ngày, mã khác nhau.
+    """
+
+    @pytest.fixture(autouse=True)
+    async def _methods(self, db):
+        await _seed_cash_method(db)
+
+    async def _ghi_mot_phieu(self, db, invoice, *, amount, when, ref, user_id):
+        from app.models.finance import Payment, PaymentMethod, PaymentStatusEnum
+        method = (
+            await db.execute(select(PaymentMethod).where(PaymentMethod.code == "cash"))
+        ).scalars().first()
+        db.add(
+            Payment(
+                invoice_id=invoice.id,
+                method_id=method.id,
+                amount=amount,
+                reference_code=ref,
+                status=PaymentStatusEnum.verified.value,
+                payment_date=when,
+                created_by_id=user_id,
+            )
+        )
+        await db.flush()
+
+    async def test_ma_tham_chieu_KHAC_nhau_van_bi_canh_bao(self, db, seeded_dependencies, admin_user):
+        """Ca chính: đây là lỗ hổng mà luật theo mã tham chiếu để lọt."""
+        _, fee, invs = await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "10000000", "issued", "0", "0")],
+        )
+        await self._ghi_mot_phieu(
+            db, invs[0],
+            amount=Decimal("5000000"),
+            when=datetime(2026, 8, 5, tzinfo=timezone.utc),
+            ref="UNC-111",
+            user_id=admin_user.id,
+        )
+        res = await pis.resolve_and_validate(
+            db,
+            [_draft("001234567890", "5000000", reference="UNC-222",
+                    payment_date=date(2026, 8, 6))],
+            2026, 1, None,
+        )
+        row = res.rows[0]
+        assert row.status == WARNED
+        assert "nghi trùng với 1 phiếu đã ghi" in row.message
+
+    async def test_ngoai_cua_so_ngay_thi_khong_canh_bao(self, db, seeded_dependencies, admin_user):
+        _, fee, invs = await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "10000000", "issued", "0", "0")],
+        )
+        await self._ghi_mot_phieu(
+            db, invs[0],
+            amount=Decimal("5000000"),
+            when=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            ref="UNC-111",
+            user_id=admin_user.id,
+        )
+        res = await pis.resolve_and_validate(
+            db,
+            [_draft("001234567890", "5000000", reference="UNC-222",
+                    payment_date=date(2026, 8, 20))],
+            2026, 1, None,
+        )
+        assert res.rows[0].status == MATCHED
+
+    async def test_khac_so_tien_thi_khong_canh_bao(self, db, seeded_dependencies, admin_user):
+        """Thu góp hợp lệ khác số tiền — cảnh báo ở đây là cảnh báo oan."""
+        _, fee, invs = await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "10000000", "issued", "0", "0")],
+        )
+        await self._ghi_mot_phieu(
+            db, invs[0],
+            amount=Decimal("5000000"),
+            when=datetime(2026, 8, 5, tzinfo=timezone.utc),
+            ref="UNC-111",
+            user_id=admin_user.id,
+        )
+        res = await pis.resolve_and_validate(
+            db,
+            [_draft("001234567890", "3000000", reference="UNC-222",
+                    payment_date=date(2026, 8, 6))],
+            2026, 1, None,
+        )
+        assert res.rows[0].status == MATCHED
+
+    async def test_khong_bao_HAI_LAN_khi_luat_ma_tham_chieu_da_bao(
+        self, db, seeded_dependencies, admin_user
+    ):
+        """Cùng một nghi ngờ mà nói hai câu thì kế toán đọc lướt cả hai."""
+        _, fee, invs = await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "10000000", "issued", "0", "0")],
+        )
+        await self._ghi_mot_phieu(
+            db, invs[0],
+            amount=Decimal("5000000"),
+            when=datetime(2026, 8, 5, tzinfo=timezone.utc),
+            ref="UNC-111",
+            user_id=admin_user.id,
+        )
+        res = await pis.resolve_and_validate(
+            db,
+            [_draft("001234567890", "5000000", reference="UNC-111",
+                    payment_date=date(2026, 8, 6))],
+            2026, 1, None,
+        )
+        row = res.rows[0]
+        assert row.status == WARNED
+        assert "mã tham chiếu" in row.message
+        assert "nghi trùng với" not in row.message
+
+    async def test_dong_LOI_khong_bi_ha_thanh_canh_bao(self, db, seeded_dependencies):
+        """Dòng đang lỗi thì lỗi mới là việc phải xử trước — đừng che nó."""
+        res = await pis.resolve_and_validate(
+            db,
+            [_draft("009999999999", "5000000", payment_date=date(2026, 8, 6))],
+            2026, 1, None,
+        )
+        assert res.rows[0].status == ERROR
+
+    async def test_cau_canh_bao_noi_dung_con_so_cua_so(self, db, seeded_dependencies, admin_user):
+        """Câu chữ phải lấy từ hằng, không viết tay '3 ngày'."""
+        from app.repositories.payment_repository import WINDOW_DO_TRUNG_NGAY
+        _, fee, invs = await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "10000000", "issued", "0", "0")],
+        )
+        await self._ghi_mot_phieu(
+            db, invs[0],
+            amount=Decimal("5000000"),
+            when=datetime(2026, 8, 5, tzinfo=timezone.utc),
+            ref="UNC-111",
+            user_id=admin_user.id,
+        )
+        res = await pis.resolve_and_validate(
+            db,
+            [_draft("001234567890", "5000000", reference="UNC-222",
+                    payment_date=date(2026, 8, 6))],
+            2026, 1, None,
+        )
+        assert f"{WINDOW_DO_TRUNG_NGAY} ngày" in res.rows[0].message
+
+
+class TestHangRaoTrungOBuocGhi:
+    """B3 — bước GHI phải từ chối dòng nghi trùng, và chỉ dòng đó.
+
+    Kịch bản thật: đã có một phiếu chờ duyệt cho khoản phí này (nên mọi màn hình
+    vẫn hiện "chưa thu" vì ``paid_amount`` chỉ tăng khi duyệt), rồi kế toán nhập
+    tệp có đúng khoản đó.
+    """
+
+    async def _phieu_cho_duyet(self, db, *, amount, when, user_id):
+        from app.models.finance import Payment, PaymentMethod, PaymentStatusEnum
+        method = (
+            await db.execute(select(PaymentMethod).where(PaymentMethod.code == "cash"))
+        ).scalars().first()
+        inv = (await db.execute(select(Invoice))).scalars().first()
+        db.add(
+            Payment(
+                invoice_id=inv.id,
+                method_id=method.id,
+                amount=amount,
+                reference_code="UNC-CU",
+                status=PaymentStatusEnum.pending.value,
+                payment_date=when,
+                created_by_id=user_id,
+            )
+        )
+        await db.flush()
+
+    async def test_dong_nghi_trung_bi_bo_qua_khong_ghi_tien(
+        self, db, seeded_dependencies, admin_user
+    ):
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=admin_user.id)
+        batch_id = batch.id
+        await self._phieu_cho_duyet(
+            db,
+            amount=Decimal("10000000"),
+            when=datetime(2026, 9, 5, tzinfo=timezone.utc),
+            user_id=admin_user.id,
+        )
+        await db.commit()
+
+        result, _cb = await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+
+        assert result.committed_count == 0
+        assert result.failed_count == 1
+        assert result.payment_count == 0
+        # Đúng MỘT phiếu trong hệ thống: phiếu chờ duyệt có từ trước.
+        assert len((await db.execute(select(Payment))).scalars().all()) == 1
+
+        row = (
+            await db.execute(
+                select(PaymentImportRow).where(PaymentImportRow.batch_id == batch_id)
+            )
+        ).scalars().first()
+        assert "nghi trùng" in (row.message or "")
+
+    async def test_xac_nhan_ca_lo_thi_ghi_duoc(
+        self, db, seeded_dependencies, admin_user
+    ):
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=admin_user.id)
+        batch_id = batch.id
+        await self._phieu_cho_duyet(
+            db,
+            amount=Decimal("10000000"),
+            when=datetime(2026, 9, 5, tzinfo=timezone.utc),
+            user_id=admin_user.id,
+        )
+        await db.commit()
+
+        result, _cb = await pis.commit_batch(
+            db,
+            batch_id=batch_id,
+            importer_id=admin_user.id,
+            unit_id=None,
+            confirm_duplicates=True,
+        )
+        await db.commit()
+
+        assert result.committed_count == 1
+        assert result.payment_count == 1
+        # Hai phiếu: cái chờ duyệt cũ + cái vừa ghi.
+        assert len((await db.execute(select(Payment))).scalars().all()) == 2
+
+    async def test_khong_nghi_trung_thi_van_ghi_binh_thuong(
+        self, db, seeded_dependencies, admin_user
+    ):
+        """Hàng rào không được chặn nhầm lô sạch — ca giữ cho nó không quá tay."""
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=admin_user.id)
+        batch_id = batch.id
+        await db.commit()
+
+        result, _cb = await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        assert result.committed_count == 1 and result.payment_count == 1

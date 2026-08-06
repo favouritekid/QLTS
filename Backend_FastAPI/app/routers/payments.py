@@ -857,17 +857,32 @@ async def preview_payment_import(
 async def commit_payment_import(
     request: Request,
     batch_id: int,
+    confirm_duplicates: bool = Query(
+        False,
+        description=(
+            "Bỏ qua hàng rào nghi trùng cho TOÀN LÔ. Chỉ bật khi kế toán đã soát "
+            "và xác nhận đây là những khoản thu riêng biệt."
+        ),
+    ),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
     _finance_staff: models.User = Depends(require_finance_staff),
 ):
     """Pha 2: re-validate TOCTOU dưới khóa + auto-verify từng dòng (kế toán=maker,
     system_user=checker) + gộp lead-sync. Lô đã committed → 409 (không ghi lại).
+
+    Dòng nghi trùng với phiếu đã ghi bị BỎ QUA (không ghi) và tính vào
+    ``failed_count`` kèm lý do; phần còn lại của lô vẫn vào. Muốn ghi cả những
+    dòng đó thì gọi lại với ``confirm_duplicates=true``.
     """
     unit_id = finance_scope_unit_id(current_user)
     try:
         result, callback = await payment_import_service.commit_batch(
-            db, batch_id=batch_id, importer_id=current_user.id, unit_id=unit_id
+            db,
+            batch_id=batch_id,
+            importer_id=current_user.id,
+            unit_id=unit_id,
+            confirm_duplicates=confirm_duplicates,
         )
         await db.commit()
         if callback:

@@ -49,6 +49,12 @@ from app.utils.datetime_helpers import vn_calendar_date
 #: thể bị dùng làm vũ khí.
 MAX_DUPLICATE_CANDIDATES = 20
 
+#: Cửa sổ dò trùng, tính bằng NGÀY LỊCH Việt Nam. Là hằng dùng chung chứ không
+#: phải mặc định của riêng hàm: câu thông báo gửi cho kế toán cũng phải nói đúng
+#: con số này. Viết "3 ngày" thẳng vào câu chữ thì đổi cửa sổ ở đây sẽ để lại
+#: một lời nhắn nói sai về chính hàng rào vừa chạy.
+WINDOW_DO_TRUNG_NGAY = 3
+
 
 def _dieu_kien_nghi_trung(fee_id_expr, amount_expr, day_from_expr, day_to_expr):
     """MỘT định nghĩa duy nhất của "hai phiếu có thể là cùng một lần thu".
@@ -356,7 +362,7 @@ class PaymentRepository(BaseRepository[Payment]):
         fee_id: int,
         amount: Decimal,
         payment_date: datetime,
-        window_days: int = 3,
+        window_days: int = WINDOW_DO_TRUNG_NGAY,
         exclude_payment_id: Optional[int] = None,
         limit: int = MAX_DUPLICATE_CANDIDATES,
         unit_id: Optional[int] = None,
@@ -452,7 +458,7 @@ class PaymentRepository(BaseRepository[Payment]):
     async def find_duplicate_candidates_bulk(
         self,
         keys: Sequence[Tuple[int, int, Decimal, datetime]],
-        window_days: int = 3,
+        window_days: int = WINDOW_DO_TRUNG_NGAY,
         exclude_payment_ids: Optional[Set[int]] = None,
     ) -> Dict[int, List[int]]:
         """Bản BÓ của :meth:`find_duplicate_candidates` cho đường nhập lô.
