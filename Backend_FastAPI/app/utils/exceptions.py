@@ -485,6 +485,24 @@ class DormSyncDisabledError(ServiceError):
     error_code = "DORM_SYNC_DISABLED"
 
 
+class DormSyncGuardError(ServiceError):
+    """
+    Raised when a source/target identity guard refuses to proceed.
+
+    🔴 Đây là hàng rào chặn ca tệ nhất: một backend dev trỏ nhầm, hoặc một bản
+    clone của production, hạ cờ đủ-điều-kiện của cả một cohort thật. Guard hỏi
+    thẳng database ``current_database()`` và ``system_identifier`` — không tin
+    nhãn trong file cấu hình.
+
+    ⚠️ Không bao giờ "bỏ qua khi gặp trở ngại". Đọc không được
+    ``system_identifier`` trùng đúng với ca "đây không phải cluster ta nghĩ".
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    detail = "Nguồn dữ liệu không khớp khai báo; từ chối ghi."
+    error_code = "DORM_SYNC_GUARD_MISMATCH"
+
+
 class DormSyncConfigError(ServiceError):
     """
     Raised when ``DORM_SYNC_ENABLED`` is on but required settings are missing.
