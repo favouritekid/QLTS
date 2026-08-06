@@ -289,9 +289,12 @@ export function PaymentRecordDialog({
           invoice_id: invoiceId,
           method_id: values.method_id,
           amount: values.amount.toString(),
-          // Đọc thẳng ô ngày người dùng bấm. `toISOString()` quy về UTC nên ở
-          // Việt Nam nó ghi LÙI MỘT NGÀY mọi lần kế toán tự chọn ngày —
-          // xem `calendarDateToISO`.
+          // Đọc thẳng ô ngày kế toán bấm. `toISOString()` quy về UTC, mà lịch
+          // trả `Date` 00:00 GIỜ ĐỊA PHƯƠNG — ở Việt Nam nó ghi LÙI MỘT NGÀY,
+          // và sau khi lưu màn hình hiện đúng cái đã lưu nên người ghi thấy
+          // ngày mình vừa chọn bị lùi. Xem `calendarDateToISO`.
+          // Dùng lại `ngayGui` đã tính ở trên để dấu vân tay chống trùng và
+          // giá trị gửi lên luôn là CÙNG một chuỗi ngày.
           payment_date: ngayGui,
           reference_code: values.reference_code || undefined,
           payer_name: values.payer_name || undefined,
