@@ -74,3 +74,31 @@ class TestPaymentAmountPrecision:
     def test_khong_duong_van_bi_chan_nhu_cu(self, amount):
         with pytest.raises(ValidationError):
             PaymentCreate(**_payload(amount))
+
+
+class TestPaymentDateNgoaiTam:
+    """Năm ngoài tầm nghiệp vụ phải là 422, không phải 500.
+
+    Hàng rào dò trùng cộng/trừ vài ngày quanh mốc rồi quy về múi giờ Việt Nam:
+    `9999-12-31` tràn khỏi `date.max`, `0001-01-01` tràn lúc đổi múi giờ. Cả hai
+    ném `OverflowError` — thứ router không bắt — cho một chuỗi ngày người gọi tự
+    gõ. Đường XEM TRƯỚC đã chặn khoảng năm này từ trước; ca dưới giữ cho đường
+    GHI không tụt lại.
+    """
+
+    @pytest.mark.parametrize("ngay", ["9999-12-31T00:00:00", "0001-01-01T00:00:00"])
+    def test_nam_ngoai_khoang_bi_tu_choi(self, ngay):
+        payload = _payload("100")
+        payload["payment_date"] = ngay
+        with pytest.raises(ValidationError):
+            PaymentCreate(**payload)
+
+    @pytest.mark.parametrize("ngay", ["1900-01-01T00:00:00", "2100-12-31T23:59:59"])
+    def test_hai_dau_khoang_van_hop_le(self, ngay):
+        payload = _payload("100")
+        payload["payment_date"] = ngay
+        assert PaymentCreate(**payload).payment_date is not None
+
+    def test_khong_truyen_ngay_van_hop_le(self):
+        """`payment_date` là tuỳ chọn — máy chủ tự lấy thời điểm hiện tại."""
+        assert PaymentCreate(**_payload("100")).payment_date is None

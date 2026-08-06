@@ -41,6 +41,7 @@ from app.models.finance import (
 from app.schemas import finance as finance_schemas
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.repositories.payment_repository import (
+    WINDOW_DO_TRUNG_NGAY,
     PaymentRepository,
     PaymentTransactionRepository,
 )
@@ -377,7 +378,8 @@ class PaymentService:
                 ]
                 raise PaymentDuplicateSuspected(
                     f"Đã có {so_luong} phiếu thu cùng số tiền cho khoản phí "
-                    f"này trong vòng 3 ngày. Kiểm tra lại trước khi ghi tiếp.",
+                    f"này, lệch không quá {WINDOW_DO_TRUNG_NGAY} ngày. "
+                    f"Kiểm tra lại trước khi ghi tiếp.",
                     duplicates=duplicates,
                     duplicates_truncated=truncated,
                 )

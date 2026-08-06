@@ -468,6 +468,10 @@ class PaymentRepository(BaseRepository[Payment]):
         dòng trong tệp) vì hai dòng khác nhau có thể trùng cả ba tham số còn
         lại — gộp theo ``(fee, tiền, ngày)`` sẽ làm hai dòng đó dính vào nhau.
 
+        Mỗi dòng trả tối đa ``MAX_DUPLICATE_CANDIDATES + 1`` mã phiếu: quá trần
+        nghĩa là danh sách đã bị cắt, người gọi phải nói "nhiều" chứ không nói
+        một con số.
+
         Vì sao không gọi hàm một-phiếu trong vòng lặp: một tệp nhập lô có tới
         vài trăm dòng, mỗi dòng một lượt đi-về cơ sở dữ liệu. Kiến trúc của
         repo này cấm N+1 và đường xem trước đã prefetch mọi thứ khác theo lô.
@@ -517,26 +521,43 @@ class PaymentRepository(BaseRepository[Payment]):
         if exclude_payment_ids:
             conditions.append(Payment.id.notin_(exclude_payment_ids))
 
-        # Trần tổng: hàng rào chống một tệp bệnh kéo cả bảng lên bộ nhớ. Cắt ở
-        # đây làm danh sách của MỘT SỐ dòng ngắn đi, nhưng người gọi chỉ dùng
-        # nó để cảnh báo "có trùng" nên cắt bớt mã phiếu không đổi kết luận.
-        tran_tong = len(rows) * MAX_DUPLICATE_CANDIDATES
-
-        query = (
-            select(k.c.idx, Payment.id)
+        # Trần đánh theo TỪNG DÒNG, ngay trong câu lệnh.
+        #
+        # Bản đầu dùng một `LIMIT` tổng (`số_dòng * MAX`) cộng `ORDER BY idx`.
+        # Sai kín: hạn ngạch bị tiêu thụ theo thứ tự idx, nên một dòng đầu tệp
+        # có nhiều ứng viên ăn hết phần của các dòng sau, và những dòng đó nhận
+        # danh sách RỖNG — tức là im lặng báo "không trùng" ở đúng nơi đang cần
+        # cảnh báo. Cắt bằng `row_number()` theo partition thì mỗi dòng có trần
+        # riêng và không dòng nào bỏ đói dòng nào.
+        #
+        # Lấy MAX+1 (cùng mẹo với đường một phiếu): người gọi thấy quá MAX thì
+        # biết danh sách đã bị cắt và phải nói "nhiều" thay vì một con số sai.
+        thu_tu_trong_dong = (
+            func.row_number()
+            .over(partition_by=k.c.idx, order_by=Payment.id)
+            .label("thu_tu")
+        )
+        sub = (
+            select(
+                k.c.idx.label("idx"),
+                Payment.id.label("payment_id"),
+                thu_tu_trong_dong,
+            )
             .select_from(k)
             .join(Invoice, Invoice.fee_id == k.c.fee_id)
             .join(Payment, Payment.invoice_id == Invoice.id)
             .where(and_(*conditions))
-            .order_by(k.c.idx, Payment.id)
-            .limit(tran_tong)
+            .subquery()
+        )
+        query = (
+            select(sub.c.idx, sub.c.payment_id)
+            .where(sub.c.thu_tu <= MAX_DUPLICATE_CANDIDATES + 1)
+            .order_by(sub.c.idx, sub.c.payment_id)
         )
 
         ket_qua: Dict[int, List[int]] = {}
         for idx, payment_id in (await self.db.execute(query)).all():
-            ds = ket_qua.setdefault(idx, [])
-            if len(ds) < MAX_DUPLICATE_CANDIDATES:
-                ds.append(payment_id)
+            ket_qua.setdefault(idx, []).append(payment_id)
         return ket_qua
 
     async def get_filtered(

@@ -622,6 +622,23 @@ class PaymentCreate(BaseModel):
         "hai, không được đính sẵn.",
     )
 
+    @field_validator('payment_date')
+    @classmethod
+    def validate_payment_date(cls, v: Optional[datetime]) -> Optional[datetime]:
+        """Chặn năm ngoài tầm nghiệp vụ — nếu không thì 500 thay vì 422.
+
+        Hàng rào dò trùng cộng/trừ vài ngày quanh mốc này rồi quy về múi giờ
+        Việt Nam, nên ``9999-12-31`` làm phép cộng tràn khỏi ``date.max`` còn
+        ``0001-01-01`` tràn lúc đổi múi giờ — cả hai ném ``OverflowError``,
+        thứ mà router không bắt, cho một chuỗi ngày người gọi tự gõ.
+
+        Đường XEM TRƯỚC đã chặn khoảng năm này (``routers/payments.py``); đặt ở
+        schema để đường GHI không phải nhớ lại điều tương tự lần nữa.
+        """
+        if v is not None and not (1900 <= v.year <= 2100):
+            raise ValueError("payment_date nằm ngoài khoảng năm hợp lệ (1900–2100)")
+        return v
+
     @field_validator('amount')
     @classmethod
     def validate_amount(cls, v: Decimal) -> Decimal:

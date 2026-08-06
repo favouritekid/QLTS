@@ -85,10 +85,25 @@ export function usePreviewPaymentImport() {
 // ============================================================================
 // PHA 2 — COMMIT (ghi tiền)
 // ============================================================================
+/**
+ * Ghi tiền cho lô.
+ *
+ * `confirmDuplicates` chỉ bật khi kế toán đã đọc danh sách dòng nghi trùng và
+ * khẳng định đó là những khoản thu riêng. Máy chủ giữ lô ở trạng thái xem
+ * trước khi còn dòng bị chặn, nên lượt gửi lại này là đường DUY NHẤT để chúng
+ * vào sổ; không có nó thì tiền đã thu thật bị kẹt ngoài hệ thống.
+ */
 export function useCommitPaymentImport() {
   const queryClient = useQueryClient()
-  return useMutation<PaymentImportCommit, AxiosError<ApiErrorResponse>, number>({
-    mutationFn: (batchId) => paymentImportApi.commit(batchId),
+  return useMutation<
+    PaymentImportCommit,
+    AxiosError<ApiErrorResponse>,
+    { batchId: number; confirmDuplicates?: boolean } | number
+  >({
+    mutationFn: (bien) =>
+      typeof bien === "number"
+        ? paymentImportApi.commit(bien)
+        : paymentImportApi.commit(bien.batchId, bien.confirmDuplicates ?? false),
     onSuccess: (result) => {
       toast.success(
         `Đã ghi ${result.committed_count} dòng` +

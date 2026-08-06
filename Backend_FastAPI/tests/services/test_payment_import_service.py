@@ -2934,3 +2934,152 @@ class TestHangRaoTrungOBuocGhi:
         )
         await db.commit()
         assert result.committed_count == 1 and result.payment_count == 1
+
+
+class TestSuaSauCodeReview:
+    """Ba lỗ hổng do rà soát chỉ ra, đều thuộc nhóm 'tiền kẹt ngoài hệ thống'."""
+
+    async def _phieu_cho_duyet(self, db, *, amount, when, user_id):
+        from app.models.finance import Payment, PaymentMethod, PaymentStatusEnum
+        method = (
+            await db.execute(select(PaymentMethod).where(PaymentMethod.code == "cash"))
+        ).scalars().first()
+        inv = (await db.execute(select(Invoice))).scalars().first()
+        db.add(
+            Payment(
+                invoice_id=inv.id,
+                method_id=method.id,
+                amount=amount,
+                reference_code="UNC-CU",
+                status=PaymentStatusEnum.pending.value,
+                payment_date=when,
+                created_by_id=user_id,
+            )
+        )
+        await db.flush()
+
+    async def test_lo_con_dong_bi_chan_thi_KHONG_dong_lai(
+        self, db, seeded_dependencies, admin_user
+    ):
+        """Đóng lô ở đây là dựng ngõ cụt: lô committed từ chối commit lại (409),
+        nên dòng bị giữ vĩnh viễn không vào được — mà đó là tiền đã thu thật."""
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        batch = await _preview_batch(db, seeded_dependencies, importer_id=admin_user.id)
+        batch_id = batch.id
+        await self._phieu_cho_duyet(
+            db,
+            amount=Decimal("10000000"),
+            when=datetime(2026, 9, 5, tzinfo=timezone.utc),
+            user_id=admin_user.id,
+        )
+        await db.commit()
+
+        await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+
+        b = (
+            await db.execute(
+                select(PaymentImportBatch).where(PaymentImportBatch.id == batch_id)
+            )
+        ).scalar_one()
+        assert b.status == "preview", "lô còn dòng nghi trùng mà đã bị đóng"
+
+        # …và chính vì còn 'preview' nên lượt gửi lại với xác nhận mới cứu được.
+        result2, _ = await pis.commit_batch(
+            db,
+            batch_id=batch_id,
+            importer_id=admin_user.id,
+            unit_id=None,
+            confirm_duplicates=True,
+        )
+        await db.commit()
+        assert result2.committed_count == 1
+
+    async def test_hai_dong_giong_HET_nhau_trong_MOT_lo_deu_ghi_duoc(
+        self, db, seeded_dependencies, admin_user
+    ):
+        """Xem trước cố ý coi hai dòng giống hệt là hai khoản thu riêng (map dò
+        trùng khoá theo row_no). Bước ghi phải nói CÙNG một điều — nếu không thì
+        pha ghi thắng và khoản thứ hai rơi mất."""
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "10000000", "issued", "0", "0")],
+        )
+        content = _csv_bytes(
+            [
+                pis.TEMPLATE_COLS,
+                ["001234567890", "Nguyễn Văn An", "5.000.000", "05/09/2026", "TM", "", ""],
+                ["001234567890", "Nguyễn Văn An", "5.000.000", "05/09/2026", "TM", "", ""],
+            ]
+        )
+        batch, _ = await pis.preview_import(
+            db,
+            content=content,
+            filename="hai-dong.csv",
+            academic_year=2026,
+            semester_no=1,
+            created_by_id=admin_user.id,
+            unit_id=None,
+        )
+        batch_id = batch.id
+        await db.commit()
+
+        result, _ = await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+
+        assert result.committed_count == 2, "dòng thứ hai bị chính dòng đầu tố"
+        assert result.payment_count == 2
+
+    async def test_tran_dem_theo_TUNG_dong_khong_bo_doi_dong_sau(
+        self, db, seeded_dependencies, admin_user
+    ):
+        """Trần tổng + ORDER BY idx làm dòng đầu ăn hết hạn ngạch, dòng sau nhận
+        rỗng và im lặng báo 'không trùng' — đúng chỗ đang cần cảnh báo."""
+        from app.repositories.payment_repository import (
+            MAX_DUPLICATE_CANDIDATES,
+            PaymentRepository,
+        )
+        from app.models.finance import Payment, PaymentMethod, PaymentStatusEnum
+
+        await _seed_cash_method(db)
+        _, fee, invs = await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[(1, "900000000", "issued", "0", "0")],
+        )
+        method = (
+            await db.execute(select(PaymentMethod).where(PaymentMethod.code == "cash"))
+        ).scalars().first()
+        khi = datetime(2026, 9, 5, tzinfo=timezone.utc)
+        # Nhiều hơn trần MỘT dòng, để nếu hạn ngạch bị tiêu thụ theo thứ tự idx
+        # thì dòng thứ hai chắc chắn đói.
+        for _ in range(MAX_DUPLICATE_CANDIDATES + 5):
+            db.add(
+                Payment(
+                    invoice_id=invs[0].id,
+                    method_id=method.id,
+                    amount=Decimal("1000000"),
+                    status=PaymentStatusEnum.pending.value,
+                    payment_date=khi,
+                    created_by_id=admin_user.id,
+                )
+            )
+        await db.commit()
+
+        res = await PaymentRepository(db).find_duplicate_candidates_bulk(
+            keys=[(0, fee.id, Decimal("1000000"), khi),
+                  (1, fee.id, Decimal("1000000"), khi)]
+        )
+        assert res.get(1), "dòng thứ hai bị bỏ đói vì dòng đầu ăn hết hạn ngạch"
+        assert len(res[0]) == MAX_DUPLICATE_CANDIDATES + 1, "phải lấy dư 1 để biết bị cắt"
+        assert len(res[1]) == MAX_DUPLICATE_CANDIDATES + 1

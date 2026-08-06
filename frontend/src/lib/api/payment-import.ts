@@ -49,9 +49,22 @@ async function preview(params: {
   return paymentImportPreviewSchema.parse(res.data)
 }
 
-/** Pha 2: ghi tiền (auto-verify) các dòng MATCHED/WARNING của lô. */
-async function commit(batchId: number): Promise<PaymentImportCommit> {
-  const res = await api.post(IMPORT.COMMIT(batchId))
+/**
+ * Pha 2: ghi tiền (auto-verify) các dòng MATCHED/WARNING của lô.
+ *
+ * `confirmDuplicates` bỏ qua hàng rào nghi trùng cho TOÀN LÔ. Không có đường
+ * này thì những dòng bị hàng rào chặn không còn cách nào vào hệ thống — chúng
+ * là tiền kế toán đã thu thật.
+ */
+async function commit(
+  batchId: number,
+  confirmDuplicates = false,
+): Promise<PaymentImportCommit> {
+  const res = await api.post(
+    IMPORT.COMMIT(batchId),
+    undefined,
+    confirmDuplicates ? { params: { confirm_duplicates: true } } : undefined,
+  )
   return paymentImportCommitSchema.parse(res.data)
 }
 

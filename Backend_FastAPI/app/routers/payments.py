@@ -104,6 +104,12 @@ async def list_payments(
         # đáng lẽ là 422. Đúng lớp lỗi mà `fee_id` đã đóng bằng `le` ngay phía
         # trên, chỉ khác tham số.
         le=finance_schemas.MAX_AMOUNT,
+        # Và cùng SỐ LẺ với `PaymentCreate.amount` (validator từ chối gì khác
+        # `quantize(0.01)`). Nửa còn lại của cùng lời hứa: `100.001` mà lọt qua
+        # đây thì so với cột `Numeric(15,2)` không khớp phiếu nào → xem trước
+        # nói "không trùng", rồi POST cùng số đó lại 422. Người dùng nhận hai
+        # câu trả lời khác nhau cho một con số.
+        decimal_places=2,
         description="Xem trước phiếu NGHI TRÙNG: đi kèm duplicate_date và "
         "fee_id. Trả về đúng tập ứng viên mà POST /api/payments sẽ dùng để "
         "cảnh báo, theo cùng một luật ở cùng một chỗ — giao diện chỉ hiển thị, "

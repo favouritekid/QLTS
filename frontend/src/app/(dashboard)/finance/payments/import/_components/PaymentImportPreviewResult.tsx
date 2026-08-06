@@ -63,18 +63,29 @@ export function PaymentImportPreviewResult({
 
   const committable = preview.matched_count + preview.warned_count
 
-  const handleCommit = () => {
-    commit.mutate(preview.batch_id, {
-      onSuccess: (result) => {
-        setOpen(false)
-        setCommitted(result)
+  const handleCommit = (confirmDuplicates = false) => {
+    commit.mutate(
+      { batchId: preview.batch_id, confirmDuplicates },
+      {
+        onSuccess: (result) => {
+          setOpen(false)
+          setCommitted(result)
+        },
       },
-    })
+    )
   }
 
   // ── Sau commit: hiện kết quả + dòng KHÔNG ghi được (TOCTOU) thay vì giấu ──
   if (committed) {
     const errorRows = committed.rows.filter((r) => r.status === "error")
+    // Dòng bị hàng rào nghi trùng giữ lại — khác hẳn dòng hỏng vì số dư đổi:
+    // chúng ghi lại được, và máy chủ cố ý KHÔNG đóng lô khi còn dòng như vậy.
+    // Nhận dạng qua câu lý do máy chủ sinh (có ca kiểm khoá đúng câu này ở
+    // `test_payment_import_service.py`); phần còn lại của thân trả về không
+    // mang cờ riêng nào cho tình huống này.
+    const dongNghiTrung = errorRows.filter((r) =>
+      (r.message ?? "").includes("nghi trùng"),
+    )
     return (
       <Card>
         <CardHeader>
@@ -104,6 +115,33 @@ export function PaymentImportPreviewResult({
                 {errorRows.length} dòng KHÔNG ghi được (số dư đổi giữa preview→commit):
               </p>
               <ImportRowsTable rows={errorRows} />
+              {dongNghiTrung.length > 0 && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40">
+                  <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                    {dongNghiTrung.length} dòng bị giữ lại vì nghi trùng phiếu đã ghi
+                  </p>
+                  <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
+                    Lô vẫn ở trạng thái xem trước nên những dòng này ghi lại được.
+                    Đối chiếu với phiếu đã nêu trong cột lý do; nếu đúng là khoản
+                    thu riêng thì ghi tiếp. Các dòng đã vào sổ sẽ không bị ghi hai lần.
+                  </p>
+                  <Button
+                    variant="outline"
+                    className="mt-2 border-amber-400 text-amber-900 hover:bg-amber-100 dark:text-amber-200"
+                    disabled={commit.isPending}
+                    onClick={() => handleCommit(true)}
+                  >
+                    {commit.isPending ? (
+                      <>
+                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                        Đang ghi…
+                      </>
+                    ) : (
+                      "Đã soát — ghi tiếp các dòng nghi trùng"
+                    )}
+                  </Button>
+                </div>
+              )}
             </>
           ) : (
             <p className="text-sm text-green-700">

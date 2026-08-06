@@ -26,7 +26,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 import structlog
@@ -61,6 +61,7 @@ from app.constants.export_formats import (
 )
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
 from app.repositories.payment_repository import (
+    MAX_DUPLICATE_CANDIDATES,
     WINDOW_DO_TRUNG_NGAY,
     PaymentRepository,
 )
@@ -118,6 +119,16 @@ MAX_AMOUNT = Decimal("9999999999999.99")
 # = String(100). Ref dài hơn → DataError ở flush → 500 không bắt → chặn sớm thành
 # lỗi dòng sạch.
 MAX_REF_LEN = 100
+
+
+class _NghiTrungBiChan(BusinessRuleViolation):
+    """Dòng bị hàng rào nghi trùng giữ lại — KHÔNG phải dòng hỏng.
+
+    Tách riêng khỏi ``BusinessRuleViolation`` vì hai thứ này cần kết cục khác
+    nhau: dòng hỏng thật (số dư đổi, hồ sơ bị xoá) thành ``error`` và dừng ở
+    đó, còn dòng này chỉ đang chờ kế toán soát — nó phải giữ trạng thái
+    commit-được để lượt gửi lại kèm xác nhận còn chọn tới nó.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -1318,6 +1329,11 @@ async def commit_batch(
     payment_count = 0
     total_amount = Decimal("0")
     cleared_profiles: Dict[int, str] = {}
+    # (B3) Phiếu do CHÍNH lô này ghi — để dòng sau không tự tố dòng trước.
+    payment_ids_cua_lo: Set[int] = set()
+    # Đếm riêng dòng bị hàng rào trùng chặn: chúng là thứ DUY NHẤT commit lại
+    # với cờ xác nhận sẽ cứu được, nên lô còn dòng như vậy thì chưa được đóng.
+    so_dong_chan_trung = 0
 
     for row in rows:
         row_payment_ids: List[int] = []
@@ -1431,17 +1447,28 @@ async def commit_batch(
                 # của riêng dòng này, phần còn lại của tệp vẫn vào bình thường.
                 # Chặn cả lô vì một dòng nghi ngờ sẽ biến mọi tệp lớn thành ngõ cụt.
                 if not confirm_duplicates:
-                    ung_vien, _ = await PaymentRepository(db).find_duplicate_candidates(
-                        fee_id=fee.id,
-                        amount=amount,
-                        payment_date=pay_dt,
-                        unit_id=unit_id,
+                    # Loại trừ phiếu do CHÍNH LÔ NÀY vừa ghi. Không có vế này thì
+                    # dòng 2 của một tệp có hai dòng giống hệt nhau sẽ đụng phải
+                    # phiếu mà dòng 1 vừa flush và bị từ chối — trong khi xem
+                    # trước đã cố ý coi hai dòng đó là hai khoản thu riêng (map
+                    # dò trùng khoá theo `row_no` chính vì lẽ đó). Hai pha nói
+                    # ngược nhau thì pha ghi là pha thắng, và tiền rơi mất.
+                    ket_do = await PaymentRepository(db).find_duplicate_candidates_bulk(
+                        keys=[(row.row_no, fee.id, amount, pay_dt)],
+                        exclude_payment_ids=payment_ids_cua_lo or None,
                     )
-                    if ung_vien:
-                        ma_phieu = ", ".join(f"#{p.id}" for p in ung_vien[:3])
-                        them = "…" if len(ung_vien) > 3 else ""
-                        raise BusinessRuleViolation(
-                            f"nghi trùng với {len(ung_vien)} phiếu đã ghi cho cùng "
+                    ung_vien_ids = ket_do.get(row.row_no, [])
+                    if ung_vien_ids:
+                        bi_cat = len(ung_vien_ids) > MAX_DUPLICATE_CANDIDATES
+                        so_luong = (
+                            f"hơn {MAX_DUPLICATE_CANDIDATES}"
+                            if bi_cat
+                            else str(len(ung_vien_ids))
+                        )
+                        ma_phieu = ", ".join(f"#{i}" for i in ung_vien_ids[:3])
+                        them = "…" if len(ung_vien_ids) > 3 else ""
+                        raise _NghiTrungBiChan(
+                            f"nghi trùng với {so_luong} phiếu đã ghi cho cùng "
                             f"khoản phí — cùng số tiền, lệch không quá "
                             f"{WINDOW_DO_TRUNG_NGAY} ngày ({ma_phieu}{them}). "
                             f"Soát lại; nếu đúng là khoản thu riêng thì commit lại "
@@ -1496,10 +1523,22 @@ async def commit_batch(
                 row.payment_ids = row_payment_ids
             # savepoint committed → giờ mới cộng tổng (raise giữa chừng đã rollback DB).
             committed_count += 1
+            # Chỉ ghi nhận SAU khi savepoint qua: dòng bị rollback không để lại
+            # phiếu nào, đưa id của nó vào tập loại trừ là loại trừ thứ không tồn tại.
+            payment_ids_cua_lo.update(row_payment_ids)
             payment_count += len(row_payment_ids)
             total_amount += row_total
             if row_cleared:
                 cleared_profiles[row_cleared[0]] = row_cleared[1]
+        except _NghiTrungBiChan as exc:
+            # KHÁC hẳn lỗi thật: dòng này ghi lại được, chỉ cần kế toán soát rồi
+            # xác nhận. Giữ nguyên trạng thái commit-được ('warned') — hạ xuống
+            # 'error' thì lượt commit sau KHÔNG chọn nó nữa (vòng lặp chỉ lấy
+            # matched/warned), và cờ xác nhận trở thành nút bấm không làm gì.
+            failed_count += 1
+            so_dong_chan_trung += 1
+            row.status = PaymentImportRowStatusEnum.warned.value
+            row.message = str(exc)[:500]
         except (
             BusinessRuleViolation,
             ResourceNotFoundError,
@@ -1568,7 +1607,14 @@ async def commit_batch(
     # Chỉ đánh dấu 'committed' khi THỰC SỰ ghi được tiền. 0 dòng ghi (tất cả fail
     # TOCTOU) → GIỮ 'preview' để re-import được (chưa có endpoint void; tránh khóa
     # file vĩnh viễn qua partial-unique).
-    if committed_count > 0:
+    #
+    # (B3) Còn dòng bị hàng rào trùng chặn thì CŨNG giữ 'preview'. Đóng lô ở đây
+    # là dựng ngõ cụt: lô 'committed' từ chối commit lại (409), nên những dòng
+    # kia vĩnh viễn không vào được — mà chúng là tiền thật kế toán đã thu. Giữ
+    # 'preview' cho phép soát rồi commit lại với `confirm_duplicates`; các dòng
+    # đã ghi ở lượt này không bị ghi hai lần vì idempotency key
+    # `bulkimport:{lô}:{dòng}:{hoá đơn}` đã chặn sẵn.
+    if committed_count > 0 and so_dong_chan_trung == 0:
         batch.status = PaymentImportBatchStatusEnum.committed.value
         batch.committed_at = datetime.now(timezone.utc)
     await db.flush()

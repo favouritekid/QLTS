@@ -231,7 +231,13 @@ jobs:
           #   * test_payment_duplicate_contract — thân JSON của lỗi 409 (không
           #     đi qua `response_model` nào cả, nên không ai rà hộ): đúng tập
           #     khoá, số tiền là chuỗi, ngày ISO, tối đa 20 phần tử, không rò
-          #     `context`, và 409 không được sinh thêm phiếu.
+          #     `context`, và 409 không được sinh thêm phiếu;
+          #   * test_payment_import_service — ĐƯỜNG NHẬP LÔ, nơi 286 phiếu prod
+          #     đi vào. Canh hai thứ không đường nào khác canh hộ: bản BÓ của
+          #     luật dò trùng phải cho cùng kết quả với bản một-phiếu (chép lệch
+          #     là có hai hàng rào, và bản lỏng hơn thắng), và hàng rào ở bước
+          #     ghi phải bỏ ĐÚNG dòng nghi trùng chứ không bỏ cả lô — cũng không
+          #     được tự tố phiếu mà chính lô này vừa ghi.
           # Ba tập cuối (cohort đưa sang hệ ký túc xá) canh thứ hỏng ÂM THẦM:
           #   * test_hk1_fee_scope_single_source — structural lock-in buộc các
           #     call site thật sự gọi helper chung;
@@ -285,6 +291,7 @@ jobs:
               tests/unit/test_payment_amount_precision.py
               tests/services/test_payment_duplicate_guard.py
               tests/api/test_payment_duplicate_contract.py
+              tests/services/test_payment_import_service.py
 
           # ---------------------------------------------------------------
           # Tier 2: RBAC + CCCD lock + CSRF
