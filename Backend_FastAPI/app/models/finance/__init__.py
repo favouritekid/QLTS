@@ -42,6 +42,7 @@ from .payment_import import (
     PaymentImportRow,
     PaymentImportBatchStatusEnum,
     PaymentImportRowStatusEnum,
+    PaymentImportCommitStatusEnum,
 )
 
 __all__ = [
@@ -84,6 +85,7 @@ __all__ = [
     "PaymentImportRow",
     "PaymentImportBatchStatusEnum",
     "PaymentImportRowStatusEnum",
+    "PaymentImportCommitStatusEnum",
 ]
 
 # Nhập vì TÁC DỤNG PHỤ: module này gắn trigger `duplicate_guard_version` vào

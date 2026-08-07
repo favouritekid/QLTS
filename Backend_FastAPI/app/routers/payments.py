@@ -863,13 +863,7 @@ async def preview_payment_import(
 async def commit_payment_import(
     request: Request,
     batch_id: int,
-    confirm_duplicates: bool = Query(
-        False,
-        description=(
-            "Bỏ qua hàng rào nghi trùng cho TOÀN LÔ. Chỉ bật khi kế toán đã soát "
-            "và xác nhận đây là những khoản thu riêng biệt."
-        ),
-    ),
+    body: Optional[finance_schemas.PaymentImportCommitIn] = Body(None),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
     _finance_staff: models.User = Depends(require_finance_staff),
@@ -877,9 +871,15 @@ async def commit_payment_import(
     """Pha 2: re-validate TOCTOU dưới khóa + auto-verify từng dòng (kế toán=maker,
     system_user=checker) + gộp lead-sync. Lô đã committed → 409 (không ghi lại).
 
-    Dòng nghi trùng với phiếu đã ghi bị BỎ QUA (không ghi) và tính vào
-    ``failed_count`` kèm lý do; phần còn lại của lô vẫn vào. Muốn ghi cả những
-    dòng đó thì gọi lại với ``confirm_duplicates=true``.
+    Dòng nghi trùng với phiếu đã ghi bị GIỮ LẠI (không ghi) và mang
+    ``commit_status='duplicate_review_required'`` kèm một PHIẾU xác nhận riêng
+    cho dòng đó; phần còn lại của lô vẫn vào. Muốn ghi tiếp những dòng ấy thì
+    gọi lại kèm ``confirmed_rows`` — mỗi phần tử là ``row_no`` cộng đúng phiếu
+    mà lượt trước trả về cho dòng đó.
+
+    Không có cờ "bỏ qua cho TOÀN LÔ" nữa: một cờ như vậy bỏ qua cả những cảnh
+    báo sinh ra SAU khi kế toán đã soát, và nó không nói được người bấm đã nhìn
+    thấy những gì.
     """
     unit_id = finance_scope_unit_id(current_user)
     try:
@@ -888,7 +888,11 @@ async def commit_payment_import(
             batch_id=batch_id,
             importer_id=current_user.id,
             unit_id=unit_id,
-            confirm_duplicates=confirm_duplicates,
+            confirmed_tokens=(
+                {r.row_no: r.review_token for r in body.confirmed_rows}
+                if body and body.confirmed_rows
+                else None
+            ),
         )
         await db.commit()
         if callback:
@@ -1083,7 +1087,16 @@ def _payment_import_row_out(r) -> finance_schemas.PaymentImportRowOut:
     """Map 1 ``PaymentImportRow`` ORM → schema (dùng chung commit + detail BV-5)."""
     return finance_schemas.PaymentImportRowOut(
         row_no=r.row_no,
-        status=r.status,
+        validation_status=r.validation_status,
+        commit_status=r.commit_status,
+        # Phiếu chỉ đi ra khi dòng THẬT SỰ đang chờ xác nhận. Trả kèm ở mọi
+        # trạng thái khác là phát ra một thứ trông như quyền nhưng không mở
+        # được gì — và rồi ai đó sẽ thử.
+        review_token=(
+            r.duplicate_review_token
+            if r.commit_status == "duplicate_review_required"
+            else None
+        ),
         message=r.message,
         citizen_id=r.citizen_id,
         profile_id=r.resolved_profile_id,
@@ -1102,6 +1115,7 @@ def _build_payment_import_commit(
         status=batch.status if batch is not None else "committed",
         committed_count=result.committed_count,
         failed_count=result.failed_count,
+        review_required_count=result.review_required_count,
         payment_count=result.payment_count,
         total_amount=result.total_amount,
         rows=[_payment_import_row_out(r) for r in rows],
@@ -1130,7 +1144,14 @@ def _build_payment_import_preview(
         rows=[
             finance_schemas.PaymentImportRowOut(
                 row_no=r.row_no,
-                status=r.status,
+                validation_status=r.validation_status,
+                # Bước xem trước KHÔNG ghi tiền, nên trục GHI ở đây luôn là
+                # "chưa ghi" — trừ dòng hỏng từ khâu đọc, thứ không có gì để ghi.
+                commit_status=(
+                    "not_applicable"
+                    if r.validation_status == "error"
+                    else "pending"
+                ),
                 message=r.message,
                 citizen_id=r.citizen_id,
                 profile_id=r.profile_id,

@@ -517,7 +517,7 @@ class TestResolveValidate:
             db, [_draft("001234567890", "10000000")], 2026, 1, None
         )
         row = res.rows[0]
-        assert row.status == MATCHED
+        assert row.validation_status == MATCHED
         assert res.matched_count == 1 and res.failed_count == 0
         assert len(row.allocations) == 1
         assert row.allocations[0].amount == Decimal("10000000")
@@ -527,14 +527,14 @@ class TestResolveValidate:
         res = await pis.resolve_and_validate(
             db, [_draft("009999999999", "1000000")], 2026, 1, None
         )
-        assert res.rows[0].status == ERROR
+        assert res.rows[0].validation_status == ERROR
         assert "không tìm thấy" in res.rows[0].message
 
     async def test_cmnd_9_digits_is_error(self, db, seeded_dependencies):
         res = await pis.resolve_and_validate(
             db, [_draft("123456789", "1000000")], 2026, 1, None
         )
-        assert res.rows[0].status == ERROR
+        assert res.rows[0].validation_status == ERROR
         assert "12 chữ số" in res.rows[0].message
 
     async def test_fee_cancelled_only_is_error(self, db, seeded_dependencies):
@@ -550,7 +550,7 @@ class TestResolveValidate:
         res = await pis.resolve_and_validate(
             db, [_draft("001234567890", "1000000")], 2026, 1, None
         )
-        assert res.rows[0].status == ERROR
+        assert res.rows[0].validation_status == ERROR
         assert "học phí" in res.rows[0].message
 
     async def test_only_draft_invoice_is_error(self, db, seeded_dependencies):
@@ -565,7 +565,7 @@ class TestResolveValidate:
         res = await pis.resolve_and_validate(
             db, [_draft("001234567890", "1000000")], 2026, 1, None
         )
-        assert res.rows[0].status == ERROR
+        assert res.rows[0].validation_status == ERROR
         assert "đợt còn nháp" in res.rows[0].message
         assert "phát hành" in res.rows[0].message
         assert "đã thu đủ" not in res.rows[0].message  # không còn gộp 2 ca
@@ -584,7 +584,7 @@ class TestResolveValidate:
         res = await pis.resolve_and_validate(
             db, [_draft("001234567890", "1000000")], 2026, 1, None
         )
-        assert res.rows[0].status == ERROR
+        assert res.rows[0].validation_status == ERROR
         assert res.rows[0].message == "học phí đã thu đủ"
 
     async def test_overpay_total_principal_is_error(self, db, seeded_dependencies):
@@ -597,7 +597,7 @@ class TestResolveValidate:
         res = await pis.resolve_and_validate(
             db, [_draft("001234567890", "10000001")], 2026, 1, None
         )
-        assert res.rows[0].status == ERROR
+        assert res.rows[0].validation_status == ERROR
         assert "vượt tổng còn nợ" in res.rows[0].message
 
     async def test_fifo_two_invoices_warns(self, db, seeded_dependencies):
@@ -614,7 +614,7 @@ class TestResolveValidate:
             db, [_draft("001234567890", "7000000")], 2026, 1, None
         )
         row = res.rows[0]
-        assert row.status == WARNED
+        assert row.validation_status == WARNED
         assert len(row.allocations) == 2
         assert row.allocations[0].amount == Decimal("4000000")  # đợt 1 đầy trước
         assert row.allocations[1].amount == Decimal("3000000")  # tràn 3tr sang đợt 2
@@ -638,9 +638,9 @@ class TestResolveValidate:
             1,
             None,
         )
-        assert res.rows[0].status == WARNED  # G1: trùng CCCD+cùng tiền → cảnh báo
+        assert res.rows[0].validation_status == WARNED  # G1: trùng CCCD+cùng tiền → cảnh báo
         assert "nghi copy" in res.rows[0].message
-        assert res.rows[1].status == ERROR  # 6tr > 4tr còn lại
+        assert res.rows[1].validation_status == ERROR  # 6tr > 4tr còn lại
         assert "vượt tổng còn nợ" in res.rows[1].message
 
     async def test_name_mismatch_warns(self, db, seeded_dependencies):
@@ -655,7 +655,7 @@ class TestResolveValidate:
             db, [_draft("001234567890", "1000000", name="Trần Thị Bích")], 2026, 1, None
         )
         row = res.rows[0]
-        assert row.status == WARNED
+        assert row.validation_status == WARNED
         assert "tên lệch" in row.message
 
     async def test_principal_first_ignores_penalty(self, db, seeded_dependencies):
@@ -672,7 +672,7 @@ class TestResolveValidate:
         ok = await pis.resolve_and_validate(
             db, [_draft("001234567890", "10000000")], 2026, 1, None
         )
-        assert ok.rows[0].status == MATCHED
+        assert ok.rows[0].validation_status == MATCHED
         assert ok.rows[0].allocations[0].amount == Decimal("10000000")
         # trả 10tr + 1đ → vượt gốc 10tr (dù remaining gồm penalty là 11tr) → ERROR
         await _seed_tuition(
@@ -684,7 +684,7 @@ class TestResolveValidate:
         over = await pis.resolve_and_validate(
             db, [_draft("001234567891", "10000001")], 2026, 1, None
         )
-        assert over.rows[0].status == ERROR
+        assert over.rows[0].validation_status == ERROR
         assert "vượt tổng còn nợ" in over.rows[0].message
 
     async def test_partial_paid_principal_remaining(self, db, seeded_dependencies):
@@ -698,7 +698,7 @@ class TestResolveValidate:
         res = await pis.resolve_and_validate(
             db, [_draft("001234567890", "6000000")], 2026, 1, None
         )
-        assert res.rows[0].status == MATCHED
+        assert res.rows[0].validation_status == MATCHED
         assert res.rows[0].allocations[0].amount == Decimal("6000000")
 
     async def test_idor_other_unit_not_found(
@@ -719,13 +719,13 @@ class TestResolveValidate:
             1,
             seeded_dependencies["unit_id"],
         )
-        assert scoped.rows[0].status == ERROR
+        assert scoped.rows[0].validation_status == ERROR
         assert "không tìm thấy" in scoped.rows[0].message
         # admin (unit_id=None) → thấy
         glob = await pis.resolve_and_validate(
             db, [_draft("001234567890", "1000000")], 2026, 1, None
         )
-        assert glob.rows[0].status == MATCHED
+        assert glob.rows[0].validation_status == MATCHED
 
     async def test_soft_deleted_lead_not_found(self, db, seeded_dependencies):
         # Finding 2: hồ sơ của lead đã xóa mềm KHÔNG được khớp
@@ -739,7 +739,7 @@ class TestResolveValidate:
         res = await pis.resolve_and_validate(
             db, [_draft("001234567890", "1000000")], 2026, 1, None
         )
-        assert res.rows[0].status == ERROR
+        assert res.rows[0].validation_status == ERROR
         assert "không tìm thấy" in res.rows[0].message
 
     async def test_wrong_semester_is_error(self, db, seeded_dependencies):
@@ -753,7 +753,7 @@ class TestResolveValidate:
         res = await pis.resolve_and_validate(
             db, [_draft("001234567890", "1000000")], 2026, 2, None
         )  # hỏi HK2
-        assert res.rows[0].status == ERROR
+        assert res.rows[0].validation_status == ERROR
         assert "chưa được thiết lập học phí HK2" in res.rows[0].message
 
     async def test_payment_date_far_from_year_warns(self, db, seeded_dependencies):
@@ -766,7 +766,7 @@ class TestResolveValidate:
         )
         d = _draft("001234567890", "1000000", payment_date=date(2030, 9, 5))
         res = await pis.resolve_and_validate(db, [d], 2026, 1, None)
-        assert res.rows[0].status == WARNED
+        assert res.rows[0].validation_status == WARNED
         assert "lệch xa năm học" in res.rows[0].message
 
     async def test_g1_duplicate_cccd_same_amount_warns_copy(
@@ -790,8 +790,8 @@ class TestResolveValidate:
             1,
             None,
         )
-        assert res.rows[0].status == WARNED
-        assert res.rows[1].status == WARNED
+        assert res.rows[0].validation_status == WARNED
+        assert res.rows[1].validation_status == WARNED
         assert "nghi copy" in res.rows[0].message
         assert res.warned_count == 2 and res.matched_count == 0
 
@@ -816,7 +816,7 @@ class TestResolveValidate:
             1,
             None,
         )
-        assert res.rows[0].status == WARNED
+        assert res.rows[0].validation_status == WARNED
         assert "kiểm tra trùng" in res.rows[0].message
         assert "copy" not in res.rows[0].message
 
@@ -843,7 +843,7 @@ class TestResolveValidate:
             1,
             None,
         )
-        assert res.rows[0].status == ERROR
+        assert res.rows[0].validation_status == ERROR
         assert "kích hoạt" in res.rows[0].message
 
 
@@ -908,9 +908,9 @@ class TestPreviewBatch:
             .all()
         )
         assert len(rows) == 2
-        assert rows[0].status == MATCHED and rows[0].citizen_id == "001234567890"
+        assert rows[0].validation_status == MATCHED and rows[0].citizen_id == "001234567890"
         assert rows[0].resolved_profile_id is not None
-        assert rows[1].status == ERROR
+        assert rows[1].validation_status == ERROR
 
     async def test_invalid_cccd_row_stores_null_citizen_id(
         self, db, seeded_dependencies, admin_user
@@ -937,7 +937,7 @@ class TestPreviewBatch:
                 select(PaymentImportRow).where(PaymentImportRow.batch_id == batch.id)
             )
         ).scalar_one()
-        assert row.status == ERROR
+        assert row.validation_status == ERROR
         assert row.citizen_id is None  # không tràn cột String(12)
         assert row.raw.get(pis.COL_CCCD) == "123456789"  # gốc vẫn audit được
 
@@ -946,7 +946,7 @@ class TestPreviewBatch:
     ):
         sha = "a" * 64
         p1 = pis.PreviewResult(
-            rows=[pis.RowResult(row_no=2, status=ERROR, raw={})],
+            rows=[pis.RowResult(row_no=2, validation_status=ERROR, raw={})],
             matched_count=0,
             warned_count=0,
             failed_count=1,
@@ -967,8 +967,8 @@ class TestPreviewBatch:
         # preview lại CÙNG file (sha) — nội dung khác (2 dòng) → thay batch cũ
         p2 = pis.PreviewResult(
             rows=[
-                pis.RowResult(row_no=2, status=ERROR, raw={}),
-                pis.RowResult(row_no=3, status=ERROR, raw={}),
+                pis.RowResult(row_no=2, validation_status=ERROR, raw={}),
+                pis.RowResult(row_no=3, validation_status=ERROR, raw={}),
             ],
             matched_count=0,
             warned_count=0,
@@ -1105,6 +1105,34 @@ async def _seed_cash_method(db):
     db.add(m)
     await db.flush()
     return m
+
+
+async def _phieu_dang_cho(db, batch_id: int) -> dict:
+    """Đọc PHIẾU mà lượt commit vừa rồi cấp cho từng dòng còn bị chặn.
+
+    Không tự dựng phiếu ở đây, dù làm được. Tự dựng là tự trao cho ca kiểm một
+    quyền mà giao diện không có, và ca sẽ xanh kể cả khi máy chủ quên cấp phiếu
+    — đúng lớp lỗi đã xảy ra rồi (giao diện thiếu một trường bắt buộc mà ca ở
+    tầng service vẫn xanh).
+    """
+    rows = (
+        (
+            await db.execute(
+                select(PaymentImportRow).where(
+                    PaymentImportRow.batch_id == batch_id,
+                    PaymentImportRow.commit_status
+                    == pis.PaymentImportCommitStatusEnum.duplicate_review_required.value,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        r.row_no: r.duplicate_review_token
+        for r in rows
+        if r.duplicate_review_token
+    }
 
 
 async def _preview_batch(
@@ -1272,7 +1300,11 @@ class TestCommitBatch:
         await db.commit()
 
         assert result.committed_count == 0
+        # Đây là GHI HỎNG thật (không phải bị hàng rào giữ lại) — hai thứ đi
+        # vào hai con số khác nhau vì chúng đòi hai hành động khác nhau: cái
+        # này phải sửa dữ liệu, cái kia chỉ cần soát rồi xác nhận.
         assert result.failed_count == 1
+        assert result.review_required_count == 0
         assert result.payment_count == 0
         assert (await db.execute(select(Payment))).scalars().all() == []
         row = (
@@ -1280,7 +1312,11 @@ class TestCommitBatch:
                 select(PaymentImportRow).where(PaymentImportRow.batch_id == batch_id)
             )
         ).scalar_one()
-        assert row.status == "error"
+        # Trục KIỂM giữ nguyên kết quả xem trước: dòng này ĐỌC được, nó chỉ
+        # hỏng ở bước GHI. Bản trước hạ nó xuống `error` và thế là lượt sau
+        # không chọn nó nữa — một dòng tiền thật rơi khỏi hàng đợi.
+        assert row.validation_status == "matched"
+        assert row.commit_status == "failed"
         assert "cancelled" in (row.message or "")
 
     async def test_fifo_two_invoices(self, db, seeded_dependencies, admin_user):
@@ -1434,13 +1470,21 @@ class TestCommitBatch:
         await db.commit()
 
         assert result.committed_count == 0
+        # Đây là GHI HỎNG thật (không phải bị hàng rào giữ lại) — hai thứ đi
+        # vào hai con số khác nhau vì chúng đòi hai hành động khác nhau: cái
+        # này phải sửa dữ liệu, cái kia chỉ cần soát rồi xác nhận.
         assert result.failed_count == 1
+        assert result.review_required_count == 0
         row = (
             await db.execute(
                 select(PaymentImportRow).where(PaymentImportRow.batch_id == batch_id)
             )
         ).scalar_one()
-        assert row.status == "error"
+        # Trục KIỂM giữ nguyên kết quả xem trước: dòng này ĐỌC được, nó chỉ
+        # hỏng ở bước GHI. Bản trước hạ nó xuống `error` và thế là lượt sau
+        # không chọn nó nữa — một dòng tiền thật rơi khỏi hàng đợi.
+        assert row.validation_status == "matched"
+        assert row.commit_status == "failed"
         assert row.message == (
             "lỗi hệ thống khi ghi dòng này — vui lòng liên hệ kỹ thuật"
         )
@@ -1512,8 +1556,24 @@ class TestCommitBatch:
         ).scalar_one()
         assert b.status == "preview"  # KHÔNG khóa file (re-import được)
         assert b.total_amount == Decimal("0")  # không giữ số preview overstate
-        assert b.matched_count == 0
-        assert b.failed_count == 1
+        # Hai trục nói hai chuyện, và đây là chỗ thấy rõ nhất: dòng này ĐỌC
+        # được (nên trục kiểm vẫn `matched`), chỉ hỏng ở bước GHI. Bản trước hạ
+        # nó xuống `error` để đếm vào `failed_count`, và thế là lượt commit sau
+        # không chọn nó nữa — một dòng tiền thật biến mất khỏi hàng đợi.
+        assert b.matched_count == 1, "trục KIỂM không được đổi vì lỗi ở bước ghi"
+        assert b.failed_count == 0, "không có dòng nào hỏng từ khâu đọc"
+        assert b.commit_failed_count == 1
+        assert b.committed_row_count == 0
+        # Mỗi họ đếm tự cộng đúng bằng số dòng — bất biến quan trọng nhất, vì
+        # nó là thứ bắt được kiểu cộng dồn theo số lần thử.
+        assert b.matched_count + b.warned_count + b.failed_count == b.row_count
+        assert (
+            b.committed_row_count
+            + b.review_required_count
+            + b.commit_failed_count
+            + b.not_applicable_count
+            == b.row_count
+        )
 
     async def test_committed_counters_reflect_actual_writes(
         self, db, seeded_dependencies, admin_user
@@ -2205,7 +2265,18 @@ async def _mk_batch_with_row(
         row_no=2,
         citizen_id="001234567890",
         raw=raw,
-        status=row_status,
+        validation_status=row_status,
+        # Trục GHI suy từ dữ liệu CỨNG, đúng như migration backfill: có mã phiếu
+        # thật ⇒ đã ghi; hỏng từ khâu đọc ⇒ không có gì để ghi; còn lại ⇒ chờ.
+        commit_status=(
+            pis.PaymentImportCommitStatusEnum.not_applicable.value
+            if row_status == ERROR
+            else (
+                pis.PaymentImportCommitStatusEnum.committed.value
+                if payment_ids
+                else pis.PaymentImportCommitStatusEnum.pending.value
+            )
+        ),
         amount=Decimal(amount),
         message="",
         payment_ids=payment_ids or [],
@@ -2476,7 +2547,7 @@ class TestMultiCollectionTimeline:
             unit_id=None,
         )
         await db.commit()
-        assert preview3.rows[0].status == ERROR
+        assert preview3.rows[0].validation_status == ERROR
         assert "đợt còn nháp" in preview3.rows[0].message
         _, _, f = await _state()
         assert f.paid_amount == Decimal("6000000")  # chưa ghi thêm
@@ -2491,7 +2562,7 @@ class TestMultiCollectionTimeline:
         # === Lô #3 (lần 2): re-import CÙNG file 4tr → preview cũ bị THAY (replace) →
         #     đợt 2 nay 'issued' → Khớp → commit → đóng đủ HK1 ===
         _, preview3b, r3 = await self._import_commit(db, admin_user.id, "4.000.000")
-        assert preview3b.rows[0].status in (MATCHED, WARNED)
+        assert preview3b.rows[0].validation_status in (MATCHED, WARNED)
         assert r3.committed_count == 1 and r3.payment_count == 1
         i1, i2, f = await _state()
         assert i2.paid_amount == Decimal("4000000") and i2.status == "paid"
@@ -2520,7 +2591,7 @@ class TestMultiCollectionTimeline:
         res = await pis.resolve_and_validate(
             db, [_draft("012345678901", "5000000")], 2026, 1, None
         )
-        assert res.rows[0].status == ERROR
+        assert res.rows[0].validation_status == ERROR
         assert "vượt" in res.rows[0].message
 
     async def test_overflow_two_issued_installments_warns(
@@ -2541,7 +2612,7 @@ class TestMultiCollectionTimeline:
         res = await pis.resolve_and_validate(
             db, [_draft("012345678901", "5000000")], 2026, 1, None
         )
-        assert res.rows[0].status == WARNED
+        assert res.rows[0].validation_status == WARNED
         assert len(res.rows[0].allocations) == 2  # 2.5tr đợt1 + 2.5tr đợt2
 
 
@@ -2650,7 +2721,7 @@ class TestDuplicateTransactionWarning:
         res = await pis.resolve_and_validate(
             db, [_draft(cccd, "4000000", reference="PT-DUP-1")], 2026, 1, None
         )
-        assert res.rows[0].status == WARNED, res.rows[0].message
+        assert res.rows[0].validation_status == WARNED, res.rows[0].message
         assert "nghi trùng giao dịch" in res.rows[0].message, res.rows[0].message
 
     async def test_legit_partial_different_amount_no_dup_warn(
@@ -2720,7 +2791,7 @@ class TestCanhBaoNghiTrungOXemTruoc:
             2026, 1, None,
         )
         row = res.rows[0]
-        assert row.status == WARNED
+        assert row.validation_status == WARNED
         assert "nghi trùng với 1 phiếu đã ghi" in row.message
 
     async def test_ngoai_cua_so_ngay_thi_khong_canh_bao(self, db, seeded_dependencies, admin_user):
@@ -2743,7 +2814,7 @@ class TestCanhBaoNghiTrungOXemTruoc:
                     payment_date=date(2026, 8, 20))],
             2026, 1, None,
         )
-        assert res.rows[0].status == MATCHED
+        assert res.rows[0].validation_status == MATCHED
 
     async def test_khac_so_tien_thi_khong_canh_bao(self, db, seeded_dependencies, admin_user):
         """Thu góp hợp lệ khác số tiền — cảnh báo ở đây là cảnh báo oan."""
@@ -2766,7 +2837,7 @@ class TestCanhBaoNghiTrungOXemTruoc:
                     payment_date=date(2026, 8, 6))],
             2026, 1, None,
         )
-        assert res.rows[0].status == MATCHED
+        assert res.rows[0].validation_status == MATCHED
 
     async def test_khong_bao_HAI_LAN_khi_luat_ma_tham_chieu_da_bao(
         self, db, seeded_dependencies, admin_user
@@ -2792,7 +2863,7 @@ class TestCanhBaoNghiTrungOXemTruoc:
             2026, 1, None,
         )
         row = res.rows[0]
-        assert row.status == WARNED
+        assert row.validation_status == WARNED
         assert "mã tham chiếu" in row.message
         assert "nghi trùng với" not in row.message
 
@@ -2803,7 +2874,7 @@ class TestCanhBaoNghiTrungOXemTruoc:
             [_draft("009999999999", "5000000", payment_date=date(2026, 8, 6))],
             2026, 1, None,
         )
-        assert res.rows[0].status == ERROR
+        assert res.rows[0].validation_status == ERROR
 
     async def test_cau_canh_bao_noi_dung_con_so_cua_so(self, db, seeded_dependencies, admin_user):
         """Câu chữ phải lấy từ hằng, không viết tay '3 ngày'."""
@@ -2857,6 +2928,96 @@ class TestHangRaoTrungOBuocGhi:
         )
         await db.flush()
 
+    async def test_HAI_dong_cung_khoan_phi_xac_nhan_MOT_luot_deu_ghi_duoc(
+        self, db, seeded_dependencies, admin_user
+    ):
+        """Ca của bẫy thứ tự — dễ mắc nhất trong cả lát này.
+
+        Phiếu xác nhận mang theo ``fee.duplicate_guard_version``, và MỖI lần ghi
+        làm số ấy nhích (trigger ở tầng cơ sở dữ liệu). Nếu soát phiếu tuần tự —
+        dòng nào tới lượt thì soát dòng đó — thì dòng đầu ghi xong sẽ giết phiếu
+        HỢP LỆ của dòng thứ hai cùng khoản phí. Kế toán xác nhận cả hai, hệ
+        thống ghi một, rồi bắt xác nhận lại dòng còn lại; mỗi lượt được đúng một
+        dòng. Vòng 409 mà cả đợt này sinh ra để xoá, mọc lại ở chỗ khác.
+
+        Nên phép soát chạy TRỌN VẸN trước khi ghi dòng đầu tiên, dưới khoá Fee,
+        theo version BAN ĐẦU.
+        """
+        await _seed_system_user(db)
+        await _seed_cash_method(db)
+        # Học phí 10tr chia hai đợt 5tr, tệp hai dòng 5tr — cùng một khoản phí.
+        _, fee, invs = await _seed_tuition(
+            db,
+            seeded_dependencies,
+            citizen_id="001234567890",
+            invoices=[
+                (1, "5000000", "issued", "0", "0"),
+                (2, "5000000", "issued", "0", "0"),
+            ],
+        )
+        content = _csv_bytes(
+            [
+                pis.TEMPLATE_COLS,
+                ["001234567890", "Nguyễn Văn An", "5.000.000", "05/09/2026", "TM", "A", ""],
+                ["001234567890", "Nguyễn Văn An", "5.000.000", "05/09/2026", "TM", "B", ""],
+            ]
+        )
+        batch, _ = await pis.preview_import(
+            db,
+            content=content,
+            filename="hai-dong-cung-fee.csv",
+            academic_year=2026,
+            semester_no=1,
+            created_by_id=admin_user.id,
+            unit_id=None,
+        )
+        batch_id = batch.id
+        # Một phiếu chờ duyệt 5tr ⇒ CẢ HAI dòng đều nghi trùng.
+        await self._phieu_cho_duyet(
+            db,
+            amount=Decimal("5000000"),
+            when=datetime(2026, 9, 5, tzinfo=timezone.utc),
+            user_id=admin_user.id,
+        )
+        await db.commit()
+
+        r1, _ = await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        assert r1.committed_count == 0
+        assert r1.review_required_count == 2, "cả hai dòng phải bị giữ lại"
+
+        phieu = await _phieu_dang_cho(db, batch_id)
+        assert len(phieu) == 2, "mỗi dòng bị giữ phải có phiếu của riêng nó"
+
+        # Xác nhận CẢ HAI trong MỘT lượt.
+        r2, _ = await pis.commit_batch(
+            db,
+            batch_id=batch_id,
+            importer_id=admin_user.id,
+            unit_id=None,
+            confirmed_tokens=phieu,
+        )
+        await db.commit()
+
+        assert r2.committed_count == 2, (
+            "phiếu của dòng thứ hai bị chính lần ghi dòng thứ nhất giết — phép "
+            "soát đang chạy xen kẽ với phép ghi thay vì trọn vẹn trước đó"
+        )
+        assert r2.review_required_count == 0
+
+        b = (
+            await db.execute(
+                select(PaymentImportBatch).where(PaymentImportBatch.id == batch_id)
+            )
+        ).scalar_one()
+        await db.refresh(b)
+        assert b.status == "committed"
+        assert b.committed_row_count == 2
+        # Tổng lô = tiền THẬT của cả hai dòng, không phải của riêng lượt sau.
+        assert b.total_amount == Decimal("10000000")
+
     async def test_dong_nghi_trung_bi_bo_qua_khong_ghi_tien(
         self, db, seeded_dependencies, admin_user
     ):
@@ -2878,7 +3039,10 @@ class TestHangRaoTrungOBuocGhi:
         await db.commit()
 
         assert result.committed_count == 0
-        assert result.failed_count == 1
+        # Bị hàng rào giữ lại KHÁC ghi hỏng: hai thứ đòi hai hành động khác
+        # nhau, nên chúng có hai con số riêng.
+        assert result.review_required_count == 1
+        assert result.failed_count == 0
         assert result.payment_count == 0
         # Đúng MỘT phiếu trong hệ thống: phiếu chờ duyệt có từ trước.
         assert len((await db.execute(select(Payment))).scalars().all()) == 1
@@ -2905,12 +3069,18 @@ class TestHangRaoTrungOBuocGhi:
         )
         await db.commit()
 
+        # Lượt một: dòng bị hàng rào giữ lại và máy chủ cấp phiếu cho nó.
+        await pis.commit_batch(
+            db, batch_id=batch_id, importer_id=admin_user.id, unit_id=None
+        )
+        await db.commit()
+        # Lượt hai: gửi lại đúng phiếu đó — không có cờ "bỏ qua cả lô" nào cả.
         result, _cb = await pis.commit_batch(
             db,
             batch_id=batch_id,
             importer_id=admin_user.id,
             unit_id=None,
-            confirm_duplicates=True,
+            confirmed_tokens=await _phieu_dang_cho(db, batch_id),
         )
         await db.commit()
 
@@ -2993,7 +3163,7 @@ class TestSuaSauCodeReview:
             batch_id=batch_id,
             importer_id=admin_user.id,
             unit_id=None,
-            confirm_duplicates=True,
+            confirmed_tokens=await _phieu_dang_cho(db, batch_id),
         )
         await db.commit()
         assert result2.committed_count == 1

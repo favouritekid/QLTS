@@ -35,10 +35,33 @@ class PaymentImportBatchStatusEnum(str, enum.Enum):
 
 
 class PaymentImportRowStatusEnum(str, enum.Enum):
-    """Per-row outcome of resolve/validate."""
-    matched = "matched"        # ghi được (có thể kèm warning)
-    warned = "warned"          # ghi được + cảnh báo (lệch tên/tràn đợt/nghi trùng)
-    error = "error"            # KHÔNG ghi (không khớp / vượt tổng / sai định dạng)
+    """Trục KIỂM: đọc/đối chiếu dòng ra kết quả dùng được không.
+
+    Không đổi sau bước xem trước. Số phận ở bước ghi tiền nằm ở trục thứ hai
+    (:class:`PaymentImportCommitStatusEnum`) — trộn hai thứ vào một cột là lỗi
+    của bản trước, và nó đẻ ra cả một dòng "đã ghi tiền" vẫn nằm trong tập chọn
+    lại, lẫn một bộ đếm cộng dồn theo số lần thử.
+    """
+    matched = "matched"        # khớp sạch
+    warned = "warned"          # khớp nhưng có cảnh báo (lệch tên/tràn đợt/nghi trùng)
+    error = "error"            # KHÔNG dùng được (không khớp / vượt tổng / sai định dạng)
+
+
+class PaymentImportCommitStatusEnum(str, enum.Enum):
+    """Trục GHI: số phận của dòng ở bước ghi tiền.
+
+    ``committed`` là quyền quyết định việc KHÔNG thử lại. Khoá idempotency của
+    ``Payment`` chỉ là hàng rào phụ: nó chặn theo (lô, dòng, HOÁ ĐƠN) nên không
+    chặn được phần tiền rơi sang một đợt khác khi đợt cũ đã hết dư.
+    """
+    pending = "pending"        # chưa thử ghi, hoặc thử rồi bị hoãn
+    duplicate_review_required = "duplicate_review_required"  # hàng rào giữ lại
+    committed = "committed"    # đã ghi, có payment_ids
+    failed = "failed"          # đã thử và hỏng ở bước ghi
+    #: Dòng hỏng từ khâu đọc — KHÔNG có gì để ghi. Tách riêng khỏi ``pending``
+    #: (xếp vào đó là nói nó đang chờ) và khỏi ``failed`` (xếp vào đó là đổ lỗi
+    #: cho bước ghi, thứ chưa hề chạm tới nó).
+    not_applicable = "not_applicable"
 
 
 class PaymentImportBatch(Base):
@@ -82,6 +105,27 @@ class PaymentImportBatch(Base):
         Integer, nullable=False, default=0, server_default="0")
     failed_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0")
+    # ── Họ đếm thứ hai: trục GHI. Tách khỏi ba cột trên (trục KIỂM) vì trộn
+    # chúng là đếm một dòng hai lần — lô #5 trên máy dev có đúng một dòng mà sổ
+    # ghi `warned_count=1` cộng `failed_count=1`. Mỗi họ tự cộng bằng
+    # `row_count`; cả hai đều là PROJECTION, đếm lại từ trạng thái dòng thực tế
+    # sau mỗi lượt, không cộng dồn theo số lần thử.
+    committed_row_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Số dòng đã ghi được tiền",
+    )
+    review_required_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Số dòng bị hàng rào nghi trùng giữ lại, đang chờ xác nhận",
+    )
+    commit_failed_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Số dòng đã thử ghi và hỏng",
+    )
+    not_applicable_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Số dòng hỏng từ khâu đọc — không có gì để ghi",
+    )
     total_amount: Mapped[Decimal] = mapped_column(
         Numeric(15, 2), nullable=False, default=Decimal("0"), server_default="0",
         comment="Tổng tiền dự kiến/đã ghi (gốc học phí)",
@@ -137,8 +181,25 @@ class PaymentImportRow(Base):
     __tablename__ = "payment_import_row"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('matched', 'warned', 'error')",
-            name="chk_payment_import_row_status",
+            "validation_status IN ('matched', 'warned', 'error')",
+            name="chk_payment_import_row_validation_status",
+        ),
+        CheckConstraint(
+            "commit_status IN ('pending', 'duplicate_review_required', "
+            "'committed', 'failed', 'not_applicable')",
+            name="chk_payment_import_row_commit_status",
+        ),
+        # Bảng chân trị ở tầng cơ sở dữ liệu, không chỉ trong tài liệu: dòng
+        # hỏng-từ-khâu-đọc thì KHÔNG có gì để ghi, và ngược lại.
+        CheckConstraint(
+            "(validation_status = 'error') = (commit_status = 'not_applicable')",
+            name="chk_payment_import_row_two_axes",
+        ),
+        # "Chờ xác nhận trùng" chỉ có nghĩa với dòng CÓ cảnh báo.
+        CheckConstraint(
+            "commit_status <> 'duplicate_review_required' "
+            "OR validation_status = 'warned'",
+            name="chk_payment_import_row_review_needs_warn",
         ),
         # Chống trùng dòng (parser chạy lại/bug) → void & đối soát theo row_no rõ ràng.
         UniqueConstraint(
@@ -160,10 +221,28 @@ class PaymentImportRow(Base):
     resolved_profile_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     resolved_fee_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    status: Mapped[str] = mapped_column(String(12), nullable=False)
+    #: Trục KIỂM — xem :class:`PaymentImportRowStatusEnum`.
+    validation_status: Mapped[str] = mapped_column(String(12), nullable=False)
+    #: Trục GHI — xem :class:`PaymentImportCommitStatusEnum`. Đây mới là thứ
+    #: quyết định dòng có được thử lại hay không; ``validation_status`` không
+    #: bao giờ trả lời câu hỏi đó.
+    commit_status: Mapped[str] = mapped_column(
+        String(28),
+        nullable=False,
+        default=PaymentImportCommitStatusEnum.pending.value,
+        server_default="pending",
+    )
     message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 2), nullable=True)
     payment_ids: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    #: Phiếu xác nhận nghi trùng do máy chủ cấp cho ĐÚNG dòng này, ở cuối lượt
+    #: ghi vừa rồi. Giao diện gửi lại nguyên văn khi kế toán xác nhận. Cấp ở
+    #: cuối lượt chứ không phải lúc dòng bị chặn: phiếu mang theo
+    #: ``fee.duplicate_guard_version``, và mỗi dòng ghi được lại làm nó nhích —
+    #: phiếu cấp sớm sẽ chết trước khi kế toán kịp nhìn thấy.
+    duplicate_review_token: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True
+    )
 
     batch: Mapped["PaymentImportBatch"] = relationship(
         "PaymentImportBatch", back_populates="rows",

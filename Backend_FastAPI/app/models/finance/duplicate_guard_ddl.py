@@ -23,6 +23,8 @@ bản cũ trên một máy mới sẽ dựng ra thứ của hôm nay — và l�
 không còn nói thật.
 """
 
+import re
+
 from sqlalchemy import DDL, event
 
 from app.models.base import Base
@@ -116,6 +118,34 @@ FOR EACH ROW EXECUTE FUNCTION bump_duplicate_guard_from_refund();
 CAC_CAU_LENH = (SQL_FN_PAYMENT, SQL_FN_REFUND, *SQL_TRIGGERS)
 
 
+def _lam_chay_lai_duoc(cau: str) -> str:
+    """Làm mỗi câu ``CREATE TRIGGER`` chạy lại được.
+
+    ``create_all()`` được gọi NHIỀU LẦN trong một phiên pytest, và listener ở
+    mức metadata chạy theo mỗi lần gọi — kể cả lần không tạo bảng nào (bảng đã
+    có thì SQLAlchemy bỏ qua, nhưng ``after_create`` vẫn nổ). Lần thứ hai gặp
+    ``CREATE TRIGGER`` trên một trigger đã tồn tại là lỗi cứng, và nó làm hỏng
+    cả một loạt ca không liên quan. Đã vấp: 42 lỗi setup ở lượt chạy cả tệp,
+    trong khi chạy lẻ từng ca thì xanh.
+
+    Dùng ``CREATE OR REPLACE TRIGGER`` (PostgreSQL 14+), KHÔNG ghép
+    ``DROP …; CREATE …`` vào một chuỗi — hai câu trong một ``DDL()`` đi qua
+    driver thành một lệnh ghép và vỡ theo những kiểu khó đọc (đã thử: 109 lỗi).
+    Một câu là một câu.
+
+    Sửa ở đây chứ không sửa ``SQL_TRIGGERS``: bản đó phải khớp TỪNG KÝ TỰ với
+    migration (ca lock-in so chúng), còn migration chạy đúng một lần trên một
+    cơ sở dữ liệu chưa có gì. Hai nhu cầu khác nhau, một nguồn văn bản.
+    """
+    return re.sub(
+        r"^\s*CREATE\s+TRIGGER\b",
+        "CREATE OR REPLACE TRIGGER",
+        cau,
+        count=1,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+
 def _dang_ky():
     """Gắn vào ``after_create`` của METADATA, không phải của một bảng.
 
@@ -131,7 +161,7 @@ def _dang_ky():
             # `execute_if(dialect="postgresql")`: các câu này là plpgsql thuần.
             # Không có vế đó thì một lần chạy trên SQLite (nếu về sau ai đó
             # thêm) sẽ vỡ ở chỗ chẳng liên quan gì tới thứ họ đang làm.
-            DDL(cau).execute_if(dialect="postgresql"),
+            DDL(_lam_chay_lai_duoc(cau)).execute_if(dialect="postgresql"),
         )
 
 

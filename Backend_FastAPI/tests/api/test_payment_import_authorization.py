@@ -276,7 +276,7 @@ class TestBatchDetailContent:
                     row_no=2,
                     citizen_id="001234567890",
                     raw={"Số CCCD": "001234567890"},
-                    status="matched",
+                    validation_status="matched",
                     amount=Decimal("1000000"),
                     message="ok",
                     payment_ids=[1],
