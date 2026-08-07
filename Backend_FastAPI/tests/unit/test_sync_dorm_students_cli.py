@@ -10,6 +10,8 @@ duy nhất khi app không lên. Hợp đồng của nó — mã thoát, cờ b�
 sau lô hiện tại — phải được kiểm y như lõi.
 """
 
+import os
+
 import pytest
 from types import SimpleNamespace
 
@@ -20,6 +22,21 @@ from app.scripts.sync_dorm_students import main, parse_args
 
 
 pytestmark = pytest.mark.unit
+
+# Lõi nay nhận cấu hình TƯỜNG MINH thay vì tự đọc os.environ — nó chạy trong web
+# worker, nơi cấu hình tới từ Settings chứ không từ shell. Ba helper dưới đây
+# đóng đúng vai adapter mà vỏ CLI làm thật, nên các ca vẫn dựng bối cảnh bằng
+# monkeypatch.setenv như cũ.
+def _khai_nguon():
+    return os.environ.get("DORM_SYNC_SOURCE_DB", "")
+
+
+def _khai_system_id():
+    return os.environ.get("DORM_SYNC_SOURCE_SYSTEM_ID", "")
+
+
+def _khai_ref():
+    return os.environ.get("DORM_SYNC_TARGET_PROJECT_REF", "")
 
 _DEV_DB_URL = "postgresql+asyncpg://qlts:mat-khau@postgres:5432/qlts"
 
@@ -321,7 +338,7 @@ async def test_main_also_stops_in_preview_mode(monkeypatch):
     thieu = _row()
     del thieu.degree_level
 
-    async def fake_fetch(academic_year, *, verify_source=False):
+    async def fake_fetch(academic_year, *, verify_source=False, **kw):
         return [thieu]
 
     class ApiKhongDuocDung:
@@ -344,7 +361,7 @@ async def test_main_goes_on_when_the_cohort_is_complete(monkeypatch):
     chỉ phát hiện lúc chạy thật.
     """
 
-    async def fake_fetch(academic_year, *, verify_source=False):
+    async def fake_fetch(academic_year, *, verify_source=False, **kw):
         return [_row(), _row(qlts_profile_id=9002, degree_level=None)]
 
     da_dung_api = []
@@ -682,7 +699,7 @@ async def test_main_stops_before_touching_the_dorm_api_when_a_row_is_incomplete(
     thieu = _row()
     del thieu.degree_level
 
-    async def fake_fetch(academic_year, *, verify_source=False):
+    async def fake_fetch(academic_year, *, verify_source=False, **kw):
         return [_row(), thieu]
 
     da_dung_api = []
@@ -722,7 +739,10 @@ async def test_cli_doi_loi_cau_hinh_thanh_ma_thoat_2(monkeypatch, capsys):
     def _thieu(ten):
         raise DormSyncConfigError("Thiếu biến môi trường %s" % ten)
 
-    monkeypatch.setattr(sync_module, "_require_env", _thieu)
+    monkeypatch.setattr(
+        sync_module.DormSyncConfig, "from_environment",
+        classmethod(lambda cls, *a, **k: _thieu("DORM_SUPABASE_URL")),
+    )
 
     ma = await main(["--academic-year", "2026", "--dry-run"])
 
@@ -733,10 +753,14 @@ async def test_cli_doi_loi_cau_hinh_thanh_ma_thoat_2(monkeypatch, capsys):
 
 
 async def test_cli_doi_loi_hang_rao_nguon_thanh_ma_thoat_2(monkeypatch, capsys):
-    def _lech():
+    def _lech(*a):
         raise DormSyncGuardError("Từ chối ghi: cluster nguồn lệch khai báo")
 
-    monkeypatch.setattr(sync_module, "_require_env", lambda ten: "gia-tri-gia")
+    monkeypatch.setattr(
+        sync_module.DormSyncConfig, "from_environment",
+        classmethod(lambda cls, *a, **k: sync_module.DormSyncConfig(
+            "https://ktx.supabase.co", "khoa", "ktx", "postgres:5432/db", "1")),
+    )
     monkeypatch.setattr(sync_module, "assert_source_database_matches", _lech)
     monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
 

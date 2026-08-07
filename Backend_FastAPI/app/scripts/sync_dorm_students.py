@@ -85,6 +85,7 @@ from app.repositories.dorm_export_repository import (
     count_atypical_statuses,
     describe_excluded_statuses,
 )
+from app.services.dorm_sync_config import DormSyncConfig
 from app.utils.exceptions import DormSyncConfigError, DormSyncGuardError
 
 # 🔴 IMPORT LẠI, không chép. Lõi nằm ở service để CLI và API dùng CHUNG một
@@ -107,7 +108,6 @@ from app.services.dorm_sync_service import (  # noqa: F401
     _doc_hang_sync_run,
     _doc_so_lieu_lo,
     _ghep_dinh_danh,
-    _require_env,
     assert_live_source_matches,
     assert_payload_contract,
     assert_source_database_matches,
@@ -239,6 +239,37 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return args
 
 
+
+def _in_thong_bao_phuc_hoi(api: Any) -> None:
+    """In lại ba thông báo phục hồi lượt cũ mà lõi ghi dưới dạng có cấu trúc.
+
+    🔴 Lõi không được in: nó dùng chung cho web, nơi stdout là log tiến trình
+    chứ không phải màn hình của người vận hành. Nhưng người vận hành thì phải
+    thấy ĐỦ ba tình huống — lượt cũ còn chạy, lượt cũ hoá ra đã xong, lượt cũ
+    đã đóng sổ — vì mỗi tình huống đòi một quyết định khác nhau.
+    """
+    for tb in getattr(api, "thong_bao_phuc_hoi", []):
+        loai = tb.get("loai")
+        run_id = tb.get("run_id")
+        if loai == "lut_cu_dang_chay":
+            print(
+                f"  ⚠️ Có lượt #{run_id} đang chạy mang dấu "
+                f"'{tb.get('dau')}' của lần chạy TRƯỚC."
+            )
+        elif loai == "lut_cu_da_hoan_tat":
+            # RPC cố ý KHÔNG hạ `completed` xuống `failed`. Lượt trước đã xong
+            # thật; nói rõ để người vận hành biết mình đang chạy lượt thứ hai
+            # chứ không phải sửa một lượt hỏng.
+            print(
+                f"  ⚠️ Lượt #{run_id} hoá ra đã HOÀN TẤT, không phải hỏng. "
+                "Mở lượt mới — đây là một lần đồng bộ nữa, không phải phục hồi."
+            )
+        elif loai == "lut_cu_da_dong_so":
+            print(f"  Đã đóng sổ lượt #{run_id} (failed). Mở lượt mới.")
+    if getattr(api, "thong_bao_phuc_hoi", None):
+        api.thong_bao_phuc_hoi.clear()
+
+
 async def main(argv: Optional[List[str]] = None) -> int:
     """Vỏ dòng lệnh: giữ NGUYÊN mã thoát cũ dù lõi nay ném exception.
 
@@ -261,19 +292,29 @@ async def main(argv: Optional[List[str]] = None) -> int:
 async def _chay(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
 
-    supabase_url = _require_env("DORM_SUPABASE_URL")
-    supabase_key = _require_env("DORM_SUPABASE_SECRET_KEY")
+    # Adapter môi trường của vỏ CLI. Lõi KHÔNG đọc os.environ nữa — nó chạy
+    # trong web worker, nơi cấu hình tới từ Settings chứ không từ shell.
+    cau_hinh = DormSyncConfig.from_environment(doi_dinh_danh_nguon=args.apply)
+    supabase_url = cau_hinh.supabase_url
+    supabase_key = cau_hinh.supabase_secret_key
 
     if args.apply:
         # Chỉ ràng khi thực sự GHI: một lần xem trước chỉ-đọc không cần khai
         # báo cấu hình nguồn, và bắt nó khai báo chỉ khiến người ta bỏ qua bước
         # xem trước — mà bước xem trước chính là thứ chặn được lần ghi sai.
-        assert_source_database_matches()
+        assert_source_database_matches(
+            cau_hinh.source_db, cau_hinh.source_system_id
+        )
         _install_stop_handlers()
 
     # Lớp 2 và 3 của hàng rào nguồn chạy TRONG transaction chỉ-đọc, trước khi
     # đọc hàng nào — xem ``assert_live_source_matches``.
-    rows = await fetch_cohort(args.academic_year, verify_source=args.apply)
+    rows = await fetch_cohort(
+        args.academic_year,
+        verify_source=args.apply,
+        expected_source_db=cau_hinh.source_db,
+        expected_system_id=cau_hinh.source_system_id,
+    )
     # Chỉ log SỐ ĐẾM. Tên, số điện thoại, mã hồ sơ của người học không đi vào
     # log — log thường được gom về nơi khác và giữ lại lâu hơn ta nghĩ.
     #
@@ -320,7 +361,11 @@ async def _chay(argv: Optional[List[str]] = None) -> int:
         return 1
 
     try:
-        api = DormApi(supabase_url, supabase_key)
+        api = DormApi(
+            supabase_url,
+            supabase_key,
+            expected_project_ref=cau_hinh.target_project_ref,
+        )
     except ValueError as exc:
         # Cấu hình sai đích đến — dừng trước khi mở kết nối, in gọn thay vì ném
         # traceback: người vận hành cần sửa biến môi trường, không cần ngăn xếp.
@@ -412,6 +457,7 @@ async def _chay(argv: Optional[List[str]] = None) -> int:
                 raw_count=len(rows),
                 la_lan_chay_lai=la_lan_chay_lai,
             )
+            _in_thong_bao_phuc_hoi(api)
         except RuntimeError as exc:
             # Chưa mở được lượt thì chưa có gì để dọn. In gọn thay vì ném
             # traceback: người vận hành cần biết PHẢI LÀM GÌ, không cần ngăn xếp.

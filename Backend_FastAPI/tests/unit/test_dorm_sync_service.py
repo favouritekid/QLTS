@@ -9,6 +9,8 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import httpx
+import os
+
 import pytest
 
 
@@ -27,6 +29,21 @@ from app.services.dorm_sync_service import (
 )
 
 pytestmark = pytest.mark.unit
+
+# Lõi nay nhận cấu hình TƯỜNG MINH thay vì tự đọc os.environ — nó chạy trong web
+# worker, nơi cấu hình tới từ Settings chứ không từ shell. Ba helper dưới đây
+# đóng đúng vai adapter mà vỏ CLI làm thật, nên các ca vẫn dựng bối cảnh bằng
+# monkeypatch.setenv như cũ.
+def _khai_nguon():
+    return os.environ.get("DORM_SYNC_SOURCE_DB", "")
+
+
+def _khai_system_id():
+    return os.environ.get("DORM_SYNC_SOURCE_SYSTEM_ID", "")
+
+
+def _khai_ref():
+    return os.environ.get("DORM_SYNC_TARGET_PROJECT_REF", "")
 
 
 def _row(**overrides):
@@ -421,7 +438,7 @@ def _api_with(client) -> DormApi:
     # loopback được miễn CẢ hàng rào đường truyền lẫn hàng rào project ref —
     # Supabase local không có ref. Dùng một hostname bịa như `ktx.test` sẽ vướng
     # hàng rào đích, và vướng vì đúng lý do nó tồn tại.
-    api = DormApi("http://127.0.0.1:54321", "khoa-gia")
+    api = DormApi("http://127.0.0.1:54321", "khoa-gia", expected_project_ref="")
     api._client = client
     return api
 
@@ -917,7 +934,7 @@ def test_plaintext_destination_is_refused(url):
         assert_transport_is_encrypted(url)
 
     with pytest.raises(ValueError):
-        DormApi(url, "khoa-that")
+        DormApi(url, "khoa-that", expected_project_ref=_khai_ref())
 
 
 @pytest.mark.parametrize(
@@ -946,13 +963,13 @@ def test_target_project_ref_must_match_the_host(monkeypatch):
     monkeypatch.setenv("DORM_SYNC_TARGET_PROJECT_REF", "wkrwceedapisacgyujtg")
 
     assert (
-        assert_target_project_matches("https://wkrwceedapisacgyujtg.supabase.co")
+        assert_target_project_matches("https://wkrwceedapisacgyujtg.supabase.co", _khai_ref())
         is None
     )
 
     with pytest.raises(ValueError) as exc:
         # Thiếu đúng một ký tự cuối.
-        assert_target_project_matches("https://wkrwceedapisacgyujt.supabase.co")
+        assert_target_project_matches("https://wkrwceedapisacgyujt.supabase.co", _khai_ref())
 
     assert "wkrwceedapisacgyujtg" in str(exc.value)
 
@@ -964,7 +981,7 @@ def test_target_guard_refuses_a_custom_domain_it_cannot_verify(monkeypatch):
     monkeypatch.setenv("DORM_SYNC_TARGET_PROJECT_REF", "ktx")
 
     with pytest.raises(ValueError):
-        assert_target_project_matches("https://ktx.truong-cd.edu.vn")
+        assert_target_project_matches("https://ktx.truong-cd.edu.vn", _khai_ref())
 
 
 def test_target_guard_skips_loopback(monkeypatch):
@@ -973,7 +990,7 @@ def test_target_guard_skips_loopback(monkeypatch):
 
     monkeypatch.delenv("DORM_SYNC_TARGET_PROJECT_REF", raising=False)
 
-    assert assert_target_project_matches("http://127.0.0.1:54321") is None
+    assert assert_target_project_matches("http://127.0.0.1:54321", _khai_ref()) is None
 
 
 def test_target_guard_requires_the_declaration(monkeypatch):
@@ -983,7 +1000,7 @@ def test_target_guard_requires_the_declaration(monkeypatch):
     monkeypatch.delenv("DORM_SYNC_TARGET_PROJECT_REF", raising=False)
 
     with pytest.raises(DormSyncConfigError):
-        assert_target_project_matches("https://ktx.supabase.co")
+        assert_target_project_matches("https://ktx.supabase.co", _khai_ref())
 
 
 def test_secret_key_never_leaves_the_process_when_the_target_is_wrong(monkeypatch):
@@ -1002,7 +1019,12 @@ def test_secret_key_never_leaves_the_process_when_the_target_is_wrong(monkeypatc
     api = object.__new__(DormApi)
 
     with pytest.raises(ValueError):
-        DormApi.__init__(api, "https://sai-project.supabase.co", "khoa-that")
+        DormApi.__init__(
+            api,
+            "https://sai-project.supabase.co",
+            "khoa-that",
+            expected_project_ref=_khai_ref(),
+        )
 
     assert not hasattr(api, "_headers")
     assert not hasattr(api, "_base")
@@ -1069,7 +1091,7 @@ def test_database_name_comparison_is_case_sensitive(monkeypatch):
     _patch_database_url(monkeypatch, "postgresql+asyncpg://u:p@postgres:5432/qlts")
 
     with pytest.raises(DormSyncGuardError) as exc:
-        assert_source_database_matches()
+        assert_source_database_matches(_khai_nguon(), _khai_system_id())
 
     assert "Từ chối ghi" in str(exc.value)
 
@@ -1082,7 +1104,7 @@ def test_hostname_comparison_stays_case_insensitive(monkeypatch):
     _set_target_env(monkeypatch, source_db="POSTGRES:5432/qlts")
     _patch_database_url(monkeypatch, "postgresql+asyncpg://u:p@postgres:5432/qlts")
 
-    assert assert_source_database_matches() is None
+    assert assert_source_database_matches(_khai_nguon(), _khai_system_id()) is None
 
 
 async def test_live_source_name_comparison_is_case_sensitive(monkeypatch):
@@ -1092,7 +1114,7 @@ async def test_live_source_name_comparison_is_case_sensitive(monkeypatch):
     _set_target_env(monkeypatch, source_db="postgres:5432/QLTS")
 
     with pytest.raises(DormSyncGuardError) as exc:
-        await assert_live_source_matches(_FakeSession(dbname="qlts"))
+        await assert_live_source_matches(_FakeSession(dbname="qlts"), _khai_nguon(), _khai_system_id())
 
     assert "Từ chối ghi" in str(exc.value)
 
@@ -1108,7 +1130,7 @@ def test_source_database_mismatch_is_refused(monkeypatch):
     _patch_database_url(monkeypatch)  # thực tế đang đọc dev
 
     with pytest.raises(DormSyncGuardError) as exc:
-        assert_source_database_matches()
+        assert_source_database_matches(_khai_nguon(), _khai_system_id())
 
     assert "Từ chối ghi" in str(exc.value)
 
@@ -1126,7 +1148,7 @@ def test_missing_source_declaration_is_refused(monkeypatch, thieu):
     monkeypatch.delenv(thieu)
 
     with pytest.raises(DormSyncConfigError) as exc:
-        assert_source_database_matches()
+        assert_source_database_matches(_khai_nguon(), _khai_system_id())
 
     # Thông điệp phải gọi ĐÚNG TÊN biến thiếu: người vận hành đọc log rồi đặt
     # biến, chứ không đi dò từng cái một.
@@ -1137,7 +1159,7 @@ def test_matching_source_database_passes(monkeypatch):
     _set_target_env(monkeypatch, source_db="postgres:5432/qlts")
     _patch_database_url(monkeypatch)
 
-    assert assert_source_database_matches() is None
+    assert assert_source_database_matches(_khai_nguon(), _khai_system_id()) is None
 
 
 class _FakeSession:
@@ -1179,7 +1201,7 @@ async def test_live_source_accepts_the_declared_cluster(monkeypatch):
 
     _set_target_env(monkeypatch, source_db="postgres:5432/qlts")
 
-    assert await assert_live_source_matches(_FakeSession()) is None
+    assert await assert_live_source_matches(_FakeSession(), _khai_nguon(), _khai_system_id()) is None
 
 
 async def test_live_source_refuses_a_different_database_name(monkeypatch):
@@ -1189,7 +1211,7 @@ async def test_live_source_refuses_a_different_database_name(monkeypatch):
     _set_target_env(monkeypatch, source_db=_PROD_DB_IDENTITY)
 
     with pytest.raises(DormSyncGuardError) as exc:
-        await assert_live_source_matches(_FakeSession(dbname="qlts"))
+        await assert_live_source_matches(_FakeSession(dbname="qlts"), _khai_nguon(), _khai_system_id())
 
     assert "Từ chối ghi" in str(exc.value)
 
@@ -1209,7 +1231,9 @@ async def test_live_source_refuses_a_clone_with_the_same_name(monkeypatch):
 
     with pytest.raises(DormSyncGuardError) as exc:
         await assert_live_source_matches(
-            _FakeSession(dbname="qlts", system_id="7999999999999999999")
+            _FakeSession(dbname="qlts", system_id="7999999999999999999"),
+            _khai_nguon(),
+            _khai_system_id(),
         )
 
     assert "Từ chối ghi" in str(exc.value)
@@ -1226,7 +1250,7 @@ async def test_live_source_stops_when_the_cluster_id_cannot_be_read(monkeypatch)
     _set_target_env(monkeypatch, source_db="postgres:5432/qlts")
 
     with pytest.raises(DormSyncGuardError) as exc:
-        await assert_live_source_matches(_FakeSession(no_catalog=True))
+        await assert_live_source_matches(_FakeSession(no_catalog=True), _khai_nguon(), _khai_system_id())
 
     assert "Từ chối ghi" in str(exc.value)
 
@@ -1240,7 +1264,7 @@ async def test_dry_run_does_not_verify_the_live_source(monkeypatch):
     session = _FakeSession()
     goi = []
 
-    async def _theo_doi(s):
+    async def _theo_doi(s, *a):
         goi.append(s)
 
     monkeypatch.setattr(service_module, "assert_live_source_matches", _theo_doi)
@@ -1304,14 +1328,14 @@ def test_source_guard_compares_database_not_app_env(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
 
     with pytest.raises(DormSyncGuardError):
-        assert_source_database_matches()
+        assert_source_database_matches(_khai_nguon(), _khai_system_id())
 
     # Và chiều ngược lại: database khớp thì ``APP_ENV`` lệch cũng không chặn,
     # vì nhãn không phải thứ quyết định script đọc dữ liệu ở đâu.
     _set_target_env(monkeypatch, source_db="postgres:5432/qlts")
     monkeypatch.setenv("APP_ENV", "development")
 
-    assert assert_source_database_matches() is None
+    assert assert_source_database_matches(_khai_nguon(), _khai_system_id()) is None
 
 
 class _ApiGhiNhan:
@@ -1361,12 +1385,12 @@ def test_bearer_header_only_for_jwt_keys():
     qua một header sai. Ngày máy chủ siết lại, lượt đồng bộ chết bằng 401 ở
     đúng thao tác ghi dữ liệu thật.
     """
-    moi = DormApi("http://127.0.0.1:54321", "sb_secret_ABCdef")
+    moi = DormApi("http://127.0.0.1:54321", "sb_secret_ABCdef", expected_project_ref="")
     assert "Authorization" not in moi._headers
     assert moi._headers["apikey"] == "sb_secret_ABCdef"
 
     # Khoá legacy `service_role` là JWT thật (mở đầu `eyJ`) — vẫn phải gửi.
-    cu = DormApi("http://127.0.0.1:54321", "eyJhbGciOiJIUzI1NiJ9.x.y")
+    cu = DormApi("http://127.0.0.1:54321", "eyJhbGciOiJIUzI1NiJ9.x.y", expected_project_ref="")
     assert cu._headers["Authorization"] == "Bearer eyJhbGciOiJIUzI1NiJ9.x.y"
 
 

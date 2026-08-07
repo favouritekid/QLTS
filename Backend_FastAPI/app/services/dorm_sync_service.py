@@ -23,10 +23,8 @@ một bản clone.
 
 from __future__ import annotations
 
-import os
 import re
 import unicodedata
-import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -36,11 +34,7 @@ import structlog
 from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
-from app.repositories.dorm_export_repository import (
-    count_atypical_statuses,
-    describe_excluded_statuses,
-    select_paid_hk1_cohort,
-)
+from app.repositories.dorm_export_repository import select_paid_hk1_cohort
 from app.utils.exceptions import DormSyncConfigError, DormSyncGuardError
 
 log = structlog.get_logger(__name__)
@@ -371,7 +365,7 @@ def _doc_so_lieu_lo(body: Any) -> Tuple[int, int]:
     return ket_qua[0], ket_qua[1]
 
 
-def assert_target_project_matches(base_url: str) -> None:
+def assert_target_project_matches(base_url: str, expected_ref: str) -> None:
     """Đích phải là ĐÚNG project Supabase đã được duyệt.
 
     ⚠️ Hàng rào ở ``assert_source_database_matches`` bảo vệ NGUỒN — đọc đúng
@@ -399,7 +393,11 @@ def assert_target_project_matches(base_url: str) -> None:
     if host in _LOOPBACK_HOSTS:
         return
 
-    expected_ref = _require_env("DORM_SYNC_TARGET_PROJECT_REF").strip().lower()
+    expected_ref = (expected_ref or "").strip().lower()
+    if not expected_ref:
+        raise DormSyncConfigError(
+            "Thiếu biến môi trường DORM_SYNC_TARGET_PROJECT_REF"
+        )
     expected_host = f"{expected_ref}.supabase.co"
 
     if host != expected_host:
@@ -495,12 +493,20 @@ class DormApi:
     KTX ra ngoài.
     """
 
-    def __init__(self, base_url: str, secret_key: str) -> None:
+    def __init__(
+        self, base_url: str, secret_key: str, *, expected_project_ref: str
+    ) -> None:
         # Thứ tự có chủ đích: đường truyền, rồi ĐÍCH, rồi mới tới headers mang
         # khoá secret. Khoá không được nằm trong bất kỳ cấu trúc nào trước khi
         # cả hai câu hỏi "đi bằng gì" và "đi tới đâu" đã có câu trả lời đúng.
         assert_transport_is_encrypted(base_url)
-        assert_target_project_matches(base_url)
+        assert_target_project_matches(base_url, expected_project_ref)
+        # 🔴 Lõi KHÔNG in ra stdout: nó chạy trong web worker, nơi stdout là
+        # log của tiến trình chứ không phải màn hình của ai. Ba thông báo
+        # phục hồi lượt cũ được tích vào đây dưới dạng có cấu trúc; vỏ CLI
+        # đọc rồi tự định dạng. Không dùng callback nhận hàm in — như vậy chỉ
+        # giấu phụ thuộc trình bày sau một tham số.
+        self.thong_bao_phuc_hoi: List[Dict[str, Any]] = []
         self._base = base_url.rstrip("/") + "/rest/v1"
         self._headers = {
             "apikey": secret_key,
@@ -682,9 +688,12 @@ class DormApi:
             )
             return run_id_cu
 
-        print(
-            f"  ⚠️ Có lượt #{run_id_cu} đang chạy mang dấu "
-            f"'{_client_note(client_token)}' của lần chạy TRƯỚC."
+        self.thong_bao_phuc_hoi.append(
+            {
+                "loai": "lut_cu_dang_chay",
+                "run_id": run_id_cu,
+                "dau": _client_note(client_token),
+            }
         )
         hang = await self.mark_sync_run_failed(run_id_cu)
         trang_thai = hang.get("status")
@@ -693,12 +702,13 @@ class DormApi:
             # RPC cố ý KHÔNG hạ `completed` xuống `failed`. Lượt trước đã xong
             # thật; nói rõ để người vận hành biết mình đang chạy lượt thứ hai
             # chứ không phải sửa một lượt hỏng.
-            print(
-                f"  ⚠️ Lượt #{run_id_cu} hoá ra đã HOÀN TẤT, không phải hỏng. "
-                "Mở lượt mới — đây là một lần đồng bộ nữa, không phải phục hồi."
+            self.thong_bao_phuc_hoi.append(
+                {"loai": "lut_cu_da_hoan_tat", "run_id": run_id_cu}
             )
         elif trang_thai == "failed":
-            print(f"  Đã đóng sổ lượt #{run_id_cu} (failed). Mở lượt mới.")
+            self.thong_bao_phuc_hoi.append(
+                {"loai": "lut_cu_da_dong_so", "run_id": run_id_cu}
+            )
         else:
             raise RuntimeError(
                 f"Không đóng được lượt cũ #{run_id_cu}: sau khi gọi fail_sync_run "
@@ -1221,7 +1231,13 @@ class DormApi:
         ) from last_error
 
 
-async def fetch_cohort(academic_year: int, *, verify_source: bool = False) -> List[Any]:
+async def fetch_cohort(
+    academic_year: int,
+    *,
+    verify_source: bool = False,
+    expected_source_db: str = "",
+    expected_system_id: str = "",
+) -> List[Any]:
     """Đọc cohort từ QLTS trong transaction CHỈ ĐỌC.
 
     Args:
@@ -1234,18 +1250,13 @@ async def fetch_cohort(academic_year: int, *, verify_source: bool = False) -> Li
         # ghi lọt vào, transaction sẽ từ chối thay vì sửa dữ liệu tuyển sinh.
         await session.execute(text("SET TRANSACTION READ ONLY"))
         if verify_source:
-            await assert_live_source_matches(session)
+            await assert_live_source_matches(
+                session, expected_source_db, expected_system_id
+            )
         result = await session.execute(select_paid_hk1_cohort(academic_year))
         return result.all()
 
 
-def _require_env(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        # Không có giá trị mặc định. Một script ghi dữ liệu mà tự đoán đích đến
-        # là script sẽ ghi nhầm chỗ vào một ngày nào đó.
-        raise DormSyncConfigError(f"Thiếu biến môi trường {name}")
-    return value
 
 
 def database_identity_from_url(database_url: str) -> str:
@@ -1291,7 +1302,9 @@ def _chuan_hoa_dinh_danh_khai_bao(raw: str) -> str:
     return f"{host.strip().lower()}:{port.strip()}/{dbname.strip()}"
 
 
-def assert_source_database_matches() -> None:
+def assert_source_database_matches(
+    expected_source_db: str, expected_system_id: str
+) -> None:
     """Nguồn phải ĐÚNG DATABASE mà đích khai báo — không phải đúng cái nhãn.
 
     ⚠️ Đây là hàng rào cho ca nguy hiểm nhất của công cụ: chạy stack DEV (cohort
@@ -1308,10 +1321,13 @@ def assert_source_database_matches() -> None:
     Lớp thứ nhất (rẻ, chạy trước khi mở kết nối): so ``host:port/dbname``.
     Hai lớp còn lại hỏi thẳng database — xem ``assert_live_source_matches``.
     """
-    expected = _chuan_hoa_dinh_danh_khai_bao(_require_env("DORM_SYNC_SOURCE_DB"))
+    for ten, gia_tri in (("DORM_SYNC_SOURCE_DB", expected_source_db),
+                         ("DORM_SYNC_SOURCE_SYSTEM_ID", expected_system_id)):
+        if not (gia_tri or "").strip():
+            raise DormSyncConfigError("Thiếu biến môi trường %s" % ten)
+    expected = _chuan_hoa_dinh_danh_khai_bao(expected_source_db)
     # Bắt buộc khai từ đây, dù chỉ dùng ở lớp ba: thiếu nó mà vẫn chạy tiếp
     # nghĩa là lớp mạnh nhất im lặng không chạy.
-    _require_env("DORM_SYNC_SOURCE_SYSTEM_ID")
 
     from app.config import settings
 
@@ -1326,7 +1342,9 @@ def assert_source_database_matches() -> None:
         )
 
 
-async def assert_live_source_matches(session: Any) -> None:
+async def assert_live_source_matches(
+    session: Any, expected_source_db: str, expected_system_id: str
+) -> None:
     """Hỏi thẳng database: mày tên gì, và mày là cluster nào.
 
     Chạy TRONG transaction chỉ-đọc đã mở, trước khi đọc hàng nào.
@@ -1345,10 +1363,14 @@ async def assert_live_source_matches(session: Any) -> None:
     hàng rào tự tắt khi gặp trở ngại thì không phải hàng rào — và ca "thiếu
     quyền đọc catalog" trùng đúng với ca "đây không phải cluster ta nghĩ".
     """
-    expected_db = _chuan_hoa_dinh_danh_khai_bao(_require_env("DORM_SYNC_SOURCE_DB"))
+    for ten, gia_tri in (("DORM_SYNC_SOURCE_DB", expected_source_db),
+                         ("DORM_SYNC_SOURCE_SYSTEM_ID", expected_system_id)):
+        if not (gia_tri or "").strip():
+            raise DormSyncConfigError("Thiếu biến môi trường %s" % ten)
+    expected_db = _chuan_hoa_dinh_danh_khai_bao(expected_source_db)
     # Tên database so KHỚP CHÍNH XÁC, không hạ chữ — xem `_ghep_dinh_danh`.
     expected_dbname = expected_db.rsplit("/", 1)[-1]
-    expected_system_id = _require_env("DORM_SYNC_SOURCE_SYSTEM_ID").strip()
+    expected_system_id = expected_system_id.strip()
 
     actual_dbname = (await session.execute(text("select current_database()"))).scalar()
     if (actual_dbname or "").strip() != expected_dbname:

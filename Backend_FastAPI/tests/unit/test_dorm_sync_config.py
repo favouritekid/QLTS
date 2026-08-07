@@ -114,3 +114,104 @@ def test_gia_tri_duoc_cat_khoang_trang_thua():
     )
 
     assert cau_hinh.target_project_ref == "ref"
+
+
+# ── Ranh giới lõi ↔ vỏ CLI ────────────────────────────────────────────────
+
+
+def test_secret_khong_xuat_hien_trong_repr():
+    """🔴 dataclass sinh __repr__ in HẾT trường.
+
+    Một dòng log kèm object cấu hình, hay một traceback có frame local, là đủ để
+    khoá secret của hệ KTX nằm lại trong nhật ký — nơi được gom về chỗ khác và
+    giữ lâu hơn ta nghĩ.
+    """
+    KHOA = "sb_secret_KHONG_DUOC_LO_RA_LOG"
+    cau_hinh = DormSyncConfig("https://x.supabase.co", KHOA, "x", "db", "1")
+
+    assert KHOA not in repr(cau_hinh)
+    assert KHOA not in str(cau_hinh)
+    # Nhưng giá trị vẫn dùng được — ẩn khỏi repr không phải là ẩn khỏi chương trình.
+    assert cau_hinh.supabase_secret_key == KHOA
+
+
+def test_adapter_CLI_khong_doi_co_web():
+    """Đường cứu hộ phải chạy đúng lúc web đang tắt.
+
+    ``DORM_SYNC_ENABLED`` là công tắc của tính năng WEB. Bắt CLI đọc cùng cờ ấy
+    nghĩa là khoá đường cứu hộ lại bằng chính công tắc của thứ đang hỏng.
+    """
+    moi_truong = {
+        "DORM_SUPABASE_URL": "https://x.supabase.co",
+        "DORM_SUPABASE_SECRET_KEY": "khoa",
+        "DORM_SYNC_TARGET_PROJECT_REF": "x",
+        "DORM_SYNC_SOURCE_DB": "postgres:5432/qlts_production",
+        "DORM_SYNC_SOURCE_SYSTEM_ID": "7618891410102018082",
+    }
+
+    for co in ({}, {"DORM_SYNC_ENABLED": "false"}, {"DORM_SYNC_ENABLED": "true"}):
+        cau_hinh = DormSyncConfig.from_environment({**moi_truong, **co})
+        assert cau_hinh.source_db == "postgres:5432/qlts_production"
+
+
+def test_adapter_CLI_van_doi_du_nam_bien_khi_ghi():
+    with pytest.raises(DormSyncConfigError) as loi:
+        DormSyncConfig.from_environment(
+            {
+                "DORM_SUPABASE_URL": "https://x.supabase.co",
+                "DORM_SUPABASE_SECRET_KEY": "khoa",
+                "DORM_SYNC_TARGET_PROJECT_REF": "x",
+                "DORM_SYNC_SOURCE_DB": "",
+                "DORM_SYNC_SOURCE_SYSTEM_ID": "",
+            }
+        )
+
+    assert "DORM_SYNC_SOURCE_DB" in str(loi.value)
+    assert "DORM_SYNC_SOURCE_SYSTEM_ID" in str(loi.value)
+
+
+def test_xem_truoc_chi_can_url_va_khoa():
+    """Bắt khai báo nguồn cho một lượt chỉ-đọc chỉ khiến người ta bỏ qua bước
+    xem trước — mà xem trước mới là thứ chặn được lần ghi sai."""
+    cau_hinh = DormSyncConfig.from_environment(
+        {"DORM_SUPABASE_URL": "https://x.supabase.co", "DORM_SUPABASE_SECRET_KEY": "k"},
+        doi_dinh_danh_nguon=False,
+    )
+
+    assert cau_hinh.supabase_url == "https://x.supabase.co"
+    assert cau_hinh.source_db == ""
+
+
+def test_loi_hang_rao_KHONG_ro_ha_tang_ra_HTTP():
+    """🔴 Đi qua ĐÚNG handler thật, không chỉ đọc thuộc tính exception.
+
+    ``base_app_exception_handler`` mới là thứ quyết định cái gì ra tới client.
+    Kiểm ``exc.detail`` thôi thì một thay đổi ở handler (ví dụ đổ cả ``context``
+    vào response) sẽ rò tên database mà không ca nào đỏ.
+    """
+    import asyncio
+    import json
+
+    from app.middleware.exception_handlers import base_app_exception_handler
+    from app.utils.exceptions import DormSyncGuardError
+
+    loi = DormSyncGuardError(
+        "Từ chối ghi: database thật tên 'qlts_production' nhưng khai báo trỏ "
+        "'qlts_dev'; system_identifier '7618891410102018082'"
+    )
+
+    yeu_cau = SimpleNamespace(
+        url=SimpleNamespace(path="/api/v2/admin/dorm-sync/apply"), method="POST"
+    )
+    phan_hoi = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        base_app_exception_handler(yeu_cau, loi)
+    )
+    than = phan_hoi.body.decode()
+
+    assert "qlts_production" not in than
+    assert "qlts_dev" not in than
+    assert "7618891410102018082" not in than
+    # Nhưng client vẫn phải rẽ nhánh được: mã lỗi là thứ duy nhất họ được tin.
+    assert json.loads(than)["error_code"] == "DORM_SYNC_GUARD_MISMATCH"
+    # Còn người vận hành vẫn có bản đầy đủ.
+    assert "qlts_production" in loi.operator_detail

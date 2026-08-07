@@ -17,7 +17,7 @@ vào ngày nào đó.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple
 
 from app.utils.exceptions import DormSyncConfigError, DormSyncDisabledError
@@ -38,7 +38,11 @@ class DormSyncConfig:
     """Năm giá trị cần để nói chuyện với hệ KTX, đã kiểm đủ."""
 
     supabase_url: str
-    supabase_secret_key: str
+    # 🔴 repr=False: dataclass sinh __repr__ in HẾT trường, nên một dòng log
+    # kèm object cấu hình, hay một traceback có frame local, là đủ để khoá
+    # secret nằm lại trong nhật ký — nơi được gom về chỗ khác và giữ lâu
+    # hơn ta nghĩ. Khoá chỉ được đi vào header Authorization.
+    supabase_secret_key: str = field(repr=False)
     target_project_ref: str
     source_db: str
     source_system_id: str
@@ -90,4 +94,40 @@ class DormSyncConfig:
             target_project_ref=gia_tri["DORM_SYNC_TARGET_PROJECT_REF"],
             source_db=gia_tri["DORM_SYNC_SOURCE_DB"],
             source_system_id=gia_tri["DORM_SYNC_SOURCE_SYSTEM_ID"],
+        )
+
+    @classmethod
+    def from_environment(
+        cls, env=None, *, doi_dinh_danh_nguon: bool = True
+    ) -> "DormSyncConfig":
+        """Adapter cho vỏ dòng lệnh: đọc thẳng biến môi trường.
+
+        🔴 CỐ Ý không đòi ``DORM_SYNC_ENABLED``. Cờ ấy là công tắc của tính năng
+        WEB; CLI là đường thoát vận hành khi ứng dụng sập, nên nó phải chạy được
+        đúng vào lúc web đang tắt. Bắt nó đọc cùng cờ nghĩa là khoá đường cứu hộ
+        lại bằng chính công tắc của thứ đang hỏng.
+
+        ``doi_dinh_danh_nguon=False`` cho bước xem trước: một lượt chỉ-đọc không
+        cần khai báo nguồn, và bắt khai chỉ khiến người ta bỏ qua bước xem
+        trước — mà xem trước mới là thứ chặn được lần ghi sai. Đích vẫn được
+        kiểm lúc dựng ``DormApi``.
+        """
+        import os
+
+        moi_truong = os.environ if env is None else env
+        can = _TRUONG_BAT_BUOC if doi_dinh_danh_nguon else _TRUONG_BAT_BUOC[:2]
+
+        thieu = [t for t, _ in can if not (moi_truong.get(t) or "").strip()]
+        if thieu:
+            raise DormSyncConfigError("Thiếu biến môi trường " + ", ".join(thieu))
+
+        def lay(t):
+            return (moi_truong.get(t) or "").strip()
+
+        return cls(
+            supabase_url=lay("DORM_SUPABASE_URL"),
+            supabase_secret_key=lay("DORM_SUPABASE_SECRET_KEY"),
+            target_project_ref=lay("DORM_SYNC_TARGET_PROJECT_REF"),
+            source_db=lay("DORM_SYNC_SOURCE_DB"),
+            source_system_id=lay("DORM_SYNC_SOURCE_SYSTEM_ID"),
         )

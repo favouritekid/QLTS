@@ -502,6 +502,27 @@ class DormSyncGuardError(ServiceError):
     detail = "Nguồn dữ liệu không khớp khai báo; từ chối ghi."
     error_code = "DORM_SYNC_GUARD_MISMATCH"
 
+    def __init__(self, operator_detail: str, context: Optional[Dict[str, Any]] = None):
+        """
+        🔴 ``detail`` CỐ Ý không nhận chuỗi chi tiết.
+
+        ``base_app_exception_handler`` đưa ``detail`` thẳng ra HTTP. Thông điệp
+        của guard chứa tên database thật và ``system_identifier`` của cluster —
+        thứ mô tả hạ tầng nguồn, và không có lý do nào để một client biết.
+
+        Chi tiết đi vào ``context`` (chỉ log) và ``operator_detail`` (để vỏ CLI
+        in cho người vận hành đang ngồi trước terminal). ``__str__`` trả bản
+        chi tiết nên ``print(f"✗ {exc}")`` ở CLI vẫn nói đủ.
+        """
+        super().__init__(
+            detail=None,
+            context={**(context or {}), "operator_detail": operator_detail},
+        )
+        self.operator_detail = operator_detail
+
+    def __str__(self) -> str:
+        return self.operator_detail
+
 
 class DormSyncConfigError(ServiceError):
     """
