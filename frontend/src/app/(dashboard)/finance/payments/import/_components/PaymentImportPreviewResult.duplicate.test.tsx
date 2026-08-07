@@ -61,13 +61,16 @@ const KET_QUA_CO_NGHI_TRUNG: PaymentImportCommit = {
   batch_id: 7,
   status: "preview",
   committed_count: 0,
-  failed_count: 1,
+  failed_count: 0,
+  review_required_count: 1,
   payment_count: 0,
   total_amount: "0",
   rows: [
     {
       row_no: 3,
-      status: "warned",
+      validation_status: "warned",
+      commit_status: "duplicate_review_required",
+      review_token: "phieu.dong2",
       message:
         "nghi trùng với 1 phiếu đã ghi cho cùng khoản phí — cùng số tiền, " +
         "lệch không quá 3 ngày (#41).",
@@ -80,10 +83,13 @@ const KET_QUA_CO_NGHI_TRUNG: PaymentImportCommit = {
 const KET_QUA_HONG_THAT: PaymentImportCommit = {
   ...KET_QUA_CO_NGHI_TRUNG,
   status: "committed",
+  review_required_count: 0,
+  failed_count: 1,
   rows: [
     {
       row_no: 3,
-      status: "error",
+      validation_status: "matched",
+      commit_status: "failed",
       message: "không còn đợt hóa đơn payable (đã thu đủ / đổi giữa 2 pha)",
       allocations: [],
     },
@@ -154,7 +160,7 @@ describe("PaymentImportPreviewResult — dòng nghi trùng", () => {
     expect(commitMutate).toHaveBeenCalledTimes(1)
     expect(commitMutate.mock.calls[0][0]).toEqual({
       batchId: 7,
-      confirmDuplicates: true,
+      confirmedRows: [{ row_no: 3, review_token: "phieu.dong2" }],
     })
   })
 

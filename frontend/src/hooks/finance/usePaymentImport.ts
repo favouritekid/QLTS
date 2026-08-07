@@ -88,7 +88,7 @@ export function usePreviewPaymentImport() {
 /**
  * Ghi tiền cho lô.
  *
- * `confirmDuplicates` chỉ bật khi kế toán đã đọc danh sách dòng nghi trùng và
+ * `confirmedRows` chỉ gửi những dòng kế toán đã đọc và
  * khẳng định đó là những khoản thu riêng. Máy chủ giữ lô ở trạng thái xem
  * trước khi còn dòng bị chặn, nên lượt gửi lại này là đường DUY NHẤT để chúng
  * vào sổ; không có nó thì tiền đã thu thật bị kẹt ngoài hệ thống.
@@ -98,16 +98,25 @@ export function useCommitPaymentImport() {
   return useMutation<
     PaymentImportCommit,
     AxiosError<ApiErrorResponse>,
-    { batchId: number; confirmDuplicates?: boolean } | number
+    | {
+        batchId: number
+        confirmedRows?: Array<{ row_no: number; review_token: string }>
+      }
+    | number
   >({
     mutationFn: (bien) =>
       typeof bien === "number"
         ? paymentImportApi.commit(bien)
-        : paymentImportApi.commit(bien.batchId, bien.confirmDuplicates ?? false),
+        : paymentImportApi.commit(bien.batchId, bien.confirmedRows),
     onSuccess: (result) => {
       toast.success(
         `Đã ghi ${result.committed_count} dòng` +
-          (result.failed_count > 0 ? `, ${result.failed_count} lỗi` : ""),
+          (result.failed_count > 0 ? `, ${result.failed_count} lỗi` : "") +
+          // Dòng chờ xác nhận KHÔNG phải dòng lỗi: chúng đòi hai hành động
+          // khác nhau, nên gộp vào một con số là buộc kế toán đoán.
+          (result.review_required_count > 0
+            ? `, ${result.review_required_count} dòng chờ xác nhận trùng`
+            : ""),
       )
       // return → mutation pending tới khi cache refetch xong (tránh thao tác tiếp
       // trên dữ liệu cũ; convention await-invalidate của repo).

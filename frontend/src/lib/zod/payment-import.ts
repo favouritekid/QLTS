@@ -30,7 +30,15 @@ export type PaymentImportAllocation = z.infer<typeof paymentImportAllocationSche
 
 export const paymentImportRowSchema = z.object({
   row_no: z.number().int(),
-  status: z.string(), // matched | warned | error
+  // HAI TRỤC. `validation_status` nói dòng ĐỌC có hợp lệ không (không đổi sau
+  // xem trước); `commit_status` nói số phận của nó ở bước ghi tiền. Trộn hai
+  // câu hỏi vào một cột là lỗi của bản trước — một dòng ĐÃ ghi tiền vẫn mang
+  // `warned` nên vẫn nằm trong tập chọn lại.
+  validation_status: z.string(), // matched | warned | error
+  // pending | duplicate_review_required | committed | failed | not_applicable
+  commit_status: z.string().default("pending"),
+  /** Phiếu xác nhận cho ĐÚNG dòng này — chỉ có khi đang chờ xác nhận trùng. */
+  review_token: z.string().nullable().optional(),
   message: z.string().nullable().optional(),
   citizen_id: z.string().nullable().optional(),
   profile_id: z.number().int().nullable().optional(),
@@ -63,7 +71,10 @@ export const paymentImportCommitSchema = z.object({
   batch_id: z.number().int(),
   status: z.string(),
   committed_count: z.number().int(),
+  /** Số dòng THỬ ghi và hỏng. KHÔNG gồm dòng bị hàng rào giữ lại. */
   failed_count: z.number().int(),
+  /** Số dòng chờ kế toán xác nhận — mỗi dòng có phiếu riêng ở `rows[]`. */
+  review_required_count: z.number().int().default(0),
   payment_count: z.number().int(),
   total_amount: z.string(),
   rows: z.array(paymentImportRowSchema).default([]),

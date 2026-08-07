@@ -63,9 +63,11 @@ export function PaymentImportPreviewResult({
 
   const committable = preview.matched_count + preview.warned_count
 
-  const handleCommit = (confirmDuplicates = false) => {
+  const handleCommit = (
+    confirmedRows?: Array<{ row_no: number; review_token: string }>,
+  ) => {
     commit.mutate(
-      { batchId: preview.batch_id, confirmDuplicates },
+      { batchId: preview.batch_id, confirmedRows },
       {
         onSuccess: (result) => {
           setOpen(false)
@@ -86,15 +88,16 @@ export function PaymentImportPreviewResult({
     // không bao giờ hiện, và người dùng thấy "tất cả đã ghi thành công" trong
     // khi không dòng nào vào sổ. (Đã gặp thật khi smoke trên trình duyệt.)
     //
-    // Nhận dạng qua câu lý do máy chủ sinh; thân trả về không mang cờ riêng.
-    const dongNghiTrung = committed.rows.filter((r) =>
-      (r.message ?? "").includes("nghi trùng"),
+    // Đọc thẳng TRỤC GHI. Bản trước phải dò câu tiếng Việt trong `message`
+    // ("nghi trùng") vì thân trả về không mang cờ riêng — mong manh (đổi câu
+    // chữ là hỏng) và lẫn với cảnh báo của luật khác cùng chứa cụm từ ấy.
+    const dongChoXacNhan = committed.rows.filter(
+      (r) => r.commit_status === "duplicate_review_required" && r.review_token,
     )
-    const dongNghiTrungIds = new Set(dongNghiTrung.map((r) => r.row_no))
-    // Dòng hỏng THẬT = không ghi được và cũng không phải ca chờ xác nhận.
-    const errorRows = committed.rows.filter(
-      (r) => r.status === "error" && !dongNghiTrungIds.has(r.row_no),
-    )
+    // Dòng hỏng THẬT: đã thử ghi và hỏng. Khác hẳn dòng bị giữ lại — cái này
+    // phải sửa dữ liệu, cái kia chỉ cần soát rồi xác nhận.
+    const errorRows = committed.rows.filter((r) => r.commit_status === "failed")
+
     return (
       <Card>
         <CardHeader>
@@ -130,12 +133,12 @@ export function PaymentImportPreviewResult({
           {/* Khối này phải đứng ĐỘC LẬP với khối lỗi ở trên. Lồng vào trong thì
               một lô mà mọi dòng đều bị giữ vì nghi trùng (không có lỗi thật nào)
               sẽ chẳng hiện gì — đúng ca đã gặp khi smoke. */}
-          {dongNghiTrung.length > 0 && (
+          {dongChoXacNhan.length > 0 && (
             <div className="rounded-md border border-amber-300 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40">
               <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
-                {dongNghiTrung.length} dòng bị giữ lại vì nghi trùng phiếu đã ghi
+                {dongChoXacNhan.length} dòng bị giữ lại vì nghi trùng phiếu đã ghi
               </p>
-              <ImportRowsTable rows={dongNghiTrung} />
+              <ImportRowsTable rows={dongChoXacNhan} />
               <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
                 Lô vẫn ở trạng thái xem trước nên những dòng này ghi lại được.
                 Đối chiếu với phiếu đã nêu trong cột lý do; nếu đúng là khoản
@@ -145,7 +148,15 @@ export function PaymentImportPreviewResult({
                 variant="outline"
                 className="mt-2 border-amber-400 text-amber-900 hover:bg-amber-100 dark:text-amber-200"
                 disabled={commit.isPending}
-                onClick={() => handleCommit(true)}
+                onClick={() =>
+                  // Gửi ĐÚNG phiếu của từng dòng, không phải một cờ cho cả lô.
+                  handleCommit(
+                    dongChoXacNhan.map((r) => ({
+                      row_no: r.row_no,
+                      review_token: r.review_token as string,
+                    })),
+                  )
+                }
               >
                 {commit.isPending ? (
                   <>
@@ -159,7 +170,7 @@ export function PaymentImportPreviewResult({
             </div>
           )}
 
-          {errorRows.length === 0 && dongNghiTrung.length === 0 && (
+          {errorRows.length === 0 && dongChoXacNhan.length === 0 && (
             <p className="text-sm text-green-700">
               Tất cả dòng hợp lệ đã ghi thành công.
             </p>

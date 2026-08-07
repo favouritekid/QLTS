@@ -24,7 +24,7 @@ import type {
 } from "@/types/finance.types"
 import { invoicesKeys } from "./useInvoices"
 import { feesKeys } from "./useFees"
-import { parseDuplicateSuspected } from "@/lib/finance/duplicate-payment"
+import { docThanLoi409 } from "@/lib/finance/duplicate-review"
 
 // =====================================================================
 // QUERY KEYS
@@ -362,7 +362,7 @@ export function useCreatePayment() {
       // Nhưng chỉ im lặng khi payload ĐÚNG cấu trúc — nếu nó méo thì form
       // không có gì để hiện, và im lặng biến thành "bấm Lưu mà không có phản
       // hồi nào". Payload méo ⇒ rơi về thông báo chung, tức fail-closed.
-      if (parseDuplicateSuspected(error.response?.data)) return
+      if (docThanLoi409(error.response?.data)) return
 
       const detail = error.response?.data?.detail
       const message =

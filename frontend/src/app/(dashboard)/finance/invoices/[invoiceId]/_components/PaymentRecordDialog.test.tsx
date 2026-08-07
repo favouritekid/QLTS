@@ -82,27 +82,6 @@ vi.mock("@/hooks/finance/usePayments", () => ({
   // Mô phỏng tối thiểu hành vi máy chủ: chỉ trả lời khi câu hỏi đủ vế, và lọc
   // theo số tiền. Luật thật sống ở máy chủ (test riêng bên backend); ở đây chỉ
   // cần phân biệt "có ứng viên" với "không có".
-  useDuplicatePreview: (
-    input: { feeId?: number; amount: number | null; paymentDate: string | null },
-    options: { enabled?: boolean },
-  ) => {
-    activeHookCalls.push({ input, options })
-    const duCanCu =
-      (options?.enabled ?? true) &&
-      !!input.feeId &&
-      input.amount != null &&
-      input.amount > 0 &&
-      !!input.paymentDate
-    if (!duCanCu) return { data: undefined, isError: false }
-    if (state.previewFailed) return { data: undefined, isError: true }
-    const items = state.activeItems.filter(
-      (p) => Number(p.amount) === input.amount,
-    )
-    return {
-      data: { items, total: items.length + (state.activeTruncated ? 1 : 0) },
-      isError: false,
-    }
-  },
 }))
 
 vi.mock("@/hooks/finance/useInvoices", () => ({
@@ -527,8 +506,9 @@ describe("PaymentRecordDialog — MỘT con số 'còn lại' duy nhất", () =>
   })
 })
 
-describe("PaymentRecordDialog — cảnh báo ghi trùng", () => {
-  /** Điền phương thức + số tiền. */
+describe("PaymentRecordDialog — vòng xác nhận nghi trùng", () => {
+  const nutLuu = () => screen.getByRole("button", { name: /ghi nhận thanh toán/i })
+
   async function dienForm(user: ReturnType<typeof userEvent.setup>, soTien: string) {
     await user.click(
       screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
@@ -537,509 +517,32 @@ describe("PaymentRecordDialog — cảnh báo ghi trùng", () => {
     await user.type(screen.getByPlaceholderText(/nhập số tiền/i), soTien)
   }
 
-  const nutLuu = () => screen.getByRole("button", { name: /ghi nhận thanh toán/i })
-
-  function phieuDaCo(over: Partial<(typeof state.activeItems)[number]> = {}) {
+  function than409(over: Record<string, unknown> = {}) {
     return {
-      id: 5,
-      amount: "1000000",
-      status: "pending",
-      payment_date: new Date().toISOString(),
-      ...over,
-    }
-  }
-
-  it("gõ số tiền trùng một phiếu đã có thì cảnh báo SỚM và chặn Lưu", async () => {
-    const user = userEvent.setup()
-    state.activeItems = [phieuDaCo()]
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    expect(screen.queryByTestId("payment-duplicate-warning")).not.toBeInTheDocument()
-
-    await dienForm(user, "1000000")
-
-    // Hiện TRƯỚC khi bấm Lưu — người ghi không phải gửi đi rồi mới biết.
-    expect(await screen.findByTestId("payment-duplicate-warning")).toBeInTheDocument()
-    expect(nutLuu()).toBeDisabled()
-    expect(createPayment).not.toHaveBeenCalled()
-  })
-
-  it("tick xác nhận rồi bấm Lưu thì gửi confirm_duplicate=true, KHÔNG tự gửi lại", async () => {
-    const user = userEvent.setup()
-    state.activeItems = [phieuDaCo({ status: "verified" })]
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    await dienForm(user, "1000000")
-    await screen.findByTestId("payment-duplicate-warning")
-
-    await user.click(screen.getByTestId("payment-duplicate-confirm"))
-    // Tick KHÔNG được tự gửi: hành động cuối vẫn phải là một quyết định.
-    expect(createPayment).not.toHaveBeenCalled()
-
-    await user.click(nutLuu())
-    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(1))
-    expect(createPayment.mock.calls[0][0].data.confirm_duplicate).toBe(true)
-  })
-
-  it("đổi số tiền sau khi đã tick thì xác nhận hết hiệu lực", async () => {
-    const user = userEvent.setup()
-    state.activeItems = [phieuDaCo(), phieuDaCo({ id: 6, amount: "2000000" })]
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    const oSoTien = screen.getByPlaceholderText(/nhập số tiền/i)
-    await dienForm(user, "1000000")
-    await screen.findByTestId("payment-duplicate-warning")
-    await user.click(screen.getByTestId("payment-duplicate-confirm"))
-    expect(nutLuu()).toBeEnabled()
-
-    // Tick được cấp cho 1.000.000. Mang nó sang 2.000.000 là bỏ qua cảnh báo
-    // cho một số tiền chưa ai xem.
-    await user.clear(oSoTien)
-    await user.type(oSoTien, "2000000")
-
-    await waitFor(() => expect(nutLuu()).toBeDisabled())
-    expect(screen.getByTestId("payment-duplicate-confirm")).not.toBeChecked()
-  })
-
-  it("số tiền không trùng phiếu nào thì không cảnh báo, gửi confirm_duplicate=false", async () => {
-    const user = userEvent.setup()
-    state.activeItems = [phieuDaCo()]
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    await dienForm(user, "500000")
-    expect(screen.queryByTestId("payment-duplicate-warning")).not.toBeInTheDocument()
-
-    await user.click(nutLuu())
-    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(1))
-    expect(createPayment.mock.calls[0][0].data.confirm_duplicate).toBe(false)
-  })
-
-  it("cảnh báo SỚM bị cắt cũng phải nói ra", async () => {
-    // Hai nguồn (xem trước và 409) đếm "còn nữa" bằng hai cách khác nhau. Đọc
-    // nhầm nguồn là im lặng đúng lúc cần nói: người ghi thấy 20 phiếu và tưởng
-    // đó là tất cả.
-    const user = userEvent.setup()
-    state.activeItems = Array.from({ length: 20 }, (_, i) => phieuDaCo({ id: i + 1 }))
-    state.activeTruncated = true
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    await dienForm(user, "1000000")
-    await screen.findByTestId("payment-duplicate-warning")
-    expect(screen.getByTestId("payment-duplicate-truncated")).toBeInTheDocument()
-  })
-
-  it("cảnh báo SỚM chưa bị cắt thì KHÔNG nói thừa", async () => {
-    const user = userEvent.setup()
-    state.activeItems = [phieuDaCo()]
-    state.activeTruncated = false
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    await dienForm(user, "1000000")
-    await screen.findByTestId("payment-duplicate-warning")
-    expect(screen.queryByTestId("payment-duplicate-truncated")).not.toBeInTheDocument()
-  })
-
-  it("máy chủ trả 409 thì hiện danh sách của máy chủ, kèm ghi chú khi bị cắt", async () => {
-    const user = userEvent.setup()
-    // Giao diện KHÔNG thấy gì — máy chủ vẫn là nơi quyết định cuối.
-    state.activeItems = []
-    createPayment.mockRejectedValueOnce({
       response: {
         status: 409,
         data: {
-          detail: "Đã có nhiều phiếu thu cùng số tiền",
+          detail: "trùng",
           error_code: "PAYMENT_DUPLICATE_SUSPECTED",
           duplicates: [
             {
               payment_id: 91,
               amount: "1000000",
               payment_date: "2026-08-05T03:00:00+00:00",
-              status: "verified",
-              invoice_number: "INV-XYZ",
-            },
-          ],
-          duplicates_truncated: true,
-        },
-      },
-    })
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    await dienForm(user, "1000000")
-    expect(screen.queryByTestId("payment-duplicate-warning")).not.toBeInTheDocument()
-
-    await user.click(nutLuu())
-
-    const khoi = await screen.findByTestId("payment-duplicate-warning")
-    expect(khoi).toHaveTextContent("INV-XYZ")
-    expect(screen.getByTestId("payment-duplicate-truncated")).toBeInTheDocument()
-    expect(nutLuu()).toBeDisabled()
-  })
-
-  it("409 rồi đổi số tiền thì danh sách của máy chủ không còn hiện", async () => {
-    const user = userEvent.setup()
-    state.activeItems = []
-    createPayment.mockRejectedValueOnce({
-      response: {
-        status: 409,
-        data: {
-          detail: "trùng",
-          error_code: "PAYMENT_DUPLICATE_SUSPECTED",
-          duplicates: [
-            {
-              payment_id: 91,
-              amount: "1000000",
-              payment_date: null,
               status: "pending",
-              invoice_number: "INV-XYZ",
+              invoice_number: "INV-A",
             },
           ],
           duplicates_truncated: false,
+          duplicates_total: 1,
+          review_token: "phieu.mot",
+          ...over,
         },
       },
-    })
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    const oSoTien = screen.getByPlaceholderText(/nhập số tiền/i)
-    await dienForm(user, "1000000")
-    await user.click(nutLuu())
-    await screen.findByTestId("payment-duplicate-warning")
-
-    // Cảnh báo nói về 1.000.000. Đổi số tiền thì nó phải biến mất — hiện danh
-    // sách của một số tiền khác với số đang trên màn hình là nói dối.
-    await user.clear(oSoTien)
-    await user.type(oSoTien, "1500000")
-    await waitFor(() =>
-      expect(screen.queryByTestId("payment-duplicate-warning")).not.toBeInTheDocument(),
-    )
-    expect(nutLuu()).toBeEnabled()
-  })
-
-  it("409 với payload MÉO thì không hiện khối cảnh báo (rơi về lỗi chung)", async () => {
-    const user = userEvent.setup()
-    state.activeItems = []
-    createPayment.mockRejectedValueOnce({
-      response: {
-        status: 409,
-        data: {
-          detail: "trùng",
-          error_code: "PAYMENT_DUPLICATE_SUSPECTED",
-          duplicates: [{ payment_id: 91 }], // thiếu trường
-          duplicates_truncated: false,
-        },
-      },
-    })
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    await dienForm(user, "1000000")
-    await user.click(nutLuu())
-    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(1))
-
-    // Không dựng khối cảnh báo từ dữ liệu không đọc được: người dùng thấy
-    // thông báo lỗi chung (hook bắn), form không giả vờ hiểu.
-    expect(screen.queryByTestId("payment-duplicate-warning")).not.toBeInTheDocument()
-  })
-
-  it("hỏi hook nguồn RIÊNG cho cảnh báo trùng, không mượn ô chờ duyệt", () => {
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    // Hai nguồn tách bạch: ô "đang chờ duyệt" hỏi hàng đợi maker-checker; cảnh
-    // báo trùng hỏi CHÍNH luật của máy chủ bằng bộ ba fee + tiền + ngày.
-    expect(activeHookCalls.at(-1)?.options).toEqual({ enabled: true })
-    expect(activeHookCalls.at(-1)?.input).toMatchObject({ feeId: 7 })
-    expect(pendingHookCalls.at(-1)).toEqual({ feeId: 7, options: { enabled: true } })
-  })
-})
-
-describe("PaymentRecordDialog — phản hồi của phiên trước không sống lại", () => {
-  it("đóng form khi request đang bay, mở lại cùng dữ liệu ⇒ không thấy cảnh báo cũ", async () => {
-    const user = userEvent.setup()
-    state.activeItems = []
-
-    // Giữ phản hồi lại: mô phỏng người dùng bấm X trong lúc máy chủ chưa trả
-    // lời. Hiệu ứng dọn dẹp chạy trước, rồi `catch` của request cũ mới chạy —
-    // nếu nó ghi state vô điều kiện thì danh sách của phiên trước sẽ nằm sẵn ở
-    // đó chờ phiên sau.
-    let tuChoi: (e: unknown) => void = () => {}
-    createPayment.mockImplementationOnce(
-      () => new Promise((_, reject) => { tuChoi = reject }),
-    )
-
-    const onOpenChange = vi.fn()
-    const { rerender } = render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={onOpenChange}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-
-    await user.click(
-      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
-    )
-    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
-    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "1000000")
-    await user.click(screen.getByRole("button", { name: /ghi nhận thanh toán/i }))
-    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(1))
-
-    // Người dùng đóng form trong lúc chờ.
-    rerender(
-      <PaymentRecordDialog
-        open={false}
-        onOpenChange={onOpenChange}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-
-    // Máy chủ trả lời MUỘN, sau khi form đã đóng. Bọc `act` vì lời từ chối này
-    // kích hoạt `setState` bên trong component — không bọc thì React cảnh báo
-    // và ta đang đo một cây giao diện chưa ổn định.
-    await act(async () => {
-      tuChoi({
-        response: {
-          status: 409,
-          data: {
-            detail: "trùng",
-            error_code: "PAYMENT_DUPLICATE_SUSPECTED",
-            duplicates: [
-              {
-                payment_id: 91,
-                amount: "1000000",
-                payment_date: null,
-                status: "pending",
-                invoice_number: "INV-PHIEN-TRUOC",
-              },
-            ],
-            duplicates_truncated: false,
-          },
-        },
-      })
-      await Promise.resolve()
-    })
-
-    // Mở lại và nhập ĐÚNG dữ liệu cũ.
-    rerender(
-      <PaymentRecordDialog
-        open
-        onOpenChange={onOpenChange}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    await user.click(
-      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
-    )
-    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
-    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "1000000")
-
-    // Cảnh báo của phiên trước KHÔNG được sống dậy: lần này chưa ai hỏi máy
-    // chủ, nên hiện một danh sách cũ là nói về dữ liệu không còn ai bảo đảm.
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(screen.queryByText(/INV-PHIEN-TRUOC/)).not.toBeInTheDocument()
-  })
-})
-
-describe("PaymentRecordDialog — ngày trong khối cảnh báo", () => {
-  it("hiện NGÀY LỊCH VIỆT NAM, không phải mười ký tự đầu của chuỗi UTC", async () => {
-    // Mốc này là 05/08 giờ Việt Nam (00:00 VN = 04/08 17:00Z) — đúng cách một
-    // phiếu ghi ngày 05/08 qua chính form này được lưu. Cắt chuỗi cho ra
-    // "2026-08-04": người ghi đang nhập 05/08 sẽ thấy "phiếu kia ngày 04/08"
-    // và kết luận đây là hai khoản khác nhau. Lùi đúng một ngày, cho mọi phiếu.
-    const user = userEvent.setup()
-    state.activeItems = []
-    createPayment.mockRejectedValueOnce({
-      response: {
-        status: 409,
-        data: {
-          detail: "trùng",
-          error_code: "PAYMENT_DUPLICATE_SUSPECTED",
-          duplicates: [
-            {
-              payment_id: 91,
-              amount: "1000000",
-              payment_date: "2026-08-04T17:00:00+00:00",
-              status: "pending",
-              invoice_number: "INV-XYZ",
-            },
-          ],
-          duplicates_truncated: false,
-        },
-      },
-    })
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    await user.click(
-      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
-    )
-    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
-    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "1000000")
-    await user.click(screen.getByRole("button", { name: /ghi nhận thanh toán/i }))
-
-    const khoi = await screen.findByTestId("payment-duplicate-warning")
-    expect(khoi).toHaveTextContent("05/08/2026")
-    expect(khoi).not.toHaveTextContent("2026-08-04")
-    expect(khoi).not.toHaveTextContent("04/08/2026")
-  })
-})
-
-describe("PaymentRecordDialog — hỏi máy chủ mà hỏng thì phải nói ra", () => {
-  it("preview lỗi ⇒ hiện cảnh báo 'không kiểm tra được', KHÔNG im lặng", async () => {
-    // Một form sạch bong sau khi gõ đủ số tiền đọc y như "đã đối chiếu, không
-    // trùng" — đúng câu trả lời sai nguy hiểm nhất, và là lý do bảng công nợ
-    // phía trên có trạng thái lỗi riêng.
-    const user = userEvent.setup()
-    state.previewFailed = true
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    await user.click(
-      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
-    )
-    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
-    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "1000000")
-
-    expect(
-      await screen.findByTestId("payment-duplicate-preview-error"),
-    ).toBeInTheDocument()
-    // KHÔNG chặn Lưu: hàng rào thật nằm ở máy chủ (409 lúc ghi), chặn ở đây
-    // chỉ khoá tay người dùng mà không thêm an toàn nào.
-    expect(screen.getByRole("button", { name: /ghi nhận thanh toán/i })).toBeEnabled()
-  })
-
-  it("preview chạy bình thường thì KHÔNG hiện cảnh báo thừa", async () => {
-    const user = userEvent.setup()
-    state.previewFailed = false
-    state.activeItems = []
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="4.000.000 ₫"
-      />,
-    )
-    await user.click(
-      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
-    )
-    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
-    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "1000000")
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(
-      screen.queryByTestId("payment-duplicate-preview-error"),
-    ).not.toBeInTheDocument()
-  })
-})
-
-describe("PaymentRecordDialog — hỏi theo số tiền đã ngừng gõ", () => {
-  async function dienForm(user: ReturnType<typeof userEvent.setup>, soTien: string) {
-    await user.click(
-      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
-    )
-    await user.click(await screen.findByRole("option", { name: "Tiền mặt" }))
-    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), soTien)
+    }
   }
 
-  const nutLuu = () => screen.getByRole("button", { name: /ghi nhận thanh toán/i })
-
-  /** Tập số tiền KHÁC NHAU mà hook đã hỏi (bỏ các lượt chưa có số). */
-  const soTienDaHoi = () =>
-    new Set(
-      activeHookCalls
-        .map((c) => (c.input as { amount: number | null }).amount)
-        .filter((a): a is number => a != null),
-    )
-
-  it("gõ một số dài KHÔNG sinh một lượt hỏi cho mỗi phím", async () => {
-    const user = userEvent.setup()
-    state.activeItems = []
+  function moForm() {
     render(
       <PaymentRecordDialog
         open
@@ -1049,52 +552,181 @@ describe("PaymentRecordDialog — hỏi theo số tiền đã ngừng gõ", () =
         maxAmount="9.999.999 ₫"
       />,
     )
-    activeHookCalls.length = 0
+  }
 
-    await dienForm(user, "2000000")
-    // Chờ quá cửa sổ trễ để lượt hỏi thật sự xảy ra.
-    await waitFor(
-      () => {
-        const soDaHoi = soTienDaHoi()
-        expect(soDaHoi.has(2000000)).toBe(true)
-      },
-      { timeout: 2000 },
-    )
+  it("gửi → 409 thật → xác nhận → request THỨ HAI mang đúng phiếu", async () => {
+    // Ca duy nhất chứng minh tính năng dùng được. Reducer xanh không đủ: nó
+    // không nói gì về việc handler có thật sự đọc phiếu ra khỏi trạng thái rồi
+    // đính vào payload hay không — đúng lớp lỗi đã xảy ra một lần rồi (giao
+    // diện thiếu một trường bắt buộc mà ca ở tầng dưới vẫn xanh).
+    const user = userEvent.setup()
+    createPayment.mockRejectedValueOnce(than409())
+    createPayment.mockResolvedValueOnce({ id: 1 })
+    moForm()
+    await dienForm(user, "1000000")
+    await user.click(nutLuu())
 
-    const soDaHoi = soTienDaHoi()
-    // Bảy ký tự → bảy con số dở dang (2, 20, 200 … 2000000) nếu hỏi theo phím.
-    // Mỗi lượt chạy trọn phép nối Payment→Invoice→Fee→Hồ sơ→Lead ở máy chủ.
-    expect(
-      soDaHoi.size,
-      `hỏi ${soDaHoi.size} giá trị khác nhau: ${[...soDaHoi].join(", ")}`,
-    ).toBeLessThanOrEqual(2)
+    await screen.findByTestId("payment-duplicate-warning")
+    expect(createPayment.mock.calls[0][0].data.review_token).toBeUndefined()
+
+    await user.click(screen.getByTestId("payment-duplicate-confirm"))
+    await user.click(nutLuu())
+
+    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(2))
+    expect(createPayment.mock.calls[1][0].data.review_token).toBe("phieu.mot")
   })
 
-  it("đổi số tiền thì cảnh báo cũ tắt NGAY, không chờ hết cửa sổ trễ", async () => {
+  it("sửa số tiền sau 409 ⇒ cảnh báo biến mất, lượt sau KHÔNG mang phiếu", async () => {
     const user = userEvent.setup()
-    state.activeItems = [
-      { id: 5, amount: "1000000", status: "pending", payment_date: new Date().toISOString() },
-    ]
-    render(
-      <PaymentRecordDialog
-        open
-        onOpenChange={vi.fn()}
-        invoiceId={19}
-        feeId={7}
-        maxAmount="99.999.999 ₫"
-      />,
+    createPayment.mockRejectedValueOnce(than409())
+    createPayment.mockResolvedValueOnce({ id: 1 })
+    moForm()
+    const oSoTien = screen.getByPlaceholderText(/nhập số tiền/i)
+    await dienForm(user, "1000000")
+    await user.click(nutLuu())
+    await screen.findByTestId("payment-duplicate-warning")
+    await user.click(screen.getByTestId("payment-duplicate-confirm"))
+
+    await user.clear(oSoTien)
+    await user.type(oSoTien, "1500000")
+    await waitFor(() =>
+      expect(screen.queryByTestId("payment-duplicate-warning")).not.toBeInTheDocument(),
     )
 
-    await dienForm(user, "1000000")
-    expect(await screen.findByTestId("payment-duplicate-warning")).toBeInTheDocument()
-    expect(nutLuu()).toBeDisabled()
+    await user.click(nutLuu())
+    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(2))
+    expect(
+      createPayment.mock.calls[1][0].data.review_token,
+      "phiếu nói về số tiền cũ — mang nó theo số tiền mới là xin xác nhận cho " +
+        "một tập ứng viên người dùng chưa từng xem",
+    ).toBeUndefined()
+  })
 
-    // Gõ thêm một số 0 → 10.000.000, không còn trùng phiếu nào. Cảnh báo phải
-    // biến mất NGAY: giữ nó lại nửa giây nữa nghĩa là khoá nút Lưu oan cho một
-    // con số chẳng trùng gì cả — đúng thứ xảy ra nếu chỉ debounce khoá truy vấn
-    // mà vẫn dùng kết quả của số tiền cũ.
-    await user.type(screen.getByPlaceholderText(/nhập số tiền/i), "0")
-    expect(screen.queryByTestId("payment-duplicate-warning")).not.toBeInTheDocument()
-    expect(nutLuu()).toBeEnabled()
+  it("sửa GHI CHÚ sau 409 ⇒ giữ nguyên lượt xác nhận", async () => {
+    // Ghi chú KHÔNG nằm trong những trường phiếu ràng buộc vào. Huỷ xác nhận vì
+    // nó là bắt người dùng tick lại vì một thay đổi không liên quan — cách
+    // nhanh nhất khiến họ bấm qua cảnh báo mà không đọc.
+    const user = userEvent.setup()
+    createPayment.mockRejectedValueOnce(than409())
+    moForm()
+    await dienForm(user, "1000000")
+    await user.click(nutLuu())
+    await screen.findByTestId("payment-duplicate-warning")
+    await user.click(screen.getByTestId("payment-duplicate-confirm"))
+
+    await user.type(screen.getByPlaceholderText(/ghi chú thêm/i), "thu hộ")
+
+    expect(screen.getByTestId("payment-duplicate-warning")).toBeInTheDocument()
+    expect(screen.getByTestId("payment-duplicate-confirm")).toBeChecked()
+  })
+
+  it("xác nhận gặp 409 MỚI ⇒ thay nguyên khối và bỏ tick", async () => {
+    const user = userEvent.setup()
+    createPayment.mockRejectedValueOnce(than409())
+    createPayment.mockRejectedValueOnce(
+      than409({
+        duplicates: [
+          {
+            payment_id: 92,
+            amount: "1000000",
+            payment_date: null,
+            status: "verified",
+            invoice_number: "INV-B",
+          },
+        ],
+        review_token: "phieu.hai",
+      }),
+    )
+    moForm()
+    await dienForm(user, "1000000")
+    await user.click(nutLuu())
+    await screen.findByTestId("payment-duplicate-warning")
+    await user.click(screen.getByTestId("payment-duplicate-confirm"))
+    await user.click(nutLuu())
+
+    await waitFor(() =>
+      expect(screen.getByTestId("payment-duplicate-warning")).toHaveTextContent(/INV-B/),
+    )
+    expect(screen.getByTestId("payment-duplicate-warning")).not.toHaveTextContent(/INV-A/)
+    expect(
+      screen.getByTestId("payment-duplicate-confirm"),
+      "tập ứng viên đã đổi ⇒ tick cũ nói về thứ khác",
+    ).not.toBeChecked()
+    expect(nutLuu()).toBeDisabled()
+  })
+
+  it("409 MÉO (thiếu phiếu) ⇒ KHÔNG có khối xác nhận", async () => {
+    const user = userEvent.setup()
+    createPayment.mockRejectedValueOnce(than409({ review_token: undefined }))
+    moForm()
+    await dienForm(user, "1000000")
+    await user.click(nutLuu())
+
+    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(1))
+    expect(
+      screen.queryByTestId("payment-duplicate-warning"),
+      "không có phiếu thì không có gì để xác nhận — một nút bấm vô hiệu còn tệ " +
+        "hơn một thông báo lỗi thẳng thắn",
+    ).not.toBeInTheDocument()
+  })
+
+  it("lỗi KHÔNG phải trùng ⇒ thoát trạng thái gửi, không giữ phiếu", async () => {
+    const user = userEvent.setup()
+    createPayment.mockRejectedValueOnce({ response: { status: 500, data: {} } })
+    createPayment.mockResolvedValueOnce({ id: 1 })
+    moForm()
+    await dienForm(user, "1000000")
+    await user.click(nutLuu())
+
+    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(1))
+    // Kẹt ở `submitting` thì nút Lưu khoá vĩnh viễn và người ghi mất đường.
+    await waitFor(() => expect(nutLuu()).toBeEnabled())
+    await user.click(nutLuu())
+    await waitFor(() => expect(createPayment).toHaveBeenCalledTimes(2))
+    expect(createPayment.mock.calls[1][0].data.review_token).toBeUndefined()
+  })
+
+  it("bấm Lưu HAI LẦN liên tiếp ⇒ chỉ MỘT lượt gửi", async () => {
+    // Phải chạy ở tầng dialog: reducer chặn được lượt thứ hai, nhưng chỉ SAU
+    // khi React render lại — còn hai cú bấm liền nhau cùng chạy trên một bản
+    // trạng thái. Hàng rào thật nằm trong handler.
+    const user = userEvent.setup()
+    let goCua: (v: unknown) => void = () => {}
+    createPayment.mockReturnValueOnce(
+      new Promise((res) => {
+        goCua = res
+      }),
+    )
+    moForm()
+    await dienForm(user, "1000000")
+    const nut = nutLuu()
+    await user.click(nut)
+    await user.click(nut)
+
+    expect(createPayment).toHaveBeenCalledTimes(1)
+    goCua({ id: 1 })
+  })
+
+  it("bấm HAI LẦN ở lượt gửi KÈM PHIẾU ⇒ cũng chỉ một lượt", async () => {
+    const user = userEvent.setup()
+    createPayment.mockRejectedValueOnce(than409())
+    let goCua: (v: unknown) => void = () => {}
+    createPayment.mockReturnValueOnce(
+      new Promise((res) => {
+        goCua = res
+      }),
+    )
+    moForm()
+    await dienForm(user, "1000000")
+    await user.click(nutLuu())
+    await screen.findByTestId("payment-duplicate-warning")
+    await user.click(screen.getByTestId("payment-duplicate-confirm"))
+    const nut = nutLuu()
+    await user.click(nut)
+    await user.click(nut)
+
+    // 1 lượt đầu (bị 409) + 1 lượt kèm phiếu = 2. Không phải 3.
+    expect(createPayment).toHaveBeenCalledTimes(2)
+    goCua({ id: 1 })
   })
 })

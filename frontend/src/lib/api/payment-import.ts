@@ -52,18 +52,18 @@ async function preview(params: {
 /**
  * Pha 2: ghi tiền (auto-verify) các dòng MATCHED/WARNING của lô.
  *
- * `confirmDuplicates` bỏ qua hàng rào nghi trùng cho TOÀN LÔ. Không có đường
- * này thì những dòng bị hàng rào chặn không còn cách nào vào hệ thống — chúng
- * là tiền kế toán đã thu thật.
+ * `confirmedRows` là những dòng kế toán đã soát, MỖI dòng kèm đúng phiếu mà
+ * lượt commit trước trả về cho nó. Không còn cờ "bỏ qua cho TOÀN LÔ": một cờ
+ * như vậy bỏ qua cả những cảnh báo sinh ra SAU khi kế toán soát, và nó không
+ * nói được người bấm đã nhìn thấy gì.
  */
 async function commit(
   batchId: number,
-  confirmDuplicates = false,
+  confirmedRows?: Array<{ row_no: number; review_token: string }>,
 ): Promise<PaymentImportCommit> {
   const res = await api.post(
     IMPORT.COMMIT(batchId),
-    undefined,
-    confirmDuplicates ? { params: { confirm_duplicates: true } } : undefined,
+    confirmedRows?.length ? { confirmed_rows: confirmedRows } : undefined,
   )
   return paymentImportCommitSchema.parse(res.data)
 }
