@@ -44,6 +44,15 @@ from app.utils.exceptions import (
     InvalidToken,
     SessionRevokedError,
     PermissionDeniedError,
+    DormSyncConfigError,
+    DormSyncDisabledError,
+    DormSyncGuardError,
+    DormSyncOpenAbsentError,
+    DormSyncOpenNotCreatedError,
+    DormSyncOpenUnknownError,
+    DormSyncOperationBlockedError,
+    DormSyncTargetMismatchError,
+    DormSyncTokenError,
     ServiceError,
     CacheServiceError,
     SessionServiceError,
@@ -404,6 +413,33 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(UserServiceError, service_error_handler)
     app.add_exception_handler(WebSocketServiceError, service_error_handler)
     app.add_exception_handler(ServiceError, service_error_handler)
+
+    # 🔴 Các lỗi `DormSync*` phải đi qua `base_app_exception_handler`, KHÔNG
+    # phải `service_error_handler`.
+    #
+    # Chúng kế thừa `ServiceError`, mà handler ấy HARD-CODE 500 và bỏ luôn
+    # `public_payload`. Hậu quả đo được: `DormSyncOperationBlockedError` khai
+    # 409 + `operation_status` + `next_action` nhưng ra tới client là 500 trần —
+    # frontend mất sạch thứ nó cần để rẽ nhánh, và một lượt `outcome_unknown`
+    # trông y hệt một sự cố máy chủ. `DormSyncDisabledError` (503) cũng vậy.
+    #
+    # ⚠️ Ca kiểm gọi THẲNG `base_app_exception_handler` không bắt được lỗi này:
+    # thứ sai nằm ở chỗ ĐẤU DÂY, không ở thân handler. Phải kiểm qua HTTP thật.
+    #
+    # Starlette tra handler theo lớp rồi đi ngược MRO, nên đăng ký lớp con ở đây
+    # thắng đăng ký `ServiceError` phía trên.
+    for _loi_dorm in (
+        DormSyncDisabledError,
+        DormSyncGuardError,
+        DormSyncTargetMismatchError,
+        DormSyncTokenError,
+        DormSyncConfigError,
+        DormSyncOperationBlockedError,
+        DormSyncOpenNotCreatedError,
+        DormSyncOpenAbsentError,
+        DormSyncOpenUnknownError,
+    ):
+        app.add_exception_handler(_loi_dorm, base_app_exception_handler)
 
     # Authentication errors (401)
     app.add_exception_handler(InvalidCredentials, authentication_error_handler)

@@ -471,11 +471,18 @@ async def test_apply_HAI_request_cung_phieu_chi_MOT_ben_ghi(
                 claims=claims,
                 rows=[object()],
             )
+        from app.utils.exceptions import DormSyncOperationBlockedError
+
         return KetQuaChuanBi(
             trang_thai=TrangThaiChuanBi.KHONG_CHAY_LAI,
             so_cai=so_cai,
             claims=claims,
             thong_diep="Lượt đồng bộ này đang chạy.",
+            loi_chan=DormSyncOperationBlockedError(
+                "Lượt đồng bộ này đang chạy.",
+                operation_status="running",
+                next_action="wait",
+            ),
         )
 
     async def _execute(**kw):
@@ -563,3 +570,109 @@ async def test_apply_KHONG_lo_chuoi_loi_noi_bo_ra_HTTP(
     du_lieu = phan_hoi.json()
     assert du_lieu["outcome"] == "outcome_unknown"
     assert du_lieu["ktx_run_id"] == 42
+
+
+# ===========================================================================
+# Đấu dây handler — ca gọi thẳng handler KHÔNG bắt được lỗi này
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "trang_thai, hanh_dong",
+    [
+        ("running", "wait"),
+        ("failed", "preview_again"),
+        ("outcome_unknown", "manual_reconcile"),
+    ],
+)
+async def test_apply_bi_chan_ra_409_kem_payload_MAY_DOC_DUOC(
+    client, admin_token_headers, monkeypatch, trang_thai, hanh_dong
+):
+    """🔴 Lỗi nằm ở chỗ ĐẤU DÂY, không ở thân handler.
+
+    Mọi lớp ``DormSync*Error`` kế thừa ``ServiceError``, mà ``ServiceError``
+    được đăng ký cho ``service_error_handler`` — hàm HARD-CODE 500 và bỏ luôn
+    ``public_payload``. Đo được: lỗi khai 409 + ``operation_status`` +
+    ``next_action`` ra tới client thành 500 trần.
+
+    ⚠️ Ca gọi THẲNG ``base_app_exception_handler`` vẫn xanh trong suốt thời
+    gian đó, vì thân handler không sai. Chỉ HTTP thật mới thấy.
+
+    Với frontend, đây là mất trắng: một lượt ``outcome_unknown`` trông y hệt sự
+    cố máy chủ, và cách xử tự nhiên nhất — bấm lại — là cách sai nhất.
+    """
+    import app.routers.admin_v2_dorm_sync as router_module
+    from app.services.dorm_sync_apply_service import _xet_so_cai_cu
+
+    op_id = uuid.uuid4()
+    so_cai = SimpleNamespace(
+        id=11,
+        operation_id=op_id,
+        actor_id=1,
+        academic_year=2026,
+        snapshot_hash="s" * 64,
+        snapshot_version=1,
+        status=trang_thai,
+        ktx_run_id=None,
+        result=None,
+    )
+    claims = SimpleNamespace(
+        operation_id=op_id,
+        academic_year=2026,
+        snapshot_hash="s" * 64,
+        snapshot_version=1,
+    )
+
+    async def _prepare(db, **kw):
+        return _xet_so_cai_cu(so_cai, claims, so_cai.actor_id)
+
+    async def _khong_duoc_goi(**kw):
+        raise AssertionError("đã chạm sang KTX cho một lượt bị chặn")
+
+    monkeypatch.setattr(router_module, "prepare_apply", _prepare)
+    monkeypatch.setattr(router_module, "execute_apply", _khong_duoc_goi)
+    monkeypatch.setattr(
+        router_module.DormSyncConfig,
+        "from_settings",
+        classmethod(lambda cls, settings=None: _cau_hinh_gia()),
+    )
+
+    phan_hoi = await client.post(
+        DUONG_DAN_APPLY, json={"preview_token": "phieu"}, headers=admin_token_headers
+    )
+
+    assert phan_hoi.status_code == 409, "đấu dây handler sai — xem service_error_handler"
+    than = phan_hoi.json()
+    assert than["error_code"] == "DORM_SYNC_OPERATION_BLOCKED"
+    assert than["operation_status"] == trang_thai
+    assert than["next_action"] == hanh_dong
+    # Không rò chi tiết nội bộ.
+    assert "operator_detail" not in than
+    assert str(op_id) not in phan_hoi.text
+
+
+async def test_preview_loi_cau_hinh_ra_dung_ma_HTTP_da_khai(
+    client, admin_token_headers, monkeypatch
+):
+    """Vế rộng hơn: MỌI lỗi `DormSync*` phải giữ đúng `status_code` của nó.
+
+    `DormSyncDisabledError` khai 503. Qua `service_error_handler` nó thành 500,
+    và người vận hành đọc log đi tìm một sự cố máy chủ không tồn tại — trong khi
+    sự thật chỉ là tính năng chưa được bật.
+    """
+    import app.routers.admin_v2_dorm_sync as router_module
+    from app.utils.exceptions import DormSyncDisabledError
+
+    def _tat(cls, settings=None):
+        raise DormSyncDisabledError("chưa bật DORM_SYNC_ENABLED")
+
+    monkeypatch.setattr(
+        router_module.DormSyncConfig, "from_settings", classmethod(_tat)
+    )
+
+    phan_hoi = await client.post(
+        DUONG_DAN_PREVIEW, json={"academic_year": 2026}, headers=admin_token_headers
+    )
+
+    assert phan_hoi.status_code == 503
+    assert phan_hoi.json()["error_code"] == "DORM_SYNC_DISABLED"

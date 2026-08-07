@@ -28,7 +28,7 @@ from app.services.dorm_sync_snapshot import (
     hash_source_snapshot,
     phat_hanh_token,
 )
-from app.utils.exceptions import ConflictError
+from app.utils.exceptions import DormSyncOperationBlockedError
 
 pytestmark = pytest.mark.unit
 
@@ -424,10 +424,15 @@ async def test_KHONG_CHAY_LAI_tra_409_va_KHONG_goi_KTX(monkeypatch):
             so_cai=so_cai,
             claims=_claims(so_cai.operation_id),
             thong_diep="Lượt đồng bộ này đang chạy.",
+            loi_chan=DormSyncOperationBlockedError(
+                "Lượt đồng bộ này đang chạy.",
+                operation_status="running",
+                next_action="wait",
+            ),
         ),
     )
 
-    with pytest.raises(ConflictError):
+    with pytest.raises(DormSyncOperationBlockedError):
         await _goi(_Db(nhat_ky))
 
     assert nhat_ky == ["prepare"]
@@ -671,3 +676,126 @@ async def test_thong_diep_FAILED_khong_noi_KTX_khong_doi(monkeypatch):
     assert "không thay đổi" not in thong_diep
     assert "KHÔNG ai bị hạ cờ" in thong_diep
     assert "vẫn còn" in thong_diep
+
+
+# ---------------------------------------------------------------------------
+# Hợp đồng MÁY ĐỌC ĐƯỢC cho ba trạng thái chặn
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "trang_thai_so, hanh_dong",
+    [
+        ("running", "wait"),
+        ("failed", "preview_again"),
+        ("outcome_unknown", "manual_reconcile"),
+    ],
+)
+async def test_ba_trang_thai_chan_cho_ba_payload_KHAC_NHAU(
+    monkeypatch, trang_thai_so, hanh_dong
+):
+    """🔴 Đi qua ĐÚNG handler thật; frontend chỉ đọc được thứ ra tới đây.
+
+    Ba trạng thái đòi ba hành động TRÁI NGƯỢC nhau:
+
+    * ``running``         → chờ, tuyệt đối không bấm lại;
+    * ``failed``          → bấm Xem trước lại;
+    * ``outcome_unknown`` → KHÔNG chạy lại, đối soát tay.
+
+    Bản trước nén cả ba thành ``ConflictError``: cùng 409, cùng ``error_code``,
+    chỉ khác câu tiếng Việt — mà ``error-handler.ts`` cố ý CHE ``detail`` của
+    mã ``CONFLICT``. Frontend khi đó không còn gì để rẽ nhánh, và ca đắt nhất
+    (``outcome_unknown``) sẽ được mời "thử lại".
+    """
+    import json
+
+    from app.middleware.exception_handlers import base_app_exception_handler
+    from app.services.dorm_sync_apply_service import _xet_so_cai_cu
+
+    so_cai = _so_cai(status=trang_thai_so)
+    claims = _claims(so_cai.operation_id)
+    so_cai.snapshot_hash = claims_snapshot_hash = so_cai.snapshot_hash
+    claims = SimpleNamespace(
+        operation_id=so_cai.operation_id,
+        academic_year=so_cai.academic_year,
+        snapshot_hash=claims_snapshot_hash,
+        snapshot_version=so_cai.snapshot_version,
+    )
+
+    ket_qua = _xet_so_cai_cu(so_cai, claims, so_cai.actor_id)
+    assert ket_qua.trang_thai is TrangThaiChuanBi.KHONG_CHAY_LAI
+
+    yeu_cau = SimpleNamespace(
+        url=SimpleNamespace(path="/api/v2/admin/dorm-sync/apply"), method="POST"
+    )
+    # ⚠️ `await` thẳng. Ca này CHẠY TRONG một event loop rồi (pytest-asyncio),
+    # nên `run_until_complete` sẽ ném "Cannot run the event loop while another
+    # loop is running".
+    phan_hoi = await base_app_exception_handler(yeu_cau, ket_qua.loi_chan)
+    than = json.loads(phan_hoi.body.decode())
+
+    assert phan_hoi.status_code == 409
+    assert than["error_code"] == "DORM_SYNC_OPERATION_BLOCKED"
+    assert than["operation_status"] == trang_thai_so
+    assert than["next_action"] == hanh_dong
+
+
+async def test_payload_chan_KHONG_ro_du_lieu_noi_bo(monkeypatch):
+    """Chỉ hai chuỗi hằng ra ngoài — không mã lượt, không tên người, không lý do.
+
+    ``operator_detail`` và ``context`` ở lại log; ``public_payload`` là trường
+    tách riêng, mặc định rỗng, người ném lỗi phải chủ động điền.
+    """
+    import json
+
+    from app.middleware.exception_handlers import base_app_exception_handler
+
+    loi = DormSyncOperationBlockedError(
+        "Lượt #4127 của Nguyễn Văn An treo ở sync_run 88 trên 10.0.0.5",
+        operation_status="outcome_unknown",
+        next_action="manual_reconcile",
+    )
+
+    yeu_cau = SimpleNamespace(
+        url=SimpleNamespace(path="/api/v2/admin/dorm-sync/apply"), method="POST"
+    )
+    phan_hoi = await base_app_exception_handler(yeu_cau, loi)
+    than = phan_hoi.body.decode()
+
+    assert "4127" not in than
+    assert "Nguyễn Văn An" not in than
+    assert "10.0.0.5" not in than
+    assert set(json.loads(than)) == {
+        "operation_status",
+        "next_action",
+        "detail",
+        "error_code",
+    }
+    # Người vận hành vẫn có bản đầy đủ.
+    assert "4127" in loi.operator_detail
+
+
+def test_hanh_dong_do_SERVICE_quyet_dinh_khong_phai_router():
+    """Router không được đọc ``so_cai.status`` rồi tự ánh xạ.
+
+    Một bản sao của máy trạng thái ở tầng router sẽ lệch ngay lần sửa đầu, và
+    lúc đó hai tầng nói hai chuyện khác nhau về cùng một lượt.
+    """
+    import inspect
+
+    from app.services.dorm_sync_apply_service import HanhDongTiepTheo
+
+    ma = "\n".join(
+        d
+        for d in inspect.getsource(router_module.ghi_dong_bo.__wrapped__).splitlines()
+        if not d.strip().startswith("#")
+    )
+
+    assert "chuan_bi.loi_chan" in ma
+    # ⚠️ Tìm chuỗi TRONG NGOẶC KÉP, không tìm chuỗi trần: `"wait"` là chuỗi con
+    # của chính từ `await` nằm khắp file, nên phép `in` thô luôn đỏ và ca này sẽ
+    # bị gỡ vì tưởng nó viết sai.
+    for hanh_dong in HanhDongTiepTheo:
+        for dang in (f'"{hanh_dong}"', f"'{hanh_dong}'"):
+            assert dang not in ma, f"router tự ánh xạ hành động: {hanh_dong}"
+    assert "DormSyncOperationBlockedError(" not in ma

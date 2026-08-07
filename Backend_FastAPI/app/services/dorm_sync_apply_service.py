@@ -51,6 +51,7 @@ from app.services.dorm_sync_snapshot import (
 from app.utils.exceptions import (
     BusinessRuleViolation,
     DormSyncOpenNotCreatedError,
+    DormSyncOperationBlockedError,
     DormSyncTokenError,
 )
 
@@ -81,6 +82,23 @@ class TrangThaiChuanBi(StrEnum):
     KHONG_CHAY_LAI = "khong_chay_lai"
 
 
+class HanhDongTiepTheo(StrEnum):
+    """Việc người dùng PHẢI làm tiếp. Tập ĐÓNG, máy đọc được.
+
+    🔴 Quyết định ở ĐÂY, không ở router và càng không ở frontend. Ba trạng thái
+    sổ cái đòi ba hành động trái ngược nhau, và ánh xạ giữa chúng là nghiệp
+    vụ — để frontend tự suy từ câu tiếng Việt là mời nó đoán sai đúng lúc
+    đoán sai đắt nhất.
+    """
+
+    # Lượt đang chạy: chờ. Bấm lại sẽ vướng khoá năm học của hệ KTX.
+    CHO = "wait"
+    # Lượt đã đóng sổ: phiếu cũ hết dùng, lấy phiếu mới.
+    XEM_TRUOC_LAI = "preview_again"
+    # KHÔNG rõ hệ KTX tới đâu: người phải vào đối soát, máy không được tự chạy.
+    DOI_SOAT_TAY = "manual_reconcile"
+
+
 @dataclass(frozen=True)
 class KetQuaChuanBi:
     trang_thai: TrangThaiChuanBi
@@ -90,6 +108,24 @@ class KetQuaChuanBi:
     rows: Optional[List[Any]] = None
     # Chỉ có ở `DA_XONG` / `KHONG_CHAY_LAI`.
     thong_diep: Optional[str] = None
+    # Chỉ có ở `KHONG_CHAY_LAI` — lỗi đã dựng sẵn kèm payload máy-đọc-được.
+    loi_chan: Optional[Exception] = None
+
+    def __post_init__(self) -> None:
+        # 🔴 Từ chối tổ hợp BẤT KHẢ THI ngay lúc dựng.
+        #
+        # Router chỉ việc `raise chuan_bi.loi_chan`. Thiếu nó thì `raise None`
+        # ném `TypeError: exceptions must derive from BaseException` — một
+        # thông điệp không nói gì về sự cố thật, ở giữa một request đã ghi sổ
+        # `running`. Bắt ở đây thì lỗi chỉ đúng chỗ nó sinh ra.
+        if (
+            self.trang_thai is TrangThaiChuanBi.KHONG_CHAY_LAI
+            and self.loi_chan is None
+        ):
+            raise ValueError(
+                "`KHONG_CHAY_LAI` bắt buộc kèm `loi_chan`: router không được "
+                "tự dựng lỗi, nên thiếu nó là không có gì để ném."
+            )
 
 
 async def prepare_apply(
@@ -340,16 +376,19 @@ def _xet_so_cai_cu(
             "Lượt đồng bộ này đang chạy. Chờ nó kết thúc; KHÔNG bấm lại — hai "
             "lượt cùng lúc sẽ vướng khoá của hệ ký túc xá."
         )
+        hanh_dong = HanhDongTiepTheo.CHO
     elif so_cai.status == "failed":
         thong_diep = (
             "Lượt đồng bộ này đã hỏng. Bấm Xem trước lại để lấy phiếu mới; "
             "phiếu cũ không chạy lại được."
         )
+        hanh_dong = HanhDongTiepTheo.XEM_TRUOC_LAI
     elif so_cai.status == "outcome_unknown":
         thong_diep = (
             "Lượt đồng bộ này kết thúc mà KHÔNG rõ hệ ký túc xá đã ghi tới "
             "đâu. Phải đối soát bằng tay trước khi chạy lượt mới."
         )
+        hanh_dong = HanhDongTiepTheo.DOI_SOAT_TAY
     else:
         # 🔴 Fail-closed. CHECK constraint phía database chỉ cho bốn giá trị,
         # nên tới đây nghĩa là ràng buộc đã bị gỡ hoặc ai đó sửa tay. Rơi vào
@@ -365,6 +404,16 @@ def _xet_so_cai_cu(
         so_cai=so_cai,
         claims=claims,
         thong_diep=thong_diep,
+        # 🔴 Lỗi dựng SẴN Ở ĐÂY, kèm đủ payload máy-đọc-được.
+        #
+        # Router chỉ việc `raise` nó. Nếu để router tự dựng, nó phải đọc
+        # `so_cai.status` thô rồi ánh xạ lại — tức một bản sao của chính máy
+        # trạng thái này, và bản sao sẽ lệch ngay lần sửa đầu.
+        loi_chan=DormSyncOperationBlockedError(
+            thong_diep,
+            operation_status=so_cai.status,
+            next_action=str(hanh_dong),
+        ),
     )
 
 

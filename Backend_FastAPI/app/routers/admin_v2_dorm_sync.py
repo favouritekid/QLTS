@@ -51,7 +51,6 @@ from app.services.dorm_sync_apply_service import (
 )
 from app.services.dorm_sync_preview_service import chuan_bi_xem_truoc
 from app.services.dorm_sync_service import DormApi
-from app.utils.exceptions import ConflictError
 
 log = structlog.get_logger(__name__)
 
@@ -260,9 +259,16 @@ async def ghi_dong_bo(
         )
 
     if chuan_bi.trang_thai is TrangThaiChuanBi.KHONG_CHAY_LAI:
-        # 409: trạng thái phía server không cho thao tác này lúc này. Không
-        # phải 400 — người gửi không sai gì, họ chỉ tới sau một lượt còn dở.
-        raise ConflictError(chuan_bi.thong_diep)
+        # 409 kèm payload MÁY ĐỌC ĐƯỢC — `operation_status` + `next_action`.
+        #
+        # 🔴 Không dùng `ConflictError` chung. Ba trạng thái đòi ba hành động
+        # trái ngược (chờ / xem trước lại / đối soát tay), mà frontend cố ý CHE
+        # `detail` của mã `CONFLICT` — nén cả ba lại là bỏ đói nó đúng lúc nó
+        # cần rẽ nhánh nhất.
+        #
+        # Lỗi do SERVICE dựng sẵn: router đọc `so_cai.status` rồi tự ánh xạ là
+        # dựng một bản sao của máy trạng thái, và bản sao sẽ lệch.
+        raise chuan_bi.loi_chan
 
     # ⚠️ COMMIT A — chốt hàng `running` + nhật ký `requested` TRƯỚC khi chạm
     # sang hệ ký túc xá. Hai việc này nguyên tử với nhau vì cùng PostgreSQL

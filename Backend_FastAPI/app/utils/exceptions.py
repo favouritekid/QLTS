@@ -597,6 +597,61 @@ class DormSyncTokenError(ServiceError):
         return self.operator_detail
 
 
+class DormSyncOperationBlockedError(ServiceError):
+    """Lượt đồng bộ này không chạy được lúc này — và VÌ SAO thì máy phải đọc được.
+
+    🔴 KHÔNG dùng ``ConflictError`` chung. Ba trạng thái ``running`` /
+    ``failed`` / ``outcome_unknown`` đòi ba hành động TRÁI NGƯỢC nhau:
+
+    * ``running``          → chờ, tuyệt đối không bấm lại;
+    * ``failed``           → bấm Xem trước lại để lấy phiếu mới;
+    * ``outcome_unknown``  → KHÔNG chạy lại, phải đối soát tay.
+
+    Nén cả ba vào một ``error_code`` nghĩa là frontend chỉ còn câu tiếng Việt
+    để phân biệt — mà ``error-handler.ts`` cố ý CHE ``detail`` của mã
+    ``CONFLICT``, nên nó không còn gì cả. Phân biệt bằng câu chữ cũng vi phạm
+    thin-client và sẽ vỡ ngay lần ai đó sửa chính tả.
+
+    Ca đắt nhất trong ba ca là ``outcome_unknown``: frontend không phân biệt
+    được sẽ mời người dùng "thử lại", và lượt thứ hai chạy chồng lên một lượt
+    có thể đang sống.
+
+    ⚠️ ``public_payload`` là trường TÁCH RIÊNG mà người ném lỗi chủ động điền;
+    ``context`` chỉ đi vào log. Đây là chỗ duy nhất được đưa dữ liệu ra HTTP, và
+    nó chỉ mang hai chuỗi hằng — không mã lượt, không tên người, không lý do
+    kỹ thuật.
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    detail = "Lượt đồng bộ này chưa chạy lại được."
+    error_code = "DORM_SYNC_OPERATION_BLOCKED"
+
+    def __init__(
+        self,
+        operator_detail: str,
+        *,
+        operation_status: str,
+        next_action: str,
+        context: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            detail=None,
+            context={
+                **(context or {}),
+                "operator_detail": operator_detail,
+                "operation_status": operation_status,
+            },
+        )
+        self.operator_detail = operator_detail
+        self.public_payload = {
+            "operation_status": operation_status,
+            "next_action": next_action,
+        }
+
+    def __str__(self) -> str:
+        return self.operator_detail
+
+
 class DormSyncOpenNotCreatedError(ServiceError):
     """Không mở được lượt, và BIẾT CHẮC hệ ký túc xá chưa tạo hàng nào.
 
