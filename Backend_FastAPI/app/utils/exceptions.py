@@ -560,9 +560,37 @@ class DormSyncTokenError(ServiceError):
     dò tiếp. Người vận hành đọc bản chi tiết ở log.
     """
 
-    status_code = status.HTTP_400_BAD_REQUEST
+    status_code = status.HTTP_409_CONFLICT
     detail = "Phiếu xem trước không dùng được. Bấm Xem trước lại rồi thử lại."
     error_code = "DORM_SYNC_TOKEN_INVALID"
+
+    def __init__(self, operator_detail: str, context: Optional[Dict[str, Any]] = None):
+        """
+        🔴 ``detail`` CỐ Ý không nhận chuỗi chi tiết — cùng khuôn với
+        ``DormSyncGuardError``.
+
+        Khai một ``detail`` trung tính ở cấp lớp là chưa đủ: ``ServiceError``
+        nhận chuỗi qua constructor và chuỗi đó ghi đè giá trị lớp, nên
+        ``DormSyncTokenError("chữ ký sai")`` đưa thẳng lý do ra HTTP. Đã đo:
+        ``detail`` trả về đúng chuỗi nội bộ.
+
+        Mà lý do mới là thứ không được ra ngoài. Phân biệt "chữ ký sai" với
+        "hết hạn" hay "sai actor" cho phía ngoài là đưa cho người đang dò một
+        tín hiệu để dò tiếp: họ biết chuỗi nào bị chặn vì chưa ký đúng, chuỗi
+        nào đã ký đúng mà chỉ quá giờ.
+
+        MỌI lỗi token ra ngoài bằng cùng một ``detail`` và cùng một
+        ``error_code``; bản chi tiết đi vào ``context`` (chỉ log) và
+        ``operator_detail``.
+        """
+        super().__init__(
+            detail=None,
+            context={**(context or {}), "operator_detail": operator_detail},
+        )
+        self.operator_detail = operator_detail
+
+    def __str__(self) -> str:
+        return self.operator_detail
 
 
 class DormSyncConfigError(ServiceError):

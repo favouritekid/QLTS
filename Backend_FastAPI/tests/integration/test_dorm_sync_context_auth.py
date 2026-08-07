@@ -159,8 +159,30 @@ def _hang_nguon(**ghi_de):
 
 
 def _gan_adapter(monkeypatch, router_module, api_cls, cohort_fn):
-    monkeypatch.setattr(router_module, "DormApi", api_cls)
-    monkeypatch.setattr(router_module, "fetch_cohort", cohort_fn)
+    """Giả TẦNG ADAPTER, không giả nghiệp vụ.
+
+    ⚠️ ``DormApi`` và ``fetch_cohort`` nay sống ở ``dorm_sync_preview_service``
+    — router chỉ dựng phụ thuộc rồi serialize. Vá vào router như trước sẽ
+    không ăn, và ba ca này đã đỏ đúng lúc chuyển: đó chính là bằng chứng nghiệp
+    vụ đã rời khỏi handler.
+    """
+    from app.services import dorm_sync_preview_service as service_module
+
+    monkeypatch.setattr(service_module, "DormApi", api_cls)
+    monkeypatch.setattr(service_module, "fetch_cohort", cohort_fn)
+    # Giá trị mặc định của tham số được chốt lúc ĐỊNH NGHĨA hàm, nên vá tên ở
+    # cấp module là chưa đủ — truyền thẳng qua `functools.partial`.
+    import functools
+
+    from app.services.dorm_sync_preview_service import chuan_bi_xem_truoc
+
+    monkeypatch.setattr(
+        router_module,
+        "chuan_bi_xem_truoc",
+        functools.partial(
+            chuan_bi_xem_truoc, api_factory=api_cls, cohort_loader=cohort_fn
+        ),
+    )
     monkeypatch.setattr(
         router_module.DormSyncConfig,
         "from_settings",

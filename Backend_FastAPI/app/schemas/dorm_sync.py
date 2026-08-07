@@ -106,6 +106,26 @@ class DormSyncWarningRow(BaseModel):
     status: str
 
 
+class DormSyncSourceCounts(BaseModel):
+    """Những con số người bấm phải đọc TRƯỚC khi ký.
+
+    🔴 Thiếu chúng thì admin ký một trạng thái họ không nhìn thấy: bao nhiêu hồ
+    sơ sẽ bị chặn xếp phòng vì không rõ giới tính, bao nhiêu người không gọi
+    được, bao nhiêu hồ sơ vẫn đang xét. Vỏ dòng lệnh in đủ từ đầu; màn hình web
+    mà thiếu là một bản xem trước kém hơn.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    khong_ro_gioi_tinh: int
+    chua_chot_nganh: int
+    chua_ro_trinh_do: int
+    ho_so_dang_xet: int
+    khong_co_so_lien_he: int
+    co_so_phu: int
+    so_bi_bo_vi_qua_dai: int
+
+
 class DormSyncPreviewResponse(BaseModel):
     """Kết quả bước xem trước. CHỈ ĐỌC — chưa ghi gì sang hệ KTX."""
 
@@ -126,6 +146,11 @@ class DormSyncPreviewResponse(BaseModel):
         description="Vì sao chưa ghi được. Chỉ có nghĩa khi `can_apply=False`.",
     )
 
+    counts: Optional[DormSyncSourceCounts] = Field(
+        None,
+        description="Số liệu khuyến cáo của nguồn. `None` khi chưa ghi được.",
+    )
+
     warnings: List[DormSyncWarningRow] = Field(
         default_factory=list,
         description="Sắp mất cờ mà vẫn đang giữ giường — người bấm phải đọc.",
@@ -136,6 +161,21 @@ class DormSyncPreviewResponse(BaseModel):
     )
     target_fingerprint: Optional[str] = Field(
         None, description="Dấu vân tay trạng thái chỗ ở phía KTX, do database tính."
+    )
+
+    snapshot_hash: Optional[str] = Field(
+        None,
+        description=(
+            "Dấu băm GỘP nguồn + đích — đúng giá trị sổ cái sẽ lưu ở cột "
+            "`snapshot_hash`."
+        ),
+    )
+    snapshot_version: Optional[int] = Field(
+        None,
+        description=(
+            "Phiên bản hình dạng ảnh chụp. KHÁC phiên bản token; sổ cái lưu "
+            "riêng cột này."
+        ),
     )
 
     preview_token: Optional[str] = Field(

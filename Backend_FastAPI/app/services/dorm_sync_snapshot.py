@@ -66,6 +66,31 @@ def _chuan_hoa(gia_tri: Any) -> Any:
     return gia_tri
 
 
+def assert_snapshot_contract(rows: Sequence[Any]) -> None:
+    """Mọi hàng phải mang đủ trường mà ẢNH CHỤP cần. Chạy TRƯỚC khi chạm KTX.
+
+    ``assert_payload_contract`` canh tập trường của PAYLOAD; ảnh chụp cần thêm
+    ``profile_status``, và nó không nằm trong payload nên cổng kia không thấy.
+
+    🔴 Vì sao phải chạy trước lời gọi sang KTX chứ không để `build_source_
+    snapshot` tự nổ: dấu băm nguồn được tính SAU khi đã hỏi ảnh chụp đích. Một
+    `AttributeError` ở đó nghĩa là đã gửi cả danh sách ``qlts_profile_id`` sang
+    hệ kia rồi mới dừng — cho một lượt lẽ ra chặn được ở dòng đầu.
+    """
+    thieu = [
+        getattr(r, "qlts_profile_id", None)
+        for r in rows
+        if not hasattr(r, _TRUONG_TRANG_THAI)
+    ]
+    if thieu:
+        # Chỉ SỐ ĐẾM ra thông điệp, không danh tính người học.
+        raise RuntimeError(
+            f"{len(thieu)}/{len(rows)} hàng nguồn thiếu `{_TRUONG_TRANG_THAI}` — "
+            "repository và service đang lệch phiên bản. Dừng trước khi chạm "
+            "sang hệ ký túc xá."
+        )
+
+
 def build_source_snapshot(rows: Sequence[Any]) -> Dict[str, Any]:
     """Ảnh chụp phía NGUỒN: 12 trường ổn định + ``profile_status``.
 
@@ -80,7 +105,15 @@ def build_source_snapshot(rows: Sequence[Any]) -> Dict[str, Any]:
             khoa: _chuan_hoa(gia_tri)
             for khoa, gia_tri in _phan_payload_on_dinh(row).items()
         }
-        ban_ghi[_TRUONG_TRANG_THAI] = _chuan_hoa(getattr(row, "profile_status", None))
+        # 🔴 Truy cập THẲNG, không `getattr(..., None)`.
+        #
+        # Hàng thiếu thuộc tính nghĩa là repository và service lệch phiên
+        # bản. Suy ra `None` ở đây là KÝ một trạng thái rỗng: dấu băm khai
+        # rằng mọi hồ sơ đều "không rõ trạng thái", và nó khớp với chính nó
+        # ở bước ghi — chốt cho qua trong khi nó không hề nhìn thấy thứ nó
+        # sinh ra để canh. `assert_snapshot_contract` chặn ca đó TRƯỚC khi
+        # có lời gọi nào sang KTX.
+        ban_ghi[_TRUONG_TRANG_THAI] = _chuan_hoa(row.profile_status)
         hang.append(ban_ghi)
 
     hang.sort(key=lambda h: h["qlts_profile_id"])
@@ -112,6 +145,30 @@ def hash_source_snapshot(snapshot: Dict[str, Any]) -> str:
     return hashlib.sha256(_json_canonical(snapshot)).hexdigest()
 
 
+def hash_combined_snapshot(source_hash: str, target_fingerprint: str) -> str:
+    """Một dấu băm cho CẢ HAI phía — thứ sổ cái lưu ở ``snapshot_hash``.
+
+    🔴 Vì sao cần dấu gộp thay vì lưu riêng hai chuỗi: sổ cái trả lời câu hỏi
+    "lượt này đã chạy trên trạng thái nào". Trạng thái đó là một CẶP — nguồn
+    QLTS và chỗ ở phía KTX — và chúng chỉ có nghĩa khi đi cùng nhau. Lưu riêng
+    thì hai lượt khác nhau có thể trùng một nửa, và mọi phép đối soát sau này
+    phải tự nhớ ghép lại.
+
+    ⚠️ Có ``version`` trong công thức: đổi tập trường của ảnh chụp mà giữ
+    nguyên cách gộp thì một dấu cũ và một dấu mới có thể va nhau mà không ai
+    biết vì sao.
+    """
+    return hashlib.sha256(
+        _json_canonical(
+            {
+                "version": SNAPSHOT_VERSION,
+                "source": source_hash,
+                "target": target_fingerprint,
+            }
+        )
+    ).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # Token xem trước
 # ---------------------------------------------------------------------------
@@ -138,6 +195,12 @@ class PreviewTokenClaims:
     expires_at: int
     source_hash: str
     target_fingerprint: str
+    # ⚠️ Phiên bản của ẢNH CHỤP, không phải của token. Hai thứ đổi vì hai lý do
+    # và sổ cái lưu riêng cột `snapshot_version`; dùng `TOKEN_VERSION` thay thế
+    # là ghi vào sổ một con số nói về chuyện khác.
+    snapshot_version: int
+    # Dấu gộp nguồn + đích — thứ đi vào cột `snapshot_hash` của sổ cái.
+    snapshot_hash: str
 
 
 def _b64_ma(du_lieu: bytes) -> str:
@@ -187,6 +250,8 @@ def phat_hanh_token(
         expires_at=now_ts + TOKEN_TTL_GIAY,
         source_hash=source_hash,
         target_fingerprint=target_fingerprint,
+        snapshot_version=SNAPSHOT_VERSION,
+        snapshot_hash=hash_combined_snapshot(source_hash, target_fingerprint),
     )
 
     than = _json_canonical(
@@ -199,6 +264,8 @@ def phat_hanh_token(
             "exp": claims.expires_at,
             "src": claims.source_hash,
             "tgt": claims.target_fingerprint,
+            "snap_v": claims.snapshot_version,
+            "snap": claims.snapshot_hash,
         }
     )
     than_b64 = _b64_ma(than)
@@ -268,6 +335,8 @@ def doc_token(
             expires_at=int(du_lieu["exp"]),
             source_hash=str(du_lieu["src"]),
             target_fingerprint=str(du_lieu["tgt"]),
+            snapshot_version=int(du_lieu["snap_v"]),
+            snapshot_hash=str(du_lieu["snap"]),
         )
     except (KeyError, TypeError, ValueError):
         raise DormSyncTokenError("Token xem trước thiếu trường bắt buộc.") from None
@@ -282,6 +351,24 @@ def doc_token(
     if now_ts >= claims.expires_at:
         raise DormSyncTokenError(
             "Token xem trước đã hết hạn. Xem lại danh sách rồi bấm lại."
+        )
+
+    # ⚠️ Dấu gộp phải DỰNG LẠI ĐƯỢC từ hai dấu thành phần trong cùng token.
+    #
+    # Chữ ký đã bảo đảm không ai sửa được từng trường. Nhưng nó không bảo đảm
+    # ba trường ấy NHẤT QUÁN với nhau — một đường phát hành viết sai (hoặc một
+    # phiên bản sau đổi công thức gộp mà quên đổi version) sẽ ký ra một token
+    # hợp lệ mà sổ cái lưu một dấu không nói về hai dấu kia.
+    if claims.snapshot_version != SNAPSHOT_VERSION:
+        raise DormSyncTokenError(
+            f"Token mang phiên bản ảnh chụp {claims.snapshot_version}, "
+            f"máy chủ đang dùng {SNAPSHOT_VERSION}."
+        )
+    if claims.snapshot_hash != hash_combined_snapshot(
+        claims.source_hash, claims.target_fingerprint
+    ):
+        raise DormSyncTokenError(
+            "Dấu băm gộp trong token không dựng lại được từ dấu nguồn và dấu đích."
         )
 
     if claims.actor_id != actor_id:

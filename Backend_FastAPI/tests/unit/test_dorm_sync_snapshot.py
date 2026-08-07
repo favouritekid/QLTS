@@ -268,6 +268,149 @@ def test_phat_roi_doc_lai_duoc():
     assert doc.expires_at - doc.issued_at == TOKEN_TTL_GIAY
 
 
+def test_token_mang_SNAPSHOT_VERSION_va_dau_bam_gop():
+    """🔴 Sổ cái lưu hai giá trị này, nên token phải chở đủ cả hai.
+
+    ``snapshot_version`` KHÁC ``TOKEN_VERSION``: hai thứ đổi vì hai lý do —
+    một cái khi tập trường ảnh chụp đổi, một cái khi hình dạng token đổi. Ghi
+    ``TOKEN_VERSION`` vào cột ``snapshot_version`` của sổ là ghi một con số nói
+    về chuyện khác, và mọi phép đối soát sau này đọc sai.
+
+    ``snapshot_hash`` là dấu GỘP nguồn + đích: trạng thái mà lượt chạy trên là
+    một CẶP, và lưu riêng hai nửa thì mọi lần đối soát phải tự nhớ ghép lại.
+    """
+    from app.services.dorm_sync_snapshot import (
+        SNAPSHOT_VERSION,
+        hash_combined_snapshot,
+    )
+
+    token, claims = _phat()
+
+    assert claims.snapshot_version == SNAPSHOT_VERSION
+    assert claims.snapshot_hash == hash_combined_snapshot("a" * 64, "b" * 32)
+    assert len(claims.snapshot_hash) == 64
+    # Và nó KHÁC cả hai nửa — không phải chỉ chép lại một trong hai.
+    assert claims.snapshot_hash not in ("a" * 64, "b" * 32)
+
+    doc = doc_token(token, secret=_KHOA, actor_id=7, now_ts=1_000_100)
+    assert doc.snapshot_version == claims.snapshot_version
+    assert doc.snapshot_hash == claims.snapshot_hash
+
+
+def test_snapshot_version_KHONG_lay_tu_TOKEN_VERSION(monkeypatch):
+    """🔴 Hai hằng số hôm nay ĐỀU bằng 1 — nên ca thường không phân biệt được.
+
+    Kiểm ngược đổi ``snapshot_version=SNAPSHOT_VERSION`` thành ``TOKEN_VERSION``
+    cho 48/48 xanh. Chúng chỉ tách nhau vào ngày một trong hai tăng, mà đúng
+    ngày đó sổ cái bắt đầu ghi một con số nói về chuyện khác — và không có gì
+    báo động.
+
+    Ca này TÁCH chúng ra bằng cách dời ``SNAPSHOT_VERSION`` đi, rồi đòi claim
+    đi theo nó chứ không theo ``TOKEN_VERSION``.
+    """
+    import app.services.dorm_sync_snapshot as m
+
+    monkeypatch.setattr(m, "SNAPSHOT_VERSION", 99)
+
+    _, claims = _phat()
+
+    assert claims.snapshot_version == 99
+    assert claims.snapshot_version != m.TOKEN_VERSION
+
+
+def test_dau_bam_gop_doi_khi_MOT_TRONG_HAI_nua_doi():
+    """Vế ĐẢO: đổi riêng nguồn, hoặc riêng đích, dấu gộp đều phải đổi.
+
+    Không có vế này thì một công thức gộp bỏ quên một nửa vẫn xanh.
+    """
+    from app.services.dorm_sync_snapshot import hash_combined_snapshot
+
+    goc = hash_combined_snapshot("a" * 64, "b" * 32)
+
+    assert hash_combined_snapshot("c" * 64, "b" * 32) != goc
+    assert hash_combined_snapshot("a" * 64, "d" * 32) != goc
+
+
+def test_dau_bam_gop_khong_nhat_quan_thi_TU_CHOI():
+    """Chữ ký đúng vẫn chưa đủ: ba trường phải NHẤT QUÁN với nhau.
+
+    Chữ ký bảo đảm không ai sửa được từng trường, nhưng không bảo đảm chúng nói
+    cùng một chuyện. Một đường phát hành viết sai — hoặc một phiên bản sau đổi
+    công thức gộp mà quên đổi version — sẽ ký ra token hợp lệ mà sổ cái lưu một
+    dấu không nói về hai dấu kia.
+    """
+    import base64
+    import json
+    import uuid as _uuid
+
+    from app.services.dorm_sync_snapshot import SNAPSHOT_VERSION, _ky
+
+    than = {
+        "v": TOKEN_VERSION,
+        "op": str(_uuid.uuid4()),
+        "actor": 7,
+        "year": 2026,
+        "iat": 1_000_000,
+        "exp": 1_000_000 + TOKEN_TTL_GIAY,
+        "src": "a" * 64,
+        "tgt": "b" * 32,
+        "snap_v": SNAPSHOT_VERSION,
+        "snap": "0" * 64,  # không dựng lại được từ src + tgt
+    }
+    thoi = json.dumps(than, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    token = f"{base64.urlsafe_b64encode(thoi).decode().rstrip('=')}.{_ky(thoi, _KHOA)}"
+
+    with pytest.raises(DormSyncTokenError):
+        doc_token(token, secret=_KHOA, actor_id=7, now_ts=1_000_100)
+
+
+def test_moi_loi_token_ra_ngoai_CUNG_MOT_thong_diep():
+    """🔴 Lý do token hỏng KHÔNG được ra HTTP.
+
+    Phân biệt "chữ ký sai" với "hết hạn" hay "sai actor" cho phía ngoài là đưa
+    cho người đang dò một tín hiệu để dò tiếp: họ biết chuỗi nào bị chặn vì
+    chưa ký đúng, chuỗi nào đã ký đúng mà chỉ quá giờ.
+
+    ⚠️ Đi qua ĐÚNG handler thật — chính nó quyết định cái gì ra tới client.
+    """
+    import asyncio
+    import json
+
+    from app.middleware.exception_handlers import base_app_exception_handler
+
+    token_hop_le, _ = _phat()
+    cac_ca = [
+        lambda: doc_token(token_hop_le, secret="khoa-khac", actor_id=7, now_ts=1_000_100),
+        lambda: doc_token(token_hop_le, secret=_KHOA, actor_id=8, now_ts=1_000_100),
+        lambda: doc_token(
+            token_hop_le, secret=_KHOA, actor_id=7,
+            now_ts=1_000_000 + TOKEN_TTL_GIAY,
+        ),
+        lambda: doc_token("rac", secret=_KHOA, actor_id=7, now_ts=1_000_100),
+    ]
+
+    yeu_cau = SimpleNamespace(
+        url=SimpleNamespace(path="/api/v2/admin/dorm-sync/apply"), method="POST"
+    )
+    vong = asyncio.get_event_loop_policy().new_event_loop()
+
+    than_thay = set()
+    for goi in cac_ca:
+        with pytest.raises(DormSyncTokenError) as bat:
+            goi()
+        phan_hoi = vong.run_until_complete(
+            base_app_exception_handler(yeu_cau, bat.value)
+        )
+        du_lieu = json.loads(phan_hoi.body.decode())
+        assert phan_hoi.status_code == 409
+        assert du_lieu["error_code"] == "DORM_SYNC_TOKEN_INVALID"
+        than_thay.add(du_lieu["detail"])
+        # Chi tiết vẫn còn cho người vận hành.
+        assert bat.value.operator_detail
+
+    assert len(than_thay) == 1, f"bốn ca lộ ra {len(than_thay)} thông điệp khác nhau"
+
+
 def test_operation_id_do_SERVER_sinh_va_moi_lan_mot_khac():
     """Client không đặt được — nếu đặt được thì chống-replay là vô nghĩa.
 
@@ -309,8 +452,10 @@ def test_token_KHONG_chua_du_lieu_ca_nhan():
     assert "Nguyễn" not in van_ban
     assert "0912345678" not in van_ban
     assert "full_name" not in than and "rows" not in than
-    # Chỉ 8 khoá đã khai, không có gì lọt thêm vào.
-    assert set(than) == {"v", "op", "actor", "year", "iat", "exp", "src", "tgt"}
+    # Chỉ những khoá đã khai, không có gì lọt thêm vào.
+    assert set(than) == {
+        "v", "op", "actor", "year", "iat", "exp", "src", "tgt", "snap_v", "snap",
+    }
 
 
 def test_sua_than_token_thi_bi_tu_choi():

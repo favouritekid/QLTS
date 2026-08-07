@@ -466,5 +466,6 @@ from .dorm_sync import (
     DormSyncContextResponse,
     DormSyncPreviewRequest,
     DormSyncPreviewResponse,
+    DormSyncSourceCounts,
     DormSyncWarningRow,
 )
