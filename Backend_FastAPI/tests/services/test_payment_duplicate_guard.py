@@ -147,19 +147,49 @@ async def _ghi(
     when: datetime = _BASE,
     reference: str | None = None,
     confirm: bool = False,
+    review_token: str | None = None,
 ):
-    payment, _ = await PaymentService(db).record_manual_payment(
-        invoice_id=ctx["invoice_ids"][invoice_idx],
-        method_id=ctx["method_id"],
-        amount=amount,
-        user_id=ctx["maker_id"],
-        unit_id=ctx["unit_id"],
-        payment_date=when,
-        reference_code=reference,
-        confirm_duplicate=confirm,
-    )
-    await db.flush()
-    return payment
+    """Ghi một phiếu; ``confirm=True`` đi trọn vòng xác nhận như giao diện.
+
+    Không còn cờ boolean nào ở đây cả. ``confirm=True`` nghĩa là: bấm gửi, nếu
+    máy chủ chặn thì lấy PHIẾU XÁC NHẬN từ chính phản hồi đó rồi gửi lại — đúng
+    những bước giao diện làm, không tắt qua đường nào.
+
+    Vì sao không để ca kiểm tự dựng một phiếu hợp lệ: làm thế là tự trao cho
+    mình quyền mà giao diện không có, và ca kiểm sẽ xanh kể cả khi máy chủ quên
+    cấp phiếu trong thân lỗi 409 — đúng lớp lỗi đã xảy ra một lần rồi (giao
+    diện thiếu một trường bắt buộc mà ca ở tầng service vẫn xanh).
+    """
+    async def _goi(phieu: str | None):
+        payment, _ = await PaymentService(db).record_manual_payment(
+            invoice_id=ctx["invoice_ids"][invoice_idx],
+            method_id=ctx["method_id"],
+            amount=amount,
+            user_id=ctx["maker_id"],
+            unit_id=ctx["unit_id"],
+            payment_date=when,
+            reference_code=reference,
+            review_token=phieu,
+        )
+        await db.flush()
+        return payment
+
+    if review_token is not None:
+        return await _goi(review_token)
+    if not confirm:
+        return await _goi(None)
+
+    from app.utils.exceptions import PaymentDuplicateSuspected
+
+    try:
+        return await _goi(None)
+    except PaymentDuplicateSuspected as exc:
+        # KHÔNG rollback ở đây. Hàng rào từ chối TRƯỚC khi ghi bất cứ thứ gì và
+        # không để lại lỗi cơ sở dữ liệu nào, nên phiên vẫn dùng được. Một
+        # `rollback()` "cho sạch" sẽ xoá luôn những phiếu mà chính ca kiểm vừa
+        # dựng ở các vòng trước (chúng chưa commit) — đã vấp: ca cần 20 ứng
+        # viên chỉ còn thấy 1.
+        return await _goi(exc.public_payload["review_token"])
 
 
 class TestLuatDoTrung:
@@ -543,7 +573,10 @@ class TestThuTuKhoa:
 
         goc_invoice = svc.invoice_repo.get_for_update
         goc_fee = svc.fee_repo.get_for_update
-        goc_quet = svc.payment_repo.find_duplicate_candidates
+        # Phép quét dưới khoá nay hỏi CẢ danh sách lẫn tổng trong một câu
+        # lệnh — hai lời gọi nối nhau là hai ảnh chụp khác nhau dưới
+        # READ COMMITTED. Thứ tự cần khoá thì không đổi.
+        goc_quet = svc.payment_repo.chup_tap_ung_vien_nghi_trung
         goc_add = db.add
 
         async def invoice_spy(*a, **k):
@@ -555,7 +588,7 @@ class TestThuTuKhoa:
             return await goc_fee(*a, **k)
 
         async def quet_spy(*a, **k):
-            calls.append("find_duplicate_candidates")
+            calls.append("chup_tap_ung_vien_nghi_trung")
             return await goc_quet(*a, **k)
 
         def add_spy(obj, *a, **k):
@@ -565,7 +598,7 @@ class TestThuTuKhoa:
 
         svc.invoice_repo.get_for_update = invoice_spy
         svc.fee_repo.get_for_update = fee_spy
-        svc.payment_repo.find_duplicate_candidates = quet_spy
+        svc.payment_repo.chup_tap_ung_vien_nghi_trung = quet_spy
         db.add = add_spy
         try:
             await svc.record_manual_payment(
@@ -582,7 +615,7 @@ class TestThuTuKhoa:
         assert calls == [
             "invoice.get_for_update",
             "fee.get_for_update",
-            "find_duplicate_candidates",
+            "chup_tap_ung_vien_nghi_trung",
             "db.add(payment)",
         ], f"thứ tự thực tế: {calls}"
 

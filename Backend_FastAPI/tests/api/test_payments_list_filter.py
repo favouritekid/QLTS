@@ -31,6 +31,7 @@ from app.models.finance import (
 )
 from app.security import get_password_hash
 from app.services.fee_calculation_service import FeeCalculationService
+from app.utils.exceptions import PaymentDuplicateSuspected
 from app.services.payment_service import PaymentService
 from tests.fixtures.constants import AuthURLs
 from tests.fixtures.users import get_auth_headers
@@ -138,21 +139,28 @@ async def two_fees_ctx(seed_lead_dependencies: dict, admin_user_in_db: dict):
         svc = PaymentService(db)
         pay_a = []
         for inv in inv_a:
-            p, _ = await svc.record_manual_payment(
+            # Fixture này CỐ Ý dựng hai phiếu cùng số tiền trên hai đợt của
+            # cùng một khoản phí — đúng hình dạng mà hàng rào chống trùng chặn
+            # lại. Ở đây ta đang dựng dữ liệu cho bài kiểm bộ LỌC, không kiểm
+            # hàng rào, nên đi trọn vòng xác nhận: bấm gửi, bị chặn thì lấy
+            # PHIẾU từ chính phản hồi rồi gửi lại. Việc phải làm vậy chính là
+            # bằng chứng hàng rào đang chạy trên đường thật; luật của nó được
+            # canh ở `tests/services/test_payment_duplicate_guard.py`.
+            tham_so = dict(
                 invoice_id=inv.id,
                 method_id=method.id,
                 amount=Decimal("1000000"),
                 user_id=maker.id,
                 unit_id=seeded["unit_id"],
-                # Fixture này CỐ Ý dựng hai phiếu cùng số tiền trên hai đợt của
-                # cùng một khoản phí — đúng hình dạng mà hàng rào chống trùng
-                # (B2) chặn lại. Ở đây ta đang dựng dữ liệu cho bài kiểm bộ
-                # LỌC, không kiểm hàng rào, nên xác nhận luôn. Việc phải thêm
-                # cờ này chính là bằng chứng hàng rào đang chạy trên đường
-                # thật; luật của nó được canh ở
-                # `tests/services/test_payment_duplicate_guard.py`.
-                confirm_duplicate=True,
             )
+            try:
+                p, _ = await svc.record_manual_payment(**tham_so)
+            except PaymentDuplicateSuspected as exc:
+                # Không rollback: hàng rào từ chối trước khi ghi gì, phiên vẫn
+                # sạch — và rollback sẽ xoá luôn phiếu của vòng lặp trước.
+                p, _ = await svc.record_manual_payment(
+                    **tham_so, review_token=exc.public_payload["review_token"]
+                )
             pay_a.append(p)
         # Khoản phí B chỉ một phiếu — đủ để phát hiện rò sang khoản phí khác.
         pay_b, _ = await svc.record_manual_payment(

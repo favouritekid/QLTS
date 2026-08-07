@@ -132,16 +132,36 @@ async def fee_with_one_payment(seed_lead_dependencies: dict, admin_user_in_db: d
         }
 
 
-def _body(ctx: dict, *, invoice_idx: int = 1, confirm: bool | None = None):
+def _body(ctx: dict, *, invoice_idx: int = 1, phieu: str | None = None):
     body = {
         "invoice_id": ctx["invoice_ids"][invoice_idx],
         "method_id": ctx["method_id"],
         "amount": "1000000",
         "payment_date": "2026-08-05T03:00:00+00:00",
     }
-    if confirm is not None:
-        body["confirm_duplicate"] = confirm
+    if phieu is not None:
+        body["review_token"] = phieu
     return body
+
+
+async def _ghi_qua_vong_xac_nhan(
+    client: AsyncClient, headers: dict, ctx: dict, *, invoice_idx: int = 1
+):
+    """Bấm gửi; bị chặn thì lấy phiếu TỪ CHÍNH phản hồi rồi gửi lại.
+
+    Đúng các bước giao diện làm. Ca kiểm không được tự dựng phiếu: làm thế là
+    tự trao cho mình quyền mà giao diện không có, và ca sẽ xanh kể cả khi máy
+    chủ quên cấp phiếu trong thân 409.
+    """
+    r = await client.post("/api/payments", json=_body(ctx, invoice_idx=invoice_idx), headers=headers)
+    if r.status_code != 409:
+        return r
+    phieu = r.json()["review_token"]
+    return await client.post(
+        "/api/payments",
+        json=_body(ctx, invoice_idx=invoice_idx, phieu=phieu),
+        headers=headers,
+    )
 
 
 async def _dem_payment(fee_id: int) -> int:
@@ -171,10 +191,42 @@ class TestHopDong409:
             "error_code",
             "duplicates",
             "duplicates_truncated",
+            "duplicates_total",
+            "review_token",
         }, f"khoá lạ trong thân lỗi: {sorted(body.keys())}"
         assert isinstance(body["detail"], str) and body["detail"]
         assert body["error_code"] == "PAYMENT_DUPLICATE_SUSPECTED"
         assert body["duplicates_truncated"] is False
+        # TỔNG thật, không phải độ dài danh sách đã cắt.
+        assert body["duplicates_total"] == len(body["duplicates"])
+        # Phiếu xác nhận phải CÓ MẶT và mờ. Thiếu nó thì người ghi không có
+        # đường nào ghi tiếp — hàng rào mềm biến thành hàng rào cứng, và đó là
+        # một lỗi im lặng: 409 vẫn trông đúng.
+        assert isinstance(body["review_token"], str) and body["review_token"]
+        assert body["review_token"].count(".") == 1, "phiếu phải là <thân>.<chữ ký>"
+
+        # Thân phiếu KHÔNG bí mật — nó là base64 có chữ ký, ai cũng giải mã
+        # được, và điều đó nằm trong thiết kế: thứ được bảo vệ là tính TOÀN VẸN
+        # (sửa một byte là chữ ký hỏng), không phải tính kín. Nhưng vì ai cũng
+        # đọc được, cái nằm bên trong phải là tập tối thiểu. Ca này khoá đúng
+        # tập đó — đặc biệt là KHÔNG có danh sách mã phiếu ứng viên: giao diện
+        # chỉ được thấy phần hiển thị, còn phiếu thì nói về TOÀN BỘ tập.
+        import base64
+        import json
+
+        phan_than = body["review_token"].split(".")[0]
+        than = json.loads(
+            base64.urlsafe_b64decode(phan_than + "=" * (-len(phan_than) % 4))
+        )
+        assert set(than.keys()) == {
+            "flow", "uid", "unit", "fee", "inv", "amt", "when", "gv",
+            "batch", "row", "exp", "jti",
+        }, f"khoá lạ trong thân phiếu: {sorted(than.keys())}"
+        assert than["fee"] == ctx["fee_id"]
+        assert than["inv"] == ctx["invoice_ids"][1]
+        assert than["flow"] == "manual"
+        # `gv` là ảnh chụp `fee.duplicate_guard_version` — vế chống chen ngang.
+        assert isinstance(than["gv"], int) and than["gv"] >= 1
 
         assert len(body["duplicates"]) == 1
         d = body["duplicates"][0]
@@ -216,34 +268,106 @@ class TestHopDong409:
         for cam in ("created_by_id", "notes", "payer_account", "invoice_id"):
             assert cam not in body["duplicates"][0], cam
 
-    async def test_xac_nhan_thi_ghi_duoc_201(
+    async def test_vong_xac_nhan_day_du_thi_ghi_duoc_201(
         self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
     ):
-        """Khoá TOÀN chuỗi router → service của cờ xác nhận.
+        """Khoá TOÀN chuỗi: 409 cấp phiếu → thân yêu cầu thật → ghi được.
 
-        Thiếu một mắt (schema, router, chữ ký service) thì cờ không tới nơi và
-        ca này trả 409 — đúng cái lỗi "nối thiếu một mắt" mà plan cảnh báo.
+        Thiếu một mắt (schema, router, chữ ký service, hay chính máy chủ quên
+        cấp phiếu) thì vòng này không khép và ca trả 409 lần hai. Đây là ca duy
+        nhất chứng minh tính năng dùng được thật — ca ở tầng service tự dựng
+        tham số nên nó xanh kể cả khi giao diện gửi thiếu một trường.
         """
         ctx = fee_with_one_payment
-        r = await client.post(
-            "/api/payments",
-            json=_body(ctx, confirm=True),
-            headers=admin_token_headers,
-        )
+        r = await _ghi_qua_vong_xac_nhan(client, admin_token_headers, ctx)
         assert r.status_code == 201, r.text
 
-    async def test_khong_xac_nhan_mac_dinh_la_chan(
+    async def test_khong_co_phieu_thi_chan(
         self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
     ):
-        """Bỏ hẳn khoá ``confirm_duplicate`` ⇒ mặc định False ⇒ vẫn chặn.
-
-        Fail-closed: một client cũ không biết cờ này vẫn được bảo vệ.
-        """
+        """Không gửi phiếu ⇒ chặn. Fail-closed cho cả client cũ."""
         ctx = fee_with_one_payment
         body = _body(ctx)
-        assert "confirm_duplicate" not in body
+        assert "review_token" not in body
         r = await client.post("/api/payments", json=body, headers=admin_token_headers)
         assert r.status_code == 409, r.text
+
+    async def test_phieu_bi_sua_mot_ky_tu_thi_van_chan(
+        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
+    ):
+        """Chữ ký phải là chữ ký thật, không phải một chuỗi trông giống."""
+        ctx = fee_with_one_payment
+        r = await client.post("/api/payments", json=_body(ctx), headers=admin_token_headers)
+        assert r.status_code == 409, r.text
+        phieu = r.json()["review_token"]
+        hong = phieu[:-1] + ("A" if phieu[-1] != "A" else "B")
+
+        truoc = await _dem_payment(ctx["fee_id"])
+        r = await client.post(
+            "/api/payments",
+            json=_body(ctx, phieu=hong),
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 409, r.text
+        assert await _dem_payment(ctx["fee_id"]) == truoc, "phiếu hỏng mà vẫn ghi"
+
+    async def test_phieu_cu_HET_hieu_luc_khi_co_phieu_thu_moi_chen_vao(
+        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
+    ):
+        """Ca then chốt của cả đợt thiết kế lại.
+
+        Người ghi nhận cảnh báo cho tập {A}, rồi một phiếu B vào giữa lúc họ
+        đang đọc. Phiếu xác nhận cũ chỉ nói về {A}, nên nó KHÔNG được mở đường
+        cho một tập đã khác — và thứ bắt được điều đó là
+        ``fee.duplicate_guard_version``, do trigger ở tầng cơ sở dữ liệu tăng.
+        """
+        ctx = fee_with_one_payment
+        r = await client.post("/api/payments", json=_body(ctx), headers=admin_token_headers)
+        assert r.status_code == 409, r.text
+        phieu_cu = r.json()["review_token"]
+
+        # B chen vào: ghi ở hoá đơn CÒN LẠI của cùng khoản phí, qua đúng vòng
+        # xác nhận (nên bản thân nó hợp lệ).
+        r = await _ghi_qua_vong_xac_nhan(client, admin_token_headers, ctx, invoice_idx=0)
+        assert r.status_code == 201, r.text
+
+        truoc = await _dem_payment(ctx["fee_id"])
+        r = await client.post(
+            "/api/payments",
+            json=_body(ctx, phieu=phieu_cu),
+            headers=admin_token_headers,
+        )
+        assert r.status_code == 409, "phiếu cấp cho tập CŨ vẫn mở được cửa"
+        assert await _dem_payment(ctx["fee_id"]) == truoc
+        # Và phải cấp phiếu MỚI, nếu không người ghi mắc kẹt trong vòng 409.
+        assert r.json()["review_token"] != phieu_cu
+
+    async def test_dung_lai_phieu_sau_khi_da_ghi_thanh_cong_KHONG_sinh_phieu_thu_hai(
+        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
+    ):
+        """Replay: bấm hai lần, hoặc mạng lag rồi client gửi lại.
+
+        Chính lần ghi thành công làm version nhích (trigger trên ``payment``),
+        nên phiếu vừa dùng tự hết hiệu lực — không cần một sổ jti đã-dùng nào
+        cả. Đây là lý do version được đặt ở tầng cơ sở dữ liệu chứ không phải
+        một con số do ứng dụng tự quản.
+        """
+        ctx = fee_with_one_payment
+        r = await client.post("/api/payments", json=_body(ctx), headers=admin_token_headers)
+        assert r.status_code == 409, r.text
+        phieu = r.json()["review_token"]
+
+        r = await client.post(
+            "/api/payments", json=_body(ctx, phieu=phieu), headers=admin_token_headers
+        )
+        assert r.status_code == 201, r.text
+        sau_lan_dau = await _dem_payment(ctx["fee_id"])
+
+        r = await client.post(
+            "/api/payments", json=_body(ctx, phieu=phieu), headers=admin_token_headers
+        )
+        assert r.status_code == 409, "phiếu dùng lại vẫn ghi được ⇒ tiền vào hai lần"
+        assert await _dem_payment(ctx["fee_id"]) == sau_lan_dau
 
 
 class TestPayloadKhongDeGhiDe:
@@ -318,11 +442,7 @@ class TestCatDanhSachTrongThanLoi:
         ctx = fee_with_one_payment
         # Đã có 1 phiếu từ fixture; thêm 20 nữa (xác nhận trùng) → 21.
         for _ in range(MAX_DUPLICATE_CANDIDATES):
-            r = await client.post(
-                "/api/payments",
-                json=_body(ctx, confirm=True),
-                headers=admin_token_headers,
-            )
+            r = await _ghi_qua_vong_xac_nhan(client, admin_token_headers, ctx)
             assert r.status_code == 201, r.text
 
         r = await client.post(
@@ -437,11 +557,7 @@ class TestXemTruocUngVienTrung:
     ):
         ctx = fee_with_one_payment
         for _ in range(MAX_DUPLICATE_CANDIDATES):
-            r = await client.post(
-                "/api/payments",
-                json=_body(ctx, confirm=True),
-                headers=admin_token_headers,
-            )
+            r = await _ghi_qua_vong_xac_nhan(client, admin_token_headers, ctx)
             assert r.status_code == 201, r.text
 
         r = await client.get(

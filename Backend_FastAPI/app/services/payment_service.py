@@ -40,6 +40,11 @@ from app.models.finance import (
 )
 from app.schemas import finance as finance_schemas
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
+from app.services.duplicate_review_token import (
+    RangBuoc,
+    cap_phieu,
+    soat_phieu,
+)
 from app.repositories.payment_repository import (
     WINDOW_DO_TRUNG_NGAY,
     PaymentRepository,
@@ -225,7 +230,7 @@ class PaymentService:
         payer_name: Optional[str] = None,
         payer_account: Optional[str] = None,
         notes: Optional[str] = None,
-        confirm_duplicate: bool = False,
+        review_token: Optional[str] = None,
     ) -> Tuple[Payment, Optional[Callable]]:
         """
         Record a manual payment (cash, bank transfer, etc.).
@@ -244,6 +249,12 @@ class PaymentService:
             payer_name: Name of payer
             payer_account: Payer account number
             notes: Additional notes
+            review_token: Phiếu xác nhận nghi trùng do CHÍNH máy chủ cấp ở lần
+                409 trước. Không phải cờ boolean, không phải danh sách mã, không
+                phải dấu vân do giao diện ghép — giao diện chỉ gửi lại nguyên
+                văn thứ nó nhận. Hợp lệ thì ghi; sai, hết hạn, hoặc tập ứng viên
+                đã đổi (``fee.duplicate_guard_version`` tăng) thì 409 lại kèm
+                một phiếu MỚI.
 
         Returns:
             Tuple of (Payment, post_commit_callback)
@@ -334,13 +345,36 @@ class PaymentService:
             if payment_date is not None
             else datetime.now(timezone.utc)
         )
-        if not confirm_duplicate and fee is not None:
-            candidates, truncated = await self.payment_repo.find_duplicate_candidates(
+        # LUÔN quét, kể cả khi người ghi đã cầm phiếu xác nhận. Bỏ qua phép quét
+        # khi có phiếu nghĩa là: giữa lúc máy chủ cấp phiếu và lúc người ghi bấm
+        # gửi, một phiếu trùng MỚI có thể đã vào — và ta ghi tiếp cho một tập
+        # ứng viên không còn đúng. Đây là phép quét DUY NHẤT chạy dưới khoá
+        # `Fee`, nên cũng là chỗ duy nhất thấy được thứ vừa chen vào.
+        if fee is not None:
+            candidates, truncated, tong_that = (
+                await self.payment_repo.chup_tap_ung_vien_nghi_trung(
+                    fee_id=fee.id,
+                    amount=amount,
+                    payment_date=effective_payment_date,
+                )
+            )
+            # Hoàn cảnh của lần ghi này. `guard_version` đọc DƯỚI KHOÁ, cùng
+            # giao dịch với phép quét ở trên — nên nó mô tả đúng tập vừa thấy.
+            rang_buoc = RangBuoc(
+                flow="manual",
+                user_id=user_id,
+                unit_id=unit_id,
                 fee_id=fee.id,
+                invoice_id=invoice_id,
                 amount=amount,
                 payment_date=effective_payment_date,
+                guard_version=fee.duplicate_guard_version,
             )
-            if candidates:
+            # Phiếu hợp lệ ⇒ người ghi đã soát ĐÚNG tập đang có. Không hợp lệ vì
+            # bất kỳ lý do gì — sai chữ ký, hết hạn, sai người, hoặc version đã
+            # nhích — đều coi như chưa xác nhận (fail-closed).
+            da_soat = bool(review_token) and soat_phieu(review_token, rang_buoc)
+            if candidates and not da_soat:
                 log.info(
                     "payment_duplicate_suspected",
                     invoice_id=invoice_id,
@@ -349,7 +383,11 @@ class PaymentService:
                     # Chỉ ĐẾM, không ghi chi tiết phiếu: nhật ký không phải chỗ
                     # chứa tên người nộp và mã tham chiếu.
                     candidate_count=len(candidates),
+                    candidates_total=tong_that,
                     candidates_truncated=truncated,
+                    # Có gửi phiếu mà vẫn bị chặn là tín hiệu đáng nhìn: hoặc
+                    # có người chen ngang thật, hoặc ai đó đang thử phiếu.
+                    co_gui_phieu=bool(review_token),
                     created_by=user_id,
                 )
                 # Danh sách bị cắt thì KHÔNG nói con số — "20 phiếu" trong khi
@@ -382,6 +420,10 @@ class PaymentService:
                     f"Kiểm tra lại trước khi ghi tiếp.",
                     duplicates=duplicates,
                     duplicates_truncated=truncated,
+                    duplicates_total=tong_that,
+                    # Phiếu cấp cho ĐÚNG tập vừa quét, dưới cùng khoá. Giao diện
+                    # gửi lại nguyên văn; nó không đọc được và không cần đọc.
+                    review_token=cap_phieu(rang_buoc),
                 )
 
         # Create payment (pending status)

@@ -613,13 +613,16 @@ class PaymentCreate(BaseModel):
     payer_name: Optional[str] = Field(None, max_length=200)
     payer_account: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = Field(None, max_length=500)
-    confirm_duplicate: bool = Field(
-        False,
-        description="Người ghi đã xem danh sách phiếu nghi trùng và khẳng "
-        "định đây là khoản thu khác. Hàng rào chống trùng là hàng rào MỀM: "
-        "nộp hai lần cùng số tiền là chuyện có thật, nên xác nhận thì ghi "
-        "được. Mặc định False — cờ này phải do người dùng bật ở lần gửi thứ "
-        "hai, không được đính sẵn.",
+    review_token: Optional[str] = Field(
+        None,
+        max_length=2048,
+        description="Phiếu xác nhận nghi trùng, gửi lại NGUYÊN VĂN thứ máy chủ "
+        "trả trong thân lỗi 409 ở lần bấm trước. Không phải cờ boolean, không "
+        "phải danh sách mã phiếu, không phải dấu vân do giao diện ghép: giao "
+        "diện không đọc được phiếu này và không cần đọc. Phiếu ràng buộc vào "
+        "đúng hoàn cảnh sinh ra nó (người ghi, đơn vị, khoản phí, hoá đơn, số "
+        "tiền, ngày thu, và phiên bản hàng rào của khoản phí), nên đổi bất kỳ "
+        "trường nào là nó tự hết hiệu lực và máy chủ hỏi lại.",
     )
 
     @field_validator('payment_date')

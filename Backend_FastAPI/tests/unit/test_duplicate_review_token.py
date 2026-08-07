@@ -59,6 +59,32 @@ class TestPhieuHopLe:
         gio_vn = _KHI.astimezone(timezone(timedelta(hours=7)))
         assert soat_phieu(cap_phieu(_rb()), _rb(payment_date=gio_vn)) is True
 
+    def test_khac_GIO_trong_cung_NGAY_LICH_VN_van_qua(self):
+        """Ràng buộc theo NGÀY LỊCH VN, không theo mốc chính xác.
+
+        Khi giao diện không gửi ngày thu, máy chủ lấy `now()`. Nếu phiếu bám
+        mốc chính xác thì lần gửi lại có một `now()` khác vài mili giây, phiếu
+        không bao giờ khớp, và người ghi mắc kẹt trong vòng 409 vô tận — đã xảy
+        ra thật.
+
+        Nới tới mức ngày không làm hàng rào lỏng đi: hai lần gửi trong cùng một
+        ngày là hai lần mà luật dò trùng vốn coi như nhau, và vế chống chen
+        ngang nằm ở `guard_version` chứ không ở đây.
+        """
+        assert soat_phieu(
+            cap_phieu(_rb()), _rb(payment_date=_KHI + timedelta(hours=6))
+        ) is True
+
+    def test_qua_NUA_DEM_gio_VN_thi_KHONG_qua(self):
+        """Và biên phải là nửa đêm giờ VN, không phải nửa đêm UTC.
+
+        `_KHI` là 10:00 giờ VN. Cộng 15 giờ ⇒ 01:00 hôm sau giờ VN, vẫn cùng
+        NGÀY UTC. Đọc theo UTC thì hai mốc này cùng ngày và phiếu lọt.
+        """
+        assert soat_phieu(
+            cap_phieu(_rb()), _rb(payment_date=_KHI + timedelta(hours=15))
+        ) is False
+
     def test_hai_lan_cap_cho_cung_hoan_canh_ra_hai_phieu_khac_nhau(self):
         """`jti` làm mỗi phiếu là một chứng từ riêng, truy được trong log."""
         assert cap_phieu(_rb()) != cap_phieu(_rb())

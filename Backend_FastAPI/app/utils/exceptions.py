@@ -178,10 +178,16 @@ class PaymentDuplicateSuspected(ConflictError):
     """Phiếu thu nghi TRÙNG với một phiếu đã có (HTTP 409).
 
     Không phải lỗi dữ liệu: nộp hai lần cùng số tiền là chuyện có thật, nên
-    đây là hàng rào MỀM — người ghi xác nhận rồi gửi lại với
-    ``confirm_duplicate=True`` là ghi được. Có mã riêng (không dùng chung
+    đây là hàng rào MỀM — người ghi soát lại rồi gửi lại kèm ``review_token``
+    mà chính phản hồi này cấp là ghi được. Có mã riêng (không dùng chung
     ``CONFLICT``) vì giao diện phải phân biệt được ca này để hiện danh sách
     phiếu nghi trùng thay vì một thông báo đỏ chung chung.
+
+    ``review_token`` thay cho cụm cờ boolean + danh sách mã + tổng + dấu vân mà
+    giao diện từng phải tự ghép. Nó mờ với giao diện và ràng buộc vào đúng hoàn
+    cảnh sinh ra nó (người, đơn vị, khoản phí, hoá đơn, số tiền, ngày, và
+    ``fee.duplicate_guard_version``), nên không có đường nào dùng lại nó cho một
+    hoàn cảnh khác.
 
     Mang theo ``duplicates`` để người ghi **nhìn thấy thứ mình đang bị so
     sánh** rồi mới quyết định — một cảnh báo không kèm bằng chứng thì chỉ còn
@@ -200,6 +206,8 @@ class PaymentDuplicateSuspected(ConflictError):
         detail: Optional[str] = None,
         duplicates: Optional[list] = None,
         duplicates_truncated: bool = False,
+        duplicates_total: int = 0,
+        review_token: str = "",
         context: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(
@@ -208,6 +216,14 @@ class PaymentDuplicateSuspected(ConflictError):
             public_payload={
                 "duplicates": duplicates or [],
                 "duplicates_truncated": duplicates_truncated,
+                # TỔNG thật, không phải độ dài danh sách đã cắt: "20 phiếu"
+                # trong khi có 200 là một câu sai mà người đọc sẽ dựa vào để
+                # quyết định.
+                "duplicates_total": duplicates_total,
+                # Phiếu xác nhận do máy chủ cấp — quyền xác nhận DUY NHẤT. Giao
+                # diện gửi lại nguyên văn ở lần bấm sau; nó không đọc được thân
+                # phiếu và không cần đọc.
+                "review_token": review_token,
             },
         )
 

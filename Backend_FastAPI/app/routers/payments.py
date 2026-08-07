@@ -285,7 +285,7 @@ async def record_payment(
             payer_account=data.payer_account,
             notes=data.notes,
             unit_id=unit_id,
-            confirm_duplicate=data.confirm_duplicate,
+            review_token=data.review_token,
         )
 
         await db.commit()

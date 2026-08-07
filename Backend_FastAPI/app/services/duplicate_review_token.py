@@ -53,6 +53,7 @@ from decimal import Decimal
 from typing import Optional
 
 from app.config import settings
+from app.utils.datetime_helpers import vn_calendar_date
 
 #: Hạn của một phiếu. Đủ dài để đọc cảnh báo, soát lại sổ, rồi bấm gửi; đủ
 #: ngắn để một tab bỏ quên từ sáng không còn xác nhận được cho buổi chiều.
@@ -115,9 +116,20 @@ class RangBuoc:
             # số tiền và phải cho ra cùng một chữ ký, còn JSON float thì vừa
             # mất chính xác vừa phụ thuộc cách máy in số.
             "amt": str(self.amount.quantize(Decimal("0.01"))),
-            # Quy về UTC rồi in ISO: cùng một thời điểm gửi kèm hai hậu tố múi
-            # giờ khác nhau phải cho cùng chữ ký.
-            "when": self.payment_date.astimezone(timezone.utc).isoformat(),
+            # NGÀY LỊCH Việt Nam, không phải mốc thời gian chính xác. Đây là
+            # đúng hạt mà luật dò trùng dùng (cửa sổ ±N ngày lịch VN), nên nó
+            # cũng là hạt đúng để ràng buộc phiếu.
+            #
+            # Không phải chuyện làm tròn cho tiện: khi giao diện KHÔNG gửi ngày
+            # thu, máy chủ lấy `now()`. Ràng buộc theo mốc chính xác thì lần gửi
+            # lại có một `now()` khác vài mili giây, phiếu không bao giờ khớp,
+            # và người ghi mắc kẹt trong một vòng 409 vô tận. Đã vấp thật: 11 ca
+            # dựng dữ liệu chết ở đúng chỗ này.
+            #
+            # Nới ra tới mức ngày KHÔNG làm hàng rào lỏng đi: hai lần gửi trong
+            # cùng một ngày là hai lần mà luật dò trùng vốn coi như nhau, còn
+            # vế chống chen ngang nằm ở `gv`.
+            "when": vn_calendar_date(self.payment_date).isoformat(),
             "gv": self.guard_version,
             "batch": self.batch_id,
             "row": self.row_no,
