@@ -277,6 +277,11 @@ class TestBatchDetailContent:
                     citizen_id="001234567890",
                     raw={"Số CCCD": "001234567890"},
                     validation_status="matched",
+                    # CÓ `payment_ids` thì phải là `committed` — ràng buộc hai
+                    # chiều ở cơ sở dữ liệu. Dữ liệu giả cũng phải nhất quán như
+                    # dữ liệu thật, nếu không nó chứng minh một thế giới không
+                    # tồn tại.
+                    commit_status="committed",
                     amount=Decimal("1000000"),
                     message="ok",
                     payment_ids=[1],

@@ -35,8 +35,13 @@ export const paymentImportRowSchema = z.object({
   // câu hỏi vào một cột là lỗi của bản trước — một dòng ĐÃ ghi tiền vẫn mang
   // `warned` nên vẫn nằm trong tập chọn lại.
   validation_status: z.string(), // matched | warned | error
-  // pending | duplicate_review_required | committed | failed | not_applicable
-  commit_status: z.string().default("pending"),
+  commit_status: z.enum([
+    "pending",
+    "duplicate_review_required",
+    "committed",
+    "failed",
+    "not_applicable",
+  ]),
   /** Phiếu xác nhận cho ĐÚNG dòng này — chỉ có khi đang chờ xác nhận trùng. */
   review_token: z.string().nullable().optional(),
   message: z.string().nullable().optional(),
@@ -50,6 +55,27 @@ export const paymentImportRowSchema = z.object({
   allocations: z.array(paymentImportAllocationSchema).default([]),
   payment_ids: z.array(z.number().int()).nullable().optional(),
 })
+  // FAIL-CLOSED. `commit_status` là enum đóng (không phải `z.string()`): một
+  // giá trị lạ từ máy chủ mà lọt qua sẽ rơi khỏi MỌI nhánh lọc ở component, và
+  // màn hình báo "tất cả đã ghi thành công" trong khi có dòng chưa vào sổ.
+  //
+  // Và "chờ xác nhận" BẮT BUỘC có phiếu: không có phiếu thì không có gì để bấm,
+  // nên một dòng như vậy sẽ bị lọc khỏi khối cảnh báo mà cũng không nằm trong
+  // khối lỗi — im lặng biến mất, đúng thứ nguy hiểm nhất.
+  .superRefine((r, ctx) => {
+    if (
+      r.commit_status === "duplicate_review_required" &&
+      !(r.review_token ?? "").trim()
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["review_token"],
+        message:
+          "dòng chờ xác nhận trùng nhưng máy chủ không cấp phiếu — không có " +
+          "đường nào ghi tiếp, và một dòng im lặng biến mất là ca tệ nhất",
+      })
+    }
+  })
 export type PaymentImportRow = z.infer<typeof paymentImportRowSchema>
 
 export const paymentImportPreviewSchema = z.object({
@@ -79,6 +105,23 @@ export const paymentImportCommitSchema = z.object({
   total_amount: z.string(),
   rows: z.array(paymentImportRowSchema).default([]),
 })
+  // Con số của máy chủ và danh sách dòng phải NÓI CÙNG MỘT ĐIỀU. Lệch nhau
+  // nghĩa là ta đang đọc sai thân phản hồi, và đọc sai theo chiều "ít dòng chờ
+  // hơn thực tế" là chiều báo thành công nhầm.
+  .superRefine((r, ctx) => {
+    const dem = r.rows.filter(
+      (x) => x.commit_status === "duplicate_review_required",
+    ).length
+    if (dem !== r.review_required_count) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["review_required_count"],
+        message:
+          `máy chủ nói ${r.review_required_count} dòng chờ xác nhận nhưng ` +
+          `danh sách có ${dem}`,
+      })
+    }
+  })
 export type PaymentImportCommit = z.infer<typeof paymentImportCommitSchema>
 
 export const paymentImportVoidSchema = z.object({

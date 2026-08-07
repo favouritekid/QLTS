@@ -150,6 +150,18 @@ def upgrade() -> None:
         "payment_import_row",
         "(validation_status = 'error') = (commit_status = 'not_applicable')",
     )
+    # `committed` ⟺ CÓ mã phiếu — hai chiều. Một dòng "đã ghi" không mã phiếu
+    # là mất dấu tiền; một dòng có mã phiếu mà chưa `committed` là tiền đã vào
+    # nhưng vẫn nằm trong tập chọn lại. Service đặt hai thứ trong cùng savepoint,
+    # nhưng một lần sửa SQL lúc chữa dữ liệu thì không đi qua service.
+    op.create_check_constraint(
+        "chk_payment_import_row_committed_has_payments",
+        "payment_import_row",
+        "(commit_status = 'committed') = "
+        "(payment_ids IS NOT NULL "
+        " AND jsonb_typeof(payment_ids) = 'array' "
+        " AND jsonb_array_length(payment_ids) > 0)",
+    )
     # `duplicate_review_required` chỉ có nghĩa với dòng CÓ cảnh báo. Dòng
     # `matched` mà "chờ xác nhận trùng" là một trạng thái không ai đọc được.
     op.create_check_constraint(
@@ -234,6 +246,7 @@ def downgrade() -> None:
 
     for ten in (
         "chk_payment_import_row_review_needs_warn",
+        "chk_payment_import_row_committed_has_payments",
         "chk_payment_import_row_two_axes",
         "chk_payment_import_row_commit_status",
     ):

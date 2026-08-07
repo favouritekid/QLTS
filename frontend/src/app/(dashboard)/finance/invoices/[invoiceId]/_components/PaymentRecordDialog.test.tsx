@@ -729,4 +729,38 @@ describe("PaymentRecordDialog — vòng xác nhận nghi trùng", () => {
     expect(createPayment).toHaveBeenCalledTimes(2)
     goCua({ id: 1 })
   })
+  it("đang gửi ⇒ KHOÁ ba trường mà phiếu ràng buộc vào", async () => {
+    // Sửa được giữa lúc request đang bay thì ảnh chụp giữ ý định CŨ trong khi
+    // form đã hiện giá trị mới. Máy chủ vẫn fail-closed, nhưng màn hình nói một
+    // đằng và lượt sau ăn thêm một vòng 409 không cần thiết.
+    const user = userEvent.setup()
+    let goCua: (v: unknown) => void = () => {}
+    createPayment.mockReturnValueOnce(
+      new Promise((res) => {
+        goCua = res
+      }),
+    )
+    moForm()
+    await dienForm(user, "1000000")
+    await user.click(nutLuu())
+
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText(/nhập số tiền/i)).toBeDisabled(),
+    )
+    expect(
+      screen.getByRole("combobox", { name: /phương thức thanh toán/i }),
+    ).toBeDisabled()
+    // Ô ngày là một nút mở lịch, nhãn của nó là chính ngày đang chọn nên
+    // không có tên ổn định để tìm. Khoá nó bằng cách khác: MỌI nút trong form
+    // phải disabled khi đang gửi, trừ nút Huỷ (người dùng luôn phải thoát
+    // được). Phép đếm này còn bắt được cả những nút thêm vào sau này mà ai đó
+    // quên khoá.
+    const nutConMo = screen
+      .getAllByRole("button")
+      .filter((b) => !(b as HTMLButtonElement).disabled)
+      .map((b) => b.textContent?.trim())
+    expect(nutConMo.every((t) => /h[uủ][yỷ]|đóng|close/i.test(t ?? ""))).toBe(true)
+
+    goCua({ id: 1 })
+  })
 })

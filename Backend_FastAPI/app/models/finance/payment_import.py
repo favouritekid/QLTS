@@ -195,6 +195,20 @@ class PaymentImportRow(Base):
             "(validation_status = 'error') = (commit_status = 'not_applicable')",
             name="chk_payment_import_row_two_axes",
         ),
+        # `committed` ⟺ CÓ mã phiếu. Hai chiều, và cả hai đều quan trọng:
+        #   → một dòng "đã ghi" mà không có mã phiếu là mất dấu tiền (không
+        #     void được, không đối soát được);
+        #   ← một dòng có mã phiếu mà chưa "committed" là tiền đã vào nhưng vẫn
+        #     nằm trong tập chọn lại — đúng đường ghi hai lần.
+        # Service có đặt hai thứ này trong cùng savepoint, nhưng một lần sửa
+        # SQL lúc chữa dữ liệu thì không đi qua service.
+        CheckConstraint(
+            "(commit_status = 'committed') = "
+            "(payment_ids IS NOT NULL "
+            " AND jsonb_typeof(payment_ids) = 'array' "
+            " AND jsonb_array_length(payment_ids) > 0)",
+            name="chk_payment_import_row_committed_has_payments",
+        ),
         # "Chờ xác nhận trùng" chỉ có nghĩa với dòng CÓ cảnh báo.
         CheckConstraint(
             "commit_status <> 'duplicate_review_required' "
@@ -249,4 +263,10 @@ class PaymentImportRow(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<PaymentImportRow b{self.batch_id}#{self.row_no}: {self.status}>"
+        # HAI trục, không phải `self.status` (cột đã đổi tên). Một `__repr__`
+        # đọc thuộc tính không tồn tại chỉ nổ khi ai đó log dòng ra — tức là
+        # đúng lúc họ đang gỡ một lỗi khác.
+        return (
+            f"<PaymentImportRow b{self.batch_id}#{self.row_no}: "
+            f"{self.validation_status}/{self.commit_status}>"
+        )

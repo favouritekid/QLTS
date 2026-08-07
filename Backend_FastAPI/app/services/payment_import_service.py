@@ -1356,7 +1356,28 @@ async def commit_batch(
     total_amount = Decimal("0")
     cleared_profiles: Dict[int, str] = {}
     # (B3) Phiếu do CHÍNH lô này ghi — để dòng sau không tự tố dòng trước.
-    payment_ids_cua_lo: Set[int] = set()
+    #
+    # Nạp sẵn phiếu của các lượt commit TRƯỚC, không bắt đầu từ tập rỗng. `rows`
+    # cố tình chỉ gồm dòng CÒN ghi được, nên dòng `committed` ở lượt trước nằm
+    # ngoài — và mã phiếu của chúng sẽ không bao giờ được nạp. Khi một dòng
+    # `failed` được thử lại (hoặc phiếu hết hạn rồi xác nhận lại), nó đụng phải
+    # phiếu mà chính lô này vừa ghi ở lượt trước và bị tố là nghi trùng. Người
+    # ghi soát mãi một cảnh báo về chính mình.
+    payment_ids_cua_lo: Set[int] = {
+        pid
+        for (ids,) in (
+            await db.execute(
+                select(PaymentImportRow.payment_ids).where(
+                    PaymentImportRow.batch_id == batch_id,
+                    PaymentImportRow.commit_status
+                    == PaymentImportCommitStatusEnum.committed.value,
+                )
+            )
+        ).all()
+        if isinstance(ids, list)
+        for pid in ids
+        if isinstance(pid, int)
+    }
     # Đếm riêng dòng bị hàng rào trùng chặn: chúng là thứ DUY NHẤT commit lại
     # với cờ xác nhận sẽ cứu được, nên lô còn dòng như vậy thì chưa được đóng.
     so_dong_chan_trung = 0

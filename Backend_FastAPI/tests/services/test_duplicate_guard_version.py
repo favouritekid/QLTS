@@ -196,6 +196,60 @@ class TestVersionTangTheoDuLieu:
         await db.commit()
         assert await _version(db, fee.id) == truoc + 1
 
+    async def test_CHUYEN_yeu_cau_hoan_sang_phieu_KHAC_lam_CA_HAI_fee_tang(
+        self, db: AsyncSession, seeded_dependencies, admin_user
+    ):
+        """Ca `COALESCE` bỏ sót — và nó bỏ sót đúng vế nguy hiểm.
+
+        `COALESCE(NEW.payment_id, OLD.payment_id)` luôn chọn NEW ở một `UPDATE`,
+        nên chuyển một yêu cầu hoàn sang phiếu của khoản phí KHÁC chỉ làm
+        version của khoản phí MỚI nhích. Khoản phí CŨ vừa có một phiếu quay lại
+        tập ứng viên (nó thôi không còn được hoàn nữa) mà mọi phiếu xác nhận
+        đang lưu hành của nó vẫn hợp lệ — tức hàng rào mở đúng ở ca nó cần đóng.
+        """
+        feeA, invA, method = await _dung_khoan_phi(
+            db, seeded_dependencies, admin_user.id
+        )
+        feeB, invB, _ = await _dung_khoan_phi(db, seeded_dependencies, admin_user.id)
+
+        def _phieu(inv):
+            return Payment(
+                invoice_id=inv.id,
+                method_id=method.id,
+                amount=Decimal("1000000"),
+                status=PaymentStatusEnum.verified.value,
+                payment_date=datetime(2026, 8, 5, tzinfo=timezone.utc),
+                created_by_id=admin_user.id,
+            )
+
+        pA, pB = _phieu(invA), _phieu(invB)
+        db.add_all([pA, pB])
+        await db.flush()
+        yc = RefundRequest(
+            payment_id=pA.id,
+            amount=Decimal("1000000"),
+            status=RefundStatusEnum.refunded.value,
+            reason="test",
+            requested_by_id=admin_user.id,
+        )
+        db.add(yc)
+        await db.commit()
+
+        truocA = await _version(db, feeA.id)
+        truocB = await _version(db, feeB.id)
+
+        await db.execute(
+            text("UPDATE refund_request SET payment_id = :p WHERE id = :i"),
+            {"p": pB.id, "i": yc.id},
+        )
+        await db.commit()
+
+        assert await _version(db, feeA.id) == truocA + 1, (
+            "khoản phí CŨ không nhích — phiếu của nó vừa quay lại tập ứng viên "
+            "mà mọi xác nhận đang lưu hành vẫn hợp lệ"
+        )
+        assert await _version(db, feeB.id) == truocB + 1, "khoản phí MỚI cũng đổi"
+
     async def test_sua_ghi_chu_phieu_KHONG_lam_version_tang(
         self, db: AsyncSession, seeded_dependencies, admin_user
     ):

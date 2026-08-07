@@ -133,7 +133,8 @@ export function PaymentRecordDialog({
   // cho mọi dòng trong danh sách.
   const {
     data: invoice,
-    isLoading: invoiceLoading,
+    isLoading: invoiceRawLoading,
+    isFetching: invoiceFetching,
     isError: invoiceFailed,
   } = useInvoiceDetail(invoiceId, {
     enabled: open,
@@ -149,11 +150,22 @@ export function PaymentRecordDialog({
   // phần đang chờ thì màn hình trông y như chưa ai thu — và kế toán nhập lại.
   const {
     data: pendingPage,
-    isLoading: pendingLoading,
+    isLoading: pendingRawLoading,
+    isFetching: pendingFetching,
     isError: pendingFailed,
   } = usePendingPaymentsByFee(feeId, {
     enabled: open,
   })
+
+  // `isLoading` một mình KHÔNG đủ. Với cache có sẵn và `staleTime: 0`, React
+  // Query trả dữ liệu CŨ ngay lập tức: `isLoading=false`, `isFetching=true`.
+  // Màn hình vẽ số dư của lần mở trước như thể nó là số hiện tại — đúng cái
+  // "màn hình nói dối" mà panel công nợ sinh ra để xoá.
+  //
+  // Nên coi mọi lượt lấy lại là CHƯA XÁC MINH: dựng skeleton, và khoá nút Lưu.
+  const invoiceLoading = invoiceRawLoading || invoiceFetching
+  const pendingLoading = pendingRawLoading || pendingFetching
+  const soLieuChuaXacMinh = invoiceLoading || pendingLoading
 
   const pendingItems = pendingPage?.items ?? []
   // Cộng tối đa 100 phần tử số — rẻ hơn hẳn chi phí giữ một mảng ổn định qua
@@ -239,7 +251,8 @@ export function PaymentRecordDialog({
   const anhChup =
     trangThai.kind === "review_required" ? trangThai.anhChup : null
   const daXacNhan = trangThai.kind === "review_required" && trangThai.daTick
-  const chanLuu = (anhChup !== null && !daXacNhan) || dangGui
+  const chanLuu =
+    (anhChup !== null && !daXacNhan) || dangGui || soLieuChuaXacMinh
 
   const onSubmit = async (values: PaymentFormValues) => {
     // Chặn theo đúng con số mà form vừa hiển thị — cùng biến, không tính lại.
@@ -458,7 +471,12 @@ export function PaymentRecordDialog({
                     // trường test.
                     value={field.value?.toString() ?? ""}
                     onValueChange={(v) => field.onChange(parseInt(v))}
-                    disabled={methodsLoading}
+                    // KHOÁ khi đang gửi: ba trường này nằm trong những thứ
+                    // phiếu xác nhận ràng buộc vào. Sửa giữa lúc request đang
+                    // bay thì ảnh chụp giữ ý định CŨ trong khi form đã hiện giá
+                    // trị mới — máy chủ vẫn fail-closed, nhưng màn hình nói một
+                    // đằng và lượt sau ăn thêm một vòng 409 không cần thiết.
+                    disabled={methodsLoading || dangGui}
                   >
                     <FormControl>
                       <SelectTrigger>
@@ -505,6 +523,7 @@ export function PaymentRecordDialog({
                       onChange={field.onChange}
                       placeholder="Nhập số tiền..."
                       className="h-11"
+                      disabled={dangGui}
                     />
                   </FormControl>
                   <FormDescription>Số tiền còn lại: {remainingLabel}</FormDescription>
@@ -525,6 +544,7 @@ export function PaymentRecordDialog({
                       value={field.value}
                       onChange={field.onChange}
                       placeholder="Chọn ngày..."
+                      disabled={dangGui}
                     />
                   </FormControl>
                   <FormMessage />

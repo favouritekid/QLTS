@@ -70,17 +70,31 @@ SQL_FN_REFUND = """
 CREATE OR REPLACE FUNCTION bump_duplicate_guard_from_refund()
 RETURNS TRIGGER AS $$
 DECLARE
-    ma_fee INTEGER;
-    ma_payment INTEGER;
+    ma_fee_cu  INTEGER;
+    ma_fee_moi INTEGER;
 BEGIN
-    ma_payment := COALESCE(NEW.payment_id, OLD.payment_id);
-    SELECT i.fee_id INTO ma_fee
-    FROM payment p JOIN invoice i ON i.id = p.invoice_id
-    WHERE p.id = ma_payment;
+    -- Lấy RIÊNG vế cũ và vế mới, không COALESCE. `COALESCE(NEW, OLD)` luôn
+    -- chọn NEW ở một `UPDATE`, nên một yêu cầu hoàn chuyển sang phiếu khác chỉ
+    -- làm version của khoản phí MỚI nhích. Khoản phí CŨ vừa có một phiếu quay
+    -- lại tập ứng viên (không còn được hoàn nữa) mà token cũ của nó vẫn hợp lệ.
+    IF (TG_OP = 'DELETE' OR TG_OP = 'UPDATE') THEN
+        SELECT i.fee_id INTO ma_fee_cu
+        FROM payment p JOIN invoice i ON i.id = p.invoice_id
+        WHERE p.id = OLD.payment_id;
+    END IF;
+    IF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
+        SELECT i.fee_id INTO ma_fee_moi
+        FROM payment p JOIN invoice i ON i.id = p.invoice_id
+        WHERE p.id = NEW.payment_id;
+    END IF;
 
-    IF ma_fee IS NOT NULL THEN
+    IF ma_fee_cu IS NOT NULL THEN
         UPDATE fee SET duplicate_guard_version = duplicate_guard_version + 1
-        WHERE id = ma_fee;
+        WHERE id = ma_fee_cu;
+    END IF;
+    IF ma_fee_moi IS NOT NULL AND ma_fee_moi IS DISTINCT FROM ma_fee_cu THEN
+        UPDATE fee SET duplicate_guard_version = duplicate_guard_version + 1
+        WHERE id = ma_fee_moi;
     END IF;
 
     RETURN NULL;
