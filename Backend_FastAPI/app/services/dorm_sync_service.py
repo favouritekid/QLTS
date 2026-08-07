@@ -165,6 +165,81 @@ def assert_payload_contract(rows: List[Any]) -> None:
         )
 
 
+# Tên 12 trường ỔN ĐỊNH của một hàng — thứ mô tả NGUỒN, không mang dấu vết của
+# lượt chạy nào. Khai tường minh để `build_source_snapshot` khoá lại tập trường.
+TRUONG_PAYLOAD_ON_DINH = (
+    "qlts_profile_id",
+    "full_name",
+    "source_gender_raw",
+    "normalized_gender",
+    "program_name",
+    "degree_level",
+    "contact_phone",
+    "contact_phone2",
+    "academic_year",
+    "officer_qlts_id",
+    "unit_id",
+    "source_eligible",
+)
+
+
+def _phan_payload_on_dinh(row: Any) -> Dict[str, Any]:
+    """12 trường mô tả NGUỒN — không mang dấu vết của lượt chạy nào.
+
+    🔴 MỘT nơi dựng, hai nơi dùng: ``build_student_payload`` (thứ gửi đi) và
+    ``build_source_snapshot`` (thứ người bấm đã xem và được băm).
+
+    Viết hai dictionary song song là cách chắc chắn nhất để chúng lệch nhau:
+    ngày ai đó thêm một cột vào payload mà quên snapshot, dấu băm sẽ nói "không
+    có gì đổi" cho một lượt ghi thật sự đổi dữ liệu — tức chốt chống đua cho
+    qua đúng lúc nó phải chặn.
+
+    ⚠️ ``last_seen_sync_id`` và ``synced_at`` CỐ Ý không nằm ở đây: chúng là
+    dấu vết của LƯỢT, đổi ở mọi lần chạy. Đưa vào snapshot thì hai lần xem
+    trước liên tiếp trên cùng dữ liệu cho hai dấu băm khác nhau, và dấu băm mất
+    sạch ý nghĩa.
+    """
+    # Truy cập THẲNG — hàng thiếu thuộc tính đã bị `assert_payload_contract`
+    # chặn TRƯỚC khi mở lượt; xem docstring của `build_student_payload`.
+    lien_he = chuan_hoa_so(row.contact_phone)
+    lien_he_phu = chuan_hoa_so(row.contact_phone2)
+    # Hai ô hiện cùng một số thì ô thứ hai không nói thêm gì, chỉ khiến người
+    # gọi thử lại đúng số vừa không nghe máy.
+    if lien_he_phu is not None and lien_he_phu == lien_he:
+        lien_he_phu = None
+
+    return {
+        "qlts_profile_id": row.qlts_profile_id,
+        "full_name": row.full_name,
+        "source_gender_raw": row.source_gender_raw,
+        "normalized_gender": normalize_gender(row.source_gender_raw),
+        "program_name": row.program_name,
+        # ⚠️ Đi CÙNG `program_name`, không tách. Cùng một tên ngành tồn tại ở
+        # hai trình độ (xem `_resolved_degree_level_subquery`), nên thiếu cột
+        # này thì phía KTX gộp hai chương trình khác nhau thành một dòng thống
+        # kê — và dòng đó trông hoàn toàn bình thường.
+        #
+        # 🔴 Truy cập THẲNG, KHÔNG `getattr(..., None)`.
+        #
+        # Bản trước dùng `getattr` với mặc định `None` và gọi đó là fail-soft.
+        # Nó không phải: hàng nguồn thiếu thuộc tính nghĩa là script và
+        # repository lệch phiên bản, mà `None` ở đây đi thẳng vào nhánh
+        # `do update` phía KTX và XOÁ trình độ của toàn bộ lô. Đã tái hiện:
+        # hàng đang mang "Trung cấp", payload thiếu khoá, RPC trả về thành
+        # công, giá trị sau đó là NULL — 457 học viên về "chưa rõ trình độ"
+        # trong khi lượt báo THÀNH CÔNG.
+        "degree_level": row.degree_level,
+        "contact_phone": lien_he,
+        "contact_phone2": lien_he_phu,
+        "academic_year": row.academic_year,
+        "officer_qlts_id": row.officer_qlts_id,
+        "unit_id": row.unit_id,
+        # Có mặt trong nguồn = còn đủ điều kiện. Đây cũng là đường KÍCH HOẠT LẠI
+        # cho người từng bị hạ cờ rồi quay lại danh sách.
+        "source_eligible": True,
+    }
+
+
 def build_student_payload(
     row: Any, sync_run_id: int, synced_at: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -192,47 +267,10 @@ def build_student_payload(
     if synced_at is None:
         synced_at = datetime.now(timezone.utc).isoformat()
 
-    # Truy cập THẲNG — cùng lý do với `degree_level` bên dưới. Hàng thiếu
-    # thuộc tính đã bị `assert_payload_contract` chặn TRƯỚC khi mở lượt.
-    lien_he = chuan_hoa_so(row.contact_phone)
-    lien_he_phu = chuan_hoa_so(row.contact_phone2)
-    # Hai ô hiện cùng một số thì ô thứ hai không nói thêm gì, chỉ khiến người
-    # gọi thử lại đúng số vừa không nghe máy.
-    if lien_he_phu is not None and lien_he_phu == lien_he:
-        lien_he_phu = None
-
     return {
-        "qlts_profile_id": row.qlts_profile_id,
-        "full_name": row.full_name,
-        "source_gender_raw": row.source_gender_raw,
-        "normalized_gender": normalize_gender(row.source_gender_raw),
-        "program_name": row.program_name,
-        # ⚠️ Đi CÙNG `program_name`, không tách. Cùng một tên ngành tồn tại ở
-        # hai trình độ (xem `_resolved_degree_level_subquery`), nên thiếu cột
-        # này thì phía KTX gộp hai chương trình khác nhau thành một dòng thống
-        # kê — và dòng đó trông hoàn toàn bình thường.
-        #
-        # 🔴 Truy cập THẲNG, KHÔNG `getattr(..., None)`.
-        #
-        # Bản trước dùng `getattr` với mặc định `None` và gọi đó là fail-soft.
-        # Nó không phải: hàng nguồn thiếu thuộc tính nghĩa là script và
-        # repository lệch phiên bản, mà `None` ở đây đi thẳng vào nhánh
-        # `do update` phía KTX và XOÁ trình độ của toàn bộ lô. Đã tái hiện: hàng
-        # đang mang "Trung cấp", payload thiếu khoá, RPC trả về thành công, giá
-        # trị sau đó là NULL. Lượt đồng bộ báo THÀNH CÔNG trong khi vừa đưa 457
-        # học viên về "chưa rõ trình độ".
-        #
-        # Lệch phiên bản phải nổ, và nổ ở `assert_payload_contract` TRƯỚC khi
-        # mở lượt — không phải giữa một lượt ghi đã mở.
-        "degree_level": row.degree_level,
-        "contact_phone": lien_he,
-        "contact_phone2": lien_he_phu,
-        "academic_year": row.academic_year,
-        "officer_qlts_id": row.officer_qlts_id,
-        "unit_id": row.unit_id,
-        # Có mặt trong nguồn = còn đủ điều kiện. Đây cũng là đường KÍCH HOẠT LẠI
-        # cho người từng bị hạ cờ rồi quay lại danh sách.
-        "source_eligible": True,
+        # 🔴 Phần ổn định lấy từ helper DÙNG CHUNG với snapshot — xem
+        # `_phan_payload_on_dinh`. Không chép lại danh sách trường ở đây.
+        **_phan_payload_on_dinh(row),
         "last_seen_sync_id": sync_run_id,
         "synced_at": synced_at,
     }

@@ -465,4 +465,6 @@ from .dorm_sync import (
     DormSyncApplyRequest,
     DormSyncContextResponse,
     DormSyncPreviewRequest,
+    DormSyncPreviewResponse,
+    DormSyncWarningRow,
 )

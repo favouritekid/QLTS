@@ -546,6 +546,25 @@ class DormSyncTargetMismatchError(DormSyncGuardError):
     error_code = "DORM_SYNC_TARGET_MISMATCH"
 
 
+class DormSyncTokenError(ServiceError):
+    """Token xem trước không hợp lệ, hết hạn, hoặc không thuộc người đang gọi.
+
+    🔴 400 chứ không 401/403: người gọi ĐÃ qua cổng quyền (endpoint là
+    admin-only). Thứ hỏng là cái vé họ mang theo — hết hạn, bị sửa, hoặc của
+    người khác — chứ không phải danh tính của họ. Trả 401 ở đây sẽ đẩy frontend
+    đi làm mới phiên đăng nhập cho một sự cố mà cách xử đúng là bấm lại nút
+    "Xem trước".
+
+    ⚠️ ``detail`` ở cấp lớp KHÔNG nói token hỏng ở khâu nào. Phân biệt "chữ ký
+    sai" với "hết hạn" cho phía ngoài là đưa cho người đang dò một tín hiệu để
+    dò tiếp. Người vận hành đọc bản chi tiết ở log.
+    """
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    detail = "Phiếu xem trước không dùng được. Bấm Xem trước lại rồi thử lại."
+    error_code = "DORM_SYNC_TOKEN_INVALID"
+
+
 class DormSyncConfigError(ServiceError):
     """
     Raised when ``DORM_SYNC_ENABLED`` is on but required settings are missing.

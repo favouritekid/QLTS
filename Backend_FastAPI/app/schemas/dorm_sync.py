@@ -85,3 +85,66 @@ class DormSyncContextResponse(BaseModel):
             "KHÔNG bao giờ suy ra từ ngày hệ thống."
         ),
     )
+
+
+class DormSyncWarningRow(BaseModel):
+    """Một người SẮP MẤT CỜ mà vẫn đang giữ giường.
+
+    🔴 Đây là dòng người bấm phải đọc trước khi quyết định. Nó có họ tên và số
+    phòng — dữ liệu cá nhân — nên nó đi trong THÂN PHẢN HỒI (sau cổng quyền
+    admin), KHÔNG đi trong ``preview_token``: token chỉ được HMAC ký, không
+    được mã hoá, và ai cầm chuỗi cũng đọc được.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    qlts_profile_id: int
+    full_name: str
+    building_name: str
+    room_code: str
+    bed_no: int
+    status: str
+
+
+class DormSyncPreviewResponse(BaseModel):
+    """Kết quả bước xem trước. CHỈ ĐỌC — chưa ghi gì sang hệ KTX."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    academic_year: int
+    source_count: int = Field(..., description="Số hồ sơ đủ điều kiện ở nguồn QLTS.")
+
+    can_apply: bool = Field(
+        ...,
+        description=(
+            "Có được bấm Ghi hay không. False ⇒ `preview_token` là None và nút "
+            "phải bị khoá."
+        ),
+    )
+    blocked_reason: Optional[str] = Field(
+        None,
+        description="Vì sao chưa ghi được. Chỉ có nghĩa khi `can_apply=False`.",
+    )
+
+    warnings: List[DormSyncWarningRow] = Field(
+        default_factory=list,
+        description="Sắp mất cờ mà vẫn đang giữ giường — người bấm phải đọc.",
+    )
+
+    source_hash: Optional[str] = Field(
+        None, description="SHA-256 của ảnh chụp nguồn mà người bấm đã xem."
+    )
+    target_fingerprint: Optional[str] = Field(
+        None, description="Dấu vân tay trạng thái chỗ ở phía KTX, do database tính."
+    )
+
+    preview_token: Optional[str] = Field(
+        None,
+        description=(
+            "Vé để bấm Ghi. `None` khi chưa ghi được. Mang theo năm học, "
+            "operation_id và hai dấu ở trên — KHÔNG mang dữ liệu cá nhân."
+        ),
+    )
+    expires_at: Optional[int] = Field(
+        None, description="Thời điểm token hết hạn (epoch giây)."
+    )
