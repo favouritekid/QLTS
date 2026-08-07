@@ -13,6 +13,7 @@ Hiện có ``GET /context`` và ``POST /preview`` — cả hai CHỈ ĐỌC. Ch�
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import structlog
@@ -178,9 +179,16 @@ async def xem_truoc(
 # người bấm ĐỌC — nên nó nói việc phải làm, không nói lỗi kỹ thuật.
 _THONG_DIEP = {
     KetCuc.COMPLETED: "Đã đồng bộ xong.",
+    # ⚠️ KHÔNG nói "hệ ký túc xá không thay đổi".
+    #
+    # Điều duy nhất chắc chắn ở kết cục này là lượt ĐÃ ĐƯỢC ĐÓNG SỔ nên bước hạ
+    # cờ không chạy. Nhưng các lô `upsert` gửi đi TRƯỚC lúc hỏng vẫn nằm bên
+    # kia — chúng là dữ liệu thật, không bị rút lại. Nói "không thay đổi" là để
+    # người vận hành bỏ qua một khác biệt có thật giữa hai hệ.
     KetCuc.FAILED: (
-        "Lượt đồng bộ thất bại và hệ ký túc xá không thay đổi. Bấm Xem trước "
-        "lại để lấy phiếu mới rồi thử lại."
+        "Lượt đồng bộ KHÔNG hoàn tất, và KHÔNG ai bị hạ cờ đủ điều kiện. "
+        "Những hồ sơ đã kịp ghi trước khi hỏng vẫn còn ở hệ ký túc xá — lượt "
+        "sau sẽ ghi đè chúng. Bấm Xem trước lại để lấy phiếu mới rồi thử lại."
     ),
     KetCuc.OUTCOME_UNKNOWN: (
         "KHÔNG rõ hệ ký túc xá đã ghi tới đâu. ĐỪNG bấm lại — hãy đối soát "
@@ -271,14 +279,29 @@ async def ghi_dong_bo(
         )
         # ⚠️ COMMIT B.
         await db.commit()
-    except Exception:
-        # 🔴 Hệ ký túc xá ĐÃ đổi rồi. Ném 500 ở đây là nói với người bấm rằng
-        # việc chưa xảy ra — rồi họ bấm lại, và lượt thứ hai chạy chồng lên.
+    except (Exception, asyncio.CancelledError):
+        # 🔴 Hệ ký túc xá ĐÃ đổi rồi. Ném ra ngoài ở đây là nói với người bấm
+        # rằng việc chưa xảy ra — rồi họ bấm lại, và lượt thứ hai chạy chồng
+        # lên. Trả thành công KÈM cảnh báo: việc đã xong, chỉ sổ sách là thiếu;
+        # mã lượt ở dưới đủ để đối soát tay.
         #
-        # Trả thành công KÈM cảnh báo: việc đã xong, chỉ sổ sách là thiếu. Mã
-        # lượt ở dưới đủ để đối soát tay.
-        await db.rollback()
+        # ⚠️ Bắt CẢ `asyncio.CancelledError`. Nó không phải `Exception`, và một
+        # lần huỷ rơi vào đúng lúc ghi sổ sẽ xoá sạch bảo đảm này.
+        # `KeyboardInterrupt`/`SystemExit` vẫn đi tiếp: đó là yêu cầu dừng tiến
+        # trình, không phải một sự cố ghi sổ.
         ledger_saved = False
+
+        # 🔴 `rollback` cũng hỏng được — và thường hỏng vì CÙNG lý do đã làm
+        # `commit` hỏng (mất kết nối). Để nó bay ra ngoài là đánh mất đúng bảo
+        # đảm vừa dựng: endpoint thoát 500 cho một lượt mà hệ KTX đã hoàn tất.
+        try:
+            await db.rollback()
+        except (Exception, asyncio.CancelledError):
+            log.error(
+                "dorm_sync_apply_rollback_failed",
+                operation_id=str(chuan_bi.claims.operation_id),
+            )
+
         log.error(
             "dorm_sync_apply_ledger_write_failed",
             operation_id=str(chuan_bi.claims.operation_id),

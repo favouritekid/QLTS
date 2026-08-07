@@ -100,8 +100,8 @@ async def prepare_apply(
     actor_id: int,
     cau_hinh: DormSyncConfig,
     now_ts: int,
-    api_factory: Callable[..., Any] = DormApi,
-    cohort_loader: Callable[..., Any] = fetch_cohort,
+    api_factory: Optional[Callable[..., Any]] = None,
+    cohort_loader: Optional[Callable[..., Any]] = None,
 ) -> KetQuaChuanBi:
     """Giải phiếu, tra sổ, rồi mới đối chiếu trạng thái. Thứ tự LÀ hàng rào.
 
@@ -115,6 +115,15 @@ async def prepare_apply(
     ở đâu. Tự chạy lại là ghi chồng lên một lượt có thể đang ghi dở — mà mỗi
     lượt hạ cờ đủ-điều-kiện của cả một cohort.
     """
+    # ⚠️ Phân giải phụ thuộc LÚC GỌI, không phải lúc định nghĩa hàm.
+    #
+    # `def f(loader=fetch_cohort)` chốt tham chiếu ngay khi module được nạp,
+    # nên `monkeypatch.setattr(module, "fetch_cohort", ...)` KHÔNG ăn — và một
+    # ca kiểm tưởng đang dùng đồ giả lại đi gọi database thật. Đã mất một
+    # lượt chạy vì đúng điều này.
+    api_factory = api_factory or DormApi
+    cohort_loader = cohort_loader or fetch_cohort
+
     # 1. Giải phiếu. Chữ ký, phiên bản, TTL, actor — xem `doc_token`.
     claims = doc_token(token, secret=secret, actor_id=actor_id, now_ts=now_ts)
 
@@ -468,7 +477,7 @@ async def execute_apply(
     cau_hinh: DormSyncConfig,
     claims: PreviewTokenClaims,
     rows: List[Any],
-    api_factory: Callable[..., Any] = DormApi,
+    api_factory: Optional[Callable[..., Any]] = None,
     api: Optional[Any] = None,
 ) -> KetQuaGhi:
     """Ghi sang hệ KTX. KHÔNG nhận session database. Trả ``KetQuaGhi`` cho mọi đường.
@@ -507,7 +516,8 @@ async def execute_apply(
     # cùng phiếu bị chặn vĩnh viễn.
     try:
         if api is None:
-            api = api_factory(
+            # Phân giải lúc gọi — xem chú thích cùng chủ đề ở `prepare_apply`.
+            api = (api_factory or DormApi)(
                 cau_hinh.supabase_url,
                 cau_hinh.supabase_secret_key,
                 expected_project_ref=cau_hinh.target_project_ref,
