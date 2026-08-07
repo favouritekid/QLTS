@@ -15,6 +15,7 @@ import pytest
 from types import SimpleNamespace
 
 from app.services.dorm_sync_apply_service import (
+    KetCuc,
     KetQuaGhi,
     TrangThaiChuanBi,
     execute_apply,
@@ -101,8 +102,10 @@ def _so_cai(status="running", **ghi_de):
         snapshot_hash="s" * 64,
         snapshot_version=1,
         status=status,
-        ktx_run_id=None,
-        result=None,
+        # Hàng `completed` mặc định là hàng HỢP LỆ; ca kiểm hàng hỏng dựng
+        # riêng bên dưới.
+        ktx_run_id=42 if status == "completed" else None,
+        result={"status": status, "ktx_run_id": 42} if status == "completed" else None,
     )
     base.update(ghi_de)
     return SimpleNamespace(**base)
@@ -170,7 +173,7 @@ async def _chuan_bi(
 
     monkeypatch.setattr(m, "lay_theo_operation_id", _lay)
     monkeypatch.setattr(m, "chen_neu_chua_co", _chen)
-    monkeypatch.setattr(m, "log_audit", _audit)
+    monkeypatch.setattr(m, "log_activity", _audit)
 
     return await prepare_apply(
         _DbGia(),
@@ -273,7 +276,7 @@ async def test_ben_THUA_cuoc_dua_di_qua_CUNG_may_trang_thai(monkeypatch):
 
     monkeypatch.setattr(m, "lay_theo_operation_id", _lay)
     monkeypatch.setattr(m, "chen_neu_chua_co", _chen)
-    monkeypatch.setattr(m, "log_audit", _audit)
+    monkeypatch.setattr(m, "log_activity", _audit)
 
     ket_qua = await prepare_apply(
         _DbGia(),
@@ -376,6 +379,10 @@ class _ApiGhi:
         self.finalize_kwargs = kw
         return 3
 
+    async def reconcile_after_failure(self, run_id):
+        self.calls.append(("reconcile", run_id))
+        raise AssertionError("đường thành công không được đối soát")
+
 
 async def test_execute_dung_fingerprint_DA_KY_va_khong_chup_lai():
     """🔴 Chụp lại trước khi đóng sổ = chốt so một giá trị với chính nó.
@@ -393,6 +400,7 @@ async def test_execute_dung_fingerprint_DA_KY_va_khong_chup_lai():
 
     assert api.so_lan_chup == 0, "đã chụp lại ảnh đích trước khi đóng sổ"
     assert api.finalize_kwargs["expected_target_fingerprint"] == _FP
+    assert ket_qua.ket_cuc is KetCuc.COMPLETED
     assert ket_qua.ktx_run_id == 42
     assert ket_qua.upserted == 2
     assert ket_qua.deactivated == 3
@@ -466,15 +474,21 @@ async def test_record_result_chi_flush_KHONG_commit(monkeypatch):
         da_goi.append(("cap_nhat", kw["status"]))
         so_cai.status = kw["status"]
         so_cai.result = kw.get("result")
+        # 🔴 Giữ lại giá trị đi vào CỘT sổ cái, tách khỏi giá trị trong JSON.
+        # Không giữ riêng thì hai nguồn lệch nhau vẫn xanh — đã đo: kiểm ngược
+        # cộng 57 vào cột mà cả bộ vẫn 26/26.
+        so_cai.ktx_run_id = kw.get("ktx_run_id")
         await db.flush()
         return so_cai
 
-    async def _audit(db, entity, eid, action, **kw):
-        da_goi.append(("audit", action))
+    async def _activity(db, *, action, **kw):
+        da_goi.append(("activity", action))
+        # MỘT nguồn cho `ktx_run_id`: nhật ký và sổ cái phải nói cùng con số.
+        da_goi.append(("run_id_trong_nhat_ky", kw["changes"]["ktx_run_id"]))
         return None
 
     monkeypatch.setattr(m, "cap_nhat_ket_qua", _cap_nhat)
-    monkeypatch.setattr(m, "log_audit", _audit)
+    monkeypatch.setattr(m, "log_activity", _activity)
 
     db = _DbGia()
     so_cai = _so_cai()
@@ -483,12 +497,241 @@ async def test_record_result_chi_flush_KHONG_commit(monkeypatch):
         db,
         so_cai,
         actor_id=7,
-        status="completed",
-        ket_qua=KetQuaGhi(ktx_run_id=42, upserted=2, blocked=0, deactivated=3),
+        ket_qua=KetQuaGhi(
+            ket_cuc=KetCuc.COMPLETED,
+            ktx_run_id=42,
+            upserted=2,
+            blocked=0,
+            deactivated=3,
+        ),
     )
 
     assert db.da_commit == 0, "service KHÔNG được commit"
     assert db.da_flush >= 1
-    assert da_goi == [("cap_nhat", "completed"), ("audit", "dorm_sync_completed")]
+    assert da_goi == [
+        ("cap_nhat", "completed"),
+        ("activity", "dorm_sync_apply_completed"),
+        ("run_id_trong_nhat_ky", 42),
+    ]
     assert so_cai.result["ktx_run_id"] == 42
     assert so_cai.result["deactivated"] == 3
+    # 🔴 CỘT sổ cái, JSON kết quả và nhật ký phải nói CÙNG một con số.
+    #
+    # Ba chỗ ghi cùng một sự thật; chúng chỉ khớp vì cả ba lấy từ một
+    # `KetQuaGhi`. Ngày ai đó thêm một tham số thứ hai, chúng lệch — và sổ cái
+    # sẽ trỏ tới một lượt KTX không phải lượt vừa chạy.
+    assert so_cai.ktx_run_id == 42, "cột sổ cái lệch khỏi kết quả thật"
+    assert so_cai.ktx_run_id == so_cai.result["ktx_run_id"]
+
+
+# ---------------------------------------------------------------------------
+# Máy trạng thái LỖI — ba kết cục, phân biệt bằng ĐỐI SOÁT
+# ---------------------------------------------------------------------------
+
+
+class _ApiHong:
+    """Mở lượt xong rồi hỏng ở ``upsert``; đối soát trả kết quả khai sẵn."""
+
+    def __init__(self, outcome, hang=None, *, no_o_buoc="upsert"):
+        self.outcome = outcome
+        self.hang = hang
+        self.no_o_buoc = no_o_buoc
+        self.so_lan_doi_soat = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def open_sync_run(self, nam, token, raw_count, *, la_lan_chay_lai=False):
+        if self.no_o_buoc == "open":
+            raise RuntimeError("mất kết nối khi mở lượt")
+        return OpenSyncRunResult(42)
+
+    async def upsert_students(self, run_id, rows):
+        if self.no_o_buoc == "upsert":
+            raise RuntimeError("mất kết nối giữa chừng")
+        return len(rows), 0
+
+    async def finalize_sync_run(self, run_id, **kw):
+        if self.no_o_buoc == "finalize":
+            raise RuntimeError("[P0192] chỗ ở đã đổi")
+        return 3
+
+    async def reconcile_after_failure(self, run_id):
+        self.so_lan_doi_soat += 1
+        if self.outcome == "no":
+            raise RuntimeError("chính lời gọi đối soát cũng hỏng")
+        return self.outcome, self.hang
+
+
+@pytest.mark.parametrize(
+    "outcome, hang, ket_cuc",
+    [
+        ("finalized", {"deactivated_count": 5}, KetCuc.COMPLETED),
+        ("marked_failed", {"status": "failed"}, KetCuc.FAILED),
+        ("unknown", None, KetCuc.OUTCOME_UNKNOWN),
+        ("no", None, KetCuc.OUTCOME_UNKNOWN),
+    ],
+)
+async def test_hong_giua_chung_thi_DOI_SOAT_roi_moi_ket_luan(outcome, hang, ket_cuc):
+    """🔴 Ba kết cục, phân biệt bằng cách HỎI LẠI hệ KTX.
+
+    Lỗi phía client KHÔNG đồng nghĩa với "database chưa làm gì":
+
+    * ``finalized`` — đã hoàn tất, chỉ phản hồi không về tới nơi. Báo thất bại
+      ở ca này là ghi sai sổ sách;
+    * ``marked_failed`` — lượt bên kia đã đóng sổ, một phiếu mới chạy được;
+    * ``unknown`` — KHÔNG biết. Gộp vào ``failed`` là nói dối rằng bên kia đã
+      sạch, rồi lượt sau ghi chồng lên một lượt có thể đang sống.
+
+    Ca cuối (``"no"``) là ca chính lời gọi đối soát cũng hỏng — vẫn phải là
+    ``OUTCOME_UNKNOWN``, không được rơi thành exception.
+    """
+    _, claims = _phieu()
+    api = _ApiHong(outcome, hang)
+
+    ket_qua = await execute_apply(
+        cau_hinh=_CAU_HINH, claims=claims, rows=_ROWS, api=api
+    )
+
+    assert ket_qua.ket_cuc is ket_cuc
+    assert api.so_lan_doi_soat == 1, "phải đối soát ĐÚNG một lần"
+    assert ket_qua.ktx_run_id == 42, "kết cục nào cũng phải truy được về lượt KTX"
+    if ket_cuc is KetCuc.COMPLETED:
+        assert ket_qua.deactivated == 5
+
+
+async def test_hong_NGAY_LUC_MO_thi_khong_doi_soat():
+    """Chưa mở được lượt nào ⇒ chưa có gì bên kia để đối soát.
+
+    Đây là ca DUY NHẤT kết luận được mà không hỏi lại.
+    """
+    _, claims = _phieu()
+    api = _ApiHong("finalized", None, no_o_buoc="open")
+
+    ket_qua = await execute_apply(
+        cau_hinh=_CAU_HINH, claims=claims, rows=_ROWS, api=api
+    )
+
+    assert ket_qua.ket_cuc is KetCuc.FAILED
+    assert ket_qua.ktx_run_id is None
+    assert api.so_lan_doi_soat == 0
+
+
+async def test_execute_KHONG_bao_gio_nem():
+    """Đẩy exception ra ngoài buộc router tự viết nghiệp vụ đối soát.
+
+    Mà đối soát là việc duy nhất phân biệt được ba kết cục, và ba kết cục ấy
+    dẫn tới ba trạng thái sổ cái khác nhau.
+    """
+    _, claims = _phieu()
+
+    for buoc in ("open", "upsert", "finalize"):
+        api = _ApiHong("unknown", None, no_o_buoc=buoc)
+        ket_qua = await execute_apply(
+            cau_hinh=_CAU_HINH, claims=claims, rows=_ROWS, api=api
+        )
+        assert isinstance(ket_qua, KetQuaGhi), buoc
+
+
+# ---------------------------------------------------------------------------
+# Tổ hợp bất khả thi
+# ---------------------------------------------------------------------------
+
+
+def test_completed_KHONG_co_run_id_thi_tu_choi_ngay_luc_dung():
+    """Một hàng `completed` rỗng sẽ được lần bấm sau trả về như "đã xong"."""
+    with pytest.raises(ValueError):
+        KetQuaGhi(ket_cuc=KetCuc.COMPLETED, ktx_run_id=None)
+
+
+def test_luot_hong_ma_khai_so_ha_co_thi_tu_choi():
+    """Ghi vào sổ một việc chưa chắc đã xảy ra."""
+    for ket_cuc in (KetCuc.FAILED, KetCuc.OUTCOME_UNKNOWN):
+        with pytest.raises(ValueError):
+            KetQuaGhi(ket_cuc=ket_cuc, ktx_run_id=42, deactivated=3)
+
+
+def test_record_result_chi_nhan_MOT_nguon_cho_run_id():
+    """🔴 Không có tham số thứ hai để lệch.
+
+    Bản trước nhận rời ``status`` + ``ktx_run_id`` + ``ket_qua`` và không kiểm
+    quan hệ giữa chúng — đo được: sổ ghi ``ktx_run_id=99`` trong khi JSON kết
+    quả ghi ``42``.
+    """
+    import inspect
+
+    tham_so = set(inspect.signature(record_result).parameters)
+
+    assert "ktx_run_id" not in tham_so
+    assert "status" not in tham_so
+    assert "ly_do" not in tham_so
+    assert "ket_qua" in tham_so
+
+
+# ---------------------------------------------------------------------------
+# Hàng đã có trong sổ phải DÙNG ĐƯỢC
+# ---------------------------------------------------------------------------
+
+
+async def test_hang_completed_HONG_thi_khong_tra_ve_nhu_da_xong(monkeypatch):
+    """Sổ ghi `completed` mà thiếu `ktx_run_id`/`result` là sổ đã hỏng từ trước.
+
+    Trả nó về như "đã xong" là đóng dấu xác nhận lên đúng cái hỏng đó, và người
+    vận hành mất luôn đường lần ra lượt bên kia.
+    """
+    from app.utils.exceptions import BusinessRuleViolation
+
+    token, claims = _phieu()
+    hong = _so_cai(status="completed", operation_id=claims.operation_id)
+    hong.ktx_run_id = None
+    hong.result = None
+
+    with pytest.raises(BusinessRuleViolation):
+        await _chuan_bi(monkeypatch, token=token, so_cai_co_san=hong)
+
+
+async def test_trang_thai_LA_thi_fail_closed(monkeypatch):
+    """CHECK constraint chỉ cho bốn giá trị; tới đây nghĩa là nó đã bị gỡ.
+
+    Rơi vào một nhánh mặc định "cho chạy" ở đúng chỗ này là chạy một lượt hạ cờ
+    trên một trạng thái không ai định nghĩa.
+    """
+    from app.utils.exceptions import BusinessRuleViolation
+
+    token, claims = _phieu()
+
+    with pytest.raises(BusinessRuleViolation):
+        await _chuan_bi(
+            monkeypatch,
+            token=token,
+            so_cai_co_san=_so_cai(status="dang_cho", operation_id=claims.operation_id),
+        )
+
+
+def test_dung_dung_he_nhat_ky_da_duyet():
+    """Contract: ``activity_service.log_activity``, không phải ``log_audit``.
+
+    Hai hệ khác nhau: một ghi việc NGƯỜI làm, một ghi việc TRƯỜNG dữ liệu đổi.
+    Lượt đồng bộ là thao tác của người vận hành và phải nằm cùng chỗ với mọi
+    thao tác khác của họ — nếu không thì màn hình nhật ký hoạt động im lặng bỏ
+    sót đúng thao tác nguy hiểm nhất trong hệ.
+    """
+    import inspect
+
+    import app.services.dorm_sync_apply_service as m
+
+    ma = inspect.getsource(m)
+
+    assert "from app.services.activity_service import log_activity" in ma
+    # ⚠️ Soi LỜI GỌI và IMPORT, không soi chuỗi trần: chú thích trong file có
+    # nhắc `log_audit` để giải thích vì sao KHÔNG dùng nó, và một phép `in`
+    # thô sẽ đỏ vì đúng dòng giải thích ấy.
+    assert "log_audit(" not in ma
+    assert "audit_service" not in ma.replace(
+        "`audit_service.log_audit`", ""
+    ).replace("audit_service.log_audit", "")
+    assert 'action="dorm_sync_apply_requested"' in ma
+    assert 'action=f"dorm_sync_apply_{ket_qua.ket_cuc}"' in ma
