@@ -12,6 +12,7 @@ hai lệnh chạy tuần tự — tức xanh cả khi ràng buộc đã bị g�
 """
 
 import asyncio
+import contextlib
 import uuid
 
 import pytest
@@ -104,6 +105,7 @@ async def test_hai_request_cung_operation_id_chi_sinh_MOT_hang(actor_id):
 
     s1 = AsyncSessionLocal()
     s2 = AsyncSessionLocal()
+    viec2 = None
     try:
         # Mở transaction ở cả hai và lấy pid — pid là thứ duy nhất cho phép hỏi
         # Postgres "ai đang chặn ai".
@@ -165,8 +167,28 @@ async def test_hai_request_cung_operation_id_chi_sinh_MOT_hang(actor_id):
         assert await s2.scalar(text("select 1")) == 1
         await s2.commit()
     finally:
+        # ⚠️ Thứ tự dọn có chủ đích, và nó chỉ lộ ra khi ca này ĐỎ.
+        #
+        # Nếu một assertion vỡ trước `await viec2`, T2 vẫn đang CHỜ khoá của
+        # T1. Đóng session lúc đó là đóng ngay dưới chân một task còn sống:
+        # task bị huỷ ở nơi khác, ngoại lệ nổi lên lạc chỗ, và những ca kiểm
+        # ngược — vốn CỐ Ý làm ca này đỏ — sẽ đọc ra một thất bại nói về dọn
+        # dẹp thay vì nói về biến thể vừa gieo.
+        #
+        # Nhả khoá trước (rollback T1), rồi mới giải phóng và CHỜ task, sau
+        # cùng mới đóng.
+        with contextlib.suppress(Exception):
+            await s1.rollback()
+
+        if viec2 is not None:
+            if not viec2.done():
+                viec2.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await viec2
+
         for s in (s1, s2):
-            await s.rollback()
+            with contextlib.suppress(Exception):
+                await s.rollback()
             await s.close()
 
 
