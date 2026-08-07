@@ -42,6 +42,7 @@ from .routers import (
     admission_config,  # ✅ PHASE 3: Admission Config + Scoring API
     admission_paths,  # ✅ PHASE 1: Admission Configuration Console
     admin_v2_casbin,  # ✅ T0-5 cold cutover: admin-only Casbin reload endpoint
+    admin_v2_dorm_sync,  # Đồng bộ ký túc xá — router khai đủ prefix /api/v2/admin/dorm-sync
     admin_v2_admission_round,  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds CRUD + bulk-create + extend
     admin_v2_path_subject_group,  # ✅ #184 Phase 2 v8.2 PR-2D: path-level subject group config + clone endpoint
     admission_reports,  # Weekly admission report (lead→admission→finance by ngành/officer)
@@ -899,6 +900,7 @@ fastapi_app.include_router(admin_backfill.router)  # ✅ #184 Phase 3 PR-3D-B BE
 fastapi_app.include_router(admission_config.router, prefix="/api")  # ✅ PHASE 3: Admission Config + Scoring
 fastapi_app.include_router(admission_paths.router, prefix="/api")  # ✅ PHASE 1: Admission Configuration Console
 fastapi_app.include_router(admin_v2_casbin.router)  # ✅ T0-5: POST /api/v2/admin/casbin/reload (router declares full prefix)
+fastapi_app.include_router(admin_v2_dorm_sync.router)  # GET /api/v2/admin/dorm-sync/context (router declares full prefix)
 fastapi_app.include_router(admin_v2_system_config.router)  # ✅ #184 PR-1D: GET/PATCH /api/v2/admin/system-config (router declares full prefix)
 fastapi_app.include_router(admin_v2_admission_round.router)  # ✅ #184 Phase 2 v8.2 PR-2A v2: year-level rounds (router declares full prefix)
 fastapi_app.include_router(admin_v2_path_subject_group.router)  # ✅ #184 Phase 2 v8.2 PR-2D: path-level subject group config + clone

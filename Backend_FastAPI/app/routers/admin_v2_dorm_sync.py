@@ -25,7 +25,17 @@ from app.services.dorm_sync_service import DormApi
 
 log = structlog.get_logger(__name__)
 
-router = APIRouter(prefix="/dorm-sync", tags=["Admin - Đồng bộ ký túc xá"])
+# 🔴 Khai ĐỦ đường dẫn ở đây, và mount thẳng vào `fastapi_app` — cùng lối với
+# các router `admin_v2_*` khác.
+#
+# Bản trước gắn vào `admin_router` (đang được mount với `prefix="/api"`) nên
+# đường thật thành `/api/admin/dorm-sync/...`, lệch contract `/api/v2/admin/...`
+# mà frontend sẽ gọi. Lệch prefix không làm test nào đỏ nếu test cũng viết theo
+# đường sai — nó chỉ hiện ra thành 404 ở lần bấm đầu tiên trên giao diện.
+router = APIRouter(
+    prefix="/api/v2/admin/dorm-sync",
+    tags=["Admin v2 - Đồng bộ ký túc xá"],
+)
 
 
 @router.get(

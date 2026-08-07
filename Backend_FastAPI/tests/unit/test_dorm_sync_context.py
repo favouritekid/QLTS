@@ -176,7 +176,7 @@ async def test_thieu_cau_hinh_thi_khong_goi_KTX(monkeypatch):
             da_dung_api.append(True)
             raise AssertionError("đã dựng DormApi dù cấu hình thiếu")
 
-    import app.routers.admin.dorm_sync as router_module
+    import app.routers.admin_v2_dorm_sync as router_module
 
     monkeypatch.setattr(router_module, "DormApi", _ApiKhongDuocDung)
     monkeypatch.setattr(router_module.DormSyncConfig, "from_settings", classmethod(
@@ -214,11 +214,11 @@ def test_endpoint_that_su_bi_limiter_boc():
     thứ tự decorator vẫn cho 19/19 xanh. Thứ phân biệt được là **object mà
     route đang giữ**.
     """
-    import app.routers.admin.dorm_sync as router_module
+    import app.routers.admin_v2_dorm_sync as router_module
 
     tuyen = [
         r for r in router_module.router.routes
-        if getattr(r, "path", "") == "/dorm-sync/context"
+        if getattr(r, "path", "") == "/api/v2/admin/dorm-sync/context"
     ]
     assert len(tuyen) == 1
 
@@ -239,7 +239,7 @@ async def test_khong_co_nam_mo_thi_mac_dinh_la_None_KHONG_lui_ve_nam_nao(monkeyp
     thì sửa nó thành `else 2026` vẫn xanh cả bộ, và màn hình dựng sẵn một lượt
     ghi vào năm mà bên đích chưa mở.
     """
-    import app.routers.admin.dorm_sync as router_module
+    import app.routers.admin_v2_dorm_sync as router_module
 
     class _ApiGia:
         def __init__(self, *a, **kw):
@@ -274,7 +274,7 @@ async def test_co_nam_mo_thi_mac_dinh_la_nam_LON_NHAT(monkeypatch):
 
     Không có vế này thì một bản vá lấy `nam_mo[-1]` vẫn xanh ở ca trên.
     """
-    import app.routers.admin.dorm_sync as router_module
+    import app.routers.admin_v2_dorm_sync as router_module
 
     class _ApiGia:
         def __init__(self, *a, **kw):

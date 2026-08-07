@@ -50,9 +50,6 @@ from . import deleted_items
 # Audit Logs router
 from . import audit_logs
 
-# Đồng bộ ký túc xá
-from . import dorm_sync
-
 # Create main admin router
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -121,9 +118,6 @@ router.include_router(system.router)  # /api/admin/system/*
 
 # Include Deleted Items Management router
 router.include_router(deleted_items.router)  # /api/admin/deleted-items/*
-
-# Include Dorm Sync router
-router.include_router(dorm_sync.router)  # /api/admin/dorm-sync/*
 
 # Include Audit Logs router
 router.include_router(audit_logs.router)  # /api/admin/audit-logs/*
