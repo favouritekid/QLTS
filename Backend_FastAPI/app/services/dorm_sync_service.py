@@ -1300,6 +1300,59 @@ class DormApi:
         total = response.headers.get("content-range", "").split("/")[-1]
         return int(total) if total.isdigit() else None
 
+    async def fetch_open_academic_years(self) -> Tuple[int, ...]:
+        """Các năm học ĐANG MỞ ở hệ KTX, sắp GIẢM DẦN. Fail-closed.
+
+        🔴 Chỉ ``status = 'open'``. Một năm đã đóng sổ vẫn còn nguyên hàng
+        trong bảng; đưa nó lên màn chọn nghĩa là dựng sẵn một lượt ghi vào năm
+        mà bên đích đã chốt sổ — và lượt ấy hạ cờ cả cohort của năm đó.
+
+        ⚠️ Sắp ở ĐÂY, không dựa vào thứ tự PostgREST trả về. Thứ tự của một
+        truy vấn không có ``order`` là thứ tự kế hoạch thực thi, và "mặc định
+        là năm lớn nhất" dựa vào nó sẽ đúng cho tới lần bảng thay đổi.
+
+        ⚠️ Danh sách RỖNG là câu trả lời hợp lệ và phải đi tiếp được: "hệ KTX
+        chưa mở năm nào" khác hẳn "không đọc được". Ca thứ hai ném.
+        """
+        response = await self._client.get(
+            f"{self._base}/dorm_academic_years",
+            headers=self._headers,
+            params={
+                "status": "eq.open",
+                "select": "academic_year",
+                # Vẫn khai `order` ở phía server để phân trang (nếu có) ổn
+                # định; phép sắp thật nằm ở dòng `sorted(...)` bên dưới.
+                "order": "academic_year.desc",
+            },
+        )
+        self._raise_for_status(response, "Đọc danh sách năm học của hệ KTX")
+
+        def _hong(vi_sao: str) -> RuntimeError:
+            return RuntimeError(
+                f"Danh sách năm học của hệ KTX không đọc được: {vi_sao}. "
+                "KHÔNG đoán — một năm học đoán ra là một lượt ghi vào nhầm năm."
+            )
+
+        try:
+            than = response.json()
+        except (ValueError, TypeError):
+            raise _hong("phản hồi không phải JSON") from None
+
+        if not isinstance(than, list):
+            raise _hong("phản hồi không phải mảng")
+
+        nam: List[int] = []
+        for hang in than:
+            if not isinstance(hang, dict):
+                raise _hong("một phần tử không phải object")
+            gia_tri = hang.get("academic_year")
+            # `bool` là lớp con của `int` — `True` không phải một năm học.
+            if not isinstance(gia_tri, int) or isinstance(gia_tri, bool):
+                raise _hong("`academic_year` không phải số nguyên")
+            nam.append(gia_tri)
+
+        return tuple(sorted(set(nam), reverse=True))
+
     async def fetch_target_snapshot(
         self, academic_year: int, cohort_ids: Sequence[int]
     ) -> TargetSnapshot:
