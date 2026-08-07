@@ -19,7 +19,12 @@ from app.scripts import sync_dorm_students as sync_module
 from app.services import dorm_sync_service as service_module
 from app.utils.exceptions import DormSyncConfigError, DormSyncGuardError
 from app.scripts.sync_dorm_students import main, parse_args
-from app.services.dorm_sync_service import OpenSyncRunResult
+from app.services.dorm_sync_service import (
+    DormSyncNotice,
+    LoaiThongBao,
+    OpenSyncRunResult,
+    TargetSnapshot,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -141,6 +146,14 @@ def test_batch_size_ceiling_matches_the_rpc():
 # fake. Copy thay vì import chéo giữa hai file test: một file test import file
 # test khác là thứ sẽ gãy im lặng khi ai đó sắp lại thứ tự.
 
+_FP_GIA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+
+def _snapshot_gia(rows=()):
+    """Ảnh chụp rỗng dùng cho các fake không quan tâm tới cảnh báo chỗ ở."""
+    return TargetSnapshot(rows=tuple(rows), fingerprint=_FP_GIA)
+
+
 def _row(**overrides):
     base = dict(
         qlts_profile_id=9001,
@@ -205,6 +218,10 @@ class _ApiGhiNhan:
     async def __aexit__(self, *exc):
         return False
 
+    async def fetch_target_snapshot(self, academic_year, cohort_ids):
+        self.cohort_ids_da_chup = list(cohort_ids)
+        return _snapshot_gia()
+
     async def open_sync_run(
         self, academic_year, client_token, raw_count, *, la_lan_chay_lai=False
     ):
@@ -221,8 +238,11 @@ class _ApiGhiNhan:
         self._so_bi_chan -= chan
         return len(rows) - chan, chan
 
-    async def finalize_sync_run(self, run_id, source_count, upserted_count):
+    async def finalize_sync_run(
+        self, run_id, source_count, upserted_count, expected_target_fingerprint
+    ):
         self.finalize_args = (source_count, upserted_count)
+        self.fingerprint_da_nhan = expected_target_fingerprint
         return 0
 
 
@@ -265,6 +285,10 @@ async def test_preview_counts_follow_the_contract(monkeypatch, capsys):
 
         async def __aexit__(self, *exc):
             return False
+
+        async def fetch_target_snapshot(self, academic_year, cohort_ids):
+            self.cohort_ids_da_chup = list(cohort_ids)
+            return _snapshot_gia()
 
         async def count_students(self, academic_year):
             return 0
@@ -309,6 +333,10 @@ async def test_dry_run_never_needs_the_source_declaration(monkeypatch):
 
         async def __aexit__(self, *exc):
             return False
+
+        async def fetch_target_snapshot(self, academic_year, cohort_ids):
+            self.cohort_ids_da_chup = list(cohort_ids)
+            return _snapshot_gia()
 
         async def count_students(self, academic_year):
             return 0
@@ -379,6 +407,7 @@ async def test_main_goes_on_when_the_cohort_is_complete(monkeypatch):
     class _TransportGia:
         def __init__(self, **kw):
             self.calls = []
+            self.payloads = []
 
         async def aclose(self):
             return None
@@ -390,6 +419,16 @@ async def test_main_goes_on_when_the_cohort_is_complete(monkeypatch):
                 is_success=True,
                 headers={"content-range": "0-0/0"},
                 json=lambda: [],
+            )
+
+        async def post(self, url, headers=None, params=None, json=None):
+            self.calls.append(url)
+            self.payloads.append(json)
+            return SimpleNamespace(
+                status_code=200,
+                is_success=True,
+                headers={},
+                json=lambda: {"rows": [], "fingerprint": _FP_GIA},
             )
 
     transport = _TransportGia()
@@ -409,8 +448,235 @@ async def test_main_goes_on_when_the_cohort_is_complete(monkeypatch):
     assert await main(["--academic-year", "2026"]) == 0
     # Đi thật tới đích: một lời gọi đếm học viên đã được phát ra, và nó đi tới
     # ĐÚNG project khai trong biến môi trường.
-    assert len(transport.calls) == 1, "cohort hợp lệ phải đi tiếp tới bước xem trước"
-    assert transport.calls[0].startswith("https://abc.supabase.co/rest/v1/")
+    # Đếm học viên + ảnh chụp chỗ ở = hai lời gọi, cả hai tới ĐÚNG project.
+    assert len(transport.calls) == 2, "cohort hợp lệ phải đi tiếp tới bước xem trước"
+    assert all(
+        u.startswith("https://abc.supabase.co/rest/v1/") for u in transport.calls
+    )
+    # 🔴 Xem trước PHẢI gọi đúng RPC mà bước ghi sẽ chốt bằng — một wrapper
+    # khác, hay một truy vấn tự dựng, là cho người bấm duyệt một trạng thái
+    # rồi chốt bằng một trạng thái khác.
+    assert transport.calls[1].endswith("/rpc/dorm_sync_target_snapshot")
+    assert transport.payloads[0]["p_academic_year"] == 2026
+    assert transport.payloads[0]["p_cohort_ids"] == [9001, 9002]
+
+
+def test_every_notice_kind_has_a_line_on_screen():
+    """🔴 Bảng định dạng phải phủ ĐỦ ``LoaiThongBao``.
+
+    Thiếu một mục thì loại cảnh báo ấy biến mất khỏi màn hình trong im lặng —
+    và đây là những dòng nói cho người vận hành biết lượt trước còn sống hay đã
+    đóng sổ, tức thứ quyết định họ có đi sửa tay database hay không.
+
+    ⚠️ So bằng TẬP, không đếm. Đếm thì đổi tên một khoá thành chuỗi gõ sai vẫn
+    ra cùng con số.
+    """
+    assert set(sync_module._MAU_THONG_BAO) == set(LoaiThongBao)
+
+
+def test_each_notice_prints_its_own_line(capsys):
+    """Ba loại, ba câu khác nhau — mỗi tình huống đòi một quyết định khác."""
+    sync_module._in_thong_bao_phuc_hoi(
+        [
+            DormSyncNotice(loai=LoaiThongBao.LUOT_CU_DANG_CHAY, run_id=11, dau="client:x"),
+            DormSyncNotice(loai=LoaiThongBao.LUOT_CU_DA_HOAN_TAT, run_id=11),
+            DormSyncNotice(loai=LoaiThongBao.LUOT_CU_DA_DONG_SO, run_id=11),
+        ]
+    )
+
+    man_hinh = capsys.readouterr().out
+    assert "đang chạy mang dấu 'client:x'" in man_hinh
+    assert "hoá ra đã HOÀN TẤT" in man_hinh
+    assert "Đã đóng sổ lượt #11" in man_hinh
+
+
+async def test_apply_carries_the_previewed_fingerprint_into_the_finalizer(monkeypatch):
+    """🔴 Dấu vân tay đi từ ảnh chụp TRƯỚC vòng ghi thẳng tới bước đóng sổ.
+
+    Chốt chống đua chỉ có nghĩa nếu con số mang đi so là trạng thái người bấm
+    ĐÃ NHÌN. Chụp lại sau vòng ghi thì nó luôn khớp, chốt thành phép so một giá
+    trị với chính nó: vẫn xanh, vẫn tốn một lời gọi, và không chặn được gì.
+
+    Ca này khoá cả hai vế: đúng MỘT lần chụp, và chuỗi tới finalizer là chuỗi
+    của lần chụp đó.
+    """
+    _set_target_env(monkeypatch)
+    monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
+
+    FP_XEM_TRUOC = "c" * 32
+    ghi_nhan = {"so_lan_chup": 0}
+
+    class _Api:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def fetch_target_snapshot(self, academic_year, cohort_ids):
+            ghi_nhan["so_lan_chup"] += 1
+            # Lần chụp THỨ HAI (nếu có) trả một giá trị khác — nên một bản vá
+            # chụp lại trước khi đóng sổ sẽ lộ ra ở khẳng định cuối.
+            if ghi_nhan["so_lan_chup"] == 1:
+                return TargetSnapshot(rows=(), fingerprint=FP_XEM_TRUOC)
+            return TargetSnapshot(rows=(), fingerprint="d" * 32)
+
+        async def open_sync_run(
+            self, academic_year, client_token, raw_count, *, la_lan_chay_lai=False
+        ):
+            return OpenSyncRunResult(51)
+
+        async def upsert_students(self, run_id, rows):
+            return len(rows), 0
+
+        async def finalize_sync_run(
+            self, run_id, source_count, upserted_count, expected_target_fingerprint
+        ):
+            ghi_nhan["fingerprint"] = expected_target_fingerprint
+            return 0
+
+    async def _hai_hang(academic_year, **kwargs):
+        return [_row(), _row(qlts_profile_id=9002)]
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _hai_hang)
+    monkeypatch.setattr(sync_module, "DormApi", _Api)
+
+    assert await main(["--academic-year", "2026", "--apply"]) == 0
+
+    assert ghi_nhan["so_lan_chup"] == 1, "chụp nhiều lần thì chốt so với chính nó"
+    assert ghi_nhan["fingerprint"] == FP_XEM_TRUOC
+
+
+async def test_a_changed_fingerprint_keeps_the_batches_but_never_lowers_the_flag(
+    monkeypatch,
+):
+    """🔴 Chỗ ở đổi giữa chừng: dữ liệu đã ghi VẪN CÒN, nhưng KHÔNG hạ cờ.
+
+    Đây là hình dạng đúng của một lượt bị chốt chặn. Hai vế đều quan trọng:
+
+    * các lô đã gửi không bị rút lại — chúng là dữ liệu thật và lượt sau sẽ
+      dùng lại; huỷ chúng chỉ tạo thêm việc;
+    * KHÔNG có ai bị hạ cờ, và lượt được đóng sổ ``failed`` chứ không treo
+      ``running`` khoá cứng năm học.
+    """
+    _set_target_env(monkeypatch)
+    monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
+
+    ghi_nhan = {"lo_da_gui": 0, "da_ha_co": False, "outcome": None}
+
+    class _Api:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def fetch_target_snapshot(self, academic_year, cohort_ids):
+            return TargetSnapshot(rows=(), fingerprint="c" * 32)
+
+        async def open_sync_run(
+            self, academic_year, client_token, raw_count, *, la_lan_chay_lai=False
+        ):
+            return OpenSyncRunResult(52)
+
+        async def upsert_students(self, run_id, rows):
+            ghi_nhan["lo_da_gui"] += 1
+            return len(rows), 0
+
+        async def finalize_sync_run(
+            self, run_id, source_count, upserted_count, expected_target_fingerprint
+        ):
+            # Đúng thứ database trả khi có người nhận giường giữa chừng.
+            raise RuntimeError(
+                "Kết thúc lượt đồng bộ thất bại (HTTP 500, request-id x). "
+                "[P0192] Chỗ ở phía ký túc xá ĐÃ ĐỔI sau khi xem trước."
+            )
+
+        async def reconcile_after_failure(self, run_id):
+            ghi_nhan["outcome"] = "marked_failed"
+            return "marked_failed", {"id": run_id, "status": "failed"}
+
+    async def _hai_hang(academic_year, **kwargs):
+        return [_row(), _row(qlts_profile_id=9002)]
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _hai_hang)
+    monkeypatch.setattr(sync_module, "DormApi", _Api)
+
+    assert await main(["--academic-year", "2026", "--apply"]) == 1
+    assert ghi_nhan["lo_da_gui"] == 1, "các lô đã ghi phải còn nguyên, không rút lại"
+    assert ghi_nhan["da_ha_co"] is False
+    assert ghi_nhan["outcome"] == "marked_failed", "lượt phải được đóng sổ, không treo"
+
+
+async def test_dry_run_reads_the_snapshot_but_opens_no_run(monkeypatch, capsys):
+    """Xem trước CHỈ ĐỌC: có ảnh chụp cảnh báo, tuyệt đối không mở lượt.
+
+    Mở một ``sync_run`` ở chế độ xem trước là để lại một hàng ``running`` khoá
+    cứng năm học ở hệ KTX — cho một lệnh mà cả tên lẫn tài liệu đều hứa là
+    không ghi gì.
+    """
+    _set_target_env(monkeypatch)
+
+    class _Api:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def count_students(self, academic_year):
+            return 0
+
+        async def fetch_target_snapshot(self, academic_year, cohort_ids):
+            return TargetSnapshot(
+                rows=(
+                    {
+                        "assignment_id": 5,
+                        "qlts_profile_id": 138,
+                        "full_name": "Trần Thị Bình",
+                        "building_id": 1,
+                        "building_name": "Toà B",
+                        "room_id": 30,
+                        "room_code": "B305",
+                        "bed_no": 13,
+                        "status": "active",
+                    },
+                ),
+                fingerprint="e" * 32,
+            )
+
+        async def open_sync_run(self, *a, **kw):
+            raise AssertionError("xem trước đã MỞ LƯỢT — nó phải chỉ đọc")
+
+        async def upsert_students(self, *a, **kw):
+            raise AssertionError("xem trước đã GHI")
+
+        async def finalize_sync_run(self, *a, **kw):
+            raise AssertionError("xem trước đã HẠ CỜ")
+
+    async def _mot_hang(academic_year, **kwargs):
+        return [_row()]
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _mot_hang)
+    monkeypatch.setattr(sync_module, "DormApi", _Api)
+
+    assert await main(["--academic-year", "2026"]) == 0
+
+    man_hinh = capsys.readouterr().out
+    assert "SẮP MẤT CỜ MÀ VẪN ĐANG GIỮ GIƯỜNG" in man_hinh
+    # Người bấm phải đọc được ĐỦ để nhận ra danh sách có gì sai: là ai, ở đâu.
+    assert "Trần Thị Bình" in man_hinh
+    assert "B305" in man_hinh
+    assert "giường 13" in man_hinh
 
 
 async def test_missing_target_ref_stops_before_reading_the_cohort(monkeypatch):
@@ -513,6 +779,10 @@ async def test_empty_cohort_proceeds_when_opted_in(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
+        async def fetch_target_snapshot(self, academic_year, cohort_ids):
+            self.cohort_ids_da_chup = list(cohort_ids)
+            return _snapshot_gia()
+
     async def _empty_cohort(academic_year, **kwargs):
         return []
 
@@ -546,6 +816,10 @@ async def test_interrupt_mid_write_still_closes_the_run(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
+        async def fetch_target_snapshot(self, academic_year, cohort_ids):
+            self.cohort_ids_da_chup = list(cohort_ids)
+            return _snapshot_gia()
+
         async def open_sync_run(
             self, academic_year, client_token, raw_count, *, la_lan_chay_lai=False
         ):
@@ -554,7 +828,9 @@ async def test_interrupt_mid_write_still_closes_the_run(monkeypatch):
         async def upsert_students(self, run_id, rows):
             raise KeyboardInterrupt
 
-        async def finalize_sync_run(self, run_id, source_count, upserted_count):
+        async def finalize_sync_run(
+        self, run_id, source_count, upserted_count, expected_target_fingerprint
+    ):
             # ⚠️ KHÔNG raise ở đây: `main` bắt `BaseException`, nên một
             # `AssertionError` sẽ bị nuốt và test xanh dù hạ cờ ĐÃ chạy. Ghi
             # nhận rồi khẳng định ở ngoài — cùng lý do với ca dừng bên dưới.
@@ -603,12 +879,18 @@ async def test_stop_request_blocks_the_finalizer_when_the_loop_never_ran(monkeyp
         async def __aexit__(self, *exc):
             return False
 
+        async def fetch_target_snapshot(self, academic_year, cohort_ids):
+            self.cohort_ids_da_chup = list(cohort_ids)
+            return _snapshot_gia()
+
         async def open_sync_run(
             self, academic_year, client_token, raw_count, *, la_lan_chay_lai=False
         ):
             return OpenSyncRunResult(91)
 
-        async def finalize_sync_run(self, run_id, source_count, upserted_count):
+        async def finalize_sync_run(
+        self, run_id, source_count, upserted_count, expected_target_fingerprint
+    ):
             # ⚠️ KHÔNG raise ở đây: `main` bắt `BaseException`, nên một
             # `AssertionError` sẽ bị nuốt và test xanh dù hạ cờ ĐÃ chạy. Phải
             # ghi nhận rồi khẳng định ở ngoài.

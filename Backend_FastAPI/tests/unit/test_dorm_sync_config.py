@@ -249,3 +249,50 @@ def test_loi_hang_rao_KHONG_ro_ha_tang_ra_HTTP():
     assert json.loads(than)["error_code"] == "DORM_SYNC_GUARD_MISMATCH"
     # Còn người vận hành vẫn có bản đầy đủ.
     assert "qlts_production" in loi.operator_detail
+
+
+def test_loi_DICH_chi_dung_cho_va_khong_ro_hostname():
+    """🔴 Hai hàng rào, hai mã lỗi — nhưng KHÔNG bên nào rò hạ tầng.
+
+    Cùng một lớp cho cả nguồn lẫn đích thì dòng lỗi duy nhất client nhận được
+    lại chỉ họ đi kiểm sai chỗ: hỏng vì stack trỏ nhầm database là một việc,
+    hỏng vì ``DORM_SUPABASE_URL`` lệch ``DORM_SYNC_TARGET_PROJECT_REF`` là việc
+    khác hẳn, sửa ở hai nơi khác nhau.
+
+    ⚠️ Vẫn đi qua ĐÚNG handler thật: chính nó quyết định cái gì ra tới client.
+    """
+    import asyncio
+    import json
+
+    from app.middleware.exception_handlers import base_app_exception_handler
+    from app.services.dorm_sync_service import assert_target_project_matches
+    from app.utils.exceptions import DormSyncGuardError, DormSyncTargetMismatchError
+
+    with pytest.raises(DormSyncTargetMismatchError) as bat:
+        assert_target_project_matches(
+            "https://sai-project.supabase.co", "wkrwceedapisacgyujtg"
+        )
+    loi = bat.value
+
+    # Bắt được bằng lớp CHA: mọi `except DormSyncGuardError` đang có vẫn chạy.
+    assert isinstance(loi, DormSyncGuardError)
+
+    yeu_cau = SimpleNamespace(
+        url=SimpleNamespace(path="/api/v2/admin/dorm-sync/apply"), method="POST"
+    )
+    phan_hoi = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        base_app_exception_handler(yeu_cau, loi)
+    )
+    than = phan_hoi.body.decode()
+
+    assert "sai-project" not in than
+    assert "wkrwceedapisacgyujtg" not in than
+    assert "supabase.co" not in than
+    # Nhưng client rẽ nhánh được, và mã KHÁC mã của hàng rào nguồn.
+    assert json.loads(than)["error_code"] == "DORM_SYNC_TARGET_MISMATCH"
+    assert (
+        DormSyncTargetMismatchError.error_code != DormSyncGuardError.error_code
+    ), "hai hàng rào phải phân biệt được ở phía client"
+    # Người vận hành vẫn có đủ để sửa biến môi trường.
+    assert "sai-project" in loi.operator_detail
+    assert "wkrwceedapisacgyujtg" in loi.operator_detail

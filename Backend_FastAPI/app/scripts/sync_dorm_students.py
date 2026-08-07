@@ -100,7 +100,9 @@ from app.utils.exceptions import DormSyncConfigError, DormSyncGuardError
 from app.services.dorm_sync_service import (  # noqa: F401
     DormApi,
     DormSyncNotice,
+    LoaiThongBao,
     OpenSyncRunResult,
+    TargetSnapshot,
     _DANG_MA_SQLSTATE,
     _GENDER_MAP,
     _LOOPBACK_HOSTS,
@@ -113,6 +115,7 @@ from app.services.dorm_sync_service import (  # noqa: F401
     _client_note,
     _doc_hang_sync_run,
     _doc_so_lieu_lo,
+    _doc_target_snapshot,
     _ghep_dinh_danh,
     assert_live_source_matches,
     assert_payload_contract,
@@ -246,6 +249,43 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 
 
+_MAU_THONG_BAO = {
+    LoaiThongBao.LUOT_CU_DANG_CHAY: lambda tb: (
+        f"  ⚠️ Có lượt #{tb.run_id} đang chạy mang dấu "
+        f"'{tb.dau}' của lần chạy TRƯỚC."
+    ),
+    # RPC cố ý KHÔNG hạ `completed` xuống `failed`. Lượt trước đã xong thật;
+    # nói rõ để người vận hành biết mình đang chạy lượt thứ hai chứ không phải
+    # sửa một lượt hỏng.
+    LoaiThongBao.LUOT_CU_DA_HOAN_TAT: lambda tb: (
+        f"  ⚠️ Lượt #{tb.run_id} hoá ra đã HOÀN TẤT, không phải hỏng. "
+        "Mở lượt mới — đây là một lần đồng bộ nữa, không phải phục hồi."
+    ),
+    LoaiThongBao.LUOT_CU_DA_DONG_SO: lambda tb: (
+        f"  Đã đóng sổ lượt #{tb.run_id} (failed). Mở lượt mới."
+    ),
+}
+
+
+def _in_canh_bao_cho_o(snapshot: TargetSnapshot) -> None:
+    """In danh sách "sắp mất cờ mà vẫn đang giữ giường" — thứ người bấm duyệt.
+
+    🔴 Đây là màn hình quyết định. Lượt đồng bộ KHÔNG đuổi ai ra khỏi phòng,
+    nhưng nó hạ cờ đủ-điều-kiện, và một người đang nằm trên giường mà mất cờ là
+    một ca phải có người nhìn trước khi xảy ra.
+    """
+    print("\n  ── SẮP MẤT CỜ MÀ VẪN ĐANG GIỮ GIƯỜNG ──────────────")
+    if not snapshot.rows:
+        print("    (không có ai)")
+    for hang in snapshot.rows:
+        print(
+            f"    #{hang['qlts_profile_id']} {hang['full_name']} — "
+            f"{hang['building_name']} {hang['room_code']} giường "
+            f"{hang['bed_no']} ({hang['status']})"
+        )
+    print(f"    Dấu vân tay trạng thái: {snapshot.fingerprint}")
+
+
 def _in_thong_bao_phuc_hoi(notices: Sequence[DormSyncNotice]) -> None:
     """In ba thông báo phục hồi lượt cũ mà lõi trả về dưới dạng có kiểu.
 
@@ -260,21 +300,12 @@ def _in_thong_bao_phuc_hoi(notices: Sequence[DormSyncNotice]) -> None:
     cho việc đó lại là một lệnh ``clear()`` mà người gọi phải nhớ.
     """
     for tb in notices:
-        if tb.loai == "lut_cu_dang_chay":
-            print(
-                f"  ⚠️ Có lượt #{tb.run_id} đang chạy mang dấu "
-                f"'{tb.dau}' của lần chạy TRƯỚC."
-            )
-        elif tb.loai == "lut_cu_da_hoan_tat":
-            # RPC cố ý KHÔNG hạ `completed` xuống `failed`. Lượt trước đã xong
-            # thật; nói rõ để người vận hành biết mình đang chạy lượt thứ hai
-            # chứ không phải sửa một lượt hỏng.
-            print(
-                f"  ⚠️ Lượt #{tb.run_id} hoá ra đã HOÀN TẤT, không phải hỏng. "
-                "Mở lượt mới — đây là một lần đồng bộ nữa, không phải phục hồi."
-            )
-        elif tb.loai == "lut_cu_da_dong_so":
-            print(f"  Đã đóng sổ lượt #{tb.run_id} (failed). Mở lượt mới.")
+        # ⚠️ Tra bảng, KHÔNG dùng chuỗi `if/elif` rồi rơi ra ngoài trong im
+        # lặng. Chuỗi `elif` không có `else` nghĩa là một loại cảnh báo mới —
+        # hoặc một loại gõ sai — biến mất khỏi màn hình mà chẳng ai biết, và
+        # `_MAU_THONG_BAO` có ca kiểm buộc nó phủ ĐỦ `LoaiThongBao`. Thiếu một
+        # mục thì `KeyError` nổ ngay, ồn ào hơn hẳn im lặng.
+        print(_MAU_THONG_BAO[tb.loai](tb))
 
 
 async def main(argv: Optional[List[str]] = None) -> int:
@@ -441,6 +472,15 @@ async def _chay(argv: Optional[List[str]] = None) -> int:
             print(f"  Không có số liên hệ  : {khong_co_so}")
             print(f"  Có số phụ            : {co_so_phu}")
             print(f"  Số bị bỏ vì quá dài  : {so_qua_dai}")
+
+            # 🔴 Xem trước PHẢI gọi đúng RPC mà bước ghi sẽ chốt bằng. In một
+            # danh sách dựng theo cách khác là cho người bấm duyệt một thứ rồi
+            # chạy một thứ khác — mà đây đúng là màn hình họ dựa vào để quyết.
+            snapshot = await api.fetch_target_snapshot(
+                args.academic_year, [r.qlts_profile_id for r in rows]
+            )
+            _in_canh_bao_cho_o(snapshot)
+
             print("\n  Truyền --apply để thực sự ghi.")
             return 0
 
@@ -483,6 +523,24 @@ async def _chay(argv: Optional[List[str]] = None) -> int:
         # cùng ``synced_at``, nếu không thì "đồng bộ lần cuối lúc nào" trở thành
         # một dải giờ trải theo tốc độ chạy của từng lô.
         synced_at = datetime.now(timezone.utc).isoformat()
+
+        # 🔴 Chụp TRƯỚC vòng ghi, và chỉ chụp MỘT lần.
+        #
+        # Chốt chống đua chỉ có nghĩa nếu con số mang đi so là trạng thái người
+        # bấm ĐÃ NHÌN. Chụp lại sau mỗi lô — hay chụp ngay trước khi đóng sổ —
+        # sẽ luôn khớp, và chốt trở thành một phép so một giá trị với chính nó:
+        # vẫn xanh, vẫn tốn một lời gọi, và không chặn được gì.
+        try:
+            snapshot = await api.fetch_target_snapshot(
+                args.academic_year, [r.qlts_profile_id for r in rows]
+            )
+        except RuntimeError as exc:
+            print(f"✗ {exc}", file=sys.stderr)
+            outcome, _ = await api.reconcile_after_failure(run_id)
+            print(f"  Lượt #{run_id}: {outcome}.", file=sys.stderr)
+            return 1
+
+        _in_canh_bao_cho_o(snapshot)
 
         upserted = 0
         blocked = 0
@@ -541,7 +599,12 @@ async def _chay(argv: Optional[List[str]] = None) -> int:
             # điệp lúc đó nói về một sự cố không có thật.
             effective = len(rows) - blocked
             deactivated = await api.finalize_sync_run(
-                run_id, source_count=effective, upserted_count=upserted
+                run_id,
+                source_count=effective,
+                upserted_count=upserted,
+                # NGUYÊN VĂN dấu vân tay đã chụp trước vòng ghi — không chụp
+                # lại. Xem khối bình luận ở chỗ gọi `fetch_target_snapshot`.
+                expected_target_fingerprint=snapshot.fingerprint,
             )
 
         # ⚠️ ``BaseException``, không phải ``Exception``. ``KeyboardInterrupt``,

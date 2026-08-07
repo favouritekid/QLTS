@@ -27,7 +27,8 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from enum import StrEnum
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 import httpx
@@ -36,7 +37,11 @@ from sqlalchemy import text
 
 from app.database import AsyncSessionLocal
 from app.repositories.dorm_export_repository import select_paid_hk1_cohort
-from app.utils.exceptions import DormSyncConfigError, DormSyncGuardError
+from app.utils.exceptions import (
+    DormSyncConfigError,
+    DormSyncGuardError,
+    DormSyncTargetMismatchError,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -409,7 +414,7 @@ def assert_target_project_matches(base_url: str, expected_ref: str) -> None:
         # đích được duyệt — đi thẳng vào traceback. ``DormSyncGuardError`` tách
         # đôi: ``detail`` ở cấp lớp là câu chung chung ra HTTP, bản chi tiết
         # nằm ở ``operator_detail`` cho người vận hành trước terminal.
-        raise DormSyncGuardError(
+        raise DormSyncTargetMismatchError(
             f"DORM_SUPABASE_URL trỏ tới '{host}' nhưng project được duyệt là "
             f"'{expected_ref}' (mong đợi '{expected_host}').\n"
             "  Đây là đích NHẬN dữ liệu cá nhân — sai project nghĩa là gửi cả "
@@ -417,6 +422,24 @@ def assert_target_project_matches(base_url: str, expected_ref: str) -> None:
             "ánh xạ domain sang ref, không đoán.",
             context={"guard": "target_project_ref"},
         )
+
+
+class LoaiThongBao(StrEnum):
+    """Tập ĐÓNG các tình huống phục hồi lượt cũ.
+
+    🔴 Vì sao không để ``str``: nơi trình bày rẽ nhánh theo giá trị này, và một
+    chuỗi tự do thì gõ sai vẫn chạy — chỉ là không nhánh nào khớp, nên cảnh báo
+    BIẾN MẤT trong im lặng. Người vận hành không thấy dòng "đã đóng sổ lượt
+    #11" thì tưởng lượt cũ vẫn còn sống, và đó là lúc họ đi sửa tay một thứ đã
+    được sửa rồi.
+
+    Là ``StrEnum`` nên nó vẫn so được với chuỗi và tuần tự hoá thẳng ra JSON
+    cho đường web sắp tới — không phải đổi kiểu lần nữa ở bước 9.
+    """
+
+    LUOT_CU_DANG_CHAY = "lut_cu_dang_chay"
+    LUOT_CU_DA_HOAN_TAT = "lut_cu_da_hoan_tat"
+    LUOT_CU_DA_DONG_SO = "lut_cu_da_dong_so"
 
 
 @dataclass(frozen=True)
@@ -428,9 +451,15 @@ class DormSyncNotice:
     đã xảy ra.
     """
 
-    loai: str
+    loai: LoaiThongBao
     run_id: int
     dau: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # ⚠️ Ép qua enum ngay lúc dựng, không chỉ khai kiểu. Chú thích kiểu ở
+        # Python không kiểm gì lúc chạy, nên một `loai="lut_cu_dang_chayy"`
+        # vẫn dựng được object và chỉ hỏng ở nơi trình bày — xa chỗ gõ sai.
+        object.__setattr__(self, "loai", LoaiThongBao(self.loai))
 
 
 @dataclass(frozen=True)
@@ -501,11 +530,101 @@ _THONG_DIEP_THEO_MA: Dict[str, str] = {
     "P0137": "Lệch contract: raw khác nguồn cộng phần bị chặn.",
     "P0138": "Số bản ghi mang dấu lượt không khớp số đã ghi.",
     "P0139": "Lượt không có `raw_count` — không đối soát được.",
+    "P0191": (
+        "Thiếu ảnh chụp chỗ ở phía KTX — lượt này chưa qua bước xem trước."
+    ),
+    "P0192": (
+        "Chỗ ở phía ký túc xá ĐÃ ĐỔI sau khi xem trước. Có người vừa nhận "
+        "hoặc đổi giường; xem lại danh sách cảnh báo rồi chạy lại."
+    ),
     # tombstone_student
     "P0120": "Học viên còn chỗ ở đang hoạt động.",
 }
 
 _DANG_MA_SQLSTATE = re.compile(r"^[0-9A-Z]{5}$")
+
+# md5 hệ 16 chữ thường, đúng 32 ký tự — dạng `md5()` của Postgres trả về.
+_DANG_FINGERPRINT = re.compile(r"^[0-9a-f]{32}$")
+
+# Những trường của một hàng cảnh báo mà NGƯỜI BẤM đọc trước khi quyết định.
+# Kiểm đủ cả tập: thiếu một trường thì dòng cảnh báo in ra "None" ở đúng chỗ
+# lẽ ra nói người đó đang nằm giường nào — mà đó là thông tin duy nhất giúp họ
+# nhận ra danh sách này có gì sai.
+_TRUONG_CANH_BAO = (
+    ("qlts_profile_id", int),
+    ("full_name", str),
+    ("building_name", str),
+    ("room_code", str),
+    ("bed_no", int),
+    ("status", str),
+)
+
+
+@dataclass(frozen=True)
+class TargetSnapshot:
+    """Ảnh chụp "ai sắp mất cờ mà vẫn đang giữ giường", kèm dấu vân tay của nó.
+
+    🔴 MỘT lời gọi trả cả hai. Hai lời gọi HTTP là hai ảnh chụp khác nhau: một
+    thay đổi chen vào giữa sẽ khiến người bấm nhìn danh sách A trong khi con số
+    mang đi chốt lại nói về trạng thái B — đúng cái chốt này sinh ra để chặn,
+    chỉ dịch sang chỗ khác.
+
+    🔴 ``fingerprint`` do DATABASE tính. Dựng lại chuỗi canonical rồi băm bằng
+    Python là đặt cược rằng hai bên serialize giống hệt nhau, và cược đó chỉ
+    được thanh toán ở production — sau khi đã upsert xong.
+    """
+
+    rows: Tuple[Dict[str, Any], ...]
+    fingerprint: str
+
+
+def _doc_target_snapshot(body: Any) -> TargetSnapshot:
+    """Đọc phản hồi của ``dorm_sync_target_snapshot`` — fail-closed từng bước.
+
+    ⚠️ Con số này đi thẳng vào ``finalize_sync_run`` làm điều kiện hạ cờ. Nhận
+    bừa một thân phản hồi lạ nghĩa là mang một chuỗi vô nghĩa đi chốt: hoặc nó
+    không khớp và mọi lượt bị chặn, hoặc — tệ hơn — ai đó "sửa" bằng cách bỏ
+    chốt đi.
+    """
+
+    def _hong(vi_sao: str) -> RuntimeError:
+        return RuntimeError(
+            f"Ảnh chụp chỗ ở phía KTX không đọc được: {vi_sao}. KHÔNG chạy "
+            "tiếp — giá trị này là điều kiện của bước hạ cờ."
+        )
+
+    # PostgREST trả thẳng giá trị của hàm `returns jsonb` (scalar), nhưng vẫn
+    # nhận mảng một phần tử phòng khi ai đó đổi sang `returns setof`.
+    if isinstance(body, list):
+        if len(body) != 1:
+            raise _hong("phản hồi là mảng nhưng không có đúng một phần tử")
+        body = body[0]
+
+    if not isinstance(body, dict):
+        raise _hong("phản hồi không phải object")
+
+    fingerprint = body.get("fingerprint")
+    if not isinstance(fingerprint, str) or not _DANG_FINGERPRINT.match(fingerprint):
+        # ⚠️ KHÔNG in giá trị nhận được: nó do phía kia kiểm soát và sẽ đi
+        # thẳng vào log qua đúng cái cửa `_raise_for_status` vừa đóng.
+        raise _hong("`fingerprint` không phải chuỗi md5 32 ký tự")
+
+    rows = body.get("rows")
+    if not isinstance(rows, list):
+        raise _hong("`rows` không phải mảng")
+
+    for row in rows:
+        if not isinstance(row, dict):
+            raise _hong("một phần tử của `rows` không phải object")
+        for ten, kieu in _TRUONG_CANH_BAO:
+            gia_tri = row.get(ten)
+            # `bool` là lớp con của `int` — không phải một số hợp lệ ở đây.
+            if kieu is int and isinstance(gia_tri, bool):
+                raise _hong(f"`{ten}` là bool, không phải số nguyên")
+            if not isinstance(gia_tri, kieu):
+                raise _hong(f"hàng cảnh báo thiếu `{ten}` hoặc sai kiểu")
+
+    return TargetSnapshot(rows=tuple(rows), fingerprint=fingerprint)
 
 
 def doc_ma_loi(response: httpx.Response) -> Optional[str]:
@@ -526,6 +645,42 @@ def doc_ma_loi(response: httpx.Response) -> Optional[str]:
     if isinstance(ma, str) and _DANG_MA_SQLSTATE.match(ma):
         return ma
     return None
+
+
+# 🔴 Những mã mà database đã QUYẾT ĐỊNH — thử lại chỉ nhận đúng câu trả lời đó.
+#
+# ⚠️ Vì sao cần danh sách này ở bước đóng sổ: PostgREST ánh xạ MỌI SQLSTATE bắt
+# đầu bằng `P0` (trừ P0001/P0002/P0003) sang **HTTP 500**. Mà nhánh 5xx của
+# `finalize_sync_run` cố ý coi 500 là "mơ hồ, có thể gateway" rồi đối soát và
+# thử lại — đúng và cần thiết cho một 502 thật, nhưng với P0192 thì nó biến một
+# lời từ chối dứt khoát thành ba lượt thử cách nhau vài giây, và kết thúc bằng
+# thông điệp "trạng thái lượt CHƯA rõ" trong khi database đã nói rất rõ.
+#
+# Phân biệt bằng THÂN phản hồi: một 500 mang SQLSTATE của ta nghĩa là lời gọi
+# đã tới database và database đã trả lời. Một 502 từ gateway không có thân JSON
+# nào như vậy.
+#
+# ⚠️ Tập này khai TƯỜNG MINH chứ không phải "mọi mã đọc được". Một mã lạ (ví dụ
+# `57P01` — server ngắt kết nối) rơi về nhánh đối soát-rồi-thử-lại như cũ, tức
+# vẫn là hành vi an toàn hơn.
+_MA_DUT_KHOAT_KHI_DONG_SO = frozenset(
+    {
+        "P0002",  # không tìm thấy lượt
+        "P0102",  # không tìm thấy lượt
+        "P0113",  # lượt không còn `running`
+        "P0130",
+        "P0131",
+        "P0132",
+        "P0133",  # đã kết thúc với số liệu khác
+        "P0135",
+        "P0136",
+        "P0137",
+        "P0138",
+        "P0139",
+        "P0191",  # thiếu fingerprint
+        "P0192",  # fingerprint lệch — chỗ ở đã đổi
+    }
+)
 
 
 class DormApi:
@@ -1143,8 +1298,50 @@ class DormApi:
         total = response.headers.get("content-range", "").split("/")[-1]
         return int(total) if total.isdigit() else None
 
+    async def fetch_target_snapshot(
+        self, academic_year: int, cohort_ids: Sequence[int]
+    ) -> TargetSnapshot:
+        """Ảnh chụp "ai sắp mất cờ mà vẫn đang giữ giường" + dấu vân tay.
+
+        ``cohort_ids`` là tập hồ sơ SẮP ĐƯỢC GHI ở lượt này; RPC loại họ ra rồi
+        mới liệt kê phần còn lại.
+
+        ⚠️ Truyền ĐỦ tập yêu cầu, kể cả những hàng sau đó sẽ bị chặn. Lúc đóng
+        sổ, database tự dựng lại ``p_cohort_ids`` từ ``last_seen_sync_id`` — tức
+        tập THỰC SỰ ghi được, hẹp hơn tập gửi đi. Hai tập vẫn cho cùng một
+        fingerprint vì phần chênh lệch là hàng nằm trong blocklist tombstone,
+        mà vị từ của snapshot đã loại chúng bằng ``s.deleted_at is null``.
+        Không có bất biến đó thì mọi lượt có ``blocked > 0`` sẽ vấp P0192.
+
+        ⚠️ KHÔNG gọi wrapper ``dorm_sync_target_fingerprint`` rồi lấy danh sách
+        bằng một lời gọi thứ hai: hai lời gọi là hai ảnh chụp.
+        """
+        response = await self._client.post(
+            f"{self._base}/rpc/dorm_sync_target_snapshot",
+            headers=self._headers,
+            json={
+                "p_academic_year": academic_year,
+                "p_cohort_ids": list(cohort_ids),
+            },
+        )
+        self._raise_for_status(response, "Đọc ảnh chụp chỗ ở phía KTX")
+
+        try:
+            than = response.json()
+        except (ValueError, TypeError):
+            raise RuntimeError(
+                "Ảnh chụp chỗ ở phía KTX không đọc được: phản hồi không phải "
+                "JSON. KHÔNG chạy tiếp — giá trị này là điều kiện của bước hạ cờ."
+            ) from None
+
+        return _doc_target_snapshot(than)
+
     async def finalize_sync_run(
-        self, run_id: int, source_count: int, upserted_count: int
+        self,
+        run_id: int,
+        source_count: int,
+        upserted_count: int,
+        expected_target_fingerprint: str,
     ) -> int:
         """Hạ cờ đủ-điều-kiện VÀ đóng lượt — trong cùng một transaction.
 
@@ -1175,6 +1372,11 @@ class DormApi:
             "p_run_id": run_id,
             "p_source_count": source_count,
             "p_upserted_count": upserted_count,
+            # 🔴 Gửi NGUYÊN VĂN chuỗi database đã trả ở bước xem trước. Chuẩn
+            # hoá, cắt khoảng trắng hay băm lại đều là dựng một công thức thứ
+            # hai song song với công thức của database — và hai công thức song
+            # song thì lệch nhau ngay lần sửa đầu.
+            "p_expected_target_fingerprint": expected_target_fingerprint,
         }
 
         last_error: Optional[Exception] = None
@@ -1207,7 +1409,13 @@ class DormApi:
             # `failed` trong khi cả cohort đã bị đổi `source_eligible`. Hỏi lại
             # trước khi kết luận — hàm phía database idempotent nên đọc lại an
             # toàn.
-            if response.status_code == 408 or response.status_code >= 500:
+            ma_ung_dung = doc_ma_loi(response)
+            la_mo_ho = (
+                response.status_code == 408
+                or response.status_code >= 500
+            ) and ma_ung_dung not in _MA_DUT_KHOAT_KHI_DONG_SO
+
+            if la_mo_ho:
                 hang_doi_soat = None
                 try:
                     hang_doi_soat = await self.get_sync_run(run_id)

@@ -1371,7 +1371,9 @@ class _ApiGhiNhan:
         self._so_bi_chan -= chan
         return len(rows) - chan, chan
 
-    async def finalize_sync_run(self, run_id, source_count, upserted_count):
+    async def finalize_sync_run(
+        self, run_id, source_count, upserted_count, expected_target_fingerprint
+    ):
         self.finalize_args = (source_count, upserted_count)
         return 0
 
@@ -1426,11 +1428,12 @@ async def test_finalize_succeeds_on_the_main_path_without_reconciling():
         _FakeResponse(payload={"id": 9, "status": "completed", "deactivated_count": 3})
     )
 
-    assert await _api_with(client).finalize_sync_run(9, 5, 5) == 3
+    assert await _api_with(client).finalize_sync_run(9, 5, 5, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") == 3
 
     assert len(client.calls) == 1
     assert client.calls[0]["url"].endswith("/rpc/finalize_sync_run")
     assert client.calls[0]["json"] == {
+        "p_expected_target_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "p_run_id": 9,
         "p_source_count": 5,
         "p_upserted_count": 5,
@@ -1461,7 +1464,7 @@ async def test_error_maps_the_code_and_never_echoes_the_server_message():
     )
 
     with pytest.raises(RuntimeError) as exc:
-        await _api_with(client).finalize_sync_run(9, 5, 4)
+        await _api_with(client).finalize_sync_run(9, 5, 4, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
     loi = str(exc.value)
     assert "[P0136]" in loi
@@ -1690,10 +1693,241 @@ async def test_finalize_reconciles_a_gateway_5xx_instead_of_declaring_failure():
 
     client = _GatewayHongRoiDoiSoat()
 
-    assert await _api_with(client).finalize_sync_run(9, 5, 5) == 4
+    assert await _api_with(client).finalize_sync_run(9, 5, 5, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") == 4
 
     # Đã hỏi lại thay vì ném thẳng.
     assert any(c["method"] == "GET" for c in client.calls)
+
+
+async def test_finalize_refuses_a_stale_fingerprint_without_retrying():
+    """🔴 P0192 là câu trả lời DỨT KHOÁT — thử lại chỉ nhận đúng nó ba lần.
+
+    PostgREST ánh xạ mọi SQLSTATE `P0*` (trừ P0001/2/3) sang HTTP 500, mà nhánh
+    5xx của hàm này cố ý coi 500 là "có thể gateway" rồi đối soát và thử lại.
+    Đúng cho một 502 thật; với P0192 thì nó biến một lời từ chối rõ ràng thành
+    ba lượt thử cách nhau vài giây rồi kết luận "trạng thái lượt CHƯA rõ" —
+    trong khi database đã nói rất rõ là chỗ ở đã đổi.
+
+    Ca này khoá hai điều: đúng MỘT lời gọi được phát ra, và thông điệp nói cho
+    người vận hành biết phải xem lại danh sách cảnh báo.
+    """
+    client = _RecordingClient(
+        _FakeResponse(
+            status_code=500,
+            payload={
+                "code": "P0192",
+                "message": "Cho o phia ky tuc xa da doi",
+                "detail": "mong aaa, thuc bbb",
+            },
+        )
+    )
+    api = _api_with(client)
+
+    with pytest.raises(RuntimeError) as exc:
+        await api.finalize_sync_run(9, 5, 5, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+
+    loi = str(exc.value)
+    assert "[P0192]" in loi
+    assert "ĐÃ ĐỔI sau khi xem trước" in loi
+    # ⚠️ Vế QUYẾT ĐỊNH của ca này. Bỏ nó đi thì một bản vá thử lại ba lần vẫn
+    # xanh, vì rốt cuộc nó cũng ném RuntimeError mang cùng mã.
+    assert len(client.calls) == 1, "P0192 đã bị thử lại như một lỗi mạng"
+
+
+async def test_finalize_still_reconciles_a_gateway_500_without_a_code():
+    """Vế NGƯỢC: 500 KHÔNG mang SQLSTATE vẫn phải đối soát rồi thử lại.
+
+    Không có ca này thì một bản vá "coi mọi 500 là dứt khoát" vẫn xanh — và nó
+    đánh dấu `failed` cho những lượt đã hạ cờ xong mà phản hồi hỏng trên đường
+    về, tức ghi sai sổ ở đúng bước phá huỷ nhất.
+    """
+
+    class _GatewayTrangTron:
+        def __init__(self):
+            self.calls = []
+
+        async def post(self, url, headers=None, params=None, json=None):
+            self.calls.append({"method": "POST", "url": url})
+            # Gateway thật trả HTML/plain, không có `code` nào đọc được.
+            return _FakeResponse(status_code=502, payload={"error": "bad gateway"})
+
+        async def get(self, url, headers=None, params=None):
+            self.calls.append({"method": "GET", "url": url})
+            return _FakeResponse(
+                payload=[{"id": 9, "status": "completed", "deactivated_count": 4}]
+            )
+
+    client = _GatewayTrangTron()
+
+    assert await _api_with(client).finalize_sync_run(9, 5, 5, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") == 4
+    assert any(c["method"] == "GET" for c in client.calls)
+
+
+# ---------------------------------------------------------------------------
+# Ảnh chụp chỗ ở phía KTX — MỘT lời gọi, cả danh sách lẫn dấu vân tay
+# ---------------------------------------------------------------------------
+
+
+async def test_snapshot_uses_one_rpc_for_both_rows_and_fingerprint():
+    """🔴 MỘT lời gọi. Hai lời gọi HTTP là hai ảnh chụp khác nhau.
+
+    Lấy danh sách bằng ``dorm_sync_target_snapshot`` rồi lấy dấu vân tay bằng
+    ``dorm_sync_target_fingerprint`` là mở lại đúng khe hở mà chốt này sinh ra
+    để đóng: một thay đổi chen vào giữa hai lời gọi khiến người bấm nhìn danh
+    sách A trong khi con số mang đi chốt nói về trạng thái B.
+    """
+    client = _RecordingClient(
+        _FakeResponse(
+            payload={
+                "rows": [
+                    {
+                        "assignment_id": 5,
+                        "qlts_profile_id": 9001,
+                        "full_name": "Nguyễn Văn An",
+                        "building_id": 1,
+                        "building_name": "Toà B",
+                        "room_id": 30,
+                        "room_code": "B305",
+                        "bed_no": 13,
+                        "status": "active",
+                    }
+                ],
+                "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            }
+        )
+    )
+
+    snapshot = await _api_with(client).fetch_target_snapshot(2026, [9002, 9003])
+
+    assert snapshot.fingerprint == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    assert snapshot.rows[0]["room_code"] == "B305"
+    assert len(client.calls) == 1, "phải đúng MỘT lời gọi cho cả hai thứ"
+    assert client.calls[0]["url"].endswith("/rpc/dorm_sync_target_snapshot")
+    assert client.calls[0]["json"] == {
+        "p_academic_year": 2026,
+        "p_cohort_ids": [9002, 9003],
+    }
+
+
+@pytest.mark.parametrize(
+    "than, vi_sao",
+    [
+        ({"rows": [], "fingerprint": "khong-phai-md5"}, "fingerprint sai dạng"),
+        ({"rows": [], "fingerprint": "A" * 32}, "md5 phải là chữ THƯỜNG"),
+        ({"rows": [], "fingerprint": "a" * 31}, "thiếu một ký tự"),
+        ({"rows": []}, "vắng hẳn fingerprint"),
+        ({"fingerprint": "a" * 32}, "vắng rows"),
+        ({"rows": {}, "fingerprint": "a" * 32}, "rows không phải mảng"),
+        ({"rows": ["khong-phai-object"], "fingerprint": "a" * 32}, "hàng không phải object"),
+    ],
+)
+async def test_snapshot_parser_is_fail_closed(than, vi_sao):
+    """Thân phản hồi lạ thì DỪNG, không đoán.
+
+    Giá trị này là điều kiện của bước hạ cờ. Nhận bừa nghĩa là mang một chuỗi
+    vô nghĩa đi chốt: hoặc nó không khớp và mọi lượt bị chặn, hoặc — tệ hơn —
+    có người "sửa" bằng cách bỏ chốt đi.
+    """
+    client = _RecordingClient(_FakeResponse(payload=than))
+
+    with pytest.raises(RuntimeError) as exc:
+        await _api_with(client).fetch_target_snapshot(2026, [])
+
+    assert "Ảnh chụp chỗ ở phía KTX không đọc được" in str(exc.value), vi_sao
+
+
+@pytest.mark.parametrize(
+    "thieu", ["qlts_profile_id", "full_name", "building_name", "room_code", "bed_no", "status"]
+)
+async def test_snapshot_checks_every_field_the_operator_reads(thieu):
+    """Từng trường một, không gộp.
+
+    Người bấm đọc đúng những trường này rồi quyết định. Thiếu một trường thì
+    dòng cảnh báo in "None" ngay chỗ lẽ ra nói người đó nằm giường nào — mà đó
+    là thông tin duy nhất giúp họ nhận ra danh sách có gì sai.
+    """
+    hang = {
+        "assignment_id": 5,
+        "qlts_profile_id": 9001,
+        "full_name": "Nguyễn Văn An",
+        "building_id": 1,
+        "building_name": "Toà B",
+        "room_id": 30,
+        "room_code": "B305",
+        "bed_no": 13,
+        "status": "active",
+    }
+    del hang[thieu]
+    client = _RecordingClient(
+        _FakeResponse(payload={"rows": [hang], "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        await _api_with(client).fetch_target_snapshot(2026, [])
+
+    assert thieu in str(exc.value)
+
+
+async def test_snapshot_refuses_a_bool_where_a_number_belongs():
+    """``bool`` là lớp con của ``int`` — ``True`` không phải số giường."""
+    hang = {
+        "assignment_id": 5,
+        "qlts_profile_id": 9001,
+        "full_name": "An",
+        "building_id": 1,
+        "building_name": "B",
+        "room_id": 30,
+        "room_code": "B305",
+        "bed_no": True,
+        "status": "active",
+    }
+    client = _RecordingClient(
+        _FakeResponse(payload={"rows": [hang], "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        await _api_with(client).fetch_target_snapshot(2026, [])
+
+    assert "bool" in str(exc.value)
+
+
+async def test_empty_snapshot_still_has_a_fingerprint():
+    """"Không ai sắp mất cờ" là trạng thái HỢP LỆ và phải so khớp được.
+
+    Nó có dấu vân tay riêng (`md5('')`), khác hẳn "không đọc được". Gộp hai ca
+    thành cùng một giá trị rỗng sẽ khiến chốt cho qua đúng lúc nó không biết gì.
+    """
+    md5_rong = "d41d8cd98f00b204e9800998ecf8427e"
+    client = _RecordingClient(
+        _FakeResponse(payload={"rows": [], "fingerprint": md5_rong})
+    )
+
+    snapshot = await _api_with(client).fetch_target_snapshot(2026, [])
+
+    assert snapshot.rows == ()
+    assert snapshot.fingerprint == md5_rong
+
+
+# ---------------------------------------------------------------------------
+# Kiểu cảnh báo ĐÓNG
+# ---------------------------------------------------------------------------
+
+
+def test_notice_kind_is_a_closed_type():
+    """Gõ sai một loại phải nổ NGAY LÚC DỰNG, không phải im lặng ở nơi in.
+
+    Chú thích kiểu của Python không kiểm gì lúc chạy, nên nếu chỉ khai
+    ``loai: LoaiThongBao`` thì một chuỗi gõ thừa ký tự vẫn dựng được object và
+    chỉ hỏng ở nơi trình bày — xa chỗ gõ sai, và ở đó nó hỏng bằng cách KHÔNG
+    in gì cả.
+    """
+    from app.services.dorm_sync_service import DormSyncNotice, LoaiThongBao
+
+    tb = DormSyncNotice(loai="lut_cu_da_dong_so", run_id=11)
+    assert tb.loai is LoaiThongBao.LUOT_CU_DA_DONG_SO
+
+    with pytest.raises(ValueError):
+        DormSyncNotice(loai="lut_cu_da_dong_soo", run_id=11)
 
 
 # ---------------------------------------------------------------------------

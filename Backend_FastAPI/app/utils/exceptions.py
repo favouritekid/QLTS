@@ -499,7 +499,12 @@ class DormSyncGuardError(ServiceError):
     """
 
     status_code = status.HTTP_409_CONFLICT
-    detail = "Nguồn dữ liệu không khớp khai báo; từ chối ghi."
+    # ⚠️ Câu này ra tới client, và lớp này nay che CẢ hai hàng rào — nguồn lẫn
+    # đích. Nói riêng về "nguồn" sẽ chỉ người đọc đi kiểm sai chỗ đúng vào lúc
+    # họ chỉ có mỗi dòng này để đi tiếp. Ca đích có lớp con riêng ngay dưới,
+    # mang `error_code` riêng để client rẽ nhánh được mà không cần biết
+    # hostname hay project ref.
+    detail = "Danh tính nguồn hoặc đích không khớp khai báo; từ chối ghi."
     error_code = "DORM_SYNC_GUARD_MISMATCH"
 
     def __init__(self, operator_detail: str, context: Optional[Dict[str, Any]] = None):
@@ -522,6 +527,23 @@ class DormSyncGuardError(ServiceError):
 
     def __str__(self) -> str:
         return self.operator_detail
+
+
+class DormSyncTargetMismatchError(DormSyncGuardError):
+    """URL đích không thuộc project Supabase đã được duyệt.
+
+    🔴 Tách khỏi lớp cha để người vận hành biết ĐI KIỂM CHỖ NÀO. Hai hàng rào
+    hỏi hai câu khác nhau — "đọc từ database nào" và "gửi tới project nào" — và
+    chúng hỏng vì hai lý do khác nhau: một bên là stack trỏ nhầm nguồn, bên kia
+    là biến ``DORM_SUPABASE_URL`` / ``DORM_SYNC_TARGET_PROJECT_REF`` lệch nhau.
+    Trả cùng một mã cho cả hai thì dòng lỗi duy nhất họ có lại chỉ sai hướng.
+
+    ⚠️ ``detail`` vẫn KHÔNG mang hostname hay project ref — đó là mô tả hạ
+    tầng. Bản chi tiết nằm ở ``operator_detail``.
+    """
+
+    detail = "Đích đồng bộ không thuộc project đã được duyệt; từ chối gửi."
+    error_code = "DORM_SYNC_TARGET_MISMATCH"
 
 
 class DormSyncConfigError(ServiceError):
