@@ -593,13 +593,15 @@ def _doc_target_snapshot(body: Any) -> TargetSnapshot:
             "tiếp — giá trị này là điều kiện của bước hạ cờ."
         )
 
-    # PostgREST trả thẳng giá trị của hàm `returns jsonb` (scalar), nhưng vẫn
-    # nhận mảng một phần tử phòng khi ai đó đổi sang `returns setof`.
-    if isinstance(body, list):
-        if len(body) != 1:
-            raise _hong("phản hồi là mảng nhưng không có đúng một phần tử")
-        body = body[0]
-
+    # 🔴 CHỈ object. `dorm_sync_target_snapshot` khai `returns jsonb` scalar,
+    # nên PostgREST trả thẳng object — mảng là hình dạng KHÁC contract.
+    #
+    # ⚠️ Bản trước tự tháo mảng một phần tử "phòng khi ai đó đổi sang
+    # `returns setof`". Đó chính là cách một thay đổi contract đi qua mà không
+    # ai biết: ngày phía KTX đổi kiểu trả về, client vẫn chạy, vẫn xanh, và thứ
+    # duy nhất lẽ ra báo động — một lời từ chối ồn ào — đã được gỡ trước.
+    # Contract đổi thì phải có người quyết định, không phải một nhánh im lặng
+    # nhận cả hai dạng.
     if not isinstance(body, dict):
         raise _hong("phản hồi không phải object")
 

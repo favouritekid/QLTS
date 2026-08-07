@@ -550,6 +550,115 @@ async def test_apply_carries_the_previewed_fingerprint_into_the_finalizer(monkey
     assert ghi_nhan["fingerprint"] == FP_XEM_TRUOC
 
 
+async def test_apply_takes_the_snapshot_before_the_first_mutation(monkeypatch):
+    """🔴 Thứ tự: snapshot → mở lượt → ghi → đóng sổ.
+
+    ``open_sync_run`` là mutation ĐẦU TIÊN của cả lượt — nó chèn một hàng
+    ``running`` khoá luôn năm học đó ở hệ KTX (``uq_sync_run_active_per_year``
+    từ chối mọi lần chạy sau). Ảnh chụp là TIỀN ĐỀ của bước đóng sổ và không
+    phụ thuộc ``run_id``, nên chẳng có gì buộc nó chạy sau.
+
+    Ca này ghi lại thứ tự thật của các lời gọi thay vì chỉ kiểm "có gọi cả
+    hai" — kiểm sự hiện diện thì đảo thứ tự vẫn xanh, mà đảo thứ tự đúng là
+    lỗi cần chặn.
+    """
+    _set_target_env(monkeypatch)
+    monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
+
+    thu_tu = []
+
+    class _Api:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def fetch_target_snapshot(self, academic_year, cohort_ids):
+            thu_tu.append("snapshot")
+            return TargetSnapshot(rows=(), fingerprint=_FP_GIA)
+
+        async def open_sync_run(
+            self, academic_year, client_token, raw_count, *, la_lan_chay_lai=False
+        ):
+            thu_tu.append("open")
+            return OpenSyncRunResult(60)
+
+        async def upsert_students(self, run_id, rows):
+            thu_tu.append("upsert")
+            return len(rows), 0
+
+        async def finalize_sync_run(
+            self, run_id, source_count, upserted_count, expected_target_fingerprint
+        ):
+            thu_tu.append("finalize")
+            return 0
+
+    async def _mot_hang(academic_year, **kwargs):
+        return [_row()]
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _mot_hang)
+    monkeypatch.setattr(sync_module, "DormApi", _Api)
+
+    assert await main(["--academic-year", "2026", "--apply"]) == 0
+    assert thu_tu == ["snapshot", "open", "upsert", "finalize"]
+
+
+async def test_a_broken_snapshot_never_opens_a_run(monkeypatch, capsys):
+    """🔴 Ảnh chụp hỏng thì DỪNG, chưa chạm gì để mà dọn.
+
+    Hai vế, và vế thứ hai dễ bị bỏ quên: không mở lượt, VÀ không đối soát.
+    Gọi ``reconcile_after_failure`` cho một ``run_id`` chưa từng tồn tại là hỏi
+    database về một thứ không có rồi diễn giải câu trả lời rỗng thành một kết
+    luận về lượt hiện tại.
+    """
+    _set_target_env(monkeypatch)
+    monkeypatch.setattr(sync_module, "_install_stop_handlers", lambda: None)
+
+    da_goi = []
+
+    class _Api:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def fetch_target_snapshot(self, academic_year, cohort_ids):
+            raise RuntimeError(
+                "Ảnh chụp chỗ ở phía KTX không đọc được: `fingerprint` không "
+                "phải chuỗi md5 32 ký tự."
+            )
+
+        async def open_sync_run(self, *a, **kw):
+            da_goi.append("open")
+            raise AssertionError("đã MỞ LƯỢT dù ảnh chụp hỏng")
+
+        async def reconcile_after_failure(self, run_id):
+            da_goi.append("reconcile")
+            raise AssertionError("đã đối soát một lượt chưa từng được tạo")
+
+    async def _mot_hang(academic_year, **kwargs):
+        return [_row()]
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _mot_hang)
+    monkeypatch.setattr(sync_module, "DormApi", _Api)
+
+    assert await main(["--academic-year", "2026", "--apply"]) == 1
+    assert da_goi == []
+
+    loi = capsys.readouterr().err
+    assert "không đọc được" in loi
+    # Người vận hành phải biết mình KHÔNG cần đi dọn gì.
+    assert "chạy lại là an toàn" in loi
+
+
 async def test_a_changed_fingerprint_keeps_the_batches_but_never_lowers_the_flag(
     monkeypatch,
 ):

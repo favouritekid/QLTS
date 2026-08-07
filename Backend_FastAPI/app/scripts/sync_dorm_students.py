@@ -484,6 +484,38 @@ async def _chay(argv: Optional[List[str]] = None) -> int:
             print("\n  Truyền --apply để thực sự ghi.")
             return 0
 
+        # 🔴 ĐỌC XONG MỌI ĐIỀU KIỆN TRƯỚC KHI GHI DÒNG ĐẦU TIÊN.
+        #
+        # Ảnh chụp là tiền đề của bước đóng sổ, mà `open_sync_run` là mutation
+        # ĐẦU TIÊN của cả lượt — nó chèn một hàng `running` khoá luôn năm học
+        # đó ở hệ KTX. Chụp sau khi mở nghĩa là một lỗi mạng hay một thân phản
+        # hồi hỏng cũng để lại một lượt phải đi đối soát và đóng sổ, cho một
+        # lệnh chưa ghi được gì. Không có gì buộc thứ tự ấy: ảnh chụp không phụ
+        # thuộc `run_id`.
+        #
+        # Chụp MỘT lần, và giữ nguyên tới lúc đóng sổ. Chốt chống đua chỉ có
+        # nghĩa nếu con số mang đi so là trạng thái người bấm ĐÃ NHÌN; chụp lại
+        # trước khi đóng sổ thì nó luôn khớp, và chốt thành phép so một giá trị
+        # với chính nó — vẫn xanh, vẫn tốn một lời gọi, và không chặn được gì.
+        try:
+            snapshot = await api.fetch_target_snapshot(
+                args.academic_year, [r.qlts_profile_id for r in rows]
+            )
+        except RuntimeError as exc:
+            # ⚠️ KHÔNG gọi `reconcile_after_failure` ở đây: chưa có lượt nào
+            # tồn tại để đối soát. Đối soát một `run_id` chưa được tạo là hỏi
+            # database về một thứ không có, rồi diễn giải câu trả lời rỗng
+            # thành một kết luận về lượt hiện tại.
+            print(f"✗ {exc}", file=sys.stderr)
+            print(
+                "  Chưa mở lượt đồng bộ nào — không có gì phải dọn, chạy lại "
+                "là an toàn.",
+                file=sys.stderr,
+            )
+            return 1
+
+        _in_canh_bao_cho_o(snapshot)
+
         # Dấu riêng cho lần chạy này: nếu phản hồi của bước mở lượt bị mất, đây
         # là thứ duy nhất cho phép nhận lại đúng hàng mình vừa tạo.
         #
@@ -523,24 +555,6 @@ async def _chay(argv: Optional[List[str]] = None) -> int:
         # cùng ``synced_at``, nếu không thì "đồng bộ lần cuối lúc nào" trở thành
         # một dải giờ trải theo tốc độ chạy của từng lô.
         synced_at = datetime.now(timezone.utc).isoformat()
-
-        # 🔴 Chụp TRƯỚC vòng ghi, và chỉ chụp MỘT lần.
-        #
-        # Chốt chống đua chỉ có nghĩa nếu con số mang đi so là trạng thái người
-        # bấm ĐÃ NHÌN. Chụp lại sau mỗi lô — hay chụp ngay trước khi đóng sổ —
-        # sẽ luôn khớp, và chốt trở thành một phép so một giá trị với chính nó:
-        # vẫn xanh, vẫn tốn một lời gọi, và không chặn được gì.
-        try:
-            snapshot = await api.fetch_target_snapshot(
-                args.academic_year, [r.qlts_profile_id for r in rows]
-            )
-        except RuntimeError as exc:
-            print(f"✗ {exc}", file=sys.stderr)
-            outcome, _ = await api.reconcile_after_failure(run_id)
-            print(f"  Lượt #{run_id}: {outcome}.", file=sys.stderr)
-            return 1
-
-        _in_canh_bao_cho_o(snapshot)
 
         upserted = 0
         blocked = 0

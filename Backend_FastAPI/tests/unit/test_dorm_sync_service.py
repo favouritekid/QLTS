@@ -1822,6 +1822,38 @@ async def test_snapshot_uses_one_rpc_for_both_rows_and_fingerprint():
     ],
 )
 async def test_snapshot_parser_is_fail_closed(than, vi_sao):
+    """(xem docstring dưới)"""
+    await _kiem_parser_tu_choi(than, vi_sao)
+
+
+@pytest.mark.parametrize(
+    "than, vi_sao",
+    [
+        ([{"rows": [], "fingerprint": "a" * 32}], "mảng MỘT phần tử"),
+        ([], "mảng rỗng"),
+        (
+            [{"rows": [], "fingerprint": "a" * 32}] * 2,
+            "mảng hai phần tử",
+        ),
+    ],
+)
+async def test_snapshot_parser_refuses_a_top_level_array(than, vi_sao):
+    """🔴 Chỉ nhận OBJECT. Mảng một phần tử cũng phải đỏ.
+
+    ``dorm_sync_target_snapshot`` khai ``returns jsonb`` scalar, nên PostgREST
+    trả thẳng object. Tự tháo mảng một phần tử "phòng khi ai đó đổi sang
+    ``returns setof``" nghe như phòng xa, nhưng nó chính là cách một thay đổi
+    contract đi qua mà không ai biết: ngày phía KTX đổi kiểu trả về, client vẫn
+    chạy, vẫn xanh, và thứ duy nhất lẽ ra báo động — một lời từ chối ồn ào — đã
+    được gỡ trước.
+
+    Contract đổi thì phải có người quyết định, không phải một nhánh im lặng
+    nhận cả hai dạng.
+    """
+    await _kiem_parser_tu_choi(than, vi_sao)
+
+
+async def _kiem_parser_tu_choi(than, vi_sao):
     """Thân phản hồi lạ thì DỪNG, không đoán.
 
     Giá trị này là điều kiện của bước hạ cờ. Nhận bừa nghĩa là mang một chuỗi
