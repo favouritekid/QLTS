@@ -10,7 +10,6 @@ duy nhất khi app không lên. Hợp đồng của nó — mã thoát, cờ b�
 sau lô hiện tại — phải được kiểm y như lõi.
 """
 
-import httpx
 import pytest
 from types import SimpleNamespace
 
@@ -18,14 +17,11 @@ from app.scripts import sync_dorm_students as sync_module
 from app.services import dorm_sync_service as service_module
 from app.utils.exceptions import DormSyncConfigError, DormSyncGuardError
 from app.scripts.sync_dorm_students import main, parse_args
-from app.services.dorm_sync_service import DormApi, _TRAN_LO
+
 
 pytestmark = pytest.mark.unit
 
 _DEV_DB_URL = "postgresql+asyncpg://qlts:mat-khau@postgres:5432/qlts"
-
-_PROD_DB_IDENTITY = "postgres:5432/qlts_production"
-
 
 def test_academic_year_is_required():
     """Thiếu năm học phải dừng, không được tự đoán."""
@@ -105,101 +101,6 @@ def test_apply_and_dry_run_together_is_rejected():
 # ---------------------------------------------------------------------------
 
 
-class _FakeResponse:
-    def __init__(self, *, status_code=200, payload=None, headers=None):
-        self.status_code = status_code
-        self._payload = [] if payload is None else payload
-        self.headers = headers or {}
-
-    @property
-    def is_success(self) -> bool:
-        return 200 <= self.status_code < 300
-
-    def json(self):
-        return self._payload
-
-
-class _RecordingClient:
-    """httpx client giả: ghi lại lời gọi thay vì đi ra mạng."""
-
-    def __init__(self, response=None, *, post_response=None, post_error=None):
-        self.calls = []
-        self._response = response if response is not None else _FakeResponse()
-        self._post_response = post_response
-        self._post_error = post_error
-
-    async def patch(self, url, headers=None, params=None, json=None):
-        self.calls.append({"method": "PATCH", "url": url, "json": json})
-        return self._response
-
-    async def get(self, url, headers=None, params=None):
-        self.calls.append(
-            {"method": "GET", "url": url, "params": params, "headers": headers}
-        )
-        return self._response
-
-    async def post(self, url, headers=None, params=None, json=None):
-        self.calls.append(
-            {"method": "POST", "url": url, "json": json, "headers": headers}
-        )
-        if self._post_error is not None:
-            raise self._post_error
-        return (
-            self._post_response if self._post_response is not None else self._response
-        )
-
-
-class _ClientLocTheoParams(_RecordingClient):
-    """Fake LỌC theo ``params`` thật, thay vì trả sẵn kết quả đã mô phỏng.
-
-    ⚠️ Đây là khác biệt giữa một test chứng minh được điều gì và một test
-    không. ``_RecordingClient`` trả cùng một ``_FakeResponse`` bất kể params,
-    nên khi test dựng sẵn ``payload=[]`` kèm chú thích "server đã lọc status",
-    chính nó đã mô phỏng luôn cái đang cần chứng minh: bỏ hẳn
-    ``status=eq.running`` khỏi client thì fake vẫn trả rỗng, và test vẫn xanh.
-
-    Fake này giữ một tập hàng và tự áp bộ lọc, nên câu hỏi "client có gửi đúng
-    bộ lọc không" mới có chỗ để trả lời sai.
-    """
-
-    def __init__(self, hang, *, post_response=None, post_error=None):
-        super().__init__(post_response=post_response, post_error=post_error)
-        self._hang = hang
-
-    async def get(self, url, headers=None, params=None):
-        self.calls.append(
-            {"method": "GET", "url": url, "params": params, "headers": headers}
-        )
-        khop = [h for h in self._hang if self._khop(h, params or {})]
-        return _FakeResponse(payload=khop)
-
-    @staticmethod
-    def _khop(hang, params) -> bool:
-        for khoa, gia in params.items():
-            # Không phải bộ lọc — chúng chỉ định hình dạng phản hồi.
-            if khoa in {"select", "limit", "order", "offset"}:
-                continue
-            if not isinstance(gia, str):
-                continue
-            if gia.startswith("eq."):
-                if str(hang.get(khoa)) != gia[3:]:
-                    return False
-            elif gia == "is.null":
-                if hang.get(khoa) is not None:
-                    return False
-        return True
-
-
-def _api_with(client) -> DormApi:
-    # Loopback: các test dưới đây không đi ra mạng (client là đồ giả), và
-    # loopback được miễn CẢ hàng rào đường truyền lẫn hàng rào project ref —
-    # Supabase local không có ref. Dùng một hostname bịa như `ktx.test` sẽ vướng
-    # hàng rào đích, và vướng vì đúng lý do nó tồn tại.
-    api = DormApi("http://127.0.0.1:54321", "khoa-gia")
-    api._client = client
-    return api
-
-
 def test_batch_size_ceiling_matches_the_rpc():
     """``--batch-size`` khoá trong 1..500, cùng trần với RPC.
 
@@ -245,101 +146,6 @@ def _row(**overrides):
 # ---------------------------------------------------------------------------
 
 
-class _FakeResponse:
-    def __init__(self, *, status_code=200, payload=None, headers=None):
-        self.status_code = status_code
-        self._payload = [] if payload is None else payload
-        self.headers = headers or {}
-
-    @property
-    def is_success(self) -> bool:
-        return 200 <= self.status_code < 300
-
-    def json(self):
-        return self._payload
-
-
-class _RecordingClient:
-    """httpx client giả: ghi lại lời gọi thay vì đi ra mạng."""
-
-    def __init__(self, response=None, *, post_response=None, post_error=None):
-        self.calls = []
-        self._response = response if response is not None else _FakeResponse()
-        self._post_response = post_response
-        self._post_error = post_error
-
-    async def patch(self, url, headers=None, params=None, json=None):
-        self.calls.append({"method": "PATCH", "url": url, "json": json})
-        return self._response
-
-    async def get(self, url, headers=None, params=None):
-        self.calls.append(
-            {"method": "GET", "url": url, "params": params, "headers": headers}
-        )
-        return self._response
-
-    async def post(self, url, headers=None, params=None, json=None):
-        self.calls.append(
-            {"method": "POST", "url": url, "json": json, "headers": headers}
-        )
-        if self._post_error is not None:
-            raise self._post_error
-        return (
-            self._post_response if self._post_response is not None else self._response
-        )
-
-
-class _ClientLocTheoParams(_RecordingClient):
-    """Fake LỌC theo ``params`` thật, thay vì trả sẵn kết quả đã mô phỏng.
-
-    ⚠️ Đây là khác biệt giữa một test chứng minh được điều gì và một test
-    không. ``_RecordingClient`` trả cùng một ``_FakeResponse`` bất kể params,
-    nên khi test dựng sẵn ``payload=[]`` kèm chú thích "server đã lọc status",
-    chính nó đã mô phỏng luôn cái đang cần chứng minh: bỏ hẳn
-    ``status=eq.running`` khỏi client thì fake vẫn trả rỗng, và test vẫn xanh.
-
-    Fake này giữ một tập hàng và tự áp bộ lọc, nên câu hỏi "client có gửi đúng
-    bộ lọc không" mới có chỗ để trả lời sai.
-    """
-
-    def __init__(self, hang, *, post_response=None, post_error=None):
-        super().__init__(post_response=post_response, post_error=post_error)
-        self._hang = hang
-
-    async def get(self, url, headers=None, params=None):
-        self.calls.append(
-            {"method": "GET", "url": url, "params": params, "headers": headers}
-        )
-        khop = [h for h in self._hang if self._khop(h, params or {})]
-        return _FakeResponse(payload=khop)
-
-    @staticmethod
-    def _khop(hang, params) -> bool:
-        for khoa, gia in params.items():
-            # Không phải bộ lọc — chúng chỉ định hình dạng phản hồi.
-            if khoa in {"select", "limit", "order", "offset"}:
-                continue
-            if not isinstance(gia, str):
-                continue
-            if gia.startswith("eq."):
-                if str(hang.get(khoa)) != gia[3:]:
-                    return False
-            elif gia == "is.null":
-                if hang.get(khoa) is not None:
-                    return False
-        return True
-
-
-def _api_with(client) -> DormApi:
-    # Loopback: các test dưới đây không đi ra mạng (client là đồ giả), và
-    # loopback được miễn CẢ hàng rào đường truyền lẫn hàng rào project ref —
-    # Supabase local không có ref. Dùng một hostname bịa như `ktx.test` sẽ vướng
-    # hàng rào đích, và vướng vì đúng lý do nó tồn tại.
-    api = DormApi("http://127.0.0.1:54321", "khoa-gia")
-    api._client = client
-    return api
-
-
 def _set_target_env(
     monkeypatch,
     *,
@@ -362,40 +168,6 @@ def _patch_database_url(monkeypatch, url=_DEV_DB_URL):
     from app.config import settings
 
     monkeypatch.setattr(settings, "DATABASE_URL", url, raising=False)
-
-
-class _FakeSession:
-    """Session giả trả lời hai câu hỏi định danh, hoặc ném ở câu thứ hai."""
-
-    def __init__(
-        self, *, dbname="qlts", system_id="7000000000000000001", no_catalog=False
-    ):
-        self._dbname = dbname
-        self._system_id = system_id
-        self._no_catalog = no_catalog
-        self.executed = []
-
-    async def execute(self, stmt):
-        sql = str(stmt)
-        self.executed.append(sql)
-
-        class _Result:
-            def __init__(self, value):
-                self._value = value
-
-            def scalar(self):
-                return self._value
-
-            def all(self):
-                return []
-
-        if "current_database" in sql:
-            return _Result(self._dbname)
-        if "pg_control_system" in sql:
-            if self._no_catalog:
-                raise RuntimeError("permission denied for function pg_control_system")
-            return _Result(self._system_id)
-        return _Result(None)
 
 
 class _ApiGhiNhan:
@@ -434,36 +206,6 @@ class _ApiGhiNhan:
     async def finalize_sync_run(self, run_id, source_count, upserted_count):
         self.finalize_args = (source_count, upserted_count)
         return 0
-
-
-class _ClientTheoUrl:
-    """Client giả ĐỊNH TUYẾN THEO URL — nhánh chạy lại đụng ba endpoint.
-
-    Trả cùng một phản hồi cho mọi URL (như ``_RecordingClient``) sẽ làm test
-    resume xanh giả: lời gọi đóng sổ và lời gọi mở lượt không phân biệt được.
-    """
-
-    def __init__(self, *, run_dang_chay, post_sync_runs=None):
-        self.calls = []
-        self._run_dang_chay = run_dang_chay
-        self._post_sync_runs = post_sync_runs
-
-    async def get(self, url, headers=None, params=None):
-        self.calls.append({"method": "GET", "url": url, "params": params})
-        return _FakeResponse(payload=self._run_dang_chay)
-
-    async def post(self, url, headers=None, params=None, json=None):
-        self.calls.append({"method": "POST", "url": url, "json": json})
-        if url.endswith("/rpc/fail_sync_run"):
-            return _FakeResponse(payload={"id": json["p_run_id"], "status": "failed"})
-        if url.endswith("/sync_runs"):
-            if self._post_sync_runs is not None:
-                return self._post_sync_runs
-            return _FakeResponse(status_code=409)
-        raise AssertionError(f"URL không mong đợi: {url}")
-
-    def urls(self):
-        return [c["url"].rsplit("/rest/v1", 1)[-1] for c in self.calls]
 
 
 async def test_preview_counts_follow_the_contract(monkeypatch, capsys):
@@ -567,42 +309,6 @@ async def test_dry_run_never_needs_the_source_declaration(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def test_finalize_reconciles_a_gateway_5xx_instead_of_declaring_failure():
-    """502 ở bước hạ cờ thì ĐỐI SOÁT, không kết luận là database từ chối.
-
-    408/5xx thường đến từ gateway đứng TRƯỚC database, nên transaction có thể
-    đã commit xong rồi phản hồi mới hỏng. Đây LÀ bước hạ cờ: coi 502 là câu trả
-    lời dứt khoát sẽ ghi ``failed`` cho một lượt đã đổi ``source_eligible`` của
-    cả cohort — và ``open_sync_run`` cách đó hai mươi dòng đã lập luận ngược lại.
-    """
-
-    class _GatewayHongRoiDoiSoat:
-        def __init__(self):
-            self.calls = []
-
-        async def post(self, url, headers=None, params=None, json=None):
-            self.calls.append({"method": "POST", "url": url})
-            return _FakeResponse(status_code=502)
-
-        async def get(self, url, headers=None, params=None):
-            self.calls.append({"method": "GET", "url": url})
-            return _FakeResponse(
-                payload=[{"id": 9, "status": "completed", "deactivated_count": 4}]
-            )
-
-    client = _GatewayHongRoiDoiSoat()
-
-    assert await _api_with(client).finalize_sync_run(9, 5, 5) == 4
-
-    # Đã hỏi lại thay vì ném thẳng.
-    assert any(c["method"] == "GET" for c in client.calls)
-
-
-# ---------------------------------------------------------------------------
-# Cổng hợp đồng phải được NỐI vào main(), đúng thứ tự
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_main_also_stops_in_preview_mode(monkeypatch):
     """Xem trước cũng phải đỏ.
@@ -682,10 +388,6 @@ async def test_wrong_target_stops_before_any_request(monkeypatch):
 # ---------------------------------------------------------------------------
 # Hàng rào trước khi ghi
 # ---------------------------------------------------------------------------
-
-
-_DEV_DB_URL = "postgresql+asyncpg://qlts:mat-khau@postgres:5432/qlts"
-_PROD_DB_IDENTITY = "postgres:5432/qlts_production"
 
 
 async def test_apply_refuses_an_empty_cohort(monkeypatch):

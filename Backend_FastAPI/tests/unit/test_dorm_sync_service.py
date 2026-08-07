@@ -1574,3 +1574,39 @@ async def test_missing_content_range_is_unknown_not_empty():
     client = _RecordingClient(_FakeResponse(headers={}))
 
     assert await _api_with(client).count_students(2026) is None
+
+
+async def test_finalize_reconciles_a_gateway_5xx_instead_of_declaring_failure():
+    """502 ở bước hạ cờ thì ĐỐI SOÁT, không kết luận là database từ chối.
+
+    408/5xx thường đến từ gateway đứng TRƯỚC database, nên transaction có thể
+    đã commit xong rồi phản hồi mới hỏng. Đây LÀ bước hạ cờ: coi 502 là câu trả
+    lời dứt khoát sẽ ghi ``failed`` cho một lượt đã đổi ``source_eligible`` của
+    cả cohort — và ``open_sync_run`` cách đó hai mươi dòng đã lập luận ngược lại.
+    """
+
+    class _GatewayHongRoiDoiSoat:
+        def __init__(self):
+            self.calls = []
+
+        async def post(self, url, headers=None, params=None, json=None):
+            self.calls.append({"method": "POST", "url": url})
+            return _FakeResponse(status_code=502)
+
+        async def get(self, url, headers=None, params=None):
+            self.calls.append({"method": "GET", "url": url})
+            return _FakeResponse(
+                payload=[{"id": 9, "status": "completed", "deactivated_count": 4}]
+            )
+
+    client = _GatewayHongRoiDoiSoat()
+
+    assert await _api_with(client).finalize_sync_run(9, 5, 5) == 4
+
+    # Đã hỏi lại thay vì ném thẳng.
+    assert any(c["method"] == "GET" for c in client.calls)
+
+
+# ---------------------------------------------------------------------------
+# Cổng hợp đồng phải được NỐI vào main(), đúng thứ tự
+# ---------------------------------------------------------------------------
