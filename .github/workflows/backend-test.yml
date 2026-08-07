@@ -251,6 +251,13 @@ jobs:
           #     production rồi thôi, không có đường kiểm bằng cách chạy lại;
           #   * test_duplicate_guard_version — trigger phải tăng version kể cả
           #     khi ghi bằng SQL THÔ, và KHÔNG tăng khi chỉ sửa ghi chú;
+          #   * test_payment_import_review_roundtrip — VÒNG QUA HTTP THẬT của
+          #     đường nhập lô: response thật → phiếu của TỪNG DÒNG → retry thật.
+          #     Ca ở tầng service tự đọc phiếu ra khỏi cơ sở dữ liệu nên nó xanh
+          #     kể cả khi giao diện không có đường nào lấy được phiếu — đúng lớp
+          #     lỗi đã xảy ra ở đường ghi tay. Tệp này cũng khoá vế "client CŨ
+          #     không ghi được bằng contract đã gỡ": `confirm_duplicates` dù ở
+          #     query hay ở thân đều không cấp quyền gì;
           #   * test_duplicate_guard_ddl_idempotent — `create_all()` hai lượt
           #     liên tiếp. Lượt hai từng giết cả một buổi chạy test theo đường
           #     vòng: `CREATE TRIGGER` trùng ⇒ dựng schema vỡ giữa chừng ⇒ thiếu
@@ -310,6 +317,7 @@ jobs:
               tests/services/test_payment_duplicate_guard.py
               tests/api/test_payment_duplicate_contract.py
               tests/services/test_payment_import_service.py
+              tests/api/test_payment_import_review_roundtrip.py
               tests/unit/test_duplicate_review_token.py
               tests/unit/test_duplicate_guard_ddl_lockin.py
               tests/unit/test_imp2axis_backfill_lockin.py
