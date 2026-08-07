@@ -597,6 +597,36 @@ class DormSyncTokenError(ServiceError):
         return self.operator_detail
 
 
+class DormSyncOpenAbsentError(ServiceError):
+    """Không mở được lượt, VÀ đã đối soát: database chưa nhận gì.
+
+    🔴 Tách khỏi :class:`DormSyncOpenUnknownError` vì hai ca dẫn tới hai trạng
+    thái sổ cái khác nhau. Ở đây ta BIẾT CHẮC bên kia sạch, nên lượt được ghi
+    ``failed`` và một phiếu mới chạy được ngay.
+    """
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+    detail = "Không mở được lượt đồng bộ; hệ ký túc xá chưa nhận gì."
+    error_code = "DORM_SYNC_OPEN_ABSENT"
+
+
+class DormSyncOpenUnknownError(ServiceError):
+    """Không mở được lượt, và KHÔNG đối soát được là đã mở hay chưa.
+
+    🔴 Đây là ca tệ nhất của bước mở lượt: một hàng ``running`` CÓ THỂ đang nằm
+    bên kia và khoá cứng năm học đó. Ghi ``failed`` cho nó là nói dối rằng bên
+    kia đã sạch — rồi lượt sau mở lượt thứ hai chồng lên, và
+    ``uq_sync_run_active_per_year`` từ chối mọi lần chạy cho tới khi có người
+    vào database sửa tay.
+
+    Sổ cái phải ghi ``outcome_unknown``.
+    """
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+    detail = "Không rõ hệ ký túc xá đã mở lượt hay chưa; cần đối soát tay."
+    error_code = "DORM_SYNC_OPEN_UNKNOWN"
+
+
 class DormSyncConfigError(ServiceError):
     """
     Raised when ``DORM_SYNC_ENABLED`` is on but required settings are missing.

@@ -40,6 +40,8 @@ from app.repositories.dorm_export_repository import select_paid_hk1_cohort
 from app.utils.exceptions import (
     DormSyncConfigError,
     DormSyncGuardError,
+    DormSyncOpenAbsentError,
+    DormSyncOpenUnknownError,
     DormSyncTargetMismatchError,
 )
 
@@ -988,7 +990,12 @@ class DormApi:
             )
 
         if outcome == "absent":
-            raise RuntimeError(
+            # 🔴 Lỗi CÓ KIỂU, không phải `RuntimeError` chung.
+            #
+            # Người gọi phải phân biệt ca này với ca "không biết" ngay dưới, và
+            # phân biệt bằng KIỂU chứ không bằng cách đọc chuỗi thông điệp —
+            # thông điệp là văn bản, nó đổi bất cứ lúc nào.
+            raise DormSyncOpenAbsentError(
                 f"Không mở được lượt đồng bộ ({ly_do}). Đã đối soát: KHÔNG có lượt "
                 f"nào mang dấu '{_client_note(client_token)}' — database chưa nhận "
                 "gì, chạy lại là an toàn."
@@ -996,7 +1003,7 @@ class DormApi:
 
         # ⚠️ KHÔNG được nói "an toàn" ở đây. Lần đọc phục hồi cũng hỏng nghĩa là
         # ta không biết hàng đã được tạo hay chưa.
-        raise RuntimeError(
+        raise DormSyncOpenUnknownError(
             f"Không mở được lượt đồng bộ ({ly_do}) và KHÔNG đối soát được trạng "
             f"thái (lần đọc phục hồi cũng thất bại). Một lượt mang dấu "
             f"'{_client_note(client_token)}' CÓ THỂ đang treo 'running' và sẽ chặn "
@@ -1084,7 +1091,7 @@ class DormApi:
                 # đang chạy là của người khác trong khi chưa đọc nổi trạng thái
                 # sẽ đẩy người vận hành đi đánh dấu failed một lượt có thể là của
                 # chính họ — và lượt đó đang ghi dở.
-                raise RuntimeError(
+                raise DormSyncOpenUnknownError(
                     f"Đã có một lượt đồng bộ ĐANG CHẠY cho năm {academic_year} "
                     "nhưng KHÔNG đối soát được nó có phải của lần chạy này hay "
                     "không (lần đọc phục hồi thất bại).\n"

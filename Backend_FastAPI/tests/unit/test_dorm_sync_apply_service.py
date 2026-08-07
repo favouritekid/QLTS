@@ -9,7 +9,6 @@ dưới đây ghi lại DÃY lời gọi chứ không kiểm sự hiện diện:
 đảo thứ tự vẫn xanh, mà đảo thứ tự đúng là lỗi cần chặn.
 """
 
-import uuid
 
 import pytest
 from types import SimpleNamespace
@@ -29,7 +28,12 @@ from app.services.dorm_sync_snapshot import (
     hash_source_snapshot,
     phat_hanh_token,
 )
-from app.utils.exceptions import DormSyncTokenError
+from app.utils.exceptions import (
+    BusinessRuleViolation,
+    DormSyncOpenAbsentError,
+    DormSyncOpenUnknownError,
+    DormSyncTokenError,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -93,14 +97,22 @@ class _DbGia:
         raise AssertionError("ca này không được chạm truy vấn thật")
 
 
-def _so_cai(status="running", **ghi_de):
+def _so_cai(status="running", claims=None, **ghi_de):
+    """Hàng sổ cái KHỚP phiếu mặc định.
+
+    ⚠️ Hàng lệch phiếu có ca riêng bên dưới; mặc định phải khớp, nếu không mọi
+    ca khác đều dừng ở hàng rào ràng-sổ-với-phiếu và không kiểm được thứ chúng
+    khai là đang kiểm.
+    """
+    if claims is None:
+        _, claims = _phieu()
     base = dict(
         id=11,
-        operation_id=uuid.uuid4(),
+        operation_id=claims.operation_id,
         actor_id=7,
-        academic_year=2026,
-        snapshot_hash="s" * 64,
-        snapshot_version=1,
+        academic_year=claims.academic_year,
+        snapshot_hash=claims.snapshot_hash,
+        snapshot_version=claims.snapshot_version,
         status=status,
         # Hàng `completed` mặc định là hàng HỢP LỆ; ca kiểm hàng hỏng dựng
         # riêng bên dưới.
@@ -237,7 +249,7 @@ async def test_so_cai_da_co_thi_KHONG_cham_nguon_hay_KTX(
     ket_qua = await _chuan_bi(
         monkeypatch,
         token=token,
-        so_cai_co_san=_so_cai(status=status, operation_id=claims.operation_id),
+        so_cai_co_san=_so_cai(status=status, claims=claims),
         thu_tu=thu_tu,
     )
 
@@ -257,7 +269,7 @@ async def test_ben_THUA_cuoc_dua_di_qua_CUNG_may_trang_thai(monkeypatch):
     import app.services.dorm_sync_apply_service as m
 
     token, claims = _phieu()
-    hang_thang = _so_cai(status="running", operation_id=claims.operation_id)
+    hang_thang = _so_cai(status="running", claims=claims)
     lan_tra = {"n": 0}
 
     async def _lay(db, op_id):
@@ -546,7 +558,9 @@ class _ApiHong:
 
     async def open_sync_run(self, nam, token, raw_count, *, la_lan_chay_lai=False):
         if self.no_o_buoc == "open":
-            raise RuntimeError("mất kết nối khi mở lượt")
+            raise DormSyncOpenAbsentError("đã đối soát: database chưa nhận gì")
+        if self.no_o_buoc == "open_unknown":
+            raise DormSyncOpenUnknownError("không đối soát được là đã mở hay chưa")
         return OpenSyncRunResult(42)
 
     async def upsert_students(self, run_id, rows):
@@ -569,7 +583,7 @@ class _ApiHong:
 @pytest.mark.parametrize(
     "outcome, hang, ket_cuc",
     [
-        ("finalized", {"deactivated_count": 5}, KetCuc.COMPLETED),
+        ("finalized", {"id": 42, "status": "completed", "deactivated_count": 5}, KetCuc.COMPLETED),
         ("marked_failed", {"status": "failed"}, KetCuc.FAILED),
         ("unknown", None, KetCuc.OUTCOME_UNKNOWN),
         ("no", None, KetCuc.OUTCOME_UNKNOWN),
@@ -685,7 +699,7 @@ async def test_hang_completed_HONG_thi_khong_tra_ve_nhu_da_xong(monkeypatch):
     from app.utils.exceptions import BusinessRuleViolation
 
     token, claims = _phieu()
-    hong = _so_cai(status="completed", operation_id=claims.operation_id)
+    hong = _so_cai(status="completed", claims=claims)
     hong.ktx_run_id = None
     hong.result = None
 
@@ -707,7 +721,7 @@ async def test_trang_thai_LA_thi_fail_closed(monkeypatch):
         await _chuan_bi(
             monkeypatch,
             token=token,
-            so_cai_co_san=_so_cai(status="dang_cho", operation_id=claims.operation_id),
+            so_cai_co_san=_so_cai(status="dang_cho", claims=claims),
         )
 
 
@@ -735,3 +749,177 @@ def test_dung_dung_he_nhat_ky_da_duyet():
     ).replace("audit_service.log_audit", "")
     assert 'action="dorm_sync_apply_requested"' in ma
     assert 'action=f"dorm_sync_apply_{ket_qua.ket_cuc}"' in ma
+
+
+# ---------------------------------------------------------------------------
+# Bốn khoảng hở đo được ở vòng review trước
+# ---------------------------------------------------------------------------
+
+
+async def test_MAT_ACK_luc_mo_luot_phai_la_outcome_unknown():
+    """🔴 "Chưa có run_id" KHÔNG đồng nghĩa "chưa mở được lượt".
+
+    ``open_sync_run`` phân biệt hai ca bằng KIỂU:
+
+    * ``DormSyncOpenAbsentError`` — đã đối soát, biết chắc bên kia sạch;
+    * ``DormSyncOpenUnknownError`` — POST mất ACK VÀ lần GET đối soát cũng hỏng.
+      Một hàng ``running`` CÓ THỂ đang nằm bên kia và khoá cứng năm học đó.
+
+    Bản trước gộp cả hai thành ``failed``. Ghi ``failed`` cho ca thứ hai là nói
+    dối rằng bên kia đã sạch — rồi lượt sau mở lượt thứ hai chồng lên, và
+    ``uq_sync_run_active_per_year`` từ chối mọi lần chạy cho tới khi có người
+    vào database sửa tay.
+    """
+    _, claims = _phieu()
+    api = _ApiHong("unknown", None, no_o_buoc="open_unknown")
+
+    ket_qua = await execute_apply(
+        cau_hinh=_CAU_HINH, claims=claims, rows=_ROWS, api=api
+    )
+
+    assert ket_qua.ket_cuc is KetCuc.OUTCOME_UNKNOWN
+    assert ket_qua.ktx_run_id is None
+    assert api.so_lan_doi_soat == 0, "chưa có run_id thì không đối soát được gì"
+
+
+class _ApiDongHong(_ApiHong):
+    """Chạy trót lọt, nhưng việc ĐÓNG client hỏng."""
+
+    def __init__(self):
+        super().__init__("finalized", None, no_o_buoc="khong")
+        self.da_finalize = False
+
+    async def finalize_sync_run(self, run_id, **kw):
+        self.da_finalize = True
+        return 3
+
+    async def __aexit__(self, *exc):
+        raise RuntimeError("close failed after finalize")
+
+
+async def test_loi_DONG_client_khong_xoa_ket_qua_completed():
+    """🔴 ``try`` phải bao TRỌN vòng đời context manager.
+
+    Bản trước đặt ``try`` bên trong ``async with``, nên lỗi ở
+    ``__aenter__``/``__aexit__`` đi vòng qua toàn bộ hàng rào. Ca tệ nhất:
+    ``finalize`` đã thành công — hệ KTX đã đổi thật — rồi việc đóng socket
+    hỏng, và người gọi không nhận được ``KetQuaGhi`` nào để đóng sổ. Sổ cái ở
+    lại ``running`` cho một lượt đã xong.
+    """
+    _, claims = _phieu()
+    api = _ApiDongHong()
+
+    ket_qua = await execute_apply(
+        cau_hinh=_CAU_HINH, claims=claims, rows=_ROWS, api=api
+    )
+
+    assert api.da_finalize is True
+    assert ket_qua.ket_cuc is KetCuc.COMPLETED
+    assert ket_qua.deactivated == 3
+
+
+async def test_loi_MO_client_van_tra_ket_qua():
+    """Vế còn lại của cùng vòng đời: ``__aenter__`` hỏng."""
+
+    class _MoHong:
+        async def __aenter__(self):
+            raise RuntimeError("không mở nổi kết nối")
+
+        async def __aexit__(self, *exc):
+            return False
+
+    _, claims = _phieu()
+
+    with pytest.raises(RuntimeError):
+        await execute_apply(
+            cau_hinh=_CAU_HINH, claims=claims, rows=_ROWS, api=_MoHong()
+        )
+
+
+@pytest.mark.parametrize(
+    "hang, vi_sao",
+    [
+        (None, "không có hàng nào"),
+        ({"id": 42, "status": "completed"}, "thiếu deactivated_count"),
+        ({"id": 99, "status": "completed", "deactivated_count": 5}, "hàng của lượt KHÁC"),
+        ({"id": 42, "status": "running", "deactivated_count": 5}, "chưa đóng sổ"),
+        ({"id": 42, "status": "completed", "deactivated_count": "5"}, "số liệu là chuỗi"),
+        ({"id": 42, "status": "completed", "deactivated_count": True}, "bool"),
+        ({"id": 42, "status": "completed", "deactivated_count": -1}, "số âm"),
+    ],
+)
+async def test_hang_finalized_KHONG_doc_duoc_thi_outcome_unknown(hang, vi_sao):
+    """🔴 KHÔNG ép về 0.
+
+    Bản trước dùng ``int((hang or {}).get(...) or 0)``, nên một phản hồi thiếu
+    trường — hoặc mang hàng của lượt KHÁC — vẫn được ghi ``completed`` với
+    ``deactivated=0``. Con số đó đi vào sổ đối soát và vào màn hình; bịa ra 0 là
+    khai "không ai bị hạ cờ" cho một lượt mà ta không hề đọc được kết quả.
+    """
+    _, claims = _phieu()
+    api = _ApiHong("finalized", hang)
+
+    ket_qua = await execute_apply(
+        cau_hinh=_CAU_HINH, claims=claims, rows=_ROWS, api=api
+    )
+
+    assert ket_qua.ket_cuc is KetCuc.OUTCOME_UNKNOWN, vi_sao
+    assert ket_qua.ktx_run_id == 42
+
+
+@pytest.mark.parametrize(
+    "ghi_de, vi_sao",
+    [
+        ({"actor_id": 8}, "người bấm khác"),
+        ({"academic_year": 2025}, "năm học khác"),
+        ({"snapshot_hash": "z" * 64}, "dấu băm ảnh chụp khác"),
+        ({"snapshot_version": 99}, "phiên bản ảnh chụp khác"),
+    ],
+)
+async def test_so_cai_LECH_phieu_thi_tu_choi(monkeypatch, ghi_de, vi_sao):
+    """🔴 ``operation_id`` khớp là CHƯA ĐỦ — nó khớp vì ta tra sổ bằng chính nó.
+
+    Những thứ còn lại mới nói hàng ấy có thật sự là lượt của phiếu này không.
+    Lệch nghĩa là hoặc khoá ký bị dùng ở nơi khác, hoặc sổ cái bị sửa tay — và
+    trả ``DA_XONG`` cho một hàng lệch là nói với người bấm rằng việc của họ đã
+    xong, trong khi thứ đã chạy là một việc khác.
+    """
+    token, claims = _phieu()
+    hang = _so_cai(status="completed", claims=claims)
+    for k, v in ghi_de.items():
+        setattr(hang, k, v)
+
+    with pytest.raises(BusinessRuleViolation):
+        await _chuan_bi(monkeypatch, token=token, so_cai_co_san=hang)
+
+
+async def test_so_cai_completed_LECH_run_id_giua_cot_va_JSON(monkeypatch):
+    """Hai chỗ ghi cùng một sự thật; lệch nghĩa là một trong hai đã bị sửa.
+
+    Người vận hành dùng ``ktx_run_id`` để lần ra lượt bên kia — trỏ họ tới sai
+    lượt còn tệ hơn không trỏ gì.
+    """
+    token, claims = _phieu()
+    hang = _so_cai(status="completed", claims=claims)
+    hang.ktx_run_id = 42
+    hang.result = {"status": "completed", "ktx_run_id": 99}
+
+    with pytest.raises(BusinessRuleViolation):
+        await _chuan_bi(monkeypatch, token=token, so_cai_co_san=hang)
+
+
+def test_KHONG_nuot_KeyboardInterrupt_va_SystemExit():
+    """``BaseException`` nuốt cả yêu cầu dừng tiến trình.
+
+    Ctrl-C giữa một lượt đồng bộ phải dừng tiến trình, không được biến thành
+    "một lượt vẫn chạy tiếp rồi trả kết quả".
+    """
+    import inspect
+
+    import app.services.dorm_sync_apply_service as m
+
+    ma = inspect.getsource(m.execute_apply)
+
+    assert "except BaseException" not in ma
+    assert "except asyncio.CancelledError" in ma
+    assert "except Exception as loi" in ma

@@ -17,7 +17,12 @@ import pytest
 # 🔴 Lõi đã chuyển sang service. Monkeypatch phải trỏ vào ĐÂY: tên trong vỏ
 # CLI chỉ là tham chiếu re-export, vá nó không đổi được thứ lõi thật sự gọi.
 from app.services import dorm_sync_service as service_module
-from app.utils.exceptions import DormSyncConfigError, DormSyncGuardError
+from app.utils.exceptions import (
+    DormSyncConfigError,
+    DormSyncGuardError,
+    DormSyncOpenAbsentError,
+    DormSyncOpenUnknownError,
+)
 from app.services.dorm_sync_service import (
     DormApi,
     assert_payload_contract,
@@ -699,7 +704,7 @@ async def test_open_run_says_plainly_when_nothing_was_created():
         _FakeResponse(payload=[]), post_error=httpx.ConnectError("mất kết nối")
     )
 
-    with pytest.raises(RuntimeError) as exc:
+    with pytest.raises(DormSyncOpenAbsentError) as exc:
         await _api_with(client).open_sync_run(2026, "tok", raw_count=1)
 
     assert "an toàn" in str(exc.value)
@@ -748,7 +753,7 @@ async def test_open_run_never_claims_safety_when_the_probe_also_failed():
         response=_FakeResponse(status_code=503, payload=[]),
     )
 
-    with pytest.raises(RuntimeError) as exc:
+    with pytest.raises(DormSyncOpenUnknownError) as exc:
         await _api_with(client).open_sync_run(2026, "tok", raw_count=1)
 
     thong_diep = str(exc.value)
@@ -854,7 +859,7 @@ async def test_open_run_does_not_recover_a_historical_failed_row():
         post_response=_FakeResponse(status_code=502, payload=[]),
     )
 
-    with pytest.raises(RuntimeError) as exc:
+    with pytest.raises(DormSyncOpenAbsentError) as exc:
         await _api_with(client).open_sync_run(2026, "tok", raw_count=1)
 
     assert "chạy lại là an toàn" in str(exc.value)
@@ -871,7 +876,7 @@ async def test_open_run_reports_unknown_when_the_conflict_probe_fails():
         post_response=_FakeResponse(status_code=409, payload=[]),
     )
 
-    with pytest.raises(RuntimeError) as exc:
+    with pytest.raises(DormSyncOpenUnknownError) as exc:
         await _api_with(client).open_sync_run(2026, "tok", raw_count=1)
 
     thong_diep = str(exc.value)

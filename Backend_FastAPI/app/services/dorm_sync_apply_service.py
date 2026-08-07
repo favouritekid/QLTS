@@ -19,6 +19,7 @@ mất điện: sổ cái ở lại ``running`` trong khi hệ KTX đã ghi xong.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import asyncio
 from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any, Callable, Dict, List, Optional
@@ -47,7 +48,11 @@ from app.services.dorm_sync_snapshot import (
     doc_token,
     hash_source_snapshot,
 )
-from app.utils.exceptions import BusinessRuleViolation, DormSyncTokenError
+from app.utils.exceptions import (
+    BusinessRuleViolation,
+    DormSyncOpenAbsentError,
+    DormSyncTokenError,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -116,7 +121,7 @@ async def prepare_apply(
     # 2. Tra sổ.
     so_cai = await lay_theo_operation_id(db, claims.operation_id)
     if so_cai is not None:
-        return _xet_so_cai_cu(so_cai, claims)
+        return _xet_so_cai_cu(so_cai, claims, actor_id)
 
     # 3. Chưa có trong sổ ⇒ mới được đọc nguồn.
     #
@@ -192,7 +197,7 @@ async def prepare_apply(
             actor_id=actor_id,
             operation_id=str(claims.operation_id),
         )
-        return _xet_so_cai_cu(so_cai, claims)
+        return _xet_so_cai_cu(so_cai, claims, actor_id)
 
     await log_activity(
         db,
@@ -219,13 +224,45 @@ async def prepare_apply(
     )
 
 
+def _rang_so_cai_voi_phieu(
+    so_cai: DormSyncOperation, claims: PreviewTokenClaims, actor_id: int
+) -> None:
+    """Hàng trong sổ phải nói về ĐÚNG lượt mà phiếu này mô tả.
+
+    🔴 ``operation_id`` khớp là chưa đủ. Nó khớp vì ta tra sổ bằng chính nó —
+    một phép so vòng tròn. Những thứ CÒN LẠI mới nói cho ta biết hàng ấy có
+    thật sự là lượt của phiếu này không: ai bấm, năm nào, và ảnh chụp nào.
+
+    Lệch nghĩa là hoặc khoá ký đã bị dùng ở nơi khác, hoặc sổ cái bị sửa tay.
+    Cả hai đều phải dừng — trả ``DA_XONG`` cho một hàng lệch là nói với người
+    bấm rằng việc của họ đã xong, trong khi thứ đã chạy là một việc khác.
+    """
+    lech = []
+    if so_cai.actor_id != actor_id:
+        lech.append("người bấm")
+    if so_cai.academic_year != claims.academic_year:
+        lech.append("năm học")
+    if so_cai.snapshot_hash != claims.snapshot_hash:
+        lech.append("dấu băm ảnh chụp")
+    if so_cai.snapshot_version != claims.snapshot_version:
+        lech.append("phiên bản ảnh chụp")
+
+    if lech:
+        raise BusinessRuleViolation(
+            f"Sổ cái ghi lượt #{so_cai.id} không khớp phiếu xem trước "
+            f"({', '.join(lech)}). Dừng để không kết luận về một lượt khác."
+        )
+
+
 def _xet_so_cai_cu(
-    so_cai: DormSyncOperation, claims: PreviewTokenClaims
+    so_cai: DormSyncOperation, claims: PreviewTokenClaims, actor_id: int
 ) -> KetQuaChuanBi:
     """Máy trạng thái cho một ``operation_id`` đã có trong sổ.
 
     MỘT nơi quyết định, dùng cho cả đường thường lẫn đường thua cuộc đua.
     """
+    _rang_so_cai_voi_phieu(so_cai, claims, actor_id)
+
     if so_cai.status == "completed":
         # Idempotent: cùng phiếu, cùng kết quả. Đây là ca mất phản hồi ở lần
         # bấm trước, hoặc người dùng bấm hai lần — cả hai đều bình thường.
@@ -239,6 +276,17 @@ def _xet_so_cai_cu(
                 f"Sổ cái ghi lượt #{so_cai.id} đã `completed` nhưng thiếu "
                 "`ktx_run_id` hoặc `result`. Không kết luận được lượt bên hệ ký "
                 "túc xá đã tới đâu — phải đối soát bằng tay."
+            )
+        # 🔴 CỘT và JSON phải nói CÙNG một con số.
+        #
+        # Hai chỗ ghi cùng một sự thật; lệch nghĩa là một trong hai đã bị sửa,
+        # và ta không biết cái nào. Người vận hành dùng `ktx_run_id` để lần ra
+        # lượt bên kia — trỏ họ tới sai lượt còn tệ hơn không trỏ gì.
+        if so_cai.result.get("ktx_run_id") != so_cai.ktx_run_id:
+            raise BusinessRuleViolation(
+                f"Sổ cái ghi lượt #{so_cai.id}: cột `ktx_run_id` "
+                f"({so_cai.ktx_run_id}) khác giá trị trong `result` "
+                f"({so_cai.result.get('ktx_run_id')}). Phải đối soát bằng tay."
             )
         return KetQuaChuanBi(
             trang_thai=TrangThaiChuanBi.DA_XONG,
@@ -334,16 +382,53 @@ class KetQuaGhi:
             )
 
 
-async def _doi_soat(api: Any, run_id: int):
+# Trần thời gian cho lần đối soát khi bị HUỶ. Không có nó thì một tác vụ đang
+# bị cancel lại đi chờ một lời gọi mạng khác — và người bấm nút Huỷ thấy giao
+# diện treo thêm một phút nữa.
+_GIAY_DOI_SOAT_KHI_HUY = 10.0
+
+
+def _doc_so_ha_co(hang: Any, run_id: int) -> Optional[int]:
+    """Số hạ cờ từ hàng ``finalized``. ``None`` = KHÔNG đọc được ⇒ fail-closed.
+
+    🔴 KHÔNG ép về 0. Bản trước dùng ``int((hang or {}).get(...) or 0)``, nên
+    một phản hồi thiếu trường — hoặc mang hàng của lượt KHÁC — vẫn được ghi
+    ``completed`` với ``deactivated=0``. Con số đó đi vào sổ đối soát và vào
+    màn hình; bịa ra 0 là khai rằng "không ai bị hạ cờ" cho một lượt mà ta
+    không hề đọc được kết quả.
+
+    ⚠️ Kiểm cả ``id``: một phản hồi mang lượt khác mà nhận bừa thì mọi kết luận
+    sau đó nói về sai lượt.
+    """
+    if not isinstance(hang, dict):
+        return None
+    if hang.get("id") != run_id:
+        return None
+    if hang.get("status") != "completed":
+        return None
+    so = hang.get("deactivated_count")
+    # `bool` là lớp con của `int` — `True` không phải một số đếm.
+    if not isinstance(so, int) or isinstance(so, bool) or so < 0:
+        return None
+    return so
+
+
+async def _doi_soat(api: Any, run_id: int, *, gioi_han: Optional[float] = None):
     """Hỏi lại hệ KTX xem lượt thực sự kết thúc ra sao.
 
     ⚠️ Chính lời gọi đối soát cũng hỏng được — và khi đó câu trả lời đúng là
     "không biết", không phải "hỏng". Tuyên bố an toàn khi không biết là kiểu sai
     tệ hơn cả im lặng.
+
+    ``gioi_han`` chỉ đặt ở đường bị HUỶ: ở đó ta vẫn muốn biết, nhưng không
+    được giữ người bấm lại thêm một lời gọi mạng nữa.
     """
     try:
-        return await api.reconcile_after_failure(run_id)
-    except BaseException:
+        goi = api.reconcile_after_failure(run_id)
+        if gioi_han is not None:
+            return await asyncio.wait_for(goi, timeout=gioi_han)
+        return await goi
+    except (Exception, asyncio.CancelledError):
         return "unknown", None
 
 
@@ -355,21 +440,24 @@ async def execute_apply(
     api_factory: Callable[..., Any] = DormApi,
     api: Optional[Any] = None,
 ) -> KetQuaGhi:
-    """Ghi sang hệ KTX. KHÔNG nhận session database. KHÔNG bao giờ ném.
+    """Ghi sang hệ KTX. KHÔNG nhận session database. Trả ``KetQuaGhi`` cho mọi đường.
 
     🔴 Không có tham số ``db`` là một ràng buộc, không phải thiếu sót. Lượt này
     mất vài chục giây; ôm một transaction suốt thời gian đó là giữ khoá trên sổ
-    cái trong lúc chờ mạng, và mọi request khác đụng cùng hàng sẽ xếp hàng sau
-    một cuộc gọi HTTP.
+    cái trong lúc chờ mạng.
 
-    🔴 Trả ``KetQuaGhi`` cho MỌI đường, kể cả đường hỏng. Đẩy exception ra
-    ngoài nghĩa là router phải tự viết nghiệp vụ đối soát — mà đối soát là việc
-    duy nhất phân biệt được "đã xong nhưng mất phản hồi" với "hỏng thật" với
-    "không biết", và ba ca đó dẫn tới ba trạng thái sổ cái khác nhau.
+    🔴 Bao TRỌN vòng đời context manager. Bản trước đặt ``try`` BÊN TRONG
+    ``async with``, nên một lỗi ở ``__aenter__``/``__aexit__`` đi vòng qua toàn
+    bộ hàng rào. Ca tệ nhất đã đo được: ``finalize`` thành công rồi việc đóng
+    client hỏng — hệ KTX đã đổi thật, mà người gọi không nhận được ``KetQuaGhi``
+    nào để đóng sổ. Nay kết quả được tính XONG rồi mới đóng client, và lỗi lúc
+    đóng không xoá được kết quả ấy.
 
-    🔴 Dùng ĐÚNG ``claims.target_fingerprint`` — dấu đã ký ở bước xem trước.
-    KHÔNG chụp lại trước khi đóng sổ: chụp lại thì nó luôn khớp, và chốt thành
-    phép so một giá trị với chính nó.
+    🔴 KHÔNG bắt ``BaseException``. ``KeyboardInterrupt`` và ``SystemExit`` là
+    yêu cầu dừng tiến trình, nuốt chúng là biến Ctrl-C thành một lượt vẫn chạy
+    tiếp. ``asyncio.CancelledError`` thì xử TƯỜNG MINH: nó xảy ra khi client
+    ngắt kết nối giữa chừng, và đúng lúc đó ta VẪN phải biết bên kia ra sao —
+    nhưng chỉ được chờ có giới hạn.
     """
     if api is None:
         api = api_factory(
@@ -381,12 +469,12 @@ async def execute_apply(
     run_id: Optional[int] = None
     upserted = 0
     blocked = 0
+    da_mo_client = False
 
-    async with api:
-        # ⚠️ ``BaseException``, không phải ``Exception``. ``KeyboardInterrupt``,
-        # ``SystemExit`` và ``CancelledError`` KHÔNG phải ``Exception``, nên bắt
-        # hẹp hơn sẽ để chúng đi vòng qua toàn bộ phần đối soát dưới đây và bỏ
-        # lại một lượt treo ``running`` — thứ khoá cứng năm học ở hệ KTX.
+    try:
+        await api.__aenter__()
+        da_mo_client = True
+
         try:
             ket_qua_mo = await api.open_sync_run(
                 claims.academic_year,
@@ -408,8 +496,7 @@ async def execute_apply(
                 )
                 # ⚠️ Đối soát TỪNG LÔ. Lệch nghĩa là RPC bỏ sót hàng trong im
                 # lặng — và hai con số này đi thẳng vào phép kiểm
-                # `raw = source + blocked` ở bước hạ cờ, nên phát hiện muộn
-                # đồng nghĩa với hạ cờ theo một con số sai.
+                # `raw = source + blocked` ở bước hạ cờ.
                 if da_ghi + bi_chan != len(lo):
                     raise BusinessRuleViolation(
                         f"Lô {dau // _KICH_THUOC_LO + 1}: gửi {len(lo)} hàng "
@@ -419,11 +506,7 @@ async def execute_apply(
                 upserted += da_ghi
                 blocked += bi_chan
 
-            # ⚠️ ``source_count`` là EFFECTIVE total — số hàng thực sự phải ghi
-            # sau khi trừ phần bị chặn tái tạo, KHÔNG phải số hàng nguồn.
-            # Truyền ``len(rows)`` khi có dù một hàng bị chặn sẽ làm guard
-            # "chưa ghi hết nguồn" phía database từ chối hạ cờ, và thông điệp
-            # lúc đó nói về một sự cố không có thật.
+            # ⚠️ ``source_count`` là EFFECTIVE total — nguồn trừ phần bị chặn.
             deactivated = await api.finalize_sync_run(
                 run_id,
                 source_count=len(rows) - blocked,
@@ -431,7 +514,7 @@ async def execute_apply(
                 expected_target_fingerprint=claims.target_fingerprint,
             )
 
-            return KetQuaGhi(
+            ket_qua = KetQuaGhi(
                 ket_cuc=KetCuc.COMPLETED,
                 ktx_run_id=run_id,
                 upserted=upserted,
@@ -439,57 +522,104 @@ async def execute_apply(
                 deactivated=deactivated,
             )
 
-        except BaseException as loi:
-            # 🔴 ĐỐI SOÁT, không đoán — và tuyệt đối không phân loại bằng cách
-            # đọc chuỗi exception. Thông điệp lỗi là văn bản: nó đổi bất cứ lúc
-            # nào và nó không biết gì về trạng thái bên kia.
-            if run_id is None:
-                # Chưa mở được lượt nào ⇒ chưa có gì bên kia để đối soát. Đây
-                # là ca DUY NHẤT kết luận được mà không hỏi lại — và
-                # `open_sync_run` đã tự đối soát bằng dấu lượt trước khi ném.
-                log.warning(
-                    "dorm_sync_apply_failed_before_open",
-                    loi=type(loi).__name__,
-                )
-                return KetQuaGhi(ket_cuc=KetCuc.FAILED, ly_do=str(loi))
+        except asyncio.CancelledError as loi:
+            # Client ngắt giữa chừng. Vẫn phải biết bên kia ra sao — nhưng chỉ
+            # chờ có giới hạn: một tác vụ đang bị huỷ mà đi chờ tiếp một lời
+            # gọi mạng là giữ người bấm lại thêm một phút nữa.
+            ket_qua = await _ket_luan_sau_loi(
+                api, run_id, upserted, blocked, loi, gioi_han=_GIAY_DOI_SOAT_KHI_HUY
+            )
 
-            outcome, hang = await _doi_soat(api, run_id)
+        except Exception as loi:
+            ket_qua = await _ket_luan_sau_loi(api, run_id, upserted, blocked, loi)
 
-            if outcome == "finalized":
-                # Database đã hoàn tất; chỉ phản hồi không về tới đây. Báo thất
-                # bại ở ca này là ghi sai sổ sách.
-                log.info(
-                    "dorm_sync_apply_completed_despite_client_error",
-                    run_id=run_id,
-                )
-                return KetQuaGhi(
-                    ket_cuc=KetCuc.COMPLETED,
-                    ktx_run_id=run_id,
-                    upserted=upserted,
-                    blocked=blocked,
-                    deactivated=int((hang or {}).get("deactivated_count") or 0),
-                )
+    finally:
+        if da_mo_client:
+            try:
+                await api.__aexit__(None, None, None)
+            except Exception:
+                # 🔴 Lỗi ĐÓNG client không được xoá kết quả đã tính.
+                #
+                # Tới đây hệ KTX đã đổi thật (hoặc đã được đối soát). Một
+                # `close failed` là chuyện của socket phía ta; để nó bay ra
+                # ngoài là làm router mất `KetQuaGhi` và bỏ sổ cái ở `running`.
+                log.warning("dorm_sync_apply_close_failed", run_id=run_id)
 
-            if outcome == "marked_failed":
-                # Lượt bên kia ĐÃ được đóng sổ ⇒ một phiếu mới chạy được.
-                return KetQuaGhi(
-                    ket_cuc=KetCuc.FAILED,
-                    ktx_run_id=run_id,
-                    upserted=upserted,
-                    blocked=blocked,
-                    ly_do=str(loi),
-                )
+    return ket_qua
 
-            # Không đối soát được. KHÔNG được nói "hỏng": lượt bên kia có thể
-            # vẫn đang sống và đang khoá năm học đó.
-            log.error("dorm_sync_apply_outcome_unknown", run_id=run_id)
+
+async def _ket_luan_sau_loi(
+    api: Any,
+    run_id: Optional[int],
+    upserted: int,
+    blocked: int,
+    loi: BaseException,
+    *,
+    gioi_han: Optional[float] = None,
+) -> KetQuaGhi:
+    """Phân loại một lần chạy hỏng bằng ĐỐI SOÁT, không bằng chuỗi lỗi."""
+    if run_id is None:
+        # 🔴 Chưa có `run_id` KHÔNG đồng nghĩa "chưa mở được lượt".
+        #
+        # `open_sync_run` phân biệt hai ca bằng KIỂU: `DormSyncOpenAbsentError`
+        # là đã đối soát và biết chắc bên kia sạch; mọi thứ khác — kể cả
+        # `DormSyncOpenUnknownError` — nghĩa là một hàng `running` CÓ THỂ đang
+        # nằm bên kia và khoá cứng năm học đó.
+        #
+        # Bản trước gộp cả hai thành `failed`. Đo được: mất ACK lúc POST cộng
+        # với lần GET đối soát cũng hỏng ⇒ ghi `failed` cho một lượt có thể
+        # đang sống.
+        if isinstance(loi, DormSyncOpenAbsentError):
+            log.warning("dorm_sync_apply_failed_before_open")
+            return KetQuaGhi(ket_cuc=KetCuc.FAILED, ly_do=str(loi))
+
+        log.error("dorm_sync_apply_open_outcome_unknown")
+        return KetQuaGhi(ket_cuc=KetCuc.OUTCOME_UNKNOWN, ly_do=str(loi))
+
+    outcome, hang = await _doi_soat(api, run_id, gioi_han=gioi_han)
+
+    if outcome == "finalized":
+        so_ha_co = _doc_so_ha_co(hang, run_id)
+        if so_ha_co is None:
+            # Nói "đã xong" mà không đọc nổi kết quả là đóng dấu xác nhận lên
+            # một thứ ta không nhìn thấy.
+            log.error("dorm_sync_apply_finalized_row_unreadable", run_id=run_id)
             return KetQuaGhi(
                 ket_cuc=KetCuc.OUTCOME_UNKNOWN,
                 ktx_run_id=run_id,
                 upserted=upserted,
                 blocked=blocked,
-                ly_do=str(loi),
+                ly_do=(
+                    "Đối soát báo lượt đã đóng sổ nhưng hàng trả về không đọc "
+                    "được số liệu."
+                ),
             )
+        log.info("dorm_sync_apply_completed_despite_client_error", run_id=run_id)
+        return KetQuaGhi(
+            ket_cuc=KetCuc.COMPLETED,
+            ktx_run_id=run_id,
+            upserted=upserted,
+            blocked=blocked,
+            deactivated=so_ha_co,
+        )
+
+    if outcome == "marked_failed":
+        return KetQuaGhi(
+            ket_cuc=KetCuc.FAILED,
+            ktx_run_id=run_id,
+            upserted=upserted,
+            blocked=blocked,
+            ly_do=str(loi),
+        )
+
+    log.error("dorm_sync_apply_outcome_unknown", run_id=run_id)
+    return KetQuaGhi(
+        ket_cuc=KetCuc.OUTCOME_UNKNOWN,
+        ktx_run_id=run_id,
+        upserted=upserted,
+        blocked=blocked,
+        ly_do=str(loi),
+    )
 
 
 async def record_result(
