@@ -75,11 +75,6 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
-        "ix_dorm_sync_operations_operation_id",
-        "dorm_sync_operations",
-        ["operation_id"],
-    )
-    op.create_index(
         "ix_dorm_sync_operations_actor_id", "dorm_sync_operations", ["actor_id"]
     )
     op.create_index(
@@ -98,7 +93,4 @@ def downgrade() -> None:
         "ix_dorm_sync_operations_academic_year", table_name="dorm_sync_operations"
     )
     op.drop_index("ix_dorm_sync_operations_actor_id", table_name="dorm_sync_operations")
-    op.drop_index(
-        "ix_dorm_sync_operations_operation_id", table_name="dorm_sync_operations"
-    )
     op.drop_table("dorm_sync_operations")

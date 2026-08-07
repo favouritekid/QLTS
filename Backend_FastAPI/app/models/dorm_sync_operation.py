@@ -69,11 +69,13 @@ class DormSyncOperation(Base):
     # 🔴 UNIQUE là hàng rào chống replay. Nó do **server** sinh lúc preview và
     # được **ký trong preview token**, nên client không tự đặt được giá trị
     # khác để đi vòng qua idempotency.
+    # ⚠️ KHÔNG thêm ``index=True``: ``unique=True`` đã tự sinh một unique index,
+    # và cái thứ hai chỉ là một bản sao phải cập nhật ở mọi lần ghi mà không
+    # truy vấn nào dùng tới — cùng cột, cùng thứ tự, kém hơn về mọi mặt.
     operation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         nullable=False,
         unique=True,
-        index=True,
         comment="Do server sinh lúc preview và ký trong token; client không đặt được.",
     )
 
