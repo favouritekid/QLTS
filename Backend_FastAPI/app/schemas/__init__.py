@@ -463,6 +463,7 @@ from .tuition_discount_policy import (
 # --- Đồng bộ ký túc xá ---
 from .dorm_sync import (
     DormSyncApplyRequest,
+    DormSyncApplyResponse,
     DormSyncContextResponse,
     DormSyncPreviewRequest,
     DormSyncPreviewResponse,

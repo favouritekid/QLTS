@@ -18,11 +18,15 @@ import time
 import structlog
 from fastapi import APIRouter, Depends, Request
 
-from app import models
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app import database, models
 from app.config import settings
 from app.core.deps import require_admin
 from app.core.rate_limits import RateLimits, limiter
 from app.schemas.dorm_sync import (
+    DormSyncApplyRequest,
+    DormSyncApplyResponse,
     DormSyncContextResponse,
     DormSyncPreviewRequest,
     DormSyncPreviewResponse,
@@ -30,8 +34,16 @@ from app.schemas.dorm_sync import (
     DormSyncWarningRow,
 )
 from app.services.dorm_sync_config import DormSyncConfig
+from app.services.dorm_sync_apply_service import (
+    KetCuc,
+    TrangThaiChuanBi,
+    execute_apply,
+    prepare_apply,
+    record_result,
+)
 from app.services.dorm_sync_preview_service import chuan_bi_xem_truoc
 from app.services.dorm_sync_service import DormApi
+from app.utils.exceptions import ConflictError
 
 log = structlog.get_logger(__name__)
 
@@ -159,4 +171,147 @@ async def xem_truoc(
         snapshot_version=ket_qua.snapshot_version,
         preview_token=ket_qua.preview_token,
         expires_at=ket_qua.expires_at,
+    )
+
+
+# Câu chữ cho từng kết cục. Client rẽ nhánh theo `outcome`, còn đây là thứ
+# người bấm ĐỌC — nên nó nói việc phải làm, không nói lỗi kỹ thuật.
+_THONG_DIEP = {
+    KetCuc.COMPLETED: "Đã đồng bộ xong.",
+    KetCuc.FAILED: (
+        "Lượt đồng bộ thất bại và hệ ký túc xá không thay đổi. Bấm Xem trước "
+        "lại để lấy phiếu mới rồi thử lại."
+    ),
+    KetCuc.OUTCOME_UNKNOWN: (
+        "KHÔNG rõ hệ ký túc xá đã ghi tới đâu. ĐỪNG bấm lại — hãy đối soát "
+        "bằng tay theo mã lượt bên dưới trước khi chạy lượt mới."
+    ),
+}
+
+
+@router.post(
+    "/apply",
+    response_model=DormSyncApplyResponse,
+    summary="Ghi lượt đồng bộ theo phiếu đã xem trước",
+)
+# Thứ tự decorator: xem chú thích ở `/context`.
+@limiter.limit(RateLimits.ADMIN_BULK)
+async def ghi_dong_bo(
+    request: Request,
+    than: DormSyncApplyRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(require_admin),
+) -> DormSyncApplyResponse:
+    """Điều phối ba pha và HAI transaction. Không có nghiệp vụ ở đây.
+
+    🔴 Trình tự bị khoá cứng, và nó là lý do endpoint này tồn tại ở dạng router:
+
+        prepare_apply → COMMIT A → execute_apply → record_result → COMMIT B
+
+    ``COMMIT A`` phải xong TRƯỚC khi có mutation nào sang hệ ký túc xá. Nếu
+    đảo lại, một lượt đã ghi thật bên kia có thể không để lại dấu nào trong sổ
+    cái — và lần bấm sau sẽ chạy lại nó.
+
+    ``execute_apply`` chạy NGOÀI mọi transaction QLTS: nó mất vài chục giây, và
+    giữ transaction suốt thời gian đó là khoá sổ cái trong lúc chờ mạng.
+
+    🔴 Router rẽ nhánh theo KIỂU (``TrangThaiChuanBi``, ``KetCuc``), tuyệt đối
+    không đọc ``so_cai.status`` thô và không đọc chuỗi exception.
+    """
+    chuan_bi = await prepare_apply(
+        db,
+        token=than.preview_token,
+        secret=settings.SECRET_KEY,
+        actor_id=current_user.id,
+        cau_hinh=DormSyncConfig.from_settings(),
+        now_ts=int(time.time()),
+    )
+
+    if chuan_bi.trang_thai is TrangThaiChuanBi.DA_XONG:
+        # Idempotent: cùng phiếu, cùng kết quả. KHÔNG gọi sang KTX.
+        #
+        # `prepare_apply` đã kiểm hàng này dùng được (`_kiem_ket_qua_da_luu`),
+        # nên đọc thẳng là an toàn.
+        da_luu = chuan_bi.so_cai.result
+        return DormSyncApplyResponse(
+            operation_id=str(chuan_bi.claims.operation_id),
+            academic_year=chuan_bi.so_cai.academic_year,
+            outcome=str(KetCuc.COMPLETED),
+            message=_THONG_DIEP[KetCuc.COMPLETED],
+            ktx_run_id=chuan_bi.so_cai.ktx_run_id,
+            upserted=da_luu["upserted"],
+            blocked=da_luu["blocked"],
+            deactivated=da_luu["deactivated"],
+        )
+
+    if chuan_bi.trang_thai is TrangThaiChuanBi.KHONG_CHAY_LAI:
+        # 409: trạng thái phía server không cho thao tác này lúc này. Không
+        # phải 400 — người gửi không sai gì, họ chỉ tới sau một lượt còn dở.
+        raise ConflictError(chuan_bi.thong_diep)
+
+    # ⚠️ COMMIT A — chốt hàng `running` + nhật ký `requested` TRƯỚC khi chạm
+    # sang hệ ký túc xá. Hai việc này nguyên tử với nhau vì cùng PostgreSQL
+    # QLTS; mutation bên kia là HTTP nên không transaction nào bao được cả hai.
+    #
+    # Hỏng ở đây thì `get_db` rollback, và bất biến phải giữ là: CHƯA gọi một
+    # mutation nào — chưa mở `sync_run`, chưa upsert, chưa finalize.
+    await db.commit()
+
+    # ⚠️ NGOÀI mọi transaction QLTS.
+    ket_qua = await execute_apply(
+        cau_hinh=DormSyncConfig.from_settings(),
+        claims=chuan_bi.claims,
+        rows=chuan_bi.rows,
+    )
+
+    ledger_saved = True
+    try:
+        await record_result(
+            db, chuan_bi.so_cai, actor_id=current_user.id, ket_qua=ket_qua
+        )
+        # ⚠️ COMMIT B.
+        await db.commit()
+    except Exception:
+        # 🔴 Hệ ký túc xá ĐÃ đổi rồi. Ném 500 ở đây là nói với người bấm rằng
+        # việc chưa xảy ra — rồi họ bấm lại, và lượt thứ hai chạy chồng lên.
+        #
+        # Trả thành công KÈM cảnh báo: việc đã xong, chỉ sổ sách là thiếu. Mã
+        # lượt ở dưới đủ để đối soát tay.
+        await db.rollback()
+        ledger_saved = False
+        log.error(
+            "dorm_sync_apply_ledger_write_failed",
+            operation_id=str(chuan_bi.claims.operation_id),
+            ktx_run_id=ket_qua.ktx_run_id,
+            outcome=str(ket_qua.ket_cuc),
+        )
+
+    log.info(
+        "dorm_sync_apply_done",
+        actor_id=current_user.id,
+        operation_id=str(chuan_bi.claims.operation_id),
+        outcome=str(ket_qua.ket_cuc),
+        ktx_run_id=ket_qua.ktx_run_id,
+        ledger_saved=ledger_saved,
+    )
+
+    thong_diep = _THONG_DIEP[ket_qua.ket_cuc]
+    if not ledger_saved:
+        thong_diep += (
+            " ⚠️ Không ghi được vào sổ đối soát — báo quản trị kèm mã lượt."
+        )
+
+    return DormSyncApplyResponse(
+        operation_id=str(chuan_bi.claims.operation_id),
+        academic_year=chuan_bi.claims.academic_year,
+        outcome=str(ket_qua.ket_cuc),
+        # ⚠️ KHÔNG đưa `ket_qua.ly_do` ra ngoài: nó là chuỗi exception phía
+        # client và mang được request-id, hostname, hay bất cứ thứ gì thư viện
+        # HTTP nhét vào. Nó nằm ở sổ cái và log.
+        message=thong_diep,
+        ktx_run_id=ket_qua.ktx_run_id,
+        upserted=ket_qua.upserted,
+        blocked=ket_qua.blocked,
+        deactivated=ket_qua.deactivated,
+        ledger_saved=ledger_saved,
     )

@@ -188,3 +188,39 @@ class DormSyncPreviewResponse(BaseModel):
     expires_at: Optional[int] = Field(
         None, description="Thời điểm token hết hạn (epoch giây)."
     )
+
+
+class DormSyncApplyResponse(BaseModel):
+    """Kết quả một lượt ghi.
+
+    ⚠️ KHÔNG có trường nào mang thông điệp lỗi thô. ``ly_do`` trong sổ cái là
+    chuỗi exception phía client — nó chứa được request-id, hostname, và bất cứ
+    thứ gì thư viện HTTP nhét vào. Người bấm cần biết PHẢI LÀM GÌ, và điều đó
+    nằm ở ``outcome`` cộng ``message``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: str
+    academic_year: int
+    outcome: str = Field(
+        ...,
+        description=(
+            "`completed` | `failed` | `outcome_unknown`. Client rẽ nhánh theo "
+            "đây, không theo câu chữ."
+        ),
+    )
+    message: str
+
+    ktx_run_id: Optional[int] = None
+    upserted: int = 0
+    blocked: int = 0
+    deactivated: int = 0
+
+    ledger_saved: bool = Field(
+        True,
+        description=(
+            "False khi hệ ký túc xá ĐÃ đổi nhưng sổ cái không ghi lại được. "
+            "Việc đã xảy ra; chỉ nhật ký là thiếu."
+        ),
+    )

@@ -10,6 +10,9 @@ người dùng không có quyền làm.
 đúng chỗ mà quyền được kiểm.
 """
 
+import uuid
+from types import SimpleNamespace
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -369,3 +372,194 @@ async def test_preview_tu_choi_nam_da_dong(client, admin_token_headers, monkeypa
 
     assert phan_hoi.status_code == 400
     assert dem["snapshot"] == 0
+
+
+# ===========================================================================
+# POST /apply — quyền, hợp đồng thân request, và cuộc đua hai request
+# ===========================================================================
+
+DUONG_DAN_APPLY = "/api/v2/admin/dorm-sync/apply"
+
+
+async def test_apply_chua_dang_nhap_thi_401(client):
+    phan_hoi = await client.post(DUONG_DAN_APPLY, json={"preview_token": "x"})
+
+    assert phan_hoi.status_code == 401
+
+
+@pytest.mark.parametrize("vai", ["manager", "officer"])
+async def test_apply_chi_admin_duoc_vao(
+    client, manager_token_headers, officer_token_headers, vai
+):
+    """Đây là thao tác hạ cờ đủ-điều-kiện của cả một cohort."""
+    headers = manager_token_headers if vai == "manager" else officer_token_headers
+    phan_hoi = await client.post(
+        DUONG_DAN_APPLY, json={"preview_token": "x"}, headers=headers
+    )
+
+    assert phan_hoi.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "than",
+    [
+        {"preview_token": "x", "academic_year": 2026},
+        {"preview_token": "x", "operation_id": "5b2f1c8e-0000-0000-0000-000000000000"},
+        {"preview_token": "x", "force": True},
+        {},
+        {"preview_token": ""},
+    ],
+)
+async def test_apply_hop_dong_than_request_chat(client, admin_token_headers, than):
+    """🔴 ``extra="forbid"`` phải có hiệu lực Ở TẦNG HTTP.
+
+    Client gửi kèm ``academic_year`` mà được bỏ qua trong im lặng sẽ nhận 200 và
+    tin rằng lượt vừa chạy là cho năm đó — trong khi server ghi vào năm đã ký
+    trong phiếu. ``operation_id`` cũng phải bị từ chối: nó do server sinh, nhận
+    từ client là mở lại cửa chống-replay.
+    """
+    phan_hoi = await client.post(
+        DUONG_DAN_APPLY, json=than, headers=admin_token_headers
+    )
+
+    assert phan_hoi.status_code == 422
+
+
+async def test_apply_HAI_request_cung_phieu_chi_MOT_ben_ghi(
+    client, admin_token_headers, monkeypatch
+):
+    """🔴 Hai lần bấm cùng lúc với cùng phiếu ⇒ đúng MỘT lần gọi ``execute_apply``.
+
+    Đây là ca có thật: người dùng bấm hai lần, hoặc trình duyệt retry. Bên thua
+    ``ON CONFLICT DO NOTHING`` đọc lại hàng bên thắng và đi qua máy trạng thái —
+    nó nhận 409 ``running`` chứ không chạy lượt thứ hai.
+
+    ⚠️ Chạy TUẦN TỰ hai request nhưng dùng CHUNG một sổ cái giả: cuộc đua thật
+    ở tầng database đã có ca riêng trên PostgreSQL thật
+    (``test_dorm_sync_operation_ledger.py``). Ca này canh vế còn lại — router
+    có gọi ``execute_apply`` lần thứ hai hay không.
+    """
+    import app.routers.admin_v2_dorm_sync as router_module
+    from app.services.dorm_sync_apply_service import (
+        KetCuc,
+        KetQuaChuanBi,
+        KetQuaGhi,
+        TrangThaiChuanBi,
+    )
+
+    dem = {"execute": 0}
+    op_id = uuid.uuid4()
+    so_cai = SimpleNamespace(
+        id=11,
+        operation_id=op_id,
+        actor_id=1,
+        academic_year=2026,
+        snapshot_hash="s" * 64,
+        snapshot_version=1,
+        status="running",
+        ktx_run_id=None,
+        result=None,
+    )
+    claims = SimpleNamespace(operation_id=op_id, academic_year=2026)
+
+    async def _prepare(db, **kw):
+        # Lần đầu: mở sổ được. Lần sau: hàng đã tồn tại và đang `running`.
+        if so_cai.status == "running" and dem["execute"] == 0:
+            return KetQuaChuanBi(
+                trang_thai=TrangThaiChuanBi.SAN_SANG,
+                so_cai=so_cai,
+                claims=claims,
+                rows=[object()],
+            )
+        return KetQuaChuanBi(
+            trang_thai=TrangThaiChuanBi.KHONG_CHAY_LAI,
+            so_cai=so_cai,
+            claims=claims,
+            thong_diep="Lượt đồng bộ này đang chạy.",
+        )
+
+    async def _execute(**kw):
+        dem["execute"] += 1
+        return KetQuaGhi(ket_cuc=KetCuc.COMPLETED, ktx_run_id=42, upserted=1)
+
+    async def _record(db, hang, **kw):
+        return hang
+
+    monkeypatch.setattr(router_module, "prepare_apply", _prepare)
+    monkeypatch.setattr(router_module, "execute_apply", _execute)
+    monkeypatch.setattr(router_module, "record_result", _record)
+    monkeypatch.setattr(
+        router_module.DormSyncConfig,
+        "from_settings",
+        classmethod(lambda cls, settings=None: _cau_hinh_gia()),
+    )
+
+    mot = await client.post(
+        DUONG_DAN_APPLY, json={"preview_token": "phieu"}, headers=admin_token_headers
+    )
+    hai = await client.post(
+        DUONG_DAN_APPLY, json={"preview_token": "phieu"}, headers=admin_token_headers
+    )
+
+    assert mot.status_code == 200
+    assert mot.json()["outcome"] == "completed"
+    assert hai.status_code == 409
+    assert dem["execute"] == 1, "request thứ hai đã chạy lượt thứ hai"
+
+
+async def test_apply_KHONG_lo_chuoi_loi_noi_bo_ra_HTTP(
+    client, admin_token_headers, monkeypatch
+):
+    """Thân phản hồi chỉ mang mã kết cục và câu chữ nói việc phải làm."""
+    import app.routers.admin_v2_dorm_sync as router_module
+    from app.services.dorm_sync_apply_service import (
+        KetCuc,
+        KetQuaChuanBi,
+        KetQuaGhi,
+        TrangThaiChuanBi,
+    )
+
+    BI_MAT = "connect to 10.0.0.5:5432 failed, request-id abc123"
+    op_id = uuid.uuid4()
+    so_cai = SimpleNamespace(
+        id=11, operation_id=op_id, actor_id=1, academic_year=2026,
+        snapshot_hash="s" * 64, snapshot_version=1, status="running",
+        ktx_run_id=None, result=None,
+    )
+
+    async def _prepare(db, **kw):
+        return KetQuaChuanBi(
+            trang_thai=TrangThaiChuanBi.SAN_SANG,
+            so_cai=so_cai,
+            claims=SimpleNamespace(operation_id=op_id, academic_year=2026),
+            rows=[object()],
+        )
+
+    async def _execute(**kw):
+        return KetQuaGhi(
+            ket_cuc=KetCuc.OUTCOME_UNKNOWN, ktx_run_id=42, ly_do=BI_MAT
+        )
+
+    async def _record(db, hang, **kw):
+        return hang
+
+    monkeypatch.setattr(router_module, "prepare_apply", _prepare)
+    monkeypatch.setattr(router_module, "execute_apply", _execute)
+    monkeypatch.setattr(router_module, "record_result", _record)
+    monkeypatch.setattr(
+        router_module.DormSyncConfig,
+        "from_settings",
+        classmethod(lambda cls, settings=None: _cau_hinh_gia()),
+    )
+
+    phan_hoi = await client.post(
+        DUONG_DAN_APPLY, json={"preview_token": "phieu"}, headers=admin_token_headers
+    )
+
+    assert phan_hoi.status_code == 200
+    than = phan_hoi.text
+    assert "10.0.0.5" not in than
+    assert "abc123" not in than
+    du_lieu = phan_hoi.json()
+    assert du_lieu["outcome"] == "outcome_unknown"
+    assert du_lieu["ktx_run_id"] == 42
