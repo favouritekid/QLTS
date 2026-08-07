@@ -210,10 +210,29 @@ def test_CHEO_payload_va_so_lieu_deu_khong_doi_thi_dau_bam_KHONG_doi():
     Nếu ``counts`` nhặt thêm thứ gì đổi theo mỗi lần chạy (mốc thời gian, thứ
     tự, id lượt) thì hai lần xem trước liên tiếp cho hai dấu băm khác nhau và
     chốt chặn tất cả — đúng kiểu hỏng mà cả bộ này đang canh ở chiều ngược lại.
+
+    ⚠️ Vế đảo SÁT LỖI NHẤT là số chính " 0912 " ↔ "0912": nó đi qua ĐÚNG đường
+    mà hai ca chéo ở trên dùng để bắt lỗi — chuẩn hoá số điện thoại — nhưng lần
+    này KHÔNG đổi cả payload lẫn số liệu, nên dấu băm phải giữ nguyên. Dùng
+    ``last_seen_sync_id`` cũng là một vế đảo, nhưng nó không chạm đường ấy nên
+    một bản vá quá tay ở phép đếm điện thoại vẫn lọt.
     """
+    chinh = "0912345678"
     rows = [_row(), _row(qlts_profile_id=9002, contact_phone2="0900000002")]
 
     assert _bam(rows) == _bam(list(rows))
+
+    # 🔴 Vế đảo sát lỗi: cùng đường chuẩn hoá, payload và counts đều không đổi.
+    tho = [_row(contact_phone=f"  {chinh}  ")]
+    sach = [_row(contact_phone=chinh)]
+    assert (
+        build_source_snapshot(tho)["counts"] == build_source_snapshot(sach)["counts"]
+    ), "ca dựng sai: hai trạng thái phải cho cùng bộ số liệu"
+    assert (
+        build_source_snapshot(tho)["rows"] == build_source_snapshot(sach)["rows"]
+    ), "ca dựng sai: hai trạng thái phải cho cùng payload"
+    assert _bam(tho) == _bam(sach)
+
     # Và một thay đổi KHÔNG chạm cả payload lẫn số liệu cũng không được đổi băm.
     assert _bam(rows) == _bam(
         [_row(last_seen_sync_id=999), _row(qlts_profile_id=9002, contact_phone2="0900000002")]
