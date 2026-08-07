@@ -22,7 +22,6 @@ from typing import Any, Optional
 import sqlalchemy as sa
 from sqlalchemy import (
     CheckConstraint,
-    Column,
     DateTime,
     ForeignKey,
     Integer,

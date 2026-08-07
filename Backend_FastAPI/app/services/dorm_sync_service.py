@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -401,13 +402,54 @@ def assert_target_project_matches(base_url: str, expected_ref: str) -> None:
     expected_host = f"{expected_ref}.supabase.co"
 
     if host != expected_host:
-        raise ValueError(
+        # 🔴 Lỗi nghiệp vụ CÓ KIỂU, không phải ``ValueError`` trần.
+        #
+        # Hàm này chạy cả trong web worker. Một ``ValueError`` ở đó thành 500
+        # không mã lỗi, còn thông điệp — vốn mang hostname của cả đích thật lẫn
+        # đích được duyệt — đi thẳng vào traceback. ``DormSyncGuardError`` tách
+        # đôi: ``detail`` ở cấp lớp là câu chung chung ra HTTP, bản chi tiết
+        # nằm ở ``operator_detail`` cho người vận hành trước terminal.
+        raise DormSyncGuardError(
             f"DORM_SUPABASE_URL trỏ tới '{host}' nhưng project được duyệt là "
             f"'{expected_ref}' (mong đợi '{expected_host}').\n"
             "  Đây là đích NHẬN dữ liệu cá nhân — sai project nghĩa là gửi cả "
             "cohort sang một hệ khác. Dùng domain riêng thì phải khai allowlist "
-            "ánh xạ domain sang ref, không đoán."
+            "ánh xạ domain sang ref, không đoán.",
+            context={"guard": "target_project_ref"},
         )
+
+
+@dataclass(frozen=True)
+class DormSyncNotice:
+    """Một điều người vận hành PHẢI biết về lượt trước, ở dạng có kiểu.
+
+    ``loai`` là hằng số do ta đặt, không phải câu chữ: câu chữ thuộc về nơi
+    trình bày (vỏ CLI hôm nay, giao diện web ngày mai), còn lõi chỉ nói điều gì
+    đã xảy ra.
+    """
+
+    loai: str
+    run_id: int
+    dau: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class OpenSyncRunResult:
+    """Kết quả mở lượt: ``run_id`` VÀ những gì đã xảy ra để có được nó.
+
+    🔴 Vì sao không phải ``int`` cộng một danh sách trên instance ``DormApi``:
+    một danh sách sống trên object là trạng thái dùng chung giữa các lời gọi.
+    Người gọi thứ hai đọc lại được cảnh báo của lời gọi thứ nhất (lượt cũ "đã
+    đóng sổ" hiện lên lần nữa cho một lượt hoàn toàn bình thường), và người gọi
+    nào quên đọc thì cảnh báo biến mất không dấu vết. Cả hai kiểu sai đều im
+    lặng.
+
+    Buộc nó vào giá trị trả về thì phạm vi của cảnh báo đúng bằng phạm vi của
+    lời gọi sinh ra nó — không cần ai nhớ ``clear()``.
+    """
+
+    run_id: int
+    notices: Tuple[DormSyncNotice, ...] = ()
 
 
 def _client_note(client_token: str) -> str:
@@ -502,11 +544,11 @@ class DormApi:
         assert_transport_is_encrypted(base_url)
         assert_target_project_matches(base_url, expected_project_ref)
         # 🔴 Lõi KHÔNG in ra stdout: nó chạy trong web worker, nơi stdout là
-        # log của tiến trình chứ không phải màn hình của ai. Ba thông báo
-        # phục hồi lượt cũ được tích vào đây dưới dạng có cấu trúc; vỏ CLI
-        # đọc rồi tự định dạng. Không dùng callback nhận hàm in — như vậy chỉ
-        # giấu phụ thuộc trình bày sau một tham số.
-        self.thong_bao_phuc_hoi: List[Dict[str, Any]] = []
+        # log của tiến trình chứ không phải màn hình của ai. Ba thông báo phục
+        # hồi lượt cũ đi ra theo GIÁ TRỊ TRẢ VỀ của ``open_sync_run``
+        # (``OpenSyncRunResult``), không phải một danh sách sống trên object —
+        # xem docstring của lớp đó. Cũng không dùng callback nhận hàm in: như
+        # vậy chỉ giấu phụ thuộc trình bày sau một tham số.
         self._base = base_url.rstrip("/") + "/rest/v1"
         self._headers = {
             "apikey": secret_key,
@@ -654,7 +696,7 @@ class DormApi:
         raw_count: int,
         *,
         la_lan_chay_lai: bool,
-    ) -> int:
+    ) -> OpenSyncRunResult:
         """Gặp một lượt ``running`` mang ĐÚNG dấu của mình: dùng lại, hay thay?
 
         Câu trả lời phụ thuộc dấu đó từ đâu ra, và hai ca khác nhau hoàn toàn:
@@ -686,15 +728,15 @@ class DormApi:
             log.warning(
                 "dorm_sync_run_recovered", run_id=run_id_cu, client_token=client_token
             )
-            return run_id_cu
+            return OpenSyncRunResult(run_id_cu)
 
-        self.thong_bao_phuc_hoi.append(
-            {
-                "loai": "lut_cu_dang_chay",
-                "run_id": run_id_cu,
-                "dau": _client_note(client_token),
-            }
-        )
+        notices = [
+            DormSyncNotice(
+                loai="lut_cu_dang_chay",
+                run_id=run_id_cu,
+                dau=_client_note(client_token),
+            )
+        ]
         hang = await self.mark_sync_run_failed(run_id_cu)
         trang_thai = hang.get("status")
 
@@ -702,13 +744,11 @@ class DormApi:
             # RPC cố ý KHÔNG hạ `completed` xuống `failed`. Lượt trước đã xong
             # thật; nói rõ để người vận hành biết mình đang chạy lượt thứ hai
             # chứ không phải sửa một lượt hỏng.
-            self.thong_bao_phuc_hoi.append(
-                {"loai": "lut_cu_da_hoan_tat", "run_id": run_id_cu}
+            notices.append(
+                DormSyncNotice(loai="lut_cu_da_hoan_tat", run_id=run_id_cu)
             )
         elif trang_thai == "failed":
-            self.thong_bao_phuc_hoi.append(
-                {"loai": "lut_cu_da_dong_so", "run_id": run_id_cu}
-            )
+            notices.append(DormSyncNotice(loai="lut_cu_da_dong_so", run_id=run_id_cu))
         else:
             raise RuntimeError(
                 f"Không đóng được lượt cũ #{run_id_cu}: sau khi gọi fail_sync_run "
@@ -720,9 +760,12 @@ class DormApi:
         # ⚠️ Mở lại với `la_lan_chay_lai=False`: từ giây phút này dấu đó thuộc
         # về lần chạy HIỆN TẠI. Giữ True sẽ đệ quy vô hạn nếu database lại trả
         # về một hàng mang dấu.
-        return await self.open_sync_run(
+        ket_qua = await self.open_sync_run(
             academic_year, client_token, raw_count, la_lan_chay_lai=False
         )
+        # Cảnh báo về lượt CŨ đứng trước cảnh báo (nếu có) của lần mở mới: đọc
+        # từ trên xuống là đúng thứ tự việc đã xảy ra.
+        return OpenSyncRunResult(ket_qua.run_id, tuple(notices) + ket_qua.notices)
 
     async def _recover_open_or_fail(
         self,
@@ -732,7 +775,7 @@ class DormApi:
         *,
         ly_do: str,
         la_lan_chay_lai: bool,
-    ) -> int:
+    ) -> OpenSyncRunResult:
         """Sau một phản hồi MƠ HỒ ở bước mở lượt: nhận lại hàng, hoặc nói thật.
 
         Ba nhánh, ba thông điệp khác nhau — người vận hành cần biết mình đang ở
@@ -774,8 +817,12 @@ class DormApi:
         raw_count: int,
         *,
         la_lan_chay_lai: bool = False,
-    ) -> int:
+    ) -> OpenSyncRunResult:
         """Mở một lượt đồng bộ. Chịu được ca phản hồi bị mất.
+
+        Trả ``OpenSyncRunResult(run_id, notices)``. ``notices`` chỉ nói về
+        LƯỢT GỌI NÀY: một lần mở sạch trả tuple rỗng, kể cả khi lần gọi trước
+        trên cùng object đã sinh cảnh báo.
 
         ``la_lan_chay_lai`` = người vận hành TỰ truyền ``--client-token``. Nó
         đổi ý nghĩa của một lượt cũ mang cùng dấu — xem
@@ -874,7 +921,7 @@ class DormApi:
         self._raise_for_status(response, "Mở lượt đồng bộ")
 
         try:
-            return response.json()[0]["id"]
+            return OpenSyncRunResult(response.json()[0]["id"])
         except (IndexError, KeyError, TypeError, ValueError):
             # Phản hồi 2xx nhưng thân không đọc được (proxy cắt, JSON hỏng).
             # Hàng gần như chắc chắn ĐÃ được tạo — tìm lại theo dấu.

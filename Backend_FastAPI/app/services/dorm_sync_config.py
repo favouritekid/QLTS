@@ -24,13 +24,25 @@ from app.utils.exceptions import DormSyncConfigError, DormSyncDisabledError
 
 # Tên biến môi trường ↔ thuộc tính trên ``Settings``. Giữ nguyên tên biến để
 # thông điệp lỗi nói đúng thứ người vận hành phải đặt.
-_TRUONG_BAT_BUOC: Tuple[Tuple[str, str], ...] = (
+# ĐÍCH — ba biến trả lời "gói tin đi tới đâu". Bắt buộc ở MỌI chế độ, kể cả
+# xem trước: ngay lượt chỉ-đọc cũng gửi khoá secret đi trong header, nên câu
+# hỏi "đi tới đâu" phải có câu trả lời trước khi có gói tin đầu tiên.
+_TRUONG_DICH: Tuple[Tuple[str, str], ...] = (
     ("DORM_SUPABASE_URL", "DORM_SUPABASE_URL"),
     ("DORM_SUPABASE_SECRET_KEY", "DORM_SUPABASE_SECRET_KEY"),
     ("DORM_SYNC_TARGET_PROJECT_REF", "DORM_SYNC_TARGET_PROJECT_REF"),
+)
+
+# NGUỒN — hai biến trả lời "đọc từ database nào". Chỉ bắt buộc khi thực sự GHI.
+_TRUONG_NGUON: Tuple[Tuple[str, str], ...] = (
     ("DORM_SYNC_SOURCE_DB", "DORM_SYNC_SOURCE_DB"),
     ("DORM_SYNC_SOURCE_SYSTEM_ID", "DORM_SYNC_SOURCE_SYSTEM_ID"),
 )
+
+# ⚠️ Ghép từ hai nhóm, KHÔNG viết lại thành một danh sách phẳng rồi cắt bằng
+# chỉ số. Một lát cắt như ``[:2]`` trông đúng cho tới ngày ai đó chèn thêm một
+# biến vào giữa — và lúc đó cổng xem trước im lặng bỏ qua đúng biến vừa thêm.
+_TRUONG_BAT_BUOC: Tuple[Tuple[str, str], ...] = _TRUONG_DICH + _TRUONG_NGUON
 
 
 @dataclass(frozen=True)
@@ -108,14 +120,20 @@ class DormSyncConfig:
         lại bằng chính công tắc của thứ đang hỏng.
 
         ``doi_dinh_danh_nguon=False`` cho bước xem trước: một lượt chỉ-đọc không
-        cần khai báo nguồn, và bắt khai chỉ khiến người ta bỏ qua bước xem
-        trước — mà xem trước mới là thứ chặn được lần ghi sai. Đích vẫn được
-        kiểm lúc dựng ``DormApi``.
+        cần khai báo NGUỒN, và bắt khai chỉ khiến người ta bỏ qua bước xem
+        trước — mà xem trước mới là thứ chặn được lần ghi sai.
+
+        🔴 Nhưng ba biến ĐÍCH thì vẫn bắt buộc. Xem trước cũng gửi khoá secret
+        đi trong header ``apikey`` tới một máy chủ ngoài; miễn
+        ``DORM_SYNC_TARGET_PROJECT_REF`` ở đây nghĩa là dựng xong cấu hình với
+        đích rỗng rồi mới chết ở ``DormApi`` — SAU khi đã đọc cả cohort khỏi
+        database nguồn. Hai tầng nói hai điều khác nhau về cùng một biến là
+        cách một lượt chạy thất bại ở giữa chừng thay vì ở dòng đầu.
         """
         import os
 
         moi_truong = os.environ if env is None else env
-        can = _TRUONG_BAT_BUOC if doi_dinh_danh_nguon else _TRUONG_BAT_BUOC[:2]
+        can = _TRUONG_BAT_BUOC if doi_dinh_danh_nguon else _TRUONG_DICH
 
         thieu = [t for t, _ in can if not (moi_truong.get(t) or "").strip()]
         if thieu:

@@ -676,9 +676,9 @@ async def test_open_run_recovers_the_row_it_created_after_a_lost_ack():
         post_error=httpx.ConnectError("mất kết nối"),
     )
 
-    run_id = await _api_with(client).open_sync_run(2026, "abc123", raw_count=1)
+    ket_qua = await _api_with(client).open_sync_run(2026, "abc123", raw_count=1)
 
-    assert run_id == 88
+    assert ket_qua.run_id == 88
     # Tìm lại phải theo ĐÚNG dấu của lần chạy này, không phải "lượt running bất kỳ".
     assert client.calls[1]["params"]["note"] == "eq.client:abc123"
 
@@ -690,7 +690,7 @@ async def test_open_run_recovers_from_an_unreadable_body():
         post_response=_FakeResponse(status_code=201, payload=[]),
     )
 
-    assert await _api_with(client).open_sync_run(2026, "tok", raw_count=1) == 91
+    assert (await _api_with(client).open_sync_run(2026, "tok", raw_count=1)).run_id == 91
 
 
 async def test_open_run_says_plainly_when_nothing_was_created():
@@ -718,7 +718,7 @@ async def test_open_run_reconciles_ambiguous_gateway_replies(ma_loi):
         post_response=_FakeResponse(status_code=ma_loi, payload=[]),
     )
 
-    assert await _api_with(client).open_sync_run(2026, "tok", raw_count=1) == 77
+    assert (await _api_with(client).open_sync_run(2026, "tok", raw_count=1)).run_id == 77
     assert [c["method"] for c in client.calls] == ["POST", "GET"]
 
 
@@ -769,7 +769,7 @@ async def test_open_run_reuses_its_own_running_row_on_conflict():
         post_response=_FakeResponse(status_code=409, payload=[]),
     )
 
-    assert await _api_with(client).open_sync_run(2026, "tok", raw_count=1) == 55
+    assert (await _api_with(client).open_sync_run(2026, "tok", raw_count=1)).run_id == 55
 
 
 async def test_open_run_refuses_a_conflict_it_does_not_own():
@@ -904,7 +904,7 @@ async def test_open_run_stamps_the_client_token_in_the_insert():
         post_response=_FakeResponse(status_code=201, payload=[{"id": 7}])
     )
 
-    assert await _api_with(client).open_sync_run(2026, "abc", raw_count=5) == 7
+    assert (await _api_with(client).open_sync_run(2026, "abc", raw_count=5)).run_id == 7
 
     insert = client.calls[0]
     assert insert["method"] == "POST"
@@ -967,7 +967,7 @@ def test_target_project_ref_must_match_the_host(monkeypatch):
         is None
     )
 
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(DormSyncGuardError) as exc:
         # Thiếu đúng một ký tự cuối.
         assert_target_project_matches("https://wkrwceedapisacgyujt.supabase.co", _khai_ref())
 
@@ -980,7 +980,7 @@ def test_target_guard_refuses_a_custom_domain_it_cannot_verify(monkeypatch):
 
     monkeypatch.setenv("DORM_SYNC_TARGET_PROJECT_REF", "ktx")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(DormSyncGuardError):
         assert_target_project_matches("https://ktx.truong-cd.edu.vn", _khai_ref())
 
 
@@ -1018,7 +1018,7 @@ def test_secret_key_never_leaves_the_process_when_the_target_is_wrong(monkeypatc
     # tham chiếu mà soi sau khi exception đã bay ra.
     api = object.__new__(DormApi)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(DormSyncGuardError):
         DormApi.__init__(
             api,
             "https://sai-project.supabase.co",
@@ -1562,13 +1562,75 @@ async def test_manual_token_closes_the_old_run_and_opens_a_new_one():
 
     client.post = _post
 
-    run_id = await api.open_sync_run(2026, "tay", raw_count=5, la_lan_chay_lai=True)
+    ket_qua = await api.open_sync_run(2026, "tay", raw_count=5, la_lan_chay_lai=True)
 
-    assert run_id == 12, "phải là lượt MỚI, không phải lượt cũ 11"
+    assert ket_qua.run_id == 12, "phải là lượt MỚI, không phải lượt cũ 11"
+    # Cảnh báo đi kèm KẾT QUẢ, không nằm trên object: người gọi không thể
+    # nhận `run_id` mà bỏ lỡ chuyện lượt cũ vừa bị đóng sổ.
+    assert [tb.loai for tb in ket_qua.notices] == [
+        "lut_cu_dang_chay",
+        "lut_cu_da_dong_so",
+    ]
+    assert all(tb.run_id == 11 for tb in ket_qua.notices)
     assert "/rpc/fail_sync_run" in client.urls(), "lượt cũ phải được đóng sổ"
     # Đóng ĐÚNG lượt cũ, không phải lượt nào khác.
     dong = [c for c in client.calls if c["url"].endswith("/rpc/fail_sync_run")]
     assert dong[0]["json"] == {"p_run_id": 11}
+
+
+async def test_notices_do_not_leak_into_the_next_call():
+    """🔴 Cảnh báo thuộc về MỘT lời gọi, không thuộc về object.
+
+    Bản trước tích cảnh báo vào một danh sách sống trên ``DormApi``. Cùng một
+    object mà mở lượt hai lần thì lần thứ hai đọc lại được cảnh báo của lần
+    thứ nhất: màn hình báo "đã đóng sổ lượt #11" cho một lượt hoàn toàn bình
+    thường vừa mở sạch. Người vận hành đọc dòng đó sẽ đi tìm một sự cố không
+    tồn tại — hoặc tệ hơn, quen mắt với nó rồi bỏ qua đúng lúc nó có thật.
+
+    Bản vá kiểu "người gọi nhớ ``clear()``" không đóng được lỗ này: nó chuyển
+    một bất biến của lõi thành một việc phải nhớ ở mọi nơi gọi, và đường web
+    sắp tới là một nơi gọi nữa.
+
+    Đây cũng là ca ĐẢO của ``test_manual_token_closes_the_old_run_and_opens_a
+    _new_one``: ở đó cảnh báo PHẢI có, ở đây PHẢI không.
+    """
+    client = _ClientTheoUrl(run_dang_chay=[{"id": 11, "status": "running"}])
+    api = _api_with(client)
+
+    # ⚠️ CẢ HAI lời gọi đều phải đi qua nhánh phục hồi.
+    #
+    # Bản đầu của ca này cho lời gọi thứ hai mở lượt sạch (201 ngay), rồi
+    # khẳng định `notices == ()`. Nó KHÔNG THỂ đỏ: đường mở sạch tự dựng kết
+    # quả rỗng của riêng nó, nên một danh sách tích luỹ trên object vẫn cho ca
+    # đó xanh. Phải để lời gọi thứ hai CŨNG sinh cảnh báo thì mới phân biệt
+    # được "cảnh báo của chính nó" với "cảnh báo cộng dồn".
+    dem = {"n": 0}
+    post_goc = client.post
+
+    async def _post(url, headers=None, params=None, json=None):
+        if url.endswith("/sync_runs"):
+            dem["n"] += 1
+            client.calls.append({"method": "POST", "url": url, "json": json})
+            # Lẻ: vấp lượt cũ đang chạy. Chẵn: mở được lượt mới.
+            if dem["n"] % 2 == 1:
+                return _FakeResponse(status_code=409)
+            return _FakeResponse(status_code=201, payload=[{"id": 100 + dem["n"]}])
+        return await post_goc(url, headers=headers, params=params, json=json)
+
+    client.post = _post
+
+    dau = await api.open_sync_run(2026, "tay-1", raw_count=5, la_lan_chay_lai=True)
+    assert [tb.run_id for tb in dau.notices] == [11, 11]
+
+    # Lượt cũ mà lần gọi SAU vấp phải là một lượt KHÁC — nên nếu cảnh báo cộng
+    # dồn thì số 11 lộ ra ngay.
+    client._run_dang_chay = [{"id": 21, "status": "running"}]
+    sau = await api.open_sync_run(2026, "tay-2", raw_count=5, la_lan_chay_lai=True)
+
+    assert sau.run_id != dau.run_id
+    assert [tb.run_id for tb in sau.notices] == [21, 21], (
+        "cảnh báo của lời gọi trước rò sang lời gọi sau"
+    )
 
 
 async def test_generated_token_reuses_the_recovered_run():
@@ -1581,11 +1643,14 @@ async def test_generated_token_reuses_the_recovered_run():
     """
     client = _ClientTheoUrl(run_dang_chay=[{"id": 11, "status": "running"}])
 
-    run_id = await _api_with(client).open_sync_run(
+    ket_qua = await _api_with(client).open_sync_run(
         2026, "tu-sinh", raw_count=5, la_lan_chay_lai=False
     )
 
-    assert run_id == 11
+    assert ket_qua.run_id == 11
+    # Nhận lại một lượt của CHÍNH mình không phải sự kiện người vận hành
+    # cần biết — không có gì hỏng cả.
+    assert ket_qua.notices == ()
     assert "/rpc/fail_sync_run" not in client.urls()
 
 

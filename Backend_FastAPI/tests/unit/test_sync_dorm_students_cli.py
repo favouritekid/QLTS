@@ -19,6 +19,7 @@ from app.scripts import sync_dorm_students as sync_module
 from app.services import dorm_sync_service as service_module
 from app.utils.exceptions import DormSyncConfigError, DormSyncGuardError
 from app.scripts.sync_dorm_students import main, parse_args
+from app.services.dorm_sync_service import OpenSyncRunResult
 
 
 pytestmark = pytest.mark.unit
@@ -211,7 +212,7 @@ class _ApiGhiNhan:
         # Ghi lại để test resume quan sát được: `main` phải truyền True đúng khi
         # người vận hành tự đưa `--client-token`.
         self.la_lan_chay_lai = la_lan_chay_lai
-        return 42
+        return OpenSyncRunResult(42)
 
     async def upsert_students(self, run_id, rows):
         self.lo_da_gui.append(rows)
@@ -347,6 +348,7 @@ async def test_main_also_stops_in_preview_mode(monkeypatch):
 
     monkeypatch.setenv("DORM_SUPABASE_URL", "https://abc.supabase.co")
     monkeypatch.setenv("DORM_SUPABASE_SECRET_KEY", "sb_secret_x")
+    monkeypatch.setenv("DORM_SYNC_TARGET_PROJECT_REF", "abc")
     monkeypatch.setattr(sync_module, "fetch_cohort", fake_fetch)
     monkeypatch.setattr(sync_module, "DormApi", ApiKhongDuocDung)
 
@@ -364,28 +366,91 @@ async def test_main_goes_on_when_the_cohort_is_complete(monkeypatch):
     async def fake_fetch(academic_year, *, verify_source=False, **kw):
         return [_row(), _row(qlts_profile_id=9002, degree_level=None)]
 
-    da_dung_api = []
+    # 🔴 KHÔNG thay `DormApi` bằng đồ giả.
+    #
+    # Ca này là ca "xem trước chạy trót lọt" — tức chính là ca phải chứng minh
+    # rằng bộ ba biến ĐÍCH đủ để đi hết đường. Thay cả lớp `DormApi` thì
+    # `assert_target_project_matches` không chạy lần nào, và một cấu hình thiếu
+    # `DORM_SYNC_TARGET_PROJECT_REF` vẫn cho ca này xanh trong khi lệnh thật
+    # chết ở đúng dòng đó. Đã xảy ra một lần.
+    #
+    # Nên chỉ giả TẦNG VẬN CHUYỂN: `httpx.AsyncClient` mà `__aenter__` dựng.
+    # Hàng rào đích, hàng rào đường truyền và thứ tự dựng headers đều chạy thật.
+    class _TransportGia:
+        def __init__(self, **kw):
+            self.calls = []
 
-    class ApiGia:
-        def __init__(self, *a, **kw):
-            da_dung_api.append(True)
+        async def aclose(self):
+            return None
 
-        async def __aenter__(self):
-            return self
+        async def get(self, url, headers=None, params=None):
+            self.calls.append(url)
+            return SimpleNamespace(
+                status_code=200,
+                is_success=True,
+                headers={"content-range": "0-0/0"},
+                json=lambda: [],
+            )
 
-        async def __aexit__(self, *exc):
-            return False
-
-        async def count_students(self, nam):
-            return 0
+    transport = _TransportGia()
+    monkeypatch.setattr(
+        service_module.httpx, "AsyncClient", lambda **kw: transport
+    )
 
     monkeypatch.setenv("DORM_SUPABASE_URL", "https://abc.supabase.co")
     monkeypatch.setenv("DORM_SUPABASE_SECRET_KEY", "sb_secret_x")
+    monkeypatch.setenv("DORM_SYNC_TARGET_PROJECT_REF", "abc")
+    # Xem trước KHÔNG đòi hai biến nguồn — bắt khai chỉ khiến người ta bỏ qua
+    # bước xem trước, mà xem trước mới là thứ chặn được lần ghi sai.
+    monkeypatch.delenv("DORM_SYNC_SOURCE_DB", raising=False)
+    monkeypatch.delenv("DORM_SYNC_SOURCE_SYSTEM_ID", raising=False)
     monkeypatch.setattr(sync_module, "fetch_cohort", fake_fetch)
-    monkeypatch.setattr(sync_module, "DormApi", ApiGia)
 
     assert await main(["--academic-year", "2026"]) == 0
-    assert da_dung_api == [True], "cohort hợp lệ phải đi tiếp tới bước xem trước"
+    # Đi thật tới đích: một lời gọi đếm học viên đã được phát ra, và nó đi tới
+    # ĐÚNG project khai trong biến môi trường.
+    assert len(transport.calls) == 1, "cohort hợp lệ phải đi tiếp tới bước xem trước"
+    assert transport.calls[0].startswith("https://abc.supabase.co/rest/v1/")
+
+
+async def test_missing_target_ref_stops_before_reading_the_cohort(monkeypatch):
+    """🔴 Thiếu ``DORM_SYNC_TARGET_PROJECT_REF`` phải dừng ở DÒNG ĐẦU.
+
+    Đây là ca hai tầng từng nói hai điều khác nhau về cùng một biến: adapter
+    cấu hình miễn nó cho bước xem trước, còn ``DormApi`` thì đòi. Hậu quả không
+    phải "một thông điệp lỗi xấu" mà là THỨ TỰ: lệnh chạy trót lọt qua cả
+    ``fetch_cohort`` — mở transaction, đọc trọn danh sách người học khỏi
+    database production — rồi mới chết vì một biến môi trường lẽ ra kiểm được
+    trước khi chạm vào bất cứ thứ gì.
+
+    Ca này khoá đúng thứ tự đó lại: cổng phải đứng TRƯỚC ``fetch_cohort``.
+
+    ⚠️ Nới tập bắt buộc của bước xem trước từ ba biến về hai sẽ làm ĐÚNG ca này
+    đỏ (``fetch_cohort`` bị gọi), không phải một ca nào khác.
+    """
+    monkeypatch.setenv("DORM_SUPABASE_URL", "https://abc.supabase.co")
+    monkeypatch.setenv("DORM_SUPABASE_SECRET_KEY", "sb_secret_x")
+    monkeypatch.delenv("DORM_SYNC_TARGET_PROJECT_REF", raising=False)
+
+    da_doc_cohort = []
+
+    async def _cohort_khong_duoc_doc(academic_year, **kwargs):
+        da_doc_cohort.append(academic_year)
+        return []
+
+    class ApiKhongDuocDung:
+        def __init__(self, *a, **kw):
+            raise AssertionError("đã dựng DormApi dù thiếu biến đích")
+
+    monkeypatch.setattr(sync_module, "fetch_cohort", _cohort_khong_duoc_doc)
+    monkeypatch.setattr(sync_module, "DormApi", ApiKhongDuocDung)
+
+    ma = await main(["--academic-year", "2026"])
+
+    assert ma == 2, "cấu hình thiếu là mã thoát 2, không phải 0 hay 1"
+    assert da_doc_cohort == [], (
+        "đã đọc cohort khỏi database TRƯỚC khi biết gói tin sẽ đi tới đâu"
+    )
 
 
 async def test_wrong_target_stops_before_any_request(monkeypatch):
@@ -484,7 +549,7 @@ async def test_interrupt_mid_write_still_closes_the_run(monkeypatch):
         async def open_sync_run(
             self, academic_year, client_token, raw_count, *, la_lan_chay_lai=False
         ):
-            return 77
+            return OpenSyncRunResult(77)
 
         async def upsert_students(self, run_id, rows):
             raise KeyboardInterrupt
@@ -541,7 +606,7 @@ async def test_stop_request_blocks_the_finalizer_when_the_loop_never_ran(monkeyp
         async def open_sync_run(
             self, academic_year, client_token, raw_count, *, la_lan_chay_lai=False
         ):
-            return 91
+            return OpenSyncRunResult(91)
 
         async def finalize_sync_run(self, run_id, source_count, upserted_count):
             # ⚠️ KHÔNG raise ở đây: `main` bắt `BaseException`, nên một

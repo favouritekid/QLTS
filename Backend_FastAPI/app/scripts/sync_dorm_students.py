@@ -43,24 +43,28 @@ tunnel production đồng nghĩa với việc nâng cấp lược đồ database
 đang chạy — chỉ chạy qua bind-mount trên máy quản trị.
 
 Biến môi trường (KHÔNG có giá trị mặc định — thiếu là dừng):
+
+    Ba biến ĐÍCH — "gói tin đi tới đâu". Bắt buộc ở MỌI chế độ, kể cả xem
+    trước: ngay một lượt chỉ-đọc cũng gửi khoá secret đi trong header tới một
+    máy chủ ngoài.
+
     DORM_SUPABASE_URL          URL project Supabase của hệ KTX
     DORM_SUPABASE_SECRET_KEY   khoá secret; chỉ sống trên máy quản trị
+    DORM_SYNC_TARGET_PROJECT_REF  project ref của Supabase nhận dữ liệu; phải
+                               khớp hostname ``<ref>.supabase.co`` của
+                               ``DORM_SUPABASE_URL`` — xem
+                               ``assert_target_project_matches``.
+                               Đích loopback (Supabase local) được miễn KHỚP,
+                               nhưng biến vẫn phải có mặt.
 
-    Ba biến dưới đây định danh NGUỒN — xem ``assert_source_database_matches``.
-    Chỉ bắt buộc khi ``--apply``:
+    Hai biến NGUỒN — "đọc từ database nào", xem
+    ``assert_source_database_matches``. Chỉ bắt buộc khi ``--apply``:
 
     DORM_SYNC_SOURCE_DB        database nguồn mà đích này chấp nhận, dạng
                                ``host:port/dbname``
                                (ví dụ ``postgres:5432/qlts_production``)
     DORM_SYNC_SOURCE_SYSTEM_ID ``system_identifier`` của cluster nguồn. Lấy bằng:
                                ``select system_identifier from pg_control_system()``
-
-    Biến dưới đây định danh ĐÍCH — xem ``assert_target_project_matches``.
-    Bắt buộc với mọi đích không phải loopback:
-
-    DORM_SYNC_TARGET_PROJECT_REF  project ref của Supabase nhận dữ liệu; phải
-                               khớp hostname ``<ref>.supabase.co`` của
-                               ``DORM_SUPABASE_URL``
 
 ⚠️ ``DORM_SYNC_SOURCE_ENV`` ĐÃ BỎ. Nó so ``APP_ENV`` với một nhãn khai trong
 file secret — mà chính file secret ấy được nạp bằng ``--env-from-file`` nên nó
@@ -77,7 +81,7 @@ import signal
 import sys
 import uuid
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Sequence
 
 import structlog
 
@@ -95,6 +99,8 @@ from app.utils.exceptions import DormSyncConfigError, DormSyncGuardError
 # CLI — phải tiếp tục thấy CÙNG đối tượng, không phải một bản sao thứ hai.
 from app.services.dorm_sync_service import (  # noqa: F401
     DormApi,
+    DormSyncNotice,
+    OpenSyncRunResult,
     _DANG_MA_SQLSTATE,
     _GENDER_MAP,
     _LOOPBACK_HOSTS,
@@ -240,34 +246,35 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 
 
-def _in_thong_bao_phuc_hoi(api: Any) -> None:
-    """In lại ba thông báo phục hồi lượt cũ mà lõi ghi dưới dạng có cấu trúc.
+def _in_thong_bao_phuc_hoi(notices: Sequence[DormSyncNotice]) -> None:
+    """In ba thông báo phục hồi lượt cũ mà lõi trả về dưới dạng có kiểu.
 
     🔴 Lõi không được in: nó dùng chung cho web, nơi stdout là log tiến trình
     chứ không phải màn hình của người vận hành. Nhưng người vận hành thì phải
     thấy ĐỦ ba tình huống — lượt cũ còn chạy, lượt cũ hoá ra đã xong, lượt cũ
     đã đóng sổ — vì mỗi tình huống đòi một quyết định khác nhau.
+
+    ⚠️ Nhận thẳng ``notices`` chứ không nhận object ``DormApi`` rồi tự đi lấy:
+    cảnh báo thuộc về MỘT lời gọi mở lượt, không phải về cả object. Đọc từ
+    object thì lời gọi thứ hai in lại cảnh báo của lời gọi thứ nhất, và bản vá
+    cho việc đó lại là một lệnh ``clear()`` mà người gọi phải nhớ.
     """
-    for tb in getattr(api, "thong_bao_phuc_hoi", []):
-        loai = tb.get("loai")
-        run_id = tb.get("run_id")
-        if loai == "lut_cu_dang_chay":
+    for tb in notices:
+        if tb.loai == "lut_cu_dang_chay":
             print(
-                f"  ⚠️ Có lượt #{run_id} đang chạy mang dấu "
-                f"'{tb.get('dau')}' của lần chạy TRƯỚC."
+                f"  ⚠️ Có lượt #{tb.run_id} đang chạy mang dấu "
+                f"'{tb.dau}' của lần chạy TRƯỚC."
             )
-        elif loai == "lut_cu_da_hoan_tat":
+        elif tb.loai == "lut_cu_da_hoan_tat":
             # RPC cố ý KHÔNG hạ `completed` xuống `failed`. Lượt trước đã xong
             # thật; nói rõ để người vận hành biết mình đang chạy lượt thứ hai
             # chứ không phải sửa một lượt hỏng.
             print(
-                f"  ⚠️ Lượt #{run_id} hoá ra đã HOÀN TẤT, không phải hỏng. "
+                f"  ⚠️ Lượt #{tb.run_id} hoá ra đã HOÀN TẤT, không phải hỏng. "
                 "Mở lượt mới — đây là một lần đồng bộ nữa, không phải phục hồi."
             )
-        elif loai == "lut_cu_da_dong_so":
-            print(f"  Đã đóng sổ lượt #{run_id} (failed). Mở lượt mới.")
-    if getattr(api, "thong_bao_phuc_hoi", None):
-        api.thong_bao_phuc_hoi.clear()
+        elif tb.loai == "lut_cu_da_dong_so":
+            print(f"  Đã đóng sổ lượt #{tb.run_id} (failed). Mở lượt mới.")
 
 
 async def main(argv: Optional[List[str]] = None) -> int:
@@ -366,9 +373,14 @@ async def _chay(argv: Optional[List[str]] = None) -> int:
             supabase_key,
             expected_project_ref=cau_hinh.target_project_ref,
         )
-    except ValueError as exc:
+    except (ValueError, DormSyncGuardError) as exc:
         # Cấu hình sai đích đến — dừng trước khi mở kết nối, in gọn thay vì ném
         # traceback: người vận hành cần sửa biến môi trường, không cần ngăn xếp.
+        #
+        # ⚠️ Bắt CẢ HAI kiểu. Hàng rào đường truyền còn ném ``ValueError``, còn
+        # hàng rào đích nay ném ``DormSyncGuardError`` (lỗi có kiểu, để đường
+        # web không trả 500 trần). Bắt sót một trong hai thì một cấu hình sai
+        # thành traceback thay vì một dòng nói phải sửa biến nào.
         print(f"✗ {exc}", file=sys.stderr)
         return 2
 
@@ -451,13 +463,14 @@ async def _chay(argv: Optional[List[str]] = None) -> int:
             )
 
         try:
-            run_id = await api.open_sync_run(
+            ket_qua_mo = await api.open_sync_run(
                 args.academic_year,
                 client_token,
                 raw_count=len(rows),
                 la_lan_chay_lai=la_lan_chay_lai,
             )
-            _in_thong_bao_phuc_hoi(api)
+            run_id = ket_qua_mo.run_id
+            _in_thong_bao_phuc_hoi(ket_qua_mo.notices)
         except RuntimeError as exc:
             # Chưa mở được lượt thì chưa có gì để dọn. In gọn thay vì ném
             # traceback: người vận hành cần biết PHẢI LÀM GÌ, không cần ngăn xếp.

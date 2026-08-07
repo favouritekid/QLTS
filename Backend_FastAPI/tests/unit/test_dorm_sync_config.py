@@ -170,16 +170,50 @@ def test_adapter_CLI_van_doi_du_nam_bien_khi_ghi():
     assert "DORM_SYNC_SOURCE_SYSTEM_ID" in str(loi.value)
 
 
-def test_xem_truoc_chi_can_url_va_khoa():
+def test_xem_truoc_mien_hai_bien_NGUON():
     """Bắt khai báo nguồn cho một lượt chỉ-đọc chỉ khiến người ta bỏ qua bước
     xem trước — mà xem trước mới là thứ chặn được lần ghi sai."""
     cau_hinh = DormSyncConfig.from_environment(
-        {"DORM_SUPABASE_URL": "https://x.supabase.co", "DORM_SUPABASE_SECRET_KEY": "k"},
+        {
+            "DORM_SUPABASE_URL": "https://x.supabase.co",
+            "DORM_SUPABASE_SECRET_KEY": "k",
+            "DORM_SYNC_TARGET_PROJECT_REF": "x",
+        },
         doi_dinh_danh_nguon=False,
     )
 
     assert cau_hinh.supabase_url == "https://x.supabase.co"
+    assert cau_hinh.target_project_ref == "x"
     assert cau_hinh.source_db == ""
+
+
+def test_xem_truoc_van_doi_du_BA_bien_DICH():
+    """🔴 Miễn nguồn KHÔNG có nghĩa là miễn đích.
+
+    Xem trước cũng gửi khoá secret đi trong header ``apikey`` tới một máy chủ
+    ngoài, nên câu hỏi "đi tới đâu" phải có câu trả lời trước gói tin đầu tiên.
+
+    Trả về một cấu hình với ``target_project_ref=""`` là đẩy phép kiểm xuống
+    tận ``DormApi`` — tức là SAU khi đã đọc trọn cohort khỏi database nguồn.
+    Hai tầng nói hai điều khác nhau về cùng một biến là cách một lượt chạy
+    thất bại ở giữa chừng thay vì ở dòng đầu.
+    """
+    with pytest.raises(DormSyncConfigError) as loi:
+        DormSyncConfig.from_environment(
+            {
+                "DORM_SUPABASE_URL": "https://x.supabase.co",
+                "DORM_SUPABASE_SECRET_KEY": "k",
+            },
+            doi_dinh_danh_nguon=False,
+        )
+
+    thong_diep = str(loi.value)
+    assert "DORM_SYNC_TARGET_PROJECT_REF" in thong_diep
+    # ⚠️ Vế NGƯỢC, và nó mới là vế giữ cho bản vá không đi quá tay: siết luôn
+    # hai biến nguồn thì bước xem trước đòi đủ như bước ghi, và người vận hành
+    # bỏ qua nó — mất đúng hàng rào cuối trước một lần ghi sai.
+    assert "DORM_SYNC_SOURCE_DB" not in thong_diep
+    assert "DORM_SYNC_SOURCE_SYSTEM_ID" not in thong_diep
 
 
 def test_loi_hang_rao_KHONG_ro_ha_tang_ra_HTTP():
