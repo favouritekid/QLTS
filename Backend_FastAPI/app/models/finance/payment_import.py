@@ -202,11 +202,21 @@ class PaymentImportRow(Base):
         #     nằm trong tập chọn lại — đúng đường ghi hai lần.
         # Service có đặt hai thứ này trong cùng savepoint, nhưng một lần sửa
         # SQL lúc chữa dữ liệu thì không đi qua service.
+        # `CASE` chứ không phải `AND` nối tiếp — cùng dạng biểu thức với backfill
+        # của `imp2axis20260807`, và cùng một lý do PHÒNG THỦ. Đã đo trên PG16:
+        # ở CHECK (một *expression*) PostgreSQL short-circuit trái→phải nên bản
+        # `AND` không vỡ; chỗ nó KHÔNG hứa thứ tự là *qual*, và ở đó
+        # `jsonb_array_length` gặp scalar vỡ thật (22023) — backfill đã dính.
+        # Giữ `CASE` ở đây vì tài liệu không hứa gì, và vì biểu thức này đã bị
+        # sao chép sang qual đúng một lần rồi. Số đo:
+        # tests/services/test_payment_import_row_committed_check.py
         CheckConstraint(
             "(commit_status = 'committed') = "
-            "(payment_ids IS NOT NULL "
-            " AND jsonb_typeof(payment_ids) = 'array' "
-            " AND jsonb_array_length(payment_ids) > 0)",
+            "(CASE "
+            " WHEN payment_ids IS NULL THEN false "
+            " WHEN jsonb_typeof(payment_ids) <> 'array' THEN false "
+            " ELSE jsonb_array_length(payment_ids) > 0 "
+            "END)",
             name="chk_payment_import_row_committed_has_payments",
         ),
         # "Chờ xác nhận trùng" chỉ có nghĩa với dòng CÓ cảnh báo.

@@ -154,13 +154,20 @@ def upgrade() -> None:
     # là mất dấu tiền; một dòng có mã phiếu mà chưa `committed` là tiền đã vào
     # nhưng vẫn nằm trong tập chọn lại. Service đặt hai thứ trong cùng savepoint,
     # nhưng một lần sửa SQL lúc chữa dữ liệu thì không đi qua service.
+    # `CASE`, không phải `AND` nối tiếp — cùng dạng biểu thức với backfill ở
+    # trên. Ở CHECK thì bản `AND` không vỡ (đã đo: expression short-circuit
+    # trái→phải); nó vỡ ở *qual*, tức đúng chỗ backfill đứng. Viết `CASE` cả ở
+    # đây để một biểu thức chỉ có MỘT dạng — lần sao chép tiếp theo sang qual sẽ
+    # không mang theo cái bẫy.
     op.create_check_constraint(
         "chk_payment_import_row_committed_has_payments",
         "payment_import_row",
         "(commit_status = 'committed') = "
-        "(payment_ids IS NOT NULL "
-        " AND jsonb_typeof(payment_ids) = 'array' "
-        " AND jsonb_array_length(payment_ids) > 0)",
+        "(CASE "
+        " WHEN payment_ids IS NULL THEN false "
+        " WHEN jsonb_typeof(payment_ids) <> 'array' THEN false "
+        " ELSE jsonb_array_length(payment_ids) > 0 "
+        "END)",
     )
     # `duplicate_review_required` chỉ có nghĩa với dòng CÓ cảnh báo. Dòng
     # `matched` mà "chờ xác nhận trùng" là một trạng thái không ai đọc được.

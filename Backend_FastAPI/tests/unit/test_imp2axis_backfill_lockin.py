@@ -150,3 +150,67 @@ def test_dung_CASE_thay_vi_AND_khi_doc_jsonb(van: str):
     assert "CASE" in doan, (
         "phép lọc `payment_ids` phải dùng CASE để chốt thứ tự đánh giá"
     )
+
+
+def test_CHECK_committed_cung_dung_CASE(van: str):
+    """Không chỉ backfill — ràng buộc CHECK cũng đọc chính `payment_ids` ấy.
+
+    Bản đầu dùng ``CASE`` cho backfill rồi để ``AND`` nối tiếp ở CHECK ngay bên
+    dưới — cùng một tệp vừa ghi lời cảnh báo vừa vi phạm nó.
+
+    Đo rồi: ở ngữ cảnh CHECK, bản ``AND`` **không** vỡ (PostgreSQL short-circuit
+    trái→phải trong một expression), nên đây là ca PHÒNG THỦ chứ không phải bản
+    vá cho một lỗi tái hiện được. Nó vẫn đáng giữ vì hai lẽ: tài liệu PostgreSQL
+    không hứa thứ tự ấy, và biểu thức này đã bị sao chép sang ngữ cảnh *qual* một
+    lần rồi — chính backfill ngay phía trên, nơi nó vỡ thật.
+
+    Ca này là thứ DUY NHẤT phân biệt hai bản DDL: bộ ca hành vi ở
+    ``tests/services/test_payment_import_row_committed_check.py`` xanh trên cả
+    hai.
+    """
+    chuan = _chuan_hoa(van.split("def downgrade")[0])
+    i = chuan.find("chk_payment_import_row_committed_has_payments")
+    assert i > 0, "không tìm thấy ràng buộc `committed ⟺ có mã phiếu`"
+    doan = chuan[i : i + 400]
+    assert "CASE" in doan, (
+        "ràng buộc `committed ⟺ có mã phiếu` đang nối `AND` — planner có quyền "
+        "chạy `jsonb_array_length` trước `jsonb_typeof` và vỡ với scalar"
+    )
+    assert "AND jsonb_array_length" not in doan
+
+
+def test_CHECK_o_model_va_migration_la_MOT_bieu_thuc():
+    """Ràng buộc này tồn tại hai bản — bản nào lệch cũng là một lời nói dối.
+
+    Migration dựng ràng buộc cho cơ sở dữ liệu đã có; ``create_all()`` dựng nó
+    cho cơ sở dữ liệu mới (và cho toàn bộ test). Hai bản lệch nhau nghĩa là cái
+    được kiểm mỗi ngày trong test không phải cái đang canh dữ liệu thật.
+    """
+    import ast
+
+    from app.models.finance.payment_import import PaymentImportRow
+
+    TEN = "chk_payment_import_row_committed_has_payments"
+
+    ban_mig = None
+    for nut in ast.walk(ast.parse(_MIGRATION.read_text(encoding="utf-8"))):
+        if (
+            isinstance(nut, ast.Call)
+            and getattr(nut.func, "attr", None) == "create_check_constraint"
+            and nut.args
+            and getattr(nut.args[0], "value", None) == TEN
+        ):
+            ban_mig = ast.literal_eval(nut.args[2])
+    assert ban_mig, f"không tìm thấy `create_check_constraint({TEN})` trong migration"
+
+    ban_model = next(
+        str(c.sqltext)
+        for c in PaymentImportRow.__table__.constraints
+        if getattr(c, "name", None) == TEN
+    )
+
+    assert _chuan_hoa(ban_model) == _chuan_hoa(ban_mig), (
+        "biểu thức CHECK ở model và ở migration đã lệch nhau:\n"
+        f"  model     : {_chuan_hoa(ban_model)}\n"
+        f"  migration : {_chuan_hoa(ban_mig)}"
+    )
