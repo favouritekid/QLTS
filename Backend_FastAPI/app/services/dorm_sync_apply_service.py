@@ -50,7 +50,7 @@ from app.services.dorm_sync_snapshot import (
 )
 from app.utils.exceptions import (
     BusinessRuleViolation,
-    DormSyncOpenAbsentError,
+    DormSyncOpenNotCreatedError,
     DormSyncTokenError,
 )
 
@@ -224,6 +224,53 @@ async def prepare_apply(
     )
 
 
+def _kiem_ket_qua_da_luu(so_cai: DormSyncOperation) -> None:
+    """Hàng ``completed`` đọc lại phải DÙNG ĐƯỢC. Fail-closed từng bước.
+
+    🔴 ``result`` là JSONB — nó nhận được cả list, cả số, cả một object thiếu
+    trường. Bản trước gọi thẳng ``so_cai.result.get(...)`` và một giá trị list
+    làm nổ ``AttributeError`` ra khỏi service: người bấm nhận 500 trần cho một
+    sự cố có tên rất rõ là "sổ sách hỏng".
+
+    Con số ở đây đi thẳng vào màn hình "đã đồng bộ xong" và vào sổ đối soát,
+    nên nhận bừa là đóng dấu xác nhận lên một thứ ta không đọc được.
+    """
+
+    def _hong(vi_sao: str) -> BusinessRuleViolation:
+        return BusinessRuleViolation(
+            f"Sổ cái ghi lượt #{so_cai.id} đã `completed` nhưng {vi_sao}. "
+            "Không kết luận được lượt bên hệ ký túc xá đã tới đâu — phải đối "
+            "soát bằng tay."
+        )
+
+    if so_cai.ktx_run_id is None:
+        raise _hong("thiếu `ktx_run_id`")
+
+    ket_qua = so_cai.result
+    if not isinstance(ket_qua, dict):
+        raise _hong("`result` không phải object")
+
+    if ket_qua.get("status") != "completed":
+        raise _hong(f"`result.status` là {ket_qua.get('status')!r}")
+
+    # 🔴 CỘT và JSON phải nói CÙNG một con số.
+    #
+    # Hai chỗ ghi cùng một sự thật; lệch nghĩa là một trong hai đã bị sửa, và
+    # ta không biết cái nào. Người vận hành dùng `ktx_run_id` để lần ra lượt
+    # bên kia — trỏ họ tới sai lượt còn tệ hơn không trỏ gì.
+    if ket_qua.get("ktx_run_id") != so_cai.ktx_run_id:
+        raise _hong(
+            f"cột `ktx_run_id` ({so_cai.ktx_run_id}) khác giá trị trong "
+            f"`result` ({ket_qua.get('ktx_run_id')})"
+        )
+
+    for ten in ("upserted", "blocked", "deactivated"):
+        gia_tri = ket_qua.get(ten)
+        # `bool` là lớp con của `int` — `True` không phải một số đếm.
+        if not isinstance(gia_tri, int) or isinstance(gia_tri, bool) or gia_tri < 0:
+            raise _hong(f"`{ten}` không phải số nguyên không âm")
+
+
 def _rang_so_cai_voi_phieu(
     so_cai: DormSyncOperation, claims: PreviewTokenClaims, actor_id: int
 ) -> None:
@@ -271,23 +318,7 @@ def _xet_so_cai_cu(
         # thiếu `ktx_run_id` hoặc thiếu `result` là sổ sách đã hỏng từ trước;
         # trả nó về như "đã xong" là đóng dấu xác nhận lên đúng cái hỏng đó, và
         # người vận hành mất luôn đường lần ra lượt bên kia.
-        if so_cai.ktx_run_id is None or not so_cai.result:
-            raise BusinessRuleViolation(
-                f"Sổ cái ghi lượt #{so_cai.id} đã `completed` nhưng thiếu "
-                "`ktx_run_id` hoặc `result`. Không kết luận được lượt bên hệ ký "
-                "túc xá đã tới đâu — phải đối soát bằng tay."
-            )
-        # 🔴 CỘT và JSON phải nói CÙNG một con số.
-        #
-        # Hai chỗ ghi cùng một sự thật; lệch nghĩa là một trong hai đã bị sửa,
-        # và ta không biết cái nào. Người vận hành dùng `ktx_run_id` để lần ra
-        # lượt bên kia — trỏ họ tới sai lượt còn tệ hơn không trỏ gì.
-        if so_cai.result.get("ktx_run_id") != so_cai.ktx_run_id:
-            raise BusinessRuleViolation(
-                f"Sổ cái ghi lượt #{so_cai.id}: cột `ktx_run_id` "
-                f"({so_cai.ktx_run_id}) khác giá trị trong `result` "
-                f"({so_cai.result.get('ktx_run_id')}). Phải đối soát bằng tay."
-            )
+        _kiem_ket_qua_da_luu(so_cai)
         return KetQuaChuanBi(
             trang_thai=TrangThaiChuanBi.DA_XONG,
             so_cai=so_cai,
@@ -459,22 +490,35 @@ async def execute_apply(
     ngắt kết nối giữa chừng, và đúng lúc đó ta VẪN phải biết bên kia ra sao —
     nhưng chỉ được chờ có giới hạn.
     """
-    if api is None:
-        api = api_factory(
-            cau_hinh.supabase_url,
-            cau_hinh.supabase_secret_key,
-            expected_project_ref=cau_hinh.target_project_ref,
-        )
-
     run_id: Optional[int] = None
     upserted = 0
     blocked = 0
     da_mo_client = False
 
+    # 🔴 PHA MỞ, có hàng rào riêng.
+    #
+    # `DormApi.__init__` chạy hai guard (đường truyền, project ref) và
+    # `__aenter__` chỉ dựng `httpx.AsyncClient` — chưa gửi byte nào sang hệ KTX.
+    # Hỏng ở đây là CHẮC CHẮN chưa tạo lượt nào, nên kết cục đúng là `FAILED`.
+    #
+    # Bản trước để chúng bay thẳng ra vì khối `try` bao ngoài chỉ có `finally`,
+    # không có `except`. Sau khi commit A đã ghi `running`, router không nhận
+    # được `KetQuaGhi` nào, sổ cái nằm lại `running`, và mọi lần bấm sau với
+    # cùng phiếu bị chặn vĩnh viễn.
     try:
+        if api is None:
+            api = api_factory(
+                cau_hinh.supabase_url,
+                cau_hinh.supabase_secret_key,
+                expected_project_ref=cau_hinh.target_project_ref,
+            )
         await api.__aenter__()
         da_mo_client = True
+    except (Exception, asyncio.CancelledError) as loi:
+        log.warning("dorm_sync_apply_client_open_failed", loi=type(loi).__name__)
+        return KetQuaGhi(ket_cuc=KetCuc.FAILED, ly_do=str(loi))
 
+    try:
         try:
             ket_qua_mo = await api.open_sync_run(
                 claims.academic_year,
@@ -535,14 +579,20 @@ async def execute_apply(
 
     finally:
         if da_mo_client:
+            # 🔴 Lỗi ĐÓNG client không được xoá kết quả đã tính.
+            #
+            # Tới đây hệ KTX đã đổi thật (hoặc đã được đối soát). Một
+            # `close failed` là chuyện của socket phía ta; để nó bay ra ngoài
+            # là làm router mất `KetQuaGhi` và bỏ sổ cái ở `running`.
+            #
+            # ⚠️ Bắt CẢ `asyncio.CancelledError`. Nó KHÔNG phải `Exception`, và
+            # một lần huỷ rơi đúng vào lúc đóng socket — sau khi `finalize` đã
+            # thành công — sẽ xoá sạch kết quả `completed` vừa tính xong.
+            # `KeyboardInterrupt`/`SystemExit` vẫn đi tiếp: đó là yêu cầu dừng
+            # tiến trình, không phải một sự cố mạng.
             try:
                 await api.__aexit__(None, None, None)
-            except Exception:
-                # 🔴 Lỗi ĐÓNG client không được xoá kết quả đã tính.
-                #
-                # Tới đây hệ KTX đã đổi thật (hoặc đã được đối soát). Một
-                # `close failed` là chuyện của socket phía ta; để nó bay ra
-                # ngoài là làm router mất `KetQuaGhi` và bỏ sổ cái ở `running`.
+            except (Exception, asyncio.CancelledError):
                 log.warning("dorm_sync_apply_close_failed", run_id=run_id)
 
     return ket_qua
@@ -569,7 +619,7 @@ async def _ket_luan_sau_loi(
         # Bản trước gộp cả hai thành `failed`. Đo được: mất ACK lúc POST cộng
         # với lần GET đối soát cũng hỏng ⇒ ghi `failed` cho một lượt có thể
         # đang sống.
-        if isinstance(loi, DormSyncOpenAbsentError):
+        if isinstance(loi, DormSyncOpenNotCreatedError):
             log.warning("dorm_sync_apply_failed_before_open")
             return KetQuaGhi(ket_cuc=KetCuc.FAILED, ly_do=str(loi))
 

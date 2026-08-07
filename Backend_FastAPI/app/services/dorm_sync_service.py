@@ -41,6 +41,7 @@ from app.utils.exceptions import (
     DormSyncConfigError,
     DormSyncGuardError,
     DormSyncOpenAbsentError,
+    DormSyncOpenNotCreatedError,
     DormSyncOpenUnknownError,
     DormSyncTargetMismatchError,
 )
@@ -1101,7 +1102,10 @@ class DormApi:
                     "đánh dấu failed bất cứ lượt nào."
                 )
 
-            raise RuntimeError(
+            # Đã ĐỌC ĐƯỢC và xác nhận lượt kia không mang dấu của ta ⇒ lần
+            # chạy này chưa tạo hàng nào. Chắc chắn, nên là
+            # `DormSyncOpenNotCreatedError` chứ không phải "không biết".
+            raise DormSyncOpenNotCreatedError(
                 f"Đã có một lượt đồng bộ ĐANG CHẠY cho năm {academic_year} và nó "
                 "KHÔNG mang dấu của lần chạy này. Chờ nó kết thúc hoặc đánh dấu "
                 "failed trước khi chạy lượt mới. "
@@ -1120,7 +1124,15 @@ class DormApi:
 
         # Còn lại là câu trả lời DỨT KHOÁT của database (400/401/403…): không có
         # hàng nào được tạo, không cần đối soát.
-        self._raise_for_status(response, "Mở lượt đồng bộ")
+        #
+        # 🔴 Và nói điều đó bằng KIỂU. `_raise_for_status` ném `RuntimeError`
+        # chung — người gọi không phân biệt được nó với một lỗi mơ hồ, và bản
+        # trước để 401 rơi thành `outcome_unknown`: sổ cái ghi "không rõ hệ KTX
+        # đã tới đâu" cho một lượt mà database vừa từ chối dứt khoát.
+        try:
+            self._raise_for_status(response, "Mở lượt đồng bộ")
+        except RuntimeError as exc:
+            raise DormSyncOpenNotCreatedError(str(exc)) from exc
 
         try:
             return OpenSyncRunResult(response.json()[0]["id"])

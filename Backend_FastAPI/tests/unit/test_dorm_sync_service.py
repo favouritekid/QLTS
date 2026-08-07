@@ -21,6 +21,7 @@ from app.utils.exceptions import (
     DormSyncConfigError,
     DormSyncGuardError,
     DormSyncOpenAbsentError,
+    DormSyncOpenNotCreatedError,
     DormSyncOpenUnknownError,
 )
 from app.services.dorm_sync_service import (
@@ -735,7 +736,7 @@ async def test_open_run_trusts_definitive_client_errors(ma_loi):
         post_response=_FakeResponse(status_code=ma_loi, payload=[]),
     )
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(DormSyncOpenNotCreatedError):
         await _api_with(client).open_sync_run(2026, "tok", raw_count=1)
 
     assert [c["method"] for c in client.calls] == ["POST"]
@@ -784,7 +785,7 @@ async def test_open_run_refuses_a_conflict_it_does_not_own():
         post_response=_FakeResponse(status_code=409, payload=[]),
     )
 
-    with pytest.raises(RuntimeError) as exc:
+    with pytest.raises(DormSyncOpenNotCreatedError) as exc:
         await _api_with(client).open_sync_run(2026, "tok", raw_count=1)
 
     assert "KHÔNG mang dấu của lần chạy này" in str(exc.value)

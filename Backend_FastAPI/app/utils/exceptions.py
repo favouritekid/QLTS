@@ -597,16 +597,34 @@ class DormSyncTokenError(ServiceError):
         return self.operator_detail
 
 
-class DormSyncOpenAbsentError(ServiceError):
-    """Không mở được lượt, VÀ đã đối soát: database chưa nhận gì.
+class DormSyncOpenNotCreatedError(ServiceError):
+    """Không mở được lượt, và BIẾT CHẮC hệ ký túc xá chưa tạo hàng nào.
 
-    🔴 Tách khỏi :class:`DormSyncOpenUnknownError` vì hai ca dẫn tới hai trạng
-    thái sổ cái khác nhau. Ở đây ta BIẾT CHẮC bên kia sạch, nên lượt được ghi
-    ``failed`` và một phiếu mới chạy được ngay.
+    🔴 Kiểu CHUNG cho mọi nhánh chắc chắn: đối soát theo dấu lượt trả về
+    "absent"; database từ chối dứt khoát (400/401/403); và ca 409 mà lượt đang
+    chạy bên kia đã được xác nhận KHÔNG mang dấu của lần chạy này.
+
+    Ba đường vào khác nhau, cùng một sự thật — nên cùng một kiểu. Người gọi chỉ
+    cần hỏi ``isinstance``; thêm một nhánh chắc chắn về sau mà quên cập nhật
+    danh sách kiểu là cách bản trước để 401 rơi thành ``outcome_unknown``.
+
+    Tách khỏi :class:`DormSyncOpenUnknownError` vì hai ca dẫn tới hai trạng thái
+    sổ cái khác nhau. Ở đây ta biết chắc bên kia sạch: lượt ghi ``failed`` và
+    một phiếu mới chạy được ngay.
     """
 
     status_code = status.HTTP_502_BAD_GATEWAY
     detail = "Không mở được lượt đồng bộ; hệ ký túc xá chưa nhận gì."
+    error_code = "DORM_SYNC_OPEN_NOT_CREATED"
+
+
+class DormSyncOpenAbsentError(DormSyncOpenNotCreatedError):
+    """Ca cụ thể: đã đối soát theo dấu lượt và KHÔNG thấy hàng nào.
+
+    Giữ riêng để thông điệp nói đúng bằng chứng — "đã tra theo dấu" khác với
+    "database trả 401". Cả hai đều là :class:`DormSyncOpenNotCreatedError`.
+    """
+
     error_code = "DORM_SYNC_OPEN_ABSENT"
 
 

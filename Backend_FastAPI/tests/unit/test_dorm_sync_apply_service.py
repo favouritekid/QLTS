@@ -10,6 +10,8 @@ dưới đây ghi lại DÃY lời gọi chứ không kiểm sự hiện diện:
 """
 
 
+import asyncio
+
 import pytest
 from types import SimpleNamespace
 
@@ -31,6 +33,7 @@ from app.services.dorm_sync_snapshot import (
 from app.utils.exceptions import (
     BusinessRuleViolation,
     DormSyncOpenAbsentError,
+    DormSyncOpenNotCreatedError,
     DormSyncOpenUnknownError,
     DormSyncTokenError,
 )
@@ -117,7 +120,17 @@ def _so_cai(status="running", claims=None, **ghi_de):
         # Hàng `completed` mặc định là hàng HỢP LỆ; ca kiểm hàng hỏng dựng
         # riêng bên dưới.
         ktx_run_id=42 if status == "completed" else None,
-        result={"status": status, "ktx_run_id": 42} if status == "completed" else None,
+        result=(
+            {
+                "status": "completed",
+                "ktx_run_id": 42,
+                "upserted": 2,
+                "blocked": 0,
+                "deactivated": 3,
+            }
+            if status == "completed"
+            else None
+        ),
     )
     base.update(ghi_de)
     return SimpleNamespace(**base)
@@ -818,8 +831,16 @@ async def test_loi_DONG_client_khong_xoa_ket_qua_completed():
     assert ket_qua.deactivated == 3
 
 
-async def test_loi_MO_client_van_tra_ket_qua():
-    """Vế còn lại của cùng vòng đời: ``__aenter__`` hỏng."""
+async def test_loi_MO_client_van_tra_KetQuaGhi():
+    """Vế còn lại của cùng vòng đời: ``__aenter__`` hỏng ⇒ FAILED, không ném.
+
+    🔴 ``DormApi.__aenter__`` chỉ dựng ``httpx.AsyncClient`` — chưa gửi byte
+    nào sang hệ KTX. Hỏng ở đây là CHẮC CHẮN chưa tạo lượt nào.
+
+    Bản trước để nó bay thẳng ra. Sau khi commit A đã ghi ``running``, router
+    không nhận được ``KetQuaGhi`` nào, sổ cái nằm lại ``running``, và mọi lần
+    bấm sau với cùng phiếu bị chặn vĩnh viễn.
+    """
 
     class _MoHong:
         async def __aenter__(self):
@@ -830,10 +851,12 @@ async def test_loi_MO_client_van_tra_ket_qua():
 
     _, claims = _phieu()
 
-    with pytest.raises(RuntimeError):
-        await execute_apply(
-            cau_hinh=_CAU_HINH, claims=claims, rows=_ROWS, api=_MoHong()
-        )
+    ket_qua = await execute_apply(
+        cau_hinh=_CAU_HINH, claims=claims, rows=_ROWS, api=_MoHong()
+    )
+
+    assert ket_qua.ket_cuc is KetCuc.FAILED
+    assert ket_qua.ktx_run_id is None
 
 
 @pytest.mark.parametrize(
@@ -923,3 +946,148 @@ def test_KHONG_nuot_KeyboardInterrupt_va_SystemExit():
     assert "except BaseException" not in ma
     assert "except asyncio.CancelledError" in ma
     assert "except Exception as loi" in ma
+
+
+# ---------------------------------------------------------------------------
+# Vòng ba — vòng đời client, phân loại dứt khoát, cached result
+# ---------------------------------------------------------------------------
+
+
+async def test_loi_DUNG_client_van_tra_KetQuaGhi():
+    """Constructor `DormApi` chạy hai guard và có thể ném — chưa gửi HTTP nào."""
+
+    def _dung_hong(*a, **kw):
+        raise ValueError("project ref không khớp")
+
+    _, claims = _phieu()
+
+    ket_qua = await execute_apply(
+        cau_hinh=_CAU_HINH, claims=claims, rows=_ROWS, api_factory=_dung_hong
+    )
+
+    assert ket_qua.ket_cuc is KetCuc.FAILED
+    assert ket_qua.ktx_run_id is None
+
+
+class _ApiHuyLucDong(_ApiHong):
+    """Chạy trót lọt, rồi bị HUỶ đúng lúc đóng client."""
+
+    def __init__(self):
+        super().__init__("finalized", None, no_o_buoc="khong")
+
+    async def finalize_sync_run(self, run_id, **kw):
+        return 3
+
+    async def __aexit__(self, *exc):
+        raise asyncio.CancelledError()
+
+
+async def test_HUY_luc_dong_client_khong_xoa_ket_qua_completed():
+    """🔴 ``CancelledError`` KHÔNG phải ``Exception``.
+
+    Bản trước chỉ bắt ``Exception`` ở chỗ đóng client, nên một lần huỷ rơi đúng
+    vào lúc đóng socket — SAU khi ``finalize`` đã thành công — xoá sạch kết quả
+    ``completed`` vừa tính xong. Hệ KTX đã đổi thật mà sổ cái nằm lại
+    ``running``.
+    """
+    _, claims = _phieu()
+
+    ket_qua = await execute_apply(
+        cau_hinh=_CAU_HINH, claims=claims, rows=_ROWS, api=_ApiHuyLucDong()
+    )
+
+    assert ket_qua.ket_cuc is KetCuc.COMPLETED
+    assert ket_qua.deactivated == 3
+
+
+async def test_tu_choi_DUT_KHOAT_cua_database_la_FAILED_khong_phai_unknown():
+    """🔴 401/403/400: database đã trả lời dứt khoát và KHÔNG tạo lượt.
+
+    Ghi ``outcome_unknown`` cho ca này là bắt người vận hành đi đối soát một
+    lượt chưa từng tồn tại — và chặn mọi phiếu mới cho tới khi họ làm xong.
+    """
+    _, claims = _phieu()
+
+    class _TuChoi(_ApiHong):
+        def __init__(self):
+            super().__init__("unknown", None, no_o_buoc="open_not_created")
+
+        async def open_sync_run(self, nam, token, raw_count, *, la_lan_chay_lai=False):
+            raise DormSyncOpenNotCreatedError(
+                "Mở lượt đồng bộ thất bại (HTTP 401, request-id x)."
+            )
+
+    api = _TuChoi()
+    ket_qua = await execute_apply(
+        cau_hinh=_CAU_HINH, claims=claims, rows=_ROWS, api=api
+    )
+
+    assert ket_qua.ket_cuc is KetCuc.FAILED
+    assert api.so_lan_doi_soat == 0
+
+
+def test_ca_absent_van_la_mot_DormSyncOpenNotCreatedError():
+    """Ba đường vào khác nhau, cùng một sự thật ⇒ cùng một kiểu.
+
+    Người gọi chỉ hỏi ``isinstance``; thêm một nhánh chắc chắn về sau mà quên
+    cập nhật danh sách kiểu là cách bản trước để 401 rơi thành
+    ``outcome_unknown``.
+    """
+    assert issubclass(DormSyncOpenAbsentError, DormSyncOpenNotCreatedError)
+    assert not issubclass(DormSyncOpenUnknownError, DormSyncOpenNotCreatedError)
+
+
+@pytest.mark.parametrize(
+    "ket_qua_luu, vi_sao",
+    [
+        ([1, 2, 3], "JSONB là list, không phải object"),
+        ("xong", "JSONB là chuỗi"),
+        (42, "JSONB là số"),
+        ({"ktx_run_id": 42, "upserted": 2, "blocked": 0, "deactivated": 3},
+         "thiếu `status`"),
+        ({"status": "failed", "ktx_run_id": 42, "upserted": 2, "blocked": 0,
+          "deactivated": 3}, "`status` không phải completed"),
+        ({"status": "completed", "ktx_run_id": 42, "blocked": 0, "deactivated": 3},
+         "thiếu `upserted`"),
+        ({"status": "completed", "ktx_run_id": 42, "upserted": "2", "blocked": 0,
+          "deactivated": 3}, "`upserted` là chuỗi"),
+        ({"status": "completed", "ktx_run_id": 42, "upserted": True, "blocked": 0,
+          "deactivated": 3}, "`upserted` là bool"),
+        ({"status": "completed", "ktx_run_id": 42, "upserted": -1, "blocked": 0,
+          "deactivated": 3}, "`upserted` âm"),
+    ],
+)
+async def test_cached_result_HONG_thi_fail_closed(monkeypatch, ket_qua_luu, vi_sao):
+    """🔴 ``result`` là JSONB — nó nhận được cả list, cả số, cả object thiếu trường.
+
+    Bản trước gọi thẳng ``so_cai.result.get(...)`` và một giá trị list làm nổ
+    ``AttributeError`` ra khỏi service: người bấm nhận 500 trần cho một sự cố có
+    tên rất rõ là "sổ sách hỏng".
+
+    Con số ở đây đi thẳng vào màn hình "đã đồng bộ xong" và vào sổ đối soát.
+    """
+    token, claims = _phieu()
+    hang = _so_cai(status="completed", claims=claims)
+    hang.result = ket_qua_luu
+
+    with pytest.raises(BusinessRuleViolation):
+        await _chuan_bi(monkeypatch, token=token, so_cai_co_san=hang)
+
+
+def test_execute_apply_KHONG_bao_gio_ne_khoi_KetQuaGhi():
+    """Soi mã: mọi đường ra của hàm phải là `return KetQuaGhi` hoặc `return ket_qua`.
+
+    Ca hành vi ở trên phủ từng đường một; ca này khoá lại vế "không có đường
+    nào khác" — một `raise` mới thêm vào sau này sẽ lọt qua mọi ca kia.
+    """
+    import inspect
+
+    import app.services.dorm_sync_apply_service as m
+
+    ma = inspect.getsource(m.execute_apply)
+
+    # Chỉ được `raise` bên trong khối `try` của thân chính (BusinessRuleViolation
+    # khi lô lệch) — nó nằm trong tầm bắt. Ngoài ra không có `raise` nào khác.
+    assert ma.count("raise ") == 1, "có đường ném mới chưa được bọc"
+    assert "except asyncio.CancelledError" in ma
+    assert "except (Exception, asyncio.CancelledError)" in ma
