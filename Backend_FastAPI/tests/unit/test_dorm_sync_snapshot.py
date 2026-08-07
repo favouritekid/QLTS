@@ -149,6 +149,93 @@ def test_chuoi_NFD_va_NFC_cho_cung_dau_bam():
     )
 
 
+# ---------------------------------------------------------------------------
+# Ca CHÉO — số liệu trên màn hình đổi thì dấu băm phải đổi
+# ---------------------------------------------------------------------------
+#
+# 🔴 Khoảng hở đã đo được, không phải giả định.
+#
+# Bảy số liệu khuyến cáo đếm trên giá trị THÔ; `rows` mang giá trị đã qua
+# `chuan_hoa_so`. Có những thay đổi chỉ MỘT bên nhìn thấy — và với chúng, admin
+# xem một bộ số, dữ liệu đổi trước khi ghi, mà phiếu vẫn hợp lệ.
+
+
+def test_CHEO_so_qua_dai_doi_thanh_de_trong():
+    """🔴 Số dài quá trần → để trống: hai con số trên màn hình đổi CHỖ cho nhau.
+
+    "Không có số liên hệ" tăng, "số bị bỏ vì quá dài" giảm. Nhưng
+    ``chuan_hoa_so`` biến số quá dài thành ``None`` từ trước, nên phần ``rows``
+    của ảnh chụp GIỐNG HỆT ở cả hai trạng thái.
+
+    Đo trước khi vá: số liệu đổi từ (không có số=0, quá dài=1) sang (1, 0) mà
+    ``source_hash`` không đổi một ký tự.
+    """
+    dai = "0" * 21
+    truoc = [_row(contact_phone=dai, contact_phone2=None)]
+    sau = [_row(contact_phone=None, contact_phone2=None)]
+
+    # Bằng chứng khoảng hở CÓ THẬT: phần `rows` của hai bên là một.
+    assert (
+        build_source_snapshot(truoc)["rows"] == build_source_snapshot(sau)["rows"]
+    ), "ca dựng sai: hai trạng thái phải trùng nhau ở phần payload"
+    # Nhưng số liệu thì khác...
+    assert (
+        build_source_snapshot(truoc)["counts"]
+        != build_source_snapshot(sau)["counts"]
+    )
+    # ...nên dấu băm PHẢI khác.
+    assert _bam(truoc) != _bam(sau)
+
+
+def test_CHEO_so_phu_khac_o_dang_tho_nhung_trung_sau_chuan_hoa():
+    """🔴 " 0912 " → "0912" trùng số chính: "có số phụ" về 0.
+
+    ``chuan_hoa_so`` cắt khoảng trắng rồi loại ô phụ vì trùng ô chính, nên
+    payload đã là ``None`` ở cả hai trạng thái. Chỉ phép đếm — vốn nhìn giá trị
+    thô — thấy sự khác biệt.
+    """
+    chinh = "0912345678"
+    truoc = [_row(contact_phone=chinh, contact_phone2=f"  {chinh}  ")]
+    sau = [_row(contact_phone=chinh, contact_phone2=chinh)]
+
+    assert (
+        build_source_snapshot(truoc)["rows"] == build_source_snapshot(sau)["rows"]
+    ), "ca dựng sai: hai trạng thái phải trùng nhau ở phần payload"
+    assert _bam(truoc) != _bam(sau)
+
+
+def test_CHEO_payload_va_so_lieu_deu_khong_doi_thi_dau_bam_KHONG_doi():
+    """Vế ĐẢO — giữ cho bản vá không đi quá tay.
+
+    Nếu ``counts`` nhặt thêm thứ gì đổi theo mỗi lần chạy (mốc thời gian, thứ
+    tự, id lượt) thì hai lần xem trước liên tiếp cho hai dấu băm khác nhau và
+    chốt chặn tất cả — đúng kiểu hỏng mà cả bộ này đang canh ở chiều ngược lại.
+    """
+    rows = [_row(), _row(qlts_profile_id=9002, contact_phone2="0900000002")]
+
+    assert _bam(rows) == _bam(list(rows))
+    # Và một thay đổi KHÔNG chạm cả payload lẫn số liệu cũng không được đổi băm.
+    assert _bam(rows) == _bam(
+        [_row(last_seen_sync_id=999), _row(qlts_profile_id=9002, contact_phone2="0900000002")]
+    )
+
+
+def test_so_lieu_trong_anh_chup_LA_bo_hien_thi_cho_nguoi_bam():
+    """Cùng MỘT helper, không hai công thức.
+
+    Viết một phép đếm thứ hai cho ảnh chụp là dựng lại đúng khoảng hở vừa bịt:
+    hai công thức sẽ lệch ngay lần sửa đầu, và lúc đó cái được ký lại không
+    phải cái được hiển thị.
+    """
+    from dataclasses import asdict
+
+    from app.services.dorm_sync_snapshot import dem_so_lieu_nguon
+
+    rows = [_row(), _row(qlts_profile_id=9002, source_gender_raw="?")]
+
+    assert build_source_snapshot(rows)["counts"] == asdict(dem_so_lieu_nguon(rows))
+
+
 def test_dau_bam_KHONG_phu_thuoc_THU_TU_KHOA():
     """JSON canonical phải sắp KHOÁ, không dựa vào thứ tự chèn của dict.
 
@@ -161,11 +248,20 @@ def test_dau_bam_KHONG_phu_thuoc_THU_TU_KHOA():
     duy nhất giữ cho hai dấu băm bằng nhau.
     """
     snapshot = build_source_snapshot([_row(), _row(qlts_profile_id=9002)])
-    dao_khoa = {
-        "version": snapshot["version"],
-        "row_count": snapshot["row_count"],
-        "rows": [dict(reversed(list(h.items()))) for h in snapshot["rows"]],
-    }
+    # Đảo thứ tự khoá ở CẢ root, CẢ từng hàng, CẢ khối `counts`.
+    dao_khoa = dict(
+        reversed(
+            list(
+                {
+                    **snapshot,
+                    "counts": dict(reversed(list(snapshot["counts"].items()))),
+                    "rows": [
+                        dict(reversed(list(h.items()))) for h in snapshot["rows"]
+                    ],
+                }.items()
+            )
+        )
+    )
 
     assert hash_source_snapshot(snapshot) == hash_source_snapshot(dao_khoa)
 

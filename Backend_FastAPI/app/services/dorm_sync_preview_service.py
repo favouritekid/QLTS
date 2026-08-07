@@ -17,47 +17,27 @@ khoá ký và mốc thời gian đều truyền vào tường minh — cùng lý
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import structlog
 
-from app.repositories.dorm_export_repository import count_atypical_statuses
 from app.services.dorm_sync_config import DormSyncConfig
 from app.services.dorm_sync_service import (
-    _MAX_PHONE_LEN,
     DormApi,
     assert_payload_contract,
     fetch_cohort,
-    normalize_gender,
 )
 from app.services.dorm_sync_snapshot import (
+    SoLieuNguon,
     assert_snapshot_contract,
     build_source_snapshot,
+    dem_so_lieu_nguon,
     hash_source_snapshot,
     phat_hanh_token,
 )
 from app.utils.exceptions import BusinessRuleViolation
 
 log = structlog.get_logger(__name__)
-
-
-@dataclass(frozen=True)
-class SoLieuNguon:
-    """Những con số người bấm phải đọc TRƯỚC khi ký.
-
-    🔴 Không có chúng thì admin ký một trạng thái họ không nhìn thấy: bao nhiêu
-    hồ sơ không rõ giới tính (sẽ bị chặn xếp phòng bên KTX), bao nhiêu người
-    không gọi được, bao nhiêu hồ sơ vẫn đang xét. Vỏ dòng lệnh in đủ những con
-    số này từ đầu; màn hình web mà thiếu là một bản xem trước kém hơn.
-    """
-
-    khong_ro_gioi_tinh: int
-    chua_chot_nganh: int
-    chua_ro_trinh_do: int
-    ho_so_dang_xet: int
-    khong_co_so_lien_he: int
-    co_so_phu: int
-    so_bi_bo_vi_qua_dai: int
 
 
 @dataclass(frozen=True)
@@ -78,47 +58,6 @@ class KetQuaXemTruoc:
     expires_at: Optional[int] = None
 
 
-def dem_so_lieu_nguon(rows: Sequence[Any]) -> SoLieuNguon:
-    """Đếm những thứ người bấm cần biết. Thuần, không chạm gì ngoài ``rows``.
-
-    ⚠️ "Không có số liên hệ" nghĩa là KHÔNG CÓ SỐ NÀO — chỉ đếm ô chính sẽ báo
-    nhầm những em chỉ khai số phụ là không liên hệ được, trong khi gọi được.
-
-    ⚠️ "Số bị bỏ vì quá dài" đếm SỐ, không phải HỒ SƠ, và phủ cả hai ô. Nó cũng
-    không tính lây sang ô phụ bị bỏ vì TRÙNG số chính — đó là dữ liệu bình
-    thường, không phải một sự cố.
-    """
-    return SoLieuNguon(
-        khong_ro_gioi_tinh=sum(
-            1 for r in rows if normalize_gender(r.source_gender_raw) == "unknown"
-        ),
-        chua_chot_nganh=sum(1 for r in rows if not r.program_name),
-        chua_ro_trinh_do=sum(1 for r in rows if not r.degree_level),
-        ho_so_dang_xet=count_atypical_statuses(rows),
-        khong_co_so_lien_he=sum(
-            1
-            for r in rows
-            if not _co_so(r.contact_phone) and not _co_so(r.contact_phone2)
-        ),
-        co_so_phu=sum(
-            1
-            for r in rows
-            if _co_so(r.contact_phone2) and r.contact_phone2 != r.contact_phone
-        ),
-        # Đếm THẲNG trên giá trị nguồn, không suy từ payload: một ô phụ bị bỏ
-        # vì TRÙNG số chính cũng cho `None` ở payload, và gộp nó vào đây sẽ báo
-        # "quá dài" cho một dữ liệu hoàn toàn bình thường.
-        so_bi_bo_vi_qua_dai=sum(
-            1
-            for r in rows
-            for cot in ("contact_phone", "contact_phone2")
-            if len(str(getattr(r, cot, None) or "").strip()) > _MAX_PHONE_LEN
-        ),
-    )
-
-
-def _co_so(gia_tri: Any) -> bool:
-    return bool(str(gia_tri or "").strip())
 
 
 async def chuan_bi_xem_truoc(

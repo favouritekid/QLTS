@@ -7,8 +7,8 @@ môi trường và không biết gì về HTTP. Ngược lại, mọi lỗi nghi
 là exception có kiểu — ``base_app_exception_handler`` dịch sang mã HTTP, router
 KHÔNG bắt rồi ném ``HTTPException`` (kiến trúc V3.0).
 
-⚠️ Bước này CHỈ có ``GET /context``. Chưa mở lượt, chưa đọc cohort, chưa ký
-token, chưa chạm sổ cái.
+Hiện có ``GET /context`` và ``POST /preview`` — cả hai CHỈ ĐỌC. Chưa mở lượt
+đồng bộ, chưa upsert/finalize, chưa chạm sổ cái ``dorm_sync_operations``.
 """
 
 from __future__ import annotations

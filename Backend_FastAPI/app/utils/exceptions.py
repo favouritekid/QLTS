@@ -549,11 +549,15 @@ class DormSyncTargetMismatchError(DormSyncGuardError):
 class DormSyncTokenError(ServiceError):
     """Token xem trước không hợp lệ, hết hạn, hoặc không thuộc người đang gọi.
 
-    🔴 400 chứ không 401/403: người gọi ĐÃ qua cổng quyền (endpoint là
+    🔴 409 chứ không 401/403: người gọi ĐÃ qua cổng quyền (endpoint là
     admin-only). Thứ hỏng là cái vé họ mang theo — hết hạn, bị sửa, hoặc của
     người khác — chứ không phải danh tính của họ. Trả 401 ở đây sẽ đẩy frontend
     đi làm mới phiên đăng nhập cho một sự cố mà cách xử đúng là bấm lại nút
     "Xem trước".
+
+    Và 409 chứ không 400: trạng thái đã đổi giữa lúc xem và lúc bấm là một XUNG
+    ĐỘT, cùng họ với ``DormSyncGuardError``. 400 nói "bạn gửi sai", trong khi
+    người gửi không sai gì cả — họ chỉ chậm mất năm phút.
 
     ⚠️ ``detail`` ở cấp lớp KHÔNG nói token hỏng ở khâu nào. Phân biệt "chữ ký
     sai" với "hết hạn" cho phía ngoài là đưa cho người đang dò một tín hiệu để
