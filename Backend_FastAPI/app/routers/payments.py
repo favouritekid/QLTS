@@ -59,6 +59,9 @@ from app.utils.exceptions import (
 # hằng này (`..._ENTITY` → `..._CONTENT`) và nhập nó thêm một cảnh báo
 # deprecation vào mọi lượt chạy. Con số thì không đổi tên.
 HTTP_422_UNPROCESSABLE = 422
+#: Cùng lý do: hàm `list_payments` có tham số query tên `status` che mất module
+#: `status` của FastAPI trong toàn bộ thân hàm.
+HTTP_410_GONE = 410
 
 log = structlog.get_logger(__name__)
 
@@ -94,31 +97,31 @@ async def list_payments(
         "invoice_id sẽ không thấy. Kết hợp được với pending_manual_only.",
     ),
     method_id: Optional[int] = Query(None, description="Filter by payment method ID"),
+    # ── Hai tham số ĐÃ GỠ. Giữ lại trong chữ ký CHỈ để từ chối tường minh.
+    #
+    # Xoá hẳn khỏi chữ ký là fail-OPEN, và im lặng: FastAPI bỏ qua query lạ, nên
+    # một client cũ gọi `?fee_id=1&duplicate_amount=…&duplicate_date=…` sẽ nhận
+    # 200 kèm DANH SÁCH PHIẾU THU THƯỜNG của khoản phí — rồi giao diện vẽ nó
+    # thành "các phiếu nghi trùng". Một tập rộng hơn hẳn, trình bày như thể là
+    # kết quả của luật dò trùng.
+    #
+    # Đường xem trước bị gỡ vì nó không còn quyền gì mà chi phí thì vẫn nguyên:
+    # cache, debounce, đua request, kết quả rỗng đã cũ, và hai bộ ứng viên cùng
+    # xuất hiện. Nó cũng tạo cảm giác sai rằng "không thấy cảnh báo nghĩa là an
+    # toàn". Cảnh báo nay đến từ 409 của chính lần bấm Lưu, kèm một phiếu xác
+    # nhận — xem `duplicate_review_token`.
     duplicate_amount: Optional[Decimal] = Query(
         None,
-        gt=0,
-        # Cùng trần với `PaymentCreate.amount`. Đường xem trước hứa trả "đúng
-        # tập ứng viên mà POST sẽ dùng", nên miền giá trị của nó không được
-        # rộng hơn miền của POST: một số vượt trần lọt tới `Payment.amount ==`
-        # rồi vỡ ở PostgreSQL ("numeric field overflow") — 500 cho một đầu vào
-        # đáng lẽ là 422. Đúng lớp lỗi mà `fee_id` đã đóng bằng `le` ngay phía
-        # trên, chỉ khác tham số.
-        le=finance_schemas.MAX_AMOUNT,
-        # Và cùng SỐ LẺ với `PaymentCreate.amount` (validator từ chối gì khác
-        # `quantize(0.01)`). Nửa còn lại của cùng lời hứa: `100.001` mà lọt qua
-        # đây thì so với cột `Numeric(15,2)` không khớp phiếu nào → xem trước
-        # nói "không trùng", rồi POST cùng số đó lại 422. Người dùng nhận hai
-        # câu trả lời khác nhau cho một con số.
-        decimal_places=2,
-        description="Xem trước phiếu NGHI TRÙNG: đi kèm duplicate_date và "
-        "fee_id. Trả về đúng tập ứng viên mà POST /api/payments sẽ dùng để "
-        "cảnh báo, theo cùng một luật ở cùng một chỗ — giao diện chỉ hiển thị, "
-        "không tự dựng lại luật (nó sẽ lệch: FE không thấy tổng tiền đã hoàn, "
-        "và 'ngày lịch VN' ở FE là múi giờ máy người dùng).",
+        deprecated=True,
+        include_in_schema=False,
+        description="ĐÃ GỠ — trả 410. Cảnh báo trùng nay đến từ 409 của POST "
+        "/api/payments kèm review_token.",
     ),
     duplicate_date: Optional[datetime] = Query(
         None,
-        description="Mốc thời gian của khoản thu sắp ghi (xem duplicate_amount).",
+        deprecated=True,
+        include_in_schema=False,
+        description="ĐÃ GỠ — xem duplicate_amount.",
     ),
     pending_manual_only: bool = Query(
         False,
@@ -151,50 +154,27 @@ async def list_payments(
     limit = min(page_size, 100)
 
     if duplicate_amount is not None or duplicate_date is not None:
-        # Xem trước ứng viên trùng. Đặt ở ĐÂY chứ không thành một route riêng
-        # là có chủ ý: Casbin trong repo này cấp quyền theo TỪNG path tường
-        # minh, nên một path mới kéo theo policy + migration + test phân quyền,
-        # và một sai sót ở đó là 403 im lặng trên production. Path này đã có
-        # grant cho đúng nhóm người ghi phiếu.
-        if duplicate_amount is None or duplicate_date is None or fee_id is None:
-            # `HTTP_422_UNPROCESSABLE_ENTITY` nhập thẳng, KHÔNG qua
-            # `status.HTTP_...`: hàm này có một tham số query tên `status`, và
-            # nó che mất module `status` của FastAPI trong toàn bộ thân hàm.
-            # Viết `status.HTTP_422_...` ở đây ném `AttributeError` trên
-            # `None` — tức một lỗi 500 thay cho lời từ chối 422.
-            raise HTTPException(
-                status_code=HTTP_422_UNPROCESSABLE,
-                detail=(
-                    "Xem trước phiếu nghi trùng cần đủ fee_id, duplicate_amount "
-                    "và duplicate_date."
-                ),
-            )
-        # Chặn năm ngoài tầm nghiệp vụ. Cửa sổ dò trùng cộng/trừ vài ngày quanh
-        # mốc này, nên `9999-12-31` làm phép cộng tràn khỏi `date.max` và
-        # `0001-01-01` tràn khi quy về múi giờ — cả hai thành `OverflowError`,
-        # tức 500 cho một chuỗi ngày mà người gọi tự gõ.
-        if not (1900 <= duplicate_date.year <= 2100):
-            raise HTTPException(
-                status_code=HTTP_422_UNPROCESSABLE,
-                detail="duplicate_date nằm ngoài khoảng năm hợp lệ (1900–2100).",
-            )
-        candidates, truncated = await payment_repo.find_duplicate_candidates(
-            fee_id=fee_id,
-            amount=duplicate_amount,
-            payment_date=duplicate_date,
-            unit_id=unit_id,
-        )
-        items = [
-            _build_payment_list_item(p, current_user.id, current_user.role)
-            for p in candidates
-        ]
-        return finance_schemas.PaymentsPage(
-            items=items,
-            # `total` lớn hơn số dòng trả về = "còn nữa" — cùng quy ước với các
-            # danh sách khác, nên giao diện không phải học thêm cách đọc mới.
-            total=len(items) + (1 if truncated else 0),
-            page=1,
-            page_size=len(items),
+        # 410 GONE — từ chối TƯỜNG MINH, không im lặng bỏ qua.
+        #
+        # Đây là toàn bộ lý do hai tham số trên còn nằm trong chữ ký. Gỡ hẳn
+        # chúng thì FastAPI bỏ qua query lạ và trả 200 kèm danh sách phiếu thu
+        # THƯỜNG của khoản phí — một tập rộng hơn hẳn tập ứng viên trùng, mà
+        # client cũ sẽ vẽ ra thành "các phiếu nghi trùng" rồi cho người dùng bấm
+        # qua. Hỏng kiểu đó không có dòng đỏ nào để lần theo.
+        #
+        # 410 (không phải 404/422) vì đường này TỪNG tồn tại và đã bị gỡ có chủ
+        # ý — đó đúng là điều client cần nghe.
+        #
+        # `HTTP_410_GONE` nhập thẳng, KHÔNG qua `status.HTTP_...`: hàm này có
+        # một tham số query tên `status`, và nó che mất module `status` của
+        # FastAPI trong toàn bộ thân hàm. Con số thì không bị che.
+        raise HTTPException(
+            status_code=HTTP_410_GONE,
+            detail=(
+                "Đường xem trước phiếu nghi trùng đã được gỡ. Cảnh báo trùng "
+                "nay đến từ lỗi 409 của POST /api/payments, kèm một "
+                "review_token để xác nhận và ghi tiếp."
+            ),
         )
 
     if pending_manual_only:

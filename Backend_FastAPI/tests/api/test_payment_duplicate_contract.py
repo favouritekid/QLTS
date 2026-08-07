@@ -456,15 +456,21 @@ class TestCatDanhSachTrongThanLoi:
         assert "20" not in body["detail"], body["detail"]
 
 
-class TestXemTruocUngVienTrung:
-    """Nhánh XEM TRƯỚC: giao diện hỏi đúng luật đang chạy ở máy chủ.
+class TestXemTruocDaGoFailClosed:
+    """Đường XEM TRƯỚC đã gỡ — và phải gỡ theo kiểu KÊU THÀNH TIẾNG.
 
-    Vì sao không để giao diện tự lọc: nó không thấy tổng tiền đã hoàn (phiếu
-    hoàn ĐỦ phải bị loại), và "ngày lịch Việt Nam" ở trình duyệt là múi giờ của
-    máy người dùng — hai chỗ đó lệch ngay lập tức. Một luật, một nơi.
+    Chỗ nguy hiểm không phải việc gỡ, mà là gỡ nửa vời. Hai tham số
+    ``duplicate_amount``/``duplicate_date`` sống trên chính ``GET /api/payments``
+    (đặt ở đó vì Casbin cấp quyền theo từng path, nên một path mới kéo theo
+    policy + migration + test phân quyền). Xoá chúng khỏi chữ ký thì FastAPI
+    IM LẶNG bỏ qua query lạ và trả 200 kèm danh sách phiếu thu THƯỜNG của khoản
+    phí — một tập rộng hơn hẳn tập ứng viên trùng, mà client cũ sẽ vẽ ra thành
+    "các phiếu nghi trùng" rồi cho người dùng bấm qua.
+
+    Không có dòng đỏ nào để lần theo trong ca đó. Nên nó cần một ca riêng.
     """
 
-    async def test_tra_dung_ung_vien_theo_luat(
+    async def test_duplicate_amount_bi_tu_choi_410_KHONG_roi_sang_list(
         self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
     ):
         ctx = fee_with_one_payment
@@ -473,196 +479,41 @@ class TestXemTruocUngVienTrung:
             "&duplicate_date=2026-08-05T03:00:00%2B00:00",
             headers=admin_token_headers,
         )
-        assert r.status_code == 200, r.text
-        body = r.json()
-        assert [i["id"] for i in body["items"]] == [ctx["phieu_cu_id"]]
-        # `total` == số dòng ⇒ chưa bị cắt, cùng quy ước với các danh sách khác.
-        assert body["total"] == 1
-
-    async def test_khac_so_tien_thi_khong_co_ung_vien(
-        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
-    ):
-        ctx = fee_with_one_payment
-        r = await client.get(
-            f"/api/payments?fee_id={ctx['fee_id']}&duplicate_amount=999999"
-            "&duplicate_date=2026-08-05T03:00:00%2B00:00",
-            headers=admin_token_headers,
+        assert r.status_code == 410, (
+            f"đường xem trước phải trả 410, nhận {r.status_code}. Nếu là 200 "
+            "thì tham số đang bị bỏ qua và client nhận danh sách phiếu thường "
+            "dưới danh nghĩa 'nghi trùng'."
         )
-        assert r.status_code == 200, r.text
-        assert r.json()["items"] == []
+        # Và tuyệt đối KHÔNG kèm dữ liệu phiếu nào.
+        assert "items" not in r.text, "410 mà vẫn trả danh sách phiếu"
 
-    async def test_qua_cua_so_ngay_thi_khong_co_ung_vien(
+    async def test_chi_MOT_trong_hai_tham_so_cung_bi_tu_choi(
         self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
     ):
+        """Nửa bộ tham số cũng là client cũ, cũng phải nghe cùng một câu.
+
+        Chấp nhận nửa bộ rồi rơi sang nhánh list là đúng cái ca fail-open ở
+        trên, chỉ khác đường vào.
+        """
         ctx = fee_with_one_payment
-        r = await client.get(
-            f"/api/payments?fee_id={ctx['fee_id']}&duplicate_amount=1000000"
-            "&duplicate_date=2026-08-10T03:00:00%2B00:00",
-            headers=admin_token_headers,
-        )
-        assert r.status_code == 200, r.text
-        assert r.json()["items"] == []
+        for q in (
+            f"fee_id={ctx['fee_id']}&duplicate_amount=1000000",
+            f"fee_id={ctx['fee_id']}&duplicate_date=2026-08-05T03:00:00%2B00:00",
+        ):
+            r = await client.get(f"/api/payments?{q}", headers=admin_token_headers)
+            assert r.status_code == 410, f"query `{q}` trả {r.status_code}"
 
-    async def test_thieu_tham_so_thi_422_khong_am_tham_tra_danh_sach_thuong(
+    async def test_LIST_thuong_van_chay_binh_thuong(
         self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
     ):
-        """Nửa vời phải bị từ chối.
+        """Chiều ngược lại: đừng chặn quá tay.
 
-        Thiếu một tham số mà vẫn trả danh sách thường là trả về một tập KHÁC
-        hẳn dưới cùng một hình dạng — giao diện sẽ hiện nó như "phiếu nghi
-        trùng" và cảnh báo oan mọi lần thu.
+        Cùng endpoint còn phục vụ danh sách phiếu thu và hàng đợi chờ duyệt.
+        Một phép chặn bắt nhầm ở đây sẽ làm hỏng hai màn hình không liên quan.
         """
         ctx = fee_with_one_payment
         r = await client.get(
-            f"/api/payments?fee_id={ctx['fee_id']}&duplicate_amount=1000000",
-            headers=admin_token_headers,
-        )
-        assert r.status_code == 422, r.text
-
-    async def test_thieu_fee_id_cung_422(
-        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
-    ):
-        r = await client.get(
-            "/api/payments?duplicate_amount=1000000"
-            "&duplicate_date=2026-08-05T03:00:00%2B00:00",
-            headers=admin_token_headers,
-        )
-        assert r.status_code == 422, r.text
-
-    async def test_don_vi_khac_khong_do_duoc(
-        self,
-        client: AsyncClient,
-        manager_other_unit_user_in_db: dict,
-        fee_with_one_payment,
-    ):
-        """IDOR: `fee_id` là số đoán được, và đây là đường ĐỌC.
-
-        Đường ghi được che nhờ khoá `Fee` theo đơn vị; đường đọc thì không có
-        gì che nếu quên điều kiện này — ai cũng dò được số tiền, ngày thu và
-        tên người nộp của đơn vị khác.
-        """
-        headers = await get_auth_headers(
-            client, manager_other_unit_user_in_db, AuthURLs.LOGIN
-        )
-        r = await client.get(
-            f"/api/payments?fee_id={fee_with_one_payment['fee_id']}"
-            "&duplicate_amount=1000000&duplicate_date=2026-08-05T03:00:00%2B00:00",
-            headers=headers,
+            f"/api/payments?fee_id={ctx['fee_id']}", headers=admin_token_headers
         )
         assert r.status_code == 200, r.text
-        assert r.json()["items"] == [], "rò phiếu sang đơn vị khác"
-
-    async def test_bi_cat_thi_total_lon_hon_so_dong(
-        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
-    ):
-        ctx = fee_with_one_payment
-        for _ in range(MAX_DUPLICATE_CANDIDATES):
-            r = await _ghi_qua_vong_xac_nhan(client, admin_token_headers, ctx)
-            assert r.status_code == 201, r.text
-
-        r = await client.get(
-            f"/api/payments?fee_id={ctx['fee_id']}&duplicate_amount=1000000"
-            "&duplicate_date=2026-08-05T03:00:00%2B00:00",
-            headers=admin_token_headers,
-        )
-        assert r.status_code == 200, r.text
-        body = r.json()
-        assert len(body["items"]) == MAX_DUPLICATE_CANDIDATES
-        assert body["total"] > len(body["items"]), "phải nói ra là còn nữa"
-
-    async def test_hoan_du_thi_KHONG_con_la_ung_vien(
-        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
-    ):
-        """Đúng chỗ mà một bản sao luật ở giao diện sẽ lệch.
-
-        Đường hoàn tiền thường chỉ đổi ``RefundRequest.status``; ``Payment``
-        vẫn ``verified``. Giao diện không thấy tổng đã hoàn nên sẽ cảnh báo và
-        khoá nút Lưu, trong khi máy chủ đã bỏ qua phiếu này từ lâu.
-        """
-        ctx = fee_with_one_payment
-        async with AsyncSessionLocal() as db:
-            p = await db.get(Payment, ctx["phieu_cu_id"])
-            db.add(
-                RefundRequest(
-                    payment_id=p.id,
-                    reason="hoàn đủ",
-                    amount=p.amount,
-                    status=RefundStatusEnum.refunded.value,
-                    requested_by_id=p.created_by_id,
-                )
-            )
-            await db.commit()
-
-        r = await client.get(
-            f"/api/payments?fee_id={ctx['fee_id']}&duplicate_amount=1000000"
-            "&duplicate_date=2026-08-05T03:00:00%2B00:00",
-            headers=admin_token_headers,
-        )
-        assert r.status_code == 200, r.text
-        assert r.json()["items"] == []
-
-
-class TestBienDauVaoXemTruoc:
-    """Đầu vào biên của đường XEM TRƯỚC phải là 422, không phải 500.
-
-    Cả hai tham số dưới đây do người gọi tự gõ trong URL. Một chuỗi hợp lệ về
-    cú pháp nhưng vô lý về giá trị mà làm vỡ câu lệnh ở tầng dưới thì lỗi hiện
-    ra là 500 kèm traceback trong log — trong khi điều duy nhất đáng nói là
-    "đầu vào này không dùng được".
-    """
-
-    @pytest.mark.parametrize(
-        "amount",
-        ["1000000000000", "1e20", "99999999999999999999"],
-    )
-    async def test_so_tien_vuot_tran_bi_tu_choi(
-        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment, amount
-    ):
-        """Miền của xem trước không được rộng hơn miền của POST.
-
-        Đường này hứa trả "đúng tập ứng viên mà POST sẽ dùng"; một số tiền POST
-        không nhận mà xem trước lại nhận thì hai bên đang nói về hai thứ khác
-        nhau — và ở đây nó còn vỡ thành 500 vì `numeric field overflow`.
-        """
-        r = await client.get(
-            f"/api/payments?fee_id={fee_with_one_payment['fee_id']}"
-            f"&duplicate_amount={amount}"
-            "&duplicate_date=2026-08-05T03:00:00%2B00:00",
-            headers=admin_token_headers,
-        )
-        assert r.status_code == 422, (
-            f"amount={amount} phải là 422, nhận {r.status_code}: {r.text[:200]}"
-        )
-
-    @pytest.mark.parametrize(
-        "ngay",
-        ["9999-12-31T23:00:00", "0001-01-01T00:00:00", "1800-06-15T10:00:00"],
-    )
-    async def test_ngay_ngoai_tam_bi_tu_choi(
-        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment, ngay
-    ):
-        """Cửa sổ dò cộng/trừ vài ngày quanh mốc này.
-
-        `9999-12-31` làm phép cộng tràn khỏi `date.max`; `0001-01-01` tràn khi
-        quy về múi giờ. Cả hai đều là `OverflowError` — tức 500.
-        """
-        r = await client.get(
-            f"/api/payments?fee_id={fee_with_one_payment['fee_id']}"
-            f"&duplicate_amount=1000000&duplicate_date={ngay}",
-            headers=admin_token_headers,
-        )
-        assert r.status_code == 422, (
-            f"ngày {ngay} phải là 422, nhận {r.status_code}: {r.text[:200]}"
-        )
-
-    async def test_bien_trong_tam_van_chay_binh_thuong(
-        self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
-    ):
-        """Đối chứng: chặn biên KHÔNG được chặn nhầm ngày thật."""
-        r = await client.get(
-            f"/api/payments?fee_id={fee_with_one_payment['fee_id']}"
-            "&duplicate_amount=1000000&duplicate_date=2026-08-05T03:00:00%2B00:00",
-            headers=admin_token_headers,
-        )
-        assert r.status_code == 200, r.text
-        assert len(r.json()["items"]) == 1
+        assert r.json()["items"], "danh sách phiếu thu thường phải còn chạy"
