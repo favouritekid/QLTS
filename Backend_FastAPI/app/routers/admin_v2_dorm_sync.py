@@ -7,8 +7,15 @@ môi trường và không biết gì về HTTP. Ngược lại, mọi lỗi nghi
 là exception có kiểu — ``base_app_exception_handler`` dịch sang mã HTTP, router
 KHÔNG bắt rồi ném ``HTTPException`` (kiến trúc V3.0).
 
-Hiện có ``GET /context`` và ``POST /preview`` — cả hai CHỈ ĐỌC. Chưa mở lượt
-đồng bộ, chưa upsert/finalize, chưa chạm sổ cái ``dorm_sync_operations``.
+Ba endpoint:
+
+* ``GET /context``  — năm học đang mở ở hệ KTX (chỉ đọc);
+* ``POST /preview`` — đọc nguồn, hỏi đích, cấp phiếu có chữ ký (chỉ đọc);
+* ``POST /apply``   — GHI: hai transaction QLTS kẹp lấy phần gọi sang hệ KTX.
+
+⚠️ Danh sách cảnh báo "sắp mất cờ mà vẫn đang giữ giường" đi THẲNG từ SQL helper
+``dorm_sync_target_snapshot`` của Gate 1. Router chỉ CHIẾU XUỐNG sáu trường công
+khai — không lọc, không sắp lại, không khử trùng, không dựng lại vị từ nào.
 """
 
 from __future__ import annotations

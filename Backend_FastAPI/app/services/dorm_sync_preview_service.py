@@ -67,14 +67,23 @@ async def chuan_bi_xem_truoc(
     actor_id: int,
     academic_year: int,
     now_ts: int,
-    api_factory: Callable[..., Any] = DormApi,
-    cohort_loader: Callable[..., Any] = fetch_cohort,
+    api_factory: Optional[Callable[..., Any]] = None,
+    cohort_loader: Optional[Callable[..., Any]] = None,
 ) -> KetQuaXemTruoc:
     """Đọc nguồn, hỏi đích, ký phiếu. CHỈ ĐỌC — không mở lượt, không ghi.
 
     Thứ tự dưới đây LÀ hàng rào; đọc từ trên xuống là đọc đúng những gì phải
     đúng trước khi một byte nào rời khỏi tiến trình.
     """
+    # ⚠️ Phân giải phụ thuộc LÚC GỌI, không phải lúc định nghĩa hàm.
+    #
+    # `def f(loader=fetch_cohort)` chốt tham chiếu ngay khi module được nạp, nên
+    # `monkeypatch.setattr(module, "fetch_cohort", ...)` KHÔNG ăn — và một ca
+    # kiểm tưởng đang dùng đồ giả lại đi gọi database thật. Cùng bẫy đã sửa ở
+    # `dorm_sync_apply_service`; đây là chỗ cuối còn sót.
+    api_factory = api_factory or DormApi
+    cohort_loader = cohort_loader or fetch_cohort
+
     # 1. Đọc nguồn trong transaction CHỈ ĐỌC.
     #
     # ⚠️ `verify_source=False`: hàng rào định danh nguồn là cổng của bước GHI.
