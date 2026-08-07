@@ -85,3 +85,11 @@ __all__ = [
     "PaymentImportBatchStatusEnum",
     "PaymentImportRowStatusEnum",
 ]
+
+# Nhập vì TÁC DỤNG PHỤ: module này gắn trigger `duplicate_guard_version` vào
+# `after_create` của metadata, thứ `Base.metadata.create_all()` cần để cơ sở dữ
+# liệu TEST có cùng hàng rào với cơ sở dữ liệu thật. Đặt ở cuối tệp vì nó phải
+# chạy sau khi mọi bảng đã được khai báo. Không có dòng này, các ca kiểm
+# "ghi phiếu phải làm version tăng" chạy trên một DB không có trigger — xanh vì
+# không có gì để hỏng.
+from app.models.finance import duplicate_guard_ddl  # noqa: E402,F401
