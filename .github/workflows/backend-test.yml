@@ -237,7 +237,25 @@ jobs:
           #     luật dò trùng phải cho cùng kết quả với bản một-phiếu (chép lệch
           #     là có hai hàng rào, và bản lỏng hơn thắng), và hàng rào ở bước
           #     ghi phải bỏ ĐÚNG dòng nghi trùng chứ không bỏ cả lô — cũng không
-          #     được tự tố phiếu mà chính lô này vừa ghi.
+          #     được tự tố phiếu mà chính lô này vừa ghi;
+          # Năm tập kế tiếp là nền của Duplicate Review Protocol — quyền xác
+          # nhận nghi trùng nay nằm ở MỘT phiếu có chữ ký do máy chủ cấp:
+          #   * test_duplicate_review_token — từng vế ràng buộc một ca riêng
+          #     (người, đơn vị, khoản phí, hoá đơn, tiền, NGÀY LỊCH VN, phiên
+          #     bản hàng rào). Gộp lại thành một ca "đổi lung tung" thì bỏ sót
+          #     một vế vẫn xanh, vì các vế còn lại đủ làm nó đỏ;
+          #   * test_duplicate_guard_ddl_lockin — hai bản DDL (migration và bản
+          #     cho `create_all`) không được trôi khỏi nhau; bản TEST lỏng hơn
+          #     bản THẬT là kiểu trôi nguy hiểm nhất, vì mọi ca vẫn xanh;
+          #   * test_imp2axis_backfill_lockin — backfill chạy MỘT LẦN trên
+          #     production rồi thôi, không có đường kiểm bằng cách chạy lại;
+          #   * test_duplicate_guard_version — trigger phải tăng version kể cả
+          #     khi ghi bằng SQL THÔ, và KHÔNG tăng khi chỉ sửa ghi chú;
+          #   * test_duplicate_guard_ddl_idempotent — `create_all()` hai lượt
+          #     liên tiếp. Lượt hai từng giết cả một buổi chạy test theo đường
+          #     vòng: `CREATE TRIGGER` trùng ⇒ dựng schema vỡ giữa chừng ⇒ thiếu
+          #     cột + khoá treo ⇒ 26 deadlock ở fixture cleanup, một chỗ trông
+          #     chẳng liên quan gì tới nguyên nhân.
           # Ba tập cuối (cohort đưa sang hệ ký túc xá) canh thứ hỏng ÂM THẦM:
           #   * test_hk1_fee_scope_single_source — structural lock-in buộc các
           #     call site thật sự gọi helper chung;
@@ -292,6 +310,11 @@ jobs:
               tests/services/test_payment_duplicate_guard.py
               tests/api/test_payment_duplicate_contract.py
               tests/services/test_payment_import_service.py
+              tests/unit/test_duplicate_review_token.py
+              tests/unit/test_duplicate_guard_ddl_lockin.py
+              tests/unit/test_imp2axis_backfill_lockin.py
+              tests/services/test_duplicate_guard_version.py
+              tests/services/test_duplicate_guard_ddl_idempotent.py
 
           # ---------------------------------------------------------------
           # Tier 2: RBAC + CCCD lock + CSRF
