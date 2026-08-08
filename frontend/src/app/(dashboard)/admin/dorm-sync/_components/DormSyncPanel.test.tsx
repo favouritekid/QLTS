@@ -23,6 +23,14 @@ vi.mock("@/lib/api/client", () => ({
   api: { get: mockGet, post: mockPost },
 }))
 
+const { mockHandleApiError } = vi.hoisted(() => ({
+  mockHandleApiError: vi.fn(),
+}))
+
+vi.mock("@/lib/error-handler", () => ({
+  handleApiError: mockHandleApiError,
+}))
+
 function boc(ui: React.ReactElement) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -88,6 +96,17 @@ afterEach(() => {
   canhBaoConsole.mockRestore()
 })
 
+/**
+ * Bấm Ghi = mở hộp xác nhận RỒI bấm nút xác nhận.
+ *
+ * 🔴 Click đầu KHÔNG được gửi request. Đây là thao tác hạ cờ đủ-điều-kiện của
+ * cả một khoá học và không có đường lùi.
+ */
+async function bamGhi() {
+  await userEvent.click(screen.getByTestId("nut-ghi"))
+  await userEvent.click(await screen.findByRole("button", { name: "Ghi" }))
+}
+
 async function xemTruocXong(du_lieu = preview()) {
   mockPost.mockResolvedValueOnce({ data: du_lieu })
   boc(<DormSyncPanel now={() => 1_000_000_000} />)
@@ -122,7 +141,7 @@ describe("payload request chính xác", () => {
       },
     })
 
-    await userEvent.click(screen.getByTestId("nut-ghi"))
+    await bamGhi()
 
     await waitFor(() =>
       expect(mockPost).toHaveBeenLastCalledWith("/api/v2/admin/dorm-sync/apply", {
@@ -142,7 +161,7 @@ describe("ba next_action", () => {
       await xemTruocXong()
       mockPost.mockRejectedValueOnce(loiChan(trangThai, hanhDong))
 
-      await userEvent.click(screen.getByTestId("nut-ghi"))
+      await bamGhi()
 
       await screen.findByTestId(`chan-${hanhDong}`)
       // Nút Xem trước cũng bị khoá — `wait` nghĩa là chờ, không phải làm lại.
@@ -156,7 +175,7 @@ describe("ba next_action", () => {
     await xemTruocXong()
     mockPost.mockRejectedValueOnce(loiChan("failed", "preview_again"))
 
-    await userEvent.click(screen.getByTestId("nut-ghi"))
+    await bamGhi()
 
     await screen.findByTestId("chan-preview_again")
     expect(screen.getByTestId("nut-xem-truoc")).toBeEnabled()
@@ -166,7 +185,7 @@ describe("ba next_action", () => {
     await xemTruocXong()
     mockPost.mockRejectedValueOnce(loiChan("outcome_unknown", "manual_reconcile"))
 
-    await userEvent.click(screen.getByTestId("nut-ghi"))
+    await bamGhi()
 
     expect(await screen.findByTestId("canh-bao-doi-soat")).toBeInTheDocument()
   })
@@ -181,7 +200,7 @@ describe("ba next_action", () => {
     await xemTruocXong()
     mockPost.mockRejectedValueOnce(loiChan("running", "preview_again"))
 
-    await userEvent.click(screen.getByTestId("nut-ghi"))
+    await bamGhi()
 
     await screen.findByTestId("chan-preview_again")
     expect(screen.getByTestId("nut-xem-truoc")).toBeEnabled()
@@ -207,7 +226,7 @@ describe("ba outcome", () => {
         },
       })
 
-      await userEvent.click(screen.getByTestId("nut-ghi"))
+      await bamGhi()
 
       await screen.findByTestId(`ket-qua-${outcome}`)
       // Mã lượt phải luôn có — nó là thứ duy nhất để đối soát tay.
@@ -237,7 +256,7 @@ describe("ba outcome", () => {
       },
     })
 
-    await userEvent.click(screen.getByTestId("nut-ghi"))
+    await bamGhi()
 
     // Không có khối kết quả nào được dựng từ một phản hồi sai hình dạng.
     await waitFor(() =>
@@ -262,7 +281,7 @@ describe("ba outcome", () => {
       },
     })
 
-    await userEvent.click(screen.getByTestId("nut-ghi"))
+    await bamGhi()
 
     expect(await screen.findByTestId("so-chua-ghi")).toBeInTheDocument()
     expect(screen.getByTestId("ma-luot")).toHaveTextContent("42")
@@ -406,5 +425,164 @@ describe("danh sách cảnh báo", () => {
     expect(so).toHaveTextContent("Không rõ giới tính: 1")
     expect(so).toHaveTextContent("Chưa rõ trình độ: 2")
     expect(so).toHaveTextContent("Có số phụ: 98")
+  })
+})
+
+
+// =============================================================================
+// Năm contract của vòng review
+// =============================================================================
+
+describe("xác nhận trước khi ghi", () => {
+  it("click ĐẦU chỉ mở hộp xác nhận, KHÔNG gửi request", async () => {
+    await xemTruocXong()
+    const truoc = mockPost.mock.calls.length
+
+    await userEvent.click(screen.getByTestId("nut-ghi"))
+
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument()
+    expect(mockPost).toHaveBeenCalledTimes(truoc)
+  })
+
+  it("huỷ hộp xác nhận thì KHÔNG gửi gì", async () => {
+    await xemTruocXong()
+    const truoc = mockPost.mock.calls.length
+
+    await userEvent.click(screen.getByTestId("nut-ghi"))
+    await userEvent.click(await screen.findByRole("button", { name: "Huỷ" }))
+
+    expect(mockPost).toHaveBeenCalledTimes(truoc)
+    // Phiếu còn nguyên — người bấm đổi ý, không mất gì.
+    expect(screen.getByTestId("nut-ghi")).toBeEnabled()
+  })
+
+  it("xác nhận gửi ĐÚNG MỘT lần", async () => {
+    await xemTruocXong()
+    const truoc = mockPost.mock.calls.length
+    mockPost.mockResolvedValueOnce({
+      data: {
+        operation_id: "op-1",
+        academic_year: 2026,
+        outcome: "completed",
+        message: "Đã đồng bộ xong.",
+        ktx_run_id: 42,
+        upserted: 5,
+        blocked: 0,
+        deactivated: 0,
+        ledger_saved: true,
+      },
+    })
+
+    await bamGhi()
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(truoc + 1))
+  })
+})
+
+describe("phiếu TỰ hết hạn", () => {
+  it("đang hợp lệ rồi TỰ tắt khi qua mốc, không cần render thủ công", async () => {
+    // 🔴 `useMemo` chỉ tính lại khi có thứ gì kích render. Một màn hình mở sẵn,
+    // người bấm đi họp mười phút rồi quay lại — không render nào xảy ra giữa
+    // chừng, nên nút vẫn mở và request vẫn được gửi với một phiếu đã chết.
+    //
+    // Ca này đi QUA ranh giới bằng đồng hồ giả, KHÔNG render lại bằng tay.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const batDau = 1_000_000
+      mockPost.mockResolvedValueOnce({
+        data: preview({ expires_at: (batDau + 300_000) / 1000 }),
+      })
+      boc(<DormSyncPanel now={() => batDau} />)
+
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      await user.click(await screen.findByTestId("nut-xem-truoc"))
+      await screen.findByTestId("ket-qua-xem-truoc")
+
+      // Còn hạn.
+      expect(screen.getByTestId("nut-ghi")).toBeEnabled()
+
+      // Đi qua mốc — không chạm gì khác.
+      await vi.advanceTimersByTimeAsync(300_001)
+
+      await waitFor(() => expect(screen.getByTestId("nut-ghi")).toBeDisabled())
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe("lỗi lạ không bị nuốt", () => {
+  it("lỗi KHÔNG nhận diện được đi qua handleApiError", async () => {
+    // Bản trước chỉ ghi chú "để component xử" rồi không ai xử: một lỗi mạng
+    // im lặng tuyệt đối, và người vận hành nhìn nút quay về trạng thái thường
+    // như chưa có gì xảy ra.
+    await xemTruocXong()
+    const loiLa = new AxiosError("Network Error")
+
+    mockPost.mockRejectedValueOnce(loiLa)
+    await bamGhi()
+
+    await waitFor(() => expect(mockHandleApiError).toHaveBeenCalledTimes(1))
+    expect(mockHandleApiError.mock.calls[0][0]).toBe(loiLa)
+  })
+
+  it("lỗi dorm-sync CÓ KIỂU vẫn xử riêng, KHÔNG rơi vào handler chung", async () => {
+    // Handler chung cố ý che `detail` của mã CONFLICT; để lỗi này rơi vào đó
+    // là mất sạch `next_action`.
+    await xemTruocXong()
+    mockPost.mockRejectedValueOnce(loiChan("outcome_unknown", "manual_reconcile"))
+
+    await bamGhi()
+
+    await screen.findByTestId("chan-manual_reconcile")
+    expect(mockHandleApiError).not.toHaveBeenCalled()
+  })
+})
+
+describe("làm mới bối cảnh sau khi ghi", () => {
+  it("mutation còn pending cho tới khi invalidate xong", async () => {
+    // 🔴 Không `return` promise invalidate thì nút mở lại trong khi bối cảnh
+    // còn là bản cũ, và người bấm nhìn một màn hình đã lỗi thời ngay sau thao
+    // tác nặng nhất của hệ.
+    await xemTruocXong()
+
+    // ⚠️ Bọc trong object: gán bên trong closure thì TS thu hẹp biến `let`
+    // xuống `null` và `thaBoiCanh?.()` báo "not callable".
+    const tha: { fn: (() => void) | null } = { fn: null }
+    mockGet.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          tha.fn = () => resolve({ data: BOI_CANH })
+        }),
+    )
+    mockPost.mockResolvedValueOnce({
+      data: {
+        operation_id: "op-1",
+        academic_year: 2026,
+        outcome: "completed",
+        message: "Đã đồng bộ xong.",
+        ktx_run_id: 42,
+        upserted: 5,
+        blocked: 0,
+        deactivated: 0,
+        ledger_saved: true,
+      },
+    })
+
+    await bamGhi()
+
+    // Bối cảnh đang được làm mới ⇒ mutation CHƯA xong.
+    //
+    // ⚠️ Khẳng định vào `dangGhi`, KHÔNG vào khối kết quả: `setKetQua` chạy
+    // đồng bộ trong `onSuccess` nên kết quả hiện ngay, còn thứ phải kéo dài
+    // tới hết invalidation là trạng thái `pending` của mutation.
+    await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2))
+    expect(screen.getByTestId("dang-ghi")).toBeInTheDocument()
+
+    tha.fn?.()
+    await waitFor(() =>
+      expect(screen.queryByTestId("dang-ghi")).not.toBeInTheDocument(),
+    )
+    expect(screen.getByTestId("ket-qua-completed")).toBeInTheDocument()
   })
 })

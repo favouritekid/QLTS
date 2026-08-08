@@ -9,12 +9,19 @@
 
 import { useState } from "react"
 
+import { ConfirmDialog } from "@/components/common/modals/ConfirmDialog"
+import { PageContainer } from "@/components/layouts/PageContainer"
+import { PageHeader } from "@/components/layouts/PageHeader"
 import { useDormSync, useDormSyncContext } from "@/hooks/admin/useDormSync"
 
 export function DormSyncPanel({ now }: { now?: () => number }) {
   const boiCanh = useDormSyncContext()
   const dongBo = useDormSync(now)
   const [namHoc, setNamHoc] = useState<number | null>(null)
+  // 🔴 Click ĐẦU chỉ mở hộp xác nhận. Đây là thao tác hạ cờ đủ-điều-kiện của
+  // cả một khoá học và không có đường lùi; một cú bấm nhầm không được biến
+  // thành một request.
+  const [hoiLai, setHoiLai] = useState(false)
 
   const namDangChon = namHoc ?? boiCanh.data?.default_academic_year ?? null
 
@@ -24,8 +31,11 @@ export function DormSyncPanel({ now }: { now?: () => number }) {
   const nam = boiCanh.data?.open_academic_years ?? []
 
   return (
-    <div>
-      <h1>Đồng bộ danh sách sang ký túc xá</h1>
+    <PageContainer>
+      <PageHeader
+        title="Đồng bộ danh sách sang ký túc xá"
+        description="Đẩy hồ sơ đủ điều kiện sang hệ ký túc xá và hạ cờ những hồ sơ không còn trong danh sách."
+      />
 
       {nam.length === 0 ? (
         // ⚠️ `default_academic_year` là `null` — hệ KTX chưa mở năm nào. KHÔNG
@@ -127,11 +137,39 @@ export function DormSyncPanel({ now }: { now?: () => number }) {
             type="button"
             data-testid="nut-ghi"
             disabled={!dongBo.choPhepGhi}
-            onClick={dongBo.ghi}
+            onClick={() => setHoiLai(true)}
           >
             {dongBo.dangGhi ? "Đang ghi…" : "Ghi sang ký túc xá"}
           </button>
+
+          <ConfirmDialog
+            open={hoiLai}
+            onOpenChange={setHoiLai}
+            variant="destructive"
+            title="Ghi sang hệ ký túc xá?"
+            description={
+              `Sẽ ghi ${dongBo.preview.source_count} hồ sơ và hạ cờ đủ điều kiện ` +
+              "của những hồ sơ không còn trong danh sách. Thao tác này không có " +
+              "đường lùi."
+            }
+            confirmText="Ghi"
+            cancelText="Huỷ"
+            onConfirm={() => {
+              setHoiLai(false)
+              dongBo.ghi()
+            }}
+          />
         </section>
+      )}
+
+      {dongBo.dangGhi && (
+        // 🔴 Hiện SUỐT pha ghi, kể cả sau khi đã có kết quả: mutation còn
+        // `pending` cho tới khi bối cảnh được làm mới xong. Không có dòng này
+        // thì người bấm thấy kết quả rồi tưởng đã xong, trong khi màn hình vẫn
+        // đang mang dữ liệu cũ.
+        <p role="status" data-testid="dang-ghi">
+          Đang ghi và làm mới danh sách…
+        </p>
       )}
 
       {dongBo.ketQua && (
@@ -148,6 +186,6 @@ export function DormSyncPanel({ now }: { now?: () => number }) {
           )}
         </section>
       )}
-    </div>
+    </PageContainer>
   )
 }

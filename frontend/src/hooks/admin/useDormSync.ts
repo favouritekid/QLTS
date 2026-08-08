@@ -8,8 +8,13 @@
  */
 "use client"
 
-import { useCallback, useMemo, useState } from "react"
-import { useMutation, useQuery } from "@tanstack/react-query"
+import { useCallback, useEffect, useState } from "react"
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
+import type { AxiosError } from "axios"
 
 import {
   applyDormSync,
@@ -17,6 +22,7 @@ import {
   getDormSyncContext,
   previewDormSync,
 } from "@/lib/api/dorm-sync"
+import { handleApiError } from "@/lib/error-handler"
 import type {
   DormSyncApplyResult,
   DormSyncNextAction,
@@ -105,7 +111,12 @@ export function useDormSync(now: () => number = () => Date.now()): DormSyncState
       setChan(null)
     },
     onSuccess: setPreview,
+    onError: (loi) => {
+      handleApiError(loi as AxiosError)
+    },
   })
+
+  const queryClient = useQueryClient()
 
   const mutGhi = useMutation({
     mutationFn: applyDormSync,
@@ -114,22 +125,57 @@ export function useDormSync(now: () => number = () => Date.now()): DormSyncState
       // 🔴 Phiếu đã dùng xong. Giữ lại là mời bấm lần hai với cùng một vé —
       // backend sẽ chặn, nhưng giao diện không nên bày ra thao tác đó.
       setPreview(null)
+      // 🔴 `return` để mutation còn `pending` cho tới khi làm mới xong.
+      //
+      // Không `return` thì nút mở lại trong khi bối cảnh còn là bản cũ, và
+      // người bấm nhìn một màn hình đã lỗi thời ngay sau thao tác nặng nhất
+      // của hệ.
+      return queryClient.invalidateQueries({ queryKey: DORM_SYNC_KEYS.context })
     },
     onError: (loi) => {
       if (loi instanceof DormSyncBlockedError) {
         setChan(dungTrangThaiChan(loi))
         setPreview(null)
+        return
       }
-      // Lỗi không nhận diện được: để nguyên cho `handleApiError` ở tầng
-      // component. Không đoán trạng thái từ nó.
+      // 🔴 Lỗi KHÔNG nhận diện được vẫn phải hiện ra.
+      //
+      // Bản trước chỉ ghi chú "để component xử" rồi không ai xử: một lỗi mạng
+      // hay một phản hồi sai hình dạng im lặng tuyệt đối, và người vận hành
+      // nhìn nút quay về trạng thái thường như chưa có gì xảy ra.
+      handleApiError(loi as AxiosError, { queryClient })
     },
   })
 
-  const daHetHan = useMemo(() => {
-    if (!preview?.expires_at) return false
+  // 🔴 Hết hạn phải TỰ tới, không đợi lần render sau.
+  //
+  // `useMemo` chỉ tính lại khi có thứ gì đó kích render. Một màn hình mở sẵn,
+  // người bấm đi họp mười phút rồi quay lại bấm Ghi — không có render nào xảy
+  // ra giữa chừng, nên nút vẫn mở và request vẫn được gửi với một phiếu đã
+  // chết. Backend sẽ chặn, nhưng giao diện không được bày ra thao tác đó.
+  //
+  // Đặt hẹn giờ ĐÚNG tới mốc `expires_at` và tự hạ cờ.
+  const [daHetHan, setDaHetHan] = useState(false)
+
+  const mocHetHan = preview?.expires_at ?? null
+
+  useEffect(() => {
+    if (mocHetHan === null) {
+      setDaHetHan(false)
+      return
+    }
     // Dùng THẲNG `expires_at` — không giải mã `exp` trong phiếu.
-    return now() >= preview.expires_at * 1000
-  }, [preview, now])
+    const conLai = mocHetHan * 1000 - now()
+    if (conLai <= 0) {
+      setDaHetHan(true)
+      return
+    }
+    setDaHetHan(false)
+    const hen = setTimeout(() => setDaHetHan(true), conLai)
+    return () => clearTimeout(hen)
+    // `now` cố ý KHÔNG nằm trong deps: nó là đồng hồ, không phải dữ liệu.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mocHetHan])
 
   const choPhepGhi = Boolean(
     preview?.can_apply &&
