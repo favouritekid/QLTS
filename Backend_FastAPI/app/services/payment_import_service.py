@@ -820,6 +820,31 @@ async def _fetch_payable_invoices(
     return by_fee
 
 
+async def _id_invoice_cua_fee(
+    db: AsyncSession,
+    fee_ids: List[int],
+    unit_id: Optional[int],
+) -> Set[int]:
+    """Tập id invoice của các fee — CÙNG bộ lọc IDOR với hàm khoá.
+
+    Dùng để đối chiếu tập đã khoá với tập hiện tại. Phải cùng bộ lọc, nếu không
+    một invoice thuộc đơn vị khác sẽ hiện ra như "đợt mới phát hành" và mọi lượt
+    commit đều chết oan.
+    """
+    if not fee_ids:
+        return set()
+    stmt = (
+        select(Invoice.id)
+        .join(Fee, Invoice.fee_id == Fee.id)
+        .join(models.AdmissionProfile)
+        .join(models.Lead)
+        .where(Invoice.fee_id.in_(fee_ids))
+    )
+    if unit_id is not None:
+        stmt = stmt.where(models.Lead.unit_id == unit_id)
+    return set((await db.execute(stmt)).scalars().all())
+
+
 async def _fetch_invoice_status_sets(
     db: AsyncSession,
     fee_ids: List[int],
@@ -1279,7 +1304,10 @@ async def commit_batch(
     + GỘP lead-sync 1 lần/hồ-sơ. Trả ``(CommitResult, post_commit)``.
 
     - Khóa lô (FOR UPDATE) → serialize commit đồng thời cùng lô.
-    - Lock order invoice→fee (khớp verify_payment → tránh deadlock với verify tay).
+    - **Thứ tự khoá: MỌI invoice của các fee liên quan (theo ``fee_id, id``) →
+      MỌI fee (theo id) → đọc version → soát phiếu → ghi.** Sau khi chạm fee
+      đầu tiên, đường này không xin thêm khoá invoice nào; đợt hoá đơn mới xuất
+      hiện giữa hai pha thì dừng sạch (``ConflictError``), không khoá bù.
     - KHÔNG dùng snapshot preview để ghi: re-fetch fee/invoice HIỆN TẠI (số dư có thể
       đổi giữa preview→commit). Cuối vòng còn ``left>0`` = vượt nợ hiện tại → raise →
       savepoint rollback CẢ dòng (không ghi nửa vời).
@@ -1392,17 +1420,55 @@ async def commit_batch(
     # ghi một dòng rồi bắt xác nhận lại bốn dòng còn lại, mỗi lượt được đúng
     # một dòng. Vòng 409 mà cả đợt này sinh ra để xoá, mọc lại ở chỗ khác.
     #
-    # Nên: khoá hết Fee liên quan (thứ tự id tăng dần — cùng chiều với mọi
-    # đường ghi khác, nên không thêm cơ hội deadlock), đọc version BAN ĐẦU dưới
-    # khoá, soát mọi phiếu theo version ấy, rồi mới ghi.
+    # Nên: khoá hết Fee liên quan, đọc version BAN ĐẦU dưới khoá, soát mọi
+    # phiếu theo version ấy, rồi mới ghi.
+    #
+    # ── THỨ TỰ KHOÁ TOÀN CỤC ────────────────────────────────────────────────
+    # Khoá Fee trước là bản vá của bẫy trên, nhưng nó dựng ra một chiều
+    # Fee → Invoice, ngược với ghi tay (Invoice → Fee). Hai chiều ngược nhau
+    # trên cùng cặp hàng = kẹt chéo thật, đã tái hiện được bằng hai session
+    # PostgreSQL (``tests/services/test_import_vs_manual_deadlock.py``).
+    #
+    # Invariant kể từ đây — **sau khi bắt đầu khoá Fee, đường nhập lô tuyệt
+    # đối không xin thêm bất kỳ khoá Invoice nào.** Vì vậy pha này cầm TRỌN
+    # tập invoice trước, kể cả đợt đã thu đủ mà lượt ghi sẽ không đụng tới:
+    # cầm phần "dự đoán sẽ dùng" là để hở đúng cái khe cần đóng.
+    #
+    # ``khoa_moi_invoice_cua_fee`` khoá ``FOR UPDATE OF invoice`` — KHÔNG kéo
+    # ``fee`` theo như ``get_for_update``. Ngữ nghĩa khoá-kèm-fee của hàm kia
+    # là hàng rào của đường ghi tay và phải giữ nguyên; xem ghi chú ở
+    # ``InvoiceRepository.khoa_moi_invoice_cua_fee``.
     ma_fee_lien_quan = sorted(
         {r.resolved_fee_id for r in rows if r.resolved_fee_id is not None}
     )
+    invoice_da_khoa = await inv_repo.khoa_moi_invoice_cua_fee(
+        ma_fee_lien_quan, unit_id
+    )
+    invoice_theo_fee: Dict[int, List[Invoice]] = {}
+    for _inv in invoice_da_khoa:
+        invoice_theo_fee.setdefault(_inv.fee_id, []).append(_inv)
+
     version_ban_dau: Dict[int, int] = {}
     for _ma_fee in ma_fee_lien_quan:
         _fee = await fee_repo.get_for_update(_ma_fee, unit_id)
         if _fee is not None:
             version_ban_dau[_ma_fee] = _fee.duplicate_guard_version
+
+    # Cửa sổ giữa hai pha: một đợt hoá đơn MỚI có thể được phát hành sau khi ta
+    # chụp tập invoice và trước khi ta cầm Fee. Khoá bổ sung nó ở đây là phá
+    # đúng invariant vừa dựng, nên đường duy nhất còn lại là dừng sạch —
+    # fail-closed. Lượt commit sau bắt đầu từ đầu và cầm trọn tập mới.
+    #
+    # Không tự thử lại tại chỗ: giao dịch này đang giữ khoá lô và một tập hàng
+    # invoice/fee: "thử lại" mà không nhả khoá thì chỉ lặp lại đúng ảnh chụp cũ.
+    _id_hien_tai = await _id_invoice_cua_fee(db, ma_fee_lien_quan, unit_id)
+    _id_da_khoa = {i.id for i in invoice_da_khoa}
+    _id_moi = _id_hien_tai - _id_da_khoa
+    if _id_moi:
+        raise ConflictError(
+            "Có đợt hoá đơn mới phát hành giữa lúc khoá — lô chưa ghi gì, "
+            f"vui lòng commit lại (hoá đơn mới: {sorted(_id_moi)})"
+        )
 
     dong_da_soat: Set[int] = set()
     for row in rows:
@@ -1466,28 +1532,27 @@ async def commit_batch(
                 if row.resolved_fee_id is None:
                     raise BusinessRuleViolation("thiếu học phí đã resolve")
 
-                # payable invoices HIỆN TẠI (sắp installment_no asc).
-                payable = (
-                    await _fetch_payable_invoices(db, [row.resolved_fee_id])
-                ).get(row.resolved_fee_id, [])
-                if not payable:
-                    raise BusinessRuleViolation(
-                        "không còn đợt hóa đơn payable (đã thu đủ / đổi giữa 2 pha)"
-                    )
-
-                # Bug 3: lock TẤT CẢ invoice (asc) RỒI mới fee — khớp lock-order
-                # verify_payment (invoice→fee) cho dòng trải nhiều đợt → tránh deadlock
-                # ABBA (fee KHÔNG bị khóa GIỮA các invoice).
-                locked = []
-                for inv in payable:
-                    li = await inv_repo.get_for_update(inv.id, unit_id)
-                    if li is None:
-                        continue
-                    await db.refresh(li)
-                    locked.append(li)
-                if not locked:
+                # Tập invoice của khoản phí này ĐÃ được khoá trọn ở pha đầu.
+                # Không gọi `inv_repo.get_for_update` ở đây: đó vừa là xin thêm
+                # khoá Invoice sau khi đã cầm Fee (phá invariant thứ tự khoá),
+                # vừa kéo `fee` vào theo thứ tự invoice vì `FOR UPDATE` của hàm
+                # ấy không có `OF`.
+                cua_fee = invoice_theo_fee.get(row.resolved_fee_id, [])
+                if not cua_fee:
                     raise BusinessRuleViolation(
                         "không tìm thấy hóa đơn (IDOR / đổi giữa 2 pha)"
+                    )
+
+                # `refresh` đọc lại hàng ĐANG bị chính giao dịch này khoá — một
+                # câu SELECT thường, không xin thêm khoá nào.
+                locked = []
+                for li in sorted(cua_fee, key=lambda i: i.installment_no):
+                    await db.refresh(li)
+                    if li.status in PAYABLE_INVOICE_STATUSES:
+                        locked.append(li)
+                if not locked:
+                    raise BusinessRuleViolation(
+                        "không còn đợt hóa đơn payable (đã thu đủ / đổi giữa 2 pha)"
                     )
                 fee = await fee_repo.get_for_update(locked[0].fee_id, unit_id)
                 if fee is None:

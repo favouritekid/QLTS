@@ -272,33 +272,47 @@ class TestNhapLoDoiDauGhiTay:
         """Hai đường ghi tiền gặp nhau trên cùng Fee — không bên nào được chết 40P01."""
         ctx = hai_ben_cung_fee
         phien: dict = {}
-        lo_giu_fee = asyncio.Event()
+        dem = {"lo": 0}
+        lo_giu_khoa_dau = asyncio.Event()
         tay_dang_bi_chan = asyncio.Event()
         do_thi: list[str] = []
 
         goc_fee = FeeRepository.get_for_update
         goc_inv = InvoiceRepository.get_for_update
+        goc_khoa_lo = InvoiceRepository.khoa_moi_invoice_cua_fee
 
-        async def fee_hook(self, *a, **k):
-            ket_qua = await goc_fee(self, *a, **k)
-            # Chỉ khoá ĐẦU TIÊN của bên nhập lô mới là điểm hẹn: đó là pha soát
-            # phiếu, chỗ sinh ra chiều Fee → Invoice.
-            if phien.get("lo") is self.db and not lo_giu_fee.is_set():
-                lo_giu_fee.set()
-            return ket_qua
-
-        async def inv_hook(self, *a, **k):
-            if phien.get("lo") is self.db:
-                # Bên nhập lô chỉ được đi xin Invoice SAU khi đã có bằng chứng
-                # bên ghi tay đang bị chặn. Không có vế này thì nó xin trước,
-                # lấy được, và chu kỳ không bao giờ khép.
+        # Điểm hẹn phải TRUNG LẬP với thứ tự khoá, nếu không nó chỉ đo được
+        # đúng thứ tự mà người viết đang giả định. Bản đầu gắn chỗ chờ vào
+        # `InvoiceRepository.get_for_update` — hàm mà bản vá không còn gọi —
+        # nên sau khi vá, bên nhập lô chạy tuột và không ai kịp bị chặn.
+        #
+        # Quy tắc trung lập: bên nhập lô cầm khoá ĐẦU TIÊN (bất kể invoice hay
+        # fee) thì báo; từ lần lấy khoá THỨ HAI trở đi thì phải chờ tới khi có
+        # bằng chứng bên ghi tay đang bị chặn. Với cả hai thứ tự, đó đúng là
+        # khoảnh khắc chu kỳ khép được nếu nó khép được.
+        async def _diem_hen(goc, self, *a, **k):
+            la_lo = phien.get("lo") is self.db
+            if la_lo and dem["lo"] >= 1:
                 try:
                     await asyncio.wait_for(
                         tay_dang_bi_chan.wait(), timeout=_TRAN_CHO
                     )
                 except asyncio.TimeoutError:
                     pass
-            return await goc_inv(self, *a, **k)
+            ket_qua = await goc(self, *a, **k)
+            if la_lo:
+                dem["lo"] += 1
+                lo_giu_khoa_dau.set()
+            return ket_qua
+
+        async def fee_hook(self, *a, **k):
+            return await _diem_hen(goc_fee, self, *a, **k)
+
+        async def inv_hook(self, *a, **k):
+            return await _diem_hen(goc_inv, self, *a, **k)
+
+        async def khoa_lo_hook(self, *a, **k):
+            return await _diem_hen(goc_khoa_lo, self, *a, **k)
 
         async def nhap_lo():
             async with AsyncSessionLocal() as ss:
@@ -317,12 +331,12 @@ class TestNhapLoDoiDauGhiTay:
                     return ("err", exc)
 
         async def ghi_tay():
-            # Chỉ vào cuộc sau khi bên nhập lô đã CẦM khoá Fee — nếu không, nó
-            # lấy trọn Invoice+Fee rồi xong, và chẳng có gì đối đầu.
+            # Chỉ vào cuộc sau khi bên nhập lô đã CẦM khoá đầu tiên — nếu
+            # không, nó lấy trọn Invoice+Fee rồi xong, chẳng có gì đối đầu.
             try:
-                await asyncio.wait_for(lo_giu_fee.wait(), timeout=_TRAN_CHO)
+                await asyncio.wait_for(lo_giu_khoa_dau.wait(), timeout=_TRAN_CHO)
             except asyncio.TimeoutError:
-                return ("err", RuntimeError("bên nhập lô không tới được khoá Fee"))
+                return ("err", RuntimeError("bên nhập lô không cầm được khoá nào"))
             async with AsyncSessionLocal() as ss:
                 phien["tay"] = ss
                 try:
@@ -342,7 +356,7 @@ class TestNhapLoDoiDauGhiTay:
         async def giam_sat():
             """Bên thứ ba: chỉ quan sát, và chính nó mở cổng cho bên nhập lô."""
             try:
-                await asyncio.wait_for(lo_giu_fee.wait(), timeout=_TRAN_CHO)
+                await asyncio.wait_for(lo_giu_khoa_dau.wait(), timeout=_TRAN_CHO)
             except asyncio.TimeoutError:
                 tay_dang_bi_chan.set()
                 return
@@ -352,6 +366,7 @@ class TestNhapLoDoiDauGhiTay:
 
         FeeRepository.get_for_update = fee_hook
         InvoiceRepository.get_for_update = inv_hook
+        InvoiceRepository.khoa_moi_invoice_cua_fee = khoa_lo_hook
         try:
             ket_qua = await asyncio.wait_for(
                 asyncio.gather(nhap_lo(), ghi_tay(), giam_sat()),
@@ -360,6 +375,7 @@ class TestNhapLoDoiDauGhiTay:
         finally:
             FeeRepository.get_for_update = goc_fee
             InvoiceRepository.get_for_update = goc_inv
+            InvoiceRepository.khoa_moi_invoice_cua_fee = goc_khoa_lo
 
         anh_khoa = do_thi[0] if do_thi else ""
         assert anh_khoa, (
@@ -376,3 +392,125 @@ class TestNhapLoDoiDauGhiTay:
             "Chu kỳ: nhập lô giữ Fee (pha soát phiếu) rồi xin Invoice; ghi tay "
             "giữ Invoice (kèm Fee, vì FOR UPDATE không có OF) rồi xin Fee."
         )
+
+
+class TestThuTuKhoaCuaNhapLo:
+    async def test_moi_khoa_invoice_xong_truoc_khoa_fee_dau_tien(
+        self, hai_ben_cung_fee
+    ):
+        """Invariant, đo trực tiếp: không có khoá Invoice nào sau khi chạm Fee.
+
+        Ca đối đầu ở trên chứng minh HẬU QUẢ (không kẹt chéo). Ca này chứng
+        minh PHƯƠNG TIỆN — vì hậu quả kia cũng đạt được bằng những cách mong
+        manh hơn (ví dụ hai bên tình cờ chạy nối đuôi), và vì lần tới ai đó
+        thêm một lời gọi khoá Invoice vào vòng ghi thì phải đỏ NGAY ở đây,
+        không phải chờ một ca đồng thời may rủi.
+        """
+        ctx = hai_ben_cung_fee
+        chuoi: list[str] = []
+
+        goc_fee = FeeRepository.get_for_update
+        goc_inv = InvoiceRepository.get_for_update
+        goc_khoa_lo = InvoiceRepository.khoa_moi_invoice_cua_fee
+
+        async def fee_hook(self, *a, **k):
+            chuoi.append("fee")
+            return await goc_fee(self, *a, **k)
+
+        async def inv_hook(self, *a, **k):
+            chuoi.append("invoice")
+            return await goc_inv(self, *a, **k)
+
+        async def khoa_lo_hook(self, *a, **k):
+            chuoi.append("invoice")
+            return await goc_khoa_lo(self, *a, **k)
+
+        FeeRepository.get_for_update = fee_hook
+        InvoiceRepository.get_for_update = inv_hook
+        InvoiceRepository.khoa_moi_invoice_cua_fee = khoa_lo_hook
+        try:
+            async with AsyncSessionLocal() as ss:
+                await pis.commit_batch(
+                    ss,
+                    batch_id=ctx["batch_id"],
+                    importer_id=ctx["ke_toan_id"],
+                    unit_id=ctx["unit_id"],
+                )
+                await ss.commit()
+        finally:
+            FeeRepository.get_for_update = goc_fee
+            InvoiceRepository.get_for_update = goc_inv
+            InvoiceRepository.khoa_moi_invoice_cua_fee = goc_khoa_lo
+
+        assert "invoice" in chuoi and "fee" in chuoi, (
+            f"lượt commit không chạm cả hai loại khoá: {chuoi}"
+        )
+        fee_dau = chuoi.index("fee")
+        sau_fee = [t for t in chuoi[fee_dau:] if t == "invoice"]
+        assert not sau_fee, (
+            f"có {len(sau_fee)} lần xin khoá Invoice SAU khi đã chạm Fee — "
+            f"chuỗi thực tế: {chuoi}. Đó đúng là chiều dựng lại chu kỳ kẹt chéo "
+            "với đường ghi tay (Invoice → Fee)."
+        )
+
+
+class TestDotHoaDonMoiGiuaHaiPha:
+    async def test_invoice_moi_giua_hai_pha_thi_dung_sach(self, hai_ben_cung_fee):
+        """Cửa sổ giữa hai pha: phát hành đợt mới ⇒ dừng sạch, KHÔNG khoá bù.
+
+        Khoá bù là đường dễ nhất và cũng là đường phá đúng invariant vừa dựng.
+        Nên hành vi đúng là fail-closed: lô chưa ghi gì, người dùng commit lại.
+        """
+        ctx = hai_ben_cung_fee
+        goc_fee = FeeRepository.get_for_update
+        da_chen = {"xong": False}
+
+        async def fee_hook(self, *a, **k):
+            # Chèn đợt mới ĐÚNG lúc pha invoice đã xong, pha fee vừa bắt đầu.
+            if not da_chen["xong"]:
+                da_chen["xong"] = True
+                async with AsyncSessionLocal() as khac:
+                    khac.add(
+                        Invoice(
+                            fee_id=ctx["fee_id"],
+                            invoice_number="INV-DEADLOCK-CHEN",
+                            installment_no=2,
+                            amount=Decimal("1000000"),
+                            status=InvoiceStatusEnum.issued.value,
+                            due_date=date.today() + timedelta(days=60),
+                        )
+                    )
+                    await khac.commit()
+            return await goc_fee(self, *a, **k)
+
+        FeeRepository.get_for_update = fee_hook
+        try:
+            async with AsyncSessionLocal() as ss:
+                with pytest.raises(Exception) as loi:
+                    await pis.commit_batch(
+                        ss,
+                        batch_id=ctx["batch_id"],
+                        importer_id=ctx["ke_toan_id"],
+                        unit_id=ctx["unit_id"],
+                    )
+                await ss.rollback()
+        finally:
+            FeeRepository.get_for_update = goc_fee
+
+        assert type(loi.value).__name__ == "ConflictError", (
+            f"phải dừng sạch bằng ConflictError, nhận {type(loi.value).__name__}: "
+            f"{loi.value}"
+        )
+
+        # Và quan trọng hơn lời từ chối: KHÔNG đồng nào vào sổ.
+        async with AsyncSessionLocal() as check:
+            so_phieu = (
+                await check.execute(
+                    text(
+                        "SELECT count(*) FROM payment p JOIN invoice i "
+                        "ON i.id = p.invoice_id WHERE i.fee_id = :f"
+                    ),
+                    {"f": ctx["fee_id"]},
+                )
+            ).scalar_one()
+        assert so_phieu == 0, f"lô đã ghi {so_phieu} phiếu dù phải dừng sạch"
