@@ -14,7 +14,10 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
+import type { QueryClient } from "@tanstack/react-query"
+import { isAxiosError } from "axios"
 import type { AxiosError } from "axios"
+import { toast } from "sonner"
 
 import {
   applyDormSync,
@@ -23,6 +26,7 @@ import {
   previewDormSync,
 } from "@/lib/api/dorm-sync"
 import { handleApiError } from "@/lib/error-handler"
+import type { ApiErrorResponse } from "@/lib/error-handler"
 import type {
   DormSyncApplyResult,
   DormSyncNextAction,
@@ -65,6 +69,32 @@ function dungTrangThaiChan(loi: DormSyncBlockedError): TrangThaiChan {
     choXemTruocLai: loi.nextAction === "preview_again",
   }
 }
+
+/**
+ * Đưa một lỗi KHÔNG nhận diện được ra màn hình.
+ *
+ * 🔴 `handleApiError` đòi `AxiosError<ApiErrorResponse>`; ép kiểu bằng `as`
+ * làm `tsc` im nhưng không làm lỗi đúng hình dạng — và lỗi PARSE của Zod
+ * không phải `AxiosError` chút nào. Bản trước ép kiểu, `tsc` vẫn đỏ, và cả hai
+ * đường đều chưa được xử.
+ *
+ * Hai nhánh, hai cách xử:
+ *
+ * * lỗi HTTP → `handleApiError` (nó biết 401/403/409… và biết invalidate);
+ * * lỗi khác (Zod parse hỏng, TypeError) → nói thẳng rằng phản hồi sai hình
+ *   dạng. Im lặng ở đây là để người vận hành nhìn nút quay về trạng thái
+ *   thường như chưa có gì xảy ra.
+ */
+function baoLoiLa(loi: unknown, queryClient?: QueryClient): void {
+  if (isAxiosError(loi)) {
+    handleApiError(loi as AxiosError<ApiErrorResponse>, { queryClient })
+    return
+  }
+  toast.error("Máy chủ trả về dữ liệu không đọc được", {
+    description: "Thử lại sau; nếu lặp lại, báo quản trị.",
+  })
+}
+
 
 export function useDormSyncContext() {
   return useQuery({
@@ -112,7 +142,7 @@ export function useDormSync(now: () => number = () => Date.now()): DormSyncState
     },
     onSuccess: setPreview,
     onError: (loi) => {
-      handleApiError(loi as AxiosError)
+      baoLoiLa(loi)
     },
   })
 
@@ -143,7 +173,7 @@ export function useDormSync(now: () => number = () => Date.now()): DormSyncState
       // Bản trước chỉ ghi chú "để component xử" rồi không ai xử: một lỗi mạng
       // hay một phản hồi sai hình dạng im lặng tuyệt đối, và người vận hành
       // nhìn nút quay về trạng thái thường như chưa có gì xảy ra.
-      handleApiError(loi as AxiosError, { queryClient })
+      baoLoiLa(loi, queryClient)
     },
   })
 
@@ -197,9 +227,14 @@ export function useDormSync(now: () => number = () => Date.now()): DormSyncState
     choPhepXemTruoc,
     xemTruoc: (namHoc: number) => mutXemTruoc.mutate(namHoc),
     ghi: () => {
-      // `choPhepGhi` đã gộp mọi lý do khoá; gọi khi nó `false` là bỏ qua chính
-      // hàng rào vừa dựng.
-      if (!preview?.preview_token) return
+      // 🔴 Fail-closed theo TOÀN BỘ `choPhepGhi`, không chỉ sự tồn tại của
+      // phiếu.
+      //
+      // Đường hỏng đã đo được: mở hộp xác nhận lúc phiếu còn hạn, hẹn giờ chạy
+      // qua mốc, nút NỀN bị khoá — nhưng hộp thoại vẫn mở và nút xác nhận vẫn
+      // bấm được. Kiểm mỗi `preview_token` thì request vẫn được gửi với một
+      // phiếu đã chết.
+      if (!choPhepGhi || !preview?.preview_token) return
       mutGhi.mutate(preview.preview_token)
     },
     doiNamHoc: () => {

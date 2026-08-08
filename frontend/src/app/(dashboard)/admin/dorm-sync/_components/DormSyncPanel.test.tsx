@@ -7,10 +7,18 @@
  * THẤY.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, screen, waitFor } from "@testing-library/react"
+import {
+  act,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { AxiosError } from "axios"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+import { useDormSync } from "@/hooks/admin/useDormSync"
 
 import { DormSyncPanel } from "./DormSyncPanel"
 
@@ -23,8 +31,13 @@ vi.mock("@/lib/api/client", () => ({
   api: { get: mockGet, post: mockPost },
 }))
 
-const { mockHandleApiError } = vi.hoisted(() => ({
+const { mockHandleApiError, mockToastError } = vi.hoisted(() => ({
   mockHandleApiError: vi.fn(),
+  mockToastError: vi.fn(),
+}))
+
+vi.mock("sonner", () => ({
+  toast: { error: mockToastError, success: vi.fn(), info: vi.fn() },
 }))
 
 vi.mock("@/lib/error-handler", () => ({
@@ -511,6 +524,78 @@ describe("phiếu TỰ hết hạn", () => {
   })
 })
 
+describe("phiếu hết hạn TRONG LÚC hộp xác nhận đang mở", () => {
+  it("mở hộp khi còn hạn, qua mốc rồi xác nhận ⇒ KHÔNG gửi thêm request", async () => {
+    // 🔴 Đường hỏng mà ca fake-timer cũ KHÔNG bắt được: nó chỉ quan sát nút
+    // NỀN. Nhưng nút xác nhận nằm TRONG hộp thoại, và hộp vẫn mở sau khi phiếu
+    // chết — người bấm mở hộp, đọc lại danh sách cảnh báo, rồi xác nhận sau mốc
+    // năm phút.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const batDau = 1_000_000
+      mockPost.mockResolvedValueOnce({
+        data: preview({ expires_at: (batDau + 300_000) / 1000 }),
+      })
+      boc(<DormSyncPanel now={() => batDau} />)
+
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      await user.click(await screen.findByTestId("nut-xem-truoc"))
+      await screen.findByTestId("ket-qua-xem-truoc")
+
+      // Mở hộp xác nhận trong lúc phiếu CÒN hạn.
+      await user.click(screen.getByTestId("nut-ghi"))
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument()
+      const truoc = mockPost.mock.calls.length
+
+      // Đi qua mốc trong khi hộp đang mở.
+      await vi.advanceTimersByTimeAsync(300_001)
+
+      // Hộp phải tự đóng — không còn nút nào để bấm nhầm.
+      await waitFor(() =>
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+      )
+      expect(mockPost).toHaveBeenCalledTimes(truoc)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("ghi() tự chặn khi mất quyền — gọi THẲNG qua hook", async () => {
+    // 🔴 Vế thứ hai của cùng hàng rào, và phải gọi THẲNG `ghi()`.
+    //
+    // Bấm nút không kiểm được điều này: nút đang `disabled` nên trình duyệt
+    // KHÔNG kích handler, và gỡ `choPhepGhi` khỏi `ghi()` vẫn cho ca xanh —
+    // đã đo. Chỉ `renderHook` mới chạm được vào hàng rào bên trong.
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    const boc2 = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    )
+
+    mockPost.mockResolvedValueOnce({
+      data: preview({ can_apply: false, preview_token: "phieu-van-con" }),
+    })
+    const { result } = renderHook(() => useDormSync(() => 1_000_000_000), {
+      wrapper: boc2,
+    })
+
+    await act(async () => {
+      result.current.xemTruoc(2026)
+    })
+    await waitFor(() => expect(result.current.preview).not.toBeNull())
+
+    expect(result.current.choPhepGhi).toBe(false)
+    const truoc = mockPost.mock.calls.length
+
+    await act(async () => {
+      result.current.ghi()
+    })
+
+    expect(mockPost).toHaveBeenCalledTimes(truoc)
+  })
+})
+
 describe("lỗi lạ không bị nuốt", () => {
   it("lỗi KHÔNG nhận diện được đi qua handleApiError", async () => {
     // Bản trước chỉ ghi chú "để component xử" rồi không ai xử: một lỗi mạng
@@ -524,6 +609,21 @@ describe("lỗi lạ không bị nuốt", () => {
 
     await waitFor(() => expect(mockHandleApiError).toHaveBeenCalledTimes(1))
     expect(mockHandleApiError.mock.calls[0][0]).toBe(loiLa)
+  })
+
+  it("phản hồi SAI HÌNH DẠNG (không phải AxiosError) vẫn báo ra màn hình", async () => {
+    // 🔴 Lỗi Zod parse KHÔNG phải `AxiosError`. Bản trước ép kiểu bằng `as`
+    // rồi đưa thẳng cho `handleApiError` — `tsc` đỏ, và ở runtime nó rơi vào
+    // một nhánh không dành cho nó. Người vận hành không thấy gì.
+    await xemTruocXong()
+    mockPost.mockResolvedValueOnce({ data: { khong_dung_hinh_dang: true } })
+
+    await bamGhi()
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1))
+    expect(String(mockToastError.mock.calls[0][0])).toMatch(/không đọc được/i)
+    // Không phải lỗi HTTP nên KHÔNG đi qua handler chung.
+    expect(mockHandleApiError).not.toHaveBeenCalled()
   })
 
   it("lỗi dorm-sync CÓ KIỂU vẫn xử riêng, KHÔNG rơi vào handler chung", async () => {

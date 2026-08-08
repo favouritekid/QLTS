@@ -143,7 +143,12 @@ export function DormSyncPanel({ now }: { now?: () => number }) {
           </button>
 
           <ConfirmDialog
-            open={hoiLai}
+            // 🔴 Hộp thoại đóng NGAY khi mất quyền ghi.
+            //
+            // Phiếu hết hạn trong lúc hộp đang mở là ca có thật: người bấm mở
+            // hộp, đọc lại danh sách, rồi xác nhận sau mốc năm phút. Chỉ khoá
+            // nút NỀN là chưa đủ — nút xác nhận nằm trong hộp và vẫn bấm được.
+            open={hoiLai && dongBo.choPhepGhi}
             onOpenChange={setHoiLai}
             variant="destructive"
             title="Ghi sang hệ ký túc xá?"
