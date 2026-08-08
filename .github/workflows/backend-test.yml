@@ -364,11 +364,21 @@ jobs:
           #     số 0 đầu CCCD, tệp trông vẫn "đủ" nhưng số sai;
           #   * fee_labels khớp frontend — tệp ghi một tên, màn hình ghi tên
           #     khác thì lời khuyên "lọc theo cột Loại phí" thành vô dụng.
+          # Hai tệp cuối KHÔNG thuộc chủ đề export — chúng canh thứ tự khoá của
+          # đường ghi tiền (nhập lô đối đầu ghi tay) và ràng buộc
+          # `committed ⟺ có mã phiếu`. Chỗ mạch lạc nhất là Tier 1, nơi ở của cả
+          # họ duplicate-guard, nhưng Tier 1 đang là shard CHẬM NHẤT còn lát này
+          # chưa tới hai phút: đặt ở đây thì wall-clock của cổng không đổi.
+          # Không đổi TÊN lát để thêm cho khớp chủ đề — tên job là required
+          # status check, đổi tên là mọi PR đang mở treo chờ một check không bao
+          # giờ tới.
           - tier: Tier 2b — Export khoản phí + công nợ
             tests: >-
               tests/services/test_tuition_export_service.py
               tests/services/test_finance_report_export.py
               tests/unit/test_fee_labels_match_frontend.py
+              tests/services/test_import_vs_manual_deadlock.py
+              tests/services/test_payment_import_row_committed_check.py
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability
