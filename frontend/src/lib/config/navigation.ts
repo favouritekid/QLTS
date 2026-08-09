@@ -462,8 +462,12 @@ export const navigationConfig: NavigationConfig = {
           // Gate 2 (2026-08): đẩy hồ sơ đủ điều kiện sang hệ ký túc xá và hạ cờ
           // những hồ sơ không còn trong danh sách. Trước đó việc này chỉ chạy
           // được bằng script CLI trên máy người vận hành, với khoá dịch vụ nằm
-          // trong một file .env — nên nó vừa không có nhật ký, vừa đòi phát khoá
-          // ấy cho thêm người mỗi lần ai đó cần chạy.
+          // trong một file .env.
+          //
+          // Hệ KTX vẫn ghi `sync_runs` cho mọi lượt, kể cả lượt từ CLI — thứ CLI
+          // thiếu nằm ở phía QLTS: sổ cái chống ghi lặp, một màn hình để bấm, và
+          // vết trong nhật ký kiểm toán của QLTS. Và nó đòi phát khoá dịch vụ
+          // cho thêm một người mỗi lần có người cần chạy.
           //
           // `roles: ["admin"]` chỉ quyết định MỤC CÓ HIỆN HAY KHÔNG. Cổng thật
           // nằm ở backend: cả ba endpoint sau `require_admin`, và ai gõ thẳng

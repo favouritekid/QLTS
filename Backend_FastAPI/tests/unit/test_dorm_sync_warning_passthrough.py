@@ -58,14 +58,20 @@ def _hang_canh_bao(**ghi_de):
 # `cho_duyet` là đề nghị đang chờ quản lý duyệt, và người đó VẪN đang giữ
 # giường — nên họ phải xuất hiện trên màn hình cảnh báo.
 #
-# ⚠️ Hàng thứ tư CỐ Ý trùng `qlts_profile_id` với hàng đầu, khác
-# `assignment_id`. Helper sắp theo `(sap_1, sap_2)` = `(qlts_profile_id,
-# assignment_id)` — khoá thứ hai chỉ có nghĩa khi MỘT người giữ được nhiều
-# hàng chỗ ở, và đó là chuyện có thật: một đề nghị chuyển phòng đang chờ duyệt
-# nằm cạnh chỗ đang ở.
+# ⚠️ Hàng thứ hai CỐ Ý trùng `qlts_profile_id` với hàng đầu — và dữ liệu ấy
+# TRÁI ràng buộc bên KTX.
 #
-# Khử trùng theo `qlts_profile_id` ở Python sẽ ném đi một giường thật, và người
-# bấm mất đúng thông tin họ cần để quyết.
+# `students.qlts_profile_id` là `not null unique`, và
+# `uq_active_assignment_per_student` (unique một phần trên `student_id` với
+# `status in ('active','cho_duyet')`) cấm một người giữ hai hàng cùng lúc;
+# `chuyen_phong` đóng hàng cũ trước khi mở hàng mới, trong cùng giao dịch. Nên
+# một database lành KHÔNG trả về hình dạng này.
+#
+# Dựng nó ở đây là cố ý, vì bất biến cần canh không phải "trùng có hợp lệ
+# không" mà là: QLTS KHÔNG tự chữa dữ liệu của bên kia. Khử trùng theo
+# `qlts_profile_id` ở Python là dựng một định nghĩa THỨ HAI cho câu hỏi mà
+# helper đã trả lời — và nếu phản hồi có hỏng thật, phép chữa ấy ném đi một
+# giường mà không ai biết. Ta chở nguyên, để cái sai lộ ra ở nơi sửa được.
 _ROWS_HELPER = (
     _hang_canh_bao(qlts_profile_id=138, assignment_id=5, status="active", bed_no=13),
     _hang_canh_bao(
@@ -166,8 +172,9 @@ async def test_giu_nguyen_SO_HANG_THU_TU_va_ca_hai_trang_thai():
         "cho_duyet",
         "active",
     ]
-    # 🔴 HAI hàng của cùng một người phải cùng qua. Khử trùng theo
-    # `qlts_profile_id` sẽ ném đi một giường thật.
+    # 🔴 Hai hàng trùng `qlts_profile_id` phải CÙNG QUA, dù hình dạng ấy trái
+    # ràng buộc bên KTX. Khử trùng ở Python là tự chữa dữ liệu của bên kia —
+    # và nó ném đi một giường mà không để lại dấu vết nào.
     assert [h["bed_no"] for h in ket_qua.warnings[:2]] == [13, 4]
 
 

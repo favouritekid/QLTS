@@ -390,10 +390,18 @@ describe("phiếu và năm học", () => {
 })
 
 describe("danh sách cảnh báo", () => {
-  it("giữ ĐỦ hàng trùng qlts_profile_id", async () => {
-    // 🔴 Một người giữ được HAI hàng chỗ ở: đề nghị chuyển phòng đang chờ duyệt
-    // nằm cạnh chỗ đang ở. Dùng riêng `qlts_profile_id` làm React key sẽ khiến
-    // React coi hai hàng là một và bỏ mất một giường thật.
+  it("phản hồi HỎNG có hàng trùng qlts_profile_id vẫn hiện đủ", async () => {
+    // ⚠️ Dữ liệu ca này TRÁI ràng buộc bên KTX, và đó là chủ ý.
+    //
+    // `students.qlts_profile_id` là `not null unique`, và
+    // `uq_active_assignment_per_student` cấm một người giữ hai hàng
+    // `active`/`cho_duyet` cùng lúc — nên hai dòng dưới đây KHÔNG thể ra từ một
+    // database lành. Ca này canh cách màn hình cư xử khi phản hồi hỏng, không
+    // canh một trạng thái nghiệp vụ hợp lệ.
+    //
+    // Vì sao vẫn đáng canh: nuốt mất một dòng cảnh báo là mất đúng thông tin
+    // người ta đang dùng để quyết, và React nuốt nó ÂM THẦM — chỉ ghi một dòng
+    // vào console.
     await xemTruocXong(
       preview({
         warnings: [

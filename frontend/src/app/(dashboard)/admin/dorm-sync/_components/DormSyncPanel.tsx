@@ -140,10 +140,23 @@ export function DormSyncPanel({ now }: { now?: () => number }) {
           ) : (
             <ul data-testid="danh-sach-canh-bao">
               {dongBo.preview.warnings.map((w, i) => (
-                // 🔴 Key gồm CẢ chỉ số: một người giữ được HAI hàng chỗ ở (đề
-                // nghị chuyển phòng đang chờ duyệt nằm cạnh chỗ đang ở), nên
-                // `qlts_profile_id` KHÔNG duy nhất. Dùng riêng nó làm key sẽ
-                // khiến React coi hai hàng là một và bỏ mất một giường thật.
+                // Key gồm CẢ chỉ số — PHÒNG THỦ, không phải vì nghiệp vụ
+                // cho phép trùng.
+                //
+                // Schema bên KTX cấm trùng ở hai lớp: `students.qlts_profile_id`
+                // là `not null unique`, và `uq_active_assignment_per_student` —
+                // unique một phần trên `student_id` với
+                // `status in ('active','cho_duyet')` — cấm một người giữ hai
+                // hàng cùng lúc. `chuyen_phong` cũng đóng hàng cũ trước khi mở
+                // hàng mới, trong cùng giao dịch. Vậy hai dòng cùng
+                // `qlts_profile_id` là BẤT KHẢ với dữ liệu đúng.
+                //
+                // Chỉ số vẫn ở đây vì cái giá lệch hẳn về một phía: nếu phản hồi
+                // hỏng — ràng buộc bên kia đổi, một lượt sửa dữ liệu tay, một
+                // bản vá helper — thì React coi hai dòng là một và NUỐT MẤT một
+                // giường ngay trên màn hình người ta đang dùng để quyết. Trả giá
+                // bằng một biến `i` để không bao giờ mất một dòng cảnh báo là
+                // đổi chác dễ.
                 <li key={`${w.qlts_profile_id}-${i}`}>
                   #{w.qlts_profile_id} {w.full_name} — {w.building_name}{" "}
                   {w.room_code} giường {w.bed_no} ({w.status})
