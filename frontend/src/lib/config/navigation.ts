@@ -459,6 +459,22 @@ export const navigationConfig: NavigationConfig = {
           roles: ["admin"],
         },
         {
+          // Gate 2 (2026-08): đẩy hồ sơ đủ điều kiện sang hệ ký túc xá và hạ cờ
+          // những hồ sơ không còn trong danh sách. Trước đó việc này chỉ chạy
+          // được bằng script CLI trên máy người vận hành, với khoá dịch vụ nằm
+          // trong một file .env — nên nó vừa không có nhật ký, vừa đòi phát khoá
+          // ấy cho thêm người mỗi lần ai đó cần chạy.
+          //
+          // `roles: ["admin"]` chỉ quyết định MỤC CÓ HIỆN HAY KHÔNG. Cổng thật
+          // nằm ở backend: cả ba endpoint sau `require_admin`, và ai gõ thẳng
+          // URL vẫn bị chặn ở đó. Đây là thin client — sidebar không phải hàng
+          // rào, và không được coi nó là hàng rào.
+          label: "Đồng bộ ký túc xá",
+          href: "/admin/dorm-sync",
+          icon: Upload,
+          roles: ["admin"],
+        },
+        {
           label: "Monitoring",
           href: "/admin/monitoring",
           icon: Activity,
