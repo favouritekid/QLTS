@@ -61,9 +61,28 @@ export function parseDormSyncBlocked(error: unknown): DormSyncBlockedError | nul
   }
 
   const parsed = dormSyncBlockedSchema.safeParse(data)
-  if (!parsed.success) return null
+  if (parsed.success) return new DormSyncBlockedError(parsed.data)
 
-  return new DormSyncBlockedError(parsed.data)
+  // 🔴 Mã ĐÚNG của ta nhưng payload sai hình dạng ⇒ FAIL-CLOSED, không trả
+  // `null`.
+  //
+  // Trả `null` ở đây đẩy lỗi sang `handleApiError` chung. Nhánh đó không biết
+  // gì về sổ cái: nó không xoá phiếu, không dựng `TrangThaiChan`, nên
+  // `khoaMoiThaoTac` giữ nguyên `false` và nút Ghi mở lại với đúng cái phiếu
+  // vừa bị chặn. Mà lượt bị chặn hay gặp nhất lại là `outcome_unknown` — bấm
+  // lần hai ở đó là chồng một lượt ghi lên một lượt có thể đang sống.
+  //
+  // Server đã nói "chặn"; chỉ phần MÔ TẢ là không đọc được. Giữ vế đã chắc
+  // chắn và hạ vế còn lại xuống mức an toàn nhất: coi như không rõ hệ KTX tới
+  // đâu, và đòi đối soát tay.
+  return new DormSyncBlockedError({
+    detail:
+      "Hệ thống chặn lượt ghi này nhưng không mô tả được lý do. " +
+      "Phải đối soát bằng tay trước khi chạy lượt mới.",
+    error_code: DORM_SYNC_BLOCKED_CODE,
+    operation_status: "outcome_unknown",
+    next_action: "manual_reconcile",
+  })
 }
 
 export async function getDormSyncContext(): Promise<DormSyncContext> {

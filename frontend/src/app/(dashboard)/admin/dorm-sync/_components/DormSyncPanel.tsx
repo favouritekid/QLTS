@@ -13,6 +13,7 @@ import { ConfirmDialog } from "@/components/common/modals/ConfirmDialog"
 import { PageContainer } from "@/components/layouts/PageContainer"
 import { PageHeader } from "@/components/layouts/PageHeader"
 import { useDormSync, useDormSyncContext } from "@/hooks/admin/useDormSync"
+import type { DormSyncPreview } from "@/lib/zod/dorm-sync"
 
 export function DormSyncPanel({ now }: { now?: () => number }) {
   const boiCanh = useDormSyncContext()
@@ -21,7 +22,31 @@ export function DormSyncPanel({ now }: { now?: () => number }) {
   // 🔴 Click ĐẦU chỉ mở hộp xác nhận. Đây là thao tác hạ cờ đủ-điều-kiện của
   // cả một khoá học và không có đường lùi; một cú bấm nhầm không được biến
   // thành một request.
-  const [hoiLai, setHoiLai] = useState(false)
+  //
+  // ⚠️ Giữ CHÍNH PHIẾU người đó đã bấm, không giữ một cờ `boolean`.
+  //
+  // Một cờ trần chỉ nói "có ai đó từng bấm", không nói bấm trên cái gì. Đường
+  // hỏng đã đo được: hộp đang mở thì phiếu hết hạn (hộp biến mất vì mất quyền
+  // ghi), người bấm Xem trước lại, phiếu mới về — cờ vẫn `true` nên hộp xác
+  // nhận TỰ MỞ trên một danh sách người đó chưa kịp đọc, nút Ghi sẵn dưới ngón
+  // tay.
+  //
+  // Nhớ chính cái phiếu thì lớp lỗi ấy biến mất chứ không phải bị vá: ý định cũ
+  // không có cách nào trỏ sang một phiếu khác. Không cần đồng bộ hai mẩu state,
+  // và cũng không cần một effect chạy sau khi màn hình đã vẽ xong — mà một
+  // khoảnh khắc hộp mở nhầm cũng là một khoảnh khắc bấm được.
+  //
+  // 🔴 So DANH TÍNH đối tượng, không so `preview_token`.
+  //
+  // So mã phiếu nghe chặt hơn nhưng nó mượn một giả định về phía server: rằng
+  // hai lần xem trước không bao giờ ký ra cùng một chuỗi. Giả định ấy đúng hôm
+  // nay (phiếu ký kèm `iat`) và không có gì bắt nó phải đúng mãi. Mỗi lần xem
+  // trước dựng một đối tượng MỚI từ `parse()`, nên so tham chiếu đứng vững kể
+  // cả khi hai phiếu giống nhau từng ký tự — đã đo bằng ca test dựng đúng
+  // trường hợp đó.
+  const [phieuDaXacNhan, setPhieuDaXacNhan] = useState<DormSyncPreview | null>(
+    null,
+  )
 
   const namDangChon = namHoc ?? boiCanh.data?.default_academic_year ?? null
 
@@ -137,19 +162,27 @@ export function DormSyncPanel({ now }: { now?: () => number }) {
             type="button"
             data-testid="nut-ghi"
             disabled={!dongBo.choPhepGhi}
-            onClick={() => setHoiLai(true)}
+            onClick={() => setPhieuDaXacNhan(dongBo.preview)}
           >
             {dongBo.dangGhi ? "Đang ghi…" : "Ghi sang ký túc xá"}
           </button>
 
           <ConfirmDialog
-            // 🔴 Hộp thoại đóng NGAY khi mất quyền ghi.
+            // 🔴 Hộp mở khi VÀ CHỈ KHI ý định còn trỏ đúng phiếu đang hiện, và
+            // phiếu đó còn ghi được.
             //
-            // Phiếu hết hạn trong lúc hộp đang mở là ca có thật: người bấm mở
-            // hộp, đọc lại danh sách, rồi xác nhận sau mốc năm phút. Chỉ khoá
-            // nút NỀN là chưa đủ — nút xác nhận nằm trong hộp và vẫn bấm được.
-            open={hoiLai && dongBo.choPhepGhi}
-            onOpenChange={setHoiLai}
+            // Vế `choPhepGhi` đóng hộp ngay giữa chừng: phiếu hết hạn trong lúc
+            // hộp đang mở là ca có thật — người bấm mở hộp, đọc lại danh sách,
+            // rồi xác nhận sau mốc năm phút. Khoá mỗi nút NỀN là chưa đủ, vì
+            // nút xác nhận nằm TRONG hộp.
+            //
+            // Vế so phiếu chặn chiều ngược lại: sau khi hộp tự đóng, người đó
+            // xem trước lại và phiếu mới về — ý định cũ không được sống dậy
+            // trên danh sách mới.
+            open={phieuDaXacNhan === dongBo.preview && dongBo.choPhepGhi}
+            onOpenChange={(mo) => {
+              if (!mo) setPhieuDaXacNhan(null)
+            }}
             variant="destructive"
             title="Ghi sang hệ ký túc xá?"
             description={
@@ -160,7 +193,7 @@ export function DormSyncPanel({ now }: { now?: () => number }) {
             confirmText="Ghi"
             cancelText="Huỷ"
             onConfirm={() => {
-              setHoiLai(false)
+              setPhieuDaXacNhan(null)
               dongBo.ghi()
             }}
           />

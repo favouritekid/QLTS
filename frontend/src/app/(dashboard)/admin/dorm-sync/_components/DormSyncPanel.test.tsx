@@ -596,6 +596,70 @@ describe("phiếu hết hạn TRONG LÚC hộp xác nhận đang mở", () => {
   })
 })
 
+describe("ý định xác nhận KHÔNG sống sót qua lần xem trước sau", () => {
+  it("hết hạn khi hộp đang mở, xem trước lại ⇒ hộp KHÔNG tự mở", async () => {
+    // 🔴 Đường hỏng mà hai ca hết-hạn ở trên KHÔNG bắt được.
+    //
+    // Chúng chỉ chứng minh hộp BIẾN MẤT khi mất quyền ghi. Nhưng `open={hoiLai
+    // && choPhepGhi}` chỉ ẩn — `hoiLai` vẫn `true`. Phiếu mới về, `choPhepGhi`
+    // bật lại, và hộp xác nhận TỰ MỞ trên một danh sách người đó chưa kịp đọc,
+    // nút Ghi sẵn dưới ngón tay. Thao tác này không có đường lùi.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const batDau = 1_000_000
+      mockPost
+        .mockResolvedValueOnce({
+          data: preview({ expires_at: (batDau + 300_000) / 1000 }),
+        })
+        // Phiếu thứ hai còn hạn dài hơn — số hồ sơ KHÁC, để thấy rõ đây là một
+        // danh sách mới cần đọc lại chứ không phải màn hình cũ.
+        //
+        // ⚠️ `preview_token` cố ý GIỮ NGUYÊN chuỗi cũ. Server thật ký kèm
+        // `iat` nên hai phiếu không trùng mã, nhưng bám vào điều đó là mượn
+        // một giả định của phía bên kia để giữ an toàn cho phía này. Ca này
+        // dựng đúng trường hợp giả định ấy sai, và màn hình vẫn phải đứng
+        // vững — nó nhận ra phiếu mới bằng danh tính đối tượng, không bằng
+        // chuỗi. Bản so `preview_token` đã ĐỎ ở đây, đúng như phải vậy.
+        .mockResolvedValueOnce({
+          data: preview({
+            source_count: 601,
+            expires_at: (batDau + 900_000) / 1000,
+          }),
+        })
+      boc(<DormSyncPanel now={() => batDau} />)
+
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      await user.click(await screen.findByTestId("nut-xem-truoc"))
+      await screen.findByTestId("ket-qua-xem-truoc")
+
+      await user.click(screen.getByTestId("nut-ghi"))
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument()
+
+      // Phiếu chết trong lúc hộp đang mở.
+      await vi.advanceTimersByTimeAsync(300_001)
+      await waitFor(() =>
+        expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+      )
+
+      // Người bấm làm đúng thứ giao diện mời: xem trước lại.
+      await user.click(screen.getByTestId("nut-xem-truoc"))
+      await waitFor(() =>
+        expect(screen.getByTestId("so-nguon")).toHaveTextContent("601"),
+      )
+
+      // ⚠️ Vế này phải khẳng định TRƯỚC: quyền ghi đã bật lại thật. Thiếu nó,
+      // ca vẫn xanh khi hộp không mở chỉ vì `choPhepGhi` còn `false` — xanh vì
+      // lý do khác với thứ đang cần chứng minh.
+      await waitFor(() => expect(screen.getByTestId("nut-ghi")).toBeEnabled())
+
+      // Quyền có, nhưng Ý ĐỊNH thì không: hộp chỉ mở khi người đó bấm lại.
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe("lỗi lạ không bị nuốt", () => {
   it("lỗi KHÔNG nhận diện được đi qua handleApiError", async () => {
     // Bản trước chỉ ghi chú "để component xử" rồi không ai xử: một lỗi mạng
@@ -636,6 +700,89 @@ describe("lỗi lạ không bị nuốt", () => {
 
     await screen.findByTestId("chan-manual_reconcile")
     expect(mockHandleApiError).not.toHaveBeenCalled()
+  })
+})
+
+describe("payload chặn SAI HÌNH DẠNG vẫn phải khoá", () => {
+  // Mã ĐÚNG của ta, nhưng phần mô tả hỏng. Ba dạng hỏng thật sự gặp: thiếu
+  // trường, sai giá trị enum, và sai kiểu.
+  const HONG: Array<[string, Record<string, unknown>]> = [
+    [
+      "thiếu next_action",
+      {
+        detail: "Lượt trước chưa rõ kết cục.",
+        error_code: "DORM_SYNC_OPERATION_BLOCKED",
+        operation_status: "outcome_unknown",
+      },
+    ],
+    [
+      "next_action lạ (backend thêm giá trị mới)",
+      {
+        detail: "Lượt trước chưa rõ kết cục.",
+        error_code: "DORM_SYNC_OPERATION_BLOCKED",
+        operation_status: "outcome_unknown",
+        next_action: "retry_later",
+      },
+    ],
+    [
+      "next_action sai kiểu",
+      {
+        detail: "Lượt trước chưa rõ kết cục.",
+        error_code: "DORM_SYNC_OPERATION_BLOCKED",
+        operation_status: "running",
+        next_action: null,
+      },
+    ],
+  ]
+
+  it.each(HONG)("%s ⇒ khoá MỌI thao tác, đòi đối soát tay", async (_ten, than) => {
+    // 🔴 Đây là ca FAIL-OPEN đắt nhất của màn hình.
+    //
+    // Bản trước trả `null` khi payload không parse được, đẩy lỗi sang
+    // `handleApiError` chung. Nhánh đó không biết gì về sổ cái: không dựng
+    // `TrangThaiChan`, nên `khoaMoiThaoTac` giữ `false` và nút quay về trạng
+    // thái thường. Người vận hành bấm lại — chồng một lượt ghi lên một lượt có
+    // thể đang sống bên KTX.
+    //
+    // Server đã nói "chặn"; chỉ phần mô tả là không đọc được. Vế chắc chắn
+    // phải được giữ, vế còn lại hạ xuống mức an toàn nhất.
+    const loi = new AxiosError("409")
+    loi.response = {
+      data: than,
+      status: 409,
+      statusText: "Conflict",
+      headers: {},
+      config: {} as never,
+    }
+    await xemTruocXong()
+    mockPost.mockRejectedValueOnce(loi)
+
+    await bamGhi()
+
+    // Rơi vào nhánh an toàn nhất, không phải nhánh "cho thử lại".
+    expect(await screen.findByTestId("chan-manual_reconcile")).toBeInTheDocument()
+    expect(screen.getByTestId("canh-bao-doi-soat")).toBeInTheDocument()
+
+    // Khoá CẢ nút xem trước — `manual_reconcile` không cho chạy lượt mới.
+    await waitFor(() =>
+      expect(screen.getByTestId("nut-xem-truoc")).toBeDisabled(),
+    )
+
+    // Và KHÔNG được rơi vào handler chung: nó sẽ trả nút về trạng thái thường.
+    expect(mockHandleApiError).not.toHaveBeenCalled()
+  })
+
+  it("payload ĐỦ hình dạng vẫn đi đúng next_action của nó — vế đảo", async () => {
+    // Vế đảo: nếu hạ tất cả xuống `manual_reconcile` thì ca trên xanh mà hàng
+    // rào lại quá tay — `failed` phải cho xem trước lại.
+    await xemTruocXong()
+    mockPost.mockRejectedValueOnce(loiChan("failed", "preview_again"))
+
+    await bamGhi()
+
+    expect(await screen.findByTestId("chan-preview_again")).toBeInTheDocument()
+    expect(screen.queryByTestId("canh-bao-doi-soat")).not.toBeInTheDocument()
+    expect(screen.getByTestId("nut-xem-truoc")).toBeEnabled()
   })
 })
 
