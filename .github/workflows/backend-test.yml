@@ -379,6 +379,7 @@ jobs:
               tests/unit/test_fee_labels_match_frontend.py
               tests/services/test_import_vs_manual_deadlock.py
               tests/services/test_payment_import_row_committed_check.py
+              tests/services/test_import_preview_replace_guard.py
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability

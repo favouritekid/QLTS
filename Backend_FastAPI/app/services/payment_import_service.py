@@ -937,7 +937,38 @@ async def create_preview_batch(
                 f"File này đã được import và ghi nhận ở lô #{existing.id}{ngay}. "
                 "Hãy đảo (void) lô đó trước nếu muốn import lại."
             )
-        # preview cũ cùng file → thay thế (cascade xóa rows) rồi tạo lại
+        # ⚠️ `status` MỘT MÌNH không đủ để kết luận "chưa ghi đồng nào".
+        #
+        # Lô còn dòng bị hàng rào nghi trùng giữ lại vẫn mang `preview` trong
+        # khi các dòng khác ĐÃ ghi tiền và đang giữ `payment_ids`. Đó là trạng
+        # thái bình thường của mọi lượt commit có `duplicate_review_required`,
+        # không phải ngoại lệ hiếm.
+        #
+        # Xoá lô ở trạng thái đó không phải "làm mới ảnh chụp" mà là xoá bằng
+        # chứng: `Payment` vẫn nằm trong sổ, tiền vẫn ở invoice/fee, nhưng hàng
+        # nối chúng với dòng file biến mất — hết đường lần ngược "khoản này vào
+        # sổ từ đâu", và lượt import sau không thấy dòng cũ nên có thể ghi lần
+        # hai.
+        so_dong_da_ghi = (
+            await db.execute(
+                select(func.count())
+                .select_from(PaymentImportRow)
+                .where(
+                    PaymentImportRow.batch_id == existing.id,
+                    PaymentImportRow.commit_status
+                    == PaymentImportCommitStatusEnum.committed.value,
+                )
+            )
+        ).scalar_one()
+        if so_dong_da_ghi:
+            raise ConflictError(
+                f"Lô #{existing.id} của file này đã ghi tiền {so_dong_da_ghi} "
+                "dòng và còn dòng chờ soát. Hãy mở lô đó để ghi tiếp các dòng "
+                "nghi trùng, hoặc đảo (void) lô trước khi import lại — nhập lại "
+                "bây giờ sẽ xoá dấu vết của khoản tiền đã vào sổ."
+            )
+
+        # preview cũ CHƯA ghi đồng nào → thay thế (cascade xóa rows) rồi tạo lại
         await db.delete(existing)
         await db.flush()
 
