@@ -149,6 +149,14 @@ export const paymentImportBatchSummarySchema = z.object({
   voided_at: z.string().nullable().optional(),
   // BE quyết quyền đảo lô của người xem (thin-client: FE đọc flag, không check role)
   can_void: z.boolean().default(false),
+  // Số dòng đang bị hàng rào nghi trùng giữ lại — để nói RÕ còn bao nhiêu dòng
+  // thay vì một nút trơ.
+  review_required_count: z.number().int().default(0),
+  // Quyền mở đường "ghi tiếp các dòng nghi trùng" — BE quyết (lô còn preview +
+  // còn dòng chờ soát + người xem qua gate commit). FE ĐỌC cờ; suy lại từ
+  // `status` + counter là dựng một bản sao luật phân quyền thứ hai, và bản sao
+  // đó không biết gì về role.
+  can_resume_commit: z.boolean().default(false),
 })
 export type PaymentImportBatchSummary = z.infer<
   typeof paymentImportBatchSummarySchema

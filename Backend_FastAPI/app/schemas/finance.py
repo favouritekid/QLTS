@@ -1618,6 +1618,14 @@ class PaymentImportBatchSummaryOut(BaseModel):
     # Quyền đảo lô của NGƯỜI ĐANG XEM (BE quyết theo role+status) → FE đọc flag thay
     # vì tự check role (thin-client). True khi user là manager/admin & lô 'committed'.
     can_void: bool = False
+    #: Số dòng đang bị hàng rào nghi trùng giữ lại — projection từ trạng thái
+    #: dòng, KHÔNG phải bộ đếm cộng dồn.
+    review_required_count: int = 0
+    #: Lô còn dòng chờ soát VÀ người đang xem có quyền ghi tiền ⇒ mở được
+    #: đường "ghi tiếp". Do BE quyết (khớp gate của route commit); FE đọc cờ,
+    #: KHÔNG tự suy từ `status` + counter — hai thứ đó không mang thông tin
+    #: quyền, và suy ra ở client là dựng một bản sao luật phân quyền thứ hai.
+    can_resume_commit: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

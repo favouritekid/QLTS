@@ -981,6 +981,7 @@ async def list_payment_import_batches(
     for b in items:
         summary = finance_schemas.PaymentImportBatchSummaryOut.model_validate(b)
         summary.can_void = _can_void_for(current_user, b.status)
+        summary.can_resume_commit = _can_resume_commit_for(current_user, b)
         items_out.append(summary)
     return finance_schemas.PaymentImportBatchListOut(
         items=items_out,
@@ -1018,6 +1019,7 @@ async def get_payment_import_batch_detail(
     # ngoài greenlet) → 500. Build từ summary (chỉ cột) + rows đã nạp riêng.
     summary = finance_schemas.PaymentImportBatchSummaryOut.model_validate(batch)
     summary.can_void = _can_void_for(current_user, batch.status)
+    summary.can_resume_commit = _can_resume_commit_for(current_user, batch)
     return finance_schemas.PaymentImportBatchDetailOut(
         **summary.model_dump(),
         rows=[_payment_import_row_out(r) for r in rows],
@@ -1061,6 +1063,25 @@ def _can_void_for(user: models.User, batch_status: str) -> bool:
     """Quyền đảo lô của user xem: manager/admin & lô 'committed' (khớp gate route void).
     Dùng chung list + detail (1 nguồn — tránh lệch nếu đổi điều kiện)."""
     return user.role in (UserRole.MANAGER, UserRole.ADMIN) and batch_status == "committed"
+
+
+def _can_resume_commit_for(user: models.User, batch) -> bool:
+    """Người xem có mở được đường "ghi tiếp các dòng nghi trùng" của lô này không.
+
+    Ba vế, thiếu một là False:
+    * lô còn ở ``preview`` — lô đã ``committed``/``void`` không còn gì để ghi tiếp;
+    * còn ít nhất một dòng bị hàng rào giữ lại;
+    * người xem qua đúng gate của route commit (``require_finance_staff``).
+
+    Vế thứ ba là lý do cờ này phải do máy chủ cấp. `status` + counter nằm sẵn
+    trong payload, nên giao diện *tự suy được* hai vế đầu — nhưng vế quyền thì
+    không, và suy nửa vời sẽ hiện một nút mà backend từ chối.
+    """
+    return (
+        batch.status == "preview"
+        and (batch.review_required_count or 0) > 0
+        and user.role in (UserRole.ADMIN, UserRole.MANAGER, UserRole.ACCOUNTANT)
+    )
 
 
 def _payment_import_row_out(r) -> finance_schemas.PaymentImportRowOut:

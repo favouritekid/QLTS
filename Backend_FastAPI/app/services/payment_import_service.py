@@ -961,11 +961,14 @@ async def create_preview_batch(
             )
         ).scalar_one()
         if so_dong_da_ghi:
+            # ⚠️ KHÔNG mời "void lô" ở đây: `void_batch` chỉ nhận lô đã
+            # `committed`. Lô này vẫn `preview`, nên void là một lối ra KHÔNG
+            # tồn tại — chỉ đường vào một thông báo lỗi thứ hai.
             raise ConflictError(
                 f"Lô #{existing.id} của file này đã ghi tiền {so_dong_da_ghi} "
-                "dòng và còn dòng chờ soát. Hãy mở lô đó để ghi tiếp các dòng "
-                "nghi trùng, hoặc đảo (void) lô trước khi import lại — nhập lại "
-                "bây giờ sẽ xoá dấu vết của khoản tiền đã vào sổ."
+                "dòng và còn dòng chờ soát. Hãy mở lô này để xử lý các dòng "
+                "còn chờ soát. Sau khi hoàn tất, bạn có thể đảo lô trước khi "
+                "nhập lại nếu cần."
             )
 
         # preview cũ CHƯA ghi đồng nào → thay thế (cascade xóa rows) rồi tạo lại

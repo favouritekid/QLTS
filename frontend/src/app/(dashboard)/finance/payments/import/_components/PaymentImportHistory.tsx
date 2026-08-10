@@ -10,6 +10,7 @@ import { useState } from "react"
 
 import { ErrorEmptyState, TableEmptyState } from "@/components/common/EmptyState"
 import { Button } from "@/components/ui/button"
+import { ResumeReviewAction } from "./ResumeReviewAction"
 import {
   Card,
   CardContent,
@@ -105,6 +106,16 @@ function BatchRow({ b }: { b: PaymentImportBatchSummary }) {
             >
               <Download className="h-4 w-4" />
             </Button>
+            {/* Đường ghi tiếp cho lô còn dòng chờ soát. Điều kiện hiện nút do
+                MÁY CHỦ quyết (`can_resume_commit`); ở đây chỉ đọc cờ. Thiếu nút
+                này thì lô mắc kẹt ngay khi người dùng refresh hoặc đóng tab —
+                backend vẫn nhận `confirmed_rows` nhưng không còn chỗ nào gửi. */}
+            {b.can_resume_commit ? (
+              <ResumeReviewAction
+                batchId={b.id}
+                reviewRequiredCount={b.review_required_count}
+              />
+            ) : null}
             {b.can_void ? <PaymentImportVoidDialog batchId={b.id} /> : null}
           </div>
         </TableCell>
