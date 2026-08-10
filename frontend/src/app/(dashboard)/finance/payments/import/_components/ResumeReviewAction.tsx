@@ -27,6 +27,7 @@ import { useState } from "react"
 import { AlertTriangle, Loader2, RotateCcw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -38,6 +39,7 @@ import {
 import { toast } from "sonner"
 
 import { paymentImportApi } from "@/lib/api/payment-import"
+import { coPhieuHetHieuLuc, LOI_TAP_DA_DOI } from "@/lib/finance/import-review"
 import { useCommitPaymentImport } from "@/hooks/finance/usePaymentImport"
 import type { PaymentImportRow } from "@/lib/zod/payment-import"
 import { ImportRowsTable } from "./ImportRowsTable"
@@ -52,6 +54,11 @@ export function ResumeReviewAction({ batchId, reviewRequiredCount }: Props) {
   const [open, setOpen] = useState(false)
   const [dangTai, setDangTai] = useState(false)
   const [dongChoSoat, setDongChoSoat] = useState<PaymentImportRow[] | null>(null)
+  // Máy chủ đã từ chối phiếu vừa gửi vì tập ứng viên đổi giữa chừng, và cấp
+  // phiếu MỚI. `daTick` là xác nhận cho tập mới ấy — luôn bắt đầu từ false, kể
+  // cả khi người dùng vừa tick cho tập cũ vài giây trước.
+  const [tapDaDoi, setTapDaDoi] = useState(false)
+  const [daTick, setDaTick] = useState(false)
   const commit = useCommitPaymentImport()
 
   const dangBan = dangTai || commit.isPending
@@ -82,6 +89,10 @@ export function ResumeReviewAction({ batchId, reviewRequiredCount }: Props) {
         return
       }
 
+      // Mở lại = một câu hỏi mới: cảnh báo và tick của lượt trước không được
+      // sống sót qua đây.
+      setTapDaDoi(false)
+      setDaTick(false)
       setDongChoSoat(rows)
       setOpen(true)
     } catch {
@@ -93,22 +104,37 @@ export function ResumeReviewAction({ batchId, reviewRequiredCount }: Props) {
 
   function ghiTiep() {
     if (dangBan || !dongChoSoat) return
+    if (tapDaDoi && !daTick) return
+    const daGui = dongChoSoat.map((r) => ({
+      row_no: r.row_no,
+      review_token: r.review_token as string,
+    }))
     commit.mutate(
+      // Gửi ĐÚNG phiếu của từng dòng, không phải một cờ cho cả lô.
+      { batchId, confirmedRows: daGui },
       {
-        batchId,
-        // Gửi ĐÚNG phiếu của từng dòng, không phải một cờ cho cả lô.
-        confirmedRows: dongChoSoat.map((r) => ({
-          row_no: r.row_no,
-          review_token: r.review_token as string,
-        })),
-      },
-      {
-        onSuccess: () => {
+        onSuccess: (ketQua) => {
+          // Máy chủ trả 200 cho cả ca "đã ghi" lẫn ca "phiếu hết hiệu lực".
+          // Ca sau: tập ứng viên đã đổi giữa lúc phiếu được cấp và lúc gửi,
+          // không dòng nào vào sổ, và máy chủ vừa cấp phiếu MỚI. Đóng hộp
+          // thoại ở đây là biến việc cấp lại phiếu thành "bấm thử lần nữa" —
+          // trong khi đó là một câu hỏi khác, về một tập ứng viên khác.
+          const conCho = ketQua.rows.filter(
+            (r) => r.commit_status === "duplicate_review_required" && r.review_token,
+          )
+          if (coPhieuHetHieuLuc(daGui, ketQua.rows) && conCho.length > 0) {
+            setDongChoSoat(conCho) // thay TOÀN BỘ danh sách + phiếu bằng bản mới
+            setTapDaDoi(true)
+            setDaTick(false) // xác nhận cũ nói về tập cũ ⇒ vứt
+            return
+          }
           // Đóng và VỨT phiếu. Hook đã invalidate danh sách + chi tiết, nên
           // `can_resume_commit` được tính lại và nút tự biến mất khi hết dòng
           // chờ — không tự suy ở client.
           setOpen(false)
           setDongChoSoat(null)
+          setTapDaDoi(false)
+          setDaTick(false)
         },
       },
     )
@@ -138,7 +164,11 @@ export function ResumeReviewAction({ batchId, reviewRequiredCount }: Props) {
         open={open}
         onOpenChange={(v) => {
           // Đóng là VỨT phiếu — không giữ lại cho lần mở sau. Lần sau nạp mới.
-          if (!v) setDongChoSoat(null)
+          if (!v) {
+            setDongChoSoat(null)
+            setTapDaDoi(false)
+            setDaTick(false)
+          }
           setOpen(v)
         }}
       >
@@ -155,7 +185,33 @@ export function ResumeReviewAction({ batchId, reviewRequiredCount }: Props) {
             </DialogDescription>
           </DialogHeader>
 
+          {/* Phiếu vừa gửi bị từ chối: nói thẳng rằng CHƯA gì vào sổ và bảng
+              dưới đây là tập MỚI. Không có khối này thì màn hình trông y hệt
+              lúc chưa bấm, và cú bấm lại thành "thử lần nữa". */}
+          {tapDaDoi && (
+            <div
+              role="alert"
+              className="rounded-md border border-red-300 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/40"
+            >
+              <p className="text-sm font-medium text-red-900 dark:text-red-200">
+                {LOI_TAP_DA_DOI}
+              </p>
+            </div>
+          )}
+
           {dongChoSoat ? <ImportRowsTable rows={dongChoSoat} /> : null}
+
+          {tapDaDoi && (
+            <label className="flex items-start gap-2 text-sm">
+              <Checkbox
+                checked={daTick}
+                onCheckedChange={(v) => setDaTick(v === true)}
+                disabled={commit.isPending}
+                aria-label="Tôi đã soát lại danh sách ứng viên mới"
+              />
+              <span>Tôi đã soát lại danh sách ứng viên mới ở trên.</span>
+            </label>
+          )}
 
           <DialogFooter>
             <Button
@@ -165,7 +221,10 @@ export function ResumeReviewAction({ batchId, reviewRequiredCount }: Props) {
             >
               Để sau
             </Button>
-            <Button onClick={ghiTiep} disabled={dangBan || !dongChoSoat}>
+            <Button
+              onClick={ghiTiep}
+              disabled={dangBan || !dongChoSoat || (tapDaDoi && !daTick)}
+            >
               {commit.isPending ? (
                 <>
                   <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />

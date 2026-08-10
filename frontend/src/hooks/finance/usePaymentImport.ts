@@ -13,6 +13,7 @@ import { AxiosError, isAxiosError } from "axios"
 import { toast } from "sonner"
 
 import { paymentImportApi } from "@/lib/api/payment-import"
+import { coPhieuHetHieuLuc, LOI_TAP_DA_DOI } from "@/lib/finance/import-review"
 import { blobErrorMessage, downloadBlob } from "@/lib/utils/download-blob"
 import type {
   PaymentImportCommit,
@@ -108,16 +109,34 @@ export function useCommitPaymentImport() {
       typeof bien === "number"
         ? paymentImportApi.commit(bien)
         : paymentImportApi.commit(bien.batchId, bien.confirmedRows),
-    onSuccess: (result) => {
-      toast.success(
+    onSuccess: (result, bien) => {
+      const daGui = typeof bien === "number" ? undefined : bien.confirmedRows
+      const cau =
         `Đã ghi ${result.committed_count} dòng` +
-          (result.failed_count > 0 ? `, ${result.failed_count} lỗi` : "") +
-          // Dòng chờ xác nhận KHÔNG phải dòng lỗi: chúng đòi hai hành động
-          // khác nhau, nên gộp vào một con số là buộc kế toán đoán.
-          (result.review_required_count > 0
-            ? `, ${result.review_required_count} dòng chờ xác nhận trùng`
-            : ""),
-      )
+        (result.failed_count > 0 ? `, ${result.failed_count} lỗi` : "") +
+        // Dòng chờ xác nhận KHÔNG phải dòng lỗi: chúng đòi hai hành động
+        // khác nhau, nên gộp vào một con số là buộc kế toán đoán.
+        (result.review_required_count > 0
+          ? `, ${result.review_required_count} dòng chờ xác nhận trùng`
+          : "")
+
+      // Máy chủ trả 200 cho CẢ ba kết cục dưới đây, nên một `toast.success`
+      // dùng chung là nói sai nghĩa ở hai trong ba:
+      //
+      //   * phiếu vừa gửi bị từ chối (tập ứng viên đã đổi) — CHƯA đồng nào vào
+      //     sổ, và người dùng phải soát lại tập MỚI;
+      //   * còn dòng chờ xác nhận — việc chưa xong;
+      //   * ghi trọn — mới là thành công.
+      //
+      // Ca đầu từng hiện dấu tích xanh "Đã ghi 0 dòng": người dùng vừa bấm
+      // "Đã soát — ghi tiếp", không gì vào sổ, mà màn hình vẫn báo thành công.
+      if (coPhieuHetHieuLuc(daGui, result.rows)) {
+        toast.warning(`${LOI_TAP_DA_DOI} (${cau})`)
+      } else if (result.review_required_count > 0) {
+        toast.warning(cau)
+      } else {
+        toast.success(cau)
+      }
       // return → mutation pending tới khi cache refetch xong (tránh thao tác tiếp
       // trên dữ liệu cũ; convention await-invalidate của repo).
       return queryClient.invalidateQueries({ queryKey: paymentImportKeys.all })

@@ -199,4 +199,78 @@ describe("ResumeReviewAction", () => {
       { row_no: 2, review_token: "tok-moi" },
     ])
   })
+
+  it("phiếu hết hiệu lực ⇒ GIỮ hộp thoại, nạp tập MỚI, bắt xác nhận lại", async () => {
+    // Máy chủ trả 200 nhưng dòng vẫn `duplicate_review_required`: tập ứng viên
+    // đã đổi giữa lúc cấp phiếu và lúc gửi, nên KHÔNG đồng nào vào sổ — và
+    // phiếu mới vừa được cấp nói về một câu hỏi khác.
+    getBatchDetail.mockResolvedValue({ rows: [dongChoSoat(2, "tok-cu")] })
+    commitMutate.mockImplementation((_bien: unknown, opts: any) => {
+      opts?.onSuccess?.({
+        batch_id: 10,
+        committed_count: 0,
+        failed_count: 0,
+        payment_count: 0,
+        total_amount: "0",
+        review_required_count: 1,
+        rows: [dongChoSoat(2, "tok-moi")],
+      })
+    })
+    const user = userEvent.setup()
+    render(<ResumeReviewAction batchId={10} reviewRequiredCount={1} />)
+
+    await user.click(screen.getByRole("button", { name: /Ghi tiếp 1 dòng/i }))
+    await screen.findByTestId("rows")
+    await user.click(screen.getByRole("button", { name: /Đã soát — ghi tiếp/i }))
+
+    // Hộp thoại KHÔNG được đóng: đóng nó là biến việc cấp lại phiếu thành
+    // "bấm thử lần nữa".
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /Tập nghi trùng đã thay đổi/i,
+    )
+    expect(screen.getByTestId("rows")).toBeInTheDocument()
+
+    // Xác nhận cũ hết hiệu lực ⇒ nút khoá cho tới khi người dùng soát lại.
+    const nutGhi = screen.getByRole("button", { name: /Đã soát — ghi tiếp/i })
+    expect(nutGhi).toBeDisabled()
+    await user.click(nutGhi)
+    expect(commitMutate).toHaveBeenCalledTimes(1)
+
+    // Tick xong mới gửi được, và gửi PHIẾU MỚI chứ không phải phiếu vừa bị từ chối.
+    await user.click(
+      screen.getByRole("checkbox", { name: /đã soát lại danh sách/i }),
+    )
+    expect(nutGhi).toBeEnabled()
+    await user.click(nutGhi)
+    expect(commitMutate).toHaveBeenCalledTimes(2)
+    expect(commitMutate.mock.calls[1][0].confirmedRows).toEqual([
+      { row_no: 2, review_token: "tok-moi" },
+    ])
+  })
+
+  it("ghi được thì ĐÓNG hộp thoại (không giữ lại nhầm)", async () => {
+    getBatchDetail.mockResolvedValue({ rows: [dongChoSoat(2, "tok-2")] })
+    commitMutate.mockImplementation((_bien: unknown, opts: any) => {
+      opts?.onSuccess?.({
+        batch_id: 10,
+        committed_count: 1,
+        failed_count: 0,
+        payment_count: 1,
+        total_amount: "1500000.00",
+        review_required_count: 0,
+        rows: [{ ...dongChoSoat(2, null), commit_status: "committed" }],
+      })
+    })
+    const user = userEvent.setup()
+    render(<ResumeReviewAction batchId={10} reviewRequiredCount={1} />)
+
+    await user.click(screen.getByRole("button", { name: /Ghi tiếp 1 dòng/i }))
+    await screen.findByTestId("rows")
+    await user.click(screen.getByRole("button", { name: /Đã soát — ghi tiếp/i }))
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("rows")).not.toBeInTheDocument(),
+    )
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
 })

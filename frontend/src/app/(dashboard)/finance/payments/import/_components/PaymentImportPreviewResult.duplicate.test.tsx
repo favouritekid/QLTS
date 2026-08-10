@@ -14,7 +14,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest"
 import userEvent from "@testing-library/user-event"
-import { render, screen } from "@/test/utils/test-utils"
+import { act, render, screen } from "@/test/utils/test-utils"
 
 import { PaymentImportPreviewResult } from "./PaymentImportPreviewResult"
 import type {
@@ -127,7 +127,12 @@ async function commitRoi(ketQua: PaymentImportCommit) {
   expect(onSuccess, "component phải truyền onSuccess cho mutate").toBeTypeOf(
     "function",
   )
-  onSuccess(ketQua)
+  // Bọc `act`: `onSuccess` đẩy state vào component, và để nó chạy ngoài act
+  // thì mọi khẳng định phía dưới nói về một lượt render còn dang dở — đúng
+  // cảnh báo React in ra ở đây trước khi thêm dòng này.
+  await act(async () => {
+    onSuccess(ketQua)
+  })
 
   // Chốt rằng màn kết quả ĐÃ dựng. Không có câu này thì ca "không hiện nút"
   // vẫn xanh cả khi component chẳng render gì — tức là xanh vì lý do sai.
@@ -189,5 +194,46 @@ describe("PaymentImportPreviewResult — dòng nghi trùng", () => {
     expect(
       screen.queryByRole("button", { name: /đã soát — ghi tiếp/i }),
     ).not.toBeInTheDocument()
+  })
+
+  it("gửi phiếu mà dòng VẪN bị giữ ⇒ báo tập đã đổi, bắt xác nhận lại", async () => {
+    // Ca này canh đúng thứ đã thấy khi smoke: máy chủ từ chối phiếu cũ vì
+    // `duplicate_guard_version` của khoản phí vừa đổi, trả 200 kèm phiếu MỚI,
+    // và không đồng nào vào sổ. Nếu màn hình im lặng nhận phiếu mới thì hàng
+    // rào chỉ còn là một cú bấm thừa — bấm hai lần là qua.
+    const user = await commitRoi(KET_QUA_CO_NGHI_TRUNG)
+    commitMutate.mockClear()
+
+    await user.click(screen.getByRole("button", { name: /đã soát — ghi tiếp/i }))
+    const onSuccess = commitMutate.mock.calls.at(-1)?.[1]?.onSuccess
+    await act(async () => {
+      onSuccess({
+        ...KET_QUA_CO_NGHI_TRUNG,
+        rows: [
+          { ...KET_QUA_CO_NGHI_TRUNG.rows[0], review_token: "phieu.moi" },
+        ],
+      })
+    })
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /Tập nghi trùng đã thay đổi/i,
+    )
+
+    // Xác nhận trước đó nói về tập cũ ⇒ phải bị vứt.
+    const nut = screen.getByRole("button", { name: /đã soát — ghi tiếp/i })
+    expect(nut).toBeDisabled()
+    commitMutate.mockClear()
+    await user.click(nut)
+    expect(commitMutate).not.toHaveBeenCalled()
+
+    // Soát lại xong mới gửi được, và gửi PHIẾU MỚI.
+    await user.click(
+      screen.getByRole("checkbox", { name: /đã soát lại danh sách/i }),
+    )
+    await user.click(nut)
+    expect(commitMutate).toHaveBeenCalledTimes(1)
+    expect(commitMutate.mock.calls[0][0].confirmedRows).toEqual([
+      { row_no: 3, review_token: "phieu.moi" },
+    ])
   })
 })
