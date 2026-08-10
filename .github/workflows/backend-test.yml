@@ -242,8 +242,26 @@ jobs:
           #   * test_hk1_fee_scope_single_source — structural lock-in buộc các
           #     call site thật sự gọi helper chung;
           #   * test_dorm_export_cohort — cohort bám đúng năm học được hỏi;
-          #   * test_sync_dorm_students — chặn --batch-size <= 0, thứ từng
-          #     khiến một lượt đồng bộ ghi 0 hồ sơ rồi vẫn báo thành công.
+          #   * test_dorm_sync_* + test_sync_dorm_students_cli — chặn
+          #     --batch-size <= 0 (thứ từng khiến một lượt đồng bộ ghi 0 hồ sơ
+          #     rồi vẫn báo thành công), cùng toàn bộ lõi đồng bộ ký túc xá:
+          #     cấu hình fail-closed, ảnh chụp nguồn, phiếu ký, ba pha ghi, và
+          #     sổ cái chống ghi lặp.
+          #
+          # 🔴 `test_sync_dorm_students.py` KHÔNG còn tồn tại — Gate 2 tách nó
+          # thành lõi (`test_dorm_sync_service.py`) và vỏ CLI
+          # (`test_sync_dorm_students_cli.py`). Để nguyên đường dẫn cũ ở đây là
+          # `ERROR: file or directory not found` và **exit 4**: cả lát đỏ trước
+          # khi chạy được ca nào, nên không có gì trong danh sách này được kiểm.
+          # Đường dẫn literal trong workflow không ai đổi tên hộ — mỗi lần đổi
+          # tên tệp test phải rà lại đúng chỗ này.
+          #
+          # ⚠️ Hai tệp INTEGRATION của nhóm này nằm ở Tier 5, không ở đây. Đo
+          # thật: 10 tệp unit hết 10 giây, còn 2 tệp integration hết 3m46 (chúng
+          # dựng schema thật và có một ca đua chờ khoá PostgreSQL). Tier 1 đang
+          # là lát dài gần nhất với Tier 2, nên cộng thêm 4 phút vào đây là đẩy
+          # thẳng wall-clock của cả gate lên; Tier 5 mới 2m43 nên nó chịu phần
+          # đó mà không ai phải chờ lâu hơn.
           #
           # ⚠️ TUYỆT ĐỐI không đặt comment BÊN TRONG `tests: >-`. YAML gấp
           # folded scalar thành MỘT dòng, nên dấu `#` đầu tiên biến toàn bộ
@@ -271,7 +289,16 @@ jobs:
               tests/unit/test_enrollment_letter_cleanup.py
               tests/unit/test_hk1_fee_scope_single_source.py
               tests/repositories/test_dorm_export_cohort.py
-              tests/unit/test_sync_dorm_students.py
+              tests/unit/test_sync_dorm_students_cli.py
+              tests/unit/test_dorm_sync_config.py
+              tests/unit/test_dorm_sync_context.py
+              tests/unit/test_dorm_sync_service.py
+              tests/unit/test_dorm_sync_snapshot.py
+              tests/unit/test_dorm_sync_preview_service.py
+              tests/unit/test_dorm_sync_apply_service.py
+              tests/unit/test_dorm_sync_apply_router.py
+              tests/unit/test_dorm_sync_warning_passthrough.py
+              tests/unit/test_dorm_sync_operation_model.py
               tests/services/test_payment_service.py::TestRefundService
               tests/services/test_payment_service.py::TestRefundNoDeadEnd
               tests/api/test_lead_import.py
@@ -391,6 +418,12 @@ jobs:
           # ---------------------------------------------------------------
           # Tier 5: Phase 2 engine prereqs
           # ---------------------------------------------------------------
+          # ⚠️ Hai tệp cuối KHÔNG thuộc Phase 2 — chúng là phần integration
+          # của nhóm đồng bộ ký túc xá (10 tệp unit còn lại ở Tier 1). Đặt ở đây
+          # thuần vì cân giờ: chúng tốn 3m46 (dựng schema thật + một ca đua chờ
+          # khoá PostgreSQL), mà Tier 5 là lát nhẹ nhất (2m43) còn Tier 1 đang
+          # sát Tier 2. Nếu về sau tách Tier 2 và thứ tự lát đổi, cân lại chỗ
+          # này — đừng coi đây là phân loại theo chủ đề.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_phase2_engine_3tier_resolution.py
@@ -406,6 +439,8 @@ jobs:
               tests/integration/test_document_audience_reresolve.py
               tests/unit/test_docgrp_audience_backfill_migration.py
               tests/integration/test_document_audience_config_panel.py
+              tests/integration/test_dorm_sync_context_auth.py
+              tests/integration/test_dorm_sync_operation_ledger.py
 
     env:
       APP_ENV: test
