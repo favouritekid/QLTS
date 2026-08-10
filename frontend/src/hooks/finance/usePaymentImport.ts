@@ -13,7 +13,10 @@ import { AxiosError, isAxiosError } from "axios"
 import { toast } from "sonner"
 
 import { paymentImportApi } from "@/lib/api/payment-import"
-import { coPhieuHetHieuLuc, LOI_TAP_DA_DOI } from "@/lib/finance/import-review"
+import {
+  cauPhieuHetHieuLuc,
+  dongPhieuHetHieuLuc,
+} from "@/lib/finance/import-review"
 import { blobErrorMessage, downloadBlob } from "@/lib/utils/download-blob"
 import type {
   PaymentImportCommit,
@@ -123,15 +126,20 @@ export function useCommitPaymentImport() {
       // Máy chủ trả 200 cho CẢ ba kết cục dưới đây, nên một `toast.success`
       // dùng chung là nói sai nghĩa ở hai trong ba:
       //
-      //   * phiếu vừa gửi bị từ chối (tập ứng viên đã đổi) — CHƯA đồng nào vào
-      //     sổ, và người dùng phải soát lại tập MỚI;
+      //   * phiếu vừa gửi bị từ chối — dòng ấy chưa vào sổ, phải soát lại;
       //   * còn dòng chờ xác nhận — việc chưa xong;
       //   * ghi trọn — mới là thành công.
       //
       // Ca đầu từng hiện dấu tích xanh "Đã ghi 0 dòng": người dùng vừa bấm
       // "Đã soát — ghi tiếp", không gì vào sổ, mà màn hình vẫn báo thành công.
-      if (coPhieuHetHieuLuc(daGui, result.rows)) {
-        toast.warning(`${LOI_TAP_DA_DOI} (${cau})`)
+      //
+      // `cau` luôn đi kèm ở ca đầu, vì một lượt CÓ THỂ vừa ghi được dòng này
+      // vừa từ chối phiếu cũ của dòng kia (`committed_count` đếm riêng lượt).
+      // Nói trống "chưa dòng nào được ghi" là tự mâu thuẫn với chính con số
+      // ngay câu sau.
+      const daBiTuChoi = dongPhieuHetHieuLuc(daGui, result.rows)
+      if (daBiTuChoi.length > 0) {
+        toast.warning(`${cauPhieuHetHieuLuc(daBiTuChoi.length)} (${cau})`)
       } else if (result.review_required_count > 0) {
         toast.warning(cau)
       } else {

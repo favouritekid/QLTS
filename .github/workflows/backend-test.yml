@@ -364,9 +364,20 @@ jobs:
           #     số 0 đầu CCCD, tệp trông vẫn "đủ" nhưng số sai;
           #   * fee_labels khớp frontend — tệp ghi một tên, màn hình ghi tên
           #     khác thì lời khuyên "lọc theo cột Loại phí" thành vô dụng.
-          # Hai tệp cuối KHÔNG thuộc chủ đề export — chúng canh thứ tự khoá của
-          # đường ghi tiền (nhập lô đối đầu ghi tay) và ràng buộc
-          # `committed ⟺ có mã phiếu`. Chỗ mạch lạc nhất là Tier 1, nơi ở của cả
+          # Bốn tệp cuối KHÔNG thuộc chủ đề export — chúng canh thứ tự khoá của
+          # đường ghi tiền (nhập lô đối đầu ghi tay), ràng buộc
+          # `committed ⟺ có mã phiếu`, việc upload lại KHÔNG được xoá lô đã ghi
+          # một phần, và cờ `can_resume_commit` (ba vế: còn preview, còn dòng
+          # chờ soát, người xem qua gate route commit — ca dương chạy bằng
+          # persona `accountant` THẬT).
+          #
+          # 🔴 Danh sách này là ALLOWLIST tường minh: tệp không có tên ở đây thì
+          # KHÔNG shard nào chạy, và required check vẫn xanh. Nên một lát backend
+          # mới chỉ được coi là "có cổng" sau khi tên tệp test của nó nằm trong
+          # một tier — thêm tệp mà quên dòng này là tự cấp cho mình một cổng
+          # không tồn tại.
+          #
+          # Chỗ mạch lạc nhất là Tier 1, nơi ở của cả
           # họ duplicate-guard, nhưng Tier 1 đang là shard CHẬM NHẤT còn lát này
           # chưa tới hai phút: đặt ở đây thì wall-clock của cổng không đổi.
           # Không đổi TÊN lát để thêm cho khớp chủ đề — tên job là required
@@ -380,6 +391,7 @@ jobs:
               tests/services/test_import_vs_manual_deadlock.py
               tests/services/test_payment_import_row_committed_check.py
               tests/services/test_import_preview_replace_guard.py
+              tests/api/test_import_batch_resume_flag.py
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability

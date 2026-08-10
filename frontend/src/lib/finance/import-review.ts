@@ -8,12 +8,16 @@
  * một đường:
  *
  *   1. gửi phiếu → dòng vào sổ  (việc đã xong)
- *   2. gửi phiếu → dòng VẪN `duplicate_review_required`  (chưa đồng nào vào sổ)
+ *   2. gửi phiếu → dòng VẪN `duplicate_review_required`  (dòng ấy chưa vào sổ)
  *
- * Ca 2 xảy ra khi `duplicate_guard_version` của khoản phí đổi giữa lúc phiếu
- * được cấp và lúc nó được gửi — tức tập ứng viên người dùng vừa soát KHÔNG còn
- * là tập hiện tại. Máy chủ từ chối dòng đó rồi **cấp phiếu mới** ngay trong
- * cùng lượt (`payment_import_service.py`, cuối pha commit).
+ * Hai ca này KHÔNG loại trừ nhau trong một lượt: `committed_count` đếm riêng
+ * lượt đang xét, nên một lần gửi hai phiếu có thể ghi được một dòng và bị từ
+ * chối dòng kia.
+ *
+ * Ca 2 xảy ra khi phiếu không còn hiệu lực lúc tới máy chủ — thường vì
+ * `duplicate_guard_version` của khoản phí đã đổi, nhưng hết hạn hay đổi người
+ * dùng cũng cho cùng kết quả. Máy chủ từ chối dòng đó rồi **cấp phiếu mới**
+ * ngay trong cùng lượt (`payment_import_service.py`, cuối pha commit).
  *
  * Đó là chỗ nguy hiểm: nếu giao diện chỉ im lặng nhận phiếu mới và báo thành
  * công, hàng rào chỉ còn là một cú bấm thừa — bấm hai lần là qua, mà chẳng ai
@@ -65,7 +69,31 @@ export function coPhieuHetHieuLuc(
  * Câu nói cho người dùng khi phiếu hết hiệu lực. Để ở đây vì cả toast lẫn hai
  * khối cảnh báo trên màn hình phải nói CÙNG một điều — lệch câu chữ giữa chúng
  * là mở lại đúng khe hiểu nhầm mà việc này đang đóng.
+ *
+ * 🔴 Chỉ nói thứ response CHỨNG MINH được. Bản trước viết "tập nghi trùng đã
+ * thay đổi — chưa dòng nào được ghi", và sai ở cả hai vế:
+ *
+ *   * NGUYÊN NHÂN: response chỉ cho biết dòng vừa gửi vẫn bị giữ. Phiếu hết
+ *     hiệu lực vì `duplicate_guard_version` đổi là một khả năng, nhưng phiếu
+ *     hết hạn hay đổi người dùng cũng cho đúng kết quả ấy. Quy cho một nguyên
+ *     nhân cụ thể là đoán.
+ *   * PHẠM VI: `committed_count` là số dòng ghi được ở LƯỢT này
+ *     (`payment_import_service.py`, `CommitResult`), nên một lượt có thể vừa
+ *     ghi xong dòng A vừa từ chối phiếu cũ của dòng B. Khi đó "chưa dòng nào
+ *     được ghi" tự mâu thuẫn với "Đã ghi 1 dòng" ngay câu sau.
  */
 export const LOI_TAP_DA_DOI =
-  "Tập nghi trùng đã thay đổi — chưa dòng nào được ghi. " +
-  "Danh sách bên dưới là ứng viên MỚI; hãy soát lại rồi xác nhận."
+  "Một hoặc nhiều dòng vừa xác nhận chưa được ghi vì phiếu xác nhận không " +
+  "còn hiệu lực. Danh sách bên dưới là snapshot hiện tại; hãy soát lại."
+
+/**
+ * Bản cho toast: không có "bên dưới" để trỏ tới, nên nêu SỐ dòng bị từ chối.
+ * Người gọi ghép thêm phần đếm của cả lượt (đã ghi bao nhiêu, còn bao nhiêu
+ * chờ soát) — hai con số ấy mới trả lời được câu hỏi kế tiếp của kế toán.
+ */
+export function cauPhieuHetHieuLuc(soDong: number): string {
+  return (
+    `${soDong} dòng vừa xác nhận chưa được ghi vì phiếu xác nhận không còn ` +
+    "hiệu lực — mở lại lô và soát snapshot hiện tại."
+  )
+}

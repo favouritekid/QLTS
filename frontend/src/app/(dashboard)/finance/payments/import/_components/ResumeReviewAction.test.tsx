@@ -226,7 +226,7 @@ describe("ResumeReviewAction", () => {
     // Hộp thoại KHÔNG được đóng: đóng nó là biến việc cấp lại phiếu thành
     // "bấm thử lần nữa".
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /Tập nghi trùng đã thay đổi/i,
+      /phiếu xác nhận không còn hiệu lực/i,
     )
     expect(screen.getByTestId("rows")).toBeInTheDocument()
 

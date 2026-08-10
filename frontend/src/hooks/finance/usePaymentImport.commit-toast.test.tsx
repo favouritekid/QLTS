@@ -5,7 +5,8 @@
  *
  *   1. ghi trọn                    → thành công (dấu ✓ xanh);
  *   2. còn dòng chờ xác nhận       → CẢNH BÁO, việc chưa xong;
- *   3. phiếu vừa gửi bị từ chối    → CẢNH BÁO nêu rõ tập ứng viên đã đổi.
+ *   3. phiếu vừa gửi bị từ chối    → CẢNH BÁO nêu SỐ dòng chưa ghi được,
+ *                                    kèm phần đã vào sổ của chính lượt ấy.
  *
  * Ca 3 là ca đã gặp thật khi smoke: người dùng bấm "Đã soát — ghi tiếp", không
  * đồng nào vào sổ, mà màn hình hiện dấu tích xanh "Đã ghi 0 dòng".
@@ -123,7 +124,9 @@ describe("useCommitPaymentImport — toast nói đúng nghĩa từng kết cục
     })
 
     await waitFor(() => expect(toastWarning).toHaveBeenCalledTimes(1))
-    expect(toastWarning.mock.calls[0][0]).toMatch(/Tập nghi trùng đã thay đổi/i)
+    expect(toastWarning.mock.calls[0][0]).toMatch(
+      /1 dòng vừa xác nhận chưa được ghi vì phiếu xác nhận không còn hiệu lực/i,
+    )
     expect(toastSuccess).not.toHaveBeenCalled()
   })
 
@@ -147,7 +150,47 @@ describe("useCommitPaymentImport — toast nói đúng nghĩa từng kết cục
     })
 
     await waitFor(() => expect(toastWarning).toHaveBeenCalledTimes(1))
-    expect(toastWarning.mock.calls[0][0]).not.toMatch(/đã thay đổi/i)
+    expect(toastWarning.mock.calls[0][0]).not.toMatch(/không còn hiệu lực/i)
+    expect(toastSuccess).not.toHaveBeenCalled()
+  })
+
+  it("HỖN HỢP: một dòng ghi được + một phiếu bị từ chối ⇒ nói cả hai con số", async () => {
+    // `committed_count` đếm riêng LƯỢT này, nên một lần gửi hai phiếu có thể
+    // ghi được dòng 3 và từ chối phiếu cũ của dòng 5. Câu "chưa dòng nào được
+    // ghi" ở bản trước tự mâu thuẫn với chính "Đã ghi 1 dòng" ngay sau nó.
+    commitApi.mockResolvedValue(
+      ketQua({
+        committed_count: 1,
+        payment_count: 1,
+        review_required_count: 1,
+        rows: [
+          { row_no: 3, validation_status: "warned", commit_status: "committed" },
+          dongChoSoat(5, "phieu-moi-dong-5"),
+        ],
+      }),
+    )
+    const { result } = renderHook(() => useCommitPaymentImport(), { wrapper })
+
+    result.current.mutate({
+      batchId: 7,
+      confirmedRows: [
+        { row_no: 3, review_token: "phieu-dong-3" },
+        { row_no: 5, review_token: "phieu-cu-dong-5" },
+      ],
+    })
+
+    await waitFor(() => expect(toastWarning).toHaveBeenCalledTimes(1))
+    const cau = toastWarning.mock.calls[0][0] as string
+
+    // Đúng MỘT dòng bị từ chối — không phải cả hai dòng vừa gửi.
+    expect(cau).toMatch(/^1 dòng vừa xác nhận chưa được ghi/i)
+    // Và phải nói ra phần đã vào sổ: giấu nó đi là để kế toán tưởng lượt này
+    // trắng tay rồi gửi lại lần nữa.
+    expect(cau).toMatch(/Đã ghi 1 dòng/i)
+    expect(cau).toMatch(/1 dòng chờ xác nhận trùng/i)
+    expect(cau, "không được nói trống 'chưa dòng nào'").not.toMatch(
+      /chưa dòng nào/i,
+    )
     expect(toastSuccess).not.toHaveBeenCalled()
   })
 })

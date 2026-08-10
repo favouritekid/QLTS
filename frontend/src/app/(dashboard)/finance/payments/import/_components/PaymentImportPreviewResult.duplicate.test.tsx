@@ -216,7 +216,7 @@ describe("PaymentImportPreviewResult — dòng nghi trùng", () => {
     })
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /Tập nghi trùng đã thay đổi/i,
+      /phiếu xác nhận không còn hiệu lực/i,
     )
 
     // Xác nhận trước đó nói về tập cũ ⇒ phải bị vứt.
