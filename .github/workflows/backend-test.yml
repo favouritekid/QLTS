@@ -392,6 +392,9 @@ jobs:
               tests/services/test_payment_import_row_committed_check.py
               tests/services/test_import_preview_replace_guard.py
               tests/api/test_import_batch_resume_flag.py
+              tests/api/test_payment_maker_checker.py
+              tests/unit/test_finance_decision_policies_have_migration.py
+              tests/integration/test_mkchk_migration_applies.py
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability

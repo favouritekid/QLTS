@@ -75,6 +75,14 @@ class Payment(Base):
             'verified_by_id IS NULL OR verified_by_id != created_by_id',
             name='chk_payment_no_self_approval'
         ),
+        # Đối xứng cho nhánh TỪ CHỐI. Ràng buộc trên chỉ nói về `verified_by_id`,
+        # nên suốt thời gian qua maker tự từ chối phiếu của mình được — cả tầng
+        # service lẫn tầng DB đều không chặn. Hai vế phải đi cùng nhau: bỏ một
+        # vế là để ngỏ đúng nửa còn lại của maker-checker.
+        CheckConstraint(
+            'rejected_by_id IS NULL OR rejected_by_id != created_by_id',
+            name='chk_payment_no_self_reject'
+        ),
         CheckConstraint('amount > 0', name='chk_payment_amount_positive'),
         CheckConstraint(
             "status IN ('pending', 'verified', 'rejected', 'refunded')",

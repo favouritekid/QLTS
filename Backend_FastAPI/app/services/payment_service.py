@@ -779,6 +779,22 @@ class PaymentService:
         if not reason or not reason.strip():
             raise BadRequest("Rejection reason is required")
 
+        # C3 (đối xứng với verify_payment): KHÔNG tự quyết phiếu của chính mình.
+        #
+        # Từ chối cũng là quyết định của CHECKER, không phải thao tác dọn dẹp
+        # của người ghi. Thiếu vế này thì kế toán tự dọn sạch hàng chờ của mình
+        # được — ghi sai rồi tự từ chối, không ai soát — và maker-checker chỉ
+        # còn hiệu lực ở đúng nửa "verify".
+        #
+        # Giao diện đã ẩn nút và ghi "Khoản bạn tạo — cần người khác duyệt",
+        # nhưng đó là chỉ dẫn cho người dùng, KHÔNG phải hàng rào: gọi thẳng API
+        # vẫn qua (đã tái hiện trên dev, payment #862). Hàng rào phải nằm ở đây,
+        # TRƯỚC mọi mutation.
+        if payment.created_by_id == rejector_id:
+            raise BusinessRuleViolation(
+                "Cannot reject your own payment (maker-checker violation)"
+            )
+
         # Đã hợp lệ → giờ mới nạp quan hệ. get_for_update cố ý không joinedload,
         # mà payload thông báo bên dưới đọc `payment.invoice.fee`; thiếu bước
         # này thì chỗ đó lazy-load trong ngữ cảnh async và nổ MissingGreenlet.
