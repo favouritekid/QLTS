@@ -59,31 +59,70 @@ _POLICIES: list[tuple[str, str, str]] = [
 
 _CONSTRAINT = "chk_payment_no_self_reject"
 
+# Dấu vết chủ sở hữu: chỉ những dòng mang marker này mới là do migration này
+# tạo ra, và chỉ chúng được phép gỡ khi downgrade.
+_MARKER = "mkchk20260811"
+
 
 def upgrade() -> None:
     conn = op.get_bind()
 
-    # ── 1. Casbin: idempotent, khớp đúng hình dạng hàng mà enforcer đọc ──
+    # ── 0. PREFLIGHT CASBIN: có DENY sẵn thì DỪNG, không âm thầm ghi đè ──
     #
-    # Bảng có cột v3 (effect). Các migration policy trước ghi 'allow', nên giữ
-    # nguyên quy ước ấy — hàng lệch hình dạng sẽ không khớp matcher.
+    # Một dòng `deny` cùng (v0, v1, v2) là quyết định của ai đó, có thể là hàng
+    # rào cố ý. Thêm `allow` bên cạnh nó là đổi nghĩa của policy mà không ai
+    # thấy — và tuỳ thứ tự/effect của model, kết quả có thể là mở quyền. Fail
+    # đóng: dừng deploy, để người ra quyết định gỡ deny một cách tường minh.
+    for v0, v1, v2 in _POLICIES:
+        co_deny = conn.execute(
+            sa.text(
+                """
+                SELECT 1 FROM casbin_rule
+                WHERE ptype = 'p'
+                  AND v0 = CAST(:v0 AS varchar)
+                  AND v1 = CAST(:v1 AS varchar)
+                  AND v2 = CAST(:v2 AS varchar)
+                  AND v3 = 'deny'
+                LIMIT 1
+                """
+            ),
+            {"v0": v0, "v1": v1, "v2": v2},
+        ).first()
+        if co_deny:
+            raise RuntimeError(
+                f"[{_MARKER}] Đã tồn tại policy DENY cho ({v0}, {v1}, {v2}). "
+                "Migration này KHÔNG ghi đè: thêm allow bên cạnh một deny cố ý "
+                "là đổi nghĩa hàng rào mà không ai thấy. Hãy gỡ dòng deny một "
+                "cách tường minh rồi chạy lại."
+            )
+
+    # ── 1. Casbin: idempotent theo ĐỦ BỐN TRƯỜNG, có provenance ──
+    #
+    # 🔴 So cả `v3`. Bản trước chỉ so (ptype, v0, v1, v2): nếu DB đã có đúng
+    # route ấy với `v3 = NULL` (hình dạng cũ, không khớp matcher) thì
+    # `WHERE NOT EXISTS` coi như "đã có", migration im lặng không thêm gì, và
+    # manager VẪN 403 — đúng triệu chứng mà migration này sinh ra để chữa.
+    #
+    # `template_id` đánh dấu dòng do CHÍNH migration này tạo, để downgrade chỉ
+    # gỡ đúng thứ mình đặt vào (xem `downgrade`).
     for v0, v1, v2 in _POLICIES:
         conn.execute(
             sa.text(
                 """
-                INSERT INTO casbin_rule (ptype, v0, v1, v2, v3)
+                INSERT INTO casbin_rule (ptype, v0, v1, v2, v3, template_id)
                 SELECT 'p', CAST(:v0 AS varchar), CAST(:v1 AS varchar),
-                       CAST(:v2 AS varchar), 'allow'
+                       CAST(:v2 AS varchar), 'allow', CAST(:marker AS varchar)
                 WHERE NOT EXISTS (
                     SELECT 1 FROM casbin_rule
                     WHERE ptype = 'p'
                       AND v0 = CAST(:v0 AS varchar)
                       AND v1 = CAST(:v1 AS varchar)
                       AND v2 = CAST(:v2 AS varchar)
+                      AND v3 = 'allow'
                 )
                 """
             ),
-            {"v0": v0, "v1": v1, "v2": v2},
+            {"v0": v0, "v1": v1, "v2": v2, "marker": _MARKER},
         )
 
     # ── 2. PREFLIGHT: đếm vi phạm lịch sử, KHÔNG tự sửa ──
@@ -143,6 +182,11 @@ def downgrade() -> None:
 
     op.execute(f"ALTER TABLE payment DROP CONSTRAINT IF EXISTS {_CONSTRAINT}")
 
+    # 🔴 CHỈ gỡ dòng do CHÍNH migration này đặt vào: khớp `template_id` và
+    # `v3='allow'`. Bản trước xoá theo (v0, v1, v2) và do đó cuốn theo mọi
+    # effect — kể cả một `deny` cố ý hoặc một `allow` đã có từ trước, những thứ
+    # migration này chưa bao giờ sở hữu. Downgrade phải trả môi trường về đúng
+    # trạng thái trước khi chạy, không nhiều hơn.
     for v0, v1, v2 in _POLICIES:
         conn.execute(
             sa.text(
@@ -152,7 +196,9 @@ def downgrade() -> None:
                   AND v0 = CAST(:v0 AS varchar)
                   AND v1 = CAST(:v1 AS varchar)
                   AND v2 = CAST(:v2 AS varchar)
+                  AND v3 = 'allow'
+                  AND template_id = CAST(:marker AS varchar)
                 """
             ),
-            {"v0": v0, "v1": v1, "v2": v2},
+            {"v0": v0, "v1": v1, "v2": v2, "marker": _MARKER},
         )
