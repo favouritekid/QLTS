@@ -71,10 +71,12 @@ def apply_verified_payment_balances(
     fee: Fee,
     amount: Decimal,
     now: datetime,
-) -> Tuple[Decimal, Decimal]:
+) -> Tuple[Decimal, Decimal, Decimal]:
     """Áp money-math của 1 payment ĐÃ verified vào invoice + fee (cập nhật
-    paid_amount/status + bump fee.version). Trả ``(fee_balance_before, fee_remaining)``
-    cho audit transaction.
+    paid_amount/status + bump fee.version). Trả
+    ``(fee_balance_before, fee_remaining, excess)`` cho audit transaction —
+    ``excess`` là phần tiền lượt ghi NÀY làm vượt quá số phải trả của invoice,
+    để người gọi mở sổ ``OverpaymentRecord``.
 
     NGUỒN SỰ THẬT DUY NHẤT cho việc "ghi 1 khoản verified vào invoice+fee", dùng
     chung bởi ``verify_payment`` (verify tay) và ``payment_import_service.
@@ -84,7 +86,28 @@ def apply_verified_payment_balances(
     invoice giữ 'partial'. fee chỉ lên 'partial' từ 'invoiced' (giữ nguyên các status
     khác như verify_payment lịch sử).
     """
-    invoice.paid_amount = (invoice.paid_amount or Decimal("0")) + amount
+    # Phần VƯỢT do chính lượt ghi này sinh ra, tính dưới khoá invoice/fee nên
+    # nó nói về trạng thái MỚI NHẤT, không phải ảnh chụp lúc tạo phiếu.
+    #
+    # Vì sao cần: lúc tạo payment, server chỉ so với remaining của các khoản ĐÃ
+    # verified. Hai phiếu pending trên cùng invoice đều qua được cửa đó, rồi lần
+    # lượt verify — khoản thứ hai đẩy số dư xuống ÂM mà không ai ghi nhận khoản
+    # thừa. Đã tái hiện trên dev: invoice #778 (8.000.000) nhận payment #781
+    # (8.000.000) và #782 (70.000), verify cách nhau ~2 giây, transaction thứ hai
+    # ghi balance_after = -70.000 và không có OverpaymentRecord nào.
+    #
+    # Chỉ đếm phần vượt PHÁT SINH THÊM: invoice có thể đã âm sẵn từ trước (ví dụ
+    # bị giảm giá sau khi thu), và khoản đó đã có sổ riêng — cộng lại là ghi nợ
+    # hai lần cho cùng một số tiền.
+    _tong_phai_tra = invoice.amount + invoice.penalty_amount
+    _paid_truoc = invoice.paid_amount or Decimal("0")
+    _vuot_truoc = max(Decimal("0"), _paid_truoc - _tong_phai_tra)
+
+    invoice.paid_amount = _paid_truoc + amount
+
+    _vuot_sau = max(Decimal("0"), invoice.paid_amount - _tong_phai_tra)
+    excess = _vuot_sau - _vuot_truoc
+
     if invoice.is_fully_paid:
         invoice.status = InvoiceStatusEnum.paid.value
         invoice.paid_at = now
@@ -100,7 +123,69 @@ def apply_verified_payment_balances(
         fee.status = FeeStatusEnum.paid.value
     elif fee.paid_amount > 0 and fee.status == FeeStatusEnum.invoiced.value:
         fee.status = FeeStatusEnum.partial.value
-    return fee_balance_before, fee_remaining
+    return fee_balance_before, fee_remaining, excess
+
+
+#: Nguồn phát sinh khoản thừa. Ghi vào ``OverpaymentRecord.source_type`` để về
+#: sau còn phân biệt được — bảng cũ không có cột này, nên mọi hàng lịch sử để
+#: NULL: provenance của chúng KHÔNG truy được, và đoán là tệ hơn để trống.
+NGUON_THUA_GHI_TIEN = "payment_settlement"
+NGUON_THUA_DOI_GIA = "invoice_reprice"
+NGUON_THUA_DOI_SOAT_TAY = "manual_reconciliation"
+
+
+async def mo_so_tien_thua(
+    db: AsyncSession,
+    *,
+    payment: Payment,
+    invoice: Invoice,
+    admission_profile_id: int,
+    excess: Decimal,
+    source_type: str = NGUON_THUA_GHI_TIEN,
+) -> Optional[OverpaymentRecord]:
+    """Mở sổ ``OverpaymentRecord`` cho phần tiền lượt ghi này làm vượt.
+
+    Gọi TRONG cùng giao dịch với việc verify, dưới khoá invoice/fee — nếu tách
+    ra thì có một khoảnh khắc số dư đã âm mà chưa ai ghi nợ, và một lần crash
+    đúng lúc đó là mất dấu tiền thật.
+
+    Idempotent theo ``payment_id``: một phiếu thu chỉ sinh ĐÚNG MỘT khoản thừa.
+    Retry (verify lại, import chạy lại, callback lặp) không được đẻ thêm nghĩa
+    vụ trả nợ thứ hai cho cùng số tiền. Ràng buộc UNIQUE ở tầng CSDL là hàng rào
+    cuối; phép kiểm ở đây tránh việc va vào nó trong luồng bình thường.
+    """
+    if excess is None or excess <= 0:
+        return None
+
+    da_co = (
+        await db.execute(
+            select(OverpaymentRecord).where(
+                OverpaymentRecord.payment_id == payment.id
+            )
+        )
+    ).scalar_one_or_none()
+    if da_co is not None:
+        return da_co
+
+    ban_ghi = OverpaymentRecord(
+        payment_id=payment.id,
+        invoice_id=invoice.id,
+        admission_profile_id=admission_profile_id,
+        overpayment_amount=excess,
+        status=OverpaymentStatusEnum.pending.value,
+        source_type=source_type,
+    )
+    db.add(ban_ghi)
+    await db.flush()
+
+    log.info(
+        "overpayment_recorded",
+        payment_id=payment.id,
+        invoice_id=invoice.id,
+        excess=str(excess),
+        source_type=source_type,
+    )
+    return ban_ghi
 
 
 def reverse_payment_balances(
@@ -615,8 +700,18 @@ class PaymentService:
 
         # Apply money-math to invoice + fee (shared 1 nguồn sự thật với bulk
         # auto-verify) → fee_balance_before / fee_remaining cho audit transaction.
-        fee_balance_before, fee_remaining = apply_verified_payment_balances(
+        fee_balance_before, fee_remaining, excess = apply_verified_payment_balances(
             invoice=invoice, fee=fee, amount=payment.amount, now=now
+        )
+
+        # Khoản thừa (nếu có) phải được ghi nợ NGAY tại đây — cùng giao dịch,
+        # cùng khoá invoice/fee. Xem `mo_so_tien_thua`.
+        await mo_so_tien_thua(
+            self.db,
+            payment=payment,
+            invoice=invoice,
+            admission_profile_id=fee.admission_profile_id,
+            excess=excess,
         )
 
         # Create audit transaction
@@ -1083,6 +1178,48 @@ class RefundService:
 
         if not reason or not reason.strip():
             raise BadRequest("Refund reason is required")
+
+        # ── FAIL-CLOSED: phiếu thu đang mang một khoản dư chưa giải quyết ────
+        #
+        # Đường hoàn tiền THƯỜNG chỉ rút tiền khỏi invoice/fee; nó không biết gì
+        # về `OverpaymentRecord` và chỉ đóng được record nào đã gắn
+        # `refund_request_id` (do endpoint overpayment tạo). Nên hoàn 70.000 qua
+        # đường này để lại một nghĩa vụ `pending` vẫn còn nguyên — và khoản ấy
+        # sau đó vẫn apply hoặc refund được LẦN NỮA.
+        #
+        # Không tự động "đóng record" ở đây: hoàn một phần có thể ăn vào phần
+        # gốc hoặc phần dư, mà hệ thống chưa có contract phân bổ để quyết định
+        # điều đó. Chặn là lựa chọn duy nhất không đoán.
+        #
+        # Muốn hoàn trọn một phiếu đang có khoản dư: hoàn phần dư qua luồng
+        # overpayment trước, đợi record sang `refunded`, rồi hoàn phần gốc.
+        # 🔴 Chỉ chặn đường THƯỜNG. Luồng khoản dư (`refund_overpayment`) cũng
+        # đi qua chính hàm này với `source='overpayment'` và nó tự gắn
+        # `refund_request_id` để đóng sổ khi tiền được chi — chặn nó là chặn
+        # đúng con đường mà thông điệp bên dưới bảo người dùng phải đi, và
+        # khoản dư trở nên không thể giải quyết bằng bất kỳ cách nào.
+        _so_du = (
+            None
+            if source == RefundSourceEnum.overpayment.value
+            else (
+                await self.db.execute(
+                    select(OverpaymentRecord).where(
+                        OverpaymentRecord.payment_id == payment_id
+                    )
+                )
+            ).scalars().first()
+        )
+        if _so_du is not None and _so_du.status in (
+            OverpaymentStatusEnum.pending.value,
+            OverpaymentStatusEnum.applied.value,
+            OverpaymentStatusEnum.cancelled.value,
+        ):
+            raise BusinessRuleViolation(
+                f"Phiếu thu này có khoản dư #{_so_du.id} đang ở trạng thái "
+                f"'{_so_du.status}'. Hoàn tiền phải đi qua luồng khoản dư — "
+                "hoàn qua đường thường sẽ rút tiền khỏi hóa đơn mà vẫn để lại "
+                "nghĩa vụ chưa giải quyết."
+            )
 
         # Create refund request
         refund = RefundRequest(

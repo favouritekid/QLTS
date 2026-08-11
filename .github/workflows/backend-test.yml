@@ -395,6 +395,12 @@ jobs:
               tests/api/test_payment_maker_checker.py
               tests/unit/test_finance_decision_policies_have_migration.py
               tests/integration/test_mkchk_migration_applies.py
+              tests/api/test_overpayment_producer.py
+              tests/services/test_payment_intent_service.py
+              tests/integration/test_ovp_migration_applies.py
+              tests/services/test_payment_service.py::TestOverpaymentCheck
+              tests/services/test_payment_service.py::TestOverpaymentService
+              tests/unit/test_finance_models.py::TestOverpaymentRecordModel
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability

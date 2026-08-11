@@ -773,6 +773,49 @@ class InvoiceRepository(BaseRepository[Invoice]):
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
+    async def khoa_invoice_theo_id(
+        self,
+        invoice_ids: List[int],
+        unit_id: Optional[int] = None,
+    ) -> List[Invoice]:
+        """Khoá một TẬP hàng invoice theo id tăng dần — và CHỈ hàng invoice.
+
+        Dành cho đường chạm HAI hoá đơn trong cùng một giao dịch (áp khoản dư:
+        rời hoá đơn nguồn, vào hoá đơn đích). Khoá từng cái bằng
+        ``get_for_update`` là đủ để kẹt chéo: hàm ấy ``FOR UPDATE`` trần nên
+        kéo cả ``fee``/``profile``/``lead`` vào theo thứ tự của ``invoice``,
+        và hai lượt áp khoản dư ngược chiều nhau (X→Y và Y→X) tạo đúng chu kỳ
+        mà quy ước thứ tự khoá dựng lên để tránh.
+
+        ``ORDER BY id`` + ``LockRows`` nằm trên nút sắp xếp ⇒ mọi luồng khoá
+        cùng một thứ tự, nên hai luồng bất kỳ gặp nhau ở hàng nhỏ nhất thay vì
+        ôm chéo. Cùng quy ước với ``khoa_moi_invoice_cua_fee`` của đường nhập
+        lô: **invoice trước, fee sau**; sau khi bắt đầu khoá Fee thì tuyệt đối
+        không xin thêm khoá Invoice nào.
+
+        Trả về theo thứ tự đã khoá; caller tự map theo ``id`` và tự quyết định
+        thiếu hàng nào thì lỗi gì — hàm này không đoán hộ.
+        """
+        if not invoice_ids:
+            return []
+
+        query = (
+            select(Invoice)
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .where(Invoice.id.in_(sorted(set(invoice_ids))))
+            .order_by(Invoice.id)
+            .with_for_update(of=Invoice)
+        )
+
+        # IDOR Filter — cùng đường với get_for_update.
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
     async def get_filtered(
         self,
         skip: int = 0,

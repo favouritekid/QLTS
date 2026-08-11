@@ -46,7 +46,11 @@ from app.repositories.payment_repository import (
     PaymentIntentRepository,
     PaymentTransactionRepository,
 )
-from app.services.payment_service import assert_payable_target
+from app.services.payment_service import (
+    apply_verified_payment_balances,
+    assert_payable_target,
+    mo_so_tien_thua,
+)
 from app.utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -631,9 +635,6 @@ class PaymentIntentService:
         # refused — the caller marks the intent failed; reconcile out-of-band.
         assert_payable_target(fee, invoice, profile, action="ghi nhận thanh toán")
 
-        # Capture balance before
-        fee_balance_before = fee.final_amount - fee.paid_amount - fee.waived_amount
-
         # Create payment (auto-verified for online payments).
         # Issue C fix: verified_by_id must be NULL, not the same as created_by_id,
         # otherwise chk_payment_no_self_approval fires. For the online path
@@ -660,29 +661,31 @@ class PaymentIntentService:
         self.db.add(payment)
         await self.db.flush()
 
-        # Update invoice paid_amount
-        invoice.paid_amount = invoice.paid_amount + intent.amount
-        if invoice.is_fully_paid:
-            invoice.status = InvoiceStatusEnum.paid.value
-            invoice.paid_at = datetime.now(timezone.utc)
-        elif invoice.paid_amount > 0:
-            invoice.status = InvoiceStatusEnum.partial.value
-
         # ADR-002 PR 5: snapshot settled state BEFORE fee mutation
         from app.services.fee_calculation_service import is_hk1_settled_fee
         was_hk1_settled = is_hk1_settled_fee(fee)
 
-        # Update fee paid_amount
-        fee.paid_amount = fee.paid_amount + intent.amount
-        fee.last_payment_at = datetime.now(timezone.utc)
-        fee.version += 1
+        # 🔴 Money-math đi qua ĐÚNG hàm dùng chung với ghi tay và nhập lô.
+        #
+        # Trước đây khối này chép tay lại toàn bộ phép cộng (invoice.paid_amount,
+        # fee.paid_amount, hai nhánh status, fee.version) — bản sao thứ BA của
+        # cùng một công thức. Hệ quả không phải "lệch vài dòng" mà là: khi hàm
+        # chung học được cách mở sổ tiền thừa, đường online vẫn im lặng, và một
+        # callback trả dư vẫn đẩy số dư xuống âm mà không ai ghi nợ.
+        _now = datetime.now(timezone.utc)
+        fee_balance_before, fee_remaining, excess = apply_verified_payment_balances(
+            invoice=invoice, fee=fee, amount=intent.amount, now=_now
+        )
 
-        # Update fee status
-        fee_remaining = fee.final_amount - fee.paid_amount - fee.waived_amount
-        if fee_remaining <= 0:
-            fee.status = FeeStatusEnum.paid.value
-        elif fee.paid_amount > 0 and fee.status == FeeStatusEnum.invoiced.value:
-            fee.status = FeeStatusEnum.partial.value
+        # Gateway trả dư thì cũng là tiền thật của người học. Ở đây KHÔNG có
+        # maker-checker để chặn trước, nên sổ thừa là chỗ duy nhất giữ dấu.
+        await mo_so_tien_thua(
+            self.db,
+            payment=payment,
+            invoice=invoice,
+            admission_profile_id=fee.admission_profile_id,
+            excess=excess,
+        )
 
         # Create audit transaction
         transaction = PaymentTransaction(

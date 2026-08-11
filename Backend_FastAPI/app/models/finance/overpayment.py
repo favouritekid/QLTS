@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import (
     CheckConstraint, DateTime, ForeignKey,
-    Integer, Numeric, String, Text
+    Integer, Numeric, String, Text, UniqueConstraint
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -81,6 +81,20 @@ class OverpaymentRecord(Base):
             "resolution_type IN ('apply_to_next', 'refund', 'write_off')",
             name='chk_overpayment_resolution_type_valid'
         ),
+        # MỘT phiếu thu chỉ sinh ĐÚNG MỘT khoản thừa. Không có ràng buộc này
+        # thì mỗi lần retry (verify lại, import chạy lại, callback gateway lặp)
+        # là thêm một nghĩa vụ trả nợ cho cùng số tiền — và nợ thì không tự mất
+        # đi như một hàng rác.
+        UniqueConstraint('payment_id', name='uq_overpayment_payment'),
+        # Nguồn phát sinh, để phân biệt khoản thừa do GHI TIỀN với khoản thừa do
+        # đổi giá sau thu hay do đối soát tay. NULL = hàng lịch sử: bảng cũ
+        # không có cột này nên provenance của chúng không truy được, và đoán thì
+        # tệ hơn để trống.
+        CheckConstraint(
+            "source_type IS NULL OR source_type IN "
+            "('payment_settlement', 'invoice_reprice', 'manual_reconciliation')",
+            name='chk_overpayment_source_type_valid'
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -119,6 +133,15 @@ class OverpaymentRecord(Base):
         nullable=False,
         default="VND",
         server_default="VND"
+    )
+
+    #: Nguồn phát sinh khoản thừa. NULL cho mọi hàng có trước cột này —
+    #: provenance của chúng không truy được, xem CheckConstraint ở trên.
+    source_type: Mapped[Optional[str]] = mapped_column(
+        String(30),
+        nullable=True,
+        index=True,
+        comment="payment_settlement | invoice_reprice | manual_reconciliation",
     )
 
     # Status & Resolution

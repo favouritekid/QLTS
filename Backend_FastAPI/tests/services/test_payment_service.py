@@ -677,7 +677,19 @@ class TestOverpaymentService:
         await db.refresh(target_invoice)
         await db.refresh(pf["fee"])
         assert target_invoice.paid_amount == Decimal("50000")
-        assert pf["fee"].paid_amount == fee_paid_before + Decimal("50000")
+
+        # 🔴 Hoá đơn nguồn và hoá đơn đích thuộc CÙNG một khoản phí, nên áp
+        # khoản dư chỉ ĐỔI CHỖ tiền giữa hai đợt — `fee.paid_amount` phải đứng
+        # yên.
+        #
+        # Bản trước của ca này khẳng định `fee_paid_before + 50000`, tức mã hoá
+        # đúng lỗi cộng-hai-lần: cùng một khoản tiền vừa nằm ở hoá đơn nguồn vừa
+        # được cộng thêm vào đích. Nó không bắt được lỗi vì `overpayment` ở đây
+        # dựng TAY — hoá đơn nguồn không thật sự có phần vượt, nên chẳng có gì
+        # để đối chiếu. Ca đối chiếu trọn vẹn (record do producer thật sinh ra,
+        # so tổng phân bổ với tổng tiền verified) nằm ở
+        # `tests/api/test_overpayment_producer.py`.
+        assert pf["fee"].paid_amount == fee_paid_before
 
     async def test_apply_overpayment_rejects_other_profile_invoice(
         self, db, payment_fixtures

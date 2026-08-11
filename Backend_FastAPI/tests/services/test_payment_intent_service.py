@@ -24,10 +24,12 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from sqlalchemy import func, select
+
 from app.models.finance import (
     Fee, Invoice, PaymentIntent, PaymentMethod,
     FeeTypeEnum, FeeStatusEnum, InvoiceStatusEnum,
-    PaymentIntentStatusEnum,
+    PaymentIntentStatusEnum, OverpaymentRecord, PaymentTransaction, Payment,
 )
 from app.services.fee_calculation_service import FeeCalculationService
 from app.services.invoice_service import InvoiceService
@@ -623,3 +625,261 @@ class TestIntentLifecycle:
         assert len(expired) >= 3
         for e in expired:
             assert e.status == PaymentIntentStatusEnum.expired.value
+
+
+# =============================================================================
+# SỔ TIỀN THỪA Ở ĐƯỜNG CALLBACK ONLINE
+# =============================================================================
+# Callback online từng CHÉP TAY toàn bộ money-math (invoice.paid_amount,
+# fee.paid_amount, hai nhánh status, fee.version) thay vì gọi hàm dùng chung với
+# ghi tay và nhập lô. Bản sao ấy im lặng đúng vào lúc hàm chung học được cách mở
+# sổ tiền thừa — nghĩa là callback trả dư vẫn đẩy số dư xuống âm mà không ai ghi
+# nợ.
+#
+# 🔴 Ca parity KHÔNG dừng ở "HTTP 200" hay "payment tồn tại": nó so từng trường
+# mà một bản chép tay có thể làm lệch — invoice.status/paid_amount,
+# fee.status/paid_amount/version, và PaymentTransaction.balance_before/after.
+
+
+#: Số tiền hoá đơn mà `intent_fixtures` dựng (fee 5.000.000, một đợt).
+_HOA_DON = Decimal("5000000")
+
+
+async def _dem_so(db, invoice_id: int) -> int:
+    return (
+        await db.execute(
+            select(func.count())
+            .select_from(OverpaymentRecord)
+            .where(OverpaymentRecord.invoice_id == invoice_id)
+        )
+    ).scalar_one()
+
+
+async def _tao_intent(db, ctx: dict, amount: Decimal):
+    """Chỉ TẠO intent, chưa cho gateway báo gì.
+
+    Tách khỏi bước callback là điều kiện để dựng được race thật: cửa "không
+    vượt quá còn nợ" của `create_intent` tính trên phần ĐÃ ghi, nên hai intent
+    tạo trước khi bất kỳ callback nào chạy đều lọt qua — y hệt hai payment
+    pending ở đường ghi tay.
+    """
+    service = PaymentIntentService(db)
+    intent, _ = await service.create_intent(
+        invoice_id=ctx["invoice"].id,
+        method_id=ctx["online_method"].id,
+        amount=amount,
+        idempotency_key=str(uuid.uuid4()),
+        return_url=VALID_RETURN_URL,
+        unit_id=ctx["unit_id"],
+    )
+    await db.commit()
+    return intent
+
+
+async def _goi_callback(db, ctx: dict, intent, amount: Decimal):
+    """Gateway báo thành công cho một intent đã tạo."""
+    service = PaymentIntentService(db)
+    result_intent, payment, _ = await service.process_callback(
+        gateway_code=ctx["online_method"].code,
+        callback_data={
+            "gateway_ref": intent.gateway_ref,
+            "status": "success",
+            "amount": str(amount),
+        },
+        unit_id=ctx["unit_id"],
+    )
+    await db.commit()
+    return result_intent, payment
+
+
+async def _callback(db, ctx: dict, amount: Decimal):
+    """Đường thẳng: tạo intent rồi callback ngay."""
+    intent = await _tao_intent(db, ctx, amount)
+    return await _goi_callback(db, ctx, intent, amount)
+
+
+# ---------------------------------------------------------------------------
+# CALLBACK — parity với đường ghi tay khi KHÔNG có phần thừa
+# ---------------------------------------------------------------------------
+
+async def test_callback_khong_thua_khop_tung_truong_va_khong_mo_so(
+    db, intent_fixtures, admin_user
+):
+    """Trả đúng số còn nợ: sổ sách phải giống hệt đường ghi tay, và KHÔNG có
+    khoản thừa nào.
+
+    So từng trường thay vì chỉ so "đã thanh toán" — xem docstring đầu tệp.
+    """
+    ctx = intent_fixtures
+    invoice_id = ctx["invoice"].id
+    fee = ctx["fee"]
+
+    version_truoc = fee.version
+    fee_paid_truoc = fee.paid_amount
+
+    result_intent, payment = await _callback(db, ctx, _HOA_DON)
+
+    assert result_intent.status == PaymentIntentStatusEnum.completed.value
+    assert payment is not None
+
+    inv = (
+        await db.execute(select(Invoice).where(Invoice.id == invoice_id))
+    ).scalar_one()
+    await db.refresh(fee)
+
+    # invoice: đủ tiền → paid, và paid_amount đúng bằng số đã trả
+    assert inv.paid_amount == _HOA_DON
+    assert inv.status == InvoiceStatusEnum.paid.value
+    assert inv.remaining_amount == Decimal("0")
+    assert inv.paid_at is not None
+
+    # fee: cộng đúng, version bump ĐÚNG MỘT lần, status theo số còn lại
+    assert fee.paid_amount == fee_paid_truoc + _HOA_DON
+    assert fee.version == version_truoc + 1
+    assert fee.status == "paid"
+    assert fee.last_payment_at is not None
+
+    # audit: balance_before/after phải kể đúng câu chuyện số dư
+    tx = (
+        await db.execute(
+            select(PaymentTransaction).where(
+                PaymentTransaction.payment_id == payment.id
+            )
+        )
+    ).scalar_one()
+    assert tx.amount == _HOA_DON
+    assert tx.balance_before == fee.final_amount - fee_paid_truoc - fee.waived_amount
+    assert tx.balance_after == Decimal("0")
+
+    # và KHÔNG có sổ thừa nào — đây là luồng thường
+    assert await _dem_so(db, invoice_id) == 0
+
+
+# ---------------------------------------------------------------------------
+# CALLBACK — có phần thừa
+# ---------------------------------------------------------------------------
+
+async def test_callback_tra_du_thi_mo_dung_mot_so(db, intent_fixtures, admin_user):
+    """Gateway trả nhiều hơn số còn nợ.
+
+    Ở đường online KHÔNG có maker-checker chặn trước, nên sổ thừa là chỗ duy
+    nhất giữ dấu vết số tiền dôi ra.
+    """
+    ctx = intent_fixtures
+    invoice_id = ctx["invoice"].id
+
+    # 🔴 Hai intent tạo TRƯỚC khi callback nào chạy. `create_intent` chặn số
+    # tiền vượt phần CÒN NỢ, nhưng phần còn nợ ấy tính trên tiền ĐÃ ghi — nên
+    # lúc này cả hai đều hợp lệ. Chính khe đó, không phải "gateway trả sai số",
+    # là đường duy nhất khiến online sinh khoản thừa.
+    i1 = await _tao_intent(db, ctx, _HOA_DON - Decimal("100000"))
+    i2 = await _tao_intent(db, ctx, Decimal("300000"))
+
+    await _goi_callback(db, ctx, i1, _HOA_DON - Decimal("100000"))
+    assert await _dem_so(db, invoice_id) == 0
+
+    _, payment2 = await _goi_callback(db, ctx, i2, Decimal("300000"))
+
+    so = (
+        await db.execute(
+            select(OverpaymentRecord).where(
+                OverpaymentRecord.invoice_id == invoice_id
+            )
+        )
+    ).scalars().all()
+    assert len(so) == 1, f"phải mở đúng một sổ, đang có {len(so)}"
+    assert so[0].overpayment_amount == Decimal("200000")
+    assert so[0].payment_id == payment2.id
+    assert so[0].source_type == "payment_settlement"
+    assert so[0].status == "pending"
+
+    inv = (
+        await db.execute(select(Invoice).where(Invoice.id == invoice_id))
+    ).scalar_one()
+    assert inv.remaining_amount == Decimal("-200000")
+    assert -inv.remaining_amount == so[0].overpayment_amount, (
+        "số dư âm và sổ thừa phải khớp từng đồng"
+    )
+
+
+async def test_callback_lap_lai_khong_nhan_ban_so(db, intent_fixtures, admin_user):
+    """Gateway gọi lại cùng ``gateway_ref`` không được đẻ nghĩa vụ thứ hai.
+
+    Callback lặp là chuyện bình thường của mọi cổng thanh toán (retry khi
+    timeout, người dùng bấm lại). Nếu mỗi lần lặp mở thêm một sổ thì hệ thống tự
+    tạo ra nợ không có thật.
+    """
+    ctx = intent_fixtures
+    invoice_id = ctx["invoice"].id
+
+    i1 = await _tao_intent(db, ctx, _HOA_DON - Decimal("100000"))
+    intent = await _tao_intent(db, ctx, Decimal("300000"))
+    await _goi_callback(db, ctx, i1, _HOA_DON - Decimal("100000"))
+
+    service = PaymentIntentService(db)
+    du_lieu = {
+        "gateway_ref": intent.gateway_ref,
+        "status": "success",
+        "amount": "300000",
+    }
+    await service.process_callback(
+        gateway_code=ctx["online_method"].code,
+        callback_data=du_lieu,
+        unit_id=ctx["unit_id"],
+    )
+    await db.commit()
+    assert await _dem_so(db, invoice_id) == 1
+
+    paid_truoc_replay = (
+        await db.execute(select(Invoice).where(Invoice.id == invoice_id))
+    ).scalar_one().paid_amount
+    # Giữ id NGUYÊN THUỶ: sau `rollback()` mọi ORM object bị expire, và chạm
+    # vào thuộc tính của chúng là một lượt IO lazy-load ngoài greenlet
+    # (MissingGreenlet), không phải lỗi nghiệp vụ.
+    intent_id = intent.id
+
+    # Lượt lặp: cùng gateway_ref, cùng số tiền.
+    #
+    # 🔴 Khẳng định ĐÚNG lỗi mong đợi, không bắt `Exception` chung. Bản đầu của
+    # ca này nuốt cả IntegrityError, lỗi lập trình lẫn lỗi kết nối — nó xanh dù
+    # callback lặp được xử lý theo bất kỳ cách nào, kể cả cách sai.
+    with pytest.raises(BusinessRuleViolation, match="Intent cannot process callback"):
+        await service.process_callback(
+            gateway_code=ctx["online_method"].code,
+            callback_data=du_lieu,
+            unit_id=ctx["unit_id"],
+        )
+    await db.rollback()
+
+    # Hậu quả: mọi thứ đứng yên.
+    intent_sau = (
+        await db.execute(
+            select(PaymentIntent).where(PaymentIntent.id == intent_id)
+        )
+    ).scalar_one()
+    assert intent_sau.status == PaymentIntentStatusEnum.completed.value
+
+    so_payment = (
+        await db.execute(
+            select(func.count())
+            .select_from(Payment)
+            .where(Payment.intent_id == intent_id)
+        )
+    ).scalar_one()
+    assert so_payment == 1, "callback lặp đã tạo phiếu thu thứ hai"
+
+    assert await _dem_so(db, invoice_id) == 1, (
+        "callback lặp đã nhân bản sổ tiền thừa — mỗi lần retry của gateway là "
+        "một khoản nợ mới không có thật"
+    )
+
+    inv_sau = (
+        await db.execute(select(Invoice).where(Invoice.id == invoice_id))
+    ).scalar_one()
+    assert inv_sau.paid_amount == paid_truoc_replay, (
+        "callback lặp đã cộng tiền lần hai vào hóa đơn"
+    )
+
+    # Ca này là REPLAY TUẦN TỰ. Nó KHÔNG chứng minh gì về hai callback chạy
+    # song song — khe đó cần hai giao dịch thật, và `uq_overpayment_payment` là
+    # hàng rào cuối cho nó.
