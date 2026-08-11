@@ -1247,11 +1247,24 @@ class TestWithdrawalPendingFlow:
         await _submit_with_debt(client, officer, pid, "giữ chỗ")
         fee_detail = await _calculate_tuition(client, officer, pid)
         invoice_id = fee_detail["invoices"][0]["id"]
+        # 🔴 Hai phiếu CỐ Ý khác số tiền. Tiền đề nghiệp vụ của ca này chỉ là
+        # "hai phiếu verified trên cùng hoá đơn" — bằng nhau hay không đều
+        # không liên quan. Nhưng hàng rào nghi trùng (PR #541) chặn 409 khi hai
+        # phiếu cùng khoản phí có CÙNG số tiền và lệch không quá 3 ngày, nên
+        # fixture cũ (3.000.000 + 3.000.000) làm ca này đỏ vì một lý do chẳng
+        # dính gì tới cancel-withdrawal.
+        #
+        # KHÔNG gửi kèm review_token để đi vòng: làm vậy là buộc ca withdrawal
+        # phụ thuộc vào duplicate-review, và che mất những fixture trùng ngoài ý
+        # muốn khác. Duplicate-review có bộ test chuyên biệt riêng:
+        #   tests/services/test_payment_duplicate_guard.py
+        #   tests/api/test_payment_duplicate_contract.py
+        #   tests/unit/test_duplicate_review_token.py
         await _record_and_verify_payment(
             client, accountant, manager, invoice_id, Decimal("3000000")
         )
         pay2 = await _record_and_verify_payment(
-            client, accountant, manager, invoice_id, Decimal("3000000")
+            client, accountant, manager, invoice_id, Decimal("2000000")
         )
 
         # Finance user manually files a refund on pay2 (source defaults 'manual',
@@ -1260,7 +1273,7 @@ class TestWithdrawalPendingFlow:
             "/api/refunds",
             json={
                 "payment_id": pay2["id"],
-                "amount": "3000000",
+                "amount": "2000000",
                 "reason": "Hoàn thủ công — thu thừa tay",
             },
             headers=accountant,
