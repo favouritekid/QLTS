@@ -698,10 +698,19 @@ export interface PaymentCreateRequest {
   payer_name?: string
   payer_account?: string
   notes?: string
-  // Người ghi đã xem danh sách phiếu nghi trùng và khẳng định đây là khoản thu
-  // khác. Hàng rào chống trùng là hàng rào MỀM. Cờ này chỉ được bật ở lần gửi
-  // THỨ HAI, cho ĐÚNG bộ dữ liệu đã hiện cảnh báo — xem `paymentFingerprint`.
-  confirm_duplicate?: boolean
+  /**
+   * Phiếu xác nhận nghi trùng — gửi lại NGUYÊN VĂN thứ máy chủ trả trong thân
+   * lỗi 409 ở lần bấm trước.
+   *
+   * Thay cho `confirm_duplicate: boolean`. Một cờ boolean không nói được người
+   * bấm đã nhìn thấy GÌ: nó vẫn "đúng" sau khi tập ứng viên đã đổi, và client
+   * tự bật được. Phiếu thì ràng buộc vào đúng hoàn cảnh sinh ra nó — người,
+   * đơn vị, khoản phí, hoá đơn, số tiền, ngày lịch VN, và phiên bản hàng rào
+   * của khoản phí — nên đổi bất kỳ trường nào là nó tự hết hiệu lực.
+   *
+   * Giao diện KHÔNG đọc, KHÔNG dựng, KHÔNG lưu nó ngoài state của lần gửi này.
+   */
+  review_token?: string
 }
 
 export interface PaymentIntentCreateRequest {
@@ -1092,11 +1101,9 @@ export interface PaymentFilters {
   // verification. When true the backend ignores status/method_id. Online
   // (auto-verified) payments never appear here.
   pending_manual_only?: boolean
-  // XEM TRƯỚC phiếu nghi trùng cho một khoản thu sắp ghi. Đi THÀNH BỘ với
-  // fee_id — thiếu một vế thì máy chủ trả 422 chứ không âm thầm trả danh sách
-  // thường (một tập khác hẳn dưới cùng hình dạng).
-  duplicate_amount?: number
-  duplicate_date?: string
+  // KHÔNG có `duplicate_amount`/`duplicate_date` ở đây nữa: đường xem trước
+  // phiếu nghi trùng đã gỡ, và máy chủ trả 410 cho hai tham số đó. Cảnh báo
+  // trùng nay đến từ lỗi 409 của POST /api/payments kèm `review_token`.
 }
 
 export interface DebtReportFilters {

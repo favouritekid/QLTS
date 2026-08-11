@@ -46,6 +46,7 @@ from app.models.finance import (
     PaymentImportRow,
     PaymentImportBatchStatusEnum,
     PaymentImportRowStatusEnum,
+    PaymentImportCommitStatusEnum,
     PaymentMethod,
     PaymentStatusEnum,
     PaymentTransaction,
@@ -60,6 +61,7 @@ from app.constants.export_formats import (
     XLSX_MEDIA_TYPE,
 )
 from app.repositories.fee_repository import FeeRepository, InvoiceRepository
+from app.services.duplicate_review_token import RangBuoc, cap_phieu, soat_phieu
 from app.repositories.payment_repository import (
     MAX_DUPLICATE_CANDIDATES,
     WINDOW_DO_TRUNG_NGAY,
@@ -162,7 +164,9 @@ class Allocation:
 @dataclass
 class RowResult:
     row_no: int
-    status: str  # matched | warned | error
+    #: Trục KIỂM. Không có trục GHI ở đây: bước xem trước KHÔNG ghi
+    #: tiền, nên mọi câu hỏi về số phận lúc ghi đều chưa có nghĩa.
+    validation_status: str  # matched | warned | error
     message: Optional[str] = None
     citizen_id: Optional[str] = None
     profile_id: Optional[int] = None
@@ -511,7 +515,7 @@ async def resolve_and_validate(
     for d in drafts:
         res = RowResult(
             row_no=d.row_no,
-            status=PaymentImportRowStatusEnum.error.value,
+            validation_status=PaymentImportRowStatusEnum.error.value,
             citizen_id=d.citizen_id,
             amount=d.amount,
             method_code=d.method_code,
@@ -685,10 +689,10 @@ async def resolve_and_validate(
             warnings.append(f"thu phân bổ {len(res.allocations)} đợt")
 
         if warnings:
-            res.status = PaymentImportRowStatusEnum.warned.value
+            res.validation_status = PaymentImportRowStatusEnum.warned.value
             res.message = " · ".join(warnings)
         else:
-            res.status = PaymentImportRowStatusEnum.matched.value
+            res.validation_status = PaymentImportRowStatusEnum.matched.value
         results.append(res)
 
     # (B3) Một lượt hỏi cho cả tệp, dùng chung luật dò trùng với đường ghi tay.
@@ -714,22 +718,22 @@ async def resolve_and_validate(
             r.message = f"{r.message} · {cau}" if r.message else cau
             # Chỉ NÂNG matched → warned. Dòng đang ở trạng thái lỗi thì lỗi đó
             # mới là việc kế toán phải xử lý trước, đừng che nó bằng cảnh báo.
-            if r.status == PaymentImportRowStatusEnum.matched.value:
-                r.status = PaymentImportRowStatusEnum.warned.value
+            if r.validation_status == PaymentImportRowStatusEnum.matched.value:
+                r.validation_status = PaymentImportRowStatusEnum.warned.value
 
     matched = sum(
-        1 for r in results if r.status == PaymentImportRowStatusEnum.matched.value
+        1 for r in results if r.validation_status == PaymentImportRowStatusEnum.matched.value
     )
     warned = sum(
-        1 for r in results if r.status == PaymentImportRowStatusEnum.warned.value
+        1 for r in results if r.validation_status == PaymentImportRowStatusEnum.warned.value
     )
     failed = sum(
-        1 for r in results if r.status == PaymentImportRowStatusEnum.error.value
+        1 for r in results if r.validation_status == PaymentImportRowStatusEnum.error.value
     )
     total = sum(
         (r.amount or Decimal("0"))
         for r in results
-        if r.status != PaymentImportRowStatusEnum.error.value
+        if r.validation_status != PaymentImportRowStatusEnum.error.value
     )
     return PreviewResult(
         rows=results,
@@ -814,6 +818,31 @@ async def _fetch_payable_invoices(
     for inv in (await db.execute(stmt)).scalars().all():
         by_fee.setdefault(inv.fee_id, []).append(inv)
     return by_fee
+
+
+async def _id_invoice_cua_fee(
+    db: AsyncSession,
+    fee_ids: List[int],
+    unit_id: Optional[int],
+) -> Set[int]:
+    """Tập id invoice của các fee — CÙNG bộ lọc IDOR với hàm khoá.
+
+    Dùng để đối chiếu tập đã khoá với tập hiện tại. Phải cùng bộ lọc, nếu không
+    một invoice thuộc đơn vị khác sẽ hiện ra như "đợt mới phát hành" và mọi lượt
+    commit đều chết oan.
+    """
+    if not fee_ids:
+        return set()
+    stmt = (
+        select(Invoice.id)
+        .join(Fee, Invoice.fee_id == Fee.id)
+        .join(models.AdmissionProfile)
+        .join(models.Lead)
+        .where(Invoice.fee_id.in_(fee_ids))
+    )
+    if unit_id is not None:
+        stmt = stmt.where(models.Lead.unit_id == unit_id)
+    return set((await db.execute(stmt)).scalars().all())
 
 
 async def _fetch_invoice_status_sets(
@@ -908,7 +937,41 @@ async def create_preview_batch(
                 f"File này đã được import và ghi nhận ở lô #{existing.id}{ngay}. "
                 "Hãy đảo (void) lô đó trước nếu muốn import lại."
             )
-        # preview cũ cùng file → thay thế (cascade xóa rows) rồi tạo lại
+        # ⚠️ `status` MỘT MÌNH không đủ để kết luận "chưa ghi đồng nào".
+        #
+        # Lô còn dòng bị hàng rào nghi trùng giữ lại vẫn mang `preview` trong
+        # khi các dòng khác ĐÃ ghi tiền và đang giữ `payment_ids`. Đó là trạng
+        # thái bình thường của mọi lượt commit có `duplicate_review_required`,
+        # không phải ngoại lệ hiếm.
+        #
+        # Xoá lô ở trạng thái đó không phải "làm mới ảnh chụp" mà là xoá bằng
+        # chứng: `Payment` vẫn nằm trong sổ, tiền vẫn ở invoice/fee, nhưng hàng
+        # nối chúng với dòng file biến mất — hết đường lần ngược "khoản này vào
+        # sổ từ đâu", và lượt import sau không thấy dòng cũ nên có thể ghi lần
+        # hai.
+        so_dong_da_ghi = (
+            await db.execute(
+                select(func.count())
+                .select_from(PaymentImportRow)
+                .where(
+                    PaymentImportRow.batch_id == existing.id,
+                    PaymentImportRow.commit_status
+                    == PaymentImportCommitStatusEnum.committed.value,
+                )
+            )
+        ).scalar_one()
+        if so_dong_da_ghi:
+            # ⚠️ KHÔNG mời "void lô" ở đây: `void_batch` chỉ nhận lô đã
+            # `committed`. Lô này vẫn `preview`, nên void là một lối ra KHÔNG
+            # tồn tại — chỉ đường vào một thông báo lỗi thứ hai.
+            raise ConflictError(
+                f"Lô #{existing.id} của file này đã ghi tiền {so_dong_da_ghi} "
+                "dòng và còn dòng chờ soát. Hãy mở lô này để xử lý các dòng "
+                "còn chờ soát. Sau khi hoàn tất, bạn có thể đảo lô trước khi "
+                "nhập lại nếu cần."
+            )
+
+        # preview cũ CHƯA ghi đồng nào → thay thế (cascade xóa rows) rồi tạo lại
         await db.delete(existing)
         await db.flush()
 
@@ -947,7 +1010,18 @@ async def create_preview_batch(
                 raw=r.raw or {},
                 resolved_profile_id=r.profile_id,
                 resolved_fee_id=r.fee_id,
-                status=r.status,
+                validation_status=r.validation_status,
+                # Trục GHI đặt ngay từ bước xem trước, theo đúng bảng chân trị:
+                # dòng hỏng từ khâu đọc KHÔNG có gì để ghi (`not_applicable`),
+                # còn lại là đang chờ lượt ghi. Để mặc định `pending` cho cả
+                # dòng lỗi thì nó nằm mãi trong nhóm "chờ ghi" — một hàng đợi
+                # không bao giờ vơi, và ràng buộc hai trục ở cơ sở dữ liệu cũng
+                # từ chối ngay.
+                commit_status=(
+                    PaymentImportCommitStatusEnum.not_applicable.value
+                    if r.validation_status == PaymentImportRowStatusEnum.error.value
+                    else PaymentImportCommitStatusEnum.pending.value
+                ),
                 message=r.message,
                 amount=r.amount,
                 payment_ids=None,
@@ -1222,10 +1296,16 @@ async def _lead_has_other_settled_hk1(
 @dataclass
 class CommitResult:
     batch_id: int
-    committed_count: int  # số dòng ghi được
-    failed_count: int  # số dòng lỗi tại commit (TOCTOU/đổi số dư)
+    committed_count: int  # số dòng ghi được ở LƯỢT này
+    #: Số dòng THỬ ghi và hỏng (TOCTOU, số dư đổi, lỗi hệ thống). KHÔNG gồm dòng
+    #: bị hàng rào nghi trùng giữ lại — hai thứ đó đòi hai hành động khác hẳn
+    #: nhau (một cái phải sửa dữ liệu, một cái chỉ cần soát rồi xác nhận), nên
+    #: gộp chúng vào một con số là buộc người đọc đoán.
+    failed_count: int
+    #: Số dòng đang chờ kế toán xác nhận — mỗi dòng có một phiếu riêng.
+    review_required_count: int
     payment_count: int  # tổng Payment tạo
-    total_amount: Decimal  # tổng tiền đã ghi
+    total_amount: Decimal  # tổng tiền của CẢ LÔ (không phải riêng lượt này)
 
 
 async def _assert_batch_creator_in_unit(
@@ -1252,13 +1332,16 @@ async def commit_batch(
     batch_id: int,
     importer_id: int,
     unit_id: Optional[int],
-    confirm_duplicates: bool = False,
+    confirmed_tokens: Optional[Dict[int, str]] = None,
 ) -> Tuple[CommitResult, Callable]:
     """Pha 2 — GHI TIỀN. RE-VALIDATE TOCTOU dưới khóa + savepoint per-row + idempotency
     + GỘP lead-sync 1 lần/hồ-sơ. Trả ``(CommitResult, post_commit)``.
 
     - Khóa lô (FOR UPDATE) → serialize commit đồng thời cùng lô.
-    - Lock order invoice→fee (khớp verify_payment → tránh deadlock với verify tay).
+    - **Thứ tự khoá: MỌI invoice của các fee liên quan (theo ``fee_id, id``) →
+      MỌI fee (theo id) → đọc version → soát phiếu → ghi.** Sau khi chạm fee
+      đầu tiên, đường này không xin thêm khoá invoice nào; đợt hoá đơn mới xuất
+      hiện giữa hai pha thì dừng sạch (``ConflictError``), không khoá bù.
     - KHÔNG dùng snapshot preview để ghi: re-fetch fee/invoice HIỆN TẠI (số dư có thể
       đổi giữa preview→commit). Cuối vòng còn ``left>0`` = vượt nợ hiện tại → raise →
       savepoint rollback CẢ dòng (không ghi nửa vời).
@@ -1304,18 +1387,23 @@ async def commit_batch(
     fee_repo = FeeRepository(db)
     inv_repo = InvoiceRepository(db)
 
+    # Chọn dòng theo TRỤC GHI, không theo trục kiểm. `committed` bị loại bằng
+    # CẤU TRÚC DỮ LIỆU, không bằng một phép kiểm rải rác trong vòng lặp: một
+    # dòng đã có tiền mà lọt vào đây là mở lại đường ghi hai lần — khoá
+    # idempotency của Payment chỉ chặn theo (lô, dòng, HOÁ ĐƠN) nên không cứu
+    # được phần tiền rơi sang đợt khác khi đợt cũ đã hết dư.
+    CO_THE_GHI = (
+        PaymentImportCommitStatusEnum.pending.value,
+        PaymentImportCommitStatusEnum.duplicate_review_required.value,
+        PaymentImportCommitStatusEnum.failed.value,
+    )
     rows = list(
         (
             await db.execute(
                 select(PaymentImportRow)
                 .where(
                     PaymentImportRow.batch_id == batch_id,
-                    PaymentImportRow.status.in_(
-                        [
-                            PaymentImportRowStatusEnum.matched.value,
-                            PaymentImportRowStatusEnum.warned.value,
-                        ]
-                    ),
+                    PaymentImportRow.commit_status.in_(CO_THE_GHI),
                 )
                 .order_by(PaymentImportRow.row_no)
             )
@@ -1330,10 +1418,124 @@ async def commit_batch(
     total_amount = Decimal("0")
     cleared_profiles: Dict[int, str] = {}
     # (B3) Phiếu do CHÍNH lô này ghi — để dòng sau không tự tố dòng trước.
-    payment_ids_cua_lo: Set[int] = set()
+    #
+    # Nạp sẵn phiếu của các lượt commit TRƯỚC, không bắt đầu từ tập rỗng. `rows`
+    # cố tình chỉ gồm dòng CÒN ghi được, nên dòng `committed` ở lượt trước nằm
+    # ngoài — và mã phiếu của chúng sẽ không bao giờ được nạp. Khi một dòng
+    # `failed` được thử lại (hoặc phiếu hết hạn rồi xác nhận lại), nó đụng phải
+    # phiếu mà chính lô này vừa ghi ở lượt trước và bị tố là nghi trùng. Người
+    # ghi soát mãi một cảnh báo về chính mình.
+    payment_ids_cua_lo: Set[int] = {
+        pid
+        for (ids,) in (
+            await db.execute(
+                select(PaymentImportRow.payment_ids).where(
+                    PaymentImportRow.batch_id == batch_id,
+                    PaymentImportRow.commit_status
+                    == PaymentImportCommitStatusEnum.committed.value,
+                )
+            )
+        ).all()
+        if isinstance(ids, list)
+        for pid in ids
+        if isinstance(pid, int)
+    }
     # Đếm riêng dòng bị hàng rào trùng chặn: chúng là thứ DUY NHẤT commit lại
     # với cờ xác nhận sẽ cứu được, nên lô còn dòng như vậy thì chưa được đóng.
     so_dong_chan_trung = 0
+
+    # ────────────────────────────────────────────────────────────────────────
+    # PHA SOÁT PHIẾU — chạy TRỌN VẸN trước khi ghi dòng đầu tiên.
+    #
+    # Thứ tự ở đây là cả vấn đề. Soát tuần tự (dòng nào tới lượt thì soát dòng
+    # đó) thì dòng đầu tiên ghi xong sẽ làm `fee.duplicate_guard_version` nhích
+    # — trigger ở tầng cơ sở dữ liệu — và phiếu HỢP LỆ của dòng thứ hai cùng
+    # khoản phí lập tức hết hiệu lực. Kế toán xác nhận cả năm dòng, hệ thống
+    # ghi một dòng rồi bắt xác nhận lại bốn dòng còn lại, mỗi lượt được đúng
+    # một dòng. Vòng 409 mà cả đợt này sinh ra để xoá, mọc lại ở chỗ khác.
+    #
+    # Nên: khoá hết Fee liên quan, đọc version BAN ĐẦU dưới khoá, soát mọi
+    # phiếu theo version ấy, rồi mới ghi.
+    #
+    # ── THỨ TỰ KHOÁ TOÀN CỤC ────────────────────────────────────────────────
+    # Khoá Fee trước là bản vá của bẫy trên, nhưng nó dựng ra một chiều
+    # Fee → Invoice, ngược với ghi tay (Invoice → Fee). Hai chiều ngược nhau
+    # trên cùng cặp hàng = kẹt chéo thật, đã tái hiện được bằng hai session
+    # PostgreSQL (``tests/services/test_import_vs_manual_deadlock.py``).
+    #
+    # Invariant kể từ đây — **sau khi bắt đầu khoá Fee, đường nhập lô tuyệt
+    # đối không xin thêm bất kỳ khoá Invoice nào.** Vì vậy pha này cầm TRỌN
+    # tập invoice trước, kể cả đợt đã thu đủ mà lượt ghi sẽ không đụng tới:
+    # cầm phần "dự đoán sẽ dùng" là để hở đúng cái khe cần đóng.
+    #
+    # ``khoa_moi_invoice_cua_fee`` khoá ``FOR UPDATE OF invoice`` — KHÔNG kéo
+    # ``fee`` theo như ``get_for_update``. Ngữ nghĩa khoá-kèm-fee của hàm kia
+    # là hàng rào của đường ghi tay và phải giữ nguyên; xem ghi chú ở
+    # ``InvoiceRepository.khoa_moi_invoice_cua_fee``.
+    ma_fee_lien_quan = sorted(
+        {r.resolved_fee_id for r in rows if r.resolved_fee_id is not None}
+    )
+    invoice_da_khoa = await inv_repo.khoa_moi_invoice_cua_fee(
+        ma_fee_lien_quan, unit_id
+    )
+    invoice_theo_fee: Dict[int, List[Invoice]] = {}
+    for _inv in invoice_da_khoa:
+        invoice_theo_fee.setdefault(_inv.fee_id, []).append(_inv)
+
+    version_ban_dau: Dict[int, int] = {}
+    for _ma_fee in ma_fee_lien_quan:
+        _fee = await fee_repo.get_for_update(_ma_fee, unit_id)
+        if _fee is not None:
+            version_ban_dau[_ma_fee] = _fee.duplicate_guard_version
+
+    # Cửa sổ giữa hai pha: một đợt hoá đơn MỚI có thể được phát hành sau khi ta
+    # chụp tập invoice và trước khi ta cầm Fee. Khoá bổ sung nó ở đây là phá
+    # đúng invariant vừa dựng, nên đường duy nhất còn lại là dừng sạch —
+    # fail-closed. Lượt commit sau bắt đầu từ đầu và cầm trọn tập mới.
+    #
+    # Không tự thử lại tại chỗ: giao dịch này đang giữ khoá lô và một tập hàng
+    # invoice/fee: "thử lại" mà không nhả khoá thì chỉ lặp lại đúng ảnh chụp cũ.
+    _id_hien_tai = await _id_invoice_cua_fee(db, ma_fee_lien_quan, unit_id)
+    _id_da_khoa = {i.id for i in invoice_da_khoa}
+    _id_moi = _id_hien_tai - _id_da_khoa
+    if _id_moi:
+        raise ConflictError(
+            "Có đợt hoá đơn mới phát hành giữa lúc khoá — lô chưa ghi gì, "
+            f"vui lòng commit lại (hoá đơn mới: {sorted(_id_moi)})"
+        )
+
+    dong_da_soat: Set[int] = set()
+    for row in rows:
+        phieu = (confirmed_tokens or {}).get(row.row_no)
+        if not phieu or row.resolved_fee_id is None or row.amount is None:
+            continue
+        gv = version_ban_dau.get(row.resolved_fee_id)
+        if gv is None:
+            continue
+        try:
+            _ngay = parse_date_vn(str((row.raw or {}).get(COL_DATE, "")))
+        except Exception:  # noqa: BLE001 — dòng hỏng ngày sẽ chết ở vòng ghi
+            continue
+        if soat_phieu(
+            phieu,
+            RangBuoc(
+                flow="import",
+                user_id=importer_id,
+                unit_id=unit_id,
+                fee_id=row.resolved_fee_id,
+                # Nhập lô phân bổ sang nhiều đợt nên không có MỘT hoá đơn để
+                # ràng buộc; `batch_id` + `row_no` mới là thứ định danh ở đây.
+                invoice_id=None,
+                amount=row.amount,
+                payment_date=datetime(
+                    _ngay.year, _ngay.month, _ngay.day, tzinfo=timezone.utc
+                ),
+                guard_version=gv,
+                batch_id=batch_id,
+                row_no=row.row_no,
+            ),
+        ):
+            dong_da_soat.add(row.row_no)
 
     for row in rows:
         row_payment_ids: List[int] = []
@@ -1364,28 +1566,27 @@ async def commit_batch(
                 if row.resolved_fee_id is None:
                     raise BusinessRuleViolation("thiếu học phí đã resolve")
 
-                # payable invoices HIỆN TẠI (sắp installment_no asc).
-                payable = (
-                    await _fetch_payable_invoices(db, [row.resolved_fee_id])
-                ).get(row.resolved_fee_id, [])
-                if not payable:
-                    raise BusinessRuleViolation(
-                        "không còn đợt hóa đơn payable (đã thu đủ / đổi giữa 2 pha)"
-                    )
-
-                # Bug 3: lock TẤT CẢ invoice (asc) RỒI mới fee — khớp lock-order
-                # verify_payment (invoice→fee) cho dòng trải nhiều đợt → tránh deadlock
-                # ABBA (fee KHÔNG bị khóa GIỮA các invoice).
-                locked = []
-                for inv in payable:
-                    li = await inv_repo.get_for_update(inv.id, unit_id)
-                    if li is None:
-                        continue
-                    await db.refresh(li)
-                    locked.append(li)
-                if not locked:
+                # Tập invoice của khoản phí này ĐÃ được khoá trọn ở pha đầu.
+                # Không gọi `inv_repo.get_for_update` ở đây: đó vừa là xin thêm
+                # khoá Invoice sau khi đã cầm Fee (phá invariant thứ tự khoá),
+                # vừa kéo `fee` vào theo thứ tự invoice vì `FOR UPDATE` của hàm
+                # ấy không có `OF`.
+                cua_fee = invoice_theo_fee.get(row.resolved_fee_id, [])
+                if not cua_fee:
                     raise BusinessRuleViolation(
                         "không tìm thấy hóa đơn (IDOR / đổi giữa 2 pha)"
+                    )
+
+                # `refresh` đọc lại hàng ĐANG bị chính giao dịch này khoá — một
+                # câu SELECT thường, không xin thêm khoá nào.
+                locked = []
+                for li in sorted(cua_fee, key=lambda i: i.installment_no):
+                    await db.refresh(li)
+                    if li.status in PAYABLE_INVOICE_STATUSES:
+                        locked.append(li)
+                if not locked:
+                    raise BusinessRuleViolation(
+                        "không còn đợt hóa đơn payable (đã thu đủ / đổi giữa 2 pha)"
                     )
                 fee = await fee_repo.get_for_update(locked[0].fee_id, unit_id)
                 if fee is None:
@@ -1446,7 +1647,7 @@ async def commit_batch(
                 # Bỏ qua DÒNG chứ không chặn cả lô: raise ở đây rơi vào savepoint
                 # của riêng dòng này, phần còn lại của tệp vẫn vào bình thường.
                 # Chặn cả lô vì một dòng nghi ngờ sẽ biến mọi tệp lớn thành ngõ cụt.
-                if not confirm_duplicates:
+                if row.row_no not in dong_da_soat:
                     # Loại trừ phiếu do CHÍNH LÔ NÀY vừa ghi. Không có vế này thì
                     # dòng 2 của một tệp có hai dòng giống hệt nhau sẽ đụng phải
                     # phiếu mà dòng 1 vừa flush và bị từ chối — trong khi xem
@@ -1521,6 +1722,14 @@ async def commit_batch(
                             reference or f"BULK-{batch_id}-{row.row_no}",
                         )
                 row.payment_ids = row_payment_ids
+                # Trạng thái GHI và `payment_ids` đặt trong CÙNG savepoint: một
+                # dòng "đã ghi" mà không có mã phiếu, hoặc ngược lại, là hai nửa
+                # của cùng một sự thật lệch nhau — và ràng buộc "committed bắt
+                # buộc có payment_ids" sẽ bắt được ngay tại đây thay vì để lộ ra
+                # ở một báo cáo nào đó sau này.
+                row.commit_status = (
+                    PaymentImportCommitStatusEnum.committed.value
+                )
             # savepoint committed → giờ mới cộng tổng (raise giữa chừng đã rollback DB).
             committed_count += 1
             # Chỉ ghi nhận SAU khi savepoint qua: dòng bị rollback không để lại
@@ -1532,12 +1741,14 @@ async def commit_batch(
                 cleared_profiles[row_cleared[0]] = row_cleared[1]
         except _NghiTrungBiChan as exc:
             # KHÁC hẳn lỗi thật: dòng này ghi lại được, chỉ cần kế toán soát rồi
-            # xác nhận. Giữ nguyên trạng thái commit-được ('warned') — hạ xuống
-            # 'error' thì lượt commit sau KHÔNG chọn nó nữa (vòng lặp chỉ lấy
-            # matched/warned), và cờ xác nhận trở thành nút bấm không làm gì.
-            failed_count += 1
+            # xác nhận. Nay nó có trạng thái GHI riêng thay vì phải mượn 'warned'
+            # — trước đây mượn như vậy nên một dòng đã ghi tiền và một dòng đang
+            # chờ xác nhận trông y hệt nhau trong mọi truy vấn.
             so_dong_chan_trung += 1
-            row.status = PaymentImportRowStatusEnum.warned.value
+            row.validation_status = PaymentImportRowStatusEnum.warned.value
+            row.commit_status = (
+                PaymentImportCommitStatusEnum.duplicate_review_required.value
+            )
             row.message = str(exc)[:500]
         except (
             BusinessRuleViolation,
@@ -1546,9 +1757,10 @@ async def commit_batch(
             ConflictError,
         ) as exc:
             # Lỗi nghiệp vụ/giá trị → message đã sạch (tiếng Việt) → hiện thẳng cho
-            # kế toán.
+            # kế toán. Hỏng ở bước GHI, không phải ở khâu đọc: trục kiểm giữ
+            # nguyên kết quả của bước xem trước, đúng như định nghĩa của nó.
             failed_count += 1
-            row.status = PaymentImportRowStatusEnum.error.value
+            row.commit_status = PaymentImportCommitStatusEnum.failed.value
             row.message = str(exc)[:500]
         except Exception as exc:  # noqa: BLE001 — lỗi KHÔNG lường (DB/IntegrityError)
             # KHÔNG nhét dump SQLAlchemy/asyncpg cho kế toán (xấu + lộ chi tiết kỹ
@@ -1562,7 +1774,7 @@ async def commit_batch(
                 error=str(exc),
             )
             failed_count += 1
-            row.status = PaymentImportRowStatusEnum.error.value
+            row.commit_status = PaymentImportCommitStatusEnum.failed.value
             row.message = "lỗi hệ thống khi ghi dòng này — vui lòng liên hệ kỹ thuật"
 
     # GỘP lead-sync (projection) 1 lần/hồ-sơ HK1 vừa cleared. Bug 2: bọc savepoint +
@@ -1592,18 +1804,111 @@ async def commit_batch(
                 exc_info=True,
             )
 
-    # Recompute counter theo trạng thái dòng THỰC TẾ sau commit (dòng có thể flip
-    # matched/warned → error lúc commit) để lịch sử lô khớp tiền THỰC ghi, không giữ
-    # số preview (overstate). `rows` chỉ gồm dòng matched/warned ở preview; preview-
-    # errors nằm ngoài nên cộng vào failed_count cũ.
-    batch.matched_count = sum(
-        1 for r in rows if r.status == PaymentImportRowStatusEnum.matched.value
+    # ── Cấp PHIẾU MỚI cho các dòng còn bị chặn, sau khi đã ghi xong mọi dòng
+    # ghi được. Cuối lượt chứ không phải giữa chừng: phiếu mang theo
+    # `guard_version`, và mỗi lần ghi lại làm nó nhích, nên phiếu cấp sớm sẽ
+    # chết trước khi kế toán kịp nhìn thấy.
+    await db.flush()
+    if so_dong_chan_trung:
+        version_hien_tai = {
+            ma: gv
+            for ma, gv in (
+                await db.execute(
+                    select(Fee.id, Fee.duplicate_guard_version).where(
+                        Fee.id.in_(ma_fee_lien_quan)
+                    )
+                )
+            ).all()
+        }
+        for row in rows:
+            if row.commit_status != (
+                PaymentImportCommitStatusEnum.duplicate_review_required.value
+            ):
+                continue
+            gv = version_hien_tai.get(row.resolved_fee_id)
+            if gv is None or row.amount is None:
+                continue
+            _ngay = parse_date_vn(str((row.raw or {}).get(COL_DATE, "")))
+            row.duplicate_review_token = cap_phieu(
+                RangBuoc(
+                    flow="import",
+                    user_id=importer_id,
+                    unit_id=unit_id,
+                    fee_id=row.resolved_fee_id,
+                    invoice_id=None,
+                    amount=row.amount,
+                    payment_date=datetime(
+                        _ngay.year, _ngay.month, _ngay.day, tzinfo=timezone.utc
+                    ),
+                    guard_version=gv,
+                    batch_id=batch_id,
+                    row_no=row.row_no,
+                )
+            )
+
+    # ── Đếm lại CẢ HAI HỌ từ trạng thái dòng THỰC TẾ của TOÀN LÔ. Không cộng
+    # dồn gì hết: `batch.failed_count += failed_count` của bản trước đếm một
+    # dòng hai lần (nó vừa làm tăng `failed_count` vừa giữ `warned`) và không ai
+    # trừ lại khi lượt sau ghi được. Lô #5 trên máy dev: đúng một dòng, sổ ghi
+    # thành hai.
+    #
+    # Đọc từ cơ sở dữ liệu chứ không đếm trên `rows`: `rows` chỉ gồm những dòng
+    # CÓ THỂ ghi ở lượt này, nên dòng hỏng từ khâu đọc và dòng đã ghi ở lượt
+    # trước đều nằm ngoài.
+    await db.flush()
+
+    async def _dem(cot) -> Dict[str, int]:
+        return {
+            gt: so
+            for gt, so in (
+                await db.execute(
+                    select(cot, func.count())
+                    .where(PaymentImportRow.batch_id == batch_id)
+                    .group_by(cot)
+                )
+            ).all()
+        }
+
+    dem_kiem = await _dem(PaymentImportRow.validation_status)
+    dem_ghi = await _dem(PaymentImportRow.commit_status)
+    E = PaymentImportRowStatusEnum
+    C = PaymentImportCommitStatusEnum
+    batch.matched_count = dem_kiem.get(E.matched.value, 0)
+    batch.warned_count = dem_kiem.get(E.warned.value, 0)
+    batch.failed_count = dem_kiem.get(E.error.value, 0)
+    batch.committed_row_count = dem_ghi.get(C.committed.value, 0)
+    batch.review_required_count = dem_ghi.get(C.duplicate_review_required.value, 0)
+    batch.commit_failed_count = dem_ghi.get(C.failed.value, 0)
+    batch.not_applicable_count = dem_ghi.get(C.not_applicable.value, 0)
+
+    # Tổng tiền của CẢ LÔ, không phải của riêng lượt này: gán `total_amount` là
+    # đè, nên lượt xác nhận lại (chỉ ghi vài dòng còn sót) sẽ làm sổ lô tụt
+    # xuống bằng đúng phần vừa ghi và mất phần đã vào ở lượt trước. Cộng từ
+    # PHIẾU THẬT, không từ số dự kiến.
+    _ma_phieu_toan_lo = [
+        pid
+        for (ids,) in (
+            await db.execute(
+                select(PaymentImportRow.payment_ids).where(
+                    PaymentImportRow.batch_id == batch_id
+                )
+            )
+        ).all()
+        if isinstance(ids, list)
+        for pid in ids
+        if isinstance(pid, int)
+    ]
+    batch.total_amount = (
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                    Payment.id.in_(_ma_phieu_toan_lo)
+                )
+            )
+        ).scalar_one()
+        if _ma_phieu_toan_lo
+        else Decimal("0")
     )
-    batch.warned_count = sum(
-        1 for r in rows if r.status == PaymentImportRowStatusEnum.warned.value
-    )
-    batch.failed_count = batch.failed_count + failed_count
-    batch.total_amount = total_amount
     # Chỉ đánh dấu 'committed' khi THỰC SỰ ghi được tiền. 0 dòng ghi (tất cả fail
     # TOCTOU) → GIỮ 'preview' để re-import được (chưa có endpoint void; tránh khóa
     # file vĩnh viễn qua partial-unique).
@@ -1614,7 +1919,12 @@ async def commit_batch(
     # 'preview' cho phép soát rồi commit lại với `confirm_duplicates`; các dòng
     # đã ghi ở lượt này không bị ghi hai lần vì idempotency key
     # `bulkimport:{lô}:{dòng}:{hoá đơn}` đã chặn sẵn.
-    if committed_count > 0 and so_dong_chan_trung == 0:
+    # Trạng thái lô SUY RA từ tập trục ghi, không từ biến đếm của riêng lượt
+    # này: một lượt xác nhận lại có `committed_count` nhỏ vẫn có thể là lượt
+    # khép được lô, còn một lượt ghi được nhiều dòng nhưng còn dòng chờ xác
+    # nhận thì không.
+    con_cho = batch.review_required_count > 0
+    if batch.committed_row_count > 0 and not con_cho:
         batch.status = PaymentImportBatchStatusEnum.committed.value
         batch.committed_at = datetime.now(timezone.utc)
     await db.flush()
@@ -1623,8 +1933,11 @@ async def commit_batch(
         batch_id=batch_id,
         committed_count=committed_count,
         failed_count=failed_count,
+        review_required_count=so_dong_chan_trung,
         payment_count=payment_count,
-        total_amount=total_amount,
+        # Tổng của CẢ LÔ, đọc lại từ phiếu thật — không phải tổng của riêng
+        # lượt này, vì lượt xác nhận lại chỉ ghi vài dòng còn sót.
+        total_amount=batch.total_amount,
     )
 
     async def post_commit() -> None:
@@ -1978,19 +2291,28 @@ async def get_batch_detail_scoped(
     return batch, rows
 
 
-def _result_status_label(batch_status: str, row_status: str) -> str:
-    """Nhãn Trạng thái cho file kết quả — theo LÔ × DÒNG (P2: void KHÔNG "Thành
-    công")."""
-    if row_status == PaymentImportRowStatusEnum.error.value:
-        if batch_status == PaymentImportBatchStatusEnum.committed.value:
-            return "Lỗi (không ghi)"
-        return "Lỗi"
-    # matched / warned
+def _result_status_label(batch_status: str, row: PaymentImportRow) -> str:
+    """Nhãn Trạng thái cho file kết quả kế toán đọc.
+
+    Đọc thẳng trục GHI thay vì suy từ (trạng thái lô × trạng thái kiểm). Bản
+    trước phải suy vì chỉ có một trục, và phép suy ấy nói sai đúng ở ca quan
+    trọng nhất: một dòng bị hàng rào giữ lại nằm trong lô đã đóng vẫn hiện "Đã
+    ghi", trong khi không có đồng nào của nó vào sổ.
+    """
+    cs = row.commit_status
+    if cs == PaymentImportCommitStatusEnum.not_applicable.value:
+        return "Lỗi (không ghi)" if batch_status == (
+            PaymentImportBatchStatusEnum.committed.value
+        ) else "Lỗi"
     if batch_status == PaymentImportBatchStatusEnum.void.value:
         return "Đã đảo"
-    if batch_status == PaymentImportBatchStatusEnum.committed.value:
+    if cs == PaymentImportCommitStatusEnum.committed.value:
         return "Đã ghi"
-    return "Dự kiến ghi"  # preview
+    if cs == PaymentImportCommitStatusEnum.duplicate_review_required.value:
+        return "Chờ xác nhận trùng"
+    if cs == PaymentImportCommitStatusEnum.failed.value:
+        return "Ghi hỏng"
+    return "Dự kiến ghi"  # pending
 
 
 # "(hệ thống)" trong nhãn để tránh trùng nếu file có sẵn cột tên "Tên hồ sơ".
@@ -2010,10 +2332,6 @@ async def build_result_file(
     """
     batch, rows = await get_batch_detail_scoped(db, batch_id, unit_id)
     committed_v = PaymentImportBatchStatusEnum.committed.value
-    written_statuses = (
-        PaymentImportRowStatusEnum.matched.value,
-        PaymentImportRowStatusEnum.warned.value,
-    )
     # Cột "Tên hồ sơ" = tên hệ thống để kế toán đối chiếu cạnh "Họ và tên học sinh"
     # của file (file có thể ghi lệch). Batch-query 1 lần (anti-N+1); dòng không
     # resolve được hồ sơ → "(không có hồ sơ)".
@@ -2053,13 +2371,14 @@ async def build_result_file(
 
     def _row_cells(r: PaymentImportRow) -> List[str]:
         raw = r.raw or {}
-        label = _result_status_label(batch.status, r.status)
+        label = _result_status_label(batch.status, r)
         pay = ", ".join(str(p) for p in (r.payment_ids or []))
         written = (
             f"{r.amount:.0f}"  # VND nguyên — bỏ đuôi '.00' của Numeric(15,2)
+            # Số tiền ĐÃ ghi lấy theo trục GHI của chính dòng, không theo
+            # trạng thái lô: lô đóng không có nghĩa mọi dòng đều vào sổ.
             if (
-                batch.status == committed_v
-                and r.status in written_statuses
+                r.commit_status == PaymentImportCommitStatusEnum.committed.value
                 and r.amount is not None
             )
             else ""

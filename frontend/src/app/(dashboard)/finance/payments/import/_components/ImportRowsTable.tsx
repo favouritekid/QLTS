@@ -54,7 +54,7 @@ export function ImportRowsTable({
               <TableRow key={r.row_no}>
                 <TableCell className="font-mono text-xs">{r.row_no}</TableCell>
                 <TableCell>
-                  <RowStatusBadge status={r.status} />
+                  <RowStatusBadge status={r.validation_status} />
                 </TableCell>
                 <TableCell className="font-mono text-xs">
                   {r.citizen_id ?? "—"}
@@ -73,7 +73,7 @@ export function ImportRowsTable({
                   {r.message ? (
                     <span
                       className={
-                        r.status === "error" ? "text-red-600" : "text-amber-600"
+                        r.validation_status === "error" ? "text-red-600" : "text-amber-600"
                       }
                     >
                       {r.allocations.length > 0 ? " — " : ""}

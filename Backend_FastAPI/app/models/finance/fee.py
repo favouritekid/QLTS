@@ -35,7 +35,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index,
+    BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index,
     Integer, Numeric, String, Text, UniqueConstraint, text
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -270,6 +270,29 @@ class Fee(Base):
         default=1,
         server_default="1",
         comment="Optimistic locking version"
+    )
+    #: Điểm tuần tự hoá của hàng rào nghi trùng — KHÔNG phải ``version`` ở
+    #: trên. Hai cột nói hai chuyện khác nhau và cố tình tách rời:
+    #:
+    #:   * ``version``: khoá lạc quan cho chính hàng ``fee`` (ai sửa học phí
+    #:     sau lưng ai);
+    #:   * ``duplicate_guard_version``: "tập phiếu nghi trùng của khoản phí này
+    #:     có thể đã đổi", do TRIGGER trên ``payment``/``refund_request`` tăng.
+    #:
+    #: Gộp chúng lại thì một lần sửa ghi chú học phí sẽ vô hiệu hoá mọi phiếu
+    #: xác nhận đang lưu hành, còn một lần ghi phiếu lại không đụng gì tới khoá
+    #: lạc quan. Ứng dụng KHÔNG bao giờ tự tăng cột này — trigger là chỗ duy
+    #: nhất, để không đường ghi nào đi vòng được.
+    duplicate_guard_version: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=1,
+        server_default="1",
+        comment=(
+            "Tăng bởi trigger mỗi khi tập phiếu nghi trùng có thể đã đổi. "
+            "Phiếu xác nhận trùng mang theo giá trị này; lúc ghi, dưới khoá "
+            "fee, hai bên phải khớp tuyệt đối."
+        ),
     )
     # Notes (for waive/cancel reasons, etc.)
     notes: Mapped[Optional[str]] = mapped_column(

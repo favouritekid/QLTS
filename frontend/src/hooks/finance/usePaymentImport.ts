@@ -13,6 +13,10 @@ import { AxiosError, isAxiosError } from "axios"
 import { toast } from "sonner"
 
 import { paymentImportApi } from "@/lib/api/payment-import"
+import {
+  cauPhieuHetHieuLuc,
+  dongPhieuHetHieuLuc,
+} from "@/lib/finance/import-review"
 import { blobErrorMessage, downloadBlob } from "@/lib/utils/download-blob"
 import type {
   PaymentImportCommit,
@@ -88,7 +92,7 @@ export function usePreviewPaymentImport() {
 /**
  * Ghi tiền cho lô.
  *
- * `confirmDuplicates` chỉ bật khi kế toán đã đọc danh sách dòng nghi trùng và
+ * `confirmedRows` chỉ gửi những dòng kế toán đã đọc và
  * khẳng định đó là những khoản thu riêng. Máy chủ giữ lô ở trạng thái xem
  * trước khi còn dòng bị chặn, nên lượt gửi lại này là đường DUY NHẤT để chúng
  * vào sổ; không có nó thì tiền đã thu thật bị kẹt ngoài hệ thống.
@@ -98,17 +102,49 @@ export function useCommitPaymentImport() {
   return useMutation<
     PaymentImportCommit,
     AxiosError<ApiErrorResponse>,
-    { batchId: number; confirmDuplicates?: boolean } | number
+    | {
+        batchId: number
+        confirmedRows?: Array<{ row_no: number; review_token: string }>
+      }
+    | number
   >({
     mutationFn: (bien) =>
       typeof bien === "number"
         ? paymentImportApi.commit(bien)
-        : paymentImportApi.commit(bien.batchId, bien.confirmDuplicates ?? false),
-    onSuccess: (result) => {
-      toast.success(
+        : paymentImportApi.commit(bien.batchId, bien.confirmedRows),
+    onSuccess: (result, bien) => {
+      const daGui = typeof bien === "number" ? undefined : bien.confirmedRows
+      const cau =
         `Đã ghi ${result.committed_count} dòng` +
-          (result.failed_count > 0 ? `, ${result.failed_count} lỗi` : ""),
-      )
+        (result.failed_count > 0 ? `, ${result.failed_count} lỗi` : "") +
+        // Dòng chờ xác nhận KHÔNG phải dòng lỗi: chúng đòi hai hành động
+        // khác nhau, nên gộp vào một con số là buộc kế toán đoán.
+        (result.review_required_count > 0
+          ? `, ${result.review_required_count} dòng chờ xác nhận trùng`
+          : "")
+
+      // Máy chủ trả 200 cho CẢ ba kết cục dưới đây, nên một `toast.success`
+      // dùng chung là nói sai nghĩa ở hai trong ba:
+      //
+      //   * phiếu vừa gửi bị từ chối — dòng ấy chưa vào sổ, phải soát lại;
+      //   * còn dòng chờ xác nhận — việc chưa xong;
+      //   * ghi trọn — mới là thành công.
+      //
+      // Ca đầu từng hiện dấu tích xanh "Đã ghi 0 dòng": người dùng vừa bấm
+      // "Đã soát — ghi tiếp", không gì vào sổ, mà màn hình vẫn báo thành công.
+      //
+      // `cau` luôn đi kèm ở ca đầu, vì một lượt CÓ THỂ vừa ghi được dòng này
+      // vừa từ chối phiếu cũ của dòng kia (`committed_count` đếm riêng lượt).
+      // Nói trống "chưa dòng nào được ghi" là tự mâu thuẫn với chính con số
+      // ngay câu sau.
+      const daBiTuChoi = dongPhieuHetHieuLuc(daGui, result.rows)
+      if (daBiTuChoi.length > 0) {
+        toast.warning(`${cauPhieuHetHieuLuc(daBiTuChoi.length)} (${cau})`)
+      } else if (result.review_required_count > 0) {
+        toast.warning(cau)
+      } else {
+        toast.success(cau)
+      }
       // return → mutation pending tới khi cache refetch xong (tránh thao tác tiếp
       // trên dữ liệu cũ; convention await-invalidate của repo).
       return queryClient.invalidateQueries({ queryKey: paymentImportKeys.all })

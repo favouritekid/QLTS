@@ -30,7 +30,20 @@ export type PaymentImportAllocation = z.infer<typeof paymentImportAllocationSche
 
 export const paymentImportRowSchema = z.object({
   row_no: z.number().int(),
-  status: z.string(), // matched | warned | error
+  // HAI TRỤC. `validation_status` nói dòng ĐỌC có hợp lệ không (không đổi sau
+  // xem trước); `commit_status` nói số phận của nó ở bước ghi tiền. Trộn hai
+  // câu hỏi vào một cột là lỗi của bản trước — một dòng ĐÃ ghi tiền vẫn mang
+  // `warned` nên vẫn nằm trong tập chọn lại.
+  validation_status: z.string(), // matched | warned | error
+  commit_status: z.enum([
+    "pending",
+    "duplicate_review_required",
+    "committed",
+    "failed",
+    "not_applicable",
+  ]),
+  /** Phiếu xác nhận cho ĐÚNG dòng này — chỉ có khi đang chờ xác nhận trùng. */
+  review_token: z.string().nullable().optional(),
   message: z.string().nullable().optional(),
   citizen_id: z.string().nullable().optional(),
   profile_id: z.number().int().nullable().optional(),
@@ -42,6 +55,27 @@ export const paymentImportRowSchema = z.object({
   allocations: z.array(paymentImportAllocationSchema).default([]),
   payment_ids: z.array(z.number().int()).nullable().optional(),
 })
+  // FAIL-CLOSED. `commit_status` là enum đóng (không phải `z.string()`): một
+  // giá trị lạ từ máy chủ mà lọt qua sẽ rơi khỏi MỌI nhánh lọc ở component, và
+  // màn hình báo "tất cả đã ghi thành công" trong khi có dòng chưa vào sổ.
+  //
+  // Và "chờ xác nhận" BẮT BUỘC có phiếu: không có phiếu thì không có gì để bấm,
+  // nên một dòng như vậy sẽ bị lọc khỏi khối cảnh báo mà cũng không nằm trong
+  // khối lỗi — im lặng biến mất, đúng thứ nguy hiểm nhất.
+  .superRefine((r, ctx) => {
+    if (
+      r.commit_status === "duplicate_review_required" &&
+      !(r.review_token ?? "").trim()
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["review_token"],
+        message:
+          "dòng chờ xác nhận trùng nhưng máy chủ không cấp phiếu — không có " +
+          "đường nào ghi tiếp, và một dòng im lặng biến mất là ca tệ nhất",
+      })
+    }
+  })
 export type PaymentImportRow = z.infer<typeof paymentImportRowSchema>
 
 export const paymentImportPreviewSchema = z.object({
@@ -63,11 +97,31 @@ export const paymentImportCommitSchema = z.object({
   batch_id: z.number().int(),
   status: z.string(),
   committed_count: z.number().int(),
+  /** Số dòng THỬ ghi và hỏng. KHÔNG gồm dòng bị hàng rào giữ lại. */
   failed_count: z.number().int(),
+  /** Số dòng chờ kế toán xác nhận — mỗi dòng có phiếu riêng ở `rows[]`. */
+  review_required_count: z.number().int().default(0),
   payment_count: z.number().int(),
   total_amount: z.string(),
   rows: z.array(paymentImportRowSchema).default([]),
 })
+  // Con số của máy chủ và danh sách dòng phải NÓI CÙNG MỘT ĐIỀU. Lệch nhau
+  // nghĩa là ta đang đọc sai thân phản hồi, và đọc sai theo chiều "ít dòng chờ
+  // hơn thực tế" là chiều báo thành công nhầm.
+  .superRefine((r, ctx) => {
+    const dem = r.rows.filter(
+      (x) => x.commit_status === "duplicate_review_required",
+    ).length
+    if (dem !== r.review_required_count) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["review_required_count"],
+        message:
+          `máy chủ nói ${r.review_required_count} dòng chờ xác nhận nhưng ` +
+          `danh sách có ${dem}`,
+      })
+    }
+  })
 export type PaymentImportCommit = z.infer<typeof paymentImportCommitSchema>
 
 export const paymentImportVoidSchema = z.object({
@@ -95,6 +149,14 @@ export const paymentImportBatchSummarySchema = z.object({
   voided_at: z.string().nullable().optional(),
   // BE quyết quyền đảo lô của người xem (thin-client: FE đọc flag, không check role)
   can_void: z.boolean().default(false),
+  // Số dòng đang bị hàng rào nghi trùng giữ lại — để nói RÕ còn bao nhiêu dòng
+  // thay vì một nút trơ.
+  review_required_count: z.number().int().default(0),
+  // Quyền mở đường "ghi tiếp các dòng nghi trùng" — BE quyết (lô còn preview +
+  // còn dòng chờ soát + người xem qua gate commit). FE ĐỌC cờ; suy lại từ
+  // `status` + counter là dựng một bản sao luật phân quyền thứ hai, và bản sao
+  // đó không biết gì về role.
+  can_resume_commit: z.boolean().default(false),
 })
 export type PaymentImportBatchSummary = z.infer<
   typeof paymentImportBatchSummarySchema

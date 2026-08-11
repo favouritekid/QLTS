@@ -39,7 +39,6 @@ import { CreditCard, Loader2 } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   useCreatePayment,
-  useDuplicatePreview,
   usePendingPaymentsByFee,
 } from "@/hooks/finance/usePayments"
 import { usePaymentMethods } from "@/hooks/finance/usePaymentMethods"
@@ -47,13 +46,13 @@ import { useInvoiceDetail } from "@/hooks/finance/useInvoices"
 import { AmountDisplay } from "@/components/finance"
 import { formatVND, parseVNDDisplayAmount } from "@/lib/zod/finance"
 import { calendarDateToISO, formatNgayVN } from "@/lib/utils/vn-date"
-import { useDebouncedValue } from "@/lib/hooks/use-debounced-value"
 import {
-  capSoPhienMoi,
-  parseDuplicateSuspected,
-  paymentFingerprint,
-  type DuplicateSuspectedPayload,
-} from "@/lib/finance/duplicate-payment"
+  TRANG_THAI_DAU,
+  cungYDinh,
+  docThanLoi409,
+  rutGon,
+  type YDinhGhi,
+} from "@/lib/finance/duplicate-review"
 import { PAYMENT_STATUS_LABELS, type PaymentStatus } from "@/types/finance.types"
 import { toast } from "sonner"
 
@@ -134,7 +133,8 @@ export function PaymentRecordDialog({
   // cho mọi dòng trong danh sách.
   const {
     data: invoice,
-    isLoading: invoiceLoading,
+    isLoading: invoiceRawLoading,
+    isFetching: invoiceFetching,
     isError: invoiceFailed,
   } = useInvoiceDetail(invoiceId, {
     enabled: open,
@@ -150,11 +150,22 @@ export function PaymentRecordDialog({
   // phần đang chờ thì màn hình trông y như chưa ai thu — và kế toán nhập lại.
   const {
     data: pendingPage,
-    isLoading: pendingLoading,
+    isLoading: pendingRawLoading,
+    isFetching: pendingFetching,
     isError: pendingFailed,
   } = usePendingPaymentsByFee(feeId, {
     enabled: open,
   })
+
+  // `isLoading` một mình KHÔNG đủ. Với cache có sẵn và `staleTime: 0`, React
+  // Query trả dữ liệu CŨ ngay lập tức: `isLoading=false`, `isFetching=true`.
+  // Màn hình vẽ số dư của lần mở trước như thể nó là số hiện tại — đúng cái
+  // "màn hình nói dối" mà panel công nợ sinh ra để xoá.
+  //
+  // Nên coi mọi lượt lấy lại là CHƯA XÁC MINH: dựng skeleton, và khoá nút Lưu.
+  const invoiceLoading = invoiceRawLoading || invoiceFetching
+  const pendingLoading = pendingRawLoading || pendingFetching
+  const soLieuChuaXacMinh = invoiceLoading || pendingLoading
 
   const pendingItems = pendingPage?.items ?? []
   // Cộng tối đa 100 phần tử số — rẻ hơn hẳn chi phí giữ một mảng ổn định qua
@@ -183,20 +194,13 @@ export function PaymentRecordDialog({
   }, [paymentMethods])
 
   // Xác nhận trùng: giữ DẤU VÂN TAY đã được xác nhận, không giữ một cờ boolean.
-  // Cờ boolean phải được "nhớ xoá" ở mọi chỗ dữ liệu đổi — và chỗ quên xoá
-  // chính là chỗ gửi xác nhận cho một số tiền chưa ai xem. Dấu vân tay thì tự
-  // hết hiệu lực: nó chỉ khớp đúng bộ dữ liệu đã sinh ra nó.
-  // Mỗi lần mở form là một PHIÊN. Phản hồi của phiên trước không được nói
-  // chuyện với phiên này — xem `paymentFingerprint`.
+  // MỘT nguồn trạng thái nghiệp vụ duy nhất cho cả lần ghi này.
   //
-  // Số cấp từ bộ đếm ở MODULE, không phải `useState(0)`: màn Thu học phí
-  // unmount hẳn form khi đóng, nên một giá trị khởi tạo cố định sẽ lặp lại ở
-  // lần mở sau và cache của phiên trước sống dậy.
-  const [phienMoForm, setPhienMoForm] = React.useState(capSoPhienMoi)
-  const [vanTayDaXacNhan, setVanTayDaXacNhan] = React.useState<string | null>(null)
-  const [canhBaoTrung, setCanhBaoTrung] = React.useState<
-    (DuplicateSuspectedPayload & { vanTay: string }) | null
-  >(null)
+  // Không suy lại `submitting` từ `mutation.isPending`, không `useEffect` nào
+  // đồng bộ hộ: hai nguồn thì sớm muộn cũng lệch, và cái lệch ở đây là gửi xác
+  // nhận cho một tập ứng viên chưa ai xem. Mọi bước chuyển được dispatch THẲNG
+  // trong handler gửi/thành công/lỗi.
+  const [trangThai, dispatch] = React.useReducer(rutGon, TRANG_THAI_DAU)
 
   const form = useForm<PaymentFormValues>({
     resolver: zodResolver(paymentFormSchema),
@@ -217,63 +221,38 @@ export function PaymentRecordDialog({
   const ngayDangChon = useWatch({ control: form.control, name: "payment_date" })
   const ngayHienTai = ngayDangChon ? calendarDateToISO(ngayDangChon) : null
 
-  const vanTayHienTai = paymentFingerprint({
-    sessionId: phienMoForm,
-    invoiceId,
-    feeId,
-    amount: soTienDangGo ?? null,
-    paymentDate: ngayHienTai,
-  })
-  // Cảnh báo của máy chủ chỉ còn hiệu lực cho đúng bộ dữ liệu sinh ra nó. Đổi
-  // số tiền hay ngày là nó tự biến mất — không cần nhớ xoá ở đâu cả.
-  const canhBaoConHieuLuc =
-    canhBaoTrung && canhBaoTrung.vanTay === vanTayHienTai ? canhBaoTrung : null
-  const daXacNhan = vanTayDaXacNhan === vanTayHienTai
+  const phuongThucDangChon = useWatch({ control: form.control, name: "method_id" })
 
-  // Lớp cảnh báo SỚM: hỏi CHÍNH máy chủ bằng đúng luật mà lần ghi sắp tới sẽ
-  // dùng, thay vì dựng lại luật ở đây. Giao diện không thể tự tính đúng: nó
-  // không thấy tổng tiền đã hoàn của từng phiếu, và "ngày lịch Việt Nam" ở
-  // trình duyệt là múi giờ máy người dùng.
-  // Hỏi theo số tiền ĐÃ NGỪNG GÕ, không theo từng phím. `CurrencyInput` phát
-  // `onChange` mỗi ký tự, mà số tiền nằm trong khoá truy vấn — gõ "2.000.000"
-  // sinh bảy lượt hỏi (2, 20, 200, … 2000000), mỗi lượt chạy trọn phép nối
-  // Payment→Invoice→Fee→Hồ sơ→Lead kèm truy vấn con tiền đã hoàn. Đã đo thật
-  // trên trình duyệt, không phải suy đoán.
-  //
-  // KHÔNG debounce dấu vân tay ở trên: vân tay phải bám giá trị thật ngay, nếu
-  // không thì cảnh báo cũ còn được coi là hợp lệ sau khi người dùng đã đổi số.
-  const soTienDeHoi = useDebouncedValue(soTienDangGo ?? null, 400)
-  const { data: previewPage, isError: previewFailed } = useDuplicatePreview(
-    {
-      feeId,
-      amount: soTienDeHoi,
-      paymentDate: ngayHienTai,
-      sessionId: phienMoForm,
-    },
-    { enabled: open },
-  )
-  // Kết quả chỉ dùng được khi nó ứng với ĐÚNG số tiền đang hiện trên form.
-  // Giữa hai nhịp gõ, một con số dở dang (vd 500.000 trên đường tới 5.000.000)
-  // có thể khớp một phiếu thật — cảnh báo loé lên rồi tắt, và tệ hơn: nút Lưu
-  // bị khoá oan vì `chanLuu` bên dưới đọc chính danh sách này.
-  const ketQuaUngVoiSoDangGo = (soTienDangGo ?? null) === soTienDeHoi
-  const ungVienSom = ketQuaUngVoiSoDangGo ? (previewPage?.items ?? []) : []
-  const ungVienSomBiCat =
-    ketQuaUngVoiSoDangGo && (previewPage?.total ?? 0) > ungVienSom.length
-  // Hỏi máy chủ mà hỏng thì KHÔNG được im lặng. Một form sạch bong sau khi gõ
-  // đủ số tiền đọc y như "đã đối chiếu, không trùng" — đúng câu trả lời sai
-  // nguy hiểm nhất, và là lý do bảng công nợ phía trên có trạng thái lỗi riêng.
-  // Không chặn nút Lưu: hàng rào thật nằm ở máy chủ (409 lúc ghi), nên chặn ở
-  // đây chỉ khoá tay người dùng mà không thêm an toàn nào.
-  const khongKiemTraDuoc = previewFailed && !canhBaoConHieuLuc
-  const coNghiTrung = Boolean(canhBaoConHieuLuc) || ungVienSom.length > 0
-  // Cờ "còn nữa" phải lấy từ ĐÚNG nguồn đang hiện. Danh sách 409 và danh sách
-  // xem trước đều có thể bị cắt, mà chúng đếm bằng hai cách khác nhau — đọc
-  // nhầm nguồn là im lặng đúng lúc cần nói.
-  const danhSachBiCat = canhBaoConHieuLuc
-    ? canhBaoConHieuLuc.duplicates_truncated
-    : ungVienSomBiCat
-  const chanLuu = coNghiTrung && !daXacNhan
+  /** Ý định ghi, CHUẨN HOÁ đúng như payload sắp gửi.
+   *
+   * So trên dạng đã chuẩn hoá chứ không trên chuỗi hiển thị: ô tiền hiện
+   * "2.000.000" còn thứ gửi đi là `2000000`, và một phép so trên chuỗi sẽ báo
+   * "đã đổi" mỗi lần định dạng nhảy. Chỉ gồm những trường mà PHIẾU ràng buộc
+   * vào — ghi chú, người nộp, mã tham chiếu không nằm trong đó nên sửa chúng
+   * KHÔNG được huỷ một lượt xác nhận đang dở.
+   */
+  const yDinhHienTai: YDinhGhi = {
+    invoiceId,
+    methodId: phuongThucDangChon ?? null,
+    amount: soTienDangGo ?? null,
+    ngay: ngayHienTai,
+  }
+
+  // Người dùng sửa một trường phiếu ràng buộc vào ⇒ bỏ lượt xác nhận NGAY.
+  // Đây là chỗ duy nhất `useEffect` được dùng, và nó chỉ chuyển trạng thái —
+  // không tính toán, không đồng bộ ngược.
+  React.useEffect(() => {
+    dispatch({ type: "DOI_Y_DINH", yDinh: yDinhHienTai })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoiceId, phuongThucDangChon, soTienDangGo, ngayHienTai])
+
+  const dangGui =
+    trangThai.kind === "submitting" || trangThai.kind === "submitting_with_token"
+  const anhChup =
+    trangThai.kind === "review_required" ? trangThai.anhChup : null
+  const daXacNhan = trangThai.kind === "review_required" && trangThai.daTick
+  const chanLuu =
+    (anhChup !== null && !daXacNhan) || dangGui || soLieuChuaXacMinh
 
   const onSubmit = async (values: PaymentFormValues) => {
     // Chặn theo đúng con số mà form vừa hiển thị — cùng biến, không tính lại.
@@ -283,20 +262,31 @@ export function PaymentRecordDialog({
       });
       return;
     }
+    // Chặn lượt gửi thứ hai NGAY TẠI ĐÂY, không đợi render kế tiếp. Reducer
+    // cũng chặn, nhưng nó chỉ có hiệu lực sau khi React render lại — còn hai
+    // cú bấm liền nhau thì cùng chạy trên một bản `trangThai`. Hai phiếu thu.
+    if (dangGui) return
+
     const ngayGui = values.payment_date
       ? calendarDateToISO(values.payment_date)
       : undefined
-    // Chụp dấu vân tay của ĐÚNG bộ dữ liệu sắp gửi. Người dùng có thể sửa form
-    // trong lúc request đang bay; khi ấy phản hồi trở về nói về một bộ dữ liệu
-    // đã cũ, và hiện nó ra (hay tệ hơn, cấp xác nhận cho nó) là cấp phép cho
-    // thứ chưa ai xem.
-    const vanTayGui = paymentFingerprint({
-      sessionId: phienMoForm,
+    const yDinhGui: YDinhGhi = {
       invoiceId,
-      feeId,
+      methodId: values.method_id ?? null,
       amount: values.amount,
-      paymentDate: ngayGui ?? null,
-    })
+      ngay: ngayGui ?? null,
+    }
+    // Phiếu CHỈ được gửi khi trạng thái đang giữ đúng ảnh chụp đã tick, và ảnh
+    // chụp ấy phải nói về đúng ý định sắp gửi. Không có biến boolean nào song
+    // song để lệch.
+    const phieu =
+      trangThai.kind === "review_required" &&
+      trangThai.daTick &&
+      cungYDinh(trangThai.yDinh, yDinhGui)
+        ? trangThai.anhChup.reviewToken
+        : undefined
+
+    dispatch(phieu ? { type: "GUI_KEM_PHIEU" } : { type: "GUI", yDinh: yDinhGui })
     try {
       await createMutation.mutateAsync({
         invoiceId,
@@ -306,38 +296,33 @@ export function PaymentRecordDialog({
           method_id: values.method_id,
           amount: values.amount.toString(),
           // Đọc thẳng ô ngày kế toán bấm. `toISOString()` quy về UTC, mà lịch
-          // trả `Date` 00:00 GIỜ ĐỊA PHƯƠNG — ở Việt Nam nó ghi LÙI MỘT NGÀY,
-          // và sau khi lưu màn hình hiện đúng cái đã lưu nên người ghi thấy
-          // ngày mình vừa chọn bị lùi. Xem `calendarDateToISO`.
-          // Dùng lại `ngayGui` đã tính ở trên để dấu vân tay chống trùng và
-          // giá trị gửi lên luôn là CÙNG một chuỗi ngày.
+          // trả `Date` 00:00 GIỜ ĐỊA PHƯƠNG — ở Việt Nam nó ghi LÙI MỘT NGÀY.
+          // Xem `calendarDateToISO`.
           payment_date: ngayGui,
           reference_code: values.reference_code || undefined,
           payer_name: values.payer_name || undefined,
           payer_account: values.payer_account || undefined,
           notes: values.notes || undefined,
-          // Suy ra từ dấu vân tay, KHÔNG giữ thêm một biến boolean song song:
-          // hai nguồn thì sớm muộn cũng lệch nhau, và cái lệch ở đây là gửi
-          // xác nhận cho một số tiền chưa ai xác nhận.
-          confirm_duplicate: vanTayDaXacNhan === vanTayGui,
+          review_token: phieu,
         },
       })
+      dispatch({ type: "THANH_CONG" })
       toast.success("Đã ghi nhận thanh toán, chờ xác minh")
       form.reset()
-      setVanTayDaXacNhan(null)
-      setCanhBaoTrung(null)
       onOpenChange(false)
     } catch (error) {
       const than = (error as AxiosError<unknown>)?.response?.data
-      const payload = parseDuplicateSuspected(than)
-      if (payload) {
-        // Gắn cảnh báo vào dấu vân tay ĐÃ GỬI. Nếu người dùng đã sửa form
-        // trong lúc chờ, khối cảnh báo sẽ không khớp dấu vân tay hiện tại và
-        // tự động không hiện — thay vì nói về một số tiền khác với số đang
-        // nằm trên màn hình.
-        setCanhBaoTrung({ vanTay: vanTayGui, ...payload })
+      const chup = docThanLoi409(than)
+      if (chup) {
+        // Thay TOÀN BỘ ảnh chụp và bỏ tick trong CÙNG một bước chuyển. Tách
+        // làm hai lần dispatch là để lại một khoảnh khắc màn hình có danh sách
+        // mới mà tick cũ vẫn đang bật.
+        dispatch({ type: "NHAN_409", anhChup: chup })
+      } else {
+        // Lỗi khác: thoát `submitting` và KHÔNG giữ phiếu. Thông báo chung đã
+        // có từ hook — không nuốt ở đây.
+        dispatch({ type: "LOI_KHAC" })
       }
-      // Ca còn lại đã có thông báo lỗi chung từ hook — không nuốt ở đây.
     }
   }
 
@@ -348,12 +333,12 @@ export function PaymentRecordDialog({
       // Đóng rồi mở lại là một lần ghi MỚI: xác nhận cũ và danh sách cũ hết
       // hiệu lực. Giữ lại chúng là mang một cái tick của lần trước sang lần
       // này.
-      setVanTayDaXacNhan(null)
-      setCanhBaoTrung(null)
       // Sang phiên mới: mọi dấu vân tay của phiên cũ vĩnh viễn không khớp nữa,
       // kể cả khi một phản hồi đến muộn còn kịp ghi state. (Đường này dành cho
       // caller GIỮ form mounted; caller unmount thì lần mở sau tự lấy số mới.)
-      setPhienMoForm(capSoPhienMoi())
+      // Đóng là mất sạch: phiếu xác nhận nói về một tập ứng viên tại một
+      // thời điểm, và lần mở sau là một câu hỏi khác.
+      dispatch({ type: "DONG_FORM" })
     }
   }, [open, form])
 
@@ -486,7 +471,12 @@ export function PaymentRecordDialog({
                     // trường test.
                     value={field.value?.toString() ?? ""}
                     onValueChange={(v) => field.onChange(parseInt(v))}
-                    disabled={methodsLoading}
+                    // KHOÁ khi đang gửi: ba trường này nằm trong những thứ
+                    // phiếu xác nhận ràng buộc vào. Sửa giữa lúc request đang
+                    // bay thì ảnh chụp giữ ý định CŨ trong khi form đã hiện giá
+                    // trị mới — máy chủ vẫn fail-closed, nhưng màn hình nói một
+                    // đằng và lượt sau ăn thêm một vòng 409 không cần thiết.
+                    disabled={methodsLoading || dangGui}
                   >
                     <FormControl>
                       <SelectTrigger>
@@ -533,6 +523,7 @@ export function PaymentRecordDialog({
                       onChange={field.onChange}
                       placeholder="Nhập số tiền..."
                       className="h-11"
+                      disabled={dangGui}
                     />
                   </FormControl>
                   <FormDescription>Số tiền còn lại: {remainingLabel}</FormDescription>
@@ -553,6 +544,7 @@ export function PaymentRecordDialog({
                       value={field.value}
                       onChange={field.onChange}
                       placeholder="Chọn ngày..."
+                      disabled={dangGui}
                     />
                   </FormControl>
                   <FormMessage />
@@ -565,7 +557,7 @@ export function PaymentRecordDialog({
               dựng nên nó — chứ không nhét xuống cuối form, để người ghi đọc
               được mà không phải cuộn đi tìm.
             */}
-            {coNghiTrung && (
+            {anhChup !== null && (
               <div
                 className="space-y-2 rounded-md border border-amber-400 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950/40"
                 role="alert"
@@ -575,22 +567,16 @@ export function PaymentRecordDialog({
                   Khoản thu này trùng với phiếu đã ghi
                 </p>
                 <ul className="space-y-1">
-                  {(canhBaoConHieuLuc
-                    ? canhBaoConHieuLuc.duplicates.map((d) => ({
-                        key: d.payment_id,
-                        soTien: d.amount,
-                        ngay: d.payment_date,
-                        trangThai: d.status,
-                        soHoaDon: d.invoice_number,
-                      }))
-                    : ungVienSom.map((p) => ({
-                        key: p.id,
-                        soTien: p.amount,
-                        ngay: p.payment_date,
-                        trangThai: p.status,
-                        soHoaDon: null,
-                      }))
-                  ).map((d) => (
+                  {/* MỘT nguồn: ảnh chụp máy chủ vừa gửi kèm 409. Không còn
+                      hai danh sách để giao diện phải chọn — và không còn chỗ
+                      để vẽ tập này trong khi gửi phiếu của tập kia. */}
+                  {anhChup.duplicates.map((d) => ({
+                    key: d.payment_id,
+                    soTien: d.amount,
+                    ngay: d.payment_date,
+                    trangThai: d.status,
+                    soHoaDon: d.invoice_number,
+                  })).map((d) => (
                     <li key={d.key} className="flex justify-between gap-3">
                       <span>
                         <AmountDisplay amount={d.soTien} />
@@ -611,7 +597,7 @@ export function PaymentRecordDialog({
                     </li>
                   ))}
                 </ul>
-                {danhSachBiCat && (
+                {anhChup.truncated && (
                   <p
                     className="text-xs text-muted-foreground"
                     data-testid="payment-duplicate-truncated"
@@ -624,10 +610,9 @@ export function PaymentRecordDialog({
                   <Checkbox
                     checked={daXacNhan}
                     onCheckedChange={(v) =>
-                      // Xác nhận được gắn vào ĐÚNG bộ dữ liệu đang hiện. Sửa số
-                      // tiền hay ngày là dấu vân tay đổi, và cái tick này không
-                      // còn khớp — không cần nhớ bỏ tick ở đâu cả.
-                      setVanTayDaXacNhan(v === true ? vanTayHienTai : null)
+                      // Tick sống TRONG chính trạng thái `review_required`, nên
+                      // nó không thể tồn tại tách khỏi ảnh chụp mà nó xác nhận.
+                      dispatch({ type: "TICK", gia_tri: v === true })
                     }
                     data-testid="payment-duplicate-confirm"
                   />
@@ -636,16 +621,6 @@ export function PaymentRecordDialog({
               </div>
             )}
 
-            {khongKiemTraDuoc && (
-              <p
-                role="alert"
-                className="rounded-md border border-destructive/50 p-3 text-sm text-destructive"
-                data-testid="payment-duplicate-preview-error"
-              >
-                Không kiểm tra được trùng lặp (không tải được danh sách phiếu đã
-                ghi). Vẫn lưu được, nhưng máy chủ sẽ chặn nếu phát hiện trùng.
-              </p>
-            )}
 
             {/* Reference Code */}
             <FormField

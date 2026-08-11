@@ -33,7 +33,6 @@ vi.mock("@/hooks/finance/usePayments", () => ({
     isLoading: false,
     isError: false,
   }),
-  useDuplicatePreview: () => ({ data: undefined }),
 }))
 
 vi.mock("@/hooks/finance/useInvoices", () => ({

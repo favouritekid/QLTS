@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 from sqlalchemy import select, and_, or_, func, desc, text
 from sqlalchemy import Date, Integer, Numeric
 from sqlalchemy import column as sa_column, values as sa_values
+from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -454,6 +455,110 @@ class PaymentRepository(BaseRepository[Payment]):
         rows = list(result.scalars().unique().all())
         truncated = len(rows) > limit
         return rows[:limit], truncated
+
+    async def chup_tap_ung_vien_nghi_trung(
+        self,
+        fee_id: int,
+        amount: Decimal,
+        payment_date: datetime,
+        window_days: int = WINDOW_DO_TRUNG_NGAY,
+        unit_id: Optional[int] = None,
+        exclude_payment_id: Optional[int] = None,
+        limit: int = MAX_DUPLICATE_CANDIDATES,
+    ) -> Tuple[List[Payment], bool, int]:
+        """Chụp MỘT lần: danh sách hiển thị, cờ bị cắt, và TỔNG thật.
+
+        Vì sao phải là một câu lệnh chứ không phải hai lời gọi nối nhau:
+        PostgreSQL ở đây chạy READ COMMITTED, nên mỗi câu lệnh nhìn thấy một
+        ảnh chụp MỚI. Hỏi danh sách rồi hỏi tổng là hai ảnh chụp khác nhau — và
+        cái người dùng nhìn thấy sẽ không khớp với cái con số nói.
+
+        Tổng đếm trên TOÀN BỘ tập; danh sách cắt ở ``limit`` kèm cờ ``bị_cắt``
+        (đọc dư một dòng để biết còn nữa hay không). Câu thứ hai chỉ nạp dữ
+        liệu hiển thị cho ĐÚNG các mã đã chốt, nên tập không thể rộng ra.
+
+        Không trả dấu vân nào cả: quyền xác nhận nay nằm ở phiếu có chữ ký do
+        máy chủ cấp (``duplicate_review_token``), gắn với
+        ``fee.duplicate_guard_version``. Trả thêm một dấu vân ở đây là dựng lại
+        đúng nguồn-sự-thật-thứ-hai mà đợt này xoá đi.
+        """
+        target_day = vn_calendar_date(payment_date)
+        dieu_kien = _dieu_kien_nghi_trung(
+            fee_id,
+            amount,
+            target_day - timedelta(days=window_days),
+            target_day + timedelta(days=window_days),
+        )
+        if exclude_payment_id is not None:
+            dieu_kien.append(Payment.id != exclude_payment_id)
+
+        nen = select(
+            Payment.id.label("id"),
+            Payment.payment_date.label("ngay"),
+        ).join(Invoice, Payment.invoice_id == Invoice.id)
+        if unit_id is not None:
+            # IDOR — xem ghi chú ở `find_duplicate_candidates`.
+            nen = (
+                nen.join(Fee, Invoice.fee_id == Fee.id)
+                .join(models.AdmissionProfile)
+                .join(models.Lead)
+            )
+            dieu_kien.append(models.Lead.unit_id == unit_id)
+        nen = nen.where(and_(*dieu_kien)).cte("ung_vien_nghi_trung")
+
+        # Thứ tự hiển thị chốt bằng `row_number`, không dựa vào việc
+        # `array_agg` "thường giữ" thứ tự của câu con — Postgres không hứa điều
+        # đó, và một danh sách nhảy thứ tự giữa hai lần xem là danh sách người
+        # dùng không tin được.
+        hien = (
+            select(
+                nen.c.id,
+                func.row_number()
+                .over(order_by=[nen.c.ngay.desc(), nen.c.id.desc()])
+                .label("rn"),
+            )
+            .order_by(nen.c.ngay.desc(), nen.c.id.desc())
+            .limit(limit + 1)
+            .subquery()
+        )
+
+        cau = select(
+            select(func.array_agg(aggregate_order_by(hien.c.id, hien.c.rn.asc())))
+            .scalar_subquery()
+            .label("ids"),
+            select(func.count()).select_from(nen).scalar_subquery().label("tong"),
+        )
+        dong = (await self.db.execute(cau)).one()
+        ma_hien = list(dong.ids or [])
+        bi_cat = len(ma_hien) > limit
+        ma_hien = ma_hien[:limit]
+
+        if not ma_hien:
+            return [], bi_cat, int(dong.tong)
+
+        nap = (
+            select(Payment)
+            .options(
+                joinedload(Payment.invoice)
+                .joinedload(Invoice.fee)
+                .joinedload(Fee.admission_profile)
+                .joinedload(models.AdmissionProfile.lead),
+                joinedload(Payment.method),
+                joinedload(Payment.created_by),
+            )
+            .where(Payment.id.in_(ma_hien))
+        )
+        theo_ma = {
+            p.id: p for p in (await self.db.execute(nap)).scalars().unique().all()
+        }
+        # Giữ đúng thứ tự đã chốt. Bỏ qua mã không nạp được thay vì ném lỗi:
+        # tập đã cố định rồi nên thiếu chỉ có thể là hiển thị ÍT hơn tổng —
+        # chiều an toàn.
+        return (
+            [theo_ma[i] for i in ma_hien if i in theo_ma],
+            bi_cat,
+            int(dong.tong),
+        )
 
     async def find_duplicate_candidates_bulk(
         self,

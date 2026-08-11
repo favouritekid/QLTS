@@ -1,21 +1,17 @@
 @echo off
-REM Run frontend npm scripts (type-check, test, lint, build) in an
-REM isolated, throw-away container instead of `docker compose exec`.
+REM Bọc `scripts\fe-check.sh` — CỐ Ý không dựng lại lệnh docker ở đây.
 REM
-REM Why: `exec` shares the dev container's cgroup with the live Next.js
-REM dev server. Running tsc / vitest / eslint there has OOM-killed PID 1
-REM (Next.js) and produced err_empty_response in browser sessions.
-REM `run --rm --no-deps` spawns a fresh container, isolated memory, and
-REM auto-removes on exit.
+REM Vì sao không viết lại bằng cmd: phần đắt giá của fe-check.sh là phép
+REM CHỨNG MINH container đang chạy đúng source trên máy (băm cây source ở hai
+REM phía rồi so). Viết bản thứ hai bằng cmd nghĩa là có hai công thức băm phải
+REM giống hệt nhau đời đời — và khi chúng lệch, phép so sẽ luôn đỏ, rồi ai đó
+REM sẽ gỡ nó đi. Một bản duy nhất thì không có gì để lệch.
 REM
-REM Usage:
+REM Cần Git Bash (đi kèm Git for Windows). Dùng:
 REM   scripts\fe-check.cmd type-check
 REM   scripts\fe-check.cmd test
-REM   scripts\fe-check.cmd test:coverage
 REM   scripts\fe-check.cmd lint
 REM   scripts\fe-check.cmd build
-REM
-REM Anything passed after the script name goes to `npm run <args...>`.
 
 if "%~1"=="" (
   echo Usage: %~n0 ^<npm-script^> [args...]
@@ -23,4 +19,11 @@ if "%~1"=="" (
   exit /b 64
 )
 
-docker compose run --rm --no-deps frontend npm run %*
+where bash >nul 2>nul
+if errorlevel 1 (
+  echo 🔴 Khong tim thay `bash`. fe-check can Git Bash ^(Git for Windows^).
+  echo    Chay truc tiep: bash scripts/fe-check.sh %*
+  exit /b 66
+)
+
+bash "%~dp0fe-check.sh" %*

@@ -59,6 +59,9 @@ from app.utils.exceptions import (
 # hằng này (`..._ENTITY` → `..._CONTENT`) và nhập nó thêm một cảnh báo
 # deprecation vào mọi lượt chạy. Con số thì không đổi tên.
 HTTP_422_UNPROCESSABLE = 422
+#: Cùng lý do: hàm `list_payments` có tham số query tên `status` che mất module
+#: `status` của FastAPI trong toàn bộ thân hàm.
+HTTP_410_GONE = 410
 
 log = structlog.get_logger(__name__)
 
@@ -94,31 +97,31 @@ async def list_payments(
         "invoice_id sẽ không thấy. Kết hợp được với pending_manual_only.",
     ),
     method_id: Optional[int] = Query(None, description="Filter by payment method ID"),
+    # ── Hai tham số ĐÃ GỠ. Giữ lại trong chữ ký CHỈ để từ chối tường minh.
+    #
+    # Xoá hẳn khỏi chữ ký là fail-OPEN, và im lặng: FastAPI bỏ qua query lạ, nên
+    # một client cũ gọi `?fee_id=1&duplicate_amount=…&duplicate_date=…` sẽ nhận
+    # 200 kèm DANH SÁCH PHIẾU THU THƯỜNG của khoản phí — rồi giao diện vẽ nó
+    # thành "các phiếu nghi trùng". Một tập rộng hơn hẳn, trình bày như thể là
+    # kết quả của luật dò trùng.
+    #
+    # Đường xem trước bị gỡ vì nó không còn quyền gì mà chi phí thì vẫn nguyên:
+    # cache, debounce, đua request, kết quả rỗng đã cũ, và hai bộ ứng viên cùng
+    # xuất hiện. Nó cũng tạo cảm giác sai rằng "không thấy cảnh báo nghĩa là an
+    # toàn". Cảnh báo nay đến từ 409 của chính lần bấm Lưu, kèm một phiếu xác
+    # nhận — xem `duplicate_review_token`.
     duplicate_amount: Optional[Decimal] = Query(
         None,
-        gt=0,
-        # Cùng trần với `PaymentCreate.amount`. Đường xem trước hứa trả "đúng
-        # tập ứng viên mà POST sẽ dùng", nên miền giá trị của nó không được
-        # rộng hơn miền của POST: một số vượt trần lọt tới `Payment.amount ==`
-        # rồi vỡ ở PostgreSQL ("numeric field overflow") — 500 cho một đầu vào
-        # đáng lẽ là 422. Đúng lớp lỗi mà `fee_id` đã đóng bằng `le` ngay phía
-        # trên, chỉ khác tham số.
-        le=finance_schemas.MAX_AMOUNT,
-        # Và cùng SỐ LẺ với `PaymentCreate.amount` (validator từ chối gì khác
-        # `quantize(0.01)`). Nửa còn lại của cùng lời hứa: `100.001` mà lọt qua
-        # đây thì so với cột `Numeric(15,2)` không khớp phiếu nào → xem trước
-        # nói "không trùng", rồi POST cùng số đó lại 422. Người dùng nhận hai
-        # câu trả lời khác nhau cho một con số.
-        decimal_places=2,
-        description="Xem trước phiếu NGHI TRÙNG: đi kèm duplicate_date và "
-        "fee_id. Trả về đúng tập ứng viên mà POST /api/payments sẽ dùng để "
-        "cảnh báo, theo cùng một luật ở cùng một chỗ — giao diện chỉ hiển thị, "
-        "không tự dựng lại luật (nó sẽ lệch: FE không thấy tổng tiền đã hoàn, "
-        "và 'ngày lịch VN' ở FE là múi giờ máy người dùng).",
+        deprecated=True,
+        include_in_schema=False,
+        description="ĐÃ GỠ — trả 410. Cảnh báo trùng nay đến từ 409 của POST "
+        "/api/payments kèm review_token.",
     ),
     duplicate_date: Optional[datetime] = Query(
         None,
-        description="Mốc thời gian của khoản thu sắp ghi (xem duplicate_amount).",
+        deprecated=True,
+        include_in_schema=False,
+        description="ĐÃ GỠ — xem duplicate_amount.",
     ),
     pending_manual_only: bool = Query(
         False,
@@ -151,50 +154,27 @@ async def list_payments(
     limit = min(page_size, 100)
 
     if duplicate_amount is not None or duplicate_date is not None:
-        # Xem trước ứng viên trùng. Đặt ở ĐÂY chứ không thành một route riêng
-        # là có chủ ý: Casbin trong repo này cấp quyền theo TỪNG path tường
-        # minh, nên một path mới kéo theo policy + migration + test phân quyền,
-        # và một sai sót ở đó là 403 im lặng trên production. Path này đã có
-        # grant cho đúng nhóm người ghi phiếu.
-        if duplicate_amount is None or duplicate_date is None or fee_id is None:
-            # `HTTP_422_UNPROCESSABLE_ENTITY` nhập thẳng, KHÔNG qua
-            # `status.HTTP_...`: hàm này có một tham số query tên `status`, và
-            # nó che mất module `status` của FastAPI trong toàn bộ thân hàm.
-            # Viết `status.HTTP_422_...` ở đây ném `AttributeError` trên
-            # `None` — tức một lỗi 500 thay cho lời từ chối 422.
-            raise HTTPException(
-                status_code=HTTP_422_UNPROCESSABLE,
-                detail=(
-                    "Xem trước phiếu nghi trùng cần đủ fee_id, duplicate_amount "
-                    "và duplicate_date."
-                ),
-            )
-        # Chặn năm ngoài tầm nghiệp vụ. Cửa sổ dò trùng cộng/trừ vài ngày quanh
-        # mốc này, nên `9999-12-31` làm phép cộng tràn khỏi `date.max` và
-        # `0001-01-01` tràn khi quy về múi giờ — cả hai thành `OverflowError`,
-        # tức 500 cho một chuỗi ngày mà người gọi tự gõ.
-        if not (1900 <= duplicate_date.year <= 2100):
-            raise HTTPException(
-                status_code=HTTP_422_UNPROCESSABLE,
-                detail="duplicate_date nằm ngoài khoảng năm hợp lệ (1900–2100).",
-            )
-        candidates, truncated = await payment_repo.find_duplicate_candidates(
-            fee_id=fee_id,
-            amount=duplicate_amount,
-            payment_date=duplicate_date,
-            unit_id=unit_id,
-        )
-        items = [
-            _build_payment_list_item(p, current_user.id, current_user.role)
-            for p in candidates
-        ]
-        return finance_schemas.PaymentsPage(
-            items=items,
-            # `total` lớn hơn số dòng trả về = "còn nữa" — cùng quy ước với các
-            # danh sách khác, nên giao diện không phải học thêm cách đọc mới.
-            total=len(items) + (1 if truncated else 0),
-            page=1,
-            page_size=len(items),
+        # 410 GONE — từ chối TƯỜNG MINH, không im lặng bỏ qua.
+        #
+        # Đây là toàn bộ lý do hai tham số trên còn nằm trong chữ ký. Gỡ hẳn
+        # chúng thì FastAPI bỏ qua query lạ và trả 200 kèm danh sách phiếu thu
+        # THƯỜNG của khoản phí — một tập rộng hơn hẳn tập ứng viên trùng, mà
+        # client cũ sẽ vẽ ra thành "các phiếu nghi trùng" rồi cho người dùng bấm
+        # qua. Hỏng kiểu đó không có dòng đỏ nào để lần theo.
+        #
+        # 410 (không phải 404/422) vì đường này TỪNG tồn tại và đã bị gỡ có chủ
+        # ý — đó đúng là điều client cần nghe.
+        #
+        # `HTTP_410_GONE` nhập thẳng, KHÔNG qua `status.HTTP_...`: hàm này có
+        # một tham số query tên `status`, và nó che mất module `status` của
+        # FastAPI trong toàn bộ thân hàm. Con số thì không bị che.
+        raise HTTPException(
+            status_code=HTTP_410_GONE,
+            detail=(
+                "Đường xem trước phiếu nghi trùng đã được gỡ. Cảnh báo trùng "
+                "nay đến từ lỗi 409 của POST /api/payments, kèm một "
+                "review_token để xác nhận và ghi tiếp."
+            ),
         )
 
     if pending_manual_only:
@@ -285,7 +265,7 @@ async def record_payment(
             payer_account=data.payer_account,
             notes=data.notes,
             unit_id=unit_id,
-            confirm_duplicate=data.confirm_duplicate,
+            review_token=data.review_token,
         )
 
         await db.commit()
@@ -863,13 +843,7 @@ async def preview_payment_import(
 async def commit_payment_import(
     request: Request,
     batch_id: int,
-    confirm_duplicates: bool = Query(
-        False,
-        description=(
-            "Bỏ qua hàng rào nghi trùng cho TOÀN LÔ. Chỉ bật khi kế toán đã soát "
-            "và xác nhận đây là những khoản thu riêng biệt."
-        ),
-    ),
+    body: Optional[finance_schemas.PaymentImportCommitIn] = Body(None),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
     _finance_staff: models.User = Depends(require_finance_staff),
@@ -877,9 +851,15 @@ async def commit_payment_import(
     """Pha 2: re-validate TOCTOU dưới khóa + auto-verify từng dòng (kế toán=maker,
     system_user=checker) + gộp lead-sync. Lô đã committed → 409 (không ghi lại).
 
-    Dòng nghi trùng với phiếu đã ghi bị BỎ QUA (không ghi) và tính vào
-    ``failed_count`` kèm lý do; phần còn lại của lô vẫn vào. Muốn ghi cả những
-    dòng đó thì gọi lại với ``confirm_duplicates=true``.
+    Dòng nghi trùng với phiếu đã ghi bị GIỮ LẠI (không ghi) và mang
+    ``commit_status='duplicate_review_required'`` kèm một PHIẾU xác nhận riêng
+    cho dòng đó; phần còn lại của lô vẫn vào. Muốn ghi tiếp những dòng ấy thì
+    gọi lại kèm ``confirmed_rows`` — mỗi phần tử là ``row_no`` cộng đúng phiếu
+    mà lượt trước trả về cho dòng đó.
+
+    Không có cờ "bỏ qua cho TOÀN LÔ" nữa: một cờ như vậy bỏ qua cả những cảnh
+    báo sinh ra SAU khi kế toán đã soát, và nó không nói được người bấm đã nhìn
+    thấy những gì.
     """
     unit_id = finance_scope_unit_id(current_user)
     try:
@@ -888,7 +868,11 @@ async def commit_payment_import(
             batch_id=batch_id,
             importer_id=current_user.id,
             unit_id=unit_id,
-            confirm_duplicates=confirm_duplicates,
+            confirmed_tokens=(
+                {r.row_no: r.review_token for r in body.confirmed_rows}
+                if body and body.confirmed_rows
+                else None
+            ),
         )
         await db.commit()
         if callback:
@@ -997,6 +981,7 @@ async def list_payment_import_batches(
     for b in items:
         summary = finance_schemas.PaymentImportBatchSummaryOut.model_validate(b)
         summary.can_void = _can_void_for(current_user, b.status)
+        summary.can_resume_commit = _can_resume_commit_for(current_user, b)
         items_out.append(summary)
     return finance_schemas.PaymentImportBatchListOut(
         items=items_out,
@@ -1034,6 +1019,7 @@ async def get_payment_import_batch_detail(
     # ngoài greenlet) → 500. Build từ summary (chỉ cột) + rows đã nạp riêng.
     summary = finance_schemas.PaymentImportBatchSummaryOut.model_validate(batch)
     summary.can_void = _can_void_for(current_user, batch.status)
+    summary.can_resume_commit = _can_resume_commit_for(current_user, batch)
     return finance_schemas.PaymentImportBatchDetailOut(
         **summary.model_dump(),
         rows=[_payment_import_row_out(r) for r in rows],
@@ -1079,11 +1065,39 @@ def _can_void_for(user: models.User, batch_status: str) -> bool:
     return user.role in (UserRole.MANAGER, UserRole.ADMIN) and batch_status == "committed"
 
 
+def _can_resume_commit_for(user: models.User, batch) -> bool:
+    """Người xem có mở được đường "ghi tiếp các dòng nghi trùng" của lô này không.
+
+    Ba vế, thiếu một là False:
+    * lô còn ở ``preview`` — lô đã ``committed``/``void`` không còn gì để ghi tiếp;
+    * còn ít nhất một dòng bị hàng rào giữ lại;
+    * người xem qua đúng gate của route commit (``require_finance_staff``).
+
+    Vế thứ ba là lý do cờ này phải do máy chủ cấp. `status` + counter nằm sẵn
+    trong payload, nên giao diện *tự suy được* hai vế đầu — nhưng vế quyền thì
+    không, và suy nửa vời sẽ hiện một nút mà backend từ chối.
+    """
+    return (
+        batch.status == "preview"
+        and (batch.review_required_count or 0) > 0
+        and user.role in (UserRole.ADMIN, UserRole.MANAGER, UserRole.ACCOUNTANT)
+    )
+
+
 def _payment_import_row_out(r) -> finance_schemas.PaymentImportRowOut:
     """Map 1 ``PaymentImportRow`` ORM → schema (dùng chung commit + detail BV-5)."""
     return finance_schemas.PaymentImportRowOut(
         row_no=r.row_no,
-        status=r.status,
+        validation_status=r.validation_status,
+        commit_status=r.commit_status,
+        # Phiếu chỉ đi ra khi dòng THẬT SỰ đang chờ xác nhận. Trả kèm ở mọi
+        # trạng thái khác là phát ra một thứ trông như quyền nhưng không mở
+        # được gì — và rồi ai đó sẽ thử.
+        review_token=(
+            r.duplicate_review_token
+            if r.commit_status == "duplicate_review_required"
+            else None
+        ),
         message=r.message,
         citizen_id=r.citizen_id,
         profile_id=r.resolved_profile_id,
@@ -1102,6 +1116,7 @@ def _build_payment_import_commit(
         status=batch.status if batch is not None else "committed",
         committed_count=result.committed_count,
         failed_count=result.failed_count,
+        review_required_count=result.review_required_count,
         payment_count=result.payment_count,
         total_amount=result.total_amount,
         rows=[_payment_import_row_out(r) for r in rows],
@@ -1130,7 +1145,14 @@ def _build_payment_import_preview(
         rows=[
             finance_schemas.PaymentImportRowOut(
                 row_no=r.row_no,
-                status=r.status,
+                validation_status=r.validation_status,
+                # Bước xem trước KHÔNG ghi tiền, nên trục GHI ở đây luôn là
+                # "chưa ghi" — trừ dòng hỏng từ khâu đọc, thứ không có gì để ghi.
+                commit_status=(
+                    "not_applicable"
+                    if r.validation_status == "error"
+                    else "pending"
+                ),
                 message=r.message,
                 citizen_id=r.citizen_id,
                 profile_id=r.profile_id,

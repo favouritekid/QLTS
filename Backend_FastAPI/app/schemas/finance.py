@@ -613,13 +613,16 @@ class PaymentCreate(BaseModel):
     payer_name: Optional[str] = Field(None, max_length=200)
     payer_account: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = Field(None, max_length=500)
-    confirm_duplicate: bool = Field(
-        False,
-        description="Người ghi đã xem danh sách phiếu nghi trùng và khẳng "
-        "định đây là khoản thu khác. Hàng rào chống trùng là hàng rào MỀM: "
-        "nộp hai lần cùng số tiền là chuyện có thật, nên xác nhận thì ghi "
-        "được. Mặc định False — cờ này phải do người dùng bật ở lần gửi thứ "
-        "hai, không được đính sẵn.",
+    review_token: Optional[str] = Field(
+        None,
+        max_length=2048,
+        description="Phiếu xác nhận nghi trùng, gửi lại NGUYÊN VĂN thứ máy chủ "
+        "trả trong thân lỗi 409 ở lần bấm trước. Không phải cờ boolean, không "
+        "phải danh sách mã phiếu, không phải dấu vân do giao diện ghép: giao "
+        "diện không đọc được phiếu này và không cần đọc. Phiếu ràng buộc vào "
+        "đúng hoàn cảnh sinh ra nó (người ghi, đơn vị, khoản phí, hoá đơn, số "
+        "tiền, ngày thu, và phiên bản hàng rào của khoản phí), nên đổi bất kỳ "
+        "trường nào là nó tự hết hiệu lực và máy chủ hỏi lại.",
     )
 
     @field_validator('payment_date')
@@ -1481,7 +1484,24 @@ class PaymentImportAllocationOut(BaseModel):
 class PaymentImportRowOut(BaseModel):
     """Kết quả đối chiếu 1 dòng file (preview)."""
     row_no: int = Field(..., description="Số dòng trên bảng tính (header = dòng 1)")
-    status: str = Field(..., description="matched | warned | error")
+    validation_status: str = Field(
+        ...,
+        description="Trục KIỂM — đọc/đối chiếu dòng: matched | warned | error. "
+        "Không đổi sau bước xem trước.",
+    )
+    commit_status: str = Field(
+        "pending",
+        description="Trục GHI — số phận ở bước ghi tiền: pending | "
+        "duplicate_review_required | committed | failed | not_applicable. Đây "
+        "mới là thứ nói dòng đã có tiền hay chưa; `validation_status` không "
+        "bao giờ trả lời câu hỏi đó.",
+    )
+    review_token: Optional[str] = Field(
+        None,
+        description="Phiếu xác nhận cho ĐÚNG dòng này, chỉ có khi "
+        "`commit_status='duplicate_review_required'`. Gửi lại nguyên văn trong "
+        "`confirmed_rows` để ghi tiếp.",
+    )
     message: Optional[str] = None
     citizen_id: Optional[str] = None
     profile_id: Optional[int] = None
@@ -1492,6 +1512,48 @@ class PaymentImportRowOut(BaseModel):
     reference: Optional[str] = None
     allocations: List[PaymentImportAllocationOut] = Field(default_factory=list)
     payment_ids: Optional[List[int]] = None  # populated sau commit (BV-3)
+
+
+class PaymentImportConfirmedRow(BaseModel):
+    """Một dòng kế toán đã soát và muốn ghi tiếp."""
+
+    row_no: int = Field(..., ge=1)
+    review_token: str = Field(
+        ...,
+        min_length=1,
+        max_length=2048,
+        description="Nguyên văn phiếu mà lượt commit trước trả về cho dòng này.",
+    )
+
+
+class PaymentImportCommitIn(BaseModel):
+    """Thân của lượt commit lại — danh sách dòng đã soát.
+
+    Không có cờ "bỏ qua cho toàn lô": một cờ như vậy bỏ qua cả những cảnh báo
+    sinh ra SAU khi kế toán soát, và nó không nói được người bấm đã nhìn thấy
+    những gì. Ở đây mỗi dòng mang phiếu của riêng nó.
+    """
+
+    confirmed_rows: List[PaymentImportConfirmedRow] = Field(
+        default_factory=list,
+        max_length=5000,
+        description="Tối đa 5000 — trần của một tệp nhập lô.",
+    )
+
+    @field_validator("confirmed_rows")
+    @classmethod
+    def khong_trung_row_no(
+        cls, v: List[PaymentImportConfirmedRow]
+    ) -> List[PaymentImportConfirmedRow]:
+        """Hai phần tử cùng ``row_no`` là dữ liệu mơ hồ: phiếu nào thắng?
+
+        Im lặng chọn một cái là chọn hộ người dùng ở đúng chỗ không được phép
+        đoán.
+        """
+        so = [r.row_no for r in v]
+        if len(set(so)) != len(so):
+            raise ValueError("confirmed_rows có row_no trùng nhau")
+        return v
 
 
 class PaymentImportPreviewOut(BaseModel):
@@ -1512,9 +1574,18 @@ class PaymentImportPreviewOut(BaseModel):
 class PaymentImportCommitOut(BaseModel):
     """Phản hồi pha 2 — commit (ĐÃ ghi tiền)."""
     batch_id: int
-    status: str  # committed
+    status: str  # preview | committed | void
     committed_count: int
-    failed_count: int
+    failed_count: int = Field(
+        ...,
+        description="Số dòng THỬ ghi và hỏng. KHÔNG gồm dòng bị hàng rào nghi "
+        "trùng giữ lại — xem `review_required_count`.",
+    )
+    review_required_count: int = Field(
+        0,
+        description="Số dòng đang chờ kế toán xác nhận, mỗi dòng có phiếu riêng "
+        "ở `rows[].review_token`.",
+    )
     payment_count: int
     total_amount: Decimal
     rows: List[PaymentImportRowOut] = Field(default_factory=list)
@@ -1547,6 +1618,14 @@ class PaymentImportBatchSummaryOut(BaseModel):
     # Quyền đảo lô của NGƯỜI ĐANG XEM (BE quyết theo role+status) → FE đọc flag thay
     # vì tự check role (thin-client). True khi user là manager/admin & lô 'committed'.
     can_void: bool = False
+    #: Số dòng đang bị hàng rào nghi trùng giữ lại — projection từ trạng thái
+    #: dòng, KHÔNG phải bộ đếm cộng dồn.
+    review_required_count: int = 0
+    #: Lô còn dòng chờ soát VÀ người đang xem có quyền ghi tiền ⇒ mở được
+    #: đường "ghi tiếp". Do BE quyết (khớp gate của route commit); FE đọc cờ,
+    #: KHÔNG tự suy từ `status` + counter — hai thứ đó không mang thông tin
+    #: quyền, và suy ra ở client là dựng một bản sao luật phân quyền thứ hai.
+    can_resume_commit: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

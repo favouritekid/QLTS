@@ -24,7 +24,7 @@ import type {
 } from "@/types/finance.types"
 import { invoicesKeys } from "./useInvoices"
 import { feesKeys } from "./useFees"
-import { parseDuplicateSuspected } from "@/lib/finance/duplicate-payment"
+import { docThanLoi409 } from "@/lib/finance/duplicate-review"
 
 // =====================================================================
 // QUERY KEYS
@@ -260,64 +260,22 @@ export function usePendingPaymentsByFee(
   })
 }
 
-/**
- * XEM TRƯỚC phiếu nghi trùng cho một khoản thu sắp ghi.
+/*
+ * `useDuplicatePreview` ĐÃ XOÁ (Duplicate Review Protocol).
  *
- * Hỏi **chính luật đang chạy ở máy chủ** (`find_duplicate_candidates`) thay vì
- * dựng lại luật ở giao diện. Bản dựng lại đã được thử và lệch ngay lập tức ở
- * hai chỗ giao diện không thể biết: tổng tiền **đã hoàn** của từng phiếu
- * (đường hoàn thường không đổi `Payment.status`), và **ngày lịch Việt Nam**
- * (trình duyệt tính theo múi giờ máy người dùng, máy chủ cố định
- * `Asia/Ho_Chi_Minh`).
+ * Nó hỏi `GET /api/payments?duplicate_amount=&duplicate_date=` trong lúc người
+ * dùng đang gõ, để cảnh báo sớm. Khi quyền xác nhận còn nằm ở giao diện, kết
+ * quả ấy còn được dùng làm bằng chứng "đã soát"; nay quyền ấy nằm trọn ở phiếu
+ * có chữ ký do máy chủ cấp trong thân lỗi 409, nên preview không còn quyền gì —
+ * mà chi phí thì vẫn nguyên: cache, debounce, đua request, kết quả rỗng đã cũ,
+ * và hai bộ ứng viên cùng xuất hiện để giao diện phải chọn.
  *
- * Dùng lại đường `GET /api/payments` chứ không thêm route mới: Casbin ở repo
- * này cấp quyền theo TỪNG path tường minh, nên một path mới kéo theo policy +
- * migration + test phân quyền, và sai sót ở đó là 403 im lặng trên production.
+ * Nó còn tạo một cảm giác sai: "không thấy cảnh báo nghĩa là an toàn". Preview
+ * chạy ngoài giao dịch ghi, nên nó không bao giờ hứa được điều đó.
  *
- * `staleTime: 0` cùng lý do với các hook kia: ca trùng kinh điển là mở lại form
- * ngay sau khi người khác vừa ghi.
- *
- * ⚠️ Vẫn chỉ là cảnh báo SỚM: **máy chủ giữ quyền quyết định cuối** bằng lỗi
- * 409 lúc ghi, kể cả khi lớp này không hiện gì (dữ liệu có thể đổi giữa hai
- * lần gọi).
+ * Đường cũ nay trả 410 — xem `TestXemTruocDaGoFailClosed` ở backend. Đừng dựng
+ * lại nó dưới một cái tên khác.
  */
-export function useDuplicatePreview(
-  input: {
-    feeId: number | undefined
-    amount: number | null
-    paymentDate: string | null
-    /**
-     * Số thứ tự LẦN MỞ form. Nằm trong query key nhưng KHÔNG gửi lên máy chủ.
-     *
-     * `staleTime: 0` chỉ buộc *hỏi lại*, nó không xoá dữ liệu cũ: React Query
-     * vẫn trả bản cache của lần mở trước ngay lập tức trong lúc request mới
-     * đang bay. Với một cảnh báo chống trùng thì đó là câu trả lời sai — form
-     * hiện danh sách cũ, người dùng tick, và cờ xác nhận đi kèm một bộ dữ liệu
-     * chưa ai kiểm lại. Đổi khoá theo từng lần mở là cách duy nhất để lần này
-     * bắt đầu từ chỗ trống.
-     */
-    sessionId: number
-  },
-  options?: { enabled?: boolean }
-) {
-  const { feeId, amount, paymentDate, sessionId } = input
-  const duCanCu = !!feeId && amount != null && amount > 0 && !!paymentDate
-  const filters: PaymentFilters = {
-    fee_id: feeId,
-    duplicate_amount: amount ?? undefined,
-    duplicate_date: paymentDate ?? undefined,
-  }
-  return useQuery<PaymentListPaginatedResponse, AxiosError<ApiErrorResponse>>({
-    // `sessionId` chỉ ở KHOÁ, không ở `filters` — máy chủ không cần biết đây
-    // là lần mở thứ mấy.
-    queryKey: [...paymentsKeys.list(filters), "phien", sessionId],
-    queryFn: () => paymentsApi.getPayments(filters),
-    // Chưa gõ đủ số tiền và ngày thì KHÔNG hỏi: câu hỏi thiếu vế bị máy chủ
-    // từ chối 422, và một lỗi đỏ trong lúc người dùng đang gõ dở là nhiễu.
-    enabled: (options?.enabled ?? true) && duCanCu,
-    staleTime: 0,
-  })
-}
 
 export function usePaymentsByInvoice(invoiceId: number, options?: { enabled?: boolean }) {
   return useQuery<Payment[], AxiosError<ApiErrorResponse>>({
@@ -404,7 +362,7 @@ export function useCreatePayment() {
       // Nhưng chỉ im lặng khi payload ĐÚNG cấu trúc — nếu nó méo thì form
       // không có gì để hiện, và im lặng biến thành "bấm Lưu mà không có phản
       // hồi nào". Payload méo ⇒ rơi về thông báo chung, tức fail-closed.
-      if (parseDuplicateSuspected(error.response?.data)) return
+      if (docThanLoi409(error.response?.data)) return
 
       const detail = error.response?.data?.detail
       const message =

@@ -724,6 +724,55 @@ class InvoiceRepository(BaseRepository[Invoice]):
         result = await self.db.execute(query)
         return result.scalars().first()
 
+    async def khoa_moi_invoice_cua_fee(
+        self,
+        fee_ids: List[int],
+        unit_id: Optional[int] = None,
+    ) -> List[Invoice]:
+        """Khoá MỌI hàng invoice thuộc các khoản phí — và CHỈ hàng invoice.
+
+        Dành riêng cho đường nhập lô. Khác ``get_for_update`` ở đúng một điểm,
+        nhưng điểm đó là cả lý do hàm này tồn tại: ``FOR UPDATE`` **OF invoice**
+        thay vì ``FOR UPDATE`` trần. Câu trần khoá hàng của mọi bảng trong
+        ``FROM`` — gồm cả ``fee`` — nên dùng nó ở pha khoá đầu sẽ kéo ``fee``
+        vào theo thứ tự của ``invoice``, đúng thứ mà bản vá thứ tự khoá đang
+        gỡ bỏ.
+
+        ⚠️ **Đừng "hợp nhất" hàm này với ``get_for_update``.** Ngữ nghĩa khoá
+        kèm ``fee`` của hàm kia là hàng rào mà đường ghi tay đang dựa vào (xem
+        ``payment_service.record_manual_payment``): hai request ghi vào hai đợt
+        khác nhau của cùng một khoản phí cần một điểm gặp chung. Đổi hàm kia
+        sang ``OF invoice`` sẽ lặng lẽ tháo hàng rào ấy.
+
+        Khoá **mọi** đợt, không lọc payable: đường ghi tay có thể chạm một đợt
+        đã thu đủ, và invariant cần giữ là "sau khi bắt đầu khoá Fee, nhập lô
+        tuyệt đối không xin thêm khoá Invoice nào" — muốn vậy thì pha đầu phải
+        cầm trọn tập, không cầm phần dự đoán sẽ dùng.
+
+        ``ORDER BY (fee_id, id)`` cho thứ tự khoá xác định giữa hai lượt nhập
+        lô bất kỳ. Nút ``LockRows`` nằm TRÊN nút sắp xếp, nên hàng được khoá
+        theo đúng thứ tự này.
+        """
+        if not fee_ids:
+            return []
+
+        query = (
+            select(Invoice)
+            .join(Fee)
+            .join(models.AdmissionProfile)
+            .join(models.Lead)
+            .where(Invoice.fee_id.in_(list(fee_ids)))
+            .order_by(Invoice.fee_id, Invoice.id)
+            .with_for_update(of=Invoice)
+        )
+
+        # IDOR Filter — cùng đường với get_for_update.
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
+
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
     async def get_filtered(
         self,
         skip: int = 0,
