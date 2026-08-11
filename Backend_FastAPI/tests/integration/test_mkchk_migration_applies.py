@@ -26,13 +26,28 @@ bảng không liên quan đổi cột NOT NULL.
 import os
 import subprocess
 import uuid
+from pathlib import Path
 
 import asyncpg
 import pytest
 
-pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+#  của CI là mức cho ca thường. Mỗi ca ở đây dựng một CSDL trắng
+# rồi chạy TOÀN BỘ chuỗi migration (~290 revision) — công việc phút, không phải
+# giây. Nới hạn ngay tại đây thay vì hạ  toàn shard, để mọi ca khác
+# vẫn bị giữ ở mức nghiêm.
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.asyncio,
+    pytest.mark.timeout(600),
+]
 
 _MARKER = "mkchk20260811"
+
+# 🔴 KHÔNG hard-code "/app". Đó là đường dẫn bên trong container dev; CI chạy
+# pytest trực tiếp với , nên  không
+# tồn tại và cả ba helper alembic đổ — shard đỏ đúng ở chỗ bộ test này lẽ ra
+# phải bảo vệ.
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
 _ROUTES = ("/api/payments/{id}/verify", "/api/payments/{id}/reject")
 
 
@@ -84,7 +99,7 @@ def _chay_alembic(url_goc: str, dbname: str) -> subprocess.CompletedProcess:
     moi_truong["DATABASE_URL"] = f"{phan_dau}/{dbname}"
     return subprocess.run(
         ["alembic", "upgrade", "head"],
-        cwd="/app",
+        cwd=_BACKEND_ROOT,
         env=moi_truong,
         capture_output=True,
         text=True,
@@ -175,7 +190,7 @@ def _chay_alembic_toi(url_goc: str, dbname: str, rev: str):
     moi_truong["DATABASE_URL"] = f"{phan_dau}/{dbname}"
     return subprocess.run(
         ["alembic", "upgrade", rev],
-        cwd="/app",
+        cwd=_BACKEND_ROOT,
         env=moi_truong,
         capture_output=True,
         text=True,
@@ -189,7 +204,7 @@ def _downgrade(url_goc: str, dbname: str, rev: str):
     moi_truong["DATABASE_URL"] = f"{phan_dau}/{dbname}"
     return subprocess.run(
         ["alembic", "downgrade", rev],
-        cwd="/app",
+        cwd=_BACKEND_ROOT,
         env=moi_truong,
         capture_output=True,
         text=True,
@@ -197,11 +212,16 @@ def _downgrade(url_goc: str, dbname: str, rev: str):
     )
 
 
-async def test_hang_v3_null_van_duoc_cap_allow(url_goc: str, db_trang: str):
-    """Đúng route nhưng ``v3 IS NULL`` — hình dạng cũ, KHÔNG khớp matcher.
+async def test_hang_v3_null_lam_migration_dung_lai(url_goc: str, db_trang: str):
+    """v3 IS NULL phải làm migration DỪNG, không phải "thêm allow bên cạnh".
 
-    Bản migration đầu chỉ so (ptype, v0, v1, v2) nên coi như "đã có" và bỏ qua;
-    kết quả là manager vẫn 403 dù migration báo chạy xong.
+    Adapter tuần tự hoá hàng NULL thành policy BA trường; enforcer nạp nó vào
+    model bốn trường rồi enforce() ném invalid policy size — toàn bộ
+    authorization 500. Thêm một dòng allow đúng hình dạng KHÔNG chữa được, vì
+    dòng hỏng vẫn nằm đó.
+
+    Bản trước của bộ này chỉ đếm so_allow == 1 nên xanh trong khi runtime
+    sẽ đổ — đúng loại "xanh vì đo nhầm thứ".
     """
     assert _chay_alembic_toi(url_goc, db_trang, _TRUOC).returncode == 0
 
@@ -215,21 +235,12 @@ async def test_hang_v3_null_van_duoc_cap_allow(url_goc: str, db_trang: str):
     finally:
         await conn.close()
 
-    assert _chay_alembic_toi(url_goc, db_trang, "head").returncode == 0
-
-    conn = await asyncpg.connect(_dsn_asyncpg(url_goc, db_trang))
-    try:
-        so_allow = await conn.fetchval(
-            "SELECT count(*) FROM casbin_rule WHERE ptype='p' "
-            "AND v0='role:manager' AND v1=$1 AND v2='PUT' AND v3='allow'",
-            _ROUTES[0],
-        )
-        assert so_allow == 1, (
-            "hàng v3=NULL có sẵn đã làm migration bỏ qua việc cấp allow — "
-            "manager vẫn 403"
-        )
-    finally:
-        await conn.close()
+    kq = _chay_alembic_toi(url_goc, db_trang, "head")
+    assert kq.returncode != 0, (
+        "migration phải DỪNG khi gặp hàng v3 IS NULL — thêm allow bên cạnh chỉ "
+        "để lại một policy ba trường làm enforce() ném invalid policy size"
+    )
+    assert "invalid policy size" in (kq.stdout + kq.stderr).lower()
 
 
 async def test_co_deny_thi_migration_dung_lai(url_goc: str, db_trang: str):
@@ -290,3 +301,36 @@ async def test_downgrade_khong_xoa_policy_cua_nguoi_khac(
         )
     finally:
         await conn.close()
+
+
+async def test_enforcer_that_cho_manager_qua(url_goc: str, db_trang: str):
+    """Policy migration tạo ra phải ENFORCE được, không chỉ tồn tại trong SQL.
+
+    Đếm dòng trong `casbin_rule` không chứng minh authorization chạy: hàng sai
+    hình dạng vẫn "có mặt" trong bảng mà làm `enforce()` ném. Ca này nạp bằng
+    chính `AsyncEnforcer` + adapter mà ứng dụng dùng, rồi hỏi đúng câu ứng dụng
+    hỏi.
+    """
+    import casbin
+    from casbin_async_sqlalchemy_adapter import Adapter as AsyncCasbinAdapter
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    assert _chay_alembic(url_goc, db_trang).returncode == 0
+
+    phan_dau = url_goc.rsplit("/", 1)[0]
+    engine = create_async_engine(f"{phan_dau}/{db_trang}")
+    try:
+        adapter = AsyncCasbinAdapter(engine)
+        model_path = _BACKEND_ROOT / "auth_model.conf"
+        assert model_path.exists(), f"không thấy {model_path}"
+
+        enforcer = casbin.AsyncEnforcer(str(model_path), adapter)
+        await enforcer.load_policy()
+
+        for route in _ROUTES:
+            assert enforcer.enforce("role:manager", route, "PUT") is True, (
+                f"enforcer TỪ CHỐI (role:manager, {route}, PUT) dù policy đã "
+                "nằm trong bảng — hàng có mặt không đồng nghĩa với enforce được"
+            )
+    finally:
+        await engine.dispose()

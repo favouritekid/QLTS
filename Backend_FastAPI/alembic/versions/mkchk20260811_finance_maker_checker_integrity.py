@@ -96,6 +96,45 @@ def upgrade() -> None:
                 "cách tường minh rồi chạy lại."
             )
 
+        # 🔴 `v3 IS NULL` cũng phải DỪNG, và vì một lý do nặng hơn deny.
+        #
+        # Adapter tuần tự hoá hàng ấy thành policy BA trường, còn model khai
+        # bốn. Khi enforcer nạp phải nó, `enforce()` ném
+        # `RuntimeError: invalid policy size` — tức toàn bộ authorization 500,
+        # chứ không phải "thiếu một quyền". Và nó nổ kể cả khi dòng allow bốn
+        # trường đã nằm ngay cạnh: thêm allow KHÔNG chữa được, vì dòng hỏng vẫn
+        # còn đó.
+        #
+        # Nên migration không tự dọn (xoá/ghi đè một hàng policy là quyết định
+        # về quyền, không phải dọn rác) mà dừng hẳn để người vận hành xử lý.
+        co_null = conn.execute(
+            sa.text(
+                """
+                SELECT count(*) FROM casbin_rule
+                WHERE ptype = 'p'
+                  AND v0 = CAST(:v0 AS varchar)
+                  AND v1 = CAST(:v1 AS varchar)
+                  AND v2 = CAST(:v2 AS varchar)
+                  AND v3 IS NULL
+                """
+            ),
+            {"v0": v0, "v1": v1, "v2": v2},
+        ).scalar_one()
+        if co_null:
+            raise RuntimeError(
+                f"[{_MARKER}] Có {co_null} dòng policy ({v0}, {v1}, {v2}) với "
+                "v3 IS NULL — hình dạng BA trường mà adapter sẽ nạp vào một "
+                "model bốn trường, và enforce() sẽ ném 'invalid policy size' "
+                "(authorization 500 toàn hệ thống). Thêm allow bên cạnh KHÔNG "
+                "chữa được.\n"
+                "    Xử lý trước khi chạy lại, ví dụ:\n"
+                "      UPDATE casbin_rule SET v3 = 'allow'\n"
+                "       WHERE ptype='p' AND v0=%r AND v1=%r AND v2=%r "
+                "AND v3 IS NULL;\n"
+                "    (hoặc DELETE nếu dòng đó không còn dùng)"
+                % (v0, v1, v2)
+            )
+
     # ── 1. Casbin: idempotent theo ĐỦ BỐN TRƯỜNG, có provenance ──
     #
     # 🔴 So cả `v3`. Bản trước chỉ so (ptype, v0, v1, v2): nếu DB đã có đúng
