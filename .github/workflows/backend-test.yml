@@ -338,6 +338,9 @@ jobs:
               tests/services/test_tuition_export_service.py
               tests/services/test_finance_report_export.py
               tests/unit/test_fee_labels_match_frontend.py
+              tests/api/test_payment_maker_checker.py
+              tests/unit/test_finance_decision_policies_have_migration.py
+              tests/integration/test_mkchk_migration_applies.py
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability
