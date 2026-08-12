@@ -1201,10 +1201,28 @@ async def auto_verify_payment(
 
     # Money-math GỐC = verify_payment (1 nguồn sự thật chung, tránh 2 đường ghi tiền
     # trôi dạt). is_fully_paid GỒM penalty → trả đủ GỐC nhưng còn phạt thì 'partial'.
-    from app.services.payment_service import apply_verified_payment_balances
+    from app.services.payment_service import (
+        apply_verified_payment_balances,
+        mo_so_tien_thua,
+    )
 
-    fee_balance_before, fee_remaining = apply_verified_payment_balances(
+    fee_balance_before, fee_remaining, excess = apply_verified_payment_balances(
         invoice=invoice, fee=fee, amount=amount, now=now
+    )
+
+    # Nhập lô đi qua ĐÚNG hàm money-math của ghi tay, nên nó cũng phải mở sổ
+    # tiền thừa ở đúng chỗ ấy — nếu không, hai đường ghi tiền lại lệch nhau, lần
+    # này ở chỗ nguy hiểm hơn: một đường ghi nợ, một đường im lặng.
+    #
+    # Thực tế lô hiếm khi sinh khoản thừa vì phân bổ FIFO chỉ rót tối đa bằng
+    # số còn nợ của từng đợt; nhưng "hiếm" không phải "không", và ca kiểm phải
+    # chứng minh lô KHÔNG sinh overpayment giả trong luồng thường.
+    await mo_so_tien_thua(
+        db,
+        payment=payment,
+        invoice=invoice,
+        admission_profile_id=fee.admission_profile_id,
+        excess=excess,
     )
 
     db.add(

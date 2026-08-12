@@ -98,10 +98,28 @@ class OverpaymentService:
         overpayment = await self._get_overpayment_locked(overpayment_id, unit_id)
         await self._ensure_resolvable(overpayment)
 
-        target_invoice = await self.invoice_repo.get_for_update(
-            target_invoice_id,
-            unit_id,
-        )
+        # ── PHA KHOÁ 1/2: MỌI invoice liên quan, theo id tăng dần ───────────
+        #
+        # Quy ước thứ tự khoá toàn cục (#541): **invoice trước — id tăng dần —
+        # rồi mới tới fee**, và sau khi đã cầm Fee thì tuyệt đối không xin thêm
+        # khoá Invoice nào.
+        #
+        # Bản trước ở đây khoá target_invoice → target_fee → SOURCE_invoice:
+        # xin Invoice sau khi đã cầm Fee, đúng thứ quy ước cấm. Hai lượt áp
+        # khoản dư ngược chiều trên cùng hồ sơ (X→Y và Y→X) khi ấy ôm chéo và
+        # Postgres bắn 40P01 — comment cũ tuyên bố đã tránh ABBA nhưng code thì
+        # chưa. `get_for_update` KHÔNG dùng được ở pha này: nó `FOR UPDATE`
+        # trần nên kéo luôn fee/profile/lead vào theo thứ tự của invoice.
+        invoice_da_khoa = {
+            inv.id: inv
+            for inv in await self.invoice_repo.khoa_invoice_theo_id(
+                [target_invoice_id, overpayment.invoice_id],
+                unit_id,
+            )
+        }
+        target_invoice = invoice_da_khoa.get(target_invoice_id)
+        source_invoice = invoice_da_khoa.get(overpayment.invoice_id)
+
         if not target_invoice:
             raise ResourceNotFoundError("Target invoice not found")
 
@@ -112,7 +130,17 @@ class OverpaymentService:
                 f"{list(PAYABLE_INVOICE_STATUSES)}"
             )
 
-        target_fee = await self.fee_repo.get_for_update(target_invoice.fee_id, unit_id)
+        # ── PHA KHOÁ 2/2: fee theo id tăng dần, sau khi đã cầm trọn invoice ──
+        fee_da_khoa = {}
+        for _fee_id in sorted(
+            {target_invoice.fee_id}
+            | ({source_invoice.fee_id} if source_invoice else set())
+        ):
+            _fee = await self.fee_repo.get_for_update(_fee_id, unit_id)
+            if _fee:
+                fee_da_khoa[_fee_id] = _fee
+
+        target_fee = fee_da_khoa.get(target_invoice.fee_id)
         if not target_fee:
             raise ResourceNotFoundError("Target fee not found")
 
@@ -154,6 +182,57 @@ class OverpaymentService:
                 "Overpayment amount exceeds target invoice remaining balance"
             )
 
+        # ── CHUYỂN, KHÔNG PHẢI CỘNG THÊM ────────────────────────────────────
+        #
+        # `paid_amount` phản ánh TOÀN BỘ tiền thật đã nhận, kể cả phần vượt —
+        # `OverpaymentRecord` chỉ là nghĩa vụ chưa phân bổ, không phải nơi giữ
+        # tiền ngoài sổ. Nên áp khoản dư là DI CHUYỂN tiền: rời hoá đơn nguồn
+        # rồi mới vào hoá đơn đích.
+        #
+        # Thiếu vế trừ nguồn thì cùng một khoản được ghi nhận hai lần: thu
+        # 8.070.000 cho hoá đơn 8.000.000 rồi áp 70.000 sang đợt sau ⇒ hệ thống
+        # phân bổ 8.140.000 trong khi tiền thật chỉ có 8.070.000. Đã đo được.
+        #
+        # Nguồn đã được khoá ở hai pha trên (invoice trước, fee sau) — ở đây
+        # chỉ tra cứu, KHÔNG xin thêm khoá nào nữa.
+        if not source_invoice:
+            raise ResourceNotFoundError("Source invoice not found")
+
+        source_fee = fee_da_khoa.get(source_invoice.fee_id)
+        if not source_fee:
+            raise ResourceNotFoundError("Source fee not found")
+
+        source_fee_balance_before = (
+            source_fee.final_amount - source_fee.paid_amount - source_fee.waived_amount
+        )
+
+        # Rời nguồn.
+        source_invoice.paid_amount -= apply_amount
+        if source_invoice.is_fully_paid:
+            source_invoice.status = InvoiceStatusEnum.paid.value
+        elif source_invoice.paid_amount > 0:
+            source_invoice.status = InvoiceStatusEnum.partial.value
+        else:
+            source_invoice.status = InvoiceStatusEnum.issued.value
+
+        if source_fee.id != target_fee.id:
+            # Khác Fee: nguồn giảm, đích tăng — tổng hai Fee không đổi.
+            source_fee.paid_amount -= apply_amount
+            source_fee.version += 1
+            _sf_remaining = (
+                source_fee.final_amount
+                - source_fee.paid_amount
+                - source_fee.waived_amount
+            )
+            if _sf_remaining <= 0:
+                source_fee.status = FeeStatusEnum.paid.value
+            elif source_fee.paid_amount > 0:
+                source_fee.status = FeeStatusEnum.partial.value
+            else:
+                source_fee.status = FeeStatusEnum.invoiced.value
+        # Cùng Fee: tiền chỉ đổi chỗ giữa hai đợt của chính nó, nên
+        # `fee.paid_amount` KHÔNG đổi — trừ rồi cộng lại đúng bằng nhau.
+
         fee_balance_before = (
             target_fee.final_amount - target_fee.paid_amount - target_fee.waived_amount
         )
@@ -165,7 +244,11 @@ class OverpaymentService:
         elif target_invoice.paid_amount > 0:
             target_invoice.status = InvoiceStatusEnum.partial.value
 
-        target_fee.paid_amount += apply_amount
+        if source_fee.id != target_fee.id:
+            target_fee.paid_amount += apply_amount
+        # Cùng Fee thì KHÔNG cộng: tiền chỉ đổi chỗ giữa hai đợt của chính Fee
+        # ấy. Cộng ở đây (mà không trừ ở nhánh nguồn) chính là chỗ tổng tiền
+        # phân bổ phình ra so với tiền thật đã nhận.
         target_fee.last_payment_at = datetime.now(timezone.utc)
         target_fee.version += 1
 
@@ -189,14 +272,58 @@ class OverpaymentService:
             f"Applied overpayment {overpayment.id} "
             f"to invoice {target_invoice.invoice_number}"
         )
+        # Audit: một phép CHUYỂN phải để lại hai vế mang cùng mã, nếu không sổ
+        # chỉ kể một nửa câu chuyện — người đọc thấy đích được cộng mà không
+        # biết tiền đến từ đâu.
+        ma_chuyen = f"OVERPAY-{overpayment.id}"
+
+        # HAI VẾ, KHÔNG ĐIỀU KIỆN. Bản trước chỉ ghi vế âm khi hai Fee khác
+        # nhau, nên lượt chuyển giữa hai đợt của CÙNG một khoản phí để lại đúng
+        # một dòng `+apply_amount` với `balance_before == balance_after`: sổ nói
+        # có 70.000 chảy vào mà số dư không nhúc nhích. Mọi báo cáo cộng cột
+        # `amount` của `adjustment` đều lệch đúng chừng ấy.
+        #
+        # Bất biến giữ trên MỌI dòng: ``balance_after == balance_before -
+        # amount``. Ở ca cùng Fee, tiền rời đợt nguồn rồi mới vào đợt đích, nên
+        # số dư đi B → B + apply → B; ghi B → B cho cả hai vế sẽ phá bất biến ấy.
+        cung_fee = source_fee.id == target_fee.id
+        source_balance_after = (
+            source_fee_balance_before + apply_amount
+            if cung_fee
+            else (
+                source_fee.final_amount
+                - source_fee.paid_amount
+                - source_fee.waived_amount
+            )
+        )
+        self.db.add(
+            PaymentTransaction(
+                payment_id=overpayment.payment_id,
+                fee_id=source_fee.id,
+                transaction_type=TransactionTypeEnum.adjustment.value,
+                amount=-apply_amount,  # vế NỢ: tiền rời đợt nguồn
+                balance_before=source_fee_balance_before,
+                balance_after=source_balance_after,
+                external_reference=ma_chuyen,
+                performed_by_id=user_id,
+                notes=(
+                    f"Chuyển khoản dư #{overpayment.id} sang hóa đơn "
+                    f"#{target_invoice_id} "
+                    + ("(cùng khoản phí, khác đợt)" if cung_fee else "(khoản phí khác)")
+                ),
+            )
+        )
+
         transaction = PaymentTransaction(
             payment_id=overpayment.payment_id,
             fee_id=target_fee.id,
             transaction_type=TransactionTypeEnum.adjustment.value,
-            amount=apply_amount,
-            balance_before=fee_balance_before,
+            amount=apply_amount,  # vế CÓ
+            balance_before=(
+                fee_balance_before + apply_amount if cung_fee else fee_balance_before
+            ),
             balance_after=fee_remaining,
-            external_reference=f"OVERPAY-{overpayment.id}",
+            external_reference=ma_chuyen,
             performed_by_id=user_id,
             notes=notes or default_note,
         )
