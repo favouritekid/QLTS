@@ -1,0 +1,5 @@
+services:
+  nginx:
+    volumes: !override
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx-test-certs:/etc/letsencrypt:ro

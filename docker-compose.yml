@@ -232,12 +232,35 @@ services:
     restart: unless-stopped
     profiles:
       - production
+    environment:
+      # envsubst chạy TRONG container nên hai biến này phải có mặt Ở ĐÓ.
+      # `--env-file` của Compose chỉ nội suy tệp compose, KHÔNG bơm biến vào
+      # container. Thiếu chúng thì `${DOMAIN}` render thành chuỗi rỗng và mọi
+      # Host rơi vào catch-all `ssl_reject_handshake`.
+      # KHÔNG dùng `${DOMAIN:?}`: Compose nội suy TOÀN BỘ tệp TRƯỚC khi lọc
+      # profile, nên `:?` làm gãy cả `docker compose up -d` của dev (không hề
+      # bật profile production, không hề chạy nginx). Đã tái hiện: bản có `:?`
+      # gãy khi thiếu DOMAIN, bản gốc thì không.
+      # Fail-closed chuyển xuống nơi thật sự chạy nginx: healthcheck dưới đây
+      # đỏ ngay nếu DOMAIN rỗng, và `scripts/deploy.sh` chặn trước khi khởi động.
+      DOMAIN: ${DOMAIN:-}
+      NGINX_ADMISSION_FROZEN: ${NGINX_ADMISSION_FROZEN:-false}
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      # Template phải nằm ở /etc/nginx/templates — thư mục DUY NHẤT mà entrypoint
+      # chính thức của nginx quét (`20-envsubst-on-templates.sh`:
+      # template_dir=/etc/nginx/templates, output_dir=/etc/nginx/conf.d).
+      # Trước đây template được mount thẳng vào conf.d, nơi `nginx.conf` chỉ
+      # `include *.conf` — nên nó KHÔNG bao giờ được render và nginx chạy với
+      # KHÔNG server block nào. Prod sống sót nhờ một `default.conf` đã render
+      # nằm NGOÀI git; clean checkout thì chết. Sự cố 12-08-2026.
+      - ./nginx/templates:/etc/nginx/templates:ro
+      # KHÔNG mount conf.d: entrypoint cần GHI bản render vào đó. Cùng script
+      # trên có nhánh `if [ ! -w "$$output_dir" ]` → báo lỗi và bỏ render nếu
+      # conf.d là read-only.
       - certbot_certs:/etc/letsencrypt:ro
       - certbot_www:/var/www/certbot:ro
       - backend_uploads:/app/uploads:ro
@@ -252,14 +275,25 @@ services:
         limits:
           memory: 128M
     healthcheck:
-      # Host header MUST match server_name in default.conf.template
-      # because the new `default_server` catch-all (PR #325) returns 444
-      # for any Host that does not match ${DOMAIN} / www.${DOMAIN}.
-      # wget defaults to `Host: 127.0.0.1` → would hit catch-all → fail.
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "--header=Host: ${DOMAIN}", "http://127.0.0.1/health"]
-      interval: 30s
+      # Ba lớp, fail-closed. `nginx -t` KHÔNG nằm trong đây: một config rỗng
+      # vẫn `syntax is ok`, nên nó không phân biệt được "đang phục vụ" với
+      # "không có server block nào" — đúng cái đã lừa cả kíp trực 12-08-2026.
+      #   1. DOMAIN phải có mặt trong container (rỗng ⇒ render hỏng);
+      #   2. bản render phải tồn tại VÀ mang đúng server_name;
+      #   3. phải phục vụ được /health với Host khớp server_name — catch-all
+      #      `default_server` trả 444 cho Host lạ, và trang mặc định của image
+      #      nginx không có /health, nên bước này loại cả hai ca xanh giả.
+      test:
+        - CMD-SHELL
+        - >-
+          test -n "$$DOMAIN"
+          && grep -q "server_name $$DOMAIN" /etc/nginx/conf.d/default.conf
+          && wget --no-verbose --tries=1 --spider
+          --header="Host: $$DOMAIN" http://127.0.0.1/health
+      interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 10s
     logging: *default-logging
 
   # --- Certbot (SSL Certificate Management) ---

@@ -41,13 +41,22 @@ log "Setting up SSL for: $DOMAIN"
 log "Certbot email: $EMAIL"
 
 # =============================================================================
-# Step 1: Create temporary Nginx config (HTTP only)
+# Step 1+2: Nginx BOOTSTRAP tạm — HTTP-only, chỉ để ACME challenge đi qua
 # =============================================================================
-log "Step 1: Creating temporary HTTP-only Nginx config..."
+# Vì sao không dùng service `nginx` của compose: từ 12-08-2026 template được
+# render TRONG container bởi entrypoint, và bản render đầy đủ tham chiếu
+# chứng thư CHƯA tồn tại ở bước này ⇒ nginx sẽ không khởi động được. Trước đây
+# script ghi đè `nginx/conf.d/default.conf` trên host để lách; chính lối đó đẻ
+# ra tệp ngoài git đã làm site chết khi cutover từ checkout sạch.
+#
+# Bootstrap nay là một container RIÊNG, dựng từ config tạm trong thư mục tạm,
+# không đụng gì trong repo.
+log "Step 1+2: Starting bootstrap Nginx (HTTP only, ACME challenge)..."
 
-mkdir -p nginx/conf.d
+BOOTSTRAP_DIR=$(mktemp -d)
+trap 'rm -rf "$BOOTSTRAP_DIR"; docker rm -f qlts-nginx-bootstrap >/dev/null 2>&1 || true' EXIT
 
-cat > nginx/conf.d/default.conf << EOF
+cat > "$BOOTSTRAP_DIR/default.conf" << EOF
 server {
     listen 80;
     server_name $DOMAIN www.$DOMAIN;
@@ -63,20 +72,29 @@ server {
 }
 EOF
 
-# =============================================================================
-# Step 2: Start Nginx (HTTP only)
-# =============================================================================
-log "Step 2: Starting Nginx (HTTP only)..."
-docker compose -f docker-compose.yml --profile production --env-file .env.production up -d nginx
+# Dùng chung volume webroot với certbot của compose để challenge tới được.
+WEBROOT_VOL="$(basename "$(pwd)")_certbot_www"
+docker volume inspect "$WEBROOT_VOL" >/dev/null 2>&1 || WEBROOT_VOL="qlts_certbot_www"
+
+docker rm -f qlts-nginx-bootstrap >/dev/null 2>&1 || true
+docker run -d --name qlts-nginx-bootstrap \
+    -p 80:80 \
+    -v "$BOOTSTRAP_DIR/default.conf:/etc/nginx/conf.d/default.conf:ro" \
+    -v "$WEBROOT_VOL:/var/www/certbot" \
+    nginx:1.27-alpine \
+    || error "Không dựng được nginx bootstrap"
 sleep 3
 
-# =============================================================================
 # Step 3: Obtain certificate via ACME challenge
 # =============================================================================
 log "Step 3: Requesting SSL certificate from Let's Encrypt..."
 
-docker compose -f docker-compose.yml --profile production --env-file .env.production run --rm certbot \
-    certbot certonly \
+# `--no-deps` là BẮT BUỘC: `certbot` khai `depends_on: nginx`, nên thiếu nó
+# Compose sẽ kéo nginx PRODUCTION lên — tranh cổng 80 với container
+# bootstrap đang chạy, và bản thân nó cũng chưa khởi động được vì chứng
+# thư còn chưa tồn tại.
+docker compose -f docker-compose.yml --profile production --env-file .env.production run --rm --no-deps --entrypoint certbot certbot \
+    certonly \
     --non-interactive \
     --webroot \
     --webroot-path=/var/www/certbot \
@@ -88,16 +106,29 @@ docker compose -f docker-compose.yml --profile production --env-file .env.produc
     || error "Certbot failed. Ensure DNS A record points to this server."
 
 # =============================================================================
-# Step 4: Generate full Nginx config with SSL
+# Step 4+5: Bàn giao cho service nginx thật
 # =============================================================================
-log "Step 4: Generating full Nginx config with SSL..."
-envsubst '${DOMAIN}' < nginx/conf.d/default.conf.template > nginx/conf.d/default.conf
+log "Step 4: Stopping bootstrap Nginx..."
+docker rm -f qlts-nginx-bootstrap >/dev/null 2>&1 || true
 
-# =============================================================================
-# Step 5: Reload Nginx with SSL
-# =============================================================================
-log "Step 5: Reloading Nginx with SSL..."
-docker compose -f docker-compose.yml --profile production exec nginx nginx -s reload
+log "Step 5: Starting production Nginx (template render trong container)..."
+# KHÔNG `envsubst` trên host và KHÔNG `nginx -s reload`: entrypoint của image
+# render template lúc khởi động, nên phải để nó khởi động mới.
+docker compose -f docker-compose.yml --profile production --env-file .env.production \
+    up -d --no-deps --force-recreate nginx \
+    || error "Không khởi động được nginx production"
+
+log "Chờ nginx healthy..."
+NGINX_OK=0
+for _ in $(seq 1 24); do
+    H=$(docker inspect -f '{{.State.Health.Status}}' \
+        "$(docker compose -f docker-compose.yml --profile production \
+            --env-file .env.production ps -q nginx)" 2>/dev/null || echo "")
+    [ "$H" = "healthy" ] && { NGINX_OK=1; break; }
+    [ "$H" = "unhealthy" ] && break
+    sleep 5
+done
+[ "$NGINX_OK" -eq 1 ] || error "nginx không healthy sau khi cấp chứng thư (trạng thái: ${H:-khong-doc-duoc})"
 
 log "========================================="
 log "SSL setup completed successfully!"

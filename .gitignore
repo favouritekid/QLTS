@@ -326,7 +326,14 @@ Documents/reports/officer_*.csv
 # nên `git status` trên prod LUÔN bẩn — khiến người vận hành quen mắt bỏ qua
 # trạng thái bẩn, và 5 thay đổi tay khác nằm đó nhiều tháng không ai thấy
 # (audit 2026-07-20).
-nginx/conf.d/default.conf
+# `nginx/conf.d/default.conf` KHONG con duoc sinh trong repo: tu 12-08-2026
+# template nam o `nginx/templates/` va entrypoint nginx render thang vao
+# `/etc/nginx/conf.d` BEN TRONG container. Dong ignore cu tung che dau viec
+# ban render la artifact ngoai git — va do la goc cua su co cutover.
+
+# Fixture cuc bo cua e2e nginx packaging (sinh tai cho, khong commit)
+nginx-test-certs/
+nginx-test.env
 
 # Bộ smoke sinh file id sau khi gieo dữ liệu (mỗi lần chạy một bộ id khác nhau).
 # Ignore để `git status` không bẩn sau mỗi lần chạy — trạng thái bẩn quen mắt là

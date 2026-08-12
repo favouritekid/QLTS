@@ -42,7 +42,7 @@ test_render() {
     DOMAIN=example.test \
     NGINX_ADMISSION_FROZEN="$frozen_val" \
         envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' \
-            < nginx/conf.d/default.conf.template \
+            < nginx/templates/default.conf.template \
             > "$rendered"
 
     echo "=== Render: $label ==="

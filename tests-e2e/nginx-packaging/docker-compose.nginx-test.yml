@@ -1,0 +1,66 @@
+# Override CÔ LẬP để kiểm nginx packaging bằng CHÍNH `docker-compose.yml` production.
+#
+# Vì sao tồn tại: sự cố 12-08-2026 — một clean checkout chỉ có
+# `nginx/conf.d/default.conf.template`, trong khi `nginx.conf` chỉ
+# `include /etc/nginx/conf.d/*.conf` và entrypoint chính thức của nginx CHỈ render
+# template nằm ở `/etc/nginx/templates/`. Kết quả: nginx chạy KHÔNG có server block
+# nào — `nginx -t` vẫn PASS, container vẫn Up, Docker vẫn publish 80/443, nhưng
+# không ai phục vụ traffic. Prod sống sót nhờ một `default.conf` đã render nằm
+# NGOÀI git.
+#
+# Override này CHỈ cô lập tài nguyên (cổng loopback, image có sẵn, cert tự ký,
+# volume riêng). Nó KHÔNG thay cấu hình nginx bằng bản tĩnh — phép kiểm phải đi
+# qua đúng template production, nếu không nó không chứng minh được gì.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.nginx-test.yml \
+#     --profile production --env-file nginx-test.env -p qltsngx up -d
+
+services:
+  postgres:
+    ports: []
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    ports: []
+
+  backend:
+    image: ${TEST_BACKEND_IMAGE:?can TEST_BACKEND_IMAGE}
+    build: !reset null
+    ports: []
+    environment:
+      RUN_MIGRATIONS_ON_STARTUP: "true"
+      RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: "false"
+      RUN_CASBIN_LOAD_ON_STARTUP: "true"
+
+  celery-worker:
+    image: ${TEST_BACKEND_IMAGE:?}
+    build: !reset null
+
+  celery-beat:
+    image: ${TEST_BACKEND_IMAGE:?}
+    build: !reset null
+
+  frontend:
+    image: ${TEST_FRONTEND_IMAGE:?can TEST_FRONTEND_IMAGE}
+    build: !reset null
+    ports: []
+
+  nginx:
+    # CHỈ loopback, cổng lạ — không đụng 80/443 của máy.
+    # `!override` là bắt buộc: mặc định Compose GỘP danh sách ports, nên không
+    # có nó thì 80/443 của compose production vẫn được bind.
+    ports: !override
+      - "127.0.0.1:${TEST_HTTP_PORT:-18080}:80"
+      - "127.0.0.1:${TEST_HTTPS_PORT:-18443}:443"
+    volumes:
+      # Cert tự ký thay cho volume certbot (tài nguyên, không phải config).
+      - ./nginx-test-certs:/etc/letsencrypt:ro
+
+  certbot:
+    # Không cần certbot trong stack kiểm.
+    profiles:
+      - khong-dung

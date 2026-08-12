@@ -176,8 +176,20 @@ log "Step 3/8: Processing Nginx template..."
 # (paired with backend ADMISSION_FROZEN=true per RUNBOOK §6.1).
 export NGINX_ADMISSION_FROZEN="${NGINX_ADMISSION_FROZEN:-false}"
 
-envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' < nginx/conf.d/default.conf.template > nginx/conf.d/default.conf
-log "Nginx config generated (domain=$DOMAIN, admission_frozen=$NGINX_ADMISSION_FROZEN)"
+# Từ 12-08-2026 template KHÔNG còn được render trên host. Nó nằm ở
+# `nginx/templates/` và entrypoint chính thức của image nginx render nó vào
+# `/etc/nginx/conf.d/` NGAY TRONG container lúc khởi động. Render trên host là
+# thứ đã sinh ra một `nginx/conf.d/default.conf` nằm ngoài git — và khi cutover
+# chạy từ một checkout sạch (không có tệp đó) thì site chết.
+#
+# Ở đây chỉ còn việc kiểm biến, fail-closed TRƯỚC khi đụng gì:
+if [ -z "${DOMAIN:-}" ]; then
+    error "DOMAIN chưa được đặt trong .env.production — nginx sẽ render server_name rỗng"
+fi
+if [ ! -f nginx/templates/default.conf.template ]; then
+    error "Thiếu nginx/templates/default.conf.template — entrypoint nginx sẽ không có gì để render"
+fi
+log "Nginx template sẽ được render TRONG container (domain=$DOMAIN, admission_frozen=$NGINX_ADMISSION_FROZEN)"
 
 # =============================================================================
 # Step 4: Build Docker images
@@ -350,16 +362,38 @@ done
 # Validate first (bad config → keep last-good, don't reload) then gracefully
 # reload (SIGHUP, zero-downtime). Non-fatal so a fresh-start deploy (nginx just
 # loaded the config) is unaffected.
-log "Step 8b: Reloading nginx (apply re-rendered config)..."
-if docker compose -f docker-compose.yml --profile production --env-file .env.production exec -T nginx nginx -t >/dev/null 2>&1; then
-    if docker compose -f docker-compose.yml --profile production --env-file .env.production exec -T nginx nginx -s reload; then
-        log "  nginx reloaded — config applied"
-    else
-        log "  WARNING: nginx reload failed — check 'docker compose logs nginx'"
-    fi
+log "Step 8b: Applying nginx config (recreate + wait healthy)..."
+
+# ⚠️ `nginx -s reload` KHÔNG còn đủ. Template nay được render TRONG container
+# lúc khởi động; một tiến trình nginx đang chạy sẽ reload lại đúng bản render
+# CŨ của chính nó. Đổi nội dung template mà chỉ reload ⇒ config mới không bao
+# giờ được áp, và không có dấu hiệu nào báo điều đó.
+#
+# `--no-deps` để không kéo backend/frontend recreate theo — chúng vừa được khởi
+# động ở Step 8 và đang healthy.
+if docker compose -f docker-compose.yml --profile production --env-file .env.production         up -d --no-deps --force-recreate nginx; then
+    log "  nginx đã được recreate — chờ healthy..."
 else
-    log "  WARNING: nginx config test FAILED — NOT reloading (keeps last-good config). Fix nginx/conf.d/default.conf"
+    error "Không recreate được nginx"
 fi
+
+# Chờ healthcheck THẬT, không dừng ở `nginx -t`: một config rỗng vẫn
+# `syntax is ok`, nên `-t` xanh không chứng minh có server block nào đang phục
+# vụ. Healthcheck kiểm bản render + server_name + một request /health thật.
+NGINX_OK=0
+for _ in $(seq 1 24); do
+    NGINX_HEALTH=$(docker inspect -f '{{.State.Health.Status}}'         "$(docker compose -f docker-compose.yml --profile production             --env-file .env.production ps -q nginx)" 2>/dev/null || echo "")
+    if [ "$NGINX_HEALTH" = "healthy" ]; then NGINX_OK=1; break; fi
+    if [ "$NGINX_HEALTH" = "unhealthy" ]; then break; fi
+    sleep 5
+done
+
+if [ "$NGINX_OK" -ne 1 ]; then
+    log "  nginx KHÔNG healthy (trạng thái: ${NGINX_HEALTH:-khong-doc-duoc})"
+    docker compose -f docker-compose.yml --profile production --env-file .env.production         logs --tail=50 nginx || true
+    error "nginx không phục vụ được sau khi recreate — KHÔNG tuyên bố deploy thành công"
+fi
+log "  nginx healthy — config mới đã được áp"
 
 # =============================================================================
 # Done
