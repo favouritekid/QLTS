@@ -205,66 +205,82 @@ for S in backend celery-worker celery-beat frontend; do
         "$S" "$CID" "$IMG_ID" "qlts-${S}:${QLTS_ROLLBACK_TAG}" >> "$MANIFEST"
 done
 
-# Push registry — VẪN trong `set -e`. Hỏng ở đây là DỪNG, không phải ghi chú.
-#
-# REGISTRY phải khai TƯỜNG MINH. `docker push qlts-backend:<tag>` KHÔNG đẩy vào
-# kho của dự án: một ref không có namespace được Docker phân giải thành
-# `docker.io/library/qlts-backend` — không gian tên của các ảnh thư viện chính
-# thức, ta không sở hữu. Ref trỏ kho riêng bắt buộc có dạng `namespace/repo`
-# hoặc `registry/namespace/repo`. Bản nháp trước thiếu đúng chỗ này, nên toàn
-# bộ đường off-host chưa từng chạy nổi một lần.
-QLTS_ROLLBACK_REGISTRY="${QLTS_ROLLBACK_REGISTRY:?dat vd ghcr.io/favouritekid hoac <acct>.dkr.ecr.<region>.amazonaws.com/qlts}"
+# Từ đây rẽ HAI NHÁNH, và cả hai đều chạy được NGUYÊN KHỐI. Bản trước đặt
+# `${QLTS_ROLLBACK_REGISTRY:?…}` ở mức khối, nên máy không có registry chết ngay
+# tại dòng đó — dù chính tài liệu bảo "có thể dùng QLTS_ROLLBACK_LOCAL_ONLY=1".
+# Người trực khi ấy phải tự hiểu mà bỏ qua một đoạn giữa. Một quy trình cứu hộ
+# đòi đọc-hiểu-rồi-chọn-tay là quy trình sẽ sai vào lúc 3 giờ sáng.
+QLTS_ROLLBACK_LOCAL_ONLY="${QLTS_ROLLBACK_LOCAL_ONLY:-0}"
 
-# Máy KHÔNG có registry: đừng chạy khối này, và phải khai rủi ro tường minh
-# `QLTS_ROLLBACK_LOCAL_ONLY=1` khi gọi preflight. Chạy `push` rồi mặc nó hỏng là
-# tự dựng lại đúng cái bẫy: tag cục bộ có, preflight xanh, tài sản không tồn tại
-# ở đâu ngoài đĩa máy này.
-for S in backend celery-worker celery-beat frontend; do
-    REMOTE="${QLTS_ROLLBACK_REGISTRY}/qlts-${S}:${QLTS_ROLLBACK_TAG}"
-    docker tag "qlts-${S}:${QLTS_ROLLBACK_TAG}" "$REMOTE"
-    docker push "$REMOTE"
-    # DIGEST là thứ duy nhất bất biến: tag ở xa có thể bị đẩy đè bởi ảnh khác,
-    # digest thì không. Preflight KÉO ẢNH VỀ BẰNG chuỗi này (không phải bằng
-    # tag), nên tag trôi mới thật sự thành chuyện không liên quan.
+if [ "$QLTS_ROLLBACK_LOCAL_ONLY" = "1" ]; then
+    # RỦI RO ĐÃ KHAI: ảnh và bản kê chỉ nằm trên đĩa máy này. Mất máy, hỏng
+    # đĩa, hay một lần `docker image prune` = KHÔNG còn đường lùi. Chỉ dùng khi
+    # thật sự không có registry, và phải ghi vào biên bản cutover.
+    echo "CANH BAO: QLTS_ROLLBACK_LOCAL_ONLY=1 — KHONG day anh ra ngoai may."
+    echo "CANH BAO: mat may / prune = KHONG rollback duoc. Ghi vao bien ban."
+else
+    # Push registry — VẪN trong `set -e`. Hỏng ở đây là DỪNG, không phải ghi chú.
     #
-    # Lọc theo đúng repo vừa push: `{{index .RepoDigests 0}}` lấy phần tử ĐẦU,
-    # mà một ảnh từng được push vào nhiều repo sẽ có nhiều RepoDigests — phần tử
-    # 0 khi ấy có thể là digest của repo KHÁC.
-    DIGEST=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$REMOTE" \
-        | grep "^${QLTS_ROLLBACK_REGISTRY}/qlts-${S}@" | head -1)
-    [ -n "$DIGEST" ] || { echo "KHONG lay duoc digest cho $S sau khi push"; exit 1; }
-    # thêm digest vào đúng dòng của service đó (cột 5)
-    awk -F'\t' -v s="$S" -v d="$DIGEST" 'BEGIN{OFS="\t"} $1==s{$5=d} {print}' \
-        "$MANIFEST" > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST"
-done
+    # REGISTRY phải khai TƯỜNG MINH. `docker push qlts-backend:<tag>` KHÔNG đẩy
+    # vào kho của dự án: một ref không có namespace được Docker phân giải thành
+    # `docker.io/library/qlts-backend` — không gian tên của các ảnh thư viện
+    # chính thức, ta không sở hữu. Ref trỏ kho riêng bắt buộc có dạng
+    # `namespace/repo` hoặc `registry/namespace/repo`.
+    : "${QLTS_ROLLBACK_REGISTRY:?dat vd ghcr.io/favouritekid hoac <acct>.dkr.ecr.<region>.amazonaws.com/qlts}"
 
-# Bản kê phải RA KHỎI MÁY — và bản RA KHỎI MÁY phải là bản HOÀN CHỈNH.
-#
-# Thứ tự dưới đây là bản chất chứ không phải khẩu vị. Bản nháp trước `cp` TRƯỚC
-# rồi mới `printf '# offsite'` vào bản local, nên tệp đưa lên S3 thiếu đúng cái
-# dòng mà preflight bắt buộc phải có: khôi phục bản kê từ S3 rồi chạy preflight
-# là tự đỏ. Đường lùi hỏng đúng vào lúc dùng tới nó.
-OFFSITE_URL="s3://qlts-backup/admission-cutover/config_backup_${DATE}_manifest.txt"
-printf '# offsite\t%s\n' "$OFFSITE_URL" >> "$MANIFEST"   # 1. hoàn chỉnh TRƯỚC
-cp "$MANIFEST" "config_backup_${DATE}_manifest.txt"      # 2. copy bản hoàn chỉnh
-sha256sum "config_backup_${DATE}_manifest.txt" | awk '{print $1}' \
-    > "config_backup_${DATE}_manifest.txt.sha256"        # 3. checksum đi kèm
-aws s3 cp "config_backup_${DATE}_manifest.txt" "$OFFSITE_URL"
-aws s3 cp "config_backup_${DATE}_manifest.txt.sha256" "${OFFSITE_URL}.sha256"
+    for S in backend celery-worker celery-beat frontend; do
+        REMOTE="${QLTS_ROLLBACK_REGISTRY}/qlts-${S}:${QLTS_ROLLBACK_TAG}"
+        docker tag "qlts-${S}:${QLTS_ROLLBACK_TAG}" "$REMOTE"
+        docker push "$REMOTE"
+        # DIGEST là thứ duy nhất bất biến: tag ở xa có thể bị đẩy đè bởi ảnh
+        # khác, digest thì không. Preflight KÉO ẢNH VỀ BẰNG chuỗi này (không
+        # phải bằng tag), nên tag trôi mới thật sự thành chuyện không liên quan.
+        #
+        # Lọc theo đúng repo vừa push: `{{index .RepoDigests 0}}` lấy phần tử
+        # ĐẦU, mà một ảnh từng được push vào nhiều repo sẽ có nhiều RepoDigests
+        # — phần tử 0 khi ấy có thể là digest của repo KHÁC.
+        DIGEST=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$REMOTE" \
+            | grep "^${QLTS_ROLLBACK_REGISTRY}/qlts-${S}@" | head -1)
+        [ -n "$DIGEST" ] || { echo "KHONG lay duoc digest cho $S sau khi push"; exit 1; }
+        # thêm digest vào đúng dòng của service đó (cột 5)
+        awk -F'\t' -v s="$S" -v d="$DIGEST" 'BEGIN{OFS="\t"} $1==s{$5=d} {print}' \
+            "$MANIFEST" > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST"
+    done
 
-# 4. Tải NGƯỢC về và so NỘI DUNG. `aws s3 cp` trả 0 không chứng minh object đọc
-#    lại được (quyền, KMS, lifecycle, sai bucket đều có thể lộ ra ở đây).
-aws s3 cp "$OFFSITE_URL" - > "${MANIFEST}.offsite-check"
-cmp -s "${MANIFEST}.offsite-check" "$MANIFEST" \
-    || { echo "ban ke tren S3 KHAC ban local — DUNG LAI"; exit 1; }
-rm -f "${MANIFEST}.offsite-check"
+    # Bản kê phải RA KHỎI MÁY — và bản RA KHỎI MÁY phải là bản HOÀN CHỈNH.
+    #
+    # Thứ tự dưới đây là bản chất chứ không phải khẩu vị. Bản nháp trước `cp`
+    # TRƯỚC rồi mới `printf '# offsite'` vào bản local, nên tệp đưa lên S3 thiếu
+    # đúng cái dòng mà preflight bắt buộc phải có: khôi phục bản kê từ S3 rồi
+    # chạy preflight là tự đỏ. Đường lùi hỏng đúng vào lúc dùng tới nó.
+    OFFSITE_URL="s3://qlts-backup/admission-cutover/config_backup_${DATE}_manifest.txt"
+    printf '# offsite\t%s\n' "$OFFSITE_URL" >> "$MANIFEST"   # 1. hoàn chỉnh TRƯỚC
+    cp "$MANIFEST" "config_backup_${DATE}_manifest.txt"      # 2. copy bản hoàn chỉnh
+    sha256sum "config_backup_${DATE}_manifest.txt" | awk '{print $1}' \
+        > "config_backup_${DATE}_manifest.txt.sha256"        # 3. checksum đi kèm
+    aws s3 cp "config_backup_${DATE}_manifest.txt" "$OFFSITE_URL"
+    aws s3 cp "config_backup_${DATE}_manifest.txt.sha256" "${OFFSITE_URL}.sha256"
+
+    # 4. Tải NGƯỢC về và so NỘI DUNG. `aws s3 cp` trả 0 không chứng minh object
+    #    đọc lại được (quyền, KMS, lifecycle, sai bucket đều lộ ra ở đây).
+    aws s3 cp "$OFFSITE_URL" - > "${MANIFEST}.offsite-check"
+    cmp -s "${MANIFEST}.offsite-check" "$MANIFEST" \
+        || { echo "ban ke tren S3 KHAC ban local — DUNG LAI"; exit 1; }
+    rm -f "${MANIFEST}.offsite-check"
+fi
 set +e
 
 cat "$MANIFEST"    # git-rev · offsite · service · CID · image ID · reference · digest
 
 # Diễn tập NGAY tại T-1d bằng ĐÚNG script mà rollback sẽ chạy.
 # `docker-compose.rollback.yml` đã có sẵn trong repo — KHÔNG sinh ad-hoc.
-QLTS_ROLLBACK_TAG=${QLTS_ROLLBACK_TAG} bash scripts/rollback-preflight.sh
+#
+# Truyền CẢ cờ local-only xuống. Bản trước chỉ truyền tag, nên ở chế độ
+# local-only preflight vẫn đi hỏi registry và đỏ — trừ khi người trực nhớ tự
+# `export`. "Nhớ tự export" không phải một cơ chế.
+QLTS_ROLLBACK_LOCAL_ONLY="$QLTS_ROLLBACK_LOCAL_ONLY" \
+    QLTS_ROLLBACK_TAG="$QLTS_ROLLBACK_TAG" \
+    bash scripts/rollback-preflight.sh
 # Nó fail-closed ở cả năm ca: thiếu manifest · manifest thiếu service · ảnh
 # không lấy được · tag đã trôi sang ID khác · service còn `build:`.
 # Không ĐẠT ở đây = KHÔNG có đường lùi = KHÔNG cutover.

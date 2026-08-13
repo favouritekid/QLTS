@@ -1720,6 +1720,57 @@ def test_runbook_push_ref_phai_co_namespace():
     )
 
 
+def test_runbook_5_4_chay_duoc_o_che_do_local_only():
+    """`${QLTS_ROLLBACK_REGISTRY:?…}` ở MỨC KHỐI thì local-only chết ngay tại đó.
+
+    Tài liệu bảo "máy không có registry thì khai QLTS_ROLLBACK_LOCAL_ONLY=1",
+    nhưng dòng `:?` lại chạy vô điều kiện — nên người trực phải tự hiểu mà bỏ
+    qua một đoạn giữa. Đã đo bằng cách chạy nguyên khối §5.4 của bản trước ở chế
+    độ local-only: đổ đúng tại dòng ấy, chưa kịp ghi được gì. Một quy trình cứu
+    hộ đòi đọc-hiểu-rồi-chọn-tay là quy trình sẽ sai vào lúc 3 giờ sáng.
+
+    Guard neo vào CẤU TRÚC (`if` … `else` … dòng `:?` … `fi`), không neo vào thụt
+    lề: thụt lề không đổi ngữ nghĩa bash nên một guard theo cột sẽ báo đỏ cho
+    bản viết đúng và bỏ lọt bản viết sai.
+    """
+    dong = _lenh_5_4().splitlines()
+    vt_if = next(
+        (k for k, d in enumerate(dong)
+         if re.match(r'\s*if \[ "\$QLTS_ROLLBACK_LOCAL_ONLY" = "1" \]', d)), -1)
+    vt_reg = next(
+        (k for k, d in enumerate(dong) if "QLTS_ROLLBACK_REGISTRY:?" in d), -1)
+    assert vt_if != -1, "§5.4 không rẽ nhánh theo QLTS_ROLLBACK_LOCAL_ONLY"
+    assert vt_reg != -1, "§5.4 không còn đòi registry ở nhánh dùng registry"
+    assert vt_if < vt_reg, (
+        "dòng đòi registry chạy TRƯỚC nhánh local-only — chế độ local-only sẽ "
+        "chết tại đó dù tài liệu bảo nó dùng được"
+    )
+    giua = dong[vt_if:vt_reg]
+    assert any(d.strip() == "else" for d in giua), (
+        "giữa `if local-only` và dòng đòi registry không có `else` — dòng ấy "
+        "không nằm trong nhánh nào cả"
+    )
+    assert not any(d.strip() == "fi" for d in giua), (
+        "nhánh đã đóng bằng `fi` TRƯỚC dòng đòi registry — nó lại về mức khối"
+    )
+
+
+def test_runbook_truyen_co_local_only_xuong_preflight():
+    """"Nhớ tự export" không phải một cơ chế.
+
+    §5.4 diễn tập bằng `rollback-preflight.sh` ngay tại T-1d. Nếu lời gọi ấy chỉ
+    truyền tag thì ở chế độ local-only preflight vẫn đi hỏi registry và đỏ —
+    trong khi khối vừa CỐ Ý không push gì cả.
+    """
+    dong = [d for d in _lenh_5_4().splitlines() if "rollback-preflight.sh" in d]
+    assert dong, "§5.4 không còn diễn tập bằng rollback-preflight.sh"
+    thieu = [d.strip()[:90] for d in dong if "QLTS_ROLLBACK_LOCAL_ONLY" not in d]
+    assert not thieu, (
+        "lời gọi preflight không truyền QLTS_ROLLBACK_LOCAL_ONLY:\n  "
+        + "\n  ".join(thieu)
+    )
+
+
 def test_runbook_ghi_digest_cua_DUNG_repo_vua_push():
     """`{{index .RepoDigests 0}}` lấy phần tử ĐẦU, không phải phần tử ĐÚNG.
 
