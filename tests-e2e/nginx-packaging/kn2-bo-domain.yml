@@ -1,4 +1,7 @@
+# Ca 2 — DOMAIN rỗng (quên `--env-file .env.production`).
+# Kỳ vọng: container DỪNG HẲN ở guard, trước cả khi envsubst chạy.
 services:
-  nginx:
+  nginx-candidate:
     environment:
       DOMAIN: ""
+      NGINX_ADMISSION_FROZEN: "false"

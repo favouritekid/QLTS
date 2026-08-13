@@ -340,3 +340,18 @@ nginx-test.env
 # cách bỏ sót thay đổi thật (xem ghi chú nginx/conf.d ở trên).
 Backend_FastAPI/smoke_ids.json
 Backend_FastAPI/smoke_ids.json.tmp
+
+# Fixture E2E nginx-packaging — SINH TẠI CHỖ, không commit.
+# README của thư mục ấy dựng chứng thư tự ký, tệp env riêng, và một bản template
+# cắt cụt sinh ra từ chính template production (để nó không trôi lệch khỏi bản
+# thật). Không thứ nào được vào git: chứng thư là bí mật, tệp env chứa giá trị
+# giả dễ bị nhầm là thật, và bản cắt cụt commit vào là ngày mai nó lệch.
+tests-e2e/nginx-packaging/nginx-test-certs/
+tests-e2e/nginx-packaging/nginx-test.env
+tests-e2e/nginx-packaging/khong-co-https/
+
+# Manifest tài sản rollback — SINH TRÊN MÁY CHỦ ở RUNBOOK §5.4, không commit.
+# Nó ghi container ID + image ID của bản đang phục vụ tại thời điểm cutover, tức
+# một sự thật của MỘT máy tại MỘT thời điểm; đưa vào git là mời người ta tin
+# một manifest của máy khác.
+rollback_manifest_*.txt

@@ -112,6 +112,23 @@ on:
     #   - frontend/**         → FE may consume BE contract; full pytest
     #                            re-verifies BE didn't drift even on
     #                            FE-only PRs (cheap with pip cache)
+    #
+    # 13-08-2026 — bốn đường dưới cùng được THÊM, và đây là lỗ nghiêm trọng
+    # nhất mà đợt review PR #553 tìm ra ở chính PR #553:
+    # `tests/unit/test_nginx_template_packaging.py` gần như chỉ khẳng định về
+    # `docker-compose.yml` và `nginx/**` — mà cả hai đều KHÔNG nằm trong bộ lọc
+    # này. Nghĩa là đúng những sửa đổi mà guard sinh ra để chặn (mount lại
+    # `conf.d`, bỏ `DOMAIN` khỏi `environment`, dời template) lại là những sửa
+    # đổi khiến workflow KHÔNG chạy — required check báo "expected, not run",
+    # PR không merge được, và lối thoát tự nhiên là chạm bừa một tệp trong
+    # `Backend_FastAPI/` để kích hoạt gate. Đúng hình dạng của memory
+    # `ci-allowlist-tep-khong-duoc-gac`: cổng không nhìn thấy thứ nó canh.
+    #
+    # `tests/unit/test_nginx_template_packaging.py::test_bo_loc_paths_...`
+    # khoá bất biến này lại: mọi đường dẫn mà guard ĐỌC đều phải có mặt ở đây —
+    # kể cả các tệp TÀI LIỆU VẬN HÀNH mà guard lệnh-đã-chết soi. Thiếu một tệp
+    # ở đây là guard canh nó trên giấy còn CI thì không bao giờ chạy để canh;
+    # `PRODUCTION_DEPLOY_GUIDE.md` đã đúng vào ca đó cho tới 13-08-2026.
     paths:
       - 'Backend_FastAPI/**'
       - 'frontend/**'
@@ -119,6 +136,13 @@ on:
       - '.github/dependabot.yml'
       - '.github/scripts/**'
       - 'scripts/**'
+      - 'docker-compose.yml'
+      - 'docker-compose.override.yml'
+      - 'docker-compose.rollback.yml'
+      - 'nginx/**'
+      - 'tests-e2e/**'
+      - 'Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md'
+      - 'Documents/PRODUCTION_DEPLOY_GUIDE.md'
 
 concurrency:
   group: be-pr-${{ github.ref }}

@@ -1,0 +1,40 @@
+# =============================================================================
+# QLTS Nginx BOOTSTRAP — chỉ dùng ở `scripts/setup-ssl.sh`, lần cấp chứng thư đầu
+# =============================================================================
+# Vì sao cần một cấu hình riêng: template production tham chiếu
+# `/etc/letsencrypt/live/${DOMAIN}/fullchain.pem`, mà ở bước này chứng thư CHƯA
+# tồn tại — nginx sẽ [emerg] và không khởi động nổi. Nên bootstrap là HTTP
+# thuần, vừa đủ để ACME challenge đi qua.
+#
+# Vì sao nó là một service của Compose chứ không phải `docker run` rời: bản
+# trước dựng container tay và phải ĐOÁN tên volume webroot từ tên thư mục hiện
+# tại (`basename $(pwd)_certbot_www`). Chạy từ một worktree tên khác là đoán
+# trượt, rồi nhánh dự phòng vớ đúng volume production trong khi certbot ghi
+# token vào một volume khác — Let's Encrypt nhận 404 và script đổ tại cho DNS.
+# Là service thì Compose tự phân giải volume theo project, không còn gì để đoán.
+# =============================================================================
+server {
+    listen 80 default_server;
+    server_name ${DOMAIN} www.${DOMAIN};
+
+    # Đường sống còn của bước này.
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    # Đầu dò nội bộ cho healthcheck. So khớp THÂN phản hồi chứ không chỉ mã:
+    # `location /` dưới đây trả 503 cho mọi đường khác, nên chỉ nhìn mã là
+    # phép kiểm không phân biệt được "đúng cấu hình bootstrap" với "bất kỳ
+    # nginx nào".
+    location = /qlts-bootstrap-alive {
+        allow 127.0.0.1;
+        deny all;
+        return 200 'qlts-bootstrap-alive';
+        add_header Content-Type text/plain;
+    }
+
+    location / {
+        return 503 'QLTS: dang cap chung thu SSL, vui long quay lai sau.';
+        add_header Content-Type text/plain;
+    }
+}

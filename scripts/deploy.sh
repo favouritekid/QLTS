@@ -109,7 +109,7 @@ if [ "${COLD_CUTOVER}" = "true" ]; then
     cutover "* Operator MUST follow RUNBOOK §7.2 post-deploy:"
     cutover "  - T+1:30 manual ``alembic upgrade head``"
     cutover "  - T+3:00 manual backfill verify"
-    cutover "  - T+3:15 restart backend (Casbin reload)"
+    cutover "  - T+3:15 dựng lại backend: up -d --no-deps --wait (Casbin reload)"
     cutover "  - T+3:30 manual ``sync_notification_rules``"
     cutover "============================================="
 else
@@ -248,7 +248,7 @@ if [ "${IS_CUTOVER}" -eq 1 ]; then
     # in-place SQL replay) per RUNBOOK §8.1.
     cutover "Step 6: SKIP auto-alembic (cutover mode)"
     cutover "Operator runs manually post-deploy:"
-    cutover "  docker compose --profile production exec backend alembic upgrade head"
+    cutover "  docker compose -f docker-compose.yml --profile production exec backend alembic upgrade head"
 else
     # Routine deploy: auto-migrate with built-in rollback on failure.
     docker compose -f docker-compose.yml --profile production --env-file .env.production run --rm backend \
@@ -332,12 +332,21 @@ while [ $timeout -gt 0 ]; do
 done
 
 if [ $timeout -le 0 ]; then
-    error "Backend failed to become healthy within 60s. Check logs: docker compose logs backend"
+    error "Backend failed to become healthy within 60s. Check logs: docker compose -f docker-compose.yml logs backend"
 fi
 
-# Start frontend + nginx + certbot
+# Start frontend + certbot. nginx CỐ Ý không nằm ở đây.
+#
+# Trước bản vá này dòng dưới là `up -d frontend nginx certbot`, rồi Step 8b
+# `--force-recreate` lại chính container ấy khoảng 60 giây sau. Mỗi lần deploy
+# có đụng khai báo nginx là HAI vòng đời container và HAI khe từ chối kết nối,
+# cho một thay đổi cấu hình duy nhất.
+#
+# `--no-deps` là BẮT BUỘC ở đây: `certbot` khai `depends_on: nginx`, nên thiếu
+# nó Compose kéo nginx lên bất kể ta đã bỏ tên nginx khỏi dòng lệnh.
+# backend/frontend đã được khởi động và chờ healthy ngay phía trên.
 docker compose -f docker-compose.yml --profile production --env-file .env.production up -d \
-    frontend nginx certbot
+    --no-deps frontend certbot
 
 log "Waiting for frontend to be healthy..."
 timeout=60
@@ -350,50 +359,15 @@ while [ $timeout -gt 0 ]; do
 done
 
 # =============================================================================
-# Step 8b: Reload nginx to APPLY the re-rendered config
+# Step 8b: áp cấu hình nginx — THỬ TRƯỚC, THAY SAU
 # =============================================================================
-# ``up -d nginx`` above does NOT recreate/reload an already-running nginx when
-# only the bind-mounted config file (rendered by the ``envsubst`` step above)
-# changed — the container keeps serving whatever config it loaded at its last
-# (re)start. Without this explicit reload, nginx changes (new ``location``
-# blocks, security headers) SILENTLY never take effect. Observed 2026-07-02:
-# nginx ran 6 weeks on a stale config → the SMS ``/r/`` short-link fell through
-# to the frontend (307 → /login) because its ``location /r/`` was never loaded.
-# Validate first (bad config → keep last-good, don't reload) then gracefully
-# reload (SIGHUP, zero-downtime). Non-fatal so a fresh-start deploy (nginx just
-# loaded the config) is unaffected.
-log "Step 8b: Applying nginx config (recreate + wait healthy)..."
+# Toàn bộ nhịp nằm ở `scripts/nginx-apply.sh`: dựng `nginx-candidate`, đo hành
+# vi thật của nó (TLS + SNI thật, route backend, route frontend), CHỈ KHI ĐẠT
+# mới đụng tới container đang phục vụ. Tách ra tệp riêng để bài kiểm hồi quy
+# chạy được ĐÚNG đoạn mã này thay vì một bản chép lại trong test.
+log "Step 8b: áp cấu hình nginx (thử trên candidate trước)..."
+bash "$SCRIPT_DIR/nginx-apply.sh" "$DOMAIN"     || error "không áp được cấu hình nginx — xem log phía trên"
 
-# ⚠️ `nginx -s reload` KHÔNG còn đủ. Template nay được render TRONG container
-# lúc khởi động; một tiến trình nginx đang chạy sẽ reload lại đúng bản render
-# CŨ của chính nó. Đổi nội dung template mà chỉ reload ⇒ config mới không bao
-# giờ được áp, và không có dấu hiệu nào báo điều đó.
-#
-# `--no-deps` để không kéo backend/frontend recreate theo — chúng vừa được khởi
-# động ở Step 8 và đang healthy.
-if docker compose -f docker-compose.yml --profile production --env-file .env.production         up -d --no-deps --force-recreate nginx; then
-    log "  nginx đã được recreate — chờ healthy..."
-else
-    error "Không recreate được nginx"
-fi
-
-# Chờ healthcheck THẬT, không dừng ở `nginx -t`: một config rỗng vẫn
-# `syntax is ok`, nên `-t` xanh không chứng minh có server block nào đang phục
-# vụ. Healthcheck kiểm bản render + server_name + một request /health thật.
-NGINX_OK=0
-for _ in $(seq 1 24); do
-    NGINX_HEALTH=$(docker inspect -f '{{.State.Health.Status}}'         "$(docker compose -f docker-compose.yml --profile production             --env-file .env.production ps -q nginx)" 2>/dev/null || echo "")
-    if [ "$NGINX_HEALTH" = "healthy" ]; then NGINX_OK=1; break; fi
-    if [ "$NGINX_HEALTH" = "unhealthy" ]; then break; fi
-    sleep 5
-done
-
-if [ "$NGINX_OK" -ne 1 ]; then
-    log "  nginx KHÔNG healthy (trạng thái: ${NGINX_HEALTH:-khong-doc-duoc})"
-    docker compose -f docker-compose.yml --profile production --env-file .env.production         logs --tail=50 nginx || true
-    error "nginx không phục vụ được sau khi recreate — KHÔNG tuyên bố deploy thành công"
-fi
-log "  nginx healthy — config mới đã được áp"
 
 # =============================================================================
 # Done

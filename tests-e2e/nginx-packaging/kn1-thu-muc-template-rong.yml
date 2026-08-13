@@ -1,0 +1,7 @@
+# Ca 1 — thư mục template RỖNG (mô phỏng bind source thiếu, daemon tự tạo).
+# Kỳ vọng: container DỪNG HẲN với thông điệp guard, KHÔNG phải "unhealthy".
+services:
+  nginx-candidate:
+    volumes: !override
+      - ./tests-e2e/nginx-packaging/khong-co-template:/etc/nginx/templates:ro
+      - ./tests-e2e/nginx-packaging/nginx-test-certs:/etc/letsencrypt:ro

@@ -1,8 +1,7 @@
-# Config HỢP LỆ về cú pháp nhưng KHÔNG có server block phục vụ /health.
-# `nginx -t` sẽ xanh; healthcheck phải đỏ.
+# Ca 3 — config HỢP LỆ cú pháp nhưng KHÔNG phục vụ gì.
+# `nginx -t` sẽ xanh; container LÊN được; healthcheck phải ĐỎ.
 services:
-  nginx:
+  nginx-candidate:
     volumes: !override
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./tests-e2e/nginx-packaging/rong:/etc/nginx/templates:ro
-      - ./nginx-test-certs:/etc/letsencrypt:ro
+      - ./tests-e2e/nginx-packaging/nginx-test-certs:/etc/letsencrypt:ro

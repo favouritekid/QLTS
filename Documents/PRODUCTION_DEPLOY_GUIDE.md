@@ -92,22 +92,22 @@ git log --oneline -3
 
 ```bash
 # Build
-docker compose --env-file .env.production --profile production build backend frontend
+docker compose -f docker-compose.yml --env-file .env.production --profile production build backend frontend
 
 # Deploy
-docker compose --env-file .env.production --profile production up -d
+docker compose -f docker-compose.yml --env-file .env.production --profile production up -d
 ```
 
 **Nếu chỉ deploy backend** (không đổi frontend):
 ```bash
-docker compose --env-file .env.production --profile production build backend
-docker compose --env-file .env.production --profile production up -d backend celery-worker celery-beat
+docker compose -f docker-compose.yml --env-file .env.production --profile production build backend
+docker compose -f docker-compose.yml --env-file .env.production --profile production up -d backend celery-worker celery-beat
 ```
 
 **Nếu chỉ deploy frontend**:
 ```bash
-docker compose --env-file .env.production --profile production build frontend
-docker compose --env-file .env.production --profile production up -d frontend
+docker compose -f docker-compose.yml --env-file .env.production --profile production build frontend
+docker compose -f docker-compose.yml --env-file .env.production --profile production up -d frontend
 ```
 
 ### 7. Verify healthy
@@ -222,7 +222,7 @@ celery-beat:
 
 **Fix**: Luôn dùng `--env-file .env.production`:
 ```bash
-docker compose --env-file .env.production --profile production build ...
+docker compose -f docker-compose.yml --env-file .env.production --profile production build ...
 ```
 
 ### 4. MFA enforce cho admin/manager
@@ -253,8 +253,8 @@ git log --oneline -5  # tìm commit trước deploy
 git checkout <previous_commit>
 
 # 2. Rebuild + redeploy
-docker compose --env-file .env.production --profile production build backend frontend
-docker compose --env-file .env.production --profile production up -d
+docker compose -f docker-compose.yml --env-file .env.production --profile production build backend frontend
+docker compose -f docker-compose.yml --env-file .env.production --profile production up -d
 
 # 3. Rollback DB (nếu cần)
 gunzip < /root/backup_YYYYMMDD_HHMMSS.sql.gz | docker exec -i qlts-postgres-1 psql -U qlts -d qlts_production

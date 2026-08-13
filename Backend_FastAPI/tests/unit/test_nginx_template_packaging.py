@@ -1,60 +1,181 @@
-"""Hợp đồng đóng gói cấu hình Nginx — canh đúng sự cố 12-08-2026.
+"""Hợp đồng đóng gói + áp cấu hình Nginx — canh sự cố 12-08-2026 và vòng hai của nó.
 
-Chuyện đã xảy ra: `docker-compose.yml` mount `./nginx/conf.d` vào
+Vòng một (12-08-2026): `docker-compose.yml` mount `./nginx/conf.d` vào
 `/etc/nginx/conf.d`, và template nằm ngay trong đó. Nhưng entrypoint chính thức
-của image `nginx` CHỈ quét `/etc/nginx/templates` (xem
-``/docker-entrypoint.d/20-envsubst-on-templates.sh``: ``template_dir`` mặc định
-là ``/etc/nginx/templates``, ``output_dir`` là ``/etc/nginx/conf.d``). Còn
-``nginx/nginx.conf`` thì chỉ ``include /etc/nginx/conf.d/*.conf``.
+của image `nginx` CHỈ quét `/etc/nginx/templates`
+(``/docker-entrypoint.d/20-envsubst-on-templates.sh``: ``template_dir`` mặc định
+là ``/etc/nginx/templates``, ``output_dir`` là ``/etc/nginx/conf.d``), còn
+``nginx/nginx.conf`` thì chỉ ``include /etc/nginx/conf.d/*.conf``. Template
+KHÔNG bao giờ được render ⇒ nginx chạy với **không một server block nào**.
+Production sống sót nhiều tuần chỉ nhờ một `nginx/conf.d/default.conf` đã render
+nằm ngoài git — nên **một clean checkout thì site chết**.
 
-Hệ quả: template KHÔNG bao giờ được render, `include *.conf` không khớp gì, và
-nginx chạy với **không một server block nào**. Production sống sót suốt nhiều
-tuần chỉ vì trên máy chủ có sẵn một `nginx/conf.d/default.conf` đã render —
-tệp ấy bị `.gitignore` loại khỏi repo, nên **một clean checkout thì site chết**.
+Vòng hai (bản vá đầu của chính sự cố trên): template chuyển sang
+`nginx/templates/` rồi bind-mount thư mục ấy vào container. Đo thật trên Docker
+29.7.2: bind-mount một thư mục KHÔNG tồn tại thì daemon TỰ TẠO nó rỗng —
+`create_host_path: false` chỉ ngăn Compose tạo, không ngăn daemon, và `up` vẫn
+exit 0 — nên clean checkout vẫn cho ra đúng trạng thái vòng một, cộng thêm vhost
+mặc định của image lộ ra (cổng 80 trả 200 "Welcome to nginx!" trong khi site
+chết). Nay cấu hình được COPY VÀO IMAGE: thiếu template là `docker build` đỏ.
 
-Điều khiến nó khó thấy: `nginx -t` vẫn báo *syntax is ok* (config rỗng vẫn hợp
-lệ), container vẫn `Up`, Docker vẫn publish 80/443. Chỉ khi gọi từ ngoài mới
-thấy `ECONNREFUSED`.
+Điều khiến cả hai vòng khó thấy: `nginx -t` vẫn báo *syntax is ok* (config rỗng
+vẫn hợp lệ), container vẫn `Up`, Docker vẫn publish 80/443.
 
-Các khẳng định dưới đây canh **hợp đồng đóng gói**, không canh cách viết config.
+Các khẳng định dưới đây canh **hợp đồng đóng gói và hợp đồng áp cấu hình**,
+không canh cách viết config — một phép kiểm dựa vào cách đánh máy template sẽ
+làm prod đỏ oan vì một lần đảo thứ tự vô hại (đã tái hiện). Bằng chứng "có phục
+vụ thật" thuộc về `scripts/nginx-verify.sh` (TLS + SNI thật), chạy mỗi lần
+deploy và trong bộ E2E `tests-e2e/nginx-packaging/`.
+
 Chúng chạy không cần Docker nên nằm được trong lát unit của CI.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
 yaml = pytest.importorskip("yaml", reason="cần PyYAML để đọc docker-compose.yml")
 
-_GOC = Path(__file__).resolve().parents[3]
+
+def _tim_goc() -> Path:
+    """Đi ngược lên tìm gốc repo bằng MỐC, không đếm số tầng thư mục.
+
+    `parents[3]` chỉ đúng trên runner CI. Dưới lệnh mà CLAUDE.md ghi là cách
+    chạy test tại máy — `docker compose exec backend python -m pytest tests/` —
+    `docker-compose.override.yml` mount `./Backend_FastAPI` vào `/app`, nên tệp
+    này là `/app/tests/unit/...` và `parents[3]` ra thẳng `/`. Hậu quả không
+    phải là "bỏ qua": một test HỎNG CỨNG vì không thấy template (tệp rõ ràng
+    đang có), fixture compose skip mất chín khẳng định, và guard "không script
+    nào đọc đường cũ" XANH VÔ NGHĨA vì `/scripts` không tồn tại.
+    """
+    import os
+
+    ung_vien = list(Path(__file__).resolve().parents)
+    # Lối thoát cho ca chạy trong container backend: ở đó `/app` CHỈ là
+    # `Backend_FastAPI/`, cây repo không hề có mặt, nên không mốc nào tìm được.
+    # Mount cây repo vào rồi trỏ biến này là chạy được đúng lệnh mà CLAUDE.md
+    # ghi, thay vì để cả tệp bị bỏ qua.
+    tu_env = os.environ.get("QLTS_REPO_ROOT")
+    if tu_env:
+        ung_vien.insert(0, Path(tu_env))
+    for thu_muc in ung_vien:
+        if (thu_muc / "docker-compose.yml").is_file() and (thu_muc / ".git").exists():
+            return thu_muc
+    pytest.skip(
+        "không thấy gốc repo (cần docker-compose.yml + .git). Chạy trong "
+        "container backend thì mount cây repo và đặt QLTS_REPO_ROOT.",
+        allow_module_level=True,
+    )
+
+
+_GOC = _tim_goc()
 _COMPOSE = _GOC / "docker-compose.yml"
-_THU_MUC_TEMPLATE = _GOC / "nginx" / "templates"
-_TEMPLATE = _THU_MUC_TEMPLATE / "default.conf.template"
+_THU_MUC_NGINX = _GOC / "nginx"
+_TEMPLATE = _THU_MUC_NGINX / "templates" / "default.conf.template"
+_DOCKERFILE = _THU_MUC_NGINX / "Dockerfile"
 
 _DUONG_TEMPLATE_TRONG_CONTAINER = "/etc/nginx/templates"
 _DUONG_OUTPUT_TRONG_CONTAINER = "/etc/nginx/conf.d"
 
+# Hằng mà `location = /nginx-alive` trả về và healthcheck so khớp CHÍNH XÁC.
+# Ba nơi phải cùng biết nó: template, healthcheck trong compose, và test này.
+_THAN_ALIVE = "qlts-nginx-alive"
+
 
 @pytest.fixture(scope="module")
-def dv_nginx() -> dict:
+def compose() -> dict:
     if not _COMPOSE.is_file():
         pytest.skip(f"không thấy {_COMPOSE}")
-    noi_dung = yaml.safe_load(_COMPOSE.read_text(encoding="utf-8"))
-    dich_vu = noi_dung.get("services", {}).get("nginx")
+    return yaml.safe_load(_COMPOSE.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def dv_nginx(compose: dict) -> dict:
+    dich_vu = compose.get("services", {}).get("nginx")
     assert dich_vu, "docker-compose.yml không có service `nginx`"
     return dich_vu
 
 
+@pytest.fixture(scope="module")
+def dv_candidate(compose: dict) -> dict:
+    dich_vu = compose.get("services", {}).get("nginx-candidate")
+    assert dich_vu, (
+        "docker-compose.yml không có service `nginx-candidate` — không có nó thì "
+        "không có cách nào thử cấu hình mới trước khi thay container đang phục vụ"
+    )
+    return dich_vu
+
+
 def _cac_mount(dv: dict) -> list[str]:
-    return [m for m in dv.get("volumes", []) if isinstance(m, str)]
+    """Danh sách mount ở dạng chuỗi, chấp nhận cả cú pháp dài."""
+    ra = []
+    for m in dv.get("volumes", []):
+        if isinstance(m, str):
+            ra.append(m)
+        elif isinstance(m, dict):
+            ra.append(f"{m.get('source', '')}:{m.get('target', '')}")
+    return ra
 
 
 def _dich_cua_mount(mount: str) -> str:
-    """`./nguon:/dich:ro` → `/dich`."""
+    """`./nguon:/dich:ro` -> `/dich`."""
     phan = mount.split(":")
     return phan[1] if len(phan) >= 2 else ""
+
+
+def _doc(duong: Path) -> str:
+    return duong.read_text(encoding="utf-8")
+
+
+class _LoaderCompose(yaml.SafeLoader):
+    """SafeLoader hiểu hai thẻ riêng của Compose.
+
+    `!reset` và `!override` không phải YAML chuẩn; `yaml.safe_load` đổ với
+    `could not determine a constructor`. Chúng lại chính là hai thứ mà các tệp
+    override ở đây bắt buộc phải dùng (Compose GỘP danh sách, không thay), nên
+    bài kiểm phải đọc được chúng thay vì né.
+    """
+
+
+_LoaderCompose.add_constructor(
+    "!reset", lambda loader, node: None
+)
+_LoaderCompose.add_constructor(
+    "!override",
+    lambda loader, node: (
+        loader.construct_sequence(node, deep=True)
+        if isinstance(node, yaml.SequenceNode)
+        else loader.construct_object(node, deep=True)
+    ),
+)
+
+
+def _tai_compose(duong: Path) -> dict:
+    return yaml.load(_doc(duong), Loader=_LoaderCompose)
+
+
+def _ma_lenh(duong: Path) -> str:
+    r"""Nội dung tệp: bỏ dòng chú thích, rồi NỐI LẠI các dòng nối tiếp `\`.
+
+    Bỏ chú thích để guard không khớp nhầm vào một câu văn nhắc lại lệnh cũ.
+    Nối dòng vì nếu không thì mọi guard dưới đây đều né được bằng cách xuống
+    dòng: `up -d --force-recreate \` + `    nginx` là cùng MỘT lệnh, nhưng một
+    biểu thức `[^\n]*` sẽ không thấy. Chính bài kiểm này đã bắt được lỗ đó ở
+    bản nháp đầu — nó báo đỏ cho một lệnh viết đúng chỉ vì lệnh ấy trải hai
+    dòng, và cùng lúc lộ ra rằng chiều ngược lại cũng lọt.
+    """
+    khong_chu_thich = "\n".join(
+        d for d in _doc(duong).splitlines() if not d.lstrip().startswith("#")
+    )
+    return re.sub(r"\\\n\s*", " ", khong_chu_thich)
+
+
+# ---------------------------------------------------------------------------
+# Đóng gói: cấu hình phải đi theo IMAGE
+# ---------------------------------------------------------------------------
 
 
 def test_template_nam_dung_thu_muc_entrypoint_quet():
@@ -67,7 +188,7 @@ def test_template_nam_dung_thu_muc_entrypoint_quet():
 
 def test_khong_con_template_trong_conf_d():
     """Chống tái phạm: đặt lại template vào `conf.d` là dựng lại sự cố."""
-    conf_d = _GOC / "nginx" / "conf.d"
+    conf_d = _THU_MUC_NGINX / "conf.d"
     if not conf_d.exists():
         return
     con_lai = sorted(p.name for p in conf_d.glob("*.template"))
@@ -77,20 +198,41 @@ def test_khong_con_template_trong_conf_d():
     )
 
 
-def test_compose_mount_template_vao_dung_duong(dv_nginx: dict):
-    dich = [_dich_cua_mount(m) for m in _cac_mount(dv_nginx)]
-    assert _DUONG_TEMPLATE_TRONG_CONTAINER in dich, (
-        f"service nginx phải mount thư mục template vào "
-        f"{_DUONG_TEMPLATE_TRONG_CONTAINER}. Hiện có: {dich}"
+def test_cau_hinh_di_theo_image_chu_khong_theo_thu_muc_host():
+    """Thiếu template phải làm `docker build` ĐỎ, không thành thư mục rỗng.
+
+    Đo trên Docker 29.7.2: `create_host_path: false` chỉ ngăn Compose tạo thư
+    mục nguồn, daemon vẫn tạo và `up` vẫn exit 0 — nên bind-mount KHÔNG thể là
+    cơ chế fail-closed cho ca "clean checkout thiếu tệp".
+    """
+    assert _DOCKERFILE.is_file(), "thiếu nginx/Dockerfile"
+    df = _doc(_DOCKERFILE)
+    assert re.search(r"^COPY\s+templates/\s+/etc/nginx/templates/", df, re.M), (
+        "nginx/Dockerfile phải COPY templates/ vào image — đó là thứ biến "
+        "'thiếu template' thành một lần build đỏ thay vì một site chết im lặng"
+    )
+    assert re.search(r"^COPY\s+nginx\.conf\s+/etc/nginx/nginx\.conf", df, re.M), (
+        "nginx/Dockerfile phải COPY nginx.conf vào image"
+    )
+    assert re.search(r"rm\s+-f\s+/etc/nginx/conf\.d/\*\.conf", df), (
+        "nginx/Dockerfile phải xoá vhost mặc định của image: chính nó biến ca "
+        "'không có config' từ ECONNREFUSED ầm ĩ thành 200 OK 'Welcome to nginx!'"
+    )
+    assert re.search(r"chmod\s+\+x\s+/docker-entrypoint\.d/", df), (
+        "phải `chmod +x` guard: entrypoint chính thức BỎ QUA (chỉ log 'Ignoring') "
+        "mọi tệp .sh không có bit thực thi — guard sẽ im lặng không chạy"
     )
 
 
-def test_compose_KHONG_mount_de_len_conf_d(dv_nginx: dict):
-    """`conf.d` là thư mục ĐẦU RA của entrypoint — mount đè là chặn render.
+def test_compose_dung_build_khong_dung_image_tran(dv_nginx: dict):
+    build = dv_nginx.get("build")
+    assert build, "service nginx phải `build:` từ nginx/Dockerfile, không `image:` trần"
+    context = build.get("context") if isinstance(build, dict) else build
+    assert str(context).rstrip("/").endswith("nginx"), f"build.context lạ: {context!r}"
 
-    Với mount read-only, chính entrypoint có nhánh
-    ``if [ ! -w "$output_dir" ]`` → in lỗi và bỏ qua render.
-    """
+
+def test_compose_KHONG_mount_de_len_conf_d(dv_nginx: dict):
+    """`conf.d` là thư mục ĐẦU RA của entrypoint — mount đè là chặn render."""
     dich = [_dich_cua_mount(m) for m in _cac_mount(dv_nginx)]
     assert _DUONG_OUTPUT_TRONG_CONTAINER not in dich, (
         f"service nginx đang mount đè {_DUONG_OUTPUT_TRONG_CONTAINER} — "
@@ -112,13 +254,26 @@ def test_bien_render_duoc_truyen_vao_container(dv_nginx: dict, bien: str):
     )
 
 
+def test_nginx_KHONG_duoc_thay_bi_mat_cua_app(dv_nginx: dict):
+    """nginx là container quay ra Internet — không cho nó `env_file` của app.
+
+    `env_file: .env.production` sẽ chữa được cú trượt tay quên `--env-file`,
+    nhưng giá phải trả là SECRET_KEY / JWT_SECRET_KEY / POSTGRES_PASSWORD nằm
+    trong biến môi trường của tiến trình đứng ngay mặt Internet. Fail-closed
+    thuộc về guard entrypoint, không đổi bằng một bậc leo thang đặc quyền.
+    """
+    assert not dv_nginx.get("env_file"), (
+        "service nginx khai `env_file` — nó sẽ thấy toàn bộ bí mật của backend"
+    )
+
+
 def test_domain_KHONG_duoc_lam_gay_parse_cua_dev(dv_nginx: dict):
     """`${DOMAIN:?}` là hồi quy: nó làm gãy cả `docker compose up -d` của dev.
 
     Compose nội suy TOÀN BỘ tệp trước khi lọc profile, nên một biến bắt buộc
     trong service `nginx` (profile `production`) vẫn chặn lệnh dev vốn không hề
-    chạy nginx. Fail-closed thuộc về healthcheck và `scripts/deploy.sh`, không
-    thuộc tầng nội suy.
+    chạy nginx. Fail-closed thuộc về guard entrypoint + healthcheck +
+    `scripts/deploy.sh`, không thuộc tầng nội suy.
     """
     moi_truong = dv_nginx.get("environment") or {}
     gia_tri = (
@@ -134,80 +289,46 @@ def test_domain_KHONG_duoc_lam_gay_parse_cua_dev(dv_nginx: dict):
 
 
 # ---------------------------------------------------------------------------
-# Consumer: không script nào được đọc đường template CŨ
+# Guard entrypoint: fail-closed NGAY TRONG container
 # ---------------------------------------------------------------------------
 
-_DUONG_CU = "nginx/conf.d/default.conf.template"
+_GUARD_BIEN = _THU_MUC_NGINX / "docker-entrypoint.d" / "10-qlts-kiem-bien.sh"
+_GUARD_RENDER = _THU_MUC_NGINX / "docker-entrypoint.d" / "25-qlts-kiem-ban-render.sh"
 
 
-def _cac_script() -> list[Path]:
-    thu_muc = _GOC / "scripts"
-    return sorted(thu_muc.glob("*.sh")) if thu_muc.is_dir() else []
+def test_guard_chay_dung_thu_tu_quanh_envsubst():
+    """Entrypoint duyệt `/docker-entrypoint.d/*.sh` theo `sort -V`.
 
-
-def test_khong_script_nao_doc_duong_template_cu():
-    """Rename template mà quên consumer thì deploy kế tiếp dừng giữa chừng.
-
-    12-08-2026 bản vá đầu chỉ sửa compose; `scripts/deploy.sh`,
-    `scripts/setup-ssl.sh` và `scripts/test_nginx_admission_freeze.sh` vẫn trỏ
-    đường cũ — cả ba sẽ gãy ở lần chạy tiếp theo, mà 12 test cấu trúc lúc đó
-    vẫn xanh.
+    Guard biến phải chạy TRƯỚC `20-envsubst-on-templates.sh`, guard bản render
+    phải chạy SAU. Sai thứ tự là guard kiểm một thứ chưa tồn tại.
     """
-    pham = []
-    for sh in _cac_script():
-        noi_dung = sh.read_text(encoding="utf-8", errors="replace")
-        for so, dong in enumerate(noi_dung.splitlines(), 1):
-            if _DUONG_CU in dong and not dong.lstrip().startswith("#"):
-                pham.append(f"{sh.relative_to(_GOC)}:{so}")
-    assert not pham, (
-        f"còn script đọc `{_DUONG_CU}` (đường đã bị rename): {pham}"
+    assert _GUARD_BIEN.is_file(), "thiếu guard kiểm biến"
+    assert _GUARD_RENDER.is_file(), "thiếu guard kiểm bản render"
+    assert _GUARD_BIEN.name < "20-envsubst-on-templates.sh" < _GUARD_RENDER.name
+
+
+def test_guard_chan_domain_rong_va_co_gat_go_nham():
+    ma = _doc(_GUARD_BIEN)
+    assert "DOMAIN" in ma and "exit 1" in ma
+    assert "NGINX_ADMISSION_FROZEN" in ma, (
+        "guard phải cưỡng chế NGINX_ADMISSION_FROZEN thuộc {true,false}: mặc "
+        "định của cần gạt này fail-OPEN — template chỉ chặn khi khớp CHÍNH XÁC "
+        "'true', nên một cú gõ nhầm (TRUE, 1) làm người trực tin đã đóng băng "
+        "tuyển sinh trong khi traffic vẫn đi qua"
     )
 
 
-def test_deploy_khong_con_render_template_tren_host():
-    """Render trên host chính là thứ đẻ ra `default.conf` nằm ngoài git."""
-    deploy = _GOC / "scripts" / "deploy.sh"
-    if not deploy.is_file():
-        pytest.skip("không có scripts/deploy.sh")
-    dong_pham = [
-        f"{so}: {d.strip()}"
-        for so, d in enumerate(deploy.read_text(encoding="utf-8").splitlines(), 1)
-        if "envsubst" in d and not d.lstrip().startswith("#")
-    ]
-    assert not dong_pham, (
-        "deploy.sh còn `envsubst` render template trên host; entrypoint nginx "
-        f"phải là nơi duy nhất render. Dòng: {dong_pham}"
-    )
+def test_guard_bat_bien_chua_duoc_thay_trong_ban_render():
+    """envsubst giữ NGUYÊN `${TEN}` cho biến thiếu — nginx nuốt im lặng."""
+    assert "${" in _doc(_GUARD_RENDER)
 
 
-def test_deploy_ap_config_bang_recreate_va_cho_healthy():
-    """`nginx -s reload` KHÔNG áp được template mới.
-
-    Template nay render lúc container khởi động; một tiến trình đang chạy chỉ
-    nạp lại đúng bản render cũ của chính nó. Phải recreate rồi chờ healthcheck
-    thật — `nginx -t` không phân biệt được "đang phục vụ" với "config rỗng".
-    """
-    deploy = _GOC / "scripts" / "deploy.sh"
-    if not deploy.is_file():
-        pytest.skip("không có scripts/deploy.sh")
-    noi_dung = deploy.read_text(encoding="utf-8")
-    ma_lenh = chr(10).join(
-        d for d in noi_dung.splitlines() if not d.lstrip().startswith("#")
-    )
-    assert "--force-recreate" in ma_lenh and "nginx" in ma_lenh, (
-        "deploy.sh phải recreate nginx để áp bản render mới"
-    )
-    assert "State.Health.Status" in ma_lenh, (
-        "deploy.sh phải CHỜ healthcheck của nginx, không dừng ở `nginx -t`"
-    )
-    assert "nginx -s reload" not in ma_lenh, (
-        "deploy.sh còn dùng `nginx -s reload` — nó nạp lại bản render CŨ"
-    )
+# ---------------------------------------------------------------------------
+# Healthcheck: phải đo HÀNH VI, trên HTTPS, với SNI thật
+# ---------------------------------------------------------------------------
 
 
 class TestHealthcheck:
-    """Healthcheck phải chứng minh CÓ SERVER BLOCK ĐANG PHỤC VỤ."""
-
     @staticmethod
     def _lenh(dv: dict) -> str:
         hc = dv.get("healthcheck") or {}
@@ -217,50 +338,116 @@ class TestHealthcheck:
 
     def test_khong_dung_nginx_t_lam_bang_chung(self, dv_nginx: dict):
         """`nginx -t` xanh cả khi KHÔNG có server block — vô dụng ở đây."""
-        lenh = self._lenh(dv_nginx)
-        assert "nginx -t" not in lenh, (
+        assert "nginx -t" not in self._lenh(dv_nginx), (
             "healthcheck dựa vào `nginx -t`: một config RỖNG vẫn `syntax is ok`, "
             "nên nó không phân biệt được 'đang phục vụ' với 'không có server "
             "block nào'."
         )
 
-    def test_co_gui_request_that_toi_health(self, dv_nginx: dict):
+    def test_do_tren_HTTPS_chu_khong_phai_cong_80(self, dv_nginx: dict):
+        """Cả ba lớp cũ đều đáp xuống cổng 80 — khối HTTPS mất mà vẫn healthy.
+
+        Đã tái hiện bằng thực thi (hai lần, hai chiều): xoá trọn khối
+        `HTTPS: Main server` rồi chạy chuỗi CMD-SHELL cũ cho rc=0 trong khi
+        client thật nhận `Connection reset`; chạy chuỗi MỚI trên cùng bản đột
+        biến thì container `unhealthy` và cổng deploy chặn lại.
+        """
         lenh = self._lenh(dv_nginx)
-        assert "/health" in lenh, "healthcheck phải gọi thật endpoint /health"
-        assert "Host:" in lenh, (
-            "phải đặt Host khớp server_name — catch-all `default_server` trả 444 "
-            "cho Host lạ, nên thiếu Host là luôn đỏ vì lý do sai."
+        assert "https://" in lenh, (
+            "healthcheck phải gọi HTTPS — khối 443 mới là nơi phục vụ production"
+        )
+        assert not re.search(r"http://127\.0\.0\.1/|http://localhost/", lenh), (
+            "healthcheck còn đáp xuống cổng 80"
         )
 
-    def test_kiem_ban_render_ton_tai_va_dung_server_name(self, dv_nginx: dict):
+    def test_dung_resolve_chu_khong_dung_header_Host(self, dv_nginx: dict):
+        """`--header "Host:"` + nối tới 127.0.0.1 thì SNI vẫn là 127.0.0.1.
+
+        Server block 443 có tên sẽ không được chọn; catch-all
+        `ssl_reject_handshake` trả lời. Đó đúng là phép đo sai đã làm cả kíp
+        trực tin site còn sống hôm 12-08-2026. `--resolve TÊN:CỔNG:IP` giữ tên
+        trong URL (nên SNI và Host đều đúng) mà ép IP đích.
+        """
         lenh = self._lenh(dv_nginx)
-        assert "server_name" in lenh and "default.conf" in lenh, (
-            "healthcheck phải kiểm bản render `/etc/nginx/conf.d/default.conf` "
-            "có đúng `server_name` — nếu không, trang mặc định của image nginx "
-            "có thể làm phép kiểm xanh giả."
+        assert "--resolve" in lenh, "healthcheck phải dùng `curl --resolve` để SNI đúng"
+        assert "Host:" not in lenh, (
+            "healthcheck đặt header Host thủ công — dấu hiệu đang nối tới "
+            "127.0.0.1 với SNI sai"
         )
 
-    def test_domain_rong_lam_healthcheck_do(self, dv_nginx: dict):
-        lenh = self._lenh(dv_nginx)
-        assert "test -n" in lenh and "DOMAIN" in lenh, (
-            "healthcheck phải đỏ khi DOMAIN rỗng — đó là ca render hỏng mà mọi "
-            "phép kiểm khác đều bỏ lọt."
+    def test_KHONG_grep_server_name(self, dv_nginx: dict):
+        """Hồi quy: phép grep ấy buộc sống chết của prod vào cách đánh máy.
+
+        Đã tái hiện: chỉ đảo thành `server_name www.${DOMAIN} ${DOMAIN};` là
+        phép grep cũ ĐỎ trong khi nginx phục vụ hoàn hảo — và vì cổng deploy nay
+        chí mạng, MỌI lần deploy sau đó sẽ hard-fail. Pattern còn là BRE không
+        neo nên dấu chấm của tên miền là wildcard.
+        """
+        assert "server_name" not in self._lenh(dv_nginx), (
+            "healthcheck đang grep `server_name` trong bản render — nó nói về "
+            "CHỮ, không nói về hành vi. Bằng chứng phục vụ thật là một request "
+            "TLS có SNI đúng."
         )
+
+    def test_so_THAN_phan_hoi_chu_khong_chi_ma_200(self, dv_nginx: dict):
+        """Chỉ nhìn mã 200 là chưa canh được gì — đã tái hiện.
+
+        Gỡ `location = /nginx-alive` thì request rơi xuống catch-all
+        `location /` → `proxy_pass http://frontend` → frontend trả 200 cho mọi
+        đường dẫn, và một healthcheck chỉ nhìn mã vẫn XANH dù thứ nó tưởng đang
+        canh đã biến mất (ca W1-E). So khớp chính xác thân phản hồi thì ca ấy đỏ.
+        """
+        lenh = self._lenh(dv_nginx)
+        assert _THAN_ALIVE in lenh, (
+            f"healthcheck phải so khớp chính xác thân phản hồi {_THAN_ALIVE!r}"
+        )
+        assert "--output /dev/null" not in lenh, (
+            "vứt thân phản hồi đi thì chỉ còn mã trạng thái — mà catch-all "
+            "proxy tới frontend trả 200 cho mọi đường dẫn"
+        )
+
+    def test_domain_rong_van_lam_healthcheck_do(self, dv_nginx: dict):
+        assert "test -n" in self._lenh(dv_nginx), (
+            "giữ lớp phòng xa cho DOMAIN rỗng (guard entrypoint đã chặn trước, "
+            "nhưng healthcheck không được phụ thuộc vào việc đó)"
+        )
+
+
+def test_template_co_dau_moc_song_cua_khoi_HTTPS():
+    """Healthcheck gọi `/nginx-alive`; nó phải nằm TRONG khối 443.
+
+    Đặt nhầm sang khối 80 là dựng lại đúng ca xanh giả mà bản vá này đóng.
+    """
+    noi_dung = _doc(_TEMPLATE)
+    i = noi_dung.index("# --- HTTPS: Main server ---")
+    assert "location = /nginx-alive" in noi_dung[i:], (
+        "`/nginx-alive` không nằm trong khối HTTPS — healthcheck sẽ lại chứng "
+        "minh một thứ khác với thứ nó tuyên bố"
+    )
+    assert "location = /nginx-alive" not in noi_dung[:i], (
+        "`/nginx-alive` xuất hiện TRƯỚC khối HTTPS"
+    )
+    assert f"return 200 '{_THAN_ALIVE}'" in noi_dung, (
+        f"thân phản hồi phải đúng hằng {_THAN_ALIVE!r} mà healthcheck so khớp"
+    )
+
+
+def test_nginx_alive_khong_lo_ra_ngoai():
+    """Nó là đầu dò nội bộ; healthcheck chạy TRONG container nên là 127.0.0.1."""
+    noi_dung = _doc(_TEMPLATE)
+    i = noi_dung.index("location = /nginx-alive")
+    khoi = noi_dung[i : noi_dung.index("\n    }\n", i)]
+    assert "allow 127.0.0.1" in khoi and "deny all" in khoi, (
+        "`/nginx-alive` phải chỉ cho loopback — không có lý do gì để lộ một "
+        "đầu dò hạ tầng ra Internet"
+    )
 
 
 def test_template_chi_dung_bien_da_duoc_truyen(dv_nginx: dict):
-    """Mọi `${BIEN}` trong template phải nằm trong environment của container.
-
-    envsubst chỉ thay biến CÓ trong môi trường; biến thiếu sẽ được giữ nguyên
-    dạng `${...}` và nginx sẽ hiểu sai hoặc lỗi.
-    """
-    import re
-
+    """Mọi `${BIEN}` trong template phải nằm trong environment của container."""
     if not _TEMPLATE.is_file():
         pytest.skip("chưa có template")
-    trong_template = set(
-        re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", _TEMPLATE.read_text(encoding="utf-8"))
-    )
+    trong_template = set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", _doc(_TEMPLATE)))
     moi_truong = dv_nginx.get("environment") or {}
     ten = (
         {m.split("=", 1)[0] for m in moi_truong}
@@ -273,27 +460,510 @@ def test_template_chi_dung_bien_da_duoc_truyen(dv_nginx: dict):
         "envsubst sẽ để nguyên chuỗi `${...}` trong config."
     )
 
+
 # ---------------------------------------------------------------------------
-# Đường vận hành: workflow deploy và bootstrap SSL
+# Áp cấu hình: THỬ TRƯỚC, THAY SAU
 # ---------------------------------------------------------------------------
+
+_APPLY = _GOC / "scripts" / "nginx-apply.sh"
+_VERIFY = _GOC / "scripts" / "nginx-verify.sh"
+_DEPLOY = _GOC / "scripts" / "deploy.sh"
+
+
+def test_candidate_khong_publish_cong_nao(dv_candidate: dict):
+    """Candidate mà bind 80/443 thì nó tranh cổng với bản đang phục vụ."""
+    assert not dv_candidate.get("ports"), (
+        "nginx-candidate KHÔNG được publish cổng — nó phải dựng được CẠNH "
+        "container đang phục vụ, đo qua IP nội bộ của mạng project"
+    )
+    assert dv_candidate.get("profiles") == ["candidate"], (
+        "nginx-candidate phải nằm riêng profile `candidate`, nếu không nó sẽ "
+        "được kéo lên trong mọi lệnh production"
+    )
+    assert str(dv_candidate.get("restart", "")).strip('"') == "no", (
+        "candidate phải `restart: no` — hỏng thì nó cần NẰM YÊN ở exited để đọc "
+        "được log, không được quay vòng"
+    )
+
+
+def test_candidate_va_nginx_dung_CHUNG_mot_than(compose: dict):
+    """Hai bên lệch nhau thì phép thử không chứng minh gì cho cái thật."""
+    tho = _doc(_COMPOSE)
+    assert "&nginx-base" in tho and tho.count("<<: *nginx-base") >= 2, (
+        "nginx và nginx-candidate phải cùng dùng anchor `*nginx-base`; chép tay "
+        "hai bản là mở đường cho chúng trôi lệch nhau"
+    )
+    n = compose["services"]["nginx"]
+    c = compose["services"]["nginx-candidate"]
+    for khoa in ("image", "environment", "healthcheck", "volumes"):
+        assert n.get(khoa) == c.get(khoa), (
+            f"nginx và nginx-candidate lệch nhau ở `{khoa}` — phép thử trên "
+            "candidate sẽ không nói được gì về container thật"
+        )
+
+
+def test_deploy_uy_thac_cho_nginx_apply():
+    assert _APPLY.is_file(), "thiếu scripts/nginx-apply.sh"
+    assert "nginx-apply.sh" in _ma_lenh(_DEPLOY), "deploy.sh phải gọi scripts/nginx-apply.sh"
+
+
+def test_deploy_KHONG_con_khoi_dong_nginx_o_step8():
+    """Step 8 khởi động nginx rồi Step 8b thay lại = hai vòng đời mỗi deploy."""
+    ma = _ma_lenh(_DEPLOY)
+    assert not re.search(r"up -d[^\n]*\bnginx\b", ma), (
+        "deploy.sh còn `up -d ... nginx` trực tiếp; việc khởi động nginx thuộc "
+        "về nginx-apply.sh (thử trước, thay sau)"
+    )
+    assert re.search(r"up -d[^\n]*--no-deps[^\n]*certbot", ma), (
+        "`certbot` khai `depends_on: nginx` — thiếu `--no-deps` là Compose vẫn "
+        "kéo nginx lên bất kể ta đã bỏ tên nginx khỏi dòng lệnh"
+    )
+
+
+def test_khong_force_recreate_container_dang_phuc_vu():
+    """`--force-recreate nginx` phá last-good TRƯỚC khi có gì được kiểm.
+
+    Neo vào ĐÚNG chuỗi lệnh chứ không phải "có `--force-recreate` ở đâu đó và
+    có chữ `nginx` ở đâu đó" — bản guard trước khớp cả khi cờ ấy nằm trên một
+    service hoàn toàn khác (`up -d --force-recreate backend` cũng làm nó xanh).
+    """
+    ma = _ma_lenh(_APPLY)
+    assert re.search(r"--force-recreate\s+nginx-candidate\b", ma), (
+        "candidate PHẢI được dựng lại mỗi lần — nó là bản nháp"
+    )
+    assert not re.search(r"--force-recreate\s+nginx\b(?!-candidate)", ma), (
+        "còn `--force-recreate nginx` trên container đang phục vụ: nó bị "
+        "stop+remove trước khi cấu hình mới được kiểm, và không có đường lùi"
+    )
+
+
+def test_candidate_duoc_do_TRUOC_khi_dung_toi_container_that():
+    """Thứ tự là toàn bộ giá trị của bản vá; đảo lại là mất sạch."""
+    ma = _ma_lenh(_APPLY)
+    vt_do_candidate = ma.index("nginx-verify.sh")
+    # Neo vào ĐÚNG lệnh khởi động container ĐANG PHỤC VỤ, không phải bất kỳ
+    # `--profile production up -d` nào: nhịp 0 cũng `up -d` nhưng chỉ để dựng
+    # backend/frontend, và neo vào nó thì test đỏ oan.
+    khoi_dong_that = re.search(r"up -d[^\n]*[^-]nginx;", ma)
+    assert khoi_dong_that, "không thấy lệnh khởi động container nginx đang phục vụ"
+    assert vt_do_candidate < khoi_dong_that.start(), (
+        "container đang phục vụ bị đụng tới TRƯỚC khi candidate được đo"
+    )
+
+
+def test_apply_do_lai_tren_chinh_container_dang_phuc_vu():
+    """Candidate đạt không chứng minh container THẬT đã nhận cấu hình ấy."""
+    assert _ma_lenh(_APPLY).count("nginx-verify.sh") >= 2, (
+        "phải đo hai lần: trên candidate, rồi trên chính container đang phục vụ"
+    )
+
+
+def test_verify_do_bang_SNI_that_va_cham_ca_hai_upstream():
+    ma = _ma_lenh(_VERIFY)
+    assert "--resolve" in ma, "phải dùng `curl --resolve` (SNI đúng)"
+    assert "Host:" not in ma, (
+        "đặt Host thủ công tới 127.0.0.1 là tái tạo đúng phép đo sai của cutover"
+    )
+    assert "/login" in ma, "phải chạm một route đi FRONTEND"
+    assert "/api/" in ma, "phải chạm một route đi BACKEND"
+    assert "khong-thuoc-ve.invalid" in ma, "phải chứng minh SNI lạ bị từ chối"
+    assert "acme-challenge" in ma, (
+        "phải chứng minh đường ACME còn sống — mất nó thì certbot gia hạn hỏng "
+        "ÂM THẦM và chứng thư chỉ chết vào ngày hết hạn"
+    )
+
+
+def test_vong_cho_nhan_ra_container_da_chet():
+    """Vòng chờ cũ chỉ thoát sớm ở đúng chữ `unhealthy`.
+
+    nginx chết lúc nạp config thì container `exited`/`restarting` và
+    `docker inspect` trả rỗng hoặc `starting` — nên nó chờ đủ ~120 giây với
+    site đã chết rồi báo một câu vô nghĩa là `khong-doc-duoc`. Đo lại sau bản
+    vá: ca DOMAIN rỗng báo hỏng sau 4 giây.
+    """
+    ma = _ma_lenh(_APPLY)
+    assert "exited" in ma and "restarting" in ma, (
+        "vòng chờ không nhận ra container đã dừng / đang quay vòng"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Consumer: không đường/lệnh cũ nào còn sót
+# ---------------------------------------------------------------------------
+
+_DUONG_CU = "nginx/conf.d/default.conf.template"
+
+
+def _cac_script() -> list[Path]:
+    thu_muc = _GOC / "scripts"
+    return sorted(thu_muc.glob("*.sh")) if thu_muc.is_dir() else []
+
+
+def test_khong_script_nao_doc_duong_template_cu():
+    """Rename template mà quên consumer thì deploy kế tiếp dừng giữa chừng."""
+    assert _cac_script(), "không thấy scripts/*.sh — guard này đang xanh vô nghĩa"
+    pham = []
+    for sh in _cac_script():
+        for so, dong in enumerate(_doc(sh).splitlines(), 1):
+            if _DUONG_CU in dong and not dong.lstrip().startswith("#"):
+                pham.append(f"{sh.relative_to(_GOC)}:{so}")
+    assert not pham, f"còn script đọc `{_DUONG_CU}` (đường đã bị rename): {pham}"
+
+
+def test_deploy_khong_con_render_template_tren_host():
+    """Render trên host chính là thứ đẻ ra `default.conf` nằm ngoài git."""
+    dong_pham = [
+        f"{so}: {d.strip()}"
+        for so, d in enumerate(_doc(_DEPLOY).splitlines(), 1)
+        if "envsubst" in d and not d.lstrip().startswith("#")
+    ]
+    assert not dong_pham, (
+        "deploy.sh còn `envsubst` render template trên host; entrypoint nginx "
+        f"phải là nơi duy nhất render. Dòng: {dong_pham}"
+    )
+
+
+def test_khong_con_nginx_s_reload_o_bat_ky_dau():
+    """`nginx -s reload` nạp lại đúng bản render CŨ của chính tiến trình đó."""
+    pham = []
+    for sh in _cac_script():
+        for so, d in enumerate(_doc(sh).splitlines(), 1):
+            if "nginx -s reload" in d and not d.lstrip().startswith("#"):
+                pham.append(f"{sh.relative_to(_GOC)}:{so}")
+    assert not pham, f"còn `nginx -s reload`: {pham}"
+
+
+# ---------------------------------------------------------------------------
+# Lệnh vận hành ĐÃ CHẾT — cấm quay lại, kể cả trong TÀI LIỆU
+# ---------------------------------------------------------------------------
+#
+# Guard cũ chỉ quét `scripts/*.sh`. Nhưng ba cần gạt hỏng nặng nhất của sự cố
+# 12-08 không nằm trong script nào cả — chúng nằm trong RUNBOOK, dưới dạng lệnh
+# mà người trực gõ tay lúc 2 giờ sáng. Thêm runbook vào `paths:` chỉ khiến CI
+# CHẠY; nó không khiến CI BẮT được một lệnh đã chết quay lại.
+#
+# Quy ước để guard đọc được tài liệu mà không tự bắn vào chân: chỉ soi các dòng
+# NẰM TRONG khối ``` và KHÔNG bắt đầu bằng `#`. Muốn nhắc "đừng dùng X" thì viết
+# nó thành dòng chú thích hoặc để ngoài khối lệnh.
+#
+# Van thoát DUY NHẤT: dán `CO-Y-LENH-CHET` ngay trên dòng đó. Nó dành cho các ca
+# ĐỐI CHỨNG — bài kiểm cố tình chạy lệnh đã chết để chứng minh nó không làm gì
+# (E2E chạy `nginx -s reload` rồi cho thấy `POST /api/admissions/` vẫn 200).
+# Van hẹp và ồn ào là có chủ đích: gõ được nó nghĩa là đã phải dừng lại và nghĩ.
+_VAN_THOAT = "CO-Y-LENH-CHET"
+
+_LENH_DA_CHET = [
+    (
+        r"nginx/conf\.d/default\.conf\.template",
+        "đường template CŨ — đã chuyển sang nginx/templates/ và nay nằm trong image",
+    ),
+    (
+        r"nginx -s reload",
+        "nạp lại đúng bản render CŨ của chính tiến trình đó; `nginx -t` vẫn xanh",
+    ),
+    (
+        r"restart\s+(-\S+\s+)*nginx\b",
+        "`restart` tái dùng biến môi trường đã nướng vào container — cần gạt câm",
+    ),
+    (
+        r"restart\s+(-\S+\s+)*backend\b",
+        "`env_file` chỉ đọc lúc TẠO container; `restart` giữ ADMISSION_FROZEN cũ. "
+        "Dùng `up -d --no-deps --wait backend`",
+    ),
+    (
+        r"envsubst[^\n]*>\s*nginx/",
+        "render trên host chính là thứ đẻ ra tệp ngoài git đã làm site chết",
+    ),
+    (
+        r"cp\s+-r\s+nginx_conf_backup",
+        "khôi phục vào một thư mục không còn được mount — im lặng không làm gì",
+    ),
+]
+
+_TAI_LIEU_VAN_HANH = [
+    "Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md",
+    "Documents/PRODUCTION_DEPLOY_GUIDE.md",
+    "tests-e2e/nginx-packaging/README.md",
+]
+
+
+def _dong_lenh_trong_tai_lieu(duong: Path) -> list[tuple[int, str]]:
+    """Các dòng NẰM TRONG khối ``` và không phải chú thích."""
+    ra: list[tuple[int, str]] = []
+    trong_khoi = False
+    for so, dong in enumerate(_doc(duong).splitlines(), 1):
+        if dong.lstrip().startswith("```"):
+            trong_khoi = not trong_khoi
+            continue
+        if trong_khoi and dong.strip() and not dong.lstrip().startswith("#"):
+            if _VAN_THOAT in dong:
+                continue
+            ra.append((so, dong))
+    return ra
+
+
+def test_tai_lieu_van_hanh_khong_con_lenh_da_chet():
+    """Ba cần gạt hỏng nặng nhất của 12-08 nằm trong RUNBOOK, không trong script.
+
+    Chúng đều "thành công": `nginx -t` in *syntax is ok*, `reload` và `restart`
+    trả 0 — trong khi `POST /api/admissions/` vẫn 200. Đã tái hiện đúng như vậy.
+    Nên tài liệu vận hành phải bị canh y như mã nguồn.
+    """
+    da_soi = 0
+    pham = []
+    for ten in _TAI_LIEU_VAN_HANH:
+        d = _GOC / ten
+        if not d.is_file():
+            continue
+        da_soi += 1
+        for so, dong in _dong_lenh_trong_tai_lieu(d):
+            for mau, ly_do in _LENH_DA_CHET:
+                if re.search(mau, dong):
+                    pham.append(f"{ten}:{so}: {dong.strip()[:90]}  ← {ly_do}")
+    assert da_soi, "không soi được tài liệu vận hành nào — guard đang xanh vô nghĩa"
+    assert not pham, "còn lệnh vận hành đã chết trong tài liệu:\n  " + "\n  ".join(pham)
+
+
+# Script chạm PRODUCTION. Luật ghim `-f` chỉ áp cho nhóm này.
+#
+# CỐ Ý loại `import-prod-to-dev.sh` và `fe-check.sh`: chúng làm việc trên stack
+# DEV và *cần* `docker-compose.override.yml` được nạp — ghim `-f` vào đó là bẻ
+# gãy chúng. Một luật áp bừa lên mọi script sẽ hoặc bị tắt đi, hoặc bị lách
+# bằng ngoại lệ rải rác; danh sách tường minh thì đọc được và cãi được.
+_SCRIPT_PRODUCTION = [
+    "deploy.sh",
+    "setup-ssl.sh",
+    "nginx-apply.sh",
+    "nginx-verify.sh",
+    "phase3-pre-deploy-snapshot.sh",
+    "rollback-preflight.sh",
+]
+
+
+def _co_lenh_compose(dong: str) -> bool:
+    """Dòng có gọi `docker compose` trực tiếp (không qua biến đã gán sẵn)."""
+    if "docker compose" not in dong:
+        return False
+    # `command -v docker compose` là phép kiểm cài đặt, không phải lời gọi.
+    if "command -v docker compose" in dong:
+        return False
+    # `DC="docker compose -f ..."` / `_COMPOSE=(docker compose -f ...)` tự mang
+    # cờ trong chính chuỗi gán nên vẫn được soi bình thường; các lời gọi QUA
+    # biến (`$DC ...`) không chứa chuỗi "docker compose" nên tự bỏ qua.
+    return True
+
+
+def test_lenh_compose_phai_ghim_docker_compose_yml():
+    """Thiếu `-f docker-compose.yml` là Compose TỰ NẠP override DEV.
+
+    Đo thật trong worktree này: cùng một lệnh
+    `docker compose --env-file .env.production --profile production config`
+      * KHÔNG `-f`: backend `command = uvicorn app.main:app --reload`,
+        `APP_ENV = development`, và `docker-compose.override.yml` kéo theo
+        `env_file: ./Backend_FastAPI/.env` + bind-mount mã nguồn;
+      * CÓ `-f`:   `command = None`, `APP_ENV = None` (đúng ảnh production).
+    Trên một máy chưa có `Backend_FastAPI/.env` thì lệnh đổ — ồn ào nhưng vô
+    hại. Trên máy CÓ tệp đó, nó dựng cấu hình development trên production mà
+    không báo gì cả. Đó mới là ca đáng sợ.
+
+    Bao gồm cả `down`/`up -d` trần: trên prod, cặp ấy gỡ stack production rồi
+    dựng stack dev lên thay.
+    """
+    pham = []
+    for ten in _TAI_LIEU_VAN_HANH:
+        d = _GOC / ten
+        if not d.is_file():
+            continue
+        for so, dong in _dong_lenh_trong_tai_lieu(d):
+            if _co_lenh_compose(dong) and "-f docker-compose.yml" not in dong:
+                pham.append(f"{ten}:{so}: {dong.strip()[:90]}")
+    da_soi_script = 0
+    for sh in _cac_script():
+        if sh.name not in _SCRIPT_PRODUCTION:
+            continue
+        da_soi_script += 1
+        for so, dong in enumerate(_doc(sh).splitlines(), 1):
+            if dong.lstrip().startswith("#"):
+                continue
+            if _co_lenh_compose(dong) and "-f docker-compose.yml" not in dong:
+                pham.append(f"{sh.relative_to(_GOC)}:{so}: {dong.strip()[:90]}")
+    assert da_soi_script == len(_SCRIPT_PRODUCTION), (
+        f"chỉ soi được {da_soi_script}/{len(_SCRIPT_PRODUCTION)} script production — "
+        "một tên trong _SCRIPT_PRODUCTION đã bị đổi/xoá và guard đang canh hụt"
+    )
+    assert not pham, (
+        "lệnh `docker compose` thiếu `-f docker-compose.yml` (Compose sẽ tự nạp "
+        "docker-compose.override.yml của DEV):\n  " + "\n  ".join(pham)
+    )
+
+
+def test_tai_lieu_khong_bao_dat_bien_ma_khong_ai_doc():
+    """Một `export` mà không ai đọc là một quy trình xanh nhưng không làm gì.
+
+    Ca thật: §8.1 Step 3 bảo người trực
+        export BACKEND_IMAGE_TAG=pre-admission-cutover-${DATE}
+        export FRONTEND_IMAGE_TAG=...
+        docker compose ... down && docker compose ... up -d
+    nhưng `docker-compose.yml` KHÔNG hề đọc hai biến ấy — bốn service ứng dụng
+    chỉ khai `build:`, không khai `image:`. Đo thật: render compose với hai tag
+    giả cho `services.backend.image` = None, và `grep -c IMAGE_TAG` = 0. Nên
+    rollback "recommended" chỉ dựng lại đúng ảnh hiện hành. Ba lệnh, ba lần
+    exit 0, và phiên bản cũ không hề quay lại.
+
+    Luật: biến được `export` trong khối lệnh của tài liệu vận hành phải hoặc
+    được `docker-compose.yml` nội suy, hoặc được chính tài liệu ấy dùng lại ở
+    một dòng lệnh khác.
+    """
+    compose_tho = _doc(_COMPOSE)
+    pham = []
+    for ten in _TAI_LIEU_VAN_HANH:
+        d = _GOC / ten
+        if not d.is_file():
+            continue
+        dong_lenh = _dong_lenh_trong_tai_lieu(d)
+        for so, dong in dong_lenh:
+            m = re.match(r"\s*export\s+([A-Z_][A-Z0-9_]*)=", dong)
+            if not m:
+                continue
+            bien = m.group(1)
+            if f"${{{bien}" in compose_tho:
+                continue
+            dung_lai = any(
+                s2 != so and re.search(r"\$\{?" + bien + r"\b", d2)
+                for s2, d2 in dong_lenh
+            )
+            if not dung_lai:
+                pham.append(f"{ten}:{so}: export {bien} — không ai đọc biến này")
+    assert not pham, (
+        "tài liệu bảo đặt biến mà không cơ chế nào tiêu thụ:\n  " + "\n  ".join(pham)
+    )
+
+
+def test_script_khong_con_lenh_da_chet():
+    """Cùng bộ luật, áp lên `scripts/*.sh`."""
+    assert _cac_script(), "không thấy scripts/*.sh — guard đang xanh vô nghĩa"
+    pham = []
+    for sh in _cac_script():
+        for so, dong in enumerate(_doc(sh).splitlines(), 1):
+            if dong.lstrip().startswith("#") or _VAN_THOAT in dong:
+                continue
+            for mau, ly_do in _LENH_DA_CHET:
+                if re.search(mau, dong):
+                    pham.append(f"{sh.relative_to(_GOC)}:{so}: {dong.strip()[:90]}  ← {ly_do}")
+    assert not pham, "còn lệnh đã chết trong scripts:\n  " + "\n  ".join(pham)
+
+
+# ---------------------------------------------------------------------------
+# setup-ssl.sh: bốn tính chất, mỗi cái từng là một ca hỏng thật
+# ---------------------------------------------------------------------------
+
+_SETUP_SSL = _GOC / "scripts" / "setup-ssl.sh"
+
+
+@pytest.fixture(scope="module")
+def ma_setup_ssl() -> str:
+    if not _SETUP_SSL.is_file():
+        pytest.skip("không có scripts/setup-ssl.sh")
+    return _ma_lenh(_SETUP_SSL)
+
+
+def test_setup_ssl_certbot_khong_keo_nginx_production_len(ma_setup_ssl: str):
+    """`certbot` khai `depends_on: nginx` — thiếu `--no-deps` là tranh cổng 80.
+
+    Ở bước bootstrap, chứng thư chưa tồn tại nên nginx production còn chưa khởi
+    động nổi; đồng thời container bootstrap đang giữ cổng 80.
+
+    Và `--entrypoint certbot` là bắt buộc: service này override entrypoint thành
+    vòng lặp `certbot renew … sleep 12h`. `run` chỉ thay COMMAND chứ không thay
+    ENTRYPOINT, nên thiếu cờ ấy thì `certonly …` chỉ là đối số không được thực
+    thi — chứng thư không bao giờ được cấp, mà lệnh vẫn "chạy xong".
+    """
+    lenh = [d for d in ma_setup_ssl.splitlines() if "run --rm" in d and "certbot" in d]
+    assert lenh, "setup-ssl.sh không còn lệnh `run --rm ... certbot`"
+    for d in lenh:
+        assert "--no-deps" in d, f"thiếu `--no-deps`: {d.strip()}"
+        assert "--entrypoint certbot" in d, f"thiếu `--entrypoint certbot`: {d.strip()}"
+
+
+def test_setup_ssl_chay_lai_duoc_khi_chung_thu_da_ton_tai(ma_setup_ssl: str):
+    """Không có `--keep-until-expiring` thì lần chạy thứ hai tự khoá mình.
+
+    `certonly --non-interactive` gặp một lineage trùng khít và chưa gần hết hạn
+    sẽ rơi vào lời nhắc tương tác, `NoninteractiveDisplay` biến nó thành
+    `MissingCommandlineFlag`, và người vận hành đọc thông điệp lỗi rồi đi mò DNS.
+    Ca này rất dễ gặp vì Step 5 là một cổng CỨNG: hỏng ở đó thì phản xạ đầu tiên
+    là chạy lại script.
+    """
+    assert "--keep-until-expiring" in ma_setup_ssl, (
+        "certbot thiếu `--keep-until-expiring` — chạy lại script sẽ chết ở Step 3 "
+        "với một thông điệp chỉ sai hướng"
+    )
+
+
+def test_setup_ssl_khoi_dong_nginx_KEM_theo_upstream(ma_setup_ssl: str):
+    """Trên VPS mới, `--no-deps` cho `up nginx` là `[emerg] host not found`.
+
+    `nginx/nginx.conf` khai `upstream backend { server backend:8000; }` và nginx
+    phân giải hostname upstream NGAY LÚC NẠP CONFIG, vô điều kiện.
+    """
+    assert "QLTS_NGINX_NO_DEPS=0" in ma_setup_ssl, (
+        "setup-ssl.sh phải gọi nginx-apply.sh với QLTS_NGINX_NO_DEPS=0 — trên VPS "
+        "mới thì backend/frontend chưa chạy, và nginx không nạp nổi config"
+    )
+    for d in ma_setup_ssl.splitlines():
+        if "up -d" in d and re.search(r"[^-]\bnginx\b", d) and "bootstrap" not in d:
+            assert "--no-deps" not in d, f"`up nginx` không được mang --no-deps: {d.strip()}"
+
+
+def test_setup_ssl_bat_lai_container_last_good_khi_hong(ma_setup_ssl: str):
+    """Script này dừng nginx — nên mọi đường thoát khác 0 phải bật lại nó.
+
+    Bản trước chỉ trap dọn bootstrap: bootstrap hỏng, certbot hỏng, candidate
+    hỏng hay bàn giao hỏng đều để lại một máy chủ KHÔNG có nginx nào chạy, mà
+    người vận hành không được báo là mình cần bật lại.
+    """
+    assert re.search(r"trap\s+\S*khoi_phuc\S*\s+EXIT", ma_setup_ssl), (
+        "trap EXIT phải gọi hàm khôi phục last-good, không chỉ dọn bootstrap"
+    )
+    # Neo vào ĐẦU DÒNG: script còn một dòng `echo "... docker start $_CID..."`
+    # để chỉ cho người vận hành cách chạy tay. Một biểu thức không neo sẽ khớp
+    # đúng dòng thông báo ấy và xanh cả khi lệnh thật đã bị thay bằng `up -d`.
+    # Chính bài đột biến đã lộ ra chỗ này — cùng lớp lỗi mà đợt review tìm thấy
+    # ở guard `_vi_tri("scripts/deploy.sh")` của bản trước.
+    assert re.search(
+        r"^\s*(if\s+!\s+)?docker start\s+\"\$_CID_NGINX_CU\"", ma_setup_ssl, re.M
+    ), (
+        "phải `docker start` ĐÚNG container cũ theo ID đã ghi lại — `up -d` có "
+        "thể dựng một container khác từ một cấu hình khác, đó không phải last-good"
+    )
+    assert "_DA_BAN_GIAO=1" in ma_setup_ssl, (
+        "phải có cờ đánh dấu đã bàn giao xong, nếu không trap sẽ bật lại container "
+        "cũ ngay cả trên đường thoát THÀNH CÔNG"
+    )
+    # Cờ chỉ được bật SAU khi nginx-apply.sh đạt.
+    vt_apply = ma_setup_ssl.index("nginx-apply.sh")
+    vt_co = ma_setup_ssl.index("_DA_BAN_GIAO=1")
+    assert vt_apply < vt_co, (
+        "cờ bàn giao được bật TRƯỚC khi nginx-apply.sh chứng minh container mới "
+        "phục vụ được — trap sẽ im lặng ở đúng lúc cần nó nhất"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Đường vận hành: workflow deploy
+# ---------------------------------------------------------------------------
+
+
+def _dong_khong_comment(duong: Path) -> list[str]:
+    return [d for d in _doc(duong).splitlines() if not d.lstrip().startswith("#")]
 
 
 def test_workflow_pull_TRUOC_khi_chay_deploy_script():
-    """Bash nạp script vào bộ nhớ lúc gọi — phải cập nhật cây TRƯỚC.
-
-    Gọi thẳng `./scripts/deploy.sh` thì bản CŨ chạy, rồi chính nó `git pull`
-    cây mới; logic đang chạy vẫn là bản cũ. Với commit rename template, bản cũ
-    đọc `nginx/conf.d/default.conf.template` — tệp đã biến mất — và deploy dừng
-    giữa chừng. Caveat này được ghi ngay trong `scripts/deploy.sh` nhưng
-    workflow chưa từng tuân theo.
-    """
+    """Bash nạp script vào bộ nhớ lúc gọi — phải cập nhật cây TRƯỚC."""
     wf = _GOC / ".github" / "workflows" / "deploy.yml"
     if not wf.is_file():
         pytest.skip("không có .github/workflows/deploy.yml")
-    dong = [
-        d for d in wf.read_text(encoding="utf-8").splitlines()
-        if not d.lstrip().startswith("#")
-    ]
+    dong = _dong_khong_comment(wf)
 
     def _vi_tri(mau: str) -> int:
         for i, d in enumerate(dong):
@@ -302,14 +972,19 @@ def test_workflow_pull_TRUOC_khi_chay_deploy_script():
         return -1
 
     vt_pull = _vi_tri("git pull")
-    vt_chay = max(_vi_tri("scripts/deploy.sh"), _vi_tri("deploy.sh"))
+    # Neo vào LỜI GỌI, không vào chuỗi con `scripts/deploy.sh`: bản guard trước
+    # lấy `max(_vi_tri("scripts/deploy.sh"), _vi_tri("deploy.sh"))`, mà chuỗi
+    # thứ nhất là superset của chuỗi thứ hai nên CẢ HAI cùng trỏ về dòng
+    # `test -f scripts/deploy.sh` — tức nó sắp thứ tự với phép kiểm tiền đề chứ
+    # không phải với lời gọi. Dời lời gọi lên trên `git pull` mà test vẫn xanh.
+    vt_chay = _vi_tri("bash scripts/deploy.sh")
     assert vt_pull != -1, "workflow deploy không cập nhật cây trước khi chạy script"
-    assert vt_chay != -1, "workflow deploy không gọi scripts/deploy.sh"
+    assert vt_chay != -1, "workflow deploy không gọi `bash scripts/deploy.sh`"
     assert vt_pull < vt_chay, (
         "workflow chạy deploy.sh TRƯỚC khi pull — lần deploy đầu sau merge sẽ "
         "chạy bản script cũ"
     )
-    assert "--ff-only" in chr(10).join(dong), (
+    assert "--ff-only" in "\n".join(dong), (
         "dùng `git pull --ff-only` để merge lạ không âm thầm xảy ra trên prod"
     )
 
@@ -319,40 +994,465 @@ def test_workflow_khong_chay_script_tu_tmp():
     wf = _GOC / ".github" / "workflows" / "deploy.yml"
     if not wf.is_file():
         pytest.skip("không có deploy.yml")
-    ma = chr(10).join(
-        d for d in wf.read_text(encoding="utf-8").splitlines()
-        if not d.lstrip().startswith("#")
-    )
-    assert "/tmp/deploy" not in ma, (
+    assert "/tmp/deploy" not in "\n".join(_dong_khong_comment(wf)), (
         "workflow chạy deploy.sh từ /tmp — script suy PROJECT_DIR từ BASH_SOURCE "
         "nên project root sẽ thành `/`"
     )
 
 
-def test_setup_ssl_khong_keo_nginx_production_len():
-    """`certbot` khai `depends_on: nginx` — thiếu `--no-deps` là tranh cổng 80.
+# ---------------------------------------------------------------------------
+# Cổng CI: gate phải NHÌN THẤY thứ nó canh
+# ---------------------------------------------------------------------------
 
-    Ở bước bootstrap, chứng thư chưa tồn tại nên nginx production còn chưa khởi
-    động được; đồng thời container bootstrap đang giữ cổng 80.
+# Mọi đường dẫn mà chính tệp test này đọc. Sửa bất kỳ đường nào trong số đó đều
+# có thể phá hợp đồng đóng gói — nên cả bộ phải nằm trong `paths:` của gate.
+_DUONG_GUARD_DOC = [
+    "docker-compose.yml",
+    "docker-compose.rollback.yml",
+    "nginx/Dockerfile",
+    "nginx/templates/default.conf.template",
+    "nginx/docker-entrypoint.d/10-qlts-kiem-bien.sh",
+    "scripts/nginx-apply.sh",
+    "scripts/nginx-verify.sh",
+    "scripts/deploy.sh",
+    "scripts/setup-ssl.sh",
+    ".github/workflows/deploy.yml",
+    "tests-e2e/nginx-packaging/docker-compose.nginx-test.yml",
+]
+
+
+def _khop_glob(duong: str, mau: str) -> bool:
+    """Khớp kiểu `paths:` của GitHub Actions, đủ dùng cho các mẫu ta khai."""
+    if mau.endswith("/**"):
+        return duong.startswith(mau[:-2])
+    if mau.endswith("/*"):
+        return duong.startswith(mau[:-1]) and "/" not in duong[len(mau) - 1 :]
+    return duong == mau
+
+
+def test_bo_loc_paths_cua_gate_phu_moi_duong_ma_guard_doc():
+    """Gate không nhìn thấy thứ nó canh thì nó không canh gì cả.
+
+    `paths:` của `backend-test.yml` trước 13-08-2026 không có `docker-compose.yml`
+    lẫn `nginx/**` — mà bộ guard này gần như CHỈ khẳng định về hai thứ đó. Nghĩa
+    là đúng những sửa đổi nó sinh ra để chặn (mount lại `conf.d`, bỏ `DOMAIN`,
+    dời template) lại là những sửa đổi khiến workflow không chạy: required check
+    treo ở "expected, not run", và lối thoát tự nhiên là chạm bừa một tệp trong
+    `Backend_FastAPI/`. Memory `ci-allowlist-tep-khong-duoc-gac`.
     """
-    sh = _GOC / "scripts" / "setup-ssl.sh"
-    if not sh.is_file():
-        pytest.skip("không có scripts/setup-ssl.sh")
-    for so, d in enumerate(sh.read_text(encoding="utf-8").splitlines(), 1):
-        if d.lstrip().startswith("#") or "certbot" not in d:
+    wf = _GOC / ".github" / "workflows" / "backend-test.yml"
+    if not wf.is_file():
+        pytest.skip("không có backend-test.yml")
+    noi_dung = yaml.safe_load(_doc(wf))
+    # `on:` là hằng `True` của YAML 1.1 khi safe_load — tra cả hai khoá.
+    kich_hoat = noi_dung.get("on", noi_dung.get(True, {}))
+    mau = kich_hoat.get("pull_request", {}).get("paths") or []
+    assert mau, "backend-test.yml không có bộ lọc `paths:`"
+    # `_TAI_LIEU_VAN_HANH` cũng phải nằm trong danh sách: guard tài liệu ĐỌC
+    # từng tệp trong đó, nên một tệp không có mặt ở `paths:` là một tệp mà guard
+    # canh trên giấy còn CI thì không bao giờ chạy để canh. `PRODUCTION_DEPLOY_
+    # GUIDE.md` đã đúng vào ca đó.
+    can_phu = _DUONG_GUARD_DOC + _TAI_LIEU_VAN_HANH
+    thieu = [d for d in can_phu if not any(_khop_glob(d, m) for m in mau)]
+    assert not thieu, (
+        f"gate `pytest` KHÔNG chạy khi các đường sau đổi: {thieu}. "
+        f"Bộ lọc hiện có: {mau}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Override E2E: phải hỏi MODEL COMPOSE SAU KHI GỘP, không đọc YAML thô
+# ---------------------------------------------------------------------------
+
+_E2E = _GOC / "tests-e2e" / "nginx-packaging"
+_E2E_OVERRIDE = _E2E / "docker-compose.nginx-test.yml"
+_E2E_README = _E2E / "README.md"
+
+
+def test_override_e2e_dung_override_cho_ports_va_profiles():
+    """Lớp tĩnh — luôn chạy, kể cả khi không có Docker.
+
+    Compose GỘP danh sách: `ports: []` không xoá cổng nào, và `profiles: [x]`
+    NỐI vào chứ không thay, nên giá trị gộp thành `["production","x"]` và
+    service vẫn khớp `--profile production`. Chỉ `!override` mới thay thật.
+    """
+    if not _E2E_OVERRIDE.is_file():
+        pytest.skip("không có override E2E")
+    tho = _doc(_E2E_OVERRIDE)
+    assert not re.search(r"^\s*ports:\s*\[\]\s*$", tho, re.M), (
+        "còn `ports: []` trần — nó KHÔNG gỡ cổng nào; Compose gộp danh sách"
+    )
+    assert re.search(r"profiles:\s*!override", tho), (
+        "`profiles:` của certbot thiếu `!override` — giá trị gộp vẫn chứa "
+        "`production`, nên `up -d` khởi động một certbot thật với vòng gia hạn "
+        "12h sống qua cả lần khởi động lại máy"
+    )
+
+
+def _co_docker() -> bool:
+    import shutil
+
+    return shutil.which("docker") is not None
+
+
+@pytest.mark.skipif(not _co_docker(), reason="cần Docker CLI để hỏi model Compose")
+def test_model_compose_sau_khi_gop_dung_nhu_override_tuyen_bo(tmp_path):
+    """Lớp hành vi — hỏi CHÍNH Compose, vì luật gộp không đọc được từ YAML thô.
+
+    Bản trước khai `profiles: - khong-dung` và `ports: []` rồi coi như xong;
+    một phép kiểm parse YAML cũng sẽ "thấy" đúng như thế và báo xanh. Chỉ khi
+    hỏi `docker compose config` mới lộ ra giá trị gộp thật.
+
+    Chỉ SKIP khi thật sự không nói chuyện được với Docker daemon. Mọi lỗi khác
+    của `docker compose config` là FAIL: một bài kiểm biến lỗi thành skip thì
+    nó chỉ còn là một dòng xanh, và đó đúng là lớp sai mà cả PR này đang vá.
+    """
+    import json
+    import os
+    import subprocess
+
+    if not _E2E_OVERRIDE.is_file():
+        pytest.skip("không có override E2E")
+
+    # Tệp env rỗng, có thật, nằm ngoài repo — KHÔNG dùng `/dev/null` (trên
+    # Windows nó bị hiểu thành một đường dẫn tương đối không tồn tại, và cả bài
+    # kiểm rơi vào nhánh skip).
+    env_rong = tmp_path / "rong.env"
+    env_rong.write_text("", encoding="utf-8")
+
+    moi_truong = {
+        **os.environ,
+        "MSYS_NO_PATHCONV": "1",
+        "DOMAIN": "nginx-test.local",
+        "POSTGRES_PASSWORD": "x",
+        "NEXT_PUBLIC_API_URL": "http://x",
+        "TEST_BACKEND_IMAGE": "busybox",
+        "TEST_FRONTEND_IMAGE": "busybox",
+        "QLTS_ENV_FILE": str(env_rong),
+    }
+    ket_qua = subprocess.run(
+        [
+            "docker", "compose",
+            "-f", str(_COMPOSE),
+            "-f", str(_E2E_OVERRIDE),
+            "--profile", "production",
+            "config", "--format", "json",
+        ],
+        cwd=str(_GOC),
+        capture_output=True,
+        text=True,
+        env=moi_truong,
+    )
+    if ket_qua.returncode != 0:
+        loi = ket_qua.stderr.lower()
+        khong_co_daemon = any(
+            d in loi
+            for d in (
+                "cannot connect to the docker daemon",
+                "docker daemon is not running",
+                "is not a docker command",
+                "permission denied while trying to connect",
+            )
+        )
+        if khong_co_daemon:
+            pytest.skip(f"không nói chuyện được với Docker daemon: {ket_qua.stderr[:160]}")
+        pytest.fail(f"`docker compose config` lỗi: {ket_qua.stderr[:600]}")
+
+    dich_vu = json.loads(ket_qua.stdout)["services"]
+    assert "certbot" not in dich_vu, (
+        "certbot VẪN nằm trong stack kiểm sau khi gộp — `profiles` bị NỐI chứ "
+        "không bị thay. Lệnh `up -d` trong README sẽ khởi động một certbot thật."
+    )
+    # KHÔNG khẳng định "postgres không publish cổng": trong `docker-compose.yml`
+    # production, postgres vốn đã không publish gì (cổng 5433 chỉ có ở
+    # `docker-compose.override.yml` của dev). Một khẳng định như thế đúng kể cả
+    # khi `!override` bị gỡ sạch — tức nó không canh gì cả.
+    # Khẳng định CÓ NỘI DUNG: sau khi gộp, không service nào được mở ra ngoài
+    # loopback. Nó đúng cho hôm nay (chỉ nginx publish) và vẫn còn răng vào ngày
+    # ai đó thêm cổng cho một service khác.
+    lo_ra_ngoai = {
+        ten: [p for p in dv.get("ports", []) if p.get("host_ip") not in ("127.0.0.1",)]
+        for ten, dv in dich_vu.items()
+        if any(p.get("host_ip") not in ("127.0.0.1",) for p in dv.get("ports", []))
+    }
+    assert not lo_ra_ngoai, (
+        f"stack KIỂM đang mở cổng ra ngoài loopback sau khi gộp: {lo_ra_ngoai}. "
+        "Nó chạy trên máy người phát triển và trên cùng host với stack thật."
+    )
+    cong_nginx = dich_vu["nginx"].get("ports", [])
+    assert cong_nginx, "nginx của stack kiểm không publish cổng nào — E2E sẽ không gọi được"
+    assert {str(p.get("published")) for p in cong_nginx} != {"80", "443"}, (
+        "nginx của stack kiểm vẫn giữ 80/443 của production — `ports` bị GỘP "
+        "chứ không bị thay"
+    )
+
+
+_ROLLBACK = _GOC / "docker-compose.rollback.yml"
+
+# Bốn service ứng dụng có ảnh RIÊNG (`<project>-<service>`), nên rollback phải
+# ghim đủ bốn. Lùi backend mà quên celery là chạy worker phiên bản MỚI trên lược
+# đồ CSDL đã lùi.
+_SERVICE_PHAI_LUI = ["backend", "celery-worker", "celery-beat", "frontend"]
+
+
+def test_co_tep_rollback_ghim_anh_cu():
+    assert _ROLLBACK.is_file(), (
+        "thiếu docker-compose.rollback.yml — không có nó thì rollback phải sinh "
+        "ad-hoc giữa lúc sự cố, đúng thứ runbook cấm"
+    )
+    noi_dung = _tai_compose(_ROLLBACK)["services"]
+    assert sorted(noi_dung) == sorted(_SERVICE_PHAI_LUI), (
+        f"rollback phải ghim ĐÚNG {sorted(_SERVICE_PHAI_LUI)}; hiện: {sorted(noi_dung)}"
+    )
+
+
+@pytest.mark.skipif(not _co_docker(), reason="cần Docker CLI để hỏi model Compose")
+def test_model_compose_rollback_chon_dung_bon_anh_cu(tmp_path):
+    """Bằng chứng hành vi, không phải bằng chứng chữ.
+
+    Quy trình rollback cũ đọc trên giấy thì hợp lý và chạy thì exit 0 — chỉ có
+    model Compose mới nói ra rằng không ảnh cũ nào được chọn.
+    """
+    import json
+    import os
+    import subprocess
+
+    if not _ROLLBACK.is_file():
+        pytest.skip("chưa có docker-compose.rollback.yml")
+    env_rong = tmp_path / "rong.env"
+    env_rong.write_text("", encoding="utf-8")
+    moi_truong = {
+        **os.environ,
+        "MSYS_NO_PATHCONV": "1",
+        "DOMAIN": "nginx-test.local",
+        "POSTGRES_PASSWORD": "x",
+        "NEXT_PUBLIC_API_URL": "http://x",
+        "QLTS_ENV_FILE": str(env_rong),
+        "QLTS_ROLLBACK_TAG": "tag-cu-kiem-thu",
+    }
+
+    def _config(moi_truong_chay):
+        return subprocess.run(
+            [
+                "docker", "compose",
+                "-f", str(_COMPOSE), "-f", str(_ROLLBACK),
+                "--profile", "production", "config", "--format", "json",
+            ],
+            cwd=str(_GOC), capture_output=True, text=True, env=moi_truong_chay,
+        )
+
+    kq = _config(moi_truong)
+    if kq.returncode != 0:
+        loi = kq.stderr.lower()
+        if "cannot connect to the docker daemon" in loi or "is not a docker command" in loi:
+            pytest.skip(f"không nói chuyện được với Docker daemon: {kq.stderr[:160]}")
+        pytest.fail(f"`docker compose config` lỗi: {kq.stderr[:600]}")
+
+    dich_vu = json.loads(kq.stdout)["services"]
+    for ten in _SERVICE_PHAI_LUI:
+        s = dich_vu[ten]
+        assert s.get("image") == f"qlts-{ten}:tag-cu-kiem-thu", (
+            f"`{ten}` không được ghim về ảnh cũ; hiện image={s.get('image')!r}"
+        )
+        assert not s.get("build"), (
+            f"`{ten}` vẫn còn `build:` — `up -d` sẽ dựng lại từ mã MỚI, tức "
+            "không rollback gì cả"
+        )
+    assert dich_vu["nginx"].get("build"), (
+        "nginx CỐ Ý vẫn build từ cây git (cấu hình của nó đi theo image); ghim "
+        "thêm một tag ảnh là tạo nguồn chuẩn thứ hai"
+    )
+
+    # Quên tag phải ĐỔ, không được lặng lẽ dựng lại ảnh hiện hành.
+    thieu_tag = {k: v for k, v in moi_truong.items() if k != "QLTS_ROLLBACK_TAG"}
+    assert _config(thieu_tag).returncode != 0, (
+        "thiếu QLTS_ROLLBACK_TAG mà lệnh vẫn xanh — đúng cái bẫy của quy trình cũ"
+    )
+
+
+_RUNBOOK = _GOC / "Documents" / "ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md"
+_PREFLIGHT = _GOC / "scripts" / "rollback-preflight.sh"
+
+
+def _khoi_rollback() -> list[tuple[int, str]]:
+    r"""Các LỆNH trong §8.1 (khối rollback), kèm số dòng của dòng đầu lệnh.
+
+    Dòng nối tiếp `\` được NỐI LẠI. Không nối thì guard mù: lệnh
+        docker compose -f docker-compose.yml -f docker-compose.rollback.yml \
+            --env-file .env.production --profile production up -d --wait \
+            backend celery-worker celery-beat frontend
+    có `docker compose` ở dòng 1 và tên service ở dòng 3, nên một phép kiểm
+    theo từng dòng thấy "lệnh compose không chạm service nào" rồi bỏ qua. Bản
+    nháp đầu của chính guard này đã xanh vô nghĩa đúng như vậy — 0/3 đột biến
+    bị bắt — cho tới khi mỗi lệnh được đột biến riêng lẻ mới lộ ra.
+    """
+    noi_dung = _doc(_RUNBOOK)
+    i = noi_dung.index("### 8.1")
+    j = noi_dung.index("### 8.2", i)
+    truoc = noi_dung[:i].count("\n")
+    ra: list[tuple[int, str]] = []
+    trong = False
+    dang_noi: tuple[int, str] | None = None
+    for k, dong in enumerate(noi_dung[i:j].splitlines(), start=truoc + 1):
+        if dong.lstrip().startswith("```"):
+            trong = not trong
             continue
-        if "run --rm" in d:
-            assert "--no-deps" in d, (
-                f"setup-ssl.sh:{so} chạy `run --rm certbot` thiếu `--no-deps` — "
-                "Compose sẽ kéo nginx production lên giữa lúc bootstrap."
-            )
-            # Service `certbot` override entrypoint thành vòng lặp
-            # `certbot renew … sleep 12h`. `run` chỉ thay COMMAND, không thay
-            # entrypoint — nên thiếu `--entrypoint certbot` thì container rơi
-            # vào vòng gia hạn và phần `certonly …` chỉ là đối số không được
-            # thực thi. Chứng thư sẽ không bao giờ được cấp, mà lệnh vẫn "chạy".
-            assert "--entrypoint certbot" in d, (
-                f"setup-ssl.sh:{so} thiếu `--entrypoint certbot` — service này "
-                "override entrypoint thành vòng lặp renew, nên `certonly` sẽ "
-                "không bao giờ chạy."
-            )
+        if not trong or not dong.strip() or dong.lstrip().startswith("#"):
+            continue
+        if dang_noi is not None:
+            so_dau, truoc_do = dang_noi
+            gop = truoc_do + " " + dong.strip()
+        else:
+            so_dau, gop = k, dong
+        if gop.rstrip().endswith("\\"):
+            dang_noi = (so_dau, gop.rstrip()[:-1].rstrip())
+        else:
+            dang_noi = None
+            ra.append((so_dau, gop))
+    if dang_noi is not None:
+        ra.append(dang_noi)
+    return ra
+
+
+def test_kiem_tai_san_rollback_chay_TRUOC_khi_cham_CSDL():
+    """Đảo thứ tự này là tự đưa mình vào trạng thái không tiến không lùi.
+
+    Bản trước khôi phục CSDL rồi mới đi tìm ảnh cũ. Ảnh không còn (registry đã
+    dọn, tag đã trôi, máy đã prune) thì lúc phát hiện, `pg_restore --clean` đã
+    nạp lại lược đồ CŨ trong khi mã đang chạy vẫn là mã MỚI.
+    """
+    assert _PREFLIGHT.is_file(), "thiếu scripts/rollback-preflight.sh"
+    dong = _khoi_rollback()
+    vt_kiem = next((i for i, (_, d) in enumerate(dong) if "rollback-preflight.sh" in d), -1)
+    vt_db = next((i for i, (_, d) in enumerate(dong) if "pg_restore" in d), -1)
+    assert vt_kiem != -1, "§8.1 không gọi scripts/rollback-preflight.sh"
+    assert vt_db != -1, "§8.1 không còn bước khôi phục CSDL?"
+    assert vt_kiem < vt_db, (
+        "kiểm tài sản rollback nằm SAU `pg_restore` — CSDL bị đụng trước khi biết "
+        "có đường lùi hay không"
+    )
+
+
+def test_rollback_khong_nuot_loi():
+    """`docker pull ... || echo "DUNG LAI"` trả exit 0 rồi chạy tiếp."""
+    pham = [
+        f"{so}: {d.strip()[:80]}"
+        for so, d in _khoi_rollback()
+        if re.search(r"\|\|\s*echo", d)
+    ]
+    assert not pham, (
+        "§8.1 còn nuốt lỗi bằng `|| echo` — trong cửa sổ rollback thì một lệnh "
+        f"hỏng phải DỪNG, không phải in ra một câu rồi đi tiếp: {pham}"
+    )
+
+
+def test_moi_lenh_sau_khi_lui_deu_giu_tep_rollback():
+    """Thiếu một `-f` ở bước sau là tự hoàn tác rollback, im lặng.
+
+    Đo model: có tệp rollback thì `backend image=qlts-backend:<cũ> build=false`;
+    thiếu nó thì `image=None build=true` — tức `up` dựng lại từ mã MỚI. Bản
+    trước đúng vào bẫy ấy ở Step "restore env/config" và Step "unlock".
+    """
+    dong = _khoi_rollback()
+    bat_dau = next(
+        (i for i, (_, d) in enumerate(dong)
+         if "rollback-preflight.sh" in d or "docker-compose.rollback.yml" in d),
+        None,
+    )
+    assert bat_dau is not None, "§8.1 không hề nhắc tới tài sản rollback"
+    pham = []
+    for so, d in dong[bat_dau:]:
+        if "docker compose" not in d:
+            continue
+        if not any(s in d for s in _SERVICE_PHAI_LUI):
+            continue  # nginx build từ cây git là đúng, không cần tệp rollback
+        if "-f docker-compose.rollback.yml" not in d:
+            pham.append(f"{so}: {d.strip()[:90]}")
+    assert not pham, (
+        "lệnh compose chạm service đã lùi mà THIẾU `-f docker-compose.rollback.yml`:\n  "
+        + "\n  ".join(pham)
+    )
+
+
+def test_tag_rollback_lay_tu_container_dang_chay_khong_tu_latest():
+    """`qlts-<service>:latest` là tag DI ĐỘNG.
+
+    Nó có thể đã trôi sang một bản build khác từ trước khi ta chạm vào, nên tag
+    từ nó là tạo ra tài sản rollback SAI ngay lúc tạo — và không gì phát hiện
+    được về sau. `.Image` của container đang chạy mới là "phiên bản đang phục vụ".
+    """
+    noi_dung = _doc(_RUNBOOK)
+    i = noi_dung.index("### 5.4")
+    j = noi_dung.index("### 5.5", i)
+    khoi = noi_dung[i:j]
+    assert not re.search(r"docker tag\s+\"?qlts-\$?\{?S?\}?[^\"\s]*:latest", khoi), (
+        "§5.4 còn tag từ `:latest` — phải lấy `.Image` của container đang chạy"
+    )
+    assert "ps -q" in khoi and "{{.Image}}" in khoi, (
+        "§5.4 phải suy ảnh từ container đang chạy (`ps -q` → `inspect .Image`)"
+    )
+    assert "MANIFEST" in khoi, (
+        "§5.4 phải ghi manifest (service · container ID · image ID · reference) — "
+        "đó là thứ `rollback-preflight.sh` đối chiếu để phát hiện tag đã trôi"
+    )
+
+
+def test_preflight_doi_chieu_image_id_chu_khong_chi_ton_tai():
+    """Ảnh "có mặt" không chứng minh nó là ảnh CŨ."""
+    ma = _ma_lenh(_PREFLIGHT)
+    assert "{{.Id}}" in ma, "preflight không đọc image ID thật để đối chiếu"
+    assert "config --images" in ma, (
+        "preflight phải hỏi model Compose xem ảnh nào SẼ được dùng, không chỉ "
+        "kiểm ảnh có tồn tại"
+    )
+    assert re.search(r"grep\s+-qxF", ma), (
+        "so khớp ảnh phải KHỚP CẢ DÒNG (`grep -qxF`): một `grep -E` lỏng sẽ xanh "
+        "khi chỉ một trong bốn ảnh khớp"
+    )
+
+
+def test_ca_hoi_quy_e2e_dung_no_deps():
+    """Thiếu `--no-deps`, một ca chưa hề chạy vẫn báo lại trạng thái của ca trước.
+
+    `up -d --force-recreate nginx-candidate` mà không `--no-deps` thì tập `up`
+    là {postgres, redis, backend, frontend, nginx-candidate} và `--force-recreate`
+    đụng tất: `backend` chạy lại `alembic upgrade head` + nạp Casbin, và nếu nó
+    không kịp `service_healthy` thì lệnh `up` BỎ DỞ trước khi chạm candidate —
+    container của ca trước còn đứng nguyên, và người chạy đọc trạng thái của nó
+    rồi đánh dấu ca này PASS.
+    """
+    # Lớp 1 — nơi lệnh THẬT SỰ chạy.
+    ma_apply = _ma_lenh(_APPLY)
+    lenh_candidate = re.search(r"[^\n]*up -d[^\n]*nginx-candidate[^\n]*", ma_apply)
+    assert lenh_candidate, "nginx-apply.sh không dựng nginx-candidate"
+    assert "--no-deps" in lenh_candidate.group(0), (
+        f"lệnh dựng candidate thiếu `--no-deps`: {lenh_candidate.group(0).strip()}"
+    )
+
+    # Lớp 2 — tài liệu E2E phải gọi ĐÚNG script đó, không chép tay vòng lặp.
+    if not _E2E_README.is_file():
+        pytest.skip("không có README E2E")
+    tho = _doc(_E2E_README)
+    assert "nginx-apply.sh" in tho, (
+        "README E2E tự chép một vòng `up -d` thay vì gọi scripts/nginx-apply.sh — "
+        "bản chép chỉ chứng minh giả định của người viết tài liệu"
+    )
+    for dong in tho.splitlines():
+        if "up -d" in dong and "nginx-candidate" in dong:
+            assert "--no-deps" in dong, f"ca hồi quy thiếu `--no-deps`: {dong.strip()}"
+
+
+def test_readme_e2e_khong_chep_de_env_production():
+    """`cp fixture .env.production` phá tệp bí mật không khôi phục được."""
+    if not _E2E_README.is_file():
+        pytest.skip("không có README E2E")
+    pham = [
+        d.strip()
+        for d in _doc(_E2E_README).splitlines()
+        if re.search(r"^\s*cp\s+\S+\s+\.env\.production", d)
+    ]
+    assert not pham, (
+        f"README E2E hướng dẫn ghi đè .env.production: {pham}. Dùng "
+        "`QLTS_ENV_FILE` — docker-compose.yml đã khai "
+        "`env_file: ${QLTS_ENV_FILE:-.env.production}` chính vì việc này."
+    )

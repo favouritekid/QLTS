@@ -1,0 +1,59 @@
+# =============================================================================
+# QLTS — ROLLBACK về ảnh Docker đã tag trước cutover
+# =============================================================================
+# Dùng bằng cách THÊM một `-f`, KHÔNG bao giờ chép đè `docker-compose.override.yml`:
+#
+#   QLTS_ROLLBACK_TAG=pre-admission-cutover-20260501 \
+#   docker compose -f docker-compose.yml -f docker-compose.rollback.yml \
+#     --env-file .env.production --profile production up -d --wait
+#
+# Vì sao tệp này tồn tại (RUNBOOK §8.1 Step 3, sửa 13-08-2026)
+# -----------------------------------------------------------
+# Quy trình rollback cũ ("Cách A — recommended") bảo người trực:
+#     docker pull qlts-backend:pre-admission-cutover-${DATE}
+#     export BACKEND_IMAGE_TAG=... ; export FRONTEND_IMAGE_TAG=...
+#     docker compose down && docker compose up -d
+# Nhưng `docker-compose.yml` KHÔNG hề đọc hai biến ấy: bốn service ứng dụng chỉ
+# khai `build:`, không khai `image:`. Đo thật — render compose với hai tag giả:
+# `services.backend.image` và `services.frontend.image` đều là `None`, và
+# `grep -c IMAGE_TAG docker-compose.yml` = 0. Nên `down` + `up -d` chỉ DỰNG LẠI
+# đúng ảnh hiện hành; hai tag cũ bị bỏ qua hoàn toàn. Chính chú thích trong
+# runbook cũng ghi "Yêu cầu: docker-compose.yml phải support env var trong image
+# tag" — một tiền đề chưa bao giờ được đáp ứng. Rollback xanh mà không rollback.
+#
+# ⚠️ BỐN service, không phải hai. Compose đặt tên ảnh dựng được theo
+# `<project>-<service>`, nên `celery-worker` và `celery-beat` có ảnh RIÊNG chứ
+# không dùng chung ảnh của `backend`. Lùi backend mà quên hai service kia là
+# chạy worker phiên bản MỚI trên lược đồ CSDL đã lùi — đúng loại lệch âm thầm
+# mà cửa sổ rollback không chịu nổi.
+#
+# Vì sao KHÔNG khai `image:` thẳng trong `docker-compose.yml`: làm thế là đổi
+# ngữ nghĩa build/deploy của mọi lần chạy bình thường. Tệp này chỉ có tác dụng
+# khi được truyền tường minh qua `-f`, nên đường deploy hằng ngày không đổi một
+# byte nào.
+#
+# `:?` an toàn ở đây (khác với `docker-compose.yml`): tệp này KHÔNG bao giờ được
+# Compose tự nạp, nên nó không thể làm gãy lệnh của dev. Quên đặt tag thì lệnh
+# rollback đổ ngay thay vì lặng lẽ dựng lại ảnh hiện hành — đúng cái bẫy cũ.
+# =============================================================================
+
+services:
+  backend:
+    image: qlts-backend:${QLTS_ROLLBACK_TAG:?dat QLTS_ROLLBACK_TAG = tag da ghi o RUNBOOK 5.4}
+    build: !reset null
+
+  celery-worker:
+    image: qlts-celery-worker:${QLTS_ROLLBACK_TAG:?dat QLTS_ROLLBACK_TAG}
+    build: !reset null
+
+  celery-beat:
+    image: qlts-celery-beat:${QLTS_ROLLBACK_TAG:?dat QLTS_ROLLBACK_TAG}
+    build: !reset null
+
+  frontend:
+    image: qlts-frontend:${QLTS_ROLLBACK_TAG:?dat QLTS_ROLLBACK_TAG}
+    build: !reset null
+
+  # nginx CỐ Ý không nằm ở đây: cấu hình của nó đi theo cây git (xem
+  # nginx/Dockerfile), nên lùi cây về đúng commit rồi `build` là đã lùi đúng
+  # nginx. Ghim thêm một tag ảnh chỉ tạo ra một nguồn chuẩn thứ hai.
