@@ -69,9 +69,14 @@ docker compose watch          # or just: dev.cmd
 #   (Windows bind mounts don't propagate inotify → watch is required)
 # - Ports exposed: backend:8000, frontend:3000, postgres:5433, redis:6380
 
-# Production — `-f` và `--env-file` là BẮT BUỘC, không phải tuỳ chọn
+# Production — `-f` và `--env-file` là BẮT BUỘC, không phải tuỳ chọn.
+# Liệt kê service TƯỜNG MINH: `up -d` trần cuốn cả nginx vào, thay thẳng
+# container đang phục vụ bằng một cấu hình chưa được đo lần nào.
 docker compose -f docker-compose.yml --env-file .env.production \
-    --profile production up -d
+    --profile production up -d --wait postgres redis backend celery-worker celery-beat frontend
+# nginx đi qua cổng candidate — xem "Nginx & Deploy" bên dưới
+set -a && source .env.production && set +a
+bash scripts/nginx-apply.sh "$DOMAIN"
 # - Backend: gunicorn with workers
 # - Frontend: Next.js standalone build
 # - Nginx: SSL termination + reverse proxy

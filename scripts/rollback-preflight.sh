@@ -81,33 +81,25 @@ for S in "${DICH_VU[@]}"; do
     ID_GHI=$(awk -F'\t' -v s="$S" '$1==s {print $3}' "$MANIFEST" | head -1)
     [ -n "$ID_GHI" ] || error "$MANIFEST không ghi image ID cho '$S'"
 
-    if ! docker image inspect "$REF" >/dev/null 2>&1; then
-        log "  $REF chưa có trên máy — thử pull..."
-        docker pull "$REF" \
-            || error "KHÔNG lấy được $REF. DỪNG LẠI — chưa đụng gì tới CSDL."
-    fi
-
-    ID_THAT=$(docker image inspect -f '{{.Id}}' "$REF")
-    [ "$ID_THAT" = "$ID_GHI" ] \
-        || error "$REF trỏ tới ảnh KHÁC với lúc tag.
-    manifest: $ID_GHI
-    hiện tại: $ID_THAT
-  Tag đã trôi. DỪNG LẠI — chưa đụng gì tới CSDL."
-
-    # Ảnh CÓ TRÊN MÁY NÀY không chứng minh còn rollback được sau khi mất máy.
-    # Phép kiểm ở trên luôn ĐẠT nếu tag vừa được tạo cục bộ ở §5.4 — kể cả khi
-    # mọi `docker push` đều hỏng. Hỏi thẳng registry bằng `manifest inspect`
-    # (không tải ảnh về) mới biết tài sản có thật ở ngoài máy hay không.
-    # Ảnh CÓ TRÊN MÁY NÀY không chứng minh còn rollback được sau khi mất máy.
-    # Phép kiểm ID ở trên luôn ĐẠT nếu tag vừa được tạo cục bộ ở §5.4 — kể cả
-    # khi mọi `docker push` đều hỏng.
+    # Ảnh CÓ TRÊN MÁY NÀY không chứng minh còn rollback được sau khi mất máy:
+    # phép so ID luôn ĐẠT nếu tag vừa được tạo cục bộ ở §5.4, kể cả khi mọi
+    # `docker push` đều hỏng.
     #
-    # Và "tag có trên registry" cũng chưa đủ: tag ở xa có thể đã bị đẩy đè bởi
-    # một ảnh KHÁC. Thứ duy nhất bất biến là DIGEST. Ta đối chiếu digest đã ghi
-    # lúc push, và hỏi registry bằng chính digest ấy — tag trôi thành không liên quan.
+    # Và "tag có trên registry" cũng chưa đủ — tag ở xa có thể đã bị đẩy đè bởi
+    # một ảnh KHÁC. Thứ duy nhất bất biến là DIGEST.
+    #
+    # Vì thế mọi lần lấy ảnh về đều đi BẰNG DIGEST. Bản trước còn `docker pull
+    # "$REF"`: host bị prune + tag registry đã trôi thì nó kéo về ảnh MỚI rồi
+    # dừng vì ID lệch — trong khi ảnh cũ vẫn nằm nguyên ở đó dưới digest cũ.
+    # Câu "tag trôi thành không liên quan" chỉ đúng khi không còn chỗ nào hỏi
+    # registry bằng tag nữa.
     if [ "${QLTS_ROLLBACK_LOCAL_ONLY:-0}" = "1" ]; then
         warn "$REF: BỎ QUA kiểm registry (QLTS_ROLLBACK_LOCAL_ONLY=1)."
         warn "   Ảnh chỉ có TRÊN MÁY NÀY. Mất máy / prune = KHÔNG rollback được."
+        docker image inspect "$REF" >/dev/null 2>&1 \
+            || error "$REF không có trên máy, mà QLTS_ROLLBACK_LOCAL_ONLY=1 cấm
+  đi tìm ở registry. Không còn nguồn nào lấy được ảnh cũ.
+  DỪNG LẠI — chưa đụng gì tới CSDL."
     else
         DIGEST=$(awk -F'\t' -v s="$S" '$1==s {print $5}' "$MANIFEST" | head -1)
         [ -n "$DIGEST" ] \
@@ -119,13 +111,53 @@ for S in "${DICH_VU[@]}"; do
             *@sha256:*) ;;
             *) error "digest của '$S' sai định dạng (cần repo@sha256:…): '$DIGEST'" ;;
         esac
+
+        # Repo phải có namespace. `qlts-backend@sha256:…` được Docker phân giải
+        # thành `docker.io/library/qlts-backend` — kho ảnh thư viện chính thức,
+        # không phải kho của dự án. Một manifest ghi ref như thế nghĩa là §5.4
+        # đã chạy bằng bản cũ (chưa có QLTS_ROLLBACK_REGISTRY) và ảnh KHÔNG hề
+        # nằm ở đâu ngoài máy này.
+        REPO="${DIGEST%%@*}"
+        case "$REPO" in
+            docker.io/library/*)
+                error "digest của '$S' trỏ vào kho thư viện chính thức: '$REPO'.
+  Đó không phải kho của dự án. Chạy lại §5.4 với QLTS_ROLLBACK_REGISTRY." ;;
+            */*) ;;
+            *)
+                error "digest của '$S' không có namespace: '$REPO'.
+  Docker sẽ hiểu là 'docker.io/library/$REPO'. Ref trỏ kho riêng phải là
+  'namespace/repo' hoặc 'registry/namespace/repo'. Chạy lại §5.4 với
+  QLTS_ROLLBACK_REGISTRY." ;;
+        esac
+
         docker manifest inspect "$DIGEST" >/dev/null 2>&1 \
             || error "KHÔNG phân giải được $DIGEST trên registry.
   Ảnh cũ của '$S' không còn ở ngoài máy — nhiều khả năng một lần \`docker push\`
   ở §5.4 đã hỏng, hoặc registry đã dọn. Rollback lúc này phụ thuộc hoàn toàn
   vào đĩa của máy chủ. DỪNG LẠI — chưa đụng gì tới CSDL."
         log "  ✓ $S: digest ${DIGEST##*@} có thật trên registry"
+
+        # Thiếu ảnh, HOẶC tag cục bộ đã trôi sang ID khác: cả hai ca đều lấy lại
+        # bằng digest rồi tự đóng lại tag mà `docker-compose.rollback.yml` ghim.
+        if ! docker image inspect "$REF" >/dev/null 2>&1 \
+           || [ "$(docker image inspect -f '{{.Id}}' "$REF")" != "$ID_GHI" ]; then
+            log "  $REF thiếu hoặc đã trôi — kéo lại BẰNG DIGEST..."
+            docker pull "$DIGEST" \
+                || error "KHÔNG kéo được $DIGEST. DỪNG LẠI — chưa đụng gì tới CSDL."
+            docker tag "$DIGEST" "$REF" \
+                || error "KHÔNG gắn được tag $REF cho $DIGEST."
+        fi
     fi
+
+    docker image inspect "$REF" >/dev/null 2>&1 \
+        || error "$REF vẫn không có trên máy sau mọi cách lấy.
+  DỪNG LẠI — chưa đụng gì tới CSDL."
+    ID_THAT=$(docker image inspect -f '{{.Id}}' "$REF")
+    [ "$ID_THAT" = "$ID_GHI" ] \
+        || error "$REF trỏ tới ảnh KHÁC với lúc tag.
+    manifest: $ID_GHI
+    hiện tại: $ID_THAT
+  DỪNG LẠI — chưa đụng gì tới CSDL."
     log "  ✓ $REF khớp ID trong manifest"
 done
 
@@ -138,7 +170,43 @@ if [ "${QLTS_ROLLBACK_LOCAL_ONLY:-0}" != "1" ]; then
         || error "$MANIFEST chưa ghi dòng '# offsite' — bản kê chỉ tồn tại trên máy này.
   Mất máy thì còn ảnh trên registry nhưng KHÔNG biết digest nào là ảnh cũ.
   Chép bản kê vào gói backup offsite (§5.3) rồi ghi lại đường dẫn đó vào manifest."
-    log "  ✓ bản kê đã có bản ngoài máy: $OFFSITE"
+
+    # Một chuỗi đường dẫn không rỗng KHÔNG chứng minh gì cả: object có thể chưa
+    # bao giờ được upload, đã bị lifecycle dọn, hoặc không đọc lại được (thiếu
+    # quyền, sai KMS key, sai bucket). Phải TẢI VỀ và so NỘI DUNG.
+    command -v aws >/dev/null 2>&1 \
+        || error "không có \`aws\` trên máy này nên KHÔNG kiểm được bản kê offsite.
+  Cài aws CLI, hoặc khai rủi ro tường minh bằng QLTS_ROLLBACK_LOCAL_ONLY=1
+  (nghĩa là chấp nhận: mất máy = mất đường lùi)."
+
+    TMP_OFFSITE=$(mktemp -d)
+    trap 'rm -rf "$TMP_OFFSITE"' EXIT
+
+    aws s3 cp "$OFFSITE" "$TMP_OFFSITE/manifest.txt" >/dev/null 2>&1 \
+        || error "KHÔNG tải được bản kê offsite: $OFFSITE
+  Object không tồn tại, đã bị dọn, hoặc không có quyền đọc.
+  DỪNG LẠI — chưa đụng gì tới CSDL."
+    aws s3 cp "${OFFSITE}.sha256" "$TMP_OFFSITE/manifest.sha256" >/dev/null 2>&1 \
+        || error "KHÔNG tải được checksum đi kèm: ${OFFSITE}.sha256
+  §5.4 phải upload cả tệp .sha256 — không có nó thì bản tải về không kiểm được."
+
+    SUM_THAT=$(sha256sum "$TMP_OFFSITE/manifest.txt" | awk '{print $1}')
+    SUM_GHI=$(awk '{print $1}' "$TMP_OFFSITE/manifest.sha256" | head -1)
+    [ "$SUM_THAT" = "$SUM_GHI" ] \
+        || error "bản kê offsite KHÔNG khớp checksum của chính nó.
+    ghi:      $SUM_GHI
+    tải về:   $SUM_THAT
+  Object đã hỏng hoặc bị ghi đè. DỪNG LẠI — chưa đụng gì tới CSDL."
+
+    # Bản offsite phải TỰ ĐỦ: khôi phục nó về một máy trắng rồi chạy chính
+    # script này phải ĐẠT. Bản nháp trước upload bản kê ở trạng thái CHƯA có
+    # dòng '# offsite' (copy trước, append sau) — tức bản cứu hộ tự làm mình đỏ.
+    cmp -s "$TMP_OFFSITE/manifest.txt" "$MANIFEST" \
+        || error "bản kê offsite KHÁC bản trên máy.
+  Thường là do §5.4 copy TRƯỚC khi ghi đủ metadata. Bản đưa ra ngoài phải là
+  bản HOÀN CHỈNH, nếu không thì khôi phục từ nó rồi chạy preflight sẽ tự đỏ."
+
+    log "  ✓ bản kê offsite tải được, khớp checksum và khớp bản local: $OFFSITE"
 fi
 
 # --- 3. Model Compose chọn ĐÚNG bốn ảnh ấy ---------------------------------

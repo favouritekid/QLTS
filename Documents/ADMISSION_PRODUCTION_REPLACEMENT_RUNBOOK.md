@@ -207,27 +207,57 @@ done
 
 # Push registry — VẪN trong `set -e`. Hỏng ở đây là DỪNG, không phải ghi chú.
 #
+# REGISTRY phải khai TƯỜNG MINH. `docker push qlts-backend:<tag>` KHÔNG đẩy vào
+# kho của dự án: một ref không có namespace được Docker phân giải thành
+# `docker.io/library/qlts-backend` — không gian tên của các ảnh thư viện chính
+# thức, ta không sở hữu. Ref trỏ kho riêng bắt buộc có dạng `namespace/repo`
+# hoặc `registry/namespace/repo`. Bản nháp trước thiếu đúng chỗ này, nên toàn
+# bộ đường off-host chưa từng chạy nổi một lần.
+QLTS_ROLLBACK_REGISTRY="${QLTS_ROLLBACK_REGISTRY:?dat vd ghcr.io/favouritekid hoac <acct>.dkr.ecr.<region>.amazonaws.com/qlts}"
+
 # Máy KHÔNG có registry: đừng chạy khối này, và phải khai rủi ro tường minh
 # `QLTS_ROLLBACK_LOCAL_ONLY=1` khi gọi preflight. Chạy `push` rồi mặc nó hỏng là
 # tự dựng lại đúng cái bẫy: tag cục bộ có, preflight xanh, tài sản không tồn tại
 # ở đâu ngoài đĩa máy này.
 for S in backend celery-worker celery-beat frontend; do
-    docker push "qlts-${S}:${QLTS_ROLLBACK_TAG}"
+    REMOTE="${QLTS_ROLLBACK_REGISTRY}/qlts-${S}:${QLTS_ROLLBACK_TAG}"
+    docker tag "qlts-${S}:${QLTS_ROLLBACK_TAG}" "$REMOTE"
+    docker push "$REMOTE"
     # DIGEST là thứ duy nhất bất biến: tag ở xa có thể bị đẩy đè bởi ảnh khác,
-    # digest thì không. Preflight sẽ hỏi registry bằng chính chuỗi này.
-    DIGEST=$(docker inspect --format '{{index .RepoDigests 0}}' "qlts-${S}:${QLTS_ROLLBACK_TAG}")
+    # digest thì không. Preflight KÉO ẢNH VỀ BẰNG chuỗi này (không phải bằng
+    # tag), nên tag trôi mới thật sự thành chuyện không liên quan.
+    #
+    # Lọc theo đúng repo vừa push: `{{index .RepoDigests 0}}` lấy phần tử ĐẦU,
+    # mà một ảnh từng được push vào nhiều repo sẽ có nhiều RepoDigests — phần tử
+    # 0 khi ấy có thể là digest của repo KHÁC.
+    DIGEST=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$REMOTE" \
+        | grep "^${QLTS_ROLLBACK_REGISTRY}/qlts-${S}@" | head -1)
     [ -n "$DIGEST" ] || { echo "KHONG lay duoc digest cho $S sau khi push"; exit 1; }
     # thêm digest vào đúng dòng của service đó (cột 5)
     awk -F'\t' -v s="$S" -v d="$DIGEST" 'BEGIN{OFS="\t"} $1==s{$5=d} {print}' \
         "$MANIFEST" > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST"
 done
 
-# Bản kê phải RA KHỎI MÁY. Ảnh ở registry mà bản kê chỉ nằm trên host thì mất
-# host = còn ảnh nhưng không biết digest nào là ảnh cũ.
-cp "$MANIFEST" "config_backup_${DATE}_manifest.txt"
-printf '# offsite\ts3://qlts-backup/admission-cutover/config_backup_%s_manifest.txt\n' \
-    "${DATE}" >> "$MANIFEST"
-aws s3 cp "config_backup_${DATE}_manifest.txt" s3://qlts-backup/admission-cutover/
+# Bản kê phải RA KHỎI MÁY — và bản RA KHỎI MÁY phải là bản HOÀN CHỈNH.
+#
+# Thứ tự dưới đây là bản chất chứ không phải khẩu vị. Bản nháp trước `cp` TRƯỚC
+# rồi mới `printf '# offsite'` vào bản local, nên tệp đưa lên S3 thiếu đúng cái
+# dòng mà preflight bắt buộc phải có: khôi phục bản kê từ S3 rồi chạy preflight
+# là tự đỏ. Đường lùi hỏng đúng vào lúc dùng tới nó.
+OFFSITE_URL="s3://qlts-backup/admission-cutover/config_backup_${DATE}_manifest.txt"
+printf '# offsite\t%s\n' "$OFFSITE_URL" >> "$MANIFEST"   # 1. hoàn chỉnh TRƯỚC
+cp "$MANIFEST" "config_backup_${DATE}_manifest.txt"      # 2. copy bản hoàn chỉnh
+sha256sum "config_backup_${DATE}_manifest.txt" | awk '{print $1}' \
+    > "config_backup_${DATE}_manifest.txt.sha256"        # 3. checksum đi kèm
+aws s3 cp "config_backup_${DATE}_manifest.txt" "$OFFSITE_URL"
+aws s3 cp "config_backup_${DATE}_manifest.txt.sha256" "${OFFSITE_URL}.sha256"
+
+# 4. Tải NGƯỢC về và so NỘI DUNG. `aws s3 cp` trả 0 không chứng minh object đọc
+#    lại được (quyền, KMS, lifecycle, sai bucket đều có thể lộ ra ở đây).
+aws s3 cp "$OFFSITE_URL" - > "${MANIFEST}.offsite-check"
+cmp -s "${MANIFEST}.offsite-check" "$MANIFEST" \
+    || { echo "ban ke tren S3 KHAC ban local — DUNG LAI"; exit 1; }
+rm -f "${MANIFEST}.offsite-check"
 set +e
 
 cat "$MANIFEST"    # git-rev · offsite · service · CID · image ID · reference · digest

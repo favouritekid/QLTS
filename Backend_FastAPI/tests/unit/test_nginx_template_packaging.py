@@ -1551,21 +1551,51 @@ def test_preflight_doi_chieu_DIGEST_chu_khong_chi_ton_tai_tag():
     )
 
 
-def test_deploy_guide_khong_up_d_TRAN_cham_nginx():
-    """`up -d` trần thay thẳng nginx đang phục vụ, bỏ qua cổng candidate."""
-    if not _GUIDE.is_file():
-        pytest.skip("không có PRODUCTION_DEPLOY_GUIDE.md")
+def _lenh_ghep_trong_tai_lieu(duong: Path) -> list[tuple[int, str]]:
+    r"""Như `_dong_lenh_trong_tai_lieu` nhưng NỐI các dòng nối tiếp `\`.
+
+    Không nối thì mọi guard đọc theo dòng đều né được bằng đúng một lần xuống
+    dòng: `--profile production \` + `    up -d` là cùng MỘT lệnh mà phép kiểm
+    từng dòng không thấy gì cả. Đã vấp đúng lỗi này (0/3 đột biến bị bắt) nên
+    nó thành helper chung thay vì mỗi nơi tự chống một kiểu.
+
+    Chú thích cuối dòng cũng bị cắt: `up -d --wait backend  # KHÔNG restart`
+    không được tính chữ trong lời nhắc là một tên service.
+    """
+    ra: list[tuple[int, str]] = []
+    for so, dong in _dong_lenh_trong_tai_lieu(duong):
+        if ra and ra[-1][1].rstrip().endswith("\\"):
+            ra[-1] = (ra[-1][0], ra[-1][1].rstrip()[:-1].rstrip() + " " + dong.strip())
+        else:
+            ra.append((so, dong))
+    return [(so, re.split(r"\s+#", d, maxsplit=1)[0]) for so, d in ra]
+
+
+def _up_d_cham_nginx(duong: Path, chi_production: bool = False) -> list[str]:
+    """Các lệnh `up -d` hoặc TRẦN, hoặc gọi thẳng tên nginx."""
     pham = []
-    for so, dong in _dong_lenh_trong_tai_lieu(_GUIDE):
+    for so, dong in _lenh_ghep_trong_tai_lieu(duong):
+        if chi_production and not (
+            "--profile production" in dong or ".env.production" in dong
+        ):
+            continue  # mục DEV cố ý dùng override — áp luật production vào là sai
         if not re.search(r"\bup -d\b", dong):
             continue
-        # `up -d` phải liệt kê service tường minh, và KHÔNG được gồm nginx
-        sau = dong.split("up -d", 1)[1]
-        sau = re.sub(r"--\S+(\s+\S+)?", "", sau).strip()  # bỏ cờ
+        # Bỏ CỜ, không bỏ tham số theo sau: `--\S+(\s+\S+)?` sẽ nuốt luôn
+        # `nginx` trong `up -d --wait nginx` và guard mất đúng thứ nó canh.
+        sau = re.sub(r"--\S+", "", dong.split("up -d", 1)[1]).strip()
         if not sau:
             pham.append(f"{so}: `up -d` trần — {dong.strip()[:80]}")
         elif re.search(r"\bnginx\b", sau):
             pham.append(f"{so}: `up -d` liệt kê nginx — {dong.strip()[:80]}")
+    return pham
+
+
+def test_deploy_guide_khong_up_d_TRAN_cham_nginx():
+    """`up -d` trần thay thẳng nginx đang phục vụ, bỏ qua cổng candidate."""
+    if not _GUIDE.is_file():
+        pytest.skip("không có PRODUCTION_DEPLOY_GUIDE.md")
+    pham = _up_d_cham_nginx(_GUIDE)
     assert not pham, (
         "nginx phải được áp qua `scripts/nginx-apply.sh`, không qua `up -d`:\n  "
         + "\n  ".join(pham)
@@ -1631,4 +1661,250 @@ def test_readme_e2e_khong_chep_de_env_production():
         f"README E2E hướng dẫn ghi đè .env.production: {pham}. Dùng "
         "`QLTS_ENV_FILE` — docker-compose.yml đã khai "
         "`env_file: ${QLTS_ENV_FILE:-.env.production}` chính vì việc này."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Đường OFF-HOST của rollback: registry · digest · bản kê ngoài máy
+#
+# Ba guard dưới đây canh cùng một sự thật: tài sản rollback chỉ có giá trị khi
+# nó còn dùng được SAU KHI mất chính máy chủ này. Mọi phép kiểm "có trên máy"
+# đều ĐẠT ở T-1d và vô dụng ở T+0.
+# ---------------------------------------------------------------------------
+
+_CLAUDE_MD = _GOC / "CLAUDE.md"
+
+
+def _lenh_5_4() -> str:
+    r"""Chỉ DÒNG LỆNH của §5.4, đã nối `\`, đã bỏ chú thích.
+
+    Bỏ chú thích là bắt buộc: khối này giải thích khá dài về `docker push`,
+    `# offsite`, `set -e`… nên guard neo vào chuỗi thô sẽ khớp trúng câu văn và
+    xanh cả sau khi lệnh thật đã bị gỡ. Đã đúng như vậy hai lần.
+    """
+    noi_dung = _doc(_RUNBOOK)
+    i = noi_dung.index("### 5.4")
+    j = noi_dung.index("### 5.5", i)
+    tho = "\n".join(
+        d for d in noi_dung[i:j].splitlines()
+        if d.strip() and not d.lstrip().startswith("#")
+    )
+    return re.sub(r"\\\n\s*", " ", tho)
+
+
+def test_runbook_push_ref_phai_co_namespace():
+    """`docker push qlts-backend:<tag>` KHÔNG đẩy vào kho của dự án.
+
+    Ref không có namespace được Docker phân giải thành
+    `docker.io/library/qlts-backend` — không gian tên của ảnh thư viện chính
+    thức, ta không sở hữu, nên push bị từ chối. Cả đường off-host của bản nháp
+    trước vì thế chưa từng chạy nổi một lần, mà preflight vẫn ĐẠT vì tag cục bộ
+    có mặt: đúng hình dạng "cổng xanh cho tài sản không tồn tại".
+    """
+    lenh = _lenh_5_4()
+    assert re.search(r"QLTS_ROLLBACK_REGISTRY:\?", lenh), (
+        "§5.4 phải ĐỔ NGAY khi chưa khai registry (`${QLTS_ROLLBACK_REGISTRY:?…}`); "
+        "thiếu nó thì `docker push` nhắm vào docker.io/library"
+    )
+    assert re.search(r'REMOTE="\$\{QLTS_ROLLBACK_REGISTRY\}/qlts-', lenh), (
+        "ref đem push phải mang namespace của kho dự án"
+    )
+    pham = [
+        d.strip()[:90]
+        for d in lenh.splitlines()
+        if re.match(r"\s*docker push\b", d) and "$REMOTE" not in d
+    ]
+    assert not pham, (
+        "còn `docker push` một ref không mang registry của dự án:\n  "
+        + "\n  ".join(pham)
+    )
+
+
+def test_runbook_ghi_digest_cua_DUNG_repo_vua_push():
+    """`{{index .RepoDigests 0}}` lấy phần tử ĐẦU, không phải phần tử ĐÚNG.
+
+    Một ảnh từng được push vào nhiều repo mang nhiều RepoDigests; phần tử 0 khi
+    ấy có thể là digest của repo KHÁC — preflight sẽ kéo về một ảnh không phải
+    ảnh cũ, và mọi phép so ID sau đó đều nói dối theo cùng một hướng.
+    """
+    lenh = _lenh_5_4()
+    assert "{{range .RepoDigests}}" in lenh, (
+        "phải duyệt HẾT RepoDigests rồi lọc, không lấy `index … 0`"
+    )
+    assert re.search(r"grep\s+\"\^\$\{QLTS_ROLLBACK_REGISTRY\}/qlts-", lenh), (
+        "phải lọc digest theo đúng repo vừa push"
+    )
+
+
+def test_runbook_upload_ban_ke_HOAN_CHINH():
+    """Bản kê đưa ra ngoài phải TỰ ĐỦ, nếu không nó tự làm mình đỏ.
+
+    Bản nháp trước `cp` TRƯỚC rồi mới `printf '# offsite'` vào bản local, nên
+    tệp lên S3 thiếu đúng cái dòng mà preflight bắt buộc phải có. Khôi phục bản
+    kê từ S3 về một máy trắng rồi chạy preflight = đỏ ngay. Đường cứu hộ hỏng
+    đúng vào lúc dùng tới nó.
+    """
+    lenh = _lenh_5_4()
+    dong = lenh.splitlines()
+    vt_offsite = next(
+        (k for k, d in enumerate(dong)
+         if re.search(r'printf[^\n]*# offsite[^\n]*>>\s*"\$MANIFEST"', d)), -1)
+    vt_cp = next(
+        (k for k, d in enumerate(dong) if re.match(r'\s*cp\s+"\$MANIFEST"', d)), -1)
+    assert vt_offsite != -1, "§5.4 không còn GHI dòng '# offsite' vào manifest"
+    assert vt_cp != -1, "§5.4 không còn copy manifest ra tệp đem đi offsite"
+    assert vt_offsite < vt_cp, (
+        "`cp` chạy TRƯỚC khi manifest hoàn chỉnh — bản đưa lên S3 sẽ thiếu dòng "
+        "'# offsite' mà chính preflight bắt buộc phải có"
+    )
+    assert re.search(r"aws s3 cp[^\n]*\.sha256", lenh), (
+        "phải upload checksum đi kèm — không có nó thì bản tải về không kiểm được"
+    )
+    assert re.search(r"cmp -s[^\n]*offsite-check", lenh), (
+        "phải tải NGƯỢC bản kê về và so nội dung: `aws s3 cp` trả 0 không chứng "
+        "minh object đọc lại được (quyền, KMS, lifecycle, sai bucket)"
+    )
+
+
+def test_preflight_keo_anh_bang_DIGEST_khong_bang_TAG():
+    """Host bị prune + tag registry đã trôi = pull theo tag kéo về ảnh MỚI.
+
+    Script khi ấy dừng vì ID lệch, trong khi ảnh cũ vẫn nằm nguyên ở registry
+    dưới digest cũ. Câu "tag trôi thành không liên quan" chỉ đúng khi KHÔNG còn
+    chỗ nào hỏi registry bằng tag nữa.
+    """
+    ma = _ma_lenh(_PREFLIGHT)
+    # Neo vào THAM SỐ của `pull`, không vào cả dòng: dòng ấy còn mang thông điệp
+    # lỗi có nhắc `$DIGEST`, nên phép kiểm `"$DIGEST" not in d` vẫn xanh sau khi
+    # lệnh đã bị đổi sang `pull "$REF"`. Bản nháp đầu đúng như vậy — lỗi này tái
+    # phát lần thứ ba trong cùng đợt, và lần nào cũng chỉ ma trận đột biến bắt được.
+    pham = []
+    for d in ma.splitlines():
+        m = re.search(r"\bdocker pull\s+(\S+)", d)
+        if m and "$DIGEST" not in m.group(1):
+            pham.append(f"{d.strip()[:70]}  ← kéo `{m.group(1)}`")
+    assert not pham, (
+        "còn `docker pull` theo TAG — phải kéo bằng digest đã ghi:\n  "
+        + "\n  ".join(pham)
+    )
+    assert re.search(r'docker tag "\$DIGEST" "\$REF"', ma), (
+        "kéo bằng digest xong phải tự đóng lại tag mà docker-compose.rollback.yml ghim"
+    )
+
+
+def test_preflight_tu_choi_digest_khong_co_namespace():
+    """Manifest ghi `qlts-backend@sha256:…` nghĩa là ảnh KHÔNG ở ngoài máy.
+
+    Ref ấy phân giải thành `docker.io/library/qlts-backend`. Nó tồn tại trong
+    manifest chỉ khi §5.4 chạy bằng bản cũ — tức đường off-host chưa từng có.
+    """
+    ma = _ma_lenh(_PREFLIGHT)
+    assert 'REPO="${DIGEST%%@*}"' in ma, (
+        "preflight không tách phần repo ra khỏi digest thì không kiểm được namespace"
+    )
+    assert "docker.io/library/*" in ma, (
+        "phải từ chối tường minh kho thư viện chính thức"
+    )
+
+
+def test_preflight_chung_minh_ban_ke_offsite_DOC_DUOC():
+    """Chuỗi đường dẫn không rỗng không chứng minh gì cả.
+
+    Object có thể chưa bao giờ được upload, đã bị lifecycle dọn, hoặc không đọc
+    lại được (thiếu quyền, sai KMS key, sai bucket). Phải TẢI VỀ và so nội dung.
+    """
+    ma = _ma_lenh(_PREFLIGHT)
+    assert re.search(r'aws s3 cp "\$OFFSITE"', ma), (
+        "preflight chỉ kiểm chuỗi không rỗng — phải tải object về mới biết nó còn"
+    )
+    assert "sha256sum" in ma, "phải đối chiếu checksum của bản tải về"
+    assert re.search(r'cmp -s "\$TMP_OFFSITE/manifest\.txt" "\$MANIFEST"', ma), (
+        "phải chứng minh bản offsite khớp bản local; nếu không thì khôi phục từ "
+        "nó rồi chạy chính script này sẽ tự đỏ"
+    )
+
+
+def _service_co_build() -> set[str]:
+    dv = _tai_compose(_COMPOSE).get("services", {})
+    return {t for t, c in dv.items() if isinstance(c, dict) and c.get("build")}
+
+
+def test_deploy_guide_build_du_moi_anh_ma_up_se_dung():
+    """Bốn service ứng dụng có ảnh RIÊNG — Compose đặt tên `<project>-<service>`.
+
+    Không service nào khai `image:` chung, nên build mỗi `backend` rồi `up` cả
+    ba là chạy worker phiên bản CŨ trên mã backend mới; ở nhánh rollback thì
+    ngược lại — worker ở lại bản MỚI trên lược đồ CSDL vừa lùi. Cả hai đều là
+    lệch âm thầm: không log, không healthcheck nào bắt được.
+    """
+    if not _GUIDE.is_file():
+        pytest.skip("không có PRODUCTION_DEPLOY_GUIDE.md")
+    co_build = _service_co_build()
+    assert {"backend", "celery-worker", "celery-beat", "frontend"} <= co_build, (
+        f"model compose đã đổi (service có build: {sorted(co_build)}) — đếm lại "
+        "trước khi tin guard này"
+    )
+    pham = []
+    da_build: set[str] = set()
+    for so, dong in _lenh_ghep_trong_tai_lieu(_GUIDE):
+        if "docker compose" not in dong or "..." in dong:
+            continue
+        if " build " in dong:
+            da_build = {
+                t for t in re.split(r"\s+", dong.split(" build ", 1)[1]) if t in co_build
+            }
+            continue
+        if re.search(r"\bup -d\b", dong):
+            can = {
+                t for t in re.split(r"\s+", re.sub(r"--\S+", "", dong.split("up -d", 1)[1]))
+                if t in co_build
+            }
+            thieu = can - da_build
+            if thieu:
+                pham.append(
+                    f"{so}: `up -d` dựng {sorted(thieu)} mà lệnh build ngay trước "
+                    f"đó chỉ có {sorted(da_build) or 'không gì'}"
+                )
+    assert not pham, (
+        "hướng dẫn deploy tay dựng service bằng ảnh CŨ vì không build nó:\n  "
+        + "\n  ".join(pham)
+    )
+
+
+def test_claude_md_khong_day_lenh_production_cham_nginx():
+    """CLAUDE.md tự mâu thuẫn thì phần đọc trước sẽ thắng.
+
+    Mục Docker ở đầu tệp dạy `--profile production up -d` trần, trong khi mục
+    "Nginx & Deploy" ở cuối nói nginx chỉ được áp qua `nginx-apply.sh`. Phần
+    được đọc trước là phần đầu — và nó cuốn nginx vào, thay thẳng container
+    đang phục vụ bằng một cấu hình chưa đo lần nào.
+
+    Chỉ soi dòng CHẠM PRODUCTION: mục dev cố ý dùng `docker compose up -d` với
+    override, áp luật production lên đó là bẻ gãy hướng dẫn đúng.
+    """
+    if not _CLAUDE_MD.is_file():
+        pytest.skip("không có CLAUDE.md")
+    pham = _up_d_cham_nginx(_CLAUDE_MD, chi_production=True)
+    assert not pham, (
+        "CLAUDE.md dạy lệnh production chạm thẳng nginx:\n  " + "\n  ".join(pham)
+    )
+    assert "nginx-apply.sh" in _doc(_CLAUDE_MD), (
+        "CLAUDE.md phải chỉ đường áp nginx qua cổng candidate"
+    )
+
+
+def test_claude_md_lenh_production_ghim_docker_compose_yml():
+    """Thiếu `-f docker-compose.yml` là Compose tự nạp override DEV lên production."""
+    if not _CLAUDE_MD.is_file():
+        pytest.skip("không có CLAUDE.md")
+    pham = [
+        f"{so}: {d.strip()[:90]}"
+        for so, d in _lenh_ghep_trong_tai_lieu(_CLAUDE_MD)
+        if ("--profile production" in d or ".env.production" in d)
+        and _co_lenh_compose(d)
+        and "-f docker-compose.yml" not in d
+    ]
+    assert not pham, (
+        "lệnh production trong CLAUDE.md thiếu `-f docker-compose.yml`:\n  "
+        + "\n  ".join(pham)
     )
