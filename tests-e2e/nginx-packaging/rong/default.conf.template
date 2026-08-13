@@ -1,0 +1,7 @@
+# Hợp lệ cú pháp, có server block, nhưng KHÔNG phục vụ /health và
+# server_name KHÔNG khớp ${DOMAIN}.
+server {
+    listen 80;
+    server_name khong-khop.invalid;
+    location / { return 204; }
+}

@@ -91,23 +91,63 @@ git log --oneline -3
 **QUAN TRỌNG**: Phải dùng `--env-file .env.production`. KHÔNG dùng `docker compose up` mà thiếu flag này.
 
 ```bash
-# Build
-docker compose --env-file .env.production --profile production build backend frontend
+# Build — cả NĂM. Bốn service ứng dụng có ảnh RIÊNG, không dùng chung ảnh nào
+docker compose -f docker-compose.yml --env-file .env.production --profile production \
+    build backend celery-worker celery-beat frontend nginx
 
-# Deploy
-docker compose --env-file .env.production --profile production up -d
+# Deploy — liệt kê service TƯỜNG MINH, KHÔNG `up -d` trần
+docker compose -f docker-compose.yml --env-file .env.production --profile production \
+    up -d --wait postgres redis backend celery-worker celery-beat frontend
+
+# nginx đi qua CỔNG CANDIDATE, không bao giờ bị thay thẳng
+set -a && source .env.production && set +a
+bash scripts/nginx-apply.sh "$DOMAIN"
 ```
 
-**Nếu chỉ deploy backend** (không đổi frontend):
+⚠️ **`up -d` trần sẽ thay thẳng container nginx đang phục vụ.** Cấu hình mới
+chưa được đo lần nào mà container tốt đã bị stop+remove; template hỏng, chứng
+thư thiếu hay `DOMAIN` rỗng đều thành :80/:443 chết không đường lùi. Đó chính là
+sự cố 12-08. `scripts/nginx-apply.sh` dựng candidate, đo TLS/SNI thật với một
+route backend và một route frontend, **chỉ khi đạt** mới thay bản đang chạy.
+Đường chuẩn `scripts/deploy.sh` đã làm đúng thế — hướng dẫn tay phải theo.
+
+⚠️ **`celery-worker` và `celery-beat` bắt buộc nằm trong lệnh build.** Đo model
+Compose sau khi gộp: `backend`, `celery-worker`, `celery-beat`, `frontend` đều
+khai `build:` riêng và **không** service nào khai `image:` chung — Compose đặt
+tên ảnh dựng được theo `<project>-<service>`, nên mỗi service có ảnh của riêng
+nó. Build mỗi `backend` rồi `up` cả ba là chạy **worker phiên bản CŨ** trên mã
+backend mới; ở nhánh rollback thì ngược lại — worker giữ **bản MỚI** trên lược
+đồ CSDL vừa lùi. Cả hai đều là lệch âm thầm, không log, không healthcheck nào
+bắt được.
+
+⚠️ **`nginx` bắt buộc nằm trong lệnh build.** Từ khi cấu hình nginx đi theo image
+(`nginx/Dockerfile`, tag cố định `qlts-nginx:local`), một máy đã có sẵn tag đó sẽ
+được `up -d` **dùng lại ảnh CŨ** — mọi thay đổi template hay script entrypoint
+lặng lẽ không được deploy, và không có dấu hiệu nào báo. Đường deploy chuẩn
+(`scripts/deploy.sh`) build `--parallel` toàn bộ nên không dính; chỉ đường tay
+này mới hở.
+
+**Nếu chỉ deploy backend** (không đổi frontend) — build đủ **ba** ảnh, vì
+`up` bên dưới dựng lại cả ba:
 ```bash
-docker compose --env-file .env.production --profile production build backend
-docker compose --env-file .env.production --profile production up -d backend celery-worker celery-beat
+docker compose -f docker-compose.yml --env-file .env.production --profile production \
+    build backend celery-worker celery-beat
+docker compose -f docker-compose.yml --env-file .env.production --profile production up -d backend celery-worker celery-beat
 ```
 
 **Nếu chỉ deploy frontend**:
 ```bash
-docker compose --env-file .env.production --profile production build frontend
-docker compose --env-file .env.production --profile production up -d frontend
+docker compose -f docker-compose.yml --env-file .env.production --profile production build frontend
+docker compose -f docker-compose.yml --env-file .env.production --profile production up -d frontend
+```
+
+**Nếu có đụng `nginx/`** (template, `nginx.conf`, `docker-entrypoint.d/`) — dùng
+đường chuẩn thay vì hai lệnh trên, vì nó dựng candidate và đo bằng request thật
+trước khi thay container đang phục vụ:
+```bash
+set -a && source .env.production && set +a
+docker compose -f docker-compose.yml --env-file .env.production --profile production build nginx
+bash scripts/nginx-apply.sh "$DOMAIN"
 ```
 
 ### 7. Verify healthy
@@ -222,7 +262,7 @@ celery-beat:
 
 **Fix**: Luôn dùng `--env-file .env.production`:
 ```bash
-docker compose --env-file .env.production --profile production build ...
+docker compose -f docker-compose.yml --env-file .env.production --profile production build ...
 ```
 
 ### 4. MFA enforce cho admin/manager
@@ -252,9 +292,18 @@ cd /opt/qlts
 git log --oneline -5  # tìm commit trước deploy
 git checkout <previous_commit>
 
-# 2. Rebuild + redeploy
-docker compose --env-file .env.production --profile production build backend frontend
-docker compose --env-file .env.production --profile production up -d
+# 2. Rebuild + redeploy — đủ NĂM ảnh
+#    `git checkout` ở bước 1 đã đưa cả `nginx/` về bản cũ, nhưng ảnh
+#    `qlts-nginx:local` trên máy vẫn là ảnh của bản LỖI cho tới khi build lại.
+#    Thiếu `nginx` ở đây = rollback code mà nginx vẫn chạy cấu hình vừa gây sự cố.
+#    Thiếu hai service Celery = worker/beat ở lại BẢN MỚI trên CSDL vừa lùi.
+docker compose -f docker-compose.yml --env-file .env.production --profile production \
+    build backend celery-worker celery-beat frontend nginx
+docker compose -f docker-compose.yml --env-file .env.production --profile production \
+    up -d --wait postgres redis backend celery-worker celery-beat frontend
+# nginx qua cổng candidate — kể cả khi rollback, nhất là khi rollback
+set -a && source .env.production && set +a
+bash scripts/nginx-apply.sh "$DOMAIN"
 
 # 3. Rollback DB (nếu cần)
 gunzip < /root/backup_YYYYMMDD_HHMMSS.sql.gz | docker exec -i qlts-postgres-1 psql -U qlts -d qlts_production

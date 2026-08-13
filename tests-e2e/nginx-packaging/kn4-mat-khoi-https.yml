@@ -1,0 +1,12 @@
+# Ca 4 — template ĐẦY ĐỦ nhưng MẤT khối `HTTPS: Main server`.
+#
+# Đây là ca mà bộ healthcheck cũ bỏ lọt hoàn toàn: cả ba lớp đều đáp xuống cổng
+# 80, nên khối 443 biến mất mà container vẫn `healthy` và deploy vẫn tuyên bố
+# thành công — trong khi mọi client thật nhận `Connection reset` từ catch-all
+# `ssl_reject_handshake`. Thư mục nguồn được SINH TẠI CHỖ từ chính template
+# production (xem README) để nó không bao giờ trôi lệch khỏi bản thật.
+services:
+  nginx-candidate:
+    volumes: !override
+      - ./tests-e2e/nginx-packaging/khong-co-https:/etc/nginx/templates:ro
+      - ./tests-e2e/nginx-packaging/nginx-test-certs:/etc/letsencrypt:ro

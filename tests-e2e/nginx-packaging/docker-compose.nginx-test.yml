@@ -1,0 +1,97 @@
+# Override CÔ LẬP để kiểm nginx packaging bằng CHÍNH `docker-compose.yml` production.
+#
+# Vì sao tồn tại: sự cố 12-08-2026 — một clean checkout chỉ có
+# `nginx/conf.d/default.conf.template`, trong khi `nginx.conf` chỉ
+# `include /etc/nginx/conf.d/*.conf` và entrypoint chính thức của nginx CHỈ render
+# template nằm ở `/etc/nginx/templates/`. Kết quả: nginx chạy KHÔNG có server block
+# nào — `nginx -t` vẫn PASS, container vẫn Up, Docker vẫn publish 80/443, nhưng
+# không ai phục vụ traffic. Prod sống sót nhờ một `default.conf` đã render nằm
+# NGOÀI git.
+#
+# Override này CHỈ cô lập tài nguyên (cổng loopback, image có sẵn, cert tự ký,
+# volume riêng). Nó KHÔNG thay cấu hình nginx bằng bản tĩnh — phép kiểm phải đi
+# qua đúng template production, nếu không nó không chứng minh được gì.
+#
+#   QLTS_ENV_FILE=tests-e2e/nginx-packaging/nginx-test.env \
+#   docker compose -f docker-compose.yml \
+#     -f tests-e2e/nginx-packaging/docker-compose.nginx-test.yml \
+#     --profile production --env-file <tệp env> -p qltsngx up -d
+#
+# ⚠️ QUY TẮC GỘP CỦA COMPOSE — hai bẫy đã đo thật, cùng một gốc:
+#   * `ports: []`      KHÔNG xoá cổng. Compose GỘP danh sách cổng theo khoá, nên
+#                      danh sách rỗng chỉ là "không thêm gì" — 80/443 của bản
+#                      production vẫn được bind. Đã kiểm: `5433:5432` sống sót.
+#   * `profiles: [x]`  KHÔNG thay danh sách profile mà NỐI vào. Giá trị gộp
+#                      thành `["production","x"]`, nên service vẫn khớp
+#                      `--profile production` và VẪN CHẠY.
+# Cách duy nhất là `!override`. Đã kiểm bằng `docker compose config` sau khi gộp:
+# với `!override`, `certbot` biến mất hẳn khỏi model và `ports` về rỗng thật.
+
+services:
+  postgres:
+    ports: !override []
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    ports: !override []
+
+  backend:
+    image: ${TEST_BACKEND_IMAGE:?can TEST_BACKEND_IMAGE}
+    build: !reset null
+    ports: !override []
+    environment:
+      RUN_MIGRATIONS_ON_STARTUP: "true"
+      RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: "false"
+      RUN_CASBIN_LOAD_ON_STARTUP: "true"
+
+  celery-worker:
+    image: ${TEST_BACKEND_IMAGE:?}
+    build: !reset null
+
+  celery-beat:
+    image: ${TEST_BACKEND_IMAGE:?}
+    build: !reset null
+
+  frontend:
+    image: ${TEST_FRONTEND_IMAGE:?can TEST_FRONTEND_IMAGE}
+    build: !reset null
+    ports: !override []
+
+  nginx:
+    # CHỈ loopback, cổng lạ — không đụng 80/443 của máy.
+    ports: !override
+      - "127.0.0.1:${TEST_HTTP_PORT:-18080}:80"
+      - "127.0.0.1:${TEST_HTTPS_PORT:-18443}:443"
+    volumes: !override
+      # Cert tự ký thay cho volume certbot (tài nguyên, không phải config).
+      - ./tests-e2e/nginx-packaging/nginx-test-certs:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+
+  # Candidate phải soi CÙNG bộ chứng thư với bản đang phục vụ, nếu không phép
+  # thử trước khi thay lại nói về một thứ khác. Nó không publish cổng nào nên
+  # không cần override `ports`.
+  nginx-candidate:
+    volumes: !override
+      - ./tests-e2e/nginx-packaging/nginx-test-certs:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+
+  # Bootstrap dùng chung cổng loopback HTTP với nginx: đó chính là điều kiện để
+  # ca "cổng 80 đang bị chiếm" tái hiện được (xem README, mục Bootstrap SSL).
+  nginx-bootstrap:
+    ports: !override
+      - "127.0.0.1:${TEST_HTTP_PORT:-18080}:80"
+
+  certbot:
+    # Không cần certbot trong stack kiểm.
+    #
+    # `!override` là BẮT BUỘC: thiếu nó, giá trị gộp là ["production",
+    # "khong-dung"] và `config --services` VẪN liệt kê certbot — tức lệnh
+    # `up -d` ghi trong README này khởi động một certbot thật, mang
+    # `restart: unless-stopped` và vòng lặp gia hạn 12h, sống qua cả phiên làm
+    # việc lẫn lần khởi động lại máy.
+    profiles: !override
+      - khong-dung

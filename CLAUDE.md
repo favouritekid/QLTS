@@ -69,12 +69,26 @@ docker compose watch          # or just: dev.cmd
 #   (Windows bind mounts don't propagate inotify → watch is required)
 # - Ports exposed: backend:8000, frontend:3000, postgres:5433, redis:6380
 
-# Production
-docker compose --profile production up -d
+# Production — `-f` và `--env-file` là BẮT BUỘC, không phải tuỳ chọn.
+# Liệt kê service TƯỜNG MINH: `up -d` trần cuốn cả nginx vào, thay thẳng
+# container đang phục vụ bằng một cấu hình chưa được đo lần nào.
+docker compose -f docker-compose.yml --env-file .env.production \
+    --profile production up -d --wait postgres redis backend celery-worker celery-beat frontend
+# nginx đi qua cổng candidate — xem "Nginx & Deploy" bên dưới
+set -a && source .env.production && set +a
+bash scripts/nginx-apply.sh "$DOMAIN"
 # - Backend: gunicorn with workers
 # - Frontend: Next.js standalone build
 # - Nginx: SSL termination + reverse proxy
 ```
+
+⚠️ **Thiếu `-f docker-compose.yml` là Compose TỰ NẠP `docker-compose.override.yml`
+của DEV.** Đo thật: cùng lệnh trên, bản thiếu `-f` cho backend
+`command = uvicorn app.main:app --reload`, `APP_ENV = development`, `env_file:
+./Backend_FastAPI/.env`, bind-mount mã nguồn. Máy chưa có tệp dev thì lệnh đổ
+(ồn ào, vô hại); máy CÓ thì nó **dựng cấu hình development lên production và
+không báo gì**. `test_lenh_compose_phai_ghim_docker_compose_yml` khoá luật này
+cho cả tài liệu vận hành lẫn script chạm production.
 
 ### Key Docker facts
 - `Backend_FastAPI/Dockerfile` only installs `requirements.txt` (production deps)
@@ -218,6 +232,67 @@ so it cannot OOM-kill the live Next.js dev server (running `tsc` /
 Avoid `docker compose exec frontend npm run type-check` (and `test`,
 `build`) on a live dev container. `exec` is fine for one-off, low-RAM
 commands such as `npm install <pkg>`.
+
+---
+
+## Nginx & Deploy — cơ chế BẮT BUỘC
+
+Mỗi luật dưới đây ra đời từ một sự cố production, phần lớn là loại **"lệnh trả 0
+mà việc không xảy ra"**. Guard tự động: `tests/unit/test_nginx_template_packaging.py`
+(lát Tier 5), E2E chạy tay: `tests-e2e/nginx-packaging/`.
+
+### Áp cấu hình nginx — `scripts/nginx-apply.sh`, không gì khác
+
+```bash
+set -a && source .env.production && set +a
+bash scripts/nginx-apply.sh "$DOMAIN"
+```
+
+Nó dựng `nginx-candidate` (không publish cổng nào), đo **hành vi thật** bằng
+`scripts/nginx-verify.sh` — TLS + **SNI thật** qua `curl --resolve`, một route
+tới backend, một route tới frontend — rồi **chỉ khi đạt** mới thay container
+đang phục vụ. Hỏng ⇒ dừng, last-good vẫn chạy.
+
+**Ba lệnh KHÔNG bao giờ dùng** (cả ba đều exit 0 trong khi không làm gì):
+| Lệnh | Thực tế |
+|---|---|
+| `nginx -s reload` | nạp lại đúng bản render CŨ của chính tiến trình đó |
+| `docker compose restart nginx` | `restart` không đọc lại `.env`; biến được nướng vào container lúc **TẠO** |
+| `envsubst … > nginx/conf.d/…` | đường đã bỏ; `conf.d` không còn được mount |
+
+Cấu hình nginx **đi theo image** (`nginx/Dockerfile`), không bind-mount: thiếu
+template ⇒ `docker build` ĐỎ. Bind-mount không cứu được — daemon tự tạo thư mục
+rỗng và `up` vẫn exit 0 (`create_host_path: false` không ngăn).
+
+### Cần gạt đóng băng tuyển sinh — RUNBOOK §6.1b
+
+**Hai tầng, cả hai đều phải được DỰNG LẠI** (`env_file` chỉ đọc lúc TẠO container):
+
+```bash
+# sửa .env.production: ADMISSION_FROZEN + NGINX_ADMISSION_FROZEN
+docker compose -f docker-compose.yml --env-file .env.production \
+    --profile production up -d --no-deps --wait backend     # KHÔNG `restart`
+bash scripts/nginx-apply.sh "$DOMAIN"
+```
+
+Nghiệm thu bằng **cặp request thật 200 ↔ 503**, không bằng `nginx -t` + reload.
+
+### Rollback — `docker-compose.rollback.yml` qua `-f` thứ hai
+
+Bốn service ứng dụng chỉ khai `build:`, **không** khai `image:` — nên
+`export *_IMAGE_TAG` + `down`/`up` **không lùi gì cả**. Dùng:
+
+```bash
+QLTS_ROLLBACK_TAG=<tag> bash scripts/rollback-preflight.sh   # TRƯỚC khi chạm CSDL
+docker compose -f docker-compose.yml -f docker-compose.rollback.yml \
+    --env-file .env.production --profile production up -d --wait \
+    backend celery-worker celery-beat frontend
+```
+
+⚠️ **BỐN ảnh, không phải hai**: `celery-worker`/`celery-beat` có ảnh RIÊNG theo
+`<project>-<service>`. Lùi backend mà quên chúng = worker mã MỚI trên lược đồ đã
+lùi. Preflight fail-closed 5 ca và **phải chạy trước `pg_restore`** — trình tự cũ
+khôi phục CSDL trước rồi mới đi tìm ảnh, hỏng là không tiến không lùi.
 
 ---
 

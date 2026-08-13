@@ -109,7 +109,7 @@ if [ "${COLD_CUTOVER}" = "true" ]; then
     cutover "* Operator MUST follow RUNBOOK §7.2 post-deploy:"
     cutover "  - T+1:30 manual ``alembic upgrade head``"
     cutover "  - T+3:00 manual backfill verify"
-    cutover "  - T+3:15 restart backend (Casbin reload)"
+    cutover "  - T+3:15 dựng lại backend: up -d --no-deps --wait (Casbin reload)"
     cutover "  - T+3:30 manual ``sync_notification_rules``"
     cutover "============================================="
 else
@@ -176,8 +176,20 @@ log "Step 3/8: Processing Nginx template..."
 # (paired with backend ADMISSION_FROZEN=true per RUNBOOK §6.1).
 export NGINX_ADMISSION_FROZEN="${NGINX_ADMISSION_FROZEN:-false}"
 
-envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' < nginx/conf.d/default.conf.template > nginx/conf.d/default.conf
-log "Nginx config generated (domain=$DOMAIN, admission_frozen=$NGINX_ADMISSION_FROZEN)"
+# Từ 12-08-2026 template KHÔNG còn được render trên host. Nó nằm ở
+# `nginx/templates/` và entrypoint chính thức của image nginx render nó vào
+# `/etc/nginx/conf.d/` NGAY TRONG container lúc khởi động. Render trên host là
+# thứ đã sinh ra một `nginx/conf.d/default.conf` nằm ngoài git — và khi cutover
+# chạy từ một checkout sạch (không có tệp đó) thì site chết.
+#
+# Ở đây chỉ còn việc kiểm biến, fail-closed TRƯỚC khi đụng gì:
+if [ -z "${DOMAIN:-}" ]; then
+    error "DOMAIN chưa được đặt trong .env.production — nginx sẽ render server_name rỗng"
+fi
+if [ ! -f nginx/templates/default.conf.template ]; then
+    error "Thiếu nginx/templates/default.conf.template — entrypoint nginx sẽ không có gì để render"
+fi
+log "Nginx template sẽ được render TRONG container (domain=$DOMAIN, admission_frozen=$NGINX_ADMISSION_FROZEN)"
 
 # =============================================================================
 # Step 4: Build Docker images
@@ -236,7 +248,7 @@ if [ "${IS_CUTOVER}" -eq 1 ]; then
     # in-place SQL replay) per RUNBOOK §8.1.
     cutover "Step 6: SKIP auto-alembic (cutover mode)"
     cutover "Operator runs manually post-deploy:"
-    cutover "  docker compose --profile production exec backend alembic upgrade head"
+    cutover "  docker compose -f docker-compose.yml --profile production exec backend alembic upgrade head"
 else
     # Routine deploy: auto-migrate with built-in rollback on failure.
     docker compose -f docker-compose.yml --profile production --env-file .env.production run --rm backend \
@@ -320,12 +332,21 @@ while [ $timeout -gt 0 ]; do
 done
 
 if [ $timeout -le 0 ]; then
-    error "Backend failed to become healthy within 60s. Check logs: docker compose logs backend"
+    error "Backend failed to become healthy within 60s. Check logs: docker compose -f docker-compose.yml logs backend"
 fi
 
-# Start frontend + nginx + certbot
+# Start frontend + certbot. nginx CỐ Ý không nằm ở đây.
+#
+# Trước bản vá này dòng dưới là `up -d frontend nginx certbot`, rồi Step 8b
+# `--force-recreate` lại chính container ấy khoảng 60 giây sau. Mỗi lần deploy
+# có đụng khai báo nginx là HAI vòng đời container và HAI khe từ chối kết nối,
+# cho một thay đổi cấu hình duy nhất.
+#
+# `--no-deps` là BẮT BUỘC ở đây: `certbot` khai `depends_on: nginx`, nên thiếu
+# nó Compose kéo nginx lên bất kể ta đã bỏ tên nginx khỏi dòng lệnh.
+# backend/frontend đã được khởi động và chờ healthy ngay phía trên.
 docker compose -f docker-compose.yml --profile production --env-file .env.production up -d \
-    frontend nginx certbot
+    --no-deps frontend certbot
 
 log "Waiting for frontend to be healthy..."
 timeout=60
@@ -338,28 +359,15 @@ while [ $timeout -gt 0 ]; do
 done
 
 # =============================================================================
-# Step 8b: Reload nginx to APPLY the re-rendered config
+# Step 8b: áp cấu hình nginx — THỬ TRƯỚC, THAY SAU
 # =============================================================================
-# ``up -d nginx`` above does NOT recreate/reload an already-running nginx when
-# only the bind-mounted config file (rendered by the ``envsubst`` step above)
-# changed — the container keeps serving whatever config it loaded at its last
-# (re)start. Without this explicit reload, nginx changes (new ``location``
-# blocks, security headers) SILENTLY never take effect. Observed 2026-07-02:
-# nginx ran 6 weeks on a stale config → the SMS ``/r/`` short-link fell through
-# to the frontend (307 → /login) because its ``location /r/`` was never loaded.
-# Validate first (bad config → keep last-good, don't reload) then gracefully
-# reload (SIGHUP, zero-downtime). Non-fatal so a fresh-start deploy (nginx just
-# loaded the config) is unaffected.
-log "Step 8b: Reloading nginx (apply re-rendered config)..."
-if docker compose -f docker-compose.yml --profile production --env-file .env.production exec -T nginx nginx -t >/dev/null 2>&1; then
-    if docker compose -f docker-compose.yml --profile production --env-file .env.production exec -T nginx nginx -s reload; then
-        log "  nginx reloaded — config applied"
-    else
-        log "  WARNING: nginx reload failed — check 'docker compose logs nginx'"
-    fi
-else
-    log "  WARNING: nginx config test FAILED — NOT reloading (keeps last-good config). Fix nginx/conf.d/default.conf"
-fi
+# Toàn bộ nhịp nằm ở `scripts/nginx-apply.sh`: dựng `nginx-candidate`, đo hành
+# vi thật của nó (TLS + SNI thật, route backend, route frontend), CHỈ KHI ĐẠT
+# mới đụng tới container đang phục vụ. Tách ra tệp riêng để bài kiểm hồi quy
+# chạy được ĐÚNG đoạn mã này thay vì một bản chép lại trong test.
+log "Step 8b: áp cấu hình nginx (thử trên candidate trước)..."
+bash "$SCRIPT_DIR/nginx-apply.sh" "$DOMAIN"     || error "không áp được cấu hình nginx — xem log phía trên"
+
 
 # =============================================================================
 # Done

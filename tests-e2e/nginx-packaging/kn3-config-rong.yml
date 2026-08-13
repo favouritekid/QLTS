@@ -1,0 +1,7 @@
+# Ca 3 — config HỢP LỆ cú pháp nhưng KHÔNG phục vụ gì.
+# `nginx -t` sẽ xanh; container LÊN được; healthcheck phải ĐỎ.
+services:
+  nginx-candidate:
+    volumes: !override
+      - ./tests-e2e/nginx-packaging/rong:/etc/nginx/templates:ro
+      - ./tests-e2e/nginx-packaging/nginx-test-certs:/etc/letsencrypt:ro

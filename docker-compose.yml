@@ -2,8 +2,13 @@
 # QLTS Production Docker Compose
 # =============================================================================
 # Usage:
-#   Production:  docker compose --profile production up -d
+#   Production:  docker compose --env-file .env.production --profile production up -d
 #   Development: docker compose up -d (uses override file)
+#
+# ⚠️ `--env-file .env.production` là BẮT BUỘC ở mọi lệnh production. Tệp env
+# mặc định của Compose là `.env` (chỉ có POSTGRES_*), nên thiếu cờ này thì
+# ${DOMAIN} nội suy thành rỗng và nginx TỪ CHỐI khởi động (guard
+# `nginx/docker-entrypoint.d/10-qlts-kiem-bien.sh` in rõ nguyên nhân).
 # =============================================================================
 
 # Default log rotation policy. Docker's json-file driver retains logs
@@ -18,7 +23,89 @@ x-logging: &default-logging
     max-file: "10"
     compress: "true"
 
+# Thân chung của hai container nginx: cái ĐANG PHỤC VỤ (`nginx`) và cái DÙNG ĐỂ
+# THỬ (`nginx-candidate`). Cùng image, cùng biến, cùng healthcheck — nếu hai bên
+# lệch nhau thì phép thử không chứng minh gì cho cái thật. Khác nhau đúng ba
+# điểm, khai tường minh dưới service: profile, cổng publish, và chính sách
+# restart. Xem `scripts/deploy.sh` Step 8b.
+# Biến render, tách riêng để container bootstrap thêm được biến của nó mà không
+# đánh mất DOMAIN (YAML không hợp nhất sâu: khai `environment` ở service sẽ THAY
+# THẾ nguyên cả map của anchor, chứ không trộn vào).
+x-nginx-env: &nginx-env
+  # envsubst chạy TRONG container nên hai biến này phải có mặt Ở ĐÓ.
+  # `--env-file` của Compose chỉ nội suy tệp compose, KHÔNG bơm biến vào
+  # container.
+  # KHÔNG dùng `${DOMAIN:?}`: Compose nội suy TOÀN BỘ tệp TRƯỚC khi lọc
+  # profile, nên `:?` làm gãy cả `docker compose up -d` của dev (không hề
+  # bật profile production, không hề chạy nginx). Đã tái hiện.
+  # KHÔNG dùng `env_file: .env.production` (dù nó sẽ chữa được cú trượt tay
+  # thiếu `--env-file`): nginx là container quay ra Internet, cho nó thấy
+  # SECRET_KEY / JWT_SECRET_KEY / POSTGRES_PASSWORD là đổi một sự cố vận hành
+  # lấy một bậc leo thang đặc quyền. Fail-closed đặt ở guard entrypoint.
+  DOMAIN: ${DOMAIN:-}
+  NGINX_ADMISSION_FROZEN: ${NGINX_ADMISSION_FROZEN:-false}
+
+x-nginx-base: &nginx-base
+  restart: unless-stopped
+  # Cấu hình nằm TRONG image (nginx/Dockerfile), không bind-mount từ host:
+  # bind-mount một thư mục không tồn tại thì daemon TỰ TẠO nó rỗng — đo trên
+  # Docker 29.7.2, `create_host_path: false` không ngăn được. Nay thiếu template
+  # là `docker build` đỏ, và đổi template là đổi image ID nên `up -d` tự
+  # recreate (không cần `--force-recreate` vô điều kiện).
+  build:
+    context: ./nginx
+  image: qlts-nginx:local
+  environment: *nginx-env
+  volumes:
+    - certbot_certs:/etc/letsencrypt:ro
+    - certbot_www:/var/www/certbot:ro
+    - backend_uploads:/app/uploads:ro
+    - backend_static_uploads:/app/static/uploads:ro
+  deploy:
+    resources:
+      limits:
+        memory: 128M
+  healthcheck:
+    # MỘT phép kiểm, đi qua đúng đường mà client thật đi: TLS trên 443 với SNI
+    # THẬT là ${DOMAIN}.
+    #
+    # Vì sao `--resolve` chứ không phải `--header "Host: ..."`: đặt Host mà nối
+    # tới 127.0.0.1 thì SNI vẫn là 127.0.0.1, và server block 443 có tên sẽ
+    # KHÔNG được chọn — catch-all `ssl_reject_handshake` trả lời. Đó đúng là
+    # phép đo sai đã làm cả kíp trực tin site còn sống hôm 12-08-2026.
+    # `--resolve` giữ nguyên tên trong URL (nên SNI đúng) mà ép IP đích.
+    #
+    # Ba ca xanh giả bị loại cùng lúc:
+    #   * không có server block nào  → không ai listen 443 có tên → hỏng handshake
+    #   * mất trọn khối HTTPS        → chỉ còn catch-all → hỏng handshake
+    #   * trang mặc định của image   → đã xoá trong Dockerfile, và không có
+    #                                  /nginx-alive
+    # So THÂN phản hồi chứ không chỉ mã 200: gỡ `location = /nginx-alive` thì
+    # request rơi xuống catch-all → proxy_pass frontend → 200 cho mọi đường
+    # dẫn, và phép kiểm chỉ nhìn mã sẽ vẫn xanh. Đã tái hiện (W1-E) rồi vá.
+    # `test -n "$$DOMAIN"` giữ lại làm lớp phòng xa; guard entrypoint đã chặn
+    # ca này từ trước khi nginx chạy.
+    test:
+      - CMD-SHELL
+      - >-
+        test -n "$$DOMAIN"
+        && test "$$(curl --fail --silent --insecure --max-time 4
+        --resolve "$$DOMAIN:443:127.0.0.1"
+        "https://$$DOMAIN/nginx-alive")" = "qlts-nginx-alive"
+    interval: 15s
+    timeout: 5s
+    retries: 3
+    start_period: 10s
+  logging: *default-logging
+
+
 services:
+  # ⚠️ `env_file: ${QLTS_ENV_FILE:-.env.production}` — KHÔNG hard-code
+  # `.env.production`. Bộ E2E `tests-e2e/nginx-packaging/` cần một tệp env khác;
+  # khi tên này bị đóng cứng, cách duy nhất để đổi là `cp fixture .env.production`
+  # — tức tài liệu E2E hướng dẫn GHI ĐÈ tệp bí mật production, không sao lưu,
+  # không khôi phục được (`.env.production` bị .gitignore loại). Chạy nhầm trên
+  # /opt/qlts là mất SECRET_KEY/JWT/POSTGRES_PASSWORD.
   # --- PostgreSQL ---
   postgres:
     image: postgres:16-alpine
@@ -67,7 +154,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - .env.production
+      - ${QLTS_ENV_FILE:-.env.production}
     environment:
       # Constructed from POSTGRES_* vars — do NOT also set in .env.production
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qlts}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qlts_production}
@@ -122,7 +209,7 @@ services:
     restart: unless-stopped
     command: celery -A app.celery_app worker -Q default,celery --loglevel=info --concurrency=2
     env_file:
-      - .env.production
+      - ${QLTS_ENV_FILE:-.env.production}
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qlts}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qlts_production}
       REDIS_URL: redis://redis:6379/1
@@ -162,7 +249,7 @@ services:
     restart: unless-stopped
     command: celery -A app.celery_app beat --loglevel=info
     env_file:
-      - .env.production
+      - ${QLTS_ENV_FILE:-.env.production}
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qlts}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qlts_production}
       REDIS_URL: redis://redis:6379/1
@@ -228,39 +315,74 @@ services:
 
   # --- Nginx (Reverse Proxy + SSL) ---
   nginx:
-    image: nginx:1.27-alpine
-    restart: unless-stopped
+    <<: *nginx-base
     profiles:
       - production
     ports:
       - "80:80"
       - "443:443"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - certbot_certs:/etc/letsencrypt:ro
-      - certbot_www:/var/www/certbot:ro
-      - backend_uploads:/app/uploads:ro
-      - backend_static_uploads:/app/static/uploads:ro
     depends_on:
       frontend:
         condition: service_healthy
       backend:
         condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          memory: 128M
+
+  # --- Nginx CANDIDATE (chỉ dùng để thử, không publish cổng nào) ---
+  # Dựng bản cấu hình MỚI cạnh bản đang phục vụ, đo hành vi thật của nó, rồi mới
+  # quyết định có thay hay không. Trước bản vá này Step 8b `--force-recreate`
+  # vô điều kiện: container tốt bị stop+remove TRƯỚC khi có gì được kiểm, và
+  # một template hỏng / chứng thư thiếu / DOMAIN rỗng là mất cả :80 lẫn :443,
+  # không đường lùi.
+  #
+  # Không có `ports:` nên nó không tranh 80/443 với bản đang chạy; đo bằng cách
+  # gọi thẳng IP của nó trong mạng của project (xem scripts/nginx-verify.sh).
+  # `restart: "no"` là cố ý: candidate hỏng phải NẰM YÊN ở trạng thái exited để
+  # đọc được log, không được quay vòng.
+  nginx-candidate:
+    <<: *nginx-base
+    profiles:
+      - candidate
+    restart: "no"
+
+  # --- Nginx BOOTSTRAP (chỉ cho lần cấp chứng thư đầu tiên) ---
+  # `scripts/setup-ssl.sh` dùng service này thay cho một `docker run` rời. Là
+  # service thì nó nằm trong ĐÚNG project của Compose, nên volume `certbot_www`
+  # được phân giải chuẩn — bản trước phải đoán tên volume từ `basename $(pwd)`
+  # và đoán trượt khi chạy từ worktree.
+  # Cổng 80 được xử lý CÓ CHỦ ĐÍCH ở script: dừng hẳn service `nginx` trước,
+  # rồi mới dựng bootstrap. Bản trước `docker run -p 80:80` thẳng và chết với
+  # "port is already allocated" nếu nginx production đang chạy hoặc đang quay
+  # vòng — mà tiền đề "phải dừng nginx trước" không được ghi ở đâu cả.
+  nginx-bootstrap:
+    <<: *nginx-base
+    profiles:
+      - bootstrap
+    restart: "no"
+    ports:
+      - "80:80"
+    # Cấu hình bootstrap nằm ở đường RIÊNG trong image (nginx/Dockerfile), nên
+    # không mount gì từ host cả.
+    # `-c nginx-bootstrap.conf`: nginx.conf production khai `upstream backend`
+    # và nginx phân giải hostname upstream NGAY LÚC NẠP CONFIG — trên VPS mới
+    # thì backend chưa chạy và bootstrap sẽ chết với `[emerg] host not found in
+    # upstream`. Đã tái hiện đúng như vậy trước khi tách tệp.
+    # `$$1` vẫn là `nginx` nên entrypoint chính thức vẫn chạy envsubst.
+    command: ["nginx", "-c", "/etc/nginx/nginx-bootstrap.conf", "-g", "daemon off;"]
+    environment:
+      <<: *nginx-env
+      NGINX_ENVSUBST_TEMPLATE_DIR: /etc/nginx/templates-bootstrap
+    volumes:
+      - certbot_www:/var/www/certbot:ro
     healthcheck:
-      # Host header MUST match server_name in default.conf.template
-      # because the new `default_server` catch-all (PR #325) returns 444
-      # for any Host that does not match ${DOMAIN} / www.${DOMAIN}.
-      # wget defaults to `Host: 127.0.0.1` → would hit catch-all → fail.
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "--header=Host: ${DOMAIN}", "http://127.0.0.1/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    logging: *default-logging
+      test:
+        - CMD-SHELL
+        - >-
+          test "$$(curl --fail --silent --max-time 4
+          http://127.0.0.1/qlts-bootstrap-alive)" = "qlts-bootstrap-alive"
+      interval: 5s
+      timeout: 4s
+      retries: 6
+      start_period: 5s
 
   # --- Certbot (SSL Certificate Management) ---
   certbot:

@@ -93,7 +93,7 @@ DB_USER=${POSTGRES_USER:-qlts}
 DB_NAME=${POSTGRES_DB:-qlts_production}
 
 # pg_dump với -T disable TTY, output binary -Fc về host file
-docker compose exec -T postgres pg_dump -U ${DB_USER} -Fc ${DB_NAME} > prod_${DATE}_pre_cutover.dump
+docker compose -f docker-compose.yml exec -T postgres pg_dump -U ${DB_USER} -Fc ${DB_NAME} > prod_${DATE}_pre_cutover.dump
 
 # Verify file size + magic bytes (PGDMP header)
 ls -la prod_${DATE}_pre_cutover.dump
@@ -102,7 +102,7 @@ head -c 5 prod_${DATE}_pre_cutover.dump | xxd  # Expect first bytes: 50 47 44 4d
 
 # Verify integrity qua pg_restore -l (list contents, không restore)
 # Pipe file vào container stdin để pg_restore -l có thể đọc:
-cat prod_${DATE}_pre_cutover.dump | docker compose exec -T postgres pg_restore -l | wc -l
+cat prod_${DATE}_pre_cutover.dump | docker compose -f docker-compose.yml exec -T postgres pg_restore -l | wc -l
 # Expect: số > 0 (số TOC entry trong dump)
 
 # Upload offsite (S3 hoặc cloud storage organization-approved)
@@ -120,13 +120,13 @@ KHÔNG có `/app/media`. Sử dụng đúng 2 path trên.
 
 ```bash
 # Tar uploaded files INSIDE backend container (mount points đã có volume)
-docker compose exec -T backend tar czf /tmp/uploads_${DATE}.tar.gz /app/uploads /app/app/static/uploads
+docker compose -f docker-compose.yml exec -T backend tar czf /tmp/uploads_${DATE}.tar.gz /app/uploads /app/app/static/uploads
 
 # Copy archive từ container ra host
-docker compose cp backend:/tmp/uploads_${DATE}.tar.gz ./
+docker compose -f docker-compose.yml cp backend:/tmp/uploads_${DATE}.tar.gz ./
 
 # Cleanup tmp file inside container
-docker compose exec -T backend rm /tmp/uploads_${DATE}.tar.gz
+docker compose -f docker-compose.yml exec -T backend rm /tmp/uploads_${DATE}.tar.gz
 
 # Verify archive size + structure
 ls -la uploads_${DATE}.tar.gz
@@ -153,31 +153,137 @@ cp frontend/.env.local frontend_env_backup_${DATE}.txt
 cp .env.production prod_env_backup_${DATE}.txt
 
 # Nginx config
-cp -r nginx/conf.d/ nginx_conf_backup_${DATE}/
+# Từ 12-08-2026 cấu hình nginx nằm ở `nginx/` và đi theo IMAGE (xem
+# nginx/Dockerfile) — không còn `nginx/conf.d/` để sao lưu, và cũng không còn
+# tệp render nào nằm ngoài git. Sao lưu ở đây chỉ để có bản chụp tại chỗ; nguồn
+# chuẩn là git.
+cp -r nginx/ nginx_backup_${DATE}/
 
 # Docker compose
 cp docker-compose.yml docker-compose_backup_${DATE}.yml
 cp docker-compose.override.yml docker-compose_override_backup_${DATE}.yml
 
 # Upload bundle offsite
-tar czf config_backup_${DATE}.tar.gz env_backup_*.txt nginx_conf_backup_${DATE}/ docker-compose_*_backup_${DATE}.yml
+tar czf config_backup_${DATE}.tar.gz env_backup_*.txt nginx_backup_${DATE}/ docker-compose_*_backup_${DATE}.yml
 aws s3 cp config_backup_${DATE}.tar.gz s3://qlts-backup/admission-cutover/
 ```
 
 ### 5.4. Docker image tag backup
 
 ```bash
-# Tag current production images với pre-cutover marker
-docker tag qlts-backend:latest qlts-backend:pre-admission-cutover-${DATE}
-docker tag qlts-frontend:latest qlts-frontend:pre-admission-cutover-${DATE}
+# BỐN ảnh, không phải hai. Compose đặt tên ảnh dựng được theo
+# `<project>-<service>`, nên `celery-worker` và `celery-beat` có ảnh RIÊNG chứ
+# không dùng chung ảnh của `backend` (kiểm: `docker images | grep qlts-celery`).
+# Tag thiếu hai cái đó thì rollback sẽ lùi backend mà để worker ở phiên bản
+# MỚI, chạy trên lược đồ CSDL đã lùi.
+# Tag theo ID ẢNH CỦA CONTAINER ĐANG CHẠY, KHÔNG theo `:latest`.
+# `qlts-<service>:latest` là một tag DI ĐỘNG: nó có thể đã trôi sang một bản
+# build khác từ trước khi ta chạm vào. Tag từ nó nghĩa là tài sản rollback sai
+# ngay lúc tạo ra, và không có gì phát hiện được điều đó về sau. `.Image` của
+# container đang chạy là thứ duy nhất chắc chắn đúng "phiên bản đang phục vụ".
+export QLTS_ROLLBACK_TAG=pre-admission-cutover-${DATE}
+MANIFEST=rollback_manifest_${QLTS_ROLLBACK_TAG}.txt
+: > "$MANIFEST"
 
-# Push registry (nếu có)
-docker push qlts-backend:pre-admission-cutover-${DATE}
-docker push qlts-frontend:pre-admission-cutover-${DATE}
+# `set -e` phủ TRỌN khối, kể cả `docker push`. Đừng tắt nó giữa chừng: một lần
+# push hỏng (hết hạn đăng nhập, sai repo, registry sập) mà bị nuốt thì tag chỉ
+# tồn tại TRÊN CHÍNH MÁY NÀY — và preflight vẫn ĐẠT, vì `docker image inspect`
+# thấy tag local nên không bao giờ thử `pull`. Cổng T-1d sẽ tuyên bố "sẵn sàng
+# rollback" cho một tài sản sẽ bốc hơi ngay khi máy chủ mất hoặc bị prune.
+set -e
 
-# Document image SHA
-docker images --no-trunc qlts-backend:pre-admission-cutover-${DATE} >> image_tags_${DATE}.txt
-docker images --no-trunc qlts-frontend:pre-admission-cutover-${DATE} >> image_tags_${DATE}.txt
+# Ghi cả REVISION GIT — §8.1 Step 5 cần nó để khôi phục cây nginx chính xác.
+printf '# git-rev\t%s\n' "$(git rev-parse HEAD)" >> "$MANIFEST"
+
+for S in backend celery-worker celery-beat frontend; do
+    CID=$(docker compose -f docker-compose.yml --env-file .env.production \
+        --profile production ps -q "$S")
+    [ -n "$CID" ] || { echo "KHONG THAY container dang chay cho '$S'"; exit 1; }
+    IMG_ID=$(docker inspect -f '{{.Image}}' "$CID")
+    docker tag "$IMG_ID" "qlts-${S}:${QLTS_ROLLBACK_TAG}"
+    printf '%s\t%s\t%s\t%s\n' \
+        "$S" "$CID" "$IMG_ID" "qlts-${S}:${QLTS_ROLLBACK_TAG}" >> "$MANIFEST"
+done
+
+# Từ đây rẽ HAI NHÁNH, và cả hai đều chạy được NGUYÊN KHỐI. Bản trước đặt
+# `${QLTS_ROLLBACK_REGISTRY:?…}` ở mức khối, nên máy không có registry chết ngay
+# tại dòng đó — dù chính tài liệu bảo "có thể dùng QLTS_ROLLBACK_LOCAL_ONLY=1".
+# Người trực khi ấy phải tự hiểu mà bỏ qua một đoạn giữa. Một quy trình cứu hộ
+# đòi đọc-hiểu-rồi-chọn-tay là quy trình sẽ sai vào lúc 3 giờ sáng.
+QLTS_ROLLBACK_LOCAL_ONLY="${QLTS_ROLLBACK_LOCAL_ONLY:-0}"
+
+if [ "$QLTS_ROLLBACK_LOCAL_ONLY" = "1" ]; then
+    # RỦI RO ĐÃ KHAI: ảnh và bản kê chỉ nằm trên đĩa máy này. Mất máy, hỏng
+    # đĩa, hay một lần `docker image prune` = KHÔNG còn đường lùi. Chỉ dùng khi
+    # thật sự không có registry, và phải ghi vào biên bản cutover.
+    echo "CANH BAO: QLTS_ROLLBACK_LOCAL_ONLY=1 — KHONG day anh ra ngoai may."
+    echo "CANH BAO: mat may / prune = KHONG rollback duoc. Ghi vao bien ban."
+else
+    # Push registry — VẪN trong `set -e`. Hỏng ở đây là DỪNG, không phải ghi chú.
+    #
+    # REGISTRY phải khai TƯỜNG MINH. `docker push qlts-backend:<tag>` KHÔNG đẩy
+    # vào kho của dự án: một ref không có namespace được Docker phân giải thành
+    # `docker.io/library/qlts-backend` — không gian tên của các ảnh thư viện
+    # chính thức, ta không sở hữu. Ref trỏ kho riêng bắt buộc có dạng
+    # `namespace/repo` hoặc `registry/namespace/repo`.
+    : "${QLTS_ROLLBACK_REGISTRY:?dat vd ghcr.io/favouritekid hoac <acct>.dkr.ecr.<region>.amazonaws.com/qlts}"
+
+    for S in backend celery-worker celery-beat frontend; do
+        REMOTE="${QLTS_ROLLBACK_REGISTRY}/qlts-${S}:${QLTS_ROLLBACK_TAG}"
+        docker tag "qlts-${S}:${QLTS_ROLLBACK_TAG}" "$REMOTE"
+        docker push "$REMOTE"
+        # DIGEST là thứ duy nhất bất biến: tag ở xa có thể bị đẩy đè bởi ảnh
+        # khác, digest thì không. Preflight KÉO ẢNH VỀ BẰNG chuỗi này (không
+        # phải bằng tag), nên tag trôi mới thật sự thành chuyện không liên quan.
+        #
+        # Lọc theo đúng repo vừa push: `{{index .RepoDigests 0}}` lấy phần tử
+        # ĐẦU, mà một ảnh từng được push vào nhiều repo sẽ có nhiều RepoDigests
+        # — phần tử 0 khi ấy có thể là digest của repo KHÁC.
+        DIGEST=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$REMOTE" \
+            | grep "^${QLTS_ROLLBACK_REGISTRY}/qlts-${S}@" | head -1)
+        [ -n "$DIGEST" ] || { echo "KHONG lay duoc digest cho $S sau khi push"; exit 1; }
+        # thêm digest vào đúng dòng của service đó (cột 5)
+        awk -F'\t' -v s="$S" -v d="$DIGEST" 'BEGIN{OFS="\t"} $1==s{$5=d} {print}' \
+            "$MANIFEST" > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST"
+    done
+
+    # Bản kê phải RA KHỎI MÁY — và bản RA KHỎI MÁY phải là bản HOÀN CHỈNH.
+    #
+    # Thứ tự dưới đây là bản chất chứ không phải khẩu vị. Bản nháp trước `cp`
+    # TRƯỚC rồi mới `printf '# offsite'` vào bản local, nên tệp đưa lên S3 thiếu
+    # đúng cái dòng mà preflight bắt buộc phải có: khôi phục bản kê từ S3 rồi
+    # chạy preflight là tự đỏ. Đường lùi hỏng đúng vào lúc dùng tới nó.
+    OFFSITE_URL="s3://qlts-backup/admission-cutover/config_backup_${DATE}_manifest.txt"
+    printf '# offsite\t%s\n' "$OFFSITE_URL" >> "$MANIFEST"   # 1. hoàn chỉnh TRƯỚC
+    cp "$MANIFEST" "config_backup_${DATE}_manifest.txt"      # 2. copy bản hoàn chỉnh
+    sha256sum "config_backup_${DATE}_manifest.txt" | awk '{print $1}' \
+        > "config_backup_${DATE}_manifest.txt.sha256"        # 3. checksum đi kèm
+    aws s3 cp "config_backup_${DATE}_manifest.txt" "$OFFSITE_URL"
+    aws s3 cp "config_backup_${DATE}_manifest.txt.sha256" "${OFFSITE_URL}.sha256"
+
+    # 4. Tải NGƯỢC về và so NỘI DUNG. `aws s3 cp` trả 0 không chứng minh object
+    #    đọc lại được (quyền, KMS, lifecycle, sai bucket đều lộ ra ở đây).
+    aws s3 cp "$OFFSITE_URL" - > "${MANIFEST}.offsite-check"
+    cmp -s "${MANIFEST}.offsite-check" "$MANIFEST" \
+        || { echo "ban ke tren S3 KHAC ban local — DUNG LAI"; exit 1; }
+    rm -f "${MANIFEST}.offsite-check"
+fi
+set +e
+
+cat "$MANIFEST"    # git-rev · offsite · service · CID · image ID · reference · digest
+
+# Diễn tập NGAY tại T-1d bằng ĐÚNG script mà rollback sẽ chạy.
+# `docker-compose.rollback.yml` đã có sẵn trong repo — KHÔNG sinh ad-hoc.
+#
+# Truyền CẢ cờ local-only xuống. Bản trước chỉ truyền tag, nên ở chế độ
+# local-only preflight vẫn đi hỏi registry và đỏ — trừ khi người trực nhớ tự
+# `export`. "Nhớ tự export" không phải một cơ chế.
+QLTS_ROLLBACK_LOCAL_ONLY="$QLTS_ROLLBACK_LOCAL_ONLY" \
+    QLTS_ROLLBACK_TAG="$QLTS_ROLLBACK_TAG" \
+    bash scripts/rollback-preflight.sh
+# Nó fail-closed ở cả năm ca: thiếu manifest · manifest thiếu service · ảnh
+# không lấy được · tag đã trôi sang ID khác · service còn `build:`.
+# Không ĐẠT ở đây = KHÔNG có đường lùi = KHÔNG cutover.
 ```
 
 ### 5.5. Restore rehearsal (BẮT BUỘC trước cutover)
@@ -192,13 +298,13 @@ STAGING_DB=qlts_staging  # hoặc tên DB staging tương ứng
 # Step 1: Pipe dump file qua stdin để pg_restore container đọc được
 START_TIME=$(date +%s)
 cat prod_${DATE}_pre_cutover.dump | \
-    docker compose exec -T postgres pg_restore \
+    docker compose -f docker-compose.yml exec -T postgres pg_restore \
         -U ${DB_USER} -d ${STAGING_DB} --clean --if-exists --no-owner --no-acl
 END_TIME=$(date +%s)
 RESTORE_TIME=$((END_TIME - START_TIME))
 
 # Step 2: Verify count match production qua psql trực tiếp (ổn định hơn Python ad-hoc)
-docker compose exec -T postgres psql -U ${DB_USER} -d ${STAGING_DB} <<'SQL'
+docker compose -f docker-compose.yml exec -T postgres psql -U ${DB_USER} -d ${STAGING_DB} <<'SQL'
 SELECT 'lead' AS table_name, COUNT(*) AS row_count FROM lead
 UNION ALL
 SELECT 'admission_profile', COUNT(*) FROM admission_profile
@@ -230,32 +336,85 @@ Nếu restore fail bất kỳ step → **KHÔNG cutover**. Investigate root caus
 ⚠️ **Pydantic BaseSettings load env 1 lần module-level → BẮT BUỘC restart container** để pickup `ADMISSION_FROZEN=true`. KHÔNG có hot-reload runtime mechanism mặc định. Nếu cần zero-downtime reload, T0-2 phải implement Redis-backed config + cache invalidate (không khuyến nghị cho cutover scope).
 
 ```bash
-# Backend env — BẮT BUỘC restart container sau khi set
-# Edit .env hoặc .env.production:
+# Backend env — BẮT BUỘC dựng lại container sau khi set (KHÔNG phải `restart`:
+# `env_file` chỉ được đọc lúc container được TẠO — xem §6.1b, đã đo hai chiều).
+# Edit .env.production:
 #   ADMISSION_FROZEN=true
-docker compose restart backend  # restart để Settings load env mới
-docker compose ps backend       # verify state running
+docker compose -f docker-compose.yml --env-file .env.production --profile production up -d --no-deps --wait backend
+docker compose -f docker-compose.yml --env-file .env.production --profile production ps backend
 
 # Verify middleware active
 curl -X POST http://localhost:8000/api/admissions/test-endpoint  # Expect: 503 Service Unavailable
 curl -X GET  http://localhost:8000/api/admissions/                # Expect: 200 (read-only allowed)
 
-# Nginx env (T0-3 shipped on `feat/admission-full-cutover`): edit `.env.production`,
-# then re-run `bash scripts/deploy.sh` (Step 3 envsubst regenerates
-# `nginx/conf.d/default.conf` with the new flag value baked in):
-#   NGINX_ADMISSION_FROZEN=true
-# Match T0-2 backend convention: only the exact lowercase string `true` enables
-# the freeze; any other value (`false`, unset, typo, `1`, `0`) leaves the gate open.
-# Reload nginx container after redeploy (no restart needed; envsubst already wrote
-# the new conf):
-docker compose --profile production exec -T nginx nginx -t   # verify syntax
-docker compose --profile production exec -T nginx nginx -s reload
-
-# Verify nginx block active (defense-in-depth)
-curl -X POST http://localhost/api/admissions/test-endpoint        # Expect: 503 từ nginx (trước khi reach backend)
+# Nginx env (T0-3): xem §6.1b "Cần gạt đóng băng — quy trình DUY NHẤT" ngay
+# dưới đây. TUYỆT ĐỐI không dùng `nginx -s reload` hay `docker compose restart
+# nginx`: cả hai đều KHÔNG bật được cần gạt, mà vẫn in ra ba dòng xanh.
 ```
 
 **Quan trọng**: backend restart mất ~10-30s, có downtime ngắn. Nếu cần zero-downtime → escalate scope T0-2 implement Redis-backed config (out of scope runbook hiện tại).
+
+### 6.1b. Cần gạt đóng băng — quy trình DUY NHẤT
+
+> **Đây là nơi duy nhất mô tả cách bật/tắt cần gạt.** §7.2 T+0:15 và §8 Step 1 /
+> Step 6 đều trỏ về đây. Trước 13-08-2026 mỗi chỗ tự chép một biến thể, và cả
+> ba biến thể đều đã CHẾT mà vẫn in ra màu xanh.
+
+**Vì sao ba lệnh quen thuộc đều không dùng được:**
+
+| Lệnh | Kết quả thật |
+|---|---|
+| `envsubst … > nginx/conf.d/default.conf` | đường vào không còn tồn tại; `>` vẫn cắt cụt một tệp mà **không container nào mount** |
+| `nginx -s reload` | tiến trình đang chạy nạp lại đúng bản render **CŨ của chính nó**; `nginx -t` vẫn "syntax is ok", reload vẫn exit 0 |
+| `docker compose restart nginx` | `restart` tái dùng biến môi trường đã nướng vào container, **không đọc lại** `.env.production` |
+| `docker compose restart backend` | **Cùng một lỗi, ở tầng backend.** `ADMISSION_FROZEN` vào container qua `env_file`, mà `env_file` chỉ được đọc lúc container được TẠO. Đã đo hai chiều trên một stack tối giản: sửa tệp env rồi `restart` ⇒ container y nguyên, biến vẫn `false`; `up -d` ⇒ container MỚI, biến thành `true`. Nên cả hai tầng của cần gạt (nginx và backend) đều câm nếu dùng `restart`. |
+
+Vì `up -d` chỉ dựng lại khi cấu hình đã đổi thật, nó **không** phải `--force-recreate`: đổi
+`.env.production` thì nó recreate, không đổi gì thì nó là no-op. `--wait` để lệnh chỉ trả về
+khi container mới đã `healthy`.
+
+Cờ được `envsubst` bake vào bản render lúc container **khởi động**, không đọc lúc chạy. Nên cách duy nhất là để Compose **tạo container mới** với biến mới.
+
+> 🔴 **`-f docker-compose.yml` là BẮT BUỘC ở mọi lệnh production.** Thiếu nó, Compose tự nạp
+> `docker-compose.override.yml` — tệp override của DEV. Đã đo trong worktree này: cùng một
+> lệnh `--env-file .env.production --profile production config`, bản thiếu `-f` cho backend
+> `command = uvicorn app.main:app --reload` và `APP_ENV = development`, kèm `env_file:
+> ./Backend_FastAPI/.env` và bind-mount mã nguồn; bản có `-f` cho `command = None`,
+> `APP_ENV = None`. Trên máy chưa có `Backend_FastAPI/.env` thì lệnh đổ — ồn ào nhưng vô
+> hại. Trên máy CÓ tệp đó, nó **dựng cấu hình development trên production** và không báo gì.
+> `test_lenh_compose_phai_ghim_docker_compose_yml` khoá bất biến này cho cả runbook,
+> `PRODUCTION_DEPLOY_GUIDE.md` và các script chạm production.
+
+```bash
+# 1. Sửa .env.production:
+#      ADMISSION_FROZEN=true
+#      NGINX_ADMISSION_FROZEN=true
+#    Chỉ đúng chuỗi thường `true` mới bật. Guard entrypoint
+#    (nginx/docker-entrypoint.d/10-qlts-kiem-bien.sh) TỪ CHỐI mọi giá trị khác,
+#    nên một cú gõ nhầm (TRUE, 1, "true ") thành container không lên — thấy
+#    ngay — thay vì một cần gạt câm mà ai cũng tưởng đã đóng.
+
+# 2. Áp. `nginx-apply.sh` dựng một container candidate, đo hành vi thật của nó
+#    (TLS + SNI thật, route backend, route frontend), CHỈ KHI ĐẠT mới thay
+#    container đang phục vụ. Cấu hình hỏng ⇒ dừng lại, last-good vẫn chạy.
+set -a && source .env.production && set +a
+docker compose -f docker-compose.yml --env-file .env.production --profile production up -d --no-deps --wait backend
+bash scripts/nginx-apply.sh "$DOMAIN"
+
+# 3. CHỨNG MINH bằng request thật. Không dòng log nào được tính là bằng chứng.
+curl -s -o /dev/null -w 'POST admissions -> %{http_code}\n' -X POST "https://$DOMAIN/api/admissions/"
+#    PHẢI 503
+
+curl -s -o /dev/null -w 'GET  admissions -> %{http_code}\n' "https://$DOMAIN/api/admissions/"
+#    KHÔNG được 503 — đọc vẫn phải mở để còn soi dữ liệu
+
+curl -s -o /dev/null -w 'POST payments   -> %{http_code}\n' -X POST "https://$DOMAIN/api/payments/"
+#    KHÔNG được 503 — ngoài phạm vi đóng băng
+```
+
+**Mở băng** = đúng ba bước trên với `false`, và phép chứng minh đảo lại: `POST /api/admissions/` phải **thôi** trả 503 (401/422 tuỳ payload đều được — điều cần thấy là nó đã đi tới backend).
+
+Cặp 200 ↔ 503 này có ca chạy thật trong `tests-e2e/nginx-packaging/` (mục "Cần gạt đóng băng"), chạy trên stack cô lập nên diễn tập được mà không đụng prod.
 
 ### 6.2. Read-only allowed endpoints
 
@@ -337,15 +496,13 @@ KHÔNG khóa: Lead module (CRUD), Finance (payment view), Dashboard, KPI reports
 ```
 T+0:00   Communicate freeze (email + Slack + in-app banner)
 T+0:15   Edit .env.production: ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=true
-         Regenerate Nginx conf (envsubst bakes flag at deploy time, NOT runtime):
+         Apply + Verify: theo §6.1b "Cần gạt đóng băng — quy trình DUY NHẤT"
            set -a && source .env.production && set +a
-           envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' \
-             < nginx/conf.d/default.conf.template \
-             > nginx/conf.d/default.conf
-         Apply: docker compose restart backend
-                docker compose --profile production exec -T nginx nginx -t
-                docker compose --profile production exec -T nginx nginx -s reload
-         Verify: curl POST /api/admissions/... → 503 (Nginx edge AND backend middleware both block)
+           docker compose -f docker-compose.yml --env-file .env.production --profile production up -d --no-deps --wait backend
+           bash scripts/nginx-apply.sh "$DOMAIN"
+         # KHÔNG dùng envsubst trên host / nginx -s reload / restart nginx —
+         # cả ba đều KHÔNG bật được cần gạt mà vẫn in ra màu xanh (§6.1b).
+         Verify BẮT BUỘC: curl POST /api/admissions/ → 503, và GET → khác 503
 T+0:30   Final pg_dump + uploads tar + config backup → upload S3 + integrity verify
 T+1:00   Deploy backend image MỚI với 3 env flag = false:
            RUN_MIGRATIONS_ON_STARTUP=false
@@ -363,7 +520,7 @@ T+1:00   Deploy backend image MỚI với 3 env flag = false:
          Verify: container start → KHÔNG chạy alembic, KHÔNG chạy sync_notification_rules,
                  KHÔNG load Casbin policy, chỉ uvicorn ready (log "Skipping..." cho cả 3 gate).
 T+1:30   Manual run Alembic chain:
-           docker compose exec backend alembic upgrade head
+           docker compose -f docker-compose.yml exec backend alembic upgrade head
          Stream log realtime; checkpoint mỗi migration step.
          Time tracking — nếu một migration > 5 phút unexpected → pause, investigate.
          Estimate full chain ~30-60 phút (data backfill heavy).
@@ -382,16 +539,16 @@ T+3:15   **Restart backend container** để fleet-wide reload Casbin enforcer
            RUN_MIGRATIONS_ON_STARTUP=false
            RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false
            RUN_CASBIN_LOAD_ON_STARTUP=true   # ← B1: bật lại load để enforcer pickup 4-field rule
-           docker compose --profile production restart backend
+           docker compose -f docker-compose.yml --env-file .env.production --profile production up -d --no-deps --wait backend
          Verify mọi worker:
-           - `docker compose --profile production logs backend --tail=50` — kiểm
+           - `docker compose -f docker-compose.yml --profile production logs backend --tail=50` — kiểm
              tra log lifespan boot success từ ALL Gunicorn workers (≥2 dòng
              "✅ Casbin AsyncEnforcer initialized and policies loaded.").
            - 4 role × 14 action smoke matrix qua Casbin (Phần 7.3 smoke có
              cover) hoặc curl `/api/v2/admin/casbin/reload` chỉ để diagnostic
              cho worker đang nhận request — KHÔNG dùng làm cơ chế reload chính.
 T+3:30   Manual run sync notification rules:
-           docker compose exec backend python -m app.scripts.sync_notification_rules
+           docker compose -f docker-compose.yml exec backend python -m app.scripts.sync_notification_rules
          Verify: 12 ADMISSION_* event có DB rule row.
 T+3:45   Deploy frontend image MỚI (Next.js standalone container restart)
          KHÔNG có CDN purge — verify browser cache header `Cache-Control: no-cache, no-store`.
@@ -437,64 +594,111 @@ Estimate recovery: 1-2h
 ```bash
 # Step 1: Re-freeze admission (block writes during rollback window)
 # Edit .env.production: ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=true
-# Regenerate Nginx conf (T0-3 envsubst-baked: flag value đi vào nginx/conf.d/default.conf
-# tại deploy time, KHÔNG đọc runtime — `nginx -s reload` đơn lẻ sẽ load config CŨ
-# và freeze edge layer KHÔNG bật):
+# Rồi theo §6.1b — quy trình DUY NHẤT. Đây là thời điểm TỆ NHẤT để cần gạt câm:
+# đang trong cửa sổ rollback, ai cũng tin ghi đã bị chặn.
 set -a && source .env.production && set +a
-envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' \
-    < nginx/conf.d/default.conf.template \
-    > nginx/conf.d/default.conf
-docker compose restart backend
-docker compose --profile production exec -T nginx nginx -t
-docker compose --profile production exec -T nginx nginx -s reload
+docker compose -f docker-compose.yml --env-file .env.production --profile production up -d --no-deps --wait backend
+bash scripts/nginx-apply.sh "$DOMAIN"
+curl -s -o /dev/null -w 'POST admissions -> %{http_code}\n' -X POST "https://$DOMAIN/api/admissions/"   # PHẢI 503
 
-# Step 2: Restore DB từ pre-cutover backup
+# Step 2: KIỂM TÀI SẢN ROLLBACK — TRƯỚC KHI CHẠM VÀO CSDL
+#
+# Thứ tự này là toàn bộ vấn đề. Bản trước khôi phục CSDL ở Step 2 rồi mới đi
+# tìm ảnh cũ ở Step 3. Nếu ảnh không còn (registry đã dọn, tag đã trôi, máy đã
+# prune) thì lúc phát hiện ra, `pg_restore --clean` đã xoá và nạp lại lược đồ
+# CŨ trong khi mã đang chạy vẫn là mã MỚI — không tiến được, không lùi được.
+#
+# Script fail-closed ở cả năm ca; `docker pull ... || echo` của bản trước thì
+# KHÔNG: nó trả exit 0, in ra chữ "DỪNG LẠI" rồi chạy tiếp.
+export QLTS_ROLLBACK_TAG=pre-admission-cutover-${DATE}   # tag đã ghi ở §5.4
+bash scripts/rollback-preflight.sh || exit 1
+# ĐẠT rồi mới được đi tiếp. Chưa đạt thì CSDL vẫn còn nguyên và cửa tiến vẫn mở.
+
+# Step 3: Restore DB từ pre-cutover backup
 # Pipe file vào container stdin (tránh file location mismatch)
 cat prod_${DATE}_pre_cutover.dump | \
-    docker compose exec -T postgres pg_restore \
+    docker compose -f docker-compose.yml exec -T postgres pg_restore \
         -U ${POSTGRES_USER:-qlts} -d ${POSTGRES_DB:-qlts_production} \
         --clean --if-exists --no-owner --no-acl
 
-# Step 3: Deploy old images — 2 cách:
-# Cách A (recommended): override image tag qua env, KHÔNG sửa docker-compose.yml
-docker pull qlts-backend:pre-admission-cutover-${DATE}
-docker pull qlts-frontend:pre-admission-cutover-${DATE}
-export BACKEND_IMAGE_TAG=pre-admission-cutover-${DATE}
-export FRONTEND_IMAGE_TAG=pre-admission-cutover-${DATE}
-docker compose down
-docker compose up -d
-# Yêu cầu: docker-compose.yml phải support env var trong image tag, e.g.:
-#   image: qlts-backend:${BACKEND_IMAGE_TAG:-latest}
+# Step 4: Deploy old images — MỘT quy trình duy nhất
+#
+# 13-08-2026: "Cách A" cũ (export BACKEND_IMAGE_TAG / FRONTEND_IMAGE_TAG rồi
+# down/up) đã bị GỠ vì nó KHÔNG rollback gì cả. `docker-compose.yml` không hề
+# đọc hai biến đó — bốn service ứng dụng chỉ khai `build:`, không khai `image:`.
+# Đo thật: render compose với hai tag giả cho `services.backend.image` = None và
+# `services.frontend.image` = None; `grep -c IMAGE_TAG docker-compose.yml` = 0.
+# Nên `down` + `up -d` chỉ dựng lại đúng ảnh hiện hành. Chính chú thích của Cách
+# A cũng ghi "Yêu cầu: docker-compose.yml phải support env var trong image tag"
+# — một tiền đề chưa bao giờ được đáp ứng.
+#
+# "Cách B" cũ cũng hỏng theo hai đường: nó chép đè `docker-compose.override.yml`
+# (tệp mà prod CỐ Ý giữ ở trạng thái đã xoá), và mọi lệnh production nay đều
+# ghim `-f docker-compose.yml` nên override sẽ KHÔNG được nạp.
+#
+# Quy trình đúng: thêm MỘT `-f`. `docker-compose.rollback.yml` nằm sẵn trong
+# repo, ghim `image:` + `build: !reset null` cho ĐỦ BỐN service.
+# Ảnh đã được Step 2 chứng minh là có thật và đúng ID. Ở đây chỉ còn việc áp.
+#
+# ⚠️ TỪ ĐÂY TỚI HẾT §8.1, MỌI lệnh compose chạm backend/celery/frontend đều
+# PHẢI mang CẢ HAI `-f`. Thiếu tệp rollback thì Compose thấy service không có
+# `image:` và dựng lại từ mã MỚI — tức tự hoàn tác rollback, im lặng. Đo model:
+# có rollback `backend image=qlts-backend:<cũ> build=false`; không có rollback
+# `image=None build=true`.
+docker compose -f docker-compose.yml -f docker-compose.rollback.yml \
+    --env-file .env.production --profile production up -d --wait \
+    backend celery-worker celery-beat frontend
 
-# Cách B (nếu compose không hỗ trợ env): commit override file riêng pre-cutover
-# cp docker-compose.rollback.yml docker-compose.override.yml
-# docker compose down && docker compose up -d
-# Lưu ý: rollback compose file MUST exist sẵn từ T-1d preflight, KHÔNG generate ad-hoc.
+# Quên đặt QLTS_ROLLBACK_TAG thì lệnh ĐỔ ngay (`:?` trong tệp rollback) thay vì
+# lặng lẽ dựng lại ảnh hiện hành — đúng cái bẫy của quy trình cũ.
 
-# Step 4: Restore env/config từ backup
+# Step 5: Restore env/config từ backup
 tar xzf config_backup_${DATE}.tar.gz
 cp env_backup_${DATE}.txt .env
 cp backend_env_backup_${DATE}.txt Backend_FastAPI/.env
 cp frontend_env_backup_${DATE}.txt frontend/.env.local
 cp prod_env_backup_${DATE}.txt .env.production
-cp -r nginx_conf_backup_${DATE}/* nginx/conf.d/
-docker compose restart backend frontend nginx
+# Cấu hình nginx đi theo IMAGE: khôi phục = đưa cây về ĐÚNG commit rồi BUILD
+# LẠI. `cp` vào `nginx/conf.d/` là vô nghĩa (thư mục ấy không còn được mount);
+# và `restart nginx` KHÔNG nạp lại biến môi trường.
+#
+# ⚠️ KHÔNG dùng `cp -r nginx_backup/* nginx/`. Chép chồng chỉ ghi đè những tệp
+# TRÙNG ĐƯỜNG; tệp mà bản lỗi THÊM vào `nginx/` (template mới, script
+# entrypoint mới) vẫn nằm nguyên. Image dựng ra là bản LAI giữa cấu hình cũ và
+# chính cấu hình vừa gây sự cố — rollback có thể tái tạo lại đúng sự cố.
+PRE_SHA=$(awk -F'\t' '$1=="# git-rev"{print $2}' rollback_manifest_${QLTS_ROLLBACK_TAG}.txt)
+[ -n "$PRE_SHA" ] || { echo "manifest thiếu git-rev — DỪNG"; exit 1; }
 
-# Step 5: Verify smoke
+git checkout "$PRE_SHA" -- nginx/     # đưa mọi tệp được theo dõi về đúng bản cũ
+git clean -fd nginx/                  # xoá tệp CHỈ CÓ ở bản lỗi
+git status --porcelain nginx/         # PHẢI rỗng; còn dòng nào là chưa sạch
+git diff --quiet "$PRE_SHA" -- nginx/ || { echo "cây nginx CHƯA khớp $PRE_SHA — DỪNG"; exit 1; }
+# nginx build từ cây git là ĐÚNG (cấu hình của nó đi theo image), nên lệnh này
+# KHÔNG cần tệp rollback.
+docker compose -f docker-compose.yml --env-file .env.production --profile production build nginx
+# Nhưng bốn service ứng dụng thì CÓ: thiếu `-f docker-compose.rollback.yml` ở
+# đây là dựng lại chúng từ mã MỚI, hoàn tác đúng thứ Step 4 vừa làm.
+docker compose -f docker-compose.yml -f docker-compose.rollback.yml \
+    --env-file .env.production --profile production up -d --no-deps --wait \
+    backend celery-worker celery-beat frontend
+set -a && source .env.production && set +a
+bash scripts/nginx-apply.sh "$DOMAIN"
+
+# Step 6: Verify smoke
 curl http://localhost:8000/api/admissions/health  # Expect 200
-docker compose exec -T postgres psql -U ${POSTGRES_USER:-qlts} -d ${POSTGRES_DB:-qlts_production} \
+docker compose -f docker-compose.yml exec -T postgres psql -U ${POSTGRES_USER:-qlts} -d ${POSTGRES_DB:-qlts_production} \
     -c "SELECT COUNT(*) FROM admission_profile"   # Expect: count match pre-cutover
 
-# Step 6: Unlock (nếu smoke PASS)
+# Step 7: Unlock (nếu smoke PASS)
 # Edit .env.production: ADMISSION_FROZEN=false + NGINX_ADMISSION_FROZEN=false
-# Regenerate Nginx conf (envsubst-baked, cùng pattern Step 1):
+# Theo §6.1b — cùng quy trình với Step 1, phép chứng minh đảo chiều.
+# VẪN mang cả hai `-f`: stack đang chạy ảnh CŨ, và lệnh mở băng này dựng lại
+# backend. Thiếu tệp rollback ở bước cuối cùng là lùi xong rồi tiến lại.
 set -a && source .env.production && set +a
-envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' \
-    < nginx/conf.d/default.conf.template \
-    > nginx/conf.d/default.conf
-docker compose restart backend
-docker compose --profile production exec -T nginx nginx -t
-docker compose --profile production exec -T nginx nginx -s reload
+docker compose -f docker-compose.yml -f docker-compose.rollback.yml \
+    --env-file .env.production --profile production up -d --no-deps --wait backend
+bash scripts/nginx-apply.sh "$DOMAIN"
+curl -s -o /dev/null -w 'POST admissions -> %{http_code}\n' -X POST "https://$DOMAIN/api/admissions/"   # PHẢI THÔI 503
 ```
 
 ### 8.2. KHÔNG rollback nửa vời
@@ -550,7 +754,7 @@ Nếu cutover đã apply một trong 5 migration trên + phát hiện bug critic
 5 infrastructure family Task 0 BẮT BUỘC ship + tested trên staging trước Go decision (6 tracker row vì T0-4 split):
 - [ ] **T0-1** 2 env flag gates trong `docker-entrypoint.sh` — tested 9-case matrix (3 RUN_MIGRATIONS × 3 RUN_SYNC_NOTIFICATION_RULES) + 5 defensive variant (TRUE/FALSE/typo) PASS. Cutover combo `RUN_MIGRATIONS_ON_STARTUP=false` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false` skip cả 2; default unset/true chạy alembic + sync_notification_rules như cũ.
 - [ ] **T0-2** `ADMISSION_FROZEN` middleware shipped — 4 write method × 3 prefix matrix tested (GET/HEAD/OPTIONS allowed, POST/PUT/PATCH/DELETE 503 trên `/api/admissions`, `/api/admission-config`, `/api/public/admissions`); path-segment match rejects `/api/admissionsfoo` lookalike.
-- [ ] **T0-3** Nginx admission block config (env-driven `NGINX_ADMISSION_FROZEN`) tested với `nginx -t` syntax check + reload smoke.
+- [ ] **T0-3** Nginx admission block config (env-driven `NGINX_ADMISSION_FROZEN`) — nghiệm thu bằng **cặp request thật 200 ↔ 503** theo §6.1b, KHÔNG bằng `nginx -t` + reload smoke. `nginx -t` báo "syntax is ok" cho cả một config rỗng, và reload nạp lại đúng bản render cũ: bộ đôi ấy xanh ngay cả khi cần gạt không hề động đậy.
 - [ ] **T0-4a** `dispatch_pending_outbox` skeleton scheduled 30s + worker registered + no-op safe before outbox table/model exists.
 - [ ] **T0-4b** `dispatch_pending_outbox` real worker wiring shipped after B2 + M-1-19a + 3-step claim/dispatch/finalize tested.
 - [ ] **T0-5** `POST /api/v2/admin/casbin/reload` endpoint shipped + admin-only `require_admin` + `ADMIN_WRITE` rate limit + audit log + `scope="current_process"` field. **Multi-worker reality**: fleet-wide reload = restart backend (§7.2 T+3:15); endpoint = current-process diagnostic only.

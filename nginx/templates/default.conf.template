@@ -83,6 +83,34 @@ server {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
 
+    # --- Bằng chứng sống của KHỐI HTTPS NÀY (healthcheck của container) ---
+    # Phải nằm trong khối 443, không phải khối 80. Trước bản vá này cả ba lớp
+    # healthcheck đều đáp xuống cổng 80, nên xoá trọn khối HTTPS mà container
+    # vẫn báo `healthy` và deploy vẫn tuyên bố thành công — trong khi mọi client
+    # thật nhận `Connection reset` từ catch-all `ssl_reject_handshake`. Đã tái
+    # hiện bằng cách xoá khối này rồi chạy đúng chuỗi healthcheck cũ: rc=0.
+    #
+    # Là hằng do CHÍNH nginx trả, cố ý không proxy: nó chứng minh "khối HTTPS
+    # này có mặt và đang phục vụ", không lẫn với "backend còn sống" (backend đã
+    # có healthcheck riêng; buộc hai thứ vào nhau thì một cú backend chớp tắt sẽ
+    # làm mọi lần deploy sau đó đỏ oan). Bằng chứng proxy tới backend/frontend
+    # thuộc về cổng candidate — `scripts/nginx-verify.sh`, chạy mỗi lần deploy.
+    #
+    # Chỉ loopback: healthcheck chạy TRONG container nên $remote_addr là
+    # 127.0.0.1. Không có đường nào gọi được từ ngoài.
+    location = /nginx-alive {
+        access_log off;
+        allow 127.0.0.1;
+        deny all;
+        # Thân là một HẰNG NHẬN DẠNG ĐƯỢC, và healthcheck so khớp CHÍNH XÁC
+        # chuỗi này. Chỉ kiểm mã 200 là không đủ: gỡ mất location này thì
+        # request rơi xuống catch-all `location /` → proxy_pass frontend →
+        # frontend trả 200 cho mọi đường dẫn ⇒ healthcheck vẫn xanh trong khi
+        # thứ nó tưởng đang canh đã biến mất. Đã tái hiện đúng như vậy (W1-E).
+        return 200 'qlts-nginx-alive';
+        add_header Content-Type text/plain;
+    }
+
     # --- Auth endpoints (strict rate limit) ---
     location /api/auth/login {
         limit_req zone=auth burst=3 nodelay;

@@ -38,5 +38,28 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 20m
           script: |
+            set -euo pipefail
             cd /opt/qlts
-            ./scripts/deploy.sh
+
+            # 🚨 SELF-UPDATE: bash nạp toàn bộ script vào bộ nhớ lúc gọi. Nếu
+            # gọi `./scripts/deploy.sh` ngay thì bản CŨ chạy, rồi Step 2 của nó
+            # `git pull` cây mới — nhưng logic đang chạy vẫn là bản cũ. Lần
+            # deploy đầu sau mỗi lần sửa deploy.sh vì thế chạy sai bản, và với
+            # commit rename template thì nó dừng hẳn vì đọc đường đã biến mất.
+            # (Caveat này được ghi ngay trong scripts/deploy.sh, nhưng workflow
+            # chưa từng tuân theo.)
+            #
+            # Thứ tự đúng: cập nhật cây TRƯỚC, xác minh, rồi mới nạp script.
+            git fetch origin main
+            git pull --ff-only origin main
+
+            SHA=$(git rev-parse HEAD)
+            echo "Deploy tại $SHA"
+            test -f scripts/deploy.sh || { echo "Thiếu scripts/deploy.sh"; exit 1; }
+            test -f nginx/templates/default.conf.template || {
+              echo "Thiếu nginx/templates/default.conf.template"; exit 1; }
+
+            # `bash scripts/deploy.sh` chứ không `/tmp/deploy_NEW.sh`: script
+            # suy PROJECT_DIR từ BASH_SOURCE, nên bản chép sang /tmp sẽ tính
+            # project root thành `/`.
+            bash scripts/deploy.sh
