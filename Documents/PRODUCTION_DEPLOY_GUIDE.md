@@ -94,9 +94,21 @@ git log --oneline -3
 # Build — PHẢI có `nginx`
 docker compose -f docker-compose.yml --env-file .env.production --profile production build backend frontend nginx
 
-# Deploy
-docker compose -f docker-compose.yml --env-file .env.production --profile production up -d
+# Deploy — liệt kê service TƯỜNG MINH, KHÔNG `up -d` trần
+docker compose -f docker-compose.yml --env-file .env.production --profile production \
+    up -d --wait postgres redis backend celery-worker celery-beat frontend
+
+# nginx đi qua CỔNG CANDIDATE, không bao giờ bị thay thẳng
+set -a && source .env.production && set +a
+bash scripts/nginx-apply.sh "$DOMAIN"
 ```
+
+⚠️ **`up -d` trần sẽ thay thẳng container nginx đang phục vụ.** Cấu hình mới
+chưa được đo lần nào mà container tốt đã bị stop+remove; template hỏng, chứng
+thư thiếu hay `DOMAIN` rỗng đều thành :80/:443 chết không đường lùi. Đó chính là
+sự cố 12-08. `scripts/nginx-apply.sh` dựng candidate, đo TLS/SNI thật với một
+route backend và một route frontend, **chỉ khi đạt** mới thay bản đang chạy.
+Đường chuẩn `scripts/deploy.sh` đã làm đúng thế — hướng dẫn tay phải theo.
 
 ⚠️ **`nginx` bắt buộc nằm trong lệnh build.** Từ khi cấu hình nginx đi theo image
 (`nginx/Dockerfile`, tag cố định `qlts-nginx:local`), một máy đã có sẵn tag đó sẽ
@@ -273,7 +285,11 @@ git checkout <previous_commit>
 #    `qlts-nginx:local` trên máy vẫn là ảnh của bản LỖI cho tới khi build lại.
 #    Thiếu `nginx` ở đây = rollback code mà nginx vẫn chạy cấu hình vừa gây sự cố.
 docker compose -f docker-compose.yml --env-file .env.production --profile production build backend frontend nginx
-docker compose -f docker-compose.yml --env-file .env.production --profile production up -d
+docker compose -f docker-compose.yml --env-file .env.production --profile production \
+    up -d --wait postgres redis backend celery-worker celery-beat frontend
+# nginx qua cổng candidate — kể cả khi rollback, nhất là khi rollback
+set -a && source .env.production && set +a
+bash scripts/nginx-apply.sh "$DOMAIN"
 
 # 3. Rollback DB (nếu cần)
 gunzip < /root/backup_YYYYMMDD_HHMMSS.sql.gz | docker exec -i qlts-postgres-1 psql -U qlts -d qlts_production

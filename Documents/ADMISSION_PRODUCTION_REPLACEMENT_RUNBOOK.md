@@ -206,12 +206,31 @@ for S in backend celery-worker celery-beat frontend; do
 done
 
 # Push registry — VẪN trong `set -e`. Hỏng ở đây là DỪNG, không phải ghi chú.
+#
+# Máy KHÔNG có registry: đừng chạy khối này, và phải khai rủi ro tường minh
+# `QLTS_ROLLBACK_LOCAL_ONLY=1` khi gọi preflight. Chạy `push` rồi mặc nó hỏng là
+# tự dựng lại đúng cái bẫy: tag cục bộ có, preflight xanh, tài sản không tồn tại
+# ở đâu ngoài đĩa máy này.
 for S in backend celery-worker celery-beat frontend; do
     docker push "qlts-${S}:${QLTS_ROLLBACK_TAG}"
+    # DIGEST là thứ duy nhất bất biến: tag ở xa có thể bị đẩy đè bởi ảnh khác,
+    # digest thì không. Preflight sẽ hỏi registry bằng chính chuỗi này.
+    DIGEST=$(docker inspect --format '{{index .RepoDigests 0}}' "qlts-${S}:${QLTS_ROLLBACK_TAG}")
+    [ -n "$DIGEST" ] || { echo "KHONG lay duoc digest cho $S sau khi push"; exit 1; }
+    # thêm digest vào đúng dòng của service đó (cột 5)
+    awk -F'\t' -v s="$S" -v d="$DIGEST" 'BEGIN{OFS="\t"} $1==s{$5=d} {print}' \
+        "$MANIFEST" > "$MANIFEST.tmp" && mv "$MANIFEST.tmp" "$MANIFEST"
 done
+
+# Bản kê phải RA KHỎI MÁY. Ảnh ở registry mà bản kê chỉ nằm trên host thì mất
+# host = còn ảnh nhưng không biết digest nào là ảnh cũ.
+cp "$MANIFEST" "config_backup_${DATE}_manifest.txt"
+printf '# offsite\ts3://qlts-backup/admission-cutover/config_backup_%s_manifest.txt\n' \
+    "${DATE}" >> "$MANIFEST"
+aws s3 cp "config_backup_${DATE}_manifest.txt" s3://qlts-backup/admission-cutover/
 set +e
 
-cat "$MANIFEST"    # git-rev · service · container ID · image ID · reference
+cat "$MANIFEST"    # git-rev · offsite · service · CID · image ID · reference · digest
 
 # Diễn tập NGAY tại T-1d bằng ĐÚNG script mà rollback sẽ chạy.
 # `docker-compose.rollback.yml` đã có sẵn trong repo — KHÔNG sinh ad-hoc.

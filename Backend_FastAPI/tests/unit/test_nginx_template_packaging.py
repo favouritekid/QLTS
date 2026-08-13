@@ -1496,6 +1496,83 @@ def test_deploy_guide_build_ca_nginx():
     )
 
 
+def test_preflight_dinh_nghia_moi_ham_no_goi():
+    """Hàm gọi mà chưa định nghĩa = `exit 127` dưới `set -e`.
+
+    `warn` từng được gọi ở nhánh `QLTS_ROLLBACK_LOCAL_ONLY=1` mà không hề được
+    định nghĩa. Nhánh ấy chưa từng được chạy nên không ai thấy — đúng loại đường
+    thoát hiểm chỉ hỏng đúng lúc cần tới.
+    """
+    ma = _ma_lenh(_PREFLIGHT)
+    dinh_nghia = set(re.findall(r"^\s*(\w+)\s*\(\)\s*\{", ma, re.M))
+    goi = set(re.findall(r"^\s*(log|warn|error)\b", ma, re.M))
+    thieu = sorted(goi - dinh_nghia)
+    assert not thieu, f"gọi hàm chưa định nghĩa (exit 127 dưới `set -e`): {thieu}"
+
+
+def test_preflight_kiem_git_sha_TRUOC_khi_cham_csdl():
+    """Manifest hỏng / commit biến mất chỉ lộ ra SAU `pg_restore` là quá muộn."""
+    ma = _ma_lenh(_PREFLIGHT)
+    # Neo vào ĐÚNG phép kiểm commit (`^{commit}`), không vào chuỗi `git cat-file`
+    # chung: script còn một `cat-file -e …:nginx` nữa, nên phép kiểm lỏng vẫn
+    # xanh sau khi phép kiểm commit đã bị gỡ.
+    assert re.search(r"git cat-file -e[^\n]*\^\{commit\}", ma), (
+        "preflight phải xác nhận commit pre-cutover CÒN TỒN TẠI; §8.1 Step 5 mới "
+        "`git checkout` thì lúc đó CSDL đã bị `pg_restore --clean` phá"
+    )
+    assert re.search(r"\[0-9a-f\]\{40\}", ma), (
+        "phải kiểm git-rev là SHA ĐẦY ĐỦ 40 ký tự — SHA rút gọn có thể mơ hồ"
+    )
+    assert re.search(r"cat-file -e[^\n]*:nginx", ma), (
+        "phải xác nhận commit đó CÓ thư mục nginx/"
+    )
+
+
+def test_preflight_doi_chieu_DIGEST_chu_khong_chi_ton_tai_tag():
+    """Tag ở registry có thể đã bị đẩy đè bởi một ảnh KHÁC.
+
+    `docker manifest inspect <tag>` chỉ chứng minh "có gì đó ở đó", không chứng
+    minh đó là ảnh cũ. Digest thì bất biến.
+    """
+    ma = _ma_lenh(_PREFLIGHT)
+    assert re.search(r"docker manifest inspect\s+\"?\$DIGEST", ma), (
+        "phải hỏi registry BẰNG DIGEST đã ghi, không bằng tag"
+    )
+    # Neo vào lệnh ĐỌC trường offsite, không vào chuỗi `# offsite` — chuỗi ấy
+    # còn nằm trong chính thông điệp lỗi, nên phép kiểm lỏng vẫn xanh sau khi
+    # lệnh đọc đã bị gỡ.
+    assert re.search(r'awk[^\n]*\$1=="# offsite"[^\n]*\$MANIFEST', ma), (
+        "phải ĐỌC trường offsite từ manifest — mất host thì còn ảnh trên registry "
+        "nhưng không biết digest nào là ảnh cũ"
+    )
+    assert "RepoDigests" in _doc(_RUNBOOK), (
+        "§5.4 phải ghi digest (`docker inspect --format '{{index .RepoDigests 0}}'`) "
+        "vào manifest sau mỗi lần push"
+    )
+
+
+def test_deploy_guide_khong_up_d_TRAN_cham_nginx():
+    """`up -d` trần thay thẳng nginx đang phục vụ, bỏ qua cổng candidate."""
+    if not _GUIDE.is_file():
+        pytest.skip("không có PRODUCTION_DEPLOY_GUIDE.md")
+    pham = []
+    for so, dong in _dong_lenh_trong_tai_lieu(_GUIDE):
+        if not re.search(r"\bup -d\b", dong):
+            continue
+        # `up -d` phải liệt kê service tường minh, và KHÔNG được gồm nginx
+        sau = dong.split("up -d", 1)[1]
+        sau = re.sub(r"--\S+(\s+\S+)?", "", sau).strip()  # bỏ cờ
+        if not sau:
+            pham.append(f"{so}: `up -d` trần — {dong.strip()[:80]}")
+        elif re.search(r"\bnginx\b", sau):
+            pham.append(f"{so}: `up -d` liệt kê nginx — {dong.strip()[:80]}")
+    assert not pham, (
+        "nginx phải được áp qua `scripts/nginx-apply.sh`, không qua `up -d`:\n  "
+        + "\n  ".join(pham)
+    )
+    assert "nginx-apply.sh" in _doc(_GUIDE)
+
+
 def test_preflight_doi_chieu_image_id_chu_khong_chi_ton_tai():
     """Ảnh "có mặt" không chứng minh nó là ảnh CŨ."""
     ma = _ma_lenh(_PREFLIGHT)

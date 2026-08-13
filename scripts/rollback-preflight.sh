@@ -29,8 +29,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log() { echo -e "${GREEN}[ROLLBACK-PREFLIGHT]${NC} $1"; }
+# `warn` từng được GỌI mà không được ĐỊNH NGHĨA: dưới `set -e` nhánh local-only
+# chết bằng exit 127 trước khi kịp in gì. Không ai thấy vì nhánh ấy chưa từng
+# được chạy — đúng loại đường thoát hiểm chỉ hỏng đúng lúc cần tới.
+warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
 error() { echo -e "${RED}[ERROR]${NC} $1" >&2; exit 1; }
 
 TAG="${QLTS_ROLLBACK_TAG:?dat QLTS_ROLLBACK_TAG = tag da ghi o RUNBOOK 5.4}"
@@ -48,6 +52,23 @@ log "manifest = $MANIFEST"
 # động. Tag `:latest` có thể đã trôi sang bản khác giữa lúc tag và lúc rollback;
 # ID ảnh thì không.
 [ -f "$MANIFEST" ] || error "thiếu $MANIFEST — không có bằng chứng ảnh nào là ảnh cũ"
+
+# --- 1b. Revision git phải kiểm TẠI ĐÂY, không đợi tới lúc restore ----------
+# §8.1 Step 5 mới `git checkout "$PRE_SHA" -- nginx/`, mà Step 5 chạy SAU
+# `pg_restore --clean`. Manifest hỏng hay commit đã biến mất (rebase, prune,
+# clone nông) thì ta chỉ biết khi CSDL đã bị phá — không tiến được, không lùi
+# được. Kiểm ở đây, trước khi chạm bất cứ thứ gì.
+PRE_SHA=$(awk -F'\t' '$1=="# git-rev"{print $2}' "$MANIFEST" | head -1)
+[ -n "$PRE_SHA" ] || error "$MANIFEST thiếu dòng '# git-rev' — Step 5 sẽ không biết checkout về đâu"
+printf '%s' "$PRE_SHA" | grep -qE '^[0-9a-f]{40}$' \
+    || error "git-rev trong manifest không phải SHA đầy đủ 40 ký tự: '$PRE_SHA'"
+git cat-file -e "${PRE_SHA}^{commit}" 2>/dev/null \
+    || error "commit $PRE_SHA KHÔNG tồn tại trong repo này.
+  Manifest trỏ tới một revision đã biến mất (rebase / prune / clone nông).
+  DỪNG LẠI — chưa đụng gì tới CSDL."
+git cat-file -e "${PRE_SHA}:nginx" 2>/dev/null \
+    || error "commit $PRE_SHA không có thư mục nginx/ — không khôi phục được cấu hình nginx"
+log "  ✓ git-rev $PRE_SHA tồn tại và có nginx/"
 
 for S in "${DICH_VU[@]}"; do
     grep -qE "^${S}	" "$MANIFEST" \
@@ -77,19 +98,48 @@ for S in "${DICH_VU[@]}"; do
     # Phép kiểm ở trên luôn ĐẠT nếu tag vừa được tạo cục bộ ở §5.4 — kể cả khi
     # mọi `docker push` đều hỏng. Hỏi thẳng registry bằng `manifest inspect`
     # (không tải ảnh về) mới biết tài sản có thật ở ngoài máy hay không.
+    # Ảnh CÓ TRÊN MÁY NÀY không chứng minh còn rollback được sau khi mất máy.
+    # Phép kiểm ID ở trên luôn ĐẠT nếu tag vừa được tạo cục bộ ở §5.4 — kể cả
+    # khi mọi `docker push` đều hỏng.
+    #
+    # Và "tag có trên registry" cũng chưa đủ: tag ở xa có thể đã bị đẩy đè bởi
+    # một ảnh KHÁC. Thứ duy nhất bất biến là DIGEST. Ta đối chiếu digest đã ghi
+    # lúc push, và hỏi registry bằng chính digest ấy — tag trôi thành không liên quan.
     if [ "${QLTS_ROLLBACK_LOCAL_ONLY:-0}" = "1" ]; then
-        warn "  ⚠ $REF: BỎ QUA kiểm registry (QLTS_ROLLBACK_LOCAL_ONLY=1) —"
-        warn "     ảnh chỉ có TRÊN MÁY NÀY. Mất máy hoặc prune = KHÔNG rollback được."
+        warn "$REF: BỎ QUA kiểm registry (QLTS_ROLLBACK_LOCAL_ONLY=1)."
+        warn "   Ảnh chỉ có TRÊN MÁY NÀY. Mất máy / prune = KHÔNG rollback được."
     else
-        docker manifest inspect "$REF" >/dev/null 2>&1 \
-            || error "$REF KHÔNG có trên registry (chỉ tồn tại cục bộ).
-  Nhiều khả năng một lần \`docker push\` ở RUNBOOK §5.4 đã hỏng mà bị nuốt.
-  Rollback lúc này phụ thuộc hoàn toàn vào đĩa của máy chủ.
-  Đẩy lại ảnh, hoặc chấp nhận rủi ro tường minh bằng QLTS_ROLLBACK_LOCAL_ONLY=1."
-        log "  ✓ $REF có trên registry"
+        DIGEST=$(awk -F'\t' -v s="$S" '$1==s {print $5}' "$MANIFEST" | head -1)
+        [ -n "$DIGEST" ] \
+            || error "$MANIFEST không ghi digest cho '$S'.
+  Không có digest thì không chứng minh được ảnh ở registry đúng là ảnh cũ.
+  Chạy lại §5.4 (nó ghi digest sau mỗi lần push), hoặc khai rủi ro tường minh
+  bằng QLTS_ROLLBACK_LOCAL_ONLY=1."
+        case "$DIGEST" in
+            *@sha256:*) ;;
+            *) error "digest của '$S' sai định dạng (cần repo@sha256:…): '$DIGEST'" ;;
+        esac
+        docker manifest inspect "$DIGEST" >/dev/null 2>&1 \
+            || error "KHÔNG phân giải được $DIGEST trên registry.
+  Ảnh cũ của '$S' không còn ở ngoài máy — nhiều khả năng một lần \`docker push\`
+  ở §5.4 đã hỏng, hoặc registry đã dọn. Rollback lúc này phụ thuộc hoàn toàn
+  vào đĩa của máy chủ. DỪNG LẠI — chưa đụng gì tới CSDL."
+        log "  ✓ $S: digest ${DIGEST##*@} có thật trên registry"
     fi
     log "  ✓ $REF khớp ID trong manifest"
 done
+
+# --- 2b. Bản kê phải TỒN TẠI NGOÀI MÁY --------------------------------------
+# Ảnh ở registry mà bản kê chỉ nằm trên host thì mất host = còn ảnh nhưng không
+# biết ảnh nào là đúng. Bản kê phải đi cùng gói backup offsite (§5.3).
+if [ "${QLTS_ROLLBACK_LOCAL_ONLY:-0}" != "1" ]; then
+    OFFSITE=$(awk -F'\t' '$1=="# offsite"{print $2}' "$MANIFEST" | head -1)
+    [ -n "$OFFSITE" ] \
+        || error "$MANIFEST chưa ghi dòng '# offsite' — bản kê chỉ tồn tại trên máy này.
+  Mất máy thì còn ảnh trên registry nhưng KHÔNG biết digest nào là ảnh cũ.
+  Chép bản kê vào gói backup offsite (§5.3) rồi ghi lại đường dẫn đó vào manifest."
+    log "  ✓ bản kê đã có bản ngoài máy: $OFFSITE"
+fi
 
 # --- 3. Model Compose chọn ĐÚNG bốn ảnh ấy ---------------------------------
 # `config --images` trả về đúng danh sách ảnh mà `up` sẽ dùng, nên không cần
