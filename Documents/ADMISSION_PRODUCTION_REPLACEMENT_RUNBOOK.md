@@ -185,7 +185,16 @@ export QLTS_ROLLBACK_TAG=pre-admission-cutover-${DATE}
 MANIFEST=rollback_manifest_${QLTS_ROLLBACK_TAG}.txt
 : > "$MANIFEST"
 
+# `set -e` phủ TRỌN khối, kể cả `docker push`. Đừng tắt nó giữa chừng: một lần
+# push hỏng (hết hạn đăng nhập, sai repo, registry sập) mà bị nuốt thì tag chỉ
+# tồn tại TRÊN CHÍNH MÁY NÀY — và preflight vẫn ĐẠT, vì `docker image inspect`
+# thấy tag local nên không bao giờ thử `pull`. Cổng T-1d sẽ tuyên bố "sẵn sàng
+# rollback" cho một tài sản sẽ bốc hơi ngay khi máy chủ mất hoặc bị prune.
 set -e
+
+# Ghi cả REVISION GIT — §8.1 Step 5 cần nó để khôi phục cây nginx chính xác.
+printf '# git-rev\t%s\n' "$(git rev-parse HEAD)" >> "$MANIFEST"
+
 for S in backend celery-worker celery-beat frontend; do
     CID=$(docker compose -f docker-compose.yml --env-file .env.production \
         --profile production ps -q "$S")
@@ -195,13 +204,14 @@ for S in backend celery-worker celery-beat frontend; do
     printf '%s\t%s\t%s\t%s\n' \
         "$S" "$CID" "$IMG_ID" "qlts-${S}:${QLTS_ROLLBACK_TAG}" >> "$MANIFEST"
 done
-set +e
-cat "$MANIFEST"    # service · container ID · image ID · reference
 
-# Push registry (nếu có)
+# Push registry — VẪN trong `set -e`. Hỏng ở đây là DỪNG, không phải ghi chú.
 for S in backend celery-worker celery-beat frontend; do
     docker push "qlts-${S}:${QLTS_ROLLBACK_TAG}"
 done
+set +e
+
+cat "$MANIFEST"    # git-rev · service · container ID · image ID · reference
 
 # Diễn tập NGAY tại T-1d bằng ĐÚNG script mà rollback sẽ chạy.
 # `docker-compose.rollback.yml` đã có sẵn trong repo — KHÔNG sinh ad-hoc.
@@ -583,10 +593,21 @@ cp env_backup_${DATE}.txt .env
 cp backend_env_backup_${DATE}.txt Backend_FastAPI/.env
 cp frontend_env_backup_${DATE}.txt frontend/.env.local
 cp prod_env_backup_${DATE}.txt .env.production
-# Cấu hình nginx đi theo IMAGE: khôi phục = đưa cây về đúng commit rồi BUILD
+# Cấu hình nginx đi theo IMAGE: khôi phục = đưa cây về ĐÚNG commit rồi BUILD
 # LẠI. `cp` vào `nginx/conf.d/` là vô nghĩa (thư mục ấy không còn được mount);
 # và `restart nginx` KHÔNG nạp lại biến môi trường.
-cp -r nginx_backup_${DATE}/* nginx/
+#
+# ⚠️ KHÔNG dùng `cp -r nginx_backup/* nginx/`. Chép chồng chỉ ghi đè những tệp
+# TRÙNG ĐƯỜNG; tệp mà bản lỗi THÊM vào `nginx/` (template mới, script
+# entrypoint mới) vẫn nằm nguyên. Image dựng ra là bản LAI giữa cấu hình cũ và
+# chính cấu hình vừa gây sự cố — rollback có thể tái tạo lại đúng sự cố.
+PRE_SHA=$(awk -F'\t' '$1=="# git-rev"{print $2}' rollback_manifest_${QLTS_ROLLBACK_TAG}.txt)
+[ -n "$PRE_SHA" ] || { echo "manifest thiếu git-rev — DỪNG"; exit 1; }
+
+git checkout "$PRE_SHA" -- nginx/     # đưa mọi tệp được theo dõi về đúng bản cũ
+git clean -fd nginx/                  # xoá tệp CHỈ CÓ ở bản lỗi
+git status --porcelain nginx/         # PHẢI rỗng; còn dòng nào là chưa sạch
+git diff --quiet "$PRE_SHA" -- nginx/ || { echo "cây nginx CHƯA khớp $PRE_SHA — DỪNG"; exit 1; }
 # nginx build từ cây git là ĐÚNG (cấu hình của nó đi theo image), nên lệnh này
 # KHÔNG cần tệp rollback.
 docker compose -f docker-compose.yml --env-file .env.production --profile production build nginx

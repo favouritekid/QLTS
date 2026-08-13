@@ -72,6 +72,22 @@ for S in "${DICH_VU[@]}"; do
     manifest: $ID_GHI
     hiện tại: $ID_THAT
   Tag đã trôi. DỪNG LẠI — chưa đụng gì tới CSDL."
+
+    # Ảnh CÓ TRÊN MÁY NÀY không chứng minh còn rollback được sau khi mất máy.
+    # Phép kiểm ở trên luôn ĐẠT nếu tag vừa được tạo cục bộ ở §5.4 — kể cả khi
+    # mọi `docker push` đều hỏng. Hỏi thẳng registry bằng `manifest inspect`
+    # (không tải ảnh về) mới biết tài sản có thật ở ngoài máy hay không.
+    if [ "${QLTS_ROLLBACK_LOCAL_ONLY:-0}" = "1" ]; then
+        warn "  ⚠ $REF: BỎ QUA kiểm registry (QLTS_ROLLBACK_LOCAL_ONLY=1) —"
+        warn "     ảnh chỉ có TRÊN MÁY NÀY. Mất máy hoặc prune = KHÔNG rollback được."
+    else
+        docker manifest inspect "$REF" >/dev/null 2>&1 \
+            || error "$REF KHÔNG có trên registry (chỉ tồn tại cục bộ).
+  Nhiều khả năng một lần \`docker push\` ở RUNBOOK §5.4 đã hỏng mà bị nuốt.
+  Rollback lúc này phụ thuộc hoàn toàn vào đĩa của máy chủ.
+  Đẩy lại ảnh, hoặc chấp nhận rủi ro tường minh bằng QLTS_ROLLBACK_LOCAL_ONLY=1."
+        log "  ✓ $REF có trên registry"
+    fi
     log "  ✓ $REF khớp ID trong manifest"
 done
 

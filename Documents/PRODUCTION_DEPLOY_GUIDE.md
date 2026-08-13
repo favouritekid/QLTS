@@ -91,12 +91,19 @@ git log --oneline -3
 **QUAN TRỌNG**: Phải dùng `--env-file .env.production`. KHÔNG dùng `docker compose up` mà thiếu flag này.
 
 ```bash
-# Build
-docker compose -f docker-compose.yml --env-file .env.production --profile production build backend frontend
+# Build — PHẢI có `nginx`
+docker compose -f docker-compose.yml --env-file .env.production --profile production build backend frontend nginx
 
 # Deploy
 docker compose -f docker-compose.yml --env-file .env.production --profile production up -d
 ```
+
+⚠️ **`nginx` bắt buộc nằm trong lệnh build.** Từ khi cấu hình nginx đi theo image
+(`nginx/Dockerfile`, tag cố định `qlts-nginx:local`), một máy đã có sẵn tag đó sẽ
+được `up -d` **dùng lại ảnh CŨ** — mọi thay đổi template hay script entrypoint
+lặng lẽ không được deploy, và không có dấu hiệu nào báo. Đường deploy chuẩn
+(`scripts/deploy.sh`) build `--parallel` toàn bộ nên không dính; chỉ đường tay
+này mới hở.
 
 **Nếu chỉ deploy backend** (không đổi frontend):
 ```bash
@@ -108,6 +115,15 @@ docker compose -f docker-compose.yml --env-file .env.production --profile produc
 ```bash
 docker compose -f docker-compose.yml --env-file .env.production --profile production build frontend
 docker compose -f docker-compose.yml --env-file .env.production --profile production up -d frontend
+```
+
+**Nếu có đụng `nginx/`** (template, `nginx.conf`, `docker-entrypoint.d/`) — dùng
+đường chuẩn thay vì hai lệnh trên, vì nó dựng candidate và đo bằng request thật
+trước khi thay container đang phục vụ:
+```bash
+set -a && source .env.production && set +a
+docker compose -f docker-compose.yml --env-file .env.production --profile production build nginx
+bash scripts/nginx-apply.sh "$DOMAIN"
 ```
 
 ### 7. Verify healthy
@@ -252,8 +268,11 @@ cd /opt/qlts
 git log --oneline -5  # tìm commit trước deploy
 git checkout <previous_commit>
 
-# 2. Rebuild + redeploy
-docker compose -f docker-compose.yml --env-file .env.production --profile production build backend frontend
+# 2. Rebuild + redeploy — `nginx` PHẢI có mặt
+#    `git checkout` ở bước 1 đã đưa cả `nginx/` về bản cũ, nhưng ảnh
+#    `qlts-nginx:local` trên máy vẫn là ảnh của bản LỖI cho tới khi build lại.
+#    Thiếu `nginx` ở đây = rollback code mà nginx vẫn chạy cấu hình vừa gây sự cố.
+docker compose -f docker-compose.yml --env-file .env.production --profile production build backend frontend nginx
 docker compose -f docker-compose.yml --env-file .env.production --profile production up -d
 
 # 3. Rollback DB (nếu cần)

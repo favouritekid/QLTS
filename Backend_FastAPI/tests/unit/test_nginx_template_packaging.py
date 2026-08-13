@@ -1397,6 +1397,105 @@ def test_tag_rollback_lay_tu_container_dang_chay_khong_tu_latest():
     )
 
 
+_GUIDE = _GOC / "Documents" / "PRODUCTION_DEPLOY_GUIDE.md"
+
+
+def test_runbook_push_registry_khong_bi_nuot_loi():
+    """`set +e` trước vòng `docker push` biến "đẩy hỏng" thành im lặng.
+
+    Hậu quả không dừng ở đó: tag khi ấy chỉ tồn tại TRÊN MÁY, mà preflight lại
+    `docker image inspect` trước — thấy tag cục bộ nên không bao giờ `pull`.
+    Cổng T-1d vì thế ĐẠT cho một tài sản rollback sẽ bốc hơi ngay khi máy chủ
+    mất hoặc bị prune.
+    """
+    noi_dung = _doc(_RUNBOOK)
+    i = noi_dung.index("### 5.4")
+    j = noi_dung.index("### 5.5", i)
+    # Chỉ giữ dòng LỆNH: chú thích của chính khối này có nhắc cả `set -e` lẫn
+    # `docker push`, nên neo vào chuỗi thô sẽ khớp trúng câu văn và guard xanh
+    # vô nghĩa — bản nháp đầu đã đúng như vậy (0/1 đột biến bị bắt).
+    lenh = [d for d in noi_dung[i:j].splitlines() if d.strip() and not d.lstrip().startswith("#")]
+    vt_push = next((k for k, d in enumerate(lenh) if re.match(r"\s*docker push\b", d)), -1)
+    assert vt_push != -1, "§5.4 không còn dòng LỆNH `docker push`?"
+    truoc = "\n".join(lenh[:vt_push])
+    vt_bat = max(k for k, d in enumerate(lenh[:vt_push]) if d.strip() == "set -e")
+    vt_tat = max((k for k, d in enumerate(lenh[:vt_push]) if d.strip() == "set +e"), default=-1)
+    assert "set -e" in truoc, "vòng push không nằm trong phạm vi `set -e`"
+    assert vt_bat > vt_tat, (
+        "`set +e` được bật lại TRƯỚC vòng `docker push` — lỗi đẩy ảnh sẽ bị nuốt, "
+        "và preflight vẫn ĐẠT vì tag cục bộ khiến nó không bao giờ `pull`"
+    )
+
+
+def test_preflight_kiem_anh_co_that_NGOAI_may():
+    """Ảnh có trên máy này không chứng minh còn rollback được sau khi mất máy."""
+    ma = _ma_lenh(_PREFLIGHT)
+    assert "docker manifest inspect" in ma, (
+        "preflight chỉ kiểm ảnh cục bộ — phải hỏi registry bằng "
+        "`docker manifest inspect` (không tải ảnh) mới biết tài sản có ở ngoài máy"
+    )
+    assert "QLTS_ROLLBACK_LOCAL_ONLY" in ma, (
+        "phải có đường chấp nhận rủi ro TƯỜNG MINH cho ca không dùng registry — "
+        "im lặng bỏ qua thì lại thành cổng xanh giả"
+    )
+
+
+def test_rollback_khoi_phuc_cay_nginx_chinh_xac():
+    """`cp -r backup/* nginx/` để lại tệp mà bản LỖI thêm vào.
+
+    Image dựng ra là bản LAI giữa cấu hình cũ và chính cấu hình vừa gây sự cố,
+    nên rollback có thể tái tạo lại đúng sự cố.
+    """
+    khoi = "\n".join(d for _, d in _khoi_rollback())
+    assert not re.search(r"cp\s+-r\s+\S*nginx_backup\S*\s+nginx/", khoi), (
+        "còn `cp -r … nginx/` — chép chồng KHÔNG xoá tệp chỉ có ở bản lỗi"
+    )
+    assert re.search(r"git checkout\s+\"?\$\w+\"?\s+--\s+nginx/", khoi), (
+        "phải `git checkout <pre-cutover-sha> -- nginx/` để cây khớp CHÍNH XÁC"
+    )
+    assert "git clean -fd nginx/" in khoi, (
+        "thiếu `git clean -fd nginx/` — tệp bản lỗi thêm vào vẫn ở lại"
+    )
+    # Neo vào LỆNH GHI, không vào chuỗi "git-rev" — chuỗi ấy còn xuất hiện ở
+    # dòng `awk` đọc lại và ở chú thích mô tả cột manifest, nên một phép kiểm
+    # `"git-rev" in ...` vẫn xanh sau khi lệnh ghi đã bị gỡ.
+    assert re.search(r"printf[^\n]*git-rev[^\n]*>>\s*\"?\$MANIFEST", _doc(_RUNBOOK)), (
+        "§5.4 phải GHI revision git vào manifest; không có nó thì Step 5 không "
+        "biết `git checkout` về đâu"
+    )
+
+
+def test_deploy_guide_build_ca_nginx():
+    """nginx nay có `build:` + tag cố định — bỏ nó ra là dùng lại ảnh CŨ.
+
+    `up -d` không tự dựng lại khi tag `qlts-nginx:local` đã tồn tại, nên thay
+    đổi template/entrypoint lặng lẽ không được deploy. Đường `scripts/deploy.sh`
+    build `--parallel` toàn bộ nên miễn nhiễm; chỉ đường deploy TAY mới hở.
+    """
+    if not _GUIDE.is_file():
+        pytest.skip("không có PRODUCTION_DEPLOY_GUIDE.md")
+    pham = []
+    for so, dong in _dong_lenh_trong_tai_lieu(_GUIDE):
+        if "docker compose" not in dong or " build " not in dong:
+            continue
+        if "..." in dong:
+            continue
+        # Chỉ bắt lần build ĐẦY ĐỦ (cả backend lẫn frontend). Build một service
+        # là chủ ý — "chỉ deploy backend" thì dựng lại nginx là thừa; ca đụng
+        # `nginx/` đã có khối riêng chỉ sang `scripts/nginx-apply.sh`.
+        day_du = "backend" in dong and "frontend" in dong
+        if day_du and "nginx" not in dong:
+            pham.append(f"{so}: {dong.strip()[:95]}")
+    assert not pham, (
+        "lệnh build ĐẦY ĐỦ trong hướng dẫn deploy tay bỏ sót `nginx` — máy đã có "
+        "tag `qlts-nginx:local` sẽ dùng lại ảnh CŨ:\n  " + "\n  ".join(pham)
+    )
+    assert "nginx-apply.sh" in _doc(_GUIDE), (
+        "hướng dẫn deploy tay phải chỉ đường cho ca đụng `nginx/` sang "
+        "scripts/nginx-apply.sh (dựng candidate + đo request thật)"
+    )
+
+
 def test_preflight_doi_chieu_image_id_chu_khong_chi_ton_tai():
     """Ảnh "có mặt" không chứng minh nó là ảnh CŨ."""
     ma = _ma_lenh(_PREFLIGHT)
