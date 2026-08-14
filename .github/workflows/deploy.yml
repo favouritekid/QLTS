@@ -32,11 +32,16 @@ jobs:
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
+        env:
+          # SHA mà run NÀY được sinh ra để deploy. Phải đi qua `envs:` bên dưới
+          # thì script trên VPS mới thấy được.
+          SHA_MONG_DOI: ${{ github.sha }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 20m
+          envs: SHA_MONG_DOI
           script: |
             set -euo pipefail
             cd /opt/qlts
@@ -51,9 +56,32 @@ jobs:
             #
             # Thứ tự đúng: cập nhật cây TRƯỚC, xác minh, rồi mới nạp script.
             git fetch origin main
-            git pull --ff-only origin main
+
+            # 🚨 CỔNG SHA: job này dừng ở `environment: production` chờ duyệt.
+            # Giữa lúc run được sinh ra và lúc có người bấm approve, `main` có
+            # thể đã nhận thêm commit. `git pull --ff-only origin main` khi ấy
+            # kéo về TIP MỚI NHẤT, nên run mang metadata của commit A lại đi
+            # deploy commit B — không ai đọc log mà thấy được, vì trước đây chỗ
+            # này chỉ `echo` ra SHA chứ không đối chiếu với gì cả.
+            #
+            # Fail-closed: lệch thì DỪNG, không tự deploy tip mới. Muốn deploy
+            # tip mới thì chạy lại workflow trên chính commit đó.
+            SHA_TIP=$(git rev-parse FETCH_HEAD)
+            if [ "$SHA_TIP" != "$SHA_MONG_DOI" ]; then
+              echo "🔴 DỪNG: origin/main đang ở $SHA_TIP, còn run này được sinh cho $SHA_MONG_DOI."
+              echo "   Cây /opt/qlts KHÔNG bị đụng. Chạy lại Deploy trên đúng commit cần lên."
+              exit 1
+            fi
+
+            # Ghim tường minh thay vì `pull` trống: cùng kết quả khi cổng trên
+            # đạt, nhưng đọc log là thấy ngay ta đang đưa cây tới ĐÚNG commit nào.
+            git merge --ff-only "$SHA_MONG_DOI"
 
             SHA=$(git rev-parse HEAD)
+            if [ "$SHA" != "$SHA_MONG_DOI" ]; then
+              echo "🔴 DỪNG: sau merge HEAD=$SHA, chờ $SHA_MONG_DOI"
+              exit 1
+            fi
             echo "Deploy tại $SHA"
             test -f scripts/deploy.sh || { echo "Thiếu scripts/deploy.sh"; exit 1; }
             test -f nginx/templates/default.conf.template || {

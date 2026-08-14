@@ -971,7 +971,15 @@ def test_workflow_pull_TRUOC_khi_chay_deploy_script():
                 return i
         return -1
 
-    vt_pull = _vi_tri("git pull")
+    # Cây được cập nhật bằng `git pull --ff-only origin main` (bản cũ) HOẶC
+    # `git fetch` + `git merge --ff-only "$SHA_MONG_DOI"` (bản ghim SHA — xem
+    # tests/unit/test_deploy_ghim_sha.py). Bất biến cần canh là THỨ TỰ, không
+    # phải tên lệnh; neo cứng vào chữ `git pull` làm guard đỏ oan ngay khi đường
+    # ghim SHA thay nó, dù cây vẫn được cập nhật trước.
+    #
+    # `max` chứ không phải `min`: nếu có nhiều lệnh cập nhật cây thì lệnh CUỐI
+    # CÙNG vẫn phải đứng trước lời gọi script.
+    vt_pull = max(_vi_tri("git pull"), _vi_tri("git merge --ff-only"))
     # Neo vào LỜI GỌI, không vào chuỗi con `scripts/deploy.sh`: bản guard trước
     # lấy `max(_vi_tri("scripts/deploy.sh"), _vi_tri("deploy.sh"))`, mà chuỗi
     # thứ nhất là superset của chuỗi thứ hai nên CẢ HAI cùng trỏ về dòng

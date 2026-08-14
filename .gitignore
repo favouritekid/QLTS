@@ -289,6 +289,10 @@ frontend/src/test/e2e/.mfa-backup-codes.txt
 .backup_*
 .e2e_*
 .smoke_*
+# `.smoke_*` KHÔNG khớp `.smoke/` — khác đúng một dấu gạch dưới, và thư mục ấy
+# đã nằm untracked trong cây suốt nhiều phiên: 5 tệp trạng thái vận hành của
+# harness smoke (`checkpoint.json`, `created-ids.json`) theo từng RUN_ID.
+Backend_FastAPI/.smoke/
 .workflow_*.png
 .daily_log_*_draft.md
 .phase2_issue_body.md
