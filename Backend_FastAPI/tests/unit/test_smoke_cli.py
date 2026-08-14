@@ -569,36 +569,127 @@ def test_HONG_luu_van_tay_HAU_start_chu_khong_phai_truoc(tmp_path, monkeypatch):
 # *formatter.ContainerContext`.
 import shutil  # noqa: E402
 import subprocess as _sp  # noqa: E402
+import uuid  # noqa: E402
 
 _CO_DOCKER = shutil.which("docker") is not None
 
+# Bản trước hỏi một compose project KHÔNG tồn tại. Đo trên CI 14-08 (PR #555) và
+# trên Docker host, cùng một template:
+#
+#   project rỗng      -> rc=0, stdout rỗng, stderr rỗng
+#   project 1 container -> rc=1, `template parsing error … RestartCount`
+#
+# `compose ps --format` chỉ đánh giá template khi CÓ HÀNG để format. Không hàng
+# thì ca kiểm ngược không thấy lỗi (đỏ oan) và — nặng hơn — ca thuận XANH với
+# BẤT KỲ template nào. Nên hai ca dưới tự dựng một container sentinel.
+#
+# Chọn `postgres:16-alpine` vì runner CI đã kéo sẵn nó cho service container của
+# shard này ⇒ `--pull never` không cần mạng. Chỉ `create`, KHÔNG start: `ps -a`
+# vẫn thấy hàng, mà không tốn tiến trình và không mở cổng nào.
+_ANH_SENTINEL = "postgres:16-alpine"
+_YAML_SENTINEL = f"services:\n  sentinel:\n    image: {_ANH_SENTINEL}\n"
 
-def _thu_template(tmpl: str):
+
+def _lenh_compose(du_an: str, tep: str, *duoi: str):
+    return ["docker", "compose", "-p", du_an, "-f", tep, *duoi]
+
+
+@pytest.fixture
+def du_an_sentinel(tmp_path):
+    """Compose project tạm, tên ngẫu nhiên, có đúng một container đã `create`."""
+    du_an = "qltstpl" + uuid.uuid4().hex[:12]
+    tep = tmp_path / "docker-compose.yml"
+    tep.write_text(_YAML_SENTINEL, encoding="utf-8")
+    try:
+        ket = _sp.run(
+            _lenh_compose(du_an, str(tep), "create", "--pull", "never"),
+            shell=False, capture_output=True, text=True, timeout=180,
+        )
+        assert ket.returncode == 0, (
+            f"không dựng được sentinel (rc={ket.returncode}); ảnh {_ANH_SENTINEL} "
+            f"phải có sẵn trong daemon:\n{((ket.stderr or '') + (ket.stdout or ''))[:400]}"
+        )
+        yield du_an, str(tep)
+    finally:
+        don = _sp.run(
+            _lenh_compose(du_an, str(tep), "down", "--volumes", "--remove-orphans"),
+            shell=False, capture_output=True, text=True, timeout=180,
+        )
+        # Bỏ qua mã thoát ở đây là để ngỏ đúng cái ta đang chống: cleanup hỏng mà
+        # ca test vẫn XANH, bỏ lại container/network cho lượt sau. `down` trên
+        # project chưa từng tạo trả 0 (đã đo), nên khác 0 luôn là hỏng thật —
+        # kể cả khi setup đã đứt trước đó.
+        assert don.returncode == 0, (
+            f"dọn project sentinel {du_an} HỎNG (rc={don.returncode}):\n"
+            f"stdout={(don.stdout or '')[:400]!r}\nstderr={(don.stderr or '')[:400]!r}"
+        )
+
+
+def _bat_buoc_dung_mot_hang_sentinel(du_an: str, tep: str):
+    """Tiền đề của cả hai ca dưới: thiếu hàng thì ĐỎ, tuyệt đối không skip.
+
+    "Không quan sát được gì" không được đọc thành "không có gì sai" — đây đúng
+    chỗ bản trước im lặng.
+    """
+    ket = _sp.run(
+        _lenh_compose(du_an, tep, "ps", "-a", "--format", "{{.Service}}"),
+        shell=False, capture_output=True, text=True, timeout=60,
+    )
+    hang = [d.strip() for d in (ket.stdout or "").splitlines() if d.strip()]
+    assert ket.returncode == 0 and hang == ["sentinel"], (
+        "phải thấy ĐÚNG MỘT service `sentinel` trước khi thử template — "
+        f"rc={ket.returncode}, hàng={hang!r}, lỗi={(ket.stderr or '')[:300]!r}"
+    )
+
+
+def _thu_template(tmpl: str, du_an: str, tep: str):
     return _sp.run(
-        ["docker", "compose", "-p", "qlts-khong-ton-tai-de-thu-template",
-         "ps", "-a", "--format", tmpl],
+        _lenh_compose(du_an, tep, "ps", "-a", "--format", tmpl),
         shell=False, capture_output=True, text=True, timeout=60,
     )
 
 
 @pytest.mark.skipif(not _CO_DOCKER, reason="cần docker CLI để kiểm formatter thật")
-def test_runtime_template_ps_duoc_docker_chap_nhan():
-    ket = _thu_template(cli.TEMPLATE_PS)
+def test_runtime_template_ps_duoc_docker_chap_nhan(du_an_sentinel):
+    du_an, tep = du_an_sentinel
+    _bat_buoc_dung_mot_hang_sentinel(du_an, tep)
+
+    ket = _thu_template(cli.TEMPLATE_PS, du_an, tep)
     loi = (ket.stderr or "") + (ket.stdout or "")
     assert ket.returncode == 0, f"docker trả mã {ket.returncode}: {loi[:400]}"
-    assert "template parsing error" not in loi, (
-        f"Docker từ chối template {cli.TEMPLATE_PS!r}:\n{loi[:400]}"
+
+    dong = [d for d in (ket.stdout or "").splitlines() if d.strip()]
+    assert len(dong) == 1, f"chờ đúng MỘT dòng sentinel, nhận {dong!r}"
+
+    truong = dong[0].split("|")
+    assert len(truong) == 4, (
+        f"template {cli.TEMPLATE_PS!r} phải cho đủ bốn trường, nhận {truong!r}"
+    )
+    assert truong[0] == "sentinel", f"trường Service sai: {truong!r}"
+    # `.Health` rỗng là hợp lệ với container mới `create`; `.State`/`.ID` thì
+    # không — chúng rỗng nghĩa là template không hề được đánh giá.
+    assert truong[1].strip() and truong[3].strip(), (
+        f"State/ID rỗng ⇒ template không được đánh giá: {truong!r}"
     )
 
 
 @pytest.mark.skipif(not _CO_DOCKER, reason="cần docker CLI để kiểm formatter thật")
-def test_kiem_nguoc_dua_RestartCount_vao_template_compose_thi_DO():
+def test_kiem_nguoc_dua_RestartCount_vao_template_compose_thi_DO(du_an_sentinel):
     """Chứng minh phép kiểm trên thật sự canh: thêm lại trường cũ phải đỏ."""
-    ket = _thu_template(cli.TEMPLATE_PS + "|{{.RestartCount}}")
+    du_an, tep = du_an_sentinel
+    _bat_buoc_dung_mot_hang_sentinel(du_an, tep)
+
+    ket = _thu_template(cli.TEMPLATE_PS + "|{{.RestartCount}}", du_an, tep)
     loi = (ket.stderr or "") + (ket.stdout or "")
-    assert "template parsing error" in loi and "RestartCount" in loi, (
-        "Docker LẼ RA phải từ chối .RestartCount trong `compose ps`; nếu bản "
-        "Docker mới đã hỗ trợ, gộp lại một lệnh và bỏ ca này."
+    # Không neo vào nguyên văn "template parsing error": chuỗi ấy là chi tiết
+    # nội bộ của Docker, đổi bản là vỡ. Bất biến thật là "bị từ chối" + "nêu
+    # đích danh trường".
+    assert ket.returncode != 0, (
+        f"Docker LẼ RA phải từ chối .RestartCount trong `compose ps` (rc={ket.returncode}); "
+        f"nếu bản Docker mới đã hỗ trợ, gộp lại một lệnh và bỏ ca này. Output: {loi[:400]}"
+    )
+    assert "RestartCount" in loi, (
+        f"lỗi phải nêu đích danh trường bị từ chối, nhận: {loi[:400]}"
     )
 
 
