@@ -482,6 +482,7 @@ jobs:
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
+              tests/unit/test_deploy_startup_gates.py
               tests/unit/test_phase2_engine_3tier_resolution.py
               tests/unit/test_phase2_engine_quota_chain_v8.py
               tests/unit/test_phase2_engine_snapshot_integrity.py

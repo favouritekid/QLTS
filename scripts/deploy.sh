@@ -215,20 +215,39 @@ mkdir -p "$BACKUP_DIR"
 #   3. Xoá xác file khi dump fail: phép chuyển hướng ``>`` tạo file NGAY CẢ
 #      khi pg_dump chết, để lại file 0 byte. Cổng ``[ -s ]`` ở Step 6 đã
 #      chặn được, nhưng dọn luôn cho khỏi ai nhặt nhầm sau này.
-if docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_isready -U "${POSTGRES_USER:-qlts}" >/dev/null 2>&1; then
-    if docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_dump \
-        --clean --if-exists \
-        -U "${POSTGRES_USER:-qlts}" \
-        "${POSTGRES_DB:-qlts_production}" \
-        > "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"; then
-        log "Database backup saved: pre_deploy_${TIMESTAMP}.sql"
-    else
-        rm -f "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"
-        warn "Database backup FAILED — deploy này sẽ KHÔNG có đường rollback tự động"
-    fi
-else
-    warn "PostgreSQL not running, skipping backup (first deploy?)"
+#   4. Vá 13-08-2026 — FAIL-CLOSED. Ba nhánh dưới đây trước đây đều chỉ
+#      ``warn`` rồi để script đi tiếp vào Step 6, tức deploy vẫn chạy
+#      migration khi KHÔNG có đường lùi. Nay cả ba đều ``error``.
+#      Riêng nhánh "PostgreSQL không sẵn sàng" trước đây đoán là "first
+#      deploy?" — một suy đoán nguy hiểm: nó không phân biệt nổi máy trắng
+#      với **sự cố của một CSDL đang có dữ liệu**, mà ca thứ hai thì đi
+#      tiếp là hỏng nặng. Bootstrap máy trắng, nếu cần, phải là một mode
+#      RIÊNG (``INITIAL_DEPLOY=true``) có guard chứng minh chưa hề có
+#      DB/volume — cố tình KHÔNG mở lối bỏ backup chung ở đây.
+_BAN_SAO="$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"
+if ! docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_isready -U "${POSTGRES_USER:-qlts}" >/dev/null 2>&1; then
+    error "PostgreSQL không sẵn sàng — KHÔNG sao lưu được, nên KHÔNG đi tiếp vào migration.
+       Đây có thể là sự cố của một CSDL đang có dữ liệu, không phải lần cài đầu.
+       Kiểm tra: docker compose -f docker-compose.yml --profile production ps postgres"
 fi
+
+if ! docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_dump \
+    --clean --if-exists \
+    -U "${POSTGRES_USER:-qlts}" \
+    "${POSTGRES_DB:-qlts_production}" \
+    > "$_BAN_SAO"; then
+    rm -f "$_BAN_SAO"
+    error "pg_dump THẤT BẠI — deploy dừng tại đây, KHÔNG chạy migration khi không có đường lùi."
+fi
+
+# ``>`` tạo tệp kể cả khi pg_dump chết giữa chừng, nên kích thước là phép
+# kiểm cuối trước khi coi bản sao là dùng được.
+if [ ! -s "$_BAN_SAO" ]; then
+    rm -f "$_BAN_SAO"
+    error "Bản sao lưu RỖNG — deploy dừng tại đây, KHÔNG chạy migration khi không có đường lùi."
+fi
+
+log "Database backup saved: pre_deploy_${TIMESTAMP}.sql"
 
 # =============================================================================
 # Step 6: Start infrastructure & run migrations
@@ -251,8 +270,15 @@ if [ "${IS_CUTOVER}" -eq 1 ]; then
     cutover "  docker compose -f docker-compose.yml --profile production exec backend alembic upgrade head"
 else
     # Routine deploy: auto-migrate with built-in rollback on failure.
-    docker compose -f docker-compose.yml --profile production --env-file .env.production run --rm backend \
-        alembic upgrade head \
+    #
+    # ``--entrypoint`` là BẮT BUỘC (vá 13-08-2026): ảnh backend khai
+    # ENTRYPOINT ["/app/docker-entrypoint.sh"], mà ``docker compose run`` chỉ
+    # đè CMD chứ KHÔNG đè ENTRYPOINT. Thiếu nó thì one-off này chạy TRỌN
+    # entrypoint — `alembic upgrade head` + `sync_notification_rules` — rồi
+    # mới chạy tới lệnh mình gọi, tức migrate hai lượt cho một lần deploy.
+    # ``--no-deps`` vì postgres/redis vừa được dựng ngay phía trên.
+    docker compose -f docker-compose.yml --profile production --env-file .env.production \
+        run --rm --no-deps --entrypoint alembic backend upgrade head \
         && log "Migrations completed successfully" \
         || {
             warn "Migration failed! Rolling back..."
@@ -294,10 +320,21 @@ fi
 # =============================================================================
 log "Step 7/8: Running pre-deploy checks..."
 
-docker compose -f docker-compose.yml --profile production --env-file .env.production run --rm backend \
-    python scripts/pre_deploy_check.py \
-    && log "Pre-deploy checks passed" \
-    || warn "Pre-deploy checks had warnings (non-fatal)"
+# Vá 13-08-2026: bỏ nhánh ``|| warn``. `pre_deploy_check.py` TỰ phân loại
+# rồi mới chọn mã thoát — thiếu WARNING_POLICIES hay thiếu kế thừa vai trò
+# thì in cảnh báo và vẫn exit 0; chỉ thiếu CRITICAL_POLICIES (hoặc không nối
+# được CSDL) mới exit 1 kèm "CRITICAL: DEPLOY BLOCKED". Nhánh ``|| warn`` cũ
+# đã nuốt đúng cái mã thoát ấy, biến một cổng chặn thành một dòng chữ vàng:
+# script vẫn đi tiếp sang Step 8 và mở traffic vào một hệ thống mà chính nó
+# vừa tuyên bố là UNUSABLE. Nay để mã thoát khác 0 tự chặn deploy
+# (``set -e`` ở đầu tệp).
+# ``--entrypoint python`` — cùng lý do với Step 6, nhưng ở đây hậu quả nặng
+# hơn: bước này chạy TRƯỚC Step 8, tức trước chỗ cold cutover export ba cờ =
+# false. Thiếu override thì ngay cả `COLD_CUTOVER=true` cũng tự migrate + sync
+# tại đây, phá đúng lời hứa "operator chạy tay" mà RUNBOOK §7.2 dựa vào.
+docker compose -f docker-compose.yml --profile production --env-file .env.production \
+    run --rm --no-deps --entrypoint python backend scripts/pre_deploy_check.py
+log "Pre-deploy checks passed"
 
 # =============================================================================
 # Step 8: Rolling restart

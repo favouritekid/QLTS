@@ -175,6 +175,13 @@ services:
       # path into the container (compose only forwards keys explicitly
       # listed here OR present in env_file). Found via Hotfix #4
       # post-merge code review 2026-05-07.
+      #
+      # ⚠️ Từ 13-08-2026 ba service KHÔNG còn chung ngữ nghĩa startup nữa.
+      # ``RUN_MIGRATIONS_ON_STARTUP`` và
+      # ``RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP`` chỉ còn nội suy Ở ĐÂY —
+      # backend là nơi DUY NHẤT chạy migration + sync. Hai service Celery
+      # đóng cứng "false" (xem chú thích tại ``celery-worker``).
+      # ``RUN_CASBIN_LOAD_ON_STARTUP`` thì vẫn chung cho cả ba.
       RUN_MIGRATIONS_ON_STARTUP: ${RUN_MIGRATIONS_ON_STARTUP:-true}
       RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: ${RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP:-true}
       RUN_CASBIN_LOAD_ON_STARTUP: ${RUN_CASBIN_LOAD_ON_STARTUP:-true}
@@ -215,15 +222,31 @@ services:
       REDIS_URL: redis://redis:6379/1
       CELERY_BROKER_URL: redis://redis:6379/2
       CELERY_RESULT_BACKEND_URL: redis://redis:6379/3
-      # Cold cutover gates per RUNBOOK §7.2 (Phase1-Hotfix-5).
-      # Celery worker shares Backend_FastAPI/Dockerfile so the same
-      # docker-entrypoint.sh runs (compose ``command:`` only overrides
-      # CMD, NOT ENTRYPOINT). Without these, celery container would
-      # auto-run alembic + sync at startup even when backend's gates
-      # are set to false → race condition với operator's manual
-      # cutover sequence.
-      RUN_MIGRATIONS_ON_STARTUP: ${RUN_MIGRATIONS_ON_STARTUP:-true}
-      RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: ${RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP:-true}
+      # Celery worker dùng CHUNG Backend_FastAPI/Dockerfile nên chạy cùng
+      # docker-entrypoint.sh (compose ``command:`` chỉ đè CMD, KHÔNG đè
+      # ENTRYPOINT). Hai cờ dưới đây vì thế đóng cứng "false":
+      #
+      #   Migration và sync notification-rule là việc của MỘT nơi duy nhất —
+      #   backend. Trước bản vá 13-08-2026 hai cờ này nội suy
+      #   ``${...:-true}`` giống backend, nghĩa là mỗi lần Compose dựng lại
+      #   worker thì worker CŨNG chạy ``alembic upgrade head`` +
+      #   ``sync_notification_rules``: ba tiến trình tranh nhau
+      #   ``alembic_version`` và ghi đè notification-rule ba lượt cho một
+      #   lần deploy.
+      #
+      #   Nó còn sinh ra một hệ quả âm thầm hơn: prod sau cold cutover mang
+      #   env ``false``, còn model Compose lại nói ``true`` ⇒ **lệch model**,
+      #   và Compose recreate container theo lệch model chứ không chỉ theo
+      #   lệch image. Nên một bản vá không đụng gì tới Celery vẫn kéo cả hai
+      #   container Celery đi lại vòng đời. Đóng cứng "false" khép cả hai
+      #   vấn đề: đúng ngữ nghĩa, và model thôi trôi khỏi trạng thái thật.
+      #
+      # ``COLD_CUTOVER=true`` không cần đụng vào đây nữa: cờ này đã là
+      # "false" sẵn, còn backend vẫn nhận ``export`` qua nội suy bên trên.
+      RUN_MIGRATIONS_ON_STARTUP: "false"
+      RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: "false"
+      # Casbin thì NGƯỢC LẠI — worker cần enforcer nạp policy để cưỡng chế
+      # quyền trong task nền, nên cờ này vẫn đi theo cutover.
       RUN_CASBIN_LOAD_ON_STARTUP: ${RUN_CASBIN_LOAD_ON_STARTUP:-true}
     volumes:
       - backend_static_uploads:/app/app/static/uploads
@@ -255,15 +278,13 @@ services:
       REDIS_URL: redis://redis:6379/1
       CELERY_BROKER_URL: redis://redis:6379/2
       CELERY_RESULT_BACKEND_URL: redis://redis:6379/3
-      # Cold cutover gates per RUNBOOK §7.2 (Phase1-Hotfix-5).
-      # Celery beat shares Backend_FastAPI/Dockerfile so the same
-      # docker-entrypoint.sh runs (compose ``command:`` only overrides
-      # CMD, NOT ENTRYPOINT). Beat container also evaluates the 3 gates
-      # before exec — without these flags it auto-runs alembic + sync
-      # at startup independently of backend, breaking RUNBOOK §7.2
-      # operator-controlled sequence.
-      RUN_MIGRATIONS_ON_STARTUP: ${RUN_MIGRATIONS_ON_STARTUP:-true}
-      RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: ${RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP:-true}
+      # Celery beat cũng dùng chung entrypoint với backend — xem giải thích
+      # đầy đủ ở service ``celery-worker``. Đóng cứng "false" vì cùng một
+      # lý do, và với beat thì còn rõ hơn: beat là singleton lịch biểu,
+      # không có việc gì phải chạm tới lược đồ CSDL lúc khởi động.
+      RUN_MIGRATIONS_ON_STARTUP: "false"
+      RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP: "false"
+      # Casbin vẫn theo cutover: beat kích task nền cần enforcer có policy.
       RUN_CASBIN_LOAD_ON_STARTUP: ${RUN_CASBIN_LOAD_ON_STARTUP:-true}
     volumes:
       - backend_static_uploads:/app/app/static/uploads
