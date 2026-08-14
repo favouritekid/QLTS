@@ -315,6 +315,11 @@ scripts/plan-loop.ps1
 # smoke-*.png : workbench screenshot từ Chrome MCP smoke session
 tmp/
 Backend_FastAPI/scripts/smoke_*.py
+# Ngoại lệ HẸP: seed Finance được viết sạch có chủ ý — mọi bí mật đi qua
+# os.environ, không có giá trị mặc định trong mã. Giữ hàng rào rộng ở dòng
+# trên vì các smoke script cũ vẫn có credential hard-coded.
+# `test_gitignore_smoke_scripts` canh chính xác ngoại lệ này.
+!Backend_FastAPI/scripts/smoke_finance_seed.py
 smoke-*.png
 # officer/lead activity reports — query exports chứa PII (tên, lead counts,
 # timestamps). KHÔNG commit; canonical metric = KPI dashboard.

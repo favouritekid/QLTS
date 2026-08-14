@@ -483,6 +483,8 @@ jobs:
             tests: >-
               tests/unit/test_nginx_template_packaging.py
               tests/unit/test_deploy_startup_gates.py
+              tests/unit/test_smoke_harness_guards.py
+              tests/unit/test_smoke_cli.py
               tests/unit/test_phase2_engine_3tier_resolution.py
               tests/unit/test_phase2_engine_quota_chain_v8.py
               tests/unit/test_phase2_engine_snapshot_integrity.py
