@@ -10,6 +10,8 @@ và KHÔNG chạm vào dữ liệu:
 * tên database phải ĐÚNG `qlts_smoke`, đọc bằng parser của SQLAlchemy chứ không
   bằng tách chuỗi — không suy từ biến môi trường nào khác, không có mặc định;
 * ``SMOKE_ALLOW_DESTRUCTIVE=1`` phải do người chạy đặt tường minh;
+* ``SMOKE_WEB_BASE``/``SMOKE_API_BASE`` phải được truyền VÀ phải trỏ về máy cục
+  bộ (``localhost``/``127.0.0.1``) — lượt smoke không được lái vào máy chủ thật;
 * URL/mật khẩu không có giá trị mặc định trong mã.
 
 Hai chế độ:
@@ -107,7 +109,19 @@ def _ten_db() -> str:
 
 
 def kiem_moi_truong(can_ghi: bool) -> None:
-    """Hai tầng: môi trường phải là dev/test, VÀ người chạy phải nói rõ ý định."""
+    """BỐN cổng fail-closed. Đích phá huỷ là ``qlts_smoke``, và chỉ nó.
+
+    1. ``APP_ENV`` phải nằm trong ``APP_ENV_CHO_PHEP`` — allowlist, không phải
+       blocklist;
+    2. tên database phải nằm trong ``DB_CHO_PHEP``, nay CHỈ ``qlts_smoke``, đọc
+       bằng ``_ten_db()``. Allowlist cũ mở cho ``qlts_dev``/``qlts_test`` đã bị
+       đóng — lý do ở chú thích của ``DB_CHO_PHEP``;
+    3. ``SMOKE_ALLOW_DESTRUCTIVE=1`` — chỉ xét khi ``can_ghi``, và phải do người
+       chạy đặt tường minh cho từng lượt;
+    4. ``SMOKE_WEB_BASE``/``SMOKE_API_BASE`` phải có VÀ trỏ về máy cục bộ.
+
+    Thiếu bất kỳ cổng nào ⇒ ``ChanLai`` (mã 2) và KHÔNG chạm vào dữ liệu.
+    """
     app_env = (getattr(settings, "APP_ENV", "") or "").strip().lower()
     if app_env not in APP_ENV_CHO_PHEP:
         # ALLOWLIST, không phải blocklist. Bản trước chỉ cấm `production`/`prod`,
