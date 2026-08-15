@@ -18,6 +18,28 @@
 #
 # ⚠️ KHÔNG khai `container_name` ở bất cứ đâu — nó phá cơ chế đặt tên theo project và
 # đụng thẳng container của stack `qlts`.
+#
+# RESET GIỮA HAI PACK — stack dùng một lần
+# -----------------------------------------
+# `smoke_lib.cli --cleanup` phục hồi **PostgreSQL và chỉ PostgreSQL** (drop +
+# restore `qlts_smoke`). Nó KHÔNG chạm:
+#
+#   * Redis DB 1/2/3 — cache, hàng đợi Celery, kết quả task;
+#   * bảy volume — uploads, static uploads, private exports, geoip, logs, và dữ
+#     liệu của chính postgres/redis.
+#
+# Nghĩa là sau cleanup, một task Celery của pack trước vẫn có thể còn trong hàng
+# đợi, và một tệp export vẫn nằm trong volume. Chứng minh "pack này không chạm
+# chúng" là việc phải làm lại cho TỪNG pack và không ai kiểm được — nên chính
+# sách là ĐỔI CÁCH LÀM, không đi chứng minh:
+#
+#   # giữa hai pack:
+#   docker compose -p qltssmoke -f docker-compose.yml -f docker-compose.smoke.yml \
+#     --env-file .env.smoke down --volumes --remove-orphans
+#   # rồi dựng lại và chạy `--baseline` cho một RUN_ID mới
+#
+# `--cleanup` vẫn giữ vai trò của nó: đưa database về baseline TRONG một pack,
+# khi ta muốn giữ nguyên stack đang chạy để đọc log và hiện trường.
 
 services:
   # postgres và redis CỐ Ý không publish cổng nào: `smoke_lib/cli.py` nói chuyện với

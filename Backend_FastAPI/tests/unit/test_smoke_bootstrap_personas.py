@@ -36,12 +36,12 @@ def _nap():
     cho phép ca test chạy ở cả nơi có `/app` (container) lẫn nơi không có, miễn là
     gói `app` nhập được.
     """
-    assert _TEP.is_file(), f"thiếu {_TEP} — 14 ca dưới đây sẽ không canh gì cả"
+    assert _TEP.is_file(), f"thiếu {_TEP} — mọi ca dưới đây sẽ không canh gì cả"
     spec = importlib.util.spec_from_file_location("smoke_bootstrap_personas", _TEP)
     mod = importlib.util.module_from_spec(spec)
     # KHÔNG bắt Exception rồi `skip`. Bản đầu làm thế "cho an toàn ở mọi môi
     # trường", nhưng hệ quả là một hồi quy import — đổi tên hàm, xoá dependency,
-    # lỗi cú pháp — biến CẢ 14 ca thành skip và required check vẫn xanh. Ở Tier 5
+    # lỗi cú pháp — biến CẢ MODULE thành skip và required check vẫn xanh. Ở Tier 5
     # môi trường luôn có `app`, nên import hỏng phải là ĐỎ.
     spec.loader.exec_module(mod)
     return mod
@@ -177,8 +177,9 @@ def test_master_secret_qua_NGAN_thi_BLOCK(monkeypatch):
 def test_app_env_dung_ALLOWLIST_khong_phai_blocklist(monkeypatch):
     """`staging`, rỗng hay một tên gõ sai đều phải DỪNG.
 
-    `smoke_finance_seed.py` hiện chỉ cấm `production`/`prod` — với một script tạo
-    tài khoản thì "không nhận ra là production" là không đủ.
+    Blocklist (chỉ cấm `production`/`prod`) để lọt chuỗi rỗng, `staging` và mọi
+    tên gõ sai — với một script tạo tài khoản thì "không nhận ra là production"
+    không đủ, phải "chắc chắn là development".
     """
     assert bp.APP_ENV_CHO_PHEP == {"development"}
     for gt in ("staging", "", "Production", "dev", "test"):

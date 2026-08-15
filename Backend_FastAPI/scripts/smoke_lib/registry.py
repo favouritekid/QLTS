@@ -157,7 +157,7 @@ class Registry:
             "project": project, "database": database, "mo_luc": _bay_gio(),
             "baseline": None, "danh_tinh": None,
             "goc": {"lead_ids": [], "profile_ids": []},
-            "ids": {}, "actions": [], "cleanup": None,
+            "ids": {}, "fixtures": {}, "actions": [], "cleanup": None,
         }
         _ghi_atomic(duong, du_lieu)
         return cls(duong, du_lieu)
@@ -305,6 +305,29 @@ class Registry:
             g["profile_ids"] = sorted(
                 set(g["profile_ids"]) | {int(x) for x in profile_ids}
             )
+
+        self._ghi(_td)
+
+    def ghi_fixture(self, ma: str, thong_tin: Mapping[str, Any]) -> None:
+        """Ghi HÌNH DẠNG một fixture. ID vẫn đi qua `ghi_ids`/`them_goc`.
+
+        Sổ cái phải giữ CẢ hai: id để đối soát cái gì đã bị đụng, và hình dạng để
+        pack sau biết fixture ấy là gì mà không phải tra theo TÊN học sinh. Trước
+        đây hình dạng nằm ở `created-ids.json` riêng — hai tệp cho một lượt nghĩa
+        là có lúc chúng lệch nhau, và không ai biết bên nào đúng.
+        """
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", ma or ""):
+            raise LoiRegistry(f"mã fixture không hợp lệ: {ma!r}")
+        if not isinstance(thong_tin, Mapping) or not thong_tin:
+            raise LoiRegistry(f"fixture {ma!r} rỗng — ghi một sổ trống không chứng minh gì")
+
+        def _td(d):
+            f = d.setdefault("fixtures", {})
+            if ma in f:
+                raise LoiRegistry(
+                    f"fixture {ma!r} đã ghi — ghi đè là xoá dấu vết bản trước"
+                )
+            f[ma] = dict(thong_tin)
 
         self._ghi(_td)
 

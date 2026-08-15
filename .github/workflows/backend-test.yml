@@ -489,6 +489,7 @@ jobs:
               tests/unit/test_deploy_ghim_sha.py
               tests/unit/test_smoke_stack_co_lap.py
               tests/unit/test_smoke_bootstrap_personas.py
+              tests/unit/test_smoke_seed_persona_registry.py
               tests/unit/test_phase2_engine_3tier_resolution.py
               tests/unit/test_phase2_engine_quota_chain_v8.py
               tests/unit/test_phase2_engine_snapshot_integrity.py

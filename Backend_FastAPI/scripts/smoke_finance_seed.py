@@ -5,23 +5,24 @@ khoản phí, hoá đơn và phiếu thu thật trong cơ sở dữ liệu đư�
 mọi hàng rào ở đây là fail-closed — thiếu một điều kiện thì thoát với mã khác 0
 và KHÔNG chạm vào dữ liệu:
 
-* ``APP_ENV`` không được là production;
-* tên database phải khớp allowlist dev/test — không suy từ biến môi trường nào
-  khác, không có giá trị mặc định;
+* ``APP_ENV`` phải thuộc allowlist ``{development}`` — không phải chỉ
+  "không nhận ra là production";
+* tên database phải ĐÚNG `qlts_smoke`, đọc bằng parser của SQLAlchemy chứ không
+  bằng tách chuỗi — không suy từ biến môi trường nào khác, không có mặc định;
 * ``SMOKE_ALLOW_DESTRUCTIVE=1`` phải do người chạy đặt tường minh;
 * URL/mật khẩu không có giá trị mặc định trong mã.
 
 Hai chế độ:
 
   python scripts/smoke_finance_seed.py --run-id R1 --seed
-  python scripts/smoke_finance_seed.py --run-id R1 --validate
+  python scripts/smoke_finance_seed.py --run-id R1 --thu-muc <gốc registry> --validate
 
-``--validate`` đọc ``created-ids.json`` rồi kiểm lại HÌNH DẠNG của từng fixture
+``--validate`` đọc **sổ cái** ``registry.json`` rồi kiểm lại HÌNH DẠNG từng fixture
 trên cơ sở dữ liệu và in bảng ``fixture -> IDs -> status -> amount``. Nó phải
 thoát khác 0 khi bất kỳ điều kiện nào của §A05 sai — một validator luôn xanh
 thì không khác gì không có validator.
 
-Không tra cứu bản ghi theo TÊN học sinh: mọi id được ghi vào ``created-ids.json``
+Không tra cứu bản ghi theo TÊN học sinh: mọi id được ghi vào ``registry.json``
 ngay lúc tạo, và mọi phép kiểm sau đó đi theo id.
 """
 
@@ -29,20 +30,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 import sys
-import tempfile
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 sys.path.insert(0, "/app")
+# `smoke_lib` nằm CẠNH tệp này (trong repo là `scripts/`, trong `smoke-runner` là
+# `/tools/`), nên neo theo vị trí tệp thay vì theo một đường tuyệt đối.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sqlalchemy import select, text  # noqa: E402
 
 from app import models  # noqa: E402
+from smoke_lib import baseline as smoke_baseline, registry  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.database import AsyncSessionLocal  # noqa: E402
 from app.models.finance import (  # noqa: E402
@@ -58,9 +61,17 @@ from app.models.finance import (  # noqa: E402
     PaymentStatusEnum,
 )
 
-#: Chỉ ba tên này. Không so khớp lỏng ("chứa chữ dev"), vì `qlts_production_dev_copy`
-#: cũng chứa nó.
-DB_CHO_PHEP = {"qlts_dev", "qlts_test", "qlts_smoke"}
+# ALLOWLIST môi trường. Xem `kiem_moi_truong`: blocklist để lọt chuỗi rỗng,
+# `staging`, và mọi tên gõ sai.
+APP_ENV_CHO_PHEP = {"development"}
+# ĐÍCH DUY NHẤT. Trước đây allowlist mở cho `qlts_dev`/`qlts_test`, nên seed có
+# thể ghi vào `qlts_dev` trong khi sổ ghi `database: qlts_smoke` và cleanup
+# restore `qlts_smoke` — dữ liệu thử nằm lại trong database dev, không ai dọn và
+# không gì trong sổ cho biết.
+#
+# Lấy hằng từ NGUỒN CHUẨN `smoke_lib.baseline`, không khai lại: hai bản hằng là
+# hai thứ sẽ lệch nhau.
+DB_CHO_PHEP = {smoke_baseline._DB_DUY_NHAT}
 
 TIEN_FULL = Decimal("5000000")
 TIEN_DOT = Decimal("3000000")
@@ -77,15 +88,35 @@ class ChanLai(SystemExit):
 
 
 def _ten_db() -> str:
-    url = str(settings.DATABASE_URL)
-    return url.rsplit("/", 1)[-1].split("?", 1)[0]
+    """Tên database đọc bằng PARSER của SQLAlchemy, không bằng tách chuỗi.
+
+    `rsplit("/")` bị lách bằng một tham số truy vấn có dấu gạch chéo:
+
+        …/qlts_dev?application_name=/qlts_smoke   →  rsplit trả "qlts_smoke"
+
+    Tức hàng rào đọc ra `qlts_smoke` trong khi kết nối thật đi tới `qlts_dev`.
+    Đã tái hiện. Định danh của ĐÍCH PHÁ HUỶ không được tự tách chuỗi lỏng tay —
+    dùng đúng parser mà chính driver dùng.
+    """
+    from sqlalchemy.engine import make_url  # noqa: WPS433
+
+    try:
+        return make_url(str(settings.DATABASE_URL)).database or ""
+    except Exception as e:  # URL hỏng ⇒ không xác định được đích ⇒ DỪNG
+        raise ChanLai(f"DATABASE_URL không phân giải được: {e}")
 
 
 def kiem_moi_truong(can_ghi: bool) -> None:
     """Hai tầng: môi trường phải là dev/test, VÀ người chạy phải nói rõ ý định."""
-    app_env = (getattr(settings, "APP_ENV", "") or "").lower()
-    if app_env in {"production", "prod"}:
-        raise ChanLai(f"APP_ENV={app_env!r} — tuyệt đối không chạy trên production")
+    app_env = (getattr(settings, "APP_ENV", "") or "").strip().lower()
+    if app_env not in APP_ENV_CHO_PHEP:
+        # ALLOWLIST, không phải blocklist. Bản trước chỉ cấm `production`/`prod`,
+        # nên `staging`, chuỗi rỗng (biến chưa đặt) hay một tên gõ sai đều đi lọt
+        # — với một script TẠO dữ liệu thật thì "không nhận ra là production"
+        # không đủ, phải "chắc chắn là development".
+        raise ChanLai(
+            f"APP_ENV={app_env!r} không nằm trong allowlist {sorted(APP_ENV_CHO_PHEP)}"
+        )
 
     ten = _ten_db()
     if ten not in DB_CHO_PHEP:
@@ -110,23 +141,63 @@ def kiem_moi_truong(can_ghi: bool) -> None:
     print(f"  môi trường: APP_ENV={app_env or '(trống)'} · db={ten} · cờ phá huỷ ĐÃ bật")
 
 
-def _duong_dan(run_id: str) -> Path:
-    thu_muc = Path("/app/.smoke") / run_id
-    thu_muc.mkdir(parents=True, exist_ok=True)
-    return thu_muc / "created-ids.json"
+def _so(thu_muc: Path, run_id: str) -> "registry.Registry":
+    """Mở SỔ CÁI của lượt. Không tạo mới: `--baseline` phải chạy trước.
+
+    Bản trước ghi một `created-ids.json` riêng dưới `/app/.smoke/<run_id>/`. Hai
+    tệp cho một lượt nghĩa là có lúc chúng lệch nhau và không ai biết bên nào
+    đúng — mà cleanup thì đọc registry. Nay chỉ còn MỘT sổ.
+    """
+    try:
+        so = registry.Registry.doc(
+            thu_muc, run_id,
+            # Hằng lấy từ NGUỒN CHUẨN `smoke_lib.baseline`, không khai lại ở đây:
+            # hai bản hằng là hai thứ sẽ lệch nhau.
+            project_mong_doi=smoke_baseline._PROJECT_DUY_NHAT,
+            database_mong_doi=smoke_baseline._DB_DUY_NHAT,
+        )
+    except registry.LoiRegistry as e:
+        raise ChanLai(
+            f"không đọc được sổ của {run_id!r} tại {thu_muc}: {e}. "
+            "Chạy `smoke_lib.cli --baseline` trước khi seed."
+        )
+    # `doc()` cho phép `baseline=None` — hợp lý cho việc đọc-để-xem, KHÔNG hợp lý
+    # ở đây: seed tạo dữ liệu, và nếu baseline chưa được chụp thì cleanup không
+    # còn mốc nào để phục hồi về. Đòi tường minh.
+    if not so.du_lieu.get("baseline"):
+        raise ChanLai(
+            f"sổ của {run_id!r} chưa có baseline. Chạy `smoke_lib.cli --baseline` "
+            "TRƯỚC khi seed — baseline phải chụp database lúc chưa có fixture nào."
+        )
+    return so
 
 
-def _ghi_atomic(duong: Path, du_lieu: Dict[str, Any]) -> None:
-    """Ghi tạm rồi thay — nửa tệp id là thứ không cleanup được."""
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=duong.parent, delete=False, suffix=".tmp"
-    ) as f:
-        json.dump(du_lieu, f, ensure_ascii=False, indent=2, default=str)
-        tam = Path(f.name)
-    os.replace(tam, duong)
+# Vai trò smoke ↔ persona. Bản trước khoá cứng `accountant01`/`manager01`/
+# `kpahdrim` — ba tài khoản NỀN dùng chung: seed đổi dữ liệu của chúng là đổi nền
+# cho mọi lượt sau, và `kpahdrim` còn là một tên người thật lọt vào mã.
+#
+# Nay mặc định trỏ sang persona `smoke_*` do `smoke_bootstrap_personas.py` dựng,
+# và `--persona VAI=username` cho phép ghi đè tường minh khi cần.
+PERSONA_MAC_DINH = {
+    "ACC-A": "smoke_acc_a",
+    "MGR-A": "smoke_mgr_a",
+    "ACC-B": "smoke_acc_b",
+    "OFF-A": "smoke_off_a",
+}
 
 
-async def _actor(db, username: str) -> models.User:
+# Vai trò mà mỗi persona BẮT BUỘC phải mang. `--persona` cho phép ghi đè tên tài
+# khoản, nên nếu chỉ kiểm "tồn tại và active" thì `ACC-A=<một manager>` vẫn qua —
+# và cả lượt smoke đo nhầm quyền.
+VAI_BAT_BUOC = {
+    "ACC-A": "accountant",
+    "ACC-B": "accountant",
+    "MGR-A": "manager",
+    "OFF-A": "officer",
+}
+
+
+async def _actor(db, username: str, vai: Optional[str] = None) -> models.User:
     u = (
         await db.execute(select(models.User).where(models.User.username == username))
     ).scalars().first()
@@ -134,6 +205,13 @@ async def _actor(db, username: str) -> models.User:
         raise ChanLai(f"không tìm thấy tài khoản {username!r} trên DB này")
     if u.status != "active":
         raise ChanLai(f"tài khoản {username!r} có status={u.status!r}, phải là active")
+    if u.unit_id is None:
+        raise ChanLai(f"tài khoản {username!r} không thuộc đơn vị nào")
+    if vai is not None and u.role != vai:
+        raise ChanLai(
+            f"tài khoản {username!r} có role={u.role!r}, chờ {vai!r}. `--persona` "
+            "đổi được TÊN tài khoản chứ không đổi được vai mà ca smoke cần."
+        )
     return u
 
 
@@ -221,19 +299,28 @@ async def _fee_va_invoice(
     return {"fee_id": fee.id, "invoice_ids": ids, "amount_moi_dot": str(tien_moi_dot)}
 
 
-async def seed(run_id: str) -> Dict[str, Any]:
+async def seed(
+    run_id: str, thu_muc: Path, persona: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
     kiem_moi_truong(can_ghi=True)
-    duong = _duong_dan(run_id)
-    if duong.exists():
+    pers = dict(PERSONA_MAC_DINH)
+    pers.update(persona or {})
+    thieu = [k for k in PERSONA_MAC_DINH if not pers.get(k)]
+    if thieu:
+        raise ChanLai(f"thiếu persona cho vai: {thieu}")
+
+    so = _so(thu_muc, run_id)
+    if so.du_lieu.get("fixtures"):
         raise ChanLai(
-            f"{duong} đã tồn tại. Một RUN_ID chỉ seed MỘT lần; chạy lại sẽ tạo "
-            "bản ghi mồ côi không ai cleanup. Dùng run-id mới hoặc cleanup trước."
+            f"sổ của {run_id!r} đã có fixture. Một RUN_ID chỉ seed MỘT lần; chạy "
+            "lại sẽ tạo bản ghi mồ côi không ai cleanup. Dùng run-id mới hoặc "
+            "cleanup trước."
         )
 
     async with AsyncSessionLocal() as db:
-        acc_a = await _actor(db, "accountant01")
-        mgr_a = await _actor(db, "manager01")
-        acc_b = await _actor(db, "kpahdrim")
+        acc_a = await _actor(db, pers["ACC-A"], VAI_BAT_BUOC["ACC-A"])
+        mgr_a = await _actor(db, pers["MGR-A"], VAI_BAT_BUOC["MGR-A"])
+        acc_b = await _actor(db, pers["ACC-B"], VAI_BAT_BUOC["ACC-B"])
         if acc_a.unit_id != mgr_a.unit_id:
             raise ChanLai(
                 f"ACC-A(unit {acc_a.unit_id}) và MGR-A(unit {mgr_a.unit_id}) phải "
@@ -252,9 +339,12 @@ async def seed(run_id: str) -> Dict[str, Any]:
             "pack": "P1",
             "tao_luc": datetime.now(timezone.utc).isoformat(),
             "actor": {
-                "ACC-A": {"id": acc_a.id, "username": acc_a.username, "unit": unit_a},
-                "MGR-A": {"id": mgr_a.id, "username": mgr_a.username, "unit": mgr_a.unit_id},
-                "ACC-B": {"id": acc_b.id, "username": acc_b.username, "unit": acc_b.unit_id},
+                "ACC-A": {"id": acc_a.id, "username": acc_a.username,
+                          "unit": unit_a, "role": acc_a.role},
+                "MGR-A": {"id": mgr_a.id, "username": mgr_a.username,
+                          "unit": mgr_a.unit_id, "role": mgr_a.role},
+                "ACC-B": {"id": acc_b.id, "username": acc_b.username,
+                          "unit": acc_b.unit_id, "role": acc_b.role},
             },
             "method_cash_id": method.id,
             "fixtures": {},
@@ -269,17 +359,15 @@ async def seed(run_id: str) -> Dict[str, Any]:
         # status", và ca trông như lỗi sản phẩm. Đã vấp thật ở FIN-02.
         #
         # Panel lệ phí đọc `profile.applied_rules`, nên đó mới là chỗ phải seed.
-        officer = (
-            await db.execute(
-                select(models.User).where(
-                    models.User.role == "officer",
-                    models.User.status == "active",
-                    models.User.unit_id == unit_a,
-                )
+        # Persona tường minh, KHÔNG quét "officer active bất kỳ ở đơn vị A": lượt
+        # sau có thể bắt được một officer khác, nên hai lượt cùng run-id lại nói
+        # về hai người — và không gì trong sổ cho biết điều đó đã xảy ra.
+        officer = await _actor(db, pers["OFF-A"], VAI_BAT_BUOC["OFF-A"])
+        if officer.unit_id != unit_a:
+            raise ChanLai(
+                f"OFF-A ({officer.username}) ở đơn vị {officer.unit_id}, "
+                f"chờ đơn vị A ({unit_a})"
             )
-        ).scalars().first()
-        if officer is None:
-            raise ChanLai(f"không có officer active nào ở đơn vị {unit_a}")
         hs = await _ho_so(
             db,
             run_id,
@@ -303,6 +391,7 @@ async def seed(run_id: str) -> Dict[str, Any]:
             "id": officer.id,
             "username": officer.username,
             "unit": officer.unit_id,
+            "role": officer.role,
         }
 
         # F-FULL — một khoản phí, một đợt.
@@ -382,19 +471,91 @@ async def seed(run_id: str) -> Dict[str, Any]:
         # chúng mãi. Ngược lại (commit xong, ghi hỏng) thì dữ liệu có thật và
         # lỗi nổ ra ngay tại đây, không âm thầm.
         await db.commit()
-        _ghi_atomic(duong, kq)
+        # Ghi vào SỔ CÁI: hình dạng qua `ghi_fixture`, id qua `ghi_ids`/
+        # `them_goc`. Cleanup và các pack sau đọc đúng một nguồn.
+        # Actor phải vào SỔ, không chỉ nằm trong `kq` bộ nhớ: `--validate` chạy
+        # ở một tiến trình KHÁC (và thường là lượt sau), nên thứ không được ghi
+        # thì lượt ấy không có. Bản trước đọc `du["actor"]` trong khi sổ chỉ có
+        # `fixtures` ⇒ KeyError chắc chắn.
+        so.ghi_fixture("_ACTOR", kq["actor"])
+        for ma, fx in kq["fixtures"].items():
+            so.ghi_fixture(ma, fx)
+        ho_so = sorted({
+            fx["profile_id"] for fx in kq["fixtures"].values() if fx.get("profile_id")
+        })
+        if ho_so:
+            so.them_goc(profile_ids=ho_so)
+            so.ghi_ids("admission_profile", ho_so)
 
-    print(f"\n  đã ghi {duong}")
+    print(f"\n  đã ghi sổ {so.duong}")
     return kq
 
 
-async def validate(run_id: str) -> int:
+def kiem_chu_so_huu(fapp: Mapping, off_a: Mapping, lead: Any) -> List[str]:
+    """Chủ sở hữu THẬT của F-APP, đọc từ `lead`, không từ sổ.
+
+    So `fapp["officer_id"]` với `off_a["id"]` là CHƯA ĐỦ: cả hai vế đều do chính
+    seed ghi vào sổ, nên chúng luôn khớp nhau bất kể database về sau ra sao. Hồ sơ
+    bị chuyển sang officer khác sau lúc seed thì chỉ `lead.assigned_officer_id`
+    mới cho biết.
+
+    Tách thành hàm thuần để kiểm được bằng stub — không cần database.
+    """
+    loi: List[str] = []
+    if fapp.get("officer_id") != off_a.get("id"):
+        loi.append("F-APP không thuộc OFF-A — hồ sơ và persona đang nói về hai người")
+    if lead is None:
+        loi.append("F-APP: không đọc được lead để kiểm chủ sở hữu")
+        return loi
+    if getattr(lead, "assigned_officer_id", None) != off_a.get("id"):
+        loi.append(
+            f"F-APP: lead đang thuộc officer "
+            f"{getattr(lead, 'assigned_officer_id', None)}, chờ OFF-A "
+            f"({off_a.get('id')}) — hồ sơ đã bị chuyển người"
+        )
+    if getattr(lead, "unit_id", None) != off_a.get("unit"):
+        loi.append(
+            f"F-APP: lead ở đơn vị {getattr(lead, 'unit_id', None)}, chờ đơn vị "
+            f"của OFF-A ({off_a.get('unit')})"
+        )
+    return loi
+
+
+def tach_so(du_lieu: Dict[str, Any], run_id: str) -> Dict[str, Any]:
+    """Tách `fixtures` và `_ACTOR` khỏi sổ — và DỪNG khi thiếu.
+
+    Tách thành hàm thuần để kiểm được mà không cần DB: bản trước đọc thẳng
+    `du["actor"]` trong khi sổ chỉ có `fixtures`, và lỗi ấy chỉ lộ ra lúc chạy
+    thật với một database.
+    """
+    tat_ca = dict(du_lieu.get("fixtures") or {})
+    actor = tat_ca.pop("_ACTOR", None)
+    if not tat_ca:
+        raise ChanLai(f"sổ của {run_id!r} chưa có fixture nào — seed trước đã")
+    if not actor:
+        raise ChanLai(
+            f"sổ của {run_id!r} không có `_ACTOR`. Không có danh tính persona thì "
+            "mọi phép kiểm actor dưới đây không canh gì cả."
+        )
+    # Đòi ĐỦ bộ vai, không phải ba cái tiện tay: OFF-A là chủ sở hữu hồ sơ F-APP,
+    # nên thiếu nó thì phép kiểm "hồ sơ thuộc đúng officer" không có gì để so.
+    thieu_vai = sorted(set(VAI_BAT_BUOC) - set(actor))
+    if thieu_vai:
+        raise ChanLai(f"sổ của {run_id!r} thiếu actor {thieu_vai}")
+    for vai, tt in sorted(actor.items()):
+        if not tt.get("role"):
+            raise ChanLai(
+                f"sổ của {run_id!r}: actor {vai!r} không ghi role — validator "
+                "không đối chiếu được vai hiện tại"
+            )
+    return {"fixtures": tat_ca, "actor": actor}
+
+
+async def validate(run_id: str, thu_muc: Path) -> int:
     """Kiểm HÌNH DẠNG, không kiểm sự tồn tại. Trả số lỗi."""
     kiem_moi_truong(can_ghi=False)
-    duong = _duong_dan(run_id)
-    if not duong.exists():
-        raise ChanLai(f"chưa có {duong} — seed trước đã")
-    du = json.loads(duong.read_text(encoding="utf-8"))
+    so = _so(thu_muc, run_id)
+    du = tach_so(so.du_lieu, run_id)
 
     loi: List[str] = []
     bang: List[tuple] = []
@@ -482,7 +643,8 @@ async def validate(run_id: str) -> int:
                 if lo is None or lo.status != PaymentImportBatchStatusEnum.preview.value:
                     loi.append("F-IMPORT: lô phải tồn tại và ở trạng thái preview")
 
-        # Actor: ba tài khoản, đúng vai, ACC-A ≠ checker, ACC-B khác đơn vị.
+        # Actor: BỐN tài khoản, đúng vai, ACC-A ≠ checker, ACC-B khác đơn vị,
+        # và OFF-A phải là chủ sở hữu THẬT của hồ sơ F-APP.
         a, m, b = du["actor"]["ACC-A"], du["actor"]["MGR-A"], du["actor"]["ACC-B"]
         if a["id"] == m["id"]:
             loi.append("ACC-A và MGR-A là cùng một tài khoản")
@@ -490,10 +652,38 @@ async def validate(run_id: str) -> int:
             loi.append("ACC-A và MGR-A không cùng đơn vị A")
         if b["unit"] == a["unit"]:
             loi.append("ACC-B không thuộc đơn vị khác")
-        for nhan, info in (("ACC-A", a), ("MGR-A", m), ("ACC-B", b)):
+        # Kiểm VAI HIỆN TẠI trên DB, không chỉ "còn active". Chú thích cũ nói
+        # "đúng vai" trong khi mã chỉ kiểm status — một actor bị đổi vai giữa
+        # seed và validate vẫn qua, và cả lượt smoke đo nhầm quyền.
+        for nhan, info in sorted(du["actor"].items()):
             u = await db.get(models.User, info["id"])
             if u is None or u.status != "active":
                 loi.append(f"{nhan}: tài khoản không còn active")
+                continue
+            cho = VAI_BAT_BUOC.get(nhan)
+            if cho and u.role != cho:
+                loi.append(f"{nhan}: role hiện tại {u.role!r}, chờ {cho!r}")
+            if u.role != info.get("role"):
+                loi.append(
+                    f"{nhan}: role đã đổi kể từ lúc seed "
+                    f"({info.get('role')!r} → {u.role!r})"
+                )
+            if u.unit_id != info.get("unit"):
+                loi.append(f"{nhan}: đơn vị đã đổi kể từ lúc seed")
+
+        o = du["actor"].get("OFF-A") or {}
+        if o.get("unit") != a["unit"]:
+            loi.append("OFF-A không cùng đơn vị A với ACC-A")
+
+        fapp = du["fixtures"].get("F-APP") or {}
+        ld = None
+        if fapp.get("profile_id"):
+            hs = await db.get(models.AdmissionProfile, fapp["profile_id"])
+            if hs is None:
+                loi.append("F-APP: hồ sơ không còn để kiểm chủ sở hữu")
+            else:
+                ld = await db.get(models.Lead, hs.lead_id)
+        loi.extend(kiem_chu_so_huu(fapp, o, ld))
 
     print("\n  fixture              IDs                         status          còn nợ")
     print("  " + "-" * 74)
@@ -510,18 +700,41 @@ async def validate(run_id: str) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--run-id", required=True)
+    ap.add_argument(
+        "--thu-muc", type=Path, required=True,
+        help="gốc registry (cùng giá trị đã truyền cho `smoke_lib.cli --baseline`)",
+    )
+    ap.add_argument(
+        "--persona", action="append", default=[], metavar="VAI=USERNAME",
+        help="ghi đè persona cho một vai, lặp lại được (mặc định: smoke_*)",
+    )
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--seed", action="store_true")
     g.add_argument("--validate", action="store_true")
     ns = ap.parse_args()
+
+    pers: Dict[str, str] = {}
+    for mo in ns.persona:
+        if "=" not in mo:
+            print(f"--persona sai dạng: {mo!r}, cần VAI=USERNAME", file=sys.stderr)
+            return 2
+        vai, _, ten = mo.partition("=")
+        vai = vai.strip().upper()
+        if vai not in PERSONA_MAC_DINH:
+            print(
+                f"vai {vai!r} không có; chọn trong {sorted(PERSONA_MAC_DINH)}",
+                file=sys.stderr,
+            )
+            return 2
+        pers[vai] = ten.strip()
 
     async def _chay() -> int:
         # MỘT vòng lặp cho cả hai pha: `asyncio.run` lần thứ hai dựng loop mới
         # trong khi engine còn giữ connection của loop cũ → "Event loop is
         # closed" ngay ở lượt ping đầu tiên.
         if ns.seed:
-            await seed(ns.run_id)
-        return await validate(ns.run_id)
+            await seed(ns.run_id, ns.thu_muc, pers)
+        return await validate(ns.run_id, ns.thu_muc)
 
     so_loi = asyncio.run(_chay())
 
