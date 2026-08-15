@@ -526,25 +526,35 @@ def test_gitignore_ngoai_le_smoke_chi_mo_dung_seed():
     gi = (_GOC.parent / ".gitignore").read_text(encoding="utf-8")
     assert "Backend_FastAPI/scripts/smoke_*.py" in gi, "hàng rào rộng đã biến mất"
     mo = re.findall(r"^!Backend_FastAPI/scripts/(.+)$", gi, re.MULTILINE)
-    assert mo == ["smoke_finance_seed.py"], (
-        f"ngoại lệ phải HẸP, chỉ đúng seed Finance; hiện mở: {mo}"
+    assert sorted(mo) == sorted(_NGOAI_LE_SMOKE), (
+        f"ngoại lệ phải HẸP và khớp danh sách đã duyệt; hiện mở: {mo}"
     )
 
 
-def test_seed_duoc_mo_khong_co_credential_hard_coded():
-    """Lý do hàng rào rộng tồn tại: một script cũ có mật khẩu trong mã."""
-    seed = _GOC / "scripts" / "smoke_finance_seed.py"
-    assert seed.is_file(), (
-        f"thiếu {seed} — seed P1 nay là artifact BẮT BUỘC của harness "
-        "(.gitignore đã mở ngoại lệ cho nó). Thiếu nó thì phép quét credential "
-        "dưới đây không canh gì cả."
+# Hai tệp smoke được mở khỏi hàng rào `smoke_*.py`. Mở thêm một tệp là việc CÓ CHỦ
+# Ý: nó phải qua phép quét credential ngay bên dưới, và phải sửa danh sách này —
+# không có đường nào để một script mới lặng lẽ vào git.
+_NGOAI_LE_SMOKE = ("smoke_finance_seed.py", "smoke_bootstrap_personas.py")
+
+
+@pytest.mark.parametrize("ten", _NGOAI_LE_SMOKE)
+def test_tep_duoc_mo_khong_co_credential_hard_coded(ten):
+    """Lý do hàng rào rộng tồn tại: một script cũ có mật khẩu trong mã.
+
+    Phép quét phải chạy cho MỌI tệp được mở, không chỉ tệp đầu tiên — một ngoại lệ
+    được thêm mà không quét là đúng cái lỗ mà hàng rào này sinh ra để chặn.
+    """
+    tep = _GOC / "scripts" / ten
+    assert tep.is_file(), (
+        f"thiếu {tep} — tệp này nằm trong danh sách ngoại lệ `.gitignore`, nên "
+        "thiếu nó nghĩa là phép quét credential dưới đây không canh gì cả."
     )
-    ma = seed.read_text(encoding="utf-8")
+    ma = tep.read_text(encoding="utf-8")
     xau = re.findall(
         r"""(?im)^\s*(?!#).*\b(password|passwd|secret|token|api_key)\b\s*=\s*['"][^'"]+['"]""",
         ma,
     )
-    assert not xau, f"seed có credential hard-coded: {xau}"
+    assert not xau, f"{ten} có credential hard-coded: {xau}"
 
 
 # =============================================================================

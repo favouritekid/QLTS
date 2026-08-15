@@ -92,6 +92,7 @@ services:
     volumes:
       - ./Backend_FastAPI/scripts/smoke_lib:/tools/smoke_lib:ro
       - ./Backend_FastAPI/scripts/smoke_finance_seed.py:/tools/smoke_finance_seed.py:ro
+      - ./Backend_FastAPI/scripts/smoke_bootstrap_personas.py:/tools/smoke_bootstrap_personas.py:ro
       - ./.smoke-evidence:/evidence
     depends_on:
       postgres:

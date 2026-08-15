@@ -1,0 +1,419 @@
+"""Dựng SÁU persona smoke trên `qlts_smoke` — và chỉ persona, không gì khác.
+
+Hai việc tách bạch, cố ý không gộp:
+
+* ``verify_foundation()`` — **chỉ XÁC MINH**. Đơn vị, `manager01`/`accountant01`,
+  danh mục `consultation_status` và `PaymentMethod code='cash'` đều do **migration**
+  tạo (`zq6w7x8y9z0a1_seed_operational_baseline`, `fin20260131002_seed_payment_
+  methods_and_plans`). Script này KHÔNG gieo lại chúng: một script vừa kiểm vừa vá
+  sẽ che mất ca "migration chưa chạy", và ca ấy phải là DỪNG chứ không phải tự sửa.
+* ``provision_personas()`` — tạo/hội tụ sáu tài khoản `smoke_*`.
+
+Vì sao cần persona riêng thay vì dùng `accountant01`/`manager01`: hai tài khoản ấy
+là dữ liệu nền dùng chung; smoke đổi mật khẩu hay trạng thái của chúng là đổi nền
+cho mọi lượt sau. Persona `smoke_*` thuộc về lượt smoke và chỉ lượt smoke.
+
+Mật khẩu
+--------
+DẪN XUẤT từ một master secret bằng HMAC-SHA256, không sinh ngẫu nhiên mỗi lần và
+không dùng chung một chuỗi cho cả sáu:
+
+* dẫn xuất ⇒ chạy lại cho ra đúng mật khẩu cũ, nên lượt hai HỘI TỤ được thay vì
+  phải đọc mật khẩu từ đâu đó;
+* theo tên persona ⇒ sáu mật khẩu KHÁC nhau, lộ một cái không suy ra được cái khác;
+* master secret chỉ tới `smoke-runner` qua `.env.smoke.runner` — backend và hai
+  Celery không đọc được nó.
+
+**Không bao giờ in mật khẩu ra log.** Muốn lấy để đăng nhập tay thì gọi
+``--in-mat-khau <persona>``, nó in ĐÚNG một dòng ra stdout và không ghi gì khác.
+
+Hội tụ, không phải "đã tồn tại nên bỏ qua"
+------------------------------------------
+Lượt hai phải đưa persona về ĐÚNG trạng thái mong muốn — mật khẩu, đơn vị, vai
+trò, `status`, `user_unit_assignment`, và dòng Casbin — rồi **đọc lại từ DB để
+chứng minh**. Một script chỉ `if exists: return` sẽ báo thành công cho một tài
+khoản đã bị lượt trước đổi mật khẩu hoặc chuyển đơn vị.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import base64
+import hashlib
+import hmac
+import os
+import sys
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
+
+sys.path.insert(0, "/app")
+
+from sqlalchemy import select, text  # noqa: E402
+
+from app import models  # noqa: E402
+from app.config import settings  # noqa: E402
+from app.database import AsyncSessionLocal  # noqa: E402
+from app.security import get_password_hash  # noqa: E402
+
+
+class ChanLai(RuntimeError):
+    """Một hàng rào đã chặn. Không có nhánh nào đi tiếp."""
+
+
+# Allowlist, KHÔNG phải blocklist. `smoke_finance_seed.py` hiện chỉ cấm
+# `production`/`prod`, nên `staging`, chuỗi rỗng hay một tên gõ sai đều đi lọt —
+# với một script TẠO tài khoản thì "không nhận ra là production" là không đủ.
+APP_ENV_CHO_PHEP = {"development"}
+DB_DUY_NHAT = "qlts_smoke"
+
+# Migration nào tạo nền — nêu tên trong thông báo lỗi để người trực biết chạy gì.
+_MIGRATION_NEN = "zq6w7x8y9z0a1 (đơn vị + user nền) · fin20260131002 (payment method)"
+
+# Sáu persona. `unit` là nhãn logic: A = đơn vị của `accountant01`, B = một đơn vị
+# active KHÁC (dùng để kiểm IDOR chéo đơn vị).
+PERSONA = (
+    {"username": "smoke_acc_a", "role": "accountant", "unit": "A", "ten": "Smoke Ke toan A"},
+    {"username": "smoke_acc_b", "role": "accountant", "unit": "B", "ten": "Smoke Ke toan B"},
+    {"username": "smoke_mgr_a", "role": "manager", "unit": "A", "ten": "Smoke Quan ly A"},
+    {"username": "smoke_mgr_b", "role": "manager", "unit": "B", "ten": "Smoke Quan ly B"},
+    {"username": "smoke_off_a", "role": "officer", "unit": "A", "ten": "Smoke Chuyen vien A"},
+    {"username": "smoke_admin", "role": "admin", "unit": "A", "ten": "Smoke Quan tri"},
+)
+
+
+# =============================================================================
+# Hàng rào
+# =============================================================================
+def _ten_db() -> str:
+    return (settings.DATABASE_URL or "").rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+
+
+def kiem_moi_truong(*, can_ghi: bool) -> None:
+    app_env = (getattr(settings, "APP_ENV", "") or "").strip().lower()
+    if app_env not in APP_ENV_CHO_PHEP:
+        raise ChanLai(
+            f"APP_ENV={app_env!r} không nằm trong allowlist {sorted(APP_ENV_CHO_PHEP)}. "
+            "Script này tạo tài khoản và đặt mật khẩu — một giá trị lạ hay rỗng phải "
+            "là dừng, không phải mặc định cho qua."
+        )
+    ten = _ten_db()
+    if ten != DB_DUY_NHAT:
+        raise ChanLai(f"database {ten!r} không phải {DB_DUY_NHAT!r}")
+    if can_ghi and os.environ.get("SMOKE_ALLOW_DESTRUCTIVE") != "1":
+        raise ChanLai(
+            "thiếu SMOKE_ALLOW_DESTRUCTIVE=1 — cờ phải do người chạy đặt cho từng lượt"
+        )
+
+
+def _master() -> bytes:
+    gt = os.environ.get("SMOKE_PERSONA_MASTER_SECRET", "").strip()
+    if len(gt) < 16:
+        raise ChanLai(
+            "thiếu SMOKE_PERSONA_MASTER_SECRET (≥16 ký tự) trong `.env.smoke.runner`. "
+            "Đây là cổng fail-closed thật của stack smoke: `docker-compose.smoke.yml` "
+            "khai env file ấy `required: true`, và mật khẩu persona được DẪN XUẤT từ "
+            "biến này chứ không sinh ngẫu nhiên."
+        )
+    return gt.encode("utf-8")
+
+
+def mat_khau(username: str, master: Optional[bytes] = None) -> str:
+    """HMAC-SHA256(master, username) → chuỗi 32 ký tự + hậu tố đủ hạng ký tự.
+
+    Hậu tố `Aa1!` để mật khẩu luôn qua được mọi chính sách độ phức tạp mà không
+    phải đọc chính sách ấy — nó không làm giảm entropy của phần dẫn xuất.
+    """
+    m = master if master is not None else _master()
+    thô = hmac.new(m, username.encode("utf-8"), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(thô).decode("ascii")[:32] + "Aa1!"
+
+
+# =============================================================================
+# verify_foundation — CHỈ xác minh
+# =============================================================================
+async def verify_foundation(db) -> Dict[str, int]:
+    """Trả về `{"unit_a": id, "unit_b": id}`. Thiếu bất cứ gì ⇒ ChanLai."""
+    loi: List[str] = []
+
+    head = (await db.execute(text("SELECT version_num FROM alembic_version"))).scalar()
+    if not head:
+        loi.append("bảng alembic_version rỗng — migration chưa chạy")
+
+    don_vi = (
+        await db.execute(
+            select(models.OrganizationUnit).where(
+                models.OrganizationUnit.is_active.is_(True)
+            )
+        )
+    ).scalars().all()
+    if len(don_vi) < 2:
+        loi.append(
+            f"chỉ có {len(don_vi)} đơn vị active — cần ≥2 để kiểm IDOR chéo đơn vị"
+        )
+
+    nen: Dict[str, models.User] = {}
+    for ten in ("accountant01", "manager01"):
+        u = (
+            await db.execute(select(models.User).where(models.User.username == ten))
+        ).scalars().first()
+        if u is None:
+            loi.append(f"thiếu tài khoản nền {ten!r}")
+        elif u.status != "active":
+            loi.append(f"{ten} có status={u.status!r}, chờ 'active'")
+        elif u.unit_id is None:
+            loi.append(f"{ten} chưa thuộc đơn vị nào")
+        else:
+            nen[ten] = u
+
+    if len(nen) == 2 and nen["accountant01"].unit_id != nen["manager01"].unit_id:
+        loi.append(
+            f"accountant01 (unit {nen['accountant01'].unit_id}) và manager01 "
+            f"(unit {nen['manager01'].unit_id}) phải cùng một đơn vị"
+        )
+
+    so_tt = (
+        await db.execute(select(models.ConsultationStatus))
+    ).scalars().all()
+    if not so_tt:
+        loi.append("bảng consultation_status rỗng — danh mục chưa được seed")
+
+    cash = (
+        await db.execute(
+            select(models.PaymentMethod).where(models.PaymentMethod.code == "cash")
+        )
+    ).scalars().first()
+    if cash is None:
+        loi.append("thiếu PaymentMethod code='cash'")
+    elif not cash.is_active:
+        loi.append("PaymentMethod 'cash' tồn tại nhưng KHÔNG active")
+
+    if loi:
+        raise ChanLai(
+            "nền chưa sẵn sàng — script này CHỈ xác minh, không gieo lại:\n  - "
+            + "\n  - ".join(loi)
+            + f"\nNền do migration tạo: {_MIGRATION_NEN}. Chạy `alembic upgrade head` "
+            "trên chính database này rồi thử lại."
+        )
+
+    unit_a = nen["accountant01"].unit_id
+    khac = [u.id for u in don_vi if u.id != unit_a]
+    if not khac:
+        raise ChanLai(
+            f"không có đơn vị active nào khác đơn vị A ({unit_a}) — không dựng được "
+            "persona B để kiểm IDOR chéo"
+        )
+    return {"unit_a": unit_a, "unit_b": min(khac)}
+
+
+# =============================================================================
+# provision_personas — tạo hoặc HỘI TỤ
+# =============================================================================
+def _chu_the(user_id: int) -> str:
+    """Định dạng chủ thể Casbin của ỨNG DỤNG, không phải định dạng ta tự nghĩ ra.
+
+    Runtime dùng `user:<id>` / `role:<role>` — xem `user_service.py` (`user_subject
+    = f"user:{db_user.id}"`, `role_name = f"role:{db_user.role}"`) và migration
+    `zq6w7x8y9z0a1` (`('g', 'user:1', 'role:admin')`).
+
+    Bản đầu của script này ghi `v0=<username>`, `v1=<role>` trần, và hàm hậu kiểm
+    lại kiểm ĐÚNG định dạng sai ấy — nên nó xanh trong khi enforcer không thấy
+    persona nào có vai trò. Một phép kiểm viết theo cùng giả định sai với mã nó
+    kiểm thì không phát hiện được gì.
+    """
+    return f"user:{int(user_id)}"
+
+
+def _vai(role: str) -> str:
+    return f"role:{role}"
+
+
+async def _casbin(db, user_id: int, role: str) -> None:
+    """Đúng một dòng `g, user:<id>, role:<role>` — xoá dòng cũ để hội tụ khi đổi vai."""
+    await db.execute(
+        text("DELETE FROM casbin_rule WHERE ptype = 'g' AND v0 = :u"),
+        {"u": _chu_the(user_id)},
+    )
+    await db.execute(
+        text("INSERT INTO casbin_rule (ptype, v0, v1) VALUES ('g', :u, :r)"),
+        {"u": _chu_the(user_id), "r": _vai(role)},
+    )
+
+
+async def provision_personas(db, don_vi: Dict[str, int]) -> Dict[str, int]:
+    master = _master()
+    ket: Dict[str, int] = {}
+
+    for p in PERSONA:
+        ten = p["username"]
+        unit_id = don_vi["unit_a"] if p["unit"] == "A" else don_vi["unit_b"]
+        bam = get_password_hash(mat_khau(ten, master))
+
+        u = (
+            await db.execute(select(models.User).where(models.User.username == ten))
+        ).scalars().first()
+        if u is None:
+            u = models.User(
+                username=ten, email=f"{ten}@smoke.invalid",
+                password_hash=bam, full_name=p["ten"], role=p["role"],
+                unit_id=unit_id, status="active",
+            )
+            db.add(u)
+        else:
+            # HỘI TỤ: đặt lại MỌI thuộc tính, kể cả khi bản ghi đã tồn tại. Một
+            # nhánh `if exists: return` sẽ báo thành công cho một tài khoản mà
+            # lượt trước đã đổi mật khẩu hoặc chuyển sang đơn vị khác.
+            u.email = f"{ten}@smoke.invalid"
+            u.password_hash = bam
+            u.full_name = p["ten"]
+            u.role = p["role"]
+            u.unit_id = unit_id
+            u.status = "active"
+        await db.flush()
+
+        # Assignment là NGUỒN SỰ THẬT về đơn vị/vai trò (xem
+        # `models/user_unit_assignment.py`), nên nó phải hội tụ chứ không phải
+        # được chèn thêm mỗi lượt. Bản đầu vô hiệu hoá hàng cũ rồi chèn hàng mới
+        # KHÔNG điều kiện: chạy lần thứ hai không có drift vẫn đẻ thêm một dòng
+        # lịch sử, và `end_date` của hàng cũ để rỗng nên lịch sử ấy không đọc được.
+        hien = (await db.execute(
+            select(models.UserUnitAssignment).where(
+                models.UserUnitAssignment.user_id == u.id,
+                models.UserUnitAssignment.is_active.is_(True),
+            )
+        )).scalars().all()
+
+        dung = [a for a in hien if a.unit_id == unit_id and a.role == p["role"]]
+        if len(hien) == 1 and dung:
+            giu = hien[0]          # không drift ⇒ giữ nguyên, không sinh lịch sử
+        else:
+            bay_gio = datetime.now(timezone.utc)
+            for a in hien:
+                a.is_active = False
+                a.end_date = bay_gio     # thiếu nó thì lịch sử không có mốc đóng
+                a.updated_at = bay_gio
+            giu = models.UserUnitAssignment(
+                user_id=u.id, unit_id=unit_id, role=p["role"],
+                start_date=bay_gio, end_date=None, is_active=True,
+                created_at=bay_gio, updated_at=bay_gio,
+            )
+            db.add(giu)
+            await db.flush()
+
+        # Con trỏ trên `user` phải trỏ đúng hàng đang hiệu lực — `user_service`
+        # duy trì nó, nên bỏ qua ở đây là để lại một bản ghi nửa vời.
+        u.current_assignment_id = giu.id
+
+        await _casbin(db, u.id, p["role"])
+        ket[ten] = u.id
+
+    await db.commit()
+    return ket
+
+
+async def kiem_hoi_tu(db, don_vi: Dict[str, int]) -> None:
+    """Đọc LẠI từ DB và chứng minh trạng thái đúng như mong muốn.
+
+    Không tin vào việc "lệnh UPDATE đã chạy": đây đúng lớp lỗi `UPDATE … WHERE
+    <giá trị cũ>` khớp 0 hàng mà không ai báo lỗi.
+    """
+    master = _master()
+    loi: List[str] = []
+    for p in PERSONA:
+        ten = p["username"]
+        unit_id = don_vi["unit_a"] if p["unit"] == "A" else don_vi["unit_b"]
+        u = (
+            await db.execute(select(models.User).where(models.User.username == ten))
+        ).scalars().first()
+        if u is None:
+            loi.append(f"{ten}: không tồn tại sau khi provision")
+            continue
+        if u.unit_id != unit_id:
+            loi.append(f"{ten}: unit_id={u.unit_id}, chờ {unit_id}")
+        if u.role != p["role"]:
+            loi.append(f"{ten}: role={u.role!r}, chờ {p['role']!r}")
+        if u.status != "active":
+            loi.append(f"{ten}: status={u.status!r}")
+
+        from app.security import verify_password
+        if not verify_password(mat_khau(ten, master), u.password_hash):
+            loi.append(f"{ten}: mật khẩu KHÔNG khớp giá trị dẫn xuất")
+
+        # Đếm một hàng active là CHƯA ĐỦ: một hàng active trỏ sai đơn vị vẫn cho
+        # count = 1. Phải kiểm cả nội dung hàng ấy và con trỏ trên `user`.
+        hang = (await db.execute(
+            select(models.UserUnitAssignment).where(
+                models.UserUnitAssignment.user_id == u.id,
+                models.UserUnitAssignment.is_active.is_(True),
+            )
+        )).scalars().all()
+        if len(hang) != 1:
+            loi.append(f"{ten}: có {len(hang)} assignment đang hiệu lực, chờ đúng 1")
+        else:
+            a = hang[0]
+            if a.unit_id != unit_id:
+                loi.append(f"{ten}: assignment unit_id={a.unit_id}, chờ {unit_id}")
+            if a.role != p["role"]:
+                loi.append(f"{ten}: assignment role={a.role!r}, chờ {p['role']!r}")
+            if a.end_date is not None:
+                loi.append(f"{ten}: assignment đang hiệu lực mà có end_date={a.end_date}")
+            if u.current_assignment_id != a.id:
+                loi.append(
+                    f"{ten}: current_assignment_id={u.current_assignment_id}, "
+                    f"chờ {a.id}"
+                )
+
+        # Định dạng của ỨNG DỤNG, không phải của script. Kiểm bằng định dạng sai
+        # thì phép kiểm chỉ xác nhận script nhất quán với chính nó.
+        g = (await db.execute(
+            text("SELECT count(*) FROM casbin_rule WHERE ptype='g' AND v0=:u AND v1=:r"),
+            {"u": _chu_the(u.id), "r": _vai(p["role"])},
+        )).scalar()
+        if g != 1:
+            loi.append(
+                f"{ten}: có {g} dòng casbin g/{_chu_the(u.id)}/{_vai(p['role'])}, chờ 1"
+            )
+
+    if loi:
+        raise ChanLai("HỘI TỤ THẤT BẠI:\n  - " + "\n  - ".join(loi))
+
+
+# =============================================================================
+# CLI
+# =============================================================================
+async def _chay(in_mat_khau: Optional[str]) -> int:
+    if in_mat_khau:
+        kiem_moi_truong(can_ghi=False)
+        if in_mat_khau not in {p["username"] for p in PERSONA}:
+            raise ChanLai(f"{in_mat_khau!r} không phải persona smoke")
+        # ĐÚNG một dòng ra stdout, không kèm nhãn, để tiện `read`/pipe mà không
+        # lẫn vào log.
+        print(mat_khau(in_mat_khau))
+        return 0
+
+    kiem_moi_truong(can_ghi=True)
+    async with AsyncSessionLocal() as db:
+        don_vi = await verify_foundation(db)
+        print(f"  nền ĐẠT · đơn vị A={don_vi['unit_a']} · B={don_vi['unit_b']}")
+        ket = await provision_personas(db, don_vi)
+        await kiem_hoi_tu(db, don_vi)
+    print(f"  sáu persona đã hội tụ: {', '.join(sorted(ket))}")
+    return 0
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description="Dựng persona smoke trên qlts_smoke")
+    p.add_argument(
+        "--in-mat-khau", metavar="PERSONA", default=None,
+        help="in mật khẩu dẫn xuất của một persona ra stdout rồi thoát (không ghi DB)",
+    )
+    a = p.parse_args()
+    try:
+        return asyncio.run(_chay(a.in_mat_khau))
+    except ChanLai as e:
+        print(f"DỪNG: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

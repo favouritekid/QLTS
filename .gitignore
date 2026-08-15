@@ -334,6 +334,11 @@ Backend_FastAPI/scripts/smoke_*.py
 # trên vì các smoke script cũ vẫn có credential hard-coded.
 # `test_gitignore_smoke_scripts` canh chính xác ngoại lệ này.
 !Backend_FastAPI/scripts/smoke_finance_seed.py
+# Cùng lý do, cùng điều kiện: bootstrap persona lấy master secret từ
+# `os.environ["SMOKE_PERSONA_MASTER_SECRET"]`, không có giá trị mặc định trong mã,
+# và mật khẩu được DẪN XUẤT chứ không viết sẵn. `test_gitignore_ngoai_le_smoke_
+# chi_mo_dung_seed` canh danh sách này, và phép quét credential chạy cho CẢ HAI tệp.
+!Backend_FastAPI/scripts/smoke_bootstrap_personas.py
 smoke-*.png
 # officer/lead activity reports — query exports chứa PII (tên, lead counts,
 # timestamps). KHÔNG commit; canonical metric = KPI dashboard.
