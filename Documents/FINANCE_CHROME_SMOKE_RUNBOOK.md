@@ -192,6 +192,103 @@ Runner sống lâu có thể dùng để phát triển nhanh, nhưng không đư
 
 Baseline tại `9950abe9`: `944 passed, 2 skipped`, exit 0. Nếu HEAD, migration, workflow hoặc bất kỳ file BE liên quan thay đổi, baseline này hết hiệu lực và phải chạy lại. Không trích số cũ cho commit mới.
 
+#### A03.1. Lượt test harness smoke tại máy — hình dạng lệnh là bắt buộc
+
+Luật "runner sống lâu không được dùng làm bằng chứng" ở trên có một biến thể tinh vi
+hơn: **container one-off cũng không sạch**. Mặc định `docker-compose.override.yml`
+mount `./Backend_FastAPI:/app`, tức checkout dev, còn `smoke_finance_seed.py` thì
+`sys.path.insert(0, "/app")` ngay ở module level. `scripts` không có `__init__.py` nên
+là *namespace package*, portion lấy theo thứ tự `sys.path`. Hệ quả: tệp test nào import
+script seed sẽ kéo `/app` lên đầu, và mọi `import scripts.*` sau đó đọc **cây nguồn
+khác** với SHA đang xét. Lượt chạy khi ấy không nói gì về mã đang kiểm.
+
+Ba hình dạng của `/app`, đo ngày 15-08 trên cùng một checkout:
+
+| `/app` là gì | Kết quả |
+|---|---|
+| checkout dev (mount mặc định của override) | dừng ở collect: `no attribute 'BoCompose'` |
+| bản sao **cùng nội dung** của chính worktree đang kiểm | 34 failed / 266 passed / 5 skipped |
+| **thư mục rỗng** — hình dạng CI | `300 passed, 5 skipped` |
+
+Cùng nội dung vẫn đỏ vì khi ấy tồn tại **hai định danh module cho một mã** (`smoke_lib.*`
+do seed chèn, và `scripts.smoke_lib.*`). Vì vậy "bind checkout hiện tại vào `/app`"
+không phải cách vá — nó còn phá thêm giả định `_GOC.parent == gốc kho` (các test tính
+gốc kho bằng cha của thư mục chứa `scripts/`+`tests/`; đặt `Backend_FastAPI` thẳng vào
+`/app` thì cha là `/`, sinh 44 ca đỏ dạng `thiếu /.env.smoke.app.example`).
+
+Lệnh chạy, nguyên văn — chạy **từ gốc kho chính**, không từ worktree (cwd sai thì
+Compose nạp nhầm bộ cấu hình và đổ ở `NEXT_PUBLIC_API_URL is required`):
+
+```bash
+MASK=/d/QLTS-smoke/.smoke-evidence/empty-app     # theo từng worktree; đã bị .gitignore che
+
+kiem_che() {                                      # guard fail-closed, chạy TRƯỚC và SAU
+  mkdir -p "$MASK" || return 2                    # mkdir hỏng ⇒ DỪNG, không đo tiếp
+  found=$(find "$MASK" -mindepth 1 \( -type f -o -type l \) -print) || return 2
+  [ -z "$found" ] || { echo "[CHẶN] thư mục che có tệp/symlink"; return 2; }
+}
+
+kiem_che || exit 2
+rc=0
+MSYS_NO_PATHCONV=1 docker compose run --rm --no-deps -T --entrypoint bash \
+  -v "D:\QLTS-smoke:/repo" \
+  -v "D:\QLTS-smoke\.smoke-evidence\empty-app:/app" \
+  -w /repo/Backend_FastAPI -e QLTS_REPO_ROOT=/repo backend -c \
+  "pip install -r requirements-dev.txt -q >/dev/null 2>&1 && \
+   python -m pytest tests/unit/test_smoke_*.py -q --tb=line" || rc=$?
+kiem_che || exit 2
+exit "$rc"
+```
+
+Ba chi tiết của khối trên đều là hàng rào, không phải văn phong:
+
+- **`&&` chứ không phải `;`** giữa `pip install` và `pytest`: cài đặt hỏng mà vẫn chạy
+  pytest thì được một lượt "xanh" của bộ test chạy thiếu phụ thuộc.
+- **`|| rc=$?` rồi `exit "$rc"`**: hậu-guard là lệnh CUỐI của khối, nên nếu không giữ
+  lại mã thoát thì `docker`/`pytest` đỏ sẽ bị hậu-guard xanh **ghi đè**. Đo được: khối
+  không giữ `rc`, lệnh trong container trả 7, mà cả khối trả **0**.
+- **`find … -print || return 2`, không phải `find … | wc -l`**: mã thoát của một pipeline
+  là mã của lệnh CUỐI, tức của `wc`. `find` hỏng vẫn cho `n=0` và guard kết luận "sạch".
+  Đo được: `find` trên một đường dẫn không tồn tại vẫn cho `n=0`. `mkdir -p` cũng phải
+  `|| return 2` — không dựng được thư mục che thì không có gì để đo.
+
+`--entrypoint bash` thay hẳn ba cờ `RUN_*_ON_STARTUP=false`. Bỏ entrypoint thì không
+alembic, không sync notification rule, không nạp Casbin — quên một cờ là chạy alembic
+trên `qlts_dev`, đã vấp.
+
+**Guard chạy hai đầu, và bắt cả symlink.** Bind không phải read-only (xem dưới), nên
+container ghi được vào thư mục che; một symlink tên `scripts` trỏ ra ngoài là đủ dựng
+lại đúng cây cạnh tranh mà cả mục này đang loại bỏ. Đã đo hai chiều: container
+`ln -s /etc/passwd /app/…` trả rc=0 và symlink hiện sang host; guard đếm được và chặn.
+
+**Thư mục che sẽ luôn có 7 thư mục rỗng — đó là bình thường, không phải ô nhiễm.**
+`docker-compose.yml` khai năm named volume nằm **dưới** `/app` (`uploads`,
+`app/static/uploads`, `private_exports`, `geoip`, `logs`); daemon phải tạo điểm mount
+và `/app` là bind từ host nên chúng hiện lên host. Chúng rỗng, lượt chạy thứ hai vẫn
+cho đúng số. Vì thế guard hỏi **"có TỆP hay SYMLINK không"**, không hỏi "có rỗng
+không" — guard rỗng-tuyệt-đối sẽ chặn nhầm từ lượt thứ hai.
+
+**Ba đường KHÔNG dùng:**
+
+- `PYTHONPATH` — vô nghĩa: hai script chủ động `sys.path.insert(0, "/app")`, biến môi
+  trường không quyết định được thứ tự.
+- **Volume ẩn danh `-v /app`** — trông gọn và hôm nay còn xanh, nhưng Docker
+  **copy-up nội dung image** vào volume rỗng: đo được `/app` hiện ra
+  `.contract-allowlist.yaml`, `Dockerfile`… Image local dựng 19-07 tình cờ chưa có
+  `scripts/smoke_lib`; build lại image là cây cạnh tranh **tự quay lại, im lặng**.
+- **`:ro`** — `docker compose run -v …:ro` **không được áp**: trong container `touch`
+  và `mkdir` đều rc=0 và tệp hiện ra trên host. `docker compose run` cũng không có
+  `--mount`. Không được dựa vào read-only để bảo vệ thư mục che; guard mới là thứ bảo vệ.
+
+⛔ **Chạy riêng từng tệp KHÔNG thay được lượt chạy chung.** Mọi hỏng hóc ở trên đều là ô
+nhiễm chéo giữa các tệp trong cùng một tiến trình: `test_smoke_cli.py` chạy riêng cho
+`45 passed, 2 skipped` ngay cả khi trong lượt chung nó đỏ 34 ca. Bằng chứng cổng phải là
+**một lượt cho cả năm tệp**.
+
+Oracle `300 passed, 5 skipped` neo tại `f598d156` trên `feat/smoke-stack-qltssmoke`.
+Đây là số của một SHA, **không phải bất biến lâu dài**: thêm ca, đổi harness, đổi
+workflow hay đổi image là hết hiệu lực và phải đo lại. Không trích số này cho SHA khác.
+
 ### A04. Khởi động dịch vụ có kiểm soát
 
 Chỉ khởi động dịch vụ cần dùng; không gọi `down`:
