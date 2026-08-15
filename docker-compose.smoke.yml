@@ -1,0 +1,99 @@
+# Stack smoke Finance — project `qltssmoke`, database `qlts_smoke`.
+#
+# Cách gọi (BA mảnh, thiếu một mảnh là sai stack):
+#
+#   docker compose -p qltssmoke \
+#     -f docker-compose.yml -f docker-compose.smoke.yml \
+#     --env-file .env.smoke up -d --wait
+#
+# ⚠️ `-f docker-compose.yml` BẮT BUỘC. Thiếu nó, Compose tự nạp
+# `docker-compose.override.yml` của DEV (uvicorn --reload, bind-mount mã nguồn) và
+# stack smoke lặng lẽ thành stack dev trỏ sang database khác.
+#
+# ⚠️ `--env-file .env.smoke` BẮT BUỘC, và tệp đó PHẢI đặt `QLTS_ENV_FILE`.
+# `docker-compose.yml` khai `env_file: ${QLTS_ENV_FILE:-.env.production}`; thiếu biến
+# ấy thì stack "cô lập" này nạp nguyên cấu hình production — đo được ngày 15-08-2026:
+# model render ra `FRONTEND_URL=https://qlts.tnpc.edu.vn` và 18 tham chiếu Zalo. Cô lập
+# bằng project + database là CHƯA ĐỦ.
+#
+# ⚠️ KHÔNG khai `container_name` ở bất cứ đâu — nó phá cơ chế đặt tên theo project và
+# đụng thẳng container của stack `qlts`.
+
+services:
+  # postgres và redis CỐ Ý không publish cổng nào: `smoke_lib/cli.py` nói chuyện với
+  # postgres qua `docker exec` (cần container id, không cần TCP). Mở cổng chỉ thêm
+  # đường đụng 5433/6380 của stack dev mà không đổi lại được gì.
+  postgres:
+    ports: !override []
+
+  redis:
+    ports: !override []
+
+  # Tag TƯỜNG MINH để `smoke-runner` ghim được đúng ảnh này. Không có tag, Compose
+  # tự đặt `<project>-backend` và runner buộc phải `extends` — kéo theo cả build,
+  # restart policy và năm volume dữ liệu (xem khối smoke-runner bên dưới).
+  backend:
+    image: qltssmoke-backend:local
+    ports:
+      - "127.0.0.1:8100:8000"
+
+  frontend:
+    ports:
+      - "127.0.0.1:3100:3000"
+
+  # ---------------------------------------------------------------------------
+  # smoke-runner — nơi DUY NHẤT được chạy công cụ smoke
+  # ---------------------------------------------------------------------------
+  # PR #556 đã loại `scripts/smoke*` và `seed_smoke_dev.py` khỏi image production
+  # (gồm cả công cụ đặt lại mật khẩu). Service này KHÔNG mang chúng trở lại image:
+  # nó dùng đúng ảnh backend đã build rồi bind-mount mã smoke vào `/tools` ở chế độ
+  # CHỈ ĐỌC, nên công cụ chỉ tồn tại trong lúc container sống.
+  #
+  # ⚠️ Cố ý KHÔNG dùng `extends: service: backend`. `extends` merge TOÀN BỘ cấu
+  # hình backend, và model đã phân giải cho thấy hậu quả: runner có `build` riêng
+  # (⇒ ảnh `qltssmoke-smoke-runner` thứ hai), thừa kế `restart: unless-stopped`,
+  # và thừa kế NĂM volume ghi được của ứng dụng (uploads, static uploads, private
+  # exports, geoip, logs). Một container chạy công cụ destructive không có lý do
+  # gì được ghi vào kho tệp của ứng dụng.
+  smoke-runner:
+    image: qltssmoke-backend:local
+    build: !reset null
+    profiles: ["smoke-tools"]
+    # `no` chứ không phải mặc định `unless-stopped`: đây là công cụ chạy một lần
+    # rồi thoát. Một runner tự khởi động lại sau khi hỏng là cách chắc chắn để
+    # thao tác destructive chạy lần thứ hai mà không ai ra lệnh.
+    restart: "no"
+    # `docker compose run` chỉ đè COMMAND, KHÔNG đè ENTRYPOINT — mà entrypoint của
+    # ảnh backend chạy `alembic upgrade head` + `sync_notification_rules` trước mọi
+    # lệnh. Phải vô hiệu hoá tường minh.
+    entrypoint: []
+    command: ["sleep", "infinity"]
+    env_file:
+      - ${QLTS_ENV_FILE:-.env.smoke.app}
+      # Mật khẩu persona chỉ tới ĐÂY, không tới backend/celery.
+      #
+      # `required: true` — KHÔNG hạ xuống optional. Bản trước để `false` với lý do
+      # "checkout sạch không có tệp này nên `compose config` đổ trên CI", và đẩy
+      # fail-closed sang `smoke_bootstrap_personas.py`. Nhưng tệp ấy chưa tồn tại,
+      # nên đó là một lời hứa chứ không phải một cổng: model vẫn render sạch trong
+      # khi runner KHÔNG có `SMOKE_PERSONA_MASTER_SECRET`.
+      #
+      # Đường ra không phải hạ cổng mà là cho phép trỏ chỗ khác: CI/test đặt
+      # `QLTS_SMOKE_RUNNER_ENV_FILE` tới một tệp giả trong `tmp_path`, còn vận
+      # hành thật vẫn buộc phải có `.env.smoke.runner`.
+      - path: ${QLTS_SMOKE_RUNNER_ENV_FILE:-.env.smoke.runner}
+        required: true
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-qlts}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-qlts_smoke}
+      REDIS_URL: redis://redis:6379/1
+    # Đúng hai loại mount, không hơn: mã smoke CHỈ ĐỌC, và một chỗ GHI được cho
+    # bằng chứng/registry. Thiếu chỗ ghi thì `compose run --rm` làm output biến mất
+    # cùng container.
+    volumes:
+      - ./Backend_FastAPI/scripts/smoke_lib:/tools/smoke_lib:ro
+      - ./Backend_FastAPI/scripts/smoke_finance_seed.py:/tools/smoke_finance_seed.py:ro
+      - ./.smoke-evidence:/evidence
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck: !reset null

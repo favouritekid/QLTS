@@ -338,6 +338,7 @@ def _bl(reg, tmp_path, **doi):
         duong_dump=str(tmp_path / "b.dump"), sha256="a" * 64,
         alembic_head="ovp20260811", van_tay_metrics="c" * 64,
         danh_tinh={"project": "qltssmoke", "container_id": "a1b2c3d4e5f6"},
+        van_tay_model="d" * 64,
     )
     kw.update(doi)
     reg.ghi_baseline(**kw)

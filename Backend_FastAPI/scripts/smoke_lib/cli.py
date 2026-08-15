@@ -56,6 +56,53 @@ from . import baseline, registry
 SERVICE_UNG_DUNG = ("backend", "celery-worker", "celery-beat", "frontend")
 
 
+class BoCompose:
+    """Bộ tệp Compose + env file dùng để ĐIỀU KHIỂN stack smoke.
+
+    Bản trước gọi `docker compose -p qltssmoke stop …` trần. `-p` chỉ chọn TÊN
+    PROJECT, không chọn MODEL: từ gốc repo, Compose sẽ tự nạp
+    `docker-compose.yml` + `docker-compose.override.yml` (dev) và đọc
+    `.env.production` mặc định. Nghĩa là lệnh dựng stack và lệnh dọn stack nói về
+    hai model khác nhau — dọn nhầm, hoặc đổ vì thiếu biến, tuỳ máy.
+
+    Không có giá trị mặc định nào ở đây, và đó là cố ý: không tồn tại bộ Compose
+    nào đúng cho mọi máy, nên một mặc định chỉ là một cách hỏng im lặng.
+    """
+
+    def __init__(self, tep_compose: Sequence[str], env_file: str):
+        tep = [str(x) for x in (tep_compose or []) if str(x).strip()]
+        if not tep:
+            raise LoiCLI(
+                "thiếu --compose-file: không có tệp compose thì `-p qltssmoke` "
+                "sẽ nạp model mặc định của thư mục hiện tại (kèm override dev)"
+            )
+        if not str(env_file or "").strip():
+            raise LoiCLI(
+                "thiếu --compose-env-file: thiếu nó thì `QLTS_ENV_FILE` không "
+                "được đặt và model rơi về `.env.production`"
+            )
+        self.tep_compose = tep
+        self.env_file = str(env_file)
+
+    def lenh(self, *duoi: str) -> List[str]:
+        argv = ["docker", "compose", "-p", baseline._PROJECT_DUY_NHAT]
+        for f in self.tep_compose:
+            argv += ["-f", f]
+        argv += ["--env-file", self.env_file]
+        return argv + list(duoi)
+
+    def van_tay(self, chay: "ChayLenh", *, app_env: str) -> str:
+        """Kiểm model THẬT rồi mới trả vân tay. Không ghi output ra đĩa ở đâu cả.
+
+        `app_env` bắt buộc: nó được đối chiếu với `APP_ENV` đã render trong model.
+        Trước đây `--app-env` chỉ là chuỗi người gọi tự khai — khai `development`
+        trong khi model nạp `.env.production` thì không có gì phát hiện ra.
+        """
+        return baseline.van_tay_model(
+            chay(self.lenh("config", "--format", "json")), app_env=app_env
+        )
+
+
 class LoiCLI(RuntimeError):
     pass
 
@@ -187,14 +234,21 @@ def kiem_git_sha(chay: ChayLenh, git_sha: str) -> str:
 
 
 def chay_baseline(
-    *, chay: ChayLenh, thu_muc: Path, run_id: str, git_sha: str, pack: str,
-    cid: str, thu_muc_dump: Path, app_env: str, ten_db: str = "qlts_smoke",
+    *, chay: ChayLenh, bo: BoCompose, thu_muc: Path, run_id: str, git_sha: str,
+    pack: str, cid: str, thu_muc_dump: Path, app_env: str,
+    ten_db: str = "qlts_smoke",
 ) -> Path:
     baseline.kiem_moi_truong(app_env=app_env, ten_db=ten_db)
     # Không có tham số tắt đối chiếu: một escape hatch trên đường production là
     # thứ sẽ được dùng đúng lúc không nên dùng.
     git_sha = kiem_git_sha(chay, git_sha)
     danh_tinh = _danh_tinh(chay, cid)
+
+    # Đo + KIỂM model trước `Registry.mo()` và trước `pg_dump`. Bản trước đo tận
+    # lúc ghi registry: `compose config` hỏng ở đó nghĩa là run-id đã bị chiếm và
+    # một tệp dump rác đã nằm trên đĩa — hỏng ở giai đoạn không còn dọn được bằng
+    # cách "chưa làm gì cả".
+    vt_model = bo.van_tay(chay, app_env=app_env)
 
     reg = registry.Registry.mo(
         thu_muc, run_id=run_id, git_sha=git_sha, pack=pack,
@@ -223,6 +277,7 @@ def chay_baseline(
         alembic_head=_alembic_head(chay, cid, ten_db),
         van_tay_metrics=_van_tay(chay, cid, ten_db),
         danh_tinh=danh_tinh,
+        van_tay_model=vt_model,
     )
     print(f"[baseline] {run_id}: {tren_host} ({sha[:12]}…)")
     return tren_host
@@ -270,7 +325,7 @@ def _inspect_container(chay: ChayLenh, cid: str) -> tuple:
     return full_id, so_restart, oneoff
 
 
-def _trang_thai_service(chay: ChayLenh) -> Mapping[str, tuple]:
+def _trang_thai_service(chay: ChayLenh, bo: BoCompose) -> Mapping[str, tuple]:
     """`{service: (state, health, full_id, restart_count)}`.
 
     Hai chỗ phải cẩn thận:
@@ -284,10 +339,7 @@ def _trang_thai_service(chay: ChayLenh) -> Mapping[str, tuple]:
       service phải còn **đúng một** container: 0 hoặc >1 đều là dừng.
     * `RestartCount` chỉ có ở `docker inspect` (xem `TEMPLATE_PS`).
     """
-    tho = chay([
-        "docker", "compose", "-p", baseline._PROJECT_DUY_NHAT, "ps", "-a",
-        "--format", TEMPLATE_PS,
-    ])
+    tho = chay(bo.lenh("ps", "-a", "--format", TEMPLATE_PS))
     gom: Dict[str, list] = {}
     for dong in tho.splitlines():
         phan = (dong.strip().split("|") + ["", "", ""])[:4]
@@ -321,7 +373,8 @@ def _trang_thai_service(chay: ChayLenh) -> Mapping[str, tuple]:
 SERVICE_CO_HEALTH = ("backend", "frontend")
 
 
-def _cho_san_sang(*, chay: ChayLenh, ngu, han_giay: int, nhip: int = 3) -> None:
+def _cho_san_sang(*, chay: ChayLenh, bo: BoCompose, ngu, han_giay: int,
+                  nhip: int = 3) -> None:
     """Chờ tới khi bốn service thật sự sẵn sàng.
 
     Hai điều kiện, mỗi cái đóng một cách tự lừa:
@@ -338,7 +391,7 @@ def _cho_san_sang(*, chay: ChayLenh, ngu, han_giay: int, nhip: int = 3) -> None:
     truoc: Optional[Mapping[str, tuple]] = None
     trang_thai: Mapping[str, tuple] = {}
     while con > 0:
-        trang_thai = _trang_thai_service(chay)
+        trang_thai = _trang_thai_service(chay, bo)
         chua = []
         for s in SERVICE_UNG_DUNG:
             st, hl, _cid, _rs = trang_thai.get(s, ("<không thấy>", "", "", ""))
@@ -401,7 +454,7 @@ def _preflight_archive(*, chay: ChayLenh, cid: str, bl: Mapping[str, str]) -> No
 
 
 def chay_cleanup(
-    *, chay: ChayLenh, thu_muc: Path, run_id: str, cid: str,
+    *, chay: ChayLenh, bo: BoCompose, thu_muc: Path, run_id: str, cid: str,
     thu_muc_dump: Path, app_env: str, ten_db: str = "qlts_smoke",
     ngu=time.sleep, han_cho_giay: int = 180,
 ) -> None:
@@ -415,14 +468,26 @@ def chay_cleanup(
     baseline.kiem_moi_truong(app_env=app_env, ten_db=ten_db)
     _danh_tinh(chay, cid, nen=reg.du_lieu.get("danh_tinh"))
 
+    # (2b) …và MODEL cũng có thể đã đổi. Danh tính container chứng minh "vẫn đúng
+    # cái postgres ấy"; nó KHÔNG chứng minh lệnh `stop`/`start` sắp chạy sẽ nhắm
+    # đúng stack đó. Hai lệnh cùng `-p qltssmoke` mà khác `-f`/`--env-file` là hai
+    # model khác nhau — đúng lỗ hổng của bản trước.
+    vt_model = bo.van_tay(chay, app_env=app_env)
+    vt_nen = bl.get("van_tay_model", "")
+    if vt_model != vt_nen:
+        raise LoiCLI(
+            "model Compose lúc cleanup KHÁC lúc ghi baseline "
+            f"({vt_model[:12]}… ≠ {vt_nen[:12]}…). Kiểm lại `--compose-file` và "
+            "`--compose-env-file` — cleanup đang điều khiển một stack khác."
+        )
+
     # (3)–(4) Từ lúc DỪNG service trở đi, mọi lỗi phải được ghi lại: database
     # vẫn an toàn (chưa drop), nhưng stack smoke đang ở trạng thái NỬA CHỪNG —
     # service đã tắt. Bản đầu để `cleanup=None` ở đây, nên sổ không nói gì về
     # việc dịch vụ đang đóng.
     da_stop = False
     try:
-        chay(["docker", "compose", "-p", baseline._PROJECT_DUY_NHAT,
-              "stop", *SERVICE_UNG_DUNG])
+        chay(bo.lenh("stop", *SERVICE_UNG_DUNG))
         da_stop = True
         con = chay(_docker_exec(cid, baseline.lenh_dem_session(
             ten_db=ten_db, user="qlts"))).strip()
@@ -480,9 +545,8 @@ def chay_cleanup(
     # với baseline → chỉ khi vẫn khớp mới `DAT`.
     vt_sau: Optional[str] = None
     try:
-        chay(["docker", "compose", "-p", baseline._PROJECT_DUY_NHAT,
-              "start", *SERVICE_UNG_DUNG])
-        _cho_san_sang(chay=chay, ngu=ngu, han_giay=han_cho_giay)
+        chay(bo.lenh("start", *SERVICE_UNG_DUNG))
+        _cho_san_sang(chay=chay, bo=bo, ngu=ngu, han_giay=han_cho_giay)
 
         vt_sau = _van_tay(chay, cid, ten_db)
         baseline.kiem_sau_restore(
@@ -495,8 +559,7 @@ def chay_cleanup(
         # không còn khẳng định được gì. Cố đóng lại cả bốn trước khi báo.
         ghi_them = ""
         try:
-            chay(["docker", "compose", "-p", baseline._PROJECT_DUY_NHAT,
-                  "stop", *SERVICE_UNG_DUNG])
+            chay(bo.lenh("stop", *SERVICE_UNG_DUNG))
             ghi_them = " Đã stop lại cả bốn service."
         except Exception as e2:
             ghi_them = f" KHÔNG stop lại được service: {e2}"
@@ -535,21 +598,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--app-env", required=True)
     p.add_argument("--git-sha", default="")
     p.add_argument("--pack", default="")
+    # BẮT BUỘC, không default: xem docstring `BoCompose`. Một mặc định ở đây chỉ
+    # là một cách hỏng im lặng trên máy có `docker-compose.override.yml` của dev.
+    p.add_argument(
+        "--compose-file", action="append", required=True, metavar="TEP",
+        help="tệp compose dựng nên stack smoke; lặp lại đúng thứ tự đã dùng",
+    )
+    p.add_argument(
+        "--compose-env-file", required=True, metavar="TEP",
+        help="env file đã dùng lúc dựng (phải đặt QLTS_ENV_FILE)",
+    )
     a = p.parse_args(argv)
 
     chay = ChayLenh()
     try:
+        bo = BoCompose(a.compose_file, a.compose_env_file)
         if a.baseline:
             if not a.pack:
                 raise LoiCLI("--baseline cần --pack")
             chay_baseline(
-                chay=chay, thu_muc=a.thu_muc, run_id=a.run_id, git_sha=a.git_sha,
+                chay=chay, bo=bo, thu_muc=a.thu_muc, run_id=a.run_id, git_sha=a.git_sha,
                 pack=a.pack, cid=a.container, thu_muc_dump=a.thu_muc_dump,
                 app_env=a.app_env,
             )
         else:
             chay_cleanup(
-                chay=chay, thu_muc=a.thu_muc, run_id=a.run_id, cid=a.container,
+                chay=chay, bo=bo, thu_muc=a.thu_muc, run_id=a.run_id, cid=a.container,
                 thu_muc_dump=a.thu_muc_dump, app_env=a.app_env,
             )
     except (LoiCLI, baseline.ChanLai, registry.LoiRegistry) as e:

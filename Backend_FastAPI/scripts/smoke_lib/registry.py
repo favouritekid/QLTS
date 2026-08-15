@@ -206,7 +206,8 @@ class Registry:
         if bl is not None:
             if not isinstance(bl, dict):
                 raise LoiRegistry("baseline không phải object")
-            for khoa in ("duong_dump", "sha256", "alembic_head", "van_tay_metrics"):
+            for khoa in ("duong_dump", "sha256", "alembic_head", "van_tay_metrics",
+                         "van_tay_model"):
                 if not bl.get(khoa):
                     raise LoiRegistry(f"baseline thiếu {khoa}")
             if not re.fullmatch(r"[0-9a-f]{64}", str(bl["sha256"])):
@@ -216,6 +217,15 @@ class Registry:
                     f"baseline.van_tay_metrics không phải SHA-256: "
                     f"{bl['van_tay_metrics']!r} — đây là thứ cleanup so sau "
                     "restore, một chuỗi tuỳ ý làm phép so mất nghĩa"
+                )
+            # Cùng lý do, và đường ĐỌC phải kiểm chứ không chỉ đường GHI: một sổ
+            # hỏng (sửa tay, ghi dở, chép từ lượt khác) mà `van_tay_model` là rác
+            # thì phép so ở cleanup vẫn "chạy" — nó chỉ luôn lệch, và người đọc
+            # log sẽ đi tìm nhầm nguyên nhân ở bộ Compose.
+            if not re.fullmatch(r"[0-9a-f]{64}", str(bl["van_tay_model"])):
+                raise LoiRegistry(
+                    f"baseline.van_tay_model không phải SHA-256: "
+                    f"{bl['van_tay_model']!r}"
                 )
             if not du_lieu.get("danh_tinh"):
                 raise LoiRegistry(
@@ -263,16 +273,22 @@ class Registry:
     def ghi_baseline(
         self, *, duong_dump: str, sha256: str, alembic_head: str,
         van_tay_metrics: str, danh_tinh: Mapping[str, str],
+        van_tay_model: str,
     ) -> None:
         if self.du_lieu.get("baseline"):
             raise LoiRegistry("baseline đã được ghi; không ghi đè")
         if not re.fullmatch(r"[0-9a-f]{64}", sha256 or ""):
             raise LoiRegistry(f"sha256 không hợp lệ: {sha256!r}")
+        # Bắt buộc, không default: thiếu vân tay model thì cleanup không còn cách
+        # nào biết nó đang điều khiển đúng stack đã đo baseline.
+        if not re.fullmatch(r"[0-9a-f]{64}", van_tay_model or ""):
+            raise LoiRegistry(f"van_tay_model không hợp lệ: {van_tay_model!r}")
 
         def _td(d):
             d["baseline"] = {
                 "duong_dump": duong_dump, "sha256": sha256,
                 "alembic_head": alembic_head, "van_tay_metrics": van_tay_metrics,
+                "van_tay_model": van_tay_model,
                 "luc": _bay_gio(),
             }
             d["danh_tinh"] = dict(danh_tinh)

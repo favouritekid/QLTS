@@ -167,6 +167,16 @@ yarn-error.log*
 .env.production.local
 !.env.example
 !.env.production.example
+# Stack smoke: hai tep MAU phai theo git (khong gia tri that); `.env.smoke` va
+# `.env.smoke.app` that thi `.env.*` o tren da che - chung chua mat khau DB va persona.
+!.env.smoke.example
+!.env.smoke.app.example
+!.env.smoke.runner.example
+# Bang chung/registry do `smoke-runner` ghi vao ./.smoke-evidence.
+# Chung chua registry.json, ID ho so va anh chup man hinh => co the co PII.
+# `.smoke_*` o tren KHONG khop `.smoke-evidence` (dau gach ngang, khong phai gach duoi).
+.smoke-evidence/*
+!.smoke-evidence/.gitkeep
 
 # Vercel
 .vercel
