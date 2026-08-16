@@ -316,6 +316,11 @@ services:
         NEXT_PUBLIC_FF_STATUS_CONFIG: ${NEXT_PUBLIC_FF_STATUS_CONFIG:-false}
         NEXT_PUBLIC_FF_STRICT_PERMISSIONS: ${NEXT_PUBLIC_FF_STRICT_PERMISSIONS:-false}
         NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
+        # Chỉ để TRUY VẾT, không phải bằng chứng: nhãn nói người build KHAI SHA
+        # nào, không nói ảnh chứa gì. Phép so nội dung nằm ở
+        # `/app/.qlts-source-manifest.json` (xem `scripts/attest-frontend-runtime.sh`).
+        # Để trống được — thiếu nhãn không làm hỏng attestation.
+        QLTS_GIT_SHA: ${QLTS_GIT_SHA:-}
     restart: unless-stopped
     environment:
       BACKEND_URL: http://backend:8000
