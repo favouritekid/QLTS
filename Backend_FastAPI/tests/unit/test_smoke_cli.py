@@ -8,6 +8,7 @@ vụ sau khi restore hỏng, hay bỏ qua bước xác nhận 0 session.
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -30,6 +31,40 @@ if str(_GOC) not in sys.path:
 from scripts.smoke_lib import baseline, cli, registry  # noqa: E402
 
 _CID = "a1b2c3d4e5f6"
+
+# Bộ Compose dùng trong test. Giá trị cụ thể không quan trọng — điều quan trọng là
+# CLI phải chuyển nguyên nó vào mọi lệnh `docker compose`, vì `-p` một mình không
+# chọn được model (xem `BoCompose`).
+_BO = cli.BoCompose(["docker-compose.yml", "docker-compose.smoke.yml"], ".env.smoke")
+
+# Model mà stub trả cho `compose config --format json`. Phải qua được
+# `kiem_model_smoke` — cổng ấy đòi đủ sáu service, và đòi ba service ứng dụng khai
+# APP_ENV/DATABASE_URL cùng ba công tắc outbound. Dựng bằng dict rồi `json.dumps`
+# thay vì một chuỗi dài viết tay: chuỗi viết tay là thứ trôi khỏi cổng đầu tiên.
+_ENV_UNG_DUNG = {
+    "APP_ENV": "development",
+    "DATABASE_URL": "postgresql+asyncpg://qlts:mat-khau-that@postgres:5432/qlts_smoke",
+    "REDIS_URL": "redis://redis:6379/1",
+    "CELERY_BROKER_URL": "redis://redis:6379/2",
+    "CELERY_RESULT_BACKEND_URL": "redis://redis:6379/3",
+    "HIBP_CHECK_ENABLED": "False",
+    "ZALO_ENABLED": "False",
+    "ZALO_BOT_ENABLED": "False",
+    # Một khoá nhạy cảm để ca digest chứng minh giá trị bị thay bằng hash chứ
+    # không bị bỏ đi.
+    "POSTGRES_PASSWORD": "mat-khau-that",
+}
+_MODEL_JSON = json.dumps({
+    "name": "qltssmoke",
+    "services": {
+        "postgres": {"image": "postgres:16-alpine"},
+        "redis": {"image": "redis:7-alpine"},
+        "backend": {"environment": dict(_ENV_UNG_DUNG)},
+        "celery-worker": {"environment": dict(_ENV_UNG_DUNG)},
+        "celery-beat": {"environment": dict(_ENV_UNG_DUNG)},
+        "frontend": {},
+    },
+})
 _SID = "7412598630145236"
 _TOC = "\n".join(
     f"34{i:02d}; 0 164{i:02d} TABLE DATA public {t} qlts"
@@ -82,12 +117,15 @@ class StubChay:
         self._restart = {}
         self._lan_ps = 0
         self.no_o = kb.get("no_o")  # chuỗi con: gặp thì ném lỗi
+        self.model_json = kb.get("model_json", _MODEL_JSON)
 
     def __call__(self, argv) -> str:
         self.lenh.append(list(argv))
         ghep = " ".join(argv)
         if self.no_o and self.no_o in ghep:
             raise cli.LoiCLI(f"stub cố ý hỏng ở: {self.no_o}")
+        if "config" in argv and "--format" in argv:
+            return self.model_json
         # ⚠️ Nhánh RestartCount phải đứng TRƯỚC nhánh nhãn generic. Bản trước
         # đặt ngược, nên lệnh hỏi RestartCount nhận về danh sách nhãn và parser
         # bỏ qua — stub "mô phỏng" một thứ chưa bao giờ được gọi tới.
@@ -162,7 +200,7 @@ class StubChay:
 
 def _baseline(tmp_path: Path, stub: StubChay, run_id="SMK1"):
     return cli.chay_baseline(
-        chay=stub, thu_muc=tmp_path / "reg", run_id=run_id, git_sha="0" * 40,
+        chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id=run_id, git_sha="0" * 40,
         pack="P2", cid=_CID, thu_muc_dump=tmp_path / "dumps", app_env="development",
     )
 
@@ -219,7 +257,7 @@ def _chuan_bi(tmp_path, monkeypatch, **kb):
 def test_cleanup_dat_thi_mo_lai_dich_vu(tmp_path, monkeypatch):
     stub = _chuan_bi(tmp_path, monkeypatch)
     cli.chay_cleanup(
-        chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+        chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
         thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
     )
     reg = registry.Registry.doc(tmp_path / "reg", "SMK1")
@@ -231,14 +269,18 @@ def test_cleanup_dung_thu_tu_bat_buoc(tmp_path, monkeypatch):
     """stop → đếm session → kiểm archive → drop → restore → start."""
     stub = _chuan_bi(tmp_path, monkeypatch)
     cli.chay_cleanup(
-        chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+        chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
         thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
     )
     # "pg_restore" không phân biệt được: nó khớp cả `pg_restore --list` ở bước
     # kiểm archive. Dùng cờ chỉ có ở lệnh restore thật.
-    vt = stub.thu_tu("compose -p qltssmoke stop", "pg_stat_activity",
+    # Neo vào `stop backend` / `start backend` chứ không vào `compose -p qltssmoke
+    # …`: hình dạng lệnh nay có `-f … --env-file …` chen giữa, và neo trần vào
+    # "compose" thì khớp trúng lệnh `config` (đo vân tay model) đứng trước cả
+    # `stop` — phép kiểm thứ tự khi ấy không còn canh cái nó định canh.
+    vt = stub.thu_tu("stop backend", "pg_stat_activity",
                      "pg_restore --list", "DROP DATABASE",
-                     "pg_restore --no-owner", "compose -p qltssmoke start")
+                     "pg_restore --no-owner", "start backend")
     assert vt == sorted(vt), f"sai thứ tự: {vt}"
 
 
@@ -246,7 +288,7 @@ def test_cleanup_con_session_thi_KHONG_drop(tmp_path, monkeypatch):
     stub = _chuan_bi(tmp_path, monkeypatch, session="2")
     with pytest.raises(cli.LoiCLI, match="còn 2 session"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
         )
     assert not stub.co("DROP DATABASE")
@@ -257,7 +299,7 @@ def test_cleanup_archive_hong_thi_KHONG_drop(tmp_path, monkeypatch):
     stub = _chuan_bi(tmp_path, monkeypatch, toc="rác không phải TOC")
     with pytest.raises(cli.LoiCLI, match="thiếu bảng trọng yếu"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
         )
     assert not stub.co("DROP DATABASE"), "drop trước khi archive được chứng minh dùng được"
@@ -267,7 +309,7 @@ def test_cleanup_danh_tinh_doi_thi_KHONG_drop(tmp_path, monkeypatch):
     stub = _chuan_bi(tmp_path, monkeypatch, sid="9" * 16)
     with pytest.raises(baseline.ChanLai, match="ĐÃ ĐỔI"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
         )
     assert not stub.co("DROP DATABASE")
@@ -277,7 +319,7 @@ def test_cleanup_restore_hong_thi_ghi_HONG_va_GIU_DICH_VU_DONG(tmp_path, monkeyp
     stub = _chuan_bi(tmp_path, monkeypatch, no_o="--no-owner --no-privileges --exit-on-error")
     with pytest.raises(cli.LoiCLI, match="KHÔNG xác định"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
         )
     reg = registry.Registry.doc(tmp_path / "reg", "SMK1")
@@ -292,7 +334,7 @@ def test_cleanup_doi_soat_lech_thi_ghi_HONG_va_GIU_DICH_VU_DONG(tmp_path, monkey
     stub = StubChay(tmp_path, dem="\n".join(f"{t}|999" for t in baseline.BANG_TRONG_YEU))
     with pytest.raises(cli.LoiCLI, match="KHÔNG xác định"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
         )
     reg = registry.Registry.doc(tmp_path / "reg", "SMK1")
@@ -306,7 +348,7 @@ def test_cleanup_alembic_lech_thi_ghi_HONG(tmp_path, monkeypatch):
     stub = StubChay(tmp_path, alembic="mkchk20260811")
     with pytest.raises(cli.LoiCLI):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
         )
     assert not stub.co("compose", "start")
@@ -321,7 +363,7 @@ def test_cleanup_khong_co_baseline_thi_dung(tmp_path, monkeypatch):
     stub = StubChay(tmp_path)
     with pytest.raises(registry.LoiRegistry, match="chưa có baseline"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK9", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK9", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
         )
     assert stub.lenh == []
@@ -334,7 +376,7 @@ def test_moi_lenh_deu_la_argv_khong_qua_shell(tmp_path, monkeypatch):
     """Không lệnh nào được ghép thành chuỗi — `shell=False` chỉ đúng khi argv là list."""
     stub = _chuan_bi(tmp_path, monkeypatch)
     cli.chay_cleanup(
-        chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+        chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
         thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
     )
     for l in stub.lenh:
@@ -378,7 +420,7 @@ def test_sha_trong_container_lech_thi_KHONG_drop(tmp_path, monkeypatch):
     stub = _chuan_bi(tmp_path, monkeypatch, sha_container="b" * 64)
     with pytest.raises(cli.LoiCLI, match="TRONG CONTAINER"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
         )
     assert not stub.co("DROP DATABASE"), "đã drop dù bản sắp restore là archive khác"
@@ -387,7 +429,7 @@ def test_sha_trong_container_lech_thi_KHONG_drop(tmp_path, monkeypatch):
 def test_cleanup_co_hash_ban_trong_container(tmp_path, monkeypatch):
     stub = _chuan_bi(tmp_path, monkeypatch)
     cli.chay_cleanup(
-        chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+        chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
         thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
     )
     assert stub.co("sha256sum", "/tmp/SMK1.dump")
@@ -397,10 +439,10 @@ def test_cleanup_co_hash_ban_trong_container(tmp_path, monkeypatch):
 # P1 — DAT chỉ được ghi khi dịch vụ ĐÃ chạy lại
 # =============================================================================
 def test_start_hong_thi_KHONG_ghi_DAT(tmp_path, monkeypatch):
-    stub = _chuan_bi(tmp_path, monkeypatch, no_o="qltssmoke start")
+    stub = _chuan_bi(tmp_path, monkeypatch, no_o="--env-file .env.smoke start")
     with pytest.raises(cli.LoiCLI, match="mở lại dịch vụ hỏng"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
         )
     reg = registry.Registry.doc(tmp_path / "reg", "SMK1")
@@ -415,7 +457,7 @@ def test_service_khong_len_lai_du_start_thanh_cong_thi_KHONG_ghi_DAT(tmp_path, m
     stub = _chuan_bi(tmp_path, monkeypatch, service_chay=["backend"])
     with pytest.raises(cli.LoiCLI, match="chưa sẵn sàng"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
         )
     reg = registry.Registry.doc(tmp_path / "reg", "SMK1")
@@ -432,7 +474,7 @@ def test_preflight_hong_ghi_BO_QUA_va_noi_ro_service_dang_dong(tmp_path, monkeyp
     stub = _chuan_bi(tmp_path, monkeypatch, **kb)
     with pytest.raises((cli.LoiCLI, baseline.ChanLai)):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
         )
     reg = registry.Registry.doc(tmp_path / "reg", "SMK1")
@@ -451,7 +493,7 @@ def test_git_sha_khong_hop_le_BLOCK(tmp_path, monkeypatch, sha):
     stub = StubChay(tmp_path)
     with pytest.raises(cli.LoiCLI, match="40 ký tự hex"):
         cli.chay_baseline(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK2", git_sha=sha,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK2", git_sha=sha,
             pack="P2", cid=_CID, thu_muc_dump=tmp_path / "dumps",
             app_env="development",
         )
@@ -463,7 +505,7 @@ def test_git_sha_khong_khop_HEAD_BLOCK(tmp_path, monkeypatch):
     stub = StubChay(tmp_path, git_head="f" * 40)
     with pytest.raises(cli.LoiCLI, match="HEAD đang checkout"):
         cli.chay_baseline(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK2", git_sha="0" * 40,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK2", git_sha="0" * 40,
             pack="P2", cid=_CID, thu_muc_dump=tmp_path / "dumps",
             app_env="development",
         )
@@ -489,7 +531,7 @@ def test_health_RONG_khong_duoc_coi_la_san_sang(tmp_path, monkeypatch, thieu):
     stub = _chuan_bi(tmp_path, monkeypatch, health=hl)
     with pytest.raises(cli.LoiCLI, match="chưa sẵn sàng"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development",
             ngu=lambda _: None, han_cho_giay=9,
         )
@@ -502,7 +544,7 @@ def test_celery_crashloop_khong_duoc_coi_la_on_dinh(tmp_path, monkeypatch):
     stub = _chuan_bi(tmp_path, monkeypatch, crashloop={"celery-worker"})
     with pytest.raises(cli.LoiCLI, match="chưa sẵn sàng|chưa ổn định"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development",
             ngu=lambda _: None, han_cho_giay=9,
         )
@@ -510,10 +552,10 @@ def test_celery_crashloop_khong_duoc_coi_la_on_dinh(tmp_path, monkeypatch):
 
 def test_stop_hong_thi_BO_QUA_noi_KHONG_XAC_DINH(tmp_path, monkeypatch):
     """Chính lệnh stop hỏng ⇒ không được khẳng định 'service đang đóng'."""
-    stub = _chuan_bi(tmp_path, monkeypatch, no_o="qltssmoke stop")
+    stub = _chuan_bi(tmp_path, monkeypatch, no_o="--env-file .env.smoke stop")
     with pytest.raises(cli.LoiCLI):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
         )
     gc = registry.Registry.doc(tmp_path / "reg", "SMK1").du_lieu["cleanup"]["ghi_chu"]
@@ -547,7 +589,7 @@ def test_HONG_luu_van_tay_HAU_start_chu_khong_phai_truoc(tmp_path, monkeypatch):
     stub = StubLech(tmp_path)
     with pytest.raises(cli.LoiCLI):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
         )
 
@@ -702,7 +744,7 @@ def test_lay_restart_count_bang_docker_inspect_rieng(tmp_path, monkeypatch):
     """Snapshot phải gồm cả hai nguồn: Compose cho danh sách, inspect cho count."""
     stub = _chuan_bi(tmp_path, monkeypatch)
     cli.chay_cleanup(
-        chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+        chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
         thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
     )
     assert stub.co("compose", "ps", "-a", cli.TEMPLATE_PS)
@@ -724,7 +766,7 @@ def test_container_oneoff_bi_loai_khoi_snapshot(tmp_path, monkeypatch):
         oneoff={_CID_ONEOFF},
     )
     cli.chay_cleanup(
-        chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+        chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
         thu_muc_dump=tmp_path / "dumps", app_env="development", ngu=lambda _: None,
     )
     assert registry.Registry.doc(tmp_path / "reg", "SMK1").du_lieu["cleanup"][
@@ -742,7 +784,7 @@ def test_oneoff_RUNNING_khong_duoc_che_container_chinh_DA_CHET(tmp_path, monkeyp
     )
     with pytest.raises(cli.LoiCLI, match="chưa sẵn sàng"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development",
             ngu=lambda _: None, han_cho_giay=9,
         )
@@ -755,7 +797,7 @@ def test_hai_container_khong_oneoff_cung_service_thi_BLOCK(tmp_path, monkeypatch
     )
     with pytest.raises(cli.LoiCLI, match="container không phải one-off"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development",
             ngu=lambda _: None, han_cho_giay=9,
         )
@@ -766,7 +808,7 @@ def test_crashloop_CUNG_ID_nhung_RestartCount_tang_thi_BLOCK(tmp_path, monkeypat
     stub = _chuan_bi(tmp_path, monkeypatch, crashloop={"celery-worker"})
     with pytest.raises(cli.LoiCLI, match="chưa sẵn sàng|chưa ổn định"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development",
             ngu=lambda _: None, han_cho_giay=9,
         )
@@ -801,7 +843,7 @@ def test_output_inspect_sai_dang_thi_BLOCK(tmp_path, monkeypatch, tra):
     stub = _StubInspectXau(tmp_path, tra)
     with pytest.raises(cli.LoiCLI, match="không đúng dạng|không bắt đầu bằng"):
         cli.chay_cleanup(
-            chay=stub, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
+            chay=stub, bo=_BO, thu_muc=tmp_path / "reg", run_id="SMK1", cid=_CID,
             thu_muc_dump=tmp_path / "dumps", app_env="development",
             ngu=lambda _: None, han_cho_giay=9,
         )

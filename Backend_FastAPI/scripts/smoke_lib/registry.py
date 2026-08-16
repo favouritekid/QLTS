@@ -157,7 +157,7 @@ class Registry:
             "project": project, "database": database, "mo_luc": _bay_gio(),
             "baseline": None, "danh_tinh": None,
             "goc": {"lead_ids": [], "profile_ids": []},
-            "ids": {}, "actions": [], "cleanup": None,
+            "ids": {}, "fixtures": {}, "actions": [], "cleanup": None,
         }
         _ghi_atomic(duong, du_lieu)
         return cls(duong, du_lieu)
@@ -206,7 +206,8 @@ class Registry:
         if bl is not None:
             if not isinstance(bl, dict):
                 raise LoiRegistry("baseline không phải object")
-            for khoa in ("duong_dump", "sha256", "alembic_head", "van_tay_metrics"):
+            for khoa in ("duong_dump", "sha256", "alembic_head", "van_tay_metrics",
+                         "van_tay_model"):
                 if not bl.get(khoa):
                     raise LoiRegistry(f"baseline thiếu {khoa}")
             if not re.fullmatch(r"[0-9a-f]{64}", str(bl["sha256"])):
@@ -216,6 +217,15 @@ class Registry:
                     f"baseline.van_tay_metrics không phải SHA-256: "
                     f"{bl['van_tay_metrics']!r} — đây là thứ cleanup so sau "
                     "restore, một chuỗi tuỳ ý làm phép so mất nghĩa"
+                )
+            # Cùng lý do, và đường ĐỌC phải kiểm chứ không chỉ đường GHI: một sổ
+            # hỏng (sửa tay, ghi dở, chép từ lượt khác) mà `van_tay_model` là rác
+            # thì phép so ở cleanup vẫn "chạy" — nó chỉ luôn lệch, và người đọc
+            # log sẽ đi tìm nhầm nguyên nhân ở bộ Compose.
+            if not re.fullmatch(r"[0-9a-f]{64}", str(bl["van_tay_model"])):
+                raise LoiRegistry(
+                    f"baseline.van_tay_model không phải SHA-256: "
+                    f"{bl['van_tay_model']!r}"
                 )
             if not du_lieu.get("danh_tinh"):
                 raise LoiRegistry(
@@ -263,16 +273,22 @@ class Registry:
     def ghi_baseline(
         self, *, duong_dump: str, sha256: str, alembic_head: str,
         van_tay_metrics: str, danh_tinh: Mapping[str, str],
+        van_tay_model: str,
     ) -> None:
         if self.du_lieu.get("baseline"):
             raise LoiRegistry("baseline đã được ghi; không ghi đè")
         if not re.fullmatch(r"[0-9a-f]{64}", sha256 or ""):
             raise LoiRegistry(f"sha256 không hợp lệ: {sha256!r}")
+        # Bắt buộc, không default: thiếu vân tay model thì cleanup không còn cách
+        # nào biết nó đang điều khiển đúng stack đã đo baseline.
+        if not re.fullmatch(r"[0-9a-f]{64}", van_tay_model or ""):
+            raise LoiRegistry(f"van_tay_model không hợp lệ: {van_tay_model!r}")
 
         def _td(d):
             d["baseline"] = {
                 "duong_dump": duong_dump, "sha256": sha256,
                 "alembic_head": alembic_head, "van_tay_metrics": van_tay_metrics,
+                "van_tay_model": van_tay_model,
                 "luc": _bay_gio(),
             }
             d["danh_tinh"] = dict(danh_tinh)
@@ -289,6 +305,29 @@ class Registry:
             g["profile_ids"] = sorted(
                 set(g["profile_ids"]) | {int(x) for x in profile_ids}
             )
+
+        self._ghi(_td)
+
+    def ghi_fixture(self, ma: str, thong_tin: Mapping[str, Any]) -> None:
+        """Ghi HÌNH DẠNG một fixture. ID vẫn đi qua `ghi_ids`/`them_goc`.
+
+        Sổ cái phải giữ CẢ hai: id để đối soát cái gì đã bị đụng, và hình dạng để
+        pack sau biết fixture ấy là gì mà không phải tra theo TÊN học sinh. Trước
+        đây hình dạng nằm ở `created-ids.json` riêng — hai tệp cho một lượt nghĩa
+        là có lúc chúng lệch nhau, và không ai biết bên nào đúng.
+        """
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", ma or ""):
+            raise LoiRegistry(f"mã fixture không hợp lệ: {ma!r}")
+        if not isinstance(thong_tin, Mapping) or not thong_tin:
+            raise LoiRegistry(f"fixture {ma!r} rỗng — ghi một sổ trống không chứng minh gì")
+
+        def _td(d):
+            f = d.setdefault("fixtures", {})
+            if ma in f:
+                raise LoiRegistry(
+                    f"fixture {ma!r} đã ghi — ghi đè là xoá dấu vết bản trước"
+                )
+            f[ma] = dict(thong_tin)
 
         self._ghi(_td)
 

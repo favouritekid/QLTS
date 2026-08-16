@@ -1,0 +1,3 @@
+# Thư mục nhận bằng chứng/registry từ `smoke-runner` (mount `/evidence`).
+# Bind-mount vào thư mục KHÔNG tồn tại thì daemon tự tạo nó rỗng và `up` vẫn exit 0 —
+# nên chỗ này phải có thật trong git, không để lượt chạy tự sinh.
