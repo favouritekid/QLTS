@@ -10,6 +10,7 @@ Nên ở đây khoá **exact JSON**: đúng tập khoá, đúng KIỂU (số ti�
 ngày là ISO hoặc null), và không có gì thừa lọt ra.
 """
 
+import base64
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -295,12 +296,40 @@ class TestHopDong409:
     async def test_phieu_bi_sua_mot_ky_tu_thi_van_chan(
         self, client: AsyncClient, admin_token_headers: dict, fee_with_one_payment
     ):
-        """Chữ ký phải là chữ ký thật, không phải một chuỗi trông giống."""
+        """Chữ ký phải là chữ ký thật, không phải một chuỗi trông giống.
+
+        ⚠️ Đột biến phải đổi BYTE, không chỉ đổi KÝ TỰ.
+
+        Bản trước sửa ký tự CUỐI: ``phieu[:-1] + ("A" if phieu[-1] != "A" else "B")``.
+        Phần chữ ký là 32 byte mã hoá Base64URL không padding ⇒ 43 ký tự, và ký
+        tự cuối chỉ mang 4 bit dữ liệu — 2 bit thấp là padding. Nên nó chỉ nhận
+        16 giá trị (``048AEIMQUYcgkosw``), và khi nó là ``A`` thì đột biến đổi
+        sang ``B``: hai ký tự ấy chung 4 bit cao nên GIẢI MÃ RA CÙNG 32 BYTE.
+        Chữ ký vẫn hợp lệ, endpoint cấp phép ghi, ca kiểm đỏ.
+
+        Đo trên 200.000 chữ ký ngẫu nhiên: 6,33% va chạm (lý thuyết 1/16 =
+        6,25%), và chỉ xảy ra khi ký tự cuối là ``A``. Tức cứ ~16 lượt CI thì
+        một lượt đỏ vì lý do không liên quan gì tới thứ ca này canh.
+
+        Nay giải mã chữ ký, lật một bit của byte đầu, rồi mã hoá lại. Cách này
+        đúng theo bản chất phép kiểm (toàn vẹn HMAC) và không phụ thuộc tính
+        chất vị trí nào của Base64 — chính loại lý lẽ đã làm bản trước sai.
+        """
         ctx = fee_with_one_payment
         r = await client.post("/api/payments", json=_body(ctx), headers=admin_token_headers)
         assert r.status_code == 409, r.text
         phieu = r.json()["review_token"]
-        hong = phieu[:-1] + ("A" if phieu[-1] != "A" else "B")
+
+        phan_than, phan_ky = phieu.split(".")
+        raw_ky = base64.urlsafe_b64decode(phan_ky + "=" * (-len(phan_ky) % 4))
+        raw_hong = bytes([raw_ky[0] ^ 0x01]) + raw_ky[1:]
+        # Đột biến phải THẬT SỰ đổi byte — nếu không, ca kiểm không kiểm gì cả.
+        assert raw_hong != raw_ky, "đột biến không đổi byte nào — ca kiểm vô nghĩa"
+        hong = f"{phan_than}.{base64.urlsafe_b64encode(raw_hong).rstrip(b'=').decode()}"
+        # Giữ đúng hợp đồng mà tên ca này khai: SỬA MỘT KÝ TỰ. Lật một bit chỉ
+        # chạm đúng một ký tự Base64, vì mỗi bit thuộc về đúng một ký tự.
+        assert len(hong) == len(phieu)
+        assert sum(a != b for a, b in zip(hong, phieu)) == 1, "phải khác đúng một ký tự"
 
         truoc = await _dem_payment(ctx["fee_id"])
         r = await client.post(
