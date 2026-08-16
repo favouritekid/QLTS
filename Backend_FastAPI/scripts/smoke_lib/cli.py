@@ -49,7 +49,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence
 
-from . import baseline, registry
+from . import anh_chup, baseline, registry
 
 # Service ứng dụng của stack smoke — phải dừng trước khi drop database.
 # `postgres` cố ý KHÔNG nằm đây: nó là thứ ta gửi lệnh tới.
@@ -121,8 +121,20 @@ class ChayLenh:
     def __call__(self, argv: Sequence[str]) -> str:
         if self.in_lenh:
             print("  $ " + " ".join(argv), file=sys.stderr)
+        # `encoding="utf-8"` TƯỜNG MINH, không dùng `text=True` trần.
+        #
+        # `text=True` để Python chọn codec theo locale — trên Windows là cp1252.
+        # PostgreSQL trả UTF-8, và dữ liệu thật của hệ này là tiếng Việt, nên
+        # `SELECT` bất kỳ bảng nào có chữ Việt sẽ ném `UnicodeDecodeError`
+        # ("can't decode byte 0x90"). Đã đo trên bảng `notification` của
+        # `qlts_smoke`. Trước 16-08-2026 không lộ vì mọi lệnh psql của harness
+        # chỉ trả ASCII: số đếm, sha256, `version_num`.
+        #
+        # `errors="strict"` là cố ý: thay ký tự hỏng bằng dấu thay thế sẽ đổi
+        # vân tay hàng một cách âm thầm, và khi ấy ảnh chụp nói dối.
         ket = subprocess.run(
-            list(argv), shell=False, check=True, capture_output=True, text=True
+            list(argv), shell=False, check=True, capture_output=True,
+            encoding="utf-8", errors="strict",
         )
         return ket.stdout
 
@@ -281,6 +293,134 @@ def chay_baseline(
     )
     print(f"[baseline] {run_id}: {tren_host} ({sha[:12]}…)")
     return tren_host
+
+
+# =============================================================================
+# --action-begin / --action-end
+# =============================================================================
+# Sổ HÀNH ĐỘNG: khai dự kiến TRƯỚC khi thao tác, đối chiếu SAU.
+#
+# `registry.bat_dau_action()`/`ket_thuc_action()` có từ đầu nhưng KHÔNG có caller
+# vận hành nào — chỉ unit test gọi. Nghĩa là hợp đồng §A05 ("khai dự kiến trước
+# mỗi mutation") không thi hành được: bấm nút trên trình duyệt thì DB đổi trước,
+# sổ ghi sau, và không gì chứng minh được rằng chỉ đúng những hàng dự kiến đã đổi.
+# Hai chế độ dưới đây là caller ấy.
+#
+# Ba cổng chạy trước MỖI lần, không phải chỉ lần đầu:
+#   * sổ phải đúng project + database + **pack** (pack là cổng mới — xem
+#     `Registry.doc`: thiếu nó thì seeder P1 chạy được trên sổ P2);
+#   * sổ phải đã có baseline — không có mốc lùi thì không được phép mutate;
+#   * danh tính PostgreSQL thật phải khớp `danh_tinh` đã ghi lúc baseline, tức
+#     cùng container VÀ cùng cụm (`system_identifier`). Một stack dựng lại giữa
+#     chừng sẽ bị bắt ở đây chứ không phải lúc cleanup.
+
+
+def _sql_tren_dich(chay: ChayLenh, cid: str, ten_db: str):
+    """Trả về hàm chạy một câu SQL trên đúng đích, đã kiểm tên database."""
+    baseline.kiem_dich(ten_db)
+
+    def f(sql: str) -> str:
+        return chay(_docker_exec(cid, [
+            "psql", "-U", "qlts", "-d", ten_db, "-At", "-v", "ON_ERROR_STOP=1",
+            "-c", sql,
+        ]))
+
+    return f
+
+
+def _so_cho_action(
+    chay: ChayLenh, *, thu_muc: Path, run_id: str, pack: str, cid: str, ten_db: str
+) -> "registry.Registry":
+    if not str(pack or "").strip():
+        raise LoiCLI(
+            "--pack bắt buộc với action. Sổ của gói khác phải bị CHẶN, không phải "
+            "bị bỏ qua: fixture gói này ghi vào sổ gói kia thì cleanup sẽ restore "
+            "theo baseline của gói kia."
+        )
+    reg = registry.Registry.doc(
+        thu_muc, run_id,
+        project_mong_doi=baseline._PROJECT_DUY_NHAT,
+        database_mong_doi=ten_db,
+        pack_mong_doi=pack,
+    )
+    if not reg.du_lieu.get("baseline"):
+        raise LoiCLI(
+            f"sổ {run_id!r} chưa có baseline. Không có mốc để lùi về thì một ca "
+            "hỏng giữa chừng là hỏng vĩnh viễn — chạy `--baseline` trước."
+        )
+    # `nen=` để `kiem_danh_tinh` so với danh tính đã ghi lúc baseline.
+    _danh_tinh(chay, cid, nen=reg.du_lieu.get("danh_tinh"))
+    return reg
+
+
+def chay_action_bat_dau(
+    *, chay: ChayLenh, thu_muc: Path, run_id: str, pack: str, cid: str,
+    ten: str,
+    them: Optional[Mapping[str, Sequence[str]]] = None,
+    them_so_luong: Optional[Mapping[str, int]] = None,
+    doi: Optional[Mapping[str, Sequence[str]]] = None,
+    mat: Optional[Mapping[str, Sequence[str]]] = None,
+    ten_db: str = "qlts_smoke",
+) -> int:
+    reg = _so_cho_action(chay, thu_muc=thu_muc, run_id=run_id, pack=pack, cid=cid,
+                         ten_db=ten_db)
+    # PHAM VI QUAN SAT KHONG PHAI LUA CHON CUA NGUOI CHAY.
+    #
+    # Ban truoc nhan `--bang`: nguoi van hanh tu chon bang nao duoc nhin. Thay
+    # doi o bang bi bo sot thanh VO HINH — va bo sot la chuyen thuong, vi mot ca
+    # nhu FIN-02 cham toi `fee`, `invoice`, `admission_profile`, `audit_log`,
+    # `notification` chu khong chi `payment`. Mot so hanh dong chi nhin nhung cho
+    # nguoi chay nho ra thi khong chung minh duoc "chi dung nhung hang da khai
+    # moi doi".
+    #
+    # Nay chup CA `registry.BANG_THEO_DOI`. `ket_thuc_action` duyet
+    # `set(truoc) | set(sau) | bang-da-khai`, nen moi thay doi trong 13 bang deu
+    # bi doi chieu, khai hay khong. Chi phi: 13 truy van dem, moi truy van vai ms.
+    bang = list(registry.BANG_THEO_DOI)
+    truoc = anh_chup.chup(bang, _sql_tren_dich(chay, cid, ten_db))
+    chi_so = reg.bat_dau_action(
+        ten, truoc,
+        bang_du_kien=bang,
+        them_du_kien=them,
+        them_so_luong_du_kien=them_so_luong,
+        doi_du_kien=doi,
+        mat_du_kien=mat,
+    )
+    tong = sum(len(v) for v in truoc.values())
+    print(f"[action-begin] {ten}: chi_so={chi_so} · {len(truoc)} bảng · {tong} hàng đã chụp")
+    return chi_so
+
+
+def chay_action_ket_thuc(
+    *, chay: ChayLenh, thu_muc: Path, run_id: str, pack: str, cid: str,
+    chi_so: int, ten_db: str = "qlts_smoke",
+) -> Dict[str, Dict[str, List[str]]]:
+    if chi_so < 0:
+        raise LoiCLI(
+            f"chi so {chi_so} am — so am chon action theo chieu nguoc trong Python"
+        )
+    reg = _so_cho_action(chay, thu_muc=thu_muc, run_id=run_id, pack=pack, cid=cid,
+                         ten_db=ten_db)
+    try:
+        ban_ghi = reg.du_lieu["actions"][chi_so]
+    except (IndexError, KeyError, TypeError):
+        raise LoiCLI(f"không có action chỉ số {chi_so} trong sổ {run_id!r}")
+
+    # Bảng lấy từ CHÍNH ảnh chụp TRƯỚC, không nhận lại từ dòng lệnh: chụp SAU trên
+    # một tập bảng khác là so hai thứ không so được, và sai lệch ấy sẽ hiện ra
+    # thành "mất sạch hàng" ở bảng vắng mặt.
+    bang = sorted(ban_ghi.get("truoc") or {})
+    if not bang:
+        raise LoiCLI(f"action {chi_so} không có ảnh chụp TRƯỚC — sổ hỏng")
+
+    sau = anh_chup.chup(bang, _sql_tren_dich(chay, cid, ten_db))
+    delta = reg.ket_thuc_action(chi_so, sau)
+    print(f"[action-end] {ban_ghi.get('ten')}: ĐẠT")
+    for bang_ten, phan in sorted(delta.items()):
+        for loai, ids in sorted(phan.items()):
+            if ids:
+                print(f"    {bang_ten}.{loai}: {', '.join(map(str, ids))}")
+    return delta
 
 
 # =============================================================================
@@ -591,27 +731,105 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     che_do = p.add_mutually_exclusive_group(required=True)
     che_do.add_argument("--baseline", action="store_true")
     che_do.add_argument("--cleanup", action="store_true")
+    che_do.add_argument("--action-begin", action="store_true")
+    che_do.add_argument("--action-end", action="store_true")
     p.add_argument("--run-id", required=True)
     p.add_argument("--container", required=True, help="container id của postgres smoke")
     p.add_argument("--thu-muc", type=Path, required=True, help="gốc registry")
-    p.add_argument("--thu-muc-dump", type=Path, required=True)
-    p.add_argument("--app-env", required=True)
+    # `--thu-muc-dump`/`--app-env`/`--compose-*` chi thuoc ve baseline va cleanup.
+    # Action khong dump, khong goi lenh compose nao — bat chung o day chi lam
+    # nguoi chay phai bia gia tri, va mot gia tri bia thi khong ai kiem.
+    # Thieu chung O DUNG che do can chung van la DUNG (xem kiem ngay duoi).
+    p.add_argument("--thu-muc-dump", type=Path, default=None)
+    p.add_argument("--app-env", default="")
     p.add_argument("--git-sha", default="")
     p.add_argument("--pack", default="")
     # BẮT BUỘC, không default: xem docstring `BoCompose`. Một mặc định ở đây chỉ
     # là một cách hỏng im lặng trên máy có `docker-compose.override.yml` của dev.
     p.add_argument(
-        "--compose-file", action="append", required=True, metavar="TEP",
+        "--compose-file", action="append", default=None, metavar="TEP",
         help="tệp compose dựng nên stack smoke; lặp lại đúng thứ tự đã dùng",
     )
     p.add_argument(
-        "--compose-env-file", required=True, metavar="TEP",
+        "--compose-env-file", default="", metavar="TEP",
         help="env file đã dùng lúc dựng (phải đặt QLTS_ENV_FILE)",
     )
+    # --- rieng cho action ---
+    p.add_argument("--ten", default="", metavar="MA_CA",
+                   help="ma ca, vd FIN-02.a1 — di vao so hanh dong")
+    p.add_argument("--them", action="append", default=[], metavar="BANG=ID[,ID]")
+    p.add_argument("--them-so-luong", action="append", default=[], metavar="BANG=N",
+                   help="dung khi server sinh id: khai SO LUONG hang se them")
+    p.add_argument("--doi", action="append", default=[], metavar="BANG=ID[,ID]")
+    p.add_argument("--mat", action="append", default=[], metavar="BANG=ID[,ID]")
+    p.add_argument("--chi-so", type=int, default=None,
+                   help="chi so action tra ve boi --action-begin")
     a = p.parse_args(argv)
 
     chay = ChayLenh()
     try:
+        if a.action_begin or a.action_end:
+            # Action khong dung BoCompose: no khong goi lenh compose nao.
+            #
+            # Co sai che do phai la DUNG, khong phai bi bo qua im lang: dat
+            # `--them payment=7` o lenh `--action-end` nghia la nguoi chay tuong
+            # minh vua khai mot ky vong — bo qua no thi ho doc ket qua "DAT" nhu
+            # la ky vong ay da duoc kiem.
+            sai_che_do = []
+            if a.action_end:
+                sai_che_do = [
+                    ten for ten, gt in (
+                        ("--ten", a.ten), ("--them", a.them),
+                        ("--them-so-luong", a.them_so_luong),
+                        ("--doi", a.doi), ("--mat", a.mat),
+                    ) if gt
+                ]
+            else:
+                sai_che_do = ["--chi-so"] if a.chi_so is not None else []
+            if sai_che_do:
+                raise LoiCLI(
+                    f"che do nay khong dung {', '.join(sai_che_do)} — dat chung o "
+                    "day la khai mot ky vong ma khong ai kiem"
+                )
+            if a.action_begin:
+                if not a.ten:
+                    raise LoiCLI("--action-begin can --ten (ma ca)")
+                chay_action_bat_dau(
+                    chay=chay, thu_muc=a.thu_muc, run_id=a.run_id, pack=a.pack,
+                    cid=a.container, ten=a.ten,
+                    them=anh_chup.doc_cap(a.them, ten_co="--them") or None,
+                    them_so_luong=anh_chup.doc_so_luong(
+                        a.them_so_luong, ten_co="--them-so-luong") or None,
+                    doi=anh_chup.doc_cap(a.doi, ten_co="--doi") or None,
+                    mat=anh_chup.doc_cap(a.mat, ten_co="--mat") or None,
+                )
+            else:
+                if a.chi_so is None:
+                    raise LoiCLI("--action-end can --chi-so")
+                # `--chi-so -1` chon action CUOI theo indexing cua Python — mot
+                # so am go nham se ket thuc nham action ma khong bao gi.
+                if a.chi_so < 0:
+                    raise LoiCLI(
+                        f"--chi-so={a.chi_so} am. So am chon action theo chieu "
+                        "nguoc trong Python; chi so that luon >= 0."
+                    )
+                chay_action_ket_thuc(
+                    chay=chay, thu_muc=a.thu_muc, run_id=a.run_id, pack=a.pack,
+                    cid=a.container, chi_so=a.chi_so,
+                )
+            return 0
+
+        # baseline/cleanup: bon tham so duoi day moi that su bat buoc.
+        thieu = [
+            ten for ten, gt in (
+                ("--thu-muc-dump", a.thu_muc_dump),
+                ("--app-env", a.app_env),
+                ("--compose-file", a.compose_file),
+                ("--compose-env-file", a.compose_env_file),
+            ) if not gt
+        ]
+        if thieu:
+            raise LoiCLI(f"che do nay can: {', '.join(thieu)}")
         bo = BoCompose(a.compose_file, a.compose_env_file)
         if a.baseline:
             if not a.pack:
@@ -621,12 +839,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 pack=a.pack, cid=a.container, thu_muc_dump=a.thu_muc_dump,
                 app_env=a.app_env,
             )
-        else:
+        elif a.cleanup:
             chay_cleanup(
                 chay=chay, bo=bo, thu_muc=a.thu_muc, run_id=a.run_id, cid=a.container,
                 thu_muc_dump=a.thu_muc_dump, app_env=a.app_env,
             )
-    except (LoiCLI, baseline.ChanLai, registry.LoiRegistry) as e:
+    except (LoiCLI, baseline.ChanLai, registry.LoiRegistry,
+            anh_chup.LoiAnhChup) as e:
         print(f"DỪNG: {e}", file=sys.stderr)
         return 1
     return 0

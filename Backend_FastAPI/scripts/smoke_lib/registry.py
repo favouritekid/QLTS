@@ -64,7 +64,12 @@ BANG_THEO_DOI = (
     "payment_import_row",
     "refund_request",
     "overpayment_record",
-    "audit_log",
+    # Tên THẬT của bảng vết là `entity_audit_log` (`app/models/entity_audit_log.py`).
+    # Danh sách này khai "audit_log" từ đầu — một bảng KHÔNG TỒN TẠI. Không ai
+    # phát hiện vì tới 16-08-2026 chưa có ai chụp cả 13 bảng: `bat_dau_action`
+    # chỉ kiểm tên nằm trong danh sách này, không kiểm bảng có thật.
+    # `test_smoke_action_cli.py` nay khoá danh sách này vào `__tablename__` thật.
+    "entity_audit_log",
     "notification",
 )
 
@@ -167,6 +172,7 @@ class Registry:
         cls, thu_muc: Path, run_id: str, *,
         project_mong_doi: Optional[str] = None,
         database_mong_doi: Optional[str] = None,
+        pack_mong_doi: Optional[str] = None,
         goc_dump_cho_phep: Optional[Path] = None,
     ) -> "Registry":
         """Đọc lại sổ — và KHÔNG tin nó cho tới khi kiểm xong.
@@ -200,6 +206,16 @@ class Registry:
             raise LoiRegistry(
                 f"database {du_lieu.get('database')!r} ≠ {database_mong_doi!r} — "
                 "sổ này không thuộc về đích đang định dọn"
+            )
+        # PACK. Bản trước kiểm project và database nhưng KHÔNG kiểm pack, nên một
+        # seeder P1 chạy được trên sổ mở cho P2 mà không gì dừng lại: fixture của
+        # gói này ghi vào sổ của gói kia, và cleanup sau đó restore theo baseline
+        # của gói kia. `smoke_finance_seed.py` chỉ dựng fixture P1 (không có
+        # `F-REFUND-*`), nên nhầm gói là chuyện có thật chứ không phải giả định.
+        if pack_mong_doi is not None and du_lieu.get("pack") != pack_mong_doi:
+            raise LoiRegistry(
+                f"pack {du_lieu.get('pack')!r} ≠ {pack_mong_doi!r} — sổ này thuộc "
+                "gói khác. Baseline phải được chụp cho đúng gói sắp chạy."
             )
 
         bl = du_lieu.get("baseline")
@@ -377,6 +393,50 @@ class Registry:
         khi ấy `ket_thuc_action` sẽ báo mọi thứ là ngoài dự kiến — guard hoá ra
         cản đúng đường lành, và người dùng sẽ tắt nó.
         """
+        # ── `cleanup` là trạng thái ĐÓNG SỔ ─────────────────────────────────
+        # `ghi_cleanup` đã ghi trạng thái kết thúc, nhưng hai hàm action không
+        # đọc nó. Hệ quả: một run SẠCH vẫn append được action sau khi database
+        # đã bị drop + restore — ảnh chụp TRƯỚC khi ấy nói về một database không
+        # còn tồn tại, và mọi kết luận rút ra từ nó là rút ra từ hư không.
+        if self.du_lieu.get("cleanup") is not None:
+            raise LoiRegistry(
+                f"sổ đã cleanup ({(self.du_lieu.get('cleanup') or {}).get('trang_thai')}) "
+                "— đây là trạng thái ĐÓNG. Database đã được restore về baseline; "
+                "mở action mới trên sổ này là quan sát một thứ không còn ở đó. "
+                "Mở run-id mới."
+            )
+
+        # ── Trạng thái sổ: một LỆCH là DỪNG, không phải một ghi chú ──────────
+        # Bản trước luôn cho append action mới. Đã xảy ra thật trong lượt
+        # BL20260816B: `THU-NGHIEM.a1` LECH, rồi sổ vẫn nhận `a2` và ghi DAT —
+        # tức lượt vẫn "chạy tiếp" sau khi một khẳng định đã sai. Ba luật:
+        #
+        #   * tối đa MỘT action đang chạy: hai action chồng nhau có thể cùng
+        #     nhận công một mutation, và khi ấy không ai biết ca nào gây ra gì;
+        #   * đã có LECH thì chỉ còn đường `--cleanup`: hiện trường sau một lệch
+        #     là thứ đắt nhất đang có, ghi tiếp lên nó là xoá bằng chứng;
+        #   * tên action phải duy nhất: hai `FIN-02.a1` trong một sổ thì mọi câu
+        #     "ca ấy đạt" trở nên vô nghĩa.
+        cu = list(self.du_lieu.get("actions") or [])
+        dang_chay = [a for a in cu if a.get("trang_thai") == "DANG_CHAY"]
+        if dang_chay:
+            raise LoiRegistry(
+                f"action {dang_chay[0].get('ten')!r} còn DANG_CHAY — kết thúc nó "
+                "trước. Hai action chồng nhau có thể cùng nhận công một mutation."
+            )
+        lech_cu = [a for a in cu if a.get("trang_thai") == "LECH"]
+        if lech_cu:
+            raise LoiRegistry(
+                f"sổ đã có action LỆCH ({lech_cu[0].get('ten')!r}) — lượt này DỪNG. "
+                "Đối chiếu API/DB rồi `--cleanup`; không chạy tiếp trên một sổ mà "
+                "một khẳng định đã sai."
+            )
+        if any(a.get("ten") == ten for a in cu):
+            raise LoiRegistry(
+                f"action {ten!r} đã có trong sổ — tên phải duy nhất, nếu không thì "
+                "câu 'ca ấy đạt' không chỉ vào đâu cả."
+            )
+
         bang_du_kien = [str(b) for b in bang_du_kien]
         la = [b for b in bang_du_kien if b not in BANG_THEO_DOI]
         if la:
@@ -461,6 +521,16 @@ class Registry:
 
     def ket_thuc_action(self, chi_so: int, sau: AnhChup) -> Dict[str, Dict[str, List[str]]]:
         """Tiêu thụ intent đã lưu, tính delta ba chiều, chặn thứ ngoài dự kiến."""
+        # Cùng lý do như `bat_dau_action`, nhưng ca này TỆ HƠN: một action đang
+        # chạy mà được kết thúc SAU khi database đã restore sẽ so ảnh chụp TRƯỚC
+        # (dữ liệu thật) với ảnh chụp SAU (dữ liệu đã bị lùi về baseline). Delta
+        # khi ấy là "mất sạch hàng" — một lời buộc tội hoàn toàn sai, và nó sẽ
+        # được ghi vào sổ như bằng chứng.
+        if self.du_lieu.get("cleanup") is not None:
+            raise LoiRegistry(
+                "sổ đã cleanup — không kết thúc action sau khi database đã restore. "
+                "Ảnh chụp SAU sẽ là trạng thái baseline, không phải kết quả của ca."
+            )
         try:
             ban_ghi = self.du_lieu["actions"][chi_so]
         except (IndexError, KeyError):
