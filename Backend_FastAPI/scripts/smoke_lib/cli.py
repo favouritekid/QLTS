@@ -56,6 +56,33 @@ from . import anh_chup, baseline, registry
 SERVICE_UNG_DUNG = ("backend", "celery-worker", "celery-beat", "frontend")
 
 
+def dat_encoding_utf8() -> None:
+    """stdout/stderr phải là UTF-8 TRƯỚC khi có dòng nào được in ra.
+
+    Ngày 16-08-2026, `--cleanup` chạy xong TOÀN BỘ phần phá huỷ và khôi phục,
+    ghi `cleanup=DAT` vào registry, rồi chết ở đúng câu `print` báo thành công:
+    stdout của Python trên Windows lấy codec theo locale (cp1252), thông báo có
+    dấu tiếng Việt ⇒ `UnicodeEncodeError`, và lệnh trả mã thoát 1 cho một việc
+    đã làm xong. Người vận hành đọc rc=1 thì tưởng cleanup hỏng và chạy lại.
+
+    Cùng họ với lỗi `ChayLenh` giải mã theo locale, nhưng ở chiều GHI — nên bản
+    vá kia (`encoding="utf-8"` cho `subprocess`) không đụng tới nó.
+
+    Gọi ở đầu `main()`, TRƯỚC `argparse`: chuỗi trợ giúp của chính parser cũng
+    có tiếng Việt (`container id của postgres smoke`), nên `--help` trên một
+    stream cp1252 hỏng y hệt — muộn hơn một dòng là đã muộn.
+
+    `errors="strict"` cố ý giữ nguyên: `replace`/`ignore` đổi ký tự hỏng thành
+    dấu thay thế và giấu luôn việc stream không tải nổi thông báo.
+    """
+    for luong in (sys.stdout, sys.stderr):
+        # Stream đã bị thay bằng thứ không phải `TextIOWrapper` (bộ bắt output
+        # của pytest, `StringIO`) thì không có codec nào để cấu hình — và cũng
+        # không có codec nào để hỏng.
+        if hasattr(luong, "reconfigure"):
+            luong.reconfigure(encoding="utf-8", errors="strict")
+
+
 class BoCompose:
     """Bộ tệp Compose + env file dùng để ĐIỀU KHIỂN stack smoke.
 
@@ -727,6 +754,8 @@ def chay_cleanup(
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    # Dòng đầu tiên của `main`, trước cả `argparse`: xem `dat_encoding_utf8`.
+    dat_encoding_utf8()
     p = argparse.ArgumentParser(description="Harness smoke Finance")
     che_do = p.add_mutually_exclusive_group(required=True)
     che_do.add_argument("--baseline", action="store_true")

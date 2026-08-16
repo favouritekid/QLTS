@@ -465,6 +465,112 @@ def test_ChayLenh_truyen_encoding_utf8_chu_khong_de_locale_quyet():
 
 
 # ---------------------------------------------------------------------------
+# stdout/stderr phải là UTF-8 — chiều GHI của lỗi codec-theo-locale
+# ---------------------------------------------------------------------------
+# Thông báo THẬT mà `chay_cleanup` in ra khi ĐẠT (`cli.py`). Dùng nguyên văn chứ
+# không bịa một chuỗi khác: ca kiểm phải canh đúng thứ đã nổ ngày 16-08-2026.
+_THONG_DIEP_DAT = "ĐẠT — restore về baseline, dịch vụ đã sẵn sàng"
+_THONG_DIEP_DUNG = "DỪNG: hỏng"
+
+
+def _khong_ma_hoa_noi_cp1252(chuoi: str) -> bool:
+    try:
+        chuoi.encode("cp1252")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
+def _luong_cp1252():
+    """TextIOWrapper cp1252 — mô phỏng stdout của Windows, chạy được trên Linux.
+
+    Không dùng `sys.stdout` thật: ca kiểm phải đỏ được ở CI (container Linux,
+    locale UTF-8), nếu không thì hồi quy đi thẳng tới máy người dùng — đúng
+    kiểu đã xảy ra với `ChayLenh`.
+    """
+    import io
+
+    return io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+
+
+def _ten_codec(luong) -> str:
+    return (luong.encoding or "").lower().replace("-", "").replace("_", "")
+
+
+def test_ca_kiem_nay_co_du_manh_khong():
+    """Tiền đề của cả ba ca dưới: chuỗi thật sự phải là thứ cp1252 KHÔNG tải nổi.
+
+    Nếu tệp này có ngày bị soạn hỏng và chữ tiếng Việt rơi mất dấu, mọi ca dưới
+    sẽ XANH mà không kiểm gì cả. Ca này bắt đúng tình huống ấy.
+    """
+    assert _khong_ma_hoa_noi_cp1252(_THONG_DIEP_DAT)
+    assert _khong_ma_hoa_noi_cp1252(_THONG_DIEP_DUNG)
+
+
+def test_dat_encoding_utf8_doi_CA_stdout_LAN_stderr(monkeypatch):
+    ra, loi = _luong_cp1252(), _luong_cp1252()
+    monkeypatch.setattr(sys, "stdout", ra)
+    monkeypatch.setattr(sys, "stderr", loi)
+    # Tiền đề: trước khi vá thì đúng là cp1252, nếu không ca này chứng minh suông.
+    assert _ten_codec(ra) == "cp1252"
+    assert _ten_codec(loi) == "cp1252"
+
+    cli.dat_encoding_utf8()
+
+    assert _ten_codec(sys.stdout) == "utf8"
+    assert _ten_codec(sys.stderr) == "utf8"
+    # `replace`/`ignore` sẽ làm mọi ca dưới xanh trong khi thông báo đã méo.
+    assert sys.stdout.errors == "strict"
+    assert sys.stderr.errors == "strict"
+
+    print(_THONG_DIEP_DAT)
+    print(_THONG_DIEP_DUNG, file=sys.stderr)
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+    assert _THONG_DIEP_DAT in ra.buffer.getvalue().decode("utf-8")
+    assert _THONG_DIEP_DUNG in loi.buffer.getvalue().decode("utf-8")
+
+
+@pytest.mark.parametrize("ten_luong", ["stdout", "stderr"])
+def test_kiem_nguoc_KHONG_dat_encoding_thi_no_UnicodeEncodeError(
+    monkeypatch, ten_luong
+):
+    """Gỡ đúng thứ đang được canh và xác nhận nó ĐỎ.
+
+    Không gọi `dat_encoding_utf8` ⇒ ghi thông báo tiếng Việt vào stream cp1252
+    phải ném `UnicodeEncodeError` — đúng vết đã xảy ra thật. Ca này đỏ ngay trên
+    Linux của CI, nên nó canh được cả khi ai đó gỡ lời gọi trong `main()`.
+
+    Tách stdout/stderr thành hai ca: một ca gộp vẫn xanh khi chỉ MỘT trong hai
+    stream còn được cấu hình.
+    """
+    luong = _luong_cp1252()
+    monkeypatch.setattr(sys, ten_luong, luong)
+    with pytest.raises(UnicodeEncodeError):
+        print(_THONG_DIEP_DAT, file=getattr(sys, ten_luong))
+
+
+def test_main_dat_encoding_TRUOC_khi_xu_ly_lenh(monkeypatch):
+    """Thứ tự, không chỉ sự tồn tại.
+
+    `argparse` in usage/help bằng tiếng Việt, nên cấu hình đặt SAU `parse_args`
+    là quá muộn. Dựng ca bằng argv rỗng: parser dừng ngay ở nhóm bắt buộc, nên
+    nếu lời gọi nằm sau `parse_args` thì nó không kịp chạy và `goi` rỗng.
+    """
+    goi = []
+    monkeypatch.setattr(cli, "dat_encoding_utf8", lambda: goi.append("encoding"))
+
+    with pytest.raises(SystemExit):
+        cli.main([])
+
+    assert goi == ["encoding"], (
+        "main() phải cấu hình encoding trước khi argparse xử lý lệnh — "
+        "help/usage của parser cũng có tiếng Việt"
+    )
+
+
+# ---------------------------------------------------------------------------
 # `cleanup` là trạng thái ĐÓNG SỔ
 # ---------------------------------------------------------------------------
 def _da_cleanup(thu_muc: Path) -> registry.Registry:
