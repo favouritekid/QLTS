@@ -95,36 +95,30 @@ const STATUS_CONFIG: Record<PaymentStatus, Omit<PaymentResult, "status">> = {
 // HELPER FUNCTIONS
 // =============================================================================
 
-function parseStatus(statusParam: string | null, intentStatus?: string): PaymentStatus {
-  // Priority: query param > intent status
-  if (statusParam) {
-    const normalized = statusParam.toLowerCase()
-    if (normalized === "success" || normalized === "completed" || normalized === "00") {
-      return "success"
-    }
-    if (normalized === "failed" || normalized === "failure" || normalized === "error") {
-      return "failed"
-    }
-    if (normalized === "cancelled" || normalized === "cancel") {
-      return "cancelled"
-    }
-    if (normalized === "pending" || normalized === "processing") {
-      return "pending"
-    }
-    if (normalized === "expired") {
-      return "expired"
-    }
-  }
-
-  // Fall back to intent status
-  if (intentStatus) {
-    if (intentStatus === "completed") return "success"
-    if (intentStatus === "failed") return "failed"
-    if (intentStatus === "cancelled") return "cancelled"
-    if (intentStatus === "expired") return "expired"
-    if (intentStatus === "pending" || intentStatus === "created") return "pending"
-  }
-
+/**
+ * Trạng thái thanh toán CHỈ được lấy từ máy chủ.
+ *
+ * ⚠️ Bản trước ưu tiên ngược: `// Priority: query param > intent status`. Tham
+ * số `?status=` nằm trong URL nên người xem sửa được, và nó THẮNG trạng thái mà
+ * máy chủ đã xác minh. Mở
+ * `/finance/payments/return?intent_id=<intent PENDING có thật>&status=success`
+ * là thấy thẻ xanh "Thanh toán thành công" kèm SỐ TIỀN THẬT lấy từ máy chủ —
+ * đủ để chụp màn hình làm "bằng chứng đã thanh toán".
+ *
+ * Máy chủ có sự thật và đã xác minh nó: `payment_intent_service.process_callback`
+ * kiểm chữ ký cổng rồi mới đặt `intent.status` và tạo phiếu thu. Giao diện không
+ * có lý do gì để tin URL hơn thứ ấy.
+ *
+ * Còn tham số `?status=` thì KHÔNG AI đặt trong luồng thật: `return_url` gửi cho
+ * cổng là `{origin}/finance/payments/return` trần, cổng chỉ nối thêm `vnp_*` của
+ * nó. Bỏ nhánh này vì vậy không làm hỏng luồng nào đang chạy.
+ */
+function parseStatus(intentStatus?: string): PaymentStatus {
+  if (intentStatus === "completed") return "success"
+  if (intentStatus === "failed") return "failed"
+  if (intentStatus === "cancelled") return "cancelled"
+  if (intentStatus === "expired") return "expired"
+  if (intentStatus === "pending" || intentStatus === "created") return "pending"
   return "unknown"
 }
 
@@ -146,10 +140,8 @@ export function PaymentReturnClient() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
-  // Parse query params
-  const statusParam = searchParams.get("status")
+  // Parse query params. `status` KHÔNG được đọc: xem `parseStatus`.
   const intentId = searchParams.get("intent_id")
-  const invoiceId = searchParams.get("invoice_id")
   const errorMessage = searchParams.get("error")
   const reference = searchParams.get("reference") || searchParams.get("vnp_TxnRef")
 
@@ -162,16 +154,29 @@ export function PaymentReturnClient() {
     enabled: !!intentId,
   })
 
-  // Determine final status
+  // Đã xác minh = máy chủ trả về intent. Tải lỗi, 404, hoặc không có
+  // `intent_id` đều là CHƯA xác minh — và chưa xác minh thì không được khẳng
+  // định điều gì, kể cả khi URL nói "success".
+  const daXacMinh = !!intentId && !intentError && !!intent
+
   const finalStatus = React.useMemo(() => {
-    return parseStatus(statusParam, intent?.status)
-  }, [statusParam, intent?.status])
+    return daXacMinh ? parseStatus(intent?.status) : "unknown"
+  }, [daXacMinh, intent?.status])
 
   // Get status config
   const config = STATUS_CONFIG[finalStatus]
 
   // Get invoice ID from intent if not in params
-  const targetInvoiceId = invoiceId || intent?.invoice_id?.toString()
+  // Đích của hành động cũng phải do MÁY CHỦ quyết, không phải URL.
+  //
+  // Bản trước: `invoiceId || intent?.invoice_id?.toString()` — tham số URL
+  // thắng. Hệ quả: với một intent đã xác minh, thêm `&invoice_id=999` là đổi
+  // đích của "Xem hoá đơn"/"Thử lại" sang hoá đơn KHÁC hoá đơn thật của intent;
+  // và khi chưa xác minh được gì, chỉ cần `invoice_id` trong URL là hai nút ấy
+  // vẫn mọc. Trạng thái đã lấy từ máy chủ mà đích hành động vẫn lấy từ URL thì
+  // hàng rào mới đóng được một nửa.
+  const targetInvoiceId =
+    daXacMinh && intent ? intent.invoice_id.toString() : undefined
 
   // Loading state
   if (intentId && intentLoading) {
@@ -202,10 +207,25 @@ export function PaymentReturnClient() {
         </CardHeader>
 
         <CardContent className="space-y-4">
-          {/* Error message */}
+          {/* Chưa xác minh được: nói thẳng, đừng để người đọc tự suy */}
+          {!daXacMinh && (
+            <div
+              data-testid="canh-bao-chua-xac-minh"
+              className="p-3 rounded-lg bg-muted text-muted-foreground text-sm text-left"
+            >
+              <p className="font-medium">Chưa đối chiếu được với hệ thống</p>
+              <p>
+                {intentId
+                  ? "Không đọc được giao dịch từ máy chủ. Trạng thái hiển thị ở đây không phải kết quả đã xác minh."
+                  : "Đường dẫn không kèm mã giao dịch, nên không có gì để đối chiếu. Hãy mở hoá đơn để xem trạng thái thật."}
+              </p>
+            </div>
+          )}
+
+          {/* Error message — chuỗi này đến TỪ URL, không phải từ máy chủ */}
           {errorMessage && (
             <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-              <p className="font-medium">Chi tiết lỗi:</p>
+              <p className="font-medium">Chi tiết lỗi (theo đường dẫn, chưa đối chiếu):</p>
               <p>{decodeURIComponent(errorMessage)}</p>
             </div>
           )}
@@ -215,7 +235,9 @@ export function PaymentReturnClient() {
             <div className="space-y-2 text-sm text-left bg-background/50 p-3 rounded-lg">
               {reference && (
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Mã giao dịch:</span>
+                  {/* `reference` lấy từ URL ⇒ chưa đối chiếu. `gateway_ref` bên
+                      dưới mới là giá trị máy chủ ghi nhận. */}
+                  <span className="text-muted-foreground">Mã giao dịch (chưa đối chiếu):</span>
                   <span className="font-mono font-medium">{reference}</span>
                 </div>
               )}
