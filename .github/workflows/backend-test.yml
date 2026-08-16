@@ -335,6 +335,7 @@ jobs:
               tests/services/test_payment_service.py::TestRefundSummaryIdor
               tests/services/test_payment_service.py::TestVerifyPayment
               tests/services/test_payment_service.py::TestRejectPayment
+              tests/services/test_payment_service.py::TestRecordPayment
               tests/services/test_payment_lock_order.py
               tests/api/test_payments_list_filter.py
               tests/unit/test_payment_amount_precision.py
@@ -424,7 +425,7 @@ jobs:
               tests/integration/test_ovp_migration_applies.py
               tests/services/test_payment_service.py::TestOverpaymentCheck
               tests/services/test_payment_service.py::TestOverpaymentService
-              tests/unit/test_finance_models.py::TestOverpaymentRecordModel
+              tests/unit/test_finance_models.py
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability
@@ -446,6 +447,7 @@ jobs:
               tests/unit/test_outbox_worker.py
               tests/unit/test_outbox_skeleton.py
               tests/unit/test_check_notification_event_coverage_deferred.py
+              tests/services/test_payment_service.py::TestPaymentVerifiedNotificationBridge
 
           # ---------------------------------------------------------------
           # Tier 4: Admission + lead workflow contract
