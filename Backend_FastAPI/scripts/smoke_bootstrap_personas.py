@@ -25,9 +25,10 @@ không dùng chung một chuỗi cho cả sáu:
   Celery không đọc được nó.
 
 **Không bao giờ in mật khẩu ra log.** Muốn lấy để đăng nhập tay thì gọi
-``--in-mat-khau <persona>``. Giá trị là **dòng CUỐI** của stdout — dùng ``| tail -1``.
-Không phải dòng duy nhất: ``app.config`` in vài dòng ``INFO [config.py]: …`` ra stdout
-ngay lúc import, trước khi script kịp chạy dòng nào.
+``--in-mat-khau <persona>``. Nó in **ĐÚNG một dòng** ra stdout — log của
+``app.config`` đã được đổi hướng sang stderr ngay tại khối import, nên người gọi
+không phải lọc gì. Đừng thêm ``| tail``: trong Bash mã thoát của pipeline là của
+``tail``, nên script đổ mà vẫn trả 0 kèm giá trị rỗng.
 
 Hội tụ, không phải "đã tồn tại nên bỏ qua"
 ------------------------------------------
@@ -42,21 +43,37 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import contextlib
 import hashlib
 import hmac
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, "/app")
 
 from sqlalchemy import select, text  # noqa: E402
 
-from app import models  # noqa: E402
-from app.config import settings  # noqa: E402
-from app.database import AsyncSessionLocal  # noqa: E402
-from app.security import get_password_hash  # noqa: E402
+# 🔴 Nhập `app.*` với stdout ĐỔI HƯỚNG sang stderr.
+#
+# `app/config.py` in vài dòng `INFO [config.py]: …` ra **stdout** ngay lúc import
+# (dòng 12/20/24), và thêm WARNING nếu thiếu biến. Chúng là log, không phải kết
+# quả — nhưng nằm chung stdout với giá trị mà `--in-mat-khau` / `--in-ma-totp`
+# trả về, nên người gọi buộc phải lọc.
+#
+# Mà lọc bằng `| tail -1` là một cái bẫy: trong Bash, mã thoát của pipeline là
+# của `tail`, nên script đổ mà pipeline vẫn trả 0 — lỗi biến thành "thành công
+# với giá trị rỗng". Và trên PowerShell thì `tail` không tồn tại.
+#
+# Cách đúng là đừng bắt ai phải lọc: đẩy log sang stderr, giữ stdout chỉ cho giá
+# trị. Sau đây `--in-mat-khau` / `--in-ma-totp` in ĐÚNG một dòng thật, và mã thoát
+# đi thẳng tới người gọi.
+with contextlib.redirect_stdout(sys.stderr):
+    from app import models  # noqa: E402
+    from app.config import settings  # noqa: E402
+    from app.database import AsyncSessionLocal  # noqa: E402
+    from app.security import get_password_hash  # noqa: E402
 
 
 class ChanLai(RuntimeError):
@@ -404,7 +421,7 @@ async def provision_personas(db, don_vi: Dict[str, int]) -> Dict[str, int]:
     return ket
 
 
-async def bat_mfa(db, u) -> str:
+async def bat_mfa(db, u) -> "Tuple[str, Optional[Any]]":
     """Bật MFA cho một persona qua ĐÚNG hợp đồng sản phẩm.
 
     Đi trọn đường thật, không tắt đường nào::
@@ -601,9 +618,7 @@ async def _chay(in_mat_khau: Optional[str], in_ma_totp: Optional[str]) -> int:
         kiem_moi_truong(can_ghi=False)
         if in_mat_khau not in {p["username"] for p in PERSONA}:
             raise ChanLai(f"{in_mat_khau!r} không phải persona smoke")
-        # Không kèm nhãn, để tiện `read`/pipe. Đây là dòng CUỐI chứ không phải
-        # dòng duy nhất: `app.config` đã in vài dòng INFO ra stdout lúc import.
-        # Lấy bằng `| tail -1`.
+        # ĐÚNG một dòng, không nhãn: log của `app.config` đã sang stderr.
         print(mat_khau(in_mat_khau))
         return 0
 
@@ -616,8 +631,7 @@ async def _chay(in_mat_khau: Optional[str], in_ma_totp: Optional[str]) -> int:
                 "quyền mới bật MFA"
             )
         async with AsyncSessionLocal() as db:
-            # Mã 6 số, không secret, không nhãn — và là dòng CUỐI của stdout
-            # (`app.config` in INFO lúc import). Lấy bằng `| tail -1`.
+            # ĐÚNG một dòng: mã 6 số, không secret, không nhãn.
             print(await ma_totp(db, in_ma_totp))
         return 0
 

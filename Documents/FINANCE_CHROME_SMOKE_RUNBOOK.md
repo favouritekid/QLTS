@@ -370,19 +370,46 @@ Sự kiện `USER_FORCE_LOGOUT` được phát **sau** khi cả ba persona đã 
 rác giữa chừng: hỏng ở persona thứ hai mà đã đá client ra thì DB rollback trong khi người
 dùng đã mất phiên — trạng thái tệ nhất có thể.
 
-**Bước 4 — đăng nhập tay.** Hai lệnh riêng, **không** cần
-`SMOKE_ALLOW_DESTRUCTIVE` (chúng chỉ đọc):
+**Bước 4 — lấy mật khẩu và mã, fail-closed.** Hai lệnh chỉ ĐỌC, không cần
+`SMOKE_ALLOW_DESTRUCTIVE`.
 
-```bash
-docker compose -p qltssmoke -f docker-compose.yml -f docker-compose.smoke.yml     --env-file .env.smoke --profile smoke-tools run --rm -T --no-deps     smoke-runner python /tools/smoke_bootstrap_personas.py --in-mat-khau smoke_mgr_a | tail -1
+🔴 **Đừng dùng `| tail -1`.** Hai lý do, mỗi lý do đủ để hỏng:
 
-docker compose -p qltssmoke -f docker-compose.yml -f docker-compose.smoke.yml     --env-file .env.smoke --profile smoke-tools run --rm -T --no-deps     smoke-runner python /tools/smoke_bootstrap_personas.py --in-ma-totp smoke_mgr_a | tail -1
+* **PowerShell không có `tail`.** Máy smoke chạy PowerShell; `bash.exe` ở đó trỏ sang WSL
+  mà WSL không có `/bin/bash`. Lệnh đơn giản là không chạy.
+* **Trong Bash, mã thoát của pipeline là của `tail`.** `docker compose` đổ — sai profile,
+  container không dựng được, guard chặn — mà pipeline vẫn trả **0** kèm một chuỗi rỗng.
+  Người trực dán chuỗi rỗng vào ô mật khẩu rồi đi tìm lỗi ở chỗ khác.
+
+Nay không cần lọc nữa: script đã đổi hướng log của `app.config` sang **stderr** ngay tại
+khối import, nên stdout chỉ còn **đúng một dòng** là giá trị. Nhưng vẫn phải kiểm mã thoát
+và kiểm định dạng — một dòng rỗng cũng là "một dòng".
+
+```powershell
+$COMPOSE = @(
+  '-p','qltssmoke',
+  '-f','docker-compose.yml','-f','docker-compose.smoke.yml',
+  '--env-file','.env.smoke','--profile','smoke-tools',
+  'run','--rm','-T','--no-deps','smoke-runner',
+  'python','/tools/smoke_bootstrap_personas.py'
+)
+
+# --- mã TOTP ---
+$out = & docker compose @COMPOSE --in-ma-totp smoke_mgr_a
+if ($LASTEXITCODE -ne 0) { throw "Không lấy được TOTP: docker thoát $LASTEXITCODE" }
+$totp = ($out | Select-Object -Last 1).Trim()
+if ($totp -notmatch '^\d{6}$') { throw "TOTP không hợp lệ: '$totp'" }
+
+# --- mật khẩu ---
+$out = & docker compose @COMPOSE --in-mat-khau smoke_mgr_a
+if ($LASTEXITCODE -ne 0) { throw "Không lấy được mật khẩu: docker thoát $LASTEXITCODE" }
+$mk = ($out | Select-Object -Last 1).Trim()
+if ([string]::IsNullOrWhiteSpace($mk)) { throw "Mật khẩu rỗng" }
 ```
 
-⚠️ **`| tail -1` là bắt buộc, không phải cho gọn.** `app/config.py` in vài dòng
-`INFO [config.py]: …` ra **stdout** ngay lúc import (dòng 12/20/24), và thêm WARNING nếu
-thiếu biến. Nên lệnh **không** in đúng một dòng như bản runbook trước đã nói nhầm — giá trị
-nằm ở **dòng CUỐI**. Chép nguyên cả khối vào ô mật khẩu là dán cả log.
+`& docker compose …` giữ nguyên `$LASTEXITCODE` của chính `docker`, khác hẳn pipeline. Ba
+phép kiểm — mã thoát, định dạng, rỗng — đều phải có: thiếu cái nào thì đúng cái đó sẽ là
+đường lỗi im lặng.
 
 `--in-ma-totp` in **mã 6 số**, KHÔNG in secret: mã sống 30 giây rồi vô dụng, còn secret lọt
 ra là lọt vĩnh viễn — vào log, vào lịch sử shell, vào ảnh chụp màn hình. Mã hết hạn thì gọi

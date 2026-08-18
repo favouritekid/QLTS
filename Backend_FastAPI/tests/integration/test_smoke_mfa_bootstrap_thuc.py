@@ -250,7 +250,7 @@ async def test_ma_totp_khong_tra_ve_secret(setup_test_database, manager_user_in_
     assert secret not in ra and ra != secret
 
 
-async def test_output_CLI_that_dong_cuoi_moi_la_gia_tri(
+async def test_output_CLI_that_chi_MOT_dong_la_gia_tri(
     setup_test_database, manager_user_in_db, tmp_path
 ):
     """Chạy CLI như một tiến trình THẬT và đo stdout — không chỉ đo giá trị trả về.
@@ -325,10 +325,18 @@ async def test_output_CLI_that_dong_cuoi_moi_la_gia_tri(
         + "\n".join(dong)
     )
 
-    # Và chứng minh lời khai cũ SAI: có nhiều hơn một dòng, nên `| tail -1` là bắt buộc.
-    assert len(dong) > 1, (
-        "stdout chỉ có một dòng — nếu điều này thành đúng thì sửa lại runbook và "
-        "docstring, đừng giữ hướng dẫn `| tail -1` khi nó không còn cần"
+    # stdout phải là ĐÚNG MỘT dòng.
+    #
+    # Bản trước của ca này khẳng định ngược lại (`len(dong) > 1`) kèm lời dặn "nếu
+    # ngày nào đó chỉ còn một dòng thì sửa lại hướng dẫn". Ngày đó là bây giờ:
+    # script đã đổi hướng log của `app.config` sang stderr ngay tại khối import,
+    # nên stdout chỉ còn giá trị.
+    #
+    # Đây là gốc của vấn đề, không phải cách trình bày: hễ còn bắt người gọi lọc
+    # thì sớm muộn có người lọc bằng `| tail -1` — và pipeline ấy nuốt mã thoát
+    # của `docker`, biến lỗi thành "thành công với chuỗi rỗng".
+    assert len(dong) == 1, (
+        f"stdout phải đúng MỘT dòng, nhận {len(dong)}:\n" + "\n".join(dong)
     )
 
     # Không dòng nào được chứa secret

@@ -543,3 +543,119 @@ def test_chay_goi_callback_SAU_commit():
         "không gom callback: gọi rải rác giữa vòng lặp thì persona sau hỏng vẫn đã "
         "phát force-logout cho persona trước"
     )
+
+
+
+# =============================================================================
+# Đường lấy mật khẩu / TOTP phải FAIL-CLOSED
+#
+# Bản runbook trước dùng `docker compose … | tail -1`. Hai đường hỏng:
+#   * PowerShell (shell của máy smoke) KHÔNG có `tail`; `bash.exe` trỏ sang WSL mà
+#     WSL không có `/bin/bash` ⇒ lệnh không chạy được;
+#   * trong Bash, mã thoát của pipeline là của `tail` ⇒ `docker` đổ mà pipeline
+#     vẫn trả 0 kèm chuỗi RỖNG. Lỗi biến thành "thành công với giá trị rỗng".
+#
+# Ca `test_output_CLI_…` không bắt được: nó gọi `ma_totp` qua một driver Python,
+# không đi qua `main()`, argparse, Docker Compose hay pipeline của runbook.
+# =============================================================================
+_RUNBOOK = _GOC.parent / "Documents" / "FINANCE_CHROME_SMOKE_RUNBOOK.md"
+
+
+def _khoi_buoc4() -> str:
+    assert _RUNBOOK.is_file(), f"thiếu {_RUNBOOK}"
+    noi_dung = _RUNBOOK.read_text(encoding="utf-8")
+    dau = noi_dung.find("**Bước 4")
+    assert dau != -1, "runbook không còn Bước 4 của §A04.1"
+    cuoi = noi_dung.find("### A05.", dau)
+    return noi_dung[dau: cuoi if cuoi != -1 else len(noi_dung)]
+
+
+def test_ca_kiem_nay_co_du_manh_khong_runbook():
+    """Vô nghĩa nếu không định vị được khối lệnh cần canh."""
+    khoi = _khoi_buoc4()
+    assert "--in-ma-totp" in khoi and "--in-mat-khau" in khoi, (
+        "không tìm thấy hai lệnh lấy mật khẩu/mã trong Bước 4"
+    )
+
+
+def test_khong_dung_pipeline_nuot_ma_thoat():
+    """`docker … | tail` biến lỗi thành thành công-với-giá-trị-rỗng."""
+    import re
+    khoi = _khoi_buoc4()
+    # Chỉ soi DÒNG LỆNH, không soi câu văn giải thích vì sao không dùng nó.
+    dong_lenh = [
+        d for d in khoi.splitlines()
+        if ("docker compose" in d or "smoke_bootstrap_personas.py" in d)
+        and not d.lstrip().startswith(("*", "#", ">", "🔴"))
+    ]
+    # ⚠️ Biểu thức PHẢI là raw string thật.
+    #
+    # Bản đầu của ca này được sinh ra từ một chuỗi KHÔNG raw, nên `\b` (word
+    # boundary) bị Python dịch thành ký tự BACKSPACE `\x08` ngay lúc ghi tệp. Biểu
+    # thức thành `(tail|head|Select-Object)\x08` — không bao giờ khớp. Đo được:
+    # đột biến đổi cả khối về `docker … | tail -1` vẫn cho 41 passed.
+    #
+    # Một biểu thức không khớp gì cả trông y hệt một biểu thức không tìm thấy gì.
+    xau = [d for d in dong_lenh
+           if re.search(r"\|\s*(?:tail|head|Select-Object|findstr)\b", d)]
+    assert not xau, (
+        "dòng lệnh còn nối pipeline làm mất mã thoát của docker:\n  "
+        + "\n  ".join(x.strip() for x in xau)
+    )
+
+
+def test_co_du_BA_phep_kiem_fail_closed():
+    """Mã thoát · định dạng · rỗng — thiếu cái nào là một đường lỗi im lặng."""
+    khoi = _khoi_buoc4()
+    # Kiểm THEO TỪNG LỆNH, không kiểm "có mặt đâu đó".
+    #
+    # Runbook có hai lệnh (`--in-ma-totp`, `--in-mat-khau`) và mỗi lệnh cần một
+    # phép kiểm riêng. Bản đầu chỉ hỏi `"$LASTEXITCODE" in khoi` — nên gỡ phép
+    # kiểm của lệnh TOTP vẫn xanh, vì phép kiểm của lệnh mật khẩu còn đó. Đo được:
+    # 41 passed trên bản đã hỏng.
+    dong = khoi.splitlines()
+    for co in ("--in-ma-totp", "--in-mat-khau"):
+        vi = [i for i, d in enumerate(dong) if co in d and "docker compose" in d]
+        assert vi, f"không tìm thấy lệnh {co} trong Bước 4"
+        for i in vi:
+            ke_tiep = "\n".join(dong[i + 1: i + 4])
+            assert "$LASTEXITCODE" in ke_tiep, (
+                f"lệnh {co} không kiểm mã thoát ngay sau đó — docker đổ mà script "
+                f"vẫn đi tiếp với giá trị rỗng. Ba dòng kế tiếp:\n{ke_tiep}"
+            )
+    assert "'^\\d{6}$'" in khoi or "^\\d{6}$" in khoi, (
+        "không kiểm định dạng TOTP — một dòng rỗng cũng là 'một dòng'"
+    )
+    assert "IsNullOrWhiteSpace" in khoi, "không kiểm mật khẩu rỗng"
+    assert "throw" in khoi, "không dừng khi kiểm hỏng"
+
+
+def test_script_khong_bat_nguoi_goi_phai_loc():
+    """Log của `app.config` phải sang stderr, để stdout chỉ còn giá trị.
+
+    Đây mới là gốc: bắt người gọi lọc thì sớm muộn có người lọc bằng cách nuốt
+    mất mã thoát.
+    """
+    assert "contextlib.redirect_stdout(sys.stderr)" in _MA_BOOTSTRAP, (
+        "script không đổi hướng log lúc import — stdout vẫn lẫn INFO của app.config"
+    )
+    import re
+    m = re.search(
+        r"with contextlib\.redirect_stdout\(sys\.stderr\):(.*?)\n\n",
+        _MA_BOOTSTRAP, re.S,
+    )
+    assert m, "không đọc được khối import đã đổi hướng"
+    assert "from app.config import settings" in m.group(1), (
+        "`app.config` nằm NGOÀI khối đổi hướng — nó vẫn in ra stdout"
+    )
+
+
+def test_annotation_cua_bat_mfa_khop_gia_tri_tra_ve():
+    """Hàm trả tuple thì khai báo phải nói tuple."""
+    import re
+    m = re.search(r"async def bat_mfa\([^)]*\)\s*->\s*([^:]+):", _MA_BOOTSTRAP)
+    assert m, "không đọc được khai báo bat_mfa"
+    khai = m.group(1).strip()
+    assert "Tuple" in khai, (
+        f"bat_mfa khai báo trả {khai!r} nhưng thực tế trả (nhãn, callback|None)"
+    )
