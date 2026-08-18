@@ -322,6 +322,80 @@ async def _fee_va_invoice(
     return {"fee_id": fee.id, "invoice_ids": ids, "amount_moi_dot": str(tien_moi_dot)}
 
 
+async def _oac_cho_tinh_phi(db) -> Any:
+    """Dựng `OfferingAdmissionConfig` — mắt xích DUY NHẤT còn thiếu để FIN-03 chạy.
+
+    `resolve_fee_academic_info` với hồ sơ **legacy** (`uses_choice_engine=False`)
+    giải ngành theo ba nhánh, đúng thứ tự::
+
+        offering_admission_config.academic_info   (eager)
+        → tra OAC theo offering_admission_config_id
+        → applied_rules['academic_info_id']
+
+    Đo trên `qlts_smoke` ở `BL20260817A`: `offering_academic_info` có **8 hàng**,
+    nhưng `offering_admission_config` có **0 hàng** và 7/7 hồ sơ đều
+    `offering_admission_config_id = NULL` + `applied_rules` không có
+    `academic_info_id`. Cả ba nhánh cùng rỗng ⇒ `BadRequest`, trong khi
+    `is_fee_eligible` vẫn trả `True` nên nút "Tính học phí" hiện ở trạng thái BẬT.
+
+    Fixture này đóng khoảng trống *fixture*. Nó **KHÔNG** vá lỗi sản phẩm
+    "cổng trạng thái nói được, bộ định giá nói không" — đó vẫn là nợ đang mở.
+
+    Idempotent: có OAC hợp lệ rồi thì dùng lại, không đẻ thêm hàng mỗi lượt seed.
+    """
+    ai = (
+        await db.execute(
+            select(models.OfferingAcademicInfo)
+            .where(
+                models.OfferingAcademicInfo.academic_year == 2026,
+                models.OfferingAcademicInfo.tuition_fee_per_year.isnot(None),
+            )
+            .order_by(models.OfferingAcademicInfo.id)
+            .limit(1)
+        )
+    ).scalars().first()
+    if ai is None:
+        raise ChanLai(
+            "không có OfferingAcademicInfo nào của năm 2026 kèm tuition_fee_per_year "
+            "— danh mục nền chưa seed, không dựng được fixture tính phí"
+        )
+
+    oac = (
+        await db.execute(
+            select(models.OfferingAdmissionConfig)
+            .where(
+                models.OfferingAdmissionConfig.academic_info_id == ai.id,
+                models.OfferingAdmissionConfig.is_active.is_(True),
+            )
+            .limit(1)
+        )
+    ).scalars().first()
+    if oac is not None:
+        return oac, ai
+
+    crit = (
+        await db.execute(
+            select(models.AdmissionCriteria)
+            .order_by(models.AdmissionCriteria.id)
+            .limit(1)
+        )
+    ).scalars().first()
+    if crit is None:
+        raise ChanLai(
+            "bảng admission_criteria rỗng — OfferingAdmissionConfig cần criteria_id "
+            "NOT NULL, không dựng được fixture tính phí"
+        )
+
+    oac = models.OfferingAdmissionConfig(
+        academic_info_id=ai.id,
+        criteria_id=crit.id,
+        is_active=True,
+    )
+    db.add(oac)
+    await db.flush()
+    return oac, ai
+
+
 async def seed(
     run_id: str, thu_muc: Path, persona: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
@@ -489,6 +563,51 @@ async def seed(
             **f_imp,
         }
 
+        # F-CALC — hồ sơ TÍNH PHÍ ĐƯỢC, mở khoá FIN-03.
+        #
+        # Khác mọi fixture trên ở đúng hai điểm, và cả hai đều bắt buộc:
+        #   * `offering_admission_config_id` trỏ tới OAC thật ⇒ nhánh 2 của
+        #     `resolve_fee_academic_info` giải được ngành;
+        #   * KHÔNG dựng sẵn Fee tuition — FIN-03 là ca "tính phí mới". Dựng sẵn
+        #     thì thao tác tính chỉ đi đường recalculate và ca mất hết ý nghĩa.
+        oac, ai_calc = await _oac_cho_tinh_phi(db)
+        hs = await _ho_so(db, run_id, "FCALC", unit_a, base + 8)
+        hs.offering_admission_config_id = oac.id
+        hs.uses_choice_engine = False
+        await db.flush()
+        kq["fixtures"]["F-CALC"] = {
+            "profile_id": hs.id,
+            "offering_admission_config_id": oac.id,
+            "academic_info_id": ai_calc.id,
+            "tuition_fee_per_year": str(ai_calc.tuition_fee_per_year),
+            # Cờ RIÊNG, không dùng `khong_co_fee_truoc` của F-APP: nhánh ấy còn
+            # đòi `applied_rules.requires_application_fee` — luật của lệ phí hồ
+            # sơ, không liên quan gì tới tính học phí.
+            "tinh_phi_duoc": True,
+            "khong_co_fee_tuition_truoc": True,
+        }
+
+        # F-CACHE — fixture RIÊNG cho FIN-07, không dùng chung với ca nào khác.
+        #
+        # Vì sao phải riêng: FIN-07 đo "UI dùng cache cũ trong lúc refetch". Nếu
+        # mượn fixture đã bị FIN-04/05/06 làm đổi thì không phân biệt được
+        # "cache cũ" với "dữ liệu đã đổi từ ca trước" — và một ca không phân biệt
+        # được hai nguyên nhân thì không kết luận được gì.
+        #
+        # Hai persona KHÁC NHAU (`ACC-A` đọc, `ACC-B` ghi): hệ chỉ cho MỘT phiên
+        # hoạt động mỗi người dùng nên kịch bản "hai phiên cùng ACC-A" của runbook
+        # cũ không dựng được — đăng nhập lần hai thu hồi phiên trước.
+        hs = await _ho_so(db, run_id, "FCACHE", unit_a, base + 9)
+        f_cache = await _fee_va_invoice(db, hs.id, "FCACHE", 1, TIEN_FULL)
+        kq["fixtures"]["F-CACHE"] = {
+            "profile_id": hs.id,
+            **f_cache,
+            "persona_doc": "ACC-A",
+            "persona_ghi": "ACC-B",
+            "so_tien_se_ghi": str(TIEN_DUP),
+            "khong_dung_chung": True,
+        }
+
         # COMMIT trước, ghi registry sau: ghi trước mà commit hỏng thì tệp id
         # trỏ tới những bản ghi không tồn tại, và lượt cleanup sau sẽ đi tìm
         # chúng mãi. Ngược lại (commit xong, ghi hỏng) thì dữ liệu có thật và
@@ -585,6 +704,90 @@ async def validate(run_id: str, thu_muc: Path) -> int:
 
     async with AsyncSessionLocal() as db:
         for ma, fx in du["fixtures"].items():
+            # F-CALC — hình dạng đúng là "giải được ngành, và CHƯA có Fee
+            # tuition". Hai vế phải cùng đúng: thiếu vế đầu thì `Tính học phí`
+            # nổ BadRequest; thiếu vế sau thì thao tác chỉ đi đường recalculate.
+            if fx.get("tinh_phi_duoc"):
+                hs = await db.get(models.AdmissionProfile, fx["profile_id"])
+                if hs is None:
+                    loi.append(f"{ma}: hồ sơ {fx['profile_id']} không còn")
+                    continue
+                if hs.uses_choice_engine:
+                    loi.append(
+                        f"{ma}: uses_choice_engine=True — nhánh legacy của "
+                        "resolve_fee_academic_info sẽ không chạy"
+                    )
+                oac_id = hs.offering_admission_config_id
+                if not oac_id:
+                    loi.append(
+                        f"{ma}: offering_admission_config_id rỗng — đúng cái NULL "
+                        "đã chặn FIN-03 ở BL20260817A"
+                    )
+                else:
+                    oac = await db.get(models.OfferingAdmissionConfig, oac_id)
+                    if oac is None:
+                        loi.append(f"{ma}: OAC {oac_id} không tồn tại")
+                    elif not oac.is_active:
+                        loi.append(f"{ma}: OAC {oac_id} is_active=False")
+                    else:
+                        ai = await db.get(
+                            models.OfferingAcademicInfo, oac.academic_info_id
+                        )
+                        if ai is None:
+                            loi.append(
+                                f"{ma}: OAC {oac_id} trỏ tới academic_info "
+                                f"{oac.academic_info_id} không tồn tại"
+                            )
+                        elif ai.tuition_fee_per_year is None:
+                            loi.append(
+                                f"{ma}: academic_info {ai.id} không có "
+                                "tuition_fee_per_year — giải được ngành nhưng "
+                                "vẫn không tính ra tiền"
+                            )
+                fee_tt = (
+                    await db.execute(
+                        select(Fee).where(
+                            Fee.admission_profile_id == fx["profile_id"],
+                            Fee.fee_type == FeeTypeEnum.tuition.value,
+                        )
+                    )
+                ).scalars().all()
+                if fee_tt:
+                    loi.append(
+                        f"{ma}: đã có {len(fee_tt)} Fee tuition dựng sẵn — FIN-03 là "
+                        "ca TÍNH MỚI, có sẵn thì chỉ còn đo đường recalculate"
+                    )
+                bang.append(
+                    (ma, f"profile={fx['profile_id']}", "tính phí được",
+                     f"oac={oac_id}")
+                )
+                continue
+
+            # F-CACHE — phải là fixture RIÊNG. Nếu profile_id của nó trùng bất kỳ
+            # fixture nào khác thì ca FIN-07 không phân biệt được "cache cũ" với
+            # "dữ liệu đã đổi từ ca trước".
+            if fx.get("khong_dung_chung"):
+                trung = [
+                    m for m, f2 in du["fixtures"].items()
+                    if m != ma and f2.get("profile_id") == fx["profile_id"]
+                ]
+                if trung:
+                    loi.append(
+                        f"{ma}: dùng CHUNG hồ sơ {fx['profile_id']} với {trung} — "
+                        "fixture cache phải riêng"
+                    )
+                if fx.get("persona_doc") == fx.get("persona_ghi"):
+                    loi.append(
+                        f"{ma}: persona đọc và ghi trùng nhau "
+                        f"({fx.get('persona_doc')!r}) — hệ chỉ cho MỘT phiên hoạt "
+                        "động mỗi người dùng, hai phiên cùng tài khoản không dựng được"
+                    )
+                for vai in ("persona_doc", "persona_ghi"):
+                    if fx.get(vai) not in du["actor"]:
+                        loi.append(
+                            f"{ma}: {vai}={fx.get(vai)!r} không có trong _ACTOR"
+                        )
+
             # F-APP cố ý KHÔNG có Fee/Invoice dựng sẵn — hình dạng đúng của nó
             # là "hồ sơ có luật đòi lệ phí, và CHƯA có sổ nào".
             if fx.get("khong_co_fee_truoc"):

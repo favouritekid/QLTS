@@ -526,3 +526,111 @@ def test_settings_hieu_luc_khong_goi_ra_ngoai(monkeypatch):
         assert "127.0.0.1" in gt or ".invalid" in gt or "localhost" in gt, (
             f"{khoa}={gt!r} không trỏ đích nội bộ"
         )
+
+
+# =============================================================================
+# F-CALC và F-CACHE — hai fixture mở khoá FIN-03 và FIN-07
+#
+# BL20260817A ghi cả hai ca là BLOCKED_FIXTURE:
+#   FIN-03  7/7 hồ sơ có offering_admission_config_id = NULL, applied_rules
+#           không có academic_info_id, bảng offering_admission_config 0 hàng
+#           ⇒ resolve_fee_academic_info rơi hết ba nhánh legacy ⇒ BadRequest
+#   FIN-07  registry không có F-CACHE, và runbook đòi hai phiên cùng ACC-A —
+#           không dựng được vì hệ chỉ cho MỘT phiên hoạt động mỗi người dùng
+# =============================================================================
+def test_ca_kiem_nay_co_du_manh_khong_fcalc():
+    """Ca dưới đây vô nghĩa nếu seeder không thật sự khai hai fixture ấy."""
+    assert '"F-CALC"' in _MA, "seeder chưa khai F-CALC"
+    assert '"F-CACHE"' in _MA, "seeder chưa khai F-CACHE"
+
+
+def test_fcalc_dung_oac_that_khong_phai_applied_rules():
+    """FIN-03 phải đi qua OAC thật, không lách bằng `applied_rules`.
+
+    `resolve_fee_academic_info` chấp nhận `applied_rules['academic_info_id']` ở
+    nhánh CUỐI. Nhét thẳng khoá vào đó thì ca xanh mà không chứng minh được
+    đường OAC — vốn là đường sản phẩm thật dùng.
+    """
+    assert "_oac_cho_tinh_phi" in _MA, "thiếu helper dựng OfferingAdmissionConfig"
+    assert "models.OfferingAdmissionConfig(" in _MA, (
+        "seeder không tạo hàng OfferingAdmissionConfig nào — FIN-03 vẫn kẹt ở "
+        "đúng chỗ cũ"
+    )
+    assert "offering_admission_config_id = oac.id" in _MA, (
+        "hồ sơ F-CALC không được gắn OAC"
+    )
+    # Không được lách bằng `applied_rules`.
+    #
+    # Phép kiểm phải trỏ ĐÚNG vào `applied_rules`, không quét cả tệp: seeder ghi
+    # `"academic_info_id"` vào SỔ như một mẩu ghi chép — hợp lệ, và một biểu thức
+    # quét toàn tệp sẽ bắt nhầm chính mẩu ấy. (Đã vấp: bản đầu của ca này đỏ vì
+    # lý do đó.)
+    for khoi in re.findall(r"applied_rules\s*=\s*\{(.*?)\}", _MA, re.S):
+        assert "academic_info_id" not in khoi, (
+            "seeder nhét academic_info_id vào applied_rules — đó là nhánh CUỐI của "
+            "resolve_fee_academic_info, không phải đường OAC mà FIN-03 cần chứng minh"
+        )
+
+
+def test_fcalc_khong_dung_san_fee_tuition():
+    """FIN-03 là ca TÍNH MỚI. Có Fee tuition sẵn thì chỉ còn đo recalculate."""
+    assert '"khong_co_fee_tuition_truoc": True' in _MA, (
+        "F-CALC chưa khai bất biến 'chưa có Fee tuition'"
+    )
+    assert "FeeTypeEnum.tuition.value" in _MA, (
+        "validator không lọc theo fee_type — nó sẽ bắt nhầm cả lệ phí hồ sơ"
+    )
+
+
+def test_fcalc_khong_muon_co_cua_fapp():
+    """`khong_co_fee_truoc` là cờ của F-APP và kéo theo luật lệ phí hồ sơ.
+
+    Dùng lại cờ ấy cho F-CALC thì validator đòi
+    `applied_rules.requires_application_fee` — một trường F-CALC không có, và ca
+    sẽ đỏ vì lý do chẳng liên quan gì tới tính học phí.
+    """
+    khoi = _MA.split('kq["fixtures"]["F-CALC"]', 1)
+    assert len(khoi) == 2, "không tìm thấy khối khai F-CALC"
+    than = khoi[1].split("}", 1)[0]
+    assert '"khong_co_fee_truoc"' not in than, (
+        "F-CALC đang mượn cờ của F-APP — hai bất biến khác nhau phải hai cờ khác nhau"
+    )
+
+
+def test_fcache_la_fixture_rieng_va_hai_persona_khac_nhau():
+    """Tái dùng dữ liệu bẩn thì không phân biệt được cache cũ với dữ liệu mới."""
+    assert '"khong_dung_chung": True' in _MA, "F-CACHE chưa khai bất biến 'riêng'"
+    assert '"persona_doc"' in _MA and '"persona_ghi"' in _MA, (
+        "F-CACHE chưa khai hai persona"
+    )
+    khoi = _MA.split('kq["fixtures"]["F-CACHE"]', 1)
+    assert len(khoi) == 2, "không tìm thấy khối khai F-CACHE"
+    than = khoi[1].split("}", 1)[0]
+    doc = re.search(r'"persona_doc":\s*"([^"]+)"', than)
+    ghi = re.search(r'"persona_ghi":\s*"([^"]+)"', than)
+    assert doc and ghi, "không đọc được persona của F-CACHE"
+    assert doc.group(1) != ghi.group(1), (
+        f"persona đọc và ghi trùng nhau ({doc.group(1)!r}) — hệ chỉ cho MỘT phiên "
+        "hoạt động mỗi người dùng, hai phiên cùng tài khoản không dựng được"
+    )
+
+
+def test_validator_co_canh_ca_hai_fixture_moi():
+    """Seed mà validator không canh thì fixture hỏng vẫn qua cửa."""
+    assert 'fx.get("tinh_phi_duoc")' in _MA, "validator không canh F-CALC"
+    assert 'fx.get("khong_dung_chung")' in _MA, "validator không canh F-CACHE"
+    # và phải canh ĐÚNG THỨ: OAC tồn tại + active + academic_info có học phí
+    for moc in ("is_active", "tuition_fee_per_year", "offering_admission_config_id"):
+        assert moc in _MA, f"validator F-CALC không kiểm {moc}"
+
+
+def test_helper_oac_idempotent():
+    """Seed lại cùng run-id không được đẻ thêm OAC mỗi lượt."""
+    khoi = _MA.split("async def _oac_cho_tinh_phi", 1)[1].split("\nasync def ", 1)[0]
+    assert "if oac is not None:" in khoi, (
+        "helper không tái dùng OAC sẵn có — mỗi lượt seed sẽ thêm một hàng"
+    )
+    assert "ChanLai" in khoi, (
+        "helper không fail-closed khi thiếu danh mục nền — nó sẽ trả None và lỗi "
+        "nổ ở chỗ khác, xa nguyên nhân"
+    )

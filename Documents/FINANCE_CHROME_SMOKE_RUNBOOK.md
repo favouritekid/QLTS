@@ -72,7 +72,14 @@ Tại `9950abe9` đã có thể chạy ngay `P1 — core collection`, `P2 — mo
 
 Không chờ sửa ba điểm mới bắt đầu các pack độc lập khác; nhưng không được dùng số ca xanh của chúng để che expected FAIL đã biết.
 
-⚠️ **Tại `2ca5d1a5` (lượt hiện tại)**: `P1` có seed+validator nhưng **chưa có `--cleanup`**, và `P2–P4` chưa có fixture nào. Chưa được chạy các ca refund/overpayment/withdrawal bằng thao tác tay: mọi id phải được ghi atomically trước mutation (§A05), và không có đường dọn fail-closed thì mỗi lượt thử là một đống rác không ai gỡ được.
+⚠️ **Trạng thái pack, cập nhật sau run `BL20260817A`**: `P1` nay có **đủ** seed, validator,
+sổ hành động (`--action-begin`/`--action-end`) **và `--cleanup`** — lượt cleanup của
+`BL20260817A` đã chạy thật, `rc=0`, vân tay khớp baseline. Câu cũ *"tại `2ca5d1a5` P1 chưa
+có `--cleanup`"* đã hết hiệu lực.
+
+`P2–P4` **vẫn chưa có fixture nào**. Chưa được chạy các ca refund/overpayment/withdrawal
+bằng thao tác tay: mọi id phải được ghi atomically trước mutation (§A05), và không có đường
+dọn fail-closed thì mỗi lượt thử là một đống rác không ai gỡ được.
 
 ## 2. Nguyên tắc bắt buộc
 
@@ -307,6 +314,110 @@ Chờ health thật:
 - Chrome console chưa có lỗi nền bất thường.
 - celery worker/beat không loop restart và nhận đúng queue; nếu đang smoke notification/background task mà celery tắt thì ca là BLOCKED, không PASS nhờ gọi đồng bộ thủ công.
 
+### A04.1. MFA cho persona đặc quyền — làm TRƯỚC khi mở Chrome
+
+`MFA_ENFORCE_ROLES = ['admin','manager']`. `deps.py:368` trả **403** ở MỌI endpoint đi qua
+`get_current_active_user` khi role đặc quyền chưa bật MFA — kể cả `/api/users/me`, nên giao
+diện không tải nổi. Bỏ qua mục này thì `MGR-A`/`MGR-B`/`ADMIN` không dùng được, và FIN-09
+(cùng mọi ca cần void) sẽ bị ghi `BLOCKED_MFA` như ở `BL20260817A`.
+
+**Bước 1 — sinh hai giá trị, đặt vào `.env.smoke.app`.** Đây là secret; sinh trên máy chạy,
+không lấy từ đâu khác, không commit:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print('MFA_ENCRYPTION_KEY=' + Fernet.generate_key().decode())"
+python -c "import secrets; print('DEVICE_FINGERPRINT_SALT=' + secrets.token_urlsafe(32))"
+```
+
+🔴 **Phải khai tường minh, dù `config.py` có đường tự lo.** `config.py:811-815` TỰ SINH giá
+trị thay thế khi thiếu và chỉ in một dòng WARNING. Giá trị ấy khác nhau mỗi lần container
+được **TẠO** ⇒ persona bật MFA hôm nay, lượt sau `decrypt_secret` ném *"Key may have
+changed"* trên chính secret mình vừa ghi. Hỏng im lặng, lộ ra đúng lúc đứng trước màn hình
+đăng nhập.
+
+**Bước 2 — dựng lại backend để nạp env mới.** `restart` KHÔNG đọc lại `env_file`; biến được
+nướng vào container lúc **TẠO**:
+
+```bash
+docker compose -p qltssmoke -f docker-compose.yml -f docker-compose.smoke.yml     --env-file .env.smoke up -d --no-deps --wait backend
+```
+
+**Bước 3 — bootstrap.** Nó fail-closed nếu thiếu/còn placeholder một trong hai biến, và
+chặn **trước** khi tạo tài khoản nào.
+
+🔴 **Ba chi tiết của lệnh dưới đây đều bắt buộc, sai một cái là không chạy:**
+
+* `--profile smoke-tools` — `smoke-runner` khai `profiles: ["smoke-tools"]`
+  (`docker-compose.smoke.yml:83`) nên **không** có container nào chạy sẵn. `exec` sẽ đổ
+  "no such service"; phải dùng `run --rm`.
+* đường dẫn `/tools/…` — mã smoke được **bind-mount** vào `/tools`
+  (`docker-compose.smoke.yml:115-117`); `scripts/smoke*` đã bị loại khỏi image production
+  nên `python scripts/…` không có tệp để chạy.
+* `-e SMOKE_ALLOW_DESTRUCTIVE=1` — `kiem_moi_truong(can_ghi=True)` đòi cờ này cho **từng
+  lượt**; thiếu là guard chặn ngay.
+
+```bash
+docker compose -p qltssmoke     -f docker-compose.yml -f docker-compose.smoke.yml     --env-file .env.smoke --profile smoke-tools     run --rm -T --no-deps -e SMOKE_ALLOW_DESTRUCTIVE=1     smoke-runner python /tools/smoke_bootstrap_personas.py
+```
+
+Đạt khi in `MFA: smoke_admin=…, smoke_mgr_a=…, smoke_mgr_b=…`. Giá trị `vua_bat(thu_hoi=N)`
+cho biết đã thu hồi N phiên cũ — **bắt buộc**: `enable_mfa` chỉ tự thu hồi khi được truyền
+`current_session_id`, mà bootstrap không có phiên nào, nên nếu không thu hồi thì một phiên
+đăng nhập TRƯỚC khi bật MFA vẫn đi qua cổng mà chưa hề trả lời challenge — và lượt smoke sẽ
+"chứng minh" FIN-09 bằng đúng phiên chưa qua MFA ấy.
+
+Sự kiện `USER_FORCE_LOGOUT` được phát **sau** khi cả ba persona đã commit, không phát rải
+rác giữa chừng: hỏng ở persona thứ hai mà đã đá client ra thì DB rollback trong khi người
+dùng đã mất phiên — trạng thái tệ nhất có thể.
+
+**Bước 4 — lấy mật khẩu và mã, fail-closed.** Hai lệnh chỉ ĐỌC, không cần
+`SMOKE_ALLOW_DESTRUCTIVE`.
+
+🔴 **Đừng dùng `| tail -1`.** Hai lý do, mỗi lý do đủ để hỏng:
+
+* **PowerShell không có `tail`.** Máy smoke chạy PowerShell; `bash.exe` ở đó trỏ sang WSL
+  mà WSL không có `/bin/bash`. Lệnh đơn giản là không chạy.
+* **Trong Bash, mã thoát của pipeline là của `tail`.** `docker compose` đổ — sai profile,
+  container không dựng được, guard chặn — mà pipeline vẫn trả **0** kèm một chuỗi rỗng.
+  Người trực dán chuỗi rỗng vào ô mật khẩu rồi đi tìm lỗi ở chỗ khác.
+
+Nay không cần lọc nữa: script đã đổi hướng log của `app.config` sang **stderr** ngay tại
+khối import, nên stdout chỉ còn **đúng một dòng** là giá trị. Nhưng vẫn phải kiểm mã thoát
+và kiểm định dạng — một dòng rỗng cũng là "một dòng".
+
+```powershell
+$COMPOSE = @(
+  '-p','qltssmoke',
+  '-f','docker-compose.yml','-f','docker-compose.smoke.yml',
+  '--env-file','.env.smoke','--profile','smoke-tools',
+  'run','--rm','-T','--no-deps','smoke-runner',
+  'python','/tools/smoke_bootstrap_personas.py'
+)
+
+# --- mã TOTP ---
+$out = & docker compose @COMPOSE --in-ma-totp smoke_mgr_a
+if ($LASTEXITCODE -ne 0) { throw "Không lấy được TOTP: docker thoát $LASTEXITCODE" }
+$totp = ($out | Select-Object -Last 1).Trim()
+if ($totp -notmatch '^\d{6}$') { throw "TOTP không hợp lệ: '$totp'" }
+
+# --- mật khẩu ---
+$out = & docker compose @COMPOSE --in-mat-khau smoke_mgr_a
+if ($LASTEXITCODE -ne 0) { throw "Không lấy được mật khẩu: docker thoát $LASTEXITCODE" }
+$mk = ($out | Select-Object -Last 1).Trim()
+if ([string]::IsNullOrWhiteSpace($mk)) { throw "Mật khẩu rỗng" }
+```
+
+`& docker compose …` giữ nguyên `$LASTEXITCODE` của chính `docker`, khác hẳn pipeline. Ba
+phép kiểm — mã thoát, định dạng, rỗng — đều phải có: thiếu cái nào thì đúng cái đó sẽ là
+đường lỗi im lặng.
+
+`--in-ma-totp` in **mã 6 số**, KHÔNG in secret: mã sống 30 giây rồi vô dụng, còn secret lọt
+ra là lọt vĩnh viễn — vào log, vào lịch sử shell, vào ảnh chụp màn hình. Mã hết hạn thì gọi
+lại, đừng đi tìm secret.
+
+⚠️ Bật MFA **thu hồi mọi phiên đang mở** của persona đó. Làm mục này **trước** khi đăng nhập
+các persona khác, nếu không phải đăng nhập lại.
+
 ### A05. Seed phải tự chứng minh đúng hình dạng
 
 Trước khi mở Chrome, seed/fixture validator phải exit non-zero nếu thiếu một trong các điều kiện:
@@ -455,6 +566,8 @@ Fixture được tạo bằng seed riêng, deterministic và idempotent theo `RU
 |---|---|---|
 | `F-APP` | Hồ sơ đủ điều kiện thu application fee, chưa thu | Thu lệ phí hồ sơ qua tab Học phí |
 | `F-FULL` | Hồ sơ có một khoản phí và một hóa đơn một đợt | Luồng thu tay cơ bản |
+| `F-CALC` | Hồ sơ `submitted`, `uses_choice_engine=false`, **có `offering_admission_config_id`** trỏ tới OAC hoạt động nối `OfferingAcademicInfo` 2026 có `tuition_fee_per_year`; **CHƯA có Fee tuition** | FIN-03 tính học phí MỚI. Thiếu OAC ⇒ `resolve_fee_academic_info` ném `BadRequest`; có sẵn Fee ⇒ chỉ còn đo đường recalculate |
+| `F-CACHE` | Hồ sơ + fee + invoice **RIÊNG**, không dùng chung với fixture nào khác | FIN-07 cache cũ. Dùng chung dữ liệu đã bị FIN-04/05/06 làm đổi thì không phân biệt được "cache cũ" với "dữ liệu đã đổi từ ca trước" |
 | `F-FIFO` | Khoản phí có ít nhất hai hóa đơn/đợt còn nợ | Phân bổ FIFO, thu tách nhiều hóa đơn |
 | `F-DUP` | Hóa đơn có một payment phù hợp luật dò trùng | Luồng 409 -> review token -> xác nhận |
 | `F-REJECT` | Hóa đơn riêng để ghi rồi từ chối | Không làm tăng tiền đã thu |
@@ -597,10 +710,20 @@ Persona: `OFF-A`; fixture `F-APP`.
 
 ### FIN-03 — tính phí và phát hành hóa đơn
 
-Persona: `ACC-A` cho calculate/issue; fixture mới thuộc `F-FULL` hoặc hồ sơ calculable riêng.
+Persona: `ACC-A` cho calculate/issue; fixture **`F-CALC`**.
+
+> 🔴 **Phải là `F-CALC`, không phải `F-FULL`.** `F-FULL` đã có sẵn Fee tuition nên thao
+> tác chỉ đi đường *recalculate* — ca mất hết ý nghĩa "tính phí mới". `F-CALC` cố ý
+> **không** dựng sẵn Fee tuition và có `offering_admission_config_id` trỏ tới OAC thật.
+>
+> ⚠️ **Nợ sản phẩm đang MỞ, chưa sửa.** `is_fee_eligible` trả `True` (nút "Tính học phí"
+> hiện ở trạng thái BẬT) trên cả hồ sơ mà `resolve_fee_academic_info` từ chối vì không
+> giải được ngành — cổng trạng thái nói được, bộ định giá nói không. `F-CALC` chỉ đóng
+> khoảng trống *fixture* để ca chạy được; nó **không** vá lỗi ấy. Gặp hồ sơ thiếu ngành mà
+> nút vẫn bật thì đó là **finding**, không phải lỗi môi trường.
 
 1. Từ dashboard bấm “Tính phí mới”.
-2. Chọn hồ sơ từ picker bằng thông tin hiển thị, không dùng ID đoán.
+2. Chọn **đúng hồ sơ `F-CALC`** từ picker bằng thông tin hiển thị, không dùng ID đoán.
 3. Mở tuition preview, ghi base amount, discount, total và installment plan.
 4. Tính phí qua UI.
 5. Mở fee detail và invoice workspace.
@@ -668,6 +791,20 @@ Persona: `ACC-A`; fixture `F-REJECT`.
 
 Persona: `ACC-A`; fixture `F-DUP`.
 
+> ⏱️ **Phiếu soát sống 15 phút — chuỗi phải chạy LIỀN MẠCH.**
+>
+> `duplicate_review_token.py` đặt `TTL_GIAY = 15 * 60`; `soat_phieu` fail-closed khi quá
+> hạn. Nghĩa là **409 → tick xác nhận → submit lại** phải xong trong 15 phút kể từ lúc
+> server cấp phiếu, tính từ **lần 409 cấp phiếu**, không phải từ lúc mở dialog.
+>
+> Đo được ở `BL20260817A`: chuỗi bị tách làm hai cổng duyệt, khoảng cách **17'56"** ⇒
+> `POST /api/payments` trả **409** dù client có gửi phiếu (`co_gui_phieu=True`), và
+> **không hàng nào được tạo**. Đó là hành vi đúng, không phải lỗi — nhưng nếu không biết
+> thì rất dễ ghi nhầm thành "hàng rào chặn cả lượt hợp lệ".
+>
+> Vì vậy: **đừng chèn cổng phê duyệt vào giữa chuỗi này.** Nếu phiếu quá hạn, lấy phiếu
+> mới bằng một lượt 409 mới rồi chạy lại liền mạch.
+
 1. Mở dialog thu tiền và nhập dữ liệu khớp candidate đã seed.
 2. Bấm Lưu; phải nhận giao diện `review_required`, thấy danh sách candidate, tổng và dấu hiệu truncated nếu có.
 3. Không tick xác nhận, bấm tiếp: không được gửi quyền ghi.
@@ -696,11 +833,20 @@ Ca biến thể bắt buộc:
 
 ### FIN-07 — cache cũ và mở lại dialog
 
-Persona: hai phiên Chrome của `ACC-A`, dùng fixture riêng.
+Persona: **`ACC-A` và `ACC-B` — hai tài khoản KHÁC NHAU**; fixture riêng **`F-CACHE`**.
 
-1. Phiên A mở dialog, ghi nhận remaining/pending rồi đóng.
-2. Phiên B tạo hoặc verify một payment làm dữ liệu thay đổi.
-3. Phiên A mở lại dialog ngay khi cache còn dữ liệu.
+> 🔴 **Không dùng hai phiên của cùng `ACC-A`.** Hệ giữ **một phiên hoạt động cho mỗi
+> người dùng**: đăng nhập lần hai **thu hồi** phiên trước. Đo được ở `BL20260817A` —
+> `session 1`, `session 2` và `session 4` đều bị đặt `revoked_at`. Kịch bản "hai phiên
+> cùng ACC-A" của bản runbook cũ **không dựng được**, không phải vì thiếu fixture mà vì
+> chính sách single-active-session.
+>
+> Fixture phải là **`F-CACHE` riêng**: không tái dùng dữ liệu đã bị FIN-04/05/06 làm đổi,
+> vì khi ấy không phân biệt được "cache cũ" với "dữ liệu đã đổi từ ca trước".
+
+1. Phiên `ACC-A` mở dialog trên fixture `F-CACHE`, ghi nhận remaining/pending rồi đóng.
+2. Phiên `ACC-B` tạo hoặc verify một payment làm dữ liệu thay đổi.
+3. Phiên `ACC-A` mở lại dialog ngay khi cache còn dữ liệu.
 4. Quan sát từ lúc mở đến khi refetch xong.
 
 Đạt khi:
@@ -711,15 +857,37 @@ Persona: hai phiên Chrome của `ACC-A`, dùng fixture riêng.
 - sau fetch hiển thị số mới;
 - không có cửa sổ nhập trùng do danh sách pending rỗng cũ.
 
-### FIN-08 — phân bổ FIFO nhiều đợt
+### FIN-08 — phân bổ FIFO nhiều đợt (đường **import**)
 
 Persona: `ACC-A`; fixture `F-FIFO`.
 
+> 🔴 **Ghi tay là invoice-scoped — đây là contract, không phải lỗi.**
+>
+> `payment_service.py:406` chặn `amount > invoice.remaining_amount` bằng
+> `BusinessRuleViolation`. Một khoản thu ghi tay khoá vào **đúng một** invoice và không
+> được vượt phần còn lại của chính invoice đó. Phân bổ FIFO qua nhiều installment **chỉ
+> tồn tại ở `payment_import_service.py`**; `grep FIFO frontend/src` trả **0** kết quả.
+>
+> Bản runbook cũ yêu cầu *"thu số tiền vượt invoice thứ nhất"* bằng UI ghi tay — thao tác
+> đó **không thi hành được** và đã làm FIN-08 bị ghi `BLOCKED_CONTRACT` ở `BL20260817A`.
+> Không mở rộng ghi tay thành cross-invoice để chiều kịch bản; kiểm FIFO ở đúng nơi nó sống.
+
+**Phần A — ghi tay phải TỪ CHỐI, zero-delta.**
+
 1. Mở fee có ít nhất hai invoice theo installment.
-2. Thu số tiền vượt invoice thứ nhất nhưng nhỏ hơn tổng còn nợ.
-3. Xác nhận cảnh báo nếu có, rồi hoàn tất theo UI.
-4. Verify nếu payment không auto-verified.
-5. Reload fee detail và từng invoice.
+2. Ghi tay một khoản **vượt `invoice.remaining_amount`** của invoice thứ nhất.
+3. Đạt khi: HTTP **400**, thông điệp `BusinessRuleViolation`, và **delta rỗng trên cả 13
+   bảng** của `BANG_THEO_DOI` — không payment, không transaction, không đổi `paid_amount`.
+
+**Phần B — FIFO chạy qua `/finance/payments/import`.**
+
+4. Vào `/finance/payments/import`, nạp file có một dòng cho fee nhiều installment với số
+   tiền vượt invoice đầu nhưng nhỏ hơn tổng còn nợ.
+5. **Preview**: đối chiếu phân bổ dự kiến theo installment/due order **trước** khi commit.
+6. **Commit**, rồi reload fee detail và từng invoice.
+
+FIN-08 tập trung **preview + commit FIFO**. Các nhánh **retry và void** của đường import
+vẫn thuộc **FIN-09**, không lặp ở đây.
 
 Đối soát:
 

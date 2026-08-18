@@ -25,7 +25,10 @@ không dùng chung một chuỗi cho cả sáu:
   Celery không đọc được nó.
 
 **Không bao giờ in mật khẩu ra log.** Muốn lấy để đăng nhập tay thì gọi
-``--in-mat-khau <persona>``, nó in ĐÚNG một dòng ra stdout và không ghi gì khác.
+``--in-mat-khau <persona>``. Nó in **ĐÚNG một dòng** ra stdout — log của
+``app.config`` đã được đổi hướng sang stderr ngay tại khối import, nên người gọi
+không phải lọc gì. Đừng thêm ``| tail``: trong Bash mã thoát của pipeline là của
+``tail``, nên script đổ mà vẫn trả 0 kèm giá trị rỗng.
 
 Hội tụ, không phải "đã tồn tại nên bỏ qua"
 ------------------------------------------
@@ -40,21 +43,37 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import contextlib
 import hashlib
 import hmac
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, "/app")
 
 from sqlalchemy import select, text  # noqa: E402
 
-from app import models  # noqa: E402
-from app.config import settings  # noqa: E402
-from app.database import AsyncSessionLocal  # noqa: E402
-from app.security import get_password_hash  # noqa: E402
+# 🔴 Nhập `app.*` với stdout ĐỔI HƯỚNG sang stderr.
+#
+# `app/config.py` in vài dòng `INFO [config.py]: …` ra **stdout** ngay lúc import
+# (dòng 12/20/24), và thêm WARNING nếu thiếu biến. Chúng là log, không phải kết
+# quả — nhưng nằm chung stdout với giá trị mà `--in-mat-khau` / `--in-ma-totp`
+# trả về, nên người gọi buộc phải lọc.
+#
+# Mà lọc bằng `| tail -1` là một cái bẫy: trong Bash, mã thoát của pipeline là
+# của `tail`, nên script đổ mà pipeline vẫn trả 0 — lỗi biến thành "thành công
+# với giá trị rỗng". Và trên PowerShell thì `tail` không tồn tại.
+#
+# Cách đúng là đừng bắt ai phải lọc: đẩy log sang stderr, giữ stdout chỉ cho giá
+# trị. Sau đây `--in-mat-khau` / `--in-ma-totp` in ĐÚNG một dòng thật, và mã thoát
+# đi thẳng tới người gọi.
+with contextlib.redirect_stdout(sys.stderr):
+    from app import models  # noqa: E402
+    from app.config import settings  # noqa: E402
+    from app.database import AsyncSessionLocal  # noqa: E402
+    from app.security import get_password_hash  # noqa: E402
 
 
 class ChanLai(RuntimeError):
@@ -81,6 +100,16 @@ PERSONA = (
     {"username": "smoke_admin", "role": "admin", "unit": "A", "ten": "Smoke Quan tri"},
 )
 
+# Ba persona đặc quyền. `deps.py:368` chặn 403 ở MỌI endpoint đi qua
+# `get_current_active_user` khi `role ∈ MFA_ENFORCE_ROLES` mà `mfa_enabled=False`.
+# Đo ở BL20260817A: phiên `smoke_mgr_a` nhận 195 phản hồi 403 mang thông điệp
+# "MFA is required" trong cửa sổ log 24h; `/api/users/me` cũng 403 nên giao diện
+# không tải nổi ⇒ FIN-09 bị ghi BLOCKED_MFA.
+#
+# Đây là blocker HARNESS, không phải lỗi sản phẩm: `MFA_ENFORCE_ROLES` đúng như
+# thiết kế và KHÔNG được nới. Thứ thiếu là bước onboarding cho persona smoke.
+PERSONA_CAN_MFA = ("smoke_mgr_a", "smoke_mgr_b", "smoke_admin")
+
 
 # =============================================================================
 # Hàng rào
@@ -103,6 +132,87 @@ def kiem_moi_truong(*, can_ghi: bool) -> None:
     if can_ghi and os.environ.get("SMOKE_ALLOW_DESTRUCTIVE") != "1":
         raise ChanLai(
             "thiếu SMOKE_ALLOW_DESTRUCTIVE=1 — cờ phải do người chạy đặt cho từng lượt"
+        )
+
+
+#: Dấu hiệu một giá trị được chép nguyên từ tệp `.example` mà chưa thay.
+#
+# Danh sách này phải phủ CẢ placeholder do chính kho này viết. Bản đầu chỉ chặn
+# `CHANGE_ME_IN_PRODUCTION` (giá trị mặc định của `config.py`) nên
+# `THAY_BANG_CHUOI_NGAU_NHIEN_CUA_BAN` trong `.env.smoke.app.example` đi lọt —
+# tức là chính cái placeholder mình viết ra lại không bị chính guard của mình bắt.
+_DAU_HIEU_PLACEHOLDER = ("THAY_BANG", "CHANGE_ME", "TODO", "XXXX", "<", ">")
+
+
+def _la_placeholder(gt: str) -> bool:
+    hoa = gt.upper()
+    return any(d in hoa for d in _DAU_HIEU_PLACEHOLDER)
+
+
+def kiem_moi_truong_mfa() -> None:
+    """Fail-closed TRƯỚC mọi mutation MFA — thiếu khoá là DỪNG, không "thử xem".
+
+    Hai biến này quyết định MFA có chạy được không, và cả hai đều có đường
+    **âm thầm hỏng**:
+
+    * ``MFA_ENCRYPTION_KEY`` rỗng ⇒ ``mfa_service._get_fernet()`` ném
+      ``BusinessRuleViolation`` giữa chừng, sau khi `setup_mfa` đã ghi secret vào
+      Redis — để lại một secret mồ côi và một persona nửa vời.
+    * ``config.py`` **tự sinh** giá trị thay thế khi thiếu (dòng 811-815) và chỉ
+      in một dòng WARNING. Nghĩa là lượt sau sinh khoá KHÁC, và
+      ``decrypt_secret`` ném "Key may have changed" trên chính secret mình vừa
+      ghi. Một persona "đã bật MFA" nhưng không đăng nhập được.
+
+    Vì vậy phải đòi giá trị đến từ **env của stack smoke**, và đòi nó là khoá
+    Fernet hợp lệ — không nhận giá trị mặc định, không nhận giá trị tự sinh.
+    """
+    thieu: List[str] = []
+
+    salt = (os.environ.get("DEVICE_FINGERPRINT_SALT") or "").strip()
+    if not salt:
+        thieu.append(
+            "DEVICE_FINGERPRINT_SALT rỗng — config.py sẽ TỰ SINH một giá trị khác "
+            "cho mỗi lượt"
+        )
+    elif _la_placeholder(salt):
+        thieu.append(
+            f"DEVICE_FINGERPRINT_SALT còn là placeholder ({salt!r}) — chép nguyên "
+            "từ `.env.smoke.app.example` mà chưa thay. Đổi khoá Fernet nhưng quên "
+            "đổi muối là ca có thật, và guard cũ để lọt vì chỉ chặn đúng chuỗi "
+            "`CHANGE_ME_IN_PRODUCTION`"
+        )
+    elif len(salt) < 16:
+        thieu.append(
+            f"DEVICE_FINGERPRINT_SALT chỉ {len(salt)} ký tự — quá ngắn để làm muối"
+        )
+
+    khoa = (os.environ.get("MFA_ENCRYPTION_KEY") or "").strip()
+    if not khoa:
+        thieu.append(
+            "MFA_ENCRYPTION_KEY — config.py sẽ TỰ SINH khoá Fernet mới mỗi lượt, "
+            "và secret ghi lượt trước sẽ không giải mã được ở lượt sau"
+        )
+    elif _la_placeholder(khoa):
+        # Fernet() cũng sẽ từ chối placeholder, nhưng bằng một thông điệp mã hoá
+        # khó đọc. Nói thẳng "còn là placeholder" thì người trực sửa được ngay.
+        thieu.append(
+            f"MFA_ENCRYPTION_KEY còn là placeholder ({khoa[:24]}…) — chép nguyên "
+            "từ `.env.smoke.app.example` mà chưa thay"
+        )
+    else:
+        try:
+            from cryptography.fernet import Fernet
+            Fernet(khoa.encode())
+        except Exception as e:
+            thieu.append(f"MFA_ENCRYPTION_KEY không phải khoá Fernet hợp lệ ({e})")
+
+    if thieu:
+        raise ChanLai(
+            "thiếu cấu hình MFA trong env của stack smoke:\n    - "
+            + "\n    - ".join(thieu)
+            + "\n  Đặt chúng trong `.env.smoke.app` (xem `.env.smoke.app.example`). "
+            "KHÔNG hardcode và KHÔNG dùng giá trị tự sinh: cả hai đều làm persona "
+            "bật được MFA lượt này rồi không đăng nhập được lượt sau."
         )
 
 
@@ -311,6 +421,93 @@ async def provision_personas(db, don_vi: Dict[str, int]) -> Dict[str, int]:
     return ket
 
 
+async def bat_mfa(db, u) -> "Tuple[str, Optional[Any]]":
+    """Bật MFA cho một persona qua ĐÚNG hợp đồng sản phẩm.
+
+    Đi trọn đường thật, không tắt đường nào::
+
+        mfa_service.setup_mfa()  → sinh secret, cất Redis (TTL 10')
+        pyotp.TOTP(secret).now() → mã 6 số của cửa sổ hiện tại
+        mfa_service.enable_mfa() → verify mã, mã hoá secret vào DB,
+                                   sinh backup code, thu hồi phiên khác
+
+    KHÔNG đặt ``mfa_enabled = True`` bằng SQL hay bằng gán thẳng: làm vậy thì
+    ``totp_secret_encrypted`` rỗng, người dùng không sinh nổi mã, và ta có một
+    persona "đã bật MFA" mà không đăng nhập được — tệ hơn trạng thái ban đầu vì
+    nó trông như đã xong.
+
+    Idempotent: đã bật rồi thì trả ``("da_bat", None)`` và không chạm gì.
+
+    :returns: ``(nhãn, post_commit_callback | None)``. Callback **chưa** được gọi —
+        nó phát ``USER_FORCE_LOGOUT`` và chỉ hợp lệ SAU khi giao dịch đã commit.
+        Người gọi có trách nhiệm gom lại, commit, rồi mới chạy.
+    """
+    if u.mfa_enabled:
+        return "da_bat", None
+
+    import pyotp
+    from app.services import mfa_service, session_service
+
+    setup, _ = await mfa_service.setup_mfa(user_id=u.id, username=u.username)
+    secret = setup["secret"]
+
+    ma = pyotp.TOTP(secret).now()
+    await mfa_service.enable_mfa(db=db, user=u, code=ma, current_session_id=None)
+
+    # 🔴 PHẢI thu hồi MỌI phiên cũ — `enable_mfa` KHÔNG làm việc đó ở đây.
+    #
+    # `mfa_service.enable_mfa` chỉ thu hồi khi `current_session_id` truthy
+    # (`mfa_service.py:241`: `if current_session_id:`). Đường sản phẩm luôn truyền
+    # id phiên đang dùng nên nhánh ấy chạy; bootstrap thì KHÔNG có phiên của mình
+    # nên truyền `None`, và hệ quả là **không phiên nào bị thu hồi**.
+    #
+    # Vì sao đó là lỗi chứ không phải chi tiết: `get_current_active_user` chỉ kiểm
+    # CỜ `mfa_enabled`. Một phiên đăng nhập TRƯỚC khi bật MFA vẫn hợp lệ sau đó, và
+    # đi qua cổng mà chưa hề trả lời một challenge TOTP nào. Lượt smoke sau đó sẽ
+    # "chứng minh" FIN-09 chạy được bằng đúng một phiên chưa qua MFA — tức bằng
+    # chứng SAI, và sai theo hướng dễ tin nhất.
+    #
+    # `except_session_id=None` ⇒ thu hồi TẤT CẢ, đúng ý ở đây: bootstrap không có
+    # phiên nào cần giữ.
+    so_thu_hoi, callback = await session_service.revoke_all_other_sessions(
+        db=db, user_id=u.id, except_session_id=None
+    )
+    # ⚠️ KHÔNG gọi `callback()` ở đây. Nó là **post-commit** callback —
+    # `session_service.py:623` ghi rõ "Sau khi đã commit" — và việc nó làm là phát
+    # `USER_FORCE_LOGOUT` cho client.
+    #
+    # Ở đây giao dịch CHƯA commit: `_chay` chỉ commit sau khi xử lý xong cả ba
+    # persona. Gọi sớm nghĩa là nếu persona thứ hai/thứ ba hỏng, hoặc chính lệnh
+    # commit hỏng, ta đã bảo client đăng xuất dựa trên một trạng thái sẽ bị
+    # rollback: phiên vẫn còn hiệu lực trong DB mà client thì đã bị đá ra.
+    #
+    # Nên trả callback lên cho người gọi gom lại, commit xong mới chạy.
+    return f"vua_bat(thu_hoi={so_thu_hoi})", callback
+
+
+async def ma_totp(db, username: str) -> str:
+    """In mã TOTP 6 số hiện tại — **không bao giờ in secret**.
+
+    Người trực cần một mã để đăng nhập tay. Đưa secret ra là đưa vĩnh viễn:
+    nó vào log, vào lịch sử shell, vào ảnh chụp màn hình. Mã 6 số sống 30 giây
+    và vô dụng ngay sau đó, nên đó mới là thứ đúng để in.
+    """
+    u = (
+        await db.execute(select(models.User).where(models.User.username == username))
+    ).scalars().first()
+    if u is None:
+        raise ChanLai(f"{username!r} không tồn tại")
+    if not u.mfa_enabled or not u.totp_secret_encrypted:
+        raise ChanLai(
+            f"{username!r} chưa bật MFA — chạy bootstrap trước rồi mới xin mã"
+        )
+
+    import pyotp
+    from app.services import mfa_service
+
+    return pyotp.TOTP(mfa_service.decrypt_secret(u.totp_secret_encrypted)).now()
+
+
 async def kiem_hoi_tu(db, don_vi: Dict[str, int]) -> None:
     """Đọc LẠI từ DB và chứng minh trạng thái đúng như mong muốn.
 
@@ -338,6 +535,41 @@ async def kiem_hoi_tu(db, don_vi: Dict[str, int]) -> None:
         from app.security import verify_password
         if not verify_password(mat_khau(ten, master), u.password_hash):
             loi.append(f"{ten}: mật khẩu KHÔNG khớp giá trị dẫn xuất")
+
+        # Ba persona đặc quyền phải MFA-ready, và phải ready THẬT: cờ bật mà
+        # không có secret là trạng thái tệ hơn chưa bật — nó trông như đã xong.
+        can_mfa = ten in PERSONA_CAN_MFA
+        if can_mfa:
+            if not u.mfa_enabled:
+                loi.append(
+                    f"{ten}: mfa_enabled=False — role {u.role!r} nằm trong "
+                    "MFA_ENFORCE_ROLES nên mọi endpoint qua get_current_active_user "
+                    "sẽ trả 403"
+                )
+            if not u.totp_secret_encrypted:
+                loi.append(
+                    f"{ten}: mfa_enabled={u.mfa_enabled} nhưng KHÔNG có "
+                    "totp_secret_encrypted — không sinh được mã, không đăng nhập được"
+                )
+            else:
+                # giải mã thật: khoá đổi giữa hai lượt thì lỗi phải nổ Ở ĐÂY,
+                # không phải lúc người trực đứng trước màn hình đăng nhập
+                try:
+                    from app.services import mfa_service
+                    mfa_service.decrypt_secret(u.totp_secret_encrypted)
+                except Exception as e:
+                    loi.append(
+                        f"{ten}: không giải mã được totp_secret ({e}) — "
+                        "MFA_ENCRYPTION_KEY đã đổi so với lượt ghi secret"
+                    )
+        elif u.mfa_enabled:
+            # officer/accountant KHÔNG được đổi: chúng không thuộc
+            # MFA_ENFORCE_ROLES, bật MFA cho chúng là tự thêm một bước đăng nhập
+            # mà sản phẩm không đòi.
+            loi.append(
+                f"{ten}: mfa_enabled=True nhưng role {u.role!r} không thuộc "
+                "MFA_ENFORCE_ROLES — bootstrap không được chạm persona này"
+            )
 
         # Đếm một hàng active là CHƯA ĐỦ: một hàng active trỏ sai đơn vị vẫn cho
         # count = 1. Phải kiểm cả nội dung hàng ấy và con trỏ trên `user`.
@@ -381,23 +613,74 @@ async def kiem_hoi_tu(db, don_vi: Dict[str, int]) -> None:
 # =============================================================================
 # CLI
 # =============================================================================
-async def _chay(in_mat_khau: Optional[str]) -> int:
+async def _chay(in_mat_khau: Optional[str], in_ma_totp: Optional[str]) -> int:
     if in_mat_khau:
         kiem_moi_truong(can_ghi=False)
         if in_mat_khau not in {p["username"] for p in PERSONA}:
             raise ChanLai(f"{in_mat_khau!r} không phải persona smoke")
-        # ĐÚNG một dòng ra stdout, không kèm nhãn, để tiện `read`/pipe mà không
-        # lẫn vào log.
+        # ĐÚNG một dòng, không nhãn: log của `app.config` đã sang stderr.
         print(mat_khau(in_mat_khau))
         return 0
 
+    if in_ma_totp:
+        kiem_moi_truong(can_ghi=False)
+        kiem_moi_truong_mfa()
+        if in_ma_totp not in PERSONA_CAN_MFA:
+            raise ChanLai(
+                f"{in_ma_totp!r} không thuộc {PERSONA_CAN_MFA} — chỉ persona đặc "
+                "quyền mới bật MFA"
+            )
+        async with AsyncSessionLocal() as db:
+            # ĐÚNG một dòng: mã 6 số, không secret, không nhãn.
+            print(await ma_totp(db, in_ma_totp))
+        return 0
+
     kiem_moi_truong(can_ghi=True)
+    # Đòi cấu hình MFA TRƯỚC khi tạo bất kỳ tài khoản nào: hỏng giữa chừng thì
+    # còn lại vài persona đã tạo và vài persona chưa, không cái nào nói ra điều đó.
+    kiem_moi_truong_mfa()
     async with AsyncSessionLocal() as db:
         don_vi = await verify_foundation(db)
         print(f"  nền ĐẠT · đơn vị A={don_vi['unit_a']} · B={don_vi['unit_b']}")
         ket = await provision_personas(db, don_vi)
+
+        mfa_ket: Dict[str, str] = {}
+        # Gom post-commit callback của cả ba persona rồi mới chạy, SAU commit.
+        #
+        # Chúng phát `USER_FORCE_LOGOUT` cho client. Chạy sớm — ngay trong
+        # `bat_mfa`, lúc giao dịch còn dở — thì persona thứ hai/thứ ba hỏng, hoặc
+        # chính `commit` hỏng, sẽ để lại đúng trạng thái tệ nhất: DB rollback nên
+        # phiên vẫn hiệu lực, mà client thì đã bị đá ra và không hiểu vì sao.
+        cho_sau_commit: List[Any] = []
+        for ten in PERSONA_CAN_MFA:
+            u = (
+                await db.execute(
+                    select(models.User).where(models.User.username == ten)
+                )
+            ).scalars().first()
+            if u is None:
+                raise ChanLai(f"{ten}: không tồn tại sau provision")
+            nhan, cb = await bat_mfa(db, u)
+            mfa_ket[ten] = nhan
+            if cb:
+                cho_sau_commit.append((ten, cb))
+
+        await db.commit()
+
+        # CHỈ tới đây trạng thái mới là thật. Một callback hỏng không được kéo
+        # theo cả lượt: dữ liệu đã đúng, thứ hỏng chỉ là thông báo realtime.
+        for ten, cb in cho_sau_commit:
+            try:
+                await cb()
+            except Exception as e:  # noqa: BLE001
+                print(f"  ⚠️ {ten}: phát force-logout hỏng sau commit ({e}) — "
+                      "MFA đã bật và phiên đã thu hồi trong DB; client cũ sẽ rớt "
+                      "ở lần gọi API kế tiếp")
+
         await kiem_hoi_tu(db, don_vi)
     print(f"  sáu persona đã hội tụ: {', '.join(sorted(ket))}")
+    print(f"  MFA: {', '.join(f'{k}={v}' for k, v in sorted(mfa_ket.items()))}")
+    print("  lấy mã đăng nhập: --in-ma-totp <persona>  (in mã 6 số, KHÔNG in secret)")
     return 0
 
 
@@ -407,9 +690,19 @@ def main() -> int:
         "--in-mat-khau", metavar="PERSONA", default=None,
         help="in mật khẩu dẫn xuất của một persona ra stdout rồi thoát (không ghi DB)",
     )
+    p.add_argument(
+        "--in-ma-totp", metavar="PERSONA", default=None,
+        help=(
+            "in mã TOTP 6 số hiện tại của một persona đặc quyền rồi thoát "
+            "(KHÔNG in secret, không ghi DB)"
+        ),
+    )
     a = p.parse_args()
+    if a.in_mat_khau and a.in_ma_totp:
+        print("DỪNG: chọn MỘT trong --in-mat-khau / --in-ma-totp", file=sys.stderr)
+        return 1
     try:
-        return asyncio.run(_chay(a.in_mat_khau))
+        return asyncio.run(_chay(a.in_mat_khau, a.in_ma_totp))
     except ChanLai as e:
         print(f"DỪNG: {e}", file=sys.stderr)
         return 1
