@@ -75,6 +75,11 @@ APP_ENV_CHO_PHEP = {"development"}
 # hai thứ sẽ lệch nhau.
 DB_CHO_PHEP = {smoke_baseline._DB_DUY_NHAT}
 
+# GÓI mà tệp này dựng fixture cho. Một nguồn chuẩn, dùng ở CẢ hai chỗ: khai vào
+# sổ khi ghi, và đối chiếu với sổ khi đọc. Hai chuỗi "P1" rời nhau là hai thứ sẽ
+# lệch — và lệch ở đây nghĩa là fixture gói này nằm trong sổ gói kia.
+PACK = "P1"
+
 TIEN_FULL = Decimal("5000000")
 TIEN_DOT = Decimal("3000000")
 TIEN_DUP = Decimal("1500000")
@@ -169,6 +174,10 @@ def _so(thu_muc: Path, run_id: str) -> "registry.Registry":
             # hai bản hằng là hai thứ sẽ lệch nhau.
             project_mong_doi=smoke_baseline._PROJECT_DUY_NHAT,
             database_mong_doi=smoke_baseline._DB_DUY_NHAT,
+            # Tệp này CHỈ dựng fixture gói P1 — không có `F-REFUND-*` của P2. Khai
+            # gói ra đây để một sổ mở cho gói khác bị chặn ngay, thay vì để fixture
+            # P1 ghi vào sổ P2 rồi cleanup restore theo baseline của gói kia.
+            pack_mong_doi=PACK,
         )
     except registry.LoiRegistry as e:
         raise ChanLai(
@@ -350,7 +359,7 @@ async def seed(
         base = abs(hash(run_id)) % 900000
         kq: Dict[str, Any] = {
             "run_id": run_id,
-            "pack": "P1",
+            "pack": PACK,
             "tao_luc": datetime.now(timezone.utc).isoformat(),
             "actor": {
                 "ACC-A": {"id": acc_a.id, "username": acc_a.username,

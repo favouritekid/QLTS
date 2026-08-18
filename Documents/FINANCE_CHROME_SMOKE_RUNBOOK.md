@@ -81,7 +81,8 @@ Không chờ sửa ba điểm mới bắt đầu các pack độc lập khác; n
 - Chỉ chạy trên dev cục bộ với dữ liệu thử riêng.
 - Ghi lại chính xác `branch`, `HEAD`, dirty/clean state, migration head và thời gian chạy.
 - Bắt buộc có cờ chủ động `SMOKE_ALLOW_DESTRUCTIVE=1` trước mọi seed/cleanup có thay đổi dữ liệu.
-- Bắt buộc truyền rõ `SMOKE_WEB_BASE=http://localhost:3000` và `SMOKE_API_BASE=http://localhost:8000`; không tự suy từ biến môi trường production.
+- Bắt buộc truyền rõ `SMOKE_WEB_BASE=http://127.0.0.1:3100` và `SMOKE_API_BASE=http://127.0.0.1:8100`; không tự suy từ biến môi trường production.
+  Đây là cổng của stack `qltssmoke` (`docker-compose.smoke.yml`), KHÔNG phải `3000`/`8000` của stack dev — trỏ nhầm là chạy smoke trên `qlts_dev`.
 - Seed/cleanup phải từ chối chạy nếu `APP_ENV`, hostname, database name hoặc URL có dấu hiệu production.
 - Không ghi mật khẩu, access token, review token, cookie hoặc thông tin cá nhân thật vào ảnh, log hay tệp bằng chứng.
 - Không dùng `docker compose down`. Các container `qlts-g2-*` của worktree khác dùng chung compose project; chỉ `start/stop` từng service được phép động tới.
@@ -117,8 +118,8 @@ FIN-SMOKE-YYYYMMDD-HHMM-<sha8>
 Mọi mã tham chiếu, ghi chú, tên fixture và file import phải chứa `RUN_ID`. Lưu registry cục bộ, không commit:
 
 ```text
-Backend_FastAPI/.smoke/finance/<RUN_ID>/registry.json
-Backend_FastAPI/.smoke/finance/<RUN_ID>/evidence/
+.smoke-evidence/<RUN_ID>/registry.json
+.smoke-evidence/dumps/<RUN_ID>.dump
 ```
 
 `registry.json` (quản bởi `smoke_lib/registry.py`) tối thiểu phải ghi:
@@ -167,8 +168,8 @@ Ghi kết quả vào manifest. Không dùng kết quả test của commit cũ ch
 
 Xác nhận:
 
-- URL trình duyệt là `http://localhost:3000`;
-- API là `http://localhost:8000`;
+- URL trình duyệt là `http://127.0.0.1:3100`;
+- API là `http://127.0.0.1:8100`;
 - database là DB dev/test đã chỉ định, không phải production;
 - Alembic đang ở head mà source yêu cầu;
 - `fee.duplicate_guard_version` tồn tại;
@@ -320,9 +321,112 @@ Trước khi mở Chrome, seed/fixture validator phải exit non-zero nếu thi�
 - fixture dead-target có đủ `rejected`, `withdrawn`, `withdrawal_pending`, fee/invoice cancelled và fee `awaiting_accountant_confirmation`;
 - kỳ kế toán bao phủ đúng ngày giao dịch theo múi giờ Việt Nam;
 - overpayment fixture: từ #552 **đã có producer production** (`payment_service.check_overpayment` → `overpayment_amount=excess` → event `overpayment_recorded`), nên lượt mới phải sinh khoản dư **bằng đường thật** (thu vượt số còn nợ) chứ không seed thẳng bản ghi; chỉ dùng `seeded_resolution_only=true` khi đường thật không dựng được, và phải ghi lý do;
-- mọi ID được ghi atomically vào `registry.json` trước khi bước Chrome đầu tiên chạy; ngoài ra mỗi action phải **khai dự kiến trước** bằng `bat_dau_action()` rồi mới thao tác — danh sách cho phép điền sau khi đã thấy id lạ thì không chứng minh được gì.
+- mọi ID được ghi atomically vào `registry.json` trước khi bước Chrome đầu tiên chạy; ngoài ra mỗi action phải **khai dự kiến trước** rồi mới thao tác — danh sách cho phép điền sau khi đã thấy id lạ thì không chứng minh được gì. Khai bằng CLI, xem §A05.1; `registry.bat_dau_action()` là API bên dưới, không gọi tay.
 
 Validator phải in một bảng `fixture_code -> IDs -> initial status -> amount`. Không dựa vào tên học sinh để tìm lại record sau mutation.
+
+### A05.1. Sổ hành động — khai dự kiến TRƯỚC mỗi mutation
+
+`registry.bat_dau_action()`/`ket_thuc_action()` có từ đầu nhưng cho tới 16-08-2026
+**không có caller vận hành nào** — chỉ unit test gọi. Nghĩa là điều §A05 đòi hỏi
+không thi hành được: bấm nút trên trình duyệt thì DB đổi trước, sổ ghi sau. Nay
+dùng CLI, chạy TRÊN HOST (nó cần `docker`), từ gốc worktree smoke:
+
+```bash
+CID=$(docker compose -p qltssmoke -f docker-compose.yml -f docker-compose.smoke.yml \
+      --env-file .env.smoke ps -q postgres)
+
+# TRƯỚC khi bấm nút: khai ca và thay đổi dự kiến.
+# KHÔNG khai bảng — cả 13 bảng của `BANG_THEO_DOI` được chụp TỰ ĐỘNG (xem dưới).
+PYTHONPATH=Backend_FastAPI/scripts python -m smoke_lib.cli --action-begin \
+  --run-id <RUN_ID> --thu-muc .smoke-evidence --pack P1 --container "$CID" \
+  --ten <MÃ_CA> \
+  --them-so-luong <bảng>=<N> [--them <bảng>=<id>] [--doi …] [--mat …]
+# → in `chi_so=N`
+
+#   … thao tác trên trình duyệt …
+
+# SAU khi bấm: đối chiếu
+PYTHONPATH=Backend_FastAPI/scripts python -m smoke_lib.cli --action-end \
+  --run-id <RUN_ID> --thu-muc .smoke-evidence --pack P1 --container "$CID" \
+  --chi-so N
+```
+
+Khai thay đổi bằng bốn cờ, dùng đúng cái hợp với ca:
+
+| Cờ | Khi nào |
+|---|---|
+| `--them-so-luong payment=1` | server sinh id (hầu hết ca UI): chỉ biết **số lượng** |
+| `--them payment=7` | id biết trước |
+| `--doi invoice=4` | hàng đã có sẽ đổi nội dung |
+| `--mat payment=3` | hàng sẽ biến mất |
+
+Lệch **theo cả hai chiều** đều là dừng: thay đổi ngoài dự kiến làm mất khả năng
+quy trách nhiệm, còn thay đổi đã khai mà KHÔNG xảy ra nghĩa là hệ thống không làm
+việc ta vừa khẳng định nó làm.
+
+⚠️ **Phạm vi quan sát không phải lựa chọn của người chạy.** CLI luôn chụp **cả 13
+bảng** trong `registry.BANG_THEO_DOI` — `lead`, `admission_profile`, `fee`,
+`invoice`, `payment`, `payment_transaction`, `payment_intent`,
+`payment_import_batch`, `payment_import_row`, `refund_request`,
+`overpayment_record`, `entity_audit_log`, `notification`. Không có cờ chọn bảng,
+và đó là cố ý: một ca như FIN-02 chạm `fee`, `invoice`, `admission_profile`,
+`entity_audit_log`, `notification` chứ không chỉ `payment`, còn người vận hành thì
+sẽ quên.
+
+Hệ quả khi khai dự kiến: **khai đủ mọi bảng mà ca thật sự làm đổi**. Khai thiếu là
+LỆCH — đó là thiết kế, không phải phiền toái.
+
+**Ca mới chưa biết chạm những bảng nào ⇒ quy trình RIÊNG, không làm trên run
+nghiệm thu.** Đọc `ngoai_du_kien` rồi chép thẳng vào phần khai chính là điều §A05
+cấm: danh sách cho phép điền sau khi đã thấy id lạ thì không chứng minh được gì —
+và nếu delta ấy do lỗi sinh ra, thao tác đó **hợp thức hoá chính con bug**. Trên
+run nghiệm thu nó cũng bất khả thi: action đã LỆCH thì máy trạng thái chỉ còn cho
+`--cleanup`.
+
+Đường đúng:
+
+1. Mở một **run khám phá**, ghi rõ trong sổ là **không tính nghiệm thu**.
+2. Chạy ca, đọc từng delta, **đối chiếu với contract/mã nguồn**: mỗi hàng phải
+   giải thích được vì sao nó PHẢI xuất hiện. Không chép máy móc thành allowlist.
+3. `--cleanup` run khám phá.
+4. Mở **run-id MỚI**, baseline/bootstrap/seed lại từ đầu, rồi khai **toàn bộ kỳ
+   vọng đã được xác nhận** ở bước 2 — trước mutation.
+
+**Không sửa action hay registry của run cũ.** Bản khai chỉ có giá trị vì nó được
+ghi trước khi biết kết quả; sửa lại sau là xoá đúng thứ làm nó thành bằng chứng.
+
+⚠️ **Một CLI writer tại một thời điểm.** Sổ ghi bằng `os.replace` (atomic trong
+một tiến trình) nhưng **không có khoá liên tiến trình**: hai lệnh `--action-begin`
+chạy song song vẫn có thể đè nhau. Không chạy hai lượt smoke cùng lúc trên một sổ.
+
+Bốn cổng chạy trước mỗi lần, không chỉ lần đầu: sổ phải đúng project + database +
+**pack**; sổ phải đã có baseline; danh tính PostgreSQL thật phải khớp `danh_tinh`
+ghi lúc baseline (cùng container VÀ cùng `system_identifier`).
+
+⚠️ `--pack` bắt buộc. Trước 16-08 sổ chỉ kiểm project và database, nên seeder P1
+chạy được trên sổ mở cho P2 — `smoke_finance_seed.py` chỉ dựng fixture P1 (không
+có `F-REFUND-*`), và cleanup sau đó restore theo baseline của gói kia.
+
+### A05.2. React #418 (hydration mismatch) — chính sách có điều kiện
+
+Đo 16-08-2026 trên stack smoke, persona `ACC-A`: #418 xuất hiện **2 lần** trong
+giai đoạn ngay sau đăng nhập (cách nhau 41 giây); điều hướng trực tiếp `/finance`
+và `/dashboard/officer` sau đó **không** tái hiện. Chưa quy được nguyên nhân —
+Socket.io có hoạt động nhưng không có bằng chứng nó là gốc.
+
+Hậu quả kỹ thuật: React vứt cây HTML do server dựng rồi dựng lại ở client. Không
+ghi DB, nhưng **thứ vừa nhìn thấy trên DOM có thể không còn là thứ đang có**. Vì
+mọi kết luận smoke dựa trên quan sát DOM, xử lý như sau:
+
+* **#418 TRƯỚC mutation**: bỏ ảnh chụp DOM/locator cũ, lấy lại mới rồi mới tiếp.
+* **#418 TRONG hoặc NGAY SAU mutation**: **dừng ca đó**, đối chiếu API/DB trước.
+  Tuyệt đối không retry theo cảm giác — sổ hành động đã khai dự kiến, retry mù là
+  cách chắc chắn nhất để tạo bản ghi thứ hai.
+* Ghi **timestamp + route** của mỗi lần #418 vào evidence.
+
+FIN-00 vì vậy là **FAIL đã biết**, không phải PASS — nhưng nó không chặn P1.
+Không gọi FIN-00 là PASS khi #418 còn xuất hiện.
 
 ## 4. Persona và ma trận quyền
 
