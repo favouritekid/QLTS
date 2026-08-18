@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -29,6 +28,12 @@ from httpx import AsyncClient
 
 from app import models
 from app.database import AsyncSessionLocal
+from tests.fixtures.dinh_danh import (
+    citizen_id_tu_khoa,
+    khoa_duy_nhat,
+    ma_tu_khoa,
+    sdt_tu_khoa,
+)
 
 
 log = logging.getLogger(__name__)
@@ -44,9 +49,9 @@ log = logging.getLogger(__name__)
 @pytest_asyncio.fixture
 async def pr3a_seed(seed_lead_dependencies: dict) -> dict:
     """Seed full Phase 3 chain (inlined from tests/unit/test_phase3_pr3a)."""
-    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
     async with AsyncSessionLocal() as s:
         async with s.begin():
+            khoa = await khoa_duy_nhat(s)
             offering = models.ProgramOffering(
                 program_id=seed_lead_dependencies["major_program_id"],
                 offering_type="full_time",
@@ -69,8 +74,8 @@ async def pr3a_seed(seed_lead_dependencies: dict) -> dict:
             )
 
             method = models.AdmissionMethod(
-                code=f"M3C_{ts}",
-                name=f"PR-3C method {ts}",
+                code=ma_tu_khoa("M3C_", khoa, 50),
+                name=f"PR-3C method {khoa}",
                 requires_subject_scores=True,
                 is_active=True,
             )
@@ -87,15 +92,15 @@ async def pr3a_seed(seed_lead_dependencies: dict) -> dict:
             await s.flush()
 
             sg = models.SubjectGroup(
-                code=f"SG3C{ts}"[:20],
-                name=f"SubjectGroup3C {ts}",
+                code=ma_tu_khoa("G", khoa, 10),
+                name=f"SubjectGroup3C {khoa}",
             )
             s.add(sg)
             await s.flush()
 
             subj = models.Subject(
-                code=f"SU3C{ts}"[:20],
-                name_vi=f"Subject3C {ts}",
+                code=ma_tu_khoa("SU3C", khoa, 50),
+                name_vi=f"Subject3C {khoa}",
             )
             s.add(subj)
             await s.flush()
@@ -117,8 +122,8 @@ async def pr3a_seed(seed_lead_dependencies: dict) -> dict:
             await s.flush()
 
             lead = models.Lead(
-                full_name=f"PR-3C Lead {ts}",
-                phone=f"097{ts:07d}"[:10],
+                full_name=f"PR-3C Lead {khoa}",
+                phone=sdt_tu_khoa("097", khoa),
                 unit_id=seed_lead_dependencies["unit_id"],
                 pipeline_stage_id=seed_lead_dependencies["stage_id"],
                 source="walkin",
@@ -128,7 +133,7 @@ async def pr3a_seed(seed_lead_dependencies: dict) -> dict:
 
             profile = models.AdmissionProfile(
                 lead_id=lead.id,
-                citizen_id=f"7{ts:08d}1"[:12],
+                citizen_id=citizen_id_tu_khoa(lead.id, "7"),
                 status="draft",
                 applied_rules={},
                 academic_year=2026,
@@ -999,10 +1004,10 @@ async def test_publish_result_manager_cross_unit_idor_denied(
                 s.add(unit_2)
                 await s.flush()
 
-            ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
+            khoa_alt = await khoa_duy_nhat(s)
             lead_alt = models.Lead(
-                full_name=f"Alt Lead {ts}",
-                phone=f"096{ts:07d}"[:10],
+                full_name=f"Alt Lead {khoa_alt}",
+                phone=sdt_tu_khoa("096", khoa_alt),
                 unit_id=TestOrgData.UNIT_2["id"],
                 pipeline_stage_id=seed_lead_dependencies["stage_id"],
                 source="walkin",
@@ -1012,7 +1017,7 @@ async def test_publish_result_manager_cross_unit_idor_denied(
 
             profile_alt = models.AdmissionProfile(
                 lead_id=lead_alt.id,
-                citizen_id=f"8{ts:08d}9"[:12],
+                citizen_id=citizen_id_tu_khoa(lead_alt.id, "8"),
                 status="reviewing",
                 applied_rules={},
                 academic_year=2026,
@@ -1727,15 +1732,12 @@ async def _seed_admitted_choice_for_path(
     seeded profile (annual count = COUNT WHERE Lead.offering_id matches
     AND profile.academic_year matches AND status in occupying set).
     """
-    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
-    # Add a small random offset to avoid collisions when called in tight loop
-    import random
-    ts = (ts + random.randint(0, 999)) % 1_000_000
     async with AsyncSessionLocal() as s:
         async with s.begin():
+            khoa = await khoa_duy_nhat(s)
             lead = models.Lead(
-                full_name=f"Quota seed lead {ts}",
-                phone=f"099{ts:07d}"[:10],
+                full_name=f"Quota seed lead {khoa}",
+                phone=sdt_tu_khoa("099", khoa),
                 unit_id=unit_id,
                 pipeline_stage_id=pipeline_stage_id,
                 source="walkin",
@@ -1744,7 +1746,7 @@ async def _seed_admitted_choice_for_path(
             s.add(lead); await s.flush()
             profile = models.AdmissionProfile(
                 lead_id=lead.id,
-                citizen_id=f"7{ts:08d}9"[:12],
+                citizen_id=citizen_id_tu_khoa(lead.id, "7"),
                 status="admitted",
                 applied_rules={"admission_path_id": path_id},
                 academic_year=2026,
@@ -1944,12 +1946,12 @@ async def test_capacity_check_mixes_multi_nv_and_legacy_counts(
         pr1_seed_with_quota["offering_id"],
     )
     # Branch (b) — legacy single-NV via applied_rules
-    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
     async with AsyncSessionLocal() as s:
         async with s.begin():
+            khoa = await khoa_duy_nhat(s)
             lead = models.Lead(
-                full_name=f"Legacy quota lead {ts}",
-                phone=f"098{ts:07d}"[:10],
+                full_name=f"Legacy quota lead {khoa}",
+                phone=sdt_tu_khoa("098", khoa),
                 unit_id=seed_lead_dependencies["unit_id"],
                 pipeline_stage_id=seed_lead_dependencies["stage_id"],
                 source="walkin",
@@ -1957,7 +1959,7 @@ async def test_capacity_check_mixes_multi_nv_and_legacy_counts(
             s.add(lead); await s.flush()
             legacy = models.AdmissionProfile(
                 lead_id=lead.id,
-                citizen_id=f"7{ts:08d}5"[:12],
+                citizen_id=citizen_id_tu_khoa(lead.id, "6"),
                 status="admitted",
                 uses_choice_engine=False,
                 applied_rules={
@@ -2119,22 +2121,22 @@ async def test_capacity_check_annual_count_attributes_to_admitted_path_not_lead_
 
     # Seed a "different intent" offering Y_B → lead points there but
     # profile admits via NV into path X (which belongs to Y_A = seed offering)
-    ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
     async with AsyncSessionLocal() as s:
         async with s.begin():
+            khoa = await khoa_duy_nhat(s)
             # Different offering (Y_B) — distinct offering_type to dodge
             # UNIQUE(program_id, offering_type) from pr3a_seed
             offering_b = models.ProgramOffering(
                 program_id=seed_lead_dependencies["major_program_id"],
-                offering_type=f"part_time_{ts}",
+                offering_type=ma_tu_khoa("part_time_", khoa, 50),
                 duration_semesters=8,
                 is_active=True,
             )
             s.add(offering_b); await s.flush()
 
             lead = models.Lead(
-                full_name=f"Cross-offering intent lead {ts}",
-                phone=f"097{ts:07d}"[:10],
+                full_name=f"Cross-offering intent lead {khoa}",
+                phone=sdt_tu_khoa("097", khoa),
                 unit_id=seed_lead_dependencies["unit_id"],
                 pipeline_stage_id=seed_lead_dependencies["stage_id"],
                 source="walkin",
@@ -2143,7 +2145,7 @@ async def test_capacity_check_annual_count_attributes_to_admitted_path_not_lead_
             s.add(lead); await s.flush()
             profile = models.AdmissionProfile(
                 lead_id=lead.id,
-                citizen_id=f"7{ts:08d}3"[:12],
+                citizen_id=citizen_id_tu_khoa(lead.id, "9"),
                 status="admitted",
                 applied_rules={"admission_path_id": pr1_seed_with_quota["path_id"]},
                 academic_year=2026,
@@ -2459,3 +2461,98 @@ async def test_promote_waitlist_succeeds_when_seat_freed(
         assert ch_after.decision == "admitted"
         profile_after = await s.get(models.AdmissionProfile, seed["profile_id"])
         assert profile_after.status == "admitted"
+
+
+# ============================================================================
+# Khoá lại nguồn định danh — chống tái phát flake `uq_citizen_academic_year`
+#
+# Bối cảnh: PR #564 attempt 1 đỏ ở `test_capacity_check_null_admit_quota_pass_
+# through` vì `citizen_id` sinh từ `ms % 1_000_000` (quay vòng mỗi 1.000 giây);
+# chạy lại y nguyên commit thì xanh 909/909. Xem `tests/fixtures/dinh_danh.py`.
+#
+# Bốn ca dưới đây phải ĐỎ nếu ai đó khôi phục cách cũ.
+# ============================================================================
+
+CHU_KY_QUAY_VONG_S = 1_000
+"""`ms % 1_000_000` lặp lại sau đúng 1.000 giây."""
+
+
+def _cong_thuc_cu(epoch_giay: float) -> int:
+    """Tái hiện NGUYÊN VĂN công thức đã bị loại bỏ, để chứng minh nó hỏng."""
+    return int(epoch_giay * 1000) % 1_000_000
+
+
+def test_ca_kiem_nay_co_du_manh_khong():
+    """Ca kiểm phải chứng minh được cách CŨ thật sự trùng, không chỉ khẳng định.
+
+    Hai mốc cách nhau đúng một chu kỳ ⇒ cùng `ts` ⇒ cùng `citizen_id` ⇒ cùng
+    (citizen_id, academic_year) ⇒ vi phạm `uq_citizen_academic_year`.
+    """
+    t0 = 1_787_000_000.0
+    t1 = t0 + CHU_KY_QUAY_VONG_S
+
+    assert _cong_thuc_cu(t0) == _cong_thuc_cu(t1), (
+        "Ca kiểm này vô nghĩa nếu công thức cũ không trùng — kiểm lại số học"
+    )
+
+    cu_0 = f"7{_cong_thuc_cu(t0):08d}1"[:12]
+    cu_1 = f"7{_cong_thuc_cu(t1):08d}1"[:12]
+    assert cu_0 == cu_1, (
+        f"Công thức cũ PHẢI sinh trùng sau {CHU_KY_QUAY_VONG_S}s: {cu_0} vs {cu_1}"
+    )
+
+
+def test_nguon_moi_khong_trung_du_thoi_diem_nao():
+    """Cách MỚI suy từ khóa DB nên hai khóa khác nhau luôn cho hai giá trị khác.
+
+    Không có tham số thời gian trong hàm ⇒ không có chu kỳ để quay vòng.
+    """
+    khoas = [1, 2, 999, 1_000, 1_001, 123_456, 1_000_000, 1_000_001]
+    ra = [citizen_id_tu_khoa(k, "7") for k in khoas]
+    assert len(set(ra)) == len(ra), f"citizen_id bị trùng: {ra}"
+    assert all(len(x) == 12 and x.isdigit() for x in ra), ra
+
+    # Hai khóa cách nhau đúng một chu kỳ của công thức cũ — cách mới vẫn khác.
+    assert citizen_id_tu_khoa(5, "7") != citizen_id_tu_khoa(5 + 1_000_000, "7")
+
+
+def test_nhom_khong_phai_nguon_duy_nhat():
+    """Chữ số phân nhóm chỉ để đọc log; tính duy nhất đến từ `khoa`."""
+    assert citizen_id_tu_khoa(42, "7") != citizen_id_tu_khoa(43, "7")
+    # cùng khóa + khác nhóm vẫn khác, nhưng đó KHÔNG phải thứ ta dựa vào
+    assert citizen_id_tu_khoa(42, "7") != citizen_id_tu_khoa(42, "8")
+
+
+def test_tep_nay_khong_con_sinh_dinh_danh_bang_dong_ho():
+    """Guard khoá: gỡ helper hoặc khôi phục `ts` là ca này ĐỎ ngay.
+
+    Đây là ca duy nhất bắt được việc *một* fixture lặng lẽ quay về cách cũ —
+    ba ca trên chỉ nói về số học, không nói về nội dung tệp.
+    """
+    import pathlib
+    import re
+
+    nguon = pathlib.Path(__file__).read_text(encoding="utf-8")
+
+    # bỏ chính khối guard này ra khỏi phép quét, nếu không nó tự bắt mình
+    moc = "# Khoá lại nguồn định danh"
+    than = nguon.split(moc)[0]
+
+    cam = {
+        "% 1_000_000": "modulo mili-giây — quay vòng mỗi 1.000 giây",
+        "random.randint": "random chỉ giảm xác suất, không loại bỏ trùng",
+        "asyncio.sleep(": "sleep để né trùng là che lỗi thiết kế",
+    }
+    vi_pham = [f"{k} ({ly_do})" for k, ly_do in cam.items() if k in than]
+    assert not vi_pham, (
+        "Fixture trong tệp này phải lấy định danh từ tests/fixtures/dinh_danh.py, "
+        f"không phải từ đồng hồ/random. Vi phạm: {vi_pham}"
+    )
+
+    # và phải thật sự dùng helper, không chỉ 'vắng mặt cái cũ'
+    assert "citizen_id_tu_khoa(" in than, "không thấy fixture nào dùng helper"
+    assert "khoa_duy_nhat(" in than, "không thấy fixture nào lấy khóa từ DB"
+
+    # mọi citizen_id trong tệp phải đi qua helper
+    tho = re.findall(r'citizen_id\s*=\s*f"', than)
+    assert not tho, f"còn {len(tho)} chỗ đặt citizen_id bằng f-string thô"
