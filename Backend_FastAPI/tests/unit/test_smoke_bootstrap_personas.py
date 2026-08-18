@@ -478,3 +478,68 @@ def test_kiem_hoi_tu_canh_ca_hai_chieu():
     assert "elif u.mfa_enabled:" in khoi, (
         "không canh chiều ngược: officer/accountant bị bật MFA vẫn lọt"
     )
+
+
+def test_bat_mfa_KHONG_tu_goi_post_commit_callback():
+    """Callback phát `USER_FORCE_LOGOUT` và chỉ hợp lệ SAU commit.
+
+    `session_service.py:623` ghi rõ "Sau khi đã commit". `bat_mfa` chạy bên trong
+    một giao dịch còn dở — `_chay` chỉ commit sau khi xong cả ba persona. Gọi sớm
+    nghĩa là persona thứ hai/thứ ba hỏng, hoặc chính `commit` hỏng, thì DB rollback
+    trong khi client đã bị đá ra: phiên vẫn hiệu lực mà người dùng đã mất phiên.
+    """
+    khoi = _MA_BOOTSTRAP.split("async def bat_mfa", 1)[1].split("\nasync def ", 1)[0]
+    import re
+    goi_som = re.findall(r"await\s+(?:callback|cb)\s*\(\s*\)", khoi)
+    assert not goi_som, (
+        f"bat_mfa tự gọi post-commit callback ({goi_som}) trong khi giao dịch chưa "
+        "commit — phải TRẢ nó về cho người gọi"
+    )
+    assert "return f\"vua_bat(thu_hoi=" in khoi and "callback" in khoi, (
+        "bat_mfa không trả callback về — người gọi không có gì để chạy sau commit"
+    )
+
+
+def test_chay_goi_callback_SAU_commit():
+    """Và người gọi phải chạy nó ĐÚNG THỨ TỰ: gom → commit → chạy.
+
+    Neo vào đoạn của ĐƯỜNG GHI (`kiem_moi_truong(can_ghi=True)`) để không bắt
+    nhầm nhánh `--in-mat-khau`/`--in-ma-totp` nằm trước — cùng lớp bẫy "phép kiểm
+    gộp che nhánh phía sau" đã vấp một lần ở guard MFA.
+    """
+    chay = _MA_BOOTSTRAP.split("async def _chay", 1)[1]
+    moc_ghi = chay.find("kiem_moi_truong(can_ghi=True)")
+    assert moc_ghi != -1, "_chay không còn nhánh ghi"
+    duong_ghi = chay[moc_ghi:]
+
+    import re
+
+    vi_commit = duong_ghi.find("await db.commit()")
+    assert vi_commit != -1, "đường ghi không commit"
+
+    truoc_commit = duong_ghi[:vi_commit]
+    sau_commit = duong_ghi[vi_commit:]
+
+    # Bắt MỌI lời gọi callback, không neo vào đúng một tên biến.
+    #
+    # Bản đầu của ca này so `find("await cb()")` với vị trí commit — và một đột
+    # biến chèn `await _c()` TRƯỚC commit vẫn xanh, vì `await cb()` sau commit vẫn
+    # còn đó. Đo được: 36 passed trên bản đã hỏng. Phép kiểm theo vị trí của MỘT
+    # chuỗi không bao giờ chứng minh được "không có lời gọi nào ở phía trước".
+    MAU_GOI = r"await\s+\w*(?:cb|callback|_c)\w*\s*\(\s*\)"
+
+    som = re.findall(MAU_GOI, truoc_commit)
+    assert not som, (
+        f"có lời gọi callback TRƯỚC commit ({som}) — sự kiện force-logout phát trên "
+        "trạng thái chưa commit; persona sau hỏng là DB rollback trong khi client "
+        "đã bị đá ra"
+    )
+    muon = re.findall(MAU_GOI, sau_commit)
+    assert muon, (
+        "đường ghi không chạy callback nào SAU commit — sự kiện force-logout không "
+        "bao giờ phát, client cũ giữ phiên cho tới lần gọi API kế tiếp"
+    )
+    assert "cho_sau_commit" in duong_ghi, (
+        "không gom callback: gọi rải rác giữa vòng lặp thì persona sau hỏng vẫn đã "
+        "phát force-logout cho persona trước"
+    )

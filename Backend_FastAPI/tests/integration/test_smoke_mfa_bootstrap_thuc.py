@@ -126,8 +126,14 @@ async def test_bat_mfa_thu_hoi_MOI_phien_cu(setup_test_database, manager_user_in
         ).scalars().first()
         assert u is not None and not u.mfa_enabled
 
-        ket = await mod.bat_mfa(db, u)
+        ket, cb = await mod.bat_mfa(db, u)
+        # `bat_mfa` PHẢI trả callback về chứ không tự gọi: nó là post-commit.
+        assert callable(cb), (
+            "bat_mfa không trả post-commit callback — nếu nó tự gọi thì sự kiện "
+            "force-logout đã phát trên trạng thái CHƯA commit"
+        )
         await db.commit()
+        await cb()
 
     assert ket.startswith("vua_bat"), ket
 
@@ -155,8 +161,10 @@ async def test_bat_mfa_ghi_secret_giai_ma_duoc(setup_test_database, manager_user
         u = (
             await db.execute(select(models.User).where(models.User.id == uid))
         ).scalars().first()
-        await mod.bat_mfa(db, u)
+        _, cb = await mod.bat_mfa(db, u)
         await db.commit()
+        if cb:
+            await cb()
 
     async with AsyncSessionLocal() as db:
         u = (
@@ -189,18 +197,21 @@ async def test_bat_mfa_idempotent_tren_DB(setup_test_database, manager_user_in_d
         u = (
             await db.execute(select(models.User).where(models.User.id == uid))
         ).scalars().first()
-        await mod.bat_mfa(db, u)
+        _, cb = await mod.bat_mfa(db, u)
         await db.commit()
+        if cb:
+            await cb()
         secret_1 = u.totp_secret_encrypted
 
     async with AsyncSessionLocal() as db:
         u = (
             await db.execute(select(models.User).where(models.User.id == uid))
         ).scalars().first()
-        ket2 = await mod.bat_mfa(db, u)
+        ket2, cb2 = await mod.bat_mfa(db, u)
         await db.commit()
 
     assert ket2 == "da_bat", ket2
+    assert cb2 is None, "lượt idempotent không được sinh callback thu hồi phiên"
 
     async with AsyncSessionLocal() as db:
         u = (
@@ -226,8 +237,10 @@ async def test_ma_totp_khong_tra_ve_secret(setup_test_database, manager_user_in_
         u = (
             await db.execute(select(models.User).where(models.User.id == uid))
         ).scalars().first()
-        await mod.bat_mfa(db, u)
+        _, cb = await mod.bat_mfa(db, u)
         await db.commit()
+        if cb:
+            await cb()
         secret = mfa_service.decrypt_secret(u.totp_secret_encrypted)
 
     async with AsyncSessionLocal() as db:
@@ -235,3 +248,94 @@ async def test_ma_totp_khong_tra_ve_secret(setup_test_database, manager_user_in_
 
     assert len(ra) == 6 and ra.isdigit(), ra
     assert secret not in ra and ra != secret
+
+
+async def test_output_CLI_that_dong_cuoi_moi_la_gia_tri(
+    setup_test_database, manager_user_in_db, tmp_path
+):
+    """Chạy CLI như một tiến trình THẬT và đo stdout — không chỉ đo giá trị trả về.
+
+    Ca này ra đời vì runbook (và docstring) từng khẳng định `--in-mat-khau` /
+    `--in-ma-totp` in "ĐÚNG một dòng". Sai: `app/config.py` in vài dòng
+    `INFO [config.py]: …` ra **stdout** ngay lúc import, trước khi script chạy được
+    dòng nào của mình. Ai chép nguyên cả khối vào ô mật khẩu là dán cả log.
+
+    Mọi ca MFA khác chỉ gọi hàm trong tiến trình, nên chúng không thể phát hiện
+    điều này — đây đúng là khoảng trống "test không chạy đường thật".
+    """
+    import os
+    import subprocess
+
+    mod = _nap_bootstrap()
+    uid = manager_user_in_db["id"]
+    ten = manager_user_in_db["username"]
+
+    from sqlalchemy import select
+    from app import models
+    from app.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        u = (
+            await db.execute(select(models.User).where(models.User.id == uid))
+        ).scalars().first()
+        _, _cb = await mod.bat_mfa(db, u)
+        await db.commit()
+        if _cb:
+            await _cb()
+
+    # PERSONA_CAN_MFA chỉ nhận ba tên `smoke_*`; tài khoản của fixture không nằm
+    # trong đó, nên chạy CLI với `--in-ma-totp` là không trung thực. Thay vào đó
+    # dựng một script driver gọi ĐÚNG `ma_totp` qua ĐÚNG đường import — tức đi qua
+    # `import app.config`, thứ sinh ra mấy dòng INFO ra stdout.
+    #
+    # Ghi ra TỆP chứ không nhét vào `python -c`: `async def` không sống nổi trong
+    # một chuỗi nối bằng dấu chấm phẩy. (Đã vấp: bản đầu của ca này đỏ vì
+    # `SyntaxError`, không phải vì mã sản phẩm sai.)
+    driver = tmp_path / "driver_ma_totp.py"
+    driver.write_text(
+        "\n".join([
+            "import asyncio, importlib.util, sys",
+            f"sys.path.insert(0, {str(_GOC)!r})",
+            f"spec = importlib.util.spec_from_file_location('bs', {str(_TEP)!r})",
+            "m = importlib.util.module_from_spec(spec)",
+            "spec.loader.exec_module(m)",
+            "from app.database import AsyncSessionLocal",
+            "async def go():",
+            "    async with AsyncSessionLocal() as db:",
+            f"        print(await m.ma_totp(db, {ten!r}))",
+            "asyncio.run(go())",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    r = subprocess.run(
+        [sys.executable, str(driver)],
+        capture_output=True, text=True, cwd=str(_GOC),
+        env={**os.environ},
+        timeout=120,
+    )
+    assert r.returncode == 0, f"CLI đổ: rc={r.returncode}\n{r.stderr[-1500:]}"
+
+    dong = [d for d in r.stdout.splitlines() if d.strip()]
+    assert dong, f"stdout rỗng; stderr={r.stderr[-500:]}"
+
+    cuoi = dong[-1].strip()
+    assert len(cuoi) == 6 and cuoi.isdigit(), (
+        f"dòng CUỐI phải là mã 6 số, nhận {cuoi!r}. Toàn bộ stdout:\n"
+        + "\n".join(dong)
+    )
+
+    # Và chứng minh lời khai cũ SAI: có nhiều hơn một dòng, nên `| tail -1` là bắt buộc.
+    assert len(dong) > 1, (
+        "stdout chỉ có một dòng — nếu điều này thành đúng thì sửa lại runbook và "
+        "docstring, đừng giữ hướng dẫn `| tail -1` khi nó không còn cần"
+    )
+
+    # Không dòng nào được chứa secret
+    from app.services import mfa_service
+    async with AsyncSessionLocal() as db:
+        u = (
+            await db.execute(select(models.User).where(models.User.id == uid))
+        ).scalars().first()
+        secret = mfa_service.decrypt_secret(u.totp_secret_encrypted)
+    assert all(secret not in d for d in dong), "secret lọt ra stdout"

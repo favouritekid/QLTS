@@ -25,7 +25,9 @@ không dùng chung một chuỗi cho cả sáu:
   Celery không đọc được nó.
 
 **Không bao giờ in mật khẩu ra log.** Muốn lấy để đăng nhập tay thì gọi
-``--in-mat-khau <persona>``, nó in ĐÚNG một dòng ra stdout và không ghi gì khác.
+``--in-mat-khau <persona>``. Giá trị là **dòng CUỐI** của stdout — dùng ``| tail -1``.
+Không phải dòng duy nhất: ``app.config`` in vài dòng ``INFO [config.py]: …`` ra stdout
+ngay lúc import, trước khi script kịp chạy dòng nào.
 
 Hội tụ, không phải "đã tồn tại nên bỏ qua"
 ------------------------------------------
@@ -45,7 +47,7 @@ import hmac
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, "/app")
 
@@ -417,10 +419,14 @@ async def bat_mfa(db, u) -> str:
     persona "đã bật MFA" mà không đăng nhập được — tệ hơn trạng thái ban đầu vì
     nó trông như đã xong.
 
-    Idempotent: đã bật rồi thì trả ``"da_bat"`` và không chạm gì.
+    Idempotent: đã bật rồi thì trả ``("da_bat", None)`` và không chạm gì.
+
+    :returns: ``(nhãn, post_commit_callback | None)``. Callback **chưa** được gọi —
+        nó phát ``USER_FORCE_LOGOUT`` và chỉ hợp lệ SAU khi giao dịch đã commit.
+        Người gọi có trách nhiệm gom lại, commit, rồi mới chạy.
     """
     if u.mfa_enabled:
-        return "da_bat"
+        return "da_bat", None
 
     import pyotp
     from app.services import mfa_service, session_service
@@ -449,9 +455,17 @@ async def bat_mfa(db, u) -> str:
     so_thu_hoi, callback = await session_service.revoke_all_other_sessions(
         db=db, user_id=u.id, except_session_id=None
     )
-    if callback:
-        await callback()
-    return f"vua_bat(thu_hoi={so_thu_hoi})"
+    # ⚠️ KHÔNG gọi `callback()` ở đây. Nó là **post-commit** callback —
+    # `session_service.py:623` ghi rõ "Sau khi đã commit" — và việc nó làm là phát
+    # `USER_FORCE_LOGOUT` cho client.
+    #
+    # Ở đây giao dịch CHƯA commit: `_chay` chỉ commit sau khi xử lý xong cả ba
+    # persona. Gọi sớm nghĩa là nếu persona thứ hai/thứ ba hỏng, hoặc chính lệnh
+    # commit hỏng, ta đã bảo client đăng xuất dựa trên một trạng thái sẽ bị
+    # rollback: phiên vẫn còn hiệu lực trong DB mà client thì đã bị đá ra.
+    #
+    # Nên trả callback lên cho người gọi gom lại, commit xong mới chạy.
+    return f"vua_bat(thu_hoi={so_thu_hoi})", callback
 
 
 async def ma_totp(db, username: str) -> str:
@@ -587,8 +601,9 @@ async def _chay(in_mat_khau: Optional[str], in_ma_totp: Optional[str]) -> int:
         kiem_moi_truong(can_ghi=False)
         if in_mat_khau not in {p["username"] for p in PERSONA}:
             raise ChanLai(f"{in_mat_khau!r} không phải persona smoke")
-        # ĐÚNG một dòng ra stdout, không kèm nhãn, để tiện `read`/pipe mà không
-        # lẫn vào log.
+        # Không kèm nhãn, để tiện `read`/pipe. Đây là dòng CUỐI chứ không phải
+        # dòng duy nhất: `app.config` đã in vài dòng INFO ra stdout lúc import.
+        # Lấy bằng `| tail -1`.
         print(mat_khau(in_mat_khau))
         return 0
 
@@ -601,7 +616,8 @@ async def _chay(in_mat_khau: Optional[str], in_ma_totp: Optional[str]) -> int:
                 "quyền mới bật MFA"
             )
         async with AsyncSessionLocal() as db:
-            # ĐÚNG một dòng: mã 6 số, không secret, không nhãn.
+            # Mã 6 số, không secret, không nhãn — và là dòng CUỐI của stdout
+            # (`app.config` in INFO lúc import). Lấy bằng `| tail -1`.
             print(await ma_totp(db, in_ma_totp))
         return 0
 
@@ -615,6 +631,13 @@ async def _chay(in_mat_khau: Optional[str], in_ma_totp: Optional[str]) -> int:
         ket = await provision_personas(db, don_vi)
 
         mfa_ket: Dict[str, str] = {}
+        # Gom post-commit callback của cả ba persona rồi mới chạy, SAU commit.
+        #
+        # Chúng phát `USER_FORCE_LOGOUT` cho client. Chạy sớm — ngay trong
+        # `bat_mfa`, lúc giao dịch còn dở — thì persona thứ hai/thứ ba hỏng, hoặc
+        # chính `commit` hỏng, sẽ để lại đúng trạng thái tệ nhất: DB rollback nên
+        # phiên vẫn hiệu lực, mà client thì đã bị đá ra và không hiểu vì sao.
+        cho_sau_commit: List[Any] = []
         for ten in PERSONA_CAN_MFA:
             u = (
                 await db.execute(
@@ -623,8 +646,22 @@ async def _chay(in_mat_khau: Optional[str], in_ma_totp: Optional[str]) -> int:
             ).scalars().first()
             if u is None:
                 raise ChanLai(f"{ten}: không tồn tại sau provision")
-            mfa_ket[ten] = await bat_mfa(db, u)
+            nhan, cb = await bat_mfa(db, u)
+            mfa_ket[ten] = nhan
+            if cb:
+                cho_sau_commit.append((ten, cb))
+
         await db.commit()
+
+        # CHỈ tới đây trạng thái mới là thật. Một callback hỏng không được kéo
+        # theo cả lượt: dữ liệu đã đúng, thứ hỏng chỉ là thông báo realtime.
+        for ten, cb in cho_sau_commit:
+            try:
+                await cb()
+            except Exception as e:  # noqa: BLE001
+                print(f"  ⚠️ {ten}: phát force-logout hỏng sau commit ({e}) — "
+                      "MFA đã bật và phiên đã thu hồi trong DB; client cũ sẽ rớt "
+                      "ở lần gọi API kế tiếp")
 
         await kiem_hoi_tu(db, don_vi)
     print(f"  sáu persona đã hội tụ: {', '.join(sorted(ket))}")

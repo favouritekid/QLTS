@@ -343,10 +343,21 @@ docker compose -p qltssmoke -f docker-compose.yml -f docker-compose.smoke.yml   
 ```
 
 **Bước 3 — bootstrap.** Nó fail-closed nếu thiếu/còn placeholder một trong hai biến, và
-chặn **trước** khi tạo tài khoản nào:
+chặn **trước** khi tạo tài khoản nào.
+
+🔴 **Ba chi tiết của lệnh dưới đây đều bắt buộc, sai một cái là không chạy:**
+
+* `--profile smoke-tools` — `smoke-runner` khai `profiles: ["smoke-tools"]`
+  (`docker-compose.smoke.yml:83`) nên **không** có container nào chạy sẵn. `exec` sẽ đổ
+  "no such service"; phải dùng `run --rm`.
+* đường dẫn `/tools/…` — mã smoke được **bind-mount** vào `/tools`
+  (`docker-compose.smoke.yml:115-117`); `scripts/smoke*` đã bị loại khỏi image production
+  nên `python scripts/…` không có tệp để chạy.
+* `-e SMOKE_ALLOW_DESTRUCTIVE=1` — `kiem_moi_truong(can_ghi=True)` đòi cờ này cho **từng
+  lượt**; thiếu là guard chặn ngay.
 
 ```bash
-docker compose -p qltssmoke ... exec -T smoke-runner     python scripts/smoke_bootstrap_personas.py
+docker compose -p qltssmoke     -f docker-compose.yml -f docker-compose.smoke.yml     --env-file .env.smoke --profile smoke-tools     run --rm -T --no-deps -e SMOKE_ALLOW_DESTRUCTIVE=1     smoke-runner python /tools/smoke_bootstrap_personas.py
 ```
 
 Đạt khi in `MFA: smoke_admin=…, smoke_mgr_a=…, smoke_mgr_b=…`. Giá trị `vua_bat(thu_hoi=N)`
@@ -355,13 +366,23 @@ cho biết đã thu hồi N phiên cũ — **bắt buộc**: `enable_mfa` chỉ 
 đăng nhập TRƯỚC khi bật MFA vẫn đi qua cổng mà chưa hề trả lời challenge — và lượt smoke sẽ
 "chứng minh" FIN-09 bằng đúng phiên chưa qua MFA ấy.
 
-**Bước 4 — đăng nhập tay.** Mật khẩu và mã lấy bằng hai lệnh riêng, mỗi lệnh in **đúng một
-dòng**:
+Sự kiện `USER_FORCE_LOGOUT` được phát **sau** khi cả ba persona đã commit, không phát rải
+rác giữa chừng: hỏng ở persona thứ hai mà đã đá client ra thì DB rollback trong khi người
+dùng đã mất phiên — trạng thái tệ nhất có thể.
+
+**Bước 4 — đăng nhập tay.** Hai lệnh riêng, **không** cần
+`SMOKE_ALLOW_DESTRUCTIVE` (chúng chỉ đọc):
 
 ```bash
-… python scripts/smoke_bootstrap_personas.py --in-mat-khau smoke_mgr_a
-… python scripts/smoke_bootstrap_personas.py --in-ma-totp  smoke_mgr_a
+docker compose -p qltssmoke -f docker-compose.yml -f docker-compose.smoke.yml     --env-file .env.smoke --profile smoke-tools run --rm -T --no-deps     smoke-runner python /tools/smoke_bootstrap_personas.py --in-mat-khau smoke_mgr_a | tail -1
+
+docker compose -p qltssmoke -f docker-compose.yml -f docker-compose.smoke.yml     --env-file .env.smoke --profile smoke-tools run --rm -T --no-deps     smoke-runner python /tools/smoke_bootstrap_personas.py --in-ma-totp smoke_mgr_a | tail -1
 ```
+
+⚠️ **`| tail -1` là bắt buộc, không phải cho gọn.** `app/config.py` in vài dòng
+`INFO [config.py]: …` ra **stdout** ngay lúc import (dòng 12/20/24), và thêm WARNING nếu
+thiếu biến. Nên lệnh **không** in đúng một dòng như bản runbook trước đã nói nhầm — giá trị
+nằm ở **dòng CUỐI**. Chép nguyên cả khối vào ô mật khẩu là dán cả log.
 
 `--in-ma-totp` in **mã 6 số**, KHÔNG in secret: mã sống 30 giây rồi vô dụng, còn secret lọt
 ra là lọt vĩnh viễn — vào log, vào lịch sử shell, vào ảnh chụp màn hình. Mã hết hạn thì gọi
