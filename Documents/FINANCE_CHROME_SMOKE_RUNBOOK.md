@@ -314,6 +314,62 @@ Chờ health thật:
 - Chrome console chưa có lỗi nền bất thường.
 - celery worker/beat không loop restart và nhận đúng queue; nếu đang smoke notification/background task mà celery tắt thì ca là BLOCKED, không PASS nhờ gọi đồng bộ thủ công.
 
+### A04.1. MFA cho persona đặc quyền — làm TRƯỚC khi mở Chrome
+
+`MFA_ENFORCE_ROLES = ['admin','manager']`. `deps.py:368` trả **403** ở MỌI endpoint đi qua
+`get_current_active_user` khi role đặc quyền chưa bật MFA — kể cả `/api/users/me`, nên giao
+diện không tải nổi. Bỏ qua mục này thì `MGR-A`/`MGR-B`/`ADMIN` không dùng được, và FIN-09
+(cùng mọi ca cần void) sẽ bị ghi `BLOCKED_MFA` như ở `BL20260817A`.
+
+**Bước 1 — sinh hai giá trị, đặt vào `.env.smoke.app`.** Đây là secret; sinh trên máy chạy,
+không lấy từ đâu khác, không commit:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print('MFA_ENCRYPTION_KEY=' + Fernet.generate_key().decode())"
+python -c "import secrets; print('DEVICE_FINGERPRINT_SALT=' + secrets.token_urlsafe(32))"
+```
+
+🔴 **Phải khai tường minh, dù `config.py` có đường tự lo.** `config.py:811-815` TỰ SINH giá
+trị thay thế khi thiếu và chỉ in một dòng WARNING. Giá trị ấy khác nhau mỗi lần container
+được **TẠO** ⇒ persona bật MFA hôm nay, lượt sau `decrypt_secret` ném *"Key may have
+changed"* trên chính secret mình vừa ghi. Hỏng im lặng, lộ ra đúng lúc đứng trước màn hình
+đăng nhập.
+
+**Bước 2 — dựng lại backend để nạp env mới.** `restart` KHÔNG đọc lại `env_file`; biến được
+nướng vào container lúc **TẠO**:
+
+```bash
+docker compose -p qltssmoke -f docker-compose.yml -f docker-compose.smoke.yml     --env-file .env.smoke up -d --no-deps --wait backend
+```
+
+**Bước 3 — bootstrap.** Nó fail-closed nếu thiếu/còn placeholder một trong hai biến, và
+chặn **trước** khi tạo tài khoản nào:
+
+```bash
+docker compose -p qltssmoke ... exec -T smoke-runner     python scripts/smoke_bootstrap_personas.py
+```
+
+Đạt khi in `MFA: smoke_admin=…, smoke_mgr_a=…, smoke_mgr_b=…`. Giá trị `vua_bat(thu_hoi=N)`
+cho biết đã thu hồi N phiên cũ — **bắt buộc**: `enable_mfa` chỉ tự thu hồi khi được truyền
+`current_session_id`, mà bootstrap không có phiên nào, nên nếu không thu hồi thì một phiên
+đăng nhập TRƯỚC khi bật MFA vẫn đi qua cổng mà chưa hề trả lời challenge — và lượt smoke sẽ
+"chứng minh" FIN-09 bằng đúng phiên chưa qua MFA ấy.
+
+**Bước 4 — đăng nhập tay.** Mật khẩu và mã lấy bằng hai lệnh riêng, mỗi lệnh in **đúng một
+dòng**:
+
+```bash
+… python scripts/smoke_bootstrap_personas.py --in-mat-khau smoke_mgr_a
+… python scripts/smoke_bootstrap_personas.py --in-ma-totp  smoke_mgr_a
+```
+
+`--in-ma-totp` in **mã 6 số**, KHÔNG in secret: mã sống 30 giây rồi vô dụng, còn secret lọt
+ra là lọt vĩnh viễn — vào log, vào lịch sử shell, vào ảnh chụp màn hình. Mã hết hạn thì gọi
+lại, đừng đi tìm secret.
+
+⚠️ Bật MFA **thu hồi mọi phiên đang mở** của persona đó. Làm mục này **trước** khi đăng nhập
+các persona khác, nếu không phải đăng nhập lại.
+
 ### A05. Seed phải tự chứng minh đúng hình dạng
 
 Trước khi mở Chrome, seed/fixture validator phải exit non-zero nếu thiếu một trong các điều kiện:
@@ -462,6 +518,8 @@ Fixture được tạo bằng seed riêng, deterministic và idempotent theo `RU
 |---|---|---|
 | `F-APP` | Hồ sơ đủ điều kiện thu application fee, chưa thu | Thu lệ phí hồ sơ qua tab Học phí |
 | `F-FULL` | Hồ sơ có một khoản phí và một hóa đơn một đợt | Luồng thu tay cơ bản |
+| `F-CALC` | Hồ sơ `submitted`, `uses_choice_engine=false`, **có `offering_admission_config_id`** trỏ tới OAC hoạt động nối `OfferingAcademicInfo` 2026 có `tuition_fee_per_year`; **CHƯA có Fee tuition** | FIN-03 tính học phí MỚI. Thiếu OAC ⇒ `resolve_fee_academic_info` ném `BadRequest`; có sẵn Fee ⇒ chỉ còn đo đường recalculate |
+| `F-CACHE` | Hồ sơ + fee + invoice **RIÊNG**, không dùng chung với fixture nào khác | FIN-07 cache cũ. Dùng chung dữ liệu đã bị FIN-04/05/06 làm đổi thì không phân biệt được "cache cũ" với "dữ liệu đã đổi từ ca trước" |
 | `F-FIFO` | Khoản phí có ít nhất hai hóa đơn/đợt còn nợ | Phân bổ FIFO, thu tách nhiều hóa đơn |
 | `F-DUP` | Hóa đơn có một payment phù hợp luật dò trùng | Luồng 409 -> review token -> xác nhận |
 | `F-REJECT` | Hóa đơn riêng để ghi rồi từ chối | Không làm tăng tiền đã thu |
@@ -604,10 +662,20 @@ Persona: `OFF-A`; fixture `F-APP`.
 
 ### FIN-03 — tính phí và phát hành hóa đơn
 
-Persona: `ACC-A` cho calculate/issue; fixture mới thuộc `F-FULL` hoặc hồ sơ calculable riêng.
+Persona: `ACC-A` cho calculate/issue; fixture **`F-CALC`**.
+
+> 🔴 **Phải là `F-CALC`, không phải `F-FULL`.** `F-FULL` đã có sẵn Fee tuition nên thao
+> tác chỉ đi đường *recalculate* — ca mất hết ý nghĩa "tính phí mới". `F-CALC` cố ý
+> **không** dựng sẵn Fee tuition và có `offering_admission_config_id` trỏ tới OAC thật.
+>
+> ⚠️ **Nợ sản phẩm đang MỞ, chưa sửa.** `is_fee_eligible` trả `True` (nút "Tính học phí"
+> hiện ở trạng thái BẬT) trên cả hồ sơ mà `resolve_fee_academic_info` từ chối vì không
+> giải được ngành — cổng trạng thái nói được, bộ định giá nói không. `F-CALC` chỉ đóng
+> khoảng trống *fixture* để ca chạy được; nó **không** vá lỗi ấy. Gặp hồ sơ thiếu ngành mà
+> nút vẫn bật thì đó là **finding**, không phải lỗi môi trường.
 
 1. Từ dashboard bấm “Tính phí mới”.
-2. Chọn hồ sơ từ picker bằng thông tin hiển thị, không dùng ID đoán.
+2. Chọn **đúng hồ sơ `F-CALC`** từ picker bằng thông tin hiển thị, không dùng ID đoán.
 3. Mở tuition preview, ghi base amount, discount, total và installment plan.
 4. Tính phí qua UI.
 5. Mở fee detail và invoice workspace.
