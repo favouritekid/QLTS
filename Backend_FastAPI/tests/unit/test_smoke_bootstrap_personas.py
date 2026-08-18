@@ -298,6 +298,81 @@ def test_bat_mfa_di_qua_hop_dong_that_khong_gan_thang_co():
         assert not re.search(cam, _MA_BOOTSTRAP, re.I), f"script chạy SQL tay: {cam!r}"
 
 
+def test_bat_mfa_thu_hoi_phien_cu():
+    """`enable_mfa` KHÔNG tự thu hồi khi `current_session_id=None`.
+
+    `mfa_service.py:241` bọc nhánh thu hồi trong `if current_session_id:`. Bootstrap
+    không có phiên của mình nên truyền `None` ⇒ nhánh ấy không chạy ⇒ phiên đăng
+    nhập TRƯỚC khi bật MFA vẫn hợp lệ, và `get_current_active_user` chỉ kiểm CỜ
+    `mfa_enabled` nên nó đi lọt mà chưa hề trả lời challenge TOTP nào.
+
+    Ca này canh phần khai báo; hiệu lực thật do
+    `tests/integration/test_smoke_mfa_bootstrap_thuc.py` đo trên DB.
+    """
+    khoi = _MA_BOOTSTRAP.split("async def bat_mfa", 1)[1].split("\nasync def ", 1)[0]
+    assert "revoke_all_other_sessions(" in khoi, (
+        "bat_mfa không thu hồi phiên cũ — enable_mfa(current_session_id=None) bỏ "
+        "qua nhánh thu hồi, nên phiên trước-MFA vẫn dùng được"
+    )
+    assert "except_session_id=None" in khoi, (
+        "phải thu hồi TẤT CẢ: bootstrap không có phiên nào cần giữ"
+    )
+
+
+def test_guard_chan_ca_placeholder_cua_chinh_kho_nay():
+    """Guard phải bắt placeholder mà chính `.example` của kho này viết ra.
+
+    Bản đầu chỉ chặn `CHANGE_ME_IN_PRODUCTION` (mặc định của `config.py`), nên
+    `THAY_BANG_CHUOI_NGAU_NHIEN_CUA_BAN` trong `.env.smoke.app.example` đi lọt:
+    đổi khoá Fernet nhưng quên đổi muối vẫn qua cửa.
+    """
+    mod = _nap()
+    from cryptography.fernet import Fernet
+    khoa_that = Fernet.generate_key().decode()
+
+    goc = _TEP.parent.parent.parent
+    vidu = goc / ".env.smoke.app.example"
+    assert vidu.is_file(), f"thiếu {vidu}"
+    noi_dung = vidu.read_text(encoding="utf-8")
+
+    import re
+    for bien in ("MFA_ENCRYPTION_KEY", "DEVICE_FINGERPRINT_SALT"):
+        m = re.search(rf"^{bien}=(.*)$", noi_dung, re.M)
+        assert m, f"`.env.smoke.app.example` thiếu {bien}"
+        gia_tri = m.group(1).strip()
+        assert gia_tri, f"{bien} trong .example để rỗng — guard sẽ bắt vì rỗng, "            "không phải vì là placeholder; ca này mất ý nghĩa"
+
+        import pytest as _pt
+        monkey = _pt.MonkeyPatch()
+        try:
+            monkey.setenv("MFA_ENCRYPTION_KEY", khoa_that)
+            monkey.setenv("DEVICE_FINGERPRINT_SALT", "muoi-that-du-dai-16")
+            monkey.setenv(bien, gia_tri)
+            with _pt.raises(mod.ChanLai) as e:
+                mod.kiem_moi_truong_mfa()
+            assert "placeholder" in str(e.value).lower(), (
+                f"guard chặn {bien} nhưng không nói vì là placeholder: {e.value}"
+            )
+        finally:
+            monkey.undo()
+
+
+def test_guard_chan_salt_qua_ngan():
+    """Muối 6 ký tự không phải muối."""
+    mod = _nap()
+    from cryptography.fernet import Fernet
+    import pytest as _pt
+    monkey = _pt.MonkeyPatch()
+    try:
+        monkey.setenv("MFA_ENCRYPTION_KEY", Fernet.generate_key().decode())
+        monkey.setenv("DEVICE_FINGERPRINT_SALT", "abc123")
+        with _pt.raises(mod.ChanLai) as e:
+            mod.kiem_moi_truong_mfa()
+        assert "ngắn" in str(e.value)
+    finally:
+        monkey.undo()
+
+
 def test_bat_mfa_idempotent():
     """Chạy lại không được bật lại — `enable_mfa` ném 400 khi đã bật."""
     khoi = _MA_BOOTSTRAP.split("async def bat_mfa", 1)[1].split("\nasync def ", 1)[0]

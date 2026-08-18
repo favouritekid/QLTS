@@ -494,6 +494,7 @@ jobs:
               tests/unit/test_smoke_seed_persona_registry.py
               tests/unit/test_attest_manifest_validator.py
               tests/unit/test_smoke_action_cli.py
+              tests/integration/test_smoke_mfa_bootstrap_thuc.py
               tests/unit/test_phase2_engine_3tier_resolution.py
               tests/unit/test_phase2_engine_quota_chain_v8.py
               tests/unit/test_phase2_engine_snapshot_integrity.py

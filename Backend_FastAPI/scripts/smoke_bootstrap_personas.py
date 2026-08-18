@@ -116,6 +116,20 @@ def kiem_moi_truong(*, can_ghi: bool) -> None:
         )
 
 
+#: Dấu hiệu một giá trị được chép nguyên từ tệp `.example` mà chưa thay.
+#
+# Danh sách này phải phủ CẢ placeholder do chính kho này viết. Bản đầu chỉ chặn
+# `CHANGE_ME_IN_PRODUCTION` (giá trị mặc định của `config.py`) nên
+# `THAY_BANG_CHUOI_NGAU_NHIEN_CUA_BAN` trong `.env.smoke.app.example` đi lọt —
+# tức là chính cái placeholder mình viết ra lại không bị chính guard của mình bắt.
+_DAU_HIEU_PLACEHOLDER = ("THAY_BANG", "CHANGE_ME", "TODO", "XXXX", "<", ">")
+
+
+def _la_placeholder(gt: str) -> bool:
+    hoa = gt.upper()
+    return any(d in hoa for d in _DAU_HIEU_PLACEHOLDER)
+
+
 def kiem_moi_truong_mfa() -> None:
     """Fail-closed TRƯỚC mọi mutation MFA — thiếu khoá là DỪNG, không "thử xem".
 
@@ -136,10 +150,21 @@ def kiem_moi_truong_mfa() -> None:
     thieu: List[str] = []
 
     salt = (os.environ.get("DEVICE_FINGERPRINT_SALT") or "").strip()
-    if not salt or salt == "CHANGE_ME_IN_PRODUCTION":
+    if not salt:
         thieu.append(
-            "DEVICE_FINGERPRINT_SALT (rỗng hoặc còn giá trị mặc định) — "
-            "config.py sẽ TỰ SINH một giá trị khác cho mỗi lượt"
+            "DEVICE_FINGERPRINT_SALT rỗng — config.py sẽ TỰ SINH một giá trị khác "
+            "cho mỗi lượt"
+        )
+    elif _la_placeholder(salt):
+        thieu.append(
+            f"DEVICE_FINGERPRINT_SALT còn là placeholder ({salt!r}) — chép nguyên "
+            "từ `.env.smoke.app.example` mà chưa thay. Đổi khoá Fernet nhưng quên "
+            "đổi muối là ca có thật, và guard cũ để lọt vì chỉ chặn đúng chuỗi "
+            "`CHANGE_ME_IN_PRODUCTION`"
+        )
+    elif len(salt) < 16:
+        thieu.append(
+            f"DEVICE_FINGERPRINT_SALT chỉ {len(salt)} ký tự — quá ngắn để làm muối"
         )
 
     khoa = (os.environ.get("MFA_ENCRYPTION_KEY") or "").strip()
@@ -147,6 +172,13 @@ def kiem_moi_truong_mfa() -> None:
         thieu.append(
             "MFA_ENCRYPTION_KEY — config.py sẽ TỰ SINH khoá Fernet mới mỗi lượt, "
             "và secret ghi lượt trước sẽ không giải mã được ở lượt sau"
+        )
+    elif _la_placeholder(khoa):
+        # Fernet() cũng sẽ từ chối placeholder, nhưng bằng một thông điệp mã hoá
+        # khó đọc. Nói thẳng "còn là placeholder" thì người trực sửa được ngay.
+        thieu.append(
+            f"MFA_ENCRYPTION_KEY còn là placeholder ({khoa[:24]}…) — chép nguyên "
+            "từ `.env.smoke.app.example` mà chưa thay"
         )
     else:
         try:
@@ -391,14 +423,35 @@ async def bat_mfa(db, u) -> str:
         return "da_bat"
 
     import pyotp
-    from app.services import mfa_service
+    from app.services import mfa_service, session_service
 
     setup, _ = await mfa_service.setup_mfa(user_id=u.id, username=u.username)
     secret = setup["secret"]
 
     ma = pyotp.TOTP(secret).now()
     await mfa_service.enable_mfa(db=db, user=u, code=ma, current_session_id=None)
-    return "vua_bat"
+
+    # 🔴 PHẢI thu hồi MỌI phiên cũ — `enable_mfa` KHÔNG làm việc đó ở đây.
+    #
+    # `mfa_service.enable_mfa` chỉ thu hồi khi `current_session_id` truthy
+    # (`mfa_service.py:241`: `if current_session_id:`). Đường sản phẩm luôn truyền
+    # id phiên đang dùng nên nhánh ấy chạy; bootstrap thì KHÔNG có phiên của mình
+    # nên truyền `None`, và hệ quả là **không phiên nào bị thu hồi**.
+    #
+    # Vì sao đó là lỗi chứ không phải chi tiết: `get_current_active_user` chỉ kiểm
+    # CỜ `mfa_enabled`. Một phiên đăng nhập TRƯỚC khi bật MFA vẫn hợp lệ sau đó, và
+    # đi qua cổng mà chưa hề trả lời một challenge TOTP nào. Lượt smoke sau đó sẽ
+    # "chứng minh" FIN-09 chạy được bằng đúng một phiên chưa qua MFA — tức bằng
+    # chứng SAI, và sai theo hướng dễ tin nhất.
+    #
+    # `except_session_id=None` ⇒ thu hồi TẤT CẢ, đúng ý ở đây: bootstrap không có
+    # phiên nào cần giữ.
+    so_thu_hoi, callback = await session_service.revoke_all_other_sessions(
+        db=db, user_id=u.id, except_session_id=None
+    )
+    if callback:
+        await callback()
+    return f"vua_bat(thu_hoi={so_thu_hoi})"
 
 
 async def ma_totp(db, username: str) -> str:
