@@ -228,3 +228,178 @@ def test_khong_co_lenh_print_nao_in_mat_khau():
         if d.strip().startswith("print(") and "mat_khau(" in d
     ]
     assert in_mat_khau == ["print(mat_khau(in_mat_khau))"], in_mat_khau
+
+
+# =============================================================================
+# MFA onboarding cho persona đặc quyền
+#
+# BL20260817A ghi FIN-09 là BLOCKED_MFA: `MFA_ENFORCE_ROLES = ['admin','manager']`
+# và `deps.py:368` trả 403 ở mọi endpoint qua `get_current_active_user` khi role
+# đặc quyền chưa bật MFA. Đo được 195 phản hồi 403 "MFA is required" cho phiên
+# `smoke_mgr_a`; `/api/users/me` cũng 403 nên giao diện không tải nổi.
+#
+# Blocker thuộc HARNESS, không phải sản phẩm — nên vá ở bootstrap.
+# =============================================================================
+_MA_BOOTSTRAP = _TEP.read_text(encoding="utf-8")
+
+
+def test_ca_kiem_nay_co_du_manh_khong_mfa():
+    """Vô nghĩa nếu script chưa hề nhắc tới MFA."""
+    assert "PERSONA_CAN_MFA" in _MA_BOOTSTRAP, "script chưa khai persona nào cần MFA"
+    assert "async def bat_mfa" in _MA_BOOTSTRAP, "script chưa có bước bật MFA"
+
+
+def test_dung_ba_persona_dac_quyen_khong_hon_khong_kem():
+    """Chỉ `admin`/`manager` thuộc `MFA_ENFORCE_ROLES`.
+
+    Bật thừa cho officer/accountant là tự thêm một bước đăng nhập mà sản phẩm
+    không đòi; bật thiếu thì FIN-09 vẫn kẹt.
+    """
+    mod = _nap()
+    assert set(mod.PERSONA_CAN_MFA) == {"smoke_mgr_a", "smoke_mgr_b", "smoke_admin"}
+
+    vai_theo_ten = {p["username"]: p["role"] for p in mod.PERSONA}
+    for ten in mod.PERSONA_CAN_MFA:
+        assert vai_theo_ten[ten] in ("admin", "manager"), (
+            f"{ten} có role {vai_theo_ten[ten]!r} — không thuộc MFA_ENFORCE_ROLES"
+        )
+    for ten, vai in vai_theo_ten.items():
+        if vai in ("admin", "manager"):
+            assert ten in mod.PERSONA_CAN_MFA, f"{ten} là {vai} mà không được onboard"
+        else:
+            assert ten not in mod.PERSONA_CAN_MFA, (
+                f"{ten} là {vai} — bootstrap không được bật MFA cho nó"
+            )
+
+
+def test_bat_mfa_di_qua_hop_dong_that_khong_gan_thang_co():
+    """Phải gọi `setup_mfa` + `enable_mfa`, không đặt `mfa_enabled = True`.
+
+    Gán thẳng cờ thì `totp_secret_encrypted` rỗng ⇒ persona không sinh nổi mã ⇒
+    "đã bật MFA" mà không đăng nhập được, tệ hơn chưa bật vì nó trông như xong.
+    """
+    khoi = _MA_BOOTSTRAP.split("async def bat_mfa", 1)[1].split("\nasync def ", 1)[0]
+    assert "mfa_service.setup_mfa(" in khoi, "không gọi setup_mfa"
+    assert "mfa_service.enable_mfa(" in khoi, "không gọi enable_mfa"
+    assert "pyotp.TOTP(" in khoi, "không sinh mã TOTP thật để enable_mfa verify"
+
+    import re
+    # Bắt đúng dạng GÁN trên một đối tượng (`u.mfa_enabled = True`), không bắt
+    # mọi lần chuỗi ấy xuất hiện: thông báo lỗi trong `kiem_hoi_tu` có chứa
+    # `mfa_enabled=True` như một mẩu văn bản, và một biểu thức quét cả tệp sẽ
+    # bắt nhầm chính lời giải thích. (Đã vấp: bản đầu của ca này đỏ vì lý do đó.)
+    gan_tay = re.findall(r"^\s*\w+\.mfa_enabled\s*=", _MA_BOOTSTRAP, re.M)
+    assert not gan_tay, (
+        f"script gán thẳng mfa_enabled ({gan_tay}) — phải đi qua enable_mfa để "
+        "secret được mã hoá vào DB"
+    )
+    # và tuyệt đối không sửa DB bằng SQL tay
+    for cam in (r'UPDATE\s+"?user"?\s+SET', r"update\s+.*\bmfa_enabled\s*="):
+        assert not re.search(cam, _MA_BOOTSTRAP, re.I), f"script chạy SQL tay: {cam!r}"
+
+
+def test_bat_mfa_idempotent():
+    """Chạy lại không được bật lại — `enable_mfa` ném 400 khi đã bật."""
+    khoi = _MA_BOOTSTRAP.split("async def bat_mfa", 1)[1].split("\nasync def ", 1)[0]
+    assert "if u.mfa_enabled:" in khoi, "thiếu nhánh bỏ qua khi đã bật"
+
+
+def test_thieu_key_hoac_salt_bi_chan_TRUOC_moi_mutation(monkeypatch):
+    """Fail-closed, và phải chặn TRƯỚC khi tạo tài khoản nào.
+
+    `config.py:811-815` TỰ SINH giá trị thay thế khi thiếu và chỉ in WARNING ⇒
+    lượt sau sinh khoá khác ⇒ `decrypt_secret` ném "Key may have changed" trên
+    chính secret mình vừa ghi. Nên "thiếu" phải là DỪNG, không phải "tự lo".
+    """
+    mod = _nap()
+    from cryptography.fernet import Fernet
+    khoa_hop_le = Fernet.generate_key().decode()
+
+    # đủ cả hai → qua
+    monkeypatch.setenv("MFA_ENCRYPTION_KEY", khoa_hop_le)
+    monkeypatch.setenv("DEVICE_FINGERPRINT_SALT", "muoi-du-dai-cho-smoke")
+    mod.kiem_moi_truong_mfa()
+
+    for thieu, gia_tri in (
+        ("MFA_ENCRYPTION_KEY", ""),
+        ("DEVICE_FINGERPRINT_SALT", ""),
+        ("DEVICE_FINGERPRINT_SALT", "CHANGE_ME_IN_PRODUCTION"),
+        ("MFA_ENCRYPTION_KEY", "khong-phai-fernet"),
+    ):
+        monkeypatch.setenv("MFA_ENCRYPTION_KEY", khoa_hop_le)
+        monkeypatch.setenv("DEVICE_FINGERPRINT_SALT", "muoi-du-dai-cho-smoke")
+        monkeypatch.setenv(thieu, gia_tri)
+        with pytest.raises(mod.ChanLai) as e:
+            mod.kiem_moi_truong_mfa()
+        assert thieu in str(e.value), f"thông báo không nêu {thieu}"
+
+    # Guard phải nằm trên ĐƯỜNG GHI, không phải chỉ "có mặt đâu đó trong _chay".
+    #
+    # `_chay` có ba nhánh: --in-mat-khau, --in-ma-totp, và đường ghi. Nhánh
+    # --in-ma-totp cũng gọi guard, và nó nằm TRƯỚC provision trong văn bản. Nên
+    # một phép kiểm kiểu `chay.find(guard) < chay.find(provision)` vẫn xanh sau
+    # khi guard đã bị gỡ khỏi đường ghi — đúng lớp "phép kiểm gộp che nhánh phía
+    # sau". (Đã vấp: đột biến gỡ guard khỏi đường ghi KHÔNG bị bắt.)
+    #
+    # Neo vào đoạn TỪ `kiem_moi_truong(can_ghi=True)` — mốc duy nhất chỉ có ở
+    # đường ghi — cho tới `provision_personas(`.
+    chay = _MA_BOOTSTRAP.split("async def _chay", 1)[1]
+    moc_ghi = chay.find("kiem_moi_truong(can_ghi=True)")
+    assert moc_ghi != -1, "_chay không còn nhánh ghi"
+    vi_provision = chay.find("provision_personas(", moc_ghi)
+    assert vi_provision != -1, "đường ghi không gọi provision_personas"
+
+    doan_truoc_provision = chay[moc_ghi:vi_provision]
+    assert "kiem_moi_truong_mfa()" in doan_truoc_provision, (
+        "guard MFA KHÔNG nằm giữa `kiem_moi_truong(can_ghi=True)` và "
+        "`provision_personas` — hỏng giữa chừng thì còn lại vài persona đã tạo và "
+        "vài persona chưa, không cái nào nói ra điều đó"
+    )
+
+
+def test_khong_bao_gio_in_secret():
+    """Người trực cần mã 6 số, không cần secret.
+
+    Đưa secret ra là đưa vĩnh viễn: nó vào log, vào lịch sử shell, vào ảnh chụp.
+    Mã TOTP sống 30 giây và vô dụng ngay sau đó.
+    """
+    assert "--in-ma-totp" in _MA_BOOTSTRAP, "thiếu đường lấy mã đăng nhập"
+    khoi = _MA_BOOTSTRAP.split("async def ma_totp", 1)[1].split("\nasync def ", 1)[0]
+    assert "pyotp.TOTP(" in khoi and ".now()" in khoi, "không sinh mã 6 số"
+    import re
+    assert not re.search(r"print\(\s*secret", _MA_BOOTSTRAP), "script in secret ra stdout"
+    assert not re.search(r"print\([^)]*totp_secret", _MA_BOOTSTRAP), (
+        "script in totp_secret ra stdout"
+    )
+
+
+def test_khong_noi_tay_MFA_ENFORCE_ROLES():
+    """Sửa danh sách role bắt buộc MFA là đổi hành vi sản phẩm để né hàng rào.
+
+    Chỉ cấm GÁN/ghi đè, không cấm NHẮC TỚI: script phải được phép giải thích vì
+    sao ba persona kia cần MFA, và lời giải thích ấy tất nhiên nêu tên hằng số.
+    """
+    import re
+    ghi = re.findall(
+        r"(?:^\s*(?:settings\.)?MFA_ENFORCE_ROLES\s*=|"
+        r"setattr\s*\(\s*settings\s*,\s*[\"']MFA_ENFORCE_ROLES|"
+        r"monkeypatch\.setattr\([^)]*MFA_ENFORCE_ROLES)",
+        _MA_BOOTSTRAP,
+        re.M,
+    )
+    assert not ghi, f"script ghi đè MFA_ENFORCE_ROLES ({ghi}) — đó là nới hàng rào"
+
+
+def test_kiem_hoi_tu_canh_ca_hai_chieu():
+    """Đặc quyền phải bật; officer/accountant phải KHÔNG bị bật."""
+    khoi = _MA_BOOTSTRAP.split("async def kiem_hoi_tu", 1)[1].split("\nasync def ", 1)[0]
+    assert "PERSONA_CAN_MFA" in khoi, "kiem_hoi_tu không phân biệt persona đặc quyền"
+    assert "totp_secret_encrypted" in khoi, (
+        "chỉ kiểm cờ mà không kiểm secret — cờ bật + secret rỗng vẫn qua cửa"
+    )
+    assert "decrypt_secret" in khoi, (
+        "không giải mã thử — khoá đổi giữa hai lượt sẽ chỉ lộ ra lúc đăng nhập"
+    )
+    assert "elif u.mfa_enabled:" in khoi, (
+        "không canh chiều ngược: officer/accountant bị bật MFA vẫn lọt"
+    )
