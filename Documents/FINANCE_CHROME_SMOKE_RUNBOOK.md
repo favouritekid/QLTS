@@ -72,7 +72,14 @@ Tại `9950abe9` đã có thể chạy ngay `P1 — core collection`, `P2 — mo
 
 Không chờ sửa ba điểm mới bắt đầu các pack độc lập khác; nhưng không được dùng số ca xanh của chúng để che expected FAIL đã biết.
 
-⚠️ **Tại `2ca5d1a5` (lượt hiện tại)**: `P1` có seed+validator nhưng **chưa có `--cleanup`**, và `P2–P4` chưa có fixture nào. Chưa được chạy các ca refund/overpayment/withdrawal bằng thao tác tay: mọi id phải được ghi atomically trước mutation (§A05), và không có đường dọn fail-closed thì mỗi lượt thử là một đống rác không ai gỡ được.
+⚠️ **Trạng thái pack, cập nhật sau run `BL20260817A`**: `P1` nay có **đủ** seed, validator,
+sổ hành động (`--action-begin`/`--action-end`) **và `--cleanup`** — lượt cleanup của
+`BL20260817A` đã chạy thật, `rc=0`, vân tay khớp baseline. Câu cũ *"tại `2ca5d1a5` P1 chưa
+có `--cleanup`"* đã hết hiệu lực.
+
+`P2–P4` **vẫn chưa có fixture nào**. Chưa được chạy các ca refund/overpayment/withdrawal
+bằng thao tác tay: mọi id phải được ghi atomically trước mutation (§A05), và không có đường
+dọn fail-closed thì mỗi lượt thử là một đống rác không ai gỡ được.
 
 ## 2. Nguyên tắc bắt buộc
 
@@ -668,6 +675,20 @@ Persona: `ACC-A`; fixture `F-REJECT`.
 
 Persona: `ACC-A`; fixture `F-DUP`.
 
+> ⏱️ **Phiếu soát sống 15 phút — chuỗi phải chạy LIỀN MẠCH.**
+>
+> `duplicate_review_token.py` đặt `TTL_GIAY = 15 * 60`; `soat_phieu` fail-closed khi quá
+> hạn. Nghĩa là **409 → tick xác nhận → submit lại** phải xong trong 15 phút kể từ lúc
+> server cấp phiếu, tính từ **lần 409 cấp phiếu**, không phải từ lúc mở dialog.
+>
+> Đo được ở `BL20260817A`: chuỗi bị tách làm hai cổng duyệt, khoảng cách **17'56"** ⇒
+> `POST /api/payments` trả **409** dù client có gửi phiếu (`co_gui_phieu=True`), và
+> **không hàng nào được tạo**. Đó là hành vi đúng, không phải lỗi — nhưng nếu không biết
+> thì rất dễ ghi nhầm thành "hàng rào chặn cả lượt hợp lệ".
+>
+> Vì vậy: **đừng chèn cổng phê duyệt vào giữa chuỗi này.** Nếu phiếu quá hạn, lấy phiếu
+> mới bằng một lượt 409 mới rồi chạy lại liền mạch.
+
 1. Mở dialog thu tiền và nhập dữ liệu khớp candidate đã seed.
 2. Bấm Lưu; phải nhận giao diện `review_required`, thấy danh sách candidate, tổng và dấu hiệu truncated nếu có.
 3. Không tick xác nhận, bấm tiếp: không được gửi quyền ghi.
@@ -696,11 +717,20 @@ Ca biến thể bắt buộc:
 
 ### FIN-07 — cache cũ và mở lại dialog
 
-Persona: hai phiên Chrome của `ACC-A`, dùng fixture riêng.
+Persona: **`ACC-A` và `ACC-B` — hai tài khoản KHÁC NHAU**; fixture riêng **`F-CACHE`**.
 
-1. Phiên A mở dialog, ghi nhận remaining/pending rồi đóng.
-2. Phiên B tạo hoặc verify một payment làm dữ liệu thay đổi.
-3. Phiên A mở lại dialog ngay khi cache còn dữ liệu.
+> 🔴 **Không dùng hai phiên của cùng `ACC-A`.** Hệ giữ **một phiên hoạt động cho mỗi
+> người dùng**: đăng nhập lần hai **thu hồi** phiên trước. Đo được ở `BL20260817A` —
+> `session 1`, `session 2` và `session 4` đều bị đặt `revoked_at`. Kịch bản "hai phiên
+> cùng ACC-A" của bản runbook cũ **không dựng được**, không phải vì thiếu fixture mà vì
+> chính sách single-active-session.
+>
+> Fixture phải là **`F-CACHE` riêng**: không tái dùng dữ liệu đã bị FIN-04/05/06 làm đổi,
+> vì khi ấy không phân biệt được "cache cũ" với "dữ liệu đã đổi từ ca trước".
+
+1. Phiên `ACC-A` mở dialog trên fixture `F-CACHE`, ghi nhận remaining/pending rồi đóng.
+2. Phiên `ACC-B` tạo hoặc verify một payment làm dữ liệu thay đổi.
+3. Phiên `ACC-A` mở lại dialog ngay khi cache còn dữ liệu.
 4. Quan sát từ lúc mở đến khi refetch xong.
 
 Đạt khi:
@@ -711,15 +741,37 @@ Persona: hai phiên Chrome của `ACC-A`, dùng fixture riêng.
 - sau fetch hiển thị số mới;
 - không có cửa sổ nhập trùng do danh sách pending rỗng cũ.
 
-### FIN-08 — phân bổ FIFO nhiều đợt
+### FIN-08 — phân bổ FIFO nhiều đợt (đường **import**)
 
 Persona: `ACC-A`; fixture `F-FIFO`.
 
+> 🔴 **Ghi tay là invoice-scoped — đây là contract, không phải lỗi.**
+>
+> `payment_service.py:406` chặn `amount > invoice.remaining_amount` bằng
+> `BusinessRuleViolation`. Một khoản thu ghi tay khoá vào **đúng một** invoice và không
+> được vượt phần còn lại của chính invoice đó. Phân bổ FIFO qua nhiều installment **chỉ
+> tồn tại ở `payment_import_service.py`**; `grep FIFO frontend/src` trả **0** kết quả.
+>
+> Bản runbook cũ yêu cầu *"thu số tiền vượt invoice thứ nhất"* bằng UI ghi tay — thao tác
+> đó **không thi hành được** và đã làm FIN-08 bị ghi `BLOCKED_CONTRACT` ở `BL20260817A`.
+> Không mở rộng ghi tay thành cross-invoice để chiều kịch bản; kiểm FIFO ở đúng nơi nó sống.
+
+**Phần A — ghi tay phải TỪ CHỐI, zero-delta.**
+
 1. Mở fee có ít nhất hai invoice theo installment.
-2. Thu số tiền vượt invoice thứ nhất nhưng nhỏ hơn tổng còn nợ.
-3. Xác nhận cảnh báo nếu có, rồi hoàn tất theo UI.
-4. Verify nếu payment không auto-verified.
-5. Reload fee detail và từng invoice.
+2. Ghi tay một khoản **vượt `invoice.remaining_amount`** của invoice thứ nhất.
+3. Đạt khi: HTTP **400**, thông điệp `BusinessRuleViolation`, và **delta rỗng trên cả 13
+   bảng** của `BANG_THEO_DOI` — không payment, không transaction, không đổi `paid_amount`.
+
+**Phần B — FIFO chạy qua `/finance/payments/import`.**
+
+4. Vào `/finance/payments/import`, nạp file có một dòng cho fee nhiều installment với số
+   tiền vượt invoice đầu nhưng nhỏ hơn tổng còn nợ.
+5. **Preview**: đối chiếu phân bổ dự kiến theo installment/due order **trước** khi commit.
+6. **Commit**, rồi reload fee detail và từng invoice.
+
+FIN-08 tập trung **preview + commit FIFO**. Các nhánh **retry và void** của đường import
+vẫn thuộc **FIN-09**, không lặp ở đây.
 
 Đối soát:
 
