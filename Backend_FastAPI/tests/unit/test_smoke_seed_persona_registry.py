@@ -619,9 +619,40 @@ def test_validator_co_canh_ca_hai_fixture_moi():
     """Seed mà validator không canh thì fixture hỏng vẫn qua cửa."""
     assert 'fx.get("tinh_phi_duoc")' in _MA, "validator không canh F-CALC"
     assert 'fx.get("khong_dung_chung")' in _MA, "validator không canh F-CACHE"
-    # và phải canh ĐÚNG THỨ: OAC tồn tại + active + academic_info có học phí
-    for moc in ("is_active", "tuition_fee_per_year", "offering_admission_config_id"):
+    for moc in ("is_active", "offering_admission_config_id"):
         assert moc in _MA, f"validator F-CALC không kiểm {moc}"
+
+
+def test_validator_F_CALC_goi_DUONG_THAT_chu_khong_kiem_ho():
+    """Bằng chứng "tính phí được" phải đến từ đường thật, không từ một trường gần đúng.
+
+    Bản đầu kết luận bằng ``ai.tuition_fee_per_year is None``. Trường đó KHÔNG
+    phải nguồn giá của tuition (``fee_type=tuition`` đọc
+    ``offering_semester_tuition``), nên nó chứng nhận nhầm cả fixture của
+    `BL20260818A`: seed xanh, validator xanh, ``preview_tuition`` trả 400.
+
+    Ca này quét mã nguồn nên nó chỉ canh được "có gọi". Việc phép gọi ấy thật sự
+    phân biệt được xanh/đỏ do
+    ``tests/integration/test_smoke_seed_gia_hoc_ky_thuc.py`` chứng minh trên DB thật.
+    """
+    than = _MA.split("async def validate", 1)[1]
+    assert "_kiem_duong_tinh_phi_that" in than, (
+        "validate() không gọi phép kiểm đường thật — nó đang kết luận từ một "
+        "trường gần đúng, đúng cái đã chứng nhận nhầm fixture BL20260818A"
+    )
+    assert "_kiem_so_khop_gia_hoc_ky" in than, (
+        "validate() không đối chiếu sổ với DB — oracle đọc semester_amount trong "
+        "sổ, sổ lệch thì bản khai sai từ trước khi bấm"
+    )
+    kiem = _MA.split("async def _kiem_duong_tinh_phi_that", 1)[1].split(
+        "\nasync def ", 1
+    )[0]
+    assert "_semester_tuition_amount_for_ai" in kiem, (
+        "phép kiểm không chạm hàm đọc giá học kỳ — nó không thể thấy thứ đã chặn FIN-03"
+    )
+    assert "resolve_fee_academic_info" in kiem, (
+        "phép kiểm bỏ bước giải ngành — hai mắt xích phải được kiểm cả hai"
+    )
 
 
 def test_helper_oac_idempotent():
@@ -634,3 +665,19 @@ def test_helper_oac_idempotent():
         "helper không fail-closed khi thiếu danh mục nền — nó sẽ trả None và lỗi "
         "nổ ở chỗ khác, xa nguyên nhân"
     )
+
+
+def test_helper_dung_ca_hang_gia_hoc_ky():
+    """Mắt xích thứ hai: OAC thôi chưa đủ, còn phải có hàng giá HK1."""
+    khoi = _MA.split("async def _oac_cho_tinh_phi", 1)[1].split("\nasync def ", 1)[0]
+    assert khoi.count("_gia_hoc_ky(db, ai)") == 2, (
+        "cả hai lối ra của helper (OAC sẵn có / OAC vừa dựng) đều phải trả hàng "
+        "giá HK1 — sót một lối là fixture hỏng ngẫu nhiên theo thứ tự chạy"
+    )
+
+
+def test_so_ghi_ID_va_SO_TIEN_that_cua_hang_gia():
+    """Sổ phải mang số THẬT của hàng giá, không để oracle suy từ giá theo năm."""
+    khoi = _MA.split('kq["fixtures"]["F-CALC"]', 1)[1].split("}", 1)[0]
+    for khoa in ("semester_tuition_id", "semester_no", "semester_amount"):
+        assert khoa in khoi, f"sổ F-CALC thiếu {khoa}"
