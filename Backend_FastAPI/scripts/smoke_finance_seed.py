@@ -348,9 +348,13 @@ async def _gia_hoc_ky(db, ai) -> Any:
       nguyên si, kể cả khi số của nó khác `tuition_fee_per_year`. Danh mục là dữ
       liệu của người khác; fixture không được sửa giá của nó để oracle tròn số.
     * **Fail-closed khi không suy ra được số.** Thiếu/không dương
-      `tuition_fee_per_year` thì `ChanLai`, không dựng hàng `amount = 0` — một
-      hàng giá 0 làm `calculate_fee` chạy được và cho ra hoá đơn 0 đồng, tức là
-      biến một fixture hỏng thành một lượt smoke "xanh".
+      `tuition_fee_per_year` thì `ChanLai`, không dựng hàng `amount = 0`. Giá 0
+      **không** làm FIN-03 xanh — đường HTTP vẫn hỏng, chỉ là hỏng MUỘN và với
+      một câu sai: `calculate_fee` flush được Fee 0 đồng, rồi router gọi tiếp
+      `generate_invoices_for_fee`, và hàm ấy chặn `amount_to_invoice <= 0` bằng
+      `BadRequest("No amount to invoice (fee fully waived)")` — nói "đã miễn hết
+      học phí" trong khi chẳng có gì được miễn. Người vận hành nhận 400 ở bước
+      cuối kèm nguyên nhân sai, thay vì seeder dừng ngay với đúng lý do.
 
     Số tiền chọn bằng đúng `tuition_fee_per_year` là quyết định **cho fixture xác
     định**, không phải khẳng định về cách trường định giá học kỳ thật. Số thật
@@ -370,8 +374,16 @@ async def _gia_hoc_ky(db, ai) -> Any:
         # đầu của hàm này trả thẳng nó ra, không hỏi số.
         #
         # Nhánh tuition của `calculate_fee` KHÔNG có guard `base_amount <= 0`
-        # (guard ấy chỉ nằm ở nhánh non-tuition), nên giá 0 đi trọn đường thành
-        # Fee 0 đồng + hoá đơn 0 đồng và FIN-03 "đạt" trên rác.
+        # (guard ấy chỉ nằm ở nhánh non-tuition), nên nó flush được một Fee 0
+        # đồng. Đường HTTP KHÔNG vì thế mà xanh: router gọi tiếp
+        # `generate_invoices_for_fee`, hàm ấy chặn `amount_to_invoice <= 0`
+        # (`invoice_service.py:136`) TRƯỚC `db.commit()` (`fees.py:385`) ⇒ 400 và
+        # rollback, không có hoá đơn 0 đồng.
+        #
+        # Hai thứ vẫn sai, và đó là lý do hàng rào này tồn tại: câu 400 nói "fee
+        # fully waived" trong khi chẳng có gì được miễn, nên người đọc đi tìm sai
+        # chỗ; và ở tầng service, một caller khác không sinh hoá đơn vẫn nhận
+        # được Fee 0 đồng.
         #
         # DỪNG, không ghi đè: sửa giá của một hàng danh mục để fixture chạy được
         # còn tệ hơn dừng.
@@ -848,6 +860,20 @@ async def _kiem_so_khop_gia_hoc_ky(db, fx: Mapping[str, Any]) -> Optional[str]:
             "sổ không có semester_tuition_id — seeder cũ chỉ ghi "
             "tuition_fee_per_year, đúng trường KHÔNG phải nguồn giá của tuition"
         )
+    # `db.get` với một chuỗi không phải số ném `DBAPIError`/`asyncpg.DataError`
+    # ("invalid input for query argument $1") — lại là traceback thay vì một dòng
+    # lỗi, đúng thứ hàm này sinh ra để tránh. `not ma_gia` không đỡ được: mọi
+    # chuỗi khác rỗng đều truthy.
+    try:
+        ma_gia = int(ma_gia)
+    except (TypeError, ValueError):
+        return (
+            f"semester_tuition_id trong sổ không phải số nguyên: "
+            f"{fx.get('semester_tuition_id')!r}"
+        )
+    if ma_gia <= 0:
+        return f"semester_tuition_id trong sổ không dương: {ma_gia}"
+
     ost = await db.get(models.OfferingSemesterTuition, ma_gia)
     if ost is None:
         return f"hàng giá học kỳ {ma_gia} trong sổ không còn trong DB"

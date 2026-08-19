@@ -222,8 +222,9 @@ async def test_thieu_tuition_fee_per_year_thi_ChanLai(
 ):
     """Fail-closed: không suy ra được số thì DỪNG, không dựng hàng giá 0.
 
-    Hàng giá 0 làm ``calculate_fee`` chạy được và đẻ hoá đơn 0 đồng — biến một
-    fixture hỏng thành một lượt smoke "xanh".
+    Không phải vì giá 0 làm FIN-03 "xanh" — đường HTTP vẫn 400 (xem
+    ``test_hang_catalog_amount_0_thi_ChanLai``). Mà vì nó hỏng MUỘN và với câu
+    sai, sau khi seed đã commit trọn fixture và ghi ``tinh_phi_duoc = true``.
     """
     sd = _nap_seed()
     from app.database import AsyncSessionLocal
@@ -380,9 +381,23 @@ async def test_hang_catalog_amount_0_thi_ChanLai(setup_test_database, seed_lead_
     có sẵn, không hỏi số. Mà ``CheckConstraint`` của model là ``amount >= 0`` —
     một hàng 0 đồng là hàng HỢP LỆ về schema.
 
-    Hậu quả không dừng ở fixture: nhánh tuition của ``calculate_fee`` KHÔNG có
-    guard ``base_amount <= 0`` (guard ấy chỉ nằm ở nhánh non-tuition), nên giá 0
-    chạy trót lọt thành Fee 0 đồng + hoá đơn 0 đồng, và FIN-03 "đạt" trên rác.
+    Đính chính so với bản đầu của ca này: giá 0 **không** làm FIN-03 xanh. Nhánh
+    tuition của ``calculate_fee`` đúng là thiếu guard ``base_amount <= 0`` và
+    flush được Fee 0 đồng, nhưng router gọi tiếp ``generate_invoices_for_fee``,
+    hàm ấy chặn ``amount_to_invoice <= 0`` (``invoice_service.py:136``) TRƯỚC
+    ``db.commit()`` (``fees.py:385``) ⇒ **400 và rollback**, không có hoá đơn 0
+    đồng nào ra đời.
+
+    Hàng rào ở seeder vẫn cần, vì hai lý do KHÁC:
+
+    * câu 400 ấy là ``"No amount to invoice (fee fully waived)"`` — nói đã miễn
+      hết học phí trong khi chẳng có gì được miễn, nên người đọc đi tìm sai chỗ;
+    * seed đã commit trọn fixture và ghi ``tinh_phi_duoc = true`` trước khi ai kịp
+      biết. Hỏng muộn tốn cả một lượt dựng.
+
+    Ở tầng service thì đúng là có khoảng trống thật: caller nào không sinh hoá đơn
+    vẫn nhận được Fee 0 đồng. Đó là finding về contract của service, ghi riêng —
+    KHÔNG kéo vào PR fixture này.
 
     Không ghi đè hàng ấy: sửa giá danh mục để fixture chạy được còn tệ hơn dừng.
     """
@@ -432,8 +447,13 @@ async def _so_hop_le(db, seed_lead_dependencies):
         ({"semester_amount": None}, "semester_amount"),
         ({"semester_amount": "not-a-number"}, "semester_amount"),
         ({"semester_no": None}, "semester_no"),
+        # `db.get` với chuỗi không phải số ném DBAPIError/asyncpg.DataError —
+        # traceback, không phải một dòng lỗi. Và `not ma_gia` không chặn được vì
+        # mọi chuỗi khác rỗng đều truthy.
+        ({"semester_tuition_id": "not-an-int"}, "semester_tuition_id"),
+        ({"semester_tuition_id": -1}, "semester_tuition_id"),
     ],
-    ids=["thieu_amount", "amount_meo", "thieu_semester_no"],
+    ids=["thieu_amount", "amount_meo", "thieu_semester_no", "id_meo", "id_am"],
 )
 async def test_so_khuyet_hoac_meo_thi_bao_loi_CO_CAU_TRUC(
     setup_test_database, seed_lead_dependencies, sua, khop
