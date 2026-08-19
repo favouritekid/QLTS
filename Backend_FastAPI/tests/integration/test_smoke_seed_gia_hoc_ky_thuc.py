@@ -452,8 +452,11 @@ async def _so_hop_le(db, seed_lead_dependencies):
         # mọi chuỗi khác rỗng đều truthy.
         ({"semester_tuition_id": "not-an-int"}, "semester_tuition_id"),
         ({"semester_tuition_id": -1}, "semester_tuition_id"),
+        # `int()` KHÔNG đủ: `int(True)` cho 1. Một sổ méo mang `true` sẽ thành id
+        # 1 và xác nhận nhầm một hàng có thật.
+        ({"semester_tuition_id": True}, "semester_tuition_id"),
     ],
-    ids=["thieu_amount", "amount_meo", "thieu_semester_no", "id_meo", "id_am"],
+    ids=["thieu_amount", "amount_meo", "thieu_semester_no", "id_meo", "id_am", "id_bool"],
 )
 async def test_so_khuyet_hoac_meo_thi_bao_loi_CO_CAU_TRUC(
     setup_test_database, seed_lead_dependencies, sua, khop
@@ -474,6 +477,36 @@ async def test_so_khuyet_hoac_meo_thi_bao_loi_CO_CAU_TRUC(
         ly_do = await sd._kiem_so_khop_gia_hoc_ky(db, dict(so, **sua))
 
     assert isinstance(ly_do, str) and khop in ly_do
+
+
+async def test_id_thap_phan_KHONG_duoc_lam_tron_thanh_hang_that(
+    setup_test_database, seed_lead_dependencies
+):
+    """``int(1.5)`` cho ``1``: sổ méo bị làm tròn thành một ID CÓ THẬT.
+
+    Đây là ca nguy hiểm nhất trong nhóm này, và là ca duy nhất mà phép ép kiểu
+    không cứu được: hai ca kia (`"not-an-int"`, `-1`) chỉ dẫn tới lỗi hoặc tới một
+    hàng không tồn tại, còn `id + 0.5` trỏ tới một hàng **thật** và validator sẽ
+    XANH trên một quyển sổ hỏng.
+
+    Dùng `ma + 0.5` chứ không phải một số cố định: nó bảo đảm phần nguyên trỏ
+    đúng vào hàng vừa dựng, tức đúng tình huống làm tròn thành công.
+    """
+    sd = _nap_seed()
+    from app.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        so = await _so_hop_le(db, seed_lead_dependencies)
+
+    async with AsyncSessionLocal() as db:
+        assert await sd._kiem_so_khop_gia_hoc_ky(db, so) is None, (
+            "sổ hợp lệ đã đỏ — ca này sẽ không chứng minh được gì về phần thập phân"
+        )
+        ly_do = await sd._kiem_so_khop_gia_hoc_ky(
+            db, dict(so, semester_tuition_id=so["semester_tuition_id"] + 0.5)
+        )
+
+    assert isinstance(ly_do, str) and "semester_tuition_id" in ly_do
 
 
 # ---------------------------------------------------------------------------

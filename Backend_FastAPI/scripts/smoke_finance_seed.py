@@ -401,7 +401,9 @@ async def _gia_hoc_ky(db, ai) -> Any:
         raise ChanLai(
             f"academic_info {ai.id} không có tuition_fee_per_year dương — không "
             f"suy ra được giá HK{HOC_KY_TINH_PHI}, và KHÔNG dựng hàng giá 0 "
-            "(hoá đơn 0 đồng sẽ làm lượt smoke xanh trên một fixture hỏng)"
+            "(giá 0 không làm FIN-03 xanh, nhưng nó hỏng MUỘN: sinh hoá đơn trả "
+            "400 'No amount to invoice (fee fully waived)' — sai nguyên nhân — "
+            "sau khi seed đã commit trọn fixture)"
         )
 
     ost = models.OfferingSemesterTuition(
@@ -864,12 +866,15 @@ async def _kiem_so_khop_gia_hoc_ky(db, fx: Mapping[str, Any]) -> Optional[str]:
     # ("invalid input for query argument $1") — lại là traceback thay vì một dòng
     # lỗi, đúng thứ hàm này sinh ra để tránh. `not ma_gia` không đỡ được: mọi
     # chuỗi khác rỗng đều truthy.
-    try:
-        ma_gia = int(ma_gia)
-    except (TypeError, ValueError):
+    #
+    # Và ÉP KIỂU cũng không đỡ: `int(1.5)` cho `1`, `int(True)` cho `1`. Một sổ
+    # méo ghi `1.5` sẽ lặng lẽ thành id `1` rồi xác nhận nhầm một hàng CÓ THẬT —
+    # tệ hơn traceback, vì nó xanh. Nên đòi ĐÚNG KIỂU int, và loại `bool` ra
+    # trước (trong Python `isinstance(True, int)` là `True`).
+    if isinstance(ma_gia, bool) or not isinstance(ma_gia, int):
         return (
             f"semester_tuition_id trong sổ không phải số nguyên: "
-            f"{fx.get('semester_tuition_id')!r}"
+            f"{ma_gia!r} (kiểu {type(ma_gia).__name__})"
         )
     if ma_gia <= 0:
         return f"semester_tuition_id trong sổ không dương: {ma_gia}"
