@@ -566,7 +566,7 @@ Fixture được tạo bằng seed riêng, deterministic và idempotent theo `RU
 |---|---|---|
 | `F-APP` | Hồ sơ đủ điều kiện thu application fee, chưa thu | Thu lệ phí hồ sơ qua tab Học phí |
 | `F-FULL` | Hồ sơ có một khoản phí và một hóa đơn một đợt | Luồng thu tay cơ bản |
-| `F-CALC` | Hồ sơ `submitted`, `uses_choice_engine=false`, **có `offering_admission_config_id`** trỏ tới OAC hoạt động nối `OfferingAcademicInfo` 2026 có `tuition_fee_per_year`; **CHƯA có Fee tuition** | FIN-03 tính học phí MỚI. Thiếu OAC ⇒ `resolve_fee_academic_info` ném `BadRequest`; có sẵn Fee ⇒ chỉ còn đo đường recalculate |
+| `F-CALC` | Hồ sơ `submitted`, `uses_choice_engine=false`, **có `offering_admission_config_id`** trỏ tới OAC hoạt động nối `OfferingAcademicInfo` 2026; ngành ấy **có hàng `offering_semester_tuition` HK1** (sổ ghi `semester_tuition_id` + `semester_amount`); **CHƯA có Fee tuition** | FIN-03 tính học phí MỚI. **Hai** mắt xích, thiếu một là 400: không OAC ⇒ `resolve_fee_academic_info` ném `BadRequest`; không hàng giá HK1 ⇒ `_semester_tuition_amount_for_ai` ném `Chưa cấu hình học phí cho HK1` (đã chặn FIN-03 ở `BL20260818A`). `tuition_fee_per_year` **không** phải nguồn giá của tuition. Có sẵn Fee ⇒ chỉ còn đo đường recalculate |
 | `F-CACHE` | Hồ sơ + fee + invoice **RIÊNG**, không dùng chung với fixture nào khác | FIN-07 cache cũ. Dùng chung dữ liệu đã bị FIN-04/05/06 làm đổi thì không phân biệt được "cache cũ" với "dữ liệu đã đổi từ ca trước" |
 | `F-FIFO` | Khoản phí có ít nhất hai hóa đơn/đợt còn nợ | Phân bổ FIFO, thu tách nhiều hóa đơn |
 | `F-DUP` | Hóa đơn có một payment phù hợp luật dò trùng | Luồng 409 -> review token -> xác nhận |
@@ -727,16 +727,26 @@ Persona: `ACC-A` cho calculate/issue; fixture **`F-CALC`**.
 3. Mở tuition preview, ghi base amount, discount, total và installment plan.
 4. Tính phí qua UI.
 5. Mở fee detail và invoice workspace.
-6. Phát hành hóa đơn.
+6. **Hậu kiểm auto-issue — KHÔNG có thao tác phát hành ở bước này.** Với `fee_type =
+   tuition`, router truyền `auto_issue=True` và `generate_invoices_for_fee` đặt luôn
+   `status = issued` + `issued_at` + `issued_by_id` trong **cùng** transaction. Xác nhận
+   mọi hoá đơn vừa sinh đã `issued` và `issued_by_id` là `ACC-A`. Gọi
+   `PUT /api/invoices/{id}/issue` ở đây trả **400** `Can only issue draft invoices` — đó
+   là **contract**, không phải lỗi, và không được ghi thành mutation của ca.
 7. Reload và xác nhận trạng thái vẫn giữ.
 
 Đối soát:
 
 - tổng các installment bằng total fee;
 - không có invoice âm/0 ngoài contract;
-- trạng thái fee/invoice đúng;
+- **`fee.status = invoiced`** — KHÔNG phải `calculated`: `calculate_fee` tạo Fee ở
+  `calculated` rồi `generate_invoices_for_fee` đặt lại thành `invoiced` ngay sau đó;
+- mọi hoá đơn `issued` (xem bước 6);
 - calculate double-click không tạo fee thứ hai;
-- audit có actor và before/after phù hợp.
+- **actor đọc ở ba chỗ, KHÔNG phải `entity_audit_log`** — luồng này không ghi bảng đó
+  (chỉ waive/cancel fee và cancel invoice mới ghi). Bằng chứng nằm ở
+  `fee.calculated_by_id` + `calculated_at`, `invoice.issued_by_id` + `issued_at`, và
+  `LeadStatusHistory.changed_by_user_id` cho lượt đẩy lead sang `sts14`.
 
 ### FIN-04 — ghi payment tay rồi verify
 

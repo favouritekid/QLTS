@@ -322,8 +322,72 @@ async def _fee_va_invoice(
     return {"fee_id": fee.id, "invoice_ids": ids, "amount_moi_dot": str(tien_moi_dot)}
 
 
+HOC_KY_TINH_PHI = 1
+
+
+async def _gia_hoc_ky(db, ai) -> Any:
+    """Hàng giá học kỳ — mắt xích THỨ HAI, và là cái đã chặn FIN-03 ở `BL20260818A`.
+
+    Bản đầu của `_oac_cho_tinh_phi` chỉ dựng `OfferingAdmissionConfig` rồi coi
+    `tuition_fee_per_year` là bằng chứng "tính được tiền". Sai, và sai im lặng:
+    với `fee_type = tuition`, giá GỐC lấy **chỉ** từ `offering_semester_tuition`
+    (`fee_calculation_service._semester_tuition_amount_for_ai`, gọi từ nhánh
+    tuition của `calculate_fee`). `tuition_fee_per_year` chỉ dùng cho fee KHÔNG
+    phải tuition.
+
+    Đo trên `qlts_smoke` ở `BL20260818A`: ngành giải ra rồi (`academic_info_id=1`,
+    `tuition_fee_per_year=5.500.000`) mà `preview_tuition` vẫn nổ
+    `BadRequest: Chưa cấu hình học phí cho HK1 (academic_info_id=1)` vì bảng ấy
+    có **0 hàng** (`qlts_dev` có 96). Kiến thức này đã nằm sẵn trong
+    `tests/api/test_tuition_prepay_flow.py::_seed_hk1_tuition_for_config` —
+    chỉ seeder là chưa biết.
+
+    Hai luật của hàm này:
+
+    * **KHÔNG ghi đè hàng catalog đã tồn tại.** Có hàng HK1 rồi thì dùng lại
+      nguyên si, kể cả khi số của nó khác `tuition_fee_per_year`. Danh mục là dữ
+      liệu của người khác; fixture không được sửa giá của nó để oracle tròn số.
+    * **Fail-closed khi không suy ra được số.** Thiếu/không dương
+      `tuition_fee_per_year` thì `ChanLai`, không dựng hàng `amount = 0` — một
+      hàng giá 0 làm `calculate_fee` chạy được và cho ra hoá đơn 0 đồng, tức là
+      biến một fixture hỏng thành một lượt smoke "xanh".
+
+    Số tiền chọn bằng đúng `tuition_fee_per_year` là quyết định **cho fixture xác
+    định**, không phải khẳng định về cách trường định giá học kỳ thật. Số thật
+    được ghi vào sổ (`semester_amount`) nên oracle đọc, không đoán.
+    """
+    ost = (
+        await db.execute(
+            select(models.OfferingSemesterTuition).where(
+                models.OfferingSemesterTuition.academic_info_id == ai.id,
+                models.OfferingSemesterTuition.semester_no == HOC_KY_TINH_PHI,
+            )
+        )
+    ).scalars().first()
+    if ost is not None:
+        return ost
+
+    tien = ai.tuition_fee_per_year
+    if tien is None or Decimal(str(tien)) <= 0:
+        raise ChanLai(
+            f"academic_info {ai.id} không có tuition_fee_per_year dương — không "
+            f"suy ra được giá HK{HOC_KY_TINH_PHI}, và KHÔNG dựng hàng giá 0 "
+            "(hoá đơn 0 đồng sẽ làm lượt smoke xanh trên một fixture hỏng)"
+        )
+
+    ost = models.OfferingSemesterTuition(
+        academic_info_id=ai.id,
+        semester_no=HOC_KY_TINH_PHI,
+        amount=Decimal(str(tien)),
+        notes="smoke fixture F-CALC — giá HK1 để FIN-03 tính phí được",
+    )
+    db.add(ost)
+    await db.flush()
+    return ost
+
+
 async def _oac_cho_tinh_phi(db) -> Any:
-    """Dựng `OfferingAdmissionConfig` — mắt xích DUY NHẤT còn thiếu để FIN-03 chạy.
+    """Dựng `OfferingAdmissionConfig` **và** hàng giá HK1 — hai mắt xích FIN-03 cần.
 
     `resolve_fee_academic_info` với hồ sơ **legacy** (`uses_choice_engine=False`)
     giải ngành theo ba nhánh, đúng thứ tự::
@@ -338,10 +402,15 @@ async def _oac_cho_tinh_phi(db) -> Any:
     `academic_info_id`. Cả ba nhánh cùng rỗng ⇒ `BadRequest`, trong khi
     `is_fee_eligible` vẫn trả `True` nên nút "Tính học phí" hiện ở trạng thái BẬT.
 
+    Giải được ngành **chưa đủ**. Đo tiếp ở `BL20260818A`: OAC đã có, ngành giải
+    ra, mà `preview_tuition` vẫn nổ vì thiếu hàng `offering_semester_tuition` —
+    xem `_gia_hoc_ky`. Hàm này nay trả **ba** thứ và cả ba đều bắt buộc.
+
     Fixture này đóng khoảng trống *fixture*. Nó **KHÔNG** vá lỗi sản phẩm
     "cổng trạng thái nói được, bộ định giá nói không" — đó vẫn là nợ đang mở.
 
-    Idempotent: có OAC hợp lệ rồi thì dùng lại, không đẻ thêm hàng mỗi lượt seed.
+    Idempotent: có OAC / hàng giá hợp lệ rồi thì dùng lại, không đẻ thêm hàng mỗi
+    lượt seed.
     """
     ai = (
         await db.execute(
@@ -371,7 +440,7 @@ async def _oac_cho_tinh_phi(db) -> Any:
         )
     ).scalars().first()
     if oac is not None:
-        return oac, ai
+        return oac, ai, await _gia_hoc_ky(db, ai)
 
     crit = (
         await db.execute(
@@ -393,7 +462,7 @@ async def _oac_cho_tinh_phi(db) -> Any:
     )
     db.add(oac)
     await db.flush()
-    return oac, ai
+    return oac, ai, await _gia_hoc_ky(db, ai)
 
 
 async def seed(
@@ -570,7 +639,7 @@ async def seed(
         #     `resolve_fee_academic_info` giải được ngành;
         #   * KHÔNG dựng sẵn Fee tuition — FIN-03 là ca "tính phí mới". Dựng sẵn
         #     thì thao tác tính chỉ đi đường recalculate và ca mất hết ý nghĩa.
-        oac, ai_calc = await _oac_cho_tinh_phi(db)
+        oac, ai_calc, gia_hk = await _oac_cho_tinh_phi(db)
         hs = await _ho_so(db, run_id, "FCALC", unit_a, base + 8)
         hs.offering_admission_config_id = oac.id
         hs.uses_choice_engine = False
@@ -580,6 +649,13 @@ async def seed(
             "offering_admission_config_id": oac.id,
             "academic_info_id": ai_calc.id,
             "tuition_fee_per_year": str(ai_calc.tuition_fee_per_year),
+            # Giá HK1 THẬT — đây mới là số `calculate_fee` dùng làm base cho
+            # tuition. Ghi cả id lẫn số để oracle đọc thay vì suy từ
+            # `tuition_fee_per_year` (hai số có thể khác nhau khi danh mục đã có
+            # sẵn hàng giá và fixture KHÔNG được ghi đè nó).
+            "semester_tuition_id": gia_hk.id,
+            "semester_no": gia_hk.semester_no,
+            "semester_amount": str(gia_hk.amount),
             # Cờ RIÊNG, không dùng `khong_co_fee_truoc` của F-APP: nhánh ấy còn
             # đòi `applied_rules.requires_application_fee` — luật của lệ phí hồ
             # sơ, không liên quan gì tới tính học phí.
@@ -693,6 +769,90 @@ def tach_so(du_lieu: Dict[str, Any], run_id: str) -> Dict[str, Any]:
     return {"fixtures": tat_ca, "actor": actor}
 
 
+async def _kiem_duong_tinh_phi_that(db, profile_id: int) -> Optional[str]:
+    """Gọi ĐÚNG hai bước mà nút "Tính học phí" gọi. Trả `None` nếu đạt.
+
+    Hai bước, cùng thứ tự với `calculate_fee` nhánh tuition:
+
+        FeeCalculationService._get_profile   (eager-load: không MissingGreenlet)
+        → resolve_fee_academic_info          (giải ngành)
+        → _semester_tuition_amount_for_ai    (giá HK — nguồn giá THẬT)
+
+    Vì sao không kiểm hộ bằng `tuition_fee_per_year`: xem chú thích tại chỗ gọi.
+    Vì sao không gọi thẳng `preview_tuition`: nó gộp thêm phần ưu đãi, nên khi đỏ
+    thì không tách được "thiếu giá" với "chính sách ưu đãi hỏng" — mà một ca kiểm
+    gộp hai nguyên nhân thì không kết luận được gì. Hai bước trên đã đủ để tái
+    hiện đúng lỗi 400 đã chặn FIN-03.
+
+    KHÔNG ghi gì: chỉ SELECT. Caller giữ session; không commit ở đây.
+    """
+    from app.services.fee_calculation_service import (  # noqa: PLC0415
+        FeeCalculationService,
+        resolve_fee_academic_info,
+    )
+
+    svc = FeeCalculationService(db)
+    hs = await svc._get_profile(profile_id, unit_id=None)
+    if hs is None:
+        return f"hồ sơ {profile_id} không còn"
+
+    try:
+        ai = await resolve_fee_academic_info(db, hs)
+    except Exception as e:  # BadRequest và mọi thứ khác đều là "không tính được"
+        return f"resolve_fee_academic_info từ chối: {type(e).__name__}: {e}"
+    if ai is None:
+        return "resolve_fee_academic_info trả None — không giải được ngành"
+
+    try:
+        tien = await svc._semester_tuition_amount_for_ai(ai.id, HOC_KY_TINH_PHI)
+    except Exception as e:
+        return (
+            f"giải được ngành (academic_info={ai.id}) nhưng KHÔNG ra giá "
+            f"HK{HOC_KY_TINH_PHI}: {type(e).__name__}: {e}"
+        )
+    if tien is None or Decimal(str(tien)) <= 0:
+        return (
+            f"giá HK{HOC_KY_TINH_PHI} của academic_info {ai.id} là {tien!r} — "
+            "không dương thì hoá đơn ra 0 đồng và lượt smoke xanh giả"
+        )
+    return None
+
+
+async def _kiem_so_khop_gia_hoc_ky(db, fx: Mapping[str, Any]) -> Optional[str]:
+    """Sổ ↔ DB cho hàng giá học kỳ. Trả `None` nếu khớp.
+
+    Oracle đọc `semester_amount` trong sổ để khai delta. Sổ ghi một số mà DB giữ
+    số khác thì bản khai sai từ trước khi bấm — và cái sai ấy sẽ hiện ra dưới
+    dạng "lệch" của một ca hoàn toàn lành.
+    """
+    ma_gia = fx.get("semester_tuition_id")
+    if not ma_gia:
+        return (
+            "sổ không có semester_tuition_id — seeder cũ chỉ ghi "
+            "tuition_fee_per_year, đúng trường KHÔNG phải nguồn giá của tuition"
+        )
+    ost = await db.get(models.OfferingSemesterTuition, ma_gia)
+    if ost is None:
+        return f"hàng giá học kỳ {ma_gia} trong sổ không còn trong DB"
+    if ost.semester_no != fx.get("semester_no"):
+        return (
+            f"hàng giá {ma_gia}: semester_no DB={ost.semester_no} ≠ "
+            f"sổ={fx.get('semester_no')!r}"
+        )
+    if Decimal(str(ost.amount)) != Decimal(str(fx.get("semester_amount"))):
+        return (
+            f"hàng giá {ma_gia}: amount DB={ost.amount} ≠ "
+            f"sổ={fx.get('semester_amount')!r}"
+        )
+    ai_id = fx.get("academic_info_id")
+    if ai_id is not None and ost.academic_info_id != ai_id:
+        return (
+            f"hàng giá {ma_gia} thuộc academic_info {ost.academic_info_id}, "
+            f"còn sổ khai ngành {ai_id} — giá của ngành KHÁC"
+        )
+    return None
+
+
 async def validate(run_id: str, thu_muc: Path) -> int:
     """Kiểm HÌNH DẠNG, không kiểm sự tồn tại. Trả số lỗi."""
     kiem_moi_truong(can_ghi=False)
@@ -738,12 +898,22 @@ async def validate(run_id: str, thu_muc: Path) -> int:
                                 f"{ma}: OAC {oac_id} trỏ tới academic_info "
                                 f"{oac.academic_info_id} không tồn tại"
                             )
-                        elif ai.tuition_fee_per_year is None:
-                            loi.append(
-                                f"{ma}: academic_info {ai.id} không có "
-                                "tuition_fee_per_year — giải được ngành nhưng "
-                                "vẫn không tính ra tiền"
-                            )
+                # ĐI ĐÚNG ĐƯỜNG THẬT, không kiểm hộ bằng một trường gần đúng.
+                #
+                # Bản đầu kết luận "tính phí được" từ `ai.tuition_fee_per_year is
+                # not None`. Trường đó KHÔNG phải nguồn giá của tuition, nên nó
+                # chứng nhận nhầm nguyên một fixture: `BL20260818A` seed xanh,
+                # validator xanh, mà `preview_tuition` trả 400.
+                #
+                # Bốn phép kiểm cấu trúc phía trên vẫn giữ vì chúng cho thông báo
+                # cụ thể; phép kiểm dưới đây mới là trọng tài.
+                ly_do = await _kiem_duong_tinh_phi_that(db, fx["profile_id"])
+                if ly_do:
+                    loi.append(f"{ma}: {ly_do}")
+                # Sổ nói một đằng, DB một nẻo thì oracle đọc sổ sẽ khai sai delta.
+                ly_do_so = await _kiem_so_khop_gia_hoc_ky(db, fx)
+                if ly_do_so:
+                    loi.append(f"{ma}: {ly_do_so}")
                 fee_tt = (
                     await db.execute(
                         select(Fee).where(
