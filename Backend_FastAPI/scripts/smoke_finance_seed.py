@@ -35,7 +35,7 @@ import asyncio
 import os
 import sys
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -365,6 +365,23 @@ async def _gia_hoc_ky(db, ai) -> Any:
         )
     ).scalars().first()
     if ost is not None:
+        # Hàng có sẵn vẫn phải QUA cửa "giá dương". `CheckConstraint` của model là
+        # `amount >= 0`, nên một hàng 0 đồng là hàng HỢP LỆ về schema — và bản vá
+        # đầu của hàm này trả thẳng nó ra, không hỏi số.
+        #
+        # Nhánh tuition của `calculate_fee` KHÔNG có guard `base_amount <= 0`
+        # (guard ấy chỉ nằm ở nhánh non-tuition), nên giá 0 đi trọn đường thành
+        # Fee 0 đồng + hoá đơn 0 đồng và FIN-03 "đạt" trên rác.
+        #
+        # DỪNG, không ghi đè: sửa giá của một hàng danh mục để fixture chạy được
+        # còn tệ hơn dừng.
+        if Decimal(str(ost.amount)) <= 0:
+            raise ChanLai(
+                f"hàng giá HK{HOC_KY_TINH_PHI} có sẵn (id={ost.id}, "
+                f"academic_info={ai.id}) mang amount={ost.amount} — không dương. "
+                "Fixture KHÔNG sửa giá danh mục; hãy đặt giá thật cho ngành này "
+                "rồi seed lại."
+            )
         return ost
 
     tien = ai.tuition_fee_per_year
@@ -834,16 +851,30 @@ async def _kiem_so_khop_gia_hoc_ky(db, fx: Mapping[str, Any]) -> Optional[str]:
     ost = await db.get(models.OfferingSemesterTuition, ma_gia)
     if ost is None:
         return f"hàng giá học kỳ {ma_gia} trong sổ không còn trong DB"
-    if ost.semester_no != fx.get("semester_no"):
+
+    # Đọc SỔ trước, so sau. `Decimal(str(None))` ném `InvalidOperation`, và một
+    # validator chết giữa chừng thì thôi không còn là validator: nó không gom nốt
+    # các lỗi khác để in một bản danh sách, còn người đọc nhận traceback thay vì
+    # câu "sổ thiếu trường X". Trường khuyết phải cho ra MỘT dòng lỗi như mọi
+    # trường khác — sổ là tệp do máy khác ghi, méo là chuyện bình thường.
+    ky = fx.get("semester_no")
+    if ky is None:
+        return "sổ thiếu semester_no cho hàng giá học kỳ"
+    if ost.semester_no != ky:
+        return f"hàng giá {ma_gia}: semester_no DB={ost.semester_no} ≠ sổ={ky!r}"
+
+    tien_so = fx.get("semester_amount")
+    if tien_so is None:
+        return "sổ thiếu semester_amount cho hàng giá học kỳ"
+    try:
+        tien_so = Decimal(str(tien_so))
+    except (InvalidOperation, ValueError, TypeError):
         return (
-            f"hàng giá {ma_gia}: semester_no DB={ost.semester_no} ≠ "
-            f"sổ={fx.get('semester_no')!r}"
+            f"semester_amount trong sổ không đọc được thành số: "
+            f"{fx.get('semester_amount')!r}"
         )
-    if Decimal(str(ost.amount)) != Decimal(str(fx.get("semester_amount"))):
-        return (
-            f"hàng giá {ma_gia}: amount DB={ost.amount} ≠ "
-            f"sổ={fx.get('semester_amount')!r}"
-        )
+    if Decimal(str(ost.amount)) != tien_so:
+        return f"hàng giá {ma_gia}: amount DB={ost.amount} ≠ sổ={tien_so}"
     ai_id = fx.get("academic_info_id")
     if ai_id is not None and ost.academic_info_id != ai_id:
         return (
