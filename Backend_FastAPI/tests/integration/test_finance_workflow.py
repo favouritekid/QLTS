@@ -893,8 +893,15 @@ class TestAccountingPeriod:
         self,
         db: AsyncSession,
         maker_user: models.User,
+        cho_phep_dong_ky,
     ):
-        """Test creating and closing an accounting period."""
+        """Test creating and closing an accounting period.
+
+        ``cho_phep_dong_ky``: đóng kỳ mặc định BỊ CHẶN fail-closed
+        (``app/services/finance_killswitch.py``). Ca này kiểm nghiệp vụ đóng kỳ
+        nên phải xin mở cổng tường minh — bộ canh chính kill-switch nằm ở
+        ``tests/services/test_finance_killswitch.py``.
+        """
         service = AccountingPeriodService(db)
 
         # Create period

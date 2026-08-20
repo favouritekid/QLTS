@@ -481,8 +481,10 @@ export const accountingPeriodSchema = z.object({
   total_refunds: z.string(),
   net_revenue: z.string(),
   created_at: z.string(),
+  // Backend quyết định; `.catch(false)` để một backend cũ chưa trả trường
+  // này không làm hỏng cả response — và mặc định là ẨN nút (fail-closed).
+  can_close: z.boolean().catch(false),
   // [TODO_BACKEND] Add: notes
-  // [TODO_BACKEND] Add permission flag: can_close
 })
 
 export type AccountingPeriod = z.infer<typeof accountingPeriodSchema>

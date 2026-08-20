@@ -495,8 +495,15 @@ export interface AccountingPeriod {
   total_refunds: string
   net_revenue: string
   created_at: string
+  /**
+   * Backend quyết định nút "Đóng kỳ" có hiện hay không.
+   *
+   * KHÔNG suy lại ở frontend từ `is_closed` hay `user.role`: cờ này còn
+   * mang thông tin frontend không có — kill-switch kế toán đang bật hay
+   * tắt. Suy lại là hiện một nút mà mọi cú bấm đều trả 409.
+   */
+  can_close: boolean
   // [TODO_BACKEND] Add: notes
-  // [TODO_BACKEND] Add permission flag: can_close
 }
 
 // ============================================================================

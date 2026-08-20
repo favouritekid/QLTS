@@ -206,13 +206,18 @@ export function AccountingPeriodClient() {
                     className="font-semibold"
                   />
                 </div>
-                <Button
-                  variant="outline"
-                  onClick={() => handleCloseClick(currentPeriod)}
-                >
-                  <Lock className="h-4 w-4 mr-2" />
-                  Đóng kỳ
-                </Button>
+                {/* Nút chỉ hiện khi backend nói được đóng. Kill-switch kế
+                    toán đang bật thì route trả 409, nên nút vô điều kiện
+                    chỉ dẫn người dùng tới một lỗi. */}
+                {currentPeriod.can_close && (
+                  <Button
+                    variant="outline"
+                    onClick={() => handleCloseClick(currentPeriod)}
+                  >
+                    <Lock className="h-4 w-4 mr-2" />
+                    Đóng kỳ
+                  </Button>
+                )}
               </div>
             </div>
           </CardContent>

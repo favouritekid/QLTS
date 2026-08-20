@@ -27,6 +27,8 @@ from app.core import deps
 from app.core.deps import CasbinAuth, require_admin
 from app.core.rate_limits import limiter, RateLimits
 from app.schemas import finance as finance_schemas
+from app.services import finance_killswitch
+from app.core.constants import UserRole
 from app.services.accounting_service import AccountingPeriodService
 from app.models.finance import AccountingPeriod
 from app.utils.exceptions import (
@@ -87,7 +89,7 @@ async def list_periods(
     result = await db.execute(query)
     periods = list(result.scalars().all())
 
-    return [_build_period_response(p) for p in periods]
+    return [_build_period_response(p, current_user) for p in periods]
 
 
 @limiter.limit(RateLimits.DATA_WRITE)
@@ -135,7 +137,7 @@ async def create_period(
         )
 
         await db.refresh(period)
-        return _build_period_response(period)
+        return _build_period_response(period, current_user)
 
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -173,7 +175,7 @@ async def get_current_period(
     if not period:
         return None
 
-    return _build_period_response(period)
+    return _build_period_response(period, current_user)
 
 
 @limiter.limit(RateLimits.DATA_READ)
@@ -206,7 +208,7 @@ async def get_period(
             detail=f"Accounting period {period_id} not found"
         )
 
-    return _build_period_response(period)
+    return _build_period_response(period, current_user)
 
 
 @limiter.limit(RateLimits.DATA_WRITE)
@@ -234,6 +236,17 @@ async def close_period(
     - Requires admin role
     - Requires 'accounting:close' permission
     """
+    # Kill-switch TRƯỚC mọi phép đọc — không phải thay cho guard ở service, mà
+    # thêm vào.
+    #
+    # Service đã tự canh (`accounting_service.close_period`), và đó vẫn là cổng
+    # có thẩm quyền cho mọi caller sinh sau. Nhưng router đọc kỳ TRƯỚC khi gọi
+    # service, nên nếu chỉ dựa vào guard ở service thì qua HTTP: id có thật →
+    # 409, id không có → 404. Chênh lệch ấy là một kênh dò trạng thái — gọi lần
+    # lượt từng id sẽ liệt kê được kỳ nào tồn tại, trong khi chức năng lẽ ra
+    # đang đóng hoàn toàn.
+    finance_killswitch.assert_period_close_allowed()
+
     # Get period by ID first
     query = select(AccountingPeriod).where(AccountingPeriod.id == period_id)
     result = await db.execute(query)
@@ -264,8 +277,13 @@ async def close_period(
         )
 
         await db.refresh(period)
-        return _build_period_response(period)
+        return _build_period_response(period, current_user)
 
+    # ⚠️ ``AccountingOperationLocked`` (kill-switch, 409) CỐ Ý không có ``except``
+    # ở đây: nó đi thẳng tới ``base_app_exception_handler`` để giữ nguyên
+    # ``error_code`` và ``public_payload.operation`` — bắt lại rồi dựng
+    # ``HTTPException`` sẽ làm mất cả hai và biến 409 thành chuỗi trần.
+    # KHÔNG thêm ``except ConflictError`` hay ``except Exception`` vào khối này.
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except BusinessRuleViolation as e:
@@ -325,8 +343,22 @@ async def get_period_summary(
 # HELPER FUNCTIONS
 # ==============================================================================
 
-def _build_period_response(period) -> finance_schemas.AccountingPeriodResponse:
-    """Build AccountingPeriodResponse from AccountingPeriod model."""
+def _build_period_response(
+    period, current_user=None
+) -> finance_schemas.AccountingPeriodResponse:
+    """Build AccountingPeriodResponse from AccountingPeriod model.
+
+    ``can_close`` là cờ GIAO DIỆN, không phải hàng rào: nó chỉ quyết định nút
+    có hiện hay không. Hàng rào thật nằm ở service, và ở precheck đầu
+    ``close_period``. Ba điều kiện phải đúng ĐỒNG THỜI:
+
+    * kill-switch cho phép — còn bật thì route trả 409 bất kể gì khác;
+    * kỳ đang MỞ — kỳ đã đóng không đóng lại được;
+    * người dùng là admin — endpoint gắn ``require_admin``.
+
+    ``current_user=None`` (caller quên truyền) cho ra ``False``: fail-closed.
+    Nút biến mất thì thấy ngay; nút hiện ra rồi trả 409 thì không.
+    """
     return finance_schemas.AccountingPeriodResponse(
         id=period.id,
         month=period.period_month,
@@ -338,4 +370,9 @@ def _build_period_response(period) -> finance_schemas.AccountingPeriodResponse:
         total_refunds=period.total_refunds,
         net_revenue=period.net_revenue,
         created_at=period.created_at,
+        can_close=(
+            finance_killswitch.is_period_close_allowed()
+            and not period.is_closed
+            and getattr(current_user, "role", None) == UserRole.ADMIN
+        ),
     )

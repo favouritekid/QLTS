@@ -139,6 +139,11 @@ on:
       - 'docker-compose.yml'
       - 'docker-compose.override.yml'
       - 'docker-compose.rollback.yml'
+      # Guard metadata production (TestKhongRoMetadataProduction) quét tệp này.
+      # Không có dòng này thì một PR CHỈ sửa `.env.production.example` không
+      # kích hoạt workflow, guard không chạy lần nào, và required check vẫn
+      # xanh — đúng chỗ số liệu sổ sách đã lọt vào lần đầu.
+      - '.env.production.example'
       - 'nginx/**'
       - 'tests-e2e/**'
       - 'Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md'
@@ -455,6 +460,14 @@ jobs:
           # Không đổi TÊN lát để thêm cho khớp chủ đề — tên job là required
           # status check, đổi tên là mọi PR đang mở treo chờ một check không bao
           # giờ tới.
+          # Tám nodeid kill-switch ở cuối lát này liệt kê theo NODEID chứ không
+          # kéo cả hai tệp vào shard: phần còn lại của chúng chưa được rà, và
+          # thêm nguyên tệp là tự nhận nợ mọi ca trong đó.
+          #
+          # ⚠️ Chú thích PHẢI nằm ngoài scalar `tests: >-`. Bản đầu đặt nó bên
+          # trong: YAML coi `#` là NỘI DUNG, `>-` gấp mọi dòng thành MỘT dòng,
+          # rồi bash cắt từ `#` tới hết. Đo thật: lệnh nhận 17 đối số thay vì
+          # 25, cả tám nodeid biến mất, và required check vẫn xanh.
           - tier: Tier 2b — Export khoản phí + công nợ
             tests: >-
               tests/services/test_tuition_export_service.py
@@ -473,6 +486,15 @@ jobs:
               tests/services/test_payment_service.py::TestOverpaymentCheck
               tests/services/test_payment_service.py::TestOverpaymentService
               tests/unit/test_finance_models.py
+              tests/services/test_finance_killswitch.py
+              tests/services/test_invoice_service.py::TestInvoiceLifecycle::test_apply_penalty
+              tests/services/test_invoice_service.py::TestInvoiceLifecycle::test_apply_penalty_on_paid_invoice
+              tests/services/test_invoice_service.py::TestApplyPenaltyGuards::test_penalty_none_rejected_not_500
+              tests/services/test_invoice_service.py::TestApplyPenaltyGuards::test_penalty_exceeds_amount_rejected
+              tests/services/test_invoice_service.py::TestApplyPenaltyGuards::test_penalty_within_cap_ok
+              tests/services/test_invoice_service.py::TestApplyPenaltyGuards::test_penalty_blocked_when_not_overdue
+              tests/services/test_invoice_service.py::TestApplyPenaltyGuards::test_penalty_blocked_on_draft_invoice
+              tests/integration/test_finance_workflow.py::TestAccountingPeriod::test_create_and_close_period
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability

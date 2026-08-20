@@ -1054,6 +1054,12 @@ class AccountingPeriodResponse(AccountingPeriodBase):
     net_revenue: Decimal
     created_at: datetime
 
+    # Mặc định ``False`` — fail-closed, y như ``can_apply_penalty``. Một router
+    # mới quên tính cờ này thì nút biến mất, chứ không hiện ra một nút chỉ dẫn
+    # tới 409. Đây là **lớp phụ**: hàng rào thật nằm ở service
+    # (``finance_killswitch.assert_period_close_allowed``).
+    can_close: bool = False
+
     model_config = ConfigDict(from_attributes=True)
 
 

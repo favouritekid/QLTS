@@ -50,6 +50,7 @@ from app.models.finance import (
 )
 from app.constants.fee_labels import FEE_TYPE_LABELS
 from app.services.invoice_service import InvoiceService
+from app.services.finance_killswitch import is_invoice_penalty_allowed
 from app.services.tuition_export_service import build_tuition_export
 from app.services.system_config_service import SystemConfigService
 from app.repositories.fee_repository import InvoiceRepository
@@ -911,6 +912,10 @@ async def apply_penalty(
         await db.refresh(invoice)
         return _build_invoice_response(invoice, current_user_role=current_user.role)
 
+    # ⚠️ ``AccountingOperationLocked`` (kill-switch, 409) CỐ Ý không có ``except``
+    # ở đây: nó đi thẳng tới ``base_app_exception_handler`` để giữ nguyên
+    # ``error_code`` và ``public_payload.operation``. KHÔNG thêm
+    # ``except ConflictError`` hay ``except Exception`` vào khối này.
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except BusinessRuleViolation as e:
@@ -977,7 +982,18 @@ def _compute_invoice_permissions(
         # Derived-overdue (issued/partial/overdue ĐÃ quá due_date), KHÔNG dùng enum
         # 'overdue' (lag theo beat job) → nút hiện đúng khi service apply_penalty
         # chấp nhận (service cũng gate ``invoice.is_overdue``).
-        "can_apply_penalty": _invoice_is_overdue(invoice) and is_manager_or_admin,
+        #
+        # ``is_invoice_penalty_allowed()`` đứng ĐẦU: kill-switch còn bật thì
+        # route trả 409 bất kể trạng thái hoá đơn, nên cờ phải false — nếu
+        # không, giao diện lại hiện đúng cái nút chết mà cờ này sinh ra để
+        # chặn. Đây là **lớp phụ**: hàng rào thật nằm ở service
+        # (``finance_killswitch.assert_invoice_penalty_allowed``), cờ này chỉ
+        # để nút không mời người dùng bấm vào một 409.
+        "can_apply_penalty": (
+            is_invoice_penalty_allowed()
+            and _invoice_is_overdue(invoice)
+            and is_manager_or_admin
+        ),
     }
 
 

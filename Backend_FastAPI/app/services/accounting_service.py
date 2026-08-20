@@ -37,6 +37,7 @@ from app.utils.exceptions import (
     BusinessRuleViolation,
     ConflictError,
 )
+from app.services.finance_killswitch import assert_period_close_allowed
 from app.config import settings
 
 log = structlog.get_logger(__name__)
@@ -157,9 +158,16 @@ class AccountingPeriodService:
             Tuple of (AccountingPeriod, post_commit_callback)
 
         Raises:
+            AccountingOperationLocked: If the fail-closed kill-switch is engaged (409)
             ResourceNotFoundError: If period not found
             BusinessRuleViolation: If period already closed or has unclosed previous periods
         """
+        # Hàng rào ĐỨNG TRƯỚC mọi thao tác đọc: khi kill-switch còn bật, một
+        # kỳ không tồn tại phải trả 409 "đang khoá" chứ không phải 404. Trả 404
+        # trước là tự mở một kênh dò: gọi lần lượt id để biết kỳ nào có thật,
+        # trong khi chức năng lẽ ra đang đóng hoàn toàn.
+        assert_period_close_allowed()
+
         period = await self.get_period(month, year)
         if not period:
             raise ResourceNotFoundError(
