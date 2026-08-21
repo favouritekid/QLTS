@@ -1,55 +1,229 @@
 name: Nightly Backend Pytest
 
-# PR-1.6 (2026-05-24) — Full BACKEND pytest suite as nightly + manual,
-# NOT a required PR gate. Distinct from ``nightly-regression.yml`` which
-# runs Playwright E2E (frontend integration) at a different cron slot;
-# this workflow covers the backend pytest layer only.
+# ============================================================================
+# TÁI CẤU TRÚC 20-08-2026 — chia lát, vì workflow này CHƯA TỪNG chạy xong
+# ============================================================================
 #
-# The per-PR gate (``backend-test.yml``) is intentionally a bounded
-# curated risk gate optimised for solo-dev velocity (memory
-# ``solo-dev-batch-prs-to-reduce-ci-overhead`` — 30-60 phút CI overhead
-# per PR is the real cost driver). This nightly workflow runs the FULL
-# backend suite so broad service/repo/unit drift surfaces every day
-# instead of waiting for a release-prep moment, without blocking any
-# PR's merge time.
+# Đo được trước khi sửa (``gh run list --workflow=nightly-backend-pytest.yml``):
 #
-# Triggers:
-#   schedule: 18:00 UTC daily (= 01:00 ICT next-day, off-hours for dev)
-#   workflow_dispatch: manual run for pre-release verification
+#   88/88 lượt gần nhất KHÔNG thành công — 87 ``cancelled`` + 1 ``failure``.
+#   Lượt cũ nhất còn thấy: 24-05-2026, đúng ngày workflow này ra đời.
 #
-# Failure mode: GitHub Actions email/UI notification. NOT a PR gate, so
-# a red nightly does NOT block ongoing PRs — it surfaces drift to the
-# solo dev for the next morning's triage.
+# Nguyên nhân KHÔNG phải một test hỏng, mà là **cấu trúc**: một job tuần tự cho
+# toàn bộ 8.652 test. Run ``32287527969`` (19-08) cho con số cụ thể:
 #
-# Cross-file sync (memory ``ci-workflow-flag-cross-file-sync``):
-#   python-version, cache, postgres + redis services, env vars all
-#   mirror ``backend-test.yml`` so the nightly's environment matches
-#   what the PR gate verifies (no env drift = no false nightly red).
+#   18:29:53 "collected 8652 items"  ->  19:58:22 dòng tiến trình cuối "[ 9%]"
+#   = 88,5 phút cho ~9%  =>  ngoại suy ~5-6 GIỜ cho một lượt.
+#
+# Trần ``timeout-minutes: 90`` cắt job giữa chừng, GitHub ghi ``cancelled``.
+# Suốt ba tháng nó không phải lưới an toàn, chỉ là một ô không ai đọc.
+#
+# Vì sao KHÔNG giải bằng tăng timeout: một lượt 6 giờ vẫn là 6 giờ; kết quả tới
+# tay vào buổi chiều là kết quả của mã hôm kia.
+#
+# Vì sao KHÔNG giải bằng ``pytest-xdist``: bộ này DROP/CREATE schema
+# ``qlts_test`` trong fixture ``setup_test_database``. Nhiều worker chung một
+# Postgres sẽ giẫm lên nhau — đúng lớp lỗi mà ``docs`` nội bộ gọi là "deadlock
+# / UNIQUE race chỉ hiện ở máy, biến mất trên CI". Chia theo JOB thì mỗi lát
+# được GitHub dựng CẶP Postgres+Redis RIÊNG; đó là cô lập thật, không phải
+# tối ưu.
+#
+# ---------------------------------------------------------------------------
+# Bốn job, và vì sao cần đủ bốn
+# ---------------------------------------------------------------------------
+#
+#   inventory      — ``pytest --collect-only`` MỘT LẦN, lấy bản kiểm kê gốc,
+#                    rồi SINH ra ma trận lát. Không ai gõ tay danh sách tệp.
+#   pytest-shard   — matrix, ``fail-fast: false``, mỗi lát một cặp DB riêng.
+#                    Mỗi lát tự ghi lại danh sách node id nó THẬT SỰ thu được.
+#   coverage-guard — đối chiếu HỢP các lát với kiểm kê gốc: thiếu ⇒ ĐỎ,
+#                    trùng ⇒ ĐỎ.
+#   nightly        — job gộp; đỏ nếu BẤT KỲ job nào ở trên không success.
+#
+# ``coverage-guard`` là job dễ bị coi là thừa nhất, và là job không được bỏ.
+# Kho này đã có sẵn đúng cái bẫy nó canh: một tệp test không có tên trong tier
+# nào thì KHÔNG shard nào chạy, mà required check VẪN XANH. Sinh danh sách tự
+# động thu hẹp bẫy chứ không đóng được nó — một lỗi glob, một tệp thêm vào sau
+# lúc kiểm kê, hay một lát chết lúc collect đều làm rơi test trong im lặng.
+# ``coverage-guard`` là thứ duy nhất nói ra điều đó.
+#
+# Cross-file sync (memory ``ci-workflow-flag-cross-file-sync``): python-version,
+# cache, services postgres+redis, env vars vẫn soi gương ``backend-test.yml``.
 
 on:
   schedule:
-    # 18:00 UTC daily. Cron is in UTC; this lands ~01:00 ICT = pre-dawn
-    # local, so the result is in the inbox by morning standup.
+    # 18:00 UTC = ~01:00 ICT, ngoài giờ làm.
     - cron: '0 18 * * *'
   workflow_dispatch:
-    # Manual trigger for pre-release runs ("ship Phase 4? run nightly
-    # first") or when investigating a suspected drift surface.
+    inputs:
+      shards:
+        description: 'Số lát chạy song song (mặc định 12)'
+        required: false
+        default: '12'
 
 concurrency:
-  # Multiple workflow_dispatch back-to-back collapse to the latest. The
-  # scheduled cron rarely overlaps with a manual run; if they do, the
-  # manual run wins (newer SHA / more intent).
   group: nightly-backend-pytest-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # 12 lát: ước lượng ~5,5 giờ chia đều là ~28 phút/lát, còn dư biên rộng dưới
+  # trần 75 phút. Chỉnh qua ``workflow_dispatch`` khi cần đo lại.
+  SO_LAT_MAC_DINH: '12'
+  # Loại trừ ĐỒNG BỘ giữa kiểm kê và từng lát. Lệch một chữ ở đây là
+  # ``coverage-guard`` đỏ ngay — cố ý: hai danh sách loại trừ khác nhau là
+  # đúng thứ sẽ âm thầm đánh rơi test.
+  BO_QUA: "--ignore-glob=tests/integration/test_debug*.py"
+
 jobs:
-  pytest-full:
-    name: pytest (full suite)
+  # ==========================================================================
+  # 1. KIỂM KÊ — nguồn chuẩn DUY NHẤT cho cả lát lẫn cổng độ phủ
+  # ==========================================================================
+  inventory:
+    name: kiểm kê + chia lát
     runs-on: ubuntu-latest
-    # Wall-clock ceiling — full suite at QLTS scale runs ~30-60 phút
-    # under sequential execution. 90 minutes covers worst-case slow
-    # fixture chains + leaves margin without burning a full job hour.
-    timeout-minutes: 90
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/qlts_test
+      REDIS_URL: redis://localhost:6379/0
+      SECRET_KEY: test-secret-key-for-ci-only
+      JWT_SECRET_KEY: test-jwt-secret-for-ci-only
+      MAIL_USERNAME: ci-test@example.com
+      MAIL_PASSWORD: ci-test-placeholder
+      MAIL_FROM: ci-test@example.com
+      MAIL_SERVER: smtp.example.com
+
+    # Kiểm kê CHỈ ``--collect-only``, không chạy test nào, nên về lý thuyết
+    # không cần DB. Vẫn dựng đủ cặp Postgres+Redis: ``tests/conftest.py`` import
+    # ``app.main`` ở mức module, và một import phụ thuộc DB len vào sau này sẽ
+    # làm kiểm kê chết — lúc ấy MỌI lát sai theo. Rẻ hơn nhiều so với một đêm
+    # ma trận rỗng.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: qlts_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: Backend_FastAPI/requirements-dev.txt
+
+      - name: Install backend dependencies (dev)
+        working-directory: Backend_FastAPI
+        run: pip install -r requirements-dev.txt
+
+      - name: Thu thập bản kiểm kê gốc
+        working-directory: Backend_FastAPI
+        # ⚠️ ``-qq``, KHÔNG phải ``-q``. ``Backend_FastAPI/pytest.ini`` đặt
+        # ``addopts = -v …``; pytest CỘNG DỒN độ chi tiết, nên ``-v`` (+1) gặp
+        # ``-q`` (−1) ra 0 = mức mặc định, và ở mức đó ``--collect-only`` in
+        # **cây** (``<Module …>``/``<Coroutine …>``) chứ KHÔNG in node id.
+        # Đã đo trên chính bộ này: ``-q`` → 0 dòng có ``::``; ``-qq`` → đủ.
+        # Đây đúng là loại lỗi chỉ lộ ra khi chạy trên bộ test THẬT.
+        #
+        # ``--collect-only -qq`` in mỗi node id một dòng. KHÔNG dùng ``|| true``:
+        # collect hỏng mà vẫn đi tiếp thì ma trận sinh ra từ một danh sách cụt,
+        # và cả đêm chạy thiếu mà không ai biết.
+        #
+        # ⚠️ Đã đo: khi có lỗi lúc collect, pytest in
+        # ``Interrupted: N errors during collection`` và **KHÔNG in node id nào
+        # cả** — kể cả những tệp thu thập được. Nên bước này là tất-cả-hoặc-
+        # không: MỘT tệp lỗi import làm cả bản kiểm kê rỗng.
+        #
+        # Đó là hành vi ĐÚNG (không ai shard được thứ không collect nổi), nhưng
+        # nếu để ``grep`` tự đổ thì log chỉ có một mã thoát 1 trần, không nói
+        # được vì sao. Bắt và in thẳng danh sách tệp lỗi.
+        run: |
+          set -uo pipefail
+          rc=0
+          python -m pytest tests/ --collect-only -qq ${{ env.BO_QUA }} \
+            > /tmp/collected-raw.txt 2>&1 || rc=$?
+
+          if grep -q '^ERROR ' /tmp/collected-raw.txt; then
+            echo "::error::Có lỗi khi COLLECT — pytest bỏ luôn danh sách node id, bản kiểm kê sẽ rỗng."
+            echo "Các tệp lỗi:"
+            grep '^ERROR ' /tmp/collected-raw.txt
+            tail -20 /tmp/collected-raw.txt
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::pytest --collect-only thoát $rc"
+            tail -20 /tmp/collected-raw.txt
+            exit "$rc"
+          fi
+
+          grep '::' /tmp/collected-raw.txt > /tmp/collected.txt || {
+            echo "::error::Không thu được node id nào dù collect không báo lỗi."
+            tail -20 /tmp/collected-raw.txt
+            exit 1
+          }
+          echo "Kiểm kê: $(wc -l < /tmp/collected.txt) node id"
+
+      - name: Sinh ma trận lát
+        id: plan
+        run: |
+          set -euo pipefail
+          SO_LAT="${{ github.event.inputs.shards || env.SO_LAT_MAC_DINH }}"
+          python .github/scripts/pytest_shard_inventory.py plan \
+            --collected /tmp/collected.txt \
+            --shards "$SO_LAT" \
+            --out /tmp/matrix.json
+          echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Lưu bản kiểm kê gốc
+        uses: actions/upload-artifact@v4
+        with:
+          name: inventory-collected
+          path: /tmp/collected.txt
+          retention-days: 7
+
+  # ==========================================================================
+  # 2. CÁC LÁT — mỗi lát một cặp Postgres+Redis RIÊNG (GitHub tự dựng theo job)
+  # ==========================================================================
+  pytest-shard:
+    name: pytest ${{ matrix.shard.name }}
+    runs-on: ubuntu-latest
+    needs: [inventory]
+    timeout-minutes: 75
+
+    strategy:
+      # ``fail-fast: false`` là CỐ Ý. Mặc định của GitHub huỷ mọi lát còn lại
+      # ngay khi một lát đỏ — nghĩa là mỗi đêm chỉ biết được MỘT lát hỏng, và
+      # bản chất của nightly là muốn thấy TOÀN BỘ drift trong một lượt.
+      #
+      # Nó cũng là điều kiện để ``coverage-guard`` có nghĩa: một lát bị huỷ
+      # giữa chừng sẽ không nộp danh sách node id, và cổng độ phủ phải nói ra
+      # điều đó thay vì im lặng vì cả ma trận đã bị dập.
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.inventory.outputs.matrix) }}
 
     env:
       APP_ENV: test
@@ -76,7 +250,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
       redis:
         image: redis:7-alpine
         ports:
@@ -101,18 +274,138 @@ jobs:
         working-directory: Backend_FastAPI
         run: pip install -r requirements-dev.txt
 
-      # Full backend pytest suite. ``--timeout=60`` (pytest-timeout) aborts
-      # any single test that hangs — without this, a future regression
-      # that re-introduces a deadlock would consume the full 90-min job
-      # ceiling and lose all log context. ``--ignore-glob`` excludes the
-      # debug-only modules under ``tests/integration/test_debug*.py``
-      # (interactive Casbin/role investigation tools, ``print``-driven —
-      # they collect under the default ``test_*.py`` pattern but contribute
-      # zero gate value).
-      - name: pytest — full suite
+      # Ghi lại thứ lát này THẬT SỰ thu được, TRƯỚC khi chạy. Không suy ra từ
+      # danh sách tệp ở ma trận: một tệp có mặt trong lát mà collect ra 0 test
+      # (lỗi import bị nuốt, ``pytest.skip`` ở mức module, đổi tên lớp) thì suy
+      # theo tên tệp vẫn cho ra "đã phủ", còn danh sách này thì không.
+      - name: Thu thập node id của lát
         working-directory: Backend_FastAPI
+        # ``-qq`` vì cùng lý do với job kiểm kê: ``pytest.ini`` có ``addopts =
+        # -v``, nên ``-q`` chỉ đưa độ chi tiết về 0 và ``--collect-only`` in cây
+        # thay vì node id. Hai bên PHẢI dùng cùng cờ — lệch một chữ ở đây là
+        # ``coverage-guard`` đỏ vì định dạng, không phải vì độ phủ.
+        run: |
+          set -uo pipefail
+          rc=0
+          python -m pytest ${{ matrix.shard.tests }} --collect-only -qq ${{ env.BO_QUA }} \
+            > /tmp/shard-raw.txt 2>&1 || rc=$?
+          if [ "$rc" -ne 0 ] || grep -q '^ERROR ' /tmp/shard-raw.txt; then
+            echo "::error::Lát ${{ matrix.shard.name }} lỗi lúc collect (rc=$rc)"
+            tail -20 /tmp/shard-raw.txt
+            exit 1
+          fi
+          grep '::' /tmp/shard-raw.txt > "/tmp/${{ matrix.shard.name }}.txt" || {
+            echo "::error::Lát ${{ matrix.shard.name }} không thu được node id nào."
+            tail -20 /tmp/shard-raw.txt
+            exit 1
+          }
+          echo "${{ matrix.shard.name }}: $(wc -l < /tmp/${{ matrix.shard.name }}.txt) node id"
+
+      # Danh sách node id đi lên artifact NGAY, trước bước chạy test. Nếu để
+      # sau, một lát đỏ sẽ không nộp gì và ``coverage-guard`` báo "thiếu test"
+      # — một lỗi thứ hai chồng lên lỗi thật, che mất nguyên nhân.
+      - name: Lưu node id của lát
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-collected-${{ matrix.shard.name }}
+          path: /tmp/${{ matrix.shard.name }}.txt
+          retention-days: 7
+
+      - name: pytest — ${{ matrix.shard.name }}
+        working-directory: Backend_FastAPI
+        # ``--timeout=60`` (pytest-timeout) cắt một test treo. Không có nó, một
+        # deadlock tái xuất sẽ ăn hết trần 75 phút và mất sạch ngữ cảnh log.
+        # ``--junit-xml`` để lần sau thay bảng hệ số ước lượng trong
+        # ``pytest_shard_inventory.py`` bằng thời gian ĐO THẬT.
         run: >-
-          python -m pytest tests/
+          python -m pytest ${{ matrix.shard.tests }}
           -q --tb=short
           --timeout=60
-          --ignore-glob='tests/integration/test_debug*.py'
+          ${{ env.BO_QUA }}
+          --junit-xml=/tmp/junit-${{ matrix.shard.name }}.xml
+
+      - name: Lưu junit-xml (để đo lại trọng số)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.shard.name }}
+          path: /tmp/junit-${{ matrix.shard.name }}.xml
+          retention-days: 7
+
+  # ==========================================================================
+  # 3. CỔNG ĐỘ PHỦ — thứ duy nhất bắt được "test bị đánh rơi trong im lặng"
+  # ==========================================================================
+  coverage-guard:
+    name: cổng độ phủ (không thiếu, không trùng)
+    runs-on: ubuntu-latest
+    needs: [inventory, pytest-shard]
+    # ``always()``: cổng này phải chạy KỂ CẢ khi có lát đỏ. Mặc định của
+    # ``needs`` là bỏ qua job khi phụ thuộc thất bại — mà "một lát đỏ" chính là
+    # lúc cần biết nó có bỏ sót test nào không.
+    if: always()
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tải bản kiểm kê gốc
+        uses: actions/download-artifact@v4
+        with:
+          name: inventory-collected
+          path: /tmp/inv
+
+      - name: Tải node id của mọi lát
+        uses: actions/download-artifact@v4
+        with:
+          pattern: shard-collected-*
+          path: /tmp/shards
+          merge-multiple: true
+
+      - name: Đối chiếu độ phủ
+        run: |
+          set -euo pipefail
+          python .github/scripts/pytest_shard_inventory.py verify \
+            --collected /tmp/inv/collected.txt \
+            --shard-dir /tmp/shards
+
+  # ==========================================================================
+  # 4. JOB GỘP — một tên duy nhất để đọc, và nó phải ĐỎ khi bất kỳ thứ gì đỏ
+  # ==========================================================================
+  nightly:
+    name: nightly backend pytest
+    runs-on: ubuntu-latest
+    needs: [inventory, pytest-shard, coverage-guard]
+    if: always()
+
+    steps:
+      # Với matrix, ``needs.<job>.result`` là kết quả GỘP: 'success' chỉ khi
+      # TOÀN BỘ lát success. Một lát đỏ ⇒ 'failure'; bị huỷ (chạm trần thời
+      # gian) ⇒ 'cancelled'; bị bỏ qua ⇒ 'skipped'.
+      #
+      # Liệt kê TỪNG giá trị hợp lệ thay vì `!= 'failure'`: 'cancelled' và
+      # 'skipped' đều KHÔNG phải thành công, mà phép so phủ định lại cho chúng
+      # đi qua. Đó đúng là cách mà 87 lượt ``cancelled`` trước đây trôi tuột.
+      - name: Gom kết quả
+        run: |
+          set -u
+          LOI=0
+          for cap in \
+            "inventory=${{ needs.inventory.result }}" \
+            "pytest-shard=${{ needs.pytest-shard.result }}" \
+            "coverage-guard=${{ needs.coverage-guard.result }}"
+          do
+            TEN="${cap%%=*}"
+            KQ="${cap#*=}"
+            echo "$TEN: $KQ"
+            if [ "$KQ" != "success" ]; then
+              echo "::error::job '$TEN' KHÔNG thành công (kết quả: $KQ)"
+              LOI=$((LOI+1))
+            fi
+          done
+          # Tích luỹ rồi thoát theo TỔNG. Thoát theo lệnh cuối cùng là cách một
+          # bộ kiểm in chữ "SAI" xong vẫn trả 0.
+          if [ "$LOI" -ne 0 ]; then
+            echo "❌ $LOI job không thành công."
+            exit 1
+          fi
+          echo "✅ Kiểm kê, toàn bộ lát, và cổng độ phủ đều thành công."
