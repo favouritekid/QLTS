@@ -6,6 +6,10 @@ Architecture Compliance:
 - Service Layer: Pure business logic, no HTTP dependencies
 - Security: IDOR checks via repository (unit_id filtering)
 - Transactions: Services use db.add()/db.flush(), Router commits
+
+⚠️ Chiếu tài chính → lead (``_create_payment_from_intent`` →
+``sync_lead_tuition_paid``): hợp đồng CHUẨN ở
+``services/lead_admission_sync.py`` (docstring đầu tệp).
 - Error Handling: Raise custom exceptions (ResourceNotFoundError, etc.)
 
 2-Phase Payment Pattern:

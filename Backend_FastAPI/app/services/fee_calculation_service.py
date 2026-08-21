@@ -6,6 +6,11 @@ Architecture Compliance:
 - Service Layer: Pure business logic, no HTTP dependencies
 - Security: IDOR checks via repository (unit_id filtering)
 - Transactions: Services use db.add()/db.flush(), Router commits
+
+⚠️ Chiếu tài chính → lead (``calculate_fee``, ``waive_fee``, ``cancel_fee``,
+``reprice_for_major_change``): hợp đồng CHUẨN ở
+``services/lead_admission_sync.py`` (docstring đầu tệp). Vị từ ``is_hk1_settled``
+ở chính tệp này là nguồn chuẩn cho điều kiện SETTLED.
 - Error Handling: Raise custom exceptions (ResourceNotFoundError, etc.)
 
 Fee Lifecycle:
