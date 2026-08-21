@@ -7,6 +7,10 @@ phân bổ FIFO (chỉ GỐC học phí) và phân loại MATCHED / WARNING / ER
 ghi Payment — chỉ đọc + tính + lưu batch 'preview' để xem trước (pha commit ghi
 tiền nằm ở BV-3).
 
+⚠️ Chiếu tài chính → lead (``commit_batch`` → ``sync_lead_tuition_paid``;
+``void_batch`` → ``revert_lead_tuition_paid``): hợp đồng CHUẨN ở
+``services/lead_admission_sync.py`` (docstring đầu tệp).
+
 Ref: Documents/BULK_PAYMENT_IMPORT_VERIFY_PLAN.md (DESIGN v2). Bất biến bắt buộc:
   1. đọc ``dtype=str`` CCCD/ref/amount (giữ số 0 đầu, không float)
   2. method 'cash'/'bank_transfer' (seed thực, KHÔNG 'bank')

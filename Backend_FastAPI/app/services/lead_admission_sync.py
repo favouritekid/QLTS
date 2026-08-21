@@ -20,6 +20,123 @@ Usage:
     - reject_profile() → sts16 (Không đạt)
     - request_revision() → sts17 (Yêu cầu bổ sung hồ sơ)
     - enroll_student() → sts11 (Đã xác nhận nhập học)
+
+================================================================================
+HỢP ĐỒNG CHIẾU TÀI CHÍNH → LEAD  (nguồn chuẩn — canonical)
+================================================================================
+
+Đây là nguồn chuẩn cho **điều kiện kích hoạt, cổng ở phía gọi, no-op, đường
+đảo, và quyền sở hữu giao dịch**. Nó KHÔNG phải nguồn chuẩn cho ID trạng
+thái/giai đoạn — thứ đó thuộc ``app/core/admission_event_mapping.py``.
+
+Thêm một lượt chiếu tài chính mới mà không thêm dòng ở đây là đúng lớp lỗi
+bảng này sinh ra để chặn. ``tests/unit/test_lead_finance_projection_contract.py``
+đọc mã bằng AST và ĐỎ khi tập callsite lệch khỏi bảng.
+
+--------------------------------------------------------------------------------
+1. Đích KHÔNG hardcode
+--------------------------------------------------------------------------------
+Bốn hằng dưới đây đọc từ ``admission_event_mapping.get_projection(<event_key>)``;
+mã ``stsNN`` chỉ là GIÁ TRỊ DỰ PHÒNG khi projection vắng mặt. Hợp đồng là
+``event_key``, không phải chuỗi ``"sts14"``.
+
+    event_key                 hằng trong tệp này            dự phòng
+    ------------------------- ----------------------------- --------
+    application_fee_paid      FEE_PAID_STATUS               sts13
+    tuition_fee_calculated    TUITION_CALCULATED_STATUS     sts14
+    tuition_fee_paid          TUITION_PAID_STATUS           sts10
+    tuition_fee_refunded      TUITION_REFUNDED_STATUS       sts18
+
+Bốn mã dự phòng ấy cũng chính là ``FEE_OVERLAY_LEAD_STATUSES`` — tập mà
+submit/resubmit phải GIỮ, không được kéo lead về sts07.
+
+--------------------------------------------------------------------------------
+2. Bảng chiếu: forward ↔ reverse, và AI gọi
+--------------------------------------------------------------------------------
+    | Sự kiện tài chính     | Forward                      | Nơi gọi (service.hàm)                                    |
+    |-----------------------|------------------------------|----------------------------------------------------------|
+    | Lệ phí xét tuyển đóng | sync_lead_fee_paid           | admission_service.record_application_fee_payment          |
+    | Học phí HK1 đã TÍNH   | sync_lead_tuition_calculated | fee_calculation_service.FeeCalculationService.calculate_fee |
+    | Học phí HK1 SETTLED   | sync_lead_tuition_paid       | payment_service.PaymentService.verify_payment              |
+    |                       |                              | payment_intent_service.PaymentIntentService._create_payment_from_intent |
+    |                       |                              | payment_import_service.commit_batch                        |
+    |                       |                              | fee_calculation_service.FeeCalculationService.waive_fee    |
+    |                       |                              | fee_calculation_service.FeeCalculationService.reprice_for_major_change |
+    | Học phí HK1 đã hoàn   | sync_lead_tuition_refunded   | payment_service.RefundService.process_approved_refund      |
+
+    | Đường ĐẢO                     | Reverse                        | Nơi gọi                                                  |
+    |-------------------------------|--------------------------------|----------------------------------------------------------|
+    | Huỷ khoản phí                 | revert_lead_tuition_calculated | fee_calculation_service.FeeCalculationService.cancel_fee  |
+    | Void lô import / đổi ngành    | revert_lead_tuition_paid       | payment_import_service.void_batch                          |
+    |                               |                                | fee_calculation_service.FeeCalculationService.reprice_for_major_change |
+    | Lệ phí xét tuyển              | **KHÔNG CÓ** — lệ phí không hoàn (cố ý)                                                   |
+
+Tổng: **11 callsite trong 5 service**. Con số này được test AST khoá lại.
+
+--------------------------------------------------------------------------------
+3. SETTLED nghĩa là gì  (đừng dùng chữ "cleared" — nó là ngữ nghĩa CŨ)
+--------------------------------------------------------------------------------
+``sync_lead_tuition_paid`` chỉ được bắn khi HK1 đạt **SETTLED**:
+
+    settled  ⇔  paid  OR  waived  OR  remaining (final − paid − waived) ≤ 0
+
+Một lần trả **MỘT PHẦN** (remaining > 0) **KHÔNG** phải settled — lead ở lại
+``TUITION_CALCULATED_STATUS``. Chỉ bắn MỘT lần, ở lượt chuyển
+``chưa-settled → settled``. Vị từ chuẩn: ``fee_calculation_service.is_hk1_settled``.
+
+--------------------------------------------------------------------------------
+4. Cổng nằm ở PHÍA GỌI — đọc thân hàm sẽ không thấy
+--------------------------------------------------------------------------------
+    | Cổng                                        | Ở đâu                                   |
+    |---------------------------------------------|-----------------------------------------|
+    | Hoàn tiền TRONG quy trình rút thì KHÔNG chiếu sts18 | ``payment_service`` — điều kiện ``profile.status != "withdrawal_pending"`` ngay trước lời gọi ``sync_lead_tuition_refunded``. Hoàn tiền NGOÀI quy trình rút vẫn chiếu bình thường. |
+    | Chỉ bắn ở lượt chuyển sang settled          | ``payment_service`` — ``if not was_hk1_settled and now_hk1_settled`` |
+
+--------------------------------------------------------------------------------
+5. Hai nhánh KHÔNG chiếu — cũng là hợp đồng
+--------------------------------------------------------------------------------
+Đây không phải "forward thiếu reverse"; đây là "cố ý không forward".
+
+    | profile.status       | Hằng                        | Vì sao                                    |
+    |----------------------|-----------------------------|-------------------------------------------|
+    | ``result_published`` | ``_RESULT_PUBLISHED_NO_OP`` | công bố kết quả không tự nó đổi bước tư vấn |
+    | ``withdrawal_pending`` | ``_WITHDRAWAL_PENDING_NO_OP`` | GIỮ lead tại chỗ tới khi hoàn xong. Finalize (→ ``withdrawn``) mới đẩy sts08; admin huỷ rút (→ ``draft``) rơi vào short-circuit draft |
+
+--------------------------------------------------------------------------------
+6. ``_revert_lead_projection`` — hai hàng rào
+--------------------------------------------------------------------------------
+Cả hai ``revert_*`` đều uỷ quyền cho helper này:
+
+  1. Chỉ hành động khi lead ĐANG ở đúng ``projected_status``. Lead đã đi xa hơn
+     (đã nhập học…) thì để yên.
+  2. Khôi phục trạng thái trước đó ĐỌC NGUYÊN VĂN từ hàng ``LeadStatusHistory``
+     gần nhất đã đặt ``projected_status`` — không tái suy, không đích cứng.
+     Không có hàng lịch sử nào ⇒ bỏ qua, trả ``False``.
+
+--------------------------------------------------------------------------------
+7. ``force=True`` — đường DUY NHẤT bypass floor của ``sync_lead_from_admission``
+--------------------------------------------------------------------------------
+(Không phải "đường duy nhất đi lùi" — hai ``revert_*`` ở mục 6 cũng đưa lead về
+trạng thái trước. Khác biệt: ``revert_*`` đọc ``LeadStatusHistory``, còn
+``force`` bỏ qua hàng rào rồi đi thẳng tới ánh xạ draft.)
+
+``sync_lead_from_admission(..., force=False)``. Với ``force=True`` hàm bỏ qua
+CẢ HAI hàng rào chống-lùi: short-circuit ``profile.status == "draft"`` và sàn
+``_should_apply_admission_floor``.
+
+Chỉ MỘT nơi gọi: ``admission_service.cancel_withdrawal`` (``withdrawal_pending``
+→ ``draft``), kéo lead về ánh xạ draft cho khớp hồ sơ vừa kích hoạt lại.
+
+⚠️ Khác hai ``revert_*``: ``force`` **KHÔNG** đọc ``LeadStatusHistory`` — nó đi
+thẳng tới ánh xạ draft. Nên câu "reverse khôi phục nguyên văn từ lịch sử" đúng
+cho ``revert_*``, KHÔNG đúng cho ``force``.
+
+--------------------------------------------------------------------------------
+8. Quyền sở hữu giao dịch
+--------------------------------------------------------------------------------
+Mọi hàm ở tệp này dùng ``flush()``, **không** ``commit()``. Chúng chạy trong
+giao dịch của người gọi và người gọi là bên commit. Một hàm chiếu tự commit sẽ
+chốt nửa vời khi phần nghiệp vụ phía sau đổ.
 """
 
 from typing import Optional

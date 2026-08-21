@@ -196,11 +196,22 @@ ADMISSION_EVENT_PROJECTIONS = {
     # -------------------------------------------------------------------------
     # TUITION FEE PAID (Finance Phase - Gate 2 Passed)
     # -------------------------------------------------------------------------
-    # ADR-002 PR 5: HK1-only, cleared-state semantics. Callers fire this
-    # when HK1 reaches cleared state for the first time:
-    # paid, waived, or partial with paid_amount > 0.
-    # "Cleared" does NOT require full payment — any non-zero HK1 payment
-    # qualifies. Lead moves to "Đã hoàn tất học phí" once.
+    # ADR-002 PR 5: HK1-only, SETTLED-state semantics. Callers fire this the
+    # first time HK1 reaches settled:
+    #
+    #     settled  ⇔  paid  OR  waived  OR  remaining (final − paid − waived) ≤ 0
+    #
+    # Một lần trả MỘT PHẦN (remaining > 0) KHÔNG phải settled — lead ở lại
+    # sts14 "Chưa hoàn tất học phí". Chỉ bắn MỘT lần, ở lượt chuyển
+    # chưa-settled → settled.
+    #
+    # ⚠️ ĐÍNH CHÍNH: chú thích ở đây trước 21-08-2026 ghi ngữ nghĩa "cleared" —
+    # "partial with paid_amount > 0" cũng lên sts10, "does NOT require full
+    # payment". Điều đó TRÁI với hợp đồng ở
+    # ``services/lead_admission_sync.py`` và trái với gate THẬT trong
+    # ``services/payment_service.py`` (``if not was_hk1_settled and
+    # now_hk1_settled``). Mã chưa bao giờ chạy theo ngữ nghĩa "cleared"; chỉ
+    # chú thích này lạc hậu. Vị từ chuẩn: ``fee_calculation_service.is_hk1_settled``.
     "tuition_fee_paid": AdmissionEventProjection(
         event="tuition_fee_paid",
         admission_status="confirmed",

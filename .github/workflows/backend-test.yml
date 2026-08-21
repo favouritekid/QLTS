@@ -454,6 +454,7 @@ jobs:
           # ---------------------------------------------------------------
           - tier: Tier 4 — Admission + lead workflow contract
             tests: >-
+              tests/unit/test_lead_finance_projection_contract.py
               tests/api/test_admission_workflow_api.py
               tests/api/test_tuition_prepay_flow.py
               tests/api/test_lead_assignment_api.py::test_lead_assignment_lifecycle_end_to_end

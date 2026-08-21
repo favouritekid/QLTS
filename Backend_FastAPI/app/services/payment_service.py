@@ -6,6 +6,13 @@ Architecture Compliance:
 - Service Layer: Pure business logic, no HTTP dependencies
 - Security: IDOR checks via repository (unit_id filtering)
 - Transactions: Services use db.add()/db.flush(), Router commits
+
+⚠️ Chiếu tài chính → lead (``verify_payment`` → ``sync_lead_tuition_paid``;
+``process_approved_refund`` → ``sync_lead_tuition_refunded``): hợp đồng CHUẨN ở
+``services/lead_admission_sync.py`` (docstring đầu tệp).
+HAI cổng nằm ở TẬP NÀY chứ không trong hàm sync — đọc thân hàm sync sẽ
+không thấy: (1) chỉ bắn ở lượt chuyển ``chưa-settled → settled``;
+(2) hoàn tiền khi ``profile.status == "withdrawal_pending"`` thì KHÔNG chiếu sts18.
 - Error Handling: Raise custom exceptions (ResourceNotFoundError, etc.)
 
 Payment Flow (Manual):

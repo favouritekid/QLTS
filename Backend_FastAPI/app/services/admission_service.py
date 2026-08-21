@@ -6,6 +6,11 @@ Architecture Compliance:
 - Service Layer: Pure business logic, no HTTP dependencies
 - Security: IDOR checks in ALL functions (lead.unit_id == user.unit_id)
 - Transactions: Services use db.add()/db.flush(), Router commits via db.commit()
+
+⚠️ Chiếu tài chính → lead (``record_application_fee_payment`` →
+``sync_lead_fee_paid``; ``cancel_withdrawal`` → ``sync_lead_from_admission(force=True)``):
+hợp đồng CHUẨN ở ``services/lead_admission_sync.py`` (docstring đầu tệp).
+Đừng sao chép bảng vào đây — hai bản sẽ trôi khác nhau.
 - Performance: selectinload to prevent N+1 queries
 - Error Handling: Raise custom exceptions (ResourceNotFoundError, BadRequest, etc.)
 
