@@ -42,8 +42,8 @@ Runbook này KHÔNG:
 | Task 0 | Why | Codebase evidence (CHƯA CÓ) | Acceptance |
 |---|---|---|---|
 | **T0-1: 2 env flag gates** trong `Backend_FastAPI/docker-entrypoint.sh`: `RUN_MIGRATIONS_ON_STARTUP` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP` | Cold cutover yêu cầu manual `alembic upgrade head` + manual `sync_notification_rules` SAU migration + backfill (KHÔNG auto trên container start vì pre-migration state có thể chưa có notification_rule table hoặc chưa seed → script fail/race) | `docker-entrypoint.sh` auto chạy `alembic upgrade head` (line 4-5) + `python -m app.scripts.sync_notification_rules` (line 7-8), cả 2 không conditional | Entrypoint thêm 2 gate độc lập: `if [ "${RUN_MIGRATIONS_ON_STARTUP:-true}" != "false" ]; then alembic upgrade head; fi` + `if [ "${RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP:-true}" != "false" ]; then python -m app.scripts.sync_notification_rules; fi`. Default `true` cho routine deploy. Cutover set CẢ 2 = `false`. Defensive: chỉ exact lowercase `"false"` mới skip; mọi value khác (TRUE/FALSE/typo) chạy như cũ. |
-| **T0-2: `ADMISSION_FROZEN` middleware** | Freeze admission write endpoints khi maintenance window | Grep zero match `ADMISSION_FROZEN` trong `app/config.py`, `app/middleware/`, `app/routers/admissions.py` | Settings field + middleware raise 503 cho POST/PUT/PATCH/DELETE trên 3 prefix verified-from-code: `/api/admissions/*`, `/api/admission-config/*` (covers cả `admission_config.py` + `admission_paths.py` — 2 router file share cùng prefix), `/api/public/admissions/*`. Path-segment match (KHÔNG raw startswith) để `/api/admissionsfoo` không bị false positive. **Reload mechanism: env-based settings cần container restart** (Pydantic BaseSettings load 1 lần module-level) — runbook Phần 6.1 phải clarify restart container, KHÔNG hot-reload runtime. |
-| **T0-3: Nginx admission block config** | Defense-in-depth với T0-2 backend middleware | `nginx/conf.d/default.conf.template` chỉ generic `/api/` proxy, zero conditional admission block | Conditional `location ~ ^/api/(admissions|admission-config|public/admissions)(/.*)?$ { ... return 503 ...}` env-driven `${NGINX_ADMISSION_FROZEN}` template variable (3 prefix match T0-2 middleware verified-from-code). |
+| **T0-2: `ADMISSION_FROZEN` middleware** | Freeze admission write endpoints khi maintenance window | Grep zero match `ADMISSION_FROZEN` trong `app/config.py`, `app/middleware/`, `app/routers/admissions.py` | Settings field + middleware trả 503 cho POST/PUT/PATCH/DELETE trên tập tiền tố khai trong `FROZEN_PREFIXES` — **xem `app/middleware/admission_freeze.py`, ĐỪNG chép danh sách ra đây** (§6.2 giải thích vì sao: bản chép ba tiền tố đã để lọt 39 đường ghi `/api/v2/`). |
+| **T0-3: Nginx admission block config** | Defense-in-depth với T0-2 backend middleware | `nginx/conf.d/default.conf.template` chỉ generic `/api/` proxy, zero conditional admission block | Khối `location ~` env-driven `${NGINX_ADMISSION_FROZEN}` trong `nginx/templates/default.conf.template`, dùng ĐÚNG tập tiền tố của T0-2 (`FROZEN_PREFIXES`); `scripts/test_nginx_admission_freeze.sh` rút danh sách từ middleware rồi đòi khối này khớp NGUYÊN VĂN. |
 | **T0-4a: `dispatch_pending_outbox` skeleton task** | Register Celery beat safely before outbox table/model exists | `app/celery_app.py:108-150` zero match | Beat schedule entry 30s + task function exists, logs "outbox not yet active", returns early, KHÔNG query/insert/dispatch `NotificationOutbox`. Safe to ship before B2 + M-1-19a. |
 | **T0-4b: `dispatch_pending_outbox` real worker wiring** | Worker drain outbox notification queue | `notification_outbox` table/model chưa tồn tại trước B2 + M-1-19a | Replace skeleton with 3-step claim/dispatch/finalize implementation per PLAN Phần 3.3.e. Gate: B2 + M-1-19a shipped first. |
 | **T0-5: `POST /api/v2/admin/casbin/reload` endpoint** | Diagnostic / smoke reload sau seed deny rules direct DB. **Chỉ tác động 1 Gunicorn worker process — KHÔNG fleet-wide.** Cutover-correct reload là restart backend container (lifespan re-init enforcer ở mọi worker, xem §7.2 T+3:15). | `admin/roles.py` chỉ side-effect trong CRUD endpoint, zero dedicated reload endpoint | Admin-only endpoint (`Depends(require_admin)` + `@limiter.limit(ADMIN_WRITE)`) gọi `await enforcer.load_policy()` + return `{"success", "reloaded_at", "policy_count", "actor_id", "scope": "current_process"}` + audit log. Failure → 500 với same shape, enforcer giữ in-memory state cũ (no partial flush). |
@@ -333,7 +333,7 @@ Nếu restore fail bất kỳ step → **KHÔNG cutover**. Investigate root caus
 
 ### 6.1. Khóa Admission intake
 
-⚠️ **Pydantic BaseSettings load env 1 lần module-level → BẮT BUỘC restart container** để pickup `ADMISSION_FROZEN=true`. KHÔNG có hot-reload runtime mechanism mặc định. Nếu cần zero-downtime reload, T0-2 phải implement Redis-backed config + cache invalidate (không khuyến nghị cho cutover scope).
+⚠️ **Pydantic BaseSettings load env 1 lần module-level → BẮT BUỘC DỰNG LẠI container** (`up -d`, KHÔNG phải `restart` — `restart` không đọc lại `env_file`) để pickup `ADMISSION_FROZEN=true`. KHÔNG có hot-reload runtime mechanism mặc định. Nếu cần zero-downtime reload, T0-2 phải implement Redis-backed config + cache invalidate (không khuyến nghị cho cutover scope).
 
 ```bash
 # Backend env — BẮT BUỘC dựng lại container sau khi set (KHÔNG phải `restart`:
@@ -343,16 +343,21 @@ Nếu restore fail bất kỳ step → **KHÔNG cutover**. Investigate root caus
 docker compose -f docker-compose.yml --env-file .env.production --profile production up -d --no-deps --wait backend
 docker compose -f docker-compose.yml --env-file .env.production --profile production ps backend
 
-# Verify middleware active
-curl -X POST http://localhost:8000/api/admissions/test-endpoint  # Expect: 503 Service Unavailable
-curl -X GET  http://localhost:8000/api/admissions/                # Expect: 200 (read-only allowed)
+# Verify middleware active — PHẢI đủ bốn loại; v1 KHÔNG đại diện cho v2:
+#   cần gạt từng hở đúng ở v2 trong khi v1 vẫn chặn đúng, nên một cặp v1 xanh
+#   chứng minh được rất ít.
+curl -X POST http://localhost:8000/api/admissions/test-endpoint            # 503  (v1 ghi)
+curl -X POST http://localhost:8000/api/v2/admissions/1/choices             # 503  (v2 ghi)
+curl -X POST http://localhost:8000/api/v2/admin/rounds/1/extend            # 503  (v2, path KHÔNG chứa "admission")
+curl -X GET  http://localhost:8000/api/admissions/                         # KHÁC 503 (đọc vẫn đi)
+curl -X POST http://localhost:8000/api/v2/admin/casbin/reload              # KHÁC 503 (ngoài miền, không được khoá)
 
 # Nginx env (T0-3): xem §6.1b "Cần gạt đóng băng — quy trình DUY NHẤT" ngay
 # dưới đây. TUYỆT ĐỐI không dùng `nginx -s reload` hay `docker compose restart
 # nginx`: cả hai đều KHÔNG bật được cần gạt, mà vẫn in ra ba dòng xanh.
 ```
 
-**Quan trọng**: backend restart mất ~10-30s, có downtime ngắn. Nếu cần zero-downtime → escalate scope T0-2 implement Redis-backed config (out of scope runbook hiện tại).
+**Quan trọng**: dựng lại backend mất ~10-30s, có downtime ngắn. Nếu cần zero-downtime → escalate scope T0-2 implement Redis-backed config (out of scope runbook hiện tại).
 
 ### 6.1b. Cần gạt đóng băng — quy trình DUY NHẤT
 
@@ -402,8 +407,14 @@ docker compose -f docker-compose.yml --env-file .env.production --profile produc
 bash scripts/nginx-apply.sh "$DOMAIN"
 
 # 3. CHỨNG MINH bằng request thật. Không dòng log nào được tính là bằng chứng.
-curl -s -o /dev/null -w 'POST admissions -> %{http_code}\n' -X POST "https://$DOMAIN/api/admissions/"
+curl -s -o /dev/null -w 'POST v1 admissions   -> %{http_code}\n' -X POST "https://$DOMAIN/api/admissions/"
 #    PHẢI 503
+curl -s -o /dev/null -w 'POST v2 choices       -> %{http_code}\n' -X POST "https://$DOMAIN/api/v2/admissions/1/choices"
+#    PHẢI 503 — v1 xanh KHÔNG chứng minh v2 đóng; đây đúng chỗ từng hở ở CẢ HAI tầng
+curl -s -o /dev/null -w 'POST v2 rounds/extend -> %{http_code}\n' -X POST "https://$DOMAIN/api/v2/admin/rounds/1/extend"
+#    PHẢI 503 — tiền tố không mang chữ "admission"
+curl -s -o /dev/null -w 'POST casbin/reload    -> %{http_code}\n' -X POST "https://$DOMAIN/api/v2/admin/casbin/reload"
+#    PHẢI KHÁC 503 — ngoài miền tuyển sinh, cửa sổ đóng băng không được khoá
 
 curl -s -o /dev/null -w 'GET  admissions -> %{http_code}\n' "https://$DOMAIN/api/admissions/"
 #    KHÔNG được 503 — đọc vẫn phải mở để còn soi dữ liệu
@@ -422,19 +433,67 @@ T0-2 middleware filter theo HTTP method, KHÔNG hard-code path list. Method matr
 
 | Method | Path prefix | Behavior khi `ADMISSION_FROZEN=true` |
 |---|---|---|
-| GET / HEAD / OPTIONS | `/api/admissions/*`, `/api/admission-config/*`, `/api/public/admissions/*` (3 distinct prefix verified-from-code on branch `feat/admission-full-cutover` HEAD `2c57e5d6` 2026-05-02) | **Allowed** — view profiles/paths/criteria/documents |
-| POST/PUT/PATCH/DELETE | Any admission write endpoint trên 3 prefix trên | **503 Service Unavailable** với JSON body `{detail, code: "ADMISSION_FROZEN", frozen_prefix}` |
+| GET / HEAD / OPTIONS | 10 tiền tố trong `FROZEN_PREFIXES` (xem `Backend_FastAPI/app/middleware/admission_freeze.py`) | **Allowed** — view profiles/paths/criteria/documents |
+| POST/PUT/PATCH/DELETE | 98 đường ghi tuyển sinh trong `ADMISSION_WRITE_ROUTES`, trải trên 10 tiền tố ấy | **503 Service Unavailable** với JSON body `{detail, code: "ADMISSION_FROZEN", frozen_prefix}` |
 | POST | `/api/admissions/confirm/{token}` (magic link consume) | **503** — block candidate consume token trong window |
 
-Block scope (theo router source verified `Backend_FastAPI/app/routers/admissions.py`, `admission_paths.py`, `admission_config.py`, `public_admissions.py` — 4 router file nhưng share 3 prefix; `admission_config.py` + `admission_paths.py` đều `APIRouter(prefix="/admission-config")`):
+⚠️ **ĐỪNG chép danh sách tiền tố vào tài liệu này.** Bản trước ghim ba tiền tố
+kèm chú thích *"verified-from-code trên `feat/admission-full-cutover` HEAD
+`2c57e5d6`"* — đúng lúc viết, rồi các router `/api/v2/` ra đời và không ai rà
+lại. Cả middleware, khối `location` của nginx, harness `scripts/`, lẫn mục
+nghiệm thu ở đây đều tụt hậu **cùng lúc**, nên không nguồn nào phát hiện được
+nguồn nào. Kết quả: **39 đường ghi `/api/v2/` không bị đóng băng ở CẢ HAI tầng**
+(đo bằng HTTP thật; xem `tests-e2e/admission-freeze/README.md`).
+
+Nguồn chuẩn duy nhất là bốn khai báo trong
+`Backend_FastAPI/app/middleware/admission_freeze.py`:
+
+| Khai báo | Ý nghĩa |
+|---|---|
+| `ADMISSION_ROUTER_MODULES` | 11 module SỞ HỮU miền tuyển sinh |
+| `NON_ADMISSION_ROUTER_MODULES` | 49 module còn lại có route ghi — **thế giới đóng** |
+| `FROZEN_PREFIXES` | 10 tiền tố hai tầng dùng để chặn |
+| `ADMISSION_WRITE_ROUTES` | 98 cặp `(method, path)` đã rà |
+
+Phân loại là **thế giới đóng**: mọi module có route ghi phải thuộc đúng một
+trong hai tập đầu. Router mới chưa phân loại ⇒ CI ĐỎ. Không có bước này thì một
+router ở tiền tố mới (`admissions_v3` → `/api/v3/admissions`) lọt qua mọi phép
+kiểm còn lại — đúng hình dạng đã sinh ra sự cố v2.
+
+Phạm vi bị chặn, theo miền chứ không theo chuỗi trong path:
 - Profile mutation (create/update/delete)
-- Status transition (approve/reject/confirm/withdraw/override/...)
-- Document upload + reset
-- Magic link issue/consume + token verification
-- Path/config admin CRUD
+- Status transition (approve/reject/confirm/withdraw/override/…)
+- Document upload + reset; nguyện vọng, minh chứng ưu tiên, KV override (v2)
+- Magic link issue/consume + token verification (v1 và v2)
+- Path/config admin CRUD; quota, subject-group config, đợt tuyển sinh (v2)
+- Cấu hình đối tượng/khu vực ưu tiên theo năm (v2)
 - Public storefront submit endpoints
 
-T0-2 acceptance test: 4 write method × 3 distinct prefix matrix verify trong staging trước rollout. 47 case PASS local on PR T0-2: 12 unfrozen pass-through + 12 frozen-block 503 + 9 frozen read-allowed (GET/HEAD/OPTIONS) + 4 non-admission baseline (`/api/leads/*`) + 4 path-segment lookalike rejection (`/api/admissionsfoo`) + 3 bare-prefix block + 1 health reachable + 1 contract-shape sanity + 1 route-table drift catch (`fastapi_app.routes` scan flags any `/api/...admission...` path not under FROZEN_PREFIXES).
+**KHÔNG** chặn `/api/v2/admin` nói chung: casbin, system-config, vn-school,
+vn-locality không thuộc tuyển sinh và phải chạy bình thường trong cửa sổ đóng
+băng. Ranh giới này có ca kiểm riêng (`test_khong_hut_nham_route_ngoai_mien_tuyen_sinh`).
+
+**Nghiệm thu T0-2/T0-3** — bằng request thật, không bằng đọc hằng số:
+
+| Phép đo | Cách chạy | Kết quả cần |
+|---|---|---|
+| Unit + cổng chống trôi | `tests/middleware/test_admission_freeze.py` (nằm trong lát **Tier 4**) | 144 passed cho RIÊNG tệp này — **không** phải tổng Tier 4; tổng Tier 4 phải TĂNG đúng 144 so với lượt ngay trước |
+| Smoke backend trực tiếp | `bash tests-e2e/admission-freeze/run-smoke-backend.sh` | 0/21 lệch, cả BẬT lẫn TẮT, kèm dòng xác nhận cô lập |
+| Smoke qua nginx | `tests-e2e/admission-freeze/smoke-nginx.sh` | 0/20 lệch, cả BẬT lẫn TẮT |
+| Harness render/syntax/regex | `scripts/test_nginx_admission_freeze.sh` | 59 PASS, 0 FAIL |
+
+Hai script smoke **fail-closed**. Chúng từ chối đo khi:
+
+- `DATABASE_URL`/`REDIS_URL` không khớp **nguyên văn** hai DSN sentinel — không
+  parse, không thử kết nối: một CSDL thật đang tạm dừng cũng "không kết nối
+  được", nên phép thử kết nối chứng minh sai;
+- `ADMISSION_FROZEN` không thuộc {`true`,`false`} — để thiếu thì smoke xanh mà
+  chẳng đo gì về trạng thái đóng băng;
+- container còn **interface nào ngoài loopback**, hoặc không liệt kê được
+  interface (đây mới là phép đo thật của `--network none`; hỏi DNS tên dịch vụ
+  KHÔNG phải, vì bridge mặc định cũng không phân giải chúng);
+- trích khối nginx ra rỗng hoặc quá dài do CRLF;
+- `envsubst` nuốt mất `$request_method`.
 
 ### 6.3. Module không liên quan vẫn chạy
 
@@ -753,7 +812,7 @@ Nếu cutover đã apply một trong 5 migration trên + phát hiện bug critic
 
 5 infrastructure family Task 0 BẮT BUỘC ship + tested trên staging trước Go decision (6 tracker row vì T0-4 split):
 - [ ] **T0-1** 2 env flag gates trong `docker-entrypoint.sh` — tested 9-case matrix (3 RUN_MIGRATIONS × 3 RUN_SYNC_NOTIFICATION_RULES) + 5 defensive variant (TRUE/FALSE/typo) PASS. Cutover combo `RUN_MIGRATIONS_ON_STARTUP=false` + `RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false` skip cả 2; default unset/true chạy alembic + sync_notification_rules như cũ.
-- [ ] **T0-2** `ADMISSION_FROZEN` middleware shipped — 4 write method × 3 prefix matrix tested (GET/HEAD/OPTIONS allowed, POST/PUT/PATCH/DELETE 503 trên `/api/admissions`, `/api/admission-config`, `/api/public/admissions`); path-segment match rejects `/api/admissionsfoo` lookalike.
+- [ ] **T0-2** `ADMISSION_FROZEN` middleware shipped — nghiệm thu theo §6.2: Tier 4 xanh + hai smoke HTTP thật (backend trực tiếp và qua nginx) 0 lệch ở CẢ hai trạng thái. Phân loại router là **thế giới đóng**, nên router tuyển sinh mới chưa khai báo sẽ làm CI ĐỎ thay vì im lặng thoát. ĐỪNG chép danh sách tiền tố ra ngoài `admission_freeze.py`.
 - [ ] **T0-3** Nginx admission block config (env-driven `NGINX_ADMISSION_FROZEN`) — nghiệm thu bằng **cặp request thật 200 ↔ 503** theo §6.1b, KHÔNG bằng `nginx -t` + reload smoke. `nginx -t` báo "syntax is ok" cho cả một config rỗng, và reload nạp lại đúng bản render cũ: bộ đôi ấy xanh ngay cả khi cần gạt không hề động đậy.
 - [ ] **T0-4a** `dispatch_pending_outbox` skeleton scheduled 30s + worker registered + no-op safe before outbox table/model exists.
 - [ ] **T0-4b** `dispatch_pending_outbox` real worker wiring shipped after B2 + M-1-19a + 3-step claim/dispatch/finalize tested.

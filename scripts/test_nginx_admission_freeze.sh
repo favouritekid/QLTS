@@ -1,25 +1,35 @@
 #!/usr/bin/env bash
 # scripts/test_nginx_admission_freeze.sh
-# T0-3 NGINX_ADMISSION_FROZEN test harness (defense-in-depth pair with T0-2).
+# T0-3 NGINX_ADMISSION_FROZEN test harness (cặp defense-in-depth với T0-2).
 #
-# Three layers of validation, all runnable on a Linux host with Docker:
-#   1. Render layer  — envsubst against the real template; grep for the
-#      structural markers that must appear after substitution.
-#   2. Syntax layer  — nginx -t in a throw-away Docker container against an
-#      isolated minimal config that mirrors the freeze location (no SSL, no
-#      live upstream) so we get a clean grammar pass/fail.
-#   3. Regex layer   — bash ERE simulation of the nginx PCRE pattern against
-#      a representative URI table; locks in path-segment matching so the
-#      lookalike `/api/admissionsfoo` and the legacy plural prefixes
-#      (`/api/admission-configs`, `/api/admission-paths`) stay out.
+# ⚠️ Bản trước GIỮ BẢN SAO RIÊNG của regex ba tiền tố ở cả ba lớp, và không lớp
+# nào đọc template. Hậu quả: nó vẫn báo PASS sau khi các router `/api/v2/` ra
+# đời mà template không phủ — 39 đường ghi thoát khỏi cần gạt ở CẢ hai tầng
+# trong khi harness "chứng nhận" là ổn. Riêng lớp 1 còn tệ hơn: grep không neo
+# cuối dòng nên chuỗi ba tiền tố vẫn là TIỀN TỐ của dòng mười tiền tố ⇒ khớp,
+# ⇒ xanh, kể cả khi v2 bị gỡ đi.
 #
-# Live HTTP smoke (POST → 503, GET → pass-through, non-admission unaffected)
-# is deferred to staging clone D12-D14 because it needs a live upstream and
-# real SSL certs at the production cert path.
+# Bản này KHÔNG giữ bản sao nào. Mọi thứ rút ra từ hai nguồn thật:
+#   - `Backend_FastAPI/app/middleware/admission_freeze.py` → FROZEN_PREFIXES
+#   - `nginx/templates/default.conf.template`             → khối `location ~`
+# và lớp 1 đòi hai bên khớp NGUYÊN VĂN.
+#
+# Ba lớp:
+#   1. Render — envsubst template thật; dòng `location` phải bằng đúng dòng
+#      dựng lại từ FROZEN_PREFIXES.
+#   2. Syntax — `nginx -t` trong container tạm, dùng chính dòng location TRÍCH
+#      TỪ template (không viết lại).
+#   3. Regex  — mô phỏng khớp URI bằng bash ERE, ca kiểm SINH RA từ danh sách
+#      tiền tố nên thêm tiền tố là tự có ca.
+#
+# Smoke HTTP thật (POST → 503, GET → đi tiếp, ngoài miền không đụng) nằm ở
+# `tests-e2e/admission-freeze/` — chạy được ngay, không cần SSL/upstream thật.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+MW=Backend_FastAPI/app/middleware/admission_freeze.py
+TPL=nginx/templates/default.conf.template
 PASS=0
 FAIL=0
 
@@ -27,140 +37,157 @@ assert() {
     local desc="$1"
     if eval "$2" >/dev/null 2>&1; then
         echo "  ✓ $desc"
-        PASS=$((PASS+1))
+        PASS=$((PASS + 1))
     else
         echo "  ✗ $desc"
-        FAIL=$((FAIL+1))
+        FAIL=$((FAIL + 1))
     fi
 }
 
-# --- Layer 1: render layer ------------------------------------------------
+# --- Nguồn chuẩn: FROZEN_PREFIXES trong middleware ------------------------
+[[ -f "$MW" ]]  || { echo "KHONG THAY $MW";  exit 3; }
+[[ -f "$TPL" ]] || { echo "KHONG THAY $TPL"; exit 3; }
+
+mapfile -t PREFIXES < <(
+    sed -n '/^FROZEN_PREFIXES/,/^)/p' "$MW" | grep -oE '"/api/[^"]+"' | tr -d '"'
+)
+if [[ ${#PREFIXES[@]} -lt 3 ]]; then
+    echo "TRICH FROZEN_PREFIXES THAT BAI (${#PREFIXES[@]} muc) — khong ket luan gi"
+    exit 3
+fi
+
+ALT=""
+for p in "${PREFIXES[@]}"; do
+    [[ "$p" == /api/* ]] || { echo "TIEN TO LA: $p"; exit 3; }
+    ALT+="${ALT:+|}${p#/api/}"
+done
+LOCATION_LINE="location ~ ^/api/(${ALT})(/.*)?\$ {"
+PATTERN="^/api/(${ALT})(/.*)?\$"
+
+echo "=== Nguon chuan: ${#PREFIXES[@]} tien to tu $MW ==="
+printf '    %s\n' "${PREFIXES[@]}"
+
+# --- Lớp 1: render + hai tầng phải khớp NGUYÊN VĂN ------------------------
 test_render() {
     local label="$1" frozen_val="$2"
     local rendered
     rendered=$(mktemp)
     DOMAIN=example.test \
     NGINX_ADMISSION_FROZEN="$frozen_val" \
-        envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' \
-            < nginx/templates/default.conf.template \
-            > "$rendered"
+        envsubst '${DOMAIN} ${NGINX_ADMISSION_FROZEN}' < "$TPL" > "$rendered"
 
     echo "=== Render: $label ==="
-    assert "regex location for 3 admission prefixes present" \
-        "grep -qE 'location ~ \\^/api/\\(admissions\\|admission-config\\|public/admissions\\)' '$rendered'"
-    assert "set \$freeze_check directive present" \
+    # grep -F + so khớp nguyên văn: đây là chỗ bản cũ để lọt, vì grep tiền tố
+    # vẫn khớp một dòng dài hơn.
+    assert "dong location khop DUNG FROZEN_PREFIXES (${#PREFIXES[@]} tien to)" \
+        "grep -qF '$LOCATION_LINE' '$rendered'"
+    assert "set \$freeze_check co mat" \
         "grep -q 'set \$freeze_check' '$rendered'"
-    assert "flag value '${frozen_val}' substituted into freeze_check" \
+    assert "gia tri co '${frozen_val}' duoc thay vao freeze_check" \
         "grep -q 'set \$freeze_check \"\$request_method:${frozen_val}\"' '$rendered'"
-    assert "503 return defined" \
-        "grep -q 'return 503' '$rendered'"
-    assert "JSON code field NGINX_ADMISSION_FROZEN present" \
+    assert "co return 503" "grep -q 'return 503' '$rendered'"
+    assert "co truong code NGINX_ADMISSION_FROZEN" \
         "grep -q 'NGINX_ADMISSION_FROZEN' '$rendered'"
+    assert "DUNG MOT khoi freeze" \
+        "[[ \$(grep -c 'set \\\$freeze_check' '$rendered') -eq 1 ]]"
     rm -f "$rendered"
 }
 
-# --- Layer 2: syntax layer (isolated minimal config in Docker) -----------
+# --- Lớp 2: nginx -t trên khối TRÍCH TỪ template --------------------------
 test_syntax() {
     local label="$1" frozen_val="$2"
     echo "=== Syntax: $label ==="
 
     local tmpdir
     tmpdir=$(mktemp -d)
-    cat > "$tmpdir/nginx.conf" <<NGINXCONF
-events { worker_connections 16; }
-http {
-    upstream backend { server 127.0.0.1:8000; }
 
-    server {
-        listen 8080;
-        server_name _;
+    # Trích nguyên khối freeze; `sub(/\r$/,"")` cho checkout CRLF trên Windows.
+    awk '{sub(/\r$/,"")} /location ~ \^\/api\/\(/{co=1} co{print} co && /^    }$/{exit}' \
+        "$TPL" > "$tmpdir/block.conf"
+    local dong
+    dong=$(wc -l < "$tmpdir/block.conf")
+    if [[ ! -s "$tmpdir/block.conf" || "$dong" -gt 40 ]]; then
+        echo "  ✗ trich khoi freeze that bai ($dong dong)"
+        FAIL=$((FAIL + 1))
+        rm -rf "$tmpdir"
+        return
+    fi
 
-        location ~ ^/api/(admissions|admission-config|public/admissions)(/.*)?\$ {
-            set \$freeze_check "\$request_method:${frozen_val}";
+    {
+        echo 'events { worker_connections 16; }'
+        echo 'http {'
+        echo '    limit_req_zone $binary_remote_addr zone=api:10m rate=1000r/s;'
+        echo '    upstream backend { server 127.0.0.1:8000; }'
+        echo '    server {'
+        echo '        listen 8080;'
+        echo '        server_name _;'
+        NGINX_ADMISSION_FROZEN="$frozen_val" \
+            envsubst '${NGINX_ADMISSION_FROZEN}' < "$tmpdir/block.conf"
+        echo '        location /api/ { proxy_pass http://backend; }'
+        echo '    }'
+        echo '}'
+    } > "$tmpdir/nginx.conf"
 
-            if (\$freeze_check ~ "^(POST|PUT|PATCH|DELETE):true\$") {
-                add_header Content-Type application/json always;
-                return 503 '{"detail":"frozen","code":"NGINX_ADMISSION_FROZEN"}';
-            }
+    if ! grep -q 'request_method' "$tmpdir/nginx.conf"; then
+        echo "  ✗ envsubst da nuot bien cua nginx"
+        FAIL=$((FAIL + 1))
+        rm -rf "$tmpdir"
+        return
+    fi
 
-            proxy_pass http://backend;
-        }
-
-        location /api/ {
-            proxy_pass http://backend;
-        }
-    }
-}
-NGINXCONF
-
-    if docker run --rm \
-            -v "$tmpdir/nginx.conf:/etc/nginx/nginx.conf:ro" \
+    if docker run --rm -v "$tmpdir/nginx.conf:/etc/nginx/nginx.conf:ro" \
             nginx:1.27-alpine nginx -t 2>&1 | grep -q "test is successful"; then
         echo "  ✓ nginx -t syntax PASS"
-        PASS=$((PASS+1))
+        PASS=$((PASS + 1))
     else
         echo "  ✗ nginx -t syntax FAIL"
-        docker run --rm \
-            -v "$tmpdir/nginx.conf:/etc/nginx/nginx.conf:ro" \
+        docker run --rm -v "$tmpdir/nginx.conf:/etc/nginx/nginx.conf:ro" \
             nginx:1.27-alpine nginx -t 2>&1 | sed 's/^/    /'
-        FAIL=$((FAIL+1))
+        FAIL=$((FAIL + 1))
     fi
     rm -rf "$tmpdir"
 }
 
-# --- Layer 3: regex URI match simulation ---------------------------------
-# The real nginx engine uses PCRE; bash regex (=~) is POSIX ERE. The pattern
-# below uses only constructs common to both (^ $ ( ) | ? * .) so the result
-# transfers. Lock-in cases come straight from the matrix in
-# tests/middleware/test_admission_freeze.py.
-PATTERN='^/api/(admissions|admission-config|public/admissions)(/.*)?$'
-
+# --- Lớp 3: mô phỏng khớp URI, ca SINH RA từ danh sách tiền tố ------------
 check_match() {
-    local path="$1" expected="$2"
-    local actual
-    if [[ "$path" =~ $PATTERN ]]; then
-        actual="MATCH"
-    else
-        actual="NO_MATCH"
-    fi
+    local path="$1" expected="$2" actual
+    if [[ "$path" =~ $PATTERN ]]; then actual="MATCH"; else actual="NO_MATCH"; fi
     if [[ "$actual" == "$expected" ]]; then
         echo "  ✓ $path → $actual"
-        PASS=$((PASS+1))
+        PASS=$((PASS + 1))
     else
-        echo "  ✗ $path → $actual (expected $expected)"
-        FAIL=$((FAIL+1))
+        echo "  ✗ $path → $actual (mong $expected)"
+        FAIL=$((FAIL + 1))
     fi
 }
 
 test_regex() {
-    echo "=== Regex URI match (bash ERE simulating nginx PCRE) ==="
-    # Should match
-    check_match "/api/admissions"                  "MATCH"
-    check_match "/api/admissions/123"              "MATCH"
-    check_match "/api/admissions/confirm/abc"      "MATCH"
-    check_match "/api/admission-config"            "MATCH"
-    check_match "/api/admission-config/policies"   "MATCH"
-    check_match "/api/public/admissions"           "MATCH"
-    check_match "/api/public/admissions/submit"    "MATCH"
-    # Lookalikes — must NOT match
-    check_match "/api/admissionsfoo"               "NO_MATCH"
-    check_match "/api/admission"                   "NO_MATCH"
-    check_match "/api/admission-configs"           "NO_MATCH"
-    check_match "/api/admission-paths"             "NO_MATCH"
-    # Non-admission baseline
-    check_match "/api/leads/123"                   "NO_MATCH"
-    check_match "/api/admin/users"                 "NO_MATCH"
-    check_match "/health"                          "NO_MATCH"
+    echo "=== Regex URI match (bash ERE mo phong nginx PCRE) ==="
+    # Sinh từ danh sách: thêm một tiền tố là tự có ba ca, không phải nhớ thêm.
+    for p in "${PREFIXES[@]}"; do
+        check_match "$p"        "MATCH"
+        check_match "$p/1"      "MATCH"
+        check_match "${p}foo"   "NO_MATCH"   # khớp theo ĐOẠN, không startswith
+    done
+    # Ngoài miền tuyển sinh — phải nằm ngoài
+    check_match "/api/leads/123"                  "NO_MATCH"
+    check_match "/api/admin/users"                "NO_MATCH"
+    check_match "/api/v2/admin/casbin/reload"     "NO_MATCH"
+    check_match "/api/v2/admin/system-config/x"   "NO_MATCH"
+    check_match "/api/v2/admin/vn-school/schools" "NO_MATCH"
+    check_match "/api/admission"                  "NO_MATCH"
+    check_match "/api/admission-configs"          "NO_MATCH"
+    check_match "/health"                         "NO_MATCH"
 }
 
 # --- Driver ---------------------------------------------------------------
-test_render "Default (frozen=false)" "false"
-test_render "Cutover (frozen=true)"  "true"
-test_render "Unset (deploy.sh defaults handle this)" ""
+test_render "Mac dinh (frozen=false)" "false"
+test_render "Cutover (frozen=true)"   "true"
+test_render "Khong dat (deploy.sh lo mac dinh)" ""
 
-test_syntax "frozen=false (default)"        "false"
-test_syntax "frozen=true (cutover)"         "true"
-test_syntax "frozen=unset (empty literal)"  ""
+test_syntax "frozen=false (mac dinh)"      "false"
+test_syntax "frozen=true (cutover)"        "true"
+test_syntax "frozen=unset (chuoi rong)"    ""
 
 test_regex
 
