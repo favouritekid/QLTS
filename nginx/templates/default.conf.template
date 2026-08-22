@@ -123,15 +123,18 @@ server {
     }
 
     # --- T0-3 Admission cold-cutover freeze (defense-in-depth pair with T0-2) ---
-    # Regex location wins over the prefix `/api/` location below for these 3
-    # paths (verified-from-code on `feat/admission-full-cutover` HEAD `1a8e0ca2`).
+    # Regex location wins over the prefix `/api/` location below for these 10
+    # prefixes. Danh sach nay PHAI trung `FROZEN_PREFIXES` trong
+    # `Backend_FastAPI/app/middleware/admission_freeze.py`; guard doi chieu hai
+    # ben la `test_nginx_template_dung_cung_tap_tien_to` — hai tang lech nhau
+    # tung de lot 39 duong ghi `/api/v2/` o CA HAI lop.
     # Bare prefix and any subpath both match thanks to `(/.*)?$`.
     # Behavior: when `${NGINX_ADMISSION_FROZEN}` is the literal string "true"
     # (envsubst-ed at deploy time), POST/PUT/PATCH/DELETE return 503 with a
     # JSON body; GET/HEAD/OPTIONS continue to `proxy_pass` for read-only
     # inspection. Any other value (false / unset / typo) falls through.
     # See `Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md` §3.5 + §6.1.
-    location ~ ^/api/(admissions|admission-config|public/admissions)(/.*)?$ {
+    location ~ ^/api/(admissions|admission-config|public/admissions|v2/admissions|v2/admin/admission-backfill-exceptions|v2/admin/admission-paths|v2/admin/path-subject-group-configs|v2/admin/priority-config|v2/admin/rounds|v2/admin/years)(/.*)?$ {
         set $freeze_check "$request_method:${NGINX_ADMISSION_FROZEN}";
 
         if ($freeze_check ~ "^(POST|PUT|PATCH|DELETE):true$") {
