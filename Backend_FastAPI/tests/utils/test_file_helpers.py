@@ -3,8 +3,11 @@
 import logging  # Thêm logging
 import os
 import uuid
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import ANY, AsyncMock, MagicMock
 
+import aiofiles
+import magic
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException, UploadFile, status
@@ -15,6 +18,18 @@ from app.config import settings  # Dùng settings làm "constants" cho file này
 from app.utils import file_helpers
 
 log = logging.getLogger(__name__)
+
+# Chụp bản THẬT của các object module dùng chung, ngay lúc import — trước khi
+# bất kỳ fixture nào chạy. ``test_khong_ro_ri_stdlib`` so identity với bản này.
+_MODULE_DUNG_CHUNG_THAT = {
+    "os.path.commonpath": os.path.commonpath,
+    "os.path.exists": os.path.exists,
+    "os.path.relpath": os.path.relpath,
+    "os.remove": os.remove,
+    "uuid.uuid4": uuid.uuid4,
+    "aiofiles.open": aiofiles.open,
+    "magic.from_buffer": magic.from_buffer,
+}
 
 
 # === Lớp Giả lập UploadFile (Giữ nguyên như trong context) ===
@@ -49,37 +64,65 @@ class MockUploadFile:
 def mock_dependencies(mocker):
     """Mock các thư viện bên ngoài mà file_helpers sử dụng."""
 
-    # 1. Mock aiofiles
-    mock_aio_open = mocker.patch("aiofiles.open")
+    # ⚠️ KHÔNG dùng ``mocker.patch("app.utils.file_helpers.os.path.exists")``.
+    # ``file_helpers`` khai ``import os``, nên ``file_helpers.os`` CHÍNH LÀ module
+    # ``os`` toàn tiến trình: vá thuộc tính trên nó là vá ``posixpath`` cho mọi
+    # thứ đang chạy, kể cả pytest. Hậu quả đo được: pytest gọi
+    # ``os.path.commonpath`` khi dựng traceback (``_makepath`` → ``bestrelpath``),
+    # nhận đường avatar giả, rồi ``relative_to`` ném ``ValueError`` và
+    # ``wrap_session`` chết bằng INTERNALERROR — nuốt trọn kết quả của cả lát.
+    # Đúng cơ chế đã giết shard-06 của nightly 32513696715.
+    #
+    # Cách đúng: thay chính BINDING trong module ``file_helpers`` bằng một
+    # namespace giả. Module thật không bị chạm; các hàm ``file_helpers`` cần mà
+    # không cần giả (``join``/``basename``/``dirname``/``sep``) trỏ thẳng về bản
+    # thật. ``test_khong_ro_ri_stdlib`` khoá bất biến này.
+
+    # 1. aiofiles
+    mock_aio_open = MagicMock()
     mock_file_handle = AsyncMock()
     mock_file_handle.write = AsyncMock(return_value=None)
     async_context_manager_mock = AsyncMock()
     async_context_manager_mock.__aenter__.return_value = mock_file_handle
     async_context_manager_mock.__aexit__.return_value = None
     mock_aio_open.return_value = async_context_manager_mock
-
-    # 2. Mock magic (mặc định là PNG hợp lệ)
-    mock_magic = mocker.patch("app.utils.file_helpers.magic.from_buffer")
-    mock_magic.return_value = "image/png"  # Mặc định là 'image/png'
-
-    # 3. Mock os (giả lập file cũ tồn tại và commonpath thành công)
-    mock_os_path_exists = mocker.patch(
-        "app.utils.file_helpers.os.path.exists", return_value=True
-    )
-    mock_os_remove = mocker.patch("app.utils.file_helpers.os.remove")
-    # Giả lập commonpath trả về đúng thư mục upload (cho trường hợp thành công)
-    mock_commonpath = mocker.patch(
-        "app.utils.file_helpers.os.path.commonpath",
-        return_value=str(settings.AVATAR_UPLOAD_FOLDER),
-    )
-    # Mock relpath để trả về đường dẫn URL mong đợi
-    mocker.patch(
-        "app.utils.file_helpers.os.path.relpath", return_value="uploads/avatars"
+    mocker.patch.object(
+        file_helpers, "aiofiles", SimpleNamespace(open=mock_aio_open)
     )
 
-    # 4. Mock uuid
-    mock_uuid4 = mocker.patch("app.utils.file_helpers.uuid.uuid4")
-    mock_uuid4.return_value = uuid.UUID("12345678-1234-5678-1234-567812345678")
+    # 2. magic (mặc định là PNG hợp lệ)
+    mock_magic = MagicMock(return_value="image/png")
+    mocker.patch.object(
+        file_helpers, "magic", SimpleNamespace(from_buffer=mock_magic)
+    )
+
+    # 3. os — giả lập file cũ tồn tại và commonpath thành công
+    mock_os_path_exists = MagicMock(return_value=True)
+    mock_os_remove = MagicMock()
+    mock_commonpath = MagicMock(return_value=str(settings.AVATAR_UPLOAD_FOLDER))
+    mock_relpath = MagicMock(return_value="uploads/avatars")
+    mocker.patch.object(
+        file_helpers,
+        "os",
+        SimpleNamespace(
+            path=SimpleNamespace(
+                exists=mock_os_path_exists,
+                commonpath=mock_commonpath,
+                relpath=mock_relpath,
+                basename=os.path.basename,
+                dirname=os.path.dirname,
+                join=os.path.join,
+            ),
+            remove=mock_os_remove,
+            sep=os.sep,
+        ),
+    )
+
+    # 4. uuid
+    mock_uuid4 = MagicMock(
+        return_value=uuid.UUID("12345678-1234-5678-1234-567812345678")
+    )
+    mocker.patch.object(file_helpers, "uuid", SimpleNamespace(uuid4=mock_uuid4))
 
     # 5. Mock Path.resolve (quan trọng cho security check)
     # Cần mock cả `strict=True` (cho thư mục) và `strict=False` (cho file)
@@ -101,7 +144,7 @@ def mock_dependencies(mocker):
     mock_path_instance.resolve.side_effect = resolve_side_effect
 
     # Mock Path() constructor để trả về instance đã mock
-    mocker.patch("app.utils.file_helpers.Path", return_value=mock_path_instance)
+    mocker.patch.object(file_helpers, "Path", return_value=mock_path_instance)
 
     return {
         "aio_open": mock_aio_open,
@@ -278,16 +321,14 @@ async def test_save_avatar_invalid_mime_type(mock_dependencies):
 
 
 @pytest.mark.asyncio
-async def test_save_avatar_path_traversal_attempt(mocker):  # Mock cục bộ
+async def test_save_avatar_path_traversal_attempt(mocker, mock_dependencies):
     """Test 4.1: Lỗi 400 - Ngăn chặn Path Traversal."""
     log.info("--- Running: test_save_avatar_path_traversal_attempt ---")
     # Mock các thư viện bên ngoài (tương tự mock_dependencies nhưng chỉ mock cái cần thiết)
-    mocker.patch("aiofiles.open", new_callable=AsyncMock)
-    mocker.patch("app.utils.file_helpers.magic.from_buffer", return_value="image/png")
-    mocker.patch(
-        "app.utils.file_helpers.uuid.uuid4",
-        return_value=uuid.UUID("12345678-1234-5678-1234-567812345678"),
-    )
+    # aiofiles / magic / uuid đã do fixture autouse ``mock_dependencies`` cung
+    # cấp dưới dạng namespace giả. KHÔNG vá lại ở đây: mỗi lần vá lại là một cơ
+    # hội để bản vá toàn cục quay về, mà Tier 5 chỉ chạy sentinel nên thân hàm
+    # này không hề chạy trên PR gate.
 
     # --- Mock quan trọng cho Path Traversal ---
     # Giả lập Path('...').resolve() trả về đường dẫn nguy hiểm
@@ -308,10 +349,14 @@ async def test_save_avatar_path_traversal_attempt(mocker):  # Mock cục bộ
         return unsafe_file_path  # Trả về path nguy hiểm
 
     mock_path_instance.resolve.side_effect = resolve_side_effect
-    mocker.patch("app.utils.file_helpers.Path", return_value=mock_path_instance)
+    mocker.patch.object(file_helpers, "Path", return_value=mock_path_instance)
 
-    # Giả lập os.path.commonpath trả về thư mục gốc "/" khi so sánh 2 đường dẫn khác nhau
-    mocker.patch("app.utils.file_helpers.os.path.commonpath", return_value=os.path.sep)
+    # commonpath trả "/" ⇒ hai đường dẫn không cùng gốc ⇒ coi là traversal.
+    # Chỉnh ``return_value`` của chính mock do fixture tạo, KHÔNG vá thêm lần
+    # nào: một biểu thức như ``patch.object(file_helpers.os.path, …)`` tuy đúng
+    # lúc chạy (vì ``file_helpers.os`` đã là namespace giả) nhưng đọc TĨNH thì
+    # không phân biệt được với việc chọc thẳng vào ``os.path`` thật.
+    mock_dependencies["commonpath"].return_value = os.path.sep
     # --- Kết thúc Mock ---
 
     file = MockUploadFile(filename="../../etc/passwd.png", content=b"fake_bytes")
@@ -413,3 +458,64 @@ async def test_save_avatar_write_error(mock_dependencies):
     log.info("File write error correctly blocked (500) and cleanup attempted.")
 
     log.info("--- Finished: test_save_avatar_write_error ---")
+
+
+# === Cổng chống rò stdlib =====================================================
+# Cổng LÚC CHẠY. Nó chỉ thấy thứ fixture autouse thật sự làm, nên KHÔNG đủ một
+# mình: Tier 5 chạy đúng nodeid này, còn thân các test khác không chạy ở đó.
+# Ba cổng còn lại nằm ở ``test_file_helpers_guard.py`` — tệp ấy cố ý KHÔNG import
+# mã ứng dụng nên nó chạy được chính tệp này trong tiến trình con mà không có
+# hai bản app cùng nằm trong trần 1G.
+#
+# Sentinel đặt cuối tệp có chủ đích, nhưng tính chất "sống qua 9 traceback" CHỈ
+# đúng khi chạy CẢ TỆP (chín ca trên đang đỏ vì lý do khác — test double lỗi
+# thời, ngoài phạm vi PR này). Việc chạy cả tệp do guard đảm nhận.
+
+
+def test_khong_ro_ri_stdlib(mock_dependencies):
+    """Fixture autouse KHÔNG được đổi object stdlib dùng chung toàn tiến trình.
+
+    ``file_helpers`` khai ``import os`` / ``import uuid``, nên
+    ``file_helpers.os`` và ``file_helpers.uuid`` CHÍNH LÀ module toàn cục. Vá
+    thuộc tính trên chúng (``mocker.patch("app.utils.file_helpers.os.path.…")``)
+    là vá ``posixpath``/``uuid`` cho mọi thứ trong tiến trình, kể cả pytest.
+
+    Đo được trên ``main@0c3031d7``: chạy MỘT ca của tệp này với ``--tb=short``
+    cho INTERNALERROR và exit 3::
+
+        _pytest/_code/code.py:1092 repr_traceback_entry → _makepath → bestrelpath
+        ValueError: '/app' is not in the subpath of '/app/app/static/uploads/avatars'
+
+    Trên nightly 32513696715 nó giết shard-06 giữa phiên: 7 test không bao giờ
+    chạy, mà cổng độ phủ vẫn xanh vì node đã được PHÂN LÁT.
+    """
+    # (a) Fixture thật sự có tác dụng. Thiếu vế này thì (b) xanh mà không chứng
+    #     minh được gì — một fixture không chạy cũng cho identity nguyên vẹn.
+    assert file_helpers.os is not os, "fixture khong thay binding file_helpers.os"
+    assert file_helpers.uuid is not uuid, "fixture khong thay binding file_helpers.uuid"
+    assert file_helpers.aiofiles is not aiofiles, "fixture khong thay binding aiofiles"
+    assert file_helpers.magic is not magic, "fixture khong thay binding magic"
+    assert file_helpers.os.path.exists is not os.path.exists
+
+    # (b) …mà module thật vẫn nguyên vẹn.
+    hien = {
+        "os.path.commonpath": os.path.commonpath,
+        "os.path.exists": os.path.exists,
+        "os.path.relpath": os.path.relpath,
+        "os.remove": os.remove,
+        "uuid.uuid4": uuid.uuid4,
+        "aiofiles.open": aiofiles.open,
+        "magic.from_buffer": magic.from_buffer,
+    }
+    lech = sorted(
+        t for t, that in _MODULE_DUNG_CHUNG_THAT.items() if hien[t] is not that
+    )
+    assert not lech, (
+        "Fixture da doi object stdlib TOAN CUC: %s. Dung "
+        "mocker.patch.object(file_helpers, '<ten>', SimpleNamespace(...)) de "
+        "thay BINDING trong module, thay vi va thuoc tinh tren module that." % lech
+    )
+
+    # (c) …và vẫn hành xử như hàm thật, không phải mock trả hằng số.
+    assert os.path.commonpath(["/a/b", "/a/c"]) == "/a"
+    assert os.path.relpath("/a/b/c", "/a") == "b/c"
