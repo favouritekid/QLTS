@@ -20,6 +20,7 @@ Các ca ở đây khoá CHI PHÍ, không chỉ khoá tính đúng: đếm số p
 chạy. Một bản vá làm đúng nhưng vẫn quét O(n) sẽ ĐỎ ở đây.
 """
 import json
+import secrets
 
 import pytest
 from passlib.context import CryptContext
@@ -88,8 +89,14 @@ def dem_bcrypt(monkeypatch):
 
 
 def _tao_kho_v2(dem, count=8):
-    """Sinh count mã + blob lưu trữ v2, rồi reset bộ đếm."""
-    plaintext, entries = mfa_service.generate_backup_codes(count=count)
+    """Sinh count mã + blob lưu trữ v2, rồi reset bộ đếm.
+
+    Dựng mục v2 TƯỜNG MINH thay vì đi qua ``generate_backup_codes`` — hàm đó
+    nay phụ thuộc cờ triển khai hai pha, và các ca dưới đây nói về ĐỊNH DẠNG
+    v2 chứ không về pha nào đang bật.
+    """
+    plaintext = [secrets.token_hex(5) for _ in range(count)]
+    entries = [mfa_service._build_v2_entry(code) for code in plaintext]
     dem.v2.hash_calls = 0
     dem.v2.verify_calls = 0
     dem.legacy.hash_calls = 0
@@ -151,7 +158,10 @@ class TestPhanTuyenHinhDang:
 @pytest.mark.unit
 class TestStorageV2:
 
-    def test_sinh_ma_dung_dinh_dang_nguoi_dung(self, dem_bcrypt):
+    def test_sinh_ma_dung_dinh_dang_nguoi_dung(self, dem_bcrypt, monkeypatch):
+        # Ca này nói về ĐỊNH DẠNG v2 nên bật pha B tường minh; mặc định sản
+        # phẩm vẫn là pha A (xem TestTrienKhaiHaiPha).
+        monkeypatch.setattr(settings, "MFA_BACKUP_CODE_V2_WRITER_ENABLED", True)
         plaintext, entries = mfa_service.generate_backup_codes(count=8)
         assert len(plaintext) == 8
         for code in plaintext:
@@ -224,7 +234,13 @@ class TestStorageV2:
 class TestPepperFailClosed:
 
     @pytest.mark.parametrize("gia_tri", ["", None])
-    def test_thieu_pepper_thi_sinh_ma_that_bai(self, monkeypatch, gia_tri):
+    def test_thieu_pepper_thi_sinh_ma_v2_that_bai(self, monkeypatch, gia_tri):
+        """Writer v2 KHÔNG được im lặng sinh selector bằng khoá rỗng.
+
+        Pha A không đụng selector nên không cần pepper — đó là ca riêng
+        ``TestTrienKhaiHaiPha.test_pha_a_khong_can_pepper``.
+        """
+        monkeypatch.setattr(settings, "MFA_BACKUP_CODE_V2_WRITER_ENABLED", True)
         monkeypatch.setattr(settings, "MFA_BACKUP_CODE_PEPPER", gia_tri)
         with pytest.raises(BusinessRuleViolation):
             mfa_service.generate_backup_codes(count=2)
@@ -291,3 +307,74 @@ class TestTuongThichLegacy:
         ok2, updated2 = mfa_service.verify_backup_code(legacy_code, updated)
         assert ok2 is True
         assert len(json.loads(updated2)) == 1
+
+
+# =============================================================================
+# 5. TRIỂN KHAI HAI PHA — ghi legacy trước, v2 sau
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestTrienKhaiHaiPha:
+    """Rollback không được làm chết backup code vừa phát.
+
+    Ảnh CŨ chỉ biết ``list[str]`` và đưa thẳng từng phần tử vào
+    ``pwd_context.verify()``. Ghi v2 ngay từ lần deploy đầu là một cutover MỘT
+    CHIỀU âm thầm: deploy → có người regenerate → rollback → mã của họ hỏng.
+    """
+
+    def test_mac_dinh_writer_v2_TAT(self):
+        """Mặc định phải là pha A. Đây là điều kiện của cả kế hoạch rollout."""
+        assert (
+            type(settings).model_fields["MFA_BACKUP_CODE_V2_WRITER_ENABLED"].default
+            is False
+        )
+
+    def test_pha_a_ghi_dinh_dang_anh_cu_doc_duoc(self, monkeypatch, dem_bcrypt):
+        """Cờ TẮT ⇒ list[str]; và một context bcrypt TRẦN xác minh được."""
+        monkeypatch.setattr(settings, "MFA_BACKUP_CODE_V2_WRITER_ENABLED", False)
+        plaintext, entries = mfa_service.generate_backup_codes(count=3)
+
+        assert all(isinstance(e, str) for e in entries), (
+            "Pha A ghi %r — ảnh cũ sẽ ném lỗi khi đưa dict vào pwd_context."
+            % (type(entries[0]),)
+        )
+
+        # Mô phỏng ẢNH CŨ: chỉ có một CryptContext bcrypt, không biết gì về
+        # selector, pepper hay khoá "v".
+        anh_cu = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        assert anh_cu.verify(plaintext[0], entries[0]) is True
+        assert anh_cu.verify(plaintext[1], entries[0]) is False
+
+    def test_pha_a_khong_can_pepper(self, monkeypatch, dem_bcrypt):
+        """Pha A chưa dùng selector nên KHÔNG được đòi pepper."""
+        monkeypatch.setattr(settings, "MFA_BACKUP_CODE_V2_WRITER_ENABLED", False)
+        plaintext, entries = mfa_service.generate_backup_codes(count=2)
+        blob = json.dumps(entries)
+
+        monkeypatch.setattr(settings, "MFA_BACKUP_CODE_PEPPER", "")
+        khop, con_lai = mfa_service.verify_backup_code(plaintext[0], blob)
+        assert khop is True
+        assert len(json.loads(con_lai)) == 1
+
+    def test_pha_b_ghi_v2(self, monkeypatch, dem_bcrypt):
+        monkeypatch.setattr(settings, "MFA_BACKUP_CODE_V2_WRITER_ENABLED", True)
+        plaintext, entries = mfa_service.generate_backup_codes(count=3)
+
+        assert all(isinstance(e, dict) and e.get("v") == 2 for e in entries)
+        khop, _ = mfa_service.verify_backup_code(plaintext[0], json.dumps(entries))
+        assert khop is True
+
+    def test_pha_b_van_doc_duoc_du_lieu_pha_a(self, monkeypatch, dem_bcrypt):
+        """Bật pha B KHÔNG được làm chết mã đã phát ở pha A."""
+        monkeypatch.setattr(settings, "MFA_BACKUP_CODE_V2_WRITER_ENABLED", False)
+        ma_pha_a, muc_pha_a = mfa_service.generate_backup_codes(count=2)
+
+        monkeypatch.setattr(settings, "MFA_BACKUP_CODE_V2_WRITER_ENABLED", True)
+        ma_pha_b, muc_pha_b = mfa_service.generate_backup_codes(count=2)
+
+        kho = json.dumps(muc_pha_a + muc_pha_b)
+        khop_a, sau_a = mfa_service.verify_backup_code(ma_pha_a[0], kho)
+        assert khop_a is True, "Mã phát ở pha A chết sau khi bật pha B."
+        khop_b, _ = mfa_service.verify_backup_code(ma_pha_b[0], sau_a)
+        assert khop_b is True

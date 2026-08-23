@@ -388,6 +388,7 @@ jobs:
               tests/api/test_enrollment_letter_api.py
               tests/services/test_mfa_backup_code_cost.py
               tests/services/test_mfa_bcrypt_dos_guard.py
+              tests/unit/test_mfa_config_bounds.py
               tests/services/test_mfa.py::TestBackupCodeEdgeCases
               tests/services/test_mfa.py::TestMfaVerificationRateLimiting
 

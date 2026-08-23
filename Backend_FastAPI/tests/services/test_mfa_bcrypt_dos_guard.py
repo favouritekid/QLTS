@@ -31,6 +31,7 @@ import pytest
 from sqlalchemy import select
 
 from app import models
+from app.config import settings
 from app.database import AsyncSessionLocal
 from app.security import get_password_hash
 from app.services import mfa_service
@@ -38,6 +39,14 @@ from app.services import mfa_service
 pytestmark = pytest.mark.asyncio
 
 PWD = "TestPassword123!"
+
+
+@pytest.fixture
+def bat_writer_v2(monkeypatch):
+    """Bật pha B. Các ca dưới nói về ĐƯỜNG v2 (selector), không về việc
+    pha nào đang bật ở production — mặc định sản phẩm vẫn là pha A."""
+    monkeypatch.setattr(settings, "MFA_BACKUP_CODE_V2_WRITER_ENABLED", True)
+
 
 # Ngưỡng nhịp: harness đập mỗi 5ms. Một cửa sổ 0,3s "sạch" cho ~60 nhịp; đòi 5
 # nhịp là biên 12 lần, đủ rộng cho runner CI chậm mà vẫn tách hẳn khỏi ca tắc
@@ -178,7 +187,9 @@ class _TheoDoiDongThoi:
 class TestTranTaiNguyenBcrypt:
     """2. Đẩy bcrypt sang thread mà không có trần = đổi kiểu tự sát."""
 
-    async def test_so_bcrypt_dong_thoi_khong_vuot_tran(self, monkeypatch):
+    async def test_so_bcrypt_dong_thoi_khong_vuot_tran(
+        self, monkeypatch, bat_writer_v2
+    ):
         codes, entries = mfa_service.generate_backup_codes(count=4)
         kho = json.dumps(entries)
 
@@ -264,12 +275,16 @@ class TestDatChoTruocBcryptVaFailClosed:
         mfa_token = mfa_service.create_mfa_token(username, user_id)
 
         dem = _DemBcrypt(mfa_service._backup_context())
+        dem_legacy = _DemBcrypt(mfa_service._pwd_context)
         monkeypatch.setattr(mfa_service, "_backup_context", lambda: dem)
+        monkeypatch.setattr(mfa_service, "_pwd_context", dem_legacy)
 
-        async def _incr_hong(*a, **kw):
+        async def _dat_cho_hong(*a, **kw):
             return None
 
-        monkeypatch.setattr(auth_router, "safe_redis_incr", _incr_hong)
+        monkeypatch.setattr(
+            auth_router, "safe_redis_reserve_attempt", _dat_cho_hong
+        )
 
         # Mã HỢP LỆ, đúng hình dạng backup: nếu đặt chỗ nằm SAU xác minh thì
         # bcrypt đã chạy và ca này bắt được.
@@ -286,8 +301,9 @@ class TestDatChoTruocBcryptVaFailClosed:
             "Đường brute-force OTP không được fail open."
         )
         assert res.headers.get("Retry-After") == "60"
-        assert dem.tong == 0, (
-            f"{dem.tong} phép bcrypt đã chạy trước khi đặt chỗ được xác nhận — "
+        tong = dem.tong + dem_legacy.tong
+        assert tong == 0, (
+            f"{tong} phép bcrypt đã chạy trước khi đặt chỗ được xác nhận — "
             "thứ tự sai, kẻ tấn công vẫn đốt được CPU khi Redis chết."
         )
 
@@ -342,9 +358,18 @@ class TestDatChoTruocBcryptVaFailClosed:
 class TestDongThoiCungMotMa:
     """4. Hai request cùng một mã: đúng một thành công."""
 
-    async def test_hai_phien_cung_ma_chi_mot_thanh_cong(self, setup_test_database):
+    async def test_hai_phien_cung_ma_chi_mot_thanh_cong(
+        self, setup_test_database, bat_writer_v2
+    ):
         user_id, _username, _secret, codes = await _seed_user_mfa(so_ma=3)
         ma = codes[0]
+
+        # BARRIER là phần bắt buộc, không phải trang trí. Không có nó, hai phiên
+        # có thể chạy NỐI TIẾP: phiên hai nạp user SAU khi phiên một đã commit,
+        # nên identity map của nó vốn đã mới và lỗi đọc-dữ-liệu-cũ không bao giờ
+        # lộ ra. Đo được: bản không barrier PASS ngay cả khi guard bị gỡ.
+        # Barrier ép cả hai nạp xong MỚI cho đi tiếp — đúng cửa sổ đua thật.
+        cong = asyncio.Barrier(2)
 
         async def _thu():
             async with AsyncSessionLocal() as s:
@@ -353,6 +378,7 @@ class TestDongThoiCungMotMa:
                         select(models.User).where(models.User.id == user_id)
                     )
                 ).scalar_one()
+                await cong.wait()      # cả hai đã nạp user vào identity map
                 ok = await mfa_service.verify_mfa_code(s, u, ma)
                 await s.commit()
                 return ok
@@ -382,7 +408,9 @@ class TestDongThoiCungMotMa:
 class TestRegenerateSinhV2:
     """Cấp lại backup code phải sinh v2 và vô hiệu toàn bộ mã cũ."""
 
-    async def test_regenerate_sinh_v2_va_vo_hieu_ma_cu(self, setup_test_database):
+    async def test_regenerate_sinh_v2_va_vo_hieu_ma_cu(
+        self, setup_test_database, bat_writer_v2
+    ):
         user_id, _username, _secret, ma_cu = await _seed_user_mfa(so_ma=3)
 
         async with AsyncSessionLocal() as s:
@@ -408,3 +436,134 @@ class TestRegenerateSinhV2:
         khop, con_lai = mfa_service.verify_backup_code(ma_moi[0], kho)
         assert khop is True
         assert len(json.loads(con_lai)) == 7
+
+
+# --------------------------------------------------------------------------- #
+# Đặt chỗ NGUYÊN TỬ: INCR + EXPIRE + TTL trong một giao dịch
+# --------------------------------------------------------------------------- #
+class _PipeEXPIREHong:
+    """Pipeline proxy: giữ nguyên INCR/TTL, ép EXPIRE báo KHÔNG đặt được hạn."""
+
+    def __init__(self, that):
+        self._that = that
+
+    async def __aenter__(self):
+        await self._that.__aenter__()
+        return self
+
+    async def __aexit__(self, *a):
+        return await self._that.__aexit__(*a)
+
+    def __getattr__(self, ten):
+        return getattr(self._that, ten)
+
+    async def execute(self):
+        kq = list(await self._that.execute())
+        kq[1] = 0          # EXPIRE trả 0 = hạn KHÔNG được đặt
+        return kq
+
+
+class _RedisEXPIREHong:
+    def __init__(self, that):
+        self._that = that
+
+    def __getattr__(self, ten):
+        return getattr(self._that, ten)
+
+    def pipeline(self, transaction=True):
+        return _PipeEXPIREHong(self._that.pipeline(transaction=transaction))
+
+
+class TestDatChoNguyenTu:
+    """INCR và EXPIRE tách rời để lại hai khe: bộ đếm không hạn, và request đi
+    tiếp khi chưa chứng minh được đặt chỗ. Cả hai đều fail closed."""
+
+    async def test_helper_tra_dem_va_ttl_duong(self, test_redis_client):
+        from app.database import safe_redis_reserve_attempt
+
+        key = f"mfa_attempts:tt_{uuid.uuid4().hex[:8]}"
+        dau = await safe_redis_reserve_attempt(key, 300)
+        assert dau is not None
+        dem, ttl = dau
+        assert dem == 1
+        assert ttl > 0, "Đặt chỗ không có hạn = khoá vĩnh viễn."
+
+        sau = await safe_redis_reserve_attempt(key, 300)
+        assert sau[0] == 2 and sau[1] > 0
+
+    async def test_expire_hong_thi_helper_tra_None(
+        self, test_redis_client, monkeypatch
+    ):
+        """EXPIRE không đặt được hạn ⇒ KHÔNG coi là đặt chỗ thành công."""
+        from app import database as db_mod
+
+        monkeypatch.setattr(
+            db_mod, "redis_client", _RedisEXPIREHong(db_mod.redis_client)
+        )
+        key = f"mfa_attempts:tt_{uuid.uuid4().hex[:8]}"
+        assert await db_mod.safe_redis_reserve_attempt(key, 300) is None
+
+    async def test_expire_hong_thi_route_tra_503_va_0_bcrypt(
+        self, client, test_redis_client, monkeypatch
+    ):
+        from httpx import ASGITransport, AsyncClient
+
+        from app import database as db_mod
+        from app.main import fastapi_app
+
+        user_id, username, _secret, codes = await _seed_user_mfa(so_ma=3)
+        mfa_token = mfa_service.create_mfa_token(username, user_id)
+
+        dem = _DemBcrypt(mfa_service._backup_context())
+        dem_legacy = _DemBcrypt(mfa_service._pwd_context)
+        monkeypatch.setattr(mfa_service, "_backup_context", lambda: dem)
+        monkeypatch.setattr(mfa_service, "_pwd_context", dem_legacy)
+        monkeypatch.setattr(
+            db_mod, "redis_client", _RedisEXPIREHong(db_mod.redis_client)
+        )
+
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post(
+                "/api/auth/verify-mfa",
+                json={"mfa_token": mfa_token, "code": codes[0]},
+            )
+
+        assert res.status_code == 503, (
+            f"EXPIRE hỏng mà vẫn cho đi tiếp (HTTP {res.status_code}) — bộ đếm "
+            "có thể không bao giờ hết hạn."
+        )
+        assert res.headers.get("Retry-After") == "60"
+        tong = dem.tong + dem_legacy.tong
+        assert tong == 0, f"{tong} phép bcrypt chạy dù chưa đặt chỗ được."
+
+    async def test_dong_thoi_van_giu_ttl_duong(self, client, test_redis_client):
+        """Nhiều request đồng thời: bộ đếm đúng số lần VÀ vẫn có hạn."""
+        from httpx import ASGITransport, AsyncClient
+
+        from app.main import fastapi_app
+
+        user_id, username, _secret, _codes = await _seed_user_mfa(so_ma=2)
+        mfa_token = mfa_service.create_mfa_token(username, user_id)
+
+        async def _thu():
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                r = await c.post(
+                    "/api/auth/verify-mfa",
+                    json={"mfa_token": mfa_token, "code": "000000"},
+                )
+                return r.status_code
+
+        so_request = 3
+        ma_tt = await asyncio.gather(*(_thu() for _ in range(so_request)))
+        assert all(m == 401 for m in ma_tt), ma_tt
+
+        key = f"mfa_attempts:{username}"
+        assert int(await test_redis_client.get(key)) == so_request, (
+            "GET-rồi-SET không nguyên tử làm hai request cùng ghi một giá trị; "
+            "INCR trong giao dịch thì không."
+        )
+        assert await test_redis_client.ttl(key) > 0

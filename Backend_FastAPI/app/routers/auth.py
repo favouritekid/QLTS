@@ -32,12 +32,10 @@ from ..middleware.csrf import set_csrf_cookie  # ✅ CSRF Protection
 from ..database import (
     safe_redis_delete,
     safe_redis_exists,
-    safe_redis_expire,
     safe_redis_get,
-    safe_redis_incr,
     safe_redis_pipeline,
+    safe_redis_reserve_attempt,
     safe_redis_set,
-    safe_redis_ttl,
 )
 from ..core.rate_limits import (  # ✅ MIGRATED: Use new rate limits module
     limiter,
@@ -1339,10 +1337,12 @@ async def verify_mfa(
     # một phép bcrypt nào.
     attempt_key = f"mfa_attempts:{username}"
     window = settings.MFA_ATTEMPT_WINDOW_MINUTES * 60
-    attempts_used = await safe_redis_incr(attempt_key)
+    dat_cho = await safe_redis_reserve_attempt(attempt_key, window)
 
-    if attempts_used is None:
-        # FAIL CLOSED: không chứng minh được đặt chỗ thì không tiêu CPU.
+    if dat_cho is None:
+        # FAIL CLOSED: không CHỨNG MINH được đặt chỗ thì không tiêu CPU.
+        # "Chứng minh" ở đây gồm cả TTL dương — một bộ đếm không hạn là một
+        # khoá vĩnh viễn, hỏng theo chiều ngược lại nhưng vẫn là hỏng.
         # Đây là đường brute-force OTP; không có bộ đếm nghĩa là không có trần.
         # (Khác với fail-open có chủ đích của blacklist JWT trên /profile.)
         log.error(
@@ -1357,12 +1357,11 @@ async def verify_mfa(
             headers={"Retry-After": "60"},
         )
 
-    # Trượt cửa sổ mỗi lần thử, giữ nguyên hành vi cũ (SET ... ex=window).
-    await safe_redis_expire(attempt_key, window)
+    # TTL đọc trong CÙNG giao dịch với INCR/EXPIRE, nên nó là hạn thật.
+    attempts_used, attempt_ttl = dat_cho
 
     if attempts_used > settings.MFA_MAX_ATTEMPTS:
-        attempt_ttl = await safe_redis_ttl(attempt_key)
-        retry_after = max(attempt_ttl, 60) if attempt_ttl > 0 else window
+        retry_after = max(attempt_ttl, 60)
         log.warning(
             "mfa_rate_limited", user_id=user_id, username=username,
             attempts=attempts_used, retry_after=retry_after,

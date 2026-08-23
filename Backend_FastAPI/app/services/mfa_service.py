@@ -288,24 +288,44 @@ def _build_v2_entry(code: str) -> dict:
     }
 
 
-def generate_backup_codes(count: int = 8) -> Tuple[List[str], List[dict]]:
-    """Sinh backup code + mục lưu trữ v2.
+def v2_writer_enabled() -> bool:
+    """Pha B đã bật chưa? Đọc settings mỗi lần gọi (cờ đổi được lúc chạy)."""
+    return bool(getattr(settings, "MFA_BACKUP_CODE_V2_WRITER_ENABLED", False))
+
+
+def generate_backup_codes(count: int = 8) -> Tuple[List[str], List]:
+    """Sinh backup code + mục lưu trữ, theo PHA TRIỂN KHAI đang bật.
 
     Giữ nguyên chữ ký đồng bộ vì ``TestBackupCodes`` gọi trực tiếp. Đường
     service dùng ``agenerate_backup_codes`` để không chặn event loop.
 
+    Hai định dạng ghi:
+
+      * Pha A (mặc định, cờ TẮT) → ``list[str]`` bcrypt — ĐÚNG định dạng ảnh
+        cũ đọc được. Rollback không làm chết mã vừa phát. Vẫn rẻ hơn bản cũ
+        tám lần vì băm bằng ``MFA_BACKUP_CODE_BCRYPT_ROUNDS`` (12) thay vì
+        rounds mật khẩu (15); chuỗi bcrypt tự mang tham số chi phí nên ảnh cũ
+        xác minh bình thường.
+      * Pha B (cờ BẬT) → ``list[dict]`` v2 có selector, cắt hẳn quét O(n).
+
+    Đọc thì luôn hiểu cả hai — xem ``verify_backup_code``.
+
     Returns:
         (plaintext_codes, entries): plaintext hiện MỘT LẦN cho người dùng;
-        ``entries`` là list dict v2, ``json.dumps`` được.
+        ``entries`` ``json.dumps`` được ở cả hai pha.
     """
     plaintext_codes = [
         secrets.token_hex(_BACKUP_CODE_BYTES) for _ in range(count)
     ]  # 10 ký tự hex, 40-bit entropy — GIỮ NGUYÊN định dạng người dùng thấy
-    entries = [_build_v2_entry(code) for code in plaintext_codes]
+    if v2_writer_enabled():
+        entries = [_build_v2_entry(code) for code in plaintext_codes]
+    else:
+        ctx = _backup_context()
+        entries = [ctx.hash(code) for code in plaintext_codes]
     return plaintext_codes, entries
 
 
-async def agenerate_backup_codes(count: int = 8) -> Tuple[List[str], List[dict]]:
+async def agenerate_backup_codes(count: int = 8) -> Tuple[List[str], List]:
     """Bản async: 8 phép bcrypt chạy ngoài event loop.
 
     Bản trước gọi thẳng ``_pwd_context.hash`` 8 lần trong coroutine, tức
@@ -335,6 +355,12 @@ def _match_v2_index(entries: List, code: str) -> Optional[int]:
 
     So sánh bằng ``compare_digest`` để không rò rỉ vị trí khớp qua thời gian.
     """
+    # Kho KHÔNG có mục v2 nào (pha A, hoặc dữ liệu cũ) thì selector vô nghĩa —
+    # và quan trọng hơn: không được đòi pepper ở một triển khai chưa dùng v2.
+    # Thiếu pepper mà kho CÓ v2 thì vẫn fail closed ngay dòng dưới.
+    if not any(_is_v2(e) for e in entries):
+        return None
+
     want = _selector(code)
     for i, entry in enumerate(entries):
         if _is_v2(entry) and hmac.compare_digest(str(entry.get("sel", "")), want):

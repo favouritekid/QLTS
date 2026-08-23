@@ -228,6 +228,64 @@ async def safe_redis_expire(key: str, seconds: int):
         return False
 
 
+async def safe_redis_reserve_attempt(key: str, window_seconds: int):
+    """Đặt chỗ MỘT lần thử: INCR + EXPIRE + TTL trong MỘT transaction.
+
+    Vì sao phải gộp: gọi INCR rồi EXPIRE riêng lẻ có hai khe hở đã đo được
+    trong review —
+
+      * INCR xong mà EXPIRE hỏng ⇒ bộ đếm KHÔNG có hạn. Nó không bao giờ tự
+        hết, và người dùng bị khoá MFA vĩnh viễn. ``safe_redis_expire`` trả
+        ``False`` khi hỏng, và giá trị đó rất dễ bị bỏ qua ở chỗ gọi.
+      * Giữa hai lệnh, tiến trình có thể chết hoặc Redis có thể failover, để
+        lại đúng trạng thái trên.
+
+    MULTI/EXEC chạy ba lệnh không xen kẽ, và TTL đọc SAU EXPIRE trong cùng
+    giao dịch nên nó chứng minh được hạn đã đặt thật — chứ không phải "đã gửi
+    lệnh đặt hạn".
+
+    Returns:
+        ``(count, ttl)`` khi ĐẶT CHỖ ĐƯỢC CHỨNG MINH; ``None`` ở MỌI trường
+        hợp còn lại (lỗi kết nối, kết quả thiếu, EXPIRE trả 0, TTL <= 0).
+        ``None`` ⇒ chỗ gọi phải FAIL CLOSED, không được đi tiếp tới chi phí CPU.
+    """
+    async def _giao_dich():
+        async with redis_client.pipeline(transaction=True) as pipe:
+            pipe.incr(key)
+            pipe.expire(key, window_seconds)
+            pipe.ttl(key)
+            return await pipe.execute()
+
+    try:
+        ket_qua = await redis_breaker.call_async(_giao_dich)
+    except REDIS_BREAKER_EXCEPTIONS:
+        log.error("Redis RESERVE failed", key=key, exc_info=True)
+        return None
+    except Exception:
+        # Kể cả lỗi ngoài dự kiến cũng fail closed: đây là hàng rào chi phí của
+        # một đường brute-force, không phải cache.
+        log.error("Redis RESERVE unexpected error", key=key, exc_info=True)
+        return None
+
+    if not isinstance(ket_qua, (list, tuple)) or len(ket_qua) != 3:
+        log.error("Redis RESERVE trả kết quả lạ", key=key, ket_qua=repr(ket_qua))
+        return None
+
+    dem, da_dat_han, ttl = ket_qua
+    if not isinstance(dem, int) or isinstance(dem, bool) or dem < 1:
+        log.error("Redis RESERVE: INCR không trả số hợp lệ", key=key, dem=repr(dem))
+        return None
+    if not da_dat_han:
+        # EXPIRE trả 0 nghĩa là hạn KHÔNG được đặt. Bộ đếm sống mãi ⇒ khoá vĩnh
+        # viễn. Thà trả 503 còn hơn để lại một khoá không ai gỡ được.
+        log.error("Redis RESERVE: EXPIRE không đặt được hạn", key=key)
+        return None
+    if not isinstance(ttl, int) or ttl <= 0:
+        log.error("Redis RESERVE: TTL không dương", key=key, ttl=repr(ttl))
+        return None
+    return dem, ttl
+
+
 async def safe_redis_incr(key: str, amount: int = 1):
     """
     Increment a Redis key by amount (safe with circuit breaker).
