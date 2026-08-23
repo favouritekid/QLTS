@@ -289,7 +289,15 @@ def _build_v2_entry(code: str) -> dict:
 
 
 def v2_writer_enabled() -> bool:
-    """Pha B đã bật chưa? Đọc settings mỗi lần gọi (cờ đổi được lúc chạy)."""
+    """Pha B đã bật chưa?
+
+    Đọc ``settings`` ở mỗi lần gọi để test monkeypatch được — ĐỪNG đọc thành
+    "đổi cờ lúc chạy". ``settings`` là singleton dựng MỘT LẦN lúc import; sửa
+    ``.env.production`` KHÔNG chạm được tiến trình đang chạy. Bật pha B là một
+    thao tác deploy: đổi env rồi **dựng lại** các service đọc Settings
+    (backend + celery-worker + celery-beat) — ``restart`` không nạp lại
+    ``env_file``. Xem Documents/PRODUCTION_DEPLOY_GUIDE.md §"Bật pha B".
+    """
     return bool(getattr(settings, "MFA_BACKUP_CODE_V2_WRITER_ENABLED", False))
 
 

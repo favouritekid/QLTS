@@ -1333,11 +1333,18 @@ async def verify_mfa(
     #     đo được 14,1s CPU mỗi mã sai. Bộ đếm không phải hàng rào chi phí.
     #   * GET rồi SET không nguyên tử: hai request đồng thời cùng đọc n, cùng
     #     ghi n+1, và cùng lọt qua kiểm tra.
-    # Nay: một INCR nguyên tử TRƯỚC khi verify. Vượt trần ⇒ 429 và không tốn
-    # một phép bcrypt nào.
+    # Nay: một script Lua NGUYÊN TỬ chạy TRƯỚC khi verify, tự quyết cho qua hay
+    # chặn. Vượt trần ⇒ 429 và không tốn một phép bcrypt nào.
+    #
+    # ⚠️ Và request đã bị chặn KHÔNG được tăng bộ đếm hay gia hạn TTL. Bản trước
+    # làm cả hai, nên kẻ tấn công chỉ cần gõ một lần trước mỗi lần hết hạn là
+    # giữ nạn nhân bị khoá MFA vô thời hạn (đo được: TTL 30s → 300s mỗi request
+    # bị chặn). Đó là đổi một lỗ hổng CPU lấy một lỗ hổng availability.
     attempt_key = f"mfa_attempts:{username}"
     window = settings.MFA_ATTEMPT_WINDOW_MINUTES * 60
-    dat_cho = await safe_redis_reserve_attempt(attempt_key, window)
+    dat_cho = await safe_redis_reserve_attempt(
+        attempt_key, window, settings.MFA_MAX_ATTEMPTS
+    )
 
     if dat_cho is None:
         # FAIL CLOSED: không CHỨNG MINH được đặt chỗ thì không tiêu CPU.
@@ -1357,11 +1364,13 @@ async def verify_mfa(
             headers={"Retry-After": "60"},
         )
 
-    # TTL đọc trong CÙNG giao dịch với INCR/EXPIRE, nên nó là hạn thật.
-    attempts_used, attempt_ttl = dat_cho
+    # TTL đọc trong CÙNG script với INCR/EXPIRE, nên nó là hạn thật.
+    # Quyết định cho qua/chặn lấy THẲNG từ `allowed`: ngưỡng chỉ được diễn giải
+    # ở một nơi (script), không so lại ở đây bằng một phép bất đẳng thức thứ hai.
+    attempts_used = dat_cho.count
 
-    if attempts_used > settings.MFA_MAX_ATTEMPTS:
-        retry_after = max(attempt_ttl, 60)
+    if not dat_cho.allowed:
+        retry_after = max(dat_cho.ttl, 60)
         log.warning(
             "mfa_rate_limited", user_id=user_id, username=username,
             attempts=attempts_used, retry_after=retry_after,

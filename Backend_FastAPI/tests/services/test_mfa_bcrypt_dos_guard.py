@@ -346,9 +346,10 @@ class TestDatChoTruocBcryptVaFailClosed:
         assert res.headers.get("Retry-After")
 
         dem = await test_redis_client.get(f"mfa_attempts:{username}")
-        assert int(dem) == settings.MFA_MAX_ATTEMPTS + 1, (
-            "Đặt chỗ phải đếm CẢ lần bị chặn — nếu không, kẻ tấn công gõ mãi "
-            "mà bộ đếm đứng yên."
+        assert int(dem) == settings.MFA_MAX_ATTEMPTS, (
+            "Bộ đếm phải DỪNG ở trần. Khẳng định cũ (max+1) khoá đúng hành vi "
+            "sai: mỗi request bị chặn lại cộng thêm một, nên kẻ tấn công vừa "
+            "đẩy bộ đếm lên vô hạn vừa gia hạn khoá của nạn nhân."
         )
 
 
@@ -439,74 +440,135 @@ class TestRegenerateSinhV2:
 
 
 # --------------------------------------------------------------------------- #
-# Đặt chỗ NGUYÊN TỬ: INCR + EXPIRE + TTL trong một giao dịch
+# Đặt chỗ NGUYÊN TỬ + KHÔNG kéo dài hình phạt
 # --------------------------------------------------------------------------- #
-class _PipeEXPIREHong:
-    """Pipeline proxy: giữ nguyên INCR/TTL, ép EXPIRE báo KHÔNG đặt được hạn."""
+class _RedisEvalGia:
+    """Proxy: mọi thứ đi qua client thật, riêng ``eval`` bị ép hỏng.
 
-    def __init__(self, that):
+    Dùng để kiểm nhánh fail-closed. ``loi`` ném ngoại lệ; ``ket_qua`` trả về một
+    payload sai (thiếu phần tử, sai kiểu, hoặc TTL không dương).
+    """
+
+    def __init__(self, that, ket_qua=None, loi=None):
         self._that = that
-
-    async def __aenter__(self):
-        await self._that.__aenter__()
-        return self
-
-    async def __aexit__(self, *a):
-        return await self._that.__aexit__(*a)
+        self._ket_qua = ket_qua
+        self._loi = loi
 
     def __getattr__(self, ten):
         return getattr(self._that, ten)
 
-    async def execute(self):
-        kq = list(await self._that.execute())
-        kq[1] = 0          # EXPIRE trả 0 = hạn KHÔNG được đặt
-        return kq
+    async def eval(self, *a, **kw):
+        if self._loi is not None:
+            raise self._loi
+        return self._ket_qua
 
 
-class _RedisEXPIREHong:
+class _GhiLenhRedis:
+    """Proxy ghi lại TÊN các lệnh Redis đã phát trong một thao tác."""
+
+    _LENH = (
+        "get", "set", "setex", "incr", "decr", "expire", "ttl", "persist",
+        "delete", "eval", "evalsha", "pipeline", "watch", "multi", "execute",
+    )
+
     def __init__(self, that):
         self._that = that
+        self.lenh = []
 
     def __getattr__(self, ten):
-        return getattr(self._that, ten)
-
-    def pipeline(self, transaction=True):
-        return _PipeEXPIREHong(self._that.pipeline(transaction=transaction))
+        thuoc = getattr(self._that, ten)
+        if ten in self._LENH:
+            def _bao(*a, **kw):
+                self.lenh.append(ten)
+                return thuoc(*a, **kw)
+            return _bao
+        return thuoc
 
 
 class TestDatChoNguyenTu:
-    """INCR và EXPIRE tách rời để lại hai khe: bộ đếm không hạn, và request đi
-    tiếp khi chưa chứng minh được đặt chỗ. Cả hai đều fail closed."""
+    """Đặt chỗ phải là MỘT thao tác server-side, và phải chứng minh được hạn."""
 
-    async def test_helper_tra_dem_va_ttl_duong(self, test_redis_client):
+    async def test_helper_tra_allowed_count_ttl(self, test_redis_client):
         from app.database import safe_redis_reserve_attempt
 
         key = f"mfa_attempts:tt_{uuid.uuid4().hex[:8]}"
-        dau = await safe_redis_reserve_attempt(key, 300)
+        dau = await safe_redis_reserve_attempt(key, 300, 5)
         assert dau is not None
-        dem, ttl = dau
-        assert dem == 1
-        assert ttl > 0, "Đặt chỗ không có hạn = khoá vĩnh viễn."
+        assert dau.allowed is True
+        assert dau.count == 1
+        assert dau.ttl > 0, "Đặt chỗ không có hạn = khoá vĩnh viễn."
 
-        sau = await safe_redis_reserve_attempt(key, 300)
-        assert sau[0] == 2 and sau[1] > 0
+        sau = await safe_redis_reserve_attempt(key, 300, 5)
+        assert sau.allowed is True and sau.count == 2 and sau.ttl > 0
 
-    async def test_expire_hong_thi_helper_tra_None(
+    async def test_dat_cho_chi_dung_MOT_lenh_server_side(
         self, test_redis_client, monkeypatch
     ):
-        """EXPIRE không đặt được hạn ⇒ KHÔNG coi là đặt chỗ thành công."""
+        """Bất biến CẤU TRÚC, không phải hành vi.
+
+        Ca đồng thời ở dưới KHÔNG phân biệt được nguyên tử với không nguyên tử:
+        dưới fakeredis trong một event loop, cửa sổ giữa GET và INCR gần như
+        không mở ra, nên bản đọc-rồi-quyết-ở-client vẫn xanh (đã đo). Bất biến
+        thật sự là "quyết định nằm TRONG Redis", và nó đo được trực tiếp: đúng
+        MỘT lệnh, và lệnh đó là script.
+        """
+        from app import database as db_mod
+
+        ghi = _GhiLenhRedis(db_mod.redis_client)
+        monkeypatch.setattr(db_mod, "redis_client", ghi)
+
+        key = f"mfa_attempts:tt_{uuid.uuid4().hex[:8]}"
+        kq = await db_mod.safe_redis_reserve_attempt(key, 300, 5)
+
+        assert kq is not None and kq.allowed is True
+        assert ghi.lenh == ["eval"], (
+            "Đặt chỗ phải là MỘT thao tác server-side. Nhiều lệnh nghĩa là "
+            "quyết định được lấy ở phía client giữa các round-trip — đúng cửa "
+            f"sổ TOCTOU mà script sinh ra để đóng. Đã phát: {ghi.lenh}"
+        )
+
+    async def test_eval_nem_loi_thi_tra_None(self, test_redis_client, monkeypatch):
+        from redis.exceptions import ConnectionError as RedisConnErr
+
         from app import database as db_mod
 
         monkeypatch.setattr(
-            db_mod, "redis_client", _RedisEXPIREHong(db_mod.redis_client)
+            db_mod,
+            "redis_client",
+            _RedisEvalGia(db_mod.redis_client, loi=RedisConnErr("mat ket noi")),
         )
         key = f"mfa_attempts:tt_{uuid.uuid4().hex[:8]}"
-        assert await db_mod.safe_redis_reserve_attempt(key, 300) is None
+        assert await db_mod.safe_redis_reserve_attempt(key, 300, 5) is None
 
-    async def test_expire_hong_thi_route_tra_503_va_0_bcrypt(
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            None,
+            [],
+            [1, 2],
+            [1, 1, 0, 0],          # TTL = 0: không chứng minh được hạn
+            [1, 1, -1, 0],         # TTL = -1: khoá vĩnh viễn
+            [-1, 0, 0, 0],         # bộ đếm hỏng, không parse được
+            ["x", "y", "z", "w"],  # sai kiểu
+        ],
+    )
+    async def test_payload_sai_thi_tra_None(
+        self, test_redis_client, monkeypatch, payload
+    ):
+        """Fail closed cho MỌI ca không chứng minh được đặt chỗ + hạn dương."""
+        from app import database as db_mod
+
+        monkeypatch.setattr(
+            db_mod, "redis_client", _RedisEvalGia(db_mod.redis_client, ket_qua=payload)
+        )
+        key = f"mfa_attempts:tt_{uuid.uuid4().hex[:8]}"
+        assert await db_mod.safe_redis_reserve_attempt(key, 300, 5) is None
+
+    async def test_eval_hong_thi_route_tra_503_va_0_bcrypt(
         self, client, test_redis_client, monkeypatch
     ):
         from httpx import ASGITransport, AsyncClient
+        from redis.exceptions import ConnectionError as RedisConnErr
 
         from app import database as db_mod
         from app.main import fastapi_app
@@ -519,9 +581,13 @@ class TestDatChoNguyenTu:
         monkeypatch.setattr(mfa_service, "_backup_context", lambda: dem)
         monkeypatch.setattr(mfa_service, "_pwd_context", dem_legacy)
         monkeypatch.setattr(
-            db_mod, "redis_client", _RedisEXPIREHong(db_mod.redis_client)
+            db_mod,
+            "redis_client",
+            _RedisEvalGia(db_mod.redis_client, loi=RedisConnErr("mat ket noi")),
         )
 
+        # Mã HỢP LỆ, đúng hình dạng backup: nếu đặt chỗ nằm SAU xác minh thì
+        # bcrypt đã chạy và ca này bắt được.
         async with AsyncClient(
             transport=ASGITransport(app=fastapi_app), base_url="http://test"
         ) as c:
@@ -531,21 +597,119 @@ class TestDatChoNguyenTu:
             )
 
         assert res.status_code == 503, (
-            f"EXPIRE hỏng mà vẫn cho đi tiếp (HTTP {res.status_code}) — bộ đếm "
-            "có thể không bao giờ hết hạn."
+            f"Đặt chỗ hỏng mà vẫn cho đi tiếp (HTTP {res.status_code})."
         )
         assert res.headers.get("Retry-After") == "60"
         tong = dem.tong + dem_legacy.tong
         assert tong == 0, f"{tong} phép bcrypt chạy dù chưa đặt chỗ được."
 
-    async def test_dong_thoi_van_giu_ttl_duong(self, client, test_redis_client):
-        """Nhiều request đồng thời: bộ đếm đúng số lần VÀ vẫn có hạn."""
+        async with AsyncSessionLocal() as s:
+            u = await s.get(models.User, user_id)
+            assert len(json.loads(u.backup_codes_hashed)) == 3
+
+
+class TestKhongKeoDaiKhoaMFA:
+    """Một request ĐÃ BỊ CHẶN không được gia hạn hình phạt của chính nó.
+
+    Bản trước luôn chạy INCR + EXPIRE kể cả khi đã chạm trần. Hệ quả đo được:
+    bộ đếm bò lên mãi và TTL bị kéo về TRỌN cửa sổ sau mỗi lần gõ. Kẻ tấn công
+    chỉ cần gửi một request trước khi TTL hết là giữ được tài khoản nạn nhân ở
+    trạng thái khoá MFA VÔ THỜI HẠN — đổi một lỗ hổng CPU lấy một lỗ hổng
+    availability nhắm đúng một người.
+    """
+
+    async def test_request_bi_chan_khong_gia_han_ttl(
+        self, client, test_redis_client, monkeypatch
+    ):
         from httpx import ASGITransport, AsyncClient
 
+        from app.config import settings
+        from app.main import fastapi_app
+
+        user_id, username, _secret, codes = await _seed_user_mfa(so_ma=3)
+        mfa_token = mfa_service.create_mfa_token(username, user_id)
+        key = f"mfa_attempts:{username}"
+        toi_da = settings.MFA_MAX_ATTEMPTS
+
+        # Trạng thái xuất phát: đã chạm trần, còn 30 giây nữa là hết khoá.
+        await test_redis_client.set(key, str(toi_da), ex=30)
+        ttl_truoc = await test_redis_client.ttl(key)
+        assert ttl_truoc > 0
+
+        dem = _DemBcrypt(mfa_service._backup_context())
+        dem_legacy = _DemBcrypt(mfa_service._pwd_context)
+        monkeypatch.setattr(mfa_service, "_backup_context", lambda: dem)
+        monkeypatch.setattr(mfa_service, "_pwd_context", dem_legacy)
+
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post(
+                "/api/auth/verify-mfa",
+                json={"mfa_token": mfa_token, "code": codes[0]},
+            )
+
+        assert res.status_code == 429
+        assert res.headers.get("Retry-After")
+
+        ttl_sau = await test_redis_client.ttl(key)
+
+        assert 0 < ttl_sau <= ttl_truoc, (
+            f"Request đã bị chặn kéo dài hình phạt: TTL {ttl_truoc}s → {ttl_sau}s. "
+            "Gửi một request trước mỗi lần hết hạn là khoá nạn nhân vĩnh viễn."
+        )
+        assert dem.tong + dem_legacy.tong == 0, "Request bị chặn vẫn tiêu bcrypt."
+
+    async def test_request_bi_chan_khong_tang_bo_dem(
+        self, client, test_redis_client
+    ):
+        """Bất biến RIÊNG: bộ đếm dừng ở trần.
+
+        Tách khỏi ca TTL ở trên vì hai bất biến hỏng độc lập nhau — gộp lại thì
+        một ca đỏ không nói được nó đỏ vì cái nào.
+        """
+        from httpx import ASGITransport, AsyncClient
+
+        from app.config import settings
+        from app.main import fastapi_app
+
+        user_id, username, _secret, codes = await _seed_user_mfa(so_ma=3)
+        mfa_token = mfa_service.create_mfa_token(username, user_id)
+        key = f"mfa_attempts:{username}"
+        toi_da = settings.MFA_MAX_ATTEMPTS
+
+        await test_redis_client.set(key, str(toi_da), ex=120)
+
+        for _ in range(3):
+            async with AsyncClient(
+                transport=ASGITransport(app=fastapi_app), base_url="http://test"
+            ) as c:
+                res = await c.post(
+                    "/api/auth/verify-mfa",
+                    json={"mfa_token": mfa_token, "code": codes[0]},
+                )
+            assert res.status_code == 429
+
+        dem_sau = int(await test_redis_client.get(key))
+        assert dem_sau == toi_da, (
+            f"Ba request bị chặn đẩy bộ đếm {toi_da} → {dem_sau}. Bộ đếm bò lên "
+            "vô hạn theo số lần kẻ tấn công gõ."
+        )
+
+    async def test_dong_thoi_vuot_tran_chi_max_lan_duoc_verify(
+        self, client, test_redis_client
+    ):
+        """Từ key MỚI, gửi nhiều hơn trần: đúng `max` lần được verify."""
+        from httpx import ASGITransport, AsyncClient
+
+        from app.config import settings
         from app.main import fastapi_app
 
         user_id, username, _secret, _codes = await _seed_user_mfa(so_ma=2)
         mfa_token = mfa_service.create_mfa_token(username, user_id)
+        key = f"mfa_attempts:{username}"
+        toi_da = settings.MFA_MAX_ATTEMPTS
+        du = 3
 
         async def _thu():
             async with AsyncClient(
@@ -557,13 +721,58 @@ class TestDatChoNguyenTu:
                 )
                 return r.status_code
 
-        so_request = 3
-        ma_tt = await asyncio.gather(*(_thu() for _ in range(so_request)))
-        assert all(m == 401 for m in ma_tt), ma_tt
+        ma_tt = await asyncio.gather(*(_thu() for _ in range(toi_da + du)))
 
-        key = f"mfa_attempts:{username}"
-        assert int(await test_redis_client.get(key)) == so_request, (
-            "GET-rồi-SET không nguyên tử làm hai request cùng ghi một giá trị; "
-            "INCR trong giao dịch thì không."
+        assert ma_tt.count(401) == toi_da, (
+            f"{ma_tt.count(401)} request tới được bước xác minh, đúng ra là "
+            f"{toi_da}. Đặt chỗ không nguyên tử thì hai request cùng đọc một "
+            f"giá trị rồi cùng lọt. Mã trạng thái: {ma_tt}"
+        )
+        assert ma_tt.count(429) == du, ma_tt
+
+        dem_cuoi = int(await test_redis_client.get(key))
+        assert dem_cuoi == toi_da, (
+            f"Bộ đếm cuối {dem_cuoi}, đúng ra dừng ở {toi_da} — phần bị chặn "
+            "không được cộng thêm."
         )
         assert await test_redis_client.ttl(key) > 0
+
+    async def test_khoa_khong_han_duoc_sua_thanh_co_han(
+        self, client, test_redis_client, monkeypatch
+    ):
+        """count >= max mà TTL = -1: chặn, nhưng phải sửa thành có hạn.
+
+        Không sửa thì đó là khoá VĨNH VIỄN — hỏng theo chiều ngược lại nhưng
+        vẫn là hỏng, và không ai gỡ được nếu không vào Redis bằng tay.
+        """
+        from httpx import ASGITransport, AsyncClient
+
+        from app.config import settings
+        from app.main import fastapi_app
+
+        user_id, username, _secret, codes = await _seed_user_mfa(so_ma=3)
+        mfa_token = mfa_service.create_mfa_token(username, user_id)
+        key = f"mfa_attempts:{username}"
+
+        await test_redis_client.set(key, str(settings.MFA_MAX_ATTEMPTS))
+        assert await test_redis_client.ttl(key) == -1, "ca kiểm phải bắt đầu từ TTL -1"
+
+        dem = _DemBcrypt(mfa_service._backup_context())
+        monkeypatch.setattr(mfa_service, "_backup_context", lambda: dem)
+
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post(
+                "/api/auth/verify-mfa",
+                json={"mfa_token": mfa_token, "code": codes[0]},
+            )
+
+        assert res.status_code == 429
+        ttl_sau = await test_redis_client.ttl(key)
+        assert ttl_sau > 0, (
+            "Bộ đếm chạm trần mà không có hạn thì khoá là VĨNH VIỄN; "
+            f"TTL sau khi xử lý vẫn là {ttl_sau}."
+        )
+        assert int(await test_redis_client.get(key)) == settings.MFA_MAX_ATTEMPTS
+        assert dem.tong == 0

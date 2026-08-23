@@ -4,6 +4,11 @@
 # Testing
 Faker==35.2.2
 fakeredis==2.32.0
+# Bộ thông dịch Lua cho fakeredis. Đường đặt chỗ MFA dùng một script Lua
+# server-side (app/database.py); thiếu lupa thì fakeredis trả
+# "unknown command `eval`" và MỌI ca MFA sẽ đỏ vì lý do môi trường —
+# tệ hơn nữa là bộ test sẽ không còn chạy đúng thứ production chạy.
+lupa==2.8
 iniconfig==2.3.0
 pluggy==1.6.0
 pytest==8.4.2

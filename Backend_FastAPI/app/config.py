@@ -289,12 +289,18 @@ class Settings(BaseSettings):
     # Điều kiện BẬT (phải đủ cả ba):
     #   1. Bản có READER hiểu v2 đã lên production và trở thành mốc rollback
     #      an toàn (tức là mọi ảnh còn nằm trong tầm rollback đều đọc được v2);
-    #   2. Pepper thật đã có trong .env.production và backend khởi động được;
+    #   2. Pepper thật đã có trong .env.production và backend khởi động được.
+    #      (Pepper là BẮT BUỘC ở production ngay từ pha A — startup validator
+    #      chặn. Chỉ ĐƯỜNG ĐỌC/GHI legacy ở tầng service là không cần tới nó.)
     #   3. Đã xác nhận không còn kế hoạch lùi về ảnh trước mốc ở (1).
     # Trước khi đủ ba điều đó, pha A vẫn ghi legacy — nhưng bằng
     # MFA_BACKUP_CODE_BCRYPT_ROUNDS (12) thay vì rounds mật khẩu (15), nên
     # quét legacy rẻ đi 8 lần mà ảnh cũ vẫn xác minh được (bcrypt tự mang tham
     # số chi phí trong chuỗi hash).
+    # Đây là cờ DEPLOY, không phải cờ runtime: Settings dựng một lần lúc import,
+    # nên bật nó đòi dựng lại backend + celery-worker + celery-beat. Và vì nó
+    # đổi định dạng dữ liệu ghi ra, bật pha B là một thao tác production RIÊNG,
+    # cần GO riêng.
     MFA_BACKUP_CODE_V2_WRITER_ENABLED: bool = Field(
         default=False, validation_alias="MFA_BACKUP_CODE_V2_WRITER_ENABLED"
     )
