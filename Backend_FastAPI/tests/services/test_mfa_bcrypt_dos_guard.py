@@ -508,9 +508,14 @@ class TestDatChoNguyenTu:
 
         Ca đồng thời ở dưới KHÔNG phân biệt được nguyên tử với không nguyên tử:
         dưới fakeredis trong một event loop, cửa sổ giữa GET và INCR gần như
-        không mở ra, nên bản đọc-rồi-quyết-ở-client vẫn xanh (đã đo). Bất biến
-        thật sự là "quyết định nằm TRONG Redis", và nó đo được trực tiếp: đúng
-        MỘT lệnh, và lệnh đó là script.
+        không mở ra, nên bản đọc-rồi-quyết-ở-client vẫn xanh (đã đo). Ca này
+        khoá một thứ khác và hẹp hơn: quyết định được lấy Ở PHÍA SERVER, bằng
+        đúng một lệnh.
+
+        ⚠️ Giới hạn: nó KHÔNG thay được phép đo trên Redis thật. "Một lệnh
+        eval" không chứng minh script chạy đúng dưới tải đồng thời thật —
+        chuyện đó do ``tests/integration/test_mfa_reservation_real_redis.py``
+        đo, trên server thật, và tệp ấy phải nằm trong cùng tier CI.
         """
         from app import database as db_mod
 
@@ -546,6 +551,8 @@ class TestDatChoNguyenTu:
             None,
             [],
             [1, 2],
+            [1, 0, 300, 0],        # count = 0: ngoài miền, Lua không sinh ra được
+            [1, -1, 300, 0],       # count âm
             [1, 1, 0, 0],          # TTL = 0: không chứng minh được hạn
             [1, 1, -1, 0],         # TTL = -1: khoá vĩnh viễn
             [-1, 0, 0, 0],         # bộ đếm hỏng, không parse được
@@ -606,6 +613,75 @@ class TestDatChoNguyenTu:
         async with AsyncSessionLocal() as s:
             u = await s.get(models.User, user_id)
             assert len(json.loads(u.backup_codes_hashed)) == 3
+
+
+class TestBoDemNgoaiMienFailClosed:
+    """Bộ đếm ở trạng thái máy không thể tự sinh ra ⇒ FAIL CLOSED.
+
+    Trước đây Lua chỉ chặn ``tonumber(cur) == nil``. Một khoá mang ``"-1"`` lọt
+    qua vế ``n >= max``, rơi xuống ``INCR`` thành ``0``, và script trả
+    ``allowed=1``. Nói cách khác: một trạng thái HỎNG tự chuyển thành một lượt
+    xác minh hợp lệ, và kẻ ghi được vào Redis còn được cấp thêm lượt. Đúng
+    hướng phải là từ chối, không phải "tự chữa".
+    """
+
+    @pytest.mark.parametrize(
+        "gia_tri", ["0", "-1", "1.5", "-7", "0.0", "khong-phai-so"]
+    )
+    async def test_helper_tu_choi_bo_dem_ngoai_mien(
+        self, test_redis_client, gia_tri
+    ):
+        from app.database import safe_redis_reserve_attempt
+
+        key = f"mfa_attempts:tt_{uuid.uuid4().hex[:8]}"
+        await test_redis_client.set(key, gia_tri, ex=120)
+        ttl_truoc = await test_redis_client.ttl(key)
+
+        assert await safe_redis_reserve_attempt(key, 300, 5) is None, (
+            f"Bộ đếm {gia_tri!r} được chấp nhận — trạng thái hỏng vừa biến "
+            "thành một lượt xác minh."
+        )
+
+        # Và không được ĐỘNG vào khoá: không INCR, không gia hạn.
+        assert await test_redis_client.get(key) == gia_tri, (
+            "Nhánh từ chối vẫn sửa giá trị khoá."
+        )
+        ttl_sau = await test_redis_client.ttl(key)
+        assert 0 < ttl_sau <= ttl_truoc, (
+            f"Nhánh từ chối vẫn đụng TTL: {ttl_truoc}s → {ttl_sau}s."
+        )
+
+    @pytest.mark.parametrize("gia_tri", ["0", "-1", "1.5"])
+    async def test_route_tra_503_va_0_bcrypt_khi_bo_dem_hong(
+        self, client, test_redis_client, monkeypatch, gia_tri
+    ):
+        from httpx import ASGITransport, AsyncClient
+
+        from app.main import fastapi_app
+
+        user_id, username, _secret, codes = await _seed_user_mfa(so_ma=3)
+        mfa_token = mfa_service.create_mfa_token(username, user_id)
+        key = f"mfa_attempts:{username}"
+        await test_redis_client.set(key, gia_tri, ex=120)
+
+        dem = _DemBcrypt(mfa_service._backup_context())
+        dem_legacy = _DemBcrypt(mfa_service._pwd_context)
+        monkeypatch.setattr(mfa_service, "_backup_context", lambda: dem)
+        monkeypatch.setattr(mfa_service, "_pwd_context", dem_legacy)
+
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c:
+            res = await c.post(
+                "/api/auth/verify-mfa",
+                json={"mfa_token": mfa_token, "code": codes[0]},
+            )
+
+        assert res.status_code == 503, (
+            f"Bộ đếm {gia_tri!r} mà route vẫn cho đi tiếp (HTTP {res.status_code})."
+        )
+        assert dem.tong + dem_legacy.tong == 0
+        assert await test_redis_client.get(key) == gia_tri
 
 
 class TestKhongKeoDaiKhoaMFA:

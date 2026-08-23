@@ -272,7 +272,13 @@ end
 local cur = redis.call('GET', KEYS[1])
 if cur then
   local n = tonumber(cur)
-  if n == nil then
+  -- Bộ đếm CHỈ hợp lệ khi là số nguyên >= 1. Máy trạng thái này không bao giờ
+  -- tự sinh ra 0, số âm hay số thập phân, nên gặp chúng nghĩa là dữ liệu đã bị
+  -- ai đó/cái gì đó ghi đè. Trước đây chỉ chặn `nil`, nên "-1" lọt qua vế
+  -- `n >= max`, rơi xuống INCR thành 0 và được CẤP THÊM LƯỢT — một trạng thái
+  -- hỏng tự chuyển thành quyền xác minh. Fail closed: không INCR, không đụng
+  -- TTL, không cho qua.
+  if n == nil or n < 1 or n ~= math.floor(n) then
     return {-1, 0, 0, 0}
   end
   if n >= max_attempts then
@@ -357,8 +363,11 @@ async def safe_redis_reserve_attempt(
         # lại một bộ đếm không bao giờ tự hết.
         log.error("Redis RESERVE: TTL không dương", key=key, ttl=ttl)
         return None
-    if dem < 0:
-        log.error("Redis RESERVE: bộ đếm âm", key=key, dem=dem)
+    if dem < 1:
+        # Kiểm ĐỘC LẬP với Lua, không phải kiểm thừa: nếu script bị đổi, bị
+        # thay bản khác, hay Redis trả payload lạ, tầng này vẫn phải từ chối.
+        # Mọi lượt hợp lệ đều có count >= 1 (cho qua: >=1; bị chặn: >= max >= 1).
+        log.error("Redis RESERVE: bộ đếm ngoài miền", key=key, dem=dem)
         return None
 
     if da_sua_han:
