@@ -3,7 +3,7 @@
 Vì sao tệp này tồn tại: toàn bộ pytest còn lại chạy trên FakeRedis —
 ``tests/fixtures/redis.py`` thay ``redis.asyncio.from_url`` TRƯỚC khi app được
 import. ``lupa`` chỉ là trình thực thi Lua cho fakeredis, nó **không** phải bằng
-chứng rằng script chạy đúng trên Redis production: ngữ nghĩa ``INCR`` trên giá
+chứng rằng script chạy đúng trên Redis thật: ngữ nghĩa ``INCR`` trên giá
 trị lạ, kiểu trả về của ``EVAL``, tính nguyên tử dưới tải đồng thời thật — cả
 ba đều là thứ chỉ Redis thật trả lời được.
 
@@ -37,19 +37,34 @@ def _redis_url() -> str:
     return os.getenv("REDIS_URL") or "redis://localhost:6379/0"
 
 
-@pytest_asyncio.fixture
-async def redis_that():
-    """Kết nối Redis THẬT, dựng bằng callable gốc (trước khi bị patch).
+def _thong_bao_an_toan(pha: str, exc: BaseException) -> str:
+    """Thông báo lỗi KHÔNG mang bí mật.
 
-    Ba phép kiểm trước khi trả về, để ca kiểm không âm thầm chạy trên FakeRedis:
-    lớp không thuộc gói fakeredis, ``PING`` tới được, và ``INFO`` trả về thông
-    tin server thật.
+    ``REDIS_URL`` có dạng ``redis://user:password@host/db``. In nguyên văn URL
+    — hoặc in ``repr`` của exception, vì redis-py nhét endpoint (và do đó cả
+    userinfo) vào message — là đẩy credential vào log CI, nơi ai đọc được job
+    cũng đọc được, và log thì còn lại lâu hơn cái mật khẩu.
+
+    Chỉ giữ ba thứ đủ để sửa lỗi: PHA thất bại, TÊN LỚP exception, và chỗ cần
+    kiểm. Không endpoint, không message của exception, không query string.
     """
-    url = _redis_url()
+    return (
+        f"Không {pha} được Redis thật ({type(exc).__name__}). "
+        "Kiểm biến môi trường REDIS_URL và service redis của cổng CI. "
+        "Máy trạng thái đặt chỗ chưa được chứng minh trên Redis thật."
+    )
+
+
+async def _mo_ket_noi(url: str):
+    """Dựng + kiểm client Redis thật, hoặc ĐỎ với thông báo không rò bí mật.
+
+    Tách khỏi fixture để ca hồi quy chống rò credential gọi được ĐÚNG đường lỗi
+    này, chứ không chỉ kiểm hàm dựng thông báo.
+    """
     try:
         client = _original_from_url_async(url, decode_responses=True)
     except Exception as exc:  # pragma: no cover - lỗi cấu hình
-        pytest.fail(f"Không dựng được client Redis thật từ {url!r}: {exc!r}")
+        pytest.fail(_thong_bao_an_toan("dựng client", exc))
 
     mo_dun = type(client).__module__ or ""
     assert "fakeredis" not in mo_dun, (
@@ -63,14 +78,23 @@ async def redis_that():
     except Exception as exc:
         await client.aclose()
         # KHÔNG skip: không đo được thì phải đỏ.
-        pytest.fail(
-            f"Không kết nối được Redis thật tại {url!r}: {exc!r}. "
-            "Máy trạng thái đặt chỗ chưa được chứng minh trên Redis production."
-        )
+        pytest.fail(_thong_bao_an_toan("kết nối", exc))
 
     assert info.get("redis_version"), (
         "INFO không trả redis_version — đây không phải server thật"
     )
+    return client
+
+
+@pytest_asyncio.fixture
+async def redis_that():
+    """Kết nối Redis THẬT, dựng bằng callable gốc (trước khi bị patch).
+
+    Ba phép kiểm trước khi trả về, để ca kiểm không âm thầm chạy trên FakeRedis:
+    lớp không thuộc gói fakeredis, ``PING`` tới được, và ``INFO`` trả về thông
+    tin server thật.
+    """
+    client = await _mo_ket_noi(_redis_url())
     try:
         yield client
     finally:
@@ -90,6 +114,53 @@ async def dat_cho_that(redis_that, monkeypatch):
 
 def _khoa_moi() -> str:
     return f"mfa_attempts:itest_{uuid.uuid4().hex}"
+
+
+# Chuỗi mồi. Nó xuất hiện ở CẢ URL lẫn message của exception, đúng hai nguồn
+# mà đường lỗi từng chép nguyên văn vào log.
+_MOI = "s3cr3t-canary-khong-duoc-log"
+
+
+class TestKhongRoCredential:
+    """Đường LỖI không được rò credential vào log CI.
+
+    ``REDIS_URL`` mang ``user:password``. Một lượt CI hỏng là một lượt in
+    secret ra chỗ ai đọc được job cũng đọc được — và log sống lâu hơn mật khẩu.
+    Ca kiểm nằm ở đây, cạnh đường lỗi, chứ không phải ở một tệp guard xa xôi.
+    """
+
+    async def test_ham_dung_thong_bao_khong_mang_bi_mat(self):
+        exc = ConnectionError(
+            f"Error 111 connecting to redis://admin:{_MOI}@db.noi.bo:6379/0"
+        )
+        thong_bao = _thong_bao_an_toan("kết nối", exc)
+
+        for xau in (_MOI, "admin", "db.noi.bo", "redis://"):
+            assert xau not in thong_bao, (
+                f"Thông báo lỗi chứa {xau!r} — lấy từ message của exception."
+            )
+        # Vẫn phải đủ dùng để sửa lỗi.
+        assert "ConnectionError" in thong_bao
+        assert "REDIS_URL" in thong_bao
+
+    async def test_duong_loi_that_khong_ro_credential(self):
+        """Đi qua ĐÚNG ``_mo_ket_noi``, không phải một bản mô phỏng.
+
+        Port 1 trên loopback không có ai nghe ⇒ kết nối bị từ chối ngay, nên ca
+        này nhanh và tất định.
+        """
+        url = f"redis://canary_user:{_MOI}@127.0.0.1:1/0?token={_MOI}"
+
+        with pytest.raises(BaseException) as thong_tin:
+            await _mo_ket_noi(url)
+
+        thong_bao = str(thong_tin.value)
+        for xau in (_MOI, "canary_user", "127.0.0.1", "token=", "@"):
+            assert xau not in thong_bao, (
+                f"Thông báo lỗi chứa {xau!r}. Với REDIS_URL thật, đó là "
+                f"credential nằm nguyên trong log CI. Thông báo: {thong_bao!r}"
+            )
+        assert "REDIS_URL" in thong_bao
 
 
 class TestRedisThat:
