@@ -32,7 +32,9 @@ from ..middleware.csrf import set_csrf_cookie  # ✅ CSRF Protection
 from ..database import (
     safe_redis_delete,
     safe_redis_exists,
+    safe_redis_expire,
     safe_redis_get,
+    safe_redis_incr,
     safe_redis_pipeline,
     safe_redis_set,
     safe_redis_ttl,
@@ -1326,30 +1328,53 @@ async def verify_mfa(
         except Exception as e:
             log.error("Redis MFA token blacklist check failed", error=str(e))
 
-    # 2. Check per-user MFA attempt limit (Layer 2)
+    # 2. RESERVATION (Layer 2) — ĐẶT CHỖ TRƯỚC CHI PHÍ CPU.
+    #
+    # ⚠️ Bản trước: GET đếm ở đây, rồi GET+SET tăng đếm SAU khi verify. Hai lỗi:
+    #   * bộ đếm tăng sau bcrypt, nên năm request đầu đều trả giá đầy đủ —
+    #     đo được 14,1s CPU mỗi mã sai. Bộ đếm không phải hàng rào chi phí.
+    #   * GET rồi SET không nguyên tử: hai request đồng thời cùng đọc n, cùng
+    #     ghi n+1, và cùng lọt qua kiểm tra.
+    # Nay: một INCR nguyên tử TRƯỚC khi verify. Vượt trần ⇒ 429 và không tốn
+    # một phép bcrypt nào.
     attempt_key = f"mfa_attempts:{username}"
-    try:
-        attempts_str = await safe_redis_get(attempt_key)
-        attempts = int(attempts_str) if attempts_str else 0
-        if attempts >= settings.MFA_MAX_ATTEMPTS:
-            # Get remaining TTL from Redis for Retry-After header
-            attempt_ttl = await safe_redis_ttl(attempt_key)
-            retry_after = max(attempt_ttl, 60) if attempt_ttl > 0 else settings.MFA_ATTEMPT_WINDOW_MINUTES * 60
-            log.warning(
-                "mfa_rate_limited", user_id=user_id, username=username,
-                attempts=attempts, retry_after=retry_after, action="mfa.rate_limited",
-            )
-            return JSONResponse(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                content={
-                    "detail": "Quá nhiều lần thử xác thực. Vui lòng thử lại sau.",
-                },
-                headers={"Retry-After": str(retry_after)},
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        log.error("Redis MFA attempt check failed", error=str(e))
+    window = settings.MFA_ATTEMPT_WINDOW_MINUTES * 60
+    attempts_used = await safe_redis_incr(attempt_key)
+
+    if attempts_used is None:
+        # FAIL CLOSED: không chứng minh được đặt chỗ thì không tiêu CPU.
+        # Đây là đường brute-force OTP; không có bộ đếm nghĩa là không có trần.
+        # (Khác với fail-open có chủ đích của blacklist JWT trên /profile.)
+        log.error(
+            "mfa_reservation_unavailable", username=username,
+            action="mfa.reservation_failed",
+        )
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "detail": "Không xác thực được lúc này. Vui lòng thử lại sau.",
+            },
+            headers={"Retry-After": "60"},
+        )
+
+    # Trượt cửa sổ mỗi lần thử, giữ nguyên hành vi cũ (SET ... ex=window).
+    await safe_redis_expire(attempt_key, window)
+
+    if attempts_used > settings.MFA_MAX_ATTEMPTS:
+        attempt_ttl = await safe_redis_ttl(attempt_key)
+        retry_after = max(attempt_ttl, 60) if attempt_ttl > 0 else window
+        log.warning(
+            "mfa_rate_limited", user_id=user_id, username=username,
+            attempts=attempts_used, retry_after=retry_after,
+            action="mfa.rate_limited",
+        )
+        return JSONResponse(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            content={
+                "detail": "Quá nhiều lần thử xác thực. Vui lòng thử lại sau.",
+            },
+            headers={"Retry-After": str(retry_after)},
+        )
 
     # 3. Load user
     user = await user_service.get_user_by_username(db, username=username)
@@ -1369,16 +1394,10 @@ async def verify_mfa(
     is_valid = await mfa_service.verify_mfa_code(db, user, mfa_data.code)
 
     if not is_valid:
-        # Increment per-user MFA counter (Layer 2)
-        l2_blocked = False
-        try:
-            window = settings.MFA_ATTEMPT_WINDOW_MINUTES * 60
-            current = await safe_redis_get(attempt_key)
-            new_count = (int(current) if current else 0) + 1
-            await safe_redis_set(attempt_key, str(new_count), ex=window)
-            l2_blocked = new_count >= settings.MFA_MAX_ATTEMPTS
-        except Exception as e:
-            log.error("Redis MFA attempt increment failed", error=str(e))
+        # Bộ đếm ĐÃ tăng ở bước 2 (reservation). Không tăng lại ở đây — nếu
+        # không thì một lần thử tính hai lần và C1 (đếm đúng +1 mỗi lần sai)
+        # sẽ sai.
+        l2_blocked = attempts_used >= settings.MFA_MAX_ATTEMPTS
 
         # Feed into AccountLockoutService (Layer 3) only if L2 hasn't already blocked.
         # Avoids double-punish: L2 blocks fast OTP brute-force, L3 tracks cumulative auth failures.

@@ -240,6 +240,32 @@ class Settings(BaseSettings):
         default=["admin", "manager"], validation_alias="MFA_ENFORCE_ROLES"
     )  # Roles that MUST enable MFA (OWASP ASVS 5.0)
 
+    # Pepper (khoá HMAC) cho SELECTOR của backup code v2.
+    #
+    # Selector cho phép tra ĐÚNG MỘT candidate thay vì quét tuyến tính toàn bộ
+    # danh sách bcrypt — đó là chỗ chi phí O(n) bị cắt. Nó PHẢI có khoá: nếu
+    # selector chỉ là hash trần, người đọc được DB có thể precompute bảng tra
+    # cho toàn bộ không gian 40-bit của mã.
+    #
+    # KHÔNG có default: thiếu hoặc rỗng thì đường backup code FAIL CLOSED
+    # (mfa_service._get_backup_pepper). Sinh bằng:
+    #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+    MFA_BACKUP_CODE_PEPPER: str = Field(
+        default="", validation_alias="MFA_BACKUP_CODE_PEPPER"
+    )
+    # Work factor RIÊNG cho backup code. Mã do hệ sinh, 40-bit ngẫu nhiên đều —
+    # khác hẳn mật khẩu người chọn — nên không cần work factor của mật khẩu.
+    # OWASP: một phép hash nên dưới 1 giây; rounds=15 đo được 1,77s/phép.
+    MFA_BACKUP_CODE_BCRYPT_ROUNDS: int = Field(
+        default=12, validation_alias="MFA_BACKUP_CODE_BCRYPT_ROUNDS"
+    )
+    # Trần thread cho bcrypt của MFA. bcrypt là CPU-bound và đồng bộ; ném vào
+    # default executor là mở một hàng đợi không trần, biến mọi request thành
+    # một suất CPU. Con số này là resource governor, không phải tinh chỉnh.
+    MFA_BCRYPT_MAX_WORKERS: int = Field(
+        default=2, validation_alias="MFA_BCRYPT_MAX_WORKERS"
+    )
+
     # -- SMS Marketing: token + build (PR-3) --
     # Short-link token: HMAC hash secret (lookup) + Fernet keyring (re-export).
     # Prod cần giá trị thật. CỐ Ý KHÔNG fail-fast startup (để không gãy backend
@@ -393,6 +419,15 @@ class Settings(BaseSettings):
                 "(32 url-safe base64 bytes). Generate with: "
                 "Fernet.generate_key().decode()"
             ) from exc
+        # Backup code v2 selector cần pepper. Thiếu nó thì đường backup code
+        # fail-closed lúc CHẠY — bắt ở startup để lỗi cấu hình không biến thành
+        # "người dùng không đăng nhập được bằng backup code" giữa đêm.
+        if not self.MFA_BACKUP_CODE_PEPPER:
+            raise RuntimeError(
+                "CRITICAL: MFA_BACKUP_CODE_PEPPER must be set in production. "
+                "Generate with: python -c \"import secrets; "
+                "print(secrets.token_urlsafe(32))\""
+            )
         if self.LOG_LEVEL == "DEBUG":
             raise LoiCauHinh(
                 "CRITICAL: LOG_LEVEL=DEBUG is not allowed in production. Use INFO or higher."

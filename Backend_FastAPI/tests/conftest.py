@@ -82,6 +82,11 @@ print("INFO [conftest.py]: App components imported successfully.")
 # Tests don't have MFA enabled for admin/manager fixtures by default.
 # Individual tests can re-enable via monkeypatch if needed.
 settings.MFA_ENFORCE_ROLES = []
+# Pepper cho selector của backup code v2. Đường backup code FAIL CLOSED khi
+# thiếu (mfa_service._get_backup_pepper), nên bộ test phải có một giá trị —
+# giống cách MFA_ENCRYPTION_KEY được đặt cho từng module MFA. Giá trị này chỉ
+# dùng trong test; production bắt buộc set thật và config.py chặn ở startup.
+settings.MFA_BACKUP_CODE_PEPPER = "test-only-backup-code-pepper-do-not-reuse"
 
 
 # --- IMPORT CONSTANTS ---

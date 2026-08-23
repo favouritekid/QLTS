@@ -9,15 +9,19 @@ Pure Python service (no FastAPI imports). Follows service isolation pattern:
 
 Security:
 - TOTP secrets encrypted at rest with Fernet
-- Backup codes stored as bcrypt hashes (NOT reversible)
+- Backup codes: selector HMAC có khoá + bcrypt verifier (storage v2)
 - Temporary setup secrets stored in Redis (TTL 10min) to avoid orphaned DB data
 - All operations emit structured audit logs
 """
 
+import asyncio
 import base64
+import hashlib
+import hmac
 import io
 import json
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
@@ -25,11 +29,15 @@ import pyotp
 import qrcode
 import structlog
 from cryptography.fernet import Fernet, InvalidToken as FernetInvalidToken
+from passlib.context import CryptContext
+from sqlalchemy.exc import InvalidRequestError as SQLAlchemyInvalidRequest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
-from ..security import pwd_context as _pwd_context  # Shared bcrypt context (rounds=15)
+# Context mật khẩu dùng chung (rounds=15) — CHỈ còn dùng cho backup code
+# LEGACY. Mã v2 dùng context riêng, xem ``_backup_context()``.
+from ..security import pwd_context as _pwd_context
 from ..utils.exceptions import BusinessRuleViolation, InvalidCredentials
 
 log = structlog.get_logger(__name__)
@@ -119,41 +127,277 @@ def decrypt_secret(ciphertext: str) -> str:
 
 
 # =============================================================================
-# BACKUP CODES (bcrypt hashed - NOT reversible)
+# BACKUP CODES — storage v2 (HMAC selector + bcrypt verifier)
 # =============================================================================
+#
+# ⚠️ Vì sao đổi: bản trước lưu ``json.dumps(list[bcrypt_hash])`` và xác minh
+# bằng cách quét TUYẾN TÍNH, bcrypt từng mục, với CHÍNH context mật khẩu
+# (rounds=15). Đo trong container: một phép bcrypt-15 = 1,77s, nên một mã sai
+# = 8 × 1,77 ≈ 14,1s CPU **và chặn event loop**. Tệ hơn: ``verify_mfa_code``
+# thử TOTP trước rồi RƠI XUỐNG backup, nên cả một mã TOTP 6 số gõ nhầm cũng
+# trả giá đầy đủ. Đó là khuếch đại CPU, không phải test chậm.
+#
+# Mô hình v2, mỗi mục là một dict trong CÙNG cột Text (không cần migration):
+#
+#     {"v": 2, "sel": "<hex>", "vfy": "<bcrypt hash>"}
+#
+#   * ``sel`` = HMAC-SHA256(pepper, code) — CÓ KHOÁ. Dùng để chọn ĐÚNG MỘT
+#     candidate. Không có pepper thì người đọc được DB vẫn không precompute
+#     được bảng tra cho không gian 40-bit của mã.
+#   * ``vfy`` = bcrypt của chính mã. Selector CHỈ để chọn; bí mật vẫn do bcrypt
+#     xác minh. Không dùng fast hash trần cho mã keyspace nhỏ.
+#
+# Chi phí sau khi đổi:
+#   mã sai hình dạng      → 0 bcrypt
+#   TOTP 6 số sai         → 0 bcrypt backup
+#   selector không khớp   → 0 bcrypt
+#   selector khớp         → ĐÚNG 1 bcrypt
+#
+# Top level vẫn là JSON **list** chứ không phải envelope ``{"v":2,"codes":[…]}``
+# có chủ đích: hợp đồng hiện hữu mà ``TestBackupCodes`` khoá là
+# ``len(json.loads(updated))`` giảm đúng 1. Version nằm ở TỪNG mục, nên một
+# danh sách trộn legacy + v2 vẫn biểu diễn được — cần thiết vì mã legacy đang
+# phát hành KHÔNG bị vô hiệu.
 
-def generate_backup_codes(count: int = 8) -> Tuple[List[str], List[str]]:
+_BACKUP_CODE_BYTES = 5          # secrets.token_hex(5) → 10 ký tự hex
+_BACKUP_CODE_LEN = 10
+_BACKUP_CODE_ALPHABET = set("0123456789abcdef")
+_TOTP_CODE_LEN = 6
+
+CODE_SHAPE_TOTP = "totp"
+CODE_SHAPE_BACKUP = "backup"
+CODE_SHAPE_INVALID = "invalid"
+
+
+def classify_code_shape(code: str) -> str:
+    """Phân tuyến theo HÌNH DẠNG, trước mọi chi phí CPU.
+
+    Đây là hàng rào đầu tiên: 6 chữ số chỉ đi đường TOTP, 10 hex thường chỉ đi
+    đường backup, còn lại từ chối ngay. Không có nhánh nào "thử cái này rồi rơi
+    xuống cái kia" — chính cú rơi ấy là thứ biến một mã TOTP gõ nhầm thành 8
+    phép bcrypt.
     """
-    Generate backup codes and their bcrypt hashes.
+    if not isinstance(code, str):
+        return CODE_SHAPE_INVALID
+    if len(code) == _TOTP_CODE_LEN and code.isdigit():
+        return CODE_SHAPE_TOTP
+    if len(code) == _BACKUP_CODE_LEN and all(c in _BACKUP_CODE_ALPHABET for c in code):
+        return CODE_SHAPE_BACKUP
+    return CODE_SHAPE_INVALID
+
+
+def _get_backup_pepper() -> bytes:
+    """Pepper cho selector. Thiếu hoặc rỗng ⇒ FAIL CLOSED.
+
+    Cùng khuôn với ``_get_fernet``: bí mật bắt buộc, không default yếu. Cấu
+    hình production còn chặn ở startup (``config.py``) để lỗi thiếu env không
+    biến thành "không ai dùng được backup code" phát hiện lúc 2 giờ sáng.
+    """
+    pepper = getattr(settings, "MFA_BACKUP_CODE_PEPPER", "") or ""
+    if not pepper:
+        raise BusinessRuleViolation(
+            detail=(
+                "MFA backup code pepper not configured. "
+                "Set MFA_BACKUP_CODE_PEPPER in environment."
+            )
+        )
+    return pepper.encode() if isinstance(pepper, str) else pepper
+
+
+def _selector(code: str) -> str:
+    """HMAC-SHA256(pepper, code) → hex. Rẻ, có khoá, dùng để CHỌN candidate."""
+    return hmac.new(_get_backup_pepper(), code.encode(), hashlib.sha256).hexdigest()
+
+
+def _backup_context() -> CryptContext:
+    """Context bcrypt RIÊNG cho backup code.
+
+    KHÔNG dùng chung với mật khẩu: mã backup là 40-bit ngẫu nhiên đều do hệ
+    sinh, không phải bí mật người chọn, nên không cần work factor của mật khẩu.
+    Global password rounds=15 giữ NGUYÊN trong PR này.
+    """
+    global _backup_ctx_cache
+    rounds = int(getattr(settings, "MFA_BACKUP_CODE_BCRYPT_ROUNDS", 12))
+    if _backup_ctx_cache is None or _backup_ctx_cache[0] != rounds:
+        _backup_ctx_cache = (
+            rounds,
+            CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=rounds),
+        )
+    return _backup_ctx_cache[1]
+
+
+_backup_ctx_cache: Optional[Tuple[int, CryptContext]] = None
+
+
+# --- Resource governor: bcrypt KHÔNG được chạy trên event loop ---------------
+#
+# bcrypt là CPU-bound và đồng bộ. Chạy thẳng trong coroutine thì nó chặn event
+# loop: mọi request khác của cùng worker đứng im suốt thời gian đó. Ném vào
+# default executor cũng sai — hàng đợi mặc định rộng (min(32, cpu+4)), nên tải
+# đồng thời biến thành bấy nhiêu suất CPU.
+#
+# Ở đây: một pool CÓ TRẦN, cộng một semaphore để phần vượt trần XẾP HÀNG thay
+# vì nhân bản.
+_bcrypt_executor: Optional[ThreadPoolExecutor] = None
+_bcrypt_gate: Optional[asyncio.Semaphore] = None
+_bcrypt_gate_loop = None
+
+
+def _max_bcrypt_workers() -> int:
+    return max(1, int(getattr(settings, "MFA_BCRYPT_MAX_WORKERS", 2)))
+
+
+def _get_bcrypt_executor() -> ThreadPoolExecutor:
+    global _bcrypt_executor
+    if _bcrypt_executor is None:
+        _bcrypt_executor = ThreadPoolExecutor(
+            max_workers=_max_bcrypt_workers(),
+            thread_name_prefix="mfa-bcrypt",
+        )
+    return _bcrypt_executor
+
+
+def _get_bcrypt_gate() -> asyncio.Semaphore:
+    """Semaphore gắn với event loop hiện tại.
+
+    Test suite dựng loop mới cho mỗi ca, và một ``asyncio.Semaphore`` tạo ở
+    loop khác sẽ hỏng khi await. Nên gắn theo loop thay vì cache toàn cục mù.
+    """
+    global _bcrypt_gate, _bcrypt_gate_loop
+    loop = asyncio.get_running_loop()
+    if _bcrypt_gate is None or _bcrypt_gate_loop is not loop:
+        _bcrypt_gate = asyncio.Semaphore(_max_bcrypt_workers())
+        _bcrypt_gate_loop = loop
+    return _bcrypt_gate
+
+
+async def _run_bcrypt(fn, *args):
+    """Chạy một phép bcrypt NGOÀI event loop, dưới trần tài nguyên."""
+    async with _get_bcrypt_gate():
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(_get_bcrypt_executor(), fn, *args)
+
+
+# --- Sinh mã -----------------------------------------------------------------
+
+def _build_v2_entry(code: str) -> dict:
+    return {
+        "v": 2,
+        "sel": _selector(code),
+        "vfy": _backup_context().hash(code),
+    }
+
+
+def generate_backup_codes(count: int = 8) -> Tuple[List[str], List[dict]]:
+    """Sinh backup code + mục lưu trữ v2.
+
+    Giữ nguyên chữ ký đồng bộ vì ``TestBackupCodes`` gọi trực tiếp. Đường
+    service dùng ``agenerate_backup_codes`` để không chặn event loop.
 
     Returns:
-        (plaintext_codes, bcrypt_hashes): Plaintext shown once to user, hashes stored in DB.
+        (plaintext_codes, entries): plaintext hiện MỘT LẦN cho người dùng;
+        ``entries`` là list dict v2, ``json.dumps`` được.
     """
-    plaintext_codes = [secrets.token_hex(5) for _ in range(count)]  # 10 hex chars, 40-bit entropy
-    bcrypt_hashes = [_pwd_context.hash(code) for code in plaintext_codes]
-    return plaintext_codes, bcrypt_hashes
+    plaintext_codes = [
+        secrets.token_hex(_BACKUP_CODE_BYTES) for _ in range(count)
+    ]  # 10 ký tự hex, 40-bit entropy — GIỮ NGUYÊN định dạng người dùng thấy
+    entries = [_build_v2_entry(code) for code in plaintext_codes]
+    return plaintext_codes, entries
 
 
-def verify_backup_code(
-    input_code: str, hashed_codes_json: str
-) -> Tuple[bool, str]:
-    """
-    Verify input against bcrypt backup code hashes.
+async def agenerate_backup_codes(count: int = 8) -> Tuple[List[str], List[dict]]:
+    """Bản async: 8 phép bcrypt chạy ngoài event loop.
 
-    Returns:
-        (matched, updated_hashes_json): If matched, the used hash is removed.
+    Bản trước gọi thẳng ``_pwd_context.hash`` 8 lần trong coroutine, tức
+    enable/regenerate chặn event loop ~14s TRƯỚC cả bước xác minh.
     """
+    return await _run_bcrypt(generate_backup_codes, count)
+
+
+# --- Xác minh ----------------------------------------------------------------
+
+def _load_entries(hashed_codes_json: str) -> List:
     if not hashed_codes_json:
+        return []
+    try:
+        loaded = json.loads(hashed_codes_json)
+    except (ValueError, TypeError):
+        return []
+    return loaded if isinstance(loaded, list) else []
+
+
+def _is_v2(entry) -> bool:
+    return isinstance(entry, dict) and entry.get("v") == 2
+
+
+def _match_v2_index(entries: List, code: str) -> Optional[int]:
+    """Chỉ số của mục v2 có selector khớp — hoặc None. KHÔNG chạy bcrypt.
+
+    So sánh bằng ``compare_digest`` để không rò rỉ vị trí khớp qua thời gian.
+    """
+    want = _selector(code)
+    for i, entry in enumerate(entries):
+        if _is_v2(entry) and hmac.compare_digest(str(entry.get("sel", "")), want):
+            return i
+    return None
+
+
+def verify_backup_code(input_code: str, hashed_codes_json: str) -> Tuple[bool, str]:
+    """Xác minh backup code. Đồng bộ — giữ hợp đồng cho unit test hiện hữu.
+
+    Chi phí bcrypt:
+      * sai hình dạng            → 0
+      * v2, selector không khớp  → 0
+      * v2, selector khớp        → đúng 1
+      * legacy (list[str])       → quét, nhưng CHỈ khi hình dạng đúng 10-hex
+
+    Returns:
+        (matched, updated_json): khớp thì mục đã dùng bị gỡ khỏi danh sách.
+    """
+    entries = _load_entries(hashed_codes_json)
+    if not entries:
         return False, hashed_codes_json
 
-    hashes = json.loads(hashed_codes_json)
-    for i, h in enumerate(hashes):
-        if _pwd_context.verify(input_code, h):
-            # Consume the used backup code
-            remaining = hashes[:i] + hashes[i + 1:]
+    # Hàng rào hình dạng: mã không thể là backup code thì không tốn CPU nào.
+    if classify_code_shape(input_code) != CODE_SHAPE_BACKUP:
+        return False, hashed_codes_json
+
+    idx = _match_v2_index(entries, input_code)
+    if idx is not None:
+        # ĐÚNG MỘT phép bcrypt. Selector chỉ chọn; bí mật do bcrypt xác minh.
+        if _backup_context().verify(input_code, entries[idx]["vfy"]):
+            remaining = entries[:idx] + entries[idx + 1:]
             return True, json.dumps(remaining)
+        # Selector khớp mà bcrypt không khớp: dữ liệu hỏng hoặc pepper đổi.
+        # KHÔNG rơi xuống legacy-scan — nếu không thì mọi mã sai lại tốn O(n).
+        return False, hashed_codes_json
+
+    # --- Legacy: list[str] bcrypt của bản cũ ---------------------------------
+    # Mã đang phát hành KHÔNG bị vô hiệu. Quét tuyến tính là cái giá của định
+    # dạng cũ; nó bị chặn bởi cùng reservation/rate-limit và chạy ngoài event
+    # loop qua ``averify_backup_code``.
+    legacy_idx = None
+    for i, entry in enumerate(entries):
+        if isinstance(entry, str) and _pwd_context.verify(input_code, entry):
+            legacy_idx = i
+            break
+    if legacy_idx is not None:
+        remaining = entries[:legacy_idx] + entries[legacy_idx + 1:]
+        return True, json.dumps(remaining)
 
     return False, hashed_codes_json
+
+
+async def averify_backup_code(
+    input_code: str, hashed_codes_json: str
+) -> Tuple[bool, str]:
+    """Bản async: mọi bcrypt chạy ngoài event loop, dưới trần tài nguyên.
+
+    Nhánh 0-bcrypt (sai hình dạng / selector không khớp) vẫn đi qua executor
+    nhưng không tốn CPU đáng kể; giữ một đường duy nhất để hành vi hai bản
+    không phân kỳ.
+    """
+    return await _run_bcrypt(verify_backup_code, input_code, hashed_codes_json)
 
 
 # =============================================================================
@@ -225,9 +469,9 @@ async def enable_mfa(
     user.totp_secret_encrypted = encrypt_secret(secret)
     user.mfa_enabled = True
 
-    # 4. Generate backup codes
-    plaintext_codes, bcrypt_hashes = generate_backup_codes()
-    user.backup_codes_hashed = json.dumps(bcrypt_hashes)
+    # 4. Generate backup codes — NGOÀI event loop (8 phép bcrypt).
+    plaintext_codes, entries = await agenerate_backup_codes()
+    user.backup_codes_hashed = json.dumps(entries)
 
     db.add(user)
     await db.flush()
@@ -289,18 +533,34 @@ async def verify_mfa_code(
     user,  # models.User
     code: str,
 ) -> bool:
-    """
-    Verify MFA code (TOTP or backup code).
-    If backup code is used, it is consumed (removed from hash list).
+    """Xác minh mã MFA. Phân tuyến theo HÌNH DẠNG trước mọi chi phí CPU.
+
+    ⚠️ Bản trước thử TOTP rồi **rơi xuống** backup code. Hệ quả đo được: một mã
+    TOTP 6 số gõ nhầm vẫn quét tuyến tính 8 bcrypt-15 ≈ 14,1s CPU, chặn event
+    loop. Nay ba đường tách hẳn:
+
+        6 chữ số   → CHỈ TOTP.   Sai ⇒ trả False, KHÔNG chạm backup bcrypt.
+        10 hex     → CHỈ backup. Selector chọn ĐÚNG MỘT candidate.
+        còn lại    → từ chối ngay, 0 bcrypt.
+
+    Backup code được tiêu thụ dưới ``SELECT … FOR UPDATE`` để hai request đồng
+    thời dùng cùng một mã chỉ có ĐÚNG MỘT thành công.
     """
     if not user.totp_secret_encrypted:
         log.warning("mfa_verify_no_secret", user_id=user.id, action="mfa.verify_failed")
         return False
 
-    secret = decrypt_secret(user.totp_secret_encrypted)
+    shape = classify_code_shape(code)
 
-    # Try TOTP first (6-digit codes)
-    if len(code) == 6 and code.isdigit():
+    if shape == CODE_SHAPE_INVALID:
+        log.warning(
+            "mfa_failed", user_id=user.id, action="mfa.verify_failed",
+            reason="bad_shape", code_len=len(code) if isinstance(code, str) else -1,
+        )
+        return False
+
+    if shape == CODE_SHAPE_TOTP:
+        secret = decrypt_secret(user.totp_secret_encrypted)
         is_valid, matched_counter = verify_totp_with_counter(secret, code)
 
         if is_valid and matched_counter is not None:
@@ -313,33 +573,85 @@ async def verify_mfa_code(
                     "totp_replay_rejected", user_id=user.id,
                     action="mfa.replay_rejected", matched_counter=matched_counter,
                 )
-                # Fall through to backup codes / fail (do NOT return True)
-            else:
-                # Accept and record this counter (TTL 180s covers 3 valid_window cycles)
-                await safe_redis_set(replay_key, str(matched_counter), ex=180)
-                log.info("mfa_verified", user_id=user.id, method="totp", action="mfa.verify_success")
-                return True
+                # KHÔNG rơi xuống backup: một mã TOTP không bao giờ là backup code.
+                return False
 
-    # Try backup codes (8 hex char codes)
-    if user.backup_codes_hashed:
-        matched, updated_json = verify_backup_code(code, user.backup_codes_hashed)
-        if matched:
-            user.backup_codes_hashed = updated_json
-            db.add(user)
-            await db.flush()
-
-            remaining = len(json.loads(updated_json)) if updated_json else 0
+            # Accept and record this counter (TTL 180s covers 3 valid_window cycles)
+            await safe_redis_set(replay_key, str(matched_counter), ex=180)
             log.info(
-                "backup_code_used", user_id=user.id, remaining_codes=remaining,
-                action="mfa.backup_used",
+                "mfa_verified", user_id=user.id, method="totp",
+                action="mfa.verify_success",
             )
             return True
 
-    log.warning(
-        "mfa_failed", user_id=user.id, action="mfa.verify_failed",
-        code_len=len(code), code_is_digit=code.isdigit(),
+        log.warning(
+            "mfa_failed", user_id=user.id, action="mfa.verify_failed",
+            reason="totp_mismatch",
+        )
+        return False
+
+    # --- shape == CODE_SHAPE_BACKUP -----------------------------------------
+    if not user.backup_codes_hashed:
+        log.warning(
+            "mfa_failed", user_id=user.id, action="mfa.verify_failed",
+            reason="no_backup_codes",
+        )
+        return False
+
+    # Khoá hàng TRƯỚC khi đọc danh sách: hai request đồng thời cùng một mã sẽ
+    # nối đuôi nhau, request thứ hai đọc danh sách ĐÃ bị gỡ mục và trượt.
+    # Không khoá thì cả hai đọc cùng snapshot và lost-update làm "sống lại" mã.
+    locked_user = await _lock_user_row(db, user)
+    stored = locked_user.backup_codes_hashed if locked_user is not None else None
+    if not stored:
+        return False
+
+    matched, updated_json = await averify_backup_code(code, stored)
+    if not matched:
+        log.warning(
+            "mfa_failed", user_id=user.id, action="mfa.verify_failed",
+            reason="backup_mismatch",
+        )
+        return False
+
+    locked_user.backup_codes_hashed = updated_json
+    db.add(locked_user)
+    await db.flush()          # Router commit — service chỉ flush.
+
+    try:
+        remaining = len(json.loads(updated_json)) if updated_json else 0
+    except (ValueError, TypeError):
+        remaining = 0
+    log.info(
+        "backup_code_used", user_id=user.id, remaining_codes=remaining,
+        action="mfa.backup_used",
     )
-    return False
+    return True
+
+
+async def _lock_user_row(db: AsyncSession, user):
+    """``SELECT … FOR UPDATE`` trên đúng hàng user, ĐỌC LẠI từ đĩa.
+
+    Khoá giữ tới lúc router commit, nên vùng đọc-sửa-ghi của backup code là
+    tuần tự thật sự chứ không phải "hy vọng không trùng".
+
+    ⚠️ Khoá thôi CHƯA ĐỦ, và đây là chỗ đã đo được sai. Một
+    ``select(...).with_for_update()`` trả về đối tượng đã nằm sẵn trong
+    identity map của session thì SQLAlchemy **giữ nguyên giá trị thuộc tính
+    cũ** — hàng bị khoá đúng, nhưng ``backup_codes_hashed`` đọc ra vẫn là
+    ảnh chụp TRƯỚC khi phiên kia commit. Đo thật: hai phiên dùng cùng một
+    backup code đều trả ``True``, mã dùng-một-lần dùng được hai lần.
+
+    ``Session.refresh(..., with_for_update=True)`` phát đúng câu
+    ``SELECT … FOR UPDATE`` ấy **và** ghi đè thuộc tính bằng dữ liệu vừa đọc,
+    nên phiên thứ hai thấy danh sách đã bị gỡ mục.
+    """
+    try:
+        await db.refresh(user, with_for_update=True)
+    except SQLAlchemyInvalidRequest:
+        # Hàng biến mất giữa chừng (xoá đồng thời): coi như không có gì để tiêu.
+        return None
+    return user
 
 
 async def regenerate_backup_codes(
@@ -359,8 +671,8 @@ async def regenerate_backup_codes(
     if not user.mfa_enabled:
         raise BusinessRuleViolation(detail="MFA is not enabled.")
 
-    plaintext_codes, bcrypt_hashes = generate_backup_codes()
-    user.backup_codes_hashed = json.dumps(bcrypt_hashes)
+    plaintext_codes, entries = await agenerate_backup_codes()
+    user.backup_codes_hashed = json.dumps(entries)
     db.add(user)
     await db.flush()
 
