@@ -14,6 +14,12 @@ print(
 )  # Log debug
 
 _env_file = ".env.test" if APP_ENV_FOR_CONFIG == "test" else ".env"
+
+# Hàm che bí mật sống ở ``app/utils/redact.py`` — một module KHÔNG side effect,
+# để nó còn import được ở đúng ca ``Settings()`` raise và chính tệp này không
+# import nổi. Xem docstring ở đó.
+from .utils.redact import LoiCauHinh, mo_ta_loi_an_toan  # noqa: E402
+
 # Xác định đường dẫn tuyệt đối đến file .env trong thư mục gốc dự án
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _env_file_path = os.path.join(_project_root, _env_file)
@@ -354,17 +360,17 @@ class Settings(BaseSettings):
         ]
 
         if self.SECRET_KEY in weak_secrets or len(self.SECRET_KEY) < 32:
-            raise RuntimeError(
+            raise LoiCauHinh(
                 "CRITICAL: SECRET_KEY is weak or default. "
                 "Generate with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
             )
         if self.JWT_SECRET_KEY in weak_secrets or len(self.JWT_SECRET_KEY) < 32:
-            raise RuntimeError(
+            raise LoiCauHinh(
                 "CRITICAL: JWT_SECRET_KEY is weak or default. "
                 "Generate with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
             )
         if self.DEVICE_FINGERPRINT_SALT == "CHANGE_ME_IN_PRODUCTION":
-            raise RuntimeError(
+            raise LoiCauHinh(
                 "CRITICAL: DEVICE_FINGERPRINT_SALT is still the default value. "
                 "Generate with: openssl rand -base64 32"
             )
@@ -374,7 +380,7 @@ class Settings(BaseSettings):
         # runtime ("Fernet key must be 32 url-safe base64-encoded bytes"), so
         # validate the actual Fernet format here.
         if not self.MFA_ENCRYPTION_KEY:
-            raise RuntimeError(
+            raise LoiCauHinh(
                 "CRITICAL: MFA_ENCRYPTION_KEY must be set in production."
             )
         try:
@@ -382,13 +388,13 @@ class Settings(BaseSettings):
 
             Fernet(self.MFA_ENCRYPTION_KEY.encode())
         except Exception as exc:
-            raise RuntimeError(
+            raise LoiCauHinh(
                 "CRITICAL: MFA_ENCRYPTION_KEY is not a valid Fernet key "
                 "(32 url-safe base64 bytes). Generate with: "
                 "Fernet.generate_key().decode()"
             ) from exc
         if self.LOG_LEVEL == "DEBUG":
-            raise RuntimeError(
+            raise LoiCauHinh(
                 "CRITICAL: LOG_LEVEL=DEBUG is not allowed in production. Use INFO or higher."
             )
 
@@ -402,18 +408,18 @@ class Settings(BaseSettings):
         ):
             _u = _url.lower()
             if not _u.startswith("https://"):
-                raise RuntimeError(
+                raise LoiCauHinh(
                     f"CRITICAL: {_name} must use https:// in production."
                 )
             if "localhost" in _u or "127.0.0.1" in _u:
-                raise RuntimeError(
+                raise LoiCauHinh(
                     f"CRITICAL: {_name} points to localhost in production."
                 )
 
         # ✅ C1: Reject localhost/default DB URLs in production
         db_url_lower = self.DATABASE_URL.lower()
         if "localhost" in db_url_lower or "127.0.0.1" in db_url_lower:
-            raise RuntimeError(
+            raise LoiCauHinh(
                 "CRITICAL: DATABASE_URL points to localhost in production. "
                 "Use a remote database with proper credentials."
             )
@@ -422,18 +428,26 @@ class Settings(BaseSettings):
         # Skip when using Docker internal network (services on same bridge, no external exposure)
         if not self.ALLOW_DOCKER_INTERNAL_NETWORK:
             if "asyncpg://" in db_url_lower and "sslmode=" not in db_url_lower:
-                raise RuntimeError(
+                raise LoiCauHinh(
                     "CRITICAL: DATABASE_URL does not specify sslmode in production. "
                     "Add ?sslmode=require for encrypted connections. "
                     "Example: postgresql+asyncpg://user:pass@host/db?sslmode=require\n"
                     "If using Docker internal network, set ALLOW_DOCKER_INTERNAL_NETWORK=true"
                 )
 
-            redis_urls = [self.REDIS_URL, self.CELERY_BROKER_URL, self.CELERY_RESULT_BACKEND_URL]
-            for url in redis_urls:
+            # Đi kèm TÊN biến: thông báo cũ cắt ``url[:30]`` để chỉ ra "cái nào",
+            # nhưng 30 ký tự đầu của ``redis://user:pass@host`` chính là
+            # credential. Tên biến chỉ ra cùng thứ đó mà không mang giá trị.
+            redis_urls = [
+                ("REDIS_URL", self.REDIS_URL),
+                ("CELERY_BROKER_URL", self.CELERY_BROKER_URL),
+                ("CELERY_RESULT_BACKEND_URL", self.CELERY_RESULT_BACKEND_URL),
+            ]
+            for _ten, url in redis_urls:
                 if url.startswith("redis://") and not url.startswith("rediss://"):
-                    raise RuntimeError(
-                        f"CRITICAL: Redis URL uses unencrypted redis:// protocol in production: {url[:30]}... "
+                    raise LoiCauHinh(
+                        f"CRITICAL: {_ten} uses unencrypted redis:// protocol "
+                        "in production. "
                         "Use rediss:// for TLS-encrypted connections.\n"
                         "If using Docker internal network, set ALLOW_DOCKER_INTERNAL_NETWORK=true"
                     )
@@ -836,9 +850,11 @@ try:
     # ✅ SECURITY: Fail-fast validation for production secrets
     settings._validate_production_secrets()
 
-    print(
-        f"INFO [config.py]: Settings loaded successfully. APP_ENV={settings.APP_ENV}, DB_URL={settings.DATABASE_URL[:30]}..."
-    )  # Log một phần DB_URL
+    # KHÔNG in DATABASE_URL, kể cả một phần. Tiền tố
+    # ``postgresql+asyncpg://qlts:`` dài 25 ký tự, nên ``[:30]`` cắt đúng vào 5
+    # ký tự ĐẦU CỦA MẬT KHẨU và đẩy chúng vào mọi log deploy. Tên biến đủ để
+    # chẩn đoán; giá trị thì không được rời khỏi tiến trình.
+    print(f"INFO [config.py]: Settings loaded successfully. APP_ENV={settings.APP_ENV}")
 
     # Debug log for GeoIP development mode
     if settings.DEV_GEOIP_TEST_IP:
@@ -851,6 +867,8 @@ try:
         )
 except Exception as e:
     print(
-        f"CRITICAL [config.py]: Failed to initialize Settings. Ensure all required variables are in '{_env_file}' or system environment. Error: {e}"
+        f"CRITICAL [config.py]: Failed to initialize Settings. Ensure all required "
+        f"variables are in '{_env_file}' or system environment. "
+        f"Error: {mo_ta_loi_an_toan(e)}"
     )
     raise e

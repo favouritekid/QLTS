@@ -198,6 +198,36 @@ log "Step 4/8: Building Docker images..."
 docker compose -f docker-compose.yml --profile production --env-file .env.production build --parallel
 
 # =============================================================================
+# Step 4b: Config preflight (ẢNH VỪA BUILD, TRƯỚC KHI CHẠM CSDL)
+# =============================================================================
+# Vá 24-08-2026. Thứ tự cũ là: build → pg_dump → alembic → pre_deploy_check.
+# ``alembic upgrade head`` import ``app.config``, nên MỘT biến môi trường thiếu
+# làm ``Settings()`` raise BÊN TRONG Step 6 — nơi mọi mã thoát khác 0 bị phân
+# loại là "Migration failed" và kích hoạt replay bản sao lên CSDL production.
+#
+# Tức là một lỗi CHÍNH TẢ trong `.env.production` kéo theo một lượt khôi phục
+# CSDL hoàn toàn không cần thiết, lên một cơ sở dữ liệu CHƯA HỀ thay đổi. Và
+# nếu chính lượt restore ấy vấp thì rơi vào trạng thái "schema nửa cũ nửa mới"
+# mà Step 6 tự mô tả là không tiến không lùi. Cổng cấu hình DUY NHẤT trước đây
+# (`pre_deploy_check.py`) lại nằm ở Step 7, tức SAU cả hai.
+#
+# Đặt ở đây vì đây là điểm sớm nhất mà phép kiểm còn có nghĩa: phải sau build
+# (kiểm đúng ẢNH sắp chạy, không phải ảnh cũ) và trước ``pg_dump`` (hỏng thì
+# chưa có bản sao nào được tạo, chưa migration nào chạy, và nhánh restore không
+# bao giờ được chạm tới).
+#
+# ``--entrypoint python`` — cùng lý do với Step 6 và Step 7: `docker compose run`
+# KHÔNG đè ENTRYPOINT, nên thiếu cờ này thì chính bước preflight sẽ chạy trọn
+# ``alembic upgrade head`` + ``sync_notification_rules`` trước khi tới script,
+# tức gây ra đúng thứ nó sinh ra để ngăn.
+#
+# Không có ``|| warn``: ``set -e`` ở đầu tệp để mã thoát khác 0 tự dừng deploy.
+log "Step 4b/8: Config preflight (candidate image)..."
+docker compose -f docker-compose.yml --profile production --env-file .env.production \
+    run --rm --no-deps --entrypoint python backend -m scripts.preflight_config
+log "Config preflight passed — CSDL chưa bị chạm"
+
+# =============================================================================
 # Step 5: Database backup (before migration)
 # =============================================================================
 log "Step 5/8: Backing up database..."
