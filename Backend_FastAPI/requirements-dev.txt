@@ -4,6 +4,14 @@
 # Testing
 Faker==35.2.2
 fakeredis==2.32.0
+# Bộ thông dịch Lua cho fakeredis — cần cho MỌI đường sản phẩm dùng Redis
+# ``EVAL``, không riêng MFA. Thiếu nó fakeredis trả "unknown command `eval`",
+# nên các đường ấy đỏ vì lý do MÔI TRƯỜNG chứ không phải vì mã sai, và bộ test
+# thôi không còn chạy đúng thứ production chạy. Hai đường đã biết:
+#   * đặt chỗ lần thử MFA (app/database.py) — script Lua server-side;
+#   * cache pipeline-stages — ô admin trong tests/security/test_permissions_matrix.py
+#     từng phải mang xfail vì hạn chế này.
+lupa==2.8
 iniconfig==2.3.0
 pluggy==1.6.0
 pytest==8.4.2

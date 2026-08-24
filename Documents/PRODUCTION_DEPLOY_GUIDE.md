@@ -311,6 +311,75 @@ gunzip < /root/backup_YYYYMMDD_HHMMSS.sql.gz | docker exec -i qlts-postgres-1 ps
 
 ---
 
+## MFA backup code — triển khai HAI PHA (pha B cần GO riêng)
+
+Định dạng lưu backup code đổi từ `list[str]` (legacy) sang `list[dict]` v2 có
+selector. Ảnh CŨ chỉ biết legacy và đưa thẳng từng phần tử vào
+`pwd_context.verify()`, nên **ghi v2 ngay lần deploy đầu là một cutover MỘT
+CHIỀU**: deploy → có người regenerate → rollback → mã backup của họ hỏng, và
+không có đường phục hồi vì bản rõ chỉ hiện một lần.
+
+Vì thế đường ĐỌC và đường GHI được tách bằng `MFA_BACKUP_CODE_V2_WRITER_ENABLED`
+(mặc định `false`).
+
+### Pha A — deploy bản đọc-được-v2, vẫn ghi legacy
+
+1. `.env.production` phải có `MFA_BACKUP_CODE_PEPPER` **thật** trước khi deploy.
+   Thiếu nó backend **không khởi động được** (fail-fast trong `app/config.py`).
+   Sinh bằng: `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+   ⚠️ Đổi pepper về sau = vô hiệu MỌI backup code v2 đã phát.
+2. Giữ `MFA_BACKUP_CODE_V2_WRITER_ENABLED=false`.
+3. Deploy theo đúng §6 ở trên (build đủ NĂM ảnh, `up -d --wait` liệt kê service
+   tường minh, nginx qua `scripts/nginx-apply.sh`).
+
+Pha A lấy được gì, và KHÔNG lấy được gì — nói cho đúng:
+
+| | Pha A (writer=false) | Pha B (writer=true) |
+|---|---|---|
+| TOTP sai / sai hình dạng | không chạm backup, **0 bcrypt** | như pha A |
+| 10-hex sai | **vẫn quét tối đa 8 bcrypt** (rounds 12, ngoài event loop) | selector trượt ⇒ **0 bcrypt** |
+| 10-hex đúng | quét tới khi khớp | đúng **1 bcrypt** |
+| Đặt chỗ nguyên tử chặn trước mọi bcrypt | có | có |
+
+Nói cách khác: pha A cắt được đường tốn kém nhất (mã TOTP gõ nhầm rơi xuống quét
+backup) và hạ chi phí mỗi phép băm từ rounds 15 xuống 12, nhưng **quét tuyến
+tính vẫn còn** cho mã 10-hex sai vì dữ liệu vẫn ở định dạng legacy `list[str]`
+(`mfa_service.generate_backup_codes` khi cờ tắt) và reader legacy lặp từng hash.
+Chỉ selector v2 ở pha B mới xoá hẳn phép quét ấy.
+
+### Mốc rollback an toàn
+
+Chỉ được sang pha B khi **mọi ảnh còn nằm trong tầm rollback đều đọc được v2** —
+nghĩa là ảnh pha A đã chạy đủ lâu để không còn kế hoạch lùi qua nó. Kiểm bằng
+tag ảnh đang giữ để rollback (§Rollback) và đối chiếu với commit đưa reader v2
+lên.
+
+### Pha B — bật writer v2
+
+Đây là **thao tác production riêng, cần GO riêng**, vì nó đổi định dạng dữ liệu
+được ghi ra.
+
+```bash
+# 1. Sửa .env.production
+#    MFA_BACKUP_CODE_V2_WRITER_ENABLED=true
+
+# 2. DỰNG LẠI các service đọc Settings — `restart` KHÔNG nạp lại env_file;
+#    biến được nướng vào container lúc TẠO.
+docker compose -f docker-compose.yml --env-file .env.production --profile production     up -d --no-deps --wait backend celery-worker celery-beat
+
+# 3. Nghiệm thu bằng hành vi thật, không bằng exit code: cấp lại backup code cho
+#    MỘT tài khoản thử, rồi kiểm bản ghi trong DB là list[dict] có khoá "v": 2.
+```
+
+### Sau khi pha B đã phát mã
+
+🔴 **CẤM rollback về ảnh trước reader-capable.** Ảnh đó sẽ ném lỗi khi gặp
+`dict` trong danh sách, và mọi backup code v2 đã phát thành vô dụng. Nếu buộc
+phải lùi, chỉ lùi tới ảnh pha A (đọc được cả hai) và đặt lại
+`MFA_BACKUP_CODE_V2_WRITER_ENABLED=false`.
+
+---
+
 ## Server info
 
 | Item | Value |

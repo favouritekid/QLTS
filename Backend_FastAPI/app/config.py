@@ -2,7 +2,7 @@
 import os
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import ConfigDict, Field  # Thêm Field
+from pydantic import ConfigDict, Field, field_validator  # Thêm Field
 
 # XÓA: from dotenv import load_dotenv, find_dotenv
 from pydantic_settings import BaseSettings
@@ -20,6 +20,10 @@ _env_file = ".env.test" if APP_ENV_FOR_CONFIG == "test" else ".env"
 # import nổi. Xem docstring ở đó.
 from .utils.redact import LoiCauHinh, mo_ta_loi_an_toan  # noqa: E402
 
+# Pepper cho selector backup code: 32 ký tự là mức tương đương
+# secrets.token_urlsafe(24); giá trị khuyến nghị token_urlsafe(32) cho 43 ký tự.
+_PEPPER_MIN_LEN = 32
+_PEPPER_PLACEHOLDERS = ("CHANGE_ME", "YOUR-", "PLACEHOLDER", "TODO")
 # Xác định đường dẫn tuyệt đối đến file .env trong thư mục gốc dự án
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _env_file_path = os.path.join(_project_root, _env_file)
@@ -240,6 +244,93 @@ class Settings(BaseSettings):
         default=["admin", "manager"], validation_alias="MFA_ENFORCE_ROLES"
     )  # Roles that MUST enable MFA (OWASP ASVS 5.0)
 
+    # Pepper (khoá HMAC) cho SELECTOR của backup code v2.
+    #
+    # Selector cho phép tra ĐÚNG MỘT candidate thay vì quét tuyến tính toàn bộ
+    # danh sách bcrypt — đó là chỗ chi phí O(n) bị cắt. Nó PHẢI có khoá: nếu
+    # selector chỉ là hash trần, người đọc được DB có thể precompute bảng tra
+    # cho toàn bộ không gian 40-bit của mã.
+    #
+    # KHÔNG có default: thiếu hoặc rỗng thì đường backup code FAIL CLOSED
+    # (mfa_service._get_backup_pepper). Sinh bằng:
+    #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+    MFA_BACKUP_CODE_PEPPER: str = Field(
+        default="", validation_alias="MFA_BACKUP_CODE_PEPPER"
+    )
+    # Work factor RIÊNG cho backup code. Mã do hệ sinh, 40-bit ngẫu nhiên đều —
+    # khác hẳn mật khẩu người chọn — nên không cần work factor của mật khẩu.
+    # OWASP: một phép hash nên dưới 1 giây; rounds=15 đo được 1,77s/phép.
+    # Miền cho phép có hai đầu, không phải trang trí:
+    #   < 10  — work factor quá thấp cho một bí mật lưu trong DB;
+    #   > 14  — vi phạm mốc OWASP "một phép hash dưới 1 giây" (đo trong
+    #           container: 12→0,223s, mỗi nấc gấp đôi ⇒ 14→0,89s, 15→1,78s),
+    #           và chính chi phí đó là lỗ hổng PR này đang vá.
+    MFA_BACKUP_CODE_BCRYPT_ROUNDS: int = Field(
+        default=12, ge=10, le=14, validation_alias="MFA_BACKUP_CODE_BCRYPT_ROUNDS"
+    )
+    # Trần thread cho bcrypt của MFA. bcrypt là CPU-bound và đồng bộ; ném vào
+    # default executor là mở một hàng đợi không trần, biến mọi request thành
+    # một suất CPU. Con số này là resource governor, không phải tinh chỉnh.
+    # CẬN TRÊN là phần quan trọng: đặt 1000 ở đây thì resource governor biến
+    # mất mà không có dấu hiệu nào — mỗi request đồng thời lại là một suất CPU,
+    # đúng thứ trần này sinh ra để chặn. Cận dưới 1 để không tự khoá chết.
+    MFA_BCRYPT_MAX_WORKERS: int = Field(
+        default=2, ge=1, le=8, validation_alias="MFA_BCRYPT_MAX_WORKERS"
+    )
+
+    # --- Cờ TRIỂN KHAI HAI PHA cho định dạng lưu backup code -----------------
+    # Đọc: luôn hiểu CẢ legacy (list[str]) lẫn v2 (list[dict]).
+    # Ghi:  chỉ sinh v2 khi cờ này BẬT.
+    #
+    # Vì sao phải tách: ảnh CŨ chỉ biết list[str] và đưa thẳng từng phần tử vào
+    # pwd_context.verify(). Nếu bản mới ghi v2 rồi phải rollback, mã backup vừa
+    # phát cho người dùng thành vô dụng — một cutover MỘT CHIỀU âm thầm.
+    #
+    # Điều kiện BẬT (phải đủ cả ba):
+    #   1. Bản có READER hiểu v2 đã lên production và trở thành mốc rollback
+    #      an toàn (tức là mọi ảnh còn nằm trong tầm rollback đều đọc được v2);
+    #   2. Pepper thật đã có trong .env.production và backend khởi động được.
+    #      (Pepper là BẮT BUỘC ở production ngay từ pha A — startup validator
+    #      chặn. Chỉ ĐƯỜNG ĐỌC/GHI legacy ở tầng service là không cần tới nó.)
+    #   3. Đã xác nhận không còn kế hoạch lùi về ảnh trước mốc ở (1).
+    # Trước khi đủ ba điều đó, pha A vẫn ghi legacy — nhưng bằng
+    # MFA_BACKUP_CODE_BCRYPT_ROUNDS (12) thay vì rounds mật khẩu (15), nên
+    # quét legacy rẻ đi 8 lần mà ảnh cũ vẫn xác minh được (bcrypt tự mang tham
+    # số chi phí trong chuỗi hash).
+    # Đây là cờ DEPLOY, không phải cờ runtime: Settings dựng một lần lúc import,
+    # nên bật nó đòi dựng lại backend + celery-worker + celery-beat. Và vì nó
+    # đổi định dạng dữ liệu ghi ra, bật pha B là một thao tác production RIÊNG,
+    # cần GO riêng.
+    MFA_BACKUP_CODE_V2_WRITER_ENABLED: bool = Field(
+        default=False, validation_alias="MFA_BACKUP_CODE_V2_WRITER_ENABLED"
+    )
+
+    @field_validator("MFA_BACKUP_CODE_PEPPER")
+    @classmethod
+    def _kiem_pepper(cls, v):
+        """Pepper rỗng = chưa cấu hình (fail closed lúc chạy). Pepper CÓ giá
+        trị thì phải là bí mật thật — "x" hay một dòng placeholder lọt qua phép
+        kiểm "khác rỗng" nhưng không cho thêm chút entropy nào."""
+        if v is None:
+            return ""
+        v = v.strip()
+        if not v:
+            return ""
+        if len(v) < _PEPPER_MIN_LEN:
+            raise ValueError(
+                f"MFA_BACKUP_CODE_PEPPER quá ngắn ({len(v)} ký tự sau khi trim, "
+                f"cần >= {_PEPPER_MIN_LEN}). Sinh bằng: python -c "
+                "\"import secrets; print(secrets.token_urlsafe(32))\""
+            )
+        hoa = v.upper()
+        for xau in _PEPPER_PLACEHOLDERS:
+            if xau in hoa:
+                raise ValueError(
+                    f"MFA_BACKUP_CODE_PEPPER còn chứa placeholder {xau!r}. "
+                    "Đặt giá trị sinh ngẫu nhiên thật."
+                )
+        return v
+
     # -- SMS Marketing: token + build (PR-3) --
     # Short-link token: HMAC hash secret (lookup) + Fernet keyring (re-export).
     # Prod cần giá trị thật. CỐ Ý KHÔNG fail-fast startup (để không gãy backend
@@ -393,6 +484,22 @@ class Settings(BaseSettings):
                 "(32 url-safe base64 bytes). Generate with: "
                 "Fernet.generate_key().decode()"
             ) from exc
+        # Backup code v2 selector cần pepper. Thiếu nó thì đường backup code
+        # fail-closed lúc CHẠY — bắt ở startup để lỗi cấu hình không biến thành
+        # "người dùng không đăng nhập được bằng backup code" giữa đêm.
+        if not self.MFA_BACKUP_CODE_PEPPER:
+            # ``LoiCauHinh`` chứ không ``RuntimeError``: bộ mô tả lỗi ở
+            # ``app/utils/redact.py`` chỉ in message của những exception đã
+            # được CHỨNG MINH an toàn theo KIỂU. Một ``RuntimeError`` trần rơi
+            # vào nhánh "chỉ in tên lớp" — không rò gì, nhưng người vận hành
+            # mất đúng dòng chữ nói THIẾU BIẾN NÀO, ngay lúc backend không khởi
+            # động được vì thiếu chính biến ấy. Message dưới đây chỉ nêu TÊN
+            # biến và cách sinh giá trị; không có giá trị nào trong đó.
+            raise LoiCauHinh(
+                "CRITICAL: MFA_BACKUP_CODE_PEPPER must be set in production. "
+                "Generate with: python -c \"import secrets; "
+                "print(secrets.token_urlsafe(32))\""
+            )
         if self.LOG_LEVEL == "DEBUG":
             raise LoiCauHinh(
                 "CRITICAL: LOG_LEVEL=DEBUG is not allowed in production. Use INFO or higher."

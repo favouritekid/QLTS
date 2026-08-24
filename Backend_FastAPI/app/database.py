@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 import redis.asyncio as redis
 import structlog
+from typing import NamedTuple
 from aiobreaker import CircuitBreaker
 from redis.exceptions import ConnectionError, TimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -226,6 +227,156 @@ async def safe_redis_expire(key: str, seconds: int):
     except REDIS_BREAKER_EXCEPTIONS:
         log.error("Redis EXPIRE failed", key=key, seconds=seconds, exc_info=True)
         return False
+
+
+class DatChoMFA(NamedTuple):
+    """Kết quả đặt chỗ một lần thử MFA.
+
+    ``allowed`` là quyết định, KHÔNG phải thứ chỗ gọi tự suy ra từ ``count``:
+    quy tắc chặn nằm trong script, nên chỉ có một nơi biết ngưỡng. Bắt router
+    so ``count`` với trần lần nữa là mở đường cho hai bản luật lệch nhau.
+    """
+
+    allowed: bool
+    count: int
+    ttl: int
+
+
+# Máy trạng thái đặt chỗ, chạy NGUYÊN TỬ trong Redis.
+#
+# Vì sao phải là Lua chứ không phải MULTI/EXEC: quyết định phụ thuộc GIÁ TRỊ
+# hiện tại (đã chạm trần hay chưa), mà MULTI/EXEC không rẽ nhánh được — nó chỉ
+# gửi một chùm lệnh cố định. Đọc trước rồi mới quyết ở phía client là TOCTOU:
+# hai request cùng đọc n, cùng kết luận "chưa chạm trần", cùng lọt.
+#
+# Bốn nhánh, và nhánh thứ ba là chỗ đã có lỗi thật:
+#   * chưa có khoá        → tạo count=1, đặt hạn, CHO QUA
+#   * count < max         → tăng 1, trượt cửa sổ (giữ semantics cũ), CHO QUA
+#   * count >= max        → KHÔNG tăng, KHÔNG gia hạn, CHẶN
+#       Bản trước luôn INCR+EXPIRE kể cả khi đã chặn, nên mỗi request của kẻ
+#       tấn công vừa đẩy bộ đếm lên vừa kéo hạn về TRỌN cửa sổ. Chỉ cần gõ một
+#       lần trước mỗi lần hết hạn là giữ nạn nhân bị khoá MFA vô thời hạn.
+#       Một hình phạt đã tuyên không được chính kẻ bị phạt gia hạn.
+#   * count >= max, TTL<0 → CHẶN, nhưng đặt lại hạn: khoá không hạn là khoá
+#       vĩnh viễn, hỏng theo chiều ngược lại nhưng vẫn là hỏng.
+#
+# Mã trả về ở ô đầu: 1 cho qua · 0 chặn · -1 bộ đếm không parse được ·
+# -2 tham số không hợp lệ. Ô thứ tư báo đã phải sửa hạn (để ghi log).
+_LUA_DAT_CHO_MFA = """
+local window = tonumber(ARGV[1])
+local max_attempts = tonumber(ARGV[2])
+if window == nil or window <= 0 or max_attempts == nil or max_attempts < 1 then
+  return {-2, 0, 0, 0}
+end
+
+local cur = redis.call('GET', KEYS[1])
+if cur then
+  local n = tonumber(cur)
+  -- Bộ đếm CHỈ hợp lệ khi là số nguyên >= 1. Máy trạng thái này không bao giờ
+  -- tự sinh ra 0, số âm hay số thập phân, nên gặp chúng nghĩa là dữ liệu đã bị
+  -- ai đó/cái gì đó ghi đè. Trước đây chỉ chặn `nil`, nên "-1" lọt qua vế
+  -- `n >= max`, rơi xuống INCR thành 0 và được CẤP THÊM LƯỢT — một trạng thái
+  -- hỏng tự chuyển thành quyền xác minh. Fail closed: không INCR, không đụng
+  -- TTL, không cho qua.
+  if n == nil or n < 1 or n ~= math.floor(n) then
+    return {-1, 0, 0, 0}
+  end
+  if n >= max_attempts then
+    local t = redis.call('TTL', KEYS[1])
+    local da_sua = 0
+    if t < 0 then
+      redis.call('EXPIRE', KEYS[1], window)
+      t = redis.call('TTL', KEYS[1])
+      da_sua = 1
+    end
+    return {0, n, t, da_sua}
+  end
+end
+
+local n = redis.call('INCR', KEYS[1])
+redis.call('EXPIRE', KEYS[1], window)
+return {1, n, redis.call('TTL', KEYS[1]), 0}
+"""
+
+
+def _la_so_nguyen(x):
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
+async def safe_redis_reserve_attempt(
+    key: str, window_seconds: int, max_attempts: int
+):
+    """Đặt chỗ MỘT lần thử MFA — nguyên tử, và fail closed.
+
+    Toàn bộ quyết định nằm trong một script server-side (``_LUA_DAT_CHO_MFA``),
+    nên không có cửa sổ TOCTOU giữa đọc và ghi, và một request ĐÃ BỊ CHẶN không
+    tự gia hạn hình phạt của nó.
+
+    Returns:
+        ``DatChoMFA(allowed, count, ttl)`` khi đặt chỗ ĐƯỢC CHỨNG MINH — gồm cả
+        việc TTL dương. ``None`` ở MỌI ca còn lại: lỗi kết nối, script lỗi, kết
+        quả thiếu/sai kiểu, bộ đếm hỏng, hoặc TTL không dương. ``None`` ⇒ chỗ
+        gọi phải trả 503 TRƯỚC mọi chi phí CPU.
+    """
+    try:
+        raw = await redis_breaker.call_async(
+            redis_client.eval,
+            _LUA_DAT_CHO_MFA,
+            1,
+            key,
+            str(int(window_seconds)),
+            str(int(max_attempts)),
+        )
+    except REDIS_BREAKER_EXCEPTIONS:
+        log.error("Redis RESERVE failed", key=key, exc_info=True)
+        return None
+    except Exception:
+        # Kể cả lỗi ngoài dự kiến (script lỗi, server không hỗ trợ EVAL) cũng
+        # fail closed: đây là hàng rào của một đường brute-force, không phải cache.
+        log.error("Redis RESERVE unexpected error", key=key, exc_info=True)
+        return None
+
+    if not isinstance(raw, (list, tuple)) or len(raw) != 4:
+        log.error("Redis RESERVE trả kết quả lạ", key=key, ket_qua=repr(raw))
+        return None
+    if not all(_la_so_nguyen(x) for x in raw):
+        log.error("Redis RESERVE trả sai kiểu", key=key, ket_qua=repr(raw))
+        return None
+
+    ma, dem, ttl, da_sua_han = raw
+
+    if ma == -1:
+        # Bộ đếm không phải số: không kết luận được còn bao nhiêu lượt.
+        log.error("Redis RESERVE: bộ đếm hỏng, không parse được", key=key)
+        return None
+    if ma == -2:
+        log.error(
+            "Redis RESERVE: tham số không hợp lệ",
+            key=key, window=window_seconds, max_attempts=max_attempts,
+        )
+        return None
+    if ma not in (0, 1):
+        log.error("Redis RESERVE: mã trả về lạ", key=key, ma=ma)
+        return None
+    if ttl <= 0:
+        # Không chứng minh được hạn ⇒ coi như chưa đặt chỗ. Thà 503 còn hơn để
+        # lại một bộ đếm không bao giờ tự hết.
+        log.error("Redis RESERVE: TTL không dương", key=key, ttl=ttl)
+        return None
+    if dem < 1:
+        # Kiểm ĐỘC LẬP với Lua, không phải kiểm thừa: nếu script bị đổi, bị
+        # thay bản khác, hay Redis trả payload lạ, tầng này vẫn phải từ chối.
+        # Mọi lượt hợp lệ đều có count >= 1 (cho qua: >=1; bị chặn: >= max >= 1).
+        log.error("Redis RESERVE: bộ đếm ngoài miền", key=key, dem=dem)
+        return None
+
+    if da_sua_han:
+        log.warning(
+            "mfa_attempt_key_missing_ttl_repaired",
+            key=key, dem=dem, ttl=ttl, action="mfa.reservation_ttl_repaired",
+        )
+
+    return DatChoMFA(allowed=(ma == 1), count=dem, ttl=ttl)
 
 
 async def safe_redis_incr(key: str, amount: int = 1):
