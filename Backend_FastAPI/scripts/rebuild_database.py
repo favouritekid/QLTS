@@ -255,7 +255,10 @@ async def main():
     # Show current config
     print(f"\n📋 Configuration:")
     print(f"   APP_ENV: {settings.APP_ENV}")
-    print(f"   DATABASE_URL: {settings.DATABASE_URL[:60]}...")
+    # KHÔNG in DATABASE_URL. 60 ký tự đầu đủ để lộ TRỌN mật khẩu, host và
+    # một phần tên CSDL. Tệp này nằm trong ảnh production và có khả năng
+    # PHÁ HUỶ dữ liệu, nên nó là chỗ cuối cùng nên in credential ra màn hình.
+    print("   DATABASE_URL: (không hiển thị)")
 
     # Check database connection
     print("\n🔌 Checking database connection...")
