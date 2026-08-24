@@ -40,12 +40,15 @@ distinct, narrower buckets — NOT a single fixture-seed drift:
      longer exists in the router (returns generic 404 ``Not Found``).
      Commit 4 retargets the cell at the current
      ``/api/admin/roles/policies`` route, expected still 403.
-  4. fakeredis EVAL limitation (test transport): the pipeline-stages
-     cache code path uses Redis ``EVAL`` which the fakeredis client
-     under the test fixtures does not implement. Marked
-     ``pytest.mark.xfail(strict=True)`` so it does not regress to a
-     false pass and is recognised as environmental, not a permission
-     failure.
+  4. fakeredis EVAL limitation (test transport) — RESOLVED. The
+     pipeline-stages cache code path uses Redis ``EVAL``, which the
+     fakeredis client did not implement, so the cell carried
+     ``pytest.mark.xfail(strict=True)``. ``requirements-dev.txt`` now
+     pins ``lupa``, the Lua interpreter fakeredis needs to execute
+     ``EVAL``; the cell passes and the waiver was removed. Note the
+     direction: dropping it makes the RBAC gate STRICTER — the cell now
+     genuinely asserts that admin receives 200 on a CasbinAuth route,
+     instead of being excused.
 
 The ``Lead(id=1)`` fixture is NOT proven broken — every cell that
 previously looked like "missing lead seed" was either downstream of
@@ -192,25 +195,16 @@ ROLE_POLICIES_URL = "/api/admin/roles/policies"
 #   * manager DELETE: target swapped from the legacy ``AdminURLs.POLICIES``
 #     (route gone) to the current ``ROLE_POLICIES_URL`` (live route),
 #     still expecting 403 because manager has no admin-rbac grant
-#   * admin GET PIPELINE_STAGES: xfail strict — fakeredis (test transport)
-#     does not implement Redis ``EVAL`` used by the pipeline cache code
-#     path; the failure is environmental, not a permission issue
+#   * admin GET PIPELINE_STAGES: waiver ĐÃ GỠ. Ô này từng mang
+#     ``xfail(strict=True)`` vì fakeredis không thực thi ``EVAL`` mà đường
+#     cache pipeline dùng. Nay ``requirements-dev.txt`` ghim ``lupa`` nên
+#     fakeredis chạy được ``EVAL``, ô này đậu thật và ``strict`` biến nó
+#     thành XPASS ⇒ đỏ. Gỡ waiver là SIẾT cổng quyền, không nới: ô này giờ
+#     khẳng định thật rằng admin nhận 200 trên một route CasbinAuth.
 PERMISSION_MATRIX = [
     # --- Admin (Toàn quyền) ---
     ("admin", "GET", AdminURLs.USERS, 200),
-    pytest.param(
-        "admin",
-        "GET",
-        AdminURLs.PIPELINE_STAGES,
-        200,
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason=(
-                "fakeredis does not support Redis EVAL used by pipeline "
-                "cache path; not a permission failure"
-            ),
-        ),
-    ),
+    ("admin", "GET", AdminURLs.PIPELINE_STAGES, 200),
     (
         "admin",
         "DELETE",
