@@ -130,3 +130,66 @@ class TestCoWriterV2:
     def test_bat_duoc_tuong_minh(self):
         s = _dung_production(MFA_BACKUP_CODE_V2_WRITER_ENABLED=True)
         assert s.MFA_BACKUP_CODE_V2_WRITER_ENABLED is True
+
+
+# =============================================================================
+# Thông báo lỗi pepper: nêu TÊN BIẾN, không mang GIÁ TRỊ
+# =============================================================================
+# Hai tầng chặn pepper hỏng, và chúng đi qua hai đường lỗi KHÁC nhau:
+#   * thiếu hẳn    → ``_validate_production_secrets`` raise ``LoiCauHinh``;
+#   * có nhưng sai → ``field_validator`` raise ``ValueError`` ⇒ pydantic gói
+#                    thành ``ValidationError``.
+# Cả hai phải đi qua ``mo_ta_loi_an_toan`` và giữ đúng một cân bằng: đủ để
+# người vận hành biết THIẾU BIẾN NÀO, mà không in giá trị.
+#
+# Vì sao ``LoiCauHinh`` chứ không ``RuntimeError``: bộ mô tả chỉ in message của
+# exception đã được chứng minh an toàn theo KIỂU. Một ``RuntimeError`` trần rơi
+# vào nhánh "chỉ in tên lớp" — không rò gì, nhưng thông báo mất hẳn tên biến,
+# đúng lúc backend không khởi động được vì thiếu chính biến ấy.
+
+_CANARY_PEPPER = "pepper-canary-khong-duoc-log"
+
+
+class TestThongBaoPepperKhongMangGiaTri:
+    def test_thieu_pepper_neu_ten_bien(self):
+        from app.utils.redact import LoiCauHinh, mo_ta_loi_an_toan
+
+        with pytest.raises(LoiCauHinh) as thong_tin:
+            _dung_production(MFA_BACKUP_CODE_PEPPER="")
+
+        ra = mo_ta_loi_an_toan(thong_tin.value)
+        assert "MFA_BACKUP_CODE_PEPPER" in ra, (
+            "thông báo không nêu tên biến — người vận hành không biết thiếu gì: "
+            + ra
+        )
+
+    def test_thieu_pepper_dung_LoiCauHinh_chu_khong_RuntimeError_tran(self):
+        """Kiểu quyết định bộ mô tả in gì — phép kiểm về KIỂU, không về chuỗi."""
+        from app.utils.redact import LoiCauHinh
+
+        with pytest.raises(LoiCauHinh):
+            _dung_production(MFA_BACKUP_CODE_PEPPER="")
+
+    def test_pepper_sai_khong_ro_gia_tri_nhung_van_neu_ten_bien(self):
+        """``field_validator`` raise ``ValueError`` mang giá trị ⇒ pydantic đưa
+        nguyên văn vào ``msg``. Bộ mô tả bỏ ``msg``, lấy tên biến từ ``loc``."""
+        from app.utils.redact import mo_ta_loi_an_toan
+
+        with pytest.raises(ValidationError) as thong_tin:
+            Settings(**_cau_hinh_production(MFA_BACKUP_CODE_PEPPER=_CANARY_PEPPER))
+
+        ra = mo_ta_loi_an_toan(thong_tin.value)
+        assert _CANARY_PEPPER not in ra, "giá trị pepper lọt vào log: " + ra
+        assert "MFA_BACKUP_CODE_PEPPER" in ra, "mất tên biến ⇒ vô dụng: " + ra
+
+    def test_kiem_nguoc_str_exc_that_su_mang_canary(self):
+        """Chứng minh mối nguy có thật: ``str(exc)`` — thứ bộ mô tả cố ý KHÔNG
+        dùng — vẫn chứa canary. Không có ca này thì ba ca trên chỉ nói rằng bộ
+        mô tả im lặng, chưa nói rằng nó im lặng về một thứ nguy hiểm."""
+        with pytest.raises(ValidationError) as thong_tin:
+            Settings(**_cau_hinh_production(MFA_BACKUP_CODE_PEPPER=_CANARY_PEPPER))
+
+        assert _CANARY_PEPPER in str(thong_tin.value), (
+            "str(exc) KHÔNG còn mang canary — phép kiểm ngược mất ý nghĩa, "
+            "hãy đọc lại vì sao bộ mô tả tồn tại"
+        )

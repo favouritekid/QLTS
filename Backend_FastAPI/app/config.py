@@ -488,7 +488,14 @@ class Settings(BaseSettings):
         # fail-closed lúc CHẠY — bắt ở startup để lỗi cấu hình không biến thành
         # "người dùng không đăng nhập được bằng backup code" giữa đêm.
         if not self.MFA_BACKUP_CODE_PEPPER:
-            raise RuntimeError(
+            # ``LoiCauHinh`` chứ không ``RuntimeError``: bộ mô tả lỗi ở
+            # ``app/utils/redact.py`` chỉ in message của những exception đã
+            # được CHỨNG MINH an toàn theo KIỂU. Một ``RuntimeError`` trần rơi
+            # vào nhánh "chỉ in tên lớp" — không rò gì, nhưng người vận hành
+            # mất đúng dòng chữ nói THIẾU BIẾN NÀO, ngay lúc backend không khởi
+            # động được vì thiếu chính biến ấy. Message dưới đây chỉ nêu TÊN
+            # biến và cách sinh giá trị; không có giá trị nào trong đó.
+            raise LoiCauHinh(
                 "CRITICAL: MFA_BACKUP_CODE_PEPPER must be set in production. "
                 "Generate with: python -c \"import secrets; "
                 "print(secrets.token_urlsafe(32))\""
