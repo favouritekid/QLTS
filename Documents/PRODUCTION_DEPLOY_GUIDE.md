@@ -332,8 +332,20 @@ Vì thế đường ĐỌC và đường GHI được tách bằng `MFA_BACKUP_C
 3. Deploy theo đúng §6 ở trên (build đủ NĂM ảnh, `up -d --wait` liệt kê service
    tường minh, nginx qua `scripts/nginx-apply.sh`).
 
-Pha A đã lấy phần lớn giá trị của bản vá: mã sai không còn quét bcrypt tuyến
-tính, chi phí chạy ngoài event loop, và đặt chỗ nguyên tử chặn trước mọi bcrypt.
+Pha A lấy được gì, và KHÔNG lấy được gì — nói cho đúng:
+
+| | Pha A (writer=false) | Pha B (writer=true) |
+|---|---|---|
+| TOTP sai / sai hình dạng | không chạm backup, **0 bcrypt** | như pha A |
+| 10-hex sai | **vẫn quét tối đa 8 bcrypt** (rounds 12, ngoài event loop) | selector trượt ⇒ **0 bcrypt** |
+| 10-hex đúng | quét tới khi khớp | đúng **1 bcrypt** |
+| Đặt chỗ nguyên tử chặn trước mọi bcrypt | có | có |
+
+Nói cách khác: pha A cắt được đường tốn kém nhất (mã TOTP gõ nhầm rơi xuống quét
+backup) và hạ chi phí mỗi phép băm từ rounds 15 xuống 12, nhưng **quét tuyến
+tính vẫn còn** cho mã 10-hex sai vì dữ liệu vẫn ở định dạng legacy `list[str]`
+(`mfa_service.generate_backup_codes` khi cờ tắt) và reader legacy lặp từng hash.
+Chỉ selector v2 ở pha B mới xoá hẳn phép quét ấy.
 
 ### Mốc rollback an toàn
 

@@ -1390,10 +1390,16 @@ async def verify_mfa(
         raise HTTPException(status_code=401, detail="Invalid MFA token")
 
     # ===== STATUS GATE (Tầng B — early) =====
-    # Block non-active accounts BEFORE spending an OTP / bumping the MFA counter.
+    # Block non-active accounts BEFORE spending an OTP.
     # Catches the TOCTOU window where the account is deactivated between /login
     # (mfa_token issued) and /verify-mfa. Authoritative re-check happens in
     # _complete_login_flow (Tầng A) below.
+    #
+    # ⚠️ Bộ đếm MFA thì ĐÃ tăng rồi, ở bước đặt chỗ phía trên — cổng này không
+    # còn chạy trước nó như chú thích cũ nói. Cố ý: hàng rào chi phí phải đứng
+    # trước MỌI thứ, kể cả trước khi biết user còn active hay không. Hệ quả là
+    # một tài khoản đã bị vô hiệu vẫn tiêu lượt thử của chính nó, và đó là điều
+    # chấp nhận được — không có OTP nào bị tiêu, không có bcrypt nào chạy.
     _deny_if_not_active(
         user, ip_address=request.client.host if request.client else None
     )
