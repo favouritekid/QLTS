@@ -1816,12 +1816,15 @@ def test_runbook_upload_ban_ke_HOAN_CHINH():
         "`cp` chạy TRƯỚC khi manifest hoàn chỉnh — bản đưa lên S3 sẽ thiếu dòng "
         "'# offsite' mà chính preflight bắt buộc phải có"
     )
-    assert re.search(r"aws s3 cp[^\n]*\.sha256", lenh), (
+    # Neo vào HÀNH VI (đẩy checksum đi kèm), không vào TÊN CÔNG CỤ: đích offsite
+    # nay có thể là S3 hoặc một remote rclone, và guard khoá vào `aws` sẽ đỏ khi
+    # đổi provider dù bất biến vẫn được giữ nguyên.
+    assert re.search(r"day_offsite[^\n]*\.sha256", lenh), (
         "phải upload checksum đi kèm — không có nó thì bản tải về không kiểm được"
     )
     assert re.search(r"cmp -s[^\n]*offsite-check", lenh), (
-        "phải tải NGƯỢC bản kê về và so nội dung: `aws s3 cp` trả 0 không chứng "
-        "minh object đọc lại được (quyền, KMS, lifecycle, sai bucket)"
+        "phải tải NGƯỢC bản kê về và so nội dung: lệnh upload trả 0 không chứng "
+        "minh object đọc lại được (quyền, KMS, lifecycle, sai bucket/remote)"
     )
 
 
@@ -1873,7 +1876,7 @@ def test_preflight_chung_minh_ban_ke_offsite_DOC_DUOC():
     lại được (thiếu quyền, sai KMS key, sai bucket). Phải TẢI VỀ và so nội dung.
     """
     ma = _ma_lenh(_PREFLIGHT)
-    assert re.search(r'aws s3 cp "\$OFFSITE"', ma), (
+    assert re.search(r'_offsite_lay "\$OFFSITE"', ma), (
         "preflight chỉ kiểm chuỗi không rỗng — phải tải object về mới biết nó còn"
     )
     assert "sha256sum" in ma, "phải đối chiếu checksum của bản tải về"
@@ -1967,3 +1970,291 @@ def test_claude_md_lenh_production_ghim_docker_compose_yml():
         "lệnh production trong CLAUDE.md thiếu `-f docker-compose.yml`:\n  "
         + "\n  ".join(pham)
     )
+
+
+# =============================================================================
+# Offsite provider — bản kê phải ra được khỏi máy KHÔNG phụ thuộc `aws`
+# =============================================================================
+#
+# Đo trên prod 25-08-2026: máy chủ KHÔNG có `aws` CLI, nhưng CÓ `rclone` với
+# remote `gdrive-crypt:` mà cron backup CSDL đã dùng và đã đo end-to-end. Bản
+# trước của cả §5.4 lẫn preflight đóng cứng vào `aws s3 cp`, nên đường off-host
+# **chưa từng chạy nổi một lần** trên chính máy nó sinh ra để phục vụ — và điều
+# đó không lộ ra, vì nhánh `QLTS_ROLLBACK_LOCAL_ONLY=1` vẫn ĐẠT.
+
+def _khoi_offsite_loai() -> list[str]:
+    """Các nhánh `case` của `_offsite_loai`, theo ĐÚNG thứ tự trong script.
+
+    Kiểm tĩnh chứ không `subprocess bash`: trên Windows, `bash` mà Python tìm
+    thấy có thể là launcher WSL, và nó treo thay vì chạy — guard khi ấy đỏ vì
+    môi trường chứ không vì mã. Thứ tự nhánh là thứ duy nhất cần khẳng định, và
+    nó đọc được tất định từ chính script.
+    """
+    ma = _doc(_PREFLIGHT)
+    i = ma.index("_offsite_loai() {")
+    j = ma.index("esac", i)
+    return [d.strip() for d in ma[i:j].splitlines() if ")" in d and ";;" in d]
+
+
+def test_preflight_nhan_dien_provider_dung_thu_tu():
+    """`s3://x` cũng khớp mẫu `?*:*` — thứ tự `case` là bản chất, không phải khẩu vị.
+
+    Để nhánh rclone lên trước thì MỌI đường S3 bị gọi bằng rclone. Và `https://`
+    phải rơi vào "không nhận ra" chứ không được đoán bừa là rclone: đoán sai
+    provider chỉ làm thông báo lỗi trỏ sai hướng đúng vào lúc cần nó nhất.
+    """
+    nhanh = _khoi_offsite_loai()
+    assert nhanh, "không đọc được các nhánh `case` của _offsite_loai"
+
+    def vi_tri(mau: str) -> int:
+        return next((k for k, d in enumerate(nhanh) if d.startswith(mau)), -1)
+
+    vt_s3 = vi_tri("s3://*)")
+    vt_scheme = vi_tri("*://*)")
+    vt_rclone = vi_tri("?*:*)")
+    assert vt_s3 != -1, "thiếu nhánh nhận diện `s3://`"
+    assert vt_scheme != -1, (
+        "thiếu nhánh chặn URL có scheme khác — `https://…` sẽ bị coi là rclone"
+    )
+    assert vt_rclone != -1, "thiếu nhánh nhận diện remote rclone `<remote>:<path>`"
+    assert vt_s3 < vt_rclone, (
+        "nhánh `?*:*` (rclone) đứng TRƯỚC `s3://*` — mọi đường S3 sẽ bị gọi bằng rclone"
+    )
+    assert vt_scheme < vt_rclone, (
+        "nhánh `*://*` đứng SAU `?*:*` — `https://…` sẽ bị nhận nhầm là remote rclone"
+    )
+    assert "aws" in nhanh[vt_s3] and "rclone" in nhanh[vt_rclone], (
+        "nhánh nhận diện không trả đúng tên provider"
+    )
+
+
+def test_preflight_ho_tro_rclone_khong_doi_aws_cho_moi_dich():
+    """Máy prod không có `aws`. Đòi nó cho một đích rclone là chặn nhầm.
+
+    Bản trước gọi `command -v aws || error` NGAY khi vào nhánh offsite, trước cả
+    khi biết đường dẫn thuộc provider nào — nên trên chính máy production, cổng
+    rollback không thể ĐẠT bằng bất kỳ cách nào ngoài LOCAL_ONLY.
+    """
+    ma = _ma_lenh(_PREFLIGHT)
+    assert "rclone copyto" in ma, (
+        "preflight chưa hỗ trợ rclone — trên máy không có `aws` thì bản kê "
+        "offsite KHÔNG kiểm được, và cổng rollback thành vô dụng đúng lúc cần"
+    )
+    assert "_offsite_lay" in ma, "không có hàm điều phối provider"
+    # `command -v aws` chỉ được phép nằm SAU khi đã nhận diện provider.
+    for dong in ma.splitlines():
+        if "command -v aws" in dong:
+            assert "aws)" in ma, (
+                "còn kiểm `aws` mà không có nhánh provider — nghĩa là vẫn đòi "
+                "aws cho mọi đích offsite, kể cả rclone"
+            )
+
+
+def test_offsite_dung_copyto_khong_dung_copy():
+    """`rclone copy` coi đích là THƯ MỤC và giữ nguyên tên nguồn.
+
+    Tệp khi ấy nằm ở `$2/<tên gốc>`, mọi phép đọc sau đó trượt — trong khi lệnh
+    vẫn trả 0. Đúng loại lỗi "exit 0 mà việc không xảy ra".
+    """
+    for ten, ma in (("preflight", _ma_lenh(_PREFLIGHT)), ("§5.4", _lenh_5_4())):
+        pham = [
+            d.strip()[:80]
+            for d in ma.splitlines()
+            if re.search(r"\brclone\s+copy\s", d)
+        ]
+        assert not pham, (
+            ten + " dùng `rclone copy` cho một tệp — phải `copyto`, nếu không "
+            "tệp rơi vào thư mục con và mọi phép so sau đó trượt: " + str(pham)
+        )
+
+
+def test_preflight_tu_choi_trang_thai_nua_voi_offsite_ma_thieu_digest():
+    """"Đã lưu bản kê nhưng chưa push đủ ảnh" KHÔNG được coi là ĐẠT.
+
+    Hai nửa của tài sản rollback phải đi cùng nhau. Có `# offsite` mà thiếu
+    digest nghĩa là bản kê đã ra ngoài máy trong khi ta không chứng minh được
+    những ảnh ấy đã lên registry.
+    """
+    ma = _ma_lenh(_PREFLIGHT)
+    # Neo vào CẤU TRÚC + VỊ TRÍ, không vào tên biến: bản đầu của guard này chỉ
+    # kiểm `"thieu_digest" in ma`, mà tên ấy xuất hiện ở BỐN dòng — đổi tên ở
+    # dòng khai báo thì ba dòng còn lại vẫn giữ chuỗi, guard xanh trong khi
+    # script đã vỡ. Đo được: mutation đổi tên cho 83/83 XANH.
+    i = ma.index('QLTS_ROLLBACK_LOCAL_ONLY:-0}" != "1"')
+    j = ma.index('_offsite_lay "$OFFSITE"', i)
+    khoi = ma[i:j]
+    assert re.search(r"\$1==s \{print \$5\}", khoi), (
+        "trước khi tải bản kê offsite, preflight phải đọc cột digest (cột 5) của "
+        "từng service — thiếu nó thì 'đã lưu bản kê nhưng chưa push đủ ảnh' vẫn ĐẠT"
+    )
+    assert re.search(r"for S in \"\$\{DICH_VU\[@\]\}\"", khoi), (
+        "phải duyệt ĐỦ bốn service, không kiểm mẫu một cái"
+    )
+    assert "error" in khoi, (
+        "phát hiện thiếu digest mà không `error` thì chỉ là một dòng log"
+    )
+
+
+def test_5_4_khong_dong_cung_dich_offsite_vao_s3():
+    """Đích offsite phải khai qua biến — máy này không có `aws`."""
+    lenh = _lenh_5_4()
+    assert "QLTS_OFFSITE_URL" in lenh, (
+        "§5.4 còn đóng cứng đích offsite; phải cho khai qua QLTS_OFFSITE_URL"
+    )
+    assert "gdrive-crypt:" in lenh, (
+        "mặc định nên trỏ remote rclone đã có sẵn và đã đo (gdrive-crypt), thay "
+        "vì đòi cài thêm một CLI chỉ để chạy được đường cứu hộ"
+    )
+
+
+# =============================================================================
+# Runbook Pha B — bật writer v2
+# =============================================================================
+
+
+def _khoi_pha_b(noi_dung: str) -> str:
+    """Khối lệnh của "### Pha B", cắt theo MỐC chứ không theo độ dài cố định.
+
+    Bản trước cắt `[i:i+4000]`. Khối dài thêm vài dòng chú thích là truy vấn
+    BASELINE SAU rơi ra ngoài cửa sổ, và guard đỏ vì lý do không liên quan tới
+    thứ nó canh — một guard mong manh theo đúng nghĩa đen.
+    """
+    i = noi_dung.index("### Pha B")
+    j = noi_dung.index("### Sau khi pha B", i)
+    return noi_dung[i:j]
+
+
+def test_pha_b_kiem_co_tren_CA_BA_container():
+    """`up -d` trả 0 không chứng minh cả ba service đã nhận cờ mới.
+
+    Compose chỉ recreate service nào có model lệch. Một service không recreate
+    giữ `writer=false` trong khi hai service kia đã bật ⇒ ghi legacy hay v2 tuỳ
+    tiến trình nào phục vụ. Lệch âm thầm, không log nào báo.
+    """
+    if not _GUIDE.is_file():
+        pytest.skip("không có PRODUCTION_DEPLOY_GUIDE.md")
+    noi_dung = _doc(_GUIDE)
+    khoi = _khoi_pha_b(noi_dung)
+    for c in ("qlts-backend-1", "qlts-celery-worker-1", "qlts-celery-beat-1"):
+        assert c in khoi, "Pha B không kiểm cờ trên " + c
+    assert "docker inspect" in khoi and "MFA_BACKUP_CODE_V2_WRITER_ENABLED" in khoi, (
+        "phải đọc cờ ĐÃ NƯỚNG vào container, không suy từ tệp .env"
+    )
+    # Ba điều dưới đây là thứ biến "lời nhắc" thành CỔNG. Bản trước chỉ
+    # `grep '^VAR='` — khớp cả `=false` — rồi `|| echo 'DUNG LAI'`, mà `echo`
+    # trả 0 nên quy trình đi tiếp. Guard cũng chỉ đòi có mặt tên biến, nên nó
+    # xanh cho một cổng fail-OPEN.
+    assert re.search(r'!=\s*"true"|=\s*"true"|-eq\s+1', khoi), (
+        "cổng chỉ tìm TÊN biến chứ không so GIÁ TRỊ — `grep '^VAR='` khớp cả "
+        "`=false`, nên một container chưa recreate vẫn lọt"
+    )
+    assert re.search(r"\bexit 1\b", khoi), (
+        "cổng không `exit 1` — dòng chữ 'DỪNG LẠI' không dừng được gì khi người "
+        "trực dán cả khối vào terminal; lệnh sau vẫn chạy"
+    )
+    assert re.search(r"so_khai|-ne 1", khoi), (
+        "không bắt ca biến khai TRÙNG: >1 dòng thì giá trị nào thắng là tuỳ thứ "
+        "tự nạp — phải coi là hỏng, không đoán"
+    )
+    # Đếm phải làm trên output THÔ, TRƯỚC khi tách giá trị. Đếm sau khi tách là
+    # sai: command substitution xoá newline cuối và `grep -c .` bỏ dòng rỗng,
+    # nên `VAR=true` + `VAR=` cho ra `so_dong=1` và LỌT. Đã đo đúng cặp ấy.
+    assert re.search(r"grep -c '\^MFA_BACKUP_CODE_V2_WRITER_ENABLED='", khoi), (
+        "đếm số dòng khai báo phải grep trên output THÔ của `docker inspect`; "
+        "đếm sau khi `sed` tách giá trị thì `VAR=true` + `VAR=` vẫn cho 1 và lọt"
+    )
+    # `up --wait` hỏng phải DỪNG, và "dừng" nghĩa là `exit`, không phải `echo`.
+    #
+    # ⚠️ Bản trước chỉ hỏi "có `||` gần lệnh Compose không". Đổi guard thật
+    # thành `|| echo "DUNG LAI"` — ĐÚNG cái lỗi fail-open đang vá — mà test vẫn
+    # xanh. Neo phải vào NHÁNH LỖI: phần ngay sau `||` phải chứa `exit`.
+    vt_up = khoi.find("up -d")
+    assert vt_up != -1, "Pha B không còn bước dựng lại service?"
+    cua_so = khoi[vt_up:vt_up + 320]
+    vt_or = cua_so.find("||")
+    assert vt_or != -1, (
+        "`docker compose up --wait` không có `||` chặn lỗi — một lượt dựng hỏng "
+        "vẫn để khối đọc cờ trên container CŨ còn sống, thấy true, rồi đi tiếp"
+    )
+    nhanh_loi = cua_so[vt_or:vt_or + 160]
+    assert re.search(r"\bexit\b", nhanh_loi), (
+        "nhánh lỗi của `up --wait` không `exit` — `|| echo 'DUNG LAI'` trả 0 nên "
+        f"khối vẫn chạy tiếp. Nhánh hiện tại: {nhanh_loi.strip()[:90]!r}"
+    )
+
+
+def test_pha_b_co_baseline_DB_truoc_va_sau():
+    """"Có 1 bản ghi v2" không phân biệt được "vừa sinh" với "đã có từ trước"."""
+    if not _GUIDE.is_file():
+        pytest.skip("không có PRODUCTION_DEPLOY_GUIDE.md")
+    noi_dung = _doc(_GUIDE)
+    khoi = _khoi_pha_b(noi_dung)
+    assert "v2_truoc" in khoi, "Pha B thiếu baseline DB TRƯỚC khi bật cờ"
+    # "BASELINE SAU" là CHỮ, không phải phép đo. Bản trước guard xanh chỉ vì tìm
+    # thấy chuỗi ấy trong một dòng chú thích — trong khi không có truy vấn thứ
+    # hai nào để so, nên "v2 +1, legacy −1" không thể chứng minh được.
+    assert khoi.count('FROM "user"') >= 2, (
+        "chỉ có MỘT truy vấn — không có số liệu SAU thì không tính được delta; "
+        "'BASELINE SAU' đang là chú thích chứ không phải phép đo"
+    )
+    assert re.search(r"v2_sau|d_v2", khoi), "không đọc số liệu SAU vào biến"
+
+    # Trích RIÊNG nhánh so delta rồi mới khẳng định — không quét cả khối.
+    #
+    # ⚠️ Bản trước tìm `exit 1` trên TOÀN khối Pha B. Khối ấy có sẵn ba `exit 1`
+    # khác (baseline không đọc được, `up --wait` hỏng, cờ writer sai), nên xoá
+    # riêng `exit 1` của nhánh delta vẫn xanh — guard canh hụt đúng chỗ nó sinh
+    # ra để canh.
+    vt_if = khoi.find('if [ "$d_v2"')
+    assert vt_if != -1, (
+        "không tìm thấy nhánh `if` so delta — delta phải được KIỂM bằng máy, "
+        "không phải in ra cho người đọc"
+    )
+    vt_fi = khoi.find("\nfi", vt_if)
+    assert vt_fi != -1, "nhánh so delta không đóng bằng `fi`?"
+    nhanh_delta = khoi[vt_if:vt_fi]
+    assert re.search(r"-ne 1\b", nhanh_delta) and re.search(r"-ne -1\b", nhanh_delta), (
+        "nhánh delta không so đủ (+1 / −1) — đọc hai bảng số bằng mắt là chỗ "
+        "sai sót vào lúc 3 giờ sáng"
+    )
+    assert re.search(r"\bexit 1\b", nhanh_delta), (
+        "delta lệch mà nhánh ấy không `exit 1` thì chỉ là một dòng cảnh báo — "
+        f"nhánh hiện tại: {nhanh_delta.strip()[:110]!r}"
+    )
+
+
+def test_pha_b_uu_tien_rollback_moi_hon_e84e0cd8():
+    """"Đọc được v2" KHÔNG còn là tiêu chí đủ để chọn ảnh lùi.
+
+    `e84e0cd8` đọc được v2 nhưng là bản TRƯỚC #576, nên lùi về đó mở lại hai
+    race MFA đã vá (TOTP replay + mfa_token reuse, cả hai fail-open).
+    """
+    if not _GUIDE.is_file():
+        pytest.skip("không có PRODUCTION_DEPLOY_GUIDE.md")
+    noi_dung = _doc(_GUIDE)
+    i = noi_dung.index("### Sau khi pha B đã phát mã")
+    khoi = noi_dung[i:i + 3000]
+    assert "811cdf17" in khoi, (
+        "runbook chưa nêu ảnh ưu tiên sau #576; người trực sẽ lùi về ảnh pha A "
+        "và mở lại hai race vừa vá"
+    )
+    vt_moi = khoi.index("811cdf17")
+    vt_cu = khoi.index("e84e0cd8")
+    assert vt_moi < vt_cu, (
+        "e84e0cd8 được nêu TRƯỚC 811cdf17 — thứ tự đọc dẫn người trực chọn nhầm"
+    )
+
+
+def test_pha_b_co_ke_hoach_cap_lai_ma_khi_doi_pepper():
+    """Đổi pepper = vô hiệu MỌI mã v2 đã phát, không tính lại được từ hash."""
+    if not _GUIDE.is_file():
+        pytest.skip("không có PRODUCTION_DEPLOY_GUIDE.md")
+    noi_dung = _doc(_GUIDE)
+    assert "Nếu buộc phải đổi pepper" in noi_dung, (
+        "chỉ cảnh báo 'đổi pepper là vô hiệu mã' mà không có KẾ HOẠCH thì lúc "
+        "buộc phải đổi vẫn không ai biết làm gì"
+    )
+    i = noi_dung.index("Nếu buộc phải đổi pepper")
+    khoi = noi_dung[i:i + 2000]
+    assert "count(*)" in khoi, "thiếu bước đếm phạm vi người dùng đang giữ mã v2"
+    assert re.search(r"[Cc]ấp lại mã", khoi), "thiếu bước cấp lại mã"

@@ -37,6 +37,64 @@ log() { echo -e "${GREEN}[ROLLBACK-PREFLIGHT]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
 error() { echo -e "${RED}[ERROR]${NC} $1" >&2; exit 1; }
 
+# --- Tải bản kê offsite: nhận diện provider TỪ CHÍNH đường dẫn ---------------
+#
+# Vì sao không thêm biến `QLTS_OFFSITE_PROVIDER`: bản kê là thứ đi theo gói cứu
+# hộ tới một máy trắng. Nếu provider nằm ở biến môi trường thì nó là mảnh thứ
+# hai phải nhớ mang theo — và mảnh nào phải nhớ thì có ngày sẽ quên. Đường dẫn
+# đã tự mô tả đủ: `s3://…` là AWS, `remote:path` là rclone.
+#
+# ⚠️ Thứ tự `case` là bản chất chứ không phải khẩu vị: `s3://x` cũng khớp mẫu
+# `?*:*`, nên nếu để nhánh rclone trước thì mọi URL S3 sẽ bị gọi bằng rclone.
+# Và `https://…` phải rơi vào "không nhận ra" chứ không được coi là rclone —
+# đoán sai provider thì thông báo lỗi sẽ chỉ sai hướng đúng vào lúc 3 giờ sáng.
+_OFFSITE_VI_SAO=""
+
+_offsite_loai() {
+    case "$1" in
+        s3://*)  echo aws ;;
+        *://*)   echo khong_ro ;;
+        ?*:*)    echo rclone ;;
+        *)       echo khong_ro ;;
+    esac
+}
+
+_offsite_lay() {   # $1 = đường dẫn nguồn, $2 = tệp đích
+    local loai
+    loai=$(_offsite_loai "$1")
+    case "$loai" in
+        aws)
+            if ! command -v aws >/dev/null 2>&1; then
+                _OFFSITE_VI_SAO="Đường dẫn là S3 nhưng máy này KHÔNG có \`aws\`.
+  Cài aws CLI, hoặc chuyển bản kê sang một remote rclone (§5.4), hoặc khai rủi
+  ro tường minh bằng QLTS_ROLLBACK_LOCAL_ONLY=1 (mất máy = mất đường lùi)."
+                return 3
+            fi
+            _OFFSITE_VI_SAO="Object không tồn tại, đã bị dọn, hoặc không có quyền đọc."
+            aws s3 cp "$1" "$2" >/dev/null 2>&1
+            ;;
+        rclone)
+            if ! command -v rclone >/dev/null 2>&1; then
+                _OFFSITE_VI_SAO="Đường dẫn là remote rclone nhưng máy này KHÔNG có \`rclone\`.
+  Cài rclone và khôi phục cấu hình remote, hoặc khai rủi ro tường minh bằng
+  QLTS_ROLLBACK_LOCAL_ONLY=1 (mất máy = mất đường lùi)."
+                return 3
+            fi
+            # `copyto` chứ không phải `copy`: `copy` coi đích là THƯ MỤC và giữ
+            # nguyên tên nguồn, nên tệp sẽ nằm ở "$2/<tên gốc>" và mọi phép đọc
+            # sau đó trượt — im lặng, vì bản thân lệnh vẫn trả 0.
+            _OFFSITE_VI_SAO="Object không tồn tại trên remote, hoặc cấu hình rclone
+  trên máy này không giải mã / không truy cập được remote đó."
+            rclone copyto "$1" "$2" >/dev/null 2>&1
+            ;;
+        *)
+            _OFFSITE_VI_SAO="Không nhận ra loại đường dẫn offsite: chỉ hỗ trợ \`s3://…\`
+  (aws) hoặc \`<remote>:<đường dẫn>\` (rclone)."
+            return 4
+            ;;
+    esac
+}
+
 TAG="${QLTS_ROLLBACK_TAG:?dat QLTS_ROLLBACK_TAG = tag da ghi o RUNBOOK 5.4}"
 ENV_FILE="${QLTS_COMPOSE_ENV_FILE:-.env.production}"
 read -r -a _EXTRA <<< "${QLTS_COMPOSE_EXTRA:-}"
@@ -171,23 +229,43 @@ if [ "${QLTS_ROLLBACK_LOCAL_ONLY:-0}" != "1" ]; then
   Mất máy thì còn ảnh trên registry nhưng KHÔNG biết digest nào là ảnh cũ.
   Chép bản kê vào gói backup offsite (§5.3) rồi ghi lại đường dẫn đó vào manifest."
 
+    # --- 2b-i. "Đã push ảnh nhưng chưa lưu bản kê" KHÔNG được coi là ĐẠT ----
+    #
+    # Hai nửa của tài sản rollback phải đi cùng nhau. Nửa vời theo BẤT KỲ chiều
+    # nào đều là bẫy:
+    #   * có `# offsite` mà thiếu digest ⇒ bản kê ngoài máy trỏ tới những ảnh ta
+    #     không chứng minh được là đã ở registry;
+    #   * có digest mà thiếu `# offsite` ⇒ ảnh ở ngoài nhưng không ai biết digest
+    #     nào là đúng sau khi mất máy.
+    # Nhánh đầu đã được vế `[ -n "$OFFSITE" ]` ở trên bắt. Nhánh còn lại là đây.
+    thieu_digest=()
+    for S in "${DICH_VU[@]}"; do
+        d=$(awk -F'\t' -v s="$S" '$1==s {print $5}' "$MANIFEST" | head -1)
+        [ -n "$d" ] || thieu_digest+=("$S")
+    done
+    [ ${#thieu_digest[@]} -eq 0 ] \
+        || error "$MANIFEST có dòng '# offsite' nhưng THIẾU digest cho: ${thieu_digest[*]}
+  Đó là trạng thái nửa vời: bản kê đã ra ngoài máy trong khi ta không chứng minh
+  được những ảnh ấy đã lên registry. Chạy lại §5.4 cho trọn, đừng vá tay bản kê.
+  DỪNG LẠI — chưa đụng gì tới CSDL."
+
     # Một chuỗi đường dẫn không rỗng KHÔNG chứng minh gì cả: object có thể chưa
     # bao giờ được upload, đã bị lifecycle dọn, hoặc không đọc lại được (thiếu
     # quyền, sai KMS key, sai bucket). Phải TẢI VỀ và so NỘI DUNG.
-    command -v aws >/dev/null 2>&1 \
-        || error "không có \`aws\` trên máy này nên KHÔNG kiểm được bản kê offsite.
-  Cài aws CLI, hoặc khai rủi ro tường minh bằng QLTS_ROLLBACK_LOCAL_ONLY=1
-  (nghĩa là chấp nhận: mất máy = mất đường lùi)."
-
+    #
+    # Provider suy từ CHÍNH đường dẫn trong bản kê, không từ một biến môi trường
+    # thứ hai: bản kê là thứ đi theo gói cứu hộ, nên nó phải tự mô tả đủ để một
+    # máy trắng đọc được. Thêm một biến nữa là thêm một thứ có thể quên mang theo.
     TMP_OFFSITE=$(mktemp -d)
     trap 'rm -rf "$TMP_OFFSITE"' EXIT
 
-    aws s3 cp "$OFFSITE" "$TMP_OFFSITE/manifest.txt" >/dev/null 2>&1 \
+    _offsite_lay "$OFFSITE" "$TMP_OFFSITE/manifest.txt" \
         || error "KHÔNG tải được bản kê offsite: $OFFSITE
-  Object không tồn tại, đã bị dọn, hoặc không có quyền đọc.
+  $_OFFSITE_VI_SAO
   DỪNG LẠI — chưa đụng gì tới CSDL."
-    aws s3 cp "${OFFSITE}.sha256" "$TMP_OFFSITE/manifest.sha256" >/dev/null 2>&1 \
+    _offsite_lay "${OFFSITE}.sha256" "$TMP_OFFSITE/manifest.sha256" \
         || error "KHÔNG tải được checksum đi kèm: ${OFFSITE}.sha256
+  $_OFFSITE_VI_SAO
   §5.4 phải upload cả tệp .sha256 — không có nó thì bản tải về không kiểm được."
 
     SUM_THAT=$(sha256sum "$TMP_OFFSITE/manifest.txt" | awk '{print $1}')
