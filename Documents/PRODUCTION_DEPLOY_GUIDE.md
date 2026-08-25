@@ -360,23 +360,133 @@ lên.
 được ghi ra.
 
 ```bash
+# 0. BASELINE TRƯỚC — LƯU VÀO BIẾN, không chỉ in ra màn hình. Không có nó thì
+#    "có 1 bản ghi v2" không phân biệt được "vừa sinh ra" với "đã có từ trước",
+#    và bước 5 không có gì để trừ.
+TRUOC=$(docker exec -i qlts-postgres-1 psql -U qlts -d qlts_production -t -A -F' ' <<'SQL'
+SELECT count(*) FILTER (WHERE btrim(backup_codes_hashed) LIKE '[{%'),
+       count(*) FILTER (WHERE btrim(backup_codes_hashed) LIKE '["%'),
+       count(*) FILTER (WHERE mfa_enabled)
+FROM "user";
+SQL
+)
+read -r v2_truoc legacy_truoc mfa_truoc <<<"$TRUOC"
+printf 'truoc: v2=%s legacy=%s mfa_bat=%s\n' "$v2_truoc" "$legacy_truoc" "$mfa_truoc"
+[ -n "$v2_truoc" ] && [ -n "$legacy_truoc" ] && [ -n "$mfa_truoc" ] \
+    || { echo "DUNG LAI: không đọc được baseline — đừng bật cờ khi chưa có mốc so."; exit 1; }
+
 # 1. Sửa .env.production
 #    MFA_BACKUP_CODE_V2_WRITER_ENABLED=true
 
 # 2. DỰNG LẠI các service đọc Settings — `restart` KHÔNG nạp lại env_file;
 #    biến được nướng vào container lúc TẠO.
-docker compose -f docker-compose.yml --env-file .env.production --profile production     up -d --no-deps --wait backend celery-worker celery-beat
+#
+#    ⚠️ PHẢI chặn lỗi tường minh. Không có `|| exit 1`, một lượt `up --wait`
+#    hỏng (image thiếu, healthcheck không đạt, container chết ngay) vẫn để khối
+#    chạy tiếp — và bước 3 sẽ đọc cờ trên những container CŨ còn sống, thấy
+#    `true`, rồi đi thẳng tới bước phát mã v2. Đo được: Compose trả 42 mà khối
+#    vẫn in `=true` cho cả ba và chạy tới baseline sau.
+docker compose -f docker-compose.yml --env-file .env.production --profile production \
+    up -d --no-deps --wait backend celery-worker celery-beat \
+    || { echo "DUNG LAI: up --wait hỏng — KHÔNG kiểm cờ trên container cũ."; exit 1; }
 
-# 3. Nghiệm thu bằng hành vi thật, không bằng exit code: cấp lại backup code cho
+# 3. KIỂM CỜ ĐÃ NƯỚNG VÀO CẢ BA container — không suy từ việc `up -d` trả 0.
+#    Compose chỉ recreate service nào có model lệch; một service không recreate
+#    sẽ giữ writer=false trong khi hai service kia đã bật. Hệ quả là ghi legacy
+#    hay v2 tuỳ tiến trình nào phục vụ — lệch âm thầm, không log nào báo.
+#
+#    ⚠️ PHẢI so GIÁ TRỊ, không chỉ tìm TÊN BIẾN: `grep '^VAR='` khớp cả `=false`.
+#    Và phải `exit 1` — một dòng chữ "DỪNG LẠI" không dừng được gì; người trực
+#    dán cả khối vào terminal thì lệnh sau vẫn chạy tiếp.
+loi=0
+for c in qlts-backend-1 qlts-celery-worker-1 qlts-celery-beat-1; do
+    # Lưu output THÔ rồi đếm trên đó. Đếm sau khi đã tách giá trị là sai:
+    # command substitution xoá newline cuối, và `grep -c .` bỏ dòng RỖNG — nên
+    # một container có CẢ `VAR=true` LẪN `VAR=` cho ra `gt=true, so_dong=1` và
+    # LỌT. Đã đo đúng cặp giá trị ấy.
+    env_tho=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$c") \
+        || { echo "DUNG LAI: không đọc được env của $c."; exit 1; }
+    so_khai=$(printf '%s\n' "$env_tho" \
+        | grep -c '^MFA_BACKUP_CODE_V2_WRITER_ENABLED=' || true)
+    gt=$(printf '%s\n' "$env_tho" \
+        | sed -n 's/^MFA_BACKUP_CODE_V2_WRITER_ENABLED=//p' | head -1)
+    if [ "$so_khai" -ne 1 ]; then
+        # 0 = container không có biến. >1 = khai TRÙNG, giá trị nào thắng là
+        # tuỳ thứ tự nạp — không đoán, coi là hỏng.
+        printf '%-24s THIEU/TRUNG (%s dòng khai)\n' "$c" "$so_khai"; loi=1
+    elif [ "$gt" != "true" ]; then
+        printf '%-24s = "%s" (phải là true)\n' "$c" "$gt"; loi=1
+    else
+        printf '%-24s = true\n' "$c"
+    fi
+done
+[ "$loi" -eq 0 ] || { echo "DUNG LAI: cờ writer chưa đúng trên đủ ba container."; exit 1; }
+
+# 4. Nghiệm thu bằng hành vi thật, không bằng exit code: cấp lại backup code cho
 #    MỘT tài khoản thử, rồi kiểm bản ghi trong DB là list[dict] có khoá "v": 2.
+
+# 5. BASELINE SAU — chạy LẠI đúng truy vấn ở bước 0 và so DELTA bằng máy.
+#    Đọc hai bảng số bằng mắt là chỗ sai sót vào lúc 3 giờ sáng; ở đây để lệnh
+#    tự kết luận. Kỳ vọng: v2 +1 · legacy −1 · mfa_bat không đổi.
+SAU=$(docker exec -i qlts-postgres-1 psql -U qlts -d qlts_production -t -A -F' ' <<'SQL'
+SELECT count(*) FILTER (WHERE btrim(backup_codes_hashed) LIKE '[{%'),
+       count(*) FILTER (WHERE btrim(backup_codes_hashed) LIKE '["%'),
+       count(*) FILTER (WHERE mfa_enabled)
+FROM "user";
+SQL
+)
+read -r v2_sau legacy_sau mfa_sau <<<"$SAU"
+d_v2=$((v2_sau - v2_truoc)); d_legacy=$((legacy_sau - legacy_truoc)); d_mfa=$((mfa_sau - mfa_truoc))
+printf 'delta: v2=%+d legacy=%+d mfa_bat=%+d\n' "$d_v2" "$d_legacy" "$d_mfa"
+if [ "$d_v2" -ne 1 ] || [ "$d_legacy" -ne -1 ] || [ "$d_mfa" -ne 0 ]; then
+    echo "DUNG LAI: delta khác (+1, -1, 0) — có đường ghi thứ hai, hoặc bước 4 chưa chạy."
+    exit 1
+fi
 ```
 
 ### Sau khi pha B đã phát mã
 
 🔴 **CẤM rollback về ảnh trước reader-capable.** Ảnh đó sẽ ném lỗi khi gặp
-`dict` trong danh sách, và mọi backup code v2 đã phát thành vô dụng. Nếu buộc
-phải lùi, chỉ lùi tới ảnh pha A (đọc được cả hai) và đặt lại
-`MFA_BACKUP_CODE_V2_WRITER_ENABLED=false`.
+`dict` trong danh sách, và mọi backup code v2 đã phát thành vô dụng.
+
+**Thứ tự ưu tiên đường lùi — hai tiêu chí, không phải một:**
+
+| Ưu tiên | Ảnh | Đọc v2 | Có bản vá race MFA (#576) |
+|---|---|---|---|
+| 1 | `…-811cdf17` **hoặc mới hơn** | ✅ | ✅ |
+| 2 (chỉ khi bất khả kháng) | `…-e84e0cd8` | ✅ | ❌ **mở lại hai race** |
+| ⛔ cấm | `…-953d6338` và cũ hơn | ❌ | ❌ |
+
+Lùi về `e84e0cd8` là đổi một sự cố lấy hai lỗ đã vá ở #576 — TOTP replay và
+`mfa_token` reuse, cả hai **fail-open khi Redis lỗi**. Nó vẫn nằm trong bảng vì
+đọc được v2, nhưng chỉ dùng khi không còn ảnh nào mới hơn. Dù lùi tới đâu, đặt
+lại `MFA_BACKUP_CODE_V2_WRITER_ENABLED=false` rồi dựng lại **cả ba** service và
+kiểm cờ như bước 3 ở trên.
+
+⇒ "Reader-capable" KHÔNG còn là tiêu chí đủ để chọn ảnh lùi. Phải hỏi thêm: ảnh
+đó có mang bản vá bảo mật nào mà ta đang dựa vào không?
+
+### Nếu buộc phải đổi pepper
+
+Đổi `MFA_BACKUP_CODE_PEPPER` làm **mọi mã v2 đã phát thành vô dụng ngay lập
+tức**: selector là `HMAC(pepper, code)`, không tính lại được từ hash đã lưu. Mã
+legacy không ảnh hưởng (bcrypt thuần), nên thiệt hại đúng bằng tập người dùng đã
+regenerate sau pha B.
+
+Kế hoạch bắt buộc trước khi đổi:
+
+1. **Đếm phạm vi** — ai đang giữ mã v2:
+   `SELECT count(*) FROM "user" WHERE btrim(backup_codes_hashed) LIKE '[{%';`
+2. **Thông báo trước** cho đúng tập ấy — sau khi đổi, mã in ra giấy của họ vô
+   dụng mà không có thông báo lỗi nào nói rõ nguyên nhân.
+3. **Đổi pepper + dựng lại ba service**, kiểm cờ như bước 3.
+4. **Cấp lại mã** cho từng tài khoản trong tập đó (bản rõ chỉ hiện MỘT lần —
+   không có đường phục hồi nếu người dùng không lưu).
+5. **Nghiệm thu**: đếm lại v2, và với ít nhất một tài khoản, xác minh mã mới
+   dùng được còn mã cũ thì không.
+
+⚠️ Không có bước nào ở trên là tự động. Nếu chưa làm được bước 4 cho **toàn bộ**
+tập ở bước 1 thì **đừng đổi pepper**.
 
 ---
 

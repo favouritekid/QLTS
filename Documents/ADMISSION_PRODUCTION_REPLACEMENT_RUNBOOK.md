@@ -253,19 +253,48 @@ else
     # TRƯỚC rồi mới `printf '# offsite'` vào bản local, nên tệp đưa lên S3 thiếu
     # đúng cái dòng mà preflight bắt buộc phải có: khôi phục bản kê từ S3 rồi
     # chạy preflight là tự đỏ. Đường lùi hỏng đúng vào lúc dùng tới nó.
-    OFFSITE_URL="s3://qlts-backup/admission-cutover/config_backup_${DATE}_manifest.txt"
+    # Đích offsite khai qua BIẾN, không đóng cứng vào S3. Hai provider được hỗ
+    # trợ, nhận diện theo hình dạng đường dẫn (`rollback-preflight.sh` dùng đúng
+    # quy tắc này): `s3://…` ⇒ aws · `<remote>:<path>` ⇒ rclone.
+    #
+    # QLTS dùng rclone remote `gdrive-crypt:` — cùng remote mà cron backup CSDL
+    # đã dùng và đã đo end-to-end. Chọn nó thay vì cài `aws` chỉ để chiều script:
+    # thêm một CLI là thêm một thứ phải cài lại trên máy cứu hộ lúc 3 giờ sáng.
+    OFFSITE_URL="${QLTS_OFFSITE_URL:-gdrive-crypt:qlts-rollback/config_backup_${DATE}_manifest.txt}"
+
+    day_offsite() {   # $1 = tệp nguồn, $2 = đích
+        case "$2" in
+            s3://*) aws s3 cp "$1" "$2" ;;
+            *://*)  echo "khong nhan ra dich offsite: $2"; return 1 ;;
+            ?*:*)   rclone copyto "$1" "$2" ;;
+            *)      echo "khong nhan ra dich offsite: $2"; return 1 ;;
+        esac
+    }
+    lay_offsite() {   # $1 = nguồn, $2 = tệp đích
+        case "$1" in
+            s3://*) aws s3 cp "$1" "$2" ;;
+            *://*)  echo "khong nhan ra nguon offsite: $1"; return 1 ;;
+            # `copyto` chứ không `copy`: `copy` coi đích là THƯ MỤC nên tệp rơi
+            # vào "$2/<tên gốc>", và mọi phép so sau đó trượt — trong khi lệnh
+            # vẫn trả 0.
+            ?*:*)   rclone copyto "$1" "$2" ;;
+            *)      echo "khong nhan ra nguon offsite: $1"; return 1 ;;
+        esac
+    }
+
     printf '# offsite\t%s\n' "$OFFSITE_URL" >> "$MANIFEST"   # 1. hoàn chỉnh TRƯỚC
     cp "$MANIFEST" "config_backup_${DATE}_manifest.txt"      # 2. copy bản hoàn chỉnh
     sha256sum "config_backup_${DATE}_manifest.txt" | awk '{print $1}' \
         > "config_backup_${DATE}_manifest.txt.sha256"        # 3. checksum đi kèm
-    aws s3 cp "config_backup_${DATE}_manifest.txt" "$OFFSITE_URL"
-    aws s3 cp "config_backup_${DATE}_manifest.txt.sha256" "${OFFSITE_URL}.sha256"
+    day_offsite "config_backup_${DATE}_manifest.txt" "$OFFSITE_URL"
+    day_offsite "config_backup_${DATE}_manifest.txt.sha256" "${OFFSITE_URL}.sha256"
 
-    # 4. Tải NGƯỢC về và so NỘI DUNG. `aws s3 cp` trả 0 không chứng minh object
-    #    đọc lại được (quyền, KMS, lifecycle, sai bucket đều lộ ra ở đây).
-    aws s3 cp "$OFFSITE_URL" - > "${MANIFEST}.offsite-check"
+    # 4. Tải NGƯỢC về và so NỘI DUNG. Lệnh upload trả 0 KHÔNG chứng minh object
+    #    đọc lại được — quyền, KMS, lifecycle, sai bucket, hay (với rclone) một
+    #    remote crypt mà máy này không giải mã nổi, đều chỉ lộ ra ở đây.
+    lay_offsite "$OFFSITE_URL" "${MANIFEST}.offsite-check"
     cmp -s "${MANIFEST}.offsite-check" "$MANIFEST" \
-        || { echo "ban ke tren S3 KHAC ban local — DUNG LAI"; exit 1; }
+        || { echo "ban ke offsite KHAC ban local — DUNG LAI"; exit 1; }
     rm -f "${MANIFEST}.offsite-check"
 fi
 set +e
