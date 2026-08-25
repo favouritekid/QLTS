@@ -30,9 +30,12 @@ from ..utils.exceptions import (  # ✅ PHASE 1: Import custom exceptions
 )
 from ..middleware.csrf import set_csrf_cookie  # ✅ CSRF Protection
 from ..database import (
+    KetQuaChiem,
+    safe_redis_claim_once,
     safe_redis_delete,
     safe_redis_exists,
     safe_redis_get,
+    safe_redis_khoa_ton_tai,
     safe_redis_pipeline,
     safe_redis_reserve_attempt,
     safe_redis_set,
@@ -52,6 +55,12 @@ from ..core.events import SystemEvents  # Security: Event registry
 
 router = APIRouter(tags=["Authentication"])
 log = structlog.get_logger(__name__)
+
+# Nhãn LOẠI khoá, dùng thay cho chính khoá trên đường log của các helper Redis
+# nhạy cảm. ``mfa_used:{jti}`` mang định danh của một bằng chứng MFA còn hiệu
+# lực; nhánh log lại là nhánh chạy KHI REDIS SỰ CỐ, nên ghi nguyên khoá ở đó là
+# đẩy JTI đầy đủ vào log đúng lúc dễ xảy ra nhất.
+_NHAN_KHOA_MFA_TOKEN = "mfa.token_claim"
 
 
 class RefreshAbuseLocked(HTTPException):
@@ -1314,17 +1323,34 @@ async def verify_mfa(
     if not username or not user_id:
         raise HTTPException(status_code=401, detail="Invalid MFA token")
 
-    # 1b. Check if this mfa_token was already used (prevent reuse within 5min window)
+    # 1b. `jti` là ĐỊNH DANH của bằng chứng MFA — thiếu nó thì KHÔNG có gì để
+    # đánh dấu đã dùng, nên cũng không có cách nào ngăn dùng lại.
+    #
+    # ⚠️ Bản trước bọc toàn bộ lớp bảo vệ trong `if mfa_jti:` — token không có
+    # `jti` (token cũ, token do một bản `create_mfa_token` khác phát, hay token
+    # được nặn ra) đi thẳng qua mà KHÔNG hề bị kiểm dùng-lại, và không để lại
+    # dấu vết nào cho biết chuyện đó đã xảy ra. Thiếu định danh ⇒ từ chối.
     mfa_jti = payload.get("jti")
-    if mfa_jti:
-        try:
-            already_used = await safe_redis_exists(f"mfa_used:{mfa_jti}")
-            if already_used:
-                raise HTTPException(status_code=401, detail="MFA token already used. Please login again.")
-        except HTTPException:
-            raise
-        except Exception as e:
-            log.error("Redis MFA token blacklist check failed", error=str(e))
+    if not isinstance(mfa_jti, str) or not mfa_jti.strip():
+        log.warning(
+            "mfa_token_missing_jti", username=username,
+            action="mfa.token_missing_jti",
+        )
+        raise HTTPException(status_code=401, detail="Invalid MFA token")
+
+    # 1c. Từ chối SỚM một token đã dùng, để không tiêu lượt thử và không tốn
+    # CPU verify cho một token chắc chắn hỏng.
+    #
+    # ⚠️ Đây CHỈ là tối ưu, KHÔNG phải cổng có thẩm quyền: giữa `EXISTS` ở đây
+    # và lúc đăng nhập hoàn tất còn cả quá trình xác minh (với backup code là
+    # một phép bcrypt ~220ms), thừa sức để một request thứ hai lọt qua cùng chỗ
+    # này. `safe_redis_khoa_ton_tai` cũng trả `False` khi Redis lỗi — cố ý, vì
+    # một phép kiểm sớm không thẩm quyền thì không được làm hỏng request.
+    # Quyết định thật nằm ở bước 5 — `SET NX` nguyên tử, TRƯỚC khi cấp phiên.
+    if await safe_redis_khoa_ton_tai(f"mfa_used:{mfa_jti}", _NHAN_KHOA_MFA_TOKEN):
+        raise HTTPException(
+            status_code=401, detail="MFA token already used. Please login again."
+        )
 
     # 2. RESERVATION (Layer 2) — ĐẶT CHỖ TRƯỚC CHI PHÍ CPU.
     #
@@ -1427,13 +1453,59 @@ async def verify_mfa(
         )
         raise HTTPException(status_code=401, detail="Invalid verification code")
 
-    # 5. MFA verified - blacklist this mfa_token to prevent reuse
-    if mfa_jti:
-        try:
-            mfa_ttl = settings.MFA_TOKEN_EXPIRE_MINUTES * 60
-            await safe_redis_set(f"mfa_used:{mfa_jti}", "1", ex=mfa_ttl)
-        except Exception as e:
-            log.error("Failed to blacklist used mfa_token", error=str(e))
+    # 5. CHIẾM bằng chứng MFA — NGUYÊN TỬ, và TRƯỚC khi cấp phiên.
+    #
+    # Đây là cổng có thẩm quyền của luồng này. Ba điều làm nên nó:
+    #
+    #   * `SET NX` thay cho `SET`: đúng MỘT trong các request đồng thời chiếm
+    #     được. Bản trước ghi đè vô điều kiện, nên hai request cùng token cùng
+    #     verify xong, cùng ghi dấu, và cùng được cấp phiên (đo được:
+    #     `_complete_login_flow` chạy 2 lần cho MỘT mfa_token).
+    #   * Đặt TRƯỚC `_complete_login_flow`: chiếm sau khi đã cấp phiên thì
+    #     phiên thứ hai đã ra khỏi cửa rồi, dấu vết ghi lúc đó không thu hồi
+    #     được gì.
+    #   * Lỗi Redis ⇒ 503, KHÔNG đăng nhập. `try/except` cũ chỉ ghi log rồi đi
+    #     tiếp — tức mọi lượt Redis trục trặc đều biến `mfa_token` thành token
+    #     dùng-nhiều-lần, âm thầm.
+    #
+    # ⚠️ Chiếm ở ĐÂY chứ không phải ngay lúc vào: chiếm sớm sẽ đốt token sau
+    # mỗi lần gõ sai mã, làm mất quyền thử lại mà `MFA_MAX_ATTEMPTS` hứa hẹn.
+    # Token chỉ bị tiêu khi nó đã thực sự chứng minh được MFA.
+    mfa_ttl = settings.MFA_TOKEN_EXPIRE_MINUTES * 60
+    ket_qua_chiem = await safe_redis_claim_once(
+        f"mfa_used:{mfa_jti}", "1", mfa_ttl, _NHAN_KHOA_MFA_TOKEN
+    )
+
+    if ket_qua_chiem is KetQuaChiem.DA_BI_CHIEM:
+        # Một request khác đã hoàn tất trước với đúng token này.
+        log.warning(
+            "mfa_token_reuse_blocked", user_id=user.id,
+            action="mfa.token_reuse_blocked",
+        )
+        raise HTTPException(
+            status_code=401, detail="MFA token already used. Please login again."
+        )
+
+    if ket_qua_chiem is not KetQuaChiem.DA_CHIEM:
+        # FAIL CLOSED: không chứng minh được token này chưa bị dùng thì không
+        # cấp phiên. Thà bắt đăng nhập lại còn hơn phát hai phiên từ một bằng
+        # chứng MFA.
+        log.error(
+            "mfa_token_claim_unavailable", user_id=user.id,
+            action="mfa.token_claim_unavailable",
+        )
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "detail": "Không xác thực được lúc này. Vui lòng thử lại sau.",
+            },
+            headers={"Retry-After": "60"},
+        )
+
+    # ⚠️ Từ đây trở đi, token ĐÃ BỊ TIÊU. Nếu các bước dưới hỏng thì KHÔNG được
+    # xoá dấu chiếm để "bù": một token đã chứng minh MFA xong phải coi là đã
+    # dùng, kể cả khi phiên không dựng được. Người dùng đăng nhập lại — đó là
+    # cái giá đúng, so với việc mở lại cửa sổ cho phát lại.
 
     # 6. Reset attempt counters
     try:
