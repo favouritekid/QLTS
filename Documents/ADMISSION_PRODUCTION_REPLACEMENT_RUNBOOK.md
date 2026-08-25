@@ -310,6 +310,18 @@ cat "$MANIFEST"    # git-rev · offsite · service · CID · image ID · referen
 QLTS_ROLLBACK_LOCAL_ONLY="$QLTS_ROLLBACK_LOCAL_ONLY" \
     QLTS_ROLLBACK_TAG="$QLTS_ROLLBACK_TAG" \
     bash scripts/rollback-preflight.sh
+
+# LOGOUT sau khi đã tạo xong thế hệ mới — SAU preflight, không phải trước.
+#
+# Preflight non-local phải hỏi registry, nên logout sớm là tự làm đỏ chính phép
+# kiểm mình vừa cần chạy.
+#
+# Bước TẠO thế hệ mới cần `write:packages`; rollback về sau chỉ cần
+# `read:packages`. Đừng để token quyền GHI nằm lại trên máy chủ sau khi xong —
+# nó ở dạng base64 KHÔNG mã hoá trong $HOME/.docker/config.json.
+if [ "$QLTS_ROLLBACK_LOCAL_ONLY" != "1" ]; then
+    docker logout "${QLTS_ROLLBACK_REGISTRY%%/*}"
+fi
 # Nó fail-closed ở cả năm ca: thiếu manifest · manifest thiếu service · ảnh
 # không lấy được · tag đã trôi sang ID khác · service còn `build:`.
 # Không ĐẠT ở đây = KHÔNG có đường lùi = KHÔNG cutover.
@@ -699,8 +711,47 @@ curl -s -o /dev/null -w 'POST admissions -> %{http_code}\n' -X POST "https://$DO
 # Script fail-closed ở cả năm ca; `docker pull ... || echo` của bản trước thì
 # KHÔNG: nó trả exit 0, in ra chữ "DỪNG LẠI" rồi chạy tiếp.
 export QLTS_ROLLBACK_TAG=pre-admission-cutover-${DATE}   # tag đã ghi ở §5.4
+
+# Step 2a: ĐĂNG NHẬP REGISTRY TRƯỚC KHI CHẠY PREFLIGHT
+#
+# Package rollback của QLTS là PRIVATE trên GHCR. Chưa xác thực thì
+# `docker manifest inspect` báo "không phân giải được" cho MỌI digest — kể cả
+# ảnh còn nguyên vẹn. Preflight sẽ đỏ, và người trực lúc 3 giờ sáng rất dễ đọc
+# cái đỏ đó thành "mất đường lùi" rồi quyết định sai.
+#
+# Quy trình vận hành CỐ Ý logout sau mỗi lần dùng: token nằm base64 KHÔNG mã hoá
+# trong $HOME/.docker/config.json. Nên trạng thái BÌNH THƯỜNG của máy chủ là
+# CHƯA đăng nhập, và bước này là bắt buộc chứ không phải tuỳ tình huống.
+#
+# Scope chỉ cần `read:packages` — rollback chỉ ĐỌC ảnh. `write:packages` chỉ cần
+# khi TẠO thế hệ mới ở §5.4. Cấp đúng quyền tối thiểu cho việc đang làm.
+#
+# `read -rs` không hiện ký tự, và giá trị KHÔNG vào ~/.bash_history vì nó không
+# nằm trong dòng lệnh. Đừng `export PAT=...` rồi `echo $PAT | docker login`:
+# cách đó để token lại trong history và trong `ps` của tiến trình.
+#
+# Ba chi tiết dưới đây đều là bản chất, không phải khẩu vị — và phải GIỐNG HỆT
+# lệnh mà `rollback-preflight.sh` in ra khi nó bắt được ca chưa đăng nhập. Hai
+# nơi lệch nhau là một trong hai nơi sẽ hỏng, và nơi hỏng sẽ là nơi ít được đọc:
+#
+#   * `printf %s` chứ không `echo`: `echo` của một số shell diễn giải dấu gạch
+#     chéo ngược, làm hỏng token chứa chúng.
+#   * KHÔNG dùng placeholder `<user>`: bash đọc `<` là chuyển hướng nhập, nên
+#     lệnh copy vào chạy báo "No such file or directory". Điền tên thật.
+#   * `if … then … else rc=$?; …; exit "$rc"; fi` chứ không `…; unset PAT`:
+#     `unset` luôn trả 0 nên nó NUỐT mã lỗi của login, và người trực chạy trong
+#     script sẽ đi tiếp như thể đã đăng nhập. `unset PAT` nằm ở CẢ HAI nhánh.
+if read -rs PAT && printf %s "$PAT" | docker login ghcr.io -u favouritekid --password-stdin; then
+    unset PAT
+else
+    rc=$?; unset PAT; exit "$rc"
+fi
+
 bash scripts/rollback-preflight.sh || exit 1
 # ĐẠT rồi mới được đi tiếp. Chưa đạt thì CSDL vẫn còn nguyên và cửa tiến vẫn mở.
+#
+# ⚠️ Nếu preflight báo "CHƯA ĐĂNG NHẬP '<registry>'" thì đó KHÔNG phải mất đường
+# lùi — chỉ là bước 2a chưa chạy hoặc token đã hết hạn. Ảnh vẫn có thể còn đủ.
 
 # Step 3: Restore DB từ pre-cutover backup
 # Pipe file vào container stdin (tránh file location mismatch)
@@ -787,6 +838,60 @@ docker compose -f docker-compose.yml -f docker-compose.rollback.yml \
     --env-file .env.production --profile production up -d --no-deps --wait backend
 bash scripts/nginx-apply.sh "$DOMAIN"
 curl -s -o /dev/null -w 'POST admissions -> %{http_code}\n' -X POST "https://$DOMAIN/api/admissions/"   # PHẢI THÔI 503
+
+# Step 8: LOGOUT REGISTRY — bước CUỐI CÙNG, không phải bước tuỳ chọn
+#
+# `docker login` ghi token vào $HOME/.docker/config.json dưới dạng base64 —
+# KHÔNG mã hoá, chỉ là mã hoá chuyển vị. Ai đọc được tệp đó thì đọc được token,
+# và token `read:packages` đủ để kéo toàn bộ ảnh production về máy họ.
+#
+# Để lại đăng nhập sau khi rollback xong nghĩa là biến một sự cố đã xử lý xong
+# thành một credential nằm chờ vô thời hạn trên máy chủ.
+docker logout ghcr.io
+# Nghiệm thu bằng NỘI DUNG, không tin dòng "Removing login credentials".
+#
+# ⚠️ Bản nháp đầu bắt mọi Exception rồi gán `a = []`, nên một `config.json` HỎNG
+# được đọc thành "auths rỗng" và nghiệm thu XANH GIẢ — đúng lúc credential có
+# thể vẫn còn nằm đó. Mọi nhánh không đọc được phải THOÁT KHÁC 0.
+python3 - <<'PY'
+import json, os, sys
+
+duong = os.path.join(os.environ.get("HOME", "/root"), ".docker", "config.json")
+if not os.path.exists(duong):
+    print("config.json không tồn tại — không còn credential nào."); sys.exit(0)
+
+try:
+    with open(duong, encoding="utf-8") as f:
+        d = json.load(f)
+except Exception as e:                      # JSON hỏng / không đọc được
+    sys.exit("KHÔNG ĐỌC ĐƯỢC %s (%s) — KHÔNG kết luận được đã logout hay chưa. "
+             "Kiểm tay trước khi coi là xong." % (duong, e.__class__.__name__))
+if not isinstance(d, dict):
+    sys.exit("config.json không phải object JSON — không kết luận được.")
+
+auths = d.get("auths") or {}
+helpers = d.get("credHelpers") or {}
+store = d.get("credsStore")
+
+print("auths:", list(auths) or "(RỖNG)")
+print("credHelpers:", list(helpers) or "(RỖNG)")
+print("credsStore:", store or "(không có)")
+
+if "ghcr.io" in auths:
+    sys.exit("ghcr.io VẪN còn trong auths — logout CHƯA có tác dụng.")
+if "ghcr.io" in helpers:
+    sys.exit("ghcr.io còn trong credHelpers — credential do helper giữ, "
+             "phải xoá bằng chính helper đó.")
+if store:
+    # Store toàn cục giữ credential NGOÀI tệp này; vắng mặt trong `auths` không
+    # chứng minh được gì. Fail-closed thay vì đoán.
+    sys.exit("credsStore='%s' đang bật: credential nằm ngoài config.json. "
+             "Xác minh bằng `docker-credential-%s list` rồi mới coi là đã xoá."
+             % (store, store))
+print("✓ không còn credential nào cho ghcr.io trong config.json")
+PY
+# ⚠️ Sau bước này, chạy lại `rollback-preflight.sh` sẽ ĐỎ với thông báo
+# "CHƯA ĐĂNG NHẬP" — đó là trạng thái ĐÚNG và mong muốn, không phải hỏng hóc.
 ```
 
 ### 8.2. KHÔNG rollback nửa vời
