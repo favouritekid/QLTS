@@ -34,7 +34,12 @@ from sqlalchemy.exc import InvalidRequestError as SQLAlchemyInvalidRequest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
-from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
+from ..database import (
+    safe_redis_consume_totp_counter,
+    safe_redis_delete,
+    safe_redis_get,
+    safe_redis_set,
+)
 # Context mật khẩu dùng chung (rounds=15) — CHỈ còn dùng cho backup code
 # LEGACY. Mã v2 dùng context riêng, xem ``_backup_context()``.
 from ..security import pwd_context as _pwd_context
@@ -167,6 +172,12 @@ _TOTP_CODE_LEN = 6
 CODE_SHAPE_TOTP = "totp"
 CODE_SHAPE_BACKUP = "backup"
 CODE_SHAPE_INVALID = "invalid"
+
+# Hạn của khoá chống phát lại TOTP. 180s phủ trọn ba chu kỳ 30s của
+# ``valid_window=1`` (bước -1, 0, +1) cộng dư ra cho lệch đồng hồ — sau ngần ấy
+# thời gian thì mọi bước đã tiêu đều đã rơi khỏi cửa sổ chấp nhận, nên giữ dấu
+# vết thêm nữa không đổi được quyết định nào.
+_TOTP_REPLAY_TTL_SECONDS = 180
 
 
 def classify_code_shape(code: str) -> str:
@@ -598,11 +609,33 @@ async def verify_mfa_code(
         is_valid, matched_counter = verify_totp_with_counter(secret, code)
 
         if is_valid and matched_counter is not None:
-            # Replay protection (RFC 6238 §5.2): reject if this time step already used
+            # Chống phát lại (RFC 6238 §5.2) — TIÊU THỤ NGUYÊN TỬ.
+            #
+            # ⚠️ Bản trước: GET counter ở đây rồi mới SET sau khi so sánh. Hai
+            # request đồng thời cùng dừng ở ``await`` của GET, cùng đọc trạng
+            # thái cũ, cùng kết luận hợp lệ ⇒ MỘT mã TOTP đổi được HAI lần xác
+            # minh (đo được ``[True, True]`` trên Redis thật). Và khi Redis
+            # lỗi, ``safe_redis_get`` trả ``None`` ⇒ vế ``if last and …`` là
+            # falsy ⇒ CHẤP NHẬN. Một lượt Redis chết làm bốc hơi im lặng cả
+            # lớp bảo vệ.
+            #
+            # Nay: so-sánh-rồi-ghi nằm trọn trong một script server-side, và
+            # mọi ca "không chứng minh được" đều TỪ CHỐI.
             replay_key = f"totp_used:{user.id}"
-            last_counter_str = await safe_redis_get(replay_key)
+            tieu_thu = await safe_redis_consume_totp_counter(
+                replay_key, matched_counter, _TOTP_REPLAY_TTL_SECONDS
+            )
 
-            if last_counter_str and int(last_counter_str) >= matched_counter:
+            if tieu_thu is None:
+                # FAIL CLOSED. Không chứng minh được rằng bước thời gian này
+                # chưa bị tiêu thì không được coi nó là chưa tiêu.
+                log.error(
+                    "totp_replay_guard_unavailable", user_id=user.id,
+                    action="mfa.replay_guard_unavailable",
+                )
+                return False
+
+            if not tieu_thu.accepted:
                 log.warning(
                     "totp_replay_rejected", user_id=user.id,
                     action="mfa.replay_rejected", matched_counter=matched_counter,
@@ -610,8 +643,6 @@ async def verify_mfa_code(
                 # KHÔNG rơi xuống backup: một mã TOTP không bao giờ là backup code.
                 return False
 
-            # Accept and record this counter (TTL 180s covers 3 valid_window cycles)
-            await safe_redis_set(replay_key, str(matched_counter), ex=180)
             log.info(
                 "mfa_verified", user_id=user.id, method="totp",
                 action="mfa.verify_success",

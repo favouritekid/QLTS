@@ -355,11 +355,26 @@ jobs:
           # EXPANDED 2026-05-24 để gồm permission_matrix + lead static-route
           # collision + fee auth + diamond inheritance, vì PR #329 đã dàn xếp
           # lại những mặt rủi ro đó và cổng phải kiểm chúng trên MỌI PR.
-          # `test_mfa_reservation_real_redis.py` PHẢI nằm ở shard có service
-          # `redis:7-alpine` (shard này có) — nó cố ý bỏ qua FakeRedis và nối
-          # thẳng tới server thật bằng callable gốc đã lưu trước lúc patch.
-          # Không tới được Redis thì nó ĐỎ, không skip: "không đo được" không
-          # phải là "đạt".
+          # `test_mfa_reservation_real_redis.py` và
+          # `test_mfa_single_use_atomic_real_redis.py` PHẢI nằm ở shard có
+          # service `redis:7-alpine` (shard này có) — cả hai cố ý bỏ qua
+          # FakeRedis và nối thẳng tới server thật bằng callable gốc đã lưu
+          # trước lúc patch. Không tới được Redis thì chúng ĐỎ, không skip:
+          # "không đo được" không phải là "đạt".
+          #
+          # Cặp `*_single_use_atomic*` canh TIÊU-THỤ-MỘT-LẦN của hai bằng chứng
+          # MFA: một time step TOTP (`totp_used:{uid}`) và một `mfa_token`
+          # (`mfa_used:{jti}`). Bản trước của cả hai đều là đọc-rồi-ghi KHÔNG
+          # nguyên tử và fail OPEN khi Redis lỗi. Lát unit chạy FakeRedis nên
+          # KHÔNG chứng minh được tính nguyên tử — chỉ lát real-redis làm được,
+          # và nó phải ở đúng shard này.
+          #
+          # `test_mfa_race_reproducer.py` là tệp RIÊNG và cố ý KHÔNG import
+          # symbol nào mới, nên nó chạy được cả trên commit TRƯỚC bản vá — nơi
+          # nó đỏ với `2/2 request cùng được chấp nhận cho MỘT mã TOTP` và
+          # `_complete_login_flow chạy 2 lần`. Hai tệp `*_single_use_atomic*`
+          # KHÔNG có tính chất đó (chúng import `KetQuaChiem`/`safe_redis_*`
+          # mới); đừng trích chúng khi cần bằng chứng "đỏ trước khi vá".
           # Các dòng MFA cuối danh sách canh chi phí bcrypt của đường backup
           # code (DoS availability): số phép bcrypt theo hình dạng mã, trần
           # đồng thời, fail-closed khi Redis chết, và tiêu-thụ-một-lần khi hai
@@ -402,6 +417,9 @@ jobs:
               tests/services/test_mfa_bcrypt_dos_guard.py
               tests/unit/test_mfa_config_bounds.py
               tests/integration/test_mfa_reservation_real_redis.py
+              tests/services/test_mfa_single_use_atomic.py
+              tests/integration/test_mfa_single_use_atomic_real_redis.py
+              tests/integration/test_mfa_race_reproducer.py
               tests/services/test_mfa.py::TestBackupCodeEdgeCases
               tests/services/test_mfa.py::TestMfaVerificationRateLimiting
               tests/services/test_mfa.py::TestMfaRateLimiting::test_mfa_attempts_tracked_in_redis
