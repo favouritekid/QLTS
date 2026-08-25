@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.core.events import SystemEvents
+from app.core.event_catalog import get_event
 from app.services.notification_dispatcher import dispatch_event
 
 
@@ -211,11 +212,18 @@ class TestDispatchEventBestEffortPath:
     @pytest.mark.asyncio
     async def test_callback_awaits_safe_dispatch_with_full_kwargs(self):
         """Callback must forward ``db``, ``event``, ``payload``,
-        ``dedupe_key``, and ``skip_preference_check`` (read from the
-        catalog's ``bypass_consent_check`` flag) into ``safe_dispatch``.
-        ``rooms`` is intentionally not forwarded — the wrapper does not
-        own room-scoping policy yet (deferred to a future PR or to the
-        caller pre-#16)."""
+        ``dedupe_key``, ``skip_preference_check`` (read from the catalog's
+        ``bypass_consent_check`` flag) **và ``rooms``** into ``safe_dispatch``.
+
+        ⚠️ Ca này TRƯỚC 20-08-2026 khoá điều ngược lại — "``rooms`` cố ý không
+        được chuyển, hoãn sang PR sau". PR này CHÍNH LÀ cái đó, nên kỳ vọng
+        được lật, không phải nới lỏng.
+
+        Không truyền ``rooms`` thì người gọi vẫn phải thấy ``rooms=None`` đi
+        xuống — nếu wrapper âm thầm bỏ khoá này khỏi lời gọi, ``safe_dispatch``
+        lấy mặc định của chính nó và ta mất khả năng phân biệt "người gọi không
+        truyền" với "wrapper đánh rơi".
+        """
         session = _FakeSession()
         event = SystemEvents.ADMISSION_PROFILE_SUBMITTED  # best-effort, bypass=False
         payload = {"profile_id": 7}
@@ -240,6 +248,7 @@ class TestDispatchEventBestEffortPath:
                 payload=payload,
                 dedupe_key=dedupe_key,
                 skip_preference_check=False,  # PROFILE_SUBMITTED: bypass=False per live catalog
+                rooms=None,
             )
 
     @pytest.mark.asyncio
@@ -282,7 +291,97 @@ class TestDispatchEventBestEffortPath:
                 payload=payload,
                 dedupe_key=None,
                 skip_preference_check=True,  # the patched True flows through
+                rooms=None,
             )
+
+
+class TestDispatchEventRoomScoping:
+    """``rooms`` — hàng rào realtime của sự kiện nhạy cảm.
+
+    Vì sao nhóm này tồn tại: ``_emit_domain_event`` chạy fail-closed khi
+    ``SOCKET_SCOPED_EMIT=True`` — một sự kiện nhạy cảm KHÔNG có ``rooms`` thì
+    nó **bỏ hẳn lượt emit**, không lỗi, không log ở mức người dùng thấy. Trước
+    bản vá 20-08-2026, ``dispatch_event`` không có tham số ``rooms`` nên mọi
+    ``ADMISSION_*`` best-effort đi qua ``state_transition`` đều rơi vào đó:
+    dữ liệu vào DB đúng, realtime im lặng biến mất.
+    """
+
+    @pytest.mark.asyncio
+    async def test_best_effort_chuyen_dung_rooms_xuong_safe_dispatch(self):
+        """Lớp 1 — nhánh best-effort phải chuyển NGUYÊN VẸN danh sách phòng."""
+        session = _FakeSession()
+        event = SystemEvents.ADMISSION_PROFILE_SUBMITTED  # best-effort
+        rooms = ["role_admin", "unit_14", "user_room_9"]
+
+        with patch(
+            "app.services.notification_dispatcher.safe_dispatch",
+            new_callable=AsyncMock,
+        ) as mock_safe:
+            callback = await dispatch_event(
+                session,
+                event=event,
+                payload={"profile_id": 7},
+                dedupe_key="SUBMITTED:7",
+                rooms=rooms,
+            )
+            assert callback is not None
+            await callback()
+
+            _, kwargs = mock_safe.await_args
+            assert kwargs["rooms"] == rooms, (
+                "rooms KHONG toi duoc safe_dispatch — sự kiện nhạy cảm sẽ bị "
+                "guard fail-closed bỏ emit, realtime chết im lặng"
+            )
+
+    @pytest.mark.asyncio
+    async def test_outbox_khong_luu_rooms_vao_payload(self):
+        """Lớp 2 — nhánh outbox KHÔNG đổi, kể cả khi người gọi truyền ``rooms``.
+
+        Worker ``dispatch_pending_outbox`` tự suy phòng lúc drain. Chụp
+        ``rooms`` vào ``payload`` là sai về bảo mật, không chỉ thừa: giữa lúc
+        INSERT và lúc drain, hồ sơ có thể được chuyển đơn vị hoặc đổi officer,
+        và ảnh chụp cũ sẽ phát sự kiện tới **đơn vị không còn quyền xem**.
+
+        Cũng khẳng định nhánh này vẫn trả ``None`` — truyền ``rooms`` không
+        được phép làm nó rẽ sang đường best-effort.
+        """
+        session = _FakeSession()
+        outbox_events = [
+            e for e in SystemEvents
+            if (getattr(get_event(e), "requires_outbox", False) if get_event(e) else False)
+        ]
+        assert outbox_events, "khong tim thay su kien requires_outbox nao trong catalog"
+        event = outbox_events[0]
+
+        ket_qua = await dispatch_event(
+            session,
+            event=event,
+            payload={"profile_id": 7},
+            dedupe_key="OUTBOX:7",
+            rooms=["role_admin", "unit_14"],
+        )
+
+        assert ket_qua is None, "nhanh outbox phai tra None"
+        assert len(session.added) == 1
+        hang = session.added[0]
+        assert "rooms" not in hang.payload, (
+            "rooms bi chup vao payload outbox — se phat nham don vi cu neu ho "
+            "so duoc chuyen giua luc INSERT va luc drain"
+        )
+        assert hang.payload == {"profile_id": 7}
+
+    def test_rooms_la_keyword_only(self):
+        """``rooms`` phải là keyword-only như mọi tham số khác sau ``db``.
+
+        Nếu nó lọt vào vị trí, một lời gọi cũ truyền thừa đối số vị trí sẽ âm
+        thầm gán nhầm vào ``rooms`` thay vì báo lỗi.
+        """
+        import inspect
+
+        params = inspect.signature(dispatch_event).parameters
+        assert "rooms" in params, "dispatch_event thieu tham so rooms"
+        assert params["rooms"].kind == inspect.Parameter.KEYWORD_ONLY
+        assert params["rooms"].default is None
 
 
 # --- Input validation ------------------------------------------------------

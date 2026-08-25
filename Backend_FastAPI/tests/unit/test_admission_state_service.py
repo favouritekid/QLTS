@@ -444,3 +444,105 @@ async def test_transition_returns_profile_and_callback_tuple(
     assert out_profile is profile  # same instance
     # callback is whatever dispatch_mock returned (None in default fixture)
     assert callback is None
+
+
+# ---------------------------------------------------------------------------
+# 6. Room-scoping — realtime của sự kiện nhạy cảm (vá 20-08-2026)
+# ---------------------------------------------------------------------------
+#
+# Vì sao nhóm này tồn tại: ``_emit_domain_event`` chạy fail-closed khi
+# ``SOCKET_SCOPED_EMIT=True`` — sự kiện nhạy cảm KHÔNG có ``rooms`` thì nó bỏ
+# hẳn lượt emit. Trước bản vá, ``transition()`` gọi ``dispatch_event`` mà không
+# truyền ``rooms``, nên mọi ``ADMISSION_*`` best-effort mất realtime trong im
+# lặng: DB đúng, giao diện không nhúc nhích.
+#
+# Đây là lớp thứ 3 (tầng gọi). Hai lớp kia ở
+# ``tests/unit/test_dispatch_event_wrapper.py``.
+
+
+def _profile_co_lead(unit_id=14, officer_id=9, status="submitted"):
+    """Hồ sơ CÓ ``lead`` — ca thật trên production.
+
+    ``_profile()` ở trên cố ý không có ``lead`` (helper trả về đúng
+    ``["role_admin"]``), nên nếu chỉ dùng nó thì phần suy phòng theo đơn vị và
+    theo officer không bao giờ được đi qua — ca kiểm sẽ xanh mà không canh gì.
+    """
+    p = _profile(status=status)
+    p.lead = SimpleNamespace(unit_id=unit_id, assigned_officer_id=officer_id)
+    return p
+
+
+@pytest.mark.asyncio
+async def test_transition_truyen_rooms_theo_don_vi_va_officer(
+    db_session, patched_audit_and_dispatch
+):
+    """``transition`` phải truyền ``rooms`` suy từ chính hồ sơ."""
+    _, dispatch_mock = patched_audit_and_dispatch
+
+    profile = _profile_co_lead(unit_id=14, officer_id=9)
+    await state_service.transition(
+        db_session, profile, "approved", actor=_actor(),
+    )
+
+    assert dispatch_mock.await_count == 1
+    _, kwargs = dispatch_mock.await_args
+    assert "rooms" in kwargs, (
+        "transition() KHONG truyen rooms — su kien nhay cam se bi guard "
+        "fail-closed bo emit, realtime chet im lang"
+    )
+    assert kwargs["rooms"] == ["role_admin", "unit_14", "user_room_9"]
+
+
+@pytest.mark.asyncio
+async def test_transition_ho_so_khong_co_lead_van_toi_admin(
+    db_session, patched_audit_and_dispatch
+):
+    """Thiếu quan hệ ``lead`` thì vẫn phải có ``role_admin``.
+
+    Trả danh sách RỖNG ở đây còn tệ hơn không vá: rỗng cũng bị guard
+    fail-closed coi là "không có phòng" và bỏ emit — mất realtime cho cả admin.
+    """
+    _, dispatch_mock = patched_audit_and_dispatch
+
+    profile = _profile(status="submitted")  # không có .lead
+    await state_service.transition(
+        db_session, profile, "approved", actor=_actor(),
+    )
+
+    _, kwargs = dispatch_mock.await_args
+    assert kwargs["rooms"] == ["role_admin"]
+    assert kwargs["rooms"], "danh sach rong bi guard coi nhu khong co phong"
+
+
+@pytest.mark.asyncio
+async def test_transition_khong_doc_lead_bang_lazy_load(
+    db_session, patched_audit_and_dispatch
+):
+    """Chỉ đọc ``lead`` qua thuộc tính đã nạp sẵn, không kích hoạt truy vấn.
+
+    ``AdmissionProfile.lead`` khai ``lazy="joined"`` (``models/admission.py:660``)
+    nên nó có sẵn trong hàng. Ca này dựng một ``lead`` ném lỗi nếu ai đó chạm
+    vào thuộc tính KHÁC hai thuộc tính helper cần — bắt được một bản vá tương
+    lai vô tình mở rộng phạm vi đọc và tự chuốc ``MissingGreenlet`` trên async.
+    """
+    _, dispatch_mock = patched_audit_and_dispatch
+
+    class _LeadChiChoPhepHaiTruong:
+        unit_id = 14
+        assigned_officer_id = 9
+
+        def __getattr__(self, ten):
+            raise AssertionError(
+                "helper cham thuoc tinh ngoai du kien: %r — nguy co lazy-load "
+                "trong ngu canh async" % ten
+            )
+
+    profile = _profile(status="submitted")
+    profile.lead = _LeadChiChoPhepHaiTruong()
+
+    await state_service.transition(
+        db_session, profile, "approved", actor=_actor(),
+    )
+
+    _, kwargs = dispatch_mock.await_args
+    assert kwargs["rooms"] == ["role_admin", "unit_14", "user_room_9"]

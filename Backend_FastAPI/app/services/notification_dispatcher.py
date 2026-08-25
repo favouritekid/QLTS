@@ -2119,6 +2119,7 @@ async def dispatch_event(
     event: SystemEvents,
     payload: dict,
     dedupe_key: Optional[str] = None,
+    rooms: Optional[List[str]] = None,
 ) -> Optional[Callable[[], Awaitable[None]]]:
     """B2.3 — single API for the admission notification surface.
 
@@ -2130,6 +2131,15 @@ async def dispatch_event(
        task ``dispatch_pending_outbox`` (T0-4a skeleton today; B2.4 /
        T0-4b ships the real worker body) drains the table out-of-band
        post-commit.
+
+    ``rooms`` (thêm 20-08-2026): danh sách phòng Socket.IO cho sự kiện nhạy
+    cảm. Nhánh best-effort chuyển thẳng xuống ``safe_dispatch``; nhánh outbox
+    BỎ QUA vì worker tự suy phòng lúc drain (lý do đầy đủ ở thân hàm).
+
+    ⚠️ Không truyền ``rooms`` cho một sự kiện nhạy cảm đi đường best-effort thì
+    ``_emit_domain_event`` **bỏ hẳn lượt emit** — fail-closed, im lặng. Đó
+    chính là lỗi mọi ``ADMISSION_*`` best-effort qua ``state_transition`` mắc
+    phải trước bản vá này.
 
     2. ``requires_outbox=False`` (the 5 best-effort events): returns a
        post-commit callback that the router awaits **after** ``await
@@ -2232,6 +2242,21 @@ async def dispatch_event(
                 f"dispatch_event: event {event.name} has requires_outbox=True; "
                 "dedupe_key is required (becomes the outbox `idempotency_key`)."
             )
+        # ``rooms`` CỐ Ý không đi vào hàng outbox, kể cả khi người gọi truyền.
+        #
+        # Worker ``dispatch_pending_outbox`` tự suy phòng lúc drain — nó import
+        # ``rooms_for_admission`` / ``rooms_for_lead`` / ``rooms_for_user`` và
+        # nạp lại thực thể từ DB (``notification_outbox_tasks.py``). Đó là
+        # đường đúng: giữa lúc INSERT và lúc drain, hồ sơ có thể được chuyển
+        # đơn vị hay đổi officer phụ trách, và một ảnh chụp ``rooms`` nằm trong
+        # ``payload`` sẽ phát sự kiện tới **đơn vị cũ** — tức rò dữ liệu sang
+        # nhóm không còn quyền xem.
+        #
+        # Cũng vì thế KHÔNG raise khi có ``rooms``: người gọi ở tầng service
+        # không biết (và không nên biết) sự kiện nào ``requires_outbox``, nên
+        # truyền ``rooms`` cho MỌI sự kiện là cách gọi đúng. Nhánh này bỏ qua
+        # nó có chủ đích, và ``test_outbox_khong_luu_rooms_vao_payload`` khoá
+        # điều đó lại.
         db.add(
             models.NotificationOutbox(
                 event_code=event.value,
@@ -2244,11 +2269,16 @@ async def dispatch_event(
     # Best-effort path — return a post-commit callback that delegates
     # to safe_dispatch. Capture context via closure so the router can
     # invoke the callback without re-passing args.
+    #
+    # ``rooms`` đi qua đúng ở đây. Thiếu nó, ``_emit_domain_event`` gặp một sự
+    # kiện nhạy cảm không có phòng và **bỏ hẳn lượt emit** (fail-closed khi
+    # ``SOCKET_SCOPED_EMIT=True``) — DB vẫn đúng, chỉ realtime im lặng biến mất.
     captured_db = db
     captured_event = event
     captured_payload = payload
     captured_dedupe = dedupe_key
     captured_skip = event_def.bypass_consent_check
+    captured_rooms = rooms
 
     async def post_commit_callback() -> None:
         await safe_dispatch(
@@ -2257,6 +2287,7 @@ async def dispatch_event(
             payload=captured_payload,
             dedupe_key=captured_dedupe,
             skip_preference_check=captured_skip,
+            rooms=captured_rooms,
         )
 
     return post_commit_callback

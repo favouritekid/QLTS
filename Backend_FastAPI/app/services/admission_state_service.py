@@ -481,12 +481,22 @@ async def transition(
             # Approve + overridden also stay distinct: they map to the
             # same event T7 but the version increments through the
             # transition so the keys never collide.
-            from .notification_dispatcher import dispatch_event
+            from .notification_dispatcher import dispatch_event, rooms_for_admission
+            # ``rooms`` cho MỌI sự kiện, không rẽ nhánh theo ``requires_outbox``:
+            # tầng này không biết (và không nên biết) sự kiện nào đi outbox.
+            # Nhánh outbox bỏ qua ``rooms`` có chủ đích — worker tự suy phòng
+            # lúc drain để không phát nhầm sang đơn vị cũ nếu hồ sơ được chuyển
+            # giữa lúc INSERT và lúc drain.
+            #
+            # ``profile.lead`` an toàn ở đây: quan hệ khai ``lazy="joined"``
+            # (``models/admission.py:660``) nên nó đã nằm sẵn trong hàng, không
+            # kích hoạt lazy-load trong ngữ cảnh async (MissingGreenlet).
             callback = await dispatch_event(
                 db,
                 event=event,
                 payload=payload,
                 dedupe_key=f"admission:{profile.id}:{new_status}:v{profile.version}",
+                rooms=rooms_for_admission(profile),
             )
 
     # ``event`` is structlog's internal positional kwarg name (it
