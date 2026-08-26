@@ -288,6 +288,8 @@ export const mockAccountingPeriods: AccountingPeriod[] = [
     total_refunds: "0",
     net_revenue: "50000000",
     created_at: "2025-01-01T00:00:00Z",
+    // Kỳ ĐÃ ĐÓNG — không đóng lại được, backend luôn trả false.
+    can_close: false,
   },
   {
     id: 2,
@@ -300,6 +302,10 @@ export const mockAccountingPeriods: AccountingPeriod[] = [
     total_refunds: "0",
     net_revenue: "30000000",
     created_at: "2025-02-01T00:00:00Z",
+    // Kỳ đang MỞ nhưng kill-switch kế toán còn bật ⇒ backend vẫn trả
+    // false. Đây là trạng thái THẬT của production hôm nay; mock đặt
+    // true sẽ dựng lên một giao diện không tồn tại ở đâu cả.
+    can_close: false,
   },
 ];
 

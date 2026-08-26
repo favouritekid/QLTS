@@ -637,3 +637,44 @@ async def seed_lead_dependencies(setup_test_database):
         "status_a1_id": status_a1_data["id"],
         "stage_id": stage_a_id,
     }
+
+
+# ===============================================================
+# === KILL-SWITCH KẾ TOÁN — fixture MỞ CỔNG (opt-in) ===
+# ===============================================================
+#
+# Hai thao tác ``close_period`` và ``apply_penalty`` mặc định BỊ CHẶN
+# (fail-closed, xem ``app/services/finance_killswitch.py``). Test nào cần
+# chúng chạy thật phải xin TƯỜNG MINH bằng một trong hai fixture dưới đây.
+#
+# Đặt ở conftest GỐC, không nhân bản vào từng thư mục test: cả
+# ``tests/services/`` lẫn ``tests/integration/`` đều cần, và hai bản sao của
+# cùng một cơ chế mở cổng là đúng thứ sẽ trôi khác nhau rồi che mất một nhánh.
+#
+# ⚠️ Việc PHẢI xin tường minh chính là giá trị: hôm nào ai đó gỡ hàng rào, các
+# test không xin gì mà vẫn gọi được hai thao tác này sẽ **không** đỏ — nên bộ
+# canh thật nằm ở ``tests/services/test_finance_killswitch.py``, còn đây chỉ
+# là đường cho test nghiệp vụ cũ đi tiếp.
+
+
+@pytest.fixture
+def cho_phep_dong_ky(monkeypatch):
+    """Bật ``ACCOUNTING_PERIOD_CLOSE_ENABLED`` cho đúng một test.
+
+    Patch thẳng lên đối tượng ``settings`` chứ không qua biến môi trường:
+    ``Settings`` của Pydantic đã dựng xong lúc import, đặt ``os.environ`` bây
+    giờ không còn ai đọc.
+    """
+    from app.config import settings as _settings
+
+    monkeypatch.setattr(_settings, "ACCOUNTING_PERIOD_CLOSE_ENABLED", True)
+    return True
+
+
+@pytest.fixture
+def cho_phep_ap_phat(monkeypatch):
+    """Bật ``INVOICE_PENALTY_ENABLED`` cho đúng một test. Xem ``cho_phep_dong_ky``."""
+    from app.config import settings as _settings
+
+    monkeypatch.setattr(_settings, "INVOICE_PENALTY_ENABLED", True)
+    return True

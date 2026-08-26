@@ -45,6 +45,7 @@ from app.utils.exceptions import (
     BusinessRuleViolation,
     DuplicateResourceError,
 )
+from app.services.finance_killswitch import assert_invoice_penalty_allowed
 from app.config import settings
 
 log = structlog.get_logger(__name__)
@@ -721,9 +722,15 @@ class InvoiceService:
             Tuple of (Invoice, post_commit_callback)
 
         Raises:
+            AccountingOperationLocked: If the fail-closed kill-switch is engaged (409)
             ResourceNotFoundError: If invoice not found
             BusinessRuleViolation: If invoice is paid or cancelled
         """
+        # Hàng rào ĐỨNG TRƯỚC ``get_for_update``: khoá hàng trong DB cho một
+        # thao tác chắc chắn bị từ chối là giữ khoá vô ích, và trả 404 trước
+        # 409 lại để lộ hoá đơn nào tồn tại trong khi chức năng đang đóng.
+        assert_invoice_penalty_allowed()
+
         invoice = await self.invoice_repo.get_for_update(invoice_id, unit_id)
         if not invoice:
             raise ResourceNotFoundError("Invoice not found")

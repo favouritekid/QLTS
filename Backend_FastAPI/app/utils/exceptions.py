@@ -228,6 +228,45 @@ class PaymentDuplicateSuspected(ConflictError):
         )
 
 
+class AccountingOperationLocked(ConflictError):
+    """Thao tác kế toán bị KHOÁ bằng kill-switch phía máy chủ (HTTP 409).
+
+    Không phải lỗi của người dùng và không phải lỗi dữ liệu: thao tác hợp lệ
+    về nghiệp vụ nhưng **hạ tầng sổ sách chưa sẵn sàng** để chịu nó. Xem
+    ``app/services/finance_killswitch.py`` cho lý do đo được của từng thao tác.
+
+    Chọn 409 chứ không 403/503:
+    - **403** nói "bạn không có quyền" — sai, admin CÓ quyền; cái thiếu là
+      trạng thái hệ thống. Người dùng sẽ đi xin cấp quyền, và ai đó sẽ cấp.
+    - **503** nói "thử lại sau" — sai, thử lại không bao giờ đổi kết quả cho
+      tới khi có người sửa cấu hình. Client tự retry sẽ quay vô hạn.
+    - **409** đúng nghĩa: yêu cầu xung đột với **trạng thái hiện tại** của hệ
+      thống. Ổn định, không phụ thuộc vai trò, và không mời gọi retry.
+
+    ``operation`` đi vào ``public_payload`` để giao diện phân biệt được thao
+    tác nào đang khoá mà không phải dò chuỗi tiếng Việt trong ``detail``.
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    error_code = "ACCOUNTING_OPERATION_LOCKED"
+    detail = "Thao tác kế toán này đang bị khoá ở máy chủ."
+
+    def __init__(
+        self,
+        operation: str,
+        detail: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            detail=detail,
+            context={**(context or {}), "operation": operation},
+            # Chỉ tên thao tác đi ra ngoài. Tên biến môi trường và giá trị cờ
+            # là thông tin cấu hình máy chủ — ở lại trong log.
+            public_payload={"operation": operation},
+        )
+        self.operation = operation
+
+
 # ============================================================================
 # GONE / CLOSED RESOURCES (410)
 # ============================================================================

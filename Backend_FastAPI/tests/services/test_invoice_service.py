@@ -461,7 +461,7 @@ class TestInvoiceLifecycle:
 
         assert "already cancelled" in str(exc_info.value).lower()
 
-    async def test_apply_penalty(self, db, invoice_fixtures, admin_user):
+    async def test_apply_penalty(self, db, invoice_fixtures, admin_user, cho_phep_ap_phat):
         """Penalty increases penalty_amount (hóa đơn ĐÃ QUÁ HẠN)."""
         service = InvoiceService(db)
         fee = invoice_fixtures["fee"]
@@ -487,7 +487,7 @@ class TestInvoiceLifecycle:
         assert penalized.penalty_amount == Decimal("50000")
         assert penalized.total_due == Decimal("900000") + Decimal("50000")
 
-    async def test_apply_penalty_on_paid_invoice(self, db, invoice_fixtures, admin_user):
+    async def test_apply_penalty_on_paid_invoice(self, db, invoice_fixtures, admin_user, cho_phep_ap_phat):
         """Cannot apply penalty to paid invoice."""
         service = InvoiceService(db)
         fee = invoice_fixtures["fee"]
@@ -1033,7 +1033,7 @@ class TestApplyPenaltyGuards:
         return invs[0]
 
     async def test_penalty_none_rejected_not_500(
-        self, db, invoice_fixtures, admin_user
+        self, db, invoice_fixtures, admin_user, cho_phep_ap_phat
     ):
         """Direct caller truyền None → BadRequest (không TypeError/500)."""
         inv = await self._issued_invoice(db, invoice_fixtures, admin_user)
@@ -1045,7 +1045,7 @@ class TestApplyPenaltyGuards:
             )
 
     async def test_penalty_exceeds_amount_rejected(
-        self, db, invoice_fixtures, admin_user
+        self, db, invoice_fixtures, admin_user, cho_phep_ap_phat
     ):
         """Tổng phạt > số tiền HĐ (900,000) → BusinessRuleViolation."""
         inv = await self._issued_invoice(db, invoice_fixtures, admin_user)
@@ -1056,7 +1056,7 @@ class TestApplyPenaltyGuards:
                 user_id=admin_user.id, unit_id=invoice_fixtures["unit_id"],
             )
 
-    async def test_penalty_within_cap_ok(self, db, invoice_fixtures, admin_user):
+    async def test_penalty_within_cap_ok(self, db, invoice_fixtures, admin_user, cho_phep_ap_phat):
         """Phạt trong trần (HĐ quá hạn) → cộng vào penalty_amount."""
         inv = await self._issued_invoice(db, invoice_fixtures, admin_user)
         service = InvoiceService(db)
@@ -1068,7 +1068,7 @@ class TestApplyPenaltyGuards:
         assert out.penalty_amount == Decimal("100000")
 
     async def test_penalty_blocked_when_not_overdue(
-        self, db, invoice_fixtures, admin_user
+        self, db, invoice_fixtures, admin_user, cho_phep_ap_phat
     ):
         """#8-B: HĐ issued CHƯA tới hạn (due tương lai) → KHÔNG được áp phạt."""
         inv = await self._issued_invoice(
@@ -1082,7 +1082,7 @@ class TestApplyPenaltyGuards:
             )
 
     async def test_penalty_blocked_on_draft_invoice(
-        self, db, invoice_fixtures, admin_user
+        self, db, invoice_fixtures, admin_user, cho_phep_ap_phat
     ):
         """Review #2: HĐ DRAFT (chưa phát hành) DÙ quá due_date → KHÔNG áp phạt —
         service gate status ∈ OVERDUE_DERIVED_STATUSES, khớp ĐÚNG cờ FE

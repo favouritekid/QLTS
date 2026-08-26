@@ -662,6 +662,23 @@ class Settings(BaseSettings):
     )  # Require two-person verification for manual payments
 
     # ---------------------------------------------------------------------
+    # Kill-switch kế toán — fail-closed
+    # ---------------------------------------------------------------------
+    # Hai thao tác dưới đây không đảo ngược được và phụ thuộc vào phần hệ
+    # thống chưa hoàn thiện. Cả hai bị chặn cho tới cutover ADR-003.
+    # Cơ chế của từng cờ + vì sao cờ mang nghĩa "CHO PHÉP" chứ không phải
+    # "KHOÁ": ``app/services/finance_killswitch.py``.
+    #
+    # ⚠️ Đổi hai biến này KHÔNG có tác dụng bằng ``docker compose restart``:
+    # env được nướng vào container lúc TẠO. Phải ``up -d`` để Compose dựng lại.
+    ACCOUNTING_PERIOD_CLOSE_ENABLED: bool = Field(
+        default=False, validation_alias="ACCOUNTING_PERIOD_CLOSE_ENABLED"
+    )  # False = PUT /api/accounting/periods/{id}/close trả 409
+    INVOICE_PENALTY_ENABLED: bool = Field(
+        default=False, validation_alias="INVOICE_PENALTY_ENABLED"
+    )  # False = POST /api/invoices/{id}/apply-penalty trả 409
+
+    # ---------------------------------------------------------------------
     # Socket.IO — PII leak mitigation (PR #2 admission audit)
     # ---------------------------------------------------------------------
     # When True, `_emit_domain_event` honors the `rooms=` kwarg and fails
@@ -751,9 +768,11 @@ class Settings(BaseSettings):
     # has had no consultation activity for this many days is auto-transitioned to
     # sts20 (CONSULT_GIVEUP, terminal) by the daily SLA beat. This frees officer
     # workload (sts04 still counts as non-final load) so balanced auto-assign can
-    # resume. Tunable without code change. NOTE: 15d is more aggressive than 30d
-    # (on prod data ~100 leads vs ~42) — pair with the reopen workflow before
-    # flipping SLA_AUTO_GIVEUP_ENABLED so closed leads can come back.
+    # resume. Tunable without code change. NOTE: 15d sweeps materially more
+    # leads than 30d — measure the delta on the target environment before
+    # flipping SLA_AUTO_GIVEUP_ENABLED, and pair it with the reopen workflow
+    # so closed leads can come back. (Counts are operational data: keep them
+    # out of this public repo.)
     SLA_CONSULT_GIVEUP_DAYS: int = Field(
         default=15, validation_alias="SLA_CONSULT_GIVEUP_DAYS"
     )
