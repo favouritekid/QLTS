@@ -37,6 +37,63 @@ log() { echo -e "${GREEN}[ROLLBACK-PREFLIGHT]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
 error() { echo -e "${RED}[ERROR]${NC} $1" >&2; exit 1; }
 
+# --- Có CẤU HÌNH CREDENTIAL cho registry này không? ---------------------------
+#
+# Vì sao cần: package rollback của QLTS là PRIVATE trên GHCR. Chưa xác thực thì
+# `docker manifest inspect` trả về CÙNG MỘT lỗi cho hai tình huống ngược hẳn
+# nhau — "ảnh đã bị dọn mất" và "ảnh còn nguyên, chỉ là chưa đăng nhập".
+# Gộp hai ca đó vào một thông báo là đẩy người trực lúc 3 giờ sáng tới kết luận
+# tệ nhất có thể ("mất đường lùi") trong khi tài sản vẫn còn đủ.
+#
+# ⚠️ TÊN HÀM LÀ MỘT LỜI HỨA. Hàm này KHÔNG chứng minh "đã đăng nhập hợp lệ" — nó
+# chỉ đọc `config.json` và trả lời "có cấu hình credential cho host này không".
+# Token có thể đã hết hạn, thiếu scope `read:packages`, hoặc bị thu hồi; cả ba
+# vẫn để lại nguyên khoá trong `auths`. Bản nháp đầu đặt tên `_da_dang_nhap` rồi
+# suy ra "có khoá ⇒ đã đăng nhập ⇒ inspect hỏng nghĩa là ảnh mất" — tức tái tạo
+# đúng kết luận sai mà cả phép kiểm này sinh ra để loại bỏ.
+#
+# Chỉ đọc tệp, không gọi mạng: phải chạy được cả khi registry đang sập.
+_co_cau_hinh_credential() {   # $1 = registry host, vd ghcr.io
+    local cfg="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
+    [ -f "$cfg" ] || return 1
+
+    # ⚠️ `command -v python3` KHÔNG chứng minh python3 chạy được: trên Windows nó
+    # trỏ tới stub Microsoft Store, có mặt trong PATH nhưng in "Python was not
+    # found" và không thực thi gì. Phải thử chạy thật rồi mới tin.
+    if python3 -c "pass" >/dev/null 2>&1; then
+        python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    # Config KHÔNG ĐỌC ĐƯỢC: mã thoát 2 = 'không biết', khác hẳn 1 = 'chắc chắn
+    # không có credential'. Gộp hai ca này là fail-open: một config.json hỏng sẽ
+    # được đọc thành 'chưa đăng nhập' và che mất chính lỗi cần sửa.
+    sys.exit(2)
+host = sys.argv[2]
+if not isinstance(d, dict):
+    sys.exit(2)
+co = (host in (d.get('auths') or {})
+      or host in (d.get('credHelpers') or {})
+      or bool(d.get('credsStore')))   # store toàn cục: credential nằm NGOÀI tệp
+sys.exit(0 if co else 1)
+" "$cfg" "$1" 2>/dev/null
+        return $?
+    fi
+
+    # Fallback không cần python. Quét cả tệp chứ không riêng khối `auths`:
+    # credential có thể nằm ở `credHelpers`/`credsStore` thay vì `auths`.
+    grep -q "\"$1\"[[:space:]]*:" "$cfg" && return 0
+    grep -q '"credsStore"[[:space:]]*:' "$cfg" && return 0
+
+    # KHÔNG tìm thấy ⇒ trả 2 ("không biết"), KHÔNG trả 1 ("chắc chắn chưa cấu
+    # hình"). `grep` không phân biệt được "JSON hợp lệ và thật sự không có
+    # credential" với "JSON hỏng nên chuỗi không khớp". Nhận vơ chắc chắn ở đây
+    # là fail-open: người trực sẽ đi đăng nhập lại trong khi lỗi thật là config
+    # hỏng, và vòng lặp đó không bao giờ thoát.
+    return 2
+}
+
 # --- Tải bản kê offsite: nhận diện provider TỪ CHÍNH đường dẫn ---------------
 #
 # Vì sao không thêm biến `QLTS_OFFSITE_PROVIDER`: bản kê là thứ đi theo gói cứu
@@ -188,11 +245,98 @@ for S in "${DICH_VU[@]}"; do
   QLTS_ROLLBACK_REGISTRY." ;;
         esac
 
-        docker manifest inspect "$DIGEST" >/dev/null 2>&1 \
-            || error "KHÔNG phân giải được $DIGEST trên registry.
-  Ảnh cũ của '$S' không còn ở ngoài máy — nhiều khả năng một lần \`docker push\`
-  ở §5.4 đã hỏng, hoặc registry đã dọn. Rollback lúc này phụ thuộc hoàn toàn
-  vào đĩa của máy chủ. DỪNG LẠI — chưa đụng gì tới CSDL."
+        # Chưa đăng nhập là ca RIÊNG, không được gộp vào "ảnh đã mất".
+        # Package rollback là PRIVATE: chưa xác thực thì MỌI digest đều
+        # "không phân giải được", kể cả ảnh còn nguyên vẹn trên registry.
+        if ! docker manifest inspect "$DIGEST" >/dev/null 2>&1; then
+            _REG="${REPO%%/*}"
+
+            # Lệnh gợi ý xây bằng SINGLE QUOTES rồi mới ghép biến. Nhúng thẳng
+            # vào chuỗi thông báo (double-quoted) là đi qua hai lớp escape, và
+            # bản nháp đầu đã in ra `echo "\$PAT"` — người trực copy vào chạy sẽ
+            # gửi CHUỖI `$PAT` làm mật khẩu, không phải token. Lệnh cứu hộ in sai
+            # còn tệ hơn không in gì: nó thất bại theo cách trông như đã làm đúng.
+            #
+            # `printf %s` chứ không `echo`: `echo` của một số shell diễn giải
+            # dấu gạch chéo ngược, làm hỏng token chứa chúng.
+            # Tên tài khoản suy TỪ CHÍNH digest: `ghcr.io/<ns>/qlts-backend`
+            # ⇒ `<ns>`. Placeholder kiểu `-u <user>` KHÔNG copy-paste được: bash
+            # đọc `<` là chuyển hướng nhập, nên người trực nhận lỗi
+            # "No such file or directory" thay vì một lệnh chạy được. Đã đo.
+            _NS="${REPO#*/}"; _NS="${_NS%%/*}"
+            # Lệnh phải FAIL-CLOSED. Hai bản trước đều không:
+            #   `…; unset PAT`                      → unset luôn trả 0, nuốt lỗi login;
+            #   `…; rc=$?; unset PAT; echo "rc=$rc"` → echo trả 0, cả dòng vẫn "thành công".
+            # Người trực chạy trong script sẽ đi tiếp như thể đã đăng nhập.
+            # Dạng `if … then … else rc=$?; …; exit "$rc"; fi` trả đúng mã lỗi,
+            # và `unset PAT` nằm ở CẢ HAI nhánh — token không ở lại môi trường
+            # dù login thành công hay thất bại.
+            _GOI_Y='if read -rs PAT && printf %s "$PAT" | docker login '"$_REG"' -u '"$_NS"' --password-stdin; then unset PAT; else rc=$?; unset PAT; exit "$rc"; fi'
+
+            # ⚠️ Script bật `set -euo pipefail`. Gọi helper TRẦN rồi đọc `$?` là
+            # sai: mã thoát khác 0 giết shell NGAY, `case` không bao giờ chạy, và
+            # đúng hai thông báo quan trọng nhất ("CHƯA CẤU HÌNH", "KHÔNG ĐỌC
+            # ĐƯỢC") không bao giờ tới được người trực. Đã đo: với `set -e`,
+            # helper trả 1 hoặc 2 ⇒ script im lặng chết, in ra RỖNG.
+            #
+            # `if ...; then` đặt lời gọi vào ngữ cảnh điều kiện — `set -e` không
+            # can thiệp ở đó.
+            if _co_cau_hinh_credential "$_REG"; then
+                _CRED_RC=0
+            else
+                _CRED_RC=$?
+            fi
+            case "$_CRED_RC" in
+            1)
+                error "CHƯA CẤU HÌNH ĐĂNG NHẬP '$_REG' — KHÔNG kết luận được ảnh còn hay mất.
+
+  Package rollback của QLTS là PRIVATE. Chưa xác thực thì mọi digest đều báo
+  'không phân giải được', kể cả khi ảnh còn NGUYÊN VẸN trên registry.
+  ĐÂY KHÔNG PHẢI 'mất đường lùi'.
+
+  Đăng nhập bằng token scope \`read:packages\` (rollback chỉ ĐỌC;
+  \`write:packages\` chỉ cần khi TẠO thế hệ mới ở §5.4) rồi chạy lại script này:
+
+      $_GOI_Y
+
+  \`read -rs\` không hiện ký tự và giá trị KHÔNG vào history vì nó không nằm
+  trong dòng lệnh. Xong việc thì \`docker logout $_REG\` — token nằm base64
+  KHÔNG mã hoá trong \$HOME/.docker/config.json."
+                ;;
+            2)
+                error "KHÔNG ĐỌC ĐƯỢC \${DOCKER_CONFIG:-\$HOME/.docker}/config.json — KHÔNG kết luận được gì.
+
+  Tệp tồn tại nhưng không phải JSON hợp lệ. Không biết máy này có credential cho
+  '$_REG' hay không, nên KHÔNG được suy ra ảnh đã mất, cũng KHÔNG được suy ra
+  chưa đăng nhập.
+
+  Sửa hoặc xoá tệp config rồi đăng nhập lại:
+
+      $_GOI_Y"
+                ;;
+            *)
+                error "KHÔNG XÁC ĐỊNH được trạng thái của $DIGEST.
+
+  Máy này CÓ credential cho '$_REG', nhưng \`docker manifest inspect\` vẫn thất
+  bại. Ba nguyên nhân đều dẫn tới đúng lỗi này và KHÔNG phân biệt được từ đây:
+
+    1. Token hết hạn, bị thu hồi, hoặc thiếu scope \`read:packages\`.
+    2. Mạng hoặc registry đang lỗi.
+    3. Ảnh cũ của '$S' đã bị dọn khỏi registry (push ở §5.4 hỏng, hoặc
+       registry tự dọn theo chính sách lưu giữ).
+
+  ⚠️ KHÔNG kết luận 'mất đường lùi' khi chưa loại trừ (1) và (2). Ảnh vẫn có thể
+  còn đủ. Phân biệt bằng cách đăng nhập lại rồi chạy lại script này:
+
+      $_GOI_Y
+
+  Nếu sau khi đăng nhập lại vẫn lỗi thì mới là ca (3), và lúc đó rollback phụ
+  thuộc hoàn toàn vào đĩa của máy chủ.
+
+  DỪNG LẠI — chưa đụng gì tới CSDL."
+                ;;
+            esac
+        fi
         log "  ✓ $S: digest ${DIGEST##*@} có thật trên registry"
 
         # Thiếu ảnh, HOẶC tag cục bộ đã trôi sang ID khác: cả hai ca đều lấy lại

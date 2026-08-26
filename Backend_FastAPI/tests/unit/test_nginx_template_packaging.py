@@ -32,12 +32,50 @@ Chúng chạy không cần Docker nên nằm được trong lát unit của CI.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
 
 yaml = pytest.importorskip("yaml", reason="cần PyYAML để đọc docker-compose.yml")
+
+
+def _tim_bash() -> str | None:
+    """Đường dẫn tới một `bash` THỰC SỰ chạy được.
+
+    ⚠️ Trên Windows, `shutil.which("bash")` thường trả về bash của **WSL**, và
+    gọi nó bằng đường dẫn kiểu Windows cho `execvpe(/bin/bash) failed: No such
+    file or directory`. Đã vấp hai lần. Nên ưu tiên Git Bash, và luôn kiểm
+    bằng cách CHẠY THẬT chứ không tin `which`.
+    """
+    ung_vien = [
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        "/bin/bash",
+        "/usr/bin/bash",
+    ]
+    duong = shutil.which("bash")
+    if duong:
+        ung_vien.append(duong)
+    for uv in ung_vien:
+        if not os.path.exists(uv):
+            continue
+        try:
+            r = subprocess.run(
+                [uv, "-c", "echo ok"], capture_output=True, text=True, timeout=20
+            )
+        except Exception:
+            continue
+        if r.returncode == 0 and "ok" in r.stdout:
+            return uv
+    return None
+
+
+_BASH = _tim_bash()
 
 
 def _tim_goc() -> Path:
@@ -2258,3 +2296,380 @@ def test_pha_b_co_ke_hoach_cap_lai_ma_khi_doi_pepper():
     khoi = noi_dung[i:i + 2000]
     assert "count(*)" in khoi, "thiếu bước đếm phạm vi người dùng đang giữ mã v2"
     assert re.search(r"[Cc]ấp lại mã", khoi), "thiếu bước cấp lại mã"
+
+
+# ---------------------------------------------------------------------------
+# GHCR: đăng nhập TRƯỚC preflight, logout SAU CÙNG, và KHÔNG kết luận quá tay
+#
+# Vì sao nhóm guard này tồn tại: package rollback là PRIVATE. Đo thật 25-08-2026 —
+# sau `docker logout ghcr.io`, preflight non-local trả RC=1 với "KHÔNG phân giải
+# được <digest> trên registry", tức CÙNG thông báo dùng cho ca "ảnh đã bị dọn
+# mất". Người trực lúc 3 giờ sáng rất dễ đọc cái đỏ đó thành "mất đường lùi".
+#
+# ⚠️ Guard TĨNH (tìm chuỗi trong mã) KHÔNG đủ cho nhóm này. Bản nháp đầu chỉ tìm
+# tên helper và tên thông báo, nên ba lỗi fail-open lọt qua nguyên vẹn:
+#   1. lệnh cứu hộ render ra `echo "\$PAT"` — copy vào chạy sẽ gửi CHUỖI `$PAT`;
+#   2. "có khoá trong config.json" bị coi là "đã đăng nhập hợp lệ";
+#   3. verifier logout bắt mọi Exception rồi coi config hỏng là "auths rỗng".
+# Nên bên dưới có cả guard RENDER: chạy thật đoạn mã rồi đọc kết quả.
+# ---------------------------------------------------------------------------
+
+
+def _khoi_ba_trang_thai() -> str:
+    """Đoạn xử lý `docker manifest inspect` thất bại trong preflight."""
+    ma = _doc(_PREFLIGHT)
+    i = ma.index('if ! docker manifest inspect "$DIGEST"')
+    # Phải lấy CẢ `fi` đóng khối: cắt trước nó thì đoạn trích mất cân bằng và
+    # bash chết bằng "unexpected end of file" — guard khi ấy đỏ vì đoạn trích
+    # hỏng chứ không phải vì mã sai. Đã vấp.
+    moc = "\n        fi"
+    j = ma.index(moc, i) + len(moc)
+    return ma[i:j]
+
+
+def _render_nhanh(ma_tra_ve: int) -> str:
+    """CHẠY THẬT khối ba-trạng-thái, với helper được ép trả `ma_tra_ve`.
+
+    Guard tĩnh không thấy được lỗi escape: chuỗi trong mã nguồn trông hợp lý,
+    chỉ khi bash render mới lộ ra `\\$PAT` thay vì `$PAT`. Phải chạy mới biết.
+    """
+    # ⚠️ PHẢI bật `set -euo pipefail` y như script thật. Bản nháp của chính guard
+    # này KHÔNG bật, nên nó XANH trong khi script thật im lặng chết trước khi tới
+    # `case`: dưới `set -e`, một lời gọi hàm trần trả khác 0 giết shell ngay, và
+    # hai thông báo quan trọng nhất không bao giờ in ra. Guard render mà chạy
+    # trong môi trường dễ dãi hơn bản thật thì nó canh một thứ không tồn tại.
+    kich_ban = (
+        "set -euo pipefail\n"
+        "RED=''; NC=''\n"
+        'error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }\n'
+        "REPO=ghcr.io/favouritekid/qlts-backend\n"
+        "DIGEST=ghcr.io/favouritekid/qlts-backend@sha256:abc\n"
+        "S=backend\n"
+        "_co_cau_hinh_credential() { return " + str(ma_tra_ve) + "; }\n"
+        + _khoi_ba_trang_thai()
+        + "\n"
+    )
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".sh", delete=False, encoding="utf-8", newline="\n"
+    ) as f:
+        f.write(kich_ban)
+        duong = f.name
+    try:
+        r = subprocess.run(
+            [_BASH, duong], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=30,
+        )
+        return r.stdout + r.stderr
+    finally:
+        os.unlink(duong)
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để render thật")
+def test_lenh_cuu_ho_in_ra_phai_chay_duoc():
+    """Lệnh gợi ý trong thông báo lỗi phải COPY VÀO CHẠY ĐƯỢC.
+
+    Đã đo: bản nháp đầu render ra `echo "\\$PAT"`. Người trực copy sẽ gửi chuỗi
+    `$PAT` làm mật khẩu — thất bại theo kiểu trông như đã làm đúng.
+    """
+    ra = _render_nhanh(1)
+    dong = [d.strip() for d in ra.split("\n") if "docker login" in d]
+    assert dong, "thông báo không in ra lệnh đăng nhập nào"
+    lenh = dong[0]
+
+    assert "\\$PAT" not in lenh, (
+        "lệnh render ra còn escape thừa — copy vào chạy sẽ gửi chuỗi $PAT "
+        "thay vì token: " + lenh
+    )
+    assert "--password-stdin" in lenh, "token phải qua stdin, không qua argv"
+    assert "printf" in lenh, (
+        "dùng `printf %s` chứ không `echo`: echo của một số shell diễn giải dấu "
+        "gạch chéo ngược và làm hỏng token"
+    )
+    assert "unset PAT" in lenh, "không xoá PAT khỏi môi trường sau khi dùng"
+    assert "rc=$?" in lenh, (
+        "`; unset PAT` nuốt mã thoát của login (unset luôn trả 0) — phải bắt "
+        "`rc=$?` ngay sau login thì người trực mới biết login hỏng"
+    )
+    assert "<" not in lenh, (
+        "placeholder dạng <user> KHÔNG copy-paste được: bash đọc `<` là chuyển "
+        "hướng nhập và báo 'No such file or directory': " + lenh
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để render thật")
+@pytest.mark.parametrize(
+    "ma, phai_co",
+    [
+        # Không có credential ⇒ kết luận CHẮC CHẮN: chưa cấu hình đăng nhập.
+        (1, ["CHƯA CẤU HÌNH ĐĂNG NHẬP", "KHÔNG PHẢI"]),
+        # Config không đọc được ⇒ KHÔNG biết gì, không đoán về phía nào.
+        (2, ["KHÔNG ĐỌC ĐƯỢC"]),
+        # CÓ credential mà inspect vẫn hỏng ⇒ token hết hạn / thiếu scope /
+        # mạng lỗi / ảnh mất. KHÔNG được tuyên bố ảnh đã mất.
+        (0, ["KHÔNG XÁC ĐỊNH", "hết hạn", "thiếu scope"]),
+    ],
+)
+def test_ba_trang_thai_khong_ket_luan_qua_tay(ma, phai_co):
+    """Mỗi trạng thái phải nói ĐÚNG mức chắc chắn mà bằng chứng cho phép."""
+    ra = _render_nhanh(ma)
+    for s in phai_co:
+        assert s in ra, "nhánh mã %d thiếu '%s'; ra: %s" % (ma, s, ra[:400])
+
+    if ma == 0:
+        # Ca nguy hiểm nhất: CÓ credential nhưng inspect hỏng. Trước khi loại
+        # trừ token/mạng thì KHÔNG được nói ảnh không còn.
+        assert "không còn ở ngoài máy" not in ra, (
+            "có credential mà inspect hỏng vẫn tuyên bố ảnh mất — đúng kết luận "
+            "sai mà nhóm guard này sinh ra để loại bỏ"
+        )
+        assert "KHÔNG kết luận" in ra, "không cảnh báo người trực đừng kết luận vội"
+
+
+def test_helper_khong_tu_nhan_la_chung_minh_dang_nhap():
+    """Helper chỉ đọc config.json ⇒ tên và ngữ nghĩa phải nói đúng chừng ấy."""
+    ma = _doc(_PREFLIGHT)
+
+    assert "_co_cau_hinh_credential()" in ma, "thiếu helper kiểm cấu hình credential"
+    assert "_da_dang_nhap()" not in ma, (
+        "tên `_da_dang_nhap` hứa nhiều hơn thứ hàm chứng minh được: token hết "
+        "hạn / thiếu scope / bị thu hồi vẫn để nguyên khoá trong `auths`"
+    )
+
+    i = ma.index("_co_cau_hinh_credential()")
+    j = ma.index("\n}", i)
+    than = ma[i:j]
+
+    # Trích RIÊNG nhánh `except`. Kiểm `"sys.exit(2)" in than` là chưa đủ: thân
+    # hàm còn một `sys.exit(2)` khác (nhánh `not isinstance`), nên đổi riêng
+    # nhánh except sang `sys.exit(1)` vẫn XANH. Đã đo bằng mutation.
+    k = than.index("except Exception:")
+    nhanh_except = than[k:than.index("host = sys.argv", k)]
+    assert "sys.exit(2)" in nhanh_except, (
+        "config không đọc được phải có mã thoát RIÊNG (2 = không biết); gộp vào "
+        "1 = 'chắc chắn không có credential' là fail-open — một config.json "
+        "hỏng sẽ được đọc thành 'chưa đăng nhập' và che mất chính lỗi cần sửa"
+    )
+    assert 'd.get("credsStore")' in than or "d.get('credsStore')" in than, (
+        "bỏ sót `credsStore`: credential khi ấy nằm NGOÀI config.json. Kiểm "
+        "bằng chuỗi 'credsStore' thôi là chưa đủ — nó còn xuất hiện ở chú thích"
+    )
+
+    lenh = "\n".join(d for d in than.split("\n") if not d.lstrip().startswith("#"))
+    assert 'python3 -c "pass"' in lenh, "phải THỬ CHẠY python3 rồi mới tin"
+    assert "command -v python3" not in lenh, (
+        "`command -v python3` chỉ chứng minh tệp có mặt — trên Windows nó là "
+        "stub Microsoft Store, in 'Python was not found' rồi exit 0"
+    )
+
+
+def _lenh_khoi_rollback() -> list:
+    """Các LỆNH trong §8.1, đã bỏ dòng chú thích.
+
+    Bỏ comment là bản chất: `docker login` và `rollback-preflight.sh` còn xuất
+    hiện trong chú thích giải thích, nên phép đo thứ tự trên văn bản thô cho
+    kết quả SAI. Đã đo: login=134 preflight=151 logout=140 trên bản thô, trong
+    khi thứ tự lệnh thật là 8 < 10 < 51.
+    """
+    return [(n, d) for n, d in _khoi_rollback() if not d.lstrip().startswith("#")]
+
+
+def test_runbook_dang_nhap_registry_truoc_khi_chay_preflight():
+    """§8.1 phải `docker login` TRƯỚC lời gọi preflight, không phải sau."""
+    lenh = _lenh_khoi_rollback()
+
+    vt_login = next((i for i, (_, d) in enumerate(lenh) if "docker login" in d), -1)
+    vt_pf = next(
+        (i for i, (_, d) in enumerate(lenh) if "rollback-preflight.sh" in d), -1
+    )
+    assert vt_pf != -1, "§8.1 không gọi rollback-preflight.sh"
+    assert vt_login != -1, (
+        "§8.1 không có bước `docker login` — package rollback là PRIVATE và quy "
+        "trình CỐ Ý logout sau mỗi lần dùng, nên trạng thái bình thường của máy "
+        "chủ là chưa đăng nhập; preflight sẽ đỏ ngay"
+    )
+    assert vt_login < vt_pf, (
+        "`docker login` nằm SAU preflight thì vô dụng: preflight đã đỏ và dừng"
+    )
+
+    dl = lenh[vt_login][1]
+    assert "--password-stdin" in dl, "token qua argv sẽ lộ trong `ps` và history"
+    assert "read -rs" in dl, "phải đọc token bằng `read -rs`"
+    # `unset PAT` KHÔNG kiểm ở đây: lệnh an toàn trải nhiều dòng
+    # (`if … then / unset PAT / else … fi`) nên phép kiểm theo TỪNG DÒNG không
+    # thấy nó — đúng lớp lỗi "lệnh nhiều dòng làm guard mù". Việc đó thuộc
+    # `test_lenh_login_trong_runbook_giong_lenh_preflight_in_ra`, guard ấy xét
+    # cả khối và còn đòi `unset PAT` xuất hiện ở CẢ HAI nhánh.
+
+
+def test_runbook_logout_o_buoc_cuoi_va_nghiem_thu_fail_closed():
+    """§8.1 phải logout sau cùng, và verifier phải ĐỎ khi không đọc được config."""
+    lenh = _lenh_khoi_rollback()
+
+    vt_logout = next((i for i, (_, d) in enumerate(lenh) if "docker logout" in d), -1)
+    vt_pf = next(
+        (i for i, (_, d) in enumerate(lenh) if "rollback-preflight.sh" in d), -1
+    )
+    assert vt_logout != -1, (
+        "§8.1 không logout — token nằm base64 KHÔNG mã hoá trong config.json"
+    )
+    assert vt_logout > vt_pf, (
+        "logout TRƯỚC preflight là tự làm đỏ chính phép kiểm mình vừa cần"
+    )
+
+    noi_dung = _doc(_RUNBOOK)
+    i = noi_dung.index("### 8.1")
+    khoi_tho = noi_dung[i:noi_dung.index("### 8.2", i)]
+    # CHỈ xét dòng lệnh: chính chú thích giải thích vì sao KHÔNG được dùng
+    # `a = []` lại chứa đúng chuỗi ấy, nên bản nháp của guard này đỏ trên mã
+    # ĐÚNG. Lần thứ hai vấp cùng một lỗi trong PR này — quét mã thì phải bỏ
+    # comment trước, không có ngoại lệ.
+    khoi = "\n".join(
+        d for d in khoi_tho.split("\n") if not d.lstrip().startswith("#")
+    )
+
+    assert "sys.exit(" in khoi, (
+        "verifier logout phải THOÁT KHÁC 0 khi có vấn đề; bản nháp đầu bắt mọi "
+        "Exception rồi gán danh sách rỗng nên config.json HỎNG cho XANH GIẢ"
+    )
+    assert "a = []" not in khoi, (
+        "gán danh sách rỗng khi đọc lỗi = coi config hỏng là 'đã sạch'"
+    )
+    # Phải neo vào phép ĐỌC THẬT (`d.get(...)`), không vào tên xuất hiện đâu đó.
+    # Mutation `store = d.get("credsStore")` → `store = None` giữ nguyên chuỗi
+    # "credsStore" ở thông báo lỗi nên guard theo tên vẫn XANH. Đã đo.
+    for k in ("credHelpers", "credsStore"):
+        assert ('d.get("%s")' % k) in khoi or ("d.get('%s')" % k) in khoi, (
+            "verifier bỏ sót phép đọc `%s`: credential có thể không nằm trong "
+            "`auths`, và một tên chỉ xuất hiện trong thông báo lỗi thì không "
+            "chứng minh nó được kiểm" % k
+        )
+
+
+def _chay_lenh_login(lenh: str, docker_rc: int) -> tuple:
+    """CHẠY THẬT lệnh login đã render, với `docker` giả trả `docker_rc`.
+
+    Trả (mã thoát của cả khối, PAT còn sót hay không).
+
+    Guard tĩnh "có `rc=$?` trong lệnh" là chưa đủ: bản trước kết thúc bằng
+    `echo "docker login rc=$rc"`, mà `echo` trả 0 nên CẢ DÒNG vẫn thành công khi
+    login hỏng. Chỉ chạy mới thấy.
+    """
+    # ⚠️ Phải đo bằng `trap … EXIT`, không phải bằng một dòng `echo` đặt SAU lệnh.
+    # Nhánh thất bại kết thúc bằng `exit "$rc"`, nên dòng đặt sau KHÔNG BAO GIỜ
+    # chạy: guard khi ấy đọc được "PAT không còn sót" cho mọi bản, kể cả bản đã
+    # gỡ hẳn `unset PAT` khỏi nhánh lỗi. Đã đo — mutation đó lọt qua nguyên vẹn.
+    # `trap … EXIT` chạy kể cả khi script thoát bằng `exit`.
+    kich_ban = (
+        'trap \'echo "PAT_CON_SOT=${PAT+co}"\' EXIT\n'
+        "docker() { cat >/dev/null; return " + str(docker_rc) + "; }\n"
+        + lenh
+        + "\n"
+    )
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".sh", delete=False, encoding="utf-8", newline="\n"
+    ) as f:
+        f.write(kich_ban)
+        duong = f.name
+    try:
+        r = subprocess.run(
+            [_BASH, duong], input="TOKEN-GIA\n", capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=30,
+        )
+        return r.returncode, ("PAT_CON_SOT=co" in r.stdout)
+    finally:
+        os.unlink(duong)
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+@pytest.mark.parametrize("docker_rc", [0, 1])
+def test_lenh_login_fail_closed_va_luon_unset_pat(docker_rc):
+    """Lệnh login phải trả ĐÚNG mã lỗi của `docker login`, và luôn xoá PAT.
+
+    `…; unset PAT` và `…; echo "rc=$rc"` đều trả 0 dù login hỏng — người trực
+    chạy trong script sẽ đi tiếp như thể đã đăng nhập. Đã đo cả hai bản.
+    """
+    ra = _render_nhanh(1)
+    dong = [d.strip() for d in ra.split("\n") if "docker login" in d]
+    assert dong, "thông báo không in ra lệnh đăng nhập nào"
+
+    rc, con_sot = _chay_lenh_login(dong[0], docker_rc)
+    assert rc == docker_rc, (
+        f"docker login trả {docker_rc} mà cả khối trả {rc} — lệnh KHÔNG "
+        f"fail-closed, mã lỗi bị nuốt: {dong[0]}"
+    )
+    assert not con_sot, (
+        f"PAT còn trong môi trường sau khi login trả {docker_rc} — token phải "
+        f"được unset ở CẢ HAI nhánh"
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_lenh_login_trong_runbook_giong_lenh_preflight_in_ra():
+    """§8.1 và thông báo preflight phải dùng CÙNG một lệnh an toàn.
+
+    Hai nơi lệch nhau thì một trong hai sẽ hỏng, và nơi hỏng là nơi ít được
+    đọc. Bản trước sửa lệnh trong preflight nhưng để nguyên §8.1 với `echo
+    "$PAT"`, `-u <user>` và mã lỗi bị nuốt.
+    """
+    noi_dung = _doc(_RUNBOOK)
+    i = noi_dung.index("### 8.1")
+    khoi_tho = noi_dung[i:noi_dung.index("### 8.2", i)]
+    lenh_rb = "\n".join(
+        d for d in khoi_tho.split("\n") if not d.lstrip().startswith("#")
+    )
+
+    assert 'echo "$PAT"' not in lenh_rb, (
+        "§8.1 còn dùng `echo \"$PAT\"`: echo của một số shell diễn giải dấu "
+        "gạch chéo ngược và làm hỏng token"
+    )
+    assert "-u <" not in lenh_rb, (
+        "§8.1 còn placeholder `-u <user>`: bash đọc `<` là chuyển hướng nhập, "
+        "lệnh copy vào chạy sẽ báo 'No such file or directory'"
+    )
+    assert "printf %s" in lenh_rb, "§8.1 phải dùng `printf %s` để đưa token qua stdin"
+    assert re.search(r"rc=\$\?;\s*unset PAT;\s*exit", lenh_rb), (
+        "§8.1 phải trả đúng mã lỗi của login: `; unset PAT` nuốt mã thoát vì "
+        "unset luôn trả 0"
+    )
+    assert lenh_rb.count("unset PAT") >= 2, (
+        "`unset PAT` phải có ở CẢ HAI nhánh (login thành công và thất bại)"
+    )
+
+
+def test_helper_goi_trong_ngu_canh_dieu_kien_vi_set_e():
+    """Dưới `set -euo pipefail`, gọi helper trần rồi đọc `$?` là chết im lặng."""
+    ma = _doc(_PREFLIGHT)
+    assert "set -euo pipefail" in ma, "script không còn bật set -euo pipefail?"
+
+    khoi = _khoi_ba_trang_thai()
+    lenh = "\n".join(d for d in khoi.split("\n") if not d.lstrip().startswith("#"))
+
+    assert not re.search(
+        r"^\s*_co_cau_hinh_credential\s+\"\$_REG\"\s*$", lenh, re.M
+    ), (
+        "gọi helper TRẦN dưới `set -e`: mã thoát khác 0 giết shell NGAY, `case` "
+        "không bao giờ chạy và hai thông báo 'CHƯA CẤU HÌNH' / 'KHÔNG ĐỌC ĐƯỢC' "
+        "không tới được người trực. Đặt vào `if …; then`"
+    )
+    assert re.search(r"if\s+_co_cau_hinh_credential\s+\"\$_REG\"\s*;\s*then", lenh), (
+        "helper phải được gọi trong ngữ cảnh điều kiện — `set -e` không can "
+        "thiệp ở đó"
+    )
+    assert "_CRED_RC" in lenh, "phải giữ mã thoát vào biến rồi mới `case`"
+
+
+def test_fallback_grep_khong_nhan_vo_chac_chan():
+    """Không có python3 thì `grep` KHÔNG chứng minh được JSON hợp lệ."""
+    ma = _doc(_PREFLIGHT)
+    i = ma.index("_co_cau_hinh_credential()")
+    j = ma.index("\n}", i)
+    than = ma[i:j]
+
+    k = than.index("grep -q")
+    duoi = than[k:]
+    lenh = "\n".join(d for d in duoi.split("\n") if not d.lstrip().startswith("#"))
+    assert re.search(r"return\s+2\s*$", lenh.strip()), (
+        "nhánh fallback grep không tìm thấy credential phải trả 2 ('không "
+        "biết'), không phải 1 ('chắc chắn chưa cấu hình'): grep không phân biệt "
+        "được 'JSON hợp lệ và không có credential' với 'JSON hỏng nên không khớp'"
+    )
