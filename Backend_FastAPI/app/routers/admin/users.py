@@ -25,7 +25,7 @@ Breaking API Changes:
 from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
 import io
-from typing import Callable, List, Optional, Tuple
+from typing import List, Optional
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -83,10 +83,16 @@ async def log_admin_activity(
     resource_id: Optional[int] = None,
     description: Optional[str] = None,
     changes: Optional[dict] = None,
-) -> Tuple[models.UserActivityLog, Callable]:
-    """
-    Helper: extract IP/UA from request and delegate to activity_service.
-    Returns (activity_log, post_commit_callback) — caller must commit and run callback.
+) -> models.UserActivityLog:
+    """Trích IP/UA từ request rồi uỷ quyền cho ``activity_service``.
+
+    Trả về **một** ``UserActivityLog``, KHÔNG phải tuple. Caller vẫn phải
+    ``db.commit()`` — hàm này chỉ ``flush``.
+
+    ⚠️ Đừng khôi phục kiểu ``Tuple[UserActivityLog, Callable]``. Contract một
+    đối tượng là contract của ``activity_service.log_activity`` và đã có test
+    service khoá nó; bọc lại thành tuple ở đây là dựng một callback no-op chỉ
+    để chiều caller — hai nguồn chuẩn cho cùng một câu hỏi.
     """
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
@@ -215,7 +221,7 @@ async def create_new_user(
 
     # Best-effort audit log — business change already committed above
     try:
-        _, log_callback = await log_admin_activity(
+        await log_admin_activity(
             db=db,
             request=request,
             action="create_user",
@@ -226,7 +232,6 @@ async def create_new_user(
             description=f"Admin created new user: {created_user.username}",
         )
         await db.commit()
-        await log_callback()
     except Exception:
         log.error("Failed to persist audit log for create_user", user_id=created_user.id, exc_info=True)
 
@@ -502,12 +507,15 @@ async def bulk_user_action(
         action_desc += f" to {action_data.status}"
     action_desc += f" for {len(action_data.user_ids)} users"
 
-    # NOTE: activity_service.log_activity (via log_admin_activity) returns a
-    # single UserActivityLog (PR #251 dropped the old (log, callback) tuple — the
-    # Tuple annotation on log_admin_activity is stale). It is staged in THIS
-    # transaction and committed below. Do NOT unpack it (the previous
-    # `_, log_callback = ` raised TypeError, 500-ing every bulk action — latent
-    # because the bulk endpoint had no endpoint-level test).
+    # ``log_admin_activity`` trả về MỘT ``UserActivityLog``, được stage trong
+    # CHÍNH giao dịch này và commit bên dưới. Đừng unpack nó.
+    #
+    # Chỗ này từng là callsite DUY NHẤT được vá sau khi PR #251 bỏ tuple
+    # ``(log, callback)``; mười sáu đường còn lại trong ``roles.py`` /
+    # ``users.py`` / ``profile.py`` giữ nguyên ``_, cb = …`` cho tới đợt này —
+    # đúng hình mẫu "vá một nhánh thì còn bốn nhánh". Ẩn được lâu KHÔNG phải
+    # vì thiếu test HTTP — nightly đã đỏ 8 ca vì đúng lỗi này — mà vì cả 8 ca
+    # đều nằm ngoài PR gate, nên mọi PR vẫn xanh.
     await log_admin_activity(
         db=db,
         request=request,
@@ -644,7 +652,7 @@ async def sync_users(
 
     # Best-effort audit log — business change already committed above
     try:
-        _, log_callback = await log_admin_activity(
+        await log_admin_activity(
             db=db,
             request=request,
             action="sync_users",
@@ -658,7 +666,6 @@ async def sync_users(
             }
         )
         await db.commit()
-        await log_callback()
     except Exception:
         log.error("Failed to persist audit log for sync_users", exc_info=True)
 
@@ -1098,7 +1105,7 @@ async def update_existing_user(
     # downstream so ORM session state (expired by commits + rollback)
     # never triggers lazy load in middleware async context.
     try:
-        _, log_callback = await log_admin_activity(
+        await log_admin_activity(
             db=db,
             request=request,
             action="update_user",
@@ -1110,7 +1117,6 @@ async def update_existing_user(
             changes=changes if changes else None,
         )
         await db.commit()
-        await log_callback()
     except Exception:
         await db.rollback()
         log.error("Failed to persist audit log for update_user", user_id=_updated_user_id, exc_info=True)
@@ -1244,7 +1250,7 @@ async def delete_existing_user(
 
     # ⚠️ IMPORTANT: Log activity BEFORE deleting user to avoid FK constraint violation
     # The activity_log.target_user_id references user.id, so user must exist when logging
-    _, log_callback = await log_admin_activity(
+    await log_admin_activity(
         db=db,
         request=request,
         action="delete_user",
@@ -1259,7 +1265,6 @@ async def delete_existing_user(
     await user_service.delete_user(db, user_id)
 
     await db.commit()
-    await log_callback()
 
     return None
 

@@ -19,7 +19,7 @@ Dependencies: role_service, activity_service (from PHASE 1), Casbin enforcer
 Complexity: HIGH (Casbin integration, atomic operations, policy validation)
 """
 
-from typing import Callable, List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 
 import casbin
@@ -75,10 +75,16 @@ async def log_admin_activity(
     resource_id: Optional[int] = None,
     description: Optional[str] = None,
     changes: Optional[dict] = None,
-) -> Tuple[models.UserActivityLog, Callable]:
-    """
-    Helper: extract IP/UA from request and delegate to activity_service.
-    Returns (activity_log, post_commit_callback) — caller must commit and run callback.
+) -> models.UserActivityLog:
+    """Trích IP/UA từ request rồi uỷ quyền cho ``activity_service``.
+
+    Trả về **một** ``UserActivityLog``, KHÔNG phải tuple. Caller vẫn phải
+    ``db.commit()`` — hàm này chỉ ``flush``.
+
+    ⚠️ Đừng khôi phục kiểu ``Tuple[UserActivityLog, Callable]``. Contract một
+    đối tượng là contract của ``activity_service.log_activity`` và đã có test
+    service khoá nó; bọc lại thành tuple ở đây là dựng một callback no-op chỉ
+    để chiều caller — hai nguồn chuẩn cho cùng một câu hỏi.
     """
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
@@ -97,11 +103,29 @@ async def log_admin_activity(
     )
 
 
-async def commit_and_log(db: AsyncSession, log_result: Tuple[models.UserActivityLog, Callable]):
-    """Router-layer helper: commit the activity log and run its post-commit callback."""
-    _, callback = log_result
+async def commit_and_log(db: AsyncSession, log_result: models.UserActivityLog):
+    """Chốt giao dịch chứa bản ghi audit vừa flush.
+
+    ``log_result`` là **một** ``UserActivityLog``. Bản trước nhận
+    ``Tuple[UserActivityLog, Callable]`` rồi ``_, callback = log_result``, trong
+    khi ``activity_service.log_activity`` đã trả về một đối tượng — mọi lời gọi
+    ném ``TypeError: cannot unpack non-iterable UserActivityLog object``.
+
+    Tham số vẫn được GIỮ dù thân hàm không đọc tới: nó làm thứ tự bắt buộc
+    (ghi audit rồi mới commit) **hiện rõ tại callsite**. Nó không chứng minh
+    được đối tượng truyền vào đúng là bản ghi vừa tạo — chỉ có phép kiểm kiểu
+    bên dưới chặn được thứ hoàn toàn sai kiểu. Bỏ tham số đi thì
+    ``commit_and_log(db)`` trông vẫn hợp lệ, và trật tự ấy biến mất khỏi trang
+    giấy.
+
+    Không còn ``callback``: ``log_activity`` không sinh việc hậu-commit nào.
+    """
+    if not isinstance(log_result, models.UserActivityLog):
+        raise TypeError(
+            "commit_and_log nhan mot UserActivityLog, nhan duoc %r"
+            % type(log_result).__name__
+        )
     await db.commit()
-    await callback()
 
 
 async def emit_policy_update(operation: str, data: dict):

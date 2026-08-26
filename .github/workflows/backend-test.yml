@@ -395,8 +395,17 @@ jobs:
           # tám test, nên con số khớp trong khi phạm vi phủ chỉ là 5/8. Ba
           # nodeid còn lại được liệt kê TƯỜNG MINH bên dưới; thiếu chúng thì
           # ba luồng ấy hồi quy mà required check vẫn xanh.
+          # `test_activity_log_contract.py` ở cuối lát này canh giao ước
+          # `activity_service.log_activity() -> UserActivityLog`. Nó thuộc Tier 2
+          # vì mọi đường nó đi qua đều là endpoint quản trị (roles/policies,
+          # admin users) — cùng bề mặt RBAC mà lát này đã gác.
+          #
+          # ⚠️ Chú thích PHẢI nằm ngoài scalar `tests: >-`. Bên trong, YAML coi
+          # `#` là nội dung, `>-` gấp mọi dòng thành MỘT dòng, rồi bash cắt từ
+          # `#` tới hết — đo được 17 đối số thay vì 25 ở một lần trước.
           - tier: Tier 2 — RBAC + security + CCCD lock
             tests: >-
+              tests/api/test_activity_log_contract.py
               tests/unit/test_casbin_phase3_routes.py
               tests/integration/test_casbin_b1_4x14_matrix.py
               tests/unit/test_csrf_middleware.py
