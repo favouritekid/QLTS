@@ -1,6 +1,6 @@
 # app/routers/profile.py
 import structlog
-from typing import Callable, Optional, Tuple
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import EmailStr, TypeAdapter, ValidationError  # <-- BỔ SUNG TypeAdapter
@@ -27,10 +27,16 @@ async def log_profile_activity(
     resource_id: Optional[int] = None,
     description: Optional[str] = None,
     changes: Optional[dict] = None,
-) -> Tuple[models.UserActivityLog, Callable]:
-    """
-    Helper: extract IP/UA from request and delegate to activity_service.
-    Returns (activity_log, post_commit_callback) — caller must commit and run callback.
+) -> models.UserActivityLog:
+    """Trích IP/UA từ request rồi uỷ quyền cho ``activity_service``.
+
+    Trả về **một** ``UserActivityLog``, KHÔNG phải tuple. Caller vẫn phải
+    ``db.commit()`` — hàm này chỉ ``flush``.
+
+    ⚠️ Đừng khôi phục kiểu ``Tuple[UserActivityLog, Callable]``. Contract một
+    đối tượng là contract của ``activity_service.log_activity`` và đã có test
+    service khoá nó; bọc lại thành tuple ở đây là dựng một callback no-op chỉ
+    để chiều caller — hai nguồn chuẩn cho cùng một câu hỏi.
     """
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
@@ -155,7 +161,7 @@ async def update_current_user_profile(
 
     # Best-effort audit log — business change already committed above
     try:
-        _activity_log, activity_callback = await log_profile_activity(
+        await log_profile_activity(
             db=db,
             request=request,
             action="update_profile",
@@ -167,7 +173,6 @@ async def update_current_user_profile(
             changes=changes if changes else None,
         )
         await db.commit()
-        await activity_callback()
     except Exception:
         log.error("Failed to persist audit log for profile update", user_id=current_user.id, exc_info=True)
 
