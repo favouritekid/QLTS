@@ -535,11 +535,20 @@ jobs:
           # từ lâu nhưng CHƯA TỪNG chạy được (thiếu fixture `async_session`), nên
           # `distribution_service.py` không có phép kiểm nào cho tới đợt này.
           #
+          # Bốn tệp `test_admission_path_*` canh hợp đồng `admission_round_id`
+          # BẮT BUỘC (PR #338 plan v4 Section B) — thuộc lát này vì đó là hợp
+          # đồng workflow tuyển sinh. Cả bốn trước nay ngoài mọi tier, nên
+          # nightly đỏ 16 ca đêm này qua đêm khác mà PR gate vẫn xanh.
+          #
           # ⚠️ Chú thích PHẢI nằm ngoài scalar `tests: >-`. Bên trong, YAML coi
           # `#` là nội dung, `>-` gấp mọi dòng thành MỘT dòng, rồi bash cắt từ
           # `#` tới hết — đo được 17 đối số thay vì 25 ở một lần trước.
           - tier: Tier 4 — Admission + lead workflow contract
             tests: >-
+              tests/unit/test_admission_path_activation.py
+              tests/unit/test_admission_path_action_flags.py
+              tests/unit/test_admission_path_admin_only_lifecycle.py
+              tests/unit/test_admission_path_schema_bonus_rule_override.py
               tests/services/test_distribution.py
               tests/unit/test_lead_finance_projection_contract.py
               tests/middleware/test_admission_freeze.py

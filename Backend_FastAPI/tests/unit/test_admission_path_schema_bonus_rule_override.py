@@ -123,12 +123,38 @@ def test_bonus_rule_override_rejects_extra_keys() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _truong_loi(exc_info) -> set:
+    """Tập tên trường thật sự gây lỗi, lấy từ ``exc.value.errors()``.
+
+    Vì sao cần: ``pytest.raises(ValidationError)`` chỉ nói "có lỗi", không nói
+    lỗi ở đâu. Một payload thiếu trường BẮT BUỘC cũng ném ``ValidationError``,
+    nên ca âm tính chỉ bắt kiểu lỗi sẽ xanh ngay cả khi trường nó định canh
+    hoàn toàn hợp lệ.
+
+    Đó đúng là chuyện đã xảy ra: khi ``_create_baseline_payload`` còn thiếu
+    ``admission_round_id``, nightly chỉ đỏ **4/7** ca Create — ba ca âm tính
+    vẫn xanh vì "thiếu trường bắt buộc" cũng là ValidationError.
+    """
+    return {
+        str(e["loc"][0]) for e in exc_info.value.errors() if e.get("loc")
+    }
+
+
 def _create_baseline_payload() -> dict:
     """Minimum valid Create payload — extracted so each test focuses
-    on the field under inspection without re-stating the boilerplate."""
+    on the field under inspection without re-stating the boilerplate.
+
+    ``admission_round_id`` là BẮT BUỘC từ PR #338 (plan v4 Section B): schema
+    khai ``Field(..., gt=0)`` và shim tự-giải-DOT_1 đã bị gỡ khỏi service, nên
+    thiếu đợt nay trả 422 thay vì âm thầm gắn path vào DOT_1. Cột trong CSDL
+    cũng là NOT NULL (PR-2C v2, đánh dấu ONE-WAY), và zod ở frontend đã có test
+    riêng khẳng định trường này bắt buộc — bốn nguồn độc lập cùng một hợp đồng.
+    Payload thiếu nó là payload mô tả một hàng không tồn tại được.
+    """
     return {
         "academic_info_id": 1,
         "admission_method_id": 1,
+        "admission_round_id": 1,
     }
 
 
@@ -145,8 +171,14 @@ def test_create_rejects_unknown_audience() -> None:
     payload = _create_baseline_payload() | {
         "applicable_to": ["NOT_A_REAL_AUDIENCE"],
     }
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as exc:
         AdmissionPathCreate.model_validate(payload)
+
+    assert _truong_loi(exc) == {"applicable_to"}, (
+        "chi 'applicable_to' duoc gay loi. Neu thay 'admission_round_id' o day "
+        "thi baseline payload dang thieu truong bat buoc, va ca nay xanh vi ly "
+        f"do khac: {exc.value.errors()}"
+    )
 
 
 def test_create_applicable_to_defaults_to_none() -> None:
@@ -165,8 +197,13 @@ def test_create_method_quota_accepts_zero() -> None:
 
 def test_create_method_quota_rejects_negative() -> None:
     payload = _create_baseline_payload() | {"method_quota": -1}
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as exc:
         AdmissionPathCreate.model_validate(payload)
+
+    assert _truong_loi(exc) == {"method_quota"}, (
+        "chi 'method_quota' duoc gay loi; xem chu thich o _truong_loi: "
+        f"{exc.value.errors()}"
+    )
 
 
 def test_create_bonus_rule_override_passes_through_typed() -> None:
@@ -187,8 +224,13 @@ def test_create_bonus_rule_override_rejects_raw_blob() -> None:
     payload = _create_baseline_payload() | {
         "bonus_rule_override": {"random_blob": "no_shape"},
     }
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as exc:
         AdmissionPathCreate.model_validate(payload)
+
+    assert _truong_loi(exc) == {"bonus_rule_override"}, (
+        "chi 'bonus_rule_override' duoc gay loi; xem chu thich o _truong_loi: "
+        f"{exc.value.errors()}"
+    )
 
 
 # ---------------------------------------------------------------------------
