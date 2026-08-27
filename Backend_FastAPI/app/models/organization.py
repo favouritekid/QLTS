@@ -102,7 +102,11 @@ class OfferingDistributionConfig(Base):
 
     Features:
     - Weighted Round Robin: Units with higher weights receive more leads
-    - Priority levels: Higher priority units are considered first
+    - Priority levels: ONLY the lowest priority number takes part in the
+      distribution cycle. There is NO automatic capacity failover — a unit in a
+      lower tier never receives a lead while a higher tier exists, even if the
+      selected unit has no active officers (``distribution_service`` logs a
+      warning and still returns that unit).
     - Active/Inactive toggle: Temporarily disable a unit from receiving leads
     - Redis-backed cursor: Atomic increment for concurrent safety
 
@@ -110,7 +114,8 @@ class OfferingDistributionConfig(Base):
         Offering "MBA Program" shared by 3 units:
         - Unit A (weight=3, priority=1) -> Gets 3x more leads than Unit B
         - Unit B (weight=1, priority=1) -> Base allocation
-        - Unit C (weight=2, priority=2) -> Only gets leads if A & B at capacity
+        - Unit C (weight=2, priority=2) -> configured but NOT in the cycle;
+          it stays idle until an operator changes its priority.
     """
     __tablename__ = "offering_distribution_config"
 

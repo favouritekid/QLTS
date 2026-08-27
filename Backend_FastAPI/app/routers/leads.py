@@ -125,14 +125,21 @@ async def get_distribution_preview(
     current_user: models.User = CasbinAuth,
 ):
     """
-    Preview which unit will receive the next lead based on distribution config.
+    Preview the unit EXPECTED to receive the next lead, based on the
+    distribution config and the cursor value at read time.
+
+    NOT a reservation. This endpoint only READS the cursor; it does not
+    advance or hold it. A concurrent request can advance the cursor between
+    this preview and the moment the lead is actually created, in which case
+    the lead lands on the next unit in the cycle instead.
 
     This does NOT increment the distribution cursor - it's read-only.
 
     Returns:
     - offering_id: The offering being queried
     - has_config: Whether distribution config exists for this offering
-    - next_unit_id: Unit that will receive the next lead
+    - next_unit_id: Unit expected to receive the next lead if the cursor
+      does not advance first
     - next_unit_name: Name of the unit
     - configs: List of active distribution configs with weights
     - total_slots: Total weighted slots in distribution cycle

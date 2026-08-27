@@ -530,8 +530,17 @@ jobs:
           # ---------------------------------------------------------------
           # Tier 4: Admission + lead workflow contract
           # ---------------------------------------------------------------
+          # `test_distribution.py` vào lát này vì nó canh đường lead được gán về
+          # đơn vị nào — cùng hợp đồng workflow mà Tier 4 đã gác. Tệp đã tồn tại
+          # từ lâu nhưng CHƯA TỪNG chạy được (thiếu fixture `async_session`), nên
+          # `distribution_service.py` không có phép kiểm nào cho tới đợt này.
+          #
+          # ⚠️ Chú thích PHẢI nằm ngoài scalar `tests: >-`. Bên trong, YAML coi
+          # `#` là nội dung, `>-` gấp mọi dòng thành MỘT dòng, rồi bash cắt từ
+          # `#` tới hết — đo được 17 đối số thay vì 25 ở một lần trước.
           - tier: Tier 4 — Admission + lead workflow contract
             tests: >-
+              tests/services/test_distribution.py
               tests/unit/test_lead_finance_projection_contract.py
               tests/middleware/test_admission_freeze.py
               tests/api/test_admission_workflow_api.py

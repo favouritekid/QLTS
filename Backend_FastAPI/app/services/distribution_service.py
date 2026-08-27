@@ -32,6 +32,66 @@ log = structlog.get_logger(__name__)
 
 # Redis key pattern for distribution cursor
 DISTRIBUTION_CURSOR_KEY_PATTERN = "distribution:offering:{offering_id}:cursor"
+
+
+def _chu_ky_top_tier(configs):
+    """Chọn tier ưu tiên cao nhất và dựng chu kỳ có trọng số. HÀM THUẦN.
+
+    NGUỒN CHUẨN DUY NHẤT cho câu hỏi "chu kỳ gồm những đơn vị nào, theo thứ tự
+    nào". Cả đường định tuyến (``get_target_unit_for_offering``) lẫn đường xem
+    trước (``get_distribution_stats``) đều gọi hàm này, nên hai bên không còn
+    dựng hai chu kỳ khác nhau.
+
+    Điều này KHÔNG có nghĩa xem trước luôn trùng kết quả thật: xem trước chỉ
+    ĐỌC con trỏ, không giữ chỗ. Một request đồng thời vẫn có thể đẩy con trỏ
+    trước khi lead được tạo. Cùng chu kỳ là điều kiện cần, không phải bảo đảm.
+
+    Vì sao phải chung: bản trước, stats có chú thích *"same logic as
+    get_target_unit_for_offering"* nhưng lặp qua **mọi** config, không lọc tier.
+    Hậu quả không dừng ở analytics — ``get_distribution_stats`` cấp dữ liệu cho
+    ``/distribution-preview``, và giao diện hiển thị ``next_unit_name``. Người
+    trực nhìn thấy một đơn vị, lead thật đi tới đơn vị khác.
+
+    Đo được ở ca ``TestMixedPriorityParity``: hai tier weight 1:1, sau một lượt
+    phát thì preview báo tier DƯỚI (``cursor 1 % 2 = 1``) còn selector vẫn trả
+    tier TRÊN (``1 % 1 = 0``).
+
+    Thứ tự trong chu kỳ được HÀM NÀY quyết định, không phụ thuộc thứ tự caller
+    đưa vào. Hai hàm gọi helper chạy hai truy vấn riêng, và ``ORDER BY priority
+    ASC, weight DESC`` KHÔNG tất định khi hai config trùng cả priority lẫn
+    weight — PostgreSQL không hứa gì về thứ tự của các hàng bằng nhau. Hai lượt
+    quét có thể trả hai thứ tự khác nhau, và vì chỉ số trong chu kỳ quyết định
+    ai nhận lead, xem trước lại lệch định tuyến theo một đường khác.
+
+    Nên sắp lại ở đây theo ``(-weight, unit_id)``: giữ đúng ý định của query
+    (weight lớn trước) và thêm ``unit_id`` làm mốc phá hoà ỔN ĐỊNH. Đặt ở helper
+    chứ không ở hai câu ORDER BY: một nguồn chuẩn, và caller sinh sau dù truy vấn
+    kiểu gì cũng nhận cùng một chu kỳ.
+
+    Trả về ``(top_priority, top_tier_configs, weighted_units)``.
+    ``configs`` rỗng ⇒ ``(None, [], [])`` — caller tự quyết fallback.
+    """
+    if not configs:
+        return None, [], []
+
+    priority_tiers = {}
+    for config in configs:
+        priority_tiers.setdefault(config.priority, []).append(config)
+
+    top_priority = min(priority_tiers.keys())
+    top_tier_configs = sorted(
+        priority_tiers[top_priority],
+        key=lambda c: (-c.weight, c.unit_id),
+    )
+
+    weighted_units = []
+    for config in top_tier_configs:
+        # Lặp unit_id theo weight (weight=3 ⇒ thêm 3 lần).
+        weighted_units.extend([config.unit_id] * config.weight)
+
+    return top_priority, top_tier_configs, weighted_units
+
+
 # TTL for cursor keys (7 days - auto-cleanup stale offerings)
 CURSOR_TTL_SECONDS = 7 * 24 * 60 * 60
 
@@ -123,24 +183,9 @@ async def get_target_unit_for_offering(
         )
 
         # === STEP 2: Build weighted candidate list ===
-        # Group by priority tiers first
-        priority_tiers = {}
-        for config in configs:
-            priority = config.priority
-            if priority not in priority_tiers:
-                priority_tiers[priority] = []
-            priority_tiers[priority].append(config)
-
-        # Start with highest priority tier (lowest number)
-        top_priority = min(priority_tiers.keys())
-        top_tier_configs = priority_tiers[top_priority]
-
-        # Build weighted list for top tier only
-        # (Lower priority tiers are only used if top tier has no capacity - handled separately)
-        weighted_units = []
-        for config in top_tier_configs:
-            # Repeat unit_id based on weight (e.g., weight=3 -> add 3 times)
-            weighted_units.extend([config.unit_id] * config.weight)
+        # Qua helper CHUNG — cùng nguồn chu kỳ chuẩn mà `get_distribution_stats`
+        # dùng, nên hai bên không còn dựng hai chu kỳ khác nhau.
+        top_priority, _top_tier_configs, weighted_units = _chu_ky_top_tier(configs)
 
         if not weighted_units:
             # Edge case: configs exist but weighted list is empty (all weights = 0?)
@@ -319,7 +364,9 @@ async def get_distribution_stats(db: AsyncSession, offering_id: int) -> dict:
                 }
             ],
             "total_slots": int,  # Total weighted slots in distribution cycle
-            "next_unit_id": int  # Which unit will get next lead
+            "next_unit_id": int  # Đơn vị DỰ KIẾN nhận lượt kế tiếp
+                                # nếu con trỏ chưa bị đẩy trước.
+                                # Chỉ ĐỌC con trỏ, KHÔNG giữ chỗ.
         }
     """
     try:
@@ -349,14 +396,24 @@ async def get_distribution_stats(db: AsyncSession, offering_id: int) -> dict:
                 "next_unit_id": None
             }
 
-        # Build weighted list (same logic as get_target_unit_for_offering)
-        weighted_units = []
+        # Chu kỳ lấy từ CÙNG nguồn chuẩn mà `get_target_unit_for_offering` dùng.
+        # Đây là điều kiện CẦN, không phải bảo đảm trùng khớp: hàm này chỉ ĐỌC
+        # con trỏ, không giữ chỗ, nên một request đồng thời vẫn có thể đẩy con
+        # trỏ trước lần phân phối thật.
+        _top_priority, top_tier_configs, weighted_units = _chu_ky_top_tier(configs)
+        trong_chu_ky = {id(c) for c in top_tier_configs}
+
+        # `configs` vẫn liệt kê MỌI config active: người trực cần thấy cấu hình
+        # tier dưới đang có những gì. Nhưng đó KHÔNG phải dự phòng — không có
+        # đường code nào chuyển lead xuống tier sau. `slots_in_cycle` nói đúng
+        # điều đó: tier dưới ra 0 vì nó hiện không tham gia chu kỳ.
+        #
+        # Không gán gì lên đối tượng ORM: `config_details` là dict dựng riêng,
+        # còn `config` chỉ được ĐỌC.
         config_details = []
         for config in configs:
-            slots = config.weight
-            weighted_units.extend([config.unit_id] * slots)
+            slots = config.weight if id(config) in trong_chu_ky else 0
 
-            # Load unit name for display
             unit = await db.get(models.OrganizationUnit, config.unit_id)
             config_details.append({
                 "unit_id": config.unit_id,
