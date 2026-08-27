@@ -697,7 +697,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode, onCreated }: LeadDi
                     </div>
                   ) : distributionPreview?.has_config ? (
                     <div className="text-sm">
-                      <span className="text-muted-foreground">Đơn vị nhận: </span>
+                      <span className="text-muted-foreground">Đơn vị dự kiến nhận: </span>
                       <span className="font-medium text-success-600">{distributionPreview.next_unit_name}</span>
                     </div>
                   ) : (
