@@ -395,19 +395,31 @@ async def test_save_avatar_empty_file(mock_dependencies):
 
 
 @pytest.mark.asyncio
-async def test_save_avatar_read_error(mock_dependencies):
-    """Test 4.1: Lỗi 400 - Lỗi khi đọc nội dung file (content=None)."""
-    log.info("--- Running: test_save_avatar_read_error ---")
-    # Sử dụng content=None để trigger lỗi đọc file trong MockUploadFile
-    file = MockUploadFile(filename="read_error.png", content=None)
+async def test_save_avatar_content_none_tra_400_khong_phai_500(mock_dependencies):
+    """``content=None`` phải cho 400 sạch, KHÔNG phải TypeError 500.
+
+    Trước lượt refactor "Service Layer Purity", ``content`` được dựng ngay trong
+    hàm (``b''.join(chunks)``) nên không bao giờ là None, và ca này kiểm nhánh
+    "đọc file thất bại" -> 400 "Could not read file content.".
+
+    Sau refactor, việc đọc chuyển ra ngoài và ``content`` thành THAM SỐ. Nhánh
+    kiểm cỡ vẫn là ``len(content)``, nên một caller truyền None làm hàm ném
+    ``TypeError: object of type 'NoneType' has no len()`` — 500, trong khi mọi
+    đầu vào hỏng khác đều được trả 400 sạch.
+
+    Ca này khoá lại hàng rào ấy. ``None`` là đầu vào KHÁC với ``b""`` (caller
+    đọc hụt vs tệp rỗng thật) nên vẫn giữ riêng, cạnh
+    ``test_save_avatar_empty_file``.
+    """
+    log.info("--- Running: test_save_avatar_content_none ---")
 
     # --- Action & Assert Exception ---
     with pytest.raises(HTTPException) as exc_info:
-        await file_helpers.save_avatar(file, old_avatar_url=None)
+        await file_helpers.save_avatar(None, "read_error.png", old_avatar_url=None)
 
     # --- Assert Error Message ---
     assert exc_info.value.status_code == 400
-    assert exc_info.value.detail == "Could not read file content."
+    assert exc_info.value.detail == "Empty file uploaded."
 
     mock_dependencies["magic"].assert_not_called()
     mock_dependencies["aio_open"].assert_not_called()
