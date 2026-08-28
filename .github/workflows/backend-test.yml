@@ -556,6 +556,10 @@ jobs:
           - tier: Tier 4 — Admission + lead workflow contract
             tests: >-
               tests/unit/test_admission_path_activation.py
+              tests/integration/test_admission_document_staging.py
+              tests/integration/test_admission_path_unique_criteria.py
+              tests/integration/test_bidirectional_sync.py
+              tests/unit/test_phase_e4_pr4_compliance.py
               tests/unit/test_admission_path_action_flags.py
               tests/unit/test_admission_path_admin_only_lifecycle.py
               tests/unit/test_admission_path_schema_bonus_rule_override.py
@@ -593,6 +597,8 @@ jobs:
             tests: >-
               tests/unit/test_nginx_template_packaging.py
               tests/unit/test_ci_test_visibility.py
+              tests/unit/test_import_moet_schools.py
+              tests/services/test_insights.py
               tests/utils/test_file_helpers.py
               tests/utils/test_file_helpers_guard.py
               tests/unit/test_nightly_shard_inventory.py
