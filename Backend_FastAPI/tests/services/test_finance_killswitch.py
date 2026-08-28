@@ -952,3 +952,107 @@ class TestCongCIThayDuocThuNoCanh:
             "cac nodeid sau co trong workflow nhung KHONG toi duoc pytest "
             "(bi bash cat bo):\n  " + "\n  ".join(thieu)
         )
+
+
+class TestNeoCheoChoCongDoNhinThay:
+    """Neo ĐỘC LẬP cho cổng độ-nhìn-thấy của test.
+
+    ⚠️ ĐỌC TRƯỚC KHI "DỌN TRÙNG LẶP"
+
+    Lớp này khẳng định ``tests/unit/test_ci_test_visibility.py`` còn whole-file
+    trong tier, và tệp kia khẳng định ngược lại rằng tệp NÀY còn whole-file
+    trong tier. Cả hai cùng khẳng định step visibility còn được nối dây.
+
+    Trùng lặp ấy là **CỐ Ý**. Một tệp test không tự canh được selector của chính
+    nó: gỡ selector ⇒ tệp không chạy ⇒ không còn ai báo đỏ. Chỉ một neo nằm ở
+    shard KHÁC mới bắt được. Gộp hai phép kiểm lại "cho gọn" sẽ phá đúng tính
+    chất khiến chúng có giá trị.
+
+    Ranh giới với luật một-nguồn-chuẩn: phép kiểm dấu ``#`` trong scalar gấp
+    thuộc về ``TestCongCIThayDuocThuNoCanh`` ở ngay trên và KHÔNG được nhân bản.
+    Chỉ "neo còn sống" mới cố tình có hai bản.
+
+    Lớp này nằm ở Tier 2b; neo kia ở Tier 5 — hai shard khác nhau.
+    """
+
+    _TEP_CONG = "tests/unit/test_ci_test_visibility.py"
+    _SCRIPT = ".github/scripts/pytest_visibility_guard.py"
+
+    def _workflow(self):
+        import yaml
+
+        goc = _goc_repo()
+        if goc is None:
+            import os
+
+            assert not os.environ.get("CI"), "khong thay goc repo tren CI"
+            pytest.skip("khong thay goc repo")
+        duong = goc / ".github" / "workflows" / "backend-test.yml"
+        assert duong.is_file(), "khong thay backend-test.yml: %s" % duong
+        return yaml.safe_load(duong.read_text(encoding="utf-8"))
+
+    async def test_tep_cong_do_nhin_thay_con_whole_file_trong_tier(self):
+        wf = self._workflow()
+        legs = wf["jobs"]["pytest-shard"]["strategy"]["matrix"]["include"]
+        whole = set()
+        tier_cua = None
+        for leg in legs:
+            for sel in str(leg.get("tests", "")).split():
+                if "::" not in sel:
+                    whole.add(sel)
+                    if sel == self._TEP_CONG:
+                        tier_cua = str(leg.get("tier", ""))
+        assert self._TEP_CONG in whole, (
+            "%s phai con whole-file trong tier. No khong the tu canh selector "
+            "cua chinh no — go selector di thi no khong chay, va khong con ai "
+            "bao do." % self._TEP_CONG
+        )
+        assert tier_cua and "Tier 2b" not in tier_cua, (
+            "neo phai o SHARD KHAC voi tep nay (Tier 2b); dang o %r" % tier_cua
+        )
+
+    async def test_dung_mot_leg_bat_co_visibility_guard(self):
+        wf = self._workflow()
+        legs = wf["jobs"]["pytest-shard"]["strategy"]["matrix"]["include"]
+        bat = [
+            str(leg.get("tier"))
+            for leg in legs
+            if leg.get("visibility_guard") is True
+        ]
+        assert len(bat) == 1, (
+            "phai co DUNG MOT leg dat visibility_guard: true — 0 leg nghia la "
+            "step ton tai ma khong bao gio chay. Dang co: %r" % (bat,)
+        )
+
+    async def test_step_visibility_con_duoc_noi_day(self):
+        wf = self._workflow()
+        steps = wf["jobs"]["pytest-shard"]["steps"]
+        khop = []
+        for s in steps:
+            dong_lenh = [
+                d.strip()
+                for d in str(s.get("run", "")).splitlines()
+                if d.strip() and not d.strip().startswith("#")
+            ]
+            if any(self._SCRIPT in d for d in dong_lenh):
+                khop.append(s)
+        assert len(khop) == 1, (
+            "phai co DUNG MOT step chay %s, dang co %d" % (self._SCRIPT, len(khop))
+        )
+        # Khoa lenh va khoa `if` van CHUA du: `continue-on-error: true` de step
+        # that bai ma job van pass — cong tra RC=1 trong khi required check
+        # xanh. Mot dong YAML bien cong thanh fail-open ma khong dung toi lenh,
+        # dieu kien, hay bat ky tep test nao.
+        coe = khop[0].get("continue-on-error", False)
+        assert coe is False, (
+            "step guard KHONG duoc co `continue-on-error` khac False — no cho "
+            "phep job pass du step do. Dang la: %r" % (coe,)
+        )
+        dieu_kien = str(khop[0].get("if", "")).strip()
+        assert dieu_kien in {
+            "matrix.visibility_guard",
+            "matrix.visibility_guard == true",
+        }, (
+            "dieu kien step phai tham chieu co matrix — `if: false` lam step "
+            "ton tai ma khong bao gio chay. Dang la: %r" % dieu_kien
+        )

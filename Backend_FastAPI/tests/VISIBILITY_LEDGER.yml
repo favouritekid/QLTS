@@ -1,0 +1,40 @@
+# Sổ khai ngoại lệ độ-nhìn-thấy của test.
+#
+# Cổng: .github/scripts/pytest_visibility_guard.py
+# Kiểm lược đồ + nối dây: tests/unit/test_ci_test_visibility.py
+#
+# Sổ này KHÔNG phải nơi ghi nợ cũ. 387 tệp đang đứng ngoài mọi tier vẫn đứng
+# ngoài và không cần khai ở đây — cổng chỉ hỏi tới một tệp khi tệp ấy (hoặc
+# selector/ledger của nó) VỪA THAY ĐỔI. Thêm mục vào đây nghĩa là: "tôi đã xem,
+# và đây là lý do nó chưa được gate trọn vẹn".
+#
+# Hai trạng thái, không có trạng thái thứ ba:
+#
+#   partial       tệp CÓ nodeid trong tier nhưng KHÔNG có selector whole-file.
+#                 Bắt buộc: reason · blob · nodeids khớp CHÍNH XÁC tập trong
+#                 tier · nightly vẫn thu thập tệp.
+#
+#   nightly-only  tệp KHÔNG có selector nào trong PR gate, dựa hoàn toàn vào
+#                 nightly. Bắt buộc: reason · blob · KHÔNG khai nodeids ·
+#                 nightly vẫn thu thập tệp.
+#
+# `blob` ghim tệp ở PHIÊN BẢN ĐÃ ĐƯỢC XEM. Sửa nội dung ⇒ blob đổi ⇒ cổng đỏ
+# cho tới khi mục này được cập nhật. Đó là chủ ý: nó buộc ngoại lệ phải được
+# xem lại thay vì sống mãi. Lấy giá trị mới bằng:
+#
+#   git rev-parse HEAD:Backend_FastAPI/<path>
+#
+# Được nâng lên whole-file selector ⇒ PHẢI XOÁ mục tương ứng, nếu không cổng
+# báo ledger lỗi thời.
+
+- path: tests/utils/test_file_helpers.py
+  status: partial
+  reason: >-
+    Chỉ sentinel chống rò stdlib được đưa vào Tier 5; nó phục vụ cổng sống-sót-
+    phiên chứ không phải để gate tệp này. Chín ca save_avatar_* còn lại đang đỏ
+    ở nightly và chưa được vá, nên đưa cả tệp vào tier sẽ làm đỏ mọi PR. Ghi
+    nhận là nợ có tên thay vì để nó vô hình. Vá nợ này rồi thì nâng lên
+    whole-file và xoá mục này.
+  blob: 26275ce57a8e7644bf8b9e80724222ec0aa2f121
+  nodeids:
+    - tests/utils/test_file_helpers.py::test_khong_ro_ri_stdlib

@@ -513,8 +513,18 @@ jobs:
           # lát này. Để chung shard vì nó soi cùng một mặt rủi ro (sự kiện khai
           # trong catalog mà thiếu rule row thì dispatch im lặng về 0), và tách
           # thành shard riêng thì tốn nguyên một runner cho một lệnh vài giây.
+          # `visibility_guard: true` bật bước chạy
+          # `.github/scripts/pytest_visibility_guard.py`. Gắn vào ĐÚNG MỘT leg —
+          # `test_ci_test_visibility.py` khẳng định lại điều đó, vì một cờ đặt ở
+          # hai leg thì cổng chạy hai lần và một cờ đặt ở KHÔNG leg nào thì step
+          # tồn tại mà không bao giờ chạy.
+          #
+          # Chọn Tier 3 vì nó là lát ngắn nhất, nên vi phạm độ-nhìn-thấy đỏ sớm
+          # thay vì đợi hết Tier 2. Bản thân TỆP TEST của cổng nằm ở Tier 5 —
+          # cố ý khác shard, xem phần canh chéo trong test_ci_test_visibility.py.
           - tier: Tier 3 — Notification reliability
             coverage_script: true
+            visibility_guard: true
             tests: >-
               tests/unit/test_notification_parity.py
               tests/services/test_notification_dispatcher.py
@@ -582,6 +592,7 @@ jobs:
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
+              tests/unit/test_ci_test_visibility.py
               tests/utils/test_file_helpers.py::test_khong_ro_ri_stdlib
               tests/utils/test_file_helpers_guard.py
               tests/unit/test_nightly_shard_inventory.py
@@ -679,6 +690,28 @@ jobs:
         if: matrix.coverage_script
         working-directory: Backend_FastAPI
         run: python -m app.scripts.check_notification_event_coverage
+
+      # Cổng ĐỘ NHÌN THẤY của test — xem docstring của script để biết vì sao.
+      #
+      # Đặt SAU bước cài phụ thuộc (cần PyYAML) và trước khi job kết thúc, nằm
+      # trong shard nên `pytest` tổng hợp đã bắt được lỗi đỏ — không cần thêm
+      # required check nào.
+      #
+      # KHÔNG dùng `fetch-depth: 0` ở `actions/checkout`: bước checkout là bước
+      # CHUNG của cả sáu leg matrix, nên bật full history ở đó bắt sáu runner
+      # tải toàn bộ lịch sử và tags. Ở đây chỉ cần đúng một commit base.
+      #
+      # `github.sha` trên sự kiện `pull_request` là commit MERGE tổng hợp — đúng
+      # cây sẽ được áp lên base — nên phép so là `git diff BASE MERGE`, hai cây,
+      # không cần merge-base và không cần lịch sử.
+      - name: CI test-visibility guard
+        if: matrix.visibility_guard
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_SHA: ${{ github.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python .github/scripts/pytest_visibility_guard.py
 
   # =======================================================================
   # Cổng SỐNG SÓT PHIÊN — collected == executed
