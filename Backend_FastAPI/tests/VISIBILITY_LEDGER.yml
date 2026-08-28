@@ -26,15 +26,3 @@
 #
 # Được nâng lên whole-file selector ⇒ PHẢI XOÁ mục tương ứng, nếu không cổng
 # báo ledger lỗi thời.
-
-- path: tests/utils/test_file_helpers.py
-  status: partial
-  reason: >-
-    Chỉ sentinel chống rò stdlib được đưa vào Tier 5; nó phục vụ cổng sống-sót-
-    phiên chứ không phải để gate tệp này. Chín ca save_avatar_* còn lại đang đỏ
-    ở nightly và chưa được vá, nên đưa cả tệp vào tier sẽ làm đỏ mọi PR. Ghi
-    nhận là nợ có tên thay vì để nó vô hình. Vá nợ này rồi thì nâng lên
-    whole-file và xoá mục này.
-  blob: 26275ce57a8e7644bf8b9e80724222ec0aa2f121
-  nodeids:
-    - tests/utils/test_file_helpers.py::test_khong_ro_ri_stdlib

@@ -593,7 +593,7 @@ jobs:
             tests: >-
               tests/unit/test_nginx_template_packaging.py
               tests/unit/test_ci_test_visibility.py
-              tests/utils/test_file_helpers.py::test_khong_ro_ri_stdlib
+              tests/utils/test_file_helpers.py
               tests/utils/test_file_helpers_guard.py
               tests/unit/test_nightly_shard_inventory.py
               tests/unit/test_deploy_startup_gates.py
