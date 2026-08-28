@@ -104,14 +104,46 @@ async def staging_doc_type(db: AsyncSession) -> models.ConfigDocumentType:
 async def staging_profile(
     db: AsyncSession,
     staging_lead: models.Lead,
+    staging_doc_type: models.ConfigDocumentType,
 ) -> models.AdmissionProfile:
+    """Hồ sơ nháp cho các ca staging.
+
+    ``applied_rules.doc_configs`` PHẢI chứa mã của ``staging_doc_type``.
+
+    Guard BR2 tại ``admission_service.py`` từ chối mọi thao tác lên một doc
+    không có mặt trong ``applied_rules.doc_configs`` — coi nó là "extra /
+    evidence-only" vì AdmissionPath có thể đã bị sửa sau khi hồ sơ được tạo.
+    Bản đầu của fixture chỉ đặt ``mandatory_docs`` nên ``doc_configs`` rỗng, và
+    chú thích của chính guard đã nói rõ hệ quả: *"Empty config → every request
+    is on an extra"*. Cả sáu ca trong tệp này vì thế đỏ ở nightly bằng cùng một
+    ``PermissionDeniedError``, dù chúng không kiểm gì về BR2.
+
+    Đặt ``is_mandatory=False`` là CỐ Ý: guard mở rộng từ ``mandatory_docs``
+    sang ``doc_configs`` chính là để doc TUỲ CHỌN không bị coi là extra. Một
+    fixture khai doc bắt buộc sẽ đi qua guard mà không hề chạm vào phần hành vi
+    mà bản vá 2026-06-09 thêm vào.
+
+    Hình dạng mỗi mục chép từ nguồn sinh thật trong ``admission_service`` —
+    ``{requires_upload, submission_format, is_mandatory, label}``.
+    """
     ts = datetime.now().timestamp()
     profile = models.AdmissionProfile(
         lead_id=staging_lead.id,
         status="draft",
         citizen_id=f"7{int(ts * 1000) % 10**11:011d}"[:12],
         version=1,
-        applied_rules={"min_gpa": 6.0, "mandatory_docs": []},
+        applied_rules={
+            "min_gpa": 6.0,
+            "mandatory_docs": [],
+            "doc_configs": {
+                staging_doc_type.code: {
+                    "requires_upload": True,
+                    "submission_format": "photo",
+                    "is_mandatory": False,
+                    "label": staging_doc_type.name,
+                }
+            },
+        },
         academic_year=2025,
         full_name=staging_lead.full_name,
         phone=staging_lead.phone,
