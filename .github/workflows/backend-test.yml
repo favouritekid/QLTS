@@ -621,6 +621,11 @@ jobs:
           # ---------------------------------------------------------------
           # Tier 5: Phase 2 engine prereqs
           # ---------------------------------------------------------------
+          # test_phase1_16_archived_admission_profile.py vao Tier 5: cung ho voi
+          # test_nginx_template_packaging / test_ci_test_visibility /
+          # test_nightly_shard_inventory — deu la phep kiem CAU TRUC doc tep nguon,
+          # chay vai giay, khong dung DB. Truoc nay ngoai moi tier nen 3 ca do trong
+          # nightly ma PR gate van xanh. Ghi sau khi xanh tron 17/17.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -630,6 +635,7 @@ jobs:
               tests/utils/test_file_helpers.py
               tests/utils/test_file_helpers_guard.py
               tests/unit/test_nightly_shard_inventory.py
+              tests/unit/test_phase1_16_archived_admission_profile.py
               tests/unit/test_deploy_startup_gates.py
               tests/unit/test_smoke_harness_guards.py
               tests/unit/test_smoke_cli.py

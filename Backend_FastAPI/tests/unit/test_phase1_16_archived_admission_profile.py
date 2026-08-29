@@ -25,6 +25,7 @@ What lives here:
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import re
 from pathlib import Path
@@ -46,6 +47,24 @@ def _load_migration():
     return module
 
 
+def _load_migration_by_revision(revision_id: str):
+    """Nạp module migration theo revision id, không theo TÊN TỆP.
+
+    Tên tệp không phải khoá: một revision có thể được đổi tên tệp mà id vẫn
+    nguyên. Quét `revision: str = "<id>"` trong từng tệp rồi mới nạp.
+    """
+    for f in sorted(_VERSIONS_DIR.glob("*.py")):
+        noi_dung = f.read_text(encoding="utf-8")
+        if re.search(rf'^revision(?::\s*str)?\s*=\s*"{re.escape(revision_id)}"',
+                     noi_dung, re.M):
+            spec = importlib.util.spec_from_file_location(f.stem, f)
+            assert spec is not None and spec.loader is not None
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    raise AssertionError(f"khong tim thay migration co revision {revision_id!r}")
+
+
 @pytest.fixture
 def phase1_16():
     return _load_migration()
@@ -54,6 +73,64 @@ def phase1_16():
 @pytest.fixture
 def src() -> str:
     return _PHASE1_16.read_text(encoding="utf-8")
+
+
+_TABLE = "_archived_admission_profile"
+
+
+def _cot_khai_o_moi_migration() -> set:
+    """Bộ cột của bảng archive, GỘP từ MỌI migration chạm tới nó.
+
+    Bất biến thật không phải "phase1_16 liệt kê đủ cột" mà là "BẢNG archive soi
+    gương ``AdmissionProfile``" — và một bảng hoàn toàn có thể được bồi thêm cột
+    bằng ``op.add_column`` ở migration sau. Neo vào một tệp duy nhất làm phép
+    kiểm sai theo cả hai chiều: đỏ oan khi cột được thêm ở nơi khác, và (nguy
+    hơn) xanh oan nếu ai đó dựng lại bảng ở migration khác.
+
+    Khoanh vùng bằng AST theo ĐÚNG lời gọi nhắm bảng này, không phải "tệp có
+    nhắc tên bảng": ``phase1_17`` và ``phase2_01_v2`` đều nhắc tên bảng trong
+    docstring/comment nhưng khai cột của BẢNG KHÁC (outbox, round). Lọc theo
+    tên tệp sẽ nuốt trọn 28 cột lạ và làm phép đếm vô nghĩa.
+    """
+    cot = set()
+    for f in sorted(_VERSIONS_DIR.glob("*.py")):
+        noi_dung = f.read_text(encoding="utf-8")
+        if _TABLE not in noi_dung:
+            continue
+        cay = ast.parse(noi_dung)
+
+        # Hằng module trỏ đúng bảng này — migration dùng ``op.create_table(TABLE, …)``
+        ten_hang = {
+            t.id
+            for n in ast.walk(cay)
+            if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
+            and n.value.value == _TABLE
+            for t in n.targets
+            if isinstance(t, ast.Name)
+        }
+
+        def tro_dung_bang(nut) -> bool:
+            if isinstance(nut, ast.Constant):
+                return nut.value == _TABLE
+            return isinstance(nut, ast.Name) and nut.id in ten_hang
+
+        for n in ast.walk(cay):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)):
+                continue
+            if n.func.attr not in ("create_table", "add_column"):
+                continue
+            if not n.args or not tro_dung_bang(n.args[0]):
+                continue
+            for con in ast.walk(n):
+                if (
+                    isinstance(con, ast.Call)
+                    and isinstance(con.func, ast.Attribute)
+                    and con.func.attr == "Column"
+                    and con.args
+                    and isinstance(con.args[0], ast.Constant)
+                ):
+                    cot.add(con.args[0].value)
+    return cot
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +147,18 @@ def test_phase1_16_chains_off_phase1_19c(phase1_16) -> None:
     string-based, NOT numeric monotonic. ``phase1_16`` follows
     ``phase1_19c`` (Wave 5-A) so the archive table can be created before
     ``phase1_17`` (5-E) and ``phase1_19d`` (5-B) which depend on it."""
-    assert phase1_16.down_revision == "phase1_19c"
+    # `a9312d02` CHÈN `phase1_19c5` vào giữa `phase1_19c` và mắt xích này
+    # (chuyển seed HOA sang thường trước pre-flight của `phase3_01`). Đổi chain
+    # là CỐ Ý, nên khẳng định cha trực tiếp theo trạng thái thật...
+    assert phase1_16.down_revision == "phase1_19c5"
+
+    # ...nhưng vẫn khoá ý định GỐC: chuỗi phải còn đi QUA `phase1_19c`. Nếu chỉ
+    # sửa hằng số ở trên thành cha mới thì lần chèn kế tiếp lại âm thầm cắt
+    # `phase1_19c` khỏi chuỗi mà không ca nào đỏ.
+    ke = _load_migration_by_revision("phase1_19c5")
+    assert ke.down_revision == "phase1_19c", (
+        f"phase1_19c5 phải nối tiếp phase1_19c, đang là {ke.down_revision!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -102,16 +190,9 @@ def test_phase1_16_mirrors_every_admission_profile_column(src) -> None:
     from app.models.admission import AdmissionProfile
 
     source_columns = {c.name for c in AdmissionProfile.__table__.columns}
-
-    missing = []
-    for column_name in source_columns:
-        # Migration uses double-quoted column names in
-        # ``sa.Column("colname", ...)`` declarations.
-        if f'"{column_name}"' not in src:
-            missing.append(column_name)
-
+    missing = sorted(source_columns - _cot_khai_o_moi_migration())
     assert not missing, (
-        f"phase1_16 archive table missing AdmissionProfile columns: {missing}"
+        f"bảng archive thiếu cột của AdmissionProfile: {missing}"
     )
 
 
@@ -122,9 +203,7 @@ def test_phase1_16_column_count_matches_source_plus_one(src) -> None:
     from app.models.admission import AdmissionProfile
 
     source_count = len(AdmissionProfile.__table__.columns)
-    column_decls = re.findall(r'sa\.Column\(\s*"([a-z_]+)"', src)
-    # Filter to unique to drop accidental duplicates.
-    unique = set(column_decls)
+    unique = _cot_khai_o_moi_migration()
     assert len(unique) == source_count + 1, (
         f"Expected {source_count + 1} columns "
         f"({source_count} source + 1 archived_at), got {len(unique)}: {unique}"
