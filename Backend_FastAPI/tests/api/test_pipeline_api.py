@@ -10,6 +10,7 @@ from sqlalchemy import func  # Cần để kiểm tra DB (mặc dù fixture đã
 from sqlalchemy import select
 
 from app import models  # Cần để tạo dữ liệu mẫu
+from app import schemas  # Dung de dung KY VONG qua dung schema tra ve
 from app.config import settings  # Cần settings để lấy cache TTL
 
 # Import các thành phần app
@@ -38,8 +39,12 @@ async def seed_pipeline_data(setup_test_database):
     """Tạo dữ liệu mẫu cho pipeline stages và statuses dùng constants."""
     log.info("--- [FIXTURE] Seeding pipeline data ---")
     # Lấy data từ constants
-    stage1_data = TestPipelineData.STAGE_A
-    stage2_data = TestPipelineData.STAGE_B
+    # Mau KHONG PHAI default cua schema ("#6B7280"): neu service quen
+    # serialise cot `color_code`, `response_model` se bom default vao va ca
+    # nay do. Seed khong dat mau thi hai ben deu "#6B7280" va phep kiem mu
+    # hoan toan truoc dung lop loi da tung xay ra.
+    stage1_data = {**TestPipelineData.STAGE_A, "color_code": "#123456"}
+    stage2_data = {**TestPipelineData.STAGE_B, "color_code": "#654321"}
     status1_1_data = TestPipelineData.STATUS_A1
     status1_2_data = {
         "id": "S1_2",
@@ -77,7 +82,7 @@ async def seed_pipeline_data(setup_test_database):
 @pytest.mark.asyncio
 async def test_get_pipeline_all_success_cache_miss(
     client: AsyncClient,
-    regular_user_token_headers: dict,  # Endpoint này cần user thường là đủ
+    officer_doc_lap_token_headers: dict,
     seed_pipeline_data: dict,  # Sử dụng fixture seed data
     test_redis_client,  # Cần để kiểm tra cache
 ):
@@ -98,7 +103,14 @@ async def test_get_pipeline_all_success_cache_miss(
 
     # --- Bước 2: Gọi API lần đầu (Cache Miss) ---
     log.info("Calling API for the first time (expecting cache miss)...")
-    response = await client.get(pipeline_url, headers=regular_user_token_headers)
+    # Dung token OFFICER, khong dung token vai tro `user`:
+    # GET /api/pipeline/all nam trong OFFICER_TEMPLATE, con `role:user` la
+    # BASIC_USER_TEMPLATE (chi profile/notification/session/security). Cay ke
+    # thua la `g, role:officer, role:user` - officer ke thua user, khong nguoc
+    # lai. tests/security/test_permissions_matrix.py:245 da khoa san bo ba
+    # ("regular", "GET", PipelineURLs.ALL, 403), nen dung token vai tro user o
+    # day la mau thuan voi chinh hop dong RBAC dang duoc canh.
+    response = await client.get(pipeline_url, headers=officer_doc_lap_token_headers)
 
     # --- Assert Response ---
     assert response.status_code == 200, f"GET Pipeline Resp: {response.text}"
@@ -112,8 +124,23 @@ async def test_get_pipeline_all_success_cache_miss(
     assert isinstance(data["statuses"], list), "'statuses' should be a list"
 
     # 2. Kiểm tra số lượng phần tử
-    expected_stages = seed_pipeline_data["stages"]
-    expected_statuses = seed_pipeline_data["statuses"]
+    # Ky vong phai di qua CHINH schema tra ve cua router
+    # (`response_model=schemas.FullPipeline`), khong phai dict tran cua hang
+    # so seed. `schemas.PipelineStage` co them `is_final_stage`/`color_code`
+    # (co default) va `lead_count`/`conversion_rate` (truong tinh toan tuy
+    # chon); `schemas.ConsultationStatus` con giau truong hon nua. So nguyen
+    # dict voi hang so seed la over-specify: moi lan schema moc them mot
+    # truong la ca nay do du hanh vi CACHE - thu no that su canh - khong doi.
+    # Dung so khop TUNG PHAN (do se nuot mat truong sai), ma nang ky vong len
+    # dung hinh dang router tra ra roi van so DANG THUC.
+    expected_stages = [
+        schemas.PipelineStage(**s).model_dump()
+        for s in seed_pipeline_data["stages"]
+    ]
+    expected_statuses = [
+        schemas.ConsultationStatus(**t).model_dump()
+        for t in seed_pipeline_data["statuses"]
+    ]
     assert len(data["stages"]) == len(
         expected_stages
     ), f"Expected {len(expected_stages)} stages, got {len(data['stages'])}"
@@ -161,9 +188,25 @@ async def test_get_pipeline_all_success_cache_miss(
         cached_stages_sorted = sorted(cached_stages, key=lambda x: x.get("order", 0))
         cached_statuses_sorted = sorted(cached_statuses, key=lambda x: x.get("id", ""))
 
-        assert cached_stages_sorted == expected_stages, "Cached stages content mismatch"
+        # Cache giu hinh dang HEP hon phan hoi: service chi serialise cac COT
+        # co that tren bang, con `lead_count`/`conversion_rate` (stage) va
+        # `lead_count`/`stage` (status) la truong TINH TOAN / quan he do schema
+        # bo sung luc tra ve. Vi the ky vong cho cache phai dung theo hop dong
+        # cua cache, khong tai dung nguyen `expected_stages`. Van la DANG THUC
+        # chinh xac tren bo khoa cua cache, khong phai so khop tung phan.
+        expected_cached_stages = [
+            {k: v for k, v in x.items() if k not in ("lead_count", "conversion_rate")}
+            for x in expected_stages
+        ]
+        expected_cached_statuses = [
+            {k: v for k, v in x.items() if k not in ("lead_count", "stage")}
+            for x in expected_statuses
+        ]
         assert (
-            cached_statuses_sorted == expected_statuses
+            cached_stages_sorted == expected_cached_stages
+        ), "Cached stages content mismatch"
+        assert (
+            cached_statuses_sorted == expected_cached_statuses
         ), "Cached statuses content mismatch"
 
         # Kiểm tra TTL (xấp xỉ)
@@ -189,7 +232,7 @@ async def test_get_pipeline_all_success_cache_miss(
 @pytest.mark.asyncio
 async def test_get_pipeline_all_success_cache_hit(
     client: AsyncClient,
-    regular_user_token_headers: dict,
+    officer_doc_lap_token_headers: dict,
     seed_pipeline_data: dict,  # Cần fixture này để DB có dữ liệu thật
     test_redis_client,
 ):
@@ -199,14 +242,23 @@ async def test_get_pipeline_all_success_cache_hit(
 
     # --- Bước 1: "Mồi" cache bằng dữ liệu giả ---
     # Dữ liệu này khác với dữ liệu thật trong DB (từ seed_pipeline_data)
-    fake_stages_data = [{"id": "FAKE_S", "name": "Fake Stage CACHED", "order": 999}]
+    # Ban ghi FAKE phai DAY DU theo schema tra ve. Neu moi cache bang dict
+    # thieu truong, router van tra 200 nhung `response_model` bom default vao
+    # -> phan hoi KHAC het byte voi thu da nam trong cache, va ca nay do vi mot
+    # ly do khong lien quan gi toi cache. Cac gia tri "FAKE_*"/999 van la thu
+    # chung minh phan hoi den TU CACHE chu khong phai tu DB da seed.
+    fake_stages_data = [
+        schemas.PipelineStage(
+            id="FAKE_S", name="Fake Stage CACHED", order=999
+        ).model_dump()
+    ]
     fake_statuses_data = [
-        {
-            "id": "FAKE_T",
-            "name": "Fake Status CACHED",
-            "color_code": "#111111",
-            "stage_id": "FAKE_S",
-        }
+        schemas.ConsultationStatus(
+            id="FAKE_T",
+            name="Fake Status CACHED",
+            color_code="#111111",
+            stage_id="FAKE_S",
+        ).model_dump()
     ]
 
     await test_redis_client.set(PIPELINE_STAGES_CACHE_KEY, json.dumps(fake_stages_data))
@@ -217,7 +269,14 @@ async def test_get_pipeline_all_success_cache_hit(
 
     # --- Bước 2: Gọi API (nên trả về dữ liệu FAKE từ cache) ---
     log.info("Calling API (expecting cache hit with FAKE data)...")
-    response = await client.get(pipeline_url, headers=regular_user_token_headers)
+    # Dung token OFFICER, khong dung token vai tro `user`:
+    # GET /api/pipeline/all nam trong OFFICER_TEMPLATE, con `role:user` la
+    # BASIC_USER_TEMPLATE (chi profile/notification/session/security). Cay ke
+    # thua la `g, role:officer, role:user` - officer ke thua user, khong nguoc
+    # lai. tests/security/test_permissions_matrix.py:245 da khoa san bo ba
+    # ("regular", "GET", PipelineURLs.ALL, 403), nen dung token vai tro user o
+    # day la mau thuan voi chinh hop dong RBAC dang duoc canh.
+    response = await client.get(pipeline_url, headers=officer_doc_lap_token_headers)
 
     # --- Assert Response (phải khớp FAKE data) ---
     assert response.status_code == 200, f"Cache Hit Resp: {response.text}"
@@ -263,6 +322,14 @@ async def test_get_pipeline_all_unauthenticated(client: AsyncClient):
     assert response.status_code == 401, f"Unauth Resp: {response.text}"  # Unauthorized
     error_data = response.json()
     assert "detail" in error_data
-    assert error_data["detail"] == "Not authenticated"  # Message mặc định
+    # KHONG con la "Not authenticated" cua FastAPI: 46cc9633 (cookie auth)
+    # dat OAuth2PasswordBearer(auto_error=False) de request khong-header van
+    # di tiep xuong deps va doc httpOnly cookie. Vi the FastAPI khong tu phat
+    # 401 nua; deps.get_current_user nem `credentials_exception` DUNG MOT the
+    # cho ca hai ca "thieu token" va "token hong" - co y, de client khong
+    # phan biet duoc hai ca (chong do dam). Khoa ca error_code de doi sang mot
+    # ngoai le auth khac cung mau chu cung phai do.
+    assert error_data["detail"] == "Could not validate credentials"
+    assert error_data["error_code"] == "INVALID_TOKEN"
     log.info("Unauthenticated access correctly blocked (401) with default message.")
     log.info("--- Finished: test_get_pipeline_all_unauthenticated ---")

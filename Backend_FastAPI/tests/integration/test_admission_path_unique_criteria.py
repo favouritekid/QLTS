@@ -121,6 +121,11 @@ async def adm_seed(seed_lead_dependencies: dict):
         "criteria_id": criteria.id,
         "subject_group_id": sg.id,
         "path_a_id": path_a.id,
+        # `admission_path.admission_round_id` là NOT NULL (đánh dấu ONE-WAY ở
+        # PR-2C v2). Hai ca dưới đây dựng path bằng SQL THÔ để mô phỏng đúng
+        # câu lệnh importer chạy, nên chúng phải tự cấp đợt — seed phải chuyển
+        # `round_id` ra ngoài thay vì giữ trong phạm vi cục bộ.
+        "round_id": round_id,
         "ts": ts,
     }
 
@@ -265,14 +270,16 @@ class TestServiceDefensiveClone:
 
                 pid_b_row = (await s.execute(text("""
                     INSERT INTO admission_path
-                    (academic_info_id, admission_method_id, criteria_id, status,
+                    (academic_info_id, admission_method_id, admission_round_id,
+                     criteria_id, status,
                      display_name, display_order, visibility, created_at, updated_at)
                     VALUES
-                    (:aiid, :mid, :cid, 'draft', :dn, 1, 'internal', NOW(), NOW())
+                    (:aiid, :mid, :rid, :cid, 'draft', :dn, 1, 'internal', NOW(), NOW())
                     RETURNING id
                 """), {
                     "aiid": adm_seed["academic_info_id"],
                     "mid": method_b_id,
+                    "rid": adm_seed["round_id"],
                     "cid": adm_seed["criteria_id"],
                     "dn": f"Path B share {ts}",
                 })).scalar()
@@ -434,12 +441,18 @@ class TestXlsxImportClonesWhenCriteriaReused:
                 # then clone the base criteria for it.
                 pid_b = (await s.execute(text("""
                     INSERT INTO admission_path
-                    (academic_info_id, admission_method_id, status,
+                    (academic_info_id, admission_method_id, admission_round_id,
+                     status,
                      display_name, display_order, visibility, created_at, updated_at)
                     VALUES
-                    (:aiid, :mid, 'draft', 'Path B import', 1, 'internal', NOW(), NOW())
+                    (:aiid, :mid, :rid, 'draft', 'Path B import', 1, 'internal',
+                     NOW(), NOW())
                     RETURNING id
-                """), {"aiid": aiid, "mid": method_b_id})).scalar()
+                """), {
+                    "aiid": aiid,
+                    "mid": method_b_id,
+                    "rid": adm_seed["round_id"],
+                })).scalar()
 
                 in_use = (await s.execute(text(
                     "SELECT EXISTS(SELECT 1 FROM admission_path WHERE criteria_id = :c)"

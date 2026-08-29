@@ -111,7 +111,7 @@ def synthetic_master_df():
 
 
 def test_build_rows_filters_to_target_provinces(synthetic_master_df):
-    rows = build_rows(synthetic_master_df)
+    rows = build_rows(synthetic_master_df, TARGET_PROVINCES)
     # 5 rows from 3 target provinces (Đắk Lắk x4 + Gia Lai x1); Hà Nội excluded
     assert len(rows) == 5
     provinces = {r["province"] for r in rows}
@@ -120,7 +120,7 @@ def test_build_rows_filters_to_target_provinces(synthetic_master_df):
 
 
 def test_build_rows_zfill_province_code(synthetic_master_df):
-    rows = build_rows(synthetic_master_df)
+    rows = build_rows(synthetic_master_df, TARGET_PROVINCES)
     by_code = {r["moet_school_code"]: r for r in rows}
     # Đắk Lắk mã 40 → zfill 3 → "040"
     assert by_code["002"]["moet_province_code"] == "040"
@@ -129,14 +129,14 @@ def test_build_rows_zfill_province_code(synthetic_master_df):
 
 
 def test_build_rows_zfill_district_code(synthetic_master_df):
-    rows = build_rows(synthetic_master_df)
+    rows = build_rows(synthetic_master_df, TARGET_PROVINCES)
     by_code = {r["moet_school_code"]: r for r in rows}
     # ma_huyen 1 → zfill 5 → "00001"
     assert by_code["002"]["moet_district_code"] == "00001"
 
 
 def test_build_rows_level_classification(synthetic_master_df):
-    rows = build_rows(synthetic_master_df)
+    rows = build_rows(synthetic_master_df, TARGET_PROVINCES)
     by_code = {r["moet_school_code"]: r for r in rows}
     # Real schools → THPT
     assert by_code["002"]["level"] == "THPT"
@@ -148,7 +148,7 @@ def test_build_rows_level_classification(synthetic_master_df):
 
 
 def test_build_rows_dtnt_flag(synthetic_master_df):
-    rows = build_rows(synthetic_master_df)
+    rows = build_rows(synthetic_master_df, TARGET_PROVINCES)
     by_code = {r["moet_school_code"]: r for r in rows}
     # N'Trang Lơng has "x" in dtnt column
     assert by_code["010"]["is_dtnt"] is True
@@ -159,7 +159,7 @@ def test_build_rows_dtnt_flag(synthetic_master_df):
 
 def test_build_rows_preserves_dup_pair(synthetic_master_df):
     """User concern: 'trường trùng nhau' — Option 1 naive keeps both rows."""
-    rows = build_rows(synthetic_master_df)
+    rows = build_rows(synthetic_master_df, TARGET_PROVINCES)
     bmt = [r for r in rows if r["name"] == "THPT Buôn Ma Thuột"]
     assert len(bmt) == 2  # Mã 002 + 090 both preserved
     codes = {r["moet_school_code"] for r in bmt}

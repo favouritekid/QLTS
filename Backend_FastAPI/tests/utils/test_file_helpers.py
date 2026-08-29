@@ -10,7 +10,7 @@ import aiofiles
 import magic
 import pytest
 import pytest_asyncio
-from fastapi import HTTPException, UploadFile, status
+from fastapi import HTTPException, status
 
 from app.config import settings  # Dùng settings làm "constants" cho file này
 
@@ -30,33 +30,6 @@ _MODULE_DUNG_CHUNG_THAT = {
     "aiofiles.open": aiofiles.open,
     "magic.from_buffer": magic.from_buffer,
 }
-
-
-# === Lớp Giả lập UploadFile (Giữ nguyên như trong context) ===
-class MockUploadFile:
-    """Giả lập đối tượng UploadFile của FastAPI."""
-
-    def __init__(self, filename: str, content: bytes, content_type: str = "image/png"):
-        self.filename = filename
-        self._content = content
-        self.content_type = content_type
-        self.file = MagicMock()
-        self.read_called = False
-
-        async def mock_read():
-            if self.read_called:
-                return b""
-            self.read_called = True
-            if self._content is None:
-                raise IOError("Simulated file read error")
-            return self._content
-
-        self.read = AsyncMock(side_effect=mock_read)
-        self.seek = MagicMock()
-        self.tell = MagicMock()
-
-    def __repr__(self):
-        return f"<MockUploadFile filename={self.filename}>"
 
 
 # === Fixture để Mock các Dependencies (Giữ nguyên như trong context) ===
@@ -165,7 +138,8 @@ def mock_dependencies(mocker):
 async def test_save_avatar_success(mock_dependencies):
     """Test 4.1: Lưu avatar thành công (không có file cũ)."""
     log.info("--- Running: test_save_avatar_success ---")
-    file = MockUploadFile(filename="avatar.png", content=b"fake_png_bytes")
+    avatar_filename = "avatar.png"
+    avatar_content = b"fake_png_bytes"
 
     expected_uuid = "12345678-1234-5678-1234-567812345678"
     expected_filename = f"{expected_uuid}.png"
@@ -173,15 +147,19 @@ async def test_save_avatar_success(mock_dependencies):
     expected_url = f"/static/uploads/avatars/{expected_filename}"
 
     # --- Action ---
-    result_url = await file_helpers.save_avatar(file, old_avatar_url=None)
+    result_url = await file_helpers.save_avatar(
+            avatar_content, avatar_filename, old_avatar_url=None
+        )
 
     # --- Assert Response (Return Value) ---
     assert result_url == expected_url, "URL trả về không chính xác"
 
     # --- Assert Side Effects (Mocks) ---
-    # 1. Đọc file 1 lần
-    file.read.assert_awaited_once()
-    # 2. Kiểm tra MIME type
+    # KHÔNG còn khẳng định "helper đọc file 1 lần": sau refactor Service Layer
+    # Purity, `save_avatar` NHẬN bytes chứ không đọc — việc đọc `UploadFile` là
+    # của tầng gọi. Giữ lại `file.read.assert_awaited_once()` là đòi hàm làm
+    # đúng thứ vừa được gỡ khỏi nó.
+    # 1. Kiểm tra MIME type
     mock_dependencies["magic"].assert_called_once_with(b"fake_png_bytes", mime=True)
     # 3. Security check (Path.resolve và commonpath)
     mock_dependencies["Path"].resolve.assert_any_call(
@@ -208,7 +186,8 @@ async def test_save_avatar_success(mock_dependencies):
 async def test_save_avatar_success_with_old_file(mock_dependencies):
     """Test 4.1: Lưu avatar thành công VÀ xóa file cũ."""
     log.info("--- Running: test_save_avatar_success_with_old_file ---")
-    file = MockUploadFile(filename="new_avatar.jpg", content=b"fake_jpg_bytes")
+    avatar_filename = "new_avatar.jpg"
+    avatar_content = b"fake_jpg_bytes"
     mock_dependencies["magic"].return_value = "image/jpeg"  # Giả lập file JPG
 
     old_url = "/static/uploads/avatars/old_file_123.jpg"
@@ -221,14 +200,18 @@ async def test_save_avatar_success_with_old_file(mock_dependencies):
     mock_dependencies["os_path_exists"].return_value = True
 
     # --- Action ---
-    await file_helpers.save_avatar(file, old_avatar_url=old_url)
+    await file_helpers.save_avatar(
+            avatar_content, avatar_filename, old_avatar_url=old_url
+        )
 
     # --- Assert Side Effects ---
     # 1. Kiểm tra magic (JPG)
     mock_dependencies["magic"].assert_called_once_with(b"fake_jpg_bytes", mime=True)
     # 2. Kiểm tra file cũ đã bị xóa
-    # Hàm save_avatar dùng os.path.exists và os.remove
-    mock_dependencies["os_path_exists"].assert_called_once_with(expected_old_path)
+    # KHÔNG khẳng định `os.path.exists` nữa: phần xoá đã chuyển từ LBYL sang
+    # EAFP — `os.remove` được gọi thẳng và `FileNotFoundError` bị bắt (chú thích
+    # "✅ SỬA LỖI: Áp dụng EAFP" trong `file_helpers`). Đổi ấy đóng một khe
+    # TOCTOU; khẳng định `exists` là khoá vào CÁCH LÀM chứ không phải kết quả.
     mock_dependencies["os_remove"].assert_called_once_with(expected_old_path)
     log.info("Old avatar deleted successfully.")
 
@@ -239,11 +222,14 @@ async def test_save_avatar_success_with_old_file(mock_dependencies):
 async def test_save_avatar_invalid_extension(mock_dependencies):
     """Test 4.1: Lỗi 400 - Đuôi file không hợp lệ (.txt)."""
     log.info("--- Running: test_save_avatar_invalid_extension ---")
-    file = MockUploadFile(filename="virus.txt", content=b"i am a virus")
+    avatar_filename = "virus.txt"
+    avatar_content = b"i am a virus"
 
     # --- Action & Assert Exception ---
     with pytest.raises(HTTPException) as exc_info:
-        await file_helpers.save_avatar(file, old_avatar_url=None)
+        await file_helpers.save_avatar(
+            avatar_content, avatar_filename, old_avatar_url=None
+        )
 
     # --- Assert Error Message ---
     assert exc_info.value.status_code == 400
@@ -266,11 +252,13 @@ async def test_save_avatar_invalid_extension(mock_dependencies):
 async def test_save_avatar_file_too_large(mock_dependencies):
     """Test 4.1: Lỗi 413 - File quá lớn."""
     log.info("--- Running: test_save_avatar_file_too_large ---")
-    large_content = b"a" * (settings.MAX_AVATAR_CONTENT_LENGTH + 1)
-    file = MockUploadFile(filename="too_big.png", content=large_content)
+    avatar_filename = "too_big.png"
+    avatar_content = b"a" * (settings.MAX_AVATAR_CONTENT_LENGTH + 1)
 
     with pytest.raises(HTTPException) as exc_info:
-        await file_helpers.save_avatar(file, old_avatar_url=None)
+        await file_helpers.save_avatar(
+            avatar_content, avatar_filename, old_avatar_url=None
+        )
 
     # --- SỬA/THÊM ASSERTION NÀY ---
     assert (
@@ -293,14 +281,17 @@ async def test_save_avatar_file_too_large(mock_dependencies):
 async def test_save_avatar_invalid_mime_type(mock_dependencies):
     """Test 4.1: Lỗi 400 - Đuôi file hợp lệ (.png) nhưng nội dung là text."""
     log.info("--- Running: test_save_avatar_invalid_mime_type ---")
-    file = MockUploadFile(filename="fake.png", content=b"this is actually a text file")
+    avatar_filename = "fake.png"
+    avatar_content = b"this is actually a text file"
 
     # Giả lập magic phát hiện đây là text
     mock_dependencies["magic"].return_value = "text/plain"
 
     # --- Action & Assert Exception ---
     with pytest.raises(HTTPException) as exc_info:
-        await file_helpers.save_avatar(file, old_avatar_url=None)
+        await file_helpers.save_avatar(
+            avatar_content, avatar_filename, old_avatar_url=None
+        )
 
     # --- Assert Error Message ---
     assert exc_info.value.status_code == 400
@@ -359,11 +350,14 @@ async def test_save_avatar_path_traversal_attempt(mocker, mock_dependencies):
     mock_dependencies["commonpath"].return_value = os.path.sep
     # --- Kết thúc Mock ---
 
-    file = MockUploadFile(filename="../../etc/passwd.png", content=b"fake_bytes")
+    avatar_filename = "../../etc/passwd.png"
+    avatar_content = b"fake_bytes"
 
     # --- Action & Assert Exception ---
     with pytest.raises(HTTPException) as exc_info:
-        await file_helpers.save_avatar(file, old_avatar_url=None)
+        await file_helpers.save_avatar(
+            avatar_content, avatar_filename, old_avatar_url=None
+        )
 
     # --- Assert Error Message ---
     assert exc_info.value.status_code == 400
@@ -377,11 +371,14 @@ async def test_save_avatar_path_traversal_attempt(mocker, mock_dependencies):
 async def test_save_avatar_empty_file(mock_dependencies):
     """Test 4.1: Lỗi 400 - File rỗng (content rỗng)."""
     log.info("--- Running: test_save_avatar_empty_file ---")
-    file = MockUploadFile(filename="empty.png", content=b"")  # Nội dung rỗng
+    avatar_filename = "empty.png"
+    avatar_content = b""  # Nội dung rỗng
 
     # --- Action & Assert Exception ---
     with pytest.raises(HTTPException) as exc_info:
-        await file_helpers.save_avatar(file, old_avatar_url=None)
+        await file_helpers.save_avatar(
+            avatar_content, avatar_filename, old_avatar_url=None
+        )
 
     # --- Assert Error Message ---
     assert exc_info.value.status_code == 400
@@ -395,19 +392,31 @@ async def test_save_avatar_empty_file(mock_dependencies):
 
 
 @pytest.mark.asyncio
-async def test_save_avatar_read_error(mock_dependencies):
-    """Test 4.1: Lỗi 400 - Lỗi khi đọc nội dung file (content=None)."""
-    log.info("--- Running: test_save_avatar_read_error ---")
-    # Sử dụng content=None để trigger lỗi đọc file trong MockUploadFile
-    file = MockUploadFile(filename="read_error.png", content=None)
+async def test_save_avatar_content_none_tra_400_khong_phai_500(mock_dependencies):
+    """``content=None`` phải cho 400 sạch, KHÔNG phải TypeError 500.
+
+    Trước lượt refactor "Service Layer Purity", ``content`` được dựng ngay trong
+    hàm (``b''.join(chunks)``) nên không bao giờ là None, và ca này kiểm nhánh
+    "đọc file thất bại" -> 400 "Could not read file content.".
+
+    Sau refactor, việc đọc chuyển ra ngoài và ``content`` thành THAM SỐ. Nhánh
+    kiểm cỡ vẫn là ``len(content)``, nên một caller truyền None làm hàm ném
+    ``TypeError: object of type 'NoneType' has no len()`` — 500, trong khi mọi
+    đầu vào hỏng khác đều được trả 400 sạch.
+
+    Ca này khoá lại hàng rào ấy. ``None`` là đầu vào KHÁC với ``b""`` (caller
+    đọc hụt vs tệp rỗng thật) nên vẫn giữ riêng, cạnh
+    ``test_save_avatar_empty_file``.
+    """
+    log.info("--- Running: test_save_avatar_content_none ---")
 
     # --- Action & Assert Exception ---
     with pytest.raises(HTTPException) as exc_info:
-        await file_helpers.save_avatar(file, old_avatar_url=None)
+        await file_helpers.save_avatar(None, "read_error.png", old_avatar_url=None)
 
     # --- Assert Error Message ---
     assert exc_info.value.status_code == 400
-    assert exc_info.value.detail == "Could not read file content."
+    assert exc_info.value.detail == "Empty file uploaded."
 
     mock_dependencies["magic"].assert_not_called()
     mock_dependencies["aio_open"].assert_not_called()
@@ -420,7 +429,8 @@ async def test_save_avatar_read_error(mock_dependencies):
 async def test_save_avatar_write_error(mock_dependencies):
     """Test 4.1: Lỗi 500 - Lỗi khi ghi file mới (mock aiofiles.write lỗi)."""
     log.info("--- Running: test_save_avatar_write_error ---")
-    file = MockUploadFile(filename="good_file.png", content=b"fake_png_bytes")
+    avatar_filename = "good_file.png"
+    avatar_content = b"fake_png_bytes"
     expected_path = os.path.join(
         settings.AVATAR_UPLOAD_FOLDER, "12345678-1234-5678-1234-567812345678.png"
     )
@@ -432,7 +442,9 @@ async def test_save_avatar_write_error(mock_dependencies):
 
     # --- Action & Assert Exception ---
     with pytest.raises(HTTPException) as exc_info:
-        await file_helpers.save_avatar(file, old_avatar_url=None)
+        await file_helpers.save_avatar(
+            avatar_content, avatar_filename, old_avatar_url=None
+        )
 
     # --- Assert Error Message ---
     assert exc_info.value.status_code == 500

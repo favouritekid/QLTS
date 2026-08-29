@@ -60,7 +60,9 @@ async def seed_pipeline_data_with_lead(setup_test_database):
         async with session.begin():
             # Org/Major
             unit1 = models.OrganizationUnit(**unit_data)  # Dùng ** để unpack dict
-            major1 = models.Major(**major_data)
+            # Model `Major` đã bị GỠ sau migration 3 tầng (k6l7m8n9o0p1 drop bảng);
+            # `MajorProgram` là Level 1 thay thế. Cùng khuôn với `tests/conftest.py`.
+            major1 = models.MajorProgram(**major_data)
             session.add_all([unit1, major1])
 
             # Pipeline Stages
@@ -83,7 +85,8 @@ async def seed_pipeline_data_with_lead(setup_test_database):
                 phone=lead_data["phone"],
                 source=lead_data["source"],
                 unit_id=unit_data["id"],
-                major_id=major_data["id"],
+                # `Lead.major_id` KHÔNG còn tồn tại sau migration 3 tầng — quan hệ
+                # ngành/lead nay đi qua offering chứ không phải một FK phẳng.
                 status=status_a1_data["id"],  # FK
                 consultation_status_id=status_a1_data["id"],  # FK
                 pipeline_stage_id=stage_a_data["id"],  # FK
@@ -142,7 +145,7 @@ async def test_admin_create_stage_success_and_cache_invalidation(
     log.info("Cache primed before action.")
 
     # Payload mẫu
-    payload = {"id": "NEW_STAGE", "name": "New Stage", "order": 1}
+    payload = {"id": "new_stage", "name": "New Stage", "order": 1}
 
     # --- Action ---
     response = await client.post(stages_url, json=payload, headers=admin_token_headers)
@@ -177,8 +180,22 @@ async def test_admin_create_stage_conflict_errors(
     """Test POST /pipeline-stages - Lỗi 409 (Trùng ID, Trùng Order)."""
     log.info("--- Running: test_admin_create_stage_conflict_errors ---")
     stages_url = AdminURLs.PIPELINE_STAGES
-    existing_stage_id = seed_pipeline_data_with_lead["stage_a_id"]  # ID: STAGE_A
     existing_order = TestPipelineData.STAGE_A["order"]  # Order: 10
+
+    # Seed dựng stage bằng ORM nên ID của nó là "STAGE_A" — CHỮ HOA. Schema nay
+    # bắt buộc `^[a-z0-9_]+$`, nên POST lại ID ấy dừng ở 422 và KHÔNG BAO GIỜ
+    # chạm nhánh "trùng ID". Ca sẽ đỏ, mà nếu ai đó nới kỳ vọng xuống 422 thì
+    # nó lại xanh trong khi nhánh 409 chưa từng được chạy.
+    #
+    # Nên tự tạo một stage qua CHÍNH API — ID hợp lệ, tồn tại thật — rồi mới
+    # POST trùng. Đó là đường người dùng đi.
+    existing_stage_id = "dupe_check_stage"
+    tao_truoc = await client.post(
+        stages_url,
+        json={"id": existing_stage_id, "name": "Seed For Dupe", "order": 77},
+        headers=admin_token_headers,
+    )
+    assert tao_truoc.status_code == 201, f"Seed stage Resp: {tao_truoc.text}"
 
     # --- Kịch bản 1: Trùng ID ---
     payload_dupe_id = {"id": existing_stage_id, "name": "Duplicate ID", "order": 99}
@@ -197,7 +214,7 @@ async def test_admin_create_stage_conflict_errors(
 
     # --- Kịch bản 2: Trùng Order ---
     payload_dupe_order = {
-        "id": "UNIQUE_ID",
+        "id": "unique_id",
         "name": "Duplicate Order",
         "order": existing_order,
     }
@@ -225,8 +242,10 @@ async def test_admin_create_stage_validation_error(
     log.info("--- Running: test_admin_create_stage_validation_error ---")
     stages_url = AdminURLs.PIPELINE_STAGES
 
-    # Thiếu 'order'
-    payload_missing_order = {"id": "INVALID", "name": "Invalid Stage"}
+    # Thiếu 'order'. `id` phải HỢP LỆ (`^[a-z0-9_]+$`) — nếu để "INVALID"
+    # chữ hoa thì payload sai HAI chỗ, và ca này xanh mà không chứng minh được
+    # trường `order` có được canh hay không.
+    payload_missing_order = {"id": "missing_order_stage", "name": "Invalid Stage"}
     response = await client.post(
         stages_url, json=payload_missing_order, headers=admin_token_headers
     )
@@ -238,8 +257,8 @@ async def test_admin_create_stage_validation_error(
     # --- SỬA CÁC DÒNG ASSERTION Ở ĐÂY ---
     assert "detail" in error_data, "422 response missing 'detail' string"
     assert (
-        error_data["detail"] == "Validation Error"
-    ), "Expected detail string 'Validation Error'"  # Kiểm tra chuỗi detail cố định
+        error_data["detail"] == "Request validation failed"
+    ), "Expected detail string 'Request validation failed'"  # Kiểm tra chuỗi detail cố định
 
     assert "errors" in error_data, "422 response missing 'errors' list"
     assert isinstance(
@@ -247,16 +266,18 @@ async def test_admin_create_stage_validation_error(
     ), "'errors' should be a list for validation details"  # Kiểm tra 'errors' là list
 
     found_error = False
-    # Lặp qua error_data["errors"]
+    # Handler nay pass thang phan tu cua Pydantic v2 ra ngoai: moi loi co `loc`
+    # (danh sach, vd ["body", "order"]) va `msg`, KHONG con `field`/`message`
+    # dang chuoi ghep. Doc `loc` cung cho biet CHINH XAC truong nao sai, thay vi
+    # phai so mot chuoi "body -> order" tu ghep.
     for error in error_data["errors"]:
         assert isinstance(error, dict)
-        # Kiểm tra các key mà handler của bạn trả về ('field', 'message')
-        assert "field" in error, "Validation error dict missing 'field' key"
-        assert "message" in error, "Validation error dict missing 'message' key"
+        assert "loc" in error, "Validation error dict missing 'loc' key"
+        assert "msg" in error, "Validation error dict missing 'msg' key"
 
         # Kiểm tra giá trị cụ thể cho lỗi thiếu 'order'
-        if error.get("field") == "body -> order" and "Field required" in error.get(
-            "message", ""
+        if list(error["loc"]) == ["body", "order"] and "Field required" in error.get(
+            "msg", ""
         ):
             found_error = True
             break  # Tìm thấy lỗi cần tìm
@@ -489,7 +510,7 @@ async def test_admin_create_status_success_and_cache_invalidation(
     # Payload mẫu (dùng stage hợp lệ từ fixture)
     stage_b_id = seed_pipeline_data_with_lead["stage_b_id"]
     payload = {
-        "id": "NEW_STATUS_B",
+        "id": "new_status_b",
         "name": "New Status for B",
         "color_code": "#123456",
         "stage_id": stage_b_id,
@@ -529,8 +550,23 @@ async def test_admin_create_status_conflict_errors(
     """Test POST /consultation-statuses - Lỗi 409 (Trùng ID), 404 (Stage ID không tồn tại)."""
     log.info("--- Running: test_admin_create_status_conflict_errors ---")
     statuses_url = AdminURLs.CONSULTATION_STATUSES
-    existing_status_id = seed_pipeline_data_with_lead["status_a1_id"]  # ID: STATUS_A1
     valid_stage_id = seed_pipeline_data_with_lead["stage_a_id"]
+
+    # Cùng lý do như ca stage: `status_a1_id` của seed là "STATUS_A1" chữ hoa,
+    # POST lại sẽ dừng ở 422 trước khi tới nhánh trùng. Tạo trước bằng API.
+    # (`stage_id` KHÔNG bị pattern nên vẫn trỏ được vào stage chữ hoa của seed.)
+    existing_status_id = "dupe_check_status"
+    tao_truoc = await client.post(
+        statuses_url,
+        json={
+            "id": existing_status_id,
+            "name": "Seed For Dupe",
+            "color_code": "#123456",
+            "stage_id": valid_stage_id,
+        },
+        headers=admin_token_headers,
+    )
+    assert tao_truoc.status_code == 201, f"Seed status Resp: {tao_truoc.text}"
 
     # --- Kịch bản 1: Trùng ID ---
     payload_dupe_id = {
@@ -554,7 +590,7 @@ async def test_admin_create_status_conflict_errors(
 
     # --- Kịch bản 2: Stage ID không tồn tại ---
     payload_invalid_stage = {
-        "id": "UNIQUE_STATUS_ID",
+        "id": "unique_status_id",
         "name": "Invalid Stage",
         "color_code": "#121212",
         "stage_id": NON_EXISTENT_STAGE_ID,  # Stage ID không tồn tại
@@ -586,7 +622,9 @@ async def test_admin_create_status_validation_error(
 
     # --- Kịch bản 1: Màu không hợp lệ ---
     payload_invalid_color = {
-        "id": "INVALID_COLOR_S",
+        # `id` hợp lệ để lỗi DUY NHẤT là `color_code` — trước đây id chữ hoa
+        # cũng sai pattern, nên ca xanh mà không canh được màu.
+        "id": "invalid_color_s",
         "name": "Invalid Color Status",
         "color_code": "not-a-hex-code",  # Màu sai
         "stage_id": valid_stage_id,
@@ -603,19 +641,17 @@ async def test_admin_create_status_validation_error(
     # --- SỬA CÁC DÒNG ASSERTION Ở ĐÂY (Kịch bản 1) ---
     assert (
         "detail" in error_data_color
-        and error_data_color["detail"] == "Validation Error"
+        and error_data_color["detail"] == "Request validation failed"
     )
     assert "errors" in error_data_color and isinstance(error_data_color["errors"], list)
 
     found_color_error = False
     for error in error_data_color["errors"]:
         assert isinstance(error, dict)
-        assert "field" in error and "message" in error
+        assert "loc" in error and "msg" in error
         # Kiểm tra lỗi màu cụ thể
-        if error.get(
-            "field"
-        ) == "body -> color_code" and "String should match pattern" in error.get(
-            "message", ""
+        if list(error["loc"]) == ["body", "color_code"] and (
+            "String should match pattern" in error.get("msg", "")
         ):
             found_color_error = True
             break
@@ -625,7 +661,7 @@ async def test_admin_create_status_validation_error(
 
     # --- Kịch bản 2: Thiếu 'name' ---
     payload_missing_name = {
-        "id": "MISSING_NAME_S",
+        "id": "missing_name_s",
         "color_code": "#123456",
         "stage_id": valid_stage_id,
         # Thiếu "name"
@@ -639,17 +675,17 @@ async def test_admin_create_status_validation_error(
 
     # --- SỬA CÁC DÒNG ASSERTION Ở ĐÂY (Kịch bản 2) ---
     assert (
-        "detail" in error_data_name and error_data_name["detail"] == "Validation Error"
+        "detail" in error_data_name and error_data_name["detail"] == "Request validation failed"
     )
     assert "errors" in error_data_name and isinstance(error_data_name["errors"], list)
 
     found_name_error = False
     for error in error_data_name["errors"]:
         assert isinstance(error, dict)
-        assert "field" in error and "message" in error
+        assert "loc" in error and "msg" in error
         # Kiểm tra lỗi thiếu 'name'
-        if error.get("field") == "body -> name" and "Field required" in error.get(
-            "message", ""
+        if list(error["loc"]) == ["body", "name"] and "Field required" in error.get(
+            "msg", ""
         ):
             found_name_error = True
             break

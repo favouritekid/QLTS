@@ -55,9 +55,14 @@ class AdminURLs:
         lambda unit_id: f"{AdminURLs.ORGANIZATION_UNITS}/{unit_id}"
     )  # Tham chiếu qua class
 
-    MAJORS = f"{BASE}/majors"
-    MAJOR_DETAIL = (
-        lambda major_id: f"{AdminURLs.MAJORS}/{major_id}"
+    # `/majors` KHÔNG còn được đăng ký: migration 3 tầng đổi endpoint thành
+    # `/programs` (router trả `schemas.MajorProgram`). `MAJORS`/`MAJOR_DETAIL`
+    # đã bị GỠ HẲN thay vì giữ lại — chúng không còn caller nào, nên "giữ để
+    # khỏi phá" là lý lẽ vòng tròn, và một hằng số trỏ tới đường chết chỉ chờ
+    # người sau dùng lại rồi nhận 404.
+    PROGRAMS = f"{BASE}/programs"
+    PROGRAM_DETAIL = (
+        lambda program_id: f"{AdminURLs.PROGRAMS}/{program_id}"
     )  # Tham chiếu qua class
 
     PIPELINE_STAGES = f"{BASE}/pipeline-stages"

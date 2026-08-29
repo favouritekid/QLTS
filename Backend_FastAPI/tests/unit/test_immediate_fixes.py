@@ -169,17 +169,45 @@ class TestConsultationCascadeDispatch:
             "confirm_admission_by_token",
         ]
 
+        # Đi THEO UỶ NHIỆM, không chỉ đọc thân router.
+        #
+        # Bản cũ chỉ grep `inspect.getsource(<router fn>)`. Nó đúng khi router
+        # còn dispatch nội tuyến, nhưng kiến trúc V3.0 đã chuyển dispatch xuống
+        # SERVICE — router là "dumb HTTP translator", nên giữ nguyên phép kiểm
+        # cũ là đang ĐÒI router chứa logic nghiệp vụ, ngược hẳn CLAUDE.md.
+        #
+        # Đo thật lúc sửa: cả 8 endpoint đều dispatch — 5 cái CHỈ ở service
+        # (approve/reject/request_revision/resubmit/enroll), 3 cái ở cả hai.
+        # Bản cũ dừng ở `assert` đầu tiên nên chỉ tố `approve_admission`,
+        # che mất bốn cái còn lại.
+        import re
+        from app.services import admission_service
+
+        DAU_HIEU = (
+            "safe_dispatch",
+            "APPLICATION_STATUS_CHANGED",
+            "LEAD_STATUS_CHANGED",
+            "dispatch_bundle",
+        )
+
+        thieu = []
         for name in endpoints_with_dispatch:
             func = getattr(admissions, name, None)
             if func is None:
                 continue
             source = inspect.getsource(func)
-            has_dispatch = (
-                "safe_dispatch" in source or
-                "APPLICATION_STATUS_CHANGED" in source or
-                "LEAD_STATUS_CHANGED" in source
-            )
-            assert has_dispatch, (
-                f"Admission endpoint '{name}' missing notification dispatch. "
-                "All state transitions must notify."
-            )
+            nguon = [source]
+            # Nạp thêm thân của MỌI hàm service mà router này uỷ nhiệm tới.
+            for ten_sv in sorted(set(re.findall(r"admission_service\.([a-z_]+)\(", source))):
+                fn_sv = getattr(admission_service, ten_sv, None)
+                if fn_sv is not None:
+                    nguon.append(inspect.getsource(fn_sv))
+            if not any(d in n for n in nguon for d in DAU_HIEU):
+                thieu.append(name)
+
+        # Gom HẾT vi phạm rồi mới assert: dừng ở cái đầu tiên thì mỗi lượt sửa
+        # chỉ lộ ra một endpoint, phải chạy lại nhiều vòng mới thấy hết.
+        assert not thieu, (
+            f"Endpoint tuyển sinh không dispatch thông báo ở router lẫn service: "
+            f"{thieu}. Mọi chuyển trạng thái đều phải thông báo."
+        )

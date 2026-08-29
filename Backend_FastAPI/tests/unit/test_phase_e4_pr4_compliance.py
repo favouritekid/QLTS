@@ -20,9 +20,39 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 pytestmark = pytest.mark.unit
+
+
+def _db_get_profile():
+    """Session giả cho đường ``get_profile``, GIỮ ĐÚNG ranh giới async/sync.
+
+    Ba ca projection/audit dưới đây chỉ quan tâm tới repository (đã bị
+    monkeypatch bằng ``FakeRepo``), nên trước đây chúng dùng ``MagicMock()``
+    trần. Nhưng ``get_profile`` nay còn hỏi ``fee_calculation_service.
+    has_awaiting_major_change_fee(db, profile)`` để dựng cờ "giấy báo cũ đã bị
+    supersede hay chưa" — và hàm ấy chạm THẲNG vào session::
+
+        (await db.execute(select(Fee.id)...)).scalar_one_or_none()
+
+    Một ``MagicMock()`` trần trả về ``MagicMock`` cho ``db.execute(...)``, thứ
+    không await được, nên ba ca đỏ ở ``TypeError: object MagicMock can't be used
+    in 'await' expression`` — cách xa thứ chúng thật sự kiểm.
+
+    ``spec=AsyncSession`` là phần quan trọng: ``AsyncSession`` có CẢ method async
+    lẫn sync, nên một ``AsyncMock()`` nguyên khối sẽ làm lệch contract và che
+    những lời gọi sai sau này. Chỉ ``execute`` được gán ``AsyncMock``.
+
+    ``scalar_one_or_none() -> None`` nghĩa là "không có phí HK1 nào đang chờ kế
+    toán chốt" — trạng thái mặc định, đúng thứ ba ca này giả định.
+    """
+    db = MagicMock(spec=AsyncSession)
+    ket_qua = MagicMock()
+    ket_qua.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(return_value=ket_qua)
+    return db
 
 
 # ---------------------------------------------------------------------------
@@ -506,7 +536,7 @@ async def test_get_profile_populates_priority_evidence_documents_when_codes_set(
 
     monkeypatch.setattr("app.repositories.AdmissionRepository", FakeRepo)
 
-    db = MagicMock()
+    db = _db_get_profile()
     user = SimpleNamespace(id=7, role="officer", unit_id=1)
 
     result = await svc.get_profile(db, 99, user)
@@ -599,7 +629,7 @@ async def test_get_profile_populates_audit_log_alongside_projection(
 
     monkeypatch.setattr("app.repositories.AdmissionRepository", FakeRepo)
 
-    db = MagicMock()
+    db = _db_get_profile()
     user = SimpleNamespace(id=7, role="officer", unit_id=1)
 
     result = await svc.get_profile(db, 99, user)
@@ -667,7 +697,7 @@ async def test_get_profile_projection_empty_codes_still_populates_empty_list(
 
     monkeypatch.setattr("app.repositories.AdmissionRepository", FakeRepo)
 
-    db = MagicMock()
+    db = _db_get_profile()
     user = SimpleNamespace(id=7, role="officer", unit_id=1)
 
     result = await svc.get_profile(db, 99, user)

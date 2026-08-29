@@ -1,7 +1,8 @@
 # tests/services/test_insights_service.py
 # -*- coding: utf-8 -*-
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy import case, func, select  # Import cho test engagement score
@@ -107,112 +108,149 @@ mock_timeline = [
 
 @pytest.fixture
 def mock_db_session():
-    """Creates a mock AsyncSession, mocks refresh for get_lead_insights."""
+    """AsyncSession giả; chỉ ``refresh`` được ``get_lead_insights`` dùng tới.
+
+    Bản trước còn giả lập ``session.execute`` để nuôi phần tính engagement.
+    Đường đó đã biến mất: ``_calculate_engagement_score`` nay đọc qua
+    ``InsightsRepository.get_engagement_score_data`` (refactor
+    "add InsightsRepository and KpiRepository"), nên session không còn được
+    truy vấn trực tiếp. Giữ lại mock cũ chỉ tạo ảo giác về một lời gọi không
+    tồn tại.
+    """
     session = AsyncMock(spec=AsyncSession)
     session.refresh = AsyncMock()
-    session.execute = AsyncMock()
+    return session
 
-    # Mock for engagement score calculation
-    mock_agg_result = MagicMock()
-    # Manual calculation based on configs for expected base score
+
+def _du_lieu_engagement():
+    """Bản ghi tổng hợp đúng hình dạng ``InsightsRepository`` trả về.
+
+    ``_calculate_engagement_score`` đọc năm thuộc tính: ``total_count``,
+    ``total_status_score``, ``total_method_score``, ``total_duration_score``,
+    ``last_consultation_date``.
+
+    ⚠️ Là ``total_status_score``, KHÔNG phải ``total_outcome_score``. Cột
+    ``outcome`` đã bị gỡ khỏi ``Consultation`` (dữ liệu mẫu trong tệp này cũng
+    đã chú thích "Removed invalid field") và điểm nay tính theo
+    ``consultation_status``. Mock cấp sai tên khiến thuộc tính trở thành một
+    ``MagicMock`` mới, ``score`` cộng dồn thành ``MagicMock``, và lỗi chỉ nổ ở
+    tận ``min(score, max_score)`` dưới dạng ``TypeError: '<' not supported``.
+    """
     cfg = settings.LEAD_SCORING_ENGAGEMENT_POINTS
-    expected_outcome_score = (
+    diem_trang_thai = (
         cfg["outcome"]["successful"]
         + cfg["outcome"]["follow-up"]
         + cfg["outcome"]["failed"]
     )
-    expected_method_score = (
+    diem_phuong_thuc = (
         cfg["method"]["meeting"] + cfg["method"]["call"] + cfg["method"]["email"]
     )
-    expected_duration_score = (35 // 10 * cfg["duration_bonus_per_10_min"]) + (
+    diem_thoi_luong = (35 // 10 * cfg["duration_bonus_per_10_min"]) + (
         12 // 10 * cfg["duration_bonus_per_10_min"]
     )
-
-    mock_agg_result.one_or_none.return_value = MagicMock(
+    return SimpleNamespace(
         total_count=len(mock_consultations_data),
-        total_outcome_score=expected_outcome_score,
-        total_method_score=expected_method_score,
-        total_duration_score=expected_duration_score,
-        last_consultation_date=mock_consultations_data[0][
-            "consultation_date"
-        ],  # Most recent
+        total_status_score=diem_trang_thai,
+        total_method_score=diem_phuong_thuc,
+        total_duration_score=diem_thoi_luong,
+        last_consultation_date=mock_consultations_data[0]["consultation_date"],
     )
-    session.execute.return_value = mock_agg_result
-    return session
 
 
 @pytest.mark.asyncio
 async def test_calculate_engagement_score(mock_db_session):
     """Test _calculate_engagement_score logic including inactivity penalty."""
-    score = await insights_service._calculate_engagement_score(
-        mock_db_session, mock_lead.id
-    )
+    du_lieu = _du_lieu_engagement()
+    with patch.object(
+        insights_service.InsightsRepository,
+        "get_engagement_score_data",
+        new=AsyncMock(return_value=du_lieu),
+    ) as doc_du_lieu:
+        score = await insights_service._calculate_engagement_score(
+            mock_db_session, mock_lead.id
+        )
+    doc_du_lieu.assert_awaited_once_with(mock_lead.id)
 
     # Calculate expected base score (without penalty) based on mock aggregation
     cfg = settings.LEAD_SCORING_ENGAGEMENT_POINTS
     expected_base = (
-        len(mock_consultations_data) * cfg["consultation_count_multiplier"]
-        + (
-            cfg["outcome"]["successful"]
-            + cfg["outcome"]["follow-up"]
-            + cfg["outcome"]["failed"]
-        )
-        + (cfg["method"]["meeting"] + cfg["method"]["call"] + cfg["method"]["email"])
-        + (
-            (35 // 10 * cfg["duration_bonus_per_10_min"])
-            + (12 // 10 * cfg["duration_bonus_per_10_min"])
-        )
+        du_lieu.total_count * cfg["consultation_count_multiplier"]
+        + du_lieu.total_status_score
+        + du_lieu.total_method_score
+        + du_lieu.total_duration_score
     )
+    # Lần tư vấn gần nhất cách 2 ngày; hình phạt chỉ áp khi > 3 ngày.
     expected_penalty = 0
 
     expected_score = int(
         max(0, min(expected_base - expected_penalty, cfg["max_score"]))
     )
 
-    mock_db_session.execute.assert_awaited_once()  # Check DB query was made
     assert score == expected_score
 
 
 def test_calculate_fit_score():
-    """Test _calculate_fit_score logic (synchronous)."""
+    """``fit = min(lead_score + officer_rating × 4, 100)``.
+
+    Bản trước cộng bốn khoản từ ``LEAD_SCORING_FIT_POINTS`` (source / gpa /
+    education_level / location). Lượt "Lead Insights Upgrade with Officer
+    Rating" đã chuyển phần chấm điểm ấy sang ``lead_score`` — một giá trị được
+    tính sẵn và lưu trên Lead — rồi cộng thêm thưởng theo đánh giá của officer.
+    Docstring của hàm khai đúng công thức này kèm ví dụ.
+
+    Các khoá cấu hình cũ vẫn tồn tại vì nơi TÍNH ``lead_score`` còn dùng chúng;
+    sự tồn tại của khoá không chứng minh hàm này còn đọc chúng — và đó là lý do
+    ca cũ đỏ bằng ``assert 16 == 40`` chứ không phải ``KeyError``.
+    """
     score = insights_service._calculate_fit_score(mock_lead)
-    cfg = settings.LEAD_SCORING_FIT_POINTS
 
-    # Source: 'website' -> 5
-    # GPA: 7.5 -> Threshold 7.0 (10 points)
-    # Education: 'Tốt nghiệp THPT' -> 15
-    # Location: 'Hà Nội' -> 10
-    expected_base = (
-        cfg["source"]["website"]
-        + cfg["gpa_thresholds"][7.0]
-        + cfg["education_level"]["Tốt nghiệp THPT"]
-        + cfg["location"]["Hà Nội"]
+    diem_nen = mock_lead.lead_score or 0
+    thuong = int(mock_lead.officer_rating) * 4
+    assert score == min(diem_nen + thuong, 100)
+
+    # Trần 100 được docstring khai tường minh: lead_score=90, rating=3 -> 100.
+    lead_sat_tran = models.Lead(
+        id=2, full_name="Cap", email="c@e.com", phone="1", unit_id=1,
+        lead_score=90, officer_rating=3,
     )
-    expected_score = int(min(expected_base, cfg["max_score"]))
+    assert insights_service._calculate_fit_score(lead_sat_tran) == 100
 
-    assert score == expected_score
+    # Không có officer_rating thì chỉ còn lead_score.
+    lead_khong_rating = models.Lead(
+        id=3, full_name="NoRating", email="n@e.com", phone="1", unit_id=1,
+        lead_score=60, officer_rating=None,
+    )
+    assert insights_service._calculate_fit_score(lead_khong_rating) == 60
 
 
-def test_calculate_urgency_score():
-    """Test _calculate_urgency_score logic based on timeline."""
-    score = insights_service._calculate_urgency_score(mock_lead, mock_timeline)
-    cfg = settings.LEAD_SCORING_URGENCY_POINTS
+def test_get_urgency_score_doc_gia_tri_da_tinh_san():
+    """``urgency`` nay ĐỌC ``lead.cached_urgency_score``, không tự tính.
 
-    # Base Score: S2 (order 2) -> 2 * 15 = 30
-    expected_base = mock_lead.pipeline_stage.order * cfg["stage_order_multiplier"]
+    Hàm cũ ``_calculate_urgency_score(lead, timeline)`` đã bị thay bằng
+    ``_get_urgency_score(lead)``. Công thức (task quá hạn, hoạt động trong 24h,
+    thứ tự giai đoạn, số ngày im lặng) chuyển sang ``lead_cache_service`` để
+    điểm hiển thị cho officer luôn khớp giá trị lưu trên Lead — docstring của
+    hàm nêu rõ mục đích ấy.
 
-    # We assume the timeline transition check is correct based on dates
-    # (S2 @ Day 20 -> S1 @ Day 2) is a slow transition (18 days), resulting in a penalty of -10.
+    Vì thế ca này KHÔNG dựng lại timeline: dựng timeline để suy ra một con số
+    mà hàm không còn đọc là kiểm một phép tính đã chuyển đi nơi khác.
+    """
+    lead_co_diem = models.Lead(
+        id=4, full_name="Cached", email="ca@e.com", phone="1", unit_id=1,
+        cached_urgency_score=42,
+    )
+    assert insights_service._get_urgency_score(lead_co_diem) == 42
 
-    # This requires running the actual calculation loop or mocking the internal logic.
-    # For now, assert the base score + known factors.
+    # Chưa có giá trị cache thì trả 0, không nổ.
+    lead_chua_cache = models.Lead(
+        id=5, full_name="NoCache", email="nc@e.com", phone="1", unit_id=1,
+        cached_urgency_score=None,
+    )
+    assert insights_service._get_urgency_score(lead_chua_cache) == 0
 
-    # Assuming slow transition penalty is applied (18 days > 14 days)
-    # Penalty: 10
-    expected_score = expected_base - 10
-
-    # Simplification for Unit Test:
-    assert score == expected_score
+    # Tên cũ phải KHÔNG còn tồn tại — nếu nó quay lại, hai nguồn tính urgency
+    # sẽ cùng sống và trôi khỏi nhau.
+    assert not hasattr(insights_service, "_calculate_urgency_score")
 
 
 @pytest.mark.asyncio
@@ -225,8 +263,11 @@ async def test_get_lead_insights_overall_score_calculation(mock_db_session, mock
         return_value=80,
     )
     mocker.patch("app.services.insights_service._calculate_fit_score", return_value=60)
+    # Hàm urgency đã đổi tên: `_calculate_urgency_score` -> `_get_urgency_score`.
+    # Patch tên cũ chỉ tạo ra một thuộc tính mới trên module rồi bị mocker gỡ
+    # lúc teardown — sản phẩm không hề gọi tới nó.
     mocker.patch(
-        "app.services.insights_service._calculate_urgency_score", return_value=50
+        "app.services.insights_service._get_urgency_score", return_value=50
     )
 
     # Note: mock_lead has officer_rating=4

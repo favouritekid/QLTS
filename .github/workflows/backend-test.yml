@@ -522,10 +522,22 @@ jobs:
           # Chọn Tier 3 vì nó là lát ngắn nhất, nên vi phạm độ-nhìn-thấy đỏ sớm
           # thay vì đợi hết Tier 2. Bản thân TỆP TEST của cổng nằm ở Tier 5 —
           # cố ý khác shard, xem phần canh chéo trong test_ci_test_visibility.py.
+            # test_resilience.py + test_profile_api.py: hai tep truoc nay NGOAI MOI TIER
+            # — nightly do 5 ca lien tuc ma required check van xanh, dung hinh mau
+            # `ci-allowlist-tep-khong-duoc-gac`. Chi ghi vao tier SAU KHI ca hai xanh
+            # TRON (khong waiver, khong skip): test_resilience.py 3/3,
+            # test_profile_api.py 9/9.
+            #
+            # `test_resilience.py` dung chu de lat nay: no canh duong fallback khi Redis
+            # chet (cache miss -> DB) va fail-open cua blacklist token — cung mat
+            # 'reliability' ma lat nay dang gac. `test_profile_api.py` vao day de CAN
+            # TAI: Tier 3 la lat NHE NHAT, con Tier 2 — noi hop chu de RBAC hon — dang
+            # la duong toi han cua ca workflow.
           - tier: Tier 3 — Notification reliability
             coverage_script: true
             visibility_guard: true
             tests: >-
+              tests/api/test_admin_users.py
               tests/unit/test_notification_parity.py
               tests/services/test_notification_dispatcher.py
               tests/integration/test_notification_core_v2.py
@@ -536,6 +548,8 @@ jobs:
               tests/unit/test_outbox_skeleton.py
               tests/unit/test_check_notification_event_coverage_deferred.py
               tests/services/test_payment_service.py::TestPaymentVerifiedNotificationBridge
+              tests/services/test_resilience.py
+              tests/api/test_profile_api.py
 
           # ---------------------------------------------------------------
           # Tier 4: Admission + lead workflow contract
@@ -553,9 +567,23 @@ jobs:
           # ⚠️ Chú thích PHẢI nằm ngoài scalar `tests: >-`. Bên trong, YAML coi
           # `#` là nội dung, `>-` gấp mọi dòng thành MỘT dòng, rồi bash cắt từ
           # `#` tới hết — đo được 17 đối số thay vì 25 ở một lần trước.
+            # test_pipeline_api.py + test_bugfix_contract.py: hai tep hop dong cau hinh
+            # pipeline, truoc nay ngoai moi tier (nightly do 4 ca ma PR gate van xanh).
+            # Vao Tier 4 vi pipeline stage/status la XUONG SONG cua workflow lead ma lat
+            # nay gac: doi hinh dang tra ve cua /api/pipeline/all la doi thang hop dong
+            # ma cac ca lead o day dua vao. Chi ghi sau khi ca hai xanh tron:
+            # test_pipeline_api.py 3/3, test_bugfix_contract.py 4/4.
+          # test_admin_pipeline.py + test_pipeline.py cung vao Tier 4: chung canh
+          # duong CRUD stage/status ma test_pipeline_api.py o tren chi doc. Ba tep
+          # cung mot mat hop dong nen de chung lat, khoi phai suy xem tep nao gac
+          # gi. Ca hai xanh tron truoc khi ghi: 19/19 va 30/30.
           - tier: Tier 4 — Admission + lead workflow contract
             tests: >-
               tests/unit/test_admission_path_activation.py
+              tests/integration/test_admission_document_staging.py
+              tests/integration/test_admission_path_unique_criteria.py
+              tests/integration/test_bidirectional_sync.py
+              tests/unit/test_phase_e4_pr4_compliance.py
               tests/unit/test_admission_path_action_flags.py
               tests/unit/test_admission_path_admin_only_lifecycle.py
               tests/unit/test_admission_path_schema_bonus_rule_override.py
@@ -585,17 +613,39 @@ jobs:
               tests/repositories/test_admission_report_integration.py
               tests/api/test_admission_report_api.py
               tests/integration/test_sts20_consult_giveup.py
+              tests/api/test_pipeline_api.py
+              tests/api/test_bugfix_contract.py
+              tests/api/test_admin_pipeline.py
+              tests/services/test_pipeline.py
 
           # ---------------------------------------------------------------
           # Tier 5: Phase 2 engine prereqs
           # ---------------------------------------------------------------
+          # Ba tep nua cung ho phep kiem CAU TRUC vao Tier 5:
+          #   test_entrypoint_ordering.py      — thu tu lenh trong docker-entrypoint.sh
+          #   test_immediate_fixes.py          — moi chuyen trang thai phai dispatch
+          #   test_wave4_15b_...race_check.py  — hop dong race-safe check theo nam
+          # Deu doc tep nguon / chu ky ham, khong dung DB, ca lat chay vai giay.
+          # Truoc nay ngoai moi tier nen 4 ca do nightly ma PR gate van xanh.
+          # Ghi sau khi xanh tron 19/19.
+          # test_phase1_16_archived_admission_profile.py vao Tier 5: cung ho voi
+          # test_nginx_template_packaging / test_ci_test_visibility /
+          # test_nightly_shard_inventory — deu la phep kiem CAU TRUC doc tep nguon,
+          # chay vai giay, khong dung DB. Truoc nay ngoai moi tier nen 3 ca do trong
+          # nightly ma PR gate van xanh. Ghi sau khi xanh tron 17/17.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
               tests/unit/test_ci_test_visibility.py
-              tests/utils/test_file_helpers.py::test_khong_ro_ri_stdlib
+              tests/unit/test_import_moet_schools.py
+              tests/services/test_insights.py
+              tests/utils/test_file_helpers.py
               tests/utils/test_file_helpers_guard.py
               tests/unit/test_nightly_shard_inventory.py
+              tests/unit/test_phase1_16_archived_admission_profile.py
+              tests/unit/test_entrypoint_ordering.py
+              tests/unit/test_immediate_fixes.py
+              tests/unit/test_wave4_15b_hotfix_multiyear_race_check.py
               tests/unit/test_deploy_startup_gates.py
               tests/unit/test_smoke_harness_guards.py
               tests/unit/test_smoke_cli.py

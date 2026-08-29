@@ -514,7 +514,15 @@ async def test_create_consultation_status_success(mock_invalidate, mock_db_sessi
     assert isinstance(added_arg, ConsultationStatus)
     assert added_arg.id == status_data["id"]
     mock_db_session.flush.assert_awaited_once()
-    mock_db_session.refresh.assert_awaited_once_with(added_arg)
+    # HAI lượt refresh, mỗi lượt một việc — và không lượt nào thay được lượt kia:
+    #   1) refresh cột sau flush (lấy giá trị server sinh)
+    #   2) nạp quan hệ `stage` trước khi object ra tầng HTTP
+    # `db.refresh(obj)` KHÔNG nạp quan hệ chưa load, còn `db.refresh(obj, ["stage"])`
+    # chỉ đụng đúng `stage` chứ không làm mới cột. Thiếu lượt (2), FastAPI serialise
+    # `schemas.ConsultationStatus.stage` sẽ ném MissingGreenlet -> 500.
+    assert mock_db_session.refresh.await_count == 2
+    assert mock_db_session.refresh.await_args_list[0].args == (added_arg,)
+    assert mock_db_session.refresh.await_args_list[1].args == (added_arg, ["stage"])
     assert result == added_arg
 
     # Execute post-commit callback and verify cache invalidation
@@ -959,7 +967,9 @@ async def test_create_consultation_status_universal_with_legacy_warning(
 
     # Mock refresh to return created status
     created_status = ConsultationStatus(**status_in.model_dump(mode='python'))
-    mock_db_session.refresh.side_effect = lambda obj: setattr(
+    # `*_` bắt lượt refresh thứ hai — `db.refresh(obj, ["stage"])` — vốn truyền
+    # thêm danh sách thuộc tính. Lambda một tham số sẽ ném TypeError ở lượt ấy.
+    mock_db_session.refresh.side_effect = lambda obj, *_: setattr(
         obj, "id", created_status.id
     )
 

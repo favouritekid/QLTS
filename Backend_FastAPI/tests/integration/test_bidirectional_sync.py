@@ -13,6 +13,7 @@ import pytest
 import pytest_asyncio
 from datetime import datetime
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -176,13 +177,34 @@ class TestDetectChangedPersonalFields:
         changed = detect_changed_personal_fields(old, new)
         assert set(changed) == {"full_name", "phone", "email"}
 
-    def test_detect_ignores_none_values(self):
-        """None values in new dict should be ignored."""
+    def test_detect_coi_none_la_gia_tri_that_khong_bo_qua(self):
+        """Xoá trắng một trường LÀ một thay đổi, và phải được báo cáo.
+
+        Ca cũ đòi "None trong dict mới thì bỏ qua". Tiền đề ấy mâu thuẫn với
+        đường ghi: ``sync_profile_from_lead`` chạy thẳng
+        ``setattr(profile, field, lead_value)`` mà KHÔNG lọc None. Nếu ``detect``
+        bỏ qua None, một lần xoá email trên Lead sẽ không bao giờ lan sang hồ sơ
+        draft, và hồ sơ giữ lại một email đã bị xoá — đúng loại dữ liệu thiu mà
+        cơ chế đồng bộ sinh ra để tránh.
+
+        (Hồ sơ ở trạng thái không sửa được vẫn được bảo vệ, nhưng bằng bộ lọc
+        ``EDITABLE_PROFILE_STATUSES`` ở tầng trên, không phải bằng việc giấu
+        thay đổi ở đây.)
+        """
         old = {"full_name": "A", "phone": "123", "email": "a@b.com"}
         new = {"full_name": None, "phone": "456", "email": None}
 
         changed = detect_changed_personal_fields(old, new)
-        assert changed == ["phone"]
+        # So theo TẬP: `SYNCABLE_FIELDS` sinh từ `frozenset` nên thứ tự tuỳ ý —
+        # khẳng định bằng list là buộc kết quả vào thứ tự lặp của set.
+        assert set(changed) == {"full_name", "phone", "email"}
+
+    def test_detect_none_o_ca_hai_ben_khong_phai_thay_doi(self):
+        """None -> None không phải thay đổi; chỉ chuyển TỪ/SANG None mới là."""
+        old = {"full_name": "A", "phone": "123", "email": None}
+        new = {"full_name": "A", "phone": "123", "email": None}
+
+        assert detect_changed_personal_fields(old, new) == []
 
 
 # ==============================================================================
@@ -472,8 +494,20 @@ class TestSyncEdgeCases:
         db.add(profile)
         await db.flush()
 
-        # Explicitly set lead to None to simulate detached relationship
-        profile.lead = None
+        # Mô phỏng "quan hệ chưa được nạp": `profile.lead` đọc ra None trong khi
+        # `profile.lead_id` VẪN nguyên — đúng trạng thái mà nhánh dự phòng của
+        # `sync_lead_from_profile` phục vụ (`if not lead: SELECT ... WHERE
+        # id == profile.lead_id`).
+        #
+        # ⚠️ KHÔNG dùng `profile.lead = None`. Gán vào quan hệ không "detach" mà
+        # GỠ LIÊN KẾT: SQLAlchemy đồng bộ FK theo, nên lúc flush nó phát
+        # `UPDATE admission_profile SET lead_id = NULL` và đâm thẳng vào ràng
+        # buộc NOT NULL — ca đỏ ở `NotNullViolationError`, một lỗi không liên
+        # quan gì tới thứ ca này định kiểm.
+        #
+        # `set_committed_value` đặt giá trị như thể vừa nạp từ CSDL: thuộc tính
+        # không vào lịch sử thay đổi, không có UPDATE nào được sinh ra.
+        set_committed_value(profile, "lead", None)
 
         # Sync should still work (loads lead internally via query)
         synced = await sync_lead_from_profile(

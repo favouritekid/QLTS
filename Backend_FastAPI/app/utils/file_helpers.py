@@ -72,7 +72,16 @@ async def save_avatar(content: bytes, filename: str, old_avatar_url: str = None)
         )
 
     # 2. Kiểm tra kích thước content (router đã validate nhưng double-check)
-    if len(content) == 0:
+    #
+    # ``not content`` chứ KHÔNG phải ``len(content) == 0``: trước lượt refactor
+    # "Service Layer Purity", ``content`` được dựng ngay trong hàm bằng
+    # ``b''.join(chunks)`` nên không bao giờ là None và ``len()`` luôn an toàn.
+    # Sau refactor nó là THAM SỐ đến từ bên ngoài, và ``len(None)`` ném
+    # ``TypeError`` không ai bắt — hàm trả 500 cho một đầu vào hỏng, trong khi
+    # mọi đầu vào hỏng khác (thiếu tên, sai đuôi, quá lớn, sai MIME) đều được
+    # trả 400 sạch. ``not content`` phủ cả ``None`` lẫn ``b""`` và không đổi
+    # hành vi cho bytes hợp lệ.
+    if not content:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file uploaded."
         )
