@@ -49,7 +49,8 @@ async def seed_basic_pipeline_data(setup_test_database):
     async with AsyncSessionLocal() as session:
         async with session.begin():
             unit1 = models.OrganizationUnit(**unit_data)
-            major1 = models.Major(**major_data)
+            # `Major` đã bị gỡ sau migration 3 tầng; `MajorProgram` là Level 1.
+            major1 = models.MajorProgram(**major_data)
             stage_a = models.PipelineStage(**stage_data)
             status_a1 = models.ConsultationStatus(**status_data_fixed)
             session.add_all([unit1, major1, stage_a, status_a1])
@@ -70,7 +71,10 @@ async def seed_basic_pipeline_data(setup_test_database):
 @pytest.mark.asyncio
 # <<< XÓA DÒNG @patch CHO db.rollback >>>
 # @patch('app.services.organization_service.db.rollback', new_callable=AsyncMock)
-@patch("app.services.organization_service.create_major", new_callable=AsyncMock)
+@patch(
+    "app.services.organization_service.create_major_program",
+    new_callable=AsyncMock,
+)
 async def test_resilience_db_commit_failure_rolls_back(
     # <<< XÓA THAM SỐ mock_db_rollback >>>
     # mock_db_rollback: AsyncMock,
@@ -89,6 +93,10 @@ async def test_resilience_db_commit_failure_rolls_back(
     major_payload = {
         "name": "Fail Major",
         "code": "FM1",
+        # `degree_level` là trường BẮT BUỘC của `MajorProgramCreate`; thiếu nó
+        # thì request dừng ở 422 và không bao giờ chạm service — ca này sẽ xanh
+        # vì lý do sai, không phải vì rollback hoạt động.
+        "degree_level": "Cao đẳng",
         "unit_id": seed_basic_pipeline_data["unit_id"],
     }
 
@@ -100,7 +108,7 @@ async def test_resilience_db_commit_failure_rolls_back(
     # Action và Assert Exception
     with pytest.raises(SQLAlchemyError) as exc_info:
         await client.post(
-            AdminURLs.MAJORS, json=major_payload, headers=admin_token_headers
+            AdminURLs.PROGRAMS, json=major_payload, headers=admin_token_headers
         )
 
     assert exc_info.value == db_error_simulation
@@ -111,7 +119,9 @@ async def test_resilience_db_commit_failure_rolls_back(
     # 1. Assert DB State (Rollback)
     async with AsyncSessionLocal() as session:
         db_major = await session.scalar(
-            select(models.Major).where(models.Major.code == major_payload["code"])
+            select(models.MajorProgram).where(
+                models.MajorProgram.code == major_payload["code"]
+            )
         )
         assert (
             db_major is None

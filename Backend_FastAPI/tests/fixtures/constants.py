@@ -55,7 +55,11 @@ class AdminURLs:
         lambda unit_id: f"{AdminURLs.ORGANIZATION_UNITS}/{unit_id}"
     )  # Tham chiếu qua class
 
+    # ⚠️ `/majors` KHÔNG còn được đăng ký: migration 3 tầng đổi endpoint
+    # thành `/programs` (router trả `schemas.MajorProgram`). Giữ hằng số cũ
+    # để không phá `MAJOR_DETAIL` bên dưới, nhưng đường ĐANG SỐNG là PROGRAMS.
     MAJORS = f"{BASE}/majors"
+    PROGRAMS = f"{BASE}/programs"
     MAJOR_DETAIL = (
         lambda major_id: f"{AdminURLs.MAJORS}/{major_id}"
     )  # Tham chiếu qua class

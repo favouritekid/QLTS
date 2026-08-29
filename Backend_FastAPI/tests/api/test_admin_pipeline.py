@@ -60,7 +60,9 @@ async def seed_pipeline_data_with_lead(setup_test_database):
         async with session.begin():
             # Org/Major
             unit1 = models.OrganizationUnit(**unit_data)  # Dùng ** để unpack dict
-            major1 = models.Major(**major_data)
+            # Model `Major` đã bị GỠ sau migration 3 tầng (k6l7m8n9o0p1 drop bảng);
+            # `MajorProgram` là Level 1 thay thế. Cùng khuôn với `tests/conftest.py`.
+            major1 = models.MajorProgram(**major_data)
             session.add_all([unit1, major1])
 
             # Pipeline Stages
@@ -83,7 +85,8 @@ async def seed_pipeline_data_with_lead(setup_test_database):
                 phone=lead_data["phone"],
                 source=lead_data["source"],
                 unit_id=unit_data["id"],
-                major_id=major_data["id"],
+                # `Lead.major_id` KHÔNG còn tồn tại sau migration 3 tầng — quan hệ
+                # ngành/lead nay đi qua offering chứ không phải một FK phẳng.
                 status=status_a1_data["id"],  # FK
                 consultation_status_id=status_a1_data["id"],  # FK
                 pipeline_stage_id=stage_a_data["id"],  # FK
