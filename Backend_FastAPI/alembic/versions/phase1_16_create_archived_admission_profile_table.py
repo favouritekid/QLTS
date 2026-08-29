@@ -23,6 +23,22 @@ Schema parity rules
 * Mirror ALL columns of ``admission_profile`` exactly (types + nullability +
   server_default), so cron INSERT can ``SELECT * FROM admission_profile``
   without coercion.
+
+  .. warning:: ĐÍNH CHÍNH 29-08-2026 (``arch20260829``) — dòng ngay trên SAI.
+
+     Đo read-only trên PostgreSQL dev: 62/64 cột chung nằm ở
+     ``ordinal_position`` KHÁC nhau (cột thứ 3 của nguồn là ``citizen_id``,
+     của archive là ``offering_admission_config_id``); ``archived_at`` ở vị
+     trí 65 nên cột thêm sau này rơi xuống 66..77; và ``server_default`` của
+     ``id``/``created_at``/``updated_at`` khác bản nguồn một cách CỐ Ý (hàng
+     archive giữ id + dấu thời gian GỐC, không sinh lại).
+
+     Nên ``SELECT *`` theo VỊ TRÍ không an toàn — nó nhét ``citizen_id`` vào
+     ``offering_admission_config_id``. Mọi đường ghi archive BẮT BUỘC liệt kê
+     CỘT ĐÍCH TƯỜNG MINH. Parity thật sự có (và được test khoá) là parity
+     THEO TÊN + kiểu + nullability. Xem docstring của ``arch20260829``.
+
+     Chỉ sửa docstring — KHÔNG đụng DDL của migration đã áp ở production.
 * Add ONE archive-metadata column ``archived_at TIMESTAMPTZ NOT NULL DEFAULT
   now()`` — set automatically when cron INSERTs the row.
 * NO foreign keys (archive must outlive source row deletes — cron does not

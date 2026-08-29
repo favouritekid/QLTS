@@ -33,14 +33,49 @@ Trạng thái đo được lúc viết migration này (29-08-2026):
   vì bảng đang RỖNG là lúc rẻ nhất; để tới khi cron chạy rồi mới vá thì phải
   đi lấp dữ liệu đã rơi.
 
+GIAO ƯỚC GHI ARCHIVE — SỬA LẠI CHO ĐÚNG THỰC ĐO
+--------------------------------------------------
+
+Docstring của `phase1_16` hứa parity đủ mạnh để cron ghi bằng
+``INSERT INTO archive SELECT * FROM admission_profile``. Lời hứa đó SAI, và
+sai từ trước bản vá này — đo read-only trên PostgreSQL dev (29-08-2026):
+
+* THỨ TỰ CỘT KHÁC NHAU: 62 trên 64 cột chung nằm ở ordinal_position khác.
+  Ngay cột thứ 3 đã lệch — nguồn là ``citizen_id``, archive là
+  ``offering_admission_config_id``.
+* ``archived_at`` nằm ở vị trí 65, nên 12 cột migration này thêm vào rơi
+  xuống 66..77, tức SAU cột metadata chứ không phải trước.
+* ``server_default`` của ``id`` / ``created_at`` / ``updated_at`` KHÁC bản
+  nguồn, và khác một cách CỐ Ý: hàng archive phải giữ nguyên dấu thời gian
+  và id của hàng gốc, không được sinh lại bằng ``now()`` / ``nextval()``.
+
+Vì vậy ``SELECT *`` theo VỊ TRÍ là không an toàn và sẽ không bao giờ an
+toàn: nó sẽ nhét ``citizen_id`` vào ``offering_admission_config_id``. Bất kỳ
+đường ghi archive nào — cron ``archive_expired_rounds_task`` hay sửa tay —
+BẮT BUỘC liệt kê CỘT ĐÍCH TƯỜNG MINH::
+
+    INSERT INTO _archived_admission_profile (id, lead_id, ...)
+    SELECT id, lead_id, ... FROM admission_profile WHERE ...
+
+Cái parity thật sự tồn tại, và là cái migration này khôi phục, là parity
+THEO TÊN: mọi cột của ``admission_profile`` đều có mặt trong bảng archive
+với CÙNG kiểu, cùng độ dài và cùng nullability. Đã đo: sau bản vá này không
+còn cột chung nào lệch ba thuộc tính ấy. Đó chính là điều kiện đủ cho câu
+INSERT liệt kê cột ở trên.
+
+``tests/unit/test_phase1_16_archived_admission_profile.py`` khoá cả hai
+chiều: parity theo tên/kiểu/nullable, và CẤM mọi ``SELECT *`` ghi vào bảng
+archive.
+
 Ràng buộc giữ nguyên theo phase1_16
 -----------------------------------
 
 * KHÔNG khoá ngoại — archive phải sống lâu hơn hàng nguồn.
 * KHÔNG unique, KHÔNG check — hàng archive ghi theo giao ước cũ không được
   phép bị từ chối khi giao ước hiện tại siết lại.
-* Giữ đúng kiểu / nullability / server_default của bảng nguồn, để câu
-  ``SELECT *`` khớp cột-đối-cột không cần ép kiểu.
+* Giữ đúng kiểu / nullability của bảng nguồn (KHÔNG phải server_default —
+  xem phần giao ước ở trên), để câu INSERT liệt kê cột tường minh khớp
+  cột-đối-cột mà không cần ép kiểu.
 
 Ba cột NOT NULL (`vocational_qualification`, `priority_object_codes`,
 `priority_object_evidence`, `priority_resolution_snapshot`,
@@ -89,11 +124,33 @@ _TEN_COT = (
 )
 
 
+class BangArchiveThieu(RuntimeError):
+    """Bảng archive không tồn tại lúc migration này chạy.
+
+    KHÔNG được nuốt: `phase1_16` (tổ tiên trong chuỗi) luôn tạo bảng, nên bảng
+    thiếu nghĩa là schema đích đã bị can thiệp ngoài luồng. Nếu chỉ `return`
+    thì Alembic vẫn ghi `arch20260829` vào `alembic_version` và báo thành công
+    trong khi KHÔNG cột nào được thêm — đúng lớp lỗi "lệnh trả 0 mà việc không
+    xảy ra". Lần chạy sau sẽ bỏ qua revision này vĩnh viễn vì nó đã được đánh
+    dấu là đã áp.
+    """
+
+
 def _cot_hien_co() -> set:
+    """Bộ cột hiện có của bảng archive. NÉM nếu bảng không tồn tại.
+
+    Phân biệt rõ HAI trạng thái, đừng gộp:
+      - bảng THIẾU        -> lỗi, dừng migration (hàm này ném)
+      - bảng CÓ, cột đã có -> bỏ qua đúng cột đó (người gọi kiểm từng cột)
+    """
     bind = op.get_bind()
     inspector = inspect(bind)
     if TABLE not in inspector.get_table_names():
-        return set()
+        raise BangArchiveThieu(
+            f"Bảng {TABLE!r} không tồn tại. Nó phải được tạo bởi `phase1_16`, "
+            "là tổ tiên của revision này. Không thêm cột nào, và KHÔNG đánh dấu "
+            "revision là đã áp — hãy kiểm lại lịch sử alembic của CSDL đích."
+        )
     return {c["name"] for c in inspector.get_columns(TABLE)}
 
 
@@ -102,12 +159,13 @@ def upgrade() -> None:
     # tồn tại, và cột có thể đã được thêm bởi một lần chạy trước — cả hai đều
     # không được làm migration đổ.
     hien_co = _cot_hien_co()
-    if not hien_co:
-        return
 
     if "cultural_education_level" not in hien_co:
         op.add_column(
-            TABLE, sa.Column("cultural_education_level", sa.String(length=30), nullable=True)
+            TABLE,
+            sa.Column(
+                "cultural_education_level", sa.String(length=30), nullable=True
+            ),
         )
     if "vocational_qualification" not in hien_co:
         op.add_column(
@@ -121,11 +179,17 @@ def upgrade() -> None:
         )
     if "permanent_commune_code" not in hien_co:
         op.add_column(
-            TABLE, sa.Column("permanent_commune_code", sa.String(length=20), nullable=True)
+            TABLE,
+            sa.Column(
+                "permanent_commune_code", sa.String(length=20), nullable=True
+            ),
         )
     if "area_resolution_basis" not in hien_co:
         op.add_column(
-            TABLE, sa.Column("area_resolution_basis", sa.String(length=40), nullable=True)
+            TABLE,
+            sa.Column(
+                "area_resolution_basis", sa.String(length=40), nullable=True
+            ),
         )
     if "priority_object_codes" not in hien_co:
         op.add_column(
@@ -160,17 +224,26 @@ def upgrade() -> None:
     if "document_debt" not in hien_co:
         op.add_column(
             TABLE,
-            sa.Column("document_debt", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+            sa.Column(
+                "document_debt",
+                postgresql.JSONB(astext_type=sa.Text()),
+                nullable=True,
+            ),
         )
     if "cached_completion" not in hien_co:
-        op.add_column(TABLE, sa.Column("cached_completion", sa.SmallInteger(), nullable=True))
+        op.add_column(
+            TABLE, sa.Column("cached_completion", sa.SmallInteger(), nullable=True)
+        )
     if "cached_readiness" not in hien_co:
         op.add_column(
             TABLE, sa.Column("cached_readiness", sa.String(length=20), nullable=True)
         )
     if "cached_derived_at" not in hien_co:
         op.add_column(
-            TABLE, sa.Column("cached_derived_at", sa.DateTime(timezone=True), nullable=True)
+            TABLE,
+            sa.Column(
+                "cached_derived_at", sa.DateTime(timezone=True), nullable=True
+            ),
         )
     if "major_change_requested" not in hien_co:
         op.add_column(
@@ -186,8 +259,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     hien_co = _cot_hien_co()
-    if not hien_co:
-        return
     for ten in reversed(_TEN_COT):
         if ten in hien_co:
             op.drop_column(TABLE, ten)

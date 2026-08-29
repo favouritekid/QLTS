@@ -92,12 +92,27 @@ def _cot_khai_o_moi_migration() -> set:
     docstring/comment nhưng khai cột của BẢNG KHÁC (outbox, round). Lọc theo
     tên tệp sẽ nuốt trọn 28 cột lạ và làm phép đếm vô nghĩa.
     """
-    cot = set()
+    return set(_dac_ta_cot_tu_migration())
+
+
+def _dac_ta_cot_tu_migration() -> dict:
+    """Như trên, nhưng trả {tên: (kiểu, nullable)} chứ không chỉ tên.
+
+    Dựng THẬT đối tượng ``sa.Column`` bằng cách eval biểu thức trong
+    namespace CỦA CHÍNH module migration — nhờ vậy tên như ``_conduct_grade``
+    (ENUM dùng lại của phase1_09a) giải được, và hai bên được so bằng cùng
+    một từ vựng SQLAlchemy thay vì so chuỗi văn bản.
+
+    Không eval được thì NÉM, không bỏ qua: một cột lặng lẽ rơi khỏi phép so
+    sẽ làm test xanh trong khi parity đã gãy.
+    """
+    dac_ta = {}
     for f in sorted(_VERSIONS_DIR.glob("*.py")):
         noi_dung = f.read_text(encoding="utf-8")
         if _TABLE not in noi_dung:
             continue
         cay = ast.parse(noi_dung)
+        nut = []
 
         # Hằng module trỏ đúng bảng này — migration dùng ``op.create_table(TABLE, …)``
         ten_hang = {
@@ -129,8 +144,23 @@ def _cot_khai_o_moi_migration() -> set:
                     and con.args
                     and isinstance(con.args[0], ast.Constant)
                 ):
-                    cot.add(con.args[0].value)
-    return cot
+                    nut.append(con)
+        if not nut:
+            continue
+        spec = importlib.util.spec_from_file_location(f.stem, f)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for con in nut:
+            bieu_thuc = ast.unparse(con)
+            try:
+                col = eval(bieu_thuc, dict(vars(module)))
+            except Exception as e:
+                raise AssertionError(
+                    f"khong dung lai duoc cot tu {f.name}: {bieu_thuc!r} ({e})"
+                ) from e
+            dac_ta[col.name] = (str(col.type), col.nullable)
+    return dac_ta
 
 
 # ---------------------------------------------------------------------------
@@ -338,3 +368,185 @@ def test_phase1_16_downgrade_drops_index_before_table(src) -> None:
 def test_phase1_16_defines_upgrade_and_downgrade(phase1_16) -> None:
     assert callable(getattr(phase1_16, "upgrade", None))
     assert callable(getattr(phase1_16, "downgrade", None))
+
+
+# ---------------------------------------------------------------------------
+# 9. Parity KIỂU + NULLABLE (không chỉ tên cột)
+# ---------------------------------------------------------------------------
+
+
+def test_archive_khop_kieu_va_nullable_voi_admission_profile() -> None:
+    """Parity theo TÊN thôi là chưa đủ cho câu INSERT liệt kê cột tường minh.
+
+    Ca `..._mirrors_every_admission_profile_column` chỉ so TẬP TÊN. Một cột đúng
+    tên nhưng sai kiểu (``String(20)`` cho chỗ cần ``String(40)``) hay sai
+    nullability vẫn lọt, rồi vỡ đúng lúc cron archive chạy — nơi khó phát hiện
+    nhất.
+
+    Cố ý KHÔNG so ``server_default`` và KHÔNG so THỨ TỰ CỘT:
+      - ``id``/``created_at``/``updated_at`` khác default một cách CỐ Ý (hàng
+        archive giữ id + dấu thời gian GỐC, không sinh lại bằng nextval/now).
+      - 62/64 cột chung nằm ở ordinal_position khác nhau; giao ước ghi archive
+        vì thế là INSERT liệt kê cột tường minh, không phải SELECT * theo vị
+        trí. Xem `test_khong_duong_ghi_nao_dung_select_sao_vao_bang_archive`.
+    """
+    from app.models.admission import AdmissionProfile
+
+    dac_ta = _dac_ta_cot_tu_migration()
+    lech = []
+    for mc in AdmissionProfile.__table__.columns:
+        if mc.name not in dac_ta:
+            lech.append(f"{mc.name}: KHÔNG có trong bảng archive")
+            continue
+        kieu, nullable = dac_ta[mc.name]
+        if kieu != str(mc.type):
+            lech.append(f"{mc.name}: kiểu model={mc.type} archive={kieu}")
+        if nullable != mc.nullable:
+            lech.append(
+                f"{mc.name}: nullable model={mc.nullable} archive={nullable}"
+            )
+    assert not lech, (
+        "archive lech kieu/nullability so voi AdmissionProfile:\n"
+        + "\n".join(lech)
+    )
+
+
+# ---------------------------------------------------------------------------
+# 10. Cấm SELECT * ghi vào bảng archive
+# ---------------------------------------------------------------------------
+
+
+def test_khong_duong_ghi_nao_dung_select_sao_vao_bang_archive() -> None:
+    """``INSERT INTO _archived_admission_profile … SELECT *`` là KHÔNG an toàn.
+
+    Đo read-only trên PostgreSQL dev 29-08-2026: 62 trên 64 cột chung nằm ở
+    ``ordinal_position`` khác nhau — ngay cột thứ 3 của nguồn là ``citizen_id``
+    còn của archive là ``offering_admission_config_id``. Một ``SELECT *`` theo
+    vị trí sẽ nhét số CCCD vào cột khoá cấu hình tuyển sinh, kiểu vẫn hợp lệ nên
+    Postgres KHÔNG báo lỗi. Ngoài ra ``archived_at`` ở vị trí 65 nên mọi cột
+    thêm về sau rơi xuống 66..77, tức SAU cột metadata.
+
+    Docstring gốc của phase1_16 hứa ngược lại (đã đính chính tại chỗ). Ca này
+    tồn tại để lời hứa cũ không sống lại thành mã: cron
+    ``archive_expired_rounds_task`` chưa được nối, nên đây là hàng rào dựng
+    TRƯỚC khi có đường ghi, chứ không phải sau khi mất dữ liệu.
+    """
+    goc = _VERSIONS_DIR.parents[1]
+    mau = re.compile(
+        r"insert\s+into\s+[\"'`]?" + re.escape(_TABLE) + r"[\"'`]?[^;]*?\bselect\s+\*",
+        re.I | re.S,
+    )
+
+    def _chuoi_trong_ma(cay: ast.AST) -> list:
+        """Mọi chuỗi hằng NGOẠI TRỪ docstring.
+
+        Quét nguyên văn bản là sai: docstring và comment nói VỀ ``SELECT *``
+        (chính docstring của ``arch20260829`` giải thích vì sao nó không an
+        toàn) sẽ bị tính là vi phạm. Đây đúng là lớp lỗi "biểu thức khớp trúng
+        dòng thông báo thay vì dòng lệnh". Comment không nằm trong AST nên tự
+        rụng; docstring thì phải loại tay.
+        """
+        doc = set()
+        for nut in ast.walk(cay):
+            if isinstance(
+                nut,
+                (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
+            ):
+                than = getattr(nut, "body", None)
+                if (
+                    than
+                    and isinstance(than[0], ast.Expr)
+                    and isinstance(than[0].value, ast.Constant)
+                    and isinstance(than[0].value.value, str)
+                ):
+                    doc.add(id(than[0].value))
+        return [
+            n.value
+            for n in ast.walk(cay)
+            if isinstance(n, ast.Constant)
+            and isinstance(n.value, str)
+            and id(n) not in doc
+        ]
+
+    vi_pham = []
+    for thu_muc in ("app", "alembic"):
+        for f in sorted((goc / thu_muc).rglob("*.py")):
+            noi_dung = f.read_text(encoding="utf-8")
+            if _TABLE not in noi_dung:
+                continue
+            for chuoi in _chuoi_trong_ma(ast.parse(noi_dung)):
+                if mau.search(chuoi):
+                    vi_pham.append(str(f.relative_to(goc)))
+                    break
+    assert not vi_pham, (
+        "đường ghi archive dùng SELECT * theo vị trí (phải liệt kê cột đích "
+        f"tường minh): {vi_pham}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 11. arch20260829 — fail-closed khi bảng archive thiếu
+# ---------------------------------------------------------------------------
+
+
+class _InspectorGia:
+    def __init__(self, ten_bang, ten_cot=()):
+        self._bang = list(ten_bang)
+        self._cot = [{"name": n} for n in ten_cot]
+
+    def get_table_names(self):
+        return self._bang
+
+    def get_columns(self, _t):
+        return self._cot
+
+
+def test_arch20260829_nem_khi_bang_archive_thieu(monkeypatch) -> None:
+    """Bảng THIẾU phải làm migration ĐỔ, không được lặng lẽ ``return``.
+
+    Bản đầu trả về tập rỗng rồi return ngay. Alembic khi đó vẫn ghi
+    ``arch20260829`` vào ``alembic_version`` và báo thành công trong khi KHÔNG
+    cột nào được thêm — đúng lớp lỗi "lệnh trả 0 mà việc không xảy ra", và tệ
+    hơn là lần chạy sau sẽ BỎ QUA revision này vĩnh viễn vì nó đã được đánh dấu
+    là đã áp.
+
+    Probe upgrade/downgrade không canh được nhánh này: nó luôn dựng sẵn bảng vỏ.
+    """
+    mod = _load_migration_by_revision("arch20260829")
+    monkeypatch.setattr(mod.op, "get_bind", lambda: object())
+    monkeypatch.setattr(mod, "inspect", lambda _bind: _InspectorGia([]))
+
+    with pytest.raises(mod.BangArchiveThieu):
+        mod.upgrade()
+    with pytest.raises(mod.BangArchiveThieu):
+        mod.downgrade()
+
+
+def test_arch20260829_bo_qua_dung_cot_da_co(monkeypatch) -> None:
+    """Bảng CÓ + một số cột đã tồn tại -> chỉ thêm đúng phần còn thiếu.
+
+    Trạng thái này KHÁC hẳn "bảng thiếu" và phải được xử lý khác: nó là đường
+    chạy lại bình thường (migration bị ngắt giữa chừng, hoặc cột đã được thêm
+    tay), nên phải im lặng bỏ qua chứ không đổ.
+    """
+    mod = _load_migration_by_revision("arch20260829")
+    da_them = []
+    monkeypatch.setattr(mod.op, "get_bind", lambda: object())
+    monkeypatch.setattr(mod.op, "add_column", lambda _t, col: da_them.append(col.name))
+
+    # (a) đã có ĐỦ 12 cột -> không thêm gì
+    monkeypatch.setattr(
+        mod, "inspect", lambda _bind: _InspectorGia([mod.TABLE], ("id",) + mod._TEN_COT)
+    )
+    mod.upgrade()
+    assert da_them == [], f"đã có đủ cột mà vẫn thêm: {da_them}"
+
+    # (b) thiếu đúng hai cột -> thêm đúng hai cột ấy, không hơn không kém
+    thieu = ("document_debt", "cached_readiness")
+    con_lai = tuple(c for c in mod._TEN_COT if c not in thieu)
+    monkeypatch.setattr(
+        mod, "inspect", lambda _bind: _InspectorGia([mod.TABLE], ("id",) + con_lai)
+    )
+    da_them.clear()
+    mod.upgrade()
+    assert sorted(da_them) == sorted(thieu), f"thêm sai tập cột: {da_them}"
