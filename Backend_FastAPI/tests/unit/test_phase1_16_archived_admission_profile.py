@@ -419,12 +419,23 @@ def test_archive_khop_kieu_va_nullable_voi_admission_profile() -> None:
 def test_khong_duong_ghi_nao_dung_select_sao_vao_bang_archive() -> None:
     """``INSERT INTO _archived_admission_profile … SELECT *`` là KHÔNG an toàn.
 
-    Đo read-only trên PostgreSQL dev 29-08-2026: 62 trên 64 cột chung nằm ở
+    Đo trên PostgreSQL 29-08-2026: 62 trên 64 cột chung nằm ở
     ``ordinal_position`` khác nhau — ngay cột thứ 3 của nguồn là ``citizen_id``
-    còn của archive là ``offering_admission_config_id``. Một ``SELECT *`` theo
-    vị trí sẽ nhét số CCCD vào cột khoá cấu hình tuyển sinh, kiểu vẫn hợp lệ nên
-    Postgres KHÔNG báo lỗi. Ngoài ra ``archived_at`` ở vị trí 65 nên mọi cột
-    thêm về sau rơi xuống 66..77, tức SAU cột metadata.
+    còn của archive là ``offering_admission_config_id``. Ngoài ra ``archived_at``
+    ở vị trí 65 nên mọi cột thêm về sau rơi xuống 66..77, SAU cột metadata.
+
+    Hậu quả, phân loại 63 cặp lệch: 49 cặp kiểu KHÔNG tương thích, 12 cặp
+    tương thích, 2 cặp khớp tên. Nên hôm nay ``SELECT *`` làm archive job ĐỔ
+    chứ KHÔNG ghi sai im lặng — Postgres từ chối ngay cặp đầu::
+
+        ERROR: column "offering_admission_config_id" is of type integer
+               but expression is of type character varying
+
+    Cái bẫy nằm ở 12 cặp tương thích: ở đó Postgres ghi im lặng (đo bằng bản
+    thu nhỏ — hai cột ``varchar`` hoán vị cho ``INSERT 0 1``, không lỗi, giá
+    trị đổi chỗ). Nên lối "sửa" bằng ``CAST`` cho vừa bộ kiểu là bẫy: nó dập
+    tắt 49 cặp đang kêu và để nguyên 12 cặp hỏng. Ca này vì thế cấm hẳn dạng
+    ``SELECT *``, không phải chỉ cấm dạng gây lỗi kiểu.
 
     Docstring gốc của phase1_16 hứa ngược lại (đã đính chính tại chỗ). Ca này
     tồn tại để lời hứa cũ không sống lại thành mã: cron
@@ -432,13 +443,54 @@ def test_khong_duong_ghi_nao_dung_select_sao_vao_bang_archive() -> None:
     TRƯỚC khi có đường ghi, chứ không phải sau khi mất dữ liệu.
     """
     goc = _VERSIONS_DIR.parents[1]
+    # Ba dạng bypass mà bản đầu để lọt, nay đều bắt:
+    #   INSERT INTO public._archived_...     -> schema-qualified target
+    #   SELECT ap.*                          -> alias wildcard
+    #   f"INSERT INTO {TABLE} … SELECT *"    -> tên bảng nằm trong FormattedValue
+    #
+    # Tên bảng có thể bị che sau một biểu thức động, nên vị trí đích chấp nhận
+    # HOẶC tên bảng thật HOẶC dấu mốc \x00 (chỗ biểu thức đã được rút gọn).
+    # Phép lọc theo tệp ở dưới đã yêu cầu tệp có nhắc `_TABLE`, nên một
+    # `INSERT … SELECT *` với đích động NẰM TRONG tệp ấy là đủ đáng ngờ để
+    # chặn — thà bắt nhầm một chỗ phải viết lại còn hơn để lọt đường ghi sai.
+    MOC = chr(0)
+    dau_nhay = r"[\"'`]?"
+    schema = r"(?:" + dau_nhay + r"\w+" + dau_nhay + r"\s*\.\s*)?"
+    dich = r"(?:" + schema + dau_nhay + re.escape(_TABLE) + dau_nhay + r"|" + MOC + r")"
     mau = re.compile(
-        r"insert\s+into\s+[\"'`]?" + re.escape(_TABLE) + r"[\"'`]?[^;]*?\bselect\s+\*",
+        r"insert\s+into\s+"
+        + dich
+        + r"[^;]*?\bselect\s+(?:distinct\s+)?(?:" + dau_nhay + r"\w+" + dau_nhay
+        + r"\s*\.\s*)?\*",
         re.I | re.S,
     )
 
-    def _chuoi_trong_ma(cay: ast.AST) -> list:
-        """Mọi chuỗi hằng NGOẠI TRỪ docstring.
+    def _ket_xuat(nut: ast.AST) -> str:
+        """Rút một biểu thức chuỗi về văn bản SQL gần đúng.
+
+        Bản đầu chỉ đọc ``ast.Constant``, nên mọi thứ được ghép động đều lọt:
+        f-string bị AST chẻ thành nhiều mảnh, và ``"a" + b + "c"`` cũng vậy.
+        Ở đây nối lại theo cấu trúc, và thay mỗi mảnh KHÔNG phải hằng bằng dấu
+        mốc ``\x00`` — nhờ vậy đích động vẫn khớp được vị trí bảng.
+        """
+        if isinstance(nut, ast.Constant):
+            return nut.value if isinstance(nut.value, str) else MOC
+        if isinstance(nut, ast.JoinedStr):
+            return "".join(_ket_xuat(x) for x in nut.values)
+        if isinstance(nut, ast.FormattedValue):
+            return MOC
+        if isinstance(nut, ast.BinOp) and isinstance(nut.op, (ast.Add, ast.Mod)):
+            return _ket_xuat(nut.left) + _ket_xuat(nut.right)
+        if isinstance(nut, ast.Call) and isinstance(nut.func, ast.Attribute):
+            goc = _ket_xuat(nut.func.value)
+            if nut.func.attr == "format":
+                return goc
+            if nut.func.attr == "join":
+                return goc.join(_ket_xuat(a) for a in nut.args) or goc
+        return MOC
+
+    def _van_ban_trong_ma(cay: ast.AST) -> list:
+        """Mọi biểu thức chuỗi trong MÃ, đã kết xuất — NGOẠI TRỪ docstring.
 
         Quét nguyên văn bản là sai: docstring và comment nói VỀ ``SELECT *``
         (chính docstring của ``arch20260829`` giải thích vì sao nó không an
@@ -460,13 +512,15 @@ def test_khong_duong_ghi_nao_dung_select_sao_vao_bang_archive() -> None:
                     and isinstance(than[0].value.value, str)
                 ):
                     doc.add(id(than[0].value))
-        return [
-            n.value
-            for n in ast.walk(cay)
-            if isinstance(n, ast.Constant)
-            and isinstance(n.value, str)
-            and id(n) not in doc
-        ]
+        ra = []
+        for nut in ast.walk(cay):
+            if id(nut) in doc:
+                continue
+            if isinstance(nut, (ast.JoinedStr, ast.BinOp, ast.Call)) or (
+                isinstance(nut, ast.Constant) and isinstance(nut.value, str)
+            ):
+                ra.append(_ket_xuat(nut))
+        return ra
 
     vi_pham = []
     for thu_muc in ("app", "alembic"):
@@ -474,8 +528,8 @@ def test_khong_duong_ghi_nao_dung_select_sao_vao_bang_archive() -> None:
             noi_dung = f.read_text(encoding="utf-8")
             if _TABLE not in noi_dung:
                 continue
-            for chuoi in _chuoi_trong_ma(ast.parse(noi_dung)):
-                if mau.search(chuoi):
+            for van_ban in _van_ban_trong_ma(ast.parse(noi_dung)):
+                if mau.search(van_ban):
                     vi_pham.append(str(f.relative_to(goc)))
                     break
     assert not vi_pham, (

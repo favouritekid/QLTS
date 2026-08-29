@@ -33,10 +33,17 @@ Schema parity rules
      ``id``/``created_at``/``updated_at`` khác bản nguồn một cách CỐ Ý (hàng
      archive giữ id + dấu thời gian GỐC, không sinh lại).
 
-     Nên ``SELECT *`` theo VỊ TRÍ không an toàn — nó nhét ``citizen_id`` vào
-     ``offering_admission_config_id``. Mọi đường ghi archive BẮT BUỘC liệt kê
-     CỘT ĐÍCH TƯỜNG MINH. Parity thật sự có (và được test khoá) là parity
-     THEO TÊN + kiểu + nullability. Xem docstring của ``arch20260829``.
+     Nên ``SELECT *`` theo VỊ TRÍ không an toàn. Hậu quả đo được: trong 63
+     cặp cột lệch, 49 cặp có kiểu KHÔNG tương thích nên Postgres từ chối cả
+     câu lệnh (``column "offering_admission_config_id" is of type integer but
+     expression is of type character varying``) — archive job ĐỔ, chứ không
+     ghi sai im lặng. Nhưng 12 cặp còn lại TƯƠNG THÍCH kiểu và sẽ ghi im
+     lặng, nên lối "sửa" bằng ``CAST`` cho vừa bộ kiểu là bẫy: nó dập tắt 49
+     cặp đang kêu và để nguyên 12 cặp hỏng.
+
+     Mọi đường ghi archive BẮT BUỘC liệt kê CỘT ĐÍCH TƯỜNG MINH. Parity thật
+     sự có (và được test khoá) là parity THEO TÊN + kiểu + nullability. Xem
+     docstring của ``arch20260829``.
 
      Chỉ sửa docstring — KHÔNG đụng DDL của migration đã áp ở production.
 * Add ONE archive-metadata column ``archived_at TIMESTAMPTZ NOT NULL DEFAULT

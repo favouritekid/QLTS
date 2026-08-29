@@ -49,10 +49,30 @@ sai từ trước bản vá này — đo read-only trên PostgreSQL dev (29-08-2
   nguồn, và khác một cách CỐ Ý: hàng archive phải giữ nguyên dấu thời gian
   và id của hàng gốc, không được sinh lại bằng ``now()`` / ``nextval()``.
 
-Vì vậy ``SELECT *`` theo VỊ TRÍ là không an toàn và sẽ không bao giờ an
-toàn: nó sẽ nhét ``citizen_id`` vào ``offering_admission_config_id``. Bất kỳ
+HẬU QUẢ THẬT — đo, không suy. Phân loại 63 cặp cột theo vị trí:
+
+  49 cặp  kiểu KHÔNG tương thích  -> Postgres TỪ CHỐI cả câu lệnh
+  12 cặp  kiểu tương thích        -> ghi được, và ghi SAI
+   2 cặp  khớp tên (id, lead_id)
+
+Nên hôm nay ``SELECT *`` KHÔNG gây hỏng im lặng — nó làm archive job ĐỔ.
+Cặp lệch đầu tiên đã đủ::
+
+    ERROR: column "offering_admission_config_id" is of type integer
+           but expression is of type character varying
+
+(Trước khi migration này áp, lỗi còn đến sớm hơn ở tầng số lượng: 65 cột
+đích so với 77 biểu thức.)
+
+Nhưng đừng đọc điều đó thành "vô hại". 12 cặp còn lại tương thích kiểu, và
+ở những cặp ấy Postgres ghi IM LẶNG — đã dựng bản thu nhỏ và đo: hai cột
+``varchar`` hoán vị cho ``INSERT 0 1``, không lỗi, giá trị đổi chỗ. Vì thế
+lối "sửa" nguy hiểm nhất là thêm ``CAST`` cho vừa bộ kiểu: nó dập tắt đúng
+49 cặp đang kêu và để nguyên 12 cặp ghi sai.
+
+Cách sửa đúng là liệt kê CỘT ĐÍCH TƯỜNG MINH, không phải thêm cast. Bất kỳ
 đường ghi archive nào — cron ``archive_expired_rounds_task`` hay sửa tay —
-BẮT BUỘC liệt kê CỘT ĐÍCH TƯỜNG MINH::
+BẮT BUỘC viết::
 
     INSERT INTO _archived_admission_profile (id, lead_id, ...)
     SELECT id, lead_id, ... FROM admission_profile WHERE ...
