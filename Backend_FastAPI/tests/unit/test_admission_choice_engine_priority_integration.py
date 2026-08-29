@@ -44,14 +44,38 @@ def test_evaluate_cascade_imports_priority_service() -> None:
     cay = ast.parse(_ENGINE_SRC.read_text(encoding="utf-8"))
     MODULE = "app.services.priority_service"
 
-    o_module = {
-        a.name
-        for n in cay.body
-        if isinstance(n, ast.ImportFrom) and n.module == MODULE
-        for a in n.names
-    }
+    def _nut_thuc_thi(nut):
+        """Nút CHẠY khi phạm vi này chạy — dừng ở thân function/lambda.
+
+        Dùng chung cho cả hai phạm vi, và ranh giới "dừng ở đâu" là phần đắt
+        nhất của ca này:
+
+        * ĐI VÀO `if` / `try` / `with` / `for` / `class`: thân chúng chạy cùng
+          phạm vi cha. Một eager import nấp trong ``if True:`` ở tầng module
+          VẪN chạy lúc nạp module — bản trước chỉ đọc con trực tiếp của
+          `Module.body` nên đột biến ấy lọt. Thân `class` cũng chạy lúc nạp,
+          nên KHÔNG được loại.
+        * KHÔNG đi vào `def` / `async def` / `lambda`: thân chúng chỉ chạy khi
+          được gọi, nên ở tầng module chúng vô hại, còn trong
+          `evaluate_cascade` chúng không bảo đảm gì cho chính hàm ấy.
+        """
+        for con in ast.iter_child_nodes(nut):
+            if isinstance(con, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue
+            yield con
+            yield from _nut_thuc_thi(con)
+
+    def _import_tu(nut) -> set:
+        ra = set()
+        for c in _nut_thuc_thi(nut):
+            if isinstance(c, ast.ImportFrom) and c.module == MODULE:
+                ra |= {a.name for a in c.names}
+        return ra
+
+    o_module = _import_tu(cay)
     assert "calculate_priority_bonus" not in o_module, (
-        "import phải LAZY — đưa lên module level là tái lập vòng phụ thuộc"
+        "import phải LAZY — chạy lúc nạp module là tái lập vòng phụ thuộc, "
+        "kể cả khi nấp trong if/try/with/class ở tầng module"
     )
 
     # Phải khoanh vào ĐÚNG `evaluate_cascade`, không gom import từ mọi hàm:
@@ -66,25 +90,7 @@ def test_evaluate_cascade_imports_priority_service() -> None:
     ]
     assert len(ham) == 1, f"kỳ vọng đúng 1 evaluate_cascade; có {len(ham)}"
 
-    def _nut_thuc_thi(nut):
-        """Nút chạy TRONG thân hàm này — không chui vào hàm/lambda/class lồng.
-
-        Import nằm trong một closure lồng bên trong chỉ chạy khi closure ấy
-        được gọi, nên không bảo đảm `evaluate_cascade` có đường lấy bonus.
-        """
-        for con in ast.iter_child_nodes(nut):
-            if isinstance(
-                con,
-                (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef),
-            ):
-                continue
-            yield con
-            yield from _nut_thuc_thi(con)
-
-    o_ham = set()
-    for c in _nut_thuc_thi(ham[0]):
-        if isinstance(c, ast.ImportFrom) and c.module == MODULE:
-            o_ham |= {a.name for a in c.names}
+    o_ham = _import_tu(ham[0])
     assert "calculate_priority_bonus" in o_ham, (
         "evaluate_cascade phải tự lazy-import calculate_priority_bonus; "
         f"thấy trong hàm: {sorted(o_ham)}"
