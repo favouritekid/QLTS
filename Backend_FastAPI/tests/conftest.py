@@ -530,6 +530,40 @@ async def officer_token_headers(client: AsyncClient, officer_user_in_db: dict) -
 
 
 @pytest_asyncio.fixture(scope="function")
+async def officer_user_doc_lap_in_db(setup_test_database):
+    """Officer KHONG keo theo ``seed_lead_dependencies``.
+
+    ``officer_user_in_db`` phu thuoc ``seed_lead_dependencies``, ma fixture
+    do seed HAN mot pipeline thu hai: PipelineStage "STAGE_A" (chu HOA,
+    khac ``TestPipelineData.STAGE_A["id"]`` = "stage_a"), "STAGE_LOST", va
+    ba ConsultationStatus - trong do "status_a1" trung khoa chinh voi ban
+    cua ``TestPipelineData.STATUS_A1`` nhung mang ``stage_id`` KHAC.
+
+    Hau qua neu dung nham: (a) UniqueViolationError tren
+    ``organization_unit_pkey``/``major_program_pkey`` khi test da tu seed
+    UNIT_1/MAJOR_1; (b) cac khang dinh dem kieu ``len(stages) == 1`` vo
+    nghia vi DB co san them stage/status khong phai cua test.
+
+    Officer o day khong can ``unit_id``: GET /api/pipeline/all chi qua
+    CasbinAuth, khong co IDOR theo don vi.
+    """
+    log.info("--- [FIXTURE] Creating standalone officer user & role ---")
+    user_info = await _create_user_and_role(TestUsers.OFFICER, "role:officer")
+    log.info(f"--- [FIXTURE] Standalone officer created (ID: {user_info['id']}) ---")
+    return user_info
+
+
+@pytest_asyncio.fixture(scope="function")
+async def officer_doc_lap_token_headers(
+    client: AsyncClient, officer_user_doc_lap_in_db: dict
+) -> dict:
+    log.info("--- [FIXTURE] Getting standalone officer token ---")
+    headers = await _get_token_headers(client, officer_user_doc_lap_in_db)
+    log.info("--- [FIXTURE] Standalone officer token obtained ---")
+    return headers
+
+
+@pytest_asyncio.fixture(scope="function")
 async def regular_user_token_headers(
     client: AsyncClient, regular_user_in_db: dict
 ) -> dict:

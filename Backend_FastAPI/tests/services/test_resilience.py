@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
+from tests.fixtures.users import get_auth_headers
 from app.config import settings
 
 # Import các thành phần app
@@ -182,13 +183,20 @@ async def test_resilience_db_commit_failure_rolls_back(
 async def test_resilience_redis_cache_fallback(
     mock_safe_get: AsyncMock,
     client: AsyncClient,
-    regular_user_token_headers: dict,
+    officer_doc_lap_token_headers: dict,
     seed_basic_pipeline_data: dict,
 ):
     log.info("--- Running: test_resilience_redis_cache_fallback ---")
     mock_safe_get.side_effect = ConnectionError("Simulated Redis Connection Error")
     pipeline_url = PipelineURLs.ALL
-    response = await client.get(pipeline_url, headers=regular_user_token_headers)
+    # Dung token OFFICER, khong dung token vai tro `user`:
+    # GET /api/pipeline/all nam trong OFFICER_TEMPLATE, con `role:user` la
+    # BASIC_USER_TEMPLATE (chi profile/notification/session/security). Cay ke
+    # thua la `g, role:officer, role:user` - officer ke thua user, khong nguoc
+    # lai. tests/security/test_permissions_matrix.py:245 da khoa san bo ba
+    # ("regular", "GET", PipelineURLs.ALL, 403), nen dung token vai tro user o
+    # day la mau thuan voi chinh hop dong RBAC dang duoc canh.
+    response = await client.get(pipeline_url, headers=officer_doc_lap_token_headers)
     assert response.status_code == 200
     data = response.json()
     assert "stages" in data
@@ -198,8 +206,22 @@ async def test_resilience_redis_cache_fallback(
     assert len(data["statuses"]) == 1
     assert data["statuses"][0]["id"] == seed_basic_pipeline_data["status_a1_id"]
     log.info("API correctly returned 200 OK by falling back to DB.")
-    assert mock_safe_get.await_count == 2
-    log.info("Cache (safe_redis_get) was called for both keys.")
+    # BON luot, khong phai hai. Moi ham `get_all_*` doc cache HAI lan cho
+    # cung mot khoa: mot lan truoc khi giu `redis_distributed_lock`, mot lan
+    # nua NGAY SAU khi giu duoc (double-check chong cache stampede - worker
+    # khac co the da nap lai cache trong luc minh cho lock). Hai ham x hai
+    # luot = 4. Khang dinh "== 2" la di tich cua ban truoc khi co lock.
+    #
+    # Doi chieu ca BO KHOA chu khong chi con so: chi dem so luot thi mot ban
+    # va lam doc nham cung mot khoa bon lan van xanh, trong khi khoa con lai
+    # khong he duoc thu.
+    assert mock_safe_get.await_count == 4
+    cac_khoa_da_thu = {c.args[0] for c in mock_safe_get.await_args_list}
+    assert cac_khoa_da_thu == {
+        pipeline_service.PIPELINE_STAGES_CACHE_KEY,
+        pipeline_service.PIPELINE_STATUSES_CACHE_KEY,
+    }, f"Bo khoa da thu: {sorted(cac_khoa_da_thu)}"
+    log.info("Cache (safe_redis_get) was called for both keys, twice each.")
 
 
 @pytest.mark.asyncio
@@ -211,15 +233,19 @@ async def test_resilience_redis_auth_fail_open(
     test_redis_client,
 ):
     log.info("--- Running: test_resilience_redis_auth_fail_open ---")
-    login_data = {
-        "username": regular_user_in_db["username"],
-        "password": regular_user_in_db["password"],
-    }
     log.info("--- Testing fail-open on ACTIVE token ---")
-    login_res_2 = await client.post(AuthURLs.LOGIN, data=login_data)
-    assert login_res_2.status_code == 200
-    active_token = login_res_2.json()["access_token"]
-    active_headers = {"Authorization": f"Bearer {active_token}"}
+    # Dung HELPER CHUNG thay vi tu doc `login_res.json()["access_token"]`:
+    # 46cc9633 chuyen sang httpOnly cookie, login van tra 200 nhung KHONG con
+    # dat access_token trong THAN phan hoi -> ban cu chet bang KeyError. Helper
+    # `get_auth_headers` la duong ma moi fixture token khac dang di (doc tu
+    # `res.cookies`), nen giu mot nguon chuan duy nhat cho viec lay token.
+    #
+    # Van dang nhap TRONG than test (khong dung fixture token) de lan login
+    # nam trong cua so `@patch` giong ban goc, gia nguyen phep dem
+    # `mock_safe_exists.await_count` o cuoi ca.
+    active_headers = await get_auth_headers(
+        client, regular_user_in_db, AuthURLs.LOGIN
+    )
     log.info("Logged in with new active token.")
     mock_safe_exists.side_effect = ConnectionError(
         "Simulated Redis Connection Error during blacklist check"

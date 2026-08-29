@@ -98,7 +98,15 @@ async def test_get_profile_unauthenticated(client: AsyncClient):
     assert response.status_code == 401, f"Unauth Resp: {response.text}"  # Unauthorized
     error_data = response.json()
     assert "detail" in error_data
-    assert error_data["detail"] == "Not authenticated"  # Message mặc định
+    # KHONG con la "Not authenticated" cua FastAPI: 46cc9633 (cookie auth)
+    # dat OAuth2PasswordBearer(auto_error=False) de request khong-header van
+    # di tiep xuong deps va doc httpOnly cookie. Vi the FastAPI khong tu phat
+    # 401 nua; deps.get_current_user nem `credentials_exception` DUNG MOT the
+    # cho ca hai ca "thieu token" va "token hong" - co y, de client khong
+    # phan biet duoc hai ca (chong do dam). Khoa ca error_code de doi sang mot
+    # ngoai le auth khac cung mau chu cung phai do.
+    assert error_data["detail"] == "Could not validate credentials"
+    assert error_data["error_code"] == "INVALID_TOKEN"
     log.info("Unauthenticated access correctly denied (401) with default message.")
     log.info("--- Finished: test_get_profile_unauthenticated ---")
 
@@ -311,8 +319,19 @@ async def test_update_profile_with_avatar_success(
     # 5. Assert Mock Call (Side Effect)
     # Service 'update_profile' gọi 'save_avatar'
     mock_save_avatar.assert_awaited_once()
-    assert mock_save_avatar.await_args[0][0].filename == "profile.png"
-    assert mock_save_avatar.await_args[1].get("old_avatar_url") == old_avatar_url
+    # Chu ky MOI sau refactor "Service Layer Purity" (Issue #3): `save_avatar`
+    # nhan `content: bytes` va `filename: str` TACH ROI, khong con nhan
+    # `UploadFile`. `user_service` goi bang TOAN kwargs, nen `await_args[0]`
+    # (tuple positional) RONG va ban cu doc `[0][0].filename` chet bang
+    # IndexError - no dang mo ta mot chu ky khong con ton tai.
+    #
+    # Kiem luon `content`: doan bytes THAT phai toi duoc helper. Day dung la
+    # lop loi ma 67a2fb31 vua vá - `if avatar_content and avatar_filename`
+    # nuot tron tep rong `b""` va tra 2xx ma khong luu gi.
+    kwargs_da_goi = mock_save_avatar.await_args.kwargs
+    assert kwargs_da_goi["filename"] == "profile.png"
+    assert kwargs_da_goi["content"] == b"fake_image_bytes"
+    assert kwargs_da_goi.get("old_avatar_url") == old_avatar_url
     log.info("Mock save_avatar called correctly.")
 
     # 6. Assert DB State

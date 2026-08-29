@@ -105,6 +105,19 @@ async def get_all_pipeline_stages(db: AsyncSession) -> List[dict]:
                 "name": s.name,
                 "order": s.order,
                 "is_final_stage": s.is_final_stage,
+                # `color_code` la COT THAT tren bang `pipeline_stage`
+                # (nullable=False, default "#6B7280"). Truoc day projection
+                # nay bo sot no, nen `response_model=schemas.PipelineStage`
+                # bom DEFAULT cua schema vao va ca hai endpoint an ham nay -
+                # GET /api/pipeline/all va GET /api/pipeline/stages - luon tra
+                # "#6B7280" cho MOI stage, bat ke gia tri trong DB. Frontend
+                # doc `stage.color_code` (PipelineColumn, LeadsTable,
+                # BulkStageDialog) nen moi stage hien mau xam nhu nhau, va
+                # nhanh fallback `STAGE_COLORS[stage.id]` khong bao gio chay
+                # vi chuoi default van truthy. Projection cua
+                # `get_all_consultation_statuses` VAN LUON lay `color_code` -
+                # stage la nhanh duy nhat bi sot.
+                "color_code": s.color_code,
             }
             for s in stages_models
         ]

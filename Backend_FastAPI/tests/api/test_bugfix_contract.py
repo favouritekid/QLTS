@@ -95,7 +95,7 @@ async def test_reassign_quota_response_contract(
 @pytest.mark.asyncio
 async def test_pipeline_all_backward_compatible_no_filters(
     client: AsyncClient,
-    regular_user_token_headers: dict,
+    officer_doc_lap_token_headers: dict,
     seed_pipeline_data: dict,
     test_redis_client,
 ):
@@ -113,7 +113,14 @@ async def test_pipeline_all_backward_compatible_no_filters(
 
     response = await client.get(
         PipelineURLs.ALL,
-        headers=regular_user_token_headers,
+        # Token OFFICER: GET /api/pipeline/all nam trong OFFICER_TEMPLATE.
+        # `role:user` la BASIC_USER_TEMPLATE va cay ke thua la
+        # `g, role:officer, role:user` (officer ke thua user, khong nguoc lai),
+        # nen token vai tro user o day chi co the nhan 403 - dung nhu
+        # tests/security/test_permissions_matrix.py:245 dang khoa.
+        # Ban `..._doc_lap` de KHONG keo theo `seed_lead_dependencies`, thu se
+        # seed them mot pipeline thu hai va lam sai cac phep dem cua ca nay.
+        headers=officer_doc_lap_token_headers,
     )
     assert response.status_code == 200
     data = response.json()
