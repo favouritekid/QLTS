@@ -526,6 +526,7 @@ jobs:
             coverage_script: true
             visibility_guard: true
             tests: >-
+              tests/api/test_admin_users.py
               tests/unit/test_notification_parity.py
               tests/services/test_notification_dispatcher.py
               tests/integration/test_notification_core_v2.py
