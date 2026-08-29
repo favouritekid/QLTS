@@ -29,6 +29,7 @@ narrow hotfix surface in setup/mock complexity.
 from __future__ import annotations
 
 import inspect
+import re
 
 import pytest
 
@@ -66,24 +67,47 @@ def test_race_safe_check_calls_get_profile_by_lead_year_not_lead_id() -> None:
     )
 
 
-def test_race_safe_check_falls_back_to_current_intake_year_when_year_none() -> None:
-    """Mirrors the eligibility-check fallback at line 2497: when a
-    caller omits ``academic_year``, both checks resolve the same
-    year via ``SystemConfigService.get_value("current_intake_year",
-    2026)`` so the two gates agree on which year is being scoped."""
+def test_race_safe_check_khong_con_fallback_academic_year_la_bat_buoc() -> None:
+    """F30 (plan v4, 25-05-2026) GỠ HẲN fallback ``current_intake_year``.
+
+    Ca cũ (`..._falls_back_to_current_intake_year_when_year_none`) khẳng định
+    đúng thứ đã bị xoá CỐ Ý: ``SystemConfigService(db).get_value(
+    "current_intake_year", 2026)``. Giữ nó là đang đòi khôi phục một hành vi
+    mà bản hardening chủ động bỏ.
+
+    Hợp đồng MỚI, và cũng là bất biến đáng canh hơn: ``academic_year`` là tham
+    số BẮT BUỘC, nên hai cổng (race-safe check và eligibility check) không thể
+    tự suy ra hai năm khác nhau. Một fallback ngầm quay lại chính là đường để
+    chúng lệch năm mà không ai thấy.
+    """
+    import inspect as _inspect
+
     from app.services import admission_service
 
-    src = inspect.getsource(admission_service.create_profile)
+    tham_so = _inspect.signature(admission_service.create_profile).parameters
+    assert "academic_year" in tham_so, "create_profile phải nhận academic_year"
+    assert tham_so["academic_year"].default is _inspect.Parameter.empty, (
+        "academic_year phải là tham số BẮT BUỘC (không default) — có default là "
+        "mở lại đường suy ngầm ra năm, thứ F30 đã đóng"
+    )
+
+    src = _inspect.getsource(admission_service.create_profile)
     lock_idx = src.index("acquire_redis_lock")
     eligibility_idx = src.index("check_lead_level_admission_eligibility(")
     race_block = src[lock_idx:eligibility_idx]
 
-    # The fallback signature mirrors lead_service._populate_lead_detail_
-    # fields: SystemConfigService(db).get_value("current_intake_year",
-    # 2026) + int(...) coercion when the value comes back as a string.
-    assert "SystemConfigService" in race_block
-    assert '"current_intake_year"' in race_block
-    assert "2026" in race_block
+    # So trên MÃ, không trên nguyên văn: cụm "current_intake_year" vẫn còn
+    # trong CHÚ THÍCH giải thích việc gỡ. Khẳng định trên nguyên văn sẽ đỏ oan.
+    ma = "\n".join(
+        l for l in race_block.splitlines() if not l.strip().startswith("#")
+    )
+    assert "SystemConfigService" not in ma, (
+        "race-safe check không được suy năm qua SystemConfigService nữa"
+    )
+    assert "current_intake_year" not in ma, (
+        "race-safe check không được đọc config current_intake_year nữa"
+    )
+    assert "academic_year" in ma, "race-safe check phải scope theo academic_year"
 
 
 # ---------------------------------------------------------------------------
@@ -109,9 +133,17 @@ def test_race_safe_conflict_message_scoped_to_year(monkeypatch) -> None:
     raise_idx = race_block.index("ConflictError(")
     raise_block = race_block[raise_idx : raise_idx + 400]
     assert "academic year" in raise_block.lower()
-    assert "{race_check_year}" in raise_block or "{year}" in raise_block, (
+
+    # Khoá BẤT BIẾN "năm được nội suy", KHÔNG khoá TÊN BIẾN. Bản cũ tìm
+    # ``{race_check_year}``/``{year}``; F30 đổi tên sang ``academic_year`` nên
+    # ca đỏ trong khi thông điệp vẫn nêu đúng năm. Bắt mọi placeholder f-string
+    # có tên kết thúc bằng "year" — đổi tên biến lần nữa vẫn xanh, còn bỏ hẳn
+    # nội suy (quay về chuỗi tĩnh) thì đỏ.
+    placeholder = re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", raise_block)
+    assert any(t.endswith("year") for t in placeholder), (
         "ConflictError message must f-string the resolved year so prod "
-        "logs disambiguate same-year vs cross-year duplicate cases"
+        f"logs disambiguate same-year vs cross-year duplicate cases; "
+        f"placeholder thấy được: {placeholder}"
     )
 
 

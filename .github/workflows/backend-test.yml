@@ -621,6 +621,13 @@ jobs:
           # ---------------------------------------------------------------
           # Tier 5: Phase 2 engine prereqs
           # ---------------------------------------------------------------
+          # Ba tep nua cung ho phep kiem CAU TRUC vao Tier 5:
+          #   test_entrypoint_ordering.py      — thu tu lenh trong docker-entrypoint.sh
+          #   test_immediate_fixes.py          — moi chuyen trang thai phai dispatch
+          #   test_wave4_15b_...race_check.py  — hop dong race-safe check theo nam
+          # Deu doc tep nguon / chu ky ham, khong dung DB, ca lat chay vai giay.
+          # Truoc nay ngoai moi tier nen 4 ca do nightly ma PR gate van xanh.
+          # Ghi sau khi xanh tron 19/19.
           # test_phase1_16_archived_admission_profile.py vao Tier 5: cung ho voi
           # test_nginx_template_packaging / test_ci_test_visibility /
           # test_nightly_shard_inventory — deu la phep kiem CAU TRUC doc tep nguon,
@@ -636,6 +643,9 @@ jobs:
               tests/utils/test_file_helpers_guard.py
               tests/unit/test_nightly_shard_inventory.py
               tests/unit/test_phase1_16_archived_admission_profile.py
+              tests/unit/test_entrypoint_ordering.py
+              tests/unit/test_immediate_fixes.py
+              tests/unit/test_wave4_15b_hotfix_multiyear_race_check.py
               tests/unit/test_deploy_startup_gates.py
               tests/unit/test_smoke_harness_guards.py
               tests/unit/test_smoke_cli.py
