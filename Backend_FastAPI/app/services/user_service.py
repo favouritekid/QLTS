@@ -61,6 +61,27 @@ log = structlog.get_logger(__name__)
 # REAL-TIME DATA SYNC HELPER
 # =============================================================================
 
+def _co_avatar_duoc_gui(
+    avatar_content: Optional[bytes], avatar_filename: Optional[str]
+) -> bool:
+    """Có avatar được GỬI LÊN hay không — quyết định gọi validator hay bỏ qua.
+
+    ⚠️ KHÔNG dùng ``if avatar_content and avatar_filename``. Một tệp RỖNG có tên
+    hợp lệ cho ``avatar_content = b""``, thứ falsy: cả khối bị bỏ qua, không
+    validator nào chạy, không lỗi nào được nêu, và endpoint trả THÀNH CÔNG trong
+    khi không lưu gì. Người dùng thấy 2xx rồi không thấy avatar — hỏng im lặng.
+
+    Router chỉ đọc khi ``avatar and avatar.filename`` và để cả hai là ``None``
+    nếu không có tệp, nên ``is not None`` phân biệt sạch "không gửi gì" với "gửi
+    một tệp rỗng". Mọi thứ ĐÃ GỬI đều đi qua ``save_avatar``, nơi tên rỗng, nội
+    dung rỗng, sai đuôi, quá cỡ và sai MIME đều có 400/413 riêng.
+
+    Ba đường gọi dùng CHUNG hàm này: cùng một vị từ chép ba bản là cách chắc
+    chắn để sửa một chỗ rồi bỏ sót hai chỗ kia.
+    """
+    return avatar_content is not None or avatar_filename is not None
+
+
 async def emit_data_updated(
     resource_type: str,
     operation: str,
@@ -475,7 +496,7 @@ async def create_user_by_admin(
             )
 
             # ✅ REFACTORED: Use avatar_content + avatar_filename (Issue #3)
-            if avatar_content and avatar_filename:
+            if _co_avatar_duoc_gui(avatar_content, avatar_filename):
                 log.debug(
                     "Processing avatar for new admin-created user",
                     filename=avatar_filename,
@@ -730,7 +751,7 @@ async def update_user(
                 setattr(db_user, field, value)
 
             # ✅ REFACTORED: Use avatar_content + avatar_filename (Issue #3)
-            if avatar_content and avatar_filename:
+            if _co_avatar_duoc_gui(avatar_content, avatar_filename):
                 log.debug(
                     "Processing avatar update for user",
                     user_id=db_user.id,
@@ -881,7 +902,7 @@ async def update_profile(
                 setattr(db_user, field, value)
 
         # ✅ REFACTORED: Use avatar_content + avatar_filename (Issue #3)
-        if avatar_content and avatar_filename:
+        if _co_avatar_duoc_gui(avatar_content, avatar_filename):
             log.debug(
                 "Processing profile avatar update",
                 user_id=user_id_for_logging,

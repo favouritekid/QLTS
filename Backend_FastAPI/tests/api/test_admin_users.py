@@ -835,6 +835,65 @@ def create_mock_avatar(
 
 
 @pytest.mark.asyncio
+async def test_admin_create_user_avatar_rong_tra_400_khong_phai_thanh_cong_im_lang(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    setup_test_database,
+):
+    """Upload avatar RỖNG phải trả 400, không được lặng lẽ tạo user không avatar.
+
+    Router chỉ kiểm cận TRÊN của kích thước (413). Một tệp rỗng có tên hợp lệ đi
+    qua được và cho ``avatar_content = b""``.
+
+    ``user_service`` từng chặn bằng ``if avatar_content and avatar_filename:`` —
+    ``b""`` là falsy nên CẢ KHỐI bị bỏ qua: không validator nào chạy, không lỗi
+    nào được nêu, endpoint trả 201 và người dùng thấy thành công trong khi không
+    có avatar nào được lưu. Hỏng im lặng, và không ca test nào thấy vì đường đó
+    không bao giờ tới ``save_avatar``.
+
+    KHÔNG mock ``save_avatar`` ở ca này: chỗ hỏng nằm ở việc hàm ấy có ĐƯỢC GỌI
+    hay không, nên mock nó đi là mock mất chính thứ đang kiểm.
+    """
+    log.info("--- Running: test_admin_create_user_avatar_rong ---")
+
+    new_user_data = {
+        "username": "avatar_user_empty",
+        "email": "avatar_empty@example.com",
+        "password": TestUsers.DEFAULT["password"],
+        "full_name": "Avatar Empty User",
+        "role": "user",
+        "status": "active",
+    }
+    # Tên hợp lệ, nội dung RỖNG — router đọc được và truyền b"" xuống service.
+    tep_rong = create_mock_avatar(filename="empty.png", content=b"")
+
+    response = await client.post(
+        AdminURLs.USERS,
+        data=new_user_data,
+        files={"avatar": tep_rong},
+        headers=admin_token_headers,
+    )
+
+    assert response.status_code == 400, (
+        "Avatar rỗng phải bị từ chối 400, nhận %s: %s"
+        % (response.status_code, response.text)
+    )
+    assert response.json().get("detail") == "Empty file uploaded."
+
+    # Và user KHÔNG được tạo — hỏng im lặng nghĩa là user vẫn ra đời.
+    danh_sach = await client.get(
+        AdminURLs.USERS,
+        params={"search": new_user_data["username"]},
+        headers=admin_token_headers,
+    )
+    assert danh_sach.status_code == 200
+    ten = [u.get("username") for u in danh_sach.json().get("items", [])]
+    assert new_user_data["username"] not in ten, (
+        "User vẫn được tạo dù avatar bị từ chối: %s" % ten
+    )
+
+
+@pytest.mark.asyncio
 @patch("app.services.user_service.file_helpers.save_avatar", new_callable=AsyncMock)
 async def test_admin_create_user_with_avatar_success(
     mock_save_avatar: AsyncMock,
