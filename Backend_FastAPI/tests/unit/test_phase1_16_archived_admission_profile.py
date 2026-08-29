@@ -78,6 +78,133 @@ def src() -> str:
 _TABLE = "_archived_admission_profile"
 
 
+# ---------------------------------------------------------------------------
+# Bộ dò "SELECT * ghi vào bảng archive" — tầng MODULE, không lồng trong test
+# ---------------------------------------------------------------------------
+#
+# Để ở tầng module vì hai lý do, và lý do thứ hai mới là lý do thật:
+#   1. hai ca kiểm dùng chung;
+#   2. nằm trong thân test thì KHÔNG parameterize được, nên các dạng bypass
+#      chỉ kiểm được bằng đột biến thủ công — thứ không ai chạy lại sau này.
+#      Bộ đối chứng bypass phải nằm TRONG kho, chạy mỗi lượt CI.
+
+_MOC = chr(0)  # chỗ một biểu thức động đã bị rút gọn
+
+_NHAY = "[" + chr(92) + chr(34) + chr(39) + chr(96) + "]?"
+_DINH_DANH = "(?:" + _NHAY + r"\w+" + _NHAY + "|" + _MOC + ")"
+_SCHEMA = "(?:" + _DINH_DANH + r"\s*\.\s*)?"
+_ALIAS = "(?:" + _DINH_DANH + r"\s*\.\s*)?"
+
+_MAU_SELECT_SAO = re.compile(
+    r"insert\s+into\s+"
+    + "(?:" + _SCHEMA + _NHAY + re.escape(_TABLE) + _NHAY + "|" + _MOC + ")"
+    + r"[^;]*?" + chr(92) + "bselect" + r"\s+(?:distinct\s+)?"
+    + _ALIAS + r"\*",
+    re.I | re.S,
+)
+
+# %s / %d / %r / %(ten)s  và  {} / {0} / {ten} / {ten!r:>10}
+_MAU_PHAN_TRAM = re.compile(r"%(?:\([^)]*\))?[-+ #0-9.*]*[hlL]?[a-zA-Z%]")
+_MAU_NGOAC_NHON = re.compile(r"\{[^{}]*\}")
+
+
+def _phan_tu(nut):
+    """Các phần tử của một list/tuple hằng; None nếu không phải."""
+    if isinstance(nut, (ast.List, ast.Tuple, ast.Set)):
+        return list(nut.elts)
+    return None
+
+
+def _ket_xuat_chuoi(nut) -> str:
+    """Rút một biểu thức chuỗi về văn bản SQL gần đúng.
+
+    Mọi mảnh KHÔNG phải hằng trở thành ``_MOC``; mẫu regex chấp nhận ``_MOC``
+    ở vị trí schema, tên bảng và alias, nên đích/alias động vẫn bị bắt.
+
+    Từng nhánh dưới đây tương ứng một đường lọt đã được chứng minh bằng ca
+    kiểm parameterized ``test_bo_do_select_sao_bat_moi_dang``, chứ không phải
+    suy đoán:
+
+      ``a + b``            -> nối hai vế
+      f-string             -> nối các mảnh, mảnh động thành _MOC
+      ``"…%s…" % x``       -> THAY chỗ %s bằng _MOC (nối vào cuối là SAI:
+                              câu lệnh vỡ chỗ khác, mẫu không khớp nữa)
+      ``"…{}…".format(x)`` -> THAY chỗ {} bằng _MOC (giữ nguyên {} cũng SAI)
+      ``sep.join([...])``  -> nối THẬT các phần tử bằng sep (biến cả danh
+                              sách thành một _MOC là mất trắng câu lệnh)
+      ``x.strip()`` v.v.   -> trả phần gốc, để mọi hàm bọc chuỗi không cắt
+                              đứt chuỗi kết xuất
+      ``dedent(x)``        -> nối các đối số
+    """
+    if isinstance(nut, ast.Constant):
+        return nut.value if isinstance(nut.value, str) else _MOC
+    if isinstance(nut, ast.JoinedStr):
+        return "".join(_ket_xuat_chuoi(x) for x in nut.values)
+    if isinstance(nut, ast.FormattedValue):
+        return _MOC
+    if isinstance(nut, ast.BinOp):
+        if isinstance(nut.op, ast.Add):
+            return _ket_xuat_chuoi(nut.left) + _ket_xuat_chuoi(nut.right)
+        if isinstance(nut.op, ast.Mod):
+            return _MAU_PHAN_TRAM.sub(_MOC, _ket_xuat_chuoi(nut.left))
+    if isinstance(nut, ast.Call):
+        if isinstance(nut.func, ast.Attribute):
+            goc = _ket_xuat_chuoi(nut.func.value)
+            if nut.func.attr == "format":
+                return _MAU_NGOAC_NHON.sub(_MOC, goc)
+            if nut.func.attr == "join":
+                pt = None
+                if len(nut.args) == 1:
+                    pt = _phan_tu(nut.args[0])
+                if pt is None:
+                    pt = list(nut.args)
+                return goc.join(_ket_xuat_chuoi(x) for x in pt) if pt else goc
+            return goc
+        if nut.args:
+            return "".join(_ket_xuat_chuoi(a) for a in nut.args)
+    return _MOC
+
+
+def _van_ban_trong_ma(cay) -> list:
+    """Mọi biểu thức chuỗi trong MÃ, đã kết xuất — NGOẠI TRỪ docstring.
+
+    Quét nguyên văn bản là sai: docstring và comment nói VỀ ``SELECT *``
+    (chính docstring của ``arch20260829`` giải thích vì sao nó không an toàn)
+    sẽ bị tính là vi phạm — đúng lớp lỗi "biểu thức khớp trúng dòng thông báo
+    thay vì dòng lệnh". Comment không nằm trong AST nên tự rụng; docstring
+    thì phải loại tay.
+    """
+    doc = set()
+    for nut in ast.walk(cay):
+        if isinstance(
+            nut, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            than = getattr(nut, "body", None)
+            if (
+                than
+                and isinstance(than[0], ast.Expr)
+                and isinstance(than[0].value, ast.Constant)
+                and isinstance(than[0].value.value, str)
+            ):
+                doc.add(id(than[0].value))
+    ra = []
+    for nut in ast.walk(cay):
+        if id(nut) in doc:
+            continue
+        if isinstance(nut, (ast.JoinedStr, ast.BinOp, ast.Call)) or (
+            isinstance(nut, ast.Constant) and isinstance(nut.value, str)
+        ):
+            ra.append(_ket_xuat_chuoi(nut))
+    return ra
+
+
+def _co_ghi_select_sao(ma_nguon: str) -> bool:
+    """True nếu mã nguồn chứa một đường ghi archive dùng ``SELECT *``."""
+    return any(
+        _MAU_SELECT_SAO.search(vb) for vb in _van_ban_trong_ma(ast.parse(ma_nguon))
+    )
+
+
 def _cot_khai_o_moi_migration() -> set:
     """Bộ cột của bảng archive, GỘP từ MỌI migration chạm tới nó.
 
@@ -443,95 +570,13 @@ def test_khong_duong_ghi_nao_dung_select_sao_vao_bang_archive() -> None:
     TRƯỚC khi có đường ghi, chứ không phải sau khi mất dữ liệu.
     """
     goc = _VERSIONS_DIR.parents[1]
-    # Ba dạng bypass mà bản đầu để lọt, nay đều bắt:
-    #   INSERT INTO public._archived_...     -> schema-qualified target
-    #   SELECT ap.*                          -> alias wildcard
-    #   f"INSERT INTO {TABLE} … SELECT *"    -> tên bảng nằm trong FormattedValue
-    #
-    # Tên bảng có thể bị che sau một biểu thức động, nên vị trí đích chấp nhận
-    # HOẶC tên bảng thật HOẶC dấu mốc \x00 (chỗ biểu thức đã được rút gọn).
-    # Phép lọc theo tệp ở dưới đã yêu cầu tệp có nhắc `_TABLE`, nên một
-    # `INSERT … SELECT *` với đích động NẰM TRONG tệp ấy là đủ đáng ngờ để
-    # chặn — thà bắt nhầm một chỗ phải viết lại còn hơn để lọt đường ghi sai.
-    MOC = chr(0)
-    dau_nhay = r"[\"'`]?"
-    schema = r"(?:" + dau_nhay + r"\w+" + dau_nhay + r"\s*\.\s*)?"
-    dich = r"(?:" + schema + dau_nhay + re.escape(_TABLE) + dau_nhay + r"|" + MOC + r")"
-    mau = re.compile(
-        r"insert\s+into\s+"
-        + dich
-        + r"[^;]*?\bselect\s+(?:distinct\s+)?(?:" + dau_nhay + r"\w+" + dau_nhay
-        + r"\s*\.\s*)?\*",
-        re.I | re.S,
-    )
-
-    def _ket_xuat(nut: ast.AST) -> str:
-        """Rút một biểu thức chuỗi về văn bản SQL gần đúng.
-
-        Bản đầu chỉ đọc ``ast.Constant``, nên mọi thứ được ghép động đều lọt:
-        f-string bị AST chẻ thành nhiều mảnh, và ``"a" + b + "c"`` cũng vậy.
-        Ở đây nối lại theo cấu trúc, và thay mỗi mảnh KHÔNG phải hằng bằng dấu
-        mốc ``\x00`` — nhờ vậy đích động vẫn khớp được vị trí bảng.
-        """
-        if isinstance(nut, ast.Constant):
-            return nut.value if isinstance(nut.value, str) else MOC
-        if isinstance(nut, ast.JoinedStr):
-            return "".join(_ket_xuat(x) for x in nut.values)
-        if isinstance(nut, ast.FormattedValue):
-            return MOC
-        if isinstance(nut, ast.BinOp) and isinstance(nut.op, (ast.Add, ast.Mod)):
-            return _ket_xuat(nut.left) + _ket_xuat(nut.right)
-        if isinstance(nut, ast.Call) and isinstance(nut.func, ast.Attribute):
-            goc = _ket_xuat(nut.func.value)
-            if nut.func.attr == "format":
-                return goc
-            if nut.func.attr == "join":
-                return goc.join(_ket_xuat(a) for a in nut.args) or goc
-        return MOC
-
-    def _van_ban_trong_ma(cay: ast.AST) -> list:
-        """Mọi biểu thức chuỗi trong MÃ, đã kết xuất — NGOẠI TRỪ docstring.
-
-        Quét nguyên văn bản là sai: docstring và comment nói VỀ ``SELECT *``
-        (chính docstring của ``arch20260829`` giải thích vì sao nó không an
-        toàn) sẽ bị tính là vi phạm. Đây đúng là lớp lỗi "biểu thức khớp trúng
-        dòng thông báo thay vì dòng lệnh". Comment không nằm trong AST nên tự
-        rụng; docstring thì phải loại tay.
-        """
-        doc = set()
-        for nut in ast.walk(cay):
-            if isinstance(
-                nut,
-                (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
-            ):
-                than = getattr(nut, "body", None)
-                if (
-                    than
-                    and isinstance(than[0], ast.Expr)
-                    and isinstance(than[0].value, ast.Constant)
-                    and isinstance(than[0].value.value, str)
-                ):
-                    doc.add(id(than[0].value))
-        ra = []
-        for nut in ast.walk(cay):
-            if id(nut) in doc:
-                continue
-            if isinstance(nut, (ast.JoinedStr, ast.BinOp, ast.Call)) or (
-                isinstance(nut, ast.Constant) and isinstance(nut.value, str)
-            ):
-                ra.append(_ket_xuat(nut))
-        return ra
-
-    vi_pham = []
-    for thu_muc in ("app", "alembic"):
-        for f in sorted((goc / thu_muc).rglob("*.py")):
-            noi_dung = f.read_text(encoding="utf-8")
-            if _TABLE not in noi_dung:
-                continue
-            for van_ban in _van_ban_trong_ma(ast.parse(noi_dung)):
-                if mau.search(van_ban):
-                    vi_pham.append(str(f.relative_to(goc)))
-                    break
+    vi_pham = [
+        str(f.relative_to(goc))
+        for thu_muc in ("app", "alembic")
+        for f in sorted((goc / thu_muc).rglob("*.py"))
+        if _TABLE in f.read_text(encoding="utf-8")
+        and _co_ghi_select_sao(f.read_text(encoding="utf-8"))
+    ]
     assert not vi_pham, (
         "đường ghi archive dùng SELECT * theo vị trí (phải liệt kê cột đích "
         f"tường minh): {vi_pham}"
@@ -604,3 +649,127 @@ def test_arch20260829_bo_qua_dung_cot_da_co(monkeypatch) -> None:
     da_them.clear()
     mod.upgrade()
     assert sorted(da_them) == sorted(thieu), f"thêm sai tập cột: {da_them}"
+
+
+# ---------------------------------------------------------------------------
+# 12. Bộ dò SELECT * — đối chứng bypass, PARAMETERIZED
+# ---------------------------------------------------------------------------
+#
+# Trước đây các dạng bypass chỉ được kiểm bằng đột biến THỦ CÔNG ngoài kho:
+# không ai chạy lại, và bản thân ca guard vẫn xanh dù bộ dò đã thủng. Bảng
+# dưới đây đưa mọi dạng ấy VÀO kho, chạy mỗi lượt CI.
+#
+# Mỗi dòng là (nhãn, mã nguồn, có_phải_vi_phạm). Các dòng False là ĐỐI CHỨNG
+# ÂM — chúng quan trọng ngang các dòng True: một bộ dò bắt tất cả, kể cả dạng
+# đúng, thì vô dụng y như bộ dò không bắt gì.
+#
+# Đã audit ca nào canh cái gì, bằng cách TẮT hẳn renderer (chỉ chừa nhánh
+# ``ast.Constant``) rồi xem ca nào còn xanh:
+#
+#   canh RENDERER (7): f-string-dich, noi-cong, format, phan-tram, join,
+#                      alias-dong, ham-boc-ghep
+#   canh REGEX    (5): literal, schema-qualified, alias-wildcard,
+#                      select-distinct, ham-boc-literal
+#
+# Nhóm thứ hai đi qua đường chuỗi hằng nên xanh kể cả khi renderer chết — hữu
+# ích cho mẫu regex, nhưng ĐỪNG đọc chúng thành bằng chứng renderer còn sống.
+
+_T = "_archived_admission_profile"
+
+_CA_BO_DO = [
+    # ----- phải BẮT -----
+    ("literal", 'op.execute("INSERT INTO ' + _T + ' SELECT *, now() FROM ap")', True),
+    (
+        "schema-qualified",
+        'op.execute("INSERT INTO public.' + _T + ' SELECT * FROM ap")',
+        True,
+    ),
+    (
+        "alias-wildcard",
+        'op.execute("INSERT INTO ' + _T + ' SELECT ap.* FROM admission_profile ap")',
+        True,
+    ),
+    ("f-string-dich", 'op.execute(f"INSERT INTO {TABLE} SELECT * FROM ap")', True),
+    (
+        "noi-cong",
+        'op.execute("INSERT INTO " + TABLE + " SELECT * FROM ap")',
+        True,
+    ),
+    (
+        "format",
+        'op.execute("INSERT INTO {} SELECT * FROM ap".format(TABLE))',
+        True,
+    ),
+    (
+        "phan-tram",
+        'op.execute("INSERT INTO %s SELECT * FROM ap" % TABLE)',
+        True,
+    ),
+    (
+        "join",
+        'op.execute(" ".join(["INSERT INTO", TABLE, "SELECT * FROM ap"]))',
+        True,
+    ),
+    (
+        "alias-dong",
+        'op.execute(f"INSERT INTO ' + _T + ' SELECT {ALIAS}.* FROM ap {ALIAS}")',
+        True,
+    ),
+    (
+        "ham-boc-literal",
+        'op.execute(textwrap.dedent("INSERT INTO ' + _T + ' SELECT * FROM ap"))',
+        True,
+    ),
+    # Ca ham-boc-GHEP mới là ca load-bearing cho nhánh "hàm bọc" của renderer.
+    # Ca literal ngay trên KHÔNG phải: `ast.walk` vẫn thấy chuỗi hằng nằm bên
+    # trong `dedent(...)` nên nó bị bắt kể cả khi nhánh hàm bọc bị gỡ — đã đo
+    # bằng đột biến. Ở đây câu lệnh bị CẮT ĐÔI qua một lời gọi, nên không nút
+    # đơn lẻ nào chứa cả INSERT lẫn SELECT; nhánh hàm bọc phải trả đúng phần
+    # gốc thì hai nửa mới nối lại được.
+    (
+        "ham-boc-ghep",
+        'op.execute(("INSERT INTO " + TABLE).strip() + " SELECT * FROM ap")',
+        True,
+    ),
+    (
+        "select-distinct",
+        'op.execute("INSERT INTO ' + _T
+        + ' SELECT DISTINCT * FROM ap")',
+        True,
+    ),
+    # ----- KHÔNG được bắt (đối chứng âm) -----
+    (
+        "liet-ke-cot",
+        'op.execute("INSERT INTO ' + _T + ' (id, lead_id) SELECT id, lead_id FROM ap")',
+        False,
+    ),
+    (
+        "select-sao-bang-khac",
+        'op.execute("INSERT INTO bang_khac SELECT * FROM ap")',
+        False,
+    ),
+    (
+        "chi-doc",
+        'rows = conn.execute("SELECT * FROM ' + _T + '")',
+        False,
+    ),
+    (
+        "docstring-noi-ve-no",
+        'def f():\n    """INSERT INTO ' + _T
+        + ' SELECT * — mô tả vì sao KHÔNG được làm."""\n    return 1',
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "nhan, ma_nguon, vi_pham",
+    _CA_BO_DO,
+    ids=[c[0] for c in _CA_BO_DO],
+)
+def test_bo_do_select_sao_bat_moi_dang(nhan: str, ma_nguon: str, vi_pham: bool) -> None:
+    """Bộ dò phải bắt mọi dạng dựng chuỗi, và CHỈ bắt dạng thật sự sai."""
+    assert _co_ghi_select_sao(ma_nguon) is vi_pham, (
+        f"dạng {nhan!r}: mong {'BẮT' if vi_pham else 'BỎ QUA'}, "
+        f"nhưng bộ dò trả {not vi_pham}"
+    )
