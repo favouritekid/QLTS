@@ -12,6 +12,8 @@ using mock/patch pattern following existing C2 test conventions.
 """
 
 import pytest
+
+from app.core.events import SystemEvents
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -34,15 +36,33 @@ class TestRenderTemplateSnapshot:
     def test_render_from_template(self):
         from app.services.notification_dispatcher import _render_template_snapshot
 
-        tpl = self._make_template()
+        # PR1: `link` là CODE-OWNED. `_render_template_snapshot` CỐ Ý bỏ qua
+        # `template.link_template` và luôn lấy link từ fallback (catalog link do
+        # mã sinh). Đây là bất biến BẢO MẬT chứ không phải chi tiết cài đặt:
+        # template nằm trong DB, nên nếu `link_template` thắng thì ai sửa được
+        # bảng template là chèn được link tuỳ ý vào thông báo gửi tới người dùng.
+        # `tests/api/test_notification_rules_preview.py:83` canh cùng bất biến
+        # này ở tầng API với payload `/evil/path/should/not/win`.
+        #
+        # Ca cũ khẳng định `link == "/leads/42"`, tức link_template THẮNG — đúng
+        # hành vi TRƯỚC PR1. Nay đặt hai giá trị KHÁC HẲN nhau để phép kiểm phân
+        # biệt được nguồn: template trỏ một đằng, fallback trỏ một nẻo. Để
+        # fallback là None như bản cũ thì hai nguồn không phân biệt được.
+        tpl = self._make_template(link_template="/tu-template/khong-duoc-thang")
         payload = {"lead_name": "Nguyen Van A", "lead_id": "42"}
-        fallback = {"title": "fallback", "message": "fallback", "link": None, "type": "info"}
+        fallback = {
+            "title": "fallback",
+            "message": "fallback",
+            "link": "/catalog/do-ma-sinh",
+            "type": "info",
+        }
 
         result = _render_template_snapshot(tpl, payload, fallback)
 
+        # title/message VẪN lấy từ template — PR1 chỉ đổi đường của `link`.
         assert result["title"] == "TPL Title: Nguyen Van A"
         assert result["message"] == "TPL Msg for Nguyen Van A"
-        assert result["link"] == "/leads/42"
+        assert result["link"] == "/catalog/do-ma-sinh"
         assert result["type"] == "info"
 
     def test_render_preserves_type_from_fallback(self):
@@ -321,12 +341,26 @@ class TestCRUDIntegration:
         from app.utils.exceptions import BadRequest
 
         rule_data = MagicMock()
-        rule_data.event = "LEAD_ASSIGNED"
+        # `SystemEvents` tra theo GIA TRI, khong theo TEN member:
+        #     SystemEvents.LEAD_ASSIGNED = "lead_assigned"
+        # `create_rule` goi `SystemEvents(rule_data.event)` (guard "B3 fix:
+        # catch unknown events early", ra doi SAU ca kiem nay), nen chuoi HOA
+        # "LEAD_ASSIGNED" nem ValueError -> BadRequest truoc khi toi doan
+        # logic ma ca nay thuc su muon kiem. Dung `.value` chu khong go cung
+        # chuoi thuong, de doi gia tri enum ve sau khong lam ca nay xanh gia.
+        rule_data.event = SystemEvents.LEAD_ASSIGNED.value
         rule_data.actions = [MagicMock(
             step=1, channel="browser", template_code="INVALID_CODE",
             delay_minutes=0, config=None,
         )]
         rule_data.template_id = None
+        # `rule_data` la MagicMock, nen MOI thuoc tinh chua dat deu tu sinh ra
+        # mot mock TRUTHY. `create_rule` doc dung bon thuoc tinh — event,
+        # actions, template_id, condition — va cong "Phase 2: Validate
+        # condition fields" ra doi SAU ca kiem nay, nen `condition` bo trong
+        # bien thanh mot mock truthy va lam ca do o cong khong lien quan gi
+        # toi thu no muon kiem. Dat tuong minh None chu khong dua vao mac dinh.
+        rule_data.condition = None
         rule_data.model_dump = MagicMock(return_value={})
 
         mock_rule_repo = MagicMock()
@@ -350,17 +384,18 @@ class TestCRUDIntegration:
         from app.services.notification_rule_crud_service import create_rule
 
         rule_data = MagicMock()
-        rule_data.event = "LEAD_ASSIGNED"
+        rule_data.event = SystemEvents.LEAD_ASSIGNED.value
         rule_data.actions = [MagicMock(
             step=1, channel="browser", template_code=None,
             delay_minutes=0, config=None,
         )]
         rule_data.template_id = None
+        rule_data.condition = None
         rule_data.model_dump = MagicMock(return_value={})
 
         new_rule = MagicMock()
         new_rule.id = 1
-        new_rule.event = "LEAD_ASSIGNED"
+        new_rule.event = SystemEvents.LEAD_ASSIGNED.value
 
         mock_rule_repo = MagicMock()
         mock_rule_repo.get_by_event = AsyncMock(return_value=None)

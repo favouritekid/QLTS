@@ -24,12 +24,44 @@ _ENGINE_SRC = (
 
 
 def test_evaluate_cascade_imports_priority_service() -> None:
-    """Engine must import calculate_priority_bonus inside evaluate_cascade
-    (lazy import to avoid circular dependency at module load)."""
-    src = _ENGINE_SRC.read_text(encoding="utf-8")
-    assert (
-        "from app.services.priority_service import calculate_priority_bonus"
-        in src
+    """Engine phải import ``calculate_priority_bonus`` LAZY, trong thân hàm.
+
+    Bất biến: ``priority_service`` import ``app.models``, nên đưa import này lên
+    module level là tái lập vòng phụ thuộc lúc nạp engine.
+
+    Bản cũ grep NGUYÊN VĂN một dòng
+    ``"from app.services.priority_service import calculate_priority_bonus"``.
+    Import ấy vẫn còn và vẫn lazy, nhưng nay là dạng nhiều tên trong ngoặc nên
+    chuỗi một dòng không còn xuất hiện — ca đỏ trong khi sản phẩm đúng. Đây là
+    lớp lỗi "test grep văn bản nguồn": nó vỡ vì ĐỊNH DẠNG, và ngược lại có thể
+    xanh oan nếu chuỗi ấy nằm trong một chú thích.
+
+    Nay soi bằng AST và khoá ĐÚNG hai chiều: có ở tầng hàm, và KHÔNG có ở tầng
+    module.
+    """
+    import ast
+
+    cay = ast.parse(_ENGINE_SRC.read_text(encoding="utf-8"))
+    MODULE = "app.services.priority_service"
+
+    o_module = {
+        a.name
+        for n in cay.body
+        if isinstance(n, ast.ImportFrom) and n.module == MODULE
+        for a in n.names
+    }
+    assert "calculate_priority_bonus" not in o_module, (
+        "import phải LAZY — đưa lên module level là tái lập vòng phụ thuộc"
+    )
+
+    o_ham = set()
+    for n in ast.walk(cay):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for c in ast.walk(n):
+                if isinstance(c, ast.ImportFrom) and c.module == MODULE:
+                    o_ham |= {a.name for a in c.names}
+    assert "calculate_priority_bonus" in o_ham, (
+        f"không thấy lazy import calculate_priority_bonus; thấy: {sorted(o_ham)}"
     )
 
 

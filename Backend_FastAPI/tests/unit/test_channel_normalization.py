@@ -123,8 +123,19 @@ class TestValidateChannelsForWrite:
 class TestCanonicalChannelsConstant:
     """Tests for the CANONICAL_CHANNELS constant."""
 
-    def test_contains_four_values(self):
-        assert CANONICAL_CHANNELS == {"browser", "email", "zalo", "sms"}
+    def test_dung_bo_kenh_chinh_tac(self):
+        """Bộ kênh chính tắc phải khớp CHÍNH XÁC — thêm kênh là việc CÓ Ý.
+
+        Đổi tên khỏi ``test_contains_four_values``: số đếm nằm trong tên hàm là
+        thứ nói dối ngay lần thêm kênh kế tiếp. ``zalo_bot`` được thêm hợp lệ
+        (dùng ở quota theo tháng — ``a8ebea0c``), nâng bộ lên 5 giá trị, nhưng
+        tên ca vẫn khai "four" nên đọc log CI ra một đằng, sự thật một nẻo.
+
+        Vẫn gõ cứng cả bộ chứ KHÔNG so với chính hằng số: đây là ca khoá, mục
+        đích là bắt ai đó thêm/bớt kênh mà không nhận ra. So với chính nó thì
+        phép kiểm thành hằng đúng.
+        """
+        assert CANONICAL_CHANNELS == {"browser", "email", "zalo", "zalo_bot", "sms"}
 
     def test_is_frozenset(self):
         assert isinstance(CANONICAL_CHANNELS, frozenset)
