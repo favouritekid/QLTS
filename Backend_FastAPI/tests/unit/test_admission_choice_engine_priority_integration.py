@@ -54,14 +54,40 @@ def test_evaluate_cascade_imports_priority_service() -> None:
         "import phải LAZY — đưa lên module level là tái lập vòng phụ thuộc"
     )
 
+    # Phải khoanh vào ĐÚNG `evaluate_cascade`, không gom import từ mọi hàm:
+    # chuyển import sang một hàm khác (vd `_collect_subject_scores`) thì phép
+    # kiểm gom-tất-cả vẫn xanh, trong khi `evaluate_cascade` mất đường lấy
+    # priority bonus. Đã đo: đột biến ấy KHÔNG bị bắt ở bản gom.
+    ham = [
+        n
+        for n in ast.walk(cay)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name == "evaluate_cascade"
+    ]
+    assert len(ham) == 1, f"kỳ vọng đúng 1 evaluate_cascade; có {len(ham)}"
+
+    def _nut_thuc_thi(nut):
+        """Nút chạy TRONG thân hàm này — không chui vào hàm/lambda/class lồng.
+
+        Import nằm trong một closure lồng bên trong chỉ chạy khi closure ấy
+        được gọi, nên không bảo đảm `evaluate_cascade` có đường lấy bonus.
+        """
+        for con in ast.iter_child_nodes(nut):
+            if isinstance(
+                con,
+                (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef),
+            ):
+                continue
+            yield con
+            yield from _nut_thuc_thi(con)
+
     o_ham = set()
-    for n in ast.walk(cay):
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            for c in ast.walk(n):
-                if isinstance(c, ast.ImportFrom) and c.module == MODULE:
-                    o_ham |= {a.name for a in c.names}
+    for c in _nut_thuc_thi(ham[0]):
+        if isinstance(c, ast.ImportFrom) and c.module == MODULE:
+            o_ham |= {a.name for a in c.names}
     assert "calculate_priority_bonus" in o_ham, (
-        f"không thấy lazy import calculate_priority_bonus; thấy: {sorted(o_ham)}"
+        "evaluate_cascade phải tự lazy-import calculate_priority_bonus; "
+        f"thấy trong hàm: {sorted(o_ham)}"
     )
 
 

@@ -1021,7 +1021,17 @@ async def test_confirm_token_dispatches_only_application_status_changed():
     NOT LEAD_STATUS_CHANGED (approved→confirmed = same lead sts09)."""
     from app.routers.admissions import confirm_admission_by_token
 
-    profile = _make_profile_mock(id=10, status="confirmed", lead_id=37)
+    # `_make_profile_mock` để `lead=MagicMock(id=37)`, nên `lead.unit_id` và
+    # `lead.assigned_officer_id` là mock TỰ SINH — không phải None, nên
+    # `rooms_for_admission` dựng ra `unit_<MagicMock ...>`: chuỗi rác mà vẫn
+    # truthy. Khẳng định "rooms không rỗng" vì thế xanh với BẤT KỲ bộ phòng nào,
+    # kể cả sai đơn vị hay sai officer. Đặt giá trị THẬT để so được đúng bộ.
+    _lead = MagicMock(id=37)
+    _lead.unit_id = 7
+    _lead.assigned_officer_id = 13
+    profile = _make_profile_mock(
+        id=10, status="confirmed", lead_id=37, lead=_lead
+    )
     profile.confirmed_at = "2026-03-31T00:00:00Z"
 
     dispatch_calls = []
@@ -1057,15 +1067,23 @@ async def test_confirm_token_dispatches_only_application_status_changed():
     events = [c["event"] for c in dispatch_calls]
     assert "application_status_changed" in events
     assert "lead_status_changed" not in events
-    assert dispatch_calls[0]["payload"]["old_status"] == "approved"
-    assert dispatch_calls[0]["payload"]["new_status"] == "confirmed"
 
-    # Bản vá scoped-emit: sự kiện phải tới ĐÚNG phòng của lead thay vì phát
-    # quảng bá. Chỉ GHI `rooms` mà không khẳng định thì test double mới chỉ
-    # CHỊU ĐỰNG tham số mới chứ chưa canh gì — gỡ `rooms=` khỏi router vẫn xanh.
-    assert dispatch_calls[0]["rooms"], (
-        f"safe_dispatch phải nhận rooms không rỗng; "
-        f"nhận: {dispatch_calls[0]['rooms']!r}"
+    # Tìm lượt gọi theo SỰ KIỆN chứ không theo chỉ số: `dispatch_calls[0]` gắn
+    # cứng vào thứ tự phát, nên chèn thêm một dispatch phía trước là mọi khẳng
+    # định dưới đây soi nhầm lượt mà vẫn xanh.
+    goi = [c for c in dispatch_calls if c["event"] == "application_status_changed"]
+    assert len(goi) == 1, f"kỳ vọng đúng 1 lượt; có {len(goi)}"
+    goi = goi[0]
+
+    assert goi["payload"]["old_status"] == "approved"
+    assert goi["payload"]["new_status"] == "confirmed"
+
+    # Bản vá scoped-emit: sự kiện phải tới ĐÚNG BỘ PHÒNG, không phải "một bộ
+    # phòng nào đó". `rooms_for_admission` = role_admin + unit của lead +
+    # phòng riêng của officer được giao. Khẳng định truthy là vô dụng:
+    # ["role_admin"] hay ["unit_999"] đều qua, và bộ rác từ MagicMock cũng qua.
+    assert set(goi["rooms"]) == {"role_admin", "unit_7", "user_room_13"}, (
+        f"bộ phòng sai: {sorted(goi['rooms'])}"
     )
 
 
