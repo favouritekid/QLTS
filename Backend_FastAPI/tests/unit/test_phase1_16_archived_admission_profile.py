@@ -95,10 +95,19 @@ _DINH_DANH = "(?:" + _NHAY + r"\w+" + _NHAY + "|" + _MOC + ")"
 _SCHEMA = "(?:" + _DINH_DANH + r"\s*\.\s*)?"
 _ALIAS = "(?:" + _DINH_DANH + r"\s*\.\s*)?"
 
+# "Khoảng trắng" của SQL KHÔNG chỉ là \s: chú thích khối /* … */ và chú thích
+# dòng -- … đều là dấu phân cách hợp lệ. Đã đo trên PostgreSQL: cả
+# `SELECT ALL *`, `SELECT /* x */ *` lẫn `SELECT -- x\n *` đều parse và lập
+# kế hoạch bình thường, nên `\s+` trần để lọt cả ba.
+_KHOANG = r"(?:\s|/\*.*?\*/|--[^\n]*\n)+"
+
+# `ALL` là lượng từ MẶC ĐỊNH của SELECT, đối ngẫu của DISTINCT — viết ra
+# tường minh vẫn hợp lệ. Bản trước chỉ liệt kê DISTINCT nên `SELECT ALL *` lọt.
 _MAU_SELECT_SAO = re.compile(
-    r"insert\s+into\s+"
+    "insert" + _KHOANG + "into" + _KHOANG
     + "(?:" + _SCHEMA + _NHAY + re.escape(_TABLE) + _NHAY + "|" + _MOC + ")"
-    + r"[^;]*?" + chr(92) + "bselect" + r"\s+(?:distinct\s+)?"
+    + r"[^;]*?" + chr(92) + "bselect"
+    + "(?:" + _KHOANG + "(?:all|distinct))?" + _KHOANG
     + _ALIAS + r"\*",
     re.I | re.S,
 )
@@ -115,11 +124,13 @@ def _phan_tu(nut):
     return None
 
 
-def _ket_xuat_chuoi(nut) -> str:
+def _ket_xuat_chuoi(nut, bang=None) -> str:
     """Rút một biểu thức chuỗi về văn bản SQL gần đúng.
 
     Mọi mảnh KHÔNG phải hằng trở thành ``_MOC``; mẫu regex chấp nhận ``_MOC``
     ở vị trí schema, tên bảng và alias, nên đích/alias động vẫn bị bắt.
+
+    ``bang`` là bảng tên → chuỗi cho các gán đơn giản (xem ``_bang_hang_chuoi``).
 
     Từng nhánh dưới đây tương ứng một đường lọt đã được chứng minh bằng ca
     kiểm parameterized ``test_bo_do_select_sao_bat_moi_dang``, chứ không phải
@@ -135,21 +146,25 @@ def _ket_xuat_chuoi(nut) -> str:
       ``x.strip()`` v.v.   -> trả phần gốc, để mọi hàm bọc chuỗi không cắt
                               đứt chuỗi kết xuất
       ``dedent(x)``        -> nối các đối số
+      ``ten_bien``         -> tra ``bang``; câu lệnh bị chẻ ra vài biến rồi
+                              nối lại là đường lọt thực tế nhất
     """
     if isinstance(nut, ast.Constant):
         return nut.value if isinstance(nut.value, str) else _MOC
+    if isinstance(nut, ast.Name):
+        return (bang or {}).get(nut.id, _MOC)
     if isinstance(nut, ast.JoinedStr):
-        return "".join(_ket_xuat_chuoi(x) for x in nut.values)
+        return "".join(_ket_xuat_chuoi(x, bang) for x in nut.values)
     if isinstance(nut, ast.FormattedValue):
-        return _MOC
+        return _ket_xuat_chuoi(nut.value, bang)
     if isinstance(nut, ast.BinOp):
         if isinstance(nut.op, ast.Add):
-            return _ket_xuat_chuoi(nut.left) + _ket_xuat_chuoi(nut.right)
+            return _ket_xuat_chuoi(nut.left, bang) + _ket_xuat_chuoi(nut.right, bang)
         if isinstance(nut.op, ast.Mod):
-            return _MAU_PHAN_TRAM.sub(_MOC, _ket_xuat_chuoi(nut.left))
+            return _MAU_PHAN_TRAM.sub(_MOC, _ket_xuat_chuoi(nut.left, bang))
     if isinstance(nut, ast.Call):
         if isinstance(nut.func, ast.Attribute):
-            goc = _ket_xuat_chuoi(nut.func.value)
+            goc = _ket_xuat_chuoi(nut.func.value, bang)
             if nut.func.attr == "format":
                 return _MAU_NGOAC_NHON.sub(_MOC, goc)
             if nut.func.attr == "join":
@@ -158,11 +173,40 @@ def _ket_xuat_chuoi(nut) -> str:
                     pt = _phan_tu(nut.args[0])
                 if pt is None:
                     pt = list(nut.args)
-                return goc.join(_ket_xuat_chuoi(x) for x in pt) if pt else goc
+                return goc.join(_ket_xuat_chuoi(x, bang) for x in pt) if pt else goc
             return goc
         if nut.args:
-            return "".join(_ket_xuat_chuoi(a) for a in nut.args)
+            return "".join(_ket_xuat_chuoi(a, bang) for a in nut.args)
     return _MOC
+
+
+def _bang_hang_chuoi(cay) -> dict:
+    """Bảng tên → chuỗi cho các gán đơn giản ``ten = <biểu thức chuỗi>``.
+
+    KHÔNG phải bộ phân tích luồng dữ liệu: bảng PHẲNG theo module, gán sau đè
+    gán trước, không phân biệt phạm vi hàm, không theo nhánh điều kiện. Đủ cho
+    lớp lọt thực tế — một câu SQL bị chẻ ra vài biến rồi nối lại —
+    mà không kéo cả một analyzer vào bộ test.
+
+    Lặp tới điểm bất động (chặn trên 3 vòng) để chuỗi gán bắc cầu
+    ``a = "…"; b = a + "…"; c = b + "…"`` cũng giải được.
+    """
+    bang = {}
+    for _ in range(3):
+        doi = False
+        for nut in ast.walk(cay):
+            if (
+                isinstance(nut, ast.Assign)
+                and len(nut.targets) == 1
+                and isinstance(nut.targets[0], ast.Name)
+            ):
+                gia_tri = _ket_xuat_chuoi(nut.value, bang)
+                if bang.get(nut.targets[0].id) != gia_tri:
+                    bang[nut.targets[0].id] = gia_tri
+                    doi = True
+        if not doi:
+            break
+    return bang
 
 
 def _van_ban_trong_ma(cay) -> list:
@@ -171,9 +215,10 @@ def _van_ban_trong_ma(cay) -> list:
     Quét nguyên văn bản là sai: docstring và comment nói VỀ ``SELECT *``
     (chính docstring của ``arch20260829`` giải thích vì sao nó không an toàn)
     sẽ bị tính là vi phạm — đúng lớp lỗi "biểu thức khớp trúng dòng thông báo
-    thay vì dòng lệnh". Comment không nằm trong AST nên tự rụng; docstring
-    thì phải loại tay.
+    thay vì dòng lệnh". Comment Python không nằm trong AST nên tự rụng;
+    docstring thì phải loại tay.
     """
+    bang = _bang_hang_chuoi(cay)
     doc = set()
     for nut in ast.walk(cay):
         if isinstance(
@@ -191,10 +236,10 @@ def _van_ban_trong_ma(cay) -> list:
     for nut in ast.walk(cay):
         if id(nut) in doc:
             continue
-        if isinstance(nut, (ast.JoinedStr, ast.BinOp, ast.Call)) or (
+        if isinstance(nut, (ast.JoinedStr, ast.BinOp, ast.Call, ast.Name)) or (
             isinstance(nut, ast.Constant) and isinstance(nut.value, str)
         ):
-            ra.append(_ket_xuat_chuoi(nut))
+            ra.append(_ket_xuat_chuoi(nut, bang))
     return ra
 
 
@@ -666,10 +711,11 @@ def test_arch20260829_bo_qua_dung_cot_da_co(monkeypatch) -> None:
 # Đã audit ca nào canh cái gì, bằng cách TẮT hẳn renderer (chỉ chừa nhánh
 # ``ast.Constant``) rồi xem ca nào còn xanh:
 #
-#   canh RENDERER (7): f-string-dich, noi-cong, format, phan-tram, join,
-#                      alias-dong, ham-boc-ghep
-#   canh REGEX    (5): literal, schema-qualified, alias-wildcard,
-#                      select-distinct, ham-boc-literal
+#   canh RENDERER (8): f-string-dich, noi-cong, format, phan-tram, join,
+#                      alias-dong, ham-boc-ghep, bien-trung-gian
+#   canh REGEX    (8): literal, schema-qualified, alias-wildcard,
+#                      select-distinct, select-all, comment-khoi,
+#                      comment-dong, ham-boc-literal
 #
 # Nhóm thứ hai đi qua đường chuỗi hằng nên xanh kể cả khi renderer chết — hữu
 # ích cho mẫu regex, nhưng ĐỪNG đọc chúng thành bằng chứng renderer còn sống.
@@ -737,7 +783,41 @@ _CA_BO_DO = [
         + ' SELECT DISTINCT * FROM ap")',
         True,
     ),
+    (
+        "select-all",
+        'op.execute("INSERT INTO ' + _T + ' SELECT ALL * FROM ap")',
+        True,
+    ),
+    (
+        "comment-khoi",
+        'op.execute("INSERT INTO ' + _T + ' SELECT /* ghi chu */ * FROM ap")',
+        True,
+    ),
+    (
+        "comment-dong",
+        'op.execute("INSERT INTO ' + _T + ' SELECT --x'
+        + chr(92) + 'n * FROM ap")',
+        True,
+    ),
+    # Câu lệnh bị chẻ ra hai biến rồi mới nối — không nút biểu thức nào chứa
+    # cả INSERT lẫn SELECT, nên chỉ bảng hằng chuỗi mới ghép lại được.
+    (
+        "bien-trung-gian",
+        'prefix = "INSERT INTO ' + _T + '"'
+        + chr(10)
+        + 'suffix = " SELECT * FROM ap"'
+        + chr(10)
+        + "op.execute(prefix + suffix)",
+        True,
+    ),
     # ----- KHÔNG được bắt (đối chứng âm) -----
+    (
+        "bien-chi-doc",
+        'truy_van = "SELECT * FROM ' + _T + '"'
+        + chr(10)
+        + "rows = conn.execute(truy_van)",
+        False,
+    ),
     (
         "liet-ke-cot",
         'op.execute("INSERT INTO ' + _T + ' (id, lead_id) SELECT id, lead_id FROM ap")',
