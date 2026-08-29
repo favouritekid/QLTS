@@ -103,7 +103,36 @@ async def test_resilience_db_commit_failure_rolls_back(
     db_error_simulation = SQLAlchemyError(
         "Simulated Database Commit Error from Service"
     )
-    mock_create_major.side_effect = db_error_simulation
+
+    # ⚠️ Mock KHÔNG được ném lỗi ngay. Nếu nó ném trước khi ghi gì, thì không có
+    # INSERT nào xảy ra, và khẳng định "không tìm thấy hàng" ở dưới chỉ chứng
+    # minh CHƯA TỪNG GHI — chứ không chứng minh transaction đã rollback. Ca sẽ
+    # xanh kể cả khi cơ chế rollback bị gỡ sạch.
+    #
+    # Nên side effect phải: ghi thật vào session -> flush (hàng đã nằm trong
+    # transaction) -> RỒI mới nổ. Khi ấy "không tìm thấy hàng ở session khác"
+    # mới là bằng chứng của rollback.
+    da_flush = {"xong": False}
+
+    async def _ghi_roi_no(db, program_in, *args, **kwargs):
+        db.add(
+            models.MajorProgram(
+                # id TƯỜNG MINH: fixture chèn MAJOR_1 với id=1 cố định, và một
+                # INSERT có id tường minh KHÔNG làm nhích sequence của Postgres.
+                # Để id tự sinh ở đây sẽ đụng `major_program_pkey` ngay từ 1 và
+                # ca đỏ bằng IntegrityError — một lỗi khác hẳn thứ đang kiểm.
+                id=9001,
+                name=program_in.name,
+                code=program_in.code,
+                degree_level=program_in.degree_level,
+                unit_id=program_in.unit_id,
+            )
+        )
+        await db.flush()  # hàng đã tồn tại TRONG transaction
+        da_flush["xong"] = True
+        raise db_error_simulation
+
+    mock_create_major.side_effect = _ghi_roi_no
 
     # Action và Assert Exception
     with pytest.raises(SQLAlchemyError) as exc_info:
@@ -114,6 +143,13 @@ async def test_resilience_db_commit_failure_rolls_back(
     assert exc_info.value == db_error_simulation
     log.info(
         f"Correct exception ({type(db_error_simulation).__name__}) was raised by client call."
+    )
+
+    # 0. Bằng chứng hàng ĐÃ được ghi trước khi lỗi nổ — thiếu khẳng định này,
+    #    phép kiểm bên dưới không phân biệt được "rollback đúng" với "chưa từng
+    #    ghi".
+    assert da_flush["xong"] is True, (
+        "Mock chưa flush được hàng nào; phép kiểm rollback bên dưới sẽ vô nghĩa."
     )
 
     # 1. Assert DB State (Rollback)
