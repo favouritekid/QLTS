@@ -246,6 +246,34 @@ async def _get_status_by_id(
     return status
 
 
+async def _nap_stage_de_tra_ve(
+    db: AsyncSession, status: models.ConsultationStatus
+) -> models.ConsultationStatus:
+    """Nạp sẵn quan hệ ``stage`` trước khi trả object ra tầng HTTP.
+
+    ``schemas.ConsultationStatus`` LUÔN chứa ``stage: Optional[PipelineStage]``,
+    còn quan hệ trên model là ``relationship(...)`` mặc định lazy. Khi FastAPI
+    serialise object chưa nạp ``stage``, SQLAlchemy thử phát IO ngoài greenlet và
+    ném ``MissingGreenlet`` -> ``ResponseValidationError`` -> **500**.
+
+    Ba endpoint dùng ``response_model=schemas.ConsultationStatus`` (tạo, xem chi
+    tiết, cập nhật) đều dính. Các endpoint TRẢ DANH SÁCH thì không, vì
+    ``pipeline_repository.get_statuses_for_stage``/``get_universal_statuses`` đã
+    có ``selectinload(ConsultationStatus.stage)`` — hàng rào đã tồn tại, chỉ
+    chưa phủ đường trả MỘT bản ghi.
+
+    ⚠️ KHÔNG đặt ``lazy="selectin"`` trên quan hệ: ``models.ConsultationStatus``
+    được truy vấn ở hàng trăm chỗ (officer/lead/kpi repository, fsm_engine…),
+    phần lớn không cần ``stage``; bật toàn cục là thêm một SELECT vào nhiều
+    đường nóng để chữa ba endpoint quản trị.
+
+    ⚠️ Và KHÔNG nạp bên trong ``_get_status_by_id``: hàm ấy còn phục vụ các
+    đường thuần logic (kiểm chuyển trạng thái) vốn không serialise gì.
+    """
+    await db.refresh(status, ["stage"])
+    return status
+
+
 # ===============================================================
 # CRUD CHO PIPELINE STAGE
 # ===============================================================
@@ -545,7 +573,7 @@ async def create_consultation_status(
                 "Created new consultation status, cache invalidated", status_id=db_status.id
             )
 
-        return db_status, _post_commit
+        return await _nap_stage_de_tra_ve(db, db_status), _post_commit
 
     except Exception as e:
         # ✅ Router will handle rollback
@@ -557,7 +585,7 @@ async def get_consultation_status(
     db: AsyncSession, status_id: str
 ) -> models.ConsultationStatus:
     """Lấy chi tiết 1 status (không cache, vì chỉ dùng cho admin)."""
-    return await _get_status_by_id(db, status_id)
+    return await _nap_stage_de_tra_ve(db, await _get_status_by_id(db, status_id))
 
 
 async def update_consultation_status(
@@ -655,7 +683,7 @@ async def update_consultation_status(
                 "Updated consultation status, cache invalidated", status_id=db_status.id
             )
 
-        return db_status, _post_commit
+        return await _nap_stage_de_tra_ve(db, db_status), _post_commit
 
     except Exception as e:
         # ✅ Router will handle rollback
