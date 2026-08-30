@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.utils.exceptions import ResourceNotFoundError
+from app.utils.exceptions import ConflictError, ResourceNotFoundError
 
 log = logging.getLogger(__name__)
 
@@ -248,6 +248,39 @@ async def delete_role_atomic(
     if not role_has_policies:
         raise ResourceNotFoundError(f"Role not found: {role_name}")
 
+    # STEP 2b: XOÁ policy + KIỂM HẬU ĐIỀU KIỆN — TRƯỚC mọi mutation khác.
+    #
+    # Thứ tự này là phần fail-closed. Các bước sau đổi hàng DB (STEP 4) và
+    # grouping policy trong enforcer (STEP 5/6); DB thì router rollback được,
+    # nhưng thay đổi trên enforcer thì KHÔNG hoàn tác đồng bộ. Nếu xoá policy
+    # thất bại mà ta đã kịp gán lại user và gỡ grouping, hệ thống rơi vào
+    # trạng thái nửa vời: user mất role, còn policy của role thì vẫn sống.
+    #
+    # Nên xoá policy trước, xác nhận sạch, rồi mới đụng thứ khác. Ném ở đây thì
+    # router `except Exception -> rollback` và KHÔNG log "Role deleted
+    # atomically".
+    from app.services.casbin_service import (
+        chuan_hoa_rule,
+        policy_cua_role,
+        xoa_rule_chinh_xac,
+    )
+
+    policies_to_remove = [
+        chuan_hoa_rule(p) for p in all_policies if p and p[0] == role_name
+    ]
+    removed_p_count = 0
+    for p in policies_to_remove:
+        if await xoa_rule_chinh_xac(enforcer, p):
+            removed_p_count += 1
+
+    policies_con_sot = policy_cua_role(enforcer, role_name)
+    if policies_con_sot:
+        raise ConflictError(
+            f"Không xoá được role {role_name}: còn {len(policies_con_sot)} "
+            f"policy chưa bị xoá, quyền cũ VẪN CÒN hiệu lực. "
+            f"Chi tiết: {policies_con_sot}"
+        )
+
     user_repo = UserRepository(db)
     
     # STEP 3a: Find all users with this role in DB (using Repository)
@@ -293,26 +326,7 @@ async def delete_role_atomic(
             await enforcer.add_grouping_policy(user_subject, "role:user")
 
     # STEP 7: Remove all permission policies (p rules) for this role
-    # Xoá bằng ĐỦ rule bốn trường. Bản cũ cắt còn `(p[0], p[1], p[2])` nên
-    # không khớp nổi rule `p = sub, obj, act, eft` — xoá role xong mà policy
-    # vẫn còn sống, thành rule MỒ CÔI: tạo lại role cùng tên (hoặc còn grouping
-    # policy trỏ user vào nó) là quyền cũ áp lại âm thầm.
-    from app.services.casbin_service import (
-        chuan_hoa_rule,
-        policy_cua_role,
-        xoa_rule_chinh_xac,
-    )
-
-    policies_to_remove = [
-        chuan_hoa_rule(p) for p in all_policies if p and p[0] == role_name
-    ]
-    removed_p_count = 0
-    for p in policies_to_remove:
-        if await xoa_rule_chinh_xac(enforcer, p):
-            removed_p_count += 1
-
-    # HẬU ĐIỀU KIỆN: chỉ được tuyên bố xoá xong khi role KHÔNG còn policy nào.
-    policies_con_sot = policy_cua_role(enforcer, role_name)
+    # (Policy đã được xoá và xác nhận sạch ở STEP 2b, TRƯỚC mọi mutation.)
 
     # STEP 8: Remove role inheritance grouping policies (g, role:X, role:user)
     removed_g_inherit_count = 0
@@ -346,17 +360,10 @@ async def delete_role_atomic(
         )
 
     result = {
-        "success": not policies_con_sot,
-        "detail": (
-            f"Role {role_name} deleted successfully"
-            if not policies_con_sot
-            else (
-                f"Role {role_name} XOA CHUA XONG: con "
-                f"{len(policies_con_sot)} policy chua bi xoa — quyen cu VAN "
-                f"CON hieu luc"
-            )
-        ),
-        "policies_con_sot": policies_con_sot,
+        # Tới được đây nghĩa là hậu điều kiện ở STEP 2b đã ĐẠT — role không
+        # còn policy nào. Trường hợp còn sót đã ném ConflictError từ trước.
+        "success": True,
+        "detail": f"Role {role_name} deleted successfully",
         "role_name": role_name,
         "users_reassigned": reassigned_count,
         "permission_policies_removed": removed_p_count,

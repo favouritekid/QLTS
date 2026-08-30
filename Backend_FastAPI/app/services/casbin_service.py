@@ -29,7 +29,6 @@ from ..casbin_config.policy_templates import (
 from .. import models
 
 
-
 # =============================================================================
 # THU HỒI QUYỀN — MỘT NGUỒN CHUẨN
 # =============================================================================
@@ -89,7 +88,6 @@ def policy_cua_role(enforcer, role: str) -> List[List[str]]:
     thực tế là 6.
     """
     return [list(p) for p in enforcer.get_policy() if p and p[0] == role]
-
 
 
 class ValidationSeverity(str, Enum):
@@ -943,6 +941,7 @@ class CasbinPolicyService:
             # vận hành tin là đã bị xoá.
             removed = 0
             giu_co_y = []
+            xoa_that_bai = []
             for policy in current_policies:
                 subject, obj, action = policy[0], policy[1], policy[2]
 
@@ -951,40 +950,41 @@ class CasbinPolicyService:
                     giu_co_y.append(chuan_hoa_rule(policy))
                     continue
 
-                success = await xoa_rule_chinh_xac(self.enforcer, policy)
-                if success:
+                if await xoa_rule_chinh_xac(self.enforcer, policy):
                     removed += 1
+                else:
+                    xoa_that_bai.append(chuan_hoa_rule(policy))
 
-            # Apply template fresh (with template tracking)
-            result = await self.apply_template_to_role(
-                template_id, role, validate=False, applied_by=applied_by
-            )
-
-            # HẬU ĐIỀU KIỆN — đo TRẠNG THÁI THẬT, không suy từ `added`.
-            # `policies_after = result["added"]` là con số bịa: nó không nhìn
-            # vào enforcer, nên từng báo 4 trong khi thực tế còn 6.
-            sau = policy_cua_role(self.enforcer, role)
-            can_xoa = [chuan_hoa_rule(p) for p in current_policies]
-            con_sot = [
-                p for p in sau if p in can_xoa and p not in giu_co_y
-            ]
-            if con_sot:
-                # KHÔNG tuyên bố refresh thành công khi rule cũ còn sống.
+            # HẬU ĐIỀU KIỆN — kiểm TRƯỚC khi áp template.
+            # Kiểm SAU là sai: template có thể chứa đúng rule vừa bị xoá, nên
+            # một rule được xoá RỒI RE-ADD ĐÚNG sẽ bị tính nhầm là "còn sót".
+            # Ghi nhận thất bại ngay tại chỗ xoá thì không có chỗ cho nhầm lẫn.
+            if xoa_that_bai:
                 return {
                     "success": False,
                     "error": (
-                        "refresh KHÔNG hoàn tất: còn rule cũ chưa bị xoá — "
+                        "refresh KHÔNG hoàn tất: không xoá được rule cũ — "
                         "quyền cũ vẫn có hiệu lực"
                     ),
                     "role": role,
                     "template_id": template_id,
                     "policies_removed": removed,
                     "policies_before": current_count,
-                    "policies_added": result.get("added", 0),
-                    "policies_after": len(sau),
-                    "policies_con_sot": con_sot,
-                    "warnings": result.get("warnings", []),
+                    "policies_added": 0,
+                    "policies_after": len(policy_cua_role(self.enforcer, role)),
+                    "policies_xoa_that_bai": xoa_that_bai,
+                    "warnings": [],
                 }
+
+            # Apply template fresh (with template tracking)
+            result = await self.apply_template_to_role(
+                template_id, role, validate=False, applied_by=applied_by
+            )
+
+            # `policies_after` phải ĐO enforcer, không suy từ `added`:
+            # `result["added"]` không nhìn vào enforcer, nên từng báo 4 trong
+            # khi thực tế còn 6.
+            sau = policy_cua_role(self.enforcer, role)
             return {
                 "success": True,
                 "role": role,

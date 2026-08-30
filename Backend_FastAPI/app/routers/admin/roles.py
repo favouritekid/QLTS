@@ -1531,18 +1531,18 @@ async def toggle_role_feature(
         # giả. Với A01 Broken Access Control, một 200 cho việc thu hồi KHÔNG
         # xảy ra là kiểu hỏng tệ nhất: người vận hành tin quyền đã bị gỡ.
         #
-        # `blocked` là từ chối CÓ CHỦ Ý của safety-check, không phải thất bại
-        # âm thầm — nên trừ ra. Phần còn lại chưa xoá được thì phải nổ.
-        chua_xoa = (
-            len(policies_tuples)
-            - result.get("removed", 0)
-            - result.get("blocked", 0)
-        )
+        # KHÔNG trừ `blocked`. Safety-check từ chối xoá là từ chối CÓ CHỦ Ý,
+        # nhưng hệ quả với người dùng thì y hệt: policy VẪN CÒN, nên feature
+        # VẪN CHƯA TẮT. Trừ `blocked` ra là quay lại đúng lỗi đang vá — báo
+        # "Disabled feature" cho một việc không xảy ra. Fail-closed: chỉ được
+        # coi là thành công khi MỌI policy dự kiến thật sự bị xoá.
+        chua_xoa = len(policies_tuples) - result.get("removed", 0)
         if chua_xoa > 0:
             raise ConflictError(
                 f"Không tắt được feature '{feature_def['display_name']}' cho "
                 f"{role_name}: {chua_xoa}/{len(policies_tuples)} policy chưa "
-                f"bị xoá, quyền cũ VẪN CÒN hiệu lực. "
+                f"bị xoá (trong đó {result.get('blocked', 0)} bị safety-check "
+                f"giữ lại), quyền cũ VẪN CÒN hiệu lực. "
                 f"Chi tiết: {result.get('warnings') or result.get('errors')}"
             )
 

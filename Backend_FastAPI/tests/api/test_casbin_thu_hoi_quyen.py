@@ -154,23 +154,44 @@ async def test_counter_policies_after_do_trang_thai_that(client):
 
 
 @pytest.mark.asyncio
-async def test_sync_all_roles_ke_thua_duong_refresh(client):
-    """`sync_all_roles_from_templates` đi qua cùng đường refresh.
+async def test_sync_all_roles_uy_nhiem_sang_refresh(client):
+    """`sync_all_roles_from_templates` phải gọi refresh cho role CÓ DRIFT.
 
-    Ca này tồn tại vì nó KẾ THỪA lỗi: vá refresh mà không đo sync thì không
-    biết đường gọi gián tiếp có được vá theo hay không.
+    Bản nháp trước khẳng định `await_count >= 0` — biểu thức LUÔN ĐÚNG, tức
+    không canh gì cả; và nó chạy `dry_run=False` thật nên có thể đổi policy của
+    role HỆ THỐNG trong DB test dùng chung.
+
+    Nay dựng drift CHẮC CHẮN và CHỈ cho đúng một role (`role:officer`), rồi
+    khẳng định refresh được gọi ĐÚNG MỘT LẦN với đúng đối số. Đây là ca canh
+    DELEGATION: nếu sync tự dựng đường xoá riêng thay vì đi qua refresh, bản vá
+    bốn trường không bảo vệ được nó — và không ca nào khác phát hiện.
     """
-    enf = await _seed_cap_allow_deny()
+    from unittest.mock import AsyncMock, patch
 
+    CO_DRIFT = "role:officer"
+
+    async def _drift(role_name, template_id):
+        co = role_name == CO_DRIFT
+        return {
+            "has_drift": co,
+            "extra_in_db": [[CO_DRIFT, OBJ, ACT, "allow"]] if co else [],
+            "missing_in_db": [],
+        }
+
+    enf = _enf()
     async with AsyncSessionLocal() as db:
-        kq = await CasbinPolicyService(db, enf).sync_all_roles_from_templates(
-            dry_run=False
-        )
+        sv = CasbinPolicyService(db, enf)
+        with patch.object(
+            CasbinPolicyService, "detect_template_drift",
+            new_callable=AsyncMock, side_effect=_drift,
+        ), patch.object(
+            CasbinPolicyService, "refresh_role_from_template",
+            new_callable=AsyncMock,
+        ) as refresh:
+            refresh.return_value = {"success": True, "policies_removed": 1}
+            await sv.sync_all_roles_from_templates(dry_run=False)
 
-    assert isinstance(kq, dict), f"sync trả về không phải dict: {kq!r}"
-    # Không khẳng định SUB bị đụng (nó không có template), chỉ khẳng định
-    # sync KHÔNG để lại rule mồ côi cho các role nó thật sự chạm.
-    assert "error" not in kq or not kq.get("error"), f"sync lỗi: {kq}"
+    refresh.assert_awaited_once_with(CO_DRIFT, "officer", force=True)
 
 
 # ---------------------------------------------------------------------------
@@ -194,3 +215,190 @@ async def test_xoa_role_xoa_sach_ca_allow_lan_deny(client):
     assert kq["permission_policies_removed"] == 2, (
         f"counter phải khớp thực tế: {kq}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 5. Nhánh THẤT BẠI phải fail-closed — mã đúng, không audit, không đổi trạng thái
+# ---------------------------------------------------------------------------
+#
+# Mọi ca dưới đây khẳng định MÃ CHÍNH XÁC (409/CONFLICT), không phải
+# `status >= 400`. Bản nháp trước dùng `>= 400` và cả ba ca đều xanh GIẢ: một
+# ca sai URL nên nhận 404, hai ca kia nhận 500 vì một lỗi khác hẳn. Một phép
+# kiểm không phân biệt được nguyên nhân thì không canh được gì.
+
+
+@pytest.mark.asyncio
+async def test_feature_toggle_con_policy_thi_409_va_khong_audit(
+    client, admin_token_headers
+):
+    """Tắt feature mà còn policy chưa xoá -> 409 CONFLICT, KHÔNG ghi audit.
+
+    Kể cả khi policy bị safety-check giữ (`blocked`): hệ quả với người dùng y
+    hệt — policy VẪN CÒN nên feature VẪN CHƯA TẮT. Vì thế mock trả
+    ``blocked == len(policies_tuples)``: nếu ai đó trừ `blocked` ra khỏi phép
+    đếm thì `chua_xoa` về 0 và endpoint báo thành công — đúng đột biến cần bắt.
+
+    Ca này phải ở tầng HTTP vì cổng trung thực nằm ở ROUTER, không ở service.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from sqlalchemy import func, select
+
+    from app import models
+    from app.services.casbin_service import CasbinPolicyService
+
+    async def _gia(policies, *a, **k):
+        return {
+            "removed": 0,
+            "blocked": len(policies),
+            "errors": [],
+            "warnings": ["Blocked for safety"],
+        }
+
+    async with AsyncSessionLocal() as db:
+        truoc = await db.scalar(
+            select(func.count()).select_from(models.UserActivityLog)
+        )
+
+    with patch.object(
+        CasbinPolicyService,
+        "remove_policies_batch",
+        new_callable=AsyncMock,
+        side_effect=_gia,
+    ) as gia:
+        r = await client.post(
+            "/api/admin/roles/role:officer/features/toggle",
+            json={"feature_id": "view_leads", "enabled": False},
+            headers=admin_token_headers,
+        )
+
+    gia.assert_awaited_once()
+    assert r.status_code == 409, (
+        f"phải 409 CONFLICT; nhận {r.status_code}: {r.text[:200]}"
+    )
+    assert r.json().get("error_code") == "CONFLICT", r.text[:200]
+
+    async with AsyncSessionLocal() as db:
+        sau = await db.scalar(
+            select(func.count()).select_from(models.UserActivityLog)
+        )
+    assert sau == truoc, (
+        "KHÔNG được ghi audit 'Disabled feature' khi feature chưa thật sự tắt"
+    )
+
+
+@pytest.mark.asyncio
+async def test_xoa_role_that_bai_service_nem_va_giu_nguyen_trang_thai(client):
+    """Tầng SERVICE: xoá thất bại -> ném ConflictError, KHÔNG đụng gì.
+
+    Hậu điều kiện chạy TRƯỚC mọi mutation DB/grouping, nên khi nó đỏ thì
+    policy còn nguyên VÀ grouping còn nguyên. Grouping là chốt khoá THỨ TỰ:
+    thay đổi trên enforcer không rollback được, nên dời phép kiểm xuống sau là
+    để lại trạng thái nửa vời.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from app.services import role_service
+    from app.utils.exceptions import ConflictError
+
+    enf = await _seed_cap_allow_deny()
+    # Subject PHẢI đúng dạng `user:<số nguyên>`: STEP 3b chỉ nhận
+    # `group[0].startswith("user:")` rồi `int(...)`, nên một subject tuỳ ý
+    # (ví dụ "user_probe_thu_hoi") bị BỎ QUA hoàn toàn — chốt khoá thứ tự khi
+    # ấy vô hiệu, và đột biến "kiểm muộn" không bị bắt. Đã đo đúng như vậy.
+    USER = "user:999999"
+    for g in list(enf.get_grouping_policy()):
+        if g[0] == USER:
+            await enf.remove_grouping_policy(*g)
+    await enf.add_grouping_policy(USER, SUB)
+
+    async with AsyncSessionLocal() as db:
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            with pytest.raises(ConflictError):
+                await role_service.delete_role_atomic(db, SUB, enf)
+
+    assert sorted(policy_cua_role(enf, SUB)) == sorted([ALLOW, DENY]), (
+        "policy phải còn NGUYÊN khi xoá thất bại"
+    )
+    assert [USER, SUB] in [list(g) for g in enf.get_grouping_policy()], (
+        "grouping phải còn NGUYÊN — hậu điều kiện phải chạy TRƯỚC mutation "
+        "grouping, vì thay đổi trên enforcer không rollback được"
+    )
+
+
+@pytest.mark.asyncio
+async def test_xoa_role_that_bai_http_tra_409_khong_phai_500(
+    client, admin_token_headers
+):
+    """Tầng HTTP: xoá thất bại -> ĐÚNG 409, không phải 500.
+
+    Router từng bắt mọi `Exception` rồi biến cả ConflictError thành 500. Với
+    A01 đó là mất thông tin: "không xoá được vì còn policy" (409, người vận
+    hành xử lý được) khác hẳn "lỗi bất ngờ" (500, chỉ biết thử lại).
+    """
+    from unittest.mock import AsyncMock, patch
+
+    enf = await _seed_cap_allow_deny()
+
+    with patch(
+        "app.services.casbin_service.xoa_rule_chinh_xac",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
+        r = await client.delete(
+            f"/api/admin/roles/{SUB}", headers=admin_token_headers
+        )
+
+    assert r.status_code == 409, f"phải 409; nhận {r.status_code}: {r.text[:200]}"
+    assert "deleted successfully" not in r.text
+    assert sorted(policy_cua_role(enf, SUB)) == sorted([ALLOW, DENY])
+
+
+@pytest.mark.asyncio
+async def test_xoa_role_thanh_cong_http_2xx_va_callback_khong_no(
+    client, admin_token_headers
+):
+    """Đường THÀNH CÔNG: HTTP 2xx, role biến mất, callback chạy không TypeError.
+
+    Ca này khoá bản vá logging: `_post_commit` chạy SAU `db.commit()`, nên một
+    `TypeError` ở dòng log biến endpoint thành 500 cho một việc ĐÃ XẢY RA.
+    """
+    enf = await _seed_cap_allow_deny()
+
+    r = await client.delete(
+        f"/api/admin/roles/{SUB}", headers=admin_token_headers
+    )
+
+    assert r.status_code < 300, f"phải 2xx; nhận {r.status_code}: {r.text[:300]}"
+    assert policy_cua_role(enf, SUB) == [], "role phải thật sự biến mất"
+
+
+@pytest.mark.asyncio
+async def test_refresh_that_bai_khong_ap_template(client):
+    """Xoá thất bại -> KHÔNG được áp template đè lên trạng thái chưa dọn."""
+    from unittest.mock import AsyncMock, patch
+
+    enf = await _seed_cap_allow_deny()
+
+    async with AsyncSessionLocal() as db:
+        sv = CasbinPolicyService(db, enf)
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            with patch.object(
+                CasbinPolicyService, "apply_template_to_role",
+                new_callable=AsyncMock,
+            ) as ap:
+                kq = await sv.refresh_role_from_template(
+                    role=SUB, template_id="lead_viewer", force=True
+                )
+
+    assert kq["success"] is False, f"phải báo thất bại: {kq}"
+    assert kq.get("policies_xoa_that_bai"), "phải nêu rõ rule nào không xoá được"
+    ap.assert_not_awaited()
