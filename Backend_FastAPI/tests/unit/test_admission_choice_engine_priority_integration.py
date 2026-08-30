@@ -24,12 +24,87 @@ _ENGINE_SRC = (
 
 
 def test_evaluate_cascade_imports_priority_service() -> None:
-    """Engine must import calculate_priority_bonus inside evaluate_cascade
-    (lazy import to avoid circular dependency at module load)."""
-    src = _ENGINE_SRC.read_text(encoding="utf-8")
-    assert (
-        "from app.services.priority_service import calculate_priority_bonus"
-        in src
+    """Engine phải import ``calculate_priority_bonus`` LAZY, trong thân hàm.
+
+    Bất biến: ``priority_service`` import ``app.models``, nên đưa import này lên
+    module level là tái lập vòng phụ thuộc lúc nạp engine.
+
+    Bản cũ grep NGUYÊN VĂN một dòng
+    ``"from app.services.priority_service import calculate_priority_bonus"``.
+    Import ấy vẫn còn và vẫn lazy, nhưng nay là dạng nhiều tên trong ngoặc nên
+    chuỗi một dòng không còn xuất hiện — ca đỏ trong khi sản phẩm đúng. Đây là
+    lớp lỗi "test grep văn bản nguồn": nó vỡ vì ĐỊNH DẠNG, và ngược lại có thể
+    xanh oan nếu chuỗi ấy nằm trong một chú thích.
+
+    Nay soi bằng AST và khoá ĐÚNG hai chiều: có ở tầng hàm, và KHÔNG có ở tầng
+    module.
+    """
+    import ast
+
+    cay = ast.parse(_ENGINE_SRC.read_text(encoding="utf-8"))
+    MODULE = "app.services.priority_service"
+
+    # Ca này CHỈ còn vế DƯƠNG TÍNH: import phải tồn tại trong local scope của
+    # `evaluate_cascade`. Vế âm ("không được chạy lúc nạp module") ĐÃ BỎ khỏi
+    # đây và giao hẳn cho `test_nap_engine_khong_keo_theo_priority_service`.
+    #
+    # Vì sao bỏ: mọi bản AST của vế âm đều đỏ oan với `if TYPE_CHECKING:` —
+    # khối ấy KHÔNG chạy lúc runtime, nhưng AST tĩnh không phân biệt được nó
+    # với một `if` thường. Đã đo: TYPE_CHECKING=False mà AST vẫn đánh dấu eager.
+    # Đuổi theo bằng cách liệt kê `TYPE_CHECKING` như một ngoại lệ chỉ đẻ ra
+    # biến thể kế tiếp (`typing.TYPE_CHECKING`, alias, `if not TYPE_CHECKING`).
+    # Phép kiểm runtime trả lời đúng câu hỏi ấy mà không cần biết cú pháp.
+    #
+    # Vế dương tính thì KHÔNG thay bằng runtime được: gỡ hẳn import đi thì
+    # `sys.modules` càng sạch, phép kiểm runtime càng xanh. Nên cần cả hai.
+    #
+    # Ranh giới dừng ở đây là ranh giới của LOCAL SCOPE, không phải của thứ tự
+    # nạp: thân `class` KHÔNG bind vào local của hàm bao — ngữ nghĩa Python,
+    # không phải chi tiết cú pháp:
+    #
+    #     def f():
+    #         class C:
+    #             from math import sqrt
+    #         sqrt(4)          # NameError
+    #
+    # nên phải dừng ở CẢ class lẫn function/lambda.
+    DUNG_KHI_LOCAL = (
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.Lambda,
+        ast.ClassDef,
+    )
+
+    def _nut(nut, dung):
+        for con in ast.iter_child_nodes(nut):
+            if isinstance(con, dung):
+                continue
+            yield con
+            yield from _nut(con, dung)
+
+    def _import_tu(nut, dung) -> set:
+        ra = set()
+        for c in _nut(nut, dung):
+            if isinstance(c, ast.ImportFrom) and c.module == MODULE:
+                ra |= {a.name for a in c.names}
+        return ra
+
+    # Phải khoanh vào ĐÚNG `evaluate_cascade`, không gom import từ mọi hàm:
+    # chuyển import sang một hàm khác (vd `_collect_subject_scores`) thì phép
+    # kiểm gom-tất-cả vẫn xanh, trong khi `evaluate_cascade` mất đường lấy
+    # priority bonus. Đã đo: đột biến ấy KHÔNG bị bắt ở bản gom.
+    ham = [
+        n
+        for n in ast.walk(cay)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name == "evaluate_cascade"
+    ]
+    assert len(ham) == 1, f"kỳ vọng đúng 1 evaluate_cascade; có {len(ham)}"
+
+    o_ham = _import_tu(ham[0], DUNG_KHI_LOCAL)
+    assert "calculate_priority_bonus" in o_ham, (
+        "evaluate_cascade phải tự lazy-import calculate_priority_bonus; "
+        f"thấy trong hàm: {sorted(o_ham)}"
     )
 
 
@@ -142,3 +217,46 @@ def test_engine_warns_on_skipped_priority() -> None:
     src = _ENGINE_SRC.read_text(encoding="utf-8")
     assert "priority_bonus_skipped_missing_academic_year" in src
     assert "log.warning(" in src
+
+
+def test_nap_engine_khong_keo_theo_priority_service() -> None:
+    """Nạp engine trong TIẾN TRÌNH SẠCH không được kéo `priority_service` vào.
+
+    Đây là vế RUNTIME, bổ sung cho phép kiểm AST ở trên chứ không thay thế nó.
+    Hai vế bắt hai thứ khác nhau, và cần cả hai:
+
+      * AST (dương tính): import PHẢI tồn tại trong local scope của
+        `evaluate_cascade`. Runtime không nói được điều này — gỡ hẳn import đi
+        thì `sys.modules` càng sạch, phép kiểm runtime càng xanh.
+      * Runtime (âm tính): nạp module KHÔNG được kéo theo `priority_service`.
+        Vế này ĐỘC LẬP CÚ PHÁP — mọi biến thể `if True:` / `try:` / `class` ở
+        tầng module đều bị bắt như nhau, không cần liệt kê từng dạng.
+
+    Phải là SUBPROCESS sạch, không phải `importlib` trong tiến trình pytest
+    đang chạy: conftest và các ca khác đã nạp sẵn nửa cây phụ thuộc, nên
+    `sys.modules` ở đây không nói lên điều gì về thứ tự nạp thật.
+    """
+    import subprocess
+    import sys
+
+    MOC = "KETQUA:"
+    ma = (
+        "import sys\n"
+        "import app.services.admission_choice_engine_service\n"
+        "print('" + MOC + "' + ('CO' if 'app.services.priority_service' in sys.modules"
+        " else 'KHONG'))\n"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", ma],
+        capture_output=True,
+        text=True,
+        cwd=str(_ENGINE_SRC.parents[2]),
+    )
+    assert r.returncode == 0, f"nạp engine hỏng:\n{r.stderr[-1500:]}"
+
+    dong = [x for x in r.stdout.splitlines() if x.startswith(MOC)]
+    assert len(dong) == 1, f"không đọc được kết quả; stdout:\n{r.stdout[-800:]}"
+    assert dong[0] == MOC + "KHONG", (
+        "nạp engine đã kéo `app.services.priority_service` vào sys.modules — "
+        "vòng phụ thuộc lúc nạp đã quay lại"
+    )

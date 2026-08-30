@@ -194,19 +194,39 @@ def test_admission_path_model_declares_method_quota() -> None:
     assert "INTEGER" in type_repr.upper()
 
 
-def test_admission_path_unique_constraint_unchanged() -> None:
-    """Duplicate-check guard — Codex P1 contract: PR-1B' MUST NOT
-    drop the existing ``uq_admission_path_offering_method`` unique
-    constraint. Phase 2 swap is a separate migration. If this test
-    breaks because someone removed the constraint name, the
-    ``DuplicateResourceError`` raised by
-    ``admission_path_service:144`` would silently degrade to a DB
-    IntegrityError 500 in Phase 1 — bad UX, bad telemetry."""
+def test_admission_path_co_unique_ba_cot_chong_trung() -> None:
+    """Bộ khoá chống trùng của AdmissionPath phải có ràng buộc UNIQUE ở DB.
+
+    Bất biến gốc giữ nguyên và vẫn là lý do ca này tồn tại: service kiểm trùng
+    TRƯỚC, nhưng nếu DB không có UNIQUE tương ứng thì hai request song song lọt
+    qua phép kiểm ấy và ``DuplicateResourceError`` thoái hoá thành
+    IntegrityError 500 — hỏng UX, hỏng telemetry.
+
+    Cái ĐỔI là bộ khoá, và đổi CÓ Ý: Phase 2 v8.2 PR-2C v2 chuyển từ
+    ``uq_admission_path_offering_method`` sang ``uq_admission_path_round_acad_method``
+    trên (round, academic_info, method) — một ngành có thể có nhiều path cùng
+    method ở các đợt khác nhau (DOT_1 vs DOT_2). Đã đối chiếu: phép kiểm trùng
+    ở ``admission_path_service`` cũng đã chuyển sang đúng bộ 3 cột ấy, nên hai
+    tầng KHỚP nhau, không có khe hở. Ca cũ khoá tên Phase 1 mà Phase 2 đã thay.
+
+    Khẳng định cả TÊN lẫn BỘ CỘT: chỉ khoá tên thì đổi cột mà giữ tên vẫn xanh.
+    So theo TẬP vì thứ tự cột không đổi ngữ nghĩa duy nhất.
+    """
     from app.models.admission_config.admission_path import AdmissionPath
-    constraint_names = {
-        c.name for c in AdmissionPath.__table__.constraints
+
+    rang_buoc = {
+        c.name: {x.name for x in getattr(c, "columns", [])}
+        for c in AdmissionPath.__table__.constraints
+        if c.name
     }
-    assert "uq_admission_path_offering_method" in constraint_names
+    assert "uq_admission_path_round_acad_method" in rang_buoc, (
+        f"thiếu UNIQUE chống trùng; đang có: {sorted(rang_buoc)}"
+    )
+    assert rang_buoc["uq_admission_path_round_acad_method"] == {
+        "admission_round_id",
+        "academic_info_id",
+        "admission_method_id",
+    }
 
 
 # ---------------------------------------------------------------------------

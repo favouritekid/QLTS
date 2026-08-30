@@ -24,13 +24,21 @@ class TestBuildActionSnapshot:
     """_build_action_snapshot with each content_mode."""
 
     def test_inherit_default(self):
+        # PR1: `link` lấy từ tham số `catalog_link` (mã sinh), KHÔNG từ
+        # `config.render_link`. `_make_config()` đặt `render_link -> "/default"`,
+        # nên truyền `catalog_link` KHÁC HẲN thì phép kiểm mới phân biệt được
+        # hai nguồn — bản cũ khẳng định "/default", tức đường config THẮNG.
         action = ActionConfig(step=1, channel="browser")
         config = _make_config()
-        result = _build_action_snapshot(action, config, {}, {})
+        result = _build_action_snapshot(
+            action, config, {}, {}, catalog_link="/catalog/do-ma-sinh"
+        )
         assert result["title"] == "Default Title"
         assert result["message"] == "Default Message"
-        assert result["link"] == "/default"
+        assert result["link"] == "/catalog/do-ma-sinh"
         assert result["type"] == "info"
+        # Khoá luôn chiều ngược: đường cũ phải CHẾT hẳn, không chỉ là thua.
+        config.render_link.assert_not_called()
 
     def test_inherit_default_explicit(self):
         action = ActionConfig(step=1, channel="browser", content_mode="inherit_default")

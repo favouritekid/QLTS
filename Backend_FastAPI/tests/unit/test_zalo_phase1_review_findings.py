@@ -1021,13 +1021,30 @@ async def test_confirm_token_dispatches_only_application_status_changed():
     NOT LEAD_STATUS_CHANGED (approved→confirmed = same lead sts09)."""
     from app.routers.admissions import confirm_admission_by_token
 
-    profile = _make_profile_mock(id=10, status="confirmed", lead_id=37)
+    # `_make_profile_mock` để `lead=MagicMock(id=37)`, nên `lead.unit_id` và
+    # `lead.assigned_officer_id` là mock TỰ SINH — không phải None, nên
+    # `rooms_for_admission` dựng ra `unit_<MagicMock ...>`: chuỗi rác mà vẫn
+    # truthy. Khẳng định "rooms không rỗng" vì thế xanh với BẤT KỲ bộ phòng nào,
+    # kể cả sai đơn vị hay sai officer. Đặt giá trị THẬT để so được đúng bộ.
+    _lead = MagicMock(id=37)
+    _lead.unit_id = 7
+    _lead.assigned_officer_id = 13
+    profile = _make_profile_mock(
+        id=10, status="confirmed", lead_id=37, lead=_lead
+    )
     profile.confirmed_at = "2026-03-31T00:00:00Z"
 
     dispatch_calls = []
 
-    async def tracking_dispatch(db, event, payload, dedupe_key=None):
-        dispatch_calls.append({"event": event.value, "payload": payload})
+    # `rooms` KHÔNG phải tham số thừa cần nuốt cho qua: nó là bản vá bảo mật
+    # scoped-emit (đã prod) — sự kiện phải tới ĐÚNG phòng của lead thay vì phát
+    # quảng bá. Test double cũ chỉ nhận tới `dedupe_key` nên router gọi kèm
+    # `rooms=` là nổ TypeError. Ghi lại `rooms` và khẳng định nó CÓ giá trị, để
+    # ca này KHOÁ bản vá ấy chứ không chỉ chịu đựng nó.
+    async def tracking_dispatch(db, event, payload, dedupe_key=None, rooms=None):
+        dispatch_calls.append(
+            {"event": event.value, "payload": payload, "rooms": rooms}
+        )
 
     with patch(
         "app.routers.admissions.admission_service.verify_and_confirm",
@@ -1050,8 +1067,24 @@ async def test_confirm_token_dispatches_only_application_status_changed():
     events = [c["event"] for c in dispatch_calls]
     assert "application_status_changed" in events
     assert "lead_status_changed" not in events
-    assert dispatch_calls[0]["payload"]["old_status"] == "approved"
-    assert dispatch_calls[0]["payload"]["new_status"] == "confirmed"
+
+    # Tìm lượt gọi theo SỰ KIỆN chứ không theo chỉ số: `dispatch_calls[0]` gắn
+    # cứng vào thứ tự phát, nên chèn thêm một dispatch phía trước là mọi khẳng
+    # định dưới đây soi nhầm lượt mà vẫn xanh.
+    goi = [c for c in dispatch_calls if c["event"] == "application_status_changed"]
+    assert len(goi) == 1, f"kỳ vọng đúng 1 lượt; có {len(goi)}"
+    goi = goi[0]
+
+    assert goi["payload"]["old_status"] == "approved"
+    assert goi["payload"]["new_status"] == "confirmed"
+
+    # Bản vá scoped-emit: sự kiện phải tới ĐÚNG BỘ PHÒNG, không phải "một bộ
+    # phòng nào đó". `rooms_for_admission` = role_admin + unit của lead +
+    # phòng riêng của officer được giao. Khẳng định truthy là vô dụng:
+    # ["role_admin"] hay ["unit_999"] đều qua, và bộ rác từ MagicMock cũng qua.
+    assert set(goi["rooms"]) == {"role_admin", "unit_7", "user_room_13"}, (
+        f"bộ phòng sai: {sorted(goi['rooms'])}"
+    )
 
 
 # NOTE: 3 router-level dispatch/commission tests removed in Path C / Arch-3
@@ -1623,16 +1656,89 @@ def test_source_extraction_for_application_deleted():
     assert source_id == 26
 
 
-def test_application_deleted_does_not_emit_lead_status_changed():
-    """Delete dispatch block must NOT contain LEAD_STATUS_CHANGED.
-    Verify by inspecting the router code pattern — delete only emits
-    APPLICATION_DELETED, never LEAD_STATUS_CHANGED."""
+def test_duong_xoa_phat_application_deleted_va_lead_status_co_dieu_kien():
+    """Đường xoá hồ sơ: APPLICATION_DELETED VÔ ĐIỀU KIỆN, LEAD_STATUS_CHANGED
+    CHỈ khi trạng thái lead thật sự đảo.
+
+    Ca cũ (`..._does_not_emit_lead_status_changed`) khẳng định đường xoá KHÔNG
+    BAO GIỜ phát LEAD_STATUS_CHANGED. Hợp đồng ấy đã bị `d435f21a`
+    ("hardening xóa hồ sơ — escape PII + dọn file + REVERT TRẠNG THÁI LEAD",
+    #415) thay CÓ Ý: xoá bản nháp cuối có thể đảo trạng thái lead, và người
+    đăng ký pipeline phải thấy việc đó.
+
+    Bất biến đáng canh nay là TÍNH CÓ ĐIỀU KIỆN, không phải sự vắng mặt: phát
+    LEAD_STATUS_CHANGED vô điều kiện sẽ bắn sự kiện đảo trạng thái ở MỌI lượt
+    xoá, kể cả khi lead không đổi gì.
+
+    Soi bằng AST chứ không so văn bản, vì hai lý do đã trả giá:
+      - dispatch nằm trong helper `_emit_post_delete_events`, không nằm trong
+        thân router;
+      - `LEAD_STATUS_CHANGED` còn xuất hiện trong CHÚ THÍCH của router, nên so
+        nguyên văn thì đỏ oan.
+    """
+    import ast as _ast
     import inspect
+    import re as _re
+    import textwrap as _tw
+
     from app.routers import admissions as adm_module
 
-    source = inspect.getsource(adm_module.delete_admission_profile)
-    assert "APPLICATION_DELETED" in source
-    assert "LEAD_STATUS_CHANGED" not in source
+    def _cay(fn):
+        return _ast.parse(_tw.dedent(inspect.getsource(fn)))
+
+    def _su_kien(nut) -> set:
+        ra = set()
+        for n in _ast.walk(nut):
+            if not isinstance(n, _ast.Call):
+                continue
+            ten = getattr(n.func, "id", None) or getattr(n.func, "attr", None)
+            if ten != "safe_dispatch":
+                continue
+            for kw in n.keywords:
+                if kw.arg == "event":
+                    ra.add(_ast.unparse(kw.value))
+        return ra
+
+    goc = inspect.getsource(adm_module.delete_admission_profile)
+    ten_helper = sorted(set(_re.findall(r"\b(_emit_[a-z_]+)\(", goc)))
+    assert ten_helper, "không thấy helper phát sự kiện nào được gọi"
+
+    # Ghi lại ĐIỀU KIỆN canh mỗi sự kiện, không chỉ "có nằm trong một if".
+    # Đột biến `if lead_revert:` -> `if True:` vẫn là một `ast.If`, nên phép
+    # kiểm chỉ hỏi "nằm trong if không" bị qua mặt — đã đo, không bắt được.
+    tat_ca = set()
+    dieu_kien = {}
+    for fn in [adm_module.delete_admission_profile] + [
+        getattr(adm_module, t) for t in ten_helper
+    ]:
+        cay = _cay(fn)
+        tat_ca |= _su_kien(cay)
+        for n in _ast.walk(cay):
+            if isinstance(n, _ast.If):
+                dk = _ast.unparse(n.test)
+                for sk in _su_kien(n):
+                    dieu_kien.setdefault(sk, set()).add(dk)
+    co_dieu_kien = set(dieu_kien)
+
+    XOA = "SystemEvents.APPLICATION_DELETED"
+    LEAD = "SystemEvents.LEAD_STATUS_CHANGED"
+
+    assert XOA in tat_ca, (
+        f"đường xoá phải phát APPLICATION_DELETED; thấy: {sorted(tat_ca)}"
+    )
+    assert XOA not in co_dieu_kien, "APPLICATION_DELETED phải phát VÔ ĐIỀU KIỆN"
+    assert LEAD in tat_ca, (
+        f"đường xoá phải phát LEAD_STATUS_CHANGED khi lead đảo; "
+        f"thấy: {sorted(tat_ca)}"
+    )
+    assert LEAD in co_dieu_kien, (
+        "LEAD_STATUS_CHANGED phải nằm trong nhánh điều kiện — phát vô điều kiện "
+        "là bắn sự kiện đảo trạng thái ở MỌI lượt xoá"
+    )
+    assert any("lead_revert" in dk for dk in dieu_kien[LEAD]), (
+        "điều kiện canh LEAD_STATUS_CHANGED phải nhắc `lead_revert`; "
+        f"đang là: {sorted(dieu_kien[LEAD])}"
+    )
 
 
 def test_application_deleted_seed_rule_exists():
@@ -1642,10 +1748,26 @@ def test_application_deleted_seed_rule_exists():
     assert "application_deleted" in CURATED_RULES
     rule = CURATED_RULES["application_deleted"]
     assert rule["enabled"] is True
-    assert "browser" in rule["channels"]
-    assert "email" in rule["channels"]
-    # Must have lead_owner + all_admins groups (4 actions: 2 channels × 2 groups)
+
+    # `channels` cấp-rule đã bỏ; kênh nay nằm THEO TỪNG action
+    # (`action["channel"]`). Ý định của ca giữ nguyên — phủ browser + email cho
+    # cả hai nhóm nhận — nhưng phải đọc từ đúng chỗ.
+    assert "channels" not in rule, (
+        "khoá `channels` cấp-rule đã bỏ; nếu nó quay lại thì có HAI nguồn kênh"
+    )
+    kenh = {a["channel"] for a in rule["actions"]}
+    assert kenh == {"browser", "email"}, f"bộ kênh: {sorted(kenh)}"
+
+    # 4 action = 2 kênh × 2 nhóm. Khẳng định TÍCH ĐỀ-CÁC chứ không chỉ đếm:
+    # đếm 4 vẫn xanh khi cả bốn action cùng trỏ một nhóm.
     assert len(rule["actions"]) == 4
-    resolver_types = {a["recipient_config"]["resolver_type"] for a in rule["actions"]}
-    assert "lead_owner" in resolver_types
-    assert "all_admins" in resolver_types
+    cap = {
+        (a["recipient_config"]["resolver_type"], a["channel"])
+        for a in rule["actions"]
+    }
+    assert cap == {
+        ("lead_owner", "browser"),
+        ("lead_owner", "email"),
+        ("all_admins", "browser"),
+        ("all_admins", "email"),
+    }, f"cặp (nhóm, kênh): {sorted(cap)}"

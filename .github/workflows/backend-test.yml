@@ -533,6 +533,11 @@ jobs:
             # 'reliability' ma lat nay dang gac. `test_profile_api.py` vao day de CAN
             # TAI: Tier 3 la lat NHE NHAT, con Tier 2 — noi hop chu de RBAC hon — dang
             # la duong toi han cua ca workflow.
+          # Bon tep nua vao Tier 3, dung mien: notification_e2 (render snapshot +
+          # CRUD rule), dispatcher_per_action (content_mode), channel_normalization
+          # (bo kenh chinh tac), zalo_phase1_review_findings (dispatch duong xoa +
+          # seed rule). Ca bon truoc nay NGOAI MOI TIER — nightly do 10 ca ma
+          # required check van xanh. Ghi sau khi xanh tron; ca lat chay ~9 giay.
           - tier: Tier 3 — Notification reliability
             coverage_script: true
             visibility_guard: true
@@ -550,6 +555,10 @@ jobs:
               tests/services/test_payment_service.py::TestPaymentVerifiedNotificationBridge
               tests/services/test_resilience.py
               tests/api/test_profile_api.py
+              tests/unit/test_notification_e2.py
+              tests/unit/test_dispatcher_per_action.py
+              tests/unit/test_channel_normalization.py
+              tests/unit/test_zalo_phase1_review_findings.py
 
           # ---------------------------------------------------------------
           # Tier 4: Admission + lead workflow contract
@@ -633,6 +642,10 @@ jobs:
           # test_nightly_shard_inventory — deu la phep kiem CAU TRUC doc tep nguon,
           # chay vai giay, khong dung DB. Truoc nay ngoai moi tier nen 3 ca do trong
           # nightly ma PR gate van xanh. Ghi sau khi xanh tron 17/17.
+          # Hai tep nua vao Tier 5, cung ho phep kiem CAU TRUC: choice_engine
+          # priority_integration soi AST dam bao import LAZY (chong vong phu thuoc),
+          # phase1_03_revision_chain soi rang buoc UNIQUE tren model. Deu doc AST /
+          # metadata, khong dung DB.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -646,6 +659,8 @@ jobs:
               tests/unit/test_entrypoint_ordering.py
               tests/unit/test_immediate_fixes.py
               tests/unit/test_wave4_15b_hotfix_multiyear_race_check.py
+              tests/unit/test_admission_choice_engine_priority_integration.py
+              tests/unit/test_phase1_03_revision_chain.py
               tests/unit/test_deploy_startup_gates.py
               tests/unit/test_smoke_harness_guards.py
               tests/unit/test_smoke_cli.py
