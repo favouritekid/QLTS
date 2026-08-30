@@ -44,35 +44,42 @@ def test_evaluate_cascade_imports_priority_service() -> None:
     cay = ast.parse(_ENGINE_SRC.read_text(encoding="utf-8"))
     MODULE = "app.services.priority_service"
 
-    def _nut_thuc_thi(nut):
-        """Nút CHẠY khi phạm vi này chạy — dừng ở thân function/lambda.
+    # HAI phạm vi, HAI ranh giới. Gộp làm một là sai — bản trước đã sai đúng
+    # chỗ này. Hai câu hỏi khác nhau về BẢN CHẤT:
+    #
+    #   (a) "có chạy lúc NẠP MODULE không?"  -> thân `class` CÓ chạy lúc nạp,
+    #       nên phải ĐI VÀO ClassDef; chỉ dừng ở function/lambda.
+    #
+    #   (b) "có bind vào LOCAL của evaluate_cascade không?" -> thân `class`
+    #       KHÔNG bind vào local của hàm bao. Đây là ngữ nghĩa Python, không
+    #       phải chi tiết cú pháp:
+    #
+    #           def f():
+    #               class C:
+    #                   from math import sqrt
+    #               sqrt(4)          # NameError
+    #
+    #       Nên câu (b) phải dừng THÊM ở ClassDef. Nếu không, chuyển import vào
+    #       một class lồng trong `evaluate_cascade` sẽ làm test XANH trong khi
+    #       production ném NameError.
+    DUNG_KHI_NAP = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+    DUNG_KHI_LOCAL = DUNG_KHI_NAP + (ast.ClassDef,)
 
-        Dùng chung cho cả hai phạm vi, và ranh giới "dừng ở đâu" là phần đắt
-        nhất của ca này:
-
-        * ĐI VÀO `if` / `try` / `with` / `for` / `class`: thân chúng chạy cùng
-          phạm vi cha. Một eager import nấp trong ``if True:`` ở tầng module
-          VẪN chạy lúc nạp module — bản trước chỉ đọc con trực tiếp của
-          `Module.body` nên đột biến ấy lọt. Thân `class` cũng chạy lúc nạp,
-          nên KHÔNG được loại.
-        * KHÔNG đi vào `def` / `async def` / `lambda`: thân chúng chỉ chạy khi
-          được gọi, nên ở tầng module chúng vô hại, còn trong
-          `evaluate_cascade` chúng không bảo đảm gì cho chính hàm ấy.
-        """
+    def _nut(nut, dung):
         for con in ast.iter_child_nodes(nut):
-            if isinstance(con, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            if isinstance(con, dung):
                 continue
             yield con
-            yield from _nut_thuc_thi(con)
+            yield from _nut(con, dung)
 
-    def _import_tu(nut) -> set:
+    def _import_tu(nut, dung) -> set:
         ra = set()
-        for c in _nut_thuc_thi(nut):
+        for c in _nut(nut, dung):
             if isinstance(c, ast.ImportFrom) and c.module == MODULE:
                 ra |= {a.name for a in c.names}
         return ra
 
-    o_module = _import_tu(cay)
+    o_module = _import_tu(cay, DUNG_KHI_NAP)
     assert "calculate_priority_bonus" not in o_module, (
         "import phải LAZY — chạy lúc nạp module là tái lập vòng phụ thuộc, "
         "kể cả khi nấp trong if/try/with/class ở tầng module"
@@ -90,7 +97,7 @@ def test_evaluate_cascade_imports_priority_service() -> None:
     ]
     assert len(ham) == 1, f"kỳ vọng đúng 1 evaluate_cascade; có {len(ham)}"
 
-    o_ham = _import_tu(ham[0])
+    o_ham = _import_tu(ham[0], DUNG_KHI_LOCAL)
     assert "calculate_priority_bonus" in o_ham, (
         "evaluate_cascade phải tự lazy-import calculate_priority_bonus; "
         f"thấy trong hàm: {sorted(o_ham)}"
@@ -206,3 +213,46 @@ def test_engine_warns_on_skipped_priority() -> None:
     src = _ENGINE_SRC.read_text(encoding="utf-8")
     assert "priority_bonus_skipped_missing_academic_year" in src
     assert "log.warning(" in src
+
+
+def test_nap_engine_khong_keo_theo_priority_service() -> None:
+    """Nạp engine trong TIẾN TRÌNH SẠCH không được kéo `priority_service` vào.
+
+    Đây là vế RUNTIME, bổ sung cho phép kiểm AST ở trên chứ không thay thế nó.
+    Hai vế bắt hai thứ khác nhau, và cần cả hai:
+
+      * AST (dương tính): import PHẢI tồn tại trong local scope của
+        `evaluate_cascade`. Runtime không nói được điều này — gỡ hẳn import đi
+        thì `sys.modules` càng sạch, phép kiểm runtime càng xanh.
+      * Runtime (âm tính): nạp module KHÔNG được kéo theo `priority_service`.
+        Vế này ĐỘC LẬP CÚ PHÁP — mọi biến thể `if True:` / `try:` / `class` ở
+        tầng module đều bị bắt như nhau, không cần liệt kê từng dạng.
+
+    Phải là SUBPROCESS sạch, không phải `importlib` trong tiến trình pytest
+    đang chạy: conftest và các ca khác đã nạp sẵn nửa cây phụ thuộc, nên
+    `sys.modules` ở đây không nói lên điều gì về thứ tự nạp thật.
+    """
+    import subprocess
+    import sys
+
+    MOC = "KETQUA:"
+    ma = (
+        "import sys\n"
+        "import app.services.admission_choice_engine_service\n"
+        "print('" + MOC + "' + ('CO' if 'app.services.priority_service' in sys.modules"
+        " else 'KHONG'))\n"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", ma],
+        capture_output=True,
+        text=True,
+        cwd=str(_ENGINE_SRC.parents[2]),
+    )
+    assert r.returncode == 0, f"nạp engine hỏng:\n{r.stderr[-1500:]}"
+
+    dong = [x for x in r.stdout.splitlines() if x.startswith(MOC)]
+    assert len(dong) == 1, f"không đọc được kết quả; stdout:\n{r.stdout[-800:]}"
+    assert dong[0] == MOC + "KHONG", (
+        "nạp engine đã kéo `app.services.priority_service` vào sys.modules — "
+        "vòng phụ thuộc lúc nạp đã quay lại"
+    )
