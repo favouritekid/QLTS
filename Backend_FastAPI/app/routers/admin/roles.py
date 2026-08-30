@@ -45,6 +45,7 @@ from app.schemas.permissions import (
 )
 from app.services import activity_service, role_service
 from app.utils.exceptions import (
+    ConflictError,
     DuplicateResourceError,
     PermissionDeniedError,
     ResourceNotFoundError,
@@ -294,9 +295,15 @@ async def delete_policy(
             detail=f"Cannot remove this policy for safety reasons: {'; '.join(validation.warnings)}"
         )
 
-    # 2. Remove policy from Casbin
-    removed = await enforcer.remove_policy(
-        policy_in.subject, policy_in.object, policy_in.action
+    # 2. Remove policy from Casbin — bằng ĐỦ bốn trường.
+    # Payload API chỉ có ba trường và chỉ tạo được policy `allow`, nên chuẩn
+    # hoá về `eft="allow"` là đúng ngữ nghĩa của nó. KHÔNG dùng remove-filter
+    # theo ba trường: nó khớp cả rule `deny` cùng (sub, obj, act) và xoá nhầm
+    # deny là âm thầm MỞ quyền.
+    from app.services.casbin_service import xoa_rule_chinh_xac
+
+    removed = await xoa_rule_chinh_xac(
+        enforcer, (policy_in.subject, policy_in.object, policy_in.action)
     )
     if not removed:
         raise ResourceNotFoundError("Policy not found or could not be removed.")
@@ -1502,7 +1509,29 @@ async def toggle_role_feature(
             force=False
         )
 
-        # Log activity
+        # CỔNG TRUNG THỰC: tầng service nay đếm đúng, nhưng bề mặt HTTP mới là
+        # thứ người vận hành nhìn. Bản cũ luôn trả 200 và luôn ghi audit
+        # "Disabled feature" kể cả khi `removed=0` — đo được: đúng thành công
+        # giả. Với A01 Broken Access Control, một 200 cho việc thu hồi KHÔNG
+        # xảy ra là kiểu hỏng tệ nhất: người vận hành tin quyền đã bị gỡ.
+        #
+        # `blocked` là từ chối CÓ CHỦ Ý của safety-check, không phải thất bại
+        # âm thầm — nên trừ ra. Phần còn lại chưa xoá được thì phải nổ.
+        chua_xoa = (
+            len(policies_tuples)
+            - result.get("removed", 0)
+            - result.get("blocked", 0)
+        )
+        if chua_xoa > 0:
+            raise ConflictError(
+                f"Không tắt được feature '{feature_def['display_name']}' cho "
+                f"{role_name}: {chua_xoa}/{len(policies_tuples)} policy chưa "
+                f"bị xoá, quyền cũ VẪN CÒN hiệu lực. "
+                f"Chi tiết: {result.get('warnings') or result.get('errors')}"
+            )
+
+        # Log activity — chỉ tới đây khi MỌI policy dự kiến đã thật sự bị xoá
+        # (hoặc bị safety-check chặn có chủ ý).
         await commit_and_log(db, await log_admin_activity(
             db=db,
             request=request,

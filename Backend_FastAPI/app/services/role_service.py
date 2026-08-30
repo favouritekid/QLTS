@@ -282,16 +282,26 @@ async def delete_role_atomic(
             await enforcer.add_grouping_policy(user_subject, "role:user")
 
     # STEP 7: Remove all permission policies (p rules) for this role
+    # Xoá bằng ĐỦ rule bốn trường. Bản cũ cắt còn `(p[0], p[1], p[2])` nên
+    # không khớp nổi rule `p = sub, obj, act, eft` — xoá role xong mà policy
+    # vẫn còn sống, thành rule MỒ CÔI: tạo lại role cùng tên (hoặc còn grouping
+    # policy trỏ user vào nó) là quyền cũ áp lại âm thầm.
+    from app.services.casbin_service import (
+        chuan_hoa_rule,
+        policy_cua_role,
+        xoa_rule_chinh_xac,
+    )
+
     policies_to_remove = [
-        (p[0], p[1], p[2])
-        for p in all_policies
-        if p[0] == role_name
+        chuan_hoa_rule(p) for p in all_policies if p and p[0] == role_name
     ]
     removed_p_count = 0
     for p in policies_to_remove:
-        removed = await enforcer.remove_policy(p[0], p[1], p[2])
-        if removed:
+        if await xoa_rule_chinh_xac(enforcer, p):
             removed_p_count += 1
+
+    # HẬU ĐIỀU KIỆN: chỉ được tuyên bố xoá xong khi role KHÔNG còn policy nào.
+    policies_con_sot = policy_cua_role(enforcer, role_name)
 
     # STEP 8: Remove role inheritance grouping policies (g, role:X, role:user)
     removed_g_inherit_count = 0
@@ -317,7 +327,17 @@ async def delete_role_atomic(
         )
 
     result = {
-        "detail": f"Role {role_name} deleted successfully",
+        "success": not policies_con_sot,
+        "detail": (
+            f"Role {role_name} deleted successfully"
+            if not policies_con_sot
+            else (
+                f"Role {role_name} XOA CHUA XONG: con "
+                f"{len(policies_con_sot)} policy chua bi xoa — quyen cu VAN "
+                f"CON hieu luc"
+            )
+        ),
+        "policies_con_sot": policies_con_sot,
         "role_name": role_name,
         "users_reassigned": reassigned_count,
         "permission_policies_removed": removed_p_count,

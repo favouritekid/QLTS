@@ -29,6 +29,69 @@ from ..casbin_config.policy_templates import (
 from .. import models
 
 
+
+# =============================================================================
+# THU HỒI QUYỀN — MỘT NGUỒN CHUẨN
+# =============================================================================
+#
+# `auth_model.conf` khai `p = sub, obj, act, eft` (từ B1). Mọi đường THÊM đã
+# chuyển sang bốn trường, nhưng bốn đường THU HỒI vẫn gọi
+# ``remove_policy(sub, obj, act)`` với ba đối số — không khớp nổi rule bốn
+# trường, nên KHÔNG xoá được gì. Đã đo cả bốn:
+#
+#   DELETE /policies            -> HTTP 404, xoá 0
+#   remove_policies_batch       -> removed=0
+#   refresh_role_from_template  -> success=True, policies_after SAI, rule mồ côi
+#   delete_role_atomic          -> "deleted successfully", rule mồ côi
+#
+# Đây là A01 Broken Access Control: một ALLOW cấp nhầm không thu hồi được bằng
+# bất kỳ đường nào người vận hành có.
+#
+# ⚠️ ĐỪNG "sửa" bằng remove_filtered_policy theo BA trường. Nó khớp mọi rule
+# cùng ``(sub, obj, act)`` bất kể ``eft``, nên sẽ xoá LUÔN rule ``deny`` đi kèm
+# — biến một lỗi "không thu hồi được" thành lỗi "âm thầm MỞ quyền", tệ hơn hẳn.
+# Ca `test_xoa_allow_phai_giu_deny` khoá đúng điều này.
+
+EFT_MAC_DINH = "allow"
+
+
+def chuan_hoa_rule(rule) -> List[str]:
+    """(sub, obj, act) hoặc (sub, obj, act, eft) -> rule ĐỦ bốn trường.
+
+    Payload ba trường của admin UI là dạng lịch sử; nó chỉ dựng được policy
+    ``allow``, nên chuẩn hoá về ``eft="allow"`` là ĐÚNG ngữ nghĩa của nó — chứ
+    không phải một mặc định tuỳ tiện.
+    """
+    r = [str(x) for x in rule]
+    if len(r) == 3:
+        r.append(EFT_MAC_DINH)
+    if len(r) != 4:
+        raise ValueError(
+            f"rule policy phải có 3 hoặc 4 trường, nhận {len(r)}: {r!r}"
+        )
+    return r
+
+
+async def xoa_rule_chinh_xac(enforcer, rule) -> bool:
+    """Xoá ĐÚNG MỘT rule bằng ĐỦ bốn trường. True nếu thật sự xoá được.
+
+    Mọi đường thu hồi phải đi qua đây. Gọi thẳng ``remove_policy`` với ba đối
+    số là cách lỗi này phát sinh, và rải ở bốn nơi thì sửa một chỗ sót ba chỗ.
+    """
+    return await enforcer.remove_policy(*chuan_hoa_rule(rule))
+
+
+def policy_cua_role(enforcer, role: str) -> List[List[str]]:
+    """Trạng thái THẬT: mọi rule bốn trường đang thuộc ``role``.
+
+    Dùng để đo HẬU ĐIỀU KIỆN. Counter suy từ ``added`` không nói được gì về
+    thứ CÒN LẠI — đó chính là cách ``policies_after`` từng báo 4 trong khi
+    thực tế là 6.
+    """
+    return [list(p) for p in enforcer.get_policy() if p and p[0] == role]
+
+
+
 class ValidationSeverity(str, Enum):
     """Severity levels for policy validation warnings."""
     INFO = "info"
@@ -500,7 +563,7 @@ class CasbinPolicyService:
 
     async def remove_policies_batch(
         self,
-        policies: List[Tuple[str, str, str]],
+        policies: List[Tuple[str, ...]],
         validate: bool = True,
         force: bool = False
     ) -> dict:
@@ -508,7 +571,11 @@ class CasbinPolicyService:
         Remove multiple policies in a batch with safety checks.
 
         Args:
-            policies: List of (subject, object, action) tuples
+            policies: List of (subject, object, action) HOẶC
+                (subject, object, action, eft) tuples. Tuple ba trường được
+                chuẩn hoá thành ``eft="allow"`` — xem ``chuan_hoa_rule``.
+                Việc xoá LUÔN gọi ``remove_policy`` với ĐỦ bốn trường; ba đối
+                số không khớp nổi rule bốn trường nên không xoá được gì.
             validate: Whether to validate before removing
             force: Skip safety checks (DANGEROUS - admin override only)
 
@@ -520,7 +587,8 @@ class CasbinPolicyService:
         errors = []
         warnings = []
 
-        for subject, obj, action in policies:
+        for rule in policies:
+            subject, obj, action = rule[0], rule[1], rule[2]
             # Validate if requested
             if validate and not force:
                 validation = await self.validate_policy_removal(subject, obj, action)
@@ -534,11 +602,13 @@ class CasbinPolicyService:
 
             # Remove policy
             try:
-                success = await self.enforcer.remove_policy(subject, obj, action)
+                success = await xoa_rule_chinh_xac(self.enforcer, rule)
                 if success:
                     removed += 1
                 else:
-                    warnings.append(f"Policy not found: {subject} {obj} {action}")
+                    warnings.append(
+                        f"Policy not found: {' '.join(chuan_hoa_rule(rule))}"
+                    )
             except Exception as e:
                 errors.append(f"Failed to remove policy {subject} {obj} {action}: {str(e)}")
 
@@ -867,16 +937,21 @@ class CasbinPolicyService:
             current_policies = [p for p in all_policies if p[0] == role]
             current_count = len(current_policies)
 
-            # Remove all policies for this role
+            # Remove all policies for this role — bằng ĐỦ rule hiện có, gồm
+            # `eft`. Bản cũ chỉ truyền `policy[0..2]` nên không xoá được gì,
+            # rồi vẫn áp template mới lên trên: rule cũ thành MỒ CÔI và người
+            # vận hành tin là đã bị xoá.
             removed = 0
+            giu_co_y = []
             for policy in current_policies:
                 subject, obj, action = policy[0], policy[1], policy[2]
 
                 # Skip critical policies
                 if is_critical_policy(subject, obj, action):
+                    giu_co_y.append(chuan_hoa_rule(policy))
                     continue
 
-                success = await self.enforcer.remove_policy(subject, obj, action)
+                success = await xoa_rule_chinh_xac(self.enforcer, policy)
                 if success:
                     removed += 1
 
@@ -885,6 +960,31 @@ class CasbinPolicyService:
                 template_id, role, validate=False, applied_by=applied_by
             )
 
+            # HẬU ĐIỀU KIỆN — đo TRẠNG THÁI THẬT, không suy từ `added`.
+            # `policies_after = result["added"]` là con số bịa: nó không nhìn
+            # vào enforcer, nên từng báo 4 trong khi thực tế còn 6.
+            sau = policy_cua_role(self.enforcer, role)
+            can_xoa = [chuan_hoa_rule(p) for p in current_policies]
+            con_sot = [
+                p for p in sau if p in can_xoa and p not in giu_co_y
+            ]
+            if con_sot:
+                # KHÔNG tuyên bố refresh thành công khi rule cũ còn sống.
+                return {
+                    "success": False,
+                    "error": (
+                        "refresh KHÔNG hoàn tất: còn rule cũ chưa bị xoá — "
+                        "quyền cũ vẫn có hiệu lực"
+                    ),
+                    "role": role,
+                    "template_id": template_id,
+                    "policies_removed": removed,
+                    "policies_before": current_count,
+                    "policies_added": result.get("added", 0),
+                    "policies_after": len(sau),
+                    "policies_con_sot": con_sot,
+                    "warnings": result.get("warnings", []),
+                }
             return {
                 "success": True,
                 "role": role,
@@ -892,7 +992,8 @@ class CasbinPolicyService:
                 "policies_removed": removed,
                 "policies_before": current_count,
                 "policies_added": result.get("added", 0),
-                "policies_after": result.get("added", 0),
+                "policies_after": len(sau),
+                "policies_giu_co_y": giu_co_y,
                 "warnings": result.get("warnings", []),
             }
 
