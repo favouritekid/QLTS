@@ -44,26 +44,36 @@ def test_evaluate_cascade_imports_priority_service() -> None:
     cay = ast.parse(_ENGINE_SRC.read_text(encoding="utf-8"))
     MODULE = "app.services.priority_service"
 
-    # HAI phạm vi, HAI ranh giới. Gộp làm một là sai — bản trước đã sai đúng
-    # chỗ này. Hai câu hỏi khác nhau về BẢN CHẤT:
+    # Ca này CHỈ còn vế DƯƠNG TÍNH: import phải tồn tại trong local scope của
+    # `evaluate_cascade`. Vế âm ("không được chạy lúc nạp module") ĐÃ BỎ khỏi
+    # đây và giao hẳn cho `test_nap_engine_khong_keo_theo_priority_service`.
     #
-    #   (a) "có chạy lúc NẠP MODULE không?"  -> thân `class` CÓ chạy lúc nạp,
-    #       nên phải ĐI VÀO ClassDef; chỉ dừng ở function/lambda.
+    # Vì sao bỏ: mọi bản AST của vế âm đều đỏ oan với `if TYPE_CHECKING:` —
+    # khối ấy KHÔNG chạy lúc runtime, nhưng AST tĩnh không phân biệt được nó
+    # với một `if` thường. Đã đo: TYPE_CHECKING=False mà AST vẫn đánh dấu eager.
+    # Đuổi theo bằng cách liệt kê `TYPE_CHECKING` như một ngoại lệ chỉ đẻ ra
+    # biến thể kế tiếp (`typing.TYPE_CHECKING`, alias, `if not TYPE_CHECKING`).
+    # Phép kiểm runtime trả lời đúng câu hỏi ấy mà không cần biết cú pháp.
     #
-    #   (b) "có bind vào LOCAL của evaluate_cascade không?" -> thân `class`
-    #       KHÔNG bind vào local của hàm bao. Đây là ngữ nghĩa Python, không
-    #       phải chi tiết cú pháp:
+    # Vế dương tính thì KHÔNG thay bằng runtime được: gỡ hẳn import đi thì
+    # `sys.modules` càng sạch, phép kiểm runtime càng xanh. Nên cần cả hai.
     #
-    #           def f():
-    #               class C:
-    #                   from math import sqrt
-    #               sqrt(4)          # NameError
+    # Ranh giới dừng ở đây là ranh giới của LOCAL SCOPE, không phải của thứ tự
+    # nạp: thân `class` KHÔNG bind vào local của hàm bao — ngữ nghĩa Python,
+    # không phải chi tiết cú pháp:
     #
-    #       Nên câu (b) phải dừng THÊM ở ClassDef. Nếu không, chuyển import vào
-    #       một class lồng trong `evaluate_cascade` sẽ làm test XANH trong khi
-    #       production ném NameError.
-    DUNG_KHI_NAP = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
-    DUNG_KHI_LOCAL = DUNG_KHI_NAP + (ast.ClassDef,)
+    #     def f():
+    #         class C:
+    #             from math import sqrt
+    #         sqrt(4)          # NameError
+    #
+    # nên phải dừng ở CẢ class lẫn function/lambda.
+    DUNG_KHI_LOCAL = (
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.Lambda,
+        ast.ClassDef,
+    )
 
     def _nut(nut, dung):
         for con in ast.iter_child_nodes(nut):
@@ -78,12 +88,6 @@ def test_evaluate_cascade_imports_priority_service() -> None:
             if isinstance(c, ast.ImportFrom) and c.module == MODULE:
                 ra |= {a.name for a in c.names}
         return ra
-
-    o_module = _import_tu(cay, DUNG_KHI_NAP)
-    assert "calculate_priority_bonus" not in o_module, (
-        "import phải LAZY — chạy lúc nạp module là tái lập vòng phụ thuộc, "
-        "kể cả khi nấp trong if/try/with/class ở tầng module"
-    )
 
     # Phải khoanh vào ĐÚNG `evaluate_cascade`, không gom import từ mọi hàm:
     # chuyển import sang một hàm khác (vd `_collect_subject_scores`) thì phép
