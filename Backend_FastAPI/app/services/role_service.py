@@ -175,16 +175,27 @@ async def remove_role_from_users(
                 user.role = db_role_name
                 db.add(user)
 
+                # `log` ở module này là `logging.getLogger` CHUẨN, không phải
+                # structlog — nó KHÔNG nhận kwarg tuỳ ý và ném
+                # `TypeError: Logger._log() got an unexpected keyword argument`.
+                # Trường có cấu trúc phải đi qua `extra={...}`.
                 log.info(
-                    f"User {user_id} updated",
-                    removed_role=role_to_remove,
-                    remaining_roles=remaining_roles,
-                    db_role=db_role_name,
+                    "User %s updated",
+                    user_id,
+                    extra={
+                        "removed_role": role_to_remove,
+                        "remaining_roles": remaining_roles,
+                        "db_role": db_role_name,
+                    },
                 )
 
         except Exception as e:
             failed_users.append({"user_id": user_id, "error": str(e)})
-            log.error(f"Failed to remove role from user {user_id}", error=str(e))
+            log.error(
+                "Failed to remove role from user %s",
+                user_id,
+                extra={"error": str(e)},
+            )
 
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()
@@ -320,10 +331,18 @@ async def delete_role_atomic(
         """Execute after router commits the transaction."""
         # Save Casbin policies
         await enforcer.save_policy()
+        # Chỗ này từng làm CẢ ENDPOINT trả 500 SAU KHI transaction đã commit:
+        # `_post_commit` chạy sau `db.commit()`, nên `TypeError` ở đây khiến
+        # router bắt exception rồi trả "Failed to delete role" cho một việc ĐÃ
+        # XẢY RA. Người vận hành thấy thất bại cho thứ đã thành công — và sẽ
+        # thử xoá lại một role không còn tồn tại.
         log.info(
-            f"Atomic role deletion complete for {role_name}",
-            reassigned=reassigned_count,
-            policies_removed=removed_p_count
+            "Atomic role deletion complete for %s",
+            role_name,
+            extra={
+                "reassigned": reassigned_count,
+                "policies_removed": removed_p_count,
+            },
         )
 
     result = {

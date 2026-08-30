@@ -45,6 +45,7 @@ from app.schemas.permissions import (
 )
 from app.services import activity_service, role_service
 from app.utils.exceptions import (
+    BadRequest,
     ConflictError,
     DuplicateResourceError,
     PermissionDeniedError,
@@ -746,8 +747,23 @@ async def delete_role_atomic(
             role_name=role_name,
         )
 
+    except (ConflictError, DuplicateResourceError, PermissionDeniedError,
+            ResourceNotFoundError, BadRequest) as e:
+        # Domain exception: rollback rồi NÉM LẠI để middleware giữ đúng mã —
+        # 409 / 400 / 404. Bọc chúng thành 500 là xoá mất thông tin người gọi
+        # cần: "không xoá được vì còn policy" (409, hành động được) khác hẳn
+        # "lỗi bất ngờ" (500, không hành động được). Với A01, một 500 che mất
+        # 409 làm người vận hành tưởng là trục trặc tạm thời và thử lại mãi.
+        await db.rollback()
+        log.warning(
+            "Role deletion refused (domain)",
+            role_name=role_name,
+            error=str(e),
+            loai=type(e).__name__,
+        )
+        raise
     except Exception as e:
-        # Rollback DB transaction
+        # Chỉ lỗi BẤT NGỜ mới thành 500.
         await db.rollback()
         log.error(
             "Failed to delete role atomically",
