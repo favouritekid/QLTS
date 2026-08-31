@@ -46,8 +46,21 @@ APP = pathlib.Path(__file__).resolve().parents[2] / "app"
 # Số miễn trừ ``KHOA-MIEN:`` ĐƯỢC PHÉP. Đổi số này là một quyết định.
 SO_MIEN_TRU = 1
 
-DAU_HIEU = ("add_", "remove_", "update_", "delete_", "save_", "load_",
-            "clear_", "build_", "set_")
+# ĐẢO CHIỀU danh mục: liệt kê CHỈ-ĐỌC, mọi thứ còn lại là mutation.
+#
+# Bản trước liệt kê tiền tố MUTATION (`add_`, `remove_`, ...) và tự nhận là
+# "rút từ thư viện" — nhưng nó chỉ rút bên trong một tập tiền tố VIẾT TAY, nên
+# sót nguyên `enable_*` và `init_*`. Ba cái sót ấy đều đánh thẳng vào A01:
+#
+#   enable_enforce(False)            -> enforce() cho phép MỌI truy cập
+#   enable_auto_save(False)          -> phá giả định persistence tự động, tức
+#                                       phá luôn cơ sở của việc bỏ save_policy
+#   init_with_model_and_adapter(...) -> thay cả model lẫn adapter dùng chung
+#
+# Chiều này hụt về phía an toàn: quên một tên CHỈ-ĐỌC thì thành báo thừa (thấy
+# được ngay), chứ không thành xanh giả. Thư viện mọc thêm API mới thì nó rơi
+# vào nhóm mutation theo mặc định.
+CHI_DOC_TIEN_TO = ("get_", "has_", "is_", "enforce", "batch_enforce")
 
 # Lời gọi TRÙNG TÊN với API Casbin nhưng KHÔNG phải Casbin. Khoá theo
 # (đoạn cuối của biểu thức người nhận, tên thuộc tính).
@@ -58,28 +71,40 @@ KHONG_PHAI_CASBIN = frozenset({
 })
 SO_TRUNG_TEN = 3
 
+# Bề mặt API của thư viện, khoá cả hai phía — xem `test_so_luong_api_bi_khoa_cung`.
+SO_API_CHI_DOC = 45
+SO_API_MUTATION = 69
+
+# Tổng số chỗ chạm API mutation trong `app/`. Khoá con số này vì "0 chỗ hở" một
+# mình KHÔNG chứng minh được gì: một scanner mất khả năng nhìn thấy một cú pháp
+# đang tồn tại cũng cho 0. Hai con số đi cùng nhau mới nói được điều gì.
+SO_CHO_CHAM = 25
+
 
 def _danh_muc():
-    """Trả (mọi API mutation, tập con BẤT ĐỒNG BỘ) — rút từ thư viện.
+    """Trả (CHỈ-ĐỌC, MUTATION, tập con bất đồng bộ của MUTATION).
 
     Gồm cả API đồng bộ: ``clear_policy``/``build_role_links``/``set_model`` đều
     đổi trạng thái enforcer. Chúng không cần ``await``, nhưng vẫn phải nằm dưới
     lock.
     """
-    moi, bat_dong_bo = set(), set()
+    chi_doc, mutation, bat_dong_bo = set(), set(), set()
     for t in dir(AsyncEnforcer):
-        if t.startswith("_") or not any(t.startswith(d) for d in DAU_HIEU):
+        if t.startswith("_"):
             continue
         f = getattr(AsyncEnforcer, t, None)
         if not callable(f):
             continue
-        moi.add(t)
+        if t.startswith(CHI_DOC_TIEN_TO):
+            chi_doc.add(t)
+            continue
+        mutation.add(t)
         if inspect.iscoroutinefunction(f):
             bat_dong_bo.add(t)
-    return frozenset(moi), frozenset(bat_dong_bo)
+    return frozenset(chi_doc), frozenset(mutation), frozenset(bat_dong_bo)
 
 
-API_MUTATION, API_ASYNC = _danh_muc()
+API_CHI_DOC, API_MUTATION, API_ASYNC = _danh_muc()
 
 
 def _ten_nhan(node: ast.AST) -> str:
@@ -121,14 +146,22 @@ class _Quet(ast.NodeVisitor):
 
     @staticmethod
     def _co_khoa(node) -> bool:
-        """Context manager phải là lời gọi TRỰC TIẾP tới ``khoa_enforcer``.
+        """Context manager phải là lời gọi tới TÊN TRẦN ``khoa_enforcer``.
 
         Khớp chuỗi thì ``khong_phai_khoa_enforcer(x)`` cũng qua, và
         ``khoa_enforcer(x) if bat else noop()`` cũng qua dù có thể không khoá gì.
+
+        Chấp nhận cả dạng thuộc tính (``fake.khoa_enforcer(x)``) cũng chưa đủ:
+        scanner không biết ``fake`` là gì, nên đó lại là tin vào tên. Chỉ nhận
+        tên trần — mọi chỗ trong ``app/`` đều ``from ... import khoa_enforcer``
+        rồi gọi thẳng. Muốn dùng dạng qualified thì phải sửa phép kiểm này một
+        cách có ý thức, và ca âm bên dưới sẽ nhắc.
         """
         for item in getattr(node, "items", []):
             ce = item.context_expr
-            if isinstance(ce, ast.Call) and _ten_ham(ce.func) == "khoa_enforcer":
+            if not isinstance(ce, ast.Call):
+                continue
+            if isinstance(ce.func, ast.Name) and ce.func.id == "khoa_enforcer":
                 return True
         return False
 
@@ -252,6 +285,66 @@ def test_danh_muc_rut_tu_thu_vien_va_co_ca_api_dong_bo():
             f"'lock bất đồng bộ đổi chữ ký' nói về runtime, không về scanner."
         )
         assert dong_bo not in API_ASYNC, f"{dong_bo} không phải coroutine"
+
+
+@pytest.mark.unit
+def test_danh_muc_khong_sot_api_pha_thang_A01():
+    """Ba API từng bị danh sách tiền tố VIẾT TAY bỏ sót.
+
+    Chúng không mang tiền tố ``add_``/``remove_``/... nên phiên bản trước của
+    phép kiểm này — vốn tự nhận là "rút từ thư viện" — không thấy chúng, dù mỗi
+    cái đều đánh thẳng vào A01.
+    """
+    for ten, vi_sao in (
+        ("enable_enforce",
+         "enable_enforce(False) làm enforce() CHO PHÉP MỌI truy cập"),
+        ("enable_auto_save",
+         "enable_auto_save(False) phá giả định persistence tự động — tức phá "
+         "luôn cơ sở của việc bỏ save_policy"),
+        ("init_with_model_and_adapter",
+         "thay cả model lẫn adapter dùng chung"),
+        ("enable_auto_build_role_links", "tắt việc dựng lại liên kết role"),
+        ("set_adapter", "đổi nơi policy được đọc/ghi"),
+    ):
+        assert ten in API_MUTATION, f"danh mục thiếu {ten} — {vi_sao}"
+
+
+@pytest.mark.unit
+def test_so_luong_api_bi_khoa_cung():
+    """Thư viện nâng cấp và đổi bề mặt API thì phải có người NHÌN LẠI.
+
+    Khoá cả hai phía: thêm API chỉ-đọc mới cũng phải xem lại, vì nhầm một
+    mutation thành chỉ-đọc là mở đúng cánh cửa phép kiểm này canh.
+    """
+    assert (len(API_CHI_DOC), len(API_MUTATION)) == (SO_API_CHI_DOC, SO_API_MUTATION), (
+        f"bề mặt API đổi từ (chỉ-đọc {SO_API_CHI_DOC}, mutation "
+        f"{SO_API_MUTATION}) thành ({len(API_CHI_DOC)}, {len(API_MUTATION)}). "
+        f"Xem lại rồi mới đổi con số.\n"
+        f"  chỉ-đọc: {sorted(API_CHI_DOC)}"
+    )
+
+
+@pytest.mark.unit
+def test_ten_lock_dang_thuoc_tinh_khong_duoc_tinh():
+    """``fake.khoa_enforcer(e)`` — scanner không biết ``fake`` là gì."""
+    hit = quet_nguon(
+        "async def f(e):\n"
+        "    async with fake.khoa_enforcer(e):\n"
+        "        await e.remove_policy('a', 'b', 'c', 'allow')\n"
+    )
+    assert hit and not hit[0][2], (
+        "chấp nhận mọi thuộc tính tên `khoa_enforcer` là lại tin vào TÊN — "
+        "đúng loại lỗi mà bản khớp-chuỗi đã mắc"
+    )
+
+
+@pytest.mark.unit
+def test_api_khong_mang_tien_to_quen_thuoc_van_bi_bat():
+    """``enable_auto_save(False)`` ngoài lock phải bị bắt."""
+    hit = quet_nguon("def f(enforcer):\n    enforcer.enable_auto_save(False)\n")
+    assert hit and not hit[0][2], (
+        "API không mang tiền tố add_/remove_/... vẫn phải nằm trong danh mục"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +489,26 @@ def test_moi_mutation_casbin_nam_duoi_khoa_enforcer():
         "chung, nên một lượt reload hoặc một thao tác nhóm chen vào giữa là mở "
         "được quyền:\n"
         + "\n".join(f"  {f}:{n}: {a}" for f, n, a in ho)
+    )
+
+
+@pytest.mark.unit
+def test_so_cho_cham_bi_khoa_cung():
+    """Scanner phải NHÌN THẤY đúng số chỗ nó nói là đã kiểm.
+
+    "0 chỗ hở" một mình là bằng chứng rỗng: một scanner mất khả năng nhận ra
+    một cú pháp đang tồn tại trong ``app/`` cũng cho 0. Khoá tổng số chỗ chạm
+    thì việc mất dấu ấy hiện ra ngay, kể cả khi các ca tổng hợp không phủ được
+    cú pháp đó.
+    """
+    tong = sum(
+        len(quet_nguon(f.read_text(encoding="utf-8")))
+        for f in sorted(APP.rglob("*.py"))
+    )
+    assert tong == SO_CHO_CHAM, (
+        f"số chỗ chạm API Casbin đổi từ {SO_CHO_CHAM} thành {tong}. Giảm mà "
+        f"không ai gỡ lời gọi nào nghĩa là SCANNER vừa mù đi một cú pháp; tăng "
+        f"thì có đường mới cần rà."
     )
 
 
