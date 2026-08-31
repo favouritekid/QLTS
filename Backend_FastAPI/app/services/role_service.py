@@ -283,11 +283,15 @@ async def delete_role_atomic(
     # trước khi xoá.
     kq = await xoa_nhom_rule_fail_closed(enforcer, policies_to_remove, xu_ly)
 
+    # `policy_cua_role` chỉ đọc MODEL BỘ NHỚ, nên nó KHÔNG thấy ca adapter hỏng
+    # (model sạch mà hàng trong CSDL còn). `kq["con_song"]` mới là danh sách
+    # rule chưa được XÁC NHẬN thu hồi — phải kiểm cả hai.
     policies_con_sot = policy_cua_role(enforcer, role_name)
-    if policies_con_sot or not kq["an_toan"]:
+    chua_xac_nhan = kq["con_song"]
+    if policies_con_sot or chua_xac_nhan or not kq["an_toan"]:
         raise ConflictError(
-            f"Không xoá được role {role_name}: còn {len(policies_con_sot)} "
-            f"policy chưa bị xoá"
+            f"Không xoá được role {role_name}: {len(policies_con_sot)} policy "
+            f"còn trong model, {len(chua_xac_nhan)} rule chưa xác nhận thu hồi"
             + (
                 f" ({len(kq['deny_chua_cham'])} rule deny KHÔNG bị chạm tới vì "
                 f"non-deny xoá hụt — xoá deny lúc này là MỞ quyền)"

@@ -93,18 +93,25 @@ def policy_cua_role(enforcer, role: str) -> List[List[str]]:
 EFT_DENY = "deny"
 
 
-def rule_con_song(enforcer, rules) -> List[List[str]]:
-    """Trong ``rules``, những rule CÒN SỐNG trong enforcer.
+def rule_con_trong_model(enforcer, rule) -> bool:
+    """Rule còn trong MODEL BỘ NHỚ hay không.
 
-    ĐO trạng thái thật thay vì tin giá trị ``remove_policy`` trả về. Nhờ thế
-    mọi lý do khiến một rule sống sót — xoá hụt, bị safety-check chặn, giữ lại
-    có chủ ý, hay ném lỗi giữa chừng — đều hiện ra ở CÙNG một chỗ, và cổng an
-    toàn không phụ thuộc vào việc người gọi có báo cáo trung thực hay không.
+    ⚠️ Chỉ nói về bộ nhớ. KHÔNG nói gì về hàng trong PostgreSQL. PyCasbin gỡ
+    rule khỏi model TRƯỚC rồi mới gọi adapter, nên adapter hỏng thì hàm trả
+    ``False`` trong khi model đã sạch. Đã đo:
+
+        remove_policy(allow) -> False
+        MODEL   = [deny]           <- đã mất allow
+        DURABLE = [allow, deny]    <- hàng vẫn còn nguyên
+
+    Vì thế "vắng khỏi model" MỘT MÌNH không đủ để kết luận đã thu hồi được.
+    Xem ``xoa_nhom_rule_fail_closed``.
+
+    ``has_policy`` là API ĐỒNG BỘ kể cả trên ``AsyncEnforcer`` (định nghĩa ở
+    ``AsyncManagementEnforcer``) — đã kiểm. Thiếu ``await`` ở đây không tạo ra
+    coroutine truthy.
     """
-    hien_co = {tuple(p) for p in enforcer.get_policy() if p}
-    return [
-        r for r in (chuan_hoa_rule(x) for x in rules) if tuple(r) in hien_co
-    ]
+    return enforcer.has_policy(*chuan_hoa_rule(rule))
 
 
 async def xoa_nhom_rule_fail_closed(enforcer, rules, xu_ly_mot_rule) -> dict:
@@ -117,8 +124,25 @@ async def xoa_nhom_rule_fail_closed(enforcer, rules, xu_ly_mot_rule) -> dict:
     enforcer thật: hàm báo ``success=False`` trong khi ``enforce(...)`` trả
     ``True``.
 
-    Nên: pha 1 xoá non-deny; ĐO enforcer; còn non-deny nào sống thì DỪNG và
-    KHÔNG chạm tới bất kỳ rule ``deny`` nào. Pha 2 chỉ chạy khi pha 1 sạch.
+    Nên: pha 1 xoá non-deny; XÁC NHẬN; còn non-deny nào chưa xác nhận thì DỪNG
+    và KHÔNG chạm tới bất kỳ rule ``deny`` nào. Pha 2 chỉ chạy khi pha 1 sạch.
+
+    ⚠️ XÁC NHẬN cần HAI điều kiện, vì ranh giới model ↔ CSDL. PyCasbin gỡ rule
+    khỏi model TRƯỚC rồi mới gọi adapter; adapter hỏng thì hàm trả ``False``
+    nhưng model đã sạch. Một cổng chỉ ĐO MODEL sẽ thấy "xoá xong" rồi đi tiếp
+    xoá ``deny`` — và ``deny`` thì xoá được thật. Sau reload, hoặc trên worker
+    khác, CSDL chỉ còn ``allow``: quyền lại mở, lần này BỀN VỮNG. Đã đo:
+
+        RESULT.an_toan = True    CALLS = [allow, deny]
+        MEMORY         = []      DURABLE = [allow]
+
+    Nên một rule chỉ được coi là đã thu hồi khi handler trả ``True`` VÀ rule
+    biến khỏi model. Handler trả ``False`` (hoặc ném lỗi) thì chặn pha ``deny``
+    BẤT KỂ model đang thể hiện gì — vì ``False`` chính là cách PyCasbin báo
+    adapter hỏng.
+
+    Rule vốn đã VẮNG trong model ngay từ đầu được xếp riêng (``vang_san``):
+    không có gì để thu hồi nên không phải thất bại, và không chặn pha sau.
 
     Cổng đo theo NHÓM chứ không ghép cặp theo ``(sub, obj, act)``: một
     ``allow`` dạng mẫu (``/api/x/*``) che được ``deny`` ở đường cụ thể
@@ -146,29 +170,45 @@ async def xoa_nhom_rule_fail_closed(enforcer, rules, xu_ly_mot_rule) -> dict:
     non_deny = [r for r in chuan if r[3] != EFT_DENY]
     deny = [r for r in chuan if r[3] == EFT_DENY]
 
-    da_xoa: List[List[str]] = []
-    for r in non_deny:
-        if await xu_ly_mot_rule(r):
-            da_xoa.append(r)
+    async def _pha(nhom):
+        """Chạy một pha, phân loại từng rule thành ba nhóm rời nhau."""
+        da_xac_nhan, chua_xac_nhan, vang_san = [], [], []
+        for r in nhom:
+            von_co = rule_con_trong_model(enforcer, r)
+            ket_qua = await xu_ly_mot_rule(r)
+            if not von_co:
+                # Vốn đã không có trong model: không có gì để thu hồi, nên
+                # không phải thất bại và KHÔNG chặn pha sau. Idempotent.
+                vang_san.append(r)
+            elif ket_qua and not rule_con_trong_model(enforcer, r):
+                # HAI điều kiện, thiếu một là hở:
+                #  - thiếu `ket_qua`  -> adapter hỏng vẫn bị coi là xong;
+                #  - thiếu phép đo    -> handler khai man vẫn được tin.
+                da_xac_nhan.append(r)
+            else:
+                chua_xac_nhan.append(r)
+        return da_xac_nhan, chua_xac_nhan, vang_san
 
-    non_deny_con_song = rule_con_song(enforcer, non_deny)
-    if non_deny_con_song and deny:
+    da1, chua1, vang1 = await _pha(non_deny)
+    if chua1 and deny:
         # DỪNG. Không chạm deny. Xem docstring: đây chính là cửa fail-open.
         return {
             "an_toan": False,
-            "da_xoa": da_xoa,
-            "con_song": non_deny_con_song,
+            "da_xoa": da1,
+            "con_song": chua1,
+            "vang_san": vang1,
             "deny_chua_cham": deny,
         }
 
-    for r in deny:
-        if await xu_ly_mot_rule(r):
-            da_xoa.append(r)
+    da2, chua2, vang2 = await _pha(deny)
 
     return {
         "an_toan": True,
-        "da_xoa": da_xoa,
-        "con_song": non_deny_con_song + rule_con_song(enforcer, deny),
+        "da_xoa": da1 + da2,
+        # `chua2` (deny xoá hụt) là fail-CLOSED — không mở quyền — nhưng vẫn là
+        # việc chưa xong, nên phải vào `con_song` để người gọi báo thất bại.
+        "con_song": chua1 + chua2,
+        "vang_san": vang1 + vang2,
         "deny_chua_cham": [],
     }
 
@@ -718,6 +758,9 @@ class CasbinPolicyService:
             # `len - removed`: rule vốn đã không tồn tại làm phép trừ báo động
             # giả, còn rule bị chặn/ném lỗi thì phép trừ lại đếm hụt.
             "con_song": kq["con_song"],
+            # Rule vốn đã vắng: không phải thất bại, nhưng cũng không phải
+            # "đã xoá" — tách riêng để người gọi không đếm nhầm vào `removed`.
+            "vang_san": kq["vang_san"],
             "deny_chua_cham": kq["deny_chua_cham"],
             "an_toan": kq["an_toan"],
         }

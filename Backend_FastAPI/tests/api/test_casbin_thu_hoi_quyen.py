@@ -651,3 +651,201 @@ async def test_feature_toggle_deny_chua_cham_thi_409(client, admin_token_headers
         f"phải 409 khi pha deny bị chặn; nhận {r.status_code}: {r.text[:200]}"
     )
     assert r.json().get("error_code") == "CONFLICT", r.text[:200]
+
+
+# ---------------------------------------------------------------------------
+# 7. RANH GIỚI model ↔ PostgreSQL — "vắng khỏi model" KHÔNG phải "đã thu hồi"
+# ---------------------------------------------------------------------------
+#
+# Mục 6 đóng cửa fail-open TRONG BỘ NHỚ, nhưng chưa đóng ở ranh giới bền vững.
+# PyCasbin gỡ rule khỏi model TRƯỚC rồi mới gọi adapter. Adapter hỏng thì hàm
+# trả `False` mà model đã sạch. Đã đo trực tiếp trên PyCasbin:
+#
+#     remove_policy(allow) -> False
+#     MODEL   = [deny]            <- mất allow
+#     DURABLE = [allow, deny]     <- hàng còn nguyên
+#
+# Một cổng chỉ ĐO MODEL sẽ thấy "allow đã xong" rồi đi xoá `deny` — mà `deny`
+# xoá được thật. Kết cục trong CSDL: chỉ còn `allow`. Sau reload hoặc trên
+# worker khác, quyền mở lại, lần này BỀN VỮNG.
+#
+# Ca mục 6 `test_cong_do_enforcer_...` canh chiều NGƯỢC LẠI (handler trả True
+# mà model còn rule). Hai chiều là hai lỗi khác nhau; chiều dưới đây mới là
+# chiều PyCasbin thật sự đi.
+
+
+@pytest.mark.asyncio
+async def test_adapter_hong_model_sach_van_phai_chan_pha_deny(client):
+    """Model sạch + handler trả False -> VẪN phải chặn pha deny."""
+    from unittest.mock import AsyncMock, patch
+
+    enf = await _seed_cap_allow_deny()
+    goi = []
+    # Mô phỏng hàng thật trong PostgreSQL, tách khỏi model bộ nhớ.
+    ben_vung = {tuple(ALLOW), tuple(DENY)}
+
+    async def _adapter_hong(enforcer, rule):
+        r = chuan_hoa_rule(rule)
+        goi.append(r)
+        # PyCasbin gỡ khỏi model TRƯỚC, trong MỌI trường hợp.
+        await enforcer.remove_policy(*r)
+        if r[3] == "deny":
+            ben_vung.discard(tuple(r))
+            return True
+        # non-deny: ghi xuống CSDL hỏng -> trả False, hàng CÒN NGUYÊN
+        return False
+
+    async with AsyncSessionLocal() as db:
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            side_effect=_adapter_hong,
+        ):
+            kq = await CasbinPolicyService(db, enf).remove_policies_batch(
+                [ALLOW, DENY], validate=False, force=True
+            )
+
+    assert not any(r[3] == "deny" for r in goi), (
+        f"deny KHÔNG được chạm tới khi allow chưa xác nhận thu hồi; "
+        f"đã gọi xoá với {goi!r}"
+    )
+    assert kq["an_toan"] is False, (
+        f"handler trả False là cách PyCasbin báo adapter hỏng — phải chặn, "
+        f"bất kể model trông sạch: {kq}"
+    )
+    assert kq["con_song"] == [ALLOW], (
+        f"allow phải bị xếp vào 'chưa xác nhận', không phải 'đã xoá': {kq}"
+    )
+    assert ben_vung == {tuple(ALLOW), tuple(DENY)}, (
+        f"CSDL phải còn NGUYÊN cả cặp. Nếu chỉ còn allow thì sau reload quyền "
+        f"mở lại và mở BỀN VỮNG. Hiện có: {ben_vung!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pha_deny_that_bai_khong_duoc_bao_thanh_cong(client):
+    """Pha 2 hỏng thì KHÔNG mở quyền, nhưng cũng KHÔNG được báo xong."""
+    from unittest.mock import AsyncMock, patch
+
+    enf = await _seed_cap_allow_deny()
+
+    async def _deny_hong(enforcer, rule):
+        r = chuan_hoa_rule(rule)
+        await enforcer.remove_policy(*r)
+        return r[3] != "deny"  # allow: xác nhận thật; deny: adapter hỏng
+
+    async with AsyncSessionLocal() as db:
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            side_effect=_deny_hong,
+        ):
+            kq = await CasbinPolicyService(db, enf).remove_policies_batch(
+                [ALLOW, DENY], validate=False, force=True
+            )
+
+    # Không có cửa fail-open: pha 1 sạch nên không còn allow nào để deny che.
+    assert kq["an_toan"] is True, f"pha 1 sạch thì không có cửa mở: {kq}"
+    # Nhưng việc CHƯA XONG, và người gọi phải thấy điều đó.
+    assert kq["con_song"] == [DENY], (
+        f"deny xoá hụt phải vào `con_song` để người gọi báo thất bại — "
+        f"fail-closed không phải là lý do để tuyên bố thành công: {kq}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_rule_vang_san_la_idempotent_khong_chan_pha_deny(client):
+    """Rule vốn đã vắng: không có gì để thu hồi, nên KHÔNG chặn pha sau."""
+    enf = _enf()
+    for p in policy_cua_role(enf, SUB):
+        await enf.remove_policy(*p)
+    await enf.add_policy(*DENY)  # chỉ deny, KHÔNG có allow
+    assert policy_cua_role(enf, SUB) == [DENY]
+
+    async with AsyncSessionLocal() as db:
+        kq = await CasbinPolicyService(db, enf).remove_policies_batch(
+            [ALLOW, DENY], validate=False, force=True
+        )
+
+    assert kq["vang_san"] == [ALLOW], (
+        f"allow vắng sẵn phải xếp riêng, không phải thất bại: {kq}"
+    )
+    assert kq["con_song"] == [], f"không có gì chưa xác nhận: {kq}"
+    assert kq["an_toan"] is True, (
+        f"không có allow nào sống sót thì không có cửa mở để chặn: {kq}"
+    )
+    assert policy_cua_role(enf, SUB) == [], f"deny phải được xoá: {kq}"
+
+
+@pytest.mark.asyncio
+async def test_callback_nem_loi_thi_khong_cham_deny(client):
+    """Handler ném lỗi cũng là 'chưa xác nhận' -> chặn pha deny."""
+    from unittest.mock import AsyncMock, patch
+
+    enf = await _seed_cap_allow_deny()
+    goi = []
+
+    async def _no(enforcer, rule):
+        r = chuan_hoa_rule(rule)
+        goi.append(r)
+        raise RuntimeError("adapter mất kết nối giữa chừng")
+
+    async with AsyncSessionLocal() as db:
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            side_effect=_no,
+        ):
+            kq = await CasbinPolicyService(db, enf).remove_policies_batch(
+                [ALLOW, DENY], validate=False, force=True
+            )
+
+    _khang_dinh_deny_nguyen_ven(enf, goi, "handler ném lỗi")
+    assert kq["an_toan"] is False, f"ném lỗi phải chặn pha deny: {kq}"
+    assert kq["errors"], f"lỗi phải được nêu ra, không nuốt im lặng: {kq}"
+
+
+@pytest.mark.asyncio
+async def test_xoa_role_adapter_hong_model_sach_van_nem_conflict(client):
+    """delete_role: model SẠCH mà chưa xác nhận -> vẫn phải ném ConflictError.
+
+    Hậu điều kiện cũ chỉ đọc `policy_cua_role`, tức MODEL. Ca này dựng đúng
+    hoàn cảnh nó mù: role CHỈ có `allow`, không có `deny`, nên cổng fail-open
+    không kích hoạt (không có pha 2 để chặn); fake dọn sạch model rồi trả
+    False. Đọc model thì thấy "role đã sạch" và báo `deleted successfully`,
+    trong khi hàng `allow` vẫn nằm trong PostgreSQL.
+
+    Khẳng định `policy_cua_role(...) == []` ở cuối là phần quan trọng: nó
+    chứng minh guard KHÔNG dựa vào model, vì model đúng là rỗng thật.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from app.services import role_service
+    from app.utils.exceptions import ConflictError
+
+    enf = _enf()
+    for p in policy_cua_role(enf, SUB):
+        await enf.remove_policy(*p)
+    await enf.add_policy(*ALLOW)  # CHỈ allow — không có deny
+    assert policy_cua_role(enf, SUB) == [ALLOW]
+
+    async def _adapter_hong(enforcer, rule):
+        await enforcer.remove_policy(*chuan_hoa_rule(rule))
+        return False
+
+    async with AsyncSessionLocal() as db:
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            side_effect=_adapter_hong,
+        ):
+            with pytest.raises(ConflictError) as ex:
+                await role_service.delete_role_atomic(db, SUB, enf)
+
+    assert "chưa xác nhận" in str(ex.value), (
+        f"thông điệp phải phân biệt 'còn trong model' với 'chưa xác nhận thu "
+        f"hồi': {ex.value}"
+    )
+    assert policy_cua_role(enf, SUB) == [], (
+        "model ĐÚNG LÀ rỗng — nên guard không thể dựa vào model mà vẫn phải nổ"
+    )
