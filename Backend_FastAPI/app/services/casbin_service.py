@@ -9,6 +9,8 @@ This service provides high-level operations for managing Casbin policies with:
 - Role management
 """
 
+import asyncio
+import weakref
 from typing import List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
@@ -54,6 +56,84 @@ from .. import models
 EFT_MAC_DINH = "allow"
 
 
+# ---------------------------------------------------------------------------
+# LOCK DÙNG CHUNG CHO MỘT ENFORCER
+# ---------------------------------------------------------------------------
+#
+# `request.app.state.enforcer` là MỘT đối tượng dùng chung cho mọi request.
+# Không có lock, hai coroutine đan nhau vẫn mở được quyền dù từng đường đã
+# fail-closed. Đo được trên mã đã vá tuần tự:
+#
+#     xoá ĐƠN gỡ `allow A1` khỏi model rồi hỏng ở adapter;
+#     thao tác NHÓM (đang chạy song song) thấy A1 vắng -> xếp `vang_san`
+#     -> đi tiếp và xoá `deny`.
+#
+#     group_result: an_toan=True   vang_san=[allow A1]
+#     durable: [allow A1]          FAIL_OPEN
+#
+# Nhóm báo an toàn trong khi PostgreSQL cuối cùng chỉ còn `allow`.
+
+
+class KhoaTaiVao:
+    """``asyncio.Lock`` nhưng TÁI VÀO ĐƯỢC trong cùng một task.
+
+    Vì sao phải tái vào: cổng cần bao TRỌN đồng bộ → dựng snapshot → hai pha
+    thu hồi → hậu điều kiện, mà snapshot được dựng ở NGOÀI helper
+    (``delete_role_atomic``, ``refresh_role_from_template``). Đặt lock riêng
+    trong helper thì khoảng hở vẫn còn.
+
+    Nhưng nếu người gọi cũng khoá mà lock không tái vào được thì request TREO —
+    fail-closed kiểu treo còn tệ hơn. Tái vào theo task giữ được cả hai: người
+    gọi khoá rộng, helper vẫn khoá vô điều kiện, và không ai phải nhớ truyền cờ
+    — tức không có đường nào "quên khoá" được.
+    """
+
+    def __init__(self):
+        self._lock = asyncio.Lock()
+        self._chu = None
+        self._sau = 0
+
+    async def __aenter__(self):
+        task = asyncio.current_task()
+        if self._sau > 0 and self._chu is task:
+            self._sau += 1
+            return self
+        await self._lock.acquire()
+        self._chu = task
+        self._sau = 1
+        return self
+
+    async def __aexit__(self, *exc):
+        self._sau -= 1
+        if self._sau <= 0:
+            self._sau = 0
+            self._chu = None
+            self._lock.release()
+        return False
+
+
+_KHOA_ENFORCER: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def khoa_enforcer(enforcer) -> KhoaTaiVao:
+    """Lock của RIÊNG một enforcer. Cùng enforcer ⇒ cùng lock.
+
+    Khoá theo đối tượng chứ không phải một lock toàn cục: hai enforcer khác
+    nhau (ví dụ trong test) không có lý do gì phải chờ nhau.
+
+    ``asyncio.Lock`` gắn với event loop lần đầu được dùng và NÉM nếu sau đó bị
+    dùng ở loop khác. Test tạo loop mới cho mỗi hàm, nên nếu loop đổi thì dựng
+    lock mới. Trong tiến trình thật chỉ có một loop nên nhánh ấy không chạy;
+    còn một enforcer bị chia sẻ qua hai loop thì vốn đã hỏng sẵn.
+    """
+    loop = asyncio.get_running_loop()
+    cu = _KHOA_ENFORCER.get(enforcer)
+    if cu is None or cu[0] is not loop:
+        cu = (loop, KhoaTaiVao())
+        _KHOA_ENFORCER[enforcer] = cu
+    return cu[1]
+
+
 def chuan_hoa_rule(rule) -> List[str]:
     """(sub, obj, act) hoặc (sub, obj, act, eft) -> rule ĐỦ bốn trường.
 
@@ -77,7 +157,11 @@ async def xoa_rule_chinh_xac(enforcer, rule) -> bool:
     Mọi đường thu hồi phải đi qua đây. Gọi thẳng ``remove_policy`` với ba đối
     số là cách lỗi này phát sinh, và rải ở bốn nơi thì sửa một chỗ sót ba chỗ.
     """
-    return await enforcer.remove_policy(*chuan_hoa_rule(rule))
+    # Lock ở ĐÂY phủ luôn endpoint xoá ĐƠN (`DELETE /policies`), vì đường ấy
+    # cũng đi qua hàm này. Một lượt xoá đơn hỏng ở adapter mà chen vào giữa một
+    # thao tác nhóm chính là kịch bản fail-open đã đo được.
+    async with khoa_enforcer(enforcer):
+        return await enforcer.remove_policy(*chuan_hoa_rule(rule))
 
 
 def policy_cua_role(enforcer, role: str) -> List[List[str]]:
@@ -144,7 +228,8 @@ async def dong_bo_tu_nguon_ben_vung(enforcer) -> Optional[str]:
     khi chưa đọc gì.
     """
     try:
-        await enforcer.load_policy()
+        async with khoa_enforcer(enforcer):
+            await enforcer.load_policy()
         return None
     except Exception as e:
         return f"{type(e).__name__}: {e}"
@@ -200,8 +285,10 @@ async def xoa_nhom_rule_fail_closed(
     Args:
         rules: rule ba hoặc bốn trường, chuẩn hoá qua ``chuan_hoa_rule``.
         xu_ly_mot_rule: async callable(rule bốn trường) -> bool, True nếu đã
-            xoá. Giá trị này CHỈ dùng để báo cáo; cổng an toàn đo enforcer nên
-            handler trả sai cũng không mở được quyền.
+            xoá. Giá trị trả về là MỘT NỬA điều kiện xác nhận bảo mật, không
+            phải số liệu báo cáo: ``False`` chính là cách PyCasbin báo adapter
+            hỏng, và nửa kia (rule biến khỏi model) không thay thế được nó.
+            Nửa còn lại che chiều ngược: handler khai ``True`` mà rule vẫn sống.
         da_dong_bo: người gọi ĐÃ tự đồng bộ rồi. Chỉ đặt ``True`` khi người gọi
             dựng ``rules`` TỪ MODEL — khi ấy nó buộc phải đồng bộ trước lúc
             dựng, chứ đồng bộ ở đây thì đã muộn: danh sách đã sai rồi. Mặc định
@@ -213,69 +300,72 @@ async def xoa_nhom_rule_fail_closed(
         ``an_toan=False`` nghĩa là pha 2 đã bị chặn — người gọi PHẢI coi đó là
         thất bại, vì nhóm rule mới chỉ bị xoá một phần.
     """
-    chuan = [chuan_hoa_rule(r) for r in rules]
-    non_deny = [r for r in chuan if r[3] != EFT_DENY]
-    deny = [r for r in chuan if r[3] == EFT_DENY]
+    # Lock bao TRỌN đồng bộ → snapshot → hai pha → hậu điều kiện. Tái vào được
+    # nên người gọi đã khoá rộng hơn thì đoạn này không chặn chính nó.
+    async with khoa_enforcer(enforcer):
+        chuan = [chuan_hoa_rule(r) for r in rules]
+        non_deny = [r for r in chuan if r[3] != EFT_DENY]
+        deny = [r for r in chuan if r[3] == EFT_DENY]
 
-    if not da_dong_bo:
-        loi_dong_bo = await dong_bo_tu_nguon_ben_vung(enforcer)
-        if loi_dong_bo is not None:
-            # Chưa đọc được CSDL thì chưa biết gì. DỪNG trước mọi mutation.
+        if not da_dong_bo:
+            loi_dong_bo = await dong_bo_tu_nguon_ben_vung(enforcer)
+            if loi_dong_bo is not None:
+                # Chưa đọc được CSDL thì chưa biết gì. DỪNG trước mọi mutation.
+                return {
+                    "an_toan": False,
+                    "dong_bo": False,
+                    "loi_dong_bo": loi_dong_bo,
+                    "da_xoa": [],
+                    "con_song": chuan,
+                    "vang_san": [],
+                    "deny_chua_cham": deny,
+                }
+
+        async def _pha(nhom):
+            """Chạy một pha, phân loại từng rule thành ba nhóm rời nhau."""
+            da_xac_nhan, chua_xac_nhan, vang_san = [], [], []
+            for r in nhom:
+                von_co = rule_con_trong_model(enforcer, r)
+                ket_qua = await xu_ly_mot_rule(r)
+                if not von_co:
+                    # Vốn đã không có trong model: không có gì để thu hồi, nên
+                    # không phải thất bại và KHÔNG chặn pha sau. Idempotent.
+                    vang_san.append(r)
+                elif ket_qua and not rule_con_trong_model(enforcer, r):
+                    # HAI điều kiện, thiếu một là hở:
+                    #  - thiếu `ket_qua`  -> adapter hỏng vẫn bị coi là xong;
+                    #  - thiếu phép đo    -> handler khai man vẫn được tin.
+                    da_xac_nhan.append(r)
+                else:
+                    chua_xac_nhan.append(r)
+            return da_xac_nhan, chua_xac_nhan, vang_san
+
+        da1, chua1, vang1 = await _pha(non_deny)
+        if chua1 and deny:
+            # DỪNG. Không chạm deny. Xem docstring: đây chính là cửa fail-open.
             return {
                 "an_toan": False,
-                "dong_bo": False,
-                "loi_dong_bo": loi_dong_bo,
-                "da_xoa": [],
-                "con_song": chuan,
-                "vang_san": [],
+                "dong_bo": True,
+                "loi_dong_bo": None,
+                "da_xoa": da1,
+                "con_song": chua1,
+                "vang_san": vang1,
                 "deny_chua_cham": deny,
             }
 
-    async def _pha(nhom):
-        """Chạy một pha, phân loại từng rule thành ba nhóm rời nhau."""
-        da_xac_nhan, chua_xac_nhan, vang_san = [], [], []
-        for r in nhom:
-            von_co = rule_con_trong_model(enforcer, r)
-            ket_qua = await xu_ly_mot_rule(r)
-            if not von_co:
-                # Vốn đã không có trong model: không có gì để thu hồi, nên
-                # không phải thất bại và KHÔNG chặn pha sau. Idempotent.
-                vang_san.append(r)
-            elif ket_qua and not rule_con_trong_model(enforcer, r):
-                # HAI điều kiện, thiếu một là hở:
-                #  - thiếu `ket_qua`  -> adapter hỏng vẫn bị coi là xong;
-                #  - thiếu phép đo    -> handler khai man vẫn được tin.
-                da_xac_nhan.append(r)
-            else:
-                chua_xac_nhan.append(r)
-        return da_xac_nhan, chua_xac_nhan, vang_san
+        da2, chua2, vang2 = await _pha(deny)
 
-    da1, chua1, vang1 = await _pha(non_deny)
-    if chua1 and deny:
-        # DỪNG. Không chạm deny. Xem docstring: đây chính là cửa fail-open.
         return {
-            "an_toan": False,
+            "an_toan": True,
             "dong_bo": True,
             "loi_dong_bo": None,
-            "da_xoa": da1,
-            "con_song": chua1,
-            "vang_san": vang1,
-            "deny_chua_cham": deny,
+            "da_xoa": da1 + da2,
+            # `chua2` (deny xoá hụt) là fail-CLOSED — không mở quyền — nhưng vẫn là
+            # việc chưa xong, nên phải vào `con_song` để người gọi báo thất bại.
+            "con_song": chua1 + chua2,
+            "vang_san": vang1 + vang2,
+            "deny_chua_cham": [],
         }
-
-    da2, chua2, vang2 = await _pha(deny)
-
-    return {
-        "an_toan": True,
-        "dong_bo": True,
-        "loi_dong_bo": None,
-        "da_xoa": da1 + da2,
-        # `chua2` (deny xoá hụt) là fail-CLOSED — không mở quyền — nhưng vẫn là
-        # việc chưa xong, nên phải vào `con_song` để người gọi báo thất bại.
-        "con_song": chua1 + chua2,
-        "vang_san": vang1 + vang2,
-        "deny_chua_cham": [],
-    }
 
 
 class ValidationSeverity(str, Enum):
@@ -647,9 +737,10 @@ class CasbinPolicyService:
             # auth_model.conf since B1 declares
             #   p = sub, obj, act, eft.
             try:
-                success = await self.enforcer.add_policy(
-                    subject, obj, action, eft
-                )
+                async with khoa_enforcer(self.enforcer):
+                    success = await self.enforcer.add_policy(
+                        subject, obj, action, eft
+                    )
                 if success:
                     added += 1
                     added_policies.append((subject, obj, action, eft))
@@ -1155,99 +1246,102 @@ class CasbinPolicyService:
             # nên nếu model đang lệch với CSDL (di chứng một lượt hỏng trước)
             # thì mọi thứ sau đó thao tác trên một bức tranh sai — kể cả phần
             # fail-closed. Đồng bộ SAU khi dựng danh sách là vô nghĩa.
-            loi_dong_bo = await dong_bo_tu_nguon_ben_vung(self.enforcer)
-            if loi_dong_bo is not None:
-                return {
-                    "success": False,
-                    "error": (
-                        "refresh KHÔNG chạy: không đồng bộ được policy từ CSDL "
-                        f"nên chưa chạm vào rule nào — {loi_dong_bo}"
-                    ),
-                    "role": role,
-                    "template_id": template_id,
-                    "dong_bo": False,
-                    "loi_dong_bo": loi_dong_bo,
-                }
+            # `current_policies` dựng TỪ MODEL ở trong vùng này, nên lock phải bao cả
+            # lúc dựng — khoá riêng trong helper thì snapshot đã kịp cũ.
+            async with khoa_enforcer(self.enforcer):
+                loi_dong_bo = await dong_bo_tu_nguon_ben_vung(self.enforcer)
+                if loi_dong_bo is not None:
+                    return {
+                        "success": False,
+                        "error": (
+                            "refresh KHÔNG chạy: không đồng bộ được policy từ CSDL "
+                            f"nên chưa chạm vào rule nào — {loi_dong_bo}"
+                        ),
+                        "role": role,
+                        "template_id": template_id,
+                        "dong_bo": False,
+                        "loi_dong_bo": loi_dong_bo,
+                    }
 
-            # Get current policies before delete (for audit log)
-            all_policies = self.enforcer.get_policy()
-            current_policies = [p for p in all_policies if p[0] == role]
-            current_count = len(current_policies)
+                # Get current policies before delete (for audit log)
+                all_policies = self.enforcer.get_policy()
+                current_policies = [p for p in all_policies if p[0] == role]
+                current_count = len(current_policies)
 
-            # Remove all policies for this role — bằng ĐỦ rule hiện có, gồm
-            # `eft`. Bản cũ chỉ truyền `policy[0..2]` nên không xoá được gì,
-            # rồi vẫn áp template mới lên trên: rule cũ thành MỒ CÔI và người
-            # vận hành tin là đã bị xoá.
-            removed = 0
-            giu_co_y = []
+                # Remove all policies for this role — bằng ĐỦ rule hiện có, gồm
+                # `eft`. Bản cũ chỉ truyền `policy[0..2]` nên không xoá được gì,
+                # rồi vẫn áp template mới lên trên: rule cũ thành MỒ CÔI và người
+                # vận hành tin là đã bị xoá.
+                removed = 0
+                giu_co_y = []
 
-            async def xu_ly(policy):
-                nonlocal removed
-                subject, obj, action = policy[0], policy[1], policy[2]
+                async def xu_ly(policy):
+                    nonlocal removed
+                    subject, obj, action = policy[0], policy[1], policy[2]
 
-                # Skip critical policies
-                if is_critical_policy(subject, obj, action):
-                    giu_co_y.append(chuan_hoa_rule(policy))
+                    # Skip critical policies
+                    if is_critical_policy(subject, obj, action):
+                        giu_co_y.append(chuan_hoa_rule(policy))
+                        return False
+
+                    if await xoa_rule_chinh_xac(self.enforcer, policy):
+                        removed += 1
+                        return True
                     return False
 
-                if await xoa_rule_chinh_xac(self.enforcer, policy):
-                    removed += 1
-                    return True
-                return False
+                # Thứ tự non-deny -> deny do helper chung giữ.
+                kq = await xoa_nhom_rule_fail_closed(
+                    self.enforcer, current_policies, xu_ly, da_dong_bo=True
+                )
 
-            # Thứ tự non-deny -> deny do helper chung giữ.
-            kq = await xoa_nhom_rule_fail_closed(
-                self.enforcer, current_policies, xu_ly, da_dong_bo=True
-            )
+                # HẬU ĐIỀU KIỆN — kiểm TRƯỚC khi áp template.
+                # Kiểm SAU là sai: template có thể chứa đúng rule vừa bị xoá, nên
+                # một rule được xoá RỒI RE-ADD ĐÚNG sẽ bị tính nhầm là "còn sót".
+                # Ghi nhận thất bại ngay tại chỗ xoá thì không có chỗ cho nhầm lẫn.
+                #
+                # `giu_co_y` là giữ CÓ CHỦ Ý nên không tính là thất bại — nhưng nếu
+                # nó chặn pha deny (`an_toan=False`) thì refresh vẫn DỞ DANG, phải
+                # báo thất bại chứ không được im lặng bỏ qua nhóm deny.
+                xoa_that_bai = [r for r in kq["con_song"] if r not in giu_co_y]
+                if xoa_that_bai or not kq["an_toan"]:
+                    return {
+                        "success": False,
+                        "error": (
+                            "refresh KHÔNG hoàn tất: không xoá được rule cũ — "
+                            "quyền cũ vẫn có hiệu lực"
+                        ),
+                        "role": role,
+                        "template_id": template_id,
+                        "policies_removed": removed,
+                        "policies_before": current_count,
+                        "policies_added": 0,
+                        "policies_after": len(policy_cua_role(self.enforcer, role)),
+                        "policies_xoa_that_bai": xoa_that_bai,
+                        "policies_deny_chua_cham": kq["deny_chua_cham"],
+                        "an_toan": kq["an_toan"],
+                        "warnings": [],
+                    }
 
-            # HẬU ĐIỀU KIỆN — kiểm TRƯỚC khi áp template.
-            # Kiểm SAU là sai: template có thể chứa đúng rule vừa bị xoá, nên
-            # một rule được xoá RỒI RE-ADD ĐÚNG sẽ bị tính nhầm là "còn sót".
-            # Ghi nhận thất bại ngay tại chỗ xoá thì không có chỗ cho nhầm lẫn.
-            #
-            # `giu_co_y` là giữ CÓ CHỦ Ý nên không tính là thất bại — nhưng nếu
-            # nó chặn pha deny (`an_toan=False`) thì refresh vẫn DỞ DANG, phải
-            # báo thất bại chứ không được im lặng bỏ qua nhóm deny.
-            xoa_that_bai = [r for r in kq["con_song"] if r not in giu_co_y]
-            if xoa_that_bai or not kq["an_toan"]:
+                # Apply template fresh (with template tracking)
+                result = await self.apply_template_to_role(
+                    template_id, role, validate=False, applied_by=applied_by
+                )
+
+                # `policies_after` phải ĐO enforcer, không suy từ `added`:
+                # `result["added"]` không nhìn vào enforcer, nên từng báo 4 trong
+                # khi thực tế còn 6.
+                sau = policy_cua_role(self.enforcer, role)
                 return {
-                    "success": False,
-                    "error": (
-                        "refresh KHÔNG hoàn tất: không xoá được rule cũ — "
-                        "quyền cũ vẫn có hiệu lực"
-                    ),
+                    "success": True,
                     "role": role,
                     "template_id": template_id,
                     "policies_removed": removed,
                     "policies_before": current_count,
-                    "policies_added": 0,
-                    "policies_after": len(policy_cua_role(self.enforcer, role)),
-                    "policies_xoa_that_bai": xoa_that_bai,
-                    "policies_deny_chua_cham": kq["deny_chua_cham"],
-                    "an_toan": kq["an_toan"],
-                    "warnings": [],
+                    "policies_added": result.get("added", 0),
+                    "policies_after": len(sau),
+                    "policies_giu_co_y": giu_co_y,
+                    "warnings": result.get("warnings", []),
                 }
-
-            # Apply template fresh (with template tracking)
-            result = await self.apply_template_to_role(
-                template_id, role, validate=False, applied_by=applied_by
-            )
-
-            # `policies_after` phải ĐO enforcer, không suy từ `added`:
-            # `result["added"]` không nhìn vào enforcer, nên từng báo 4 trong
-            # khi thực tế còn 6.
-            sau = policy_cua_role(self.enforcer, role)
-            return {
-                "success": True,
-                "role": role,
-                "template_id": template_id,
-                "policies_removed": removed,
-                "policies_before": current_count,
-                "policies_added": result.get("added", 0),
-                "policies_after": len(sau),
-                "policies_giu_co_y": giu_co_y,
-                "warnings": result.get("warnings", []),
-            }
 
         except Exception as e:
             return {

@@ -249,75 +249,81 @@ async def delete_role_atomic(
     # nằm trong CSDL — khi ấy phép kiểm này ném `ResourceNotFoundError` (404)
     # cho một role vẫn còn quyền, còn retry thì chỉ nhìn thấy phần rule sót
     # trong model. Đồng bộ trước là điều kiện để hai bước đó nói về CSDL thật.
-    from app.services.casbin_service import dong_bo_tu_nguon_ben_vung
+    # `all_policies` và `policies_to_remove` dựng TỪ MODEL ở trong vùng này,
+    # nên lock phải bao cả lúc dựng — khoá riêng trong helper thì snapshot đã
+    # kịp cũ. Lock TÁI VÀO ĐƯỢC nên helper vẫn tự khoá mà không tự chặn mình.
+    from app.services.casbin_service import khoa_enforcer
 
-    loi_dong_bo = await dong_bo_tu_nguon_ben_vung(enforcer)
-    if loi_dong_bo is not None:
-        raise ConflictError(
-            f"Không xoá được role {role_name}: không đồng bộ được policy từ "
-            f"CSDL nên chưa chạm vào gì — {loi_dong_bo}"
-        )
+    async with khoa_enforcer(enforcer):
+        from app.services.casbin_service import dong_bo_tu_nguon_ben_vung
 
-    # STEP 2: Check if role exists (has any policies)
-    all_policies = enforcer.get_policy()
-    role_has_policies = any(p[0] == role_name for p in all_policies)
-    if not role_has_policies:
-        raise ResourceNotFoundError(f"Role not found: {role_name}")
-
-    # STEP 2b: XOÁ policy + KIỂM HẬU ĐIỀU KIỆN — TRƯỚC mọi mutation khác.
-    #
-    # Thứ tự này là phần fail-closed. Các bước sau đổi hàng DB (STEP 4) và
-    # grouping policy trong enforcer (STEP 5/6); DB thì router rollback được,
-    # nhưng thay đổi trên enforcer thì KHÔNG hoàn tác đồng bộ. Nếu xoá policy
-    # thất bại mà ta đã kịp gán lại user và gỡ grouping, hệ thống rơi vào
-    # trạng thái nửa vời: user mất role, còn policy của role thì vẫn sống.
-    #
-    # Nên xoá policy trước, xác nhận sạch, rồi mới đụng thứ khác. Ném ở đây thì
-    # router `except Exception -> rollback` và KHÔNG log "Role deleted
-    # atomically".
-    from app.services.casbin_service import (
-        chuan_hoa_rule,
-        policy_cua_role,
-        xoa_nhom_rule_fail_closed,
-        xoa_rule_chinh_xac,
-    )
-
-    policies_to_remove = [
-        chuan_hoa_rule(p) for p in all_policies if p and p[0] == role_name
-    ]
-    removed_p_count = 0
-
-    async def xu_ly(p):
-        nonlocal removed_p_count
-        if await xoa_rule_chinh_xac(enforcer, p):
-            removed_p_count += 1
-            return True
-        return False
-
-    # Thứ tự non-deny -> deny do helper chung giữ. Vòng `for` phẳng ở đây từng
-    # xoá `deny` sau khi `allow` xoá hụt: role "xoá dở" mà quyền lại RỘNG HƠN
-    # trước khi xoá.
-    kq = await xoa_nhom_rule_fail_closed(
-        enforcer, policies_to_remove, xu_ly, da_dong_bo=True
-    )
-
-    # `policy_cua_role` chỉ đọc MODEL BỘ NHỚ, nên nó KHÔNG thấy ca adapter hỏng
-    # (model sạch mà hàng trong CSDL còn). `kq["con_song"]` mới là danh sách
-    # rule chưa được XÁC NHẬN thu hồi — phải kiểm cả hai.
-    policies_con_sot = policy_cua_role(enforcer, role_name)
-    chua_xac_nhan = kq["con_song"]
-    if policies_con_sot or chua_xac_nhan or not kq["an_toan"]:
-        raise ConflictError(
-            f"Không xoá được role {role_name}: {len(policies_con_sot)} policy "
-            f"còn trong model, {len(chua_xac_nhan)} rule chưa xác nhận thu hồi"
-            + (
-                f" ({len(kq['deny_chua_cham'])} rule deny KHÔNG bị chạm tới vì "
-                f"non-deny xoá hụt — xoá deny lúc này là MỞ quyền)"
-                if not kq["an_toan"]
-                else ""
+        loi_dong_bo = await dong_bo_tu_nguon_ben_vung(enforcer)
+        if loi_dong_bo is not None:
+            raise ConflictError(
+                f"Không xoá được role {role_name}: không đồng bộ được policy từ "
+                f"CSDL nên chưa chạm vào gì — {loi_dong_bo}"
             )
-            + f", quyền cũ VẪN CÒN hiệu lực. Chi tiết: {policies_con_sot}"
+
+        # STEP 2: Check if role exists (has any policies)
+        all_policies = enforcer.get_policy()
+        role_has_policies = any(p[0] == role_name for p in all_policies)
+        if not role_has_policies:
+            raise ResourceNotFoundError(f"Role not found: {role_name}")
+
+        # STEP 2b: XOÁ policy + KIỂM HẬU ĐIỀU KIỆN — TRƯỚC mọi mutation khác.
+        #
+        # Thứ tự này là phần fail-closed. Các bước sau đổi hàng DB (STEP 4) và
+        # grouping policy trong enforcer (STEP 5/6); DB thì router rollback được,
+        # nhưng thay đổi trên enforcer thì KHÔNG hoàn tác đồng bộ. Nếu xoá policy
+        # thất bại mà ta đã kịp gán lại user và gỡ grouping, hệ thống rơi vào
+        # trạng thái nửa vời: user mất role, còn policy của role thì vẫn sống.
+        #
+        # Nên xoá policy trước, xác nhận sạch, rồi mới đụng thứ khác. Ném ở đây thì
+        # router `except Exception -> rollback` và KHÔNG log "Role deleted
+        # atomically".
+        from app.services.casbin_service import (
+            chuan_hoa_rule,
+            policy_cua_role,
+            xoa_nhom_rule_fail_closed,
+            xoa_rule_chinh_xac,
         )
+
+        policies_to_remove = [
+            chuan_hoa_rule(p) for p in all_policies if p and p[0] == role_name
+        ]
+        removed_p_count = 0
+
+        async def xu_ly(p):
+            nonlocal removed_p_count
+            if await xoa_rule_chinh_xac(enforcer, p):
+                removed_p_count += 1
+                return True
+            return False
+
+        # Thứ tự non-deny -> deny do helper chung giữ. Vòng `for` phẳng ở đây từng
+        # xoá `deny` sau khi `allow` xoá hụt: role "xoá dở" mà quyền lại RỘNG HƠN
+        # trước khi xoá.
+        kq = await xoa_nhom_rule_fail_closed(
+            enforcer, policies_to_remove, xu_ly, da_dong_bo=True
+        )
+
+        # `policy_cua_role` chỉ đọc MODEL BỘ NHỚ, nên nó KHÔNG thấy ca adapter hỏng
+        # (model sạch mà hàng trong CSDL còn). `kq["con_song"]` mới là danh sách
+        # rule chưa được XÁC NHẬN thu hồi — phải kiểm cả hai.
+        policies_con_sot = policy_cua_role(enforcer, role_name)
+        chua_xac_nhan = kq["con_song"]
+        if policies_con_sot or chua_xac_nhan or not kq["an_toan"]:
+            raise ConflictError(
+                f"Không xoá được role {role_name}: {len(policies_con_sot)} policy "
+                f"còn trong model, {len(chua_xac_nhan)} rule chưa xác nhận thu hồi"
+                + (
+                    f" ({len(kq['deny_chua_cham'])} rule deny KHÔNG bị chạm tới vì "
+                    f"non-deny xoá hụt — xoá deny lúc này là MỞ quyền)"
+                    if not kq["an_toan"]
+                    else ""
+                )
+                + f", quyền cũ VẪN CÒN hiệu lực. Chi tiết: {policies_con_sot}"
+            )
 
     user_repo = UserRepository(db)
     

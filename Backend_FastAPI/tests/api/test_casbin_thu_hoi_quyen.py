@@ -11,6 +11,8 @@ không phải trang trí: nó là thứ duy nhất phân biệt được bản v
 rule chính xác) với bản vá SAI (remove-filter theo ba trường) — bản sai xoá
 luôn ``deny``, tức âm thầm MỞ quyền, tệ hơn lỗi ban đầu.
 """
+import asyncio
+
 import pytest
 
 from app.database import AsyncSessionLocal
@@ -1156,4 +1158,99 @@ async def test_hai_luot_retry_refresh_thay_lai_allow_ben_vung(client):
     await enf.load_policy()
     assert policy_cua_role(enf, SUB) == [], (
         f"CSDL phải sạch sau retry; còn {policy_cua_role(enf, SUB)!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. CẠNH TRANH — enforcer là đối tượng DÙNG CHUNG
+# ---------------------------------------------------------------------------
+#
+# Mục 7 và 8 đóng các lỗi TUẦN TỰ. Nhưng `request.app.state.enforcer` là MỘT
+# đối tượng cho mọi request, và không có lock thì hai coroutine đan nhau vẫn mở
+# được quyền dù từng đường đã fail-closed:
+#
+#     xoá ĐƠN gỡ `allow` khỏi model rồi hỏng ở adapter;
+#     thao tác NHÓM đang chạy song song thấy `allow` vắng -> xếp `vang_san`
+#     -> đi tiếp và xoá `deny`.
+#
+#     group_result: an_toan=True   vang_san=[allow]
+#     durable: [allow]             FAIL_OPEN
+#
+# Nhóm báo AN TOÀN trong khi PostgreSQL cuối cùng chỉ còn `allow`.
+#
+# Lịch trình dưới đây tái hiện đúng thứ tự ấy: T2 vào vùng tới hạn rồi nhường
+# lượt cho T1. Barrier có TIMEOUT chứ không chờ vô hạn — chờ vô hạn thì khi lock
+# hoạt động đúng, T1 bị chặn và ca kiểm sẽ TREO thay vì xanh.
+
+
+@pytest.mark.asyncio
+async def test_canh_tranh_xoa_don_khong_duoc_bien_allow_thanh_vang_san(client):
+    """Xoá ĐƠN hỏng chen giữa thao tác NHÓM: deny phải KHÔNG bị chạm."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.services import casbin_service
+
+    enf = await _seed_cap_allow_deny()
+    that_remove = enf.remove_policy
+    that_sync = casbin_service.dong_bo_tu_nguon_ben_vung
+
+    goi = []
+    t2_vao_vung = asyncio.Event()
+    t1_xong = asyncio.Event()
+
+    async def _remove_gia(*rule):
+        r = chuan_hoa_rule(list(rule))
+        goi.append(r)
+        if r[3] == "deny":
+            return await that_remove(*rule)
+        # non-deny: PyCasbin gỡ khỏi model TRƯỚC rồi adapter hỏng
+        _go_khoi_model_thoi(enf, r)
+        return False
+
+    async def _sync_hook(enforcer):
+        kq = await that_sync(enforcer)
+        # Đã vào vùng tới hạn (nếu có lock thì đang GIỮ lock). Nhường lượt.
+        t2_vao_vung.set()
+        try:
+            await asyncio.wait_for(t1_xong.wait(), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass  # có lock: T1 bị chặn — đúng như mong đợi
+        return kq
+
+    async def _xoa_don():
+        """Đường xoá ĐƠN thật: đi qua `xoa_rule_chinh_xac`, chịu cùng lock."""
+        await t2_vao_vung.wait()
+        await casbin_service.xoa_rule_chinh_xac(enf, ALLOW)
+        t1_xong.set()
+
+    with patch.object(enf, "remove_policy", side_effect=_remove_gia):
+        with patch(
+            "app.services.casbin_service.dong_bo_tu_nguon_ben_vung",
+            new_callable=AsyncMock,
+            side_effect=_sync_hook,
+        ):
+            t1 = asyncio.create_task(_xoa_don(), name="T1-xoa-don")
+            async with AsyncSessionLocal() as db:
+                kq = await CasbinPolicyService(db, enf).remove_policies_batch(
+                    [ALLOW, DENY], validate=False, force=True
+                )
+            await asyncio.wait_for(t1, timeout=5)
+
+    assert not any(r[3] == "deny" for r in goi), (
+        f"deny KHÔNG được chạm tới. Đã gọi xoá với {goi!r} — nghĩa là thao tác "
+        f"nhóm đã coi `allow` là 'vắng sẵn' vì lượt xoá đơn vừa gỡ nó khỏi "
+        f"model, rồi đi tiếp xoá deny."
+    )
+    assert kq["vang_san"] == [], (
+        f"`allow` KHÔNG được xếp 'vắng sẵn': nó vắng vì một thao tác KHÁC đang "
+        f"chạy dở, không phải vì CSDL đã sạch: {kq}"
+    )
+    assert kq["an_toan"] is False, f"pha deny phải bị chặn: {kq}"
+
+    # Trạng thái BỀN VỮNG — hàng nào cũng phải còn, adapter đã hỏng cả lượt.
+    await enf.load_policy()
+    con_lai = sorted(policy_cua_role(enf, SUB))
+    assert con_lai == sorted([ALLOW, DENY]), (
+        f"CSDL phải còn NGUYÊN cả cặp. Chỉ còn [allow] nghĩa là quyền vừa mở "
+        f"bền vững do đan lịch. Hiện có: {con_lai!r}"
     )

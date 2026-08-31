@@ -245,7 +245,12 @@ async def add_new_policy(
     })
 
     # 5. Reload policy for current worker to ensure consistency
-    await enforcer.load_policy()
+    # Dưới lock: một lượt reload chen vào giữa thao tác nhóm sẽ thay model
+    # ngay dưới chân nó, làm snapshot vừa dựng thành vô nghĩa.
+    from app.services.casbin_service import khoa_enforcer
+
+    async with khoa_enforcer(enforcer):
+        await enforcer.load_policy()
 
     # 6. Return success
     return {"detail": "Policy added successfully."}
@@ -333,7 +338,10 @@ async def delete_policy(
     })
 
     # 6. Reload policy for current worker to ensure consistency
-    await enforcer.load_policy()
+    from app.services.casbin_service import khoa_enforcer
+
+    async with khoa_enforcer(enforcer):
+        await enforcer.load_policy()
 
     # 7. Return success
     return {"detail": "Policy removed successfully."}
