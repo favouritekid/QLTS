@@ -1534,20 +1534,30 @@ async def toggle_role_feature(
         # KHÔNG trừ `blocked`. Safety-check từ chối xoá là từ chối CÓ CHỦ Ý,
         # nhưng hệ quả với người dùng thì y hệt: policy VẪN CÒN, nên feature
         # VẪN CHƯA TẮT. Trừ `blocked` ra là quay lại đúng lỗi đang vá — báo
-        # "Disabled feature" cho một việc không xảy ra. Fail-closed: chỉ được
-        # coi là thành công khi MỌI policy dự kiến thật sự bị xoá.
-        chua_xoa = len(policies_tuples) - result.get("removed", 0)
-        if chua_xoa > 0:
+        # "Disabled feature" cho một việc không xảy ra.
+        #
+        # Và ĐO thay vì trừ: `con_song` là rule thật sự còn trong enforcer.
+        # Phép trừ `len - removed` sai hai chiều — rule vốn đã không tồn tại bị
+        # tính là "chưa xoá" (báo động giả), còn rule bị chặn hay ném lỗi thì
+        # không phải lúc nào cũng vào được `removed`.
+        con_song = result.get("con_song", [])
+        if con_song or not result.get("an_toan", False):
             raise ConflictError(
                 f"Không tắt được feature '{feature_def['display_name']}' cho "
-                f"{role_name}: {chua_xoa}/{len(policies_tuples)} policy chưa "
-                f"bị xoá (trong đó {result.get('blocked', 0)} bị safety-check "
-                f"giữ lại), quyền cũ VẪN CÒN hiệu lực. "
+                f"{role_name}: {len(con_song)}/{len(policies_tuples)} policy "
+                f"chưa bị xoá (trong đó {result.get('blocked', 0)} bị "
+                f"safety-check giữ lại"
+                + (
+                    f"; {len(result.get('deny_chua_cham', []))} rule deny KHÔNG "
+                    f"bị chạm tới vì non-deny xoá hụt"
+                    if not result.get("an_toan", False)
+                    else ""
+                )
+                + f"), quyền cũ VẪN CÒN hiệu lực. "
                 f"Chi tiết: {result.get('warnings') or result.get('errors')}"
             )
 
-        # Log activity — chỉ tới đây khi MỌI policy dự kiến đã thật sự bị xoá
-        # (hoặc bị safety-check chặn có chủ ý).
+        # Log activity — chỉ tới đây khi MỌI policy dự kiến đã thật sự bị xoá.
         await commit_and_log(db, await log_admin_activity(
             db=db,
             request=request,

@@ -15,13 +15,21 @@ import pytest
 
 from app.database import AsyncSessionLocal
 from app.main import fastapi_app
-from app.services.casbin_service import CasbinPolicyService, policy_cua_role
+from app.services.casbin_service import (
+    CasbinPolicyService,
+    chuan_hoa_rule,
+    policy_cua_role,
+)
 
 SUB = "role:thu_hoi_probe"
 OBJ = "/api/thu_hoi_probe/*"
 ACT = "GET"
 ALLOW = [SUB, OBJ, ACT, "allow"]
 DENY = [SUB, OBJ, ACT, "deny"]
+# Đường request THẬT mà người dùng gõ, khác với `OBJ` là mẫu trong policy.
+# `enforce` phải được hỏi bằng đường thật thì mới nói lên điều gì. Đã đo trên
+# `auth_model.conf`: allow+deny -> False, chỉ còn allow -> True.
+DUONG_THAT = "/api/thu_hoi_probe/1"
 
 
 def _enf():
@@ -234,9 +242,16 @@ async def test_feature_toggle_con_policy_thi_409_va_khong_audit(
     """Tắt feature mà còn policy chưa xoá -> 409 CONFLICT, KHÔNG ghi audit.
 
     Kể cả khi policy bị safety-check giữ (`blocked`): hệ quả với người dùng y
-    hệt — policy VẪN CÒN nên feature VẪN CHƯA TẮT. Vì thế mock trả
-    ``blocked == len(policies_tuples)``: nếu ai đó trừ `blocked` ra khỏi phép
-    đếm thì `chua_xoa` về 0 và endpoint báo thành công — đúng đột biến cần bắt.
+    hệt — policy VẪN CÒN nên feature VẪN CHƯA TẮT.
+
+    Mock trả về ĐÚNG hình dạng thật của ``remove_policies_batch``: rule bị
+    ``blocked`` thì vẫn nằm trong enforcer, nên nó phải có mặt trong
+    ``con_song``. Nếu ai đó lọc `blocked` ra khỏi `con_song` thì cổng mở và
+    endpoint báo thành công — đúng đột biến cần bắt.
+
+    Mock KHÔNG được thiếu `con_song`/`an_toan`: thiếu thì router rơi về mặc
+    định fail-closed và vẫn ra 409, nghĩa là ca kiểm xanh vì một lý do khác
+    hẳn thứ nó định canh.
 
     Ca này phải ở tầng HTTP vì cổng trung thực nằm ở ROUTER, không ở service.
     """
@@ -248,11 +263,16 @@ async def test_feature_toggle_con_policy_thi_409_va_khong_audit(
     from app.services.casbin_service import CasbinPolicyService
 
     async def _gia(policies, *a, **k):
+        chuan = [chuan_hoa_rule(p) for p in policies]
         return {
             "removed": 0,
-            "blocked": len(policies),
+            "blocked": len(chuan),
             "errors": [],
             "warnings": ["Blocked for safety"],
+            # bị chặn = chưa xoá = CÒN trong enforcer
+            "con_song": chuan,
+            "deny_chua_cham": [],
+            "an_toan": True,
         }
 
     async with AsyncSessionLocal() as db:
@@ -402,3 +422,232 @@ async def test_refresh_that_bai_khong_ap_template(client):
     assert kq["success"] is False, f"phải báo thất bại: {kq}"
     assert kq.get("policies_xoa_that_bai"), "phải nêu rõ rule nào không xoá được"
     ap.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# 6. THẤT BẠI HỖN HỢP — xoá allow hụt thì TUYỆT ĐỐI không chạm deny
+# ---------------------------------------------------------------------------
+#
+# Đây là lỗ hổng mà mục 5 KHÔNG bắt được. Mọi ca ở mục 5 cho MỌI lượt xoá đều
+# hụt, nên vòng lặp phẳng "hụt rồi vẫn chạy tiếp" trông vô hại. Ca thật nguy
+# hiểm là hỗn hợp: `allow` xoá hụt mà `deny` xoá được.
+#
+# Khi ấy hàm báo `success=False` — nghe như đã an toàn — nhưng trạng thái để
+# lại là CHỈ CÒN ALLOW, tức quyền đi từ TỪ CHỐI sang CHO PHÉP. Đo trên enforcer
+# thật: `policies_removed=1`, `remaining=[allow]`, `enforce=True`. Thất bại mà
+# lại NỚI quyền thì nguy hiểm hơn hẳn không làm gì.
+#
+# Vì thế patch dưới đây phải BẤT ĐỐI XỨNG: `allow` luôn hụt, còn `deny` thì
+# XOÁ ĐƯỢC THẬT nếu bị gọi. Nếu làm cho `deny` cũng hụt thì ca kiểm không phân
+# biệt nổi "không chạm tới deny" với "có chạm mà không xoá nổi" — xanh giả.
+
+
+def _patch_hut_non_deny(ghi_nhan):
+    """allow (và mọi non-deny) xoá HỤT; deny thì xoá ĐƯỢC THẬT nếu bị gọi."""
+
+    async def _gia(enforcer, rule):
+        r = chuan_hoa_rule(rule)
+        ghi_nhan.append(r)
+        if r[3] == "deny":
+            return await enforcer.remove_policy(*r)
+        return False
+
+    return _gia
+
+
+def _khang_dinh_deny_nguyen_ven(enf, ghi_nhan, nhan):
+    """Ba khẳng định độc lập cho cùng một bất biến, ở ba mức khác nhau."""
+    con_lai = policy_cua_role(enf, SUB)
+    # HỆ QUẢ trước, cơ chế sau. `enforce` là thứ người dùng thật sự chạm phải;
+    # để nó nổ đầu tiên thì thông điệp lỗi nói thẳng ra rằng quyền vừa bị MỞ,
+    # thay vì chỉ nói một hàng policy đã biến mất.
+    assert enf.enforce(SUB, DUONG_THAT, ACT) is False, (
+        f"{nhan}: enforce phải VẪN là False. True nghĩa là deny đã mất trong "
+        f"khi allow còn sống — đúng cửa fail-open. Còn lại: {con_lai!r}"
+    )
+    assert DENY in con_lai, (
+        f"{nhan}: deny bị xoá sau khi allow xoá hụt — quyền vừa được MỞ"
+    )
+    assert not any(r[3] == "deny" for r in ghi_nhan), (
+        f"{nhan}: deny KHÔNG được chạm tới; đã gọi xoá với {ghi_nhan!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_hon_hop_khong_cham_deny(client):
+    """refresh: allow xoá hụt -> dừng, deny nguyên vẹn, template không được áp."""
+    from unittest.mock import AsyncMock, patch
+
+    enf = await _seed_cap_allow_deny()
+    goi = []
+
+    async with AsyncSessionLocal() as db:
+        sv = CasbinPolicyService(db, enf)
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            side_effect=_patch_hut_non_deny(goi),
+        ):
+            with patch.object(
+                CasbinPolicyService, "apply_template_to_role",
+                new_callable=AsyncMock,
+            ) as ap:
+                kq = await sv.refresh_role_from_template(
+                    role=SUB, template_id="lead_viewer", force=True
+                )
+
+    _khang_dinh_deny_nguyen_ven(enf, goi, "refresh")
+    assert kq["success"] is False, f"phải báo thất bại: {kq}"
+    assert kq.get("an_toan") is False, (
+        f"phải nêu rõ pha deny bị chặn, không chỉ 'thất bại chung': {kq}"
+    )
+    assert kq.get("policies_deny_chua_cham") == [DENY], (
+        f"phải liệt kê đúng rule deny chưa bị chạm: {kq}"
+    )
+    ap.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_xoa_role_hon_hop_khong_cham_deny(client):
+    """delete_role_atomic: allow xoá hụt -> ConflictError, deny nguyên vẹn."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.services import role_service
+    from app.utils.exceptions import ConflictError
+
+    enf = await _seed_cap_allow_deny()
+    goi = []
+
+    async with AsyncSessionLocal() as db:
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            side_effect=_patch_hut_non_deny(goi),
+        ):
+            with pytest.raises(ConflictError) as ex:
+                await role_service.delete_role_atomic(db, SUB, enf)
+
+    _khang_dinh_deny_nguyen_ven(enf, goi, "delete_role")
+    assert "MỞ quyền" in str(ex.value), (
+        f"thông điệp phải nói rõ vì sao deny không bị chạm: {ex.value}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_xoa_hang_loat_hon_hop_khong_cham_deny(client):
+    """remove_policies_batch: cùng bất biến — đường thứ BA cùng root.
+
+    Đường này không nằm trong hai chỗ được chỉ ra ban đầu, nhưng nó dùng đúng
+    vòng lặp phẳng ấy và phục vụ cổng bật/tắt feature, nên bỏ sót nó là vá một
+    nhánh còn ba.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    enf = await _seed_cap_allow_deny()
+    goi = []
+
+    async with AsyncSessionLocal() as db:
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            side_effect=_patch_hut_non_deny(goi),
+        ):
+            kq = await CasbinPolicyService(db, enf).remove_policies_batch(
+                [ALLOW, DENY], validate=False, force=True
+            )
+
+    _khang_dinh_deny_nguyen_ven(enf, goi, "batch")
+    assert kq["an_toan"] is False, f"phải báo pha deny bị chặn: {kq}"
+    assert kq["removed"] == 0, f"không xoá được gì thì counter phải là 0: {kq}"
+    assert kq["con_song"] == [ALLOW], f"phải đo đúng rule còn sống: {kq}"
+    assert kq["deny_chua_cham"] == [DENY], f"phải liệt kê deny bị bỏ qua: {kq}"
+
+
+@pytest.mark.asyncio
+async def test_cong_do_enforcer_chu_khong_tin_gia_tri_tra_ve(client):
+    """Handler báo ĐÃ XOÁ nhưng rule vẫn còn -> cổng VẪN phải chặn pha deny.
+
+    Ca này phân biệt bản vá đang có với một bản vá trông rất giống: cổng dựng
+    trên GIÁ TRỊ TRẢ VỀ của từng lượt xoá thay vì trên trạng thái enforcer.
+    Bản ấy xanh ở mọi ca hỗn hợp khác, vì ở đó handler trả về đúng sự thật.
+
+    Nó chỉ vỡ đúng ở đây: handler báo True trong khi rule còn sống. Đó không
+    phải giả thuyết xa vời — `remove_policy` trả True theo bộ nhớ trong khi lượt
+    ghi xuống adapter hỏng là đúng hình dạng ấy, và cả loạt lỗi trong tệp này
+    đều sinh ra từ việc tin một giá trị trả về thay vì đo thứ nó nói về.
+
+    Chú ý phần tương phản: `removed` nói 1, `con_song` nói vẫn còn. Cổng nghe
+    theo `con_song`.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    enf = await _seed_cap_allow_deny()
+    goi = []
+
+    async def _noi_doi(enforcer, rule):
+        r = chuan_hoa_rule(rule)
+        goi.append(r)
+        if r[3] == "deny":
+            return await enforcer.remove_policy(*r)
+        return True  # nói dối: báo đã xoá mà không hề xoá
+
+    async with AsyncSessionLocal() as db:
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            side_effect=_noi_doi,
+        ):
+            kq = await CasbinPolicyService(db, enf).remove_policies_batch(
+                [ALLOW, DENY], validate=False, force=True
+            )
+
+    _khang_dinh_deny_nguyen_ven(enf, goi, "handler nói dối")
+    assert kq["removed"] == 1, f"counter đang chép lại lời nói dối: {kq}"
+    assert kq["con_song"] == [ALLOW], (
+        f"`con_song` phải ĐO enforcer, nên vẫn thấy allow: {kq}"
+    )
+    assert kq["an_toan"] is False, (
+        f"cổng phải chặn vì allow còn sống, bất kể handler khai gì: {kq}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_feature_toggle_deny_chua_cham_thi_409(client, admin_token_headers):
+    """Tầng HTTP: service báo `an_toan=False` -> phải 409, dù `con_song` rỗng.
+
+    Hai trường này canh hai chuyện khác nhau. `con_song` nói "còn rule chưa
+    xoá"; `an_toan` nói "nhóm rule mới bị xoá MỘT PHẦN, phần bỏ lại là deny".
+    Một router chỉ nhìn `con_song` sẽ trả 200 cho đúng ca fail-open — nên ca
+    này cố tình để `con_song` rỗng.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from app.services.casbin_service import CasbinPolicyService
+
+    async def _gia(policies, *a, **k):
+        return {
+            "removed": 1,
+            "blocked": 0,
+            "errors": ["DỪNG fail-closed"],
+            "warnings": [],
+            "con_song": [],
+            "deny_chua_cham": [DENY],
+            "an_toan": False,
+        }
+
+    with patch.object(
+        CasbinPolicyService,
+        "remove_policies_batch",
+        new_callable=AsyncMock,
+        side_effect=_gia,
+    ):
+        r = await client.post(
+            "/api/admin/roles/role:officer/features/toggle",
+            json={"feature_id": "view_leads", "enabled": False},
+            headers=admin_token_headers,
+        )
+
+    assert r.status_code == 409, (
+        f"phải 409 khi pha deny bị chặn; nhận {r.status_code}: {r.text[:200]}"
+    )
+    assert r.json().get("error_code") == "CONFLICT", r.text[:200]

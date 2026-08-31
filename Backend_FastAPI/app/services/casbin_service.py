@@ -90,6 +90,89 @@ def policy_cua_role(enforcer, role: str) -> List[List[str]]:
     return [list(p) for p in enforcer.get_policy() if p and p[0] == role]
 
 
+EFT_DENY = "deny"
+
+
+def rule_con_song(enforcer, rules) -> List[List[str]]:
+    """Trong ``rules``, những rule CÒN SỐNG trong enforcer.
+
+    ĐO trạng thái thật thay vì tin giá trị ``remove_policy`` trả về. Nhờ thế
+    mọi lý do khiến một rule sống sót — xoá hụt, bị safety-check chặn, giữ lại
+    có chủ ý, hay ném lỗi giữa chừng — đều hiện ra ở CÙNG một chỗ, và cổng an
+    toàn không phụ thuộc vào việc người gọi có báo cáo trung thực hay không.
+    """
+    hien_co = {tuple(p) for p in enforcer.get_policy() if p}
+    return [
+        r for r in (chuan_hoa_rule(x) for x in rules) if tuple(r) in hien_co
+    ]
+
+
+async def xoa_nhom_rule_fail_closed(enforcer, rules, xu_ly_mot_rule) -> dict:
+    """Xoá một NHÓM rule theo thứ tự BẮT BUỘC: non-deny trước, ``deny`` sau.
+
+    Xoá tuần tự theo thứ tự tuỳ ý là FAIL-OPEN, không phải chỉ kém gọn. Với
+    cặp ``(allow, deny)`` cùng ``(sub, obj, act)``: nếu xoá ``allow`` hụt mà
+    vòng lặp vẫn chạy tiếp rồi xoá ``deny``, quyền hiệu lực đi từ TỪ CHỐI sang
+    CHO PHÉP — trạng thái sau còn nguy hiểm hơn lúc chưa làm gì. Đo trên
+    enforcer thật: hàm báo ``success=False`` trong khi ``enforce(...)`` trả
+    ``True``.
+
+    Nên: pha 1 xoá non-deny; ĐO enforcer; còn non-deny nào sống thì DỪNG và
+    KHÔNG chạm tới bất kỳ rule ``deny`` nào. Pha 2 chỉ chạy khi pha 1 sạch.
+
+    Cổng đo theo NHÓM chứ không ghép cặp theo ``(sub, obj, act)``: một
+    ``allow`` dạng mẫu (``/api/x/*``) che được ``deny`` ở đường cụ thể
+    (``/api/x/1``) mà hai bộ ba lại không bằng nhau, nên ghép cặp chính xác sẽ
+    lọt đúng ca nguy hiểm nhất. Chặn cả nhóm là chặt hơn cần thiết, và chặt hơn
+    về phía an toàn.
+
+    KHÔNG "bù" bằng cách thêm lại ``allow`` khi đang ở trạng thái bất định:
+    thêm lại một rule vừa không xoá nổi là đoán mò về nguyên nhân hỏng, và nếu
+    chính adapter đang hỏng thì lệnh thêm cũng hỏng nốt — chỉ khác là lần này
+    ta đã kịp tuyên bố thành công.
+
+    Args:
+        rules: rule ba hoặc bốn trường, chuẩn hoá qua ``chuan_hoa_rule``.
+        xu_ly_mot_rule: async callable(rule bốn trường) -> bool, True nếu đã
+            xoá. Giá trị này CHỈ dùng để báo cáo; cổng an toàn đo enforcer nên
+            handler trả sai cũng không mở được quyền.
+
+    Returns:
+        dict: ``da_xoa``, ``con_song``, ``deny_chua_cham``, ``an_toan``.
+        ``an_toan=False`` nghĩa là pha 2 đã bị chặn — người gọi PHẢI coi đó là
+        thất bại, vì nhóm rule mới chỉ bị xoá một phần.
+    """
+    chuan = [chuan_hoa_rule(r) for r in rules]
+    non_deny = [r for r in chuan if r[3] != EFT_DENY]
+    deny = [r for r in chuan if r[3] == EFT_DENY]
+
+    da_xoa: List[List[str]] = []
+    for r in non_deny:
+        if await xu_ly_mot_rule(r):
+            da_xoa.append(r)
+
+    non_deny_con_song = rule_con_song(enforcer, non_deny)
+    if non_deny_con_song and deny:
+        # DỪNG. Không chạm deny. Xem docstring: đây chính là cửa fail-open.
+        return {
+            "an_toan": False,
+            "da_xoa": da_xoa,
+            "con_song": non_deny_con_song,
+            "deny_chua_cham": deny,
+        }
+
+    for r in deny:
+        if await xu_ly_mot_rule(r):
+            da_xoa.append(r)
+
+    return {
+        "an_toan": True,
+        "da_xoa": da_xoa,
+        "con_song": non_deny_con_song + rule_con_song(enforcer, deny),
+        "deny_chua_cham": [],
+    }
+
+
 class ValidationSeverity(str, Enum):
     """Severity levels for policy validation warnings."""
     INFO = "info"
@@ -585,36 +668,58 @@ class CasbinPolicyService:
         errors = []
         warnings = []
 
-        for rule in policies:
+        async def xu_ly(rule):
+            nonlocal removed, blocked
             subject, obj, action = rule[0], rule[1], rule[2]
             # Validate if requested
             if validate and not force:
-                validation = await self.validate_policy_removal(subject, obj, action)
+                validation = await self.validate_policy_removal(
+                    subject, obj, action
+                )
                 if not validation.is_safe:
                     blocked += 1
                     errors.append(f"Blocked for safety: {subject} {obj} {action}")
                     warnings.extend(validation.warnings)
-                    continue
+                    return False
 
                 warnings.extend(validation.warnings)
 
             # Remove policy
             try:
-                success = await xoa_rule_chinh_xac(self.enforcer, rule)
-                if success:
+                if await xoa_rule_chinh_xac(self.enforcer, rule):
                     removed += 1
-                else:
-                    warnings.append(
-                        f"Policy not found: {' '.join(chuan_hoa_rule(rule))}"
-                    )
+                    return True
+                warnings.append(
+                    f"Policy not found: {' '.join(chuan_hoa_rule(rule))}"
+                )
+                return False
             except Exception as e:
-                errors.append(f"Failed to remove policy {subject} {obj} {action}: {str(e)}")
+                errors.append(
+                    f"Failed to remove policy {subject} {obj} {action}: {str(e)}"
+                )
+                return False
+
+        # Thứ tự non-deny -> deny do helper chung giữ. Vòng `for` phẳng ở đây
+        # từng xoá `deny` sau khi `allow` xoá hụt, tức MỞ quyền.
+        kq = await xoa_nhom_rule_fail_closed(self.enforcer, policies, xu_ly)
+        if not kq["an_toan"]:
+            errors.append(
+                f"DỪNG fail-closed: {len(kq['con_song'])} rule non-deny chưa "
+                f"xoá được, nên {len(kq['deny_chua_cham'])} rule deny KHÔNG bị "
+                f"chạm tới — xoá deny khi allow còn sống là MỞ quyền."
+            )
 
         return {
             "removed": removed,
             "blocked": blocked,
             "errors": errors,
             "warnings": warnings,
+            # ĐO enforcer. Người gọi phải dùng `con_song` thay cho phép trừ
+            # `len - removed`: rule vốn đã không tồn tại làm phép trừ báo động
+            # giả, còn rule bị chặn/ném lỗi thì phép trừ lại đếm hụt.
+            "con_song": kq["con_song"],
+            "deny_chua_cham": kq["deny_chua_cham"],
+            "an_toan": kq["an_toan"],
         }
 
     # =========================================================================
@@ -941,25 +1046,36 @@ class CasbinPolicyService:
             # vận hành tin là đã bị xoá.
             removed = 0
             giu_co_y = []
-            xoa_that_bai = []
-            for policy in current_policies:
+
+            async def xu_ly(policy):
+                nonlocal removed
                 subject, obj, action = policy[0], policy[1], policy[2]
 
                 # Skip critical policies
                 if is_critical_policy(subject, obj, action):
                     giu_co_y.append(chuan_hoa_rule(policy))
-                    continue
+                    return False
 
                 if await xoa_rule_chinh_xac(self.enforcer, policy):
                     removed += 1
-                else:
-                    xoa_that_bai.append(chuan_hoa_rule(policy))
+                    return True
+                return False
+
+            # Thứ tự non-deny -> deny do helper chung giữ.
+            kq = await xoa_nhom_rule_fail_closed(
+                self.enforcer, current_policies, xu_ly
+            )
 
             # HẬU ĐIỀU KIỆN — kiểm TRƯỚC khi áp template.
             # Kiểm SAU là sai: template có thể chứa đúng rule vừa bị xoá, nên
             # một rule được xoá RỒI RE-ADD ĐÚNG sẽ bị tính nhầm là "còn sót".
             # Ghi nhận thất bại ngay tại chỗ xoá thì không có chỗ cho nhầm lẫn.
-            if xoa_that_bai:
+            #
+            # `giu_co_y` là giữ CÓ CHỦ Ý nên không tính là thất bại — nhưng nếu
+            # nó chặn pha deny (`an_toan=False`) thì refresh vẫn DỞ DANG, phải
+            # báo thất bại chứ không được im lặng bỏ qua nhóm deny.
+            xoa_that_bai = [r for r in kq["con_song"] if r not in giu_co_y]
+            if xoa_that_bai or not kq["an_toan"]:
                 return {
                     "success": False,
                     "error": (
@@ -973,6 +1089,8 @@ class CasbinPolicyService:
                     "policies_added": 0,
                     "policies_after": len(policy_cua_role(self.enforcer, role)),
                     "policies_xoa_that_bai": xoa_that_bai,
+                    "policies_deny_chua_cham": kq["deny_chua_cham"],
+                    "an_toan": kq["an_toan"],
                     "warnings": [],
                 }
 

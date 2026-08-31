@@ -262,6 +262,7 @@ async def delete_role_atomic(
     from app.services.casbin_service import (
         chuan_hoa_rule,
         policy_cua_role,
+        xoa_nhom_rule_fail_closed,
         xoa_rule_chinh_xac,
     )
 
@@ -269,16 +270,31 @@ async def delete_role_atomic(
         chuan_hoa_rule(p) for p in all_policies if p and p[0] == role_name
     ]
     removed_p_count = 0
-    for p in policies_to_remove:
+
+    async def xu_ly(p):
+        nonlocal removed_p_count
         if await xoa_rule_chinh_xac(enforcer, p):
             removed_p_count += 1
+            return True
+        return False
+
+    # Thứ tự non-deny -> deny do helper chung giữ. Vòng `for` phẳng ở đây từng
+    # xoá `deny` sau khi `allow` xoá hụt: role "xoá dở" mà quyền lại RỘNG HƠN
+    # trước khi xoá.
+    kq = await xoa_nhom_rule_fail_closed(enforcer, policies_to_remove, xu_ly)
 
     policies_con_sot = policy_cua_role(enforcer, role_name)
-    if policies_con_sot:
+    if policies_con_sot or not kq["an_toan"]:
         raise ConflictError(
             f"Không xoá được role {role_name}: còn {len(policies_con_sot)} "
-            f"policy chưa bị xoá, quyền cũ VẪN CÒN hiệu lực. "
-            f"Chi tiết: {policies_con_sot}"
+            f"policy chưa bị xoá"
+            + (
+                f" ({len(kq['deny_chua_cham'])} rule deny KHÔNG bị chạm tới vì "
+                f"non-deny xoá hụt — xoá deny lúc này là MỞ quyền)"
+                if not kq["an_toan"]
+                else ""
+            )
+            + f", quyền cũ VẪN CÒN hiệu lực. Chi tiết: {policies_con_sot}"
         )
 
     user_repo = UserRepository(db)
