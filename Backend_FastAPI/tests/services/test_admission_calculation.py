@@ -15,6 +15,11 @@ from sqlalchemy import select
 
 from app import models
 from app.database import AsyncSessionLocal
+from tests.fixtures.builders import (
+    ensure_submittable_ward,
+    seed_submittable_offering_config,
+    submittable_profile_fields,
+)
 
 
 pytestmark = pytest.mark.asyncio
@@ -50,13 +55,34 @@ async def create_submittable_profile(
     citizen_id: str = None,
     min_gpa: float = 0,
     mandatory_docs: list = None,
+    academic_year: int = 2025,
 ) -> models.AdmissionProfile:
-    """Create a profile that can be submitted (with subject scores, family_info, etc.)."""
+    """Create a profile that can be submitted (with subject scores, family_info, etc.).
+
+    #337: hồ sơ phải có chuỗi config hợp lệ thì ``submit_and_evaluate`` mới suy
+    ra được bậc đào tạo. Đường legacy (``uses_choice_engine=False``) đọc
+    ``offering_admission_config_id`` → academic_info → offering →
+    ``MajorProgram.degree_level_id``; thiếu nó thì submit fail-closed với
+    ``CONFIG_GAP_TARGET_LEVEL``. Bản trước dựng hồ sơ trần nên cả 4 ca trong
+    tệp này nhận 400 — cổng sản phẩm chặn ĐÚNG, chỉ fixture là lạc hậu.
+
+    Dùng builder dùng chung thay vì tự dựng chuỗi: đây là cùng một công thức
+    ``tests/services/test_admission_workflow.py`` đã chuyển sang, nên hai tệp
+    không trôi khỏi nhau lần nữa.
+    """
     if citizen_id is None:
         citizen_id = f"0{datetime.now().timestamp():.0f}"[:12]
 
+    # Gap #3: a current-era ward so the permanent address validates.
+    await ensure_submittable_ward()
     async with AsyncSessionLocal() as session:
         async with session.begin():
+            lead = await session.get(models.Lead, lead_id)
+            # #337: legacy config + KV chain so submit can derive the
+            # target level + resolve KV (else CONFIG_GAP / KV_UNRESOLVED).
+            seed = await seed_submittable_offering_config(
+                session, lead.unit_id, academic_year
+            )
             # Create subject if needed
             subj = (await session.execute(
                 select(models.Subject).where(models.Subject.code == "TOAN")
@@ -70,7 +96,9 @@ async def create_submittable_profile(
                 lead_id=lead_id,
                 status="draft",
                 citizen_id=citizen_id,
-                academic_year=2025,
+                # Lấy TỪ seed: `OfferingAcademicInfo` mang cùng năm, lệch năm là
+                # vi phạm UNIQUE(lead_id/citizen_id, academic_year) một cách âm thầm.
+                academic_year=seed["academic_year"],
                 version=1,
                 applied_rules={
                     "min_gpa": min_gpa,
@@ -81,7 +109,14 @@ async def create_submittable_profile(
                     "subject_selection_mode": "fixed",
                 },
                 family_info=[{"relationship": "Cha", "full_name": "Test Father", "phone": "0901234567"}],
-                academic_history=[{"school_name": "THPT Test", "year_from": 2020, "year_to": 2024}],
+                # `academic_history` do builder cấp — mục THPT của nó có
+                # `school_id` để engine giải được KV. ĐO ĐƯỢC khi bỏ nó ra:
+                # submit vẫn trả 200 nhưng hồ sơ ĐỨNG NGUYÊN `draft`, và chỉ
+                # `test_submit_with_zero_min_gpa_always_passes` bắt được vì nó
+                # là ca DUY NHẤT khẳng định trạng thái sau submit. Ba ca còn
+                # lại chỉ kiểm mã 200 nên xanh trên một hồ sơ không hề tiến —
+                # nợ đã ghi trong thông điệp commit, không nới ở đây.
+                **submittable_profile_fields(seed),
             )
             session.add(profile)
             await session.flush()

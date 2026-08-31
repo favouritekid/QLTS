@@ -600,6 +600,7 @@ jobs:
               tests/unit/test_lead_finance_projection_contract.py
               tests/middleware/test_admission_freeze.py
               tests/api/test_admission_workflow_api.py
+              tests/services/test_admission_calculation.py
               tests/api/test_tuition_prepay_flow.py
               tests/api/test_lead_assignment_api.py::test_lead_assignment_lifecycle_end_to_end
               tests/services/test_assignment.py
