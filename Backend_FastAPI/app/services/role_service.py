@@ -242,6 +242,22 @@ async def delete_role_atomic(
     if role_name in SYSTEM_ROLES:
         raise BadRequest(f"Cannot delete system role: {role_name}")
 
+    # STEP 1b: ĐỒNG BỘ POLICY TỪ CSDL — TRƯỚC cả phép kiểm role tồn tại.
+    #
+    # Cả `role_has_policies` bên dưới lẫn `policies_to_remove` ở STEP 2b đều
+    # dựng TỪ MODEL. Sau một lượt thu hồi hỏng, model đã quên rule mà hàng vẫn
+    # nằm trong CSDL — khi ấy phép kiểm này ném `ResourceNotFoundError` (404)
+    # cho một role vẫn còn quyền, còn retry thì chỉ nhìn thấy phần rule sót
+    # trong model. Đồng bộ trước là điều kiện để hai bước đó nói về CSDL thật.
+    from app.services.casbin_service import dong_bo_tu_nguon_ben_vung
+
+    loi_dong_bo = await dong_bo_tu_nguon_ben_vung(enforcer)
+    if loi_dong_bo is not None:
+        raise ConflictError(
+            f"Không xoá được role {role_name}: không đồng bộ được policy từ "
+            f"CSDL nên chưa chạm vào gì — {loi_dong_bo}"
+        )
+
     # STEP 2: Check if role exists (has any policies)
     all_policies = enforcer.get_policy()
     role_has_policies = any(p[0] == role_name for p in all_policies)
@@ -281,7 +297,9 @@ async def delete_role_atomic(
     # Thứ tự non-deny -> deny do helper chung giữ. Vòng `for` phẳng ở đây từng
     # xoá `deny` sau khi `allow` xoá hụt: role "xoá dở" mà quyền lại RỘNG HƠN
     # trước khi xoá.
-    kq = await xoa_nhom_rule_fail_closed(enforcer, policies_to_remove, xu_ly)
+    kq = await xoa_nhom_rule_fail_closed(
+        enforcer, policies_to_remove, xu_ly, da_dong_bo=True
+    )
 
     # `policy_cua_role` chỉ đọc MODEL BỘ NHỚ, nên nó KHÔNG thấy ca adapter hỏng
     # (model sạch mà hàng trong CSDL còn). `kq["con_song"]` mới là danh sách

@@ -849,3 +849,311 @@ async def test_xoa_role_adapter_hong_model_sach_van_nem_conflict(client):
     assert policy_cua_role(enf, SUB) == [], (
         "model ĐÚNG LÀ rỗng — nên guard không thể dựa vào model mà vẫn phải nổ"
     )
+
+
+# ---------------------------------------------------------------------------
+# 8. LƯỢT RETRY — model lệch CSDL là DI CHỨNG của chính lượt hỏng trước
+# ---------------------------------------------------------------------------
+#
+# Mục 7 đóng lượt hỏng ĐẦU TIÊN. Nhưng lượt hỏng ấy để lại model và CSDL lệch
+# nhau: PyCasbin đã gỡ `allow` khỏi model rồi mới gọi adapter, adapter hỏng nên
+# hàng vẫn nằm trong CSDL. `refresh_role_from_template` và `delete_role_atomic`
+# dựng danh sách rule TỪ MODEL, nên lượt RETRY chỉ nhìn thấy `deny`. Đo được:
+#
+#     lượt 1:  an_toan=False  MODEL=[deny]  DURABLE=[allow, deny]
+#     lượt 2:  rules=[deny]   an_toan=True  MODEL=[]  DURABLE=[allow]
+#
+# Lượt hai "thành công" và mở quyền bền vững. Cùng root làm `vang_san` không an
+# toàn: "vắng khỏi model" bị hiểu là idempotent, trong khi nó là di chứng.
+#
+# Cách đóng: đồng bộ model từ CSDL TRƯỚC mỗi thao tác nhóm, và trước cả lúc
+# dựng danh sách. Đồng bộ hỏng thì dừng trước mọi mutation.
+
+
+def _go_khoi_model_thoi(enf, r):
+    """Gỡ rule khỏi MODEL, KHÔNG chạm adapter.
+
+    Đúng hình dạng PyCasbin để lại khi ghi xuống CSDL thất bại — đã đo:
+    `remove_policy` trả False, MODEL mất rule, DURABLE còn nguyên.
+    """
+    return enf.get_model().remove_policy("p", "p", list(r))
+
+
+@pytest.mark.asyncio
+async def test_hai_luot_retry_khong_xoa_deny_khi_allow_con_ben_vung(client):
+    """Lượt 1 hỏng làm model quên allow; lượt 2 KHÔNG được vì thế mà xoá deny."""
+    from unittest.mock import AsyncMock, patch
+
+    enf = await _seed_cap_allow_deny()
+
+    # ── LƯỢT 1: adapter hỏng với non-deny ──────────────────────────────────
+    goi1 = []
+
+    async def _luot1(enforcer, rule):
+        r = chuan_hoa_rule(rule)
+        goi1.append(r)
+        _go_khoi_model_thoi(enforcer, r)
+        return r[3] == "deny"  # deny xoá được; allow: adapter hỏng
+
+    async with AsyncSessionLocal() as db:
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            side_effect=_luot1,
+        ):
+            kq1 = await CasbinPolicyService(db, enf).remove_policies_batch(
+                [ALLOW, DENY], validate=False, force=True
+            )
+
+    assert kq1["an_toan"] is False, f"lượt 1 phải chặn: {kq1}"
+    assert not any(r[3] == "deny" for r in goi1), "lượt 1 không được chạm deny"
+    assert not enf.has_policy(*ALLOW), (
+        "tiền đề của ca này: model PHẢI đã quên allow sau lượt hỏng. Nếu còn "
+        "thì ca kiểm không dựng được cái bẫy nó định canh."
+    )
+
+    # ── LƯỢT 2: adapter hoạt động lại ──────────────────────────────────────
+    goi2 = []
+
+    async def _luot2(enforcer, rule):
+        r = chuan_hoa_rule(rule)
+        goi2.append(r)
+        return await enforcer.remove_policy(*r)
+
+    async with AsyncSessionLocal() as db:
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            side_effect=_luot2,
+        ):
+            kq2 = await CasbinPolicyService(db, enf).remove_policies_batch(
+                [ALLOW, DENY], validate=False, force=True
+            )
+
+    assert goi2, "lượt 2 phải thật sự làm gì đó"
+    assert goi2[0][3] != "deny", (
+        f"lượt retry phải xử lý allow TRƯỚC deny. Thứ tự nhận được {goi2!r} "
+        f"nghĩa là cổng đồng bộ đã không chạy."
+    )
+    assert kq2["vang_san"] == [], (
+        f"allow KHÔNG được xếp 'vắng sẵn' — nó vắng trong model vì lượt trước "
+        f"hỏng, chứ không phải vì CSDL đã sạch: {kq2}"
+    )
+    assert ALLOW in kq2["da_xoa"], f"allow phải được thu hồi thật: {kq2}"
+
+    # Trạng thái BỀN VỮNG cuối cùng — đọc lại từ CSDL, không tin model.
+    await enf.load_policy()
+    assert policy_cua_role(enf, SUB) == [], (
+        f"CSDL phải sạch. Còn đúng [allow] nghĩa là lượt retry vừa mở quyền "
+        f"BỀN VỮNG. Hiện có: {policy_cua_role(enf, SUB)!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_hai_luot_retry_delete_role_thay_lai_allow_ben_vung(client):
+    """delete_role dựng danh sách TỪ MODEL — retry phải thấy lại allow."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.services import role_service
+    from app.utils.exceptions import ConflictError
+
+    enf = await _seed_cap_allow_deny()
+
+    async def _luot1(enforcer, rule):
+        r = chuan_hoa_rule(rule)
+        _go_khoi_model_thoi(enforcer, r)
+        return r[3] == "deny"
+
+    async with AsyncSessionLocal() as db:
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            side_effect=_luot1,
+        ):
+            with pytest.raises(ConflictError):
+                await role_service.delete_role_atomic(db, SUB, enf)
+
+    assert not enf.has_policy(*ALLOW), "tiền đề: model đã quên allow"
+    assert enf.has_policy(*DENY), "deny chưa bị chạm tới"
+
+    # LƯỢT 2 — không patch gì cả, đường thật.
+    async with AsyncSessionLocal() as db:
+        await role_service.delete_role_atomic(db, SUB, enf)
+
+    await enf.load_policy()
+    assert policy_cua_role(enf, SUB) == [], (
+        f"CSDL phải sạch sau retry. Nếu còn [allow] thì `role_has_policies` và "
+        f"`policies_to_remove` vẫn đang đọc model lệch: "
+        f"{policy_cua_role(enf, SUB)!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_hai_luot_feature_toggle_retry_khong_tra_200_gia(
+    client, admin_token_headers
+):
+    """Retry của feature-toggle KHÔNG được trả 200 khi CSDL còn policy.
+
+    Không mock service: cả hai lượt đi qua đường HTTP thật. Lượt 1 chỉ hỏng ở
+    tầng adapter. Nếu thiếu cổng đồng bộ, lượt 2 thấy model trống, xếp mọi rule
+    vào `vang_san`, và trả 200 cho một hàng `allow` vẫn nằm trong PostgreSQL.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from app.casbin_config.policy_templates import FEATURE_MAP
+
+    enf = _enf()
+    rules = [
+        [p["subject"].replace("{role}", SUB), p["object"], p["action"], "allow"]
+        for p in FEATURE_MAP["view_leads"]["policies"]
+    ]
+    for p in policy_cua_role(enf, SUB):
+        await enf.remove_policy(*p)
+    for r in rules:
+        await enf.add_policy(*r)
+    assert sorted(policy_cua_role(enf, SUB)) == sorted(rules)
+
+    async def _adapter_hong(enforcer, rule):
+        r = chuan_hoa_rule(rule)
+        _go_khoi_model_thoi(enforcer, r)
+        return False
+
+    with patch(
+        "app.services.casbin_service.xoa_rule_chinh_xac",
+        new_callable=AsyncMock,
+        side_effect=_adapter_hong,
+    ):
+        r1 = await client.post(
+            f"/api/admin/roles/{SUB}/features/toggle",
+            json={"feature_id": "view_leads", "enabled": False},
+            headers=admin_token_headers,
+        )
+    assert r1.status_code == 409, (
+        f"lượt 1 phải 409; nhận {r1.status_code}: {r1.text[:200]}"
+    )
+    assert policy_cua_role(enf, SUB) == [], "tiền đề: model đã bị dọn trống"
+
+    # LƯỢT 2 — đường thật, adapter hoạt động.
+    r2 = await client.post(
+        f"/api/admin/roles/{SUB}/features/toggle",
+        json={"feature_id": "view_leads", "enabled": False},
+        headers=admin_token_headers,
+    )
+
+    await enf.load_policy()
+    con_lai = policy_cua_role(enf, SUB)
+    assert con_lai == [], (
+        f"CSDL phải sạch sau retry. HTTP trả {r2.status_code} trong khi còn "
+        f"{con_lai!r} là 200 GIẢ — người vận hành tin feature đã tắt."
+    )
+    assert r2.status_code < 300, (
+        f"lượt 2 phải thành công thật; nhận {r2.status_code}: {r2.text[:200]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dong_bo_that_bai_thi_khong_cham_rule_nao(client):
+    """Không đọc được CSDL thì DỪNG trước mọi mutation, không đoán."""
+    from unittest.mock import AsyncMock, patch
+
+    enf = await _seed_cap_allow_deny()
+    goi = []
+
+    async def _ghi_nhan(enforcer, rule):
+        goi.append(chuan_hoa_rule(rule))
+        return True
+
+    async with AsyncSessionLocal() as db:
+        with patch.object(
+            enf, "load_policy",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("mất kết nối CSDL"),
+        ):
+            with patch(
+                "app.services.casbin_service.xoa_rule_chinh_xac",
+                new_callable=AsyncMock,
+                side_effect=_ghi_nhan,
+            ):
+                kq = await CasbinPolicyService(db, enf).remove_policies_batch(
+                    [ALLOW, DENY], validate=False, force=True
+                )
+
+    assert goi == [], f"KHÔNG được chạm rule nào khi chưa đọc được CSDL: {goi!r}"
+    assert kq["dong_bo"] is False, f"phải nêu rõ đồng bộ hỏng: {kq}"
+    assert kq["an_toan"] is False, f"đồng bộ hỏng là fail-closed: {kq}"
+    assert kq["con_song"] == [ALLOW, DENY], (
+        f"chưa chạm gì thì MỌI rule đều còn 'chưa xác nhận thu hồi': {kq}"
+    )
+    assert any("đồng bộ" in e for e in kq["errors"]), (
+        f"lý do phải tới được người vận hành, không nuốt im lặng: {kq}"
+    )
+    assert sorted(policy_cua_role(enf, SUB)) == sorted([ALLOW, DENY])
+
+
+@pytest.mark.asyncio
+async def test_hai_luot_retry_refresh_thay_lai_allow_ben_vung(client):
+    """refresh cũng dựng danh sách TỪ MODEL — retry phải thấy lại allow.
+
+    `refresh_role_from_template` tự đồng bộ rồi mới dựng `current_policies`, và
+    truyền `da_dong_bo=True` nên helper KHÔNG đồng bộ lần nữa. Nghĩa là cổng
+    của refresh là cổng DUY NHẤT trên đường này — bỏ nó thì không ai đỡ.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    enf = await _seed_cap_allow_deny()
+
+    async def _luot1(enforcer, rule):
+        r = chuan_hoa_rule(rule)
+        _go_khoi_model_thoi(enforcer, r)
+        return r[3] == "deny"
+
+    async with AsyncSessionLocal() as db:
+        sv = CasbinPolicyService(db, enf)
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            side_effect=_luot1,
+        ):
+            with patch.object(
+                CasbinPolicyService, "apply_template_to_role",
+                new_callable=AsyncMock,
+            ):
+                kq1 = await sv.refresh_role_from_template(
+                    role=SUB, template_id="lead_viewer", force=True
+                )
+
+    assert kq1["success"] is False, f"lượt 1 phải thất bại: {kq1}"
+    assert not enf.has_policy(*ALLOW), "tiền đề: model đã quên allow"
+
+    goi2 = []
+
+    async def _luot2(enforcer, rule):
+        r = chuan_hoa_rule(rule)
+        goi2.append(r)
+        return await enforcer.remove_policy(*r)
+
+    async with AsyncSessionLocal() as db:
+        sv = CasbinPolicyService(db, enf)
+        with patch(
+            "app.services.casbin_service.xoa_rule_chinh_xac",
+            new_callable=AsyncMock,
+            side_effect=_luot2,
+        ):
+            with patch.object(
+                CasbinPolicyService, "apply_template_to_role",
+                new_callable=AsyncMock,
+                return_value={"added": 0, "warnings": []},
+            ):
+                await sv.refresh_role_from_template(
+                    role=SUB, template_id="lead_viewer", force=True
+                )
+
+    assert goi2, "lượt 2 phải thật sự làm gì đó"
+    assert goi2[0][3] != "deny", (
+        f"retry phải xử lý allow TRƯỚC deny; thứ tự {goi2!r} nghĩa là cổng "
+        f"đồng bộ của refresh đã không chạy"
+    )
+    await enf.load_policy()
+    assert policy_cua_role(enf, SUB) == [], (
+        f"CSDL phải sạch sau retry; còn {policy_cua_role(enf, SUB)!r}"
+    )
