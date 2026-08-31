@@ -273,6 +273,9 @@ async def lifespan(app: FastAPI):
                 "restart with the flag unset / set to true."
             )
         else:
+            # KHOA-MIEN: lượt nạp này chạy TRƯỚC dòng
+            # `fastapi_app.state.enforcer = enforcer` ngay bên dưới, nên chưa
+            # task nào chạm tới enforcer được — không có gì để loại trừ.
             await enforcer.load_policy()
             log.info("✅ Casbin AsyncEnforcer initialized and policies loaded.")
         fastapi_app.state.enforcer = enforcer

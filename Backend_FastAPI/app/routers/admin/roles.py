@@ -365,14 +365,25 @@ async def assign_role_to_user(
     # SỬA: Type hint thành AsyncEnforcer
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
-    added = await enforcer.add_grouping_policy(
-        f"user:{assignment.user_id}", assignment.role
-    )
+    from app.services.casbin_service import khoa_enforcer
+
+    async with khoa_enforcer(enforcer):
+        added = await enforcer.add_grouping_policy(
+            f"user:{assignment.user_id}", assignment.role
+        )
     if not added:
         raise DuplicateResourceError("User already has this role.")
 
-    # Explicitly save to ensure persistence
-    await enforcer.save_policy()
+    # KHÔNG gọi `save_policy()`. Đã đo hai điều:
+    #  - `auto_save` bật mặc định và không nơi nào tắt, nên
+    #    `add/remove_grouping_policy` ĐÃ tự ghi hàng xuống `casbin_rule`;
+    #  - `save_policy()` của adapter async là `DELETE FROM casbin_rule` rồi ghi
+    #    lại TOÀN BỘ model — một lệnh xoá trắng bảng trên đường chỉ định đổi
+    #    MỘT hàng. Model lệch CSDL vì bất kỳ lý do gì (reload chen ngang, một
+    #    worker nạp thiếu, `RUN_CASBIN_LOAD_ON_STARTUP=false`) đều bị ghi đè
+    #    thành sự thật mới.
+    # Chú thích cũ "writes to casbin_rule table in SAME transaction" cũng sai:
+    # adapter mở session RIÊNG, không nằm trong transaction của người gọi.
 
     return {"detail": "Role assigned."}
 
@@ -390,16 +401,27 @@ async def remove_role_from_user(
     # SỬA: Type hint thành AsyncEnforcer
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
-    removed = await enforcer.remove_grouping_policy(
-        f"user:{assignment.user_id}", assignment.role
-    )
+    from app.services.casbin_service import khoa_enforcer
+
+    async with khoa_enforcer(enforcer):
+        removed = await enforcer.remove_grouping_policy(
+            f"user:{assignment.user_id}", assignment.role
+        )
     if not removed:
         raise ResourceNotFoundError(
             "Role assignment not found or could not be removed."
         )
 
-    # Explicitly save to ensure persistence
-    await enforcer.save_policy()
+    # KHÔNG gọi `save_policy()`. Đã đo hai điều:
+    #  - `auto_save` bật mặc định và không nơi nào tắt, nên
+    #    `add/remove_grouping_policy` ĐÃ tự ghi hàng xuống `casbin_rule`;
+    #  - `save_policy()` của adapter async là `DELETE FROM casbin_rule` rồi ghi
+    #    lại TOÀN BỘ model — một lệnh xoá trắng bảng trên đường chỉ định đổi
+    #    MỘT hàng. Model lệch CSDL vì bất kỳ lý do gì (reload chen ngang, một
+    #    worker nạp thiếu, `RUN_CASBIN_LOAD_ON_STARTUP=false`) đều bị ghi đè
+    #    thành sự thật mới.
+    # Chú thích cũ "writes to casbin_rule table in SAME transaction" cũng sai:
+    # adapter mở session RIÊNG, không nằm trong transaction của người gọi.
 
     return {"detail": "Role removed from user."}
 
@@ -558,16 +580,29 @@ async def add_grouping_policy(
     """
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
+    from app.services.casbin_service import khoa_enforcer
+
     # Add the grouping policy (g rule)
-    added = await enforcer.add_grouping_policy(grouping.subject, grouping.parent_role)
+    async with khoa_enforcer(enforcer):
+        added = await enforcer.add_grouping_policy(
+            grouping.subject, grouping.parent_role
+        )
 
     if not added:
         raise DuplicateResourceError(
             f"Grouping policy already exists: {grouping.subject} → {grouping.parent_role}"
         )
 
-    # Save to database
-    await enforcer.save_policy()
+    # KHÔNG gọi `save_policy()`. Đã đo hai điều:
+    #  - `auto_save` bật mặc định và không nơi nào tắt, nên
+    #    `add/remove_grouping_policy` ĐÃ tự ghi hàng xuống `casbin_rule`;
+    #  - `save_policy()` của adapter async là `DELETE FROM casbin_rule` rồi ghi
+    #    lại TOÀN BỘ model — một lệnh xoá trắng bảng trên đường chỉ định đổi
+    #    MỘT hàng. Model lệch CSDL vì bất kỳ lý do gì (reload chen ngang, một
+    #    worker nạp thiếu, `RUN_CASBIN_LOAD_ON_STARTUP=false`) đều bị ghi đè
+    #    thành sự thật mới.
+    # Chú thích cũ "writes to casbin_rule table in SAME transaction" cũng sai:
+    # adapter mở session RIÊNG, không nằm trong transaction của người gọi.
 
     # Log activity
     await commit_and_log(db, await log_admin_activity(
@@ -617,16 +652,29 @@ async def delete_grouping_policy(
     """
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
+    from app.services.casbin_service import khoa_enforcer
+
     # Remove the grouping policy
-    removed = await enforcer.remove_grouping_policy(grouping.subject, grouping.parent_role)
+    async with khoa_enforcer(enforcer):
+        removed = await enforcer.remove_grouping_policy(
+            grouping.subject, grouping.parent_role
+        )
 
     if not removed:
         raise ResourceNotFoundError(
             f"Grouping policy not found: {grouping.subject} → {grouping.parent_role}"
         )
 
-    # Save to database
-    await enforcer.save_policy()
+    # KHÔNG gọi `save_policy()`. Đã đo hai điều:
+    #  - `auto_save` bật mặc định và không nơi nào tắt, nên
+    #    `add/remove_grouping_policy` ĐÃ tự ghi hàng xuống `casbin_rule`;
+    #  - `save_policy()` của adapter async là `DELETE FROM casbin_rule` rồi ghi
+    #    lại TOÀN BỘ model — một lệnh xoá trắng bảng trên đường chỉ định đổi
+    #    MỘT hàng. Model lệch CSDL vì bất kỳ lý do gì (reload chen ngang, một
+    #    worker nạp thiếu, `RUN_CASBIN_LOAD_ON_STARTUP=false`) đều bị ghi đè
+    #    thành sự thật mới.
+    # Chú thích cũ "writes to casbin_rule table in SAME transaction" cũng sai:
+    # adapter mở session RIÊNG, không nằm trong transaction của người gọi.
 
     # Log activity
     await commit_and_log(db, await log_admin_activity(

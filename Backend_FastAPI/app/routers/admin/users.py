@@ -493,10 +493,15 @@ async def bulk_user_action(
             # Remove all Casbin policies for this user
             user_subject = f"user:{user_id}"
             try:
-                # Remove all role assignments for this user
-                await enforcer.delete_roles_for_user(user_subject)
-                # Remove all permissions for this user
-                await enforcer.delete_permissions_for_user(user_subject)
+                from app.services.casbin_service import khoa_enforcer
+
+                # Hai lời gọi là MỘT thao tác: giữa chúng người dùng đã mất
+                # role nhưng quyền trực tiếp thì còn, nên phải cùng một lock.
+                async with khoa_enforcer(enforcer):
+                    # Remove all role assignments for this user
+                    await enforcer.delete_roles_for_user(user_subject)
+                    # Remove all permissions for this user
+                    await enforcer.delete_permissions_for_user(user_subject)
             except Exception as e:
                 # Log but don't fail the request if Casbin cleanup fails
                 print(f"Warning: Failed to clean up Casbin policies for user {user_id}: {e}")

@@ -132,29 +132,41 @@ async def remove_role_from_users(
         user_subject = f"user:{user_id}"
 
         try:
-            # Get all current roles for this user
-            current_roles = await enforcer.get_roles_for_user(user_subject)
+            from app.services.casbin_service import khoa_enforcer
 
-            # Check if user actually has the role to remove
-            if role_to_remove not in current_roles:
-                log.warning(
-                    f"User {user_id} doesn't have role {role_to_remove}, skipping"
-                )
-                continue
+            # Lock bao TRỌN đọc snapshot -> gỡ role -> gán lại role dự phòng.
+            # Khoá từng lời gọi là chưa đủ: giữa lúc gỡ và lúc gán lại, người
+            # dùng KHÔNG có role nào; và `current_roles` đọc trước đó mà bị một
+            # lượt reload chen ngang thì quyết định "còn role nào không" dựa
+            # trên ảnh cũ.
+            async with khoa_enforcer(enforcer):
+                # Get all current roles for this user
+                current_roles = await enforcer.get_roles_for_user(user_subject)
 
-            # Remove the specified role from Casbin
-            await enforcer.remove_grouping_policy(user_subject, role_to_remove)
-            removed_count += 1
+                # Check if user actually has the role to remove
+                if role_to_remove not in current_roles:
+                    log.warning(
+                        f"User {user_id} doesn't have role {role_to_remove}, skipping"
+                    )
+                    continue
 
-            # Get remaining roles after removal
-            remaining_roles = [r for r in current_roles if r != role_to_remove]
+                # Remove the specified role from Casbin
+                await enforcer.remove_grouping_policy(user_subject, role_to_remove)
+                removed_count += 1
 
-            # SMART BEHAVIOR: If no roles left, auto-assign role:user as fallback
-            if not remaining_roles:
-                await enforcer.add_grouping_policy(user_subject, "role:user")
-                remaining_roles = ["role:user"]
-                reassigned_count += 1
-                log.info(f"User {user_id} had no roles left, auto-assigned role:user")
+                # Get remaining roles after removal
+                remaining_roles = [
+                    r for r in current_roles if r != role_to_remove
+                ]
+
+                # SMART BEHAVIOR: If no roles left, auto-assign role:user
+                if not remaining_roles:
+                    await enforcer.add_grouping_policy(user_subject, "role:user")
+                    remaining_roles = ["role:user"]
+                    reassigned_count += 1
+                    log.info(
+                        f"User {user_id} had no roles left, auto-assigned role:user"
+                    )
 
             # Update database user.role field to highest priority remaining role
             # ✅ REFACTORED: Use UserRepository
@@ -202,9 +214,15 @@ async def remove_role_from_users(
 
     # ✅ Create post-commit callback
     async def _post_commit():
-        """Execute after router commits the transaction."""
-        # Save Casbin policies to persist changes
-        await enforcer.save_policy()
+        """Execute after router commits the transaction.
+
+        KHÔNG gọi `save_policy()`. `auto_save` bật nên mọi
+        `add/remove_grouping_policy` ở trên ĐÃ ghi xuống `casbin_rule`. Còn
+        `save_policy()` của adapter async là `DELETE FROM casbin_rule` rồi ghi
+        lại toàn bộ model — chạy SAU `db.commit()`, tức ngoài mọi lock đã giữ
+        lúc mutation, nên một lượt reload chen giữa hai thời điểm là đủ để nó
+        ghi trạng thái CŨ đè lên trạng thái ĐÚNG.
+        """
 
     result = {
         "detail": f"Removed {role_to_remove} from {removed_count} user(s), {reassigned_count} auto-assigned to role:user",
@@ -325,70 +343,77 @@ async def delete_role_atomic(
                 + f", quyền cũ VẪN CÒN hiệu lực. Chi tiết: {policies_con_sot}"
             )
 
-    user_repo = UserRepository(db)
+        user_repo = UserRepository(db)
     
-    # STEP 3a: Find all users with this role in DB (using Repository)
-    db_role = role_name.replace("role:", "")
-    users_from_db = await user_repo.get_by_db_role(db_role)
+        # STEP 3a: Find all users with this role in DB (using Repository)
+        db_role = role_name.replace("role:", "")
+        users_from_db = await user_repo.get_by_db_role(db_role)
 
-    # STEP 3b: Find all users with grouping policy for this role
-    all_grouping = enforcer.get_grouping_policy()
-    user_ids_from_casbin = []
-    for group in all_grouping:
-        # group format: ["user:123", "role:support"]
-        if len(group) >= 2 and group[1] == role_name and group[0].startswith("user:"):
-            try:
-                user_id = int(group[0].split(":")[1])
-                user_ids_from_casbin.append(user_id)
-            except (ValueError, IndexError):
-                continue
+        # STEP 3b: Find all users with grouping policy for this role
+        all_grouping = enforcer.get_grouping_policy()
+        user_ids_from_casbin = []
+        for group in all_grouping:
+            # group format: ["user:123", "role:support"]
+            if (
+                len(group) >= 2
+                and group[1] == role_name
+                and group[0].startswith("user:")
+            ):
+                try:
+                    user_id = int(group[0].split(":")[1])
+                    user_ids_from_casbin.append(user_id)
+                except (ValueError, IndexError):
+                    continue
 
-    # Merge: Get all unique user IDs
-    all_user_ids = set([u.id for u in users_from_db] + user_ids_from_casbin)
+        # Merge: Get all unique user IDs
+        all_user_ids = set([u.id for u in users_from_db] + user_ids_from_casbin)
 
-    # STEP 4: Update users in DB to role:user (using Repository)
-    reassigned_count = 0
-    users_to_update = await user_repo.get_by_ids(list(all_user_ids))
-    for user in users_to_update:
-        # Only update if they had this role
-        if user.role == db_role:
-            user.role = "user"
-            db.add(user)
-            reassigned_count += 1
+        # STEP 4: Update users in DB to role:user (using Repository)
+        reassigned_count = 0
+        users_to_update = await user_repo.get_by_ids(list(all_user_ids))
+        for user in users_to_update:
+            # Only update if they had this role
+            if user.role == db_role:
+                user.role = "user"
+                db.add(user)
+                reassigned_count += 1
 
-    # STEP 5: Remove grouping policies (user → role)
-    removed_g_user_count = 0
-    for user_id in all_user_ids:
-        user_subject = f"user:{user_id}"
-        removed = await enforcer.remove_grouping_policy(user_subject, role_name)
-        if removed:
-            removed_g_user_count += 1
-
-        # STEP 6: Add grouping policy (user → role:user) if needed
-        user_roles = await enforcer.get_roles_for_user(user_subject)
-        if not user_roles or len(user_roles) == 0:
-            await enforcer.add_grouping_policy(user_subject, "role:user")
-
-    # STEP 7: Remove all permission policies (p rules) for this role
-    # (Policy đã được xoá và xác nhận sạch ở STEP 2b, TRƯỚC mọi mutation.)
-
-    # STEP 8: Remove role inheritance grouping policies (g, role:X, role:user)
-    removed_g_inherit_count = 0
-    for group in all_grouping:
-        # Check if this is a role inheriting from another role
-        if len(group) >= 2 and group[0] == role_name:
-            removed = await enforcer.remove_grouping_policy(group[0], group[1])
+        # STEP 5: Remove grouping policies (user → role)
+        removed_g_user_count = 0
+        for user_id in all_user_ids:
+            user_subject = f"user:{user_id}"
+            removed = await enforcer.remove_grouping_policy(
+                user_subject, role_name
+            )
             if removed:
-                removed_g_inherit_count += 1
+                removed_g_user_count += 1
+
+            # STEP 6: Add grouping policy (user → role:user) if needed
+            user_roles = await enforcer.get_roles_for_user(user_subject)
+            if not user_roles or len(user_roles) == 0:
+                await enforcer.add_grouping_policy(user_subject, "role:user")
+
+        # STEP 7: Remove all permission policies (p rules) for this role
+        # (Policy đã được xoá và xác nhận sạch ở STEP 2b, TRƯỚC mọi mutation.)
+
+        # STEP 8: Remove role inheritance grouping policies (g, role:X, role:user)
+        removed_g_inherit_count = 0
+        for group in all_grouping:
+            # Check if this is a role inheriting from another role
+            if len(group) >= 2 and group[0] == role_name:
+                removed = await enforcer.remove_grouping_policy(group[0], group[1])
+                if removed:
+                    removed_g_inherit_count += 1
 
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()
 
     # ✅ Create post-commit callback
     async def _post_commit():
-        """Execute after router commits the transaction."""
-        # Save Casbin policies
-        await enforcer.save_policy()
+        """Execute after router commits the transaction.
+
+        Không `save_policy()` — xem `remove_role_from_users`.
+        """
         # Chỗ này từng làm CẢ ENDPOINT trả 500 SAU KHI transaction đã commit:
         # `_post_commit` chạy sau `db.commit()`, nên `TypeError` ở đây khiến
         # router bắt exception rồi trả "Failed to delete role" cho một việc ĐÃ

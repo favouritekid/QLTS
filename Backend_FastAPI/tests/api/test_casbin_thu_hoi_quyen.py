@@ -1254,3 +1254,96 @@ async def test_canh_tranh_xoa_don_khong_duoc_bien_allow_thanh_vang_san(client):
         f"CSDL phải còn NGUYÊN cả cặp. Chỉ còn [allow] nghĩa là quyền vừa mở "
         f"bền vững do đan lịch. Hiện có: {con_lai!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 10. CẠNH TRANH TRÊN GROUPING — cùng lock, khác bảng
+# ---------------------------------------------------------------------------
+#
+# Mục 9 đóng race trên policy `p`. Nhưng `g` (grouping) đi qua ĐÚNG cơ chế ấy:
+# PyCasbin gỡ rule khỏi model TRƯỚC rồi mới `await adapter.remove_policy`. Cửa
+# sổ giữa hai bước là chỗ một lượt reload chen vào, đọc CSDL còn hàng cũ, và
+# ĐƯA ROLE TRỞ LẠI model.
+#
+# Lịch trình:
+#   1. Thu hồi `user:999999 -> role:admin` khỏi model, đang chờ adapter.
+#   2. Reload chen vào, đọc CSDL cũ, đưa role trở lại model.
+#   3. Adapter thu hồi hoàn tất -> hàng trong CSDL biến mất.
+#   4. Model VẪN CÒN role. API báo thu hồi thành công.
+#
+# Người vận hành thu hồi role, API nói xong, mà `enforce` vẫn cho qua cho tới
+# lượt reload kế tiếp. Nếu sau đó có bất kỳ lượt ghi toàn-model nào
+# (`save_policy`) thì role còn được ghi TRỞ LẠI CSDL — phục hồi bền vững.
+
+
+@pytest.mark.asyncio
+async def test_canh_tranh_grouping_reload_khong_duoc_phuc_hoi_role(client):
+    """Reload chen giữa lúc gỡ grouping: role phải mất ở CẢ model LẪN CSDL."""
+    from unittest.mock import patch
+
+    from app.services import casbin_service
+    from app.services.casbin_service import khoa_enforcer
+
+    enf = _enf()
+    USER = "user:999999"
+    ROLE = "role:admin"
+
+    for g in [list(x) for x in enf.get_grouping_policy()]:
+        if g[0] == USER:
+            await enf.remove_grouping_policy(*g)
+    await enf.add_grouping_policy(USER, ROLE)
+    assert [USER, ROLE] in [list(g) for g in enf.get_grouping_policy()]
+
+    dang_trong_adapter = asyncio.Event()
+    reload_xong = asyncio.Event()
+    that_adapter_remove = enf.adapter.remove_policy
+
+    async def _adapter_cham(sec, ptype, rule):
+        # Tới đây thì model ĐÃ mất rule còn adapter chưa xong — đúng cửa sổ.
+        if list(rule) == [USER, ROLE]:
+            dang_trong_adapter.set()
+            try:
+                await asyncio.wait_for(reload_xong.wait(), timeout=0.5)
+            except asyncio.TimeoutError:
+                pass  # có lock: reload bị chặn — đúng như mong đợi
+        return await that_adapter_remove(sec, ptype, rule)
+
+    async def _reload_chen_ngang():
+        """Đúng thứ endpoint reload làm: nạp lại policy từ CSDL."""
+        await dang_trong_adapter.wait()
+        async with khoa_enforcer(enf):
+            await enf.load_policy()
+        reload_xong.set()
+
+    with patch.object(enf.adapter, "remove_policy", side_effect=_adapter_cham):
+        t2 = asyncio.create_task(_reload_chen_ngang(), name="T2-reload")
+        async with AsyncSessionLocal() as db:
+            so_go = await casbin_service.CasbinPolicyService(
+                db, enf
+            ).remove_user_roles(999999)
+        await asyncio.wait_for(t2, timeout=5)
+
+    assert so_go == 1, f"phải gỡ đúng 1 grouping: {so_go}"
+
+    trong_model = [list(g) for g in enf.get_grouping_policy() if list(g)[0] == USER]
+    assert trong_model == [], (
+        f"role phải biến khỏi MODEL. Nếu còn thì `enforce` vẫn cho qua cho tới "
+        f"lượt reload kế tiếp — API báo thu hồi xong mà quyền vẫn sống. "
+        f"Hiện có: {trong_model!r}"
+    )
+
+    # Trạng thái BỀN VỮNG: đọc lại từ CSDL, không tin model.
+    async with khoa_enforcer(enf):
+        await enf.load_policy()
+    trong_db = [list(g) for g in enf.get_grouping_policy() if list(g)[0] == USER]
+    assert trong_db == [], f"role phải biến khỏi CSDL: {trong_db!r}"
+
+    # Và một lượt ghi TOÀN MODEL sau đó cũng không được phục hồi role — đây là
+    # bước 4 trong lịch trình: `save_policy()` lấy model rồi ghi đè cả bảng.
+    async with khoa_enforcer(enf):
+        await enf.save_policy()
+        await enf.load_policy()
+    sau_save = [list(g) for g in enf.get_grouping_policy() if list(g)[0] == USER]
+    assert sau_save == [], (
+        f"một lượt ghi toàn-model sau đó đã PHỤC HỒI role vào CSDL: {sau_save!r}"
+    )

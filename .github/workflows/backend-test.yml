@@ -429,6 +429,7 @@ jobs:
               tests/api/test_admin_v2_admission_round_phase3_flags.py
               tests/security/test_permissions_matrix.py
               tests/api/test_casbin_thu_hoi_quyen.py
+              tests/unit/test_casbin_lock_coverage.py
               tests/api/test_admin_roles.py
               tests/integration/test_casbin_lead_static_route_collision.py
               tests/api/test_fees_calculate_authorization.py
