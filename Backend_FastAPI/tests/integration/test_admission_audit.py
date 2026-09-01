@@ -135,12 +135,46 @@ async def create_admission_profile(
 
 async def create_submittable_profile(
     lead_id: int,
+    unit_id: int,
     citizen_id: str = None,
 ) -> models.AdmissionProfile:
-    """Create a profile with proper applied_rules and subject scores so it can be submitted."""
-    import random
+    """Create a profile that genuinely clears EVERY ``submit_and_evaluate`` gate.
+
+    Uses the SHARED submit-ready builders rather than a bespoke recipe:
+
+    * ``seed_submittable_offering_config`` (tests/fixtures/builders.py) — the
+      legacy single-NV chain, i.e. ``OfferingAdmissionConfig`` →
+      academic_info → offering → ``MajorProgram.degree_level_id`` +
+      ``ProgramOffering.offering_type_id``, plus a THPT ``VnSchool`` with a
+      ``VnSchoolKvAssignment``.
+    * ``submittable_profile_fields`` — the profile columns those gates read:
+      ``offering_admission_config_id``, ``cultural_education_level``,
+      ``vocational_qualification``, ``uses_choice_engine=False``, full_name,
+      phone, the Gap #3 permanent address and a KV-resolvable
+      ``academic_history`` entry.
+    * ``ensure_submittable_ward`` — the CURRENT-era WARD node backing
+      ``permanent_commune_code``.
+
+    Why: the previous hand-written profile carried no
+    ``offering_admission_config_id``, so ``_validate_eligibility_all_choices``
+    fail-closed with ``CONFIG_GAP_TARGET_LEVEL``
+    (app/services/admission_service.py:6424-6430) → HTTP 400, and the audit
+    assertion below never ran at all.
+
+    Subject scores + ``applied_rules`` scoring keys are kept as-is: this file
+    tests the AUDIT TRAIL, and the scoring branch must stay satisfied so the
+    only thing under test is whether the status change got recorded.
+    """
+    from tests.fixtures.builders import (
+        ensure_submittable_ward,
+        seed_submittable_offering_config,
+        submittable_profile_fields,
+    )
+
     if citizen_id is None:
         citizen_id = f"0{datetime.now().timestamp():.0f}"[:12]
+
+    await ensure_submittable_ward()
 
     async with AsyncSessionLocal() as session:
         async with session.begin():
@@ -151,6 +185,20 @@ async def create_submittable_profile(
             if not subj:
                 subj = models.Subject(code="TOAN", name_vi="Toan", is_active=True)
                 session.add(subj)
+                await session.flush()
+
+            seed = await seed_submittable_offering_config(
+                session, unit_id=unit_id, academic_year=2025
+            )
+            profile_fields = submittable_profile_fields(seed)
+
+            # Keep the lead pointing at the SAME offering the profile's config
+            # chain belongs to. ``create_test_lead`` leaves offering_id NULL,
+            # which would make lead→offering and profile→config describe two
+            # different programs — an inconsistency no production row has.
+            lead = await session.get(models.Lead, lead_id)
+            if lead is not None and lead.offering_id is None:
+                lead.offering_id = seed["offering_id"]
                 await session.flush()
 
             profile = models.AdmissionProfile(
@@ -166,9 +214,14 @@ async def create_submittable_profile(
                     "required_subject_count": 1,
                     "subject_selection_mode": "fixed",
                 },
-                academic_year=2025,
-                family_info=[{"relationship": "Cha", "full_name": "Test Father", "phone": "0901234567"}],
-                academic_history=[{"school_name": "THPT Test", "year_from": 2020, "year_to": 2024}],
+                # Same year the offering chain was seeded on — the CCCD
+                # uniqueness check is scoped by academic_year.
+                academic_year=seed["academic_year"],
+                family_info=[{
+                    "relationship": "Cha", "full_name": "Test Father",
+                    "phone": "0901234567", "is_primary_guardian": True,
+                }],
+                **profile_fields,
             )
             session.add(profile)
             await session.flush()
@@ -413,7 +466,7 @@ class TestSubmitProfileAudit:
         await seed_admission_pipeline_data()
 
         lead_id = await create_test_lead(unit_id, assigned_officer_id=officer_user_in_db["id"])
-        profile = await create_submittable_profile(lead_id)
+        profile = await create_submittable_profile(lead_id, unit_id=unit_id)
 
         headers = await get_auth_headers(client, officer_user_in_db)
 
@@ -423,7 +476,21 @@ class TestSubmitProfileAudit:
         )
         assert response.status_code == 200, f"Submit failed: {response.text}"
 
-        # Check audit log
+        # STEP 1 — the HTTP call really transitioned the profile. /submit
+        # answers 200 + status='draft' + validation_errors when a gate blocks,
+        # so status_code alone proves nothing. This assertion and the audit
+        # assertions below are deliberately SEPARATE: removing the audit write
+        # must leave this one green and redden only the audit block.
+        body = response.json()
+        assert body["status"] == "submitted", (
+            "Submit did not transition the profile — the audit assertions below "
+            f"would be meaningless. status={body['status']} "
+            f"validation_errors={body.get('validation_errors')}"
+        )
+
+        # STEP 2 — the transition was RECORDED. Written by
+        # `admission_state_service.transition` →
+        # `audit_service.log_status_change` (app/services/admission_state_service.py:436-447).
         logs = await get_audit_logs_for_entity("AdmissionProfile", profile.id)
         status_log = next((l for l in logs if l.action == "status_changed"), None)
 
@@ -431,8 +498,9 @@ class TestSubmitProfileAudit:
             f"No 'status_changed' audit log found after submit. Actions: {[l.action for l in logs]}"
         assert status_log.field_name == "status"
         assert status_log.old_value == "draft"
-        assert status_log.new_value in ["submitted", "approved"]
+        assert status_log.new_value == "submitted"
         assert status_log.actor_user_id == officer_user_in_db["id"]
+        assert status_log.source == "api"
 
 
 # ==============================================================================
