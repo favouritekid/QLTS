@@ -414,6 +414,13 @@ jobs:
           # va xoa `allow` phai GIU `deny` cung (sub,obj,act). Khong dat o lat nhe hon:
           # no phai chay cung luot voi bo khoa RBAC, vi hai ben cung noi ve mot mo hinh.
           # Ghi tier ngay o commit nay vi tep xanh tron 7/7 tu dau.
+          # test_org_unit_access_dependency.py vao Tier 2 cung ho A01: no khoa bat bien
+          # "co dac quyen `allow_read_only` THUOC VE SERVER". Tham so scalar co default
+          # trong chu ky dependency bi FastAPI nang thanh QUERY PARAMETER, nen client
+          # bat duoc cong ghi bang `?allow_read_only=true`. Cac ca goi THANG dependency
+          # la phan chung minh that: moi ca di qua HTTP voi persona officer deu xanh ca
+          # TRUOC lan SAU ban va, vi Casbin khong cap officer quyen tren
+          # /api/admin/organization-units/* nen no che mat thu dang duoc canh.
           - tier: Tier 2 — RBAC + security + CCCD lock
             tests: >-
               tests/api/test_activity_log_contract.py
@@ -428,6 +435,7 @@ jobs:
               tests/unit/test_magic_link_rate_limit_key_hashing.py
               tests/api/test_admin_v2_admission_round_phase3_flags.py
               tests/security/test_permissions_matrix.py
+              tests/security/test_org_unit_access_dependency.py
               tests/api/test_casbin_thu_hoi_quyen.py
               tests/unit/test_casbin_lock_coverage.py
               tests/services/test_user.py

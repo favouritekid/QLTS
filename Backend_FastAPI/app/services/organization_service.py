@@ -165,9 +165,14 @@ async def _check_unit_access(
 ) -> models.OrganizationUnit:
     """
     INTERNAL: Rigorous unit-level access check (IDOR protection).
-    
+
     Ensures that current_user has permission to view/modify the unit_id.
     Standardized across all service operations.
+
+    ⚠️ `allow_read_only` là cờ THUỘC VỀ SERVER: nó chỉ được đặt từ chỗ này
+    (tầng service) chứ không bao giờ đến từ request. `get_organizational_unit_for_user`
+    là lối gọi server-side — KHÔNG phải FastAPI dependency; router phải dùng
+    `deps.OrgUnitReadDep` / `deps.OrgUnitWriteDep`.
     """
     from app.core import deps
     return await deps.get_organizational_unit_for_user(

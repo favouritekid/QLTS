@@ -25,7 +25,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
-from app.core import deps  # For get_organizational_unit_for_user, get_user_managed_units
+from app.core import deps  # For OrgUnitReadDep / OrgUnitWriteDep, get_user_managed_units
 from app.core.deps import CasbinAuth  # Phase 2.2
 from app.core.constants import UserRole
 from app.services import config_service
@@ -49,7 +49,8 @@ router = APIRouter(tags=["Admin - Config"])
 )
 async def get_assignment_config_route(
     request: Request,
-    unit: models.OrganizationUnit = Depends(deps.get_organizational_unit_for_user),
+    # Cổng ĐỌC server-owned (không còn cờ `allow_read_only` phơi ra query).
+    unit: models.OrganizationUnit = deps.OrgUnitReadDep,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
 ):
@@ -77,7 +78,8 @@ async def get_assignment_config_route(
 async def update_assignment_config_route(
     request: Request,
     config_in: schemas.AssignmentConfig,
-    unit: models.OrganizationUnit = Depends(deps.get_organizational_unit_for_user),
+    # Cổng GHI server-owned (officer bị từ chối kể cả cùng đơn vị).
+    unit: models.OrganizationUnit = deps.OrgUnitWriteDep,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
 ):
