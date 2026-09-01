@@ -470,7 +470,10 @@ async def register_user(
         if enforcer:
             role_name = f"role:{created_user.role}"
             user_subject = f"user:{created_user.id}"
-            await enforcer.add_grouping_policy(user_subject, role_name)
+            from app.services.casbin_service import khoa_enforcer
+
+            async with khoa_enforcer(enforcer):
+                await enforcer.add_grouping_policy(user_subject, role_name)
             log.info(
                 "Casbin grouping policy added for new user",
                 user_id=created_user.id,

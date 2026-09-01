@@ -273,6 +273,9 @@ async def lifespan(app: FastAPI):
                 "restart with the flag unset / set to true."
             )
         else:
+            # KHOA-MIEN: lượt nạp này chạy TRƯỚC dòng
+            # `fastapi_app.state.enforcer = enforcer` ngay bên dưới, nên chưa
+            # task nào chạm tới enforcer được — không có gì để loại trừ.
             await enforcer.load_policy()
             log.info("✅ Casbin AsyncEnforcer initialized and policies loaded.")
         fastapi_app.state.enforcer = enforcer
@@ -476,8 +479,14 @@ async def lifespan(app: FastAPI):
                     # Auto-sync in development mode
                     sync_result = await casbin_service.sync_all_roles_from_templates(dry_run=False)
                     
-                    # Reload policies after sync
-                    await enforcer.load_policy()
+                    # Reload policies after sync — dưới lock chung.
+                    # (Lượt `load_policy` ở đoạn khởi tạo phía trên KHÔNG cần
+                    # lock: nó chạy TRƯỚC `fastapi_app.state.enforcer = ...`
+                    # nên chưa task nào chạm tới enforcer được.)
+                    from app.services.casbin_service import khoa_enforcer
+
+                    async with khoa_enforcer(enforcer):
+                        await enforcer.load_policy()
                     
                     log.info(
                         f"✅ Auto-sync complete: {sync_result['hint']}"

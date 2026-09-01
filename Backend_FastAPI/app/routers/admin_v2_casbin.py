@@ -100,8 +100,11 @@ async def reload_casbin_policy(
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
     started_at = _utcnow_iso()
+    from app.services.casbin_service import khoa_enforcer
+
     try:
-        await enforcer.load_policy()
+        async with khoa_enforcer(enforcer):
+            await enforcer.load_policy()
     except Exception as exc:
         log.error(
             "casbin_reload_failed",

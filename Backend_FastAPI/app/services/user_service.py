@@ -537,11 +537,18 @@ async def create_user_by_admin(
                 role_name = f"role:{db_user.role}"
                 user_subject = f"user:{db_user.id}"
 
-                added = await enforcer.add_grouping_policy(user_subject, role_name)
+                from app.services.casbin_service import khoa_enforcer
+
+                async with khoa_enforcer(enforcer):
+                    added = await enforcer.add_grouping_policy(
+                        user_subject, role_name
+                    )
                 log.debug("Added Casbin grouping policy for new user", added=added)
 
-                # Save policy - this writes to casbin_rule table in SAME transaction
-                await enforcer.save_policy()
+                # KHÔNG `save_policy()`: `auto_save` đã ghi hàng xuống bảng, còn
+                # `save_policy()` là `DELETE FROM casbin_rule` rồi ghi lại toàn
+                # bộ model. Chú thích cũ "in SAME transaction" cũng sai: adapter
+                # mở session RIÊNG.
 
                 log.info(
                     "Casbin grouping policy added for admin-created user (in transaction)",
@@ -809,17 +816,28 @@ async def update_user(
                 old_casbin_role = f"role:{old_db_role}" if old_db_role else None
                 new_casbin_role = f"role:{new_db_role}"
 
-                # Remove old role grouping (if exists)
-                if old_casbin_role:
-                    removed = await enforcer.remove_grouping_policy(user_subject, old_casbin_role)
-                    log.debug("Removed old Casbin grouping policy", removed=removed)
+                from app.services.casbin_service import khoa_enforcer
 
-                # Add new role grouping
-                added = await enforcer.add_grouping_policy(user_subject, new_casbin_role)
+                # Gỡ role cũ + gán role mới là MỘT thao tác. Tách ra thì có một
+                # khoảnh khắc người dùng KHÔNG có role nào — hoặc, nếu đan lịch
+                # ngược lại, có CẢ HAI.
+                async with khoa_enforcer(enforcer):
+                    # Remove old role grouping (if exists)
+                    if old_casbin_role:
+                        removed = await enforcer.remove_grouping_policy(
+                            user_subject, old_casbin_role
+                        )
+                        log.debug(
+                            "Removed old Casbin grouping policy", removed=removed
+                        )
+
+                    # Add new role grouping
+                    added = await enforcer.add_grouping_policy(
+                        user_subject, new_casbin_role
+                    )
                 log.debug("Added new Casbin grouping policy", added=added)
 
-                # Save policy - this writes to casbin_rule table in SAME transaction
-                await enforcer.save_policy()
+                # KHÔNG `save_policy()` — xem chú thích ở `create_user_by_admin`.
 
                 log.info(
                     "Casbin grouping policy synced successfully (in transaction)",
