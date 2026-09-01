@@ -49,8 +49,13 @@ router = APIRouter(tags=["Admin - Config"])
 )
 async def get_assignment_config_route(
     request: Request,
-    # Cổng ĐỌC server-owned (không còn cờ `allow_read_only` phơi ra query).
-    unit: models.OrganizationUnit = deps.OrgUnitReadDep,
+    # Cổng GHI server-owned. KHÔNG dùng cổng ĐỌC ở đây dù đây là route GET:
+    # docstring ngay dưới khai hợp đồng `(Admin/Manager)`, và baseline trước bản
+    # vá là `allow_read_only=False`. Đổi sang cổng ĐỌC sẽ cho officer cùng đơn vị
+    # qua tầng IDOR — một lần NỚI quyền, không phải giữ nguyên. Lập luận "Casbin
+    # đang che nên vô hại" chính là kiểu fail-open mà bản vá này sinh ra để loại
+    # bỏ: policy là thứ ĐỘNG.
+    unit: models.OrganizationUnit = deps.OrgUnitWriteDep,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
 ):

@@ -437,3 +437,122 @@ async def test_officer_khong_ghi_duoc_don_vi_du_gui_allow_read_only_true(
         ).scalar_one()
 
     assert sau == truoc, "Tên đơn vị đã bị đổi dù request bị từ chối"
+
+
+# =============================================================================
+# 6. BẢN ĐỒ DEPENDENCY — route nào PHẢI dùng cổng nào
+# =============================================================================
+# Hai ca OpenAPI ở trên chỉ chứng minh cờ không LỘ ra query. Chúng KHÔNG nói gì
+# về việc route nào đang dùng cổng nào — nên đổi `GET /assignment-config` từ
+# cổng GHI sang cổng ĐỌC vẫn xanh trọn, dù đó là một lần NỚI quyền: officer
+# cùng đơn vị sẽ qua được tầng IDOR.
+#
+# `GET /assignment-config` dùng cổng GHI chứ KHÔNG phải cổng ĐỌC, vì ba lẽ:
+#   1. docstring của chính route khai hợp đồng `(Admin/Manager)`;
+#   2. baseline trước bản vá là `allow_read_only=False`;
+#   3. deny-by-default — nới quyền phải là một quyết định tường minh, có người
+#      duyệt, không phải hệ quả phụ của việc dọn chữ ký.
+#
+# "Casbin đang chặn officer nên đổi cũng vô hại" KHÔNG phải lý lẽ dùng được ở
+# đây: policy là dữ liệu ĐỘNG, còn bản đồ này là mã tĩnh. Đúng thứ tự phòng thủ
+# là mỗi tầng tự chặt, không tầng nào dựa vào tầng kia.
+
+BAN_DO_CONG_DON_VI = {
+    ("/api/admin/organization-units/{unit_id}", "GET"): "readonly",
+    ("/api/admin/organization-units/{unit_id}", "PUT"): "write",
+    ("/api/admin/organization-units/{unit_id}", "DELETE"): "write",
+    ("/api/admin/assignment-config/{unit_id}", "GET"): "write",
+    ("/api/admin/assignment-config/{unit_id}", "PUT"): "write",
+}
+
+_TEN_CONG = {
+    "readonly": "get_organizational_unit_readonly",
+    "write": "get_organizational_unit_for_write",
+}
+
+
+def _cong_don_vi_cua_route(path: str, method: str):
+    """Tập cổng đơn vị xuất hiện trong CÂY dependency của đúng route+method.
+
+    Đi qua `route.dependant` chứ không đọc chữ ký hàm: cổng có thể được nối
+    gián tiếp, và thứ FastAPI thật sự giải mới là thứ đáng khoá.
+    """
+    from fastapi.routing import APIRoute
+
+    cong = {
+        deps.get_organizational_unit_readonly: "readonly",
+        deps.get_organizational_unit_for_write: "write",
+    }
+    thay = None
+    ra = set()
+    for route in fastapi_app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        if route.path != path or method not in route.methods:
+            continue
+        thay = route
+        for dep in _walk_dependants(route.dependant):
+            if dep.call in cong:
+                ra.add(cong[dep.call])
+    return thay, ra
+
+
+@pytest.mark.parametrize(
+    "path,method,mong_doi",
+    [(p, m, v) for (p, m), v in BAN_DO_CONG_DON_VI.items()],
+    ids=[f"{m}_{p.split('/')[3]}" for (p, m) in BAN_DO_CONG_DON_VI],
+)
+def test_ban_do_cong_don_vi_dung_tung_route(path, method, mong_doi):
+    """Khoá CHÍNH XÁC route nào dùng cổng nào — không chỉ 'cờ không lộ ra'."""
+    route, cong = _cong_don_vi_cua_route(path, method)
+
+    # Fail-closed: route đổi tên/biến mất thì ĐỎ, không xanh rỗng.
+    assert route is not None, f"Route biến mất: {method} {path}"
+
+    assert cong, (
+        f"{method} {path} KHÔNG đi qua cổng đơn vị nào — tầng IDOR đã rơi mất"
+    )
+    assert len(cong) == 1, (
+        f"{method} {path} đi qua NHIỀU cổng cùng lúc: {sorted(cong)!r}; "
+        "hai cổng chồng nhau thì không đọc được cổng nào đang quyết định"
+    )
+    that = next(iter(cong))
+    assert that == mong_doi, (
+        f"{method} {path} phải dùng `{_TEN_CONG[mong_doi]}` nhưng đang dùng "
+        f"`{_TEN_CONG[that]}`. Đổi cổng ĐỌC/GHI là đổi ai qua được tầng IDOR — "
+        "nếu đây là chủ ý thì phải sửa BAN_DO_CONG_DON_VI trong cùng một lần, "
+        "để việc nới quyền hiện ra trong diff chứ không trôi qua âm thầm."
+    )
+
+
+def test_ban_do_cong_don_vi_phu_het_route_dung_cong():
+    """Không route nào dùng cổng đơn vị mà nằm ngoài bản đồ.
+
+    Thiếu ca này thì một route MỚI có thể nối cổng ĐỌC vào đường ghi và không
+    phép kiểm nào thấy — bản đồ chỉ canh những gì nó liệt kê.
+    """
+    from fastapi.routing import APIRoute
+
+    cong = {
+        deps.get_organizational_unit_readonly,
+        deps.get_organizational_unit_for_write,
+    }
+    ngoai_ban_do = set()
+    for route in fastapi_app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        dung_cong = any(
+            dep.call in cong for dep in _walk_dependants(route.dependant)
+        )
+        if not dung_cong:
+            continue
+        for m in route.methods:
+            if m in ("HEAD", "OPTIONS"):
+                continue
+            if (route.path, m) not in BAN_DO_CONG_DON_VI:
+                ngoai_ban_do.add(f"{m} {route.path}")
+
+    assert ngoai_ban_do == set(), (
+        "Route dùng cổng đơn vị nhưng chưa có trong BAN_DO_CONG_DON_VI: "
+        f"{sorted(ngoai_ban_do)!r}. Thêm vào bản đồ kèm cổng mong đợi."
+    )
