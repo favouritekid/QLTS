@@ -420,6 +420,15 @@ jobs:
           # va xoa `allow` phai GIU `deny` cung (sub,obj,act). Khong dat o lat nhe hon:
           # no phai chay cung luot voi bo khoa RBAC, vi hai ben cung noi ve mot mo hinh.
           # Ghi tier ngay o commit nay vi tep xanh tron 7/7 tu dau.
+          # test_admin_sync_aliases.py vao Tier 2 (selector WHOLE-FILE, khong waiver,
+          # khong partial): no la duong HTTP THAT cua hai alias admin sync
+          # (GET /api/admin/sync/status, POST /api/admin/sync) — cung be mat RBAC
+          # ma lat nay dang gac, va ca hai alias deu di qua CasbinAuth. Decorator
+          # tinh + policy Casbin KHONG chung minh duoc alias bind dung dependency,
+          # nhan duoc body, va goi toi implementation; do la dung lop loi vua gap o
+          # organization.py (Depends(lambda ...) bi FastAPI nang thanh query bat buoc
+          # ⇒ endpoint LUON 422 ma moi phep kiem tinh van xanh). Chi request that qua
+          # ASGI moi phan biet duoc route song va route chet.
           - tier: Tier 2 — RBAC + security + CCCD lock
             tests: >-
               tests/api/test_activity_log_contract.py
@@ -438,6 +447,7 @@ jobs:
               tests/unit/test_casbin_lock_coverage.py
               tests/services/test_user.py
               tests/api/test_admin_roles.py
+              tests/api/test_admin_sync_aliases.py
               tests/api/test_admin_casbin.py
               tests/api/test_casbin_tracking.py
               tests/integration/test_casbin_lead_static_route_collision.py
