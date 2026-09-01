@@ -1831,7 +1831,11 @@ async def sync_users_to_casbin(
         db: Database session (injected via DI)
         enforcer: Casbin enforcer instance (injected via DI)
         user_ids: Optional list of specific user IDs to sync.
-                  If None or empty, sync all users in database.
+                  ``None`` = sync all users. ``[]`` = sync NO ONE.
+                  Hai thứ đó KHÔNG giống nhau — xem chú thích ở
+                  vị từ bên dưới. Tầng HTTP đã chặn ``[]`` bằng 422
+                  (``SyncUsersRequest``); vị từ ở đây là hàng rào thứ
+                  hai cho caller nội bộ tương lai.
 
     Returns:
         Dict containing:
@@ -1866,8 +1870,14 @@ async def sync_users_to_casbin(
     
     repo = UserRepository(db)
     
-    # Query users to sync (specific IDs or all)
-    if user_ids:
+    # Query users to sync.
+    #
+    # `is not None` chứ KHÔNG phải truthiness: `[]` là "không ai", còn
+    # `None` mới là "tất cả". Bản trước dùng `if user_ids:` nên gộp hai
+    # thứ ngược nhau vào cùng một nhánh — một danh sách rỗng do lỗi nhập
+    # liệu biến thành lệnh ghi lên TOÀN BỘ user. `get_by_ids([])` trả `[]`
+    # an toàn (user_repository.py:640), nên nhánh này không cần ca riêng.
+    if user_ids is not None:
         users = await repo.get_by_ids(user_ids)
     else:
         users = await repo.get_all()

@@ -636,7 +636,12 @@ async def sync_users(
     (Admin only) Đồng bộ role từ Casbin về DB cho tất cả users hoặc một nhóm users cụ thể.
     Casbin được coi là source of truth (nguồn chân lý).
 
-    - `user_ids`: Danh sách ID users cần sync. Nếu None hoặc rỗng, sync tất cả users.
+    - `user_ids`: **BẮT BUỘC** có mặt trong body.
+        * `null`            -> đồng bộ TOÀN BỘ user
+        * `[id, ...]`       -> đồng bộ đúng các id ấy (mọi id > 0)
+        * thiếu khoá / `[]` / khoá lạ -> **422**
+      Mảng rỗng KHÔNG còn nghĩa là "tất cả": gộp hai thứ đó lại
+      từng khiến một lỗi gõ phím mở rộng phạm vi ghi ra mọi user.
 
     REFACTORED: Business logic extracted to user_service.sync_users_to_casbin()
     Router now only handles HTTP concerns (request/response, DI, admin activity logging)
@@ -667,7 +672,10 @@ async def sync_users(
             changes={
                 "synced_count": result["synced_count"],
                 "failed_count": result["failed_count"],
-                "user_ids": user_ids or "all"
+                # `or "all"` sẽ nói dối khi `user_ids == []`. Sau khi
+                # tầng HTTP chặn `[]`, ca ấy không tới được đây — nhưng
+                # audit log không nên phụ thuộc vào việc đó.
+                "user_ids": "all" if user_ids is None else user_ids
             }
         )
         await db.commit()

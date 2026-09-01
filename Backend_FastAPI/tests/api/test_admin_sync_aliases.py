@@ -268,13 +268,15 @@ async def test_alias_post_sync_keo_role_lech_ve_dung_user_duoc_chi_dinh(
       * user CHỨNG KIẾN (`test_user_in_db`, KHÔNG có g-rule ⇒ Casbin
         fallback "user")
 
-    Vì sao phải có user CHỨNG KIẾN: `SyncUsersRequest.user_ids` là
-    `Optional[List[int]] = None` và Pydantic v2 mặc định BỎ QUA field lạ.
-    Nếu chỉ có một user, đổi tên khoá body (`user_ids` → `userIds`) sẽ khiến
-    `user_ids=None` ⇒ sync TẤT CẢ ⇒ user duy nhất kia vẫn được kéo về ⇒ ca
-    kiểm VẪN XANH dù giao ước body đã hỏng. User chứng kiến làm hai khẳng
-    định `synced_count == 1` và "chứng kiến KHÔNG đổi" trở thành hàng rào
-    thật cho tên khoá body.
+    Vì sao phải có user CHỨNG KIẾN: nó khoá PHẠM VI ghi, không khoá hình
+    dạng body. `synced_count == 1` một mình có thể bị một implementation
+    "đếm đúng, ghi thừa" qua mặt; chỉ khẳng định "chứng kiến KHÔNG đổi" mới
+    phân biệt được "sync đúng tập" với "sync tất cả rồi đếm nhầm".
+
+    (Lối hỏng qua TÊN KHOÁ nay đã có cổng riêng: `SyncUsersRequest` fail-closed
+    — `extra="forbid"`, `user_ids` bắt buộc, không rỗng, id > 0 — và
+    `test_payload_sai_bi_tu_choi_o_ca_hai_duong` gác nó. Trước bản vá ấy,
+    `userIds` bị Pydantic nuốt im lặng ⇒ `user_ids=None` ⇒ sync TẤT CẢ.)
 
     Đọc lại bằng session MỚI (không phải qua chính response) để giá trị đến
     từ CSDL chứ không từ identity map.
@@ -358,8 +360,8 @@ async def test_alias_post_sync_keo_role_lech_ve_dung_user_duoc_chi_dinh(
     assert data["synced_count"] == 1, (
         f"Phải sync ĐÚNG 1 user (user_ids=[{id_muc_tieu}]) nhưng "
         f"synced_count={data['synced_count']}. Nếu là 2 thì body `user_ids` "
-        f"đã KHÔNG tới được implementation (Pydantic bỏ qua field lạ ⇒ "
-        f"user_ids=None ⇒ sync tất cả). Nếu là 0 thì endpoint là no-op."
+        f"đã KHÔNG tới được implementation — service đang sync TẤT CẢ thay "
+        f"vì đúng danh sách. Nếu là 0 thì endpoint là no-op."
     )
 
     # --- Đọc lại bằng SESSION MỚI: nguồn sự thật là CSDL ------------------
@@ -489,4 +491,274 @@ async def test_alias_post_sync_bat_body_sai_kieu_bang_422_tu_body(
     assert any("user_ids" in vt for vt in vi_tri), (
         f"422 phải trỏ đích danh field `user_ids` của "
         f"`schemas.SyncUsersRequest`. loc nhận được: {vi_tri}"
+    )
+
+
+# =============================================================================
+# MA TRẬN FAIL-CLOSED — payload sai KHÔNG được mở rộng phạm vi mutation
+# =============================================================================
+# Bản trước của `SyncUsersRequest` khai `Optional[List[int]] = None` và không
+# cấm field lạ. Đo được trên chính lớp ấy::
+#
+#     {}                  -> user_ids=None
+#     {"userId": [123]}   -> user_ids=None      (khoá lạ bị Pydantic NUỐT)
+#     {"user_ids": []}    -> user_ids=[]
+#
+# Cả ba đều falsy, mà service rẽ nhánh bằng truthiness ⇒ cả ba rơi vào
+# `repo.get_all()`. Một lỗi gõ phím biến "đồng bộ hai user" thành "ghi lên
+# TOÀN BỘ user", và vẫn trả 200. Không phải vượt quyền (vẫn cần admin), nhưng
+# là fail-open: sai sót của người gọi làm RỘNG THÊM tác động.
+#
+# Ma trận dưới đây khoá cả hai mặt: mặt TỪ CHỐI (payload sai ⇒ 422 đúng chỗ)
+# và mặt HIỆU ỨNG (payload đúng ⇒ ghi đúng phạm vi, đo bằng session mới).
+
+URL_SYNC_CANONICAL = "/api/admin/users/sync"
+
+# Hai đường viết THẲNG, không sinh từ hằng chung: alias tự khai
+# `sync_request: schemas.SyncUsersRequest` (sync.py:56) và uỷ quyền xuống
+# canonical bằng LỜI GỌI HÀM Python (sync.py:74). Nghĩa là validate của
+# canonical KHÔNG hề chạy trên request đi qua alias, và ngược lại. Suy một
+# đường từ đường kia là bỏ sót đúng một nửa bề mặt.
+CA_HAI_DUONG_SYNC = [URL_SYNC_ALIAS, URL_SYNC_CANONICAL]
+
+
+def _loi_422(response, mo_ta: str) -> list:
+    """Trả danh sách lỗi validation, sau khi khẳng định 422 ĐÚNG KIỂU.
+
+    Bốn tầng, không rút gọn được tầng nào:
+      1. không 404 — phân biệt "route chết" với "body sai";
+      2. đúng 422;
+      3. đúng envelope `VALIDATION_ERROR` — chặn 422 đến từ handler khác;
+      4. không lỗi nào ở `query`/`path` — đó là vân tay của lỗi
+         `organization.py` (dependency bị nâng thành tham số bắt buộc), đúng
+         lớp lỗi mà tệp này sinh ra để bắt.
+    """
+    assert response.status_code != 404, (
+        f"{mo_ta}: nhận 404 — route CHẾT, không phải body sai. "
+        f"Thân: {response.text[:300]}"
+    )
+    assert response.status_code == 422, (
+        f"{mo_ta}: kỳ vọng 422, nhận {response.status_code}. "
+        f"Thân: {response.text[:300]}"
+    )
+    body = response.json()
+    assert body.get("error_code") == "VALIDATION_ERROR", (
+        f"{mo_ta}: 422 nhưng error_code là {body.get('error_code')!r} — "
+        f"422 này đến từ handler khác. Thân: {response.text[:300]}"
+    )
+    loi = body.get("errors")
+    assert isinstance(loi, list) and loi, (
+        f"{mo_ta}: `errors` phải là list không rỗng, nhận {loi!r}"
+    )
+    sai_cho = [e for e in loi if (e.get("loc") or [None])[0] in ("query", "path")]
+    assert not sai_cho, (
+        f"{mo_ta}: có lỗi ở query/path — dependency đã bị nâng thành tham số "
+        f"bắt buộc (đúng lỗi organization.py): {sai_cho!r}"
+    )
+    return loi
+
+
+# (ten, payload, type kỳ vọng, loc kỳ vọng)
+#
+# Hai ca đánh dấu ⚑ là ca PHÂN GIẢI, không phải ca thừa:
+#
+#  ⚑ `khoa-la-kem-user_ids-hop-le`: nếu chỉ có `khoa-la-userId`, đột biến "bỏ
+#    `extra=forbid`" VẪN SỐNG SÓT — vì `user_ids` bắt buộc nên `{"userId":[1]}`
+#    vẫn 422 do `missing`. Ở ca này `user_ids` hợp lệ, nên 422 CHỈ CÓ THỂ đến
+#    từ `extra="forbid"`. Đo được: payload ấy cho đúng MỘT lỗi.
+#
+#  ⚑ `id-am-o-vi-tri-thu-hai`: khoá `loc` tới đúng CHỈ SỐ phần tử, chống bản vá
+#    nửa vời chỉ kiểm phần tử đầu tiên.
+MA_TRAN_TU_CHOI = [
+    ("thieu-khoa", {}, "missing", ["body", "user_ids"]),
+    ("khoa-la-userId", {"userId": [1]}, "extra_forbidden", ["body", "userId"]),
+    ("khoa-la-kem-user_ids-hop-le",
+     {"user_ids": [1], "userId": [1]}, "extra_forbidden", ["body", "userId"]),
+    ("mang-rong", {"user_ids": []}, "too_short", ["body", "user_ids"]),
+    ("id-bang-khong", {"user_ids": [0]}, "greater_than", ["body", "user_ids", 0]),
+    ("id-am", {"user_ids": [-1]}, "greater_than", ["body", "user_ids", 0]),
+    ("id-am-o-vi-tri-thu-hai",
+     {"user_ids": [1, -5]}, "greater_than", ["body", "user_ids", 1]),
+    ("khong-phai-list",
+     {"user_ids": "khong-phai-mot-danh-sach"}, "list_type", ["body", "user_ids"]),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ten,payload,type_mong_doi,loc_mong_doi",
+    MA_TRAN_TU_CHOI,
+    ids=[m[0] for m in MA_TRAN_TU_CHOI],
+)
+async def test_payload_sai_bi_tu_choi_o_ca_hai_duong(
+    client: AsyncClient,
+    admin_token_headers: Dict[str, str],
+    ten: str,
+    payload: Dict[str, Any],
+    type_mong_doi: str,
+    loc_mong_doi: list,
+):
+    """Payload sai phải 422 ở ĐÚNG chỗ, trên CẢ alias lẫn canonical.
+
+    Lặp hai đường BÊN TRONG một ca thay vì parametrize thêm một chiều: các ca
+    từ chối không đổi trạng thái, nên dựng fixture hai lần chỉ tốn truncate +
+    lifespan + login mà không thêm sức phân giải nào.
+
+    ⚠️ Mọi request đều mang `admin_token_headers`. Auth giải TRƯỚC validate
+    body (`deps.py`), nên thiếu token là đo nhầm 403 rồi tưởng đã kiểm 422.
+    """
+    for url in CA_HAI_DUONG_SYNC:
+        mo_ta = f"[{ten}] POST {url}"
+        response = await client.post(url, json=payload, headers=admin_token_headers)
+        loi = _loi_422(response, mo_ta)
+
+        cap = [(e.get("type"), list(e.get("loc") or [])) for e in loi]
+        assert (type_mong_doi, loc_mong_doi) in cap, (
+            f"{mo_ta}: không thấy lỗi (type={type_mong_doi!r}, "
+            f"loc={loc_mong_doi!r}). Các lỗi thực tế: {cap!r}"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", CA_HAI_DUONG_SYNC)
+async def test_null_tuong_minh_dong_bo_TOAN_BO_user_lech(
+    client: AsyncClient,
+    admin_token_headers: Dict[str, str],
+    admin_user_in_db: Dict[str, Any],
+    regular_user_in_db: Dict[str, Any],
+    test_user_in_db: Dict[str, Any],
+    url: str,
+):
+    """`{"user_ids": null}` = đồng bộ toàn bộ — và phải đo được là TOÀN BỘ.
+
+    Dựng HAI user lệch chứ không một. Với một user, đột biến "chỉ sync phần tử
+    đầu" hoặc "sync đúng một" vẫn xanh; hai user mới phân biệt được "toàn bộ"
+    với "một phần".
+    """
+    id_a = regular_user_in_db["id"]
+    id_b = test_user_in_db["id"]
+    id_admin = admin_user_in_db["id"]
+    assert len({id_a, id_b, id_admin}) == 3, "ba user phải phân biệt"
+
+    await _dat_role_trong_db(id_a, "officer")
+    await _dat_role_trong_db(id_b, "officer")
+
+    # Tiền điều kiện: lệch nằm trong CSDL THẬT, không phải trong identity map.
+    assert await _doc_role_bang_session_moi(id_a) == "officer"
+    assert await _doc_role_bang_session_moi(id_b) == "officer"
+
+    truoc = await client.get(URL_STATUS_ALIAS, headers=admin_token_headers)
+    assert truoc.status_code == 200, truoc.text
+    lech_truoc = _map_mismatched_theo_id(truoc.json())
+    assert set(lech_truoc) == {id_a, id_b}, (
+        "tiền đề hỏng: Casbin phải nói 'user' cho cả hai. Đang lệch: "
+        f"{sorted(lech_truoc)}; kỳ vọng {sorted({id_a, id_b})}"
+    )
+    assert id_admin not in lech_truoc, (
+        "admin phải KHỚP — nếu admin cũng lệch thì `synced_count` kỳ vọng sai, "
+        "và ca này sẽ đổi quyền của chính token đang dùng"
+    )
+
+    response = await client.post(
+        url, json={"user_ids": None}, headers=admin_token_headers
+    )
+    _khong_duoc_la_route_chet(response, f"POST {url} với user_ids=null")
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["failed_count"] == 0 and data["failed_users"] == [], data
+    assert data["synced_count"] == 2, (
+        f"null tường minh phải kéo CẢ HAI user lệch; nhận "
+        f"synced_count={data['synced_count']}. 1 ⇒ chỉ sync một; "
+        f"0 ⇒ no-op. Thân: {data}"
+    )
+
+    assert await _doc_role_bang_session_moi(id_a) == "user"
+    assert await _doc_role_bang_session_moi(id_b) == "user", (
+        "user THỨ HAI không được kéo về — đây đúng là đột biến mà một user lệch "
+        "không bao giờ bắt được"
+    )
+    assert await _doc_role_bang_session_moi(id_admin) == "admin", (
+        "sync toàn bộ không được phá quyền của chính actor"
+    )
+
+    sau = await client.get(URL_STATUS_ALIAS, headers=admin_token_headers)
+    assert sau.json()["out_of_sync_count"] == 0, sau.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", CA_HAI_DUONG_SYNC)
+async def test_danh_sach_khong_rong_chi_dong_bo_dung_muc_tieu(
+    client: AsyncClient,
+    admin_token_headers: Dict[str, str],
+    admin_user_in_db: Dict[str, Any],
+    regular_user_in_db: Dict[str, Any],
+    test_user_in_db: Dict[str, Any],
+    url: str,
+):
+    """Mảng không rỗng = đúng tập ấy, không hơn. User CHỨNG KIẾN giữ nguyên.
+
+    Khẳng định chứng kiến là thứ duy nhất khoá được PHẠM VI: `synced_count`
+    một mình có thể bị một implementation "đếm đúng, ghi thừa" qua mặt.
+    """
+    id_muc_tieu = regular_user_in_db["id"]
+    id_chung_kien = test_user_in_db["id"]
+
+    await _dat_role_trong_db(id_muc_tieu, "officer")
+    await _dat_role_trong_db(id_chung_kien, "officer")
+    assert await _doc_role_bang_session_moi(id_chung_kien) == "officer"
+
+    truoc = await client.get(URL_STATUS_ALIAS, headers=admin_token_headers)
+    assert set(_map_mismatched_theo_id(truoc.json())) == {id_muc_tieu, id_chung_kien}
+
+    response = await client.post(
+        url, json={"user_ids": [id_muc_tieu]}, headers=admin_token_headers
+    )
+    _khong_duoc_la_route_chet(response, f"POST {url} với một mục tiêu")
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["failed_count"] == 0, data
+    assert data["synced_count"] == 1, (
+        f"chỉ được sync ĐÚNG một user; nhận {data['synced_count']}. 2 ⇒ body "
+        f"`user_ids` không tới được implementation. Thân: {data}"
+    )
+
+    assert await _doc_role_bang_session_moi(id_muc_tieu) == "user"
+    assert await _doc_role_bang_session_moi(id_chung_kien) == "officer", (
+        "user CHỨNG KIẾN bị đổi — phạm vi ghi đã rộng hơn danh sách được chỉ định"
+    )
+    assert await _doc_role_bang_session_moi(admin_user_in_db["id"]) == "admin"
+
+    sau = await client.get(URL_STATUS_ALIAS, headers=admin_token_headers)
+    assert set(_map_mismatched_theo_id(sau.json())) == {id_chung_kien}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", CA_HAI_DUONG_SYNC)
+async def test_mang_rong_bi_tu_choi_va_KHONG_ghi_gi(
+    client: AsyncClient,
+    admin_token_headers: Dict[str, str],
+    regular_user_in_db: Dict[str, Any],
+    url: str,
+):
+    """`[]` là ca LAI: về hình thức là từ chối, chế độ hỏng lại là sync-ALL.
+
+    Nếu `min_length=1` bị gỡ, `[]` đi lọt và `if user_ids is not None:` ở
+    service sẽ gọi `get_by_ids([])` — no-op. Nhưng nếu ai đó ĐỒNG THỜI khôi
+    phục truthiness cũ (`if user_ids:`), `[]` lại thành "toàn bộ". Nên ngoài
+    422, ca này còn khẳng định user lệch VẪN LỆCH sau lời gọi.
+    """
+    id_a = regular_user_in_db["id"]
+    await _dat_role_trong_db(id_a, "officer")
+    assert await _doc_role_bang_session_moi(id_a) == "officer"
+
+    response = await client.post(
+        url, json={"user_ids": []}, headers=admin_token_headers
+    )
+    loi = _loi_422(response, f"POST {url} với mảng rỗng")
+    cap = [(e.get("type"), list(e.get("loc") or [])) for e in loi]
+    assert ("too_short", ["body", "user_ids"]) in cap, cap
+
+    assert await _doc_role_bang_session_moi(id_a) == "officer", (
+        "mảng rỗng bị từ chối NHƯNG server vẫn ghi — 422 trả về sau khi đã "
+        "thay đổi trạng thái là kiểu hỏng tệ nhất trong nhóm này"
     )
