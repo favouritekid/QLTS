@@ -49,7 +49,10 @@ export function TemplatesTab() {
       const result = await applyTemplateMutation.mutateAsync({
         template_id: selectedTemplate.id,
         role: targetRole.startsWith("role:") ? targetRole : `role:${targetRole}`,
-        validate: true,
+        // Tên trường backend là `run_validation` (schemas/permissions.py:137).
+        // Khoá `validate` cũ bị Pydantic bỏ qua không báo lỗi, nên ý định "có
+        // kiểm tra" ở đây chưa bao giờ tới được server.
+        run_validation: true,
       });
 
       toast.success(`Applied ${result.added} policies to ${targetRole}`);
