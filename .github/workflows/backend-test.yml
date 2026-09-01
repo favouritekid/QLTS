@@ -806,8 +806,8 @@ jobs:
       # required check nào.
       #
       # KHÔNG dùng `fetch-depth: 0` ở `actions/checkout`: bước checkout là bước
-      # CHUNG của cả sáu leg matrix, nên bật full history ở đó bắt sáu runner
-      # tải toàn bộ lịch sử và tags. Ở đây chỉ cần đúng một commit base.
+      # CHUNG của MỌI leg matrix, nên bật full history ở đó bắt từng runner của
+      # matrix tải toàn bộ lịch sử và tags. Ở đây chỉ cần đúng một commit base.
       #
       # `github.sha` trên sự kiện `pull_request` là commit MERGE tổng hợp — đúng
       # cây sẽ được áp lên base — nên phép so là `git diff BASE MERGE`, hai cây,

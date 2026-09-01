@@ -195,9 +195,9 @@ class TestNoiDayHieuLuc:
         assert "github.sha" in str(env["MERGE_SHA"])
 
     def test_khong_bat_fetch_depth_0_o_checkout_chung(self, wf):
-        # Bước checkout là bước CHUNG của cả sáu leg. Bật full history ở đó bắt
-        # sáu runner tải toàn bộ lịch sử + tags cho một phép so hai cây vốn chỉ
-        # cần thêm đúng một commit.
+        # Bước checkout là bước CHUNG của MỌI leg. Bật full history ở đó bắt
+        # từng runner matrix tải toàn bộ lịch sử + tags cho một phép so hai cây
+        # vốn chỉ cần thêm đúng một commit.
         for s in wf["jobs"]["pytest-shard"]["steps"]:
             if "actions/checkout" in str(s.get("uses", "")):
                 sau = (s.get("with") or {}).get("fetch-depth")
