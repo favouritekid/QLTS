@@ -21,6 +21,32 @@ Per memory ``reference_test_db_schema_source``, the test DB uses
 alembic from pytest — we execute the migration's SQL directly via
 ``MIGRATION_UPGRADE_SQL`` (kept in sync by hand). If the migration's
 SQL ever changes, update both files together.
+
+⚠️ RUN THIS FILE ON ITS OWN, SEQUENTIALLY
+-----------------------------------------
+Two reasons, both global side effects:
+
+1. ``_run_migration_upgrade`` executes ``UPDATE admission_path SET
+   allow_unverified_submission = FALSE`` with NO id predicate — it flips
+   EVERY row in the table, including paths another test seeded as legacy.
+2. ``test_migration_preserves_inflight_profile_snapshots`` runs
+   ``ALTER TABLE admission_profile DISABLE TRIGGER
+   enforce_applied_rules_immutability`` — a table-level DDL that suspends
+   the guard for every concurrent session until it is re-enabled.
+
+Neither is scoped to this test's own rows, so running this file in parallel
+with (or interleaved into) another admission suite can silently corrupt the
+other suite's fixtures. Give it its own pytest invocation, no ``-n``.
+
+Submit chain
+------------
+``_seed_path`` builds on ``tests/fixtures/builders.seed_submittable_offering_config``
+— the proven #337 recipe. Rolling its own chain (as this file used to) left
+out ``OfferingAdmissionConfig`` and ``MajorProgram.degree_level_id``, so
+``create_profile`` stored ``offering_admission_config_id = NULL``
+(app/services/admission_service.py:4854-4869) and ``submit`` fail-closed with
+``CONFIG_GAP_TARGET_LEVEL`` (app/services/admission_service.py:6424-6430)
+BEFORE the document rule under test ever ran.
 """
 from __future__ import annotations
 
@@ -54,78 +80,74 @@ async def _login(client: AsyncClient, username: str, password: str) -> dict:
     return {"Authorization": f"Bearer {r.cookies.get('access_token')}"}
 
 
-async def _seed_path(session, *, allow_unverified: bool, mpid: int, ts_suffix: str) -> dict:
-    """Seed a self-contained admission path with one mandatory document.
+ACADEMIC_YEAR = 2026
 
-    Returns the ids/codes the test needs to drive the API. Mirrors the
-    minimal scaffolding from ``test_admission_submit_requires_verified_docs``
-    so tests stay self-contained.
+
+async def _seed_path(session, *, allow_unverified: bool, unit_id: int) -> dict:
+    """Seed one SUBMITTABLE admission path with a single mandatory document.
+
+    Built on ``seed_submittable_offering_config`` (the #337 recipe) rather than
+    a hand-rolled chain, so the path carries everything ``submit_and_evaluate``
+    needs BEFORE the document rule:
+
+    * ``OfferingAdmissionConfig`` on (academic_info, criteria) — the row
+      ``create_profile`` looks up to fill ``offering_admission_config_id``
+      (app/services/admission_service.py:4854-4869). Missing ⇒ submit raises
+      ``CONFIG_GAP_TARGET_LEVEL`` (app/services/admission_service.py:6424-6430).
+    * ``MajorProgram.degree_level_id`` + ``ProgramOffering.offering_type_id`` —
+      what ``derive_target_level_and_type`` reads (app/services/priority_service.py:976,996).
+    * a ``VnSchool`` + ``VnSchoolKvAssignment`` so the THPT academic_history
+      entry resolves a KV instead of ``KV_UNRESOLVED``.
+
+    On top of that this helper adds ONLY the bits ADM-024 is about: the path
+    with the flag under test, plus one mandatory upload-required doc — so the
+    document rule is the sole remaining gate and a blocked submit can only mean
+    the doc rule blocked it.
+
+    The caller owns the transaction; must be paired with one
+    ``ensure_submittable_ward()`` before any profile is created.
     """
-    ot = models.ConfigOfferingType(code=f"tq_{ts_suffix}", name=f"TQ_{ts_suffix}", display_order=1)
-    session.add(ot)
-    await session.flush()
-    dt = models.ConfigDocumentType(code=f"tcc_{ts_suffix}", name=f"TCC_{ts_suffix}", display_order=1)
-    session.add(dt)
-    await session.flush()
-    po = models.ProgramOffering(
-        offering_type=f"TQ_{ts_suffix}",
-        program_id=mpid,
-        offering_type_id=ot.id,
-        is_active=True,
-        duration_semesters=6,
+    from tests.fixtures.builders import (
+        AdmissionRoundBuilder,
+        _next_id,
+        seed_submittable_offering_config,
     )
-    session.add(po)
-    await session.flush()
-    ai = models.OfferingAcademicInfo(
-        offering_id=po.id,
-        academic_year=2026,
-        tuition_fee_per_year=5000000,
-        annual_admission_quota=100,
-        is_published=True,
+
+    seed = await seed_submittable_offering_config(
+        session, unit_id=unit_id, academic_year=ACADEMIC_YEAR
     )
-    session.add(ai)
-    await session.flush()
-    am = models.AdmissionMethod(
-        code=f"hb_{ts_suffix}",
-        name=f"HB_{ts_suffix}",
-        requires_gpa=True,
-        requires_subject_scores=False,
-        is_active=True,
+    round_id = await AdmissionRoundBuilder.get_or_create_default_round(
+        session, academic_year=ACADEMIC_YEAR
     )
-    session.add(am)
-    await session.flush()
-    ac = models.AdmissionCriteria(
-        method_id=am.id,
-        code=f"TC_{ts_suffix}",
-        name=f"TC_{ts_suffix}",
-        min_gpa=0.0,
-        scoring_method="average",
-        subject_selection_mode="fixed",
-        policy_version="2026.1",
-        is_active=True,
-    )
-    session.add(ac)
-    await session.flush()
-    from tests.fixtures.builders import AdmissionRoundBuilder
-    round_id = await AdmissionRoundBuilder.get_or_create_default_round(session, academic_year=2026)
+
+    # Monotonic suffix (NOT a seconds/ms timestamp): the three paths of one
+    # fixture are seeded inside a single call, and `code` columns are UNIQUE.
+    sid = _next_id()
+
     ap = models.AdmissionPath(
-        academic_info_id=ai.id,
-        admission_method_id=am.id,
+        academic_info_id=seed["academic_info_id"],
+        admission_method_id=seed["method_id"],
         admission_round_id=round_id,
-        criteria_id=ac.id,
+        criteria_id=seed["criteria_id"],
         status="active",
-        display_name=f"ADM024 {ts_suffix}",
+        display_name=f"ADM024 {sid}",
         display_order=0,
         visibility="public",
         allow_unverified_submission=allow_unverified,
     )
     session.add(ap)
     await session.flush()
+
+    dt = models.ConfigDocumentType(
+        code=f"tcc_{sid}", name=f"TCC_{sid}", display_order=1
+    )
+    session.add(dt)
+    await session.flush()
     dg = models.DocumentGroup(
-        offering_type_id=ot.id,
-        admission_method_id=am.id,
-        code=f"dg_{ts_suffix}",
-        name=f"DG_{ts_suffix}",
+        offering_type_id=seed["offering_type_id"],
+        admission_method_id=seed["method_id"],
+        code=f"dg_{sid}",
+        name=f"DG_{sid}",
         is_active=True,
     )
     session.add(dg)
@@ -141,10 +163,16 @@ async def _seed_path(session, *, allow_unverified: bool, mpid: int, ts_suffix: s
     session.add(dgi)
     await session.flush()
     return {
-        "offering_id": po.id,
-        "method_id": am.id,
+        "offering_id": seed["offering_id"],
+        "method_id": seed["method_id"],
         "path_id": ap.id,
         "doc_code": dt.code,
+        # Round contract hardening (plan v4): POST /api/admissions now REQUIRES
+        # both (app/schemas/admission.py:470, :482).
+        "round_id": round_id,
+        "academic_year": ACADEMIC_YEAR,
+        # KV layer — the academic_history entry must point at THIS school.
+        "school_id": seed["school_id"],
     }
 
 
@@ -156,16 +184,25 @@ async def adm024_paths(seed_lead_dependencies: dict):
     - One path with allow_unverified_submission=FALSE (already strict)
 
     Lets us assert the migration only touches legacy rows.
+
+    Each path owns its own offering/academic_info/method/criteria chain, so the
+    3-col UNIQUE (admission_round_id, academic_info_id, admission_method_id) on
+    ``admission_path`` is satisfied even though all three share DOT_1/2026.
     """
-    mpid = seed_lead_dependencies["major_program_id"]
-    ts = f"{int(datetime.now().timestamp() * 1000)}"
+    from tests.fixtures.builders import ensure_submittable_ward
+
+    unit_id = seed_lead_dependencies["unit_id"]
+    # Gap #3 submit gate: one CURRENT-era ward backing
+    # ``SUBMITTABLE_PERMANENT_ADDRESS``. Own session — call before the
+    # transaction below so it is committed and visible to the API.
+    await ensure_submittable_ward()
     async with AsyncSessionLocal() as s:
         async with s.begin():
-            legacy_a = await _seed_path(s, allow_unverified=True, mpid=mpid, ts_suffix=f"a{ts}")
-            legacy_b = await _seed_path(s, allow_unverified=True, mpid=mpid, ts_suffix=f"b{ts}")
-            already_strict = await _seed_path(s, allow_unverified=False, mpid=mpid, ts_suffix=f"c{ts}")
+            legacy_a = await _seed_path(s, allow_unverified=True, unit_id=unit_id)
+            legacy_b = await _seed_path(s, allow_unverified=True, unit_id=unit_id)
+            already_strict = await _seed_path(s, allow_unverified=False, unit_id=unit_id)
     return {
-        "unit_id": seed_lead_dependencies["unit_id"],
+        "unit_id": unit_id,
         "legacy_a": legacy_a,
         "legacy_b": legacy_b,
         "already_strict": already_strict,
@@ -197,7 +234,15 @@ async def _create_draft(client, admin_token_headers, officer_user_in_db, cfg, *,
     )
     prof_resp = await client.post(
         ADMISSIONS,
-        json={"lead_id": lead["id"], "admission_method_id": cfg["path"]["method_id"]},
+        json={
+            "lead_id": lead["id"],
+            "admission_method_id": cfg["path"]["method_id"],
+            # Round contract hardening (plan v4, 2026-05-25): both fields are
+            # REQUIRED — app/schemas/admission.py:470 and :482. Omitting them
+            # 422s at the Pydantic boundary, before create_profile runs.
+            "admission_round_id": cfg["path"]["round_id"],
+            "academic_year": cfg["path"]["academic_year"],
+        },
         headers=admin_token_headers,
     )
     assert prof_resp.status_code in (200, 201), f"Create profile: {prof_resp.text}"
@@ -213,10 +258,26 @@ async def _officer_upload(client, oh, pid, doc_code):
     )
 
 
-async def _fill_personal(client, oh, pid):
+async def _fill_personal(client, oh, pid, *, school_id):
+    """Clear every NON-document submit gate so the outcome of ``/submit``
+    hinges purely on the document rule this file is about.
+
+    Beyond the personal columns the old version filled, this now supplies:
+      * ``**SUBMITTABLE_PERMANENT_ADDRESS`` — the Gap #3 gate wants
+        permanent_province/ward + a CURRENT-era ``permanent_commune_code``;
+      * ``cultural_education_level='graduated_thpt'`` + ``vocational_qualification``
+        — the eligibility check against the derived target level;
+      * an academic_history THPT row carrying ``school_id`` (+ level/grade_to)
+        so KV resolves via ``VnSchoolKvAssignment`` instead of ``KV_UNRESOLVED``.
+
+    The PUT is asserted: silently swallowing a 4xx here is exactly how a
+    "submit blocked" assertion goes green for the wrong reason.
+    """
+    from tests.fixtures.builders import SUBMITTABLE_PERMANENT_ADDRESS
+
     ts_cccd = f"{int(datetime.now().timestamp()) % 10**12:012d}"
     v = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()["version"]
-    await client.put(
+    r = await client.put(
         f"{ADMISSIONS}/{pid}",
         json={
             "version": v,
@@ -226,16 +287,29 @@ async def _fill_personal(client, oh, pid):
             "nationality": "Viet Nam",
             "ethnicity": "Kinh",
             "place_of_birth": "Test",
+            "cultural_education_level": "graduated_thpt",
+            "vocational_qualification": "none",
+            **SUBMITTABLE_PERMANENT_ADDRESS,
             "family_info": [
                 {"relationship": "Cha", "full_name": "P", "phone": "0901111111", "is_primary_guardian": True}
             ],
             "academic_history": [
-                {"school_name": "THPT", "year_from": 2019, "year_to": 2022, "gpa": 8.0, "graduation_type": "THPT"}
+                {
+                    "school_name": "THPT Submittable",
+                    "year_from": 2020,
+                    "year_to": 2024,
+                    "gpa": 8.0,
+                    "graduation_type": "THPT",
+                    "level": "THPT",
+                    "grade_to": 12,
+                    "school_id": school_id,
+                }
             ],
             "admission_scores": {"gpa": 8.0, "subject_scores": {}},
         },
         headers=oh,
     )
+    assert r.status_code == 200, f"_fill_personal PUT failed: {r.status_code} {r.text}"
 
 
 async def _run_migration_upgrade() -> int:
@@ -373,13 +447,21 @@ async def test_migration_preserves_inflight_profile_snapshots(
 
     # Legacy profile still submits with uploaded-only docs (grandfathered).
     oh = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])
-    await _fill_personal(client, oh, pid)
+    await _fill_personal(client, oh, pid, school_id=adm024_paths["legacy_a"]["school_id"])
     upload = await _officer_upload(client, oh, pid, adm024_paths["legacy_a"]["doc_code"])
     assert upload.status_code in (200, 201), upload.text
 
     v = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()["version"]
     resp = await client.post(f"{ADMISSIONS}/{pid}/submit", json={"version": v}, headers=oh)
+    # 200 alone is NOT success: /submit answers 200 + status='draft' +
+    # validation_errors when a gate blocks (see the strict test below). The
+    # grandfather claim is only proven by the resulting STATE.
     assert resp.status_code == 200, f"Legacy snapshot must still submit: {resp.text[:300]}"
+    body = resp.json()
+    assert body["status"] == "submitted", (
+        "Grandfathered legacy snapshot must actually transition to submitted, "
+        f"got status={body['status']} errors={body.get('validation_errors')}"
+    )
 
 
 @pytest.mark.asyncio
@@ -398,7 +480,7 @@ async def test_new_profile_post_migration_strict_with_verify_unblocks(
     pid = prof["id"]
 
     oh = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])
-    await _fill_personal(client, oh, pid)
+    await _fill_personal(client, oh, pid, school_id=adm024_paths["legacy_b"]["school_id"])
 
     # Snapshot must be schema_version=2 + allow=false (post-migration default).
     detail = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()
@@ -414,8 +496,20 @@ async def test_new_profile_post_migration_strict_with_verify_unblocks(
     v = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()["version"]
     blocked = await client.post(f"{ADMISSIONS}/{pid}/submit", json={"version": v}, headers=oh)
     assert blocked.status_code == 200, blocked.text
-    assert blocked.json()["status"] == "draft", (
-        f"Strict snapshot must block submit, got status={blocked.json()['status']}"
+    blocked_body = blocked.json()
+    assert blocked_body["status"] == "draft", (
+        f"Strict snapshot must block submit, got status={blocked_body['status']}"
+    )
+    # status='draft' alone does NOT prove the STRICT DOC RULE blocked it — any
+    # unmet gate (CONFIG_GAP, KV, missing address) parks the profile in draft
+    # too. Require the verify-document message so this case really touches the
+    # contract ADM-024 guards.
+    blocked_errors = blocked_body.get("validation_errors") or []
+    assert any(
+        "xác minh" in e.lower() or "verify" in e.lower() for e in blocked_errors
+    ), (
+        "Strict submit must be blocked by the document-verification rule, not "
+        f"by some other unmet gate. validation_errors={blocked_errors}"
     )
 
     # Bonus per Q15a chốt: marking the doc verified unblocks submit.
