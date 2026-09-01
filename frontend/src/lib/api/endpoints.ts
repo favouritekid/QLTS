@@ -72,15 +72,33 @@ export const API_ENDPOINTS = {
       EXPORT: "/api/admin/users/export",
       EXPORT_CSV_STREAM: "/api/admin/users/export/csv",
     },
+    // Đường THẬT của cụm này được ghép từ ba chỗ, không suy từ tên hằng:
+    //   app/routers/admin/roles.py:61      APIRouter(prefix="/roles")
+    //   app/routers/admin/__init__.py:54   APIRouter(prefix="/admin")
+    //   app/main.py:957                    include_router(admin_router, prefix="/api")
+    // ⇒ mọi endpoint role/policy đều nằm dưới `/api/admin/roles/...`.
+    // Ba hằng dưới đây từng trỏ ra ngoài cụm ấy (`/api/admin/assign-role`,
+    // `/api/admin/policy-templates`, `/api/admin/roles/policies/apply-template`).
+    // KHÔNG có router nào phục vụ chúng — đã grep toàn `app/` — nên mỗi lần UI
+    // gán/thu hồi vai trò hay mở tab template là một 404 câm.
+    // Cách chữa ĐÚNG là kéo frontend về đường thật, KHÔNG dựng lại alias cũ ở
+    // backend: alias là nguồn chuẩn thứ hai cho cùng một hành động, và nó che
+    // mất chính lỗi này ở lần sau.
     PERMISSIONS: {
       POLICIES: "/api/admin/roles/policies",
-      ASSIGN_ROLE: "/api/admin/assign-role",
-      REMOVE_ROLE: "/api/admin/assign-role", // DELETE method
+      // HAI hằng TÁCH RIÊNG, không dùng chung một chuỗi.
+      // Backend phục vụ hai đường KHÁC NHAU: `POST /roles/assign` (roles.py:358)
+      // và `DELETE /roles/revoke` (roles.py:394). Bản cũ để cả hai key trỏ cùng
+      // một chuỗi rồi phân biệt bằng HTTP method — nên khi backend tách đường
+      // thì không có chỗ nào sửa được đúng MỘT nửa, và `REMOVE_ROLE` thành hằng
+      // chết trong khi hook xoá vẫn dùng `ASSIGN_ROLE`.
+      ASSIGN_ROLE: "/api/admin/roles/assign", // POST   — roles.py:358
+      REVOKE_ROLE: "/api/admin/roles/revoke", // DELETE — roles.py:394
       ROLES: "/api/admin/roles",
-      TEMPLATES: "/api/admin/policy-templates",
+      TEMPLATES: "/api/admin/roles/templates", // GET  — roles.py:859
       BATCH: "/api/admin/roles/policies/batch",
       VALIDATE: "/api/admin/roles/policies/validate",
-      APPLY_TEMPLATE: "/api/admin/roles/policies/apply-template",
+      APPLY_TEMPLATE: "/api/admin/roles/templates/apply", // POST — roles.py:895
       STATISTICS: "/api/admin/roles/policies/statistics",
     },
     // Organization Management (Admin Only)
