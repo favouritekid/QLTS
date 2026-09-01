@@ -454,6 +454,8 @@ jobs:
               tests/services/test_mfa.py::TestMfaRateLimiting::test_mfa_attempts_tracked_in_redis
               tests/services/test_mfa.py::TestMixedAbuseScenarios::test_e2_cycling_login_mfa_fail_cumulative_lockout
               tests/services/test_mfa.py::TestMfaSetupEdgeCases::test_f4_regenerate_backup_codes_invalidates_old
+              tests/api/test_notification_delivery_idor.py
+              tests/services/test_organization_m12_scoping.py
 
           # ---------------------------------------------------------------
           # Tier 2b: Luồng XUẤT tệp (danh sách khoản phí + báo cáo công nợ)
@@ -519,6 +521,7 @@ jobs:
               tests/services/test_invoice_service.py::TestApplyPenaltyGuards::test_penalty_blocked_when_not_overdue
               tests/services/test_invoice_service.py::TestApplyPenaltyGuards::test_penalty_blocked_on_draft_invoice
               tests/integration/test_finance_workflow.py::TestAccountingPeriod::test_create_and_close_period
+              tests/repositories/test_profile_collection.py
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability
@@ -574,6 +577,7 @@ jobs:
               tests/unit/test_dispatcher_per_action.py
               tests/unit/test_channel_normalization.py
               tests/unit/test_zalo_phase1_review_findings.py
+              tests/test_router_fixes_e2e.py
 
           # ---------------------------------------------------------------
           # Tier 4: Admission + lead workflow contract
@@ -641,6 +645,9 @@ jobs:
               tests/api/test_bugfix_contract.py
               tests/api/test_admin_pipeline.py
               tests/services/test_pipeline.py
+              tests/api/test_adm_024_strict_default_migration.py
+              tests/integration/test_admission_audit.py
+              tests/services/test_data_sync_gap.py
 
           # ---------------------------------------------------------------
           # Tier 5: Phase 2 engine prereqs
