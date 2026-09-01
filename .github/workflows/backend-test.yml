@@ -645,7 +645,6 @@ jobs:
               tests/api/test_bugfix_contract.py
               tests/api/test_admin_pipeline.py
               tests/services/test_pipeline.py
-              tests/api/test_adm_024_strict_default_migration.py
               tests/integration/test_admission_audit.py
               tests/services/test_data_sync_gap.py
 
@@ -668,6 +667,28 @@ jobs:
           # priority_integration soi AST dam bao import LAZY (chong vong phu thuoc),
           # phase1_03_revision_chain soi rang buoc UNIQUE tren model. Deu doc AST /
           # metadata, khong dung DB.
+          # Tier 4i — leg CACH LY, mot minh mot service DB.
+          # `test_adm_024_strict_default_migration.py` KHONG duoc chay chung
+          # invocation voi tep khac. Docstring cua chinh no (dong 25) neu hai
+          # ly do, va ca hai deu o cap BANG chu khong cap hang:
+          #   - `UPDATE admission_path SET allow_unverified_submission = FALSE`
+          #     khong co vi tu id  ->  lat co cua MOI hang, ke ca hang cua test khac;
+          #   - `ALTER TABLE admission_profile DISABLE TRIGGER
+          #     enforce_applied_rules_immutability`  ->  DDL cap bang, dung chung moi
+          #     ket noi; tien trinh chet giua chung thi trigger bat bien O LAI trang
+          #     thai tat cho phan con lai cua luot chay.
+          #
+          # Mot luot do 11 ca xanh khi chay chung KHONG chung minh an toan: no chi
+          # noi ve dung thu tu ay, dung bo fixture ay, dung hom ay. Leg rieng bien
+          # dieu do thanh bat bien CAU TRUC thay vi mot quan sat.
+          #
+          # Moi leg matrix co service `postgres`/`redis` RIENG (khai o job
+          # `pytest-shard`), va buoc chay la mot `python -m pytest` duy nhat,
+          # khong xdist. Nen leg nay tu no da thoa: whole-file, mot invocation,
+          # DB rieng.
+          - tier: Tier 4i — isolated migration mutation
+            tests: >-
+              tests/api/test_adm_024_strict_default_migration.py
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py

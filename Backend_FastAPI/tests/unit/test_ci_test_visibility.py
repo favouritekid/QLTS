@@ -535,3 +535,72 @@ class TestSelectorTrungLapVaChongLan:
         )
         with pytest.raises(guard.LoiCong, match="vừa có whole-file vừa có nodeid"):
             guard.phan_tich_selector(wf)
+
+
+# =============================================================================
+# LEG CÁCH LY — tệp có DDL/UPDATE cấp BẢNG không được ở chung invocation
+# =============================================================================
+
+TEP_CACH_LY = "tests/api/test_adm_024_strict_default_migration.py"
+
+
+class TestLegCachLy:
+    """`adm_024` phải chiếm trọn một leg matrix, không chia với ai.
+
+    Hai thao tác của tệp ấy đều ở cấp BẢNG chứ không cấp hàng:
+      * ``UPDATE admission_path SET allow_unverified_submission = FALSE`` —
+        không có vị từ ``id``, nên nó lật cờ của MỌI hàng, kể cả hàng mà test
+        khác vừa seed;
+      * ``ALTER TABLE admission_profile DISABLE TRIGGER
+        enforce_applied_rules_immutability`` — DDL cấp bảng, hiệu lực với mọi
+        kết nối; tiến trình chết giữa chừng thì trigger bất biến Ở LẠI trạng
+        thái tắt cho phần còn lại của lượt chạy.
+
+    Một lượt đo "chạy chung vẫn xanh" KHÔNG thay thế được ca này: nó chỉ nói
+    về đúng thứ tự ấy, đúng bộ fixture ấy, đúng hôm ấy. Bất biến cấu trúc thì
+    còn đúng với mọi thứ tự và mọi fixture thêm vào sau.
+    """
+
+    def test_tep_cach_ly_nam_dung_mot_leg(self, cac_leg):
+        chua = [
+            str(leg.get("tier", ""))
+            for leg in cac_leg
+            if TEP_CACH_LY in str(leg.get("tests", "")).split()
+        ]
+        assert len(chua) == 1, (
+            "%s phải nằm trong ĐÚNG MỘT leg matrix, đang ở %d leg: %r. "
+            "0 leg nghĩa là không shard nào chạy nó mà required check vẫn xanh; "
+            ">1 leg nghĩa là nó chạy song song với chính nó trên hai DB."
+            % (TEP_CACH_LY, len(chua), chua)
+        )
+
+    def test_leg_chua_tep_cach_ly_khong_chia_voi_ai(self, cac_leg):
+        for leg in cac_leg:
+            sel = str(leg.get("tests", "")).split()
+            if TEP_CACH_LY not in sel:
+                continue
+            ban_cung_leg = [s for s in sel if s != TEP_CACH_LY]
+            assert ban_cung_leg == [], (
+                "leg %r chứa %s CÙNG VỚI %d selector khác: %r. "
+                "Tệp này tắt trigger và UPDATE toàn bảng — bạn cùng leg sẽ chạy "
+                "trên một CSDL đã bị nó sửa cấu trúc. Nếu thật sự muốn gộp thì "
+                "phải gỡ hai thao tác cấp bảng ấy trước, và sửa ca này trong "
+                "cùng một lần để việc gộp hiện ra trong diff."
+                % (str(leg.get("tier", "")), TEP_CACH_LY,
+                   len(ban_cung_leg), ban_cung_leg[:5])
+            )
+
+    def test_leg_cach_ly_khong_om_them_co_visibility_guard(self, cac_leg):
+        """Leg cách ly không được kiêm cổng độ nhìn thấy.
+
+        Cổng ấy đã có đúng một chỗ (ca `test_dung_mot_leg_bat_co_visibility_guard`
+        khoá số 1). Ca này chặn lối "tiện tay" gắn thêm vào leg mới, vì leg cách
+        ly là leg dễ đỏ nhất do hạ tầng — buộc cổng vào đó là tự tạo một điểm
+        chết chung.
+        """
+        for leg in cac_leg:
+            if TEP_CACH_LY in str(leg.get("tests", "")).split():
+                assert not leg.get("visibility_guard"), (
+                    "leg cách ly %r không được bật visibility_guard"
+                    % str(leg.get("tier", ""))
+                )
