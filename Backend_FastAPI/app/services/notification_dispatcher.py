@@ -1773,16 +1773,52 @@ async def _bulk_create_notifications(
         try:
             # Use repository for bulk insert
             cap_chunk = await repo.bulk_create(values)
-            # Fail-closed: mỗi người nhận phải có ĐÚNG một hàng trả về.
-            # Thiếu (RETURNING hụt hàng) hoặc trùng (cùng user_id hai lần)
-            # đều làm bản đồ mất phần tử một cách IM LẶNG — đúng loại hỏng
-            # mà bản vá này tồn tại để chặn. Ném ra để ``dispatch`` huỷ
-            # cả sự kiện thay vì ghi một bó nửa vời.
-            if len(cap_chunk) != len(chunk) or len({u for u, _ in cap_chunk}) != len(chunk):
+            # Fail-closed: tập người nhận trả về phải BẰNG CHÍNH XÁC tập
+            # người nhận đã gửi đi — so ĐỊNH DANH, không suy từ lực lượng.
+            #
+            # Bản trước chỉ đếm số hàng và số user duy nhất, nên
+            # ``chunk=[u1,u2]`` với kết quả ``[(u1,n1),(u3,n2)]`` LỌT: đúng
+            # hai hàng, đúng hai user duy nhất — mà u2 biến mất và u3 (ngoài
+            # tập) lọt vào bản đồ chủ quyền. Với một bất biến sở hữu thì
+            # lực lượng không thay được định danh.
+            #
+            # Ba vế, ba chế độ hỏng khác nhau:
+            #   1. sai SỐ LƯỢNG        — RETURNING hụt/thừa hàng
+            #   2. trả TRÙNG user_id   — cùng user_id hai lần
+            #   3. sai THÀNH VIÊN      — đủ số nhưng lệch tập
+            #
+            # Vế 1 và vế 2 CHỈ sống khi ``user_ids`` có phần tử trùng: nếu
+            # đầu vào đã duy nhất thì chúng bị vế 3 bao hàm. Chỗ gọi sản
+            # phẩm DUY NHẤT (``dispatch``) truyền ``sorted(set(...))`` nên
+            # hôm nay chỉ vế 3 gác một đường thật — hai vế kia là hợp đồng
+            # phòng thủ cho caller TƯƠNG LAI. Nói rõ để người đọc sau
+            # không tưởng cả ba đang canh cùng một thứ.
+            # Mỗi vế có một ca kiểm ngược RIÊNG (BT13); không vế nào thừa.
+            #
+            # KHÔNG kiểm ``notification_id`` duy nhất: ``Notification.id`` là
+            # khoá chính, nên id trùng không có chế độ hỏng khả dĩ — thêm
+            # vào chỉ là một dòng không phép kiểm nào canh được.
+            # Dùng `elif` để thông điệp nói ĐÚNG vế nào vỡ. Ba vế cùng một
+            # câu chữ thì `pytest.raises(match=…)` không phân biệt được, và
+            # tính cô lập của từng ca kiểm ngược chỉ còn là lập luận của
+            # người viết chứ không phải thứ ca test khẳng định.
+            _user_tra_ve = [u for u, _ in cap_chunk]
+            _tap_tra_ve = set(_user_tra_ve)
+            if len(cap_chunk) != len(chunk):
+                _ve_vo = "sai SỐ LƯỢNG"
+            elif len(_tap_tra_ve) != len(_user_tra_ve):
+                _ve_vo = "trả TRÙNG user_id"
+            elif _tap_tra_ve != set(chunk):
+                _ve_vo = "sai THÀNH VIÊN"
+            else:
+                _ve_vo = None
+            if _ve_vo is not None:
                 raise RuntimeError(
-                    "bulk_create trả %d cặp cho %d người nhận "
-                    "(user_id duy nhất: %d) — quan hệ chủ quyền không dựng được"
-                    % (len(cap_chunk), len(chunk), len({u for u, _ in cap_chunk}))
+                    "bulk_create %s: trả %d cặp / %d người nhận, %d user_id "
+                    "duy nhất; tập trả về %r, tập đã gửi %r — quan hệ chủ "
+                    "quyền không dựng được"
+                    % (_ve_vo, len(cap_chunk), len(chunk), len(_tap_tra_ve),
+                       sorted(_tap_tra_ve), sorted(set(chunk)))
                 )
             ket_qua.update(cap_chunk)
 

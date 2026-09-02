@@ -34,8 +34,9 @@ kể cả khi gỡ sạch guard. Thứ KHÔNG ràng buộc nào canh — và vì
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import delete, func, select, text
@@ -1328,3 +1329,81 @@ async def test_bt12_returning_hut_hang_phai_huy_ca_su_kien(
         assert await phien_moi.get(models.Lead, lead_id) is not None, (
             "Huỷ sự kiện đã cuộn vượt phạm vi và nuốt cả dữ liệu nghiệp vụ"
         )
+
+
+# =============================================================================
+# BT13 — hậu điều kiện phải so TẬP ĐỊNH DANH, không suy từ lực lượng
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "user_ids,tra_ve,ve_vo",
+    [
+        # ── hai ca đối chứng DƯƠNG: cổng KHÔNG được ném ──────────────
+        ([1, 2], [(1, 101), (2, 102)], None),
+        ([1, 2], [(2, 102), (1, 101)], None),
+        # ── ba ca ÂM: mỗi ca vi phạm ĐÚNG MỘT vế ─────────────────────
+        ([1, 1], [(1, 101)], "sai SỐ LƯỢNG"),
+        ([1, 1], [(1, 101), (1, 102)], "trả TRÙNG user_id"),
+        ([1, 2], [(1, 101), (3, 102)], "sai THÀNH VIÊN"),
+    ],
+    ids=[
+        "duong-dung-du-va-dung-tap",
+        "duong-DAO-THU-TU-van-hop-le",
+        "am-chi-vo-ve-SO-LUONG",
+        "am-chi-vo-ve-TRUNG-LAP",
+        "am-chi-vo-ve-THANH-VIEN",
+    ],
+)
+async def test_bt13_hau_dieu_kien_bulk_create_so_dung_tap_nguoi_nhan(
+    user_ids, tra_ve, ve_vo,
+):
+    """Tập `user_id` trả về phải BẰNG CHÍNH XÁC tập đã gửi đi.
+
+    Ca `du-so-nhung-SAI-THANH-VIEN` là ca quan trọng nhất và là ca mà bản
+    trước KHÔNG bắt được: `[(u1,n1),(u3,n2)]` cho `chunk=[u1,u2]` có đúng hai
+    hàng và đúng hai `user_id` duy nhất, nên mọi phép đếm đều thoả — trong khi
+    u2 biến mất và u3, một người NGOÀI tập, lọt vào bản đồ chủ quyền. Với bất
+    biến sở hữu thì lực lượng không thay được định danh.
+
+    Gọi THẲNG helper thay vì đi qua CSDL. Cố ý: một ca đầu-cuối không phân
+    biệt được "cổng đã ném" với "khối dọn hàng mồ côi tình cờ xoá sạch nên mọi
+    phép đếm về 0" — hai nguyên nhân khác hẳn nhau cho cùng một quan sát.
+
+    Bốn tham số nhắm ĐÚNG bốn nhánh, mỗi nhánh một vế của cổng (cộng một ca
+    đối chứng DƯƠNG chặn bản vá "ném bừa cho chắc"):
+
+        dung-du-va-dung-tap         -> không được ném, trả đúng bản đồ
+        thieu-hang                  -> vế SỐ LƯỢNG
+        du-so-nhung-SAI-THANH-VIEN  -> vế SO TẬP
+        dau-vao-trung-va-tra-trung  -> vế TRÙNG LẶP
+    """
+    repo_gia = MagicMock()
+    repo_gia.bulk_create = AsyncMock(return_value=tra_ve)
+
+    async def _chay():
+        return await nd._bulk_create_notifications(
+            db=MagicMock(), user_ids=user_ids,
+            title="t", message="m", notification_type="info",
+            link=None, data={}, strict=False,
+        )
+
+    with patch.object(nd, "NotificationRepository", return_value=repo_gia):
+        if ve_vo is None:
+            ket = await _chay()
+            assert ket == dict(tra_ve), (
+                "Ca đối chứng DƯƠNG: kết quả hợp lệ KHÔNG được ném, và bản đồ "
+                f"phải đúng cặp trả về; đo được {ket!r}"
+            )
+        else:
+            with pytest.raises(RuntimeError, match=re.escape(ve_vo)) as loi:
+                await _chay()
+            assert "quan hệ chủ quyền" in str(loi.value)
+
+    # Tiền đề: phải THỰC SỰ vào vòng lặp chunk. Thiếu phép này thì một thay
+    # đổi làm `user_ids` bị lọc rỗng sẽ khiến mọi ca âm hết ném, và pytest
+    # chỉ báo `DID NOT RAISE` — một thông điệp không chỉ ra nguyên nhân thật.
+    assert repo_gia.bulk_create.await_count == 1, (
+        "Tiền đề hỏng: helper không gọi `bulk_create` lần nào ⇒ ca test "
+        f"không đo gì (await_count={repo_gia.bulk_create.await_count})"
+    )
