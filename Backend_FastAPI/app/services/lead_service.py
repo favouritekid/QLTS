@@ -38,7 +38,7 @@ from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
 from ..repositories.collaborator_repository import CollaboratorRepository
 from .lead_profile_sync import sync_profile_from_lead, detect_changed_personal_fields, SYNCABLE_FIELDS
 from ..core.events import SystemEvents
-from .notification_dispatcher import dispatch
+from .notification_dispatcher import dispatch, log_dispatch_failure
 from .notification_payloads import EventPayload
 
 log = structlog.get_logger(__name__)
@@ -1354,7 +1354,7 @@ async def create_lead(
                     rooms=_lead_rooms,
                 )
         except Exception as e:
-            log.warning("Dispatch failed, business data preserved", lead_id=db_lead.id, error=str(e))
+            log_dispatch_failure(db, e, logger=log, lead_id=db_lead.id)
 
         # ✅ Dispatch LEAD_ASSIGNED notification in savepoint (if direct assignment)
         _lead_assigned_cb = None
@@ -1372,7 +1372,7 @@ async def create_lead(
                         rooms=_lead_rooms,
                     )
             except Exception as e:
-                log.warning("Dispatch failed, business data preserved", lead_id=db_lead.id, error=str(e))
+                log_dispatch_failure(db, e, logger=log, lead_id=db_lead.id)
 
         # ✅ Create post-commit callback with all post-commit actions
         async def _post_commit():

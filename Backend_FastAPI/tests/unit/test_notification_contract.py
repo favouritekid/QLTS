@@ -211,6 +211,15 @@ class TestDispatcherInvariants:
         db = AsyncMock()
         db.flush = AsyncMock()
         db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+        # ``dispatch`` mở savepoint cấp sự kiện quanh pha tạo Notification
+        # cha (`async with db.begin_nested()`). `AsyncMock()` gọi ra một
+        # coroutine chứ không phải async context manager, nên `db` giả phải
+        # được trang bị. `__aexit__` trả False để KHÔNG nuốt ngoại lệ —
+        # nuốt sẽ làm mọi ca trong tệp này xanh giả.
+        _sp = MagicMock()
+        _sp.__aenter__ = AsyncMock(return_value=_sp)
+        _sp.__aexit__ = AsyncMock(return_value=False)
+        db.begin_nested = MagicMock(return_value=_sp)
 
         # Track per-step delivery calls to verify dedup
         delivery_calls = []
@@ -227,7 +236,10 @@ class TestDispatcherInvariants:
              patch("app.services.notification_dispatcher.safe_redis_set", new=AsyncMock(return_value=True)), \
              patch("app.services.notification_dispatcher.safe_redis_incr", new=AsyncMock(return_value=1)), \
              patch("app.services.notification_dispatcher.safe_redis_expire", new=AsyncMock()), \
-             patch("app.services.notification_dispatcher._bulk_create_notifications", new=AsyncMock(return_value=[101, 102])), \
+             patch("app.services.notification_dispatcher._bulk_create_notifications",
+                   # Trả `{user_id: notification_id}` — quan hệ chủ quyền
+                   # nay đến từ `RETURNING user_id, id`, không từ vị trí.
+                   new=AsyncMock(return_value={10: 101, 20: 102})), \
              patch("app.services.notification_dispatcher._create_deliveries_for_action", track_deliveries), \
              patch("app.services.notification_dispatcher._resolve_action_templates", new=AsyncMock(return_value={})), \
              patch("app.services.notification_dispatcher._build_action_snapshot", return_value={}), \

@@ -553,6 +553,17 @@ jobs:
           # (bo kenh chinh tac), zalo_phase1_review_findings (dispatch duong xoa +
           # seed rule). Ca bon truoc nay NGOAI MOI TIER — nightly do 10 ca ma
           # required check van xanh. Ghi sau khi xanh tron; ca lat chay ~9 giay.
+          # 2026-09-02 — bốn tệp thêm ở cuối lát này trước nay KHÔNG có tên
+          # trong tier nào, tức không shard nào chạy chúng mà required check
+          # vẫn xanh. `test_rule_loader_db.py` là thứ DUY NHẤT gác đường đọc
+          # rule từ CSDL — đúng chỗ vừa đổi khi bỏ read-cache Redis, nên không
+          # ghi vào đây thì bản vá ấy không có cổng nào nhìn thấy.
+          # `test_registry_fallback_dispatch.py` + `test_lead_notification_flow.py`
+          # là hai nửa của bộ tái hiện tối thiểu đã tái hiện được sự cố FK.
+          # Cả bốn đã chạy xanh trọn TRƯỚC khi ghi vào đây (216 passed /
+          # 1 skipped trên bộ nghiệm thu notification), theo tiền lệ của lát này.
+          # Còn nợ: `tests/integration/test_notification_delivery_persistence.py`
+          # cũng chưa có tier — xanh nhưng chưa kéo vào, để một PR riêng.
           - tier: Tier 3 — Notification reliability
             coverage_script: true
             visibility_guard: true
@@ -564,6 +575,11 @@ jobs:
               tests/services/test_notification_bundle.py
               tests/services/test_admission_bundle_contract.py
               tests/integration/test_condition_dispatch.py
+              tests/integration/test_per_action_dispatch.py
+              tests/services/test_dispatch_stale_rule_cache.py
+              tests/integration/test_rule_loader_db.py
+              tests/integration/test_registry_fallback_dispatch.py
+              tests/integration/test_lead_notification_flow.py
               tests/unit/test_outbox_worker.py
               tests/unit/test_outbox_skeleton.py
               tests/unit/test_check_notification_event_coverage_deferred.py
@@ -572,6 +588,7 @@ jobs:
               tests/api/test_profile_api.py
               tests/unit/test_notification_e2.py
               tests/unit/test_dispatcher_per_action.py
+              tests/unit/test_notification_contract.py
               tests/unit/test_channel_normalization.py
               tests/unit/test_zalo_phase1_review_findings.py
 

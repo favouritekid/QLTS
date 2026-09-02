@@ -125,13 +125,45 @@ class NotificationDeliveryRepository(BaseRepository[NotificationDelivery]):
     async def bulk_create_deliveries(
         self, deliveries_data: List[Dict[str, Any]]
     ) -> List[int]:
-        """Bulk insert delivery records. Returns list of IDs."""
+        """Chèn hàng loạt delivery. Trả về danh sách ID.
+
+        HÀNG RÀO GIAO DỊCH (2026-09-02). Đây là tầng canonical: BỐN đường
+        ghi delivery đều đi qua đây — vòng lặp action của ``dispatch``,
+        nhánh fallback nội bộ, ``prepare_external_deliveries`` cho người
+        nhận ngoài, và ``dispatch_bundle``. Đặt hàng rào ở từng chỗ gọi
+        thì chắc chắn sót một, nên nó nằm ở đây.
+
+        ``begin_nested()`` làm hai việc, và việc thứ hai dễ bị bỏ sót:
+
+        1. Một INSERT hỏng chỉ cuộn về savepoint của CHÍNH NÓ. Trước đây
+           ``flush()`` hỏng cuộn về savepoint của NGƯỜI GỌI, xoá luôn hàng
+           ``notification`` cha vừa tạo và đầu độc phiên
+           (``PendingRollbackError`` ở thao tác kế tiếp).
+
+        2. ``add_all`` gắn các đối tượng vào phiên; nếu chúng còn treo ở
+           trạng thái pending sau khi hỏng thì lần ``flush()`` SAU sẽ thử lại,
+           mang theo ``notification_id`` trỏ vào hàng cha đã bị cuộn — đúng
+           ``notification_delivery_notification_id_fkey``, triệu chứng tầng
+           hai của sự cố gốc. Vì ``add_all`` nằm BÊN TRONG savepoint,
+           ``ROLLBACK TO SAVEPOINT`` của SQLAlchemy tự gỡ chúng ra
+           (``_restore_snapshot``), nên không cần ``expunge`` tay.
+
+           Đã đo, không suy: một đột biến gỡ vòng ``expunge`` mà giữ nguyên
+           savepoint KHÔNG làm đỏ ca nào trong 7 ca hồi quy — tức vòng ấy là
+           thừa. Đột biến gỡ chính ``begin_nested()`` thì làm đỏ ngay ca
+           sống-sót-phiên.
+
+        Ngoại lệ vẫn được NÉM RA: tầng này chỉ bảo đảm "lỗi của tôi không
+        làm hỏng giao dịch của bạn". Quyết định dừng hay đi tiếp là của
+        người gọi.
+        """
         if not deliveries_data:
             return []
 
         objects = [NotificationDelivery(**d) for d in deliveries_data]
-        self.db.add_all(objects)
-        await self.db.flush()
+        async with self.db.begin_nested():
+            self.db.add_all(objects)
+            await self.db.flush()
         return [obj.id for obj in objects]
 
     async def update_status(
