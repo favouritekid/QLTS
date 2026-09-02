@@ -397,15 +397,35 @@ class SyncUsersRequest(BaseModel):
     cấp trường), nhưng nó là cách duy nhất để ``loc`` trỏ tới ĐÚNG CHỈ SỐ phần
     tử hỏng thay vì chỉ tên trường — thứ quyết định thông điệp 422 có dùng
     được hay không.
+
+    ``strict=True`` đi kèm ``gt=0``, cũng ở cấp phần tử. Không có nó, Pydantic
+    v2 chạy chế độ lax và ÉP KIỂU trước khi kiểm ``> 0``. Đo qua JSON, đúng
+    đường HTTP đi::
+
+        [true]      -> [1]        bool thành user ID 1
+        ["7"]       -> [7]
+        [7.0]       -> [7]
+        [1, true]   -> [1, 1]     trùng lặp âm thầm
+
+    Một kiểu JSON sai vì thế trở thành ID HỢP LỆ trên một endpoint quản trị
+    GHI hàng loạt. Không còn mở rộng ra toàn bộ user như lỗi trước, nhưng là
+    mutation NHẦM ĐỐI TƯỢNG — và ``true -> 1`` luôn trỏ vào user có id nhỏ
+    nhất, thường là tài khoản quản trị đầu tiên.
+
+    Với ``strict=True``, cả bốn ca trên đều ``422 int_type`` kèm ``loc`` trỏ
+    đúng chỉ số. ``null`` KHÔNG bị ảnh hưởng: ``Optional`` nằm ngoài
+    ``Annotated``, nên ``{"user_ids": null}`` vẫn đi qua và vẫn nghĩa là
+    "đồng bộ toàn bộ" — đã đo, không suy.
     """
 
-    user_ids: Optional[List[Annotated[int, Field(gt=0)]]] = Field(
+    user_ids: Optional[List[Annotated[int, Field(gt=0, strict=True)]]] = Field(
         ...,
         min_length=1,
         description=(
             "Danh sách ID user cần đồng bộ. BẮT BUỘC có mặt. "
-            "`null` = đồng bộ toàn bộ; mảng phải không rỗng và mọi id > 0. "
-            "Mảng rỗng KHÔNG có nghĩa là toàn bộ — nó là 422."
+            "`null` = đồng bộ toàn bộ; mảng phải không rỗng, và mỗi phần tử "
+            "phải là JSON integer THẬT và > 0. `true`, `\"7\"`, `7.0` đều bị "
+            "từ chối — không ép kiểu. Mảng rỗng KHÔNG có nghĩa là toàn bộ."
         ),
     )
 

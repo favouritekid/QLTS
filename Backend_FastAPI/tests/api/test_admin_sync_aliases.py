@@ -581,6 +581,35 @@ MA_TRAN_TU_CHOI = [
      {"user_ids": [1, -5]}, "greater_than", ["body", "user_ids", 1]),
     ("khong-phai-list",
      {"user_ids": "khong-phai-mot-danh-sach"}, "list_type", ["body", "user_ids"]),
+
+    # ── KIỂU JSON của TỪNG PHẦN TỬ ──────────────────────────────────────────
+    # Ca `khong-phai-list` chỉ khoá kiểu của CONTAINER. Không có bốn ô dưới
+    # đây, một phần tử sai kiểu vẫn bị Pydantic ÉP thành ID hợp lệ. Đo qua
+    # JSON, đúng đường HTTP đi, trước khi có `strict=True`::
+    #
+    #     [true]     -> [1]      bool thành user ID 1
+    #     ["7"]      -> [7]
+    #     [7.0]      -> [7]
+    #     [1, true]  -> [1, 1]   trùng lặp âm thầm
+    #
+    # `true -> 1` là ca xấu nhất: nó luôn trỏ vào user có id nhỏ nhất, thường
+    # là tài khoản quản trị đầu tiên. Không còn mở rộng ra toàn bộ user như
+    # lỗi trước, nhưng là mutation NHẦM ĐỐI TƯỢNG.
+    ("bool-bi-ep-thanh-id",
+     {"user_ids": [True]}, "int_type", ["body", "user_ids", 0]),
+    ("chuoi-so-bi-ep",
+     {"user_ids": ["7"]}, "int_type", ["body", "user_ids", 0]),
+    ("float-tron-bi-ep",
+     {"user_ids": [7.0]}, "int_type", ["body", "user_ids", 0]),
+    # ⚑ Phần tử hỏng ở VỊ TRÍ THỨ HAI: chống bản vá chỉ kiểm phần tử đầu.
+    ("bool-o-vi-tri-thu-hai",
+     {"user_ids": [1, True]}, "int_type", ["body", "user_ids", 1]),
+    # ⚑ Ca THỨ TỰ CỔNG: chuỗi "-1" phải chết ở cổng KIỂU (`int_type`),
+    # KHÔNG phải ở cổng giá trị (`greater_than`). Nếu ai "sửa" bằng cách
+    # thêm validator giá trị thay vì siết kiểu, ca này đỏ — vì lúc ấy
+    # "-1" được ép thành -1 rồi mới bị `gt=0` bắt.
+    ("chuoi-am-phai-chet-o-cong-KIEU",
+     {"user_ids": ["-1"]}, "int_type", ["body", "user_ids", 0]),
 ]
 
 
@@ -761,4 +790,57 @@ async def test_mang_rong_bi_tu_choi_va_KHONG_ghi_gi(
     assert await _doc_role_bang_session_moi(id_a) == "officer", (
         "mảng rỗng bị từ chối NHƯNG server vẫn ghi — 422 trả về sau khi đã "
         "thay đổi trạng thái là kiểu hỏng tệ nhất trong nhóm này"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", CA_HAI_DUONG_SYNC)
+@pytest.mark.parametrize(
+    "nhan,bien_doi",
+    [("chuoi", lambda i: str(i)), ("float", lambda i: float(i))],
+    ids=["id-that-dang-chuoi", "id-that-dang-float"],
+)
+async def test_id_that_sai_kieu_bi_tu_choi_va_KHONG_ghi_gi(
+    client: AsyncClient,
+    admin_token_headers: Dict[str, str],
+    regular_user_in_db: Dict[str, Any],
+    test_user_in_db: Dict[str, Any],
+    url: str,
+    nhan: str,
+    bien_doi,
+):
+    """ID có THẬT nhưng sai kiểu JSON: 422, và CSDL không được đổi.
+
+    Khác các ô ma trận ở chỗ id ở đây TỒN TẠI. Nếu coercion còn sống, request
+    không chỉ 200 — nó GHI THẬT lên đúng user ấy. Nên ca này đo hai điều mà
+    một ô 422 thuần không đo được:
+
+      1. server từ chối TRƯỚC khi chạm CSDL (không phải "422 sau khi đã ghi");
+      2. user chứng kiến cũng không bị đụng, tức phạm vi không bị nới.
+    """
+    id_muc_tieu = regular_user_in_db["id"]
+    id_chung_kien = test_user_in_db["id"]
+
+    await _dat_role_trong_db(id_muc_tieu, "officer")
+    await _dat_role_trong_db(id_chung_kien, "officer")
+    assert await _doc_role_bang_session_moi(id_muc_tieu) == "officer"
+
+    response = await client.post(
+        url,
+        json={"user_ids": [bien_doi(id_muc_tieu)]},
+        headers=admin_token_headers,
+    )
+    loi = _loi_422(response, f"POST {url} với id thật dạng {nhan}")
+    cap = [(e.get("type"), list(e.get("loc") or [])) for e in loi]
+    assert ("int_type", ["body", "user_ids", 0]) in cap, (
+        f"id thật dạng {nhan} phải bị từ chối bằng `int_type` ở đúng chỉ số 0; "
+        f"các lỗi thực tế: {cap!r}"
+    )
+
+    assert await _doc_role_bang_session_moi(id_muc_tieu) == "officer", (
+        f"id dạng {nhan} bị ép thành int rồi GHI THẬT lên user {id_muc_tieu} — "
+        "coercion đã biến một kiểu JSON sai thành lệnh ghi hợp lệ"
+    )
+    assert await _doc_role_bang_session_moi(id_chung_kien) == "officer", (
+        "user chứng kiến bị đụng — phạm vi ghi rộng hơn cả danh sách sai kiểu"
     )
