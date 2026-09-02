@@ -634,3 +634,303 @@ async def test_bt3_hong_pha_notification_cha_khong_duoc_nuot_nghiep_vu(
     )
     assert await _dem(db, models.Notification) == 0
     assert await _dem(db, models.NotificationDelivery) == 0
+
+
+# =============================================================================
+# BT5 — pha tạo Notification cha phải all-or-nothing trên TOÀN BỘ chunk
+# =============================================================================
+
+
+async def test_bt5_hong_chunk_thu_hai_khong_duoc_de_lai_chunk_dau(
+    db: AsyncSession, clear_redis_keys, monkeypatch,
+    seeded_dependencies: dict, admin_user: models.User, officer_user: models.User,
+):
+    """Chunk 2 hỏng ⇒ chunk 1 KHÔNG được sống sót.
+
+    `_bulk_create_notifications` chèn theo lô `BULK_INSERT_CHUNK_SIZE = 100`.
+    Nếu ranh giới giao dịch đặt ở CẤP CHUNK thì nó cho một bảo đảm sai: chunk 1
+    release thành công, chunk 2 hỏng, ngoại lệ bay lên `dispatch`, `dispatch`
+    bắt rồi `return` NGAY — trước khối dọn hàng mồ côi — nên hàng của chunk 1
+    vẫn nằm trong giao dịch ngoài và được router commit.
+
+    Ép chunk nhỏ bằng cách sửa hằng số ở cấp module (`dispatch` đọc nó lúc
+    chạy), rẻ hơn nhiều so với seed 100+ user thật, và vẫn đi đúng đường mã.
+
+    Bất biến DUY NHẤT của ca này: pha cha là all-or-nothing. Dữ liệu nghiệp vụ
+    được `flush` mà CHƯA commit để phân biệt "rollback đúng phạm vi savepoint"
+    với "rollback nuốt cả giao dịch của người gọi".
+    """
+    _cam_tac_dung_phu(monkeypatch)
+    monkeypatch.setattr(nd, "BULK_INSERT_CHUNK_SIZE", 2)
+    ID_KHONG_TON_TAI = 9_999_993
+
+    rule = await _tao_rule(db, tieu_de=TIEU_DE_DB)
+    await invalidate_rule_cache(SU_KIEN.value)
+    assert rule.id is not None
+
+    lead = models.Lead(
+        full_name="Nghiệp vụ phải sống (chunk)", phone="0805000071", source="website",
+        unit_id=seeded_dependencies["unit_id"],
+        consultation_status_id=seeded_dependencies["initial_status_id"],
+        pipeline_stage_id=seeded_dependencies["stage_id"],
+    )
+    db.add(lead)
+    await db.flush()
+    lead_id = lead.id
+
+    # sorted() ⇒ hai ID thật vào chunk 1, ID không tồn tại rơi xuống chunk 2.
+    nguoi_nhan = sorted({admin_user.id, officer_user.id, ID_KHONG_TON_TAI})
+    assert nguoi_nhan[-1] == ID_KHONG_TON_TAI, "Tiền đề hỏng: ID giả không ở chunk cuối"
+
+    try:
+        ids, _ = await nd.dispatch(
+            db=db, event=SU_KIEN,
+            payload={
+                "user_ids": nguoi_nhan, "lead_id": lead_id,
+                "lead_name": "Kiểm thử", "actor_id": admin_user.id,
+            },
+            dedupe_key="bt5:chunk",
+            rooms=[f"user_room_{admin_user.id}"],
+            strict=False,
+        )
+        assert ids == [], "Pha cha hỏng mà dispatch vẫn trả ID notification"
+    except Exception:
+        pass
+
+    await db.commit()
+
+    con_lai = await _dem(db, models.Notification)
+    assert con_lai == 0, (
+        f"Ranh giới giao dịch đặt SAI CẤP: còn {con_lai} hàng notification của "
+        "chunk đầu được commit trong khi chunk sau đã hỏng. Pha tạo Notification "
+        "cha phải all-or-nothing trên TOÀN BỘ vòng lặp chunk."
+    )
+    assert await _dem(db, models.NotificationDelivery) == 0
+    async with AsyncSessionLocal() as phien_moi:
+        assert await phien_moi.get(models.Lead, lead_id) is not None, (
+            "Savepoint cấp sự kiện đã cuộn vượt phạm vi và nuốt cả dữ liệu nghiệp vụ"
+        )
+
+
+# =============================================================================
+# BT6 — không được ghi notification của người này vào inbox cache người kia
+# =============================================================================
+
+
+async def test_bt6_khong_ghi_notification_cua_nguoi_khac_vao_inbox_cache(
+    db: AsyncSession, clear_redis_keys, monkeypatch, test_redis_client,
+    admin_user: models.User, officer_user: models.User,
+):
+    """Hỏng MỘT PHẦN ⇒ cặp `user_id ↔ notification_id` vẫn phải đúng.
+
+    Dựng hai action CÙNG kênh `browser` với tập người nhận RỜI NHAU (dedup
+    chéo-action giữ nguyên cả hai vì không giao nhau):
+
+        step 1  `specific_users`  -> officer  (ID LỚN hơn)
+        step 2  `all_admins`      -> admin    (ID NHỎ hơn)
+
+    `inbox_user_ids` được `sorted()` nên thứ tự là [admin, officer] và
+    `notification_ids` là [n_admin, n_officer]. Hook xoá rule ngay trước lần
+    ghi delivery của step 2 ⇒ step 1 (officer) ghi được, step 2 (admin) hỏng ⇒
+    `n_admin` thành mồ côi và bị dọn.
+
+    Nếu bản vá thu gọn RIÊNG `notification_ids` rồi vẫn `zip()` với
+    `inbox_user_ids` nguyên vẹn thì cặp lệch một bậc: (admin, n_officer) —
+    và ID notification của officer bị đẩy vào `user_inbox:{admin}`.
+
+    Khẳng định là BẤT BIẾN chứ không phải ID cụ thể: mọi ID nằm trong
+    `user_inbox:{u}` phải thuộc về đúng `u`. Nhờ vậy ca không vỡ nếu resolver
+    `all_admins` trả thêm một admin khác.
+    """
+    _cam_tac_dung_phu(monkeypatch)
+
+    rule = models.NotificationRule(
+        event=SU_KIEN.value,
+        title_template=TIEU_DE_DB,
+        message_template="Nội dung kiểm thử lead $lead_id",
+        notification_type="info",
+        recipient_config={"resolver_type": "specific_users", "params": {}},
+        condition=None,
+        enabled=True,
+    )
+    db.add(rule)
+    await db.flush()
+    db.add(models.NotificationAction(
+        rule_id=rule.id, step=1, channel="browser",
+        content_mode="inherit_default",
+        recipient_config={"resolver_type": "specific_users", "params": {}},
+    ))
+    db.add(models.NotificationAction(
+        rule_id=rule.id, step=2, channel="browser",
+        content_mode="inherit_default",
+        recipient_config={"resolver_type": "all_admins", "params": {}},
+    ))
+    await db.commit()
+    await db.refresh(rule)
+    await invalidate_rule_cache(SU_KIEN.value)
+
+    assert admin_user.id < officer_user.id, (
+        "Tiền đề hỏng: ca này cần người sống sót nằm SAU trong thứ tự sắp xếp, "
+        "nếu không thì phép ghép lệch lại đúng một cách tình cờ"
+    )
+
+    # Tiêm lỗi ở ĐÚNG mối nối, không xoá rule: xoá rule ở phiên khác sẽ vấp
+    # khoá hàng do phiên chính đang giữ (đo được: `LockNotAvailableError` sau
+    # 5 giây), và nó làm HỎNG CẢ HAI action nên không còn cảnh hỏng-một-phần.
+    # Cơ chế gây lỗi không phải thứ ca này canh — cặp `user ↔ notification`
+    # mới là thứ được canh; nên tiêm sạch và tất định là đúng chỗ.
+    trang_thai = {"so_lan": 0, "da_hong_step2": False}
+    that = nd._create_deliveries_for_action
+
+    async def _bao_boc(**kwargs):
+        trang_thai["so_lan"] += 1
+        if kwargs["action"].step == 2:
+            trang_thai["da_hong_step2"] = True
+            raise RuntimeError("tiêm lỗi: delivery của step 2 hỏng")
+        return await that(**kwargs)
+
+    monkeypatch.setattr(nd, "_create_deliveries_for_action", _bao_boc)
+
+    try:
+        _, cb = await nd.dispatch(
+            db=db, event=SU_KIEN,
+            payload={
+                "user_ids": [officer_user.id], "lead_id": 606,
+                "lead_name": "Kiểm thử", "actor_id": admin_user.id,
+            },
+            dedupe_key="bt6:606",
+            rooms=[f"user_room_{officer_user.id}"],
+            strict=False,
+        )
+        await db.commit()
+        if cb:
+            await cb()
+    except Exception:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+
+    assert trang_thai["da_hong_step2"] is True, (
+        "Tiền đề hỏng: step 2 chưa từng được gọi ⇒ không có hỏng-một-phần"
+    )
+    con_lai = await _dem(db, models.Notification)
+    assert con_lai == 1, (
+        f"Tiền đề hỏng: mong đúng MỘT hàng notification sống sót, đo được "
+        f"{con_lai}. Không có hỏng-MỘT-PHẦN thì phép ghép không thể lệch và ca "
+        "này không chứng minh gì."
+    )
+
+    # BẤT BIẾN: mọi ID trong inbox cache của u phải là notification CỦA u.
+    vi_pham = []
+    for u in (admin_user.id, officer_user.id):
+        for raw in await test_redis_client.lrange(f"user_inbox:{u}", 0, -1):
+            n = await db.get(models.Notification, int(raw))
+            if n is not None and n.user_id != u:
+                vi_pham.append((u, int(raw), n.user_id))
+    assert not vi_pham, (
+        "Rò dữ liệu chéo người dùng: ID notification bị ghi vào inbox cache của "
+        f"người KHÁC — (cache_cua, notification_id, chu_so_huu_that) = {vi_pham!r}. "
+        "Nguyên nhân là ghép cặp theo VỊ TRÍ sau khi một danh sách đã bị thu gọn."
+    )
+
+
+# =============================================================================
+# BT7 — hàng rào cuối: hydrate inbox phải lọc theo chủ quyền
+# =============================================================================
+
+
+async def test_bt7_hydrate_inbox_khong_duoc_tin_redis_lam_bang_chu_quyen(
+    db: AsyncSession, clear_redis_keys, test_redis_client,
+    admin_user: models.User, officer_user: models.User,
+):
+    """Cache bị đầu độc ⇒ đường đọc vẫn KHÔNG được trả hàng của người khác.
+
+    Đây là hàng rào ĐỘC LẬP với bản vá ở đường ghi. Kể cả khi một ID lọt vào
+    `user_inbox:{u1}` — do lỗi ghép cặp, do sửa tay, do một khoá cũ còn sót —
+    thì `get_user_notifications` vẫn phải lọc theo `user_id`. Redis không được
+    là nguồn chứng minh chủ quyền.
+
+    Chú ý: nhánh cache MISS ngay bên dưới trong cùng hàm đã lọc đúng qua
+    `get_filtered(user_id=...)`. Lỗ hổng chỉ nằm ở nhánh cache HIT — nên ca này
+    BẮT BUỘC phải làm cho cache HIT.
+    """
+    from app.services import notification_service
+
+    cua_officer = models.Notification(
+        user_id=officer_user.id, type="info",
+        title="BÍ MẬT CỦA OFFICER", message="Không ai khác được đọc",
+        is_read=False,
+    )
+    db.add(cua_officer)
+    await db.commit()
+    await db.refresh(cua_officer)
+
+    # Đầu độc cache của admin bằng ID THẬT của officer.
+    await test_redis_client.lpush(f"user_inbox:{admin_user.id}", str(cua_officer.id))
+    assert await test_redis_client.lrange(f"user_inbox:{admin_user.id}", 0, -1), (
+        "Tiền đề hỏng: không seed được cache ⇒ ca sẽ đi nhánh MISS và không đo gì"
+    )
+
+    _, _, ket_qua = await notification_service.get_user_notifications(
+        db=db, user_id=admin_user.id, skip=0, limit=50, unread_only=False,
+    )
+
+    chu_so_huu = {n.user_id for n in ket_qua}
+    assert officer_user.id not in chu_so_huu, (
+        f"A01: admin (id={admin_user.id}) đọc được notification của officer "
+        f"(id={officer_user.id}) chỉ vì ID ấy nằm trong cache Redis của mình. "
+        "Đường hydrate phải ràng buộc `Notification.user_id`, không được tin cache."
+    )
+    assert cua_officer.id not in {n.id for n in ket_qua}
+
+
+# =============================================================================
+# BT8 — log helper chỉ được nói điều ĐO ĐƯỢC
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "con_song,muc_ky_vong,cum_tu_bat_buoc",
+    [
+        (True, "warning", "remains active"),
+        (False, "error", "requires rollback"),
+    ],
+    ids=["phien-con-active", "phien-can-rollback"],
+)
+async def test_bt8_log_dispatch_failure_khong_khang_dinh_dieu_chua_do(
+    con_song: bool, muc_ky_vong: str, cum_tu_bat_buoc: str,
+):
+    """`Session.is_active` KHÔNG chứng minh một hàng nghiệp vụ còn tồn tại.
+
+    Nó chỉ chứng minh giao dịch không ở trạng thái bắt buộc phải rollback. Câu
+    "business data preserved" vì thế là SUY LUẬN, không phải phép đo — dù nó
+    đúng trong phần lớn trường hợp. Helper chỉ được phát ngôn điều đo được, và
+    phải nói rõ rằng tính bền của dữ liệu nghiệp vụ KHÔNG được khẳng định.
+
+    Canh cả MỨC log lẫn NỘI DUNG, ở cả hai nhánh — một ca chỉ kiểm "helper có
+    được gọi không" sẽ xanh kể cả khi thông điệp quay lại nói sai.
+    """
+    phien = MagicMock()
+    phien.sync_session.is_active = con_song
+    ghi_log = MagicMock()
+
+    ket = nd.log_dispatch_failure(
+        phien, RuntimeError("boom"), logger=ghi_log, lead_id=123,
+    )
+    assert ket is con_song
+
+    goi = getattr(ghi_log, muc_ky_vong)
+    khong_goi = getattr(ghi_log, "error" if muc_ky_vong == "warning" else "warning")
+    assert goi.called, f"phải log ở mức `{muc_ky_vong}`"
+    assert not khong_goi.called, "không được log ở mức còn lại"
+
+    thong_diep = " ".join(str(a) for a in goi.call_args.args)
+    assert cum_tu_bat_buoc in thong_diep, (
+        f"thông điệp phải nêu trạng thái ĐO ĐƯỢC (`{cum_tu_bat_buoc}`); "
+        f"thực tế: {thong_diep!r}"
+    )
+    assert "preserved" not in thong_diep or "NOT asserted" in thong_diep, (
+        "không được khẳng định dữ liệu nghiệp vụ đã được bảo toàn — "
+        f"đó là suy luận, không phải phép đo. Thông điệp: {thong_diep!r}"
+    )

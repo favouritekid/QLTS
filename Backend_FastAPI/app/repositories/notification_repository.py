@@ -59,12 +59,37 @@ class NotificationRepository(BaseRepository[models.Notification]):
         """Count total notifications for a user."""
         return await self.count(self.model.user_id == user_id)
 
-    async def get_by_ids(self, notification_ids: List[int]) -> List[models.Notification]:
-        """Fetch notifications by a list of IDs."""
+    async def get_by_ids(
+        self,
+        notification_ids: List[int],
+        *,
+        owner_user_id: Optional[int],
+    ) -> List[models.Notification]:
+        """Lấy notification theo danh sách ID, có ràng buộc CHỦ QUYỀN.
+
+        ``owner_user_id`` KHÔNG có giá trị mặc định — đây là chủ ý. Trước
+        2026-09-02 hàm này chỉ lọc theo ``id``, và đường hydrate inbox
+        (``notification_service.get_user_notifications``, nhánh cache HIT)
+        lấy danh sách ID từ Redis rồi gọi thẳng vào đây. Nghĩa là Redis
+        trở thành nguồn chứng minh chủ quyền: một ID lọt vào
+        ``user_inbox:{u1}`` là u1 đọc được hàng của u2, dù endpoint đã
+        truyền đúng ``current_user.id`` (OWASP A01). Nhánh cache MISS ngay
+        bên dưới thì lại lọc đúng qua ``get_filtered(user_id=...)`` — tức
+        lỗ hổng chỉ nằm ở nhánh HIT.
+
+        Bắt buộc nêu tên tham số làm cho một caller mới KHÔNG THỂ quên nó:
+        quên là ``TypeError`` lúc gọi, không phải một lỗ hổng im lặng.
+        Truyền ``owner_user_id=None`` một cách TƯỜNG MINH khi và chỉ khi
+        các ID vừa do chính tiến trình ấy tạo ra trong cùng giao dịch.
+        """
         if not notification_ids:
             return []
-            
-        query = select(self.model).where(self.model.id.in_(notification_ids))
+
+        dieu_kien = [self.model.id.in_(notification_ids)]
+        if owner_user_id is not None:
+            dieu_kien.append(self.model.user_id == owner_user_id)
+
+        query = select(self.model).where(and_(*dieu_kien))
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
@@ -93,18 +118,22 @@ class NotificationRepository(BaseRepository[models.Notification]):
         if not values:
             return []
 
-        # HÀNG RÀO GIAO DỊCH (2026-09-02) — xem chú thích dài ở
-        # ``NotificationDeliveryRepository.bulk_create_deliveries``.
-        # Sequence Postgres KHÔNG cuộn ngược, nên một INSERT hỏng ngoài
-        # savepoint để lại ID đã cấp phát trong bộ nhớ Python trong khi
-        # hàng thật đã biến mất — đúng hình dạng ``notification_id`` mồ côi.
-        async with self.db.begin_nested():
-            result = await self.db.execute(
-                insert(self.model)
-                .values(values)
-                .returning(self.model.id)
-            )
-            return [row[0] for row in result.fetchall()]
+        # KHÔNG mở savepoint ở đây. Hàm này được gọi MỘT LẦN MỖI CHUNK
+        # (``BULK_INSERT_CHUNK_SIZE = 100``), nên savepoint cấp-chunk cho
+        # một bảo đảm SAI: chunk 1 release thành công rồi chunk 2 hỏng thì
+        # hàng của chunk 1 vẫn nằm trong giao dịch ngoài và được commit —
+        # đúng những hàng ``notification`` mồ côi mà bản vá muốn chặn.
+        #
+        # Ranh giới đúng là CẤP SỰ KIỆN, bao trọn cả vòng lặp chunk, và nó
+        # nằm ở ``notification_dispatcher.dispatch`` — tầng duy nhất biết
+        # ranh giới của một sự kiện. Đặt thêm một savepoint ở đây chỉ tạo
+        # một lớp không phép kiểm nào canh được.
+        result = await self.db.execute(
+            insert(self.model)
+            .values(values)
+            .returning(self.model.id)
+        )
+        return [row[0] for row in result.fetchall()]
 
     async def get_unread_for_user(self, user_id: int, notification_ids: Optional[List[int]] = None) -> List[models.Notification]:
         """

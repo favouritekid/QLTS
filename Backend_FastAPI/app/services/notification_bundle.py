@@ -24,11 +24,13 @@ commits the business mutation. The bundle just contributes ``None``
 to the post-commit callback chain.
 
 Each ``dispatch()`` call inside the bundle runs with ``strict=True``
-so that a persistence failure re-raises instead of calling the
-dispatcher's internal ``db.rollback()``. Without this, a bulk-insert
-error inside ``_bulk_create_notifications`` would issue a full
-rollback on the shared session and wipe the outer admission mutation
-as a side effect, contradicting the "outer txn stays alive" promise.
+so that a persistence failure RE-RAISES instead of being swallowed into
+``([], callback)``. Có nổi lên thì savepoint của bundle mới cuộn được cả
+cụm; ``strict=False`` sẽ nuốt lỗi và bundle mất tính nguyên tử.
+
+(Trước 2026-09-02 lý do khác: ``_bulk_create_notifications`` từng gọi
+``db.rollback()`` nội bộ, cuộn về GỐC và xoá cả admission mutation. Đường
+đó đã gỡ; lý do giữ ``strict=True`` nay là tính nguyên tử của bó.)
 
 This complements rather than replaces ``safe_dispatch()`` — that
 helper remains the right tool for genuinely fire-and-forget
@@ -224,11 +226,11 @@ async def dispatch_bundle(
         async with db.begin_nested():
             for intent in intents:
                 try:
-                    # strict=True: persistence failure re-raises instead of
-                    # triggering dispatch()'s internal db.rollback(). The
-                    # surrounding savepoint absorbs the rollback so the
-                    # outer business transaction (admission mutation)
-                    # survives per the bundle contract.
+                    # strict=True: lỗi ghi bền NỔI LÊN thay vì bị nuốt thành
+                    # ``([], callback)``. Savepoint bao ngoài hấp thụ cú cuộn
+                    # nên giao dịch nghiệp vụ (admission mutation) sống sót
+                    # đúng giao ước của bó. Dispatcher KHÔNG còn
+                    # ``db.rollback()`` nội bộ nào (gỡ 2026-09-02).
                     ids, child_cb = await dispatch(
                         db=db,
                         event=intent.event,

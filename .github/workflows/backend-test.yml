@@ -575,6 +575,7 @@ jobs:
               tests/services/test_notification_bundle.py
               tests/services/test_admission_bundle_contract.py
               tests/integration/test_condition_dispatch.py
+              tests/integration/test_per_action_dispatch.py
               tests/services/test_dispatch_stale_rule_cache.py
               tests/integration/test_rule_loader_db.py
               tests/integration/test_registry_fallback_dispatch.py
@@ -587,6 +588,7 @@ jobs:
               tests/api/test_profile_api.py
               tests/unit/test_notification_e2.py
               tests/unit/test_dispatcher_per_action.py
+              tests/unit/test_notification_contract.py
               tests/unit/test_channel_normalization.py
               tests/unit/test_zalo_phase1_review_findings.py
 

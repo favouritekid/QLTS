@@ -211,6 +211,15 @@ class TestDispatcherInvariants:
         db = AsyncMock()
         db.flush = AsyncMock()
         db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
+        # ``dispatch`` mở savepoint cấp sự kiện quanh pha tạo Notification
+        # cha (`async with db.begin_nested()`). `AsyncMock()` gọi ra một
+        # coroutine chứ không phải async context manager, nên `db` giả phải
+        # được trang bị. `__aexit__` trả False để KHÔNG nuốt ngoại lệ —
+        # nuốt sẽ làm mọi ca trong tệp này xanh giả.
+        _sp = MagicMock()
+        _sp.__aenter__ = AsyncMock(return_value=_sp)
+        _sp.__aexit__ = AsyncMock(return_value=False)
+        db.begin_nested = MagicMock(return_value=_sp)
 
         # Track per-step delivery calls to verify dedup
         delivery_calls = []
