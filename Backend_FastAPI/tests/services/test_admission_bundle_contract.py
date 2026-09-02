@@ -688,8 +688,11 @@ class TestBundleFailureBusinessSurvives:
           2. NÉM RA để `dispatch` huỷ cả sự kiện, thay vì đi tiếp với danh sách
              ID thiếu/lệch rồi `zip()` nhầm người nhận.
 
-        Sự sống sót của phiên nay do savepoint riêng trong
-        `NotificationRepository.bulk_create` bảo đảm, không do rollback.
+        Sự sống sót của phiên nay do savepoint CẤP SỰ KIỆN trong
+        `dispatch` bảo đảm, không do rollback — `bulk_create` KHÔNG còn mở
+        savepoint riêng (savepoint cấp-chunk cho một bảo đảm sai: chunk
+        trước release xong rồi chunk sau hỏng thì hàng chunk trước vẫn
+        được commit).
         Hành vi đầu-cuối được khoá bằng dữ liệu thật ở
         `tests/services/test_dispatch_stale_rule_cache.py`.
         """

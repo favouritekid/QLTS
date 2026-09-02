@@ -1108,7 +1108,7 @@ async def dispatch(
         notification_data["dedupe_key"] = action_dedupe_keys.get(browser_action.step) if browser_action else dedupe_key
 
     # Step 6: Bulk insert inbox Notification rows (for browser-eligible users only)
-    notification_ids = []
+    notification_id_map: Dict[int, int] = {}
     if inbox_user_ids:
         try:
             # Savepoint CẤP SỰ KIỆN, bao trọn CẢ vòng lặp chunk bên trong
@@ -1118,7 +1118,7 @@ async def dispatch(
             # dịch ngoài, và khối dọn hàng mồ côi phía dưới KHÔNG chạy tới
             # (đường ``except`` này ``return`` trước nó) ⇒ commit ra hàng mồ côi.
             async with db.begin_nested():
-                notification_ids = await _bulk_create_notifications(
+                notification_id_map = await _bulk_create_notifications(
                     db=db,
                     user_ids=inbox_user_ids,
                     title=title,
@@ -1152,6 +1152,10 @@ async def dispatch(
 
             return [], _abort_callback
 
+    # ``notification_ids`` chỉ còn là DẪN XUẤT của bản đồ có chủ quyền.
+    # Mọi quan hệ user ↔ notification phải đi qua ``notification_id_map``.
+    notification_ids = list(notification_id_map.values())
+
     # Phase C1: notification_ids can be empty (no browser recipients) while
     # other channels still have recipients. Only short-circuit if truly nothing.
     if not notification_ids and not any(channel_recipient_map.values()) and not has_external_actions:
@@ -1163,7 +1167,10 @@ async def dispatch(
             pass
         return [], _empty_callback
 
-    notification_id_map = dict(zip(inbox_user_ids, notification_ids)) if notification_ids else {}
+    # (Bản đồ đã được dựng từ ``RETURNING user_id, id`` ở trên — KHÔNG
+    # ``dict(zip(inbox_user_ids, notification_ids))``: thứ tự RETURNING của
+    # bulk insert không có bảo đảm hình thức, ghép theo vị trí sẽ gán
+    # notification của người này cho người kia.)
     _source_type, _source_id = _extract_source_from_payload(event, payload)
 
     # Phase E2: Pre-fetch templates for per-action rendering
@@ -1711,7 +1718,7 @@ async def _bulk_create_notifications(
     link: Optional[str],
     data: dict,
     strict: bool = False,
-) -> List[int]:
+) -> Dict[int, int]:
     """
     Bulk insert notifications for multiple users.
 
@@ -1734,9 +1741,12 @@ async def _bulk_create_notifications(
                 xoá luôn dữ liệu nghiệp vụ của caller.
 
     Returns:
-        List of created notification IDs
+        ``{user_id: notification_id}`` hợp nhất qua MỌI chunk. Quan hệ này
+        đến thẳng từ ``RETURNING user_id, id`` của từng lệnh INSERT, KHÔNG
+        từ vị trí trong danh sách — thứ tự RETURNING của bulk insert không
+        có bảo đảm hình thức.
     """
-    notification_ids = []
+    ket_qua: Dict[int, int] = {}
     now = datetime.now(timezone.utc)
 
     repo = NotificationRepository(db)
@@ -1762,13 +1772,24 @@ async def _bulk_create_notifications(
 
         try:
             # Use repository for bulk insert
-            chunk_ids = await repo.bulk_create(values)
-            notification_ids.extend(chunk_ids)
+            cap_chunk = await repo.bulk_create(values)
+            # Fail-closed: mỗi người nhận phải có ĐÚNG một hàng trả về.
+            # Thiếu (RETURNING hụt hàng) hoặc trùng (cùng user_id hai lần)
+            # đều làm bản đồ mất phần tử một cách IM LẶNG — đúng loại hỏng
+            # mà bản vá này tồn tại để chặn. Ném ra để ``dispatch`` huỷ
+            # cả sự kiện thay vì ghi một bó nửa vời.
+            if len(cap_chunk) != len(chunk) or len({u for u, _ in cap_chunk}) != len(chunk):
+                raise RuntimeError(
+                    "bulk_create trả %d cặp cho %d người nhận "
+                    "(user_id duy nhất: %d) — quan hệ chủ quyền không dựng được"
+                    % (len(cap_chunk), len(chunk), len({u for u, _ in cap_chunk}))
+                )
+            ket_qua.update(cap_chunk)
 
             log.debug(
                 "Bulk notification insert successful",
                 chunk_number=i // BULK_INSERT_CHUNK_SIZE + 1,
-                chunk_size=len(chunk_ids),
+                chunk_size=len(cap_chunk),
                 notification_type=notification_type
             )
 
@@ -1804,12 +1825,12 @@ async def _bulk_create_notifications(
 
     log.info(
         "Bulk notification creation completed",
-        total_created=len(notification_ids),
+        total_created=len(ket_qua),
         total_recipients=len(user_ids),
         notification_type=notification_type
     )
 
-    return notification_ids
+    return ket_qua
 
 
 async def _emit_notifications_immediate(
@@ -1961,12 +1982,22 @@ async def _prepend_to_inbox_cache(user_ids: List[int], notification_ids: List[in
     - Set TTL to 7 days
 
     Args:
-        user_ids: List of user IDs who received notifications
-        notification_ids: List of notification IDs that were created (in same order as user_ids)
+        user_ids: danh sách user nhận thông báo
+        notification_ids: ID tương ứng, ``notification_ids[i]`` thuộc về
+            ``user_ids[i]``
 
-    Note:
-        Bulk notifications create one notification per user in same order as user_ids list.
-        We prepend notification_ids[i] to cache for user_ids[i].
+    ⚠️ Hàm này ăn hai danh sách SONG SONG THEO VỊ TRÍ, nên nó chỉ đúng khi
+    người gọi đã có sẵn quan hệ chủ quyền và giải nén ra hai danh sách từ
+    CÙNG một nguồn. Chỗ gọi duy nhất làm đúng thế:
+    ``zip(*browser_notif_pairs)`` với ``browser_notif_pairs`` dựng từ
+    ``notification_id_map.items()``.
+
+    KHÔNG được truyền vào đây hai danh sách đến từ hai nguồn khác nhau —
+    ví dụ ``inbox_user_ids`` cạnh kết quả ``RETURNING`` của một bulk
+    INSERT. Thứ tự ``RETURNING`` không có bảo đảm hình thức, và ghép lệch
+    ở đây có nghĩa là đẩy ID thông báo của người này vào inbox người kia.
+    Phép kiểm độ dài bên dưới KHÔNG bắt được ca ấy: hai danh sách lệch
+    nội dung vẫn có thể bằng nhau về độ dài.
     """
     if len(user_ids) != len(notification_ids):
         log.warning(

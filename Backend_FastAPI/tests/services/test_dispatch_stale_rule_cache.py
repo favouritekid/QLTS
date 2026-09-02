@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import delete, func, select, text
@@ -246,20 +246,31 @@ def _hook_xoa_rule_truoc_khi_ghi_delivery(monkeypatch, rule_id: int) -> dict:
     return trang_thai
 
 
-def _cam_tac_dung_phu(monkeypatch) -> dict:
-    """Chặn mọi tác dụng phụ ngoài CSDL và GHI LẠI thứ callback định làm."""
-    ghi = {"ids_enqueue": [], "domain_emit": 0}
+def _cam_tac_dung_phu(monkeypatch, *, ket_qua_kenh=None) -> dict:
+    """Chặn mọi tác dụng phụ ngoài CSDL và GHI LẠI thứ callback định làm.
+
+    `ket_qua_kenh` cho phép một ca ép kết quả gửi kênh (ai `sent`, ai `failed`)
+    một cách tất định. Mặc định giữ nguyên hành vi cũ nên các ca sẵn có không
+    đổi. `send_channel`/`recipient_ids` là hai mốc ĐO ĐƯỢC chứng minh callback
+    đã chạy tới bước 8a — không có chúng thì "cache rỗng" và "callback không
+    chạy" trông giống hệt nhau.
+    """
+    ghi = {"ids_enqueue": [], "domain_emit": 0,
+           "send_channel": 0, "recipient_ids": None}
 
     async def _emit(*a, **k):
         ghi["domain_emit"] += 1
 
+    async def _gui(**kwargs):
+        ghi["send_channel"] += 1
+        # ĐO thứ tự thật của `browser_recipients` — ca BT11 cần nó để chứng
+        # minh hai thứ tự KHÁC nhau, thay vì chỉ giả định.
+        ghi["recipient_ids"] = list(kwargs.get("recipient_ids") or [])
+        return ("browser", ket_qua_kenh if ket_qua_kenh is not None else
+                MagicMock(sent_count=1, failed_ids=[], error_message=""), None)
+
     monkeypatch.setattr(nd, "_emit_domain_event", _emit)
-    monkeypatch.setattr(
-        nd, "_send_via_channel",
-        AsyncMock(
-            return_value=("browser", MagicMock(sent_count=1, failed_ids=[]), None)
-        ),
-    )
+    monkeypatch.setattr(nd, "_send_via_channel", _gui)
 
     from app.tasks import delivery_tasks
 
@@ -791,25 +802,22 @@ async def test_bt6_khong_ghi_notification_cua_nguoi_khac_vao_inbox_cache(
 
     monkeypatch.setattr(nd, "_create_deliveries_for_action", _bao_boc)
 
-    try:
-        _, cb = await nd.dispatch(
-            db=db, event=SU_KIEN,
-            payload={
-                "user_ids": [officer_user.id], "lead_id": 606,
-                "lead_name": "Kiểm thử", "actor_id": admin_user.id,
-            },
-            dedupe_key="bt6:606",
-            rooms=[f"user_room_{officer_user.id}"],
-            strict=False,
-        )
-        await db.commit()
-        if cb:
-            await cb()
-    except Exception:
-        try:
-            await db.rollback()
-        except Exception:
-            pass
+    # KHÔNG bọc try/except: nuốt ngoại lệ ở đây làm ca xanh giả khi callback
+    # không chạy hoặc khi bước nạp cache bị gỡ hẳn. Nếu `dispatch` ném thì ca
+    # PHẢI đỏ — đó là thông tin, không phải nhiễu.
+    ids, cb = await nd.dispatch(
+        db=db, event=SU_KIEN,
+        payload={
+            "user_ids": [officer_user.id], "lead_id": 606,
+            "lead_name": "Kiểm thử", "actor_id": admin_user.id,
+        },
+        dedupe_key="bt6:606",
+        rooms=[f"user_room_{officer_user.id}"],
+        strict=False,
+    )
+    await db.commit()
+    assert cb is not None, "dispatch phải trả callback post-commit"
+    await cb()
 
     assert trang_thai["da_hong_step2"] is True, (
         "Tiền đề hỏng: step 2 chưa từng được gọi ⇒ không có hỏng-một-phần"
@@ -832,6 +840,23 @@ async def test_bt6_khong_ghi_notification_cua_nguoi_khac_vao_inbox_cache(
         "Rò dữ liệu chéo người dùng: ID notification bị ghi vào inbox cache của "
         f"người KHÁC — (cache_cua, notification_id, chu_so_huu_that) = {vi_pham!r}. "
         "Nguyên nhân là ghép cặp theo VỊ TRÍ sau khi một danh sách đã bị thu gọn."
+    )
+
+    # KHẲNG ĐỊNH DƯƠNG — bắt buộc, nếu không thì gỡ HẲN bước nạp cache cũng
+    # làm ca này xanh (không có cache thì không có cache sai).
+    n_song = (
+        await db.execute(select(models.Notification))
+    ).scalars().all()
+    assert len(n_song) == 1
+    chu = n_song[0].user_id
+    cache_chu = await test_redis_client.lrange(f"user_inbox:{chu}", 0, -1)
+    assert str(n_song[0].id) in cache_chu, (
+        f"Notification sống sót (id={n_song[0].id}, của user {chu}) KHÔNG vào "
+        f"cache inbox của chính chủ. Cache đọc được: {cache_chu!r}. Một bản vá "
+        "chỉ 'không ghi sai' mà cũng không ghi đúng thì đã phá tính năng."
+    )
+    assert ids == [n_song[0].id], (
+        f"dispatch phải trả đúng ID còn sống, đo được {ids!r}"
     )
 
 
@@ -934,3 +959,372 @@ async def test_bt8_log_dispatch_failure_khong_khang_dinh_dieu_chua_do(
         "không được khẳng định dữ liệu nghiệp vụ đã được bảo toàn — "
         f"đó là suy luận, không phải phép đo. Thông điệp: {thong_diep!r}"
     )
+
+
+# =============================================================================
+# BT9/BT10/BT11 — quan hệ chủ quyền KHÔNG được dựng từ thứ tự danh sách
+# =============================================================================
+
+
+class _KetQuaDaoHang:
+    """Bọc kết quả THẬT, chỉ đảo thứ tự các HÀNG mà `fetchall()` trả về.
+
+    Không giả lập CSDL: lệnh INSERT đã chạy thật, FK thật, id thật. Vật này
+    mô phỏng đúng MỘT điều — CSDL trả các hàng `RETURNING` theo thứ tự khác
+    thứ tự trong `VALUES`. Chuẩn SQL không hứa thứ tự ấy.
+    """
+
+    def __init__(self, hang):
+        self._hang = list(hang)
+
+    def fetchall(self):
+        return list(self._hang)
+
+    def __getattr__(self, ten):
+        # fail-LOUD: nếu mã sản phẩm đổi cách tiêu thụ kết quả, ta muốn biết
+        # ngay chứ không muốn một ca test âm thầm ngừng đo.
+        raise AssertionError(
+            f"`bulk_create` gọi `result.{ten}` — vật bọc này chỉ hiểu "
+            "`fetchall()`. Cập nhật vật bọc, ĐỪNG bỏ ca test."
+        )
+
+
+def _hook_dao_thu_tu_returning(monkeypatch, db) -> dict:
+    """Đảo thứ tự HÀNG `RETURNING` của lệnh INSERT vào bảng `notification`.
+
+    Đặt ở `db.execute` chứ KHÔNG bọc `NotificationRepository.bulk_create`.
+    Đây là khác biệt quyết định: sau bản vá, CHÍNH `bulk_create` là nơi ràng
+    buộc `user_id` với `id`. Bọc bên NGOÀI nó là đảo những cặp ĐÃ tự mô tả —
+    vô hại theo định nghĩa — nên một đột biến bên TRONG (`RETURNING id` rồi
+    `zip` với `[v["user_id"] for v in values]`, vẫn giữ nguyên kiểu trả về và
+    vẫn qua cổng fail-closed độ dài) sẽ KHÔNG bị bắt. Ở tầng này thì bị.
+    """
+    from sqlalchemy.sql.dml import Insert
+
+    that = db.execute
+    trang_thai = {"so_lan_dao": 0, "so_hang_dao": 0}
+
+    async def _bao_boc(statement, *a, **k):
+        ket = await that(statement, *a, **k)
+        bang = getattr(statement, "table", None)
+        if not isinstance(statement, Insert) or bang is None:
+            return ket
+        if bang.name != models.Notification.__tablename__:
+            return ket
+        hang = list(ket.fetchall())
+        if len(hang) < 2:
+            # Đảo một danh sách < 2 phần tử là phép đồng nhất — KHÔNG đếm, để
+            # phép kiểm tiền đề bắt được ca vô nghĩa.
+            return _KetQuaDaoHang(hang)
+        trang_thai["so_lan_dao"] += 1
+        trang_thai["so_hang_dao"] = len(hang)
+        return _KetQuaDaoHang(reversed(hang))
+
+    monkeypatch.setattr(db, "execute", _bao_boc)
+    return trang_thai
+
+
+async def _cap_delivery_notification(db: AsyncSession):
+    """Trả `[(delivery.user_id, notification.user_id, delivery.id), ...]`."""
+    rows = (await db.execute(text(
+        "SELECT d.user_id, n.user_id, d.id "
+        "FROM notification_delivery d "
+        "JOIN notification n ON n.id = d.notification_id"
+    ))).fetchall()
+    return [(r[0], r[1], r[2]) for r in rows]
+
+
+async def test_bt9_thu_tu_returning_dao_van_phai_ghep_dung_chu(
+    db: AsyncSession, clear_redis_keys, monkeypatch,
+    admin_user: models.User, officer_user: models.User,
+):
+    """`RETURNING` trả ngược thứ tự ⇒ quan hệ chủ quyền vẫn phải đúng.
+
+    Bất biến DUY NHẤT: với MỌI hàng `notification_delivery` có
+    `notification_id`, phải có `delivery.user_id == notification.user_id`.
+
+    Không có bảo đảm hình thức nào rằng `INSERT ... VALUES (…),(…) RETURNING`
+    trả về theo thứ tự đầu vào. Ca này ép đúng cảnh ấy thay vì chờ CSDL tình
+    cờ đảo.
+    """
+    _cam_tac_dung_phu(monkeypatch)
+
+    await _tao_rule(db, tieu_de=TIEU_DE_DB)
+    await invalidate_rule_cache(SU_KIEN.value)
+
+    nguoi_nhan = sorted({admin_user.id, officer_user.id})
+    assert len(nguoi_nhan) == 2, "Tiền đề hỏng: cần ĐÚNG hai người nhận khác nhau"
+
+    # Đặt hook SAU khi đã dựng xong rule: nó chặn `db.execute`, và ta chỉ muốn
+    # nó chạm đúng lệnh INSERT vào `notification` của lượt dispatch.
+    hook = _hook_dao_thu_tu_returning(monkeypatch, db)
+
+    _, cb = await nd.dispatch(
+        db=db, event=SU_KIEN,
+        payload={
+            "user_ids": nguoi_nhan, "lead_id": 909,
+            "lead_name": "Kiểm thử", "actor_id": admin_user.id,
+        },
+        dedupe_key="bt9:909",
+        rooms=[f"user_room_{nguoi_nhan[0]}"],
+        strict=False,
+    )
+    await db.commit()
+    assert cb is not None
+    await cb()
+
+    assert hook["so_lan_dao"] == 1, (
+        "Tiền đề hỏng: không lần INSERT nào vào `notification` bị đảo ⇒ ca này "
+        f"không đo gì (so_lan_dao={hook['so_lan_dao']})"
+    )
+    assert hook["so_hang_dao"] == 2, (
+        f"Tiền đề hỏng: đảo {hook['so_hang_dao']} hàng là phép đồng nhất"
+    )
+
+    cap = await _cap_delivery_notification(db)
+    assert len(cap) == 2, f"Tiền đề hỏng: mong 2 delivery có cha, đo được {len(cap)}"
+    lech = [(du, nu, did) for du, nu, did in cap if du != nu]
+    assert not lech, (
+        "Quan hệ chủ quyền bị ghép lệch: (delivery.user_id, notification.user_id, "
+        f"delivery.id) = {lech!r}. Bản đồ user↔notification đang dựa vào THỨ TỰ "
+        "của `RETURNING`, thứ không có bảo đảm hình thức nào."
+    )
+
+
+async def test_bt10_cache_inbox_dung_chu_va_du_nguoi(
+    db: AsyncSession, clear_redis_keys, monkeypatch, test_redis_client,
+    admin_user: models.User, officer_user: models.User,
+):
+    """Cache inbox: đúng chủ VÀ đủ người — hai vế của cùng một bất biến.
+
+    Khẳng định PHỦ ĐỊNH ("không có ID sai chủ") một mình là chưa đủ: gỡ hẳn
+    bước nạp cache cũng thoả nó. Nên ca này khẳng định luôn chiều DƯƠNG —
+    mỗi người nhận hợp lệ phải có ĐÚNG notification của mình trong cache.
+    """
+    ghi = _cam_tac_dung_phu(monkeypatch)
+
+    await _tao_rule(db, tieu_de=TIEU_DE_DB)
+    await invalidate_rule_cache(SU_KIEN.value)
+
+    nguoi_nhan = sorted({admin_user.id, officer_user.id})
+    _hook_dao_thu_tu_returning(monkeypatch, db)
+
+    _, cb = await nd.dispatch(
+        db=db, event=SU_KIEN,
+        payload={
+            "user_ids": nguoi_nhan, "lead_id": 910,
+            "lead_name": "Kiểm thử", "actor_id": admin_user.id,
+        },
+        dedupe_key="bt10:910",
+        rooms=[f"user_room_{nguoi_nhan[0]}"],
+        strict=False,
+    )
+    await db.commit()
+    assert cb is not None
+    await cb()
+
+    # Callback đã chạy QUA bước nạp cache: bước 7.5 nằm GIỮA hai mốc này.
+    # Không có hai mốc ấy thì "cache rỗng" và "callback không chạy" trông
+    # giống hệt nhau — `_prepend_to_inbox_cache` nuốt mọi lỗi của chính nó.
+    assert ghi["domain_emit"] == 1, "callback chưa tới bước phát domain event"
+    assert ghi["send_channel"] == 1, "callback thoát sớm, chưa tới bước 8a"
+
+    async with AsyncSessionLocal() as phien_moi:
+        cua_ai = dict((await phien_moi.execute(text(
+            "SELECT user_id, id FROM notification"
+        ))).fetchall())
+    assert set(cua_ai) == set(nguoi_nhan), (
+        f"Tiền đề hỏng: mong notification cho {nguoi_nhan}, đo được {sorted(cua_ai)}"
+    )
+
+    for u in nguoi_nhan:
+        cache = await test_redis_client.lrange(f"user_inbox:{u}", 0, -1)
+        # chiều DƯƠNG
+        assert str(cua_ai[u]) in cache, (
+            f"user {u} KHÔNG có notification của mình (id={cua_ai[u]}) trong "
+            f"cache inbox. Cache đọc được: {cache!r}"
+        )
+        # chiều PHỦ ĐỊNH
+        la = [x for x in cache if int(x) != cua_ai[u]]
+        assert not la, (
+            f"cache inbox của user {u} chứa ID KHÔNG thuộc về mình: {la!r}"
+        )
+
+
+async def test_bt11_trang_thai_delivery_phai_bam_dung_nguoi(
+    db: AsyncSession, clear_redis_keys, monkeypatch,
+    admin_user: models.User, officer_user: models.User,
+):
+    """`sent`/`failed` phải rơi vào delivery của ĐÚNG người.
+
+    Dựng hai action cùng kênh `browser` với người nhận RỜI NHAU và THỨ TỰ
+    NGƯỢC nhau, để `browser_recipients` (đã `sorted()`) khác thứ tự
+    `browser_del_ids` (nối theo thứ tự action):
+
+        step 1  `specific_users`  -> officer  (id LỚN)   => delivery đầu tiên
+        step 2  `all_admins`      -> admin    (id NHỎ)   => delivery thứ hai
+
+    ⇒ recipients = [admin, officer] nhưng del_ids = [d_officer, d_admin].
+    Ghép theo vị trí sẽ đánh `failed` của admin lên delivery của officer.
+
+    Đọc lại bằng PHIÊN MỚI vì trạng thái được ghi ở một session riêng.
+    """
+    assert admin_user.id < officer_user.id, (
+        "Tiền đề hỏng: ca này cần admin có id NHỎ hơn officer, nếu không hai "
+        "thứ tự trùng nhau và phép ghép lệch không lộ ra"
+    )
+    # Một người THẤT BẠI, một người THÀNH CÔNG — tất định. `error_message`
+    # phải là chuỗi THẬT: nó rơi thẳng vào cột Text `error_reason`, và cả khối
+    # bước 8a nằm trong `except Exception` nên một MagicMock ở đó sẽ bị nuốt
+    # im lặng, để cả hai hàng ở `queued` và ca test xanh vì lý do sai.
+    ghi = _cam_tac_dung_phu(monkeypatch, ket_qua_kenh=MagicMock(
+        sent_count=1,
+        failed_ids=[admin_user.id],
+        error_message="tiêm lỗi kênh",
+    ))
+
+    rule = models.NotificationRule(
+        event=SU_KIEN.value,
+        title_template=TIEU_DE_DB,
+        message_template="Nội dung kiểm thử lead $lead_id",
+        notification_type="info",
+        recipient_config={"resolver_type": "specific_users", "params": {}},
+        condition=None,
+        enabled=True,
+    )
+    db.add(rule)
+    await db.flush()
+    db.add(models.NotificationAction(
+        rule_id=rule.id, step=1, channel="browser",
+        content_mode="inherit_default",
+        recipient_config={"resolver_type": "specific_users", "params": {}},
+    ))
+    db.add(models.NotificationAction(
+        rule_id=rule.id, step=2, channel="browser",
+        content_mode="inherit_default",
+        recipient_config={"resolver_type": "all_admins", "params": {}},
+    ))
+    await db.commit()
+    await invalidate_rule_cache(SU_KIEN.value)
+
+    _, cb = await nd.dispatch(
+        db=db, event=SU_KIEN,
+        payload={
+            "user_ids": [officer_user.id], "lead_id": 911,
+            "lead_name": "Kiểm thử", "actor_id": admin_user.id,
+        },
+        dedupe_key="bt11:911",
+        rooms=[f"user_room_{officer_user.id}"],
+        strict=False,
+    )
+    await db.commit()
+    assert cb is not None
+    await cb()
+
+    async with AsyncSessionLocal() as phien_moi:
+        rows = (await phien_moi.execute(text(
+            "SELECT user_id, status FROM notification_delivery "
+            "WHERE channel = 'browser' ORDER BY id"
+        ))).fetchall()
+    trang_thai = {r[0]: r[1] for r in rows}
+
+    assert set(trang_thai) == {admin_user.id, officer_user.id}, (
+        f"Tiền đề hỏng: mong delivery browser cho cả hai người, đo được "
+        f"{trang_thai!r}"
+    )
+
+    # ── TIỀN ĐỀ CHỐNG-TỰ-ĐÚNG: hai thứ tự phải THẬT SỰ khác nhau ──────────
+    # Không có phép này thì ca test có thể xanh vì ghép-theo-vị-trí và
+    # ghép-theo-bản-đồ tình cờ cho cùng kết quả.
+    thu_tu_ghi = [r[0] for r in rows]            # ≈ `browser_del_ids`
+    thu_tu_gui = ghi["recipient_ids"]            # = `browser_recipients`
+    assert thu_tu_ghi == [officer_user.id, admin_user.id], (
+        f"Tiền đề hỏng: thứ tự GHI delivery không như thiết kế: {thu_tu_ghi!r}"
+    )
+    assert thu_tu_gui == [admin_user.id, officer_user.id], (
+        f"Tiền đề hỏng: `browser_recipients` không được sắp xếp: {thu_tu_gui!r}"
+    )
+    assert thu_tu_gui != thu_tu_ghi, (
+        "Tiền đề hỏng: hai thứ tự TRÙNG nhau ⇒ ghép theo vị trí và ghép theo "
+        "bản đồ cho cùng kết quả, ca này không chứng minh gì."
+    )
+    assert trang_thai[admin_user.id] == "failed", (
+        f"admin (id={admin_user.id}) được kênh báo THẤT BẠI nhưng delivery của "
+        f"anh ta mang status {trang_thai[admin_user.id]!r}. Trạng thái đang bị "
+        "ghép theo VỊ TRÍ giữa `browser_recipients` (đã sorted) và "
+        "`browser_del_ids` (theo thứ tự action) — hai thứ tự khác nhau."
+    )
+    assert trang_thai[officer_user.id] == "sent", (
+        f"officer (id={officer_user.id}) gửi THÀNH CÔNG nhưng delivery mang "
+        f"status {trang_thai[officer_user.id]!r} — nhận nhầm kết quả của người khác."
+    )
+    assert ghi["domain_emit"] >= 0
+
+
+async def test_bt12_returning_hut_hang_phai_huy_ca_su_kien(
+    db: AsyncSession, clear_redis_keys, monkeypatch,
+    seeded_dependencies: dict, admin_user: models.User, officer_user: models.User,
+):
+    """`RETURNING` trả THIẾU hàng ⇒ huỷ cả sự kiện, không ghi bó nửa vời.
+
+    Bản đồ `user_id → notification_id` dựng từ kết quả trả về. Nếu kết quả hụt
+    một hàng thì bản đồ mất phần tử một cách IM LẶNG: người nhận ấy có hàng
+    `notification` trong CSDL nhưng không ai biết id của nó, nên không delivery
+    nào, không cache nào, và khối dọn mồ côi cũng không thấy nó.
+
+    Hàng rào fail-closed trong `_bulk_create_notifications` phải ném ra để
+    `dispatch` huỷ cả sự kiện. Không có ca này thì hàng rào ấy là một dòng
+    không phép kiểm nào canh.
+    """
+    from app.repositories.notification_repository import NotificationRepository
+
+    _cam_tac_dung_phu(monkeypatch)
+    that = NotificationRepository.bulk_create
+    trang_thai = {"so_lan": 0}
+
+    async def _bao_boc(self, values):
+        cap = await that(self, values)
+        trang_thai["so_lan"] += 1
+        return cap[:-1]  # hụt ĐÚNG một hàng
+
+    monkeypatch.setattr(NotificationRepository, "bulk_create", _bao_boc)
+
+    await _tao_rule(db, tieu_de=TIEU_DE_DB)
+    await invalidate_rule_cache(SU_KIEN.value)
+
+    lead = models.Lead(
+        full_name="Nghiệp vụ phải sống (hụt hàng)", phone="0805000081",
+        source="website", unit_id=seeded_dependencies["unit_id"],
+        consultation_status_id=seeded_dependencies["initial_status_id"],
+        pipeline_stage_id=seeded_dependencies["stage_id"],
+    )
+    db.add(lead)
+    await db.flush()
+    lead_id = lead.id
+
+    ids, _ = await nd.dispatch(
+        db=db, event=SU_KIEN,
+        payload={
+            "user_ids": sorted({admin_user.id, officer_user.id}),
+            "lead_id": lead_id, "lead_name": "Kiểm thử",
+            "actor_id": admin_user.id,
+        },
+        dedupe_key="bt12:hut",
+        rooms=[f"user_room_{admin_user.id}"],
+        strict=False,
+    )
+    await db.commit()
+
+    assert trang_thai["so_lan"] == 1, "Tiền đề hỏng: hook không chạy"
+    assert ids == [], (
+        f"Kết quả trả về hụt hàng mà dispatch vẫn báo {ids!r} notification"
+    )
+    assert await _dem(db, models.Notification) == 0, (
+        "Bó nửa vời được commit: có hàng notification mà bản đồ chủ quyền "
+        "không dựng đủ ⇒ hàng ấy vĩnh viễn không ai giao và không ai dọn."
+    )
+    assert await _dem(db, models.NotificationDelivery) == 0
+    async with AsyncSessionLocal() as phien_moi:
+        assert await phien_moi.get(models.Lead, lead_id) is not None, (
+            "Huỷ sự kiện đã cuộn vượt phạm vi và nuốt cả dữ liệu nghiệp vụ"
+        )

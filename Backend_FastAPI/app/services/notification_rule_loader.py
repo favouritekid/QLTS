@@ -6,7 +6,7 @@ This module handles:
 1. Loading notification rules from database
 2. Deserializing JSON resolver configs into resolver instances
 3. Evaluating activation conditions
-4. ✅ Caching rules for performance (Edge Case #6 fix)
+4. Xoá khoá cache rule cũ còn sót (invalidate — loader KHÔNG còn ĐỌC cache)
 """
 from dataclasses import dataclass, field
 from string import Template
@@ -97,12 +97,13 @@ def _resolve_field(field: str, context: dict):
 
 
 # =============================================================================
-# ✅ FIX: Edge Case #6 - Redis Caching for Rules
+# Invalidation khoá rule cũ — di sản của Edge Case #6; cache ĐỌC đã gỡ
 # =============================================================================
 
-# Cache configuration
+# Tiền tố khoá còn sống, nhưng CHỈ cho đường XOÁ. `RULE_CACHE_TTL` đã bỏ
+# cùng với đường ghi cache (0 nơi đọc) — giữ lại một hằng chết chỉ khiến
+# người đọc sau tưởng vẫn còn một tầng cache.
 RULE_CACHE_PREFIX = "notification_rule:"
-RULE_CACHE_TTL = 3600  # 1 hour in seconds
 
 
 async def invalidate_rule_cache(event: str) -> None:
@@ -547,14 +548,18 @@ async def get_rule_for_event(
     event: SystemEvents
 ) -> Optional[DatabaseRuleConfig]:
     """
-    Load notification rule from database for a specific event.
+    Nạp notification rule của một sự kiện TỪ CƠ SỞ DỮ LIỆU.
 
-    ✅ Uses Redis caching to reduce database load.
+    ❌ KHÔNG dùng cache Redis (bỏ 2026-09-02). Cache cũ không mang
+    ``updated_at``/``version``/hash, và không mang cả ``enabled`` — nên nó
+    không tự chứng minh được là còn đồng bộ với ``NotificationRule`` +
+    ``NotificationAction`` + ``NotificationTemplate``. Nặng hơn: ``rule_id``
+    lấy từ cache đi thẳng vào ``notification_delivery.rule_id`` — một cột
+    CÓ khoá ngoại — nên một rule đã xoá mà cache còn sống làm vỡ FK giữa
+    giao dịch của người gọi.
 
-    Cache Strategy:
-    - Cache raw rule data as JSON (1 hour TTL)
-    - Deserialize resolver on each request (resolvers can't be serialized)
-    - Invalidate cache on rule create/update/delete
+    ``invalidate_rule_cache()`` được GIỮ LẠI và vẫn xoá thật: nó dọn khoá
+    còn sót từ trước lần deploy này, và các service đang gọi nó.
 
     Args:
         db: Database session
@@ -592,7 +597,7 @@ async def get_rule_for_event(
     # từ trước lần deploy này, và các service đang gọi nó.
 
     # ✅ Luôn đọc rule đang bật từ CSDL — nguồn chuẩn duy nhất
-    # ✅ Query database for enabled rule (cache miss or error)
+    # ✅ Query database for enabled rule — đường DUY NHẤT, không phải dự phòng
     # Phase C0: eager-load actions for action-based execution
     # 1.9d: eager-load template to avoid N+1 query
     result = await db.execute(

@@ -236,7 +236,10 @@ class TestDispatcherInvariants:
              patch("app.services.notification_dispatcher.safe_redis_set", new=AsyncMock(return_value=True)), \
              patch("app.services.notification_dispatcher.safe_redis_incr", new=AsyncMock(return_value=1)), \
              patch("app.services.notification_dispatcher.safe_redis_expire", new=AsyncMock()), \
-             patch("app.services.notification_dispatcher._bulk_create_notifications", new=AsyncMock(return_value=[101, 102])), \
+             patch("app.services.notification_dispatcher._bulk_create_notifications",
+                   # Trả `{user_id: notification_id}` — quan hệ chủ quyền
+                   # nay đến từ `RETURNING user_id, id`, không từ vị trí.
+                   new=AsyncMock(return_value={10: 101, 20: 102})), \
              patch("app.services.notification_dispatcher._create_deliveries_for_action", track_deliveries), \
              patch("app.services.notification_dispatcher._resolve_action_templates", new=AsyncMock(return_value={})), \
              patch("app.services.notification_dispatcher._build_action_snapshot", return_value={}), \

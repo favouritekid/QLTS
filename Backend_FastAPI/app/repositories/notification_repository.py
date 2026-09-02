@@ -110,10 +110,27 @@ class NotificationRepository(BaseRepository[models.Notification]):
         result = await self.db.execute(query)
         return [row[0] for row in result.fetchall()]
 
-    async def bulk_create(self, values: List[dict]) -> List[int]:
-        """
-        Perform bulk insert of notifications.
-        Returns list of created IDs.
+    async def bulk_create(self, values: List[dict]) -> List[Tuple[int, int]]:
+        """Chèn hàng loạt notification, trả về TỪNG CẶP ``(user_id, id)``.
+
+        Dữ liệu TỰ MÔ TẢ, không phải một danh sách ID trần. Trước
+        2026-09-02 hàm này chỉ ``RETURNING id`` và tầng gọi ghép lại bằng
+        ``dict(zip(user_ids, ids))`` — tức dựa vào giả định rằng thứ tự
+        RETURNING của một lệnh ``INSERT ... VALUES (…),(…)`` trùng thứ tự
+        đầu vào. **Giả định đó không có bảo đảm hình thức.** Nếu CSDL trả
+        ``[n2, n1]`` cho đầu vào ``[u1, u2]`` thì:
+
+          · ``notification_delivery`` của u1 trỏ vào notification của u2;
+          · ``user_inbox:{u1}`` nạp ID không thuộc u1;
+          · u1 mất thông báo của chính mình, và sổ delivery sai quan hệ.
+
+        Hàng rào chủ quyền ở đường ĐỌC (``get_by_ids(owner_user_id=…)``)
+        chặn được việc đọc chéo, nhưng KHÔNG sửa được dữ liệu đã ghi sai.
+        Nên quan hệ chủ quyền phải dựng từ chính dữ liệu CSDL trả về.
+
+        Cố ý KHÔNG dùng ``sort_by_parameter_order``: chưa chứng minh được
+        nó áp dụng cho đúng dạng ``insert().values(list)`` đang dùng ở
+        đây, và ``RETURNING`` thêm một cột thì đúng bất kể thứ tự.
         """
         if not values:
             return []
@@ -131,9 +148,9 @@ class NotificationRepository(BaseRepository[models.Notification]):
         result = await self.db.execute(
             insert(self.model)
             .values(values)
-            .returning(self.model.id)
+            .returning(self.model.user_id, self.model.id)
         )
-        return [row[0] for row in result.fetchall()]
+        return [(row[0], row[1]) for row in result.fetchall()]
 
     async def get_unread_for_user(self, user_id: int, notification_ids: Optional[List[int]] = None) -> List[models.Notification]:
         """
