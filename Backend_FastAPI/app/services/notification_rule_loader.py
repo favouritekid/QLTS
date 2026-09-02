@@ -8,7 +8,6 @@ This module handles:
 3. Evaluating activation conditions
 4. ✅ Caching rules for performance (Edge Case #6 fix)
 """
-import json
 from dataclasses import dataclass, field
 from string import Template
 from typing import Any, Dict, List, Optional
@@ -21,7 +20,7 @@ from sqlalchemy.orm import selectinload
 from app import models
 from app.core.events import SystemEvents
 from app.core.event_groups import get_event_group
-from app.database import safe_redis_get, safe_redis_set, safe_redis_delete
+from app.database import safe_redis_delete
 from app.services.notification_resolvers import (
     ActorExcludedResolver,
     AllAdminsResolver,
@@ -570,71 +569,29 @@ async def get_rule_for_event(
         ...     recipients = await rule.resolver.resolve_users(db, payload)
     """
     event_name = event.value
-    cache_key = f"{RULE_CACHE_PREFIX}{event_name}"
 
-    # ✅ Try to get from cache first
-    try:
-        cached_data = await safe_redis_get(cache_key)
-        if cached_data:
-            rule_data = json.loads(cached_data)
-            log.debug(
-                "Rule loaded from cache",
-                event_type=event_name,
-                cache_key=cache_key
-            )
+    # ❌ ĐÃ BỎ read-cache Redis (2026-09-02).
+    #
+    # Cache cũ KHÔNG có revision: payload chỉ mang
+    # id/event/templates/actions/recipient_config/condition — không
+    # `updated_at`, không `version`, không hash — nên nó không tự chứng
+    # minh được là còn đồng bộ với `NotificationRule` +
+    # `NotificationAction` + `NotificationTemplate`. Nó còn KHÔNG mang cả
+    # `enabled`, trong khi điều kiện `enabled == True` chỉ tồn tại ở truy
+    # vấn CSDL bên dưới ⇒ một lần invalidate bị mất là thao tác "tắt
+    # rule" thành no-op trọn 1 giờ.
+    #
+    # Hệ quả đã ĐO được: `rule_id` từ cache đi thẳng vào
+    # `notification_delivery.rule_id` — một cột CÓ khoá ngoại. Rule bị xoá
+    # mà cache còn sống ⇒ `notification_delivery_rule_id_fkey` vỡ GIỮA
+    # giao dịch của người gọi. Trong kho có 14 migration
+    # DELETE/UPDATE `notification_rule` và không migration nào chạm Redis,
+    # nên cảnh này với tới được ở production, không chỉ trong test.
+    #
+    # `invalidate_rule_cache()` được GIỮ LẠI: nó vẫn dọn khoá cũ còn sót
+    # từ trước lần deploy này, và các service đang gọi nó.
 
-            # Deserialize resolver (can't be cached)
-            try:
-                resolver = deserialize_resolver(rule_data["recipient_config"])
-            except Exception as e:
-                log.error(
-                    "Failed to deserialize resolver from cache",
-                    event_type=event_name,
-                    error=str(e)
-                )
-                # Invalidate bad cache entry
-                await safe_redis_delete(cache_key)
-                # Fall through to DB query
-            else:
-                # Deserialize cached actions
-                cached_actions = rule_data.get("actions")
-                action_configs = None
-                if cached_actions:
-                    action_configs = [
-                        ActionConfig(
-                            step=a_data["step"],
-                            channel=a_data["channel"],
-                            delay_minutes=a_data.get("delay_minutes", 0),
-                            template_code=a_data.get("template_code"),
-                            config=a_data.get("config"),
-                            recipient_config=a_data.get("recipient_config"),
-                            content_mode=a_data.get("content_mode"),
-                            content_override=a_data.get("content_override"),
-                            branch_key=a_data.get("branch_key"),
-                        )
-                        for a_data in cached_actions
-                    ]
-
-                # Successfully loaded from cache
-                config = DatabaseRuleConfig(
-                    rule_id=rule_data["id"],
-                    event=rule_data["event"],
-                    title_template=rule_data["title_template"],
-                    message_template=rule_data["message_template"],
-                    notification_type=rule_data["notification_type"],
-                    link_template=rule_data.get("link_template"),
-                    resolver=resolver,
-                    condition=rule_data.get("condition"),
-                    actions=action_configs,
-                )
-                return config
-    except Exception as e:
-        log.warning(
-            "Cache read failed, falling back to database",
-            event_type=event_name,
-            error=str(e)
-        )
-
+    # ✅ Luôn đọc rule đang bật từ CSDL — nguồn chuẩn duy nhất
     # ✅ Query database for enabled rule (cache miss or error)
     # Phase C0: eager-load actions for action-based execution
     # 1.9d: eager-load template to avoid N+1 query
@@ -742,48 +699,9 @@ async def get_rule_for_event(
         actions=action_configs,
     )
 
-    # ✅ Cache the rule data for future requests
-    try:
-        # Serialize actions for cache
-        actions_cache = [
-            {"step": a.step, "channel": a.channel,
-             "delay_minutes": a.delay_minutes,
-             "template_code": a.template_code, "config": a.config,
-             "recipient_config": a.recipient_config,
-             "content_mode": a.content_mode,
-             "content_override": a.content_override,
-             "branch_key": a.branch_key}
-            for a in config.actions
-        ]
-
-        rule_data = {
-            "id": rule.id,
-            "event": rule.event,
-            "title_template": title_template,
-            "message_template": message_template,
-            "notification_type": rule.notification_type,
-            "link_template": link_template,
-            "actions": actions_cache,
-            "recipient_config": rule.recipient_config,  # Will deserialize on each request
-            "condition": rule.condition,
-        }
-        await safe_redis_set(
-            cache_key,
-            json.dumps(rule_data),
-            ex=RULE_CACHE_TTL
-        )
-        log.debug(
-            "Cached rule data",
-            event_type=event_name,
-            cache_key=cache_key,
-            ttl=RULE_CACHE_TTL
-        )
-    except Exception as e:
-        log.warning(
-            "Failed to cache rule data",
-            event_type=event_name,
-            error=str(e)
-        )
+    # ❌ ĐÃ BỎ ghi cache: không ai đọc nó nữa (xem chú thích ở trên).
+    # Giữ lại một cache không có người đọc chỉ tạo ảo giác an toàn cho
+    # người đọc mã sau này.
 
     log.info(
         "Loaded notification rule from database",

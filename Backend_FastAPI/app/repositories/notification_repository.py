@@ -92,13 +92,19 @@ class NotificationRepository(BaseRepository[models.Notification]):
         """
         if not values:
             return []
-            
-        result = await self.db.execute(
-            insert(self.model)
-            .values(values)
-            .returning(self.model.id)
-        )
-        return [row[0] for row in result.fetchall()]
+
+        # HÀNG RÀO GIAO DỊCH (2026-09-02) — xem chú thích dài ở
+        # ``NotificationDeliveryRepository.bulk_create_deliveries``.
+        # Sequence Postgres KHÔNG cuộn ngược, nên một INSERT hỏng ngoài
+        # savepoint để lại ID đã cấp phát trong bộ nhớ Python trong khi
+        # hàng thật đã biến mất — đúng hình dạng ``notification_id`` mồ côi.
+        async with self.db.begin_nested():
+            result = await self.db.execute(
+                insert(self.model)
+                .values(values)
+                .returning(self.model.id)
+            )
+            return [row[0] for row in result.fetchall()]
 
     async def get_unread_for_user(self, user_id: int, notification_ids: Optional[List[int]] = None) -> List[models.Notification]:
         """

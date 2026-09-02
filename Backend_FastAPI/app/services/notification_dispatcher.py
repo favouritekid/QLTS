@@ -42,7 +42,7 @@ import structlog
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
-# from sqlalchemy import and_, cast, insert, select, String (removed - using repository)
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -525,7 +525,7 @@ async def _send_via_channel(
             log.info(
                 "Channel not yet implemented, skipping delivery",
                 channel=channel_name,
-                event=event,
+                event_type=event,
                 recipient_count=len(recipient_ids),
             )
             return (channel_name, None, None)  # Not an error — just not ready
@@ -1103,16 +1103,37 @@ async def dispatch(
     # Step 6: Bulk insert inbox Notification rows (for browser-eligible users only)
     notification_ids = []
     if inbox_user_ids:
-        notification_ids = await _bulk_create_notifications(
-            db=db,
-            user_ids=inbox_user_ids,
-            title=title,
-            message=message,
-            notification_type=notification_type,
-            link=link,
-            data=notification_data,
-            strict=strict,
-        )
+        try:
+            notification_ids = await _bulk_create_notifications(
+                db=db,
+                user_ids=inbox_user_ids,
+                title=title,
+                message=message,
+                notification_type=notification_type,
+                link=link,
+                data=notification_data,
+                strict=strict,
+            )
+        except Exception as e:
+            # Hỏng ở pha CHA thì huỷ cả sự kiện. Đi tiếp sẽ ghép
+            # ``inbox_user_ids`` với một danh sách ID thiếu/lệch qua
+            # ``zip()`` bên dưới và sinh delivery trỏ sai người nhận hoặc
+            # trỏ vào hàng không tồn tại. Repository đã cuộn savepoint
+            # riêng nên phiên còn dùng được ở đây.
+            log.error(
+                "Failed to create parent notifications — aborting event",
+                event_type=event.value,
+                recipient_count=len(inbox_user_ids),
+                error=str(e),
+                strict=strict,
+            )
+            if strict:
+                raise
+
+            async def _abort_callback():
+                await _emit_domain_event(event, payload, rooms=rooms)
+
+            return [], _abort_callback
 
     # Phase C1: notification_ids can be empty (no browser recipients) while
     # other channels still have recipients. Only short-circuit if truly nothing.
@@ -1135,6 +1156,10 @@ async def dispatch(
     from app.services import notification_delivery_service
     action_delivery_map: Dict[int, List[int]] = {}
     channel_delivery_ids: Dict[str, List[int]] = {}
+    # Những ``notification`` cha ĐÃ có ít nhất một hàng delivery đi kèm.
+    # Đếm trong bộ nhớ chứ không truy vấn lại: rẻ hơn một round-trip mỗi
+    # lượt dispatch, và đúng cả khi phiên là đối tượng giả trong test.
+    _notif_da_giao: set = set()
 
     for action in action_configs:
         action_users = action_filtered_map.get(action.step, [])
@@ -1158,6 +1183,10 @@ async def dispatch(
             )
             action_delivery_map[action.step] = delivery_ids
             channel_delivery_ids.setdefault(action.channel, []).extend(delivery_ids)
+            _notif_da_giao.update(
+                notification_id_map[_u] for _u in action_users
+                if notification_id_map.get(_u) is not None
+            )
         except Exception as e:
             log.error("Failed to create delivery rows for action",
                      step=action.step, channel=action.channel, error=str(e),
@@ -1190,7 +1219,7 @@ async def dispatch(
                 log.warning(
                     "Unknown external resolver type",
                     resolver_type=ext_resolver_type,
-                    event=event.value,
+                    event_type=event.value,
                 )
                 continue
 
@@ -1285,6 +1314,8 @@ async def dispatch(
                 if fallback_ids:
                     channel_delivery_ids.setdefault(ch, []).extend(fallback_ids)
                     action_delivery_map.setdefault(action.step, []).extend(fallback_ids)
+                    if notification_id_map.get(uid) is not None:
+                        _notif_da_giao.add(notification_id_map[uid])
                 log.info(
                     "External resolver returned internal user, created internal delivery",
                     event_type=event.value,
@@ -1385,6 +1416,27 @@ async def dispatch(
     # Merge external delivery IDs into channel_delivery_ids for worker enqueueing
     for ch, ext_ids in _external_delivery_ids.items():
         channel_delivery_ids.setdefault(ch, []).extend(ext_ids)
+
+    # ✅ 2026-09-02: KHÔNG để lại ``notification`` mồ côi.
+    #
+    # Với savepoint theo từng lần ghi, một action hỏng nay chỉ cuộn phần
+    # của nó — nghĩa là hàng ``notification`` cha VẪN SỐNG. Nếu không
+    # action nào ghi được delivery cho nó thì đó là chuông đỏ trong inbox
+    # mà không đường nào giao, và không dấu vết kiểm toán nào giải thích.
+    # Không ràng buộc nào của CSDL canh quan hệ này, nên phải canh ở đây.
+    if notification_ids:
+        _mo_coi = [n for n in notification_ids if n not in _notif_da_giao]
+        if _mo_coi:
+            log.warning(
+                "Rolling back orphan notifications (no delivery row created)",
+                event_type=event.value,
+                orphan_count=len(_mo_coi),
+            )
+            await db.execute(
+                sa_delete(models.Notification)
+                .where(models.Notification.id.in_(_mo_coi))
+            )
+            notification_ids = [n for n in notification_ids if n in _notif_da_giao]
 
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()
@@ -1664,20 +1716,22 @@ async def _bulk_create_notifications(
                 notification_type=notification_type,
                 strict=strict,
             )
-            if strict:
-                # Propagate so the surrounding SAVEPOINT (dispatch_bundle)
-                # can ROLLBACK TO SAVEPOINT and keep the outer business
-                # transaction alive. Do NOT call db.rollback() here — that
-                # would discard the caller's business mutations too.
-                raise
-            # Legacy best-effort behavior for non-bundle callers:
-            # rollback to clear session error state so subsequent
-            # operations (delivery tracking, other chunks) can proceed.
-            try:
-                await db.rollback()
-            except Exception:
-                pass
-            # Continue with other chunks
+            # 2026-09-02: NÉM RA trong MỌI trường hợp, kể cả non-strict.
+            #
+            # Trước đây nhánh non-strict gọi ``await db.rollback()`` ngay
+            # tại đây. ``Session.rollback()`` cuộn về GỐC chứ không về
+            # savepoint, nên nó xoá luôn dữ liệu nghiệp vụ của người gọi —
+            # chính docstring của hàm này đã cảnh báo điều đó. Sáu chỗ gọi
+            # ``dispatch()`` có bọc ``begin_nested()`` mà không truyền
+            # ``strict=True`` đều tin rằng savepoint bảo vệ họ; nó không.
+            #
+            # Nay ``NotificationRepository.bulk_create`` tự bọc savepoint
+            # riêng, nên phiên KHÔNG còn hỏng khi tới đây. Ném ra để
+            # ``dispatch`` quyết định — đó là tầng biết mình đang nằm trong
+            # savepoint nào. Hỏng khi tạo Notification CHA phải huỷ cả pha,
+            # không được đi tiếp với danh sách ID thiếu hoặc lệch so với
+            # ``inbox_user_ids``.
+            raise
 
     log.info(
         "Bulk notification creation completed",
@@ -1809,7 +1863,7 @@ def _dispatch_broadcast_task(
 
         log.info(
             "Celery broadcast task queued successfully",
-            event=event,
+            event_type=event,
             notification_count=len(notification_ids),
             channels=channels,
             queue="notifications"
@@ -1818,7 +1872,7 @@ def _dispatch_broadcast_task(
     except Exception as e:
         log.error(
             "Failed to queue Celery broadcast task",
-            event=event,
+            event_type=event,
             error=str(e),
             notification_count=len(notification_ids)
         )
@@ -2028,6 +2082,43 @@ async def dispatch_system_alert(
 # SAFE DISPATCH — Router-level helper (commit + callback in one call)
 # ============================================================================
 
+def log_dispatch_failure(db, exc, *, logger=None, **truong) -> bool:
+    """Ghi log một lượt dispatch hỏng — và nói SỰ THẬT về giao dịch.
+
+    Trước 2026-09-02, ba chỗ gọi (``lead_service`` ×2, ``officer_service``)
+    đều ghi thẳng ``"Dispatch failed, business data preserved"`` trong khối
+    ``except``. Câu ấy được SUY RA từ việc ngoại lệ đã bị bắt, chứ không
+    được ĐO. Đã đo bằng SQL echo: ngoại lệ bị bắt nhưng phiên đã chết
+    (``PendingRollbackError``), nên ``db.commit()`` của router sau đó đổ và
+    dữ liệu nghiệp vụ KHÔNG hề được giữ. Dòng log nói ngược với sự thật.
+
+    ``Session.is_active`` là False đúng khi giao dịch đang ở trạng thái bắt
+    buộc phải rollback — tức là câu khẳng định kia sai. Trả về True nếu
+    phiên còn dùng được, để người gọi tự quyết nếu cần.
+
+    Đây là MỘT nguồn chuẩn: đừng chép câu log ấy ra chỗ thứ tư.
+    """
+    _log = logger if logger is not None else log
+    try:
+        con_dung_duoc = bool(db.sync_session.is_active)
+    except Exception:
+        con_dung_duoc = False
+
+    if con_dung_duoc:
+        _log.warning(
+            "Dispatch failed, business data preserved",
+            error=str(exc),
+            **truong,
+        )
+    else:
+        _log.error(
+            "Dispatch failed AND caller transaction is unusable — business data NOT preserved",
+            error=str(exc),
+            **truong,
+        )
+    return con_dung_duoc
+
+
 async def safe_dispatch(
     db: AsyncSession,
     event: SystemEvents,
@@ -2095,7 +2186,7 @@ async def safe_dispatch(
     except Exception as e:
         log.warning(
             "Notification dispatch failed (non-critical)",
-            event=event.value,
+            event_type=event.value,
             dedupe_key=dedupe_key,
             error=str(e),
         )
