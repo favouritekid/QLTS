@@ -25,7 +25,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
-from app.core import deps  # For get_organizational_unit_for_user, get_user_managed_units
+from app.core import deps  # For OrgUnitReadDep / OrgUnitWriteDep, get_user_managed_units
 from app.core.deps import CasbinAuth  # Phase 2.2
 from app.core.constants import UserRole
 from app.services import config_service
@@ -49,7 +49,13 @@ router = APIRouter(tags=["Admin - Config"])
 )
 async def get_assignment_config_route(
     request: Request,
-    unit: models.OrganizationUnit = Depends(deps.get_organizational_unit_for_user),
+    # Cổng GHI server-owned. KHÔNG dùng cổng ĐỌC ở đây dù đây là route GET:
+    # docstring ngay dưới khai hợp đồng `(Admin/Manager)`, và baseline trước bản
+    # vá là `allow_read_only=False`. Đổi sang cổng ĐỌC sẽ cho officer cùng đơn vị
+    # qua tầng IDOR — một lần NỚI quyền, không phải giữ nguyên. Lập luận "Casbin
+    # đang che nên vô hại" chính là kiểu fail-open mà bản vá này sinh ra để loại
+    # bỏ: policy là thứ ĐỘNG.
+    unit: models.OrganizationUnit = deps.OrgUnitWriteDep,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
 ):
@@ -77,7 +83,8 @@ async def get_assignment_config_route(
 async def update_assignment_config_route(
     request: Request,
     config_in: schemas.AssignmentConfig,
-    unit: models.OrganizationUnit = Depends(deps.get_organizational_unit_for_user),
+    # Cổng GHI server-owned (officer bị từ chối kể cả cùng đơn vị).
+    unit: models.OrganizationUnit = deps.OrgUnitWriteDep,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
 ):
