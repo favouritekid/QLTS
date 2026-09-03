@@ -724,9 +724,21 @@ jobs:
           #   - `UPDATE admission_path SET allow_unverified_submission = FALSE`
           #     khong co vi tu id  ->  lat co cua MOI hang, ke ca hang cua test khac;
           #   - `ALTER TABLE admission_profile DISABLE TRIGGER
-          #     enforce_applied_rules_immutability`  ->  DDL cap bang, dung chung moi
-          #     ket noi; tien trinh chet giua chung thi trigger bat bien O LAI trang
-          #     thai tat cho phan con lai cua luot chay.
+          #     enforce_applied_rules_immutability`  ->  DDL cap BANG: lay khoa
+          #     SHARE ROW EXCLUSIVE tren CA BANG va giu DEN HET transaction (khong
+          #     nha sau ENABLE), nen moi INSERT/UPDATE/DELETE vao
+          #     `admission_profile` cua phien khac phai xep hang; SELECT thi khong.
+          #     Day la rui ro KHOA, KHONG phai "trigger o lai trang thai tat":
+          #     DISABLE va ENABLE nam trong CUNG mot transaction (ENABLE o
+          #     `finally`), ma DDL cua PostgreSQL la transactional -- trang thai
+          #     tat chua commit thi phien khac khong thay, va tien trinh chet thi
+          #     backend abort transaction nen trigger tro lai BAT.
+          #
+          # Gach dau dong THU NHAT moi la ly do QUYET DINH: `UPDATE` toan bang
+          # duoc COMMIT va khong co teardown khoi phuc, nen hang cua tep khac O LAI
+          # trang thai da lat -- nan nhan khong can chay DONG THOI, chi can chay
+          # SAU. Gach thu hai hien la LATENT (moi leg mot invocation, khong xdist)
+          # va duoc giu de leg nay khong bao gio bi bat song song.
           #
           # Mot luot do 11 ca xanh khi chay chung KHONG chung minh an toan: no chi
           # noi ve dung thu tu ay, dung bo fixture ay, dung hom ay. Leg rieng bien

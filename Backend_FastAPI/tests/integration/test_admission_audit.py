@@ -490,7 +490,8 @@ class TestSubmitProfileAudit:
 
         # STEP 2 — the transition was RECORDED. Written by
         # `admission_state_service.transition` →
-        # `audit_service.log_status_change` (app/services/admission_state_service.py:436-447).
+        # `audit_service.log_status_change`
+        # (app/services/admission_state_service.py:436-447).
         logs = await get_audit_logs_for_entity("AdmissionProfile", profile.id)
         status_log = next((l for l in logs if l.action == "status_changed"), None)
 

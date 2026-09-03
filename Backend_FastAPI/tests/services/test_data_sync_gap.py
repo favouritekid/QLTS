@@ -121,8 +121,12 @@ async def setup_admission_api_data(major_id, unit_id, officer_id, academic_year=
 
 class TestDataSyncGap:
     """
-    Verify GAP #2: Data sync issues between Lead and Admission Profile.
-    Reference: Backend_FastAPI/docs/LEAD_ADMISSION_AUDIT_REPORT.md
+    Khoá hợp đồng đồng bộ CÓ ĐIỀU KIỆN giữa Lead và Admission Profile.
+
+    Ma trận nguồn chuẩn ở `app/services/lead_profile_sync.py`:
+    draft/submitted -> Sync; approved/enrolled -> Snapshot, và sửa định
+    danh lead bị CHẶN. Tên lớp giữ theo lịch sử; "GAP #2" trong
+    `docs/LEAD_ADMISSION_AUDIT_REPORT.md` nay là TÍNH NĂNG, không phải lỗ hổng.
     """
 
     async def test_lead_update_syncs_to_editable_profile_only(
@@ -206,8 +210,6 @@ class TestDataSyncGap:
             assert profile.email == "updated@example.com", (
                 f"email hồ sơ `draft` phải đồng bộ; đang là {profile.email!r}"
             )
-
-            print(f"\n[VERIFIED] Gap #2 Confirmed: Lead({lead.phone}) != Profile({profile.phone})")
 
         # 6. VẾ B — hồ sơ KHOÁ (`approved`): đồng bộ phải DỪNG
         async with AsyncSessionLocal() as session:

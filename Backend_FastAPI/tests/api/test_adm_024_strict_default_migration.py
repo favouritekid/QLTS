@@ -31,12 +31,21 @@ Two reasons, both global side effects:
    EVERY row in the table, including paths another test seeded as legacy.
 2. ``test_migration_preserves_inflight_profile_snapshots`` runs
    ``ALTER TABLE admission_profile DISABLE TRIGGER
-   enforce_applied_rules_immutability`` — a table-level DDL that suspends
-   the guard for every concurrent session until it is re-enabled.
+   enforce_applied_rules_immutability`` — table-level DDL that takes a
+   SHARE ROW EXCLUSIVE lock on the whole table and holds it until the
+   transaction ends (the matching ENABLE does not release it), so every
+   concurrent INSERT/UPDATE/DELETE on ``admission_profile`` queues behind
+   it; plain SELECTs are unaffected. The disabled state itself is NOT a
+   cross-session hazard: DISABLE and ENABLE live in the same transaction
+   (ENABLE in ``finally``) and PostgreSQL DDL is transactional — an
+   uncommitted catalog change is invisible to other sessions, and a dying
+   process aborts the transaction, leaving the trigger ENABLED.
 
-Neither is scoped to this test's own rows, so running this file in parallel
-with (or interleaved into) another admission suite can silently corrupt the
-other suite's fixtures. Give it its own pytest invocation, no ``-n``.
+Reason 1 is the decisive one: the UPDATE is committed and no fixture restores
+the flags, so a co-running file sees flipped rows even under strictly
+sequential execution — it only has to run AFTER, not concurrently. Reason 2
+is latent today (one pytest invocation per leg, no xdist) and is why this
+file must never be run with ``-n``. Give it its own pytest invocation.
 
 Submit chain
 ------------
@@ -95,7 +104,8 @@ async def _seed_path(session, *, allow_unverified: bool, unit_id: int) -> dict:
       (app/services/admission_service.py:4854-4869). Missing ⇒ submit raises
       ``CONFIG_GAP_TARGET_LEVEL`` (app/services/admission_service.py:6424-6430).
     * ``MajorProgram.degree_level_id`` + ``ProgramOffering.offering_type_id`` —
-      what ``derive_target_level_and_type`` reads (app/services/priority_service.py:976,996).
+      what ``derive_target_level_and_type`` reads
+      (app/services/priority_service.py:976,996).
     * a ``VnSchool`` + ``VnSchoolKvAssignment`` so the THPT academic_history
       entry resolves a KV instead of ``KV_UNRESOLVED``.
 
@@ -200,7 +210,9 @@ async def adm024_paths(seed_lead_dependencies: dict):
         async with s.begin():
             legacy_a = await _seed_path(s, allow_unverified=True, unit_id=unit_id)
             legacy_b = await _seed_path(s, allow_unverified=True, unit_id=unit_id)
-            already_strict = await _seed_path(s, allow_unverified=False, unit_id=unit_id)
+            already_strict = await _seed_path(
+                s, allow_unverified=False, unit_id=unit_id
+            )
     return {
         "unit_id": unit_id,
         "legacy_a": legacy_a,
@@ -447,7 +459,9 @@ async def test_migration_preserves_inflight_profile_snapshots(
 
     # Legacy profile still submits with uploaded-only docs (grandfathered).
     oh = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])
-    await _fill_personal(client, oh, pid, school_id=adm024_paths["legacy_a"]["school_id"])
+    await _fill_personal(
+        client, oh, pid, school_id=adm024_paths["legacy_a"]["school_id"]
+    )
     upload = await _officer_upload(client, oh, pid, adm024_paths["legacy_a"]["doc_code"])
     assert upload.status_code in (200, 201), upload.text
 
@@ -480,7 +494,9 @@ async def test_new_profile_post_migration_strict_with_verify_unblocks(
     pid = prof["id"]
 
     oh = await _login(client, officer_user_in_db["username"], officer_user_in_db["password"])
-    await _fill_personal(client, oh, pid, school_id=adm024_paths["legacy_b"]["school_id"])
+    await _fill_personal(
+        client, oh, pid, school_id=adm024_paths["legacy_b"]["school_id"]
+    )
 
     # Snapshot must be schema_version=2 + allow=false (post-migration default).
     detail = (await client.get(f"{ADMISSIONS}/{pid}", headers=oh)).json()

@@ -552,9 +552,21 @@ class TestLegCachLy:
         không có vị từ ``id``, nên nó lật cờ của MỌI hàng, kể cả hàng mà test
         khác vừa seed;
       * ``ALTER TABLE admission_profile DISABLE TRIGGER
-        enforce_applied_rules_immutability`` — DDL cấp bảng, hiệu lực với mọi
-        kết nối; tiến trình chết giữa chừng thì trigger bất biến Ở LẠI trạng
-        thái tắt cho phần còn lại của lượt chạy.
+        enforce_applied_rules_immutability`` — DDL cấp bảng: lấy khoá
+        ``SHARE ROW EXCLUSIVE`` trên cả bảng và giữ đến hết transaction
+        (không nhả sau ``ENABLE``), nên mọi ``INSERT``/``UPDATE``/``DELETE``
+        vào ``admission_profile`` của phiên khác phải xếp hàng — ``SELECT``
+        thì không. Đây là rủi ro KHOÁ, KHÔNG phải "trigger ở lại trạng thái
+        tắt": ``DISABLE`` và ``ENABLE`` nằm trong CÙNG một transaction
+        (``ENABLE`` ở ``finally``), mà DDL của PostgreSQL là transactional —
+        trạng thái tắt chưa commit thì phiên khác không nhìn thấy, và tiến
+        trình chết thì backend abort transaction nên trigger trở lại BẬT.
+
+    Gạch đầu dòng THỨ NHẤT mới là lý do quyết định: ``UPDATE`` toàn bảng được
+    COMMIT và tệp không có teardown khôi phục, nên hàng của tệp khác ở lại
+    trạng thái đã lật — nạn nhân không cần chạy ĐỒNG THỜI, chỉ cần chạy SAU.
+    Gạch thứ hai hiện là LATENT (mỗi leg một invocation, không xdist) và được
+    giữ để leg này không bao giờ bị bật song song.
 
     Một lượt đo "chạy chung vẫn xanh" KHÔNG thay thế được ca này: nó chỉ nói
     về đúng thứ tự ấy, đúng bộ fixture ấy, đúng hôm ấy. Bất biến cấu trúc thì
@@ -582,10 +594,12 @@ class TestLegCachLy:
             ban_cung_leg = [s for s in sel if s != TEP_CACH_LY]
             assert ban_cung_leg == [], (
                 "leg %r chứa %s CÙNG VỚI %d selector khác: %r. "
-                "Tệp này tắt trigger và UPDATE toàn bảng — bạn cùng leg sẽ chạy "
-                "trên một CSDL đã bị nó sửa cấu trúc. Nếu thật sự muốn gộp thì "
-                "phải gỡ hai thao tác cấp bảng ấy trước, và sửa ca này trong "
-                "cùng một lần để việc gộp hiện ra trong diff."
+                "Tệp này UPDATE toàn bảng `admission_path` rồi COMMIT (không có "
+                "teardown khôi phục) và giữ khoá cấp bảng trên `admission_profile` "
+                "đến hết transaction — bạn cùng leg sẽ chạy trên một CSDL đã bị nó "
+                "sửa DỮ LIỆU. Nếu thật sự muốn gộp thì phải gỡ hai thao tác cấp "
+                "bảng ấy trước, và sửa ca này trong cùng một lần để việc gộp hiện "
+                "ra trong diff."
                 % (str(leg.get("tier", "")), TEP_CACH_LY,
                    len(ban_cung_leg), ban_cung_leg[:5])
             )

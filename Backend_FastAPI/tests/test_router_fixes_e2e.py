@@ -193,7 +193,10 @@ async def test_update_user_creates_notification(
             rule = models.NotificationRule(
                 event="user_profile_updated",
                 title_template="Your profile has been updated",
-                message_template="An administrator updated your profile. Changed fields: ${updated_fields}.",
+                message_template=(
+                    "An administrator updated your profile. "
+                    "Changed fields: ${updated_fields}."
+                ),
                 recipient_config={"resolver_type": "specific_users", "params": {}},
                 enabled=True,
             )
