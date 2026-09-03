@@ -1,6 +1,7 @@
 // src/hooks/usePermissionExplain.ts
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api/client";
+import { API_ENDPOINTS } from "@/lib/api/endpoints";
 
 interface PolicyRule {
   subject: string;
@@ -29,8 +30,11 @@ export function usePermissionExplain(roleName: string) {
   return useQuery<PermissionExplainResponse>({
     queryKey: ["admin", "roles", roleName, "explain"],
     queryFn: async () => {
+      // Đường thật là `/roles/{role_name}/permissions/explain` (roles.py:1205);
+      // bản cũ bỏ mất đoạn `/permissions` nên rơi vào 404. Dùng hằng để đoạn ấy
+      // chỉ tồn tại ở MỘT chỗ.
       const response = await api.get<PermissionExplainResponse>(
-        `/api/admin/roles/${roleName}/explain`
+        API_ENDPOINTS.ADMIN.PERMISSIONS.EXPLAIN(roleName)
       );
       return response.data;
     },

@@ -16,6 +16,11 @@ import type {
   PolicyStatistics,
 } from "@/types/policy.types";
 
+// MỘT đường phục vụ cả POST (roles.py:558) lẫn DELETE (roles.py:639) grouping
+// policy. Bí danh cục bộ để hai hook bên dưới KHÔNG THỂ trôi lệch nhau — bản cũ
+// hardcode chuỗi ở cả hai chỗ và cả hai cùng thiếu `/roles`.
+const GROUPING_POLICIES = API_ENDPOINTS.ADMIN.PERMISSIONS.GROUPING_POLICIES;
+
 // Query keys
 export const policyKeys = {
   all: ["policies"] as const,
@@ -162,12 +167,17 @@ export function useApplyTemplate() {
 }
 
 // Add grouping policy (role inheritance or user-role assignment)
+//
+// Cả hai hook dưới đây đọc CÙNG hằng `GROUPING_POLICIES`. Backend phục vụ POST
+// (roles.py:558) và DELETE (roles.py:639) trên đúng MỘT đường, nên tách thành
+// hai chuỗi chỉ tạo cơ hội cho một nửa trôi đi mà nửa kia vẫn xanh.
+// Bản cũ hardcode `/api/admin/grouping-policies` ở CẢ HAI — thiếu `/roles` ⇒ 404.
 export function useAddGroupingPolicy() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (request: { subject: string; parent_role: string }) => {
-      const response = await api.post("/api/admin/grouping-policies", request);
+      const response = await api.post(GROUPING_POLICIES, request);
       return response.data;
     },
     onSuccess: () => {
@@ -178,14 +188,18 @@ export function useAddGroupingPolicy() {
 }
 
 // Remove grouping policy
+//
+// Chưa có caller ở thời điểm sửa, nhưng vẫn vá cùng lượt: nó mắc ĐÚNG lỗi thiếu
+// `/roles` như bản POST, và để lại một nửa là tái diễn cái bẫy đã ghi ở `0b87ac4e`
+// (sửa một hằng, bỏ hằng anh em, rồi lỗi quay lại qua đường còn sót).
 export function useDeleteGroupingPolicy() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (request: { subject: string; parent_role: string }) => {
-      const response = await api.delete("/api/admin/grouping-policies", {
-        data: request,
-      });
+      // Axios: `delete(url, config)` — payload BẮT BUỘC đi trong `config.data`,
+      // truyền như đối số vị trí thứ hai thì backend nhận body rỗng và trả 422.
+      const response = await api.delete(GROUPING_POLICIES, { data: request });
       return response.data;
     },
     onSuccess: () => {

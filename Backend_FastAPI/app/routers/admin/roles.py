@@ -1093,7 +1093,7 @@ async def simulate_permission(
     - Understanding complex policy interactions
 
     Example:
-        POST /api/admin/policies/simulate
+        POST /api/admin/roles/permissions/simulate
         {
             "subject": "role:manager",
             "object": "/api/leads",
@@ -1355,7 +1355,8 @@ async def who_can_access_resource(
     permission checks.
 
     Example:
-        GET /api/admin/policies/who-can-access?object=/api/leads&action=GET
+        POST /api/admin/roles/permissions/who-can-access?object=/api/leads&action=GET
+        (method là POST, nhưng `object`/`action` là Query — KHÔNG phải JSON body)
 
     Returns:
         List of roles that have permission to access the resource.

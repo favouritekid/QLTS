@@ -63,7 +63,12 @@ async def sync_users_alias(
     Đồng bộ role từ Casbin về DB cho tất cả users hoặc một nhóm users cụ thể.
     Casbin được coi là source of truth (nguồn chân lý).
 
-    - `user_ids`: Danh sách ID users cần sync. Nếu None hoặc rỗng, sync tất cả users.
+    - `user_ids`: **BẮT BUỘC** có mặt trong body.
+        * `null`            -> đồng bộ TOÀN BỘ user
+        * `[id, ...]`       -> đồng bộ đúng các id ấy (mọi id > 0)
+        * thiếu khoá / `[]` / khoá lạ -> **422**
+      Mảng rỗng KHÔNG còn nghĩa là "tất cả": gộp hai thứ đó lại
+      từng khiến một lỗi gõ phím mở rộng phạm vi ghi ra mọi user.
 
     **Note:** This is an alias endpoint for backward compatibility.
     The actual implementation is in `app.routers.admin.users.sync_users()`

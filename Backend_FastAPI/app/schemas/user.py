@@ -2,7 +2,7 @@
 # app/schemas/user.py
 # NOTE: Các schema này được sử dụng cho các endpoint của /auth
 import re
-from typing import List, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
 from pydantic import (
     BaseModel,
@@ -363,9 +363,73 @@ class RefreshTokenRequest(BaseModel):
 
 
 class SyncUsersRequest(BaseModel):
-    """Schema cho request body của POST /admin/sync/users endpoint."""
+    """Body của `POST /api/admin/sync` (alias) và `POST /api/admin/users/sync`.
 
-    user_ids: Optional[List[int]] = None  # None hoặc empty list = sync all users
+    FAIL-CLOSED. Bản trước khai ``user_ids: Optional[List[int]] = None`` và
+    không cấm field lạ, nên Pydantic v2 (mặc định ``extra="ignore"``) nuốt im
+    lặng mọi khoá sai. Đo được trên chính lớp này::
+
+        {}                   -> user_ids=None
+        {"userId": [123]}    -> user_ids=None     (khoá lạ bị NUỐT)
+        {"user_ids": []}     -> user_ids=[]
+
+    Cả ba đều falsy, mà service rẽ nhánh bằng truthiness, nên cả ba rơi vào
+    ``repo.get_all()``. Nghĩa là một LỖI NHẬP LIỆU — gõ sai tên khoá, quên
+    body, gửi mảng rỗng — âm thầm MỞ RỘNG phạm vi mutation từ "vài user"
+    thành "TOÀN BỘ user", và vẫn trả 200. Không phải vượt quyền (vẫn cần
+    admin), nhưng là fail-open: sai sót của người gọi làm rộng thêm tác động.
+
+    Giao ước nay tường minh, ba trạng thái KHÔNG còn gộp làm một:
+
+        {"user_ids": null}      -> hợp lệ, sync TOÀN BỘ (chủ ý, có nói ra)
+        {"user_ids": [1, 2]}    -> hợp lệ, sync đúng tập ấy
+        {}  (thiếu khoá)        -> 422 `missing`
+        {"userId": [...]}       -> 422 `extra_forbidden`
+        {"user_ids": []}        -> 422 `too_short`
+        {"user_ids": [0]}/[-1]  -> 422 `greater_than`, loc trỏ đúng chỉ số
+
+    ``Field(...)`` giữ trường BẮT BUỘC CÓ MẶT trong khi ``Optional`` vẫn cho
+    ``null`` đi qua — "vắng mặt" và "null tường minh" là hai chuyện khác nhau,
+    và chính việc gộp chúng đã đẻ ra lỗi trên.
+
+    Ràng buộc ``gt=0`` đặt ở CẤP PHẦN TỬ (``Annotated``) chứ không ở cấp
+    trường: kho chưa có tiền lệ cho lối này (21 chỗ dùng ``Field(gt=0)`` đều ở
+    cấp trường), nhưng nó là cách duy nhất để ``loc`` trỏ tới ĐÚNG CHỈ SỐ phần
+    tử hỏng thay vì chỉ tên trường — thứ quyết định thông điệp 422 có dùng
+    được hay không.
+
+    ``strict=True`` đi kèm ``gt=0``, cũng ở cấp phần tử. Không có nó, Pydantic
+    v2 chạy chế độ lax và ÉP KIỂU trước khi kiểm ``> 0``. Đo qua JSON, đúng
+    đường HTTP đi::
+
+        [true]      -> [1]        bool thành user ID 1
+        ["7"]       -> [7]
+        [7.0]       -> [7]
+        [1, true]   -> [1, 1]     trùng lặp âm thầm
+
+    Một kiểu JSON sai vì thế trở thành ID HỢP LỆ trên một endpoint quản trị
+    GHI hàng loạt. Không còn mở rộng ra toàn bộ user như lỗi trước, nhưng là
+    mutation NHẦM ĐỐI TƯỢNG — và ``true -> 1`` luôn trỏ vào user có id nhỏ
+    nhất, thường là tài khoản quản trị đầu tiên.
+
+    Với ``strict=True``, cả bốn ca trên đều ``422 int_type`` kèm ``loc`` trỏ
+    đúng chỉ số. ``null`` KHÔNG bị ảnh hưởng: ``Optional`` nằm ngoài
+    ``Annotated``, nên ``{"user_ids": null}`` vẫn đi qua và vẫn nghĩa là
+    "đồng bộ toàn bộ" — đã đo, không suy.
+    """
+
+    user_ids: Optional[List[Annotated[int, Field(gt=0, strict=True)]]] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Danh sách ID user cần đồng bộ. BẮT BUỘC có mặt. "
+            "`null` = đồng bộ toàn bộ; mảng phải không rỗng, và mỗi phần tử "
+            "phải là JSON integer THẬT và > 0. `true`, `\"7\"`, `7.0` đều bị "
+            "từ chối — không ép kiểu. Mảng rỗng KHÔNG có nghĩa là toàn bộ."
+        ),
+    )
+
+    model_config = ConfigDict(extra="forbid")
 
 
 # =============================================================================

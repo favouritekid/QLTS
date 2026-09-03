@@ -414,6 +414,12 @@ jobs:
           # 33273246008 shard-10. Chi ghi tier o commit NAY, sau khi ca hai xanh:
           # delete_policy_success xanh nho ban va san pham (commit truoc),
           # add_policy_success xanh nho ban va test-debt (commit nay).
+          # test_casbin_tracking.py cung vao Tier 2: no giu ban sao CUNG cua duong
+          # policy nen doi theo hang o commit nay; da do 36/36 xanh ca tep.
+          # test_admin_casbin.py vao Tier 2: no la duong HTTP that cua policy CRUD
+          # va role assign/revoke. Hai ca cua no do trong ca BA nightly tren ffb45291
+          # vi tro duong da bo (/api/admin/policies, /api/admin/assign-role). Chi ghi
+          # tier o commit NAY, sau khi da do 2/2 xanh.
           # test_casbin_thu_hoi_quyen.py vao Tier 2, dung canh test_permissions_matrix:
           # ca hai canh cung mat A01 Broken Access Control. Tep nay khoa bat bien THU
           # HOI quyen — moi duong xoa phai dung DU bon truong (p = sub, obj, act, eft),
@@ -427,6 +433,15 @@ jobs:
           # la phan chung minh that: moi ca di qua HTTP voi persona officer deu xanh ca
           # TRUOC lan SAU ban va, vi Casbin khong cap officer quyen tren
           # /api/admin/organization-units/* nen no che mat thu dang duoc canh.
+          # test_admin_sync_aliases.py vao Tier 2 (selector WHOLE-FILE, khong waiver,
+          # khong partial): no la duong HTTP THAT cua hai alias admin sync
+          # (GET /api/admin/sync/status, POST /api/admin/sync) — cung be mat RBAC
+          # ma lat nay dang gac, va ca hai alias deu di qua CasbinAuth. Decorator
+          # tinh + policy Casbin KHONG chung minh duoc alias bind dung dependency,
+          # nhan duoc body, va goi toi implementation; do la dung lop loi vua gap o
+          # organization.py (Depends(lambda ...) bi FastAPI nang thanh query bat buoc
+          # ⇒ endpoint LUON 422 ma moi phep kiem tinh van xanh). Chi request that qua
+          # ASGI moi phan biet duoc route song va route chet.
           - tier: Tier 2 — RBAC + security + CCCD lock
             tests: >-
               tests/api/test_activity_log_contract.py
@@ -446,6 +461,9 @@ jobs:
               tests/unit/test_casbin_lock_coverage.py
               tests/services/test_user.py
               tests/api/test_admin_roles.py
+              tests/api/test_admin_sync_aliases.py
+              tests/api/test_admin_casbin.py
+              tests/api/test_casbin_tracking.py
               tests/integration/test_casbin_lead_static_route_collision.py
               tests/api/test_fees_calculate_authorization.py
               tests/api/test_finance_api.py::TestDiamondInheritance

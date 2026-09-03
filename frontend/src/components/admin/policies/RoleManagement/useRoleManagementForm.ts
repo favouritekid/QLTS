@@ -9,6 +9,21 @@ import { useRoles, useAddPolicy, useAddGroupingPolicy, usePolicies, policyKeys }
 import { WorkflowStep, UserWithRole } from "./types";
 
 /**
+ * Rút một thông điệp lỗi đọc được từ `unknown`.
+ *
+ * `catch` cho ra `unknown`, nên ép kiểu HẸP tại chỗ thay vì giả định mọi lỗi
+ * đều là AxiosError. Dùng để nhét dữ kiện thật vào thông báo partial-creation:
+ * admin phải biết bước 2 hỏng VÌ GÌ mới sửa được.
+ */
+function describeError(error: unknown): string {
+  const detail = (error as { response?: { data?: { detail?: unknown } } })
+    ?.response?.data?.detail;
+  if (typeof detail === "string" && detail.trim()) return detail.trim();
+  if (error instanceof Error && error.message) return error.message;
+  return "unknown error";
+}
+
+/**
  * useRoleManagementForm - Custom hook for managing role workflow state
  *
  * Manages:
@@ -115,14 +130,37 @@ export function useRoleManagementForm() {
       });
 
       // STEP 2: Add role inheritance from role:user
+      //
+      // Bước 2 hỏng KHÔNG được nuốt. Bước 1 đã ghi thật vào Casbin ⇒ role TỒN
+      // TẠI nhưng THIẾU kế thừa `role:user`. Báo "created successfully" ở trạng
+      // thái ấy là báo thành công cho việc chưa xảy ra.
+      //
+      // Cố ý KHÔNG rollback: xoá bù policy vừa thêm là một thao tác ghi NỮA có
+      // thể hỏng tiếp, và nếu thành công thì nó XOÁ luôn dấu vết để admin lần
+      // ra. Trạng thái nửa vời được PHƠI RA, không bị che.
       try {
         await addGroupingPolicyMutation.mutateAsync({
           subject: roleWithPrefix,
           parent_role: "role:user",
         });
-        console.log(`✅ Role ${roleWithPrefix} now inherits from role:user`);
       } catch (inheritError) {
-        console.warn("Could not add role inheritance (may already exist):", inheritError);
+        console.error(
+          `Partial creation: role ${roleWithPrefix} created, inheritance from role:user failed`,
+          inheritError
+        );
+        toast.error(
+          `Partial creation: role "${newRoleName}" (${roleWithPrefix}) was created with basic ` +
+          `permissions, but STEP 2 — inheritance from "role:user" — failed: ${describeError(inheritError)}. ` +
+          `The role now EXISTS but is missing inherited permissions. Nothing was rolled back: ` +
+          `add the grouping policy ${roleWithPrefix} → role:user manually, or delete the role, ` +
+          `before assigning it to anyone.`,
+          { duration: 15000 }
+        );
+        // Đóng hộp thoại (role đã tồn tại — mở tiếp chỉ mời tạo trùng) nhưng
+        // KHÔNG auto-select và KHÔNG nhảy sang MANAGE_FEATURES: luồng đi tiếp
+        // là tín hiệu "xong xuôi", mà việc này chưa xong.
+        setCreateDialogOpen(false);
+        return;
       }
 
       toast.success(`Role "${newRoleName}" created successfully with basic permissions`);

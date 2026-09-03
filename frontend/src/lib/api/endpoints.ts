@@ -72,16 +72,67 @@ export const API_ENDPOINTS = {
       EXPORT: "/api/admin/users/export",
       EXPORT_CSV_STREAM: "/api/admin/users/export/csv",
     },
+    // Đường THẬT của cụm này được ghép từ ba chỗ, không suy từ tên hằng:
+    //   app/routers/admin/roles.py:61      APIRouter(prefix="/roles")
+    //   app/routers/admin/__init__.py:54   APIRouter(prefix="/admin")
+    //   app/main.py:957                    include_router(admin_router, prefix="/api")
+    // ⇒ mọi endpoint role/policy đều nằm dưới `/api/admin/roles/...`.
+    // Ba hằng dưới đây từng trỏ ra ngoài cụm ấy (`/api/admin/assign-role`,
+    // `/api/admin/policy-templates`, `/api/admin/roles/policies/apply-template`).
+    // KHÔNG có router nào phục vụ chúng — đã grep toàn `app/` — nên mỗi lần UI
+    // gán/thu hồi vai trò hay mở tab template là một 404 câm.
+    // Cách chữa ĐÚNG là kéo frontend về đường thật, KHÔNG dựng lại alias cũ ở
+    // backend: alias là nguồn chuẩn thứ hai cho cùng một hành động, và nó che
+    // mất chính lỗi này ở lần sau.
     PERMISSIONS: {
       POLICIES: "/api/admin/roles/policies",
-      ASSIGN_ROLE: "/api/admin/assign-role",
-      REMOVE_ROLE: "/api/admin/assign-role", // DELETE method
+      // HAI hằng TÁCH RIÊNG, không dùng chung một chuỗi.
+      // Backend phục vụ hai đường KHÁC NHAU: `POST /roles/assign` (roles.py:358)
+      // và `DELETE /roles/revoke` (roles.py:394). Bản cũ để cả hai key trỏ cùng
+      // một chuỗi rồi phân biệt bằng HTTP method — nên khi backend tách đường
+      // thì không có chỗ nào sửa được đúng MỘT nửa, và `REMOVE_ROLE` thành hằng
+      // chết trong khi hook xoá vẫn dùng `ASSIGN_ROLE`.
+      ASSIGN_ROLE: "/api/admin/roles/assign", // POST   — roles.py:358
+      REVOKE_ROLE: "/api/admin/roles/revoke", // DELETE — roles.py:394
       ROLES: "/api/admin/roles",
-      TEMPLATES: "/api/admin/policy-templates",
+      TEMPLATES: "/api/admin/roles/templates", // GET  — roles.py:859
       BATCH: "/api/admin/roles/policies/batch",
       VALIDATE: "/api/admin/roles/policies/validate",
-      APPLY_TEMPLATE: "/api/admin/roles/policies/apply-template",
+      APPLY_TEMPLATE: "/api/admin/roles/templates/apply", // POST — roles.py:895
       STATISTICS: "/api/admin/roles/policies/statistics",
+
+      // MỘT đường phục vụ CẢ HAI method: POST (roles.py:558) và DELETE
+      // (roles.py:639). Hai hook từng hardcode `/api/admin/grouping-policies`
+      // — thiếu đúng đoạn `/roles` của prefix router ⇒ 404 câm ở cả hai chiều.
+      // Sửa riêng lẻ từng hook là lặp lại đúng cái bẫy đã vá ở `0b87ac4e`, nên
+      // cả hai cùng đọc MỘT hằng này.
+      GROUPING_POLICIES: "/api/admin/roles/grouping-policies",
+
+      // Cụm `/permissions/...` nằm TRONG router `/roles`, KHÔNG phải dưới một
+      // router `/policies` nào — `/api/admin/policies/...` chưa bao giờ tồn tại.
+      // ⚠️ WHO_CAN_ACCESS là **POST** (roles.py:1336) nhưng khai `object`/`action`
+      //    bằng `Query(...)`, không phải body. Người gọi PHẢI đặt chúng vào
+      //    `config.params` (đối số thứ BA của `api.post`); gói vào JSON body thì
+      //    FastAPI trả 422 vì thiếu query bắt buộc.
+      WHO_CAN_ACCESS: "/api/admin/roles/permissions/who-can-access", // POST — roles.py:1336
+      SIMULATE: "/api/admin/roles/permissions/simulate", // POST — roles.py:1078
+      // GET — roles.py:1205. Đường thật có đoạn `/permissions` ở giữa; bản cũ
+      // gọi `${role}/explain` nên không router nào nhận.
+      EXPLAIN: (roleName: string) => `/api/admin/roles/${roleName}/permissions/explain`,
+      ROLE_FEATURES: (roleName: string) => `/api/admin/roles/${roleName}/features`, // GET — roles.py:1435
+      TOGGLE_FEATURE: (roleName: string) => `/api/admin/roles/${roleName}/features/toggle`, // POST — roles.py:1505
+    },
+    // Đồng bộ Casbin ↔ DB do MỘT ROUTER KHÁC phục vụ:
+    //   app/routers/admin/sync.py:28       APIRouter(prefix="/sync")
+    //   app/routers/admin/__init__.py:105  include_router(sync.router)
+    // Nó KHÔNG nằm dưới `/roles`, nên cố ý để ngoài `PERMISSIONS` — nhét vào đó
+    // sẽ phá bất biến "mọi hằng PERMISSIONS thuộc cụm /api/admin/roles".
+    // ⚠️ `RUN` là `@router.post("")` (sync.py:53) ⇒ đường đầy đủ đúng bằng
+    //    `/api/admin/sync`, KHÔNG có hậu tố `/users`. Bản cũ gọi
+    //    `/api/admin/sync/users` — không router nào phục vụ chuỗi đó.
+    SYNC: {
+      STATUS: "/api/admin/sync/status", // GET  — sync.py:31
+      RUN: "/api/admin/sync", // POST — sync.py:53, body { user_ids: number[] | null }
     },
     // Organization Management (Admin Only)
     ORGANIZATION: {
