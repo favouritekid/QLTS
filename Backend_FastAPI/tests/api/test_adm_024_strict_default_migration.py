@@ -41,11 +41,26 @@ Two reasons, both global side effects:
    uncommitted catalog change is invisible to other sessions, and a dying
    process aborts the transaction, leaving the trigger ENABLED.
 
-Reason 1 is the decisive one: the UPDATE is committed and no fixture restores
-the flags, so a co-running file sees flipped rows even under strictly
-sequential execution — it only has to run AFTER, not concurrently. Reason 2
-is latent today (one pytest invocation per leg, no xdist) and is why this
-file must never be run with ``-n``. Give it its own pytest invocation.
+Neither is a SEQUENTIAL hazard under the standard fixtures.
+``setup_test_database`` (tests/conftest.py:235) creates the schema once and
+then TRUNCATEs every table before each subsequent DB test, and all three
+tests here pull it: test 1 via ``adm024_paths`` -> ``seed_lead_dependencies``,
+tests 2 and 3 via ``client``. With today's CI shape -- a single pytest
+process, no xdist (``pytest-xdist`` is absent from requirements-dev.txt and
+the run step passes no ``-n``), a dedicated PostgreSQL/Redis per matrix leg
+-- a sequential test using those fixtures does NOT observe rows this file
+flipped.
+
+The table-wide UPDATE only becomes interference under CONCURRENT execution
+against the same database: xdist, an external process, or a test that
+bypasses the standard fixtures. Likewise the SHARE ROW EXCLUSIVE lock, held
+until the transaction ends, is only a BLOCKING risk while another writer is
+active on the same database.
+
+So keep the dedicated invocation as DEFENSE-IN-DEPTH: it confines both
+table-level operations and keeps the blast radius small if the execution
+model later changes (adding ``-n``, merging legs, or sharing one database
+across runners). It is not a fix for a sequential hazard that exists today.
 
 Submit chain
 ------------

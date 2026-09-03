@@ -562,11 +562,20 @@ class TestLegCachLy:
         trạng thái tắt chưa commit thì phiên khác không nhìn thấy, và tiến
         trình chết thì backend abort transaction nên trigger trở lại BẬT.
 
-    Gạch đầu dòng THỨ NHẤT mới là lý do quyết định: ``UPDATE`` toàn bảng được
-    COMMIT và tệp không có teardown khôi phục, nên hàng của tệp khác ở lại
-    trạng thái đã lật — nạn nhân không cần chạy ĐỒNG THỜI, chỉ cần chạy SAU.
-    Gạch thứ hai hiện là LATENT (mỗi leg một invocation, không xdist) và được
-    giữ để leg này không bao giờ bị bật song song.
+    Cả hai KHÔNG phải nguy cơ TUẦN TỰ với fixture chuẩn: ``setup_test_database``
+    (``tests/conftest.py:235``) dựng lược đồ MỘT lần rồi TRUNCATE toàn bộ bảng
+    TRƯỚC mỗi test CSDL kế tiếp, và cả BA ca ADM-024 đều kéo fixture ấy (ca 1 qua
+    ``adm024_paths`` -> ``seed_lead_dependencies``; ca 2 và 3 qua ``client``). Với
+    hình dạng CI hiện tại — MỘT process pytest, không xdist, mỗi leg matrix một
+    PostgreSQL/Redis RIÊNG — test tuần tự dùng fixture chuẩn KHÔNG nhìn thấy dữ
+    liệu mà tệp ấy đã lật.
+
+    ``UPDATE`` toàn bảng chỉ gây nhiễu khi có thực thi ĐỒNG THỜI trên cùng CSDL
+    (xdist, tiến trình ngoài, hoặc test bỏ qua fixture chuẩn); ``SHARE ROW
+    EXCLUSIVE`` giữ tới hết transaction cũng chỉ thành rủi ro BLOCKING khi có
+    writer đồng thời. Ca này giữ leg riêng như DEFENSE-IN-DEPTH: cô lập hai thao
+    tác cấp bảng và giữ blast radius nhỏ nếu mô hình thực thi về sau đổi — không
+    phải vì đang có một nguy cơ tuần tự.
 
     Một lượt đo "chạy chung vẫn xanh" KHÔNG thay thế được ca này: nó chỉ nói
     về đúng thứ tự ấy, đúng bộ fixture ấy, đúng hôm ấy. Bất biến cấu trúc thì
@@ -594,12 +603,13 @@ class TestLegCachLy:
             ban_cung_leg = [s for s in sel if s != TEP_CACH_LY]
             assert ban_cung_leg == [], (
                 "leg %r chứa %s CÙNG VỚI %d selector khác: %r. "
-                "Tệp này UPDATE toàn bảng `admission_path` rồi COMMIT (không có "
-                "teardown khôi phục) và giữ khoá cấp bảng trên `admission_profile` "
-                "đến hết transaction — bạn cùng leg sẽ chạy trên một CSDL đã bị nó "
-                "sửa DỮ LIỆU. Nếu thật sự muốn gộp thì phải gỡ hai thao tác cấp "
-                "bảng ấy trước, và sửa ca này trong cùng một lần để việc gộp hiện "
-                "ra trong diff."
+                "Tệp này UPDATE toàn bảng `admission_path` rồi COMMIT và giữ khoá "
+                "cấp bảng trên `admission_profile` đến hết transaction. Fixture "
+                "chuẩn TRUNCATE giữa các test nên gộp KHÔNG chắc gây sai ở cấu "
+                "hình hôm nay; leg riêng là defense-in-depth cho lúc mô hình thực "
+                "thi đổi. Nếu thật sự muốn gộp thì phải gỡ hai thao tác cấp bảng "
+                "ấy trước, và sửa ca này trong cùng một lần để việc gộp hiện ra "
+                "trong diff."
                 % (str(leg.get("tier", "")), TEP_CACH_LY,
                    len(ban_cung_leg), ban_cung_leg[:5])
             )

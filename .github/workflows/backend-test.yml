@@ -734,11 +734,24 @@ jobs:
           #     tat chua commit thi phien khac khong thay, va tien trinh chet thi
           #     backend abort transaction nen trigger tro lai BAT.
           #
-          # Gach dau dong THU NHAT moi la ly do QUYET DINH: `UPDATE` toan bang
-          # duoc COMMIT va khong co teardown khoi phuc, nen hang cua tep khac O LAI
-          # trang thai da lat -- nan nhan khong can chay DONG THOI, chi can chay
-          # SAU. Gach thu hai hien la LATENT (moi leg mot invocation, khong xdist)
-          # va duoc giu de leg nay khong bao gio bi bat song song.
+          # KHONG phai nguy co TUAN TU. `setup_test_database` (tests/conftest.py:235)
+          # dung luoc do MOT lan roi TRUNCATE TOAN BO bang TRUOC moi test CSDL ke
+          # tiep, va ca BA ca ADM-024 deu keo fixture ay: ca 1 qua `adm024_paths`
+          # -> `seed_lead_dependencies`, ca 2 va 3 qua `client`. Voi hinh dang CI
+          # hien tai -- MOT process pytest, khong xdist (`pytest-xdist` khong co
+          # trong requirements-dev.txt; buoc chay o duoi khong co `-n`), va moi leg
+          # matrix co PostgreSQL/Redis RIENG -- mot test tuan tu dung fixture chuan
+          # KHONG nhin thay du lieu ma tep nay da lat.
+          #
+          # `UPDATE` toan bang chi gay nhieu khi CO thuc thi DONG THOI tren cung mot
+          # CSDL: xdist, tien trinh ngoai, hoac test BO QUA fixture chuan. Tuong tu,
+          # SHARE ROW EXCLUSIVE giu toi het transaction cung chi thanh rui ro
+          # BLOCKING khi co writer dong thoi tren cung CSDL.
+          #
+          # Nen giu Tier 4i o day la DEFENSE-IN-DEPTH: co lap hai thao tac cap bang
+          # va giu blast radius nho neu mo hinh thuc thi ve sau doi (them `-n`, gop
+          # leg, hay mot runner dung chung CSDL). KHONG phai ban va cho mot nguy co
+          # tuan tu dang ton tai.
           #
           # Mot luot do 11 ca xanh khi chay chung KHONG chung minh an toan: no chi
           # noi ve dung thu tu ay, dung bo fixture ay, dung hom ay. Leg rieng bien
