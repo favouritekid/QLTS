@@ -51,11 +51,17 @@ the run step passes no ``-n``), a dedicated PostgreSQL/Redis per matrix leg
 -- a sequential test using those fixtures does NOT observe rows this file
 flipped.
 
-The table-wide UPDATE only becomes interference under CONCURRENT execution
-against the same database: xdist, an external process, or a test that
-bypasses the standard fixtures. Likewise the SHARE ROW EXCLUSIVE lock, held
-until the transaction ends, is only a BLOCKING risk while another writer is
-active on the same database.
+Two DISTINCT interference paths — do not conflate them:
+
+* CONCURRENT: xdist, or another process sharing the same database, running
+  interleaved with this file.
+* SEQUENTIAL: a test that runs AFTER this one but BYPASSES the standard reset
+  fixture. The committed rows are still there, so NO concurrency is required.
+  This is a real hazard; it simply does not apply to tests that use the
+  standard fixtures, because those TRUNCATE before they run.
+
+The SHARE ROW EXCLUSIVE lock is different: held until the transaction ends, it
+is only a BLOCKING risk while another writer is active on the same database.
 
 So keep the dedicated invocation as DEFENSE-IN-DEPTH: it confines both
 table-level operations and keeps the blast radius small if the execution

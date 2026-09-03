@@ -743,10 +743,15 @@ jobs:
           # matrix co PostgreSQL/Redis RIENG -- mot test tuan tu dung fixture chuan
           # KHONG nhin thay du lieu ma tep nay da lat.
           #
-          # `UPDATE` toan bang chi gay nhieu khi CO thuc thi DONG THOI tren cung mot
-          # CSDL: xdist, tien trinh ngoai, hoac test BO QUA fixture chuan. Tuong tu,
-          # SHARE ROW EXCLUSIVE giu toi het transaction cung chi thanh rui ro
-          # BLOCKING khi co writer dong thoi tren cung CSDL.
+          # Hai duong nhieu KHAC NHAU, dung gop lam mot:
+          #   - DONG THOI: xdist, hoac mot tien trinh khac dung CUNG CSDL, chay
+          #     xen vao giua.
+          #   - TUAN TU: mot test chay SAU nhung BO QUA fixture reset chuan. Hang
+          #     da COMMIT van con do nen KHONG can dong thoi gi ca. Day la nguy co
+          #     THAT; no chi khong ap voi test dung fixture chuan, vi fixture ay
+          #     TRUNCATE truoc khi chay.
+          # Rieng khoa SHARE ROW EXCLUSIVE thi khac: giu toi het transaction, va chi
+          # la rui ro BLOCKING khi co writer DONG THOI tren cung CSDL.
           #
           # Nen giu Tier 4i o day la DEFENSE-IN-DEPTH: co lap hai thao tac cap bang
           # va giu blast radius nho neu mo hinh thuc thi ve sau doi (them `-n`, gop

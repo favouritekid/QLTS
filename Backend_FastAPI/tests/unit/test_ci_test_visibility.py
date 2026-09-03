@@ -570,12 +570,19 @@ class TestLegCachLy:
     PostgreSQL/Redis RIÊNG — test tuần tự dùng fixture chuẩn KHÔNG nhìn thấy dữ
     liệu mà tệp ấy đã lật.
 
-    ``UPDATE`` toàn bảng chỉ gây nhiễu khi có thực thi ĐỒNG THỜI trên cùng CSDL
-    (xdist, tiến trình ngoài, hoặc test bỏ qua fixture chuẩn); ``SHARE ROW
-    EXCLUSIVE`` giữ tới hết transaction cũng chỉ thành rủi ro BLOCKING khi có
-    writer đồng thời. Ca này giữ leg riêng như DEFENSE-IN-DEPTH: cô lập hai thao
-    tác cấp bảng và giữ blast radius nhỏ nếu mô hình thực thi về sau đổi — không
-    phải vì đang có một nguy cơ tuần tự.
+    Hai đường nhiễu KHÁC NHAU, đừng gộp làm một:
+      * ĐỒNG THỜI — xdist, hoặc một tiến trình khác dùng CÙNG CSDL, chạy xen vào;
+      * TUẦN TỰ — một test chạy SAU nhưng BỎ QUA fixture reset chuẩn. Hàng đã
+        COMMIT vẫn còn đó nên KHÔNG cần đồng thời gì cả. Đây là nguy cơ THẬT; nó
+        chỉ không áp với test dùng fixture chuẩn, vì fixture ấy TRUNCATE trước
+        khi chạy.
+
+    Riêng khoá ``SHARE ROW EXCLUSIVE`` thì khác: giữ tới hết transaction, và chỉ
+    là rủi ro BLOCKING khi có writer ĐỒNG THỜI trên cùng CSDL.
+
+    Ca này giữ leg riêng như DEFENSE-IN-DEPTH: cô lập hai thao tác cấp bảng và
+    giữ blast radius nhỏ nếu mô hình thực thi về sau đổi — không phải vì test
+    dùng fixture chuẩn đang gặp nguy cơ tuần tự hôm nay.
 
     Một lượt đo "chạy chung vẫn xanh" KHÔNG thay thế được ca này: nó chỉ nói
     về đúng thứ tự ấy, đúng bộ fixture ấy, đúng hôm ấy. Bất biến cấu trúc thì
