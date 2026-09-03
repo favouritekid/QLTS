@@ -298,6 +298,10 @@ jobs:
           #   * test_dorm_export_cohort — cohort bám đúng năm học được hỏi;
           #   * test_sync_dorm_students — chặn --batch-size <= 0, thứ từng
           #     khiến một lượt đồng bộ ghi 0 hồ sơ rồi vẫn báo thành công.
+          #   * test_lead_import_phone_identity_map — bản đồ lead↔SĐT ở
+          #     đường nhập hàng loạt không được suy từ thứ tự `RETURNING`;
+          #   * test_lead_cache — mock `bulk_insert_leads`, phải đi cùng tier
+          #     với hợp đồng nó khoá, nếu không hợp đồng đổi mà không ai đỏ.
           #
           # ⚠️ TUYỆT ĐỐI không đặt comment BÊN TRONG `tests: >-`. YAML gấp
           # folded scalar thành MỘT dòng, nên dấu `#` đầu tiên biến toàn bộ
@@ -336,6 +340,8 @@ jobs:
               tests/unit/test_lead_import_empty_cells.py
               tests/unit/test_lead_import_empty_email_end_to_end.py
               tests/unit/test_lead_schema_phone_and_limits.py
+              tests/services/test_lead_import_phone_identity_map.py
+              tests/services/test_lead_cache.py
               tests/services/test_payment_service.py::TestRefundReferenceAndContext
               tests/services/test_payment_service.py::TestRefundSummaryIdor
               tests/services/test_payment_service.py::TestVerifyPayment
@@ -420,6 +426,13 @@ jobs:
           # va xoa `allow` phai GIU `deny` cung (sub,obj,act). Khong dat o lat nhe hon:
           # no phai chay cung luot voi bo khoa RBAC, vi hai ben cung noi ve mot mo hinh.
           # Ghi tier ngay o commit nay vi tep xanh tron 7/7 tu dau.
+          # test_org_unit_access_dependency.py vao Tier 2 cung ho A01: no khoa bat bien
+          # "co dac quyen `allow_read_only` THUOC VE SERVER". Tham so scalar co default
+          # trong chu ky dependency bi FastAPI nang thanh QUERY PARAMETER, nen client
+          # bat duoc cong ghi bang `?allow_read_only=true`. Cac ca goi THANG dependency
+          # la phan chung minh that: moi ca di qua HTTP voi persona officer deu xanh ca
+          # TRUOC lan SAU ban va, vi Casbin khong cap officer quyen tren
+          # /api/admin/organization-units/* nen no che mat thu dang duoc canh.
           # test_admin_sync_aliases.py vao Tier 2 (selector WHOLE-FILE, khong waiver,
           # khong partial): no la duong HTTP THAT cua hai alias admin sync
           # (GET /api/admin/sync/status, POST /api/admin/sync) — cung be mat RBAC
@@ -443,6 +456,7 @@ jobs:
               tests/unit/test_magic_link_rate_limit_key_hashing.py
               tests/api/test_admin_v2_admission_round_phase3_flags.py
               tests/security/test_permissions_matrix.py
+              tests/security/test_org_unit_access_dependency.py
               tests/api/test_casbin_thu_hoi_quyen.py
               tests/unit/test_casbin_lock_coverage.py
               tests/services/test_user.py
@@ -571,6 +585,17 @@ jobs:
           # (bo kenh chinh tac), zalo_phase1_review_findings (dispatch duong xoa +
           # seed rule). Ca bon truoc nay NGOAI MOI TIER — nightly do 10 ca ma
           # required check van xanh. Ghi sau khi xanh tron; ca lat chay ~9 giay.
+          # 2026-09-02 — bốn tệp thêm ở cuối lát này trước nay KHÔNG có tên
+          # trong tier nào, tức không shard nào chạy chúng mà required check
+          # vẫn xanh. `test_rule_loader_db.py` là thứ DUY NHẤT gác đường đọc
+          # rule từ CSDL — đúng chỗ vừa đổi khi bỏ read-cache Redis, nên không
+          # ghi vào đây thì bản vá ấy không có cổng nào nhìn thấy.
+          # `test_registry_fallback_dispatch.py` + `test_lead_notification_flow.py`
+          # là hai nửa của bộ tái hiện tối thiểu đã tái hiện được sự cố FK.
+          # Cả bốn đã chạy xanh trọn TRƯỚC khi ghi vào đây (216 passed /
+          # 1 skipped trên bộ nghiệm thu notification), theo tiền lệ của lát này.
+          # Còn nợ: `tests/integration/test_notification_delivery_persistence.py`
+          # cũng chưa có tier — xanh nhưng chưa kéo vào, để một PR riêng.
           - tier: Tier 3 — Notification reliability
             coverage_script: true
             visibility_guard: true
@@ -582,6 +607,11 @@ jobs:
               tests/services/test_notification_bundle.py
               tests/services/test_admission_bundle_contract.py
               tests/integration/test_condition_dispatch.py
+              tests/integration/test_per_action_dispatch.py
+              tests/services/test_dispatch_stale_rule_cache.py
+              tests/integration/test_rule_loader_db.py
+              tests/integration/test_registry_fallback_dispatch.py
+              tests/integration/test_lead_notification_flow.py
               tests/unit/test_outbox_worker.py
               tests/unit/test_outbox_skeleton.py
               tests/unit/test_check_notification_event_coverage_deferred.py
@@ -590,6 +620,7 @@ jobs:
               tests/api/test_profile_api.py
               tests/unit/test_notification_e2.py
               tests/unit/test_dispatcher_per_action.py
+              tests/unit/test_notification_contract.py
               tests/unit/test_channel_normalization.py
               tests/unit/test_zalo_phase1_review_findings.py
 
