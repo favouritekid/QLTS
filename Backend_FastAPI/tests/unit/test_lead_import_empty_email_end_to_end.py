@@ -55,7 +55,14 @@ class _RepoGia:
         self.da_chen.extend(batch)
         ids = list(range(self._id_ke_tiep, self._id_ke_tiep + len(batch)))
         self._id_ke_tiep += len(batch)
-        return ids
+        # Hợp đồng: trả ``(id, phone, phone2)`` tự mô tả. Ở đây ``zip`` là
+        # HỢP LỆ — vật giả này ĐÓNG VAI CSDL, nó là nơi duy nhất thật sự
+        # biết hàng nào ứng với dòng nào. Điều bị cấm là chỗ GỌI suy quan hệ
+        # ấy từ thứ tự trả về.
+        return [
+            (lead_id, d.get("phone"), d.get("phone2"))
+            for lead_id, d in zip(ids, batch)
+        ]
 
     async def register_phone_identities(self, *_a, **_kw):
         return None

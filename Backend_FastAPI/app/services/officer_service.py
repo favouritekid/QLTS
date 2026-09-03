@@ -10,7 +10,7 @@ from .. import models, schemas
 from ..core.events import SystemEvents
 from ..repositories import OfficerRepository
 from ..repositories.organization_repository import OrganizationRepository
-from .notification_dispatcher import dispatch
+from .notification_dispatcher import dispatch, log_dispatch_failure
 from . import kpi_service
 from .pipeline_service import LOSS_REASONS
 
@@ -260,11 +260,7 @@ async def update_officer_availability(
                 rooms=_notif_rooms,
             )
     except Exception as e:
-        log.warning(
-            "Dispatch failed, business data preserved",
-            officer_id=officer_id,
-            error=str(e)
-        )
+        log_dispatch_failure(db, e, logger=log, officer_id=officer_id)
 
     async def _post_commit():
         """Execute after router commits the transaction."""
