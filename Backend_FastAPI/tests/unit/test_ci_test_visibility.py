@@ -195,9 +195,9 @@ class TestNoiDayHieuLuc:
         assert "github.sha" in str(env["MERGE_SHA"])
 
     def test_khong_bat_fetch_depth_0_o_checkout_chung(self, wf):
-        # Bước checkout là bước CHUNG của cả sáu leg. Bật full history ở đó bắt
-        # sáu runner tải toàn bộ lịch sử + tags cho một phép so hai cây vốn chỉ
-        # cần thêm đúng một commit.
+        # Bước checkout là bước CHUNG của MỌI leg. Bật full history ở đó bắt
+        # từng runner matrix tải toàn bộ lịch sử + tags cho một phép so hai cây
+        # vốn chỉ cần thêm đúng một commit.
         for s in wf["jobs"]["pytest-shard"]["steps"]:
             if "actions/checkout" in str(s.get("uses", "")):
                 sau = (s.get("with") or {}).get("fetch-depth")
@@ -535,3 +535,103 @@ class TestSelectorTrungLapVaChongLan:
         )
         with pytest.raises(guard.LoiCong, match="vừa có whole-file vừa có nodeid"):
             guard.phan_tich_selector(wf)
+
+
+# =============================================================================
+# LEG CÁCH LY — tệp có DDL/UPDATE cấp BẢNG không được ở chung invocation
+# =============================================================================
+
+TEP_CACH_LY = "tests/api/test_adm_024_strict_default_migration.py"
+
+
+class TestLegCachLy:
+    """`adm_024` phải chiếm trọn một leg matrix, không chia với ai.
+
+    Hai thao tác của tệp ấy đều ở cấp BẢNG chứ không cấp hàng:
+      * ``UPDATE admission_path SET allow_unverified_submission = FALSE`` —
+        không có vị từ ``id``, nên nó lật cờ của MỌI hàng, kể cả hàng mà test
+        khác vừa seed;
+      * ``ALTER TABLE admission_profile DISABLE TRIGGER
+        enforce_applied_rules_immutability`` — DDL cấp bảng: lấy khoá
+        ``SHARE ROW EXCLUSIVE`` trên cả bảng và giữ đến hết transaction
+        (không nhả sau ``ENABLE``), nên mọi ``INSERT``/``UPDATE``/``DELETE``
+        vào ``admission_profile`` của phiên khác phải xếp hàng — ``SELECT``
+        thì không. Đây là rủi ro KHOÁ, KHÔNG phải "trigger ở lại trạng thái
+        tắt": ``DISABLE`` và ``ENABLE`` nằm trong CÙNG một transaction
+        (``ENABLE`` ở ``finally``), mà DDL của PostgreSQL là transactional —
+        trạng thái tắt chưa commit thì phiên khác không nhìn thấy, và tiến
+        trình chết thì backend abort transaction nên trigger trở lại BẬT.
+
+    Cả hai KHÔNG phải nguy cơ TUẦN TỰ với fixture chuẩn: ``setup_test_database``
+    (``tests/conftest.py:235``) dựng lược đồ MỘT lần rồi TRUNCATE toàn bộ bảng
+    TRƯỚC mỗi test CSDL kế tiếp, và cả BA ca ADM-024 đều kéo fixture ấy (ca 1 qua
+    ``adm024_paths`` -> ``seed_lead_dependencies``; ca 2 và 3 qua ``client``). Với
+    hình dạng CI hiện tại — MỘT process pytest, không xdist, mỗi leg matrix một
+    PostgreSQL/Redis RIÊNG — test tuần tự dùng fixture chuẩn KHÔNG nhìn thấy dữ
+    liệu mà tệp ấy đã lật.
+
+    Hai đường nhiễu KHÁC NHAU, đừng gộp làm một:
+      * ĐỒNG THỜI — xdist, hoặc một tiến trình khác dùng CÙNG CSDL, chạy xen vào;
+      * TUẦN TỰ — một test chạy SAU nhưng BỎ QUA fixture reset chuẩn. Hàng đã
+        COMMIT vẫn còn đó nên KHÔNG cần đồng thời gì cả. Đây là nguy cơ THẬT; nó
+        chỉ không áp với test dùng fixture chuẩn, vì fixture ấy TRUNCATE trước
+        khi chạy.
+
+    Riêng khoá ``SHARE ROW EXCLUSIVE`` thì khác: giữ tới hết transaction, và chỉ
+    là rủi ro BLOCKING khi có writer ĐỒNG THỜI trên cùng CSDL.
+
+    Ca này giữ leg riêng như DEFENSE-IN-DEPTH: cô lập hai thao tác cấp bảng và
+    giữ blast radius nhỏ nếu mô hình thực thi về sau đổi — không phải vì test
+    dùng fixture chuẩn đang gặp nguy cơ tuần tự hôm nay.
+
+    Một lượt đo "chạy chung vẫn xanh" KHÔNG thay thế được ca này: nó chỉ nói
+    về đúng thứ tự ấy, đúng bộ fixture ấy, đúng hôm ấy. Bất biến cấu trúc thì
+    còn đúng với mọi thứ tự và mọi fixture thêm vào sau.
+    """
+
+    def test_tep_cach_ly_nam_dung_mot_leg(self, cac_leg):
+        chua = [
+            str(leg.get("tier", ""))
+            for leg in cac_leg
+            if TEP_CACH_LY in str(leg.get("tests", "")).split()
+        ]
+        assert len(chua) == 1, (
+            "%s phải nằm trong ĐÚNG MỘT leg matrix, đang ở %d leg: %r. "
+            "0 leg nghĩa là không shard nào chạy nó mà required check vẫn xanh; "
+            ">1 leg nghĩa là nó chạy song song với chính nó trên hai DB."
+            % (TEP_CACH_LY, len(chua), chua)
+        )
+
+    def test_leg_chua_tep_cach_ly_khong_chia_voi_ai(self, cac_leg):
+        for leg in cac_leg:
+            sel = str(leg.get("tests", "")).split()
+            if TEP_CACH_LY not in sel:
+                continue
+            ban_cung_leg = [s for s in sel if s != TEP_CACH_LY]
+            assert ban_cung_leg == [], (
+                "leg %r chứa %s CÙNG VỚI %d selector khác: %r. "
+                "Tệp này UPDATE toàn bảng `admission_path` rồi COMMIT và giữ khoá "
+                "cấp bảng trên `admission_profile` đến hết transaction. Fixture "
+                "chuẩn TRUNCATE giữa các test nên gộp KHÔNG chắc gây sai ở cấu "
+                "hình hôm nay; leg riêng là defense-in-depth cho lúc mô hình thực "
+                "thi đổi. Nếu thật sự muốn gộp thì phải gỡ hai thao tác cấp bảng "
+                "ấy trước, và sửa ca này trong cùng một lần để việc gộp hiện ra "
+                "trong diff."
+                % (str(leg.get("tier", "")), TEP_CACH_LY,
+                   len(ban_cung_leg), ban_cung_leg[:5])
+            )
+
+    def test_leg_cach_ly_khong_om_them_co_visibility_guard(self, cac_leg):
+        """Leg cách ly không được kiêm cổng độ nhìn thấy.
+
+        Cổng ấy đã có đúng một chỗ (ca `test_dung_mot_leg_bat_co_visibility_guard`
+        khoá số 1). Ca này chặn lối "tiện tay" gắn thêm vào leg mới, vì leg cách
+        ly là leg dễ đỏ nhất do hạ tầng — buộc cổng vào đó là tự tạo một điểm
+        chết chung.
+        """
+        for leg in cac_leg:
+            if TEP_CACH_LY in str(leg.get("tests", "")).split():
+                assert not leg.get("visibility_guard"), (
+                    "leg cách ly %r không được bật visibility_guard"
+                    % str(leg.get("tier", ""))
+                )

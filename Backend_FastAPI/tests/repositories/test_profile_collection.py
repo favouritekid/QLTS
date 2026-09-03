@@ -336,22 +336,31 @@ async def test_total_remaining_excludes_waived_includes_penalty():
     """Regression (PR2 review): a waive AFTER an invoice is issued bumps
     fee.waived but leaves invoice.amount untouched, so total_remaining must be
     Σ fee.remaining (reflects the waiver) + Σ non-terminal invoice penalty —
-    NEVER Σ invoice.remaining (which ignores the waiver and over-states)."""
+    NEVER Σ invoice.remaining (which ignores the waiver and over-states).
+
+    Every stub fee carries an explicit ``status``: ``_total_remaining_with_penalty``
+    reads it through ``_fee_status_value`` (app/routers/fees.py:1105) to drop
+    CANCELLED fees (app/routers/fees.py:1149-1156), so a status-less namespace
+    raises ``AttributeError`` instead of exercising the sum. The cancelled fee
+    below is the counter-case that proves the filter is live."""
     from types import SimpleNamespace as NS
 
     # Fee waived 400k of 1M (paid 0) → fee.remaining 600k; its issued invoice
     # still shows the full 1M (waive_fee never touches the invoice).
-    fee_waived = NS(remaining_amount=Decimal("600000"))
+    fee_waived = NS(remaining_amount=Decimal("600000"), status="partial")
     inv_waived = NS(
         remaining_amount=Decimal("1000000"),  # stale: ignores the waiver
         penalty_amount=Decimal("0"), status="issued",
     )
     # Overdue fee whose invoice carries a 50k penalty (penalty ∉ the fee).
-    fee_overdue = NS(remaining_amount=Decimal("200000"))
+    fee_overdue = NS(remaining_amount=Decimal("200000"), status="overdue")
     inv_overdue = NS(
         remaining_amount=Decimal("250000"),
         penalty_amount=Decimal("50000"), status="overdue",
     )
+    # A CANCELLED fee still carries a non-zero remaining (final − paid − waived)
+    # but is void — its principal must NOT reach the header.
+    fee_cancelled = NS(remaining_amount=Decimal("777000"), status="cancelled")
     # A cancelled invoice's penalty must NOT count.
     inv_cancelled = NS(
         remaining_amount=Decimal("999"),
@@ -359,10 +368,12 @@ async def test_total_remaining_excludes_waived_includes_penalty():
     )
 
     total = _total_remaining_with_penalty(
-        [fee_waived, fee_overdue], [inv_waived, inv_overdue, inv_cancelled]
+        [fee_waived, fee_overdue, fee_cancelled],
+        [inv_waived, inv_overdue, inv_cancelled],
     )
     # 600k + 200k principal + 50k penalty = 850k. The regressed Σ invoice.remaining
-    # would give 1,000,000 + 250,000 = 1,250,000 — 400k too high (dropped waiver).
+    # would give 1,000,000 + 250,000 = 1,250,000 — 400k too high (dropped waiver);
+    # dropping the cancelled-fee filter would give 1,627,000 (777k too high).
     assert total == Decimal("850000")
 
 
@@ -376,7 +387,9 @@ async def test_total_remaining_clamps_negative_when_penalty_paid_in_full():
     from types import SimpleNamespace as NS
 
     # final 1M, paid 1.05M (1M principal + 50k penalty) → fee.remaining = -50k.
-    fee_overpaid = NS(remaining_amount=Decimal("-50000"))
+    # ``status`` is mandatory — the cancelled-fee filter reads it
+    # (app/routers/fees.py:1149-1156); 'paid' keeps this fee inside the sum.
+    fee_overpaid = NS(remaining_amount=Decimal("-50000"), status="paid")
     # Its invoice is now fully paid (terminal) → penalty excluded from the sum.
     inv_paid = NS(
         remaining_amount=Decimal("0"),
@@ -393,7 +406,9 @@ async def test_total_remaining_total_clamp_preserves_partial_penalty_offset():
     from types import SimpleNamespace as NS
 
     # Fee overpaid: final 1M, paid 1.03M → fee.remaining = -30k.
-    fee = NS(remaining_amount=Decimal("-30000"))
+    # ``status`` is mandatory — the cancelled-fee filter reads it
+    # (app/routers/fees.py:1149-1156); 'partial' keeps this fee inside the sum.
+    fee = NS(remaining_amount=Decimal("-30000"), status="partial")
     # Its invoice is still 'partial' (penalty not fully paid) → penalty counted.
     inv = NS(
         remaining_amount=Decimal("20000"),

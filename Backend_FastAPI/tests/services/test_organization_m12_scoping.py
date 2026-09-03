@@ -7,6 +7,18 @@ Verifies:
 - Manager sees ONLY managed units + descendants
 - Officer sees ONLY their own unit + descendants
 - Unknown role sees all data (Casbin handles endpoint access)
+
+Deliberate exception — ``get_all_program_offerings``
+----------------------------------------------------
+``603eda3c`` added an M12 unit filter to the offerings dropdown; ``b206fede``
+("fix(rbac): grant officer lead CRUD permissions and fix offerings dropdown",
+2026-02-11) REMOVED it again on purpose. Officers sitting in administrative
+units (Phòng Tuyển sinh) must be able to pick ANY program when creating a
+lead, so this one endpoint stays unscoped and Casbin gates it at the router.
+The reason is written into the service docstring —
+``app/services/organization_service.py:1949-1955``. ``get_all_academic_infos``
+KEEPS its filter (``app/services/organization_service.py:1985-2005``); do not
+generalise the exception to it.
 """
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -311,7 +323,7 @@ def test_filter_agg_tree_empty_managed():
 
 
 # =============================================================================
-# TESTS: get_all_program_offerings with scoping
+# TESTS: get_all_program_offerings — deliberately NOT unit-scoped (b206fede)
 # =============================================================================
 
 
@@ -335,8 +347,23 @@ async def test_get_all_offerings_admin_no_filter(mock_db_session, admin_user, mo
 
 
 @pytest.mark.asyncio
-async def test_get_all_offerings_manager_filtered(mock_db_session, manager_user, mocker):
-    """Manager → only offerings from managed units."""
+async def test_get_all_offerings_manager_unscoped_by_design(
+    mock_db_session, manager_user, mocker
+):
+    """Manager → ALL offerings, including ones outside their managed units.
+
+    NOT a scoping hole: ``b206fede`` deliberately removed the M12 filter that
+    ``603eda3c`` had added, because the offerings endpoint feeds the LeadDialog
+    /LeadFilterBar dropdown and staff in administrative units must be able to
+    pick any program. Reason of record:
+    ``app/services/organization_service.py:1949-1955``.
+
+    Two locks, so the test fails if the behaviour drifts either way:
+      1. both offerings come back (a re-added filter would drop unit 99);
+      2. the unit-scope helpers are never consulted at all — a filter added
+         through ``_get_managed_unit_ids`` / ``get_descendant_unit_ids`` trips
+         this even if the fixture data happened to survive it.
+    """
     prog_managed = MagicMock(unit_id=10)
     prog_other = MagicMock(unit_id=99)
     offering_managed = MagicMock(program=prog_managed)
@@ -350,7 +377,7 @@ async def test_get_all_offerings_manager_filtered(mock_db_session, manager_user,
     )
     mock_repo.return_value.get_descendant_unit_ids = AsyncMock(return_value=[10, 11])
 
-    mocker.patch(
+    managed_units_mock = mocker.patch(
         "app.services.organization_service._get_managed_unit_ids",
         new_callable=AsyncMock,
         return_value=[10],
@@ -359,8 +386,13 @@ async def test_get_all_offerings_manager_filtered(mock_db_session, manager_user,
     result = await organization_service.get_all_program_offerings(
         mock_db_session, current_user=manager_user
     )
-    assert len(result) == 1
-    assert result[0].program.unit_id == 10
+    assert len(result) == 2, (
+        "Offerings dropdown must stay unscoped (b206fede) — got "
+        f"{[o.program.unit_id for o in result]}"
+    )
+    assert {o.program.unit_id for o in result} == {10, 99}
+    managed_units_mock.assert_not_awaited()
+    mock_repo.return_value.get_descendant_unit_ids.assert_not_awaited()
 
 
 # =============================================================================
