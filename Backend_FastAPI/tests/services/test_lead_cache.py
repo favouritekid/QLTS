@@ -140,7 +140,14 @@ class TestImportUrgencyInitialization:
 
         async def _bulk_insert_leads(batch):
             captured["batch"] = batch
-            return [101]
+            # Hợp đồng: mỗi hàng TỰ MÔ TẢ ``(id, phone, phone2)`` — đó là
+            # thứ khiến chỗ gọi không phải ghép id với SĐT theo vị trí.
+            # Mock phải giữ đúng hình dạng ấy, nếu không nó khoá một hợp
+            # đồng đã chết và bản vá thật sẽ vỡ ở đây thay vì ở sản phẩm.
+            return [
+                (101 + i, d.get("phone"), d.get("phone2"))
+                for i, d in enumerate(batch)
+            ]
 
         repo.bulk_insert_leads.side_effect = _bulk_insert_leads
 

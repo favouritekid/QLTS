@@ -298,6 +298,10 @@ jobs:
           #   * test_dorm_export_cohort — cohort bám đúng năm học được hỏi;
           #   * test_sync_dorm_students — chặn --batch-size <= 0, thứ từng
           #     khiến một lượt đồng bộ ghi 0 hồ sơ rồi vẫn báo thành công.
+          #   * test_lead_import_phone_identity_map — bản đồ lead↔SĐT ở
+          #     đường nhập hàng loạt không được suy từ thứ tự `RETURNING`;
+          #   * test_lead_cache — mock `bulk_insert_leads`, phải đi cùng tier
+          #     với hợp đồng nó khoá, nếu không hợp đồng đổi mà không ai đỏ.
           #
           # ⚠️ TUYỆT ĐỐI không đặt comment BÊN TRONG `tests: >-`. YAML gấp
           # folded scalar thành MỘT dòng, nên dấu `#` đầu tiên biến toàn bộ
@@ -336,6 +340,8 @@ jobs:
               tests/unit/test_lead_import_empty_cells.py
               tests/unit/test_lead_import_empty_email_end_to_end.py
               tests/unit/test_lead_schema_phone_and_limits.py
+              tests/services/test_lead_import_phone_identity_map.py
+              tests/services/test_lead_cache.py
               tests/services/test_payment_service.py::TestRefundReferenceAndContext
               tests/services/test_payment_service.py::TestRefundSummaryIdor
               tests/services/test_payment_service.py::TestVerifyPayment
