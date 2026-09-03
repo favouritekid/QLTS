@@ -56,6 +56,11 @@ __all__ = [
     "verify_criteria_visibility",  # Phase 6.5
     "verify_user_management_permission",
 
+    # Organizational Unit IDOR — cờ allow_read_only THUỘC VỀ SERVER
+    "get_organizational_unit_readonly",   # cổng ĐỌC (hardcode True)
+    "get_organizational_unit_for_write",  # cổng GHI (hardcode False)
+    "get_organizational_unit_for_user",   # lối gọi tầng service, KHÔNG phải dependency
+
     # Admission State Machine IDOR (State Machine Implementation)
     "get_admission_for_manager",  # Manager approve/reject
     "get_admission_for_admin_locked",  # Admin rollback — SELECT FOR UPDATE
@@ -1477,14 +1482,40 @@ async def get_distribution_rule_for_user(
     )
 
 
-async def get_organizational_unit_for_user(
-    unit_id: int = Path(..., description="ID của Organization Unit"),
-    db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = Depends(get_current_user),
+# =============================================================================
+# ORGANIZATIONAL UNIT ACCESS (IDOR — A01 broken access control)
+# =============================================================================
+# `allow_read_only` là CÔNG TẮC ĐẶC QUYỀN THUỘC VỀ SERVER. Nó tuyệt đối không
+# được xuất hiện trong chữ ký của bất kỳ callable nào FastAPI soi (`Depends`),
+# vì một `bool` trần có default sẽ bị FastAPI nâng thành **query parameter** —
+# lúc đó bất kỳ client nào cũng bật được cổng bằng `?allow_read_only=true`.
+#
+# Vì vậy:
+#   * `_resolve_organizational_unit_access` — resolver NỘI BỘ, tham số Python
+#     thuần (không `Path`/`Query`/`Depends`), cờ là KEYWORD-ONLY. KHÔNG BAO GIỜ
+#     được nối vào FastAPI bằng `Depends(...)`.
+#   * `get_organizational_unit_readonly`  — dependency ĐỌC, hardcode True.
+#   * `get_organizational_unit_for_write` — dependency GHI, hardcode False.
+#   * `get_organizational_unit_for_user`  — lối gọi cho TẦNG SERVICE (không
+#     phải dependency), giữ nguyên tên cũ cho `organization_service`.
+#
+# Giấu cờ bằng `Query(include_in_schema=False)` KHÔNG phải bản vá: giấu khỏi
+# tài liệu không bằng biến mất khỏi chữ ký — FastAPI vẫn nhận giá trị từ client.
+
+
+async def _resolve_organizational_unit_access(
+    unit_id: int,
+    db: AsyncSession,
+    current_user: models.User,
+    *,
     allow_read_only: bool = False,
 ) -> models.OrganizationUnit:
     """
-    Verify ownership and retrieve an organizational unit.
+    INTERNAL resolver — plain async function, **NEVER** a FastAPI dependency.
+
+    Không có `Path`/`Query`/`Depends` trong chữ ký và `allow_read_only` là
+    keyword-only, nên FastAPI không thể phơi bất cứ thứ gì ở đây ra query.
+    Nối hàm này bằng `Depends(...)` là tái tạo lại đúng lỗ hổng A01 đã vá.
 
     **Security Levels:**
     - **Admin**: Full access to all units
@@ -1492,42 +1523,21 @@ async def get_organizational_unit_for_user(
     - **Officer**: Read-only access if allow_read_only=True, otherwise denied
 
     **IDOR Prevention:**
-    This dependency prevents cross-unit access violations by verifying
-    organizational unit ownership.
+    Chặn truy cập chéo đơn vị bằng cách xác minh quyền sở hữu đơn vị tổ chức.
 
     Args:
         unit_id: ID of the organizational unit to access
-        db: Database session (injected)
-        current_user: Current authenticated user (injected)
-        allow_read_only: If True, allows Officers to view units they belong to
+        db: Database session
+        current_user: Current authenticated user
+        allow_read_only: SERVER-OWNED. Do người gọi phía server quyết định,
+            không bao giờ do client truyền vào.
 
     Returns:
         OrganizationUnit model if access is permitted
 
     Raises:
-        ResourceNotFoundError: If unit doesn't exist
-        PermissionDeniedError: If user doesn't have permission to access this unit
-
-    Example:
-        ```python
-        # Write operation (managers only)
-        @router.put("/organization-units/{unit_id}")
-        async def update_unit(
-            unit: models.OrganizationUnit = Depends(get_organizational_unit_for_user)
-        ):
-            # Only admin/managers can reach here
-            ...
-
-        # Read operation (allow officers)
-        @router.get("/organization-units/{unit_id}")
-        async def get_unit(
-            unit: models.OrganizationUnit = Depends(
-                lambda **kwargs: get_organizational_unit_for_user(**kwargs, allow_read_only=True)
-            )
-        ):
-            # Admin, managers, and officers in this unit can view
-            ...
-        ```
+        ResourceNotFoundError: If unit doesn't exist or access is denied
+            (404 chứ không 403 — không rò rỉ sự tồn tại của tài nguyên)
     """
     from sqlalchemy import select
     from ..services import organization_service
@@ -1605,6 +1615,61 @@ async def get_organizational_unit_for_user(
     )
     raise ResourceNotFoundError(
         detail="Organizational unit not found"
+    )
+
+
+async def get_organizational_unit_for_user(
+    unit_id: int,
+    db: AsyncSession,
+    current_user: models.User,
+    *,
+    allow_read_only: bool = False,
+) -> models.OrganizationUnit:
+    """
+    Lối gọi cho TẦNG SERVICE — **KHÔNG phải FastAPI dependency**.
+
+    `organization_service._check_unit_access` gọi hàm này bằng keyword. Chữ ký
+    không có `Path`/`Depends` nên nối nó vào `Depends(...)` sẽ nổ ngay lúc khai
+    báo route (FastAPI không dựng nổi response field cho `AsyncSession`) —
+    fail-closed, thay vì âm thầm phơi `allow_read_only` ra query như bản cũ.
+
+    Router PHẢI dùng `get_organizational_unit_readonly` hoặc
+    `get_organizational_unit_for_write`.
+    """
+    return await _resolve_organizational_unit_access(
+        unit_id, db, current_user, allow_read_only=allow_read_only
+    )
+
+
+async def get_organizational_unit_readonly(
+    unit_id: int = Path(..., description="ID của Organization Unit"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> models.OrganizationUnit:
+    """
+    Cổng ĐỌC đơn vị tổ chức — `allow_read_only` HARDCODE `True` phía server.
+
+    Admin: mọi đơn vị · Manager: đơn vị mình quản lý · Officer: đúng đơn vị
+    mình thuộc về (chỉ đọc). Không có tham số nào cho client bật/tắt điều đó.
+    """
+    return await _resolve_organizational_unit_access(
+        unit_id=unit_id, db=db, current_user=current_user, allow_read_only=True
+    )
+
+
+async def get_organizational_unit_for_write(
+    unit_id: int = Path(..., description="ID của Organization Unit"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> models.OrganizationUnit:
+    """
+    Cổng GHI đơn vị tổ chức — `allow_read_only` HARDCODE `False` phía server.
+
+    Admin: mọi đơn vị · Manager: đơn vị mình quản lý · Officer: TỪ CHỐI, kể cả
+    officer thuộc đúng đơn vị đó, và không có đường nào từ ngoài nới ra được.
+    """
+    return await _resolve_organizational_unit_access(
+        unit_id=unit_id, db=db, current_user=current_user, allow_read_only=False
     )
 
 
@@ -2112,7 +2177,15 @@ async def get_config_filter(
 
 # NEW: Ownership verification shortcuts for IDOR prevention
 DistributionRuleAccessDep = Depends(get_distribution_rule_for_user)
-OrgUnitAccessDep = Depends(get_organizational_unit_for_user)
+
+# Đơn vị tổ chức: HAI cổng riêng, cờ đặc quyền do server giữ (xem khối
+# "ORGANIZATIONAL UNIT ACCESS" ở trên). KHÔNG nối `Depends` vào
+# `_resolve_organizational_unit_access` hay `get_organizational_unit_for_user`.
+OrgUnitReadDep = Depends(get_organizational_unit_readonly)
+OrgUnitWriteDep = Depends(get_organizational_unit_for_write)
+# Tên cũ — giữ lại cho router chưa đổi tên, nay trỏ vào cổng GHI (mặc định
+# CHẶT). Trước bản vá nó trỏ vào hàm có cờ client bật được qua query.
+OrgUnitAccessDep = OrgUnitWriteDep
 
 
 # =============================================================================

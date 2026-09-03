@@ -42,7 +42,7 @@ import structlog
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
-# from sqlalchemy import and_, cast, insert, select, String (removed - using repository)
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -525,7 +525,7 @@ async def _send_via_channel(
             log.info(
                 "Channel not yet implemented, skipping delivery",
                 channel=channel_name,
-                event=event,
+                event_type=event,
                 recipient_count=len(recipient_ids),
             )
             return (channel_name, None, None)  # Not an error — just not ready
@@ -717,13 +717,17 @@ async def dispatch(
                    If provided, prevents duplicate notifications for same key+user
         skip_preference_check: If True, skip user preference filtering
                               Use for critical system notifications
-        strict: If True, DB persistence failures (e.g. bulk insert
-                IntegrityError) are re-raised to the caller instead of
-                being absorbed by an internal ``db.rollback()``. Used by
-                ``dispatch_bundle()`` so a failed notification insert
-                rolls back only the surrounding SAVEPOINT, leaving the
-                outer business transaction alive. Default False preserves
-                legacy best-effort behavior for all non-bundle callers.
+        strict: Quyết định điều gì xảy ra khi pha ghi bền hỏng.
+                ``True``  — ngoại lệ NỔI LÊN caller; caller phải bọc
+                            ``db.begin_nested()`` để savepoint hấp thụ
+                            (``dispatch_bundle`` làm đúng thế).
+                ``False`` — hỏng ở pha tạo Notification CHA HUỶ CẢ SỰ KIỆN:
+                            trả ``([], callback chỉ emit domain)``. KHÔNG
+                            còn dữ liệu một phần, và KHÔNG còn
+                            ``db.rollback()`` nội bộ nào (đã gỡ 2026-09-02
+                            — nó cuộn về GỐC và nuốt cả giao dịch của
+                            caller). Hỏng ở pha delivery thì đi tiếp sang
+                            action kế, vì mỗi lần ghi có savepoint riêng.
         rooms: Optional Socket.IO rooms for the realtime domain emit.
                Required for sensitive events (admission/lead/finance/user
                PII) when ``settings.SOCKET_SCOPED_EMIT=True``; public
@@ -745,6 +749,9 @@ async def dispatch(
         - Caller owns transaction: service flushes, caller commits
         - Caller runs callback AFTER commit (socket.io, email, worker enqueue)
         - On exception: caller handles rollback
+        - Với ``strict=False``, lỗi pha CHA KHÔNG nổi lên: ``dispatch`` trả
+          ``[]`` kèm callback chỉ emit domain. Caller phân biệt bằng danh
+          sách rỗng, KHÔNG bằng exception.
         - When ``strict=True``: persistence errors propagate; the caller
           (typically ``dispatch_bundle``) must wrap the call in
           ``db.begin_nested()`` so the savepoint absorbs the rollback
@@ -1101,18 +1108,53 @@ async def dispatch(
         notification_data["dedupe_key"] = action_dedupe_keys.get(browser_action.step) if browser_action else dedupe_key
 
     # Step 6: Bulk insert inbox Notification rows (for browser-eligible users only)
-    notification_ids = []
+    notification_id_map: Dict[int, int] = {}
     if inbox_user_ids:
-        notification_ids = await _bulk_create_notifications(
-            db=db,
-            user_ids=inbox_user_ids,
-            title=title,
-            message=message,
-            notification_type=notification_type,
-            link=link,
-            data=notification_data,
-            strict=strict,
-        )
+        try:
+            # Savepoint CẤP SỰ KIỆN, bao trọn CẢ vòng lặp chunk bên trong
+            # ``_bulk_create_notifications``. Savepoint cấp-chunk (bản trước)
+            # cho một bảo đảm sai: với hơn 100 người nhận, chunk 1 release
+            # xong rồi chunk 2 hỏng thì hàng của chunk 1 vẫn nằm trong giao
+            # dịch ngoài, và khối dọn hàng mồ côi phía dưới KHÔNG chạy tới
+            # (đường ``except`` này ``return`` trước nó) ⇒ commit ra hàng mồ côi.
+            async with db.begin_nested():
+                notification_id_map = await _bulk_create_notifications(
+                    db=db,
+                    user_ids=inbox_user_ids,
+                    title=title,
+                    message=message,
+                    notification_type=notification_type,
+                    link=link,
+                    data=notification_data,
+                    strict=strict,
+                )
+        except Exception as e:
+            # Hỏng ở pha CHA thì huỷ cả sự kiện. Đi tiếp sẽ dùng một danh
+            # sách ID thiếu/lệch so với ``inbox_user_ids`` và sinh delivery
+            # trỏ sai người nhận hoặc trỏ vào hàng không tồn tại.
+            #
+            # Phiên còn dùng được ở đây là nhờ ``async with db.begin_nested()``
+            # NGAY TRÊN — savepoint cấp sự kiện đã ``ROLLBACK TO`` trước khi
+            # tới đây. KHÔNG phải nhờ repository: ``bulk_create`` đã bỏ
+            # savepoint riêng, có chủ ý (xem chú thích ở đó).
+            log.error(
+                "Failed to create parent notifications — aborting event",
+                event_type=event.value,
+                recipient_count=len(inbox_user_ids),
+                error=str(e),
+                strict=strict,
+            )
+            if strict:
+                raise
+
+            async def _abort_callback():
+                await _emit_domain_event(event, payload, rooms=rooms)
+
+            return [], _abort_callback
+
+    # ``notification_ids`` chỉ còn là DẪN XUẤT của bản đồ có chủ quyền.
+    # Mọi quan hệ user ↔ notification phải đi qua ``notification_id_map``.
+    notification_ids = list(notification_id_map.values())
 
     # Phase C1: notification_ids can be empty (no browser recipients) while
     # other channels still have recipients. Only short-circuit if truly nothing.
@@ -1125,7 +1167,10 @@ async def dispatch(
             pass
         return [], _empty_callback
 
-    notification_id_map = dict(zip(inbox_user_ids, notification_ids)) if notification_ids else {}
+    # (Bản đồ đã được dựng từ ``RETURNING user_id, id`` ở trên — KHÔNG
+    # ``dict(zip(inbox_user_ids, notification_ids))``: thứ tự RETURNING của
+    # bulk insert không có bảo đảm hình thức, ghép theo vị trí sẽ gán
+    # notification của người này cho người kia.)
     _source_type, _source_id = _extract_source_from_payload(event, payload)
 
     # Phase E2: Pre-fetch templates for per-action rendering
@@ -1135,6 +1180,13 @@ async def dispatch(
     from app.services import notification_delivery_service
     action_delivery_map: Dict[int, List[int]] = {}
     channel_delivery_ids: Dict[str, List[int]] = {}
+    # Những ``notification`` cha ĐÃ có ít nhất một hàng delivery đi kèm.
+    # Đếm trong bộ nhớ chứ không truy vấn lại: rẻ hơn một round-trip mỗi
+    # lượt dispatch, và đúng cả khi phiên là đối tượng giả trong test.
+    _notif_da_giao: set = set()
+    # user_id -> delivery_id cho kênh browser. Dựng NGAY tại chỗ ghi, nơi
+    # thứ tự người nhận và thứ tự delivery chắc chắn khớp nhau.
+    _browser_uid_to_did: Dict[int, int] = {}
 
     for action in action_configs:
         action_users = action_filtered_map.get(action.step, [])
@@ -1158,6 +1210,21 @@ async def dispatch(
             )
             action_delivery_map[action.step] = delivery_ids
             channel_delivery_ids.setdefault(action.channel, []).extend(delivery_ids)
+            # CHỈ kênh ``browser``. Hàng ``Notification`` LÀ hàng inbox —
+            # nó chỉ được tạo khi có người nhận kênh browser
+            # (``inbox_user_ids = channel_recipient_map["browser"]``). Một
+            # action ``email`` ghi được delivery KHÔNG chứng minh chuông của
+            # người đó có đường giao; đếm cả kênh khác sẽ để lại hàng inbox
+            # không ai giao được mà vẫn coi là hợp lệ.
+            if action.channel == "browser":
+                _notif_da_giao.update(
+                    notification_id_map[_u] for _u in action_users
+                    if notification_id_map.get(_u) is not None
+                )
+                # ``_create_deliveries_for_action`` dựng ``deliveries_data``
+                # theo đúng thứ tự ``user_ids``, và ``bulk_create_deliveries``
+                # giữ nguyên thứ tự ấy — nên ghép ở ĐÂY là an toàn.
+                _browser_uid_to_did.update(zip(action_users, delivery_ids))
         except Exception as e:
             log.error("Failed to create delivery rows for action",
                      step=action.step, channel=action.channel, error=str(e),
@@ -1190,7 +1257,7 @@ async def dispatch(
                 log.warning(
                     "Unknown external resolver type",
                     resolver_type=ext_resolver_type,
-                    event=event.value,
+                    event_type=event.value,
                 )
                 continue
 
@@ -1285,6 +1352,9 @@ async def dispatch(
                 if fallback_ids:
                     channel_delivery_ids.setdefault(ch, []).extend(fallback_ids)
                     action_delivery_map.setdefault(action.step, []).extend(fallback_ids)
+                    # KHÔNG cộng vào ``_notif_da_giao``: vòng lặp external
+                    # đã ``continue`` với ``action.channel == "browser"``, nên
+                    # nhánh fallback này chỉ tạo delivery cho kênh KHÁC browser.
                 log.info(
                     "External resolver returned internal user, created internal delivery",
                     event_type=event.value,
@@ -1386,6 +1456,44 @@ async def dispatch(
     for ch, ext_ids in _external_delivery_ids.items():
         channel_delivery_ids.setdefault(ch, []).extend(ext_ids)
 
+    # ✅ 2026-09-02: KHÔNG để lại ``notification`` mồ côi.
+    #
+    # Với savepoint theo từng lần ghi, một action hỏng nay chỉ cuộn phần
+    # của nó — nghĩa là hàng ``notification`` cha VẪN SỐNG. Nếu không
+    # action nào ghi được delivery cho nó thì đó là chuông đỏ trong inbox
+    # mà không đường nào giao, và không dấu vết kiểm toán nào giải thích.
+    # Không ràng buộc nào của CSDL canh quan hệ này, nên phải canh ở đây.
+    if notification_ids:
+        _mo_coi = [n for n in notification_ids if n not in _notif_da_giao]
+        if _mo_coi:
+            log.warning(
+                "Rolling back orphan notifications (no delivery row created)",
+                event_type=event.value,
+                orphan_count=len(_mo_coi),
+            )
+            await db.execute(
+                sa_delete(models.Notification)
+                .where(models.Notification.id.in_(_mo_coi))
+            )
+            # ⚠️ Phải cập nhật ĐỒNG BỘ cả ba cấu trúc dẫn xuất. Bản trước chỉ
+            # thu gọn ``notification_ids`` rồi vẫn ``zip()`` nó với
+            # ``inbox_user_ids`` NGUYÊN VẸN ở bước nạp cache inbox — ghép lệch
+            # một bậc: [u1,u2] ↔ [n1,n2] mà chỉ n2 sống sót thì thành u1 ↔ n2,
+            # tức ID notification của u2 bị đẩy vào ``user_inbox:u1``.
+            # ``notification_id_map`` là nguồn chuẩn; hai danh sách chỉ là
+            # dẫn xuất và phải theo nó.
+            _mo_coi_set = set(_mo_coi)
+            notification_id_map = {
+                _u: _n for _u, _n in notification_id_map.items()
+                if _n not in _mo_coi_set
+            }
+            notification_ids = [
+                n for n in notification_ids if n not in _mo_coi_set
+            ]
+            inbox_user_ids = [
+                _u for _u in inbox_user_ids if _u in notification_id_map
+            ]
+
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()
 
@@ -1421,14 +1529,17 @@ async def dispatch(
             await _emit_domain_event(event, payload, rooms=rooms)
 
         # Step 7.5: ✅ PHASE 1.2: Prepend new notifications to inbox cache
-        # Only cache for browser-eligible users (bell icon / dropdown).
-        # notification_ids[i] matches inbox_user_ids[i], so filter both lists
-        # to only browser-eligible users.
+        # Chỉ nạp cache cho người nhận kênh browser (chuông / dropdown).
+        #
+        # Dẫn xuất từ ``notification_id_map`` chứ KHÔNG ``zip()`` hai danh
+        # sách theo vị trí: bất biến "notification_ids[i] ứng với
+        # inbox_user_ids[i]" vỡ ngay khi khối dọn hàng mồ côi bỏ bớt một
+        # phần tử, và hệ quả là ghi ID của người này vào inbox người kia.
         browser_set = set(channel_recipient_map.get("browser", []))
-        if notification_ids and browser_set:
+        if notification_id_map and browser_set:
             browser_notif_pairs = [
                 (uid, nid)
-                for uid, nid in zip(inbox_user_ids, notification_ids)
+                for uid, nid in notification_id_map.items()
                 if uid in browser_set
             ]
             if browser_notif_pairs:
@@ -1441,10 +1552,17 @@ async def dispatch(
             browser_del_ids = channel_delivery_ids.get("browser", [])
             browser_recipients = channel_recipient_map.get("browser", [])
 
-            if browser_recipients and notification_ids:
-                notifications = []
+            if browser_recipients and notification_id_map:
                 repo = NotificationRepository(db)
-                notifications = await repo.get_by_ids(notification_ids)
+                _bset = set(browser_recipients)
+                _ids_browser = [
+                    _n for _u, _n in notification_id_map.items() if _u in _bset
+                ]
+                # ``owner_user_id=None`` TƯỜNG MINH: các ID này vừa do chính
+                # lượt dispatch tạo ra trong cùng giao dịch, chủ quyền đã biết.
+                notifications = await repo.get_by_ids(
+                    _ids_browser, owner_user_id=None
+                )
 
                 ch_name, ch_result, error_msg = await _send_via_channel(
                     channel_name="browser",
@@ -1456,7 +1574,13 @@ async def dispatch(
 
                 # 1.9b: Use separate session for delivery status updates
                 # to avoid nested commit on caller's session
-                uid_to_did = dict(zip(browser_recipients, browser_del_ids))
+                # KHÔNG ``zip(browser_recipients, browser_del_ids)``:
+                # ``browser_recipients`` đã được ``sorted()`` ở bước hợp nhất
+                # kênh, còn ``browser_del_ids`` nối theo thứ tự action rồi
+                # theo thứ tự resolver trả về — hai thứ tự KHÁC nhau, nên
+                # ghép theo vị trí sẽ đánh dấu ``sent``/``failed`` lên hàng
+                # delivery của NGƯỜI KHÁC. Dùng bản đồ dựng tại chỗ ghi.
+                uid_to_did = _browser_uid_to_did
                 from app.database import AsyncSessionLocal
                 async with AsyncSessionLocal() as _delivery_db:
                     if browser_del_ids:
@@ -1594,7 +1718,7 @@ async def _bulk_create_notifications(
     link: Optional[str],
     data: dict,
     strict: bool = False,
-) -> List[int]:
+) -> Dict[int, int]:
     """
     Bulk insert notifications for multiple users.
 
@@ -1609,17 +1733,20 @@ async def _bulk_create_notifications(
         notification_type: Type (info, success, warning, error)
         link: Optional navigation link
         data: Additional data payload
-        strict: If True, re-raise on chunk insert failure instead of
-                swallowing with ``db.rollback()``. The rollback path
-                aborts the **outer** transaction and is unsafe when
-                called inside a ``db.begin_nested()`` savepoint
-                (``dispatch_bundle``), because it blows away the
-                business mutation that was supposed to survive.
+        strict: Ở TẦNG NÀY chỉ còn là một trường log. Hỏng chunk LUÔN được
+                ném ra, kể cả ``strict=False`` — quyết định huỷ hay đi
+                tiếp thuộc về ``dispatch()``, tầng mở savepoint cấp sự
+                kiện bao trọn vòng lặp chunk này. Đường ``db.rollback()``
+                cũ đã gỡ: nó cuộn về GỐC chứ không về savepoint, nên nó
+                xoá luôn dữ liệu nghiệp vụ của caller.
 
     Returns:
-        List of created notification IDs
+        ``{user_id: notification_id}`` hợp nhất qua MỌI chunk. Quan hệ này
+        đến thẳng từ ``RETURNING user_id, id`` của từng lệnh INSERT, KHÔNG
+        từ vị trí trong danh sách — thứ tự RETURNING của bulk insert không
+        có bảo đảm hình thức.
     """
-    notification_ids = []
+    ket_qua: Dict[int, int] = {}
     now = datetime.now(timezone.utc)
 
     repo = NotificationRepository(db)
@@ -1645,13 +1772,60 @@ async def _bulk_create_notifications(
 
         try:
             # Use repository for bulk insert
-            chunk_ids = await repo.bulk_create(values)
-            notification_ids.extend(chunk_ids)
+            cap_chunk = await repo.bulk_create(values)
+            # Fail-closed: tập người nhận trả về phải BẰNG CHÍNH XÁC tập
+            # người nhận đã gửi đi — so ĐỊNH DANH, không suy từ lực lượng.
+            #
+            # Bản trước chỉ đếm số hàng và số user duy nhất, nên
+            # ``chunk=[u1,u2]`` với kết quả ``[(u1,n1),(u3,n2)]`` LỌT: đúng
+            # hai hàng, đúng hai user duy nhất — mà u2 biến mất và u3 (ngoài
+            # tập) lọt vào bản đồ chủ quyền. Với một bất biến sở hữu thì
+            # lực lượng không thay được định danh.
+            #
+            # Ba vế, ba chế độ hỏng khác nhau:
+            #   1. sai SỐ LƯỢNG        — RETURNING hụt/thừa hàng
+            #   2. trả TRÙNG user_id   — cùng user_id hai lần
+            #   3. sai THÀNH VIÊN      — đủ số nhưng lệch tập
+            #
+            # Vế 1 và vế 2 CHỈ sống khi ``user_ids`` có phần tử trùng: nếu
+            # đầu vào đã duy nhất thì chúng bị vế 3 bao hàm. Chỗ gọi sản
+            # phẩm DUY NHẤT (``dispatch``) truyền ``sorted(set(...))`` nên
+            # hôm nay chỉ vế 3 gác một đường thật — hai vế kia là hợp đồng
+            # phòng thủ cho caller TƯƠNG LAI. Nói rõ để người đọc sau
+            # không tưởng cả ba đang canh cùng một thứ.
+            # Mỗi vế có một ca kiểm ngược RIÊNG (BT13); không vế nào thừa.
+            #
+            # KHÔNG kiểm ``notification_id`` duy nhất: ``Notification.id`` là
+            # khoá chính, nên id trùng không có chế độ hỏng khả dĩ — thêm
+            # vào chỉ là một dòng không phép kiểm nào canh được.
+            # Dùng `elif` để thông điệp nói ĐÚNG vế nào vỡ. Ba vế cùng một
+            # câu chữ thì `pytest.raises(match=…)` không phân biệt được, và
+            # tính cô lập của từng ca kiểm ngược chỉ còn là lập luận của
+            # người viết chứ không phải thứ ca test khẳng định.
+            _user_tra_ve = [u for u, _ in cap_chunk]
+            _tap_tra_ve = set(_user_tra_ve)
+            if len(cap_chunk) != len(chunk):
+                _ve_vo = "sai SỐ LƯỢNG"
+            elif len(_tap_tra_ve) != len(_user_tra_ve):
+                _ve_vo = "trả TRÙNG user_id"
+            elif _tap_tra_ve != set(chunk):
+                _ve_vo = "sai THÀNH VIÊN"
+            else:
+                _ve_vo = None
+            if _ve_vo is not None:
+                raise RuntimeError(
+                    "bulk_create %s: trả %d cặp / %d người nhận, %d user_id "
+                    "duy nhất; tập trả về %r, tập đã gửi %r — quan hệ chủ "
+                    "quyền không dựng được"
+                    % (_ve_vo, len(cap_chunk), len(chunk), len(_tap_tra_ve),
+                       sorted(_tap_tra_ve), sorted(set(chunk)))
+                )
+            ket_qua.update(cap_chunk)
 
             log.debug(
                 "Bulk notification insert successful",
                 chunk_number=i // BULK_INSERT_CHUNK_SIZE + 1,
-                chunk_size=len(chunk_ids),
+                chunk_size=len(cap_chunk),
                 notification_type=notification_type
             )
 
@@ -1664,29 +1838,35 @@ async def _bulk_create_notifications(
                 notification_type=notification_type,
                 strict=strict,
             )
-            if strict:
-                # Propagate so the surrounding SAVEPOINT (dispatch_bundle)
-                # can ROLLBACK TO SAVEPOINT and keep the outer business
-                # transaction alive. Do NOT call db.rollback() here — that
-                # would discard the caller's business mutations too.
-                raise
-            # Legacy best-effort behavior for non-bundle callers:
-            # rollback to clear session error state so subsequent
-            # operations (delivery tracking, other chunks) can proceed.
-            try:
-                await db.rollback()
-            except Exception:
-                pass
-            # Continue with other chunks
+            # 2026-09-02: NÉM RA trong MỌI trường hợp, kể cả non-strict.
+            #
+            # Trước đây nhánh non-strict gọi ``await db.rollback()`` ngay
+            # tại đây. ``Session.rollback()`` cuộn về GỐC chứ không về
+            # savepoint, nên nó xoá luôn dữ liệu nghiệp vụ của người gọi —
+            # chính docstring của hàm này đã cảnh báo điều đó. Sáu chỗ gọi
+            # ``dispatch()`` có bọc ``begin_nested()`` mà không truyền
+            # ``strict=True`` đều tin rằng savepoint bảo vệ họ; nó không.
+            #
+            # Ném ra để ``dispatch`` quyết định — đó là tầng biết ranh giới
+            # của MỘT SỰ KIỆN, và là tầng đã mở savepoint bao trọn cả vòng
+            # lặp chunk này. Hỏng khi tạo Notification CHA phải huỷ cả pha:
+            # ``continue`` ở đây sẽ để chunk trước sống sót thành hàng mồ
+            # côi, và đi tiếp với danh sách ID thiếu/lệch so với
+            # ``inbox_user_ids``.
+            #
+            # ⚠️ Savepoint nằm ở TẦNG GỌI, không phải ở repository. Đừng gỡ
+            # ``async with db.begin_nested()`` trong ``dispatch`` vì tin rằng
+            # repository tự lo — nó không, và đó là cách lỗ hổng tái sinh.
+            raise
 
     log.info(
         "Bulk notification creation completed",
-        total_created=len(notification_ids),
+        total_created=len(ket_qua),
         total_recipients=len(user_ids),
         notification_type=notification_type
     )
 
-    return notification_ids
+    return ket_qua
 
 
 async def _emit_notifications_immediate(
@@ -1809,7 +1989,7 @@ def _dispatch_broadcast_task(
 
         log.info(
             "Celery broadcast task queued successfully",
-            event=event,
+            event_type=event,
             notification_count=len(notification_ids),
             channels=channels,
             queue="notifications"
@@ -1818,7 +1998,7 @@ def _dispatch_broadcast_task(
     except Exception as e:
         log.error(
             "Failed to queue Celery broadcast task",
-            event=event,
+            event_type=event,
             error=str(e),
             notification_count=len(notification_ids)
         )
@@ -1838,12 +2018,22 @@ async def _prepend_to_inbox_cache(user_ids: List[int], notification_ids: List[in
     - Set TTL to 7 days
 
     Args:
-        user_ids: List of user IDs who received notifications
-        notification_ids: List of notification IDs that were created (in same order as user_ids)
+        user_ids: danh sách user nhận thông báo
+        notification_ids: ID tương ứng, ``notification_ids[i]`` thuộc về
+            ``user_ids[i]``
 
-    Note:
-        Bulk notifications create one notification per user in same order as user_ids list.
-        We prepend notification_ids[i] to cache for user_ids[i].
+    ⚠️ Hàm này ăn hai danh sách SONG SONG THEO VỊ TRÍ, nên nó chỉ đúng khi
+    người gọi đã có sẵn quan hệ chủ quyền và giải nén ra hai danh sách từ
+    CÙNG một nguồn. Chỗ gọi duy nhất làm đúng thế:
+    ``zip(*browser_notif_pairs)`` với ``browser_notif_pairs`` dựng từ
+    ``notification_id_map.items()``.
+
+    KHÔNG được truyền vào đây hai danh sách đến từ hai nguồn khác nhau —
+    ví dụ ``inbox_user_ids`` cạnh kết quả ``RETURNING`` của một bulk
+    INSERT. Thứ tự ``RETURNING`` không có bảo đảm hình thức, và ghép lệch
+    ở đây có nghĩa là đẩy ID thông báo của người này vào inbox người kia.
+    Phép kiểm độ dài bên dưới KHÔNG bắt được ca ấy: hai danh sách lệch
+    nội dung vẫn có thể bằng nhau về độ dài.
     """
     if len(user_ids) != len(notification_ids):
         log.warning(
@@ -2028,6 +2218,44 @@ async def dispatch_system_alert(
 # SAFE DISPATCH — Router-level helper (commit + callback in one call)
 # ============================================================================
 
+def log_dispatch_failure(db, exc, *, logger=None, **truong) -> bool:
+    """Ghi log một lượt dispatch hỏng — và nói SỰ THẬT về giao dịch.
+
+    Trước 2026-09-02, ba chỗ gọi (``lead_service`` ×2, ``officer_service``)
+    đều ghi thẳng ``"Dispatch failed, business data preserved"`` trong khối
+    ``except``. Câu ấy được SUY RA từ việc ngoại lệ đã bị bắt, chứ không
+    được ĐO. Đã đo bằng SQL echo: ngoại lệ bị bắt nhưng phiên đã chết
+    (``PendingRollbackError``), nên ``db.commit()`` của router sau đó đổ và
+    dữ liệu nghiệp vụ KHÔNG hề được giữ. Dòng log nói ngược với sự thật.
+
+    ``Session.is_active`` là False đúng khi giao dịch đang ở trạng thái bắt
+    buộc phải rollback — tức là câu khẳng định kia sai. Trả về True nếu
+    phiên còn dùng được, để người gọi tự quyết nếu cần.
+
+    Đây là MỘT nguồn chuẩn: đừng chép câu log ấy ra chỗ thứ tư.
+    """
+    _log = logger if logger is not None else log
+    try:
+        con_dung_duoc = bool(db.sync_session.is_active)
+    except Exception:
+        con_dung_duoc = False
+
+    if con_dung_duoc:
+        _log.warning(
+            "Dispatch failed; caller transaction remains active "
+            "(business persistence NOT asserted)",
+            error=str(exc),
+            **truong,
+        )
+    else:
+        _log.error(
+            "Dispatch failed; caller transaction requires rollback",
+            error=str(exc),
+            **truong,
+        )
+    return con_dung_duoc
+
+
 async def safe_dispatch(
     db: AsyncSession,
     event: SystemEvents,
@@ -2095,7 +2323,7 @@ async def safe_dispatch(
     except Exception as e:
         log.warning(
             "Notification dispatch failed (non-critical)",
-            event=event.value,
+            event_type=event.value,
             dedupe_key=dedupe_key,
             error=str(e),
         )

@@ -669,10 +669,33 @@ class TestBundleFailureBusinessSurvives:
         # exact behavior that was collateral-damaging the outer txn.
         db.rollback.assert_not_awaited()
 
-    async def test_bulk_create_notifications_non_strict_keeps_legacy_behavior(self):
-        """Non-strict (default) keeps the best-effort swallow for
-        fire-and-forget callers like safe_dispatch. Verifies we did not
-        accidentally tighten the contract for existing callers."""
+    async def test_bulk_create_notifications_non_strict_khong_duoc_rollback(self):
+        """Non-strict cũng KHÔNG được `db.rollback()` — hợp đồng đổi 2026-09-02.
+
+        Bản trước của ca này khoá hành vi cũ: non-strict *nuốt* lỗi, trả `[]`,
+        và `db.rollback.assert_awaited()`. Chính lời gọi rollback ấy là khuyết
+        tật — `Session.rollback()` cuộn về GỐC chứ không về savepoint, nên nó
+        xoá luôn dữ liệu nghiệp vụ CHƯA commit của người gọi. Đã đo bằng SQL
+        echo trên đường `lead_service.create_lead`: lead biến mất trong khi
+        `lead_service` vẫn ghi log "business data preserved".
+
+        Sáu chỗ gọi `dispatch()` bọc `begin_nested()` mà không truyền
+        `strict=True` đều tin rằng savepoint bảo vệ họ; nó không.
+
+        Hợp đồng MỚI, hai vế và cả hai đều được khẳng định ở đây:
+
+          1. KHÔNG gọi `db.rollback()` — tầng này không sở hữu giao dịch;
+          2. NÉM RA để `dispatch` huỷ cả sự kiện, thay vì đi tiếp với danh sách
+             ID thiếu/lệch rồi `zip()` nhầm người nhận.
+
+        Sự sống sót của phiên nay do savepoint CẤP SỰ KIỆN trong
+        `dispatch` bảo đảm, không do rollback — `bulk_create` KHÔNG còn mở
+        savepoint riêng (savepoint cấp-chunk cho một bảo đảm sai: chunk
+        trước release xong rồi chunk sau hỏng thì hàng chunk trước vẫn
+        được commit).
+        Hành vi đầu-cuối được khoá bằng dữ liệu thật ở
+        `tests/services/test_dispatch_stale_rule_cache.py`.
+        """
         from app.services import notification_dispatcher
 
         db = AsyncMock()
@@ -685,14 +708,13 @@ class TestBundleFailureBusinessSurvives:
             notification_dispatcher, "NotificationRepository",
             return_value=fake_repo,
         ):
-            # Must NOT raise (legacy swallow)
-            ids = await notification_dispatcher._bulk_create_notifications(
-                db=db,
-                user_ids=[1, 2],
-                title="t", message="m", notification_type="info",
-                link=None, data={},
-                strict=False,
-            )
+            with pytest.raises(RuntimeError, match="boom"):
+                await notification_dispatcher._bulk_create_notifications(
+                    db=db,
+                    user_ids=[1, 2],
+                    title="t", message="m", notification_type="info",
+                    link=None, data={},
+                    strict=False,
+                )
 
-        assert ids == []
-        db.rollback.assert_awaited()
+        db.rollback.assert_not_awaited()

@@ -3,9 +3,11 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { FileCode, Layers, PlusCircle, Link2 } from "lucide-react";
+import { FileCode, Layers, PlusCircle, Link2, RefreshCw, ServerCrash } from "lucide-react";
 import { usePermissionExplain } from "@/hooks/usePermissionExplain";
 
 interface RoleDetailViewProps {
@@ -69,7 +71,8 @@ function PolicyTable({ policies, title, icon: Icon, description }: PolicyTablePr
 }
 
 export function RoleDetailView({ roleName }: RoleDetailViewProps) {
-  const { data, isLoading } = usePermissionExplain(roleName);
+  const { data, isLoading, isError, error, isFetching, refetch } =
+    usePermissionExplain(roleName);
 
   if (isLoading) {
     return (
@@ -81,7 +84,42 @@ export function RoleDetailView({ roleName }: RoleDetailViewProps) {
     );
   }
 
-  if (!data) return null;
+  // Bản cũ: `if (!data) return null;` — query explain hỏng ⇒ component biến mất
+  // KHÔNG một tín hiệu nào. Bảng "quyền đến từ đâu" rỗng ở MỌI role trông y hệt
+  // "role này chưa có quyền nào", nên một endpoint chết sống sót rất lâu mà
+  // không ai thấy. Không có dữ liệu thì phải NÓI RA là không có dữ liệu.
+  if (isError || !data) {
+    return (
+      <Alert variant="destructive" data-testid="role-explain-error">
+        <ServerCrash className="h-4 w-4" />
+        <AlertTitle>
+          Không tải được phân rã quyền của vai trò {roleName}
+        </AlertTitle>
+        <AlertDescription className="space-y-3">
+          <p>
+            Bảng nguồn gốc quyền của vai trò này <strong>không</strong> hiển thị
+            được. Đây <strong>không</strong> có nghĩa là vai trò không có quyền
+            nào — quyền thực tế của nó hiện <strong>chưa xác định</strong>, đừng
+            dựa vào màn hình này để kết luận.
+          </p>
+          <p className="font-mono text-xs break-all">
+            {error instanceof Error
+              ? error.message
+              : "Lỗi không xác định khi gọi API explain"}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refetch()}
+            disabled={isFetching}
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
+            Thử lại
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
 
   return (
     <div className="space-y-6">

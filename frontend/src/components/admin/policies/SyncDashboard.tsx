@@ -3,10 +3,8 @@
 
 import { useState } from "react";
 
-// useQueryClient removed
-import { RefreshCw, AlertCircle, CheckCircle2, Database } from "lucide-react";
+import { RefreshCw, AlertCircle, CheckCircle2, Database, ServerCrash } from "lucide-react";
 import { usePolicySyncStatus, useSyncPolicies } from "@/hooks/policies/usePolicySync";
-// SyncStatus import removed
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -32,13 +30,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-// Interfaces imported from policies.ts
-
-
-// ... imports
+// `SyncStatus` / `MismatchedUser` được khai ở `@/lib/api/policies` và đi vào đây
+// qua kiểu trả về của `usePolicySyncStatus()` — không cần import lại.
 
 export function SyncDashboard() {
-  // queryClient removed
   const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
   const [pendingSync, setPendingSync] = useState<{ type: "all" | "selected"; message: string } | null>(null);
 
@@ -46,23 +41,35 @@ export function SyncDashboard() {
   const {
     data: syncStatus,
     isLoading,
+    isError,
+    error: statusError,
+    isFetching,
     refetch: refetchStatus,
   } = usePolicySyncStatus();
 
-  // Sync mutation
-  // Note: Standard syncPolicies uses internal logic. Partial sync not supported by simple hook yet.
-  // We need to decide: does useSyncPolicies support userIds?
-  // Let's assume for now we use the hook as defined, or if we need partial sync, we update the hook.
-  // The hook defined in step 1561: useSyncPolicies() -> policiesApi.syncPolicies() [no args]
-  // BUT SyncDashboard calls it with userIds.
-  // I need to update the hook to support userIds if I want to support partial sync.
-  // OR I can use it as is if partial sync was the "wrong" way. But likely strict mode wants it.
+  // Sync mutation.
+  //
+  // `useSyncPolicies()` gọi `policiesApi.syncUsers(userIds)` → POST
+  // `/api/admin/sync` (hằng `API_ENDPOINTS.ADMIN.SYNC.RUN`). KHÔNG có hậu tố
+  // `/users`: `sync.py:53` khai `@router.post("")` trên prefix `/sync`, nên
+  // đường đầy đủ dừng ở `/api/admin/sync`. `/api/admin/sync/users` là đường
+  // CHẾT — đừng chép lại từ chú thích này ra hằng.
+  // `null` = đồng bộ TẤT CẢ, mảng `user_id` = đồng bộ từng phần ⇒ partial sync
+  // ĐÃ được hỗ trợ sẵn, hook không cần sửa gì.
+  //
+  // (Chú thích cũ ở chỗ này nói hook gọi `policiesApi.syncPolicies()` "no args"
+  //  và partial sync "chưa hỗ trợ" — SAI cả hai. `syncPolicies` là hằng chết:
+  //  không có endpoint backend tương ứng và 0 caller. Đừng dựng lại niềm tin
+  //  vào nó từ chú thích này.)
   const syncMutation = useSyncPolicies();
 
   const handleSyncAll = () => {
+    // Không có trạng thái đọc được thì không có gì để xác nhận — nút này chỉ
+    // render sau cổng fail-closed bên dưới, nhánh này là chốt chặn thừa.
+    if (!syncStatus) return;
     setPendingSync({
       type: "all",
-      message: `Đồng bộ TẤT CẢ ${syncStatus?.total_users} users từ Casbin về DB?`,
+      message: `Đồng bộ TẤT CẢ ${syncStatus.total_users} users từ Casbin về DB?`,
     });
   };
 
@@ -94,10 +101,11 @@ export function SyncDashboard() {
   };
 
   const toggleSelectAll = () => {
-    if (selectedUsers.length === syncStatus?.mismatched_users.length) {
+    const mismatched = syncStatus?.mismatched_users ?? [];
+    if (selectedUsers.length === mismatched.length) {
       setSelectedUsers([]);
     } else {
-      setSelectedUsers(syncStatus?.mismatched_users.map((u) => u.user_id) || []);
+      setSelectedUsers(mismatched.map((u) => u.user_id));
     }
   };
 
@@ -110,9 +118,49 @@ export function SyncDashboard() {
     );
   }
 
-  const outOfSyncCount = syncStatus?.out_of_sync_count || 0;
-  const syncedCount = syncStatus?.synced_count || 0;
-  const totalUsers = syncStatus?.total_users || 0;
+  // ── CỔNG FAIL-CLOSED ────────────────────────────────────────────────────
+  // Query hỏng ⇒ KHÔNG có số liệu nào cả, và tuyệt đối không suy ra số.
+  //
+  // Bản cũ để `syncStatus?.x || 0`: query lỗi ⇒ `undefined` ⇒ 0 ⇒ dashboard vẽ
+  // "Tổng số Users 0 · Đã đồng bộ 0 · Chưa đồng bộ 0" rồi rơi vào nhánh
+  // `outOfSyncCount > 0 ? … : <Alert>Hệ thống đã đồng bộ</Alert>` — tức là
+  // KHẲNG ĐỊNH hệ thống sạch đúng lúc nó không đo được gì. Đó là báo cáo sai,
+  // không phải báo lỗi.
+  if (isError || !syncStatus) {
+    return (
+      <Alert variant="destructive" data-testid="sync-status-error">
+        <ServerCrash className="h-4 w-4" />
+        <AlertTitle>Không đọc được trạng thái đồng bộ DB ↔ Casbin</AlertTitle>
+        <AlertDescription className="space-y-3">
+          <p>
+            Không hiển thị số liệu nào vì không lấy được dữ liệu. Đây{" "}
+            <strong>không</strong> có nghĩa là hệ thống đã đồng bộ — số user lệch
+            hiện <strong>chưa xác định</strong>.
+          </p>
+          <p className="font-mono text-xs break-all">
+            {statusError instanceof Error
+              ? statusError.message
+              : "Lỗi không xác định khi gọi API sync-status"}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refetchStatus()}
+            disabled={isFetching}
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? "animate-spin" : ""}`} />
+            Thử lại
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  // Từ đây `syncStatus` chắc chắn có thật — đọc thẳng, không `|| 0`.
+  const outOfSyncCount = syncStatus.out_of_sync_count;
+  const syncedCount = syncStatus.synced_count;
+  const totalUsers = syncStatus.total_users;
+  const mismatchedUsers = syncStatus.mismatched_users ?? [];
 
   return (
     <div className="space-y-6">
@@ -230,7 +278,10 @@ export function SyncDashboard() {
                   <TableHead className="w-12">
                     <input
                       type="checkbox"
-                      checked={selectedUsers.length === syncStatus?.mismatched_users.length}
+                      checked={
+                        mismatchedUsers.length > 0 &&
+                        selectedUsers.length === mismatchedUsers.length
+                      }
                       onChange={toggleSelectAll}
                       className="cursor-pointer"
                     />
@@ -243,7 +294,7 @@ export function SyncDashboard() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {syncStatus?.mismatched_users.map((user) => (
+                {mismatchedUsers.map((user) => (
                   <TableRow key={user.user_id}>
                     <TableCell>
                       <input

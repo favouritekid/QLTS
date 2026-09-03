@@ -26,7 +26,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
-from app.core import deps  # For OrgUnitAccessDep, get_organizational_unit_for_user
+from app.core import deps  # For OrgUnitReadDep / OrgUnitWriteDep (org-unit IDOR gates)
 from app.core.deps import CasbinAuth  # Phase 2.2
 from app.core.events import SystemEvents
 from app.services import organization_service
@@ -102,14 +102,10 @@ async def get_organization_unit_details(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
-    unit: models.OrganizationUnit = Depends(
-        lambda unit_id, db, current_user: deps.get_organizational_unit_for_user(
-            unit_id=unit_id,
-            db=db,
-            current_user=current_user,
-            allow_read_only=True
-        )
-    ),
+    # Cổng ĐỌC server-owned. Bản cũ dùng `Depends(lambda ...)`: lambda SYNC trả
+    # coroutine (gọi hàm async mà không await) và không có annotation, nên
+    # FastAPI biến `db`/`current_user` thành query BẮT BUỘC ⇒ route luôn 422.
+    unit: models.OrganizationUnit = deps.OrgUnitReadDep,
 ):
     """
     (Admin/Manager/Officer) Get organizational unit details.
@@ -136,7 +132,7 @@ async def update_existing_organization_unit(
     unit_in: schemas.OrganizationUnitUpdate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
-    unit: models.OrganizationUnit = deps.OrgUnitAccessDep,
+    unit: models.OrganizationUnit = deps.OrgUnitWriteDep,
 ):
     """
     (Admin/Manager) Update an organizational unit.
@@ -180,7 +176,7 @@ async def delete_existing_organization_unit(
     request: Request,  # Required for rate limiter
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
-    unit: models.OrganizationUnit = deps.OrgUnitAccessDep,
+    unit: models.OrganizationUnit = deps.OrgUnitWriteDep,
 ):
     """
     (Admin/Manager) Delete an organizational unit (soft delete).
