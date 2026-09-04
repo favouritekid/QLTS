@@ -11,11 +11,41 @@ container (CLAUDE.md).
 """
 import io
 
+import pytest
 from httpx import AsyncClient
 from openpyxl import load_workbook
 from sqlalchemy import text
 
+from app.config import settings
 from app.database import AsyncSessionLocal
+
+
+@pytest.fixture(autouse=True)
+def sms_export_storage_tmp(tmp_path, monkeypatch):
+    """Trỏ thư mục lưu file export SMS sang tmp riêng của TỪNG test.
+
+    ``SMS_EXPORT_STORAGE_DIR`` mặc định là ``/app/private_exports/sms``
+    (``app/config.py``) — đường TUYỆT ĐỐI chỉ tồn tại trong ảnh Docker
+    (``Dockerfile`` tạo sẵn, điểm mount named volume). Nightly chạy pytest
+    THẲNG trên runner: ``/app`` không có và user ``runner`` không tạo nổi ở
+    gốc hệ tệp ⇒ ``os.makedirs`` (``app/utils/sms_export.py``) ném
+    PermissionError ⇒ ``_generate_files`` nuốt rồi ``_mark_failed_safe`` đặt
+    batch ``'failed'`` ⇒ 6 ca cần file thật đỏ, 6 ca guard vẫn xanh.
+
+    CỐ Ý KHÔNG ``mkdir`` thư mục này: để chính mã sản phẩm phải tự tạo cả
+    chuỗi thư mục. Tạo sẵn ở đây là che mất đúng dòng ``os.makedirs`` mà
+    test đang gác — gỡ dòng ấy đi thì test vẫn xanh.
+
+    Patch THẲNG lên đối tượng ``settings`` (singleton dựng lúc import),
+    KHÔNG dùng ``monkeypatch.setenv``: Pydantic chỉ đọc env lúc khởi tạo
+    nên đặt biến bây giờ không còn ai đọc. Scope ``function`` là bắt buộc
+    (``tmp_path``/``monkeypatch`` đều function-scoped), và cũng nhờ vậy mỗi
+    ca có thư mục riêng — tránh hai ca ghi đè file của nhau sau TRUNCATE.
+    """
+    monkeypatch.setattr(
+        settings, "SMS_EXPORT_STORAGE_DIR", str(tmp_path / "sms_exports")
+    )
+
 
 API = "/api/sms"
 _GRANT = {
