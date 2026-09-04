@@ -15,6 +15,11 @@ from sqlalchemy import select
 
 from app import models
 from app.database import AsyncSessionLocal
+from tests.fixtures.builders import (
+    ensure_submittable_ward,
+    seed_submittable_offering_config,
+    submittable_profile_fields,
+)
 
 
 pytestmark = pytest.mark.asyncio
@@ -50,13 +55,34 @@ async def create_submittable_profile(
     citizen_id: str = None,
     min_gpa: float = 0,
     mandatory_docs: list = None,
+    academic_year: int = 2025,
 ) -> models.AdmissionProfile:
-    """Create a profile that can be submitted (with subject scores, family_info, etc.)."""
+    """Create a profile that can be submitted (with subject scores, family_info, etc.).
+
+    #337: hồ sơ phải có chuỗi config hợp lệ thì ``submit_and_evaluate`` mới suy
+    ra được bậc đào tạo. Đường legacy (``uses_choice_engine=False``) đọc
+    ``offering_admission_config_id`` → academic_info → offering →
+    ``MajorProgram.degree_level_id``; thiếu nó thì submit fail-closed với
+    ``CONFIG_GAP_TARGET_LEVEL``. Bản trước dựng hồ sơ trần nên cả 4 ca trong
+    tệp này nhận 400 — cổng sản phẩm chặn ĐÚNG, chỉ fixture là lạc hậu.
+
+    Dùng builder dùng chung thay vì tự dựng chuỗi: đây là cùng một công thức
+    ``tests/services/test_admission_workflow.py`` đã chuyển sang, nên hai tệp
+    không trôi khỏi nhau lần nữa.
+    """
     if citizen_id is None:
         citizen_id = f"0{datetime.now().timestamp():.0f}"[:12]
 
+    # Gap #3: a current-era ward so the permanent address validates.
+    await ensure_submittable_ward()
     async with AsyncSessionLocal() as session:
         async with session.begin():
+            lead = await session.get(models.Lead, lead_id)
+            # #337: legacy config + KV chain so submit can derive the
+            # target level + resolve KV (else CONFIG_GAP / KV_UNRESOLVED).
+            seed = await seed_submittable_offering_config(
+                session, lead.unit_id, academic_year
+            )
             # Create subject if needed
             subj = (await session.execute(
                 select(models.Subject).where(models.Subject.code == "TOAN")
@@ -70,7 +96,9 @@ async def create_submittable_profile(
                 lead_id=lead_id,
                 status="draft",
                 citizen_id=citizen_id,
-                academic_year=2025,
+                # Lấy TỪ seed: `OfferingAcademicInfo` mang cùng năm, lệch năm là
+                # vi phạm UNIQUE(lead_id/citizen_id, academic_year) một cách âm thầm.
+                academic_year=seed["academic_year"],
                 version=1,
                 applied_rules={
                     "min_gpa": min_gpa,
@@ -81,7 +109,24 @@ async def create_submittable_profile(
                     "subject_selection_mode": "fixed",
                 },
                 family_info=[{"relationship": "Cha", "full_name": "Test Father", "phone": "0901234567"}],
-                academic_history=[{"school_name": "THPT Test", "year_from": 2020, "year_to": 2024}],
+                # `academic_history` do builder cấp — mục THPT của nó có
+                # `school_id` để engine giải được KV.
+                #
+                # ĐO ĐƯỢC khi bỏ ĐÚNG khoá `school_id` (giữ nguyên mọi thứ
+                # khác): submit trả 200, hồ sơ đứng nguyên `draft`, và thân
+                # phản hồi mang::
+                #
+                #     validation_errors=['KV_UNRESOLVED (insufficient_data):
+                #     … Lý do: no_qualifying_thpt_history_entries …']
+                #
+                # Tức KV_UNRESOLVED KHÔNG nổi lên thành 400 — nó nằm trong
+                # một phản hồi 200. Đó chính là lý do `assert status_code
+                # == 200` một mình vô hại về hình thức mà vô dụng về nội
+                # dung: ở phiên bản trước chỉ 1/4 ca bắt được đột biến này.
+                # Nay cả bốn ca đi qua `khang_dinh_submit_da_chuyen`, và
+                # kiểm ngược đã xác nhận cùng đột biến ấy làm ĐỦ BỐN ca đỏ,
+                # mỗi ca đều báo `status='draft'`.
+                **submittable_profile_fields(seed),
             )
             session.add(profile)
             await session.flush()
@@ -119,6 +164,53 @@ async def get_auth_headers(client: AsyncClient, user_info: dict) -> dict:
     return {"Authorization": f"Bearer {access_token}"}
 
 
+async def khang_dinh_submit_da_chuyen(response, profile_id: int) -> None:
+    """Khẳng định submit THỰC SỰ chuyển trạng thái, không chỉ trả 200.
+
+    Contract của endpoint (`AdmissionSubmitResponse`) cố ý dùng CÙNG mã 200 cho
+    hai kết cục ngược nhau::
+
+        thành công        -> status="submitted", validation_errors=None
+        validation hỏng   -> status="draft",     validation_errors=[...]
+
+    Nên `assert status_code == 200` một mình KHÔNG phân biệt được "đã nộp" với
+    "không làm gì". Đo được: bỏ `school_id` khỏi `academic_history` thì submit
+    vẫn trả 200, hồ sơ đứng nguyên `draft`, và chỉ 1/4 ca trong tệp này đỏ —
+    ba ca kia xanh trên một hồ sơ không hề tiến.
+
+    Bốn khẳng định dưới đây là bốn chuyện KHÁC nhau, giữ riêng để khi đỏ còn
+    đọc được đỏ vì gì:
+
+      1. mã 200 — đường HTTP không hỏng;
+      2. `status` đúng BẰNG "submitted". Không dùng `in [...]`: schema khai
+         `Literal["draft", "submitted"]`, nên mọi giá trị khác là bất khả và
+         một danh sách chấp nhận nhiều giá trị chỉ nới lỏng chứ không canh
+         thêm được gì;
+      3. `validation_errors is None` — bắt ca hỗn hợp: đã chuyển trạng thái
+         nhưng vẫn kèm lỗi;
+      4. đọc lại từ CSDL bằng session MỚI. Thân phản hồi là thứ service dựng
+         trong bộ nhớ; chỉ lượt đọc sau commit mới chứng minh hàng đã persist.
+         Đây là khẳng định duy nhất bắt được ca router trả đúng nhưng
+         transaction không xuống đĩa.
+    """
+    assert response.status_code == 200, f"Submit failed: {response.text}"
+    data = response.json()
+    assert data["status"] == "submitted", (
+        "submit KHÔNG chuyển trạng thái: "
+        f"status={data['status']!r} validation_errors={data.get('validation_errors')!r}"
+    )
+    assert data["validation_errors"] is None, (
+        f"đã sang 'submitted' nhưng còn lỗi: {data['validation_errors']!r}"
+    )
+
+    async with AsyncSessionLocal() as session:
+        trong_db = await session.get(models.AdmissionProfile, profile_id)
+        assert trong_db is not None, f"hồ sơ {profile_id} không còn trong CSDL"
+        assert trong_db.status == "submitted", (
+            f"phản hồi nói 'submitted' nhưng CSDL còn {trong_db.status!r}"
+        )
+
+
 # ==============================================================================
 # TEST: BASIC SUBMISSION TESTS
 # ==============================================================================
@@ -152,10 +244,7 @@ class TestBasicSubmission:
             headers=headers,
         )
 
-        assert response.status_code == 200, f"Submit failed: {response.text}"
-        data = response.json()
-        assert data["status"] in ["submitted", "approved"], \
-            f"Unexpected status: {data['status']}"
+        await khang_dinh_submit_da_chuyen(response, profile.id)
 
     async def test_submit_profile_exists_and_returns_response(
         self,
@@ -182,8 +271,7 @@ class TestBasicSubmission:
             headers=headers,
         )
 
-        assert response.status_code == 200
-        assert "status" in response.json()
+        await khang_dinh_submit_da_chuyen(response, profile.id)
 
 
 # ==============================================================================
@@ -219,7 +307,7 @@ class TestSubmissionValidation:
             headers=headers,
         )
 
-        assert response.status_code == 200, f"Submit failed: {response.text}"
+        await khang_dinh_submit_da_chuyen(response, profile.id)
 
     async def test_submit_endpoint_responds(
         self,
@@ -246,5 +334,4 @@ class TestSubmissionValidation:
             headers=headers,
         )
 
-        assert response.status_code == 200, f"Submit failed: {response.text}"
-        assert "status" in response.json()
+        await khang_dinh_submit_da_chuyen(response, profile.id)
