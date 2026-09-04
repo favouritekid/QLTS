@@ -489,7 +489,6 @@ jobs:
               tests/services/test_mfa.py::TestMfaSetupEdgeCases::test_f4_regenerate_backup_codes_invalidates_old
               tests/api/test_notification_delivery_idor.py
               tests/services/test_organization_m12_scoping.py
-              tests/integration/test_sms_export.py
               tests/services/test_auth.py
 
           # ---------------------------------------------------------------
@@ -529,6 +528,18 @@ jobs:
           # trong: YAML coi `#` là NỘI DUNG, `>-` gấp mọi dòng thành MỘT dòng,
           # rồi bash cắt từ `#` tới hết. Đo thật: lệnh nhận 17 đối số thay vì
           # 25, cả tám nodeid biến mất, và required check vẫn xanh.
+          # `test_sms_export.py` dat o day vi CAN TAI, khong phai vi chu de:
+          # no la export SMS marketing, khong phai khoan phi/cong no. Ly do
+          # xep chung: cung ho rui ro "tep xuat ra trong DU ma noi dung SAI"
+          # ma lat nay dang gac (cot A phai la text 84xxx, mat so 0 dau la
+          # hong y het mat so 0 dau CCCD), va no chua PII (so dien thoai +
+          # consent) nen thuoc be mat can gac truoc merge.
+          # Khong dat o Tier 2: Tier 2 dang la duong toi han cua workflow
+          # (do run 33765553372: 51m52s, hon a quan Tier 1 gan 13 phut), nen
+          # them 12 ca integration vao do la keo dai dung lat dai nhat.
+          # LUU Y trung thuc: 51m52s do o cay CHUA co tep nay; chuyen sang day
+          # chi TRANH lam Tier 2 dai them, KHONG phai ban va duong toi han —
+          # muon rut that thi phai che chinh Tier 2 (xem chu thich dong ~49).
           - tier: Tier 2b — Export khoản phí + công nợ
             tests: >-
               tests/services/test_tuition_export_service.py
@@ -557,6 +568,7 @@ jobs:
               tests/services/test_invoice_service.py::TestApplyPenaltyGuards::test_penalty_blocked_on_draft_invoice
               tests/integration/test_finance_workflow.py::TestAccountingPeriod::test_create_and_close_period
               tests/repositories/test_profile_collection.py
+              tests/integration/test_sms_export.py
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability

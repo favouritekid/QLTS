@@ -323,7 +323,8 @@ class TestPasswordChange:
     async def test_change_password_success(
         self,
         client: AsyncClient,
-        regular_user_in_db: dict
+        regular_user_in_db: dict,
+        mock_hibp,
     ):
         """Test password change with correct old password."""
         username = regular_user_in_db["username"]
@@ -344,6 +345,13 @@ class TestPasswordChange:
         })
         
         assert change_res.status_code == 204
+
+        # HIBP phải được AWAIT đúng một lần, với mật khẩu MỚI. Dùng họ
+        # ``assert_awaited_*`` chứ không phải ``assert_called_*``: trên
+        # AsyncMock, gọi mà QUÊN ``await`` vẫn ghi nhận ``called``. Đã đo
+        # trên chính ca này: biến thể "gọi nhưng không await" làm phép
+        # await ĐỎ, còn phép ``called`` vẫn XANH.
+        mock_hibp.assert_awaited_once_with(new_password)
 
         # Login with new password
         from app.main import fastapi_app
@@ -378,33 +386,6 @@ class TestPasswordChange:
         })
         
         assert change_res.status_code == 400
-
-    async def test_change_password_kiem_hibp_voi_mat_khau_moi(
-        self,
-        client: AsyncClient,
-        regular_user_in_db: dict,
-        mock_hibp,
-    ):
-        """Hợp đồng: đổi mật khẩu PHẢI hỏi HIBP, và hỏi ĐÚNG mật khẩu MỚI."""
-        username = regular_user_in_db["username"]
-        old_password = regular_user_in_db["password"]
-        new_password = "NewSecurePassword123!"
-
-        login_res = await client.post("/api/auth/login", data={
-            "username": username,
-            "password": old_password
-        })
-        assert login_res.status_code == 200
-
-        change_res = await client.post("/api/auth/change-password", json={
-            "old_password": old_password,
-            "new_password": new_password
-        })
-        assert change_res.status_code == 204
-
-        # ĐÃ AWAIT, không chỉ 'đã gọi': bỏ chữ `await` ở call-site thì
-        # `assert_called_once_with` VẪN xanh, còn phép này ĐỎ.
-        mock_hibp.assert_awaited_once_with(new_password)
 
     async def test_change_password_bi_tu_choi_khi_hibp_bao_lo(
         self,
