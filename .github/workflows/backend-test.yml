@@ -489,6 +489,8 @@ jobs:
               tests/services/test_mfa.py::TestMfaSetupEdgeCases::test_f4_regenerate_backup_codes_invalidates_old
               tests/api/test_notification_delivery_idor.py
               tests/services/test_organization_m12_scoping.py
+              tests/integration/test_sms_export.py
+              tests/services/test_auth.py
 
           # ---------------------------------------------------------------
           # Tier 2b: Luồng XUẤT tệp (danh sách khoản phí + báo cáo công nợ)

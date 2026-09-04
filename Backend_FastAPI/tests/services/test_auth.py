@@ -32,6 +32,35 @@ log = logging.getLogger(__name__)
 # FIXTURES
 # =============================================================================
 
+
+@pytest.fixture(autouse=True)
+def mock_hibp():
+    """Chặn MỌI lời gọi mạng tới HIBP trong tệp này.
+
+    Đích patch là NƠI DÙNG (``app.services.user_service``), KHÔNG phải nơi
+    ĐỊNH NGHĨA (``app.security.hibp``): ``user_service`` dùng ``from``-import
+    lúc nạp module, nên các call-site phân giải tên qua globals của chính nó
+    và không bao giờ hỏi lại ``app.security.hibp``. Patch nhầm nơi định nghĩa
+    là no-op IM LẶNG: test vẫn xanh trong khi request thật vẫn bay ra mạng.
+
+    ``new_callable=AsyncMock`` ghi tường minh vì ``check_password_breached``
+    là ``async def`` và mọi call-site đều ``await`` nó.
+
+    Trước bản vá này, các ca đổi/đặt lại mật khẩu gọi HIBP THẬT: mật khẩu
+    ghim cứng lộ 47 lần nên ``change_password`` trả 400 thay vì 204, còn
+    ``HIBP_TIMEOUT`` fail-open biến sự cố mạng thành xanh giả (dao động).
+
+    Mặc định ``(False, 0)`` = chưa lộ. Ca cần trạng thái khác thì tự đặt
+    ``mock_hibp.return_value = (True, 47)``.
+    """
+    with patch(
+        "app.services.user_service.check_password_breached",
+        new_callable=AsyncMock,
+        return_value=(False, 0),
+    ) as mock:
+        yield mock
+
+
 @pytest_asyncio.fixture
 async def auth_test_user(db: AsyncSession) -> models.User:
     """Create a user for auth tests."""
@@ -349,6 +378,84 @@ class TestPasswordChange:
         })
         
         assert change_res.status_code == 400
+
+    async def test_change_password_kiem_hibp_voi_mat_khau_moi(
+        self,
+        client: AsyncClient,
+        regular_user_in_db: dict,
+        mock_hibp,
+    ):
+        """Hợp đồng: đổi mật khẩu PHẢI hỏi HIBP, và hỏi ĐÚNG mật khẩu MỚI."""
+        username = regular_user_in_db["username"]
+        old_password = regular_user_in_db["password"]
+        new_password = "NewSecurePassword123!"
+
+        login_res = await client.post("/api/auth/login", data={
+            "username": username,
+            "password": old_password
+        })
+        assert login_res.status_code == 200
+
+        change_res = await client.post("/api/auth/change-password", json={
+            "old_password": old_password,
+            "new_password": new_password
+        })
+        assert change_res.status_code == 204
+
+        # ĐÃ AWAIT, không chỉ 'đã gọi': bỏ chữ `await` ở call-site thì
+        # `assert_called_once_with` VẪN xanh, còn phép này ĐỎ.
+        mock_hibp.assert_awaited_once_with(new_password)
+
+    async def test_change_password_bi_tu_choi_khi_hibp_bao_lo(
+        self,
+        client: AsyncClient,
+        regular_user_in_db: dict,
+        mock_hibp,
+    ):
+        """HIBP báo đã lộ ⇒ 400; mật khẩu CŨ còn dùng, mật khẩu MỚI thì không."""
+        from app.main import fastapi_app
+
+        username = regular_user_in_db["username"]
+        old_password = regular_user_in_db["password"]
+        new_password = "NewSecurePassword123!"
+
+        login_res = await client.post("/api/auth/login", data={
+            "username": username,
+            "password": old_password
+        })
+        assert login_res.status_code == 200
+
+        # TẤT ĐỊNH, không phụ thuộc mạng. Chọn 47 vì < 1000 nên f"{n:,}"
+        # không chèn dấu phẩy, chuỗi "47" nằm nguyên trong detail.
+        mock_hibp.return_value = (True, 47)
+
+        change_res = await client.post("/api/auth/change-password", json={
+            "old_password": old_password,
+            "new_password": new_password
+        })
+        assert change_res.status_code == 400
+        assert "47 data breaches" in change_res.text
+        mock_hibp.assert_awaited_once_with(new_password)
+
+        # Mật khẩu CŨ vẫn dùng được — không có ghi nửa vời.
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c_old:
+            res_old = await c_old.post("/api/auth/login", data={
+                "username": username,
+                "password": old_password
+            })
+        assert res_old.status_code == 200
+
+        # Mật khẩu MỚI KHÔNG dùng được.
+        async with AsyncClient(
+            transport=ASGITransport(app=fastapi_app), base_url="http://test"
+        ) as c_new:
+            res_new = await c_new.post("/api/auth/login", data={
+                "username": username,
+                "password": new_password
+            })
+        assert res_new.status_code == 401
 
 
 # =============================================================================
