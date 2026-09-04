@@ -56,9 +56,15 @@ export interface PolicyCreateRequest {
   action: string;
 }
 
+// ⚠️ Tên trường phải là `run_validation`, KHÔNG phải `validate`.
+// Pydantic `PolicyBatchRequest` (schemas/permissions.py:98) khai
+// `run_validation: bool = Field(True, ...)` và mặc định BỎ QUA khoá lạ, nên một
+// body gửi `validate: false` không hề bị từ chối — nó chỉ bị nuốt IM LẶNG và
+// backend vẫn chạy với default `True`. Đặt sai tên ở đây là tắt được cờ trên
+// giao diện mà server không bao giờ nghe thấy.
 export interface PolicyBatchRequest {
   policies: PolicyCreateRequest[];
-  validate?: boolean;
+  run_validation?: boolean;
   dry_run?: boolean;
 }
 
@@ -69,10 +75,12 @@ export interface PolicyValidationRequest {
   operation: "add" | "remove";
 }
 
+// Cùng lý do như `PolicyBatchRequest`: backend là
+// `TemplateApplicationRequest.run_validation` (schemas/permissions.py:137).
 export interface TemplateApplicationRequest {
   template_id: string;
   role: string;
-  validate?: boolean;
+  run_validation?: boolean;
 }
 
 // Response types

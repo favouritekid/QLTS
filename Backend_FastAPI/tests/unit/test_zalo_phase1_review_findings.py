@@ -1274,6 +1274,15 @@ async def test_different_dedupe_keys_do_not_cooldown_block_each_other():
     mock_defn.retired = False
 
     db = AsyncMock()
+    # ``dispatch`` mở savepoint cấp sự kiện quanh pha tạo Notification
+    # cha (`async with db.begin_nested()`). `AsyncMock()` gọi ra một
+    # coroutine chứ không phải async context manager, nên `db` giả phải
+    # được trang bị. `__aexit__` trả False để KHÔNG nuốt ngoại lệ —
+    # nuốt sẽ làm mọi ca trong tệp này xanh giả.
+    _sp = MagicMock()
+    _sp.__aenter__ = AsyncMock(return_value=_sp)
+    _sp.__aexit__ = AsyncMock(return_value=False)
+    db.begin_nested = MagicMock(return_value=_sp)
     db.flush = AsyncMock()
     dedup_result = MagicMock()
     dedup_result.scalar_one_or_none = MagicMock(return_value=None)
@@ -1359,6 +1368,15 @@ async def test_same_dedupe_key_is_cooldown_blocked():
     mock_defn.retired = False
 
     db = AsyncMock()
+    # ``dispatch`` mở savepoint cấp sự kiện quanh pha tạo Notification
+    # cha (`async with db.begin_nested()`). `AsyncMock()` gọi ra một
+    # coroutine chứ không phải async context manager, nên `db` giả phải
+    # được trang bị. `__aexit__` trả False để KHÔNG nuốt ngoại lệ —
+    # nuốt sẽ làm mọi ca trong tệp này xanh giả.
+    _sp = MagicMock()
+    _sp.__aenter__ = AsyncMock(return_value=_sp)
+    _sp.__aexit__ = AsyncMock(return_value=False)
+    db.begin_nested = MagicMock(return_value=_sp)
     db.flush = AsyncMock()
     dedup_result = MagicMock()
     dedup_result.scalar_one_or_none = MagicMock(return_value=None)

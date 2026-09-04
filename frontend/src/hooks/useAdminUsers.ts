@@ -306,7 +306,10 @@ export function useAdminRemoveRole() {
 
   return useMutation<void, AxiosError<ApiErrorResponse>, RoleAssignment>({
     mutationFn: async (data) => {
-      await api.delete(API_ENDPOINTS.ADMIN.PERMISSIONS.ASSIGN_ROLE, { data });
+      // THU HỒI đi đường RIÊNG (`DELETE /api/admin/roles/revoke`), không phải
+      // đường gán với method khác. Dùng lại `ASSIGN_ROLE` ở đây là cách hai
+      // hành động ngược nhau bị buộc vào một hằng số.
+      await api.delete(API_ENDPOINTS.ADMIN.PERMISSIONS.REVOKE_ROLE, { data });
     },
     onSuccess: (_, variables) => {
       toast.success("Xoá vai trò thành công!");

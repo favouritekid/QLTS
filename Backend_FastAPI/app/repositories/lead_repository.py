@@ -1116,24 +1116,78 @@ class LeadRepository(BaseRepository[models.Lead]):
         # Return lowercased emails for comparison
         return {row[0].lower() for row in result.all() if row[0]}
 
-    async def bulk_insert_leads(self, leads_data: list[dict]) -> list[int]:
-        """
-        Bulk insert leads and return their IDs.
-        
+    async def bulk_insert_leads(
+        self, leads_data: list[dict]
+    ) -> list[tuple[int, Optional[str], Optional[str]]]:
+        """Chèn hàng loạt lead; mỗi hàng trả về TỰ MÔ TẢ danh tính SĐT.
+
+        Trả ``(lead_id, phone, phone2)`` — cả ba lấy từ CÙNG một hàng
+        ``RETURNING``, nên quan hệ giữa id và số điện thoại do CSDL khẳng
+        định chứ không do người gọi suy ra.
+
+        🔴 Bản cũ trả một danh sách id TRẦN và chỗ gọi ghép lại bằng
+        ``zip(batch, batch_ids)``. Chuẩn SQL KHÔNG hứa các hàng ``RETURNING``
+        về theo thứ tự của ``VALUES``; PostgreSQL cũng không tài liệu hoá
+        điều đó. Khi thứ tự lệch, SĐT của lead A được đăng ký cho lead B —
+        và CSDL im lặng hoàn toàn: khoá ngoại vẫn hợp lệ (cả hai lead vừa
+        được chèn), còn ``uq_lead_phone_active`` chỉ canh cột
+        ``phone_normalized`` một mình nên một HOÁN VỊ không đổi tập số.
+
+        Đừng "sửa" bằng ``ORDER BY`` hay sắp lại theo id: cách đó vẫn là
+        suy quan hệ từ thứ tự. Cách duy nhất không cần thứ tự là để mỗi hàng
+        mang đủ thông tin.
+
         Args:
-            leads_data: List of dictionaries matching Lead model fields
-            
+            leads_data: Danh sách dict khớp các trường của model Lead
+
         Returns:
-            List of created Lead IDs
+            Danh sách ``(id, phone, phone2)``, thứ tự KHÔNG có ý nghĩa
+
+        Raises:
+            RuntimeError: khi tập SĐT trả về không khớp tập đã gửi
         """
+        from collections import Counter
+
         from sqlalchemy.dialects.postgresql import insert as pg_insert
-        
+
         if not leads_data:
             return []
-            
-        stmt = pg_insert(models.Lead).values(leads_data).returning(models.Lead.id)
+
+        stmt = (
+            pg_insert(models.Lead)
+            .values(leads_data)
+            .returning(models.Lead.id, models.Lead.phone, models.Lead.phone2)
+        )
         result = await self.db.execute(stmt)
-        return result.scalars().all()
+        hang = [(r[0], r[1], r[2]) for r in result.fetchall()]
+
+        # ── Hậu điều kiện fail-closed ────────────────────────────────────
+        # So MULTISET các cặp SĐT trả về với cặp đã gửi. Dùng ``Counter``
+        # chứ KHÔNG dùng ``set``: ``set`` gộp phần tử trùng, nên với đầu vào
+        # có hai dòng cùng SĐT thì phép so tập vẫn xanh dù CSDL trả thiếu
+        # một hàng.
+        #
+        # CỐ Ý chỉ MỘT vế. Một vế đếm riêng (``len(hang) != len(leads_data)``)
+        # sẽ bị vế này bao hàm — hai ``Counter`` bằng nhau thì tổng cũng bằng
+        # — nên không ca kiểm ngược nào cô lập được nó, và một vế không phép
+        # kiểm nào canh được là vế chết. Số lượng vẫn được in ra để chẩn đoán.
+        #
+        # 🔒 Thông điệp KHÔNG chứa số điện thoại. Chuỗi này đi thẳng vào
+        # ``log.error(..., error=str(e))`` ở tầng service; nhúng SĐT vào đó là
+        # tự tạo thêm một chỗ PII nằm trong log. Số lượng chênh lệch cộng với
+        # ``batch_offset`` đã đủ để tìm lại lô trong tệp nguồn.
+        _gui = Counter((d.get("phone"), d.get("phone2")) for d in leads_data)
+        _ve = Counter((p, p2) for _, p, p2 in hang)
+        if _ve != _gui:
+            _thieu = sum((_gui - _ve).values())
+            _thua = sum((_ve - _gui).values())
+            raise RuntimeError(
+                "bulk_insert_leads: RETURNING trả %d hàng cho %d dòng gửi đi "
+                "và tập cặp (phone, phone2) KHÔNG khớp — %d cặp thiếu, %d cặp "
+                "thừa. Không dựng được danh tính SĐT cho lô này."
+                % (len(hang), len(leads_data), _thieu, _thua)
+            )
+        return hang
 
     async def bulk_update_pipeline_stage(
         self,

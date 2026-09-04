@@ -38,7 +38,7 @@ from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
 from ..repositories.collaborator_repository import CollaboratorRepository
 from .lead_profile_sync import sync_profile_from_lead, detect_changed_personal_fields, SYNCABLE_FIELDS
 from ..core.events import SystemEvents
-from .notification_dispatcher import dispatch
+from .notification_dispatcher import dispatch, log_dispatch_failure
 from .notification_payloads import EventPayload
 
 log = structlog.get_logger(__name__)
@@ -1354,7 +1354,7 @@ async def create_lead(
                     rooms=_lead_rooms,
                 )
         except Exception as e:
-            log.warning("Dispatch failed, business data preserved", lead_id=db_lead.id, error=str(e))
+            log_dispatch_failure(db, e, logger=log, lead_id=db_lead.id)
 
         # ✅ Dispatch LEAD_ASSIGNED notification in savepoint (if direct assignment)
         _lead_assigned_cb = None
@@ -1372,7 +1372,7 @@ async def create_lead(
                         rooms=_lead_rooms,
                     )
             except Exception as e:
-                log.warning("Dispatch failed, business data preserved", lead_id=db_lead.id, error=str(e))
+                log_dispatch_failure(db, e, logger=log, lead_id=db_lead.id)
 
         # ✅ Create post-commit callback with all post-commit actions
         async def _post_commit():
@@ -4824,15 +4824,21 @@ async def import_leads_from_file_content(
 
                 try:
                     async with db.begin_nested():  # Start nested transaction
-                        # Insert batch and get IDs
-                        batch_ids = await repo.bulk_insert_leads(batch)
+                        # 🔴 Mỗi hàng ``RETURNING`` TỰ MÔ TẢ ``(id, phone,
+                        # phone2)`` nên SĐT lấy thẳng từ hàng, KHÔNG ghép lại
+                        # với ``batch`` theo vị trí. Bản cũ dùng
+                        # ``zip(batch, batch_ids)``; chuẩn SQL không hứa thứ tự
+                        # ``RETURNING`` trùng thứ tự ``VALUES``, và khi lệch thì
+                        # ``lead_phone_identity`` ghi SĐT của lead này lên lead
+                        # kia — không ràng buộc CSDL nào bắt được.
+                        batch_rows = await repo.bulk_insert_leads(batch)
 
                         # ✅ PR3: Register phone identities for each lead in batch
-                        for lead_dict, lead_id in zip(batch, batch_ids):
+                        for lead_id, phone, phone2 in batch_rows:
                             await repo.register_phone_identities(
                                 lead_id=lead_id,
-                                phone=lead_dict.get("phone"),
-                                phone2=lead_dict.get("phone2"),
+                                phone=phone,
+                                phone2=phone2,
                             )
                 except IntegrityError as exc:
                     detail = str(exc.orig) if exc.orig else str(exc)
@@ -4864,10 +4870,10 @@ async def import_leads_from_file_content(
                 # sách thì phản hồi trả về id của những dòng vừa bị rollback, và
                 # router phát ``LEAD_IMPORTED`` kèm đúng những id không tồn tại đó.
                 # Đặt ở đây thì không nhánh lỗi nào phải nhớ dọn dẹp.
-                created_lead_ids.extend(batch_ids)
+                created_lead_ids.extend(lead_id for lead_id, _, _ in batch_rows)
 
                 log.info(
-                    f"Committed batch {i // batch_size + 1}, {len(batch_ids)} leads inserted."
+                    f"Committed batch {i // batch_size + 1}, {len(batch_rows)} leads inserted."
                 )
 
             # ✅ TRANSACTION FIX: Flush instead of commit

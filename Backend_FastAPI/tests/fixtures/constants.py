@@ -87,8 +87,27 @@ class AdminURLs:
         lambda rule_id: f"{AdminURLs.SKILL_RULES}/{rule_id}"
     )  # Tham chiếu qua AdminURLs.SKILL_RULES
 
-    POLICIES = f"{BASE}/policies"
-    ASSIGN_ROLE = f"{BASE}/assign-role"
+    # Đường THẬT ghép từ ba chỗ, KHÔNG suy từ tên hằng:
+    #   app/routers/admin/roles.py:61      APIRouter(prefix="/roles")
+    #   app/routers/admin/__init__.py:54   APIRouter(prefix="/admin")
+    #   app/main.py:957                    include_router(admin_router, prefix="/api")
+    # ⇒ `/api/admin/roles/...`. `/api/admin/policies` và `/api/admin/assign-role`
+    # KHÔNG còn router nào phục vụ (đã grep toàn `app/`), nên hai ca của
+    # `tests/api/test_admin_casbin.py` nhận `{"detail":"Not Found",
+    # "error_code":"HTTP_404"}` — 404 của FastAPI cho route không tồn tại, KHÔNG
+    # phải 404-thay-403 của hợp đồng IDOR. Hạ kỳ vọng xuống 404 sẽ khoá vĩnh
+    # viễn một ca không hề chạm tới endpoint nào.
+    #
+    # Alias cũ cố ý KHÔNG được dựng lại ở backend: nó là nguồn chuẩn thứ hai cho
+    # cùng một hành động và chính nó che mất lỗi này ở lần sau.
+    POLICIES = f"{BASE}/roles/policies"
+    # HAI hằng TÁCH RIÊNG — backend phục vụ hai đường KHÁC NHAU:
+    #   POST   /api/admin/roles/assign   (roles.py:358)
+    #   DELETE /api/admin/roles/revoke   (roles.py:394)
+    # Một hằng dùng chung cho cả hai hành động rồi phân biệt bằng HTTP method là
+    # đúng cái hình dạng đã đẻ ra lỗi ở frontend; đừng tái tạo nó trong tests.
+    ASSIGN_ROLE = f"{BASE}/roles/assign"
+    REVOKE_ROLE = f"{BASE}/roles/revoke"
 
     # Audit Logs URLs
     AUDIT_LOGS = f"{BASE}/audit-logs"

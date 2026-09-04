@@ -156,9 +156,31 @@ async def test_update_user_creates_notification(
     admin_token_headers: dict,
     regular_user_in_db: dict,
 ):
-    """Bug #4: notification must be created (no NameError, proper unpack + commit)."""
+    """Bug #4: notification must be created (no NameError, proper unpack + commit).
+
+    Rule + ACTION, not rule + ``channels``
+    --------------------------------------
+    The legacy ``notification_rule.channels`` column was DROPPED in Wave 4b
+    (migration ``2297e303be04``); the model says so at
+    ``app/models/notification.py:110-112``, and the loader now builds its
+    delivery plan purely from ``NotificationAction`` rows
+    (``app/services/notification_rule_loader.py:712-729``). A rule with zero
+    actions yields ``action_configs = []`` → no resolved recipients → the
+    dispatcher takes its domain-event-only branch and writes NO inbox row
+    (``app/services/notification_dispatcher.py:901-951``). Only browser actions
+    produce ``Notification`` rows (``…dispatcher.py:1057, 1105-1114``), so a
+    single ``channel="browser"`` action is the minimum viable seed.
+
+    Assertions key on ``data.event`` / ``data.dedupe_key`` / ``user_id``, not on
+    the title: a title match would also accept a row written by some other rule
+    that happened to reuse the wording.
+    """
     target_id = regular_user_in_db["id"]
     started_at = datetime.now(timezone.utc)
+    # Router-side dedupe key + the action-scoped suffix the dispatcher appends:
+    # app/routers/admin/users.py:1196 and
+    # app/services/notification_dispatcher.py:1039.
+    expected_dedupe_key = f"user_profile_updated:{target_id}:step1"
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(
@@ -166,17 +188,38 @@ async def test_update_user_creates_notification(
                 models.NotificationRule.event == "user_profile_updated"
             )
         )
-        if result.scalars().first() is None:
+        rule = result.scalars().first()
+        if rule is None:
+            rule = models.NotificationRule(
+                event="user_profile_updated",
+                title_template="Your profile has been updated",
+                message_template=(
+                    "An administrator updated your profile. "
+                    "Changed fields: ${updated_fields}."
+                ),
+                recipient_config={"resolver_type": "specific_users", "params": {}},
+                enabled=True,
+            )
+            db.add(rule)
+            await db.flush()
+
+        # Wave 4b: the rule needs at least one action or nothing is delivered.
+        action_exists = (await db.execute(
+            select(models.NotificationAction).where(
+                models.NotificationAction.rule_id == rule.id,
+                models.NotificationAction.channel == "browser",
+            )
+        )).scalars().first()
+        if action_exists is None:
             db.add(
-                models.NotificationRule(
-                    event="user_profile_updated",
-                    title_template="Your profile has been updated",
-                    message_template="An administrator updated your profile. Changed fields: ${updated_fields}.",
-                    recipient_config={"resolver_type": "specific_users", "params": {}},
-                    enabled=True,
+                models.NotificationAction(
+                    rule_id=rule.id,
+                    step=1,
+                    channel="browser",
+                    content_mode="inherit_default",
                 )
             )
-            await db.commit()
+        await db.commit()
 
         from app.services.notification_rule_loader import invalidate_rule_cache
         await invalidate_rule_cache("user_profile_updated")
@@ -192,20 +235,34 @@ async def test_update_user_creates_notification(
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(models.Notification).where(
-                models.Notification.title == "Your profile has been updated",
-                models.Notification.message.ilike("%full_name%"),
                 models.Notification.created_at >= started_at,
             ).order_by(models.Notification.created_at.desc())
         )
-        notifications = result.scalars().all()
-        notif = notifications[0] if notifications else None
-        assert notif is not None, \
-            "Notification NOT created â€” NameError or missing commit!"
-        assert len(notifications) == 1, \
-            f"Expected exactly 1 recipient for user profile update, got {len(notifications)}"
-        assert notif.user_id == target_id, \
-            "Per-user profile update notification leaked to the wrong recipient"
-        assert notif is not None, \
-            "Notification NOT created — NameError or missing commit!"
+        recent = result.scalars().all()
+        # Identify by EVENT, not by title — the title is just rendered text.
+        matching = [
+            n for n in recent
+            if (n.data or {}).get("event") == "user_profile_updated"
+        ]
+        assert matching, (
+            "No user_profile_updated notification persisted — NameError, missing "
+            "commit, or the rule has no browser NotificationAction. Recent rows: "
+            f"{[(n.user_id, (n.data or {}).get('event'), n.title) for n in recent]}"
+        )
+        # Exactly one recipient overall: this event targets ONE user via
+        # SpecificUsersResolver reading payload['user_id'].
+        recipients = [n.user_id for n in matching]
+        assert recipients == [target_id], (
+            "Per-user profile update must reach exactly the updated user; "
+            f"got recipients={recipients}, expected [{target_id}]"
+        )
+        notif = matching[0]
+        assert (notif.data or {}).get("dedupe_key") == expected_dedupe_key, (
+            "Notification is not the one this dispatch produced: "
+            f"dedupe_key={(notif.data or {}).get('dedupe_key')!r}, "
+            f"expected {expected_dedupe_key!r}"
+        )
+        assert (notif.data or {}).get("user_id") == target_id
+        assert notif.title == "Your profile has been updated"
         assert "full_name" in notif.message, \
             f"Notification message doesn't mention changed field: {notif.message}"

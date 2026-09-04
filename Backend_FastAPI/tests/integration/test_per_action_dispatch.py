@@ -35,14 +35,11 @@ def _mock_side_effects(mocker):
 
 def _mock_redis(mocker):
     """Bypass Redis cache + cooldown."""
-    mocker.patch(
-        "app.services.notification_rule_loader.safe_redis_get",
-        new_callable=AsyncMock, return_value=None,
-    )
-    mocker.patch(
-        "app.services.notification_rule_loader.safe_redis_set",
-        new_callable=AsyncMock,
-    )
+    # Không còn patch ``notification_rule_loader.safe_redis_get/_set``:
+    # từ 2026-09-02 loader KHÔNG đọc/ghi cache Redis nữa (rule config là
+    # DB-authoritative), nên hai tên ấy đã rời khỏi module và patch chúng
+    # chỉ còn ném ``AttributeError``. Cache rule không cần bỏ qua nữa vì
+    # nó không tồn tại; phần cooldown/rate-limit bên dưới vẫn cần.
     mocker.patch(
         "app.services.notification_dispatcher.safe_redis_exists",
         new_callable=AsyncMock, return_value=False,

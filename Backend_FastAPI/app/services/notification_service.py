@@ -220,7 +220,13 @@ async def get_user_notifications(
             notification_ids = [int(nid) for nid in cached_ids]
 
             # Query notifications by IDs (preserve order from cache)
-            notifications_from_db = await repo.get_by_ids(notification_ids)
+            # Redis KHÔNG được là nguồn chứng minh chủ quyền: khoá
+            # ``user_inbox:{user_id}`` có thể chứa ID của người khác (do lỗi
+            # ghép cặp ở đường dispatch, do sửa tay, do một khoá cũ còn sót).
+            # Ràng buộc ``user_id`` ở đây là hàng rào CUỐI, độc lập với cache.
+            notifications_from_db = await repo.get_by_ids(
+                notification_ids, owner_user_id=user_id
+            )
             notification_dict = {n.id: n for n in notifications_from_db}
 
             # Preserve cache order

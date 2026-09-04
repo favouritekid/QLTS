@@ -110,9 +110,12 @@ async def test_policy_tracking_columns_filled_on_create(
     
     try:
         # Create policy via API
-        # Note: Correct URL is /api/admin/roles/policies, not AdminURLs.POLICIES
+        # `AdminURLs.POLICIES` nay ĐÃ trỏ `/api/admin/roles/policies` — chuỗi
+        # cứng ở đây từng là cách đi vòng qua hằng chung đang sai, và chính cách
+        # đi vòng ấy giữ cho lỗi sống sót. Dùng lại hằng chung: một đường, một
+        # nguồn.
         response = await client.post(
-            "/api/admin/roles/policies",
+            AdminURLs.POLICIES,
             json=policy_payload,
             headers=admin_token_headers
         )

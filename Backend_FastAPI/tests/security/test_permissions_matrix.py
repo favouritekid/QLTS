@@ -165,15 +165,17 @@ async def test_data_for_matrix(
     }
 
 
-# PR-1.5 Commit 4 (2026-05-24) — local override for the live admin
-# RBAC inspection route. ``AdminURLs.POLICIES`` (tests/fixtures/constants.py)
-# still points at the legacy ``/api/admin/policies`` path which no longer
-# exists in the router (returns generic 404 ``Not Found``). The current
-# Casbin-rule inspection surface is ``/api/admin/roles/policies``. Kept
-# local instead of editing the shared ``constants.py`` so the change
-# scope stays inside this commit; other tests that import
-# ``AdminURLs.POLICIES`` are unaffected.
-ROLE_POLICIES_URL = "/api/admin/roles/policies"
+# PR-1.5 Commit 4 (2026-05-24) đặt ở đây một chuỗi CỨNG vì
+# ``AdminURLs.POLICIES`` khi ấy còn trỏ đường chết ``/api/admin/policies``, và
+# commit ấy cố ý không sửa ``constants.py`` để giữ hẹp phạm vi. Hệ quả: hai
+# nguồn chuẩn cho cùng một đường, và ``test_admin_casbin.py`` — tệp DUY NHẤT
+# còn dùng hằng chung — nhận 404 suốt từ đó tới nay.
+#
+# ``constants.py`` nay đã trỏ đúng ``/api/admin/roles/policies``, nên chỗ này
+# trỏ NGƯỢC về hằng chung thay vì giữ bản sao: một đường, một nguồn. Chuỗi vẫn
+# y hệt, và ``tests/api/test_admin_roles.py`` (Tier 2, xanh) đang gọi thẳng
+# ``/api/admin/roles/policies`` nên đường này đã được chứng minh là sống.
+ROLE_POLICIES_URL = AdminURLs.POLICIES
 
 # === SỬA PERMISSION_MATRIX ===
 # (Giữ nguyên như lần sửa 8 - dùng string key)

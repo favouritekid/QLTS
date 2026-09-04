@@ -839,7 +839,6 @@ class TestCasbinAndAssignment:
         mock_enforcer = AsyncMock()
         mock_enforcer.add_grouping_policy.return_value = True
         mock_enforcer.remove_grouping_policy.return_value = True
-        mock_enforcer.save_policy.return_value = None
         
         # Act
         updated_user, callback = await user_service.update_user(
@@ -855,7 +854,17 @@ class TestCasbinAndAssignment:
         # Assert - Verify Casbin was called
         mock_enforcer.remove_grouping_policy.assert_awaited()
         mock_enforcer.add_grouping_policy.assert_awaited()
-        mock_enforcer.save_policy.assert_awaited()
+
+        # `save_policy()` PHẢI KHÔNG được gọi. Ca này trước đây khẳng định
+        # ngược lại, tức nó mã hoá một niềm tin đã đo ra là SAI:
+        #  - `auto_save` bật mặc định nên hai lời gọi grouping ở trên ĐÃ ghi
+        #    hàng xuống `casbin_rule`; `save_policy()` không thêm gì;
+        #  - adapter async hiện thực `save_policy` là `DELETE FROM casbin_rule`
+        #    rồi ghi lại TOÀN BỘ model — xoá trắng bảng trên một đường chỉ định
+        #    đổi role của MỘT người dùng.
+        # Chú thích cũ trong `user_service` ("in SAME transaction") cũng sai:
+        # adapter mở session riêng, ngoài transaction của người gọi.
+        mock_enforcer.save_policy.assert_not_awaited()
         
         # Verify role was changed in DB
         await db.refresh(regular_user)

@@ -178,9 +178,10 @@ jobs:
   # PR #533 đã chạy ba lượt trong một ngày (~3,5 giờ). 42 phút tiết kiệm
   # mỗi lượt được nhân lên theo số lần chạy lại, không phải một lần.
   #
-  # Giá phải trả: 6 runner cùng `pip install` thay vì 1 (~+10-15 phút
-  # Actions minutes mỗi lượt). Đổi thời gian chờ lấy compute — với solo
-  # dev thì thời gian chờ đắt hơn.
+  # Giá phải trả: mỗi runner matrix tự `pip install` thay vì dùng chung một
+  # lần, nên Actions minutes tăng theo số leg (~+10-15 phút mỗi lượt ở thời
+  # điểm ghi chú này). Đổi thời gian chờ lấy compute — với solo dev thì thời
+  # gian chờ đắt hơn.
   #
   # ⚠️ `fail-fast: false` là CỐ Ý. Mặc định của GitHub là huỷ mọi shard
   # còn lại ngay khi một shard đỏ — nghĩa là mỗi lượt chỉ biết được MỘT
@@ -298,6 +299,10 @@ jobs:
           #   * test_dorm_export_cohort — cohort bám đúng năm học được hỏi;
           #   * test_sync_dorm_students — chặn --batch-size <= 0, thứ từng
           #     khiến một lượt đồng bộ ghi 0 hồ sơ rồi vẫn báo thành công.
+          #   * test_lead_import_phone_identity_map — bản đồ lead↔SĐT ở
+          #     đường nhập hàng loạt không được suy từ thứ tự `RETURNING`;
+          #   * test_lead_cache — mock `bulk_insert_leads`, phải đi cùng tier
+          #     với hợp đồng nó khoá, nếu không hợp đồng đổi mà không ai đỏ.
           #
           # ⚠️ TUYỆT ĐỐI không đặt comment BÊN TRONG `tests: >-`. YAML gấp
           # folded scalar thành MỘT dòng, nên dấu `#` đầu tiên biến toàn bộ
@@ -336,6 +341,8 @@ jobs:
               tests/unit/test_lead_import_empty_cells.py
               tests/unit/test_lead_import_empty_email_end_to_end.py
               tests/unit/test_lead_schema_phone_and_limits.py
+              tests/services/test_lead_import_phone_identity_map.py
+              tests/services/test_lead_cache.py
               tests/services/test_payment_service.py::TestRefundReferenceAndContext
               tests/services/test_payment_service.py::TestRefundSummaryIdor
               tests/services/test_payment_service.py::TestVerifyPayment
@@ -403,6 +410,39 @@ jobs:
           # ⚠️ Chú thích PHẢI nằm ngoài scalar `tests: >-`. Bên trong, YAML coi
           # `#` là nội dung, `>-` gấp mọi dòng thành MỘT dòng, rồi bash cắt từ
           # `#` tới hết — đo được 17 đối số thay vì 25 ở một lần trước.
+          # test_admin_roles.py cung vao Tier 2: no la duong HTTP that cua chinh bat
+          # bien tren (POST/DELETE policy), va hai ca cua no tung do trong nightly
+          # 33273246008 shard-10. Chi ghi tier o commit NAY, sau khi ca hai xanh:
+          # delete_policy_success xanh nho ban va san pham (commit truoc),
+          # add_policy_success xanh nho ban va test-debt (commit nay).
+          # test_casbin_tracking.py cung vao Tier 2: no giu ban sao CUNG cua duong
+          # policy nen doi theo hang o commit nay; da do 36/36 xanh ca tep.
+          # test_admin_casbin.py vao Tier 2: no la duong HTTP that cua policy CRUD
+          # va role assign/revoke. Hai ca cua no do trong ca BA nightly tren ffb45291
+          # vi tro duong da bo (/api/admin/policies, /api/admin/assign-role). Chi ghi
+          # tier o commit NAY, sau khi da do 2/2 xanh.
+          # test_casbin_thu_hoi_quyen.py vao Tier 2, dung canh test_permissions_matrix:
+          # ca hai canh cung mat A01 Broken Access Control. Tep nay khoa bat bien THU
+          # HOI quyen — moi duong xoa phai dung DU bon truong (p = sub, obj, act, eft),
+          # va xoa `allow` phai GIU `deny` cung (sub,obj,act). Khong dat o lat nhe hon:
+          # no phai chay cung luot voi bo khoa RBAC, vi hai ben cung noi ve mot mo hinh.
+          # Ghi tier ngay o commit nay vi tep xanh tron 7/7 tu dau.
+          # test_org_unit_access_dependency.py vao Tier 2 cung ho A01: no khoa bat bien
+          # "co dac quyen `allow_read_only` THUOC VE SERVER". Tham so scalar co default
+          # trong chu ky dependency bi FastAPI nang thanh QUERY PARAMETER, nen client
+          # bat duoc cong ghi bang `?allow_read_only=true`. Cac ca goi THANG dependency
+          # la phan chung minh that: moi ca di qua HTTP voi persona officer deu xanh ca
+          # TRUOC lan SAU ban va, vi Casbin khong cap officer quyen tren
+          # /api/admin/organization-units/* nen no che mat thu dang duoc canh.
+          # test_admin_sync_aliases.py vao Tier 2 (selector WHOLE-FILE, khong waiver,
+          # khong partial): no la duong HTTP THAT cua hai alias admin sync
+          # (GET /api/admin/sync/status, POST /api/admin/sync) — cung be mat RBAC
+          # ma lat nay dang gac, va ca hai alias deu di qua CasbinAuth. Decorator
+          # tinh + policy Casbin KHONG chung minh duoc alias bind dung dependency,
+          # nhan duoc body, va goi toi implementation; do la dung lop loi vua gap o
+          # organization.py (Depends(lambda ...) bi FastAPI nang thanh query bat buoc
+          # ⇒ endpoint LUON 422 ma moi phep kiem tinh van xanh). Chi request that qua
+          # ASGI moi phan biet duoc route song va route chet.
           - tier: Tier 2 — RBAC + security + CCCD lock
             tests: >-
               tests/api/test_activity_log_contract.py
@@ -417,6 +457,14 @@ jobs:
               tests/unit/test_magic_link_rate_limit_key_hashing.py
               tests/api/test_admin_v2_admission_round_phase3_flags.py
               tests/security/test_permissions_matrix.py
+              tests/security/test_org_unit_access_dependency.py
+              tests/api/test_casbin_thu_hoi_quyen.py
+              tests/unit/test_casbin_lock_coverage.py
+              tests/services/test_user.py
+              tests/api/test_admin_roles.py
+              tests/api/test_admin_sync_aliases.py
+              tests/api/test_admin_casbin.py
+              tests/api/test_casbin_tracking.py
               tests/integration/test_casbin_lead_static_route_collision.py
               tests/api/test_fees_calculate_authorization.py
               tests/api/test_finance_api.py::TestDiamondInheritance
@@ -439,6 +487,9 @@ jobs:
               tests/services/test_mfa.py::TestMfaRateLimiting::test_mfa_attempts_tracked_in_redis
               tests/services/test_mfa.py::TestMixedAbuseScenarios::test_e2_cycling_login_mfa_fail_cumulative_lockout
               tests/services/test_mfa.py::TestMfaSetupEdgeCases::test_f4_regenerate_backup_codes_invalidates_old
+              tests/api/test_notification_delivery_idor.py
+              tests/services/test_organization_m12_scoping.py
+              tests/services/test_auth.py
 
           # ---------------------------------------------------------------
           # Tier 2b: Luồng XUẤT tệp (danh sách khoản phí + báo cáo công nợ)
@@ -477,6 +528,18 @@ jobs:
           # trong: YAML coi `#` là NỘI DUNG, `>-` gấp mọi dòng thành MỘT dòng,
           # rồi bash cắt từ `#` tới hết. Đo thật: lệnh nhận 17 đối số thay vì
           # 25, cả tám nodeid biến mất, và required check vẫn xanh.
+          # `test_sms_export.py` dat o day vi CAN TAI, khong phai vi chu de:
+          # no la export SMS marketing, khong phai khoan phi/cong no. Ly do
+          # xep chung: cung ho rui ro "tep xuat ra trong DU ma noi dung SAI"
+          # ma lat nay dang gac (cot A phai la text 84xxx, mat so 0 dau la
+          # hong y het mat so 0 dau CCCD), va no chua PII (so dien thoai +
+          # noi dung tin/link) nen thuoc be mat can gac truoc merge.
+          # Khong dat o Tier 2: Tier 2 dang la duong toi han cua workflow
+          # (do run 33765553372: 51m52s, hon a quan Tier 1 gan 13 phut), nen
+          # them 12 ca integration vao do la keo dai dung lat dai nhat.
+          # LUU Y trung thuc: 51m52s do o cay CHUA co tep nay; chuyen sang day
+          # chi TRANH lam Tier 2 dai them, KHONG phai ban va duong toi han —
+          # muon rut that thi phai che chinh Tier 2 (xem chu thich dong ~49).
           - tier: Tier 2b — Export khoản phí + công nợ
             tests: >-
               tests/services/test_tuition_export_service.py
@@ -504,6 +567,8 @@ jobs:
               tests/services/test_invoice_service.py::TestApplyPenaltyGuards::test_penalty_blocked_when_not_overdue
               tests/services/test_invoice_service.py::TestApplyPenaltyGuards::test_penalty_blocked_on_draft_invoice
               tests/integration/test_finance_workflow.py::TestAccountingPeriod::test_create_and_close_period
+              tests/repositories/test_profile_collection.py
+              tests/integration/test_sms_export.py
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability
@@ -538,6 +603,17 @@ jobs:
           # (bo kenh chinh tac), zalo_phase1_review_findings (dispatch duong xoa +
           # seed rule). Ca bon truoc nay NGOAI MOI TIER — nightly do 10 ca ma
           # required check van xanh. Ghi sau khi xanh tron; ca lat chay ~9 giay.
+          # 2026-09-02 — bốn tệp thêm ở cuối lát này trước nay KHÔNG có tên
+          # trong tier nào, tức không shard nào chạy chúng mà required check
+          # vẫn xanh. `test_rule_loader_db.py` là thứ DUY NHẤT gác đường đọc
+          # rule từ CSDL — đúng chỗ vừa đổi khi bỏ read-cache Redis, nên không
+          # ghi vào đây thì bản vá ấy không có cổng nào nhìn thấy.
+          # `test_registry_fallback_dispatch.py` + `test_lead_notification_flow.py`
+          # là hai nửa của bộ tái hiện tối thiểu đã tái hiện được sự cố FK.
+          # Cả bốn đã chạy xanh trọn TRƯỚC khi ghi vào đây (216 passed /
+          # 1 skipped trên bộ nghiệm thu notification), theo tiền lệ của lát này.
+          # Còn nợ: `tests/integration/test_notification_delivery_persistence.py`
+          # cũng chưa có tier — xanh nhưng chưa kéo vào, để một PR riêng.
           - tier: Tier 3 — Notification reliability
             coverage_script: true
             visibility_guard: true
@@ -549,6 +625,11 @@ jobs:
               tests/services/test_notification_bundle.py
               tests/services/test_admission_bundle_contract.py
               tests/integration/test_condition_dispatch.py
+              tests/integration/test_per_action_dispatch.py
+              tests/services/test_dispatch_stale_rule_cache.py
+              tests/integration/test_rule_loader_db.py
+              tests/integration/test_registry_fallback_dispatch.py
+              tests/integration/test_lead_notification_flow.py
               tests/unit/test_outbox_worker.py
               tests/unit/test_outbox_skeleton.py
               tests/unit/test_check_notification_event_coverage_deferred.py
@@ -557,8 +638,10 @@ jobs:
               tests/api/test_profile_api.py
               tests/unit/test_notification_e2.py
               tests/unit/test_dispatcher_per_action.py
+              tests/unit/test_notification_contract.py
               tests/unit/test_channel_normalization.py
               tests/unit/test_zalo_phase1_review_findings.py
+              tests/test_router_fixes_e2e.py
 
           # ---------------------------------------------------------------
           # Tier 4: Admission + lead workflow contract
@@ -627,6 +710,8 @@ jobs:
               tests/api/test_bugfix_contract.py
               tests/api/test_admin_pipeline.py
               tests/services/test_pipeline.py
+              tests/integration/test_admission_audit.py
+              tests/services/test_data_sync_gap.py
 
           # ---------------------------------------------------------------
           # Tier 5: Phase 2 engine prereqs
@@ -647,6 +732,58 @@ jobs:
           # priority_integration soi AST dam bao import LAZY (chong vong phu thuoc),
           # phase1_03_revision_chain soi rang buoc UNIQUE tren model. Deu doc AST /
           # metadata, khong dung DB.
+          # Tier 4i — leg CACH LY, mot minh mot service DB.
+          # `test_adm_024_strict_default_migration.py` KHONG duoc chay chung
+          # invocation voi tep khac. Docstring cua chinh no (dong 25) neu hai
+          # ly do, va ca hai deu o cap BANG chu khong cap hang:
+          #   - `UPDATE admission_path SET allow_unverified_submission = FALSE`
+          #     khong co vi tu id  ->  lat co cua MOI hang, ke ca hang cua test khac;
+          #   - `ALTER TABLE admission_profile DISABLE TRIGGER
+          #     enforce_applied_rules_immutability`  ->  DDL cap BANG: lay khoa
+          #     SHARE ROW EXCLUSIVE tren CA BANG va giu DEN HET transaction (khong
+          #     nha sau ENABLE), nen moi INSERT/UPDATE/DELETE vao
+          #     `admission_profile` cua phien khac phai xep hang; SELECT thi khong.
+          #     Day la rui ro KHOA, KHONG phai "trigger o lai trang thai tat":
+          #     DISABLE va ENABLE nam trong CUNG mot transaction (ENABLE o
+          #     `finally`), ma DDL cua PostgreSQL la transactional -- trang thai
+          #     tat chua commit thi phien khac khong thay, va tien trinh chet thi
+          #     backend abort transaction nen trigger tro lai BAT.
+          #
+          # KHONG phai nguy co TUAN TU. `setup_test_database` (tests/conftest.py:235)
+          # dung luoc do MOT lan roi TRUNCATE TOAN BO bang TRUOC moi test CSDL ke
+          # tiep, va ca BA ca ADM-024 deu keo fixture ay: ca 1 qua `adm024_paths`
+          # -> `seed_lead_dependencies`, ca 2 va 3 qua `client`. Voi hinh dang CI
+          # hien tai -- MOT process pytest, khong xdist (`pytest-xdist` khong co
+          # trong requirements-dev.txt; buoc chay o duoi khong co `-n`), va moi leg
+          # matrix co PostgreSQL/Redis RIENG -- mot test tuan tu dung fixture chuan
+          # KHONG nhin thay du lieu ma tep nay da lat.
+          #
+          # Hai duong nhieu KHAC NHAU, dung gop lam mot:
+          #   - DONG THOI: xdist, hoac mot tien trinh khac dung CUNG CSDL, chay
+          #     xen vao giua.
+          #   - TUAN TU: mot test chay SAU nhung BO QUA fixture reset chuan. Hang
+          #     da COMMIT van con do nen KHONG can dong thoi gi ca. Day la nguy co
+          #     THAT; no chi khong ap voi test dung fixture chuan, vi fixture ay
+          #     TRUNCATE truoc khi chay.
+          # Rieng khoa SHARE ROW EXCLUSIVE thi khac: giu toi het transaction, va chi
+          # la rui ro BLOCKING khi co writer DONG THOI tren cung CSDL.
+          #
+          # Nen giu Tier 4i o day la DEFENSE-IN-DEPTH: co lap hai thao tac cap bang
+          # va giu blast radius nho neu mo hinh thuc thi ve sau doi (them `-n`, gop
+          # leg, hay mot runner dung chung CSDL). KHONG phai ban va cho mot nguy co
+          # tuan tu dang ton tai.
+          #
+          # Mot luot do 11 ca xanh khi chay chung KHONG chung minh an toan: no chi
+          # noi ve dung thu tu ay, dung bo fixture ay, dung hom ay. Leg rieng bien
+          # dieu do thanh bat bien CAU TRUC thay vi mot quan sat.
+          #
+          # Moi leg matrix co service `postgres`/`redis` RIENG (khai o job
+          # `pytest-shard`), va buoc chay la mot `python -m pytest` duy nhat,
+          # khong xdist. Nen leg nay tu no da thoa: whole-file, mot invocation,
+          # DB rieng.
+          - tier: Tier 4i — isolated migration mutation
+            tests: >-
+              tests/api/test_adm_024_strict_default_migration.py
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -764,8 +901,8 @@ jobs:
       # required check nào.
       #
       # KHÔNG dùng `fetch-depth: 0` ở `actions/checkout`: bước checkout là bước
-      # CHUNG của cả sáu leg matrix, nên bật full history ở đó bắt sáu runner
-      # tải toàn bộ lịch sử và tags. Ở đây chỉ cần đúng một commit base.
+      # CHUNG của MỌI leg matrix, nên bật full history ở đó bắt từng runner của
+      # matrix tải toàn bộ lịch sử và tags. Ở đây chỉ cần đúng một commit base.
       #
       # `github.sha` trên sự kiện `pull_request` là commit MERGE tổng hợp — đúng
       # cây sẽ được áp lên base — nên phép so là `git diff BASE MERGE`, hai cây,

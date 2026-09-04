@@ -105,9 +105,24 @@ async def test_add_policy_success(
     )
     policies = get_response.json()
 
-    # Check if our policy exists
-    policy_tuple = [policy_data["subject"], policy_data["object"], policy_data["action"]]
-    assert policy_tuple in policies, "Policy not found in enforcer"
+    # Hàng policy có BỐN trường: `auth_model.conf` khai
+    # `p = sub, obj, act, eft` từ B1, nên GET trả về
+    # `[sub, obj, act, eft]`. Ca cũ so tuple BA trường nên không bao giờ khớp.
+    #
+    # Không chỉ nới tuple cho xanh: khẳng định RÕ trường thứ tư là "allow".
+    # Payload API chỉ có ba trường và chỉ dựng được policy allow, nên "allow"
+    # là SEMANTICS của đường này chứ không phải một giá trị điền cho đủ. Nếu
+    # mai kia POST dựng ra `deny` mà không ai nhận ra, ca này phải đỏ.
+    policy_tuple = [
+        policy_data["subject"],
+        policy_data["object"],
+        policy_data["action"],
+        "allow",
+    ]
+    assert policy_tuple in policies, (
+        f"Policy not found in enforcer; hàng có prefix khớp: "
+        f"{[p for p in policies if p[:3] == policy_tuple[:3]]}"
+    )
 
     log.info("✅ Policy added successfully")
 

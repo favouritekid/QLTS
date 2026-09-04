@@ -45,6 +45,8 @@ from app.schemas.permissions import (
 )
 from app.services import activity_service, role_service
 from app.utils.exceptions import (
+    BadRequest,
+    ConflictError,
     DuplicateResourceError,
     PermissionDeniedError,
     ResourceNotFoundError,
@@ -243,7 +245,12 @@ async def add_new_policy(
     })
 
     # 5. Reload policy for current worker to ensure consistency
-    await enforcer.load_policy()
+    # Dưới lock: một lượt reload chen vào giữa thao tác nhóm sẽ thay model
+    # ngay dưới chân nó, làm snapshot vừa dựng thành vô nghĩa.
+    from app.services.casbin_service import khoa_enforcer
+
+    async with khoa_enforcer(enforcer):
+        await enforcer.load_policy()
 
     # 6. Return success
     return {"detail": "Policy added successfully."}
@@ -294,9 +301,15 @@ async def delete_policy(
             detail=f"Cannot remove this policy for safety reasons: {'; '.join(validation.warnings)}"
         )
 
-    # 2. Remove policy from Casbin
-    removed = await enforcer.remove_policy(
-        policy_in.subject, policy_in.object, policy_in.action
+    # 2. Remove policy from Casbin — bằng ĐỦ bốn trường.
+    # Payload API chỉ có ba trường và chỉ tạo được policy `allow`, nên chuẩn
+    # hoá về `eft="allow"` là đúng ngữ nghĩa của nó. KHÔNG dùng remove-filter
+    # theo ba trường: nó khớp cả rule `deny` cùng (sub, obj, act) và xoá nhầm
+    # deny là âm thầm MỞ quyền.
+    from app.services.casbin_service import xoa_rule_chinh_xac
+
+    removed = await xoa_rule_chinh_xac(
+        enforcer, (policy_in.subject, policy_in.object, policy_in.action)
     )
     if not removed:
         raise ResourceNotFoundError("Policy not found or could not be removed.")
@@ -325,7 +338,10 @@ async def delete_policy(
     })
 
     # 6. Reload policy for current worker to ensure consistency
-    await enforcer.load_policy()
+    from app.services.casbin_service import khoa_enforcer
+
+    async with khoa_enforcer(enforcer):
+        await enforcer.load_policy()
 
     # 7. Return success
     return {"detail": "Policy removed successfully."}
@@ -349,14 +365,25 @@ async def assign_role_to_user(
     # SỬA: Type hint thành AsyncEnforcer
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
-    added = await enforcer.add_grouping_policy(
-        f"user:{assignment.user_id}", assignment.role
-    )
+    from app.services.casbin_service import khoa_enforcer
+
+    async with khoa_enforcer(enforcer):
+        added = await enforcer.add_grouping_policy(
+            f"user:{assignment.user_id}", assignment.role
+        )
     if not added:
         raise DuplicateResourceError("User already has this role.")
 
-    # Explicitly save to ensure persistence
-    await enforcer.save_policy()
+    # KHÔNG gọi `save_policy()`. Đã đo hai điều:
+    #  - `auto_save` bật mặc định và không nơi nào tắt, nên
+    #    `add/remove_grouping_policy` ĐÃ tự ghi hàng xuống `casbin_rule`;
+    #  - `save_policy()` của adapter async là `DELETE FROM casbin_rule` rồi ghi
+    #    lại TOÀN BỘ model — một lệnh xoá trắng bảng trên đường chỉ định đổi
+    #    MỘT hàng. Model lệch CSDL vì bất kỳ lý do gì (reload chen ngang, một
+    #    worker nạp thiếu, `RUN_CASBIN_LOAD_ON_STARTUP=false`) đều bị ghi đè
+    #    thành sự thật mới.
+    # Chú thích cũ "writes to casbin_rule table in SAME transaction" cũng sai:
+    # adapter mở session RIÊNG, không nằm trong transaction của người gọi.
 
     return {"detail": "Role assigned."}
 
@@ -374,16 +401,27 @@ async def remove_role_from_user(
     # SỬA: Type hint thành AsyncEnforcer
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
-    removed = await enforcer.remove_grouping_policy(
-        f"user:{assignment.user_id}", assignment.role
-    )
+    from app.services.casbin_service import khoa_enforcer
+
+    async with khoa_enforcer(enforcer):
+        removed = await enforcer.remove_grouping_policy(
+            f"user:{assignment.user_id}", assignment.role
+        )
     if not removed:
         raise ResourceNotFoundError(
             "Role assignment not found or could not be removed."
         )
 
-    # Explicitly save to ensure persistence
-    await enforcer.save_policy()
+    # KHÔNG gọi `save_policy()`. Đã đo hai điều:
+    #  - `auto_save` bật mặc định và không nơi nào tắt, nên
+    #    `add/remove_grouping_policy` ĐÃ tự ghi hàng xuống `casbin_rule`;
+    #  - `save_policy()` của adapter async là `DELETE FROM casbin_rule` rồi ghi
+    #    lại TOÀN BỘ model — một lệnh xoá trắng bảng trên đường chỉ định đổi
+    #    MỘT hàng. Model lệch CSDL vì bất kỳ lý do gì (reload chen ngang, một
+    #    worker nạp thiếu, `RUN_CASBIN_LOAD_ON_STARTUP=false`) đều bị ghi đè
+    #    thành sự thật mới.
+    # Chú thích cũ "writes to casbin_rule table in SAME transaction" cũng sai:
+    # adapter mở session RIÊNG, không nằm trong transaction của người gọi.
 
     return {"detail": "Role removed from user."}
 
@@ -542,16 +580,29 @@ async def add_grouping_policy(
     """
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
+    from app.services.casbin_service import khoa_enforcer
+
     # Add the grouping policy (g rule)
-    added = await enforcer.add_grouping_policy(grouping.subject, grouping.parent_role)
+    async with khoa_enforcer(enforcer):
+        added = await enforcer.add_grouping_policy(
+            grouping.subject, grouping.parent_role
+        )
 
     if not added:
         raise DuplicateResourceError(
             f"Grouping policy already exists: {grouping.subject} → {grouping.parent_role}"
         )
 
-    # Save to database
-    await enforcer.save_policy()
+    # KHÔNG gọi `save_policy()`. Đã đo hai điều:
+    #  - `auto_save` bật mặc định và không nơi nào tắt, nên
+    #    `add/remove_grouping_policy` ĐÃ tự ghi hàng xuống `casbin_rule`;
+    #  - `save_policy()` của adapter async là `DELETE FROM casbin_rule` rồi ghi
+    #    lại TOÀN BỘ model — một lệnh xoá trắng bảng trên đường chỉ định đổi
+    #    MỘT hàng. Model lệch CSDL vì bất kỳ lý do gì (reload chen ngang, một
+    #    worker nạp thiếu, `RUN_CASBIN_LOAD_ON_STARTUP=false`) đều bị ghi đè
+    #    thành sự thật mới.
+    # Chú thích cũ "writes to casbin_rule table in SAME transaction" cũng sai:
+    # adapter mở session RIÊNG, không nằm trong transaction của người gọi.
 
     # Log activity
     await commit_and_log(db, await log_admin_activity(
@@ -601,16 +652,29 @@ async def delete_grouping_policy(
     """
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
+    from app.services.casbin_service import khoa_enforcer
+
     # Remove the grouping policy
-    removed = await enforcer.remove_grouping_policy(grouping.subject, grouping.parent_role)
+    async with khoa_enforcer(enforcer):
+        removed = await enforcer.remove_grouping_policy(
+            grouping.subject, grouping.parent_role
+        )
 
     if not removed:
         raise ResourceNotFoundError(
             f"Grouping policy not found: {grouping.subject} → {grouping.parent_role}"
         )
 
-    # Save to database
-    await enforcer.save_policy()
+    # KHÔNG gọi `save_policy()`. Đã đo hai điều:
+    #  - `auto_save` bật mặc định và không nơi nào tắt, nên
+    #    `add/remove_grouping_policy` ĐÃ tự ghi hàng xuống `casbin_rule`;
+    #  - `save_policy()` của adapter async là `DELETE FROM casbin_rule` rồi ghi
+    #    lại TOÀN BỘ model — một lệnh xoá trắng bảng trên đường chỉ định đổi
+    #    MỘT hàng. Model lệch CSDL vì bất kỳ lý do gì (reload chen ngang, một
+    #    worker nạp thiếu, `RUN_CASBIN_LOAD_ON_STARTUP=false`) đều bị ghi đè
+    #    thành sự thật mới.
+    # Chú thích cũ "writes to casbin_rule table in SAME transaction" cũng sai:
+    # adapter mở session RIÊNG, không nằm trong transaction của người gọi.
 
     # Log activity
     await commit_and_log(db, await log_admin_activity(
@@ -739,8 +803,23 @@ async def delete_role_atomic(
             role_name=role_name,
         )
 
+    except (ConflictError, DuplicateResourceError, PermissionDeniedError,
+            ResourceNotFoundError, BadRequest) as e:
+        # Domain exception: rollback rồi NÉM LẠI để middleware giữ đúng mã —
+        # 409 / 400 / 404. Bọc chúng thành 500 là xoá mất thông tin người gọi
+        # cần: "không xoá được vì còn policy" (409, hành động được) khác hẳn
+        # "lỗi bất ngờ" (500, không hành động được). Với A01, một 500 che mất
+        # 409 làm người vận hành tưởng là trục trặc tạm thời và thử lại mãi.
+        await db.rollback()
+        log.warning(
+            "Role deletion refused (domain)",
+            role_name=role_name,
+            error=str(e),
+            loai=type(e).__name__,
+        )
+        raise
     except Exception as e:
-        # Rollback DB transaction
+        # Chỉ lỗi BẤT NGỜ mới thành 500.
         await db.rollback()
         log.error(
             "Failed to delete role atomically",
@@ -1014,7 +1093,7 @@ async def simulate_permission(
     - Understanding complex policy interactions
 
     Example:
-        POST /api/admin/policies/simulate
+        POST /api/admin/roles/permissions/simulate
         {
             "subject": "role:manager",
             "object": "/api/leads",
@@ -1276,7 +1355,8 @@ async def who_can_access_resource(
     permission checks.
 
     Example:
-        GET /api/admin/policies/who-can-access?object=/api/leads&action=GET
+        POST /api/admin/roles/permissions/who-can-access?object=/api/leads&action=GET
+        (method là POST, nhưng `object`/`action` là Query — KHÔNG phải JSON body)
 
     Returns:
         List of roles that have permission to access the resource.
@@ -1502,7 +1582,39 @@ async def toggle_role_feature(
             force=False
         )
 
-        # Log activity
+        # CỔNG TRUNG THỰC: tầng service nay đếm đúng, nhưng bề mặt HTTP mới là
+        # thứ người vận hành nhìn. Bản cũ luôn trả 200 và luôn ghi audit
+        # "Disabled feature" kể cả khi `removed=0` — đo được: đúng thành công
+        # giả. Với A01 Broken Access Control, một 200 cho việc thu hồi KHÔNG
+        # xảy ra là kiểu hỏng tệ nhất: người vận hành tin quyền đã bị gỡ.
+        #
+        # KHÔNG trừ `blocked`. Safety-check từ chối xoá là từ chối CÓ CHỦ Ý,
+        # nhưng hệ quả với người dùng thì y hệt: policy VẪN CÒN, nên feature
+        # VẪN CHƯA TẮT. Trừ `blocked` ra là quay lại đúng lỗi đang vá — báo
+        # "Disabled feature" cho một việc không xảy ra.
+        #
+        # Và ĐO thay vì trừ: `con_song` là rule thật sự còn trong enforcer.
+        # Phép trừ `len - removed` sai hai chiều — rule vốn đã không tồn tại bị
+        # tính là "chưa xoá" (báo động giả), còn rule bị chặn hay ném lỗi thì
+        # không phải lúc nào cũng vào được `removed`.
+        con_song = result.get("con_song", [])
+        if con_song or not result.get("an_toan", False):
+            raise ConflictError(
+                f"Không tắt được feature '{feature_def['display_name']}' cho "
+                f"{role_name}: {len(con_song)}/{len(policies_tuples)} policy "
+                f"chưa bị xoá (trong đó {result.get('blocked', 0)} bị "
+                f"safety-check giữ lại"
+                + (
+                    f"; {len(result.get('deny_chua_cham', []))} rule deny KHÔNG "
+                    f"bị chạm tới vì non-deny xoá hụt"
+                    if not result.get("an_toan", False)
+                    else ""
+                )
+                + f"), quyền cũ VẪN CÒN hiệu lực. "
+                f"Chi tiết: {result.get('warnings') or result.get('errors')}"
+            )
+
+        # Log activity — chỉ tới đây khi MỌI policy dự kiến đã thật sự bị xoá.
         await commit_and_log(db, await log_admin_activity(
             db=db,
             request=request,
