@@ -533,7 +533,7 @@ jobs:
           # xep chung: cung ho rui ro "tep xuat ra trong DU ma noi dung SAI"
           # ma lat nay dang gac (cot A phai la text 84xxx, mat so 0 dau la
           # hong y het mat so 0 dau CCCD), va no chua PII (so dien thoai +
-          # consent) nen thuoc be mat can gac truoc merge.
+          # noi dung tin/link) nen thuoc be mat can gac truoc merge.
           # Khong dat o Tier 2: Tier 2 dang la duong toi han cua workflow
           # (do run 33765553372: 51m52s, hon a quan Tier 1 gan 13 phut), nen
           # them 12 ca integration vao do la keo dai dung lat dai nhat.
