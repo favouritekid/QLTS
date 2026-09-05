@@ -1,0 +1,185 @@
+# Manifest mien — nguon chuan DUY NHAT cho anh xa "duong dan san pham -> lat test".
+#
+# PR nay o che do SHADOW: manifest CHUA quyet dinh lat nao chay. No duoc tinh,
+# ghi ra artifact, va doi chieu ve sau. Cong test hien hanh GIU NGUYEN — ma
+# tran `pytest-shard` khong bi PR nay cham toi (snapshot `7b02278c`, 05-09-2026): 7 tier /
+# 226 token / 207 tep. Con so nay la SNAPSHOT, khong phai hop dong; hop dong
+# la 'PR nay khong sua ma tran'.
+#
+# HAI CHIEU PHU — trang thai HIEN TAI, khong phai ca hai deu da duoc thi hanh:
+#
+#   A. Product-path coverage — ĐÃ THI HÀNH trong ma.
+#      Moi duong duoi `Backend_FastAPI/` (ngoai cay test) hoac khop mot mien,
+#      hoac roi vao BROAD tuong minh qua `unknown_backend_path`. Duong backend
+#      KHONG nhan dien duoc thi LUON BROAD, khong bao gio la tap rong.
+#      Be mat da biet ngoai backend (frontend/, nginx/, scripts/,
+#      docker-compose*) khop mien thi chay mien do, khong khop thi khong dong
+#      gop — de mot PR sua UI khong keo tron backend.
+#
+#   B. Test coverage — **PROMOTION_CRITERION = PENDING, CHUA thi hanh.**
+#      Muc tieu: moi tep test hoac thuoc mot bundle, hoac co waiver nightly-only
+#      (reason + blob + isolation + review deadline), hoac la intentional-debug
+#      exclusion (`tests/integration/test_debug*.py`, bi `--ignore-glob` cua
+#      nightly loai TRUOC khi kiem ke chay).
+#      Hom nay ma CHI kiem chieu nguoc lai — moi selector `tests:` phai khop it
+#      nhat mot tep o HEAD (`kiem_selector_manifest`). No KHONG chung minh rang
+#      MOI tep test deu thuoc mot bundle/waiver/debug. Dung doc muc B nhu
+#      mot bat bien dang co hieu luc.
+#
+# BAY truong bat buoc cho moi mien (paths, tests, isolation,
+# expected_seconds, critical, owner, reason). Luoc do duoc `pr_classify.nap_manifest`
+# xac thuc NGHIEM NGAT, va ba cai bay duoi day deu da do that tren PyYAML 6.0.3:
+#
+#   * khoa trung bi `yaml.safe_load` NUOT IM LANG (giu ban cuoi) — o day dung
+#     loader tu choi khoa trung;
+#   * `owner: NO` bi ep thanh bool False (Norway problem);
+#   * `expected_seconds: 017` bi doc thanh 15 (bat phan), `12:30` thanh 750;
+#     va `isinstance(True, int)` la True nen bool lot qua cong kiem `int`.
+#
+# `isolation` chi nhan: shared | dedicated | oneoff.
+
+domains:
+
+  auth_rbac:
+    paths:
+      - Backend_FastAPI/app/security/
+      - Backend_FastAPI/app/casbin_config/
+      - Backend_FastAPI/app/core/deps.py
+    tests:
+      - Backend_FastAPI/tests/api/test_auth
+      - Backend_FastAPI/tests/services/test_auth.py
+      - Backend_FastAPI/tests/security/
+    isolation: shared
+    expected_seconds: 1970
+    critical: true
+    owner: platform
+    reason: "Cong xac thuc va phan quyen Casbin — moi duong thu hoi quyen di qua day."
+
+  admission:
+    paths:
+      - Backend_FastAPI/app/services/admission
+      - Backend_FastAPI/app/routers/admission
+      - Backend_FastAPI/app/admission_metrics.py
+    tests:
+      - Backend_FastAPI/tests/services/test_admission
+      - Backend_FastAPI/tests/api/test_admission
+      - Backend_FastAPI/tests/integration/test_admission
+    isolation: shared
+    expected_seconds: 5517
+    critical: true
+    owner: admissions
+    reason: "May trang thai ho so tuyen sinh; fail-closed CONFIG_GAP_TARGET_LEVEL nam o day."
+
+  finance:
+    paths:
+      - Backend_FastAPI/app/repositories/fee_repository.py
+      - Backend_FastAPI/app/services/fee_pricing.py
+      - Backend_FastAPI/app/constants/cash_ledger.py
+      - Backend_FastAPI/app/gateways/
+      # BON be mat frontend duoi day nam trong `_BE_MAT_KILL_SWITCH` cua
+      # `tests/services/test_finance_killswitch.py` — guard chong ro metadata
+      # production DOC TUNG DONG cua chung. Truoc khi map, sua mot trong ba tep
+      # duoi ra `NO_BACKEND_IMPACT`/0 test, tuc dan mot con so that vao
+      # `zod/finance.ts` thi guard khong chay. `finance.types.ts` con bi
+      # `test_fee_labels_match_frontend.py` doc de khoa FEE_TYPE_LABELS /
+      # FEE_STATUS_LABELS khoi drift voi `app/constants/fee_labels.py`.
+      - frontend/src/types/finance.types.ts
+      - frontend/src/lib/zod/finance.ts
+      - frontend/src/test/mocks/data/finance.ts
+      - frontend/src/app/(dashboard)/finance/accounting/_components/AccountingPeriodClient.tsx
+    tests:
+      - Backend_FastAPI/tests/unit/test_fee_labels_match_frontend.py
+      # ⚠️ Map `paths` thoi KHONG du: tep guard nay o `tests/services/` ma
+      # selector cua `finance` la `test_fee`/`test_payment`, nen no tung MO COI.
+      # Chieu xuoi va chieu nguoc phai khop nhau, neu khong thi mien "co map"
+      # ma guard van khong chay.
+      - Backend_FastAPI/tests/services/test_finance_killswitch.py
+      - Backend_FastAPI/tests/api/test_fee
+      - Backend_FastAPI/tests/services/test_fee
+      - Backend_FastAPI/tests/services/test_payment
+      - Backend_FastAPI/tests/repositories/test_profile_collection.py
+    isolation: shared
+    expected_seconds: 1248
+    critical: true
+    owner: finance
+    reason: "So tien, hoa don, cong thanh toan. Sai o day la sai tien that."
+
+  notification:
+    paths:
+      - Backend_FastAPI/app/tasks/
+      - Backend_FastAPI/app/celery_app.py
+      - Backend_FastAPI/app/celery_utils.py
+    tests:
+      - Backend_FastAPI/tests/unit/test_notification
+      - Backend_FastAPI/tests/integration/test_notification
+    isolation: shared
+    expected_seconds: 909
+    critical: false
+    owner: platform
+    reason: "Hang doi Celery + outbox thong bao; cache rule tung gay vo FK o #591."
+
+  lead:
+    paths:
+      - Backend_FastAPI/app/services/lead_service.py
+      - Backend_FastAPI/app/repositories/lead_repository.py
+      - Backend_FastAPI/app/models/lead.py
+    tests:
+      - Backend_FastAPI/tests/services/test_lead.py
+      - Backend_FastAPI/tests/services/test_create_lead_referral.py
+      - Backend_FastAPI/tests/api/test_lead
+    isolation: shared
+    expected_seconds: 700
+    critical: true
+    owner: admissions
+    reason: "Ba tep tung do trong chien dich nightly ma den nay van khong co selector."
+
+  infra:
+    # ⚠️ `Backend_FastAPI/alembic/` DA BI GO khoi day. Ly do do duoc (snapshot `7b02278c`, 05-09-2026):
+    # tuyet dai da so duong backend "khop mien" chi la alembic, ma ba tep test
+    # cua `infra` khong tep nao dung toi luoc do — chung chi doc YAML/workflow.
+    # Nghia la phan THU HEP lon nhat cua ca manifest lai la phan sai nhat: them
+    # mot migration cho ra ke hoach ba test khong lien quan, trong khi kho co
+    # han mot ho tep test migration that (`test_mkchk_migration_applies.py`,
+    # `test_adm_024_strict_default_migration.py`, …). Khong map ⇒
+    # `unknown_backend_path` ⇒ BROAD. Cham hon, va DUNG.
+    paths:
+      # ⚠️ `Backend_FastAPI/pytest.ini` DA BI GO — cung ho voi `alembic/`. No
+      # dieu khien marker / asyncio_mode / testpaths cho TOAN BO cay test, ma
+      # khong tep nao trong `infra.tests` doc no. Map = ba test khong lien quan;
+      # khong map = `unknown_backend_path` ⇒ BROAD. BROAD moi la cau tra loi dung.
+      - nginx/
+      - scripts/
+      # Bon be mat duoi day tung roi xuong `NO_BACKEND_IMPACT`/0 test, trong khi
+      # `test_nginx_template_packaging.py` DOC dung chung (`_DUONG_GUARD_DOC`,
+      # `_TAI_LIEU_VAN_HANH`). Kho nay da vap dung lo nay mot lan o bo loc
+      # `paths:` cua `backend-test.yml` (13-08-2026); day la nhanh anh em.
+      - docker-compose
+      - .env
+      - tests-e2e/
+      - Documents/PRODUCTION_DEPLOY_GUIDE.md
+      - Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md
+      # `CLAUDE.md` o goc la RUNBOOK, khong phai README:
+      # `test_nginx_template_packaging.py` mo no bang `_CLAUDE_MD` va khang dinh
+      # ve noi dung (lenh production phai ghim `-f docker-compose.yml`). De no o
+      # be mat AN TOAN ma khong map = them mot dong lenh sai vao runbook thi CI
+      # chon 0 test.
+      - CLAUDE.md
+    tests:
+      - Backend_FastAPI/tests/unit/test_nginx_template_packaging.py
+      - Backend_FastAPI/tests/unit/test_ci_test_visibility.py
+      - Backend_FastAPI/tests/unit/test_deploy_startup_gates.py
+      # ⚠️ Ba tep tren KHONG doc phan lon be mat ma `infra` nhan. Do that: mot PR
+      # chi sua `docker-compose.smoke.yml` ra ke hoach ba test, va ca ba deu
+      # khong mo tep do — trong khi guard THAT nam o `test_smoke_stack_co_lap.py`.
+      # Sau tep duoi day la nhung tep DOC THAT cac be mat cua mien nay.
+      - Backend_FastAPI/tests/unit/test_smoke_stack_co_lap.py
+      - Backend_FastAPI/tests/unit/test_smoke_cli.py
+      - Backend_FastAPI/tests/unit/test_attest_manifest_validator.py
+      - Backend_FastAPI/tests/unit/test_dockerignore_prod_context.py
+      - Backend_FastAPI/tests/middleware/test_admission_freeze.py
+      - Backend_FastAPI/tests/services/test_finance_killswitch.py
+    isolation: dedicated
+    expected_seconds: 120
+    critical: true
+    owner: platform
+    reason: "Dong goi nginx, cong deploy, cong do-nhin-thay cua chinh CI."

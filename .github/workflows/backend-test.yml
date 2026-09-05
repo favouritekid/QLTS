@@ -996,6 +996,294 @@ jobs:
           python ../tests-e2e/session-survival/kiem-phien.py             tests/utils/test_file_helpers.py test_khong_ro_ri_stdlib
 
   # =======================================================================
+  # CONTRACT — hợp đồng của shadow classifier
+  # =======================================================================
+  # Job RIÊNG, không phải một node pytest và KHÔNG nằm trong
+  # `matrix.include[*].tests`. Lý do: cổng này chọn tệp bằng allowlist tường
+  # minh, nên một tệp test mới không có tên trong đó thì KHÔNG lát nào chạy mà
+  # required check `pytest` vẫn xanh — đúng memory `ci-allowlist-tep-khong-duoc-gac`.
+  # Gọi bằng một lệnh tường minh trên đường dẫn cố định thì không tầng nào có
+  # thể "quên chọn" nó. Tiền lệ đang chạy: `dependency-audit.yml` gọi
+  # `node --test .github/scripts/audit-dev-delta.test.js` vì đúng lý do đó.
+  #
+  # Classifier là hàm THUẦN trên chuỗi đường dẫn ⇒ KHÔNG cần Postgres/Redis,
+  # không service container, không `requirements-dev.txt`.
+  #
+  # 🔴 SÁU phép, không phải bốn. Cột "chịu lực" là kết quả ĐO (gỡ phép ấy ra thì
+  # cổng XANH trên đúng đầu vào hỏng), không phải phán đoán:
+  #
+  #   | # | phép                              | chịu lực?                       |
+  #   |---|-----------------------------------|---------------------------------|
+  #   | 1 | RC == 0 (không phải `!= 5`)       | CÓ — nodeid chết cho RC=4, mọi   |
+  #   |   |                                   | phép `!= 5` cho lọt đúng ca ấy   |
+  #   | 2 | executed > 0                      | KHÔNG — bị (5) bao trùm; giữ làm |
+  #   |   |                                   | lớp hai và để thông điệp đúng    |
+  #   | 3 | failures+errors+skipped == 0      | CÓ — JUnit vẫn ghi `<testcase>`  |
+  #   |   |                                   | cho ca `@skip`, nên (5) mù       |
+  #   | 4 | collected == executed             | CÓ — JUnit không tiết lộ         |
+  #   |   |                                   | deselect; cần lượt `--collect-   |
+  #   |   |                                   | only` RIÊNG                      |
+  #   | 5 | tập tên == REQUIRED_SENTINELS     | CÓ — sàn `>= n` là cổng giả      |
+  #   | 6 | không có tên TRÙNG; số `<testcase>`| CÓ — `name` của JUnit không mang|
+  #   |   | == len(REQUIRED_SENTINELS)        | `classname`                     |
+  #
+  # ⚠️ Giới hạn ĐÃ CÔNG BỐ, không vá được bằng danh sách tên: rỗng hoá THÂN một
+  # sentinel thành `pass` cho `thiếu=∅ thừa=∅` và cổng VẪN XANH (đã đo). Hợp
+  # đồng này khoá DANH TÍNH, không khoá NỘI DUNG.
+  #
+  # Hằng REQUIRED_SENTINELS nằm Ở ĐÂY chứ không trong tệp test: nếu nó ở trong
+  # tệp test thì cùng một PR vừa xoá ca vừa xoá dòng hằng, và cổng tự miễn trừ.
+  classifier-contract:
+    name: classifier contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cài phụ thuộc (hai gói, ghim phiên bản)
+        run: python -m pip install --quiet pytest==8.4.2 PyYAML==6.0.3
+
+      # Bộ ca hợp đồng chỉ kiểm những chuỗi manifest GIẢ dựng trong test. Tệp
+      # `domains.yml` THẬT có thể sai mà cổng vẫn xanh — đúng chỗ hở đã đo.
+      # Bước này nạp chính tệp trong checkout, và kiểm mọi selector `tests:`
+      # khớp ít nhất một tệp ở HEAD (một selector gõ sai làm pytest thu 0 ca
+      # cho bundle đó, và đó lại là XANH).
+      - name: Manifest THẬT phải hợp lệ và mọi selector phải khớp tệp có thật
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import importlib.util, pathlib, sys
+          goc = pathlib.Path(".")
+          spec = importlib.util.spec_from_file_location(
+              "pr_classify", goc / ".github/scripts/pr_classify.py")
+          C = importlib.util.module_from_spec(spec)
+          sys.modules[spec.name] = C
+          spec.loader.exec_module(C)
+
+          duong = goc / ".github/scripts/domains.yml"
+          if not duong.exists():
+              sys.exit("BLOCK: %s không tồn tại trong checkout" % duong)
+          try:
+              m = C.nap_manifest(duong.read_text(encoding="utf-8"))
+          except C.LoiManifest as e:
+              sys.exit("BLOCK: manifest thật sai lược đồ: %s" % e)
+
+          # MOT nguon chuan: loc bang chinh `C._la_tep_test`, dung glob rieng.
+          # Hai ban cua cung mot vi tu la hai ban se troi khoi nhau.
+          universe = {
+              d for d in (str(p).replace("\\", "/")
+                          for p in goc.glob("Backend_FastAPI/tests/**/*.py"))
+              if C._la_tep_test(d)
+          }
+          if not universe:
+              sys.exit("BLOCK: không thấy tệp test nào ở HEAD")
+          try:
+              C.kiem_selector_manifest(m, universe)
+          except C.LoiManifest as e:
+              sys.exit("BLOCK: %s" % e)
+
+          # CHIEU XUOI: moi `paths:` cung phai khop mot duong CO THAT. Thieu
+          # phep nay thi mot `paths:` go sai van hop le, khop 0 duong, va mien
+          # do lang le ngung bat — an toan (BROAD) nhung cam.
+          import subprocess
+          moi_duong = {d for d in subprocess.run(
+              ["git", "ls-files"], capture_output=True, text=True,
+              check=True).stdout.splitlines() if d.strip()}
+          if not moi_duong:
+              sys.exit("BLOCK: `git ls-files` khong tra duong nao")
+          try:
+              C.kiem_paths_manifest(m, moi_duong)
+          except C.LoiManifest as e:
+              sys.exit("BLOCK: %s" % e)
+          print("✅ manifest thật hợp lệ: %d miền, mọi selector khớp tệp có thật "
+                "(universe %d tệp)." % (len(m["domains"]), len(universe)))
+          PY
+
+      - name: Hợp đồng classifier — RC, JUnit, collected==executed, sentinel
+        run: |
+          set -euo pipefail
+          TEP=.github/scripts/tests/test_pr_classifier.py
+
+          # --- lượt collect-only RIÊNG: JUnit không tiết lộ deselect ---
+          python -m pytest "$TEP" -q -p no:cacheprovider --collect-only \
+            > /tmp/collect.txt 2>&1 || { cat /tmp/collect.txt; exit 1; }
+
+          # --- lượt chạy thật ---
+          set +e
+          python -m pytest "$TEP" -q -p no:cacheprovider \
+            --junitxml=/tmp/classifier-junit.xml
+          RC=$?
+          set -e
+          echo "pytest RC=$RC"
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::pytest RC=$RC (0=OK 1=FAILED 2=INTERRUPTED 3=INTERNAL 4=USAGE/nodeid chết 5=NO_TESTS_COLLECTED)."
+            exit 1
+          fi
+
+          python - <<'PY'
+          import re, sys, xml.etree.ElementTree as ET
+
+          # Nguồn chuẩn là DANH SÁCH, không phải con số. Con số chỉ là len() của
+          # nó — sinh ra, không gõ tay. Đổi tên một ca mà giữ nguyên tổng vẫn đỏ,
+          # vì phép so là HIỆU tập hợp chứ không phải giao.
+          REQUIRED_SENTINELS = [
+              # --- BỐN nguồn BROAD: mỗi nguồn một ca, vì ca gộp để lọt ba nhánh
+              "test_broad_unknown_backend_khong_rong_va_dung_ly_do",
+              "test_broad_self_change_khong_rong_va_dung_ly_do",
+              "test_broad_shared_test_surface_khong_rong_va_dung_ly_do",
+              "test_broad_empty_plan_guard_khong_rong_va_dung_ly_do",
+              # --- kế hoạch là HỢP base ∪ head, không phải chỉ head
+              "test_ke_hoach_gom_ca_domain_chi_co_o_base",
+              "test_ke_hoach_gom_ca_domain_chi_co_o_head",
+              # --- bề mặt TEST_FILE: sửa test thì chạy CHÍNH nó, không BROAD
+              "test_tep_test_bi_sua_thi_chinh_no_duoc_chon",
+              "test_test_only_chua_map_chon_chinh_no_khong_broad",
+              # --- self-change: ba đường + HAI dạng conftest (gốc cây / lồng nhau)
+              "test_cham_manifest_thi_broad",
+              "test_cham_workflow_gate_thi_broad",
+              "test_cham_github_actions_thi_broad",
+              "test_conftest_goc_cay_test_thi_broad",
+              "test_conftest_long_nhau_thi_broad",
+              # --- rename / delete: bản ghi R có BA trường, A/M/D có hai
+              "test_rename_lien_mien_hop_ca_hai_domain",
+              "test_rename_path_co_khoang_trang_khong_bi_tach_sai",
+              "test_xoa_tep_van_chon_domain_cua_path_cu",
+              "test_record_count_dem_record_khong_dem_path_o_pr_rename",
+              # --- đầu vào hỏng: mọi ngả đều BLOCK, không ngả nào thành "sạch"
+              "test_diff_rong_thi_block_khong_phai_no_backend_impact",
+              "test_parser_tu_choi_truong_trang_thai_khong_phai_chu",
+              "test_kiem_sha_tu_choi_duoi_bam_va_xuong_dong",
+              "test_record_it_hon_changed_files_thi_block",
+              "test_record_nhieu_hon_changed_files_thi_block",
+              "test_git_hong_khong_bi_coi_la_manifest_vang",
+              # --- không tác động backend / bề mặt đã biết ngoài backend
+              "test_docs_only_tra_sentinel_no_backend_impact_tuong_minh",
+              "test_frontend_ui_thuan_tra_no_backend_impact",
+              "test_frontend_duoc_manifest_anh_xa_thi_chay_domain",
+              "test_pr_tron_frontend_backend_theo_backend",
+              "test_be_mat_da_biet_ngoai_backend_van_duoc_khop_mien",
+              # --- lược đồ manifest: PyYAML im lặng ở đủ sáu chỗ
+              "test_manifest_trung_khoa_bi_tu_choi",
+              "test_manifest_gia_tri_bool_yaml_bi_tu_choi",
+              "test_manifest_so_co_so_0_bi_tu_choi",
+              "test_manifest_bool_khong_lot_cong_kiem_int",
+              "test_manifest_rong_bi_tu_choi_khong_phai_bootstrap",
+              "test_manifest_thieu_khoa_bat_buoc_nem_loi_manifest",
+              "test_manifest_chuoi_rong_trong_paths_bi_tu_choi",
+              "test_manifest_path_thoat_kho_bi_tu_choi",
+              "test_manifest_critical_khong_phai_bool_that_bi_tu_choi",
+              "test_selector_manifest_khong_khop_tep_nao_thi_do",
+              # --- bất biến của chính kế hoạch + ngữ nghĩa CLI
+              "test_pr_cham_backend_khong_bao_gio_sinh_ke_hoach_rong",
+              "test_ke_hoach_khong_tro_toi_tep_da_xoa",
+              "test_ke_hoach_khong_tru_bot_tep_ung_vien_isolated",
+              "test_cli_tra_ma_khac_0_khi_block",
+              # --- be mat DA BIET moi + luoc do `paths:` fail-closed
+              "test_docker_compose_va_env_example_khop_mien_thay_vi_no_backend_impact",
+              "test_manifest_paths_ngoai_be_mat_duoc_tra_bi_tu_choi",
+              "test_manifest_paths_tro_vao_cay_test_bi_tu_choi",
+              "test_domain_khong_keo_mien_nao_duoc_danh_dau_test_only_self_select",
+              "test_dem_phu_song_dem_dung_so_tep_mo_coi",
+              "test_cli_block_van_giu_records_va_change_record_count",
+              "test_cli_bat_moi_ngoai_le_chu_khong_chi_ba_lop_da_biet",
+              # --- be mat CHUA BIET phai fail-closed, khong duoc im lang
+              "test_tests_e2e_va_tai_lieu_van_hanh_khong_roi_xuong_unknown",
+              "test_duong_top_level_la_hoac_ra_broad_khong_phai_no_backend_impact",
+              "test_moi_duong_trong_github_deu_la_self_ke_ca_dependabot",
+              "test_readme_goc_la_be_mat_an_toan_va_ra_no_backend_impact",
+              "test_tron_AN_TOAN_voi_CHUA_BIET_thi_BROAD_khong_duoc_im_lang",
+              "test_be_mat_VAN_HANH_khong_khop_mien_thi_BROAD_khong_phai_thoi",
+              # --- dinh danh ba SHA: ghi lai KHONG phai chung minh
+              "test_doc_parents_doc_dung_hai_parent_theo_dung_thu_tu",
+              "test_doc_parents_khong_bi_lua_boi_chu_parent_trong_THONG_DIEP",
+              "test_doc_parents_tu_choi_object_khong_phai_commit",
+              "test_dinh_danh_parent1_sai_thi_nem",
+              "test_dinh_danh_parent2_sai_thi_nem",
+              "test_dinh_danh_commit_khong_phai_merge_thi_nem",
+              "test_dinh_danh_checkout_khong_phai_merge_thi_nem",
+              "test_dinh_danh_tu_choi_sha_khong_phai_40_hex",
+              "test_cli_THUC_SU_goi_kiem_dinh_danh",
+              # --- chieu XUOI cua `paths:` + be mat AN TOAN khai duoc
+              "test_manifest_paths_tren_be_mat_AN_TOAN_duoc_chap_nhan",
+              "test_paths_go_sai_khop_0_duong_thi_do",
+              "test_artifact_ghi_lai_parent_QUAN_SAT_ke_ca_khi_dinh_danh_DO",
+          ]
+          CAN = set(REQUIRED_SENTINELS)
+          assert len(CAN) == len(REQUIRED_SENTINELS), "REQUIRED_SENTINELS có tên trùng"
+
+          root = ET.parse("/tmp/classifier-junit.xml").getroot()
+          suite = root if root.tag == "testsuite" else root.find("testsuite")
+          tests = int(suite.get("tests", 0))
+          bad = (int(suite.get("failures", 0)) + int(suite.get("errors", 0))
+                 + int(suite.get("skipped", 0)))
+
+          txt = open("/tmp/collect.txt", encoding="utf-8", errors="replace").read()
+          m = re.search(r"(\d+) tests? collected", txt)
+          if not m:
+              sys.exit("BLOCK: không đọc được số ca từ lượt --collect-only")
+          collected = int(m.group(1))
+
+          ds = [tc.get("name") for tc in root.iter("testcase")]
+          got = set(ds)
+          thieu = sorted(CAN - got)
+          thua = sorted(got - CAN)
+          # ⚠️ `name` cua JUnit KHONG mang `classname`. Hai phuong thuc trung ten
+          # o hai lop khac nhau gop lam MOT trong `set` ⇒ xoa han mot sentinel o
+          # lop A ma van `thieu = ∅`. Phep so BOI ben duoi chan nga do, va cung
+          # chan ca `parametrize` len lut lam phong so ca.
+          #
+          # ⚠️⚠️ Gioi han da biet, KHONG va duoc bang danh sach TEN: rong hoa
+          # THAN mot sentinel thanh `pass` van cho `thieu=∅ thua=∅` va cong VAN
+          # XANH (da do). Hop dong nay khoa DANH TINH, khong khoa NOI DUNG.
+
+          print("collected=%d executed=%d bad=%d required=%d"
+                % (collected, tests, bad, len(CAN)))
+          loi = []
+          # ⚠️ Đo thật (kiểm ngược D28): phép này BỊ BAO TRÙM. Executed=0 kéo
+          # theo 0 phần tử <testcase> ⇒ `thieu` = toàn bộ danh sách và cổng đã
+          # đỏ vì lý do đó. Giữ lại làm lớp phòng thủ thứ hai và để thông điệp
+          # nói đúng bệnh, KHÔNG phải vì nó là thứ duy nhất chặn. Hai phép dưới
+          # thì ngược lại — gỡ chúng ra là cổng XANH trên đúng đầu vào hỏng.
+          if tests <= 0:
+              loi.append("executed=0 — lượt không chạy ca nào (XML vẫn được ghi)")
+          if bad:
+              loi.append("failures+errors+skipped=%d, phải bằng 0" % bad)
+          if collected != tests:
+              loi.append("collected=%d != executed=%d (deselect/-k lọt vào lệnh?)"
+                         % (collected, tests))
+          if len(ds) != len(got):
+              from collections import Counter
+              trung = sorted(k for k, v in Counter(ds).items() if v > 1)
+              loi.append("tên ca TRÙNG trong JUnit: %s — `name` không mang "
+                         "classname nên hai ca trùng tên gộp làm một" % trung)
+          if len(ds) != len(CAN):
+              loi.append("số <testcase> = %d, REQUIRED_SENTINELS = %d — hợp đồng "
+                         "là ràng buộc BẰNG, không phải sàn" % (len(ds), len(CAN)))
+          if thieu:
+              loi.append("THIẾU sentinel: %s" % thieu)
+          if thua:
+              loi.append("THỪA ca ngoài danh sách: %s" % thua)
+          if thieu or thua or len(ds) != len(CAN):
+              loi.append("sửa hằng `REQUIRED_SENTINELS` trong "
+                         ".github/workflows/backend-test.yml, job "
+                         "`classifier-contract`, bước `Hợp đồng classifier`")
+          if thieu and thua:
+              loi.append("cả THIẾU lẫn THỪA khác rỗng ⇒ đây là ĐỔI TÊN, không "
+                         "phải xoá+thêm; cập nhật REQUIRED_SENTINELS tường minh")
+          if loi:
+              for x in loi:
+                  print("::error::%s" % x)
+              sys.exit(1)
+          print("✅ hợp đồng classifier đạt: %d/%d sentinel, thiếu 0, thừa 0."
+                % (tests, len(CAN)))
+          PY
+
+  # =======================================================================
   # GATE — required status check, tên phải giữ NGUYÊN là `pytest`
   # =======================================================================
   # Ruleset 16381130 đòi đúng chuỗi `pytest`. Job này gom kết quả của mọi
@@ -1015,7 +1303,7 @@ jobs:
   pytest:
     name: pytest
     runs-on: ubuntu-latest
-    needs: [pytest-shard, session-survival]
+    needs: [pytest-shard, session-survival, classifier-contract]
     if: always()
     steps:
       - name: Gom kết quả các shard
@@ -1040,3 +1328,22 @@ jobs:
             exit 1
           fi
           echo "✅ Cổng session-survival đã thành công."
+
+      # `classifier-contract` cũng là job RIÊNG. Không gom vào đây thì nó không
+      # thuộc required check nào, và một self-test đỏ vẫn merge được — đúng hình
+      # dạng "cổng tồn tại nhưng không ai bắt buộc nó".
+      #
+      # Phải so `!= "success"`, KHÔNG so `== "failure"`: job đỏ cho 'failure',
+      # bị huỷ cho 'cancelled', bị bỏ qua cho 'skipped'. GitHub coi check
+      # `skipped` là THÀNH CÔNG — đo được ngay trong kho này: trên `c6c212f8`,
+      # `Weekly Audit Alarm` và `Node.js Dev-scope Advisories` đều
+      # `completed | skipped`. Viết `== failure` thì hai trạng thái kia lọt.
+      - name: Gom kết quả hợp đồng classifier
+        run: |
+          RESULT="${{ needs.classifier-contract.result }}"
+          echo "Kết quả của classifier-contract: $RESULT"
+          if [ "$RESULT" != "success" ]; then
+            echo "::error::Hợp đồng classifier KHÔNG thành công (kết quả: $RESULT). Mở job 'classifier contract'."
+            exit 1
+          fi
+          echo "✅ Hợp đồng classifier đã thành công."

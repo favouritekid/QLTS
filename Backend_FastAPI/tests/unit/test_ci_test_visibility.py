@@ -635,3 +635,488 @@ class TestLegCachLy:
                     "leg cách ly %r không được bật visibility_guard"
                     % str(leg.get("tier", ""))
                 )
+
+
+# ---------------------------------------------------------------------------
+# 8. NEO CHÉO — hợp đồng classifier phải được required check nhìn thấy
+# ---------------------------------------------------------------------------
+# Tệp test của classifier nằm ở `.github/scripts/tests/`, NGOÀI `Backend_FastAPI/`.
+# Nó không thể tự canh dây nối của chính nó: một PR gỡ `classifier-contract` khỏi
+# `pytest.needs` sẽ làm chính nó ngừng ảnh hưởng tới cổng, mà nó vẫn xanh.
+#
+# Tệp NÀY nằm ở Tier 5 nên nó chạy qua required check `pytest`. Đặt neo ở đây là
+# đặt vào đúng chỗ mà việc gỡ dây nối sẽ ĐỎ.
+
+JOB_CONTRACT = "classifier-contract"
+TEP_CONTRACT = ".github/scripts/tests/test_pr_classifier.py"
+DUONG_WF_SHADOW = GOC / ".github" / "workflows" / "pr-classifier.yml"
+
+#: San cua `REQUIRED_SENTINELS`. Suy tu danh sach THAT (snapshot `7b02278c`,
+#: 05-09-2026).
+#: Chi duoc NANG. Ha san la mot sua doi phai nhin thay duoc trong diff.
+SO_SENTINEL_TOI_THIEU = 67
+
+#: Loi bat buoc — moi ten o day khoa MOT nguon quyet dinh rieng cua classifier.
+LOI_SENTINEL = {
+    "test_broad_unknown_backend_khong_rong_va_dung_ly_do",
+    "test_broad_self_change_khong_rong_va_dung_ly_do",
+    "test_broad_shared_test_surface_khong_rong_va_dung_ly_do",
+    "test_broad_empty_plan_guard_khong_rong_va_dung_ly_do",
+    "test_cli_tra_ma_khac_0_khi_block",
+    "test_manifest_rong_bi_tu_choi_khong_phai_bootstrap",
+    "test_selector_manifest_khong_khop_tep_nao_thi_do",
+    "test_record_it_hon_changed_files_thi_block",
+    "test_record_nhieu_hon_changed_files_thi_block",
+    "test_duong_top_level_la_hoac_ra_broad_khong_phai_no_backend_impact",
+    "test_moi_duong_trong_github_deu_la_self_ke_ca_dependabot",
+    "test_tron_AN_TOAN_voi_CHUA_BIET_thi_BROAD_khong_duoc_im_lang",
+    "test_be_mat_VAN_HANH_khong_khop_mien_thi_BROAD_khong_phai_thoi",
+    "test_cli_THUC_SU_goi_kiem_dinh_danh",
+    "test_dinh_danh_commit_khong_phai_merge_thi_nem",
+}
+
+
+def _khoi_on(wf: dict) -> dict:
+    """YAML 1.1 ép `on:` thành khoá bool `True` — cùng họ với Norway problem.
+
+    Đo thật: `list(yaml.safe_load(backend-test.yml))` cho
+    `['name', True, 'concurrency', 'jobs']`. Đọc `wf["on"]` là `KeyError`.
+    """
+    if "on" in wf:
+        return wf["on"]
+    if True in wf:
+        return wf[True]
+    raise AssertionError("workflow không có khối `on:`")
+
+
+def _than_khong_comment_shell(than: str) -> str:
+    """Bỏ comment SHELL trong thân `run:` trước khi tìm chuỗi.
+
+    Bài học 2 dưới đây nói về comment YAML. Còn một tầng nữa: `steps[].run` giữ
+    NGUYÊN comment shell (`# ...`) nằm bên trong khối lệnh. Đo thật — đột biến
+    N11 giữ đủ mọi chuỗi bị khoá nhưng dời chúng vào một dòng `#` rồi ép
+    `RESULT="success"`; TOÀN BỘ lớp neo vẫn xanh trong khi cổng đã tê liệt
+    (snapshot `7b02278c`, 05-09-2026).
+    """
+    ra = []
+    for dong in than.splitlines():
+        cat = dong.split("#", 1)[0]
+        if cat.strip():
+            ra.append(cat)
+    return "\n".join(ra)
+
+
+# Ba bài học đã trả giá khi dựng lớp neo này, giữ lại để đừng ai đi lại:
+#
+#   1. `yaml.dump()` MÃ HOÁ LẠI chuỗi shell — `yaml.dump(job).count('!= "success"')`
+#      cho **0** trong khi tệp có ba lần. Đừng đếm trên bản dump.
+#   2. Đọc VĂN BẢN THÔ thì trúng comment: chính comment giải thích
+#      "KHÔNG so `== failure`" làm phép cấm tự đỏ. Lọc comment đầu dòng vẫn sót
+#      comment cuối dòng (`key: value  # ...`), và một `!= "success"` nhét vào
+#      comment cuối dòng đủ để bù số đếm cho một cổng đã bị tháo.
+#   3. Đúng cách là đọc CẤU TRÚC — `steps[].run` giữ nguyên chuỗi gốc, comment
+#      YAML không nằm trong đó, và phạm vi khoá được vào đúng bước cần xét.
+
+
+def _co_exit1_tran_trong_khoi(than: str) -> bool:
+    """`exit 1` phải đứng TRẦN bên trong khối `if … != "success"; then … fi`.
+
+    Đo thật — đột biến N12 giữ nguyên phép so và vẫn có chuỗi `exit 1`,
+    chỉ bọc nó thành `[ "${QLTS_GATE_STRICT:-0}" = "1" ] && exit 1`. Phép
+    `"exit 1" in than` xanh, trong khi cổng chỉ đỏ khi ai đó nhớ bật biến.
+    """
+    trong = False
+    for dong in than.splitlines():
+        goc = dong.strip()
+        if '!= "success"' in goc and goc.startswith("if "):
+            trong = True
+            continue
+        if trong:
+            if goc == "fi":
+                trong = False
+                continue
+            if goc == "exit 1":
+                return True
+    return False
+
+
+class TestNeoCheoHopDongClassifier:
+    def test_job_classifier_contract_ton_tai(self, wf):
+        assert JOB_CONTRACT in wf["jobs"], (
+            "job %r biến mất khỏi backend-test.yml — hợp đồng classifier không "
+            "còn được required check `pytest` gom vào." % JOB_CONTRACT
+        )
+
+    def test_job_goi_dung_tep_test_classifier(self, wf):
+        # Phải đọc THÂN JOB, không đọc toàn tệp: một comment còn giữ đường dẫn
+        # cũ ở đâu đó trong workflow sẽ làm phép tìm trên toàn tệp xanh giả.
+        than = "\n".join(str(b.get("run", "")) for b in wf["jobs"][JOB_CONTRACT]["steps"])
+        assert TEP_CONTRACT in than, (
+            "job %r không còn gọi %r — cổng có thể đang chạy một tệp khác, hoặc "
+            "không chạy gì." % (JOB_CONTRACT, TEP_CONTRACT)
+        )
+
+    def test_job_khong_continue_on_error(self, wf):
+        job = wf["jobs"][JOB_CONTRACT]
+        assert not job.get("continue-on-error"), (
+            "`continue-on-error` biến job đỏ thành job xanh — cổng còn tên mà "
+            "hết hiệu lực."
+        )
+        for buoc in job.get("steps", []):
+            assert not buoc.get("continue-on-error"), (
+                "bước %r bật continue-on-error" % buoc.get("name")
+            )
+
+    def test_job_khong_co_dieu_kien_khien_no_bi_skip(self, wf):
+        """GitHub coi check `skipped` là THÀNH CÔNG.
+
+        Đo được ngay trong kho: trên `c6c212f8`, `Weekly Audit Alarm` và
+        `Node.js Dev-scope Advisories` đều `completed | conclusion=skipped`. Một
+        `if:` sai trên job này biến cổng thành xanh giả, không phải đỏ.
+        """
+        job = wf["jobs"][JOB_CONTRACT]
+        assert "if" not in job, (
+            "job %r không được có `if:` — mọi điều kiện đều là một đường để nó "
+            "bị skip, và check skipped KHÔNG làm PR đỏ." % JOB_CONTRACT
+        )
+
+    def test_aggregator_needs_chua_classifier_contract(self, wf):
+        needs = wf["jobs"]["pytest"]["needs"]
+        assert JOB_CONTRACT in needs, (
+            "`pytest.needs` không còn %r — job vẫn chạy nhưng kết quả của nó "
+            "không ảnh hưởng gì tới required check." % JOB_CONTRACT
+        )
+
+    def test_aggregator_that_su_doc_ket_qua_classifier_contract(self, wf):
+        """Có trong `needs` mà không đọc `result` là fail-open câm."""
+        than = "\n".join(str(b.get("run", "")) for b in wf["jobs"]["pytest"]["steps"])
+        assert "needs.%s.result" % JOB_CONTRACT in than, (
+            "aggregator `pytest` không đọc `needs.%s.result` — phụ thuộc có mặt "
+            "nhưng kết quả bị bỏ qua." % JOB_CONTRACT
+        )
+
+    def test_aggregator_phai_la_if_always_tran(self, wf):
+        """Không có `always()` thì job bị skip khi một phụ thuộc đỏ — mà GitHub
+        coi check `skipped` là THÀNH CÔNG, nên cổng biến mất đúng lúc cần nhất.
+        """
+        assert wf["jobs"]["pytest"].get("if") == "always()", (
+            "aggregator `pytest` phải là `if: always()` trần; mọi biến thể kiểu "
+            "`always() && needs.x.result != 'skipped'` mở lại chính lỗ đó."
+        )
+
+    def test_needs_cua_aggregator_dung_bang_tap_ghim(self, wf):
+        """Khoá `needs` bằng TẬP CỐ ĐỊNH, không phải phép `in`.
+
+        Vòng kiểm fail-closed duyệt chính `job["needs"]`, nên **gỡ một tên khỏi
+        `needs` là tự loại nó khỏi phạm vi kiểm** — đo thật: gỡ
+        `session-survival` thì TOÀN BỘ lớp neo vẫn xanh trong khi cổng ấy hết
+        hiệu lực (snapshot `7b02278c`, 05-09-2026).
+        """
+        assert set(wf["jobs"]["pytest"]["needs"]) == {
+            "pytest-shard", "session-survival", JOB_CONTRACT}
+
+    def test_khong_buoc_nao_cua_cac_job_gac_bi_vo_hieu(self, wf):
+        """Cấm `if:` và `continue-on-error` ở CẤP BƯỚC của ba job cổng.
+
+        Neo cũ chỉ soi job `classifier-contract`. Đo thật: thêm `if:` hoặc
+        `continue-on-error` vào một **bước** của aggregator `pytest` thì TOÀN
+        BỘ lớp neo vẫn xanh trong khi phép gom ấy không còn chạy (snapshot `7b02278c`, 05-09-2026).
+
+        ⚠️ `pytest-shard` KHÔNG nằm trong phạm vi này: nó là matrix và các leg
+        có `if: matrix.<cờ>` **theo thiết kế** (`coverage_script`,
+        `visibility_guard`). Điều kiện của riêng bước guard đã bị khoá ở
+        `test_step_goi_dung_script_va_dung_dieu_kien` +
+        `test_step_khong_duoc_continue_on_error`. Kéo `pytest-shard` vào đây
+        chỉ tạo một ca đỏ vì kỳ vọng sai — đã đo.
+        """
+        for ten in ("pytest", JOB_CONTRACT, "session-survival"):
+            job = wf["jobs"][ten]
+            assert not job.get("continue-on-error"), (
+                "job %r bật continue-on-error ở CẤP JOB" % ten)
+            for buoc in job.get("steps", []):
+                assert "if" not in buoc, (
+                    "job %r bước %r có `if:` — mọi điều kiện là một đường để bước "
+                    "gác không chạy." % (ten, buoc.get("name"))
+                )
+                assert not buoc.get("continue-on-error"), (
+                    "job %r bước %r bật continue-on-error" % (ten, buoc.get("name"))
+                )
+
+    def test_cong_sentinel_dung_HIEU_tap_khong_dung_giao(self, wf):
+        """Phép so tập phải là HIỆU, không phải GIAO.
+
+        Đột biến `missing = REQUIRED & got` vẫn "so tập hợp", vẫn có biến
+        `missing`, nhưng biến cổng thành *"chỉ cần có ít nhất một sentinel"*.
+        Bất biến này KHÔNG tự canh được từ tệp test của classifier — logic nằm
+        trong heredoc của workflow. Đây là nơi duy nhất nhìn thấy nó.
+        """
+        than = _than_khong_comment_shell(
+            "\n".join(str(b.get("run", ""))
+                      for b in wf["jobs"][JOB_CONTRACT]["steps"]))
+        assert "CAN - got" in than, "cổng sentinel phải dùng HIỆU tập `CAN - got`"
+        assert "CAN & got" not in than, (
+            "`CAN & got` biến cổng thành 'chỉ cần có ít nhất một sentinel'")
+        assert "got - CAN" in than, "phải báo cả THỪA để bắt được ca ĐỔI TÊN"
+
+    def test_moi_phu_thuoc_cua_aggregator_deu_duoc_kiem_fail_closed(self, wf):
+        """Mỗi phụ thuộc phải có RIÊNG một bước, và bước ấy phải vừa so
+        `!= "success"` vừa `exit 1`.
+
+        ⚠️ Bản đầu của ca này đếm `count('!= "success"') >= len(needs)` trên
+        **văn bản toàn tệp**. Ba đột biến đo được đã lọt qua:
+
+        * giữ phép so nhưng đổi `exit 1` thành `echo ::warning` — cổng còn phép
+          so, phép so không làm gì;
+        * cho một bước kiểm `pytest-shard` HAI lần rồi xoá hẳn khối `if` của
+          classifier — tổng đếm vẫn đủ;
+        * bù một `!= "success"` vào **comment cuối dòng** — bộ lọc chỉ loại
+          comment đầu dòng.
+
+        Đọc theo CẤU TRÚC (`steps[].run`) chặn cả ba: comment YAML không nằm
+        trong giá trị `run`, và phạm vi bị khoá vào đúng bước của từng phụ thuộc.
+        """
+        job = wf["jobs"]["pytest"]
+        buoc = [(b, _than_khong_comment_shell(str(b["run"])))
+                for b in job["steps"] if "run" in b]
+        for ten in job["needs"]:
+            moc = "needs.%s.result" % ten
+            cua_no = [x for x in buoc if moc in x[1]]
+            assert len(cua_no) == 1, (
+                "phụ thuộc %r phải được đọc bởi ĐÚNG MỘT bước LỆNH THẬT, thấy "
+                "%d — nhiều hơn một là đếm phồng, bằng không là không ai kiểm "
+                "(comment shell đã bị loại trước khi đếm)." % (ten, len(cua_no))
+            )
+            than = cua_no[0][1]
+            assert '!= "success"' in than, (
+                "bước kiểm %r không so `!= \"success\"` — `== \"failure\"` để "
+                "lọt cả `cancelled` lẫn `skipped`." % ten
+            )
+            assert _co_exit1_tran_trong_khoi(than), (
+                "bước kiểm %r không có `exit 1` TRẦN bên trong khối "
+                "`!= \"success\"` — `exit 1` đứng ngoài khối, hay bị bọc thêm một "
+                "điều kiện (`[ \"$X\" = 1 ] && exit 1`), đều là cổng còn hình thức "
+                "mà hết hiệu lực." % ten
+            )
+            assert '== "failure"' not in than and "== 'failure'" not in than, (
+                "bước kiểm %r dùng `== failure`." % ten
+            )
+
+    # -- than TRONG cong: neo cu chi kiem day noi NGOAI ---------------------
+    # Bon dot bien duoi day tung LOT het (snapshot `7b02278c`, 05-09-2026): rut gon
+    # `REQUIRED_SENTINELS` kem viec xoa dung nhung ca ay; xoa nguyen buoc
+    # "Manifest THAT"; bo tang `--collect-only`; bo `skipped` khoi `bad`.
+    # Chung khong dong toi day noi nao ca — chung rut ruot chinh cai cong.
+
+    def test_danh_sach_sentinel_khong_bi_rut_gon(self, wf):
+        """Sàn số lượng + một lõi tên bắt buộc.
+
+        `REQUIRED_SENTINELS` nằm ở workflow chứ không trong tệp test, để một PR
+        không thể vừa xoá ca vừa xoá dòng hằng. Nhưng một PR **vẫn** sửa được
+        cả hai tệp: đo thật — gỡ 4 tên `test_broad_*` khỏi hằng VÀ xoá 4 `def`
+        tương ứng thì `thiếu=∅ thừa=∅`, hợp đồng xanh, bốn nguồn BROAD hết được
+        canh. Neo này là nhân chứng THỨ BA, ở một cây tệp thứ ba.
+
+        Sàn phải được NÂNG khi danh sách dài ra — nó suy từ danh sách thật, và
+        hạ sàn là một sửa đổi phải nhìn thấy được trong diff.
+        """
+        than = "\n".join(str(b.get("run", ""))
+                         for b in wf["jobs"][JOB_CONTRACT]["steps"])
+        # Ten ca CO chua chu HOA (`..._AN_TOAN_...`, `..._THUC_SU_...`) — lop
+        # ky tu chi-thuong da tung bo sot 4 ten va lam san bi dem thieu.
+        ten = set(re.findall(r'"(test_[A-Za-z0-9_]+)"', than))
+        assert len(ten) >= SO_SENTINEL_TOI_THIEU, (
+            "REQUIRED_SENTINELS còn %d tên, sàn là %d — danh sách chỉ được DÀI "
+            "ra." % (len(ten), SO_SENTINEL_TOI_THIEU)
+        )
+        thieu = sorted(LOI_SENTINEL - ten)
+        assert not thieu, (
+            "gỡ khỏi `REQUIRED_SENTINELS` những sentinel lõi: %s" % thieu)
+
+    def test_buoc_kiem_manifest_THAT_van_con(self, wf):
+        """Xoá nguyên bước "Manifest THẬT" thì mọi neo cũ vẫn xanh (đã đo).
+
+        `test_job_goi_dung_tep_test_classifier` chỉ đòi chuỗi đường dẫn tệp test
+        xuất hiện đâu đó trong job — bước hợp đồng vẫn cung cấp chuỗi ấy. Mất
+        bước này là `domains.yml` THẬT hết được xác thực: selector trỏ tệp đã
+        xoá, sai lược đồ, `domains:` rỗng — không ai bắt.
+        """
+        # ⚠️ PHẢI lọc comment trước khi tìm. Đột biến
+        # `pass  # C.kiem_paths_manifest(m, moi_duong)` giữ nguyên chuỗi bị khoá
+        # trong khi lời gọi đã chết — đo thật, nó lọt qua phép tìm văn bản thô.
+        than = _than_khong_comment_shell(
+            "\n".join(str(b.get("run", ""))
+                      for b in wf["jobs"][JOB_CONTRACT]["steps"]))
+        # `kiem_paths_manifest` là chiều XUÔI (`paths:` phải khớp đường có
+        # thật). Thiếu nó thì một `paths:` gõ sai vẫn hợp lệ, khớp 0 đường, và
+        # miền lặng lẽ ngừng bắt — an toàn nhưng câm.
+        for can in ("kiem_selector_manifest", "kiem_paths_manifest",
+                    "nap_manifest", "git", "ls-files",
+                    ".github/scripts/domains.yml"):
+            assert can in than, (
+                "job %r không còn xác thực manifest THẬT (thiếu %r)."
+                % (JOB_CONTRACT, can))
+
+    def test_bon_tang_cua_cong_hop_dong_deu_con(self, wf):
+        """Bốn tầng, không phải một. Hai tầng đã đo là CHỊU LỰC (gỡ ra thì cổng
+        xanh trên đúng đầu vào hỏng): `collected == executed` và
+        `failures+errors+skipped == 0`.
+
+        * `--collect-only` là nguồn DUY NHẤT của `collected` — JUnit không tiết
+          lộ deselect. Bỏ tầng này rồi đặt `collected = tests` là hằng-đúng.
+        * `skipped` trong `bad`: JUnit vẫn ghi `<testcase>` cho ca skip, nên
+          `got` không thiếu tên nào — `@pytest.mark.skip` trên một sentinel lọt
+          trọn nếu `bad` chỉ cộng `failures + errors`.
+        """
+        than = _than_khong_comment_shell(
+            "\n".join(str(b.get("run", ""))
+                      for b in wf["jobs"][JOB_CONTRACT]["steps"]))
+        for can, vi_sao in (
+            ("--collect-only", "nguồn duy nhất của `collected`; bỏ đi thì phép "
+                               "`collected != executed` thành hằng-sai"),
+            ('"skipped"', "`bad` phải cộng cả skipped, nếu không `@skip` trên "
+                          "một sentinel lọt trọn"),
+            ("tests <= 0", "lớp phòng thủ thứ hai cho lượt 0 ca"),
+        ):
+            assert can in than, "cổng hợp đồng mất %r — %s" % (can, vi_sao)
+
+    # -- workflow shadow: cac thuoc tinh CAP JOB / CAP `on:` ----------------
+
+    def test_shadow_khong_co_dieu_kien_va_khong_bi_paths_loc(self):
+        """`if: false` trên job, hoặc thêm `paths:`, đều làm shadow im lặng biến
+        mất — và hai neo cũ chỉ đọc `steps`, nên chúng vẫn xanh (đã đo).
+        """
+        doc = yaml.safe_load(DUONG_WF_SHADOW.read_text(encoding="utf-8"))
+        job = doc["jobs"]["shadow-plan"]
+        assert "if" not in job, "job shadow-plan có `if:` — nó sẽ skipped im lặng"
+        assert not job.get("continue-on-error")
+        khoi = _khoi_on(doc)["pull_request"]
+        assert "paths" not in khoi, (
+            "shadow phải chạy trên MỌI PR. Có `paths:` thì đúng những PR nó cần "
+            "quan sát nhất (chỉ sửa tài liệu, chỉ sửa frontend) lại không có "
+            "kế hoạch nào để đối chiếu."
+        )
+
+    def test_shadow_ghim_permissions_va_timeout(self):
+        """Hai thuộc tính cấp job, không neo nào cũ nhìn tới.
+
+        Mất `permissions` ⇒ rơi về mặc định kho (có thể là write). Mất
+        `timeout-minutes` ⇒ một bước treo giữ check tới trần 6 giờ của Actions:
+        không đỏ, không xanh, chỉ đứng đó.
+        """
+        doc = yaml.safe_load(DUONG_WF_SHADOW.read_text(encoding="utf-8"))
+        assert doc.get("permissions") == {"contents": "read"}
+        assert doc["jobs"]["shadow-plan"].get("timeout-minutes") == 10
+
+    def test_ten_artifact_duoc_dung_o_buoc_DAU_TIEN(self):
+        """`OUT` phải được dựng trước MỌI bước có thể đỏ.
+
+        Đo thật: khi `OUT=` còn nằm trong bước "Tính kế hoạch", một bước fetch
+        đỏ ở trên làm bước ấy bị SKIP ⇒ `OUT` không bao giờ vào `$GITHUB_ENV` ⇒
+        `name: ${{ env.OUT }}` rỗng ⇒ upload đỏ với "Artifact name is not
+        valid", che mất lý do thật và **không còn bằng chứng nào**.
+        `if: always()` không cứu được, vì chính CÁI TÊN phụ thuộc bước đã skip.
+        """
+        doc = yaml.safe_load(DUONG_WF_SHADOW.read_text(encoding="utf-8"))
+        buoc = doc["jobs"]["shadow-plan"]["steps"]
+        co_out = [i for i, b in enumerate(buoc) if "OUT=" in str(b.get("run", ""))]
+        assert co_out == [0], (
+            "bước dựng `OUT=` phải là bước ĐẦU TIÊN và duy nhất, đang ở %r"
+            % co_out)
+        assert "uses" not in buoc[0], "bước dựng tên không được phụ thuộc action nào"
+
+    def test_workflow_shadow_truyen_dung_duong_manifest(self):
+        """Workflow phải truyền `--manifest .github/scripts/domains.yml`.
+
+        Sai đường manifest bị hiểu như bootstrap "manifest vắng ở base" ⇒
+        classifier chạy với 0 miền mà không ai báo. Nay `nap_manifest_tai` bắt
+        HEAD phải tồn tại, nhưng dây nối vẫn phải được canh ở đây.
+        """
+        doc = yaml.safe_load(DUONG_WF_SHADOW.read_text(encoding="utf-8"))
+        than = "\n".join(str(b.get("run", ""))
+                         for b in doc["jobs"]["shadow-plan"]["steps"])
+        assert "--manifest .github/scripts/domains.yml" in than, (
+            "workflow shadow không truyền đúng đường manifest."
+        )
+
+    def test_workflow_shadow_khong_tat_kiem_dinh_danh(self):
+        """CI KHÔNG được truyền `--khong-kiem-dinh-danh`.
+
+        Cờ ấy tồn tại cho việc chạy tay ngoài ngữ cảnh merge của PR. Nó mặc
+        định TẮT (tức kiểm định danh mặc định BẬT), nhưng một cờ tồn tại là một
+        cờ có thể bị bật — và bật nó thì classifier lại tin ba SHA mà không
+        chứng minh gì. Neo này ở cây tệp khác với workflow, nên bật cờ là một
+        sửa đổi hai tệp, nhìn thấy được.
+
+        `--head-sha` cũng bắt buộc: thiếu nó thì không có parent2 để đối chiếu.
+        """
+        doc = yaml.safe_load(DUONG_WF_SHADOW.read_text(encoding="utf-8"))
+        than = _than_khong_comment_shell(
+            "\n".join(str(b.get("run", ""))
+                      for b in doc["jobs"]["shadow-plan"]["steps"]))
+        assert "--khong-kiem-dinh-danh" not in than, (
+            "workflow đang TẮT kiểm định danh ba SHA — kế hoạch khi ấy nói về "
+            "một cặp cây chưa ai chứng minh là của PR này."
+        )
+        for can in ("--head-sha", "--base-sha", "--merge-sha"):
+            assert can in than, "workflow không truyền %s" % can
+
+    def test_workflow_shadow_luu_bang_chung_ke_ca_khi_do(self):
+        """Lượt BLOCK mới là lượt cần điều tra nhất.
+
+        Thiếu `if: always()` thì bước upload bị skip khi bước tính đỏ, và lượt
+        đó không để lại gì ngoài log. `if-no-files-found: error` biến "không có
+        chẩn đoán" thành ĐỎ thay vì bỏ qua im lặng.
+        """
+        doc = yaml.safe_load(DUONG_WF_SHADOW.read_text(encoding="utf-8"))
+        up = [b for b in doc["jobs"]["shadow-plan"]["steps"]
+              if str(b.get("uses", "")).startswith("actions/upload-artifact")]
+        assert len(up) == 1, "phải có đúng một bước upload"
+        assert up[0].get("if") == "always()", (
+            "bước upload phải `if: always()` — lượt BLOCK cũng phải để lại bằng chứng."
+        )
+        assert up[0]["with"].get("if-no-files-found") == "error"
+        # Tên artifact là `${{ env.OUT }}`; ba thành phần định danh nằm ở bước
+        # dựng `OUT=`. Phải soi ĐÚNG chỗ đó, không soi khoá `name:`.
+        dung_out = [b for b in doc["jobs"]["shadow-plan"]["steps"]
+                    if "OUT=" in str(b.get("run", ""))]
+        assert len(dung_out) == 1, "phải có đúng một bước dựng OUT="
+        # Phải soi CHÍNH DÒNG gán, không soi cả thân bước: thân bước còn có
+        # `PR_NUMBER=…`, `RUN_ID=…`, `RUN_ATTEMPT=…` ở trên, nên đổi
+        # `OUT="shadow-plan.json"` vẫn làm phép tìm trên thân xanh (đã đo).
+        than = "\n".join(
+            d for d in _than_khong_comment_shell(str(dung_out[0]["run"])).splitlines()
+            if d.lstrip().startswith("OUT=")
+        )
+        assert than.strip(), "không tìm thấy dòng gán `OUT=`"
+        for can in ("PR_NUMBER", "RUN_ID", "RUN_ATTEMPT"):
+            assert can in than, (
+                "tên artifact phải chứa %r — `upload-artifact@v4` từ chối tên "
+                "trùng bằng HTTP 409, nên thiếu `RUN_ATTEMPT` là mọi lượt "
+                "re-run đỏ ở bước upload, không chỉ mất bằng chứng." % can
+            )
+        assert str(up[0]["with"].get("name", "")).strip() == "${{ env.OUT }}", (
+            "tên artifact phải LÀ `${{ env.OUT }}` — một tên cố định kèm theo là "
+            "va chạm 409 giữa các lượt."
+        )
+        assert str(up[0]["with"].get("path", "")).strip() == "${{ env.OUT }}", (
+            "đường tệp upload phải trùng tên đã dựng; lệch đi thì "
+            "`if-no-files-found: error` đỏ mọi lượt."
+        )
+        assert int(up[0]["with"].get("retention-days", 0)) == 90, (
+            "`retention-days` phải là 90 — mặc định của repo có thể ngắn hơn "
+            "chu kỳ backtest, bằng chứng bay trước khi được đọc."
+        )
+
+    def test_paths_van_phu_duong_dan_cua_classifier(self, wf):
+        """Cổng phải NHÌN THẤY thứ nó canh.
+
+        Thiếu `.github/scripts/**` thì một PR chỉ sửa classifier hoặc manifest
+        không kích hoạt workflow — required check báo "expected, not run", PR
+        không merge được, và lối thoát tự nhiên là chạm bừa một tệp khác.
+        """
+        paths = _khoi_on(wf)["pull_request"]["paths"]
+        for can in (".github/workflows/**", ".github/scripts/**"):
+            assert can in paths, (
+                "bộ lọc `paths` thiếu %r — thay đổi mà hợp đồng classifier sinh "
+                "ra để chặn lại chính là thay đổi khiến workflow không chạy." % can
+            )
