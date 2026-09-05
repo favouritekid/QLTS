@@ -46,10 +46,16 @@ name: Backend Test (PR Gate)
 # KHÔNG hoàn toàn công bằng: hai lượt chạy trên runner khác nhau, và nếu
 # lượt nối đuôi rơi vào runner chậm như lượt này thì nó đã lâu hơn 70 phút.
 #
-# 🔴 Muốn kéo xuống nữa thì phải chẻ chính Tier 2, không phải thêm shard
-# cho các lát vốn đã nhanh. Tier 2b tốn 1m44s trong đó phần lớn là dựng
-# máy (test chỉ ~40 giây) — chẻ nhỏ nữa thì overhead setup nuốt hết phần
-# tiết kiệm.
+# ✅ ĐÃ LÀM (05-09-2026, snapshot af736b6d): Tier 2 được chẻ làm `Tier 2a`
+# và `Tier 2c`. Đo run 33942351990 — Tier 2 chiếm 3364s trong wall 3375s.
+# Sau khi chẻ, mỗi lát ~1667s và đường tới hạn chuyển sang **Tier 1
+# (2252s = 37m32)**; wall dự kiến ~37m43, tức −33%.
+#
+# 🔴 Muốn kéo xuống NỮA thì phải chẻ **Tier 1**, không phải chẻ tiếp Tier 2:
+# Tier 1 nay là sàn, hai lát 2a/2c còn ~8m30 dư địa dưới nó. Cũng đừng thêm
+# shard cho các lát vốn đã nhanh — Tier 2b tốn 1m44s mà phần lớn là dựng
+# máy (test chỉ ~40 giây), chẻ nhỏ nữa thì overhead setup nuốt hết phần
+# tiết kiệm. Overhead cố định mỗi lát đo được ≈75s.
 #
 # DESIGN — BOUNDED RISK GATE (PR-1.6, 2026-05-24):
 # This is a SOLO-DEV velocity-optimized PR gate. It is intentionally
@@ -74,12 +80,17 @@ name: Backend Test (PR Gate)
 #
 #   Tier 1: Phase 3 multi-NV core (choice schema, state machine, engine,
 #           CRUD, magic-link consume) — Wave A/B acceptance gates
-#   Tier 2: RBAC + CCCD lock + CSRF (Casbin matrix, confirm lock ladder,
-#           CSRF exempt prefix, XFF helper) — EXPANDED 2026-05-24 to
+#   Tier 2a/2c: RBAC + CCCD lock + CSRF + MFA — EXPANDED 2026-05-24 to
 #           include permission_matrix + lead static-route collision +
 #           fee auth + diamond inheritance because PR #329 reconciled
 #           those risk surfaces and the gate must verify them on every
-#           PR going forward.
+#           PR going forward. SPLIT 2026-09-05 into two legs balanced by
+#           MEASURED cost — not by theme: the RBAC/AUTH boundary measured
+#           2.75:1 and would have kept the wall at ~42m.
+#   Tier 2b: Export khoản phí + công nợ — UNRELATED to the 2a/2c split;
+#           it predates it.
+#   Tier 4i: isolated migration mutation (adm_024) — runs alone on its
+#           own leg so a global-state mutation cannot leak.
 #   Tier 3: Notification reliability (parity + dispatcher + bundle +
 #           outbox + event coverage)
 #   Tier 4: Admission + lead workflow contract (state machine, milestone
@@ -443,37 +454,53 @@ jobs:
           # organization.py (Depends(lambda ...) bi FastAPI nang thanh query bat buoc
           # ⇒ endpoint LUON 422 ma moi phep kiem tinh van xanh). Chi request that qua
           # ASGI moi phan biet duoc route song va route chet.
-          - tier: Tier 2 — RBAC + security + CCCD lock
+          # ---------------------------------------------------------------
+          # Tier 2 ĐÃ ĐƯỢC CHẺ LÀM HAI — 2a và 2c
+          # ---------------------------------------------------------------
+          # ⚠️ `Tier 2b` bên dưới KHÔNG liên quan: nó là lát XUẤT TỆP có từ
+          # trước, không phải một phần ba của phép chia này.
+          #
+          # Vì sao chẻ: đo run 33942351990 (PR gate) — Tier 2 chiếm 3364s
+          # (56m04) trong khi cả run là 3375s. Nó LÀ đường tới hạn; sáu lát
+          # còn lại xong sớm hơn nhiều.
+          #
+          # Vì sao chia THEO THỜI GIAN chứ không theo chủ đề: đã tính cả hai.
+          # Ranh giới nghiệp vụ (Casbin/RBAC ↔ MFA/rate-limit/CCCD) cho
+          # ~2446s ↔ ~889s = 2,75:1, và nửa nặng VƯỢT sàn Tier 1 (2252s) ⇒
+          # nó thành đường tới hạn mới, wall ~42m. Bản dưới đây cân theo chi
+          # phí ĐO ĐƯỢC nên mỗi lát ~1667s, nằm gọn dưới Tier 1.
+          #
+          # Chi phí cực lệch — 6 tệp chiếm 65% cả lát cũ. Chia theo SỐ
+          # selector là sai; token không tỷ lệ với thời gian.
+          #
+          # Nguồn số: JUnit thật của nightly 33915106868 + 33834007883
+          # (PR gate không upload JUnit). Đối chứng với gate thật: dự đoán
+          # 758 test — gate chạy `collected 758 items`, khớp tuyệt đối; tổng
+          # 3335,0s dự đoán vs 3289,35s thật = +1,4%.
+          # Snapshot af736b6d, 05-09-2026. ĐỪNG coi các con số này là bất
+          # biến: dao động runner đo được tới ±25% giữa hai lượt liền nhau.
+          #
+          # Muốn xuống dưới ~37m thì phải chẻ TIER 1 (2252s) — chẻ tiếp
+          # Tier 2 vô ích vì Tier 1 đã là sàn.
+          - tier: Tier 2a — Ma trận quyền + phiên + MFA guard
             tests: >-
               tests/api/test_activity_log_contract.py
               tests/unit/test_casbin_phase3_routes.py
               tests/integration/test_casbin_b1_4x14_matrix.py
               tests/unit/test_csrf_middleware.py
-              tests/integration/test_admission_confirmation_lock_ladder.py
               tests/integration/test_admission_confirm_lock.py
               tests/unit/test_admission_state_service_event_mapping.py
               tests/unit/test_client_ip_helper.py
               tests/unit/test_admission_confirmation_cooldown.py
               tests/unit/test_magic_link_rate_limit_key_hashing.py
-              tests/api/test_admin_v2_admission_round_phase3_flags.py
               tests/security/test_permissions_matrix.py
               tests/security/test_org_unit_access_dependency.py
-              tests/api/test_casbin_thu_hoi_quyen.py
               tests/unit/test_casbin_lock_coverage.py
               tests/services/test_user.py
               tests/api/test_admin_roles.py
-              tests/api/test_admin_sync_aliases.py
-              tests/api/test_admin_casbin.py
-              tests/api/test_casbin_tracking.py
-              tests/integration/test_casbin_lead_static_route_collision.py
-              tests/api/test_fees_calculate_authorization.py
               tests/api/test_finance_api.py::TestDiamondInheritance
-              tests/api/test_tuition_export_authorization.py
               tests/security/test_ratelimit_order_guard.py
-              tests/security/test_ip_rate_limit.py
               tests/security/test_ratelimit_per_user_key.py
-              tests/api/test_consultation_security.py
-              tests/unit/test_casbin_enrollment_letter_routes.py
               tests/api/test_enrollment_letter_api.py
               tests/services/test_mfa_backup_code_cost.py
               tests/services/test_mfa_bcrypt_dos_guard.py
@@ -481,15 +508,30 @@ jobs:
               tests/integration/test_mfa_reservation_real_redis.py
               tests/services/test_mfa_single_use_atomic.py
               tests/integration/test_mfa_single_use_atomic_real_redis.py
+              tests/api/test_notification_delivery_idor.py
+              tests/services/test_organization_m12_scoping.py
+              tests/services/test_auth.py
+
+          - tier: Tier 2c — Phân quyền endpoint + MFA biên
+            tests: >-
+              tests/integration/test_admission_confirmation_lock_ladder.py
+              tests/api/test_admin_v2_admission_round_phase3_flags.py
+              tests/api/test_casbin_thu_hoi_quyen.py
+              tests/api/test_admin_sync_aliases.py
+              tests/api/test_admin_casbin.py
+              tests/api/test_casbin_tracking.py
+              tests/integration/test_casbin_lead_static_route_collision.py
+              tests/api/test_fees_calculate_authorization.py
+              tests/api/test_tuition_export_authorization.py
+              tests/security/test_ip_rate_limit.py
+              tests/api/test_consultation_security.py
+              tests/unit/test_casbin_enrollment_letter_routes.py
               tests/integration/test_mfa_race_reproducer.py
               tests/services/test_mfa.py::TestBackupCodeEdgeCases
               tests/services/test_mfa.py::TestMfaVerificationRateLimiting
               tests/services/test_mfa.py::TestMfaRateLimiting::test_mfa_attempts_tracked_in_redis
               tests/services/test_mfa.py::TestMixedAbuseScenarios::test_e2_cycling_login_mfa_fail_cumulative_lockout
               tests/services/test_mfa.py::TestMfaSetupEdgeCases::test_f4_regenerate_backup_codes_invalidates_old
-              tests/api/test_notification_delivery_idor.py
-              tests/services/test_organization_m12_scoping.py
-              tests/services/test_auth.py
 
           # ---------------------------------------------------------------
           # Tier 2b: Luồng XUẤT tệp (danh sách khoản phí + báo cáo công nợ)

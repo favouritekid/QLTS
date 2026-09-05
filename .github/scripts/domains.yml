@@ -1,10 +1,32 @@
 # Manifest mien — nguon chuan DUY NHAT cho anh xa "duong dan san pham -> lat test".
 #
 # PR nay o che do SHADOW: manifest CHUA quyet dinh lat nao chay. No duoc tinh,
-# ghi ra artifact, va doi chieu ve sau. Cong test hien hanh GIU NGUYEN — ma
-# tran `pytest-shard` khong bi PR nay cham toi (snapshot `7b02278c`, 05-09-2026): 7 tier /
-# 226 token / 207 tep. Con so nay la SNAPSHOT, khong phai hop dong; hop dong
-# la 'PR nay khong sua ma tran'.
+# ghi ra artifact, va doi chieu ve sau. Manifest van CHUA chon lat nao.
+#
+# ⚠️ TEP NAY KHONG SO HUU VA KHONG DIEU KHIEN `matrix.include`.
+# Cong test hien hanh chon lat bang `jobs.pytest-shard.strategy.matrix.include`
+# trong `.github/workflows/backend-test.yml`. Manifest o day chi duoc TINH va
+# ghi ra artifact; no khong chon, khong loc, khong bo qua test nao.
+#
+# ⛔ KHONG chep so tier / so selector token / so tep vao day. Da thu hai lan va
+# ca hai lan deu stale: mot con so go tay trong manifest se cu the them mot
+# chut moi lan ai do sua ma tran, cho toi khi no sai han — va vi khong test nao
+# doc no, khong gi bao ca.
+#
+# Muon biet census thi SINH DONG tu chinh nguon chuan:
+#
+#   python - <<'EOF'
+#   import yaml
+#   wf = yaml.safe_load(open(".github/workflows/backend-test.yml", encoding="utf-8"))
+#   legs = wf["jobs"]["pytest-shard"]["strategy"]["matrix"]["include"]
+#   tok  = [t for l in legs for t in str(l["tests"]).split()]
+#   print(len(legs), "tier /", len(tok), "token /",
+#         len({t.split("::")[0] for t in tok}), "tep")
+#   EOF
+#
+# Con so DUY NHAT tep nay duoc phep sinh la ba truong dong cua chinh classifier
+# (`test_universe_count` / `test_covered_count` / `test_orphan_count`), va chung
+# duoc tinh moi luot roi di vao artifact — khong nam trong comment.
 #
 # HAI CHIEU PHU — trang thai HIEN TAI, khong phai ca hai deu da duoc thi hanh:
 #
