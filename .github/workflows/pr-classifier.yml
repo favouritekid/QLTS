@@ -1,0 +1,138 @@
+# =========================================================================
+# Shadow classifier — TINH ke hoach test, KHONG quyet dinh lat nao chay.
+# =========================================================================
+#
+# PR nay o che do SHADOW. Ket qua phan loai (DOMAIN / BROAD / NO_BACKEND_IMPACT)
+# KHONG lam job do va KHONG skip bat ky test hien hanh nao: ma tran
+# `pytest-shard` cua `backend-test.yml` khong bi PR nay cham toi. Chi loi ma,
+# loi luoc do, loi dinh danh ba SHA, hoac khong sinh duoc ke hoach hop le moi
+# lam job do.
+#
+# ⚠️ KHONG dat `paths:` o day. Mot workflow quyet dinh "cai gi duoc chay" ma lai
+# tu loc minh theo path la tu tao lo. Va bo loc path tren mot required check con
+# de check dung "Expected — waiting for status" vinh vien: kho nay da dinh dung
+# ca do o PR #553, ghi lai trong `backend-test.yml` dong 106-125.
+#
+# ⚠️ KHONG dung GitHub API changed-files lam nguon chuan. Do that tren kho nay:
+# PR #233 co `changed_files = 171`, ma `GET /pulls/233/files` (mac dinh) tra ve
+# **30** — mat im lang 141 tep (82%), HTTP 200, khong canh bao. Cong voi tran
+# cung 3.000 tep trong khi kho chi co gan bang so do => bien an toan bang 0.
+# Nguon chuan
+# la GIT.
+#
+# ⚠️ `github.sha` tren su kien `pull_request` la commit MERGE tam, KHONG phai
+# head cua nhanh PR. Do that: PR #606 head `c6c212f8`, `github.sha` la
+# `196e4f5f` voi hai cha `e01125a4` + `c6c212f8`. Phep so dung la
+# `git diff BASE MERGE` — hai cay, khong can merge-base, khong can lich su.
+#
+# Artifact la BANG CHUNG BAT BIEN THEO TUNG LUOT (per-run immutable evidence).
+# KHONG goi no la append-only: chua co gi chung minh dieu do.
+
+name: PR Classifier (shadow)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Khai mot scope lam MOI scope con lai thanh `none`. `contents: read` du cho
+# `actions/checkout`; va vi khong dung API changed-files nen KHONG can
+# `pull-requests: read`.
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-classifier-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shadow-plan:
+    name: shadow plan
+    runs-on: ubuntu-latest
+    # Job khong co tran thoi gian se giu check toi tran mac dinh cua Actions
+    # (6 gio) khi mot buoc treo — khong do, khong xanh, chi dung do.
+    timeout-minutes: 10
+
+    steps:
+      # ⚠️ `OUT` phai duoc dung o mot buoc RIENG, va la buoc SOM NHAT co the.
+      # Ban dau no nam trong buoc "Tinh ke hoach". Do that: neu buoc fetch ben
+      # duoi DO, buoc tinh ke hoach bi SKIP ⇒ `OUT` khong bao gio vao
+      # `$GITHUB_ENV` ⇒ `name: ${{ env.OUT }}` rong ⇒ upload do voi "Artifact
+      # name is not valid", che mat ly do that va **khong con bang chung nao**.
+      # `if: always()` khong cuu duoc, vi chinh CAI TEN phu thuoc mot buoc da bi
+      # skip.
+      - name: Dung ten artifact (truoc MOI buoc co the do)
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          OUT="shadow-plan-pr${PR_NUMBER}-run${RUN_ID}-attempt${RUN_ATTEMPT}.json"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Classifier la ham THUAN tren chuoi duong dan: khong service container,
+      # khong Postgres/Redis, khong secret, khong mang khi chay.
+      - name: Cai phu thuoc (chi hai goi, ghim phien ban)
+        run: python -m pip install --quiet pytest==8.4.2 PyYAML==6.0.3
+
+      # Self-test o day la LOP THU HAI. Lop bat buoc nam o job
+      # `classifier-contract` cua `backend-test.yml`, vi chi job do moi duoc gom
+      # vao required check `pytest`. Buoc nay chi de thay do som trong cung
+      # workflow — no KHONG phai cong.
+      - name: Self-test nhanh (khong phai cong bat buoc)
+        run: |
+          python -m pytest .github/scripts/tests/test_pr_classifier.py \
+            -q -p no:cacheprovider
+
+      # `actions/checkout` mac dinh `fetch-depth: 1` => chi co merge commit,
+      # KHONG co base. Bu dung MOT commit, khong bat moi runner tai het lich su.
+      - name: Nap dung commit base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git fetch --no-tags --depth=1 origin "$BASE_SHA"
+
+      - name: Tinh ke hoach (SHADOW — khong quyet dinh gi)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          # Qua `env:`, KHONG noi suy thang vao than `run:`. Day la bien cuoi
+          # cung con noi suy truc tiep; giu ky luat "moi dau vao di qua env".
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          python .github/scripts/pr_classify.py \
+            --base-sha "$BASE_SHA" \
+            --merge-sha "$MERGE_SHA" \
+            --head-sha "$HEAD_SHA" \
+            --pr-number "$PR_NUMBER" \
+            --changed-files "$CHANGED_FILES" \
+            --run-id "$RUN_ID" \
+            --run-attempt "$RUN_ATTEMPT" \
+            --event "$EVENT_NAME" \
+            --manifest .github/scripts/domains.yml \
+            --out "$OUT"
+
+      # `if: always()` vi luot BLOCK moi la luot can dieu tra nhat — classifier
+      # ghi JSON chan doan TRUOC khi thoat khac 0, nen bang chung van co. Va
+      # `if-no-files-found: error` bien "khong co chan doan" thanh DO, khong
+      # phai bo qua im lang.
+      - name: Luu bang chung bat bien cua luot nay
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.OUT }}
+          path: ${{ env.OUT }}
+          if-no-files-found: error
+          retention-days: 90
