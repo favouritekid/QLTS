@@ -15,7 +15,14 @@ jobs:
   regression:
     name: E2E Regression
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # ⚠️ 30 phút cũ là ngân sách của một job mà SÁU bước E2E chưa bao giờ
+    # chạy (15/15 lượt schedule 23-08→06-09 đều skip cả sáu). Ngay khi
+    # chúng chạy thật, `npm ci` + `playwright install --with-deps` +
+    # `compose up` + seed + sáu lượt Playwright `--workers=1` gần như chắc
+    # chắn vượt 30 phút. Con số 120 là DỰ TRÙ chưa được đo — lượt đầu tiên
+    # sau bản vá có thể vẫn đỏ vì hết giờ, và đó là THÔNG TIN, không phải
+    # cổng hỏng. Đo xong thì siết lại.
+    timeout-minutes: 120
 
     # Inject all env vars referenced by ``docker-compose.yml`` interpolation
     # (root cause of 10/10 fail runs through 2026-05-24 — see PR #332 body).
@@ -46,6 +53,24 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Kế hoạch phải chốt TRƯỚC mọi bước cài đặt/khởi động nặng: đầu vào
+      # sai thì đỏ trong vài giây, không phải sau hai mươi phút dựng stack.
+      #
+      # Vì sao không quyết định thẳng trong `if:` như trước: trên
+      # `schedule` thì `github.event.inputs` là null, GitHub ép null thành
+      # chuỗi rỗng, nên `null == 'all'` sai và `contains('', 'lead')` cũng
+      # sai ⇒ cả sáu bước skipped mà job vẫn success. Đo thật: 15/15 lượt
+      # schedule từ 2026-08-23 tới 2026-09-06 đều như vậy.
+      - name: Lập kế hoạch suite
+        id: plan
+        env:
+          # Giá trị người dùng nhập đi qua `env`, KHÔNG qua argv — nhờ vậy
+          # thân `run:` dưới đây không chứa một `${{` nào, tức không có
+          # đường nội suy vào shell.
+          QLTS_EVENT_NAME: ${{ github.event_name }}
+          QLTS_SUITES_RAW: ${{ github.event.inputs.suites }}
+        run: python3 .github/scripts/nightly_regression_plan.py plan --plan-file "$RUNNER_TEMP/nightly-plan.json"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -135,7 +160,8 @@ jobs:
 
       # --- Regression Suites ---
       - name: E2E — Lead workflow
-        if: always() && (github.event.inputs.suites == 'all' || contains(github.event.inputs.suites, 'lead'))
+        id: e2e_lead
+        if: always() && steps.plan.outputs.e2e_lead == 'true'
         working-directory: frontend
         env:
           E2E_API_URL: http://localhost:8000
@@ -143,7 +169,8 @@ jobs:
         run: npx playwright test src/test/e2e/lead-workflow.spec.ts --project=e2e-workflow --reporter=list --workers=1
 
       - name: E2E — Admission lifecycle
-        if: always() && (github.event.inputs.suites == 'all' || contains(github.event.inputs.suites, 'admission'))
+        id: e2e_admission
+        if: always() && steps.plan.outputs.e2e_admission == 'true'
         working-directory: frontend
         env:
           E2E_API_URL: http://localhost:8000
@@ -151,7 +178,8 @@ jobs:
         run: npx playwright test src/test/e2e/admission-lifecycle.spec.ts --project=e2e-workflow --reporter=list --workers=1
 
       - name: E2E — Finance lifecycle
-        if: always() && (github.event.inputs.suites == 'all' || contains(github.event.inputs.suites, 'finance'))
+        id: e2e_finance
+        if: always() && steps.plan.outputs.e2e_finance == 'true'
         working-directory: frontend
         env:
           E2E_API_URL: http://localhost:8000
@@ -159,7 +187,8 @@ jobs:
         run: npx playwright test src/test/e2e/finance-lifecycle.spec.ts --project=e2e-workflow --reporter=list --workers=1
 
       - name: E2E — Bugfix regression
-        if: always() && (github.event.inputs.suites == 'all' || contains(github.event.inputs.suites, 'bugfix'))
+        id: e2e_bugfix
+        if: always() && steps.plan.outputs.e2e_bugfix == 'true'
         working-directory: frontend
         env:
           E2E_API_URL: http://localhost:8000
@@ -167,7 +196,8 @@ jobs:
         run: npx playwright test src/test/e2e/bugfix-regression.spec.ts --project=e2e-workflow --reporter=list --workers=1
 
       - name: E2E — Unified workflow
-        if: always() && (github.event.inputs.suites == 'all' || contains(github.event.inputs.suites, 'unified'))
+        id: e2e_unified
+        if: always() && steps.plan.outputs.e2e_unified == 'true'
         working-directory: frontend
         env:
           E2E_API_URL: http://localhost:8000
@@ -175,11 +205,30 @@ jobs:
         run: npx playwright test src/test/e2e/lead-to-admission-workflow.spec.ts --project=e2e-workflow --reporter=list --workers=1
 
       - name: E2E — Smoke tests
-        if: always() && (github.event.inputs.suites == 'all' || contains(github.event.inputs.suites, 'smoke'))
+        id: e2e_smoke
+        if: always() && steps.plan.outputs.e2e_smoke == 'true'
         working-directory: frontend
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
         run: npx playwright test src/test/e2e/smoke-all-pages.spec.ts src/test/e2e/admission-ui-smoke.spec.ts --project=chromium --reporter=list
+
+      # CỔNG NGHIỆM THU. Đặt TRƯỚC bước upload có chủ ý: `Upload Playwright
+      # report` gác bằng `if: failure()`, mà `failure()` chỉ đúng nếu đã có
+      # bước đỏ TRƯỚC nó. Cổng đứng sau upload thì mọi suite xanh + cổng đỏ
+      # sẽ không sinh artifact nào để đọc.
+      #
+      # `if: always()` phải TRẦN. Thêm bất kỳ vế `&&` nào là mở một đường
+      # cho cổng tự skip — đúng cơ chế đã làm sáu bước E2E biến mất.
+      - name: Cổng — mọi suite đã chọn phải THẬT SỰ chạy
+        id: nightly_gate
+        if: always()
+        env:
+          # `toJSON(steps)` chỉ chứa bước CÓ `id`. Gỡ `id` của một bước thì
+          # nó biến mất khỏi đây và cổng đỏ — không cần ca kiểm riêng cho
+          # việc gỡ id lúc chạy. Một biến duy nhất thay vì sáu biến rời:
+          # thêm suite thứ bảy mà quên biến thứ bảy là lỗi không thể xảy ra.
+          QLTS_STEPS_JSON: ${{ toJSON(steps) }}
+        run: python3 .github/scripts/nightly_regression_plan.py verify --plan-file "$RUNNER_TEMP/nightly-plan.json"
 
       # Upload test artifacts on failure
       - name: Upload Playwright report
