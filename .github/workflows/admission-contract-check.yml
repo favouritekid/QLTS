@@ -46,6 +46,7 @@ on:
       - "Backend_FastAPI/app/scripts/check_status_assignment.py"
       - "Backend_FastAPI/app/scripts/check_notification_event_coverage.py"
       - "Backend_FastAPI/.contract-allowlist.yaml"
+      - ".github/workflows/admission-contract-check.yml"
 
 jobs:
   status-assignment:
