@@ -1429,3 +1429,44 @@ class TestPhanVungTier2TheoSieuDuLieu:
             "tập selector Tier 2 đã đổi: digest %s, cần %s. Bỏ/thêm/thay một "
             "selector là đổi; chuyển giữa 2a và 2c thì KHÔNG."
             % (bam, SHA_HOP_SELECTOR_TIER2))
+
+
+class TestNeoCheoDeployClassifier:
+    """Tệp hợp đồng deploy không thể tự canh selector và dây nối của chính nó.
+
+    Neo nằm ở tệp Tier 5 này: gỡ ``test_deploy_ghim_sha.py`` khỏi matrix hoặc
+    tháo bước kiểm skip-directive khỏi required ``classifier-contract`` đều
+    phải làm một ca độc lập còn chạy chuyển đỏ.
+    """
+
+    TEP_HOP_DONG_DEPLOY = "tests/unit/test_deploy_ghim_sha.py"
+    SCRIPT_DEPLOY = ".github/scripts/deploy_change_classifier.py"
+
+    def test_hop_dong_deploy_con_la_whole_file_trong_pr_gate(self, cac_leg):
+        assert self.TEP_HOP_DONG_DEPLOY in _selector_whole_file(cac_leg), (
+            "%s phải còn là whole-file selector; nếu gỡ nó thì chính các hợp "
+            "đồng deploy ngừng chạy mà không ai báo đỏ." % self.TEP_HOP_DONG_DEPLOY
+        )
+
+    def test_required_classifier_contract_thuc_su_goi_guard_skip_directive(self, wf):
+        job = wf["jobs"].get(JOB_CONTRACT)
+        assert isinstance(job, dict), "mất job classifier-contract"
+        steps = [step for step in job.get("steps", [])
+                 if "check-skip-directives" in str(step.get("run", ""))]
+        assert len(steps) == 1, (
+            "classifier-contract phải gọi đúng một bước check-skip-directives, "
+            "thấy %d." % len(steps)
+        )
+        body = _than_khong_comment_shell(str(steps[0].get("run", "")))
+        assert self.SCRIPT_DEPLOY in body
+        assert "--base \"$BASE_SHA\"" in body
+        assert "--head \"$HEAD_SHA\"" in body
+
+    def test_pr_gate_nhin_thay_ca_script_lan_tep_hop_dong(self, wf):
+        on = _khoi_on(wf)
+        paths = on["pull_request"].get("paths")
+        assert isinstance(paths, list)
+        assert ".github/scripts/**" in paths, (
+            "sửa classifier deploy phải kích hoạt required backend gate")
+        assert "Backend_FastAPI/**" in paths, (
+            "sửa tệp hợp đồng deploy phải kích hoạt required backend gate")

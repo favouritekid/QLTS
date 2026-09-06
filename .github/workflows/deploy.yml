@@ -15,14 +15,61 @@ name: Deploy to Production
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.claude/**'
+  workflow_dispatch:
+
+# Không dùng `push.paths`/`paths-ignore` để quyết định production: GitHub chỉ
+# xét một phần hữu hạn của diff cho path filter. Workflow luôn sinh trên main;
+# job nhẹ bên dưới đọc TOÀN BỘ `git diff before..after`, rồi mới quyết định có
+# tạo job mang `environment: production` hay không.
+permissions:
+  contents: read
 
 jobs:
+  classify-changes:
+    name: Classify production impact
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      deploy: ${{ steps.plan.outputs.deploy }}
+      classification: ${{ steps.plan.outputs.classification }}
+    env:
+      PLAN_PATH: ${{ github.workspace }}/deploy-change-plan.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Cần cả `before` lẫn `after`; không dùng compare API hay danh sách
+          # changed-files bị cắt ngắn.
+          fetch-depth: 0
+
+      - name: Phân loại toàn bộ diff theo hướng fail-closed
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          python .github/scripts/deploy_change_classifier.py classify \
+            --event "$EVENT_NAME" \
+            --before "$BEFORE_SHA" \
+            --after "$AFTER_SHA" \
+            --artifact "$PLAN_PATH"
+
+      - name: Lưu bằng chứng phân loại kể cả khi BLOCK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-change-plan-run${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ env.PLAN_PATH }}
+          if-no-files-found: error
+          retention-days: 90
+
   deploy:
     name: Deploy to VPS
+    needs: classify-changes
+    # Chỉ job này sở hữu environment + concurrency production. Một push chỉ
+    # chứa CI/test/docs sẽ skip TRƯỚC hai cơ chế đó, nên không tạo pending
+    # deployment và không huỷ deployment thật đang chờ duyệt.
+    if: needs.classify-changes.result == 'success' && needs.classify-changes.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     environment: production
     concurrency:

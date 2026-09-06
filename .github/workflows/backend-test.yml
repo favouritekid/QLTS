@@ -1095,6 +1095,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Cổng chỉ thị bỏ qua phải đọc MỌI commit của PR: squash/rebase có thể
+          # đưa message của một commit không phải HEAD vào push cuối cùng.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -1103,6 +1107,20 @@ jobs:
 
       - name: Cài phụ thuộc (hai gói, ghim phiên bản)
         run: python -m pip install --quiet pytest==8.4.2 PyYAML==6.0.3
+
+      # GitHub cho phép message của commit làm `push`/`pull_request` workflow
+      # biến mất hoàn toàn. Required check đã chặn trường hợp token nằm ngay ở
+      # HEAD (check sẽ Pending), còn bước này chặn tiêu đề/body PR và các commit
+      # cũ có thể đi vào merge/squash/rebase message rồi vô hiệu hoá deploy.
+      - name: Cấm chỉ thị bỏ qua Actions đi vào commit merge
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python .github/scripts/deploy_change_classifier.py \
+            check-skip-directives --base "$BASE_SHA" --head "$HEAD_SHA"
 
       # Bộ ca hợp đồng chỉ kiểm những chuỗi manifest GIẢ dựng trong test. Tệp
       # `domains.yml` THẬT có thể sai mà cổng vẫn xanh — đúng chỗ hở đã đo.
