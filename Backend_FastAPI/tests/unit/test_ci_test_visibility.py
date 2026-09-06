@@ -1470,3 +1470,531 @@ class TestNeoCheoDeployClassifier:
             "sửa classifier deploy phải kích hoạt required backend gate")
         assert "Backend_FastAPI/**" in paths, (
             "sửa tệp hợp đồng deploy phải kích hoạt required backend gate")
+
+
+# ---------------------------------------------------------------------------
+# 10. NIGHTLY REGRESSION — planner, cổng nghiệm thu, census MỘT nguồn
+# ---------------------------------------------------------------------------
+#
+# Sự cố: sáu bước E2E gác bằng
+#     `always() && (github.event.inputs.suites == 'all' || contains(..., 'lead'))`
+# Trên `schedule` thì `github.event.inputs` là null, GitHub ép null thành chuỗi
+# rỗng ⇒ cả hai vế sai ⇒ sáu bước **skipped**, job vẫn **success**. Đo thật:
+# 15/15 lượt `schedule` từ 2026-08-23 tới 2026-09-06 đều success với E2E
+# chạy=0 / skipped=6 / đỏ=0. Mười lăm đêm không một ca E2E nào chạy.
+#
+# Bản vá thay quyết định ấy bằng `nightly_regression_plan.py`. Mục này khoá cả
+# hai nửa: logic chọn suite, và cổng đối chiếu kết quả THẬT với kế hoạch.
+
+DUONG_WF_NIGHTLY = GOC / ".github" / "workflows" / "nightly-regression.yml"
+DUONG_PLANNER = GOC / ".github" / "scripts" / "nightly_regression_plan.py"
+
+JOB_NIGHTLY = "regression"
+ID_BUOC_PLAN = "plan"
+ID_BUOC_CONG = "nightly_gate"
+
+#: SHA-256 của census suite, băm trên
+#:     json.dumps([[tên, sorted(spec), project], …], separators=(",", ":"))
+#: Hai phép đối chiếu chéo (planner↔step id, planner↔dòng run) vẫn XANH nếu ai
+#: đó gỡ một suite khỏi CẢ hai đầu. Digest này là thứ bắt ca ấy.
+#:
+#: Sinh lại khi cố ý đổi tập suite:
+#:
+#:     python - <<'EOF'
+#:     import hashlib, importlib.util, json, sys
+#:     s = importlib.util.spec_from_file_location(
+#:         "nrp", ".github/scripts/nightly_regression_plan.py")
+#:     m = importlib.util.module_from_spec(s); sys.modules["nrp"] = m
+#:     s.loader.exec_module(m)
+#:     census = [[t, sorted(c["spec"]), c["project"]] for t, c in m.SUITES.items()]
+#:     print(hashlib.sha256(json.dumps(
+#:         census, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest())
+#:     EOF
+SHA_CENSUS_SUITE_NIGHTLY = (
+    "53ca26f3b565c95ef604ffdef24ed7e72ea0e59613ec6a809bfb054a3f1eb15e"
+)
+
+
+def _nap_planner():
+    """Nạp `nightly_regression_plan` theo đường dẫn — nó ngoài package backend.
+
+    ⚠️ `sys.modules[...] = mod` PHẢI đứng TRƯỚC `exec_module`, cùng lý do đã
+    ghi ở `_nap_pr_classify`: nếu module về sau thêm `@dataclass` kèm
+    `from __future__ import annotations` thì thiếu dòng này là
+    `AttributeError: 'NoneType' object has no attribute '__dict__'`. Hiện
+    planner KHÔNG dùng dataclass, nhưng đặt sẵn để bản sửa sau không vấp.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_nightly_plan_cho_test_visibility", DUONG_PLANNER
+    )
+    assert spec and spec.loader, "không nạp được %s" % DUONG_PLANNER
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="module")
+def planner():
+    return _nap_planner()
+
+
+@pytest.fixture(scope="module")
+def wf_nightly(prc):
+    """Đọc bằng loader NGHIÊM NGẶT, không `safe_load`.
+
+    `safe_load` nuốt khoá trùng và im lặng giữ bản CUỐI: một `if:` thứ hai dán
+    nhầm vào cùng bước sẽ thay thế cái thứ nhất mà không cảnh báo, và mọi phép
+    kiểm đọc qua `safe_load` đều mù.
+    """
+    return prc.yaml.load(
+        DUONG_WF_NIGHTLY.read_text(encoding="utf-8"), Loader=prc._LoaderNghiemNgat
+    )
+
+
+@pytest.fixture(scope="module")
+def job_nightly(wf_nightly):
+    return wf_nightly["jobs"][JOB_NIGHTLY]
+
+
+def _buoc_theo_id(job) -> dict:
+    return {s["id"]: s for s in job["steps"] if isinstance(s, dict) and "id" in s}
+
+
+def _chi_so_buoc(job, ten_hoac_id) -> int:
+    for i, s in enumerate(job["steps"]):
+        if s.get("id") == ten_hoac_id or s.get("name") == ten_hoac_id:
+            return i
+    raise AssertionError("không thấy bước %r trong job" % (ten_hoac_id,))
+
+
+def _steps_gia(planner, outcome_theo_suite: dict) -> dict:
+    """Dựng `toJSON(steps)` giả cho ĐỦ SÁU bước.
+
+    ⚠️ Cố ý dựng đủ sáu, không dựng một. Một ca chỉ chèn MỘT phần tử thì gỡ
+    hẳn ràng buộc vẫn xanh — `test-input-too-weak-to-fail`.
+    """
+    return {
+        planner.id_buoc(s): {"outcome": outcome_theo_suite[s], "conclusion": "success"}
+        for s in planner.SUITES
+        if outcome_theo_suite.get(s) is not None
+    }
+
+
+def _ke_hoach_gia(planner, chon) -> dict:
+    return {
+        "schema_version": 1,
+        "selected": list(chon),
+        "selected_count": len(chon),
+        "all_suites": list(planner.SUITES),
+    }
+
+
+class TestPlannerNightlyChonSuite:
+    """Logic chọn suite — hàm thuần, mỗi ca một bất biến.
+
+    ⚠️ Mọi ca từ chối đều dùng `match=` trên một mảnh thông điệp RIÊNG. Không
+    có `match=` thì bốn luật từ chối gộp thành một, và một
+    `raise LoiKeHoach("lỗi")` chung nuốt cả bốn mà cả bốn vẫn xanh.
+    """
+
+    def test_schedule_khong_input_thi_du_sau(self, planner):
+        assert planner.chon_suite("schedule", None) == tuple(planner.SUITES)
+
+    def test_schedule_chuoi_rong_thi_du_sau(self, planner):
+        """CHÍNH ca của sự cố: `${{ inputs.suites }}` trên schedule là chuỗi rỗng."""
+        assert planner.chon_suite("schedule", "") == tuple(planner.SUITES)
+        assert planner.chon_suite("schedule", "   ") == tuple(planner.SUITES)
+
+    def test_schedule_ma_co_input_thi_do(self, planner):
+        with pytest.raises(planner.LoiKeHoach, match="không mang input"):
+            planner.chon_suite("schedule", "all")
+
+    def test_dispatch_all_thi_du_sau(self, planner):
+        assert planner.chon_suite("workflow_dispatch", "all") == tuple(planner.SUITES)
+
+    def test_dispatch_tap_con_dung_hai(self, planner):
+        ra = planner.chon_suite("workflow_dispatch", "lead,smoke")
+        assert ra == ("lead", "smoke") and len(ra) == 2
+
+    def test_dispatch_tap_con_khac_dung_ba(self, planner):
+        ra = planner.chon_suite("workflow_dispatch", "finance,bugfix,unified")
+        assert ra == ("finance", "bugfix", "unified") and len(ra) == 3
+
+    def test_thu_tu_tra_ve_theo_khai_bao_khong_theo_go(self, planner):
+        """`smoke,lead` và `lead,smoke` phải cho CÙNG một giá trị.
+
+        `selected` là chuỗi đem so ở cổng cuối. Nếu nó phụ thuộc thứ tự người
+        gõ thì cổng đỏ giả mỗi khi ai đó gõ đảo.
+        """
+        assert (planner.chon_suite("workflow_dispatch", "smoke,lead")
+                == planner.chon_suite("workflow_dispatch", "lead,smoke"))
+
+    def test_khoang_trang_quanh_token_duoc_trim(self, planner):
+        assert planner.chon_suite("workflow_dispatch", " lead , smoke ") == ("lead", "smoke")
+
+    def test_leadership_khong_khop_lead(self, planner):
+        """`contains()` của GitHub cho `leadership` khớp `lead` — planner thì KHÔNG.
+
+        Đây là quả bom thứ hai đang ngủ trong workflow cũ: nó chưa nổ chỉ vì
+        `schedule` làm mọi thứ skip.
+        """
+        with pytest.raises(planner.LoiKeHoach, match="token suite lạ"):
+            planner.chon_suite("workflow_dispatch", "leadership")
+
+    def test_token_la_thi_do(self, planner):
+        with pytest.raises(planner.LoiKeHoach, match="token suite lạ"):
+            planner.chon_suite("workflow_dispatch", "payments")
+
+    def test_dispatch_rong_thi_do(self, planner):
+        with pytest.raises(planner.LoiKeHoach, match="ô `suites` rỗng"):
+            planner.chon_suite("workflow_dispatch", "")
+
+    def test_dispatch_toan_khoang_trang_thi_do(self, planner):
+        with pytest.raises(planner.LoiKeHoach, match="ô `suites` rỗng"):
+            planner.chon_suite("workflow_dispatch", "   ")
+
+    def test_token_trung_lap_thi_do(self, planner):
+        with pytest.raises(planner.LoiKeHoach, match="trùng lặp"):
+            planner.chon_suite("workflow_dispatch", "lead,lead")
+
+    def test_token_rong_giua_dau_phay_thi_do(self, planner):
+        with pytest.raises(planner.LoiKeHoach, match="token rỗng"):
+            planner.chon_suite("workflow_dispatch", "lead,,smoke")
+
+    def test_all_tron_token_khac_thi_do(self, planner):
+        with pytest.raises(planner.LoiKeHoach, match="đứng MỘT MÌNH"):
+            planner.chon_suite("workflow_dispatch", "all,lead")
+
+    def test_chu_hoa_thi_do(self, planner):
+        """Đổi hành vi CÓ CHỦ Ý so với `contains()` (vốn không phân biệt hoa)."""
+        with pytest.raises(planner.LoiKeHoach, match="viết thường"):
+            planner.chon_suite("workflow_dispatch", "LEAD")
+
+    def test_khoang_trang_thay_dau_phay_thi_do(self, planner):
+        """Cú pháp công bố là comma-separated; `lead smoke` phải ĐỎ, không im lặng."""
+        with pytest.raises(planner.LoiKeHoach, match="token suite lạ"):
+            planner.chon_suite("workflow_dispatch", "lead smoke")
+
+    def test_su_kien_la_thi_do(self, planner):
+        """Allowlist ĐÓNG — không có nhánh `else: đủ sáu`."""
+        with pytest.raises(planner.LoiKeHoach, match="không được hỗ trợ"):
+            planner.chon_suite("push", "all")
+
+    def test_thieu_ten_su_kien_thi_do(self, planner):
+        with pytest.raises(planner.LoiKeHoach, match="thiếu tên sự kiện"):
+            planner.chon_suite(None, "all")
+
+
+class TestPlannerNightlyOutcome:
+    """Cổng đối chiếu kết quả THẬT với kế hoạch.
+
+    Mọi ca dựng đủ SÁU bước. Ca "một suite hỏng" chỉ hỏng ĐÚNG MỘT, năm cái
+    còn lại `success` — nếu dựng hai lỗi cùng lúc thì không biết nó đỏ vì gì.
+    """
+
+    def test_dung_tap_va_toan_success_thi_XANH(self, planner):
+        """ĐỐI CHỨNG BẮT BUỘC.
+
+        Thiếu ca này thì một `kiem_outcome` trả đỏ VÔ ĐIỀU KIỆN làm mọi ca đỏ
+        bên dưới xanh hết — `reverse-check-must-prove-it-broke` áp cả chiều
+        ngược.
+        """
+        chon = list(planner.SUITES)
+        steps = _steps_gia(planner, {s: "success" for s in planner.SUITES})
+        assert planner.kiem_outcome(_ke_hoach_gia(planner, chon), steps) == []
+
+    def test_tap_con_dung_va_phan_con_lai_skipped_thi_XANH(self, planner):
+        chon = ["lead", "smoke"]
+        steps = _steps_gia(planner, {
+            s: ("success" if s in chon else "skipped") for s in planner.SUITES})
+        assert planner.kiem_outcome(_ke_hoach_gia(planner, chon), steps) == []
+
+    def test_khong_suite_nao_duoc_chon_thi_do(self, planner):
+        """Bất biến GỐC — kể cả khi cả sáu outcome đều `skipped` và NHẤT QUÁN.
+
+        Một cổng chỉ so hai tập sẽ thấy `∅ == ∅` và báo xanh. Đó đúng là mười
+        lăm đêm vừa rồi.
+        """
+        steps = _steps_gia(planner, {s: "skipped" for s in planner.SUITES})
+        vi_pham = planner.kiem_outcome(_ke_hoach_gia(planner, []), steps)
+        assert any("KHÔNG suite nào được chọn" in v for v in vi_pham), vi_pham
+
+    def test_du_sau_duoc_chon_ma_ca_sau_skipped_thi_do(self, planner):
+        """Bản sao chính xác của sự cố 15/15 lượt schedule."""
+        chon = list(planner.SUITES)
+        steps = _steps_gia(planner, {s: "skipped" for s in planner.SUITES})
+        vi_pham = planner.kiem_outcome(_ke_hoach_gia(planner, chon), steps)
+        assert len([v for v in vi_pham if "ĐƯỢC CHỌN nhưng outcome" in v]) == 6, vi_pham
+
+    def test_mot_suite_duoc_chon_bi_skipped_thi_do(self, planner):
+        """Ca 'gần đúng' — năm xanh một skip. Dễ lọt nhất."""
+        chon = list(planner.SUITES)
+        oc = {s: "success" for s in planner.SUITES}
+        oc["finance"] = "skipped"
+        vi_pham = planner.kiem_outcome(
+            _ke_hoach_gia(planner, chon), _steps_gia(planner, oc))
+        assert any("`finance` ĐƯỢC CHỌN" in v for v in vi_pham), vi_pham
+
+    def test_suite_duoc_chon_failure_thi_do(self, planner):
+        chon = list(planner.SUITES)
+        oc = {s: "success" for s in planner.SUITES}
+        oc["bugfix"] = "failure"
+        vi_pham = planner.kiem_outcome(
+            _ke_hoach_gia(planner, chon), _steps_gia(planner, oc))
+        assert any("`bugfix` ĐƯỢC CHỌN" in v for v in vi_pham), vi_pham
+
+    def test_suite_duoc_chon_cancelled_thi_do(self, planner):
+        chon = list(planner.SUITES)
+        oc = {s: "success" for s in planner.SUITES}
+        oc["unified"] = "cancelled"
+        vi_pham = planner.kiem_outcome(
+            _ke_hoach_gia(planner, chon), _steps_gia(planner, oc))
+        assert any("`unified` ĐƯỢC CHỌN" in v for v in vi_pham), vi_pham
+
+    def test_suite_khong_chon_ma_da_chay_thi_do(self, planner):
+        """Đấu chéo: chỉ chọn `lead` nhưng `smoke` vẫn chạy."""
+        chon = ["lead"]
+        oc = {s: "skipped" for s in planner.SUITES}
+        oc["lead"] = "success"
+        oc["smoke"] = "success"
+        vi_pham = planner.kiem_outcome(
+            _ke_hoach_gia(planner, chon), _steps_gia(planner, oc))
+        assert any("`smoke` KHÔNG được chọn" in v for v in vi_pham), vi_pham
+
+    def test_thieu_id_trong_steps_thi_do(self, planner):
+        """Bước bị gỡ `id` hoặc bị xoá ⇒ vắng khỏi `toJSON(steps)` ⇒ đỏ."""
+        chon = list(planner.SUITES)
+        oc = {s: "success" for s in planner.SUITES}
+        oc["finance"] = None  # vắng mặt hoàn toàn
+        vi_pham = planner.kiem_outcome(
+            _ke_hoach_gia(planner, chon), _steps_gia(planner, oc))
+        assert any("thiếu bước `e2e_finance`" in v for v in vi_pham), vi_pham
+
+    @pytest.mark.parametrize("la", ["", "neutral", "SUCCESS", None])
+    def test_outcome_la_hoac_rong_thi_do(self, planner, la):
+        """Fail-closed cho mọi giá trị chưa biết, kể cả chuỗi rỗng."""
+        chon = list(planner.SUITES)
+        steps = _steps_gia(planner, {s: "success" for s in planner.SUITES})
+        steps[planner.id_buoc("lead")] = {"outcome": la}
+        vi_pham = planner.kiem_outcome(_ke_hoach_gia(planner, chon), steps)
+        assert any("không hiểu được" in v for v in vi_pham), vi_pham
+
+    def test_census_trong_ke_hoach_lech_planner_thi_do(self, planner):
+        """Kế hoạch do một bản planner KHÁC dựng ⇒ đỏ."""
+        chon = list(planner.SUITES)
+        kh = _ke_hoach_gia(planner, chon)
+        kh["all_suites"] = kh["all_suites"][:-1]
+        steps = _steps_gia(planner, {s: "success" for s in planner.SUITES})
+        vi_pham = planner.kiem_outcome(kh, steps)
+        assert any("khác census của planner" in v for v in vi_pham), vi_pham
+
+    def test_selected_count_lech_thi_do(self, planner):
+        chon = ["lead", "smoke"]
+        kh = _ke_hoach_gia(planner, chon)
+        kh["selected_count"] = 6
+        steps = _steps_gia(planner, {
+            s: ("success" if s in chon else "skipped") for s in planner.SUITES})
+        vi_pham = planner.kiem_outcome(kh, steps)
+        assert any("selected_count" in v for v in vi_pham), vi_pham
+
+
+class TestHopDongWorkflowNightly:
+    """Hợp đồng TĨNH trên `nightly-regression.yml`."""
+
+    def test_qua_duoc_loader_nghiem_ngat(self, prc):
+        prc.yaml.load(DUONG_WF_NIGHTLY.read_text(encoding="utf-8"),
+                      Loader=prc._LoaderNghiemNgat)
+
+    def test_sau_buoc_e2e_co_id_on_dinh(self, job_nightly, planner):
+        co = {i for i in _buoc_theo_id(job_nightly) if i.startswith(planner.TIEN_TO_ID)}
+        can = {planner.id_buoc(s) for s in planner.SUITES}
+        assert co == can, "thừa %s · thiếu %s" % (sorted(co - can), sorted(can - co))
+
+    def test_moi_buoc_doc_dung_output_cua_chinh_no(self, job_nightly, planner):
+        """Quan hệ 1-1 planner↔bước. Đấu chéo là hỏng, không phải xanh."""
+        theo_id = _buoc_theo_id(job_nightly)
+        for suite in planner.SUITES:
+            sid = planner.id_buoc(suite)
+            dieu_kien = str(theo_id[sid].get("if", ""))
+            cua_no = "steps.%s.outputs.%s" % (ID_BUOC_PLAN, sid)
+            assert dieu_kien.count(cua_no) == 1, (
+                "bước %r phải đọc ĐÚNG MỘT lần %r, `if` đang là %r"
+                % (sid, cua_no, dieu_kien))
+            for khac in planner.SUITES:
+                if khac == suite:
+                    continue
+                assert planner.id_buoc(khac) not in dieu_kien, (
+                    "bước %r đang đọc output của suite %r — dây nối đấu chéo"
+                    % (sid, khac))
+
+    def test_moi_buoc_chay_dung_spec_cua_suite_ay(self, job_nightly, planner):
+        """Đổi `id` mà quên đổi lệnh sẽ bị bắt ở đây, không chỉ ở tên."""
+        theo_id = _buoc_theo_id(job_nightly)
+        for suite, cau_hinh in planner.SUITES.items():
+            than = _than_khong_comment_shell(str(theo_id[planner.id_buoc(suite)]["run"]))
+            for spec in cau_hinh["spec"]:
+                assert spec in than, "bước %r thiếu spec %r" % (suite, spec)
+            assert "--project=%s" % cau_hinh["project"] in than, (
+                "bước %r sai `--project`" % suite)
+            for khac, ch_khac in planner.SUITES.items():
+                if khac == suite:
+                    continue
+                for spec_khac in ch_khac["spec"]:
+                    if spec_khac in cau_hinh["spec"]:
+                        continue
+                    assert spec_khac not in than, (
+                        "bước %r đang chạy spec của %r" % (suite, khac))
+
+    def test_giu_nguyen_ba_bat_doi_xung_cua_smoke(self, job_nightly, planner):
+        """`smoke` KHÁC ba điểm — đã ship, đừng 'chuẩn hoá cho đều'."""
+        theo_id = _buoc_theo_id(job_nightly)
+        smoke = theo_id[planner.id_buoc("smoke")]
+        than = _than_khong_comment_shell(str(smoke["run"]))
+        assert "--project=chromium" in than
+        assert "--workers=1" not in than, "smoke cố ý KHÔNG ghim --workers=1"
+        assert "E2E_API_URL" not in (smoke.get("env") or {}), (
+            "smoke cố ý KHÔNG có E2E_API_URL")
+        for suite in ("lead", "admission", "finance", "bugfix", "unified"):
+            b = theo_id[planner.id_buoc(suite)]
+            assert "--workers=1" in _than_khong_comment_shell(str(b["run"]))
+            assert "E2E_API_URL" in (b.get("env") or {})
+
+    def test_khong_continue_on_error_o_job_lan_buoc(self, job_nightly):
+        assert not job_nightly.get("continue-on-error"), (
+            "một dòng `continue-on-error` ở cấp job biến mọi bước đỏ thành xanh")
+        for s in job_nightly["steps"]:
+            assert not s.get("continue-on-error"), (
+                "bước %r bật `continue-on-error`" % (s.get("name") or s.get("id")))
+
+    def test_job_khong_co_dieu_kien_lam_no_bi_skip(self, job_nightly):
+        assert "if" not in job_nightly, (
+            "job này là job DUY NHẤT của workflow; một `if` ở cấp job làm cả "
+            "workflow vô hình mà kết luận vẫn không đỏ")
+
+    def test_buoc_planner_chay_TRUOC_cac_buoc_nang(self, job_nightly):
+        vt = _chi_so_buoc(job_nightly, ID_BUOC_PLAN)
+        for nang in ("Install dependencies", "Install Playwright browsers",
+                     "Start services", "Seed database"):
+            assert vt < _chi_so_buoc(job_nightly, nang), (
+                "planner phải chạy trước %r — đầu vào sai thì đỏ sau vài giây, "
+                "không phải sau hai mươi phút dựng stack" % nang)
+
+    def test_cong_cuoi_la_if_always_TRAN(self, job_nightly):
+        """`always() && X` KHÔNG phải `always()` — X sai thì bước skip.
+
+        Đó đúng là cơ chế đã làm sáu bước E2E biến mất.
+        """
+        cong = _buoc_theo_id(job_nightly)[ID_BUOC_CONG]
+        assert str(cong.get("if", "")).strip() == "always()", (
+            "cổng phải là `if: always()` TRẦN, đang là %r" % cong.get("if"))
+
+    def test_cong_dung_sau_ca_sau_buoc_e2e(self, job_nightly, planner):
+        vt_cong = _chi_so_buoc(job_nightly, ID_BUOC_CONG)
+        for suite in planner.SUITES:
+            assert vt_cong > _chi_so_buoc(job_nightly, planner.id_buoc(suite))
+
+    def test_cong_dung_TRUOC_buoc_upload_artifact(self, job_nightly):
+        """`Upload Playwright report` gác bằng `failure()`.
+
+        Cổng đứng SAU nó thì ca 'mọi suite xanh + cổng đỏ' không sinh artifact
+        nào để đọc — đúng lúc cần đọc nhất.
+        """
+        assert (_chi_so_buoc(job_nightly, ID_BUOC_CONG)
+                < _chi_so_buoc(job_nightly, "Upload Playwright report"))
+
+    def test_khong_noi_suy_bieu_thuc_vao_than_run(self, job_nightly):
+        """Không `run:` nào chứa `${{` — giá trị người dùng chỉ đi qua `env:`."""
+        for s in job_nightly["steps"]:
+            than = _than_khong_comment_shell(str(s.get("run", "")))
+            assert "${{" not in than, (
+                "bước %r nội suy biểu thức vào thân shell" % (s.get("name") or s.get("id")))
+
+    def test_buoc_planner_va_cong_truyen_du_env(self, job_nightly):
+        theo_id = _buoc_theo_id(job_nightly)
+        env_plan = theo_id[ID_BUOC_PLAN].get("env") or {}
+        assert "github.event_name" in str(env_plan.get("QLTS_EVENT_NAME", "")), (
+            "thiếu `event_name` thì planner không phân biệt được `schedule` "
+            "(đủ sáu) với dispatch ô rỗng (từ chối) — cả hai đều cho chuỗi rỗng")
+        assert "inputs.suites" in str(env_plan.get("QLTS_SUITES_RAW", ""))
+        env_cong = theo_id[ID_BUOC_CONG].get("env") or {}
+        assert "toJSON(steps)" in str(env_cong.get("QLTS_STEPS_JSON", "")), (
+            "cổng phải nhận outcome qua MỘT biến `toJSON(steps)`; sáu biến rời "
+            "là sáu chỗ để quên khi thêm suite thứ bảy")
+
+    def test_cong_doc_outcome_chu_khong_phai_conclusion(self, planner):
+        """`conclusion` đã bị `continue-on-error` bóp méo; `outcome` thì chưa."""
+        src = DUONG_PLANNER.read_text(encoding="utf-8")
+        assert '"outcome"' in src or "'outcome'" in src
+        assert 'buoc.get("conclusion")' not in src, (
+            "đọc `conclusion` làm một dòng `continue-on-error` biến cổng thành "
+            "fail-open mà cổng vẫn báo xanh")
+
+    def test_khong_con_dieu_kien_contains_inputs_cu(self, job_nightly):
+        """Neo chống hồi quy về đúng bug này ở một suite thêm sau."""
+        for s in job_nightly["steps"]:
+            assert "contains(github.event.inputs" not in str(s.get("if", "")), (
+                "bước %r quay lại lối `contains(github.event.inputs…)` — trên "
+                "`schedule` nó luôn sai và bước sẽ skip im lặng"
+                % (s.get("name") or s.get("id")))
+
+    def test_khong_them_concurrency_cho_nightly(self, wf_nightly, job_nightly):
+        """`cancel-in-progress` từng giết 8 run deploy đang CHỜ DUYỆT."""
+        assert "concurrency" not in wf_nightly
+        assert "concurrency" not in job_nightly
+
+    def test_cong_backend_nhin_thay_ca_hai_tep(self, wf):
+        on = _khoi_on(wf)
+        paths = on["pull_request"].get("paths")
+        assert isinstance(paths, list)
+        assert ".github/workflows/**" in paths
+        assert ".github/scripts/**" in paths
+
+
+class TestCensusSuiteMotNguon:
+    """Census sáu suite chỉ có MỘT nguồn; mọi bản sao phải đối chiếu ngược."""
+
+    def test_census_planner_khop_step_id(self, job_nightly, planner):
+        tu_id = {i[len(planner.TIEN_TO_ID):] for i in _buoc_theo_id(job_nightly)
+                 if i.startswith(planner.TIEN_TO_ID)}
+        assert tu_id == set(planner.SUITES)
+
+    def test_planner_ghi_dung_tap_output_ma_buoc_dang_doc(self, planner, tmp_path,
+                                                          monkeypatch):
+        """Ca HÀNH VI: chạy `plan` thật rồi đọc lại `$GITHUB_OUTPUT`.
+
+        Hợp đồng tĩnh chứng minh bước `if` đọc tên nào; ca này chứng minh
+        planner THẬT SỰ ghi ra đúng tên ấy. Thiếu vế thứ hai thì hai bên có thể
+        cùng đúng cú pháp mà không bao giờ gặp nhau.
+        """
+        out = tmp_path / "gh_output.txt"
+        ke_hoach = tmp_path / "plan.json"
+        monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+        monkeypatch.setenv("QLTS_EVENT_NAME", "schedule")
+        monkeypatch.delenv("QLTS_SUITES_RAW", raising=False)
+        assert planner.main(["plan", "--plan-file", str(ke_hoach)]) == 0
+        cap = dict(d.split("=", 1) for d in out.read_text(encoding="utf-8").splitlines() if d)
+        boolean = {k for k in cap if k.startswith(planner.TIEN_TO_ID)}
+        assert boolean == {planner.id_buoc(s) for s in planner.SUITES}
+        assert all(cap[planner.id_buoc(s)] == "true" for s in planner.SUITES)
+        assert cap["selected_count"] == "6"
+        assert json.loads(ke_hoach.read_text(encoding="utf-8"))["selected_count"] == 6
+
+    def test_thieu_GITHUB_OUTPUT_thi_do(self, planner, tmp_path, monkeypatch):
+        """Không có nơi công bố kế hoạch ⇒ cả sáu bước skip — chính bug đang vá."""
+        monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+        monkeypatch.setenv("QLTS_EVENT_NAME", "schedule")
+        monkeypatch.delenv("QLTS_SUITES_RAW", raising=False)
+        assert planner.main(["plan", "--plan-file", str(tmp_path / "p.json")]) == 2
+
+    def test_digest_census_khong_doi(self, planner):
+        """Bắt ca 'gỡ suite khỏi CẢ planner LẪN workflow' — hai phép đối chiếu
+        chéo ở trên vẫn xanh với ca ấy."""
+        census = [[t, sorted(c["spec"]), c["project"]] for t, c in planner.SUITES.items()]
+        bam = hashlib.sha256(
+            json.dumps(census, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        assert bam == SHA_CENSUS_SUITE_NIGHTLY, (
+            "census suite đã đổi: %s, cần %s. Sinh lại bằng đoạn script trong "
+            "docstring của `SHA_CENSUS_SUITE_NIGHTLY` nếu đây là chủ ý."
+            % (bam, SHA_CENSUS_SUITE_NIGHTLY))
