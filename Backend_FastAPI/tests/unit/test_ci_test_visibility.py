@@ -37,9 +37,13 @@ và đó đã là phần lớn các ca thật.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import pathlib
 import re
+import sys
+import unicodedata
 
 import pytest
 
@@ -1120,3 +1124,308 @@ class TestNeoCheoHopDongClassifier:
                 "bộ lọc `paths` thiếu %r — thay đổi mà hợp đồng classifier sinh "
                 "ra để chặn lại chính là thay đổi khiến workflow không chạy." % can
             )
+
+
+# ---------------------------------------------------------------------------
+# 9. Hình dạng job gác + siêu dữ liệu phân vùng Tier 2
+# ---------------------------------------------------------------------------
+# Mục 1–8 canh *nội dung* cổng: selector nào chạy, ai gom kết quả, hợp đồng
+# classifier có đủ sentinel không. Mục này canh *hình dạng* của chính job gác —
+# những thuộc tính mà khi mất đi, cổng vẫn tồn tại, vẫn có tên, và vẫn xanh.
+
+DUONG_WF_ADMISSION = GOC / ".github" / "workflows" / "admission-contract-check.yml"
+DUONG_PR_CLASSIFY = GOC / ".github" / "scripts" / "pr_classify.py"
+TEN_WF_ADMISSION = ".github/workflows/admission-contract-check.yml"
+JOB_SHARD = "pytest-shard"
+TRAN_PHUT_SHARD = 75
+HOP_DONG_PHAN_VUNG = "tier2-rbac-security-v1"
+PHAN_VUNG_CAN = {"a", "c"}
+
+#: SHA-256 của HỢP hai lát Tier 2, băm trên **tập đã sắp xếp**:
+#:     json.dumps(sorted(set(2a) | set(2c)), separators=(",", ":"))
+#: Vì băm trên HỢP chứ không trên từng lát, chuyển một selector từ 2a sang 2c
+#: (hay ngược lại) KHÔNG đổi digest — cân lại tải là việc thường, không nên bắt
+#: sửa hằng số. Nhưng bỏ / thêm / thay một selector thì đổi, và đó đúng là thứ
+#: cần đỏ.
+SHA_HOP_SELECTOR_TIER2 = (
+    "08380c444af4faca35e4e139f5b41adb1a4876e0f4361e75b56de2151db9035e"
+)
+
+
+def _nap_pr_classify():
+    """Nạp `pr_classify` — CHỈ để mượn loader YAML nghiêm ngặt của nó.
+
+    ⚠️ `sys.modules[...] = mod` PHẢI đứng TRƯỚC `exec_module`. Module ấy dùng
+    `from __future__ import annotations` + `@dataclass`, và dataclass giải chú
+    thích kiểu qua `sys.modules[cls.__module__].__dict__`. Thiếu dòng ấy thì
+    nạp module ném `AttributeError: 'NoneType' object has no attribute
+    '__dict__'` — đã đo thật trên Python 3.12.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "_pr_classify_cho_test_visibility", DUONG_PR_CLASSIFY
+    )
+    assert spec and spec.loader, "không nạp được %s" % DUONG_PR_CLASSIFY
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="module")
+def prc():
+    return _nap_pr_classify()
+
+
+def _cac_leg_phan_vung(cac_leg):
+    """Tìm hai lát Tier 2 bằng SIÊU DỮ LIỆU, không bằng tên hiển thị."""
+    return [l for l in cac_leg
+            if str(l.get("partition_contract", "")) == HOP_DONG_PHAN_VUNG]
+
+
+class TestWorkflowAdmissionTuNhinThay:
+    """Cổng phải nhìn thấy chính thứ nó canh — ở CẢ HAI sự kiện.
+
+    `admission-contract-check.yml` từng liệt kê chính nó trong
+    `pull_request.paths` mà KHÔNG có trong `push.paths`. Hệ quả đo được: sửa
+    chính cổng ấy rồi merge vào `main` thì nhánh `push:main` không kích hoạt gì
+    — cổng không tự kiểm lại sau khi bị sửa. Đúng hình dạng
+    `ci-allowlist-tep-khong-duoc-gac`, chỉ đổi chỗ đứng.
+    """
+
+    @pytest.fixture(scope="class")
+    def on_adm(self, prc):
+        """Đọc bằng loader NGHIÊM NGẶT, không `safe_load`.
+
+        `safe_load` nuốt khoá trùng: một `paths:` thứ hai dán nhầm vào cùng
+        block sẽ lặng lẽ THAY THẾ cái thứ nhất, và mọi phép đếm bên dưới khi
+        ấy đang đếm một danh sách không phải danh sách đang có hiệu lực.
+        """
+        return _khoi_on(prc.yaml.load(
+            DUONG_WF_ADMISSION.read_text(encoding="utf-8"),
+            Loader=prc._LoaderNghiemNgat))
+
+    @staticmethod
+    def _phai_la_danh_sach_chuoi(paths, ten_su_kien):
+        """`paths` dạng SCALAR làm `str.count` xanh giả.
+
+        GitHub đòi `paths` là danh sách chuỗi (sequence of strings). Nếu ai đó viết
+        ``paths: ".github/workflows/admission-contract-check.yml"`` thì YAML
+        cho một `str`, và `"…yml".count("…yml")` vẫn bằng 1 — phép đếm bên
+        dưới xanh trong khi lược đồ trigger đã sai. Chặn ở KIỂU, trước khi đếm.
+        """
+        assert type(paths) is list, (
+            "`%s.paths` phải là DANH SÁCH, nhận %s (%r). `paths` dạng scalar "
+            "làm mọi phép `.count()` bên dưới xanh giả."
+            % (ten_su_kien, type(paths).__name__, paths)
+        )
+        assert all(type(p) is str for p in paths), (
+            "`%s.paths` có phần tử không phải chuỗi: %r" % (
+                ten_su_kien, [p for p in paths if type(p) is not str])
+        )
+
+    def test_tu_nhin_thay_o_pull_request(self, on_adm):
+        paths = on_adm["pull_request"]["paths"]
+        self._phai_la_danh_sach_chuoi(paths, "pull_request")
+        assert paths.count(TEN_WF_ADMISSION) == 1, (
+            "`pull_request.paths` phải chứa ĐÚNG MỘT lần %r — 0 lần thì sửa "
+            "cổng không kích hoạt cổng; 2 lần là dấu hiệu sao chép nhầm."
+            % TEN_WF_ADMISSION
+        )
+
+    def test_tu_nhin_thay_o_push(self, on_adm):
+        paths = on_adm["push"]["paths"]
+        self._phai_la_danh_sach_chuoi(paths, "push")
+        assert paths.count(TEN_WF_ADMISSION) == 1, (
+            "`push.paths` phải chứa ĐÚNG MỘT lần %r. Đây là vế từng THIẾU: "
+            "PR có, push không ⇒ bản vá cổng merge vào `main` mà cổng không "
+            "chạy lại lần nào." % TEN_WF_ADMISSION
+        )
+
+
+class TestHinhDangJobPytestShard:
+    """Hai thuộc tính mà khi mất, job vẫn còn tên và vẫn xanh."""
+
+    @pytest.fixture(scope="class")
+    def job(self, wf):
+        return wf["jobs"][JOB_SHARD]
+
+    def test_shard_ghim_tran_thoi_gian(self, job):
+        """Thiếu `timeout-minutes` ⇒ job kế thừa trần MẶC ĐỊNH 360 phút.
+
+        Một leg treo khi ấy giữ required check `pytest` suốt sáu giờ ở trạng
+        thái KHÔNG đỏ cũng KHÔNG xanh — không ai bị báo, PR không merge được,
+        và cách thoát tự nhiên là bấm rerun chứ không phải đọc log.
+
+        ⚠️ Phải `type(...) is int`, KHÔNG `isinstance`: `isinstance(True, int)`
+        là True, nên `timeout-minutes: true` sẽ lọt. Và YAML `"75"` có nháy cho
+        `str`, cũng phải đỏ.
+        """
+        gia_tri = job.get("timeout-minutes")
+        assert type(gia_tri) is int, (
+            "`%s.timeout-minutes` phải là số nguyên THẬT, nhận %r (%s). "
+            "Thiếu hẳn ⇒ trần mặc định 360 phút."
+            % (JOB_SHARD, gia_tri, type(gia_tri).__name__)
+        )
+        assert gia_tri == TRAN_PHUT_SHARD, (
+            "`%s.timeout-minutes` phải là %d, đang là %d."
+            % (JOB_SHARD, TRAN_PHUT_SHARD, gia_tri)
+        )
+
+    def test_shard_khong_continue_on_error(self, job):
+        """`continue-on-error` biến job đỏ thành job xanh.
+
+        ⚠️ Phạm vi có chủ ý: ca này chỉ canh `continue-on-error`, KHÔNG canh
+        `if:`. `test_khong_buoc_nao_cua_cac_job_gac_bi_vo_hieu` cố tình loại
+        `pytest-shard` khỏi phép cấm `if:` vì các leg matrix có
+        `if: matrix.<cờ>` theo thiết kế. Hai ca vì thế không mâu thuẫn nhau.
+        """
+        assert not job.get("continue-on-error"), (
+            "job %r bật `continue-on-error` ở CẤP JOB — mọi shard đỏ sẽ được "
+            "báo là thành công." % JOB_SHARD
+        )
+        for buoc in job.get("steps", []):
+            assert not buoc.get("continue-on-error"), (
+                "bước %r của %r bật `continue-on-error`."
+                % (buoc.get("name") or buoc.get("uses"), JOB_SHARD)
+            )
+
+
+class TestTenLegMatrixDuyNhat:
+    """Tên leg đi thẳng vào tên check `pytest shard — ${{ matrix.tier }}`.
+
+    Hai leg trùng tên sinh hai ô check không phân biệt được trên GitHub, và
+    `_tier_cua` trả leg KHỚP ĐẦU TIÊN — nên bất biến "hai neo ở HAI tier khác
+    nhau" mất nghĩa mà vẫn xanh. So sau NFKC + casefold vì `Tier 2A` và
+    `Tier 2a` là hai chuỗi khác nhau với Python nhưng là cùng một thứ với mắt
+    người đọc log.
+
+    ⚠️ Khoảng trắng cũng phải chuẩn hoá. `"Tier 2a — X "` và `"Tier 2a — X"`
+    khác nhau với `==`, mà trên GitHub là hai ô check TRÔNG y hệt nhau —
+    người đọc log không có cách nào phân biệt. Chuẩn hoá bằng
+    `" ".join(s.split())` để gộp cả khoảng trắng đầu/cuối lẫn khoảng trắng
+    nội bộ dư.
+    """
+
+    def test_moi_ten_leg_khac_rong(self, cac_leg):
+        for leg in cac_leg:
+            ten = leg.get("tier")
+            assert isinstance(ten, str) and ten.strip(), (
+                "leg có `tier` rỗng hoặc không phải chuỗi: %r" % (ten,))
+            assert ten == ten.strip(), (
+                "tên leg có khoảng trắng thừa ở đầu/cuối: %r. Nó vô hình trên "
+                "giao diện check nhưng làm mọi phép so tên trượt." % (ten,))
+
+    def test_ten_leg_duy_nhat_sau_chuan_hoa(self, cac_leg):
+        chuan = [" ".join(unicodedata.normalize("NFKC", str(l["tier"])).split())
+                 .casefold()
+                 for l in cac_leg]
+        trung = sorted({t for t in chuan if chuan.count(t) > 1})
+        assert not trung, (
+            "tên leg TRÙNG sau NFKC + gộp khoảng trắng + casefold: %s — "
+            "GitHub sẽ dựng hai check trông y hệt nhau và `_tier_cua` chỉ "
+            "thấy cái đầu." % trung)
+
+
+class TestSelectorThatDiQuaGuard:
+    """Workflow THẬT phải đi lọt guard, không chỉ YAML tự chế.
+
+    `TestSelectorTrungLapVaChongLan` chạy `phan_tich_selector` trên ba dòng
+    YAML viết tay — nó chứng minh guard BẮT được lỗi, không chứng minh rằng
+    `backend-test.yml` hiện tại còn qua được guard ấy. Hai điều khác nhau, và
+    chỉ điều thứ hai mới hỏng khi ai đó sửa ma trận.
+    """
+
+    def test_workflow_that_qua_duoc_phan_tich_selector(self, guard):
+        whole, nodeid = guard.phan_tich_selector(
+            DUONG_WF.read_text(encoding="utf-8"))
+        assert whole, "guard trả tập whole-file RỖNG — ma trận không còn selector nào"
+        tong = len(whole) + sum(len(v) for v in nodeid.values())
+        assert tong > 0
+        # KHÔNG ghim 226/207: chúng là số ĐỘNG. Thứ cần khoá là "guard không
+        # ném ngoại lệ và không trả tập rỗng".
+
+    def test_guard_thay_dung_tap_tep_ma_fixture_thay(self, guard, cac_leg):
+        """Buộc hai đường đọc ma trận phải đồng ý với nhau.
+
+        `guard.phan_tich_selector` và fixture `cac_leg` là hai bản đọc độc lập
+        của cùng một khối `matrix.include`. Nếu chúng lệch nhau thì một trong
+        hai đang nhìn nhầm chỗ, và mọi phép kiểm dựa trên bản kia đều vô nghĩa.
+        """
+        whole, nodeid = guard.phan_tich_selector(
+            DUONG_WF.read_text(encoding="utf-8"))
+        tu_fixture = {x for leg in cac_leg for x in str(leg.get("tests", "")).split()}
+        tu_guard = set(whole) | {x for v in nodeid.values() for x in v}
+        assert tu_guard == tu_fixture, (
+            "guard và fixture bất đồng: chỉ guard thấy %s; chỉ fixture thấy %s"
+            % (sorted(tu_guard - tu_fixture)[:3], sorted(tu_fixture - tu_guard)[:3]))
+
+
+class TestYamlThoQuaLoaderNghiemNgat:
+    """`safe_load` NUỐT khoá trùng — im lặng giữ giá trị CUỐI.
+
+    Đo thật: `yaml.safe_load("jobs:\\n  a:\\n    x: 1\\n    x: 2\\n")` trả
+    `{'jobs': {'a': {'x': 2}}}`, không cảnh báo gì. Nghĩa là một `tests:` thứ
+    hai dán nhầm vào cùng một leg sẽ lặng lẽ thay thế cái thứ nhất, và mọi
+    phép kiểm đọc qua `safe_load` đều mù. Loader nghiêm ngặt của classifier
+    từ chối ca đó, nên workflow phải qua được NÓ.
+    """
+
+    def test_backend_test_yml_qua_duoc_loader_nghiem_ngat(self, prc):
+        prc.yaml.load(DUONG_WF.read_text(encoding="utf-8"),
+                      Loader=prc._LoaderNghiemNgat)
+
+    def test_loader_that_su_tu_choi_khoa_trung(self, prc):
+        """Đối chứng: nếu loader không từ chối gì thì ca trên vô nghĩa."""
+        with pytest.raises(prc.LoiManifest):
+            prc.yaml.load("jobs:\n  a:\n    x: 1\n    x: 2\n",
+                          Loader=prc._LoaderNghiemNgat)
+
+
+class TestPhanVungTier2TheoSieuDuLieu:
+    """Tìm hai lát Tier 2 bằng SIÊU DỮ LIỆU, không bằng tên hiển thị.
+
+    Tên hiển thị là văn bản cho người đọc log — đổi chữ trong đó là việc
+    thường. Ghim phép kiểm vào tên hiển thị thì một lần sửa mô tả làm phép
+    lọc khớp 0 leg, và một phép kiểm chạy trên tập rỗng thì **xanh**. Siêu dữ
+    liệu `partition_contract` / `partition_part` tồn tại chỉ để máy tìm.
+    """
+
+    def test_dung_hai_phan_a_va_c(self, cac_leg):
+        legs = _cac_leg_phan_vung(cac_leg)
+        assert len(legs) == 2, (
+            "phải có ĐÚNG HAI leg mang `partition_contract: %s`, thấy %d — "
+            "gỡ khỏi một lát, hoặc gắn cho lát thứ ba, đều làm hợp đồng phân "
+            "hoạch mất nghĩa." % (HOP_DONG_PHAN_VUNG, len(legs)))
+        phan = sorted(str(l.get("partition_part", "")) for l in legs)
+        assert set(phan) == PHAN_VUNG_CAN and len(set(phan)) == 2, (
+            "`partition_part` phải là đúng {'a','c'}, thấy %r" % phan)
+
+    def test_hop_selector_hai_lat_dung_digest(self, cac_leg):
+        """Digest băm trên HỢP đã sắp xếp ⇒ chuyển selector 2a↔2c không đổi.
+
+        Sinh lại khi cố ý đổi tập selector Tier 2:
+
+            python - <<'EOF'
+            import hashlib, json, yaml
+            wf = yaml.safe_load(open(".github/workflows/backend-test.yml", encoding="utf-8"))
+            legs = wf["jobs"]["pytest-shard"]["strategy"]["matrix"]["include"]
+            u = sorted({t for l in legs
+                        if l.get("partition_contract") == "tier2-rbac-security-v1"
+                        for t in str(l["tests"]).split()})
+            print(hashlib.sha256(json.dumps(u, separators=(",", ":")).encode()).hexdigest())
+            EOF
+        """
+        legs = _cac_leg_phan_vung(cac_leg)
+        assert len(legs) == 2, "cần đúng hai lát trước khi băm; thấy %d" % len(legs)
+        theo_phan = {str(l["partition_part"]): str(l["tests"]).split() for l in legs}
+        a, c = theo_phan["a"], theo_phan["c"]
+        assert not (set(a) & set(c)), (
+            "hai lát GIAO NHAU: %s" % sorted(set(a) & set(c)))
+        hop = sorted(set(a) | set(c))
+        assert hop, "hợp hai lát RỖNG — mọi phép băm sau đây sẽ vô nghĩa"
+        bam = hashlib.sha256(
+            json.dumps(hop, separators=(",", ":")).encode("utf-8")).hexdigest()
+        assert bam == SHA_HOP_SELECTOR_TIER2, (
+            "tập selector Tier 2 đã đổi: digest %s, cần %s. Bỏ/thêm/thay một "
+            "selector là đổi; chuyển giữa 2a và 2c thì KHÔNG."
+            % (bam, SHA_HOP_SELECTOR_TIER2))
