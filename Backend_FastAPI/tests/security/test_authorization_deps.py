@@ -15,7 +15,8 @@ Per AUTHORIZATION_GUIDELINES.md v1.0
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi import HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from httpx import ASGITransport, AsyncClient
 
 from app.core.deps import (
     require_admin,
@@ -23,6 +24,8 @@ from app.core.deps import (
     require_any_staff,
     get_lead_list_filter,
     LeadListFilter,
+    check_permission,
+    get_current_user,
 )
 from app.core.constants import UserRole
 from app.utils.exceptions import PermissionDeniedError
@@ -239,22 +242,118 @@ class TestGetLeadListFilter:
 # TEST: check_permission (Inactive User Blocking)
 # =============================================================================
 
+# ⚠️ `create_mock_user` above sets `user.is_active`, but the production gate
+# (`app/core/deps.get_current_active_user`) reads `user.status`. On a MagicMock
+# an unset `user.status` is itself a MagicMock and is therefore `!= "active"`,
+# so EVERY user built by that helper would be blocked and the test below would
+# go green for the wrong reason. This helper sets `status` explicitly — same
+# shape as tests/security/test_idor_protection.py::create_mock_user.
+def create_mock_user_with_status(
+    role: str, status: str, user_id: int = 1, unit_id: int = 10
+):
+    """Create a mock user whose `status` attribute is set EXPLICITLY."""
+    user = MagicMock()
+    user.id = user_id
+    user.role = role
+    user.status = status
+    user.unit_id = unit_id
+    user.username = f"test_{role}_{status}"
+    # get_current_active_user also enforces MFA for privileged roles. Pin this
+    # True so the tests isolate the active-status gate and can never be carried
+    # by the MFA branch instead.
+    user.mfa_enabled = True
+    return user
+
+
+def build_casbin_protected_app(current_user, enforcer):
+    """
+    Build a real FastAPI app with one route guarded by `check_permission`.
+
+    `check_permission` is a plain dependency, not a factory — its signature is
+
+        async def check_permission(
+            request: Request,
+            current_user: models.User = Depends(get_current_active_user),
+        ) -> models.User
+
+    so it is wired as `Depends(check_permission)` with no call.
+
+    Only `get_current_user` is overridden. `get_current_active_user` stays REAL,
+    because it is exactly the gate under test.
+    """
+    app = FastAPI()
+    app.state.enforcer = enforcer
+
+    @app.get("/protected")
+    async def protected_route(user=Depends(check_permission)):
+        return {"user_id": user.id}
+
+    async def _override_current_user():
+        return current_user
+
+    app.dependency_overrides[get_current_user] = _override_current_user
+    return app
+
+
 class TestCheckPermissionInactiveUser:
     """
     Tests for check_permission blocking inactive users.
-    
+
     This verifies the security fix from Phase 1 where check_permission
     was changed from get_current_user to get_current_active_user.
     """
-    
+
     @pytest.mark.asyncio
     async def test_inactive_user_blocked_from_casbin_protected_route(self):
         """
-        Inactive user should be blocked by check_permission.
-        
-        This is an integration-level test that requires more setup.
-        Marked for later implementation with proper fixtures.
+        An inactive user must be blocked BEFORE Casbin is consulted.
+
+        Casbin is rigged to ALLOW (`enforce` -> True), so a rejection here can
+        only come from the active-user dependency. Asserting that `enforce` was
+        never called pins the dependency ORDER, not merely the outcome.
         """
-        # TODO: Requires integration test with actual Casbin enforcer
-        # For now, we validate the fix was applied by checking deps.py
-        pass
+        enforcer = MagicMock()
+        enforcer.enforce = MagicMock(return_value=True)
+        user = create_mock_user_with_status(role=UserRole.OFFICER, status="inactive")
+        app = build_casbin_protected_app(user, enforcer)
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            res = await ac.get("/protected")
+
+        # app/core/deps.py: get_current_active_user raises
+        # HTTPException(status.HTTP_400_BAD_REQUEST, detail="Inactive user")
+        assert res.status_code == 400, res.text
+        assert "Inactive user" in res.text
+        enforcer.enforce.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_active_user_passes_same_casbin_protected_route(self):
+        """
+        Counter-case on the SAME route with the SAME rigged-allow Casbin: an
+        active user must get through.
+
+        Without this, a `check_permission` that denied everything (or a route
+        that 500'd for an unrelated reason) would still make the test above
+        pass, so the 400 alone proves nothing about the active-status gate.
+        """
+        enforcer = MagicMock()
+        enforcer.enforce = MagicMock(return_value=True)
+        user = create_mock_user_with_status(role=UserRole.OFFICER, status="active")
+        app = build_casbin_protected_app(user, enforcer)
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as ac:
+            res = await ac.get("/protected")
+
+        assert res.status_code == 200, res.text
+        assert res.json() == {"user_id": user.id}
+        # Proof the request really traversed check_permission's Casbin call
+        # (and therefore that the 400 above was raised before this point).
+        enforcer.enforce.assert_called_once()
+        subject, object_path, action = enforcer.enforce.call_args.args
+        assert subject == f"role:{UserRole.OFFICER}"
+        assert object_path == "/protected"
+        assert action == "GET"
