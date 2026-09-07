@@ -74,7 +74,7 @@ jobs:
       # axios got CORS Network Error → Playwright login fail.
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Kế hoạch phải chốt TRƯỚC mọi bước cài đặt/khởi động nặng: đầu vào
       # sai thì đỏ trong vài giây, không phải sau hai mươi phút dựng stack.
