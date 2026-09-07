@@ -42,6 +42,28 @@ jobs:
       # TEST_USERNAME / TEST_PASSWORD env) login successfully.
       TEST_USERNAME: vothithuthuhien
       TEST_PASSWORD: Abc@123456789
+      # Sáu biến dưới đây là thứ SÁU spec workflow thật sự đọc. Trước bản
+      # vá này workflow KHÔNG khai chúng, nên mọi spec rơi về literal cứng
+      # `admin`/`Admin@12345` (sai mật khẩu — seed là `Admin@123`) và
+      # `vothuhien`/`@Matkhau123!` (tài khoản KHÔNG TỒN TẠI — officer thật
+      # là `vothithuthuhien`). Hai chuỗi 401 ấy kích ACCOUNT_LOCKOUT_MAX_
+      # ATTEMPTS=5 ⇒ khoá 15 phút ⇒ 429 ⇒ retry 65s×3, làm cả sáu suite đỏ
+      # mà không sinh một tín hiệu test nào.
+      #
+      # Giá trị lấy TRỰC TIẾP từ `seed_data_template.xlsx` sheet `2_TaiKhoan`
+      # (cột `username` / `mat_khau` / `vai_tro`), là nguồn mà
+      # `seed_from_xlsx.py:358-398` dùng để tạo tài khoản. Chúng bị khoá
+      # bằng nhau qua `tests/unit/test_e2e_credential_contract.py`.
+      #
+      # MANAGER là CỐ Ý, không phải thừa: thiếu nó thì
+      # `lead-workflow.spec.ts:1640` gọi `test.skip` và ca *Manager IDOR
+      # list scope* biến thành XANH GIẢ thay vì chạy thật.
+      E2E_ADMIN_USERNAME: admin
+      E2E_ADMIN_PASSWORD: Admin@123
+      E2E_OFFICER_USERNAME: vothithuthuhien
+      E2E_OFFICER_PASSWORD: Abc@123456789
+      E2E_MANAGER_USERNAME: phanthithuyvan
+      E2E_MANAGER_PASSWORD: Abc@123456789
       # NOTE: CORS_ORIGINS moved to ``.env.production`` (Generate step
       # below) per hotfix 2026-05-26 — docker-compose backend service
       # ``environment:`` block does NOT forward arbitrary host env vars
@@ -157,6 +179,52 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend pip install -r requirements-dev.txt -q
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend python -m scripts.seed_from_xlsx
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend python -m app.scripts.seed_notification_rules
+
+      # CỔNG ĐĂNG NHẬP — chạy SAU seed, TRƯỚC mọi suite. Fail-closed.
+      #
+      # Vì sao cần: run 34092354121 đốt 23 phút để cả sáu suite cùng chết ở một
+      # lỗi 401 giống hệt nhau. Mỗi suite tự phát hiện lại cùng một sự thật, sau
+      # khi đã dựng browser và đã kích khoá tài khoản. Bước này biến 23 phút mù
+      # thành ~10 giây có tên.
+      #
+      # Nó đo cả BA vai bằng chính sáu biến ở khối `env:` — không hardcode gì —
+      # nên nếu ai đổi một mật khẩu trong workflow mà quên workbook (hoặc ngược
+      # lại), cổng đỏ NGAY, kèm tên vai và mã HTTP thật.
+      #
+      # ⚠️ KHÔNG retry: 401 là sai thông tin, thử lại chỉ tiêu thêm hạn mức
+      # ACCOUNT_LOCKOUT_MAX_ATTEMPTS=5 rồi biến 401 thành 429 và che mất nguyên
+      # nhân — đúng thứ đã xảy ra ở run cũ.
+      - name: Cổng đăng nhập — ba vai phải login được trước khi chạy suite
+        run: |
+          set -uo pipefail
+          loi=0
+          kiem_vai() {
+            vai="$1"; u="$2"; p="$3"
+            if [ -z "$u" ] || [ -z "$p" ]; then
+              echo "::error::$vai: thiếu biến môi trường (username/password rỗng)"
+              loi=1; return
+            fi
+            ma=$(curl -s -o "/tmp/login_${vai}.json" -w '%{http_code}'                    -X POST http://localhost:8000/api/auth/login                    -H 'Content-Type: application/x-www-form-urlencoded'                    --data-urlencode "username=$u"                    --data-urlencode "password=$p") || ma=000
+            if [ "$ma" = "200" ]; then
+              echo "  ✅ $vai ($u): HTTP 200"
+            else
+              # In THÂN phản hồi: 401 và 429 phải phân biệt được ngay, vì 429
+              # nghĩa là tài khoản ĐÃ bị khoá bởi một lượt trước đó.
+              echo "::error::$vai ($u): HTTP $ma — $(head -c 300 "/tmp/login_${vai}.json")"
+              loi=1
+            fi
+          }
+          kiem_vai admin   "$E2E_ADMIN_USERNAME"   "$E2E_ADMIN_PASSWORD"
+          kiem_vai officer "$E2E_OFFICER_USERNAME" "$E2E_OFFICER_PASSWORD"
+          kiem_vai manager "$E2E_MANAGER_USERNAME" "$E2E_MANAGER_PASSWORD"
+          kiem_vai setup   "$TEST_USERNAME"        "$TEST_PASSWORD"
+          if [ "$loi" -ne 0 ]; then
+            echo "::error::Cổng đăng nhập ĐỎ — dừng trước khi chạy suite. TÁM biến"
+            echo "::error::(sáu E2E_* + hai TEST_*) phải khớp sheet 2_TaiKhoan của"
+            echo "::error::seed_data_template.xlsx. Hợp đồng tĩnh: tests/unit/test_e2e_credential_contract.py"
+            exit 1
+          fi
+          echo "✅ Bốn đường đăng nhập (tám biến) đều 200 — suite chạy trên nền credential đúng."
 
       # --- Regression Suites ---
       - name: E2E — Lead workflow

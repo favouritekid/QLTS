@@ -847,6 +847,7 @@ jobs:
             tests: >-
               tests/unit/test_nginx_template_packaging.py
               tests/unit/test_ci_test_visibility.py
+              tests/unit/test_e2e_credential_contract.py
               tests/unit/test_import_moet_schools.py
               tests/services/test_insights.py
               tests/utils/test_file_helpers.py
