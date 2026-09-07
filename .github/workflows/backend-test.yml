@@ -523,6 +523,8 @@ jobs:
               tests/api/test_notification_delivery_idor.py
               tests/services/test_organization_m12_scoping.py
               tests/services/test_auth.py
+              tests/security/test_session_revocation.py
+              tests/security/test_websocket_security.py
 
           - tier: Tier 2c — Phân quyền endpoint + MFA biên
             partition_contract: tier2-rbac-security-v1
@@ -546,6 +548,7 @@ jobs:
               tests/services/test_mfa.py::TestMfaRateLimiting::test_mfa_attempts_tracked_in_redis
               tests/services/test_mfa.py::TestMixedAbuseScenarios::test_e2_cycling_login_mfa_fail_cumulative_lockout
               tests/services/test_mfa.py::TestMfaSetupEdgeCases::test_f4_regenerate_backup_codes_invalidates_old
+              tests/security/test_authorization_deps.py
 
           # ---------------------------------------------------------------
           # Tier 2b: Luồng XUẤT tệp (danh sách khoản phí + báo cáo công nợ)
