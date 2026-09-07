@@ -1148,7 +1148,7 @@ PHAN_VUNG_CAN = {"a", "c"}
 #: sửa hằng số. Nhưng bỏ / thêm / thay một selector thì đổi, và đó đúng là thứ
 #: cần đỏ.
 SHA_HOP_SELECTOR_TIER2 = (
-    "08380c444af4faca35e4e139f5b41adb1a4876e0f4361e75b56de2151db9035e"
+    "7f43ac590c757ad83355aede6d8e88d5a6bf44a3da95caee0c6744b90a05fa78"
 )
 
 
