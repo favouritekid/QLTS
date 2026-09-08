@@ -636,6 +636,7 @@ jobs:
               tests/integration/test_finance_workflow.py::TestAccountingPeriod::test_create_and_close_period
               tests/repositories/test_profile_collection.py
               tests/integration/test_sms_export.py
+              tests/api/test_auth_inactive_user_gate.py
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability
