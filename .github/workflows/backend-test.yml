@@ -115,6 +115,14 @@ on:
   pull_request:
     # Skip draft PRs (mirror frontend-test.yml R15 pattern) to save
     # Actions minutes during hot iteration.
+    #
+    # CỐ Ý KHÔNG có `edited`. Guard chỉ-thị-bỏ-qua bên dưới đọc
+    # `pull_request.title`/`.body`, mà sửa tiêu đề thì không tệp nào đổi ⇒ không
+    # lượt chạy mới ⇒ check cũ vẫn xanh. Lỗ ấy CÓ THẬT, nhưng bịt nó ở đây thì
+    # mỗi lần sửa tiêu đề phải chạy lại tám shard (~37 phút). Nó được bịt ở
+    # `dependency-audit.yml` — cũng là required check (`Python Dependencies`)
+    # nhưng chỉ ~40-55 giây. Guard ở đây giữ nguyên làm lớp phòng thủ thứ hai
+    # trên opened/synchronize/reopened/ready_for_review.
     types: [opened, synchronize, reopened, ready_for_review]
     # Path filter must catch every PR type that branch-protection
     # requires `pytest` to pass on — otherwise the gate reports
@@ -1111,6 +1119,63 @@ jobs:
 
       - name: Cài phụ thuộc (hai gói, ghim phiên bản)
         run: python -m pip install --quiet pytest==8.4.2 PyYAML==6.0.3
+
+      # actionlint + shellcheck — cổng tĩnh cho chính CI.
+      #
+      # Ba điều đã đo và định hình bước này:
+      #  1. actionlint BỎ QUA rule shellcheck khi thiếu binary, và vẫn RC=0.
+      #     Trỏ `-shellcheck` vào đường dẫn không tồn tại cũng RC=0 — nó nuốt
+      #     luôn lỗi cấu hình. Nên RC=0 KHÔNG chứng minh gì; phải bắn mồi nhử
+      #     `.github/actionlint-canary.yml` và ĐÒI nó đỏ trước.
+      #  2. Bản tải ghim theo SHA256, không theo tag: tag có thể được đẩy lại.
+      #  3. Không `if:`, không `continue-on-error` — hai thứ đó biến bước gác
+      #     thành trang trí, và `test_khong_buoc_nao_cua_cac_job_gac_bi_vo_hieu`
+      #     đang canh đúng chuyện ấy.
+      - name: Lint workflow — actionlint có shellcheck THẬT SỰ bật
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+
+          # --- shellcheck phải có mặt và tự khai phiên bản ---
+          if ! command -v shellcheck > /dev/null 2>&1; then
+            echo "::error::shellcheck KHÔNG có trên runner — actionlint sẽ bỏ qua"
+            echo "::error::mọi rule SC mà vẫn trả RC=0. Cổng này từ chối chạy mù."
+            exit 1
+          fi
+          shellcheck --version
+
+          # --- tải actionlint, ghim theo NỘI DUNG ---
+          TGZ="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          URL="https://github.com/rhysd/actionlint/releases/download"
+          curl --silent --show-error --fail --location \
+            --output "/tmp/${TGZ}" \
+            "${URL}/v${ACTIONLINT_VERSION}/${TGZ}"
+          echo "${ACTIONLINT_SHA256}  /tmp/${TGZ}" | sha256sum --check --strict
+          tar -xzf "/tmp/${TGZ}" -C /tmp actionlint
+          /tmp/actionlint --version
+
+          # --- MỒI NHỬ: shellcheck phải thật sự bắn ---
+          # Chạy trên tệp cố tình sai. Nó XANH nghĩa là shellcheck đang câm,
+          # và mọi phép "sạch" phía sau chỉ là ảo giác.
+          if /tmp/actionlint -no-color .github/actionlint-canary.yml \
+               > /tmp/canary.txt 2>&1; then
+            echo "::error::Mồi nhử actionlint XANH — shellcheck KHÔNG chạy."
+            echo "::error::Không có phép kiểm nào thật sự diễn ra. Dừng."
+            cat /tmp/canary.txt
+            exit 1
+          fi
+          if ! grep --quiet SC2086 /tmp/canary.txt; then
+            echo "::error::Mồi nhử đỏ nhưng KHÔNG vì SC2086 — shellcheck có thể"
+            echo "::error::đã tắt tiếng và cái đỏ kia đến từ rule khác."
+            cat /tmp/canary.txt
+            exit 1
+          fi
+          echo "Mồi nhử ĐỎ đúng vì SC2086 — shellcheck đã được vũ trang."
+
+          # --- phép kiểm thật ---
+          /tmp/actionlint -no-color
 
       # GitHub cho phép message của commit làm `push`/`pull_request` workflow
       # biến mất hoàn toàn. Required check đã chặn trường hợp token nằm ngay ở
