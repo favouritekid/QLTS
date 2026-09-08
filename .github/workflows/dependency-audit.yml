@@ -19,14 +19,59 @@ on:
       - '.github/scripts/**'
   pull_request:
     branches: [main]
+    # `edited` ở ĐÂY, không ở `backend-test.yml`.
+    #
+    # Job `python-audit` bên dưới gác chỉ thị bỏ qua Actions nằm trong TIÊU ĐỀ
+    # và BODY của PR. Sửa tiêu đề thì không tệp nào đổi, nên không có `edited`
+    # là không có lượt chạy mới: check cũ vẫn xanh, PR merge được, và message
+    # squash mặc định CHÍNH LÀ tiêu đề PR — nó mang `[skip actions]` vào `main`,
+    # `deploy.yml` không sinh run nào, production đứng yên trong im lặng.
+    #
+    # Đặt `edited` vào Backend Gate cũng bịt được lỗ ấy, nhưng bắt tám shard
+    # chạy lại cho mỗi lần sửa tiêu đề. Đo thật, không ước: Backend Gate
+    # ~39 phút / 9.846 job-giây (run `34142611246`); workflow này ~46-53 giây
+    # wall, `Python Dependencies` 36-48 giây (tám lượt gần nhất).
+    #
+    # CỐ Ý KHÔNG có `paths:` — guard phải chạy trên MỌI PR nhắm `main`, kể cả PR
+    # chỉ sửa tài liệu. Một `paths:` hẹp là một đường để guard biến mất đúng lúc
+    # cần nhất.
+    #
+    # ⚠️ GIỚI HẠN — đọc trước khi tin rằng lỗ đã kín:
+    #
+    #  * `edited` đóng đường "sửa tiêu đề sau lượt chạy cuối rồi merge". Nó
+    #    KHÔNG đóng đường "gõ thẳng chỉ thị vào ô message trong hộp thoại
+    #    merge" — thao tác ấy không sinh sự kiện `pull_request` nào cả, nên
+    #    không workflow nào chạy được để canh. Đường đó phải chặn ở tầng khác
+    #    (ruleset `commit_message_pattern`, hoặc một cổng trên `push:main`).
+    #  * `ready_for_review` ở đây là MỚI, không phải kế thừa: `pull_request`
+    #    không khai `types:` thì mặc định chỉ có `[opened, synchronize,
+    #    reopened]`. Bản vá này thêm HAI loại sự kiện, không phải một.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   schedule:
     # Run weekly on Monday at 08:00 UTC
     - cron: '0 8 * * 1'
+
+# `edited` làm mỗi lần lưu tiêu đề đẻ một lượt. Không có khối này thì chúng
+# chồng lên nhau và không lượt nào bị huỷ.
+#
+# ⚠️ KHOÁ THEO `github.ref` TRẦN LÀ BẪY ở workflow này — khác với
+# `backend-test.yml`/`frontend-test.yml` (chỉ chạy trên `pull_request`, nên `ref`
+# là duy nhất theo PR). Ở đây `push` và `schedule` DÙNG CHUNG `refs/heads/main`,
+# nên nhóm theo `ref` trần sẽ để một lần merge **huỷ lượt cron hàng tuần** —
+# và mất luôn chuông `audit-alarm`, thứ duy nhất biến audit đỏ thành issue.
+# `github.event_name` trong khoá là thứ tách ba đường ấy ra.
+concurrency:
+  group: dep-audit-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   python-audit:
     name: Python Dependencies
     runs-on: ubuntu-latest
+    # `fetch-depth: 0` bên dưới kéo toàn bộ lịch sử; một checkout treo mà không
+    # có trần này sẽ giữ required context tới mặc định SÁU TIẾNG, và PR không
+    # đỏ cũng không xanh — nó chỉ đứng đó. Job đo được 36-48 giây.
+    timeout-minutes: 10
 
     defaults:
       run:
@@ -40,11 +85,43 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Cổng chỉ thị bỏ qua đọc MỌI commit của PR (`git log base..head`),
+          # nên checkout nông sẽ làm nó chết vì thiếu object chứ không phải vì
+          # phát hiện vi phạm. `fetch-depth: 0` là điều kiện để nó đo được thật.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # Cổng RẺ cho một lỗ hổng ĐẮT.
+      #
+      # `[skip ci]` / `[ci skip]` / `[no ci]` / `[skip actions]` / `[actions
+      # skip]` / dòng `skip-checks: true` trong message làm workflow KHÔNG ĐƯỢC
+      # TẠO — required check không đỏ, nó biến mất, và branch protection không
+      # có gì để chặn. Message squash mặc định chính là TIÊU ĐỀ PR, nên tiêu đề
+      # là một đường đi thẳng từ PR vào `main` rồi vô hiệu hoá `deploy.yml`.
+      #
+      # Đặt ở đây vì `Python Dependencies` là required context và job này rẻ.
+      # `backend-test.yml` giữ một bản guard nữa làm lớp phòng thủ thứ hai,
+      # nhưng workflow ĐÓ không nhận `edited` — chỉ workflow này nhận.
+      - name: Cấm chỉ thị bỏ qua Actions đi vào commit merge
+        # push/schedule không có payload `pull_request`; bốn biến dưới sẽ rỗng
+        # và `--base ""` làm bước chết vì lý do sai. Điều kiện tường minh này
+        # là thứ DUY NHẤT được phép ở đây — mọi `if:` khác đều là một đường để
+        # cổng bị skip, và GitHub coi `skipped` là THÀNH CÔNG.
+        if: github.event_name == 'pull_request'
+        working-directory: ${{ github.workspace }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python .github/scripts/deploy_change_classifier.py \
+            check-skip-directives --base "$BASE_SHA" --head "$HEAD_SHA"
 
       # Cùng lý do như bên node-audit: logic đếm quyết định một required
       # check, nên phải được test TRƯỚC khi tin vào số nó trả ra. Dùng
@@ -108,14 +185,27 @@ jobs:
           #     never on the allowlist — closed outright by 3.14.1 → 3.14.3.
           #   - CVE-2026-69248 / CVE-2026-69249 (cryptography name-constraint
           #     wildcard escape + chain-building DoS) — closed by 49.0.0.
-          IGNORE_ARGS="--ignore-vuln CVE-2024-23342 --ignore-vuln PYSEC-2026-89 --ignore-vuln PYSEC-2025-183 --ignore-vuln CVE-2026-69247 --ignore-vuln GHSA-4xgf-cpjx-pc3j --ignore-vuln CVE-2026-54911"
+          # MẢNG, không phải chuỗi. Chuỗi rồi để `$IGNORE_ARGS` trần thì shell
+          # tự tách 12 token — đúng ý, nhưng shellcheck báo SC2086 và cách "sửa"
+          # nó gợi ý (`"$IGNORE_ARGS"`) PHÁ hành vi: đo được 12 argv → 1 argv,
+          # pip-audit nhận cả chuỗi làm một giá trị và allowlist chết câm.
+          # Mảng giữ đúng 12 argv, khử được finding mà không tắt phép kiểm, và
+          # vẫn đúng nếu sau này một ID có khoảng trắng.
+          IGNORE_ARGS=(
+            --ignore-vuln CVE-2024-23342
+            --ignore-vuln PYSEC-2026-89
+            --ignore-vuln PYSEC-2025-183
+            --ignore-vuln CVE-2026-69247
+            --ignore-vuln GHSA-4xgf-cpjx-pc3j
+            --ignore-vuln CVE-2026-54911
+          )
           pip-audit -r requirements.txt --format json --output audit-results.json \
-            $IGNORE_ARGS || true
+            "${IGNORE_ARGS[@]}" || true
 
           # Parse results (handle missing output file)
           if [ ! -f audit-results.json ]; then
             echo "⚠️ pip-audit failed to produce output — treating as error"
-            pip-audit -r requirements.txt --desc $IGNORE_ARGS || true
+            pip-audit -r requirements.txt --desc "${IGNORE_ARGS[@]}" || true
             exit 1
           fi
 
@@ -129,7 +219,7 @@ jobs:
           echo "vuln_count=$VULNS" >> "$GITHUB_OUTPUT"
 
           # Show human-readable output
-          pip-audit -r requirements.txt --desc $IGNORE_ARGS || true
+          pip-audit -r requirements.txt --desc "${IGNORE_ARGS[@]}" || true
 
           if [ "$VULNS" -gt "0" ]; then
             echo "⚠️ Vulnerabilities found in Python dependencies!"
@@ -166,11 +256,18 @@ jobs:
           node-version: '20'
 
       # Chạy ở ĐÂY dù logic delta chỉ được dùng bởi `node-audit-dev`.
-      # Lý do: `node-audit-dev` bị skip trên pull_request, còn Vitest chỉ
-      # include `frontend/src/**` — nên nếu chỉ self-test bên đó thì một PR
-      # làm hỏng script cảnh báo vẫn merge được, và chỉ vỡ ra SAU merge trên
-      # main. Job này là required check, nên đặt test ở đây khiến logic hỏng
-      # không thể lọt qua PR. Chi phí ~0,2 giây, không cần node_modules.
+      #
+      # Lý do là REQUIRED, không phải "chạy hay không chạy": job này mang context
+      # `Node.js Dependencies` — một trong năm required check — còn
+      # `Node.js Dev-scope Advisories` thì KHÔNG. Nay `node-audit-dev` đã chạy
+      # trên pull_request, nhưng nó vẫn chỉ là advisory: nó đỏ cũng không chặn
+      # merge. Nếu self-test chỉ nằm bên đó thì một PR làm hỏng chính script
+      # đếm/parser vẫn merge được, và chỉ vỡ ra SAU merge trên main. Đặt test ở
+      # đây khiến logic hỏng không lọt qua PR. Chi phí ~0,2 giây, không cần
+      # node_modules. (Vitest cũng không phủ: nó chỉ include `frontend/src/**`.)
+      #
+      # ⚠️ "Không phải required" là sự thật của RULESET, không suy ra được từ
+      # tệp này. Kiểm bằng API: `gh api repos/<owner>/<repo>/rulesets/<id>`.
       - name: Self-test counting logic
         working-directory: ${{ github.workspace }}
         run: node --test .github/scripts/audit-dev-delta.test.js
@@ -239,10 +336,17 @@ jobs:
   #    dùng hiệu tập theo tên package — severity gắn với ĐƯỜNG phụ thuộc,
   #    một package moderate ở prod có thể critical qua nhánh dev và lọt cả
   #    hai lưới. Chi tiết + test: .github/scripts/audit-dev-delta.js
-  #  - KHÔNG chạy trên PR: dev-scope hiện có 15 high KHÔNG vá được (upstream
-  #    eslint-plugin-jsx-a11y@6.10.2 vẫn khai `peer eslint ^3..^9` nên không
-  #    thể lên eslint@10) → để nó đỏ trên mọi PR chỉ khiến người ta quen mắt
-  #    với check đỏ, đúng thứ làm cảnh báo mất tác dụng.
+  #  - CÓ chạy trên PR. Lý do cũ ("15 high không vá được sẽ làm đỏ mọi PR") đã
+  #    được đo lại và SAI ở ba tầng:
+  #      * ngưỡng: bước đo chỉ đọc `CRIT`; `HIGH` chỉ được IN ra, không có
+  #        `exit` nào gắn với nó. 15 high — hay 1.500 — đều không làm job đỏ.
+  #      * nó tự mâu thuẫn với đúng dòng ngay bên dưới ("Chỉ ĐỎ ở mức CRITICAL").
+  #      * con số 15 thuộc *production scope* của `node-audit`; job này đo DELTA
+  #        đã trừ baseline production, nên chính 15 finding ấy bị trừ đi và
+  #        không xuất hiện trong `HIGH` ở đây.
+  #    Bỏ `if:` không đổi ngữ nghĩa đỏ/xanh — nó chỉ khiến job thôi biến mất.
+  #    Trước đó nó `skipped` trên MỌI pull_request, mà GitHub coi `skipped` là
+  #    THÀNH CÔNG, nên cảnh giới này chưa từng nói được gì ở tầng PR.
   #  - Chỉ ĐỎ ở mức CRITICAL — dấu hiệu release bị chiếm quyền / chèn mã độc.
   #    Điều này ĐÁNG quan tâm vì `npm ci` CHẠY lifecycle script của
   #    devDependencies ngay trong runner, không chỉ "chạy lúc lint".
@@ -251,7 +355,6 @@ jobs:
   node-audit-dev:
     name: Node.js Dev-scope Advisories
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
 
     defaults:
       run:

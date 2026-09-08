@@ -485,3 +485,155 @@ def test_moi_duong_github_cuc_bo_ma_deploy_dung_deu_la_runtime(classifier):
             paths.update(re.findall(r"(?<![\w.-])(\.github/[\w./-]+)", run))
     assert ".github/scripts/deploy_change_classifier.py" in paths
     assert all(classifier.classify_path(path) == "runtime" for path in paths), paths
+
+
+# --------------------------------------------------------------- HM2-A: SINK THẬT
+#
+# Bộ ca cũ chứng minh guard bắt được directive trong COMMIT, và chứng minh bốn
+# biến `PR_TITLE`/`PR_BODY`/`BASE_SHA`/`HEAD_SHA` TỒN TẠI trong `env:` của bước.
+# Không ca nào chứng minh title và body thật sự ĐƯỢC QUÉT.
+#
+# Đo được: xoá cả hai phần tử ``("pull_request.title", title)`` và
+# ``("pull_request.body", body)`` khỏi ``parts`` trong ``check_skip_directives``
+# thì TOÀN BỘ bộ cũ vẫn XANH — kể cả ca mang tên
+# ``test_guard_skip_quet_tieu_de_body_va_moi_commit``, vì nó truyền title/body
+# SẠCH rồi chỉ khẳng định finding ở ``commit[2]``.
+#
+# Bốn ca dưới đây mỗi ca vi phạm ĐÚNG MỘT bất biến, để khi đỏ thì biết đỏ vì gì.
+
+
+def _khong_commit(classifier, monkeypatch):
+    """Cắt đường git: ``parts`` chỉ còn title + body."""
+    monkeypatch.setattr(classifier, "_commit_messages", lambda _b, _h: [])
+
+
+def test_directive_trong_TIEU_DE_pr_bi_bat(classifier, monkeypatch):
+    """Tiêu đề PR là message squash mặc định — đường ngắn nhất vào `main`."""
+    _khong_commit(classifier, monkeypatch)
+    found = classifier.check_skip_directives(
+        _SHA_A, _SHA_B, "fix(ci): dọn nhanh [skip ci]", "body sạch")
+    assert found == [{"source": "pull_request.title", "directive": "[skip ci]"}], (
+        "directive trong TIÊU ĐỀ không bị bắt — thấy %r" % (found,))
+
+
+def test_directive_trong_BODY_pr_bi_bat(classifier, monkeypatch):
+    """Body cũng đi vào message của merge commit ở chế độ merge/squash."""
+    _khong_commit(classifier, monkeypatch)
+    found = classifier.check_skip_directives(
+        _SHA_A, _SHA_B, "tiêu đề sạch", "mô tả bình thường\n\nskip-checks: true\n")
+    # `SKIP_TRAILER_RE` neo `\s*$` nên `group(0)` nuốt luôn ký tự xuống dòng —
+    # so nguyên văn ở đây là so nhầm thứ. Cái cần khoá là NGUỒN và nội dung
+    # directive sau khi bỏ khoảng trắng.
+    assert len(found) == 1, "directive trong BODY không bị bắt — thấy %r" % (found,)
+    assert found[0]["source"] == "pull_request.body", (
+        "bắt được nhưng gán sai nguồn: %r" % (found,))
+    assert found[0]["directive"].strip() == "skip-checks: true"
+
+
+def test_directive_trong_COMMIT_van_bi_bat(classifier, monkeypatch):
+    """Nhánh cũ không được hỏng khi thêm hai nhánh mới."""
+    monkeypatch.setattr(
+        classifier, "_commit_messages",
+        lambda _b, _h: ["commit sạch", "legacy\n\n[actions skip]"])
+    found = classifier.check_skip_directives(
+        _SHA_A, _SHA_B, "tiêu đề sạch", "body sạch")
+    assert found == [{"source": "commit[2]", "directive": "[actions skip]"}], (
+        "directive trong COMMIT không còn bị bắt — thấy %r" % (found,))
+
+
+def test_tieu_de_body_commit_sach_thi_khong_bao_gi(classifier, monkeypatch):
+    """Guard fail-closed không được là guard báo bừa."""
+    monkeypatch.setattr(classifier, "_commit_messages", lambda _b, _h: ["commit sạch"])
+    assert classifier.check_skip_directives(
+        _SHA_A, _SHA_B,
+        "docs: mô tả hành vi skip ci không có ngoặc",
+        "skip-checks: false\n") == []
+
+
+# --- tầng CLI: mã thoát + nguồn được nêu tên -------------------------------
+#
+# `check_skip_directives` đúng vẫn chưa đủ: bước CI gọi qua `_check_skip_command`,
+# nơi title/body được đọc từ BIẾN MÔI TRƯỜNG. Nối dây sai tên biến ở tầng này
+# làm guard mù trong khi mọi ca thuần vẫn xanh.
+
+
+def _args_gia():
+    return type("Args", (), {"base": _SHA_A, "head": _SHA_B})()
+
+
+def test_cli_bao_do_va_NEU_TEN_nguon_khi_directive_o_tieu_de(
+        classifier, monkeypatch, capsys):
+    _khong_commit(classifier, monkeypatch)
+    monkeypatch.setenv("PR_TITLE", "chore: gấp [ci skip]")
+    monkeypatch.setenv("PR_BODY", "")
+    rc = classifier._check_skip_command(_args_gia())
+    ra = capsys.readouterr().out
+    assert rc == 1, "CLI phải trả 1 khi có directive, trả %r" % rc
+    assert "::error::" in ra and "pull_request.title" in ra, (
+        "CLI không nêu đúng nguồn `pull_request.title` — người đọc log không "
+        "biết phải sửa ở đâu. Thấy: %r" % ra)
+
+
+def test_cli_bao_do_khi_directive_o_body(classifier, monkeypatch, capsys):
+    _khong_commit(classifier, monkeypatch)
+    monkeypatch.setenv("PR_TITLE", "tiêu đề sạch")
+    monkeypatch.setenv("PR_BODY", "chi tiết\n\n[no ci]\n")
+    rc = classifier._check_skip_command(_args_gia())
+    assert rc == 1
+    assert "pull_request.body" in capsys.readouterr().out
+
+
+def test_cli_tra_0_khi_moi_nguon_deu_sach(classifier, monkeypatch, capsys):
+    _khong_commit(classifier, monkeypatch)
+    monkeypatch.setenv("PR_TITLE", "feat: thêm cổng")
+    monkeypatch.setenv("PR_BODY", "không có gì đặc biệt")
+    assert classifier._check_skip_command(_args_gia()) == 0
+    assert "No Actions skip directive" in capsys.readouterr().out
+
+
+def test_cli_doc_dung_TEN_bien_PR_TITLE_va_PR_BODY(classifier, monkeypatch, capsys):
+    """Đổi tên biến ở workflow là đường làm guard mù mà không ai thấy.
+
+    Ca này ghim đúng hai tên `PR_TITLE`/`PR_BODY`: đặt directive vào một tên
+    KHÁC thì guard phải KHÔNG thấy gì (chứng minh nó chỉ đọc đúng hai tên ấy),
+    còn đặt vào đúng tên thì phải đỏ.
+    """
+    _khong_commit(classifier, monkeypatch)
+    monkeypatch.delenv("PR_TITLE", raising=False)
+    monkeypatch.delenv("PR_BODY", raising=False)
+    monkeypatch.setenv("PR_SUBJECT", "chore: gấp [ci skip]")
+    assert classifier._check_skip_command(_args_gia()) == 0, (
+        "guard đọc một biến ngoài PR_TITLE/PR_BODY — hợp đồng tên biến không "
+        "còn là hợp đồng.")
+    capsys.readouterr()
+    monkeypatch.setenv("PR_TITLE", "chore: gấp [ci skip]")
+    assert classifier._check_skip_command(_args_gia()) == 1
+
+
+# --- cấu trúc workflow: guard nằm trên đường RẺ ---------------------------
+
+_DEP_AUDIT = _goc_repo() / ".github" / "workflows" / "dependency-audit.yml"
+
+
+def test_guard_tieu_de_nam_trong_required_python_dependencies():
+    """`edited` phải ở workflow RẺ, và guard phải ở cùng workflow ấy.
+
+    Đặt `edited` ở `backend-test.yml` cũng bịt được lỗ nhưng bắt tám shard chạy
+    lại (~37 phút) cho mỗi lần sửa tiêu đề.
+    """
+    wf = _workflow(_DEP_AUDIT)
+    types = _on_block(wf)["pull_request"]["types"]
+    assert "edited" in types, "dependency-audit thiếu `edited`; thấy %r" % (types,)
+
+    job = wf["jobs"]["python-audit"]
+    assert job["name"] == "Python Dependencies"
+    guards = [s for s in job["steps"] if "check-skip-directives" in str(s.get("run", ""))]
+    assert len(guards) == 1, "cần đúng một guard trong python-audit, thấy %d" % len(guards)
+    g = guards[0]
+    assert set(g["env"]) == {"BASE_SHA", "HEAD_SHA", "PR_TITLE", "PR_BODY"}
+    assert str(g.get("if", "")).strip() == "github.event_name == 'pull_request'"
+    assert "github.workspace" in str(g.get("working-directory", ""))
+    assert not g.get("continue-on-error")
+
+    co = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout")]
+    assert len(co) == 1 and co[0]["with"]["fetch-depth"] == 0

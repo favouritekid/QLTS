@@ -1998,3 +1998,353 @@ class TestCensusSuiteMotNguon:
             "census suite đã đổi: %s, cần %s. Sinh lại bằng đoạn script trong "
             "docstring của `SHA_CENSUS_SUITE_NIGHTLY` nếu đây là chủ ý."
             % (bam, SHA_CENSUS_SUITE_NIGHTLY))
+
+
+# ---------------------------------------------------------------- HM1 / HM2-A / HM3
+#
+# Ba cổng dưới đây ra đời từ ba lỗ đã ĐO ĐƯỢC, không phải từ suy đoán:
+#
+#   HM1  actionlint chưa từng chạy ở tầng required. Tệ hơn: gọi actionlint mà
+#        thiếu `shellcheck` thì nó BỎ QUA mọi rule SC và vẫn trả RC=0 — đo trên
+#        actionlint 1.7.12: không có shellcheck → 0 finding; trỏ `-shellcheck`
+#        vào đường dẫn không tồn tại → vẫn 0 finding; có shellcheck 0.10.0 → 3
+#        finding. Nên một bước "chạy actionlint" là vô nghĩa nếu không có mồi
+#        nhử chứng minh shellcheck đang bắn.
+#
+#   HM2-A `types:` thiếu `edited`. Guard đọc `pull_request.title`, mà đổi tiêu
+#        đề thì không tệp nào đổi ⇒ không lượt chạy mới ⇒ check cũ vẫn xanh ⇒
+#        merge được, và message squash mặc định CHÍNH LÀ tiêu đề PR.
+#
+#   HM3  `node-audit-dev` mang `if: github.event_name != 'pull_request'` nên
+#        `skipped` trên mọi PR — mà GitHub coi `skipped` là THÀNH CÔNG.
+
+DUONG_WF_DEPS = GOC / ".github" / "workflows" / "dependency-audit.yml"
+DUONG_CANARY = GOC / ".github" / "actionlint-canary.yml"
+
+JOB_DEV_AUDIT = "node-audit-dev"
+JOB_ALARM = "audit-alarm"
+
+
+@pytest.fixture(scope="module")
+def wf_deps() -> dict:
+    return yaml.safe_load(DUONG_WF_DEPS.read_text(encoding="utf-8"))
+
+
+def _buoc_actionlint(wf: dict) -> dict:
+    """Bước actionlint trong job cổng — tìm theo THÂN `run:`, không theo tên.
+
+    Tìm theo tên thì đổi tên bước là cổng biến mất trong im lặng.
+    """
+    for buoc in wf["jobs"][JOB_CONTRACT].get("steps", []):
+        than = _than_khong_comment_shell(str(buoc.get("run", "")))
+        if "actionlint" in than:
+            return buoc
+    raise AssertionError(
+        "không bước nào của job %r gọi actionlint — cổng lint workflow đã biến "
+        "mất khỏi đường required." % JOB_CONTRACT)
+
+
+class TestCongActionlintTrongRequiredGate:
+    """HM1 — actionlint phải nằm trên đường `pytest` gom, và phải bắn thật."""
+
+    def test_buoc_actionlint_ton_tai_trong_job_duoc_required_gom(self, wf):
+        buoc = _buoc_actionlint(wf)
+        assert JOB_CONTRACT in wf["jobs"]["pytest"]["needs"], (
+            "job %r không còn được aggregator `pytest` gom — actionlint có chạy "
+            "cũng không chặn được gì." % JOB_CONTRACT)
+        assert buoc.get("name"), "bước actionlint phải có tên để đọc log"
+
+    def test_buoc_actionlint_khong_bi_vo_hieu(self, wf):
+        """`if:` hoặc `continue-on-error` biến cổng thành trang trí."""
+        buoc = _buoc_actionlint(wf)
+        assert "if" not in buoc, (
+            "bước actionlint có `if:` — mọi điều kiện là một đường để nó không "
+            "chạy, và check skipped KHÔNG làm PR đỏ.")
+        assert not buoc.get("continue-on-error"), (
+            "bước actionlint bật `continue-on-error` — nó sẽ đỏ mà PR vẫn xanh.")
+
+    def test_ban_tai_actionlint_ghim_theo_NOI_DUNG_khong_theo_tag(self, wf):
+        """Tag có thể được đẩy lại; SHA256 thì không.
+
+        Ghim theo tag nghĩa là hôm nay lint bằng một binary, ngày mai bằng
+        binary khác, mà không dòng log nào nói ra.
+        """
+        buoc = _buoc_actionlint(wf)
+        env = buoc.get("env") or {}
+        assert "ACTIONLINT_VERSION" in env, "thiếu ghim phiên bản actionlint"
+        sha = str(env.get("ACTIONLINT_SHA256", ""))
+        assert re.fullmatch(r"[0-9a-f]{64}", sha), (
+            "ACTIONLINT_SHA256 phải là SHA-256 hạ chữ đủ 64 ký tự, thấy %r" % sha)
+        than = _than_khong_comment_shell(str(buoc["run"]))
+        assert "sha256sum" in than and "--check" in than, (
+            "bước tải actionlint không đối chiếu SHA256 — biến ghim kia chỉ là "
+            "trang trí nếu không ai kiểm nó.")
+
+    def test_buoc_doi_shellcheck_phai_CO_MAT(self, wf):
+        """Thiếu shellcheck thì actionlint im lặng bỏ qua mọi rule SC, RC=0."""
+        than = _than_khong_comment_shell(str(_buoc_actionlint(wf)["run"]))
+        assert "command -v shellcheck" in than, (
+            "bước không kiểm sự tồn tại của shellcheck. Thiếu nó, actionlint "
+            "vẫn RC=0 trong khi KHÔNG rule SC nào chạy — cổng xanh mù.")
+
+    def test_moi_nhu_duoc_ban_va_PHAI_do(self, wf):
+        """Phép kiểm chỉ đáng tin khi đã chứng minh nó đỏ được.
+
+        Bước phải lint tệp mồi nhử TRƯỚC, và đòi nó thất bại vì đúng SC2086.
+        """
+        than = _than_khong_comment_shell(str(_buoc_actionlint(wf)["run"]))
+        assert "actionlint-canary.yml" in than, (
+            "bước không bắn mồi nhử — không có gì chứng minh shellcheck đang bật.")
+        assert "SC2086" in than, (
+            "bước không đòi mồi nhử đỏ vì ĐÚNG SC2086; một cái đỏ vì rule khác "
+            "vẫn tương thích với việc shellcheck đã tắt tiếng.")
+
+    def test_tep_moi_nhu_ton_tai_va_NGOAI_thu_muc_workflows(self):
+        assert DUONG_CANARY.is_file(), (
+            "mất tệp mồi nhử %s — bước lint sẽ đỏ vì thiếu tệp, không phải vì "
+            "shellcheck câm, và thông điệp ấy đánh lạc hướng." % DUONG_CANARY)
+        assert DUONG_CANARY.parent.name == ".github", (
+            "mồi nhử phải nằm NGOÀI `.github/workflows/`, nếu không GitHub sẽ "
+            "nạp nó như một workflow thật.")
+
+    def test_moi_nhu_van_con_khiem_khuyet_can_do(self):
+        """Ai đó "dọn dẹp" SC2086 trong mồi nhử là vô hiệu hoá cả cổng.
+
+        Khi ấy actionlint trả RC=0 trên mồi nhử, bước báo "shellcheck câm" và
+        đỏ — nhưng đỏ vì lý do sai. Ca này bắt việc dọn ấy ngay tại nguồn.
+        """
+        noi_dung = DUONG_CANARY.read_text(encoding="utf-8")
+        canary = yaml.safe_load(noi_dung)
+        thans = [str(b.get("run", ""))
+                 for j in canary["jobs"].values() for b in j.get("steps", [])]
+        assert any(re.search(r"echo\s+\$[A-Za-z_]", t) for t in thans), (
+            "thân mồi nhử không còn phép khai triển biến TRẦN — SC2086 đã bị "
+            "'sửa', và cùng với nó là phép chứng minh shellcheck đang chạy.")
+
+    def test_khong_tat_shellcheck_bang_co_dong_lenh(self, wf):
+        """`-shellcheck=` rỗng tắt toàn bộ rule SC mà vẫn cho RC=0."""
+        than = _than_khong_comment_shell(str(_buoc_actionlint(wf)["run"]))
+        assert "-shellcheck=" not in than.replace(" ", ""), (
+            "bước truyền `-shellcheck=` — đó là tắt shellcheck toàn cục, đúng "
+            "thứ mồi nhử sinh ra để ngăn.")
+        assert "-pyflakes=" not in than.replace(" ", ""), (
+            "bước truyền `-pyflakes=` — tắt phép kiểm mà không ai thấy.")
+
+
+JOB_PY_AUDIT = "python-audit"
+LENH_GUARD = "check-skip-directives"
+
+
+def _cac_buoc_guard(job) -> list[dict]:
+    """Các bước của job gọi `check-skip-directives` — đọc THÂN, không đọc tên."""
+    return [b for b in job.get("steps", [])
+            if LENH_GUARD in _than_khong_comment_shell(str(b.get("run", "")))]
+
+
+class TestGuardTieuDeTrenTuyenRe:
+    """HM2-A — guard tiêu đề chạy lại khi sửa title, qua đường RẺ.
+
+    Guard đọc `pull_request.title`/`.body`. Sửa tiêu đề thì KHÔNG tệp nào đổi ⇒
+    không có `edited` là không có lượt chạy mới ⇒ check cũ vẫn xanh ⇒ merge
+    được, và message squash mặc định CHÍNH LÀ tiêu đề PR: nó mang `[skip
+    actions]` vào `main` và `deploy.yml` không sinh run nào.
+
+    `edited` đặt ở `dependency-audit.yml` (required `Python Dependencies`,
+    ~40-55s) chứ KHÔNG ở `backend-test.yml` (tám shard, ~37 phút).
+    """
+
+    def test_dependency_audit_co_edited(self, wf_deps):
+        types = _khoi_on(wf_deps)["pull_request"].get("types")
+        assert types is not None, (
+            "`pull_request` của dependency-audit không khai `types:` — mặc định "
+            "của GitHub KHÔNG gồm `edited`, nên sửa tiêu đề vẫn không chạy lại.")
+        assert "edited" in types, "thiếu `edited`; thấy %r" % (types,)
+
+    def test_dependency_audit_giu_du_su_kien_goc(self, wf_deps):
+        """Thêm `edited` không được đánh đổi bằng việc mất sự kiện khác."""
+        types = set(_khoi_on(wf_deps)["pull_request"]["types"])
+        thieu = {"opened", "synchronize", "reopened", "ready_for_review"} - types
+        assert not thieu, "mất sự kiện gốc: %s" % sorted(thieu)
+
+    def test_dependency_audit_pull_request_KHONG_co_paths(self, wf_deps):
+        """Một `paths:` hẹp là đường để guard biến mất đúng lúc cần nhất.
+
+        PR chỉ sửa tài liệu vẫn có tiêu đề, và tiêu đề vẫn đi thẳng vào message
+        squash. Guard phải chạy trên MỌI PR nhắm `main`.
+        """
+        pr = _khoi_on(wf_deps)["pull_request"]
+        assert "paths" not in pr and "paths-ignore" not in pr, (
+            "`pull_request` của dependency-audit đã bị lọc theo đường dẫn (%r) — "
+            "PR không chạm các đường ấy sẽ không chạy guard nào."
+            % {k: v for k, v in pr.items() if "paths" in k})
+
+    def test_guard_nam_trong_job_required_python_dependencies(self, wf_deps):
+        job = wf_deps["jobs"][JOB_PY_AUDIT]
+        assert job["name"] == "Python Dependencies", (
+            "job %r đổi tên ⇒ ruleset khớp check theo TÊN nên required context "
+            "hoá 'expected, not run' và mọi PR treo." % JOB_PY_AUDIT)
+        guards = _cac_buoc_guard(job)
+        assert len(guards) == 1, (
+            "cần ĐÚNG một bước gọi %r trong %r, thấy %d — không có thì lỗ mở "
+            "lại, nhiều hơn một thì không biết cái nào đang thật sự gác."
+            % (LENH_GUARD, JOB_PY_AUDIT, len(guards)))
+
+    def test_checkout_cua_python_audit_lay_du_lich_su(self, wf_deps):
+        """Guard chạy `git log base..head`; checkout nông làm nó chết vì THIẾU
+        OBJECT, không phải vì phát hiện vi phạm — một cái đỏ nói sai nguyên nhân.
+        """
+        job = wf_deps["jobs"][JOB_PY_AUDIT]
+        co = [b for b in job["steps"]
+              if str(b.get("uses", "")).startswith("actions/checkout")]
+        assert len(co) == 1, "cần đúng một bước checkout, thấy %d" % len(co)
+        assert (co[0].get("with") or {}).get("fetch-depth") == 0, (
+            "checkout của %r thiếu `fetch-depth: 0`" % JOB_PY_AUDIT)
+
+    def test_guard_chay_dung_o_goc_repo(self, wf_deps):
+        """`defaults.run.working-directory` của job là `Backend_FastAPI`.
+
+        Không ghi đè thì đường dẫn `.github/scripts/...` trỏ sai và bước chết vì
+        không tìm thấy tệp.
+        """
+        guard = _cac_buoc_guard(wf_deps["jobs"][JOB_PY_AUDIT])[0]
+        wd = str(guard.get("working-directory", ""))
+        assert "github.workspace" in wd, (
+            "bước guard không ghi đè `working-directory` về gốc repo (thấy %r), "
+            "trong khi job mặc định là %r"
+            % (wd, wf_deps["jobs"][JOB_PY_AUDIT]["defaults"]["run"]["working-directory"]))
+
+    def test_guard_nhan_du_bon_bien(self, wf_deps):
+        guard = _cac_buoc_guard(wf_deps["jobs"][JOB_PY_AUDIT])[0]
+        env = guard.get("env") or {}
+        assert set(env) == {"BASE_SHA", "HEAD_SHA", "PR_TITLE", "PR_BODY"}, (
+            "env của guard phải đúng bốn biến, thấy %s" % sorted(env))
+        assert "pull_request.title" in str(env["PR_TITLE"])
+        assert "pull_request.body" in str(env["PR_BODY"])
+        assert "pull_request.base.sha" in str(env["BASE_SHA"])
+        assert "pull_request.head.sha" in str(env["HEAD_SHA"])
+
+    def test_guard_co_dung_MOT_dieu_kien_va_la_dieu_kien_pull_request(self, wf_deps):
+        """`if:` là con dao hai lưỡi ở đây.
+
+        Không có nó thì bước chạy trên push/schedule với bốn biến RỖNG và chết
+        vì lý do sai. Có một `if:` khác thì nó là đường để cổng bị skip — mà
+        GitHub coi `skipped` là THÀNH CÔNG. Chỉ đúng một dạng được chấp nhận.
+        """
+        guard = _cac_buoc_guard(wf_deps["jobs"][JOB_PY_AUDIT])[0]
+        dk = str(guard.get("if", "")).strip()
+        assert dk == "github.event_name == 'pull_request'", (
+            "điều kiện của bước guard phải đúng nguyên văn "
+            "`github.event_name == 'pull_request'`, thấy %r" % dk)
+
+    def test_guard_khong_bi_vo_hieu(self, wf_deps):
+        job = wf_deps["jobs"][JOB_PY_AUDIT]
+        assert not job.get("continue-on-error"), "job bật continue-on-error"
+        assert "if" not in job, (
+            "job %r có `if:` cấp job — cả cổng có thể bị skip." % JOB_PY_AUDIT)
+        assert not _cac_buoc_guard(job)[0].get("continue-on-error"), (
+            "bước guard bật continue-on-error — nó đỏ mà PR vẫn xanh.")
+
+    def test_concurrency_tach_theo_EVENT_khong_chi_theo_ref(self, wf_deps):
+        """`edited` đẻ một lượt mỗi lần lưu tiêu đề — phải có concurrency.
+
+        Nhưng khoá theo `github.ref` TRẦN là bẫy riêng của workflow này: nó chạy
+        trên cả `push:main` lẫn `schedule`, hai đường DÙNG CHUNG
+        `refs/heads/main`. Nhóm theo `ref` trần thì một lần merge sẽ huỷ lượt
+        cron hàng tuần, và mất luôn `audit-alarm` — thứ duy nhất biến audit đỏ
+        thành issue. (`backend-test.yml` khoá theo `ref` trần là ĐÚNG với nó:
+        workflow ấy chỉ chạy trên `pull_request`.)
+        """
+        cc = wf_deps.get("concurrency")
+        assert cc, (
+            "dependency-audit không có `concurrency:` — với `edited`, mỗi lần "
+            "lưu tiêu đề đẻ thêm một lượt và không lượt nào bị huỷ.")
+        group = str(cc.get("group", ""))
+        assert "github.event_name" in group, (
+            "khoá concurrency (%r) không tách theo `github.event_name` — merge "
+            "vào `main` sẽ huỷ lượt cron hàng tuần." % group)
+        assert cc.get("cancel-in-progress") is True
+
+    def test_python_audit_co_tran_thoi_gian(self, wf_deps):
+        """`fetch-depth: 0` kéo toàn bộ lịch sử; checkout treo mà không có trần
+        sẽ giữ required context tới mặc định SÁU TIẾNG — PR không đỏ không xanh,
+        chỉ đứng đó. Job đo được 36-48 giây.
+        """
+        tm = wf_deps["jobs"][JOB_PY_AUDIT].get("timeout-minutes")
+        assert isinstance(tm, int) and 0 < tm <= 30, (
+            "`python-audit` thiếu `timeout-minutes` hợp lý (thấy %r)" % tm)
+
+    def test_backend_gate_VAN_giu_guard_lam_lop_thu_hai(self, wf):
+        """Chuyển tuyến không được đánh đổi bằng việc gỡ lớp phòng thủ cũ.
+
+        `backend-test.yml` cố ý KHÔNG nhận `edited` (tám shard, ~37 phút), nhưng
+        guard của nó vẫn phải còn để canh opened/synchronize/reopened.
+        """
+        guards = _cac_buoc_guard(wf["jobs"][JOB_CONTRACT])
+        assert len(guards) == 1, (
+            "mất guard trong %r — chỉ còn MỘT lớp cho một lỗ đã biết."
+            % JOB_CONTRACT)
+        assert set(guards[0].get("env") or {}) == {
+            "BASE_SHA", "HEAD_SHA", "PR_TITLE", "PR_BODY"}
+
+
+class TestDevScopeAdvisoriesChayTrenPR:
+    """HM3 — job cảnh giới không được biến mất bằng `skipped` trên PR."""
+
+    def test_job_khong_con_if_loai_tru_pull_request(self, wf_deps):
+        job = wf_deps["jobs"][JOB_DEV_AUDIT]
+        dieu_kien = str(job.get("if", ""))
+        assert "pull_request" not in dieu_kien, (
+            "job %r vẫn loại trừ pull_request qua `if: %s`. GitHub coi "
+            "`skipped` là THÀNH CÔNG, nên ở tầng PR nó chưa từng nói được gì."
+            % (JOB_DEV_AUDIT, dieu_kien))
+
+    def test_nguong_do_van_la_CRITICAL_khong_phai_HIGH(self, wf_deps):
+        """Giữ nguyên policy: chỉ CRITICAL làm đỏ. HIGH chỉ được in."""
+        than = "\n".join(
+            _than_khong_comment_shell(str(b.get("run", "")))
+            for b in wf_deps["jobs"][JOB_DEV_AUDIT].get("steps", []))
+        assert re.search(r'if\s+\[\s+"\$CRIT"\s+-gt\s+"?0"?\s+\]', than), (
+            "mất phép so `CRIT -gt 0` — ngưỡng đỏ của job đã đổi.")
+        assert not re.search(r'if\s+\[\s+"\$HIGH"\s+-gt', than), (
+            "xuất hiện phép so trên HIGH — policy ngưỡng đã đổi mà chưa ai chốt.")
+
+    def test_binh_luan_khong_con_noi_HIGH_lam_do_moi_PR(self, wf_deps):
+        """Bình luận sai là một dạng nợ: nó biện minh cho `if:` đã gỡ.
+
+        Bản cũ viết "15 high … để nó đỏ trên mọi PR", mâu thuẫn với chính dòng
+        ngay dưới ("Chỉ ĐỎ ở mức CRITICAL") và với `CRIT -gt 0` trong mã.
+        """
+        tho = DUONG_WF_DEPS.read_text(encoding="utf-8")
+        assert "để nó đỏ trên mọi PR" not in tho, (
+            "bình luận cũ còn nguyên — nó nói HIGH làm đỏ mọi PR, điều mà mã "
+            "không làm.")
+
+    def test_audit_alarm_GIU_NGUYEN_hanh_vi_tren_push_va_cron(self, wf_deps):
+        """Bỏ `if:` ở job dev không được kéo theo job mở issue chạy trên PR."""
+        alarm = str(wf_deps["jobs"][JOB_ALARM].get("if", ""))
+        assert "pull_request" in alarm, (
+            "job %r mất guard pull_request — nó có quyền `issues: write` và sẽ "
+            "mở issue từ mỗi PR." % JOB_ALARM)
+        assert JOB_DEV_AUDIT in wf_deps["jobs"][JOB_ALARM]["needs"], (
+            "`%s.needs` không còn %r" % (JOB_ALARM, JOB_DEV_AUDIT))
+
+    def test_ten_context_cua_hai_job_node_on_dinh(self, wf_deps):
+        """Khoá TÊN CONTEXT, không khoá tư cách required.
+
+        ⚠️ Ca này KHÔNG chứng minh `Node.js Dev-scope Advisories` nằm ngoài
+        required checks — một tệp YAML không đọc được ruleset, và mọi khẳng
+        định kiểu đó ở đây sẽ là suy diễn. Tư cách required phải kiểm bằng API:
+
+            gh api repos/<owner>/<repo>/rulesets/<id> \\
+              --jq '.rules[]|select(.type=="required_status_checks")
+                    |.parameters.required_status_checks[].context'
+
+        Cái ca này canh được là chuyện khác và vẫn đáng canh: tên context phải
+        ỔN ĐỊNH. Ruleset khớp check theo TÊN, nên đổi tên job là âm thầm đưa nó
+        ra khỏi (hoặc vào) danh sách required mà không dòng diff nào nói ra —
+        `Node.js Dependencies` mà đổi tên thì required check hoá "expected, not
+        run" và PR treo vĩnh viễn.
+        """
+        assert wf_deps["jobs"][JOB_DEV_AUDIT]["name"] == "Node.js Dev-scope Advisories"
+        assert wf_deps["jobs"]["node-audit"]["name"] == "Node.js Dependencies"
+        assert wf_deps["jobs"]["python-audit"]["name"] == "Python Dependencies"

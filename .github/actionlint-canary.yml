@@ -1,0 +1,30 @@
+# MỒI NHỬ cho cổng actionlint — KHÔNG phải workflow thật.
+#
+# Nằm NGOÀI `.github/workflows/` nên GitHub không bao giờ nạp hay chạy nó.
+# Lý do tồn tại: actionlint **im lặng bỏ qua** toàn bộ rule shellcheck khi
+# không tìm thấy binary `shellcheck`, và vẫn trả về mã thoát 0. Đo được trên
+# máy phát triển (actionlint 1.7.12):
+#
+#   không có shellcheck trên PATH        -> RC=0, 0 finding
+#   -shellcheck /đường/không/tồn/tại     -> RC=0, 0 finding   (nuốt cả lỗi cấu hình)
+#   có shellcheck 0.10.0                 -> RC=1, 3 finding
+#
+# Nghĩa là "actionlint RC=0" một mình KHÔNG chứng minh workflow sạch — nó cũng
+# đúng y hệt khi phép kiểm chưa từng chạy. Cổng CI vì thế phải lint tệp này
+# TRƯỚC và đòi nó ĐỎ; nếu nó xanh thì shellcheck đã tắt tiếng, và mọi kết quả
+# "sạch" sau đó là vô nghĩa.
+#
+# ĐỪNG "sửa" SC2086 bên dưới. Nó là thứ đang được đo.
+name: actionlint canary (không bao giờ chạy)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Biến trần — SC2086 CỐ Ý
+        run: |
+          MOI="a b"
+          echo $MOI
