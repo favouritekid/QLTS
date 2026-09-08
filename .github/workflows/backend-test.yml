@@ -557,6 +557,10 @@ jobs:
               tests/services/test_mfa.py::TestMixedAbuseScenarios::test_e2_cycling_login_mfa_fail_cumulative_lockout
               tests/services/test_mfa.py::TestMfaSetupEdgeCases::test_f4_regenerate_backup_codes_invalidates_old
               tests/security/test_authorization_deps.py
+              tests/api/test_admission_document_permissions.py
+              tests/api/test_auth_login_response_count.py
+              tests/api/test_auth_cookie_lifetime.py
+              tests/security/test_socket_offboarding.py
 
           # ---------------------------------------------------------------
           # Tier 2b: Luồng XUẤT tệp (danh sách khoản phí + báo cáo công nợ)

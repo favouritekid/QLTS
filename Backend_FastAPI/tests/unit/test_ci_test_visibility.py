@@ -1147,8 +1147,13 @@ PHAN_VUNG_CAN = {"a", "c"}
 #: (hay ngược lại) KHÔNG đổi digest — cân lại tải là việc thường, không nên bắt
 #: sửa hằng số. Nhưng bỏ / thêm / thay một selector thì đổi, và đó đúng là thứ
 #: cần đỏ.
+#: Cập nhật 08-09-2026 (Batch 15 lô 3): Tier 2c nhận thêm bốn selector —
+#: `test_admission_document_permissions.py`, `test_auth_login_response_count.py`,
+#: `test_auth_cookie_lifetime.py`, `test_socket_offboarding.py`. Đây là THÊM
+#: selector nên digest phải đổi; giá trị cũ là
+#: `7f43ac590c757ad83355aede6d8e88d5a6bf44a3da95caee0c6744b90a05fa78`.
 SHA_HOP_SELECTOR_TIER2 = (
-    "7f43ac590c757ad83355aede6d8e88d5a6bf44a3da95caee0c6744b90a05fa78"
+    "2a57b3c14d4fb5b124ca84a242d421b4fe12ba325c1e8bd974889310fe6ef2e1"
 )
 
 
