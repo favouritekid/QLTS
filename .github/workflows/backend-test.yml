@@ -779,6 +779,7 @@ jobs:
               tests/services/test_pipeline.py
               tests/integration/test_admission_audit.py
               tests/services/test_data_sync_gap.py
+              tests/integration/test_admission_idor.py
 
           # ---------------------------------------------------------------
           # Tier 5: Phase 2 engine prereqs
