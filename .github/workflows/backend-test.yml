@@ -557,6 +557,17 @@ jobs:
               tests/services/test_mfa.py::TestMixedAbuseScenarios::test_e2_cycling_login_mfa_fail_cumulative_lockout
               tests/services/test_mfa.py::TestMfaSetupEdgeCases::test_f4_regenerate_backup_codes_invalidates_old
               tests/security/test_authorization_deps.py
+              tests/api/test_admission_document_permissions.py
+              tests/api/test_auth_login_response_count.py
+              tests/api/test_auth_cookie_lifetime.py
+              tests/security/test_csv_injection.py
+              tests/security/test_idor_protection.py
+              tests/security/test_phase2_fixes.py
+              tests/security/test_security_bugfixes.py
+              tests/security/test_security_phase0.py
+              tests/security/test_socket_auth_session.py
+              tests/security/test_socket_force_disconnect.py
+              tests/security/test_socket_offboarding.py
 
           # ---------------------------------------------------------------
           # Tier 2b: Luồng XUẤT tệp (danh sách khoản phí + báo cáo công nợ)
@@ -636,6 +647,7 @@ jobs:
               tests/integration/test_finance_workflow.py::TestAccountingPeriod::test_create_and_close_period
               tests/repositories/test_profile_collection.py
               tests/integration/test_sms_export.py
+              tests/api/test_auth_inactive_user_gate.py
 
           # ---------------------------------------------------------------
           # Tier 3: Notification reliability
@@ -779,6 +791,9 @@ jobs:
               tests/services/test_pipeline.py
               tests/integration/test_admission_audit.py
               tests/services/test_data_sync_gap.py
+              tests/integration/test_admission_idor.py
+              tests/api/test_admission_action_routes_casbin_first.py
+              tests/api/test_admission_assign_officer_permission.py
 
           # ---------------------------------------------------------------
           # Tier 5: Phase 2 engine prereqs
