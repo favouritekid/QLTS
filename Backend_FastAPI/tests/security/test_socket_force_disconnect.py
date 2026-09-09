@@ -23,6 +23,35 @@ from app import socket_manager as sm
 pytestmark = [pytest.mark.unit, pytest.mark.security]
 
 
+@pytest.fixture(autouse=True)
+def _cam_ro_worker_id():
+    """Bất biến DUY NHẤT: không ca nào trong module NÀY được để lại
+    ``socket_manager._worker_id`` khác giá trị lúc ca bắt đầu.
+
+    ``_worker_id`` là biến MODULE toàn cục; pytest chạy đơn tiến trình nên một
+    giá trị rò sẽ sống tới hết shard và băng qua mọi tệp chạy sau — trong Tier
+    2c là ``test_socket_offboarding.py``.
+
+    Module này toàn unit test mock, không ca nào có lý do chính đáng ghi vào
+    biến ấy. Module offboarding thì CÓ (qua ``register_socket_worker``), vì thế
+    fixture này ở phạm vi MODULE chứ KHÔNG đặt ở ``tests/security/conftest.py``
+    — đặt ở đó sẽ đỏ oan trên các ca register hợp pháp.
+
+    So với giá trị chụp NGAY TRƯỚC ca, không so với ``None`` và không so với
+    một hằng: nhờ vậy nó bắt được cả biến thể gán một uuid hex trông hợp lệ, và
+    vẫn đúng khi module offboarding đã chạy trước và để lại uuid thật.
+
+    Phần sau ``yield`` chạy cả khi ca FAIL hoặc ném exception (teardown của
+    fixture luôn được gọi), nên rò không thể núp sau một ca đỏ.
+    """
+    truoc = sm._worker_id
+    yield
+    assert sm._worker_id == truoc, (
+        "ca này để lại _worker_id = %r (trước ca: %r) — biến process-global rò "
+        "sang phần còn lại của shard" % (sm._worker_id, truoc)
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Heartbeat watchdog thread (sync function, runs off the event loop)
 # --------------------------------------------------------------------------- #
@@ -194,8 +223,8 @@ async def test_handler_failure_does_not_ack():
 @pytest.mark.asyncio
 async def test_handler_success_acks_once():
     rc = AsyncMock()
-    sm._worker_id = "w-self"
-    with patch.object(sm, "redis_client", rc), \
+    with patch.object(sm, "_worker_id", "w-self"), \
+            patch.object(sm, "redis_client", rc), \
             patch.object(sm, "force_disconnect_user", AsyncMock(return_value=0)):
         await sm._handle_force_disconnect(
             json.dumps({"command_id": "c2", "user_ids": [1, 2]})
@@ -204,6 +233,24 @@ async def test_handler_success_acks_once():
     ack_key, wid = rc.sadd.await_args.args
     assert ack_key == sm._ACK_PREFIX + "c2"
     assert wid == "w-self"
+
+
+@pytest.mark.asyncio
+async def test_patch_object_khoi_phuc_worker_id_ca_khi_nem_exception():
+    """Bất biến DUY NHẤT: ``patch.object`` khôi phục ``_worker_id`` KỂ CẢ khi
+    thân khối ``with`` ném exception.
+
+    Đây đúng là thứ một phép gán trần ``sm._worker_id = …`` KHÔNG làm được: nó
+    không có ``__exit__``, nên một ca ném giữa chừng để lại giá trị nhiễm vĩnh
+    viễn trong process. Khẳng định ở đây là phép chứng minh dương tính cho cơ
+    chế mà fixture ``_cam_ro_worker_id`` dựa vào.
+    """
+    truoc = sm._worker_id
+    with pytest.raises(RuntimeError, match="no-giua-chung"):
+        with patch.object(sm, "_worker_id", "w-tam"):
+            assert sm._worker_id == "w-tam"
+            raise RuntimeError("no-giua-chung")
+    assert sm._worker_id == truoc
 
 
 # --------------------------------------------------------------------------- #
