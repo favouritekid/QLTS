@@ -94,6 +94,12 @@ jobs:
           QLTS_SUITES_RAW: ${{ github.event.inputs.suites }}
         run: python3 .github/scripts/nightly_regression_plan.py plan --plan-file "$RUNNER_TEMP/nightly-plan.json"
 
+      # Ba giá trị chỉ sống trong runner của lượt này. Script mask chúng TRƯỚC
+      # khi ghi GITHUB_ENV; không có secret cố định nào nằm trong Git/Actions
+      # variables. Dùng stdlib để cổng này không phụ thuộc npm/pip đã cài chưa.
+      - name: Sinh và che vật liệu MFA tạm thời
+        run: python3 .github/scripts/nightly_mfa_gate.py generate
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -134,27 +140,81 @@ jobs:
           APP_ENV=test
           SECRET_KEY=ci-test-secret-key-for-nightly-regression-only
           JWT_SECRET_KEY=ci-test-jwt-secret-for-nightly-regression-only
+          # Cùng CHÍNH XÁC khoá Fernet vừa ghi vào GITHUB_ENV: bootstrap trong
+          # backend mã hoá bằng khoá này, rồi E2E dùng hai secret TOTP tạm ở host.
+          # Runner và stack đều bị huỷ sau job; các giá trị đã được add-mask.
+          MFA_ENCRYPTION_KEY=$MFA_ENCRYPTION_KEY
+          E2E_ADMIN_TOTP_SECRET=$E2E_ADMIN_TOTP_SECRET
+          E2E_MANAGER_TOTP_SECRET=$E2E_MANAGER_TOTP_SECRET
+          # Bootstrap chỉ cần tên để khoá đúng ba hàng seed; password không đi
+          # vào container vì chỉ preflight/Playwright ở runner cần dùng.
+          E2E_ADMIN_USERNAME=$E2E_ADMIN_USERNAME
+          E2E_OFFICER_USERNAME=$E2E_OFFICER_USERNAME
+          E2E_MANAGER_USERNAME=$E2E_MANAGER_USERNAME
           MAIL_USERNAME=ci-test@example.com
           MAIL_PASSWORD=ci-test-placeholder
           MAIL_FROM=ci-test@example.com
           MAIL_SERVER=smtp.example.com
           # HOTFIX 2026-05-26 — CORS_ORIGINS phải có trong env_file (NOT chỉ
           # workflow env block) vì docker-compose backend service
-          # ``environment:`` (docker-compose.yml:71-93) KHÔNG list
+          # 'environment:' (docker-compose.yml:71-93) KHÔNG list
           # CORS_ORIGINS → compose chỉ forward keys explicitly listed HOẶC
           # present trong env_file. Workflow env CORS_ORIGINS chỉ sống ở
           # runner host env, không reach backend container. Lesson nightly
           # smoke run 26426142805 fail với "No 'Access-Control-Allow-Origin'
           # header is present on the requested resource" (vs prior mismatch).
           CORS_ORIGINS=http://localhost:3000
-          # Trigger Casbin policy auto-sync at backend startup so DB
-          # casbin_rule rows match policy_templates.py before Playwright
-          # auth.setup begins (audit task #51 root cause: fresh CI DB
-          # lagged policy_templates.py → officer 403 on /api/pipeline/all
-          # + /api/notifications/preferences). main.py:431 gates on
-          # APP_ENV in {"development", "test"} so prod stays opt-out
-          # (manual POST /api/admin/roles/sync-all-from-templates).
-          AUTO_SYNC_TEMPLATES=true
+          # TOPOLOGY ĐA-WORKER TỐI THIỂU — ghim tường minh, KHÔNG hạ về 1.
+          #
+          # 'gunicorn.conf.py:14' đọc 'min(int(os.getenv("GUNICORN_WORKERS","2")), 4)',
+          # nên 2 vốn đã là mặc định; ghim vào đây để nó là một quyết định đọc
+          # được, không phải một giá trị ngầm. Hạ về 1 sẽ làm phân kỳ enforcer
+          # giữa các worker BIẾN MẤT khỏi tầm đo của nightly, tức cổng xanh nhờ
+          # giấu đi chính điều kiện nó sinh ra để canh — production vẫn 2-4 worker.
+          #
+          # PHẢI nằm trong env_file, KHÔNG phải khối 'env:' của job: khối
+          # 'environment:' của service backend (docker-compose.yml:158-187)
+          # không liệt kê 'GUNICORN_WORKERS', mà Compose chỉ forward những khoá
+          # được liệt kê ở đó HOẶC có trong env_file. Cùng lớp lỗi với
+          # CORS_ORIGINS ở trên. Và 'int()' bên gunicorn KHÔNG có try/except:
+          # một khoảng trắng thừa sau số là backend không khởi động được.
+          GUNICORN_WORKERS=2
+          # ⚠️ TẮT AUTO-SYNC PER-WORKER — MỘT WRITER CHO ĐỒNG BỘ
+          # TEMPLATE-POLICY HẬU-SEED.
+          #
+          # Cờ này là false NGAY TỪ CONTAINER ĐẦU TIÊN, không phải chỉ ở
+          # bước cutover. Phạm vi chính xác của điều đó: KHÔNG lifespan nào
+          # tự đồng bộ template-policy — cả ở lần start đầu lẫn ở cutover.
+          # Nó KHÔNG có nghĩa là không có gì ghi bảng casbin_rule: entrypoint
+          # của lần start đầu vẫn chạy alembic upgrade head (59 migration có
+          # INSERT INTO casbin_rule), và seed_from_xlsx.py:412 chèn rule 'g'
+          # cho từng người dùng.
+          #
+          # Cái duy nhất mà cờ này loại bỏ là các writer PER-WORKER, và lượt
+          # đồng bộ template-policy hậu-seed khi ấy chỉ còn một nguồn: bước
+          # sync-casbin bên dưới, một lượt gọi API đã qua đủ hai yếu tố xác
+          # thực, chạy đúng một lần. Riêng CUTOVER mới là giai đoạn load-only.
+          #
+          # Nếu bật, MỖI worker tự chạy sync_all_roles_from_templates()
+          # (app/main.py:463) lúc boot. Với hai worker đó là HAI writer cạnh
+          # tranh trên cùng bảng casbin_rule, và chúng boot song song: worker A
+          # có thể nạp policy XONG trước khi B ghi sync xong, rồi A giữ ảnh
+          # chụp CŨ trong bộ nhớ. Đo thật ở lượt trước khi tắt: log container
+          # mới có 'Drift detected in' 2 lần và 'Auto-sync complete' 2 lần.
+          #
+          # Nếu lần boot ĐẦU vẫn bật auto-sync thì nó đã ghi CSDL trước khi
+          # sync-casbin chạy, và bằng chứng 0 drift sau cutover sẽ che mất
+          # điều đó — nên bước kiểm cờ ngay sau Start services tồn tại.
+          #
+          # Mạng an toàn không mất: nhánh auto-seed (app/main.py:307) gated bởi
+          # RUN_CASBIN_LOAD_ON_STARTUP chứ không phải cờ này. Và với APP_ENV=test
+          # nhánh raise RuntimeError (main.py:308) không thể kích hoạt — nó
+          # gated APP_ENV=="production".
+          #
+          # PHẢI nằm trong env_file: khối environment: của service backend
+          # KHÔNG liệt kê AUTO_SYNC_TEMPLATES, nên đặt trước lệnh compose sẽ
+          # rơi vào hư không mà vẫn exit 0.
+          AUTO_SYNC_TEMPLATES=false
           EOF
 
       # ``-f docker-compose.yml`` bypasses the auto-loaded
@@ -173,6 +233,29 @@ jobs:
           timeout 90 bash -c 'until curl -sf http://localhost:3000 > /dev/null; do sleep 2; done'
           echo "Services ready"
 
+      # Cờ phải đúng NGAY TỪ LẦN TẠO CONTAINER ĐẦU TIÊN, không chỉ sau cutover.
+      # Nếu lần boot đầu vẫn bật auto-sync thì nó đã ghi CSDL trước khi bước
+      # sync-casbin chạy, và bằng chứng "0 drift" sau cutover che mất điều đó.
+      - name: Cờ khởi động phải đúng ngay từ container đầu tiên
+        run: |
+          set -euo pipefail
+          DC="docker compose -f docker-compose.yml -f docker-compose.ci.yml"
+          ID=$($DC ps -q backend)
+          if [ -z "$ID" ]; then
+            echo "::error::không có container backend"
+            exit 1
+          fi
+          ENVDUMP=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$ID")
+          for CAN in 'AUTO_SYNC_TEMPLATES=false' 'APP_ENV=test' 'GUNICORN_WORKERS=2' ; do
+            if printf '%s\n' "$ENVDUMP" | grep -Fxq "$CAN"; then
+              echo "  env OK   ${CAN%%=*}"
+            else
+              echo "::error::${CAN%%=*} sai giá trị ở container đầu tiên"
+              exit 1
+            fi
+          done
+          unset ENVDUMP
+
       # Seed data (required for E2E tests)
       - name: Seed database
         run: |
@@ -180,51 +263,221 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend python -m scripts.seed_from_xlsx
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend python -m app.scripts.seed_notification_rules
 
-      # CỔNG ĐĂNG NHẬP — chạy SAU seed, TRƯỚC mọi suite. Fail-closed.
+      # Script nằm ngoài Backend image production; workflow pipe đúng blob đã
+      # checkout vào stdin của Python trong container. Nó khoá APP_ENV=test +
+      # DB qlts_test, kiểm role trước mutation, bật MFA đúng admin/manager qua
+      # service thật, commit rồi đọc lại/giải mã; officer phải giữ MFA=false.
+      - name: Bootstrap MFA cho đúng hai tài khoản đặc quyền
+        run: >-
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T
+          backend python - bootstrap < .github/scripts/nightly_mfa_gate.py
+
+      # ĐỒNG BỘ POLICY CASBIN — bước GHI CSDL, KHÔNG phải bằng chứng hội tụ.
       #
-      # Vì sao cần: run 34092354121 đốt 23 phút để cả sáu suite cùng chết ở một
-      # lỗi 401 giống hệt nhau. Mỗi suite tự phát hiện lại cùng một sự thật, sau
-      # khi đã dựng browser và đã kích khoá tài khoản. Bước này biến 23 phút mù
-      # thành ~10 giây có tên.
+      # Đây là writer duy nhất cho lượt ĐỒNG BỘ TEMPLATE-POLICY HẬU-SEED —
+      # KHÔNG phải writer duy nhất của bảng `casbin_rule` trong lượt nightly.
+      # Bảng ấy còn được ghi bởi hai nguồn hợp lệ khác, cả hai đều chạy TRƯỚC
+      # bước này: `alembic upgrade head` ở entrypoint (59 migration có
+      # `INSERT INTO casbin_rule`) và `seed_from_xlsx.py:412` (rule `g` nối
+      # user với role).
       #
-      # Nó đo cả BA vai bằng chính sáu biến ở khối `env:` — không hardcode gì —
-      # nên nếu ai đổi một mật khẩu trong workflow mà quên workbook (hoặc ngược
-      # lại), cổng đỏ NGAY, kèm tên vai và mã HTTP thật.
+      # Auto-sync lúc khởi động đã bị TẮT (`AUTO_SYNC_TEMPLATES=false` trong
+      # env_file) vì nó chạy trong MỖI worker, tức nhiều writer cạnh tranh,
+      # và nó chạy ở STARTUP — trước khi seed ghi xong. Tắt nó loại đúng lớp
+      # writer per-worker ấy; lượt gọi API dưới đây là thứ đưa CSDL về đúng
+      # `policy_templates.py`, và nó chạy đúng một lần.
       #
-      # ⚠️ KHÔNG retry: 401 là sai thông tin, thử lại chỉ tiêu thêm hạn mức
-      # ACCOUNT_LOCKOUT_MAX_ATTEMPTS=5 rồi biến 401 thành 429 và che mất nguyên
-      # nhân — đúng thứ đã xảy ra ở run cũ.
-      - name: Cổng đăng nhập — ba vai phải login được trước khi chạy suite
+      # ⚠️ Nó chỉ nạp lại enforcer của ĐÚNG MỘT worker — worker phục vụ chính
+      # request ấy. `app/routers/admin_v2_casbin.py:11` ghi thẳng: "Single-process
+      # reload only — NOT a production-wide guarantee ... deny rules can be
+      # enforced inconsistently". Đó là lý do bước cutover bên dưới tồn tại, và
+      # là lý do bước này KHÔNG được coi là đã hội tụ.
+      - name: Đồng bộ Casbin sau seed — ghi CSDL
+        env:
+          E2E_API_URL: http://localhost:8000
+          QLTS_TOTP_COUNTER_FILE: ${{ runner.temp }}/qlts-totp-counter
+        run: python3 .github/scripts/nightly_mfa_gate.py sync-casbin
+
+      # CUTOVER — tạo lại backend để MỌI worker nạp lại policy vừa ghi.
+      #
+      # Đây là "restart-based reload pattern" mà RUNBOOK §7.2 (T+3:15) chỉ định,
+      # và là đường DUY NHẤT đưa cả fleet về cùng một ảnh chụp policy.
+      #
+      # `--force-recreate` là bắt buộc: thiếu nó, khi model container không đổi
+      # Compose GIỮ NGUYÊN container cũ và vẫn exit 0, rồi mọi bằng chứng phía
+      # sau đọc lại chính lượt boot cũ.
+      # `restart` KHÔNG dùng được: nó giữ nguyên container ID nên phép so
+      # ID-trước/ID-sau mất khả năng phân biệt, và nó không đọc lại env_file.
+      #
+      # Hai cờ đầu tắt để lượt boot này không chạy lại migration/seed thông báo;
+      # cờ Casbin BẬT để lifespan của TỪNG worker gọi `enforcer.load_policy()`
+      # (`app/main.py:279`). Cả ba đi vào container qua
+      # `docker-compose.yml:185-187` (khối `environment:` có nội suy sẵn).
+      - name: Cutover backend — mọi worker nạp lại policy
         run: |
-          set -uo pipefail
-          loi=0
-          kiem_vai() {
-            vai="$1"; u="$2"; p="$3"
-            if [ -z "$u" ] || [ -z "$p" ]; then
-              echo "::error::$vai: thiếu biến môi trường (username/password rỗng)"
-              loi=1; return
-            fi
-            ma=$(curl -s -o "/tmp/login_${vai}.json" -w '%{http_code}'                    -X POST http://localhost:8000/api/auth/login                    -H 'Content-Type: application/x-www-form-urlencoded'                    --data-urlencode "username=$u"                    --data-urlencode "password=$p") || ma=000
-            if [ "$ma" = "200" ]; then
-              echo "  ✅ $vai ($u): HTTP 200"
-            else
-              # In THÂN phản hồi: 401 và 429 phải phân biệt được ngay, vì 429
-              # nghĩa là tài khoản ĐÃ bị khoá bởi một lượt trước đó.
-              echo "::error::$vai ($u): HTTP $ma — $(head -c 300 "/tmp/login_${vai}.json")"
-              loi=1
-            fi
-          }
-          kiem_vai admin   "$E2E_ADMIN_USERNAME"   "$E2E_ADMIN_PASSWORD"
-          kiem_vai officer "$E2E_OFFICER_USERNAME" "$E2E_OFFICER_PASSWORD"
-          kiem_vai manager "$E2E_MANAGER_USERNAME" "$E2E_MANAGER_PASSWORD"
-          kiem_vai setup   "$TEST_USERNAME"        "$TEST_PASSWORD"
-          if [ "$loi" -ne 0 ]; then
-            echo "::error::Cổng đăng nhập ĐỎ — dừng trước khi chạy suite. TÁM biến"
-            echo "::error::(sáu E2E_* + hai TEST_*) phải khớp sheet 2_TaiKhoan của"
-            echo "::error::seed_data_template.xlsx. Hợp đồng tĩnh: tests/unit/test_e2e_credential_contract.py"
+          set -euo pipefail
+          DC="docker compose -f docker-compose.yml -f docker-compose.ci.yml"
+
+          OLD_ID=$($DC ps -q backend)
+          if [ -z "$OLD_ID" ]; then
+            echo "::error::không có container backend TRƯỚC cutover — phép so ID vô nghĩa"
             exit 1
           fi
-          echo "✅ Bốn đường đăng nhập (tám biến) đều 200 — suite chạy trên nền credential đúng."
+
+          RUN_MIGRATIONS_ON_STARTUP=false \
+          RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false \
+          RUN_CASBIN_LOAD_ON_STARTUP=true \
+          $DC up -d --no-deps --force-recreate --wait --wait-timeout 120 backend
+
+          NEW_ID=$($DC ps -q backend)
+          if [ -z "$NEW_ID" ]; then
+            echo "::error::không lấy được container ID sau cutover"
+            exit 1
+          fi
+          if [ "$NEW_ID" = "$OLD_ID" ]; then
+            echo "::error::container KHÔNG được tạo lại (ID trùng $OLD_ID)"
+            exit 1
+          fi
+          echo "container: $OLD_ID -> $NEW_ID"
+
+      # BẰNG CHỨNG FLEET — đo TỪNG TIẾN TRÌNH, không đo bằng may rủi.
+      #
+      # `--wait` ở trên chỉ chờ healthcheck, mà healthcheck là ĐÚNG MỘT
+      # `curl -f /health` (docker-compose.yml:203-208) do MỘT worker trả lời;
+      # `/health` không chạm CSDL, không chạm enforcer. Nó là điều kiện cần,
+      # không phải bằng chứng. Bằng chứng nằm ở số tiến trình con và log khởi
+      # động của ĐÚNG container mới.
+      - name: Chứng minh mọi worker đã nạp policy
+        run: |
+          set -euo pipefail
+          DC="docker compose -f docker-compose.yml -f docker-compose.ci.yml"
+          NEW_ID=$($DC ps -q backend)
+          SO_WORKER=${GUNICORN_WORKERS:-2}
+
+          # (1) health phải BẰNG "healthy". Dùng `grep -q healthy` sẽ khớp luôn
+          #     "unhealthy" — đúng lỗi đã có tiền lệ ở scripts/deploy.sh.
+          TRANG_THAI=$(docker inspect -f '{{.State.Health.Status}}' "$NEW_ID")
+          if [ "$TRANG_THAI" != "healthy" ]; then
+            echo "::error::health=$TRANG_THAI"
+            exit 1
+          fi
+
+          # (2) Cờ phải THỰC SỰ vào tới container. Hỏi ĐÍCH DANH từng tên và chỉ
+          #     in PASS/FAIL — `.Config.Env` chứa nguyên văn SECRET_KEY,
+          #     MFA_ENCRYPTION_KEY, E2E_*_TOTP_SECRET; in cả mảng ra log là tự
+          #     giải mật. `grep -Fx` khớp TRỌN dòng nên "=true" không dính "=truex".
+          ENVDUMP=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$NEW_ID")
+          for CAN in \
+            'RUN_MIGRATIONS_ON_STARTUP=false' \
+            'RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP=false' \
+            'RUN_CASBIN_LOAD_ON_STARTUP=true' \
+            'AUTO_SYNC_TEMPLATES=false' \
+            "GUNICORN_WORKERS=$SO_WORKER" ; do
+            if printf '%s\n' "$ENVDUMP" | grep -Fxq "$CAN"; then
+              echo "  env OK   ${CAN%%=*}"
+            else
+              echo "::error::${CAN%%=*} KHÔNG vào tới container đúng giá trị"
+              exit 1
+            fi
+          done
+          unset ENVDUMP
+
+          # (3) Đúng SO_WORKER tiến trình con của PID 1 đang sống. Image không có
+          #     `ps`, nên đọc /proc; `/proc/1/task/1/children` đã tự loại master
+          #     (master LÀ pid 1 nhờ `exec "$@"` ở docker-entrypoint.sh).
+          DEM=$(docker exec "$NEW_ID" sh -c '
+            n=0
+            for pid in $(cat /proc/1/task/1/children); do
+              [ -r "/proc/$pid/cmdline" ] || continue
+              if tr "\0" " " < "/proc/$pid/cmdline" | grep -q gunicorn; then
+                n=$((n+1))
+              fi
+            done
+            echo "$n"')
+          if [ "$DEM" != "$SO_WORKER" ]; then
+            echo "::error::worker đang sống = $DEM, cần $SO_WORKER"
+            exit 1
+          fi
+
+          # (4) Log của ĐÚNG container mới. Hai điều bắt buộc:
+          #     - `2>&1`: gunicorn errorlog và structlog StreamHandler đều ra
+          #       STDERR; thiếu nó thì grep đọc rỗng rồi báo nhầm "0 dòng".
+          #     - neo theo $NEW_ID chứ không theo tên service, và grep chuỗi
+          #       THUẦN ASCII: APP_ENV=test dùng JSONRenderer(ujson) nên "✅"
+          #       ra dạng \u2705, mẫu có emoji sẽ không khớp.
+          #     Chạy NGAY sau cutover, trước khi đổ tải: max_requests=1000 sẽ
+          #     tái sinh worker và in thêm "Booting worker".
+          LOG=$(mktemp)
+          docker logs "$NEW_ID" > "$LOG" 2>&1
+
+          BOOT=$(grep -cE 'Booting worker with pid: [0-9]+' "$LOG" || true)
+          CASBIN=$(grep -cF 'Casbin AsyncEnforcer initialized and policies loaded' "$LOG" || true)
+          if [ "$BOOT" != "$SO_WORKER" ]; then
+            echo "::error::'Booting worker' = $BOOT, cần $SO_WORKER"
+            exit 1
+          fi
+          if [ "$CASBIN" != "$SO_WORKER" ]; then
+            echo "::error::'policies loaded' = $CASBIN, cần $SO_WORKER"
+            exit 1
+          fi
+
+          # (5) Không worker nào chết/treo/ném ngoại lệ sau khi boot.
+          if grep -Eqi 'Worker failed to boot|Worker exiting|WORKER TIMEOUT|Shutting down: Master|Traceback \(most recent call last\)' "$LOG"; then
+            grep -EniI 'Worker failed to boot|Worker exiting|WORKER TIMEOUT|Shutting down: Master|Traceback' "$LOG" >&2
+            echo "::error::gunicorn báo worker boot failure/exit"
+            exit 1
+          fi
+
+          # (6) LOAD-ONLY: lượt boot này không được GHI policy, dưới mọi hình thức.
+          #
+          #     Với AUTO_SYNC_TEMPLATES=false, cả ba dòng log của nhánh auto-sync
+          #     (app/main.py:463-495) đều KHÔNG được in. Khẳng định BẰNG 0 tường
+          #     minh, không so tương đối: phép "DRIFT == DONGBO" và
+          #     "DRIFT <= SO_WORKER" đều thoả khi cả hai bằng 0, nên chúng XANH
+          #     y hệt cho 0/0 (đúng ý đồ) lẫn 2/2 (cờ bị bật lại) — một cổng
+          #     không phân biệt được hai ca ngược nhau thì không canh gì cả.
+          #
+          #     Bản DÀI của chuỗi "No drift detected" là bắt buộc: bản ngắn còn
+          #     xuất hiện ở app/services/casbin_service.py:1393 như một lý do
+          #     skip hợp lệ của endpoint sync.
+          #
+          #     SEED=0 mang nghĩa riêng: tới lúc cutover CSDL đã phải có policy.
+          #     Còn phải auto-seed nghĩa là lượt ghi ở bước sync-casbin không
+          #     lưu được gì.
+          DRIFT=$(grep -cF 'Drift detected in' "$LOG" || true)
+          DONGBO=$(grep -cF 'Auto-sync complete:' "$LOG" || true)
+          SEED=$(grep -cF 'No policies found. Auto-seeding from policy_templates.py' "$LOG" || true)
+          KHONGDRIFT=$(grep -cF 'No drift detected - all roles match their templates' "$LOG" || true)
+          for CAP in "SEED=$SEED" "DRIFT=$DRIFT" "DONGBO=$DONGBO" "KHONGDRIFT=$KHONGDRIFT" ; do
+            if [ "${CAP#*=}" != "0" ]; then
+              echo "::error::${CAP%%=*} phải bằng 0, đo được ${CAP#*=} — lượt boot không còn load-only — auto-seed đã ghi hoặc nhánh auto-sync per-worker đã được kích hoạt; cấu hình này có thể cạnh tranh với bước sync-casbin"
+              exit 1
+            fi
+          done
+          echo "FLEET OK: $SO_WORKER worker, $BOOT boot, $CASBIN policies loaded, health=$TRANG_THAI, load-only seed/drift/sync=0/0/0"
+
+      # CỔNG MFA + PHÂN QUYỀN — chạy SAU seed/bootstrap, TRƯỚC mọi suite.
+      #
+      # HTTP 200 từ /login CHƯA chứng minh đăng nhập hoàn tất: với MFA bật, 200
+      # chỉ mang mfa_token, chưa có phiên. Cổng này bắt buộc admin/manager nhận
+      # challenge, gọi /verify-mfa bằng TOTP thật, rồi dùng cookie vừa cấp gọi
+      # /api/pipeline/all (Casbin) và đòi 200. Officer/setup phải KHÔNG bị bật MFA.
+      #
+      # Bước này CHỈ ĐỌC: nó không sửa policy nữa. Lượt sync đã tách thành bước
+      # riêng phía trên, vì móc sync vào đây nghĩa là cái 200 đo được một phần
+      # do CHÍNH nó vừa tạo ra — cổng tự chứng minh mình bằng thứ mình vừa đổi.
+      #
+      # Không retry: 401/403/429 là một hợp đồng hỏng; thử lại chỉ đốt hạn mức
+      # rồi che nguyên nhân. Script cũng không in password, mfa_token hay secret.
+      # `QLTS_TOTP_COUNTER_FILE` mang ĐÚNG MỘT SỐ: counter TOTP mà bước sync đã
+      # đốt. Backend chống replay bằng bất biến đơn điệu nghiêm ngặt
+      # (`counter <= đã_lưu` thì từ chối), nên preflight phải chờ qua số ấy —
+      # chờ, chứ không thử lại.
+      - name: Cổng MFA và Casbin — bốn đường đăng nhập trên ba tài khoản
+        env:
+          E2E_API_URL: http://localhost:8000
+          QLTS_TOTP_COUNTER_FILE: ${{ runner.temp }}/qlts-totp-counter
+        run: python3 .github/scripts/nightly_mfa_gate.py preflight
 
       # --- Regression Suites ---
       - name: E2E — Lead workflow
