@@ -37,6 +37,7 @@ và đó đã là phần lớn các ca thật.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -1152,8 +1153,16 @@ PHAN_VUNG_CAN = {"a", "c"}
 #: `test_auth_cookie_lifetime.py`, `test_socket_offboarding.py`. Đây là THÊM
 #: selector nên digest phải đổi; giá trị cũ là
 #: `7f43ac590c757ad83355aede6d8e88d5a6bf44a3da95caee0c6744b90a05fa78`.
+#: Cập nhật 09-09-2026 (Batch 15 lô 4): Tier 2c nhận thêm BẢY selector security —
+#: `test_csv_injection.py`, `test_idor_protection.py`, `test_phase2_fixes.py`,
+#: `test_security_bugfixes.py`, `test_security_phase0.py`,
+#: `test_socket_auth_session.py`, `test_socket_force_disconnect.py`.
+#: Hai tệp còn lại của lô 4 vào **Tier 4** (`test_admission_action_routes_casbin_first.py`,
+#: `test_admission_assign_officer_permission.py`) nên KHÔNG ảnh hưởng digest này —
+#: digest chỉ phủ hợp 2a∪2c. Giá trị cũ là
+#: `2a57b3c14d4fb5b124ca84a242d421b4fe12ba325c1e8bd974889310fe6ef2e1`.
 SHA_HOP_SELECTOR_TIER2 = (
-    "2a57b3c14d4fb5b124ca84a242d421b4fe12ba325c1e8bd974889310fe6ef2e1"
+    "88b4096f125101ad34720356bf1eed6bec2012b016c378770a0672117629fb94"
 )
 
 
@@ -2353,3 +2362,346 @@ class TestDevScopeAdvisoriesChayTrenPR:
         assert wf_deps["jobs"][JOB_DEV_AUDIT]["name"] == "Node.js Dev-scope Advisories"
         assert wf_deps["jobs"]["node-audit"]["name"] == "Node.js Dependencies"
         assert wf_deps["jobs"]["python-audit"]["name"] == "Python Dependencies"
+
+
+# ---------------------------------------------------------------------------
+# 9. Cặp đôi CƯỠNG CHẾ: bản vá isolation `_worker_id` ↔ selector Batch 15
+# ---------------------------------------------------------------------------
+#
+# Vì sao contract này ở ĐÂY chứ không ở chính tệp socket: nó phải sống trong
+# commit THÊM SELECTOR, để revert riêng commit vá mà giữ selector thì CI ĐỎ.
+# Đặt chung tệp với bản vá là tự huỷ mục đích — bỏ commit vá là bỏ luôn guard.
+#
+# `_worker_id` là biến MODULE toàn cục của `app/socket_manager.py`. Ghi vào nó
+# mà không khôi phục thì giá trị sống tới hết shard pytest (đơn tiến trình) và
+# rò sang mọi tệp chạy sau — trong Tier 2c là `test_socket_offboarding.py`.
+#
+# ⚠️ Contract TĨNH này KHÔNG thay thế phép khôi phục ĐỘNG. Nó chứng minh mã
+# không chứa dạng ghi nguy hiểm; fixture `_cam_ro_worker_id` trong chính tệp
+# socket mới là thứ đo hành vi lúc chạy. Hai thứ bù nhau, không thay nhau.
+
+DUONG_SOCKET_FD_TUONG_DOI = "tests/security/test_socket_force_disconnect.py"
+DUONG_SOCKET_FD = GOC / "Backend_FastAPI" / DUONG_SOCKET_FD_TUONG_DOI
+TEN_BIEN_WORKER = "_worker_id"
+
+
+def _ghi_khong_khoi_phuc(tho: str) -> list[tuple[int, str]]:
+    """[(dòng, mô tả)] cho các phép ghi ``_worker_id`` thuộc **những DẠNG GHI
+    TĨNH ĐÃ BIẾT** mà không tự khôi phục.
+
+    ⚠️ PHẠM VI — đọc trước khi tin kết quả
+    =====================================
+    Hàm này khớp theo HÌNH DẠNG AST của một tập hữu hạn các dạng viết đã liệt
+    kê dưới đây. Nó **KHÔNG** là phép chứng minh "không thể ghi ``_worker_id``
+    theo cách nào khác". Nằm NGOÀI mô hình, không được tuyên bố là đã canh:
+
+    * ``exec`` / ``eval`` / chuỗi dựng lúc chạy;
+    * ``globals()`` / ``sys.modules[...]`` / ``importlib`` rồi ghi gián tiếp;
+    * alias hay dataflow nhiều bước (``f = sm; g = f; g._worker_id = …``),
+      ngoài đúng MỘT bước alias của ``setattr`` nói ở W2;
+    * mọi phép ghi phát sinh từ hàm/thư viện khác được gọi tới.
+
+    Hai phép nhận diện hẹp, nói rõ để không ai đọc quá:
+
+    * ``W1b`` **chỉ** phủ ``vars(...)`` và ``.__dict__`` — không phủ subscript
+      nói chung;
+    * ``MonkeyPatch.context`` nhận diện theo **thân khối lexical**, không theo
+      luồng dữ liệu; ``monkeypatch`` nhận theo **quy ước tên fixture**.
+
+    Và nhắc lại cho chắc: **fixture runtime mới là authority** cho những ca
+    thực sự được executed — hàm này không đo hành vi.
+
+    BẤT BIẾN PHÂN LỚP — đừng lẫn hai thứ
+    ====================================
+    * **Contract AST (hàm này)** = chống *revert* bản vá, và canh các **dạng
+      ghi tĩnh đã biết**. Nó nói về VĂN BẢN của tệp.
+    * **Fixture autouse ``_cam_ro_worker_id``** (trong chính tệp socket) =
+      *authority* duy nhất cho rò lúc CHẠY, và chỉ cho những ca **thực sự được
+      executed**.
+    * **KHÔNG** dùng kết quả của hàm này để tuyên bố bất cứ điều gì về
+      restoration lúc chạy. Sạch ở đây chỉ có nghĩa "không thấy dạng tĩnh đã
+      biết", không có nghĩa "không rò".
+
+    Các dạng bị bắt
+    ===============
+    * **W1** ``Assign`` / ``AnnAssign`` / ``AugAssign`` mà ĐÍCH là
+      ``Attribute(attr="_worker_id")`` — ``sm._worker_id = …``,
+      ``sm._worker_id: str = …``, ``sm._worker_id += …``. Khớp theo tên thuộc
+      tính nên gốc là ``sm``, ``X`` hay ``app.socket_manager`` đều bị bắt.
+    * **W1b** cùng ba loại gán nhưng ĐÍCH là ``Subscript`` có khoá hằng
+      ``"_worker_id"`` **VÀ** gốc của subscript là **đúng một trong hai** dạng
+      ghi vào không gian tên đối tượng: ``vars(<expr>)[...]`` hoặc
+      ``<expr>.__dict__[...]``. Cố ý **KHÔNG** bắt mọi subscript chỉ vì trùng
+      khoá — ``local_cache["_worker_id"] = …`` là dict thường, không phải phép
+      ghi vào module, và báo nó là dương tính giả.
+    * **W2** ``setattr(<gì đó>, "_worker_id", …)``, kể cả qua **một bước**
+      alias (``gan = setattr`` rồi ``gan(...)``). Hai miễn trừ, và chỉ hai:
+
+      - receiver tên ``monkeypatch`` — miễn theo **QUY ƯỚC ĐẶT TÊN của fixture
+        pytest**, KHÔNG phải type inference: hàm này không biết và không suy ra
+        kiểu của bất kỳ biểu thức nào. Một biến tên ``monkeypatch`` mà không
+        phải fixture sẽ lọt, và đó là giới hạn đã biết của quy ước.
+      - tên do ``with pytest.MonkeyPatch.context() as <tên>`` ràng buộc, và
+        **chỉ khi lời gọi nằm LEXICALLY BÊN TRONG thân của đúng khối ``with``
+        ấy**. Ra khỏi thân khối — dù cùng hàm hay ở hàm khác — context đã
+        thoát, giá trị đã được hoàn tác, nên một ``mp.setattr(...)`` ở đó là
+        ghi KHÔNG khôi phục và bị bắt.
+    * **W3** patcher ``patch`` / ``patch.object`` nhắc tới ``"_worker_id"`` —
+      cả dạng đối số tên (``patch.object(sm, "_worker_id", …)``) lẫn **dạng
+      chuỗi đường dẫn** (``patch("app.socket_manager._worker_id", …)``) — mà
+      KHÔNG ở vị trí tự khôi phục, tức không phải ``withitem.context_expr`` và
+      không phải decorator. Bắt ``…​.start()`` không ``stop`` và patcher gán ra
+      biến rồi ``.start()``.
+    """
+    cay = ast.parse(tho)
+
+    def _la_ten_worker(v) -> bool:
+        """Hằng chuỗi trỏ tới `_worker_id`: tên trần hoặc đuôi đường dẫn."""
+        return isinstance(v, str) and (
+            v == TEN_BIEN_WORKER or v.endswith("." + TEN_BIEN_WORKER)
+        )
+
+    def _la_khong_gian_ten(goc: ast.AST) -> bool:
+        """Gốc subscript có phải KHÔNG GIAN TÊN của một đối tượng không?
+
+        Đúng hai dạng: ``vars(<expr>)`` và ``<expr>.__dict__``. Một dict thường
+        trùng khoá (``local_cache["_worker_id"]``) KHÔNG phải phép ghi vào
+        module và không được báo.
+        """
+        if (
+            isinstance(goc, ast.Call)
+            and isinstance(goc.func, ast.Name)
+            and goc.func.id == "vars"
+        ):
+            return True
+        return isinstance(goc, ast.Attribute) and goc.attr == "__dict__"
+
+    cho_phep: set[int] = set()
+    # `mp_than[tên]` = tập id các nút nằm LEXICALLY trong thân khối `with
+    # pytest.MonkeyPatch.context() as <tên>`. Miễn trừ chỉ áp trong tập ấy —
+    # ra ngoài thân khối thì context đã thoát và giá trị đã được hoàn tác.
+    mp_than: dict[str, set[int]] = {}
+    alias_setattr: set[str] = set()  # MỘT bước: `gan = setattr`
+    for nut in ast.walk(cay):
+        if isinstance(nut, (ast.With, ast.AsyncWith)):
+            for muc in nut.items:
+                cho_phep.add(id(muc.context_expr))
+                # `with pytest.MonkeyPatch.context() as mp:` → `mp` được miễn,
+                # NHƯNG chỉ bên trong thân khối này.
+                if (
+                    isinstance(muc.context_expr, ast.Call)
+                    and "MonkeyPatch.context" in ast.unparse(muc.context_expr.func)
+                    and isinstance(muc.optional_vars, ast.Name)
+                ):
+                    trong = mp_than.setdefault(muc.optional_vars.id, set())
+                    for than in nut.body:
+                        for con in ast.walk(than):
+                            trong.add(id(con))
+        if isinstance(nut, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for dec in nut.decorator_list:
+                cho_phep.add(id(dec))
+        if (
+            isinstance(nut, ast.Assign)
+            and isinstance(nut.value, ast.Name)
+            and nut.value.id == "setattr"
+        ):
+            for d in nut.targets:
+                if isinstance(d, ast.Name):
+                    alias_setattr.add(d.id)
+
+    def _nhac_hang(goi: ast.Call) -> bool:
+        moi = list(goi.args) + [k.value for k in goi.keywords]
+        return any(
+            isinstance(a, ast.Constant) and _la_ten_worker(a.value) for a in moi
+        )
+
+    def _duoi(goi: ast.Call) -> str:
+        f = goi.func
+        if isinstance(f, ast.Attribute):
+            return f.attr
+        return f.id if isinstance(f, ast.Name) else ""
+
+    vi_pham: list[tuple[int, str]] = []
+    for nut in ast.walk(cay):
+        if isinstance(nut, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            dich = nut.targets if isinstance(nut, ast.Assign) else [nut.target]
+            for d in dich:
+                if isinstance(d, ast.Attribute) and d.attr == TEN_BIEN_WORKER:
+                    vi_pham.append((nut.lineno, "gán trần: %s" % ast.unparse(d)))
+                elif (
+                    isinstance(d, ast.Subscript)
+                    and isinstance(d.slice, ast.Constant)
+                    and _la_ten_worker(d.slice.value)
+                    and _la_khong_gian_ten(d.value)
+                ):
+                    vi_pham.append(
+                        (nut.lineno, "ghi qua __dict__/vars: %s" % ast.unparse(d))
+                    )
+            continue
+        if not isinstance(nut, ast.Call) or not _nhac_hang(nut):
+            continue
+        f = nut.func
+        ten_goi = ast.unparse(f)
+        la_setattr = (isinstance(f, ast.Name) and f.id in {"setattr"} | alias_setattr) or (
+            isinstance(f, ast.Attribute) and f.attr == "setattr"
+        )
+        if la_setattr:
+            duoc_mien = False
+            if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
+                ten_nhan = f.value.id
+                # (a) quy ước đặt tên fixture pytest — KHÔNG phải type inference
+                if ten_nhan == "monkeypatch":
+                    duoc_mien = True
+                # (b) `mp` của MonkeyPatch.context, CHỈ trong thân khối `with`
+                elif id(nut) in mp_than.get(ten_nhan, ()):
+                    duoc_mien = True
+            if not duoc_mien:
+                vi_pham.append((nut.lineno, "setattr không khôi phục: %s" % ten_goi))
+        elif _duoi(nut) in ("object", "patch") or ten_goi.endswith("patch"):
+            if id(nut) not in cho_phep:
+                vi_pham.append(
+                    (nut.lineno, "patcher ngoài `with`/decorator: %s" % ten_goi)
+                )
+    return sorted(vi_pham)
+
+
+#: Hai dạng ghi ``_worker_id`` HỢP LỆ vì có CẤU TRÚC PHỤC HỒI riêng. Cả hai
+#: từng bị bộ dò bắt nhầm; giữ lại đây làm ca hồi quy, dùng ĐÚNG snippet đã gây
+#: dương tính giả.
+#:
+#:   * ``monkeypatch.setattr`` — fixture của pytest; giá trị cũ được hoàn tác ở
+#:     TEARDOWN của fixture, tự động, kể cả khi ca ném exception.
+#:   * ``pytest.MonkeyPatch.context()`` — context manager; hoàn tác khi THOÁT
+#:     khối ``with``, cũng kể cả khi thân khối ném.
+#: Ngoài ra còn dạng KHÔNG PHẢI phép ghi vào module — sạch vì lý do khác hẳn:
+#: một dict thường tình cờ trùng khoá. Báo nó là dương tính giả.
+DANG_PHAI_SACH = (
+    (
+        "monkeypatch fixture",
+        'def t(monkeypatch):\n    monkeypatch.setattr(sm, "_worker_id", "w")\n',
+    ),
+    (
+        "MonkeyPatch.context() — gọi TRONG thân with",
+        "def t():\n"
+        "    with pytest.MonkeyPatch.context() as mp:\n"
+        '        mp.setattr(sm, "_worker_id", "w")\n',
+    ),
+    (
+        "dict thường trùng khoá — không phải ghi vào module",
+        "def t():\n"
+        "    local_cache = {}\n"
+        '    local_cache["_worker_id"] = "metadata-only"\n',
+    ),
+)
+
+#: Các DẠNG GHI TĨNH ĐÃ BIẾT mà bộ dò phải bắt. Danh sách này là hợp đồng của
+#: chính bộ dò: mỗi mục từng là một đường lách thật.
+DANG_GHI_PHAI_BAT = (
+    ("gán trần", 'def t():\n    sm._worker_id = "w"\n'),
+    ("AnnAssign", 'def t():\n    sm._worker_id: str = "w"\n'),
+    ("AugAssign", 'def t():\n    sm._worker_id += "w"\n'),
+    ("alias module khác", 'def t():\n    X._worker_id = "w"\n'),
+    ("vars()", 'def t():\n    vars(sm)["_worker_id"] = "w"\n'),
+    ("__dict__", 'def t():\n    sm.__dict__["_worker_id"] = "w"\n'),
+    ("setattr trần", 'def t():\n    setattr(sm, "_worker_id", "w")\n'),
+    (
+        "alias setattr một bước",
+        'def t():\n    gan = setattr\n    gan(sm, "_worker_id", "w")\n',
+    ),
+    (
+        "patcher .start() không stop",
+        'def t():\n    patch.object(sm, "_worker_id", "w").start()\n',
+    ),
+    (
+        "patcher gán ra biến rồi start",
+        'def t():\n    p = patch.object(sm, "_worker_id", "w")\n    p.start()\n',
+    ),
+    (
+        "patch dạng chuỗi đường dẫn, ngoài with",
+        'def t():\n    patch("app.socket_manager._worker_id", "w").start()\n',
+    ),
+    # Hai ca LEXICAL SCOPE: `mp` chỉ được miễn TRONG thân khối `with`. Ra khỏi
+    # thân, context đã thoát và giá trị đã hoàn tác ⇒ ghi ở đó là ghi không
+    # khôi phục. Trước khi vá, cả hai lọt qua bộ dò.
+    (
+        "mp dùng NGOÀI with, cùng hàm",
+        "def a():\n"
+        "    with pytest.MonkeyPatch.context() as mp:\n"
+        "        pass\n"
+        '    mp.setattr(sm, "_worker_id", "w")\n',
+    ),
+    (
+        "mp dùng ở HÀM KHÁC",
+        "def a():\n"
+        "    with pytest.MonkeyPatch.context() as mp:\n"
+        "        pass\n"
+        "\n"
+        "def b():\n"
+        '    mp.setattr(sm, "_worker_id", "w")\n',
+    ),
+)
+
+
+class TestCapDoiIsolationWorkerId:
+    """Bốn bất biến RIÊNG BIỆT — cố ý không gộp, để đỏ ở đâu biết ngay vì gì."""
+
+    def test_khong_ghi_tran_worker_id(self):
+        """Bất biến 1: mọi phép ghi ``_worker_id`` phải TỰ KHÔI PHỤC."""
+        assert DUONG_SOCKET_FD.is_file(), "thiếu %s" % DUONG_SOCKET_FD
+        xau = _ghi_khong_khoi_phuc(DUONG_SOCKET_FD.read_text(encoding="utf-8"))
+        assert xau == [], (
+            "%s ghi `%s` mà KHÔNG tự khôi phục ở %d vị trí:\n  %s\n"
+            "`%s` là biến MODULE toàn cục; pytest chạy đơn tiến trình nên giá "
+            "trị rò tới hết shard, sang cả `test_socket_offboarding.py` đứng sau "
+            "trong Tier 2c. Dùng `patch.object(sm, \"%s\", …)` trong `with`, hoặc "
+            "`monkeypatch.setattr`."
+            % (
+                DUONG_SOCKET_FD_TUONG_DOI,
+                TEN_BIEN_WORKER,
+                len(xau),
+                "\n  ".join("dòng %d — %s" % (d, m) for d, m in xau),
+                TEN_BIEN_WORKER,
+                TEN_BIEN_WORKER,
+            )
+        )
+
+    def test_tep_socket_force_disconnect_o_tier_2c(self, cac_leg):
+        """Bất biến 2: tệp còn whole-file, và ở ĐÚNG Tier 2c.
+
+        Đọc từ ma trận YAML thật, không grep tên tệp.
+        """
+        assert DUONG_SOCKET_FD_TUONG_DOI in _selector_whole_file(cac_leg), (
+            "%s phải có selector WHOLE-FILE: bất biến 1 chỉ có nghĩa khi tệp "
+            "thật sự được một shard chạy." % DUONG_SOCKET_FD_TUONG_DOI
+        )
+        tier = _tier_cua(cac_leg, DUONG_SOCKET_FD_TUONG_DOI)
+        assert tier and tier.startswith("Tier 2c"), (
+            "%s phải ở Tier 2c (thấy %r): nó dùng chung `app.socket_manager` với "
+            "`test_socket_offboarding.py` — hai tệp phải cùng một shard để bất "
+            "biến isolation được kiểm ở đúng nơi rò có thể xảy ra."
+            % (DUONG_SOCKET_FD_TUONG_DOI, tier)
+        )
+
+    @pytest.mark.parametrize("nhan,ma", DANG_PHAI_SACH, ids=lambda x: x)
+    def test_dang_hop_le_khong_bi_bat(self, nhan, ma):
+        """Bất biến 3 (HỒI QUY): dạng hợp lệ không được báo sai.
+
+        Mỗi snippet dưới đây từng bị bộ dò bắt nhầm — hoặc vì nó CÓ cấu trúc
+        phục hồi, hoặc vì nó không hề là phép ghi vào module. Một guard hay báo
+        sai sẽ bị người ta tắt đi; dương tính giả cũng là lỗi, không phải "thận
+        trọng".
+        """
+        assert _ghi_khong_khoi_phuc(ma) == [], (
+            "%s bị bắt NHẦM: đây là dạng hợp lệ" % nhan
+        )
+
+    @pytest.mark.parametrize("nhan,ma", DANG_GHI_PHAI_BAT, ids=lambda x: x)
+    def test_bo_do_bat_cac_dang_ghi_tinh_da_biet(self, nhan, ma):
+        """Bất biến 4: bộ dò phải bắt từng dạng ghi tĩnh đã biết.
+
+        Canh chính bộ dò. Không có ca này thì một lần "dọn dẹp" làm hụt phép
+        khớp sẽ khiến bất biến 1 xanh vĩnh viễn mà chẳng canh gì.
+        """
+        assert _ghi_khong_khoi_phuc(ma) != [], (
+            "bộ dò KHÔNG bắt được dạng %r — đường lách này đã mở lại" % nhan
+        )
