@@ -779,16 +779,231 @@ _SCRIPT_PRODUCTION = [
 
 
 def _co_lenh_compose(dong: str) -> bool:
-    """Dòng có gọi `docker compose` trực tiếp (không qua biến đã gán sẵn)."""
+    """Dòng TÀI LIỆU có gọi `docker compose` trực tiếp.
+
+    Chỉ dùng cho tài liệu vận hành (.md), nơi mỗi dòng đã là một lệnh trần.
+    Mã shell thật đi qua `_lenh_compose_trong_script` — xem hợp đồng ở đó.
+    """
     if "docker compose" not in dong:
         return False
     # `command -v docker compose` là phép kiểm cài đặt, không phải lời gọi.
     if "command -v docker compose" in dong:
         return False
-    # `DC="docker compose -f ..."` / `_COMPOSE=(docker compose -f ...)` tự mang
-    # cờ trong chính chuỗi gán nên vẫn được soi bình thường; các lời gọi QUA
-    # biến (`$DC ...`) không chứa chuỗi "docker compose" nên tự bỏ qua.
     return True
+
+
+# ===========================================================================
+# Bộ phân loại ngữ cảnh cho MÃ SHELL — hợp đồng tường minh
+# ===========================================================================
+# Bản trước hỏi `"docker compose" in dong` rồi thôi. Nó soi cả dòng THÔNG BÁO,
+# và chưa đỏ lần nào chỉ vì văn bản của những dòng ấy TÌNH CỜ có sẵn
+# `-f docker-compose.yml` — tức guard đã luôn soi nhầm, chỉ là chưa gặp dòng
+# thông báo nào thiếu cờ.
+#
+# CỐ Ý KHÔNG ghi số lượng hay danh sách số dòng ở đây: `deploy.sh` còn đổi, mà
+# một con số trong chú thích thì âm thầm cũ đi không ai biết. Bất biến được
+# neo bằng TEST (xem `test_guard_compose_van_thay_du_hai_loai_o_deploy_sh`),
+# không bằng câu chữ.
+#
+# HỢP ĐỒNG (dựa trên HÌNH DẠNG cú pháp, không dựa trên số dòng / tên hàm /
+# câu chữ tiếng Việt cụ thể):
+#
+#   A. Ngữ cảnh MÃ (ngoài mọi trích dẫn, ngoài chú thích) ⇒ LÀ LỆNH.
+#      Bao gồm: gọi trực tiếp · sau `if !` · trong `$( )` (kể cả khi `$( )`
+#      nằm bên trong nháy kép) · gán mảng `X=(docker compose …)`.
+#      Ngoại lệ duy nhất: `command -v docker compose` — phép kiểm cài đặt.
+#
+#   B. Trong CHUỖI TRÍCH DẪN — nháy kép HOẶC NHÁY ĐƠN, cùng một luật ⇒ chỉ
+#      tính là "lệnh in cho operator / gán vào biến" khi có hình dạng
+#      nhãn-rồi-lệnh mà người ta copy-paste được:
+#        B1. KHÔNG nằm trong ngoặc đơn còn mở bên trong chuỗi ấy
+#            (dấu ngoặc = lời chú thích phụ, không phải lệnh để chạy);
+#        B2. đứng ở ĐẦU chuỗi (bỏ qua khoảng trắng) HOẶC ngay sau `": "`.
+#      `error "… (docker compose ps -aq thất bại)"` trượt CẢ HAI: nó nằm trong
+#      ngoặc, và không ở đầu chuỗi cũng không sau dấu hai chấm.
+#
+#      🔴 NHÁY ĐƠN PHẢI ĐI CHUNG LUẬT VỚI NHÁY KÉP. Bản trước bỏ qua toàn bộ
+#      nháy đơn và vì thế FAIL-OPEN với cả wrapper lẫn gợi ý operator:
+#      `DC='docker compose up -d'`, `COMPOSE='docker compose ps'`,
+#      `log 'docker compose up -d'`, `echo 'docker compose ps'` đều lọt sạch.
+#      Với shell thì `'…'` và `"…'` chỉ khác ở phép bung biến — khác biệt đó
+#      KHÔNG liên quan gì tới việc chuỗi ấy có phải một lệnh hay không, nên
+#      lấy nó làm cớ để miễn kiểm là tự mở một đường vòng.
+#
+#   C. Chú thích ⇒ bỏ qua.
+#
+#   D. FAIL-CLOSED: cú pháp mà bộ phân loại KHÔNG mô hình hoá (heredoc,
+#      ANSI-C `$'…'`) mà lại chứa `docker compose` ⇒ trả về dạng UNSUPPORTED
+#      để guard ĐỎ, tuyệt đối không im lặng coi là prose an toàn.
+#
+# Nếu ai đó cần nới hợp đồng, sửa ở đây và thêm ca hồi quy — đừng thêm ngoại lệ
+# theo số dòng.
+_NGU_CANH_MA = "ma"
+_NGU_CANH_NHAY_KEP = "nhay_kep"
+_NGU_CANH_NHAY_DON = "nhay_don"
+_NGU_CANH_CHU_THICH = "chu_thich"
+
+
+def _ngu_canh_tung_ky_tu(noi_dung: str) -> list[str]:
+    """Gắn nhãn ngữ cảnh cho TỪNG ký tự của toàn bộ nội dung script.
+
+    Nhận cả tệp chứ không nhận từng dòng: chuỗi và `$( )` đều có thể trải nhiều
+    dòng, mà một regex "giả vờ hiểu nháy" chỉ đúng với dòng hiện tại là đúng cái
+    bẫy đã cắn kho này.
+    """
+    n = len(noi_dung)
+    nhan = [_NGU_CANH_MA] * n
+    ngan_xep: list[str] = []          # ngữ cảnh cha khi bước vào `$( )`
+    tt = _NGU_CANH_MA
+    i = 0
+    while i < n:
+        c = noi_dung[i]
+
+        if tt == _NGU_CANH_CHU_THICH:
+            if c == "\n":
+                tt = _NGU_CANH_MA
+                nhan[i] = _NGU_CANH_MA
+            else:
+                nhan[i] = _NGU_CANH_CHU_THICH
+            i += 1
+            continue
+
+        if tt == _NGU_CANH_NHAY_DON:
+            nhan[i] = _NGU_CANH_NHAY_DON
+            if c == "'":
+                tt = _NGU_CANH_MA
+            i += 1
+            continue
+
+        # Còn lại: ngữ cảnh MÃ hoặc NHÁY KÉP (hai chỗ duy nhất `$( )` mở được).
+        if c == "\\" and i + 1 < n:
+            nhan[i] = tt
+            nhan[i + 1] = tt
+            i += 2
+            continue
+
+        if c == "$" and i + 1 < n and noi_dung[i + 1] == "(":
+            nhan[i] = nhan[i + 1] = _NGU_CANH_MA
+            ngan_xep.append(tt)
+            tt = _NGU_CANH_MA
+            i += 2
+            continue
+
+        if c == ")" and ngan_xep:
+            nhan[i] = _NGU_CANH_MA
+            tt = ngan_xep.pop()
+            i += 1
+            continue
+
+        if tt == _NGU_CANH_NHAY_KEP:
+            nhan[i] = _NGU_CANH_NHAY_KEP
+            if c == '"':
+                tt = _NGU_CANH_MA
+            i += 1
+            continue
+
+        nhan[i] = _NGU_CANH_MA
+        if c == '"':
+            tt = _NGU_CANH_NHAY_KEP
+        elif c == "'":
+            tt = _NGU_CANH_NHAY_DON
+        elif c == "#" and (i == 0 or noi_dung[i - 1] in " \t\n;&|("):
+            tt = _NGU_CANH_CHU_THICH
+            nhan[i] = _NGU_CANH_CHU_THICH
+        i += 1
+    return nhan
+
+
+def _lat_lenh_ma(noi_dung: str, vt: int) -> str:
+    """Lấy nguyên một lệnh từ vị trí `vt`, NỐI các dòng tiếp nối `\\`."""
+    ra: list[str] = []
+    j, n = vt, len(noi_dung)
+    while j < n:
+        c = noi_dung[j]
+        if c == "\\" and j + 1 < n and noi_dung[j + 1] == "\n":
+            ra.append(" ")
+            j += 2
+            continue
+        if c in "\n;":
+            break
+        ra.append(c)
+        j += 1
+    return "".join(ra)
+
+
+def _lat_chuoi(noi_dung: str, nhan: list[str], vt: int) -> tuple[str, int]:
+    """Nội dung chuỗi trích dẫn bao quanh `vt`, kèm độ lệch của `vt` trong đó.
+
+    Dùng chung cho nháy kép LẪN nháy đơn: hai loại chỉ khác ở phép bung biến,
+    còn câu hỏi "chuỗi này có phải một lệnh không" thì y hệt nhau.
+    """
+    loai = nhan[vt]
+    d = vt
+    while d > 0 and nhan[d - 1] == loai:
+        d -= 1
+    c = vt
+    n = len(noi_dung)
+    while c < n and nhan[c] == loai:
+        c += 1
+    return noi_dung[d:c], vt - d
+
+
+def _la_goi_y_operator(chuoi: str, lech: int) -> bool:
+    """Hợp đồng B: chuỗi này có đang IN MỘT LỆNH cho người trực không?"""
+    truoc = chuoi[:lech]
+    # B1 — nằm trong ngoặc đơn còn mở ⇒ là lời chú thích phụ, không phải lệnh.
+    if truoc.count("(") > truoc.count(")"):
+        return False
+    # B2 — đầu chuỗi (bỏ khoảng trắng) hoặc ngay sau `": "`.
+    if truoc.strip() == "":
+        return True
+    return truoc.endswith(": ")
+
+
+def _cu_phap_khong_mo_hinh_hoa(noi_dung: str, vt: int) -> str | None:
+    """Hợp đồng D: `docker compose` có đang nằm trong cú pháp CHƯA mô hình hoá?
+
+    Trả về tên cú pháp (⇒ UNSUPPORTED, guard phải ĐỎ) hoặc None.
+    """
+    truoc = noi_dung[:vt]
+    # heredoc: `<<EOF` / `<<-'EOF'` mở trước đó mà chưa thấy dấu đóng.
+    for m in re.finditer(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", truoc):
+        dau = m.group(2)
+        # Dấu đóng đứng riêng một dòng.
+        if not re.search(rf"^\s*{re.escape(dau)}\s*$", truoc[m.end():], re.M):
+            return f"heredoc <<{dau}"
+    # ANSI-C quoting `$'…'` — bộ quét coi `'` sau `$` như nháy đơn thường.
+    if re.search(r"\$'[^']*$", truoc):
+        return "ANSI-C $'…'"
+    return None
+
+
+def _lenh_compose_trong_script(noi_dung: str):
+    """Sinh `(so_dong, doan_lenh)` cho MỌI lần `docker compose` là LỆNH thật.
+
+    Chuỗi trả về của ca UNSUPPORTED cố ý KHÔNG chứa `-f docker-compose.yml`
+    nên nó luôn làm guard đỏ — fail-closed theo hợp đồng D.
+    """
+    nhan = _ngu_canh_tung_ky_tu(noi_dung)
+    moc = "docker compose"
+    vt = noi_dung.find(moc)
+    while vt != -1:
+        loai = nhan[vt]
+        so_dong = noi_dung.count("\n", 0, vt) + 1
+        chua_ho_tro = _cu_phap_khong_mo_hinh_hoa(noi_dung, vt)
+        if chua_ho_tro is not None:
+            yield so_dong, f"UNSUPPORTED ({chua_ho_tro}) — bộ phân loại không đọc được ngữ cảnh này"
+        elif loai == _NGU_CANH_MA:
+            lenh = _lat_lenh_ma(noi_dung, vt)
+            # Phép kiểm cài đặt, không phải lời gọi.
+            if not noi_dung[:vt].rstrip().endswith("command -v"):
+                yield so_dong, lenh
+        elif loai in (_NGU_CANH_NHAY_KEP, _NGU_CANH_NHAY_DON):
+            # Nháy đơn đi CHUNG luật với nháy kép — xem hợp đồng B.
+            chuoi, lech = _lat_chuoi(noi_dung, nhan, vt)
+            if _la_goi_y_operator(chuoi, lech):
+                yield so_dong, chuoi.strip()
+        vt = noi_dung.find(moc, vt + 1)
 
 
 def test_lenh_compose_phai_ghim_docker_compose_yml():
@@ -820,11 +1035,9 @@ def test_lenh_compose_phai_ghim_docker_compose_yml():
         if sh.name not in _SCRIPT_PRODUCTION:
             continue
         da_soi_script += 1
-        for so, dong in enumerate(_doc(sh).splitlines(), 1):
-            if dong.lstrip().startswith("#"):
-                continue
-            if _co_lenh_compose(dong) and "-f docker-compose.yml" not in dong:
-                pham.append(f"{sh.relative_to(_GOC)}:{so}: {dong.strip()[:90]}")
+        for so, lenh in _lenh_compose_trong_script(_doc(sh)):
+            if "-f docker-compose.yml" not in lenh:
+                pham.append(f"{sh.relative_to(_GOC)}:{so}: {lenh.strip()[:90]}")
     assert da_soi_script == len(_SCRIPT_PRODUCTION), (
         f"chỉ soi được {da_soi_script}/{len(_SCRIPT_PRODUCTION)} script production — "
         "một tên trong _SCRIPT_PRODUCTION đã bị đổi/xoá và guard đang canh hụt"
@@ -832,6 +1045,196 @@ def test_lenh_compose_phai_ghim_docker_compose_yml():
     assert not pham, (
         "lệnh `docker compose` thiếu `-f docker-compose.yml` (Compose sẽ tự nạp "
         "docker-compose.override.yml của DEV):\n  " + "\n  ".join(pham)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hồi quy cho bộ phân loại ngữ cảnh (hợp đồng A/B/C ở trên)
+# ---------------------------------------------------------------------------
+# Mỗi ca nuôi một mẩu shell tổng hợp vào `_lenh_compose_trong_script` và hỏi
+# ĐÚNG MỘT câu. Không ca nào dựa vào số dòng, tên hàm, hay câu chữ hiện tại của
+# `deploy.sh` — nếu guard chỉ đúng nhờ những thứ đó thì nó chưa hiểu ngữ cảnh.
+
+def _bat(noi_dung: str) -> list[str]:
+    """Các đoạn bị coi là LỆNH và THIẾU `-f docker-compose.yml`."""
+    return [
+        lenh
+        for _, lenh in _lenh_compose_trong_script(noi_dung)
+        if "-f docker-compose.yml" not in lenh
+    ]
+
+
+@pytest.mark.parametrize(
+    "ten_ca,manh",
+    [
+        # (1) chẩn đoán trong ngoặc — chính là deploy.sh:515, KHÔNG được bắt.
+        ("chẩn đoán trong ngoặc đơn",
+         '''error "không liệt kê được container của service '$ten' (docker compose ps -aq thất bại)"'''),
+        # (2) chú thích.
+        ("chú thích", '# docker compose up -d rồi chờ healthy'),
+        ("chú thích thụt lề", '    # dùng docker compose ps để xem trạng thái'),
+        # (3) phép kiểm cài đặt.
+        ("command -v", 'command -v docker compose >/dev/null 2>&1 || error "thiếu"'),
+        # (4) văn xuôi có nhắc tên công cụ nhưng không phải lệnh in ra.
+        ("văn xuôi giữa câu", 'log "nhớ rằng docker compose sẽ nạp override nếu thiếu cờ"'),
+        ("văn xuôi trong ngoặc sau dấu hai chấm",
+         'warn "Cảnh báo: bước này (docker compose sẽ tự nạp override) rất dễ sai"'),
+        # Nháy đơn CHỈ sạch khi thật sự là văn xuôi — cùng luật với nháy kép.
+        ("nháy đơn văn xuôi giữa câu",
+         "echo 'hãy nhớ rằng docker compose có thể nạp override'"),
+        ("nháy đơn văn xuôi trong ngoặc",
+         "warn 'Cảnh báo: bước này (docker compose sẽ tự nạp override) rất dễ sai'"),
+    ],
+)
+def test_guard_compose_khong_bat_nham_van_ban(ten_ca: str, manh: str) -> None:
+    assert _bat(manh) == [], f"{ten_ca}: bắt nhầm văn bản không phải lệnh"
+
+
+@pytest.mark.parametrize(
+    "ten_ca,manh",
+    [
+        # (5) gọi trực tiếp.
+        ("gọi trực tiếp", 'docker compose --profile production ps'),
+        # (6) sau `if !`.
+        ("sau if !", 'if ! docker compose exec -T postgres pg_isready; then\n  exit 1\nfi'),
+        # (7) command substitution.
+        ("command substitution", 'ds=$(docker compose ps -aq backend)'),
+        ("command substitution trong nháy kép", 'echo "kết quả: $(docker compose ps -aq backend)"'),
+        # (8) gán mảng / gán chuỗi.
+        ("gán mảng", 'COMPOSE=(docker compose --env-file "$_ENV_FILE")'),
+        ("gán mảng có gạch dưới", '_COMPOSE=(docker compose --env-file "$_ENV_FILE")'),
+        # (9) gợi ý operator bắt đầu bằng `docker compose`.
+        ("gợi ý đầu chuỗi", 'log "  docker compose --profile production logs -f"'),
+        ("gợi ý đầu chuỗi qua cutover", 'cutover "  docker compose --profile production exec backend alembic upgrade head"'),
+        ("gợi ý đầu chuỗi qua echo", 'echo "  docker compose exec postgres pg_restore -U qlts"'),
+        # (10) gợi ý operator sau dấu hai chấm.
+        ("gợi ý sau dấu hai chấm",
+         'error "PostgreSQL không sẵn sàng.\n       Kiểm tra: docker compose --profile production ps postgres"'),
+        ("gợi ý sau dấu hai chấm, câu dài",
+         'error "mơ hồ.\n       Dọn container thừa rồi deploy lại: docker compose ps -a $ten"'),
+        # 🔴 NHÁY ĐƠN — đường fail-open của bản trước. Bốn dạng chủ sở hữu nêu.
+        ("wrapper nháy đơn DC=", "DC='docker compose up -d'"),
+        ("wrapper nháy đơn COMPOSE=", "COMPOSE='docker compose ps'"),
+        ("gợi ý nháy đơn qua log", "log 'docker compose up -d'"),
+        ("gợi ý nháy đơn qua echo", "echo 'docker compose ps'"),
+        ("gợi ý nháy đơn sau dấu hai chấm",
+         "error 'PostgreSQL hỏng. Kiểm tra: docker compose ps postgres'"),
+        ("nháy đơn thụt lề đầu chuỗi", "log '  docker compose --profile production ps'"),
+    ],
+)
+def test_guard_compose_bat_khi_thieu_co(ten_ca: str, manh: str) -> None:
+    assert _bat(manh), f"{ten_ca}: LỌT — thiếu `-f docker-compose.yml` mà guard im lặng"
+
+
+@pytest.mark.parametrize(
+    "ten_ca,manh",
+    [
+        ("heredoc không dấu nháy", "cat <<EOF\ndocker compose up -d\nEOF\n"),
+        ("heredoc có dấu nháy", "cat <<'EOF'\ndocker compose ps\nEOF\n"),
+        ("heredoc thụt lề", "cat <<-EOF\n\tdocker compose ps\nEOF\n"),
+        ("ANSI-C quoting", "DC=$'docker compose ps\\n'"),
+    ],
+)
+def test_guard_compose_cu_phap_la_thi_fail_closed(ten_ca: str, manh: str) -> None:
+    """Hợp đồng D: cú pháp chưa mô hình hoá ⇒ ĐỎ, không im lặng cho qua.
+
+    Đây là chỗ dễ sa vào bẫy nhất: "bộ quét không hiểu" và "chuỗi này an toàn"
+    là HAI kết luận khác nhau, gộp chúng lại là tự mở một đường vòng.
+    """
+    ra = _bat(manh)
+    assert ra, f"{ten_ca}: cú pháp lạ mà guard im lặng"
+    assert any("UNSUPPORTED" in r for r in ra), (
+        f"{ten_ca}: phải nói rõ là UNSUPPORTED chứ không đoán bừa, nhận: {ra}"
+    )
+
+
+@pytest.mark.parametrize(
+    "ten_ca,manh",
+    [
+        ("gọi trực tiếp", 'docker compose -f docker-compose.yml --profile production ps'),
+        ("sau if !", 'if ! docker compose -f docker-compose.yml exec -T postgres pg_isready; then\n  exit 1\nfi'),
+        ("command substitution", 'ds=$(docker compose -f docker-compose.yml ps -aq backend)'),
+        ("gán mảng", 'COMPOSE=(docker compose -f docker-compose.yml --env-file "$_ENV_FILE")'),
+        ("gợi ý đầu chuỗi", 'log "  docker compose -f docker-compose.yml ps"'),
+        ("gợi ý sau dấu hai chấm", 'error "hỏng.\n       Kiểm tra: docker compose -f docker-compose.yml ps postgres"'),
+        ("nối dòng, cờ ở dòng đầu",
+         'docker compose -f docker-compose.yml --profile production \\\n    up -d backend'),
+        # Nháy đơn có cờ ⇒ phải XANH, nếu không luật mới thành "chặn tất".
+        ("wrapper nháy đơn có cờ", "DC='docker compose -f docker-compose.yml up -d'"),
+        ("gợi ý nháy đơn có cờ", "log '  docker compose -f docker-compose.yml ps'"),
+        ("gợi ý nháy đơn sau hai chấm có cờ",
+         "error 'hỏng. Kiểm tra: docker compose -f docker-compose.yml ps postgres'"),
+    ],
+)
+def test_guard_compose_doi_chung_co_co_thi_xanh(ten_ca: str, manh: str) -> None:
+    """Đối chứng: có `-f` thì KHÔNG được kêu.
+
+    Thiếu nhóm ca này thì một bản vá "bắt tất" vẫn làm mọi ca ở trên xanh.
+    """
+    assert _bat(manh) == [], f"{ten_ca}: kêu oan một lệnh đã ghim đúng cờ"
+
+
+def test_guard_compose_van_thay_du_hai_loai_o_deploy_sh():
+    """Tripwire thay cho con số trong chú thích.
+
+    Chú thích ghi "bốn dòng string" đã lỗi thời trong im lặng (thật ra là bảy).
+    Nên bất biến được neo bằng PHÉP ĐO, không bằng câu chữ: guard phải còn nhìn
+    thấy CẢ HAI loại trong `deploy.sh` — lệnh trong ngữ cảnh mã, VÀ gợi ý
+    operator nằm trong chuỗi. Mất một loại nghĩa là bộ phân loại vừa câm đi một
+    nửa, dù mọi ca tổng hợp vẫn xanh.
+    """
+    d = _GOC / "scripts" / "deploy.sh"
+    if not d.is_file():
+        pytest.skip("không có scripts/deploy.sh")
+    noi_dung = _doc(d)
+    nhan = _ngu_canh_tung_ky_tu(noi_dung)
+    so_dong_thay = {so for so, _ in _lenh_compose_trong_script(noi_dung)}
+    assert so_dong_thay, "guard không thấy lệnh `docker compose` nào — chắc chắn đã câm"
+
+    trong_ma, trong_chuoi = 0, 0
+    for so in so_dong_thay:
+        vt = 0
+        for _ in range(so - 1):
+            vt = noi_dung.index("\n", vt) + 1
+        het = noi_dung.find("\n", vt)
+        het = len(noi_dung) if het == -1 else het
+        k = noi_dung.find("docker compose", vt, het)
+        if k == -1:
+            continue
+        if nhan[k] == _NGU_CANH_MA:
+            trong_ma += 1
+        else:
+            trong_chuoi += 1
+
+    assert trong_ma > 0, "không còn thấy lệnh nào trong ngữ cảnh MÃ"
+    assert trong_chuoi > 0, (
+        "không còn thấy gợi ý operator nào trong chuỗi — nhánh B của hợp đồng "
+        "đã chết mà các ca tổng hợp không phát hiện ra"
+    )
+    # Mọi thứ guard thấy trong tệp thật đều PHẢI đã ghim cờ (nếu không, ca đích
+    # `test_lenh_compose_phai_ghim_docker_compose_yml` đang đỏ).
+    assert _bat(noi_dung) == [], f"deploy.sh có lệnh thiếu cờ: {_bat(noi_dung)}"
+
+
+def test_guard_compose_van_thay_dong_515_la_khong_phai_lenh():
+    """Neo vào tệp THẬT: dòng chẩn đoán của `deploy.sh` không được tính là lệnh.
+
+    Ca này cố ý đọc `scripts/deploy.sh` thật thay vì một mẩu tổng hợp — nếu ai
+    đó sửa wording của dòng ấy để né guard thay vì sửa guard, ca tổng hợp vẫn
+    xanh còn ca này sẽ đổi nghĩa và bắt phải đọc lại.
+    """
+    d = _GOC / "scripts" / "deploy.sh"
+    if not d.is_file():
+        pytest.skip("không có scripts/deploy.sh")
+    noi_dung = _doc(d)
+    assert "(docker compose ps -aq thất bại)" in noi_dung, (
+        "dòng chẩn đoán đã bị đổi wording — guard phải được kiểm lại theo HÌNH "
+        "DẠNG, không phải theo câu chữ này"
+    )
+    so_dong = [so for so, _ in _lenh_compose_trong_script(noi_dung)]
+    dong_chan_doan = noi_dung[: noi_dung.index("(docker compose ps -aq thất bại)")].count("\n") + 1
+    assert dong_chan_doan not in so_dong, (
+        f"dòng {dong_chan_doan} là câu chẩn đoán trong ngoặc, không phải lệnh"
     )
 
 
