@@ -298,12 +298,53 @@ case "$_tat_ca" in
     *"alembic upgrade head"*)
         exit "${STUB_ALEMBIC_RC:-0}"
         ;;
-    *" ps "*)
-        # deploy.sh chờ bằng `... ps <svc> | grep -q healthy`
-        echo "qlts-gia   running   healthy"
-        exit 0
+    *" ps -aq "*)
+        # Cổng health đọc ID container rồi hỏi `docker inspect`, KHÔNG grep một
+        # dòng chữ dành cho người đọc.
+        #
+        # Bản trước của stub này trả "qlts-gia   running   healthy" cho MỌI lệnh
+        # chứa " ps ", tức nó bám đúng bản cài đặt CÓ LỖI (`ps <svc> | grep -q
+        # healthy`). Hệ quả: vòng chờ luôn thoát ở vòng đầu, nên nhánh quá hạn
+        # CHƯA TỪNG được thi hành trong bất kỳ ca nào — guard xanh mà không canh
+        # gì. Nay stub mô phỏng đúng giao thức: một ID cho mỗi service.
+        case "$_tat_ca" in
+            *" backend"*)  echo "cid-backend"  ; exit 0 ;;
+            *" frontend"*) echo "cid-frontend" ; exit 0 ;;
+        esac
+        echo "STUB: 'ps -aq' cho service KHÔNG nhận diện được: $_tat_ca" >&2
+        exit 90
+        ;;
+    inspect*)
+        # Trả theo ĐÚNG trường được hỏi. Định dạng lạ ⇒ FAIL to tiếng, tuyệt đối
+        # không im lặng trả rỗng: chuỗi rỗng trôi qua mọi phép so và biến một
+        # thay đổi giao thức thành một ca xanh giả.
+        case "$_tat_ca" in
+            *".State.Status"*)
+                case "$_tat_ca" in
+                    *cid-frontend*) echo "${STUB_STATUS_FRONTEND:-running}" ;;
+                    *)              echo "${STUB_STATUS_BACKEND:-running}"  ;;
+                esac
+                exit 0
+                ;;
+            *".State.Health"*)
+                case "$_tat_ca" in
+                    *cid-frontend*) echo "${STUB_HEALTH_FRONTEND:-healthy}" ;;
+                    *)              echo "${STUB_HEALTH_BACKEND:-healthy}"  ;;
+                esac
+                exit 0
+                ;;
+            *".State.ExitCode"*)
+                echo "${STUB_EXITCODE:-0}"
+                exit 0
+                ;;
+        esac
+        echo "STUB: 'docker inspect' với định dạng KHÔNG nhận diện được: $_tat_ca" >&2
+        exit 91
         ;;
     *)
+        # Các họ lệnh còn lại (up/build/exec/run/…) vốn trả 0 trên đường thuận
+        # lợi. Chúng vẫn được GHI vào $QLTS_STUB_LOG ở đầu tệp, nên một lệnh
+        # ngoài dự kiến đọc lại được, không biến mất.
         exit 0
         ;;
 esac
