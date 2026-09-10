@@ -637,3 +637,309 @@ def test_guard_tieu_de_nam_trong_required_python_dependencies():
 
     co = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout")]
     assert len(co) == 1 and co[0]["with"]["fetch-depth"] == 0
+
+
+# ===========================================================================
+# scripts/deploy.sh — cổng ghim SHA + cổng health (vá 09-09-2026)
+# ===========================================================================
+# Hai lỗ được đóng ở đây, và cả hai chỉ chứng minh được bằng cách THI HÀNH
+# THẬT `scripts/deploy.sh`, không phải bằng cách grep nội dung nó:
+#
+#   * TOCTOU ghim SHA: `deploy.yml` đưa VPS tới đúng `$SHA_MONG_DOI` rồi mới gọi
+#     script, nhưng Step 2 của script `git pull origin main` — kéo TIP nhánh, đẩy
+#     cây vượt qua commit vừa xác minh. Job dừng ở `environment: production` chờ
+#     duyệt nên khoảng hở dài bằng thời gian chờ approve.
+#   * Cổng health đọc bằng `grep -q "healthy"` — khớp SUBSTRING nên `unhealthy`
+#     cũng lọt; và frontend hết timeout thì KHÔNG có nhánh nào chặn.
+#
+# Bộ ca dưới đây tự dựng sân khấu riêng (stub `docker`/`git`) thay vì dùng lại
+# harness của `test_deploy_startup_gates.py`, để hai tệp không ràng buộc nhau.
+
+_DEPLOY_SH = _goc_repo() / "scripts" / "deploy.sh"
+
+_SHA_HEAD = "c" * 40          # HEAD mà stub `git rev-parse` trả về
+_SHA_KHAC = "d" * 40          # một SHA hợp lệ nhưng KHÁC HEAD
+
+_MOC_THANH_CONG = "Deployment completed successfully!"
+_MOC_NGINX = "nginx-apply"
+_MOC_GHIM = "Cây đã ghim tại"
+
+_STUB_DOCKER_DH = r"""#!/usr/bin/env bash
+_tat_ca="$*"
+echo "docker $_tat_ca" >> "$QLTS_STUB_LOG"
+
+case "$_tat_ca" in
+    *" ps -aq "*)
+        [ "${STUB_PSQ_RC:-0}" != "0" ] && exit "${STUB_PSQ_RC}"
+        [ "${STUB_PSQ_EMPTY:-0}" = "1" ] && exit 0
+        [ "${STUB_PSQ_NHIEU:-0}" = "1" ] && { printf 'cid-mot\ncid-hai\n'; exit 0; }
+        case "$_tat_ca" in
+            *frontend*) echo "cid-frontend" ;;
+            *)          echo "cid-backend"  ;;
+        esac
+        exit 0
+        ;;
+    inspect*)
+        [ "${STUB_INSPECT_RC:-0}" != "0" ] && exit "${STUB_INSPECT_RC}"
+        case "$_tat_ca" in
+            *State.Status*)
+                case "$_tat_ca" in
+                    *cid-frontend*) echo "${STUB_STATUS_FRONTEND:-running}" ;;
+                    *)              echo "${STUB_STATUS_BACKEND:-running}"  ;;
+                esac
+                ;;
+            *ExitCode*)
+                echo "1"
+                ;;
+            *)
+                case "$_tat_ca" in
+                    *cid-frontend*) echo "${STUB_HEALTH_FRONTEND:-healthy}" ;;
+                    *)              echo "${STUB_HEALTH_BACKEND:-healthy}"  ;;
+                esac
+                ;;
+        esac
+        exit 0
+        ;;
+    *pg_isready*)  exit 0 ;;
+    *pg_dump*)     printf -- '-- ban sao gia\nSELECT 1;\n'; exit 0 ;;
+    *)             exit 0 ;;
+esac
+"""
+
+_STUB_GIT_DH = r"""#!/usr/bin/env bash
+echo "git $*" >> "$QLTS_STUB_LOG"
+case "$1" in
+    rev-parse)
+        [ "${STUB_GIT_REVPARSE_RC:-0}" != "0" ] && exit "${STUB_GIT_REVPARSE_RC}"
+        echo "${STUB_GIT_HEAD:-cccccccccccccccccccccccccccccccccccccccc}"
+        ;;
+    pull) echo "[git gia] pull" ;;
+    log)  : ;;
+    *)    : ;;
+esac
+exit 0
+"""
+
+_STUB_NGINX_APPLY_DH = r"""#!/usr/bin/env bash
+echo "nginx-apply $*" >> "$QLTS_STUB_LOG"
+exit 0
+"""
+
+_ENV_PROD_DH = (
+    "DOMAIN=vidu.test\n"
+    "POSTGRES_USER=qlts\n"
+    "POSTGRES_DB=qlts_production\n"
+    "POSTGRES_PASSWORD=matkhau-gia\n"
+)
+
+_bo_qua_neu_khong_posix_dh = pytest.mark.skipif(
+    os.name == "nt" or shutil.which("bash") is None,
+    reason="cần bash và PATH kiểu POSIX để thi hành thật scripts/deploy.sh",
+)
+
+
+def _san_khau_dh(tmp_path: Path, deploy_sh: str | None = None) -> Path:
+    goc = tmp_path / "qlts"
+    (goc / "scripts").mkdir(parents=True)
+    (goc / "nginx" / "templates").mkdir(parents=True)
+    (goc / "bin").mkdir()
+
+    than = deploy_sh if deploy_sh is not None else _DEPLOY_SH.read_text(encoding="utf-8")
+    (goc / "scripts" / "deploy.sh").write_text(than, encoding="utf-8", newline="\n")
+    for ten, noi_dung in (
+        ("scripts/nginx-apply.sh", _STUB_NGINX_APPLY_DH),
+        ("bin/docker", _STUB_DOCKER_DH),
+        ("bin/git", _STUB_GIT_DH),
+    ):
+        duong = goc / ten
+        duong.write_text(noi_dung, encoding="utf-8", newline="\n")
+        duong.chmod(0o755)
+
+    (goc / ".env.production").write_text(_ENV_PROD_DH, encoding="utf-8", newline="\n")
+    (goc / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8", newline="\n")
+    (goc / "nginx" / "templates" / "default.conf.template").write_text(
+        "server { server_name ${DOMAIN}; }\n", encoding="utf-8", newline="\n"
+    )
+    return goc
+
+
+def _chay_dh(goc: Path, **kich_ban: str):
+    nhat_ky = goc / "lenh.log"
+    nhat_ky.write_text("", encoding="utf-8")
+    moi_truong = {
+        **os.environ,
+        "PATH": f"{goc / 'bin'}:{os.environ.get('PATH', '')}",
+        "QLTS_STUB_LOG": str(nhat_ky),
+    }
+    # Các biến điều khiển PHẢI đến từ kịch bản của ca, không từ môi trường
+    # người chạy — nếu không, một ca có thể xanh mà chẳng chứng minh gì.
+    for bien in (
+        "SHA_MONG_DOI", "QLTS_HEALTH_TIMEOUT", "STUB_GIT_HEAD", "STUB_GIT_REVPARSE_RC",
+        "STUB_HEALTH_BACKEND", "STUB_HEALTH_FRONTEND", "STUB_STATUS_BACKEND",
+        "STUB_STATUS_FRONTEND", "STUB_INSPECT_RC", "STUB_PSQ_RC", "STUB_PSQ_EMPTY",
+        "STUB_PSQ_NHIEU", "RUN_MIGRATIONS_ON_STARTUP",
+        "RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP", "RUN_CASBIN_LOAD_ON_STARTUP",
+    ):
+        moi_truong.pop(bien, None)
+    # Hạn chờ ngắn cho MỌI ca: cùng ngữ nghĩa, nhưng một bộ 19 ca không phải đốt
+    # 60 giây mỗi lần chạm nhánh quá hạn. Ca nào cần con số khác thì tự đặt lại.
+    moi_truong["QLTS_HEALTH_TIMEOUT"] = "4"
+    moi_truong.update(kich_ban)
+    ket = _sp.run(
+        ["bash", "scripts/deploy.sh"],
+        cwd=str(goc), env=moi_truong, capture_output=True, text=True, timeout=300,
+    )
+    return ket, nhat_ky.read_text(encoding="utf-8"), (ket.stdout or "") + (ket.stderr or "")
+
+
+# --- I. Cổng ghim SHA -------------------------------------------------------
+
+
+@_bo_qua_neu_khong_posix_dh
+def test_dh_sha_khop_thi_di_tiep_va_khong_pull(tmp_path: Path) -> None:
+    """ĐỐI CHỨNG cho cổng SHA: khớp thì đi tiếp, và TUYỆT ĐỐI không `git pull`."""
+    goc = _san_khau_dh(tmp_path)
+    ket, nhat_ky, ra = _chay_dh(goc, SHA_MONG_DOI=_SHA_HEAD, STUB_GIT_HEAD=_SHA_HEAD)
+
+    assert ket.returncode == 0, f"đường thuận lợi mà chặn (rc={ket.returncode}):\n{ra[-2000:]}"
+    assert _MOC_GHIM in ra, f"không thấy log xác nhận đã ghim:\n{ra[-1500:]}"
+    assert "git pull" not in nhat_ky, (
+        f"có SHA_MONG_DOI mà VẪN `git pull` — đúng lỗ TOCTOU đang vá:\n{nhat_ky}"
+    )
+
+
+@_bo_qua_neu_khong_posix_dh
+def test_dh_sha_lech_thi_chan_truoc_moi_mutation(tmp_path: Path) -> None:
+    goc = _san_khau_dh(tmp_path)
+    ket, nhat_ky, ra = _chay_dh(goc, SHA_MONG_DOI=_SHA_KHAC, STUB_GIT_HEAD=_SHA_HEAD)
+
+    assert ket.returncode != 0, "HEAD lệch mà deploy vẫn thoát 0"
+    assert _SHA_HEAD in ra and _SHA_KHAC in ra, f"phải nêu cả hai SHA:\n{ra[-800:]}"
+    for cam in ("pg_dump", "build --parallel", "upgrade head"):
+        assert cam not in nhat_ky, f"đã chạy `{cam}` dù cổng SHA lệch:\n{nhat_ky}"
+    assert "git pull" not in nhat_ky, "đã `git pull` dù cổng SHA lệch"
+
+
+@_bo_qua_neu_khong_posix_dh
+@pytest.mark.parametrize(
+    "ten_ca,gia_tri",
+    [
+        ("quá ngắn", "abc123"),
+        ("chữ HOA", "C" * 40),
+        ("39 ký tự", "c" * 39),
+        ("41 ký tự", "c" * 41),
+        ("có ký tự lạ", "g" * 40),
+        ("khoảng trắng hai đầu", " " + "c" * 40 + " "),
+        ("khoảng trắng ở giữa", "c" * 20 + " " + "c" * 19),
+        ("chỉ khoảng trắng", "   "),
+    ],
+)
+def test_dh_sha_sai_dinh_dang_thi_chan(tmp_path: Path, ten_ca: str, gia_tri: str) -> None:
+    goc = _san_khau_dh(tmp_path)
+    ket, nhat_ky, _ = _chay_dh(goc, SHA_MONG_DOI=gia_tri, STUB_GIT_HEAD=_SHA_HEAD)
+
+    assert ket.returncode != 0, f"{ten_ca}: SHA sai định dạng mà vẫn thoát 0"
+    assert "git pull" not in nhat_ky, f"{ten_ca}: đã `git pull` dù SHA sai định dạng"
+
+
+@_bo_qua_neu_khong_posix_dh
+def test_dh_rev_parse_loi_thi_chan(tmp_path: Path) -> None:
+    """Không đọc được HEAD ⇒ KHÔNG đoán bừa là đang đứng đúng chỗ."""
+    goc = _san_khau_dh(tmp_path)
+    ket, _, ra = _chay_dh(goc, SHA_MONG_DOI=_SHA_HEAD, STUB_GIT_REVPARSE_RC="1")
+
+    assert ket.returncode != 0, "git rev-parse hỏng mà deploy vẫn đi tiếp"
+    assert "không đọc được HEAD" in ra, f"thông điệp không nêu nguyên nhân:\n{ra[-800:]}"
+
+
+@_bo_qua_neu_khong_posix_dh
+def test_dh_sha_khong_hien_dien_thi_di_duong_manual(tmp_path: Path) -> None:
+    """UNSET THẬT ⇒ giữ hành vi manual (VẪN `git pull`, VẪN unpinned)."""
+    goc = _san_khau_dh(tmp_path)
+    ket, nhat_ky, ra = _chay_dh(goc)
+
+    assert ket.returncode == 0, f"đường manual bị chặn nhầm:\n{ra[-1500:]}"
+    assert "git pull" in nhat_ky, "đường manual phải giữ nguyên `git pull origin main`"
+    assert "KHÔNG HIỆN DIỆN" in ra, (
+        f"cảnh báo phải nói đúng trạng thái 'không hiện diện':\n{ra[-800:]}"
+    )
+    assert "KHÔNG có bảo đảm ghim SHA" in ra, (
+        "đường manual phải nói rõ nó KHÔNG được ghim — im lặng ở đây là overclaim"
+    )
+
+
+@_bo_qua_neu_khong_posix_dh
+def test_dh_sha_co_mat_nhung_rong_thi_chan(tmp_path: Path) -> None:
+    """CÓ MẶT + RỖNG là LỖI, không phải 'chạy tay'.
+
+    `[ -n "${SHA_MONG_DOI:-}" ]` gộp unset với set-empty, nên một workflow đã
+    forward biến mà giá trị không tới nơi (`envs:` thiếu tên, secret rỗng,
+    expression sai) sẽ rơi xuống nhánh manual, `git pull` tip mới và thoát 0 —
+    cổng tự tắt đúng lúc cần canh nhất, không một dòng log nào nói ra.
+    """
+    goc = _san_khau_dh(tmp_path)
+    ket, nhat_ky, ra = _chay_dh(goc, SHA_MONG_DOI="")
+
+    assert ket.returncode != 0, f"set-empty mà deploy vẫn thoát 0:\n{ra[-1500:]}"
+    assert "CÓ MẶT nhưng RỖNG" in ra, f"thông điệp phải phân biệt với unset:\n{ra[-800:]}"
+    assert "KHÔNG HIỆN DIỆN" not in ra, (
+        "set-empty KHÔNG được báo là 'không hiện diện' — hai trạng thái khác nhau"
+    )
+    assert "git pull" not in nhat_ky, f"set-empty mà VẪN `git pull`:\n{nhat_ky}"
+    for cam in ("pg_dump", "build --parallel", "upgrade head", "nginx-apply"):
+        assert cam not in nhat_ky, f"set-empty mà đã chạy `{cam}`:\n{nhat_ky}"
+
+
+# --- II. Cổng health --------------------------------------------------------
+
+
+@_bo_qua_neu_khong_posix_dh
+def test_dh_duong_thuan_loi_healthy_thi_exit_0(tmp_path: Path) -> None:
+    """ĐỐI CHỨNG BẮT BUỘC: thiếu ca này thì `error "chặn hết"` cũng xanh."""
+    goc = _san_khau_dh(tmp_path)
+    ket, nhat_ky, ra = _chay_dh(goc, SHA_MONG_DOI=_SHA_HEAD, STUB_GIT_HEAD=_SHA_HEAD)
+
+    assert ket.returncode == 0, f"cả hai healthy mà vẫn chặn:\n{ra[-2000:]}"
+    assert _MOC_NGINX in nhat_ky, f"không tới được nginx-apply:\n{nhat_ky[-1500:]}"
+    assert _MOC_THANH_CONG in ra, "không in dòng hoàn tất"
+
+
+@_bo_qua_neu_khong_posix_dh
+@pytest.mark.parametrize(
+    "ten_ca,kich_ban,manh_mong_doi",
+    [
+        ("backend unhealthy",  {"STUB_HEALTH_BACKEND": "unhealthy"},  "'backend' UNHEALTHY"),
+        ("frontend unhealthy", {"STUB_HEALTH_FRONTEND": "unhealthy"}, "'frontend' UNHEALTHY"),
+        ("backend starting → quá hạn",
+         {"STUB_HEALTH_BACKEND": "starting", "QLTS_HEALTH_TIMEOUT": "4"},
+         "'backend' quá hạn 4s"),
+        ("frontend starting → quá hạn",
+         {"STUB_HEALTH_FRONTEND": "starting", "QLTS_HEALTH_TIMEOUT": "4"},
+         "'frontend' quá hạn 4s"),
+        ("không khai healthcheck",
+         {"STUB_HEALTH_BACKEND": "khong-co-healthcheck"},
+         "KHÔNG khai healthcheck"),
+        ("inspect lỗi",   {"STUB_INSPECT_RC": "1"},  "docker inspect THẤT BẠI"),
+        ("ps -aq lỗi",    {"STUB_PSQ_RC": "1"},      "không liệt kê được container"),
+        ("0 container",   {"STUB_PSQ_EMPTY": "1"},   "không thấy container nào"),
+        ("nhiều container", {"STUB_PSQ_NHIEU": "1"}, "đang có 2 container"),
+        ("backend exited", {"STUB_STATUS_BACKEND": "exited"}, "đã DỪNG"),
+    ],
+)
+def test_dh_moi_trang_thai_khong_healthy_deu_chan(
+    tmp_path: Path, ten_ca: str, kich_ban: dict, manh_mong_doi: str
+) -> None:
+    """Mỗi ca vi phạm ĐÚNG MỘT bất biến, và đòi ĐÚNG thông điệp của bất biến ấy.
+
+    Chỉ khẳng định `returncode != 0` là không đủ: một đột biến làm mất nhánh
+    riêng vẫn có thể rơi vào nhánh quá hạn và giữ rc≠0, che mất hồi quy.
+    """
+    goc = _san_khau_dh(tmp_path)
+    ket, nhat_ky, ra = _chay_dh(
+        goc, SHA_MONG_DOI=_SHA_HEAD, STUB_GIT_HEAD=_SHA_HEAD, **kich_ban
+    )
+
+    assert ket.returncode != 0, f"{ten_ca}: KHÔNG healthy mà deploy vẫn thoát 0:\n{ra[-1500:]}"
+    assert manh_mong_doi in ra, f"{ten_ca}: thiếu thông điệp {manh_mong_doi!r}:\n{ra[-1500:]}"
+    assert _MOC_NGINX not in nhat_ky, f"{ten_ca}: đã tới nginx-apply dù cổng health đỏ"
+    assert _MOC_THANH_CONG not in ra, f"{ten_ca}: đã in dòng hoàn tất dù cổng health đỏ"

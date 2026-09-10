@@ -156,7 +156,73 @@ log "Step 2/8: Pulling latest code..."
 # via git pull catch-up). Now the operator sees exactly what landed.
 _PRE_PULL_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
 
-git pull origin main
+# =============================================================================
+# CỔNG GHIM SHA (vá 09-09-2026) — đóng TOCTOU giữa deploy.yml và deploy.sh
+# =============================================================================
+# `deploy.yml` đã làm đúng phần của nó: fetch, so `FETCH_HEAD` với `$SHA_MONG_DOI`,
+# `git merge --ff-only "$SHA_MONG_DOI"`, kiểm lại HEAD, RỒI mới `bash scripts/deploy.sh`.
+# Nhưng Step 2 ở đây lại `git pull origin main` — kéo TIP nhánh, tức đẩy cây
+# VƯỢT QUA đúng commit vừa được xác minh. Job dừng ở `environment: production`
+# chờ duyệt, nên khoảng hở ấy dài bằng thời gian chờ người bấm approve: run mang
+# metadata commit A, còn thứ thật sự lên production là commit B. Không log nào
+# nói ra điều đó, vì cổng duy nhất nằm ở yml và đã bị `pull` này vô hiệu hoá.
+#
+# Fail-closed: có `SHA_MONG_DOI` thì TUYỆT ĐỐI không `pull`; chỉ xác nhận cây
+# đang đứng đúng chỗ. Lệch ⇒ dừng TRƯỚC backup/build/mọi mutation runtime.
+#
+# BA trạng thái, BA lối đi — không được gộp:
+#
+#   1. KHÔNG HIỆN DIỆN  → chạy tay, đường manual (unpinned, có cảnh báo).
+#   2. HIỆN DIỆN + RỖNG → LỖI. Đây là workflow đã forward biến nhưng giá trị
+#      không tới nơi (`envs:` thiếu tên, secret rỗng, expression sai). Coi nó
+#      là "chạy tay" thì đúng lúc cổng cần canh nhất, cổng lại tự tắt và
+#      `git pull` kéo tip mới với RC=0 — im lặng hoàn toàn.
+#   3. HIỆN DIỆN + CÓ GIÁ TRỊ → validate rồi ghim.
+#
+# `[ -n "${SHA_MONG_DOI:-}" ]` KHÔNG phân biệt được 1 với 2 (đã đo bằng bash:
+# set-empty cho kết quả y hệt unset), nên nó KHÔNG được dùng làm cổng setness.
+# `${VAR+co}` bung thành "co" khi biến CÓ MẶT, kể cả khi rỗng — đó mới là phép
+# hỏi đúng câu.
+if [ "${SHA_MONG_DOI+co}" = "co" ]; then
+    if [ -z "$SHA_MONG_DOI" ]; then
+        error "SHA_MONG_DOI CÓ MẶT nhưng RỖNG — biến đã được truyền vào mà giá trị không tới nơi.
+       KHÔNG coi đây là chạy tay, KHÔNG \`git pull\`. Kiểm \`envs:\` trong deploy.yml
+       và giá trị \${{ github.sha }} của run."
+    fi
+
+    # Đòi đúng 40 hex CHỮ THƯỜNG. `git rev-parse` in chữ thường, nên so bằng
+    # `=` với một giá trị viết hoa sẽ luôn lệch — bắt ở đây để thông điệp nói
+    # đúng nguyên nhân thay vì đổ cho "HEAD lệch".
+    case "$SHA_MONG_DOI" in
+        *[!0-9a-f]*)
+            error "SHA_MONG_DOI không phải 40 hex chữ thường (có ký tự lạ) — từ chối deploy" ;;
+    esac
+    if [ "${#SHA_MONG_DOI}" -ne 40 ]; then
+        error "SHA_MONG_DOI dài ${#SHA_MONG_DOI} ký tự, cần đúng 40 — từ chối deploy"
+    fi
+
+    if ! _HEAD_HIEN_TAI=$(git rev-parse HEAD 2>/dev/null); then
+        error "không đọc được HEAD (git rev-parse thất bại) — từ chối deploy khi chưa biết cây đang ở đâu"
+    fi
+
+    if [ "$_HEAD_HIEN_TAI" != "$SHA_MONG_DOI" ]; then
+        error "cây đang ở $_HEAD_HIEN_TAI nhưng run này được sinh cho $SHA_MONG_DOI.
+       KHÔNG tự kéo tip mới. Chạy lại Deploy trên đúng commit cần lên."
+    fi
+
+    log "Cây đã ghim tại $SHA_MONG_DOI — BỎ QUA \`git pull\` (cổng SHA đạt)"
+else
+    # Đường MANUAL (chạy tay trên VPS, không qua workflow).
+    #
+    # ⚠️ Đường này KHÔNG có bảo đảm ghim của workflow. `git pull origin main`
+    # kéo tip nhánh tại thời điểm chạy, nên thứ lên production là "main lúc này",
+    # không phải một commit đã được xác minh trước. Cổng SHA ở trên KHÔNG áp
+    # dụng cho nhánh này và bản vá 09-09-2026 KHÔNG tuyên bố đã đóng race ở đây.
+    # Muốn có bảo đảm ghim thì đặt SHA_MONG_DOI=<40 hex> rồi tự đưa cây tới đó
+    # trước khi gọi script, hoặc dùng workflow Deploy.
+    warn "SHA_MONG_DOI KHÔNG HIỆN DIỆN — chạy đường MANUAL, KHÔNG có bảo đảm ghim SHA"
+    git pull origin main
+fi
 
 _POST_PULL_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
 if [ -n "$_PRE_PULL_SHA" ] && [ "$_PRE_PULL_SHA" != "$_POST_PULL_SHA" ]; then
@@ -195,6 +261,25 @@ log "Nginx template sẽ được render TRONG container (domain=$DOMAIN, admiss
 # Step 4: Build Docker images
 # =============================================================================
 log "Step 4/8: Building Docker images..."
+
+# Kiểm lại HEAD ngay TRƯỚC build: đây là biên cuối cùng còn rẻ. Step 3 chỉ đọc
+# biến và kiểm tệp template, nhưng nó vẫn là một khoảng thời gian trong đó một
+# tiến trình khác (cron, người trực gõ tay, một lượt deploy chồng) có thể đã
+# dịch cây. Build từ cây đã trôi = ảnh không khớp SHA mà run này khai.
+#
+# Dùng cùng phép hỏi setness với Step 2 (`${VAR+co}`), không phải `-n`: tới đây
+# thì ca "có mặt nhưng rỗng" đã bị chặn ở trên, nhưng để hai cổng hỏi CÙNG MỘT
+# câu thì sau này sửa một chỗ không làm chỗ kia lệch nghĩa trong im lặng.
+if [ "${SHA_MONG_DOI+co}" = "co" ]; then
+    if ! _HEAD_TRUOC_BUILD=$(git rev-parse HEAD 2>/dev/null); then
+        error "không đọc được HEAD trước khi build — từ chối build khi chưa biết cây đang ở đâu"
+    fi
+    if [ "$_HEAD_TRUOC_BUILD" != "$SHA_MONG_DOI" ]; then
+        error "cây đã DỊCH giữa Step 2 và Step 4: HEAD=$_HEAD_TRUOC_BUILD, chờ $SHA_MONG_DOI.
+       KHÔNG build từ cây trôi. Chưa chạm CSDL, chưa dựng ảnh nào."
+    fi
+fi
+
 docker compose -f docker-compose.yml --profile production --env-file .env.production build --parallel
 
 # =============================================================================
@@ -388,19 +473,97 @@ fi
 docker compose -f docker-compose.yml --profile production --env-file .env.production up -d \
     backend celery-worker celery-beat
 
-log "Waiting for backend to be healthy..."
-timeout=60
-while [ $timeout -gt 0 ]; do
-    if docker compose -f docker-compose.yml ps backend | grep -q "healthy"; then
-        break
-    fi
-    sleep 2
-    timeout=$((timeout - 2))
-done
-
-if [ $timeout -le 0 ]; then
-    error "Backend failed to become healthy within 60s. Check logs: docker compose -f docker-compose.yml logs backend"
+# =============================================================================
+# CỔNG HEALTH (vá 09-09-2026) — MỘT helper cho cả backend lẫn frontend
+# =============================================================================
+# Bản cũ có hai vòng lặp chép tay, và cả hai đọc health bằng
+# `docker compose ps <svc> | grep -q "healthy"`. Hai lỗi chồng nhau:
+#
+#   1. `grep` khớp SUBSTRING. Cột STATUS in `Up 30 seconds (unhealthy)` — chuỗi
+#      đó CHỨA "healthy" ⇒ `break` ngay vòng đầu ⇒ `timeout` vẫn 60 ⇒ cổng
+#      `[ $timeout -le 0 ]` KHÔNG BAO GIỜ đúng. Container unhealthy mà deploy
+#      báo "completed successfully".
+#   2. Bất đối xứng: backend có nhánh timeout, frontend KHÔNG có gì cả — hết
+#      60 giây là rơi thẳng xuống nginx-apply rồi in dòng thành công.
+#
+# Vá bằng CẤU TRÚC, không bằng cách nhớ thêm một `if`: một hàm duy nhất phục vụ
+# cả hai service, nên không còn chỗ cho hai đường xử lý lệch nhau.
+#
+# NGUỒN CHUẨN: `scripts/nginx-apply.sh:_cho_healthy`. Bản này khác 4 điểm CÓ CHỦ
+# Ý: (a) không kéo `--profile candidate` (deploy.sh không dựng container ứng
+# viên); (b) `error`/`exit 1` thay vì `return 1` — deploy.sh không có bước dọn
+# nào sau đó, và `return 1` trong thân `if` sẽ bị `set -e` bỏ qua, đúng loại
+# fail-open đang vá; (c) CHẶN khi có nhiều container thay vì `| head -1` chọn
+# bừa; (d) chặn NGAY khi service không khai healthcheck thay vì chờ hết hạn.
+_HAN_HEALTH="${QLTS_HEALTH_TIMEOUT:-60}"
+case "$_HAN_HEALTH" in
+    ''|*[!0-9]*) error "QLTS_HEALTH_TIMEOUT phải là số nguyên, nhận: '$_HAN_HEALTH'" ;;
+esac
+if [ "$_HAN_HEALTH" -lt 1 ] || [ "$_HAN_HEALTH" -gt 600 ]; then
+    error "QLTS_HEALTH_TIMEOUT ngoài khoảng 1..600: '$_HAN_HEALTH'"
 fi
+
+# Chờ MỘT service tới đúng trạng thái `healthy`. Mọi kết cục khác đều exit 1.
+_cho_healthy_dv() {
+    local ten="$1" han="$2"
+    local ds so cid tt sk ma het
+
+    # `ps -aq` trả ID, không trả chữ — cắt hẳn đường đọc health bằng cách grep
+    # một dòng văn bản dành cho người đọc.
+    if ! ds=$(docker compose -f docker-compose.yml --profile production \
+                  --env-file .env.production ps -aq "$ten" 2>/dev/null); then
+        error "không liệt kê được container của service '$ten' (docker compose ps -aq thất bại)"
+    fi
+    so=$(printf '%s\n' "$ds" | grep -c '[^[:space:]]' || true)
+    if [ "$so" -eq 0 ]; then
+        error "không thấy container nào cho service '$ten' — KHÔNG có gì để nghiệm thu"
+    fi
+    if [ "$so" -gt 1 ]; then
+        error "service '$ten' đang có $so container — MƠ HỒ, không đoán bừa.
+       Dọn container thừa rồi deploy lại: docker compose -f docker-compose.yml ps -a $ten"
+    fi
+    cid=$(printf '%s\n' "$ds" | grep -m1 '[^[:space:]]')
+
+    het=$((SECONDS + han))
+    while [ "$SECONDS" -lt "$het" ]; do
+        if ! tt=$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null); then
+            error "docker inspect THẤT BẠI khi đọc State.Status của '$ten' (cid=$cid)"
+        fi
+        # `{{else}}` biến "không khai healthcheck" thành một giá trị NÓI ĐƯỢC
+        # THÀNH LỜI, thay vì chuỗi rỗng trôi qua mọi phép so mà không ai thấy.
+        if ! sk=$(docker inspect \
+                    -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}khong-co-healthcheck{{end}}' \
+                    "$cid" 2>/dev/null); then
+            error "docker inspect THẤT BẠI khi đọc State.Health.Status của '$ten' (cid=$cid)"
+        fi
+
+        case "$tt" in
+            exited|dead)
+                ma=$(docker inspect -f '{{.State.ExitCode}}' "$cid" 2>/dev/null || echo "?")
+                error "'$ten' đã DỪNG (status=$tt, exit=$ma) — KHÔNG deploy tiếp" ;;
+            restarting)
+                error "'$ten' đang quay vòng khởi động lại — KHÔNG deploy tiếp" ;;
+        esac
+
+        # So BẰNG NHAU trên chuỗi đầy đủ. Không grep, không `case *healthy*`.
+        # Đây là lối ra xanh DUY NHẤT của hàm.
+        if [ "$sk" = "healthy" ]; then
+            return 0
+        fi
+        if [ "$sk" = "unhealthy" ]; then
+            error "'$ten' UNHEALTHY — KHÔNG deploy tiếp"
+        fi
+        if [ "$sk" = "khong-co-healthcheck" ]; then
+            error "'$ten' KHÔNG khai healthcheck — không có gì để nghiệm thu"
+        fi
+        sleep 2
+    done
+    error "'$ten' quá hạn ${han}s (status=${tt:-?}, health=${sk:-?}) — KHÔNG deploy tiếp"
+}
+
+log "Waiting for backend to be healthy..."
+_cho_healthy_dv backend "$_HAN_HEALTH"
+log "Backend healthy"
 
 # Start frontend + certbot. nginx CỐ Ý không nằm ở đây.
 #
@@ -416,14 +579,8 @@ docker compose -f docker-compose.yml --profile production --env-file .env.produc
     --no-deps frontend certbot
 
 log "Waiting for frontend to be healthy..."
-timeout=60
-while [ $timeout -gt 0 ]; do
-    if docker compose -f docker-compose.yml ps frontend | grep -q "healthy"; then
-        break
-    fi
-    sleep 2
-    timeout=$((timeout - 2))
-done
+_cho_healthy_dv frontend "$_HAN_HEALTH"
+log "Frontend healthy"
 
 # =============================================================================
 # Step 8b: áp cấu hình nginx — THỬ TRƯỚC, THAY SAU
