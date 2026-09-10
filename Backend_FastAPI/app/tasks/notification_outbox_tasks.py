@@ -126,7 +126,24 @@ async def _drain_outbox() -> dict:
             }
 
         results = await _dispatch_each(session, pending)
-        await _finalize(session, results)
+
+    # Ranh giới giao dịch: session dispatch đã ĐÓNG ở đây, cố ý.
+    #
+    # ``dispatch()`` trả về một post-commit callback; callback đó đọc lại
+    # notification bằng CHÍNH session vừa commit (``repo.get_by_ids`` trong
+    # ``_post_commit`` của ``notification_dispatcher``) ⇒ SQLAlchemy autobegin
+    # một giao dịch mới trên session. Giao dịch đó chỉ được dọn nếu còn hàng
+    # sau nó trong batch; với hàng CUỐI nó rò ra khỏi vòng lặp.
+    #
+    # Nếu ``_finalize`` dùng lại session ấy thì ``session.begin()`` ném
+    # ``InvalidRequestError`` và CẢ BATCH không được finalize — kể cả những
+    # hàng đã dispatch xong; ``last_error`` cũng không kịp ghi nên hỏng hoàn
+    # toàn vô hình trong bảng, chỉ còn dấu vết ở log Celery.
+    #
+    # Vì vậy finalize chạy trên một session RIÊNG: nó độc lập với bất cứ thứ gì
+    # callback để lại, thay vì phải commit/rollback hộ giao dịch của kẻ khác.
+    async with task_db_session() as finalize_session:
+        await _finalize(finalize_session, results)
 
     ok_count = sum(1 for _, status, _ in results if status == "ok")
     failed_count = sum(1 for _, status, _ in results if status == "error")
