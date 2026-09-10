@@ -660,3 +660,101 @@ def test_rooms_for_admission_skips_officer_when_unassigned():
 
     profile = _StubProfile(_StubLead(unit_id=5, assigned_officer_id=None))
     assert rooms_for_admission(profile) == ["role_admin", "unit_5"]
+
+
+# --- 9. Post-commit callback autobegin vs finalize -------------------------
+
+
+async def test_post_commit_callback_autobegin_does_not_break_finalize(
+    setup_test_database,
+):
+    """``_post_commit`` đọc lại notification bằng CHÍNH session vừa commit
+    (``repo.get_by_ids(db)``), làm SQLAlchemy autobegin một giao dịch mới.
+
+    Nếu ``_finalize`` dùng lại session đó thì ``session.begin()`` ném
+    ``InvalidRequestError`` và CẢ BATCH mất finalize — hàng vẫn
+    ``dispatched_at IS NULL`` dù notification đã gửi, và ``last_error``
+    không được ghi nên hỏng vô hình trong bảng.
+
+    Ca này tái hiện đúng đường đó: callback THẬT SỰ chạy một câu SELECT
+    trên session dispatch sau commit. Ca chỉ có nghĩa nếu autobegin thật
+    sự xảy ra, nên điều đó được khẳng định tường minh trước.
+    """
+    from sqlalchemy import text
+
+    import app.tasks.notification_outbox_tasks as outbox_tasks
+    from app.database import AsyncSessionLocal
+    from app.models import NotificationOutbox
+
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            row = NotificationOutbox(
+                event_code="admission_decision_admitted",
+                payload={},
+                idempotency_key="AUTOBEGIN-FINALIZE-GUARD",
+            )
+            session.add(row)
+            await session.flush()
+            row_id = row.id
+
+    seen: dict = {"dispatch_calls": 0}
+
+    async def _fake_dispatch(*args, **kwargs):
+        db = kwargs["db"]
+        seen["dispatch_calls"] += 1
+        seen["dispatch_session"] = id(db)
+
+        async def _post_commit_like():
+            # Tái hiện ``repo.get_by_ids(db)``: một SELECT trên chính
+            # session vừa commit ⇒ SQLAlchemy autobegin.
+            await db.execute(text("SELECT 1"))
+            seen["autobegin_after_callback"] = db.in_transaction()
+
+        return ([], _post_commit_like)
+
+    real_finalize = outbox_tasks._finalize
+
+    async def _spy_finalize(finalize_session, results):
+        # Chỉ ghi lại rồi gọi bản THẬT — không thay thế hành vi.
+        seen["finalize_session"] = id(finalize_session)
+        seen["finalize_in_tx_before"] = finalize_session.in_transaction()
+        return await real_finalize(finalize_session, results)
+
+    with patch.object(outbox_tasks, "dispatch", new=_fake_dispatch):
+        with patch.object(outbox_tasks, "_finalize", new=_spy_finalize):
+            result = _run_worker_sync()
+
+    # 1. Callback phải THẬT SỰ tạo autobegin, nếu không ca này canh hụt.
+    assert seen.get("autobegin_after_callback") is True, (
+        "ca kiểm vô nghĩa: callback không tạo autobegin trên session dispatch"
+    )
+
+    # 2. Finalize phải chạy trên session KHÁC session dispatch.
+    assert "finalize_session" in seen, "_finalize không được gọi"
+    assert seen["finalize_session"] != seen["dispatch_session"], (
+        "_finalize phải dùng session riêng, không dùng lại session dispatch"
+    )
+    assert seen["finalize_in_tx_before"] is False, (
+        "session của finalize phải sạch để session.begin() hợp lệ"
+    )
+
+    # 3. Worker không nổ và đếm đúng.
+    assert result["claimed"] == 1
+    assert result["dispatched"] == 1
+    assert result["failed"] == 0
+
+    # 4. Hàng được finalize thật.
+    async with AsyncSessionLocal() as session:
+        fresh = await session.get(NotificationOutbox, row_id)
+        assert fresh is not None
+        assert fresh.dispatched_at is not None, "finalize phải set dispatched_at"
+        assert fresh.claimed_until is None, "finalize phải xoá claimed_until"
+        assert fresh.attempts == 1
+        assert fresh.last_error is None
+        total = (
+            await session.execute(text("SELECT count(*) FROM notification_outbox"))
+        ).scalar_one()
+        assert total == 1, "không được sinh thêm hàng outbox nào"
+
+    # 5. Không dispatch trùng.
+    assert seen["dispatch_calls"] == 1
