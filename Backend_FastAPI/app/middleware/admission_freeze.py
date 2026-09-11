@@ -105,6 +105,12 @@ NON_ADMISSION_ROUTER_MODULES: Final[frozenset[str]] = frozenset(
         "app.routers.kpi_config",
         "app.routers.kpi_planning",
         "app.routers.leads",
+        # Cổng nhận lead công khai từ website. Cùng miền với
+        # ``app.routers.leads`` ở trên: nó tạo LEAD (bản ghi phễu tư vấn),
+        # KHÔNG tạo hồ sơ tuyển sinh. Đóng băng tuyển sinh không chặn
+        # officer tạo lead, nên cũng không được chặn lead từ website —
+        # để khác nhau thì cùng một hành vi lại có hai kết quả tuỳ đường vào.
+        "app.routers.public_leads",
         "app.routers.notification_consents",
         "app.routers.notification_delivery_ops",
         "app.routers.notification_preferences",

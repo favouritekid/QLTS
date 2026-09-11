@@ -95,6 +95,18 @@ class Settings(BaseSettings):
         default="http://localhost:5173", validation_alias="CORS_ORIGINS"
     )  # Mặc định lấy từ FRONTEND_URL không hoạt động tốt với pydantic-settings, nên đặt giá trị mặc định rõ ràng
 
+    # === Website Lead Intake (public endpoint POST /api/public/leads/intake) ===
+    # Khóa API bảo vệ endpoint công khai nhận lead từ website (WordPress/Formidable).
+    # Rỗng = endpoint trả 503 (chưa cấu hình) — fail-closed, không mở toang.
+    PUBLIC_INTAKE_API_KEY: str = Field(
+        default="", validation_alias="PUBLIC_INTAKE_API_KEY"
+    )
+    # Đơn vị mặc định nhận lead từ website (D9). None = endpoint trả 503 (không tạo
+    # lead treo vì auto-assign lọc officer theo unit; xem assignment_service).
+    PUBLIC_INTAKE_DEFAULT_UNIT_ID: Optional[int] = Field(
+        default=None, validation_alias="PUBLIC_INTAKE_DEFAULT_UNIT_ID"
+    )
+
     # Mail Settings - Bắt buộc
     MAIL_USERNAME: str
     MAIL_PASSWORD: str
@@ -304,6 +316,36 @@ class Settings(BaseSettings):
     MFA_BACKUP_CODE_V2_WRITER_ENABLED: bool = Field(
         default=False, validation_alias="MFA_BACKUP_CODE_V2_WRITER_ENABLED"
     )
+
+    @field_validator("PUBLIC_INTAKE_API_KEY")
+    @classmethod
+    def _kiem_intake_key(cls, v):
+        """Rỗng = chưa cấu hình ⇒ endpoint trả 503 (fail-closed) — VẪN hợp lệ.
+
+        Nhưng key CÓ giá trị thì phải là bí mật thật: đây là thứ DUY NHẤT đứng
+        giữa Internet và một đường ghi vào pipeline lead. Một giá trị như "x" hay
+        "CHANGE_ME" lọt qua phép kiểm khác-rỗng mà không cho chút entropy nào,
+        đồng thời tắt luôn chế độ 503 an toàn.
+        """
+        if v is None:
+            return ""
+        v = v.strip()
+        if not v:
+            return ""
+        if len(v) < _PEPPER_MIN_LEN:
+            raise ValueError(
+                f"PUBLIC_INTAKE_API_KEY quá ngắn ({len(v)} ký tự sau khi trim, "
+                f"cần >= {_PEPPER_MIN_LEN}). Sinh bằng: python -c "
+                "\"import secrets; print(secrets.token_urlsafe(32))\""
+            )
+        hoa = v.upper()
+        for xau in _PEPPER_PLACEHOLDERS:
+            if xau in hoa:
+                raise ValueError(
+                    f"PUBLIC_INTAKE_API_KEY còn chuỗi placeholder {xau!r} — "
+                    "đây phải là bí mật thật, hoặc để RỖNG để giữ chế độ 503."
+                )
+        return v
 
     @field_validator("MFA_BACKUP_CODE_PEPPER")
     @classmethod

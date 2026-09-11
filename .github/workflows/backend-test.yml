@@ -794,6 +794,7 @@ jobs:
               tests/integration/test_admission_idor.py
               tests/api/test_admission_action_routes_casbin_first.py
               tests/api/test_admission_assign_officer_permission.py
+              tests/services/test_public_lead_intake.py
 
           # ---------------------------------------------------------------
           # Tier 5: Phase 2 engine prereqs
