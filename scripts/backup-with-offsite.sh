@@ -56,12 +56,63 @@ log "upload OK — bản hôm nay ĐÃ an toàn ngoài máy chủ"
 # ── Dọn bản cũ: hỏng thì KÊU, không nuốt ────────────────────────────────────
 # Trước đây là `2>/dev/null || true` — hết quota / token hết hạn / remote đổi
 # tên đều biến mất không dấu vết, trong khi dòng "Offsite OK" vẫn in ra.
+#
+# PHẠM VI (sự cố 11-09-2026): lệnh này từng là `rclone delete gdrive-crypt:
+# --min-age 14d` — KHÔNG có bộ lọc nào, nên nó quét TOÀN BỘ remote và xoá mọi
+# object quá 14 ngày, kể cả bản kê rollback nằm trong `qlts-rollback/`. Đo
+# được: hai bản kê thế hệ 27-08 bị chính dòng này xoá lúc 03:00 ngày 11-09.
+# Bản kê là thứ DUY NHẤT ánh xạ tag rollback → digest ảnh trên GHCR; mất nó
+# là mất đường lùi, trong khi ảnh vẫn còn nguyên trên registry.
+#
+# Hai hàng rào ĐỘC LẬP, dư thừa có chủ ý:
+#   --include '/qlts_*.sql.gz'   dấu `/` đầu mẫu neo vào GỐC remote. Thiếu nó,
+#                                mẫu khớp ở MỌI độ sâu — đã đo: xoá nhầm
+#                                `qlts-rollback/qlts_old.sql.gz`.
+#   --max-depth 1                chặn mọi thứ ngoài tầng gốc, nên kể cả khi ai
+#                                đó lỡ bỏ dấu `/` thì thư mục con vẫn an toàn.
+# KHÔNG dùng `--rmdirs`: đo trực tiếp thấy 1.60.1 và 1.74.4 hành xử KHÁC nhau,
+# mà phiên bản rclone trên máy chủ thì không được ghim ở đâu cả.
 RETENTION_RC=0
-rclone delete gdrive-crypt: --min-age 14d || RETENTION_RC=$?
+rclone delete gdrive-crypt: --min-age 14d --include '/qlts_*.sql.gz' --max-depth 1 || RETENTION_RC=$?
 if [ "$RETENTION_RC" -ne 0 ]; then
     log "WARN: dọn bản >14 ngày THẤT BẠI (mã $RETENTION_RC)."
     log "WARN: bản upload hôm nay VẪN AN TOÀN, nhưng nếu lỗi lặp lại thì Drive"
     log "WARN: sẽ đầy dần rồi chặn luôn đường upload. Cần xử sớm."
+fi
+
+# ── Hậu kiểm: mã thoát 0 KHÔNG chứng minh đã xoá đúng ───────────────────────
+# `rclone delete` trả 0 và im lặng khi bộ lọc không khớp gì (đo trên cả 1.60.1
+# lẫn 1.74.4). Vậy một lỗi đánh máy trong mẫu — `.sql` thay vì `.sql.gz` — sẽ
+# làm retention chết lặng còn Drive thì đầy dần: đúng kiểu hỏng mà cả tệp này
+# được viết ra để chống.
+#
+# Nên hậu kiểm bằng CƠ CHẾ KHÁC: liệt kê tầng gốc rồi tự khớp bằng `grep -E`,
+# KHÔNG dùng lại bộ lọc của rclone. Mẫu rclone sai thì phép này vẫn thấy phần
+# còn sót; dùng lại chính mẫu ấy thì cả hai cùng trả rỗng và nó báo SẠCH cho
+# một retention đã chết.
+#
+# Mẫu neo hai đầu và loại ký tự `/`, nên một tên có đường dẫn (tức nằm trong
+# thư mục con) không bao giờ bị tính là bản dump ở tầng gốc — kể cả khi ai đó
+# gỡ mất `--max-depth 1` của lệnh liệt kê.
+#
+# Cố ý KHÔNG dùng `while read` + here-string: `<<<` là bashism, mà kho không
+# chứa crontab của máy chủ nên không có gì chứng minh cron gọi bằng `bash`. Nếu
+# nó gọi bằng `sh`, script sẽ chết ngay ở thì phân tích cú pháp và `backup-cron.sh`
+# ở dòng 19 KHÔNG BAO GIỜ CHẠY — mất luôn cả backup cục bộ, không chỉ offsite.
+# Đừng đổi sang heredoc thường: dấu kết thúc trùng tên tệp trên remote sẽ cắt
+# ngắn danh sách và làm phép kiểm fail-open.
+RESIDUE_RC=0
+CON_SOT=$(rclone lsf --files-only --max-depth 1 --min-age 14d gdrive-crypt:) || RESIDUE_RC=$?
+if [ "$RESIDUE_RC" -ne 0 ]; then
+    log "WARN: không liệt kê được tầng gốc để hậu kiểm dọn dẹp (mã $RESIDUE_RC)."
+    [ "$RETENTION_RC" -ne 0 ] || RETENTION_RC="$RESIDUE_RC"
+else
+    CON_LAI=$(printf '%s\n' "$CON_SOT" | grep -E '^qlts_[^/]*\.sql\.gz$' | tr '\n' ' ' || true)
+    if [ -n "$CON_LAI" ]; then
+        log "WARN: hậu kiểm thấy bản dump >14 ngày VẪN CÒN ở gốc remote: $CON_LAI"
+        log "WARN: nghi bộ lọc retention sai — kiểm '--include' của lệnh rclone delete."
+        [ "$RETENTION_RC" -ne 0 ] || RETENTION_RC=1
+    fi
 fi
 
 # ── Công tắc người chết (tuỳ chọn, mặc định TẮT) ────────────────────────────

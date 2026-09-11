@@ -3076,3 +3076,407 @@ def test_fallback_grep_khong_nhan_vo_chac_chan():
         "biết'), không phải 1 ('chắc chắn chưa cấu hình'): grep không phân biệt "
         "được 'JSON hợp lệ và không có credential' với 'JSON hỏng nên không khớp'"
     )
+
+
+# ---------------------------------------------------------------------------
+# Retention offsite: chỉ được xoá DB dump ở TẦNG GỐC remote
+# ---------------------------------------------------------------------------
+#
+# Sự cố 11-09-2026: `rclone delete gdrive-crypt: --min-age 14d` không mang bộ
+# lọc nào nên nó quét TOÀN BỘ remote. Nó đã xoá thật hai bản kê rollback thế hệ
+# 27-08 lúc 03:00 — thứ duy nhất ánh xạ tag rollback → digest ảnh trên GHCR.
+# Ảnh vẫn còn nguyên trên registry, nhưng không còn gì nói ảnh nào ứng với tag
+# nào, nên đường lùi coi như mất.
+
+_BACKUP = _GOC / "scripts" / "backup-with-offsite.sh"
+
+
+def _lenh_rclone_delete() -> list[str]:
+    r"""Các dòng LỆNH `rclone delete` — không phải mọi dòng NHẮC TỚI nó.
+
+    Hai lớp lọc, vì mỗi lớp một mình đều hụt:
+
+    1. `_ma_lenh` bỏ DÒNG chú thích — script có ba câu chú thích nhắc lại nguyên
+       văn lệnh cũ để giải thích sự cố.
+    2. `re.match` neo vào ĐẦU dòng, vì `_ma_lenh` **không** bỏ chuỗi nằm trong
+       lệnh. Khối hậu kiểm có một dòng `log "… kiểm '--include' của lệnh rclone
+       delete."`, và bản nháp đầu của chính guard này đã đếm nó thành lệnh thứ
+       hai — đo được: nó báo 2 ≠ 1. Đúng cái bẫy "khớp trúng dòng thông báo thay
+       vì dòng lệnh".
+
+    Lệnh viết khác đi (`sudo rclone delete`, `rclone --config x delete`) sẽ cho
+    danh sách rỗng và làm guard ĐỎ, chứ không lọt — fail-closed.
+    """
+    return [
+        d.strip()
+        for d in _ma_lenh(_BACKUP).splitlines()
+        if re.match(r"\s*rclone\s+delete\b", d)
+    ]
+
+
+def _khoi_hau_kiem() -> str:
+    """Khối hậu kiểm sau lệnh xoá, trích NGUYÊN VĂN từ script.
+
+    Phải lấy CẢ HAI `fi` đóng khối: cắt trước chúng thì đoạn trích mất cân bằng
+    và bash chết bằng "unexpected end of file" — guard khi ấy đỏ vì đoạn trích
+    hỏng chứ không phải vì mã sai.
+    """
+    ma = _doc(_BACKUP)
+    i = ma.index("RESIDUE_RC=0")
+    moc = "\n    fi\nfi\n"
+    j = ma.index(moc, i) + len(moc)
+    return ma[i:j]
+
+
+def test_retention_co_dung_mot_lenh_xoa():
+    """Nhiều lệnh xoá thì mỗi guard dưới đây chỉ canh được một cái."""
+    assert _BACKUP.is_file(), f"thiếu {_BACKUP.relative_to(_GOC)}"
+    lenh = _lenh_rclone_delete()
+    assert len(lenh) == 1, (
+        f"kỳ vọng đúng một lệnh `rclone delete`, thấy {len(lenh)}: {lenh}"
+    )
+
+
+def test_retention_neo_vao_tang_goc_va_dung_duoi_sql_gz():
+    """Mẫu lọc phải neo `/` vào gốc remote và khớp đúng đuôi `.sql.gz`.
+
+    Thiếu dấu `/` đầu mẫu thì rclone khớp ở MỌI độ sâu — đã đo trên cả 1.60.1
+    lẫn 1.74.4, kể cả qua remote crypt: `qlts-rollback/qlts_old.sql.gz` bị xoá
+    theo. Sai đuôi (`.sql` thay vì `.sql.gz`) thì không khớp gì, `rclone delete`
+    trả 0 IM LẶNG và retention chết mà không ai biết.
+    """
+    lenh = _lenh_rclone_delete()[0]
+
+    assert not re.search(r"--include\s+[^'\"\s]", lenh), (
+        "mẫu `--include` phải nằm trong dấu nháy: để trần thì bash bung glob "
+        "theo thư mục làm việc của cron TRƯỚC khi rclone nhìn thấy nó, và "
+        f"rclone nhận một tên tệp cục bộ làm bộ lọc: {lenh}"
+    )
+    m = re.search(r"--include\s+(?P<q>['\"])(?P<mau>[^'\"]+)(?P=q)", lenh)
+    assert m, f"lệnh retention KHÔNG có `--include` — nó đang quét cả remote: {lenh}"
+
+    mau = m.group("mau")
+    assert mau.startswith("/"), (
+        f"mẫu {mau!r} không neo vào gốc remote: thiếu dấu `/` đầu mẫu thì nó "
+        "khớp ở mọi độ sâu và xoá cả bản kê rollback trong thư mục con"
+    )
+    assert mau.endswith(".sql.gz"), (
+        f"mẫu {mau!r} không kết thúc bằng `.sql.gz`: bản dump thật tên là "
+        "`qlts_<ngày>.sql.gz`, sai đuôi thì lệnh xoá thành công RỖNG và im"
+    )
+    assert mau.startswith("/qlts_"), (
+        f"mẫu {mau!r} không giới hạn vào tiền tố `qlts_` của DB dump"
+    )
+
+
+def test_retention_gioi_han_do_sau_mot_tang():
+    """`--max-depth 1` là hàng rào THỨ HAI, độc lập với dấu `/` đầu mẫu.
+
+    Dư thừa có chủ ý: mỗi hàng rào một mình đã đủ giữ thư mục con an toàn, nên
+    một lần lỡ tay gỡ dấu `/` vẫn không thành sự cố mất bản kê.
+    """
+    lenh = _lenh_rclone_delete()[0]
+    assert re.search(r"--max-depth\s+1\b", lenh), (
+        f"thiếu `--max-depth 1` — mất hàng rào thứ hai chặn thư mục con: {lenh}"
+    )
+
+
+def test_retention_giu_nguong_14_ngay_va_khong_dung_rmdirs():
+    lenh = _lenh_rclone_delete()[0]
+    assert re.search(r"--min-age\s+14d\b", lenh), (
+        f"mất ngưỡng `--min-age 14d`: lệnh sẽ xoá cả bản vừa upload xong: {lenh}"
+    )
+    assert "--rmdirs" not in lenh, (
+        "KHÔNG dùng `--rmdirs`: đo trực tiếp thấy rclone 1.60.1 và 1.74.4 hành "
+        "xử khác nhau với cờ này, mà phiên bản rclone trên máy chủ không được "
+        f"ghim ở đâu cả: {lenh}"
+    )
+
+
+def test_retention_khong_co_co_thu_hai_am_tham_noi_rong():
+    """Một cờ THỨ HAI nới phạm vi trong khi cờ thứ nhất vẫn còn nguyên vẹn.
+
+    Đây là lớp đột biến mà guard đọc "lần xuất hiện đầu tiên" hoàn toàn mù. Hậu
+    quả đo được thật với rclone 1.74.4:
+
+      · `--min-age 14d … --min-age 0s`      xoá luôn bản vừa upload HÔM NAY
+      · `--include '/qlts_*.sql.gz' --include '/**'`
+                                            xoá lại bản kê rollback, tức TÁI
+                                            HIỆN ĐÚNG sự cố tệp này chặn
+      · `--max-depth 1 … --max-depth 9`     gỡ im lặng hàng rào thứ hai
+
+    rclone CỘNG DỒN `--include` và lấy cờ CUỐI cho `--min-age`/`--max-depth`.
+    `_ma_lenh` đã nối các dòng nối tiếp `\\`, nên viết cờ thứ hai xuống dòng
+    cũng không né được phép đếm này.
+    """
+    lenh = _lenh_rclone_delete()[0]
+    for co in ("--include", "--min-age", "--max-depth"):
+        n = len(re.findall(re.escape(co) + r"(?![\w-])", lenh))
+        assert n == 1, (
+            f"`{co}` xuất hiện {n} lần: rclone cộng dồn `--include` và lấy cờ "
+            f"CUỐI cho `--min-age`/`--max-depth`, nên cờ thứ hai nới phạm vi "
+            f"trong khi cờ đầu vẫn trông hoàn toàn đúng: {lenh}"
+        )
+    for co in ("--filter", "--exclude", "--files-from", "--include-from",
+               "--filter-from", "--exclude-from"):
+        assert not re.search(re.escape(co) + r"(?![\w-])", lenh), (
+            f"`{co}` đổi hẳn ngữ nghĩa lọc và có thể nới lại phạm vi mà phép "
+            f"đếm `--include` không thấy: {lenh}"
+        )
+
+
+def test_retention_tro_dung_goc_remote():
+    """Đổi đối số remote nới phạm vi mà mọi guard về CỜ đều mù.
+
+    `gdrive-crypt:qlts-rollback` giữ nguyên từng cờ một mà vẫn xoá đúng thư mục
+    đang cần bảo vệ.
+    """
+    lenh = _lenh_rclone_delete()[0]
+    m = re.match(r"rclone\s+delete\s+(\S+)", lenh)
+    assert m, f"không đọc được đối số remote của lệnh xoá: {lenh}"
+    assert m.group(1) == "gdrive-crypt:", (
+        f"lệnh xoá trỏ vào {m.group(1)!r} chứ không phải GỐC remote "
+        f"`gdrive-crypt:`: {lenh}"
+    )
+
+
+def test_script_khong_dung_cu_phap_rieng_cua_bash():
+    """Kho KHÔNG chứa crontab máy chủ ⇒ không có gì chứng minh cron gọi `bash`.
+
+    Nếu cron gọi `sh` (dash trên Debian/Ubuntu) thì một bashism giết script ngay
+    ở thì PHÂN TÍCH CÚ PHÁP — `bash scripts/backup-cron.sh` ở dòng 19 không bao
+    giờ chạy, và mất luôn backup CỤC BỘ chứ không riêng offsite.
+
+    ⚠️ Đừng tin `set -o pipefail` ở dòng 12 là đã ghim bash: đã đo, dash hiện
+    đại CHẤP NHẬN cờ này và chạy tiếp bình thường.
+
+    Đọc qua `_ma_lenh` chứ không phải nội dung thô: chú thích trong script có
+    nhắc tới `<<<` để giải thích vì sao không dùng nó, và bản nháp đầu của guard
+    này đã báo đỏ vì chính câu chú thích ấy.
+    """
+    ma = _ma_lenh(_BACKUP)
+    assert "<<<" not in ma, (
+        "here-string `<<<` là cú pháp riêng của bash: dash báo `Syntax error: "
+        "redirection unexpected` ngay lúc phân tích, trước cả lệnh đầu tiên"
+    )
+    assert "[[" not in ma, "`[[ ]]` là cú pháp riêng của bash — dùng `[ ]`"
+
+
+def test_retention_hong_van_lam_script_thoat_khac_0():
+    """Dọn dẹp hỏng phải đẩy ra mã thoát, nếu không cron hiểu là thành công."""
+    ma = _ma_lenh(_BACKUP)
+    assert re.search(r'RETENTION_RC"?\s*-eq\s*0\s*\]\s*\|\|\s*exit\s+1', ma), (
+        'mất dòng `[ "$RETENTION_RC" -eq 0 ] || exit 1` — lớp offsite có thể '
+        "chết hàng tháng mà cron vẫn ghi nhận thành công"
+    )
+    assert re.search(r"rclone\s+delete[^\n]*\|\|\s*RETENTION_RC=\$\?", ma), (
+        "mã thoát của `rclone delete` không được bắt vào `RETENTION_RC` — dưới "
+        "`set -e` thì hoặc script chết câm, hoặc lỗi bị nuốt"
+    )
+
+
+def test_hau_kiem_khong_dung_lai_chinh_bo_loc_cua_rclone():
+    """Hậu kiểm phải dùng CƠ CHẾ KHÁC, nếu không nó mù đúng lúc cần thấy.
+
+    Đây là bất biến dễ bị "dọn cho gọn" nhất: dùng lại `--include` của lệnh xoá
+    thì khi mẫu ấy sai, phép liệt kê cũng trả rỗng và hậu kiểm báo SẠCH. Một
+    phép kiểm không bao giờ đỏ được thì không canh gì cả.
+    """
+    khoi = _khoi_hau_kiem()
+    dong_lsf = [d for d in khoi.splitlines() if "rclone lsf" in d]
+    assert len(dong_lsf) == 1, f"kỳ vọng đúng một lệnh `rclone lsf`: {dong_lsf}"
+    assert "--include" not in dong_lsf[0], (
+        "hậu kiểm dùng lại `--include` của lệnh xoá ⇒ mẫu sai thì cả hai cùng "
+        f"trả rỗng và nó báo SẠCH cho một retention đã chết: {dong_lsf[0]}"
+    )
+    m = re.search(r"grep -E '([^']+)'", khoi)
+    assert m, (
+        "hậu kiểm phải tự khớp tên bằng `grep -E` — đó chính là cơ chế độc lập "
+        "với bộ lọc của rclone"
+    )
+    mau = m.group(1)
+    assert mau.startswith("^") and mau.endswith("$"), (
+        f"mẫu hậu kiểm {mau!r} không neo hai đầu: `grep` không neo thì một tên "
+        "như `xxqlts_1.sql.gzyy` cũng khớp"
+    )
+    assert "[^/]" in mau, (
+        f"mẫu hậu kiểm {mau!r} không loại ký tự `/`: một tên có đường dẫn (tức "
+        "nằm trong thư mục con) sẽ bị tính nhầm thành bản dump ở tầng gốc và "
+        "gây báo động giả mỗi đêm nếu `--max-depth 1` của lệnh liệt kê bị gỡ"
+    )
+
+
+def _chay_lenh_xoa(lenh: str) -> list[str]:
+    """CHẠY THẬT lệnh xoá với `rclone` giả, trả về argv mà nó NHẬN ĐƯỢC.
+
+    Guard tĩnh đọc mã nguồn; bash đọc mã nguồn RỒI BUNG GLOB. Hai thứ đó khác
+    nhau đúng ở chỗ nguy hiểm nhất, nên phải chạy mới biết. Thư mục làm việc
+    được gieo sẵn tệp mồi tên `qlts_*.sql.gz`: mẫu nào không được bảo vệ bằng
+    dấu nháy sẽ TỰ LỘ bằng cách biến thành tên tệp mồi trong argv.
+    """
+    with tempfile.TemporaryDirectory() as thu_muc:
+        for moi in ("qlts_moi_nhu.sql.gz", "qlts_moi_khac.sql.gz"):
+            Path(thu_muc, moi).write_text("moi", encoding="utf-8")
+        kich_ban = (
+            "set -euo pipefail\n"
+            "log() { :; }\n"
+            "RETENTION_RC=0\n"
+            "rclone() { printf '%s\\n' \"$@\" > argv.txt; return 0; }\n"
+            + lenh
+            + "\n"
+        )
+        kb = Path(thu_muc, "chay.sh")
+        kb.write_text(kich_ban, encoding="utf-8", newline="\n")
+        r = subprocess.run(
+            [_BASH, str(kb)], cwd=thu_muc, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=30,
+        )
+        assert r.returncode == 0, f"kịch bản đổ: {r.stdout}{r.stderr}"
+        return Path(thu_muc, "argv.txt").read_text(encoding="utf-8").splitlines()
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_bash_truyen_dung_mau_cho_rclone_khong_bung_glob():
+    """Thứ rclone NHẬN ĐƯỢC mới là bộ lọc thật, không phải thứ ta viết ra."""
+    argv = _chay_lenh_xoa(_lenh_rclone_delete()[0])
+
+    assert "--include" in argv, f"argv không có `--include`: {argv}"
+    mau = argv[argv.index("--include") + 1]
+    assert mau.startswith("/qlts_") and mau.endswith(".sql.gz"), (
+        f"rclone nhận bộ lọc {mau!r} — không phải mẫu neo gốc mà script viết ra; "
+        f"nhiều khả năng bash đã bung glob: {argv}"
+    )
+    assert not any(d.endswith("moi_nhu.sql.gz") for d in argv), (
+        f"bash đã bung mẫu thành tên tệp trong thư mục làm việc: {argv}"
+    )
+    assert "--max-depth" in argv and argv[argv.index("--max-depth") + 1] == "1", (
+        f"rclone không nhận được `--max-depth 1`: {argv}"
+    )
+    assert "--min-age" in argv and argv[argv.index("--min-age") + 1] == "14d", (
+        f"rclone không nhận được `--min-age 14d`: {argv}"
+    )
+
+
+def _chay_hau_kiem(danh_sach: str, lsf_rc: int = 0) -> tuple:
+    """CHẠY THẬT khối hậu kiểm với `rclone lsf` giả.
+
+    Trả `(RETENTION_RC, log, argv mà rclone nhận được)`.
+
+    Danh sách giả đi qua BIẾN MÔI TRƯỜNG chứ không nhúng vào kịch bản, để một
+    tên tệp có ký tự lạ không bao giờ đổi được cấu trúc kịch bản.
+
+    ⚠️ Bản nháp đầu của stub này BỎ QUA argv, nên mọi tham số của chính lệnh
+    `lsf` — remote, `--min-age` — không hề được canh. Đo được: đổi `--min-age
+    14d` thành `400d` làm hậu kiểm MÙ HOÀN TOÀN mà cả bộ test vẫn xanh. Hậu
+    kiểm là lưới đỡ CUỐI CÙNG, nên tham số của nó phải được canh chặt như tham
+    số của lệnh xoá.
+    """
+    with tempfile.TemporaryDirectory() as thu_muc:
+        kich_ban = (
+            "set -euo pipefail\n"
+            'log() { echo "LOG $*"; }\n'
+            "RETENTION_RC=0\n"
+            "rclone() {\n"
+            "  printf '%s\\n' \"$@\" > argv.txt\n"
+            '  if [ "${1:-}" != "lsf" ]; then echo "STUB GOI SAI: $*" >&2; return 9; fi\n'
+            '  printf %s "${DS_GIA:-}"\n'
+            "  return " + str(lsf_rc) + "\n"
+            "}\n"
+            + _khoi_hau_kiem()
+            + '\necho "RETENTION_RC=$RETENTION_RC"\n'
+        )
+        kb = Path(thu_muc, "chay.sh")
+        kb.write_text(kich_ban, encoding="utf-8", newline="\n")
+        r = subprocess.run(
+            [_BASH, str(kb)], cwd=thu_muc, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=30,
+            env={**os.environ, "DS_GIA": danh_sach},
+        )
+        ra = r.stdout + r.stderr
+        m = re.search(r"RETENTION_RC=(\d+)", ra)
+        assert m, f"khối hậu kiểm không chạy tới cuối: {ra}"
+        p = Path(thu_muc, "argv.txt")
+        argv = p.read_text(encoding="utf-8").splitlines() if p.is_file() else []
+        return int(m.group(1)), ra, argv
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_hau_kiem_goi_lsf_dung_pham_vi():
+    """Tham số của CHÍNH lệnh hậu kiểm cũng phải được canh.
+
+    Đo được: `--min-age 400d`, hay đổi remote sang `gdrive-crypt:qlts-rollback`,
+    làm hậu kiểm mù hoàn toàn — nó báo SẠCH cho một retention đã chết. Bỏ hẳn
+    `--min-age` thì hỏng theo chiều ngược lại: báo động giả mỗi đêm, rồi người
+    trực tắt cảnh báo đi.
+    """
+    _, _, argv = _chay_hau_kiem("")
+    assert argv and argv[0] == "lsf", f"khối hậu kiểm không gọi `rclone lsf`: {argv}"
+    assert "gdrive-crypt:" in argv, (
+        f"hậu kiểm không liệt kê GỐC remote — nó đang soi chỗ khác: {argv}"
+    )
+    assert argv.count("--min-age") == 1 and argv[argv.index("--min-age") + 1] == "14d", (
+        f"hậu kiểm phải soi đúng ngưỡng 14d: lớn hơn thì mù, không có thì báo "
+        f"động giả mỗi đêm: {argv}"
+    )
+    assert argv.count("--max-depth") == 1 and argv[argv.index("--max-depth") + 1] == "1", (
+        f"hậu kiểm phải giới hạn ở tầng gốc: {argv}"
+    )
+    for co in ("--include", "--filter", "--exclude"):
+        assert co not in argv, (
+            f"hậu kiểm dùng `{co}` là dùng lại bộ lọc của rclone ⇒ mẫu sai thì "
+            f"cả hai cùng trả rỗng và nó báo SẠCH: {argv}"
+        )
+
+
+_BAN_KE = "rollback_manifest_pre-24ec658b-from-a4dab746-20260910T151546Z.offsite.txt"
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_hau_kiem_bat_duoc_retention_chet_lang():
+    """Mẫu sai ⇒ `rclone delete` trả 0 và xoá rỗng. Hậu kiểm phải kêu.
+
+    Đây là lý do tồn tại của cả khối: mã thoát 0 KHÔNG phân biệt được "mẫu sai"
+    với "không có gì để xoá".
+    """
+    rc, ra, _ = _chay_hau_kiem("qlts_20260820_030000.sql.gz\n" + _BAN_KE + "\n")
+    assert rc != 0, (
+        "còn bản dump quá hạn ở gốc remote mà hậu kiểm vẫn để RETENTION_RC=0 — "
+        f"một retention chết lặng vẫn được báo là thành công:\n{ra}"
+    )
+    assert "VẪN CÒN" in ra, f"hậu kiểm không in cảnh báo nào:\n{ra}"
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+@pytest.mark.parametrize(
+    "danh_sach",
+    [
+        "",
+        _BAN_KE + "\n",
+        _BAN_KE + "\nconfig_backup_20260820_manifest.txt\n",
+        "qlts_20260820_030000.sql.gz.sha256\n",
+        "ghi_chu_van_hanh.txt\n",
+        # Bản dump nằm trong thư mục con: nếu `--max-depth 1` của lệnh liệt kê
+        # bị gỡ thì tên này sẽ xuất hiện kèm đường dẫn, và một mẫu không loại
+        # `/` sẽ tính nhầm nó thành bản sót ở gốc rồi kêu mỗi đêm.
+        "qlts-rollback/qlts_20260820_030000.sql.gz\n",
+    ],
+)
+def test_hau_kiem_khong_bao_dong_gia(danh_sach):
+    """Bản kê, checksum và object lạ ở gốc KHÔNG được tính là bản dump sót.
+
+    Guard này khoá đúng phạm vi: nới `case` thành `qlts*` hay `*.gz` thì đêm nào
+    retention cũng bị coi là hỏng, cảnh báo thành tiếng ồn, rồi người trực tắt.
+    """
+    rc, ra, _ = _chay_hau_kiem(danh_sach)
+    assert rc == 0, f"báo động giả cho danh sách {danh_sach!r}:\n{ra}"
+    assert "VẪN CÒN" not in ra, f"cảnh báo sai cho {danh_sach!r}:\n{ra}"
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_hau_kiem_khong_liet_ke_duoc_thi_cung_phai_keu():
+    """Không liệt kê được nghĩa là KHÔNG BIẾT, không phải là SẠCH."""
+    rc, ra, _ = _chay_hau_kiem("", lsf_rc=7)
+    assert rc == 7, (
+        f"`rclone lsf` hỏng (mã 7) mà RETENTION_RC={rc} — script sẽ thoát 0 và "
+        f"báo HOÀN TẤT cho một lượt dọn dẹp chưa hề được xác minh:\n{ra}"
+    )
