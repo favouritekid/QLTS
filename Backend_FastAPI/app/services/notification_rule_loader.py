@@ -28,6 +28,7 @@ from app.services.notification_resolvers import (
     BaseResolver,
     CollaboratorUserResolver,
     CompositeResolver,
+    FirstNonEmptyResolver,
     DormResidentsResolver,
     DormStaffResolver,
     LeadOwnerResolver,
@@ -183,6 +184,18 @@ def deserialize_resolver(config: Dict[str, Any]) -> BaseResolver:
             deserialize_resolver(r) for r in inner_resolvers_config
         ]
         return CompositeResolver(inner_resolvers)
+
+    # Handle first-non-empty fallback chain (ORDERED, short-circuit, NOT a union)
+    if resolver_type == "first_nonempty":
+        inner_resolvers_config = params.get("resolvers", [])
+        if not inner_resolvers_config:
+            raise ValueError(
+                "FirstNonEmptyResolver requires a non-empty 'resolvers' list in params"
+            )
+        inner_resolvers = [
+            deserialize_resolver(r) for r in inner_resolvers_config
+        ]
+        return FirstNonEmptyResolver(inner_resolvers)
 
     # Handle actor-excluded wrapper
     if resolver_type == "actor_excluded":

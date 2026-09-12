@@ -16,7 +16,9 @@ import unicodedata
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import String, and_, case, cast, func, literal, or_, select, type_coerce
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -46,6 +48,19 @@ def pending_followup_status_subquery():
         models.ConsultationStatus.id.not_in(CANCELLED_FOLLOWUP_STATUS_IDS),
     )
 
+
+# PostgreSQL 55P03 = lock_not_available: somebody else holds the row right now.
+# This is the ONLY database error the watchdog may treat as "skip, not my turn".
+_LOCK_NOT_AVAILABLE = "55P03"
+
+
+def _is_lock_not_available(exc) -> bool:
+    orig = getattr(exc, "orig", None)
+    for attr in ("sqlstate", "pgcode"):
+        code = getattr(orig, attr, None)
+        if code == _LOCK_NOT_AVAILABLE:
+            return True
+    return False
 
 class LeadRepository(BaseRepository[models.Lead]):
     """Repository for Lead model operations."""
@@ -1481,6 +1496,131 @@ class LeadRepository(BaseRepository[models.Lead]):
         )
         result = await self.db.execute(query)
         return result.scalar() or 0
+
+    @staticmethod
+    def _like_escape(raw):
+        """Escape LIKE metacharacters. Our own prefix contains "_"."""
+        return raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    def _alert_exists(self, alert_prefix, since=None):
+        """EXISTS(a watchdog alert for THIS lead), optionally only since a time.
+
+        Correlated on ``Lead.id`` so both the mute test AND the "has it ever
+        been alerted" flag can be evaluated by the database. Evaluating either
+        one in Python after the fact puts it AFTER the LIMIT, which is how a
+        newer never-alerted lead got pushed out of the candidate pool by older
+        repeat-due leads and could never "outrank" anything.
+        """
+        pattern = (
+            literal(self._like_escape(alert_prefix))
+            + cast(models.Lead.id, String)
+            + literal(":%")
+        )
+        key = type_coerce(models.Notification.data, JSONB)["dedupe_key"].astext
+        conds = [key.like(pattern, escape="\\")]
+        if since is not None:
+            conds.append(models.Notification.created_at >= since)
+        return select(literal(1)).where(*conds).exists()
+
+    async def find_unalerted_stale_website_leads(
+        self,
+        *,
+        cutoff,
+        alert_prefix,
+        since,
+        limit,
+    ):
+        """Leads overdue for assignment and not alerted since ``since``.
+
+        Returns ``[(lead, ever_alerted_before), ...]`` already in priority
+        order. Both the mute filter and the priority flag are computed by the
+        database BEFORE the LIMIT, so a never-alerted lead cannot be crowded out
+        of the pool by older repeat candidates, and the flag costs no extra
+        round trip (the previous version issued one query per candidate).
+
+        "Not finished" uses the SAME predicate as the assignment balancer
+        (``assignment_service._non_final_status_filter``). The outer join is
+        required: a freshly created website lead has ``consultation_status_id``
+        NULL and an inner join would drop exactly the rows this exists to find.
+        """
+        ever_col = self._alert_exists(alert_prefix).label("ever_alerted")
+        query = (
+            select(models.Lead, ever_col)
+            .join(
+                models.ConsultationStatus,
+                models.Lead.consultation_status_id == models.ConsultationStatus.id,
+                isouter=True,
+            )
+            .where(
+                models.Lead.source == "website",
+                models.Lead.assigned_officer_id.is_(None),
+                models.Lead.deleted_at.is_(None),
+                models.Lead.created_at <= cutoff,
+                or_(
+                    models.ConsultationStatus.is_final == False,  # noqa: E712
+                    models.Lead.consultation_status_id.is_(None),
+                ),
+                ~self._alert_exists(alert_prefix, since),
+            )
+            .order_by(ever_col.asc(), models.Lead.created_at, models.Lead.id)
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
+        return [(row[0], bool(row[1])) for row in result.all()]
+
+    async def lock_and_recheck_unassigned(self, lead_id, *, cutoff):
+        """Re-read the lead under a row lock and re-test the WHOLE predicate.
+
+        Between picking candidates and dispatching, auto-assignment can take the
+        very same lead - it locks with ``with_for_update(nowait=True)``. Without
+        this the watchdog would tell an admin "assignment failed" about a lead
+        that had just succeeded, and false alarms are how an alert channel gets
+        ignored.
+
+        Every condition from the selection query is re-tested, not just the
+        obvious two: ``source`` can be edited, and ``created_at`` is re-checked
+        so the caller's cutoff stays the single definition of "overdue".
+
+        Returns None ONLY for "this lead is no longer our business" or "someone
+        else holds the row right now" (PostgreSQL 55P03, lock_not_available).
+        Any other database failure PROPAGATES: an infrastructure error is not a
+        lead that changed, and reporting it as one would let the task finish
+        SUCCESS while silently skipping work Celery should have retried.
+        """
+        try:
+            row = (
+                await self.db.execute(
+                    select(models.Lead)
+                    .where(models.Lead.id == lead_id)
+                    .with_for_update(nowait=True)
+                    # populate_existing is what makes this a re-CHECK. Without
+                    # it SQLAlchemy hands back the instance already in this
+                    # session's identity map - the one loaded during candidate
+                    # selection, with its stale values - so we would lock the
+                    # row and then inspect data from before the lock.
+                    .execution_options(populate_existing=True)
+                )
+            ).scalars().first()
+        except DBAPIError as exc:
+            if _is_lock_not_available(exc):
+                return None
+            raise
+        if row is None:
+            return None
+        if row.assigned_officer_id is not None or row.deleted_at is not None:
+            return None
+        if row.source != "website":
+            return None
+        if row.created_at is None or row.created_at > cutoff:
+            return None
+        if row.consultation_status_id is not None:
+            status = await self.db.get(
+                models.ConsultationStatus, row.consultation_status_id
+            )
+            if status is not None and status.is_final:
+                return None
+        return row
+
 
     async def count_stale_leads(
         self,

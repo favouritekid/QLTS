@@ -252,6 +252,16 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "default"},
     },
 
+    # --- E1 safety net: website leads nobody picked up ---
+    # Catches business failures live (assignment ran and failed, or its alert
+    # resolved to nobody). It CANNOT detect an ongoing Celery outage: it runs on
+    # this same worker, so an outage is only visible once Celery is back.
+    "lead-unassigned-watchdog": {
+        "task": "lead_unassigned_watchdog_task",
+        "schedule": crontab(minute="*/15"),  # Every 15 minutes
+        "options": {"queue": "default"},
+    },
+
     # --- Phase C2: Stale delivery reconciliation ---
     "reconcile-stale-deliveries": {
         "task": "reconcile_stale_deliveries",

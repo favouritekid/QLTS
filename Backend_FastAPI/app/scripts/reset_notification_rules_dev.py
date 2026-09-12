@@ -114,7 +114,29 @@ CURATED_RULES: dict[str, dict[str, Any]] = {
         message_template="Lead $lead_name chưa thể phân công tự động. Lý do: $reason.",
         notification_type="warning",
         link_template="/leads/$lead_id",
-        groups=[_internal_group("unit_managers", ["browser"])],
+        # Must mirror NOTIFICATION_SEED_DEFAULTS: manager tier first, then every
+        # active admin. A unit with no manager resolves to an empty list, and an
+        # empty recipient list on a FAILURE event means nobody is told.
+        groups=[
+            {
+                "recipient_config": {
+                    "resolver_type": "first_nonempty",
+                    "params": {
+                        "resolvers": [
+                            {
+                                "resolver_type": "actor_excluded",
+                                "params": {"inner_resolver": {"resolver_type": "unit_managers", "params": {}}},
+                            },
+                            {
+                                "resolver_type": "actor_excluded",
+                                "params": {"inner_resolver": {"resolver_type": "all_admins", "params": {}}},
+                            },
+                        ]
+                    },
+                },
+                "channels": ["browser"],
+            }
+        ],
     ),
     "lead_status_changed": _build_rule(
         event="lead_status_changed",
