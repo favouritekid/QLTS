@@ -262,6 +262,27 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "default"},
     },
 
+    # --- E1 observability: the one signal that lives OUTSIDE Celery's blind spot ---
+    # Beat has to be alive to send this, and the worker has to be alive to run
+    # it, so a single advancing timestamp proves both. Nothing inside Celery can
+    # report its own death; this exists so something outside (host cron +
+    # external dead-man check) can. Interval is pinned to
+    # heartbeat_tasks.HEARTBEAT_INTERVAL_SECONDS by a test — the monitor's
+    # staleness threshold is derived from it (3 missed beats), so changing one
+    # without the other turns the alarm into either noise or silence.
+    # `expires` is load-bearing, not hygiene. Without it a heartbeat message can
+    # sit in the broker while beat is DEAD, get drained minutes later by a
+    # healthy worker, and stamp a fresh execution time — the monitor would then
+    # read a green signal produced entirely after the thing it watches died.
+    # Capping it at the beat interval means a message that could not be executed
+    # within one cycle is discarded rather than believed. Pinned by a test
+    # against heartbeat_tasks.HEARTBEAT_INTERVAL_SECONDS.
+    "celery-heartbeat": {
+        "task": "celery_heartbeat_task",
+        "schedule": crontab(minute="*/5"),  # Every 5 minutes
+        "options": {"queue": "default", "expires": 300},
+    },
+
     # --- Phase C2: Stale delivery reconciliation ---
     "reconcile-stale-deliveries": {
         "task": "reconcile_stale_deliveries",
