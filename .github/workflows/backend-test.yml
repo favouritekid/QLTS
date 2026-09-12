@@ -167,6 +167,14 @@ on:
       - '.env.production.example'
       - 'nginx/**'
       - 'tests-e2e/**'
+      # `test_celery_heartbeat_monitor_script.py` ĐỌC hai đường dưới đây, nên
+      # thiếu chúng là guard canh trên giấy còn CI không bao giờ chạy để canh —
+      # đúng ca `PRODUCTION_DEPLOY_GUIDE.md` ở trên. Cụ thể: một PR CHỈ dán một
+      # URL thật vào `ops/healthchecks.env.example`, hoặc CHỈ gỡ dòng
+      # `!ops/healthchecks.env.example` khỏi `.gitignore` (làm tệp mẫu lặng lẽ
+      # rơi khỏi git), sẽ không kích hoạt lượt chạy nào.
+      - 'ops/**'
+      - '.gitignore'
       - 'Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md'
       - 'Documents/PRODUCTION_DEPLOY_GUIDE.md'
 
@@ -709,6 +717,7 @@ jobs:
               tests/integration/test_assignment_failed_rule_rollout.py
               tests/integration/test_redis_lock_ownership.py
               tests/integration/test_first_nonempty_resolver.py
+              tests/integration/test_celery_heartbeat.py
               tests/integration/test_rule_loader_db.py
               tests/integration/test_registry_fallback_dispatch.py
               tests/integration/test_lead_notification_flow.py
@@ -874,6 +883,7 @@ jobs:
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
+              tests/unit/test_celery_heartbeat_monitor_script.py
               tests/unit/test_ci_test_visibility.py
               tests/unit/test_e2e_credential_contract.py
               tests/unit/test_import_moet_schools.py

@@ -67,6 +67,11 @@ virtualenv/
 *.env.*
 !.env.example
 !.env.production.example
+# Mẫu cấu hình giám sát (CHỈ tên biến, không giá trị). Không có dòng này thì
+# `*.env.*` ở trên nuốt nó và `git add` từ chối trong im lặng — tệp mẫu "đã
+# thêm" mà không bao giờ vào git. Tệp THẬT là `ops/healthchecks.env`, vẫn bị
+# `*.env` chặn và phải sống ở /etc/qlts/ trên host.
+!ops/healthchecks.env.example
 *.db
 *.sqlite
 *.sqlite3

@@ -11,7 +11,15 @@
 # nhánh `else`, in một dòng WARN rồi THOÁT 0.
 set -euo pipefail
 
+# shellcheck source=lib/healthchecks.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/healthchecks.sh"
+
 cd /opt/qlts
+
+# Tệp bí mật chỉ-host, dùng CHUNG với scripts/celery-heartbeat-monitor.sh —
+# nhưng BIẾN thì riêng, xem khối ping ở cuối tệp.
+TEP_BI_MAT="${QLTS_HEALTHCHECKS_FILE:-/etc/qlts/healthchecks.env}"
+TEN_BIEN_PING="HEALTHCHECK_PING_URL"
 
 log() { echo "[$(date)] [OFFSITE] $*"; }
 die() { log "FATAL: $*"; exit 1; }
@@ -118,14 +126,44 @@ fi
 # ── Công tắc người chết (tuỳ chọn, mặc định TẮT) ────────────────────────────
 # Ba sửa đổi trên khiến script THẤT BẠI TO TIẾNG — nhưng tiếng đó rơi vào
 # /var/log/qlts-backup.log, nơi không ai ngồi canh. Đặt HEALTHCHECK_PING_URL
-# (healthchecks.io hoặc tương đương) để biến IM LẶNG thành CẢNH BÁO: dịch vụ
-# sẽ chủ động báo khi quá hạn mà không nhận được ping.
+# trong tệp bí mật chỉ-host để biến IM LẶNG thành CẢNH BÁO: dịch vụ sẽ chủ động
+# báo khi quá hạn mà không nhận được ping.
 # Ping ở đây nghĩa là "bản hôm nay đã nằm ngoài máy chủ", nên vẫn ping kể cả
 # khi dọn dẹp lỗi — dữ liệu an toàn và dọn dẹp sạch là hai chuyện khác nhau.
-if [ -n "${HEALTHCHECK_PING_URL:-}" ]; then
-    curl -fsS -m 10 --retry 3 "$HEALTHCHECK_PING_URL" >/dev/null \
-      && log "đã ping healthcheck" \
-      || log "WARN: ping healthcheck thất bại (backup vẫn OK)"
+#
+# HAI THAY ĐỔI so với bản trước, cả hai đều về nơi bí mật được phép tồn tại:
+#   * Đọc từ tệp chỉ-host `600 root` chứ KHÔNG từ environment. Biến môi trường
+#     đi theo mọi tiến trình con và lộ qua `/proc/<pid>/environ`; nếu ai đó đặt
+#     nó vào `.env.production` cho tiện thì nó còn bị nướng vào container và lộ
+#     qua `docker inspect .Config.Env`.
+#   * URL vào curl qua STDIN (`--config -`), KHÔNG qua argv. Bản trước truyền
+#     thẳng `"$HEALTHCHECK_PING_URL"` làm tham số ⇒ bất kỳ ai trên máy cũng đọc
+#     được bằng `ps` trong lúc backup chạy. URL ping chính là mật khẩu: có nó
+#     thì ping thay được, tức TẮT được cảnh báo.
+#
+# Biến RIÊNG, không dùng chung với `CELERY_HEARTBEAT_PING_URL` — xem
+# ops/healthchecks.env.example, mục "HAI CHECK ĐỘC LẬP".
+#
+# VẪN LÀ TUỲ CHỌN, CÓ CHỦ Ý: bắt buộc hoá ở đây sẽ làm lượt backup đêm nay
+# THOÁT KHÁC 0 chỉ vì bí mật chưa được cấu hình, tức biến một bản sao lưu thành
+# công thành một báo động. Đó là quyết định vận hành riêng, không phải phần của
+# bản vá này. `celery-heartbeat-monitor.sh` thì NGƯỢC LẠI — thiếu URL là fatal,
+# vì ở đó ping LÀ toàn bộ sản phẩm của script.
+#
+# Quyền tệp bí mật: ở đây chỉ CẢNH BÁO rồi đi tiếp, khác với
+# `celery-heartbeat-monitor.sh` vốn dừng hẳn. Lý do: với monitor thì ping LÀ
+# toàn bộ sản phẩm, còn ở đây sản phẩm là bản sao lưu đã nằm ngoài máy chủ — từ
+# chối ping không làm dữ liệu an toàn hơn, chỉ làm mất nốt tín hiệu cuối cùng.
+CANH_BAO_QUYEN=$(hc_kiem_quyen "$TEP_BI_MAT") || log "WARN: tệp bí mật không an toàn — ${CANH_BAO_QUYEN}"
+PING_URL_BACKUP=$(hc_doc_url "$TEN_BIEN_PING" "$TEP_BI_MAT") || PING_URL_BACKUP=""
+if [ -n "$PING_URL_BACKUP" ]; then
+    if hc_ping "$PING_URL_BACKUP"; then
+        log "đã ping healthcheck"
+    else
+        log "WARN: ping healthcheck thất bại (backup vẫn OK)"
+    fi
+else
+    log "WARN: chưa cấu hình ${TEN_BIEN_PING} trong ${TEP_BI_MAT} — backup KHÔNG có công tắc người chết"
 fi
 
 # Thoát khác 0 nếu có bước nào không trọn vẹn — để cron/giám sát nhìn thấy.
