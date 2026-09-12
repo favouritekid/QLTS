@@ -14,6 +14,7 @@ Usage:
 """
 
 import asyncio
+import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
 
@@ -71,6 +72,13 @@ def get_redis_client() -> aioredis.Redis:
     return _redis_client
 
 
+# Compare-and-delete. Keeping it as a module constant so the same script text is
+# reused (redis-py caches by SHA) instead of being re-sent on every release.
+_RELEASE_IF_OWNER = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+    "return redis.call('del', KEYS[1]) else return 0 end"
+)
+
 @asynccontextmanager
 async def acquire_redis_lock(
     key: str,
@@ -110,7 +118,9 @@ async def acquire_redis_lock(
     """
     redis = get_redis_client()
     lock_key = f"lock:{key}"
-    lock_value = f"locked_at_{asyncio.get_event_loop().time()}"
+    # Unique per acquisition. The previous value was a loop timestamp, which is
+    # not unique across processes and could not be used to prove ownership.
+    lock_value = f"{uuid.uuid4().hex}:{asyncio.get_event_loop().time()}"
     acquired = False
 
     try:
@@ -154,7 +164,27 @@ async def acquire_redis_lock(
         yield acquired
 
     finally:
-        # Release lock if acquired
+        # Release ONLY if we still own it. A plain DELETE releases whatever is
+        # at the key — so a holder that overran the TTL would delete the lock a
+        # DIFFERENT worker had since acquired, letting a third worker in and
+        # defeating the whole point of the lock. Compare-and-delete is atomic
+        # server-side; a GET-then-DELETE pair has the same race it is fixing.
         if acquired:
-            await redis.delete(lock_key)
-            log.debug("Redis lock released", lock_key=lock_key)
+            try:
+                released = await redis.eval(
+                    _RELEASE_IF_OWNER, 1, lock_key, lock_value
+                )
+            except Exception as e:  # noqa: BLE001 - never fail the caller on release
+                log.warning(
+                    "Redis lock release failed", lock_key=lock_key, error=str(e)
+                )
+                released = 0
+            if released:
+                log.debug("Redis lock released", lock_key=lock_key)
+            else:
+                # Our TTL expired and somebody else owns the key now.
+                log.warning(
+                    "Redis lock had already expired and been re-acquired by "
+                    "another holder; not deleting it",
+                    lock_key=lock_key,
+                )

@@ -706,6 +706,9 @@ jobs:
               tests/integration/test_condition_dispatch.py
               tests/integration/test_per_action_dispatch.py
               tests/services/test_dispatch_stale_rule_cache.py
+              tests/integration/test_assignment_failed_rule_rollout.py
+              tests/integration/test_redis_lock_ownership.py
+              tests/integration/test_first_nonempty_resolver.py
               tests/integration/test_rule_loader_db.py
               tests/integration/test_registry_fallback_dispatch.py
               tests/integration/test_lead_notification_flow.py
@@ -784,6 +787,7 @@ jobs:
               tests/unit/test_admission_report_helpers.py
               tests/repositories/test_admission_report_integration.py
               tests/api/test_admission_report_api.py
+              tests/integration/test_lead_unassigned_watchdog.py
               tests/integration/test_sts20_consult_giveup.py
               tests/api/test_pipeline_api.py
               tests/api/test_bugfix_contract.py

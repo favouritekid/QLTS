@@ -563,6 +563,93 @@ class CompositeResolver(BaseResolver):
             return []
 
 
+class FirstNonEmptyResolver(BaseResolver):
+    """
+    Tries resolvers IN ORDER and returns the FIRST one that yields recipients.
+
+    This is a FALLBACK chain, not a union. It exists because
+    ``UnitManagersResolver`` returns ``[]`` for a unit that has no
+    manager/admin — and an empty recipient list on a *failure* event means
+    nobody is told that something broke. ``CompositeResolver`` cannot express
+    this: it merges every resolver unconditionally, so the fallback tier would
+    always be notified even when the primary tier has recipients.
+
+    Contract:
+        * Resolvers run in the given order and evaluation SHORT-CIRCUITS —
+          once a resolver returns at least one recipient, later resolvers are
+          NOT called at all.
+        * Results are NEVER unioned across tiers.
+        * Duplicate ids inside a single tier are removed (order preserved).
+        * All tiers empty => ``[]``, logged at ERROR. That is a real
+          "nobody can be told" condition and must stay visible rather than be
+          reported as a successful dispatch.
+
+    Usage:
+        resolver = FirstNonEmptyResolver([
+            ActorExcludedResolver(UnitManagersResolver()),
+            ActorExcludedResolver(AllAdminsResolver()),
+        ])
+        user_ids = await resolver.resolve_users(db, payload)
+    """
+
+    def __init__(self, resolvers: List[BaseResolver]):
+        """
+        Initialize with an ORDERED list of resolvers.
+
+        Args:
+            resolvers: List of BaseResolver instances, highest priority first
+        """
+        self.resolvers = resolvers
+
+    async def resolve_users(
+        self,
+        db: AsyncSession,
+        payload: dict
+    ) -> List[int]:
+        try:
+            for index, resolver in enumerate(self.resolvers):
+                user_ids = await resolver.resolve_users(db, payload)
+                if user_ids:
+                    # Preserve order, drop duplicates within this tier.
+                    seen: Set[int] = set()
+                    result: List[int] = []
+                    for uid in user_ids:
+                        if uid not in seen:
+                            seen.add(uid)
+                            result.append(uid)
+                    self._log_info(
+                        f"First-non-empty resolver matched tier {index} "
+                        f"({type(resolver).__name__}) with {len(result)} users; "
+                        f"{len(self.resolvers) - index - 1} later tier(s) skipped"
+                    )
+                    return result
+
+            # Every tier empty. Do NOT swallow this: a failure event with no
+            # recipient is exactly the silent-failure case this resolver was
+            # added to close.
+            # NOTE: ``log`` here is stdlib logging, not structlog — structured
+            # fields go through ``extra=``, never as bare kwargs.
+            log.error(
+                "[FirstNonEmptyResolver] no recipients in any tier — "
+                "a failure event will reach nobody",
+                extra={
+                    "event": "first_nonempty_resolver_no_recipients",
+                    "tiers": len(self.resolvers),
+                    "tier_types": [type(r).__name__ for r in self.resolvers],
+                    "unit_id": payload.get("unit_id"),
+                    "lead_id": payload.get("lead_id"),
+                },
+            )
+            return []
+
+        except Exception as e:
+            self._log_warning(
+                f"Failed in first-non-empty resolution: {str(e)}",
+                payload=payload
+            )
+            return []
+
+
 class ActorExcludedResolver(BaseResolver):
     """
     Wrapper resolver that excludes the actor from results.

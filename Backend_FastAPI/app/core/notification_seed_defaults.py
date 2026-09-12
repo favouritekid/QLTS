@@ -288,8 +288,26 @@ NOTIFICATION_SEED_DEFAULTS: Dict[SystemEvents, Dict[str, Any]] = {
         "message_template": "Lead #${lead_id} (${lead_name}) could not be assigned automatically. Reason: ${reason}. Please assign manually or adjust officer capacity.",
         "notification_type": "error",
         "recipient_config": {
-            "resolver_type": "actor_excluded",
-            "params": {"inner_resolver": {"resolver_type": "unit_managers", "params": {}}},
+            # FALLBACK CHAIN, not a union: unit managers first; if that unit has
+            # none (measured on production: unit 14 has 0 manager/admin) the alert
+            # falls through to every active admin. Without this an assignment
+            # failure reaches NOBODY and the lead is lost silently.
+            # actor_excluded is applied PER TIER on purpose — wrapping the whole
+            # chain would let a sole manager who is also the actor collapse the
+            # result to empty instead of falling through to the admin tier.
+            "resolver_type": "first_nonempty",
+            "params": {
+                "resolvers": [
+                    {
+                        "resolver_type": "actor_excluded",
+                        "params": {"inner_resolver": {"resolver_type": "unit_managers", "params": {}}},
+                    },
+                    {
+                        "resolver_type": "actor_excluded",
+                        "params": {"inner_resolver": {"resolver_type": "all_admins", "params": {}}},
+                    },
+                ]
+            },
         },
     },
     SystemEvents.LEAD_CREATED: {

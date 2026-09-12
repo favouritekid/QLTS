@@ -47,6 +47,7 @@ from .admission_tasks import (
 from .notification_outbox_tasks import (
     dispatch_pending_outbox,  # T0-4a skeleton; T0-4b will replace body
 )
+from .lead_watchdog_tasks import lead_unassigned_watchdog_task
 from .sla_tasks import auto_close_stale_rejected_leads_task
 from .sms_tasks import (
     cleanup_sms_export_files_task,
@@ -61,6 +62,7 @@ __all__ = [
     "send_password_reset_confirmation_email_task",
     # Assignment tasks
     "process_automatic_lead_assignment_task",
+    "lead_unassigned_watchdog_task",
     # Notification tasks
     "broadcast_notification_task",
     "check_consultation_reminders_task",

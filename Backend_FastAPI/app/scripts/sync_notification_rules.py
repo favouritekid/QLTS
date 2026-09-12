@@ -19,6 +19,14 @@ import sys
 from datetime import datetime, timezone
 from typing import Any, Dict
 
+from copy import deepcopy
+
+# Imported at module scope ON PURPOSE: if these cannot be imported the sync
+# must fail loudly at startup, not degrade to the old recipient config.
+from app.core.events import SystemEvents
+from app.core.notification_seed_defaults import NOTIFICATION_SEED_DEFAULTS
+from app.services.notification_rule_loader import deserialize_resolver
+
 import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -26,7 +34,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app import models
 from app.config import settings
 from app.core.event_catalog import EVENT_CATALOG, get_notifiable_events
-from app.core.events import SystemEvents
 
 log = structlog.get_logger(__name__)
 
@@ -34,6 +41,61 @@ log = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Resolver serialisation — same logic as seed_notification_rules.py
 # ---------------------------------------------------------------------------
+
+def _recipient_config_for(event_key, default_resolver):
+    """Recipient config for a NEW rule row.
+
+    Prefers NOTIFICATION_SEED_DEFAULTS, because the catalog's
+    ``default_resolver`` is a single resolver NAME and cannot express a nested
+    config such as a fallback chain. Without this a fresh database boots with
+    the flattened single-resolver form and quietly loses what the seed defaults
+    say - the migration cannot help either, since on a new database it runs
+    BEFORE this script and finds no row to update.
+
+    FAIL CLOSED. An earlier version wrapped the lookup in
+    ``except (ValueError, KeyError, ImportError): pass`` and fell back to the
+    single-resolver form. That is the exact failure this whole change exists to
+    remove: if the safety config cannot be loaded, the system must NOT silently
+    boot with the old recipient set that reaches nobody. Missing seed entry is
+    fine and falls back; a BROKEN one stops startup.
+    """
+    try:
+        event = SystemEvents(event_key)
+    except ValueError:
+        # Event exists in the catalog but not in the enum - nothing seeded for
+        # it by definition, so the catalog default is the right answer.
+        return _resolver_type_for_default(default_resolver)
+
+    if event not in NOTIFICATION_SEED_DEFAULTS:
+        # No seed default declared for this event. Legitimate: most events are
+        # happy with the single-resolver form.
+        return _resolver_type_for_default(default_resolver)
+
+    config = NOTIFICATION_SEED_DEFAULTS[event].get("recipient_config")
+    if not config:
+        raise RuntimeError(
+            f"NOTIFICATION_SEED_DEFAULTS[{event_key}] exists but carries no "
+            "recipient_config. Refusing to fall back to the catalog default: "
+            "that would boot with a recipient set the seed deliberately "
+            "replaced, and nobody would be told."
+        )
+
+    # Truthy is not the same as usable. A config like
+    # {"resolver_type": "first_nonempty", "params": {}} passes every emptiness
+    # check and then fails at DISPATCH time - which is the worst moment, because
+    # by then the row is in the database and the only symptom is an alert that
+    # never arrives. Build it here, where failing simply stops startup.
+    try:
+        deserialize_resolver(config)
+    except Exception as exc:
+        raise RuntimeError(
+            f"NOTIFICATION_SEED_DEFAULTS[{event_key}] recipient_config is not a "
+            f"usable resolver ({exc}). Refusing to write it: it would only fail "
+            "when an alert was actually needed."
+        ) from exc
+
+    return deepcopy(config)
+
 
 def _resolver_type_for_default(default_resolver: str) -> Dict[str, Any]:
     """Build minimal recipient_config JSON from catalog default_resolver string."""
@@ -155,7 +217,7 @@ async def sync_notification_rules(db) -> Dict[str, int]:
             message_template=msg_tpl,
             notification_type="info",
             link_template=None,  # PR2: link is code-owned (catalog), not DB-stored
-            recipient_config=_resolver_type_for_default(defn.default_resolver),
+            recipient_config=_recipient_config_for(event_key, defn.default_resolver),
             condition=None,
             enabled=True,
             created_at=datetime.now(timezone.utc),
