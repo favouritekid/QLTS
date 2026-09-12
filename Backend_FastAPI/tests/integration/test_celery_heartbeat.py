@@ -22,7 +22,6 @@ import pytest
 from redis.exceptions import RedisError
 
 from app.celery_app import celery_app
-from app.config import settings
 from app.tasks import heartbeat_tasks as ht
 from app.utils import redis_lock as rl
 
@@ -35,6 +34,26 @@ BEAT_ENTRY = "celery-heartbeat"
 
 def _text(raw):
     return raw.decode() if isinstance(raw, bytes) else raw
+
+
+class _ClientGhiLai:
+    """Bọc client Redis thật: vẫn ghi thật, nhưng ghi lại đối số của `set`.
+
+    Bọc thay vì thay hẳn bằng đồ giả, để ca kiểm vẫn khẳng định được rằng giá
+    trị THỰC SỰ tới Redis — một `set` chỉ được spy ghi nhận mà không tới đâu cả
+    thì vẫn xanh.
+    """
+
+    def __init__(self, that):
+        self._that = that
+        self.cac_lan_set = []
+
+    async def set(self, *vi_tri, **tu_khoa):
+        self.cac_lan_set.append((vi_tri, tu_khoa))
+        return await self._that.set(*vi_tri, **tu_khoa)
+
+    def __getattr__(self, ten):
+        return getattr(object.__getattribute__(self, "_that"), ten)
 
 
 @pytest.fixture(autouse=True)
@@ -85,16 +104,56 @@ class TestGiaTriGhiRa:
         ttl = await client.ttl(ht.HEARTBEAT_KEY)
         assert ht.HEARTBEAT_TTL_SECONDS - 5 <= ttl <= ht.HEARTBEAT_TTL_SECONDS
 
-    async def test_ghi_vao_DB_cache_cua_app_khong_phai_DB_broker(self):
-        """DB 1, deliberately.
+    async def test_ghi_qua_client_DUNG_CHUNG_cua_app(self, monkeypatch):
+        """Hai hợp đồng KHÁC NHAU, và trộn chúng là cách ca này từng đỏ ở CI.
 
-        The broker DB would NOT prove the worker can still reach the DB the rest
-        of the app uses — beat can publish into a broker the worker has lost.
+        * Hợp đồng RUNTIME (ca này): heartbeat phải ghi qua ĐÚNG client dùng
+          chung của app, chứ không tự mở một kết nối thứ hai. Một client riêng
+          với DB ghim cứng sẽ ghi vào DB mà monitor không đọc, và cả hai phía
+          vẫn "chạy được" — không ai thấy gì cho tới lúc cần cảnh báo.
+        * Hợp đồng TRIỂN KHAI (không thuộc tệp này): client dùng chung ấy trỏ
+          vào Redis DB 1 ở production. Nó được canh độc lập bởi
+          `test_monitor_doc_dung_DB_cua_app`, ca đó đọc thẳng `docker-compose.yml`
+          nên đúng ở mọi môi trường.
+
+        Bản đầu của ca này khẳng định `settings.REDIS_URL` kết thúc bằng `/1`.
+        Đó là khẳng định về MÔI TRƯỜNG CHẠY TEST, không phải về mã: compose cho
+        `/1` nên nó xanh ở máy dev, còn runner CI đặt `/0` nên nó đỏ. Chênh lệch
+        đo được đúng một ca — Tier 3 cho 406 passed ở máy và 405 passed + 1
+        failed ở CI.
         """
-        assert settings.REDIS_URL.rstrip("/").endswith("/1"), (
-            f"REDIS_URL={settings.REDIS_URL!r} khong tro vao DB 1; monitor doc "
-            "`redis-cli -n 1` nen lech DB la doc mot khoa khong bao gio ton tai"
+        that = rl.get_redis_client()
+        theo_doi = _ClientGhiLai(that)
+        so_lan_goi_factory = []
+
+        def factory():
+            so_lan_goi_factory.append(1)
+            return theo_doi
+
+        monkeypatch.setattr(ht, "get_redis_client", factory)
+        await ht.write_heartbeat()
+
+        assert len(so_lan_goi_factory) == 1, (
+            f"factory duoc goi {len(so_lan_goi_factory)} lan. 0 lan nghia la "
+            "write_heartbeat KHONG di qua client dung chung — no da mo mot "
+            "ket noi khac, co the tro vao DB ma monitor khong doc."
         )
+        assert len(theo_doi.cac_lan_set) == 1, (
+            f"client dung chung nhan {len(theo_doi.cac_lan_set)} lan `set`"
+        )
+
+        vi_tri, tu_khoa = theo_doi.cac_lan_set[0]
+        assert vi_tri[0] == ht.HEARTBEAT_KEY
+        assert re.fullmatch(r"[0-9]+", vi_tri[1]), (
+            f"gia tri ghi ra khong phai epoch thap phan tran: {vi_tri[1]!r}"
+        )
+        assert tu_khoa.get("ex") == ht.HEARTBEAT_TTL_SECONDS, (
+            f"thieu hoac sai TTL: {tu_khoa!r}"
+        )
+
+        # Và giá trị thật sự nằm trong client ĐƯỢC BỌC, không chỉ đi qua spy:
+        # nếu chỉ khẳng định trên spy thì một bản ghi đi đâu mất vẫn xanh.
+        assert _text(await that.get(ht.HEARTBEAT_KEY)) == vi_tri[1]
 
 
 class TestThoiDiemLaLucWorkerCHAY:
