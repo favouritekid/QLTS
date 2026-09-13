@@ -14,7 +14,16 @@
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
 import * as OTPAuth from "otpauth";
-import { expectOk, listActiveOfficers, safeBody, summarizeApiError } from "./helpers/e2e-fixtures";
+import {
+  assertPrincipal,
+  expectOk,
+  listActiveOfficers,
+  loginPrincipal,
+  pickAssignableOfficer,
+  safeBody,
+  summarizeApiError,
+  type Principal,
+} from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -82,9 +91,7 @@ const testPhone3 = generatePhone();
 
 // Test 8: Business rule validations
 let leadIdForLocking: number;
-let leadIdForTerminal: number;
 let finalNegativeStatusId: string | null = null;
-let enrolledFinalStatusId: string | null = null;
 
 // Test 9: Quota exhaustion
 let quotaOfficerUsername: string;
@@ -1494,11 +1501,20 @@ test.describe("Lead Management Workflow", () => {
   });
 
   // =========================================================================
-  // Test 8: Business Rule Validations — optimistic locking, loss reason, terminal block
+  // Test 8: Business Rule Validations — optimistic locking, loss reason
+  //
+  // Ca "terminal block" ĐÃ RỜI khỏi đây sang describe ĐỘC LẬP ở cuối tệp
+  // (`Lead terminal hard block — độc lập`). Lý do là một sự thật ĐO ĐƯỢC, không
+  // phải gu thẩm mỹ: describe này chạy `mode: "serial"`, nên test 6 (import
+  // CSV) đỏ là Playwright **skip** mọi test sau nó — test 7..10 in ra
+  // "did not run". Ca terminal vì thế chưa từng thực thi một lần nào, kể cả
+  // trong những đêm nightly mà nó nằm sẵn trong tệp.
+  // Chạy riêng bằng `-g` cũng không cứu: test 8 đọc `adminCookies`,
+  // `offeringId`, `unitId`, `initialStatusId` — toàn biến module do test 1 gán.
   // =========================================================================
-  test("Business rule validations — optimistic locking, loss reason, terminal block", async ({ page }) => {
-    // --- Preamble: Re-fetch pipeline với full metadata + tạo leads mới ---
-    await test.step("Re-fetch pipeline metadata + create fresh leads", async () => {
+  test("Business rule validations — optimistic locking, loss reason", async ({ page }) => {
+    // --- Preamble: Re-fetch pipeline với full metadata + tạo lead mới ---
+    await test.step("Re-fetch pipeline metadata + create fresh lead", async () => {
       adminHeaders = await restoreCookies(page, adminCookies);
 
       // Re-fetch để lấy is_final, phase, outcome_type
@@ -1511,12 +1527,9 @@ test.describe("Lead Management Workflow", () => {
       finalNegativeStatusId = allFullStatuses.find(
         (s) => s.is_final && s.outcome_type === "negative" && s.phase === "consultation"
       )?.id ?? null;
-      enrolledFinalStatusId = allFullStatuses.find(
-        (s) => s.is_final && s.phase === "enrolled"
-      )?.id ?? null;
-      console.log(`finalNegativeStatusId=${finalNegativeStatusId}, enrolledFinalStatusId=${enrolledFinalStatusId}`);
+      console.log(`finalNegativeStatusId=${finalNegativeStatusId}`);
 
-      // Create 2 fresh leads
+      // Create 1 fresh lead
       const r1 = await page.request.post(`${API_URL}/api/leads`, {
         headers: adminHeaders,
         // `unit_id` tường minh: sub-test B gán lead này cho officer.
@@ -1524,14 +1537,7 @@ test.describe("Lead Management Workflow", () => {
       });
       await expectOk(r1, "admin tạo lead cho ca optimistic locking", [200, 201]);
       leadIdForLocking = (await r1.json()).id;
-
-      const r2 = await page.request.post(`${API_URL}/api/leads`, {
-        headers: adminHeaders,
-        data: { full_name: `E2E_Terminal_${Date.now()}`, phone: generatePhone(), source: "walk_in", offering_id: offeringId, unit_id: unitId },
-      });
-      await expectOk(r2, "admin tạo lead cho ca terminal block", [200, 201]);
-      leadIdForTerminal = (await r2.json()).id;
-      console.log(`Created leads for Test 8: locking=${leadIdForLocking}, terminal=${leadIdForTerminal}`);
+      console.log(`Created lead for Test 8: locking=${leadIdForLocking}`);
     });
 
     // --- Sub-test A: Optimistic Locking (version mismatch → 409) ---
@@ -1635,139 +1641,6 @@ test.describe("Lead Management Workflow", () => {
           `khoá nhận được: ${Object.keys(created).join(",")}`
       ).toBe(finalNegativeStatusId);
       console.log(`Loss reason accepted: consultation status=${statusField}`);
-    });
-
-    // --- Sub-test C: Terminal Status Hard Block ---
-    //
-    // BẤT BIẾN ĐƯỢC CANH: một lead ở trạng thái TERMINAL (`is_final=true`) phải
-    // TỪ CHỐI consultation mới bằng 400.
-    //
-    // Bản cũ có HAI đường xanh giả, và cả hai đều bỏ qua đúng phần kiểm ấy:
-    //   1. `if (!enrolledFinalStatusId) return;`
-    //   2. `if (!patchResp.ok()) { expect(status).not.toBe(422); return; }`
-    // Đường (2) chỉ loại 422, nên 401 / 403 / 500 đều lọt qua rồi `return` —
-    // ca xanh mà không đo gì. Đúng lớp lỗi "phép kiểm gộp che thứ nó canh".
-    //
-    // Bản này KHÔNG bỏ qua. FSM chặn nhảy thẳng sang phase `enrolled` là HỢP LỆ
-    // (phase suy từ admission profile — `pipeline.py:124-147` gọi
-    // `derive_phase_from_admission`, lead chưa có hồ sơ thì phase=`consultation`),
-    // nên ta thử lần lượt các trạng thái terminal ĐẠT TỚI ĐƯỢC, qua CẢ HAI
-    // đường sản phẩm: PATCH status và POST consultation kèm `loss_reason_code`.
-    // Không đường nào tới được thì ĐỎ kèm chẩn đoán, không phải `return`.
-    await test.step("C: Terminal lead → consultation blocked", async () => {
-      const candidates = [enrolledFinalStatusId, finalNegativeStatusId].filter(
-        (x): x is string => typeof x === "string" && x.length > 0
-      );
-      expect(
-        candidates.length,
-        "Seed không có trạng thái nào `is_final=true` — không thể canh bất biến " +
-          "terminal. Đây là lỗi dữ liệu seed, KHÔNG phải lý do bỏ qua phép kiểm."
-      ).toBeGreaterThan(0);
-
-      const attempts: string[] = [];
-      let reached: string | null = null;
-
-      for (const statusId of candidates) {
-        adminHeaders = await restoreCookies(page, adminCookies);
-        const leadResp = await page.request.get(
-          `${API_URL}/api/leads/${leadIdForTerminal}`,
-          { headers: adminHeaders }
-        );
-        await expectOk(leadResp, `GET lead #${leadIdForTerminal} lấy version`, [200]);
-        const version = (await leadResp.json()).version as number;
-
-        // Đường 1 — PATCH status (`LeadStatusUpdate` bắt buộc `version`).
-        const patchResp = await page.request.patch(
-          `${API_URL}/api/leads/${leadIdForTerminal}/status`,
-          { headers: adminHeaders, data: { consultation_status_id: statusId, version } }
-        );
-        if (patchResp.ok()) {
-          reached = statusId;
-          break;
-        }
-        attempts.push(
-          `PATCH status → ${statusId}: ` +
-            summarizeApiError(patchResp.status(), await patchResp.text())
-        );
-
-        // Đường 2 — POST consultation kèm `loss_reason_code`, đúng cách sub-test B
-        // đưa lead sang trạng thái âm cuối cùng.
-        adminHeaders = await restoreCookies(page, adminCookies);
-        const consResp = await page.request.post(
-          `${API_URL}/api/leads/${leadIdForTerminal}/consultations`,
-          {
-            headers: adminHeaders,
-            data: {
-              status_id: statusId,
-              method: "phone",
-              notes: "E2E: đưa lead sang trạng thái terminal",
-              loss_reason_code: "NO_CONTACT",
-              loss_reason_note: "E2E terminal setup",
-            },
-          }
-        );
-        if (consResp.ok()) {
-          reached = statusId;
-          break;
-        }
-        attempts.push(
-          `POST consultation → ${statusId}: ` +
-            summarizeApiError(consResp.status(), await consResp.text())
-        );
-      }
-
-      expect(
-        reached,
-        `Không đường nào đưa lead #${leadIdForTerminal} tới trạng thái terminal. ` +
-          `Đã thử ${candidates.length} trạng thái × 2 đường — ${attempts.join(" ｜ ")}`
-      ).not.toBeNull();
-
-      // TIỀN ĐỀ phải được CHỨNG MINH, không được giả định: nếu lead chưa terminal
-      // thì một 400 ở C2 có thể đến từ bất kỳ luật nào khác, và phép kiểm vô nghĩa.
-      adminHeaders = await restoreCookies(page, adminCookies);
-      const pipeResp = await page.request.get(`${API_URL}/api/pipeline/all`, {
-        headers: adminHeaders,
-      });
-      await expectOk(pipeResp, "GET /api/pipeline/all (xác minh tiền đề terminal)", [200]);
-      const finalIds = new Set<string>(
-        ((await pipeResp.json()).statuses as Array<{ id: string; is_final: boolean }>)
-          .filter((st) => st.is_final)
-          .map((st) => st.id)
-      );
-      const afterResp = await page.request.get(
-        `${API_URL}/api/leads/${leadIdForTerminal}`,
-        { headers: adminHeaders }
-      );
-      await expectOk(afterResp, `GET lead #${leadIdForTerminal} sau chuyển terminal`, [200]);
-      const afterStatusId = (await afterResp.json()).consultation_status_id as string;
-      expect(
-        finalIds.has(afterStatusId),
-        `Lead #${leadIdForTerminal} phải đang ở trạng thái is_final sau khi chuyển; ` +
-          `thực tế đang ở ${afterStatusId}. Chuyển được nhưng không terminal ⇒ ` +
-          `phép kiểm C2 sẽ đo nhầm luật khác.`
-      ).toBe(true);
-      console.log(`Lead ở trạng thái terminal: ${afterStatusId} (qua ${reached})`);
-
-      // C2 — CHẠY VÔ ĐIỀU KIỆN.
-      adminHeaders = await restoreCookies(page, adminCookies);
-      const hardBlockResp = await page.request.post(
-        `${API_URL}/api/leads/${leadIdForTerminal}/consultations`,
-        {
-          headers: adminHeaders,
-          data: { status_id: initialStatusId, method: "phone", notes: "E2E: should be hard blocked" },
-        }
-      );
-      // Đọc thân MỘT LẦN rồi parse: `APIResponse` của Playwright không có
-      // `clone()`, và gọi `.text()` sau `.json()` là đọc lại cùng bộ đệm.
-      const hardBlockText = await hardBlockResp.text();
-      expect(
-        hardBlockResp.status(),
-        `Lead terminal ${afterStatusId} phải CHẶN consultation mới bằng 400. ` +
-          summarizeApiError(hardBlockResp.status(), hardBlockText)
-      ).toBe(400);
-      const blockErr = JSON.parse(hardBlockText) as { detail?: string };
-      expect(blockErr.detail).toMatch(/nhập học|enrolled|hoàn tất|hard.block|terminal|kết thúc/i);
-      console.log(`Hard block confirmed: 400 — ${safeBody({ detail: blockErr.detail })}`);
     });
   });
 
@@ -2129,6 +2002,252 @@ test.describe("Lead Management Workflow", () => {
       const adminUnitBBody = await adminUnitBResp.json();
       expect(adminUnitBBody.leads.some((l: { id: number }) => l.id === unitBLeadId)).toBeTruthy();
       console.log(`Admin sees unitB lead ${unitBLeadId}: confirmed`);
+    });
+  });
+});
+
+// ===========================================================================
+// Test 8C — ĐỘC LẬP: Terminal Status Hard Block
+// ===========================================================================
+//
+// BẤT BIẾN ĐƯỢC CANH: một lead ở trạng thái TERMINAL (`is_final=true`) phải
+// TỪ CHỐI consultation mới bằng 400.
+//
+// VÌ SAO NÓ NẰM Ở DESCRIBE RIÊNG — ba sự thật đo được, không phải sở thích:
+//
+//  1. `Lead Management Workflow` chạy `mode: "serial"`. Test 6 (import CSV)
+//     đang đỏ ⇒ Playwright **skip** test 7..10, chúng in ra "did not run".
+//     Ca terminal nằm trong test 8 nên nó CHƯA TỪNG thực thi lần nào — kể cả
+//     những đêm nightly có nó trong tệp. Một ca không chạy không canh gì cả.
+//  2. Chạy riêng bằng `-g "terminal"` cũng hỏng: test 8 đọc `adminCookies`,
+//     `adminHeaders`, `offeringId`, `unitId`, `initialStatusId` — toàn biến
+//     module do test 1 gán. Lọc `-g` bỏ test 1 ⇒ `adminCookies` là `[]` ⇒
+//     `GET /api/pipeline/all` đi ra không phiên.
+//  3. Describe này KHÔNG chia sẻ một biến module nào với describe trên. Nó tự
+//     đăng nhập vào `APIRequestContext` RIÊNG (`loginPrincipal`), tự khám phá
+//     pipeline / đơn vị / offering, tự tạo lead. Test 6 đỏ hay xanh không đổi
+//     được gì ở đây.
+//
+// BA ĐIỀU KHÔNG ĐƯỢC NỚI, dù có vẻ tiện:
+//  * 401/403/500 TUYỆT ĐỐI không được biến thành `return` coi như thành công.
+//    Bản cũ có đúng hai đường như thế (`if (!enrolledFinalStatusId) return;`
+//    và `if (!patchResp.ok()) { expect(status).not.toBe(422); return; }`);
+//    đường sau chỉ loại 422 nên 401/403/500 lọt qua rồi `return` — ca xanh mà
+//    không đo gì.
+//  * Tiền đề `is_final` phải được CHỨNG MINH bằng cách ĐỌC LẠI lead, không
+//    được suy từ "PATCH trả 200". Chưa terminal thì một 400 ở bước cuối có thể
+//    đến từ bất kỳ luật nào khác, và phép kiểm đo nhầm thứ khác.
+//  * Không đường nào tới được terminal ⇒ ĐỎ kèm chẩn đoán TỪNG LƯỢT THỬ.
+test.describe("Lead terminal hard block — độc lập", () => {
+  test.describe.configure({ timeout: 300_000, mode: "serial" });
+
+  let terminalAdmin: Principal | undefined;
+
+  test.afterAll(async () => {
+    await terminalAdmin?.dispose();
+  });
+
+  test("Terminal lead chặn consultation mới bằng 400", async ({ playwright }) => {
+    // --- 1. Phiên RIÊNG, không mượn cookie của bất kỳ test nào ---
+    await test.step("Admin login (APIRequestContext riêng)", async () => {
+      terminalAdmin = await loginPrincipal(playwright.request, {
+        label: "admin-terminal",
+        username: ADMIN_USERNAME,
+        password: ADMIN_PASSWORD,
+        totpSecret: ADMIN_TOTP_SECRET,
+      });
+      expect(
+        terminalAdmin.user.role,
+        `Tài khoản "${ADMIN_USERNAME}" phải có role admin để PATCH status tự do`
+      ).toBe("admin");
+      console.log(
+        `admin-terminal: user #${terminalAdmin.user.id} role=${terminalAdmin.user.role}`
+      );
+    });
+    const admin = terminalAdmin as Principal;
+
+    // --- 2. Khám phá pipeline / đơn vị / offering qua CHÍNH jar ấy ---
+    type FullStatus = {
+      id: string;
+      name: string;
+      phase: string;
+      is_final: boolean;
+      outcome_type: string;
+    };
+    let finalIds = new Set<string>();
+    let candidates: string[] = [];
+    let nonFinalStatusId = "";
+    let leadId = 0;
+
+    await test.step("Khám phá pipeline + tạo lead của riêng ca này", async () => {
+      const pipeResp = await admin.ctx.get(`${API_URL}/api/pipeline/all`);
+      await expectOk(pipeResp, "GET /api/pipeline/all (khám phá)", [200]);
+      const pipeline = await pipeResp.json();
+      const statuses = pipeline.statuses as FullStatus[];
+      const transitions: Array<{ from_status_id: string; to_status_id: string }> =
+        pipeline.allowed_transitions || [];
+
+      finalIds = new Set(statuses.filter((s) => s.is_final).map((s) => s.id));
+      expect(
+        finalIds.size,
+        "Seed không có trạng thái nào `is_final=true` — không thể canh bất biến " +
+          "terminal. Đây là lỗi dữ liệu seed, KHÔNG phải lý do bỏ qua phép kiểm."
+      ).toBeGreaterThan(0);
+
+      // Thứ tự ưu tiên: `enrolled` (ca thật hay gặp) → âm-cuối-cùng của
+      // consultation → MỌI trạng thái final còn lại. Thử đủ, không dừng ở hai.
+      const uuTien = [
+        ...statuses.filter((s) => s.is_final && s.phase === "enrolled"),
+        ...statuses.filter(
+          (s) => s.is_final && s.outcome_type === "negative" && s.phase === "consultation"
+        ),
+        ...statuses.filter((s) => s.is_final),
+      ];
+      candidates = [...new Set(uuTien.map((s) => s.id))];
+
+      // Trạng thái KHỞI ĐIỂM cho lượt POST bị chặn: phải KHÔNG final, nếu
+      // không thì một 400 có thể đến từ chính luật "không nhảy vào final".
+      const batDau =
+        transitions.find((t) => !finalIds.has(t.from_status_id))?.from_status_id ??
+        statuses.find((s) => !s.is_final)?.id;
+      expect(
+        batDau,
+        "Seed không có trạng thái KHÔNG-final nào để làm status khởi điểm"
+      ).toBeTruthy();
+      nonFinalStatusId = batDau as string;
+
+      // Đơn vị đọc RA TỪ officer thật (cặp đơn vị/officer luôn tương thích),
+      // không lấy `units[0]` rời rạc.
+      const officer = await pickAssignableOfficer(admin.ctx);
+      const offResp = await admin.ctx.get(
+        `${API_URL}/api/program-offerings?is_active=true&limit=1`
+      );
+      await expectOk(offResp, "GET /api/program-offerings", [200]);
+      const offerings = await offResp.json();
+      expect(
+        offerings.length,
+        "Seed không có program-offering active nào"
+      ).toBeGreaterThan(0);
+
+      const createResp = await admin.ctx.post(`${API_URL}/api/leads`, {
+        headers: admin.headers,
+        data: {
+          full_name: `E2E_TerminalSolo_${Date.now()}`,
+          phone: generatePhone(),
+          source: "walk_in",
+          offering_id: offerings[0].id,
+          unit_id: officer.unit_id,
+        },
+      });
+      await expectOk(createResp, "admin tạo lead cho ca terminal block", [200, 201]);
+      leadId = (await createResp.json()).id;
+      console.log(
+        `Lead #${leadId} (unit ${officer.unit_id}) · ${candidates.length} ứng viên ` +
+          `terminal · status khởi điểm ${nonFinalStatusId}`
+      );
+    });
+
+    // --- 3. Đưa lead tới terminal, thử MỌI đường, không `return` giữa chừng ---
+    let reached: string | null = null;
+    const attempts: string[] = [];
+
+    await test.step("Đưa lead tới trạng thái terminal", async () => {
+      for (const statusId of candidates) {
+        const leadResp = await admin.ctx.get(`${API_URL}/api/leads/${leadId}`);
+        await expectOk(leadResp, `GET lead #${leadId} lấy version`, [200]);
+        const version = (await leadResp.json()).version as number;
+
+        // Đường 1 — PATCH status (`LeadStatusUpdate` bắt buộc `version`).
+        const patchResp = await admin.ctx.patch(
+          `${API_URL}/api/leads/${leadId}/status`,
+          {
+            headers: admin.headers,
+            data: { consultation_status_id: statusId, version },
+          }
+        );
+        if (patchResp.ok()) {
+          reached = statusId;
+          break;
+        }
+        attempts.push(
+          `PATCH status → ${statusId}: ` +
+            summarizeApiError(patchResp.status(), await patchResp.text())
+        );
+
+        // Đường 2 — POST consultation kèm `loss_reason_code`, đúng đường sản
+        // phẩm mà UI dùng khi đóng lead ở trạng thái âm.
+        const consResp = await admin.ctx.post(
+          `${API_URL}/api/leads/${leadId}/consultations`,
+          {
+            headers: admin.headers,
+            data: {
+              status_id: statusId,
+              method: "phone",
+              notes: "E2E: đưa lead sang trạng thái terminal",
+              loss_reason_code: "NO_CONTACT",
+              loss_reason_note: "E2E terminal setup",
+            },
+          }
+        );
+        if (consResp.ok()) {
+          reached = statusId;
+          break;
+        }
+        attempts.push(
+          `POST consultation → ${statusId}: ` +
+            summarizeApiError(consResp.status(), await consResp.text())
+        );
+      }
+
+      expect(
+        reached,
+        `Không đường nào đưa lead #${leadId} tới trạng thái terminal. ` +
+          `Đã thử ${candidates.length} trạng thái × 2 đường — ${attempts.join(" ｜ ")}`
+      ).not.toBeNull();
+    });
+
+    // --- 4. TIỀN ĐỀ phải được CHỨNG MINH, không được giả định ---
+    let afterStatusId = "";
+    await test.step("Chứng minh lead ĐANG ở trạng thái is_final", async () => {
+      await assertPrincipal(admin);
+      const afterResp = await admin.ctx.get(`${API_URL}/api/leads/${leadId}`);
+      await expectOk(afterResp, `GET lead #${leadId} sau chuyển terminal`, [200]);
+      afterStatusId = (await afterResp.json()).consultation_status_id as string;
+      expect(
+        finalIds.has(afterStatusId),
+        `Lead #${leadId} phải đang ở trạng thái is_final sau khi chuyển; thực tế ` +
+          `đang ở ${afterStatusId}. Chuyển được nhưng không terminal ⇒ phép kiểm ` +
+          `dưới đây sẽ đo nhầm luật khác. Các lượt đã thử: ${attempts.join(" ｜ ")}`
+      ).toBe(true);
+      console.log(`Lead ở trạng thái terminal: ${afterStatusId} (qua ${reached})`);
+    });
+
+    // --- 5. Phép kiểm thật — CHẠY VÔ ĐIỀU KIỆN ---
+    await test.step("Consultation mới trên lead terminal phải 400", async () => {
+      const blockResp = await admin.ctx.post(
+        `${API_URL}/api/leads/${leadId}/consultations`,
+        {
+          headers: admin.headers,
+          data: {
+            status_id: nonFinalStatusId,
+            method: "phone",
+            notes: "E2E: should be hard blocked",
+          },
+        }
+      );
+      // Đọc thân MỘT LẦN rồi parse: `APIResponse` của Playwright không có
+      // `clone()`, và gọi `.text()` sau `.json()` là đọc lại cùng bộ đệm.
+      const blockText = await blockResp.text();
+      expect(
+        blockResp.status(),
+        `Lead terminal ${afterStatusId} phải CHẶN consultation mới bằng 400. ` +
+          summarizeApiError(blockResp.status(), blockText)
+      ).toBe(400);
+      const blockErr = JSON.parse(blockText) as { detail?: string };
+      expect(blockErr.detail).toMatch(
+        /nhập học|enrolled|hoàn tất|hard.block|terminal|kết thúc/i
+      );
+      console.log(`Hard block confirmed: 400 — ${safeBody({ detail: blockErr.detail })}`);
     });
   });
 });

@@ -547,10 +547,15 @@ jobs:
         working-directory: frontend
         env:
           # `E2E_API_URL` KHÔNG được khai ở bước này trước bản vá, nên
-          # `admission-ui-smoke.spec.ts` rơi về literal `http://localhost:8000`.
+          # `smoke-all-pages.spec.ts:36` rơi về literal `http://localhost:8000`.
           # Giá trị trùng nhau nên không ai thấy, nhưng nó là một mặc định ngầm:
           # đổi cổng backend ở `docker-compose.ci.yml` là suite này gọi nhầm
           # địa chỉ mà năm bước kia thì không. Khai tường minh như năm bước trên.
+          #
+          # Giá trị dưới đây bị khoá vào cổng host của `backend` trong
+          # `docker-compose.ci.yml` bởi
+          # `test_moi_E2E_API_URL_trong_nightly_tro_dung_cong_backend_CI`
+          # (Tier 5). Đổi một đầu mà quên đầu kia là ĐỎ, không phải im lặng.
           E2E_API_URL: http://localhost:8000
           PLAYWRIGHT_BASE_URL: http://localhost:3000
         run: npx playwright test src/test/e2e/smoke-all-pages.spec.ts src/test/e2e/admission-ui-smoke.spec.ts --project=chromium --reporter=list --output=test-results/suite-smoke
