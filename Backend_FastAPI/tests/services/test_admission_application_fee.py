@@ -1406,12 +1406,27 @@ class TestApplicationFeePaidEvent:
     async def test_end_to_end_delivery_via_real_db_rule(
         self,
         admin_user_in_db: dict,
+        accountant_user_in_db: dict,
         seed_admission_statuses: dict,
     ):
         """
         Full E2E: seed rule into DB via sync_notification_rules, then run
         dispatch() for APPLICATION_FEE_PAID. Verify a real Notification row
         is created in the DB for the lead owner.
+
+        ACTOR ≠ LEAD OWNER on purpose — that is the production shape. The
+        recipient config that ``sync_notification_rules`` writes comes from
+        ``NOTIFICATION_SEED_DEFAULTS[APPLICATION_FEE_PAID]``, which is
+        ``actor_excluded(lead_owner)``; ``EVENT_CATALOG.default_resolver`` is
+        the lossy single-name projection ("lead_owner") and is NOT what a
+        fresh database boots with. An earlier version of this test put the
+        lead owner in ``actor_id`` as well and then demanded the owner be
+        notified — that demands the exact opposite of the rule it just
+        seeded. The real path (``admission_service.record_application_fee_
+        payment``) fills ``officer_id`` from ``lead.assigned_officer_id`` and
+        ``actor_id`` from ``recorded_by``: an accountant recording the
+        receipt for a lead owned by someone else. Self-actor is covered by
+        ``test_actor_who_is_lead_owner_receives_no_self_notification``.
 
         Channel send is mocked so no real socket/email is emitted; every
         other step (rule lookup, resolver, recipient resolution, row
@@ -1426,6 +1441,12 @@ class TestApplicationFeePaidEvent:
 
         unit_id = seed_admission_statuses["unit_id"]
         officer_id = admin_user_in_db["id"]
+        actor_id = accountant_user_in_db["id"]
+        assert actor_id != officer_id, (
+            "fixture drift: the accountant recording the fee must NOT be the "
+            "lead owner, otherwise this case silently becomes the "
+            "self-exclusion case"
+        )
 
         lead_id = await create_test_lead_with_consultation(
             unit_id=unit_id,
@@ -1468,8 +1489,8 @@ class TestApplicationFeePaidEvent:
                     "officer_id": officer_id,
                     "amount": "100000",
                     "transaction_id": "TXN-E2E-001",
-                    "actor_id": officer_id,
-                    "actor_name": admin_user_in_db["username"],
+                    "actor_id": actor_id,
+                    "actor_name": accountant_user_in_db["username"],
                 }
                 notification_ids, callback = await dispatch(
                     db=session,
@@ -1482,7 +1503,8 @@ class TestApplicationFeePaidEvent:
 
             # 5. Notification row must exist for the lead owner
             assert notification_ids, (
-                "APPLICATION_FEE_PAID rule exists → notification must be created"
+                "APPLICATION_FEE_PAID rule exists and the actor is NOT the "
+                "lead owner → notification must be created"
             )
             notif_stmt = select(models.Notification).where(
                 models.Notification.id.in_(notification_ids)
@@ -1490,8 +1512,12 @@ class TestApplicationFeePaidEvent:
             notifs = (await session.execute(notif_stmt)).scalars().all()
             assert len(notifs) >= 1
             recipient_ids = {n.user_id for n in notifs}
-            assert officer_id in recipient_ids, (
-                f"Lead owner {officer_id} must receive the notification; "
+            # EXACT set, not membership: the seeded resolver is
+            # actor_excluded(lead_owner), so the owner is the only recipient
+            # and the actor must never be one. `in` alone would stay green if
+            # the resolver started fanning out to every admin.
+            assert recipient_ids == {officer_id}, (
+                f"Lead owner {officer_id} must be the only recipient; "
                 f"got recipients {recipient_ids}"
             )
             # Template rendering + payload snapshot survived into the row
@@ -1502,6 +1528,182 @@ class TestApplicationFeePaidEvent:
             # Data JSON carries the source event type for audit/trace
             assert matching.data is not None
             assert matching.data.get("event") == "application_fee_paid"
+
+    async def test_actor_who_is_lead_owner_receives_no_self_notification(
+        self,
+        admin_user_in_db: dict,
+        accountant_user_in_db: dict,
+        officer_peer_user_in_db: dict,
+        seed_admission_statuses: dict,
+    ):
+        """actor_excluded: the lead owner who records the fee himself must
+        NOT be mailed about his own action.
+
+        The assertion "zero notifications" is worthless on its own — it stays
+        green when the rule is missing, disabled, actionless, or when the
+        resolver blew up. So this case carries its own NEGATIVE CONTROL: a
+        SECOND lead, owned by a DIFFERENT officer, dispatched through the very
+        same seeded rule in the same session, MUST produce a row. Treatment
+        and control differ in exactly one thing — whether ``actor_id`` equals
+        the lead owner.
+
+        Ordering and the second owner are both load-bearing:
+          * treatment runs FIRST. The dispatcher's cooldown key for a
+            ``dispatch()`` call without an explicit ``dedupe_key`` is
+            ``notif:cooldown:<event>:<uid>:<channel>:<step>`` — it carries no
+            application_id — so a control that ran first would put the owner
+            in cooldown and the treatment would come back empty for the WRONG
+            reason;
+          * the control uses a different owner, so the two halves cannot
+            interact through that per-user cooldown at all.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from sqlalchemy import select
+        from app.core.events import SystemEvents
+        from app.scripts.sync_notification_rules import sync_notification_rules
+        from app.services.notification_dispatcher import dispatch
+        from app.services.notification_rule_loader import invalidate_rule_cache
+
+        unit_id = seed_admission_statuses["unit_id"]
+        owner_id = admin_user_in_db["id"]
+        control_owner_id = officer_peer_user_in_db["id"]
+        control_actor_id = accountant_user_in_db["id"]
+        assert len({owner_id, control_owner_id, control_actor_id}) == 3, (
+            "fixture drift: treatment owner, control owner and control actor "
+            "must be three distinct users"
+        )
+
+        # Treatment: owner records his own lead's fee.
+        self_lead_id = await create_test_lead_with_consultation(
+            unit_id=unit_id,
+            assigned_officer_id=owner_id,
+        )
+        self_profile = await create_admission_profile_with_fee_status(
+            lead_id=self_lead_id,
+            citizen_id="200000000031",
+            academic_year=2026,
+            requires_fee=True,
+            fee_status="pending",
+        )
+        # Control: a different owner, fee recorded by the accountant.
+        control_lead_id = await create_test_lead_with_consultation(
+            unit_id=unit_id,
+            assigned_officer_id=control_owner_id,
+        )
+        control_profile = await create_admission_profile_with_fee_status(
+            lead_id=control_lead_id,
+            citizen_id="200000000032",
+            academic_year=2026,
+            requires_fee=True,
+            fee_status="pending",
+        )
+
+        async with AsyncSessionLocal() as session:
+            await sync_notification_rules(session)
+            await session.commit()
+
+            rule_stmt = select(models.NotificationRule).where(
+                models.NotificationRule.event == "application_fee_paid",
+                models.NotificationRule.enabled == True,  # noqa: E712
+            )
+            rule_row = (await session.execute(rule_stmt)).scalars().first()
+            assert rule_row is not None, "sync_notification_rules must seed the rule"
+            action_count = (
+                await session.execute(
+                    select(models.NotificationAction).where(
+                        models.NotificationAction.rule_id == rule_row.id
+                    )
+                )
+            ).scalars().all()
+            assert action_count, (
+                "rule without action rows dispatches nothing — an empty result "
+                "below would then prove nothing about actor exclusion"
+            )
+
+            await invalidate_rule_cache("application_fee_paid")
+
+            mock_result = MagicMock(sent_count=1, failed_ids=[], success=True)
+            with patch(
+                "app.services.notification_dispatcher._send_via_channel",
+                new=AsyncMock(return_value=("browser", mock_result, None)),
+            ):
+                self_ids, self_cb = await dispatch(
+                    db=session,
+                    event=SystemEvents.APPLICATION_FEE_PAID,
+                    payload={
+                        "application_id": self_profile.id,
+                        "lead_id": self_lead_id,
+                        "unit_id": unit_id,
+                        "officer_id": owner_id,
+                        "amount": "100000",
+                        "transaction_id": "TXN-SELF-001",
+                        "actor_id": owner_id,
+                        "actor_name": admin_user_in_db["username"],
+                    },
+                )
+                await session.commit()
+                if self_cb:
+                    await self_cb()
+
+                control_ids, control_cb = await dispatch(
+                    db=session,
+                    event=SystemEvents.APPLICATION_FEE_PAID,
+                    payload={
+                        "application_id": control_profile.id,
+                        "lead_id": control_lead_id,
+                        "unit_id": unit_id,
+                        "officer_id": control_owner_id,
+                        "amount": "100000",
+                        "transaction_id": "TXN-CTRL-001",
+                        "actor_id": control_actor_id,
+                        "actor_name": accountant_user_in_db["username"],
+                    },
+                )
+                await session.commit()
+                if control_cb:
+                    await control_cb()
+
+            # Control first in the report: if the pipe is dead, say so instead
+            # of letting the treatment's emptiness look like a pass.
+            assert control_ids, (
+                "negative control failed: an actor who is NOT the lead owner "
+                "must produce a notification, otherwise the empty treatment "
+                "result below proves nothing"
+            )
+
+            # Treatment: nothing for the actor, and nothing at all.
+            assert self_ids == [], (
+                f"actor_excluded(lead_owner): actor {owner_id} is the lead "
+                f"owner, so APPLICATION_FEE_PAID must reach nobody; got "
+                f"notification ids {self_ids}"
+            )
+
+            # Not just "dispatch returned []": no row may exist for that
+            # application under any recipient, by any path.
+            all_notifs = (
+                await session.execute(select(models.Notification))
+            ).scalars().all()
+            fee_notifs = [
+                n for n in all_notifs
+                if (n.data or {}).get("event") == "application_fee_paid"
+            ]
+            self_rows = [
+                n for n in fee_notifs
+                if (n.data or {}).get("application_id") == self_profile.id
+            ]
+            assert self_rows == [], (
+                "no APPLICATION_FEE_PAID row may exist for the self-recorded "
+                f"application {self_profile.id}; found "
+                f"{[(n.id, n.user_id) for n in self_rows]}"
+            )
+            control_rows = [
+                n for n in fee_notifs
+                if (n.data or {}).get("application_id") == control_profile.id
+            ]
+            assert {n.user_id for n in control_rows} == {control_owner_id}, (
+                "control row must belong to the control lead owner; got "
+                f"{[(n.id, n.user_id) for n in control_rows]}"
+            )
 
     async def test_idempotent_call_does_not_dispatch(
         self,

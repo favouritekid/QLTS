@@ -701,6 +701,30 @@ jobs:
           # 1 skipped trên bộ nghiệm thu notification), theo tiền lệ của lát này.
           # Còn nợ: `tests/integration/test_notification_delivery_persistence.py`
           # cũng chưa có tier — xanh nhưng chưa kéo vào, để một PR riêng.
+          #
+          # 2026-09-13 — `tests/services/test_admission_application_fee.py`
+          # trước nay KHÔNG có tên trong tier nào: PR gate chưa từng chạy nó,
+          # required check vẫn xanh, và ca đỏ duy nhất của nightly
+          # (run 34716163644, shard-08) nằm đúng trong tệp này —
+          # `TestApplicationFeePaidEvent::test_end_to_end_delivery_via_real_db_rule`.
+          # Đúng hình mẫu `ci-allowlist-tep-khong-duoc-gac`.
+          #
+          # Vào lát này vì `TestApplicationFeePaidEvent` là mặt
+          # notification-reliability: nó là ca DUY NHẤT chạy
+          # `sync_notification_rules` thật rồi `dispatch()` thật cho một sự
+          # kiện có `recipient_config` dạng LỒNG (`actor_excluded(lead_owner)`)
+          # — hình dạng mà `EVENT_CATALOG.default_resolver` không diễn đạt
+          # được, nên nó là phép kiểm duy nhất chứng minh seed defaults thắng
+          # catalog trên CSDL mới.
+          #
+          # Selector WHOLE-FILE, không phải nodeid: nodeid sẽ đẩy tệp sang
+          # trạng thái PARTIAL và đòi một mục trong
+          # `Backend_FastAPI/tests/VISIBILITY_LEDGER.yml`. Whole-file gác trọn
+          # và không cần waiver nào.
+          # Ghi vào đây SAU KHI tệp xanh TRỌN, không waiver/skip: 49/49 passed
+          # (607,80s trên bind-mount Windows; ở CI Linux rẻ hơn nhiều). Chi
+          # phí ước tính của lát: Tier 3 ~139s + tệp này ⇒ vẫn dưới xa đường
+          # tới hạn Tier 1 (~1330-2266s).
           - tier: Tier 3 — Notification reliability
             coverage_script: true
             visibility_guard: true
@@ -732,6 +756,7 @@ jobs:
               tests/unit/test_notification_contract.py
               tests/unit/test_channel_normalization.py
               tests/unit/test_zalo_phase1_review_findings.py
+              tests/services/test_admission_application_fee.py
               tests/test_router_fixes_e2e.py
 
           # ---------------------------------------------------------------
