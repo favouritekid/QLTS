@@ -2,30 +2,84 @@
  * E2E Test: Admission UI Smoke
  *
  * Coverage:
- *   - List page loads với filter tabs
- *   - Detail page tabs không crash
- *   - Unsaved changes dialog khi đổi tab
+ *   - List page renders the profile this suite created (KHÔNG chấp nhận empty state)
+ *   - List page renders a usable empty state khi lọc sang một năm chắc chắn rỗng
+ *   - Detail page: mọi bước điều hướng được đều mở mà không crash
+ *   - Unsaved-changes dialog khi đổi bước sau khi sửa
  *
- * Project: chromium only (officer storageState from setup)
- * Data: seed profile via API in beforeAll — không phụ thuộc dữ liệu môi trường
+ * Project: chromium only (officer storageState từ project `setup`)
+ * Data: seed lead + consultation + profile qua API trong `beforeAll`
+ *
+ * ⚠️ HỢP ĐỒNG CỦA TỆP NÀY — ba luật ra đời từ nightly run 34678745325:
+ *
+ *  1. `beforeAll` FAIL-CLOSED. Bản cũ gọi bốn endpoint mà KHÔNG kiểm một
+ *     response nào, nên `POST /api/admissions` trả 422 (thiếu
+ *     `admission_round_id` + `academic_year` — hardening có chủ đích ở
+ *     `app/schemas/admission.py:443`) mà hook vẫn "thành công" và in
+ *     `UI smoke profile created: id=undefined`. Mọi request setup nay đi qua
+ *     `apiJson()`; hỏng là NÉM NGAY kèm status + error_code + tên trường
+ *     thiếu (KHÔNG in body thô — body 422 echo lại `input` của người dùng).
+ *
+ *  2. `storageState` truyền TƯỜNG MINH cho `browser.newContext()`.
+ *     ĐO THẬT (Playwright 1.56, `node_modules/playwright/lib/index.js:277`):
+ *     hook `runBeforeCreateBrowserContext` BƠM NGƯỢC `_combinedContextOptions`
+ *     — `storageState` trong đó — vào mọi `browser.newContext(options)` chưa
+ *     khai khoá ấy. Nghĩa là bản cũ VẪN có phiên officer; giả thuyết "context
+ *     trắng" là SAI (kiểm ngược M0: gỡ đối số vẫn cho `user_id=10 role=officer`).
+ *     Nhưng đó là hành vi NGẦM của một hook nội bộ, đúng-nhờ-may: nó không
+ *     xuất hiện trong chữ ký `browser.newContext()`, và `beforeAll` là hook
+ *     phạm vi worker nên không có gì trong hợp đồng công khai bảo đảm nó chạy.
+ *     Khai tường minh để phiên mà setup dùng là thứ ĐỌC ĐƯỢC từ mã nguồn.
+ *
+ *  3. Ca "List page" phải chứng minh ĐÚNG hồ sơ vừa tạo hiện ra. Bản cũ chỉ
+ *     đòi `h1` + `table` nên một DB rỗng (hệ quả của luật 1) làm nó đỏ ở đúng
+ *     chỗ vô nghĩa nhất. Nới assertion để nhận empty state là che setup fail —
+ *     CẤM. Ca empty-state tách riêng, lọc sang một năm không thể có hồ sơ.
  *
  * Chạy:
  *   npx playwright test admission-ui-smoke --project=chromium --reporter=list
  */
 
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import {
+  test,
+  expect,
+  type APIRequestContext,
+  type APIResponse,
+  type Page,
+} from "@playwright/test";
+import path from "path";
 
 const API_URL = process.env.E2E_API_URL || "http://localhost:8000";
+
+/**
+ * storageState do project `chromium` khai trong `playwright.config.ts`
+ * (`use.storageState = src/test/.auth/user.json`, sinh bởi `auth.setup.ts`).
+ * Đường dẫn phải khớp `auth.setup.ts:14` — xem luật 2 ở đầu tệp về việc vì sao
+ * truyền tường minh thay vì dựa vào hook bơm ngược của Playwright.
+ */
+const AUTH_STATE_FILE = path.join(__dirname, "..", ".auth", "user.json");
 
 // ---------------------------------------------------------------------------
 // Shared state
 // ---------------------------------------------------------------------------
 
-let smokeProfileId: number;
-let smokeCookieHeader: string;
+interface SmokeSeed {
+  leadId: number;
+  leadName: string;
+  profileId: number;
+  academicYear: number;
+  admissionRoundId: number;
+  admissionMethodId: number;
+  offeringId: number;
+}
+
+let seed: SmokeSeed;
+
+/** Mọi hồ sơ suite này tạo ra (beforeAll chạy lại ở mỗi lượt retry). */
+const createdProfileIds: number[] = [];
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helpers — chẩn đoán fail-closed, không rò PII
 // ---------------------------------------------------------------------------
 
 function generatePhone(): string {
@@ -37,185 +91,503 @@ function generatePhone(): string {
   return prefix + suffix;
 }
 
+/**
+ * Mô tả một response hỏng bằng ĐÚNG thứ cần để chẩn đoán: status, `error_code`,
+ * và danh sách `loc:type` của từng lỗi validation.
+ *
+ * CỐ Ý không in body thô: body 422 của FastAPI mang khoá `input` echo lại
+ * nguyên payload gửi lên (họ tên, điện thoại, email của lead) và log nightly
+ * là artifact công khai trong repo. `detail` là chuỗi do backend soạn nên giữ
+ * lại, cắt 200 ký tự.
+ */
+async function describeFailure(resp: APIResponse): Promise<string> {
+  const parts = [`HTTP ${resp.status()}`];
+  let body: unknown;
+  try {
+    body = await resp.json();
+  } catch {
+    return `${parts.join(" ")} (body không phải JSON)`;
+  }
+  if (body && typeof body === "object") {
+    const b = body as Record<string, unknown>;
+    if (typeof b.error_code === "string") parts.push(`error_code=${b.error_code}`);
+    if (Array.isArray(b.errors)) {
+      const fields = b.errors
+        .map((e) => {
+          const item = (e ?? {}) as Record<string, unknown>;
+          const loc = Array.isArray(item.loc) ? item.loc.join(".") : "?";
+          return `${loc}:${String(item.type ?? "?")}`;
+        })
+        .join(", ");
+      if (fields) parts.push(`fields=[${fields}]`);
+    } else if (typeof b.detail === "string") {
+      parts.push(`detail="${b.detail.slice(0, 200)}"`);
+    }
+  }
+  return parts.join(" ");
+}
+
+type HttpMethod = "get" | "post" | "patch" | "delete";
+
+/**
+ * Gọi API và NÉM nếu không 2xx. Đây là cái chặn duy nhất giữa "setup hỏng" và
+ * "ca test đỏ ở một dòng không liên quan".
+ */
+async function apiJson(
+  api: APIRequestContext,
+  label: string,
+  method: HttpMethod,
+  url: string,
+  data?: unknown,
+): Promise<unknown> {
+  const resp = await api[method](url, data === undefined ? undefined : { data });
+  if (!resp.ok()) {
+    throw new Error(
+      `[SETUP FAIL] ${label}: ${method.toUpperCase()} ${url} → ${await describeFailure(resp)}`,
+    );
+  }
+  return resp.json();
+}
+
+function asRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`[SETUP FAIL] ${label}: response không phải object JSON`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function asArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`[SETUP FAIL] ${label}: response không phải mảng JSON`);
+  }
+  return value;
+}
+
+/**
+ * Rút `id` số nguyên. Đúng cái bản cũ thiếu: `(await resp.json()).id` trên body
+ * lỗi cho `undefined` rồi đi tiếp im lặng.
+ */
+function requireId(value: unknown, label: string): number {
+  const id = asRecord(value, label).id;
+  if (typeof id !== "number" || !Number.isInteger(id)) {
+    throw new Error(`[SETUP FAIL] ${label}: response thiếu \`id\` số nguyên (nhận ${typeof id})`);
+  }
+  return id;
+}
+
+/** Ngày hôm nay theo giờ VN — backend chốt round bằng `today_vn()` (UTC+7). */
+function todayVnIso(): string {
+  return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 // ---------------------------------------------------------------------------
-// beforeAll / afterAll using storageState session via request fixture
+// Fixture tuyển sinh CANONICAL
+// ---------------------------------------------------------------------------
+
+interface AdmissionFixture {
+  offeringId: number;
+  pathId: number;
+  admissionMethodId: number;
+  admissionRoundId: number;
+  academicYear: number;
+}
+
+/**
+ * Nguồn chuẩn cho bộ ba `(admission_round_id, academic_year,
+ * admission_method_id)` mà `AdmissionProfileCreate` đòi.
+ *
+ * Đường đi: `GET /api/program-offerings` → với mỗi offering,
+ * `GET /api/admission-config/paths/for-offering/{id}` → chọn path `active` có
+ * round MỞ. Endpoint đã lọc `status == "active"` + `is_published` ở repository
+ * (`get_active_paths_by_offering_id`), nhưng KHÔNG lọc round; bốn điều kiện
+ * round dưới đây soi đúng bốn nhánh raise của `create_profile`
+ * (`admission_service.py` — mismatch năm / inactive / archived / `assert_round_open`).
+ *
+ * Ưu tiên path có `academic_year` == năm dương lịch hiện tại, vì bộ lọc năm mặc
+ * định của trang `/admissions` là `CURRENT_ADMISSIONS_YEAR = new Date().getFullYear()`
+ * (`hooks/admissions/filterDefaults.ts`). Không có thì vẫn dùng path khác năm —
+ * ca test điều hướng kèm `?year=<năm của fixture>` nên không phụ thuộc lịch.
+ */
+async function resolveAdmissionFixture(api: APIRequestContext): Promise<AdmissionFixture> {
+  const offerings = asArray(
+    await apiJson(api, "list program offerings", "get", `${API_URL}/api/program-offerings?is_active=true&limit=100`),
+    "list program offerings",
+  );
+  if (offerings.length === 0) {
+    throw new Error("[SETUP FAIL] không có ProgramOffering nào đang hoạt động — seed chưa chạy?");
+  }
+
+  const today = todayVnIso();
+  const currentYear = new Date().getFullYear();
+  const rejected: Record<string, number> = {};
+  const reject = (reason: string) => {
+    rejected[reason] = (rejected[reason] ?? 0) + 1;
+  };
+
+  const usable: AdmissionFixture[] = [];
+  let pathsSeen = 0;
+
+  for (const offering of offerings) {
+    const offeringId = requireId(offering, "program offering");
+    const label = `list admission paths (offering ${offeringId})`;
+    const body = asRecord(
+      await apiJson(api, label, "get", `${API_URL}/api/admission-config/paths/for-offering/${offeringId}`),
+      label,
+    );
+    for (const raw of asArray(body.items ?? [], label)) {
+      pathsSeen += 1;
+      const p = asRecord(raw, label);
+      if (p.status !== "active") {
+        reject(`path.status=${String(p.status)}`);
+        continue;
+      }
+      if (p.round_is_active === false) {
+        reject("round inactive");
+        continue;
+      }
+      if (p.round_archived_at != null) {
+        reject("round archived");
+        continue;
+      }
+      if (typeof p.round_end_date === "string" && p.round_end_date < today) {
+        reject("round đã đóng (end_date < hôm nay)");
+        continue;
+      }
+      const academicInfo = p.academic_info;
+      const academicYear =
+        academicInfo && typeof academicInfo === "object"
+          ? (academicInfo as Record<string, unknown>).academic_year
+          : undefined;
+      if (
+        typeof p.admission_round_id !== "number" ||
+        typeof p.admission_method_id !== "number" ||
+        typeof academicYear !== "number"
+      ) {
+        reject("path thiếu round_id / method_id / academic_info.academic_year");
+        continue;
+      }
+      usable.push({
+        offeringId,
+        pathId: requireId(p, label),
+        admissionMethodId: p.admission_method_id,
+        admissionRoundId: p.admission_round_id,
+        academicYear,
+      });
+      // Đủ điều kiện tốt nhất rồi thì dừng: mỗi offering thêm một round-trip,
+      // và mỗi round-trip thêm một cách để setup đỏ vì lý do không liên quan.
+      if (academicYear === currentYear) {
+        return usable[usable.length - 1];
+      }
+    }
+  }
+
+  if (usable.length === 0) {
+    const why = Object.entries(rejected)
+      .map(([reason, count]) => `${reason} ×${count}`)
+      .join(" · ");
+    throw new Error(
+      `[SETUP FAIL] không có AdmissionPath dùng được: ${offerings.length} offering, ` +
+        `${pathsSeen} path, loại vì [${why || "không có path nào"}]`,
+    );
+  }
+
+  return usable.find((f) => f.academicYear === currentYear) ?? usable[0];
+}
+
+/**
+ * Trạng thái tư vấn hợp lệ để `check_lead_level_admission_eligibility` cho qua:
+ * KHÔNG `is_universal` (chỉ ghi nhận hoạt động) và KHÔNG `is_final` ở phase
+ * consultation (lead đã đóng). Bản cũ lấy thẳng `statuses[0]` — đúng hay sai
+ * tuỳ thứ tự seed, và vì không kiểm response nên sai cũng không ai biết.
+ */
+function pickConsultationStatusId(statuses: unknown[]): string {
+  const candidates = statuses
+    .map((s) => asRecord(s, "consultation status"))
+    .filter(
+      (s) =>
+        typeof s.id === "string" &&
+        s.is_universal !== true &&
+        !(s.is_final === true && s.phase === "consultation"),
+    )
+    .sort(
+      (a, b) =>
+        (typeof a.display_order === "number" ? a.display_order : 0) -
+        (typeof b.display_order === "number" ? b.display_order : 0),
+    );
+  if (candidates.length === 0) {
+    throw new Error(
+      `[SETUP FAIL] không có ConsultationStatus nào vừa không-universal vừa không-final ` +
+        `(tổng ${statuses.length} status)`,
+    );
+  }
+  return candidates[0].id as string;
+}
+
+// ---------------------------------------------------------------------------
+// beforeAll / afterAll
 // ---------------------------------------------------------------------------
 
 test.beforeAll(async ({ browser }) => {
-  // Create a browser context with the stored auth state (officer session)
-  // The storageState is injected by the project config (setup dependency)
-  const context = await browser.newContext();
-  const page = await context.newPage();
-
+  const context = await browser.newContext({ storageState: AUTH_STATE_FILE });
   try {
-    // Read auth cookies from context (populated via storageState)
-    const cookies = await context.cookies();
-    smokeCookieHeader = cookies
-      .map((c) => `${c.name}=${c.value}`)
-      .join("; ");
+    const api = context.request;
 
-    // We need to call the backend API using the officer session.
-    // Use page.request which shares the context's cookies.
-    const pipelineResp = await page.request.get(`${API_URL}/api/pipeline/all`);
-    if (!pipelineResp.ok()) {
-      throw new Error("Cannot reach backend — is it running?");
-    }
-    const initialStatusId = (await pipelineResp.json()).statuses[0].id;
+    // Bằng chứng phiên officer thật sự nạp được — nếu storageState trắng thì
+    // đây là request đầu tiên đỏ, và thông điệp nói đúng nguyên nhân.
+    const me = asRecord(await apiJson(api, "GET /api/profile (phiên officer)", "get", `${API_URL}/api/profile`), "profile");
+    console.log(`[setup] phiên officer: user_id=${String(me.id)} role=${String(me.role)} unit_id=${String(me.unit_id)}`);
 
-    const offeringsResp = await page.request.get(
-      `${API_URL}/api/program-offerings?is_active=true&limit=1`
+    const pipeline = asRecord(await apiJson(api, "GET /api/pipeline/all", "get", `${API_URL}/api/pipeline/all`), "pipeline");
+    const statusId = pickConsultationStatusId(asArray(pipeline.statuses ?? [], "pipeline.statuses"));
+
+    const fixture = await resolveAdmissionFixture(api);
+    console.log(
+      `[setup] fixture: offering=${fixture.offeringId} path=${fixture.pathId} ` +
+        `round=${fixture.admissionRoundId} method=${fixture.admissionMethodId} năm=${fixture.academicYear}`,
     );
-    const offeringId = (await offeringsResp.json())[0].id;
 
-    const methodsResp = await page.request.get(
-      `${API_URL}/api/admission-config/methods?active_only=true`
-    );
-    const methodsBody = await methodsResp.json();
-    const methods = methodsBody.methods || methodsBody;
-    const admissionMethodId = methods[0].id;
-
-    // Create lead + draft profile
-    const leadResp = await page.request.post(`${API_URL}/api/leads`, {
-      data: {
-        full_name: `E2E_UISmoke_${Date.now()}`,
+    const leadName = `E2E_UISmoke_${Date.now()}`;
+    const leadId = requireId(
+      await apiJson(api, "POST /api/leads", "post", `${API_URL}/api/leads`, {
+        full_name: leadName,
         phone: generatePhone(),
         source: "walk_in",
-        offering_id: offeringId,
-      },
-    });
-    const leadId = (await leadResp.json()).id;
+        offering_id: fixture.offeringId,
+      }),
+      "POST /api/leads",
+    );
 
-    await page.request.post(`${API_URL}/api/leads/${leadId}/consultations`, {
-      data: { status_id: initialStatusId, method: "phone", notes: "UI smoke test" },
-    });
+    await apiJson(
+      api,
+      `POST /api/leads/${leadId}/consultations`,
+      "post",
+      `${API_URL}/api/leads/${leadId}/consultations`,
+      { status_id: statusId, method: "phone", notes: "UI smoke test" },
+    );
 
-    const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
-      data: { lead_id: leadId, admission_method_id: admissionMethodId },
-    });
-    smokeProfileId = (await profileResp.json()).id;
-    console.log(`UI smoke profile created: id=${smokeProfileId}`);
+    // Bốn trường, KHÔNG phải hai. `admission_round_id` + `academic_year` là
+    // Field(...) bắt buộc từ "Round contract hardening (plan v4 Section A)".
+    const profileId = requireId(
+      await apiJson(api, "POST /api/admissions", "post", `${API_URL}/api/admissions`, {
+        lead_id: leadId,
+        admission_method_id: fixture.admissionMethodId,
+        admission_round_id: fixture.admissionRoundId,
+        academic_year: fixture.academicYear,
+      }),
+      "POST /api/admissions",
+    );
+    createdProfileIds.push(profileId);
+
+    // Đọc lại qua đúng endpoint mà trang danh sách dùng: tạo được chưa đủ,
+    // hồ sơ phải THẬT SỰ nằm trong phạm vi mà officer này đọc được — nếu không
+    // ca UI sẽ đỏ vì scope chứ không vì render.
+    const listLabel = `GET /api/admissions?academic_year=${fixture.academicYear}`;
+    const list = asRecord(
+      await apiJson(api, listLabel, "get", `${API_URL}/api/admissions?academic_year=${fixture.academicYear}&page_size=100`),
+      listLabel,
+    );
+    // Khoá của `AdmissionProfileListResponse` là `profiles` (không phải `items`
+    // như `AdmissionPathListResponse`) — đã đo trên chính response thật.
+    const items = asArray(list.profiles ?? [], listLabel);
+    const found = items.some((it) => asRecord(it, listLabel).id === profileId);
+    if (!found) {
+      throw new Error(
+        `[SETUP FAIL] hồ sơ ${profileId} vừa tạo KHÔNG có trong ${listLabel} ` +
+          `(${items.length} hàng trả về) — phạm vi đọc của officer không chứa nó`,
+      );
+    }
+
+    seed = {
+      leadId,
+      leadName,
+      profileId,
+      academicYear: fixture.academicYear,
+      admissionRoundId: fixture.admissionRoundId,
+      admissionMethodId: fixture.admissionMethodId,
+      offeringId: fixture.offeringId,
+    };
+    console.log(`[setup] hồ sơ smoke: id=${profileId} lead=${leadId} năm=${fixture.academicYear}`);
   } finally {
     await context.close();
   }
 });
 
 test.afterAll(async ({ browser }) => {
-  if (!smokeProfileId) return;
-  // Cleanup: attempt to delete the draft profile
-  const context = await browser.newContext();
-  const page = await context.newPage();
+  if (createdProfileIds.length === 0) return;
+  const ids = createdProfileIds.splice(0, createdProfileIds.length);
+  const context = await browser.newContext({ storageState: AUTH_STATE_FILE });
+  const unexpected: string[] = [];
   try {
-    await page.request.delete(`${API_URL}/api/admissions/${smokeProfileId}`);
-    console.log(`UI smoke profile deleted: id=${smokeProfileId}`);
-  } catch {
-    console.log(`Could not delete smoke profile ${smokeProfileId} — ignoring`);
+    for (const id of ids) {
+      const resp = await context.request.delete(`${API_URL}/api/admissions/${id}`);
+      const status = resp.status();
+      if (status === 204 || status === 200) {
+        console.log(`[cleanup] hồ sơ ${id}: ĐÃ XOÁ (HTTP ${status})`);
+      } else if (status === 401 || status === 403) {
+        // Đã đo trên `policy_templates.py`: OFFICER_TEMPLATE (dòng 111-332) và
+        // MANAGER_TEMPLATE đều KHÔNG có rule nào cho `DELETE /api/admissions/{id}`;
+        // chỉ ADMIN_TEMPLATE (`/*` + `.*`) có. Nên 403 ở đây là HỢP ĐỒNG, không
+        // phải lỗi — nhưng nó KHÔNG được in ra thành chữ "deleted".
+        console.log(
+          `[cleanup] hồ sơ ${id}: KHÔNG xoá được — ${await describeFailure(resp)} ` +
+            `(officer không có quyền DELETE /api/admissions/{id}; hồ sơ draft còn lại trong DB)`,
+        );
+      } else {
+        unexpected.push(`hồ sơ ${id}: ${await describeFailure(resp)}`);
+      }
+    }
   } finally {
     await context.close();
   }
+  if (unexpected.length > 0) {
+    throw new Error(`[CLEANUP FAIL] DELETE trả status ngoài dự kiến:\n  ${unexpected.join("\n  ")}`);
+  }
 });
+
+// ---------------------------------------------------------------------------
+// Helpers cho phần UI
+// ---------------------------------------------------------------------------
+
+/**
+ * Bắt mọi exception chưa bắt của trang. "Không crash" mà không nghe `pageerror`
+ * thì chỉ là "không có locator nào timeout" — bản cũ đúng nghĩa đó.
+ */
+function watchPageErrors(page: Page): string[] {
+  const errors: string[] = [];
+  page.on("pageerror", (err) => errors.push(err.message.slice(0, 200)));
+  return errors;
+}
+
+/** Error boundary của route hồ sơ: `admissions/[id]/error.tsx` + `error.tsx` gốc. */
+function errorBoundary(page: Page) {
+  return page.getByRole("heading", { name: /Đã xảy ra lỗi|Đã có lỗi xảy ra|Something went wrong/i });
+}
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-test("List page loads với filter tabs", async ({ page }) => {
-  await page.goto("/admissions");
+test("List page hiện đúng hồ sơ vừa tạo", async ({ page }) => {
+  const pageErrors = watchPageErrors(page);
 
-  // Page heading should be visible
-  await expect(page.locator("h1")).toBeVisible({ timeout: 15000 });
+  // `year` là khoá URL mà CẢ SSR (`parseAdmissionsSearchParamsToApiParams`) lẫn
+  // client (`useAdmissionsFilter.parseSearchParams`) đọc. Ghim tường minh để ca
+  // này không phụ thuộc việc năm học seed có trùng năm dương lịch hay không.
+  await page.goto(`/admissions?year=${seed.academicYear}`);
 
-  // Table or list container should render (not blank)
-  const tableOrList = page.locator("table, [role='table'], [data-testid='admissions-list']").first();
-  await expect(tableOrList).toBeVisible({ timeout: 15000 });
+  // Khung trang: breadcrumb + tablist lọc trạng thái. KHÔNG dùng riêng `h1` —
+  // `h1` hiện ra cả khi danh sách rỗng lẫn khi API lỗi.
+  await expect(page.getByRole("tablist", { name: "Lọc nhanh theo trạng thái" })).toBeVisible({
+    timeout: 15_000,
+  });
 
-  console.log("Admissions list page loaded successfully");
+  // BẰNG CHỨNG CHÍNH: đúng hàng của hồ sơ suite này tạo ra.
+  // Hợp đồng accessible có sẵn trong `AdmissionsClient.tsx` — mỗi hàng roster là
+  // `role="link"` với `aria-label={`Hồ sơ ${lead.full_name}`}` (bản desktop dòng
+  // 529, bản mobile dòng 693; bản kia luôn `display:none` theo breakpoint nên
+  // không lọt vào cây accessibility).
+  const row = page.getByRole("link", { name: `Hồ sơ ${seed.leadName}` });
+  await expect(row).toBeVisible({ timeout: 15_000 });
+
+  // Empty state PHẢI vắng mặt. Đây là câu chặn "nới assertion để nhận DB rỗng":
+  // nếu setup lại thất bại im lặng thì dòng này đỏ với thông điệp đúng nguyên nhân.
+  await expect(
+    page.getByRole("heading", { name: "Chưa có hồ sơ nào" }),
+    "danh sách rơi về empty state dù beforeAll đã tạo hồ sơ",
+  ).toHaveCount(0);
+
+  expect(pageErrors, `uncaught JS errors trên /admissions: ${pageErrors.join(" | ")}`).toHaveLength(0);
 });
 
-test("Detail page tabs không crash", async ({ page }) => {
-  if (!smokeProfileId) {
-    test.skip(true, "smokeProfileId not set — beforeAll failed");
-    return;
-  }
+test("List page hiện empty state khi lọc sang năm chắc chắn rỗng", async ({ page }) => {
+  // Tách hẳn khỏi ca trên theo yêu cầu: empty state là một HÀNH VI được canh,
+  // không phải một lối thoát cho setup hỏng. Năm 2000 là cận dưới của
+  // `AdmissionProfileCreate.academic_year` (`ge=2000`) nên không hồ sơ nào có
+  // thể nằm ở đó, mà vẫn là giá trị hợp lệ để backend nhận và lọc.
+  await page.goto("/admissions?year=2000");
 
-  await page.goto(`/admissions/${smokeProfileId}`);
-  await expect(page.locator("h1, h2").first()).toBeVisible({ timeout: 15000 });
-
-  // Find all tab triggers
-  const tabs = page.locator("[role='tab']");
-  const tabCount = await tabs.count();
-  console.log(`Found ${tabCount} tabs on detail page`);
-
-  // Click each tab and verify no unhandled error appears
-  for (let i = 0; i < tabCount; i++) {
-    const tab = tabs.nth(i);
-    const tabName = await tab.textContent();
-
-    try {
-      await tab.click();
-      // Wait for tab panel to be visible (not stuck loading)
-      await page.waitForLoadState("networkidle", { timeout: 5000 });
-      console.log(`  Tab "${tabName?.trim()}" — OK`);
-    } catch (err) {
-      console.log(`  Tab "${tabName?.trim()}" — timeout (may still be loading)`);
-    }
-
-    // Verify no error boundary or crash message visible
-    const errorBoundary = page.locator("text=Something went wrong, text=Đã có lỗi xảy ra").first();
-    const hasError = await errorBoundary.isVisible().catch(() => false);
-    if (hasError) {
-      throw new Error(`Tab "${tabName?.trim()}" caused a UI error`);
-    }
-  }
+  await expect(page.getByRole("tablist", { name: "Lọc nhanh theo trạng thái" })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.getByRole("heading", { name: /Chưa có hồ sơ nào|Không tìm thấy kết quả/ })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.getByRole("link", { name: `Hồ sơ ${seed.leadName}` })).toHaveCount(0);
 });
 
-test("Unsaved changes dialog khi đổi tab sau khi edit", async ({ page }) => {
-  if (!smokeProfileId) {
-    test.skip(true, "smokeProfileId not set — beforeAll failed");
-    return;
+test("Detail page: mọi bước mở được đều không crash", async ({ page }) => {
+  const pageErrors = watchPageErrors(page);
+
+  await page.goto(`/admissions/${seed.profileId}`);
+
+  // Định danh, không phải "có h1": `AdmissionHeader` render tên + `#{profile.id}`.
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(`#${seed.profileId}`, {
+    timeout: 15_000,
+  });
+  await expect(errorBoundary(page)).toHaveCount(0);
+
+  // Điều hướng bước: `PipelineSidebar` render `<nav>` chứa 8 `<button>` (một
+  // bản mobile `MobileStepStrip` `lg:hidden` — ở Desktop Chrome 1280px nó
+  // display:none nên không vào cây accessibility). Bước bị khoá là `disabled`.
+  const stepButtons = page.locator("aside nav button");
+  await expect(stepButtons.first()).toBeVisible({ timeout: 15_000 });
+  const total = await stepButtons.count();
+  expect(total, "sidebar bước hồ sơ không render nút nào").toBeGreaterThan(0);
+
+  let opened = 0;
+  for (let i = 0; i < total; i++) {
+    const button = stepButtons.nth(i);
+    if (!(await button.isEnabled())) continue;
+    const label = ((await button.textContent()) ?? "").trim().replace(/\s+/g, " ");
+    await button.click();
+    // Bước được chọn phải trở thành bước hiện tại (PipelineSidebar tô
+    // `text-primary` + `font-semibold` cho `isActive`), rồi mới kiểm crash.
+    await expect(button).toHaveClass(/font-semibold/, { timeout: 10_000 });
+    await expect(errorBoundary(page), `bước "${label}" làm trang rơi vào error boundary`).toHaveCount(0);
+    opened += 1;
+    console.log(`[detail] bước "${label}" — mở OK`);
   }
 
-  await page.goto(`/admissions/${smokeProfileId}`);
-  await expect(page.locator("h1, h2").first()).toBeVisible({ timeout: 15000 });
+  expect(opened, "không mở được bước nào (tất cả đều disabled)").toBeGreaterThan(0);
+  expect(
+    pageErrors,
+    `uncaught JS errors trên /admissions/${seed.profileId}: ${pageErrors.join(" | ")}`,
+  ).toHaveLength(0);
+});
 
-  // Find the first editable text input on the current tab
-  const editableInput = page
-    .locator("input[type='text']:not([disabled]):not([readonly])")
-    .first();
-  const isEditable = await editableInput.isVisible().catch(() => false);
+test("Đổi bước sau khi sửa thì hiện dialog 'Thay đổi chưa lưu'", async ({ page }) => {
+  await page.goto(`/admissions/${seed.profileId}`);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(`#${seed.profileId}`, {
+    timeout: 15_000,
+  });
 
-  if (!isEditable) {
-    console.log("No editable input found on first tab — skipping unsaved-changes assertion");
-    return;
+  // Bước 1 (Thông tin cá nhân) là bước mặc định; `full_name` nằm trong
+  // `admissionProfileUpdateSchema` nên gõ vào đó làm react-hook-form `isDirty`.
+  const nameInput = page.getByLabel("Họ và tên", { exact: true });
+  await expect(nameInput).toBeVisible({ timeout: 15_000 });
+  await nameInput.fill(`${seed.leadName}_DIRTY`);
+  await nameInput.blur();
+
+  const stepButtons = page.locator("aside nav button");
+  const enabled: number[] = [];
+  const total = await stepButtons.count();
+  for (let i = 0; i < total; i++) {
+    if (await stepButtons.nth(i).isEnabled()) enabled.push(i);
   }
+  expect(
+    enabled.length,
+    "cần ít nhất 2 bước mở được để kiểm dialog đổi bước; hồ sơ draft này chỉ có " + enabled.length,
+  ).toBeGreaterThanOrEqual(2);
 
-  // Type something to dirty the form
-  await editableInput.click();
-  await editableInput.fill("UI_SMOKE_DIRTY_VALUE");
+  // Bấm sang một bước KHÁC bước đang đứng.
+  await stepButtons.nth(enabled[enabled.length - 1]).click();
 
-  // Click a different tab
-  const tabs = page.locator("[role='tab']");
-  const tabCount = await tabs.count();
-  if (tabCount < 2) {
-    console.log("Less than 2 tabs — skipping unsaved-changes assertion");
-    return;
-  }
-
-  await tabs.nth(1).click();
-
-  // AlertDialog should appear warning about unsaved changes
   const dialog = page.getByRole("alertdialog");
-  const dialogVisible = await dialog.isVisible({ timeout: 3000 }).catch(() => false);
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  await expect(dialog).toContainText("Thay đổi chưa lưu");
 
-  if (dialogVisible) {
-    await expect(dialog).toBeVisible();
-    console.log("Unsaved changes AlertDialog appeared — OK");
-    // Dismiss the dialog (cancel) to leave form state intact
-    const cancelBtn = dialog.getByRole("button").first();
-    await cancelBtn.click();
-  } else {
-    // Some implementations may use a different mechanism (toast, inline warning)
-    console.log(
-      "AlertDialog not visible — UI may use a different unsaved-changes mechanism"
-    );
-  }
+  // Ở lại: form giữ nguyên giá trị vừa gõ.
+  await dialog.getByRole("button", { name: "Ở lại và lưu" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(nameInput).toHaveValue(`${seed.leadName}_DIRTY`);
 });
