@@ -14,7 +14,7 @@
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
 import * as OTPAuth from "otpauth";
-import { expectOk, listActiveOfficers, summarizeApiError } from "./helpers/e2e-fixtures";
+import { expectOk, listActiveOfficers, safeBody, summarizeApiError } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -179,7 +179,7 @@ async function loginViaAPI(
       continue;
     }
     if (!loginResp.ok()) {
-      const body = (await loginResp.text()).slice(0, 300);
+      const body = summarizeApiError(loginResp.status(), await loginResp.text());
       throw new Error(`Login failed for ${username}: ${loginResp.status()} ${body}`);
     }
 
@@ -360,7 +360,7 @@ test.describe("Lead Management Workflow", () => {
         headers: officerHeaders,
       });
       if (!resp.ok()) {
-        console.log(`Get lead failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Get lead failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
@@ -380,7 +380,7 @@ test.describe("Lead Management Workflow", () => {
       );
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
-      console.log(`Workflow context: ${JSON.stringify(body).slice(0, 200)}`);
+      console.log(`Workflow context: ${safeBody(body)}`);
     });
 
     // --- Step 7: Add consultation ---
@@ -400,7 +400,7 @@ test.describe("Lead Management Workflow", () => {
         }
       );
       if (!resp.ok() && resp.status() !== 201) {
-        console.log(`Add consultation failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Add consultation failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok() || resp.status() === 201).toBeTruthy();
       const body = await resp.json();
@@ -451,7 +451,7 @@ test.describe("Lead Management Workflow", () => {
       );
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
-      console.log(`Insights: ${JSON.stringify(body).slice(0, 200)}`);
+      console.log(`Insights: ${safeBody(body)}`);
     });
 
     // --- Step 12: Update lead ---
@@ -469,7 +469,7 @@ test.describe("Lead Management Workflow", () => {
         },
       });
       if (!resp.ok()) {
-        console.log(`Lead update failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Lead update failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
@@ -591,7 +591,7 @@ test.describe("Lead Management Workflow", () => {
       );
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
-      console.log(`Reassign quota: ${JSON.stringify(body)}`);
+      console.log(`Reassign quota: ${safeBody(body)}`);
     });
 
     // --- Step 5: Admin creates lead3 ---
@@ -631,12 +631,12 @@ test.describe("Lead Management Workflow", () => {
       expect(body.total).toBe(2);
       expect(
         body.successful,
-        `bulk-assign errors=${JSON.stringify(body.errors)}`
+        `bulk-assign errors=${safeBody(body.errors)}`
       ).toBe(2);
       expect(body.failed).toBe(0);
       expect(body.assigned_lead_ids).toContain(leadId2);
       expect(body.assigned_lead_ids).toContain(leadId3);
-      console.log(`Bulk-assign: total=${body.total}, successful=${body.successful}, errors=${JSON.stringify(body.errors)}`);
+      console.log(`Bulk-assign: total=${body.total}, successful=${body.successful}, errors=${safeBody(body.errors)}`);
     });
 
     // --- Step 7: Bulk update stage ---
@@ -656,7 +656,7 @@ test.describe("Lead Management Workflow", () => {
       );
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
-      console.log(`Bulk stage update: ${JSON.stringify(body)}`);
+      console.log(`Bulk stage update: ${safeBody(body)}`);
     });
 
     // --- Step 7: Export leads ---
@@ -992,7 +992,7 @@ test.describe("Lead Management Workflow", () => {
         }
       );
       if (!resp.ok()) {
-        console.log(`Officer action failed: ${resp.status()} ${(await resp.text()).slice(0, 200)}`);
+        console.log(`Officer action failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
@@ -1280,7 +1280,7 @@ test.describe("Lead Management Workflow", () => {
         `CSV import: rows=${body.total_rows_processed}, success=${body.successful_imports}, failed=${body.failed_imports}`
       );
       if (body.failed_imports > 0) {
-        console.log(`Import body: ${JSON.stringify(body).slice(0, 600)}`);
+        console.log(`Import body: ${safeBody(body)}`);
       }
       expect(body.total_rows_processed).toBe(2);
       expect(body.successful_imports).toBeGreaterThanOrEqual(1);
@@ -1552,7 +1552,7 @@ test.describe("Lead Management Workflow", () => {
       expect(staleResp.status()).toBe(409);
       const staleErr = await staleResp.json();
       expect(staleErr.detail).toMatch(/cập nhật|conflict/i);
-      console.log(`Stale version rejected: 409 — ${String(staleErr.detail).slice(0, 100)}`);
+      console.log(`Stale version rejected: 409 — ${safeBody({ detail: staleErr.detail })}`);
 
       // A3: PUT với version đúng → 200, version tăng
       adminHeaders = await restoreCookies(page, adminCookies);
@@ -1601,7 +1601,7 @@ test.describe("Lead Management Workflow", () => {
       expect(noReasonResp.status()).toBe(400);
       const noReasonErr = await noReasonResp.json();
       expect(noReasonErr.detail).toMatch(/loss_reason|lý do/i);
-      console.log(`Missing loss_reason rejected: 400 — ${String(noReasonErr.detail).slice(0, 100)}`);
+      console.log(`Missing loss_reason rejected: 400 — ${safeBody({ detail: noReasonErr.detail })}`);
 
       // B3: POST WITH loss_reason_code → 201
       adminHeaders = await restoreCookies(page, adminCookies);
@@ -1637,51 +1637,118 @@ test.describe("Lead Management Workflow", () => {
       console.log(`Loss reason accepted: consultation status=${statusField}`);
     });
 
-    // --- Sub-test C: Terminal Status Hard Block (phase=enrolled) ---
-    await test.step("C: Terminal enrolled lead → consultation blocked", async () => {
-      if (!enrolledFinalStatusId) {
-        console.log("Skip sub-test C: no status with is_final=true AND phase=enrolled");
-        return;
+    // --- Sub-test C: Terminal Status Hard Block ---
+    //
+    // BẤT BIẾN ĐƯỢC CANH: một lead ở trạng thái TERMINAL (`is_final=true`) phải
+    // TỪ CHỐI consultation mới bằng 400.
+    //
+    // Bản cũ có HAI đường xanh giả, và cả hai đều bỏ qua đúng phần kiểm ấy:
+    //   1. `if (!enrolledFinalStatusId) return;`
+    //   2. `if (!patchResp.ok()) { expect(status).not.toBe(422); return; }`
+    // Đường (2) chỉ loại 422, nên 401 / 403 / 500 đều lọt qua rồi `return` —
+    // ca xanh mà không đo gì. Đúng lớp lỗi "phép kiểm gộp che thứ nó canh".
+    //
+    // Bản này KHÔNG bỏ qua. FSM chặn nhảy thẳng sang phase `enrolled` là HỢP LỆ
+    // (phase suy từ admission profile — `pipeline.py:124-147` gọi
+    // `derive_phase_from_admission`, lead chưa có hồ sơ thì phase=`consultation`),
+    // nên ta thử lần lượt các trạng thái terminal ĐẠT TỚI ĐƯỢC, qua CẢ HAI
+    // đường sản phẩm: PATCH status và POST consultation kèm `loss_reason_code`.
+    // Không đường nào tới được thì ĐỎ kèm chẩn đoán, không phải `return`.
+    await test.step("C: Terminal lead → consultation blocked", async () => {
+      const candidates = [enrolledFinalStatusId, finalNegativeStatusId].filter(
+        (x): x is string => typeof x === "string" && x.length > 0
+      );
+      expect(
+        candidates.length,
+        "Seed không có trạng thái nào `is_final=true` — không thể canh bất biến " +
+          "terminal. Đây là lỗi dữ liệu seed, KHÔNG phải lý do bỏ qua phép kiểm."
+      ).toBeGreaterThan(0);
+
+      const attempts: string[] = [];
+      let reached: string | null = null;
+
+      for (const statusId of candidates) {
+        adminHeaders = await restoreCookies(page, adminCookies);
+        const leadResp = await page.request.get(
+          `${API_URL}/api/leads/${leadIdForTerminal}`,
+          { headers: adminHeaders }
+        );
+        await expectOk(leadResp, `GET lead #${leadIdForTerminal} lấy version`, [200]);
+        const version = (await leadResp.json()).version as number;
+
+        // Đường 1 — PATCH status (`LeadStatusUpdate` bắt buộc `version`).
+        const patchResp = await page.request.patch(
+          `${API_URL}/api/leads/${leadIdForTerminal}/status`,
+          { headers: adminHeaders, data: { consultation_status_id: statusId, version } }
+        );
+        if (patchResp.ok()) {
+          reached = statusId;
+          break;
+        }
+        attempts.push(
+          `PATCH status → ${statusId}: ` +
+            summarizeApiError(patchResp.status(), await patchResp.text())
+        );
+
+        // Đường 2 — POST consultation kèm `loss_reason_code`, đúng cách sub-test B
+        // đưa lead sang trạng thái âm cuối cùng.
+        adminHeaders = await restoreCookies(page, adminCookies);
+        const consResp = await page.request.post(
+          `${API_URL}/api/leads/${leadIdForTerminal}/consultations`,
+          {
+            headers: adminHeaders,
+            data: {
+              status_id: statusId,
+              method: "phone",
+              notes: "E2E: đưa lead sang trạng thái terminal",
+              loss_reason_code: "NO_CONTACT",
+              loss_reason_note: "E2E terminal setup",
+            },
+          }
+        );
+        if (consResp.ok()) {
+          reached = statusId;
+          break;
+        }
+        attempts.push(
+          `POST consultation → ${statusId}: ` +
+            summarizeApiError(consResp.status(), await consResp.text())
+        );
       }
 
-      // C1: Admin PATCH leadIdForTerminal → enrolled final status
+      expect(
+        reached,
+        `Không đường nào đưa lead #${leadIdForTerminal} tới trạng thái terminal. ` +
+          `Đã thử ${candidates.length} trạng thái × 2 đường — ${attempts.join(" ｜ ")}`
+      ).not.toBeNull();
+
+      // TIỀN ĐỀ phải được CHỨNG MINH, không được giả định: nếu lead chưa terminal
+      // thì một 400 ở C2 có thể đến từ bất kỳ luật nào khác, và phép kiểm vô nghĩa.
       adminHeaders = await restoreCookies(page, adminCookies);
-      // `version` bắt buộc (LeadStatusUpdate) — xem ghi chú ở Test 4.
-      const termLeadResp = await page.request.get(
+      const pipeResp = await page.request.get(`${API_URL}/api/pipeline/all`, {
+        headers: adminHeaders,
+      });
+      await expectOk(pipeResp, "GET /api/pipeline/all (xác minh tiền đề terminal)", [200]);
+      const finalIds = new Set<string>(
+        ((await pipeResp.json()).statuses as Array<{ id: string; is_final: boolean }>)
+          .filter((st) => st.is_final)
+          .map((st) => st.id)
+      );
+      const afterResp = await page.request.get(
         `${API_URL}/api/leads/${leadIdForTerminal}`,
         { headers: adminHeaders }
       );
-      await expectOk(termLeadResp, `GET lead #${leadIdForTerminal} lấy version`, [200]);
-      const termVersion = (await termLeadResp.json()).version as number;
+      await expectOk(afterResp, `GET lead #${leadIdForTerminal} sau chuyển terminal`, [200]);
+      const afterStatusId = (await afterResp.json()).consultation_status_id as string;
+      expect(
+        finalIds.has(afterStatusId),
+        `Lead #${leadIdForTerminal} phải đang ở trạng thái is_final sau khi chuyển; ` +
+          `thực tế đang ở ${afterStatusId}. Chuyển được nhưng không terminal ⇒ ` +
+          `phép kiểm C2 sẽ đo nhầm luật khác.`
+      ).toBe(true);
+      console.log(`Lead ở trạng thái terminal: ${afterStatusId} (qua ${reached})`);
 
-      const patchResp = await page.request.patch(
-        `${API_URL}/api/leads/${leadIdForTerminal}/status`,
-        {
-          headers: adminHeaders,
-          data: {
-            consultation_status_id: enrolledFinalStatusId,
-            version: termVersion,
-          },
-        }
-      );
-      if (!patchResp.ok()) {
-        // FSM có thể CHẶN HỢP LỆ bước nhảy thẳng sang phase enrolled — đó
-        // là một kết quả, không phải lỗi hạ tầng. Nhưng 422 thì KHÔNG: nó
-        // nghĩa là thân request sai hợp đồng, và ca C khi ấy không đo gì.
-        expect(
-          patchResp.status(),
-          `PATCH sang ${enrolledFinalStatusId} trả 422 = sai hợp đồng thân ` +
-            `request, không phải FSM chặn. ` +
-            `${summarizeApiError(patchResp.status(), await patchResp.text())}`
-        ).not.toBe(422);
-        console.log(`Cannot PATCH to enrolled status (FSM may block): ${patchResp.status()} — skip sub-test C`);
-        return;
-      }
-      const patched = await patchResp.json();
-      expect(patched.consultation_status_id).toBe(enrolledFinalStatusId);
-      console.log(`Lead patched to enrolled status: ${enrolledFinalStatusId}`);
-
-      // C2: POST consultation to enrolled+final lead → 400 hard block
+      // C2 — CHẠY VÔ ĐIỀU KIỆN.
       adminHeaders = await restoreCookies(page, adminCookies);
       const hardBlockResp = await page.request.post(
         `${API_URL}/api/leads/${leadIdForTerminal}/consultations`,
@@ -1690,10 +1757,17 @@ test.describe("Lead Management Workflow", () => {
           data: { status_id: initialStatusId, method: "phone", notes: "E2E: should be hard blocked" },
         }
       );
-      expect(hardBlockResp.status()).toBe(400);
-      const blockErr = await hardBlockResp.json();
-      expect(blockErr.detail).toMatch(/nhập học|enrolled|hoàn tất|hard.block/i);
-      console.log(`Hard block confirmed: 400 — ${String(blockErr.detail).slice(0, 100)}`);
+      // Đọc thân MỘT LẦN rồi parse: `APIResponse` của Playwright không có
+      // `clone()`, và gọi `.text()` sau `.json()` là đọc lại cùng bộ đệm.
+      const hardBlockText = await hardBlockResp.text();
+      expect(
+        hardBlockResp.status(),
+        `Lead terminal ${afterStatusId} phải CHẶN consultation mới bằng 400. ` +
+          summarizeApiError(hardBlockResp.status(), hardBlockText)
+      ).toBe(400);
+      const blockErr = JSON.parse(hardBlockText) as { detail?: string };
+      expect(blockErr.detail).toMatch(/nhập học|enrolled|hoàn tất|hard.block|terminal|kết thúc/i);
+      console.log(`Hard block confirmed: 400 — ${safeBody({ detail: blockErr.detail })}`);
     });
   });
 
@@ -1827,7 +1901,7 @@ test.describe("Lead Management Workflow", () => {
       expect(failResp.status()).toBe(400);
       const failErr = await failResp.json();
       expect(failErr.detail).toMatch(/quota|lượt|hết/i);
-      console.log(`Quota exceeded: 400 — ${String(failErr.detail).slice(0, 100)}`);
+      console.log(`Quota exceeded: 400 — ${safeBody({ detail: failErr.detail })}`);
     });
 
     // --- Step 8: Final quota state — remaining=0, allowed=false ---
@@ -1983,8 +2057,8 @@ test.describe("Lead Management Workflow", () => {
       const probeResp = await page.request.get(`${API_URL}/api/leads`, { headers: managerHeaders });
       if (probeResp.status() === 403) {
         const probeErr = await probeResp.json();
-        console.log(`Manager probe failed 403: ${JSON.stringify(probeErr).slice(0, 200)}`);
-        if (/mfa|multi.factor/i.test(JSON.stringify(probeErr))) {
+        console.log(`Manager probe failed 403: ${safeBody(probeErr)}`);
+        if (/mfa|multi.factor/i.test(safeBody(probeErr))) {
           test.skip(
             true,
             "Manager MFA enforcement active but mfa_enabled=False — set E2E_MANAGER_TOTP_SECRET or enable MFA"

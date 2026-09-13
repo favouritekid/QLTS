@@ -61,30 +61,12 @@ export const API_URL = process.env.E2E_API_URL || "http://localhost:8000";
  * sách trường validation (`loc` + `type`). Cố tình BỎ `input` — nó chứa
  * nguyên văn payload (có thể mang số điện thoại / CCCD).
  */
-export function summarizeApiError(status: number, bodyText: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(bodyText);
-  } catch {
-    // Thân không phải JSON: cắt ngắn, vẫn không in nguyên văn dài.
-    return `status=${status} body(non-JSON, ${bodyText.length} bytes)="${bodyText.slice(0, 200)}"`;
-  }
-  const body = parsed as {
-    detail?: unknown;
-    error_code?: string;
-    errors?: Array<{ type?: string; loc?: unknown[]; msg?: string }>;
-  };
-  const bits: string[] = [`status=${status}`];
-  if (body.error_code) bits.push(`error_code=${body.error_code}`);
-  if (typeof body.detail === "string") bits.push(`detail="${body.detail.slice(0, 300)}"`);
-  if (Array.isArray(body.errors) && body.errors.length > 0) {
-    const fields = body.errors
-      .map((e) => `${(e.loc || []).join(".")}[${e.type ?? "?"}]`)
-      .join(", ");
-    bits.push(`invalid_fields=${fields}`);
-  }
-  return bits.join(" ");
-}
+// Lọc log nằm ở `log-redaction.ts` — module THUẦN, không import Playwright,
+// để canary `src/test/log-redaction.test.ts` chạy được dưới vitest (vitest.config
+// loại trừ `src/test/e2e/**`, nên một canary đặt trong này sẽ không bao giờ chạy).
+export { summarizeApiError, safeBody, correlationHash } from "./log-redaction";
+import { summarizeApiError, safeBody } from "./log-redaction";
+void safeBody;
 
 interface MinimalResponse {
   status(): number;

@@ -20,12 +20,7 @@
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
 import * as OTPAuth from "otpauth";
-import {
-  createAdmissionProfile,
-  expectOk,
-  resolveAdmissionContext,
-  type AdmissionPathContext,
-} from "./helpers/e2e-fixtures";
+import { createAdmissionProfile, expectOk, resolveAdmissionContext, safeBody, summarizeApiError, type AdmissionPathContext } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -185,7 +180,7 @@ async function loginViaAPI(
       continue;
     }
     if (!loginResp.ok()) {
-      const body = (await loginResp.text()).slice(0, 300);
+      const body = summarizeApiError(loginResp.status(), await loginResp.text());
       throw new Error(`Login failed for ${username}: ${loginResp.status()} ${body}`);
     }
 
@@ -328,7 +323,7 @@ async function createLeadAndProfile(
     }
   );
   if (!updateResp.ok()) {
-    console.log(`Profile update: ${updateResp.status()} ${(await updateResp.text()).slice(0, 300)}`);
+    console.log(`Profile update: ${updateResp.status()} ${summarizeApiError(updateResp.status(), await updateResp.text())}`);
   }
 
   // 5. Upload mandatory docs
@@ -562,7 +557,7 @@ test.describe("Admission Profile Lifecycle", () => {
       );
       const body = await resp.json();
       if (body.status !== "submitted") {
-        console.log(`Submit errors: ${JSON.stringify(body.validation_errors || body).slice(0, 500)}`);
+        console.log(`Submit errors: ${safeBody(body.validation_errors || body)}`);
       }
       expect(body.status).toBe("submitted");
       // Get fresh version after submit
@@ -583,7 +578,7 @@ test.describe("Admission Profile Lifecycle", () => {
         }
       );
       if (!resp.ok()) {
-        console.log(`Claim failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Claim failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
@@ -599,7 +594,7 @@ test.describe("Admission Profile Lifecycle", () => {
       );
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
-      console.log(`Status counts: ${JSON.stringify(body).slice(0, 200)}`);
+      console.log(`Status counts: ${safeBody(body)}`);
     });
 
     // --- Step 7: Admin approves ---
@@ -645,7 +640,7 @@ test.describe("Admission Profile Lifecycle", () => {
       // Fee status endpoint may return 404 if no fees exist yet, which is expected
       if (resp.ok()) {
         const body = await resp.json();
-        console.log(`Fee status: ${JSON.stringify(body).slice(0, 200)}`);
+        console.log(`Fee status: ${safeBody(body)}`);
       } else {
         console.log(`Fee status: ${resp.status()} (no fees yet - expected)`);
         expect([200, 404, 500]).toContain(resp.status());
@@ -931,7 +926,7 @@ test.describe("Admission Profile Lifecycle", () => {
       expect(resp.status()).toBe(400);
       const body = await resp.json();
       expect(body.detail).toContain("CCCD");
-      console.log(`Wrong CCCD rejected: ${body.detail}`);
+      console.log(`Wrong CCCD rejected: ${safeBody({ detail: body.detail })}`);
     });
 
     // --- Step 6: Confirm with correct CCCD ---
@@ -991,7 +986,7 @@ test.describe("Admission Profile Lifecycle", () => {
       expect(resp.status()).toBe(400);
       const body = await resp.json();
       expect(body.detail).toBeTruthy();
-      console.log(`Reuse token rejected: ${resp.status()} - ${body.detail}`);
+      console.log(`Reuse token rejected: ${resp.status()} - ${safeBody({ detail: body.detail })}`);
     });
 
     // --- Step 9: Exhaust 5 wrong CCCD attempts → token locked ---
@@ -1054,7 +1049,7 @@ test.describe("Admission Profile Lifecycle", () => {
         );
         expect(wrongResp.status()).toBe(400);
         const wrongBody = await wrongResp.json();
-        console.log(`Attempt ${i + 1}/5: ${wrongBody.detail}`);
+        console.log(`Attempt ${i + 1}/5: ${safeBody({ detail: wrongBody.detail })}`);
 
         // Check remaining attempts via info endpoint (may not work when locked)
         if (i < 4) {
@@ -1078,7 +1073,7 @@ test.describe("Admission Profile Lifecycle", () => {
       expect(lockedResp.status()).toBe(400);
       const lockedBody = await lockedResp.json();
       expect(lockedBody.detail).toBeTruthy();
-      console.log(`Token after exhaustion: ${lockedBody.detail}`);
+      console.log(`Token after exhaustion: ${safeBody({ detail: lockedBody.detail })}`);
     });
   });
 
@@ -1737,7 +1732,7 @@ test.describe("Admission Profile Lifecycle", () => {
       console.log(
         `Validation blocked submit: status=${body.status}, errors=${body.validation_errors.length}`
       );
-      console.log(`First error: ${JSON.stringify(body.validation_errors[0])}`);
+      console.log(`First error: ${safeBody(body.validation_errors[0])}`);
     });
   });
 });

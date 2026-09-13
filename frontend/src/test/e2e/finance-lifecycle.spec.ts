@@ -16,12 +16,7 @@
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
 import * as OTPAuth from "otpauth";
-import {
-  createAdmissionProfile,
-  expectOk,
-  resolveAdmissionContext,
-  type AdmissionPathContext,
-} from "./helpers/e2e-fixtures";
+import { createAdmissionProfile, expectOk, resolveAdmissionContext, safeBody, summarizeApiError, type AdmissionPathContext } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -156,7 +151,7 @@ async function loginViaAPI(
       continue;
     }
     if (!loginResp.ok()) {
-      const body = (await loginResp.text()).slice(0, 300);
+      const body = summarizeApiError(loginResp.status(), await loginResp.text());
       throw new Error(`Login failed for ${username}: ${loginResp.status()} ${body}`);
     }
 
@@ -364,7 +359,7 @@ async function setupApprovedProfile(
   );
   const submitBody = await submitResp.json();
   if (submitBody.status !== "submitted") {
-    console.log(`Submit errors: ${JSON.stringify(submitBody.validation_errors || submitBody).slice(0, 500)}`);
+    console.log(`Submit errors: ${safeBody(submitBody.validation_errors || submitBody)}`);
   }
   expect(submitBody.status).toBe("submitted");
 
@@ -458,7 +453,7 @@ test.describe("Finance Lifecycle", () => {
         },
       });
       if (!resp.ok() && resp.status() !== 201) {
-        console.log(`Fee calculate failed: ${resp.status()} ${(await resp.text()).slice(0, 500)}`);
+        console.log(`Fee calculate failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok() || resp.status() === 201).toBeTruthy();
       const body = await resp.json();
@@ -490,7 +485,7 @@ test.describe("Finance Lifecycle", () => {
         `${API_URL}/api/fees/by-profile/${approvedProfileId}`
       );
       if (!resp.ok()) {
-        console.log(`Fees by profile failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Fees by profile failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const fees = await resp.json();
@@ -504,7 +499,7 @@ test.describe("Finance Lifecycle", () => {
         `${API_URL}/api/fees/summary/${approvedProfileId}`
       );
       if (!resp.ok()) {
-        console.log(`Finance summary failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Finance summary failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
@@ -550,7 +545,7 @@ test.describe("Finance Lifecycle", () => {
         headers: adminHeaders,
       });
       if (!resp.ok()) {
-        console.log(`Payment methods failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Payment methods failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const methods = await resp.json();
@@ -575,7 +570,7 @@ test.describe("Finance Lifecycle", () => {
         },
       });
       if (!resp.ok() && resp.status() !== 201) {
-        console.log(`Record payment failed: ${resp.status()} ${(await resp.text()).slice(0, 500)}`);
+        console.log(`Record payment failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok() || resp.status() === 201).toBeTruthy();
       const body = await resp.json();
@@ -622,7 +617,7 @@ test.describe("Finance Lifecycle", () => {
       const resp = await page.request.get(`${API_URL}/api/finance/dashboard`);
       if (resp.ok()) {
         const body = await resp.json();
-        console.log(`Dashboard: ${JSON.stringify(body).slice(0, 200)}`);
+        console.log(`Dashboard: ${safeBody(body)}`);
       } else {
         // Dashboard endpoint may not exist, that's OK
         console.log(`Dashboard endpoint: ${resp.status()} (may not exist)`);
@@ -660,7 +655,7 @@ test.describe("Finance Lifecycle", () => {
       );
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
-      console.log(`Fee2 recalculated: ${JSON.stringify(body).slice(0, 200)}`);
+      console.log(`Fee2 recalculated: ${safeBody(body)}`);
     });
 
     // --- Step 3: Waive partial amount ---
@@ -677,7 +672,7 @@ test.describe("Finance Lifecycle", () => {
       );
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
-      console.log(`Fee2 waived: ${JSON.stringify(body).slice(0, 200)}`);
+      console.log(`Fee2 waived: ${safeBody(body)}`);
     });
 
     // --- Step 4: Waive excessive amount (should fail) ---
@@ -729,7 +724,7 @@ test.describe("Finance Lifecycle", () => {
       const resp = await page.request.get(`${API_URL}/api/installment-plans`);
       if (resp.ok()) {
         const plans = await resp.json();
-        console.log(`Installment plans: ${JSON.stringify(plans).slice(0, 200)}`);
+        console.log(`Installment plans: ${safeBody(plans)}`);
       } else {
         // Endpoint may not exist
         console.log(`Installment plans endpoint: ${resp.status()}`);
@@ -826,7 +821,7 @@ test.describe("Finance Lifecycle", () => {
         },
       });
       if (!resp.ok() && resp.status() !== 201) {
-        console.log(`Record payment3 failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Record payment3 failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok() || resp.status() === 201).toBeTruthy();
       const body = await resp.json();

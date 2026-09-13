@@ -25,11 +25,7 @@
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
 import * as OTPAuth from "otpauth";
-import {
-  createAdmissionProfile,
-  resolveAdmissionContext,
-  type AdmissionPathContext,
-} from "./helpers/e2e-fixtures";
+import { createAdmissionProfile, resolveAdmissionContext, summarizeApiError, type AdmissionPathContext } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -193,7 +189,7 @@ async function loginViaAPI(
     }
     if (!loginResp.ok()) {
       throw new Error(
-        `Login failed for ${username}: ${loginResp.status()} ${(await loginResp.text()).slice(0, 300)}`
+        `Login failed for ${username}: ${loginResp.status()} ${summarizeApiError(loginResp.status(), await loginResp.text())}`
       );
     }
 
@@ -360,7 +356,7 @@ test.describe("Lead to Admission Workflow", () => {
       });
       if (!resp.ok() && resp.status() !== 201) {
         throw new Error(
-          `Admin create lead failed (${resp.status()}): ${(await resp.text()).slice(0, 500)}`
+          `Admin create lead failed (${resp.status()}): ${summarizeApiError(resp.status(), await resp.text())}`
         );
       }
       const body = await resp.json();
@@ -429,7 +425,7 @@ test.describe("Lead to Admission Workflow", () => {
         }
       );
       if (!reassignResp.ok()) {
-        throw new Error(`Reassign failed (${reassignResp.status()}): ${(await reassignResp.text()).slice(0, 500)}`);
+        throw new Error(`Reassign failed (${reassignResp.status()}): ${summarizeApiError(reassignResp.status(), await reassignResp.text())}`);
       }
       const reassigned = await reassignResp.json();
 
@@ -716,7 +712,7 @@ test.describe("Lead to Admission Workflow", () => {
         }
       );
       if (!resp.ok()) {
-        const errText = (await resp.text()).slice(0, 500);
+        const errText = summarizeApiError(resp.status(), await resp.text());
         throw new Error(`Submit failed (${resp.status()}): ${errText}`);
       }
       const body = await resp.json();
@@ -768,7 +764,7 @@ test.describe("Lead to Admission Workflow", () => {
         }
       );
       if (!resp.ok()) {
-        const errText = (await resp.text()).slice(0, 500);
+        const errText = summarizeApiError(resp.status(), await resp.text());
         throw new Error(`Approve failed (${resp.status()}): ${errText}`);
       }
       const body = await resp.json();
@@ -811,7 +807,7 @@ test.describe("Lead to Admission Workflow", () => {
           },
         }
       );
-      if (!resp.ok()) throw new Error(`Override failed (${resp.status()}): ${(await resp.text()).slice(0, 500)}`);
+      if (!resp.ok()) throw new Error(`Override failed (${resp.status()}): ${summarizeApiError(resp.status(), await resp.text())}`);
       const body = await resp.json();
       profileVersion1 = body.version;
       expect(body.status).toBe("overridden");
@@ -834,7 +830,7 @@ test.describe("Lead to Admission Workflow", () => {
           data: { version: profileVersion1 },
         }
       );
-      if (!resp.ok()) throw new Error(`Finalize failed (${resp.status()}): ${(await resp.text()).slice(0, 500)}`);
+      if (!resp.ok()) throw new Error(`Finalize failed (${resp.status()}): ${summarizeApiError(resp.status(), await resp.text())}`);
       const body = await resp.json();
       profileVersion1 = body.version;
       expect(body.status).toBe("enrolled");
@@ -1022,7 +1018,7 @@ test.describe("Lead to Admission Workflow", () => {
           },
         }
       );
-      if (!resp.ok()) throw new Error(`Reject failed (${resp.status()}): ${(await resp.text()).slice(0, 500)}`);
+      if (!resp.ok()) throw new Error(`Reject failed (${resp.status()}): ${summarizeApiError(resp.status(), await resp.text())}`);
       const body = await resp.json();
       profileVersion2 = body.version;
       expect(body.status).toBe("rejected");

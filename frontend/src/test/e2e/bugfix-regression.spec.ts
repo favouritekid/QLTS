@@ -47,15 +47,7 @@
  */
 
 import { test, expect } from "@playwright/test";
-import {
-  API_URL,
-  expectOk,
-  loginPrincipal,
-  pickAssignableOfficer,
-  summarizeApiError,
-  type OfficerPick,
-  type Principal,
-} from "./helpers/e2e-fixtures";
+import { API_URL, expectOk, loginPrincipal, pickAssignableOfficer, safeBody, summarizeApiError, type OfficerPick, type Principal } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -316,7 +308,7 @@ test.describe("Bugfix Regression (T1-T9)", () => {
         const body = await resp.json();
         expect(
           body.successful,
-          `bulk-assign trả errors=${JSON.stringify(body.errors)}`
+          `bulk-assign trả errors=${safeBody(body.errors)}`
         ).toBe(2);
         expect(body.total).toBe(2);
         expect(body.assigned_lead_ids).toContain(leadA_id);
@@ -382,7 +374,7 @@ test.describe("Bugfix Regression (T1-T9)", () => {
       );
       await expectOk(resp, `bulk-update-stage → ${targetStageId}`, [200]);
       const body = await resp.json();
-      console.log(`Bulk stage update result: ${JSON.stringify(body)}`);
+      console.log(`Bulk stage update result: ${safeBody(body)}`);
     });
 
     await test.step("Verify lead A has correct pipeline_stage_id", async () => {
@@ -661,7 +653,7 @@ test.describe("Bugfix Regression (T1-T9)", () => {
       const body = await resp.json();
       // Backend typically returns { "detail": "..." } for 404s
       expect(body).toHaveProperty("detail");
-      console.log(`404 body: ${JSON.stringify(body).slice(0, 200)}`);
+      console.log(`404 body: ${safeBody(body)}`);
     });
   });
 

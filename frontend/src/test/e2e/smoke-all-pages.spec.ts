@@ -15,6 +15,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import * as OTPAuth from "otpauth";
+import { summarizeApiError } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -202,7 +203,7 @@ async function loginViaAPI(
     form: { username, password },
   });
   if (!loginResp.ok()) {
-    const body = (await loginResp.text()).slice(0, 300);
+    const body = summarizeApiError(loginResp.status(), await loginResp.text());
     throw new Error(`Login failed for ${username}: ${loginResp.status()} ${body}`);
   }
 
@@ -230,7 +231,7 @@ async function loginViaAPI(
       // (`mfa.replay_rejected`), hay phiên MFA hết hạn — nên mỗi lần gặp lại
       // là một vòng chẩn đoán mới. `error_code` + counter tách ba ca đó ra.
       // KHÔNG in mã TOTP: nó còn hiệu lực tới hết cửa sổ 30 giây.
-      const detail = (await mfaResp.text()).slice(0, 200);
+      const detail = summarizeApiError(mfaResp.status(), await mfaResp.text());
       throw new Error(
         `MFA failed for ${username}: HTTP ${mfaResp.status()} ` +
           `${totp ? `totp_counter=${totp.counter}` : "auth=backup_code"} — ${detail}`
