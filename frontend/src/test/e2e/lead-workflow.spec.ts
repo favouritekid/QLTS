@@ -72,7 +72,14 @@ let officerCookies: Cookie[] = [];
  */
 let unitId: number;
 let offeringId: number;
-let pipelineStatuses: Array<{ id: string; name: string }> = [];
+// `code` là định danh HỢP ĐỒNG (ràng buộc `uq_consultation_status_code UNIQUE`),
+// khác `id` ở chỗ nó được lược đồ bảo đảm duy nhất và không phụ thuộc thứ tự hàng.
+let pipelineStatuses: Array<{
+  id: string;
+  name: string;
+  code?: string | null;
+  is_final?: boolean;
+}> = [];
 let pipelineStages: Array<{ id: string; name: string }> = [];
 let initialStatusId: string;
 let secondStatusId: string;
@@ -272,20 +279,71 @@ test.describe("Lead Management Workflow", () => {
       const pipeline = await pipelineResp.json();
       pipelineStatuses = pipeline.statuses;
       pipelineStages = pipeline.stages;
-      const transitions: Array<{ from_status_id: string; to_status_id: string }> =
-        pipeline.allowed_transitions || [];
       expect(pipelineStatuses.length).toBeGreaterThanOrEqual(2);
 
-      // Pick a valid transition pair from allowed_transitions
-      if (transitions.length > 0) {
-        initialStatusId = transitions[0].from_status_id;
-        secondStatusId = transitions[0].to_status_id;
-      } else {
-        // Fallback: use first two statuses
-        initialStatusId = pipelineStatuses[0].id;
-        secondStatusId = pipelineStatuses[1].id;
-      }
-      console.log(`Pipeline: ${pipelineStatuses.length} statuses, ${transitions.length} transitions, initial=${initialStatusId}, second=${secondStatusId}`);
+      // ---------------------------------------------------------------------
+      // TRẠNG THÁI KHỞI TẠO — chọn theo ĐỊNH DANH HỢP ĐỒNG, không theo thứ tự
+      // ---------------------------------------------------------------------
+      // Bản cũ đọc `pipeline.allowed_transitions` rồi rơi về `statuses[0]/[1]`.
+      // Hai sai lầm chồng lên nhau, cả hai đều ĐO ĐƯỢC:
+      //
+      //  1. `allowed_transitions` LUÔN rỗng. `/api/pipeline/all`
+      //     (`app/routers/pipeline.py:39-48`) chỉ trả `{stages, statuses}`;
+      //     trường kia có trong schema nhưng không ai điền. Nên nhánh fallback
+      //     LUÔN được chọn — "nhánh dự phòng" thực chất là nhánh duy nhất.
+      //
+      //  2. `statuses[0]` KHÔNG xác định. `PipelineRepository.get_all_statuses`
+      //     (`app/repositories/pipeline_repository.py:104-108`) là `select(...)`
+      //     KHÔNG `ORDER BY`, nên thứ tự là thứ tự heap của Postgres. Một
+      //     `UPDATE` bất kỳ lên hàng `sts00` viết lại tuple và đẩy nó xuống
+      //     CUỐI heap. Đo thật trên cùng một CSDL: trước UPDATE
+      //     `statuses[0]='sts00'`, sau UPDATE `statuses[0]='sts02'` — cả suite
+      //     lặng lẽ thao tác trên một cặp trạng thái KHÁC.
+      //
+      // Nguồn chuẩn đúng là `code`: nó có ràng buộc tầng CSDL
+      // `uq_consultation_status_code UNIQUE (code)`, và `fsm_engine.py:112-130`
+      // (SPEC Rule #11 — "lead mới, status NULL ⇒ CHỈ trả NOT_CONTACTED") đã
+      // dùng đúng định danh này.
+      const khoiTao = pipelineStatuses.find((s) => s.code === "NOT_CONTACTED");
+      expect(
+        khoiTao,
+        `Seed phải có đúng một trạng thái code='NOT_CONTACTED'. ` +
+          `Nhận được ${pipelineStatuses.length} trạng thái, các code: ` +
+          `${pipelineStatuses.map((s) => s.code ?? "<null>").join(",")}`
+      ).toBeTruthy();
+      initialStatusId = khoiTao!.id;
+
+      // TRẠNG THÁI KẾ TIẾP — hỏi chính FSM, không lấy phần tử kế trong mảng.
+      // `GET /api/pipeline/allowed-next-statuses` (`routers/pipeline.py:93`)
+      // chạy qua `get_next_statuses_for_lead`, tức đúng bộ luật mà PATCH status
+      // sẽ cưỡng chế. Lấy `statuses[1]` là rút thăm, và rút trúng một trạng thái
+      // không có cạnh tới thì ca test đỏ vì lý do chẳng liên quan.
+      const nextResp = await page.request.get(
+        `${API_URL}/api/pipeline/allowed-next-statuses?current_status_id=${initialStatusId}`
+      );
+      await expectOk(
+        nextResp,
+        `GET /api/pipeline/allowed-next-statuses?current_status_id=${initialStatusId}`,
+        [200]
+      );
+      const ungVien = (await nextResp.json()) as Array<{
+        id: string;
+        code?: string | null;
+        is_final?: boolean;
+      }>;
+      const keTiep = ungVien.find((s) => s.id !== initialStatusId && !s.is_final);
+      expect(
+        keTiep,
+        `FSM phải cho ít nhất một trạng thái KHÔNG-final đi tới được từ ` +
+          `${initialStatusId}; nhận được ${ungVien.length} ứng viên: ` +
+          `${ungVien.map((s) => `${s.id}${s.is_final ? "(final)" : ""}`).join(",")}`
+      ).toBeTruthy();
+      secondStatusId = keTiep!.id;
+
+      console.log(
+        `Pipeline: ${pipelineStatuses.length} statuses · initial=${initialStatusId}` +
+          ` (code=NOT_CONTACTED) · second=${secondStatusId} (FSM, ${ungVien.length} ứng viên)`
+      );
 
       // Organization units — chỉ để khẳng định seed có đơn vị; `unitId`
       // KHÔNG lấy ở đây nữa (xem ghi chú ở khai báo biến).
