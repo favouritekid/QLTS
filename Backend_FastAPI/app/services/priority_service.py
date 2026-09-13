@@ -802,6 +802,250 @@ async def resolve_kv_for_profile(
     )
 
 
+# =============================================================================
+# B1 (2026-09-13) — Bảo toàn override KV hợp lệ QUA freeze, kèm dấu vết phê duyệt
+# =============================================================================
+#
+# Vì sao khối này tồn tại
+# -----------------------
+# ``resolve_kv_for_profile`` trả ``(None, {"rule_applied": "manual_override"})``
+# cho nhánh ``basis == "MANUAL"``: engine cố ý KHÔNG tự resolve và giao cho
+# caller giữ lại ``kv_resolved`` đang có. ``freeze_priority_snapshot`` thì lại
+# dựng snapshot MỚI từ số 0 ⇒ ``kv_resolved`` về ``None`` và mất trọn
+# ``manual_override_by/_at/_reason``. Hậu quả đo được:
+#   * submit: ``_kv_unresolved_error_message`` chặn (ồn ào, nhưng thấy được);
+#   * T6 (``admission_choice_engine_service`` freeze rồi
+#     ``calculate_priority_bonus``): ``_resolve_area_bonus`` đọc
+#     ``snapshot["kv_resolved"]`` → ``None`` → ``return _ZERO`` — 0 điểm khu
+#     vực, không lỗi, không log. Cột fallback ``high_school_kv_resolved`` đã
+#     DROP ở phase1_09 nên không cứu được.
+#
+# Vì sao KHÔNG được "cứ giữ lại kv_resolved cũ"
+# ---------------------------------------------
+# ``area_resolution_basis`` nhận giá trị ``'manual_override'`` qua ``PUT
+# /api/admissions/{id}`` thường (schema cho phép, service ghi thẳng). Nếu freeze
+# tin cái nhãn ấy thì bất kỳ ai sửa được hồ sơ draft cũng "đóng dấu thủ công"
+# lên một KV do engine tính ra — kể cả KV tính từ dữ liệu đã bị sửa lại sau đó.
+# Nhãn ``MANUAL`` và "kv_resolved khác null" LÀ THỨ CẦN CHỨNG MINH, không phải
+# bằng chứng.
+#
+# Căn cứ độc lập
+# --------------
+# Đường override được phép DUY NHẤT (``priority_override_service.override_kv``,
+# gọi từ ``POST /api/v2/admissions/{id}/override-priority-kv``) INSERT một hàng
+# ``priority_audit_log`` với ``action_type='kv_manual_override'`` trong CÙNG
+# transaction với việc ghi snapshot. Đường ``PUT`` thường KHÔNG sinh hàng nào.
+# Hàng audit ấy — chứ không phải nhãn trong snapshot — là căn cứ.
+#
+# Năm điều kiện HẾT HIỆU LỰC (fail-closed, dẫn từ mã):
+#   1. Không có hàng audit nào  -> ``no_audit_row``
+#      (đúng ca ``PUT`` thường + ca snapshot bị vá tay).
+#   2. ``audit.actor_id`` khác ``snapshot.manual_override_by`` hoặc
+#      ``audit.new_value.kv_resolved`` khác ``snapshot.kv_resolved`` ->
+#      ``audit_row_mismatch_*``. Khoá snapshot vào ĐÚNG quyết định đã ghi sổ.
+#   3. ``audit.metadata.actor_role`` ngoài {admin, manager} ->
+#      ``actor_role_not_allowed``. Đây là ca thật, không phải giả định: trước
+#      "Phase E.4 commit 7" (``priority_override_service`` ~dòng 283) officer
+#      ĐƯỢC override submitted/reviewing/revision_requested; các hàng ấy nay
+#      không còn hợp lệ.
+#   4. ``|audit.created_at - snapshot.manual_override_at|`` > 300s ->
+#      ``timestamp_out_of_band``. Chặn ca snapshot mang dấu override MỚI HƠN
+#      mọi hàng đã ghi sổ.
+#   5. Vân tay đầu vào KV lúc override khác vân tay tính lại lúc freeze ->
+#      ``stale_inputs``. Người duyệt đã quyết trên MỘT bộ dữ liệu; dữ liệu đổi
+#      thì quyết định ấy hết hiệu lực, phải duyệt lại.
+#      Hàng audit CŨ (ghi trước bản vá này) không có vân tay ->
+#      ``provenance_incomplete_no_fingerprint`` — cũng fail-closed: không
+#      chứng minh được thì không công nhận.
+#
+# Vân tay CHỈ gồm đầu vào mà ``resolve_kv_for_profile`` thật sự đọc để ra KV
+# (văn hoá, chuyên môn, mã xã thường trú, năm tuyển sinh, lịch sử học tập).
+# KHÔNG gồm ngành / NV1 / phương thức: khi ``basis == MANUAL`` engine bỏ qua
+# chúng, và "đổi ngành thì override còn hiệu lực không" là câu hỏi NGHIỆP VỤ
+# chưa có quyết định ở đâu trong mã. Đưa chúng vào đây là tự đặt chính sách.
+#
+# Guard ``_KV_SUCCESS_RULE_APPLIED`` / ``_kv_unresolved_error_message`` trong
+# ``admission_service`` KHÔNG bị đụng tới: ca không chứng minh được xuất xứ đi
+# ra với ``rule_applied='manual_override_unverified'`` — một giá trị NGOÀI
+# whitelist ấy — nên cổng submit chặn y như cũ mà không phải nới một chữ nào.
+
+_MANUAL_OVERRIDE_KV_CODES = frozenset({"KV1", "KV2-NT", "KV2", "KV3"})
+_MANUAL_OVERRIDE_ALLOWED_ACTOR_ROLES = frozenset({"admin", "manager"})
+# Khớp ``priority_override_service._MIN_REASON_LEN`` (20). Không import chéo:
+# module ấy import ngược lại priority_service ở tầng hàm.
+_MANUAL_OVERRIDE_MIN_REASON_LEN = 20
+# Hàng audit lấy ``created_at`` từ DB (server default), snapshot lấy giờ Python
+# của cùng transaction => lệch mili-giây là bình thường; 300s là biên rộng rãi
+# mà vẫn chặn được ca "đóng dấu lại sau này".
+_MANUAL_OVERRIDE_MAX_CLOCK_SKEW_SECONDS = 300
+_MANUAL_OVERRIDE_UNVERIFIED_RULE = "manual_override_unverified"
+# Khoá audit_metadata mang vân tay đầu vào KV tại thời điểm override.
+KV_INPUTS_FINGERPRINT_KEY = "kv_inputs_fingerprint"
+
+
+def kv_inputs_fingerprint(profile: "AdmissionProfile") -> str:
+    """sha256 của ĐÚNG những đầu vào quyết định KV mà engine đọc.
+
+    Đọc thẳng từ ``resolve_kv_for_profile`` + ``_derive_kv_basis_level``:
+    ``cultural_education_level``, ``vocational_qualification``,
+    ``permanent_commune_code``, ``academic_year`` (biến ``kv_year``) và
+    ``academic_history``. Từ ``academic_history`` chỉ lấy các khoá mà luật
+    multi-school TT 05/2021 Mục 5.b dùng (``school_id``/``level``/
+    ``year_from``/``year_to``/``grade_to``/``graduation_type``) — thêm GPA hay
+    đổi thứ tự phần tử KHÔNG được làm hết hiệu lực một quyết định đúng.
+
+    CỐ Ý KHÔNG có ``area_resolution_basis``: chính nó là công tắc bật nhánh
+    MANUAL, đưa vào thì vân tay tự mâu thuẫn. Cũng CỐ Ý không có
+    ``target_level``/``admission_type``: nhánh MANUAL bỏ qua chúng.
+    """
+    import hashlib
+    import json
+
+    history = getattr(profile, "academic_history", None) or []
+    normalised: list[dict[str, Any]] = []
+    for entry in history:
+        if not isinstance(entry, dict):
+            continue
+        normalised.append(
+            {
+                "school_id": entry.get("school_id"),
+                "level": entry.get("level"),
+                "year_from": entry.get("year_from"),
+                "year_to": entry.get("year_to"),
+                "grade_to": entry.get("grade_to"),
+                "graduation_type": entry.get("graduation_type"),
+            }
+        )
+    # Sắp xếp tất định: thứ tự phần tử trong JSONB không mang nghĩa nghiệp vụ.
+    normalised.sort(key=lambda e: json.dumps(e, sort_keys=True, default=str))
+
+    payload = {
+        "cultural_education_level": getattr(
+            profile, "cultural_education_level", None
+        ),
+        "vocational_qualification": getattr(profile, "vocational_qualification", None)
+        or "none",
+        "permanent_commune_code": getattr(profile, "permanent_commune_code", None),
+        "academic_year": getattr(profile, "academic_year", None),
+        "academic_history": normalised,
+    }
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _parse_iso_utc(raw: Any) -> Optional[datetime]:
+    """ISO-8601 str (hoặc datetime) -> aware UTC datetime; None khi không đọc được."""
+    if isinstance(raw, datetime):
+        parsed = raw
+    elif isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        if text.endswith(("Z", "z")):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+async def verify_manual_override_provenance(
+    db: "AsyncSession",
+    profile: "AdmissionProfile",
+) -> tuple[bool, Optional[str], dict[str, Any]]:
+    """Override KV đang khai trong snapshot có ĐƯỢC PHÉP không?
+
+    Returns ``(ok, refuse_reason, evidence)``:
+      * ``ok=True``  -> ``evidence`` mang các khoá dấu vết để chép vào snapshot
+        mới (``manual_override_*``, ``kv_resolved``, ``manual_override_audit_id``).
+      * ``ok=False`` -> ``refuse_reason`` là mã snake_case để ghi vào
+        ``snapshot["reason"]`` + log.
+
+    Fail-closed ở MỌI nhánh. Xem khối chú thích phía trên cho 5 điều kiện.
+    """
+    from app.models.priority_audit import PriorityAuditLog
+
+    snapshot = getattr(profile, "priority_resolution_snapshot", None)
+    if not isinstance(snapshot, dict) or not snapshot:
+        return False, "no_prior_snapshot", {}
+
+    claimed_kv = snapshot.get("kv_resolved")
+    claimed_by = snapshot.get("manual_override_by")
+    claimed_at = _parse_iso_utc(snapshot.get("manual_override_at"))
+    claimed_reason = (snapshot.get("manual_override_reason") or "").strip()
+
+    if claimed_kv not in _MANUAL_OVERRIDE_KV_CODES:
+        return False, "snapshot_kv_invalid", {}
+    if not isinstance(claimed_by, int) or isinstance(claimed_by, bool):
+        return False, "snapshot_missing_actor", {}
+    if claimed_at is None:
+        return False, "snapshot_missing_timestamp", {}
+    if len(claimed_reason) < _MANUAL_OVERRIDE_MIN_REASON_LEN:
+        return False, "snapshot_reason_too_short", {}
+
+    stmt = (
+        select(PriorityAuditLog)
+        .where(
+            PriorityAuditLog.profile_id == profile.id,
+            PriorityAuditLog.action_type == "kv_manual_override",
+        )
+        .order_by(PriorityAuditLog.created_at.desc(), PriorityAuditLog.id.desc())
+        .limit(1)
+    )
+    audit_row = (await db.execute(stmt)).scalars().first()
+    if audit_row is None:
+        return False, "no_audit_row", {}
+
+    new_value = audit_row.new_value if isinstance(audit_row.new_value, dict) else {}
+    metadata = (
+        audit_row.audit_metadata if isinstance(audit_row.audit_metadata, dict) else {}
+    )
+
+    if audit_row.actor_id != claimed_by:
+        return False, "audit_row_mismatch_actor", {}
+    if new_value.get("kv_resolved") != claimed_kv:
+        return False, "audit_row_mismatch_kv", {}
+    if metadata.get("actor_role") not in _MANUAL_OVERRIDE_ALLOWED_ACTOR_ROLES:
+        return False, "actor_role_not_allowed", {}
+
+    audited_at = _parse_iso_utc(audit_row.created_at)
+    if audited_at is None:
+        return False, "audit_row_missing_timestamp", {}
+    if (
+        abs((audited_at - claimed_at).total_seconds())
+        > _MANUAL_OVERRIDE_MAX_CLOCK_SKEW_SECONDS
+    ):
+        return False, "timestamp_out_of_band", {}
+
+    audited_fingerprint = metadata.get(KV_INPUTS_FINGERPRINT_KEY)
+    if not audited_fingerprint:
+        # Hàng audit ghi trước bản vá này: không có gì chứng minh dữ liệu KV
+        # còn nguyên như lúc duyệt => không công nhận. Lối ra vận hành là
+        # override LẠI qua endpoint (sinh hàng audit mới có vân tay), KHÔNG
+        # phải sửa dữ liệu cũ.
+        return False, "provenance_incomplete_no_fingerprint", {}
+    if audited_fingerprint != kv_inputs_fingerprint(profile):
+        return False, "stale_inputs", {}
+
+    evidence = {
+        "kv_resolved": claimed_kv,
+        "manual_override_by": claimed_by,
+        "manual_override_by_name": snapshot.get("manual_override_by_name"),
+        "manual_override_at": snapshot.get("manual_override_at"),
+        "manual_override_reason": claimed_reason,
+        "evidence_file_id": snapshot.get("evidence_file_id"),
+        "manual_override_audit_id": audit_row.id,
+        "manual_override_actor_role": metadata.get("actor_role"),
+        KV_INPUTS_FINGERPRINT_KEY: audited_fingerprint,
+    }
+    return True, None, evidence
+
+
 async def freeze_priority_snapshot(
     profile: "AdmissionProfile",
     db: "AsyncSession",
@@ -855,6 +1099,50 @@ async def freeze_priority_snapshot(
         admission_type=admission_type,
     )
     rule_applied = meta.get("rule_applied")
+
+    # --- B1: nhánh MANUAL — engine CỐ Ý trả None, caller phải giữ lại KV đã
+    # được duyệt. Chỉ giữ khi CHỨNG MINH được xuất xứ bằng hàng
+    # ``priority_audit_log`` (xem khối chú thích trên
+    # ``verify_manual_override_provenance``). Không chứng minh được thì đi ra
+    # bằng ``manual_override_unverified`` — NGOÀI ``_KV_SUCCESS_RULE_APPLIED``
+    # nên cổng submit chặn mà không phải nới guard.
+    override_evidence: dict[str, Any] = {}
+    override_refused_reason: Optional[str] = None
+    if rule_applied == "manual_override":
+        ok, refuse_reason, override_evidence = (
+            await verify_manual_override_provenance(db, profile)
+        )
+        if ok:
+            kv_resolved = override_evidence["kv_resolved"]
+            log.info(
+                "kv_manual_override_preserved_through_freeze",
+                profile_id=getattr(profile, "id", None),
+                kv_resolved=kv_resolved,
+                frozen_at_status=frozen_at_status,
+                audit_id=override_evidence.get("manual_override_audit_id"),
+                override_by=override_evidence.get("manual_override_by"),
+            )
+        else:
+            override_refused_reason = refuse_reason
+            override_evidence = {}
+            rule_applied = _MANUAL_OVERRIDE_UNVERIFIED_RULE
+            kv_resolved = None
+            log.warning(
+                "kv_manual_override_refused_unverified_provenance",
+                profile_id=getattr(profile, "id", None),
+                frozen_at_status=frozen_at_status,
+                refuse_reason=refuse_reason,
+                claimed_kv=(
+                    (getattr(profile, "priority_resolution_snapshot", None) or {}).get(
+                        "kv_resolved"
+                    )
+                    if isinstance(
+                        getattr(profile, "priority_resolution_snapshot", None), dict
+                    )
+                    else None
+                ),
+            )
+
     snapshot: dict[str, Any] = {
         "kv_resolved": kv_resolved,
         "rule_applied": rule_applied,
@@ -883,6 +1171,50 @@ async def freeze_priority_snapshot(
         snapshot["requires_manual_override"] = True
     if meta.get("reason"):
         snapshot["reason"] = meta["reason"]
+
+    # --- B1: chép dấu vết phê duyệt SANG snapshot mới. Trước bản vá này freeze
+    # dựng dict từ số 0 nên ai/khi nào/lý do/chứng cứ biến mất cùng kv_resolved,
+    # và không còn cách nào đọc ra hồ sơ này từng được duyệt KV thủ công.
+    if override_evidence:
+        snapshot.update(
+            {
+                "manual_override_by": override_evidence["manual_override_by"],
+                "manual_override_by_name": override_evidence[
+                    "manual_override_by_name"
+                ],
+                "manual_override_at": override_evidence["manual_override_at"],
+                "manual_override_reason": override_evidence[
+                    "manual_override_reason"
+                ],
+                "evidence_file_id": override_evidence["evidence_file_id"],
+                "manual_override_audit_id": override_evidence[
+                    "manual_override_audit_id"
+                ],
+                "manual_override_actor_role": override_evidence[
+                    "manual_override_actor_role"
+                ],
+                KV_INPUTS_FINGERPRINT_KEY: override_evidence[
+                    KV_INPUTS_FINGERPRINT_KEY
+                ],
+                "manual_override_verified_at": snapshot["frozen_at"],
+            }
+        )
+        snapshot.pop("requires_manual_override", None)
+        snapshot.pop("reason", None)
+    elif override_refused_reason is not None:
+        # Fail-closed: nêu ĐÚNG lý do từ chối để manager biết phải làm gì
+        # (duyệt lại qua endpoint override), và bật lại cờ engine-signal cho
+        # cổng override-draft của ``priority_override_service``.
+        snapshot["reason"] = f"manual_override_unverified:{override_refused_reason}"
+        snapshot["requires_manual_override"] = True
+
+    # --- B1: ``ut_verified_bucket`` do priority_override_service (verify /
+    # reject / untick / re-upload) ghi bằng deep-merge vào CÙNG cột JSONB này.
+    # Freeze dựng dict mới nên nó cũng rơi mất. Giữ lại: nó là kết quả xác minh
+    # chứng cứ UT, không phải trạng thái engine KV tính ra được.
+    _prev_snapshot = getattr(profile, "priority_resolution_snapshot", None)
+    if isinstance(_prev_snapshot, dict) and "ut_verified_bucket" in _prev_snapshot:
+        snapshot.setdefault("ut_verified_bucket", _prev_snapshot["ut_verified_bucket"])
 
     profile.priority_resolution_snapshot = snapshot
     return snapshot
