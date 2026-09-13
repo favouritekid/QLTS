@@ -156,6 +156,31 @@ describe("safeBody — khoá lạ bị che theo mặc định", () => {
     assertNoCanary(out);
   });
 
+  it("số và boolean dưới khoá LẠ vẫn in — ranh giới CỐ Ý, đã đo", () => {
+    // Mọi cột nhân thân của hệ này là kiểu chuỗi (`app/models/lead.py:95-97`,
+    // `app/models/admission.py:171-222`), nên số/boolean không nhận dạng được
+    // cá nhân. Che chúng sẽ xoá đúng phần chẩn đoán có giá trị — bản đầu của
+    // bộ lọc này đã ăn mất `used/limit/remaining/allowed` của ca hạn mức
+    // reassign, tức làm test khó đọc hơn mà không an toàn hơn.
+    const out = safeBody({
+      allowed: false,
+      used: 5,
+      limit: 5,
+      remaining: 0,
+      is_terminal_phase: true,
+    });
+    expect(out).toContain("allowed=false");
+    expect(out).toContain("used=5");
+    expect(out).toContain("remaining=0");
+    expect(out).toContain("is_terminal_phase=true");
+  });
+
+  it("chuỗi dưới khoá lạ vẫn bị che dù cạnh các khoá số an toàn", () => {
+    const out = safeBody({ used: 5, full_name: CANARIES.hoTen, ward: CANARIES.phuongXa });
+    assertNoCanary(out);
+    expect(out).toContain("used=5");
+  });
+
   it("giá trị null và kiểu lạ không làm vỡ hàm", () => {
     expect(safeBody(null)).toBe("null");
     expect(safeBody(undefined)).toBe("null");

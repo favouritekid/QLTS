@@ -162,15 +162,65 @@ app/services/status_helper.py:212   (get_initial_status_id)
 cùng chuỗi migration nhưng với dữ liệu có sẵn, có thể còn hàng `legacy_status='new'`
 từ trước. Việc cần làm trước tiên là **đo prod**, rồi mới chọn cách vá.
 
+### ⛔ Cách vá hiển nhiên là SAI — đã đo, đừng làm
+
+> Bản đầu của tài liệu này đề xuất “migration đặt `sts00.legacy_status='new'`”.
+> **Đã thử trên stack thật và nó làm vỡ chỗ khác.** Giữ lại đây để không ai đi lại.
+
+Thí nghiệm trên stack `nfrd` (CSDL do chính `seed_from_xlsx` dựng), đổi qua đổi lại:
+
+| `sts00.legacy_status` | lead test 4 (FSM status patch) | lead test 6 (import) |
+|---|---|---|
+| `NULL` — như đang ship | ✓ PASS | ✘ FAIL (B2) |
+| `'new'` — cách vá ngây thơ | ✘ **FAIL** | ✓ hết chặn |
+| `NULL` (hoàn tác) | ✓ PASS | ✘ FAIL |
+
+Thứ tự chạy là NULL → 'new' → 'new' → NULL, và mỗi lượt còn làm CSDL bẩn thêm;
+test 4 vẫn XANH ở lượt cuối cùng (bẩn nhất) nên không thể quy cho nhiễm bẩn dữ liệu.
+
+**Vì sao cột ấy CỐ Ý để NULL:** `app/core/status_mapping.py:175-205` giải trạng thái
+theo **hai tầng** — ưu tiên 1 lấy cột `legacy_status`, ưu tiên 2 **suy ra** từ thuộc
+tính, trong đó `stage_id == "stg01" → "new"`. `sts00` nằm ở `stg01`, nên nó **vốn đã**
+cho `"new"` qua suy diễn. Cột NULL không phải thiếu sót dữ liệu.
+
+**Khuyết tật thật là một nguồn-chuẩn bị nhân đôi:** `StatusHelper.get_initial_status`
+truy vấn thẳng **cột** `legacy_status == "new"`, tức đi vòng qua chính hàm
+`map_status_to_legacy()` mà phần còn lại của hệ dùng. Nó mù với tầng suy diễn.
+
+### ⚠️ Vá B2 sẽ làm ĐỎ một ca đang xanh — và ca ấy đang xanh vì lý do sai
+
+`app/services/lead_service.py:1183-1196` — `create_lead`:
+
+```python
+initial_status = await StatusHelper.get_initial_status(db)
+if initial_status:
+    await StatusHelper.sync_lead_status(db_lead, initial_status)
+else:
+    log.warning("Initial consultation status not found during lead creation.")
+    # gán giá trị mặc định an toàn
+```
+
+- **Hôm nay (B2 hỏng):** hàm trả `None` ⇒ lead mới **không mang trạng thái nào**.
+  `lead-workflow` test 4 POST một consultation ở `initialStatusId` ⇒ trạng thái ĐỔI
+  ⇒ `status_updated = true` ⇒ ca XANH.
+- **Sau khi vá:** lead mới **bắt đầu ngay ở `sts00`**. Cùng lời gọi ấy trở thành
+  no-op ⇒ `status_updated = false` ⇒ ca ĐỎ với
+  `Lead phải được cập nhật trạng thái; terminal_guard_reason=null`.
+
+Nghĩa là test 4 đang canh một hành vi **chỉ tồn tại khi bug còn đó**. PR sửa B2 phải
+sửa luôn ca này (cho lead tiến sang một trạng thái KHÁC trạng thái ban đầu), và phải
+coi việc nó đỏ là **dấu hiệu bản vá có tác dụng**, không phải hồi quy.
+
 ### Phạm vi sửa (PR riêng)
 
-1. Đo production: `SELECT id, code, legacy_status, is_final FROM consultation_status
-   WHERE legacy_status = 'new' OR id = 'sts00';`
-2. Tuỳ kết quả: migration đặt `sts00.legacy_status='new'`, **hoặc** đổi
-   `get_initial_status` sang tra theo `code='NOT_CONTACTED'` (ổn định hơn
-   `legacy_status`, vốn là cột tương thích ngược).
-3. Nếu đổi hàm thì rà **cả 5** nơi gọi — luật *"vá một nhánh thì còn bốn"*.
-4. Ca kiểm ngược: trên CSDL mới, `POST /api/leads/import` phải 2xx; gỡ bản vá ⇒ ĐỎ.
+1. Đo production trước: `SELECT id, code, legacy_status, is_final FROM
+   consultation_status WHERE legacy_status = 'new' OR id = 'sts00';`
+2. **Không** đụng dữ liệu. Sửa `get_initial_status` đi qua nguồn chuẩn — tra theo
+   `code='NOT_CONTACTED'`, hoặc dùng `map_status_to_legacy()` thay vì đọc cột thô.
+3. Rà **cả 5** nơi gọi (`collaborator_service.py:490`, `lead_service.py:1183/2784/4526`,
+   `status_helper.py:212`) — luật *"vá một nhánh thì còn bốn"*.
+4. Sửa `lead-workflow` test 4 theo mục trên.
+5. Ca kiểm ngược: trên CSDL mới, `POST /api/leads/import` phải 2xx; gỡ bản vá ⇒ ĐỎ.
 
 ---
 

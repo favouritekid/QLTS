@@ -110,12 +110,25 @@ export function safeBody(value: unknown, depth = 0): string {
   const shown = keys.slice(0, MAX_KEYS);
   const parts = shown.map((k) => {
     const lower = k.toLowerCase();
-    if (ALWAYS_MASK.has(lower)) return `${k}=${maskedScalar(obj[k])}`;
-    if (!SAFE_KEYS.has(lower)) return `${k}=${maskedScalar(obj[k])}`;
     const v = obj[k];
+    if (ALWAYS_MASK.has(lower)) return `${k}=${maskedScalar(v)}`;
+
+    // RANH GIỚI, đã ĐO chứ không giả định: mọi cột nhân thân của hệ này đều
+    // kiểu chuỗi — `lead.full_name/email/phone` là `Column(String(...))`
+    // (`app/models/lead.py:95-97`), `admission.citizen_id/full_name/email/
+    // phone/permanent_ward/permanent_street_address` là `Mapped[str]`
+    // (`app/models/admission.py:171-222`). Số và boolean ở đây là ID, số đếm,
+    // version, cờ — không nhận dạng được cá nhân, và ID thì log đã có sẵn
+    // trong URL. Vì vậy chỉ CHUỖI mới cần danh sách cho phép.
+    //
+    // Nới rộng hơn thế là sai: một chuỗi lạ có thể là họ tên, tên phường,
+    // tên trường — thứ không regex nào tách được khỏi từ thường.
+    if (typeof v === "boolean" || typeof v === "number") return `${k}=${v}`;
+
     if (v !== null && typeof v === "object" && depth < 2) {
       return `${k}=${safeBody(v, depth + 1)}`;
     }
+    if (!SAFE_KEYS.has(lower)) return `${k}=${maskedScalar(v)}`;
     return `${k}=${safeScalar(v)}`;
   });
   const more = keys.length > MAX_KEYS ? `, …+${keys.length - MAX_KEYS} khoá` : "";
