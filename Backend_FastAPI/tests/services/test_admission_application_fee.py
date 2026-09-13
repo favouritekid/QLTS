@@ -1408,11 +1408,19 @@ class TestApplicationFeePaidEvent:
         admin_user_in_db: dict,
         accountant_user_in_db: dict,
         seed_admission_statuses: dict,
+        clear_redis_keys,
     ):
         """
         Full E2E: seed rule into DB via sync_notification_rules, then run
         dispatch() for APPLICATION_FEE_PAID. Verify a real Notification row
         is created in the DB for the lead owner.
+
+        ``clear_redis_keys`` is NOT decoration — see the note on
+        ``test_actor_who_is_lead_owner_receives_no_self_notification``: the
+        fake Redis server is shared for the whole pytest session while
+        PostgreSQL is truncated with ``RESTART IDENTITY``, so user ids and
+        application ids repeat and the dispatcher's cooldown key repeats with
+        them.
 
         ACTOR ≠ LEAD OWNER on purpose — that is the production shape. The
         recipient config that ``sync_notification_rules`` writes comes from
@@ -1535,6 +1543,7 @@ class TestApplicationFeePaidEvent:
         accountant_user_in_db: dict,
         officer_peer_user_in_db: dict,
         seed_admission_statuses: dict,
+        clear_redis_keys,
     ):
         """actor_excluded: the lead owner who records the fee himself must
         NOT be mailed about his own action.
@@ -1547,15 +1556,22 @@ class TestApplicationFeePaidEvent:
         and control differ in exactly one thing — whether ``actor_id`` equals
         the lead owner.
 
-        Ordering and the second owner are both load-bearing:
-          * treatment runs FIRST. The dispatcher's cooldown key for a
-            ``dispatch()`` call without an explicit ``dedupe_key`` is
-            ``notif:cooldown:<event>:<uid>:<channel>:<step>`` — it carries no
-            application_id — so a control that ran first would put the owner
-            in cooldown and the treatment would come back empty for the WRONG
-            reason;
-          * the control uses a different owner, so the two halves cannot
-            interact through that per-user cooldown at all.
+        ``clear_redis_keys`` IS LOAD-BEARING, not hygiene theatre. Measured,
+        not guessed: without it this case passed even after the actor_excluded
+        wrapper was removed from ``NOTIFICATION_SEED_DEFAULTS`` — a false
+        green. Why: ``dispatch()`` falls back to the catalog dedup template, so
+        the cooldown key is
+        ``notif:cooldown:application_fee_paid:<uid>:browser:app:<application_id>:fee_paid:step1``;
+        the fake Redis server lives for the WHOLE pytest session
+        (``clear_redis_keys`` is ``autouse=False``) while PostgreSQL is
+        truncated with ``RESTART IDENTITY`` between tests. So the previous case
+        in this class — same admin id, same first application id — had already
+        written that exact key, and the treatment below came back empty because
+        of COOLDOWN rather than because of actor exclusion. Drop the fixture and
+        the reverse check stops catching the mutation.
+
+        The control also uses a DIFFERENT owner, so the two halves of this case
+        cannot mask each other through the per-user cooldown either.
         """
         from unittest.mock import AsyncMock, MagicMock, patch
         from sqlalchemy import select
