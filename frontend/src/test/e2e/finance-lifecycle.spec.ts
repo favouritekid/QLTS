@@ -16,6 +16,7 @@
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
 import * as OTPAuth from "otpauth";
+import { createAdmissionProfile, expectOk, resolveAdmissionContext, safeBody, summarizeApiError, type AdmissionPathContext } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -43,6 +44,12 @@ let officerCookies: Cookie[] = [];
 // Discovery
 let offeringId: number;
 let admissionMethodId: number;
+/**
+ * (offering, path, round, năm, phương thức) lấy từ MỘT AdmissionPath —
+ * xem ghi chú trong `helpers/e2e-fixtures.ts`. `AdmissionProfileCreate`
+ * đòi đủ bốn trường; payload hai trường của bản cũ trả 422.
+ */
+let pathContext: AdmissionPathContext;
 let initialStatusId: string;
 
 // Test 1: Happy path
@@ -144,7 +151,7 @@ async function loginViaAPI(
       continue;
     }
     if (!loginResp.ok()) {
-      const body = (await loginResp.text()).slice(0, 300);
+      const body = summarizeApiError(loginResp.status(), await loginResp.text());
       throw new Error(`Login failed for ${username}: ${loginResp.status()} ${body}`);
     }
 
@@ -229,13 +236,17 @@ async function setupApprovedProfile(
   );
   expect(consultResp.ok() || consultResp.status() === 201).toBeTruthy();
 
-  // Officer: create admission profile
-  const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
-    headers,
-    data: { lead_id: leadId, admission_method_id: opts.admissionMethodId },
-  });
-  expect(profileResp.ok() || profileResp.status() === 201).toBeTruthy();
-  const profile = await profileResp.json();
+  // Officer: create admission profile — payload ĐỦ BỐN TRƯỜNG từ nguồn chuẩn.
+  const profile = (await createAdmissionProfile(
+    page.request,
+    leadId,
+    pathContext,
+    headers
+  )) as {
+    id: number;
+    version: number;
+    applied_rules?: { allowed_subject_codes?: string[] };
+  };
   const profileId = profile.id;
 
   // Officer: fill personal info + scores
@@ -255,6 +266,14 @@ async function setupApprovedProfile(
       nationality: "Viet Nam",
       ethnicity: "Kinh",
       place_of_birth: "Ha Noi",
+      // Bắt buộc tại submit — `priority_service.validate_eligibility`
+      // đọc thẳng `profile.cultural_education_level`, KHÔNG suy từ
+      // `academic_history.graduation_type`.
+      cultural_education_level: "graduated_thpt",
+      vocational_qualification: "none",
+      permanent_province: "TP Ho Chi Minh",
+      permanent_district: "Quan 1",
+      permanent_ward: "Phuong Ben Nghe",
       family_info: [
         { relationship: "Cha", full_name: "Nguyen Van X", phone: "0912345670", occupation: "Ky su", is_primary_guardian: true },
         { relationship: "Me", full_name: "Le Thi Y", phone: "0912345671", occupation: "Bac si", is_primary_guardian: false },
@@ -274,7 +293,7 @@ async function setupApprovedProfile(
       d.is_mandatory && d.status === "missing"
   );
   for (const doc of missingDocs) {
-    await page.request.post(
+    const upResp = await page.request.post(
       `${API_URL}/api/admissions/${profileId}/documents/${doc.code}/upload`,
       {
         headers,
@@ -288,7 +307,50 @@ async function setupApprovedProfile(
         },
       }
     );
+    await expectOk(upResp, `officer tải lên tài liệu ${doc.code}`, [200, 201]);
   }
+
+  // Admin: XÁC MINH tài liệu.
+  // Path ở chế độ nghiêm ngặt (`allow_unverified_submission=false`) —
+  // bỏ bước này thì `/submit` trả 200 mà `status` vẫn `"draft"` kèm
+  // "Tài liệu … chưa được xác minh". PATCH, không phải POST
+  // (`app/routers/admissions.py:1187`).
+  const verifyHeaders = await restoreCookies(page, adminCookies);
+  const afterUpload = await (
+    await page.request.get(`${API_URL}/api/admissions/${profileId}`)
+  ).json();
+  for (const doc of (afterUpload.documents_checklist || []).filter(
+    (d: { is_mandatory: boolean; status: string }) =>
+      d.is_mandatory && (d.status === "uploaded" || d.status === "paper_submitted")
+  )) {
+    const vResp = await page.request.patch(
+      `${API_URL}/api/admissions/${profileId}/documents/${doc.code}/verify-format`,
+      { headers: verifyHeaders, data: { format: "photo" } }
+    );
+    await expectOk(vResp, `admin xác minh tài liệu ${doc.code}`, [200]);
+  }
+
+  // Admin: ấn định KV thủ công — đường hợp lệ mà chính thông báo lỗi của
+  // cổng submit chỉ ra, khi engine không tự giải được khu vực ưu tiên.
+  const beforeKv = await (
+    await page.request.get(`${API_URL}/api/admissions/${profileId}`)
+  ).json();
+  const kvResp = await page.request.post(
+    `${API_URL}/api/v2/admissions/${profileId}/override-priority-kv`,
+    {
+      headers: verifyHeaders,
+      data: {
+        version: beforeKv.version,
+        kv_resolved: "KV3",
+        reason:
+          "E2E nightly: danh mục trường/xã trống trên CSDL kiểm thử nên engine " +
+          "không tự giải được khu vực ưu tiên.",
+      },
+    }
+  );
+  await expectOk(kvResp, `admin ấn định KV thủ công cho hồ sơ #${profileId}`, [200]);
+
+  headers = await restoreCookies(page, officerCookies);
 
   // Officer: submit
   const submitResp = await page.request.post(
@@ -297,7 +359,7 @@ async function setupApprovedProfile(
   );
   const submitBody = await submitResp.json();
   if (submitBody.status !== "submitted") {
-    console.log(`Submit errors: ${JSON.stringify(submitBody.validation_errors || submitBody).slice(0, 500)}`);
+    console.log(`Submit errors: ${safeBody(submitBody.validation_errors || submitBody)}`);
   }
   expect(submitBody.status).toBe("submitted");
 
@@ -344,22 +406,16 @@ test.describe("Finance Lifecycle", () => {
       expect(pipelineResp.ok()).toBeTruthy();
       initialStatusId = (await pipelineResp.json()).statuses[0].id;
 
-      // Offerings
-      const offeringsResp = await page.request.get(
-        `${API_URL}/api/program-offerings?is_active=true&limit=1`
-      );
-      expect(offeringsResp.ok()).toBeTruthy();
-      offeringId = (await offeringsResp.json())[0].id;
+      // Offering + phương thức + đợt + năm — cùng MỘT AdmissionPath.
+      pathContext = await resolveAdmissionContext(page.request);
+      offeringId = pathContext.offeringId;
+      admissionMethodId = pathContext.admissionMethodId;
 
-      // Admission methods
-      const methodsResp = await page.request.get(
-        `${API_URL}/api/admission-config/methods?active_only=true`
+      console.log(
+        `Config: offering=${offeringId}, method=${admissionMethodId}, ` +
+          `round=${pathContext.admissionRoundId}(${pathContext.roundCode}), ` +
+          `year=${pathContext.academicYear}, status=${initialStatusId}`
       );
-      expect(methodsResp.ok()).toBeTruthy();
-      const methodsBody = await methodsResp.json();
-      admissionMethodId = (methodsBody.methods || methodsBody)[0].id;
-
-      console.log(`Config: offering=${offeringId}, method=${admissionMethodId}, status=${initialStatusId}`);
     });
 
     // --- Step 2: Officer login ---
@@ -397,7 +453,7 @@ test.describe("Finance Lifecycle", () => {
         },
       });
       if (!resp.ok() && resp.status() !== 201) {
-        console.log(`Fee calculate failed: ${resp.status()} ${(await resp.text()).slice(0, 500)}`);
+        console.log(`Fee calculate failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok() || resp.status() === 201).toBeTruthy();
       const body = await resp.json();
@@ -429,7 +485,7 @@ test.describe("Finance Lifecycle", () => {
         `${API_URL}/api/fees/by-profile/${approvedProfileId}`
       );
       if (!resp.ok()) {
-        console.log(`Fees by profile failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Fees by profile failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const fees = await resp.json();
@@ -443,7 +499,7 @@ test.describe("Finance Lifecycle", () => {
         `${API_URL}/api/fees/summary/${approvedProfileId}`
       );
       if (!resp.ok()) {
-        console.log(`Finance summary failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Finance summary failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
@@ -489,7 +545,7 @@ test.describe("Finance Lifecycle", () => {
         headers: adminHeaders,
       });
       if (!resp.ok()) {
-        console.log(`Payment methods failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Payment methods failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const methods = await resp.json();
@@ -514,7 +570,7 @@ test.describe("Finance Lifecycle", () => {
         },
       });
       if (!resp.ok() && resp.status() !== 201) {
-        console.log(`Record payment failed: ${resp.status()} ${(await resp.text()).slice(0, 500)}`);
+        console.log(`Record payment failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok() || resp.status() === 201).toBeTruthy();
       const body = await resp.json();
@@ -561,7 +617,7 @@ test.describe("Finance Lifecycle", () => {
       const resp = await page.request.get(`${API_URL}/api/finance/dashboard`);
       if (resp.ok()) {
         const body = await resp.json();
-        console.log(`Dashboard: ${JSON.stringify(body).slice(0, 200)}`);
+        console.log(`Dashboard: ${safeBody(body)}`);
       } else {
         // Dashboard endpoint may not exist, that's OK
         console.log(`Dashboard endpoint: ${resp.status()} (may not exist)`);
@@ -599,7 +655,7 @@ test.describe("Finance Lifecycle", () => {
       );
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
-      console.log(`Fee2 recalculated: ${JSON.stringify(body).slice(0, 200)}`);
+      console.log(`Fee2 recalculated: ${safeBody(body)}`);
     });
 
     // --- Step 3: Waive partial amount ---
@@ -616,7 +672,7 @@ test.describe("Finance Lifecycle", () => {
       );
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
-      console.log(`Fee2 waived: ${JSON.stringify(body).slice(0, 200)}`);
+      console.log(`Fee2 waived: ${safeBody(body)}`);
     });
 
     // --- Step 4: Waive excessive amount (should fail) ---
@@ -668,7 +724,7 @@ test.describe("Finance Lifecycle", () => {
       const resp = await page.request.get(`${API_URL}/api/installment-plans`);
       if (resp.ok()) {
         const plans = await resp.json();
-        console.log(`Installment plans: ${JSON.stringify(plans).slice(0, 200)}`);
+        console.log(`Installment plans: ${safeBody(plans)}`);
       } else {
         // Endpoint may not exist
         console.log(`Installment plans endpoint: ${resp.status()}`);
@@ -765,7 +821,7 @@ test.describe("Finance Lifecycle", () => {
         },
       });
       if (!resp.ok() && resp.status() !== 201) {
-        console.log(`Record payment3 failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Record payment3 failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok() || resp.status() === 201).toBeTruthy();
       const body = await resp.json();

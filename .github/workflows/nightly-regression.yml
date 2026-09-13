@@ -480,6 +480,22 @@ jobs:
         run: python3 .github/scripts/nightly_mfa_gate.py preflight
 
       # --- Regression Suites ---
+      #
+      # ⚠️ MỖI SUITE PHẢI CÓ `--output` RIÊNG. `outputDir` mặc định của Playwright
+      # là `frontend/test-results`, và Playwright DỌN SẠCH thư mục ấy ở đầu mỗi
+      # lượt chạy. Sáu bước dưới đây là sáu tiến trình `npx playwright test` nối
+      # tiếp nhau trên cùng một thư mục, nên bước sau xoá hiện vật của bước
+      # trước; bước `Upload Playwright report` chạy MỘT LẦN ở cuối nên chỉ còn
+      # hiện vật của suite chạy SAU CÙNG.
+      #
+      # Đo thật trên run 34678745325: cả sáu suite đều đỏ, artifact
+      # `playwright-report` về đúng 10 tệp và TẤT CẢ thuộc `admission-ui-smoke`
+      # (suite thứ sáu). Năm suite kia mất sạch trace/video/screenshot — đó là
+      # lý do không ai chẩn đoán được chúng, và là lý do bản vá này tồn tại.
+      #
+      # Tên thư mục có tiền tố `suite-` là CỐ Ý: `smoke-all-pages.spec.ts` tự
+      # ghi ảnh chụp vào đường dẫn cứng `test-results/smoke/`, nên một
+      # `--output=test-results/smoke` sẽ khiến Playwright dọn đúng thư mục ấy.
       - name: E2E — Lead workflow
         id: e2e_lead
         if: always() && steps.plan.outputs.e2e_lead == 'true'
@@ -487,7 +503,7 @@ jobs:
         env:
           E2E_API_URL: http://localhost:8000
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-        run: npx playwright test src/test/e2e/lead-workflow.spec.ts --project=e2e-workflow --reporter=list --workers=1
+        run: npx playwright test src/test/e2e/lead-workflow.spec.ts --project=e2e-workflow --reporter=list --workers=1 --output=test-results/suite-lead
 
       - name: E2E — Admission lifecycle
         id: e2e_admission
@@ -496,7 +512,7 @@ jobs:
         env:
           E2E_API_URL: http://localhost:8000
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-        run: npx playwright test src/test/e2e/admission-lifecycle.spec.ts --project=e2e-workflow --reporter=list --workers=1
+        run: npx playwright test src/test/e2e/admission-lifecycle.spec.ts --project=e2e-workflow --reporter=list --workers=1 --output=test-results/suite-admission
 
       - name: E2E — Finance lifecycle
         id: e2e_finance
@@ -505,7 +521,7 @@ jobs:
         env:
           E2E_API_URL: http://localhost:8000
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-        run: npx playwright test src/test/e2e/finance-lifecycle.spec.ts --project=e2e-workflow --reporter=list --workers=1
+        run: npx playwright test src/test/e2e/finance-lifecycle.spec.ts --project=e2e-workflow --reporter=list --workers=1 --output=test-results/suite-finance
 
       - name: E2E — Bugfix regression
         id: e2e_bugfix
@@ -514,7 +530,7 @@ jobs:
         env:
           E2E_API_URL: http://localhost:8000
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-        run: npx playwright test src/test/e2e/bugfix-regression.spec.ts --project=e2e-workflow --reporter=list --workers=1
+        run: npx playwright test src/test/e2e/bugfix-regression.spec.ts --project=e2e-workflow --reporter=list --workers=1 --output=test-results/suite-bugfix
 
       - name: E2E — Unified workflow
         id: e2e_unified
@@ -523,15 +539,26 @@ jobs:
         env:
           E2E_API_URL: http://localhost:8000
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-        run: npx playwright test src/test/e2e/lead-to-admission-workflow.spec.ts --project=e2e-workflow --reporter=list --workers=1
+        run: npx playwright test src/test/e2e/lead-to-admission-workflow.spec.ts --project=e2e-workflow --reporter=list --workers=1 --output=test-results/suite-unified
 
       - name: E2E — Smoke tests
         id: e2e_smoke
         if: always() && steps.plan.outputs.e2e_smoke == 'true'
         working-directory: frontend
         env:
+          # `E2E_API_URL` KHÔNG được khai ở bước này trước bản vá, nên
+          # `smoke-all-pages.spec.ts:36` rơi về literal `http://localhost:8000`.
+          # Giá trị trùng nhau nên không ai thấy, nhưng nó là một mặc định ngầm:
+          # đổi cổng backend ở `docker-compose.ci.yml` là suite này gọi nhầm
+          # địa chỉ mà năm bước kia thì không. Khai tường minh như năm bước trên.
+          #
+          # Giá trị dưới đây bị khoá vào cổng host của `backend` trong
+          # `docker-compose.ci.yml` bởi
+          # `test_moi_E2E_API_URL_trong_nightly_tro_dung_cong_backend_CI`
+          # (Tier 5). Đổi một đầu mà quên đầu kia là ĐỎ, không phải im lặng.
+          E2E_API_URL: http://localhost:8000
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-        run: npx playwright test src/test/e2e/smoke-all-pages.spec.ts src/test/e2e/admission-ui-smoke.spec.ts --project=chromium --reporter=list
+        run: npx playwright test src/test/e2e/smoke-all-pages.spec.ts src/test/e2e/admission-ui-smoke.spec.ts --project=chromium --reporter=list --output=test-results/suite-smoke
 
       # CỔNG NGHIỆM THU. Đặt TRƯỚC bước upload có chủ ý: `Upload Playwright
       # report` gác bằng `if: failure()`, mà `failure()` chỉ đúng nếu đã có

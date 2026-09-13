@@ -15,6 +15,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import * as OTPAuth from "otpauth";
+import { summarizeApiError } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -156,14 +157,38 @@ async function extractAndAddCookies(
   return csrf;
 }
 
-function generateTOTP(secret: string): string {
+/**
+ * Sinh mã TOTP và TRẢ VỀ CẢ COUNTER đã dùng.
+ *
+ * Counter là phần chịu lực của chẩn đoán, không phải trang trí. Backend
+ * (`app/services/mfa_service.py:609-641`) ghi counter vừa khớp vào Redis
+ * (`totp_used:{user_id}`) và TỪ CHỐI mọi lần dùng lại — đã đo trên stack
+ * cô lập `nfrc` ngày 13-09-2026:
+ *
+ *   login#1 counter=59642152 → HTTP 200
+ *   login#2 counter=59642152 → HTTP 401, backend log
+ *     `action=mfa.replay_rejected matched_counter=59642152`
+ *
+ * Đó chính là bốn dòng "MFA failed for admin (401)" trong nightly run
+ * 34678745325: bước preflight và các suite E2E cùng dùng MỘT tài khoản
+ * `admin`, mỗi tiến trình tự tính `⌊t/30⌋`, nên hai lượt rơi vào cùng cửa sổ
+ * 30 giây là lượt sau bị coi là replay.
+ *
+ * ⚠️ KHÔNG chữa bằng cách ngủ thêm hay retry thêm. Lời giải đúng là cái mà
+ * `.github/scripts/nightly_mfa_gate.py` đã có — một tệp counter CHUNG
+ * (`QLTS_TOTP_COUNTER_FILE`) để counter đơn điệu nghiêm ngặt XUYÊN tiến trình —
+ * hoặc tách tài khoản/principal cho từng suite. Cả hai đều vượt phạm vi tệp
+ * này (workflow không truyền biến ấy vào các bước Playwright); ở đây chỉ làm
+ * cho lần sau chẩn đoán được trong một lượt đọc log.
+ */
+function generateTOTP(secret: string): { code: string; counter: number } {
   const totp = new OTPAuth.TOTP({
     secret: OTPAuth.Secret.fromBase32(secret),
     digits: 6,
     period: 30,
     algorithm: "SHA1",
   });
-  return totp.generate();
+  return { code: totp.generate(), counter: Math.floor(Date.now() / 1000 / 30) };
 }
 
 async function loginViaAPI(
@@ -178,7 +203,7 @@ async function loginViaAPI(
     form: { username, password },
   });
   if (!loginResp.ok()) {
-    const body = (await loginResp.text()).slice(0, 300);
+    const body = summarizeApiError(loginResp.status(), await loginResp.text());
     throw new Error(`Login failed for ${username}: ${loginResp.status()} ${body}`);
   }
 
@@ -187,9 +212,8 @@ async function loginViaAPI(
 
   if (loginBody.mfa_required) {
     // Prefer TOTP secret (reusable), fallback to backup code (single-use)
-    const mfaCode = opts?.totpSecret
-      ? generateTOTP(opts.totpSecret)
-      : opts?.backupCode;
+    const totp = opts?.totpSecret ? generateTOTP(opts.totpSecret) : null;
+    const mfaCode = totp ? totp.code : opts?.backupCode;
 
     if (!mfaCode) {
       throw new Error(
@@ -202,7 +226,16 @@ async function loginViaAPI(
       { data: { mfa_token: loginBody.mfa_token, code: mfaCode } }
     );
     if (!mfaResp.ok()) {
-      throw new Error(`MFA failed for ${username}: ${mfaResp.status()}`);
+      // Bản cũ chỉ in status. Một 401 trần không phân biệt được ba nguyên nhân
+      // khác hẳn nhau — mã sai, counter đã bị TIÊU bởi tiến trình khác
+      // (`mfa.replay_rejected`), hay phiên MFA hết hạn — nên mỗi lần gặp lại
+      // là một vòng chẩn đoán mới. `error_code` + counter tách ba ca đó ra.
+      // KHÔNG in mã TOTP: nó còn hiệu lực tới hết cửa sổ 30 giây.
+      const detail = summarizeApiError(mfaResp.status(), await mfaResp.text());
+      throw new Error(
+        `MFA failed for ${username}: HTTP ${mfaResp.status()} ` +
+          `${totp ? `totp_counter=${totp.counter}` : "auth=backup_code"} — ${detail}`
+      );
     }
     authResp = mfaResp;
   }
