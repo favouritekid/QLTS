@@ -125,6 +125,18 @@ async def _get_raw_transitions(
         # Đây là đường ĐỌC (liệt kê lựa chọn), nên thiếu hàng ⇒ trả rỗng + log
         # error, KHÔNG ném 503: mọi đường GHI đã fail-closed ở
         # ``get_initial_status``.
+        #
+        # ``check_initial_status_row`` là CÙNG phép kiểm mà ``get_initial_status``
+        # dùng, gọi chứ không chép lại. Chỉ khớp ``code`` là chưa đủ: cái mà
+        # danh sách này nuôi là ĐƯỜNG GHI ``PATCH /api/leads/{id}/status``
+        # (``deps.validate_status_transition`` -> ``is_transition_allowed`` ->
+        # chính hàm này), và router ấy gọi thẳng ``StatusHelper.sync_lead_status``
+        # trên hàng trả về — KHÔNG đi qua ``get_initial_status``. Nên nếu hàng
+        # mang mã chuẩn bị cấu hình sai (``stage_id=NULL`` / ``is_final`` /
+        # ``is_universal``) thì một lead đang ``consultation_status_id IS NULL``
+        # vẫn bị đẩy vào đúng hàng đó và nhận ``pipeline_stage_id = NULL`` —
+        # ĐÚNG thứ hỏng mà fail-closed ở ``get_initial_status`` đóng lại, chỉ
+        # khác lối vào. Hàng không dùng được ⇒ Rule #11 không đề nghị gì cả.
         result = await db.execute(
             select(models.ConsultationStatus)
             .where(models.ConsultationStatus.code == INITIAL_CONSULTATION_STATUS_CODE)
@@ -132,12 +144,20 @@ async def _get_raw_transitions(
         )
         status = result.scalar_one_or_none()
 
-        if status:
-            log.info("New lead - returning NOT_CONTACTED only", status_id=status.id)
-            return [status]
-        else:
-            log.error("NOT_CONTACTED status not found in database")
+        from app.services.status_helper import StatusHelper
+
+        problems = StatusHelper.check_initial_status_row(status)
+        if problems:
+            log.error(
+                "NOT_CONTACTED status not usable for Rule #11",
+                expected_code=INITIAL_CONSULTATION_STATUS_CODE,
+                found_status_id=status.id if status else None,
+                problems=problems,
+            )
             return []
+
+        log.info("New lead - returning NOT_CONTACTED only", status_id=status.id)
+        return [status]
 
     # Query transitions for existing status
     result = await db.execute(
