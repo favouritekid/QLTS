@@ -27,6 +27,7 @@ import structlog
 
 from app import models
 from app.core.constants import UserRole
+from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
 from app.models.pipeline import TriggerTypeEnum, SelectableModeEnum, StatusTypeEnum
 
 log = structlog.get_logger(__name__)
@@ -114,9 +115,19 @@ async def _get_raw_transitions(
     """
     if not from_status_id:
         # ✅ RULE #11: NEW LEAD → ONLY sts00 (NOT_CONTACTED)
+        #
+        # Mã lấy từ ``INITIAL_CONSULTATION_STATUS_CODE`` — CÙNG hằng mà
+        # ``StatusHelper.get_initial_status`` dùng để ghi trạng thái khởi tạo.
+        # Hai nơi này phải chỉ vào đúng một hàng: nếu đường GHI đặt lead vào X
+        # còn đường ĐỌC gợi ý danh sách kế tiếp của Y thì officer nhìn thấy một
+        # bộ lựa chọn không khớp với trạng thái thật của lead.
+        #
+        # Đây là đường ĐỌC (liệt kê lựa chọn), nên thiếu hàng ⇒ trả rỗng + log
+        # error, KHÔNG ném 503: mọi đường GHI đã fail-closed ở
+        # ``get_initial_status``.
         result = await db.execute(
             select(models.ConsultationStatus)
-            .where(models.ConsultationStatus.code == "NOT_CONTACTED")
+            .where(models.ConsultationStatus.code == INITIAL_CONSULTATION_STATUS_CODE)
             .options(selectinload(models.ConsultationStatus.stage))
         )
         status = result.scalar_one_or_none()

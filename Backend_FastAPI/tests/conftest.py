@@ -585,6 +585,7 @@ async def seed_lead_dependencies(setup_test_database):
         INITIAL_LEAD_STATUS_ID,
         LOST_LEAD_STATUS_ID,
     )
+    from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
     unit_data = TestOrgData.UNIT_1
     major_data = TestOrgData.MAJOR_1
     initial_status_id = INITIAL_LEAD_STATUS_ID
@@ -592,6 +593,18 @@ async def seed_lead_dependencies(setup_test_database):
     stage_data = {"id": stage_a_id, "name": "Initial Stage", "order": 10}
     initial_status_data = {
         "id": initial_status_id,
+        # ĐỊNH DANH CHUẨN của trạng thái khởi tạo. Thiếu nó,
+        # ``StatusHelper.get_initial_status`` fail-closed (503) và MỌI test tạo
+        # lead đỏ. Trước đây fixture này để cả ``code`` lẫn ``legacy_status``
+        # trống, và đường tạo lead vẫn "xanh" chỉ vì nó có nhánh fallback ghi
+        # ``consultation_status_id=NULL`` — tức bộ test đang khẳng định đúng cái
+        # hỏng hóc mà bản vá đóng lại.
+        #
+        # Mã đặt ở ĐÂY chứ không ở hàng ``sts00`` phía dưới: hằng
+        # ``uq_consultation_status_code UNIQUE (code)`` chỉ cho MỘT hàng mang mã
+        # này, và ``initial_status_id`` là thứ fixture trả về cho test khẳng
+        # định. Đặt nhầm chỗ thì test tạo lead sẽ thấy một id khác id nó được cho.
+        "code": INITIAL_CONSULTATION_STATUS_CODE,
         "name": "New Lead (Default)",
         "color_code": "#0000FF",
         "stage_id": stage_a_id,

@@ -29,6 +29,8 @@ from ..core.status_mapping import (
     sync_lead_status_from_consultation,
     is_consultation_terminal_status,
     is_lead_consultation_terminal,
+    create_status_info_from_model,
+    derive_lead_status,
 )
 from ..core.constants import UserRole, SYSTEM_CONSULTATION_METHOD
 from ..utils.tz import ensure_aware
@@ -1174,29 +1176,31 @@ async def create_lead(
             unit_id=create_data.get("unit_id"),
         )
 
+        # Lấy trạng thái ban đầu từ DB (database-driven, không hardcode ID).
+        #
+        # Đặt TRƯỚC khi dựng ``models.Lead`` — và trước mọi ``db.add`` — để lối
+        # 503 không thể để lại một Lead nửa vời. Một ``SELECT`` sau ``db.add``
+        # sẽ kích hoạt autoflush và INSERT lead vào transaction trước khi lỗi
+        # kịp ném; thứ tự này làm chuyện đó thành bất khả thi, không phải chỉ
+        # "được savepoint dọn hộ".
+        #
+        # Thiếu cấu hình ⇒ ném ``InitialLeadStatusNotConfigured`` (503) từ
+        # helper. Nhánh fallback cũ (log.warning rồi ghi
+        # ``consultation_status_id=NULL`` + ``pipeline_stage_id=NULL`` và vẫn
+        # trả 201) đã bị gỡ: nó tạo ra lead vô hình với mọi phễu và mọi bộ lọc
+        # theo stage, mà không ai nhìn thấy lỗi.
+        initial_status = await StatusHelper.get_initial_status(db)
+
         # Set the calculated score + derived cache fields
         create_data["lead_score"] = calculated_score
         create_data["is_hot_lead"] = (calculated_score or 0) >= 70
         db_lead = models.Lead(**create_data)
 
-        # Lấy trạng thái ban đầu từ DB (database-driven, không hardcode ID)
-        initial_status = await StatusHelper.get_initial_status(db)
-
         # Trạng thái "trước khi tạo"
         old_state = _get_current_lead_state(models.Lead())  # Trạng thái rỗng
 
         # Gán trạng thái ban đầu cho Lead mới
-        if initial_status:
-            await StatusHelper.sync_lead_status(db_lead, initial_status)
-        else:
-            # Ghi log cảnh báo nếu không tìm thấy status mặc định
-            log.warning(
-                "Initial consultation status not found during lead creation."
-            )
-            # Gán giá trị mặc định an toàn
-            db_lead.status = "new"
-            db_lead.consultation_status_id = None
-            db_lead.pipeline_stage_id = None
+        await StatusHelper.sync_lead_status(db_lead, initial_status)
 
         # Set initial assignment status
         StatusHelper.set_assignment_status(db_lead, AssignmentStatus.PENDING)
@@ -2781,8 +2785,15 @@ async def _resolve_revert_target(
         return None, None  # toàn universal → giữ nguyên (KHÔNG động state)
 
     # Rỗng → initial.
+    #
+    # ``initial`` không còn có thể là None (helper fail-closed bằng 503), nên
+    # nhánh ``if initial else None`` cũ đã được gỡ. Nhánh đó nguy hiểm hơn vẻ
+    # ngoài: nó gộp "thiếu cấu hình máy chủ" vào cùng một giá trị trả về với
+    # "chuỗi còn lại toàn universal → giữ nguyên pipeline" (hai ``return None,
+    # None`` ở trên), tức lead lặng lẽ GIỮ trạng thái tiến xa trong khi người
+    # dùng vừa xoá cuộc tư vấn cuối cùng và tưởng nó đã lùi về đầu.
     initial = await StatusHelper.get_initial_status(db)
-    return initial, (initial.stage_id if initial else None)
+    return initial, initial.stage_id
 
 
 def _apply_revert_target(
@@ -4522,19 +4533,25 @@ async def import_leads_from_file_content(
     errors: List[schemas.LeadImportError] = []
     processed_row_count = 0
 
-    # Get default initial status (database-driven)
+    # Get default initial status (database-driven).
+    #
+    # ``ValueError`` cũ ở đây bị router bắt (routers/leads.py:1727) và đổi thành
+    # **400 kèm chuỗi "System configuration error"** — một câu tự mâu thuẫn:
+    # 400 bảo người nhập đi sửa tệp, trong khi tệp không có lỗi gì. Nay helper
+    # ném ``InitialLeadStatusNotConfigured`` (503), KHÔNG phải ``ValueError``,
+    # nên nó đi xuyên qua ``except ValueError`` của router tới handler chung.
     initial_status_obj = await StatusHelper.get_initial_status(db)
-    if not initial_status_obj:
-        log.error(
-            "FATAL: Initial consultation status not found in DB. Cannot import leads."
-        )
-        raise ValueError(
-            "System configuration error: Initial lead status not found."
-        )
 
     initial_status_id = initial_status_obj.id
     initial_stage_id = initial_status_obj.stage_id
-    initial_legacy_status = initial_status_obj.legacy_status or "new"
+    # Cùng MỘT phép tính với ``sync_lead_status`` của đường tạo-một-lead.
+    # ``.legacy_status or "new"`` cũ là nguồn chuẩn THỨ HAI cho đúng câu hỏi
+    # "lead.status của trạng thái này là gì": nó bỏ qua hẳn bảng suy diễn của
+    # ``derive_lead_status``, nên hôm nào hàng khởi tạo đổi stage thì lead nhập
+    # theo lô và lead tạo tay mang hai giá trị ``status`` khác nhau.
+    initial_legacy_status = derive_lead_status(
+        create_status_info_from_model(initial_status_obj)
+    )
 
     # ✅ REFACTORED: Use LeadRepository for batch email check (unit-scoped)
     repo = LeadRepository(db)

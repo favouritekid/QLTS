@@ -425,6 +425,39 @@ class ServiceUnavailableError(BaseAppException):
     error_code = "SERVICE_UNAVAILABLE"
 
 
+class InitialLeadStatusNotConfigured(ServiceUnavailableError):
+    """Không tìm được hàng ``consultation_status`` khởi tạo hợp lệ (HTTP 503).
+
+    Cùng hình dạng với ca website-intake thiếu API key / thiếu đơn vị mặc định:
+    **dữ liệu tham chiếu của máy chủ thiếu**, không phải người dùng gửi sai. Vì
+    thế nó là ``ServiceUnavailableError`` chứ không phải:
+
+    - **400/``ValidationError``** — nói "tệp của bạn sai", và người nhập sẽ đi
+      sửa tệp mãi mãi. Đường ``POST /api/leads/import`` trước bản vá này trả
+      đúng 400 kèm chuỗi "System configuration error", tức một câu tự mâu thuẫn
+      với chính mã trạng thái nó mang.
+    - **409/``ConflictError``** — 409 là "xung đột với trạng thái hiện tại của
+      một tài nguyên"; ở đây không có tài nguyên nào để xung đột.
+    - **500** — 500 là "đã xảy ra chuyện ngoài dự kiến"; ca này *đã được lường
+      trước* và có hành động sửa rõ ràng (seed lại hàng trạng thái).
+
+    Mã lỗi riêng (không dùng chung ``SERVICE_UNAVAILABLE``) để giao diện và
+    người trực phân biệt được "thiếu hàng trạng thái khởi tạo" với mọi ca 503
+    khác mà không phải dò chuỗi tiếng Việt trong ``detail`` — cùng lý do
+    ``PaymentDuplicateSuspected`` và ``AccountingOperationLocked`` có mã riêng.
+
+    Chi tiết hàng nào sai ở lại trong ``context`` (log của người vận hành);
+    ``public_payload`` để RỖNG vì tên mã trạng thái nội bộ không phải thứ cần
+    đi ra tới trình duyệt.
+    """
+
+    detail = (
+        "Hệ thống chưa có trạng thái khởi tạo hợp lệ cho lead mới. "
+        "Liên hệ quản trị để seed lại bảng trạng thái tư vấn."
+    )
+    error_code = "INITIAL_LEAD_STATUS_NOT_CONFIGURED"
+
+
 # ============================================================================
 # SERVICE LAYER EXCEPTIONS (500)
 # ============================================================================
@@ -595,4 +628,7 @@ EXCEPTION_HTTP_STATUS_MAP = {
     # 503 Service Unavailable (Transient/Retryable)
     TransientError: 503,
     LockContentionError: 503,
+    # 503 Service Unavailable (thiếu cấu hình/dữ liệu tham chiếu — fail-closed)
+    ServiceUnavailableError: 503,
+    InitialLeadStatusNotConfigured: 503,
 }

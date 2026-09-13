@@ -25,6 +25,7 @@ from sqlalchemy import func, select
 
 from app import models
 from app.database import AsyncSessionLocal
+from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
 from tests._lead_status_test_ids import INITIAL_LEAD_STATUS_ID
 from tests.conftest import create_mock_lead_file
 from tests.fixtures.constants import LeadsURLs
@@ -36,12 +37,12 @@ pytestmark = pytest.mark.asyncio
 
 @pytest_asyncio.fixture(scope="function")
 async def _initial_status_legacy_marker(seed_lead_dependencies):
-    """Đóng dấu ``legacy_status="new"`` cho TTHV000 — đường nhập lead tra trạng
-    thái ban đầu qua ``StatusHelper.get_initial_status()``.
+    """Đóng dấu ĐỊNH DANH CHUẨN ``code='NOT_CONTACTED'`` cho TTHV000 — đường
+    nhập lead tra trạng thái ban đầu qua ``StatusHelper.get_initial_status()``,
+    và hàm đó tra theo ``code``, không theo ``legacy_status``.
 
     Bản sao có chủ ý của fixture cùng tên trong ``test_lead_import.py``: nó là
-    file-local ở đó (các suite khác phụ thuộc việc cột này giữ NULL), nên không
-    import chéo được.
+    file-local ở đó nên không import chéo được.
     """
     async with AsyncSessionLocal() as session:
         async with session.begin():
@@ -52,8 +53,13 @@ async def _initial_status_legacy_marker(seed_lead_dependencies):
                     )
                 )
             ).scalar_one()
-            row.legacy_status = "new"
+            # ĐỊNH DANH CHUẨN: ``StatusHelper.get_initial_status`` tra theo
+            # ``code``, không theo ``legacy_status`` (trên CSDL thật cột đó NULL
+            # ở 20/21 hàng, cố ý). ``conftest`` đã đóng dấu mã này lên chính hàng
+            # TTHV000; đóng lại ở đây là idempotent và giữ tệp tự đủ nghĩa.
+            row.code = INITIAL_CONSULTATION_STATUS_CODE
             row.is_final = False
+            row.is_universal = False
     return seed_lead_dependencies
 
 

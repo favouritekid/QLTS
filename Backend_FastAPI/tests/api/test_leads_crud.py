@@ -66,12 +66,17 @@ async def seed_lead_dependencies(setup_test_database):
     # 2. Định nghĩa Status sts00 (Initial - Chưa liên hệ)
     initial_status_data = {
         "id": initial_status_id,
+        # ĐỊNH DANH CHUẨN — ``StatusHelper.get_initial_status`` tra theo ``code``.
+        # ``legacy_status="new"`` bên dưới KHÔNG còn là tiêu chí chọn hàng (trên
+        # CSDL thật sau ``alembic upgrade head`` cột đó NULL ở 20/21 hàng, cố ý);
+        # giữ lại vì nó vẫn là override cho ``derive_lead_status``.
+        "code": "NOT_CONTACTED",
         "name": "Chưa liên hệ",
         "color_code": "#0000FF",
         "stage_id": stage_a_id,
         "phase": "consultation",
         "updates_pipeline": True,
-        "legacy_status": "new",  # Required by StatusHelper.get_initial_status()
+        "legacy_status": "new",
         "is_final": False,  # Required by StatusHelper.get_initial_status()
     }
 

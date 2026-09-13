@@ -29,20 +29,27 @@ log = logging.getLogger(__name__)
 
 
 # =============================================================================
-# FIXTURE: Initial status with legacy_status="new" for import tests
+# FIXTURE: Initial status mang code='NOT_CONTACTED' cho các ca nhập lead
 # =============================================================================
 
 @pytest_asyncio.fixture
 async def import_ready_deps(db: AsyncSession, seeded_dependencies: dict) -> dict:
-    """Ensure initial status has legacy_status='new' and is_final=False (required by import)."""
+    """Đóng dấu ĐỊNH DANH CHUẨN ``code='NOT_CONTACTED'`` cho hàng khởi tạo.
+
+    ``StatusHelper.get_initial_status`` tra theo ``code``, không theo
+    ``legacy_status`` — cột đó NULL ở 20/21 hàng trên CSDL thật (cố ý), nên
+    tiêu chí cũ khớp 0 hàng và đường nhập lead trả lỗi cấu hình.
+    """
     from tests._lead_status_test_ids import INITIAL_LEAD_STATUS_ID
+    from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
 
     await db.execute(
         text(
-            "UPDATE consultation_status SET legacy_status = 'new', is_final = false "
+            "UPDATE consultation_status "
+            "SET code = :code, is_final = false, is_universal = false "
             "WHERE id = :sid"
         ),
-        {"sid": INITIAL_LEAD_STATUS_ID},
+        {"sid": INITIAL_LEAD_STATUS_ID, "code": INITIAL_CONSULTATION_STATUS_CODE},
     )
     await db.flush()
     return seeded_dependencies

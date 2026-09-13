@@ -21,6 +21,8 @@ from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
+from ..core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
+from ..utils.exceptions import InitialLeadStatusNotConfigured
 
 log = structlog.get_logger(__name__)
 
@@ -43,39 +45,98 @@ class StatusHelper:
     """
 
     @staticmethod
-    async def get_initial_status(db: AsyncSession) -> Optional[models.ConsultationStatus]:
-        """
-        Get the initial consultation status for new leads.
+    def check_initial_status_row(
+        status: Optional[models.ConsultationStatus],
+    ) -> list[str]:
+        """Liệt kê những điều kiện hợp lệ mà hàng khởi tạo KHÔNG thoả.
 
-        Query: legacy_status = "new" AND is_final = false
-        Expected result: sts00 (Chưa liên hệ)
+        Tách riêng khỏi ``get_initial_status`` để phép kiểm là một hàm thuần —
+        test khẳng định được TỪNG điều kiện mà không cần CSDL, và không ai phải
+        chép lại danh sách này ở nơi thứ hai.
+
+        Trả về danh sách rỗng nghĩa là hàng dùng được.
+
+        Ba điều kiện, mỗi cái vì một hỏng hóc cụ thể (đọc ra từ chính mã gọi,
+        không phải từ tên cột):
+
+        * ``is_final is False`` — ``sync_lead_status`` sẽ đẩy lead thẳng vào
+          trạng thái CUỐI vòng đời ngay lúc tạo. Lead chết lúc sinh ra, và
+          ``check_terminal_status_guard`` sẽ chặn mọi consultation sau đó.
+        * ``is_universal is False`` — hàng universal là *activity* (``sts01``
+          NO_ANSWER, ``sts15``, ``sts19``): chúng cố tình đứng NGOÀI pipeline,
+          ``updates_pipeline=false``, và ``add_consultation`` (:2291) bỏ qua
+          hẳn nhánh cập nhật pipeline cho chúng. Lấy một hàng như thế làm điểm
+          xuất phát là dựng lead trên một trạng thái không bao giờ tiến được.
+        * ``stage_id is not None`` — ``StatusHelper.sync_lead_status`` gán
+          ``lead.pipeline_stage_id = consultation_status.stage_id``. NULL ở đây
+          tái tạo đúng thứ hỏng mà bản vá này đang đóng: lead có
+          ``pipeline_stage_id = NULL``, rơi khỏi mọi phễu và mọi bộ lọc theo
+          stage, mà HTTP vẫn 201.
+        """
+        if status is None:
+            return ["không tìm thấy hàng nào"]
+
+        problems: list[str] = []
+        if status.is_final:
+            problems.append("is_final=True (trạng thái cuối vòng đời)")
+        if status.is_universal:
+            problems.append("is_universal=True (activity, đứng ngoài pipeline)")
+        if not status.stage_id:
+            problems.append("stage_id=NULL (không thuộc pipeline stage nào)")
+        return problems
+
+    @staticmethod
+    async def get_initial_status(db: AsyncSession) -> models.ConsultationStatus:
+        """
+        Lấy trạng thái tư vấn KHỞI TẠO cho lead mới.
+
+        Truy vấn theo ĐỊNH DANH CHUẨN ``code = 'NOT_CONTACTED'``
+        (:data:`app.core.status_mapping.INITIAL_CONSULTATION_STATUS_CODE`), có
+        ``uq_consultation_status_code UNIQUE (code)`` canh ở tầng CSDL. Không
+        ``ORDER BY``, không ``LIMIT``: nếu ràng buộc UNIQUE có ngày biến mất thì
+        ``scalar_one_or_none`` ném ``MultipleResultsFound`` thay vì im lặng chọn
+        hàng đầu tiên — đúng thứ đã suýt xảy ra khi migration ``v7w8x9y0z1a2``
+        gán ``legacy_status='new'`` cho cả ``sts00`` lẫn ``sts01``.
 
         Returns:
-            ConsultationStatus or None if not found
+            ConsultationStatus — luôn là một hàng đã qua
+            :meth:`check_initial_status_row`.
+
+        Raises:
+            InitialLeadStatusNotConfigured: 503. Hàm này KHÔNG trả ``None`` nữa.
+                Mọi người gọi trước đây đều có nhánh fallback ghi lead với
+                ``consultation_status_id=NULL`` + ``pipeline_stage_id=NULL`` rồi
+                trả 201 — hỏng dữ liệu im lặng. Fail-closed ở ĐÂY, tầng
+                canonical, để không phải rải lại hàng rào ở năm nơi gọi.
         """
         result = await db.execute(
             select(models.ConsultationStatus)
-            .where(
-                and_(
-                    models.ConsultationStatus.legacy_status == "new",
-                    models.ConsultationStatus.is_final == False
-                )
-            )
-            .order_by(models.ConsultationStatus.id)
-            .limit(1)
+            .where(models.ConsultationStatus.code == INITIAL_CONSULTATION_STATUS_CODE)
         )
         status = result.scalar_one_or_none()
 
-        if status:
-            log.debug(
-                "Found initial status",
-                status_id=status.id,
-                status_name=status.name,
-                legacy_status=status.legacy_status
+        problems = StatusHelper.check_initial_status_row(status)
+        if problems:
+            log.error(
+                "Initial consultation status not usable",
+                expected_code=INITIAL_CONSULTATION_STATUS_CODE,
+                found_status_id=status.id if status else None,
+                problems=problems,
             )
-        else:
-            log.warning("No initial consultation status found in database")
+            raise InitialLeadStatusNotConfigured(
+                context={
+                    "expected_code": INITIAL_CONSULTATION_STATUS_CODE,
+                    "found_status_id": status.id if status else None,
+                    "problems": problems,
+                }
+            )
 
+        log.debug(
+            "Found initial status",
+            status_id=status.id,
+            status_name=status.name,
+            stage_id=status.stage_id,
+        )
         return status
 
     @staticmethod
@@ -201,16 +262,21 @@ class StatusHelper:
         )
 
     @staticmethod
-    async def get_initial_status_id(db: AsyncSession) -> Optional[str]:
+    async def get_initial_status_id(db: AsyncSession) -> str:
         """
         Get just the ID of the initial status.
         Useful when you only need the ID without loading the full object.
 
         Returns:
-            Status ID string or None
+            Status ID string.
+
+        Raises:
+            InitialLeadStatusNotConfigured: uỷ quyền hoàn toàn cho
+                :meth:`get_initial_status` — không có nhánh ``None`` riêng ở
+                đây, nếu không lại đẻ ra nguồn chuẩn thứ hai cho cùng phép hỏi.
         """
         status = await StatusHelper.get_initial_status(db)
-        return status.id if status else None
+        return status.id
 
     @staticmethod
     async def get_rejected_status_id(db: AsyncSession) -> Optional[str]:
