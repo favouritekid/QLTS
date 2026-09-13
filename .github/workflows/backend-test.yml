@@ -347,6 +347,7 @@ jobs:
           # `--timeout=60`, và workflow vẫn xanh vì lệnh vẫn chạy (chạy thiếu).
           - tier: Tier 1 — Phase 3 multi-NV core
             tests: >-
+              tests/api/test_b1_kv_override_preserve.py
               tests/unit/test_phase3_pr3a_choice_and_score.py
               tests/unit/test_phase3_pr3b_state_machine.py
               tests/unit/test_phase3_pr3c_sub1_scoring_gates.py
