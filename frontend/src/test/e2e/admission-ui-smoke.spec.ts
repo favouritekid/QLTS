@@ -48,8 +48,12 @@ import {
   type Page,
 } from "@playwright/test";
 import path from "path";
+import {
+  API_URL,
+  resolveAdmissionContext,
+  summarizeApiError,
+} from "./helpers/e2e-fixtures";
 
-const API_URL = process.env.E2E_API_URL || "http://localhost:8000";
 
 /**
  * storageState do project `chromium` khai trong `playwright.config.ts`
@@ -101,30 +105,10 @@ function generatePhone(): string {
  * lại, cắt 200 ký tự.
  */
 async function describeFailure(resp: APIResponse): Promise<string> {
-  const parts = [`HTTP ${resp.status()}`];
-  let body: unknown;
-  try {
-    body = await resp.json();
-  } catch {
-    return `${parts.join(" ")} (body không phải JSON)`;
-  }
-  if (body && typeof body === "object") {
-    const b = body as Record<string, unknown>;
-    if (typeof b.error_code === "string") parts.push(`error_code=${b.error_code}`);
-    if (Array.isArray(b.errors)) {
-      const fields = b.errors
-        .map((e) => {
-          const item = (e ?? {}) as Record<string, unknown>;
-          const loc = Array.isArray(item.loc) ? item.loc.join(".") : "?";
-          return `${loc}:${String(item.type ?? "?")}`;
-        })
-        .join(", ");
-      if (fields) parts.push(`fields=[${fields}]`);
-    } else if (typeof b.detail === "string") {
-      parts.push(`detail="${b.detail.slice(0, 200)}"`);
-    }
-  }
-  return parts.join(" ");
+  // Uỷ quyền cho `summarizeApiError` của helper dùng chung: một nguồn chuẩn
+  // duy nhất cho việc rút gọn lỗi, và cũng là một chỗ duy nhất phải giữ luật
+  // "không in `errors[].input`" (trường ấy echo nguyên văn payload).
+  return summarizeApiError(resp.status(), await resp.text());
 }
 
 type HttpMethod = "get" | "post" | "patch" | "delete";
@@ -176,124 +160,6 @@ function requireId(value: unknown, label: string): number {
 }
 
 /** Ngày hôm nay theo giờ VN — backend chốt round bằng `today_vn()` (UTC+7). */
-function todayVnIso(): string {
-  return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
-}
-
-// ---------------------------------------------------------------------------
-// Fixture tuyển sinh CANONICAL
-// ---------------------------------------------------------------------------
-
-interface AdmissionFixture {
-  offeringId: number;
-  pathId: number;
-  admissionMethodId: number;
-  admissionRoundId: number;
-  academicYear: number;
-}
-
-/**
- * Nguồn chuẩn cho bộ ba `(admission_round_id, academic_year,
- * admission_method_id)` mà `AdmissionProfileCreate` đòi.
- *
- * Đường đi: `GET /api/program-offerings` → với mỗi offering,
- * `GET /api/admission-config/paths/for-offering/{id}` → chọn path `active` có
- * round MỞ. Endpoint đã lọc `status == "active"` + `is_published` ở repository
- * (`get_active_paths_by_offering_id`), nhưng KHÔNG lọc round; bốn điều kiện
- * round dưới đây soi đúng bốn nhánh raise của `create_profile`
- * (`admission_service.py` — mismatch năm / inactive / archived / `assert_round_open`).
- *
- * Ưu tiên path có `academic_year` == năm dương lịch hiện tại, vì bộ lọc năm mặc
- * định của trang `/admissions` là `CURRENT_ADMISSIONS_YEAR = new Date().getFullYear()`
- * (`hooks/admissions/filterDefaults.ts`). Không có thì vẫn dùng path khác năm —
- * ca test điều hướng kèm `?year=<năm của fixture>` nên không phụ thuộc lịch.
- */
-async function resolveAdmissionFixture(api: APIRequestContext): Promise<AdmissionFixture> {
-  const offerings = asArray(
-    await apiJson(api, "list program offerings", "get", `${API_URL}/api/program-offerings?is_active=true&limit=100`),
-    "list program offerings",
-  );
-  if (offerings.length === 0) {
-    throw new Error("[SETUP FAIL] không có ProgramOffering nào đang hoạt động — seed chưa chạy?");
-  }
-
-  const today = todayVnIso();
-  const currentYear = new Date().getFullYear();
-  const rejected: Record<string, number> = {};
-  const reject = (reason: string) => {
-    rejected[reason] = (rejected[reason] ?? 0) + 1;
-  };
-
-  const usable: AdmissionFixture[] = [];
-  let pathsSeen = 0;
-
-  for (const offering of offerings) {
-    const offeringId = requireId(offering, "program offering");
-    const label = `list admission paths (offering ${offeringId})`;
-    const body = asRecord(
-      await apiJson(api, label, "get", `${API_URL}/api/admission-config/paths/for-offering/${offeringId}`),
-      label,
-    );
-    for (const raw of asArray(body.items ?? [], label)) {
-      pathsSeen += 1;
-      const p = asRecord(raw, label);
-      if (p.status !== "active") {
-        reject(`path.status=${String(p.status)}`);
-        continue;
-      }
-      if (p.round_is_active === false) {
-        reject("round inactive");
-        continue;
-      }
-      if (p.round_archived_at != null) {
-        reject("round archived");
-        continue;
-      }
-      if (typeof p.round_end_date === "string" && p.round_end_date < today) {
-        reject("round đã đóng (end_date < hôm nay)");
-        continue;
-      }
-      const academicInfo = p.academic_info;
-      const academicYear =
-        academicInfo && typeof academicInfo === "object"
-          ? (academicInfo as Record<string, unknown>).academic_year
-          : undefined;
-      if (
-        typeof p.admission_round_id !== "number" ||
-        typeof p.admission_method_id !== "number" ||
-        typeof academicYear !== "number"
-      ) {
-        reject("path thiếu round_id / method_id / academic_info.academic_year");
-        continue;
-      }
-      usable.push({
-        offeringId,
-        pathId: requireId(p, label),
-        admissionMethodId: p.admission_method_id,
-        admissionRoundId: p.admission_round_id,
-        academicYear,
-      });
-      // Đủ điều kiện tốt nhất rồi thì dừng: mỗi offering thêm một round-trip,
-      // và mỗi round-trip thêm một cách để setup đỏ vì lý do không liên quan.
-      if (academicYear === currentYear) {
-        return usable[usable.length - 1];
-      }
-    }
-  }
-
-  if (usable.length === 0) {
-    const why = Object.entries(rejected)
-      .map(([reason, count]) => `${reason} ×${count}`)
-      .join(" · ");
-    throw new Error(
-      `[SETUP FAIL] không có AdmissionPath dùng được: ${offerings.length} offering, ` +
-        `${pathsSeen} path, loại vì [${why || "không có path nào"}]`,
-    );
-  }
-
-  return usable.find((f) => f.academicYear === currentYear) ?? usable[0];
-}
-
 /**
  * Trạng thái tư vấn hợp lệ để `check_lead_level_admission_eligibility` cho qua:
  * KHÔNG `is_universal` (chỉ ghi nhận hoạt động) và KHÔNG `is_final` ở phase
@@ -340,7 +206,12 @@ test.beforeAll(async ({ browser }) => {
     const pipeline = asRecord(await apiJson(api, "GET /api/pipeline/all", "get", `${API_URL}/api/pipeline/all`), "pipeline");
     const statusId = pickConsultationStatusId(asArray(pipeline.statuses ?? [], "pipeline.statuses"));
 
-    const fixture = await resolveAdmissionFixture(api);
+    // Nguồn chuẩn DÙNG CHUNG với năm suite regression — xem
+    // `helpers/e2e-fixtures.ts`. Ưu tiên năm hiện tại vì bộ lọc mặc định của
+    // trang `/admissions` là `CURRENT_ADMISSIONS_YEAR = new Date().getFullYear()`.
+    const fixture = await resolveAdmissionContext(api, {
+      preferAcademicYears: [new Date().getFullYear()],
+    });
     console.log(
       `[setup] fixture: offering=${fixture.offeringId} path=${fixture.pathId} ` +
         `round=${fixture.admissionRoundId} method=${fixture.admissionMethodId} năm=${fixture.academicYear}`,

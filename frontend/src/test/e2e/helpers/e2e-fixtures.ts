@@ -503,6 +503,16 @@ export async function resolveAdmissionContext(
     offeringId?: number;
     preferOfferingIds?: number[];
     preferMethodIds?: number[];
+    /**
+     * Ưu tiên path thuộc các năm này, theo thứ tự. Chỉ là ƯU TIÊN: hết năm ưu
+     * tiên thì vẫn nhận path năm khác, vì bộ lọc năm là chuyện của lời gọi chứ
+     * không phải điều kiện hợp lệ của path.
+     *
+     * Suite smoke cần nó vì bộ lọc mặc định của trang `/admissions` là
+     * `CURRENT_ADMISSIONS_YEAR = new Date().getFullYear()`
+     * (`hooks/admissions/filterDefaults.ts`). Bỏ trống ⇒ hành vi KHÔNG đổi.
+     */
+    preferAcademicYears?: number[];
   }
 ): Promise<AdmissionPathContext> {
   const pickByMethod = (cands: AdmissionPathContext[]): AdmissionPathContext => {
@@ -512,6 +522,16 @@ export async function resolveAdmissionContext(
       if (hit) return hit;
     }
     return cands[0];
+  };
+
+  // Năm ưu tiên lọc TRƯỚC, phương thức chọn TRONG tập đã lọc. Danh sách rỗng
+  // ⇒ rơi thẳng về `pickByMethod`, nên lời gọi cũ giữ nguyên kết quả.
+  const pick = (cands: AdmissionPathContext[]): AdmissionPathContext => {
+    for (const y of opts?.preferAcademicYears ?? []) {
+      const sub = cands.filter((c) => c.academicYear === y);
+      if (sub.length > 0) return pickByMethod(sub);
+    }
+    return pickByMethod(cands);
   };
 
   if (opts?.offeringId != null) {
@@ -524,7 +544,7 @@ export async function resolveAdmissionContext(
           `(round, offering, method).`
       );
     }
-    return pickByMethod(cands);
+    return pick(cands);
   }
 
   const listResp = await ctx.get(
@@ -546,7 +566,7 @@ export async function resolveAdmissionContext(
     if (!offerings.some((o) => o.id === id)) continue;
     const cands = await resolvePathsForOffering(ctx, id);
     tried.push(`#${id}:${cands.length}`);
-    if (cands.length > 0) return pickByMethod(cands);
+    if (cands.length > 0) return pick(cands);
   }
   throw new Error(
     `Không offering nào có admission path dùng được. Đã thử (offering:số path): ` +
