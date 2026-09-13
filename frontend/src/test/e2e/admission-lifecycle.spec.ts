@@ -20,6 +20,12 @@
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
 import * as OTPAuth from "otpauth";
+import {
+  createAdmissionProfile,
+  expectOk,
+  resolveAdmissionContext,
+  type AdmissionPathContext,
+} from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -48,6 +54,15 @@ let officerCookies: Cookie[] = [];
 let unitId: number;
 let offeringId: number;
 let admissionMethodId: number;
+/**
+ * Bộ ba (round, năm, phương thức) lấy từ NGUỒN CHUẨN mà UI dùng —
+ * `GET /api/admission-config/paths/for-offering/{offering_id}`.
+ * `AdmissionProfileCreate` (`app/schemas/admission.py:443-494`) bắt buộc
+ * cả `admission_round_id` lẫn `academic_year`; payload hai trường của bản
+ * cũ trả 422 (đo thật: `invalid_fields=body.admission_round_id[missing],
+ * body.academic_year[missing]`).
+ */
+let pathContext: AdmissionPathContext;
 let initialStatusId: string;
 
 // Test data - each test creates its own lead+profile
@@ -251,24 +266,22 @@ async function createLeadAndProfile(
   );
   expect(consultResp.ok() || consultResp.status() === 201).toBeTruthy();
 
-  // 3. Create admission profile
-  const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
-    headers,
-    data: {
-      lead_id: leadId,
-      admission_method_id: opts.admissionMethodId,
-    },
-  });
-  if (!profileResp.ok() && profileResp.status() !== 201) {
-    const errBody = await profileResp.text();
-    throw new Error(`Profile creation failed: ${profileResp.status()} ${errBody.slice(0, 500)}`);
-  }
-  const profile = await profileResp.json();
-  const profileId = profile.id;
+  // 3. Create admission profile — payload ĐỦ BỐN TRƯỜNG từ nguồn chuẩn.
+  const profile = await createAdmissionProfile(
+    page.request,
+    leadId,
+    pathContext,
+    headers
+  );
+  const profileId = profile.id as number;
 
   // 4. Fill personal info + scores
-  const freshProfile = profile;
-  const allowedSubjects: string[] = freshProfile.applied_rules?.allowed_subject_codes || [];
+  const freshProfile = profile as {
+    version: number;
+    applied_rules?: { allowed_subject_codes?: string[] };
+  };
+  const allowedSubjects: string[] =
+    freshProfile.applied_rules?.allowed_subject_codes || [];
   const subjectScores: Record<string, number> = {};
   for (const subj of allowedSubjects.slice(0, 3)) {
     subjectScores[subj] = 7 + Math.random() * 3;
@@ -286,6 +299,20 @@ async function createLeadAndProfile(
         nationality: "Viet Nam",
         ethnicity: "Kinh",
         place_of_birth: "TP Ho Chi Minh",
+        // BẮT BUỘC tại bước submit. `priority_service.validate_eligibility`
+        // (dòng 1023-1088) đọc `profile.cultural_education_level` — KHÔNG
+        // suy từ `academic_history.graduation_type`. Thiếu nó thì submit
+        // một path `cao_dang/chinh_quy` trả 400
+        //   ELIGIBILITY_FAIL: cd_chinh_quy_requires_thpt_or_completed_thpt
+        // (đo thật trên stack nightly). Schema:
+        // `app/schemas/admission.py:780-796`.
+        cultural_education_level: "graduated_thpt",
+        vocational_qualification: "none",
+        // Địa chỉ thường trú — hai validator riêng ở bước submit đòi
+        // "Tỉnh/Thành phố" và "Phường/Xã" (đo thật trong validation_errors).
+        permanent_province: "TP Ho Chi Minh",
+        permanent_district: "Quan 1",
+        permanent_ward: "Phuong Ben Nghe",
         family_info: [
           { relationship: "Cha", full_name: "Nguyen Van A", phone: "0901234567", occupation: "Kinh doanh", is_primary_guardian: true },
           { relationship: "Me", full_name: "Tran Thi B", phone: "0901234568", occupation: "Giao vien", is_primary_guardian: false },
@@ -312,7 +339,7 @@ async function createLeadAndProfile(
       d.is_mandatory && d.status === "missing"
   );
   for (const doc of missingDocs) {
-    await page.request.post(
+    const upResp = await page.request.post(
       `${API_URL}/api/admissions/${profileId}/documents/${doc.code}/upload`,
       {
         headers,
@@ -326,9 +353,76 @@ async function createLeadAndProfile(
         },
       }
     );
+    await expectOk(upResp, `officer tải lên tài liệu ${doc.code}`, [200, 201]);
   }
 
-  return { leadId, profileId, citizenId, version: updatedProfile.version };
+  // 6. Manager/admin XÁC MINH tài liệu.
+  //
+  // Bắt buộc khi path ở chế độ nghiêm ngặt
+  // (`allow_unverified_submission = false` — mặc định của seed). Đo thật
+  // khi bỏ bước này: `POST /submit` trả 200 nhưng `status` vẫn `"draft"`
+  // kèm validation_errors "Tài liệu … chưa được xác minh. Liên hệ quản lý
+  // để verify trước khi nộp hồ sơ." ⇒ hồ sơ KHÔNG nộp được.
+  // Đây đúng là quy trình sản phẩm (officer tải lên → quản lý xác minh),
+  // KHÔNG phải nới lỏng ca kiểm.
+  const verifyHeaders = await restoreCookies(page, adminCookies);
+  const afterUpload = await (
+    await page.request.get(`${API_URL}/api/admissions/${profileId}`)
+  ).json();
+  const canVerify = (afterUpload.documents_checklist || []).filter(
+    (d: { is_mandatory: boolean; status: string }) =>
+      d.is_mandatory && (d.status === "uploaded" || d.status === "paper_submitted")
+  );
+  for (const doc of canVerify) {
+    // PATCH, không phải POST (`app/routers/admissions.py:1187`).
+    const vResp = await page.request.patch(
+      `${API_URL}/api/admissions/${profileId}/documents/${doc.code}/verify-format`,
+      { headers: verifyHeaders, data: { format: "photo" } }
+    );
+    await expectOk(vResp, `admin xác minh tài liệu ${doc.code}`, [200]);
+  }
+  // 7. Ấn định KV thủ công (admin) khi engine KHÔNG tự giải được.
+  //
+  // Cổng submit `_kv_unresolved_error_message`
+  // (`app/services/admission_service.py:6224-6284`) fail-closed: chỉ chấp
+  // nhận `longest_duration | tiebreak_graduation_school | commune_lookup |
+  // manual_override`. Với CĐ chính quy + `graduated_thpt`, engine đi nhánh
+  // LICH_SU_THPT và đòi `academic_history[].school_id` tra được trong danh
+  // mục trường (`priority_service.py:652-672`).
+  //
+  // ĐO THẬT trên CSDL nightly vừa migrate+seed: `vn_school` 0 hàng và
+  // `vn_commune_area_map` 0 hàng ⇒ KHÔNG nhánh tự động nào giải được KV cho
+  // BẤT KỲ hồ sơ nào. Đường đi hợp lệ mà chính thông báo lỗi chỉ ra là
+  // "đề nghị quản lý ấn định KV thủ công" — endpoint
+  // `POST /api/v2/admissions/{id}/override-priority-kv` (admin/manager;
+  // officer bị chặn cứng). Đây là quy trình sản phẩm, không phải lối tắt.
+  const kvHeaders = await restoreCookies(page, adminCookies);
+  const beforeKv = await (
+    await page.request.get(`${API_URL}/api/admissions/${profileId}`)
+  ).json();
+  const kvResp = await page.request.post(
+    `${API_URL}/api/v2/admissions/${profileId}/override-priority-kv`,
+    {
+      headers: kvHeaders,
+      data: {
+        version: beforeKv.version,
+        kv_resolved: "KV3",
+        reason:
+          "E2E nightly: danh mục trường/xã trống trên CSDL kiểm thử nên engine " +
+          "không tự giải được khu vực ưu tiên.",
+      },
+    }
+  );
+  await expectOk(kvResp, `admin ấn định KV thủ công cho hồ sơ #${profileId}`, [200]);
+
+  // Trả quyền điều khiển về officer — caller vẫn đang dùng phiên officer.
+  await restoreCookies(page, officerCookies);
+
+  const finalResp = await page.request.get(`${API_URL}/api/admissions/${profileId}`);
+  await expectOk(finalResp, `GET hồ sơ #${profileId} sau khi xác minh`, [200]);
+  const finalProfile = await finalResp.json();
+
+  return { leadId, profileId, citizenId, version: finalProfile.version };
 }
 
 /**
@@ -360,12 +454,16 @@ async function createMinimalDraftProfile(
     data: { status_id: opts.initialStatusId, method: "phone", notes: "minimal" },
   });
 
-  // Create profile — intentionally do NOT fill personal info or upload docs
-  const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
-    headers,
-    data: { lead_id: leadId, admission_method_id: opts.admissionMethodId },
-  });
-  const profileId = (await profileResp.json()).id;
+  // Create profile — intentionally do NOT fill personal info or upload docs.
+  // Vẫn phải ĐỦ TRƯỜNG: thiếu round/năm là 422 và ca "draft tối thiểu"
+  // biến thành ca "không có hồ sơ nào", hỏng ở một chỗ chẳng liên quan.
+  const profile = await createAdmissionProfile(
+    page.request,
+    leadId,
+    pathContext,
+    headers
+  );
+  const profileId = profile.id as number;
   return { leadId, profileId };
 }
 
@@ -398,30 +496,42 @@ test.describe("Admission Profile Lifecycle", () => {
       expect(unitsResp.ok()).toBeTruthy();
       unitId = (await unitsResp.json())[0]?.id;
 
-      // Offerings
-      const offeringsResp = await page.request.get(
-        `${API_URL}/api/program-offerings?is_active=true&limit=1`
-      );
-      expect(offeringsResp.ok()).toBeTruthy();
-      const offerings = await offeringsResp.json();
-      offeringId = offerings[0].id;
-
-      // Admission methods
+      // Offering + method + round + năm — MỘT LƯỢT, từ cùng một
+      // AdmissionPath, nên chúng tương thích theo định nghĩa.
+      //
+      // Bản cũ lấy `offerings[0]` rồi `methods[0]` RỜI RẠC. Hai vấn đề đã đo:
+      //   * `/api/program-offerings` sắp theo `offering_type` (không duy
+      //     nhất) nên phần tử đầu đổi theo `limit`: `limit=5` cho offering
+      //     #1, `limit=20` cho #28 — và #5 không có path nào dùng được;
+      //   * cặp (offering, method) không có gì buộc phải tồn tại path, mà
+      //     `create_profile` tra path theo BỘ BA (round, academic_info,
+      //     method) — không có path là 400.
+      // Ưu tiên phương thức mà Test 9 cần (giấy tờ nộp bản giấy) nếu
+      // offering có path cho nó.
       const methodsResp = await page.request.get(
         `${API_URL}/api/admission-config/methods?active_only=true`
       );
-      expect(methodsResp.ok()).toBeTruthy();
+      await expectOk(methodsResp, "GET /api/admission-config/methods", [200]);
       const methodsBody = await methodsResp.json();
       const methods = methodsBody.methods || methodsBody;
-      // Prefer method with paper-only doc for Test 9 (mark paper submitted)
       const methodWithPaperDoc = methods.find(
         (m: { id: number; documents?: Array<{ requires_upload: boolean }> }) =>
           m.documents?.some((d: { requires_upload: boolean }) => d.requires_upload === false)
       );
-      admissionMethodId = methodWithPaperDoc?.id || methods[0].id;
-      hasPaperDoc = !!methodWithPaperDoc;
 
-      console.log(`Config: unit=${unitId}, offering=${offeringId}, method=${admissionMethodId}, status=${initialStatusId}, hasPaperDoc=${hasPaperDoc}`);
+      pathContext = await resolveAdmissionContext(page.request, {
+        preferMethodIds: methodWithPaperDoc ? [methodWithPaperDoc.id] : [],
+      });
+      offeringId = pathContext.offeringId;
+      admissionMethodId = pathContext.admissionMethodId;
+      hasPaperDoc =
+        !!methodWithPaperDoc && methodWithPaperDoc.id === admissionMethodId;
+
+      console.log(
+        `Config: unit=${unitId}, offering=${offeringId}, method=${admissionMethodId}, ` +
+          `round=${pathContext.admissionRoundId}(${pathContext.roundCode}), ` +
+          `year=${pathContext.academicYear}, status=${initialStatusId}, hasPaperDoc=${hasPaperDoc}`
+      );
     });
 
     // --- Step 2: Officer login ---
@@ -1288,11 +1398,13 @@ test.describe("Admission Profile Lifecycle", () => {
         data: { status_id: initialStatusId, method: "phone", notes: "IDOR test" },
       });
 
-      const otherProfileResp = await page.request.post(`${API_URL}/api/admissions`, {
-        headers: adminHeaders,
-        data: { lead_id: otherLeadId, admission_method_id: admissionMethodId },
-      });
-      const otherProfileId = (await otherProfileResp.json()).id;
+      const otherProfile = await createAdmissionProfile(
+        page.request,
+        otherLeadId,
+        pathContext,
+        adminHeaders
+      );
+      const otherProfileId = otherProfile.id as number;
       console.log(`Created out-of-scope profile: id=${otherProfileId}, unit=${otherUnit.id}`);
 
       // Officer tries to access — should get 404 (not 403, to avoid leaking existence)

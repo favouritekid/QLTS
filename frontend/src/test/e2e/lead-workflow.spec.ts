@@ -14,6 +14,7 @@
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
 import * as OTPAuth from "otpauth";
+import { expectOk, listActiveOfficers, summarizeApiError } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -43,6 +44,23 @@ let officerHeaders: Record<string, string> = {};
 let officerCookies: Cookie[] = [];
 
 // Discovery
+/**
+ * Đơn vị dùng cho MỌI lead mà admin tạo rồi giao cho officer của suite này.
+ *
+ * KHÔNG còn là `units[0].id`. `_assert_officer_in_lead_unit`
+ * (`app/services/lead_service.py:2411-2423`) bắt buộc officer CÙNG đơn vị
+ * với lead; lấy `units[0]` và `users[0]` rời rạc rồi giả định chúng khớp là
+ * đúng cách nightly 34678745325 đỏ ở :517 — đo thật:
+ *   POST /api/leads/{id}/assign → 400
+ *   {"detail":"Không thể phân công: officer thuộc đơn vị #4, khác đơn vị
+ *     của lead #1. Chỉ phân công officer cùng đơn vị.",
+ *    "error_code":"BUSINESS_RULE_VIOLATION"}
+ * và đơn vị #1 (phần tử đầu của `/api/organization-units`) KHÔNG có officer
+ * active nào cả, nên không có cách nào chữa bằng việc đổi officer.
+ *
+ * Giá trị này đọc RA TỪ chính officer đang đăng nhập, nên cặp (đơn vị,
+ * officer) luôn tương thích theo định nghĩa.
+ */
 let unitId: number;
 let offeringId: number;
 let pipelineStatuses: Array<{ id: string; name: string }> = [];
@@ -79,6 +97,8 @@ const quotaLeadIds: number[] = [];
 let managerHeaders: Record<string, string> = {};
 let managerCookies: Cookie[] = [];
 let unitBId: number;
+/** Đơn vị của CHÍNH manager — phạm vi thật của họ (lead_service.py:3736). */
+let managerUnitId: number;
 
 // ---------------------------------------------------------------------------
 // Helpers (self-contained, no cross-file imports)
@@ -260,13 +280,12 @@ test.describe("Lead Management Workflow", () => {
       }
       console.log(`Pipeline: ${pipelineStatuses.length} statuses, ${transitions.length} transitions, initial=${initialStatusId}, second=${secondStatusId}`);
 
-      // Organization units
+      // Organization units — chỉ để khẳng định seed có đơn vị; `unitId`
+      // KHÔNG lấy ở đây nữa (xem ghi chú ở khai báo biến).
       const unitsResp = await page.request.get(`${API_URL}/api/organization-units`);
-      expect(unitsResp.ok()).toBeTruthy();
+      await expectOk(unitsResp, "GET /api/organization-units", [200]);
       const units = await unitsResp.json();
-      unitId = units[0]?.id;
-      expect(unitId).toBeTruthy();
-      console.log(`Unit ID: ${unitId}`);
+      expect(units.length).toBeGreaterThan(0);
 
       // Offerings
       const offeringsResp = await page.request.get(
@@ -283,7 +302,25 @@ test.describe("Lead Management Workflow", () => {
     await test.step("Officer login", async () => {
       officerHeaders = await loginViaAPI(page, OFFICER_USERNAME, OFFICER_PASSWORD);
       officerCookies = await page.context().cookies();
-      console.log("Officer logged in");
+
+      // Danh tính + đơn vị ĐỌC RA TỪ phiên, không suy từ tên đăng nhập và
+      // không lấy `units[0]`. Cặp (officerUserId, unitId) từ đây trở đi
+      // luôn tương thích với `_assert_officer_in_lead_unit`.
+      const meResp = await page.request.get(`${API_URL}/api/users/me`);
+      await expectOk(meResp, "officer GET /api/users/me", [200]);
+      const me = await meResp.json();
+      expect(me.role, `Tài khoản "${OFFICER_USERNAME}" phải có role officer`).toBe(
+        "officer"
+      );
+      expect(
+        me.unit_id,
+        `Officer #${me.id} không có unit_id — không thể tạo lead cùng đơn vị để phân công.`
+      ).toBeTruthy();
+      officerUserId = me.id;
+      unitId = me.unit_id;
+      console.log(
+        `Officer logged in: user #${officerUserId} role=${me.role} unit=${unitId}`
+      );
     });
 
     // --- Step 3: Check duplicate (should not exist) ---
@@ -294,7 +331,9 @@ test.describe("Lead Management Workflow", () => {
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
       expect(body.phone_available).toBe(true);
-      console.log(`No duplicate for ${testPhone1}: phone_available=${body.phone_available}`);
+      // Không in nguyên số điện thoại (dù là số sinh ra cho test) — log
+      // nightly được lưu 7 ngày và đi qua nhiều tay.
+      console.log(`No duplicate for …${testPhone1.slice(-3)}: phone_available=${body.phone_available}`);
     });
 
     // --- Step 4: Create lead ---
@@ -459,6 +498,10 @@ test.describe("Lead Management Workflow", () => {
     await test.step("Admin creates lead2", async () => {
       adminHeaders = await restoreCookies(page, adminCookies);
 
+      // `unit_id` TƯỜNG MINH. Bỏ trống thì nhánh ADMIN của `create_lead`
+      // (lead_service.py:941-960) hỏi cấu hình phân phối của offering và
+      // đặt lead vào đơn vị mà cấu hình ấy trả về — đo thật: đơn vị #1,
+      // nơi không có officer active nào ⇒ bước Assign bên dưới 400.
       const resp = await page.request.post(`${API_URL}/api/leads`, {
         headers: adminHeaders,
         data: {
@@ -466,11 +509,17 @@ test.describe("Lead Management Workflow", () => {
           phone: testPhone2,
           source: "online",
           offering_id: offeringId,
+          unit_id: unitId,
         },
       });
-      expect(resp.ok() || resp.status() === 201).toBeTruthy();
-      leadId2 = (await resp.json()).id;
-      console.log(`Created lead2 ID: ${leadId2}`);
+      await expectOk(resp, "admin tạo lead2", [200, 201]);
+      const lead2Body = await resp.json();
+      leadId2 = lead2Body.id;
+      expect(
+        lead2Body.unit_id,
+        `lead2 phải nằm ở đơn vị #${unitId} của officer #${officerUserId}`
+      ).toBe(unitId);
+      console.log(`Created lead2 ID: ${leadId2} (unit #${lead2Body.unit_id})`);
     });
 
     // --- Step 2: Duplicate check (phone1 should exist) ---
@@ -482,30 +531,39 @@ test.describe("Lead Management Workflow", () => {
       const body = await resp.json();
       expect(body.phone_available).toBe(false);
       expect(body.phone_conflict).toBeTruthy();
-      console.log(`Duplicate found for ${testPhone1}: conflict=${JSON.stringify(body.phone_conflict).slice(0, 100)}`);
+      // `phone_conflict` mang tên + SĐT + đơn vị của lead trùng ⇒ CHỈ in
+      // các KHOÁ, không in giá trị.
+      console.log(
+        `Duplicate found for …${testPhone1.slice(-3)}: conflict keys=` +
+          `${Object.keys(body.phone_conflict || {}).join(",")}`
+      );
     });
 
     // --- Step 3: Assign lead2 to officer ---
     await test.step("Assign lead to officer", async () => {
-      // Discover officer user ID if not yet known
-      if (!officerUserId) {
-        const rolesResp = await page.request.get(
-          `${API_URL}/api/admin/roles/officer/users`
-        );
-        if (rolesResp.ok()) {
-          const users = await rolesResp.json();
-          if (users.length > 0) {
-            officerUserId = users[0].id;
-          }
-        }
-        // Fallback: get from lead1 which was created by officer
-        if (!officerUserId) {
-          const lead1Resp = await page.request.get(`${API_URL}/api/leads/${leadId1}`);
-          const lead1 = await lead1Resp.json();
-          officerUserId = lead1.assigned_officer_id || lead1.created_by_id;
-        }
-        console.log(`Discovered officer user ID: ${officerUserId}`);
-      }
+      // `officerUserId` đã ĐỌC RA từ `/api/users/me` của chính phiên
+      // officer ở Test 1. Khối "khám phá" cũ ở đây là mã CHẾT có hại:
+      //   * `/api/admin/roles/officer/users` trả OBJECT
+      //     `{role, user_count, users}` (admin/roles.py:451-503), nên
+      //     `users.length` là `undefined` ⇒ nhánh đó không bao giờ chạy;
+      //   * nó lọc grouping policy theo `group[1] == "officer"` trong khi
+      //     seed ghi `v1 = "role:officer"` — đo thật: `user_count = 0`;
+      //   * fallback `lead1.created_by_id` có thể trả về ID của ADMIN, và
+      //     backend khi ấy trả 403 "is not an officer".
+      // Thay bằng một cổng chứng minh cặp (officer, đơn vị lead) hợp lệ
+      // TRƯỚC khi gọi — bất biến ở lead_service.py:2454-2472.
+      const officers = await listActiveOfficers(page.request);
+      const target = officers.find((o) => o.id === officerUserId);
+      expect(
+        target,
+        `Officer #${officerUserId} không nằm trong danh sách officer active ` +
+          `(${officers.map((o) => `#${o.id}@${o.unit_id}`).join(" ")}).`
+      ).toBeTruthy();
+      expect(
+        target!.unit_id,
+        `Officer #${officerUserId} thuộc đơn vị #${target!.unit_id} còn lead2 ` +
+          `thuộc đơn vị #${unitId} — backend chặn 400 BUSINESS_RULE_VIOLATION.`
+      ).toBe(unitId);
 
       const resp = await page.request.post(
         `${API_URL}/api/leads/${leadId2}/assign`,
@@ -514,7 +572,11 @@ test.describe("Lead Management Workflow", () => {
           data: { officer_id: officerUserId },
         }
       );
-      expect(resp.ok()).toBeTruthy();
+      await expectOk(
+        resp,
+        `assign lead2 #${leadId2} (đơn vị #${unitId}) → officer #${officerUserId}`,
+        [200]
+      );
       const body = await resp.json();
       expect(body.assigned_officer_id).toBe(officerUserId);
       console.log(`Lead2 assigned to officer ${officerUserId}`);
@@ -543,9 +605,10 @@ test.describe("Lead Management Workflow", () => {
           phone: testPhone3,
           source: "facebook",
           offering_id: offeringId,
+          unit_id: unitId,
         },
       });
-      expect(resp.ok() || resp.status() === 201).toBeTruthy();
+      await expectOk(resp, "admin tạo lead3", [200, 201]);
       leadId3 = (await resp.json()).id;
       console.log(`Created lead3 ID: ${leadId3}`);
     });
@@ -559,10 +622,17 @@ test.describe("Lead Management Workflow", () => {
           data: { lead_ids: [leadId2, leadId3] },
         }
       );
-      expect(resp.ok()).toBeTruthy();
+      await expectOk(
+        resp,
+        `bulk-assign [${leadId2},${leadId3}] → officer #${officerUserId}`,
+        [200]
+      );
       const body = await resp.json();
       expect(body.total).toBe(2);
-      expect(body.successful).toBe(2);
+      expect(
+        body.successful,
+        `bulk-assign errors=${JSON.stringify(body.errors)}`
+      ).toBe(2);
       expect(body.failed).toBe(0);
       expect(body.assigned_lead_ids).toContain(leadId2);
       expect(body.assigned_lead_ids).toContain(leadId3);
@@ -794,22 +864,76 @@ test.describe("Lead Management Workflow", () => {
           },
         }
       );
-      expect(resp.ok() || resp.status() === 201).toBeTruthy();
+      await expectOk(resp, `officer thêm consultation cho lead4 #${leadId4}`, [
+        200,
+        201,
+      ]);
       const body = await resp.json();
-      expect(body.consultation_status_id ?? body.lead?.consultation_status_id).toBe(initialStatusId);
+      // `POST /consultations` trả `ConsultationCreateResult`
+      // (`app/schemas/lead.py:133-142`) = `{consultation, status_updated,
+      // terminal_guard_reason}`. KHÔNG có `consultation_status_id` ở cấp
+      // gốc và KHÔNG có khoá `lead` — phép đọc cũ
+      // `body.consultation_status_id ?? body.lead?.consultation_status_id`
+      // luôn cho `undefined`. Ca này chưa từng chạy (serial mode dừng ở
+      // :517 nên test 4 bị bỏ qua).
+      expect(
+        body.consultation?.consultation_status_id,
+        `Consultation vừa tạo phải mang status ${initialStatusId}`
+      ).toBe(initialStatusId);
+      expect(
+        body.status_updated,
+        `Lead phải được cập nhật trạng thái; terminal_guard_reason=${body.terminal_guard_reason}`
+      ).toBe(true);
+
+      // Đo ở NGUỒN CHUẨN: trạng thái thật trên lead, không chỉ trên thân
+      // phản hồi của chính lệnh vừa ghi.
+      const leadResp = await page.request.get(`${API_URL}/api/leads/${leadId4}`, {
+        headers: officerHeaders,
+      });
+      await expectOk(leadResp, `GET lead4 #${leadId4} sau consultation`, [200]);
+      const leadBody = await leadResp.json();
+      expect(leadBody.consultation_status_id).toBe(initialStatusId);
       console.log(`Lead4 consultation set to ${initialStatusId}`);
     });
 
+    // `PATCH /leads/{id}/status` nhận `LeadStatusUpdate`
+    // (`app/schemas/lead.py:480-501`): `consultation_status_id` VÀ
+    // `version` (khoá lạc quan) đều là `Field(...)` BẮT BUỘC. Thiếu
+    // `version` thì mọi lời gọi ở đây trả 422 — đo thật:
+    //   422 VALIDATION_ERROR · invalid_fields=body.version[missing]
+    // Ba bước dưới đây chưa từng chạy trong nightly (serial mode dừng ở
+    // :517), nên lỗi hợp đồng này chưa ai thấy.
+    const layVersion = async (
+      headers: Record<string, string>
+    ): Promise<number> => {
+      const r = await page.request.get(`${API_URL}/api/leads/${leadId4}`, {
+        headers,
+      });
+      await expectOk(r, `GET lead4 #${leadId4} để lấy version`, [200]);
+      const b = await r.json();
+      expect(typeof b.version, "Lead phải có version cho khoá lạc quan").toBe(
+        "number"
+      );
+      return b.version as number;
+    };
+
     // --- Step 5: Officer cannot PATCH /status → 403 (admin/manager only) ---
     await test.step("Officer cannot PATCH /leads/{id}/status → 403", async () => {
+      // Thân request ĐẦY ĐỦ: nếu thiếu `version`, 403 có thể đến từ bất kỳ
+      // đâu và ca kiểm không còn chứng minh được điều nó nhận là chứng minh.
+      const version = await layVersion(officerHeaders);
       const resp = await page.request.patch(
         `${API_URL}/api/leads/${leadId4}/status`,
         {
           headers: officerHeaders,
-          data: { consultation_status_id: secondStatusId },
+          data: { consultation_status_id: secondStatusId, version },
         }
       );
-      expect(resp.status()).toBe(403);
+      expect(
+        resp.status(),
+        `Officer PATCH /status phải 403 (Casbin: admin/manager). ` +
+          `${summarizeApiError(resp.status(), await resp.text())}`
+      ).toBe(403);
       console.log(`Officer PATCH /status blocked: 403`);
     });
 
@@ -817,17 +941,19 @@ test.describe("Lead Management Workflow", () => {
     await test.step("Admin PATCH /leads/{lead4}/status → secondStatusId (valid)", async () => {
       adminHeaders = await restoreCookies(page, adminCookies);
 
+      const version = await layVersion(adminHeaders);
       const resp = await page.request.patch(
         `${API_URL}/api/leads/${leadId4}/status`,
         {
           headers: adminHeaders,
-          data: { consultation_status_id: secondStatusId },
+          data: { consultation_status_id: secondStatusId, version },
         }
       );
-      if (!resp.ok()) {
-        console.log(`FSM PATCH failed: ${resp.status()} ${(await resp.text()).slice(0, 200)}`);
-      }
-      expect(resp.ok()).toBeTruthy();
+      await expectOk(
+        resp,
+        `admin PATCH lead4 #${leadId4} status ${initialStatusId} → ${secondStatusId} (version ${version})`,
+        [200]
+      );
       const body = await resp.json();
       expect(body.consultation_status_id).toBe(secondStatusId);
       console.log(`Admin FSM PATCH: ${initialStatusId} → ${secondStatusId}`);
@@ -835,14 +961,21 @@ test.describe("Lead Management Workflow", () => {
 
     // --- Step 7: PATCH with non-existent status ID → 404 or 400 ---
     await test.step("PATCH with invalid status ID → rejected (404/400)", async () => {
+      const version = await layVersion(adminHeaders);
       const resp = await page.request.patch(
         `${API_URL}/api/leads/${leadId4}/status`,
         {
           headers: adminHeaders,
-          data: { consultation_status_id: "sts_nonexistent_xyz" },
+          data: { consultation_status_id: "sts_nonexistent_xyz", version },
         }
       );
-      expect(resp.ok()).toBeFalsy();
+      // Phải bị từ chối vì TRẠNG THÁI không tồn tại, không phải vì thiếu
+      // trường — nên loại tường minh 422 ra khỏi tập chấp nhận.
+      expect(
+        [400, 404],
+        `PATCH với status không tồn tại phải bị từ chối bằng 400/404. ` +
+          `${summarizeApiError(resp.status(), await resp.text())}`
+      ).toContain(resp.status());
       console.log(`FSM PATCH with invalid status rejected: ${resp.status()}`);
     });
 
@@ -890,18 +1023,42 @@ test.describe("Lead Management Workflow", () => {
           phone: generatePhone(),
           source: "walk_in",
           offering_id: offeringId,
+          // Cùng đơn vị officer — nếu không, assign dưới đây trả 400 và
+          // bước "officer reassign" kế tiếp đo nhầm một lead chưa được gán.
+          unit_id: unitId,
         },
       });
-      expect(freshLeadResp.ok() || freshLeadResp.status() === 201).toBeTruthy();
+      await expectOk(freshLeadResp, "admin tạo lead cho ca reassign", [200, 201]);
       const freshLeadId = (await freshLeadResp.json()).id;
 
-      await page.request.post(`${API_URL}/api/leads/${freshLeadId}/assign`, {
-        headers: adminHeaders,
-        data: { officer_id: officerUserId },
-      });
+      const freshAssignResp = await page.request.post(
+        `${API_URL}/api/leads/${freshLeadId}/assign`,
+        {
+          headers: adminHeaders,
+          data: { officer_id: officerUserId },
+        }
+      );
+      await expectOk(
+        freshAssignResp,
+        `assign lead #${freshLeadId} → officer #${officerUserId} trước ca reassign`,
+        [200]
+      );
 
       // Officer reassigns the lead (self-reassign: gives up ownership)
       officerHeaders = await restoreCookies(page, officerCookies);
+
+      // Hạn mức reassign là 5 LƯỢT/TUẦN cho mỗi officer
+      // (`lead_service.check_reassign_quota`). Đọc nó TRƯỚC và đưa vào
+      // thông điệp lỗi: trên CSDL bị dùng lại nhiều lượt, bước này hết
+      // hạn mức và `expect(resp.ok()).toBeTruthy()` chỉ in "Received:
+      // false" — không ai đoán được vì sao.
+      const quotaResp = await page.request.get(
+        `${API_URL}/api/leads/my/reassign-quota`,
+        { headers: officerHeaders }
+      );
+      await expectOk(quotaResp, "officer GET /api/leads/my/reassign-quota", [200]);
+      const quota = await quotaResp.json();
+
       const resp = await page.request.post(
         `${API_URL}/api/leads/${freshLeadId}/action`,
         {
@@ -909,7 +1066,12 @@ test.describe("Lead Management Workflow", () => {
           data: { action: "reassign", reason: "Lead không phù hợp, cần chuyển cho nhóm khác" },
         }
       );
-      expect(resp.ok()).toBeTruthy();
+      await expectOk(
+        resp,
+        `officer #${officerUserId} reassign lead #${freshLeadId} ` +
+          `(hạn mức tuần: used=${quota.used}/${quota.limit}, remaining=${quota.remaining}, allowed=${quota.allowed})`,
+        [200]
+      );
       const body = await resp.json();
       expect(body.assigned_officer_id).toBeNull();
       expect(body.assignment_status).toBe("reassign_pending");
@@ -1088,10 +1250,30 @@ test.describe("Lead Management Workflow", () => {
         headers: { ...officerHeaders, "Content-Type": mpCT },
         data: mpBody,
       });
-      if (!resp.ok()) {
-        console.log(`CSV import failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
-      }
-      expect(resp.ok()).toBeTruthy();
+      // ⛔ ĐANG ĐỎ VÌ DỮ LIỆU NỀN, KHÔNG PHẢI VÌ TEST.
+      //
+      // Đo thật trên stack nightly dựng lại cục bộ (`nfrb`), CSDL vừa
+      // `alembic upgrade head` + `seed_from_xlsx`:
+      //     POST /api/leads/import → 400
+      //     {"detail":"System configuration error: Initial lead status not
+      //       found.","error_code":"HTTP_400"}
+      // Nguyên nhân: `StatusHelper.get_initial_status`
+      // (`app/services/status_helper.py:46-67`) tìm hàng
+      // `legacy_status == 'new' AND is_final == false`, mà trên CSDL mới
+      // KHÔNG hàng nào có `legacy_status='new'`:
+      //   * `zq6w7x8y9z0a1_seed_operational_baseline.py:146` chèn sts00 với
+      //     `legacy_status = NULL`;
+      //   * `zb1h2i3j4k5l6_fix_consultation_status_legacy_and_funnel.py:59`
+      //     đổi sts02 từ 'new' → 'contacted';
+      //   * `seed_from_xlsx.seed_10b_trang_thai` BỎ QUA vì bảng đã có 21 hàng.
+      // Đo bằng SQL: `count(*) FILTER (WHERE legacy_status='new') = 0 / 21`.
+      // KHÔNG nới assertion ở đây — sửa phải nằm ở seed/migration, đi qua
+      // PR riêng có cổng deploy.
+      await expectOk(
+        resp,
+        "officer nhập CSV 2 lead (POST /api/leads/import)",
+        [200]
+      );
       const body = await resp.json();
       firstImportCount = body.successful_imports;
       console.log(
@@ -1337,16 +1519,17 @@ test.describe("Lead Management Workflow", () => {
       // Create 2 fresh leads
       const r1 = await page.request.post(`${API_URL}/api/leads`, {
         headers: adminHeaders,
-        data: { full_name: `E2E_Lock_${Date.now()}`, phone: generatePhone(), source: "walk_in", offering_id: offeringId },
+        // `unit_id` tường minh: sub-test B gán lead này cho officer.
+        data: { full_name: `E2E_Lock_${Date.now()}`, phone: generatePhone(), source: "walk_in", offering_id: offeringId, unit_id: unitId },
       });
-      expect(r1.ok() || r1.status() === 201).toBeTruthy();
+      await expectOk(r1, "admin tạo lead cho ca optimistic locking", [200, 201]);
       leadIdForLocking = (await r1.json()).id;
 
       const r2 = await page.request.post(`${API_URL}/api/leads`, {
         headers: adminHeaders,
-        data: { full_name: `E2E_Terminal_${Date.now()}`, phone: generatePhone(), source: "walk_in", offering_id: offeringId },
+        data: { full_name: `E2E_Terminal_${Date.now()}`, phone: generatePhone(), source: "walk_in", offering_id: offeringId, unit_id: unitId },
       });
-      expect(r2.ok() || r2.status() === 201).toBeTruthy();
+      await expectOk(r2, "admin tạo lead cho ca terminal block", [200, 201]);
       leadIdForTerminal = (await r2.json()).id;
       console.log(`Created leads for Test 8: locking=${leadIdForLocking}, terminal=${leadIdForTerminal}`);
     });
@@ -1398,7 +1581,11 @@ test.describe("Lead Management Workflow", () => {
           headers: adminHeaders,
           data: { officer_id: officerUserId },
         });
-        expect(assignResp.ok()).toBeTruthy();
+        await expectOk(
+          assignResp,
+          `assign lead #${leadIdForLocking} → officer #${officerUserId}`,
+          [200]
+        );
         console.log(`Lead assigned to officer ${officerUserId}`);
       }
 
@@ -1431,10 +1618,22 @@ test.describe("Lead Management Workflow", () => {
           },
         }
       );
-      expect(withReasonResp.ok() || withReasonResp.status() === 201).toBeTruthy();
+      await expectOk(
+        withReasonResp,
+        `POST consultation ${finalNegativeStatusId} kèm loss_reason_code`,
+        [200, 201]
+      );
       const created = await withReasonResp.json();
-      const statusField = created.consultation_status_id ?? created.status_id;
-      expect(statusField).toBe(finalNegativeStatusId);
+      // Cùng lớp lỗi với :862 — `ConsultationCreateResult` bọc bản ghi trong
+      // khoá `consultation` (`app/schemas/lead.py:133-142`), nên phép đọc cũ
+      // `created.consultation_status_id ?? created.status_id` luôn
+      // `undefined`. Ca này chưa từng chạy trong nightly.
+      const statusField = created.consultation?.consultation_status_id;
+      expect(
+        statusField,
+        `Consultation tạo kèm loss_reason phải mang status ${finalNegativeStatusId}; ` +
+          `khoá nhận được: ${Object.keys(created).join(",")}`
+      ).toBe(finalNegativeStatusId);
       console.log(`Loss reason accepted: consultation status=${statusField}`);
     });
 
@@ -1447,11 +1646,34 @@ test.describe("Lead Management Workflow", () => {
 
       // C1: Admin PATCH leadIdForTerminal → enrolled final status
       adminHeaders = await restoreCookies(page, adminCookies);
+      // `version` bắt buộc (LeadStatusUpdate) — xem ghi chú ở Test 4.
+      const termLeadResp = await page.request.get(
+        `${API_URL}/api/leads/${leadIdForTerminal}`,
+        { headers: adminHeaders }
+      );
+      await expectOk(termLeadResp, `GET lead #${leadIdForTerminal} lấy version`, [200]);
+      const termVersion = (await termLeadResp.json()).version as number;
+
       const patchResp = await page.request.patch(
         `${API_URL}/api/leads/${leadIdForTerminal}/status`,
-        { headers: adminHeaders, data: { consultation_status_id: enrolledFinalStatusId } }
+        {
+          headers: adminHeaders,
+          data: {
+            consultation_status_id: enrolledFinalStatusId,
+            version: termVersion,
+          },
+        }
       );
       if (!patchResp.ok()) {
+        // FSM có thể CHẶN HỢP LỆ bước nhảy thẳng sang phase enrolled — đó
+        // là một kết quả, không phải lỗi hạ tầng. Nhưng 422 thì KHÔNG: nó
+        // nghĩa là thân request sai hợp đồng, và ca C khi ấy không đo gì.
+        expect(
+          patchResp.status(),
+          `PATCH sang ${enrolledFinalStatusId} trả 422 = sai hợp đồng thân ` +
+            `request, không phải FSM chặn. ` +
+            `${summarizeApiError(patchResp.status(), await patchResp.text())}`
+        ).not.toBe(422);
         console.log(`Cannot PATCH to enrolled status (FSM may block): ${patchResp.status()} — skip sub-test C`);
         return;
       }
@@ -1546,14 +1768,21 @@ test.describe("Lead Management Workflow", () => {
             phone: generatePhone(),
             source: "walk_in",
             offering_id: offeringId,
+            // quota officer vừa được đặt vào chính `unitId` ở Step 2.
+            unit_id: unitId,
           },
         });
-        expect(lr.ok() || lr.status() === 201).toBeTruthy();
+        await expectOk(lr, `admin tạo quota lead #${i}`, [200, 201]);
         const lid = (await lr.json()).id;
-        await page.request.post(`${API_URL}/api/leads/${lid}/assign`, {
+        const qAssign = await page.request.post(`${API_URL}/api/leads/${lid}/assign`, {
           headers: adminHeaders,
           data: { officer_id: quotaOfficerUserId },
         });
+        await expectOk(
+          qAssign,
+          `assign quota lead #${lid} → quota officer #${quotaOfficerUserId} (đơn vị #${unitId})`,
+          [200]
+        );
         quotaLeadIds.push(lid);
       }
       expect(quotaLeadIds).toHaveLength(6);
@@ -1649,17 +1878,68 @@ test.describe("Lead Management Workflow", () => {
         test.skip(true, "Need ≥2 organization units for manager IDOR cross-unit test");
         return;
       }
-      unitBId = allUnits.find((u: { id: number }) => u.id !== unitId)!.id;
-      console.log(`unitId=${unitId}, unitBId=${unitBId}`);
+      console.log(`Đơn vị gốc đọc được: ${allUnits.map((u: { id: number }) => u.id).join(",")}`);
     });
 
     // Early return if skipped
     if (!MANAGER_USERNAME || !MANAGER_PASSWORD) return;
 
-    // --- Step 2: Admin creates lead in unitB ---
+    // --- Step 2: Manager login (with optional TOTP) ---
+    //
+    // Đăng nhập manager phải đi TRƯỚC việc dựng dữ liệu, vì phạm vi của
+    // manager là `user.unit_id` của CHÍNH manager
+    // (`lead_service.py:3736` — `MANAGER và unit_id != None → (None,
+    // user.unit_id)`, KHÔNG mở rộng xuống đơn vị con).
+    //
+    // Bản cũ so phạm vi manager với `unitId` — mà `unitId` là đơn vị của
+    // OFFICER. Seed đặt officer `vothithuthuhien` ở đơn vị #4 còn manager
+    // `phanthithuyvan` ở đơn vị #11, nên "manager phải nhìn thấy lead1"
+    // là một giả định SAI về quan hệ dữ liệu seed, không phải một bất biến
+    // của sản phẩm. Ca này chưa từng chạy thật (serial mode dừng ở :517).
+    await test.step("Manager login + đọc đơn vị của chính manager", async () => {
+      managerHeaders = await loginViaAPI(
+        page,
+        MANAGER_USERNAME,
+        MANAGER_PASSWORD,
+        MANAGER_TOTP_SECRET ? { totpSecret: MANAGER_TOTP_SECRET } : undefined
+      );
+      managerCookies = await page.context().cookies();
+
+      const meResp = await page.request.get(`${API_URL}/api/users/me`);
+      await expectOk(meResp, "manager GET /api/users/me", [200]);
+      const me = await meResp.json();
+      expect(me.role, `Tài khoản "${MANAGER_USERNAME}" phải có role manager`).toBe(
+        "manager"
+      );
+      expect(
+        me.unit_id,
+        `Manager #${me.id} không có unit_id ⇒ phạm vi rơi về "chỉ của mình" ` +
+          `(lead_service.py:3739), ca kiểm phạm vi theo ĐƠN VỊ không còn nghĩa.`
+      ).toBeTruthy();
+      managerUnitId = me.unit_id;
+      console.log(`Manager logged in: user #${me.id} unit=${managerUnitId}`);
+    });
+
+    // --- Step 3: Admin dựng hai chứng cứ: 1 lead TRONG đơn vị manager, 1 lead NGOÀI ---
     let unitBLeadId: number;
-    await test.step("Admin creates lead in unitB", async () => {
+    let managerUnitLeadId: number;
+    await test.step("Admin creates lead in unitB + lead in manager's unit", async () => {
       adminHeaders = await restoreCookies(page, adminCookies);
+
+      // unitB = một đơn vị KHÁC đơn vị của manager.
+      const unitsResp2 = await page.request.get(`${API_URL}/api/organization-units`, {
+        headers: adminHeaders,
+      });
+      await expectOk(unitsResp2, "GET /api/organization-units", [200]);
+      const roots = await unitsResp2.json();
+      const other = roots.find((u: { id: number }) => u.id !== managerUnitId);
+      expect(
+        other,
+        `Không tìm được đơn vị nào khác đơn vị #${managerUnitId} của manager ` +
+          `trong ${roots.length} đơn vị gốc.`
+      ).toBeTruthy();
+      unitBId = other.id;
+      console.log(`managerUnitId=${managerUnitId}, unitBId=${unitBId}`);
 
       const unitBLeadResp = await page.request.post(`${API_URL}/api/leads`, {
         headers: adminHeaders,
@@ -1670,21 +1950,30 @@ test.describe("Lead Management Workflow", () => {
           unit_id: unitBId,
         },
       });
-      expect(unitBLeadResp.ok() || unitBLeadResp.status() === 201).toBeTruthy();
+      await expectOk(unitBLeadResp, `admin tạo lead ở đơn vị #${unitBId}`, [200, 201]);
       unitBLeadId = (await unitBLeadResp.json()).id;
-      console.log(`Created unitB lead: id=${unitBLeadId}`);
-    });
 
-    // --- Step 3: Manager login (with optional TOTP) ---
-    await test.step("Manager login", async () => {
-      managerHeaders = await loginViaAPI(
-        page,
-        MANAGER_USERNAME,
-        MANAGER_PASSWORD,
-        MANAGER_TOTP_SECRET ? { totpSecret: MANAGER_TOTP_SECRET } : undefined
+      const mgrLeadResp = await page.request.post(`${API_URL}/api/leads`, {
+        headers: adminHeaders,
+        data: {
+          full_name: `E2E_MgrUnit_Lead_${Date.now()}`,
+          phone: generatePhone(),
+          source: "walk_in",
+          unit_id: managerUnitId,
+        },
+      });
+      await expectOk(
+        mgrLeadResp,
+        `admin tạo lead ở đơn vị #${managerUnitId} của manager`,
+        [200, 201]
       );
-      managerCookies = await page.context().cookies();
-      console.log("Manager logged in");
+      const mgrLeadBody = await mgrLeadResp.json();
+      managerUnitLeadId = mgrLeadBody.id;
+      expect(mgrLeadBody.unit_id).toBe(managerUnitId);
+      console.log(
+        `Chứng cứ: lead ngoài phạm vi #${unitBLeadId} (đơn vị #${unitBId}) · ` +
+          `lead trong phạm vi #${managerUnitLeadId} (đơn vị #${managerUnitId})`
+      );
     });
 
     // --- Step 4: Probe — check MFA enforcement ---
@@ -1707,24 +1996,36 @@ test.describe("Lead Management Workflow", () => {
       console.log("Manager probe succeeded");
     });
 
-    // --- Step 5: Manager list → only sees unitA leads ---
-    await test.step("Manager list — sees unitA, not unitB", async () => {
+    // --- Step 5: Manager list → chỉ thấy lead trong ĐƠN VỊ CỦA MANAGER ---
+    await test.step("Manager list — thấy lead cùng đơn vị, KHÔNG thấy lead unitB", async () => {
       managerHeaders = await restoreCookies(page, managerCookies);
 
-      const mgrListResp = await page.request.get(`${API_URL}/api/leads`, { headers: managerHeaders });
-      expect(mgrListResp.ok()).toBeTruthy();
+      // page_size tối đa của `/api/leads` là 100 (Query(..., le=100)).
+      const mgrListResp = await page.request.get(`${API_URL}/api/leads?page_size=100`, {
+        headers: managerHeaders,
+      });
+      await expectOk(mgrListResp, "manager GET /api/leads", [200]);
       const mgrBody = await mgrListResp.json();
 
-      // Positive: manager sees lead1 (unitA)
-      expect(mgrBody.leads.some((l: { id: number }) => l.id === leadId1)).toBeTruthy();
-      // Negative: manager does NOT see unitB lead
-      expect(mgrBody.leads.find((l: { id: number }) => l.id === unitBLeadId)).toBeFalsy();
-      // Role enforcement: all returned leads belong to unitA
-      if (mgrBody.leads.length > 0) {
-        expect(
-          mgrBody.leads.every((l: { unit_id: number }) => l.unit_id === unitId)
-        ).toBeTruthy();
-      }
+      // Dương tính: manager THẤY lead vừa tạo trong chính đơn vị mình.
+      expect(
+        mgrBody.leads.some((l: { id: number }) => l.id === managerUnitLeadId),
+        `Manager (đơn vị #${managerUnitId}) phải thấy lead #${managerUnitLeadId} ` +
+          `cùng đơn vị. Nhận ${mgrBody.leads.length} lead, total=${mgrBody.total_count}.`
+      ).toBeTruthy();
+      // Âm tính: manager KHÔNG thấy lead của đơn vị khác.
+      expect(
+        mgrBody.leads.find((l: { id: number }) => l.id === unitBLeadId),
+        `Manager KHÔNG được thấy lead #${unitBLeadId} ở đơn vị #${unitBId}.`
+      ).toBeFalsy();
+      // Bất biến phạm vi: mọi lead trả về đều thuộc ĐƠN VỊ CỦA MANAGER.
+      const ngoaiPhamVi = mgrBody.leads.filter(
+        (l: { id: number; unit_id: number }) => l.unit_id !== managerUnitId
+      );
+      expect(
+        ngoaiPhamVi.map((l: { id: number; unit_id: number }) => `#${l.id}@${l.unit_id}`),
+        `Manager đơn vị #${managerUnitId} nhận được lead ngoài phạm vi.`
+      ).toEqual([]);
       console.log(`Manager list: total_count=${mgrBody.total_count}, unitB lead hidden`);
     });
 

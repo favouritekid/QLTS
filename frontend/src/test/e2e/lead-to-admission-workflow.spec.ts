@@ -25,6 +25,11 @@
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
 import * as OTPAuth from "otpauth";
+import {
+  createAdmissionProfile,
+  resolveAdmissionContext,
+  type AdmissionPathContext,
+} from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -76,6 +81,13 @@ let officerCookies: Cookie[] = [];
 let unitId: number;
 let offeringId: number;
 let admissionMethodId: number;
+/**
+ * (offering, path, round, năm, phương thức) từ MỘT AdmissionPath — nguồn
+ * chuẩn `GET /api/admission-config/paths/for-offering/{id}`, đúng thứ UI
+ * dùng. `AdmissionProfileCreate` đòi đủ bốn trường; payload hai trường của
+ * bản cũ trả 422 (đo thật ở :614 của nightly 34678745325).
+ */
+let pathContext: AdmissionPathContext;
 let initialStatusId: string;
 let secondStatusId: string;
 let officerUserId: number;
@@ -308,29 +320,15 @@ test.describe("Lead to Admission Workflow", () => {
     const allOfferings: Array<{ id: number; program?: { unit_id?: number } }> =
       await offeringsResp.json();
 
-    // Prefer offering whose program belongs to officer's unit tree
-    const unitOffering = allOfferings.find(
-      (o) => o.program?.unit_id === unitId
-    );
-    offeringId = unitOffering?.id || allOfferings[0]?.id;
-    if (!offeringId) {
-      throw new Error(
-        `Setup FAILED: No active offering found. Total: ${allOfferings.length}`
-      );
-    }
-
-    const methodsResp = await page.request.get(
-      `${API_URL}/api/admission-config/methods?active_only=true`
-    );
-    expect(methodsResp.ok()).toBeTruthy();
-    const methodsBody = await methodsResp.json();
-    const allMethods: Array<{ id: number }> = methodsBody.methods || methodsBody;
-    admissionMethodId = allMethods[0]?.id;
-    if (!admissionMethodId) {
-      throw new Error(
-        `Setup FAILED: No active admission method found.`
-      );
-    }
+    // Ưu tiên offering thuộc đơn vị officer, NHƯNG chỉ chấp nhận offering
+    // thật sự CÓ admission path dùng được — `create_profile` tra path theo
+    // bộ ba (round, academic_info, method), không có path là 400.
+    const unitOffering = allOfferings.find((o) => o.program?.unit_id === unitId);
+    pathContext = await resolveAdmissionContext(page.request, {
+      preferOfferingIds: unitOffering ? [unitOffering.id] : [],
+    });
+    offeringId = pathContext.offeringId;
+    admissionMethodId = pathContext.admissionMethodId;
 
     console.log(
       `Config: unit=${unitId} offering=${offeringId} method=${admissionMethodId} status=${initialStatusId}→${secondStatusId} officer=${officerUserId}(${officerFullName})`
@@ -599,23 +597,17 @@ test.describe("Lead to Admission Workflow", () => {
     }) => {
       officerHeaders = await restoreCookies(page, officerCookies);
 
-      // Create profile
-      const createResp = await page.request.post(
-        `${API_URL}/api/admissions`,
-        {
-          headers: officerHeaders,
-          data: {
-            lead_id: leadId1,
-            admission_method_id: admissionMethodId,
-          },
-        }
-      );
-      if (!createResp.ok() && createResp.status() !== 201) {
-        throw new Error(
-          `Create profile failed (${createResp.status()}): ${(await createResp.text()).slice(0, 500)}`
-        );
-      }
-      const profile = await createResp.json();
+      // Create profile — payload ĐỦ BỐN TRƯỜNG từ nguồn chuẩn.
+      const profile = (await createAdmissionProfile(
+        page.request,
+        leadId1,
+        pathContext,
+        officerHeaders
+      )) as {
+        id: number;
+        version: number;
+        applied_rules?: { allowed_subject_codes?: string[] };
+      };
       profileId1 = profile.id;
       profileVersion1 = profile.version;
 
@@ -639,6 +631,13 @@ test.describe("Lead to Admission Workflow", () => {
             nationality: "Viet Nam",
             ethnicity: "Kinh",
             place_of_birth: "Dak Lak",
+            // Bắt buộc tại submit: `priority_service.validate_eligibility`
+            // đọc thẳng `profile.cultural_education_level`.
+            cultural_education_level: "graduated_thpt",
+            vocational_qualification: "none",
+            permanent_province: "Dak Lak",
+            permanent_district: "Buon Ma Thuot",
+            permanent_ward: "Phuong Tan Loi",
             family_info: [
               {
                 relationship: "Cha",
@@ -901,18 +900,17 @@ test.describe("Lead to Admission Workflow", () => {
         }
       );
 
-      // Profile + fill data + docs
-      const createResp = await page.request.post(
-        `${API_URL}/api/admissions`,
-        {
-          headers: officerHeaders,
-          data: {
-            lead_id: leadId2,
-            admission_method_id: admissionMethodId,
-          },
-        }
-      );
-      const profile = await createResp.json();
+      // Profile + fill data + docs — payload ĐỦ BỐN TRƯỜNG từ nguồn chuẩn.
+      const profile = (await createAdmissionProfile(
+        page.request,
+        leadId2,
+        pathContext,
+        officerHeaders
+      )) as {
+        id: number;
+        version: number;
+        applied_rules?: { allowed_subject_codes?: string[] };
+      };
       profileId2 = profile.id;
       profileVersion2 = profile.version;
 
@@ -935,6 +933,13 @@ test.describe("Lead to Admission Workflow", () => {
             nationality: "Viet Nam",
             ethnicity: "Kinh",
             place_of_birth: "Dak Lak",
+            // Bắt buộc tại submit: `priority_service.validate_eligibility`
+            // đọc thẳng `profile.cultural_education_level`.
+            cultural_education_level: "graduated_thpt",
+            vocational_qualification: "none",
+            permanent_province: "Dak Lak",
+            permanent_district: "Buon Ma Thuot",
+            permanent_ward: "Phuong Tan Loi",
             family_info: [
               {
                 relationship: "Cha",
