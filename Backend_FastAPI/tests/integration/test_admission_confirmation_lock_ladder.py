@@ -302,6 +302,174 @@ class TestHardLock:
 
 
 # ============================================================================
+# Biên hard-lock: 29 KHÔNG khoá, 30 mới khoá
+# ============================================================================
+
+
+class TestHardLockBoundary:
+    """Rung 29 phải KHÁC HẲN rung 30.
+
+    VÌ SAO CÓ LỚP NÀY: bộ E2E cũ (``admission-lifecycle.spec.ts`` bước
+    "Exhausting CCCD attempts locks token") tin rằng **5** lần sai là khoá
+    cứng. Ngưỡng thật là ``HARD_LOCK_THRESHOLD = 30``
+    (``app/services/admission_confirmation_cooldown.py``), và
+    ``ADMISSION_CONFIRM_MAX_ATTEMPTS = 5`` chỉ còn dùng để HIỂN THỊ
+    ``attempts_remaining``. Giả định sai đó nay bị gỡ khỏi E2E; biên thật
+    được canh ở đây, nơi có thể dựng thẳng ``attempt_count`` thay vì gõ sai
+    30 lần qua HTTP.
+
+    ``TestHardLock`` phía trên đã canh chiều "30 thì khoá". Lớp này canh
+    chiều NGƯỢC LẠI — "29 thì CHƯA khoá" — mà không có nó thì một đột biến
+    lùi ngưỡng xuống 29 **ngay tại chỗ gọi**
+    (``increment_token_attempts(token_obj, HARD_LOCK_THRESHOLD - 1)``) để cả
+    bộ ladder cũ XANH NGUYÊN: ``attempt_count`` vẫn 29, ``lock_until`` vẫn
+    1440 phút, ca 30-lần vẫn khoá + vẫn ghi audit. Khác biệt DUY NHẤT quan sát
+    được là ứng viên gõ sai lần thứ 29 bị khoá VĨNH VIỄN mà không có hàng
+    audit lẫn thông báo cho cán bộ.
+    """
+
+    async def _stage_28_then_one_failure(self, unit_id: int, admin_user_id: int) -> str:
+        """Đưa token tới đúng ``attempt_count == 29`` bằng ĐƯỜNG THẬT.
+
+        Dựng sẵn 28 ở DB rồi cho service chạy lần sai thứ 29 — lần cuối phải
+        đi qua ``verify_and_confirm`` thật, vì thứ đang được canh chính là
+        nhánh mà hàm đó chọn.
+        """
+        _, token_value = await _seed_token(unit_id, admin_user_id)
+        async with AsyncSessionLocal() as session:
+            tok = (
+                await session.execute(
+                    select(models.AdmissionConfirmationToken).where(
+                        models.AdmissionConfirmationToken.token == token_value
+                    )
+                )
+            ).scalar_one()
+            tok.attempt_count = HARD_LOCK_THRESHOLD - 2  # 28
+            tok.lock_until = None
+            await session.commit()
+
+        async with AsyncSessionLocal() as session:
+            with pytest.raises(BadRequest):
+                await admission_service.verify_and_confirm(
+                    db=session,
+                    token_value=token_value,
+                    last_digits=_WRONG_DIGITS,
+                )
+            await session.commit()
+        return token_value
+
+    async def test_attempt_29_leaves_locked_at_null(
+        self,
+        setup_test_database,
+        seed_lead_dependencies,
+        admin_user_in_db,
+    ):
+        """Lần sai thứ 29 KHÔNG được đặt ``locked_at``."""
+        token_value = await self._stage_28_then_one_failure(
+            seed_lead_dependencies["unit_id"], admin_user_in_db["id"]
+        )
+
+        token = await _reload_token(token_value)
+        assert token.attempt_count == HARD_LOCK_THRESHOLD - 1, (
+            "Tiền đề của ca này: phải đứng ở đúng 29, "
+            f"đang là {token.attempt_count}"
+        )
+        assert token.locked_at is None, (
+            "29 lần sai là rung CUỐI của cooldown, chưa phải hard lock — "
+            f"locked_at phải NULL, đang là {token.locked_at!r}"
+        )
+
+    async def test_attempt_29_does_not_increment_lock_count(
+        self,
+        setup_test_database,
+        seed_lead_dependencies,
+        admin_user_in_db,
+    ):
+        """Lần sai thứ 29 KHÔNG được tăng ``lock_count``.
+
+        ``lock_count`` là số lần token bị khoá cứng — nó vào báo cáo lạm dụng.
+        Tăng ở 29 làm sai số liệu ấy ngay cả khi ``locked_at`` vẫn đúng.
+        """
+        token_value = await self._stage_28_then_one_failure(
+            seed_lead_dependencies["unit_id"], admin_user_in_db["id"]
+        )
+
+        token = await _reload_token(token_value)
+        assert (token.lock_count or 0) == 0, (
+            f"lock_count phải còn 0 ở lần sai thứ 29, đang là {token.lock_count}"
+        )
+
+    async def test_attempt_29_writes_no_hard_lock_audit_row(
+        self,
+        setup_test_database,
+        seed_lead_dependencies,
+        admin_user_in_db,
+    ):
+        """Lần sai thứ 29 KHÔNG được sinh hàng audit ``confirmation_hard_locked``."""
+        token_value = await self._stage_28_then_one_failure(
+            seed_lead_dependencies["unit_id"], admin_user_in_db["id"]
+        )
+        token = await _reload_token(token_value)
+
+        async with AsyncSessionLocal() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(models.EntityAuditLog).where(
+                            models.EntityAuditLog.entity_type
+                            == "AdmissionConfirmationToken",
+                            models.EntityAuditLog.entity_id == token.id,
+                            models.EntityAuditLog.action == "confirmation_hard_locked",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert len(rows) == 0, (
+            f"29 lần sai không được ghi audit hard-lock, thấy {len(rows)} hàng"
+        )
+
+    async def test_attempt_29_still_admits_correct_cccd_after_cooldown(
+        self,
+        setup_test_database,
+        seed_lead_dependencies,
+        admin_user_in_db,
+    ):
+        """Sau 29 lần sai, ứng viên vẫn còn LẦN THỨ 30 để nhập đúng.
+
+        Đây là hệ quả nghiệp vụ của biên 29/30 và là thứ người dùng thật cảm
+        nhận được. Chỉ lùi ``lock_until`` về quá khứ (mô phỏng hết cooldown
+        1440 phút) — KHÔNG chạm ``locked_at``, ``attempt_count``, hay ngưỡng.
+        """
+        token_value = await self._stage_28_then_one_failure(
+            seed_lead_dependencies["unit_id"], admin_user_in_db["id"]
+        )
+
+        async with AsyncSessionLocal() as session:
+            tok = (
+                await session.execute(
+                    select(models.AdmissionConfirmationToken).where(
+                        models.AdmissionConfirmationToken.token == token_value
+                    )
+                )
+            ).scalar_one()
+            tok.lock_until = datetime.now(timezone.utc) - timedelta(minutes=1)
+            await session.commit()
+
+        async with AsyncSessionLocal() as session:
+            profile, _post_commit = await admission_service.verify_and_confirm(
+                db=session,
+                token_value=token_value,
+                last_digits=_CORRECT_DIGITS,
+            )
+            await session.commit()
+            assert profile.status == "confirmed", (
+                "29 lần sai rồi hết cooldown thì lần đúng thứ 30 phải được nhận"
+            )
+
+
+# ============================================================================
 # Cooldown elapsed → next attempt admitted
 # ============================================================================
 

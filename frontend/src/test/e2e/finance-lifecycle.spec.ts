@@ -15,7 +15,7 @@
  */
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
-import * as OTPAuth from "otpauth";
+import { FIXTURE_MA_XA, FIXTURE_TINH, FIXTURE_XA, createAdmissionProfile, expectOk, fixtureAcademicHistory, resolveAdmissionContext, resolveFixtureSchoolId, safeBody, summarizeApiError, type AdmissionPathContext, xacThucMfa } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -31,6 +31,19 @@ const OFFICER_PASSWORD = process.env.E2E_OFFICER_PASSWORD || "Abc@123456789";
 
 const API_URL = process.env.E2E_API_URL || "http://localhost:8000";
 
+// Người DUYỆT/TỪ CHỐI phải KHÁC người lập phiếu — xem `_compute_payment_review_flags`
+// (`app/routers/payments.py:1178-1190`) và hàng rào C3 trong
+// `payment_service.reject_payment`.
+//
+// Phải là KẾ TOÁN, không phải manager. `finance_scope_unit_id`
+// (`app/core/deps.py`) trả `None` cho admin+accountant (mọi đơn vị) nhưng trả
+// `unit_id` cho manager. Đo trên chính CSDL E2E: officer `vothithuthuhien` ở
+// đơn vị 4, manager `phanthithuyvan` ở đơn vị 11 ⇒ manager KHÔNG với tới phiếu
+// thu của hồ sơ do officer lập, và lượt từ chối trả 404 (IDOR trả 404, không
+// phải 403). Kế toán `kpahdrim` không bị chặn theo đơn vị và không bật MFA.
+const ACCOUNTANT_USERNAME = process.env.E2E_ACCOUNTANT_USERNAME || "kpahdrim";
+const ACCOUNTANT_PASSWORD = process.env.E2E_ACCOUNTANT_PASSWORD || "Abc@123456789";
+
 // ---------------------------------------------------------------------------
 // Shared state across tests (serial execution within describe)
 // ---------------------------------------------------------------------------
@@ -39,10 +52,17 @@ let adminHeaders: Record<string, string> = {};
 let adminCookies: Cookie[] = [];
 let officerHeaders: Record<string, string> = {};
 let officerCookies: Cookie[] = [];
+let accountantHeaders: Record<string, string> = {};
 
 // Discovery
 let offeringId: number;
 let admissionMethodId: number;
+/**
+ * (offering, path, round, năm, phương thức) lấy từ MỘT AdmissionPath —
+ * xem ghi chú trong `helpers/e2e-fixtures.ts`. `AdmissionProfileCreate`
+ * đòi đủ bốn trường; payload hai trường của bản cũ trả 422.
+ */
+let pathContext: AdmissionPathContext;
 let initialStatusId: string;
 
 // Test 1: Happy path
@@ -76,16 +96,6 @@ function generatePhone(): string {
 
 function generateCitizenId(): string {
   return Array.from({ length: 12 }, () => Math.floor(Math.random() * 10)).join("");
-}
-
-function generateTOTP(secret: string): string {
-  const totp = new OTPAuth.TOTP({
-    secret: OTPAuth.Secret.fromBase32(secret),
-    digits: 6,
-    period: 30,
-    algorithm: "SHA1",
-  });
-  return totp.generate();
 }
 
 async function getCSRFToken(page: Page): Promise<string | undefined> {
@@ -144,7 +154,7 @@ async function loginViaAPI(
       continue;
     }
     if (!loginResp.ok()) {
-      const body = (await loginResp.text()).slice(0, 300);
+      const body = summarizeApiError(loginResp.status(), await loginResp.text());
       throw new Error(`Login failed for ${username}: ${loginResp.status()} ${body}`);
     }
 
@@ -155,16 +165,18 @@ async function loginViaAPI(
       if (!opts?.totpSecret) {
         throw new Error(`MFA required for ${username} but no TOTP secret provided`);
       }
-      const mfaResp = await page.request.post(`${API_URL}/api/auth/verify-mfa`, {
-        data: { mfa_token: loginBody.mfa_token, code: generateTOTP(opts.totpSecret) },
-      });
-      if (!mfaResp.ok()) {
-        // TOTP collision — wait for next period, then restart entire login flow
-        console.log(`MFA failed for ${username} (${mfaResp.status()}), waiting 31s and retrying login...`);
-        await new Promise((r) => setTimeout(r, 31_000));
-        continue; // restart from login
-      }
-      authResp = mfaResp;
+      // Điều phối viên TOTP giữ khoá tài khoản xuyên qua lượt gửi này, nên hai
+      // tiến trình `npx playwright test` không bao giờ tiêu cùng một counter.
+      // Hỏng ⇒ NÉM NGAY: nhánh `sleep(31s); continue` cũ biến mọi nguyên nhân
+      // (mật khẩu sai, tài khoản bị khoá, MFA bị tắt) thành cùng một thất bại
+      // sau 93 giây, và còn đốt hạn mức đăng nhập.
+      authResp = await xacThucMfa(
+        username,
+        opts.totpSecret,
+        loginBody.mfa_token,
+        (payload) =>
+          page.request.post(`${API_URL}/api/auth/verify-mfa`, { data: payload })
+      );
     }
 
     const csrf = await extractAndAddCookies(page, authResp);
@@ -204,6 +216,9 @@ async function setupApprovedProfile(
   const phone = generatePhone();
   const citizenId = generateCitizenId();
   const name = `E2E_Fin_${Date.now()}`;
+  // Tra `school_id` của fixture qua endpoint sản phẩm — id là số tự tăng,
+  // hard-code sẽ vỡ khi thứ tự seed đổi.
+  const fixtureSchoolId = await resolveFixtureSchoolId(page.request);
 
   // Officer: create lead
   let headers = await restoreCookies(page, officerCookies);
@@ -229,13 +244,17 @@ async function setupApprovedProfile(
   );
   expect(consultResp.ok() || consultResp.status() === 201).toBeTruthy();
 
-  // Officer: create admission profile
-  const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
-    headers,
-    data: { lead_id: leadId, admission_method_id: opts.admissionMethodId },
-  });
-  expect(profileResp.ok() || profileResp.status() === 201).toBeTruthy();
-  const profile = await profileResp.json();
+  // Officer: create admission profile — payload ĐỦ BỐN TRƯỜNG từ nguồn chuẩn.
+  const profile = (await createAdmissionProfile(
+    page.request,
+    leadId,
+    pathContext,
+    headers
+  )) as {
+    id: number;
+    version: number;
+    applied_rules?: { allowed_subject_codes?: string[] };
+  };
   const profileId = profile.id;
 
   // Officer: fill personal info + scores
@@ -255,13 +274,19 @@ async function setupApprovedProfile(
       nationality: "Viet Nam",
       ethnicity: "Kinh",
       place_of_birth: "Ha Noi",
+      // Bắt buộc tại submit — `priority_service.validate_eligibility`
+      // đọc thẳng `profile.cultural_education_level`, KHÔNG suy từ
+      // `academic_history.graduation_type`.
+      cultural_education_level: "graduated_thpt",
+      vocational_qualification: "none",
+      permanent_province: FIXTURE_TINH,
+      permanent_ward: FIXTURE_XA,
+      permanent_commune_code: FIXTURE_MA_XA,
       family_info: [
         { relationship: "Cha", full_name: "Nguyen Van X", phone: "0912345670", occupation: "Ky su", is_primary_guardian: true },
         { relationship: "Me", full_name: "Le Thi Y", phone: "0912345671", occupation: "Bac si", is_primary_guardian: false },
       ],
-      academic_history: [
-        { school_name: "THPT Le Quy Don", year_from: 2018, year_to: 2021, gpa: 8.0, graduation_type: "THPT" },
-      ],
+      academic_history: fixtureAcademicHistory(fixtureSchoolId, 2018, 2021),
       admission_scores: { subject_scores: subjectScores, gpa: 8.0 },
     },
   });
@@ -274,7 +299,7 @@ async function setupApprovedProfile(
       d.is_mandatory && d.status === "missing"
   );
   for (const doc of missingDocs) {
-    await page.request.post(
+    const upResp = await page.request.post(
       `${API_URL}/api/admissions/${profileId}/documents/${doc.code}/upload`,
       {
         headers,
@@ -288,7 +313,37 @@ async function setupApprovedProfile(
         },
       }
     );
+    await expectOk(upResp, `officer tải lên tài liệu ${doc.code}`, [200, 201]);
   }
+
+  // Admin: XÁC MINH tài liệu.
+  // Path ở chế độ nghiêm ngặt (`allow_unverified_submission=false`) —
+  // bỏ bước này thì `/submit` trả 200 mà `status` vẫn `"draft"` kèm
+  // "Tài liệu … chưa được xác minh". PATCH, không phải POST
+  // (`app/routers/admissions.py:1187`).
+  const verifyHeaders = await restoreCookies(page, adminCookies);
+  const afterUpload = await (
+    await page.request.get(`${API_URL}/api/admissions/${profileId}`)
+  ).json();
+  for (const doc of (afterUpload.documents_checklist || []).filter(
+    (d: { is_mandatory: boolean; status: string }) =>
+      d.is_mandatory && (d.status === "uploaded" || d.status === "paper_submitted")
+  )) {
+    const vResp = await page.request.patch(
+      `${API_URL}/api/admissions/${profileId}/documents/${doc.code}/verify-format`,
+      { headers: verifyHeaders, data: { format: "photo" } }
+    );
+    await expectOk(vResp, `admin xác minh tài liệu ${doc.code}`, [200]);
+  }
+
+  // KV KHÔNG còn phải ấn định thủ công — xem ghi chú cùng nội dung ở
+  // `admission-lifecycle.spec.ts`. Tóm tắt: `seed_e2e_catalog_fixture` nay
+  // seed danh mục tối thiểu nên engine tự giải KV qua nhánh LICH_SU_THPT, và
+  // cổng xuất xứ của override chặn đúng khi không còn gì để override
+  // (đo thật: 400 BUSINESS_RULE_VIOLATION, "Engine vừa tính lại và resolve
+  // thành công").
+
+  headers = await restoreCookies(page, officerCookies);
 
   // Officer: submit
   const submitResp = await page.request.post(
@@ -297,7 +352,7 @@ async function setupApprovedProfile(
   );
   const submitBody = await submitResp.json();
   if (submitBody.status !== "submitted") {
-    console.log(`Submit errors: ${JSON.stringify(submitBody.validation_errors || submitBody).slice(0, 500)}`);
+    console.log(`Submit errors: ${safeBody(submitBody.validation_errors || submitBody)}`);
   }
   expect(submitBody.status).toBe("submitted");
 
@@ -344,22 +399,16 @@ test.describe("Finance Lifecycle", () => {
       expect(pipelineResp.ok()).toBeTruthy();
       initialStatusId = (await pipelineResp.json()).statuses[0].id;
 
-      // Offerings
-      const offeringsResp = await page.request.get(
-        `${API_URL}/api/program-offerings?is_active=true&limit=1`
-      );
-      expect(offeringsResp.ok()).toBeTruthy();
-      offeringId = (await offeringsResp.json())[0].id;
+      // Offering + phương thức + đợt + năm — cùng MỘT AdmissionPath.
+      pathContext = await resolveAdmissionContext(page.request);
+      offeringId = pathContext.offeringId;
+      admissionMethodId = pathContext.admissionMethodId;
 
-      // Admission methods
-      const methodsResp = await page.request.get(
-        `${API_URL}/api/admission-config/methods?active_only=true`
+      console.log(
+        `Config: offering=${offeringId}, method=${admissionMethodId}, ` +
+          `round=${pathContext.admissionRoundId}(${pathContext.roundCode}), ` +
+          `year=${pathContext.academicYear}, status=${initialStatusId}`
       );
-      expect(methodsResp.ok()).toBeTruthy();
-      const methodsBody = await methodsResp.json();
-      admissionMethodId = (methodsBody.methods || methodsBody)[0].id;
-
-      console.log(`Config: offering=${offeringId}, method=${admissionMethodId}, status=${initialStatusId}`);
     });
 
     // --- Step 2: Officer login ---
@@ -396,10 +445,12 @@ test.describe("Finance Lifecycle", () => {
           installment_plan_code: "FULL",
         },
       });
-      if (!resp.ok() && resp.status() !== 201) {
-        console.log(`Fee calculate failed: ${resp.status()} ${(await resp.text()).slice(0, 500)}`);
-      }
-      expect(resp.ok() || resp.status() === 201).toBeTruthy();
+      // `POST /api/fees/calculate` khai `status_code=201` (routers/fees.py:247).
+      // Phép kiểm GỘP cũ (`ok() || status===201`) nhận cả 200/202/204 và chỉ in
+      // "Received: false", nên nó KHÔNG nói được vì sao — đúng cái đã che một
+      // lượt nightly. `expectOk(..., [201])` chỉ nhận 201 và nhét
+      // `summarizeApiError` vào thông điệp assertion.
+      await expectOk(resp, "POST /api/fees/calculate (tuition, HK1)", [201]);
       const body = await resp.json();
       feeId = body.id;
       feeAmount = parseFloat(body.total_amount || body.base_amount);
@@ -429,7 +480,7 @@ test.describe("Finance Lifecycle", () => {
         `${API_URL}/api/fees/by-profile/${approvedProfileId}`
       );
       if (!resp.ok()) {
-        console.log(`Fees by profile failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Fees by profile failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const fees = await resp.json();
@@ -443,7 +494,7 @@ test.describe("Finance Lifecycle", () => {
         `${API_URL}/api/fees/summary/${approvedProfileId}`
       );
       if (!resp.ok()) {
-        console.log(`Finance summary failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Finance summary failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
@@ -489,7 +540,7 @@ test.describe("Finance Lifecycle", () => {
         headers: adminHeaders,
       });
       if (!resp.ok()) {
-        console.log(`Payment methods failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Payment methods failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const methods = await resp.json();
@@ -513,10 +564,8 @@ test.describe("Finance Lifecycle", () => {
           payer_name: "Nguyen Van Test",
         },
       });
-      if (!resp.ok() && resp.status() !== 201) {
-        console.log(`Record payment failed: ${resp.status()} ${(await resp.text()).slice(0, 500)}`);
-      }
-      expect(resp.ok() || resp.status() === 201).toBeTruthy();
+      // `POST /api/payments` khai `status_code=201` (routers/payments.py:232).
+      await expectOk(resp, "POST /api/payments (ghi phiếu thu)", [201]);
       const body = await resp.json();
       paymentId = body.id;
       expect(body.status).toBe("pending");
@@ -561,7 +610,7 @@ test.describe("Finance Lifecycle", () => {
       const resp = await page.request.get(`${API_URL}/api/finance/dashboard`);
       if (resp.ok()) {
         const body = await resp.json();
-        console.log(`Dashboard: ${JSON.stringify(body).slice(0, 200)}`);
+        console.log(`Dashboard: ${safeBody(body)}`);
       } else {
         // Dashboard endpoint may not exist, that's OK
         console.log(`Dashboard endpoint: ${resp.status()} (may not exist)`);
@@ -585,7 +634,7 @@ test.describe("Finance Lifecycle", () => {
           installment_plan_code: "FULL",
         },
       });
-      expect(resp.ok() || resp.status() === 201).toBeTruthy();
+      await expectOk(resp, "POST /api/fees/calculate (application)", [201]);
       const body = await resp.json();
       fee2Id = body.id;
       console.log(`Fee2 created: id=${fee2Id}, type=application`);
@@ -599,7 +648,7 @@ test.describe("Finance Lifecycle", () => {
       );
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
-      console.log(`Fee2 recalculated: ${JSON.stringify(body).slice(0, 200)}`);
+      console.log(`Fee2 recalculated: ${safeBody(body)}`);
     });
 
     // --- Step 3: Waive partial amount ---
@@ -616,7 +665,7 @@ test.describe("Finance Lifecycle", () => {
       );
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
-      console.log(`Fee2 waived: ${JSON.stringify(body).slice(0, 200)}`);
+      console.log(`Fee2 waived: ${safeBody(body)}`);
     });
 
     // --- Step 4: Waive excessive amount (should fail) ---
@@ -668,7 +717,7 @@ test.describe("Finance Lifecycle", () => {
       const resp = await page.request.get(`${API_URL}/api/installment-plans`);
       if (resp.ok()) {
         const plans = await resp.json();
-        console.log(`Installment plans: ${JSON.stringify(plans).slice(0, 200)}`);
+        console.log(`Installment plans: ${safeBody(plans)}`);
       } else {
         // Endpoint may not exist
         console.log(`Installment plans endpoint: ${resp.status()}`);
@@ -723,7 +772,11 @@ test.describe("Finance Lifecycle", () => {
             installment_plan_code: "FULL",
           },
         });
-        expect(newFeeResp.ok() || newFeeResp.status() === 201).toBeTruthy();
+        await expectOk(
+          newFeeResp,
+          "POST /api/fees/calculate (tuition, hồ sơ thứ hai)",
+          [201]
+        );
         const body = await newFeeResp.json();
         fee3Id = body.id;
         const invoices = body.invoices || [];
@@ -764,10 +817,7 @@ test.describe("Finance Lifecycle", () => {
           payer_name: "Tran Van Test",
         },
       });
-      if (!resp.ok() && resp.status() !== 201) {
-        console.log(`Record payment3 failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
-      }
-      expect(resp.ok() || resp.status() === 201).toBeTruthy();
+      await expectOk(resp, "POST /api/payments (phiếu thu sẽ bị từ chối)", [201]);
       const body = await resp.json();
       payment3Id = body.id;
       expect(body.status).toBe("pending");
@@ -785,16 +835,35 @@ test.describe("Finance Lifecycle", () => {
       console.log(`Self-verify blocked: ${resp.status()}`);
     });
 
-    // --- Step 4: Admin rejects payment ---
-    await test.step("Admin rejects payment", async () => {
+    // --- Step 4: MỘT NGƯỜI KHÁC từ chối phiếu thu ---
+    await test.step("Kế toán (khác maker) từ chối phiếu thu", async () => {
+      // Bản cũ để CHÍNH admin vừa lập phiếu đi từ chối nó, rồi đòi 2xx. Điều đó
+      // mâu thuẫn với hàng rào C3 (`payment_service.reject_payment`): "Cannot
+      // reject your own payment (maker-checker violation)". Hàng rào ấy vào main
+      // ngày 11-08-2026 qua #550, còn bước test này có từ 06-03-2026 — nên ca
+      // này ĐỎ từ 11-08, chỉ chưa ai thấy vì suite chết trước khi tới đây.
+      //
+      // ⚠️ KHÔNG nới ca kiểm thành "chấp nhận cả 400". Làm thế là xoá mất phép
+      // kiểm đường từ chối THÀNH CÔNG — nửa còn lại của maker-checker. Cách
+      // đúng là cấp cho ca một CHECKER thật, khác maker.
+      //
+      // Vẫn giữ admin làm maker ở Step 2/3: admin có ĐỦ quyền, nên 400 ở bước
+      // self-verify chắc chắn đến từ maker-checker chứ không phải từ thiếu
+      // quyền — một 403 vì thiếu quyền sẽ lọt qua `expect([400,403])` mà không
+      // kiểm được gì cả.
+      accountantHeaders = await loginViaAPI(page, ACCOUNTANT_USERNAME, ACCOUNTANT_PASSWORD);
+
       const resp = await page.request.put(
         `${API_URL}/api/payments/${payment3Id}/reject?reason=E2E+test+payment+rejection`,
-        { headers: adminHeaders }
+        { headers: accountantHeaders }
       );
-      expect(resp.ok()).toBeTruthy();
+      await expectOk(resp, "kế toán từ chối phiếu thu do admin lập", [200]);
       const body = await resp.json();
       expect(body.status).toBe("rejected");
-      console.log(`Payment3 rejected`);
+      console.log(`Payment3 rejected by accountant`);
+
+      // Trả phiên về admin: các bước sau đọc theo cookie của trang.
+      adminHeaders = await restoreCookies(page, adminCookies);
     });
 
     // --- Step 5: Verify payment in invoice list ---

@@ -806,6 +806,7 @@ jobs:
               tests/unit/test_lead_action_permissions.py
               tests/integration/test_reassign_terminal_guard.py
               tests/integration/test_delete_consultation_revert.py
+              tests/api/test_fee_calculate_thieu_gia_hoc_ky_hk1.py
               tests/integration/test_restore_consultation_revert.py
               tests/integration/test_add_restore_consultation_latest.py
               tests/integration/test_consultation_system_immutable.py
@@ -910,12 +911,14 @@ jobs:
               tests/unit/test_nginx_template_packaging.py
               tests/unit/test_celery_heartbeat_monitor_script.py
               tests/unit/test_ci_test_visibility.py
+              tests/unit/test_e2e_catalog_fixture.py
               tests/unit/test_e2e_credential_contract.py
               tests/unit/test_import_moet_schools.py
               tests/services/test_insights.py
               tests/utils/test_file_helpers.py
               tests/utils/test_file_helpers_guard.py
               tests/unit/test_nightly_shard_inventory.py
+              tests/unit/test_totp_coordinator_inventory.py
               tests/unit/test_phase1_16_archived_admission_profile.py
               tests/unit/test_entrypoint_ordering.py
               tests/unit/test_immediate_fixes.py

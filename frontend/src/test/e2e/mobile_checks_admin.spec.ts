@@ -11,7 +11,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
-import * as OTPAuth from 'otpauth';
+import { xacThucMfa } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -29,16 +29,6 @@ const MOBILE_VIEWPORT = { width: 375, height: 812 };
 // ---------------------------------------------------------------------------
 // Helpers (inline — no cross-file imports per E2E convention)
 // ---------------------------------------------------------------------------
-
-function generateTOTP(secret: string): string {
-  const totp = new OTPAuth.TOTP({
-    secret: OTPAuth.Secret.fromBase32(secret),
-    digits: 6,
-    period: 30,
-    algorithm: 'SHA1',
-  });
-  return totp.generate();
-}
 
 async function extractAndAddCookies(
   page: Page,
@@ -94,19 +84,18 @@ async function loginAdminViaAPI(page: Page): Promise<void> {
     const loginBody = await loginResp.json();
 
     if (loginBody.mfa_required) {
-      const mfaResp = await page.request.post(`${API_URL}/api/auth/verify-mfa`, {
-        data: {
-          mfa_token: loginBody.mfa_token,
-          code: generateTOTP(ADMIN_TOTP_SECRET),
-        },
-      });
-      if (!mfaResp.ok()) {
-        console.log(
-          `MFA failed (${mfaResp.status()}), waiting 31s and retrying...`
-        );
-        await new Promise((r) => setTimeout(r, 31_000));
-        continue;
-      }
+      // Điều phối viên TOTP giữ khoá tài khoản xuyên qua lượt gửi này, nên hai
+      // tiến trình `npx playwright test` không bao giờ tiêu cùng một counter.
+      // Hỏng ⇒ NÉM NGAY: nhánh `sleep(31s); continue` cũ biến mọi nguyên nhân
+      // (mật khẩu sai, tài khoản bị khoá, MFA bị tắt) thành cùng một thất bại
+      // sau 93 giây, và còn đốt hạn mức đăng nhập.
+      const mfaResp = await xacThucMfa(
+        ADMIN_USERNAME,
+        ADMIN_TOTP_SECRET,
+        loginBody.mfa_token,
+        (payload) =>
+          page.request.post(`${API_URL}/api/auth/verify-mfa`, { data: payload })
+      );
       await extractAndAddCookies(page, mfaResp);
     } else {
       await extractAndAddCookies(page, loginResp);
