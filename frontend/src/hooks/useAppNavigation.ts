@@ -6,6 +6,7 @@
 import { useMemo, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
+import { useHasMounted } from "@/hooks/useHasMounted";
 import { navigationConfig } from "@/lib/config/navigation";
 import type { NavItem, NavGroup } from "@/types/navigation";
 
@@ -27,7 +28,17 @@ interface UseAppNavigationReturn {
  * const { navigation, isActive } = useAppNavigation();
  */
 export function useAppNavigation(): UseAppNavigationReturn {
-  const { user } = useAuth();
+  const { user: persistedUser } = useAuth();
+  // Readiness THEO TỪNG INSTANCE của hook — `useHasMounted()` giữ `useState` +
+  // `useEffect` bên trong nó, nên MỖI lời gọi `useAppNavigation()` có cờ RIÊNG.
+  // Lần render client ĐẦU TIÊN của chính instance đó luôn thấy `user = null`,
+  // đúng như server đã render, kể cả khi instance ấy mount ở một biên
+  // <Suspense> được ghép muộn (AppSidebar vs MobileBottomNav).
+  //
+  // Cờ TOÀN CỤC (biến cấp module) KHÔNG đủ: instance mount muộn sẽ thấy cờ đã
+  // bật ngay ở lần render đầu của nó → lệch lại với HTML server.
+  const hasMounted = useHasMounted();
+  const user = hasMounted ? persistedUser : null;
   const pathname = usePathname();
 
   /**
