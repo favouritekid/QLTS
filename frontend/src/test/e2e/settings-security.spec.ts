@@ -10,7 +10,7 @@
  */
 
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
-import * as OTPAuth from "otpauth";
+import { xacThucMfa } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -28,16 +28,6 @@ const HYDRATION_ISSUE_PATTERN =
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function generateTOTP(secret: string): string {
-  const totp = new OTPAuth.TOTP({
-    secret: OTPAuth.Secret.fromBase32(secret),
-    digits: 6,
-    period: 30,
-    algorithm: "SHA1",
-  });
-  return totp.generate();
-}
 
 async function extractAndAddCookies(
   page: Page,
@@ -137,13 +127,18 @@ test.describe("Settings Pages", () => {
     let authResp = loginResp;
 
     if (loginBody.mfa_required && ADMIN_TOTP_SECRET) {
-      const code = generateTOTP(ADMIN_TOTP_SECRET);
-      const mfaResp = await sharedPage.request.post(
-        `${API_URL}/api/auth/verify-mfa`,
-        { data: { mfa_token: loginBody.mfa_token, code } }
+      // Điều phối viên TOTP giữ khoá tài khoản xuyên qua lượt gửi này, nên hai
+      // tiến trình `npx playwright test` không bao giờ tiêu cùng một counter.
+      // Hỏng ⇒ NÉM NGAY: nhánh `sleep(31s); continue` cũ biến mọi nguyên nhân
+      // (mật khẩu sai, tài khoản bị khoá, MFA bị tắt) thành cùng một thất bại
+      // sau 93 giây, và còn đốt hạn mức đăng nhập.
+      authResp = await xacThucMfa(
+        ADMIN_USERNAME,
+        ADMIN_TOTP_SECRET,
+        loginBody.mfa_token,
+        (payload) =>
+          sharedPage.request.post(`${API_URL}/api/auth/verify-mfa`, { data: payload })
       );
-      if (!mfaResp.ok()) throw new Error(`MFA failed: ${mfaResp.status()}`);
-      authResp = mfaResp;
     } else if (loginBody.mfa_required) {
       throw new Error("MFA required but no TOTP secret configured");
     }

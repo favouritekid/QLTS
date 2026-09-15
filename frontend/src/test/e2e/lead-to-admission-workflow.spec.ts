@@ -24,7 +24,7 @@
  */
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
-import * as OTPAuth from "otpauth";
+import { FIXTURE_MA_XA, FIXTURE_TINH, FIXTURE_XA, createAdmissionProfile, expectOk, fixtureAcademicHistory, resolveAdmissionContext, resolveFixtureSchoolId, safeBody, summarizeApiError, type AdmissionPathContext, xacThucMfa } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -76,6 +76,13 @@ let officerCookies: Cookie[] = [];
 let unitId: number;
 let offeringId: number;
 let admissionMethodId: number;
+/**
+ * (offering, path, round, năm, phương thức) từ MỘT AdmissionPath — nguồn
+ * chuẩn `GET /api/admission-config/paths/for-offering/{id}`, đúng thứ UI
+ * dùng. `AdmissionProfileCreate` đòi đủ bốn trường; payload hai trường của
+ * bản cũ trả 422 (đo thật ở :614 của nightly 34678745325).
+ */
+let pathContext: AdmissionPathContext;
 let initialStatusId: string;
 let secondStatusId: string;
 let officerUserId: number;
@@ -111,16 +118,6 @@ function generateCitizenId(): string {
   return Array.from({ length: 12 }, () => Math.floor(Math.random() * 10)).join(
     ""
   );
-}
-
-function generateTOTP(secret: string): string {
-  const totp = new OTPAuth.TOTP({
-    secret: OTPAuth.Secret.fromBase32(secret),
-    digits: 6,
-    period: 30,
-    algorithm: "SHA1",
-  });
-  return totp.generate();
 }
 
 async function getCSRFToken(page: Page): Promise<string | undefined> {
@@ -181,7 +178,7 @@ async function loginViaAPI(
     }
     if (!loginResp.ok()) {
       throw new Error(
-        `Login failed for ${username}: ${loginResp.status()} ${(await loginResp.text()).slice(0, 300)}`
+        `Login failed for ${username}: ${loginResp.status()} ${summarizeApiError(loginResp.status(), await loginResp.text())}`
       );
     }
 
@@ -191,23 +188,18 @@ async function loginViaAPI(
     if (loginBody.mfa_required) {
       if (!opts?.totpSecret)
         throw new Error(`MFA required for ${username} but no TOTP secret`);
-      const mfaResp = await page.request.post(
-        `${API_URL}/api/auth/verify-mfa`,
-        {
-          data: {
-            mfa_token: loginBody.mfa_token,
-            code: generateTOTP(opts.totpSecret),
-          },
-        }
+      // Điều phối viên TOTP giữ khoá tài khoản xuyên qua lượt gửi này, nên hai
+      // tiến trình `npx playwright test` không bao giờ tiêu cùng một counter.
+      // Hỏng ⇒ NÉM NGAY: nhánh `sleep(31s); continue` cũ biến mọi nguyên nhân
+      // (mật khẩu sai, tài khoản bị khoá, MFA bị tắt) thành cùng một thất bại
+      // sau 93 giây, và còn đốt hạn mức đăng nhập.
+      authResp = await xacThucMfa(
+        username,
+        opts.totpSecret,
+        loginBody.mfa_token,
+        (payload) =>
+          page.request.post(`${API_URL}/api/auth/verify-mfa`, { data: payload })
       );
-      if (!mfaResp.ok()) {
-        console.log(
-          `MFA failed for ${username}, waiting 31s and retrying...`
-        );
-        await new Promise((r) => setTimeout(r, 31_000));
-        continue;
-      }
-      authResp = mfaResp;
     }
 
     const csrf = await extractAndAddCookies(page, authResp);
@@ -231,11 +223,207 @@ const TABLE_SELECTOR =
   "table, [role='table'], [data-testid='admissions-list']";
 
 // ---------------------------------------------------------------------------
+// Tài liệu bắt buộc — NỘP rồi XÁC MINH, một nguồn chuẩn cho CẢ HAI chỗ dựng
+// hồ sơ trong tệp này (test 8 "happy path" và test 16 "rejection path").
+// ---------------------------------------------------------------------------
+
+/** Một dòng `documents_checklist` — chỉ những trường harness thật sự đọc. */
+interface ChecklistItem {
+  code: string;
+  status: "missing" | "uploaded" | "verified" | "rejected" | "paper_submitted";
+  is_mandatory?: boolean | null;
+  requires_upload?: boolean | null;
+}
+
+/**
+ * Đọc `documents_checklist` của hồ sơ — FAIL-CLOSED.
+ *
+ * Bản cũ gọi `page.request.get(...)` rồi `await getResp.json()` thẳng, không
+ * nhìn status lần nào: một 401/404/500 sẽ cho `fresh.documents_checklist ===
+ * undefined`, `missingDocs` rỗng, vòng upload chạy 0 lần, và test vẫn đi tiếp
+ * tới `submit` như thể đã nộp đủ giấy tờ.
+ */
+async function fetchChecklist(
+  page: Page,
+  profileId: number,
+  headers: Record<string, string>,
+  label: string
+): Promise<{ version: number; checklist: ChecklistItem[] }> {
+  const resp = await page.request.get(
+    `${API_URL}/api/admissions/${profileId}`,
+    { headers }
+  );
+  await expectOk(resp, `GET /api/admissions/${profileId} (${label})`, [200]);
+  const body = (await resp.json()) as {
+    version: number;
+    documents_checklist?: ChecklistItem[] | null;
+  };
+  expect(
+    Array.isArray(body.documents_checklist),
+    `${label}: hồ sơ #${profileId} không trả về documents_checklist dạng mảng — ` +
+      `${safeBody(body)}`
+  ).toBeTruthy();
+  return { version: body.version, checklist: body.documents_checklist ?? [] };
+}
+
+/**
+ * Đưa MỌI tài liệu bắt buộc của hồ sơ về trạng thái ĐÃ XÁC MINH, rồi khẳng
+ * định điều đó TRƯỚC khi test gọi `submit`.
+ *
+ * VÌ SAO PHẢI CÓ BƯỚC VERIFY — dẫn mã, không suy đoán:
+ *   `admission_service._validate_documents` (:1255-1260) ở chế độ NGHIÊM
+ *   (`applied_rules.allow_unverified_submission == false`) chỉ tính tài liệu
+ *   `verified` / `paper_submitted` là đã nộp; một tài liệu mới `uploaded`
+ *   rơi vào `pending_verify_codes` và sinh lỗi *"Tài liệu {code} chưa được
+ *   xác minh…"* (:1284). `submit_and_evaluate` trả lỗi ấy dưới dạng
+ *   **HTTP 200 + `{"status":"draft","validation_errors":[…]}`** (:7121-7123)
+ *   chứ KHÔNG phải 4xx — nên một harness chỉ nhìn `resp.ok()` sẽ thấy "xanh"
+ *   ở mọi request rồi ngã ở dòng `expect(status).toBe("submitted")` mà không
+ *   nói được vì sao.
+ *
+ * AI ĐƯỢC VERIFY: `DocumentActionPolicy.authorize("verify", …)`
+ *   (`app/services/admission_document_policy.py`) đòi `reviewer_scope` =
+ *   **admin HOẶC manager cùng đơn vị**; officer — kể cả officer phụ trách —
+ *   KHÔNG có quyền. Casbin cũng chỉ cấp route cho manager
+ *   (`policy_templates.py:648`, admin thừa kế qua wildcard `/*`). Vì vậy hàm
+ *   này ĐỔI sang principal admin đúng cho bước verify rồi trả officer về.
+ *
+ * ENDPOINT: `PATCH /api/admissions/{profile_id}/documents/{doc_code}/verify-format`
+ *   (`app/routers/admissions.py:1187-1194`), thân `{"format": "original" |
+ *   "certified_copy" | "photo"}` (`schemas.DocumentFormatVerifyRequest`).
+ *   Phương thức là **PATCH** — POST vào đúng URL ấy trả 405.
+ *
+ * Trả về `version` mới nhất của hồ sơ, đọc bằng principal officer (chính
+ * người sẽ gọi `submit`).
+ */
+async function satisfyMandatoryDocuments(
+  page: Page,
+  profileId: number,
+  label: string
+): Promise<number> {
+  // --- 1. NỘP (officer) --------------------------------------------------
+  let officerHdrs = await restoreCookies(page, officerCookies);
+  let { checklist } = await fetchChecklist(
+    page,
+    profileId,
+    officerHdrs,
+    `${label} · trước khi nộp giấy tờ`
+  );
+
+  const mandatoryCodes = checklist
+    .filter((d) => d.is_mandatory)
+    .map((d) => d.code);
+  expect(
+    mandatoryCodes.length,
+    `${label}: hồ sơ #${profileId} KHÔNG có tài liệu bắt buộc nào — ` +
+      `fixture sai thì phép kiểm "đã xác minh" không canh gì cả`
+  ).toBeGreaterThan(0);
+
+  for (const doc of checklist.filter(
+    (d) => d.is_mandatory && d.status === "missing"
+  )) {
+    if (doc.requires_upload === false) {
+      // Tài liệu chỉ nộp GIẤY: không có đường upload, `authorize("upload")`
+      // đòi `requires_upload === true` nên POST /upload sẽ 404.
+      const paperResp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId}/documents/${doc.code}/paper-submitted`,
+        {
+          headers: officerHdrs,
+          data: { actual_submission_format: "photo" },
+        }
+      );
+      await expectOk(
+        paperResp,
+        `POST paper-submitted ${doc.code} (${label})`,
+        [200]
+      );
+    } else {
+      const upResp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId}/documents/${doc.code}/upload`,
+        {
+          headers: officerHdrs,
+          multipart: {
+            file: {
+              name: `${doc.code}.pdf`,
+              mimeType: "application/pdf",
+              buffer: Buffer.from(`%PDF-1.4\n%%EOF\n% E2E: ${doc.code}`),
+            },
+            actual_submission_format: "photo",
+          },
+        }
+      );
+      await expectOk(upResp, `POST upload ${doc.code} (${label})`, [200]);
+    }
+  }
+
+  // --- 2. ĐỌC LẠI bằng officer: cái gì còn chờ xác minh ------------------
+  ({ checklist } = await fetchChecklist(
+    page,
+    profileId,
+    officerHdrs,
+    `${label} · sau khi nộp giấy tờ`
+  ));
+  const pendingVerify = checklist.filter(
+    (d) => d.is_mandatory && d.status === "uploaded"
+  );
+
+  // --- 3. XÁC MINH bằng ADMIN (officer không có quyền) -------------------
+  const adminHdrs = await restoreCookies(page, adminCookies);
+  for (const doc of pendingVerify) {
+    const vResp = await page.request.patch(
+      `${API_URL}/api/admissions/${profileId}/documents/${doc.code}/verify-format`,
+      { headers: adminHdrs, data: { format: "photo" } }
+    );
+    await expectOk(
+      vResp,
+      `PATCH verify-format ${doc.code} (${label})`,
+      [200]
+    );
+  }
+
+  // --- 4. ĐỌC LẠI và KHẲNG ĐỊNH trạng thái trước khi submit --------------
+  // Khẳng định trên ảnh chụp MỚI đọc từ server, không phải trên thân phản
+  // hồi của chính lệnh verify: một lệnh verify trả 200 mà không đổi trạng
+  // thái vẫn phải làm ca này ĐỎ.
+  const after = await fetchChecklist(
+    page,
+    profileId,
+    adminHdrs,
+    `${label} · sau khi xác minh`
+  );
+  for (const doc of after.checklist.filter((d) => d.is_mandatory)) {
+    const mong = doc.requires_upload === false ? "paper_submitted" : "verified";
+    expect(
+      doc.status,
+      `${label}: tài liệu bắt buộc ${doc.code} phải ở "${mong}" TRƯỚC khi nộp ` +
+        `hồ sơ (chế độ nghiêm: chỉ verified/paper_submitted mới tính là đã nộp)`
+    ).toBe(mong);
+  }
+  console.log(
+    `${label}: ${mandatoryCodes.length} tài liệu bắt buộc — ` +
+      `đã xác minh ${pendingVerify.length} qua PATCH verify-format (admin)`
+  );
+
+  // --- 5. Trả principal officer + version mới nhất -----------------------
+  officerHdrs = await restoreCookies(page, officerCookies);
+  const cuoi = await fetchChecklist(
+    page,
+    profileId,
+    officerHdrs,
+    `${label} · lấy version trước submit`
+  );
+  return cuoi.version;
+}
+
+// ---------------------------------------------------------------------------
 // Test Suite
 // ---------------------------------------------------------------------------
 
 test.describe("Lead to Admission Workflow", () => {
   test.describe.configure({ mode: "serial", timeout: 600_000 });
+  // Tra một lần ở bước Setup rồi dùng lại — id trường là số tự tăng nên
+  // hard-code sẽ vỡ khi thứ tự seed đổi.
+  let fixtureSchoolId = 0;
 
   // =========================================================================
   // SETUP
@@ -259,10 +447,14 @@ test.describe("Lead to Admission Workflow", () => {
     // Discover resources (dynamic — pattern from lead-workflow.spec.ts:243)
     adminHeaders = await restoreCookies(page, adminCookies);
 
+    // Tra `school_id` của fixture — PHẢI sau khi đăng nhập, endpoint này đòi
+    // xác thực (đặt trước login thì 401 INVALID_TOKEN).
+    fixtureSchoolId = await resolveFixtureSchoolId(page.request);
+
     const pipelineResp = await page.request.get(
       `${API_URL}/api/pipeline/all`
     );
-    expect(pipelineResp.ok()).toBeTruthy();
+    await expectOk(pipelineResp, "GET /api/pipeline/all", [200]);
     const pipeline = await pipelineResp.json();
     const transitions: Array<{
       from_status_id: string;
@@ -281,7 +473,7 @@ test.describe("Lead to Admission Workflow", () => {
     const unitsResp = await page.request.get(
       `${API_URL}/api/organization-units`
     );
-    expect(unitsResp.ok()).toBeTruthy();
+    await expectOk(unitsResp, "GET /api/organization-units", [200]);
     unitId = (await unitsResp.json())[0]?.id;
     expect(unitId).toBeTruthy();
 
@@ -290,7 +482,7 @@ test.describe("Lead to Admission Workflow", () => {
     const meResp = await page.request.get(`${API_URL}/api/profile`, {
       headers: officerHeaders,
     });
-    expect(meResp.ok()).toBeTruthy();
+    await expectOk(meResp, "GET /api/profile (officer)", [200]);
     const me = await meResp.json();
     officerUserId = me.id;
     officerFullName = me.full_name;
@@ -304,33 +496,19 @@ test.describe("Lead to Admission Workflow", () => {
     const offeringsResp = await page.request.get(
       `${API_URL}/api/program-offerings?is_active=true&limit=50`
     );
-    expect(offeringsResp.ok()).toBeTruthy();
+    await expectOk(offeringsResp, "GET /api/program-offerings", [200]);
     const allOfferings: Array<{ id: number; program?: { unit_id?: number } }> =
       await offeringsResp.json();
 
-    // Prefer offering whose program belongs to officer's unit tree
-    const unitOffering = allOfferings.find(
-      (o) => o.program?.unit_id === unitId
-    );
-    offeringId = unitOffering?.id || allOfferings[0]?.id;
-    if (!offeringId) {
-      throw new Error(
-        `Setup FAILED: No active offering found. Total: ${allOfferings.length}`
-      );
-    }
-
-    const methodsResp = await page.request.get(
-      `${API_URL}/api/admission-config/methods?active_only=true`
-    );
-    expect(methodsResp.ok()).toBeTruthy();
-    const methodsBody = await methodsResp.json();
-    const allMethods: Array<{ id: number }> = methodsBody.methods || methodsBody;
-    admissionMethodId = allMethods[0]?.id;
-    if (!admissionMethodId) {
-      throw new Error(
-        `Setup FAILED: No active admission method found.`
-      );
-    }
+    // Ưu tiên offering thuộc đơn vị officer, NHƯNG chỉ chấp nhận offering
+    // thật sự CÓ admission path dùng được — `create_profile` tra path theo
+    // bộ ba (round, academic_info, method), không có path là 400.
+    const unitOffering = allOfferings.find((o) => o.program?.unit_id === unitId);
+    pathContext = await resolveAdmissionContext(page.request, {
+      preferOfferingIds: unitOffering ? [unitOffering.id] : [],
+    });
+    offeringId = pathContext.offeringId;
+    admissionMethodId = pathContext.admissionMethodId;
 
     console.log(
       `Config: unit=${unitId} offering=${offeringId} method=${admissionMethodId} status=${initialStatusId}→${secondStatusId} officer=${officerUserId}(${officerFullName})`
@@ -362,7 +540,7 @@ test.describe("Lead to Admission Workflow", () => {
       });
       if (!resp.ok() && resp.status() !== 201) {
         throw new Error(
-          `Admin create lead failed (${resp.status()}): ${(await resp.text()).slice(0, 500)}`
+          `Admin create lead failed (${resp.status()}): ${summarizeApiError(resp.status(), await resp.text())}`
         );
       }
       const body = await resp.json();
@@ -405,12 +583,16 @@ test.describe("Lead to Admission Workflow", () => {
     }) => {
       officerHeaders = await restoreCookies(page, officerCookies);
 
-      // Check quota first — skip if exhausted (data accumulation from prior runs)
+      // Check quota first — skip if exhausted (data accumulation from prior runs).
+      // FAIL-CLOSED trên chính lượt ĐỌC hạn mức: `if (quotaResp.ok())` cũ coi
+      // một 401/500 là "cứ chạy tiếp", tức chính cái nhánh mà bước kiểm này
+      // sinh ra để canh lại bị bỏ qua im lặng.
       const quotaResp = await page.request.get(
         `${API_URL}/api/leads/my/reassign-quota`,
         { headers: officerHeaders }
       );
-      if (quotaResp.ok()) {
+      await expectOk(quotaResp, "GET /api/leads/my/reassign-quota", [200]);
+      {
         const quota = await quotaResp.json();
         if (!quota.allowed) {
           console.log(
@@ -431,7 +613,7 @@ test.describe("Lead to Admission Workflow", () => {
         }
       );
       if (!reassignResp.ok()) {
-        throw new Error(`Reassign failed (${reassignResp.status()}): ${(await reassignResp.text()).slice(0, 500)}`);
+        throw new Error(`Reassign failed (${reassignResp.status()}): ${summarizeApiError(reassignResp.status(), await reassignResp.text())}`);
       }
       const reassigned = await reassignResp.json();
 
@@ -495,7 +677,9 @@ test.describe("Lead to Admission Workflow", () => {
           data: { offering_id: offeringId },
         }
       );
-      expect(resp.ok()).toBeTruthy();
+      // `expect(resp.ok()).toBeTruthy()` cũ in đúng "Received: false" — không
+      // status, không error_code. `expectOk` giữ nguyên độ chặt và thêm chẩn đoán.
+      await expectOk(resp, `PUT /api/leads/${leadId1} (gán offering)`, [200]);
       const lead = await resp.json();
       expect(lead.offering_id).toBe(offeringId);
       console.log(`Lead updated: offering_id=${offeringId}`);
@@ -539,7 +723,7 @@ test.describe("Lead to Admission Workflow", () => {
         `${API_URL}/api/leads/${leadId1}`,
         { headers: officerHeaders }
       );
-      expect(leadResp.ok()).toBeTruthy();
+      await expectOk(leadResp, `GET /api/leads/${leadId1} (kiểm trạng thái)`, [200]);
       const lead = await leadResp.json();
       expect(lead.consultation_status_id).toBe(secondStatusId);
       console.log(
@@ -557,6 +741,7 @@ test.describe("Lead to Admission Workflow", () => {
         `${API_URL}/api/leads/${leadId1}`,
         { headers: officerHeaders }
       );
+      await expectOk(statusResp, `GET /api/leads/${leadId1} (tên trạng thái kỳ vọng)`, [200]);
       const lead = await statusResp.json();
       const expectedStatusName = lead.consultation_status?.name;
       const expectedStageName = lead.pipeline_stage?.name;
@@ -599,23 +784,17 @@ test.describe("Lead to Admission Workflow", () => {
     }) => {
       officerHeaders = await restoreCookies(page, officerCookies);
 
-      // Create profile
-      const createResp = await page.request.post(
-        `${API_URL}/api/admissions`,
-        {
-          headers: officerHeaders,
-          data: {
-            lead_id: leadId1,
-            admission_method_id: admissionMethodId,
-          },
-        }
-      );
-      if (!createResp.ok() && createResp.status() !== 201) {
-        throw new Error(
-          `Create profile failed (${createResp.status()}): ${(await createResp.text()).slice(0, 500)}`
-        );
-      }
-      const profile = await createResp.json();
+      // Create profile — payload ĐỦ BỐN TRƯỜNG từ nguồn chuẩn.
+      const profile = (await createAdmissionProfile(
+        page.request,
+        leadId1,
+        pathContext,
+        officerHeaders
+      )) as {
+        id: number;
+        version: number;
+        applied_rules?: { allowed_subject_codes?: string[] };
+      };
       profileId1 = profile.id;
       profileVersion1 = profile.version;
 
@@ -639,6 +818,15 @@ test.describe("Lead to Admission Workflow", () => {
             nationality: "Viet Nam",
             ethnicity: "Kinh",
             place_of_birth: "Dak Lak",
+            // Bắt buộc tại submit: `priority_service.validate_eligibility`
+            // đọc thẳng `profile.cultural_education_level`.
+            cultural_education_level: "graduated_thpt",
+            vocational_qualification: "none",
+            // Khớp fixture danh mục (`seed_e2e_catalog_fixture`): xã 22045 có
+            // hàng `administrative_nodes` đương thời + `vn_commune_area_map`.
+            permanent_province: FIXTURE_TINH,
+            permanent_ward: FIXTURE_XA,
+            permanent_commune_code: FIXTURE_MA_XA,
             family_info: [
               {
                 relationship: "Cha",
@@ -648,66 +836,48 @@ test.describe("Lead to Admission Workflow", () => {
                 is_primary_guardian: true,
               },
             ],
-            academic_history: [
-              {
-                school_name: "THPT Buon Ma Thuot",
-                year_from: 2019,
-                year_to: 2022,
-                gpa: 8.5,
-                graduation_type: "THPT",
-              },
-            ],
+            academic_history: fixtureAcademicHistory(fixtureSchoolId, 2019, 2022),
             admission_scores: { subject_scores: subjectScores, gpa: 8.5 },
           },
         }
       );
-      if (updateResp.ok()) {
-        profileVersion1 = (await updateResp.json()).version;
-      }
+      // FAIL-CLOSED: `if (updateResp.ok())` cũ nuốt trọn một 409/422 — hồ sơ
+      // ở lại không có CCCD/điểm/hộ khẩu và mọi thứ sau đó đo nhầm chỗ.
+      await expectOk(
+        updateResp,
+        `PUT /api/admissions/${profileId1} (điền thông tin hồ sơ 1)`,
+        [200]
+      );
+      profileVersion1 = (await updateResp.json()).version;
 
-      // Upload mandatory docs
-      const getResp = await page.request.get(
-        `${API_URL}/api/admissions/${profileId1}`
+      // Nộp + XÁC MINH tài liệu bắt buộc (một nguồn chuẩn, xem
+      // `satisfyMandatoryDocuments`).
+      profileVersion1 = await satisfyMandatoryDocuments(
+        page,
+        profileId1,
+        "hồ sơ 1"
       );
-      const fresh = await getResp.json();
-      profileVersion1 = fresh.version;
-      const missingDocs = (fresh.documents_checklist || []).filter(
-        (d: { is_mandatory: boolean; status: string }) =>
-          d.is_mandatory && d.status === "missing"
-      );
-      for (const doc of missingDocs) {
-        await page.request.post(
-          `${API_URL}/api/admissions/${profileId1}/documents/${doc.code}/upload`,
-          {
-            headers: officerHeaders,
-            multipart: {
-              file: {
-                name: `${doc.code}.pdf`,
-                mimeType: "application/pdf",
-                buffer: Buffer.from(`%PDF-1.4\n%%EOF\n% E2E: ${doc.code}`),
-              },
-              actual_submission_format: "photo",
-            },
-          }
-        );
-      }
+      officerHeaders = await restoreCookies(page, officerCookies);
 
-      console.log(
-        `Profile created: id=${profileId1}, docs=${missingDocs.length}`
-      );
+      console.log(`Profile created: id=${profileId1}, version=${profileVersion1}`);
     });
 
     test("9. Officer submits profile", async ({ page }) => {
       officerHeaders = await restoreCookies(page, officerCookies);
 
-      // Re-fetch current version (doc uploads may have changed it)
+      // Re-fetch current version (doc uploads may have changed it) —
+      // FAIL-CLOSED: một GET hỏng ở đây trước kia để lại `profileVersion1`
+      // cũ và biến lỗi thành 409 khó đọc ở bước submit.
       const freshResp = await page.request.get(
         `${API_URL}/api/admissions/${profileId1}`,
         { headers: officerHeaders }
       );
-      if (freshResp.ok()) {
-        profileVersion1 = (await freshResp.json()).version;
-      }
+      await expectOk(
+        freshResp,
+        `GET /api/admissions/${profileId1} (lấy version trước submit)`,
+        [200]
+      );
+      profileVersion1 = (await freshResp.json()).version;
 
       const resp = await page.request.post(
         `${API_URL}/api/admissions/${profileId1}/submit`,
@@ -717,11 +887,21 @@ test.describe("Lead to Admission Workflow", () => {
         }
       );
       if (!resp.ok()) {
-        const errText = (await resp.text()).slice(0, 500);
+        const errText = summarizeApiError(resp.status(), await resp.text());
         throw new Error(`Submit failed (${resp.status()}): ${errText}`);
       }
       const body = await resp.json();
-      expect(body.status).toBe("submitted");
+      // `submit_and_evaluate` trả **200 + status="draft" + validation_errors**
+      // khi validation trượt, nên `resp.ok()` ở trên KHÔNG đủ. In chẩn đoán
+      // đã KHỬ PII: `validation_errors` là văn xuôi tiếng Việt có nhúng tên
+      // phường/trường ⇒ chỉ lộ độ dài + băm tương quan qua `safeBody`.
+      expect(
+        body.status,
+        `Submit hồ sơ 1 không đạt "submitted" — ${safeBody({
+          status: body.status,
+          validation_errors: body.validation_errors,
+        })}`
+      ).toBe("submitted");
       // Don't capture body.version here — submit may not return it reliably.
       // All subsequent transitions use re-fetch pattern before acting.
       console.log(`Profile submitted: status=${body.status}`);
@@ -757,9 +937,12 @@ test.describe("Lead to Admission Workflow", () => {
         `${API_URL}/api/admissions/${profileId1}`,
         { headers: adminHeaders }
       );
-      if (freshResp.ok()) {
-        profileVersion1 = (await freshResp.json()).version;
-      }
+      await expectOk(
+        freshResp,
+        `GET /api/admissions/${profileId1} (version trước approve)`,
+        [200]
+      );
+      profileVersion1 = (await freshResp.json()).version;
 
       const resp = await page.request.post(
         `${API_URL}/api/admissions/${profileId1}/approve`,
@@ -769,7 +952,7 @@ test.describe("Lead to Admission Workflow", () => {
         }
       );
       if (!resp.ok()) {
-        const errText = (await resp.text()).slice(0, 500);
+        const errText = summarizeApiError(resp.status(), await resp.text());
         throw new Error(`Approve failed (${resp.status()}): ${errText}`);
       }
       const body = await resp.json();
@@ -798,9 +981,10 @@ test.describe("Lead to Admission Workflow", () => {
     test("13. Admin overrides (approved → overridden)", async ({ page }) => {
       adminHeaders = await restoreCookies(page, adminCookies);
 
-      // Re-fetch current version
+      // Re-fetch current version — FAIL-CLOSED.
       const fr = await page.request.get(`${API_URL}/api/admissions/${profileId1}`, { headers: adminHeaders });
-      if (fr.ok()) profileVersion1 = (await fr.json()).version;
+      await expectOk(fr, `GET /api/admissions/${profileId1} (lấy version)`, [200]);
+      profileVersion1 = (await fr.json()).version;
 
       const resp = await page.request.post(
         `${API_URL}/api/admissions/${profileId1}/override`,
@@ -812,7 +996,7 @@ test.describe("Lead to Admission Workflow", () => {
           },
         }
       );
-      if (!resp.ok()) throw new Error(`Override failed (${resp.status()}): ${(await resp.text()).slice(0, 500)}`);
+      if (!resp.ok()) throw new Error(`Override failed (${resp.status()}): ${summarizeApiError(resp.status(), await resp.text())}`);
       const body = await resp.json();
       profileVersion1 = body.version;
       expect(body.status).toBe("overridden");
@@ -824,9 +1008,10 @@ test.describe("Lead to Admission Workflow", () => {
     }) => {
       adminHeaders = await restoreCookies(page, adminCookies);
 
-      // Re-fetch current version
+      // Re-fetch current version — FAIL-CLOSED.
       const fr = await page.request.get(`${API_URL}/api/admissions/${profileId1}`, { headers: adminHeaders });
-      if (fr.ok()) profileVersion1 = (await fr.json()).version;
+      await expectOk(fr, `GET /api/admissions/${profileId1} (lấy version)`, [200]);
+      profileVersion1 = (await fr.json()).version;
 
       const resp = await page.request.post(
         `${API_URL}/api/admissions/${profileId1}/finalize`,
@@ -835,7 +1020,7 @@ test.describe("Lead to Admission Workflow", () => {
           data: { version: profileVersion1 },
         }
       );
-      if (!resp.ok()) throw new Error(`Finalize failed (${resp.status()}): ${(await resp.text()).slice(0, 500)}`);
+      if (!resp.ok()) throw new Error(`Finalize failed (${resp.status()}): ${summarizeApiError(resp.status(), await resp.text())}`);
       const body = await resp.json();
       profileVersion1 = body.version;
       expect(body.status).toBe("enrolled");
@@ -886,10 +1071,14 @@ test.describe("Lead to Admission Workflow", () => {
           offering_id: offeringId,
         },
       });
+      // FAIL-CLOSED: không có khẳng định nào ở đây thì một 400/429 cho
+      // `leadId2 === undefined`, và mọi URL phía sau thành `/api/leads/undefined`.
+      await expectOk(leadResp, "POST /api/leads (lead 2)");
       leadId2 = (await leadResp.json()).id;
+      expect(leadId2, "POST /api/leads (lead 2) không trả về id").toBeTruthy();
 
       // Consultation
-      await page.request.post(
+      const consultResp = await page.request.post(
         `${API_URL}/api/leads/${leadId2}/consultations`,
         {
           headers: officerHeaders,
@@ -900,19 +1089,22 @@ test.describe("Lead to Admission Workflow", () => {
           },
         }
       );
-
-      // Profile + fill data + docs
-      const createResp = await page.request.post(
-        `${API_URL}/api/admissions`,
-        {
-          headers: officerHeaders,
-          data: {
-            lead_id: leadId2,
-            admission_method_id: admissionMethodId,
-          },
-        }
+      await expectOk(
+        consultResp,
+        `POST /api/leads/${leadId2}/consultations (lead 2)`
       );
-      const profile = await createResp.json();
+
+      // Profile + fill data + docs — payload ĐỦ BỐN TRƯỜNG từ nguồn chuẩn.
+      const profile = (await createAdmissionProfile(
+        page.request,
+        leadId2,
+        pathContext,
+        officerHeaders
+      )) as {
+        id: number;
+        version: number;
+        applied_rules?: { allowed_subject_codes?: string[] };
+      };
       profileId2 = profile.id;
       profileVersion2 = profile.version;
 
@@ -935,6 +1127,15 @@ test.describe("Lead to Admission Workflow", () => {
             nationality: "Viet Nam",
             ethnicity: "Kinh",
             place_of_birth: "Dak Lak",
+            // Bắt buộc tại submit: `priority_service.validate_eligibility`
+            // đọc thẳng `profile.cultural_education_level`.
+            cultural_education_level: "graduated_thpt",
+            vocational_qualification: "none",
+            // Khớp fixture danh mục (`seed_e2e_catalog_fixture`): xã 22045 có
+            // hàng `administrative_nodes` đương thời + `vn_commune_area_map`.
+            permanent_province: FIXTURE_TINH,
+            permanent_ward: FIXTURE_XA,
+            permanent_commune_code: FIXTURE_MA_XA,
             family_info: [
               {
                 relationship: "Cha",
@@ -944,47 +1145,26 @@ test.describe("Lead to Admission Workflow", () => {
                 is_primary_guardian: true,
               },
             ],
-            academic_history: [
-              {
-                school_name: "THPT Nguyen Hue",
-                year_from: 2020,
-                year_to: 2023,
-                gpa: 7.0,
-                graduation_type: "THPT",
-              },
-            ],
+            academic_history: fixtureAcademicHistory(fixtureSchoolId, 2020, 2023),
             admission_scores: { subject_scores: subjectScores, gpa: 7.0 },
           },
         }
       );
-      if (updateResp.ok())
-        profileVersion2 = (await updateResp.json()).version;
-
-      // Upload docs
-      const getResp = await page.request.get(
-        `${API_URL}/api/admissions/${profileId2}`
+      // FAIL-CLOSED — cùng lỗ hổng đã vá ở test 8 (luật "vá một nhánh thì còn bốn").
+      await expectOk(
+        updateResp,
+        `PUT /api/admissions/${profileId2} (điền thông tin hồ sơ 2)`,
+        [200]
       );
-      const fresh = await getResp.json();
-      profileVersion2 = fresh.version;
-      for (const doc of (fresh.documents_checklist || []).filter(
-        (d: { is_mandatory: boolean; status: string }) =>
-          d.is_mandatory && d.status === "missing"
-      )) {
-        await page.request.post(
-          `${API_URL}/api/admissions/${profileId2}/documents/${doc.code}/upload`,
-          {
-            headers: officerHeaders,
-            multipart: {
-              file: {
-                name: `${doc.code}.pdf`,
-                mimeType: "application/pdf",
-                buffer: Buffer.from(`%PDF-1.4\n%%EOF\n% E2E: ${doc.code}`),
-              },
-              actual_submission_format: "photo",
-            },
-          }
-        );
-      }
+      profileVersion2 = (await updateResp.json()).version;
+
+      // Nộp + XÁC MINH tài liệu bắt buộc — CÙNG helper với test 8.
+      profileVersion2 = await satisfyMandatoryDocuments(
+        page,
+        profileId2,
+        "hồ sơ 2"
+      );
+      officerHeaders = await restoreCookies(page, officerCookies);
 
       // Submit
       const submitResp = await page.request.post(
@@ -994,18 +1174,29 @@ test.describe("Lead to Admission Workflow", () => {
           data: { version: profileVersion2 },
         }
       );
-      expect(submitResp.ok()).toBeTruthy();
+      await expectOk(
+        submitResp,
+        `POST /api/admissions/${profileId2}/submit (hồ sơ 2)`,
+        [200]
+      );
       const submitBody = await submitResp.json();
-      expect(submitBody.status).toBe("submitted");
+      expect(
+        submitBody.status,
+        `Submit hồ sơ 2 không đạt "submitted" — ${safeBody({
+          status: submitBody.status,
+          validation_errors: submitBody.validation_errors,
+        })}`
+      ).toBe("submitted");
       console.log(`2nd profile submitted: id=${profileId2}, status=${submitBody.status}`);
     });
 
     test("17. Admin rejects profile", async ({ page }) => {
       adminHeaders = await restoreCookies(page, adminCookies);
 
-      // Re-fetch version
+      // Re-fetch version — FAIL-CLOSED.
       const fr = await page.request.get(`${API_URL}/api/admissions/${profileId2}`, { headers: adminHeaders });
-      if (fr.ok()) profileVersion2 = (await fr.json()).version;
+      await expectOk(fr, `GET /api/admissions/${profileId2} (lấy version)`, [200]);
+      profileVersion2 = (await fr.json()).version;
 
       const resp = await page.request.post(
         `${API_URL}/api/admissions/${profileId2}/reject`,
@@ -1017,7 +1208,7 @@ test.describe("Lead to Admission Workflow", () => {
           },
         }
       );
-      if (!resp.ok()) throw new Error(`Reject failed (${resp.status()}): ${(await resp.text()).slice(0, 500)}`);
+      if (!resp.ok()) throw new Error(`Reject failed (${resp.status()}): ${summarizeApiError(resp.status(), await resp.text())}`);
       const body = await resp.json();
       profileVersion2 = body.version;
       expect(body.status).toBe("rejected");
@@ -1042,7 +1233,8 @@ test.describe("Lead to Admission Workflow", () => {
       officerHeaders = await restoreCookies(page, officerCookies);
       // Re-fetch version
       const frA = await page.request.get(`${API_URL}/api/admissions/${profileId2}`, { headers: officerHeaders });
-      if (frA.ok()) profileVersion2 = (await frA.json()).version;
+      await expectOk(frA, `GET /api/admissions/${profileId2} (version trước resubmit)`, [200]);
+      profileVersion2 = (await frA.json()).version;
       const resubResp = await page.request.post(
         `${API_URL}/api/admissions/${profileId2}/resubmit`,
         {
@@ -1121,7 +1313,8 @@ test.describe("Lead to Admission Workflow", () => {
 
       // Re-fetch version before approve
       const frApprove = await page.request.get(`${API_URL}/api/admissions/${profileId2}`, { headers: adminHeaders });
-      if (frApprove.ok()) profileVersion2 = (await frApprove.json()).version;
+      await expectOk(frApprove, `GET /api/admissions/${profileId2} (version trước approve)`, [200]);
+      profileVersion2 = (await frApprove.json()).version;
 
       // Approve
       const approveResp = await page.request.post(

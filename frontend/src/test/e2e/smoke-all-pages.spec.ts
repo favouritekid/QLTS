@@ -14,7 +14,7 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
-import * as OTPAuth from "otpauth";
+import { summarizeApiError, voiMaTotp } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -156,15 +156,31 @@ async function extractAndAddCookies(
   return csrf;
 }
 
-function generateTOTP(secret: string): string {
-  const totp = new OTPAuth.TOTP({
-    secret: OTPAuth.Secret.fromBase32(secret),
-    digits: 6,
-    period: 30,
-    algorithm: "SHA1",
-  });
-  return totp.generate();
-}
+/**
+ * Sinh mã TOTP và TRẢ VỀ CẢ COUNTER đã dùng.
+ *
+ * Counter là phần chịu lực của chẩn đoán, không phải trang trí. Backend
+ * (`app/services/mfa_service.py:609-641`) ghi counter vừa khớp vào Redis
+ * (`totp_used:{user_id}`) và TỪ CHỐI mọi lần dùng lại — đã đo trên stack
+ * cô lập `nfrc` ngày 13-09-2026:
+ *
+ *   login#1 counter=59642152 → HTTP 200
+ *   login#2 counter=59642152 → HTTP 401, backend log
+ *     `action=mfa.replay_rejected matched_counter=59642152`
+ *
+ * Đó chính là bốn dòng "MFA failed for admin (401)" trong nightly run
+ * 34678745325: bước preflight và các suite E2E cùng dùng MỘT tài khoản
+ * `admin`, mỗi tiến trình tự tính `⌊t/30⌋`, nên hai lượt rơi vào cùng cửa sổ
+ * 30 giây là lượt sau bị coi là replay.
+ *
+ * ✅ ĐÃ ĐÓNG bằng `helpers/totp-coordinator.js`: đặt chỗ counter NGUYÊN TỬ
+ * (`O_EXCL` + `rename`) trên một thư mục state DÙNG CHUNG
+ * (`QLTS_TOTP_STATE_DIR`, ghim cho cả tám bước dùng TOTP trong
+ * `nightly-regression.yml` — hai bước Python và sáu bước Playwright), và khoá
+ * được GIỮ xuyên qua lượt gửi `/verify-mfa` nên thứ tự gửi cũng đơn điệu.
+ *
+ * ⚠️ Vẫn KHÔNG chữa bằng ngủ thêm hay retry thêm: mọi lỗi MFA nay ném NGAY.
+ */
 
 async function loginViaAPI(
   page: Page,
@@ -178,7 +194,7 @@ async function loginViaAPI(
     form: { username, password },
   });
   if (!loginResp.ok()) {
-    const body = (await loginResp.text()).slice(0, 300);
+    const body = summarizeApiError(loginResp.status(), await loginResp.text());
     throw new Error(`Login failed for ${username}: ${loginResp.status()} ${body}`);
   }
 
@@ -186,25 +202,36 @@ async function loginViaAPI(
   let authResp = loginResp;
 
   if (loginBody.mfa_required) {
-    // Prefer TOTP secret (reusable), fallback to backup code (single-use)
-    const mfaCode = opts?.totpSecret
-      ? generateTOTP(opts.totpSecret)
-      : opts?.backupCode;
+    const guiMa = async (code: string, nhan: string) => {
+      const mfaResp = await page.request.post(
+        `${API_URL}/api/auth/verify-mfa`,
+        { data: { mfa_token: loginBody.mfa_token, code } }
+      );
+      if (!mfaResp.ok()) {
+        // Không in mã TOTP: nó còn hiệu lực tới hết cửa sổ 30 giây.
+        const detail = summarizeApiError(mfaResp.status(), await mfaResp.text());
+        throw new Error(
+          `MFA failed for ${username}: HTTP ${mfaResp.status()} ${nhan} — ${detail}`
+        );
+      }
+      return mfaResp;
+    };
 
-    if (!mfaCode) {
+    if (opts?.totpSecret) {
+      // TOTP đi qua điều phối viên dùng chung — khoá tài khoản được giữ xuyên
+      // qua lượt gửi, nên không tiến trình nào tiêu trùng counter.
+      authResp = await voiMaTotp(username, opts.totpSecret, ({ code, counter }) =>
+        guiMa(code, `totp_counter=${counter}`)
+      );
+    } else if (opts?.backupCode) {
+      // Backup code KHÔNG đi qua counter TOTP (`classify_code_shape` tách hai
+      // dạng), nên nó không cần — và không được — chiếm khoá tài khoản.
+      authResp = await guiMa(opts.backupCode, "auth=backup_code");
+    } else {
       throw new Error(
         `MFA required for ${username} but no TOTP secret or backup code provided`
       );
     }
-
-    const mfaResp = await page.request.post(
-      `${API_URL}/api/auth/verify-mfa`,
-      { data: { mfa_token: loginBody.mfa_token, code: mfaCode } }
-    );
-    if (!mfaResp.ok()) {
-      throw new Error(`MFA failed for ${username}: ${mfaResp.status()}`);
-    }
-    authResp = mfaResp;
   }
 
   await extractAndAddCookies(page, authResp);

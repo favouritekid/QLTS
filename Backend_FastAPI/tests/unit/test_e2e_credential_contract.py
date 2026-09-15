@@ -86,6 +86,7 @@ KHOA_BAT_BUOC = (
     "E2E_ADMIN_USERNAME", "E2E_ADMIN_PASSWORD",
     "E2E_OFFICER_USERNAME", "E2E_OFFICER_PASSWORD",
     "E2E_MANAGER_USERNAME", "E2E_MANAGER_PASSWORD",
+    "E2E_ACCOUNTANT_USERNAME", "E2E_ACCOUNTANT_PASSWORD",
     "TEST_USERNAME", "TEST_PASSWORD",
 )
 
@@ -95,6 +96,7 @@ CAP_THEO_VAI = {
     ("E2E_ADMIN_USERNAME", "E2E_ADMIN_PASSWORD"): "admin",
     ("E2E_OFFICER_USERNAME", "E2E_OFFICER_PASSWORD"): "officer",
     ("E2E_MANAGER_USERNAME", "E2E_MANAGER_PASSWORD"): "manager",
+    ("E2E_ACCOUNTANT_USERNAME", "E2E_ACCOUNTANT_PASSWORD"): "accountant",
     ("TEST_USERNAME", "TEST_PASSWORD"): "officer",
 }
 
@@ -108,7 +110,7 @@ CAP_THEO_VAI = {
 #: định về quyền được đo trên sai chủ thể. ``CTV`` không có trong seed nên để
 #: ``None`` (fallback của nó là chuỗi rỗng, đã được ``test.skip`` bảo vệ).
 VAI_CUA_TIEN_TO = {"ADMIN": "admin", "OFFICER": "officer", "MANAGER": "manager",
-                   "CTV": None}
+                   "ACCOUNTANT": "accountant", "CTV": None}
 TIEN_TO_HANG = tuple(VAI_CUA_TIEN_TO)
 
 #: ``auth.setup.ts`` dùng cặp hằng không mang tiền tố vai; nó đăng nhập bằng
@@ -117,7 +119,7 @@ VAI_CUA_SETUP = "officer"
 
 HAU_TO_HOP_LE = ("USERNAME", "PASSWORD", "TOTP_SECRET", "MFA_CODE")
 BIEN_E2E_KHAC_CHO_PHEP = {"E2E_API_URL"}
-VAI_HOP_LE = ("ADMIN", "OFFICER", "MANAGER", "CTV")
+VAI_HOP_LE = ("ADMIN", "OFFICER", "MANAGER", "ACCOUNTANT", "CTV")
 
 
 def _phai_ton_tai(p: pathlib.Path, mo_ta: str) -> pathlib.Path:

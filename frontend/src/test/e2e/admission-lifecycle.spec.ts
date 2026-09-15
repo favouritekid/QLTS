@@ -19,7 +19,7 @@
  */
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
-import * as OTPAuth from "otpauth";
+import { FIXTURE_MA_XA, FIXTURE_TINH, FIXTURE_XA, createAdmissionProfile, expectOk, fixtureAcademicHistory, resolveAdmissionContext, resolveFixtureSchoolId, safeBody, summarizeApiError, type AdmissionPathContext, xacThucMfa } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -35,6 +35,18 @@ const OFFICER_PASSWORD = process.env.E2E_OFFICER_PASSWORD || "Abc@123456789";
 
 const API_URL = process.env.E2E_API_URL || "http://localhost:8000";
 
+/**
+ * `attempts_remaining` mà `GET /api/admissions/confirm/{token}` trả về là
+ * `ADMISSION_CONFIRM_MAX_ATTEMPTS - attempt_count` (`app/services/admission_service.py`,
+ * `get_token_info`), mặc định 5 (`app/config.py`, `ADMISSION_CONFIRM_MAX_ATTEMPTS`).
+ *
+ * ⚠️ Con số này CHỈ để HIỂN THỊ. Ngưỡng khoá cứng thật là
+ * `HARD_LOCK_THRESHOLD = 30` (`app/services/admission_confirmation_cooldown.py`), nên
+ * `attempts_remaining` chạm 0 KHÔNG có nghĩa token đã bị khoá — đúng chỗ mà bản cũ
+ * của bộ E2E này đọc nhầm.
+ */
+const CONFIRM_ATTEMPTS_DISPLAY_MAX = 5;
+
 // ---------------------------------------------------------------------------
 // Shared state across tests (serial execution within describe)
 // ---------------------------------------------------------------------------
@@ -48,6 +60,15 @@ let officerCookies: Cookie[] = [];
 let unitId: number;
 let offeringId: number;
 let admissionMethodId: number;
+/**
+ * Bộ ba (round, năm, phương thức) lấy từ NGUỒN CHUẨN mà UI dùng —
+ * `GET /api/admission-config/paths/for-offering/{offering_id}`.
+ * `AdmissionProfileCreate` (`app/schemas/admission.py:443-494`) bắt buộc
+ * cả `admission_round_id` lẫn `academic_year`; payload hai trường của bản
+ * cũ trả 422 (đo thật: `invalid_fields=body.admission_round_id[missing],
+ * body.academic_year[missing]`).
+ */
+let pathContext: AdmissionPathContext;
 let initialStatusId: string;
 
 // Test data - each test creates its own lead+profile
@@ -104,16 +125,20 @@ function generateCitizenId(): string {
   return Array.from({ length: 12 }, () => Math.floor(Math.random() * 10)).join("");
 }
 
-function generateTOTP(secret: string): string {
-  const totp = new OTPAuth.TOTP({
-    secret: OTPAuth.Secret.fromBase32(secret),
-    digits: 6,
-    period: 30,
-    algorithm: "SHA1",
-  });
-  return totp.generate();
+/**
+ * Bốn chữ số CHẮC CHẮN KHÁC bốn số cuối của `citizenId`.
+ *
+ * VÌ SAO KHÔNG DÙNG "0000" NHƯ BẢN CŨ: `generateCitizenId()` sinh 12 chữ số NGẪU
+ * NHIÊN, nên "0000" trùng bốn số cuối với xác suất 1/10.000 — một lượt nightly đỏ
+ * ngẫu nhiên mà không ai tái hiện được. Tăng chữ số cuối thêm 1 (mod 10) cho một
+ * chuỗi 4 chữ số khác hẳn, vẫn khớp `pattern=^\d{4}$` của `ConfirmTokenVerifyRequest`
+ * (`app/schemas/admission.py`) nên vẫn tới được nhánh so khớp CCCD chứ không rơi
+ * xuống 422 của Pydantic.
+ */
+function wrongLastFour(citizenId: string): string {
+  const dung = citizenId.slice(-4);
+  return dung.slice(0, 3) + String((Number(dung[3]) + 1) % 10);
 }
-
 async function getCSRFToken(page: Page): Promise<string | undefined> {
   const cookies = await page.context().cookies();
   return cookies.find((c) => c.name === "csrf_token")?.value;
@@ -170,7 +195,7 @@ async function loginViaAPI(
       continue;
     }
     if (!loginResp.ok()) {
-      const body = (await loginResp.text()).slice(0, 300);
+      const body = summarizeApiError(loginResp.status(), await loginResp.text());
       throw new Error(`Login failed for ${username}: ${loginResp.status()} ${body}`);
     }
 
@@ -181,15 +206,18 @@ async function loginViaAPI(
       if (!opts?.totpSecret) {
         throw new Error(`MFA required for ${username} but no TOTP secret provided`);
       }
-      const mfaResp = await page.request.post(`${API_URL}/api/auth/verify-mfa`, {
-        data: { mfa_token: loginBody.mfa_token, code: generateTOTP(opts.totpSecret) },
-      });
-      if (!mfaResp.ok()) {
-        console.log(`MFA failed for ${username} (${mfaResp.status()}), waiting 31s and retrying login...`);
-        await new Promise((r) => setTimeout(r, 31_000));
-        continue; // restart from login
-      }
-      authResp = mfaResp;
+      // Điều phối viên TOTP giữ khoá tài khoản xuyên qua lượt gửi này, nên hai
+      // tiến trình `npx playwright test` không bao giờ tiêu cùng một counter.
+      // Hỏng ⇒ NÉM NGAY: nhánh `sleep(31s); continue` cũ biến mọi nguyên nhân
+      // (mật khẩu sai, tài khoản bị khoá, MFA bị tắt) thành cùng một thất bại
+      // sau 93 giây, và còn đốt hạn mức đăng nhập.
+      authResp = await xacThucMfa(
+        username,
+        opts.totpSecret,
+        loginBody.mfa_token,
+        (payload) =>
+          page.request.post(`${API_URL}/api/auth/verify-mfa`, { data: payload })
+      );
     }
 
     const csrf = await extractAndAddCookies(page, authResp);
@@ -222,10 +250,23 @@ async function createLeadAndProfile(
     admissionMethodId: number;
     initialStatusId: string;
     citizenId?: string;
+    /**
+     * Bỏ bước nộp + xác minh tài liệu, giữ nguyên mọi phần khác.
+     *
+     * Dùng cho ca cần một hồ sơ ĐỦ ĐIỀU KIỆN nhưng THIẾU TÀI LIỆU — đó là
+     * tiền đề duy nhất mà nhánh "200 kèm validation_errors" của `/submit`
+     * chạy tới. Một hồ sơ "tối thiểu" thật sự (không nhân thân, không quá
+     * trình học tập) dừng sớm hơn ở luật xét điều kiện:
+     * `400 ELIGIBILITY_FAIL: cd_chinh_quy_requires_thpt_or_completed_thpt`.
+     */
+    skipDocuments?: boolean;
   }
 ): Promise<{ leadId: number; profileId: number; citizenId: string; version: number }> {
   const phone = generatePhone();
   const citizenId = opts.citizenId || generateCitizenId();
+  // Tra `school_id` của fixture qua endpoint sản phẩm — id là số tự tăng,
+  // hard-code sẽ vỡ khi thứ tự seed đổi.
+  const fixtureSchoolId = await resolveFixtureSchoolId(page.request);
   const name = `E2E_Adm_${Date.now()}`;
 
   // 1. Create lead
@@ -251,24 +292,22 @@ async function createLeadAndProfile(
   );
   expect(consultResp.ok() || consultResp.status() === 201).toBeTruthy();
 
-  // 3. Create admission profile
-  const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
-    headers,
-    data: {
-      lead_id: leadId,
-      admission_method_id: opts.admissionMethodId,
-    },
-  });
-  if (!profileResp.ok() && profileResp.status() !== 201) {
-    const errBody = await profileResp.text();
-    throw new Error(`Profile creation failed: ${profileResp.status()} ${errBody.slice(0, 500)}`);
-  }
-  const profile = await profileResp.json();
-  const profileId = profile.id;
+  // 3. Create admission profile — payload ĐỦ BỐN TRƯỜNG từ nguồn chuẩn.
+  const profile = await createAdmissionProfile(
+    page.request,
+    leadId,
+    pathContext,
+    headers
+  );
+  const profileId = profile.id as number;
 
   // 4. Fill personal info + scores
-  const freshProfile = profile;
-  const allowedSubjects: string[] = freshProfile.applied_rules?.allowed_subject_codes || [];
+  const freshProfile = profile as {
+    version: number;
+    applied_rules?: { allowed_subject_codes?: string[] };
+  };
+  const allowedSubjects: string[] =
+    freshProfile.applied_rules?.allowed_subject_codes || [];
   const subjectScores: Record<string, number> = {};
   for (const subj of allowedSubjects.slice(0, 3)) {
     subjectScores[subj] = 7 + Math.random() * 3;
@@ -286,13 +325,29 @@ async function createLeadAndProfile(
         nationality: "Viet Nam",
         ethnicity: "Kinh",
         place_of_birth: "TP Ho Chi Minh",
+        // BẮT BUỘC tại bước submit. `priority_service.validate_eligibility`
+        // (dòng 1023-1088) đọc `profile.cultural_education_level` — KHÔNG
+        // suy từ `academic_history.graduation_type`. Thiếu nó thì submit
+        // một path `cao_dang/chinh_quy` trả 400
+        //   ELIGIBILITY_FAIL: cd_chinh_quy_requires_thpt_or_completed_thpt
+        // (đo thật trên stack nightly). Schema:
+        // `app/schemas/admission.py:780-796`.
+        cultural_education_level: "graduated_thpt",
+        vocational_qualification: "none",
+        // Địa chỉ thường trú — hai validator riêng ở bước submit đòi
+        // "Tỉnh/Thành phố" và "Phường/Xã" (đo thật trong validation_errors).
+        // Khớp fixture danh mục (`seed_e2e_catalog_fixture`): xã 22045 =
+        // Phường Bình Kiến, có hàng trong `administrative_nodes` đương thời và
+        // `vn_commune_area_map`. Địa chỉ cũ "TP Ho Chi Minh" không có hàng nào
+        // nên `_is_current_era_ward` và ngã THUONG_TRU đều fail-closed.
+        permanent_province: FIXTURE_TINH,
+        permanent_ward: FIXTURE_XA,
+        permanent_commune_code: FIXTURE_MA_XA,
         family_info: [
           { relationship: "Cha", full_name: "Nguyen Van A", phone: "0901234567", occupation: "Kinh doanh", is_primary_guardian: true },
           { relationship: "Me", full_name: "Tran Thi B", phone: "0901234568", occupation: "Giao vien", is_primary_guardian: false },
         ],
-        academic_history: [
-          { school_name: "THPT Nguyen Du", year_from: 2019, year_to: 2022, gpa: 8.5, graduation_type: "THPT" },
-        ],
+        academic_history: fixtureAcademicHistory(fixtureSchoolId),
         admission_scores: {
           subject_scores: subjectScores,
           gpa: 8.5,
@@ -301,10 +356,18 @@ async function createLeadAndProfile(
     }
   );
   if (!updateResp.ok()) {
-    console.log(`Profile update: ${updateResp.status()} ${(await updateResp.text()).slice(0, 300)}`);
+    console.log(`Profile update: ${updateResp.status()} ${summarizeApiError(updateResp.status(), await updateResp.text())}`);
   }
 
   // 5. Upload mandatory docs
+  if (opts.skipDocuments) {
+    // Đọc version THẬT chứ không trả hằng: người gọi dùng nó cho optimistic
+    // locking, và một con số bịa sẽ nổ ở chỗ khác dưới dạng 409 khó lần.
+    const hoSo = await (
+      await page.request.get(`${API_URL}/api/admissions/${profileId}`)
+    ).json();
+    return { leadId, profileId, citizenId, version: hoSo.version };
+  }
   const getResp = await page.request.get(`${API_URL}/api/admissions/${profileId}`);
   const updatedProfile = await getResp.json();
   const missingDocs = (updatedProfile.documents_checklist || []).filter(
@@ -312,7 +375,7 @@ async function createLeadAndProfile(
       d.is_mandatory && d.status === "missing"
   );
   for (const doc of missingDocs) {
-    await page.request.post(
+    const upResp = await page.request.post(
       `${API_URL}/api/admissions/${profileId}/documents/${doc.code}/upload`,
       {
         headers,
@@ -326,48 +389,67 @@ async function createLeadAndProfile(
         },
       }
     );
+    await expectOk(upResp, `officer tải lên tài liệu ${doc.code}`, [200, 201]);
   }
 
-  return { leadId, profileId, citizenId, version: updatedProfile.version };
-}
+  // 6. Manager/admin XÁC MINH tài liệu.
+  //
+  // Bắt buộc khi path ở chế độ nghiêm ngặt
+  // (`allow_unverified_submission = false` — mặc định của seed). Đo thật
+  // khi bỏ bước này: `POST /submit` trả 200 nhưng `status` vẫn `"draft"`
+  // kèm validation_errors "Tài liệu … chưa được xác minh. Liên hệ quản lý
+  // để verify trước khi nộp hồ sơ." ⇒ hồ sơ KHÔNG nộp được.
+  // Đây đúng là quy trình sản phẩm (officer tải lên → quản lý xác minh),
+  // KHÔNG phải nới lỏng ca kiểm.
+  const verifyHeaders = await restoreCookies(page, adminCookies);
+  const afterUpload = await (
+    await page.request.get(`${API_URL}/api/admissions/${profileId}`)
+  ).json();
+  const canVerify = (afterUpload.documents_checklist || []).filter(
+    (d: { is_mandatory: boolean; status: string }) =>
+      d.is_mandatory && (d.status === "uploaded" || d.status === "paper_submitted")
+  );
+  for (const doc of canVerify) {
+    // PATCH, không phải POST (`app/routers/admissions.py:1187`).
+    const vResp = await page.request.patch(
+      `${API_URL}/api/admissions/${profileId}/documents/${doc.code}/verify-format`,
+      { headers: verifyHeaders, data: { format: "photo" } }
+    );
+    await expectOk(vResp, `admin xác minh tài liệu ${doc.code}`, [200]);
+  }
+  // KV KHÔNG còn phải ấn định thủ công.
+  //
+  // Bản trước có một bước admin gọi `POST /api/v2/admissions/{id}/override-
+  // priority-kv` ở đây, kèm chú thích nêu đúng lý do của thời điểm ấy: trên
+  // CSDL nightly vừa migrate+seed, `vn_school` và `vn_commune_area_map` đều 0
+  // hàng nên KHÔNG nhánh tự động nào giải được KV.
+  //
+  // Nay `scripts/seeds/seed_e2e_catalog_fixture` seed danh mục tối thiểu
+  // (trường THPT + xã + ánh xạ KV) nên engine tự giải qua nhánh LICH_SU_THPT.
+  // Và cổng xuất xứ của override CHẶN ĐÚNG khi không còn gì để override —
+  // đo thật: `400 BUSINESS_RULE_VIOLATION`, thông điệp "Engine vừa tính lại và
+  // resolve thành công".
+  //
+  // Giữ lại bước ấy là dựng một đường vòng cho một vấn đề đã hết, và là ép
+  // mọi hồ sơ E2E đi nhánh MANUAL thay vì nhánh engine mà sản phẩm thật dùng.
+  // Trả quyền điều khiển về officer — caller vẫn đang dùng phiên officer.
+  await restoreCookies(page, officerCookies);
 
+  const finalResp = await page.request.get(`${API_URL}/api/admissions/${profileId}`);
+  await expectOk(finalResp, `GET hồ sơ #${profileId} sau khi xác minh`, [200]);
+  const finalProfile = await finalResp.json();
+
+  return { leadId, profileId, citizenId, version: finalProfile.version };
+}
 /**
- * Create a lead + admission profile with minimal data (no personal info, no docs uploaded).
- * Returns a profile in draft state ready for validation-error testing.
+ * `createMinimalDraftProfile` ĐÃ GỠ.
+ *
+ * Nó dựng hồ sơ không nhân thân, không quá trình học tập — thứ mà `/submit`
+ * từ chối ở luật xét điều kiện (`ELIGIBILITY_FAIL: cd_chinh_quy_requires_
+ * thpt_or_completed_thpt`) TRƯỚC khi tới nhánh "200 kèm validation_errors".
+ * Người gọi duy nhất của nó nay dùng `createLeadAndProfile({ skipDocuments:
+ * true })`, tức hồ sơ ĐỦ ĐIỀU KIỆN nhưng THIẾU TÀI LIỆU.
  */
-async function createMinimalDraftProfile(
-  page: Page,
-  headers: Record<string, string>,
-  opts: { offeringId: number; admissionMethodId: number; initialStatusId: string }
-): Promise<{ leadId: number; profileId: number }> {
-  const phone = generatePhone();
-
-  // Create lead
-  const leadResp = await page.request.post(`${API_URL}/api/leads`, {
-    headers,
-    data: {
-      full_name: `E2E_MinDraft_${Date.now()}`,
-      phone,
-      source: "walk_in",
-      offering_id: opts.offeringId,
-    },
-  });
-  const leadId = (await leadResp.json()).id;
-
-  // Consultation required before admission
-  await page.request.post(`${API_URL}/api/leads/${leadId}/consultations`, {
-    headers,
-    data: { status_id: opts.initialStatusId, method: "phone", notes: "minimal" },
-  });
-
-  // Create profile — intentionally do NOT fill personal info or upload docs
-  const profileResp = await page.request.post(`${API_URL}/api/admissions`, {
-    headers,
-    data: { lead_id: leadId, admission_method_id: opts.admissionMethodId },
-  });
-  const profileId = (await profileResp.json()).id;
-  return { leadId, profileId };
-}
 
 // ---------------------------------------------------------------------------
 // Test Suite
@@ -398,30 +480,42 @@ test.describe("Admission Profile Lifecycle", () => {
       expect(unitsResp.ok()).toBeTruthy();
       unitId = (await unitsResp.json())[0]?.id;
 
-      // Offerings
-      const offeringsResp = await page.request.get(
-        `${API_URL}/api/program-offerings?is_active=true&limit=1`
-      );
-      expect(offeringsResp.ok()).toBeTruthy();
-      const offerings = await offeringsResp.json();
-      offeringId = offerings[0].id;
-
-      // Admission methods
+      // Offering + method + round + năm — MỘT LƯỢT, từ cùng một
+      // AdmissionPath, nên chúng tương thích theo định nghĩa.
+      //
+      // Bản cũ lấy `offerings[0]` rồi `methods[0]` RỜI RẠC. Hai vấn đề đã đo:
+      //   * `/api/program-offerings` sắp theo `offering_type` (không duy
+      //     nhất) nên phần tử đầu đổi theo `limit`: `limit=5` cho offering
+      //     #1, `limit=20` cho #28 — và #5 không có path nào dùng được;
+      //   * cặp (offering, method) không có gì buộc phải tồn tại path, mà
+      //     `create_profile` tra path theo BỘ BA (round, academic_info,
+      //     method) — không có path là 400.
+      // Ưu tiên phương thức mà Test 9 cần (giấy tờ nộp bản giấy) nếu
+      // offering có path cho nó.
       const methodsResp = await page.request.get(
         `${API_URL}/api/admission-config/methods?active_only=true`
       );
-      expect(methodsResp.ok()).toBeTruthy();
+      await expectOk(methodsResp, "GET /api/admission-config/methods", [200]);
       const methodsBody = await methodsResp.json();
       const methods = methodsBody.methods || methodsBody;
-      // Prefer method with paper-only doc for Test 9 (mark paper submitted)
       const methodWithPaperDoc = methods.find(
         (m: { id: number; documents?: Array<{ requires_upload: boolean }> }) =>
           m.documents?.some((d: { requires_upload: boolean }) => d.requires_upload === false)
       );
-      admissionMethodId = methodWithPaperDoc?.id || methods[0].id;
-      hasPaperDoc = !!methodWithPaperDoc;
 
-      console.log(`Config: unit=${unitId}, offering=${offeringId}, method=${admissionMethodId}, status=${initialStatusId}, hasPaperDoc=${hasPaperDoc}`);
+      pathContext = await resolveAdmissionContext(page.request, {
+        preferMethodIds: methodWithPaperDoc ? [methodWithPaperDoc.id] : [],
+      });
+      offeringId = pathContext.offeringId;
+      admissionMethodId = pathContext.admissionMethodId;
+      hasPaperDoc =
+        !!methodWithPaperDoc && methodWithPaperDoc.id === admissionMethodId;
+
+      console.log(
+        `Config: unit=${unitId}, offering=${offeringId}, method=${admissionMethodId}, ` +
+          `round=${pathContext.admissionRoundId}(${pathContext.roundCode}), ` +
+          `year=${pathContext.academicYear}, status=${initialStatusId}, hasPaperDoc=${hasPaperDoc}`
+      );
     });
 
     // --- Step 2: Officer login ---
@@ -452,7 +546,7 @@ test.describe("Admission Profile Lifecycle", () => {
       );
       const body = await resp.json();
       if (body.status !== "submitted") {
-        console.log(`Submit errors: ${JSON.stringify(body.validation_errors || body).slice(0, 500)}`);
+        console.log(`Submit errors: ${safeBody(body.validation_errors || body)}`);
       }
       expect(body.status).toBe("submitted");
       // Get fresh version after submit
@@ -473,7 +567,7 @@ test.describe("Admission Profile Lifecycle", () => {
         }
       );
       if (!resp.ok()) {
-        console.log(`Claim failed: ${resp.status()} ${(await resp.text()).slice(0, 300)}`);
+        console.log(`Claim failed: ${resp.status()} ${summarizeApiError(resp.status(), await resp.text())}`);
       }
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
@@ -489,7 +583,7 @@ test.describe("Admission Profile Lifecycle", () => {
       );
       expect(resp.ok()).toBeTruthy();
       const body = await resp.json();
-      console.log(`Status counts: ${JSON.stringify(body).slice(0, 200)}`);
+      console.log(`Status counts: ${safeBody(body)}`);
     });
 
     // --- Step 7: Admin approves ---
@@ -535,7 +629,7 @@ test.describe("Admission Profile Lifecycle", () => {
       // Fee status endpoint may return 404 if no fees exist yet, which is expected
       if (resp.ok()) {
         const body = await resp.json();
-        console.log(`Fee status: ${JSON.stringify(body).slice(0, 200)}`);
+        console.log(`Fee status: ${safeBody(body)}`);
       } else {
         console.log(`Fee status: ${resp.status()} (no fees yet - expected)`);
         expect([200, 404, 500]).toContain(resp.status());
@@ -740,9 +834,37 @@ test.describe("Admission Profile Lifecycle", () => {
   });
 
   // =========================================================================
-  // Test 3: Magic link — approved → confirmed → enrolled
+  // Test 3A / 3B: Magic link — HAI token ĐỘC LẬP, mỗi token canh MỘT nhánh
+  //
+  // Ca 3 CŨ dùng CHUNG một token cho cả hai nhánh: gõ SAI rồi gõ ĐÚNG ngay sau
+  // đó, và kỳ vọng lần đúng trả 200. Runtime CỐ Ý chặn — đó là hàng rào chống
+  // dò bốn số CCCD (ADM-023), không phải lỗi sản phẩm:
+  //
+  //   • lần sai thứ nhất đặt `lock_until = now + cooldown_minutes_for(1)`,
+  //     tức 5 PHÚT — `app/services/admission_confirmation_cooldown.py`
+  //     (bậc thang 2→5ph, 4→30ph, 6→120ph, 29→1440ph; từ 30 là khoá cứng);
+  //   • `verify_and_confirm` từ chối MỌI lần thử khi `lock_until > now`, KỂ CẢ
+  //     lần gõ ĐÚNG — `app/services/admission_service.py`, nhánh
+  //     "ADM-023 hybrid cooldown gate".
+  //
+  // ĐO THẬT qua đúng bề mặt HTTP mà ca này gọi (harness 13-09-2026):
+  //     POST sai   → 400 "Incorrect CCCD digits. 4 attempts remaining."
+  //     POST đúng  → 400 "Quá nhiều lần nhập sai. Vui lòng thử lại sau 299 giây."
+  //     GET  info  → already_used=false, valid=true, attempts_remaining=4
+  //     DB         → profile.status='approved', token.confirmed_at=NULL
+  //
+  // ⇒ Tách làm hai hồ sơ + hai token, mỗi cái canh một nhánh. Nới cooldown,
+  // hay `sleep` 5 phút để lấy xanh, đều là gỡ chính hàng rào đang được canh.
+  //
+  // ⚠️ Giả định "5 lần sai là khoá cứng" của bản cũ đã bị GỠ: ngưỡng thật là
+  // `HARD_LOCK_THRESHOLD = 30`. `ADMISSION_CONFIRM_MAX_ATTEMPTS = 5` chỉ còn
+  // dùng để hiển thị `attempts_remaining`. Biên 29→30 nay do backend canh —
+  // `tests/integration/test_admission_confirmation_lock_ladder.py`, lớp
+  // `TestHardLockBoundary` — vì ở đó dựng thẳng được `attempt_count` thay vì
+  // phải gõ sai 30 lần qua HTTP (và 30 lần sẽ đụng luôn trần 5 lần/60 giây
+  // của `magic_link_rate_limit`, biến ca E2E thành phép đo cái khác).
   // =========================================================================
-  test("Magic link: approved → confirmed → enrolled", async ({ page }) => {
+  test("Magic link (token A): CCCD đúng ngay lần đầu → confirmed → enrolled", async ({ page }) => {
     // --- Step 1: Officer creates + submits ---
     await test.step("Officer creates + submits profile", async () => {
       officerHeaders = await restoreCookies(page, officerCookies);
@@ -763,7 +885,8 @@ test.describe("Admission Profile Lifecycle", () => {
       );
       const submitBody = await submitResp.json();
       expect(submitBody.status).toBe("submitted");
-      console.log(`Profile3 submitted: lead=${leadId3}, profile=${profileId3}, cccd=****${citizenId3.slice(-4)}`);
+      // KHÔNG in bốn số cuối CCCD: log của lượt nightly công khai được.
+      console.log(`Profile3 submitted: lead=${leadId3}, profile=${profileId3}`);
     });
 
     // --- Step 2: Admin approves ---
@@ -796,45 +919,64 @@ test.describe("Admission Profile Lifecycle", () => {
       const body = await resp.json();
       confirmToken = body.token_value;
       expect(confirmToken).toBeTruthy();
-      console.log(`Token: ${confirmToken.slice(0, 8)}...`);
+      // KHÔNG in token, kể cả TIỀN TỐ: 8 ký tự đầu của một token 256-bit vẫn là
+      // khoá tìm kiếm đủ để đối chiếu với access log (xem mục bàn giao "raw
+      // magic token trong access log"). Chỉ in ĐỘ DÀI.
+      console.log(`Token A đã cấp: length=${String(confirmToken).length}`);
     });
 
-    // --- Step 4: Get token info (public) ---
-    await test.step("Get token info (public)", async () => {
+    // --- Step 4: Token info trước khi dùng (public) ---
+    await test.step("Token A: chưa dùng, chưa khoá, đủ lượt hiển thị", async () => {
       const resp = await page.request.get(
         `${API_URL}/api/admissions/confirm/${confirmToken}`
       );
-      expect(resp.ok()).toBeTruthy();
+      expect(resp.status()).toBe(200);
       const info = await resp.json();
       expect(info.valid).toBe(true);
       expect(info.expired).toBe(false);
-      expect(info.attempts_remaining).toBe(5);
-      console.log(`Token valid, attempts=${info.attempts_remaining}`);
+      expect(info.locked).toBe(false);
+      expect(info.already_used).toBe(false);
+      expect(info.attempts_remaining).toBe(CONFIRM_ATTEMPTS_DISPLAY_MAX);
+      console.log(`Token A hợp lệ: attempts_remaining=${info.attempts_remaining}`);
     });
 
-    // --- Step 5: Confirm with wrong CCCD ---
-    await test.step("Confirm with wrong CCCD fails", async () => {
+    // --- Step 5: CCCD ĐÚNG ngay lần đầu → 200 ---
+    // Token A chưa từng sai ⇒ `lock_until` còn NULL ⇒ không có cổng cooldown
+    // nào phải vượt. Đây là nhánh DUY NHẤT mà 200 là kết quả đúng.
+    await test.step("CCCD đúng ngay lần đầu → 200 + confirmed", async () => {
       const resp = await page.request.post(
         `${API_URL}/api/admissions/confirm/${confirmToken}`,
-        { data: { last_digits_citizen_id: "0000" } }
+        { data: { last_digits_citizen_id: citizenId3.slice(-4) } }
       );
-      expect(resp.status()).toBe(400);
-      const body = await resp.json();
-      expect(body.detail).toContain("CCCD");
-      console.log(`Wrong CCCD rejected: ${body.detail}`);
-    });
-
-    // --- Step 6: Confirm with correct CCCD ---
-    await test.step("Confirm with correct CCCD", async () => {
-      const lastFour = citizenId3.slice(-4);
-      const resp = await page.request.post(
-        `${API_URL}/api/admissions/confirm/${confirmToken}`,
-        { data: { last_digits_citizen_id: lastFour } }
-      );
-      expect(resp.ok()).toBeTruthy();
-      const body = await resp.json();
+      const bodyText = await resp.text();
+      expect(
+        resp.status(),
+        `Xác nhận lần đầu phải 200 — ${summarizeApiError(resp.status(), bodyText)}`
+      ).toBe(200);
+      const body = JSON.parse(bodyText);
       expect(body.status).toBe("confirmed");
-      console.log(`Confirmed! profile_id=${body.profile_id}`);
+      expect(body.profile_id).toBe(profileId3);
+      console.log(`Confirmed! profile_id=${body.profile_id}, status=${body.status}`);
+    });
+
+    // --- Step 6: token A đã TIÊU (đo, không suy) ---
+    await test.step("Token A đã tiêu + hồ sơ đã confirmed", async () => {
+      const infoResp = await page.request.get(
+        `${API_URL}/api/admissions/confirm/${confirmToken}`
+      );
+      expect(infoResp.status()).toBe(200);
+      const info = await infoResp.json();
+      expect(info.already_used).toBe(true);
+      expect(info.valid).toBe(false);
+      expect(info.locked).toBe(false);
+
+      const profile = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileId3}`)
+      ).json();
+      expect(profile.status).toBe("confirmed");
+      console.log(
+        `Token A tiêu: already_used=${info.already_used}, valid=${info.valid}, profile.status=${profile.status}`
+      );
     });
 
     // --- Step 7: Admin enrolls confirmed profile ---
@@ -847,7 +989,7 @@ test.describe("Admission Profile Lifecycle", () => {
       );
       if (enrollResp.ok() || enrollResp.status() === 201) {
         const body = await enrollResp.json();
-        console.log(`Enrolled! student_code=${body.student_code}`);
+        console.log(`Enrolled! ${safeBody({ student_code: body.student_code })}`);
       } else {
         // ADM-015: finalize requires current version
         const profileBefore = await (
@@ -872,103 +1014,180 @@ test.describe("Admission Profile Lifecycle", () => {
       console.log(`Final status: ${profile.status}`);
     });
 
-    // --- Step 8: Reuse already-confirmed token → 400 ---
-    await test.step("Reuse already-confirmed token fails", async () => {
+    // --- Step 8: Reuse already-confirmed token → 400 nhánh "đã dùng" ---
+    await test.step("Dùng lại token A đã tiêu → 400 nhánh 'đã dùng'", async () => {
       const resp = await page.request.post(
         `${API_URL}/api/admissions/confirm/${confirmToken}`,
         { data: { last_digits_citizen_id: citizenId3.slice(-4) } }
       );
-      expect(resp.status()).toBe(400);
-      const body = await resp.json();
-      expect(body.detail).toBeTruthy();
-      console.log(`Reuse token rejected: ${resp.status()} - ${body.detail}`);
+      const bodyText = await resp.text();
+      expect(
+        resp.status(),
+        `Dùng lại token đã tiêu phải 400 — ${summarizeApiError(resp.status(), bodyText)}`
+      ).toBe(400);
+      // Phân biệt NHÁNH bằng một biến boolean chứ không bằng `toContain`:
+      // khi ca đỏ, Playwright chỉ in `true/false` + thông điệp của ta, không in
+      // nguyên `detail` ra log công khai.
+      const detail = String(JSON.parse(bodyText).detail ?? "");
+      const laNhanhDaDung = /already been used/i.test(detail);
+      expect(
+        laNhanhDaDung,
+        "400 phải đến từ nhánh 'token đã dùng', không phải cooldown/khoá cứng"
+      ).toBe(true);
+      console.log(`Dùng lại token A bị chặn: status=${resp.status()} (đúng nhánh 'đã dùng')`);
     });
+  });
 
-    // --- Step 9: Exhaust 5 wrong CCCD attempts → token locked ---
-    await test.step("Exhausting CCCD attempts locks token", async () => {
-      // Create a fresh profile for this edge case
+  // =========================================================================
+  // Test 3B: token RIÊNG — cooldown ADM-023 chặn cả lần nhập ĐÚNG ngay sau
+  // =========================================================================
+  test("Magic link (token B): CCCD sai rồi đúng ngay trong cooldown → vẫn 400, hồ sơ nguyên", async ({
+    page,
+  }) => {
+    let leadIdB = 0;
+    let profileIdB = 0;
+    let citizenIdB = "";
+    let tokenB = "";
+
+    // --- Step 1: Officer creates + submits ---
+    await test.step("Officer tạo + nộp hồ sơ B", async () => {
       officerHeaders = await restoreCookies(page, officerCookies);
-      const exhaustCitizenId = generateCitizenId();
-      const exhaustResult = await createLeadAndProfile(page, officerHeaders, {
+
+      citizenIdB = generateCitizenId();
+      const result = await createLeadAndProfile(page, officerHeaders, {
         offeringId,
         admissionMethodId,
         initialStatusId,
-        citizenId: exhaustCitizenId,
+        citizenId: citizenIdB,
       });
-      const exhaustProfileId = exhaustResult.profileId;
+      leadIdB = result.leadId;
+      profileIdB = result.profileId;
 
-      // Submit
       const submitResp = await page.request.post(
-        `${API_URL}/api/admissions/${exhaustProfileId}/submit`,
+        `${API_URL}/api/admissions/${profileIdB}/submit`,
         { headers: officerHeaders }
       );
       expect((await submitResp.json()).status).toBe("submitted");
+      console.log(`ProfileB submitted: lead=${leadIdB}, profile=${profileIdB}`);
+    });
 
-      // Admin approve
+    // --- Step 2: Admin approves ---
+    await test.step("Admin duyệt hồ sơ B", async () => {
       adminHeaders = await restoreCookies(page, adminCookies);
-      const approveProf = await (
-        await page.request.get(`${API_URL}/api/admissions/${exhaustProfileId}`)
+
+      const profile = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileIdB}`)
       ).json();
-      const approveResp = await page.request.post(
-        `${API_URL}/api/admissions/${exhaustProfileId}/approve`,
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileIdB}/approve`,
         {
           headers: adminHeaders,
-          data: { notes: "Edge case exhaust test", version: approveProf.version },
+          data: { notes: "E2E cooldown branch - approved", version: profile.version },
         }
       );
-      expect((await approveResp.json()).status).toBe("approved");
+      expect(resp.ok()).toBeTruthy();
+      expect((await resp.json()).status).toBe("approved");
+      console.log("Approved for cooldown-branch test");
+    });
 
-      // Send confirmation
-      const sendResp = await page.request.post(
-        `${API_URL}/api/admissions/${exhaustProfileId}/send-confirmation`,
+    // --- Step 3: Admin sends confirmation link ---
+    await test.step("Admin gửi liên kết xác nhận B", async () => {
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/${profileIdB}/send-confirmation`,
         { headers: adminHeaders }
       );
-      expect(sendResp.ok()).toBeTruthy();
-      const exhaustToken = (await sendResp.json()).token_value;
-      expect(exhaustToken).toBeTruthy();
-      console.log(`Exhaust token: ${exhaustToken.slice(0, 8)}...`);
+      expect(resp.ok()).toBeTruthy();
+      tokenB = (await resp.json()).token_value;
+      expect(tokenB).toBeTruthy();
+      console.log(`Token B đã cấp: length=${String(tokenB).length}`);
+    });
 
-      // Verify initial attempts
-      const infoInit = await page.request.get(
-        `${API_URL}/api/admissions/confirm/${exhaustToken}`
+    // --- Step 4: trạng thái xuất phát ---
+    await test.step("Token B: xuất phát chưa dùng, chưa khoá", async () => {
+      const resp = await page.request.get(
+        `${API_URL}/api/admissions/confirm/${tokenB}`
       );
-      expect(infoInit.ok()).toBeTruthy();
-      const initData = await infoInit.json();
-      expect(initData.attempts_remaining).toBe(5);
+      expect(resp.status()).toBe(200);
+      const info = await resp.json();
+      expect(info.valid).toBe(true);
+      expect(info.already_used).toBe(false);
+      expect(info.locked).toBe(false);
+      expect(info.attempts_remaining).toBe(CONFIRM_ATTEMPTS_DISPLAY_MAX);
+      console.log(`Token B hợp lệ: attempts_remaining=${info.attempts_remaining}`);
+    });
 
-      // Wrong CCCD 5 times — verify attempts_remaining decreases
-      for (let i = 0; i < 5; i++) {
-        const wrongResp = await page.request.post(
-          `${API_URL}/api/admissions/confirm/${exhaustToken}`,
-          { data: { last_digits_citizen_id: "0000" } }
-        );
-        expect(wrongResp.status()).toBe(400);
-        const wrongBody = await wrongResp.json();
-        console.log(`Attempt ${i + 1}/5: ${wrongBody.detail}`);
-
-        // Check remaining attempts via info endpoint (may not work when locked)
-        if (i < 4) {
-          const infoResp = await page.request.get(
-            `${API_URL}/api/admissions/confirm/${exhaustToken}`
-          );
-          if (infoResp.ok()) {
-            const info = await infoResp.json();
-            const expectedRemaining = 5 - (i + 1);
-            expect(info.attempts_remaining).toBe(expectedRemaining);
-            console.log(`  attempts_remaining: ${info.attempts_remaining}`);
-          }
-        }
-      }
-
-      // After 5 failures, token should be locked — any further attempt also fails
-      const lockedResp = await page.request.post(
-        `${API_URL}/api/admissions/confirm/${exhaustToken}`,
-        { data: { last_digits_citizen_id: "0000" } }
+    // --- Step 5: CCCD CHẮC CHẮN SAI → 400 + trừ một lượt hiển thị ---
+    await test.step("CCCD sai → 400 và attempts_remaining còn 4", async () => {
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/confirm/${tokenB}`,
+        { data: { last_digits_citizen_id: wrongLastFour(citizenIdB) } }
       );
-      expect(lockedResp.status()).toBe(400);
-      const lockedBody = await lockedResp.json();
-      expect(lockedBody.detail).toBeTruthy();
-      console.log(`Token after exhaustion: ${lockedBody.detail}`);
+      const bodyText = await resp.text();
+      expect(
+        resp.status(),
+        `CCCD sai phải 400 — ${summarizeApiError(resp.status(), bodyText)}`
+      ).toBe(400);
+      const detail = String(JSON.parse(bodyText).detail ?? "");
+      const laNhanhSaiSo = /attempts remaining/i.test(detail);
+      expect(
+        laNhanhSaiSo,
+        "400 phải đến từ nhánh 'sai bốn số', không phải cooldown/khoá cứng"
+      ).toBe(true);
+
+      const info = await (
+        await page.request.get(`${API_URL}/api/admissions/confirm/${tokenB}`)
+      ).json();
+      expect(info.attempts_remaining).toBe(CONFIRM_ATTEMPTS_DISPLAY_MAX - 1);
+      console.log(
+        `CCCD sai bị từ chối: status=${resp.status()}, attempts_remaining=${info.attempts_remaining}`
+      );
+    });
+
+    // --- Step 6: CCCD ĐÚNG NGAY SAU ĐÓ → vẫn 400 vì cooldown 5 phút ---
+    // ĐÂY là khẳng định trung tâm của ca này. Không `sleep`, không nới
+    // cooldown: gửi NGAY để chứng minh cổng `lock_until` đang chắn thật.
+    await test.step("CCCD đúng ngay trong cooldown → vẫn 400", async () => {
+      const resp = await page.request.post(
+        `${API_URL}/api/admissions/confirm/${tokenB}`,
+        { data: { last_digits_citizen_id: citizenIdB.slice(-4) } }
+      );
+      const bodyText = await resp.text();
+      expect(
+        resp.status(),
+        `Trong cooldown, kể cả CCCD đúng cũng phải 400 — ${summarizeApiError(
+          resp.status(),
+          bodyText
+        )}`
+      ).toBe(400);
+      const detail = String(JSON.parse(bodyText).detail ?? "");
+      const laNhanhCooldown = /thử lại sau \d+ giây/i.test(detail);
+      expect(
+        laNhanhCooldown,
+        "400 phải đến từ nhánh COOLDOWN (lock_until), không phải 'sai bốn số' hay 'đã khoá'"
+      ).toBe(true);
+      console.log(`Cooldown chặn cả lần nhập đúng: status=${resp.status()}`);
+    });
+
+    // --- Step 7: hậu kiểm — không có gì bị tiêu ---
+    await test.step("Hậu kiểm B: hồ sơ còn approved, token chưa tiêu, còn 4 lượt", async () => {
+      const info = await (
+        await page.request.get(`${API_URL}/api/admissions/confirm/${tokenB}`)
+      ).json();
+      expect(info.already_used).toBe(false);
+      expect(info.locked).toBe(false);
+      expect(info.valid).toBe(true);
+      // Lần bị cooldown chặn KHÔNG chạm `attempt_count` (bị từ chối TRƯỚC khi
+      // tăng), nên số lượt hiển thị vẫn đúng bằng 4 chứ không phải 3.
+      expect(info.attempts_remaining).toBe(CONFIRM_ATTEMPTS_DISPLAY_MAX - 1);
+
+      adminHeaders = await restoreCookies(page, adminCookies);
+      const profile = await (
+        await page.request.get(`${API_URL}/api/admissions/${profileIdB}`)
+      ).json();
+      expect(profile.status).toBe("approved");
+      console.log(
+        `Hậu kiểm B: profile.status=${profile.status}, already_used=${info.already_used}, attempts_remaining=${info.attempts_remaining}`
+      );
     });
   });
 
@@ -990,17 +1209,54 @@ test.describe("Admission Profile Lifecycle", () => {
       console.log(`Draft profile4: lead=${leadId4}, profile=${profileId4}`);
     });
 
-    // --- Step 2: Find a document to test with ---
+    // --- Step 2: Dựng ĐÚNG tiền đề mà ca này cần ---
     let testDocCode: string;
     await test.step("Identify document for testing", async () => {
-      const resp = await page.request.get(`${API_URL}/api/admissions/${profileId4}`);
-      expect(resp.ok()).toBeTruthy();
-      const profile = await resp.json();
-      const docs: Array<{ code: string; status: string }> = profile.documents_checklist || [];
-      // Pick any uploaded doc (we already uploaded mandatory docs in createLeadAndProfile)
-      const uploaded = docs.find((d) => d.status === "uploaded");
-      expect(uploaded).toBeTruthy();
-      testDocCode = uploaded!.code;
+      // Bản cũ đi tìm một tài liệu còn sót ở `uploaded` do `createLeadAndProfile`
+      // để lại. Nó ĐÃ hỏng: helper ấy nay upload XONG THÌ XÁC MINH LUÔN mọi tài
+      // liệu bắt buộc (bước `canVerify`), nên không còn hàng nào ở `uploaded` —
+      // đo thật trên hồ sơ 6: 7 tài liệu, trạng thái {missing, verified}, 0
+      // `uploaded`. Phụ thuộc vào tác dụng phụ của một helper dùng chung là chỗ
+      // hỏng, không phải trạng thái kia.
+      //
+      // Nay ca này TỰ dựng tiền đề: lấy một tài liệu còn `missing` rồi nộp nó.
+      // Chặt hơn bản cũ chứ không lỏng hơn — tiền đề được KHẲNG ĐỊNH (`uploaded`
+      // sau khi nộp) thay vì được giả định, và toàn bộ vòng đời bên dưới
+      // (verify → reject → reset → re-upload → delete) vẫn chạy y nguyên.
+      const truoc = await page.request.get(`${API_URL}/api/admissions/${profileId4}`);
+      expect(truoc.ok()).toBeTruthy();
+      const docs: Array<{ code: string; status: string; is_mandatory: boolean }> =
+        (await truoc.json()).documents_checklist || [];
+      const conThieu = docs.find((d) => d.status === "missing");
+      expect(
+        conThieu,
+        `hồ sơ ${profileId4} không còn tài liệu nào ở 'missing' — checklist: ` +
+          docs.map((d) => `${d.code}=${d.status}`).join(", ")
+      ).toBeTruthy();
+      testDocCode = conThieu!.code;
+
+      const upResp = await page.request.post(
+        `${API_URL}/api/admissions/${profileId4}/documents/${testDocCode}/upload`,
+        {
+          headers: officerHeaders,
+          multipart: {
+            file: {
+              name: `${testDocCode}.pdf`,
+              mimeType: "application/pdf",
+              buffer: Buffer.from(`%PDF-1.4\n%%EOF\n% E2E doc-mgmt: ${testDocCode}`),
+            },
+            actual_submission_format: "photo",
+          },
+        }
+      );
+      await expectOk(upResp, `officer nộp tài liệu ${testDocCode}`, [200, 201]);
+
+      // Tiền đề phải được ĐO, không được suy từ 2xx của lượt nộp.
+      const sau = await page.request.get(`${API_URL}/api/admissions/${profileId4}`);
+      const sauDocs: Array<{ code: string; status: string }> =
+        (await sau.json()).documents_checklist || [];
+      const hang = sauDocs.find((d) => d.code === testDocCode);
+      expect(hang?.status, `tài liệu ${testDocCode} sau khi nộp`).toBe("uploaded");
       console.log(`Testing with doc: ${testDocCode}`);
     });
 
@@ -1288,11 +1544,13 @@ test.describe("Admission Profile Lifecycle", () => {
         data: { status_id: initialStatusId, method: "phone", notes: "IDOR test" },
       });
 
-      const otherProfileResp = await page.request.post(`${API_URL}/api/admissions`, {
-        headers: adminHeaders,
-        data: { lead_id: otherLeadId, admission_method_id: admissionMethodId },
-      });
-      const otherProfileId = (await otherProfileResp.json()).id;
+      const otherProfile = await createAdmissionProfile(
+        page.request,
+        otherLeadId,
+        pathContext,
+        adminHeaders
+      );
+      const otherProfileId = otherProfile.id as number;
       console.log(`Created out-of-scope profile: id=${otherProfileId}, unit=${otherUnit.id}`);
 
       // Officer tries to access — should get 404 (not 403, to avoid leaking existence)
@@ -1526,7 +1784,8 @@ test.describe("Admission Profile Lifecycle", () => {
       const body = await resp.json();
       const token7B = body.token_value;
       expect(token7B).toBeTruthy();
-      console.log(`Token7B: ${token7B.slice(0, 8)}...`);
+      // KHÔNG in tiền tố token — xem chú thích ở ca 3A.
+      console.log(`Token7B đã cấp: length=${String(token7B).length}`);
 
       // --- Step 4: Confirm with correct CCCD ---
       const confirmResp = await page.request.post(
@@ -1603,13 +1862,28 @@ test.describe("Admission Profile Lifecycle", () => {
     await test.step("Create minimal draft profile", async () => {
       officerHeaders = await restoreCookies(page, officerCookies);
 
-      const { profileId } = await createMinimalDraftProfile(page, officerHeaders, {
+      // Bản cũ dùng `createMinimalDraftProfile` — hồ sơ KHÔNG nhân thân, KHÔNG
+      // quá trình học tập. Hồ sơ ấy không bao giờ tới được nhánh mà ca này
+      // muốn kiểm: `/submit` dừng sớm hơn ở luật xét điều kiện, trả
+      // `400 BUSINESS_RULE_VIOLATION — ELIGIBILITY_FAIL: Legacy single-path
+      // (cao_dang/chinh_quy): cd_chinh_quy_requires_thpt_or_completed_thpt`
+      // (đo thật trên hồ sơ 12 của lượt nghiệm thu).
+      //
+      // Đây là ĐỎ CÓ SẴN, không phải hồi quy: helper ấy có từ 11-03-2026 và
+      // đợt này không sửa nó, cũng không sửa tệp eligibility nào. Suite trước
+      // nay chết sớm hơn nên chưa lần nào chạy tới ca số 10.
+      //
+      // Tiền đề ĐÚNG của ca: hồ sơ ĐỦ ĐIỀU KIỆN nhưng THIẾU TÀI LIỆU. Không
+      // nới phép kiểm nào — vẫn đòi 200 + `status=draft` + `validation_errors`
+      // không rỗng; chỉ dựng đúng hoàn cảnh mà khẳng định ấy nói về.
+      const { profileId } = await createLeadAndProfile(page, officerHeaders, {
         offeringId,
         admissionMethodId,
         initialStatusId,
+        skipDocuments: true,
       });
 
-      console.log(`Minimal draft created: profileId=${profileId}`);
+      console.log(`Hồ sơ đủ điều kiện, chưa nộp tài liệu: profileId=${profileId}`);
 
       // --- Step 2: Submit → expect 200 with status=draft + validation_errors ---
       const resp = await page.request.post(
@@ -1625,7 +1899,7 @@ test.describe("Admission Profile Lifecycle", () => {
       console.log(
         `Validation blocked submit: status=${body.status}, errors=${body.validation_errors.length}`
       );
-      console.log(`First error: ${JSON.stringify(body.validation_errors[0])}`);
+      console.log(`First error: ${safeBody(body.validation_errors[0])}`);
     });
   });
 });
