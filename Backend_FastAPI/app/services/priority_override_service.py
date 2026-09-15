@@ -337,7 +337,30 @@ async def override_kv(
             target_level=live_target_ctx.get("target_level"),
             admission_type=live_target_ctx.get("admission_type"),
         )
-        if not live_meta.get("requires_manual_override"):
+        # B1 (2026-09-13) — nhánh MANUAL KHÔNG phải "engine resolve thành công".
+        # ``resolve_kv_for_profile`` cho ``basis == MANUAL`` trả THẲNG
+        # ``(None, {"rule_applied": "manual_override",
+        # "requires_manual_override": False})`` — nó không tính ra KV nào cả,
+        # chỉ báo "đã có người ấn định, dùng giá trị đang lưu". Cổng dưới đây
+        # đọc mỗi cờ ``requires_manual_override`` nên hiểu nhầm ca ấy là
+        # "engine tự xử được" và TỪ CHỐI mọi lần override THỨ HAI trên hồ sơ
+        # draft (400) — hồ sơ bị khoá cứng ở KV đã đặt.
+        #
+        # Bản vá B1 làm ca này thành đường VẬN HÀNH BẮT BUỘC chứ không còn là
+        # ca hiếm: override hết hiệu lực khi đầu vào KV đổi (``stale_inputs``),
+        # và lối ra duy nhất là duyệt LẠI. Không mở nhánh MANUAL ở đây thì
+        # fail-closed trở thành ngõ cụt.
+        #
+        # KHÔNG phải nới guard: điều kiện của cổng là "engine không tự xác định
+        # được". Nhánh MANUAL đúng là không xác định được (trả None). Lần
+        # override ĐẦU TIÊN trên draft vẫn phải có ``requires_manual_override``
+        # — ``basis == MANUAL`` chỉ xuất hiện sau khi ``override_kv`` đã ghi
+        # cột, và đường PUT thường nay bị chặn ở ``admission_service``.
+        engine_self_resolved = (
+            live_meta.get("rule_applied") != "manual_override"
+            and not live_meta.get("requires_manual_override")
+        )
+        if engine_self_resolved:
             log.info(
                 "draft_override_refused_engine_resolved_live",
                 profile_id=profile.id,
@@ -429,6 +452,13 @@ async def override_kv(
     profile.priority_resolution_snapshot = new_snapshot
     profile.area_resolution_basis = "manual_override"
 
+    # B1 — lazy import (priority_service <-> models circular dep at top-level;
+    # cùng lý do với lazy import ở cổng draft phía trên).
+    from .priority_service import (
+        KV_INPUTS_FINGERPRINT_KEY,
+        kv_inputs_fingerprint as _kv_inputs_fingerprint,
+    )
+
     # ---- Step 6: INSERT audit log row
     audit_row = models.PriorityAuditLog(
         profile_id=profile.id,
@@ -454,6 +484,13 @@ async def override_kv(
                 if profile.status in _POST_PUBLISH_STATUS
                 else None
             ),
+            # B1 (2026-09-13) — vân tay ĐẦU VÀO KV tại thời điểm duyệt. Đây là
+            # thứ ``priority_service.freeze_priority_snapshot`` so lại ở MỌI
+            # lần freeze sau: người duyệt quyết trên MỘT bộ dữ liệu (văn hoá /
+            # chuyên môn / xã thường trú / năm / lịch sử học tập); dữ liệu đổi
+            # thì quyết định ấy HẾT HIỆU LỰC và phải duyệt lại. Không có khoá
+            # này (hàng audit cũ) thì freeze fail-closed.
+            KV_INPUTS_FINGERPRINT_KEY: _kv_inputs_fingerprint(profile),
         },
     )
     db.add(audit_row)

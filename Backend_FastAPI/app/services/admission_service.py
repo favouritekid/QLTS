@@ -5899,7 +5899,38 @@ async def update_profile(
         else:
             profile.permanent_commune_code = _raw_cc
     if "area_resolution_basis" in data:
-        profile.area_resolution_basis = data["area_resolution_basis"]
+        # B1 (2026-09-13) — LỐI VÀO THỨ HAI của "ấn định KV thủ công".
+        # ``AdmissionProfileUpdate.area_resolution_basis`` nhận cả
+        # ``'manual_override'``, và trước bản vá này dòng dưới ghi thẳng, KHÔNG
+        # kiểm gì, KHÔNG sinh hàng ``priority_audit_log`` nào. Hệ quả:
+        # ``_derive_kv_basis_level`` (priority_service ~dòng 350) chuyển hồ sơ
+        # sang nhánh ``MANUAL`` — tức là bỏ qua toàn bộ luật KV — chỉ bằng một
+        # PUT thường của người sửa được hồ sơ draft. Chính docstring của
+        # validator trong ``schemas/admission.py`` cũng ghi override "fills via
+        # separate endpoint", nên đường này mâu thuẫn với hợp đồng đã tuyên bố.
+        #
+        # Cổng: chỉ CHẶN việc BẬT MỚI. Gửi lại đúng giá trị đang có là no-op
+        # (FE ``AdmissionDetailClient`` hydrate rồi gửi lại nguyên giá trị ở mọi
+        # lần lưu — chặn cả ca ấy là làm hỏng mọi lần lưu của hồ sơ đã override
+        # hợp lệ). Gỡ override thì vẫn cho: nó rơi về engine tự tính, tức là
+        # hướng AN TOÀN.
+        #
+        # Đây là lớp phòng vệ thứ hai. Lớp thứ nhất
+        # (``priority_service.verify_manual_override_provenance``) mới là lớp
+        # bắt buộc: nó không tin nhãn mà đòi hàng audit, nên kể cả khi có một
+        # đường ghi cột khác ra đời sau, KV vẫn không được công nhận.
+        _new_basis = data["area_resolution_basis"]
+        if (
+            _new_basis == "manual_override"
+            and profile.area_resolution_basis != "manual_override"
+        ):
+            raise BusinessRuleViolation(
+                "Không thể đặt area_resolution_basis='manual_override' qua "
+                "đường cập nhật hồ sơ thường. Ấn định KV thủ công phải đi qua "
+                "POST /api/v2/admissions/{id}/override-priority-kv (chỉ "
+                "manager/admin, bắt buộc lý do + ghi sổ priority_audit_log)."
+            )
+        profile.area_resolution_basis = _new_basis
     if "priority_object_codes" in data and data["priority_object_codes"] is not None:
         profile.priority_object_codes = data["priority_object_codes"]
         flag_modified(profile, "priority_object_codes")
