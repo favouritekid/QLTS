@@ -18,6 +18,7 @@ from sqlalchemy import select
 
 from app import models
 from app.database import AsyncSessionLocal
+from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
 from tests._lead_status_test_ids import INITIAL_LEAD_STATUS_ID
 from tests.fixtures.constants import LeadsURLs
 
@@ -42,8 +43,13 @@ async def _initial_status_legacy_marker(seed_lead_dependencies):
                     )
                 )
             ).scalar_one()
-            row.legacy_status = "new"
+            # ĐỊNH DANH CHUẨN: ``StatusHelper.get_initial_status`` tra theo
+            # ``code``, không theo ``legacy_status`` (trên CSDL thật cột đó NULL
+            # ở 20/21 hàng, cố ý). ``conftest`` đã đóng dấu mã này lên chính hàng
+            # TTHV000; đóng lại ở đây là idempotent và giữ tệp tự đủ nghĩa.
+            row.code = INITIAL_CONSULTATION_STATUS_CODE
             row.is_final = False
+            row.is_universal = False
     return seed_lead_dependencies
 
 

@@ -73,8 +73,32 @@ def _transition(to_id, trigger):
 
 
 async def _seed_fsm(db: AsyncSession) -> None:
-    """Seed stg02 + sts03/sts04/sts20 + the sts04 transitions used by tests."""
+    """Seed stg01+stg02 + sts00/sts03/sts04/sts20 + the sts04 transitions.
+
+    ``sts00`` mang ĐỊNH DANH CHUẨN ``code='NOT_CONTACTED'``: ba ca referral ở
+    cuối tệp gọi ``create_lead``, và đường đó nay fail-closed khi không có hàng
+    khởi tạo hợp lệ. Trước bản vá hợp-đồng-trạng-thái-khởi-tạo chúng vẫn "xanh"
+    vì ``create_lead`` âm thầm ghi lead với ``consultation_status_id=NULL`` —
+    tức bộ test đang dựa vào chính lối hỏng.
+    """
+    from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
+
+    db.add(models.PipelineStage(id="stg01", name="Chưa tư vấn", order=1))
     db.add(models.PipelineStage(id="stg02", name="Đang tư vấn", order=2))
+    db.add(models.ConsultationStatus(
+        id="sts00",
+        code=INITIAL_CONSULTATION_STATUS_CODE,
+        name="Chưa tiếp cận",
+        color_code="#9CA3AF",
+        stage_id="stg01",
+        phase="consultation",
+        outcome_type=OutcomeTypeEnum.neutral,
+        is_final=False,
+        is_universal=False,
+        status_type=StatusTypeEnum.transition,
+        selectable_mode=SelectableModeEnum.user,
+        updates_pipeline=True,
+    ))
     db.add(_status(
         "sts03", name="Có nhu cầu", outcome=OutcomeTypeEnum.neutral,
         is_final=False, mode=SelectableModeEnum.user,

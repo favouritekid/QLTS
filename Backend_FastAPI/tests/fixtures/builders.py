@@ -336,8 +336,13 @@ class SeedDependenciesBuilder:
         stage_a = models.PipelineStage(id=stage_a_id, name="Initial Stage", order=10)
         stage_lost = models.PipelineStage(id=stage_lost_id, name="Lost Stage", order=999)
 
+        # ``code`` là ĐỊNH DANH CHUẨN mà ``StatusHelper.get_initial_status``
+        # tra — thiếu nó thì mọi đường tạo lead fail-closed 503. Xem chú thích
+        # dài ở ``tests/conftest.py`` (cùng lý do, cùng hàng).
+        from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
         initial_status = models.ConsultationStatus(
             id=initial_status_id, name="New Lead", color_code="#0000FF", stage_id=stage_a_id,
+            code=INITIAL_CONSULTATION_STATUS_CODE,
         )
         status_a1 = models.ConsultationStatus(
             id=status_a1_id, name="Status A1", color_code="#00FF00", stage_id=stage_a_id,

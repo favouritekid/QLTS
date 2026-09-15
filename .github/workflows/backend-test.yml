@@ -807,6 +807,16 @@ jobs:
               tests/unit/test_lead_action_permissions.py
               tests/integration/test_reassign_terminal_guard.py
               tests/integration/test_delete_consultation_revert.py
+              tests/services/test_initial_status_contract.py
+              tests/services/test_initial_status_caller_contract.py
+              tests/api/test_leads_crud.py
+              tests/api/test_collaborator_api.py
+              tests/api/test_commission_api.py
+              tests/services/test_lead.py
+              tests/services/test_lead_phase1_hardening.py
+              tests/services/test_collaborator_claim.py
+              tests/services/test_create_lead_referral.py
+              tests/services/test_lead_offering_keep_officer.py
               tests/integration/test_restore_consultation_revert.py
               tests/integration/test_add_restore_consultation_latest.py
               tests/integration/test_consultation_system_immutable.py

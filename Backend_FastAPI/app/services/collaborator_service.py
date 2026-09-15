@@ -471,6 +471,19 @@ async def submit_lead_claim(
             existing.source = "referral"
             lead = existing
         else:
+            # A2: Set initial consultation status (same pattern as create_lead)
+            #
+            # Giải quyết TRƯỚC ``db.add(lead)``: thứ tự cũ (add rồi mới query)
+            # để autoflush INSERT lead vào transaction ngay tại câu SELECT này,
+            # nên lối lỗi phải trông cậy vào savepoint dọn hộ. Query trước thì
+            # không có gì để dọn.
+            #
+            # Thiếu cấu hình ⇒ 503 từ helper. Nhánh cũ ``lead.status = "new"``
+            # ghi CTV-lead với ``consultation_status_id=NULL`` +
+            # ``pipeline_stage_id=NULL`` rồi vẫn trả 201 — lead của cộng tác
+            # viên biến mất khỏi phễu trong khi CTV tưởng đã gửi thành công.
+            initial_status = await StatusHelper.get_initial_status(db)
+
             # Create new lead
             lead = models.Lead(
                 full_name=claim_data.full_name,
@@ -486,12 +499,7 @@ async def submit_lead_claim(
             )
             db.add(lead)
 
-            # A2: Set initial consultation status (same pattern as create_lead)
-            initial_status = await StatusHelper.get_initial_status(db)
-            if initial_status:
-                await StatusHelper.sync_lead_status(lead, initial_status)
-            else:
-                lead.status = "new"
+            await StatusHelper.sync_lead_status(lead, initial_status)
 
             await db.flush()
 

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
 from app.config import settings
+from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
 from tests._lead_status_test_ids import (
     INITIAL_LEAD_STATUS_ID,
 )
@@ -38,13 +39,18 @@ log = logging.getLogger(__name__)
 
 @pytest_asyncio.fixture(scope="function")
 async def _initial_status_legacy_marker(seed_lead_dependencies):
-    """Patch the conftest-seeded TTHV000 row to set ``legacy_status="new"``.
+    """Đóng dấu ĐỊNH DANH CHUẨN ``code='NOT_CONTACTED'`` lên hàng TTHV000.
 
-    The lead import path resolves the initial consultation status via
-    ``StatusHelper.get_initial_status()`` which queries ``legacy_status="new"``
-    + ``is_final=False``. The shared conftest fixture seeds TTHV000 without
-    the marker (other test suites depend on it staying NULL), so this
-    file-local fixture stamps the marker just for the import tests.
+    Đường nhập lead tra trạng thái khởi tạo qua
+    ``StatusHelper.get_initial_status()``, và hàm đó tra theo **``code``** chứ
+    không theo ``legacy_status``: trên CSDL thật sau ``alembic upgrade head``
+    cột ``legacy_status`` NULL ở 20/21 hàng (cố ý — nó là *override* cho
+    ``derive_lead_status``, không phải định danh), nên tiêu chí cũ khớp **0
+    hàng** và mọi lượt nhập trả lỗi cấu hình.
+
+    ``conftest`` đã đóng dấu mã này lên chính hàng đó khi seed; fixture này giữ
+    lại để tệp tự đủ nghĩa và để một lần đổi conftest không làm các ca ở đây đỏ
+    vì lý do không liên quan.
     """
     async with AsyncSessionLocal() as session:
         async with session.begin():
@@ -55,8 +61,13 @@ async def _initial_status_legacy_marker(seed_lead_dependencies):
                     )
                 )
             ).scalar_one()
-            row.legacy_status = "new"
+            # ĐỊNH DANH CHUẨN: ``StatusHelper.get_initial_status`` tra theo
+            # ``code``, không theo ``legacy_status`` (trên CSDL thật cột đó NULL
+            # ở 20/21 hàng, cố ý). ``conftest`` đã đóng dấu mã này lên chính hàng
+            # TTHV000; đóng lại ở đây là idempotent và giữ tệp tự đủ nghĩa.
+            row.code = INITIAL_CONSULTATION_STATUS_CODE
             row.is_final = False
+            row.is_universal = False
     return seed_lead_dependencies
 
 # --- Dữ liệu file mẫu sử dụng constants ---
