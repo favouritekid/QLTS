@@ -61,6 +61,38 @@ DEFAULT_LEAD_STATUS = "new"
 
 
 # =============================================================================
+# INITIAL CONSULTATION STATUS — ĐỊNH DANH CHUẨN (một nguồn duy nhất)
+# =============================================================================
+
+#: Mã máy-đọc của hàng ``consultation_status`` dùng làm trạng thái KHỞI TẠO cho
+#: mọi lead mới. Đây là định danh DUY NHẤT được phép dùng để tìm hàng đó.
+#:
+#: Vì sao là ``code`` chứ không phải ba cách còn lại — cả ba đều đã được đo trên
+#: một CSDL mới (``alembic upgrade head``) và cả ba đều sai:
+#:
+#: * ``legacy_status = 'new'`` → **0/21 hàng**. Cột này CỐ Ý để NULL (migration
+#:   ``zs8y9z0a1b2c3`` giải thích: chỉ ``sts02`` cần override vì nó dùng chung
+#:   ``stg01`` với ``sts00``), nên nó không bao giờ là định danh — nó là
+#:   *override* cho phép suy diễn ``derive_lead_status``.
+#: * ``stage_id = 'stg01'`` → **2 hàng** (``sts00`` và ``sts02``).
+#: * "mọi hàng map ra ``new``" qua ``derive_lead_status`` → **4 hàng**
+#:   (``sts00``, ``sts01``, ``sts15``, ``sts19``).
+#:
+#: Chọn theo thứ tự hàng (``ORDER BY id LIMIT 1``) là thứ nguy hiểm nhất: nó
+#: luôn trả về *một cái gì đó*. Migration ``v7w8x9y0z1a2`` từng gán
+#: ``legacy_status='new'`` cho CẢ ``sts00`` lẫn ``sts01``; truy vấn cũ chỉ trúng
+#: ``sts00`` nhờ may mắn về thứ tự id. Mất hàng ``sts00`` là prod lặng lẽ khởi
+#: tạo lead bằng ``sts01 NO_ANSWER`` — một activity status universal, không có
+#: ``stage_id``.
+#:
+#: ``code`` thì có ``uq_consultation_status_code UNIQUE (code)`` canh ở TẦNG
+#: CSDL: không thể có hai hàng cùng mang mã này, nên không có chỗ cho "hàng đầu
+#: tiên". ``app/services/fsm_engine.py`` (Rule #11) đã dùng đúng mã này từ
+#: trước; hằng ở đây là để hai nơi không còn gõ lại chuỗi.
+INITIAL_CONSULTATION_STATUS_CODE = "NOT_CONTACTED"
+
+
+# =============================================================================
 # CONSULTATION TERMINAL PREDICATE (single source of truth)
 # =============================================================================
 

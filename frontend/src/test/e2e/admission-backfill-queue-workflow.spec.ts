@@ -23,7 +23,7 @@
  * for Bundle 4 release confidence.
  */
 import { test, expect } from "@playwright/test"
-import * as OTPAuth from "otpauth"
+import { voiMaTotp } from "./helpers/e2e-fixtures";
 
 const API_URL = process.env.E2E_API_URL || "http://localhost:8000"
 const FRONTEND_URL = process.env.E2E_FRONTEND_URL || "http://localhost:3000"
@@ -43,20 +43,18 @@ test.describe("admin admission-backfill-queue smoke", () => {
 
     // Handle TOTP MFA if configured (admin account requires MFA)
     if (ADMIN_MFA_SECRET) {
-      const totp = new OTPAuth.TOTP({
-        secret: ADMIN_MFA_SECRET,
-        period: 30,
-        digits: 6,
+      // Đường UI cũng phải đi qua điều phối viên: backend không phân biệt mã
+      // đến từ form hay từ API — khoá chống replay là `totp_used:{user_id}`.
+      await voiMaTotp(ADMIN_USERNAME, ADMIN_MFA_SECRET, async ({ code }) => {
+        await page
+          .locator('input[autocomplete="one-time-code"], input[name="otp"]')
+          .first()
+          .fill(code)
+        await page
+          .locator('button[type="submit"]:has-text("Xác minh"), button:has-text("Verify")')
+          .first()
+          .click()
       })
-      const code = totp.generate()
-      await page
-        .locator('input[autocomplete="one-time-code"], input[name="otp"]')
-        .first()
-        .fill(code)
-      await page
-        .locator('button[type="submit"]:has-text("Xác minh"), button:has-text("Verify")')
-        .first()
-        .click()
     }
 
     await expect(page).not.toHaveURL(/\/login/, { timeout: 30000 })

@@ -158,10 +158,16 @@ class TestImportUrgencyInitialization:
         db.begin_nested = MagicMock(return_value=nested_tx)
         db.flush = AsyncMock()
 
+        # Bản giả phải mang đủ thuộc tính đường nhập đọc: ``lead.status`` của lô
+        # nhập nay tính bằng CHÍNH ``derive_lead_status`` (nguồn chuẩn chung với
+        # đường tạo-một-lead), nên thiếu ``outcome_type``/``is_final`` là
+        # ``AttributeError`` chứ không phải một khẳng định sai.
         initial_status = SimpleNamespace(
             id="sts01",
             stage_id="stg01",
             legacy_status="new",
+            outcome_type="neutral",
+            is_final=False,
         )
         phone = "0909.667.001" if not expected_hot else "0909.667.002"
 

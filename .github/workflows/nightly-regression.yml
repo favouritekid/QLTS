@@ -64,6 +64,14 @@ jobs:
       E2E_OFFICER_PASSWORD: Abc@123456789
       E2E_MANAGER_USERNAME: phanthithuyvan
       E2E_MANAGER_PASSWORD: Abc@123456789
+      # ACCOUNTANT cũng CỐ Ý: `finance-lifecycle` cần một CHECKER khác người
+      # lập phiếu, mà `finance_scope_unit_id` (`app/core/deps.py`) chỉ trả
+      # `None` (mọi đơn vị) cho admin và accountant — manager bị khoá vào đơn
+      # vị của mình (11), còn hồ sơ E2E do officer (đơn vị 4) lập. Thiếu vai
+      # này thì bước "từ chối phiếu thu" không có chủ thể hợp lệ nào và nửa
+      # THÀNH CÔNG của maker-checker không được kiểm.
+      E2E_ACCOUNTANT_USERNAME: kpahdrim
+      E2E_ACCOUNTANT_PASSWORD: Abc@123456789
       # NOTE: CORS_ORIGINS moved to ``.env.production`` (Generate step
       # below) per hotfix 2026-05-26 — docker-compose backend service
       # ``environment:`` block does NOT forward arbitrary host env vars
@@ -263,6 +271,46 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend python -m scripts.seed_from_xlsx
           docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend python -m app.scripts.seed_notification_rules
 
+      # Bốn bảng danh mục KV/địa giới RỖNG sau `alembic upgrade head` + bước
+      # trên — đo thật: `administrative_nodes=0 · current_era=0 · vn_school=0 ·
+      # vn_commune_area_map=0`, và `seed_from_xlsx` KHÔNG chèn hàng nào vào
+      # chúng. Không có dữ liệu ấy thì mọi hồ sơ E2E fail-closed ở
+      # `_kv_unresolved_error_message` và `_is_current_era_ward`, tức ba suite
+      # admission/finance/unified không bao giờ qua nổi bước `submit`.
+      #
+      # Nguồn là `Documents/reports/dak_lak_kv_table.csv` ĐÃ CÓ TRONG GIT
+      # (5.276 byte, 102 xã thật). CỐ Ý không dùng
+      # `scripts/seeds/seed_administrative_nodes` — nó đọc
+      # `Documents/Seeding data/.../ward_mappings.sql`, tệp CHƯA TỪNG có trong
+      # git; và `build_kv_table_dak_lak.py` đọc `/tmp/ward_mappings.sql`, một
+      # đường dẫn trên máy người khác. Một bước CI không được phụ thuộc thứ
+      # không dựng lại được từ kho.
+      #
+      # Script guard HAI TẦNG (`APP_ENV` ∈ {test} VÀ tên CSDL ∈ {qlts_test},
+      # kiểm cả trước lẫn sau khi kết nối), idempotent, mặc định dry-run nên
+      # `--apply` là tường minh. Không cần thêm biến môi trường: container
+      # backend đã có `APP_ENV=test` và `POSTGRES_DB=qlts_test`. Nếu ai đổi một
+      # trong hai, bước này ĐỎ có tiếng nói thay vì âm thầm bỏ qua.
+      - name: Seed danh mục KV + địa giới (fixture E2E)
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend \
+            python -m scripts.seeds.seed_e2e_catalog_fixture --apply
+
+      # `offering_semester_tuition` RỖNG sau migration + `seed_from_xlsx` (đo thật:
+      # 0 hàng; không migration nào INSERT, `seed_from_xlsx.py:786` chỉ chèn
+      # `offering_academic_info`). Thiếu nó thì `POST /api/fees/calculate` cho học
+      # phí trả 400 "Chưa cấu hình học phí cho HK1 (academic_info_id=…)" — ĐÚNG hợp
+      # đồng của service, nên phải seed DỮ LIỆU chứ KHÔNG nới service và KHÔNG
+      # fallback `tuition_fee_per_year`.
+      #
+      # Số tiền fixture CỐ Ý khác `tuition_fee_per_year` của ngành E2E chọn, để một
+      # hồi quy rơi về cột cũ lộ ra bằng CON SỐ chứ không phải bằng mã 201.
+      # Guard hai tầng + idempotent, dùng chung hàm với bước trên.
+      - name: Seed giá học phí HK1 (fixture E2E)
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml exec -T backend \
+            python -m scripts.seeds.seed_e2e_semester_tuition_fixture --all-candidates --apply
+
       # Script nằm ngoài Backend image production; workflow pipe đúng blob đã
       # checkout vào stdin của Python trong container. Nó khoá APP_ENV=test +
       # DB qlts_test, kiểm role trước mutation, bật MFA đúng admin/manager qua
@@ -296,6 +344,7 @@ jobs:
         env:
           E2E_API_URL: http://localhost:8000
           QLTS_TOTP_COUNTER_FILE: ${{ runner.temp }}/qlts-totp-counter
+          QLTS_TOTP_STATE_DIR: ${{ runner.temp }}/qlts-totp-state
         run: python3 .github/scripts/nightly_mfa_gate.py sync-casbin
 
       # CUTOVER — tạo lại backend để MỌI worker nạp lại policy vừa ghi.
@@ -477,9 +526,26 @@ jobs:
         env:
           E2E_API_URL: http://localhost:8000
           QLTS_TOTP_COUNTER_FILE: ${{ runner.temp }}/qlts-totp-counter
+          QLTS_TOTP_STATE_DIR: ${{ runner.temp }}/qlts-totp-state
         run: python3 .github/scripts/nightly_mfa_gate.py preflight
 
       # --- Regression Suites ---
+      #
+      # ⚠️ MỖI SUITE PHẢI CÓ `--output` RIÊNG. `outputDir` mặc định của Playwright
+      # là `frontend/test-results`, và Playwright DỌN SẠCH thư mục ấy ở đầu mỗi
+      # lượt chạy. Sáu bước dưới đây là sáu tiến trình `npx playwright test` nối
+      # tiếp nhau trên cùng một thư mục, nên bước sau xoá hiện vật của bước
+      # trước; bước `Upload Playwright report` chạy MỘT LẦN ở cuối nên chỉ còn
+      # hiện vật của suite chạy SAU CÙNG.
+      #
+      # Đo thật trên run 34678745325: cả sáu suite đều đỏ, artifact
+      # `playwright-report` về đúng 10 tệp và TẤT CẢ thuộc `admission-ui-smoke`
+      # (suite thứ sáu). Năm suite kia mất sạch trace/video/screenshot — đó là
+      # lý do không ai chẩn đoán được chúng, và là lý do bản vá này tồn tại.
+      #
+      # Tên thư mục có tiền tố `suite-` là CỐ Ý: `smoke-all-pages.spec.ts` tự
+      # ghi ảnh chụp vào đường dẫn cứng `test-results/smoke/`, nên một
+      # `--output=test-results/smoke` sẽ khiến Playwright dọn đúng thư mục ấy.
       - name: E2E — Lead workflow
         id: e2e_lead
         if: always() && steps.plan.outputs.e2e_lead == 'true'
@@ -487,7 +553,8 @@ jobs:
         env:
           E2E_API_URL: http://localhost:8000
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-        run: npx playwright test src/test/e2e/lead-workflow.spec.ts --project=e2e-workflow --reporter=list --workers=1
+          QLTS_TOTP_STATE_DIR: ${{ runner.temp }}/qlts-totp-state
+        run: npx playwright test src/test/e2e/lead-workflow.spec.ts --project=e2e-workflow --reporter=list --workers=1 --output=test-results/suite-lead
 
       - name: E2E — Admission lifecycle
         id: e2e_admission
@@ -496,7 +563,8 @@ jobs:
         env:
           E2E_API_URL: http://localhost:8000
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-        run: npx playwright test src/test/e2e/admission-lifecycle.spec.ts --project=e2e-workflow --reporter=list --workers=1
+          QLTS_TOTP_STATE_DIR: ${{ runner.temp }}/qlts-totp-state
+        run: npx playwright test src/test/e2e/admission-lifecycle.spec.ts --project=e2e-workflow --reporter=list --workers=1 --output=test-results/suite-admission
 
       - name: E2E — Finance lifecycle
         id: e2e_finance
@@ -505,7 +573,8 @@ jobs:
         env:
           E2E_API_URL: http://localhost:8000
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-        run: npx playwright test src/test/e2e/finance-lifecycle.spec.ts --project=e2e-workflow --reporter=list --workers=1
+          QLTS_TOTP_STATE_DIR: ${{ runner.temp }}/qlts-totp-state
+        run: npx playwright test src/test/e2e/finance-lifecycle.spec.ts --project=e2e-workflow --reporter=list --workers=1 --output=test-results/suite-finance
 
       - name: E2E — Bugfix regression
         id: e2e_bugfix
@@ -514,7 +583,8 @@ jobs:
         env:
           E2E_API_URL: http://localhost:8000
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-        run: npx playwright test src/test/e2e/bugfix-regression.spec.ts --project=e2e-workflow --reporter=list --workers=1
+          QLTS_TOTP_STATE_DIR: ${{ runner.temp }}/qlts-totp-state
+        run: npx playwright test src/test/e2e/bugfix-regression.spec.ts --project=e2e-workflow --reporter=list --workers=1 --output=test-results/suite-bugfix
 
       - name: E2E — Unified workflow
         id: e2e_unified
@@ -523,15 +593,28 @@ jobs:
         env:
           E2E_API_URL: http://localhost:8000
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-        run: npx playwright test src/test/e2e/lead-to-admission-workflow.spec.ts --project=e2e-workflow --reporter=list --workers=1
+          QLTS_TOTP_STATE_DIR: ${{ runner.temp }}/qlts-totp-state
+        run: npx playwright test src/test/e2e/lead-to-admission-workflow.spec.ts --project=e2e-workflow --reporter=list --workers=1 --output=test-results/suite-unified
 
       - name: E2E — Smoke tests
         id: e2e_smoke
         if: always() && steps.plan.outputs.e2e_smoke == 'true'
         working-directory: frontend
         env:
+          # `E2E_API_URL` KHÔNG được khai ở bước này trước bản vá, nên
+          # `smoke-all-pages.spec.ts:36` rơi về literal `http://localhost:8000`.
+          # Giá trị trùng nhau nên không ai thấy, nhưng nó là một mặc định ngầm:
+          # đổi cổng backend ở `docker-compose.ci.yml` là suite này gọi nhầm
+          # địa chỉ mà năm bước kia thì không. Khai tường minh như năm bước trên.
+          #
+          # Giá trị dưới đây bị khoá vào cổng host của `backend` trong
+          # `docker-compose.ci.yml` bởi
+          # `test_moi_E2E_API_URL_trong_nightly_tro_dung_cong_backend_CI`
+          # (Tier 5). Đổi một đầu mà quên đầu kia là ĐỎ, không phải im lặng.
+          E2E_API_URL: http://localhost:8000
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-        run: npx playwright test src/test/e2e/smoke-all-pages.spec.ts src/test/e2e/admission-ui-smoke.spec.ts --project=chromium --reporter=list
+          QLTS_TOTP_STATE_DIR: ${{ runner.temp }}/qlts-totp-state
+        run: npx playwright test src/test/e2e/smoke-all-pages.spec.ts src/test/e2e/admission-ui-smoke.spec.ts --project=chromium --reporter=list --output=test-results/suite-smoke
 
       # CỔNG NGHIỆM THU. Đặt TRƯỚC bước upload có chủ ý: `Upload Playwright
       # report` gác bằng `if: failure()`, mà `failure()` chỉ đúng nếu đã có

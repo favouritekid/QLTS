@@ -121,8 +121,13 @@ async def seed_commission_deps(setup_test_database):
             stage = models.PipelineStage(id="COMM_STAGE", name="Commission Stage", order=10)
             session.add(stage)
 
+            # ``code`` là ĐỊNH DANH CHUẨN mà ``StatusHelper.get_initial_status``
+            # tra (UNIQUE ở tầng CSDL); thiếu nó mọi đường tạo lead 503.
+            from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
+
             initial_status = models.ConsultationStatus(
                 id=INITIAL_LEAD_STATUS_ID,
+                code=INITIAL_CONSULTATION_STATUS_CODE,
                 name="New Lead (Commission Test)",
                 color_code="#0000FF",
                 stage_id="COMM_STAGE",

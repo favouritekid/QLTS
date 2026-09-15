@@ -124,8 +124,14 @@ async def seed_collab_deps(setup_test_database):
             stage = models.PipelineStage(id="CTV_STAGE", name="CTV Stage", order=10)
             session.add(stage)
 
+            # ``code`` là ĐỊNH DANH CHUẨN mà ``StatusHelper.get_initial_status``
+            # tra; thiếu nó thì đường CTV claim fail-closed 503 (trước bản vá nó
+            # ghi lead với consultation_status_id=NULL rồi vẫn trả 201).
+            from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
+
             status = models.ConsultationStatus(
                 id=INITIAL_LEAD_STATUS_ID,
+                code=INITIAL_CONSULTATION_STATUS_CODE,
                 name="New Lead (CTV Test)",
                 color_code="#0000FF",
                 stage_id="CTV_STAGE",

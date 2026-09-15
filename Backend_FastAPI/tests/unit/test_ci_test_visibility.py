@@ -1502,6 +1502,7 @@ class TestNeoCheoDeployClassifier:
 
 DUONG_WF_NIGHTLY = GOC / ".github" / "workflows" / "nightly-regression.yml"
 DUONG_PLANNER = GOC / ".github" / "scripts" / "nightly_regression_plan.py"
+DUONG_COMPOSE_CI = GOC / "docker-compose.ci.yml"
 
 JOB_NIGHTLY = "regression"
 ID_BUOC_PLAN = "plan"
@@ -1569,6 +1570,32 @@ def wf_nightly(prc):
 @pytest.fixture(scope="module")
 def job_nightly(wf_nightly):
     return wf_nightly["jobs"][JOB_NIGHTLY]
+
+
+@pytest.fixture(scope="module")
+def url_backend_ci(prc):
+    """URL backend mà mọi bước của nightly PHẢI gọi — SUY RA, không chép tay.
+
+    Nguồn chuẩn là cổng HOST mà `docker-compose.ci.yml` publish cho `backend`.
+    Một hằng số `"http://localhost:8000"` chép vào test sẽ vẫn xanh sau khi ai
+    đó đổi cổng ở compose — đúng lớp lỗi mà phép kiểm này sinh ra để bắt.
+
+    Đọc bằng loader NGHIÊM NGẶT vì cùng lý do với `wf_nightly`: `safe_load`
+    nuốt khoá trùng và giữ bản CUỐI, nên một khối `ports:` thứ hai dán nhầm
+    vào cùng service sẽ thay thế cái thứ nhất mà không một cảnh báo nào.
+    """
+    compose = prc.yaml.load(
+        DUONG_COMPOSE_CI.read_text(encoding="utf-8"), Loader=prc._LoaderNghiemNgat
+    )
+    cong = compose["services"]["backend"]["ports"]
+    assert len(cong) == 1, (
+        "`backend` publish %d ánh xạ cổng trong %s — không suy được MỘT URL; "
+        "sửa phép kiểm cho khớp chủ ý mới, đừng nới nó thành no-op"
+        % (len(cong), DUONG_COMPOSE_CI.name)
+    )
+    host = str(cong[0]).split(":")[0]
+    assert host.isdigit(), "cổng host %r không phải số" % host
+    return "http://localhost:%s" % host
 
 
 def _buoc_theo_id(job) -> dict:
@@ -1860,19 +1887,90 @@ class TestHopDongWorkflowNightly:
                     assert spec_khac not in than, (
                         "bước %r đang chạy spec của %r" % (suite, khac))
 
-    def test_giu_nguyen_ba_bat_doi_xung_cua_smoke(self, job_nightly, planner):
-        """`smoke` KHÁC ba điểm — đã ship, đừng 'chuẩn hoá cho đều'."""
+    def test_giu_nguyen_hai_bat_doi_xung_cua_smoke(self, job_nightly, planner):
+        """`smoke` còn KHÁC HAI điểm — đã ship, đừng 'chuẩn hoá cho đều'.
+
+        Trước đây là BA. Điểm thứ ba — "smoke không khai `E2E_API_URL`" — đã bị
+        **chủ kho bãi bỏ**: nó không phải một chủ ý, nó là một mặc định ngầm.
+        `smoke-all-pages.spec.ts:36` viết
+        ``process.env.E2E_API_URL || "http://localhost:8000"``; giá trị mặc
+        định TRÙNG giá trị đúng hôm nay nên không ai thấy, cho tới ngày cổng
+        backend đổi. Hợp đồng mới nằm ở
+        `test_sau_buoc_e2e_deu_khai_E2E_API_URL` và
+        `test_moi_E2E_API_URL_trong_nightly_tro_dung_cong_backend_CI`.
+
+        Hai điểm CÒN LẠI vẫn được canh ở đây, và đây là lý do ĐO ĐƯỢC của
+        từng điểm — không phải suy đoán:
+
+        * ``--project=chromium`` là BẮT BUỘC, không phải sở thích.
+          `playwright.config.ts` định tuyến theo `testMatch`: project
+          ``chromium`` bắt ``/smoke-all-pages\\.spec\\.ts|(responsive|ui-smoke)
+          \\.spec\\.ts/`` — đúng hai tệp của bước này — trong khi
+          ``e2e-workflow`` bắt ``/(lifecycle|workflow|bulk|regression|…)/``,
+          KHÔNG khớp tệp nào trong hai tệp ấy. Chạy chúng dưới
+          ``--project=e2e-workflow`` sẽ chọn **0 ca** mà vẫn exit 0. Thêm nữa,
+          chỉ ``chromium`` mang ``storageState: authFile`` +
+          ``dependencies: ['setup']`` mà hai tệp smoke cần.
+        * KHÔNG ghim ``--workers=1``: trên CI `playwright.config.ts:23` đã đặt
+          ``workers: process.env.CI ? 1 : undefined``, nên cờ ấy ở năm bước kia
+          là TƯỜNG MINH-THỪA chứ không đổi hành vi. Khoá hình dạng đã ship,
+          không khoá một khẳng định về hiệu năng.
+        """
         theo_id = _buoc_theo_id(job_nightly)
         smoke = theo_id[planner.id_buoc("smoke")]
         than = _than_khong_comment_shell(str(smoke["run"]))
         assert "--project=chromium" in than
         assert "--workers=1" not in than, "smoke cố ý KHÔNG ghim --workers=1"
-        assert "E2E_API_URL" not in (smoke.get("env") or {}), (
-            "smoke cố ý KHÔNG có E2E_API_URL")
         for suite in ("lead", "admission", "finance", "bugfix", "unified"):
             b = theo_id[planner.id_buoc(suite)]
             assert "--workers=1" in _than_khong_comment_shell(str(b["run"]))
-            assert "E2E_API_URL" in (b.get("env") or {})
+
+    def test_sau_buoc_e2e_deu_khai_E2E_API_URL(self, job_nightly, planner):
+        """Không suite nào được rơi về literal mặc định trong tệp spec.
+
+        `smoke-all-pages.spec.ts:36` viết
+        ``process.env.E2E_API_URL || "http://localhost:8000"``. Mặc định ấy
+        TRÙNG giá trị đúng hôm nay, nên một bước thiếu khoá là **vô hình** —
+        cho tới lần đổi cổng backend, khi đúng bước ấy gọi nhầm địa chỉ mà
+        năm bước kia thì không. Khai tường minh ở CẢ SÁU bước là thứ biến
+        "vô hình" thành "đỏ".
+
+        Phép kiểm này chỉ hỏi CÓ hay KHÔNG; giá trị trỏ đi đâu là bất biến
+        của ca kiểm ngay dưới. Tách ra để một đột biến chỉ làm đỏ một ca.
+        """
+        theo_id = _buoc_theo_id(job_nightly)
+        thieu = sorted(
+            s for s in planner.SUITES
+            if "E2E_API_URL" not in (theo_id[planner.id_buoc(s)].get("env") or {})
+        )
+        assert not thieu, (
+            "bước E2E thiếu khoá `E2E_API_URL` nên rơi về mặc định ngầm của "
+            "tệp spec: %s" % thieu)
+
+    def test_moi_E2E_API_URL_trong_nightly_tro_dung_cong_backend_CI(
+        self, job_nightly, url_backend_ci
+    ):
+        """MỌI bước khai `E2E_API_URL` phải trỏ ĐÚNG cổng host của backend CI.
+
+        Không chỉ sáu bước E2E: bước `sync-casbin` và bước cổng MFA cũng nói
+        chuyện với đúng backend ấy. Vá một nhánh thì còn bốn nhánh — nên phép
+        kiểm quét cả job, không quét riêng các bước có `id`.
+
+        Giá trị kỳ vọng SUY từ `docker-compose.ci.yml` (xem fixture
+        `url_backend_ci`), nên đổi cổng ở compose mà quên workflow là ĐỎ ở
+        đây, thay vì sáu suite lặng lẽ gọi vào hư không.
+        """
+        lech = {}
+        for s in job_nightly["steps"]:
+            env = s.get("env") or {}
+            if "E2E_API_URL" not in env:
+                continue
+            if str(env["E2E_API_URL"]) != url_backend_ci:
+                lech[str(s.get("id") or s.get("name"))] = str(env["E2E_API_URL"])
+        assert not lech, (
+            "`E2E_API_URL` phải là %r — suy từ cổng host mà %s publish cho "
+            "`backend`. Các bước đang trỏ SAI: %r"
+            % (url_backend_ci, DUONG_COMPOSE_CI.name, lech))
 
     def test_khong_continue_on_error_o_job_lan_buoc(self, job_nightly):
         assert not job_nightly.get("continue-on-error"), (

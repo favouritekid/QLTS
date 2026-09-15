@@ -15,7 +15,7 @@
  */
 
 import { test, expect, type Page, type Cookie } from "@playwright/test";
-import * as OTPAuth from "otpauth";
+import { xacThucMfa } from "./helpers/e2e-fixtures";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -76,16 +76,6 @@ function generatePhone(): string {
     .toString()
     .padStart(7, "0");
   return prefix + suffix;
-}
-
-function generateTOTP(secret: string): string {
-  const totp = new OTPAuth.TOTP({
-    secret: OTPAuth.Secret.fromBase32(secret),
-    digits: 6,
-    period: 30,
-    algorithm: "SHA1",
-  });
-  return totp.generate();
 }
 
 async function getCSRFToken(page: Page): Promise<string | undefined> {
@@ -174,15 +164,18 @@ async function loginViaAPI(
       if (!opts?.totpSecret) {
         throw new Error(`MFA required for ${username} but no TOTP secret provided`);
       }
-      const mfaResp = await page.request.post(`${API_URL}/api/auth/verify-mfa`, {
-        data: { mfa_token: loginBody.mfa_token, code: generateTOTP(opts.totpSecret) },
-      });
-      if (!mfaResp.ok()) {
-        console.log(`MFA failed for ${username} (${mfaResp.status()}), waiting 31s and retrying login...`);
-        await new Promise((r) => setTimeout(r, 31_000));
-        continue; // restart from login
-      }
-      authResp = mfaResp;
+      // Điều phối viên TOTP giữ khoá tài khoản xuyên qua lượt gửi này, nên hai
+      // tiến trình `npx playwright test` không bao giờ tiêu cùng một counter.
+      // Hỏng ⇒ NÉM NGAY: nhánh `sleep(31s); continue` cũ biến mọi nguyên nhân
+      // (mật khẩu sai, tài khoản bị khoá, MFA bị tắt) thành cùng một thất bại
+      // sau 93 giây, và còn đốt hạn mức đăng nhập.
+      authResp = await xacThucMfa(
+        username,
+        opts.totpSecret,
+        loginBody.mfa_token,
+        (payload) =>
+          page.request.post(`${API_URL}/api/auth/verify-mfa`, { data: payload })
+      );
     }
 
     const csrf = await extractAndAddCookies(page, authResp);

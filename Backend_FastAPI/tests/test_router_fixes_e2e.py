@@ -94,17 +94,18 @@ async def test_import_leads_persists(
     """Bug #3: imported leads must be committed to DB, not rolled back."""
     unit_id = seed_lead_dependencies["unit_id"]
 
-    # Ensure an initial status exists with legacy_status="new", is_final=False
-    # (StatusHelper.get_initial_status queries by these fields)
+    # Bảo đảm có hàng mang ĐỊNH DANH CHUẨN ``code='NOT_CONTACTED'``.
+    # ``StatusHelper.get_initial_status`` tra theo ``code`` (UNIQUE ở tầng CSDL),
+    # KHÔNG theo ``legacy_status`` — cột đó NULL ở 20/21 hàng trên CSDL thật.
+    from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
+
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(models.ConsultationStatus).where(
-                models.ConsultationStatus.legacy_status == "new",
-                models.ConsultationStatus.is_final == False,
+                models.ConsultationStatus.code == INITIAL_CONSULTATION_STATUS_CODE
             )
         )
         if not result.scalars().first():
-            # Patch the existing seeded status to match StatusHelper query
             status_id = seed_lead_dependencies["initial_status_id"]
             result = await db.execute(
                 select(models.ConsultationStatus).where(
@@ -113,8 +114,9 @@ async def test_import_leads_persists(
             )
             status = result.scalars().first()
             if status:
-                status.legacy_status = "new"
+                status.code = INITIAL_CONSULTATION_STATUS_CODE
                 status.is_final = False
+                status.is_universal = False
                 await db.commit()
 
     unique_suffix = id(object())

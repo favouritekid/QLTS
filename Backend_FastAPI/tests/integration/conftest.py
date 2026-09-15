@@ -124,9 +124,16 @@ async def seeded_dependencies(db: AsyncSession) -> dict:
     )
     db.add(stage)
 
-    # Initial Status
+    # Initial Status — ``code`` là ĐỊNH DANH CHUẨN mà
+    # ``StatusHelper.get_initial_status`` tra (UNIQUE ở tầng CSDL). Thiếu nó thì
+    # mọi đường tạo lead fail-closed 503. Test nào cần một hàng KHÁC làm initial
+    # phải GỠ mã khỏi hàng này trước rồi mới gán — xem
+    # ``test_delete_consultation_revert.py::revert_statuses``.
+    from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
+
     initial_status = models.ConsultationStatus(
         id=INITIAL_LEAD_STATUS_ID,
+        code=INITIAL_CONSULTATION_STATUS_CODE,
         name="New Lead (Integration Test)",
         color_code="#0000FF",
         stage_id="INTEGRATION_TEST_STAGE"

@@ -117,7 +117,13 @@ async def test_dong_thieu_email_van_tao_duoc_lead(repo_gia, db_gia):
     with patch.object(
         lead_service.StatusHelper, "get_initial_status",
         AsyncMock(return_value=SimpleNamespace(
-            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+            # Bản giả phải mang ĐỦ thuộc tính mà đường nhập đọc: từ bản vá
+            # hợp-đồng-trạng-thái-khởi-tạo, ``lead.status`` của lô nhập được
+            # tính bằng CHÍNH ``derive_lead_status`` của đường tạo-một-lead
+            # (trước là `.legacy_status or "new"` — nguồn chuẩn thứ hai), nên
+            # ``outcome_type`` và ``is_final`` là bắt buộc.
+            id="sts00", legacy_status="new", stage_id="stg00",
+            name="Chưa tiếp cận", outcome_type="neutral", is_final=False,
         )),
     ), patch.object(
         lead_service, "calculate_lead_score", AsyncMock(return_value=20)
@@ -153,7 +159,13 @@ async def test_khong_dong_nao_mang_chuoi_nan(repo_gia, db_gia):
     with patch.object(
         lead_service.StatusHelper, "get_initial_status",
         AsyncMock(return_value=SimpleNamespace(
-            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+            # Bản giả phải mang ĐỦ thuộc tính mà đường nhập đọc: từ bản vá
+            # hợp-đồng-trạng-thái-khởi-tạo, ``lead.status`` của lô nhập được
+            # tính bằng CHÍNH ``derive_lead_status`` của đường tạo-một-lead
+            # (trước là `.legacy_status or "new"` — nguồn chuẩn thứ hai), nên
+            # ``outcome_type`` và ``is_final`` là bắt buộc.
+            id="sts00", legacy_status="new", stage_id="stg00",
+            name="Chưa tiếp cận", outcome_type="neutral", is_final=False,
         )),
     ), patch.object(
         lead_service, "calculate_lead_score", AsyncMock(return_value=20)
@@ -212,7 +224,13 @@ async def test_o_bat_buoc_trong_thi_bao_loi_chu_khong_tao_lead_ten_nan(repo_gia,
     with patch.object(
         lead_service.StatusHelper, "get_initial_status",
         AsyncMock(return_value=SimpleNamespace(
-            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+            # Bản giả phải mang ĐỦ thuộc tính mà đường nhập đọc: từ bản vá
+            # hợp-đồng-trạng-thái-khởi-tạo, ``lead.status`` của lô nhập được
+            # tính bằng CHÍNH ``derive_lead_status`` của đường tạo-một-lead
+            # (trước là `.legacy_status or "new"` — nguồn chuẩn thứ hai), nên
+            # ``outcome_type`` và ``is_final`` là bắt buộc.
+            id="sts00", legacy_status="new", stage_id="stg00",
+            name="Chưa tiếp cận", outcome_type="neutral", is_final=False,
         )),
     ), patch.object(
         lead_service, "calculate_lead_score", AsyncMock(return_value=20)
@@ -254,7 +272,13 @@ async def test_file_khong_co_cot_email_van_nhap_duoc(repo_gia, db_gia):
     with patch.object(
         lead_service.StatusHelper, "get_initial_status",
         AsyncMock(return_value=SimpleNamespace(
-            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+            # Bản giả phải mang ĐỦ thuộc tính mà đường nhập đọc: từ bản vá
+            # hợp-đồng-trạng-thái-khởi-tạo, ``lead.status`` của lô nhập được
+            # tính bằng CHÍNH ``derive_lead_status`` của đường tạo-một-lead
+            # (trước là `.legacy_status or "new"` — nguồn chuẩn thứ hai), nên
+            # ``outcome_type`` và ``is_final`` là bắt buộc.
+            id="sts00", legacy_status="new", stage_id="stg00",
+            name="Chưa tiếp cận", outcome_type="neutral", is_final=False,
         )),
     ), patch.object(
         lead_service, "calculate_lead_score", AsyncMock(return_value=20)
@@ -319,7 +343,13 @@ async def _chay_hai_lo(monkeypatch, db_gia, loai_loi):
     with patch.object(
         lead_service.StatusHelper, "get_initial_status",
         AsyncMock(return_value=SimpleNamespace(
-            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+            # Bản giả phải mang ĐỦ thuộc tính mà đường nhập đọc: từ bản vá
+            # hợp-đồng-trạng-thái-khởi-tạo, ``lead.status`` của lô nhập được
+            # tính bằng CHÍNH ``derive_lead_status`` của đường tạo-một-lead
+            # (trước là `.legacy_status or "new"` — nguồn chuẩn thứ hai), nên
+            # ``outcome_type`` và ``is_final`` là bắt buộc.
+            id="sts00", legacy_status="new", stage_id="stg00",
+            name="Chưa tiếp cận", outcome_type="neutral", is_final=False,
         )),
     ), patch.object(
         lead_service, "calculate_lead_score", AsyncMock(return_value=20)
@@ -432,7 +462,13 @@ async def test_cot_trung_sau_chuan_hoa_bi_tu_choi_ro_rang(repo_gia, db_gia):
     with patch.object(
         lead_service.StatusHelper, "get_initial_status",
         AsyncMock(return_value=SimpleNamespace(
-            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+            # Bản giả phải mang ĐỦ thuộc tính mà đường nhập đọc: từ bản vá
+            # hợp-đồng-trạng-thái-khởi-tạo, ``lead.status`` của lô nhập được
+            # tính bằng CHÍNH ``derive_lead_status`` của đường tạo-một-lead
+            # (trước là `.legacy_status or "new"` — nguồn chuẩn thứ hai), nên
+            # ``outcome_type`` và ``is_final`` là bắt buộc.
+            id="sts00", legacy_status="new", stage_id="stg00",
+            name="Chưa tiếp cận", outcome_type="neutral", is_final=False,
         )),
     ), patch.object(
         lead_service, "calculate_lead_score", AsyncMock(return_value=20)
@@ -474,7 +510,13 @@ async def test_trung_cot_email_khong_con_no_HTTP_500(repo_gia, db_gia):
     with patch.object(
         lead_service.StatusHelper, "get_initial_status",
         AsyncMock(return_value=SimpleNamespace(
-            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+            # Bản giả phải mang ĐỦ thuộc tính mà đường nhập đọc: từ bản vá
+            # hợp-đồng-trạng-thái-khởi-tạo, ``lead.status`` của lô nhập được
+            # tính bằng CHÍNH ``derive_lead_status`` của đường tạo-một-lead
+            # (trước là `.legacy_status or "new"` — nguồn chuẩn thứ hai), nên
+            # ``outcome_type`` và ``is_final`` là bắt buộc.
+            id="sts00", legacy_status="new", stage_id="stg00",
+            name="Chưa tiếp cận", outcome_type="neutral", is_final=False,
         )),
     ), patch.object(
         lead_service, "calculate_lead_score", AsyncMock(return_value=20)
@@ -516,7 +558,13 @@ async def test_khong_chen_dau_nhay_vao_du_lieu_luc_nhap(repo_gia, db_gia):
     with patch.object(
         lead_service.StatusHelper, "get_initial_status",
         AsyncMock(return_value=SimpleNamespace(
-            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+            # Bản giả phải mang ĐỦ thuộc tính mà đường nhập đọc: từ bản vá
+            # hợp-đồng-trạng-thái-khởi-tạo, ``lead.status`` của lô nhập được
+            # tính bằng CHÍNH ``derive_lead_status`` của đường tạo-một-lead
+            # (trước là `.legacy_status or "new"` — nguồn chuẩn thứ hai), nên
+            # ``outcome_type`` và ``is_final`` là bắt buộc.
+            id="sts00", legacy_status="new", stage_id="stg00",
+            name="Chưa tiếp cận", outcome_type="neutral", is_final=False,
         )),
     ), patch.object(
         lead_service, "calculate_lead_score", AsyncMock(return_value=20)
@@ -572,7 +620,13 @@ async def _chay_bytes(db_gia, noi_dung: bytes, ten: str):
     with patch.object(
         lead_service.StatusHelper, "get_initial_status",
         AsyncMock(return_value=SimpleNamespace(
-            id="sts00", legacy_status="new", stage_id="stg00", name="Chưa tiếp cận"
+            # Bản giả phải mang ĐỦ thuộc tính mà đường nhập đọc: từ bản vá
+            # hợp-đồng-trạng-thái-khởi-tạo, ``lead.status`` của lô nhập được
+            # tính bằng CHÍNH ``derive_lead_status`` của đường tạo-một-lead
+            # (trước là `.legacy_status or "new"` — nguồn chuẩn thứ hai), nên
+            # ``outcome_type`` và ``is_final`` là bắt buộc.
+            id="sts00", legacy_status="new", stage_id="stg00",
+            name="Chưa tiếp cận", outcome_type="neutral", is_final=False,
         )),
     ), patch.object(
         lead_service, "calculate_lead_score", AsyncMock(return_value=20)

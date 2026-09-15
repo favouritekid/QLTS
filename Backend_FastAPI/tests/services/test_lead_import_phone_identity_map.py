@@ -79,21 +79,25 @@ def _csv_hai_lead(unit_id: int) -> bytes:
 
 @pytest_asyncio.fixture
 async def import_ready_deps(db: AsyncSession, seeded_dependencies: dict) -> dict:
-    """Đóng dấu ``legacy_status='new'`` + ``is_final=false`` cho TTHV000.
+    """Đóng dấu ĐỊNH DANH CHUẨN ``code='NOT_CONTACTED'`` cho TTHV000.
 
     ``import_leads_from_file_content`` tra trạng thái ban đầu qua
-    ``StatusHelper.get_initial_status(db)`` — truy vấn đúng hai cột này.
-    ``seeded_dependencies`` để chúng NULL (suite khác phụ thuộc điều đó), nên
-    thiếu fixture này thì import ném ``ValueError`` trước khi chạm INSERT và ca
-    test "đỏ" vì lý do hoàn toàn khác. Bản sao CÓ CHỦ Ý của fixture cùng tên ở
-    ``test_lead_phase1_hardening.py`` — fixture ấy file-local, không import chéo.
+    ``StatusHelper.get_initial_status(db)`` — truy vấn theo **``code``**, không
+    theo ``legacy_status`` (cột đó NULL ở 20/21 hàng trên CSDL thật, cố ý).
+    Thiếu hàng mang mã này thì import ném ``InitialLeadStatusNotConfigured``
+    trước khi chạm INSERT và ca test "đỏ" vì lý do hoàn toàn khác. Bản sao CÓ
+    CHỦ Ý của fixture cùng tên ở ``test_lead_phase1_hardening.py`` — fixture ấy
+    file-local, không import chéo.
     """
+    from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
+
     await db.execute(
         text(
-            "UPDATE consultation_status SET legacy_status = 'new', is_final = false "
+            "UPDATE consultation_status "
+            "SET code = :code, is_final = false, is_universal = false "
             "WHERE id = :sid"
         ),
-        {"sid": INITIAL_LEAD_STATUS_ID},
+        {"sid": INITIAL_LEAD_STATUS_ID, "code": INITIAL_CONSULTATION_STATUS_CODE},
     )
     await db.flush()
     return seeded_dependencies

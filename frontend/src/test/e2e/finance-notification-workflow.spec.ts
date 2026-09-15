@@ -16,7 +16,7 @@ import {
   type BrowserContext,
   type Page,
 } from "@playwright/test";
-import * as OTPAuth from "otpauth";
+import { xacThucMfa } from "./helpers/e2e-fixtures";
 
 const ADMIN_USERNAME = process.env.E2E_ADMIN_USERNAME || "admin";
 const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "@Abc12345!";
@@ -56,10 +56,6 @@ function generateCitizenId(): string {
   return Array.from({ length: 12 }, () => Math.floor(Math.random() * 10)).join("");
 }
 
-function generateTOTP(secret: string): string {
-  return new OTPAuth.TOTP({ secret: OTPAuth.Secret.fromBase32(secret), digits: 6, period: 30, algorithm: "SHA1" }).generate();
-}
-
 async function extractAndAddCookies(
   page: Page,
   response: { headersArray(): Array<{ name: string; value: string }> },
@@ -97,11 +93,19 @@ async function loginViaAPI(
     let authUser = loginBody.user;
     if (loginBody.mfa_required) {
       if (!opts?.totpSecret) throw new Error(`MFA required for ${username} but no TOTP secret`);
-      const mfaResp = await page.request.post(`${API_URL}/api/auth/verify-mfa`, {
-        data: { mfa_token: loginBody.mfa_token, code: generateTOTP(opts.totpSecret) },
-      });
-      if (!mfaResp.ok()) { await page.waitForTimeout(31_000); continue; }
-      authResp = mfaResp; authUser = (await mfaResp.json()).user;
+      // Điều phối viên TOTP giữ khoá tài khoản xuyên qua lượt gửi này, nên hai
+      // tiến trình `npx playwright test` không bao giờ tiêu cùng một counter.
+      // Hỏng ⇒ NÉM NGAY: nhánh `sleep(31s); continue` cũ biến mọi nguyên nhân
+      // (mật khẩu sai, tài khoản bị khoá, MFA bị tắt) thành cùng một thất bại
+      // sau 93 giây, và còn đốt hạn mức đăng nhập.
+      authResp = await xacThucMfa(
+        username,
+        opts.totpSecret,
+        loginBody.mfa_token,
+        (payload) =>
+          page.request.post(`${API_URL}/api/auth/verify-mfa`, { data: payload })
+      );
+      authUser = (await authResp.json()).user;
     }
     const csrf = await extractAndAddCookies(page, authResp);
     if (!authUser) throw new Error(`Login for ${username} returned no user`);

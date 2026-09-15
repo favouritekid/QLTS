@@ -45,11 +45,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import contextlib
+import errno
 import hashlib
 import hmac
 import http.cookiejar
 import json
 import os
+import random
 import re
 import secrets
 import struct
@@ -765,6 +768,190 @@ def _sync_casbin_after_seed(
     )
 
 
+# ===========================================================================
+# TRẠNG THÁI TOTP DÙNG CHUNG VỚI PLAYWRIGHT
+# ===========================================================================
+#
+# Cùng một giao thức trên đĩa với
+# ``frontend/src/test/e2e/helpers/totp-coordinator.js``. Hai bên PHẢI khớp từng
+# chi tiết, vì chúng chạy trong cùng một lượt nightly trên cùng một máy và cùng
+# tranh một khoá chống replay của backend (``totp_used:{user_id}``, điều kiện
+# ``counter > counter_đã_lưu`` — ĐƠN ĐIỆU NGHIÊM NGẶT).
+#
+# Ba điểm khớp, cả ba đều có ca kiểm ở
+# ``Backend_FastAPI/tests/unit/test_totp_coordinator_inventory.py``:
+#   1. tên tệp = ``<slug tên đăng nhập>.<8 hex sha256>.counter`` / ``.lock``;
+#   2. nội dung tệp counter = ĐÚNG một số nguyên thập phân + ``\n``;
+#   3. khoá đặt bằng ``O_CREAT|O_EXCL``, ghi state bằng tệp tạm + ``os.replace``.
+#
+# ⚠️ KHÔNG BAO GIỜ ghi secret hay mã TOTP vào đây. Tệp state đi qua ranh giới
+# tiến trình và sống sót sau khi lượt chạy kết thúc; tên đăng nhập vốn đã nằm
+# plaintext trong ``nightly-regression.yml``, secret thì không.
+#
+# Thiếu ``QLTS_TOTP_STATE_DIR`` ⇒ phía Python KHÔNG công bố gì và nói to ra
+# điều đó. Lý do không ``_required_env``: hàm đăng nhập này còn được gọi thẳng
+# trong test đơn vị, nơi không có thư mục chung nào. Hàng rào thật nằm ở
+# ``test_moi_buoc_dung_totp_deu_ghim_cung_state_dir`` — nó đọc chính
+# ``nightly-regression.yml`` và đòi CẢ TÁM bước dùng TOTP khai cùng một giá trị.
+
+TOTP_STATE_DIR_ENV = "QLTS_TOTP_STATE_DIR"
+
+#: Hạn ĐẶT khoá tài khoản. Vượt là ĐỎ — không phải chờ thêm.
+#:
+#: Phải LỚN HƠN thời gian giữ khoá tệ nhất của MỌI bên, nếu không một lượt chờ
+#: hợp lệ biến thành lỗi giả. Cận trên: Node ≈ 92s, Python ≈ 70s (45s
+#: ``_cho_counter_vuot`` + 15s căn mép + 10s HTTP).
+TOTP_KHOA_HAN_GIAY = 120.0
+
+#: Khoá không được chạm tới quá ngần này giây thì coi là mồ côi và bị thu hồi.
+#:
+#: ⚠️ Phải KHỚP ``KHOA_MO_COI_MS`` phía
+#: ``frontend/src/test/e2e/helpers/totp-coordinator.js``: ngưỡng có hiệu lực là
+#: ngưỡng của KẺ THU HỒI, nên hai bên lệch nhau nghĩa là bên khắt khe hơn cướp
+#: khoá của bên kia giữa chừng.
+#:
+#: Phải lớn hơn hẳn khoảng KHÔNG chạm khoá dài nhất phía Python: căn mép cửa sổ
+#: trong ``_totp_for_preflight`` (≤ ``TOTP_MIN_REMAINING_SECONDS`` + 0,25 =
+#: 15,25s) cộng lượt ``/verify-mfa`` (≤ ``HTTP_TIMEOUT_SECONDS`` = 10s) ≈ 25,25s.
+#: Ngưỡng 20s của bản trước để lọt đúng ca ấy.
+TOTP_KHOA_MO_COI_GIAY = 60.0
+
+
+def _thu_muc_state_totp() -> Path | None:
+    """Thư mục state dùng chung, hoặc ``None`` khi chưa ghim biến môi trường."""
+    tho = os.environ.get(TOTP_STATE_DIR_ENV, "").strip()
+    if not tho:
+        return None
+    duong = Path(tho)
+    duong.mkdir(parents=True, exist_ok=True)
+    return duong
+
+
+def _nhan_tep_totp(tai_khoan: str) -> str:
+    """``<slug>.<8 hex>`` — phải khớp TỪNG KÝ TỰ với ``nhanTep`` phía Node."""
+    if not isinstance(tai_khoan, str) or not tai_khoan.strip():
+        raise GateError(
+            "tên tài khoản rỗng — state TOTP sẽ gộp mọi người dùng vào một khoá"
+        )
+    slug = re.sub(r"[^a-z0-9_-]+", "-", tai_khoan.lower())[:40] or "x"
+    bam = hashlib.sha256(tai_khoan.encode("utf-8")).hexdigest()[:8]
+    return f"{slug}.{bam}"
+
+
+def _duong_state_totp(thu_muc: Path, tai_khoan: str) -> Path:
+    return thu_muc / f"{_nhan_tep_totp(tai_khoan)}.counter"
+
+
+def _duong_khoa_totp(thu_muc: Path, tai_khoan: str) -> Path:
+    return thu_muc / f"{_nhan_tep_totp(tai_khoan)}.lock"
+
+
+def _doc_counter_chung(duong: Path) -> int | None:
+    """Counter đã công bố, hoặc ``None`` khi CHƯA AI công bố.
+
+    ``None`` KHÁC 0: số 0 là một counter hợp lệ (1970-01-01). Gộp hai ca vào
+    một giá trị là đúng lỗi mà ``PhienDaXacThuc.counter_da_tieu`` đã ghi lại.
+
+    Nội dung hỏng ⇒ ĐỎ. Không "coi như chưa ai tiêu": làm thế thì một tệp hỏng
+    tắt câm lặng toàn bộ chống va, và triệu chứng đúng bằng triệu chứng nó sinh
+    ra để chữa (401 ``mfa.replay_rejected``) — không ai phân biệt được.
+    """
+    try:
+        tho = duong.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise GateError(f"không đọc được {duong}: {exc}") from exc
+    if not re.fullmatch(r"[0-9]+\r?\n?", tho):
+        raise GateError(
+            f"{duong} phải chứa ĐÚNG một số nguyên thập phân; nhận {len(tho)} byte "
+            f"bắt đầu bằng {tho[:16]!r}"
+        )
+    return int(tho.strip())
+
+
+def _ghi_counter_chung(duong: Path, counter: int) -> None:
+    """Ghi ĐƠN ĐIỆU và NGUYÊN TỬ: tệp tạm rồi ``os.replace``.
+
+    Không bao giờ hạ giá trị — một lượt ghi lùi mở lại đúng cửa sổ va chạm mà
+    cả giao thức này sinh ra để đóng.
+    """
+    if not isinstance(counter, int) or isinstance(counter, bool) or counter < 0:
+        raise GateError(f"counter phải là số nguyên không âm, nhận {counter!r}")
+    hien_co = _doc_counter_chung(duong)
+    if hien_co is not None and hien_co >= counter:
+        return
+    tam = duong.with_name(
+        f"{duong.name}.tmp-{os.getpid()}-{secrets.token_hex(4)}"
+    )
+    try:
+        tam.write_text(f"{counter}\n", encoding="utf-8", newline="\n")
+        os.replace(tam, duong)
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            tam.unlink()
+        raise GateError(f"không ghi được {duong}: {exc}") from exc
+
+
+@contextlib.contextmanager
+def _khoa_tai_khoan_totp(thu_muc: Path, tai_khoan: str):
+    """Khoá ``O_EXCL`` cho ĐÚNG MỘT tài khoản.
+
+    Mỗi tài khoản một tệp khoá riêng, nên hai tài khoản khác nhau KHÔNG chặn
+    nhau. Yield một hàm ``cham_nhip()``: chủ khoá gọi nó trong mọi vòng chờ để
+    khoá của một tiến trình đang chờ hợp lệ không bị nhầm là mồ côi.
+
+    Thu hồi khoá mồ côi là AN TOÀN vì counter được CÔNG BỐ TRƯỚC lượt gọi
+    ``/verify-mfa``: một tiến trình chết trước khi công bố thì chưa gửi mã nào.
+    """
+    lock = _duong_khoa_totp(thu_muc, tai_khoan)
+    han = time.monotonic() + TOTP_KHOA_HAN_GIAY
+    fd = None
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            break
+        except OSError as exc:
+            if exc.errno != errno.EEXIST:
+                raise GateError(f"không đặt được khoá {lock}: {exc}") from exc
+        try:
+            tuoi = time.time() - lock.stat().st_mtime
+            if tuoi > TOTP_KHOA_MO_COI_GIAY:
+                lock.unlink()
+                print(
+                    f"[totp] thu hồi khoá mồ côi {lock.name} "
+                    f"(đứng nhịp {tuoi:.1f}s)"
+                )
+                continue
+        except OSError:
+            # Khoá vừa được nhả giữa hai lệnh — vòng sau sẽ đặt được.
+            pass
+        if time.monotonic() >= han:
+            raise GateError(
+                f"quá {TOTP_KHOA_HAN_GIAY:.0f}s mà không đặt được khoá {lock.name} "
+                "— một tiến trình khác đang giữ nó và vẫn đập nhịp"
+            )
+        time.sleep(0.025 + random.random() * 0.05)
+
+    try:
+        # Thân khoá chỉ mang PID + mốc. Không tài khoản, không secret.
+        os.write(fd, f"{os.getpid()} {time.time():.0f}\n".encode("utf-8"))
+        os.close(fd)
+        fd = None
+
+        def cham_nhip() -> None:
+            with contextlib.suppress(OSError):
+                os.utime(lock, None)
+
+        yield cham_nhip
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        with contextlib.suppress(OSError):
+            lock.unlink()
+
+
 class PhienDaXacThuc(NamedTuple):
     """Một phiên ĐÃ qua đủ hai yếu tố, kèm counter TOTP nó đã đốt.
 
@@ -856,15 +1043,68 @@ def _dang_nhap_va_chung_minh(
                 f"verification, expected exactly 401{_response_detail(than_som)}"
             )
 
-        code, counter_da_tieu = _totp_for_preflight(
-            totp_secret or "", f"{label} TOTP secret"
-        )
-        status, authenticated = _request_json(
-            opener,
-            "POST",
-            f"{base_url}/api/auth/verify-mfa",
-            payload={"mfa_token": mfa_token, "code": code},
-        )
+        # ĐIỀU PHỐI XUYÊN TIẾN TRÌNH.
+        #
+        # Khoá được giữ XUYÊN QUA lượt `/verify-mfa`, không chỉ xuyên qua phép
+        # tính counter. Lý do là điều kiện của backend là `>` chứ không phải
+        # "chưa nằm trong tập đã dùng": nếu một tiến trình Playwright đặt chỗ
+        # `c+1` và GỬI TRƯỚC khi ta kịp gửi `c`, thì `c` bị từ chối dù không ai
+        # tiêu nó. Buông khoá sớm là mở lại đúng lỗ ấy.
+        #
+        # Counter được CÔNG BỐ TRƯỚC khi gửi: mã đã rời tiến trình này là mã có
+        # thể đã bị backend tiêu, kể cả khi request hỏng giữa chừng.
+        thu_muc_state = _thu_muc_state_totp()
+        if thu_muc_state is None:
+            # Tên biến viết THẲNG, không nội suy hằng `TOTP_STATE_DIR_ENV`:
+            # `test_khong_in_bi_mat_ra_log` cấm mọi `print()` nội suy một định
+            # danh có chữ "totp" trong tên. Luật ấy cố ý thô — nó không đọc
+            # được giá trị, chỉ đọc được tên — và nới nó ra để lọt một ca vô
+            # hại là mở đường cho ca có hại tiếp theo.
+            print(
+                "[totp] QLTS_TOTP_STATE_DIR chưa đặt — KHÔNG công bố counter "
+                f"cho {username!r}; các tiến trình Playwright sẽ không thấy nó"
+            )
+        with contextlib.ExitStack() as ngan:
+            duong_state = None
+            cham_nhip = None
+            if thu_muc_state is not None:
+                cham_nhip = ngan.enter_context(
+                    _khoa_tai_khoan_totp(thu_muc_state, username)
+                )
+                duong_state = _duong_state_totp(thu_muc_state, username)
+                da_cong_bo = _doc_counter_chung(duong_state)
+                if da_cong_bo is not None:
+                    _cho_counter_vuot(da_cong_bo, cham_nhip=cham_nhip)
+
+            code, counter_da_tieu = _totp_for_preflight(
+                totp_secret or "", f"{label} TOTP secret"
+            )
+
+            if duong_state is not None:
+                # Chạm khoá NGAY TRƯỚC lượt gửi. `_totp_for_preflight` ở trên có
+                # thể vừa ngủ tới 15,25s để né mép cửa sổ, và lượt gửi dưới đây
+                # còn tốn tới 10s nữa — cộng lại là khoảng KHÔNG chạm khoá dài
+                # nhất của cả tiến trình này. Chạm ở đây cắt nó làm đôi.
+                if cham_nhip is not None:
+                    cham_nhip()
+                da_cong_bo = _doc_counter_chung(duong_state)
+                if da_cong_bo is not None and counter_da_tieu <= da_cong_bo:
+                    # Không thể xảy ra sau phép chờ ở trên; nếu xảy ra thì
+                    # đồng hồ đã lùi hoặc có kẻ ghi ngoài giao thức. ĐỎ NGAY,
+                    # đừng gửi một mã chắc chắn bị từ chối rồi đổ cho MFA.
+                    raise GateError(
+                        f"{label}: counter sắp gửi ({counter_da_tieu}) không lớn hơn "
+                        f"counter đã công bố ({da_cong_bo}) — đồng hồ lùi hoặc có "
+                        "kẻ ghi ngoài giao thức state TOTP"
+                    )
+                _ghi_counter_chung(duong_state, counter_da_tieu)
+
+            status, authenticated = _request_json(
+                opener,
+                "POST",
+                f"{base_url}/api/auth/verify-mfa",
+                payload={"mfa_token": mfa_token, "code": code},
+            )
         if status != 200 or not isinstance(authenticated, dict):
             raise GateError(f"{label}: MFA verification returned HTTP {status}")
     else:
@@ -947,7 +1187,12 @@ def _doc_counter_da_tieu(duong: Path) -> int:
     return int(noi_dung)
 
 
-def _cho_counter_vuot(counter_da_tieu: int, *, han_giay: float = 45.0) -> int:
+def _cho_counter_vuot(
+    counter_da_tieu: int,
+    *,
+    han_giay: float = 45.0,
+    cham_nhip: Callable[[], None] | None = None,
+) -> int:
     """Chờ tới khi counter TRƯỚC đã vượt hẳn counter mà ``sync`` đã đốt.
 
     Backend chống replay bằng một bất biến ĐƠN ĐIỆU NGHIÊM NGẶT: nó từ chối khi
@@ -963,6 +1208,10 @@ def _cho_counter_vuot(counter_da_tieu: int, *, han_giay: float = 45.0) -> int:
 
     Hết hạn mà điều kiện chưa đạt thì ĐỎ. Đồng hồ không tiến là một sự cố thật,
     không phải thứ để thử lại.
+
+    ``cham_nhip`` (nếu có) được gọi mỗi vòng: khi phép chờ này diễn ra BÊN TRONG
+    khoá tài khoản dùng chung với Playwright, chủ khoá phải chạm tệp khoá để
+    tiến trình khác không coi nó là mồ côi sau ``TOTP_KHOA_MO_COI_GIAY``.
     """
     het_han = time.monotonic() + han_giay
     while True:
@@ -974,6 +1223,8 @@ def _cho_counter_vuot(counter_da_tieu: int, *, han_giay: float = 45.0) -> int:
                 f"quá {han_giay:.0f}s mà counter TOTP chưa vượt "
                 f"{counter_da_tieu} (hiện tại {hien_tai}); đồng hồ không tiến"
             )
+        if cham_nhip is not None:
+            cham_nhip()
         time.sleep(1.0)
 
 

@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -32,8 +33,19 @@ async def revert_statuses(db: AsyncSession, seeded_dependencies: dict) -> dict:
     - PIPE_A / PIPE_B: human pipeline (updates_pipeline=True, có stage, non-final).
     - UNIV: universal (updates_pipeline=False, stage_id=NULL).
     - TERM: terminal phase tư vấn (updates_pipeline=True, is_final=True) — sts20-like.
-    - INIT: initial (legacy_status='new', is_final=False) cho get_initial_status.
+    - INIT: initial — mang ĐỊNH DANH CHUẨN ``code='NOT_CONTACTED'`` để
+      ``get_initial_status`` chọn đúng nó. Mã đó UNIQUE ở tầng CSDL, nên phải
+      GỠ khỏi hàng do ``seeded_dependencies`` seed TRƯỚC khi gán — hai hàng cùng
+      mã là một lỗi UNIQUE, còn để nguyên thì helper trả về hàng kia và ca test
+      đỏ với một id không ai hiểu từ đâu ra.
     """
+    from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
+
+    await db.execute(
+        text("UPDATE consultation_status SET code = NULL WHERE code = :code"),
+        {"code": INITIAL_CONSULTATION_STATUS_CODE},
+    )
+    await db.flush()
     stages = [
         models.PipelineStage(id="STG_A", name="Stage A", order=11),
         models.PipelineStage(id="STG_B", name="Stage B", order=12),
@@ -68,7 +80,7 @@ async def revert_statuses(db: AsyncSession, seeded_dependencies: dict) -> dict:
         "INIT": models.ConsultationStatus(
             id="RV_INIT", name="Initial", color_code="#444444",
             stage_id="STG_INIT", is_final=False, updates_pipeline=True,
-            phase="consultation", legacy_status="new",
+            phase="consultation", code=INITIAL_CONSULTATION_STATUS_CODE,
         ),
     }
     for st in statuses.values():
@@ -216,7 +228,7 @@ async def test_empty_chain_reverts_to_initial(
     db, seeded_dependencies, revert_statuses, manager_user
 ):
     """Xóa consultation DUY NHẤT → không còn cuộc nào → revert về initial
-    (get_initial_status = legacy_status='new')."""
+    (get_initial_status = code='NOT_CONTACTED')."""
     off = manager_user.id
     lead = await _make_lead(db, seeded_dependencies, off, "RV_PIPE_A", "STG_A")
     c_a = await _add_consult(db, lead.id, off, "RV_PIPE_A", 10)

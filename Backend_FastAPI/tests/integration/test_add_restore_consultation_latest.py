@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
@@ -32,7 +33,17 @@ _BASE = datetime(2026, 7, 1, 8, 0, 0, tzinfo=timezone.utc)
 @pytest_asyncio.fixture
 async def slice3_statuses(db: AsyncSession, seeded_dependencies: dict) -> dict:
     """PIPE_A/PIPE_B: human pipeline (updates_pipeline=True, có stage).
-    UNIV: universal (updates_pipeline=False, stage_id=NULL)."""
+    UNIV: universal (updates_pipeline=False, stage_id=NULL).
+    INIT: initial — mang ĐỊNH DANH CHUẨN ``code='NOT_CONTACTED'``. Mã đó UNIQUE
+    ở tầng CSDL nên phải GỠ khỏi hàng do ``seeded_dependencies`` seed trước."""
+    from app.core.status_mapping import INITIAL_CONSULTATION_STATUS_CODE
+
+    await db.execute(
+        text("UPDATE consultation_status SET code = NULL WHERE code = :code"),
+        {"code": INITIAL_CONSULTATION_STATUS_CODE},
+    )
+    await db.flush()
+
     stages = [
         models.PipelineStage(id="S3_STG_A", name="S3 Stage A", order=31),
         models.PipelineStage(id="S3_STG_B", name="S3 Stage B", order=32),
@@ -57,13 +68,13 @@ async def slice3_statuses(db: AsyncSession, seeded_dependencies: dict) -> dict:
             stage_id=None, is_final=False, updates_pipeline=False,
             is_universal=True, phase="consultation",
         ),
-        # legacy_status="new" + is_final=False → StatusHelper.get_initial_status
-        # nhận diện đây là initial (prod = sts00; test DB conftest không seed
-        # thuộc tính này nên phải tự seed cho nhánh 'rỗng' của helper).
+        # code='NOT_CONTACTED' → StatusHelper.get_initial_status nhận diện đây
+        # là initial (prod = sts00). Tra theo ``code``, KHÔNG theo
+        # ``legacy_status`` — cột đó NULL ở 20/21 hàng trên CSDL thật.
         "INIT": models.ConsultationStatus(
             id="S3_INIT", name="S3 Initial", color_code="#444444",
             stage_id="S3_STG_A", is_final=False, updates_pipeline=True,
-            phase="consultation", legacy_status="new",
+            phase="consultation", code=INITIAL_CONSULTATION_STATUS_CODE,
         ),
     }
     for st in statuses.values():
