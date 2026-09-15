@@ -13,11 +13,19 @@ import { AppointmentReminder } from "@/components/leads/AppointmentReminder";
 import { useCommandPalette } from "@/hooks/useCommandPalette";
 import { useShouldShowSecurityBanner, SECURITY_BANNER_HEIGHT } from "@/components/layouts/SecurityBanner";
 import { useAuth } from "@/hooks/useAuth";
+import { useHasMounted } from "@/hooks/useHasMounted";
 
 const ADMIN_NAV_ROLES = ["admin", "manager"];
 
 const TopNav = () => {
-  const { user } = useAuth();
+  const { user: persistedUser } = useAuth();
+  // `Header` nằm trong một biên <Suspense> RIÊNG (DashboardLayout.tsx:224), nên
+  // nó có thể hydrate ở một pha khác với sidebar. Với admin/manager, cổng vai
+  // trò này làm XUẤT HIỆN THÊM một <Link> "Người dùng" ở lần render client đầu
+  // tiên trong khi HTML server không có → cùng lớp mismatch persisted-user.
+  // Readiness riêng theo instance giữ lần render đầu trùng với server.
+  const hasMounted = useHasMounted();
+  const user = hasMounted ? persistedUser : null;
   const canAccessAdmin = user?.role ? ADMIN_NAV_ROLES.includes(user.role) : false;
 
   return (

@@ -12,14 +12,24 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button"; // Import Button
 import { useAuth } from "@/hooks/useAuth";
+import { useHasMounted } from "@/hooks/useHasMounted";
 import { LogOut, Settings, User as UserIcon, ChevronsUpDown } from "lucide-react";
 import Link from "next/link";
 import { cn, getAvatarUrl } from "@/lib/utils";
 
 export function NavUser({ isCollapsed }: { isCollapsed: boolean }) {
-  const { user, logout, isLoading } = useAuth();
+  const { user: persistedUser, logout, isLoading } = useAuth();
+  // Readiness RIÊNG của instance này. Trước khi mount, `user` là null — giống
+  // hệt điều kiện server — nên avatar/tên/email KHÔNG được đọc từ store đã
+  // rehydrate ở lần render client đầu tiên (nếu đọc: `??` ↔ `VO`, và nhánh
+  // skeleton ↔ nhánh button, đều là mismatch).
+  //
+  // Không dùng `isLoading` thô để chọn cây trước khi đã mount: `isLoading` do
+  // react-query quyết định và khác nhau giữa server với client.
+  const hasMounted = useHasMounted();
+  const user = hasMounted ? persistedUser : null;
 
-  if (isLoading && !user) {
+  if (!hasMounted || (isLoading && !user)) {
     return (
       <div className="flex items-center gap-2 px-3 py-2">
         <div className="bg-muted h-8 w-8 animate-pulse rounded-full" />
