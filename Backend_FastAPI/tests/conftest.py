@@ -662,6 +662,7 @@ async def seed_lead_dependencies(setup_test_database):
 
             admission_statuses = [
                 models.ConsultationStatus(id="sts00", name="Chua lien he", color_code="#999999", stage_id="stg01"),
+                models.ConsultationStatus(id="sts02", name="Da ket noi", color_code="#33AA33", stage_id="stg01"),
                 models.ConsultationStatus(id="sts05", name="Hen lien he lai", color_code="#FFA500", stage_id="stg02"),
                 models.ConsultationStatus(id="sts06", name="Dong y tu van", color_code="#00FF00", stage_id="stg02"),
                 models.ConsultationStatus(id="sts07", name="Da nop ho so", color_code="#0088FF", stage_id="stg03"),
@@ -676,12 +677,44 @@ async def seed_lead_dependencies(setup_test_database):
                 models.ConsultationStatus(id="sts18", name="Da hoan hoc phi", color_code="#008888", stage_id="stg05"),
             ]
             session.add_all(admission_statuses)
+            await session.flush()
+
+            # Cạnh chuyển trạng thái ĐẦU TIÊN — bản tương đương tổng hợp của hàng
+            # chuẩn ``sts00 → sts02`` (``scripts/data/allowed_transitions_v3.csv:2``
+            # và migration ``zq6w7x8y9z0a1``). Ở fixture, trạng thái mang
+            # ``code=NOT_CONTACTED`` là ``initial_status_id`` chứ không phải
+            # ``sts00`` (ràng buộc ``uq_consultation_status_code`` chỉ cho MỘT
+            # hàng giữ mã đó), nên cạnh phải đi từ id ấy.
+            #
+            # Vì sao cần: vượt cổng phase CHƯA đủ. ``add_consultation`` còn gọi
+            # ``pipeline_service.validate_status_transition``, và hàm đó chỉ xanh ở
+            # BỐN nhánh — ``from == to`` · ``from`` rỗng · ``to.is_universal`` ·
+            # hoặc CÓ hàng trong ``allowed_transitions``. Cùng ``stage_id`` KHÔNG
+            # nằm trong bốn nhánh đó.
+            #
+            # ⚠️ Nhánh thứ năm KHÔNG phải hợp đồng: ``lead_service.py`` cho ADMIN
+            # bypass quy tắc transition (phase guard thì không). Nên một test chạy
+            # bằng admin sẽ xanh KỂ CẢ khi thiếu cạnh này — đừng đọc "xanh" thành
+            # "cạnh không cần". Bằng chứng là ca manager ở
+            # ``test_lead_assignment_api.py``: gỡ cạnh này thì nó phải ĐỎ 400.
+            from app.models.pipeline import TriggerTypeEnum
+
+            session.add(
+                models.AllowedTransition(
+                    from_status_id=initial_status_id,
+                    to_status_id="sts02",
+                    trigger_type=TriggerTypeEnum.user,
+                    required_phase="consultation",
+                    is_active=True,
+                )
+            )
     log.info("--- [FIXTURE conftest.py] Lead dependencies seeded ---")
     return {
         "unit_id": unit_data["id"],
         "major_program_id": TestOrgData.MAJOR_1["id"],  # ✅ FIX: Renamed from major_id
         "initial_status_id": initial_status_id,
         "status_a1_id": status_a1_data["id"],
+        "contacted_status_id": "sts02",
         "stage_id": stage_a_id,
     }
 

@@ -774,6 +774,7 @@ async def test_admin_can_create_consultation_any_lead(
     client: AsyncClient,
     admin_token_headers: dict,
     unassigned_lead: dict,
+    seed_lead_dependencies: dict,
 ):
     """
     Admin should be able to create consultation on any lead.
@@ -785,7 +786,11 @@ async def test_admin_can_create_consultation_any_lead(
     lead_id = unassigned_lead["id"]
 
     consultation_data = {
-        "status_id": TestPipelineData.STATUS_A1["id"],  # Required field per ConsultationCreate schema
+        # Phải là status hợp lệ theo PHASE và có cạnh transition từ trạng thái
+        # khởi tạo — xem ``contacted_status_id`` trong ``seed_lead_dependencies``.
+        # ``STATUS_A1`` là id tổng hợp, không thuộc phase nào, nên cổng phase ở
+        # ``add_consultation`` từ chối nó bằng 400.
+        "status_id": seed_lead_dependencies["contacted_status_id"],
         "notes": "Admin creating consultation",
     }
 
@@ -956,11 +961,50 @@ async def test_scenario_13_manager_assigns_specific_officer(
 # SCENARIO 16: MANAGER CONSULTATION ON TEAM LEAD
 # =============================================================================
 
+@pytest_asyncio.fixture
+async def manager_dang_nhap_sau_cung(
+    client: AsyncClient,
+    lead_assigned_to_officer: dict,
+    manager_user_in_db: dict,
+) -> dict:
+    """Manager là actor THẬT của request, không chỉ trên Authorization header.
+
+    ``get_current_user`` (``app/core/deps.py``) đọc cookie ``access_token``
+    TRƯỚC, Authorization header chỉ là fallback. Mọi fixture đăng nhập trên CÙNG
+    một ``AsyncClient``, nên lần login SAU ghi đè cookie của lần trước.
+
+    Hệ quả đã đo: ``lead_assigned_to_officer`` đăng nhập admin (tạo lead rồi gán
+    officer) SAU khi ``manager_token_headers`` đăng nhập manager ⇒ request mang
+    header manager nhưng chạy bằng **admin**. Log của service ghi đúng sự thật
+    đó: ``admin_username="testadmin"`` kèm ``Admin bypassed transition rule``.
+    Nghĩa là ca "manager" trước nay không kiểm gì về manager — nó còn đi vòng qua
+    nhánh bypass mà chỉ admin mới có.
+
+    Fixture này đăng nhập manager SAU CÙNG để cookie và header cùng trỏ một
+    người. Nó phụ thuộc ``lead_assigned_to_officer`` nên thứ tự là bất biến, chứ
+    không dựa vào may mắn về thứ tự khai tham số.
+    """
+    # Dùng helper chung thay vì tự dựng login: nó lấy credentials TỪ CHÍNH fixture
+    # người dùng (không chép lại hằng, nên không trôi khi hằng đổi) và có cổng
+    # fail-closed mà bản tự viết thiếu — ``pytest.fail`` khi login trả 200 nhưng
+    # KHÔNG có cookie ``access_token``. Thiếu cổng đó, một thay đổi làm server
+    # ngừng set cookie sẽ cho header rỗng và test lại âm thầm chạy bằng phiên cũ
+    # — đúng lớp lỗi mà fixture này sinh ra để đóng.
+    from tests.fixtures.users import get_auth_headers
+
+    headers = await get_auth_headers(client, manager_user_in_db, AuthURLs.LOGIN)
+    return {
+        "lead": lead_assigned_to_officer,
+        "headers": headers,
+        "manager_id": manager_user_in_db["id"],
+    }
+
+
 @pytest.mark.asyncio
 async def test_scenario_16_manager_consultation_team_lead(
     client: AsyncClient,
-    manager_token_headers: dict,
-    lead_assigned_to_officer: dict,
+    manager_dang_nhap_sau_cung: dict,
+    seed_lead_dependencies: dict,
 ):
     """
     Scenario 16: Manager creates consultation for team's lead
@@ -969,21 +1013,81 @@ async def test_scenario_16_manager_consultation_team_lead(
     When: Manager creates a consultation
     Then: Consultation is created successfully
     """
-    lead_id = lead_assigned_to_officer["id"]
+    lead_id = manager_dang_nhap_sau_cung["lead"]["id"]
 
     consultation_data = {
-        "status_id": TestPipelineData.STATUS_A1["id"],
+        "status_id": seed_lead_dependencies["contacted_status_id"],
         "notes": "Manager creating consultation for team lead",
     }
 
     res = await client.post(
         LeadsURLs.CONSULTATIONS(lead_id),
         json=consultation_data,
-        headers=manager_token_headers,
+        headers=manager_dang_nhap_sau_cung["headers"],
     )
 
     # Manager should succeed (they have access to all team leads)
     assert res.status_code in [200, 201], f"Expected success, got {res.status_code}: {res.text}"
+
+    # Khẳng định ACTOR, không chỉ mã trạng thái. Thiếu phép này thì một 201 do
+    # admin tạo ra cũng làm test xanh — đúng cái đã xảy ra suốt thời gian cookie
+    # admin ghi đè header manager. Đây cũng là thứ buộc ca này đi qua cổng
+    # ``allowed_transitions`` thật, vì chỉ admin mới được bypass nó.
+    # ``response_model`` của route là ``ConsultationCreateResult``, không phải
+    # ``Consultation`` — bản ghi nằm LỒNG dưới khoá ``consultation``.
+    actor_id = res.json()["consultation"]["officer_id"]
+    assert actor_id == manager_dang_nhap_sau_cung["manager_id"], (
+        "Consultation phải được ghi cho MANAGER. "
+        f"officer_id={actor_id}, "
+        f"manager_id={manager_dang_nhap_sau_cung['manager_id']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_consultation_reject_status_ngoai_phase_hien_tai(
+    client: AsyncClient,
+    admin_token_headers: dict,
+    unassigned_lead: dict,
+):
+    """Lead ở phase CONSULTATION KHÔNG được chuyển sang status của phase ADMISSION.
+
+    Đây là ca ÂM đi kèm hai ca dương ở trên, và nó tồn tại vì một lý do cụ thể:
+    trước bản vá, cả ba đều đi qua mà KHÔNG chạm cổng phase lần nào. Lead được
+    tạo với ``consultation_status_id=NULL`` (fixture thiếu ``code`` ⇒
+    ``StatusHelper.get_initial_status`` trả ``None`` ⇒ đường tạo lead rơi vào
+    nhánh fallback), mà cổng trong ``lead_service.add_consultation`` lại mở bằng
+    ``if will_be_latest and current_status_id and ...`` — status rỗng thì toàn bộ
+    khối bị nhảy qua. Hai ca dương xanh suốt nhiều tháng là nhờ đúng trạng thái
+    hỏng ấy, không phải nhờ cổng cho phép.
+
+    Nay lead luôn có trạng thái khởi tạo thật, nên ca này khẳng định cổng ĐANG
+    chạy: ``sts07`` (Đã nộp hồ sơ) thuộc ``PHASE_STATUSES[ADMISSION]``, không
+    universal, không system-only, nên phải bị từ chối khi lead chưa có hồ sơ xét
+    tuyển — ``derive_phase_from_admission(None)`` cho ``CONSULTATION``.
+
+    Dùng admin để loại trừ hẳn biến quyền hạn: nếu admin cũng bị chặn thì 400 đến
+    từ cổng phase chứ không phải từ RBAC hay IDOR.
+    """
+    lead_id = unassigned_lead["id"]
+
+    res = await client.post(
+        LeadsURLs.CONSULTATIONS(lead_id),
+        json={
+            "status_id": "sts07",
+            "notes": "Chuyen sang status cua phase ADMISSION khi chua co ho so",
+        },
+        headers=admin_token_headers,
+    )
+
+    assert res.status_code == 400, (
+        "Cổng phase phải từ chối status ngoài phase hiện tại. "
+        f"Nhận {res.status_code}: {res.text}"
+    )
+    # Neo vào ĐÚNG cổng, không chỉ vào con số 400: một 400 khác (validation
+    # schema, transition gate) cũng cho cùng mã trạng thái.
+    assert "giai đoạn" in res.text, (
+        f"400 đúng nhưng không phải từ cổng phase: {res.text}"
+    )
 
 
 # =============================================================================

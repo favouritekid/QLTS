@@ -802,7 +802,7 @@ jobs:
               tests/api/test_admission_workflow_api.py
               tests/services/test_admission_calculation.py
               tests/api/test_tuition_prepay_flow.py
-              tests/api/test_lead_assignment_api.py::test_lead_assignment_lifecycle_end_to_end
+              tests/api/test_lead_assignment_api.py
               tests/services/test_assignment.py
               tests/unit/test_lead_action_permissions.py
               tests/integration/test_reassign_terminal_guard.py
