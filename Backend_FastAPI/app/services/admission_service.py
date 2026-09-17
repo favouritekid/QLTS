@@ -85,6 +85,25 @@ from ..utils.masking import mask_citizen_id
 log = structlog.get_logger(__name__)
 
 
+def _now_utc() -> datetime:
+    """Đồng hồ của đường xác nhận hồ sơ — seam DUY NHẤT để test ghim thời gian.
+
+    Luôn trả giờ UTC thật. Hàm này **không** đọc request, header, tham số,
+    cấu hình hay biến môi trường, và **không** có tham số bù trừ nào — nên
+    không tồn tại đường để dữ liệu bên ngoài lái đồng hồ, và cũng không có
+    grace period ẩn. Cách duy nhất đổi được nó là ``monkeypatch`` ở tầng test,
+    trong tiến trình test.
+
+    Vì sao cần seam: ca kiểm hợp đồng hết hạn phải dựng được đúng trạng thái
+    ``expires_at == now`` để chứng minh toán tử là ``<`` chứ không phải ``<=``.
+    Trước đây ca đó đặt ``expires_at = now + 200ms`` rồi hy vọng request kịp
+    về — điều đó không bao giờ tạo ra trạng thái bằng nhau, nên nó không khoá
+    được hợp đồng nó tuyên bố khoá; nó chỉ âm thầm khẳng định một ngân sách
+    hiệu năng 200ms mà không ai khai báo, và đã đỏ trên CI vì lý do đó.
+    """
+    return datetime.now(timezone.utc)
+
+
 # ADM-012: Safe domain exceptions whose ``str()`` is user-facing copy.
 # Anything outside this tuple becomes "Unexpected error" + correlation id
 # in bulk-action error maps so internal DB/stack details cannot leak to
@@ -13704,7 +13723,7 @@ async def verify_and_confirm(
     if not token_obj:
         raise ResourceNotFoundError("Invalid or expired confirmation link")
 
-    now = datetime.now(timezone.utc)
+    now = _now_utc()
 
     # Check token status
     if token_obj.confirmed_at is not None:
