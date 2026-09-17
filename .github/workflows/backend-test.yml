@@ -917,6 +917,20 @@ jobs:
           - tier: Tier 4i — isolated migration mutation
             tests: >-
               tests/api/test_adm_024_strict_default_migration.py
+          # Leg RIENG chu khong nhap vao Tier 4. Do that: Tier 4 tren CI mat
+          # 58m58s, tep nay ~8m ⇒ gop lai ≈ 66/75 phut, tuc 88% tran. Sat den
+          # muc mot lan runner cham hon binh thuong la het gio ca lat — va khi
+          # do 1247 ca kia chet theo. Tach leg re hon nhieu so voi noi timeout.
+          #
+          # Vi sao tep nay phai co mat o day: truoc do no xuat hien 0 lan trong
+          # backend-test.yml, nen PR gate KHONG BAO GIO chay no. Ca
+          # `test_token_expires_at_boundary` (200ms) vi the chi lo ra sau khi da
+          # merge, o nightly — dung lop lo hong ma `test_ci_test_visibility.py`
+          # sinh ra de bit. Ghim WHOLE-FILE, khong dung `::node`: chon theo node
+          # la cach ma mot ca moi them vao lop se im lang khong duoc chay.
+          - tier: Tier 4s — Admission state transitions + confirmation token
+            tests: >-
+              tests/integration/test_admission_state_transitions.py
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py

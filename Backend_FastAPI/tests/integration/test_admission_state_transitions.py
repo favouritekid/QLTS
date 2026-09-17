@@ -1045,26 +1045,20 @@ class TestTokenBasedConfirmation:
             assert final.status == "confirmed"
             assert final.confirmed_at is not None
 
-    async def test_token_expires_at_boundary(
+    async def _dung_token_voi_expires_at(
         self,
         client: AsyncClient,
         manager_user_in_db: dict,
-        seed_lead_dependencies: dict,
-    ):
-        """Document the inclusive/exclusive semantics of the expiry check.
+        unit_id: int,
+        citizen_id: str,
+        expires_at: datetime,
+    ) -> str:
+        """Tạo hồ sơ + token xác nhận rồi ghim ``expires_at`` đúng giá trị cho trước.
 
-        Current code at admission_service.verify_and_confirm uses
-        `token_obj.expires_at < now` — strict `<`. So a token whose
-        `expires_at` is exactly `now` is still considered valid (by a hair).
-        This test locks that behaviour in so any future change that flips
-        the comparison to `<=` becomes a visible breaking change rather
-        than a silent UX shift.
+        Tách ra vì hai ca biên dưới đây chỉ khác nhau ĐÚNG MỘT biến — giá trị
+        ``expires_at`` — và mọi thứ khác phải giống hệt, nếu không thì ca đỏ
+        không nói được nó đỏ vì gì.
         """
-        from datetime import timedelta
-
-        unit_id = seed_lead_dependencies["unit_id"]
-        citizen_id = "222211119988"  # last 4 = "9988"
-
         lead_id = await create_test_lead(unit_id)
         profile = await create_admission_profile(
             lead_id, status="approved", citizen_id=citizen_id
@@ -1075,21 +1069,52 @@ class TestTokenBasedConfirmation:
             f"/api/admissions/{profile.id}/send-confirmation", headers=headers
         )
 
-        # Pin expires_at a few milliseconds in the future so the comparison
-        # `expires_at < now` is false and the token is still accepted.
         async with AsyncSessionLocal() as session:
             async with session.begin():
                 result = await session.execute(
-                    select(models.AdmissionConfirmationToken)
-                    .where(
+                    select(models.AdmissionConfirmationToken).where(
                         models.AdmissionConfirmationToken.profile_id == profile.id
                     )
                 )
                 token = result.scalar_one()
-                token.expires_at = datetime.now(timezone.utc) + timedelta(
-                    milliseconds=200
-                )
-                token_value = token.token
+                token.expires_at = expires_at
+                return token.token
+
+    async def test_token_expires_at_bang_dung_now_thi_van_hop_le(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+        monkeypatch,
+    ):
+        """Khoá hợp đồng: toán tử là ``<`` chứ KHÔNG phải ``<=``.
+
+        ``verify_and_confirm`` so ``token_obj.expires_at < now``. Với strict
+        ``<``, một token có ``expires_at`` ĐÚNG BẰNG ``now`` vẫn còn hiệu lực.
+        Đổi thành ``<=`` sẽ làm ca này đỏ — đó chính là điều nó tồn tại để canh.
+
+        Ghim đồng hồ bằng ``monkeypatch`` lên seam ``admission_service._now_utc``
+        nên trạng thái ``expires_at == now`` được dựng **tất định**, không phụ
+        thuộc việc request có kịp về trong một cửa sổ mili-giây nào hay không.
+        Bản cũ đặt ``now + 200ms`` rồi chạy đua với chính mình: nó không bao giờ
+        tạo ra trạng thái bằng nhau (nên không khoá được hợp đồng), mà lại âm
+        thầm khẳng định COMMIT + trọn vòng HTTP xong dưới 200ms — và đã đỏ trên
+        CI đúng vì cái ngân sách ẩn đó.
+
+        Đường HTTP vẫn đi qua service thật; chỉ nguồn thời gian bị ghim.
+        """
+        from app.services import admission_service
+
+        fixed_now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(admission_service, "_now_utc", lambda: fixed_now)
+
+        token_value = await self._dung_token_voi_expires_at(
+            client,
+            manager_user_in_db,
+            seed_lead_dependencies["unit_id"],
+            "222211119988",  # bốn số cuối = "9988"
+            expires_at=fixed_now,
+        )
 
         response = await client.post(
             f"/api/admissions/confirm/{token_value}",
@@ -1097,10 +1122,52 @@ class TestTokenBasedConfirmation:
         )
 
         assert response.status_code == 200, (
-            f"Boundary expires_at (now + 200ms) should still be valid, got "
-            f"{response.status_code}: {response.text}"
+            "expires_at == now phải CÒN hiệu lực (toán tử strict '<'), "
+            f"nhận {response.status_code}: {response.text}"
         )
         assert response.json()["status"] == "confirmed"
+
+    async def test_token_expires_at_truoc_now_mot_micro_giay_thi_het_han(
+        self,
+        client: AsyncClient,
+        manager_user_in_db: dict,
+        seed_lead_dependencies: dict,
+        monkeypatch,
+    ):
+        """Đối chứng của ca trên: lệch ĐÚNG MỘT micro giây về phía quá khứ ⇒ 400.
+
+        Cặp này mới là phép kiểm hợp đồng hoàn chỉnh. Chỉ có ca ``==`` thì một
+        bản vá làm phép kiểm hết hạn luôn trả ``False`` vẫn xanh; chỉ có ca
+        ``-1µs`` thì đổi ``<`` thành ``<=`` vẫn xanh. Hai ca lệch nhau đúng một
+        micro giây nên chúng kẹp chặt đúng cạnh của toán tử.
+        """
+        from datetime import timedelta
+
+        from app.services import admission_service
+
+        fixed_now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(admission_service, "_now_utc", lambda: fixed_now)
+
+        token_value = await self._dung_token_voi_expires_at(
+            client,
+            manager_user_in_db,
+            seed_lead_dependencies["unit_id"],
+            "222211119977",  # bốn số cuối = "9977"
+            expires_at=fixed_now - timedelta(microseconds=1),
+        )
+
+        response = await client.post(
+            f"/api/admissions/confirm/{token_value}",
+            json={"last_digits_citizen_id": "9977"},
+        )
+
+        assert response.status_code == 400, (
+            "expires_at trước now 1µs phải bị coi là HẾT HẠN, "
+            f"nhận {response.status_code}: {response.text}"
+        )
+        assert "expired" in response.text.lower(), (
+            f"400 đúng nhưng không phải vì hết hạn: {response.text}"
+        )
 
     async def test_verify_and_confirm_bumps_version(
         self,
