@@ -88,10 +88,18 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-log() { echo -e "${GREEN}[DEPLOY]${NC} $1"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
-error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
-cutover() { echo -e "${YELLOW}[CUTOVER]${NC} $1"; }
+# `echo -e` diễn giải escape TRONG NỘI DUNG THÔNG ĐIỆP, nên một chuỗi do người
+# dùng cung cấp mà chứa hai ký tự `\` + `n` sẽ đẻ ra một DÒNG LOG GIẢ — dù nó
+# không hề chứa ký tự newline thật. Phép kiểm "không có ký tự điều khiển" vì
+# thế không đủ để bảo toàn tính toàn vẹn của log.
+#
+# `printf '%b…%s…'`: `%b` chỉ áp cho biến MÀU (vốn cần escape), còn `%s` in
+# thông điệp NGUYÊN VĂN. Đã kiểm: 0 lời gọi log/warn/error/cutover trong tệp
+# này dựa vào escape trong thông điệp, nên đổi là an toàn.
+log() { printf '%b[DEPLOY]%b %s\n' "$GREEN" "$NC" "$1"; }
+warn() { printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$1"; }
+error() { printf '%b[ERROR]%b %s\n' "$RED" "$NC" "$1"; exit 1; }
+cutover() { printf '%b[CUTOVER]%b %s\n' "$YELLOW" "$NC" "$1"; }
 
 # ============================================================================
 # Cold cutover mode detection (Phase1-Hotfix-4 / 2026-05-07)
@@ -132,10 +140,48 @@ if grep -v '^\s*#' .env.production | grep -q "CHANGE_ME"; then
     error ".env.production contains CHANGE_ME placeholders. Update all values before deploying."
 fi
 
+# =============================================================================
+# Chụp cổng thoát hiểm TRƯỚC khi nạp .env.production (vá 18-09-2026)
+# =============================================================================
+# `source .env.production` ngay dưới đây đưa MỌI biến trong tệp vào môi trường.
+# Nếu ai đó viết `QLTS_SKIP_ROLLBACK_ASSET=1` vào tệp ấy một lần rồi quên, thì
+# từ đó về sau MỌI deploy đều tự động bỏ qua tài sản rollback — trong khi hợp
+# đồng của cổng này là "phải gõ tay MỖI LƯỢT". Một cờ khẩn cấp biến thành cấu
+# hình thường trực là cách cổng tự tắt mà không ai nhận ra.
+#
+# Ba bước, theo đúng thứ tự: chụp giá trị từ môi trường THẬT → `unset` để phép
+# hỏi sau `source` có nghĩa → nếu tệp tái khai báo thì DỪNG. Từ đây về sau chỉ
+# dùng bản đã chụp, không đọc lại biến môi trường.
+_RA_SKIP_CO=0
+_RA_SKIP_GIATRI=""
+_RA_REASON_CO=0
+_RA_REASON_GIATRI=""
+if [ "${QLTS_SKIP_ROLLBACK_ASSET+co}" = "co" ]; then
+    _RA_SKIP_CO=1
+    _RA_SKIP_GIATRI="$QLTS_SKIP_ROLLBACK_ASSET"
+fi
+if [ "${QLTS_SKIP_ROLLBACK_ASSET_REASON+co}" = "co" ]; then
+    _RA_REASON_CO=1
+    _RA_REASON_GIATRI="$QLTS_SKIP_ROLLBACK_ASSET_REASON"
+fi
+unset QLTS_SKIP_ROLLBACK_ASSET QLTS_SKIP_ROLLBACK_ASSET_REASON
+
 # Load env vars for template substitution
 set -a
 source .env.production
 set +a
+
+# Hai biến này CHỈ được đến từ dòng lệnh. Có mặt sau `source` nghĩa là chúng
+# vừa ra đời từ .env.production — từ chối, kể cả khi giá trị là "0": vấn đề là
+# chúng NẰM TRONG TỆP, không phải giá trị chúng mang.
+if [ "${QLTS_SKIP_ROLLBACK_ASSET+co}" = "co" ] \
+   || [ "${QLTS_SKIP_ROLLBACK_ASSET_REASON+co}" = "co" ]; then
+    error "QLTS_SKIP_ROLLBACK_ASSET / _REASON được khai báo trong .env.production.
+       Cổng thoát hiểm phải là hành vi THỦ CÔNG TỪNG LƯỢT, không phải cấu hình
+       thường trực. Gỡ chúng khỏi .env.production; muốn bỏ qua thì đặt ngay
+       trên dòng lệnh của lượt deploy đó."
+fi
+unset QLTS_SKIP_ROLLBACK_ASSET QLTS_SKIP_ROLLBACK_ASSET_REASON
 
 if [ -z "${DOMAIN:-}" ]; then
     error "DOMAIN is not set in .env.production"
@@ -256,6 +302,262 @@ if [ ! -f nginx/templates/default.conf.template ]; then
     error "Thiếu nginx/templates/default.conf.template — entrypoint nginx sẽ không có gì để render"
 fi
 log "Nginx template sẽ được render TRONG container (domain=$DOMAIN, admission_frozen=$NGINX_ADMISSION_FROZEN)"
+
+# =============================================================================
+# Step 3b: TÀI SẢN ROLLBACK — tạo TRƯỚC build, fail-closed
+# =============================================================================
+# Vá 18-09-2026. Trước bản vá này, việc tạo tài sản rollback (tag ảnh cũ + bản
+# kê) chỉ tồn tại ở `Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md`
+# §5.4 — một thủ tục LÀM TAY. Đường tự động chưa từng gọi nó:
+# `deploy.yml` và chính tệp này đều có `docker tag` = 0 lần. Hệ quả đo được:
+# deploy `deffbf2b` ngày 18-09 chạy xong mà không sinh bộ tài sản nào, trong
+# khi sáu deploy `success` trước đó đều có. Không cổng nào nhắc, không cổng nào
+# chặn — nên nó sẽ lặp lại ở MỌI lần deploy sau.
+#
+# ⭐⭐ VÌ SAO KHÔNG DÙNG `$_PRE_PULL_SHA` LÀM `# git-rev`:
+# `deploy.yml` đã `git merge --ff-only "$SHA_MONG_DOI"` TRƯỚC khi gọi script
+# này. Nên tại đây HEAD — và do đó `_PRE_PULL_SHA` — đã là SHA MỚI. Lấy nó ghi
+# vào bản kê nghĩa là dán nhãn "phiên bản cũ" lên đúng phiên bản sắp thay thế:
+# tài sản rollback SAI ngay lúc sinh ra, và Step 5 của §8.1 sẽ checkout về đúng
+# cái cây vừa gây sự cố. Không có gì phát hiện được điều đó về sau.
+#
+# Nguồn đúng phải BỀN và NGOÀI worktree: một marker ghi sau mỗi deploy thành
+# công, chứa SHA đã deploy + image ID của bốn container nó tạo ra. Marker chỉ
+# đáng tin khi 4/4 image ID còn khớp với bốn container ĐANG chạy — khớp thì SHA
+# trong marker đúng là revision của ảnh đang phục vụ; lệch thì đã có ai đó thay
+# container ngoài đường này và ta KHÔNG biết ảnh hiện tại từ commit nào.
+#
+# Fail-closed: thiếu marker, marker hỏng, hoặc lệch dù chỉ một service ⇒ DỪNG
+# trước build và trước mọi thứ chạm CSDL. Không đoán, không suy, không "cảnh
+# báo rồi chạy tiếp" — đó đúng là hình dạng `docker pull … || echo "DỪNG LẠI"`
+# đã trả giá một lần.
+
+_RA_DICH_VU="backend celery-worker celery-beat frontend"
+_RA_OPS="${QLTS_ROLLBACK_OPS_DIR:-/opt/qlts-ops/rollback}"
+_RA_MARKER="$_RA_OPS/last-deploy.marker"
+_RA_COMPOSE="docker compose -f docker-compose.yml --profile production --env-file .env.production"
+
+# --- Cổng thoát hiểm: phải là hành vi THỦ CÔNG CÓ CHỦ ĐÍCH ------------------
+# Hai biến, cả hai đều bắt buộc, và workflow KHÔNG forward chúng (`envs:` của
+# deploy.yml chỉ có SHA_MONG_DOI). Một biến đơn lẻ quá dễ bấm; đòi thêm lý do
+# viết ra bằng chữ buộc người gõ phải nói vì sao, và để lại vết trong log.
+# Đọc BẢN ĐÃ CHỤP ở Step 1, không đọc biến môi trường: sau `source
+# .env.production` thì biến môi trường không còn phân biệt được "người gõ" với
+# "tệp cấu hình khai".
+_RA_BO_QUA=0
+if [ "$_RA_SKIP_CO" = "1" ]; then
+    case "$_RA_SKIP_GIATRI" in
+        0) : ;;
+        1) _RA_BO_QUA=1 ;;
+        *) error "QLTS_SKIP_ROLLBACK_ASSET='$_RA_SKIP_GIATRI' không hợp lệ — chỉ nhận '0' hoặc '1'.
+       Giá trị lạ KHÔNG được hiểu là 'bật': một biến đặt sai chính tả mà được
+       coi như bỏ qua là cách cổng tự tắt đúng lúc cần canh nhất." ;;
+    esac
+fi
+if [ "$_RA_BO_QUA" = "1" ]; then
+    if [ "$_RA_REASON_CO" != "1" ]; then
+        error "QLTS_SKIP_ROLLBACK_ASSET=1 nhưng THIẾU QLTS_SKIP_ROLLBACK_ASSET_REASON.
+       Bỏ qua tài sản rollback là quyết định phải ghi lại được — nêu lý do."
+    fi
+    if [ -z "$_RA_REASON_GIATRI" ]; then
+        error "QLTS_SKIP_ROLLBACK_ASSET_REASON RỖNG — cần một lý do thật, không phải chuỗi trống."
+    fi
+    case "$_RA_REASON_GIATRI" in
+        *[[:cntrl:]]*)
+            error "QLTS_SKIP_ROLLBACK_ASSET_REASON chứa ký tự điều khiển (xuống dòng/tab/…).
+       Lý do phải nằm trên MỘT dòng: nó sẽ đi vào log và marker, và một chuỗi
+       nhiều dòng làm hỏng định dạng phân tách bằng tab của bản kê." ;;
+        *\\*)
+            # Phòng thủ hai lớp cùng với việc log đã chuyển sang `printf '%s'`:
+            # một chuỗi chứa `\` + `n` (hai ký tự, KHÔNG phải newline) từng có
+            # thể đẻ ra dòng log giả qua `echo -e`. Lý do là văn bản thuần.
+            error "QLTS_SKIP_ROLLBACK_ASSET_REASON chứa dấu gạch chéo ngược.
+       Lý do phải là văn bản thuần — chuỗi escape có thể giả mạo dòng log." ;;
+    esac
+    warn "BỎ QUA tạo tài sản rollback theo yêu cầu thủ công."
+    warn "  lý do: $_RA_REASON_GIATRI"
+    warn "  ⇒ deploy này sẽ KHÔNG có đường lùi được ghim. Tự chịu trách nhiệm."
+else
+    log "Step 3b: tạo tài sản rollback (trước build)..."
+
+    # --- Đọc marker ---------------------------------------------------------
+    if [ ! -f "$_RA_MARKER" ]; then
+        error "THIẾU marker $_RA_MARKER — không biết ảnh đang chạy thuộc commit nào.
+       Đây là lần đầu deploy.sh chạy với cổng này, hoặc marker đã bị xoá.
+       KHÔNG đoán từ HEAD: tại đây HEAD đã là SHA MỚI (deploy.yml đã ff-merge).
+       Cần một lần khởi tạo marker trên production, có phê duyệt riêng, rồi mới
+       deploy tiếp. Muốn bỏ qua có chủ đích:
+         QLTS_SKIP_ROLLBACK_ASSET=1 QLTS_SKIP_ROLLBACK_ASSET_REASON='...'"
+    fi
+
+    # ---- Marker phải ĐÚNG HÌNH DẠNG, không chỉ "có dòng ta cần" ------------
+    # `head -1` là cái bẫy: một marker có HAI dòng `# deployed-sha` mâu thuẫn
+    # nhau vẫn qua cổng, và ta ghim theo dòng đầu mà không biết dòng thứ hai
+    # nói khác. Tương tự với một service khai hai lần bằng hai image ID.
+    # Nên: đếm trước, đọc sau. Đếm khác 1 ⇒ dừng.
+    _ra_dem() { grep -cE "$1" "$_RA_MARKER" || true; }
+
+    _RA_N=$(_ra_dem '^# marker-version'$'\t')
+    if [ "$_RA_N" -ne 1 ]; then
+        error "marker: có $_RA_N dòng '# marker-version' (cần đúng 1) — marker hỏng."
+    fi
+    _RA_VER=$(awk -F'\t' '$1=="# marker-version"{print $2}' "$_RA_MARKER")
+    if [ "$_RA_VER" != "1" ]; then
+        error "marker: marker-version='$_RA_VER', script này chỉ đọc được version 1.
+       Không đoán định dạng lạ — một marker của phiên bản khác có thể xếp cột
+       khác và ta sẽ ghim nhầm image ID."
+    fi
+
+    _RA_N=$(_ra_dem '^# deployed-sha'$'\t')
+    if [ "$_RA_N" -ne 1 ]; then
+        error "marker: có $_RA_N dòng '# deployed-sha' (cần đúng 1) — không biết tin dòng nào."
+    fi
+    _RA_SRC=$(awk -F'\t' '$1=="# deployed-sha"{print $2}' "$_RA_MARKER")
+    case "$_RA_SRC" in
+        *[!0-9a-f]*) error "marker: deployed-sha '$_RA_SRC' có ký tự không phải hex thường" ;;
+    esac
+    if [ "${#_RA_SRC}" -ne 40 ]; then
+        error "marker: deployed-sha dài ${#_RA_SRC} ký tự, cần đúng 40"
+    fi
+
+    # Mỗi service ĐÚNG MỘT dòng, và không có dòng service lạ. Một dòng thừa tên
+    # `postgres` hay `nginx` nghĩa là marker được sinh bởi thứ khác — đừng đọc
+    # tiếp một tệp ta không hiểu.
+    for _S in $_RA_DICH_VU; do
+        _RA_N=$(_ra_dem "^${_S}"$'\t')
+        if [ "$_RA_N" -ne 1 ]; then
+            error "marker: service '$_S' xuất hiện $_RA_N lần (cần đúng 1)."
+        fi
+    done
+    _RA_LA=$(awk -F'\t' -v ds="$_RA_DICH_VU" '
+        /^#/ {next} NF==0 {next}
+        { ok=0; n=split(ds,a," "); for(i=1;i<=n;i++) if($1==a[i]) ok=1
+          if(!ok) print $1 }' "$_RA_MARKER")
+    if [ -n "$_RA_LA" ]; then
+        error "marker có dòng service KHÔNG thuộc bốn service ứng dụng: $(printf '%s' "$_RA_LA" | tr '\n' ' ')
+       Marker này không do đường deploy sinh ra — từ chối dùng."
+    fi
+
+    # --- Đối chiếu marker với BỐN container đang chạy -----------------------
+    # BỐN, không phải hai: compose đặt tên ảnh theo `<project>-<service>` nên
+    # celery-worker/celery-beat có ảnh RIÊNG. Thiếu hai cái đó thì rollback lùi
+    # backend mà để worker ở mã MỚI, chạy trên lược đồ CSDL đã lùi.
+    for _S in $_RA_DICH_VU; do
+        _RA_CID=$($_RA_COMPOSE ps -q "$_S" 2>/dev/null || true)
+        if [ -z "$_RA_CID" ]; then
+            error "không thấy container đang chạy cho '$_S' — không thể ghim ảnh cũ.
+       Đừng build đè lên một stack đang thiếu service."
+        fi
+        _RA_IMG=$(docker inspect -f '{{.Image}}' "$_RA_CID" 2>/dev/null || true)
+        case "$_RA_IMG" in
+            sha256:*) : ;;
+            *) error "docker inspect '$_S' trả image ID không hợp lệ: '$_RA_IMG'
+       (cần dạng sha256:…). Chuỗi rỗng hay định dạng lạ sẽ trôi qua mọi phép so
+       và biến cổng này thành cổng xanh giả." ;;
+        esac
+        # Không `head -1`: phép đếm ở trên đã bảo đảm đúng một dòng. Dùng
+        # `head -1` ở đây sẽ che mất đúng cái ta vừa đi kiểm.
+        _RA_GHI=$(awk -F'\t' -v s="$_S" '$1==s {print $2}' "$_RA_MARKER")
+        case "$_RA_GHI" in
+            sha256:*) : ;;
+            *) error "marker: image ID của '$_S' không có tiền tố sha256: ('$_RA_GHI')" ;;
+        esac
+        _RA_HEX=${_RA_GHI#sha256:}
+        case "$_RA_HEX" in
+            *[!0-9a-f]*) error "marker: image ID của '$_S' có ký tự không phải hex thường" ;;
+        esac
+        if [ "${#_RA_HEX}" -ne 64 ]; then
+            error "marker: image ID của '$_S' dài ${#_RA_HEX} hex, cần đúng 64.
+       Một chuỗi ngắn hơn có thể là tiền tố rút gọn — so tiền tố với ID đầy đủ
+       sẽ luôn LỆCH, và ta sẽ dừng vì lý do sai."
+        fi
+        if [ "$_RA_GHI" != "$_RA_IMG" ]; then
+            error "LỆCH marker ở '$_S':
+         marker ghi : $_RA_GHI
+         đang chạy  : $_RA_IMG
+       Container đã bị thay ngoài đường deploy này, nên SHA trong marker KHÔNG
+       còn mô tả đúng ảnh đang phục vụ. Ghim theo nó là tạo ra tài sản rollback
+       sai. DỪNG trước build và trước CSDL."
+        fi
+    done
+    log "  ✓ marker khớp 4/4 container đang chạy — nguồn = $_RA_SRC"
+
+    # --- Tên tag: không va chạm, không ghi đè -------------------------------
+    if ! _RA_TGT=$(git rev-parse HEAD 2>/dev/null); then
+        error "không đọc được HEAD để đặt tên tag rollback"
+    fi
+    _RA_TAG="pre-$(printf '%.8s' "$_RA_TGT")-from-$(printf '%.8s' "$_RA_SRC")-$(date -u +%Y%m%dT%H%M%SZ)"
+    _RA_DIR="$_RA_OPS/$_RA_TAG"
+    _RA_MANIFEST="$_RA_DIR/rollback_manifest_${_RA_TAG}.txt"
+
+    if [ -e "$_RA_DIR" ]; then
+        error "$_RA_DIR đã tồn tại — từ chối ghi đè một bộ tài sản có sẵn."
+    fi
+    for _S in $_RA_DICH_VU; do
+        if docker image inspect "qlts-${_S}:${_RA_TAG}" >/dev/null 2>&1; then
+            error "tag qlts-${_S}:${_RA_TAG} ĐÃ TỒN TẠI — từ chối ghi đè.
+       Nếu đây là tàn dư của một lượt hỏng giữa chừng, dọn tay ĐÍCH DANH từng
+       tag rồi chạy lại. Tuyệt đối không \`image prune\`."
+        fi
+    done
+
+    # --- Tag từ `.Image` của container đang chạy, KHÔNG từ `:latest` --------
+    # `qlts-<svc>:latest` là tag DI ĐỘNG: nó có thể đã trôi sang một bản build
+    # khác từ trước khi ta chạm vào. `.Image` của container đang chạy là thứ duy
+    # nhất chắc chắn đúng "phiên bản đang phục vụ".
+    mkdir -p "$_RA_DIR"
+    chmod 700 "$_RA_OPS" "$_RA_DIR"
+
+    _RA_TMP="$_RA_DIR/.manifest.$$.tmp"
+    : > "$_RA_TMP"
+    chmod 600 "$_RA_TMP"
+    {
+        printf '# scope\tLOCAL-ONLY - chua publish GHCR/offsite\n'
+        printf '# git-rev\t%s\n'    "$_RA_SRC"
+        printf '# target-rev\t%s\n' "$_RA_TGT"
+        printf '# created\t%s\n'    "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '# marker\t%s\n'     "$_RA_MARKER"
+    } >> "$_RA_TMP"
+
+    for _S in $_RA_DICH_VU; do
+        _RA_CID=$($_RA_COMPOSE ps -q "$_S")
+        _RA_IMG=$(docker inspect -f '{{.Image}}' "$_RA_CID")
+        docker tag "$_RA_IMG" "qlts-${_S}:${_RA_TAG}"
+        printf '%s\t%s\t%s\t%s\t%s\n' \
+            "$_S" "$_RA_CID" "$_RA_IMG" "qlts-${_S}:${_RA_TAG}" "PENDING_DIGEST" >> "$_RA_TMP"
+    done
+
+    # Chỉ xuất bản bản kê khi CẢ BỐN tag đã xong. `set -e` cắt ngang ở trên thì
+    # `$_RA_MANIFEST` không bao giờ xuất hiện — preflight của lượt sau sẽ thấy
+    # thiếu bản kê và dừng, thay vì đọc một bản kê nửa vời.
+    log "  ✓ đã ghim 4 ảnh vào tag $_RA_TAG"
+
+    # --- Preflight NGAY, local-only, TRÊN TỆP TẠM ---------------------------
+    # Thứ tự ở đây là toàn bộ vấn đề. Bản trước `mv` sang tên chính thức RỒI
+    # mới chạy preflight: preflight đỏ thì một bản kê TRÔNG HOÀN CHỈNH vẫn nằm
+    # lại, không mang dấu nào cho biết nó chưa đạt — và lượt sau (hoặc người
+    # trực lúc 3 giờ sáng) sẽ tin nó. Nay preflight đọc chính tệp tạm; chỉ khi
+    # RC=0 mới đặt tên chính thức. Đỏ ⇒ xoá tạm, không để lại gì.
+    #
+    # Local-only vì đẩy GHCR đòi credential ghi registry — một cổng riêng,
+    # không nhét vào đường deploy routine.
+    if ! QLTS_ROLLBACK_LOCAL_ONLY=1 \
+         QLTS_ROLLBACK_TAG="$_RA_TAG" \
+         QLTS_ROLLBACK_MANIFEST="$_RA_TMP" \
+         bash "$SCRIPT_DIR/rollback-preflight.sh"; then
+        rm -f -- "$_RA_TMP"
+        error "rollback-preflight ĐỎ trên tài sản vừa tạo ($_RA_TAG).
+       Bản kê KHÔNG được xuất bản — không có tệp nửa vời nào nằm lại.
+       Tài sản không dùng được thì deploy này không có đường lùi. DỪNG trước
+       build và trước CSDL."
+    fi
+
+    # ĐẠT rồi mới đặt tên chính thức. Từ giây này trở đi, sự tồn tại của
+    # `$_RA_MANIFEST` LÀ bằng chứng "đã qua preflight".
+    mv -- "$_RA_TMP" "$_RA_MANIFEST"
+    log "  ✓ preflight ĐẠT (local-only) — có đường lùi về $_RA_SRC"
+    log "  ✓ bản kê: $_RA_MANIFEST"
+fi
 
 # =============================================================================
 # Step 4: Build Docker images
@@ -592,6 +894,56 @@ log "Frontend healthy"
 log "Step 8b: áp cấu hình nginx (thử trên candidate trước)..."
 bash "$SCRIPT_DIR/nginx-apply.sh" "$DOMAIN"     || error "không áp được cấu hình nginx — xem log phía trên"
 
+
+# =============================================================================
+# Step 8c: ghi marker cho lần deploy SAU
+# =============================================================================
+# Đặt ở đây, sau khi mọi cổng health đã đạt, vì marker tuyên bố "bốn container
+# NÀY đang phục vụ commit NÀY". Ghi sớm hơn là tuyên bố một điều chưa đúng.
+#
+# Nguyên tử: viết tệp tạm rồi `mv`. Một marker bị cắt ngang giữa chừng còn tệ
+# hơn không có marker — Step 3b của lượt sau sẽ đọc được vài dòng đầu, thấy đủ
+# `# deployed-sha`, rồi lệch ở service thứ ba và dừng với thông điệp sai
+# nguyên nhân. `mv` trên cùng filesystem là atomic, nên marker hoặc là bản cũ
+# nguyên vẹn, hoặc là bản mới nguyên vẹn, không có trạng thái thứ ba.
+log "Step 8c: ghi marker deploy..."
+
+_RA_SHA_MOI=$(git rev-parse HEAD) || error "không đọc được HEAD để ghi marker"
+mkdir -p "$_RA_OPS"
+chmod 700 "$_RA_OPS"
+_RA_MK_TMP="$_RA_OPS/.last-deploy.$$.tmp"
+: > "$_RA_MK_TMP"
+chmod 600 "$_RA_MK_TMP"
+{
+    printf '# marker-version\t1\n'
+    printf '# deployed-sha\t%s\n' "$_RA_SHA_MOI"
+    printf '# deployed-at\t%s\n'  "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [ "$_RA_BO_QUA" = "1" ]; then
+        printf '# asset-skipped\t%s\n' "$_RA_REASON_GIATRI"
+    else
+        printf '# asset-tag\t%s\n' "$_RA_TAG"
+    fi
+} >> "$_RA_MK_TMP"
+
+for _S in $_RA_DICH_VU; do
+    _RA_CID_MOI=$($_RA_COMPOSE ps -q "$_S" 2>/dev/null || true)
+    if [ -z "$_RA_CID_MOI" ]; then
+        rm -f -- "$_RA_MK_TMP"
+        error "sau deploy vẫn không thấy container cho '$_S' — từ chối ghi marker nửa vời.
+       Marker sai còn nguy hiểm hơn marker thiếu: lượt deploy sau sẽ ghim ảnh cũ
+       theo một SHA không đúng."
+    fi
+    _RA_IMG_MOI=$(docker inspect -f '{{.Image}}' "$_RA_CID_MOI" 2>/dev/null || true)
+    case "$_RA_IMG_MOI" in
+        sha256:*) : ;;
+        *) rm -f -- "$_RA_MK_TMP"
+           error "image ID sau deploy của '$_S' không hợp lệ: '$_RA_IMG_MOI' — từ chối ghi marker." ;;
+    esac
+    printf '%s\t%s\t%s\n' "$_S" "$_RA_IMG_MOI" "$_RA_CID_MOI" >> "$_RA_MK_TMP"
+done
+
+mv -- "$_RA_MK_TMP" "$_RA_MARKER"
+log "  ✓ marker: $_RA_MARKER (sha=$_RA_SHA_MOI, 4/4 ảnh)"
 
 # =============================================================================
 # Done
