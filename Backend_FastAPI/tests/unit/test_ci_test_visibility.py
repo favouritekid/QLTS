@@ -63,6 +63,14 @@ GOC = _goc_repo()
 if GOC is None:  # pragma: no cover - chỉ xảy ra ngoài cây nguồn
     pytest.skip("không tìm thấy gốc repo", allow_module_level=True)
 
+#: Gốc của cây backend. Selector trong `backend-test.yml` viết tương đối so
+#: với thư mục này (`tests/...`), vì bước chạy CI `cd Backend_FastAPI` trước
+#: khi gọi pytest. Ai phân giải selector thành đường dẫn thật PHẢI đi qua đây,
+#: đừng nối vào `GOC` — nối vào `GOC` thì `is_file()` trả False cho MỌI tệp và
+#: phép kiểm "tệp có thật" biến thành phép kiểm luôn đỏ (hoặc, nếu viết ngược,
+#: luôn xanh).
+GOC_BE = GOC / "Backend_FastAPI"
+
 DUONG_WF = GOC / ".github" / "workflows" / "backend-test.yml"
 DUONG_LEDGER = GOC / "Backend_FastAPI" / "tests" / "VISIBILITY_LEDGER.yml"
 DUONG_SCRIPT = GOC / ".github" / "scripts" / "pytest_visibility_guard.py"
@@ -1165,6 +1173,78 @@ SHA_HOP_SELECTOR_TIER2 = (
     "88b4096f125101ad34720356bf1eed6bec2012b016c378770a0672117629fb94"
 )
 
+# --- Phân hoạch Tier 4 (SPLIT 18-09-2026) -------------------------------------
+HOP_DONG_PHAN_VUNG_TIER4 = "tier4-admission-lead-v1"
+
+#: ⚠️ DANH SÁCH, KHÔNG phải tập. Ca kiểm so danh sách đã sắp xếp với hằng số
+#: này. So bằng TẬP thì ba leg nhãn `a`/`a`/`b` vẫn cho `{'a','b'}` ⇒ XANH GIẢ
+#: trong khi phân hoạch đã hỏng (một lát bị nhân đôi, một lát biến mất).
+PHAN_VUNG_CAN_TIER4 = ["a", "b"]
+
+#: Khoá matrix mang cờ `--durations` cho RIÊNG hai lát Tier 4, và giá trị bắt
+#: buộc của nó. Đặt qua khoá matrix chứ không nhét thẳng vào chuỗi lệnh, vì
+#: `steps[].run` dùng CHUNG cho cả 10 leg — sửa thẳng ở đó là áp `--durations`
+#: lên mọi tier, đúng thứ đề bài cấm.
+#:
+#: Vì sao phải có hợp đồng khoá ba đầu này lại: cờ chỉ ĐỔI ĐẦU RA (in 25 test
+#: chậm nhất), KHÔNG đổi pass/fail. Gỡ nó đi thì mọi shard vẫn xanh, mọi ca
+#: vẫn chạy, và không một phép kiểm nào của kho này thấy gì — chỉ lần sau cần
+#: cân lại tải mới phát hiện số liệu đã biến mất, và khi ấy phải dựng lại chi
+#: phí từ dấu thời gian log (một buổi làm việc, và phép đo suýt sai vì khối
+#: `warnings summary` lọt neo). Đây đúng là loại hồi quy ÂM THẦM mà guard tồn
+#: tại để bắt.
+KHOA_DURATIONS_TIER4 = "pytest_extra"
+GIA_TRI_DURATIONS_TIER4 = "--durations=25"
+
+#: Biểu thức mà bước chạy pytest phải chứa ĐÚNG MỘT lần.
+THAM_CHIEU_DURATIONS_TIER4 = "${{ matrix.%s }}" % KHOA_DURATIONS_TIER4
+
+#: SHA-256 của HỢP hai lát Tier 4a ∪ Tier 4b, băm trên **danh sách đã sắp xếp
+#: của tập** — cùng công thức với `SHA_HOP_SELECTOR_TIER2`, qua chung helper
+#: `_digest_hop` để hai chỗ không thể trôi khỏi nhau.
+#:
+#: Mốc đo: 18-09-2026, ngay khi chẻ leg `Tier 4` cũ (57 tệp) làm hai lát
+#: 19 + 38 cân theo CHI PHÍ ĐO ĐƯỢC.
+#:
+#: ⚠️ Về các con số thời gian, phải tách hai loại — bản đầu của chú thích này
+#: viết "46m44 – 75m17" như một khoảng thời lượng hoàn thành, và đó là sai:
+#:
+#:   * LƯỢT HOÀN THÀNH (dùng dựng mô hình chi phí):
+#:       13-09 05:18  28m11 · 13-09 07:01  31m50 · 15-09  51m42
+#:       16-09        58m58 · 17-09        46m44
+#:     Mô hình lấy trung bình hai lượt 16-09 và 17-09 vì chúng cùng tập
+#:     selector với `main` (tổng pytest 3090s).
+#:   * LƯỢT BỊ HUỶ: 18-09 07:53 dừng ở **75m17** vì chạm `timeout-minutes: 75`.
+#:     Con số này KHÔNG phải thời lượng — nó chỉ chứng minh thời lượng thật
+#:     **≥ 75m17**. Ngoại suy từ 46/57 tệp đã chạy xong của lượt ấy cho
+#:     ~89,5 phút. Coi 75m17 là "đã chạy xong trong 75 phút" là đọc một lượt
+#:     thất bại thành một phép đo.
+#:
+#: Vì băm trên HỢP, chuyển một selector từ 4a sang 4b (hay ngược lại) KHÔNG đổi
+#: digest — cân lại tải là việc thường. Nhưng BỎ / THÊM / THAY một selector thì
+#: đổi, và đó đúng là thứ cần đỏ.
+#:
+#: 🔴 Sinh lại hằng số này KHÔNG phải cách hợp lệ để gỡ một tệp khỏi cổng PR.
+#: Digest đỏ nghĩa là tập selector đã đổi; việc phải làm là xem tệp nào biến
+#: mất và vì sao, rồi hoặc trả nó lại, hoặc ghi rõ quyết định gỡ vào chú thích
+#: này cùng giá trị digest CŨ. Chạy lại lệnh dưới rồi dán số mới vào là xoá
+#: sạch bằng chứng — đúng lớp lỗ hổng mà cả tệp này sinh ra để bịt.
+#:
+#: Sinh lại (chạy từ gốc repo) khi CỐ Ý đổi tập selector Tier 4:
+#:
+#:     python - <<'EOF'
+#:     import hashlib, json, yaml
+#:     wf = yaml.safe_load(open(".github/workflows/backend-test.yml", encoding="utf-8"))
+#:     legs = wf["jobs"]["pytest-shard"]["strategy"]["matrix"]["include"]
+#:     u = sorted({t for l in legs
+#:                 if l.get("partition_contract") == "tier4-admission-lead-v1"
+#:                 for t in str(l["tests"]).split()})
+#:     print(hashlib.sha256(json.dumps(u, separators=(",", ":")).encode()).hexdigest())
+#:     EOF
+SHA_HOP_SELECTOR_TIER4 = (
+    "5e86f2c0990fdde4fd6905b1248ee2b3edcb978491691937e95a450bc8cdace3"
+)
+
 
 def _nap_pr_classify():
     """Nạp `pr_classify` — CHỈ để mượn loader YAML nghiêm ngặt của nó.
@@ -1190,10 +1270,38 @@ def prc():
     return _nap_pr_classify()
 
 
-def _cac_leg_phan_vung(cac_leg):
-    """Tìm hai lát Tier 2 bằng SIÊU DỮ LIỆU, không bằng tên hiển thị."""
+def _cac_leg_phan_vung(cac_leg, hop_dong: str = HOP_DONG_PHAN_VUNG):
+    """Tìm các lát của MỘT hợp đồng phân hoạch bằng SIÊU DỮ LIỆU.
+
+    Tham số `hop_dong` có mặc định là hợp đồng Tier 2 để mọi lời gọi cũ giữ
+    nguyên ngữ nghĩa; Tier 4 truyền `HOP_DONG_PHAN_VUNG_TIER4`.
+
+    Lọc theo `partition_contract`, KHÔNG theo tên hiển thị: tên hiển thị là
+    văn bản cho người đọc log, sửa chữ trong đó là việc thường, và một phép
+    lọc khớp 0 leg làm mọi ca dựa trên nó chạy trên tập RỖNG — tức **xanh**.
+    """
     return [l for l in cac_leg
-            if str(l.get("partition_contract", "")) == HOP_DONG_PHAN_VUNG]
+            if str(l.get("partition_contract", "")) == hop_dong]
+
+
+def _digest_hop(selectors) -> str:
+    """Digest chuẩn của một HỢP selector — MỘT nguồn chuẩn cho mọi lát.
+
+    Serialize đúng như tiền lệ Tier 2: `json.dumps` trên **danh sách đã sắp
+    xếp của tập**, với `separators=(",", ":")`.
+
+    ⚠️ `separators` là BẮT BUỘC: mặc định `json.dumps` chèn khoảng trắng sau
+    dấu phẩy, đổi chuỗi đầu vào và do đó đổi digest. KHÔNG truyền
+    `ensure_ascii` — selector đều ASCII thuần nên nó không đổi kết quả, thêm
+    vào chỉ mời người sau tưởng nó có nghĩa.
+
+    Tier 2 và Tier 4 dùng CHUNG hàm này. `SHA_HOP_SELECTOR_TIER2` là hằng số
+    lịch sử KHÔNG đổi, nên nếu hàm này serialize lệch một byte thì ca Tier 2
+    đỏ NGAY — đó là phép khoá-bằng-nhau, không phải trùng lặp.
+    """
+    return hashlib.sha256(
+        json.dumps(sorted(set(selectors)), separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 class TestWorkflowAdmissionTuNhinThay:
@@ -1437,12 +1545,237 @@ class TestPhanVungTier2TheoSieuDuLieu:
             "hai lát GIAO NHAU: %s" % sorted(set(a) & set(c)))
         hop = sorted(set(a) | set(c))
         assert hop, "hợp hai lát RỖNG — mọi phép băm sau đây sẽ vô nghĩa"
-        bam = hashlib.sha256(
-            json.dumps(hop, separators=(",", ":")).encode("utf-8")).hexdigest()
+        # Dùng CHUNG `_digest_hop` với Tier 4 — `SHA_HOP_SELECTOR_TIER2` là
+        # hằng số lịch sử không đổi, nên ca này khoá luôn cách serialize của
+        # helper: helper trôi một byte là đỏ ở đây trước.
+        bam = _digest_hop(hop)
         assert bam == SHA_HOP_SELECTOR_TIER2, (
             "tập selector Tier 2 đã đổi: digest %s, cần %s. Bỏ/thêm/thay một "
             "selector là đổi; chuyển giữa 2a và 2c thì KHÔNG."
             % (bam, SHA_HOP_SELECTOR_TIER2))
+
+
+class TestPhanVungTier4TheoSieuDuLieu:
+    """Hợp đồng phân hoạch `tier4-admission-lead-v1` — leg Tier 4 chẻ 18-09.
+
+    Tìm lát bằng `partition_contract`, **KHÔNG bằng tên hiển thị**. Tên hiển
+    thị là văn bản cho người đọc log; ghim phép kiểm vào nó thì một lần sửa mô
+    tả làm phép lọc khớp 0 leg, và phép kiểm chạy trên tập rỗng thì **xanh**.
+
+    ⚠️ Phân công CÓ CHỦ Ý giữa các ca: bốn ca cuối (giao rỗng, digest, whole-
+    file, tệp có thật) đều **vacuous nếu `legs4` rỗng** — tập rỗng thoả mọi
+    lượng từ phổ quát. Tính KHÔNG-RỖNG do `test_dung_hai_leg_mang_hop_dong`
+    gác, và chỉ nó. Đừng gỡ ca ấy vì "nó chỉ đếm": gỡ nó là bốn ca kia im
+    lặng biến thành vô nghĩa mà vẫn xanh.
+
+    Mỗi ca canh ĐÚNG MỘT bất biến. Gộp lại thì lúc đỏ không ai biết đỏ vì gì.
+    """
+
+    def _legs4(self, cac_leg):
+        return _cac_leg_phan_vung(cac_leg, HOP_DONG_PHAN_VUNG_TIER4)
+
+    def _theo_phan(self, cac_leg):
+        """Danh sách `(nhãn, selector)` — **KHÔNG** phải dict theo nhãn.
+
+        Dict `{part: tests}` chỉ giữ leg CUỐI khi hai leg trùng nhãn, nên nó
+        NUỐT đúng ca hỏng mà `test_cac_phan_giao_rong` sinh ra để bắt.
+        """
+        return [(str(l.get("partition_part", "")), str(l.get("tests", "")).split())
+                for l in self._legs4(cac_leg)]
+
+    def test_dung_hai_leg_mang_hop_dong(self, cac_leg):
+        """Bất biến 1: đúng HAI leg mang hợp đồng — không một, không ba.
+
+        Ca này cũng là thứ DUY NHẤT chặn `legs4` rỗng cho bốn ca cuối lớp.
+        """
+        legs = self._legs4(cac_leg)
+        assert len(legs) == 2, (
+            "phải có ĐÚNG HAI leg mang `partition_contract: %s`, thấy %d — gỡ "
+            "khỏi một lát, hoặc gắn cho lát thứ ba, đều làm hợp đồng phân hoạch "
+            "mất nghĩa." % (HOP_DONG_PHAN_VUNG_TIER4, len(legs)))
+
+    def test_partition_part_dung_a_va_b(self, cac_leg):
+        """Bất biến 2: nhãn phân vùng là đúng DANH SÁCH ['a', 'b'].
+
+        So DANH SÁCH đã sắp xếp, **không** so TẬP. Ba leg nhãn `a`/`a`/`b` cho
+        tập `{'a','b'}` ⇒ so tập là **XANH GIẢ** trong khi phân hoạch đã hỏng:
+        một lát bị nhân đôi (chạy hai lần) và một lát biến mất khỏi cổng.
+        """
+        phan = sorted(str(l.get("partition_part", "")) for l in self._legs4(cac_leg))
+        assert phan == PHAN_VUNG_CAN_TIER4, (
+            "`partition_part` phải là đúng danh sách %r, thấy %r"
+            % (PHAN_VUNG_CAN_TIER4, phan))
+
+    def test_moi_phan_khong_rong(self, cac_leg):
+        """Bất biến 3: không lát nào rỗng.
+
+        ⚠️ Bản đầu của docstring này ghi "pytest không có đối số ⇒ chạy 0 ca,
+        exit 0". SAI, và sai theo hướng làm người đọc yên tâm nhầm. `pytest.ini`
+        khai ``testpaths = tests``, nên một lát rỗng khiến lệnh shard tụt thành
+        ``python -m pytest -q --tb=short --timeout=60`` và pytest tự KHÁM PHÁ
+        TOÀN BỘ cây test. Đo thật trên chính cây này (18-09-2026):
+
+            python -m pytest -q -q --collect-only   ⇒   10060 tests collected
+
+        Tức lát rỗng không "xanh rỗng" mà chạy **10.060 ca** — gấp 8 lần cả
+        Tier 4 cũ (1.247). Ba hậu quả, không cái nào là "vô hại":
+
+        * vỡ cô lập — shard ấy nuốt luôn phần việc của mọi tier khác, nên
+          "Tier 4a xanh" không còn nói lên điều gì về 19 tệp nó phải gác;
+        * gần như chắc chắn vượt trần ``timeout-minutes: 75`` rồi bị huỷ, và
+          một job bị huỷ KHÔNG cho biết thời lượng thật (xem chú thích của
+          ``SHA_HOP_SELECTOR_TIER4`` về mốc 75m17);
+        * hai lát cùng rỗng thì cùng chạy toàn cây trên hai Postgres riêng —
+          các tệp này ``DROP/CREATE`` schema nên đó là hai lượt đua nhau.
+
+        Guard vẫn đúng chỗ và vẫn cần; chỉ LÝ DO trước đây là bịa.
+        """
+        for nhan, sel in self._theo_phan(cac_leg):
+            assert sel, (
+                "lát Tier 4%s RỖNG. Lệnh shard sẽ không còn selector nào, và vì "
+                "`pytest.ini` khai `testpaths = tests`, pytest KHÔNG chạy 0 ca — "
+                "nó khám phá toàn bộ cây test (đo 18-09-2026: 10.060 ca). Hậu "
+                "quả là vỡ cô lập shard và gần như chắc chắn vượt trần 75 phút, "
+                "chứ không phải một lượt xanh rỗng." % nhan)
+
+    def test_cac_phan_giao_rong(self, cac_leg):
+        """Bất biến 4: hai lát KHÔNG giao nhau.
+
+        Giao khác rỗng nghĩa là một tệp chạy hai lần — tốn gấp đôi mà không
+        thêm phủ, và làm digest của HỢP che mất việc tệp khác đã biến mất.
+        """
+        cap = self._theo_phan(cac_leg)
+        thay = {}
+        for nhan, sel in cap:
+            for s in sel:
+                if s in thay:
+                    assert False, (
+                        "selector %s xuất hiện ở CẢ lát %s lẫn lát %s — hai lát "
+                        "phải rời nhau" % (s, thay[s], nhan))
+                thay[s] = nhan
+
+    def test_hop_cac_phan_dung_digest(self, cac_leg):
+        """Bất biến 5: HỢP các lát khớp digest đã ghim.
+
+        Băm trên HỢP ⇒ chuyển selector 4a↔4b không đổi digest (cân tải là việc
+        thường); bỏ/thêm/thay một selector thì đổi.
+        """
+        hop = sorted({s for _, sel in self._theo_phan(cac_leg) for s in sel})
+        assert hop, "hợp các lát Tier 4 RỖNG — mọi phép băm sau đây sẽ vô nghĩa"
+        bam = _digest_hop(hop)
+        assert bam == SHA_HOP_SELECTOR_TIER4, (
+            "tập selector Tier 4 đã đổi: digest %s, cần %s (%d selector). "
+            "Bỏ/thêm/thay một selector là đổi; chuyển giữa 4a và 4b thì KHÔNG. "
+            "Sinh lại hằng số KHÔNG phải cách hợp lệ để gỡ một tệp khỏi cổng."
+            % (bam, SHA_HOP_SELECTOR_TIER4, len(hop)))
+
+    def test_moi_selector_la_whole_file(self, cac_leg):
+        """Bất biến 6: mọi selector là WHOLE-FILE, không `::node`.
+
+        Chọn theo node là cách một ca mới thêm vào lớp/tệp sẽ im lặng không
+        được chạy mà required check vẫn xanh.
+        """
+        theo_node = sorted(s for _, sel in self._theo_phan(cac_leg)
+                           for s in sel if "::" in s)
+        assert not theo_node, (
+            "lát Tier 4 phải ghim whole-file; thấy selector theo node: %s"
+            % theo_node)
+
+    def test_moi_selector_tro_toi_tep_co_that(self, cac_leg):
+        """Bất biến 7: mọi selector trỏ tới tệp CÓ THẬT trên đĩa.
+
+        Selector trỏ tệp đã đổi tên / đã xoá làm pytest thoát 4 (usage error)
+        — nhưng chỉ khi leg ấy thật sự chạy. Bắt ở đây thì thấy ngay tên nào.
+        Cắt ở `::` TRƯỚC khi `is_file()` để ca này không đỏ lây khi ai đó thêm
+        selector theo node — bất biến ấy đã có ca riêng ở trên.
+        """
+        thieu = sorted(s for _, sel in self._theo_phan(cac_leg) for s in sel
+                       if not (GOC_BE / s.split("::", 1)[0]).is_file())
+        assert not thieu, (
+            "selector Tier 4 trỏ tới tệp không tồn tại dưới %s: %s"
+            % (GOC_BE, thieu))
+
+
+class TestHopDongDurationsTier4:
+    """`--durations=25` phải ở ĐÚNG hai lát Tier 4, và bước chạy phải dùng nó.
+
+    Cờ này là **thiết bị đo**, không phải phép kiểm: nó chỉ thêm 25 dòng vào
+    log. Gỡ nó ra thì 1.247 ca vẫn chạy, mọi shard vẫn xanh, required check
+    vẫn xanh — không gì trong kho này đỏ. Nghĩa là nếu không có lớp guard ở
+    đây thì nó sẽ biến mất trong một lần dọn dẹp vô danh nào đó, và lần sau
+    cần cân lại tải thì lại phải dựng chi phí từ dấu thời gian log.
+
+    Bốn bất biến, MỖI CÁI MỘT CA (gộp lại thì lúc đỏ không biết đỏ vì gì):
+
+    ====================================  ================================
+    ca                                     bất biến
+    ====================================  ================================
+    test_dung_hai_leg_khai_durations       đúng HAI leg khai khoá
+    test_hai_leg_khai_dung_la_tier4        và đó đúng là hai lát Tier 4
+    test_gia_tri_durations_dung            giá trị đúng `--durations=25`
+    test_buoc_chay_dung_tham_chieu_mot_lan bước pytest tham chiếu ĐÚNG 1 lần
+    ====================================  ================================
+
+    Ca 1 và ca 2 tách nhau có chủ ý: "có đúng hai leg khai" và "hai leg ấy
+    chính là Tier 4a/4b" là hai mệnh đề khác nhau. Chuyển cờ từ Tier 4a sang
+    Tier 1 giữ nguyên số đếm là 2 — chỉ ca 2 thấy.
+    """
+
+    @staticmethod
+    def _leg_co_khoa(cac_leg):
+        return [l for l in cac_leg if KHOA_DURATIONS_TIER4 in l]
+
+    def test_dung_hai_leg_khai_durations(self, cac_leg):
+        co = self._leg_co_khoa(cac_leg)
+        assert len(co) == 2, (
+            "phải có ĐÚNG HAI leg khai `%s`, thấy %d: %s. Thiếu một leg ⇒ lần "
+            "đo sau chỉ thấy nửa bức tranh và việc cân lại tải sẽ lệch; thừa "
+            "một leg ⇒ cờ đã rò sang tier khác."
+            % (KHOA_DURATIONS_TIER4, len(co),
+               [str(l.get("tier", "")) for l in co]))
+
+    def test_hai_leg_khai_dung_la_tier4(self, cac_leg):
+        """Đếm đúng 2 KHÔNG đủ — phải đúng HAI LÁT NÀO.
+
+        Gỡ cờ khỏi Tier 4a rồi gắn vào Tier 1 vẫn cho tổng 2. Ca này là ca
+        duy nhất phân biệt được.
+        """
+        sai = sorted(str(l.get("tier", "")) for l in self._leg_co_khoa(cac_leg)
+                     if l.get("partition_contract") != HOP_DONG_PHAN_VUNG_TIER4)
+        assert not sai, (
+            "leg KHÔNG thuộc hợp đồng %r mà vẫn khai `%s`: %s — cờ đã rò sang "
+            "tier khác, đúng thứ 'không vô tình áp sai sang lát khác' cấm."
+            % (HOP_DONG_PHAN_VUNG_TIER4, KHOA_DURATIONS_TIER4, sai))
+
+    def test_gia_tri_durations_dung(self, cac_leg):
+        lech = sorted(
+            (str(l.get("tier", "")), str(l.get(KHOA_DURATIONS_TIER4)))
+            for l in self._leg_co_khoa(cac_leg)
+            if str(l.get(KHOA_DURATIONS_TIER4)) != GIA_TRI_DURATIONS_TIER4)
+        assert not lech, (
+            "`%s` phải đúng %r, thấy %s. Một giá trị khác (ví dụ `--durations=0`, "
+            "in MỌI thời lượng) vẫn 'có cờ' nên phép đếm ở ca trên vẫn xanh."
+            % (KHOA_DURATIONS_TIER4, GIA_TRI_DURATIONS_TIER4, lech))
+
+    def test_buoc_chay_dung_tham_chieu_mot_lan(self, wf):
+        """Cờ khai ở matrix mà bước chạy không đọc thì nó là trang trí.
+
+        Đọc CẤU TRÚC `steps[].run`, không đọc toàn tệp: một comment còn giữ
+        chuỗi `${{ matrix.pytest_extra }}` ở đâu đó sẽ làm phép tìm trên toàn
+        tệp xanh giả — cùng bài học đã ghi ở `test_job_goi_dung_tep_test_classifier`.
+        """
+        chay = [str(s.get("run", "")) for s in wf["jobs"]["pytest-shard"]["steps"]
+                if "matrix.tests" in str(s.get("run", ""))]
+        assert len(chay) == 1, (
+            "phải có ĐÚNG MỘT bước chạy pytest theo `matrix.tests`, thấy %d"
+            % len(chay))
+        dem = chay[0].count(THAM_CHIEU_DURATIONS_TIER4)
+        assert dem == 1, (
+            "bước chạy pytest phải tham chiếu %r ĐÚNG MỘT lần, thấy %d. Bằng 0 "
+            "⇒ khoá matrix chỉ là trang trí, hai lát khai cờ mà log vẫn không "
+            "có bảng durations, và KHÔNG ca nào khác trong kho đỏ vì việc đó. "
+            "Lớn hơn 1 ⇒ cờ bị nhân đôi trên dòng lệnh."
+            % (THAM_CHIEU_DURATIONS_TIER4, dem))
 
 
 class TestNeoCheoDeployClassifier:
