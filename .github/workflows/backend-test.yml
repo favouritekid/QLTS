@@ -95,8 +95,18 @@ name: Backend Test (PR Gate)
 #           own leg so a global-state mutation cannot leak.
 #   Tier 3: Notification reliability (parity + dispatcher + bundle +
 #           outbox + event coverage)
-#   Tier 4: Admission + lead workflow contract (state machine, milestone
-#           events, lead assignment lifecycle)
+#   Tier 4a: Lead + assignment + collaborator workflow contract (vòng đời
+#           gán lead, CTV/hoa hồng, hợp đồng trạng thái khởi tạo)
+#   Tier 4b: Admission contract + consultation + pipeline (state machine,
+#           milestone events, tư vấn, cấu hình pipeline)
+#           SPLIT 2026-09-18 — partition contract tier4-admission-lead-v1:
+#           chẻ Tier 4 cũ (57 tệp) làm hai lát cân bằng theo CHI PHÍ ĐO
+#           ĐƯỢC, không theo chủ đề. Số ca KHÔNG dự đoán được chi phí:
+#           middleware/test_admission_freeze.py 144 ca mà 1,1s, còn
+#           api/test_tuition_prepay_flow.py 15 ca mà 219s — chênh 200 lần
+#           mỗi ca. Chia theo chủ đề (24/33) lệch 1,721×; chia theo chi phí
+#           (19/38) lệch 1,073×. Hợp hai lát bị khoá bằng digest trong
+#           tests/unit/test_ci_test_visibility.py.
 #   Tier 5: Phase 2 engine prereqs (3-tier resolution, quota chain,
 #           snapshot, UNIQUE constraints)
 #
@@ -193,6 +203,17 @@ jobs:
   #   Tier 2  1731s (28m51)     script     2s
   #   Tier 2b   40s             Tier 4   807s (13m27)
   #                             Tier 5   163s (2m43)
+  # ⚠️ HAI SỐ "Tier 4" trong khối này (807s ở trên và 13m14 ở dưới) là SỐ
+  # CŨ ĐÃ CHẾT — giữ lại vì chúng là số liệu LỊCH SỬ của run PR #533 và
+  # của lượt song song 04-08, không phải mô tả hiện trạng. Đo lại 16/17-09
+  # (trung bình 2 lượt HOÀN THÀNH, tổng 3090s): Tier 4 mất 58m58 và 46m44,
+  # tức GẤP ~4 lần con số 13 phút ở đây. Đừng dùng hai số này để ước lượng.
+  # ⚠️ Lượt 18-09 dừng ở 75m17 là lượt BỊ HUỶ vì chạm `timeout-minutes: 75`,
+  # KHÔNG phải một thời lượng hoàn thành: nó chỉ chứng minh thời gian thật
+  # ≥ 75m17 (ngoại suy từ 46/57 tệp đã xong: ~89,5 phút). Đừng gộp nó vào
+  # cùng một "khoảng 46m44 – 75m17" với các lượt hoàn thành.
+  # Sau SPLIT 18-09: Tier 4a ≈ 1599,6s (26,7 phút) · Tier 4b ≈ 1490,2s
+  # (24,8 phút) theo mô hình chi phí đo từ chính hai lượt CI đó.
   # Chúng độc lập nhau (không lát nào đọc kết quả của lát khác), nên nối
   # đuôi chỉ là quán tính. Tách ra matrix thì wall-clock rút về lát dài
   # nhất — Tier 2.
@@ -761,8 +782,33 @@ jobs:
               tests/test_router_fixes_e2e.py
 
           # ---------------------------------------------------------------
-          # Tier 4: Admission + lead workflow contract
+          # Tier 4a + Tier 4b: Admission + lead workflow contract
+          # partition_contract: tier4-admission-lead-v1
           # ---------------------------------------------------------------
+          # SPLIT 18-09-2026. Leg `Tier 4` cũ gom 57 tệp. Các lượt HOÀN THÀNH
+          # gần nhất: 15-09 51m42 · 16-09 58m58 · 17-09 46m44. Lượt 18-09 thì
+          # KHÔNG hoàn thành — nó bị HUỶ ở 75m17 vì chạm `timeout-minutes: 75`,
+          # nên 75m17 là mốc CẮT chứ không phải thời lượng; thời gian thật của
+          # lượt ấy ≥ 75m17 (ngoại suy từ 46/57 tệp đã xong: ~89,5 phút).
+          # Tức MỘT lượt runner chậm là cả lát chết vì timeout. Chẻ làm hai
+          # lát rời `a`/`b`.
+          #
+          # Chẻ theo CHI PHÍ ĐO ĐƯỢC, KHÔNG theo chủ đề. Mô hình chi phí lấy
+          # trung bình 2 lượt CI hoàn thành (16-09 và 17-09, tổng 3090s). Số
+          # ca KHÔNG dự đoán được chi phí: `middleware/test_admission_freeze.py`
+          # có 144 ca mà tốn 1,1s, còn `api/test_tuition_prepay_flow.py` có 15
+          # ca mà tốn 219s — chênh 200 lần mỗi ca. Chấm điểm hai phương án
+          # bằng chính mô hình đó:
+          #   - theo CHỦ ĐỀ  (24/33): 1135,7s vs 1954,1s ⇒ lệch 1,721×
+          #   - theo CHI PHÍ (19/38): 1599,6s vs 1490,2s ⇒ lệch 1,073×
+          # Nên danh sách dưới đây trông "lộn xộn" theo chủ đề là CỐ Ý.
+          #
+          # HỢP của hai lát bị khoá bằng digest sha256 trong
+          # `Backend_FastAPI/tests/unit/test_ci_test_visibility.py`
+          # (`SHA_HOP_SELECTOR_TIER4`). Gỡ một tệp khỏi một lát mà không thêm
+          # vào lát kia ⇒ digest đổi ⇒ ĐỎ. Sinh lại hằng số KHÔNG phải cách
+          # hợp lệ để gỡ một tệp khỏi cổng PR.
+          #
           # `test_distribution.py` vào lát này vì nó canh đường lead được gán về
           # đơn vị nào — cùng hợp đồng workflow mà Tier 4 đã gác. Tệp đã tồn tại
           # từ lâu nhưng CHƯA TỪNG chạy được (thiếu fixture `async_session`), nên
@@ -786,27 +832,24 @@ jobs:
           # duong CRUD stage/status ma test_pipeline_api.py o tren chi doc. Ba tep
           # cung mot mat hop dong nen de chung lat, khoi phai suy xem tep nao gac
           # gi. Ca hai xanh tron truoc khi ghi: 19/19 va 30/30.
-          - tier: Tier 4 — Admission + lead workflow contract
+          # Lát `a` ≈ 1599,6s (26,7 phút) theo mô hình chi phí nêu trên.
+          - tier: Tier 4a — Lead + assignment + collaborator workflow contract
+            partition_contract: tier4-admission-lead-v1
+            partition_part: a
+            # `--durations=25` CHỈ gắn cho hai lát Tier 4, qua khoá matrix riêng.
+            # Nó in thẳng 25 test chậm nhất vào log, nên lần cân lại tải sau KHÔNG
+            # phải dựng lại chi phí từ dấu thời gian log (lượt 18-09 mất cả buổi
+            # cho việc đó, và phép đo suýt sai vì khối `warnings summary` lọt neo).
+            # Leg nào không khai khoá này thì `${{ matrix.pytest_extra }}` nở thành
+            # chuỗi RỖNG ⇒ lệnh của chúng không đổi một ký tự.
+            pytest_extra: --durations=25
             tests: >-
-              tests/unit/test_admission_path_activation.py
-              tests/integration/test_admission_document_staging.py
-              tests/integration/test_admission_path_unique_criteria.py
-              tests/integration/test_bidirectional_sync.py
-              tests/unit/test_phase_e4_pr4_compliance.py
-              tests/unit/test_admission_path_action_flags.py
-              tests/unit/test_admission_path_admin_only_lifecycle.py
-              tests/unit/test_admission_path_schema_bonus_rule_override.py
               tests/services/test_distribution.py
               tests/unit/test_lead_finance_projection_contract.py
-              tests/middleware/test_admission_freeze.py
-              tests/api/test_admission_workflow_api.py
-              tests/services/test_admission_calculation.py
-              tests/api/test_tuition_prepay_flow.py
               tests/api/test_lead_assignment_api.py
               tests/services/test_assignment.py
               tests/unit/test_lead_action_permissions.py
               tests/integration/test_reassign_terminal_guard.py
-              tests/integration/test_delete_consultation_revert.py
               tests/services/test_initial_status_contract.py
               tests/services/test_initial_status_caller_contract.py
               tests/api/test_leads_crud.py
@@ -817,6 +860,34 @@ jobs:
               tests/services/test_collaborator_claim.py
               tests/services/test_create_lead_referral.py
               tests/services/test_lead_offering_keep_officer.py
+              tests/services/test_assignment_self_sourced.py
+              tests/integration/test_lead_unassigned_watchdog.py
+              tests/services/test_public_lead_intake.py
+
+          # Lát `b` ≈ 1490,2s (24,8 phút) theo mô hình chi phí nêu trên.
+          # `middleware/test_admission_freeze.py` (144 ca) và
+          # `api/test_tuition_prepay_flow.py` (15 ca) cùng ở đây — xem chú
+          # thích ở đầu khối về việc số ca không dự đoán được chi phí.
+          - tier: Tier 4b — Admission contract + consultation + pipeline
+            partition_contract: tier4-admission-lead-v1
+            partition_part: b
+            # Xem chú thích ở lát `a`. Hai lát PHẢI cùng có khoá này — nếu chỉ một
+            # lát có, lần đo sau chỉ thấy nửa bức tranh và việc cân lại sẽ lệch.
+            pytest_extra: --durations=25
+            tests: >-
+              tests/unit/test_admission_path_activation.py
+              tests/integration/test_admission_document_staging.py
+              tests/integration/test_admission_path_unique_criteria.py
+              tests/integration/test_bidirectional_sync.py
+              tests/unit/test_phase_e4_pr4_compliance.py
+              tests/unit/test_admission_path_action_flags.py
+              tests/unit/test_admission_path_admin_only_lifecycle.py
+              tests/unit/test_admission_path_schema_bonus_rule_override.py
+              tests/middleware/test_admission_freeze.py
+              tests/api/test_admission_workflow_api.py
+              tests/services/test_admission_calculation.py
+              tests/api/test_tuition_prepay_flow.py
+              tests/integration/test_delete_consultation_revert.py
               tests/api/test_fee_calculate_thieu_gia_hoc_ky_hk1.py
               tests/integration/test_restore_consultation_revert.py
               tests/integration/test_add_restore_consultation_latest.py
@@ -825,7 +896,6 @@ jobs:
               tests/repositories/test_consultation_system_excluded_nhom3.py
               tests/unit/test_consultation_action_permissions.py
               tests/integration/test_lead_timeline_permissions.py
-              tests/services/test_assignment_self_sourced.py
               tests/unit/test_admission_state_machine.py
               tests/unit/test_b2_1_admission_milestone_events.py
               tests/integration/test_delete_profile_revert.py
@@ -833,7 +903,6 @@ jobs:
               tests/unit/test_admission_report_helpers.py
               tests/repositories/test_admission_report_integration.py
               tests/api/test_admission_report_api.py
-              tests/integration/test_lead_unassigned_watchdog.py
               tests/integration/test_sts20_consult_giveup.py
               tests/api/test_pipeline_api.py
               tests/api/test_bugfix_contract.py
@@ -844,7 +913,6 @@ jobs:
               tests/integration/test_admission_idor.py
               tests/api/test_admission_action_routes_casbin_first.py
               tests/api/test_admission_assign_officer_permission.py
-              tests/services/test_public_lead_intake.py
 
           # ---------------------------------------------------------------
           # Tier 5: Phase 2 engine prereqs
@@ -1038,7 +1106,7 @@ jobs:
 
       - name: pytest — ${{ matrix.tier }}
         working-directory: Backend_FastAPI
-        run: python -m pytest ${{ matrix.tests }} -q --tb=short --timeout=60
+        run: python -m pytest ${{ matrix.tests }} -q --tb=short --timeout=60 ${{ matrix.pytest_extra }}
 
       - name: Notification event coverage script
         if: matrix.coverage_script
