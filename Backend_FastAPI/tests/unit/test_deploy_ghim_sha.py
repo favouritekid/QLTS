@@ -669,6 +669,26 @@ _tat_ca="$*"
 echo "docker $_tat_ca" >> "$QLTS_STUB_LOG"
 
 case "$_tat_ca" in
+    *" ps -q "*)
+        # Step 3b/8c hỏi ID container theo TỪNG service. Khác hẳn `ps -aq` của
+        # vòng chờ health bên dưới, và KHÔNG chịu ảnh hưởng `STUB_PSQ_*` —
+        # những biến ấy dựng ca cho cổng health, không phải cho tài sản rollback.
+        for _sv in backend celery-worker celery-beat frontend; do
+            case "$_tat_ca" in
+                *" $_sv"*) echo "cid-$_sv"; exit 0 ;;
+            esac
+        done
+        echo "STUB: 'ps -q' service lạ: $_tat_ca" >&2
+        exit 92
+        ;;
+    "tag "*)
+        exit 0
+        ;;
+    "image inspect"*)
+        # Cổng chống va chạm tag của Step 3b hỏi "tag này CÓ chưa?".
+        # Mặc định CHƯA (exit 1) ⇒ deploy được phép tạo tag mới.
+        exit 1
+        ;;
     *" ps -aq "*)
         [ "${STUB_PSQ_RC:-0}" != "0" ] && exit "${STUB_PSQ_RC}"
         [ "${STUB_PSQ_EMPTY:-0}" = "1" ] && exit 0
@@ -680,6 +700,30 @@ case "$_tat_ca" in
         exit 0
         ;;
     inspect*)
+        # `{{.Image}}` phục vụ Step 3b/8c (tài sản rollback), KHÔNG phải cổng
+        # health. Nó phải trả lời TRƯỚC `STUB_INSPECT_RC` — biến ấy được viết ra
+        # để dựng ca "inspect hỏng" cho vòng chờ healthy; nếu nó cũng làm hỏng
+        # `.Image` thì deploy dừng ở Step 3b và ca kia xanh vì lý do sai.
+        case "$_tat_ca" in
+            *".Image"*)
+                for _sv in backend celery-worker celery-beat frontend; do
+                    case "$_tat_ca" in
+                        *"cid-$_sv"*)
+                            case "$_sv" in
+                                backend)       _k=b ;;
+                                celery-worker) _k=c ;;
+                                celery-beat)   _k=d ;;
+                                frontend)      _k=f ;;
+                            esac
+                            _r=$_k$_k$_k$_k$_k$_k$_k$_k
+                            echo "sha256:$_r$_r$_r$_r$_r$_r$_r$_r"
+                            exit 0 ;;
+                    esac
+                done
+                echo "STUB: '{{.Image}}' container lạ: $_tat_ca" >&2
+                exit 93
+                ;;
+        esac
         [ "${STUB_INSPECT_RC:-0}" != "0" ] && exit "${STUB_INSPECT_RC}"
         case "$_tat_ca" in
             *State.Status*)
@@ -725,6 +769,38 @@ echo "nginx-apply $*" >> "$QLTS_STUB_LOG"
 exit 0
 """
 
+_STUB_ROLLBACK_PREFLIGHT_DH = r"""#!/usr/bin/env bash
+# Ghi lại HỢP ĐỒNG, không chỉ "đã được gọi": thiếu `LOCAL_ONLY=1` là preflight
+# đi nhánh GHCR và dừng ở cổng đăng nhập — ca nào cần thấy điều đó phải thấy.
+_L="$QLTS_STUB_LOG"
+echo "rollback-preflight tag=${QLTS_ROLLBACK_TAG:-KHONG_DAT}" >> "$_L"
+echo "rollback-preflight local_only=${QLTS_ROLLBACK_LOCAL_ONLY:-KHONG_DAT}" >> "$_L"
+exit "${STUB_ROLLBACK_PREFLIGHT_RC:-0}"
+"""
+
+# Bản đồ image ID phải TRÙNG KHÍT `docker` giả ở trên. Lệch một ký tự là mọi ca
+# marker-khớp biến thành ca marker-lệch mà không ai nhận ra.
+_ANH_DH = {
+    "backend": "sha256:" + "b" * 64,
+    "celery-worker": "sha256:" + "c" * 64,
+    "celery-beat": "sha256:" + "d" * 64,
+    "frontend": "sha256:" + "f" * 64,
+}
+_DICH_VU_DH = ("backend", "celery-worker", "celery-beat", "frontend")
+_SHA_MARKER_DH = "a" * 40  # SHA của lượt deploy TRƯỚC — khác `_SHA_HEAD`
+
+
+def _marker_dh(sha: str = _SHA_MARKER_DH) -> str:
+    """Marker hợp lệ: SHA đã deploy + image ID của bốn container đang chạy."""
+    dong = [
+        "# marker-version\t1",
+        f"# deployed-sha\t{sha}",
+        "# deployed-at\t2026-09-18T00:00:00Z",
+    ]
+    dong += [f"{s}\t{_ANH_DH[s]}\tcid-{s}" for s in _DICH_VU_DH]
+    return "\n".join(dong) + "\n"
+
+
 _ENV_PROD_DH = (
     "DOMAIN=vidu.test\n"
     "POSTGRES_USER=qlts\n"
@@ -738,16 +814,28 @@ _bo_qua_neu_khong_posix_dh = pytest.mark.skipif(
 )
 
 
-def _san_khau_dh(tmp_path: Path, deploy_sh: str | None = None) -> Path:
+def _san_khau_dh(
+    tmp_path: Path, deploy_sh: str | None = None, marker: str | None = "MAC_DINH"
+) -> Path:
+    """``marker``: ``"MAC_DINH"`` ⇒ marker hợp lệ khớp 4/4 image ID giả lập;
+    ``None`` ⇒ KHÔNG tạo marker; chuỗi khác ⇒ ghi nguyên văn chuỗi đó."""
     goc = tmp_path / "qlts"
     (goc / "scripts").mkdir(parents=True)
     (goc / "nginx" / "templates").mkdir(parents=True)
     (goc / "bin").mkdir()
 
+    (goc / "ops").mkdir()
+    if marker is not None:
+        (goc / "ops" / "last-deploy.marker").write_text(
+            _marker_dh() if marker == "MAC_DINH" else marker,
+            encoding="utf-8", newline="\n",
+        )
+
     than = deploy_sh if deploy_sh is not None else _DEPLOY_SH.read_text(encoding="utf-8")
     (goc / "scripts" / "deploy.sh").write_text(than, encoding="utf-8", newline="\n")
     for ten, noi_dung in (
         ("scripts/nginx-apply.sh", _STUB_NGINX_APPLY_DH),
+        ("scripts/rollback-preflight.sh", _STUB_ROLLBACK_PREFLIGHT_DH),
         ("bin/docker", _STUB_DOCKER_DH),
         ("bin/git", _STUB_GIT_DH),
     ):
@@ -770,10 +858,17 @@ def _chay_dh(goc: Path, **kich_ban: str):
         **os.environ,
         "PATH": f"{goc / 'bin'}:{os.environ.get('PATH', '')}",
         "QLTS_STUB_LOG": str(nhat_ky),
+        # Mặc định của deploy.sh là /opt/qlts-ops/rollback — tuyệt đối không để
+        # test ghi ra đó. Mỗi ca có thư mục ops riêng trong tmp_path.
+        "QLTS_ROLLBACK_OPS_DIR": str(goc / "ops"),
     }
     # Các biến điều khiển PHẢI đến từ kịch bản của ca, không từ môi trường
     # người chạy — nếu không, một ca có thể xanh mà chẳng chứng minh gì.
     for bien in (
+        # Hai cổng thoát hiểm của Step 3b: nếu môi trường người chạy đang đặt
+        # chúng thì MỌI ca dưới đây bỏ qua khối tài sản và xanh giả.
+        "QLTS_SKIP_ROLLBACK_ASSET", "QLTS_SKIP_ROLLBACK_ASSET_REASON",
+        "STUB_ROLLBACK_PREFLIGHT_RC",
         "SHA_MONG_DOI", "QLTS_HEALTH_TIMEOUT", "STUB_GIT_HEAD", "STUB_GIT_REVPARSE_RC",
         "STUB_HEALTH_BACKEND", "STUB_HEALTH_FRONTEND", "STUB_STATUS_BACKEND",
         "STUB_STATUS_FRONTEND", "STUB_INSPECT_RC", "STUB_PSQ_RC", "STUB_PSQ_EMPTY",
@@ -943,3 +1038,84 @@ def test_dh_moi_trang_thai_khong_healthy_deu_chan(
     assert manh_mong_doi in ra, f"{ten_ca}: thiếu thông điệp {manh_mong_doi!r}:\n{ra[-1500:]}"
     assert _MOC_NGINX not in nhat_ky, f"{ten_ca}: đã tới nginx-apply dù cổng health đỏ"
     assert _MOC_THANH_CONG not in ra, f"{ten_ca}: đã in dòng hoàn tất dù cổng health đỏ"
+
+
+# =============================================================================
+# Step 3b không được nuốt các cổng ĐỨNG TRƯỚC nó
+# =============================================================================
+# Khối tài sản rollback nằm sau Step 3. Thứ tự ấy PHẢI giữ: một cấu hình hỏng
+# ở Step 1 hay một cây lệch SHA ở Step 2 phải dừng deploy với ĐÚNG lý do của
+# nó, chứ không phải với "THIẾU marker". Nếu Step 3b bị kéo lên trước, mọi ca
+# dưới đây vẫn "đỏ" — nhưng đỏ vì lý do sai, và cổng SHA coi như mất phép kiểm.
+#
+# Cả ba ca chạy với `marker=None` (KHÔNG có marker) để phép kiểm có nghĩa:
+# nếu deploy chạm tới Step 3b thì nó chắc chắn báo thiếu marker.
+
+
+@_bo_qua_neu_khong_posix_dh
+def test_dh_cong_sha_do_thi_dung_TRUOC_khi_can_marker(tmp_path: Path) -> None:
+    goc = _san_khau_dh(tmp_path, marker=None)
+    ket, nhat_ky, ra = _chay_dh(
+        goc, SHA_MONG_DOI=_SHA_HEAD, STUB_GIT_HEAD="d" * 40
+    )
+
+    assert ket.returncode != 0, "cây lệch SHA mà deploy vẫn thoát 0"
+    assert "SHA_MONG_DOI" in ra or "được sinh cho" in ra, (
+        f"phải dừng vì cổng SHA:\n{ra[-1500:]}"
+    )
+    assert "marker" not in ra.lower(), (
+        "dừng vì THIẾU MARKER thay vì vì cổng SHA — Step 3b đã bị kéo lên trước "
+        f"Step 2:\n{ra[-1500:]}"
+    )
+
+
+@_bo_qua_neu_khong_posix_dh
+def test_dh_sha_rong_thi_dung_TRUOC_khi_can_marker(tmp_path: Path) -> None:
+    """Biến CÓ MẶT nhưng RỖNG là ca riêng — không được rơi vào đường manual."""
+    goc = _san_khau_dh(tmp_path, marker=None)
+    ket, nhat_ky, ra = _chay_dh(goc, SHA_MONG_DOI="")
+
+    assert ket.returncode != 0
+    assert "RỖNG" in ra or "RONG" in ra, f"phải dừng vì SHA rỗng:\n{ra[-1500:]}"
+    assert "marker" not in ra.lower(), (
+        f"dừng vì thiếu marker thay vì vì SHA rỗng:\n{ra[-1500:]}"
+    )
+
+
+@_bo_qua_neu_khong_posix_dh
+def test_dh_thieu_env_production_thi_dung_TRUOC_khi_can_marker(tmp_path: Path) -> None:
+    """Step 1 (thiếu `.env.production`) phải chặn sớm hơn Step 3b."""
+    goc = _san_khau_dh(tmp_path, marker=None)
+    (goc / ".env.production").unlink()
+    ket, nhat_ky, ra = _chay_dh(goc, SHA_MONG_DOI=_SHA_HEAD, STUB_GIT_HEAD=_SHA_HEAD)
+
+    assert ket.returncode != 0
+    assert ".env.production" in ra, f"phải dừng vì thiếu .env.production:\n{ra[-1500:]}"
+    assert "marker" not in ra.lower(), (
+        f"dừng vì thiếu marker thay vì vì thiếu .env.production:\n{ra[-1500:]}"
+    )
+
+
+@_bo_qua_neu_khong_posix_dh
+def test_dh_duong_thuan_loi_DI_QUA_step_3b_va_tao_tai_san(tmp_path: Path) -> None:
+    """Đối chứng dương tính: đường thuận lợi phải THẬT SỰ đi qua Step 3b.
+
+    Không có ca này thì ba ca trên có thể xanh chỉ vì deploy chưa bao giờ chạm
+    tới khối tài sản — tức phép kiểm "không nhắc marker" trở nên vô nghĩa.
+    """
+    goc = _san_khau_dh(tmp_path)
+    ket, nhat_ky, ra = _chay_dh(goc, SHA_MONG_DOI=_SHA_HEAD, STUB_GIT_HEAD=_SHA_HEAD)
+
+    assert ket.returncode == 0, f"đường thuận lợi mà chặn:\n{ra[-2500:]}"
+    for dv in _DICH_VU_DH:
+        assert f"docker tag {_ANH_DH[dv]} qlts-{dv}:pre-" in nhat_ky, (
+            f"Step 3b không ghim ảnh của '{dv}':\n{nhat_ky}"
+        )
+    assert "rollback-preflight local_only=1" in nhat_ky, (
+        f"preflight phải chạy ở chế độ local-only:\n{nhat_ky}"
+    )
+    ban_ke = sorted((goc / "ops").glob("pre-*/rollback_manifest_*.txt"))
+    assert len(ban_ke) == 1, f"phải xuất bản đúng một bản kê, thấy {ban_ke}"
+    assert f"# git-rev\t{_SHA_MARKER_DH}" in ban_ke[0].read_text(encoding="utf-8"), (
+        "bản kê phải ghim SHA từ MARKER (phiên bản cũ), không phải HEAD hiện tại"
+    )
