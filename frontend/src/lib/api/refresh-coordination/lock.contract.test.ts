@@ -13,6 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import { acquireRefreshLock, LEASE_TTL_MS } from "./lock";
+import { FRESH_PROOF_WINDOW_MS } from "./proof";
 import { selectJournalStore } from "./storage";
 import { installFakeIdb, removeWebLocks, installWebLocks } from "./test-harness";
 
@@ -94,15 +95,49 @@ describe("contract 2 — hết hạn không giải phóng kết quả đã hoàn
     await acquired.handle.release();
   }
 
-  it("`success` đã hết hạn ⇒ follower KHÔNG được POST lại", async () => {
+  /**
+   * ⚠️ Ca này CỐ Ý là một CẶP, không phải một khẳng định.
+   *
+   * `success` không cùng loại với `terminal`/`ambiguous`/`nonterminal-stop`.
+   * Ba loại kia nói về TRẠNG THÁI PHIÊN và trạng thái ấy bền. `success` là
+   * một BẰNG CHỨNG có hạn dùng — "đã có token mới lúc bản ghi được viết" — và
+   * access token chỉ sống 15 phút. Chặn POST dựa vào một bằng chứng của chu kỳ
+   * trước chính là vòng lặp `/session-refresh` đo được trên production:
+   * bootstrap báo "xong" mà chưa chạm mạng, quay lại trang đích, token ở đó
+   * vẫn hết hạn, lại bị đẩy sang bootstrap.
+   *
+   * Viết thành cặp vì mỗi vế một mình đều nói dối: chỉ vế (a) thì gỡ hẳn cửa
+   * sổ tuổi vẫn xanh; chỉ vế (b) thì bỏ luôn việc chặn `success` cũng xanh, và
+   * nhiều tab sẽ cùng rotate.
+   */
+  it("`success` còn TƯƠI ⇒ chặn, dù lease đã hết hạn (vế a)", async () => {
     await finishWith("success");
 
-    const later = T0 + LEASE_TTL_MS * 3;
-    vi.setSystemTime(later);
-    const outcome = await acquireRefreshLock("gen-1", later);
+    // Khoảng giữa hai mốc: lease (20s) đã hết, cửa sổ bằng chứng (30s) thì
+    // chưa. Hai phép kiểm dưới đây để ca tự đỏ nếu ai đó chỉnh hằng tới mức
+    // khoảng này không còn tồn tại.
+    const trongCuaSo = T0 + LEASE_TTL_MS + 1_000;
+    expect(trongCuaSo - T0).toBeGreaterThan(LEASE_TTL_MS);
+    expect(trongCuaSo - T0).toBeLessThanOrEqual(FRESH_PROOF_WINDOW_MS);
 
-    // Token mới đã có rồi; POST nữa là trình lại token server vừa vô hiệu hoá.
+    vi.setSystemTime(trongCuaSo);
+    const outcome = await acquireRefreshLock("gen-1", trongCuaSo);
+
+    // Token mới vừa có thật; POST nữa là trình lại token server vừa vô hiệu hoá.
     expect(outcome.status).not.toBe("acquired");
+  });
+
+  it("`success` đã QUÁ TUỔI ⇒ được thử lại, không còn chặn (vế b)", async () => {
+    await finishWith("success");
+
+    const quaCuaSo = T0 + FRESH_PROOF_WINDOW_MS + 1;
+    vi.setSystemTime(quaCuaSo);
+    const outcome = await acquireRefreshLock("gen-1", quaCuaSo);
+
+    // Bản ghi mang `phase: "in-flight"` còn sót lại sau khi đã có kết quả, nên
+    // ca này cũng canh luôn việc nhánh `success` phải `return` tường minh thay
+    // vì rơi xuống nhánh `stale-in-flight`.
+    expect(outcome.status).toBe("acquired");
   });
 
   it("`terminal` đã hết hạn ⇒ KHÔNG được POST lại", async () => {
