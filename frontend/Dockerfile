@@ -39,7 +39,7 @@ FROM scratch AS manifest
 COPY --from=source /qlts-source-manifest.json /qlts-source-manifest.json
 
 # --- Stage 1: Dependencies ---
-FROM node:20-alpine AS deps
+FROM node:26-alpine AS deps
 
 WORKDIR /app
 
@@ -53,7 +53,7 @@ WORKDIR /app
 COPY . .
 
 # --- Stage 2: Builder ---
-FROM node:20-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /app
 
@@ -81,7 +81,7 @@ ENV BACKEND_INTERNAL_URL=http://backend:8000
 RUN npx next build --webpack
 
 # --- Stage 3: Runner ---
-FROM node:20-alpine AS runner
+FROM node:26-alpine AS runner
 
 WORKDIR /app
 
