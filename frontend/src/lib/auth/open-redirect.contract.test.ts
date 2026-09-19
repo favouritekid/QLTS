@@ -22,7 +22,7 @@
 import { describe, it, expect } from "vitest";
 
 import { isValidRedirect, stripRsc } from "./login-redirect";
-import { stripSr, withSr } from "./sr-marker";
+import { SR_MAX, parseSr, stripSr, withSr } from "./sr-marker";
 
 /** Origin của chính site — dùng để hỏi "chuỗi này có đưa ta đi đâu không". */
 const NHA = "https://qlts.example";
@@ -131,6 +131,56 @@ describe("bất biến: ba hàm chuẩn hoá không bao giờ trả chuỗi bắ
   it.each(MOI_DAU_VAO)("stripRsc(%j) không bắt đầu bằng `//`", (dauVao) => {
     expect(stripRsc(dauVao).startsWith("//")).toBe(false);
   });
+});
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Chặn cuối của `withSr` phải GIỮ `_sr` — nhóm bất biến ngay trên KHÔNG canh
+ * được chỗ này.
+ *
+ * `expect(withSr(x, 1).startsWith("//")).toBe(false)` chỉ hỏi đúng một câu:
+ * "có rời khỏi site không". Một đột biến đổi chặn cuối thành
+ * `return DUONG_AN_TOAN;` — trả trơ `/`, bỏ `?_sr=` — ĐI QUA trọn vẹn nhóm đó:
+ * `/` không bắt đầu bằng `//`, và `origindDich("/")` vẫn là nhà. Bộ ca cũ mù
+ * đúng chỗ này.
+ *
+ * Mà mất `_sr` là mất bộ đếm vòng: lượt sau `parseSr` đọc ra 0, nắp `SR_MAX`
+ * không bao giờ đóng, và ta đổi một lỗ hổng open-redirect lấy đúng cái vòng
+ * lặp `/session-refresh` đang phải chữa.
+ *
+ * Hai nhóm ca dưới đây tách đôi có chủ đích, mỗi ca vi phạm MỘT bất biến:
+ *
+ *   A. GIÁ TRỊ TRẢ VỀ chính xác — hợp đồng đầy đủ của chặn cuối, đọc bằng mắt;
+ *   B. BỘ ĐẾM SỐNG SÓT — đo qua `parseSr`, không so chuỗi. Ca B chỉ đỏ khi mất
+ *      `_sr`, và vẫn xanh nếu ai đó đổi CÁCH VIẾT của đường an toàn. Nên chỉ A
+ *      đỏ ⇒ đổi cách viết; A và B cùng đỏ ⇒ mất nắp.
+ */
+describe("chặn cuối `withSr`: rơi về đường an toàn nhưng GIỮ bộ đếm `_sr`", () => {
+  it.each(TAI_TRONG_THOAT_SITE)(
+    "A. withSr(%j, 1) trả ĐÚNG `/?_sr=1`",
+    (tai) => {
+      expect(withSr(tai, 1)).toBe("/?_sr=1");
+    },
+  );
+
+  it.each(TAI_TRONG_THOAT_SITE)(
+    "B. bộ đếm sống sót: parseSr(withSr(%j, 1)) là 1",
+    (tai) => {
+      // Đo bằng chính hàm ĐỌC mà nắp dựa vào, không bằng so chuỗi: nắp chỉ
+      // đóng được khi `parseSr` đọc lại được số vòng `withSr` vừa ghi.
+      expect(parseSr(withSr(tai, 1))).toBe(1);
+    },
+  );
+
+  it.each(TAI_TRONG_THOAT_SITE)(
+    "B'. ở NẮP: parseSr(withSr(%j, 5)) là SR_MAX",
+    (tai) => {
+      // `5` vượt nắp, nên câu hỏi ở đây là "có kẹp về nắp không" chứ không phải
+      // "nắp bằng mấy" — vì thế kỳ vọng viết bằng hằng `SR_MAX`, để ca này
+      // không đổi màu khi ai đó chỉnh nắp.
+      expect(parseSr(withSr(tai, 5))).toBe(SR_MAX);
+    },
+  );
 });
 
 describe("hợp đồng cũ không được vỡ vì bản vá này", () => {
