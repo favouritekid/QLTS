@@ -400,7 +400,19 @@ class TestProcessCallback:
         assert invoice.paid_amount == Decimal("0")
 
     async def test_process_callback_amount_mismatch(self, db, intent_fixtures, admin_user):
-        """Amount mismatch in callback marks intent as failed (C1)."""
+        """Amount mismatch in callback is REFUSED — và KHÔNG ghi gì (C1).
+
+        ⚠️ ĐỔI KỲ VỌNG CÓ CHỦ ĐÍCH. Bản trước khẳng định
+        ``intent.status == failed`` — tức nó KHOÁ ĐÚNG hành vi hoá ra là lỗ
+        hổng: nhánh lệch số tiền ghi bốn trường (gồm cả thân request thô) rồi
+        ``flush()`` rồi mới ``raise``; ``process_gateway_callback`` nuốt ngoại
+        lệ và router ``db.commit()`` vô điều kiện, nên phép ghi thành vĩnh
+        viễn. ``failed`` là trạng thái terminal ⇒ callback THẬT sau đó bị từ
+        chối.
+
+        Kỳ vọng mới: vẫn từ chối, nhưng intent ĐỨNG YÊN. Xem
+        ``TestCallbackFailClosed`` để có phép đo đi qua đúng chuỗi của router.
+        """
         service = PaymentIntentService(db)
         invoice = intent_fixtures["invoice"]
         method = intent_fixtures["online_method"]
@@ -429,9 +441,11 @@ class TestProcessCallback:
 
         assert "mismatch" in str(exc_info.value).lower()
 
-        # Intent should be marked failed
+        # Intent KHÔNG được đổi trạng thái: nhánh lỗi không ghi.
         await db.refresh(intent)
-        assert intent.status == PaymentIntentStatusEnum.failed.value
+        assert intent.status == PaymentIntentStatusEnum.created.value
+        assert intent.gateway_status is None
+        assert intent.callback_data is None
 
     async def test_process_callback_expired_intent(self, db, intent_fixtures, admin_user):
         """Cannot process callback for expired intent."""
@@ -883,3 +897,463 @@ async def test_callback_lap_lai_khong_nhan_ban_so(db, intent_fixtures, admin_use
     # Ca này là REPLAY TUẦN TỰ. Nó KHÔNG chứng minh gì về hai callback chạy
     # song song — khe đó cần hai giao dịch thật, và `uq_overpayment_payment` là
     # hàng rào cuối cho nó.
+
+
+# =============================================================================
+# CỔNG FAIL-CLOSED CHO CALLBACK — mỗi ca vi phạm ĐÚNG MỘT bất biến
+# =============================================================================
+#
+# `POST /api/payments/callback/{gateway_code}` là POST KHÔNG AUTH duy nhất của
+# router thanh toán. Đường mã fail-OPEN ở ba chỗ độc lập:
+#
+#   1. `_gateway_adapters` RỖNG ở mọi request (`register_default_gateways` có
+#      0 call-site sản xuất) ⇒ luôn rơi vào nhánh `else: # Mock parsing`, nơi
+#      `gateway_ref`/`status`/`amount` lấy THẲNG từ thân request.
+#   2. `if secret_key and not adapter.verify_signature(...)` — secret RỖNG thì
+#      phép kiểm chữ ký bị BỎ QUA, không phải bị từ chối.
+#   3. `gateway_code` của ROUTE không bao giờ được đối chiếu với phương thức
+#      của intent.
+#
+# ---------------------------------------------------------------------------
+# VÌ SAO GỌI QUA `process_gateway_callback` RỒI `commit`, CHỨ KHÔNG PHẢI
+# `pytest.raises(...)` RỒI `rollback`
+# ---------------------------------------------------------------------------
+# Một bản nháp của chính bộ ca này đã XANH GIẢ vì viết theo lối đó. Thiệt hại
+# thật KHÔNG nằm ở chỗ service ném ngoại lệ — nó nằm ở chỗ:
+#
+#     service gán + `flush()`  →  wrapper NUỐT ngoại lệ (không re-raise,
+#     không rollback)  →  router `await db.commit()` VÔ ĐIỀU KIỆN.
+#
+# `pytest.raises` + `rollback` vứt bỏ đúng phép ghi cần đo, nên ca nào cũng
+# xanh kể cả khi hàng `payment_intent` đã bị sửa. Vì thế bộ ca dưới đây dựng
+# lại ĐÚNG chuỗi của router: gọi wrapper, rồi `commit`, rồi đọc lại hàng.
+#
+# Hệ quả: bất biến ở đây là "KHÔNG GHI", không phải "có ném". Một bản vá chỉ
+# thêm `raise` mà vẫn gán trước khi ném sẽ VẪN ĐỎ — đúng như mong muốn.
+
+
+@pytest.fixture(autouse=True)
+def bat_mock_callback_cho_module(monkeypatch):
+    """Nhánh mock phải TẮT mặc định; module này bật TƯỜNG MINH để test nó.
+
+    Đặt thẳng trên object `settings` (không qua `os.environ`): `Settings` đã
+    dựng xong lúc import, nên sửa biến môi trường lúc này không ai đọc — cùng
+    lý do với `cho_phep_dong_ky`/`cho_phep_ap_phat` ở `tests/conftest.py`.
+    """
+    monkeypatch.setattr(settings, "PAYMENT_CALLBACK_MOCK_ENABLED", True)
+
+
+class _AdapterGia:
+    """Adapter tối thiểu — dựng ca "CÓ adapter nhưng chữ ký/secret hỏng".
+
+    Không kế thừa `BaseGatewayAdapter`: lớp đó là ABC với nhiều abstractmethod
+    không liên quan, mà `register_gateway` chỉ chú kiểu chứ không ép lúc chạy.
+    """
+
+    def __init__(self, *, gateway_ref: str, amount: Decimal, chu_ky_hop_le: bool):
+        self._gateway_ref = gateway_ref
+        self._amount = amount
+        self._chu_ky_hop_le = chu_ky_hop_le
+        self.so_lan_verify = 0
+
+    def verify_signature(self, callback_data, secret_key) -> bool:
+        self.so_lan_verify += 1
+        return self._chu_ky_hop_le
+
+    def parse_callback(self, callback_data):
+        from app.gateways.base import GatewayResponse
+        from app.gateways.base import GatewayStatusEnum as _GwStatus
+
+        return GatewayResponse(
+            gateway_ref=self._gateway_ref,
+            status=_GwStatus(callback_data.get("status", "success")),
+            amount=self._amount,
+        )
+
+
+async def _anh_chup_intent(db, intent_id: int) -> tuple:
+    """Chụp hàng `payment_intent` bằng SELECT CỘT, không qua ORM.
+
+    Chọn cột thay vì entity có chủ đích: identity map của ORM trả lại đối
+    tượng đã nạp sẵn, nên một bản vá hỏng vẫn "xanh". Hàng cột luôn đọc lại
+    từ CSDL.
+    """
+    return (
+        await db.execute(
+            select(
+                PaymentIntent.status,
+                PaymentIntent.gateway_status,
+                PaymentIntent.callback_received_at,
+                PaymentIntent.callback_data,
+                PaymentIntent.gateway_response,
+                PaymentIntent.completed_at,
+            ).where(PaymentIntent.id == intent_id)
+        )
+    ).one()
+
+
+async def _dem_payment(db) -> int:
+    return (await db.execute(select(func.count()).select_from(Payment))).scalar_one()
+
+
+async def _nhu_router(db, *, gateway_code: str, callback_data: dict) -> dict:
+    """Chạy ĐÚNG chuỗi của `payments.py::payment_callback`.
+
+    Gồm cả `commit` vô điều kiện — đó là thứ biến một phép `flush` trên nhánh
+    lỗi thành thiệt hại vĩnh viễn.
+    """
+    service = PaymentIntentService(db)
+    ket_qua, post_commit = await service.process_gateway_callback(
+        gateway_code=gateway_code,
+        callback_data=callback_data,
+    )
+    await db.commit()
+    return ket_qua
+
+
+class TestCallbackFailClosed:
+    """Mỗi ca gỡ ĐÚNG MỘT hàng rào, để màu đỏ chỉ ra đúng thứ bị hỏng."""
+
+    async def test_thieu_adapter_va_mock_tat_thi_khong_ghi_gi(
+        self, db, intent_fixtures, monkeypatch
+    ):
+        """BẤT BIẾN 1 — không adapter + mock TẮT ⇒ từ chối, hàng intent đứng yên."""
+        monkeypatch.setattr(settings, "PAYMENT_CALLBACK_MOCK_ENABLED", False)
+        ma_cong = intent_fixtures["online_method"].code
+        intent = await _tao_intent(db, intent_fixtures, _HOA_DON)
+        intent_id, ref = intent.id, intent.gateway_ref
+        truoc = await _anh_chup_intent(db, intent_id)
+
+        ket_qua = await _nhu_router(
+            db,
+            gateway_code=ma_cong,
+            callback_data={
+                "gateway_ref": ref,
+                "status": "success",
+                "amount": str(_HOA_DON),
+            },
+        )
+
+        assert ket_qua["success"] is False
+        assert await _anh_chup_intent(db, intent_id) == truoc
+        assert await _dem_payment(db) == 0
+
+    async def test_mock_tat_thi_than_bao_failed_cung_khong_doi_intent(
+        self, db, intent_fixtures, monkeypatch
+    ):
+        """BẤT BIẾN 1 — biến thể RẺ NHẤT của kẻ tấn công.
+
+        Thân mang ĐÚNG số tiền nên KHÔNG chạm nhánh lệch số tiền; điều duy
+        nhất nó nói là `status=failed`. Ở bản chưa vá nhánh này KHÔNG ném gì,
+        chỉ đặt `intent.status = failed` rồi flush, router commit, API trả
+        `200 {"status":"ok"}`. `failed` nằm trong `is_terminal` ⇒
+        `can_process_callback` False VĨNH VIỄN ⇒ callback THẬT sau đó bị từ
+        chối. Không mất đồng nào mà vẫn hỏng một intent còn hiệu lực.
+
+        Bộ ca cũ mù đúng chỗ này vì nó chỉ hỏi `payment is None` — mà payment
+        vốn dĩ là None trên nhánh đó.
+        """
+        monkeypatch.setattr(settings, "PAYMENT_CALLBACK_MOCK_ENABLED", False)
+        ma_cong = intent_fixtures["online_method"].code
+        intent = await _tao_intent(db, intent_fixtures, _HOA_DON)
+        intent_id, ref = intent.id, intent.gateway_ref
+        truoc = await _anh_chup_intent(db, intent_id)
+
+        ket_qua = await _nhu_router(
+            db,
+            gateway_code=ma_cong,
+            callback_data={
+                "gateway_ref": ref,
+                "status": "failed",
+                "amount": str(_HOA_DON),
+            },
+        )
+
+        assert ket_qua["success"] is False
+        assert await _anh_chup_intent(db, intent_id) == truoc
+        assert await _dem_payment(db) == 0
+
+    async def test_secret_rong_khong_duoc_BO_QUA_phep_kiem_chu_ky(
+        self, db, intent_fixtures
+    ):
+        """BẤT BIẾN 2 — secret rỗng ⇒ TỪ CHỐI, không phải bỏ kiểm.
+
+        Fixture dùng `code='intent_test_vnpay'` nên `secret_key` rơi về
+        `getattr(settings, 'GATEWAY_INTENT_TEST_VNPAY_SECRET', '')` = rỗng.
+        Ở bản chưa vá, `if secret_key and not ...` ngắn mạch ⇒ adapter báo chữ
+        ký SAI mà callback vẫn đi tới tạo payment.
+
+        Mock vẫn BẬT ở ca này: adapter CÓ mặt nên nhánh mock không dính dáng,
+        và màu đỏ chỉ đúng vào phép kiểm chữ ký.
+        """
+        ma_cong = intent_fixtures["online_method"].code
+        intent = await _tao_intent(db, intent_fixtures, _HOA_DON)
+        intent_id, ref = intent.id, intent.gateway_ref
+        truoc = await _anh_chup_intent(db, intent_id)
+
+        service = PaymentIntentService(db)
+        adapter = _AdapterGia(gateway_ref=ref, amount=_HOA_DON, chu_ky_hop_le=False)
+        service.register_gateway(ma_cong, adapter)
+        ket_qua, _ = await service.process_gateway_callback(
+            gateway_code=ma_cong,
+            callback_data={
+                "gateway_ref": ref,
+                "status": "success",
+                "amount": str(_HOA_DON),
+            },
+        )
+        await db.commit()
+
+        assert ket_qua["success"] is False
+        assert await _anh_chup_intent(db, intent_id) == truoc
+        assert await _dem_payment(db) == 0
+
+    async def test_cong_cua_route_phai_khop_phuong_thuc_cua_intent(
+        self, db, intent_fixtures
+    ):
+        """BẤT BIẾN 3 — `gateway_code` của ROUTE khác `method.code` của intent ⇒ từ chối.
+
+        Mock vẫn BẬT (fixture autouse) để màu đỏ chỉ đúng vào phép đối chiếu
+        chứ không lẫn sang cổng mock.
+
+        Phải so với `PaymentMethod.code` — KHÔNG phải `PaymentMethod.gateway_code`.
+        `create_intent` dùng `gateway_code = method.code` để tra adapter; cột
+        `gateway_code` tồn tại riêng và không nằm trên đường này. So nhầm cột
+        là một phép kiểm xanh mà không canh gì.
+        """
+        intent = await _tao_intent(db, intent_fixtures, _HOA_DON)
+        intent_id, ref = intent.id, intent.gateway_ref
+        truoc = await _anh_chup_intent(db, intent_id)
+
+        ket_qua = await _nhu_router(
+            db,
+            gateway_code="mot_cong_hoan_toan_khac",
+            callback_data={
+                "gateway_ref": ref,
+                "status": "success",
+                "amount": str(_HOA_DON),
+            },
+        )
+
+        assert ket_qua["success"] is False
+        assert await _anh_chup_intent(db, intent_id) == truoc
+        assert await _dem_payment(db) == 0
+
+    async def test_lech_so_tien_khong_duoc_GHI_truoc_khi_nem(
+        self, db, intent_fixtures
+    ):
+        """BẤT BIẾN 4 — nhánh lệch số tiền phải KHÔNG ghi gì trước khi từ chối.
+
+        Đây là ca người dùng chỉ ra. Ở bản chưa vá: `status=failed`,
+        `gateway_status='amount_mismatch'`, `callback_received_at`,
+        `callback_data = THÂN REQUEST THÔ`, rồi `flush()`, rồi mới `raise`.
+        Wrapper nuốt, router commit ⇒ intent hỏng vĩnh viễn và thân request
+        chưa xác thực nằm lại trong CSDL.
+
+        ⚠️ Ca này KHÔNG phán xử chuyện "gateway ĐÃ xác thực báo sai số tiền
+        thì có nên đánh dấu failed không" — đó là quyết định nghiệp vụ. Ở đây
+        callback CHƯA hề được xác thực (không adapter, mock đang bật), nên nó
+        không được phép ghi bất cứ thứ gì.
+        """
+        ma_cong = intent_fixtures["online_method"].code
+        intent = await _tao_intent(db, intent_fixtures, _HOA_DON)
+        intent_id, ref = intent.id, intent.gateway_ref
+        truoc = await _anh_chup_intent(db, intent_id)
+
+        ket_qua = await _nhu_router(
+            db,
+            gateway_code=ma_cong,
+            callback_data={"gateway_ref": ref, "status": "success", "amount": "1"},
+        )
+
+        assert ket_qua["success"] is False
+        assert await _anh_chup_intent(db, intent_id) == truoc
+        assert await _dem_payment(db) == 0
+
+    async def test_tao_payment_that_bai_thi_khong_de_lai_dau_vet_tren_intent(
+        self, db, intent_fixtures
+    ):
+        """BẤT BIẾN 5 — chỉ được gán SAU khi mọi phép có thể ném đã đi qua.
+
+        Dựng đúng hình dạng của `test_process_callback_refused_on_cancelled_fee`:
+        fee bị huỷ SAU khi intent đã tạo, nên `_create_payment_from_intent` ném
+        `BusinessRuleViolation`.
+
+        Bản trước gán bốn trường — gồm `gateway_response = THÂN REQUEST THÔ` —
+        TRƯỚC lời gọi đó. Wrapper nuốt ngoại lệ, router commit, và thân request
+        chưa xác thực nằm lại trên một intent VẪN CÒN SỐNG (`created`, chưa hết
+        hạn), sẵn sàng nhận callback thật sau này.
+
+        Khe này KHÔNG có ca nào canh trước khi thêm: đẩy khối gán lên trước
+        `_create_payment_from_intent` vẫn cho 25/25 xanh.
+        """
+        ma_cong = intent_fixtures["online_method"].code
+        intent = await _tao_intent(db, intent_fixtures, _HOA_DON)
+        intent_id, ref = intent.id, intent.gateway_ref
+
+        # Huỷ fee NGOÀI luồng, sau khi intent đã tồn tại (race / phát hành lại).
+        intent_fixtures["fee"].status = FeeStatusEnum.cancelled.value
+        await db.commit()
+
+        truoc = await _anh_chup_intent(db, intent_id)
+
+        ket_qua = await _nhu_router(
+            db,
+            gateway_code=ma_cong,
+            callback_data={
+                "gateway_ref": ref,
+                "status": "success",
+                "amount": str(_HOA_DON),
+            },
+        )
+
+        assert ket_qua["success"] is False
+        assert await _anh_chup_intent(db, intent_id) == truoc
+        assert await _dem_payment(db) == 0
+
+    async def test_giao_dich_va_intent_giu_CUNG_mot_snapshot_gateway(
+        self, db, intent_fixtures, monkeypatch
+    ):
+        """ĐỐI SOÁT — `PaymentTransaction.gateway_response` phải khớp `intent.gateway_response`.
+
+        Hồi quy do CHÍNH đợt vá này đẻ ra: khi dời phép gán
+        `intent.gateway_response` xuống SAU `_create_payment_from_intent`, mà
+        bản ghi kiểm toán bên trong hàm đó lại ĐỌC `intent.gateway_response`,
+        thì một giao dịch THÀNH CÔNG lưu snapshot RỖNG trong khi intent lại có
+        dữ liệu — hai nguồn lệch nhau đúng ở bản ghi dùng để đối soát. Không ca
+        nào trước đó đọc trường này, nên hồi quy lọt qua 26/26 xanh.
+
+        Đây cũng là ca DUY NHẤT đi hết đường thành công với CHỮ KÝ HỢP LỆ. Phải
+        dựng một `PaymentMethod` mã `vnpay` để `secret_key` rơi vào trường đã
+        khai `settings.VNPAY_HASH_SECRET` — pydantic không cho đặt trường lạ,
+        nên `GATEWAY_<MÃ>_SECRET` của mã tuỳ ý là không monkeypatch được.
+        """
+        monkeypatch.setattr(settings, "VNPAY_HASH_SECRET", "bi-mat-that")
+
+        cong = PaymentMethod(
+            code="vnpay", name="VNPay", is_online=True, is_active=True
+        )
+        db.add(cong)
+        await db.flush()
+
+        service = PaymentIntentService(db)
+        intent, _ = await service.create_intent(
+            invoice_id=intent_fixtures["invoice"].id,
+            method_id=cong.id,
+            amount=_HOA_DON,
+            idempotency_key=str(uuid.uuid4()),
+            return_url=VALID_RETURN_URL,
+            unit_id=intent_fixtures["unit_id"],
+        )
+        await db.commit()
+        intent_id, ref = intent.id, intent.gateway_ref
+
+        than = {"gateway_ref": ref, "status": "success", "amount": str(_HOA_DON)}
+
+        service = PaymentIntentService(db)
+        service.register_gateway(
+            "vnpay",
+            _AdapterGia(gateway_ref=ref, amount=_HOA_DON, chu_ky_hop_le=True),
+        )
+        ket_qua, _ = await service.process_gateway_callback(
+            gateway_code="vnpay", callback_data=than
+        )
+        await db.commit()
+
+        assert ket_qua["success"] is True
+        assert await _dem_payment(db) == 1
+
+        # `_anh_chup_intent` trả về theo thứ tự cột: status, gateway_status,
+        # callback_received_at, callback_data, gateway_response, completed_at.
+        sau = await _anh_chup_intent(db, intent_id)
+        assert sau[4] == than, "intent phải giữ phản hồi gateway đã xác thực"
+
+        snapshot_giao_dich = (
+            (await db.execute(select(PaymentTransaction.gateway_response)))
+            .scalars()
+            .all()
+        )
+        assert snapshot_giao_dich == [than], (
+            "PaymentTransaction phải giữ CÙNG snapshot với intent — lệch ở đây "
+            "là lệch đúng bản ghi dùng để đối soát"
+        )
+
+    async def test_loi_SAU_mot_buoc_ghi_trung_gian_khong_de_lai_gi(
+        self, db, intent_fixtures, monkeypatch
+    ):
+        """BẤT BIẾN 6 — NGUYÊN TỬ: lỗi sau một phép ghi trung gian không để lại gì.
+
+        Ca `refused_on_cancelled_fee` chỉ phủ trường hợp ném TRƯỚC mọi phép
+        ghi (`assert_payable_target`), nên nó không chứng minh được tính
+        nguyên tử.
+
+        Điểm bơm: `mo_so_tien_thua` — nằm SAU `db.add(payment)` + `flush()`
+        VÀ sau khi `apply_verified_payment_balances` đã sửa
+        `invoice.paid_amount`, `fee.paid_amount`, `fee.status`, `fee.version`.
+        Bơm vì không có đường DỮ LIỆU THUẦN nào tới đó: ràng buộc bảng
+        (`chk_payment_intent_amount_positive`, FK `resolved_major_id`) chặn hết
+        các cách làm hỏng dữ liệu từ ngoài.
+
+        ⚠️ Phải ném đúng `BusinessRuleViolation`: đó là một trong HAI lớp mà
+        `process_gateway_callback` nuốt. Mọi lớp khác thoát ra và đã được
+        router `except Exception` → `db.rollback()` xử lý, nên bơm lớp khác sẽ
+        cho một ca xanh vô nghĩa.
+        """
+        from app.services import payment_intent_service as _module
+
+        ma_cong = intent_fixtures["online_method"].code
+        hoa_don_id = intent_fixtures["invoice"].id
+        fee_id = intent_fixtures["fee"].id
+        intent = await _tao_intent(db, intent_fixtures, _HOA_DON)
+        intent_id, ref = intent.id, intent.gateway_ref
+
+        truoc_intent = await _anh_chup_intent(db, intent_id)
+        truoc_so_sach = (
+            await db.execute(
+                select(Invoice.paid_amount, Invoice.status).where(
+                    Invoice.id == hoa_don_id
+                )
+            )
+        ).one()
+        truoc_fee = (
+            await db.execute(
+                select(Fee.paid_amount, Fee.status, Fee.version).where(Fee.id == fee_id)
+            )
+        ).one()
+
+        def _no_giua_chung(*args, **kwargs):
+            raise BusinessRuleViolation("lỗi bơm vào SAU một bước ghi trung gian")
+
+        monkeypatch.setattr(_module, "mo_so_tien_thua", _no_giua_chung)
+
+        ket_qua = await _nhu_router(
+            db,
+            gateway_code=ma_cong,
+            callback_data={
+                "gateway_ref": ref,
+                "status": "success",
+                "amount": str(_HOA_DON),
+            },
+        )
+
+        assert ket_qua["success"] is False
+        assert await _dem_payment(db) == 0, "payment dang dở phải bị cuộn lại"
+        assert await _anh_chup_intent(db, intent_id) == truoc_intent
+        assert (
+            await db.execute(
+                select(Invoice.paid_amount, Invoice.status).where(
+                    Invoice.id == hoa_don_id
+                )
+            )
+        ).one() == truoc_so_sach, "số dư hoá đơn phải đứng yên"
+        assert (
+            await db.execute(
+                select(Fee.paid_amount, Fee.status, Fee.version).where(Fee.id == fee_id)
+            )
+        ).one() == truoc_fee, "số dư fee phải đứng yên"
+        assert (
+            await db.execute(select(func.count()).select_from(PaymentTransaction))
+        ).scalar_one() == 0
+        assert (
+            await db.execute(select(func.count()).select_from(OverpaymentRecord))
+        ).scalar_one() == 0

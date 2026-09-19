@@ -704,6 +704,25 @@ class Settings(BaseSettings):
     )  # Require two-person verification for manual payments
 
     # ---------------------------------------------------------------------
+    # Nhánh "Mock parsing" của callback cổng thanh toán — fail-closed
+    # ---------------------------------------------------------------------
+    # `process_callback` có một nhánh dự phòng đọc thẳng `gateway_ref`,
+    # `status`, `amount` từ THÂN REQUEST khi không tra được adapter. Endpoint
+    # `POST /api/payments/callback/{gateway_code}` là POST không auth, nên
+    # nhánh đó tương đương "ai cũng ghi được trạng thái thanh toán".
+    #
+    # Cờ này là TẦNG THỨ HAI, không phải tầng duy nhất: guard ở service còn
+    # đòi `APP_ENV == "test"`. Hai tầng vì một biến môi trường đặt nhầm không
+    # được phép mở lại nhánh này trên production — cùng khuôn với
+    # `CSRF_PROTECTION_IN_TEST` (`app/middleware/csrf.py`).
+    #
+    # Mặc định False theo luật cờ của kho (`app/services/finance_killswitch.py`):
+    # cờ mang nghĩa "CHO PHÉP", không phải "KHOÁ".
+    PAYMENT_CALLBACK_MOCK_ENABLED: bool = Field(
+        default=False, validation_alias="PAYMENT_CALLBACK_MOCK_ENABLED"
+    )  # False = không adapter thì TỪ CHỐI callback, không đoán từ thân request
+
+    # ---------------------------------------------------------------------
     # Kill-switch kế toán — fail-closed
     # ---------------------------------------------------------------------
     # Hai thao tác dưới đây không đảo ngược được và phụ thuộc vào phần hệ
