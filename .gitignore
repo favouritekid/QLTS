@@ -384,3 +384,73 @@ tests-e2e/nginx-packaging/khong-co-https/
 # một sự thật của MỘT máy tại MỘT thời điểm; đưa vào git là mời người ta tin
 # một manifest của máy khác.
 rollback_manifest_*.txt
+
+# ---------------------------------------------------------------------------
+# PII — bộ công cụ xuất hồ sơ tuyển sinh (`scripts/export-hoso-excel/`)
+# ---------------------------------------------------------------------------
+# Kho này là PUBLIC. Thư mục ấy là bộ chạy tay trên dữ liệu THẬT của 969 hồ sơ:
+# ngoài script còn có log chạy thật (`out.txt`, `err.txt`), bản kê, và tài liệu
+# bàn giao — đều mang hoặc trích dẫn PII của thí sinh.
+#
+# Đo 19-09-2026 TRÊN CHÍNH commit 87a68ae5, TRƯỚC khi thêm khối này: tệp có 386
+# dòng và `grep -i export-hoso` khớp 0 dòng trong số đó. Tái hiện bằng tệp mồi
+# vô hại trong một repo tạm dùng đúng bản `.gitignore` ấy: `git add -An --
+# scripts/export-hoso-excel` VẪN CHỌN tệp. Thứ che được một phần chỉ là TÌNH CỜ:
+# `*.sql` (dòng 90) loại các tệp .sql, `__pycache__/` (dòng 6) loại các .pyc —
+# không quy tắc nào nhắm vào thư mục này.
+#
+# ⚠️ Đừng kiểm bằng `git check-ignore` gọi trên CHÍNH thư mục. Trên một nhánh
+# khác của kho này, lệnh ấy trả rc=0 với trường pattern RỖNG, trỏ một dòng
+# trống — tức một phép kiểm XANH cho một thư mục KHÔNG hề được che. Hiện tượng
+# đó KHÔNG tái hiện được trên 87a68ae5 (ở đây nó trả rc=1), nên đừng trích nó
+# như một sự thật của commit này; nhưng phép kiểm vẫn hỏi trên TỪNG TỆP và vẫn
+# bắt buộc pattern khác rỗng, vì đó là bảo hiểm rẻ tiền cho một ca đã thấy thật.
+#
+# Luật cố ý HẸP tới đúng tên thư mục. `scripts/export*` sẽ nuốt luôn các script
+# vận hành hợp pháp khác trong `scripts/`, biến một lỗ PII thành một lỗ "mã vận
+# hành lặng lẽ rơi khỏi git" — đúng loại sự cố mà khối nginx/conf.d ở trên ghi lại.
+#
+# KHÔNG có ngoại lệ `!` nào: mọi tệp trong thư mục phải được đọc và làm sạch
+# bằng tay trước khi xin đưa một tệp CỤ THỂ vào git.
+#
+# ⭐ Và luật viết dạng THƯ MỤC (`scripts/export-hoso-excel/`) chứ KHÔNG phải glob
+# `scripts/export-hoso-excel/**` là có chủ đích: git không cho `!` kéo lại một
+# tệp nằm dưới một thư mục đã bị loại. Đo cả hai chiều hôm 19-09 — với dạng thư
+# mục thì `!scripts/export-hoso-excel/BAN-GIAO.md` VÔ HIỆU; đổi sang dạng glob
+# thì đúng ngoại lệ ấy CÓ tác dụng và `git add -An` chọn tệp để commit. Dạng thư
+# mục vì thế fail-closed hơn một bậc: ai đó thêm một dòng `!` cũng không mở được
+# lỗ. Đừng "chuẩn hoá" nó thành `/**`.
+#
+# ⚠️ Khối này CHỈ đóng lỗ "đưa nhầm lên Git public". Nó KHÔNG phải bản sao lưu:
+# thư mục vẫn chỉ nằm trên một máy, chưa có đích sao lưu riêng tư nào.
+#
+# ⭐⭐ HAI DÒNG, KHÔNG PHẢI MỘT — đừng gộp lại:
+#
+#   `**/export-hoso-excel/`      sống sót qua DI DỜI. Luật neo bên dưới khớp tên
+#                                ở ĐÚNG MỘT CHỖ, nên `git mv` thư mục sang
+#                                `tools/`, `Backend_FastAPI/scripts/`,
+#                                `Documents/`, hay lên gốc kho là MẤT LÁ CHẮN
+#                                một cách LẶNG LẼ. Đo 19-09 trên 5 vị trí: luật
+#                                neo một mình che 1/5; thêm dòng này thành 5/5,
+#                                và 0/15 dương tính giả trên hàng xóm lành — kể
+#                                cả `scripts/export-hoso-excel.md` (tệp, không
+#                                phải thư mục) và `scripts/export-hoso-excel-
+#                                backup/x.txt` (tên DÀI HƠN).
+#
+#   `scripts/export-hoso-excel/` neo ĐÚNG CHỖ thư mục đang nằm. Đặt SAU nên nó
+#                                thắng ở vị trí hiện tại, để `check-ignore -v`
+#                                chỉ ra luật chủ đích thay vì một glob chung.
+#
+# ⚠️ TRUNG THỰC VỀ PHẠM VI: dòng `**/` BAO TRÙM dòng neo. Gỡ dòng neo thì KHÔNG
+# tệp nào hết được che — chỉ đổi tên quy tắc mà `-v` báo. Giữ cả hai là chủ ý
+# (một dòng đọc ra ý định, một dòng chịu được di dời), không phải thừa.
+#
+# ⚠️ GIỚI HẠN CÒN LẠI, ĐÃ ĐO chứ không đoán: ĐỔI TÊN thư mục thì cả hai dòng đều
+# thua. `scripts/export-hoso-excel-2026/` và `scripts/xuat-hoso-excel/` KHÔNG
+# được che (rc=1). Cố ý KHÔNG nới luật để bắt chúng: mọi pattern đủ rộng cho
+# việc ấy đều bắt đầu nuốt tệp lành. Đổi tên thư mục ⇒ PHẢI sửa tệp này.
+#
+# `Backend_FastAPI/tests/unit/test_gitignore_export_pii.py` (lát Tier 5) khoá
+# CẢ HAI luật theo CẢ HAI CHIỀU, và ghi luôn giới hạn đổi-tên ở trên.
+**/export-hoso-excel/
+scripts/export-hoso-excel/
