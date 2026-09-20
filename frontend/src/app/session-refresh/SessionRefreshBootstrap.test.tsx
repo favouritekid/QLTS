@@ -31,6 +31,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { RefreshFailure } from "@/lib/api/refresh";
+import { parseSr } from "@/lib/auth/sr-marker";
 import { useAuthStore } from "@/lib/stores/auth.store";
 import { SessionRefreshBootstrap } from "./SessionRefreshBootstrap";
 
@@ -76,7 +77,109 @@ describe("SessionRefreshBootstrap", () => {
 
     render(<SessionRefreshBootstrap />);
 
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("/admissions/611"));
+    await waitFor(() =>
+      // `?_sr=1`: bootstrap nay tự đếm vòng — xem `lib/auth/sr-marker`.
+      expect(replace).toHaveBeenCalledWith("/admissions/611?_sr=1"),
+    );
+  });
+
+  /**
+   * 🔴 CA TÁI HIỆN SỰ CỐ.
+   *
+   * Nắp chống lặp `_sr` chỉ đếm được nếu có ai GHI nó. Trước bản vá, lối duy
+   * nhất ghi marker là nhánh shortcut trong `proxy.ts` — nhánh đó chỉ chạy khi
+   * access token CÒN HẠN, tức đúng ca không bao giờ xảy ra khi người dùng đang
+   * kẹt trong vòng lặp. Đo trên production: 0/5.513 URL mang `_sr`, và nắp
+   * không đóng lần nào.
+   */
+  it("làm mới xong → quay lại target KÈM marker `_sr` (nắp mới đếm được)", async () => {
+    refreshAccessToken.mockResolvedValueOnce(undefined);
+
+    render(<SessionRefreshBootstrap />);
+
+    await waitFor(() => expect(replace).toHaveBeenCalled());
+    expect(parseSr(String(replace.mock.calls[0][0]))).toBe(1);
+  });
+
+  it("target đã đi 1 vòng ⇒ TĂNG lên 2, và chỉ có MỘT marker", async () => {
+    // Nối thêm thay vì ghi đè sẽ tạo `_sr` trùng khoá, mà `parseSr` coi ca đó
+    // là 0 ⇒ bộ đếm về mo và vòng lặp quay lại y như cũ.
+    setRedirect("/admissions/611?_sr=1");
+    refreshAccessToken.mockResolvedValueOnce(undefined);
+
+    render(<SessionRefreshBootstrap />);
+
+    await waitFor(() => expect(replace).toHaveBeenCalled());
+    const dich = String(replace.mock.calls[0][0]);
+    expect(parseSr(dich)).toBe(2);
+    expect(dich.split("_sr=").length - 1).toBe(1);
+  });
+
+  it("gắn marker KHÔNG làm mất query nghiệp vụ và hash", async () => {
+    // Người dùng có thể đang đứng ở một bộ lọc cụ thể. Marker được gắn ở MỌI
+    // lượt thành công, nên rủi ro này nay nằm trên đường đi thường ngày.
+    setRedirect("/leads?q=Nguyễn&from=2026-06-24T10:00:00#mục-2");
+    refreshAccessToken.mockResolvedValueOnce(undefined);
+
+    render(<SessionRefreshBootstrap />);
+
+    await waitFor(() => expect(replace).toHaveBeenCalled());
+    const dich = String(replace.mock.calls[0][0]);
+
+    // Phép đo 1 — giải nghĩa qua `URL`.
+    const url = new URL(dich, "https://placeholder.invalid");
+    expect(url.searchParams.get("q")).toBe("Nguyễn");
+    expect(url.searchParams.get("from")).toBe("2026-06-24T10:00:00");
+
+    // Phép đo 2 — cắt chuỗi thô. Nếu chính `URL` hiểu sai thì phép đo 1 sai
+    // theo cùng một kiểu và không thấy gì.
+    expect(dich.startsWith("/leads?")).toBe(true);
+    expect(decodeURIComponent(dich.slice(dich.indexOf("#")))).toBe("#mục-2");
+  });
+
+  /**
+   * 🔴 `_sr` không được rò sang `/login` — cả HAI lối rời trang này.
+   *
+   * Nếu rò, đăng nhập lại xong người dùng đáp xuống `X?_sr=2` và chu kỳ SAU
+   * chạm nắp ngay từ vòng đầu: một lần hết hạn token bình thường biến thành
+   * một lần bị đá thẳng về trang đăng nhập.
+   */
+  it("terminal ⇒ `/login` KHÔNG mang `_sr`, nhưng GIỮ return-url", async () => {
+    setRedirect("/admissions/611?_sr=1");
+    refreshAccessToken.mockRejectedValueOnce(
+      new RefreshFailure({ kind: "terminal", status: 401 }),
+    );
+
+    render(<SessionRefreshBootstrap />);
+
+    await waitFor(() => expect(replace).toHaveBeenCalled());
+    const dich = decodeURIComponent(String(replace.mock.calls[0][0]));
+    expect(dich).toContain("/login");
+    expect(dich).toContain("force_login=true");
+    expect(dich).not.toContain("_sr");
+    expect(dich).toContain("redirect=/admissions/611");
+  });
+
+  it("bấm *Đăng nhập lại* ⇒ `/login` KHÔNG mang `_sr`, nhưng GIỮ return-url", async () => {
+    // Lối thoát thứ hai. Vá một lối mà quên lối kia thì lỗ hổng vẫn còn
+    // nguyên, chỉ khó gặp hơn.
+    setRedirect("/admissions/611?_sr=1");
+    refreshAccessToken.mockRejectedValueOnce(
+      new RefreshFailure({ kind: "safe-retryable", retryAt: Date.now() + 60_000 }),
+    );
+
+    render(<SessionRefreshBootstrap />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Thử lại$/i })).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Đăng nhập lại/i }));
+
+    expect(assign).toHaveBeenCalledTimes(1);
+    const dich = decodeURIComponent(String(assign.mock.calls[0][0]));
+    expect(dich).toContain("reauth=true");
+    expect(dich).not.toContain("_sr");
+    expect(dich).toContain("redirect=/admissions/611");
   });
 
   // Ca trung tâm: 429 RATE_LIMITED trên bucket dùng chung của cả trường.
@@ -284,7 +387,7 @@ describe("SessionRefreshBootstrap", () => {
 
     render(<SessionRefreshBootstrap />);
 
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("/dashboard"));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/dashboard?_sr=1"));
   });
 
   it("thiếu redirect → về /dashboard", async () => {
@@ -293,7 +396,7 @@ describe("SessionRefreshBootstrap", () => {
 
     render(<SessionRefreshBootstrap />);
 
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("/dashboard"));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/dashboard?_sr=1"));
   });
 
   // StrictMode mount effect hai lần và cleanup lần đầu. Nếu chặn lần hai bằng
@@ -308,7 +411,10 @@ describe("SessionRefreshBootstrap", () => {
       </StrictMode>,
     );
 
-    await waitFor(() => expect(replace).toHaveBeenCalledWith("/admissions/611"));
+    await waitFor(() =>
+      // `?_sr=1`: bootstrap nay tự đếm vòng — xem `lib/auth/sr-marker`.
+      expect(replace).toHaveBeenCalledWith("/admissions/611?_sr=1"),
+    );
   });
 
   it("dưới StrictMode + lỗi tạm thời → vẫn hiện nút thử lại", async () => {

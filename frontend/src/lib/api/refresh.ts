@@ -26,6 +26,7 @@ import {
   type ClearTrigger,
 } from "./refresh-coordination/lifecycle";
 import { selectJournalStore } from "./refresh-coordination/storage";
+import { isProofFresh } from "./refresh-coordination/proof";
 import { writeThrottleAt } from "./session-flags";
 import type { JournalRecord, ResultKind } from "./refresh-coordination/types";
 
@@ -41,15 +42,6 @@ const FOLLOWER_WAIT_MS = 15_000;
 const FOLLOWER_POLL_MS = 250;
 /** Chờ trình duyệt persist cookie mới trước khi caller retry. */
 const COOKIE_PERSIST_MS = 100;
-
-/**
- * Một bản ghi bao lâu tuổi thì còn được coi là bằng chứng "token mới còn hạn".
- *
- * Phải BAO ĐƯỢC một cuộc đua giữa các tab (vài giây, và lease sống 20 giây)
- * nhưng NHỎ HƠN NHIỀU chu kỳ proactive 13 phút — nếu không, nhật ký của chu kỳ
- * trước sẽ biến chu kỳ sau thành no-op và access token chết trong khoảng trống.
- */
-const FRESH_PROOF_WINDOW_MS = 30_000;
 
 // ---------------------------------------------------------------------------
 // Kết quả — có cấu trúc, để caller không phải đoán lại
@@ -287,6 +279,17 @@ function outcomeFromRecord(
 
   switch (kind) {
     case "success":
+      // Cùng lý lẽ với `inspect()` trong `lock.ts`: `success` là bằng chứng có
+      // hạn dùng, không phải trạng thái bền. Nhận một bản ghi quá tuổi (hoặc
+      // mang mốc thời gian TỪ TƯƠNG LAI vì đồng hồ lệch) là báo "đã có token
+      // mới" cho một token đã chết.
+      //
+      // Fail-closed chứ không trả `null`: chỗ gọi ở nhánh `blocked` coi `null`
+      // là "không có gì để nói" rồi trả về êm — đúng kiểu im lặng đang phải
+      // chữa. `ambiguous` thì dừng hẳn và người dùng thấy màn thử lại.
+      if (!isProofFresh(record.updatedAt, now)) {
+        return { kind: "ambiguous", reason: "stale-attempt" };
+      }
       return { kind: "success" };
     case "terminal":
       return { kind: "terminal", status: record.status, errorCode: record.errorCode };
@@ -462,8 +465,7 @@ async function doRefresh(): Promise<void> {
   // bản ghi lệch giờ về phía tương lai đều lọt qua như bằng chứng tươi, và ta
   // rơi lại đúng ca (b): báo xong mà chưa POST, token chết ở phút 15.
   if (superseded.status === "cleared") {
-    const proofAge = Date.now() - superseded.clearedAt;
-    if (proofAge >= 0 && proofAge <= FRESH_PROOF_WINDOW_MS) {
+    if (isProofFresh(superseded.clearedAt, Date.now())) {
       return;
     }
   }
