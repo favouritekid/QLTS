@@ -13,6 +13,7 @@
  */
 import type { JournalRecord, JournalStore } from "./types";
 import { hasWebLocks, selectJournalStore } from "./storage";
+import { isProofFresh } from "./proof";
 
 const WEB_LOCK_NAME = "qlts-refresh-coordination";
 
@@ -70,16 +71,35 @@ function newId(): string {
  * hạn là "được thử lại" sẽ biến mọi kết quả thành giấy phép POST sau 20 giây,
  * tức xoá sạch tác dụng của cả lớp này.
  *
+ * 🔴 Nhưng `success` KHÔNG cùng loại với ba kết quả kia, và gộp nó vào là gốc
+ * của vòng lặp `/session-refresh` đo được trên production.
+ *
+ * `terminal`/`ambiguous`/`nonterminal-stop` nói về TRẠNG THÁI PHIÊN — phiên
+ * chết, hoặc không biết phiên ra sao. Trạng thái ấy bền: thời gian trôi không
+ * làm nó lành lại. `success` thì khác hẳn, nó là một BẰNG CHỨNG có hạn dùng:
+ * "đã có token mới **lúc bản ghi này được viết**". Access token sống 15 phút,
+ * nên một bản ghi `success` của chu kỳ trước (hook proactive chạy mỗi 13 phút)
+ * chứng minh đúng một token đã chết. Chặn POST dựa vào nó nghĩa là: hàm làm
+ * mới trả về "xong" mà chưa chạm mạng, bootstrap quay lại trang đích, token ở
+ * đó vẫn hết hạn, proxy lại đẩy sang bootstrap — quay vòng cho tới khi người
+ * dùng bỏ cuộc, và `POST /api/auth/refresh` không xảy ra LẦN NÀO.
+ *
+ * Hạn dùng ấy là `FRESH_PROOF_WINDOW_MS` (xem `proof.ts`), dài hơn lease vì nó
+ * đo một thứ khác: lease đo "ai đang giữ quyền", bằng chứng đo "token còn hạn
+ * hay chưa".
+ *
  * Thứ tự nhánh:
  * 1. `ambiguous`/`nonterminal-stop` ⇒ cấm, kể cả đã quá hạn. Quá hạn không làm
  *    một rotation mơ hồ trở nên an toàn.
  * 2. Còn hạn ⇒ tab khác đang làm ⇒ `busy`.
- * 3. `success`/`terminal` ⇒ đã xong. POST nữa là trình lại một token server đã
- *    vô hiệu hoá — đúng hành vi bị tính là reuse.
- * 4. `safe-retryable` ⇒ được thử lại, nhưng chỉ SAU `retryAt`.
- * 5. `in-flight` quá hạn, không kết quả ⇒ chủ chết giữa lúc request bay ⇒ cấm.
+ * 3. `terminal` ⇒ phiên chết hẳn. Cấm vĩnh viễn, không xét tuổi.
+ * 4. `success` còn TƯƠI ⇒ cấm: token mới vừa có, POST nữa là trình lại một
+ *    token server vừa vô hiệu hoá — đúng hành vi bị tính là reuse.
+ *    `success` QUÁ TUỔI ⇒ hết là bằng chứng ⇒ cho thử lại.
+ * 5. `safe-retryable` ⇒ được thử lại, nhưng chỉ SAU `retryAt`.
+ * 6. `in-flight` quá hạn, không kết quả ⇒ chủ chết giữa lúc request bay ⇒ cấm.
  *    Đây chính là ca Web Locks một mình bỏ sót.
- * 6. `acquired` quá hạn ⇒ chết TRƯỚC khi chạm mạng ⇒ cướp được vô điều kiện.
+ * 7. `acquired` quá hạn ⇒ chết TRƯỚC khi chạm mạng ⇒ cướp được vô điều kiện.
  */
 function inspect(
   record: JournalRecord | null,
@@ -101,8 +121,24 @@ function inspect(
     return { blocked: true, outcome: { status: "busy", record } };
   }
 
-  if (record.resultKind === "success" || record.resultKind === "terminal") {
+  // Phiên chết là trạng thái BỀN — thời gian trôi không làm nó lành lại.
+  if (record.resultKind === "terminal") {
     return block("result");
+  }
+
+  if (record.resultKind === "success") {
+    // Còn trong cửa sổ ⇒ token mới vừa có thật ⇒ vẫn phải chặn, nếu không thì
+    // nhiều tab cùng rotate và server đếm đó là reuse.
+    if (isProofFresh(record.updatedAt, now)) return block("result");
+
+    // Quá tuổi ⇒ bằng chứng hết giá trị ⇒ được thử lại.
+    //
+    // 🔴 Phải `return` TƯỜNG MINH, không được rơi xuống các nhánh dưới: bản
+    // ghi này mang `phase: "in-flight"` (không ai đặt `phase` về sau khi đã có
+    // kết quả), nên rơi xuống nhánh 6 là bị chặn tiếp vì `stale-in-flight` —
+    // vòng lặp vẫn nguyên, chỉ đổi tên lý do. Nhánh ấy dành cho bản ghi CHƯA
+    // có kết quả; bản ghi này thì có.
+    return { blocked: false };
   }
 
   if (record.resultKind === "safe-retryable") {

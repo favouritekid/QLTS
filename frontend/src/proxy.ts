@@ -22,6 +22,7 @@ import {
   isValidRedirect,
   stripRsc,
 } from "@/lib/auth/login-redirect";
+import { SR_MAX, parseSr, stripSr, withSr } from "@/lib/auth/sr-marker";
 
 // ============================================
 // 🛣️ ROUTE CONFIGURATION
@@ -90,14 +91,6 @@ const IGNORED_ROUTES = ["/.well-known"];
 /** Đích mặc định khi return-url không dùng được. */
 const DEFAULT_TARGET = "/dashboard";
 
-/**
- * Đi qua vòng cứu phiên tối đa mấy lần trước khi bắt đăng nhập lại.
- *
- * `2` là con số nhỏ nhất còn cho phép một lần thử lại hợp lệ (vòng 0 → 1), và
- * đủ để một endpoint SSR luôn trả 401 không quay mãi.
- */
-const SR_MAX = 2;
-
 // ============================================
 // 🔐 PROXY LOGIC
 // ============================================
@@ -156,34 +149,6 @@ function prefetchNoStore(): NextResponse {
     status: 204,
     headers: { "Cache-Control": "private, no-store" },
   });
-}
-
-/** Đếm số vòng đã đi qua `/session-refresh`, đọc TỪ TRONG target. */
-function parseSr(target: string): number {
-  try {
-    const url = new URL(target, "https://placeholder.invalid");
-    const all = url.searchParams.getAll("_sr");
-    // Khoá trùng ⇒ không tin được cái nào ⇒ coi như chưa đi vòng nào. Đây là
-    // phía an toàn: nắp vẫn đóng ở vòng sau, còn tin nhầm thì mất nắp.
-    if (all.length !== 1) return 0;
-    const n = Number(all[0]);
-    if (!Number.isInteger(n) || n < 0) return 0;
-    return Math.min(n, SR_MAX);
-  } catch {
-    return 0;
-  }
-}
-
-/** Ghi lại số vòng vào target — `delete` rồi `set`, không `append`. */
-function withSr(target: string, n: number): string {
-  try {
-    const url = new URL(target, "https://placeholder.invalid");
-    url.searchParams.delete("_sr");
-    url.searchParams.set("_sr", String(Math.min(n, SR_MAX)));
-    return `${url.pathname}${url.search}${url.hash}`;
-  } catch {
-    return target;
-  }
 }
 
 /**
@@ -268,17 +233,6 @@ async function handleSessionRefresh(request: NextRequest): Promise<NextResponse>
   }
 
   return sessionRefreshPage();
-}
-
-/** Gỡ marker `_sr` — dùng khi rời khỏi vòng cứu phiên. */
-function stripSr(target: string): string {
-  try {
-    const url = new URL(target, "https://placeholder.invalid");
-    url.searchParams.delete("_sr");
-    return `${url.pathname}${url.search}${url.hash}`;
-  } catch {
-    return target;
-  }
 }
 
 /**
