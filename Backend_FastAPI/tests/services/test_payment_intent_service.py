@@ -1076,15 +1076,30 @@ class TestCallbackFailClosed:
     async def test_secret_rong_khong_duoc_BO_QUA_phep_kiem_chu_ky(
         self, db, intent_fixtures
     ):
-        """BẤT BIẾN 2 — secret rỗng ⇒ TỪ CHỐI, không phải bỏ kiểm.
+        """BẤT BIẾN 2 — secret rỗng bị TỪ CHỐI **TRƯỚC KHI** gọi adapter.
 
         Fixture dùng `code='intent_test_vnpay'` nên `secret_key` rơi về
         `getattr(settings, 'GATEWAY_INTENT_TEST_VNPAY_SECRET', '')` = rỗng.
-        Ở bản chưa vá, `if secret_key and not ...` ngắn mạch ⇒ adapter báo chữ
-        ký SAI mà callback vẫn đi tới tạo payment.
 
-        Mock vẫn BẬT ở ca này: adapter CÓ mặt nên nhánh mock không dính dáng,
-        và màu đỏ chỉ đúng vào phép kiểm chữ ký.
+        ⚠️ Chữ ký giả lập **HỢP LỆ** (`chu_ky_hop_le=True`) là chủ ý, và đó là
+        điểm mấu chốt. Bản trước dựng adapter trả False, nên khi gỡ cổng
+        `if not secret_key` thì luồng vẫn rơi xuống `verify_signature`, adapter
+        vẫn từ chối, và cả ba assert cũ VẪN XANH — ca kiểm không chứng minh
+        được "secret rỗng tự thân là lý do từ chối". Đo 20-09: đột biến vô hiệu
+        riêng cổng ấy SỐNG SÓT 28/28.
+
+        Với adapter trả True, chỉ còn đúng một thứ có thể từ chối callback này,
+        nên cả hai đột biến đều phải ĐỎ:
+          - gỡ hẳn khối `if not secret_key` ⇒ chữ ký "hợp lệ" ⇒ callback được
+            CHẤP NHẬN ⇒ `success` True và sinh `payment` ⇒ đỏ;
+          - lỗi lịch sử `if secret_key and not adapter.verify_signature(...)`
+            ⇒ ngắn mạch, bỏ luôn phép kiểm ⇒ cũng được chấp nhận ⇒ đỏ.
+
+        `so_lan_verify == 0` là bất biến về THỨ TỰ, không phải về kết quả: nó
+        khoá "từ chối TRƯỚC adapter", nên một bản vá dời phép kiểm xuống sau
+        `verify_signature` vẫn bị bắt dù kết quả cuối giống nhau.
+
+        Mock vẫn BẬT: adapter CÓ mặt nên nhánh mock không dính dáng.
         """
         ma_cong = intent_fixtures["online_method"].code
         intent = await _tao_intent(db, intent_fixtures, _HOA_DON)
@@ -1092,7 +1107,7 @@ class TestCallbackFailClosed:
         truoc = await _anh_chup_intent(db, intent_id)
 
         service = PaymentIntentService(db)
-        adapter = _AdapterGia(gateway_ref=ref, amount=_HOA_DON, chu_ky_hop_le=False)
+        adapter = _AdapterGia(gateway_ref=ref, amount=_HOA_DON, chu_ky_hop_le=True)
         service.register_gateway(ma_cong, adapter)
         ket_qua, _ = await service.process_gateway_callback(
             gateway_code=ma_cong,
@@ -1104,6 +1119,8 @@ class TestCallbackFailClosed:
         )
         await db.commit()
 
+        # Bất biến THỨ TỰ: secret rỗng chặn trước, adapter không được đụng tới.
+        assert adapter.so_lan_verify == 0
         assert ket_qua["success"] is False
         assert await _anh_chup_intent(db, intent_id) == truoc
         assert await _dem_payment(db) == 0
