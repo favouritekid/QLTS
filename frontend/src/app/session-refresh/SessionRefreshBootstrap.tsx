@@ -22,6 +22,7 @@ import {
   shouldClearAuthCookies,
 } from "@/lib/api/refresh";
 import { buildLoginRedirect, isValidRedirect } from "@/lib/auth/login-redirect";
+import { parseSr, stripSr, withSr } from "@/lib/auth/sr-marker";
 import { clearClientAuthState } from "@/lib/auth/clear-client-auth-state";
 import { Button } from "@/components/ui/button";
 
@@ -60,8 +61,19 @@ export function SessionRefreshBootstrap() {
       try {
         await refreshAccessToken();
         if (cancelled) return;
+        // 🔴 Gắn marker `_sr` TẠI ĐÂY — đây là lối đi thật của vòng cứu phiên.
+        //
+        // Nắp chống lặp trong `proxy.ts` đọc số vòng từ chính URL đích, nên nó
+        // chỉ đếm được nếu có ai GHI con số ấy. Lối duy nhất ghi marker trước
+        // đây là nhánh shortcut của proxy, mà nhánh đó đòi access token CÒN
+        // HẠN — tức đúng ca không bao giờ xảy ra khi người dùng đang kẹt.
+        // Production đo được `0/5.513` URL mang `_sr`: nắp chưa đóng lần nào.
+        //
+        // Dùng chung `lib/auth/sr-marker` với proxy: nắp chỉ có nghĩa khi hai
+        // phía đọc và ghi CÙNG một cách.
+        //
         // `replace` để nút Back không quay lại chính trang bootstrap này.
-        window.location.replace(target);
+        window.location.replace(withSr(target, parseSr(target) + 1));
       } catch (error) {
         if (cancelled) return;
 
@@ -82,8 +94,20 @@ export function SessionRefreshBootstrap() {
           // được xử lý), nên điều kiện của `force-login-cookies-cleared` chưa
           // thoả. Gate phát trigger đó sau, đúng lúc.
           clearClientAuthState();
+          // 🔴 `stripSr`: marker KHÔNG được đi sang `/login`. Nếu nó đi theo,
+          // đăng nhập lại xong người dùng đáp xuống `X?_sr=2` và chu kỳ SAU
+          // chạm nắp ngay từ vòng đầu — một lần hết hạn token bình thường biến
+          // thành một lần bị đá thẳng về trang đăng nhập. Cùng bất biến với
+          // `proxy.ts` ở nhánh chạm nắp.
+          //
+          // `target` đã qua `isValidRedirect` ở trên, nên `stripSr` (vốn parse
+          // bằng `new URL`) chạy trên một giá trị ĐÃ ĐƯỢC LỌC — đúng thứ tự
+          // lọc-trước-strip-sau.
           window.location.replace(
-            buildLoginRedirect(target, { forceLogin: true, reason: "session_expired" }),
+            buildLoginRedirect(stripSr(target), {
+              forceLogin: true,
+              reason: "session_expired",
+            }),
           );
           return;
         }
@@ -128,8 +152,11 @@ export function SessionRefreshBootstrap() {
               // 30 ngày, đúng triệu chứng cả kế hoạch này sinh ra để chữa.
               const url = new URL("/login", window.location.origin);
               url.searchParams.set("reauth", "true");
-              if (isValidRedirect(target)) {
-                url.searchParams.set("redirect", target);
+              // Lối thoát thứ hai, cùng bất biến với nhánh terminal ở trên: vá
+              // một lối mà quên lối kia thì marker vẫn rò, chỉ khó gặp hơn.
+              const clean = stripSr(target);
+              if (isValidRedirect(clean)) {
+                url.searchParams.set("redirect", clean);
               }
               window.location.assign(url.toString());
             }}

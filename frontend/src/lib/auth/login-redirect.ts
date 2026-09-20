@@ -13,11 +13,21 @@
  * CHỈ validate PHẦN PATH (đoạn trước `?`/`#`) — query/hash để TỰ DO,
  * cho phép giá trị filter/timestamp/text chứa `:` hoặc encoded slash
  * (vd `/finance?from=2026-06-24T10:00:00`, `/leads?q=a:b`). An toàn vì
- * path đã chắc chắn internal (bắt đầu `/`, không `//`, không protocol),
- * và `router.push`/`new URL(x, origin)` không thể đổi origin từ query.
+ * `router.push`/`new URL(x, origin)` không thể đổi origin từ query.
  *
  * Cũng reject các public auth path (/login, /register, ...) làm return-url —
  * tránh vòng lặp redirect về chính trang đăng nhập.
+ *
+ * 🔴 BẢN TRƯỚC NÓI SAI một vế, và đó chính là lỗ hổng:
+ *   «path đã chắc chắn internal (bắt đầu `/`, không `//`, không protocol)».
+ * Câu đó chỉ đúng với CHUỖI THÔ. Nhưng mọi người tiêu thụ — `withSr`,
+ * `stripSr`, `stripRsc` — đều đi qua `new URL(x, nền).pathname`, tức CHUẨN HOÁ
+ * dot-segment TRƯỚC khi điều hướng. `/..//evil.example` qua được hết phép lọc
+ * thô rồi chuẩn hoá thành `//evil.example` — URL protocol-relative, rời khỏi
+ * site. `%2f` bị chặn nhưng `%2e` thì không, mà WHATWG URL coi `%2e` là `.`
+ * khi bỏ dot-segment, nên `/%2e%2e//evil.example` là cùng lỗ viết khác đi.
+ *
+ * Cách đóng: CHUẨN HOÁ TRƯỚC RỒI MỚI LỌC — xem `normalizeInternalTarget`.
  */
 const AUTH_PATHS = [
   "/login",
@@ -62,22 +72,91 @@ function hasControlChar(value: string): boolean {
   return false;
 }
 
+/**
+ * Nền ảo để phân giải đường dẫn tương đối.
+ *
+ * Phải là MỘT hằng dùng chung: `withSr`/`stripSr`/`stripRsc` và hàm lọc này
+ * bắt buộc chuẩn hoá bằng CÙNG một phép, nếu không thì cái lọc và cái điều
+ * hướng lại nhìn thấy hai chuỗi khác nhau — đúng cái khe đã đẻ ra lỗ hổng.
+ */
+const PLACEHOLDER_ORIGIN = "https://placeholder.invalid";
+
+/**
+ * Đường rơi về khi một hàm chuẩn hoá phát hiện đầu ra đã thoát khỏi site.
+ *
+ * Chọn `/` chứ không phải chuỗi rỗng: chuỗi rỗng đưa vào `location.replace`
+ * nghĩa là "tải lại chính trang hiện tại", tức có thể quay lại đúng vòng lặp
+ * đang phải chữa.
+ */
+export const SAFE_PATH = "/";
+
+/**
+ * Một đường dẫn (đã chuẩn hoá hay chưa) có còn là đường NỘI BỘ không.
+ *
+ * Export vì `sr-marker.ts` cần ĐÚNG định nghĩa này cho chặn cuối của nó. Hai
+ * bản sao của một vị từ an toàn là hai bản sẽ lệch nhau, và chỗ lệch nằm đúng
+ * ở ca không ai nghĩ tới — xem `feedback_single_source_of_truth_shared_helper`.
+ */
+export function isInternalPath(path: string): boolean {
+  if (!path.startsWith("/")) return false;
+  // `//host` là URL protocol-relative: trình duyệt hiểu là ĐỔI ORIGIN.
+  if (path.startsWith("//")) return false;
+  return true;
+}
+
+/**
+ * Chuẩn hoá return-url về ĐÚNG dạng cuối cùng trình duyệt sẽ dùng, rồi kiểm
+ * LẠI trên bản đã chuẩn hoá. Trả `null` nếu không an toàn.
+ *
+ * Hai lượt kiểm, KHÔNG phải một:
+ *
+ *  1. trên chuỗi THÔ — bắt ký tự điều khiển và `%2f`/`%5c`, những thứ sẽ BỐC
+ *     HƠI hoặc đổi nghĩa khi parse nên sau chuẩn hoá không còn thấy được;
+ *  2. trên chuỗi ĐÃ CHUẨN HOÁ — bắt `//` sinh ra do bỏ dot-segment, và bắt
+ *     auth path giấu sau `..` (vd `/a/../login`).
+ *
+ * ⚠️ KHÔNG hạ xuống thành "cấm mọi dấu chấm": `/a/../b` chuẩn hoá ra `/b`,
+ * hoàn toàn nội bộ và hợp lệ. Một luật thô như thế vừa chặn nhầm đường lành,
+ * vừa KHÔNG giải quyết `%2e` — tức tệ hơn về cả hai phía.
+ */
+export function normalizeInternalTarget(
+  url: string | null | undefined,
+): string | null {
+  if (!url) return null;
+  if (hasControlChar(url)) return null;
+  if (!isInternalPath(url)) return null;
+
+  // --- Lượt 1: trên chuỗi THÔ ------------------------------------------
+  const rawPath = url.split(/[?#]/, 1)[0];
+  if (rawPath.includes(":")) return null; // protocol-like
+  if (rawPath.includes("\\")) return null; // backslash
+  if (/%2f|%5c/i.test(rawPath)) return null; // encoded slash/backslash
+
+  // --- Chuẩn hoá bằng CHÍNH phép mà tầng điều hướng sẽ dùng --------------
+  let normalized: string;
+  try {
+    const u = new URL(url, PLACEHOLDER_ORIGIN);
+    normalized = `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+    return null;
+  }
+
+  // --- Lượt 2: trên chuỗi ĐÃ CHUẨN HOÁ ----------------------------------
+  if (!isInternalPath(normalized)) return null;
+  const normalizedPath = normalized.split(/[?#]/, 1)[0];
+  if (normalizedPath.includes(":")) return null;
+  if (normalizedPath.includes("\\")) return null;
+  // Không return-url về trang auth (tránh loop /login?redirect=/login).
+  if (AUTH_PATHS.some((p) => normalizedPath === p || normalizedPath.startsWith(`${p}/`)))
+    return null;
+
+  return normalized;
+}
+
 export function isValidRedirect(
   url: string | null | undefined,
 ): url is string {
-  if (!url) return false;
-  if (hasControlChar(url)) return false;
-  if (!url.startsWith("/")) return false;
-  if (url.startsWith("//")) return false;
-  // Chỉ xét path-part (đoạn trước query/hash).
-  const pathPart = url.split(/[?#]/, 1)[0];
-  if (pathPart.includes(":")) return false; // protocol-like
-  if (pathPart.includes("\\")) return false; // backslash
-  if (/%2f|%5c/i.test(pathPart)) return false; // encoded slash/backslash
-  // Không return-url về trang auth (tránh loop /login?redirect=/login).
-  if (AUTH_PATHS.some((p) => pathPart === p || pathPart.startsWith(`${p}/`)))
-    return false;
-  return true;
+  return normalizeInternalTarget(url) !== null;
 }
 
 /**
@@ -93,11 +172,16 @@ export function isValidRedirect(
  */
 export function stripRsc(target: string): string {
   try {
-    const url = new URL(target, "https://placeholder.invalid");
+    const url = new URL(target, PLACEHOLDER_ORIGIN);
     url.searchParams.delete("_rsc");
-    return `${url.pathname}${url.search}${url.hash}`;
+    const result = `${url.pathname}${url.search}${url.hash}`;
+    // CHẶN CUỐI. `url.pathname` đã bỏ dot-segment, nên `/..//evil.example` ra
+    // `//evil.example`. Hàm này cùng khuôn với `withSr`/`stripSr` và đầu ra của
+    // nó cũng đi thẳng vào redirect, nên nó cũng phải có chặn cuối — vá một
+    // nhánh mà bỏ ba nhánh anh em là tái tạo lỗ ở chỗ khác.
+    return isInternalPath(result) ? result : SAFE_PATH;
   } catch {
-    return target;
+    return isInternalPath(target) ? target : SAFE_PATH;
   }
 }
 

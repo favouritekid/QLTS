@@ -122,6 +122,24 @@ class PaymentIntentService:
         """Register a payment gateway adapter."""
         self._gateway_adapters[code] = adapter
 
+    @staticmethod
+    def _mock_callback_allowed() -> bool:
+        """Nhánh "Mock parsing" của callback có được phép chạy không.
+
+        HAI TẦNG, cố ý — một biến môi trường đặt nhầm không được phép mở lại
+        nhánh này trên production:
+
+          1. ``APP_ENV == "test"`` — nhánh chỉ tồn tại cho test;
+          2. ``PAYMENT_CALLBACK_MOCK_ENABLED`` — và phải bật TƯỜNG MINH.
+
+        Cùng khuôn với ``CSRF_PROTECTION_IN_TEST`` (``app/middleware/csrf.py``)
+        và luật cờ ở ``app/services/finance_killswitch.py``: cờ mang nghĩa
+        "CHO PHÉP", mặc định False.
+        """
+        return settings.APP_ENV == "test" and bool(
+            settings.PAYMENT_CALLBACK_MOCK_ENABLED
+        )
+
     # ==========================================================================
     # CREATE INTENT
     # ==========================================================================
@@ -395,15 +413,47 @@ class PaymentIntentService:
             else:
                 secret_key = getattr(settings, f"GATEWAY_{gateway_code.upper()}_SECRET", "")
 
-            if secret_key and not adapter.verify_signature(callback_data, secret_key):
+            # FAIL-CLOSED. Bản trước viết `if secret_key and not verify(...)`:
+            # secret RỖNG thì phép kiểm chữ ký bị BỎ QUA, không phải bị từ
+            # chối — tức cấu hình thiếu lại thành cấu hình cho qua. Endpoint
+            # này không đòi auth, nên "cho qua" nghĩa là ai cũng ghi được
+            # trạng thái thanh toán.
+            #
+            # Từ chối TRƯỚC khi gọi `verify_signature`, không đưa secret rỗng
+            # vào mã mật mã rồi trông chờ nó trả False.
+            if not secret_key:
+                log.warning(
+                    "callback_secret_not_configured",
+                    gateway_code=gateway_code,
+                )
+                raise BusinessRuleViolation(
+                    "Gateway secret is not configured; callback refused"
+                )
+
+            if not adapter.verify_signature(callback_data, secret_key):
                 log.warning(
                     "callback_signature_invalid",
                     gateway_code=gateway_code,
                     gateway_ref=gateway_ref,
                 )
                 raise BusinessRuleViolation("Invalid gateway signature")
+        elif not self._mock_callback_allowed():
+            # FAIL-CLOSED. Không tra được adapter nghĩa là KHÔNG CÓ CÁCH NÀO
+            # xác thực callback này. Bản trước rơi thẳng xuống nhánh "Mock
+            # parsing" và đọc `gateway_ref`/`status`/`amount` từ THÂN REQUEST
+            # — trên một endpoint POST không auth. Vì `register_default_gateways`
+            # không có call-site sản xuất nào, đó là đường đi của 100% callback
+            # trên production.
+            log.warning(
+                "callback_gateway_adapter_not_registered",
+                gateway_code=gateway_code,
+            )
+            raise BusinessRuleViolation(
+                f"No gateway adapter registered for '{gateway_code}'; callback refused"
+            )
         else:
-            # Mock parsing for testing
+            # Nhánh mock — CHỈ sống khi `_mock_callback_allowed()` (xem hàm
+            # đó: đòi cả `APP_ENV == "test"` lẫn cờ bật tường minh).
             gateway_ref = callback_data.get("gateway_ref") or callback_data.get("txn_ref")
             gateway_status_str = callback_data.get("status", "success")
             gateway_status = GatewayStatusEnum(gateway_status_str)
@@ -417,6 +467,29 @@ class PaymentIntentService:
                 gateway_ref=gateway_ref,
             )
             raise ResourceNotFoundError("Payment intent not found")
+
+        # Cổng của ROUTE phải khớp PHƯƠNG THỨC của intent.
+        #
+        # Thiếu phép này, `gateway_ref` là thứ DUY NHẤT ràng buộc callback với
+        # intent — mà nó do gateway sinh ra và, ở đường không-adapter, mang
+        # dạng đoán được `MOCK-{id}-{epoch}`. Một callback gửi tới
+        # `/callback/<cổng bất kỳ>` vẫn khớp trúng intent của cổng khác.
+        #
+        # ⚠️ So với `PaymentMethod.code`, KHÔNG phải `PaymentMethod.gateway_code`:
+        # `create_intent` dùng `gateway_code = method.code` để tra adapter, nên
+        # `.code` mới là thứ nằm trên đường này. `get_by_gateway_ref` đã
+        # `joinedload(PaymentIntent.method)` nên phép so này không tốn query.
+        intent_gateway_code = intent.method.code if intent.method else None
+        if intent_gateway_code != gateway_code:
+            log.warning(
+                "callback_gateway_mismatch",
+                intent_id=intent.id,
+                gateway_code_route=gateway_code,
+                gateway_code_intent=intent_gateway_code,
+            )
+            raise BusinessRuleViolation(
+                "Callback gateway does not match the payment intent method"
+            )
 
         # Check intent can process callback
         if not intent.can_process_callback:
@@ -432,6 +505,18 @@ class PaymentIntentService:
             )
 
         # Verify amount matches (C1)
+        #
+        # KHÔNG GHI GÌ trên nhánh này. Bản trước đặt `status=failed`,
+        # `gateway_status='amount_mismatch'`, `callback_received_at` và
+        # `callback_data = THÂN REQUEST THÔ`, rồi `flush()`, RỒI MỚI `raise`.
+        # `process_gateway_callback` nuốt ngoại lệ (không re-raise, không
+        # rollback) và router `await db.commit()` vô điều kiện ⇒ phép ghi ấy
+        # thành VĨNH VIỄN. Mà `failed` nằm trong `is_terminal` ⇒
+        # `can_process_callback` False mãi mãi ⇒ callback THẬT sau đó bị từ
+        # chối: tiền vào cổng mà hệ không ghi nhận.
+        #
+        # Từ chối mà không ghi thì intent giữ nguyên trạng thái, vẫn nhận được
+        # callback đúng sau đó, hoặc hết hạn tự nhiên.
         if callback_amount != intent.amount:
             log.error(
                 "callback_amount_mismatch",
@@ -439,20 +524,9 @@ class PaymentIntentService:
                 expected=str(intent.amount),
                 received=str(callback_amount),
             )
-            intent.status = PaymentIntentStatusEnum.failed.value
-            intent.gateway_status = "amount_mismatch"
-            intent.callback_received_at = datetime.now(timezone.utc)
-            intent.callback_data = callback_data
-            await self.db.flush()
             raise BusinessRuleViolation(
                 f"Amount mismatch: expected {intent.amount}, received {callback_amount}"
             )
-
-        # Update intent with callback data
-        intent.callback_received_at = datetime.now(timezone.utc)
-        intent.callback_data = callback_data
-        intent.gateway_status = gateway_status.value
-        intent.gateway_response = callback_data
 
         payment = None
         fee = None
@@ -461,15 +535,28 @@ class PaymentIntentService:
         if gateway_status == GatewayStatusEnum.success:
             # Create verified payment (returns payment, fee, profile)
             payment, fee, profile = await self._create_payment_from_intent(
-                intent, unit_id
+                intent, unit_id, verified_gateway_response=callback_data
             )
-            intent.status = PaymentIntentStatusEnum.completed.value
-            intent.completed_at = datetime.now(timezone.utc)
+            new_status = PaymentIntentStatusEnum.completed.value
         elif gateway_status in [GatewayStatusEnum.failed, GatewayStatusEnum.expired]:
-            intent.status = PaymentIntentStatusEnum.failed.value
+            new_status = PaymentIntentStatusEnum.failed.value
         else:
             # Pending or other - keep as pending
-            intent.status = PaymentIntentStatusEnum.pending.value
+            new_status = PaymentIntentStatusEnum.pending.value
+
+        # Ghi SAU khi mọi phép có thể ném đã đi qua.
+        #
+        # `_create_payment_from_intent` ném được (`assert_payable_target`, fee
+        # hoặc hoá đơn đã huỷ...). Bản trước gán bốn trường TRƯỚC lời gọi đó,
+        # nên khi nó ném thì wrapper nuốt, router commit, và thân request CHƯA
+        # XÁC THỰC nằm lại trên một intent VẪN CÒN SỐNG.
+        intent.callback_received_at = datetime.now(timezone.utc)
+        intent.callback_data = callback_data
+        intent.gateway_status = gateway_status.value
+        intent.gateway_response = callback_data
+        intent.status = new_status
+        if new_status == PaymentIntentStatusEnum.completed.value:
+            intent.completed_at = datetime.now(timezone.utc)
 
         await self.db.flush()
 
@@ -582,22 +669,52 @@ class PaymentIntentService:
             }, post_commit
 
         except ResourceNotFoundError as e:
+            await self._rollback_callback_partial_write()
             return {
                 "success": False,
                 "message": str(e),
                 "intent_id": None,
             }, None
         except BusinessRuleViolation as e:
+            await self._rollback_callback_partial_write()
             return {
                 "success": False,
                 "message": str(e),
                 "intent_id": None,
             }, None
 
+    async def _rollback_callback_partial_write(self) -> None:
+        """Cuộn lại mọi phép ghi dang dở của một callback BỊ TỪ CHỐI.
+
+        Hàm này là ngoại lệ có chủ đích của luật "service chỉ flush, router
+        commit" (``MASTER_ARCHITECTURE.md``). Lý do: ``process_gateway_callback``
+        chính là RANH GIỚI LỖI của đường callback — nó nuốt
+        ``BusinessRuleViolation``/``ResourceNotFoundError`` và trả về một dict
+        thay vì ném tiếp, nên router **không thể biết** đã có lỗi và vẫn
+        ``await db.commit()`` vô điều kiện. Chỗ duy nhất còn biết sự thật là
+        đây.
+
+        ⚠️ CHỈ gọi trong hai khối ``except``, TUYỆT ĐỐI không đặt ở nhánh
+        ``return`` thành công. Một callback hợp lệ báo ``failed``/``expired``
+        đi qua nhánh đó và phép ghi ``status = failed`` của nó là CÓ CHỦ ĐÍCH;
+        rollback ở đấy sẽ xoá mất nó. Dấu phân biệt: nhánh thành công trả
+        ``intent_id`` khác None, hai nhánh ``except`` trả None.
+
+        Vì sao cần dù hiện chưa nổ: sau ``db.add(payment)`` trong
+        ``_create_payment_from_intent``, hôm nay KHÔNG chuỗi gọi nào ném hai
+        lớp trên (``apply_verified_payment_balances``, ``mo_so_tien_thua``,
+        ``sync_lead_tuition_paid`` đều không ném domain), và mọi lớp khác đã
+        được router cuộn lại. Lỗ hổng vì thế là TIỀM ẨN — nó mở ra ngay khi ai
+        đó thêm một ``raise BusinessRuleViolation`` vào bất kỳ đâu sau phép ghi
+        đầu tiên. Đóng trước thì rẻ hơn nhiều so với đóng sau khi mất tiền.
+        """
+        await self.db.rollback()
+
     async def _create_payment_from_intent(
         self,
         intent: PaymentIntent,
         unit_id: Optional[int] = None,
+        verified_gateway_response: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Payment, "Fee", Optional["models.AdmissionProfile"]]:
         """
         Create Payment record from successful intent.
@@ -700,7 +817,18 @@ class PaymentIntentService:
             balance_before=fee_balance_before,
             balance_after=fee_remaining,
             external_reference=intent.gateway_ref,
-            gateway_response=intent.gateway_response,
+            # Snapshot gateway lấy từ THAM SỐ, không đọc `intent.gateway_response`.
+            #
+            # Trường đó cố ý chỉ được gán SAU lời gọi này (để một lần ném ở đây
+            # không để lại thân request trên một intent còn sống), nên đọc nó ở
+            # đây sẽ chụp giá trị CŨ/RỖNG: giao dịch thành công lưu snapshot
+            # rỗng trong khi intent lại có dữ liệu — hai nguồn lệch nhau đúng ở
+            # bản ghi dùng để ĐỐI SOÁT.
+            gateway_response=(
+                verified_gateway_response
+                if verified_gateway_response is not None
+                else intent.gateway_response
+            ),
             performed_by_id=1,  # System user
             notes=f"Online payment via {intent.method.code}. Invoice: {invoice.invoice_number}",
         )
