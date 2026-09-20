@@ -22,7 +22,7 @@
 // runtime-agnostic (chỉ URL/URLSearchParams/String) nên import này không kéo
 // `next/server` hay `window` vào bundle client, và không tạo vòng import:
 // `login-redirect.ts` không import ngược lại module này.
-import { DUONG_AN_TOAN, laDuongNoiBo } from "./login-redirect";
+import { SAFE_PATH, isInternalPath } from "./login-redirect";
 
 /**
  * Đi qua vòng cứu phiên tối đa mấy lần trước khi bắt đăng nhập lại.
@@ -37,7 +37,7 @@ export const SR_MAX = 2;
  * `login-redirect.ts` dùng, nếu không thì tầng lọc và tầng điều hướng lại
  * chuẩn hoá khác nhau, đúng cái khe đã đẻ ra open redirect.
  */
-const NEN_AO_SR = "https://placeholder.invalid";
+const PLACEHOLDER_ORIGIN = "https://placeholder.invalid";
 
 /** Đếm số vòng đã đi qua `/session-refresh`, đọc TỪ TRONG target. */
 export function parseSr(target: string): number {
@@ -67,23 +67,23 @@ export function parseSr(target: string): number {
  * `parseSr` đọc ra 0, nắp `SR_MAX` không bao giờ đóng, và ta đổi một lỗ hổng
  * lấy đúng cái vòng lặp đang phải chữa.
  */
-function chanThoatSiteGiuNap(duongDan: string, n: number): string {
-  if (laDuongNoiBo(duongDan)) return duongDan;
-  return `${DUONG_AN_TOAN}?_sr=${Math.min(n, SR_MAX)}`;
+function clampToSafePathKeepingSr(path: string, n: number): string {
+  if (isInternalPath(path)) return path;
+  return `${SAFE_PATH}?_sr=${Math.min(n, SR_MAX)}`;
 }
 
 /** Ghi lại số vòng vào target — `delete` rồi `set`, không `append`. */
 export function withSr(target: string, n: number): string {
   try {
-    const url = new URL(target, NEN_AO_SR);
+    const url = new URL(target, PLACEHOLDER_ORIGIN);
     url.searchParams.delete("_sr");
     url.searchParams.set("_sr", String(Math.min(n, SR_MAX)));
-    return chanThoatSiteGiuNap(
+    return clampToSafePathKeepingSr(
       `${url.pathname}${url.search}${url.hash}`,
       n,
     );
   } catch {
-    return chanThoatSiteGiuNap(target, n);
+    return clampToSafePathKeepingSr(target, n);
   }
 }
 
@@ -96,11 +96,11 @@ export function withSr(target: string, n: number): string {
  */
 export function stripSr(target: string): string {
   try {
-    const url = new URL(target, NEN_AO_SR);
+    const url = new URL(target, PLACEHOLDER_ORIGIN);
     url.searchParams.delete("_sr");
-    const ketQua = `${url.pathname}${url.search}${url.hash}`;
-    return laDuongNoiBo(ketQua) ? ketQua : DUONG_AN_TOAN;
+    const result = `${url.pathname}${url.search}${url.hash}`;
+    return isInternalPath(result) ? result : SAFE_PATH;
   } catch {
-    return laDuongNoiBo(target) ? target : DUONG_AN_TOAN;
+    return isInternalPath(target) ? target : SAFE_PATH;
   }
 }

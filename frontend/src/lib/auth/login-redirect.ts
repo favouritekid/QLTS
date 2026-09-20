@@ -79,7 +79,7 @@ function hasControlChar(value: string): boolean {
  * bắt buộc chuẩn hoá bằng CÙNG một phép, nếu không thì cái lọc và cái điều
  * hướng lại nhìn thấy hai chuỗi khác nhau — đúng cái khe đã đẻ ra lỗ hổng.
  */
-const NEN_AO = "https://placeholder.invalid";
+const PLACEHOLDER_ORIGIN = "https://placeholder.invalid";
 
 /**
  * Đường rơi về khi một hàm chuẩn hoá phát hiện đầu ra đã thoát khỏi site.
@@ -88,7 +88,7 @@ const NEN_AO = "https://placeholder.invalid";
  * nghĩa là "tải lại chính trang hiện tại", tức có thể quay lại đúng vòng lặp
  * đang phải chữa.
  */
-export const DUONG_AN_TOAN = "/";
+export const SAFE_PATH = "/";
 
 /**
  * Một đường dẫn (đã chuẩn hoá hay chưa) có còn là đường NỘI BỘ không.
@@ -97,10 +97,10 @@ export const DUONG_AN_TOAN = "/";
  * bản sao của một vị từ an toàn là hai bản sẽ lệch nhau, và chỗ lệch nằm đúng
  * ở ca không ai nghĩ tới — xem `feedback_single_source_of_truth_shared_helper`.
  */
-export function laDuongNoiBo(duongDan: string): boolean {
-  if (!duongDan.startsWith("/")) return false;
+export function isInternalPath(path: string): boolean {
+  if (!path.startsWith("/")) return false;
   // `//host` là URL protocol-relative: trình duyệt hiểu là ĐỔI ORIGIN.
-  if (duongDan.startsWith("//")) return false;
+  if (path.startsWith("//")) return false;
   return true;
 }
 
@@ -124,33 +124,33 @@ export function normalizeInternalTarget(
 ): string | null {
   if (!url) return null;
   if (hasControlChar(url)) return null;
-  if (!laDuongNoiBo(url)) return null;
+  if (!isInternalPath(url)) return null;
 
   // --- Lượt 1: trên chuỗi THÔ ------------------------------------------
-  const pathTho = url.split(/[?#]/, 1)[0];
-  if (pathTho.includes(":")) return null; // protocol-like
-  if (pathTho.includes("\\")) return null; // backslash
-  if (/%2f|%5c/i.test(pathTho)) return null; // encoded slash/backslash
+  const rawPath = url.split(/[?#]/, 1)[0];
+  if (rawPath.includes(":")) return null; // protocol-like
+  if (rawPath.includes("\\")) return null; // backslash
+  if (/%2f|%5c/i.test(rawPath)) return null; // encoded slash/backslash
 
   // --- Chuẩn hoá bằng CHÍNH phép mà tầng điều hướng sẽ dùng --------------
-  let chuanHoa: string;
+  let normalized: string;
   try {
-    const u = new URL(url, NEN_AO);
-    chuanHoa = `${u.pathname}${u.search}${u.hash}`;
+    const u = new URL(url, PLACEHOLDER_ORIGIN);
+    normalized = `${u.pathname}${u.search}${u.hash}`;
   } catch {
     return null;
   }
 
   // --- Lượt 2: trên chuỗi ĐÃ CHUẨN HOÁ ----------------------------------
-  if (!laDuongNoiBo(chuanHoa)) return null;
-  const pathChuan = chuanHoa.split(/[?#]/, 1)[0];
-  if (pathChuan.includes(":")) return null;
-  if (pathChuan.includes("\\")) return null;
+  if (!isInternalPath(normalized)) return null;
+  const normalizedPath = normalized.split(/[?#]/, 1)[0];
+  if (normalizedPath.includes(":")) return null;
+  if (normalizedPath.includes("\\")) return null;
   // Không return-url về trang auth (tránh loop /login?redirect=/login).
-  if (AUTH_PATHS.some((p) => pathChuan === p || pathChuan.startsWith(`${p}/`)))
+  if (AUTH_PATHS.some((p) => normalizedPath === p || normalizedPath.startsWith(`${p}/`)))
     return null;
 
-  return chuanHoa;
+  return normalized;
 }
 
 export function isValidRedirect(
@@ -172,16 +172,16 @@ export function isValidRedirect(
  */
 export function stripRsc(target: string): string {
   try {
-    const url = new URL(target, NEN_AO);
+    const url = new URL(target, PLACEHOLDER_ORIGIN);
     url.searchParams.delete("_rsc");
-    const ketQua = `${url.pathname}${url.search}${url.hash}`;
+    const result = `${url.pathname}${url.search}${url.hash}`;
     // CHẶN CUỐI. `url.pathname` đã bỏ dot-segment, nên `/..//evil.example` ra
     // `//evil.example`. Hàm này cùng khuôn với `withSr`/`stripSr` và đầu ra của
     // nó cũng đi thẳng vào redirect, nên nó cũng phải có chặn cuối — vá một
     // nhánh mà bỏ ba nhánh anh em là tái tạo lỗ ở chỗ khác.
-    return laDuongNoiBo(ketQua) ? ketQua : DUONG_AN_TOAN;
+    return isInternalPath(result) ? result : SAFE_PATH;
   } catch {
-    return laDuongNoiBo(target) ? target : DUONG_AN_TOAN;
+    return isInternalPath(target) ? target : SAFE_PATH;
   }
 }
 

@@ -154,9 +154,9 @@ export function SessionRefreshBootstrap() {
               url.searchParams.set("reauth", "true");
               // Lối thoát thứ hai, cùng bất biến với nhánh terminal ở trên: vá
               // một lối mà quên lối kia thì marker vẫn rò, chỉ khó gặp hơn.
-              const sach = stripSr(target);
-              if (isValidRedirect(sach)) {
-                url.searchParams.set("redirect", sach);
+              const clean = stripSr(target);
+              if (isValidRedirect(clean)) {
+                url.searchParams.set("redirect", clean);
               }
               window.location.assign(url.toString());
             }}

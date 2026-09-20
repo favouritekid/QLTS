@@ -140,7 +140,7 @@ describe("bất biến: ba hàm chuẩn hoá không bao giờ trả chuỗi bắ
  *
  * `expect(withSr(x, 1).startsWith("//")).toBe(false)` chỉ hỏi đúng một câu:
  * "có rời khỏi site không". Một đột biến đổi chặn cuối thành
- * `return DUONG_AN_TOAN;` — trả trơ `/`, bỏ `?_sr=` — ĐI QUA trọn vẹn nhóm đó:
+ * `return SAFE_PATH;` — trả trơ `/`, bỏ `?_sr=` — ĐI QUA trọn vẹn nhóm đó:
  * `/` không bắt đầu bằng `//`, và `origindDich("/")` vẫn là nhà. Bộ ca cũ mù
  * đúng chỗ này.
  *
