@@ -246,6 +246,23 @@ _STUB_DOCKER = r"""#!/usr/bin/env bash
 echo "docker $*" >> "$QLTS_STUB_LOG"
 _tat_ca="$*"
 
+# CID giả phải theo ĐÚNG hợp đồng production: `docker compose ps -q` và
+# `docker inspect` trả ID ĐẦY ĐỦ 64 hex thường (đã đo: `ps -q` của compose ra
+# 64, `docker ps -q` ra 12). Một fixture trả "cid-backend" làm cổng schema của
+# marker không thể đòi 64 hex — tức fixture giả đang định nghĩa hợp đồng thay
+# cho production. Mỗi service một chữ số hex riêng nên vẫn phân biệt bằng `case`.
+_cid_gia() {
+    case "$1" in
+        backend)       _cc=1 ;;
+        celery-worker) _cc=2 ;;
+        celery-beat)   _cc=3 ;;
+        frontend)      _cc=4 ;;
+        *)             _cc=5 ;;
+    esac
+    _c8=$_cc$_cc$_cc$_cc$_cc$_cc$_cc$_cc
+    printf '%s\n' "$_c8$_c8$_c8$_c8$_c8$_c8$_c8$_c8"
+}
+
 # --- Mô phỏng ENTRYPOINT của ảnh backend -----------------------------------
 # `Backend_FastAPI/Dockerfile` khai ENTRYPOINT ["/app/docker-entrypoint.sh"],
 # và `docker compose run` KHÔNG đè ENTRYPOINT — chỉ đè CMD. Nên mỗi one-off
@@ -274,6 +291,42 @@ case "$_tat_ca" in
 esac
 
 case "$_tat_ca" in
+    *" ps -q "*)
+        # Step 3b/8c hỏi ID container theo TỪNG service. Khác hẳn `ps -aq` của
+        # vòng chờ health bên dưới — đừng gộp hai giao thức làm một.
+        for _sv in backend celery-worker celery-beat frontend; do
+            case "$_tat_ca" in
+                *" $_sv"*)
+                    # Kịch bản "thiếu một container": trả RỖNG đúng như compose
+                    # khi service không chạy (và vẫn exit 0 — đó mới là cái bẫy).
+                    if [ "${STUB_PS_Q_THIEU:-}" = "$_sv" ]; then exit 0; fi
+                    # Biến thể theo GIAI ĐOẠN: chỉ hỏng SAU khi đã build, tức
+                    # ở Step 8c. Không có nó thì Step 3b đỏ trước và nhánh lỗi
+                    # của 8c không bao giờ được thi hành.
+                    if [ "${STUB_PS_Q_THIEU_SAU_BUILD:-}" = "$_sv" ] \
+                       && grep -q 'build --parallel' "$QLTS_STUB_LOG"; then exit 0; fi
+                    _cid_gia "$_sv"; exit 0 ;;
+            esac
+        done
+        echo "STUB: 'ps -q' cho service KHÔNG nhận diện được: $_tat_ca" >&2
+        exit 92
+        ;;
+    "tag "*)
+        # `STUB_TAG_RC` làm hỏng NGAY lệnh tag đầu tiên. Để dựng ca "hỏng GIỮA
+        # CHỪNG" (đã tạo 1–3 tag rồi mới gãy) cần đếm lần gọi: dòng log của
+        # chính lệnh này đã được ghi ở đầu tệp, nên phép đếm bao gồm nó.
+        if [ -n "${STUB_TAG_FAIL_AT:-}" ]; then
+            _lan=$(grep -c '^docker tag ' "$QLTS_STUB_LOG")
+            if [ "$_lan" = "$STUB_TAG_FAIL_AT" ]; then exit 1; fi
+            exit 0
+        fi
+        exit "${STUB_TAG_RC:-0}"
+        ;;
+    "image inspect"*)
+        # Cổng chống va chạm hỏi "tag này CÓ chưa?". Mặc định là CHƯA (exit 1).
+        # Trả 0 ở đây nghĩa là "đã tồn tại" ⇒ deploy phải từ chối ghi đè.
+        exit "${STUB_IMAGE_INSPECT_RC:-1}"
+        ;;
     *pg_isready*)
         exit "${STUB_PGISREADY_RC:-0}"
         ;;
@@ -308,8 +361,8 @@ case "$_tat_ca" in
         # CHƯA TỪNG được thi hành trong bất kỳ ca nào — guard xanh mà không canh
         # gì. Nay stub mô phỏng đúng giao thức: một ID cho mỗi service.
         case "$_tat_ca" in
-            *" backend"*)  echo "cid-backend"  ; exit 0 ;;
-            *" frontend"*) echo "cid-frontend" ; exit 0 ;;
+            *" backend"*)  _cid_gia backend  ; exit 0 ;;
+            *" frontend"*) _cid_gia frontend ; exit 0 ;;
         esac
         echo "STUB: 'ps -aq' cho service KHÔNG nhận diện được: $_tat_ca" >&2
         exit 90
@@ -319,16 +372,48 @@ case "$_tat_ca" in
         # không im lặng trả rỗng: chuỗi rỗng trôi qua mọi phép so và biến một
         # thay đổi giao thức thành một ca xanh giả.
         case "$_tat_ca" in
+            *".Image"*)
+                # Image ID của container đang chạy — thứ Step 3b ghim, và thứ
+                # Step 8c ghi vào marker. Một service có thể bị "đổi ảnh" qua
+                # STUB_IMG_LECH để dựng ca marker lệch.
+                for _sv in backend celery-worker celery-beat frontend; do
+                    case "$_tat_ca" in
+                        *"$(_cid_gia "$_sv")"*)
+                            if [ "${STUB_IMG_LECH:-}" = "$_sv" ]; then
+                                _z=9999999999999999
+                                echo "sha256:$_z$_z$_z$_z"
+                            elif [ "${STUB_IMG_RONG:-}" = "$_sv" ]; then
+                                echo ""
+                            elif [ "${STUB_IMG_RONG_SAU_BUILD:-}" = "$_sv" ] \
+                                 && grep -q 'build --parallel' "$QLTS_STUB_LOG"
+                            then
+                                echo ""
+                            else
+                                case "$_sv" in
+                                    backend)       _k=b ;;
+                                    celery-worker) _k=c ;;
+                                    celery-beat)   _k=d ;;
+                                    frontend)      _k=f ;;
+                                esac
+                                _r=$_k$_k$_k$_k$_k$_k$_k$_k
+                                echo "sha256:$_r$_r$_r$_r$_r$_r$_r$_r"
+                            fi
+                            exit 0 ;;
+                    esac
+                done
+                echo "STUB: '{{.Image}}' container lạ: $_tat_ca" >&2
+                exit 93
+                ;;
             *".State.Status"*)
                 case "$_tat_ca" in
-                    *cid-frontend*) echo "${STUB_STATUS_FRONTEND:-running}" ;;
+                    *"$(_cid_gia frontend)"*) echo "${STUB_STATUS_FRONTEND:-running}" ;;
                     *)              echo "${STUB_STATUS_BACKEND:-running}"  ;;
                 esac
                 exit 0
                 ;;
             *".State.Health"*)
                 case "$_tat_ca" in
-                    *cid-frontend*) echo "${STUB_HEALTH_FRONTEND:-healthy}" ;;
+                    *"$(_cid_gia frontend)"*) echo "${STUB_HEALTH_FRONTEND:-healthy}" ;;
                     *)              echo "${STUB_HEALTH_BACKEND:-healthy}"  ;;
                 esac
                 exit 0
@@ -365,6 +450,36 @@ echo "nginx-apply $*" >> "$QLTS_STUB_LOG"
 exit 0
 """
 
+_STUB_ROLLBACK_PREFLIGHT = r"""#!/usr/bin/env bash
+# Ghi lại HỢP ĐỒNG chứ không chỉ "đã được gọi": ba biến này là toàn bộ giao
+# diện giữa deploy.sh và preflight. Một lượt gọi thiếu `LOCAL_ONLY=1` sẽ đi
+# nhánh GHCR và dừng ở cổng đăng nhập — test phải thấy được điều đó.
+_L="$QLTS_STUB_LOG"
+echo "rollback-preflight tag=${QLTS_ROLLBACK_TAG:-KHONG_DAT}" >> "$_L"
+echo "rollback-preflight local_only=${QLTS_ROLLBACK_LOCAL_ONLY:-KHONG_DAT}" >> "$_L"
+echo "rollback-preflight manifest=${QLTS_ROLLBACK_MANIFEST:-KHONG_DAT}" >> "$_L"
+if [ -f "${QLTS_ROLLBACK_MANIFEST:-/khong-co}" ]; then
+    echo "rollback-preflight manifest_ton_tai=1" >> "$QLTS_STUB_LOG"
+fi
+exit "${STUB_ROLLBACK_PREFLIGHT_RC:-0}"
+"""
+
+# Bản đồ image ID phải TRÙNG KHÍT với `docker` giả ở trên. Lệch một ký tự là
+# mọi ca marker-khớp biến thành ca marker-lệch mà không ai nhận ra.
+_ANH_GIA = {
+    "backend": "sha256:" + "b" * 64,
+    "celery-worker": "sha256:" + "c" * 64,
+    "celery-beat": "sha256:" + "d" * 64,
+    "frontend": "sha256:" + "f" * 64,
+}
+_DICH_VU_RA = ("backend", "celery-worker", "celery-beat", "frontend")
+_SHA_CU = "a" * 40          # SHA trong marker = phiên bản ĐANG chạy
+_SHA_MOI = "1" * 40         # `git` giả trả cái này cho rev-parse = phiên bản MỚI
+
+_MOC_BUILD = "build --parallel"
+_MOC_TAG_ANH = "docker tag"
+_MOC_PREFLIGHT_RA = "rollback-preflight tag="
+
 _ENV_PRODUCTION = (
     "DOMAIN=vidu.test\n"
     "POSTGRES_USER=qlts\n"
@@ -378,17 +493,135 @@ _bo_qua_neu_khong_posix = pytest.mark.skipif(
 )
 
 
-def _dung_san_khau(tmp_path: Path, deploy_sh: str | None = None) -> Path:
-    """Dựng một cây dự án tối thiểu đủ để `scripts/deploy.sh` chạy tới Step 8."""
+def _cid_gia(sv: str) -> str:
+    """CID giả — ID ĐẦY ĐỦ 64 hex thường, đúng hợp đồng production.
+
+    Phải khớp từng byte với hàm `_cid_gia` trong stub `docker`: marker do
+    script ghi lấy CID từ stub, còn các ca kiểm ở đây so chuỗi trên tệp.
+    """
+    ky = {"backend": "1", "celery-worker": "2", "celery-beat": "3",
+          "frontend": "4"}.get(sv, "5")
+    return ky * 64
+
+
+def _noi_dung_marker(sha: str = _SHA_CU, anh: dict[str, str] | None = None) -> str:
+    """Marker hợp lệ: SHA đang chạy + image ID của bốn container đang chạy."""
+    anh = anh if anh is not None else _ANH_GIA
+    dong = [
+        "# marker-version\t1",
+        f"# deployed-sha\t{sha}",
+        "# deployed-at\t2026-09-18T00:00:00Z",
+    ]
+    dong += [f"{s}\t{anh[s]}\t{_cid_gia(s)}" for s in _DICH_VU_RA if s in anh]
+    return "\n".join(dong) + "\n"
+
+
+# --- NGỮ CẢNH production: root + root:root ----------------------------------
+# `deploy.sh` đòi uid 0 và `700 root:root` / `600 root:root`. Runner của
+# required CI (`runs-on: ubuntu-latest`, KHÔNG khai `container:`) chạy dưới một
+# user thường, nên sandbox KHÔNG dựng được trạng thái ấy thật. Đo ngày
+# 21-09-2026 trên cùng một cây: chạy non-root cho **83 failed / 354 passed /
+# 1 skipped**, chạy root cho **437 passed / 1 skipped**. Nghĩa là "xanh ở máy"
+# đã KHÔNG chứng minh gì về PR gate.
+#
+# Harness này vốn ĐÃ mô phỏng `docker`, `git`, `mktemp`, `mv`, `ln`… bằng stub
+# trên PATH. Chủ sở hữu và uid là mảnh còn thiếu của đúng lớp mô phỏng ấy.
+#
+# ⚠️ Hai shim dưới đây KHÔNG nới cổng của mã production — `deploy.sh` vẫn đòi
+# đúng `0` và đúng `root:root`. Chúng dựng NGỮ CẢNH mà cổng ấy được thiết kế để
+# chạy trong đó. Và mỗi cổng vẫn có ca riêng lái shim sang giá trị SAI
+# (`QLTS_TEST_UID`, `QLTS_TEST_CHU_SO_HUU`) để chứng minh nó còn canh — trước
+# bản vá này cổng uid KHÔNG có ca nào, nó chỉ "tình cờ xanh" vì người chạy
+# đang là root.
+_SHIM_NGU_CANH_STAT = """#!/usr/bin/env bash
+# Thay ĐÚNG trường `%U:%G`, và CHỈ cho đường dẫn nằm trong sandbox của test.
+# Mọi trường khác (`%a`, `%s`, `%h`, `%d:%i`) vẫn là giá trị THẬT của tệp thật.
+_THAT=/usr/bin/stat
+if [ "${1:-}" = "-c" ] && [ -n "${2:-}" ]; then
+    _dang="$2"
+    _dich="${@: -1}"
+    case "$_dich" in
+        "${QLTS_TEST_SANDBOX:-/khong/bao/gio/khop}"/*)
+            _dang=${_dang//%U:%G/${QLTS_TEST_CHU_SO_HUU:-root:root}} ;;
+    esac
+    shift 2
+    exec "$_THAT" -c "$_dang" "$@"
+fi
+exec "$_THAT" "$@"
+"""
+
+_SHIM_STAT = """#!/usr/bin/env bash
+# Lớp mỏng. Ca kiểm nào cần can thiệp `stat` thì GHI ĐÈ tệp này, và PHẢI kết
+# bằng `exec _ngu_canh_stat "$@"` chứ không phải `/usr/bin/stat` — nếu không,
+# chính ca đó tự đánh rơi ngữ cảnh chủ sở hữu rồi đỏ vì một lý do khác hẳn.
+exec _ngu_canh_stat "$@"
+"""
+
+_SHIM_ID = """#!/usr/bin/env bash
+if [ "$#" = "1" ] && [ "${1:-}" = "-u" ]; then
+    printf '%s\\n' "${QLTS_TEST_UID:-0}"
+    exit 0
+fi
+exec /usr/bin/id "$@"
+"""
+
+
+
+def _viet_shim_ngu_canh(goc: Path) -> None:
+    """Ghi ba shim ngữ cảnh vào `bin/` — dùng chung cho MỌI bộ test deploy."""
+    for ten, than in (
+        ("bin/_ngu_canh_stat", _SHIM_NGU_CANH_STAT),
+        ("bin/stat", _SHIM_STAT),
+        ("bin/id", _SHIM_ID),
+    ):
+        duong = goc / ten
+        duong.write_text(than, encoding="utf-8", newline="\n")
+        duong.chmod(0o755)
+
+
+def _sandbox_cua(goc: Path) -> str:
+    """Gốc sandbox mà shim `stat` coi là "trong phạm vi" — CHA của `goc`.
+
+    Lấy cha chứ không lấy chính `goc`: vài ca cố ý đẩy `$OPS` hoặc nạn nhân
+    symlink ra NGOÀI cây dự án (`ops_ngoai_pham_vi`, `nan_nhan_*`) và vẫn cần
+    ngữ cảnh chủ sở hữu ở đó, nếu không chúng sẽ đỏ vì lý do sai.
+    """
+    return str(goc.parent)
+
+
+def _dung_san_khau(
+    tmp_path: Path,
+    deploy_sh: str | None = None,
+    marker: str | None = "MAC_DINH",
+    env_them: str = "",
+) -> Path:
+    """Dựng một cây dự án tối thiểu đủ để `scripts/deploy.sh` chạy tới Step 8.
+
+    ``marker``: ``"MAC_DINH"`` ⇒ marker hợp lệ khớp 4/4 (đường thuận lợi);
+    ``None`` ⇒ KHÔNG tạo marker; chuỗi khác ⇒ ghi nguyên văn chuỗi đó.
+    """
     goc = tmp_path / "qlts"
     (goc / "scripts").mkdir(parents=True)
     (goc / "nginx" / "templates").mkdir(parents=True)
     (goc / "bin").mkdir()
+    _viet_shim_ngu_canh(goc)
+    # Hop dong MOI cua deploy.sh: $OPS phai duoc cap quyen TRUOC; script
+    # KHONG con "mkdir -p" + "chmod 700" de sua ho. Fixture phai dung dung
+    # trang thai production, khong phai trang thai tien cho test.
+    (goc / "ops").mkdir(mode=0o700)
+    os.chmod(goc / "ops", 0o700)
+    if marker is not None:
+        than = _noi_dung_marker() if marker == "MAC_DINH" else marker
+        _mk = goc / "ops" / "last-deploy.marker"
+        _mk.write_text(than, encoding="utf-8", newline="\n")
+        # Step 8c tu choi thay mot marker sai quyen; 600 la quyen that.
+        os.chmod(_mk, 0o600)
 
     noi_dung = deploy_sh if deploy_sh is not None else _DEPLOY.read_text(encoding="utf-8")
     (goc / "scripts" / "deploy.sh").write_text(noi_dung, encoding="utf-8", newline="\n")
     for ten, than in (
         ("scripts/nginx-apply.sh", _STUB_NGINX_APPLY),
+        ("scripts/rollback-preflight.sh", _STUB_ROLLBACK_PREFLIGHT),
         ("bin/docker", _STUB_DOCKER),
         ("bin/git", _STUB_GIT),
     ):
@@ -396,7 +629,9 @@ def _dung_san_khau(tmp_path: Path, deploy_sh: str | None = None) -> Path:
         duong.write_text(than, encoding="utf-8", newline="\n")
         duong.chmod(0o755)
 
-    (goc / ".env.production").write_text(_ENV_PRODUCTION, encoding="utf-8", newline="\n")
+    (goc / ".env.production").write_text(
+        _ENV_PRODUCTION + env_them, encoding="utf-8", newline="\n"
+    )
     (goc / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8", newline="\n")
     (goc / "nginx" / "templates" / "default.conf.template").write_text(
         "server { server_name ${DOMAIN}; }\n", encoding="utf-8", newline="\n"
@@ -411,7 +646,21 @@ def _chay_deploy(goc: Path, **kich_ban: str) -> tuple[subprocess.CompletedProces
         **os.environ,
         "PATH": f"{goc / 'bin'}:{os.environ.get('PATH', '')}",
         "QLTS_STUB_LOG": str(nhat_ky),
+        # Mặc định của script là /opt/qlts-ops/rollback — tuyệt đối không để
+        # test ghi ra đó. Trỏ vào tmp_path để mỗi ca có ops dir riêng.
+        "QLTS_ROLLBACK_OPS_DIR": str(goc / "ops"),
+        # Ngữ cảnh production mà shim `stat`/`id` mô phỏng.
+        "QLTS_TEST_SANDBOX": _sandbox_cua(goc),
     }
+    # Cùng lý do với ba cờ entrypoint bên dưới: hai biến thoát hiểm PHẢI đến từ
+    # kịch bản của test. Nếu môi trường người chạy đang đặt chúng thì mọi ca
+    # fail-closed sẽ xanh giả vì khối asset bị bỏ qua hoàn toàn.
+    # `QLTS_TEST_UID` / `QLTS_TEST_CHU_SO_HUU` cũng vậy: chúng lái shim ngữ
+    # cảnh, nên một biến còn sót trong shell người chạy sẽ làm cả hai ca cổng
+    # uid và chủ sở hữu xanh giả.
+    for co in ("QLTS_SKIP_ROLLBACK_ASSET", "QLTS_SKIP_ROLLBACK_ASSET_REASON",
+               "QLTS_TEST_UID", "QLTS_TEST_CHU_SO_HUU"):
+        moi_truong.pop(co, None)
     # Ba cờ này quyết định stub có mô phỏng entrypoint hay không, nên chúng
     # PHẢI đến từ kịch bản của test chứ không từ môi trường người chạy. Bỏ sót
     # chỗ này thì `docker compose run ... -e RUN_MIGRATIONS_ON_STARTUP=false`
@@ -1212,3 +1461,605 @@ def test_p6_mo_ta_khong_lay_msg_tu_pydantic() -> None:
         if isinstance(n, ast.Constant) and n.value == "msg"
     ]
     assert not doc_msg, f"mo_ta_loi_an_toan còn đọc 'msg' tại dòng {doc_msg}"
+
+
+# =============================================================================
+# Step 3b — tài sản rollback: mọi nhánh hỏng đều phải DỪNG TRƯỚC build
+# =============================================================================
+# Bất biến của cả nhóm: khi tài sản rollback KHÔNG tạo được, `docker compose
+# build` không được chạy. Build là biên đầu tiên tốn kém và là biên cuối cùng
+# còn rẻ để quay đầu — sau nó là pg_dump, alembic, rồi thay container.
+#
+# Mỗi ca dưới đây vi phạm ĐÚNG MỘT bất biến, để khi đỏ thì biết đỏ vì gì.
+
+_MARKER_THIEU_SHA = (
+    "# marker-version\t1\n"
+    "backend\t" + _ANH_GIA["backend"] + "\t" + _cid_gia("backend") + "\n"
+)
+
+
+def _manifest_da_xuat_ban(goc: Path) -> list[Path]:
+    return sorted((goc / "ops").glob("pre-*/rollback_manifest_*.txt"))
+
+
+@_bo_qua_neu_khong_posix
+def test_ra_duong_thuan_loi_tao_du_bon_tag_va_goi_preflight(tmp_path: Path) -> None:
+    """Guard không được chặn nhầm ca lành — nếu không, nó vô dụng theo cách khác."""
+    goc = _dung_san_khau(tmp_path)
+    ket, nhat_ky = _chay_deploy(goc)
+
+    assert ket.returncode == 0, (
+        f"stdout:\n{ket.stdout[-3000:]}\nstderr:\n{ket.stderr[-3000:]}"
+    )
+    assert _MOC_BUILD in nhat_ky, "đường thuận lợi mà không tới build"
+
+    # Bốn tag, không phải hai: celery-worker/celery-beat có ảnh RIÊNG.
+    for dv in _DICH_VU_RA:
+        assert f"docker tag {_ANH_GIA[dv]} qlts-{dv}:pre-" in nhat_ky, (
+            f"thiếu lệnh tag cho '{dv}' — rollback sẽ lùi thiếu service.\n{nhat_ky}"
+        )
+
+    ban_ke = _manifest_da_xuat_ban(goc)
+    assert len(ban_ke) == 1, f"phải có đúng một bản kê, thấy {ban_ke}"
+    noi_dung = ban_ke[0].read_text(encoding="utf-8")
+
+    # `# git-rev` phải là SHA CŨ (từ marker), KHÔNG phải HEAD hiện tại. Đây là
+    # toàn bộ lý do marker tồn tại: deploy.yml đã ff-merge nên HEAD đã là SHA mới.
+    assert f"# git-rev\t{_SHA_CU}" in noi_dung, (
+        f"bản kê phải ghim SHA CŨ {_SHA_CU}, không phải HEAD.\n{noi_dung}"
+    )
+    assert f"# target-rev\t{_SHA_MOI}" in noi_dung
+    for dv in _DICH_VU_RA:
+        assert (
+            f"{dv}\t{_cid_gia(dv)}\t{_ANH_GIA[dv]}\t" in noi_dung
+        ), f"bản kê thiếu dòng '{dv}'"
+
+    # Preflight phải chạy NGAY, và phải ở chế độ local-only: nhánh GHCR sẽ dừng
+    # ở cổng đăng nhập vì VPS có `auths` rỗng.
+    assert _MOC_PREFLIGHT_RA in nhat_ky, "không gọi rollback-preflight"
+    assert "rollback-preflight local_only=1" in nhat_ky, (
+        f"preflight phải được gọi với LOCAL_ONLY=1.\n{nhat_ky}"
+    )
+    assert "rollback-preflight manifest_ton_tai=1" in nhat_ky, (
+        "preflight được gọi trước khi bản kê tồn tại — sai thứ tự"
+    )
+
+    # Marker mới phải mô tả SHA vừa deploy.
+    marker = (goc / "ops" / "last-deploy.marker").read_text(encoding="utf-8")
+    assert f"# deployed-sha\t{_SHA_MOI}" in marker, f"marker chưa cập nhật:\n{marker}"
+    for dv in _DICH_VU_RA:
+        assert f"{dv}\t{_ANH_GIA[dv]}\t" in marker, f"marker thiếu '{dv}'"
+
+
+@_bo_qua_neu_khong_posix
+def test_ra_thieu_marker_thi_dung_truoc_build(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path, marker=None)
+    ket, nhat_ky = _chay_deploy(goc)
+
+    assert ket.returncode != 0, "thiếu marker mà deploy vẫn thoát 0"
+    assert _MOC_BUILD not in nhat_ky, (
+        f"đã build dù không biết ảnh cũ thuộc commit nào:\n{nhat_ky}"
+    )
+    assert _MOC_PGDUMP not in nhat_ky, "đã chạm CSDL"
+    assert not _manifest_da_xuat_ban(goc), "không được xuất bản bản kê nào"
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,than_marker",
+    [
+        ("thiếu dòng deployed-sha", _MARKER_THIEU_SHA),
+        ("sha không đủ 40 ký tự", _noi_dung_marker(sha="a" * 39)),
+        ("sha có ký tự không phải hex", _noi_dung_marker(sha="g" * 40)),
+        (
+            "marker chỉ có 3/4 service",
+            _noi_dung_marker(
+                anh={k: v for k, v in _ANH_GIA.items() if k != "frontend"}
+            ),
+        ),
+    ],
+)
+def test_ra_marker_hong_thi_dung_truoc_build(
+    tmp_path: Path, ten_ca: str, than_marker: str
+) -> None:
+    goc = _dung_san_khau(tmp_path, marker=than_marker)
+    ket, nhat_ky = _chay_deploy(goc)
+
+    assert ket.returncode != 0, f"{ten_ca}: deploy phải dừng"
+    assert _MOC_BUILD not in nhat_ky, f"{ten_ca}: đã build\n{nhat_ky}"
+    assert not _manifest_da_xuat_ban(goc), f"{ten_ca}: đã xuất bản bản kê"
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize("dich_vu", _DICH_VU_RA)
+def test_ra_marker_lech_mot_service_thi_dung(tmp_path: Path, dich_vu: str) -> None:
+    """Lệch DÙ CHỈ MỘT service thì dừng.
+
+    Ca này chạy cho cả bốn service vì một guard chỉ so `backend` sẽ xanh ở ba
+    ca còn lại — đúng lớp lỗi "vá một nhánh còn bốn nhánh".
+    """
+    goc = _dung_san_khau(tmp_path)
+    ket, nhat_ky = _chay_deploy(goc, STUB_IMG_LECH=dich_vu)
+
+    assert ket.returncode != 0, f"'{dich_vu}' lệch mà deploy vẫn thoát 0"
+    assert (
+        dich_vu in ket.stdout + ket.stderr
+    ), "thông điệp lỗi phải nêu ĐÍCH DANH service lệch"
+    assert _MOC_BUILD not in nhat_ky, f"đã build dù marker lệch ở '{dich_vu}'"
+    assert not _manifest_da_xuat_ban(goc)
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize("dich_vu", _DICH_VU_RA)
+def test_ra_thieu_mot_container_thi_dung(tmp_path: Path, dich_vu: str) -> None:
+    """`compose ps -q` trả RỖNG mà vẫn exit 0 — đúng cái bẫy "lệnh trả 0"."""
+    goc = _dung_san_khau(tmp_path)
+    ket, nhat_ky = _chay_deploy(goc, STUB_PS_Q_THIEU=dich_vu)
+
+    assert ket.returncode != 0, f"thiếu container '{dich_vu}' mà deploy vẫn thoát 0"
+    assert _MOC_BUILD not in nhat_ky, f"đã build dù thiếu container '{dich_vu}'"
+    assert not _manifest_da_xuat_ban(goc)
+
+
+@_bo_qua_neu_khong_posix
+def test_ra_image_id_rong_thi_dung(tmp_path: Path) -> None:
+    """Chuỗi rỗng trôi qua mọi phép so — phải bắt tại chỗ đọc, không để nó đi xa."""
+    goc = _dung_san_khau(tmp_path)
+    ket, nhat_ky = _chay_deploy(goc, STUB_IMG_RONG="celery-beat")
+
+    assert ket.returncode != 0, "image ID rỗng mà deploy vẫn thoát 0"
+    assert _MOC_BUILD not in nhat_ky
+    assert not _manifest_da_xuat_ban(goc)
+
+
+@_bo_qua_neu_khong_posix
+def test_ra_tag_da_ton_tai_thi_khong_ghi_de(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, nhat_ky = _chay_deploy(goc, STUB_IMAGE_INSPECT_RC="0")
+
+    assert ket.returncode != 0, "tag đã tồn tại mà deploy vẫn thoát 0"
+    assert _MOC_TAG_ANH not in nhat_ky, f"đã ghi đè tag có sẵn:\n{nhat_ky}"
+    assert _MOC_BUILD not in nhat_ky
+    assert not _manifest_da_xuat_ban(goc)
+
+
+@_bo_qua_neu_khong_posix
+def test_ra_loi_giua_chung_khong_xuat_ban_ban_ke(tmp_path: Path) -> None:
+    """`docker tag` hỏng ở giữa thì KHÔNG được để lại bản kê nào.
+
+    Bản kê nửa vời nguy hiểm hơn không có bản kê: preflight của lượt sau sẽ đọc
+    được vài dòng đầu rồi tuyên bố có đường lùi cho một bộ ảnh không đủ.
+    """
+    goc = _dung_san_khau(tmp_path)
+    ket, nhat_ky = _chay_deploy(goc, STUB_TAG_RC="1")
+
+    assert ket.returncode != 0, "tag hỏng mà deploy vẫn thoát 0"
+    assert not _manifest_da_xuat_ban(goc), "đã xuất bản bản kê dù tag hỏng giữa chừng"
+    assert _MOC_BUILD not in nhat_ky
+    assert (
+        _MOC_PREFLIGHT_RA not in nhat_ky
+    ), "gọi preflight trên bộ tài sản chưa hoàn chỉnh"
+
+
+@_bo_qua_neu_khong_posix
+def test_ra_preflight_do_thi_dung_truoc_build(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, nhat_ky = _chay_deploy(goc, STUB_ROLLBACK_PREFLIGHT_RC="1")
+
+    assert ket.returncode != 0, "preflight đỏ mà deploy vẫn thoát 0"
+    assert _MOC_PREFLIGHT_RA in nhat_ky, "preflight phải được gọi rồi mới đỏ"
+    assert _MOC_BUILD not in nhat_ky, (
+        f"đã build dù tài sản rollback không dùng được:\n{nhat_ky}"
+    )
+    assert _MOC_PGDUMP not in nhat_ky, "đã chạm CSDL"
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,kich_ban",
+    [
+        ("bật mà thiếu lý do", {"QLTS_SKIP_ROLLBACK_ASSET": "1"}),
+        (
+            "lý do rỗng",
+            {"QLTS_SKIP_ROLLBACK_ASSET": "1", "QLTS_SKIP_ROLLBACK_ASSET_REASON": ""},
+        ),
+        (
+            "lý do có xuống dòng",
+            {
+                "QLTS_SKIP_ROLLBACK_ASSET": "1",
+                "QLTS_SKIP_ROLLBACK_ASSET_REASON": "vi\nly do",
+            },
+        ),
+        (
+            "lý do có tab",
+            {
+                "QLTS_SKIP_ROLLBACK_ASSET": "1",
+                "QLTS_SKIP_ROLLBACK_ASSET_REASON": "vi\tly do",
+            },
+        ),
+        (
+            "giá trị 'true' không được coi là bật",
+            {
+                "QLTS_SKIP_ROLLBACK_ASSET": "true",
+                "QLTS_SKIP_ROLLBACK_ASSET_REASON": "co ly do",
+            },
+        ),
+        ("giá trị 'yes'", {"QLTS_SKIP_ROLLBACK_ASSET": "yes"}),
+        ("giá trị rỗng", {"QLTS_SKIP_ROLLBACK_ASSET": ""}),
+    ],
+)
+def test_ra_thoat_hiem_khong_hop_le_thi_dung(
+    tmp_path: Path, ten_ca: str, kich_ban: dict
+) -> None:
+    """Cổng thoát hiểm phải fail-closed ở MỌI cách dùng sai.
+
+    Đặc biệt: một giá trị lạ (`true`, `yes`, rỗng) KHÔNG được hiểu là "bật".
+    Biến đặt sai chính tả mà được coi như bỏ qua là cách cổng tự tắt đúng lúc
+    cần canh nhất.
+    """
+    goc = _dung_san_khau(tmp_path, marker=None)
+    ket, nhat_ky = _chay_deploy(goc, **kich_ban)
+
+    assert ket.returncode != 0, f"{ten_ca}: deploy phải dừng"
+    assert _MOC_BUILD not in nhat_ky, f"{ten_ca}: đã build\n{nhat_ky}"
+
+
+@_bo_qua_neu_khong_posix
+def test_ra_thoat_hiem_hop_le_thi_di_tiep_va_ghi_vet(tmp_path: Path) -> None:
+    """Bỏ qua ĐÚNG CÁCH thì deploy chạy — nhưng phải để lại vết đọc được."""
+    goc = _dung_san_khau(tmp_path, marker=None)
+    ket, nhat_ky = _chay_deploy(
+        goc,
+        QLTS_SKIP_ROLLBACK_ASSET="1",
+        QLTS_SKIP_ROLLBACK_ASSET_REASON="hotfix P0, registry dang sap",
+    )
+
+    assert ket.returncode == 0, (
+        f"stdout:\n{ket.stdout[-3000:]}\nstderr:\n{ket.stderr[-3000:]}"
+    )
+    assert _MOC_BUILD in nhat_ky, "bỏ qua hợp lệ mà không tới build"
+    assert not _manifest_da_xuat_ban(goc), "bỏ qua rồi mà vẫn tạo bản kê"
+    assert "hotfix P0" in ket.stdout, "lý do phải xuất hiện trong log deploy"
+
+    marker = (goc / "ops" / "last-deploy.marker").read_text(encoding="utf-8")
+    assert "# asset-skipped\thotfix P0, registry dang sap" in marker, (
+        f"marker phải ghi lại rằng lượt này KHÔNG có tài sản:\n{marker}"
+    )
+
+
+@_bo_qua_neu_khong_posix
+def test_kiem_nguoc_go_khoi_tai_san_thi_thieu_marker_van_build(tmp_path: Path) -> None:
+    """Gỡ đúng khối đang canh và xác nhận nó ĐỎ — không thì "vẫn xanh" vô nghĩa.
+
+    Biến thể tinh vi nhất: xoá trọn Step 3b nhưng giữ nguyên mọi thứ khác. Nếu
+    build vẫn không chạy sau khi gỡ, guard này không phải thứ đang chặn và cả
+    nhóm ca trên đang xanh nhờ một cơ chế khác.
+    """
+    van = _DEPLOY.read_text(encoding="utf-8")
+    dau = van.rindex("# ====", 0, van.index("# Step 3b: TÀI SẢN ROLLBACK"))
+    cuoi = van.rindex("# ====", 0, van.index("# Step 4: Build Docker images"))
+    dot_bien = van[:dau] + van[cuoi:]
+    # Bám vào THÂN guard, không bám chữ "Step 3b": chuỗi đó còn xuất hiện trong
+    # chú thích của Step 8c, nên phép kiểm theo tên mục sẽ luôn đỏ và ca đột
+    # biến không bao giờ chạy tới phần có nghĩa.
+    assert "LỆCH marker ở" not in dot_bien, "đột biến chưa gỡ được thân guard"
+    assert "rollback-preflight.sh" not in dot_bien, "đột biến còn sót lời gọi preflight"
+
+    goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien, marker=None)
+    _, nhat_ky = _chay_deploy(goc)
+
+    assert _MOC_BUILD in nhat_ky, (
+        "gỡ Step 3b mà build VẪN không chạy ⇒ thứ chặn build không phải guard này.\n"
+        f"nhật ký:\n{nhat_ky}"
+    )
+
+
+# =============================================================================
+# Bốn lỗ fail-closed phát hiện khi rà lại (18-09-2026) — mỗi lỗ một nhóm ca
+# =============================================================================
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,env_them",
+    [
+        (
+            "cả hai biến",
+            "QLTS_SKIP_ROLLBACK_ASSET=1\nQLTS_SKIP_ROLLBACK_ASSET_REASON=x\n",
+        ),
+        ("chỉ biến cờ", "QLTS_SKIP_ROLLBACK_ASSET=1\n"),
+        ("chỉ biến lý do", "QLTS_SKIP_ROLLBACK_ASSET_REASON=x\n"),
+        ("cờ đặt =0", "QLTS_SKIP_ROLLBACK_ASSET=0\n"),
+    ],
+)
+def test_ra_thoat_hiem_trong_env_production_thi_dung(
+    tmp_path: Path, ten_ca: str, env_them: str
+) -> None:
+    """Cổng thoát hiểm KHÔNG được trở thành cấu hình thường trực.
+
+    `deploy.sh` `source .env.production`, nên hai biến ghi vào tệp đó một lần
+    rồi quên sẽ khiến MỌI deploy sau tự bỏ qua tài sản — trái hợp đồng "gõ tay
+    mỗi lượt". Kể cả `=0` cũng phải từ chối: vấn đề là chúng NẰM TRONG TỆP,
+    không phải giá trị chúng mang.
+    """
+    goc = _dung_san_khau(tmp_path, env_them=env_them)
+    ket, nhat_ky = _chay_deploy(goc)
+
+    assert ket.returncode != 0, f"{ten_ca}: deploy phải dừng"
+    assert ".env.production" in ket.stdout, f"{ten_ca}: thông điệp phải nêu đúng nguồn"
+    assert _MOC_BUILD not in nhat_ky, f"{ten_ca}: đã build"
+
+
+@_bo_qua_neu_khong_posix
+def test_ra_thoat_hiem_dong_lenh_van_chay_du_env_sach(tmp_path: Path) -> None:
+    """Kiểm ngược của ca trên: gõ tay trên dòng lệnh thì VẪN phải đi tiếp.
+
+    Không có ca này thì một guard chặn nhầm cả đường hợp lệ vẫn xanh.
+    """
+    goc = _dung_san_khau(tmp_path, marker=None)
+    ket, _ = _chay_deploy(
+        goc,
+        QLTS_SKIP_ROLLBACK_ASSET="1",
+        QLTS_SKIP_ROLLBACK_ASSET_REASON="hotfix P0",
+    )
+    assert ket.returncode == 0, f"stdout:\n{ket.stdout[-2500:]}"
+
+
+@_bo_qua_neu_khong_posix
+def test_ra_ly_do_co_backslash_thi_dung(tmp_path: Path) -> None:
+    """`\\n` là HAI ký tự, không phải newline — phép kiểm cntrl không bắt được.
+
+    Với `echo -e` nó từng đẻ ra một dòng log giả. Hai lớp phòng thủ: log đã
+    chuyển sang `printf '%s'`, và lý do từ chối dấu gạch chéo ngược.
+    """
+    goc = _dung_san_khau(tmp_path, marker=None)
+    ket, _ = _chay_deploy(
+        goc,
+        QLTS_SKIP_ROLLBACK_ASSET="1",
+        QLTS_SKIP_ROLLBACK_ASSET_REASON="hotfix\\n[DEPLOY] gia mao",
+    )
+    assert ket.returncode != 0, "lý do chứa backslash mà deploy vẫn chạy"
+    assert "\n[DEPLOY] gia mao" not in ket.stdout, "đã đẻ ra dòng log giả"
+
+
+@_bo_qua_neu_khong_posix
+def test_ra_log_khong_dien_giai_escape_trong_thong_diep(tmp_path: Path) -> None:
+    """Chứng minh chính hàm log đã hết diễn giải escape, độc lập với guard lý do."""
+    goc = _dung_san_khau(tmp_path, marker=None)
+    (goc / "scripts" / "thu.sh").write_text(
+        "source scripts/deploy.sh 2>/dev/null || true\n", encoding="utf-8", newline="\n"
+    )
+    ket = subprocess.run(
+        ["bash", "-c", 'sed -n "/^log()/,/^cutover()/p" scripts/deploy.sh > /tmp/f.sh; '
+         'RED=; GREEN=; YELLOW=; NC=; . /tmp/f.sh; log "a\\nb"'],
+        cwd=str(goc), capture_output=True, text=True, timeout=60,
+    )
+    assert ket.stdout.count("\n") == 1, (
+        f"log() vẫn tách '\\n' thành dòng mới: {ket.stdout!r}"
+    )
+    assert "a\\nb" in ket.stdout, f"log() phải in nguyên văn: {ket.stdout!r}"
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,than_marker",
+    [
+        (
+            "thiếu marker-version",
+            _noi_dung_marker().replace("# marker-version\t1\n", ""),
+        ),
+        (
+            "marker-version khác 1",
+            _noi_dung_marker().replace("# marker-version\t1", "# marker-version\t2"),
+        ),
+        (
+            "marker-version hai lần",
+            "# marker-version\t1\n" + _noi_dung_marker(),
+        ),
+        (
+            "deployed-sha hai lần mâu thuẫn",
+            _noi_dung_marker() + f"# deployed-sha\t{'e' * 40}\n",
+        ),
+        (
+            "một service khai hai lần",
+            _noi_dung_marker() + f"backend\t{_ANH_GIA['backend']}\t{_cid_gia('backend')}\n",
+        ),
+        (
+            "có dòng service lạ",
+            _noi_dung_marker() + f"postgres\t{_ANH_GIA['backend']}\t{_cid_gia('postgres')}\n",
+        ),
+        (
+            "image ID thiếu tiền tố sha256",
+            _noi_dung_marker(anh={**_ANH_GIA, "frontend": "f" * 64}),
+        ),
+        (
+            "image ID chỉ 12 hex (tiền tố rút gọn)",
+            _noi_dung_marker(anh={**_ANH_GIA, "celery-beat": "sha256:" + "d" * 12}),
+        ),
+        (
+            "image ID có ký tự không phải hex",
+            _noi_dung_marker(anh={**_ANH_GIA, "backend": "sha256:" + "z" * 64}),
+        ),
+    ],
+)
+def test_ra_marker_sai_hinh_dang_thi_dung(
+    tmp_path: Path, ten_ca: str, than_marker: str
+) -> None:
+    """Marker phải ĐÚNG HÌNH DẠNG, không chỉ "có dòng ta cần".
+
+    `head -1` là cái bẫy: marker có hai dòng `deployed-sha` mâu thuẫn vẫn qua
+    cổng và ta ghim theo dòng đầu mà không biết dòng sau nói khác.
+    """
+    goc = _dung_san_khau(tmp_path, marker=than_marker)
+    ket, nhat_ky = _chay_deploy(goc)
+
+    assert ket.returncode != 0, f"{ten_ca}: deploy phải dừng"
+    assert _MOC_BUILD not in nhat_ky, f"{ten_ca}: đã build\n{nhat_ky}"
+    assert not _manifest_da_xuat_ban(goc), f"{ten_ca}: đã xuất bản bản kê"
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize("lan_hong", [2, 3, 4])
+def test_ra_tag_hong_GIUA_CHUNG_khong_xuat_ban_ban_ke(
+    tmp_path: Path, lan_hong: int
+) -> None:
+    """Hỏng ở tag thứ 2/3/4 — tức ĐÃ tạo được 1–3 tag rồi mới gãy.
+
+    `STUB_TAG_RC=1` làm hỏng ngay lệnh đầu, nên nó chưa từng thi hành nhánh
+    "dở dang thật". Ca này mới là ca mà bản kê nửa vời có thể ra đời.
+    """
+    goc = _dung_san_khau(tmp_path)
+    ket, nhat_ky = _chay_deploy(goc, STUB_TAG_FAIL_AT=str(lan_hong))
+
+    assert ket.returncode != 0, f"gãy ở tag #{lan_hong} mà deploy vẫn thoát 0"
+    assert nhat_ky.count("docker tag ") == lan_hong, (
+        f"kịch bản chưa đúng: muốn gãy ở lần {lan_hong}, "
+        f"thấy {nhat_ky.count('docker tag ')} lần gọi"
+    )
+    assert not _manifest_da_xuat_ban(goc), "đã xuất bản bản kê dù tag gãy giữa chừng"
+    assert _MOC_PREFLIGHT_RA not in nhat_ky, "gọi preflight trên bộ tài sản dở dang"
+    assert _MOC_BUILD not in nhat_ky
+
+
+@_bo_qua_neu_khong_posix
+def test_ra_preflight_do_thi_khong_co_ban_ke_chinh_thuc(tmp_path: Path) -> None:
+    """Preflight đỏ ⇒ KHÔNG được để lại bản kê mang tên chính thức.
+
+    Bản trước `mv` sang tên thật RỒI mới chạy preflight, nên khi đỏ vẫn còn một
+    tệp trông hoàn chỉnh, không dấu hiệu nào nói nó chưa đạt — và lượt sau sẽ
+    tin nó.
+    """
+    goc = _dung_san_khau(tmp_path)
+    ket, nhat_ky = _chay_deploy(goc, STUB_ROLLBACK_PREFLIGHT_RC="1")
+
+    assert ket.returncode != 0
+    assert _MOC_PREFLIGHT_RA in nhat_ky, "preflight phải được gọi rồi mới đỏ"
+    assert not _manifest_da_xuat_ban(goc), (
+        "preflight ĐỎ mà bản kê chính thức vẫn nằm lại — lượt sau sẽ tin nó"
+    )
+    # Và cũng không để lại tệp tạm nào.
+    con_lai = [p.name for p in (goc / "ops").rglob("*") if p.is_file()]
+    assert not [n for n in con_lai if ".tmp" in n], f"còn tệp tạm: {con_lai}"
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,kich_ban",
+    [
+        ("thiếu container ở 8c", {"STUB_PS_Q_THIEU_SAU_BUILD": "celery-beat"}),
+        ("image ID rỗng ở 8c", {"STUB_IMG_RONG_SAU_BUILD": "frontend"}),
+    ],
+)
+def test_ra_loi_o_step_8c_giu_marker_cu_nguyen_ven(
+    tmp_path: Path, ten_ca: str, kich_ban: dict
+) -> None:
+    """Nhánh lỗi của Step 8c chưa từng được thi hành trước ca này.
+
+    `STUB_PS_Q_THIEU`/`STUB_IMG_RONG` làm Step 3b đỏ NGAY, nên chúng không bao
+    giờ chạm tới 8c. Hai kịch bản `_SAU_BUILD` chỉ hỏng sau khi build đã chạy.
+
+    Bất biến: marker CŨ phải còn byte-identical, không tệp tạm nào nằm lại, và
+    KHÔNG in dòng hoàn tất.
+    """
+    goc = _dung_san_khau(tmp_path)
+    truoc = (goc / "ops" / "last-deploy.marker").read_bytes()
+
+    ket, nhat_ky = _chay_deploy(goc, **kich_ban)
+
+    assert _MOC_BUILD in nhat_ky, f"{ten_ca}: chưa tới build ⇒ chưa chạm được 8c"
+    assert ket.returncode != 0, f"{ten_ca}: lỗi ở 8c mà deploy vẫn thoát 0"
+
+    sau = (goc / "ops" / "last-deploy.marker").read_bytes()
+    assert sau == truoc, f"{ten_ca}: marker cũ đã bị sửa — lượt sau sẽ ghim nhầm"
+
+    con_lai = [p.name for p in (goc / "ops").rglob("*") if p.is_file()]
+    assert not [n for n in con_lai if ".tmp" in n], f"{ten_ca}: còn tệp tạm {con_lai}"
+    assert "Deployment completed successfully" not in ket.stdout, (
+        f"{ten_ca}: in dòng hoàn tất dù marker chưa ghi được"
+    )
+
+
+def _go_moi_lop_bao_ve_env(van: str) -> str:
+    """Đột biến: gỡ TẤT CẢ các lớp chặn `.env.production`.
+
+    Có BA lớp, không phải hai — lượt viết ca này đầu tiên đã sót lớp 3 và đột
+    biến không tái hiện được lỗ:
+
+    1. chụp giá trị TRƯỚC `source` rồi chỉ dùng bản chụp ⇒ giá trị từ tệp env
+       không bao giờ được đọc;
+    2. từ chối to tiếng nếu tệp env tái khai báo;
+    3. `unset` sau `source` ⇒ dù có lọt qua (1) và (2), biến vẫn bị xoá trước
+       khi tới Step 3b.
+
+    Gỡ riêng lớp 2 thì lỗ KHÔNG mở lại, nên một ca đột biến chỉ gỡ lớp 2 sẽ
+    chứng minh nhầm. Phải gỡ cả ba.
+    """
+    dau = van.index('if [ "${QLTS_SKIP_ROLLBACK_ASSET+co}" = "co" ] \\')
+    # Cắt qua HẾT dòng `unset` (lớp 3), không dừng ngay trước nó.
+    cuoi = van.index("\n", van.index("unset QLTS_SKIP_ROLLBACK_ASSET", dau)) + 1
+    van = van[:dau] + van[cuoi:]
+    van = van.replace('if [ "$_RA_SKIP_CO" = "1" ]; then', 'if true; then', 1)
+    van = van.replace(
+        'case "$_RA_SKIP_GIATRI" in', 'case "${QLTS_SKIP_ROLLBACK_ASSET:-0}" in', 1
+    )
+    van = van.replace('if [ "$_RA_REASON_CO" != "1" ]; then', "if false; then", 1)
+    van = van.replace(
+        'if [ -z "$_RA_REASON_GIATRI" ]; then', "if false; then", 1
+    )
+    return van
+
+
+@_bo_qua_neu_khong_posix
+def test_kiem_nguoc_go_moi_lop_thi_env_production_bat_duoc_vinh_vien(
+    tmp_path: Path,
+) -> None:
+    """Gỡ đúng thứ đang canh và xác nhận lỗ MỞ LẠI — không thì "vẫn xanh" vô nghĩa.
+
+    Sau đột biến, `.env.production` khai hai biến là đủ để deploy **âm thầm bỏ
+    qua** tài sản rollback: thoát 0, tới build, không bản kê nào. Đó chính là
+    hình dạng của lỗ "bật vĩnh viễn" mà bản vá đóng lại.
+    """
+    dot_bien = _go_moi_lop_bao_ve_env(_DEPLOY.read_text(encoding="utf-8"))
+    assert "được khai báo trong .env.production" not in dot_bien
+
+    goc = _dung_san_khau(
+        tmp_path,
+        deploy_sh=dot_bien,
+        env_them="QLTS_SKIP_ROLLBACK_ASSET=1\nQLTS_SKIP_ROLLBACK_ASSET_REASON=x\n",
+    )
+    ket, nhat_ky = _chay_deploy(goc)
+
+    assert ket.returncode == 0, (
+        f"đột biến phải chạy trót lọt mới chứng minh được lỗ.\n"
+        f"stdout:\n{ket.stdout[-2500:]}"
+    )
+    assert _MOC_BUILD in nhat_ky, "đột biến chưa tới build"
+    assert not _manifest_da_xuat_ban(goc), (
+        "đột biến vẫn tạo bản kê ⇒ chưa tái hiện được lỗ bỏ-qua"
+    )
+
+
+@_bo_qua_neu_khong_posix
+def test_ra_lop_chup_truoc_source_tu_no_da_du_vo_hieu_env(tmp_path: Path) -> None:
+    """Chỉ gỡ lớp 2: lỗ KHÔNG mở lại, vì lớp 1 vẫn bỏ qua giá trị từ tệp env.
+
+    Ca này khoá lại đúng lý do vì sao ca đột biến ở trên phải gỡ CẢ BA lớp —
+    nếu ai đó sau này rút gọn nó, ca này sẽ đỏ.
+    """
+    van = _DEPLOY.read_text(encoding="utf-8")
+    dau = van.index('if [ "${QLTS_SKIP_ROLLBACK_ASSET+co}" = "co" ] \\')
+    cuoi = van.index("unset QLTS_SKIP_ROLLBACK_ASSET", dau)
+    chi_go_lop2 = van[:dau] + van[cuoi:]
+
+    goc = _dung_san_khau(
+        tmp_path,
+        deploy_sh=chi_go_lop2,
+        env_them="QLTS_SKIP_ROLLBACK_ASSET=1\nQLTS_SKIP_ROLLBACK_ASSET_REASON=x\n",
+    )
+    ket, nhat_ky = _chay_deploy(goc)
+
+    assert ket.returncode == 0, f"stdout:\n{ket.stdout[-2500:]}"
+    assert _manifest_da_xuat_ban(goc), (
+        "giá trị từ .env.production KHÔNG được có hiệu lực — lớp chụp-trước-source "
+        "phải khiến deploy vẫn tạo tài sản bình thường"
+    )
