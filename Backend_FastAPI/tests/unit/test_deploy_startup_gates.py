@@ -516,6 +516,79 @@ def _noi_dung_marker(sha: str = _SHA_CU, anh: dict[str, str] | None = None) -> s
     return "\n".join(dong) + "\n"
 
 
+# --- NGỮ CẢNH production: root + root:root ----------------------------------
+# `deploy.sh` đòi uid 0 và `700 root:root` / `600 root:root`. Runner của
+# required CI (`runs-on: ubuntu-latest`, KHÔNG khai `container:`) chạy dưới một
+# user thường, nên sandbox KHÔNG dựng được trạng thái ấy thật. Đo ngày
+# 21-09-2026 trên cùng một cây: chạy non-root cho **83 failed / 354 passed /
+# 1 skipped**, chạy root cho **437 passed / 1 skipped**. Nghĩa là "xanh ở máy"
+# đã KHÔNG chứng minh gì về PR gate.
+#
+# Harness này vốn ĐÃ mô phỏng `docker`, `git`, `mktemp`, `mv`, `ln`… bằng stub
+# trên PATH. Chủ sở hữu và uid là mảnh còn thiếu của đúng lớp mô phỏng ấy.
+#
+# ⚠️ Hai shim dưới đây KHÔNG nới cổng của mã production — `deploy.sh` vẫn đòi
+# đúng `0` và đúng `root:root`. Chúng dựng NGỮ CẢNH mà cổng ấy được thiết kế để
+# chạy trong đó. Và mỗi cổng vẫn có ca riêng lái shim sang giá trị SAI
+# (`QLTS_TEST_UID`, `QLTS_TEST_CHU_SO_HUU`) để chứng minh nó còn canh — trước
+# bản vá này cổng uid KHÔNG có ca nào, nó chỉ "tình cờ xanh" vì người chạy
+# đang là root.
+_SHIM_NGU_CANH_STAT = """#!/usr/bin/env bash
+# Thay ĐÚNG trường `%U:%G`, và CHỈ cho đường dẫn nằm trong sandbox của test.
+# Mọi trường khác (`%a`, `%s`, `%h`, `%d:%i`) vẫn là giá trị THẬT của tệp thật.
+_THAT=/usr/bin/stat
+if [ "${1:-}" = "-c" ] && [ -n "${2:-}" ]; then
+    _dang="$2"
+    _dich="${@: -1}"
+    case "$_dich" in
+        "${QLTS_TEST_SANDBOX:-/khong/bao/gio/khop}"/*)
+            _dang=${_dang//%U:%G/${QLTS_TEST_CHU_SO_HUU:-root:root}} ;;
+    esac
+    shift 2
+    exec "$_THAT" -c "$_dang" "$@"
+fi
+exec "$_THAT" "$@"
+"""
+
+_SHIM_STAT = """#!/usr/bin/env bash
+# Lớp mỏng. Ca kiểm nào cần can thiệp `stat` thì GHI ĐÈ tệp này, và PHẢI kết
+# bằng `exec _ngu_canh_stat "$@"` chứ không phải `/usr/bin/stat` — nếu không,
+# chính ca đó tự đánh rơi ngữ cảnh chủ sở hữu rồi đỏ vì một lý do khác hẳn.
+exec _ngu_canh_stat "$@"
+"""
+
+_SHIM_ID = """#!/usr/bin/env bash
+if [ "$#" = "1" ] && [ "${1:-}" = "-u" ]; then
+    printf '%s\\n' "${QLTS_TEST_UID:-0}"
+    exit 0
+fi
+exec /usr/bin/id "$@"
+"""
+
+
+
+def _viet_shim_ngu_canh(goc: Path) -> None:
+    """Ghi ba shim ngữ cảnh vào `bin/` — dùng chung cho MỌI bộ test deploy."""
+    for ten, than in (
+        ("bin/_ngu_canh_stat", _SHIM_NGU_CANH_STAT),
+        ("bin/stat", _SHIM_STAT),
+        ("bin/id", _SHIM_ID),
+    ):
+        duong = goc / ten
+        duong.write_text(than, encoding="utf-8", newline="\n")
+        duong.chmod(0o755)
+
+
+def _sandbox_cua(goc: Path) -> str:
+    """Gốc sandbox mà shim `stat` coi là "trong phạm vi" — CHA của `goc`.
+
+    Lấy cha chứ không lấy chính `goc`: vài ca cố ý đẩy `$OPS` hoặc nạn nhân
+    symlink ra NGOÀI cây dự án (`ops_ngoai_pham_vi`, `nan_nhan_*`) và vẫn cần
+    ngữ cảnh chủ sở hữu ở đó, nếu không chúng sẽ đỏ vì lý do sai.
+    """
+    return str(goc.parent)
+
+
 def _dung_san_khau(
     tmp_path: Path,
     deploy_sh: str | None = None,
@@ -531,6 +604,7 @@ def _dung_san_khau(
     (goc / "scripts").mkdir(parents=True)
     (goc / "nginx" / "templates").mkdir(parents=True)
     (goc / "bin").mkdir()
+    _viet_shim_ngu_canh(goc)
     # Hop dong MOI cua deploy.sh: $OPS phai duoc cap quyen TRUOC; script
     # KHONG con "mkdir -p" + "chmod 700" de sua ho. Fixture phai dung dung
     # trang thai production, khong phai trang thai tien cho test.
@@ -575,11 +649,17 @@ def _chay_deploy(goc: Path, **kich_ban: str) -> tuple[subprocess.CompletedProces
         # Mặc định của script là /opt/qlts-ops/rollback — tuyệt đối không để
         # test ghi ra đó. Trỏ vào tmp_path để mỗi ca có ops dir riêng.
         "QLTS_ROLLBACK_OPS_DIR": str(goc / "ops"),
+        # Ngữ cảnh production mà shim `stat`/`id` mô phỏng.
+        "QLTS_TEST_SANDBOX": _sandbox_cua(goc),
     }
     # Cùng lý do với ba cờ entrypoint bên dưới: hai biến thoát hiểm PHẢI đến từ
     # kịch bản của test. Nếu môi trường người chạy đang đặt chúng thì mọi ca
     # fail-closed sẽ xanh giả vì khối asset bị bỏ qua hoàn toàn.
-    for co in ("QLTS_SKIP_ROLLBACK_ASSET", "QLTS_SKIP_ROLLBACK_ASSET_REASON"):
+    # `QLTS_TEST_UID` / `QLTS_TEST_CHU_SO_HUU` cũng vậy: chúng lái shim ngữ
+    # cảnh, nên một biến còn sót trong shell người chạy sẽ làm cả hai ca cổng
+    # uid và chủ sở hữu xanh giả.
+    for co in ("QLTS_SKIP_ROLLBACK_ASSET", "QLTS_SKIP_ROLLBACK_ASSET_REASON",
+               "QLTS_TEST_UID", "QLTS_TEST_CHU_SO_HUU"):
         moi_truong.pop(co, None)
     # Ba cờ này quyết định stub có mô phỏng entrypoint hay không, nên chúng
     # PHẢI đến từ kịch bản của test chứ không từ môi trường người chạy. Bỏ sót

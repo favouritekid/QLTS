@@ -844,6 +844,15 @@ _bo_qua_neu_khong_posix_dh = pytest.mark.skipif(
 )
 
 
+# Shim ngữ cảnh (root + root:root) dùng CHUNG với `test_deploy_startup_gates`.
+# Đây là lớp mô phỏng môi trường, không phải stub nghiệp vụ: khai bản thứ hai ở
+# đây là mời hai bản trôi khỏi nhau, rồi một bộ xanh còn bộ kia đỏ vì ngữ cảnh.
+from tests.unit.test_deploy_startup_gates import (  # noqa: E402
+    _sandbox_cua,
+    _viet_shim_ngu_canh,
+)
+
+
 def _san_khau_dh(
     tmp_path: Path, deploy_sh: str | None = None, marker: str | None = "MAC_DINH"
 ) -> Path:
@@ -853,6 +862,7 @@ def _san_khau_dh(
     (goc / "scripts").mkdir(parents=True)
     (goc / "nginx" / "templates").mkdir(parents=True)
     (goc / "bin").mkdir()
+    _viet_shim_ngu_canh(goc)
 
     # Hop dong MOI: $OPS phai san 700 root:root; deploy.sh khong tu sua.
     (goc / "ops").mkdir(mode=0o700)
@@ -895,6 +905,8 @@ def _chay_dh(goc: Path, **kich_ban: str):
         # Mặc định của deploy.sh là /opt/qlts-ops/rollback — tuyệt đối không để
         # test ghi ra đó. Mỗi ca có thư mục ops riêng trong tmp_path.
         "QLTS_ROLLBACK_OPS_DIR": str(goc / "ops"),
+        # Ngữ cảnh production mà shim `stat`/`id` mô phỏng.
+        "QLTS_TEST_SANDBOX": _sandbox_cua(goc),
     }
     # Các biến điều khiển PHẢI đến từ kịch bản của ca, không từ môi trường
     # người chạy — nếu không, một ca có thể xanh mà chẳng chứng minh gì.
@@ -902,6 +914,8 @@ def _chay_dh(goc: Path, **kich_ban: str):
         # Hai cổng thoát hiểm của Step 3b: nếu môi trường người chạy đang đặt
         # chúng thì MỌI ca dưới đây bỏ qua khối tài sản và xanh giả.
         "QLTS_SKIP_ROLLBACK_ASSET", "QLTS_SKIP_ROLLBACK_ASSET_REASON",
+        # Lái shim ngữ cảnh — sót lại trong shell người chạy là xanh giả.
+        "QLTS_TEST_UID", "QLTS_TEST_CHU_SO_HUU",
         "STUB_ROLLBACK_PREFLIGHT_RC",
         "SHA_MONG_DOI", "QLTS_HEALTH_TIMEOUT", "STUB_GIT_HEAD", "STUB_GIT_REVPARSE_RC",
         "STUB_HEALTH_BACKEND", "STUB_HEALTH_FRONTEND", "STUB_STATUS_BACKEND",

@@ -1024,6 +1024,7 @@ jobs:
               tests/unit/test_dockerignore_prod_context.py
               tests/unit/test_gitignore_export_pii.py
               tests/unit/test_deploy_ghim_sha.py
+              tests/unit/test_deploy_atomic_writers.py
               tests/unit/test_smoke_stack_co_lap.py
               tests/unit/test_smoke_bootstrap_personas.py
               tests/unit/test_smoke_seed_persona_registry.py

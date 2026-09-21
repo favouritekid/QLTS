@@ -1781,18 +1781,69 @@ class TestHopDongDurationsTier4:
 class TestNeoCheoDeployClassifier:
     """Tệp hợp đồng deploy không thể tự canh selector và dây nối của chính nó.
 
-    Neo nằm ở tệp Tier 5 này: gỡ ``test_deploy_ghim_sha.py`` khỏi matrix hoặc
-    tháo bước kiểm skip-directive khỏi required ``classifier-contract`` đều
-    phải làm một ca độc lập còn chạy chuyển đỏ.
+    Neo nằm ở tệp Tier 5 này: gỡ BẤT KỲ tệp nào trong ba hợp đồng deploy
+    (``ghim_sha``, ``startup_gates``, ``atomic_writers``) khỏi matrix, tách
+    chúng sang hai leg, hoặc tháo bước kiểm skip-directive khỏi required
+    ``classifier-contract``, đều phải làm một ca độc lập còn chạy chuyển đỏ.
     """
 
     TEP_HOP_DONG_DEPLOY = "tests/unit/test_deploy_ghim_sha.py"
+    TEP_ATOMIC_WRITERS = "tests/unit/test_deploy_atomic_writers.py"
+    #: BA tệp — không phải hai. Bản trước tuyên bố "ba" trong docstring mà
+    #: phép so chỉ chạm HAI: chuyển `test_deploy_startup_gates.py` sang leg
+    #: khác thì neo vẫn PASS. Danh sách này là thứ phép so thật sự đọc.
+    TEP_DEPLOY_CUNG_LEG = (
+        "tests/unit/test_deploy_ghim_sha.py",
+        "tests/unit/test_deploy_startup_gates.py",
+        "tests/unit/test_deploy_atomic_writers.py",
+    )
     SCRIPT_DEPLOY = ".github/scripts/deploy_change_classifier.py"
 
     def test_hop_dong_deploy_con_la_whole_file_trong_pr_gate(self, cac_leg):
         assert self.TEP_HOP_DONG_DEPLOY in _selector_whole_file(cac_leg), (
             "%s phải còn là whole-file selector; nếu gỡ nó thì chính các hợp "
             "đồng deploy ngừng chạy mà không ai báo đỏ." % self.TEP_HOP_DONG_DEPLOY
+        )
+
+    def test_atomic_writers_con_la_whole_file_trong_pr_gate(self, cac_leg):
+        """56 ca cổng ghi nguyên tử phải nằm TRONG MATRIX, không chỉ trong kho.
+
+        Workflow chạy một DANH SÁCH SELECTOR TƯỜNG MINH. Tệp test không có tên
+        trong leg nào thì KHÔNG shard nào chạy nó, mà required check vẫn XANH —
+        đúng lớp lỗi đã đo 316/567 tệp đang nằm ngoài mọi tier (đo lại
+        21-09-2026: universe 567 tệp test, matrix phủ 251).
+        """
+        assert self.TEP_ATOMIC_WRITERS in _selector_whole_file(cac_leg), (
+            "%s phải còn là whole-file selector trong matrix `pytest-shard`; gỡ "
+            "nó ra thì toàn bộ hợp đồng ghi nguyên tử của `deploy.sh` ngừng chạy "
+            "mà không ca nào báo đỏ." % self.TEP_ATOMIC_WRITERS
+        )
+
+    def test_ba_hop_dong_deploy_o_cung_mot_leg(self, cac_leg):
+        """CẢ BA tệp hợp đồng deploy phải ở CÙNG một leg.
+
+        ⚠️ Lý do KHÔNG phải "lát khác có thể không required" — đó là một diễn
+        giải SAI: job `pytest` gom kết quả của TOÀN BỘ matrix
+        (`needs.pytest-shard.result`), nên mọi leg đều nằm trong required check.
+
+        Lý do thật: ba tệp deploy dùng CHUNG một lớp mô phỏng ngữ cảnh (root +
+        `root:root`, xem `_viet_shim_ngu_canh`). Mọi thiết lập ở cấp leg —
+        `pytest_extra`, timeout, và bất kỳ thay đổi môi trường nào về sau —
+        phải áp cho cả ba cùng lúc. Tách chúng ra phải là một quyết định có ý
+        thức, không phải một lần sửa tay lặng lẽ.
+
+        KHÔNG ghim chuỗi "Tier 5 — …": ghim nhãn bằng chữ sẽ đỏ oan chỉ vì một
+        lần đổi tên. Phép so là "ba giá trị BẰNG NHAU", nên nó sống sót qua
+        đổi nhãn mà vẫn bắt được việc tách lát.
+
+        Ca này cũng bắt luôn việc GỠ HẲN một trong ba, hoặc đổi selector của nó
+        thành node-id: `_tier_cua` trả `None` ⇒ ba giá trị hết bằng nhau.
+        """
+        tier = {t: _tier_cua(cac_leg, t) for t in self.TEP_DEPLOY_CUNG_LEG}
+        assert len(set(tier.values())) == 1, (
+            "ba hợp đồng deploy KHÔNG còn ở cùng một leg: %r — một thiết lập cấp "
+            "leg sẽ chỉ áp cho một phần, và `None` nghĩa là tệp đó không còn "
+            "whole-file selector trong matrix." % (tier,)
         )
 
     def test_required_classifier_contract_thuc_su_goi_guard_skip_directive(self, wf):

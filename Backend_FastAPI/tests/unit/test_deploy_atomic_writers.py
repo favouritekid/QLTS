@@ -232,10 +232,16 @@ def test_aw_loi_8c_giu_marker_cu_byte_identical(tmp_path: Path) -> None:
 # 7. Cong $OPS — vector OWNER (mode va owner la hai bat bien khac nhau)
 # ===========================================================================
 def test_aw_ops_sai_owner_thi_dung_truoc_moi_ghi(tmp_path: Path) -> None:
+    """$OPS thuoc NGUOI KHAC => dung truoc moi lan ghi.
+
+    Ban truoc dung `os.chown(..., 65534)` — chi chay duoc khi NGUOI CHAY la
+    root, nen ca nay do tren runner CI. Nay lai shim ngu canh: mode van la
+    mode THAT, chi truong chu so huu duoc mo phong.
+    """
     goc = _dung_san_khau(tmp_path)
-    os.chown(goc / "ops", 65534, 65534)
-    rc, out = _do(goc)
+    rc, out = _do(goc, QLTS_TEST_CHU_SO_HUU="nobody:nogroup")
     assert rc != 0, out
+    assert "sai quy" in out, out
     # Chan TRUOC docker tag / TMP / build: khong co thu muc tai san nao sinh ra
     assert sorted((goc / "ops").glob("pre-*")) == [], "da tao thu muc tai san"
     nhat_ky = (goc / "lenh.log").read_text(encoding="utf-8") if (goc / "lenh.log").exists() else ""
@@ -378,7 +384,7 @@ def _stub_stat_tao_final(goc: Path) -> None:
         '      [ -e "$F" ] || echo "CHEN NGANG" > "$F" ;;',
         "  esac",
         "fi",
-        'exec /usr/bin/stat "$@"',
+        'exec _ngu_canh_stat "$@"',
     ])
 
 
@@ -626,7 +632,7 @@ def _stub_stat_doi_tmp(goc: Path) -> None:
         '    *.manifest.*) printf X >> "$ARG" ;;',
         "  esac",
         "fi",
-        'exec /usr/bin/stat "$@"',
+        'exec _ngu_canh_stat "$@"',
     ])
 
 
@@ -790,7 +796,7 @@ def _stub_stat_loi_tren_final(goc: Path, dang: str) -> None:
         '      echo "stat gia: khong doc duoc metadata" >&2; exit 77 ;;',
         "  esac",
         "fi",
-        'exec /usr/bin/stat "$@"',
+        'exec _ngu_canh_stat "$@"',
     ])
 
 
@@ -923,7 +929,7 @@ def _stub_stat_tai_dung_inode(goc: Path) -> None:
         'if [ "${1:-}" = "-c" ] && [ "${2:-}" = "%d:%i" ]; then',
         '  case "$ARG" in',
         "    *.manifest.*)",
-        "      V=$(/usr/bin/stat -c '%d:%i' \"$ARG\") || exit $?",
+        "      V=$(_ngu_canh_stat -c '%d:%i' \"$ARG\") || exit $?",
         '      printf %s "$V" > "$KHO"',
         "      printf '%s\\n' \"$V\"",
         "      exit 0 ;;",
@@ -931,7 +937,7 @@ def _stub_stat_tai_dung_inode(goc: Path) -> None:
         '      if [ -s "$KHO" ]; then printf \'%s\\n\' "$(cat "$KHO")"; exit 0; fi ;;',
         "  esac",
         "fi",
-        'exec /usr/bin/stat "$@"',
+        'exec _ngu_canh_stat "$@"',
     ])
 
 
@@ -973,3 +979,63 @@ def test_kiem_nguoc_aba_doi_ef_fd_thanh_dev_inode(tmp_path: Path) -> None:
     assert _tep_ngoai_lai(goc) == [], (
         "doi sang dev:inode ma tep ngoai lai van con => ca nen khong chung minh "
         "duoc `-ef` voi FD dang ganh:" + _NL + out)
+
+# ===========================================================================
+# 12. NGU CANH root — cong uid va cong chu so huu cua $OPS
+# ===========================================================================
+# Hai cong nay CHUA TUNG co ca kiem nao. Chung "tinh co xanh" vi nguoi chay
+# dang la root va tep dang thuoc root:root — dung thu ma runner cua required
+# CI (`runs-on: ubuntu-latest`, khong `container:`) KHONG co.
+#
+# Do ngay 21-09-2026 tren cung mot cay: chay non-root cho 83 failed / 354
+# passed / 1 skipped; chay root cho 437 passed / 1 skipped. Do la hinh dang
+# "xanh o may khong noi gi ve PR gate".
+#
+# Shim ngu canh dung lai trang thai production; hai ca duoi day lai shim sang
+# gia tri SAI de chung minh cong van con canh.
+
+_DONG_CONG_UID = (
+    '    [ "$(id -u)" = "0" ] || error "[$_n] không phải root '
+    '(uid=$(id -u)) — dừng trước mọi lần ghi."'
+)
+_DONG_CONG_CHU_SO_HUU = (
+    '    [ "$_q" = "700 root:root" ] || error "[$_n] $_RA_OPS sai quyền/chủ sở '
+    'hữu: $_q (cần 700 root:root)."'
+)
+
+
+def test_aw_khong_phai_root_thi_dung_truoc_moi_ghi(tmp_path: Path) -> None:
+    """uid != 0 => dung TRUOC docker tag, truoc TMP, truoc build."""
+    goc = _dung_san_khau(tmp_path)
+    rc, out = _do(goc, QLTS_TEST_UID="1000")
+    assert rc != 0, out
+    assert "uid=1000" in out, out
+    assert sorted((goc / "ops").glob("pre-*")) == [], "da tao thu muc tai san"
+    nhat_ky = (goc / "lenh.log").read_text(encoding="utf-8")
+    assert "docker tag" not in nhat_ky, "da chay docker tag truoc khi dung"
+
+
+def test_kiem_nguoc_go_cong_uid(tmp_path: Path) -> None:
+    """Go cong uid => deploy chay TRON duoi user thuong, khong gi chan lai."""
+    moi = _ban_va([(_DONG_CONG_UID, "    :")])
+    goc = _dung_san_khau(tmp_path, deploy_sh=moi)
+    rc, out = _do(goc, QLTS_TEST_UID="1000")
+    assert rc == 0, "go cong ma van chan => ca nen khong canh dung:" + _NL + out
+    assert (goc / "ops" / "last-deploy.marker").is_file(), (
+        "go cong uid ma marker van khong ra doi => deploy dung vi ly do khac")
+
+
+def test_kiem_nguoc_go_cong_chu_so_huu_cua_ops(tmp_path: Path) -> None:
+    """Go cong chu so huu cua $OPS => khong con dung o `[step3b]` nua.
+
+    KHONG doi rc == 0: shim lai chu so huu cho CA sandbox nen cac cong chu so
+    huu phia sau (`$_RA_DIR`, tep tam) van chan. Bat bien can chung minh la
+    "cong nay la thu dang chan O DAY", nen phep so dung la NHAN `[step3b]`.
+    """
+    moi = _ban_va([(_DONG_CONG_CHU_SO_HUU, "    :")])
+    goc = _dung_san_khau(tmp_path, deploy_sh=moi)
+    rc, out = _do(goc, QLTS_TEST_CHU_SO_HUU="nobody:nogroup")
+    assert rc != 0, out
+    assert "[step3b]" not in out, (
+        "go cong ma van dung o step3b => ca nen dang noi ve cong khac:"
+        + _NL + out)
