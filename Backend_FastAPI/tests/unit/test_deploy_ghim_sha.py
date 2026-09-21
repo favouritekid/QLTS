@@ -668,6 +668,25 @@ _STUB_DOCKER_DH = r"""#!/usr/bin/env bash
 _tat_ca="$*"
 echo "docker $_tat_ca" >> "$QLTS_STUB_LOG"
 
+# CID giả phải theo ĐÚNG hợp đồng production: `docker compose ps -q` và
+# `docker inspect` trả ID ĐẦY ĐỦ 64 hex thường (đã đo: `ps -q` của compose ra
+# 64, `docker ps -q` ra 12). Một fixture trả "cid-backend" làm cổng schema của
+# marker không thể đòi 64 hex — tức fixture giả đang định nghĩa hợp đồng thay
+# cho production. Mỗi service một chữ số hex riêng nên vẫn phân biệt bằng `case`.
+_cid_gia() {
+    case "$1" in
+        backend)       _cc=1 ;;
+        celery-worker) _cc=2 ;;
+        celery-beat)   _cc=3 ;;
+        frontend)      _cc=4 ;;
+        mot)           _cc=6 ;;
+        hai)           _cc=7 ;;
+        *)             _cc=5 ;;
+    esac
+    _c8=$_cc$_cc$_cc$_cc$_cc$_cc$_cc$_cc
+    printf '%s\n' "$_c8$_c8$_c8$_c8$_c8$_c8$_c8$_c8"
+}
+
 case "$_tat_ca" in
     *" ps -q "*)
         # Step 3b/8c hỏi ID container theo TỪNG service. Khác hẳn `ps -aq` của
@@ -675,7 +694,7 @@ case "$_tat_ca" in
         # những biến ấy dựng ca cho cổng health, không phải cho tài sản rollback.
         for _sv in backend celery-worker celery-beat frontend; do
             case "$_tat_ca" in
-                *" $_sv"*) echo "cid-$_sv"; exit 0 ;;
+                *" $_sv"*) _cid_gia "$_sv"; exit 0 ;;
             esac
         done
         echo "STUB: 'ps -q' service lạ: $_tat_ca" >&2
@@ -692,10 +711,10 @@ case "$_tat_ca" in
     *" ps -aq "*)
         [ "${STUB_PSQ_RC:-0}" != "0" ] && exit "${STUB_PSQ_RC}"
         [ "${STUB_PSQ_EMPTY:-0}" = "1" ] && exit 0
-        [ "${STUB_PSQ_NHIEU:-0}" = "1" ] && { printf 'cid-mot\ncid-hai\n'; exit 0; }
+        [ "${STUB_PSQ_NHIEU:-0}" = "1" ] && { _cid_gia mot; _cid_gia hai; exit 0; }
         case "$_tat_ca" in
-            *frontend*) echo "cid-frontend" ;;
-            *)          echo "cid-backend"  ;;
+            *frontend*) _cid_gia frontend ;;
+            *)          _cid_gia backend  ;;
         esac
         exit 0
         ;;
@@ -708,7 +727,7 @@ case "$_tat_ca" in
             *".Image"*)
                 for _sv in backend celery-worker celery-beat frontend; do
                     case "$_tat_ca" in
-                        *"cid-$_sv"*)
+                        *"$(_cid_gia "$_sv")"*)
                             case "$_sv" in
                                 backend)       _k=b ;;
                                 celery-worker) _k=c ;;
@@ -728,7 +747,7 @@ case "$_tat_ca" in
         case "$_tat_ca" in
             *State.Status*)
                 case "$_tat_ca" in
-                    *cid-frontend*) echo "${STUB_STATUS_FRONTEND:-running}" ;;
+                    *"$(_cid_gia frontend)"*) echo "${STUB_STATUS_FRONTEND:-running}" ;;
                     *)              echo "${STUB_STATUS_BACKEND:-running}"  ;;
                 esac
                 ;;
@@ -737,7 +756,7 @@ case "$_tat_ca" in
                 ;;
             *)
                 case "$_tat_ca" in
-                    *cid-frontend*) echo "${STUB_HEALTH_FRONTEND:-healthy}" ;;
+                    *"$(_cid_gia frontend)"*) echo "${STUB_HEALTH_FRONTEND:-healthy}" ;;
                     *)              echo "${STUB_HEALTH_BACKEND:-healthy}"  ;;
                 esac
                 ;;
@@ -790,6 +809,17 @@ _DICH_VU_DH = ("backend", "celery-worker", "celery-beat", "frontend")
 _SHA_MARKER_DH = "a" * 40  # SHA của lượt deploy TRƯỚC — khác `_SHA_HEAD`
 
 
+def _cid_gia(sv: str) -> str:
+    """CID giả — ID ĐẦY ĐỦ 64 hex thường, đúng hợp đồng production.
+
+    Phải khớp từng byte với hàm `_cid_gia` trong stub `docker`: marker do
+    script ghi lấy CID từ stub, còn các ca kiểm ở đây so chuỗi trên tệp.
+    """
+    ky = {"backend": "1", "celery-worker": "2", "celery-beat": "3",
+          "frontend": "4", "mot": "6", "hai": "7"}.get(sv, "5")
+    return ky * 64
+
+
 def _marker_dh(sha: str = _SHA_MARKER_DH) -> str:
     """Marker hợp lệ: SHA đã deploy + image ID của bốn container đang chạy."""
     dong = [
@@ -797,7 +827,7 @@ def _marker_dh(sha: str = _SHA_MARKER_DH) -> str:
         f"# deployed-sha\t{sha}",
         "# deployed-at\t2026-09-18T00:00:00Z",
     ]
-    dong += [f"{s}\t{_ANH_DH[s]}\tcid-{s}" for s in _DICH_VU_DH]
+    dong += [f"{s}\t{_ANH_DH[s]}\t{_cid_gia(s)}" for s in _DICH_VU_DH]
     return "\n".join(dong) + "\n"
 
 
@@ -824,12 +854,16 @@ def _san_khau_dh(
     (goc / "nginx" / "templates").mkdir(parents=True)
     (goc / "bin").mkdir()
 
-    (goc / "ops").mkdir()
+    # Hop dong MOI: $OPS phai san 700 root:root; deploy.sh khong tu sua.
+    (goc / "ops").mkdir(mode=0o700)
+    os.chmod(goc / "ops", 0o700)
     if marker is not None:
-        (goc / "ops" / "last-deploy.marker").write_text(
+        _mk = goc / "ops" / "last-deploy.marker"
+        _mk.write_text(
             _marker_dh() if marker == "MAC_DINH" else marker,
             encoding="utf-8", newline="\n",
         )
+        os.chmod(_mk, 0o600)
 
     than = deploy_sh if deploy_sh is not None else _DEPLOY_SH.read_text(encoding="utf-8")
     (goc / "scripts" / "deploy.sh").write_text(than, encoding="utf-8", newline="\n")

@@ -246,6 +246,23 @@ _STUB_DOCKER = r"""#!/usr/bin/env bash
 echo "docker $*" >> "$QLTS_STUB_LOG"
 _tat_ca="$*"
 
+# CID giả phải theo ĐÚNG hợp đồng production: `docker compose ps -q` và
+# `docker inspect` trả ID ĐẦY ĐỦ 64 hex thường (đã đo: `ps -q` của compose ra
+# 64, `docker ps -q` ra 12). Một fixture trả "cid-backend" làm cổng schema của
+# marker không thể đòi 64 hex — tức fixture giả đang định nghĩa hợp đồng thay
+# cho production. Mỗi service một chữ số hex riêng nên vẫn phân biệt bằng `case`.
+_cid_gia() {
+    case "$1" in
+        backend)       _cc=1 ;;
+        celery-worker) _cc=2 ;;
+        celery-beat)   _cc=3 ;;
+        frontend)      _cc=4 ;;
+        *)             _cc=5 ;;
+    esac
+    _c8=$_cc$_cc$_cc$_cc$_cc$_cc$_cc$_cc
+    printf '%s\n' "$_c8$_c8$_c8$_c8$_c8$_c8$_c8$_c8"
+}
+
 # --- Mô phỏng ENTRYPOINT của ảnh backend -----------------------------------
 # `Backend_FastAPI/Dockerfile` khai ENTRYPOINT ["/app/docker-entrypoint.sh"],
 # và `docker compose run` KHÔNG đè ENTRYPOINT — chỉ đè CMD. Nên mỗi one-off
@@ -288,7 +305,7 @@ case "$_tat_ca" in
                     # của 8c không bao giờ được thi hành.
                     if [ "${STUB_PS_Q_THIEU_SAU_BUILD:-}" = "$_sv" ] \
                        && grep -q 'build --parallel' "$QLTS_STUB_LOG"; then exit 0; fi
-                    echo "cid-$_sv"; exit 0 ;;
+                    _cid_gia "$_sv"; exit 0 ;;
             esac
         done
         echo "STUB: 'ps -q' cho service KHÔNG nhận diện được: $_tat_ca" >&2
@@ -344,8 +361,8 @@ case "$_tat_ca" in
         # CHƯA TỪNG được thi hành trong bất kỳ ca nào — guard xanh mà không canh
         # gì. Nay stub mô phỏng đúng giao thức: một ID cho mỗi service.
         case "$_tat_ca" in
-            *" backend"*)  echo "cid-backend"  ; exit 0 ;;
-            *" frontend"*) echo "cid-frontend" ; exit 0 ;;
+            *" backend"*)  _cid_gia backend  ; exit 0 ;;
+            *" frontend"*) _cid_gia frontend ; exit 0 ;;
         esac
         echo "STUB: 'ps -aq' cho service KHÔNG nhận diện được: $_tat_ca" >&2
         exit 90
@@ -361,7 +378,7 @@ case "$_tat_ca" in
                 # STUB_IMG_LECH để dựng ca marker lệch.
                 for _sv in backend celery-worker celery-beat frontend; do
                     case "$_tat_ca" in
-                        *"cid-$_sv"*)
+                        *"$(_cid_gia "$_sv")"*)
                             if [ "${STUB_IMG_LECH:-}" = "$_sv" ]; then
                                 _z=9999999999999999
                                 echo "sha256:$_z$_z$_z$_z"
@@ -389,14 +406,14 @@ case "$_tat_ca" in
                 ;;
             *".State.Status"*)
                 case "$_tat_ca" in
-                    *cid-frontend*) echo "${STUB_STATUS_FRONTEND:-running}" ;;
+                    *"$(_cid_gia frontend)"*) echo "${STUB_STATUS_FRONTEND:-running}" ;;
                     *)              echo "${STUB_STATUS_BACKEND:-running}"  ;;
                 esac
                 exit 0
                 ;;
             *".State.Health"*)
                 case "$_tat_ca" in
-                    *cid-frontend*) echo "${STUB_HEALTH_FRONTEND:-healthy}" ;;
+                    *"$(_cid_gia frontend)"*) echo "${STUB_HEALTH_FRONTEND:-healthy}" ;;
                     *)              echo "${STUB_HEALTH_BACKEND:-healthy}"  ;;
                 esac
                 exit 0
@@ -476,6 +493,17 @@ _bo_qua_neu_khong_posix = pytest.mark.skipif(
 )
 
 
+def _cid_gia(sv: str) -> str:
+    """CID giả — ID ĐẦY ĐỦ 64 hex thường, đúng hợp đồng production.
+
+    Phải khớp từng byte với hàm `_cid_gia` trong stub `docker`: marker do
+    script ghi lấy CID từ stub, còn các ca kiểm ở đây so chuỗi trên tệp.
+    """
+    ky = {"backend": "1", "celery-worker": "2", "celery-beat": "3",
+          "frontend": "4"}.get(sv, "5")
+    return ky * 64
+
+
 def _noi_dung_marker(sha: str = _SHA_CU, anh: dict[str, str] | None = None) -> str:
     """Marker hợp lệ: SHA đang chạy + image ID của bốn container đang chạy."""
     anh = anh if anh is not None else _ANH_GIA
@@ -484,7 +512,7 @@ def _noi_dung_marker(sha: str = _SHA_CU, anh: dict[str, str] | None = None) -> s
         f"# deployed-sha\t{sha}",
         "# deployed-at\t2026-09-18T00:00:00Z",
     ]
-    dong += [f"{s}\t{anh[s]}\tcid-{s}" for s in _DICH_VU_RA if s in anh]
+    dong += [f"{s}\t{anh[s]}\t{_cid_gia(s)}" for s in _DICH_VU_RA if s in anh]
     return "\n".join(dong) + "\n"
 
 
@@ -503,12 +531,17 @@ def _dung_san_khau(
     (goc / "scripts").mkdir(parents=True)
     (goc / "nginx" / "templates").mkdir(parents=True)
     (goc / "bin").mkdir()
-    (goc / "ops").mkdir()
+    # Hop dong MOI cua deploy.sh: $OPS phai duoc cap quyen TRUOC; script
+    # KHONG con "mkdir -p" + "chmod 700" de sua ho. Fixture phai dung dung
+    # trang thai production, khong phai trang thai tien cho test.
+    (goc / "ops").mkdir(mode=0o700)
+    os.chmod(goc / "ops", 0o700)
     if marker is not None:
         than = _noi_dung_marker() if marker == "MAC_DINH" else marker
-        (goc / "ops" / "last-deploy.marker").write_text(
-            than, encoding="utf-8", newline="\n"
-        )
+        _mk = goc / "ops" / "last-deploy.marker"
+        _mk.write_text(than, encoding="utf-8", newline="\n")
+        # Step 8c tu choi thay mot marker sai quyen; 600 la quyen that.
+        os.chmod(_mk, 0o600)
 
     noi_dung = deploy_sh if deploy_sh is not None else _DEPLOY.read_text(encoding="utf-8")
     (goc / "scripts" / "deploy.sh").write_text(noi_dung, encoding="utf-8", newline="\n")
@@ -1361,7 +1394,7 @@ def test_p6_mo_ta_khong_lay_msg_tu_pydantic() -> None:
 
 _MARKER_THIEU_SHA = (
     "# marker-version\t1\n"
-    "backend\t" + _ANH_GIA["backend"] + "\tcid-backend\n"
+    "backend\t" + _ANH_GIA["backend"] + "\t" + _cid_gia("backend") + "\n"
 )
 
 
@@ -1398,7 +1431,7 @@ def test_ra_duong_thuan_loi_tao_du_bon_tag_va_goi_preflight(tmp_path: Path) -> N
     assert f"# target-rev\t{_SHA_MOI}" in noi_dung
     for dv in _DICH_VU_RA:
         assert (
-            f"{dv}\tcid-{dv}\t{_ANH_GIA[dv]}\t" in noi_dung
+            f"{dv}\t{_cid_gia(dv)}\t{_ANH_GIA[dv]}\t" in noi_dung
         ), f"bản kê thiếu dòng '{dv}'"
 
     # Preflight phải chạy NGAY, và phải ở chế độ local-only: nhánh GHCR sẽ dừng
@@ -1749,11 +1782,11 @@ def test_ra_log_khong_dien_giai_escape_trong_thong_diep(tmp_path: Path) -> None:
         ),
         (
             "một service khai hai lần",
-            _noi_dung_marker() + f"backend\t{_ANH_GIA['backend']}\tcid-backend\n",
+            _noi_dung_marker() + f"backend\t{_ANH_GIA['backend']}\t{_cid_gia('backend')}\n",
         ),
         (
             "có dòng service lạ",
-            _noi_dung_marker() + f"postgres\t{_ANH_GIA['backend']}\tcid-pg\n",
+            _noi_dung_marker() + f"postgres\t{_ANH_GIA['backend']}\t{_cid_gia('postgres')}\n",
         ),
         (
             "image ID thiếu tiền tố sha256",
