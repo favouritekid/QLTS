@@ -18,7 +18,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
+import { cn, resolveSafeUrl } from "@/lib/utils";
 import {
   useNotifications,
   useMarkAsRead,
@@ -195,11 +195,15 @@ export function NotificationDropdown() {
                   </div>
                 );
 
-                // Render with Link if notification has a link, otherwise render as div
-                return notification.link ? (
+                // Render with Link if notification has a SAFE link, otherwise
+                // render as div. `href` PHẢI là đích đã chuẩn hoá — sink này
+                // trước đây không gọi guard nào, nên một `notification.link`
+                // ngoài site đi thẳng vào DOM.
+                const linkTarget = resolveSafeUrl(notification.link);
+                return linkTarget ? (
                   <Link
                     key={notification.id}
-                    href={notification.link}
+                    href={linkTarget}
                     onClick={() => handleMarkAsRead(notification)}
                     className={wrapperClassName}
                   >
