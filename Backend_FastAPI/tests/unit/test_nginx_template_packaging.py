@@ -626,6 +626,605 @@ def test_vong_cho_nhan_ra_container_da_chet():
 
 
 # ---------------------------------------------------------------------------
+# Cổng NỘI DUNG + cổng ĐỒNG NHẤT — `nginx-apply.sh` KHÔNG BUILD GÌ CẢ
+# ---------------------------------------------------------------------------
+# Khoảng trống được đóng ở đây:
+#
+#   `--profile candidate up -d --no-deps --force-recreate nginx-candidate` thay
+#   CONTAINER chứ không thay IMAGE, và `nginx` với `nginx-candidate` dùng chung
+#   đúng một tag (`qlts-nginx:local`, anchor `x-nginx-base`). Nên chuỗi
+#       sửa nginx/templates/*  →  bash scripts/nginx-apply.sh <domain>
+#   cho ra một candidate dựng từ ảnh CŨ: healthcheck xanh, cả sáu phép kiểm của
+#   `nginx-verify.sh` xanh (ảnh cũ phục vụ tốt — ĐÓ CHÍNH LÀ VẤN ĐỀ), rồi script
+#   in "cấu hình mới đã được áp". Đường deploy chính build ở `scripts/deploy.sh`
+#   Step 7 nên không dính; `scripts/setup-ssl.sh` và mọi lần gõ tay theo runbook
+#   thì có.
+#
+# Phép đo HÀNH VI không thể thấy ca này — nên cổng phải so NỘI DUNG, và phải so
+# ở tầng mà `COPY` đặt tệp xuống (trước render). `envsubst` của entrypoint biến
+# `/etc/nginx/templates/*.template` thành `/etc/nginx/conf.d/*`, nên so byte ở
+# tầng `conf.d` là không thể; ở tầng `/etc/nginx/templates/` thì `COPY` là phép
+# chép NGUYÊN BYTE.
+
+
+def test_cong_noi_dung_chay_TRUOC_phep_do_hanh_vi():
+    ma = _ma_lenh(_APPLY)
+    assert "_cong_noi_dung" in ma, (
+        "scripts/nginx-apply.sh không có cổng đối chiếu nội dung — sửa template "
+        "mà quên build thì script vẫn in 'cấu hình mới đã được áp'"
+    )
+    vt_cong = ma.index('_cong_noi_dung "$_CID_CANDIDATE"')
+    vt_do = ma.index("nginx-verify.sh")
+    assert vt_cong < vt_do, (
+        "cổng nội dung phải chạy TRƯỚC nginx-verify.sh: ca 'chưa build' là ca mà "
+        "phép đo hành vi luôn xanh, nên để sau là đốt phép đo rồi mới báo sai chỗ"
+    )
+
+
+def test_cong_dong_nhat_ghim_image_id_bat_bien():
+    """`{{.Config.Image}}` là TÊN:TAG — hai service dùng chung một tag."""
+    ma = _ma_lenh(_APPLY)
+    assert "{{.Image}}" in ma, (
+        "cổng đồng nhất phải đọc `docker inspect -f '{{.Image}}'` (sha256 bất biến)"
+    )
+    assert "{{.Config.Image}}" not in ma, (
+        "`{{.Config.Image}}` trả về `qlts-nginx:local` cho CẢ HAI service, nên "
+        "phép so luôn khớp kể cả khi `up -d` không recreate gì"
+    )
+    assert re.search(r"_ANH_DANG_PHUC_VU.*!=.*_ANH_DA_CHUNG_MINH|"
+                     r"_ANH_DA_CHUNG_MINH.*!=.*_ANH_DANG_PHUC_VU", ma), (
+        "không thấy phép so image id của nginx sau cutover với image id của "
+        "candidate đã được chứng minh"
+    )
+
+
+def test_bang_doi_chieu_suy_tu_dockerfile_chu_khong_chep_tay():
+    """Chép tay một bảng thứ hai là mở đường cho nó trôi (CLAUDE.md §6)."""
+    ma = _ma_lenh(_APPLY)
+    assert "nginx/Dockerfile" in ma, (
+        "cổng nội dung phải suy danh sách tệp TỪ `nginx/Dockerfile`; một bảng "
+        "chép tay sẽ canh hụt đúng tệp mà `COPY` mới thêm"
+    )
+
+
+def test_tap_anh_nen_suy_tu_FROM_chu_khong_chep_tay():
+    """Danh sách script của ảnh nền KHÔNG được đóng cứng trong script.
+
+    Bốn script ấy đổi theo mỗi lần nâng `nginx:<ver>`-alpine; một danh sách chép
+    tay sẽ im lặng sai ngay lần nâng đầu tiên. Cách duy nhất còn đúng về sau là
+    hỏi CHÍNH ảnh nền, và suy tên ảnh nền từ dòng `FROM` của cùng Dockerfile.
+    """
+    ma = _ma_lenh(_APPLY)
+    assert "_anh_nen" in ma and "FROM" in ma, (
+        "cổng chiều ngược phải suy ảnh nền từ dòng `FROM` của nginx/Dockerfile"
+    )
+    assert "docker image inspect" in ma, (
+        "phải hỏi `docker image inspect` trước khi `docker run` ảnh nền — nếu "
+        "không, một tag vắng mặt sẽ khiến cổng đi KÉO TỪ MẠNG giữa lúc deploy"
+    )
+    for ten in ("10-listen-on-ipv6", "15-local-resolvers", "20-envsubst", "30-tune-worker"):
+        assert ten not in ma, (
+            f"script đóng cứng tên tệp của ảnh nền ('{ten}') — danh sách ấy sẽ "
+            "trôi ngay lần nâng nginx kế tiếp"
+        )
+
+
+def test_cong_noi_dung_di_CA_HAI_CHIEU():
+    """Chiều xuôi chỉ duyệt tệp CÒN tồn tại ở nguồn ⇒ mù với tệp đã bị xoá."""
+    ma = _ma_lenh(_APPLY)
+    assert "MỒ CÔI" in ma, (
+        "không thấy nhánh chiều ngược (ảnh → nguồn): một template bị xoá khỏi "
+        "cây mà còn trong ảnh vẫn được envsubst render và nginx include"
+    )
+    assert "_MOC_LIET_KE" in ma, (
+        "phép liệt kê phải kết bằng một mốc — đầu ra cụt mà rc=0 trông y hệt "
+        "một danh sách sạch"
+    )
+
+
+def test_tap_thu_muc_soi_KHONG_CO_LAI_khi_mot_COPY_bien_mat():
+    """Suy tập thư mục CHỈ từ Dockerfile hiện tại là một điểm mù.
+
+    Xoá hẳn một dòng `COPY` thì thư mục đích của nó rơi khỏi tập soi, và tệp cũ
+    trong ảnh (chưa dựng lại) vẫn được entrypoint render/thi hành. Tập phải là
+    HỢP với thư mục đọc từ lịch sử build của chính ảnh đang chạy.
+    """
+    ma = _ma_lenh(_APPLY)
+    assert "docker history" in ma, (
+        "cổng không đọc lịch sử build của ảnh ⇒ không lấy lại được tập thư mục "
+        "của một `COPY` vừa bị xoá khỏi Dockerfile"
+    )
+    assert "_thu_muc_copy_trong_lich_su" in ma
+    for duong in ("/etc/nginx/templates", "/docker-entrypoint.d"):
+        assert f'"{duong}"' not in ma and f"'{duong}'" not in ma, (
+            f"đóng cứng thư mục runtime '{duong}' trong script — tập thư mục "
+            "phải suy ra, không chép tay"
+        )
+
+
+def test_ADD_bi_tu_choi_vi_cong_khong_mo_hinh_hoa_duoc():
+    """`ADD` ghi vào ảnh y như `COPY`; bỏ qua im lặng là một đường vòng."""
+    ma = _ma_lenh(_APPLY)
+    assert re.search(r"ADD\[\[:space:\]\]|ADD\[\[:space:", ma) or "lệnh ADD" in ma, (
+        "cổng không từ chối `ADD` — một `ADD templates/ …` sẽ đi vòng qua toàn "
+        "bộ phép đối chiếu mà không ai thấy"
+    )
+
+
+# --- Ba ca kiểm chạy thật, với `docker` GIẢ --------------------------------
+# Không đụng nginx thật, không build gì: stub chỉ hiểu đúng những lệnh mà
+# `nginx-apply.sh` + `nginx-verify.sh` gọi, và mọi hành vi được lái bằng biến
+# môi trường — nên MỖI CA VI PHẠM ĐÚNG MỘT BẤT BIẾN (CLAUDE.md §3).
+
+_STUB_DOCKER_NGX = r"""#!/usr/bin/env bash
+_L="${QLTS_STUB_LOG:-/dev/null}"
+echo "docker $*" >> "$_L"
+_cid_cand="${STUB_CID_CANDIDATE:-cand1111}"
+_cid_ngx="${STUB_CID_NGINX:-ngx22222}"
+case "${1:-}" in
+  compose)
+    shift
+    _sub=""; _args=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f|--env-file|-p|--profile) shift 2; continue ;;
+        -*) shift; continue ;;
+        *) _sub="$1"; shift; _args=("$@"); break ;;
+      esac
+    done
+    case "$_sub" in
+      ps)
+        _svc=""
+        for _a in "${_args[@]}"; do case "$_a" in -*) ;; *) _svc="$_a" ;; esac; done
+        case "$_svc" in
+          nginx-candidate) echo "$_cid_cand" ;;
+          nginx)           echo "$_cid_ngx" ;;
+        esac
+        exit 0 ;;
+      *) exit "${STUB_COMPOSE_RC:-0}" ;;
+    esac
+    ;;
+  inspect)
+    shift
+    _fmt=""; _cid=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f|--format) _fmt="$2"; shift 2 ;;
+        *) _cid="$1"; shift ;;
+      esac
+    done
+    case "$_fmt" in
+      *index*IPAddress*)  echo "172.30.0.9" ;;
+      *Networks*)         echo "qltsstub_default" ;;
+      *State.Status*)     echo "${STUB_STATUS:-running}" ;;
+      *State.Health*)     echo "${STUB_HEALTH:-healthy}" ;;
+      *State.ExitCode*)   echo "0" ;;
+      *Config.Image*)     echo "qlts-nginx:local" ;;
+      *.Image*)
+        if [ "$_cid" = "$_cid_ngx" ]; then
+          [ -n "${STUB_ANH_NGINX+x}" ] || exit "${STUB_INSPECT_ANH_RC:-0}"
+          printf '%s\n' "$STUB_ANH_NGINX"
+        else
+          [ -n "${STUB_ANH_CANDIDATE+x}" ] || exit "${STUB_INSPECT_ANH_RC:-0}"
+          printf '%s\n' "$STUB_ANH_CANDIDATE"
+        fi
+        ;;
+    esac
+    exit 0 ;;
+  image)
+    exit "${STUB_NEN_CO_RC:-0}" ;;
+  history)
+    # history --no-trunc --format '{{.CreatedBy}}' <ảnh>
+    for _a in "$@"; do _last="$_a"; done
+    if [ "$_last" = "${STUB_NEN_REF:?}" ]; then
+      [ "${STUB_LS_NEN_RC:-0}" = "0" ] || exit "${STUB_LS_NEN_RC}"
+      cat "${STUB_LS_NEN:?}"
+    else
+      [ "${STUB_LS_ANH_RC:-0}" = "0" ] || exit "${STUB_LS_ANH_RC}"
+      cat "${STUB_LS_ANH:?}"
+    fi
+    exit 0 ;;
+  exec)
+    shift
+    _cid="$1"; shift
+    case "${1:-}" in
+      sha256sum)
+        _p="$2"
+        [ "${STUB_EXEC_RC:-0}" = "0" ] || exit "${STUB_EXEC_RC}"
+        _f="${STUB_ANH_TREE:?stub thiếu STUB_ANH_TREE}$_p"
+        [ -f "$_f" ] || exit 1
+        printf '%s  %s\n' "$(sha256sum "$_f" | cut -d' ' -f1)" "$_p"
+        exit 0 ;;
+      sh)
+        [ "${STUB_LIET_KE_RC:-0}" = "0" ] || exit "${STUB_LIET_KE_RC}"
+        shift 3
+        shift
+        for _d in "$@"; do
+          find "${STUB_ANH_TREE:?}$_d" -type f 2>/dev/null | sed "s#^${STUB_ANH_TREE}##"
+        done
+        [ "${STUB_LIET_KE_KHONG_MOC:-0}" = "1" ] || echo "__QLTS_HET__"
+        exit 0 ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  run)
+    if printf '%s' "$*" | grep -q '__QLTS_HET__'; then
+      [ "${STUB_NEN_RC:-0}" = "0" ] || exit "${STUB_NEN_RC}"
+      for _t in ${STUB_NEN_TEP:-}; do echo "$_t"; done
+      [ "${STUB_NEN_KHONG_MOC:-0}" = "1" ] || echo "__QLTS_HET__"
+      exit 0
+    fi
+    exit "${STUB_RUN_RC:-0}" ;;
+  *) exit 0 ;;
+esac
+"""
+
+# Ảnh sha256 giả — chỉ cần ĐÚNG DẠNG, vì đó chính là thứ cổng đồng nhất thẩm định.
+_ANH_A = "sha256:" + "1" * 64
+_ANH_B = "sha256:" + "2" * 64
+
+# Bảng COPY KỲ VỌNG, khai tường minh ở đây để đối chiếu với bảng mà
+# `nginx-apply.sh` TỰ SUY từ `nginx/Dockerfile`. Hai bản này CỐ Ý độc lập: bản
+# trong script là thứ chạy thật, bản ở đây là thứ ta khẳng định nó phải ra.
+_DUONG_TRONG_ANH = {
+    "nginx.conf": "/etc/nginx/nginx.conf",
+    "templates/default.conf.template": "/etc/nginx/templates/default.conf.template",
+    "bootstrap/nginx.conf": "/etc/nginx/nginx-bootstrap.conf",
+    "bootstrap/default.conf.template":
+        "/etc/nginx/templates-bootstrap/default.conf.template",
+    "docker-entrypoint.d/10-qlts-kiem-bien.sh":
+        "/docker-entrypoint.d/10-qlts-kiem-bien.sh",
+    "docker-entrypoint.d/25-qlts-kiem-ban-render.sh":
+        "/docker-entrypoint.d/25-qlts-kiem-ban-render.sh",
+}
+
+# Tệp của ẢNH NỀN `nginx:1.27-alpine` trong các thư mục đích — ĐO THẬT
+# (`docker run --rm --entrypoint sh nginx:1.27-alpine -c 'find …'`, 22-09-2026),
+# không đoán theo tên: hai trong bốn cái tên không phải thứ người ta hay đoán
+# (`15-local-resolvers.envsh` chứ không phải `.sh`; `10-listen-on-ipv6-by-default.sh`
+# chứ không phải `10-listen-on-ipv6-on-ipv4.sh`). `/etc/nginx/templates` và
+# `/etc/nginx/templates-bootstrap` KHÔNG tồn tại trong ảnh nền — cũng đã đo.
+_TEP_ANH_NEN = [
+    "/docker-entrypoint.d/10-listen-on-ipv6-by-default.sh",
+    "/docker-entrypoint.d/15-local-resolvers.envsh",
+    "/docker-entrypoint.d/20-envsubst-on-templates.sh",
+    "/docker-entrypoint.d/30-tune-worker-processes.sh",
+]
+
+# Đuôi lịch sử của ảnh nền. Không cần giống `nginx:1.27-alpine` từng dòng — thứ
+# ca kiểm đo là HỢP ĐỒNG: đuôi phải trùng khít, phần đầu là của QLTS. Cố ý có một
+# `COPY … /` để chứng minh cổng không đi quét cả gốc hệ tệp.
+_LICH_SU_NEN = [
+    'CMD ["nginx" "-g" "daemon off;"]',
+    'ENTRYPOINT ["/docker-entrypoint.sh"]',
+    "COPY 20-envsubst-on-templates.sh /docker-entrypoint.d # buildkit",
+    "COPY docker-entrypoint.sh / # buildkit",
+    "ADD alpine-minirootfs.tar.gz / # buildkit",
+]
+
+_bo_qua_neu_khong_chay_duoc_bash = pytest.mark.skipif(
+    _BASH is None or shutil.which("sha256sum") is None,
+    reason="cần bash chạy được và `sha256sum` để thi hành thật scripts/nginx-apply.sh",
+)
+
+
+def _from_cua(dockerfile: Path) -> str:
+    dong = [
+        d.strip() for d in _doc(dockerfile).splitlines()
+        if d.strip().upper().startswith("FROM ")
+    ]
+    assert len(dong) == 1, f"{dockerfile} phải có đúng MỘT dòng FROM; thấy {len(dong)}"
+    return dong[0].split()[1]
+
+
+def _san_khau_ngx(
+    tmp_path: Path, them: dict[str, str] | None = None
+) -> tuple[Path, Path]:
+    """Sân khấu cô lập: bản sao `scripts/` + `nginx/`, `docker` giả, và một
+    cây "ảnh" phản chiếu đường dẫn tuyệt đối trong container.
+
+    ``them``: các tệp PHỤ được tạo ở NGUỒN rồi chụp vào ảnh — để ca "xoá khỏi
+    nguồn, giữ trong ảnh" có thứ để xoá mà không phải đụng template thật.
+
+    Cây ảnh CỐ Ý mang cả bốn tệp của ảnh nền: thiếu chúng thì phép trừ tập nền
+    không bao giờ được thi hành, và ca đối chứng sẽ xanh vì một lý do sai.
+    """
+    san = tmp_path / "san"
+    repo = san / "repo"
+    (san / "bin").mkdir(parents=True)
+    shutil.copytree(_GOC / "scripts", repo / "scripts")
+    shutil.copytree(_THU_MUC_NGINX, repo / "nginx")
+
+    stub = san / "bin" / "docker"
+    stub.write_text(_STUB_DOCKER_NGX, encoding="utf-8", newline="\n")
+    stub.chmod(0o755)
+
+    anh = san / "anh"
+    ban_do = dict(_DUONG_TRONG_ANH)
+    for rel, dich in (them or {}).items():
+        (repo / "nginx" / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / "nginx" / rel).write_text(
+            f"# tệp phụ của ca kiểm: {rel}\n", encoding="utf-8", newline="\n"
+        )
+        ban_do[rel] = dich
+    for nguon, dich in ban_do.items():
+        d = anh / dich.lstrip("/")
+        d.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(repo / "nginx" / nguon, d)
+    for dich in _TEP_ANH_NEN:
+        d = anh / dich.lstrip("/")
+        d.parent.mkdir(parents=True, exist_ok=True)
+        d.write_text("# script cua anh nen\n", encoding="utf-8", newline="\n")
+
+    # Lịch sử build giả, đúng hình dạng `docker history --format '{{.CreatedBy}}'`
+    # (mới nhất TRƯỚC, phần của ảnh nền nằm ở ĐUÔI). Sinh từ chính Dockerfile của
+    # sân khấu, nên nó phản ánh "ảnh đã được dựng từ Dockerfile lúc này" — ca kiểm
+    # nào sửa Dockerfile SAU khi dựng sân khấu sẽ tạo đúng độ lệch cần đo.
+    (san / "lichsu-nen.txt").write_text(
+        "\n".join(_LICH_SU_NEN) + "\n", encoding="utf-8", newline="\n"
+    )
+    dong_copy = [
+        d.strip()
+        for d in (repo / "nginx" / "Dockerfile").read_text(encoding="utf-8").splitlines()
+        if d.strip().startswith("COPY ")
+    ]
+    rieng = (
+        ["RUN /bin/sh -c chmod +x /docker-entrypoint.d/*.sh # buildkit"]
+        + [f"{d} # buildkit" for d in reversed(dong_copy)]
+        + ["RUN /bin/sh -c rm -f /etc/nginx/conf.d/*.conf # buildkit"]
+    )
+    (san / "lichsu-anh.txt").write_text(
+        "\n".join(rieng + _LICH_SU_NEN) + "\n", encoding="utf-8", newline="\n"
+    )
+    return repo, anh
+
+
+def _chay_apply(repo: Path, anh: Path, **bien: str) -> subprocess.CompletedProcess:
+    nhat_ky = repo.parent / "lenh.log"
+    nhat_ky.write_text("", encoding="utf-8")
+    moi_truong = {
+        **os.environ,
+        "MSYS_NO_PATHCONV": "1",
+        "PATH": str(repo.parent / "bin") + os.pathsep + os.environ.get("PATH", ""),
+        "STUB_ANH_TREE": str(anh).replace("\\", "/"),
+        "STUB_NEN_TEP": " ".join(_TEP_ANH_NEN),
+        # Suy từ chính Dockerfile của sân khấu: đóng cứng `nginx:1.27-alpine`
+        # ở đây thì lần nâng nginx kế tiếp sẽ làm stub trả nhầm lịch sử mà
+        # không ai thấy.
+        "STUB_NEN_REF": _from_cua(repo / "nginx" / "Dockerfile"),
+        "STUB_LS_NEN": str(repo.parent / "lichsu-nen.txt").replace("\\", "/"),
+        "STUB_LS_ANH": str(repo.parent / "lichsu-anh.txt").replace("\\", "/"),
+        "QLTS_STUB_LOG": str(nhat_ky).replace("\\", "/"),
+        "QLTS_COMPOSE_ENV_FILE": "khong-ton-tai.env",
+        **bien,
+    }
+    return subprocess.run(
+        [_BASH, str(repo / "scripts" / "nginx-apply.sh"), "nginx-test.local"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=moi_truong, cwd=str(repo),
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca2_anh_da_chua_template_moi_thi_XANH(tmp_path):
+    """Ca ĐỐI CHỨNG. Thiếu nó thì mọi ca đỏ dưới đây có thể đỏ vì lý do khác.
+
+    Khẳng định thêm: cổng đã soi ĐÚNG SÁU tệp mà `nginx/Dockerfile` COPY, ở
+    đúng đường dẫn trong container — tức bảng script tự suy khớp bảng kỳ vọng.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A)
+    assert kq.returncode == 0, f"ca đối chứng phải XANH:\n{kq.stdout}\n{kq.stderr}"
+
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    da_soi = {
+        d.split("sha256sum ", 1)[1].strip()
+        for d in nhat_ky.splitlines()
+        if " exec " in d and "sha256sum " in d
+    }
+    assert da_soi == set(_DUONG_TRONG_ANH.values()), (
+        "bảng mà nginx-apply.sh suy từ nginx/Dockerfile KHÔNG khớp bảng kỳ vọng.\n"
+        f"  script soi : {sorted(da_soi)}\n"
+        f"  kỳ vọng    : {sorted(_DUONG_TRONG_ANH.values())}"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca1_template_sua_ma_chua_build_thi_DO(tmp_path):
+    """Bất biến: bản trong container PHẢI khớp nguồn sẽ được áp.
+
+    Ảnh được chụp TRƯỚC, rồi nguồn trôi đi — đúng chuỗi "sửa template rồi chạy
+    thẳng nginx-apply.sh". Mọi phép đo hành vi ở đây đều xanh (stub `docker run`
+    trả 0), nên ca này CHỈ có thể đỏ vì cổng nội dung.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    t = repo / "nginx" / "templates" / "default.conf.template"
+    t.write_text(_doc(t) + "\n# dòng mới chưa vào ảnh\n", encoding="utf-8", newline="")
+
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A)
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"template đã trôi mà cổng vẫn XANH:\n{ra}"
+    assert "LỆCH" in ra, f"không nói ra tệp nào lệch:\n{ra}"
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "profile production up -d" not in nhat_ky, (
+        "đã đụng tới container ĐANG PHỤC VỤ dù cổng nội dung đã đỏ"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca3_khong_doc_duoc_checksum_thi_DO_chu_khong_phai_DAT(tmp_path):
+    """Bất biến: lỗi ĐỌC không bao giờ được tính là "đạt" (fail-closed).
+
+    `docker exec sha256sum` hỏng ⇒ phía container không có giá trị. Bản fail-open
+    tự nhiên ("không đọc được thì không có gì để so") làm ca này xanh trong khi
+    KHÔNG một tệp nào được đối chiếu.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(
+        repo, anh, STUB_EXEC_RC="1",
+        STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A,
+    )
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"không đọc được checksum mà cổng vẫn XANH:\n{ra}"
+    assert "không đọc được checksum" in ra, f"thông điệp không nói đúng ca:\n{ra}"
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "profile production up -d" not in nhat_ky, (
+        "đã đụng tới container ĐANG PHỤC VỤ dù cổng nội dung đã đỏ"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca6_template_xoa_khoi_nguon_ma_con_trong_anh_thi_DO(tmp_path):
+    """Bất biến CHIỀU NGƯỢC: ảnh không được giữ tệp cấu hình QLTS đã bị xoá.
+
+    Đây là ca mà chiều xuôi KHÔNG THỂ thấy: vòng duyệt đi qua các tệp còn tồn
+    tại ở nguồn, nên một tệp đã xoá thì đơn giản là không được hỏi tới. Trong
+    khi đó entrypoint vẫn envsubst nó thành `/etc/nginx/conf.d/*` và nginx vẫn
+    `include`. Mọi phép đo hành vi vẫn xanh.
+    """
+    them = {"templates/mo-coi.conf.template": "/etc/nginx/templates/mo-coi.conf.template"}
+    repo, anh = _san_khau_ngx(tmp_path, them=them)
+    # Chụp ảnh xong mới xoá khỏi nguồn — đúng chuỗi "gỡ template rồi chạy thẳng".
+    (repo / "nginx" / "templates" / "mo-coi.conf.template").unlink()
+
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A)
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"tệp mồ côi trong ảnh mà cổng vẫn XANH:\n{ra}"
+    assert "MỒ CÔI" in ra and "mo-coi.conf.template" in ra, (
+        f"không nói ra tệp mồ côi nào:\n{ra}"
+    )
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "profile production up -d" not in nhat_ky, (
+        "đã đụng tới container ĐANG PHỤC VỤ dù cổng nội dung đã đỏ"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca9_xoa_HAN_mot_lenh_COPY_khoi_Dockerfile_thi_DO(tmp_path):
+    """Bất biến: tập thư mục cần soi KHÔNG ĐƯỢC CO LẠI khi một `COPY` biến mất.
+
+    Khác hẳn ca6. Ca6 xoá TỆP NGUỒN trong khi dòng `COPY templates/ …` vẫn còn,
+    nên thư mục đích vẫn nằm trong tập soi. Ở đây xoá HẲN dòng `COPY` — thư mục
+    đích rơi khỏi tập suy từ Dockerfile, và một cổng chỉ nhìn Dockerfile hiện
+    tại sẽ KHÔNG BAO GIỜ nhìn vào đó nữa, trong khi ảnh (chưa dựng lại) vẫn giữ
+    template cũ và entrypoint vẫn render nó.
+
+    Tập thư mục cũ được lấy lại từ lịch sử build của chính ảnh đang chạy.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    df = repo / "nginx" / "Dockerfile"
+    than = _doc(df)
+    moc = "COPY templates/ /etc/nginx/templates/"
+    assert than.count(moc) == 1, "Dockerfile đã đổi — ca kiểm đang neo vào dòng không còn"
+    # Ảnh KHÔNG dựng lại: `lichsu-anh.txt` giữ nguyên dòng COPY này.
+    df.write_text(than.replace(moc + "\n", ""), encoding="utf-8", newline="")
+
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A)
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"xoá hẳn một lệnh COPY mà cổng vẫn XANH:\n{ra}"
+    assert "MỒ CÔI" in ra and "/etc/nginx/templates/default.conf.template" in ra, (
+        f"không nhìn vào thư mục của lệnh COPY vừa bị xoá:\n{ra}"
+    )
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "profile production up -d" not in nhat_ky, (
+        "đã đụng tới container ĐANG PHỤC VỤ dù cổng nội dung đã đỏ"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca10_khong_doc_duoc_lich_su_build_thi_DO(tmp_path):
+    """Bất biến: KHÔNG xác định được tập thư mục cũ ⇒ ĐỎ, không đoán là rỗng.
+
+    Trả về tập rỗng khi không đọc được lịch sử trông y hệt "ảnh này không COPY
+    vào thư mục nào" — và ca sau chính là điểm mù ca9 mô tả.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(
+        repo, anh, STUB_LS_ANH_RC="1",
+        STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A,
+    )
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"không đọc được lịch sử build mà cổng vẫn XANH:\n{ra}"
+    assert "lịch sử build" in ra, f"thông điệp không nói đúng ca:\n{ra}"
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca7_danh_sach_tep_CUT_thi_DO_chu_khong_phai_DAT(tmp_path):
+    """Bất biến: đầu ra CỤT không được coi là "không có tệp thừa nào".
+
+    `docker run`/`docker exec` có thể trả 0 với đầu ra bị cắt. Một danh sách cụt
+    trông y hệt một danh sách sạch — nên phép liệt kê phải kết bằng MỘT MỐC, và
+    thiếu mốc là ĐỎ.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(
+        repo, anh, STUB_NEN_KHONG_MOC="1",
+        STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A,
+    )
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"danh sách cụt mà cổng vẫn XANH:\n{ra}"
+    assert "CỤT" in ra, f"thông điệp không nói đúng ca:\n{ra}"
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca8_anh_nen_vang_mat_cuc_bo_thi_DO_va_KHONG_keo_mang(tmp_path):
+    """Bất biến: không đo được tập nền ⇒ ĐỎ, và không đi kéo ảnh từ mạng.
+
+    `docker run` trên một tag vắng mặt sẽ tự pull — biến cổng thành phụ thuộc
+    mạng giữa lúc deploy. Nên phải hỏi `docker image inspect` TRƯỚC và từ chối.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(
+        repo, anh, STUB_NEN_CO_RC="1",
+        STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A,
+    )
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"ảnh nền vắng mặt mà cổng vẫn XANH:\n{ra}"
+    assert "ảnh nền" in ra, f"thông điệp không nói đúng ca:\n{ra}"
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "image inspect" in nhat_ky, (
+        "cổng không hỏi `docker image inspect` trước — `docker run` sẽ tự pull"
+    )
+    assert not re.search(r"^docker run .*__QLTS_HET__", nhat_ky, re.M), (
+        "đã gọi `docker run` trên ảnh nền dù nó vắng mặt cục bộ (⇒ pull từ mạng)"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca4_nginx_sau_cutover_chay_anh_KHAC_candidate_thi_DO(tmp_path):
+    """Bất biến: container đang phục vụ phải chạy ĐÚNG bản ảnh đã chứng minh.
+
+    Đây là ca mà `{{.Config.Image}}` không thể thấy: hai service dùng chung tag
+    `qlts-nginx:local`, nên so theo tên:tag là so một hằng số với chính nó.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_B)
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"nginx chạy ảnh khác mà script vẫn tuyên bố đạt:\n{ra}"
+    assert _ANH_A in ra and _ANH_B in ra, (
+        f"thông điệp không nêu cả hai image id để đối chiếu:\n{ra}"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca5_image_id_khong_phai_ID_bat_bien_thi_DO(tmp_path):
+    """Bất biến: giá trị đọc được phải ĐÚNG DẠNG image id, không chỉ khác rỗng.
+
+    `docker inspect` trả `qlts-nginx:local` (dạng của `{{.Config.Image}}`) cho
+    CẢ HAI container. Bản không thẩm định dạng sẽ thấy hai giá trị BẰNG NHAU và
+    tuyên bố đạt — một giá trị gộp hai ca ngược nhau.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(
+        repo, anh,
+        STUB_ANH_CANDIDATE="qlts-nginx:local", STUB_ANH_NGINX="qlts-nginx:local",
+    )
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"image id không phải ID bất biến mà vẫn XANH:\n{ra}"
+    assert "image id bất biến" in ra, f"thông điệp không nói đúng ca:\n{ra}"
+
+
+# ---------------------------------------------------------------------------
 # Consumer: không đường/lệnh cũ nào còn sót
 # ---------------------------------------------------------------------------
 
