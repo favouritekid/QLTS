@@ -238,39 +238,82 @@ _liet_ke_trong_anh_nen() {
 # Đuôi KHÔNG trùng ⇒ ảnh nền cục bộ không phải bản đã dựng ra ảnh này ⇒ cả phép
 # trừ tập nền lẫn phép suy thư mục cũ đều mất cơ sở ⇒ TRẢ LỖI (fail-closed),
 # không đoán.
-_thu_muc_copy_trong_lich_su() {
+_dich_copy_trong_lich_su() {
     local anh="$1" nen="$2" ls_anh ls_nen so_anh so_nen duoi rieng dong dst
-    ls_anh=$(docker history --no-trunc --format '{{.CreatedBy}}' "$anh" 2>/dev/null) || return 1
-    ls_nen=$(docker history --no-trunc --format '{{.CreatedBy}}' "$nen" 2>/dev/null) || return 1
-    [ -n "$ls_anh" ] && [ -n "$ls_nen" ] || return 1
+    ls_anh=$(docker history --no-trunc --format '{{.CreatedBy}}' "$anh" 2>/dev/null) \
+        || { echo "không đọc được lịch sử build của ảnh '$anh'" >&2; return 1; }
+    ls_nen=$(docker history --no-trunc --format '{{.CreatedBy}}' "$nen" 2>/dev/null) \
+        || { echo "không đọc được lịch sử build của ảnh nền '$nen'" >&2; return 1; }
+    if [ -z "$ls_anh" ] || [ -z "$ls_nen" ]; then
+        echo "lịch sử build rỗng" >&2; return 1
+    fi
     so_anh=$(printf '%s\n' "$ls_anh" | wc -l)
     so_nen=$(printf '%s\n' "$ls_nen" | wc -l)
-    [ "$so_anh" -gt "$so_nen" ] || return 1
+    if [ "$so_anh" -le "$so_nen" ]; then
+        echo "lịch sử ảnh ($so_anh dòng) không dài hơn lịch sử nền ($so_nen dòng)" >&2
+        return 1
+    fi
     duoi=$(printf '%s\n' "$ls_anh" | tail -n "$so_nen")
-    [ "$duoi" = "$ls_nen" ] || return 1
+    if [ "$duoi" != "$ls_nen" ]; then
+        echo "đuôi lịch sử KHÔNG trùng ảnh nền — ảnh nền cục bộ không phải bản đã dựng ra ảnh này" >&2
+        return 1
+    fi
     rieng=$(printf '%s\n' "$ls_anh" | head -n "$((so_anh - so_nen))")
     # Không một dòng `COPY ` nào trong phần riêng ⇒ ta KHÔNG đọc được định dạng
     # lịch sử (builder cổ ghi `/bin/sh -c #(nop) COPY dir:<hash> in <đích>`),
     # chứ không phải "ảnh này không COPY gì". Hai ca ấy trông giống hệt nhau và
     # ca sau là điểm mù — nên TRẢ LỖI thay vì trả về tập rỗng.
     if ! printf '%s\n' "$rieng" | grep -q '^COPY '; then
+        echo "phần riêng của lịch sử không có dòng COPY nào đọc được (builder cổ?)" >&2
         return 1
     fi
     while IFS= read -r dong; do
         case "$dong" in
             COPY\ *) ;;
-            *) continue ;;
+            ADD\ *)
+                echo "lịch sử ảnh có lệnh ADD — cổng chỉ mô hình hoá COPY: $dong" >&2
+                return 1
+                ;;
+            *COPY\ *)
+                # Có chữ `COPY` nhưng KHÔNG ở đầu dòng ⇒ một định dạng lịch sử
+                # ta không đọc được (vd builder cổ). Bỏ qua thì đích của nó
+                # không bao giờ vào tập soi — đúng điểm mù cổng này đang đóng.
+                echo "dòng lịch sử mang COPY ở dạng không đọc được: $dong" >&2
+                return 1
+                ;;
+            *)
+                # Các lệnh còn lại (RUN/ENV/CMD/LABEL/EXPOSE/…) KHÔNG đưa tệp vào
+                # ảnh qua COPY nên không sinh được "đích COPY" nào để canh. Bỏ
+                # qua chúng KHÔNG giấu được điểm mù nào của mô hình này.
+                # Ranh giới đã biết, ghi ra chứ không giấu: tệp do `RUN` tạo ra
+                # nằm NGOÀI mô hình của cổng — cùng ranh giới với `ADD`.
+                continue
+                ;;
         esac
         dong="${dong% # buildkit}"
         set -f
         # shellcheck disable=SC2086
         set -- $dong
         set +f
-        [ "$#" -ge 3 ] || continue
+        # KHÔNG `continue`: một dòng COPY không phân tích được, xen giữa những
+        # dòng hợp lệ, vẫn lọt qua phép kiểm `grep -q '^COPY '` ở trên. Bỏ qua
+        # nó là đúng cái điểm mù ca9 vừa đóng, chỉ ở mức MỘT DÒNG.
+        if [ "$#" -lt 3 ]; then
+            echo "dòng COPY trong lịch sử không phân tích được: $dong" >&2
+            return 1
+        fi
         dst="${!#}"
         case "$dst" in
-            /) continue ;;
-            */) printf '%s\n' "$dst" ;;
+            /)
+                echo "lịch sử có COPY vào gốc '/' — cổng không mô hình hoá được" >&2
+                return 1
+                ;;
+            */) printf 'D\t%s\n' "$dst" ;;
+            /*) printf 'F\t%s\n' "$dst" ;;
+            *)
+                echo "đích COPY trong lịch sử không tuyệt đối: $dst" >&2
+                return 1
+                ;;
         esac
     done <<< "$rieng"
 }
@@ -301,7 +344,7 @@ _thu_muc_copy_trong_lich_su() {
 _cong_noi_dung() {
     local cid="$1" bang so=0 hong=0 loai nguon dich
     local hh hc nen dich_tm=() cho_phep="|" ds_anh ds_nen f thua=""
-    local anh_ref roots_anh r d co
+    local anh_ref roots_anh loai_ls r d co
     if [ -z "$cid" ]; then
         log "  cổng nội dung: không có container để soi"
         return 1
@@ -361,26 +404,55 @@ _cong_noi_dung() {
         return 1
     fi
 
-    # Tập thư mục cần soi = HỢP của (Dockerfile HIỆN TẠI) và (lịch sử của CHÍNH
-    # ẢNH đang chạy). Chỉ lấy vế đầu thì xoá hẳn một dòng COPY là thư mục ấy
-    # lặng lẽ rơi khỏi tầm soi — xem hợp đồng ở `_thu_muc_copy_trong_lich_su`.
+    # Tập đích cần soi = HỢP của (Dockerfile HIỆN TẠI) và (lịch sử của CHÍNH ẢNH
+    # đang chạy) — cho CẢ đích thư mục lẫn đích tệp. Chỉ lấy vế đầu thì xoá hẳn
+    # một dòng COPY là đích ấy lặng lẽ rơi khỏi tầm soi; chỉ lấy đích thư mục thì
+    # hai lệnh chép vào TỆP cụ thể (`/etc/nginx/nginx.conf`,
+    # `/etc/nginx/nginx-bootstrap.conf`) rơi vào đúng khoảng trống ấy.
+    # Hợp đồng ở `_dich_copy_trong_lich_su`.
     anh_ref=$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null) || anh_ref=""
     if [ -z "$anh_ref" ]; then
         log "  cổng nội dung: không đọc được ảnh của container $cid"
         return 1
     fi
-    if ! roots_anh=$(_thu_muc_copy_trong_lich_su "$anh_ref" "$nen"); then
-        log "  cổng nội dung: không suy được tập thư mục CŨ từ lịch sử build của ảnh."
-        log "                 (lịch sử không đọc được, hoặc ảnh nền cục bộ không phải bản đã dựng ra ảnh này)"
+    if ! roots_anh=$(_dich_copy_trong_lich_su "$anh_ref" "$nen"); then
+        log "  cổng nội dung: không suy được tập đích CŨ từ lịch sử build của ảnh (lý do ở dòng trên)"
         return 1
     fi
-    while IFS= read -r r; do
+    while IFS=$'\t' read -r loai_ls r; do
         [ -n "$r" ] || continue
-        co=0
-        for d in "${dich_tm[@]}"; do
-            if [ "$d" = "$r" ]; then co=1; break; fi
-        done
-        [ "$co" = "1" ] || dich_tm+=("$r")
+        case "$loai_ls" in
+            D)
+                co=0
+                for d in "${dich_tm[@]}"; do
+                    if [ "$d" = "$r" ]; then co=1; break; fi
+                done
+                [ "$co" = "1" ] || dich_tm+=("$r")
+                ;;
+            F)
+                # Đích dạng TỆP không có thư mục để `find`, nên bất biến phải
+                # khác: tệp này ĐÃ được COPY vào chính ảnh đang chạy (lịch sử
+                # của nó nói thế). Nếu KHÔNG dòng COPY nào của Dockerfile HIỆN
+                # TẠI sinh ra nó thì nó là tệp mồ côi.
+                #
+                # Không cần hỏi ảnh nền ở đây: lịch sử và nội dung đến từ CÙNG
+                # một ảnh, nên "lịch sử có dòng COPY này" đã đủ chứng minh tệp
+                # trong ảnh là bản của QLTS chứ không phải bản của ảnh nền.
+                case "$cho_phep" in
+                    *"|$r|"*) ;;
+                    *)
+                        log "  ✗ MỒ CÔI (đích tệp): $r"
+                        log "         do một lệnh COPY ĐÃ BỊ XOÁ khỏi nginx/Dockerfile sinh ra"
+                        thua="$thua$r "
+                        hong=$((hong + 1))
+                        ;;
+                esac
+                ;;
+            *)
+                log "  cổng nội dung: dòng lịch sử hỏng: '$loai_ls'"
+                return 1
+                ;;
+        esac
     done <<< "$roots_anh"
 
     if [ "${#dich_tm[@]}" -eq 0 ]; then

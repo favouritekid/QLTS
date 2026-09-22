@@ -734,7 +734,7 @@ def test_tap_thu_muc_soi_KHONG_CO_LAI_khi_mot_COPY_bien_mat():
         "cổng không đọc lịch sử build của ảnh ⇒ không lấy lại được tập thư mục "
         "của một `COPY` vừa bị xoá khỏi Dockerfile"
     )
-    assert "_thu_muc_copy_trong_lich_su" in ma
+    assert "_dich_copy_trong_lich_su" in ma
     for duong in ("/etc/nginx/templates", "/docker-entrypoint.d"):
         assert f'"{duong}"' not in ma and f"'{duong}'" not in ma, (
             f"đóng cứng thư mục runtime '{duong}' trong script — tập thư mục "
@@ -1125,6 +1125,65 @@ def test_ca9_xoa_HAN_mot_lenh_COPY_khoi_Dockerfile_thi_DO(tmp_path):
     assert "MỒ CÔI" in ra and "/etc/nginx/templates/default.conf.template" in ra, (
         f"không nhìn vào thư mục của lệnh COPY vừa bị xoá:\n{ra}"
     )
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "profile production up -d" not in nhat_ky, (
+        "đã đụng tới container ĐANG PHỤC VỤ dù cổng nội dung đã đỏ"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca11_xoa_HAN_mot_COPY_dich_TEP_khoi_Dockerfile_thi_DO(tmp_path):
+    """Nhánh ANH EM của ca9: đích dạng TỆP, không phải thư mục (CLAUDE.md §6).
+
+    `COPY nginx.conf /etc/nginx/nginx.conf` không kết thúc bằng `/`, nên bản
+    chỉ thu thập đích dạng thư mục bỏ nó lại — không thư mục nào để `find`, và
+    không ai canh. Xoá HẲN dòng ấy mà dùng ảnh CŨ thì `nginx.conf` của ta vẫn
+    nằm trong ảnh và vẫn là cấu hình nginx đang chạy.
+
+    Lưu ý vì sao chiều xuôi KHÔNG bắt được: chiều xuôi chỉ duyệt các dòng COPY
+    CÒN TRONG Dockerfile. Xoá dòng thì không còn gì để nó nhắc tới.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    df = repo / "nginx" / "Dockerfile"
+    than = _doc(df)
+    moc = "COPY nginx.conf /etc/nginx/nginx.conf"
+    assert than.count(moc) == 1, "Dockerfile đã đổi — ca kiểm đang neo vào dòng không còn"
+    # Ảnh KHÔNG dựng lại: `lichsu-anh.txt` giữ nguyên dòng COPY này.
+    df.write_text(than.replace(moc + "\n", ""), encoding="utf-8", newline="")
+
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A)
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"xoá hẳn một COPY đích-tệp mà cổng vẫn XANH:\n{ra}"
+    assert "MỒ CÔI" in ra and "/etc/nginx/nginx.conf" in ra, (
+        f"không nhận ra tệp do lệnh COPY vừa bị xoá sinh ra:\n{ra}"
+    )
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "profile production up -d" not in nhat_ky, (
+        "đã đụng tới container ĐANG PHỤC VỤ dù cổng nội dung đã đỏ"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca12_mot_dong_COPY_hong_XEN_GIUA_lich_su_thi_DO(tmp_path):
+    """Bất biến: MỘT dòng COPY không đọc được cũng phải ĐỎ.
+
+    Cố ý KHÔNG dựng ca "mọi dòng đều hỏng" — ca ấy đã bị phép kiểm
+    `grep -q '^COPY '` bắt và không chứng minh gì mới. Ở đây các dòng khác vẫn
+    hợp lệ, nên phép kiểm tổng thể vẫn qua; chỉ phép từ chối TỪNG DÒNG mới thấy.
+    Bỏ qua dòng hỏng = đích của nó không bao giờ vào tập soi.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    ls = repo.parent / "lichsu-anh.txt"
+    dong = _doc(ls).splitlines()
+    vt = next(i for i, d in enumerate(dong) if d.startswith("COPY templates/"))
+    # Dòng COPY CỤT: đúng tiền tố `COPY ` nên qua được grep, nhưng thiếu đích.
+    dong.insert(vt, "COPY # buildkit")
+    ls.write_text("\n".join(dong) + "\n", encoding="utf-8", newline="\n")
+
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A)
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"một dòng COPY hỏng mà cổng vẫn XANH:\n{ra}"
+    assert "không phân tích được" in ra, f"thông điệp không nói đúng ca:\n{ra}"
     nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
     assert "profile production up -d" not in nhat_ky, (
         "đã đụng tới container ĐANG PHỤC VỤ dù cổng nội dung đã đỏ"
