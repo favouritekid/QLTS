@@ -77,6 +77,11 @@ DUONG_SCRIPT = GOC / ".github" / "scripts" / "pytest_visibility_guard.py"
 
 TEP_NAY = "tests/unit/test_ci_test_visibility.py"
 TEP_NEO_CHEO = "tests/services/test_finance_killswitch.py"
+#: Hai tệp cùng gác MỘT nguồn chuẩn (`app/services/payment_intent_service.py`:
+#: `build_safe_return_url`). Neo bên dưới đòi chúng ở CÙNG một leg mà KHÔNG
+#: ghim nhãn "Tier 2b" — nhãn đổi tên thì neo phải sống, tách lát thì neo phải đỏ.
+TEP_RETURN_URL = "tests/unit/test_payment_return_url_guard.py"
+TEP_PAYMENT_INTENT = "tests/services/test_payment_intent_service.py"
 DUONG_SCRIPT_TRONG_WF = ".github/scripts/pytest_visibility_guard.py"
 IF_HOP_LE = {"matrix.visibility_guard", "matrix.visibility_guard == true"}
 
@@ -255,6 +260,45 @@ class TestCanhCheoNeoDocLap:
         assert "folded" not in than.lower() or "TestCongCIThayDuoc" in than, (
             "phép kiểm '#' trong scalar gấp phải ở NGUYÊN một nguồn: "
             "TestCongCIThayDuocThuNoCanh"
+        )
+
+
+class TestNeoCheoPaymentReturnUrl:
+    """`test_payment_return_url_guard.py` không thể tự canh selector của nó.
+
+    Đo 21-09-2026: tệp CÓ trong kho (9 ca, 3.996 B) nhưng **0 selector** trong
+    toàn `.github/` ⇒ chỉ nightly chạy, còn required check vẫn XANH. Một thay
+    đổi ở `build_safe_return_url` merge được mà PR gate không thấy — đúng lớp
+    lỗi `ci-allowlist-tep-khong-duoc-gac`.
+
+    Neo đặt ở tệp NÀY (Tier 5) chứ không ở tệp được neo (Tier 2b): tệp bị gỡ
+    selector thì chính nó ngừng chạy, nên nó không bao giờ tự báo đỏ được.
+    """
+
+    def test_return_url_guard_con_whole_file_trong_pr_gate(self, cac_leg):
+        """Bắt CẢ hai ca: gỡ hẳn selector, và hạ cấp xuống node-id.
+
+        `_selector_whole_file` chỉ nhận token KHÔNG chứa `::`, nên một selector
+        đổi thành `…py::TestX` sẽ rơi khỏi tập này và ca vẫn đỏ."""
+        assert TEP_RETURN_URL in _selector_whole_file(cac_leg), (
+            "%s phải còn là whole-file selector trong matrix `pytest-shard`. "
+            "Không có nó thì 9 ca gác `build_safe_return_url` chỉ chạy ở nightly, "
+            "còn required check vẫn xanh." % TEP_RETURN_URL
+        )
+
+    def test_return_url_guard_cung_leg_voi_payment_intent(self, cac_leg):
+        """Hai neo của CÙNG một nguồn chuẩn phải ở CÙNG một lát.
+
+        Cố ý KHÔNG ghim chuỗi "Tier 2b": đổi tên nhãn là việc vô hại, còn tách
+        hai neo sang hai lát mới là việc đáng đỏ — lúc ấy một thiết lập cấp leg
+        (timeout, `pytest_extra`, môi trường) chỉ áp cho một nửa."""
+        tier_url = _tier_cua(cac_leg, TEP_RETURN_URL)
+        tier_intent = _tier_cua(cac_leg, TEP_PAYMENT_INTENT)
+        assert tier_url == tier_intent, (
+            "%s đang ở leg %r còn %s ở leg %r — hai neo của cùng một nguồn "
+            "chuẩn bị tách lát. (`None` nghĩa là tệp đó không còn whole-file "
+            "selector nào.)" % (TEP_RETURN_URL, tier_url,
+                               TEP_PAYMENT_INTENT, tier_intent)
         )
 
 
