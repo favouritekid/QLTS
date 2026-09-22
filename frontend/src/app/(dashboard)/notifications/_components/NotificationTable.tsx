@@ -23,7 +23,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { MobileActionSheet } from "@/components/common/MobileActionSheet";
-import { cn } from "@/lib/utils";
+import { cn, resolveSafeUrl } from "@/lib/utils";
 import type { Notification } from "@/types/api.types";
 
 // =============================================================================
@@ -75,9 +75,9 @@ function MobileNotificationCard({
         <div className="flex-1 min-w-0 space-y-1">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
-              {notification.link ? (
+              {resolveSafeUrl(notification.link) ? (
                 <Link
-                  href={notification.link}
+                  href={resolveSafeUrl(notification.link) ?? "#"}
                   className={cn(
                     "text-sm hover:underline line-clamp-2",
                     !notification.is_read && "font-semibold"
@@ -272,9 +272,9 @@ export function NotificationTable({
                 </TableCell>
                 <TableCell>
                   <div className="space-y-1">
-                    {notification.link ? (
+                    {resolveSafeUrl(notification.link) ? (
                       <Link
-                        href={notification.link}
+                        href={resolveSafeUrl(notification.link) ?? "#"}
                         className={cn(
                           "text-sm hover:underline",
                           !notification.is_read && "font-semibold"

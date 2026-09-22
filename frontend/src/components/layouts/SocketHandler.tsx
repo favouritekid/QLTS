@@ -17,7 +17,7 @@ import { invoicesKeys } from "@/hooks/finance/useInvoices";
 import { refundsKeys } from "@/hooks/finance/useRefunds";
 import { financeDashboardKeys } from "@/hooks/finance/useFinanceDashboard";
 import { pipelineKeys } from "@/hooks/usePipeline";
-import { isSafeUrl } from "@/lib/utils";
+import { resolveSafeUrl } from "@/lib/utils";
 import { bumpSuspiciousLoginBanner } from "@/components/layouts/SecurityBanner";
 import { useProactiveTokenRefresh } from "@/hooks/useProactiveTokenRefresh";
 import type { SuspiciousLoginSocketPayload } from "@/types/api.types";
@@ -397,23 +397,27 @@ export function SocketHandler() {
           ? toast.error
           : toast.info;
       
-      const duration = notification.type === "reminder" ? 15000 
-        : notification.type === "warning" || notification.type === "error" ? 10000 
+      const duration = notification.type === "reminder" ? 15000
+        : notification.type === "warning" || notification.type === "error" ? 10000
         : 8000;
+
+      // Đích điều hướng đã chuẩn hoá — tính MỘT lần, dùng cho cả điều kiện
+      // hiện nút lẫn hành động lúc bấm, để hai thứ không thể lệch nhau.
+      const notificationTarget = resolveSafeUrl(notification.link);
 
       toastFn(notification.title, {
         description: notification.message,
         duration,
         id: `notification-${notification.id}`,  // Prevent duplicates
-        action: notification.link
+        // Nút "Xem chi tiết" chỉ hiện khi đích ĐÃ CHUẨN HOÁ hợp lệ — không
+        // hiện một nút rồi mới im lặng không làm gì lúc bấm.
+        action: notificationTarget
           ? {
               label: "Xem chi tiết",
               onClick: () => {
                 // ✅ Mark as read BEFORE navigating (updates bell icon)
                 markAsRead.mutate({ notification_ids: [notification.id] });
-                if (notification.link && isSafeUrl(notification.link)) {
-                  window.location.href = notification.link;
-                }
+                window.location.href = notificationTarget;
               },
             }
           : undefined,
@@ -1017,13 +1021,30 @@ export function SocketHandler() {
             ? toast.warning
             : toast.info;
 
+      // `action_url` tới từ query param THÔ của `POST /admin/system/alert`
+      // (`routers/admin/system.py`: `Optional[str]`, 0 validator) và đi thẳng
+      // vào `payload` của `safe_dispatch` ⇒ trên KÊNH SOCKET này, guard ở đây
+      // là guard DUY NHẤT. Điều hướng bằng ĐÍCH ĐÃ CHUẨN HOÁ, không bằng chuỗi
+      // gốc: kiểm một chuỗi rồi đi theo chuỗi khác chính là khe đã đẻ ra open
+      // redirect ở đường cứu phiên.
+      //
+      // ⚠️ ĐỪNG SUY RỘNG câu trên sang `notification.link`. Đường ĐÓ có một
+      // guard backend: `event_catalog._is_safe_relative_link`. Đo 22-09 bằng
+      // chính hàm ấy — nó CHẶN `//x`, `https://`, `javascript:` nhưng CHO QUA
+      // `/<TAB>/x`, `/<LF>/x`, `/<CR>/x`, `/\x` và `/..//x` (cùng lớp khuyết
+      // tật `strip()` hai đầu + so tiền tố thô như `isSafeUrl` cũ). Nghĩa là:
+      // có guard, nhưng KHÔNG đủ — guard ở frontend vẫn phải đứng.
+      const alertTarget = resolveSafeUrl(data.action_url);
+
       toastFn(`🚨 System Alert`, {
         description: data.message,
         duration: 10000,
-        action: data.action_url && isSafeUrl(data.action_url)
+        action: alertTarget
           ? {
               label: "View",
-              onClick: () => (window.location.href = data.action_url!),
+              onClick: () => {
+                window.location.href = alertTarget;
+              },
             }
           : undefined,
       });
