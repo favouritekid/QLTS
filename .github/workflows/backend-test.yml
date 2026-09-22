@@ -662,6 +662,7 @@ jobs:
               tests/integration/test_mkchk_migration_applies.py
               tests/api/test_overpayment_producer.py
               tests/services/test_payment_intent_service.py
+              tests/unit/test_payment_return_url_guard.py
               tests/integration/test_ovp_migration_applies.py
               tests/services/test_payment_service.py::TestOverpaymentCheck
               tests/services/test_payment_service.py::TestOverpaymentService
