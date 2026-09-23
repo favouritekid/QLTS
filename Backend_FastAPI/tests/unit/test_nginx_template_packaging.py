@@ -756,34 +756,33 @@ def test_ADD_bi_tu_choi_vi_cong_khong_mo_hinh_hoa_duoc():
 # `nginx-apply.sh` + `nginx-verify.sh` gọi, và mọi hành vi được lái bằng biến
 # môi trường — nên MỖI CA VI PHẠM ĐÚNG MỘT BẤT BIẾN (CLAUDE.md §3).
 
-_STUB_DOCKER_NGX = r"""#!/usr/bin/env bash
-_L="${QLTS_STUB_LOG:-/dev/null}"
-echo "docker $*" >> "$_L"
-_cid_cand="${STUB_CID_CANDIDATE:-cand1111}"
-_cid_ngx="${STUB_CID_NGINX:-ngx22222}"
-case "${1:-}" in
-  compose)
-    shift
-    _sub=""; _args=()
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        -f|--env-file|-p|--profile) shift 2; continue ;;
-        -*) shift; continue ;;
-        *) _sub="$1"; shift; _args=("$@"); break ;;
-      esac
-    done
-    case "$_sub" in
-      ps)
-        _svc=""
-        for _a in "${_args[@]}"; do case "$_a" in -*) ;; *) _svc="$_a" ;; esac; done
-        case "$_svc" in
-          nginx-candidate) echo "$_cid_cand" ;;
-          nginx)           echo "$_cid_ngx" ;;
-        esac
-        exit 0 ;;
-      *) exit "${STUB_COMPOSE_RC:-0}" ;;
-    esac
-    ;;
+# Mốc kết của phép liệt kê. ĐỌC TỪ chính `scripts/nginx-apply.sh`: chép tay một
+# bản thứ hai ở đây thì ngày script đổi mốc, stub sẽ lặng lẽ trả một danh sách
+# mà script coi là CỤT — và mọi ca full-run đỏ vì một lý do không ai đoán ra.
+_m_moc = re.search(r"^_MOC_LIET_KE='([^']+)'", _ma_lenh(_APPLY), re.M)
+assert _m_moc, "không đọc được `_MOC_LIET_KE` từ scripts/nginx-apply.sh"
+_MOC_LIET_KE_STUB = _m_moc.group(1)
+
+
+# --- LÕI dùng chung của hai `docker` GIẢ -----------------------------------
+# Đoạn bash dưới đây mô hình hoá ĐÚNG những lệnh mà cổng NỘI DUNG (G1) và cổng
+# ĐỒNG NHẤT (G2) của `scripts/nginx-apply.sh` gọi: `inspect -f {{.Image}}`,
+# `image inspect`, `history`, `exec … sha256sum`, `exec … sh -c 'find …'`, và
+# `run … __QLTS_HET__` trên ảnh nền.
+#
+# Vì sao MỘT bản: `nginx-apply.sh` nay có HAI người gọi được kiểm ở tệp này —
+# các ca chạy thẳng script (`_chay_apply`) và các ca chạy trọn `setup-ssl.sh`
+# (`_chay_setup_ssl`, Step 5 gọi thật sang nginx-apply). Hai bản mô phỏng sẽ
+# trôi khỏi nhau, và bản KHÔNG có ca đối chứng sẽ trôi trước (CLAUDE.md §7).
+#
+# Hàm chỉ `exit` khi nó thật sự mô hình hoá được lệnh; mọi thứ khác rơi xuống
+# phần THÂN riêng của từng sân khấu (ngữ nghĩa `compose ps`, các cần gạt
+# build/pull/certbot) — những thứ vốn khác nhau và phải khác nhau.
+_LOI_STUB_ANH = r"""
+_qlts_mo_hinh_anh() {
+  local _cid_ngx="${STUB_CID_NGINX:-ngx22222}"
+  local _fmt _cid _a _last _p _f _d _t
+  case "${1:-}" in
   inspect)
     shift
     _fmt=""; _cid=""
@@ -798,6 +797,7 @@ case "${1:-}" in
       *Networks*)         echo "qltsstub_default" ;;
       *State.Status*)     echo "${STUB_STATUS:-running}" ;;
       *State.Health*)     echo "${STUB_HEALTH:-healthy}" ;;
+      *State.Running*)    echo "${STUB_RUNNING:-true}" ;;
       *State.ExitCode*)   echo "0" ;;
       *Config.Image*)     echo "qlts-nginx:local" ;;
       *.Image*)
@@ -816,7 +816,7 @@ case "${1:-}" in
   history)
     # history --no-trunc --format '{{.CreatedBy}}' <ảnh>
     for _a in "$@"; do _last="$_a"; done
-    if [ "$_last" = "${STUB_NEN_REF:?}" ]; then
+    if [ "$_last" = "${STUB_NEN_REF:?stub thiếu STUB_NEN_REF}" ]; then
       [ "${STUB_LS_NEN_RC:-0}" = "0" ] || exit "${STUB_LS_NEN_RC}"
       cat "${STUB_LS_NEN:?}"
     else
@@ -842,22 +842,83 @@ case "${1:-}" in
         for _d in "$@"; do
           find "${STUB_ANH_TREE:?}$_d" -type f 2>/dev/null | sed "s#^${STUB_ANH_TREE}##"
         done
-        [ "${STUB_LIET_KE_KHONG_MOC:-0}" = "1" ] || echo "__QLTS_HET__"
+        [ "${STUB_LIET_KE_KHONG_MOC:-0}" = "1" ] || echo "@MOC@"
         exit 0 ;;
       *) exit 1 ;;
     esac
     ;;
   run)
-    if printf '%s' "$*" | grep -q '__QLTS_HET__'; then
+    if printf '%s' "$*" | grep -q '@MOC@'; then
       [ "${STUB_NEN_RC:-0}" = "0" ] || exit "${STUB_NEN_RC}"
       for _t in ${STUB_NEN_TEP:-}; do echo "$_t"; done
-      [ "${STUB_NEN_KHONG_MOC:-0}" = "1" ] || echo "__QLTS_HET__"
+      [ "${STUB_NEN_KHONG_MOC:-0}" = "1" ] || echo "@MOC@"
       exit 0
     fi
     exit "${STUB_RUN_RC:-0}" ;;
-  *) exit 0 ;;
-esac
+  esac
+}
 """
+
+# Đầu tệp chung: MỘT dòng nhật ký, tiền tố cấu hình được.
+#
+# Hai sân khấu đọc nhật ký theo hai định dạng đã có sẵn assertion bám vào —
+# `_chay_apply` đọc các dòng `docker …`, còn `_lat_lenh_compose`/`_vt_lenh` của
+# nhóm setup-ssl đọc các dòng KHÔNG tiền tố (`compose …`). Nên tiền tố là tham
+# số, chứ không phải cái cớ để đi sửa hàng loạt assertion cho khớp stub.
+#
+# Xuống dòng trong argv bị ÉP thành khoảng trắng: `nginx-verify.sh` truyền cả
+# một script `sh -c '...'` nhiều dòng làm tham số, và nếu ghi nguyên văn thì
+# MỘT lệnh hoá ra ba chục dòng nhật ký — mọi phép so VỊ TRÍ sẽ lệch theo.
+_DAU_STUB_DOCKER = r"""#!/usr/bin/env bash
+_L="${QLTS_STUB_LOG:-/dev/null}"
+printf '%s\n' "@TIEN_TO@${*//$'\n'/ }" >> "$_L"
+"""
+
+
+def _ma_stub_docker(tien_to: str, than: str) -> str:
+    """Ghép một `docker` giả: nhật ký + LÕI G1/G2 dùng chung + thân riêng."""
+    return (
+        _DAU_STUB_DOCKER.replace("@TIEN_TO@", tien_to)
+        + _LOI_STUB_ANH.replace("@MOC@", _MOC_LIET_KE_STUB)
+        + '_qlts_mo_hinh_anh "$@"\n'
+        + than
+    )
+
+
+# Thân RIÊNG của sân khấu `nginx-apply.sh` chạy thẳng: ngữ nghĩa `compose ps`
+# đơn giản (candidate và nginx luôn tồn tại), mọi lệnh compose khác lái bằng
+# `STUB_COMPOSE_RC`.
+_THAN_STUB_NGX = r"""
+_cid_cand="${STUB_CID_CANDIDATE:-cand1111}"
+_cid_ngx="${STUB_CID_NGINX:-ngx22222}"
+case "${1:-}" in
+  compose)
+    shift
+    _sub=""; _args=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f|--env-file|-p|--profile) shift 2; continue ;;
+        -*) shift; continue ;;
+        *) _sub="$1"; shift; _args=("$@"); break ;;
+      esac
+    done
+    case "$_sub" in
+      ps)
+        _svc=""
+        for _a in "${_args[@]}"; do case "$_a" in -*) ;; *) _svc="$_a" ;; esac; done
+        case "$_svc" in
+          nginx-candidate) echo "$_cid_cand" ;;
+          nginx)           echo "$_cid_ngx" ;;
+        esac
+        exit 0 ;;
+      *) exit "${STUB_COMPOSE_RC:-0}" ;;
+    esac
+    ;;
+esac
+exit 0
+"""
+
+_STUB_DOCKER_NGX = _ma_stub_docker("docker ", _THAN_STUB_NGX)
 
 # Ảnh sha256 giả — chỉ cần ĐÚNG DẠNG, vì đó chính là thứ cổng đồng nhất thẩm định.
 _ANH_A = "sha256:" + "1" * 64
@@ -917,17 +978,85 @@ def _from_cua(dockerfile: Path) -> str:
     return dong[0].split()[1]
 
 
+def _dung_cay_anh(
+    goc_nginx: Path, san: Path, them: dict[str, str] | None = None
+) -> Path:
+    """Cây "ảnh" phản chiếu đường dẫn TUYỆT ĐỐI trong container, dựng từ
+    `goc_nginx` theo đúng bảng `_DUONG_TRONG_ANH`.
+
+    ``them``: các tệp PHỤ được tạo ở NGUỒN rồi chụp vào ảnh — để ca "xoá khỏi
+    nguồn, giữ trong ảnh" có thứ để xoá mà không phải đụng template thật. Chỉ
+    sân khấu sao chép cây nguồn mới được truyền tham số này.
+
+    Cây ảnh CỐ Ý mang cả bốn tệp của ảnh nền: thiếu chúng thì phép trừ tập nền
+    không bao giờ được thi hành, và ca đối chứng sẽ xanh vì một lý do sai.
+    """
+    anh = san / "anh"
+    ban_do = dict(_DUONG_TRONG_ANH)
+    for rel, dich in (them or {}).items():
+        (goc_nginx / rel).parent.mkdir(parents=True, exist_ok=True)
+        (goc_nginx / rel).write_text(
+            f"# tệp phụ của ca kiểm: {rel}\n", encoding="utf-8", newline="\n"
+        )
+        ban_do[rel] = dich
+    for nguon, dich in ban_do.items():
+        d = anh / dich.lstrip("/")
+        d.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(goc_nginx / nguon, d)
+    for dich in _TEP_ANH_NEN:
+        d = anh / dich.lstrip("/")
+        d.parent.mkdir(parents=True, exist_ok=True)
+        d.write_text("# script cua anh nen\n", encoding="utf-8", newline="\n")
+    return anh
+
+
+def _ghi_lich_su_anh(goc_nginx: Path, san: Path) -> None:
+    """Lịch sử build giả, đúng hình dạng `docker history --format '{{.CreatedBy}}'`
+    (mới nhất TRƯỚC, phần của ảnh nền nằm ở ĐUÔI).
+
+    Sinh từ chính Dockerfile của sân khấu, nên nó phản ánh "ảnh đã được dựng từ
+    Dockerfile lúc này" — ca kiểm nào sửa Dockerfile SAU khi dựng sân khấu sẽ
+    tạo đúng độ lệch cần đo.
+    """
+    (san / "lichsu-nen.txt").write_text(
+        "\n".join(_LICH_SU_NEN) + "\n", encoding="utf-8", newline="\n"
+    )
+    dong_copy = [
+        d.strip()
+        for d in (goc_nginx / "Dockerfile").read_text(encoding="utf-8").splitlines()
+        if d.strip().startswith("COPY ")
+    ]
+    rieng = (
+        ["RUN /bin/sh -c chmod +x /docker-entrypoint.d/*.sh # buildkit"]
+        + [f"{d} # buildkit" for d in reversed(dong_copy)]
+        + ["RUN /bin/sh -c rm -f /etc/nginx/conf.d/*.conf # buildkit"]
+    )
+    (san / "lichsu-anh.txt").write_text(
+        "\n".join(rieng + _LICH_SU_NEN) + "\n", encoding="utf-8", newline="\n"
+    )
+
+
+def _bien_mo_hinh_anh(goc_nginx: Path, san: Path) -> dict[str, str]:
+    """Biến môi trường mà LÕI stub cần để mô hình hoá G1/G2.
+
+    `STUB_NEN_REF` suy từ chính Dockerfile của sân khấu: đóng cứng
+    `nginx:1.27-alpine` ở đây thì lần nâng nginx kế tiếp sẽ làm stub trả nhầm
+    lịch sử mà không ai thấy.
+    """
+    return {
+        "STUB_ANH_TREE": str(san / "anh").replace("\\", "/"),
+        "STUB_NEN_TEP": " ".join(_TEP_ANH_NEN),
+        "STUB_NEN_REF": _from_cua(goc_nginx / "Dockerfile"),
+        "STUB_LS_NEN": str(san / "lichsu-nen.txt").replace("\\", "/"),
+        "STUB_LS_ANH": str(san / "lichsu-anh.txt").replace("\\", "/"),
+    }
+
+
 def _san_khau_ngx(
     tmp_path: Path, them: dict[str, str] | None = None
 ) -> tuple[Path, Path]:
     """Sân khấu cô lập: bản sao `scripts/` + `nginx/`, `docker` giả, và một
     cây "ảnh" phản chiếu đường dẫn tuyệt đối trong container.
-
-    ``them``: các tệp PHỤ được tạo ở NGUỒN rồi chụp vào ảnh — để ca "xoá khỏi
-    nguồn, giữ trong ảnh" có thứ để xoá mà không phải đụng template thật.
-
-    Cây ảnh CỐ Ý mang cả bốn tệp của ảnh nền: thiếu chúng thì phép trừ tập nền
-    không bao giờ được thi hành, và ca đối chứng sẽ xanh vì một lý do sai.
     """
     san = tmp_path / "san"
     repo = san / "repo"
@@ -939,43 +1068,8 @@ def _san_khau_ngx(
     stub.write_text(_STUB_DOCKER_NGX, encoding="utf-8", newline="\n")
     stub.chmod(0o755)
 
-    anh = san / "anh"
-    ban_do = dict(_DUONG_TRONG_ANH)
-    for rel, dich in (them or {}).items():
-        (repo / "nginx" / rel).parent.mkdir(parents=True, exist_ok=True)
-        (repo / "nginx" / rel).write_text(
-            f"# tệp phụ của ca kiểm: {rel}\n", encoding="utf-8", newline="\n"
-        )
-        ban_do[rel] = dich
-    for nguon, dich in ban_do.items():
-        d = anh / dich.lstrip("/")
-        d.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(repo / "nginx" / nguon, d)
-    for dich in _TEP_ANH_NEN:
-        d = anh / dich.lstrip("/")
-        d.parent.mkdir(parents=True, exist_ok=True)
-        d.write_text("# script cua anh nen\n", encoding="utf-8", newline="\n")
-
-    # Lịch sử build giả, đúng hình dạng `docker history --format '{{.CreatedBy}}'`
-    # (mới nhất TRƯỚC, phần của ảnh nền nằm ở ĐUÔI). Sinh từ chính Dockerfile của
-    # sân khấu, nên nó phản ánh "ảnh đã được dựng từ Dockerfile lúc này" — ca kiểm
-    # nào sửa Dockerfile SAU khi dựng sân khấu sẽ tạo đúng độ lệch cần đo.
-    (san / "lichsu-nen.txt").write_text(
-        "\n".join(_LICH_SU_NEN) + "\n", encoding="utf-8", newline="\n"
-    )
-    dong_copy = [
-        d.strip()
-        for d in (repo / "nginx" / "Dockerfile").read_text(encoding="utf-8").splitlines()
-        if d.strip().startswith("COPY ")
-    ]
-    rieng = (
-        ["RUN /bin/sh -c chmod +x /docker-entrypoint.d/*.sh # buildkit"]
-        + [f"{d} # buildkit" for d in reversed(dong_copy)]
-        + ["RUN /bin/sh -c rm -f /etc/nginx/conf.d/*.conf # buildkit"]
-    )
-    (san / "lichsu-anh.txt").write_text(
-        "\n".join(rieng + _LICH_SU_NEN) + "\n", encoding="utf-8", newline="\n"
-    )
+    anh = _dung_cay_anh(repo / "nginx", san, them)
+    _ghi_lich_su_anh(repo / "nginx", san)
     return repo, anh
 
 
@@ -986,14 +1080,7 @@ def _chay_apply(repo: Path, anh: Path, **bien: str) -> subprocess.CompletedProce
         **os.environ,
         "MSYS_NO_PATHCONV": "1",
         "PATH": str(repo.parent / "bin") + os.pathsep + os.environ.get("PATH", ""),
-        "STUB_ANH_TREE": str(anh).replace("\\", "/"),
-        "STUB_NEN_TEP": " ".join(_TEP_ANH_NEN),
-        # Suy từ chính Dockerfile của sân khấu: đóng cứng `nginx:1.27-alpine`
-        # ở đây thì lần nâng nginx kế tiếp sẽ làm stub trả nhầm lịch sử mà
-        # không ai thấy.
-        "STUB_NEN_REF": _from_cua(repo / "nginx" / "Dockerfile"),
-        "STUB_LS_NEN": str(repo.parent / "lichsu-nen.txt").replace("\\", "/"),
-        "STUB_LS_ANH": str(repo.parent / "lichsu-anh.txt").replace("\\", "/"),
+        **_bien_mo_hinh_anh(repo / "nginx", anh.parent),
         "QLTS_STUB_LOG": str(nhat_ky).replace("\\", "/"),
         "QLTS_COMPOSE_ENV_FILE": "khong-ton-tai.env",
         **bien,
@@ -2067,20 +2154,16 @@ def test_setup_ssl_bat_lai_container_last_good_khi_hong(ma_setup_ssl: str):
 # Không certbot thật, không build/recreate nginx thật, không `docker compose up`
 # thật: mọi lời gọi `docker` đều dừng ở stub.
 
-_STUB_DOCKER = r"""#!/usr/bin/env bash
-# `docker` GIẢ: ghi argv vào nhật ký rồi trả mã do biến môi trường quyết định.
+# Thân RIÊNG của sân khấu `setup-ssl.sh`: các cần gạt build/pull/certbot và ngữ
+# nghĩa `compose ps` của riêng nó (có `nginx-bootstrap`, và `nginx` CÓ THỂ vắng
+# mặt — đó là kịch bản VPS mới).
 #
-# Xuống dòng trong argv bị ÉP thành khoảng trắng: `nginx-verify.sh` truyền cả
-# một script `sh -c '...'` nhiều dòng làm tham số, và nếu ghi nguyên văn thì
-# MỘT lệnh hoá ra ba chục dòng nhật ký — mọi phép so VỊ TRÍ ở dưới lệch theo.
-printf '%s\n' "${*//$'\n'/ }" >> "$QLTS_STUB_LOG"
+# LÕI dùng chung đã `exit` trước khi tới đây cho `inspect`/`image`/`history`/
+# `exec`/`run` — tức đúng những lệnh mà G1/G2 của `nginx-apply.sh` gọi ở Step 5.
+# `setup-ssl.sh` không gọi `docker run` trần (certbot đi qua `docker compose
+# run`, nên `$1` là `compose` và rơi xuống đây), nên LÕI không nuốt cần gạt nào.
+_THAN_STUB_SSL = r"""
 _a="$*"
-case "$_a" in
-    inspect*State.Health*)          echo healthy;  exit 0 ;;
-    inspect*State.Status*)          echo running;  exit 0 ;;
-    inspect*State.Running*)         echo true;     exit 0 ;;
-    inspect*NetworkSettings*)       echo mang-gia; exit 0 ;;
-esac
 case "$_a" in
     *" build "*|*" build")
         exit "${STUB_BUILD_RC:-0}" ;;
@@ -2101,6 +2184,13 @@ esac
 exit 0
 """
 
+_STUB_DOCKER = _ma_stub_docker("", _THAN_STUB_SSL)
+
+# Container id mà `compose ps` của sân khấu setup-ssl trả về — khai ở đây để ca
+# kiểm neo được vào ĐÚNG hai container mà cổng đồng nhất (G2) phải đọc.
+_CID_CANDIDATE_SSL = "cid-candidate-0001"
+_CID_NGINX_SSL = "cid-nginx-0001"
+
 _STUB_GIT = r"""#!/usr/bin/env bash
 # `git` GIẢ: trạng thái cây nguồn do biến môi trường quyết định.
 printf 'git %s\n' "${*//$'\n'/ }" >> "$QLTS_STUB_LOG"
@@ -2118,7 +2208,22 @@ exit 0
 
 
 def _moi_truong_gia(tmp_path: Path, **bien: str) -> tuple[dict, Path]:
-    """PATH có `docker`/`git` giả, `.env` giả, và một nhật ký argv rỗng."""
+    """PATH có `docker`/`git` giả, `.env` giả, và một nhật ký argv rỗng.
+
+    Step 5 của `setup-ssl.sh` gọi THẬT sang `scripts/nginx-apply.sh`, và script
+    ấy mang cổng NỘI DUNG (G1) + cổng ĐỒNG NHẤT (G2). Nên sân khấu này phải
+    dựng đủ thứ để một lượt chạy ĐẠT là đạt vì đúng lý do:
+      * cây "ảnh" chụp byte-nguyên từ `nginx/` THẬT của kho — G1 chiều xuôi so
+        sha256 từng tệp, nên một bản "gần đúng" là đỏ;
+      * cùng cây ấy KHÔNG có tệp nào ngoài bảng COPY + bốn tệp của ảnh nền —
+        G1 chiều ngược gọi là mồ côi ngay nếu có;
+      * lịch sử build có đuôi TRÙNG KHÍT lịch sử ảnh nền — `_dich_copy_trong_lich_su`
+        fail-closed khi đuôi lệch;
+      * `STUB_ANH_CANDIDATE` = `STUB_ANH_NGINX` = MỘT image id `sha256:` +
+        64 hex — G2 từ chối cả khi hai bên lệch lẫn khi giá trị không đúng dạng.
+    Mọi giá trị đều đi qua `**bien`, nên ca kiểm ngược nào muốn phá đúng MỘT
+    trong bốn thứ trên vẫn phá được bằng một biến duy nhất.
+    """
     shim = tmp_path / "shim"
     shim.mkdir(parents=True, exist_ok=True)
     for ten, ma in (("docker", _STUB_DOCKER), ("git", _STUB_GIT)):
@@ -2133,6 +2238,12 @@ def _moi_truong_gia(tmp_path: Path, **bien: str) -> tuple[dict, Path]:
         encoding="utf-8",
         newline="\n",
     )
+    # Sân khấu ảnh dùng CHUNG bộ dựng với nhóm `_chay_apply` — một bản thứ hai
+    # sẽ trôi khỏi bản đầu, và bản ở đây (không có ca đột biến riêng) trôi trước.
+    san = tmp_path / "san-anh"
+    san.mkdir(parents=True, exist_ok=True)
+    _dung_cay_anh(_THU_MUC_NGINX, san)
+    _ghi_lich_su_anh(_THU_MUC_NGINX, san)
     moi = {
         **os.environ,
         # PATH ở dạng BẢN ĐỊA (Windows dùng `;`), còn hai biến dưới đi thẳng
@@ -2141,6 +2252,9 @@ def _moi_truong_gia(tmp_path: Path, **bien: str) -> tuple[dict, Path]:
         "MSYS_NO_PATHCONV": "1",
         "QLTS_STUB_LOG": nhat_ky.as_posix(),
         "QLTS_COMPOSE_ENV_FILE": env_gia.as_posix(),
+        **_bien_mo_hinh_anh(_THU_MUC_NGINX, san),
+        "STUB_ANH_CANDIDATE": _ANH_A,
+        "STUB_ANH_NGINX": _ANH_A,
     }
     for thua in ("QLTS_COMPOSE_EXTRA", "QLTS_SSL_KIEM_CAY_NGUON"):
         moi.pop(thua, None)
@@ -2617,6 +2731,51 @@ def test_setup_ssl_sau_khi_dung_nginx_khong_con_build_hay_pull(tmp_path):
     assert "nginx" in _dich_vu_khoi_dong(lenh[vt_stop + 1 :], _tai_compose(_COMPOSE)), (
         "không thấy service `nginx` được khởi động lại sau điểm dừng ⇒ Step 5 "
         "chưa chạy hết:\n" + "\n".join(lenh)
+    )
+
+    # CHỐNG XANH RỖNG, phần hai: Step 5 gọi THẬT sang `nginx-apply.sh`, nên rc=0
+    # ở đây cũng là lời khẳng định rằng hai cổng của script ấy đã ĐI QUA chứ
+    # không phải được đi vòng. Nếu sân khấu tụt xuống thành "mọi lệnh đều thành
+    # công" thì rc vẫn 0 và cả nhóm ca này xanh mà không đo gì — nên đòi đúng
+    # dấu vết mà G1/G2 để lại.
+    #
+    # G1 (cổng NỘI DUNG): thông báo đối chiếu THÀNH CÔNG, và đủ số tệp.
+    khop = re.search(r"cổng nội dung: (\d+)/\1 tệp khớp nguồn", ra)
+    assert khop, (
+        "không thấy cổng NỘI DUNG (G1) của nginx-apply.sh báo đối chiếu thành "
+        f"công — lượt chạy này chưa đi qua nó:\n{ra}"
+    )
+    assert int(khop.group(1)) == len(_DUONG_TRONG_ANH), (
+        f"G1 chỉ đối chiếu {khop.group(1)} tệp, bảng COPY của nginx/Dockerfile "
+        f"có {len(_DUONG_TRONG_ANH)} — sân khấu đang che bớt tệp cho cổng"
+    )
+    # …và đúng ba phép đo mà G1 dựa vào, trên nhật ký argv (không phải trên log
+    # người đọc): lịch sử build, checksum trong container, và mốc kết của phép
+    # liệt kê. Thiếu mốc thì một đầu ra CỤT trông y hệt một danh sách sạch.
+    for moc, vi_sao in (
+        ("history ", "đọc lịch sử build của ảnh"),
+        (" sha256sum ", "đối chiếu checksum trong container"),
+        (_MOC_LIET_KE_STUB, "mốc kết của phép liệt kê thư mục đích"),
+    ):
+        assert any(moc in d for d in lenh), (
+            f"nhật ký không có dấu vết `{moc}` ({vi_sao}) ⇒ G1 chưa thật sự "
+            "chạy:\n" + "\n".join(lenh)
+        )
+
+    # G2 (cổng ĐỒNG NHẤT): image id BẤT BIẾN được đọc ở CẢ HAI container và
+    # khớp nhau. `{{.Config.Image}}` không đủ — nó là tên:tag dùng chung.
+    cid_doc = {
+        d.split()[-1]
+        for d in lenh
+        if d.startswith("inspect ") and "{{.Image}}" in d
+    }
+    assert {_CID_CANDIDATE_SSL, _CID_NGINX_SSL} <= cid_doc, (
+        "G2 không đọc `{{.Image}}` của CẢ candidate lẫn nginx đang phục vụ "
+        f"(thấy: {sorted(cid_doc)}):\n" + "\n".join(lenh)
+    )
+    assert re.search(r"chạy đúng ảnh đã chứng minh \(sha256:[0-9a-f]{64}\)", ra), (
+        "không thấy nginx-apply.sh tuyên bố nginx đang chạy ĐÚNG bản ảnh đã "
+        f"được chứng minh (image id bất biến) ⇒ G2 chưa đi qua:\n{ra}"
     )
 
     pham = _build_hay_pull_sau(lenh, vt_stop)
