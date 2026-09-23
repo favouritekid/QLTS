@@ -36,11 +36,17 @@ if app_env_check != "test":
 # take precedence over Pydantic-settings env_file values. We need to force-load .env.test
 # with override=True so that test DATABASE_URL (qlts_test) wins over Docker's DATABASE_URL.
 from dotenv import load_dotenv
+
+# MỘT NGUỒN CHUẨN cho cả phép kiểm an toàn CSDL lẫn cách che URL khi in.
+# `tests/fixtures/database.py` vốn đã sở hữu bất biến này (fail-closed) —
+# đừng cài lại bản thứ hai ở đây.
+from tests.fixtures.database import che_url_csdl, kiem_url_csdl_test
+
 _env_test_path = os.path.join(project_root, ".env.test")
 if os.path.exists(_env_test_path):
     load_dotenv(_env_test_path, override=True)
     print(f"INFO [conftest.py]: Loaded .env.test with override=True from {_env_test_path}")
-    print(f"INFO [conftest.py]: DATABASE_URL after override = {os.getenv('DATABASE_URL', 'NOT SET')[:60]}...")
+    print(f"INFO [conftest.py]: DATABASE_URL after override = {che_url_csdl(os.getenv('DATABASE_URL'))}")
 else:
     print(f"WARNING [conftest.py]: .env.test not found at {_env_test_path}")
 
@@ -115,12 +121,23 @@ if settings.APP_ENV != "test":
         f"CRITICAL: settings.APP_ENV is not 'test' (value: {settings.APP_ENV}). Aborting tests.",
         pytrace=False,
     )
-if "test" not in settings.DATABASE_URL.lower():
-    log.warning(
-        f"WARNING: settings.DATABASE_URL ({settings.DATABASE_URL}) might not contain 'test'."
+# N4.01 — nhánh này TỪNG chỉ `log.warning` rồi rơi thẳng xuống dòng
+# "Safety check passed" bên dưới. Nghĩa là: chạy pytest trỏ vào CSDL
+# production thì in một dòng cảnh báo, rồi tự tuyên bố đã kiểm xong, rồi
+# `setup_test_database` DROP SCHEMA. Nay nó chặn, cùng hình dạng với nhánh
+# `APP_ENV` ngay trên.
+_ly_do_url_khong_an_toan = kiem_url_csdl_test(settings.DATABASE_URL)
+if _ly_do_url_khong_an_toan is not None:
+    pytest.fail(
+        f"CRITICAL: {_ly_do_url_khong_an_toan} "
+        f"(DATABASE_URL={che_url_csdl(settings.DATABASE_URL)}). Aborting tests.",
+        pytrace=False,
     )
+# Dòng này chỉ được in KHI CẢ HAI phép kiểm trên đã thật sự qua. Một dòng chữ
+# nói "passed" in vô điều kiện còn nguy hiểm hơn việc không kiểm gì.
 print(
-    f"INFO [conftest.py]: Safety check passed. settings.APP_ENV={settings.APP_ENV}. Using test database: {settings.DATABASE_URL[:30]}..."
+    f"INFO [conftest.py]: Safety check passed. settings.APP_ENV={settings.APP_ENV}. "
+    f"Using test database: {che_url_csdl(settings.DATABASE_URL)}"
 )
 
 
