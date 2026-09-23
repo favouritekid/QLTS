@@ -2049,6 +2049,781 @@ def test_setup_ssl_bat_lai_container_last_good_khi_hong(ma_setup_ssl: str):
 
 
 # ---------------------------------------------------------------------------
+# setup-ssl.sh Step 0: ẢNH phải dựng được TRƯỚC cổng 80 và TRƯỚC ACME
+# ---------------------------------------------------------------------------
+# Đo thật trên bản trước: `grep -c build scripts/setup-ssl.sh` = 0 — script chưa
+# bao giờ dựng ảnh nginx. Thiệt hại KHÔNG phải hạn mức Let's Encrypt
+# (`--keep-until-expiring` đã lo), mà là đường lùi: chứng thư đã cấp ở Step 3,
+# bootstrap đã gỡ ở Step 4, Step 5 đỏ vì ảnh cũ/không có, `_DA_BAN_GIAO` còn 0 ⇒
+# trap bật lại container nginx CŨ — mà trên VPS mới thì KHÔNG CÓ container cũ
+# nào, nên trap lặng lẽ không làm gì và máy chủ ở lại KHÔNG có nginx.
+#
+# Guard TĨNH không đủ cho nhóm này: câu hỏi là "build có xảy ra TRƯỚC lệnh chạm
+# nginx đang chạy không", tức một câu hỏi về THỨ TỰ THỰC THI. Nên các ca dưới
+# đây CHẠY THẬT `setup-ssl.sh` với `docker` và `git` GIẢ trên PATH, rồi so VỊ
+# TRÍ trong nhật ký argv — không so sự có mặt (một guard chỉ hỏi "có dòng build
+# không" vẫn xanh khi dòng ấy nằm ở Step 5).
+#
+# Không certbot thật, không build/recreate nginx thật, không `docker compose up`
+# thật: mọi lời gọi `docker` đều dừng ở stub.
+
+_STUB_DOCKER = r"""#!/usr/bin/env bash
+# `docker` GIẢ: ghi argv vào nhật ký rồi trả mã do biến môi trường quyết định.
+#
+# Xuống dòng trong argv bị ÉP thành khoảng trắng: `nginx-verify.sh` truyền cả
+# một script `sh -c '...'` nhiều dòng làm tham số, và nếu ghi nguyên văn thì
+# MỘT lệnh hoá ra ba chục dòng nhật ký — mọi phép so VỊ TRÍ ở dưới lệch theo.
+printf '%s\n' "${*//$'\n'/ }" >> "$QLTS_STUB_LOG"
+_a="$*"
+case "$_a" in
+    inspect*State.Health*)          echo healthy;  exit 0 ;;
+    inspect*State.Status*)          echo running;  exit 0 ;;
+    inspect*State.Running*)         echo true;     exit 0 ;;
+    inspect*NetworkSettings*)       echo mang-gia; exit 0 ;;
+esac
+case "$_a" in
+    *" build "*|*" build")
+        exit "${STUB_BUILD_RC:-0}" ;;
+    *" pull "*|*" pull")
+        exit "${STUB_PULL_RC:-0}" ;;
+    *certonly*)
+        exit "${STUB_CERTBOT_RC:-0}" ;;
+    # Nhánh riêng phải đứng TRƯỚC nhánh chung: `*"ps -q nginx"*` có dấu sao hai
+    # đầu nên nó khớp luôn cả `ps -q nginx-candidate`.
+    *"ps -aq nginx-bootstrap"*|*"ps -q nginx-bootstrap"*)
+        echo "cid-bootstrap-0001"; exit 0 ;;
+    *"ps -aq nginx-candidate"*|*"ps -q nginx-candidate"*)
+        echo "cid-candidate-0001"; exit 0 ;;
+    *"ps -aq nginx"*|*"ps -q nginx"*)
+        if [ -n "${STUB_CID_NGINX:-}" ]; then echo "$STUB_CID_NGINX"; fi
+        exit 0 ;;
+esac
+exit 0
+"""
+
+_STUB_GIT = r"""#!/usr/bin/env bash
+# `git` GIẢ: trạng thái cây nguồn do biến môi trường quyết định.
+printf 'git %s\n' "${*//$'\n'/ }" >> "$QLTS_STUB_LOG"
+case "${1:-}" in
+    rev-parse)
+        if [ "${STUB_GIT_REV_RC:-0}" != "0" ]; then exit "${STUB_GIT_REV_RC}"; fi
+        echo "${STUB_GIT_SHA:-1111111111111111111111111111111111111111}"
+        exit 0 ;;
+    status)
+        if [ -n "${STUB_GIT_BAN:-}" ]; then printf '%s\n' "$STUB_GIT_BAN"; fi
+        exit "${STUB_GIT_STATUS_RC:-0}" ;;
+esac
+exit 0
+"""
+
+
+def _moi_truong_gia(tmp_path: Path, **bien: str) -> tuple[dict, Path]:
+    """PATH có `docker`/`git` giả, `.env` giả, và một nhật ký argv rỗng."""
+    shim = tmp_path / "shim"
+    shim.mkdir(parents=True, exist_ok=True)
+    for ten, ma in (("docker", _STUB_DOCKER), ("git", _STUB_GIT)):
+        p = shim / ten
+        p.write_text(ma, encoding="utf-8", newline="\n")
+        p.chmod(0o755)
+    nhat_ky = tmp_path / "argv.log"
+    nhat_ky.write_text("", encoding="utf-8", newline="\n")
+    env_gia = tmp_path / "gia.env"
+    env_gia.write_text(
+        "DOMAIN=vi-du.test\nCERTBOT_EMAIL=ops@vi-du.test\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    moi = {
+        **os.environ,
+        # PATH ở dạng BẢN ĐỊA (Windows dùng `;`), còn hai biến dưới đi thẳng
+        # vào bash nên phải ở dạng POSIX.
+        "PATH": str(shim) + os.pathsep + os.environ.get("PATH", ""),
+        "MSYS_NO_PATHCONV": "1",
+        "QLTS_STUB_LOG": nhat_ky.as_posix(),
+        "QLTS_COMPOSE_ENV_FILE": env_gia.as_posix(),
+    }
+    for thua in ("QLTS_COMPOSE_EXTRA", "QLTS_SSL_KIEM_CAY_NGUON"):
+        moi.pop(thua, None)
+    moi.update({k: str(v) for k, v in bien.items()})
+    return moi, nhat_ky
+
+
+def _chay_setup_ssl(
+    tmp_path: Path, duong: Path | None = None, **bien: str
+) -> tuple[int, str, list[str]]:
+    """CHẠY THẬT `setup-ssl.sh`; trả `(rc, log người đọc, nhật ký argv)`."""
+    moi, nhat_ky = _moi_truong_gia(tmp_path, **bien)
+    kb = duong or _SETUP_SSL
+    r = subprocess.run(
+        [_BASH, kb.as_posix()],
+        cwd=str(_GOC),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=180,
+        env=moi,
+    )
+    lenh = [d for d in nhat_ky.read_text(encoding="utf-8").splitlines() if d.strip()]
+    return r.returncode, r.stdout + r.stderr, lenh
+
+
+def _vt_lenh(lenh: list[str], moc: str) -> int:
+    """Vị trí lệnh ĐẦU TIÊN khớp `moc` trong nhật ký; -1 nếu không có."""
+    for i, d in enumerate(lenh):
+        if moc in d:
+            return i
+    return -1
+
+
+def _ghi_ban_sao(tmp_path: Path, dong: list[str]) -> Path:
+    """Bản đột biến nằm ở thư mục TẠM, giữ nguyên layout `<goc>/scripts/…`.
+
+    CẤM ghi đè tệp trong worktree để đổi phiên bản: chết giữa chừng là mất việc.
+    """
+    thu_muc = tmp_path / "ban-dot-bien" / "scripts"
+    thu_muc.mkdir(parents=True, exist_ok=True)
+    p = thu_muc / "setup-ssl.sh"
+    p.write_text("\n".join(dong) + "\n", encoding="utf-8", newline="\n")
+    return p
+
+
+def _vt_lenh_ma(dong: list[str], moc: str) -> int:
+    """Vị trí dòng MÃ (không phải chú thích) đầu tiên chứa `moc`."""
+    for i, d in enumerate(dong):
+        if moc in d and not d.lstrip().startswith("#"):
+            return i
+    raise AssertionError(f"không thấy dòng mã nào chứa `{moc}` trong setup-ssl.sh")
+
+
+def _khoi_lenh(dong: list[str], bd: int) -> int:
+    """Chỉ số dòng CUỐI của lệnh bắt đầu ở `bd` (đi hết các dòng nối `\\`)."""
+    kt = bd
+    while dong[kt].rstrip().endswith("\\"):
+        kt += 1
+    return kt
+
+
+def _ban_go_step0(tmp_path: Path) -> Path:
+    """Bản `setup-ssl.sh` ĐÃ GỠ trọn Step 0 — dùng cho kiểm ngược.
+
+    Vòng 2: Step 0 không còn MỘT lệnh mà là hai (`build …` rồi `pull …`). Cắt
+    tới hết lệnh muộn hơn trong hai lệnh ấy, chứ không đóng cứng vào `build` —
+    cắt hụt thì bản đột biến vẫn còn `pull` và ca kiểm ngược đo nhầm thứ.
+    """
+    dong = _doc(_SETUP_SSL).splitlines()
+    bd = next(
+        i for i, d in enumerate(dong) if d.lstrip().startswith("log ") and "Step 0:" in d
+    )
+    kt = max(
+        _khoi_lenh(dong, _vt_lenh_ma(dong, "--profile production build ")),
+        _khoi_lenh(dong, _vt_lenh_ma(dong, "--profile production pull ")),
+    )
+    assert bd < kt, "mốc cắt Step 0 đảo ngược — đột biến sẽ cắt nhầm chỗ"
+    return _ghi_ban_sao(tmp_path, dong[:bd] + dong[kt + 1 :])
+
+
+def _ban_doi_build_xuong_sau_stop(tmp_path: Path) -> Path:
+    """Đột biến TINH VI nhất của nhóm này: DỜI lệnh build xuống sau `stop nginx`.
+
+    Không xoá gì, không đổi một ký tự nào của lệnh — nên mọi guard hỏi "script
+    có gọi `compose build` không", "lệnh build có ghim `-f` không", "cây nguồn
+    có được xác minh không" đều VẪN XANH. Thứ duy nhất đổi là VỊ TRÍ, và đó
+    đúng là thứ quyết định thiệt hại: tới đó thì nginx đang phục vụ đã bị dừng.
+    Đặt ngay sau `stop nginx` (tức vẫn TRƯỚC certbot) để đột biến khó bị bắt
+    nhất — một guard chỉ so `build < certonly` sẽ không thấy gì.
+    """
+    dong = _doc(_SETUP_SSL).splitlines()
+    bd = _vt_lenh_ma(dong, "--profile production build ")
+    kt = _khoi_lenh(dong, bd)
+    khoi = dong[bd : kt + 1]
+    con_lai = dong[:bd] + dong[kt + 1 :]
+    vt_stop = _vt_lenh_ma(con_lai, "--profile production stop nginx")
+    return _ghi_ban_sao(
+        tmp_path, con_lai[: vt_stop + 1] + khoi + con_lai[vt_stop + 1 :]
+    )
+
+
+# --- Đọc nhật ký argv thành (lệnh compose, có --no-deps, các toán hạng) ------
+# Cờ MANG GIÁ TRỊ: token ngay sau chúng là giá trị chứ không phải tên service.
+# Thiếu một cái ở đây là đọc nhầm giá trị thành service — `--entrypoint certbot
+# certbot` là đúng cái bẫy ấy.
+_CO_MANG_GIA_TRI = {
+    "-f", "--file", "-p", "--project-name", "--env-file", "--profile",
+    "--entrypoint", "-e", "--env", "--name", "--policy", "--tail", "-v",
+    "--volume", "-w", "--workdir", "-u", "--user", "--network",
+}
+
+
+def _lat_lenh_compose(dong: str) -> tuple[str, bool, list[str]] | None:
+    """`(lệnh, có --no-deps, toán hạng)` cho một dòng nhật ký `docker compose`.
+
+    Trả `None` cho mọi thứ không phải lời gọi `docker compose` — đặc biệt là
+    `docker run --rm --network …` của `nginx-verify.sh`, vốn KHÔNG khởi động
+    service nào của stack và không được lẫn vào phép đếm.
+    """
+    tok = dong.split()
+    if not tok or tok[0] != "compose":
+        return None
+    i = 1
+    while i < len(tok):
+        if tok[i] in _CO_MANG_GIA_TRI:
+            i += 2
+            continue
+        if tok[i].startswith("-"):
+            i += 1
+            continue
+        break
+    if i >= len(tok):
+        return None
+    lenh = tok[i]
+    i += 1
+    toan_hang: list[str] = []
+    no_deps = "--no-deps" in tok
+    while i < len(tok):
+        if tok[i] in _CO_MANG_GIA_TRI:
+            i += 2
+            continue
+        if tok[i].startswith("-"):
+            i += 1
+            continue
+        toan_hang.append(tok[i])
+        i += 1
+        # `run <service> <command> …`: chỉ token đầu là service, phần còn lại
+        # là lệnh chạy TRONG container (`certonly --non-interactive …`).
+        if lenh == "run":
+            break
+    return lenh, no_deps, toan_hang
+
+
+def _dich_vu_khoi_dong(lenh: list[str], compose: dict) -> set[str]:
+    """Mọi service được `up`/`run` trong đoạn nhật ký, ĐÃ đóng theo `depends_on`.
+
+    Đóng bao là bắt buộc: `up -d nginx` không mang `--no-deps` sẽ kéo cả
+    `frontend` + `backend` (rồi `postgres` + `redis`) lên theo, và những ảnh ấy
+    cũng phải có mặt từ trước. Lệnh nào có `--no-deps` thì KHÔNG đóng bao.
+    """
+    dv = compose.get("services", {})
+    ra: set[str] = set()
+    for d in lenh:
+        lat = _lat_lenh_compose(d)
+        if lat is None or lat[0] not in ("up", "run"):
+            continue
+        _, no_deps, ten = lat
+        hang_doi = [t for t in ten if t in dv]
+        while hang_doi:
+            t = hang_doi.pop()
+            if t in ra:
+                continue
+            ra.add(t)
+            if no_deps:
+                continue
+            hang_doi.extend(
+                p for p in (dv[t].get("depends_on") or []) if p in dv and p not in ra
+            )
+    return ra
+
+
+def _anh_cua(compose: dict, ten: str) -> str:
+    """Định danh ẢNH mà service `ten` chạy.
+
+    Ba service nginx (`nginx`, `nginx-candidate`, `nginx-bootstrap`) khai CÙNG
+    `image: qlts-nginx:local`, nên build MỘT trong ba là đủ cho cả ba — đó
+    chính là lý do phép so phải theo ẢNH chứ không theo tên service.
+    """
+    dv = compose["services"][ten]
+    anh = dv.get("image")
+    return anh if anh else f"<ảnh build riêng của {ten}>"
+
+
+def _build_hay_pull_sau(lenh: list[str], moc: int) -> list[str]:
+    """Các lệnh `build`/`pull` nằm SAU vị trí `moc` trong nhật ký."""
+    pham = []
+    for i, d in enumerate(lenh):
+        if i <= moc:
+            continue
+        lat = _lat_lenh_compose(d)
+        if lat is not None and lat[0] in ("build", "pull"):
+            pham.append(f"#{i}: {d}")
+    return pham
+
+
+def _ban_go_kiem_cay(tmp_path: Path) -> Path:
+    """Bản GỠ riêng khối xác minh cây nguồn, GIỮ nguyên lệnh build."""
+    dong = _doc(_SETUP_SSL).splitlines()
+    bd = next(
+        i for i, d in enumerate(dong) if d.startswith('if [ "${QLTS_SSL_KIEM_CAY_NGUON')
+    )
+    # `fi` đóng khối NGOÀI nằm ở cột 0; mọi `fi` bên trong đều thụt lề, nên so
+    # nguyên văn (không `strip`) là phép cắt chính xác.
+    kt = next(i for i in range(bd + 1, len(dong)) if dong[i] == "fi")
+    return _ghi_ban_sao(tmp_path, dong[:bd] + dong[kt + 1 :])
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_build_hong_thi_DUNG_truoc_cong_80_va_truoc_acme(tmp_path):
+    """Build hỏng ⇒ script dừng khi CHƯA chạm gì — không có gì phải khôi phục.
+
+    Ca hỏng thật mà nhóm này canh: ảnh nginx không dựng được (template thiếu,
+    Dockerfile hỏng, đĩa đầy). Nếu phát hiện ấy rơi xuống sau Step 3 thì chứng
+    thư đã cấp, nginx đang phục vụ đã bị dừng, cổng 80 đã bị lấy — và trên VPS
+    mới thì trap không có container cũ nào để bật lại.
+    """
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_BUILD_RC="1")
+    assert rc != 0, f"`compose build` trả 1 mà script vẫn trả 0:\n{ra}"
+    assert _vt_lenh(lenh, " build nginx") >= 0, (
+        "script không hề gọi `compose build nginx` — Step 0 đã biến mất:\n"
+        + "\n".join(lenh)
+    )
+    for cam, vi_sao in (
+        ("stop nginx", "đã dừng nginx đang phục vụ"),
+        ("nginx-bootstrap", "đã đụng tới cổng 80"),
+        ("certonly", "đã gọi ACME"),
+    ):
+        assert _vt_lenh(lenh, cam) < 0, (
+            f"build hỏng mà script vẫn {vi_sao} — phát hiện tới quá muộn "
+            f"(`{cam}` trong nhật ký lệnh):\n" + "\n".join(lenh)
+        )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_khong_co_step0_thi_di_thang_toi_certbot(tmp_path):
+    """KIỂM NGƯỢC: gỡ Step 0 ⇒ script chạy thẳng tới certbot.
+
+    Không có ca này thì ca nền ở trên có thể đang xanh vì một lý do khác hẳn
+    (env giả thiếu biến, stub trả sai, script chết ở một dòng vô can) — và một
+    guard đỏ vì lý do khác là một guard không canh gì cả.
+    """
+    ban = _ban_go_step0(tmp_path)
+    rc, ra, lenh = _chay_setup_ssl(
+        tmp_path, duong=ban, STUB_BUILD_RC="1", STUB_CERTBOT_RC="1"
+    )
+    assert not _build_hay_pull_sau(lenh, -1), (
+        "bản đột biến vẫn còn lệnh build/pull — phép cắt Step 0 đã trượt "
+        "(vòng 2: Step 0 có HAI lệnh, cắt hụt một cái là đo nhầm thứ):\n"
+        + "\n".join(lenh)
+    )
+    assert _vt_lenh(lenh, "stop nginx") >= 0 and _vt_lenh(lenh, "certonly") >= 0, (
+        "gỡ Step 0 mà script KHÔNG tới được cổng 80 và certbot ⇒ ca nền đỏ vì "
+        f"lý do khác chứ không phải vì Step 0 (rc={rc}):\n{ra}\n" + "\n".join(lenh)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_build_dung_TRUOC_moi_lenh_cham_nginx(tmp_path):
+    """So VỊ TRÍ trong nhật ký lệnh, không so sự có mặt.
+
+    Một lệnh build đặt ở Step 5 vẫn làm mọi guard "có gọi build không" xanh,
+    trong khi nó chữa đúng con số không: tới đó thì cổng 80 đã bị lấy và chứng
+    thư đã cấp.
+    """
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_CERTBOT_RC="1")
+    vt_build = _vt_lenh(lenh, " build nginx")
+    vt_stop = _vt_lenh(lenh, "stop nginx")
+    vt_acme = _vt_lenh(lenh, "certonly")
+    assert min(vt_build, vt_stop, vt_acme) >= 0, (
+        f"thiếu mốc trong nhật ký lệnh (build={vt_build} stop={vt_stop} "
+        f"certbot={vt_acme}), rc={rc}:\n{ra}\n" + "\n".join(lenh)
+    )
+    assert vt_build < vt_stop < vt_acme, (
+        "thứ tự thực thi SAI — build phải đứng trước mọi lệnh chạm nginx đang "
+        f"phục vụ và trước ACME: build={vt_build} stop={vt_stop} "
+        f"certbot={vt_acme}\n" + "\n".join(lenh)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_tu_choi_build_tu_cay_da_troi(tmp_path):
+    """`build` dựng từ CÂY LÀM VIỆC — cây trôi thì ảnh không khớp commit nào.
+
+    Không có cổng này, Step 0 chữa được ca "chưa có ảnh" nhưng lại mở một ca
+    mới: nó đưa lặng lẽ mọi sửa đổi đang nằm trên đĩa của VPS lên production.
+    """
+    rc, ra, lenh = _chay_setup_ssl(
+        tmp_path, STUB_GIT_BAN=" M nginx/templates/default.conf.template"
+    )
+    assert rc != 0, f"cây nguồn đã trôi mà script vẫn trả 0:\n{ra}"
+    for cam in (" build nginx", "stop nginx", "certonly"):
+        assert _vt_lenh(lenh, cam) < 0, (
+            f"cây nguồn đã trôi mà script vẫn chạy `{cam}`:\n" + "\n".join(lenh)
+        )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_go_kiem_cay_thi_cay_troi_van_build(tmp_path):
+    """KIỂM NGƯỢC cho cổng cây nguồn: gỡ đúng khối ấy ⇒ build chạy trở lại."""
+    ban = _ban_go_kiem_cay(tmp_path)
+    rc, ra, lenh = _chay_setup_ssl(
+        tmp_path, duong=ban, STUB_GIT_BAN=" M nginx/x", STUB_CERTBOT_RC="1"
+    )
+    assert _vt_lenh(lenh, " build nginx") >= 0, (
+        "gỡ khối xác minh cây nguồn mà build vẫn không chạy ⇒ ca nền đỏ vì một "
+        f"lý do khác (rc={rc}):\n{ra}\n" + "\n".join(lenh)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_khong_doc_duoc_HEAD_thi_tu_choi_build(tmp_path):
+    """Không biết cây đang ở đâu thì không build — fail-closed, không đoán."""
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_GIT_REV_RC="128")
+    assert rc != 0, f"`git rev-parse HEAD` hỏng mà script vẫn trả 0:\n{ra}"
+    assert _vt_lenh(lenh, " build nginx") < 0, (
+        "không đọc được HEAD mà vẫn build:\n" + "\n".join(lenh)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_khong_doc_duoc_git_status_thi_tu_choi_build(tmp_path):
+    """`git status` hỏng ⇒ từ chối build. Nhánh ANH EM của ca ngay trên.
+
+    Vá một nhánh thì còn bốn nhánh: cổng cây nguồn hỏi git HAI lần
+    (`rev-parse HEAD` rồi `status --porcelain`), và chỉ nhánh thứ nhất từng có
+    ca canh. Đo bằng đột biến: đổi `if ! _CAY_BAN=$(git status …); then error`
+    thành `_CAY_BAN=$(git status … || true)` là biến một cổng fail-closed thành
+    một cổng LUÔN XANH — `_CAY_BAN` rỗng thì cây nào cũng "sạch" — và trước ca
+    này thì KHÔNG một ca nào trong 169 ca bắt được.
+    """
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_GIT_STATUS_RC="128")
+    assert rc != 0, f"`git status` trả 128 mà script vẫn trả 0:\n{ra}"
+    assert not _build_hay_pull_sau(lenh, -1), (
+        "không đọc được trạng thái cây nguồn mà vẫn build/pull:\n" + "\n".join(lenh)
+    )
+    assert _vt_lenh(lenh, "stop nginx") < 0 and _vt_lenh(lenh, "certonly") < 0, (
+        "cổng cây nguồn đỏ mà script vẫn dừng nginx / gọi ACME:\n" + "\n".join(lenh)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_co_thoat_hiem_cay_nguon_chay_duoc(tmp_path):
+    """Lối thoát ghi trong thông điệp lỗi phải MỞ ĐƯỢC cổng thật.
+
+    Một `QLTS_SSL_KIEM_CAY_NGUON=0` được quảng cáo mà không ai đọc còn tệ hơn
+    không có: người trực gõ nó lúc 2 giờ sáng, cổng vẫn đỏ, và họ đi sửa nhầm
+    chỗ.
+    """
+    rc, ra, lenh = _chay_setup_ssl(
+        tmp_path,
+        STUB_GIT_BAN=" M nginx/x",
+        QLTS_SSL_KIEM_CAY_NGUON="0",
+        STUB_CERTBOT_RC="1",
+    )
+    assert _vt_lenh(lenh, " build nginx") >= 0, (
+        "đặt QLTS_SSL_KIEM_CAY_NGUON=0 mà cổng vẫn chặn build "
+        f"(rc={rc}):\n{ra}\n" + "\n".join(lenh)
+    )
+
+
+def test_setup_ssl_build_di_qua_mang_COMPOSE_da_ghim(ma_setup_ssl: str):
+    """Lệnh build mới phải đi qua mảng `COMPOSE` đã ghim `-f docker-compose.yml`.
+
+    `_lenh_compose_trong_script` tìm chuỗi `docker compose`, nên một dòng viết
+    `"${COMPOSE[@]}" … build nginx` là VÔ HÌNH với nó: guard không đỏ, mà cũng
+    không xác nhận gì. Cái giữ cho dòng ấy được ghim là khai báo mảng ở đầu tệp
+    — và điều đó chỉ đúng chừng nào lệnh build thật sự dùng mảng ấy.
+    """
+    dong_build = [
+        d for d in ma_setup_ssl.splitlines() if re.search(r"\bbuild\s+nginx\b", d)
+    ]
+    assert dong_build, (
+        "setup-ssl.sh không còn lệnh `build nginx` — Step 0 đã biến mất, và với "
+        "nó là toàn bộ đường lùi trên VPS mới"
+    )
+    for d in dong_build:
+        assert '"${COMPOSE[@]}"' in d or "-f docker-compose.yml" in d, (
+            "lệnh build không ghim `-f docker-compose.yml` và cũng không đi qua "
+            f"mảng COMPOSE: {d.strip()[:120]}"
+        )
+
+
+def test_mang_compose_trong_script_production_ghim_va_gan_DUNG_MOT_LAN():
+    """Mảng giữ `docker compose` phải ghim `-f`, và chỉ được gán MỘT lần.
+
+    Bộ phân loại ngữ cảnh nhìn thấy `X=(docker compose …)` vì chuỗi ấy có mặt ở
+    đó. Nó KHÔNG nhìn thấy `X+=(--profile …)` hay một lần gán lại `X=("${X[@]}"
+    -f khac.yml)`: hai dòng ấy không chứa `docker compose` nên không lần nào
+    được hỏi tới, mà chúng lại đổi được chính lệnh mà mọi `"${X[@]}"` sau đó
+    chạy. Đóng khe ấy ở đây thay vì nới hợp đồng của bộ phân loại.
+    """
+    re_gan = re.compile(r"^(\w+)=\(\s*docker compose\b(.*)$", re.M)
+    pham: list[str] = []
+    da_soi = 0
+    for sh in _cac_script():
+        if sh.name not in _SCRIPT_PRODUCTION:
+            continue
+        da_soi += 1
+        ma = _ma_lenh(sh)
+        for m in re_gan.finditer(ma):
+            ten, than = m.group(1), m.group(2)
+            if "-f docker-compose.yml" not in than:
+                pham.append(f"{sh.name}: mảng `{ten}` không ghim -f docker-compose.yml")
+            so_lan = len(re.findall(rf"^\s*{re.escape(ten)}\+?=\(", ma, re.M))
+            if so_lan != 1:
+                pham.append(
+                    f"{sh.name}: mảng `{ten}` được gán {so_lan} lần — lần gán "
+                    "thứ hai không chứa `docker compose` nên bộ phân loại không "
+                    "nhìn thấy nó"
+                )
+    assert da_soi == len(_SCRIPT_PRODUCTION), (
+        f"chỉ soi được {da_soi}/{len(_SCRIPT_PRODUCTION)} script production — "
+        "một tên trong _SCRIPT_PRODUCTION đã bị đổi/xoá"
+    )
+    assert not pham, "mảng lệnh compose không an toàn:\n  " + "\n  ".join(pham)
+
+
+# ---------------------------------------------------------------------------
+# setup-ssl.sh Step 0 — VÒNG 2: phạm vi là MỌI ảnh cần sau điểm dừng nginx
+# ---------------------------------------------------------------------------
+# Vòng 1 chỉ build `nginx`. Nhưng sau điểm dừng, Step 3 chạy `certbot` và Step 5
+# gọi `nginx-apply.sh` với `QLTS_NGINX_NO_DEPS=0`, mà Nhịp 0 của nó là
+# `up -d --wait postgres redis backend frontend`. Ảnh backend/frontend thiếu ⇒
+# Compose TỰ build ngay tại đó; ảnh certbot/postgres/redis thiếu ⇒ một
+# `docker pull` phát sinh — cả hai đều rơi vào đúng khoảng thời gian mà Step 0
+# sinh ra để dọn trống: cổng 80 đã nhường, nginx đang phục vụ đã bị dừng, và
+# (với certbot trở đi) chứng thư đã cấp.
+#
+# Nhóm ca dưới đây đo bằng NHẬT KÝ LỆNH của một lượt chạy đầy đủ, và so theo VỊ
+# TRÍ. Một guard hỏi "có gọi build không" vẫn xanh khi lệnh ấy nằm ở Step 5 —
+# `_ban_doi_build_xuong_sau_stop` là đột biến dựng riêng để chứng minh điều đó.
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_sau_khi_dung_nginx_khong_con_build_hay_pull(tmp_path):
+    """SAU `stop nginx`, nhật ký lệnh phải có ĐÚNG 0 lệnh `build` và 0 `pull`.
+
+    Đây là tính chất mà toàn bộ Step 0 tồn tại để bảo đảm. Nó được phát biểu
+    trên nhật ký argv của MỘT lượt chạy đi tới cùng (rc=0), chứ không trên văn
+    bản script: một lệnh build nằm trong nhánh `if` chẳng bao giờ chạy cũng làm
+    guard tĩnh xanh, còn một lệnh build do `nginx-apply.sh` (script KHÁC) phát
+    ra thì guard tĩnh trên `setup-ssl.sh` không bao giờ thấy.
+    """
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_CID_NGINX="cid-nginx-0001")
+    assert rc == 0, f"lượt chạy đầy đủ không tới đích (rc={rc}):\n{ra}\n" + "\n".join(
+        lenh
+    )
+    vt_stop = _vt_lenh(lenh, "stop nginx")
+    assert vt_stop >= 0, "không thấy `stop nginx` — mốc đo biến mất:\n" + "\n".join(lenh)
+
+    # CHỐNG XANH RỖNG: nếu script chết ngay sau `stop nginx` thì "0 lệnh build
+    # phía sau" đúng một cách vô nghĩa. Bắt buộc phải thấy các mốc muộn nhất.
+    for moc, o_dau in (
+        ("nginx-bootstrap", "Step 2"),
+        ("certonly", "Step 3"),
+        ("nginx-candidate", "Step 5 / Nhịp 1"),
+    ):
+        assert any(moc in d for d in lenh[vt_stop + 1 :]), (
+            f"nhật ký sau `stop nginx` không có mốc `{moc}` ({o_dau}) ⇒ lượt "
+            "chạy chưa đi hết, ca này đang xanh rỗng:\n" + "\n".join(lenh)
+        )
+    assert "nginx" in _dich_vu_khoi_dong(lenh[vt_stop + 1 :], _tai_compose(_COMPOSE)), (
+        "không thấy service `nginx` được khởi động lại sau điểm dừng ⇒ Step 5 "
+        "chưa chạy hết:\n" + "\n".join(lenh)
+    )
+
+    pham = _build_hay_pull_sau(lenh, vt_stop)
+    assert not pham, (
+        "còn lệnh build/pull phát sinh SAU khi nginx đang phục vụ đã bị dừng — "
+        "đúng hình dạng thất bại mà Step 0 sinh ra để chặn:\n  "
+        + "\n  ".join(pham)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_doi_build_xuong_sau_stop_nginx_thi_ca_tren_DO(tmp_path):
+    """KIỂM NGƯỢC cho ca ngay trên: dời build xuống sau `stop nginx` ⇒ ĐỎ.
+
+    Bản đột biến vi phạm ĐÚNG MỘT bất biến (vị trí của lệnh build) và không
+    đụng gì khác — nên nếu ca trên vẫn xanh với nó thì ca trên không canh gì.
+    Ca này khẳng định hai điều, và cần cả hai: (1) bản đột biến VẪN chạy được
+    tới certbot — tức nó tinh vi, không phải một script gãy; (2) phép đo vị trí
+    bắt được nó.
+    """
+    ban = _ban_doi_build_xuong_sau_stop(tmp_path)
+    rc, ra, lenh = _chay_setup_ssl(
+        tmp_path, duong=ban, STUB_CID_NGINX="cid-nginx-0001"
+    )
+    vt_stop = _vt_lenh(lenh, "stop nginx")
+    assert vt_stop >= 0, f"đột biến làm hỏng cả mốc `stop nginx` (rc={rc}):\n{ra}"
+    assert _vt_lenh(lenh, "certonly") > vt_stop, (
+        "bản đột biến không còn chạy tới certbot ⇒ nó THÔ chứ không tinh vi, "
+        f"và ca trên có thể đang đỏ vì lý do khác (rc={rc}):\n{ra}\n"
+        + "\n".join(lenh)
+    )
+    pham = _build_hay_pull_sau(lenh, vt_stop)
+    assert pham, (
+        "dời hẳn lệnh build xuống sau `stop nginx` mà phép đo KHÔNG thấy gì ⇒ "
+        "ca `sau khi dừng nginx không còn build/pull` đang xanh vô nghĩa:\n"
+        + "\n".join(lenh)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_moi_anh_can_sau_diem_dung_deu_do_step0_lo_lieu(tmp_path):
+    """Phạm vi Step 0 = ĐÚNG tập ảnh của các service khởi động sau điểm dừng.
+
+    Suy cả hai chiều từ chính nhật ký chạy + `docker-compose.yml`, không từ một
+    danh sách chép tay:
+      * THIẾU  — một service lên sau điểm dừng mà ảnh của nó không được Step 0
+                 lo (build hoặc pull) ⇒ đỏ. Đây là khe hở vòng 1.
+      * THỪA   — Step 0 build/pull một ảnh mà không service nào sau điểm dừng
+                 dùng ⇒ cũng đỏ. Đây là khe hở ngược lại: mở rộng máy móc sang
+                 `celery-worker`/`celery-beat` (không lệnh nào khởi động chúng)
+                 bắt một VPS mới trả tiền cho hai ảnh vô dụng.
+    So theo ẢNH chứ không theo tên service: ba service nginx dùng chung
+    `qlts-nginx:local`, build một là đủ cho cả ba.
+    """
+    compose = _tai_compose(_COMPOSE)
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_CID_NGINX="cid-nginx-0001")
+    assert rc == 0, f"lượt chạy đầy đủ không tới đích (rc={rc}):\n{ra}"
+    vt_stop = _vt_lenh(lenh, "stop nginx")
+    assert vt_stop >= 0
+
+    ds_build: list[str] = []
+    ds_pull: list[str] = []
+    for d in lenh[:vt_stop]:
+        lat = _lat_lenh_compose(d)
+        if lat is None:
+            continue
+        if lat[0] == "build":
+            ds_build += lat[2]
+        elif lat[0] == "pull":
+            ds_pull += lat[2]
+    assert ds_build, "Step 0 không build gì cả:\n" + "\n".join(lenh)
+    assert ds_pull, "Step 0 không bảo đảm ảnh mượn nào cả:\n" + "\n".join(lenh)
+
+    dv = compose["services"]
+    for t in ds_build:
+        assert t in dv and dv[t].get("build"), (
+            f"Step 0 build `{t}` nhưng docker-compose.yml không khai `build:` "
+            "cho nó — lệnh ấy không dựng được gì"
+        )
+    for t in ds_pull:
+        assert t in dv and not dv[t].get("build"), (
+            f"Step 0 `pull {t}` nhưng service ấy có `build:` — ảnh của nó phải "
+            "được DỰNG, `pull` sẽ đi tìm một ảnh không ai đẩy lên registry"
+        )
+
+    anh_lo = {_anh_cua(compose, t) for t in ds_build + ds_pull}
+    khoi_dong = _dich_vu_khoi_dong(lenh[vt_stop + 1 :], compose)
+    assert khoi_dong, "không service nào được khởi động sau điểm dừng — xanh rỗng"
+    anh_can = {_anh_cua(compose, t) for t in khoi_dong}
+
+    thieu = {
+        f"{t} → {_anh_cua(compose, t)}"
+        for t in khoi_dong
+        if _anh_cua(compose, t) not in anh_lo
+    }
+    assert not thieu, (
+        "service lên SAU điểm dừng nginx mà Step 0 không lo ảnh cho nó — "
+        "Compose sẽ tự build/pull đúng lúc cổng 80 đã nhường:\n  "
+        + "\n  ".join(sorted(thieu))
+    )
+    thua = anh_lo - anh_can
+    assert not thua, (
+        "Step 0 lo những ảnh mà KHÔNG lệnh nào sau điểm dừng dùng tới:\n  "
+        + "\n  ".join(sorted(thua))
+        + "\n(các service thật sự khởi động: "
+        + ", ".join(sorted(khoi_dong))
+        + ")"
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_cong_cay_nguon_phu_dung_cac_build_context(tmp_path, ma_setup_ssl: str):
+    """Cổng cây nguồn phải soi ĐÚNG các `build.context` của ảnh sắp build.
+
+    Hai chiều, và cả hai đều đã hỏng thật ở đâu đó:
+      * soi HỤT  — vòng 1 chỉ gác `nginx` + `docker-compose.yml`; nay Step 0
+                   còn build backend + frontend, nên một `Backend_FastAPI/`
+                   đang trôi sẽ lặng lẽ lên production;
+      * soi THỪA — gác cả cây thì mọi sửa đổi vô can cũng làm cổng đỏ, và một
+                   cổng đỏ oan là một cổng sẽ bị tắt.
+    Danh sách được suy từ `docker-compose.yml`, nên đổi `build.context` của một
+    service mà quên cổng là ca này đỏ.
+    """
+    m = re.search(r"^_DUONG_CAY_NGUON=\(([^)]*)\)", ma_setup_ssl, re.M)
+    assert m, "không thấy khai báo `_DUONG_CAY_NGUON=(…)` trong setup-ssl.sh"
+    duong_gac = set(m.group(1).split())
+
+    # Khai báo mà không ai DÙNG là một cổng xanh giả. Buộc chính mảng ấy phải
+    # là thứ được truyền cho `git status`.
+    assert 'git status --porcelain -- "${_DUONG_CAY_NGUON[@]}"' in ma_setup_ssl, (
+        "`_DUONG_CAY_NGUON` được khai nhưng `git status` không dùng nó — cổng "
+        "đang gác một danh sách khác với danh sách được kiểm ở đây"
+    )
+
+    compose = _tai_compose(_COMPOSE)
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_CID_NGINX="cid-nginx-0001")
+    assert rc == 0, f"lượt chạy đầy đủ không tới đích (rc={rc}):\n{ra}"
+    ds_build: list[str] = []
+    for d in lenh:
+        lat = _lat_lenh_compose(d)
+        if lat is not None and lat[0] == "build":
+            ds_build += lat[2]
+    assert ds_build, "Step 0 không build gì cả"
+
+    def _chuan(p: str) -> str:
+        return p[2:] if p.startswith("./") else p
+
+    mong = {"docker-compose.yml"}
+    for t in ds_build:
+        b = compose["services"][t]["build"]
+        mong.add(_chuan(b if isinstance(b, str) else b["context"]))
+
+    assert duong_gac == mong, (
+        "cổng cây nguồn lệch khỏi các `build.context` thật:\n"
+        f"  script gác : {sorted(duong_gac)}\n"
+        f"  compose đòi: {sorted(mong)}\n"
+        f"  (service sắp build: {ds_build})"
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_break_glass_cay_nguon_la_bien_rieng_va_canh_bao_to(
+    tmp_path, ma_setup_ssl: str
+):
+    """Lối thoát phải là BIẾN RIÊNG và phải hét lên khi được dùng.
+
+    Một cờ dùng chung cho hai hàng rào là cách một hàng rào bị gỡ mà không ai
+    định gỡ nó. Một lối thoát im lặng thì tệ hơn nữa: nó biến "owner cố ý bỏ
+    qua" thành "không ai biết cổng đã tắt" — và bản ghi vận hành duy nhất về
+    việc ảnh production không khớp commit nào sẽ không tồn tại.
+    """
+    # BIẾN RIÊNG: được ĐỌC đúng một lần, và lần đọc ấy là điều kiện của cổng.
+    doc_bien = re.findall(r"\$\{QLTS_SSL_KIEM_CAY_NGUON[:\-]", ma_setup_ssl)
+    assert len(doc_bien) == 1, (
+        f"`QLTS_SSL_KIEM_CAY_NGUON` được đọc {len(doc_bien)} lần — lối thoát "
+        "đang điều khiển nhiều hơn một thứ"
+    )
+    dong_dk = [
+        d for d in ma_setup_ssl.splitlines() if "${QLTS_SSL_KIEM_CAY_NGUON" in d
+    ][0]
+    assert len(re.findall(r"\$\{", dong_dk)) == 1, (
+        "điều kiện của cổng cây nguồn còn đọc biến khác ngoài "
+        f"QLTS_SSL_KIEM_CAY_NGUON — lối thoát không còn là của riêng nó: {dong_dk.strip()}"
+    )
+
+    rc, ra, lenh = _chay_setup_ssl(
+        tmp_path,
+        STUB_GIT_BAN=" M nginx/x\n M Backend_FastAPI/y\n?? frontend/z",
+        QLTS_SSL_KIEM_CAY_NGUON="0",
+        STUB_CID_NGINX="cid-nginx-0001",
+    )
+    assert rc == 0, f"break-glass mà lượt chạy vẫn hỏng (rc={rc}):\n{ra}"
+    assert ra.count("[WARN]") >= 5, (
+        "break-glass chỉ cảnh báo lí nhí — một dòng warn lẫn trong log build là "
+        f"thứ không ai đọc:\n{ra}"
+    )
+    assert "BREAK-GLASS" in ra and "THAO TÁC CÓ CHỦ ĐÍCH" in ra, (
+        "văn bản cảnh báo không nói rõ đây là thao tác owner có chủ đích chứ "
+        f"không phải đường đi thường:\n{ra}"
+    )
+    assert _vt_lenh(lenh, " build ") >= 0, (
+        "break-glass được bật mà cổng vẫn chặn build — lối thoát chỉ là quảng "
+        "cáo:\n" + "\n".join(lenh)
+    )
+
+
+# ---------------------------------------------------------------------------
 # Đường vận hành: workflow deploy
 # ---------------------------------------------------------------------------
 
