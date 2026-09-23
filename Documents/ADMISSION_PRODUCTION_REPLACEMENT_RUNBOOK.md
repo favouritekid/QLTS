@@ -443,8 +443,53 @@ Cờ được `envsubst` bake vào bản render lúc container **khởi động*
 # 2. Áp. `nginx-apply.sh` dựng một container candidate, đo hành vi thật của nó
 #    (TLS + SNI thật, route backend, route frontend), CHỈ KHI ĐẠT mới thay
 #    container đang phục vụ. Cấu hình hỏng ⇒ dừng lại, last-good vẫn chạy.
+#
+#    BUILD TRƯỚC — `nginx-apply.sh` KHÔNG tự build. Cấu hình nginx đi theo
+#    IMAGE (`nginx/Dockerfile` COPY `templates/`) và service ghim tag cố định
+#    `qlts-nginx:local`, nên `up -d` KHÔNG dựng lại khi tag ấy đã tồn tại. Cây
+#    `nginx/` đã khác ảnh đang chạy ⇒ candidate đo ảnh CŨ, `up -d` cũng áp ảnh
+#    CŨ, và script vẫn báo ĐẠT. Chuỗi đúng: COPY → build → up; Compose recreate
+#    vì IMAGE ID đổi, không phải vì thấy tệp nguồn đổi.
+#    Cây đang ở đúng SHA đang chạy thì build là cache hit — cùng image ID, `up
+#    -d` no-op thật, nên dòng này rẻ. ⚠️ Nhưng nó build từ CÂY LÀM VIỆC: cây đã
+#    trôi khỏi SHA đang chạy thì nó đưa luôn phần trôi ấy lên, giữa lúc đóng
+#    băng.
+#
+#    Nên cổng dưới đây là LỆNH CHẶN, không phải lời nhắc "soi git status".
+#    `git status` chỉ IN ra; người trực lúc 2 giờ sáng đọc lướt nó đúng như đọc
+#    lướt mọi dòng log khác, và một cổng nối bằng `&&` thì cũng chỉ in ra.
+#
+#    HAI phép kiểm, không phải một, vì chúng thấy hai thứ KHÁC nhau:
+#      * `git diff --quiet HEAD` thấy tệp ĐƯỢC THEO DÕI bị sửa/xoá (so với HEAD
+#        chứ không phải `git diff` trần: bản trần bỏ qua phần đã `git add`);
+#      * `git ls-files --others` thấy tệp UNTRACKED — thứ `git diff` KHÔNG BAO
+#        GIỜ thấy mà `COPY templates/` trong `nginx/Dockerfile` thì CÓ. Đây
+#        đúng là đường một tệp render tay lọt được vào image production.
+#    CỐ Ý không dùng `--exclude-standard`: `.gitignore` có `nginx-test.env` và
+#    `nginx-test-certs/` không neo đường dẫn, nên chúng khớp cả dưới `nginx/` —
+#    một tệp như thế vừa vô hình với `git diff`, vừa vô hình với
+#    `--exclude-standard`, mà `COPY` vẫn nhặt. Đo trên cây sạch: cả hai biến thể
+#    đều trả về RỖNG, nên bản ngặt hơn không ồn thêm.
+#    `docker-compose.yml` nằm trong cổng vì nó quyết định build context và tag
+#    `qlts-nginx:local`; nó trôi thì `build nginx` dựng ra một thứ khác hẳn.
+#
+#    Break-glass — thao tác owner CÓ CHỦ ĐÍCH, không phải lối thoát mặc định:
+#    biến RIÊNG `QLTS_BUILD_NGINX_CAY_BAN`, gõ tay từng lần, KHÔNG đặt trong
+#    script và không export vào hồ sơ shell. Nó in một khối cảnh báo lớn kèm
+#    đúng những gì đang bẩn, để dòng ấy nằm lại trong log ca trực.
+if [ "${QLTS_BUILD_NGINX_CAY_BAN:-}" = "toi-chap-nhan-anh-khong-khop-commit" ]; then
+    echo "=============================================================="
+    echo "== BREAK-GLASS: cổng cây sạch ĐÃ BỊ BỎ QUA. Ảnh nginx sắp"
+    echo "== dựng KHÔNG tương ứng commit nào. Ghi ai bật và vì sao."
+    echo "=============================================================="
+    git status --porcelain -- nginx/ docker-compose.yml
+else
+    git diff --quiet HEAD -- nginx/ docker-compose.yml || { echo "CÂY BẨN ở nginx/ hoặc docker-compose.yml — build sẽ đưa phần trôi ấy lên production. DỪNG."; git status --porcelain -- nginx/ docker-compose.yml; exit 1; }
+    [ -z "$(git ls-files --others -- nginx/)" ] || { echo "nginx/ còn tệp UNTRACKED — git diff không thấy chúng, COPY thì có. DỪNG."; git ls-files --others -- nginx/; exit 1; }
+fi
 set -a && source .env.production && set +a
 docker compose -f docker-compose.yml --env-file .env.production --profile production up -d --no-deps --wait backend
+docker compose -f docker-compose.yml --env-file .env.production --profile production build nginx
 bash scripts/nginx-apply.sh "$DOMAIN"
 
 # 3. CHỨNG MINH bằng request thật. Không dòng log nào được tính là bằng chứng.
@@ -597,9 +642,20 @@ KHÔNG khóa: Lead module (CRUD), Finance (payment view), Dashboard, KPI reports
 T+0:00   Communicate freeze (email + Slack + in-app banner)
 T+0:15   Edit .env.production: ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=true
          Apply + Verify: theo §6.1b "Cần gạt đóng băng — quy trình DUY NHẤT"
+           git diff --quiet HEAD -- nginx/ docker-compose.yml || { echo "CÂY BẨN — DỪNG"; git status --porcelain -- nginx/ docker-compose.yml; exit 1; }
+           [ -z "$(git ls-files --others -- nginx/)" ] || { echo "nginx/ còn tệp UNTRACKED — DỪNG"; git ls-files --others -- nginx/; exit 1; }
            set -a && source .env.production && set +a
            docker compose -f docker-compose.yml --env-file .env.production --profile production up -d --no-deps --wait backend
+           docker compose -f docker-compose.yml --env-file .env.production --profile production build nginx
            bash scripts/nginx-apply.sh "$DOMAIN"
+         # Hai dòng đầu là CỔNG CHẶN của §6.1b, không phải lời nhắc: `build
+         # nginx` dựng từ CÂY LÀM VIỆC, nên cây trôi là phần trôi lên thẳng
+         # production giữa cửa sổ đóng băng. `git status` chỉ IN ra nên không
+         # dùng được làm cổng; break-glass có chủ đích thì xem §6.1b.
+         # `build nginx` KHÔNG được bỏ: cấu hình nginx đi theo image và service
+         # ghim tag `qlts-nginx:local`, nên `up -d` dùng lại ảnh CŨ nếu tag đã
+         # có. `nginx-apply.sh` không tự build — bỏ bước này thì candidate đo
+         # ảnh cũ và script vẫn báo ĐẠT (§6.1b).
          # KHÔNG dùng envsubst trên host / nginx -s reload / restart nginx —
          # cả ba đều KHÔNG bật được cần gạt mà vẫn in ra màu xanh (§6.1b).
          Verify BẮT BUỘC: curl POST /api/admissions/ → 503, và GET → khác 503
@@ -696,8 +752,21 @@ Estimate recovery: 1-2h
 # Edit .env.production: ADMISSION_FROZEN=true + NGINX_ADMISSION_FROZEN=true
 # Rồi theo §6.1b — quy trình DUY NHẤT. Đây là thời điểm TỆ NHẤT để cần gạt câm:
 # đang trong cửa sổ rollback, ai cũng tin ghi đã bị chặn.
+#
+# `build nginx` là BƯỚC CỦA §6.1b, không phải thứ thêm cho đẹp: `nginx-apply.sh`
+# không tự build, service ghim tag `qlts-nginx:local`, nên `up -d` dùng lại ảnh
+# CŨ khi tag đã có. Ở ĐÂY cây vẫn đang là bản MỚI (cây `nginx/` chỉ được đưa về
+# $PRE_SHA ở Step 5), nên build này trùng đúng ảnh đang chạy — cache hit, cùng
+# image ID, không đưa gì lạ lên. Nó chỉ bảo đảm ảnh được đo = ảnh dựng từ cây.
+#
+# Cổng cây sạch của §6.1b áp NGUYÊN VẸN ở đây, và ở ĐÂY nó so với `HEAD`: chưa
+# có `git checkout` nào chạy, cây PHẢI còn là đúng bản vừa deploy. (Từ Step 5
+# trở đi phép so đổi sang `$PRE_SHA` — hai luồng, hai phép so, xem Step 5.)
+git diff --quiet HEAD -- nginx/ docker-compose.yml || { echo "CÂY BẨN ở nginx/ hoặc docker-compose.yml — DỪNG"; git status --porcelain -- nginx/ docker-compose.yml; exit 1; }
+[ -z "$(git ls-files --others -- nginx/)" ] || { echo "nginx/ còn tệp UNTRACKED — DỪNG"; git ls-files --others -- nginx/; exit 1; }
 set -a && source .env.production && set +a
 docker compose -f docker-compose.yml --env-file .env.production --profile production up -d --no-deps --wait backend
+docker compose -f docker-compose.yml --env-file .env.production --profile production build nginx
 bash scripts/nginx-apply.sh "$DOMAIN"
 curl -s -o /dev/null -w 'POST admissions -> %{http_code}\n' -X POST "https://$DOMAIN/api/admissions/"   # PHẢI 503
 
@@ -810,11 +879,30 @@ PRE_SHA=$(awk -F'\t' '$1=="# git-rev"{print $2}' rollback_manifest_${QLTS_ROLLBA
 
 git checkout "$PRE_SHA" -- nginx/     # đưa mọi tệp được theo dõi về đúng bản cũ
 git clean -fd nginx/                  # xoá tệp CHỈ CÓ ở bản lỗi
-git status --porcelain nginx/         # PHẢI rỗng; còn dòng nào là chưa sạch
+git status --porcelain nginx/         # chỉ để NHÌN; cổng thật là hai dòng dưới
+# ⚠️ HAI LUỒNG, HAI PHÉP SO — đừng dùng chung một lệnh cho cả hai.
+#   * Luồng bình thường (§6.1b, Step 1): so với `HEAD`, vì cây PHẢI khớp bản
+#     đang deploy.
+#   * Luồng rollback TỪ ĐÂY: so với `$PRE_SHA`. Cây `nginx/` vừa được CỐ Ý đưa
+#     về bản cũ nên nó khác `HEAD` — so với `HEAD` ở đây sẽ đỏ ở đúng ca đang
+#     làm đúng, và người trực sẽ học cách bỏ qua cổng.
 git diff --quiet "$PRE_SHA" -- nginx/ || { echo "cây nginx CHƯA khớp $PRE_SHA — DỪNG"; exit 1; }
+# `git clean -fd` KHÔNG xoá tệp bị `.gitignore` bỏ qua, và `git diff` không bao
+# giờ thấy tệp untracked. Mà `.gitignore` có `nginx-test.env` + `nginx-test-certs/`
+# không neo đường dẫn ⇒ chúng khớp cả dưới `nginx/`. Một tệp như thế sống sót cả
+# `clean` lẫn `diff` mà `COPY` vẫn nhặt vào image. Nên phải hỏi thẳng, và hỏi
+# KHÔNG kèm `--exclude-standard`.
+[ -z "$(git ls-files --others -- nginx/)" ] || { echo "nginx/ còn tệp UNTRACKED sau git clean — DỪNG"; git ls-files --others -- nginx/; exit 1; }
 # nginx build từ cây git là ĐÚNG (cấu hình của nó đi theo image), nên lệnh này
 # KHÔNG cần tệp rollback.
 docker compose -f docker-compose.yml --env-file .env.production --profile production build nginx
+# GHI LẠI ID ẢNH VỪA DỰNG. Step 7 CỐ Ý không build lần hai (lý lẽ ở Step 7), nên
+# nó phải chứng minh được `qlts-nginx:local` lúc ấy vẫn là ĐÚNG ảnh này. Một cái
+# TAG không chứng minh gì: `docker tag` tay, một lần build ở shell khác, hay
+# stack E2E (`-p qltsngx`) đều có thể đã trỏ tag ấy sang chỗ khác.
+NGINX_IMG_SAU_BUILD=$(docker image inspect --format '{{.Id}}' qlts-nginx:local) || { echo "không đọc được image ID của qlts-nginx:local ngay sau build — DỪNG"; exit 1; }
+[ -n "$NGINX_IMG_SAU_BUILD" ] || { echo "image ID rỗng sau build — DỪNG"; exit 1; }
+echo "nginx image sau Step 5: $NGINX_IMG_SAU_BUILD"   # chép vào sổ ca trực
 # Nhưng bốn service ứng dụng thì CÓ: thiếu `-f docker-compose.rollback.yml` ở
 # đây là dựng lại chúng từ mã MỚI, hoàn tác đúng thứ Step 4 vừa làm.
 docker compose -f docker-compose.yml -f docker-compose.rollback.yml \
@@ -833,6 +921,46 @@ docker compose -f docker-compose.yml exec -T postgres psql -U ${POSTGRES_USER:-q
 # Theo §6.1b — cùng quy trình với Step 1, phép chứng minh đảo chiều.
 # VẪN mang cả hai `-f`: stack đang chạy ảnh CŨ, và lệnh mở băng này dựng lại
 # backend. Thiếu tệp rollback ở bước cuối cùng là lùi xong rồi tiến lại.
+#
+# ⛔ KHÔNG `build nginx` lần thứ hai ở đây — và đó là một QUYẾT ĐỊNH, không phải
+# một chỗ quên. Step 5 đã `checkout $PRE_SHA`, dọn untracked, build và áp ảnh.
+# Từ đó tới đây chỉ có curl, psql và một lần sửa `.env.production`; không gì
+# chạm `nginx/`. Đổi env thì `up -d` tự recreate vì MODEL lệch — không cần ảnh
+# mới. Build lại giữa cửa sổ rollback vừa thừa vừa thêm một điểm có thể hỏng
+# (và nó build từ CÂY, nên nếu cây đã trôi thì chính nó là đường đưa cái trôi
+# ấy lên, đúng lúc tệ nhất).
+#
+# Cái giá của quyết định ấy là NĂM tiền đề phải còn đúng. Chúng được kiểm bằng
+# LỆNH THOÁT, không bằng `&&` và không bằng một dòng nhắc trong chú thích: nối
+# `&&` chỉ IN ra rồi chạy tiếp — đúng loại cổng đã làm một lần approval trễ 17
+# giây vì nó "xanh" trong khi chẳng chặn gì.
+#
+# ① $PRE_SHA còn tồn tại — và đây còn là phép kiểm "vẫn ĐÚNG shell đã chạy Step
+#    5": mở shell mới lúc 3 giờ sáng thì biến rỗng, và `git diff --quiet ""` sẽ
+#    so với cây làm việc chứ không đỏ.
+#
+#    ⚠️ Cổng này đỏ vì shell mới thì ĐỪNG bỏ qua nó — nạp lại hai biến rồi chạy
+#    lại. Cả hai đều lấy lại được, không phải đi lại từ đầu:
+#      PRE_SHA=$(awk -F'\t' '$1=="# git-rev"{print $2}' rollback_manifest_${QLTS_ROLLBACK_TAG}.txt)
+#      NGINX_IMG_SAU_BUILD=<ID đã in ở Step 5, chép từ sổ ca trực>
+#    KHÔNG lấy `NGINX_IMG_SAU_BUILD` bằng cách hỏi lại `docker image inspect`:
+#    làm thế là so một giá trị với chính nó, cổng ⑤ sẽ xanh với MỌI ảnh.
+[ -n "$PRE_SHA" ] || { echo "PRE_SHA rỗng — đây không phải shell đã chạy Step 5. DỪNG"; exit 1; }
+git rev-parse --verify --quiet "$PRE_SHA^{commit}" >/dev/null || { echo "PRE_SHA không còn phân giải được thành commit — DỪNG"; exit 1; }
+# ② nginx/ vẫn khớp $PRE_SHA — PHÉP SO CỦA LUỒNG ROLLBACK. Ở đây KHÔNG được so
+#    với HEAD: cây `nginx/` đang CỐ Ý khác HEAD kể từ Step 5.
+git diff --quiet "$PRE_SHA" -- nginx/ || { echo "nginx/ đã trôi khỏi $PRE_SHA sau Step 5 — ảnh đang chạy không còn là thứ cây này mô tả. DỪNG"; git diff --stat "$PRE_SHA" -- nginx/; exit 1; }
+# ③ không có untracked dưới nginx/ — `git diff` ở ② mù với chúng.
+[ -z "$(git ls-files --others -- nginx/)" ] || { echo "nginx/ có tệp UNTRACKED mới xuất hiện sau Step 5 — DỪNG"; git ls-files --others -- nginx/; exit 1; }
+# ④ docker-compose.yml không trôi — PHÉP SO CỦA LUỒNG BÌNH THƯỜNG, cố ý khác ②.
+#    Rollback chỉ đưa `nginx/` về bản cũ; `docker-compose.yml` và
+#    `docker-compose.rollback.yml` phải vẫn là bản HEAD đang dùng để lùi.
+git diff --quiet HEAD -- docker-compose.yml docker-compose.rollback.yml || { echo "docker-compose*.yml đã trôi khỏi HEAD giữa cửa sổ rollback — DỪNG"; git status --porcelain -- docker-compose.yml docker-compose.rollback.yml; exit 1; }
+# ⑤ ảnh `qlts-nginx:local` vẫn ĐÚNG ID đã ghi ở Step 5. Đây là điều kiện cho
+#    phép bỏ build: nếu tag đã bị trỏ sang chỗ khác thì `nginx-apply.sh` sẽ đo
+#    một ảnh không ai kiểm, và vẫn báo ĐẠT.
+[ -n "$NGINX_IMG_SAU_BUILD" ] || { echo "NGINX_IMG_SAU_BUILD rỗng — Step 5 chưa ghi ID, hoặc shell đã đổi. DỪNG"; exit 1; }
+[ "$(docker image inspect --format '{{.Id}}' qlts-nginx:local)" = "$NGINX_IMG_SAU_BUILD" ] || { echo "qlts-nginx:local KHÔNG còn là ảnh Step 5 đã dựng ($NGINX_IMG_SAU_BUILD) — DỪNG"; exit 1; }
 set -a && source .env.production && set +a
 docker compose -f docker-compose.yml -f docker-compose.rollback.yml \
     --env-file .env.production --profile production up -d --no-deps --wait backend

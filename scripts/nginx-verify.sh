@@ -58,9 +58,23 @@ TRANG_THAI=$(docker inspect -f '{{.State.Status}}' "$CT" 2>/dev/null) \
 
 MANG=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$CT" | head -1)
 IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$MANG\").IPAddress}}" "$CT")
-IMAGE=$(docker inspect -f '{{.Config.Image}}' "$CT")
-[ -n "$MANG" ] || loi "container '$CT' không nối vào mạng nào"
-[ -n "$IP" ]   || loi "không đọc được IP của '$CT' trên mạng '$MANG'"
+# `{{.Image}}`, KHÔNG `{{.Config.Image}}`. Cái sau trả về TÊN:TAG mà container
+# được yêu cầu chạy — một nhãn DI ĐỘNG: `nginx` và `nginx-candidate` dùng chung
+# `qlts-nginx:local`, và tag ấy trôi sang bản build mới sau mỗi `compose build`.
+# Lấy tên:tag để chạy probe nghĩa là probe có thể chạy trên MỘT BẢN ẢNH KHÁC với
+# bản mà container đang đo thực sự đang chạy. `{{.Image}}` là sha256 bất biến
+# của đúng bản ảnh ấy, và `docker run` nhận thẳng image id.
+#
+# Ở ĐÂY chỉ đòi KHÁC RỖNG. Bất biến "image id phải là một ID bất biến thật" có
+# ĐÚNG MỘT tầng chủ sở hữu: `_anh_cua` trong `scripts/nginx-apply.sh` (cổng
+# đồng nhất). Khai lại nó ở đây là hai tầng cùng canh một bất biến mà không
+# tầng nào chịu trách nhiệm — CLAUDE.md §7.
+IMAGE=$(docker inspect -f '{{.Image}}' "$CT" 2>/dev/null) || IMAGE=""
+[ -n "$MANG" ]  || loi "container '$CT' không nối vào mạng nào"
+[ -n "$IP" ]    || loi "không đọc được IP của '$CT' trên mạng '$MANG'"
+# Thiếu phép kiểm này thì `docker run --entrypoint sh "" -c …` chạy một image
+# rỗng và thông điệp hỏng nói về thứ khác hẳn.
+[ -n "$IMAGE" ] || loi "không đọc được image của container '$CT'"
 
 log "đo '$CT' tại $IP trên mạng '$MANG' (domain=$DOMAIN, strict_tls=$STRICT)"
 

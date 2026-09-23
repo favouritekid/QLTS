@@ -626,6 +626,751 @@ def test_vong_cho_nhan_ra_container_da_chet():
 
 
 # ---------------------------------------------------------------------------
+# Cổng NỘI DUNG + cổng ĐỒNG NHẤT — `nginx-apply.sh` KHÔNG BUILD GÌ CẢ
+# ---------------------------------------------------------------------------
+# Khoảng trống được đóng ở đây:
+#
+#   `--profile candidate up -d --no-deps --force-recreate nginx-candidate` thay
+#   CONTAINER chứ không thay IMAGE, và `nginx` với `nginx-candidate` dùng chung
+#   đúng một tag (`qlts-nginx:local`, anchor `x-nginx-base`). Nên chuỗi
+#       sửa nginx/templates/*  →  bash scripts/nginx-apply.sh <domain>
+#   cho ra một candidate dựng từ ảnh CŨ: healthcheck xanh, cả sáu phép kiểm của
+#   `nginx-verify.sh` xanh (ảnh cũ phục vụ tốt — ĐÓ CHÍNH LÀ VẤN ĐỀ), rồi script
+#   in "cấu hình mới đã được áp". Đường deploy chính build ở `scripts/deploy.sh`
+#   Step 7 nên không dính; `scripts/setup-ssl.sh` và mọi lần gõ tay theo runbook
+#   thì có.
+#
+# Phép đo HÀNH VI không thể thấy ca này — nên cổng phải so NỘI DUNG, và phải so
+# ở tầng mà `COPY` đặt tệp xuống (trước render). `envsubst` của entrypoint biến
+# `/etc/nginx/templates/*.template` thành `/etc/nginx/conf.d/*`, nên so byte ở
+# tầng `conf.d` là không thể; ở tầng `/etc/nginx/templates/` thì `COPY` là phép
+# chép NGUYÊN BYTE.
+
+
+def test_cong_noi_dung_chay_TRUOC_phep_do_hanh_vi():
+    ma = _ma_lenh(_APPLY)
+    assert "_cong_noi_dung" in ma, (
+        "scripts/nginx-apply.sh không có cổng đối chiếu nội dung — sửa template "
+        "mà quên build thì script vẫn in 'cấu hình mới đã được áp'"
+    )
+    vt_cong = ma.index('_cong_noi_dung "$_CID_CANDIDATE"')
+    vt_do = ma.index("nginx-verify.sh")
+    assert vt_cong < vt_do, (
+        "cổng nội dung phải chạy TRƯỚC nginx-verify.sh: ca 'chưa build' là ca mà "
+        "phép đo hành vi luôn xanh, nên để sau là đốt phép đo rồi mới báo sai chỗ"
+    )
+
+
+def test_cong_dong_nhat_ghim_image_id_bat_bien():
+    """`{{.Config.Image}}` là TÊN:TAG — hai service dùng chung một tag."""
+    ma = _ma_lenh(_APPLY)
+    assert "{{.Image}}" in ma, (
+        "cổng đồng nhất phải đọc `docker inspect -f '{{.Image}}'` (sha256 bất biến)"
+    )
+    assert "{{.Config.Image}}" not in ma, (
+        "`{{.Config.Image}}` trả về `qlts-nginx:local` cho CẢ HAI service, nên "
+        "phép so luôn khớp kể cả khi `up -d` không recreate gì"
+    )
+    assert re.search(r"_ANH_DANG_PHUC_VU.*!=.*_ANH_DA_CHUNG_MINH|"
+                     r"_ANH_DA_CHUNG_MINH.*!=.*_ANH_DANG_PHUC_VU", ma), (
+        "không thấy phép so image id của nginx sau cutover với image id của "
+        "candidate đã được chứng minh"
+    )
+
+
+def test_bang_doi_chieu_suy_tu_dockerfile_chu_khong_chep_tay():
+    """Chép tay một bảng thứ hai là mở đường cho nó trôi (CLAUDE.md §6)."""
+    ma = _ma_lenh(_APPLY)
+    assert "nginx/Dockerfile" in ma, (
+        "cổng nội dung phải suy danh sách tệp TỪ `nginx/Dockerfile`; một bảng "
+        "chép tay sẽ canh hụt đúng tệp mà `COPY` mới thêm"
+    )
+
+
+def test_tap_anh_nen_suy_tu_FROM_chu_khong_chep_tay():
+    """Danh sách script của ảnh nền KHÔNG được đóng cứng trong script.
+
+    Bốn script ấy đổi theo mỗi lần nâng `nginx:<ver>`-alpine; một danh sách chép
+    tay sẽ im lặng sai ngay lần nâng đầu tiên. Cách duy nhất còn đúng về sau là
+    hỏi CHÍNH ảnh nền, và suy tên ảnh nền từ dòng `FROM` của cùng Dockerfile.
+    """
+    ma = _ma_lenh(_APPLY)
+    assert "_anh_nen" in ma and "FROM" in ma, (
+        "cổng chiều ngược phải suy ảnh nền từ dòng `FROM` của nginx/Dockerfile"
+    )
+    assert "docker image inspect" in ma, (
+        "phải hỏi `docker image inspect` trước khi `docker run` ảnh nền — nếu "
+        "không, một tag vắng mặt sẽ khiến cổng đi KÉO TỪ MẠNG giữa lúc deploy"
+    )
+    for ten in ("10-listen-on-ipv6", "15-local-resolvers", "20-envsubst", "30-tune-worker"):
+        assert ten not in ma, (
+            f"script đóng cứng tên tệp của ảnh nền ('{ten}') — danh sách ấy sẽ "
+            "trôi ngay lần nâng nginx kế tiếp"
+        )
+
+
+def test_cong_noi_dung_di_CA_HAI_CHIEU():
+    """Chiều xuôi chỉ duyệt tệp CÒN tồn tại ở nguồn ⇒ mù với tệp đã bị xoá."""
+    ma = _ma_lenh(_APPLY)
+    assert "MỒ CÔI" in ma, (
+        "không thấy nhánh chiều ngược (ảnh → nguồn): một template bị xoá khỏi "
+        "cây mà còn trong ảnh vẫn được envsubst render và nginx include"
+    )
+    assert "_MOC_LIET_KE" in ma, (
+        "phép liệt kê phải kết bằng một mốc — đầu ra cụt mà rc=0 trông y hệt "
+        "một danh sách sạch"
+    )
+
+
+def test_tap_thu_muc_soi_KHONG_CO_LAI_khi_mot_COPY_bien_mat():
+    """Suy tập thư mục CHỈ từ Dockerfile hiện tại là một điểm mù.
+
+    Xoá hẳn một dòng `COPY` thì thư mục đích của nó rơi khỏi tập soi, và tệp cũ
+    trong ảnh (chưa dựng lại) vẫn được entrypoint render/thi hành. Tập phải là
+    HỢP với thư mục đọc từ lịch sử build của chính ảnh đang chạy.
+    """
+    ma = _ma_lenh(_APPLY)
+    assert "docker history" in ma, (
+        "cổng không đọc lịch sử build của ảnh ⇒ không lấy lại được tập thư mục "
+        "của một `COPY` vừa bị xoá khỏi Dockerfile"
+    )
+    assert "_dich_copy_trong_lich_su" in ma
+    for duong in ("/etc/nginx/templates", "/docker-entrypoint.d"):
+        assert f'"{duong}"' not in ma and f"'{duong}'" not in ma, (
+            f"đóng cứng thư mục runtime '{duong}' trong script — tập thư mục "
+            "phải suy ra, không chép tay"
+        )
+
+
+def test_ADD_bi_tu_choi_vi_cong_khong_mo_hinh_hoa_duoc():
+    """`ADD` ghi vào ảnh y như `COPY`; bỏ qua im lặng là một đường vòng."""
+    ma = _ma_lenh(_APPLY)
+    assert re.search(r"ADD\[\[:space:\]\]|ADD\[\[:space:", ma) or "lệnh ADD" in ma, (
+        "cổng không từ chối `ADD` — một `ADD templates/ …` sẽ đi vòng qua toàn "
+        "bộ phép đối chiếu mà không ai thấy"
+    )
+
+
+# --- Ba ca kiểm chạy thật, với `docker` GIẢ --------------------------------
+# Không đụng nginx thật, không build gì: stub chỉ hiểu đúng những lệnh mà
+# `nginx-apply.sh` + `nginx-verify.sh` gọi, và mọi hành vi được lái bằng biến
+# môi trường — nên MỖI CA VI PHẠM ĐÚNG MỘT BẤT BIẾN (CLAUDE.md §3).
+
+# Mốc kết của phép liệt kê. ĐỌC TỪ chính `scripts/nginx-apply.sh`: chép tay một
+# bản thứ hai ở đây thì ngày script đổi mốc, stub sẽ lặng lẽ trả một danh sách
+# mà script coi là CỤT — và mọi ca full-run đỏ vì một lý do không ai đoán ra.
+_m_moc = re.search(r"^_MOC_LIET_KE='([^']+)'", _ma_lenh(_APPLY), re.M)
+assert _m_moc, "không đọc được `_MOC_LIET_KE` từ scripts/nginx-apply.sh"
+_MOC_LIET_KE_STUB = _m_moc.group(1)
+
+
+# --- LÕI dùng chung của hai `docker` GIẢ -----------------------------------
+# Đoạn bash dưới đây mô hình hoá ĐÚNG những lệnh mà cổng NỘI DUNG (G1) và cổng
+# ĐỒNG NHẤT (G2) của `scripts/nginx-apply.sh` gọi: `inspect -f {{.Image}}`,
+# `image inspect`, `history`, `exec … sha256sum`, `exec … sh -c 'find …'`, và
+# `run … __QLTS_HET__` trên ảnh nền.
+#
+# Vì sao MỘT bản: `nginx-apply.sh` nay có HAI người gọi được kiểm ở tệp này —
+# các ca chạy thẳng script (`_chay_apply`) và các ca chạy trọn `setup-ssl.sh`
+# (`_chay_setup_ssl`, Step 5 gọi thật sang nginx-apply). Hai bản mô phỏng sẽ
+# trôi khỏi nhau, và bản KHÔNG có ca đối chứng sẽ trôi trước (CLAUDE.md §7).
+#
+# Hàm chỉ `exit` khi nó thật sự mô hình hoá được lệnh; mọi thứ khác rơi xuống
+# phần THÂN riêng của từng sân khấu (ngữ nghĩa `compose ps`, các cần gạt
+# build/pull/certbot) — những thứ vốn khác nhau và phải khác nhau.
+_LOI_STUB_ANH = r"""
+_qlts_mo_hinh_anh() {
+  local _cid_ngx="${STUB_CID_NGINX:-ngx22222}"
+  local _fmt _cid _a _last _p _f _d _t
+  case "${1:-}" in
+  inspect)
+    shift
+    _fmt=""; _cid=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f|--format) _fmt="$2"; shift 2 ;;
+        *) _cid="$1"; shift ;;
+      esac
+    done
+    case "$_fmt" in
+      *index*IPAddress*)  echo "172.30.0.9" ;;
+      *Networks*)         echo "qltsstub_default" ;;
+      *State.Status*)     echo "${STUB_STATUS:-running}" ;;
+      *State.Health*)     echo "${STUB_HEALTH:-healthy}" ;;
+      *State.Running*)    echo "${STUB_RUNNING:-true}" ;;
+      *State.ExitCode*)   echo "0" ;;
+      *Config.Image*)     echo "qlts-nginx:local" ;;
+      *.Image*)
+        if [ "$_cid" = "$_cid_ngx" ]; then
+          [ -n "${STUB_ANH_NGINX+x}" ] || exit "${STUB_INSPECT_ANH_RC:-0}"
+          printf '%s\n' "$STUB_ANH_NGINX"
+        else
+          [ -n "${STUB_ANH_CANDIDATE+x}" ] || exit "${STUB_INSPECT_ANH_RC:-0}"
+          printf '%s\n' "$STUB_ANH_CANDIDATE"
+        fi
+        ;;
+    esac
+    exit 0 ;;
+  image)
+    exit "${STUB_NEN_CO_RC:-0}" ;;
+  history)
+    # history --no-trunc --format '{{.CreatedBy}}' <ảnh>
+    for _a in "$@"; do _last="$_a"; done
+    if [ "$_last" = "${STUB_NEN_REF:?stub thiếu STUB_NEN_REF}" ]; then
+      [ "${STUB_LS_NEN_RC:-0}" = "0" ] || exit "${STUB_LS_NEN_RC}"
+      cat "${STUB_LS_NEN:?}"
+    else
+      [ "${STUB_LS_ANH_RC:-0}" = "0" ] || exit "${STUB_LS_ANH_RC}"
+      cat "${STUB_LS_ANH:?}"
+    fi
+    exit 0 ;;
+  exec)
+    shift
+    _cid="$1"; shift
+    case "${1:-}" in
+      sha256sum)
+        _p="$2"
+        [ "${STUB_EXEC_RC:-0}" = "0" ] || exit "${STUB_EXEC_RC}"
+        _f="${STUB_ANH_TREE:?stub thiếu STUB_ANH_TREE}$_p"
+        [ -f "$_f" ] || exit 1
+        printf '%s  %s\n' "$(sha256sum "$_f" | cut -d' ' -f1)" "$_p"
+        exit 0 ;;
+      sh)
+        [ "${STUB_LIET_KE_RC:-0}" = "0" ] || exit "${STUB_LIET_KE_RC}"
+        shift 3
+        shift
+        for _d in "$@"; do
+          find "${STUB_ANH_TREE:?}$_d" -type f 2>/dev/null | sed "s#^${STUB_ANH_TREE}##"
+        done
+        [ "${STUB_LIET_KE_KHONG_MOC:-0}" = "1" ] || echo "@MOC@"
+        exit 0 ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  run)
+    if printf '%s' "$*" | grep -q '@MOC@'; then
+      [ "${STUB_NEN_RC:-0}" = "0" ] || exit "${STUB_NEN_RC}"
+      for _t in ${STUB_NEN_TEP:-}; do echo "$_t"; done
+      [ "${STUB_NEN_KHONG_MOC:-0}" = "1" ] || echo "@MOC@"
+      exit 0
+    fi
+    exit "${STUB_RUN_RC:-0}" ;;
+  esac
+}
+"""
+
+# Đầu tệp chung: MỘT dòng nhật ký, tiền tố cấu hình được.
+#
+# Hai sân khấu đọc nhật ký theo hai định dạng đã có sẵn assertion bám vào —
+# `_chay_apply` đọc các dòng `docker …`, còn `_lat_lenh_compose`/`_vt_lenh` của
+# nhóm setup-ssl đọc các dòng KHÔNG tiền tố (`compose …`). Nên tiền tố là tham
+# số, chứ không phải cái cớ để đi sửa hàng loạt assertion cho khớp stub.
+#
+# Xuống dòng trong argv bị ÉP thành khoảng trắng: `nginx-verify.sh` truyền cả
+# một script `sh -c '...'` nhiều dòng làm tham số, và nếu ghi nguyên văn thì
+# MỘT lệnh hoá ra ba chục dòng nhật ký — mọi phép so VỊ TRÍ sẽ lệch theo.
+_DAU_STUB_DOCKER = r"""#!/usr/bin/env bash
+_L="${QLTS_STUB_LOG:-/dev/null}"
+printf '%s\n' "@TIEN_TO@${*//$'\n'/ }" >> "$_L"
+"""
+
+
+def _ma_stub_docker(tien_to: str, than: str) -> str:
+    """Ghép một `docker` giả: nhật ký + LÕI G1/G2 dùng chung + thân riêng."""
+    return (
+        _DAU_STUB_DOCKER.replace("@TIEN_TO@", tien_to)
+        + _LOI_STUB_ANH.replace("@MOC@", _MOC_LIET_KE_STUB)
+        + '_qlts_mo_hinh_anh "$@"\n'
+        + than
+    )
+
+
+# Thân RIÊNG của sân khấu `nginx-apply.sh` chạy thẳng: ngữ nghĩa `compose ps`
+# đơn giản (candidate và nginx luôn tồn tại), mọi lệnh compose khác lái bằng
+# `STUB_COMPOSE_RC`.
+_THAN_STUB_NGX = r"""
+_cid_cand="${STUB_CID_CANDIDATE:-cand1111}"
+_cid_ngx="${STUB_CID_NGINX:-ngx22222}"
+case "${1:-}" in
+  compose)
+    shift
+    _sub=""; _args=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f|--env-file|-p|--profile) shift 2; continue ;;
+        -*) shift; continue ;;
+        *) _sub="$1"; shift; _args=("$@"); break ;;
+      esac
+    done
+    case "$_sub" in
+      ps)
+        _svc=""
+        for _a in "${_args[@]}"; do case "$_a" in -*) ;; *) _svc="$_a" ;; esac; done
+        case "$_svc" in
+          nginx-candidate) echo "$_cid_cand" ;;
+          nginx)           echo "$_cid_ngx" ;;
+        esac
+        exit 0 ;;
+      *) exit "${STUB_COMPOSE_RC:-0}" ;;
+    esac
+    ;;
+esac
+exit 0
+"""
+
+_STUB_DOCKER_NGX = _ma_stub_docker("docker ", _THAN_STUB_NGX)
+
+# Ảnh sha256 giả — chỉ cần ĐÚNG DẠNG, vì đó chính là thứ cổng đồng nhất thẩm định.
+_ANH_A = "sha256:" + "1" * 64
+_ANH_B = "sha256:" + "2" * 64
+
+# Bảng COPY KỲ VỌNG, khai tường minh ở đây để đối chiếu với bảng mà
+# `nginx-apply.sh` TỰ SUY từ `nginx/Dockerfile`. Hai bản này CỐ Ý độc lập: bản
+# trong script là thứ chạy thật, bản ở đây là thứ ta khẳng định nó phải ra.
+_DUONG_TRONG_ANH = {
+    "nginx.conf": "/etc/nginx/nginx.conf",
+    "templates/default.conf.template": "/etc/nginx/templates/default.conf.template",
+    "bootstrap/nginx.conf": "/etc/nginx/nginx-bootstrap.conf",
+    "bootstrap/default.conf.template":
+        "/etc/nginx/templates-bootstrap/default.conf.template",
+    "docker-entrypoint.d/10-qlts-kiem-bien.sh":
+        "/docker-entrypoint.d/10-qlts-kiem-bien.sh",
+    "docker-entrypoint.d/25-qlts-kiem-ban-render.sh":
+        "/docker-entrypoint.d/25-qlts-kiem-ban-render.sh",
+}
+
+# Tệp của ẢNH NỀN `nginx:1.27-alpine` trong các thư mục đích — ĐO THẬT
+# (`docker run --rm --entrypoint sh nginx:1.27-alpine -c 'find …'`, 22-09-2026),
+# không đoán theo tên: hai trong bốn cái tên không phải thứ người ta hay đoán
+# (`15-local-resolvers.envsh` chứ không phải `.sh`; `10-listen-on-ipv6-by-default.sh`
+# chứ không phải `10-listen-on-ipv6-on-ipv4.sh`). `/etc/nginx/templates` và
+# `/etc/nginx/templates-bootstrap` KHÔNG tồn tại trong ảnh nền — cũng đã đo.
+_TEP_ANH_NEN = [
+    "/docker-entrypoint.d/10-listen-on-ipv6-by-default.sh",
+    "/docker-entrypoint.d/15-local-resolvers.envsh",
+    "/docker-entrypoint.d/20-envsubst-on-templates.sh",
+    "/docker-entrypoint.d/30-tune-worker-processes.sh",
+]
+
+# Đuôi lịch sử của ảnh nền. Không cần giống `nginx:1.27-alpine` từng dòng — thứ
+# ca kiểm đo là HỢP ĐỒNG: đuôi phải trùng khít, phần đầu là của QLTS. Cố ý có một
+# `COPY … /` để chứng minh cổng không đi quét cả gốc hệ tệp.
+_LICH_SU_NEN = [
+    'CMD ["nginx" "-g" "daemon off;"]',
+    'ENTRYPOINT ["/docker-entrypoint.sh"]',
+    "COPY 20-envsubst-on-templates.sh /docker-entrypoint.d # buildkit",
+    "COPY docker-entrypoint.sh / # buildkit",
+    "ADD alpine-minirootfs.tar.gz / # buildkit",
+]
+
+_bo_qua_neu_khong_chay_duoc_bash = pytest.mark.skipif(
+    _BASH is None or shutil.which("sha256sum") is None,
+    reason="cần bash chạy được và `sha256sum` để thi hành thật scripts/nginx-apply.sh",
+)
+
+
+def _from_cua(dockerfile: Path) -> str:
+    dong = [
+        d.strip() for d in _doc(dockerfile).splitlines()
+        if d.strip().upper().startswith("FROM ")
+    ]
+    assert len(dong) == 1, f"{dockerfile} phải có đúng MỘT dòng FROM; thấy {len(dong)}"
+    return dong[0].split()[1]
+
+
+def _dung_cay_anh(
+    goc_nginx: Path, san: Path, them: dict[str, str] | None = None
+) -> Path:
+    """Cây "ảnh" phản chiếu đường dẫn TUYỆT ĐỐI trong container, dựng từ
+    `goc_nginx` theo đúng bảng `_DUONG_TRONG_ANH`.
+
+    ``them``: các tệp PHỤ được tạo ở NGUỒN rồi chụp vào ảnh — để ca "xoá khỏi
+    nguồn, giữ trong ảnh" có thứ để xoá mà không phải đụng template thật. Chỉ
+    sân khấu sao chép cây nguồn mới được truyền tham số này.
+
+    Cây ảnh CỐ Ý mang cả bốn tệp của ảnh nền: thiếu chúng thì phép trừ tập nền
+    không bao giờ được thi hành, và ca đối chứng sẽ xanh vì một lý do sai.
+    """
+    anh = san / "anh"
+    ban_do = dict(_DUONG_TRONG_ANH)
+    for rel, dich in (them or {}).items():
+        (goc_nginx / rel).parent.mkdir(parents=True, exist_ok=True)
+        (goc_nginx / rel).write_text(
+            f"# tệp phụ của ca kiểm: {rel}\n", encoding="utf-8", newline="\n"
+        )
+        ban_do[rel] = dich
+    for nguon, dich in ban_do.items():
+        d = anh / dich.lstrip("/")
+        d.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(goc_nginx / nguon, d)
+    for dich in _TEP_ANH_NEN:
+        d = anh / dich.lstrip("/")
+        d.parent.mkdir(parents=True, exist_ok=True)
+        d.write_text("# script cua anh nen\n", encoding="utf-8", newline="\n")
+    return anh
+
+
+def _ghi_lich_su_anh(goc_nginx: Path, san: Path) -> None:
+    """Lịch sử build giả, đúng hình dạng `docker history --format '{{.CreatedBy}}'`
+    (mới nhất TRƯỚC, phần của ảnh nền nằm ở ĐUÔI).
+
+    Sinh từ chính Dockerfile của sân khấu, nên nó phản ánh "ảnh đã được dựng từ
+    Dockerfile lúc này" — ca kiểm nào sửa Dockerfile SAU khi dựng sân khấu sẽ
+    tạo đúng độ lệch cần đo.
+    """
+    (san / "lichsu-nen.txt").write_text(
+        "\n".join(_LICH_SU_NEN) + "\n", encoding="utf-8", newline="\n"
+    )
+    dong_copy = [
+        d.strip()
+        for d in (goc_nginx / "Dockerfile").read_text(encoding="utf-8").splitlines()
+        if d.strip().startswith("COPY ")
+    ]
+    rieng = (
+        ["RUN /bin/sh -c chmod +x /docker-entrypoint.d/*.sh # buildkit"]
+        + [f"{d} # buildkit" for d in reversed(dong_copy)]
+        + ["RUN /bin/sh -c rm -f /etc/nginx/conf.d/*.conf # buildkit"]
+    )
+    (san / "lichsu-anh.txt").write_text(
+        "\n".join(rieng + _LICH_SU_NEN) + "\n", encoding="utf-8", newline="\n"
+    )
+
+
+def _bien_mo_hinh_anh(goc_nginx: Path, san: Path) -> dict[str, str]:
+    """Biến môi trường mà LÕI stub cần để mô hình hoá G1/G2.
+
+    `STUB_NEN_REF` suy từ chính Dockerfile của sân khấu: đóng cứng
+    `nginx:1.27-alpine` ở đây thì lần nâng nginx kế tiếp sẽ làm stub trả nhầm
+    lịch sử mà không ai thấy.
+    """
+    return {
+        "STUB_ANH_TREE": str(san / "anh").replace("\\", "/"),
+        "STUB_NEN_TEP": " ".join(_TEP_ANH_NEN),
+        "STUB_NEN_REF": _from_cua(goc_nginx / "Dockerfile"),
+        "STUB_LS_NEN": str(san / "lichsu-nen.txt").replace("\\", "/"),
+        "STUB_LS_ANH": str(san / "lichsu-anh.txt").replace("\\", "/"),
+    }
+
+
+def _san_khau_ngx(
+    tmp_path: Path, them: dict[str, str] | None = None
+) -> tuple[Path, Path]:
+    """Sân khấu cô lập: bản sao `scripts/` + `nginx/`, `docker` giả, và một
+    cây "ảnh" phản chiếu đường dẫn tuyệt đối trong container.
+    """
+    san = tmp_path / "san"
+    repo = san / "repo"
+    (san / "bin").mkdir(parents=True)
+    shutil.copytree(_GOC / "scripts", repo / "scripts")
+    shutil.copytree(_THU_MUC_NGINX, repo / "nginx")
+
+    stub = san / "bin" / "docker"
+    stub.write_text(_STUB_DOCKER_NGX, encoding="utf-8", newline="\n")
+    stub.chmod(0o755)
+
+    anh = _dung_cay_anh(repo / "nginx", san, them)
+    _ghi_lich_su_anh(repo / "nginx", san)
+    return repo, anh
+
+
+def _chay_apply(repo: Path, anh: Path, **bien: str) -> subprocess.CompletedProcess:
+    nhat_ky = repo.parent / "lenh.log"
+    nhat_ky.write_text("", encoding="utf-8")
+    moi_truong = {
+        **os.environ,
+        "MSYS_NO_PATHCONV": "1",
+        "PATH": str(repo.parent / "bin") + os.pathsep + os.environ.get("PATH", ""),
+        **_bien_mo_hinh_anh(repo / "nginx", anh.parent),
+        "QLTS_STUB_LOG": str(nhat_ky).replace("\\", "/"),
+        "QLTS_COMPOSE_ENV_FILE": "khong-ton-tai.env",
+        **bien,
+    }
+    return subprocess.run(
+        [_BASH, str(repo / "scripts" / "nginx-apply.sh"), "nginx-test.local"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=moi_truong, cwd=str(repo),
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca2_anh_da_chua_template_moi_thi_XANH(tmp_path):
+    """Ca ĐỐI CHỨNG. Thiếu nó thì mọi ca đỏ dưới đây có thể đỏ vì lý do khác.
+
+    Khẳng định thêm: cổng đã soi ĐÚNG SÁU tệp mà `nginx/Dockerfile` COPY, ở
+    đúng đường dẫn trong container — tức bảng script tự suy khớp bảng kỳ vọng.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A)
+    assert kq.returncode == 0, f"ca đối chứng phải XANH:\n{kq.stdout}\n{kq.stderr}"
+
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    da_soi = {
+        d.split("sha256sum ", 1)[1].strip()
+        for d in nhat_ky.splitlines()
+        if " exec " in d and "sha256sum " in d
+    }
+    assert da_soi == set(_DUONG_TRONG_ANH.values()), (
+        "bảng mà nginx-apply.sh suy từ nginx/Dockerfile KHÔNG khớp bảng kỳ vọng.\n"
+        f"  script soi : {sorted(da_soi)}\n"
+        f"  kỳ vọng    : {sorted(_DUONG_TRONG_ANH.values())}"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca1_template_sua_ma_chua_build_thi_DO(tmp_path):
+    """Bất biến: bản trong container PHẢI khớp nguồn sẽ được áp.
+
+    Ảnh được chụp TRƯỚC, rồi nguồn trôi đi — đúng chuỗi "sửa template rồi chạy
+    thẳng nginx-apply.sh". Mọi phép đo hành vi ở đây đều xanh (stub `docker run`
+    trả 0), nên ca này CHỈ có thể đỏ vì cổng nội dung.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    t = repo / "nginx" / "templates" / "default.conf.template"
+    t.write_text(_doc(t) + "\n# dòng mới chưa vào ảnh\n", encoding="utf-8", newline="")
+
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A)
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"template đã trôi mà cổng vẫn XANH:\n{ra}"
+    assert "LỆCH" in ra, f"không nói ra tệp nào lệch:\n{ra}"
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "profile production up -d" not in nhat_ky, (
+        "đã đụng tới container ĐANG PHỤC VỤ dù cổng nội dung đã đỏ"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca3_khong_doc_duoc_checksum_thi_DO_chu_khong_phai_DAT(tmp_path):
+    """Bất biến: lỗi ĐỌC không bao giờ được tính là "đạt" (fail-closed).
+
+    `docker exec sha256sum` hỏng ⇒ phía container không có giá trị. Bản fail-open
+    tự nhiên ("không đọc được thì không có gì để so") làm ca này xanh trong khi
+    KHÔNG một tệp nào được đối chiếu.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(
+        repo, anh, STUB_EXEC_RC="1",
+        STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A,
+    )
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"không đọc được checksum mà cổng vẫn XANH:\n{ra}"
+    assert "không đọc được checksum" in ra, f"thông điệp không nói đúng ca:\n{ra}"
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "profile production up -d" not in nhat_ky, (
+        "đã đụng tới container ĐANG PHỤC VỤ dù cổng nội dung đã đỏ"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca6_template_xoa_khoi_nguon_ma_con_trong_anh_thi_DO(tmp_path):
+    """Bất biến CHIỀU NGƯỢC: ảnh không được giữ tệp cấu hình QLTS đã bị xoá.
+
+    Đây là ca mà chiều xuôi KHÔNG THỂ thấy: vòng duyệt đi qua các tệp còn tồn
+    tại ở nguồn, nên một tệp đã xoá thì đơn giản là không được hỏi tới. Trong
+    khi đó entrypoint vẫn envsubst nó thành `/etc/nginx/conf.d/*` và nginx vẫn
+    `include`. Mọi phép đo hành vi vẫn xanh.
+    """
+    them = {"templates/mo-coi.conf.template": "/etc/nginx/templates/mo-coi.conf.template"}
+    repo, anh = _san_khau_ngx(tmp_path, them=them)
+    # Chụp ảnh xong mới xoá khỏi nguồn — đúng chuỗi "gỡ template rồi chạy thẳng".
+    (repo / "nginx" / "templates" / "mo-coi.conf.template").unlink()
+
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A)
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"tệp mồ côi trong ảnh mà cổng vẫn XANH:\n{ra}"
+    assert "MỒ CÔI" in ra and "mo-coi.conf.template" in ra, (
+        f"không nói ra tệp mồ côi nào:\n{ra}"
+    )
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "profile production up -d" not in nhat_ky, (
+        "đã đụng tới container ĐANG PHỤC VỤ dù cổng nội dung đã đỏ"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca9_xoa_HAN_mot_lenh_COPY_khoi_Dockerfile_thi_DO(tmp_path):
+    """Bất biến: tập thư mục cần soi KHÔNG ĐƯỢC CO LẠI khi một `COPY` biến mất.
+
+    Khác hẳn ca6. Ca6 xoá TỆP NGUỒN trong khi dòng `COPY templates/ …` vẫn còn,
+    nên thư mục đích vẫn nằm trong tập soi. Ở đây xoá HẲN dòng `COPY` — thư mục
+    đích rơi khỏi tập suy từ Dockerfile, và một cổng chỉ nhìn Dockerfile hiện
+    tại sẽ KHÔNG BAO GIỜ nhìn vào đó nữa, trong khi ảnh (chưa dựng lại) vẫn giữ
+    template cũ và entrypoint vẫn render nó.
+
+    Tập thư mục cũ được lấy lại từ lịch sử build của chính ảnh đang chạy.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    df = repo / "nginx" / "Dockerfile"
+    than = _doc(df)
+    moc = "COPY templates/ /etc/nginx/templates/"
+    assert than.count(moc) == 1, "Dockerfile đã đổi — ca kiểm đang neo vào dòng không còn"
+    # Ảnh KHÔNG dựng lại: `lichsu-anh.txt` giữ nguyên dòng COPY này.
+    df.write_text(than.replace(moc + "\n", ""), encoding="utf-8", newline="")
+
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A)
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"xoá hẳn một lệnh COPY mà cổng vẫn XANH:\n{ra}"
+    assert "MỒ CÔI" in ra and "/etc/nginx/templates/default.conf.template" in ra, (
+        f"không nhìn vào thư mục của lệnh COPY vừa bị xoá:\n{ra}"
+    )
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "profile production up -d" not in nhat_ky, (
+        "đã đụng tới container ĐANG PHỤC VỤ dù cổng nội dung đã đỏ"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca11_xoa_HAN_mot_COPY_dich_TEP_khoi_Dockerfile_thi_DO(tmp_path):
+    """Nhánh ANH EM của ca9: đích dạng TỆP, không phải thư mục (CLAUDE.md §6).
+
+    `COPY nginx.conf /etc/nginx/nginx.conf` không kết thúc bằng `/`, nên bản
+    chỉ thu thập đích dạng thư mục bỏ nó lại — không thư mục nào để `find`, và
+    không ai canh. Xoá HẲN dòng ấy mà dùng ảnh CŨ thì `nginx.conf` của ta vẫn
+    nằm trong ảnh và vẫn là cấu hình nginx đang chạy.
+
+    Lưu ý vì sao chiều xuôi KHÔNG bắt được: chiều xuôi chỉ duyệt các dòng COPY
+    CÒN TRONG Dockerfile. Xoá dòng thì không còn gì để nó nhắc tới.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    df = repo / "nginx" / "Dockerfile"
+    than = _doc(df)
+    moc = "COPY nginx.conf /etc/nginx/nginx.conf"
+    assert than.count(moc) == 1, "Dockerfile đã đổi — ca kiểm đang neo vào dòng không còn"
+    # Ảnh KHÔNG dựng lại: `lichsu-anh.txt` giữ nguyên dòng COPY này.
+    df.write_text(than.replace(moc + "\n", ""), encoding="utf-8", newline="")
+
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A)
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"xoá hẳn một COPY đích-tệp mà cổng vẫn XANH:\n{ra}"
+    assert "MỒ CÔI" in ra and "/etc/nginx/nginx.conf" in ra, (
+        f"không nhận ra tệp do lệnh COPY vừa bị xoá sinh ra:\n{ra}"
+    )
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "profile production up -d" not in nhat_ky, (
+        "đã đụng tới container ĐANG PHỤC VỤ dù cổng nội dung đã đỏ"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca12_mot_dong_COPY_hong_XEN_GIUA_lich_su_thi_DO(tmp_path):
+    """Bất biến: MỘT dòng COPY không đọc được cũng phải ĐỎ.
+
+    Cố ý KHÔNG dựng ca "mọi dòng đều hỏng" — ca ấy đã bị phép kiểm
+    `grep -q '^COPY '` bắt và không chứng minh gì mới. Ở đây các dòng khác vẫn
+    hợp lệ, nên phép kiểm tổng thể vẫn qua; chỉ phép từ chối TỪNG DÒNG mới thấy.
+    Bỏ qua dòng hỏng = đích của nó không bao giờ vào tập soi.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    ls = repo.parent / "lichsu-anh.txt"
+    dong = _doc(ls).splitlines()
+    vt = next(i for i, d in enumerate(dong) if d.startswith("COPY templates/"))
+    # Dòng COPY CỤT: đúng tiền tố `COPY ` nên qua được grep, nhưng thiếu đích.
+    dong.insert(vt, "COPY # buildkit")
+    ls.write_text("\n".join(dong) + "\n", encoding="utf-8", newline="\n")
+
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A)
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"một dòng COPY hỏng mà cổng vẫn XANH:\n{ra}"
+    assert "không phân tích được" in ra, f"thông điệp không nói đúng ca:\n{ra}"
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "profile production up -d" not in nhat_ky, (
+        "đã đụng tới container ĐANG PHỤC VỤ dù cổng nội dung đã đỏ"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca10_khong_doc_duoc_lich_su_build_thi_DO(tmp_path):
+    """Bất biến: KHÔNG xác định được tập thư mục cũ ⇒ ĐỎ, không đoán là rỗng.
+
+    Trả về tập rỗng khi không đọc được lịch sử trông y hệt "ảnh này không COPY
+    vào thư mục nào" — và ca sau chính là điểm mù ca9 mô tả.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(
+        repo, anh, STUB_LS_ANH_RC="1",
+        STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A,
+    )
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"không đọc được lịch sử build mà cổng vẫn XANH:\n{ra}"
+    assert "lịch sử build" in ra, f"thông điệp không nói đúng ca:\n{ra}"
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca7_danh_sach_tep_CUT_thi_DO_chu_khong_phai_DAT(tmp_path):
+    """Bất biến: đầu ra CỤT không được coi là "không có tệp thừa nào".
+
+    `docker run`/`docker exec` có thể trả 0 với đầu ra bị cắt. Một danh sách cụt
+    trông y hệt một danh sách sạch — nên phép liệt kê phải kết bằng MỘT MỐC, và
+    thiếu mốc là ĐỎ.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(
+        repo, anh, STUB_NEN_KHONG_MOC="1",
+        STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A,
+    )
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"danh sách cụt mà cổng vẫn XANH:\n{ra}"
+    assert "CỤT" in ra, f"thông điệp không nói đúng ca:\n{ra}"
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca8_anh_nen_vang_mat_cuc_bo_thi_DO_va_KHONG_keo_mang(tmp_path):
+    """Bất biến: không đo được tập nền ⇒ ĐỎ, và không đi kéo ảnh từ mạng.
+
+    `docker run` trên một tag vắng mặt sẽ tự pull — biến cổng thành phụ thuộc
+    mạng giữa lúc deploy. Nên phải hỏi `docker image inspect` TRƯỚC và từ chối.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(
+        repo, anh, STUB_NEN_CO_RC="1",
+        STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A,
+    )
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"ảnh nền vắng mặt mà cổng vẫn XANH:\n{ra}"
+    assert "ảnh nền" in ra, f"thông điệp không nói đúng ca:\n{ra}"
+    nhat_ky = (repo.parent / "lenh.log").read_text(encoding="utf-8")
+    assert "image inspect" in nhat_ky, (
+        "cổng không hỏi `docker image inspect` trước — `docker run` sẽ tự pull"
+    )
+    assert not re.search(r"^docker run .*__QLTS_HET__", nhat_ky, re.M), (
+        "đã gọi `docker run` trên ảnh nền dù nó vắng mặt cục bộ (⇒ pull từ mạng)"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca4_nginx_sau_cutover_chay_anh_KHAC_candidate_thi_DO(tmp_path):
+    """Bất biến: container đang phục vụ phải chạy ĐÚNG bản ảnh đã chứng minh.
+
+    Đây là ca mà `{{.Config.Image}}` không thể thấy: hai service dùng chung tag
+    `qlts-nginx:local`, nên so theo tên:tag là so một hằng số với chính nó.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_B)
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"nginx chạy ảnh khác mà script vẫn tuyên bố đạt:\n{ra}"
+    assert _ANH_A in ra and _ANH_B in ra, (
+        f"thông điệp không nêu cả hai image id để đối chiếu:\n{ra}"
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca5_image_id_khong_phai_ID_bat_bien_thi_DO(tmp_path):
+    """Bất biến: giá trị đọc được phải ĐÚNG DẠNG image id, không chỉ khác rỗng.
+
+    `docker inspect` trả `qlts-nginx:local` (dạng của `{{.Config.Image}}`) cho
+    CẢ HAI container. Bản không thẩm định dạng sẽ thấy hai giá trị BẰNG NHAU và
+    tuyên bố đạt — một giá trị gộp hai ca ngược nhau.
+    """
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(
+        repo, anh,
+        STUB_ANH_CANDIDATE="qlts-nginx:local", STUB_ANH_NGINX="qlts-nginx:local",
+    )
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"image id không phải ID bất biến mà vẫn XANH:\n{ra}"
+    assert "image id bất biến" in ra, f"thông điệp không nói đúng ca:\n{ra}"
+
+
+# ---------------------------------------------------------------------------
 # Consumer: không đường/lệnh cũ nào còn sót
 # ---------------------------------------------------------------------------
 
@@ -1387,6 +2132,853 @@ def test_setup_ssl_bat_lai_container_last_good_khi_hong(ma_setup_ssl: str):
     assert vt_apply < vt_co, (
         "cờ bàn giao được bật TRƯỚC khi nginx-apply.sh chứng minh container mới "
         "phục vụ được — trap sẽ im lặng ở đúng lúc cần nó nhất"
+    )
+
+
+# ---------------------------------------------------------------------------
+# setup-ssl.sh Step 0: ẢNH phải dựng được TRƯỚC cổng 80 và TRƯỚC ACME
+# ---------------------------------------------------------------------------
+# Đo thật trên bản trước: `grep -c build scripts/setup-ssl.sh` = 0 — script chưa
+# bao giờ dựng ảnh nginx. Thiệt hại KHÔNG phải hạn mức Let's Encrypt
+# (`--keep-until-expiring` đã lo), mà là đường lùi: chứng thư đã cấp ở Step 3,
+# bootstrap đã gỡ ở Step 4, Step 5 đỏ vì ảnh cũ/không có, `_DA_BAN_GIAO` còn 0 ⇒
+# trap bật lại container nginx CŨ — mà trên VPS mới thì KHÔNG CÓ container cũ
+# nào, nên trap lặng lẽ không làm gì và máy chủ ở lại KHÔNG có nginx.
+#
+# Guard TĨNH không đủ cho nhóm này: câu hỏi là "build có xảy ra TRƯỚC lệnh chạm
+# nginx đang chạy không", tức một câu hỏi về THỨ TỰ THỰC THI. Nên các ca dưới
+# đây CHẠY THẬT `setup-ssl.sh` với `docker` và `git` GIẢ trên PATH, rồi so VỊ
+# TRÍ trong nhật ký argv — không so sự có mặt (một guard chỉ hỏi "có dòng build
+# không" vẫn xanh khi dòng ấy nằm ở Step 5).
+#
+# Không certbot thật, không build/recreate nginx thật, không `docker compose up`
+# thật: mọi lời gọi `docker` đều dừng ở stub.
+
+# Thân RIÊNG của sân khấu `setup-ssl.sh`: các cần gạt build/pull/certbot và ngữ
+# nghĩa `compose ps` của riêng nó (có `nginx-bootstrap`, và `nginx` CÓ THỂ vắng
+# mặt — đó là kịch bản VPS mới).
+#
+# LÕI dùng chung đã `exit` trước khi tới đây cho `inspect`/`image`/`history`/
+# `exec`/`run` — tức đúng những lệnh mà G1/G2 của `nginx-apply.sh` gọi ở Step 5.
+# `setup-ssl.sh` không gọi `docker run` trần (certbot đi qua `docker compose
+# run`, nên `$1` là `compose` và rơi xuống đây), nên LÕI không nuốt cần gạt nào.
+_THAN_STUB_SSL = r"""
+_a="$*"
+case "$_a" in
+    *" build "*|*" build")
+        exit "${STUB_BUILD_RC:-0}" ;;
+    *" pull "*|*" pull")
+        exit "${STUB_PULL_RC:-0}" ;;
+    *certonly*)
+        exit "${STUB_CERTBOT_RC:-0}" ;;
+    # Nhánh riêng phải đứng TRƯỚC nhánh chung: `*"ps -q nginx"*` có dấu sao hai
+    # đầu nên nó khớp luôn cả `ps -q nginx-candidate`.
+    *"ps -aq nginx-bootstrap"*|*"ps -q nginx-bootstrap"*)
+        echo "cid-bootstrap-0001"; exit 0 ;;
+    *"ps -aq nginx-candidate"*|*"ps -q nginx-candidate"*)
+        echo "cid-candidate-0001"; exit 0 ;;
+    *"ps -aq nginx"*|*"ps -q nginx"*)
+        if [ -n "${STUB_CID_NGINX:-}" ]; then echo "$STUB_CID_NGINX"; fi
+        exit 0 ;;
+esac
+exit 0
+"""
+
+_STUB_DOCKER = _ma_stub_docker("", _THAN_STUB_SSL)
+
+# Container id mà `compose ps` của sân khấu setup-ssl trả về — khai ở đây để ca
+# kiểm neo được vào ĐÚNG hai container mà cổng đồng nhất (G2) phải đọc.
+_CID_CANDIDATE_SSL = "cid-candidate-0001"
+_CID_NGINX_SSL = "cid-nginx-0001"
+
+_STUB_GIT = r"""#!/usr/bin/env bash
+# `git` GIẢ: trạng thái cây nguồn do biến môi trường quyết định.
+printf 'git %s\n' "${*//$'\n'/ }" >> "$QLTS_STUB_LOG"
+case "${1:-}" in
+    rev-parse)
+        if [ "${STUB_GIT_REV_RC:-0}" != "0" ]; then exit "${STUB_GIT_REV_RC}"; fi
+        echo "${STUB_GIT_SHA:-1111111111111111111111111111111111111111}"
+        exit 0 ;;
+    status)
+        if [ -n "${STUB_GIT_BAN:-}" ]; then printf '%s\n' "$STUB_GIT_BAN"; fi
+        exit "${STUB_GIT_STATUS_RC:-0}" ;;
+esac
+exit 0
+"""
+
+
+def _moi_truong_gia(tmp_path: Path, **bien: str) -> tuple[dict, Path]:
+    """PATH có `docker`/`git` giả, `.env` giả, và một nhật ký argv rỗng.
+
+    Step 5 của `setup-ssl.sh` gọi THẬT sang `scripts/nginx-apply.sh`, và script
+    ấy mang cổng NỘI DUNG (G1) + cổng ĐỒNG NHẤT (G2). Nên sân khấu này phải
+    dựng đủ thứ để một lượt chạy ĐẠT là đạt vì đúng lý do:
+      * cây "ảnh" chụp byte-nguyên từ `nginx/` THẬT của kho — G1 chiều xuôi so
+        sha256 từng tệp, nên một bản "gần đúng" là đỏ;
+      * cùng cây ấy KHÔNG có tệp nào ngoài bảng COPY + bốn tệp của ảnh nền —
+        G1 chiều ngược gọi là mồ côi ngay nếu có;
+      * lịch sử build có đuôi TRÙNG KHÍT lịch sử ảnh nền — `_dich_copy_trong_lich_su`
+        fail-closed khi đuôi lệch;
+      * `STUB_ANH_CANDIDATE` = `STUB_ANH_NGINX` = MỘT image id `sha256:` +
+        64 hex — G2 từ chối cả khi hai bên lệch lẫn khi giá trị không đúng dạng.
+    Mọi giá trị đều đi qua `**bien`, nên ca kiểm ngược nào muốn phá đúng MỘT
+    trong bốn thứ trên vẫn phá được bằng một biến duy nhất.
+    """
+    shim = tmp_path / "shim"
+    shim.mkdir(parents=True, exist_ok=True)
+    for ten, ma in (("docker", _STUB_DOCKER), ("git", _STUB_GIT)):
+        p = shim / ten
+        p.write_text(ma, encoding="utf-8", newline="\n")
+        p.chmod(0o755)
+    nhat_ky = tmp_path / "argv.log"
+    nhat_ky.write_text("", encoding="utf-8", newline="\n")
+    env_gia = tmp_path / "gia.env"
+    env_gia.write_text(
+        "DOMAIN=vi-du.test\nCERTBOT_EMAIL=ops@vi-du.test\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    # Sân khấu ảnh dùng CHUNG bộ dựng với nhóm `_chay_apply` — một bản thứ hai
+    # sẽ trôi khỏi bản đầu, và bản ở đây (không có ca đột biến riêng) trôi trước.
+    san = tmp_path / "san-anh"
+    san.mkdir(parents=True, exist_ok=True)
+    _dung_cay_anh(_THU_MUC_NGINX, san)
+    _ghi_lich_su_anh(_THU_MUC_NGINX, san)
+    moi = {
+        **os.environ,
+        # PATH ở dạng BẢN ĐỊA (Windows dùng `;`), còn hai biến dưới đi thẳng
+        # vào bash nên phải ở dạng POSIX.
+        "PATH": str(shim) + os.pathsep + os.environ.get("PATH", ""),
+        "MSYS_NO_PATHCONV": "1",
+        "QLTS_STUB_LOG": nhat_ky.as_posix(),
+        "QLTS_COMPOSE_ENV_FILE": env_gia.as_posix(),
+        **_bien_mo_hinh_anh(_THU_MUC_NGINX, san),
+        "STUB_ANH_CANDIDATE": _ANH_A,
+        "STUB_ANH_NGINX": _ANH_A,
+    }
+    for thua in ("QLTS_COMPOSE_EXTRA", "QLTS_SSL_KIEM_CAY_NGUON"):
+        moi.pop(thua, None)
+    moi.update({k: str(v) for k, v in bien.items()})
+    return moi, nhat_ky
+
+
+def _chay_setup_ssl(
+    tmp_path: Path, duong: Path | None = None, **bien: str
+) -> tuple[int, str, list[str]]:
+    """CHẠY THẬT `setup-ssl.sh`; trả `(rc, log người đọc, nhật ký argv)`."""
+    moi, nhat_ky = _moi_truong_gia(tmp_path, **bien)
+    kb = duong or _SETUP_SSL
+    r = subprocess.run(
+        [_BASH, kb.as_posix()],
+        cwd=str(_GOC),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=180,
+        env=moi,
+    )
+    lenh = [d for d in nhat_ky.read_text(encoding="utf-8").splitlines() if d.strip()]
+    return r.returncode, r.stdout + r.stderr, lenh
+
+
+def _vt_lenh(lenh: list[str], moc: str) -> int:
+    """Vị trí lệnh ĐẦU TIÊN khớp `moc` trong nhật ký; -1 nếu không có."""
+    for i, d in enumerate(lenh):
+        if moc in d:
+            return i
+    return -1
+
+
+def _ghi_ban_sao(tmp_path: Path, dong: list[str]) -> Path:
+    """Bản đột biến nằm ở thư mục TẠM, giữ nguyên layout `<goc>/scripts/…`.
+
+    CẤM ghi đè tệp trong worktree để đổi phiên bản: chết giữa chừng là mất việc.
+    """
+    thu_muc = tmp_path / "ban-dot-bien" / "scripts"
+    thu_muc.mkdir(parents=True, exist_ok=True)
+    p = thu_muc / "setup-ssl.sh"
+    p.write_text("\n".join(dong) + "\n", encoding="utf-8", newline="\n")
+    return p
+
+
+def _vt_lenh_ma(dong: list[str], moc: str) -> int:
+    """Vị trí dòng MÃ (không phải chú thích) đầu tiên chứa `moc`."""
+    for i, d in enumerate(dong):
+        if moc in d and not d.lstrip().startswith("#"):
+            return i
+    raise AssertionError(f"không thấy dòng mã nào chứa `{moc}` trong setup-ssl.sh")
+
+
+def _khoi_lenh(dong: list[str], bd: int) -> int:
+    """Chỉ số dòng CUỐI của lệnh bắt đầu ở `bd` (đi hết các dòng nối `\\`)."""
+    kt = bd
+    while dong[kt].rstrip().endswith("\\"):
+        kt += 1
+    return kt
+
+
+def _ban_go_step0(tmp_path: Path) -> Path:
+    """Bản `setup-ssl.sh` ĐÃ GỠ trọn Step 0 — dùng cho kiểm ngược.
+
+    Vòng 2: Step 0 không còn MỘT lệnh mà là hai (`build …` rồi `pull …`). Cắt
+    tới hết lệnh muộn hơn trong hai lệnh ấy, chứ không đóng cứng vào `build` —
+    cắt hụt thì bản đột biến vẫn còn `pull` và ca kiểm ngược đo nhầm thứ.
+    """
+    dong = _doc(_SETUP_SSL).splitlines()
+    bd = next(
+        i for i, d in enumerate(dong) if d.lstrip().startswith("log ") and "Step 0:" in d
+    )
+    kt = max(
+        _khoi_lenh(dong, _vt_lenh_ma(dong, "--profile production build ")),
+        _khoi_lenh(dong, _vt_lenh_ma(dong, "--profile production pull ")),
+    )
+    assert bd < kt, "mốc cắt Step 0 đảo ngược — đột biến sẽ cắt nhầm chỗ"
+    return _ghi_ban_sao(tmp_path, dong[:bd] + dong[kt + 1 :])
+
+
+def _ban_doi_build_xuong_sau_stop(tmp_path: Path) -> Path:
+    """Đột biến TINH VI nhất của nhóm này: DỜI lệnh build xuống sau `stop nginx`.
+
+    Không xoá gì, không đổi một ký tự nào của lệnh — nên mọi guard hỏi "script
+    có gọi `compose build` không", "lệnh build có ghim `-f` không", "cây nguồn
+    có được xác minh không" đều VẪN XANH. Thứ duy nhất đổi là VỊ TRÍ, và đó
+    đúng là thứ quyết định thiệt hại: tới đó thì nginx đang phục vụ đã bị dừng.
+    Đặt ngay sau `stop nginx` (tức vẫn TRƯỚC certbot) để đột biến khó bị bắt
+    nhất — một guard chỉ so `build < certonly` sẽ không thấy gì.
+    """
+    dong = _doc(_SETUP_SSL).splitlines()
+    bd = _vt_lenh_ma(dong, "--profile production build ")
+    kt = _khoi_lenh(dong, bd)
+    khoi = dong[bd : kt + 1]
+    con_lai = dong[:bd] + dong[kt + 1 :]
+    vt_stop = _vt_lenh_ma(con_lai, "--profile production stop nginx")
+    return _ghi_ban_sao(
+        tmp_path, con_lai[: vt_stop + 1] + khoi + con_lai[vt_stop + 1 :]
+    )
+
+
+# --- Đọc nhật ký argv thành (lệnh compose, có --no-deps, các toán hạng) ------
+# Cờ MANG GIÁ TRỊ: token ngay sau chúng là giá trị chứ không phải tên service.
+# Thiếu một cái ở đây là đọc nhầm giá trị thành service — `--entrypoint certbot
+# certbot` là đúng cái bẫy ấy.
+_CO_MANG_GIA_TRI = {
+    "-f", "--file", "-p", "--project-name", "--env-file", "--profile",
+    "--entrypoint", "-e", "--env", "--name", "--policy", "--tail", "-v",
+    "--volume", "-w", "--workdir", "-u", "--user", "--network",
+}
+
+
+def _lat_lenh_compose(dong: str) -> tuple[str, bool, list[str]] | None:
+    """`(lệnh, có --no-deps, toán hạng)` cho một dòng nhật ký `docker compose`.
+
+    Trả `None` cho mọi thứ không phải lời gọi `docker compose` — đặc biệt là
+    `docker run --rm --network …` của `nginx-verify.sh`, vốn KHÔNG khởi động
+    service nào của stack và không được lẫn vào phép đếm.
+    """
+    tok = dong.split()
+    if not tok or tok[0] != "compose":
+        return None
+    i = 1
+    while i < len(tok):
+        if tok[i] in _CO_MANG_GIA_TRI:
+            i += 2
+            continue
+        if tok[i].startswith("-"):
+            i += 1
+            continue
+        break
+    if i >= len(tok):
+        return None
+    lenh = tok[i]
+    i += 1
+    toan_hang: list[str] = []
+    no_deps = "--no-deps" in tok
+    while i < len(tok):
+        if tok[i] in _CO_MANG_GIA_TRI:
+            i += 2
+            continue
+        if tok[i].startswith("-"):
+            i += 1
+            continue
+        toan_hang.append(tok[i])
+        i += 1
+        # `run <service> <command> …`: chỉ token đầu là service, phần còn lại
+        # là lệnh chạy TRONG container (`certonly --non-interactive …`).
+        if lenh == "run":
+            break
+    return lenh, no_deps, toan_hang
+
+
+def _dich_vu_khoi_dong(lenh: list[str], compose: dict) -> set[str]:
+    """Mọi service được `up`/`run` trong đoạn nhật ký, ĐÃ đóng theo `depends_on`.
+
+    Đóng bao là bắt buộc: `up -d nginx` không mang `--no-deps` sẽ kéo cả
+    `frontend` + `backend` (rồi `postgres` + `redis`) lên theo, và những ảnh ấy
+    cũng phải có mặt từ trước. Lệnh nào có `--no-deps` thì KHÔNG đóng bao.
+    """
+    dv = compose.get("services", {})
+    ra: set[str] = set()
+    for d in lenh:
+        lat = _lat_lenh_compose(d)
+        if lat is None or lat[0] not in ("up", "run"):
+            continue
+        _, no_deps, ten = lat
+        hang_doi = [t for t in ten if t in dv]
+        while hang_doi:
+            t = hang_doi.pop()
+            if t in ra:
+                continue
+            ra.add(t)
+            if no_deps:
+                continue
+            hang_doi.extend(
+                p for p in (dv[t].get("depends_on") or []) if p in dv and p not in ra
+            )
+    return ra
+
+
+def _anh_cua(compose: dict, ten: str) -> str:
+    """Định danh ẢNH mà service `ten` chạy.
+
+    Ba service nginx (`nginx`, `nginx-candidate`, `nginx-bootstrap`) khai CÙNG
+    `image: qlts-nginx:local`, nên build MỘT trong ba là đủ cho cả ba — đó
+    chính là lý do phép so phải theo ẢNH chứ không theo tên service.
+    """
+    dv = compose["services"][ten]
+    anh = dv.get("image")
+    return anh if anh else f"<ảnh build riêng của {ten}>"
+
+
+def _build_hay_pull_sau(lenh: list[str], moc: int) -> list[str]:
+    """Các lệnh `build`/`pull` nằm SAU vị trí `moc` trong nhật ký."""
+    pham = []
+    for i, d in enumerate(lenh):
+        if i <= moc:
+            continue
+        lat = _lat_lenh_compose(d)
+        if lat is not None and lat[0] in ("build", "pull"):
+            pham.append(f"#{i}: {d}")
+    return pham
+
+
+def _ban_go_kiem_cay(tmp_path: Path) -> Path:
+    """Bản GỠ riêng khối xác minh cây nguồn, GIỮ nguyên lệnh build."""
+    dong = _doc(_SETUP_SSL).splitlines()
+    bd = next(
+        i for i, d in enumerate(dong) if d.startswith('if [ "${QLTS_SSL_KIEM_CAY_NGUON')
+    )
+    # `fi` đóng khối NGOÀI nằm ở cột 0; mọi `fi` bên trong đều thụt lề, nên so
+    # nguyên văn (không `strip`) là phép cắt chính xác.
+    kt = next(i for i in range(bd + 1, len(dong)) if dong[i] == "fi")
+    return _ghi_ban_sao(tmp_path, dong[:bd] + dong[kt + 1 :])
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_build_hong_thi_DUNG_truoc_cong_80_va_truoc_acme(tmp_path):
+    """Build hỏng ⇒ script dừng khi CHƯA chạm gì — không có gì phải khôi phục.
+
+    Ca hỏng thật mà nhóm này canh: ảnh nginx không dựng được (template thiếu,
+    Dockerfile hỏng, đĩa đầy). Nếu phát hiện ấy rơi xuống sau Step 3 thì chứng
+    thư đã cấp, nginx đang phục vụ đã bị dừng, cổng 80 đã bị lấy — và trên VPS
+    mới thì trap không có container cũ nào để bật lại.
+    """
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_BUILD_RC="1")
+    assert rc != 0, f"`compose build` trả 1 mà script vẫn trả 0:\n{ra}"
+    assert _vt_lenh(lenh, " build nginx") >= 0, (
+        "script không hề gọi `compose build nginx` — Step 0 đã biến mất:\n"
+        + "\n".join(lenh)
+    )
+    for cam, vi_sao in (
+        ("stop nginx", "đã dừng nginx đang phục vụ"),
+        ("nginx-bootstrap", "đã đụng tới cổng 80"),
+        ("certonly", "đã gọi ACME"),
+    ):
+        assert _vt_lenh(lenh, cam) < 0, (
+            f"build hỏng mà script vẫn {vi_sao} — phát hiện tới quá muộn "
+            f"(`{cam}` trong nhật ký lệnh):\n" + "\n".join(lenh)
+        )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_khong_co_step0_thi_di_thang_toi_certbot(tmp_path):
+    """KIỂM NGƯỢC: gỡ Step 0 ⇒ script chạy thẳng tới certbot.
+
+    Không có ca này thì ca nền ở trên có thể đang xanh vì một lý do khác hẳn
+    (env giả thiếu biến, stub trả sai, script chết ở một dòng vô can) — và một
+    guard đỏ vì lý do khác là một guard không canh gì cả.
+    """
+    ban = _ban_go_step0(tmp_path)
+    rc, ra, lenh = _chay_setup_ssl(
+        tmp_path, duong=ban, STUB_BUILD_RC="1", STUB_CERTBOT_RC="1"
+    )
+    assert not _build_hay_pull_sau(lenh, -1), (
+        "bản đột biến vẫn còn lệnh build/pull — phép cắt Step 0 đã trượt "
+        "(vòng 2: Step 0 có HAI lệnh, cắt hụt một cái là đo nhầm thứ):\n"
+        + "\n".join(lenh)
+    )
+    assert _vt_lenh(lenh, "stop nginx") >= 0 and _vt_lenh(lenh, "certonly") >= 0, (
+        "gỡ Step 0 mà script KHÔNG tới được cổng 80 và certbot ⇒ ca nền đỏ vì "
+        f"lý do khác chứ không phải vì Step 0 (rc={rc}):\n{ra}\n" + "\n".join(lenh)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_build_dung_TRUOC_moi_lenh_cham_nginx(tmp_path):
+    """So VỊ TRÍ trong nhật ký lệnh, không so sự có mặt.
+
+    Một lệnh build đặt ở Step 5 vẫn làm mọi guard "có gọi build không" xanh,
+    trong khi nó chữa đúng con số không: tới đó thì cổng 80 đã bị lấy và chứng
+    thư đã cấp.
+    """
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_CERTBOT_RC="1")
+    vt_build = _vt_lenh(lenh, " build nginx")
+    vt_stop = _vt_lenh(lenh, "stop nginx")
+    vt_acme = _vt_lenh(lenh, "certonly")
+    assert min(vt_build, vt_stop, vt_acme) >= 0, (
+        f"thiếu mốc trong nhật ký lệnh (build={vt_build} stop={vt_stop} "
+        f"certbot={vt_acme}), rc={rc}:\n{ra}\n" + "\n".join(lenh)
+    )
+    assert vt_build < vt_stop < vt_acme, (
+        "thứ tự thực thi SAI — build phải đứng trước mọi lệnh chạm nginx đang "
+        f"phục vụ và trước ACME: build={vt_build} stop={vt_stop} "
+        f"certbot={vt_acme}\n" + "\n".join(lenh)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_tu_choi_build_tu_cay_da_troi(tmp_path):
+    """`build` dựng từ CÂY LÀM VIỆC — cây trôi thì ảnh không khớp commit nào.
+
+    Không có cổng này, Step 0 chữa được ca "chưa có ảnh" nhưng lại mở một ca
+    mới: nó đưa lặng lẽ mọi sửa đổi đang nằm trên đĩa của VPS lên production.
+    """
+    rc, ra, lenh = _chay_setup_ssl(
+        tmp_path, STUB_GIT_BAN=" M nginx/templates/default.conf.template"
+    )
+    assert rc != 0, f"cây nguồn đã trôi mà script vẫn trả 0:\n{ra}"
+    for cam in (" build nginx", "stop nginx", "certonly"):
+        assert _vt_lenh(lenh, cam) < 0, (
+            f"cây nguồn đã trôi mà script vẫn chạy `{cam}`:\n" + "\n".join(lenh)
+        )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_go_kiem_cay_thi_cay_troi_van_build(tmp_path):
+    """KIỂM NGƯỢC cho cổng cây nguồn: gỡ đúng khối ấy ⇒ build chạy trở lại."""
+    ban = _ban_go_kiem_cay(tmp_path)
+    rc, ra, lenh = _chay_setup_ssl(
+        tmp_path, duong=ban, STUB_GIT_BAN=" M nginx/x", STUB_CERTBOT_RC="1"
+    )
+    assert _vt_lenh(lenh, " build nginx") >= 0, (
+        "gỡ khối xác minh cây nguồn mà build vẫn không chạy ⇒ ca nền đỏ vì một "
+        f"lý do khác (rc={rc}):\n{ra}\n" + "\n".join(lenh)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_khong_doc_duoc_HEAD_thi_tu_choi_build(tmp_path):
+    """Không biết cây đang ở đâu thì không build — fail-closed, không đoán."""
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_GIT_REV_RC="128")
+    assert rc != 0, f"`git rev-parse HEAD` hỏng mà script vẫn trả 0:\n{ra}"
+    assert _vt_lenh(lenh, " build nginx") < 0, (
+        "không đọc được HEAD mà vẫn build:\n" + "\n".join(lenh)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_khong_doc_duoc_git_status_thi_tu_choi_build(tmp_path):
+    """`git status` hỏng ⇒ từ chối build. Nhánh ANH EM của ca ngay trên.
+
+    Vá một nhánh thì còn bốn nhánh: cổng cây nguồn hỏi git HAI lần
+    (`rev-parse HEAD` rồi `status --porcelain`), và chỉ nhánh thứ nhất từng có
+    ca canh. Đo bằng đột biến: đổi `if ! _CAY_BAN=$(git status …); then error`
+    thành `_CAY_BAN=$(git status … || true)` là biến một cổng fail-closed thành
+    một cổng LUÔN XANH — `_CAY_BAN` rỗng thì cây nào cũng "sạch" — và trước ca
+    này thì KHÔNG một ca nào trong 169 ca bắt được.
+    """
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_GIT_STATUS_RC="128")
+    assert rc != 0, f"`git status` trả 128 mà script vẫn trả 0:\n{ra}"
+    assert not _build_hay_pull_sau(lenh, -1), (
+        "không đọc được trạng thái cây nguồn mà vẫn build/pull:\n" + "\n".join(lenh)
+    )
+    assert _vt_lenh(lenh, "stop nginx") < 0 and _vt_lenh(lenh, "certonly") < 0, (
+        "cổng cây nguồn đỏ mà script vẫn dừng nginx / gọi ACME:\n" + "\n".join(lenh)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_co_thoat_hiem_cay_nguon_chay_duoc(tmp_path):
+    """Lối thoát ghi trong thông điệp lỗi phải MỞ ĐƯỢC cổng thật.
+
+    Một `QLTS_SSL_KIEM_CAY_NGUON=0` được quảng cáo mà không ai đọc còn tệ hơn
+    không có: người trực gõ nó lúc 2 giờ sáng, cổng vẫn đỏ, và họ đi sửa nhầm
+    chỗ.
+    """
+    rc, ra, lenh = _chay_setup_ssl(
+        tmp_path,
+        STUB_GIT_BAN=" M nginx/x",
+        QLTS_SSL_KIEM_CAY_NGUON="0",
+        STUB_CERTBOT_RC="1",
+    )
+    assert _vt_lenh(lenh, " build nginx") >= 0, (
+        "đặt QLTS_SSL_KIEM_CAY_NGUON=0 mà cổng vẫn chặn build "
+        f"(rc={rc}):\n{ra}\n" + "\n".join(lenh)
+    )
+
+
+def test_setup_ssl_build_di_qua_mang_COMPOSE_da_ghim(ma_setup_ssl: str):
+    """Lệnh build mới phải đi qua mảng `COMPOSE` đã ghim `-f docker-compose.yml`.
+
+    `_lenh_compose_trong_script` tìm chuỗi `docker compose`, nên một dòng viết
+    `"${COMPOSE[@]}" … build nginx` là VÔ HÌNH với nó: guard không đỏ, mà cũng
+    không xác nhận gì. Cái giữ cho dòng ấy được ghim là khai báo mảng ở đầu tệp
+    — và điều đó chỉ đúng chừng nào lệnh build thật sự dùng mảng ấy.
+    """
+    dong_build = [
+        d for d in ma_setup_ssl.splitlines() if re.search(r"\bbuild\s+nginx\b", d)
+    ]
+    assert dong_build, (
+        "setup-ssl.sh không còn lệnh `build nginx` — Step 0 đã biến mất, và với "
+        "nó là toàn bộ đường lùi trên VPS mới"
+    )
+    for d in dong_build:
+        assert '"${COMPOSE[@]}"' in d or "-f docker-compose.yml" in d, (
+            "lệnh build không ghim `-f docker-compose.yml` và cũng không đi qua "
+            f"mảng COMPOSE: {d.strip()[:120]}"
+        )
+
+
+def test_mang_compose_trong_script_production_ghim_va_gan_DUNG_MOT_LAN():
+    """Mảng giữ `docker compose` phải ghim `-f`, và chỉ được gán MỘT lần.
+
+    Bộ phân loại ngữ cảnh nhìn thấy `X=(docker compose …)` vì chuỗi ấy có mặt ở
+    đó. Nó KHÔNG nhìn thấy `X+=(--profile …)` hay một lần gán lại `X=("${X[@]}"
+    -f khac.yml)`: hai dòng ấy không chứa `docker compose` nên không lần nào
+    được hỏi tới, mà chúng lại đổi được chính lệnh mà mọi `"${X[@]}"` sau đó
+    chạy. Đóng khe ấy ở đây thay vì nới hợp đồng của bộ phân loại.
+    """
+    re_gan = re.compile(r"^(\w+)=\(\s*docker compose\b(.*)$", re.M)
+    pham: list[str] = []
+    da_soi = 0
+    for sh in _cac_script():
+        if sh.name not in _SCRIPT_PRODUCTION:
+            continue
+        da_soi += 1
+        ma = _ma_lenh(sh)
+        for m in re_gan.finditer(ma):
+            ten, than = m.group(1), m.group(2)
+            if "-f docker-compose.yml" not in than:
+                pham.append(f"{sh.name}: mảng `{ten}` không ghim -f docker-compose.yml")
+            so_lan = len(re.findall(rf"^\s*{re.escape(ten)}\+?=\(", ma, re.M))
+            if so_lan != 1:
+                pham.append(
+                    f"{sh.name}: mảng `{ten}` được gán {so_lan} lần — lần gán "
+                    "thứ hai không chứa `docker compose` nên bộ phân loại không "
+                    "nhìn thấy nó"
+                )
+    assert da_soi == len(_SCRIPT_PRODUCTION), (
+        f"chỉ soi được {da_soi}/{len(_SCRIPT_PRODUCTION)} script production — "
+        "một tên trong _SCRIPT_PRODUCTION đã bị đổi/xoá"
+    )
+    assert not pham, "mảng lệnh compose không an toàn:\n  " + "\n  ".join(pham)
+
+
+# ---------------------------------------------------------------------------
+# setup-ssl.sh Step 0 — VÒNG 2: phạm vi là MỌI ảnh cần sau điểm dừng nginx
+# ---------------------------------------------------------------------------
+# Vòng 1 chỉ build `nginx`. Nhưng sau điểm dừng, Step 3 chạy `certbot` và Step 5
+# gọi `nginx-apply.sh` với `QLTS_NGINX_NO_DEPS=0`, mà Nhịp 0 của nó là
+# `up -d --wait postgres redis backend frontend`. Ảnh backend/frontend thiếu ⇒
+# Compose TỰ build ngay tại đó; ảnh certbot/postgres/redis thiếu ⇒ một
+# `docker pull` phát sinh — cả hai đều rơi vào đúng khoảng thời gian mà Step 0
+# sinh ra để dọn trống: cổng 80 đã nhường, nginx đang phục vụ đã bị dừng, và
+# (với certbot trở đi) chứng thư đã cấp.
+#
+# Nhóm ca dưới đây đo bằng NHẬT KÝ LỆNH của một lượt chạy đầy đủ, và so theo VỊ
+# TRÍ. Một guard hỏi "có gọi build không" vẫn xanh khi lệnh ấy nằm ở Step 5 —
+# `_ban_doi_build_xuong_sau_stop` là đột biến dựng riêng để chứng minh điều đó.
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_setup_ssl_sau_khi_dung_nginx_khong_con_build_hay_pull(tmp_path):
+    """SAU `stop nginx`, nhật ký lệnh phải có ĐÚNG 0 lệnh `build` và 0 `pull`.
+
+    Đây là tính chất mà toàn bộ Step 0 tồn tại để bảo đảm. Nó được phát biểu
+    trên nhật ký argv của MỘT lượt chạy đi tới cùng (rc=0), chứ không trên văn
+    bản script: một lệnh build nằm trong nhánh `if` chẳng bao giờ chạy cũng làm
+    guard tĩnh xanh, còn một lệnh build do `nginx-apply.sh` (script KHÁC) phát
+    ra thì guard tĩnh trên `setup-ssl.sh` không bao giờ thấy.
+    """
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_CID_NGINX="cid-nginx-0001")
+    assert rc == 0, f"lượt chạy đầy đủ không tới đích (rc={rc}):\n{ra}\n" + "\n".join(
+        lenh
+    )
+    vt_stop = _vt_lenh(lenh, "stop nginx")
+    assert vt_stop >= 0, "không thấy `stop nginx` — mốc đo biến mất:\n" + "\n".join(lenh)
+
+    # CHỐNG XANH RỖNG: nếu script chết ngay sau `stop nginx` thì "0 lệnh build
+    # phía sau" đúng một cách vô nghĩa. Bắt buộc phải thấy các mốc muộn nhất.
+    for moc, o_dau in (
+        ("nginx-bootstrap", "Step 2"),
+        ("certonly", "Step 3"),
+        ("nginx-candidate", "Step 5 / Nhịp 1"),
+    ):
+        assert any(moc in d for d in lenh[vt_stop + 1 :]), (
+            f"nhật ký sau `stop nginx` không có mốc `{moc}` ({o_dau}) ⇒ lượt "
+            "chạy chưa đi hết, ca này đang xanh rỗng:\n" + "\n".join(lenh)
+        )
+    assert "nginx" in _dich_vu_khoi_dong(lenh[vt_stop + 1 :], _tai_compose(_COMPOSE)), (
+        "không thấy service `nginx` được khởi động lại sau điểm dừng ⇒ Step 5 "
+        "chưa chạy hết:\n" + "\n".join(lenh)
+    )
+
+    # CHỐNG XANH RỖNG, phần hai: Step 5 gọi THẬT sang `nginx-apply.sh`, nên rc=0
+    # ở đây cũng là lời khẳng định rằng hai cổng của script ấy đã ĐI QUA chứ
+    # không phải được đi vòng. Nếu sân khấu tụt xuống thành "mọi lệnh đều thành
+    # công" thì rc vẫn 0 và cả nhóm ca này xanh mà không đo gì — nên đòi đúng
+    # dấu vết mà G1/G2 để lại.
+    #
+    # G1 (cổng NỘI DUNG): thông báo đối chiếu THÀNH CÔNG, và đủ số tệp.
+    khop = re.search(r"cổng nội dung: (\d+)/\1 tệp khớp nguồn", ra)
+    assert khop, (
+        "không thấy cổng NỘI DUNG (G1) của nginx-apply.sh báo đối chiếu thành "
+        f"công — lượt chạy này chưa đi qua nó:\n{ra}"
+    )
+    assert int(khop.group(1)) == len(_DUONG_TRONG_ANH), (
+        f"G1 chỉ đối chiếu {khop.group(1)} tệp, bảng COPY của nginx/Dockerfile "
+        f"có {len(_DUONG_TRONG_ANH)} — sân khấu đang che bớt tệp cho cổng"
+    )
+    # …và đúng ba phép đo mà G1 dựa vào, trên nhật ký argv (không phải trên log
+    # người đọc): lịch sử build, checksum trong container, và mốc kết của phép
+    # liệt kê. Thiếu mốc thì một đầu ra CỤT trông y hệt một danh sách sạch.
+    for moc, vi_sao in (
+        ("history ", "đọc lịch sử build của ảnh"),
+        (" sha256sum ", "đối chiếu checksum trong container"),
+        (_MOC_LIET_KE_STUB, "mốc kết của phép liệt kê thư mục đích"),
+    ):
+        assert any(moc in d for d in lenh), (
+            f"nhật ký không có dấu vết `{moc}` ({vi_sao}) ⇒ G1 chưa thật sự "
+            "chạy:\n" + "\n".join(lenh)
+        )
+
+    # G2 (cổng ĐỒNG NHẤT): image id BẤT BIẾN được đọc ở CẢ HAI container và
+    # khớp nhau. `{{.Config.Image}}` không đủ — nó là tên:tag dùng chung.
+    cid_doc = {
+        d.split()[-1]
+        for d in lenh
+        if d.startswith("inspect ") and "{{.Image}}" in d
+    }
+    assert {_CID_CANDIDATE_SSL, _CID_NGINX_SSL} <= cid_doc, (
+        "G2 không đọc `{{.Image}}` của CẢ candidate lẫn nginx đang phục vụ "
+        f"(thấy: {sorted(cid_doc)}):\n" + "\n".join(lenh)
+    )
+    assert re.search(r"chạy đúng ảnh đã chứng minh \(sha256:[0-9a-f]{64}\)", ra), (
+        "không thấy nginx-apply.sh tuyên bố nginx đang chạy ĐÚNG bản ảnh đã "
+        f"được chứng minh (image id bất biến) ⇒ G2 chưa đi qua:\n{ra}"
+    )
+
+    pham = _build_hay_pull_sau(lenh, vt_stop)
+    assert not pham, (
+        "còn lệnh build/pull phát sinh SAU khi nginx đang phục vụ đã bị dừng — "
+        "đúng hình dạng thất bại mà Step 0 sinh ra để chặn:\n  "
+        + "\n  ".join(pham)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_doi_build_xuong_sau_stop_nginx_thi_ca_tren_DO(tmp_path):
+    """KIỂM NGƯỢC cho ca ngay trên: dời build xuống sau `stop nginx` ⇒ ĐỎ.
+
+    Bản đột biến vi phạm ĐÚNG MỘT bất biến (vị trí của lệnh build) và không
+    đụng gì khác — nên nếu ca trên vẫn xanh với nó thì ca trên không canh gì.
+    Ca này khẳng định hai điều, và cần cả hai: (1) bản đột biến VẪN chạy được
+    tới certbot — tức nó tinh vi, không phải một script gãy; (2) phép đo vị trí
+    bắt được nó.
+    """
+    ban = _ban_doi_build_xuong_sau_stop(tmp_path)
+    rc, ra, lenh = _chay_setup_ssl(
+        tmp_path, duong=ban, STUB_CID_NGINX="cid-nginx-0001"
+    )
+    vt_stop = _vt_lenh(lenh, "stop nginx")
+    assert vt_stop >= 0, f"đột biến làm hỏng cả mốc `stop nginx` (rc={rc}):\n{ra}"
+    assert _vt_lenh(lenh, "certonly") > vt_stop, (
+        "bản đột biến không còn chạy tới certbot ⇒ nó THÔ chứ không tinh vi, "
+        f"và ca trên có thể đang đỏ vì lý do khác (rc={rc}):\n{ra}\n"
+        + "\n".join(lenh)
+    )
+    pham = _build_hay_pull_sau(lenh, vt_stop)
+    assert pham, (
+        "dời hẳn lệnh build xuống sau `stop nginx` mà phép đo KHÔNG thấy gì ⇒ "
+        "ca `sau khi dừng nginx không còn build/pull` đang xanh vô nghĩa:\n"
+        + "\n".join(lenh)
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_moi_anh_can_sau_diem_dung_deu_do_step0_lo_lieu(tmp_path):
+    """Phạm vi Step 0 = ĐÚNG tập ảnh của các service khởi động sau điểm dừng.
+
+    Suy cả hai chiều từ chính nhật ký chạy + `docker-compose.yml`, không từ một
+    danh sách chép tay:
+      * THIẾU  — một service lên sau điểm dừng mà ảnh của nó không được Step 0
+                 lo (build hoặc pull) ⇒ đỏ. Đây là khe hở vòng 1.
+      * THỪA   — Step 0 build/pull một ảnh mà không service nào sau điểm dừng
+                 dùng ⇒ cũng đỏ. Đây là khe hở ngược lại: mở rộng máy móc sang
+                 `celery-worker`/`celery-beat` (không lệnh nào khởi động chúng)
+                 bắt một VPS mới trả tiền cho hai ảnh vô dụng.
+    So theo ẢNH chứ không theo tên service: ba service nginx dùng chung
+    `qlts-nginx:local`, build một là đủ cho cả ba.
+    """
+    compose = _tai_compose(_COMPOSE)
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_CID_NGINX="cid-nginx-0001")
+    assert rc == 0, f"lượt chạy đầy đủ không tới đích (rc={rc}):\n{ra}"
+    vt_stop = _vt_lenh(lenh, "stop nginx")
+    assert vt_stop >= 0
+
+    ds_build: list[str] = []
+    ds_pull: list[str] = []
+    for d in lenh[:vt_stop]:
+        lat = _lat_lenh_compose(d)
+        if lat is None:
+            continue
+        if lat[0] == "build":
+            ds_build += lat[2]
+        elif lat[0] == "pull":
+            ds_pull += lat[2]
+    assert ds_build, "Step 0 không build gì cả:\n" + "\n".join(lenh)
+    assert ds_pull, "Step 0 không bảo đảm ảnh mượn nào cả:\n" + "\n".join(lenh)
+
+    dv = compose["services"]
+    for t in ds_build:
+        assert t in dv and dv[t].get("build"), (
+            f"Step 0 build `{t}` nhưng docker-compose.yml không khai `build:` "
+            "cho nó — lệnh ấy không dựng được gì"
+        )
+    for t in ds_pull:
+        assert t in dv and not dv[t].get("build"), (
+            f"Step 0 `pull {t}` nhưng service ấy có `build:` — ảnh của nó phải "
+            "được DỰNG, `pull` sẽ đi tìm một ảnh không ai đẩy lên registry"
+        )
+
+    anh_lo = {_anh_cua(compose, t) for t in ds_build + ds_pull}
+    khoi_dong = _dich_vu_khoi_dong(lenh[vt_stop + 1 :], compose)
+    assert khoi_dong, "không service nào được khởi động sau điểm dừng — xanh rỗng"
+    anh_can = {_anh_cua(compose, t) for t in khoi_dong}
+
+    thieu = {
+        f"{t} → {_anh_cua(compose, t)}"
+        for t in khoi_dong
+        if _anh_cua(compose, t) not in anh_lo
+    }
+    assert not thieu, (
+        "service lên SAU điểm dừng nginx mà Step 0 không lo ảnh cho nó — "
+        "Compose sẽ tự build/pull đúng lúc cổng 80 đã nhường:\n  "
+        + "\n  ".join(sorted(thieu))
+    )
+    thua = anh_lo - anh_can
+    assert not thua, (
+        "Step 0 lo những ảnh mà KHÔNG lệnh nào sau điểm dừng dùng tới:\n  "
+        + "\n  ".join(sorted(thua))
+        + "\n(các service thật sự khởi động: "
+        + ", ".join(sorted(khoi_dong))
+        + ")"
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_cong_cay_nguon_phu_dung_cac_build_context(tmp_path, ma_setup_ssl: str):
+    """Cổng cây nguồn phải soi ĐÚNG các `build.context` của ảnh sắp build.
+
+    Hai chiều, và cả hai đều đã hỏng thật ở đâu đó:
+      * soi HỤT  — vòng 1 chỉ gác `nginx` + `docker-compose.yml`; nay Step 0
+                   còn build backend + frontend, nên một `Backend_FastAPI/`
+                   đang trôi sẽ lặng lẽ lên production;
+      * soi THỪA — gác cả cây thì mọi sửa đổi vô can cũng làm cổng đỏ, và một
+                   cổng đỏ oan là một cổng sẽ bị tắt.
+    Danh sách được suy từ `docker-compose.yml`, nên đổi `build.context` của một
+    service mà quên cổng là ca này đỏ.
+    """
+    m = re.search(r"^_DUONG_CAY_NGUON=\(([^)]*)\)", ma_setup_ssl, re.M)
+    assert m, "không thấy khai báo `_DUONG_CAY_NGUON=(…)` trong setup-ssl.sh"
+    duong_gac = set(m.group(1).split())
+
+    # Khai báo mà không ai DÙNG là một cổng xanh giả. Buộc chính mảng ấy phải
+    # là thứ được truyền cho `git status`.
+    assert 'git status --porcelain -- "${_DUONG_CAY_NGUON[@]}"' in ma_setup_ssl, (
+        "`_DUONG_CAY_NGUON` được khai nhưng `git status` không dùng nó — cổng "
+        "đang gác một danh sách khác với danh sách được kiểm ở đây"
+    )
+
+    compose = _tai_compose(_COMPOSE)
+    rc, ra, lenh = _chay_setup_ssl(tmp_path, STUB_CID_NGINX="cid-nginx-0001")
+    assert rc == 0, f"lượt chạy đầy đủ không tới đích (rc={rc}):\n{ra}"
+    ds_build: list[str] = []
+    for d in lenh:
+        lat = _lat_lenh_compose(d)
+        if lat is not None and lat[0] == "build":
+            ds_build += lat[2]
+    assert ds_build, "Step 0 không build gì cả"
+
+    def _chuan(p: str) -> str:
+        return p[2:] if p.startswith("./") else p
+
+    mong = {"docker-compose.yml"}
+    for t in ds_build:
+        b = compose["services"][t]["build"]
+        mong.add(_chuan(b if isinstance(b, str) else b["context"]))
+
+    assert duong_gac == mong, (
+        "cổng cây nguồn lệch khỏi các `build.context` thật:\n"
+        f"  script gác : {sorted(duong_gac)}\n"
+        f"  compose đòi: {sorted(mong)}\n"
+        f"  (service sắp build: {ds_build})"
+    )
+
+
+@pytest.mark.skipif(_BASH is None, reason="cần bash để chạy thật")
+def test_break_glass_cay_nguon_la_bien_rieng_va_canh_bao_to(
+    tmp_path, ma_setup_ssl: str
+):
+    """Lối thoát phải là BIẾN RIÊNG và phải hét lên khi được dùng.
+
+    Một cờ dùng chung cho hai hàng rào là cách một hàng rào bị gỡ mà không ai
+    định gỡ nó. Một lối thoát im lặng thì tệ hơn nữa: nó biến "owner cố ý bỏ
+    qua" thành "không ai biết cổng đã tắt" — và bản ghi vận hành duy nhất về
+    việc ảnh production không khớp commit nào sẽ không tồn tại.
+    """
+    # BIẾN RIÊNG: được ĐỌC đúng một lần, và lần đọc ấy là điều kiện của cổng.
+    doc_bien = re.findall(r"\$\{QLTS_SSL_KIEM_CAY_NGUON[:\-]", ma_setup_ssl)
+    assert len(doc_bien) == 1, (
+        f"`QLTS_SSL_KIEM_CAY_NGUON` được đọc {len(doc_bien)} lần — lối thoát "
+        "đang điều khiển nhiều hơn một thứ"
+    )
+    dong_dk = [
+        d for d in ma_setup_ssl.splitlines() if "${QLTS_SSL_KIEM_CAY_NGUON" in d
+    ][0]
+    assert len(re.findall(r"\$\{", dong_dk)) == 1, (
+        "điều kiện của cổng cây nguồn còn đọc biến khác ngoài "
+        f"QLTS_SSL_KIEM_CAY_NGUON — lối thoát không còn là của riêng nó: {dong_dk.strip()}"
+    )
+
+    rc, ra, lenh = _chay_setup_ssl(
+        tmp_path,
+        STUB_GIT_BAN=" M nginx/x\n M Backend_FastAPI/y\n?? frontend/z",
+        QLTS_SSL_KIEM_CAY_NGUON="0",
+        STUB_CID_NGINX="cid-nginx-0001",
+    )
+    assert rc == 0, f"break-glass mà lượt chạy vẫn hỏng (rc={rc}):\n{ra}"
+    assert ra.count("[WARN]") >= 5, (
+        "break-glass chỉ cảnh báo lí nhí — một dòng warn lẫn trong log build là "
+        f"thứ không ai đọc:\n{ra}"
+    )
+    assert "BREAK-GLASS" in ra and "THAO TÁC CÓ CHỦ ĐÍCH" in ra, (
+        "văn bản cảnh báo không nói rõ đây là thao tác owner có chủ đích chứ "
+        f"không phải đường đi thường:\n{ra}"
+    )
+    assert _vt_lenh(lenh, " build ") >= 0, (
+        "break-glass được bật mà cổng vẫn chặn build — lối thoát chỉ là quảng "
+        "cáo:\n" + "\n".join(lenh)
     )
 
 
@@ -2371,6 +3963,528 @@ def test_deploy_guide_build_du_moi_anh_ma_up_se_dung():
     assert not pham, (
         "hướng dẫn deploy tay dựng service bằng ảnh CŨ vì không build nó:\n  "
         + "\n  ".join(pham)
+    )
+
+
+# ---------------------------------------------------------------------------
+# `build nginx` phải đứng TRƯỚC `nginx-apply.sh`
+# ---------------------------------------------------------------------------
+# `scripts/nginx-apply.sh` KHÔNG build. Service nginx ghim tag cố định
+# `qlts-nginx:local`, nên `up -d` dùng lại ảnh đã có tag ấy mà không dựng lại.
+# Cấu hình thì đi theo IMAGE (`nginx/Dockerfile` COPY `templates/`). Ba vế ấy
+# cộng lại cho đúng một kết cục: cây `nginx/` khác ảnh đang chạy ⇒ candidate đo
+# ảnh CŨ, `up -d` áp ảnh CŨ, và script in ra "cấu hình mới đã được áp".
+#
+# Đó là ca fail-OPEN, nên không healthcheck nào bắt. Thứ duy nhất chặn được là
+# thứ tự lệnh trong tài liệu vận hành — mà trước guard này không ai canh nó.
+#
+# CỐ Ý loại `tests-e2e/nginx-packaging/README.md` khỏi phạm vi, cùng lý lẽ với
+# `_SCRIPT_PRODUCTION`: nó chạy trên một stack CÔ LẬP (`-p qltsngx`) và phần
+# lớn lời gọi `nginx-apply.sh` ở đó CỐ TÌNH nạp một cấu hình hỏng qua override
+# `kn*.yml` để chứng minh cổng candidate từ chối. Bắt nó build trước mỗi ca là
+# đòi dựng lại ảnh cho một đột biến không nằm trong cây — vừa thừa vừa sai
+# nghĩa. Danh sách tường minh thì đọc được và cãi được; một luật áp bừa sẽ bị
+# tắt đi hoặc bị lách bằng ngoại lệ rải rác.
+_TAI_LIEU_CHAM_PRODUCTION = [
+    "Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md",
+    "Documents/PRODUCTION_DEPLOY_GUIDE.md",
+]
+
+
+def _chi_so_khoi(duong: Path) -> dict[int, int]:
+    """Số hiệu dòng ➜ chỉ số khối ``` chứa nó.
+
+    Cùng luật mở/đóng khối với `_dong_lenh_trong_tai_lieu` (ở đó khối được đếm
+    ngầm): chỉ `lstrip().startswith("```")` mới lật trạng thái, nên fence nằm
+    trong trích dẫn `> ```bash` KHÔNG tính — đúng như bộ đọc lệnh đang làm.
+
+    Vì sao cần chỉ số khối: một khối ``` là đơn vị người trực CHÉP ra chạy.
+    Cho phép `build` ở khối này phủ cho `apply` ở khối khác tức là giả định
+    người ta chạy tuần tự cả tài liệu — giả định đó chính là chỗ hở.
+    """
+    ra: dict[int, int] = {}
+    trong_khoi = False
+    khoi = 0
+    for so, dong in enumerate(_doc(duong).splitlines(), 1):
+        if dong.lstrip().startswith("```"):
+            if not trong_khoi:
+                khoi += 1
+            trong_khoi = not trong_khoi
+            continue
+        if trong_khoi:
+            ra[so] = khoi
+    return ra
+
+
+_CHUOI_NHAY = re.compile(r"\"[^\"]*\"|'[^']*'")
+
+
+def _bo_chuoi(dong: str) -> str:
+    """Bỏ phần nằm trong nháy — chỉ giữ lại phần thật sự là LỆNH.
+
+    CLAUDE.md §3 ghi đúng cái bẫy này: biểu thức khớp trúng **dòng thông báo**
+    thay vì dòng lệnh. Đã vấp thật ở chính guard này: dòng
+    `… || { echo "nginx/ còn tệp UNTRACKED sau git clean — DỪNG"; … }`
+    làm `_GIT_VIET_LAI_CAY` tưởng vừa có một `git clean` chạy, nên nó xoá hiệu
+    lực của cổng đứng ngay TRÊN nó và guard đỏ ở một tài liệu ĐÚNG.
+
+    Chỉ dùng cho câu hỏi "dòng này CÓ PHẢI lệnh X không". KHÔNG dùng cho các mẫu
+    cổng: `git diff --quiet "$PRE_SHA" -- nginx/` mất `"$PRE_SHA"` thì không còn
+    phân biệt được với phép so `HEAD` — mà phân biệt ấy chính là hai luồng.
+    """
+    return _CHUOI_NHAY.sub(" ", dong)
+
+
+# Lệnh git VIẾT LẠI CÂY LÀM VIỆC. Sau một trong số này, mọi lần build trước đó
+# hết giá trị: ảnh `qlts-nginx:local` đang mang cấu hình của cây CŨ.
+#
+# LUÔN hỏi qua `_bo_chuoi` — xem lý do ở đó.
+#
+# Đây đúng là hình dạng của Step 5 phần rollback (`git checkout "$PRE_SHA" --
+# nginx/` + `git clean -fd nginx/`), và nếu không có vế này thì lần build ở
+# Step 1 sẽ "phủ" luôn cho Step 5 — đã đo: đột biến đổi `build nginx` của Step 5
+# thành `build backend` KHÔNG bị bắt. `fetch`/`push`/`log`/`status` không đổi
+# cây nên cố ý không nằm trong danh sách.
+_GIT_VIET_LAI_CAY = re.compile(
+    r"\bgit\s+(checkout|switch|clean|pull|reset|restore|stash|apply|merge|rebase|worktree)\b"
+)
+
+
+def _la_build_nginx(dong: str) -> bool:
+    """Lệnh `docker compose ... build ... nginx`.
+
+    Đòi `nginx` là MỘT THAM SỐ sau `build`, không phải chữ `nginx` ở bất kỳ đâu
+    trong dòng: `... --env-file .env.production build backend` nằm cạnh một
+    đường dẫn có chữ nginx vẫn phải bị coi là KHÔNG build nginx.
+    """
+    if not _co_lenh_compose(dong) or " build " not in dong:
+        return False
+    sau = re.split(r"\s+", dong.split(" build ", 1)[1].strip())
+    return "nginx" in sau
+
+
+def test_moi_loi_goi_nginx_apply_deu_co_build_nginx_dung_truoc():
+    """Bỏ `build nginx` = áp ảnh CŨ mà vẫn báo ĐẠT.
+
+    Một lần build được coi là còn hiệu lực cho tới khi gặp MỘT trong hai mốc:
+      * hết khối ``` — khối là đơn vị người trực chép ra chạy, nên cho build ở
+        khối này phủ cho apply ở khối khác là giả định người ta chạy tuần tự cả
+        tài liệu, mà đó chính là chỗ hở;
+      * một lệnh git viết lại cây làm việc (`_GIT_VIET_LAI_CAY`) — sau nó, ảnh
+        đang có mang cấu hình của cây CŨ.
+
+    Hệ quả đã biết và CHẤP NHẬN: trong phần rollback, Step 7 (mở băng) nằm cùng
+    khối với Step 5 và không có lệnh git nào xen giữa, nên nó được lần build ở
+    Step 5 phủ. Điều đó ĐÚNG khi chạy tuần tự — giữa hai bước chỉ có curl/psql
+    và một lần sửa `.env.production`, không gì chạm `nginx/`, mà đổi env thì
+    `up -d` tự recreate vì model lệch, không cần ảnh mới. Guard này vì thế
+    KHÔNG mô hình hoá ca người trực NHẢY THẲNG vào Step 7; đó là một quyết định
+    còn mở của tài liệu, không phải chỗ guard quên.
+    """
+    assert set(_TAI_LIEU_CHAM_PRODUCTION) <= set(_TAI_LIEU_VAN_HANH), (
+        "_TAI_LIEU_CHAM_PRODUCTION đã trôi khỏi _TAI_LIEU_VAN_HANH — một tên bị "
+        "đổi/xoá ở một danh sách mà không ở danh sách kia"
+    )
+    pham = []
+    da_soi = 0
+    for ten in _TAI_LIEU_CHAM_PRODUCTION:
+        d = _GOC / ten
+        if not d.is_file():
+            continue
+        if "scripts/nginx-apply.sh" not in _doc(d):
+            continue
+        khoi_cua = _chi_so_khoi(d)
+        da_build: set[int] = set()
+        thay_apply = 0
+        for so, dong in _lenh_ghep_trong_tai_lieu(d):
+            khoi = khoi_cua.get(so)
+            if _GIT_VIET_LAI_CAY.search(_bo_chuoi(dong)):
+                da_build.clear()
+            if _la_build_nginx(dong):
+                da_build.add(khoi)
+            if "scripts/nginx-apply.sh" not in dong:
+                continue
+            thay_apply += 1
+            if khoi not in da_build:
+                pham.append(
+                    f"{ten}:{so}: `nginx-apply.sh` chạy mà chưa có "
+                    f"`docker compose ... build nginx` nào còn hiệu lực đứng "
+                    f"trước (cùng khối ```, sau mốc git gần nhất) — "
+                    f"{dong.strip()[:70]}"
+                )
+        # §11: cổng phải NHÌN THẤY thứ nó canh. Văn bản có lời gọi mà bộ đọc
+        # lệnh không thấy dòng nào nghĩa là lệnh đã rơi ra ngoài khối ```, hoặc
+        # bị ngắt dòng kiểu mà bộ nối không hiểu — guard xanh vô nghĩa.
+        assert thay_apply, (
+            f"{ten}: văn bản có `scripts/nginx-apply.sh` mà bộ đọc lệnh không "
+            "thấy lời gọi nào — guard đang canh hụt, không phải tài liệu đã sạch"
+        )
+        da_soi += 1
+    assert da_soi == len(_TAI_LIEU_CHAM_PRODUCTION), (
+        f"chỉ soi được {da_soi}/{len(_TAI_LIEU_CHAM_PRODUCTION)} tài liệu chạm "
+        "production — một tên trong _TAI_LIEU_CHAM_PRODUCTION đã bị đổi/xoá, "
+        "hoặc lời gọi `nginx-apply.sh` đã biến mất khỏi tệp; guard đang canh hụt"
+    )
+    assert not pham, (
+        "lời gọi `nginx-apply.sh` không có `build nginx` đứng trước: apply sẽ "
+        "dựng candidate từ ảnh CŨ, đo ảnh CŨ, áp ảnh CŨ và báo ĐẠT:\n  "
+        + "\n  ".join(pham)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cổng phải là LỆNH CHẶN, không phải một dòng chữ
+# ---------------------------------------------------------------------------
+_THOAT_SAU_HOAC = re.compile(r"\bexit\b\s*(?P<ma>[^\s;}\"']*)")
+
+
+def _la_lenh_chan(dong: str) -> bool:
+    """Nhánh THẤT BẠI của dòng này có thoát KHÁC 0 không.
+
+    Bốn hình dạng đều trượt, và cả bốn đều đã gặp ngoài đời:
+
+      * `A && echo "…"` — chỉ chạy khi A THÀNH CÔNG. A hỏng thì im lặng hoàn
+        toàn. Đây đúng là ca `valid-until-phai-la-lenh-chan`: cổng in đủ chữ để
+        người đọc tin là đã chặn, trong khi nó chưa chặn lần nào (approval trễ
+        17 giây vì thế).
+      * `A || echo "…"` — có nhánh hỏng, nhưng nhánh đó IN RỒI ĐI TIẾP. Tinh vi
+        hơn hẳn ca `&&` vì nó *trông* như một cổng.
+      * `A` trần — chỉ đặt mã thoát cho dòng CUỐI của script.
+      * `A || { …; exit 0; }` — dừng và báo THÀNH CÔNG. Tệ hơn không có cổng,
+        vì nó dừng đúng lúc rồi in ra màu xanh.
+
+    Cố ý KHÔNG nhận `git status --porcelain` làm cổng dù nó là dòng người ta hay
+    viết ra: nó chỉ in. Toàn bộ quyết định ② của owner nằm ở chỗ ấy.
+    """
+    if "||" not in dong:
+        return False
+    sau = dong.split("||", 1)[1]
+    m = _THOAT_SAU_HOAC.search(sau)
+    if m is None:
+        return False
+    return m.group("ma") != "0"
+
+
+# Những phép hỏi TRẠNG THÁI mà tài liệu dùng làm cổng. Mỗi mẫu ở đây là một câu
+# hỏi mà câu trả lời "không đạt" PHẢI dừng quy trình.
+#
+# `git rev-parse` cố ý hẹp lại thành `--verify`: `git rev-parse HEAD` ở §5.4 là
+# một phép ĐỌC để ghi manifest, không phải cổng, và bắt nó `|| exit 1` là vô
+# nghĩa. `git status` KHÔNG có mặt — nó chỉ in, và đó là cả vấn đề.
+_CONG_TRANG_THAI_CAY = [
+    (
+        re.compile(r"\bgit\s+diff\s+--quiet\b"),
+        "so cây làm việc với một mốc git",
+    ),
+    (
+        re.compile(r"\bgit\s+ls-files\s+--others\b"),
+        "hỏi tệp untracked (thứ `git diff` KHÔNG BAO GIỜ thấy)",
+    ),
+    (
+        re.compile(r"\bgit\s+rev-parse\s+--verify\b"),
+        "kiểm một ref còn phân giải được",
+    ),
+    (
+        re.compile(r"\bdocker\s+image\s+inspect\b[^\n]*\{\{\.Id\}\}"),
+        "đối chiếu image ID thật",
+    ),
+]
+
+# Sàn §11: guard phải NHÌN THẤY thứ nó canh. Xoá sạch cổng rồi guard xanh vì
+# "không có dòng nào vi phạm" là đúng cái bẫy mà mục này tồn tại để chặn.
+_SAN_CONG_TRANG_THAI = 10
+
+
+def test_moi_cong_trang_thai_deu_la_lenh_chan_khong_phai_dong_chu():
+    """Đổi `|| { … exit 1; }` thành `&& echo …` (hoặc `|| echo …`) phải ĐỎ.
+
+    Owner chốt vòng 2: điều kiện trước Step 7 và cổng git-status phải là **lệnh
+    chặn thật**, không phải chú thích và không phải một dòng in. Test này canh
+    đúng HÌNH DẠNG ấy, tách khỏi câu hỏi "cổng có tồn tại không" (test kế bên)
+    để mỗi bất biến có một đột biến giết riêng.
+    """
+    pham = []
+    da_thay = 0
+    for ten in _TAI_LIEU_CHAM_PRODUCTION:
+        d = _GOC / ten
+        if not d.is_file():
+            continue
+        for so, dong in _lenh_ghep_trong_tai_lieu(d):
+            for mau, mo_ta in _CONG_TRANG_THAI_CAY:
+                if not mau.search(dong):
+                    continue
+                da_thay += 1
+                if not _la_lenh_chan(dong):
+                    pham.append(
+                        f"{ten}:{so}: cổng «{mo_ta}» KHÔNG chặn — nhánh thất "
+                        f"bại không `exit` khác 0: {dong.strip()[:100]}"
+                    )
+    assert da_thay >= _SAN_CONG_TRANG_THAI, (
+        f"chỉ thấy {da_thay} cổng trạng thái trong tài liệu chạm production "
+        f"(sàn {_SAN_CONG_TRANG_THAI}) — cổng đã bị xoá bớt, hoặc bộ đọc lệnh "
+        "không còn nhìn thấy chúng. Guard xanh ở đây là xanh vô nghĩa."
+    )
+    assert not pham, (
+        "cổng chỉ IN ra chứ không chặn — quy trình chạy tiếp như thể đã đạt:\n  "
+        + "\n  ".join(pham)
+    )
+
+
+# `build nginx` dựng từ CÂY LÀM VIỆC. Cây bẩn ⇒ phần trôi lên thẳng production.
+# Nên mọi `build nginx` phải có CẢ HAI cổng đứng trước, vì chúng mù ở hai chỗ
+# khác nhau: `git diff` không thấy untracked, `git ls-files --others` không thấy
+# tệp được theo dõi đã bị sửa.
+_CAP_CONG_TRUOC_BUILD = [
+    (
+        re.compile(r"\bgit\s+diff\s+--quiet\b"),
+        "`git diff --quiet <mốc> -- nginx/ …` (tệp được theo dõi bị sửa/xoá)",
+    ),
+    (
+        re.compile(r"\bgit\s+ls-files\s+--others\b[^\n]*nginx/"),
+        "`git ls-files --others -- nginx/` (tệp untracked — `COPY` nhặt, "
+        "`git diff` không thấy)",
+    ),
+]
+
+# CỐ Ý chỉ một tệp. `PRODUCTION_DEPLOY_GUIDE.md:149` cũng có `build nginx` +
+# `nginx-apply.sh` mà KHÔNG có cổng cây sạch — đã đo. Nó nằm ngoài phạm vi sửa
+# của đợt này (một lát khác đang giữ tệp), nên thay vì nới luật cho vừa hiện
+# trạng, nợ được ghim bằng một phép kiểm NGƯỢC ở cuối test: ngày cổng được thêm
+# vào guide, CI đỏ và bảo đưa tên nó sang danh sách trên.
+_TAI_LIEU_BAT_BUOC_CONG_CAY_SACH = [
+    "Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md",
+]
+_TAI_LIEU_CON_NO_CONG_CAY_SACH = [
+    "Documents/PRODUCTION_DEPLOY_GUIDE.md",
+]
+
+
+def test_moi_build_nginx_deu_co_cong_cay_sach_chan_truoc():
+    """Xoá cổng mà giữ `build nginx` = dựng cây bẩn lên production, im lặng.
+
+    Hiệu lực của một cổng hết khi gặp MỘT trong hai mốc — cùng luật với
+    `test_moi_loi_goi_nginx_apply_deu_co_build_nginx_dung_truoc`:
+      * hết khối ``` (khối là đơn vị người trực chép ra chạy);
+      * một lệnh git VIẾT LẠI CÂY (`_GIT_VIET_LAI_CAY`) — sau `git checkout
+        "$PRE_SHA" -- nginx/` thì phép so cũ nói về một cây không còn tồn tại.
+
+    Vế thứ hai chính là chỗ HAI LUỒNG tách nhau, và guard cố ý KHÔNG ép chúng
+    dùng chung một lệnh: luồng bình thường so với `HEAD`, luồng rollback (sau
+    `git checkout`) so với `$PRE_SHA`. Ép `HEAD` vào Step 5 sẽ đỏ ở đúng ca đang
+    làm đúng, và người trực sẽ học cách bỏ qua cổng.
+    """
+    pham = []
+    da_soi = 0
+    for ten in _TAI_LIEU_BAT_BUOC_CONG_CAY_SACH:
+        d = _GOC / ten
+        assert d.is_file(), f"{ten}: không còn tệp — guard mất đối tượng"
+        khoi_cua = _chi_so_khoi(d)
+        # (chỉ số cổng) ➜ {khối đã có cổng ấy còn hiệu lực}
+        con_hieu_luc: dict[int, set[int]] = {i: set() for i in range(len(_CAP_CONG_TRUOC_BUILD))}
+        thay_build = 0
+        for so, dong in _lenh_ghep_trong_tai_lieu(d):
+            khoi = khoi_cua.get(so)
+            if _GIT_VIET_LAI_CAY.search(_bo_chuoi(dong)):
+                for tap in con_hieu_luc.values():
+                    tap.clear()
+            for i, (mau, _) in enumerate(_CAP_CONG_TRUOC_BUILD):
+                if mau.search(dong) and _la_lenh_chan(dong):
+                    con_hieu_luc[i].add(khoi)
+            if not _la_build_nginx(dong):
+                continue
+            thay_build += 1
+            for i, (_, ten_cong) in enumerate(_CAP_CONG_TRUOC_BUILD):
+                if khoi not in con_hieu_luc[i]:
+                    pham.append(
+                        f"{ten}:{so}: `build nginx` chạy mà chưa có cổng CHẶN "
+                        f"{ten_cong} nào còn hiệu lực đứng trước (cùng khối "
+                        f"```, sau mốc git gần nhất)"
+                    )
+        assert thay_build, (
+            f"{ten}: không thấy `build nginx` nào — guard đang canh hụt, không "
+            "phải tài liệu đã sạch"
+        )
+        da_soi += 1
+    assert da_soi == len(_TAI_LIEU_BAT_BUOC_CONG_CAY_SACH)
+    assert not pham, (
+        "`build nginx` dựng từ CÂY LÀM VIỆC; thiếu cổng là đưa phần trôi lên "
+        "production giữa cửa sổ đóng băng:\n  " + "\n  ".join(pham)
+    )
+
+    # Ratchet cho món nợ đã đo, không phải một ngoại lệ vĩnh viễn.
+    for ten in _TAI_LIEU_CON_NO_CONG_CAY_SACH:
+        d = _GOC / ten
+        if not d.is_file():
+            continue
+        co_cong = any(
+            mau.search(dong) and _la_lenh_chan(dong)
+            for so, dong in _lenh_ghep_trong_tai_lieu(d)
+            for mau, _ in _CAP_CONG_TRUOC_BUILD
+        )
+        assert not co_cong, (
+            f"{ten} nay ĐÃ có cổng cây sạch dạng lệnh chặn — chuyển tên nó từ "
+            "_TAI_LIEU_CON_NO_CONG_CAY_SACH sang _TAI_LIEU_BAT_BUOC_CONG_CAY_SACH "
+            "để luật áp thật. Đây là tin tốt, không phải hồi quy."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Step 7 (mở băng trong rollback): KHÔNG build lại ⇒ phải chứng minh đủ NĂM điều
+# ---------------------------------------------------------------------------
+# Owner chốt phương án B: không build lần hai giữa cửa sổ rollback. Giá của
+# quyết định ấy là năm tiền đề phải còn đúng, và chúng phải được kiểm bằng LỆNH
+# THOÁT. Danh sách dưới đây là đúng năm điều owner nêu, giữ nguyên số hiệu để
+# đọc chéo được với chú thích trong runbook.
+_NAM_PHEP_KIEM_STEP7 = [
+    (
+        "①",
+        re.compile(r"\bgit\s+rev-parse\s+--verify\b[^\n]*PRE_SHA"),
+        "$PRE_SHA còn phân giải được thành commit",
+    ),
+    (
+        "②",
+        re.compile(r"\bgit\s+diff\s+--quiet\s+\"?\$\{?PRE_SHA\}?[^\n]*nginx/"),
+        "nginx/ vẫn khớp $PRE_SHA (phép so của LUỒNG ROLLBACK — không phải HEAD)",
+    ),
+    (
+        "③",
+        re.compile(r"\bgit\s+ls-files\s+--others\b[^\n]*nginx/"),
+        "không có tệp untracked dưới nginx/",
+    ),
+    (
+        "④",
+        re.compile(r"\bgit\s+diff\s+--quiet\s+HEAD\b[^\n]*docker-compose\.yml"),
+        "docker-compose.yml không trôi (phép so của LUỒNG BÌNH THƯỜNG — HEAD)",
+    ),
+    (
+        "⑤",
+        re.compile(r"\bdocker\s+image\s+inspect\b[^\n]*\{\{\.Id\}\}"),
+        "ảnh qlts-nginx:local vẫn ĐÚNG ID đã ghi ở Step 5",
+    ),
+]
+
+# Dòng GHI LẠI image ID ở Step 5. Không có nó thì điều ⑤ không có gì để đối
+# chiếu, và một phép so với biến rỗng sẽ... vẫn xanh nếu viết ẩu.
+_GHI_IMAGE_ID = re.compile(
+    r"^(?P<bien>[A-Za-z_][A-Za-z0-9_]*)=\$\(\s*docker\s+image\s+inspect\b[^)]*\{\{\.Id\}\}"
+)
+
+
+def test_step7_khong_build_lai_thi_phai_chung_minh_du_nam_dieu():
+    """Phương án B chỉ đúng khi năm tiền đề của nó được KIỂM, không được TIN.
+
+    Vùng được soi là đoạn giữa lời gọi `nginx-apply.sh` của Step 5 và lời gọi
+    của Step 7 — cố ý neo vào HAI lời gọi cuối chứ không vào số dòng: một đột
+    biến dời nguyên cụm năm phép kiểm lên ngay sau `build nginx` của Step 5
+    (giữ nguyên từng ký tự, tổng số dòng không đổi) sẽ làm chúng vô nghĩa với
+    Step 7, và cách neo này bắt được đúng ca ấy.
+
+    Vòng 1 đã ghi rằng ca "người trực nhảy thẳng vào Step 7" nằm NGOÀI phạm vi
+    guard. Nay nó có điều kiện chặn thật nên được đưa VÀO: điều ⑤ chính là thứ
+    bắt được ca đó — shell mới thì `$NGINX_IMG_SAU_BUILD` rỗng và cổng đỏ.
+    """
+    d = _RUNBOOK
+    assert d.is_file(), "không còn RUNBOOK — guard mất đối tượng"
+    khoi_cua = _chi_so_khoi(d)
+    lenh = _lenh_ghep_trong_tai_lieu(d)
+
+    # Neo vào `docker-compose.rollback.yml`, KHÔNG vào `rollback-preflight.sh`:
+    # preflight còn được nhắc ở §5.4 (khối khác) nên nó nhận diện ra HAI khối —
+    # đã đo, guard đỏ ngay lần chạy đầu. Tệp override rollback thì chỉ xuất hiện
+    # như một LỆNH ở đúng §8.1.
+    khoi_81 = {
+        khoi_cua.get(so)
+        for so, dong in lenh
+        if "docker-compose.rollback.yml" in dong
+    }
+    assert len(khoi_81) == 1, (
+        "không xác định được DUY NHẤT khối §8.1 (khối có lệnh dùng "
+        f"`docker-compose.rollback.yml`): {sorted(khoi_81)} — guard đang canh hụt"
+    )
+    khoi = khoi_81.pop()
+    trong_khoi = [(so, dong) for so, dong in lenh if khoi_cua.get(so) == khoi]
+
+    apply_o = [so for so, dong in trong_khoi if "scripts/nginx-apply.sh" in dong]
+    assert len(apply_o) >= 2, (
+        f"khối §8.1 chỉ có {len(apply_o)} lời gọi `nginx-apply.sh` — không neo "
+        "được vùng Step 5 ➜ Step 7; guard đang canh hụt"
+    )
+    dau, cuoi = apply_o[-2], apply_o[-1]
+    vung = [(so, dong) for so, dong in trong_khoi if dau < so < cuoi]
+    assert vung, f"vùng Step 5 ➜ Step 7 (dòng {dau}..{cuoi}) rỗng — canh hụt"
+
+    thieu = []
+
+    # Phương án B: KHÔNG build lần hai. Đổi sang A là một quyết định của owner,
+    # và khi đó chính test này phải đổi cùng lúc với chú thích Step 7.
+    build_lai = [so for so, dong in vung if _la_build_nginx(dong)]
+    if build_lai:
+        thieu.append(
+            f"vùng Step 5 ➜ Step 7 có `build nginx` ở dòng {build_lai} — owner "
+            "chốt phương án B (KHÔNG build lần hai). Đổi phương án thì sửa cả "
+            "chú thích Step 7 và test này, đừng sửa một bên"
+        )
+
+    for nhan, mau, mo_ta in _NAM_PHEP_KIEM_STEP7:
+        khop = [(so, dong) for so, dong in vung if mau.search(dong)]
+        if not khop:
+            thieu.append(f"{nhan} VẮNG MẶT: {mo_ta}")
+        elif not any(_la_lenh_chan(dong) for _, dong in khop):
+            thieu.append(
+                f"{nhan} có mặt nhưng KHÔNG CHẶN (chỉ in ra rồi đi tiếp): "
+                f"{mo_ta} — {khop[0][1].strip()[:90]}"
+            )
+
+    # Điều ① còn một vế: biến rỗng nghĩa là shell này KHÔNG phải shell đã chạy
+    # Step 5. `git diff --quiet "" -- nginx/` khi ấy so với cây làm việc và
+    # KHÔNG đỏ — một cổng xanh giả đúng lúc cần nó nhất.
+    if not any(
+        re.search(r"\[\s*-n\s+\"\$\{?PRE_SHA", dong) and _la_lenh_chan(dong)
+        for _, dong in vung
+    ):
+        thieu.append(
+            "① thiếu vế `[ -n \"$PRE_SHA\" ] || … exit`: mở shell mới giữa "
+            "Step 5 và Step 7 thì biến rỗng và mọi phép so sau đó xanh giả"
+        )
+
+    # Cross-link: điều ⑤ phải đối chiếu với ĐÚNG biến mà Step 5 đã ghi.
+    ghi = [
+        (so, m)
+        for so, dong in trong_khoi
+        if so < dau
+        for m in [_GHI_IMAGE_ID.match(dong.strip())]
+        if m
+    ]
+    if not ghi:
+        thieu.append(
+            "Step 5 KHÔNG ghi lại image ID sau `build nginx` "
+            "(`VAR=$(docker image inspect --format '{{.Id}}' …)`) — điều ⑤ "
+            "không còn gì để đối chiếu"
+        )
+    else:
+        so_ghi, m = ghi[-1]
+        bien = m.group("bien")
+        dong_ghi = dict(trong_khoi)[so_ghi]
+        if not _la_lenh_chan(dong_ghi):
+            thieu.append(
+                f"Step 5:{so_ghi}: dòng ghi image ID không chặn — `docker image "
+                "inspect` hỏng thì biến rỗng và Step 7 so với rỗng"
+            )
+        if not any(
+            mau.search(dong) and bien in dong and _la_lenh_chan(dong)
+            for _, mau, _ in _NAM_PHEP_KIEM_STEP7[-1:]
+            for _, dong in vung
+        ):
+            thieu.append(
+                f"điều ⑤ không đối chiếu với biến `{bien}` mà Step 5 ghi — một "
+                "phép `docker image inspect` không so với gì thì chỉ là một "
+                "dòng log"
+            )
+
+    assert not thieu, (
+        "Step 7 bỏ `build nginx` (phương án B) mà KHÔNG chứng minh đủ tiền đề — "
+        "ảnh được áp có thể không còn là ảnh Step 5 đã dựng và đã đo:\n  "
+        + "\n  ".join(thieu)
     )
 
 
