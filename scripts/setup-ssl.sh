@@ -66,6 +66,146 @@ COMPOSE=(docker compose -f docker-compose.yml --env-file "$_ENV_FILE" "${_EXTRA[
 log "Setting up SSL for: $DOMAIN"
 log "Certbot email: $EMAIL"
 
+# =============================================================================
+# Step 0: MỌI ẢNH CẦN SAU ĐIỂM DỪNG NGINX PHẢI CÓ SẴN — TRƯỚC cổng 80, TRƯỚC ACME
+# =============================================================================
+# Bản trước KHÔNG build bao giờ (`grep -c build scripts/setup-ssl.sh` = 0).
+#
+# Thứ hỏng vì thế KHÔNG phải hạn mức Let's Encrypt — `--keep-until-expiring` ở
+# Step 3 đã lo đúng việc đó, chạy lại không đốt thêm suất duplicate-certificate.
+# Thứ hỏng là ĐƯỜNG LÙI:
+#
+#   chứng thư đã cấp (Step 3) · bootstrap đã gỡ (Step 4) · Step 5 đỏ vì ảnh
+#   nginx không có hoặc đã cũ · `_DA_BAN_GIAO` còn 0 ⇒ trap bật lại container
+#   nginx CŨ. Trên một VPS MỚI thì KHÔNG CÓ container cũ nào — `_NGINX_DANG_CHAY`
+#   bằng 0 nên trap lặng lẽ không làm gì. Kết quả: máy chủ không có nginx nào
+#   chạy, cổng 443 câm, và người vận hành phải tự đoán ra rằng thứ còn thiếu là
+#   một lệnh `compose build` mà không script nào nhắc tới.
+#
+# Vì sao BUILD chứ không phải một phép thẩm định thuần: trên VPS mới ảnh
+# `qlts-nginx:local` CHƯA TỒN TẠI. Một phép kiểm chỉ biết báo đỏ sẽ chặn luôn
+# cả lần cấp chứng thư đầu tiên — đúng cái việc script này sinh ra để làm.
+# `build` vừa chữa ca ấy, vừa đặt CẢ BA container nginx lên CÙNG MỘT ảnh:
+# `nginx-bootstrap` (Step 2), rồi `nginx-candidate` + `nginx` trong
+# `nginx-apply.sh` (Step 5) đều `<<: *nginx-base` ⇒ cùng `build: ./nginx` ⇒ cùng
+# `image: qlts-nginx:local`. Không build thì `up -d` ở Step 5 là no-op trên ảnh
+# cũ: template mới KHÔNG lên mà mọi thứ vẫn trả 0.
+#
+# --- VÌ SAO KHÔNG CHỈ NGINX (vòng 2) -----------------------------------------
+# Danh sách dưới đây KHÔNG suy từ "bốn service ứng dụng" mà suy từ những service
+# THẬT SỰ được khởi động sau điểm dừng nginx. Đọc ngược từ mã:
+#
+#   Step 2  `--profile bootstrap up -d --no-deps nginx-bootstrap`  → qlts-nginx:local
+#   Step 3  `--profile production run --rm --no-deps … certbot`    → certbot/certbot
+#   Step 5  nginx-apply.sh, `QLTS_NGINX_NO_DEPS=0`:
+#           Nhịp 0 `up -d --wait postgres redis backend frontend`
+#                  → postgres:16-alpine · redis:7-alpine · ảnh build backend · frontend
+#           Nhịp 1 `--profile candidate up -d … nginx-candidate` → qlts-nginx:local
+#           Nhịp 3 `--profile production up -d nginx`            → qlts-nginx:local
+#
+# `celery-worker` / `celery-beat` KHÔNG có mặt trong danh sách ấy: không lệnh nào
+# trong hai script khởi động chúng, và không `depends_on` nào dẫn tới chúng
+# (chính CHÚNG mới `depends_on: backend`, chiều ngược lại). Nên chúng KHÔNG được
+# build ở đây — mở rộng máy móc sang "bốn service ứng dụng" là bắt một VPS mới
+# trả tiền cho hai ảnh không ai dùng trong luồng này.
+#
+# Hai nhóm, hai cách xử lý khác nhau:
+#   * BUILD  — `nginx`, `backend`, `frontend`: ảnh của ta, dựng từ cây nguồn.
+#              Thiếu chúng thì `up -d` ở Nhịp 0/Nhịp 3 sẽ TỰ build — đúng lúc
+#              cổng 80 đã nhường và chứng thư đã cấp. Compose build ngầm trong
+#              `up` KHÔNG hiện ra như một lệnh riêng, nên người vận hành chỉ
+#              thấy `up` treo mười phút rồi đỏ vì một lý do chẳng liên quan.
+#   * PULL   — `certbot`, `postgres`, `redis`: ảnh upstream, không có `build:`
+#              nào để dựng. `--policy missing` nên đã có cục bộ thì không chạm
+#              mạng. Không kéo trước thì lần chạm registry đầu tiên rơi vào
+#              GIỮA lúc bootstrap đang giữ cổng 80 — mạng hỏng ở đó là hỏng với
+#              một nginx đã bị dừng.
+#
+# Đặt ở ĐÂY chứ không ở Step 5: sau certbot thì mọi bản vá đều là vá nửa vời —
+# cổng 80 đã bị lấy, nginx đang phục vụ đã bị dừng, chứng thư đã cấp.
+#
+# `COMPOSE` (khai ở trên) đã ghim sẵn `-f docker-compose.yml --env-file …`;
+# thiếu `-f` là Compose tự nạp `docker-compose.override.yml` của DEV.
+log "Step 0: xác minh cây nguồn, dựng ảnh, kéo ảnh mượn (trước khi chạm cổng 80)..."
+
+# --- 0a. Cây nào sẽ được build? ----------------------------------------------
+# `build` dựng từ CÂY LÀM VIỆC, không từ một SHA. Cây đã trôi ⇒ Step 0 lặng lẽ
+# đưa phần trôi ấy lên production và ảnh không còn khớp commit nào cả.
+#
+# Soi ĐÚNG những đường thật sự đi vào ba ảnh sắp build, không hơn: mỗi phần tử
+# của `_DUONG_CAY_NGUON` là một `build.context` trong `docker-compose.yml`
+#   nginx           → services.nginx.build.context          = ./nginx
+#   Backend_FastAPI → services.backend.build.context        = ./Backend_FastAPI
+#   frontend        → services.frontend.build.context       = ./frontend
+# cộng thêm chính `docker-compose.yml` (nó khai context, tag ảnh, build args,
+# biến render — đổi nó là đổi ảnh mà không đổi một byte nào trong context).
+# `test_cong_cay_nguon_phu_dung_cac_build_context` khoá danh sách này vào
+# compose theo CẢ HAI CHIỀU, nên đổi `build.context` mà quên cổng là test đỏ.
+#
+# Soi cả cây thì mọi sửa đổi vô can cũng làm cổng đỏ, mà một cổng đỏ oan là một
+# cổng sẽ bị tắt. Chiều ngược lại — soi hụt — thì tệ hơn: nó xanh.
+#
+# ⚠️ Cổng này CỐ Ý over-inclusive ở một chỗ: `.dockerignore` loại bớt tệp khỏi
+# build context (vd `Backend_FastAPI/tests/`), nên sửa một tệp bị loại vẫn làm
+# cổng đỏ dù ảnh không đổi. Đọc `.dockerignore` cho đúng (phủ định, ký tự đại
+# diện, thứ tự) là một bộ phân tích riêng; đoán sai theo chiều "bỏ qua" là mở
+# một lỗ IM LẶNG. Fail-closed chọn phía ồn ào.
+#
+# Tệp CHƯA THEO DÕI (`??`) cũng tính: `COPY` của Docker đọc cả tệp chưa commit,
+# và `nginx/conf.d/default.conf` nằm ngoài git CHÍNH LÀ thứ đã giữ production
+# sống nhiều tuần rồi giết nó khi cutover từ checkout sạch (12-08-2026).
+#
+# CỐ Ý KHÔNG thêm biến kiểu `SHA_MONG_DOI` của `deploy.sh`: ở đó giá trị đến từ
+# `github.sha` của run, tức có một bên sinh ra nó. Script này chạy TAY trên VPS
+# mới, không ai biết trước SHA mong đợi — một biến không ai đặt là một cổng
+# không bao giờ đóng. SHA vẫn được IN ra để vào log vận hành.
+#
+# BREAK-GLASS `QLTS_SSL_KIEM_CAY_NGUON=0`: đây là THAO TÁC CÓ CHỦ ĐÍCH CỦA
+# OWNER, không phải đường đi thường. Nó nói "tôi biết trên đĩa có thứ chưa
+# commit và tôi MUỐN chính thứ đó lên production" — ca thật duy nhất là vá nóng
+# khi không push được. Biến này RIÊNG cho cổng cây nguồn: nó không tắt kèm bất
+# cứ phép kiểm nào khác, và không phép kiểm nào khác tắt được nó. Dùng chung một
+# cờ cho hai hàng rào là cách một hàng rào bị gỡ mà không ai định gỡ nó.
+_DUONG_CAY_NGUON=(nginx Backend_FastAPI frontend docker-compose.yml)
+
+if [ "${QLTS_SSL_KIEM_CAY_NGUON:-1}" = "1" ]; then
+    if ! _SHA_SE_BUILD=$(git rev-parse HEAD 2>/dev/null); then
+        error "không đọc được HEAD — từ chối build khi chưa biết mình sắp build cái gì. Đây có phải một checkout git không? Nếu CỐ Ý chạy ngoài git, đặt QLTS_SSL_KIEM_CAY_NGUON=0."
+    fi
+    if ! _CAY_BAN=$(git status --porcelain -- "${_DUONG_CAY_NGUON[@]}" 2>/dev/null); then
+        error "không đọc được trạng thái cây nguồn (git status) — từ chối build."
+    fi
+    if [ -n "$_CAY_BAN" ]; then
+        error "cây nguồn của các ảnh sắp build đã TRÔI khỏi $_SHA_SE_BUILD:
+$_CAY_BAN
+       Step 0 sẽ build CHÍNH những thay đổi đang nằm trên đĩa này lên production. Commit hoặc stash trước, hoặc đặt QLTS_SSL_KIEM_CAY_NGUON=0 nếu đó đúng là điều bạn muốn."
+    fi
+    log "  cây nguồn: $_SHA_SE_BUILD (${_DUONG_CAY_NGUON[*]} — sạch)"
+else
+    warn "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    warn "!!  BREAK-GLASS: QLTS_SSL_KIEM_CAY_NGUON=0 — CỔNG CÂY NGUỒN ĐÃ TẮT  !!"
+    warn "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    warn "Đây là THAO TÁC CÓ CHỦ ĐÍCH CỦA OWNER, không phải đường đi thường."
+    warn "Ảnh nginx/backend/frontend sắp lên production sẽ mang MỌI sửa đổi đang"
+    warn "nằm trên đĩa máy này — kể cả tệp CHƯA COMMIT và tệp CHƯA THEO DÕI — và"
+    warn "sẽ KHÔNG khớp commit nào. Không có cách nào dựng lại đúng ảnh ấy về sau."
+    warn "Ghi lại vào sổ vận hành: ai bật, lúc nào, vì việc gì."
+fi
+
+"${COMPOSE[@]}" --profile production build nginx backend frontend \
+    || error "không build được ảnh (nginx/backend/frontend) — DỪNG tại đây. Chưa dừng nginx nào, chưa chạm cổng 80, chưa gọi certbot: không có gì phải khôi phục. Đọc log build phía trên."
+
+# --- 0c. Ảnh MƯỢN phải có mặt trước điểm dừng --------------------------------
+# `--policy missing`: có sẵn cục bộ thì không chạm mạng, thiếu thì kéo NGAY BÂY
+# GIỜ. Ba service này không có `build:` nào — `build` ở trên không đụng tới
+# chúng, và Compose cũng không tự dựng được chúng. Lần chạm registry đầu tiên
+# vì thế sẽ rơi vào Step 3 (certbot) hoặc Nhịp 0 của nginx-apply (postgres,
+# redis) — tức SAU khi nginx đang phục vụ đã bị dừng và cổng 80 đã nhường.
+# `--profile production` là bắt buộc để `certbot` được nhìn thấy (postgres và
+# redis không khai profile nên luôn có mặt).
+"${COMPOSE[@]}" --profile production pull --policy missing certbot postgres redis \
+    || error "không bảo đảm được các ảnh mượn (certbot/postgres/redis) — DỪNG tại đây. Chưa dừng nginx nào, chưa chạm cổng 80, chưa gọi certbot: không có gì phải khôi phục."
+
 _don_bootstrap() {
     "${COMPOSE[@]}" --profile bootstrap rm -sfv nginx-bootstrap >/dev/null 2>&1 || true
 }
