@@ -12,7 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
+import { cn, resolveSafeUrl } from "@/lib/utils";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { PageHeader } from "@/components/layouts/PageHeader";
 import { Input } from "@/components/ui/input";
@@ -441,8 +441,8 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
                           {/* Content */}
                           <div className="min-w-0 flex-1 space-y-2">
                             <div className="flex items-start justify-between gap-4">
-                              {notification.link ? (
-                                <Link href={notification.link} className="flex-1">
+                              {resolveSafeUrl(notification.link) ? (
+                                <Link href={resolveSafeUrl(notification.link) ?? "#"} className="flex-1">
                                   {notificationContent}
                                 </Link>
                               ) : (
