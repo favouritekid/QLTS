@@ -17,6 +17,7 @@ import structlog
 from fastapi import (
     APIRouter,
     Depends,
+    HTTPException,
     Request,
     status,
 )
@@ -24,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
 from app.core.deps import CasbinAuth  # Phase 2.2
+from app.core.event_catalog import is_safe_notification_link
 from app.services.notification_dispatcher import _all_role_rooms, safe_dispatch
 from app.core.events import SystemEvents
 
@@ -84,6 +86,43 @@ async def create_system_alert(
     }
     ```
     """
+    # 🔒 D8-17 — CHẶN Ở NGAY CỬA VÀO, không chỉ ở link đã lưu.
+    #
+    # ``render_link`` gác ``notification.link`` nên cột ấy luôn sạch. Nhưng
+    # CÙNG một ``action_url`` còn đi ra ngoài qua HAI đường KHÁC, cả hai đều
+    # mang chuỗi THÔ, không qua vị từ nào ở backend:
+    #
+    #   1. ``_emit_domain_event`` phát nguyên ``payload`` qua Socket.IO tới
+    #      toàn bộ ma trận role room ⇒ frontend
+    #      ``SocketHandler.tsx`` đọc ``data.action_url`` và gán thẳng vào
+    #      ``window.location.href``.
+    #   2. ``notification.data`` (dispatcher trộn nguyên payload vào) ⇒
+    #      ``GET /notifications`` và sự kiện socket ``notification``.
+    #
+    # Chặn ở mỗi sink là bốn nhánh phải nhớ; chặn ở ingress là MỘT. Tầng
+    # chủ sở hữu của bất biến "action_url do người dùng nhập phải là đường
+    # nội bộ" là ĐÚNG chỗ này — nơi chuỗi không tin cậy bước vào hệ thống.
+    # ``render_link`` vẫn giữ nguyên vai trò phòng thủ chiều sâu cho mọi
+    # event khác.
+    #
+    # Hành vi: TỪ CHỐI to tiếng (400). KHÔNG sửa đầu vào thành ``/``,
+    # KHÔNG âm thầm bỏ link. Chuỗi được KIỂM chính là chuỗi được ĐƯA vào
+    # payload — không cắt, không chuẩn hoá ở giữa.
+    #
+    # ⚠️ ĐỔI HỢP ĐỒNG, ghi rõ: trước bản vá endpoint trả 201 cho MỌI
+    # ``action_url`` (kể cả ``javascript:``/``//evil``) rồi lặng lẽ bỏ link
+    # trong khi vẫn phát chuỗi thô lên socket. Nay ``action_url`` không đạt
+    # ⇒ 400 và KHÔNG có thông báo nào được tạo.
+    if action_url not in (None, "") and not is_safe_notification_link(action_url):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "action_url phải là đường dẫn nội bộ bắt đầu bằng '/' "
+                "(không '//', không scheme, không backslash, không ký tự "
+                "điều khiển, không khoảng trắng bao ngoài)."
+            ),
+        )
+
     # ✅ NOTIFICATION 2.0: Dispatch SYSTEM_ALERT.
     # SYSTEM_ALERT is catalog-sensitive; admin-triggered broadcast must
     # pass the full role matrix explicitly (no implicit all-users fanout).
