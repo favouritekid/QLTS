@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from string import Template
 from typing import Dict, List, Literal, Optional
+from urllib.parse import urlsplit
 
 from app.core.events import SystemEvents
 
@@ -158,22 +159,154 @@ _SYSTEM_RESOLVERS = ("all_users", "all_admins", "specific_users")
 _FINANCE_RESOLVERS = ("specific_users", "all_admins", "unit_managers")
 
 
+# ---------------------------------------------------------------------------
+# Notification link guard — MỘT vị từ, MỘT tầng chủ sở hữu
+# ---------------------------------------------------------------------------
+#
+# Hợp đồng (D8-11): chỉ chấp nhận đường NỘI BỘ bắt đầu bằng ``/``, KHÔNG
+# ``//``, và SAU CHUẨN HOÁ vẫn nội bộ.
+#
+# Vị từ này KHÔNG sửa đầu vào. Nó chỉ trả True/False. Đầu vào nguy hiểm
+# KHÔNG bị "vá" thành ``/`` và KHÔNG bị cắt bỏ âm thầm — mỗi người gọi tự
+# quyết định báo lỗi (router: HTTP 400) hay trả ``None`` (``render_link``).
+#
+# Ký tự bị CẤM ở MỌI vị trí, không chỉ hai đầu:
+#
+#   * C0 (U+0000..U+001F) và DEL (U+007F). Trình duyệt GỠ TAB/LF/CR ra khỏi
+#     URL TRƯỚC khi phân giải (WHATWG URL Standard, "basic URL parser" bỏ
+#     mọi ASCII tab/newline). Vì vậy ``/<TAB>/evil.example`` tới tay trình
+#     duyệt là ``//evil.example`` — protocol-relative, THOÁT origin. Phép
+#     kiểm cũ chỉ ``.strip()`` hai đầu nên nhận sai ca này.
+#   * ``\`` (backslash). Với scheme đặc biệt (http/https), trình duyệt coi
+#     ``\`` như ``/``: ``/\evil.example`` trở thành ``//evil.example``.
+#     Đường nội bộ hợp lệ không bao giờ cần backslash thô; cần thì dùng
+#     ``%5C``.
+#   * U+2028 / U+2029 — dấu kết dòng của JavaScript.
+# NOTE: viết bằng ``chr()`` có chủ ý — KHÔNG nhúng ký tự U+2028/U+2029 thô
+# vào mã nguồn. Ký tự thô ở đây vô hình với người đọc và dễ bị công cụ/diff
+# biến dạng; ``chr(0x2028)`` thì đọc ra được và không thể bị nuốt.
+_FORBIDDEN_LINK_CHARS: frozenset = frozenset(
+    [chr(c) for c in range(0x00, 0x20)]
+    + [chr(0x7F), chr(0x2028), chr(0x2029), chr(0x5C)]
+)
+
+
+# Định nghĩa "đoạn một chấm" / "đoạn hai chấm" lấy NGUYÊN VĂN từ WHATWG URL
+# Standard (mục "single-dot path segment" / "double-dot path segment"), KHÔNG
+# phải từ RFC 3986 — vì sink cuối là trình duyệt, và trình duyệt theo WHATWG.
+#
+# 🔴 KHÁC BIỆT ĐÃ TRẢ GIÁ: WHATWG coi ``%2e`` (không phân biệt hoa/thường) là
+# một dấu chấm, RFC 3986 thì không. ``urlsplit`` của Python cũng KHÔNG giải mã
+# ``%2e``. Bản vá đầu chỉ nhận diện dấu chấm THÔ ⇒ ``/%2e%2e//x`` lọt qua BE
+# trong khi ``resolveSafeUrl`` của #644 từ chối nó. Đo bằng Node v20.20.2,
+# nền ``https://qlts.example/notifications``:
+#
+#     /%2e%2e//x  → pathname "//x"      /%2e//x    → pathname "//x"
+#     /%2E%2E//x  → pathname "//x"      /.%2e//x   → pathname "//x"
+#     /%2e.//x    → pathname "//x"      /a/%2e%2e//x → pathname "//x"
+#     /%2e%2e/b   → pathname "/b"       /a/../b    → pathname "/b"
+#
+# Ranh giới đúng là "CHUẨN HOÁ XONG có thành ``//`` không", KHÔNG phải "có
+# chứa dấu chấm không" — luật sau vừa chặn oan ``/%2e%2e/b`` (chuẩn hoá ra
+# ``/b``, nội bộ hợp lệ) vừa không đóng được ca thật.
+#
+# ⚠️ ``%2f`` thì NGƯỢC LẠI: WHATWG **không** giải mã nó thành dấu phân đoạn.
+# Đo được: ``/a%2f%2fb`` → pathname ``/a%2f%2fb`` (một đoạn). Nên ở đây chỉ so
+# NGUYÊN một đoạn với các dạng dấu chấm, tuyệt đối không ``unquote`` cả chuỗi
+# — ``unquote`` sẽ biến ``%2f`` thành ``/`` và đẻ ra chặn oan.
+_SINGLE_DOT_SEGMENTS = frozenset((".", "%2e"))
+_DOUBLE_DOT_SEGMENTS = frozenset(("..", ".%2e", "%2e.", "%2e%2e"))
+
+
+def _remove_dot_segments(path: str) -> str:
+    """Khử đoạn một/hai chấm theo WHATWG URL cho phần PATH.
+
+    Chỉ dùng để RA QUYẾT ĐỊNH (xem ``_is_safe_relative_link``). Giá trị
+    chuẩn hoá này KHÔNG bao giờ được lưu hay phát đi — xem ghi chú "giá trị
+    nào được lưu" ở ``render_link``.
+
+    Ca đáng giá: ``/..//evil.example`` và ``/%2e%2e//evil.example`` đều khử
+    thành ``//evil.example`` ⇒ lộ ra là protocol-relative, phải chặn. Dấu
+    ``/`` cuối được giữ khi đoạn cuối là dấu chấm (``/a/..`` → ``/``).
+    """
+    segs = path.split("/")
+    out: List[str] = [""] if path.startswith("/") else []
+    for i, seg in enumerate(segs):
+        if i == 0 and path.startswith("/"):
+            continue  # đoạn rỗng mở đầu đã nằm sẵn trong ``out``
+        last = i == len(segs) - 1
+        lowered_seg = seg.lower()
+        if lowered_seg in _SINGLE_DOT_SEGMENTS:
+            if last:
+                out.append("")
+            continue
+        if lowered_seg in _DOUBLE_DOT_SEGMENTS:
+            if len(out) > 1:
+                out.pop()
+            if last:
+                out.append("")
+            continue
+        out.append(seg)
+    return "/".join(out)
+
+
 def _is_safe_relative_link(link: str) -> bool:
-    """Allow only same-origin relative app paths for notification links."""
-    if not link:
+    """Chỉ cho qua đường nội bộ cùng origin cho link thông báo.
+
+    KHÔNG tự ``strip()``. Người gọi phải đưa vào ĐÚNG chuỗi sẽ được lưu /
+    phát đi — nếu vị từ tự cắt khoảng trắng thì nó lại kiểm một chuỗi và
+    hệ thống phát một chuỗi khác. Chuỗi có khoảng trắng bao ngoài bị TỪ
+    CHỐI thẳng (không vá).
+    """
+    if not link or not isinstance(link, str):
         return False
 
-    trimmed = link.strip()
-    if not trimmed:
-        return False
-    if trimmed.startswith("//"):
+    # 1. Ký tự điều khiển / backslash / dấu ngắt dòng ở BẤT KỲ vị trí nào.
+    if any(ch in _FORBIDDEN_LINK_CHARS for ch in link):
         return False
 
-    lowered = trimmed.lower()
+    # 2. Không nhận chuỗi có khoảng trắng bao ngoài — xem docstring.
+    if link != link.strip():
+        return False
+
+    # 3. Phải là đường tuyệt đối nội bộ, không protocol-relative.
+    if not link.startswith("/") or link.startswith("//"):
+        return False
+
+    # 4. Danh sách chặn scheme — PHÒNG THỦ CHIỀU SÂU, dư thừa theo cấu trúc.
+    #    Tầng chủ sở hữu của bất biến "không scheme, không authority" là
+    #    bước 3 (``startswith("/")``) và bước 5 (``urlsplit``): chuỗi bắt
+    #    đầu bằng ``/`` KHÔNG THỂ mang scheme, nên nhánh dưới đây không bao
+    #    giờ đổi kết quả. Giữ lại vì nó nói thẳng ra ý định cho người đọc;
+    #    đột biến M-D14 (gỡ nhánh này) KHÔNG làm ca nào đỏ — đã đo.
+    lowered = link.lower()
     if lowered.startswith(("javascript:", "data:", "vbscript:", "http://", "https://")):
         return False
 
-    return trimmed.startswith("/")
+    # 5. Sau khi phân giải URL: không scheme, không authority.
+    try:
+        parts = urlsplit(link)
+    except ValueError:
+        return False
+    if parts.scheme or parts.netloc:
+        return False
+
+    # 6. SAU CHUẨN HOÁ dot-segment, phần path VẪN phải nội bộ.
+    #    ``urlsplit`` không khử ``..`` nên bước này là bước duy nhất bắt
+    #    ``/..//evil.example``.
+    normalized = _remove_dot_segments(parts.path)
+    if not normalized.startswith("/") or normalized.startswith("//"):
+        return False
+
+    return True
+
+
+def is_safe_notification_link(link: str) -> bool:
+    """Tên công khai của ``_is_safe_relative_link`` — CÙNG một vị từ.
+
+    Dùng ở tầng ingress (router) để từ chối sớm; không có bản sao logic.
+    """
+    return _is_safe_relative_link(link)
 
 
 # ===================================================================
@@ -2168,7 +2301,22 @@ def render_dedup_key(event: SystemEvents, payload: dict) -> Optional[str]:
 
 
 def render_link(event: SystemEvents, payload: dict) -> Optional[str]:
-    """Render link from catalog template + payload. Code-owned, not DB."""
+    """Render link from catalog template + payload. Code-owned, not DB.
+
+    GIÁ TRỊ NÀO ĐƯỢC LƯU — nêu tường minh (D8-11):
+
+    * Chuỗi được KIỂM và chuỗi được TRẢ VỀ là **cùng một đối tượng**
+      ``rendered`` (đã ``.strip()`` trước khi kiểm). Không có ca nào kiểm
+      chuỗi A rồi phát chuỗi B.
+    * Dạng đã khử dot-segment (``_remove_dot_segments``) chỉ dùng để RA
+      QUYẾT ĐỊNH bên trong vị từ; nó KHÔNG được lưu. Lý do: chuẩn hoá chỉ
+      dùng để *phát hiện* nguy hiểm rồi TỪ CHỐI, không bao giờ để *sửa*
+      một đầu vào nguy hiểm thành an toàn — nên hai giá trị không thể lệch
+      nhau về mặt an toàn, còn đường dẫn gốc thì giữ nguyên query/fragment
+      và cách mã hoá mà tác giả link viết ra.
+    * Hợp đồng lỗi GIỮ NGUYÊN: link không đạt ⇒ trả ``None`` (không ném),
+      đúng như trước bản vá.
+    """
     defn = EVENT_CATALOG.get(event)
     if not defn or not defn.link_strategy:
         return None

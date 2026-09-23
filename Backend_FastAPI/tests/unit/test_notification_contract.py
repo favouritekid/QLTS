@@ -117,6 +117,330 @@ class TestCatalogClassification:
 
 
 # =============================================================================
+# A-bis. Link guard — D8-11 (vị từ) + D8-17 (ingress)
+# =============================================================================
+#
+# Hợp đồng: chỉ đường NỘI BỘ bắt đầu bằng ``/``, không ``//``, và SAU CHUẨN
+# HOÁ vẫn nội bộ. Đầu vào không đạt ⇒ ``render_link`` trả ``None`` (không
+# ném), còn router ingress ⇒ HTTP 400. KHÔNG vá đầu vào, KHÔNG bỏ lặng lẽ.
+
+_BS = chr(92)  # backslash — viết tường minh để heredoc/editor không nuốt
+
+# Mỗi phần tử: (chuỗi, vì sao nguy hiểm).
+# Bốn nhóm, mỗi nhóm bị một MỆNH ĐỀ khác nhau của vị từ chặn — đột biến gỡ
+# một mệnh đề chỉ làm nhóm tương ứng đỏ.
+_LINK_NGOAI_MIEN = [
+    # nhóm "scheme / authority" — đã đỏ từ trước bản vá
+    ("https://evil.example/phish", "scheme tuyệt đối"),
+    ("javascript:alert(1)", "scheme javascript"),
+    ("//evil.example/phish", "protocol-relative"),
+    ("relative/path", "không bắt đầu bằng /"),
+    # nhóm "backslash" — trình duyệt coi \ như / với scheme đặc biệt
+    ("/" + _BS + "evil.example/p", "slash + backslash ⇒ //evil.example"),
+    ("/" + _BS + "/evil.example/p", "slash backslash slash"),
+    (_BS + _BS + "evil.example/p", "hai backslash"),
+    # nhóm "ký tự điều khiển ở GIỮA" — trình duyệt gỡ TAB/LF/CR rồi mới phân giải
+    ("/\t/evil.example/p", "TAB giữa hai dấu /"),
+    ("/\n/evil.example/p", "LF giữa hai dấu /"),
+    ("/\r/evil.example/p", "CR giữa hai dấu /"),
+    ("/\tevil", "TAB ngay sau /"),
+    ("/x\ny\rz", "CR+LF giữa đường dẫn"),
+    ("/\x00evil", "NUL giữa đường dẫn"),
+    # ``chr(0x2028)`` thay vì ký tự thô: không nhúng ký tự vô hình vào mã nguồn.
+    ("/normal/" + chr(0x2028) + "evil", "U+2028 — dấu kết dòng JavaScript"),
+    # nhóm "dot-segment THÔ" — chỉ lộ ra sau khi khử ./..
+    ("/..//evil.example/p", "khử dot-segment ⇒ //evil.example"),
+    ("/./../..//evil.example", "chuỗi dot-segment ⇒ //evil.example"),
+    ("/.//x", "đoạn một chấm ⇒ //x"),
+    ("/a/..//x", "hai chấm giữa đường ⇒ //x"),
+    # nhóm "dot-segment MÃ HOÁ %2e" — WHATWG coi %2e là dấu chấm, `urlsplit`
+    # của Python thì KHÔNG. Đo bằng Node v20.20.2: cả bảy dạng dưới đây cho
+    # `pathname === "//x"`, và `resolveSafeUrl` của #644 trả `null`.
+    ("/%2e%2e//x", "%2e%2e ⇒ //x (WHATWG đo được)"),
+    ("/%2E%2E//x", "%2E%2E hoa ⇒ //x"),
+    ("/%2e%2E//x", "%2e%2E hoa-thường trộn ⇒ //x"),
+    ("/.%2e//x", ".%2e ⇒ //x"),
+    ("/%2e.//x", "%2e. ⇒ //x"),
+    ("/%2e//x", "đoạn MỘT chấm mã hoá %2e ⇒ //x"),
+    ("/%2E//x", "đoạn MỘT chấm mã hoá %2E ⇒ //x"),
+    ("/a/%2e%2e//x", "%2e%2e giữa đường ⇒ //x"),
+]
+
+# Dương tính — PHẢI xanh dưới MỌI đột biến (positive control).
+_LINK_NOI_BO_HOP_LE = [
+    "/maintenance-info",
+    "/leads/42",
+    "/leads/42?stage=3&status=rejected,unqualified#top",
+    "/admin/kpi-planning/holidays/status/2027",
+    "/a/../b",                 # dot-segment KHỬ RA vẫn nội bộ ⇒ phải cho qua
+    # ⚠️ KHÔNG được chặn oan: bốn dạng %2e dưới đây chuẩn hoá thành `/b` —
+    # nội bộ hợp lệ. Ranh giới là "chuẩn hoá xong có thành `//` không",
+    # KHÔNG phải "có chứa dấu chấm không".
+    "/%2e%2e/b",
+    "/%2E%2E/b",
+    "/.%2e/b",
+    "/%2e./b",
+    "/%09/evil.example",       # %09 KHÔNG được trình duyệt giải mã ⇒ vẫn cùng origin
+    "/a%2f%2fb",               # %2f KHÔNG được WHATWG giải mã ⇒ vẫn MỘT đoạn
+    "/",
+]
+
+
+def _system_alert_endpoint():
+    """Trả về ĐÚNG hàm FastAPI gọi cho ``POST /system/alert``.
+
+    KHÔNG dùng ``system_module.create_system_alert``: trong tệp đó
+    ``@limiter.limit`` bọc NGOÀI ``@router.post`` (thứ tự sai đã biết, có
+    tên trong ``tests/security/ratelimit_wrong_order_allowlist.txt``), nên
+    thuộc tính module trỏ tới bản ĐÃ BỌC còn route giữ bản gốc. Đo được:
+    ``router.routes[0].endpoint is module.create_system_alert`` → False.
+    Test phải chạy đúng thân hàm đang phục vụ, không phải vỏ bọc.
+    """
+    from app.routers.admin import system as system_module
+
+    for route in system_module.router.routes:
+        if getattr(route, "path", None) == "/system/alert":
+            return route.endpoint
+    raise AssertionError("Không tìm thấy route POST /system/alert")
+
+
+class TestNotificationLinkGuard:
+    """D8-11: vị từ link phải chặn mọi biến thể thoát origin."""
+
+    @pytest.mark.parametrize("raw,ly_do", _LINK_NGOAI_MIEN)
+    def test_render_link_tu_choi_duong_thoat_origin(self, raw, ly_do):
+        """``render_link`` trả None cho mọi biến thể thoát origin."""
+        assert render_link(SystemEvents.SYSTEM_ALERT, {"action_url": raw}) is None, (
+            f"render_link nhận sai {raw!r} ({ly_do})"
+        )
+
+    @pytest.mark.parametrize("raw,ly_do", _LINK_NGOAI_MIEN)
+    def test_vi_tu_tu_choi_duong_thoat_origin(self, raw, ly_do):
+        """Cùng corpus, gọi thẳng vị từ — không qua Template/strip."""
+        from app.core.event_catalog import _is_safe_relative_link
+
+        assert _is_safe_relative_link(raw) is False, f"vị từ nhận sai {raw!r} ({ly_do})"
+
+    def test_vi_tu_tu_choi_khoang_trang_bao_ngoai_thay_vi_tu_cat(self):
+        """Vị từ KHÔNG tự ``strip()`` — kiểm chuỗi nào thì phát chuỗi ấy."""
+        from app.core.event_catalog import _is_safe_relative_link
+
+        assert _is_safe_relative_link(" /maintenance-info") is False
+        assert _is_safe_relative_link("/maintenance-info ") is False
+        assert _is_safe_relative_link("\t/maintenance-info\n") is False
+
+    # --- POSITIVE CONTROL: phải XANH dưới mọi đột biến -------------------
+    @pytest.mark.parametrize("raw", _LINK_NOI_BO_HOP_LE)
+    def test_positive_control_duong_noi_bo_van_duoc_cho_qua(self, raw):
+        """Chứng cứ chống 'guard đúng vì chặn hết mọi thứ'."""
+        assert render_link(SystemEvents.SYSTEM_ALERT, {"action_url": raw}) == raw
+
+    def test_gia_tri_luu_bang_dung_gia_tri_da_kiem(self):
+        """Không có ca nào kiểm chuỗi A rồi phát chuỗi B.
+
+        Dạng đã khử dot-segment (``/b``) KHÔNG được lưu; giá trị trả về là
+        chính chuỗi gốc ``/a/../b`` — đúng quyết định nêu ở docstring của
+        ``render_link``.
+        """
+        ra = render_link(SystemEvents.SYSTEM_ALERT, {"action_url": "/a/../b"})
+        assert ra == "/a/../b"
+        assert ra != "/b"
+
+
+class TestSystemAlertActionUrlIngress:
+    """D8-17: ``action_url`` thô còn đi qua socket + ``notification.data``.
+
+    ``render_link`` chỉ gác cột ``notification.link``. Cùng chuỗi ấy còn
+    được ``_emit_domain_event`` phát NGUYÊN payload tới mọi role room, và
+    được dispatcher trộn vào ``notification.data``. Hàng rào phải đứng ở
+    INGRESS thì mới đóng hết các nhánh.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("raw,ly_do", _LINK_NGOAI_MIEN)
+    async def test_ingress_tra_400_va_khong_dispatch(self, raw, ly_do):
+        from fastapi import HTTPException
+
+        endpoint = _system_alert_endpoint()
+        sd = AsyncMock()
+        with patch("app.routers.admin.system.safe_dispatch", new=sd):
+            with pytest.raises(HTTPException) as ei:
+                await endpoint(
+                    request=MagicMock(),
+                    severity="warning",
+                    message="bao tri",
+                    action_url=raw,
+                    db=AsyncMock(),
+                    current_admin=MagicMock(id=1, username="admin"),
+                )
+        assert ei.value.status_code == 400, f"{raw!r} ({ly_do}) không bị chặn ở ingress"
+        # Không dispatch ⇒ không có payload thô nào tới socket / notification.data
+        sd.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ingress_cho_qua_dung_chuoi_da_kiem(self):
+        """Positive control cho ingress: link nội bộ đi tiếp NGUYÊN VĂN."""
+        endpoint = _system_alert_endpoint()
+        sd = AsyncMock()
+        with patch("app.routers.admin.system.safe_dispatch", new=sd):
+            ket_qua = await endpoint(
+                request=MagicMock(),
+                severity="info",
+                message="bao tri",
+                action_url="/maintenance-info",
+                db=AsyncMock(),
+                current_admin=MagicMock(id=1, username="admin"),
+            )
+        assert ket_qua["success"] is True
+        sd.assert_awaited_once()
+        payload = sd.await_args.kwargs["payload"]
+        assert payload["action_url"] == "/maintenance-info"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("vang_mat", [None, ""])
+    async def test_ingress_khong_chan_khi_vang_action_url(self, vang_mat):
+        """Positive control: vắng link KHÔNG phải lỗi (hợp đồng cũ giữ nguyên)."""
+        endpoint = _system_alert_endpoint()
+        sd = AsyncMock()
+        with patch("app.routers.admin.system.safe_dispatch", new=sd):
+            ket_qua = await endpoint(
+                request=MagicMock(),
+                severity="info",
+                message="bao tri",
+                action_url=vang_mat,
+                db=AsyncMock(),
+                current_admin=MagicMock(id=1, username="admin"),
+            )
+        assert ket_qua["success"] is True
+        sd.assert_awaited_once()
+
+
+# Corpus lấy NGUYÊN VĂN từ hợp đồng frontend của PR #644
+# (`frontend/src/lib/utils.ts::resolveSafeUrl` + `utils.test.ts`). Nếu #644
+# đổi danh sách này thì BE phải đổi theo — hai tầng cùng một bất biến
+# "đích không rời site", nên KHÔNG được lệch.
+#
+# Đo 22-09 bằng Node v20.20.2, nền `https://qlts.example/notifications`:
+# cả năm chuỗi dưới đây cho `new URL(x, base).pathname === "//x"`.
+_644_PHAI_TU_CHOI = ["/..//x", "/.//x", "/%2e%2e//x", "/%2E%2E//x", "/a/..//x"]
+# ...và hai chuỗi này #644 CHO QUA (chuẩn hoá ra `/b`) ⇒ BE không được chặn oan.
+_644_PHAI_CHO_QUA = ["/a/../b", "/%2e%2e/b"]
+
+
+class TestBeKhopHopDongFrontend644:
+    """Khoá BE ↔ `resolveSafeUrl` của #644 — cùng một bất biến, hai tầng.
+
+    Vì sao cần: `urlsplit` của Python KHÔNG giải mã `%2e`, còn WHATWG URL
+    (thứ trình duyệt thật dùng, và `resolveSafeUrl` đi qua `new URL`) thì
+    COI `%2e` là dấu chấm. Bản vá đầu chỉ nhận diện dấu chấm THÔ nên BE cho
+    qua `/%2e%2e//x` trong khi FE từ chối — đo được **8/21 ca lệch**.
+    """
+
+    @pytest.mark.parametrize("duong", _644_PHAI_TU_CHOI)
+    def test_be_tu_choi_dung_nhung_gi_644_tu_choi(self, duong):
+        assert render_link(SystemEvents.SYSTEM_ALERT, {"action_url": duong}) is None
+
+    @pytest.mark.parametrize("duong", _644_PHAI_CHO_QUA)
+    def test_be_khong_chan_oan_nhung_gi_644_cho_qua(self, duong):
+        """Ranh giới là 'chuẩn hoá xong có thành `//` không', KHÔNG phải
+        'có chứa dấu chấm không'. Luật sau sẽ chặn oan hai ca này."""
+        assert render_link(SystemEvents.SYSTEM_ALERT, {"action_url": duong}) == duong
+
+
+class TestSystemAlertIngressQuaHTTP:
+    """Cùng bất biến với ``TestSystemAlertActionUrlIngress`` nhưng đi qua
+    ĐÚNG đường người dùng đi: ASGI → middleware → router (CLAUDE.md §10).
+
+    Ca ở tầng hàm không chứng minh route đã gắn, prefix đúng, hay
+    ``HTTPException`` thật sự ra mã 400 sau middleware. Ca này chứng minh.
+    Đường dẫn lấy TỪ CHÍNH ``fastapi_app.routes`` — không gõ tay, nên đổi
+    prefix là ca này theo, không xanh giả.
+    """
+
+    @staticmethod
+    def _duong_dan(app) -> str:
+        duong = [
+            r.path for r in app.routes
+            if getattr(r, "name", None) == "create_system_alert"
+        ]
+        assert len(duong) == 1, f"mong đúng 1 route create_system_alert, thấy {duong}"
+        return duong[0]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("raw,ly_do", _LINK_NGOAI_MIEN)
+    async def test_http_400_va_khong_dispatch(self, raw, ly_do):
+        from httpx import ASGITransport, AsyncClient
+
+        from app import database
+        from app.core.deps import check_permission
+        from app.main import fastapi_app
+
+        duong = self._duong_dan(fastapi_app)
+        fastapi_app.dependency_overrides[database.get_db] = lambda: AsyncMock()
+        fastapi_app.dependency_overrides[check_permission] = lambda: MagicMock(
+            id=1, username="admin"
+        )
+        sd = AsyncMock()
+        try:
+            with patch("app.routers.admin.system.safe_dispatch", new=sd):
+                async with AsyncClient(
+                    transport=ASGITransport(app=fastapi_app), base_url="http://test"
+                ) as client:
+                    resp = await client.post(
+                        duong,
+                        params={
+                            "severity": "warning",
+                            "message": "bao tri",
+                            "action_url": raw,
+                        },
+                    )
+        finally:
+            fastapi_app.dependency_overrides.clear()
+
+        assert resp.status_code == 400, (
+            f"{raw!r} ({ly_do}) → HTTP {resp.status_code}, mong 400"
+        )
+        # Bất biến thứ hai của ca này: KHÔNG một lượt dispatch nào ⇒ không có
+        # chuỗi thô nào tới socket / ``notification.data``.
+        assert sd.await_count == 0
+
+    @pytest.mark.asyncio
+    async def test_http_positive_control_201_va_co_dispatch(self):
+        """Phải XANH dưới mọi đột biến — chứng cứ guard không chặn tất."""
+        from httpx import ASGITransport, AsyncClient
+
+        from app import database
+        from app.core.deps import check_permission
+        from app.main import fastapi_app
+
+        duong = self._duong_dan(fastapi_app)
+        fastapi_app.dependency_overrides[database.get_db] = lambda: AsyncMock()
+        fastapi_app.dependency_overrides[check_permission] = lambda: MagicMock(
+            id=1, username="admin"
+        )
+        sd = AsyncMock()
+        try:
+            with patch("app.routers.admin.system.safe_dispatch", new=sd):
+                async with AsyncClient(
+                    transport=ASGITransport(app=fastapi_app), base_url="http://test"
+                ) as client:
+                    resp = await client.post(
+                        duong,
+                        params={
+                            "severity": "info",
+                            "message": "bao tri",
+                            "action_url": "/maintenance-info",
+                        },
+                    )
+        finally:
+            fastapi_app.dependency_overrides.clear()
+
+        assert resp.status_code == 201
+        assert sd.await_count == 1
+        assert sd.await_args.kwargs["payload"]["action_url"] == "/maintenance-info"
+
+
+# =============================================================================
 # B. Dispatcher invariants (unit-level, mocked DB)
 # =============================================================================
 
