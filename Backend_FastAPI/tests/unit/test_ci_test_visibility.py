@@ -82,6 +82,10 @@ TEP_NEO_CHEO = "tests/services/test_finance_killswitch.py"
 #: ghim nhãn "Tier 2b" — nhãn đổi tên thì neo phải sống, tách lát thì neo phải đỏ.
 TEP_RETURN_URL = "tests/unit/test_payment_return_url_guard.py"
 TEP_PAYMENT_INTENT = "tests/services/test_payment_intent_service.py"
+#: `test_conftest_db_url_guard.py` gác `tests/conftest.py` — tệp toàn cục của
+#: CẢ bộ test. Nó KHÔNG thể tự canh selector của chính nó: gỡ selector thì nó
+#: ngừng chạy, nên nó không bao giờ tự báo đỏ được. Neo vì thế đặt ở tệp NÀY.
+TEP_CONFTEST_GUARD = "tests/unit/test_conftest_db_url_guard.py"
 DUONG_SCRIPT_TRONG_WF = ".github/scripts/pytest_visibility_guard.py"
 IF_HOP_LE = {"matrix.visibility_guard", "matrix.visibility_guard == true"}
 
@@ -299,6 +303,36 @@ class TestNeoCheoPaymentReturnUrl:
             "chuẩn bị tách lát. (`None` nghĩa là tệp đó không còn whole-file "
             "selector nào.)" % (TEP_RETURN_URL, tier_url,
                                TEP_PAYMENT_INTENT, tier_intent)
+        )
+
+
+class TestNeoCheoConftestDbUrlGuard:
+    """`test_conftest_db_url_guard.py` cũng không thể tự canh selector của nó.
+
+    Đo 23-09-2026: gỡ ĐÚNG dòng selector ấy khỏi `backend-test.yml` thì
+    `test_ci_test_visibility.py` vẫn **192 passed, rc=0** — không ca nào đỏ.
+    Nghĩa là cổng an toàn CSDL của bộ test (`kiem_url_csdl_test` + `pytest.fail`
+    khi `DATABASE_URL` trỏ vào dev/production) có thể rơi khỏi PR gate mà
+    required check vẫn xanh. Đúng lớp `ci-allowlist-tep-khong-duoc-gac`.
+
+    Cố ý KHÔNG ghim nhãn tier: chỗ đứng của tệp trong matrix KHÔNG phải bất
+    biến nghiệp vụ — đổi lát là việc vô hại, còn MẤT selector mới đáng đỏ.
+    (Khác với cặp `TEP_RETURN_URL`/`TEP_PAYMENT_INTENT` ở trên: hai tệp ấy gác
+    CÙNG một nguồn chuẩn nên bị đòi cùng leg; tệp này đứng một mình.)
+    """
+
+    def test_conftest_guard_con_whole_file_trong_pr_gate(self, cac_leg):
+        """Bắt CẢ hai ca: gỡ hẳn selector, và hạ cấp xuống node-id.
+
+        `_selector_whole_file` chỉ nhận token KHÔNG chứa `::`, nên một selector
+        đổi thành `…py::TestGuardFailClosed` cũng rơi khỏi tập này và ca vẫn
+        đỏ — chọn theo node là cách mà một ca MỚI thêm vào lớp sẽ im lặng
+        không được chạy."""
+        assert TEP_CONFTEST_GUARD in _selector_whole_file(cac_leg), (
+            "%s phải còn là whole-file selector trong matrix `pytest-shard`. "
+            "Không có nó thì cổng chặn `DATABASE_URL` trỏ vào CSDL dev/"
+            "production chỉ chạy ở nightly, còn required check vẫn xanh."
+            % TEP_CONFTEST_GUARD
         )
 
 
