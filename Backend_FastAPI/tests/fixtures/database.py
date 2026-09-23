@@ -9,10 +9,179 @@ import asyncio
 import logging
 
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine as _create_engine
 from sqlalchemy.pool import NullPool
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# MỘT NGUỒN CHUẨN cho câu hỏi "URL này có an toàn để test ghi/xoá không?"
+# và cho câu hỏi "in URL này ra log thế nào thì không lộ mật khẩu?".
+#
+# Trước 23-09 câu hỏi thứ nhất có HAI bản trả lời khác nhau: bản ở đây
+# fail-closed, còn bản ở `tests/conftest.py` chỉ `log.warning` rồi in
+# "Safety check passed" VÔ ĐIỀU KIỆN. Hai nhánh cạnh nhau, một chặn một
+# không (nợ N4.01). Nay cả hai đi qua `kiem_url_csdl_test()`.
+# ---------------------------------------------------------------------------
+
+#: Che toàn bộ vùng userinfo (``user:password``) bằng đúng chuỗi này.
+CHE = "***"
+
+#: Backend (dialect) mà guard này biết cách suy luận về TÊN CSDL. Kiểu nằm
+#: ngoài danh sách là "kiểu không xác định" ⇒ TỪ CHỐI: guard không đoán hộ ngữ
+#: nghĩa tên CSDL của một hệ nó chưa từng thấy. Sai về phía chặn.
+BACKEND_BIET = frozenset(("postgresql", "sqlite"))
+
+#: TÊN CSDL của dev/production — tên ĐẦY ĐỦ, không phải mẫu chuỗi con. Danh
+#: sách này CHỈ đổi LỜI VĂN của thông điệp: không tên nào trong đây chứa
+#: "test", nên tất cả đã bị tiêu chí chính chặn từ trước. Giữ lại vì "trỏ vào
+#: CSDL dev/production" nói đúng bệnh hơn "tên CSDL không chứa test".
+TEN_CSDL_NGUY_HIEM = frozenset(
+    ("qlts_dev", "qlts_prod", "qlts_production", "production", "prod")
+)
+
+
+def che_url_csdl(url) -> str:
+    """Trả về URL CSDL đã CHE credential — chỉ còn scheme + host + tên CSDL.
+
+    Vì sao không cắt ngắn: ``postgresql+asyncpg://qlts:`` dài 25 ký tự, nên
+    ``url[:30]`` in ra đúng 5 ký tự ĐẦU của mật khẩu, và ``url[:60]`` in gần
+    trọn nó. Kho này PUBLIC ⇒ log GitHub Actions ai cũng đọc. Cắt ngắn KHÔNG
+    phải biện pháp che; bỏ hẳn vùng userinfo mới là (nợ N5.01).
+
+    Cách cắt là ``rfind('@')`` trên TOÀN BỘ phần sau ``://``, cố ý:
+
+    * mật khẩu được phép chứa ``@``, ``/``, ``?`` — cắt theo dấu ``/`` đầu
+      tiên hay theo dấu ``?`` đầu tiên đều có thể xẻ ngang mật khẩu và đẩy
+      phần đuôi của nó ra output;
+    * lấy dấu ``@`` CUỐI CÙNG thì mọi ký tự thuộc vùng userinfo đều bị bỏ,
+      kể cả khi chúng trông như tên host.
+
+    Nếu chuỗi truy vấn cũng chứa ``@`` thì hàm che NHIỀU hơn mức cần —
+    đó là hướng sai an toàn, và nó được chọn có chủ đích.
+    """
+    if not isinstance(url, str) or not url:
+        return "(khong co URL)"
+    vi_tri_scheme = url.find("://")
+    if vi_tri_scheme < 0:
+        # Không phân giải được thì KHÔNG trả lại nguyên văn: một chuỗi lạ
+        # vẫn có thể là secret. Fail-closed cả ở đường che.
+        return "(khong phan giai duoc URL)"
+
+    scheme = url[:vi_tri_scheme]
+    phan_sau = url[vi_tri_scheme + 3 :]
+
+    vi_tri_at = phan_sau.rfind("@")
+    if vi_tri_at >= 0:
+        con_lai = phan_sau[vi_tri_at + 1 :]
+        tien_to = f"{scheme}://{CHE}@"
+    else:
+        con_lai = phan_sau
+        tien_to = f"{scheme}://"
+
+    # Chỉ CẮT query/fragment SAU khi đã bỏ userinfo — `?password=...` cũng là
+    # credential, mà cắt trước thì mật khẩu chứa '?' bị xẻ đôi.
+    for dau in ("?", "#"):
+        k = con_lai.find(dau)
+        if k >= 0:
+            con_lai = con_lai[:k]
+
+    return tien_to + con_lai
+
+
+def kiem_url_csdl_test(db_url) -> str | None:
+    """Trả ``None`` khi URL đủ an toàn cho test; ngược lại trả LÝ DO (str).
+
+    Quyền cho phép chỉ phụ thuộc vào **TÊN CSDL đã phân giải**
+    (``sqlalchemy.engine.make_url(...).database``) — không phải một phép tìm
+    chuỗi con trên toàn URL. Đây đúng là hợp đồng mà
+    ``Backend_FastAPI/.env.test.example`` đã ghi từ đầu::
+
+        DATABASE_URL MUST contain "test" in database name
+
+    Bản trước kiểm ``"test" in db_url.lower()``, tức **chưa thực thi hợp đồng
+    ấy**. Đo thật trên SQLAlchemy 2.0, bốn URL production dưới đây đều LỌT vì
+    chữ "test" nằm NGOÀI tên CSDL::
+
+        //test:pw@prod-db:5432/qlts_production             (username)
+        //qlts:test123@prod-db:5432/qlts_production        (password)
+        //qlts:pw@testing-host:5432/qlts_production        (host)
+        //qlts:pw@prod-db:5432/qlts_production?mode=test   (query)
+
+    Tiêu chí sau khi siết:
+
+    1. Không phân giải được ⇒ từ chối. Một chuỗi hỏng vẫn có thể chứa chữ
+       "test"; ``make_url`` ném ``ArgumentError`` thì đó là câu trả lời cuối.
+    2. Backend ngoài :data:`BACKEND_BIET` ⇒ từ chối.
+    3. Thiếu tên CSDL ⇒ từ chối. Đo thật: ``sqlite://`` cho ``database=None``
+       dù SQLAlchemy coi nó là in-memory. Guard KHÔNG suy diễn hộ — muốn
+       in-memory thì viết ``:memory:`` tường minh.
+    4. ``:memory:`` chỉ được miễn khi backend ĐÚNG là ``sqlite``. Đo thật:
+       ``postgresql+asyncpg://…/:memory:`` phân giải ra ``database=':memory:'``
+       — miễn theo TÊN thì một CSDL PostgreSQL thật tên ``:memory:`` sẽ lọt.
+    5. Còn lại: ``test`` phải nằm trong chính ``url.database``.
+
+    Ngoài ra tên CSDL còn mang ``#`` hoặc ``?`` thì bị từ chối. ``make_url``
+    KHÔNG mô hình hoá fragment — đo thật:
+    ``…/qlts_production#test`` cho ``database='qlts_production#test'``, và nó
+    sẽ lọt bước 5. Một ký tự như thế còn sót lại nghĩa là chuỗi mang thành
+    phần mà trình phân giải không mô hình hoá ⇒ từ chối, KHÔNG tự cắt: cắt hộ
+    là đoán, mà đoán sai ở đây thì DROP SCHEMA chạy trên CSDL thật.
+
+    ⚠️ Cố ý KHÔNG dùng :func:`che_url_csdl` để phân giải. Hàm ấy có nhiệm vụ
+    DUY NHẤT là bỏ credential trước khi in; nó cắt theo ``rfind('@')``, sai
+    hướng cho việc quyết định quyền. Một hàm che dùng làm parser an toàn là
+    cách sinh ra lỗ thứ hai.
+    """
+    if not isinstance(db_url, str) or not db_url.strip():
+        return "DATABASE_URL rỗng hoặc không phải chuỗi"
+
+    try:
+        dia_chi = make_url(db_url.strip())
+    except Exception:
+        # Bắt rộng có chủ đích: mọi lỗi phân giải đều quy về một câu — "không
+        # biết URL này trỏ vào đâu" — và câu ấy phải dẫn tới TỪ CHỐI.
+        return "DATABASE_URL không phân giải được thành URL SQLAlchemy"
+
+    backend = (dia_chi.get_backend_name() or "").lower()
+    if backend not in BACKEND_BIET:
+        return (
+            "DATABASE_URL dùng kiểu CSDL không xác định (%s)"
+            % (backend or "rỗng")
+        )
+
+    ten_csdl = dia_chi.database
+    if not ten_csdl:
+        return "DATABASE_URL không nêu tên CSDL"
+
+    if "#" in ten_csdl or "?" in ten_csdl:
+        return (
+            "tên CSDL còn ký tự '#'/'?' — trình phân giải không mô hình hoá "
+            "fragment nên phần sau dấu ấy KHÔNG phải tên CSDL"
+        )
+    if backend != "sqlite" and "/" in ten_csdl:
+        return "tên CSDL chứa '/' — không phải một tên CSDL hợp lệ"
+
+    thap = ten_csdl.lower()
+
+    if thap == ":memory:":
+        if backend == "sqlite":
+            return None
+        return (
+            "DATABASE_URL đặt tên CSDL là ':memory:' trên backend %s — chỉ "
+            "sqlite mới có CSDL in-memory" % backend
+        )
+
+    if thap in TEN_CSDL_NGUY_HIEM:
+        return "DATABASE_URL trỏ vào CSDL dev/production"
+
+    if "test" not in thap:
+        return (
+            "tên CSDL không chứa 'test' và cũng không phải sqlite ':memory:'"
+        )
+
+    return None
 
 
 def verify_test_database_safety(settings, pytest_fail):
@@ -21,30 +190,29 @@ def verify_test_database_safety(settings, pytest_fail):
 
     Safety criteria:
     1. APP_ENV must be "test"
-    2. DATABASE_URL must contain "test" or ":memory:"
+    2. TÊN CSDL đã phân giải phải chứa "test" (hoặc là sqlite
+       ":memory:") — xem `kiem_url_csdl_test`. Chữ "test" ở
+       user/password/host/port/query/fragment KHÔNG tính.
     """
     current_env = settings.APP_ENV
     if current_env != "test":
         pytest_fail(
             f"SAFETY CHECK FAILED! APP_ENV is '{current_env}', not 'test'."
         )
+        return
 
-    db_url = settings.DATABASE_URL.lower()
-    is_safe = ":memory:" in db_url or "test" in db_url
-
-    dangerous_patterns = ["/qlts_dev", "/qlts_prod", "/qlts_production", "/production", "/prod/"]
-    is_dangerous = any(p in db_url for p in dangerous_patterns)
-
-    if is_dangerous and not is_safe:
+    ly_do = kiem_url_csdl_test(settings.DATABASE_URL)
+    if ly_do is not None:
         pytest_fail(
-            f"SAFETY CHECK FAILED! DATABASE_URL appears to be production: {settings.DATABASE_URL}"
+            f"SAFETY CHECK FAILED! {ly_do}: {che_url_csdl(settings.DATABASE_URL)}"
         )
-    if not is_safe:
-        pytest_fail(
-            f"SAFETY CHECK FAILED! DATABASE_URL does not contain 'test': {settings.DATABASE_URL}"
-        )
+        return
 
-    log.info(f"Safety check passed: APP_ENV={current_env}, DB_URL={settings.DATABASE_URL[:60]}...")
+    log.info(
+        "Safety check passed: APP_ENV=%s, DB_URL=%s",
+        current_env,
+        che_url_csdl(settings.DATABASE_URL),
+    )
 
 
 async def init_schema_once(settings, AppBase, CasbinBase=None):

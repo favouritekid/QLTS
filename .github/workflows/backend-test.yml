@@ -1000,11 +1000,22 @@ jobs:
           - tier: Tier 4s — Admission state transitions + confirmation token
             tests: >-
               tests/integration/test_admission_state_transitions.py
+          # `test_conftest_db_url_guard.py` vào Tier 5, cùng họ phép kiểm CẤU
+          # TRÚC với `test_nginx_template_packaging` / `test_ci_test_visibility`:
+          # nó đọc `tests/conftest.py` và `tests/fixtures/database.py` như VĂN
+          # BẢN rồi soi AST, cộng thêm vài ca hàm thuần. Không đụng CSDL, chạy
+          # vài giây.
+          # Ghim WHOLE-FILE chứ không `::node` — chọn theo node là cách mà một
+          # ca mới thêm vào lớp sẽ im lặng không được chạy.
+          # Vì sao BẮT BUỘC có selector: nó canh chính `tests/conftest.py`, tệp
+          # toàn cục của cả bộ test. Nằm ngoài mọi tier thì không shard nào chạy
+          # mà required check vẫn xanh — đúng lớp lỗ hổng `ci-allowlist`.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
               tests/unit/test_celery_heartbeat_monitor_script.py
               tests/unit/test_ci_test_visibility.py
+              tests/unit/test_conftest_db_url_guard.py
               tests/unit/test_e2e_catalog_fixture.py
               tests/unit/test_e2e_credential_contract.py
               tests/unit/test_import_moet_schools.py
