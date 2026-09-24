@@ -322,8 +322,9 @@ log "Nginx template sẽ được render TRONG container (domain=$DOMAIN, admiss
 # cái cây vừa gây sự cố. Không có gì phát hiện được điều đó về sau.
 #
 # Nguồn đúng phải BỀN và NGOÀI worktree: một marker ghi sau mỗi deploy thành
-# công, chứa SHA đã deploy + image ID của bốn container nó tạo ra. Marker chỉ
-# đáng tin khi 4/4 image ID còn khớp với bốn container ĐANG chạy — khớp thì SHA
+# công, chứa SHA đã deploy + image ID của MỌI container runtime nó tạo ra (danh
+# sách dẫn xuất từ model Compose, hiện là năm). Marker chỉ đáng tin khi image ID
+# của TẤT CẢ còn khớp với container ĐANG chạy — khớp thì SHA
 # trong marker đúng là revision của ảnh đang phục vụ; lệch thì đã có ai đó thay
 # container ngoài đường này và ta KHÔNG biết ảnh hiện tại từ commit nào.
 #
@@ -334,6 +335,11 @@ log "Nginx template sẽ được render TRONG container (domain=$DOMAIN, admiss
 
 _RA_OPS="${QLTS_ROLLBACK_OPS_DIR:-/opt/qlts-ops/rollback}"
 _RA_MARKER="$_RA_OPS/last-deploy.marker"
+# Xoa moi gia tri ke thua tu moi truong. `_ra_bao_dam_dich_vu` bo qua buoc dan
+# xuat khi bien nay da co gia tri, nen mot `export _RA_DICH_VU=...` tu ben ngoai
+# se thanh duong tat KHONG KHAI BAO vong qua model Compose — dung thu ma chu
+# thich cua ham ay tuyen bo la khong ton tai.
+_RA_DICH_VU=""
 _RA_COMPOSE="docker compose -f docker-compose.yml --profile production --env-file .env.production"
 
 # --- Danh sach service PHAI duoc ghim: DAN XUAT, khong chep tay -------------
@@ -417,12 +423,25 @@ print(" ".join(sorted(ra)))
 #
 # Fail-closed KHONG doi mot ly: moi phep kiem cu van o day, chi doi CHO chay.
 # Khong bien bypass, khong fallback sang danh sach chep tay.
+# `_RA_SO_DICH_VU` phai duoc dat trong MOI lan goi, khong chi lan dau.
+#
+# Ban truoc `return 0` ngay khi `_RA_DICH_VU` da co gia tri — nhung phep gan
+# `_RA_SO_DICH_VU` nam SAU do. Hau qua: neu `_RA_DICH_VU` duoc ke thua tu moi
+# truong thi (a) bo dan xuat bi bo qua hoan toan — tuc mot BIEN BYPASS khong khai
+# bao, dung thu chu thich tren tuyen bo la khong co; va (b) `_RA_SO_DICH_VU`
+# KHONG BAO GIO duoc dat. Voi `set -u`, moi cho doc no chet bang `unbound
+# variable` — o duong bo qua tai san thi cho ay nam SAU `mv` cong bo marker.
+#
+# Dong `_RA_DICH_VU=""` o phan khai bao tren dau da xoa moi gia tri ke thua, nen
+# cay nay chi con la phong thu chieu sau: tinh lai so luong o MOI lan goi thi
+# bien dem khong the roi ra ngoai bat ky duong di nao.
 _ra_bao_dam_dich_vu() {
-    [ -n "${_RA_DICH_VU:-}" ] && return 0
-    if ! _RA_DICH_VU=$(_ra_dan_xuat_dich_vu); then
-        error "khong dan xuat duoc danh sach service tu model Compose.
+    if [ -z "${_RA_DICH_VU:-}" ]; then
+        if ! _RA_DICH_VU=$(_ra_dan_xuat_dich_vu); then
+            error "khong dan xuat duoc danh sach service tu model Compose.
        Thieu python3/python, hoac 'docker compose config' that bai.
        DUNG — chep tay danh sach la dung loi da de lot nginx."
+        fi
     fi
     [ -n "$_RA_DICH_VU" ] || error "danh sach service ghim RONG — fail-closed."
     _RA_SO_DICH_VU=$(printf %s "$_RA_DICH_VU" | wc -w)
@@ -517,7 +536,7 @@ _ra_kiem_hash_sau_ln() {
 }
 
 _ra_kiem_schema_marker() {
-    local _f="$1" _n _v _sha _la _s _i _hex _c
+    local _f="$1" _n _v _sha _la _s _i _hex _c _can
     _n=$(grep -c "^# marker-version$(printf '	')" "$_f" || true)
     [ "$_n" -eq 1 ] || error "marker mới: có $_n dòng '# marker-version' (cần 1)."
     _v=$(awk -F"$(printf '	')" '$1=="# marker-version"{print $2}' "$_f")
@@ -563,15 +582,33 @@ _ra_kiem_schema_marker() {
         case "$_c" in *[!0-9a-f]*) error "marker mới: CID của '$_s' có ký tự không phải hex thường." ;; esac
         [ "${#_c}" -eq 64 ] || error "marker mới: CID của '$_s' dài ${#_c} hex (cần 64)."
     done
+    # Tổng dòng = (số dòng TIÊU ĐỀ) + (một dòng cho mỗi service).
+    #
+    # Con số 4 ở đây KHÔNG phải số service — nó là arity của khối `printf` ghi
+    # tiêu đề, và đã được bốn phép kiểm ngay phía trên ép RIÊNG từng khoá
+    # (`# marker-version`, `# deployed-sha`, `# deployed-at`, và đúng một trong
+    # `# asset-tag`/`# asset-skipped`). Số service thì lấy từ `$_RA_SO_DICH_VU`,
+    # tức CÙNG một `$_RA_DICH_VU` mà vòng lặp phía trên vừa duyệt — nên phép
+    # kiểm này không đẻ ra nguồn chuẩn thứ hai. Nó là phép kiểm PHẦN DƯ: sau khi
+    # mọi dòng hợp lệ đã được đếm riêng, không được còn dòng nào khác.
+    #
+    # Trước bản vá này dòng dưới là hằng `-eq 8` = 4 tiêu đề + BỐN service. Danh
+    # sách nay được dẫn xuất từ model Compose và có NĂM (thêm `nginx`), nên marker
+    # hợp lệ có 9 dòng và cổng này làm deploy ĐỔ ở bước niêm phong — sau khi đã
+    # build, đã `up -d`, đã health-check. Cùng lớp lỗi mà phép kiểm
+    # `marker-version` ngay trên đã vấp một lần: hai con số cách nhau ~750 dòng
+    # trôi khỏi nhau. Vì thế con số này phải DẪN XUẤT, không được viết tay.
     _n=$(wc -l < "$_f")
-    [ "$_n" -eq 8 ] || error "marker mới: có $_n dòng (cần đúng 8)."
+    _can=$(( 4 + _RA_SO_DICH_VU ))
+    [ "$_n" -eq "$_can" ] || error "marker mới: có $_n dòng (cần đúng $_can = 4 tiêu đề + $_RA_SO_DICH_VU hàng service)."
     _n=$(tr -dc '\r' < "$_f" | wc -c)
     [ "$_n" -eq 0 ] || error "marker mới: chứa $_n ký tự CR — phải LF thuần."
     _n=$(head -c3 "$_f" | od -An -tx1 | tr -d ' ')
     [ "$_n" != "efbbbf" ] || error "marker mới: có BOM."
 }
 
-# Marker phải mô tả ĐÚNG bốn container đang phục vụ, không chỉ đúng hình dạng.
+# Marker phải mô tả ĐÚNG tập container đang phục vụ, không chỉ đúng hình dạng.
+# Tập ấy là `$_RA_DICH_VU` — dẫn xuất, không phải một con số viết tay.
 _ra_kiem_marker_vs_live() {
     local _n="$1" _f="$2" _s _mi _mc _lc _li _st
     for _s in $_RA_DICH_VU; do
@@ -717,8 +754,8 @@ else
        Marker này không do đường deploy sinh ra — từ chối dùng."
     fi
 
-    # --- Đối chiếu marker với BỐN container đang chạy -----------------------
-    # BỐN, không phải hai: compose đặt tên ảnh theo `<project>-<service>` nên
+    # --- Đối chiếu marker với MỌI container runtime đang chạy ---------------
+    # Không phải hai: compose đặt tên ảnh theo `<project>-<service>` nên
     # celery-worker/celery-beat có ảnh RIÊNG. Thiếu hai cái đó thì rollback lùi
     # backend mà để worker ở mã MỚI, chạy trên lược đồ CSDL đã lùi.
     for _S in $_RA_MK_DICH_VU; do
@@ -834,7 +871,7 @@ else
             "$_S" "$_RA_CID" "$_RA_IMG" "qlts-${_S}:${_RA_TAG}" "PENDING_DIGEST" >> "$_RA_TMP"
     done
 
-    # Chỉ xuất bản bản kê khi CẢ BỐN tag đã xong. `set -e` cắt ngang ở trên thì
+    # Chỉ xuất bản bản kê khi TẤT CẢ tag đã xong. `set -e` cắt ngang ở trên thì
     # `$_RA_MANIFEST` không bao giờ xuất hiện — preflight của lượt sau sẽ thấy
     # thiếu bản kê và dừng, thay vì đọc một bản kê nửa vời.
     log "  ✓ đã ghim $_RA_SO_DICH_VU ảnh vào tag $_RA_TAG"
@@ -1247,7 +1284,7 @@ bash "$SCRIPT_DIR/nginx-apply.sh" "$DOMAIN"     || error "không áp được c�
 # =============================================================================
 # Step 8c: ghi marker cho lần deploy SAU
 # =============================================================================
-# Đặt ở đây, sau khi mọi cổng health đã đạt, vì marker tuyên bố "bốn container
+# Đặt ở đây, sau khi mọi cổng health đã đạt, vì marker tuyên bố "các container
 # NÀY đang phục vụ commit NÀY". Ghi sớm hơn là tuyên bố một điều chưa đúng.
 #
 # Nguyên tử: viết tệp tạm rồi `mv`. Một marker bị cắt ngang giữa chừng còn tệ
