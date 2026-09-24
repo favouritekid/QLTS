@@ -41,6 +41,7 @@ POSTGRES_PASSWORD=$(openssl rand -hex 16)
 POSTGRES_DB=ngxtest
 DOMAIN=$D
 NGINX_ADMISSION_FROZEN=false
+ADMISSION_FROZEN=false
 NEXT_PUBLIC_API_URL=http://localhost:8000
 SECRET_KEY=ngxtest-khong-phai-secret-0000000000
 JWT_SECRET_KEY=ngxtest-khong-phai-secret-1111111111
@@ -189,7 +190,16 @@ goi POST /api/admissions/                    # vẫn 200 ⇒ CẦN GẠT CÂM
 # --- quy trình đúng: HAI tầng, cả hai đều phải được DỰNG LẠI ---
 # Tầng backend: `env_file` chỉ được đọc lúc container được TẠO, nên `restart`
 # giữ nguyên ADMISSION_FROZEN cũ. Đã đo hai chiều trên stack này.
+# ⚠️ Fixture do chính README này sinh ra KHÔNG có dòng `ADMISSION_FROZEN=` — nó
+# chỉ có `NGINX_ADMISSION_FROZEN=`. Biểu thức neo `^ADMISSION_FROZEN=` vì thế
+# khớp 0 HÀNG, `sed` trả rc=0 và KHÔNG báo gì. Backend khởi động lại với biến
+# KHÔNG đặt ⇒ `settings.ADMISSION_FROZEN` giữ default=False ⇒ middleware không
+# chặn gì. Mà phép kiểm 503 bên dưới VẪN XANH, vì tầng **nginx** đã trả 503.
+# Tài liệu tuyên bố 'HAI tầng' trong khi chỉ chứng minh được MỘT.
 sed -i 's/^ADMISSION_FROZEN=.*/ADMISSION_FROZEN=true/' $E
+# HẬU KIỂM NGAY TẠI CHỖ — `sed` khớp 0 hàng vẫn rc=0 (CLAUDE.md §8):
+grep -c '^ADMISSION_FROZEN=true$' $E        # phải = 1
+grep -c '^NGINX_ADMISSION_FROZEN=true$' $E  # phải = 1
 $DC up -d --no-deps --wait backend
 
 # Tầng nginx:
