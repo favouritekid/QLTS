@@ -893,14 +893,26 @@ git diff --quiet "$PRE_SHA" -- nginx/ || { echo "cây nginx CHƯA khớp $PRE_SH
 # `clean` lẫn `diff` mà `COPY` vẫn nhặt vào image. Nên phải hỏi thẳng, và hỏi
 # KHÔNG kèm `--exclude-standard`.
 [ -z "$(git ls-files --others -- nginx/)" ] || { echo "nginx/ còn tệp UNTRACKED sau git clean — DỪNG"; git ls-files --others -- nginx/; exit 1; }
-# nginx build từ cây git là ĐÚNG (cấu hình của nó đi theo image), nên lệnh này
-# KHÔNG cần tệp rollback.
-docker compose -f docker-compose.yml --env-file .env.production --profile production build nginx
+# nginx — ĐỔI CHÍNH SÁCH 24-09-2026 (Đường A). Bản kê v2 CÓ tài sản ảnh nginx
+# nên lùi bằng ĐÚNG ẢNH CŨ, KHÔNG build lại. Dựng lại từ nguồn không tương
+# đương lùi ảnh: base image, build-arg và cache đều có thể đã đổi.
+NGINX_ANH_GHIM=$(awk -F'	' '$1=="nginx"{print $3}' rollback_manifest_${QLTS_ROLLBACK_TAG}.txt)
+if [ -n "$NGINX_ANH_GHIM" ]; then
+  echo "bản kê CÓ tài sản nginx: $NGINX_ANH_GHIM — KHÔNG build, áp bằng ảnh ghim ở Step 5b"
+  # Phan giai ref ghim thanh IMAGE ID chinh tac, bang MOT lenh chan. Dieu ⑤ cua
+  # Step 7 doi dung hinh dang `VAR=$(docker image inspect --format ...)` — gan
+  # thang "$NGINX_ANH_GHIM" thi guard khong con gi de doi chieu.
+  NGINX_IMG_SAU_BUILD=$(docker image inspect --format '{{.Id}}' "$NGINX_ANH_GHIM") || { echo "ảnh nginx đã ghim KHÔNG có trên máy — DỪNG"; exit 1; }
+else
+  echo "⚠️ bản kê LEGACY (v1): KHÔNG có ảnh nginx đã ghim — buộc DỰNG LẠI từ nguồn."
+  echo "   Đây KHÔNG phải rollback ảnh; base image/build-arg/cache có thể đã đổi."
+  docker compose -f docker-compose.yml --env-file .env.production --profile production build nginx
+  NGINX_IMG_SAU_BUILD=$(docker image inspect --format '{{.Id}}' qlts-nginx:local) || { echo "không đọc được image ID của qlts-nginx:local ngay sau build — DỪNG"; exit 1; }
+fi
 # GHI LẠI ID ẢNH VỪA DỰNG. Step 7 CỐ Ý không build lần hai (lý lẽ ở Step 7), nên
 # nó phải chứng minh được `qlts-nginx:local` lúc ấy vẫn là ĐÚNG ảnh này. Một cái
 # TAG không chứng minh gì: `docker tag` tay, một lần build ở shell khác, hay
 # stack E2E (`-p qltsngx`) đều có thể đã trỏ tag ấy sang chỗ khác.
-NGINX_IMG_SAU_BUILD=$(docker image inspect --format '{{.Id}}' qlts-nginx:local) || { echo "không đọc được image ID của qlts-nginx:local ngay sau build — DỪNG"; exit 1; }
 [ -n "$NGINX_IMG_SAU_BUILD" ] || { echo "image ID rỗng sau build — DỪNG"; exit 1; }
 echo "nginx image sau Step 5: $NGINX_IMG_SAU_BUILD"   # chép vào sổ ca trực
 # Nhưng bốn service ứng dụng thì CÓ: thiếu `-f docker-compose.rollback.yml` ở
@@ -909,7 +921,13 @@ docker compose -f docker-compose.yml -f docker-compose.rollback.yml \
     --env-file .env.production --profile production up -d --no-deps --wait \
     backend celery-worker celery-beat frontend
 set -a && source .env.production && set +a
-bash scripts/nginx-apply.sh "$DOMAIN"
+# Step 5b — ÁP nginx. Bản kê v2 ⇒ truyền ảnh ghim; `nginx-apply.sh` vẫn chạy ĐỦ
+# candidate → G1 (nội dung) → nginx-verify.sh (TLS + SNI thật) → G2 rồi mới thay
+# container đang phục vụ. KHÔNG có đường tắt nào bỏ verify.
+# ⭐ `git checkout "$PRE_SHA" -- nginx/` ở Step 5 BẮT BUỘC đứng TRƯỚC lệnh này:
+# G1 so nội dung ảnh với cây `nginx/` hiện tại, nên chạy sai thứ tự thì G1 từ
+# chối — đó là hành vi ĐÚNG, không phải lỗi.
+QLTS_NGINX_ANH_GHIM="${NGINX_ANH_GHIM:-}" bash scripts/nginx-apply.sh "$DOMAIN"
 
 # Step 6: Verify smoke
 curl http://localhost:8000/api/admissions/health  # Expect 200

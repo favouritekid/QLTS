@@ -3237,13 +3237,28 @@ _SERVICE_PHAI_LUI = ["backend", "celery-worker", "celery-beat", "frontend"]
 
 
 def test_co_tep_rollback_ghim_anh_cu():
+    """Bốn service ứng dụng KHÔNG được rơi khỏi bản ghim.
+
+    ⚠️ Phép kiểm này CỐ Ý không còn đòi bằng ĐÚNG bốn. Owner chốt Đường A ngày
+    24-09-2026: mọi image runtime bị ``compose build`` ghi đè đều phải có tài sản
+    rollback — nghĩa là **nginx cũng nằm trong bản ghim**, và một service
+    ``build:`` thứ sáu sau này cũng vậy. Đòi bằng đúng bốn ở đây là mã hoá chính
+    sách CŨ vào một chỗ thứ ba, và nó sẽ đỏ ở đúng ca đang làm ĐÚNG.
+
+    Bất biến "bản ghim phủ HẾT tập bị build" có **một tầng chủ sở hữu duy nhất**:
+    ``tests/unit/test_rollback_asset_contract.py``. Tệp này chỉ giữ mối lo riêng
+    của nó — bốn service ứng dụng không được quên.
+    """
     assert _ROLLBACK.is_file(), (
         "thiếu docker-compose.rollback.yml — không có nó thì rollback phải sinh "
         "ad-hoc giữa lúc sự cố, đúng thứ runbook cấm"
     )
-    noi_dung = _tai_compose(_ROLLBACK)["services"]
-    assert sorted(noi_dung) == sorted(_SERVICE_PHAI_LUI), (
-        f"rollback phải ghim ĐÚNG {sorted(_SERVICE_PHAI_LUI)}; hiện: {sorted(noi_dung)}"
+    noi_dung = set(_tai_compose(_ROLLBACK)["services"])
+    thieu = sorted(set(_SERVICE_PHAI_LUI) - noi_dung)
+    assert not thieu, (
+        f"rollback THIẾU service ứng dụng {thieu}; hiện ghim: {sorted(noi_dung)}. "
+        "Lùi backend mà quên celery là chạy worker phiên bản MỚI trên lược đồ "
+        "CSDL đã lùi."
     )
 
 

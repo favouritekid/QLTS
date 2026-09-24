@@ -332,10 +332,86 @@ log "Nginx template sẽ được render TRONG container (domain=$DOMAIN, admiss
 # báo rồi chạy tiếp" — đó đúng là hình dạng `docker pull … || echo "DỪNG LẠI"`
 # đã trả giá một lần.
 
-_RA_DICH_VU="backend celery-worker celery-beat frontend"
 _RA_OPS="${QLTS_ROLLBACK_OPS_DIR:-/opt/qlts-ops/rollback}"
 _RA_MARKER="$_RA_OPS/last-deploy.marker"
 _RA_COMPOSE="docker compose -f docker-compose.yml --profile production --env-file .env.production"
+
+# --- Danh sach service PHAI duoc ghim: DAN XUAT, khong chep tay -------------
+# Ban chep tay truoc day la "backend celery-worker celery-beat frontend" —
+# thieu `nginx`. Ma `build` thi dung CA nginx, nen moi lan deploy ghi de
+# `qlts-nginx:local` trong khi khong tai san nao ghim anh cu. Anh dang phuc vu
+# mat ten duy nhat cua no va thanh dangling: khong con duong lui.
+#
+# KHONG doc docker-compose.yml bang grep/awk: service `nginx` lay `build:` qua
+# YAML anchor (`<<: *nginx-base`), nen moi phep doc VAN BAN deu KHONG thay no.
+# Phai di qua bo render hieu anchor.
+#
+# `--no-interpolate --no-env-resolution`: `config` binh thuong render `env_file`
+# ra plaintext — tu tao mot ban sao secret production tren stdout. Hai co nay
+# giu ${VAR} nguyen van, nen ban render KHONG chua gia tri nao.
+#
+# Nhom theo ANH chu khong theo service: `nginx`, `nginx-bootstrap`,
+# `nginx-candidate` dung CHUNG `qlts-nginx:local`. Dai dien = service co
+# profile rong hoac chua `production`; hai service kia chi song trong luc ap
+# cau hinh nen khong co container de doc image ID.
+_ra_dan_xuat_dich_vu() {
+    local _json _py
+    _py=$(command -v python3 || command -v python) || return 11
+    _json=$(docker compose -f docker-compose.yml --profile production config --no-interpolate --no-env-resolution --format json) || return 12
+    printf %s "$_json" | "$_py" -c '
+import json,sys
+try:
+    goc=json.load(sys.stdin) or {}
+except Exception as e:
+    print("khong doc duoc JSON model Compose: %r" % (e,), file=sys.stderr)
+    sys.exit(5)
+sv=goc.get("services") or {}
+theo_anh={}
+for ten,c in sv.items():
+    b=c.get("build")
+    if not b: continue
+    anh=c.get("image") or ten
+    ky=json.dumps(b,sort_keys=True)
+    # `--no-interpolate` giu ${VAR} nguyen van. Placeholder trong TEN ANH nghia
+    # la ta KHONG biet anh that su la gi — ghim theo chuoi do la ghim mot cai ten
+    # khong ton tai. Fail-closed.
+    #
+    # KHONG cam placeholder trong `build`: build args HOP LE mang ${VAR}
+    # (frontend co NEXT_PUBLIC_* dang do). Chung khong doi anh NAO bi ghi de; va
+    # phep so ky ben duoi la so CHUOI, nen hai service dung chung mot bo args se
+    # van khop nhau nguyen van.
+    if "${" in anh:
+        print("service %s co placeholder trong TEN ANH: %s" % (ten,anh), file=sys.stderr)
+        sys.exit(6)
+    theo_anh.setdefault(anh,{}).setdefault(ky,[]).append((ten, c.get("profiles") or []))
+ra=[]
+for anh,nhom in theo_anh.items():
+    # Gom theo TEN ANH khong du: hai build KHAC NHAU cung ghi mot tag thi ghim
+    # mot dai dien se che mat build con lai, va anh duoc ghim co the la anh cua
+    # build kia. Cung anh ma khac cau hinh build ⇒ DUNG.
+    if len(nhom)!=1:
+        print("anh %s co %d cau hinh build KHAC NHAU" % (anh,len(nhom)), file=sys.stderr)
+        sys.exit(4)
+    ds=list(nhom.values())[0]
+    dd=[t for t,p in ds if not p or "production" in p]
+    if len(dd)!=1:
+        print("anh %s co %d dai dien production" % (anh,len(dd)), file=sys.stderr)
+        sys.exit(2)
+    ra.append(dd[0])
+if not ra:
+    print("0 service co build", file=sys.stderr)
+    sys.exit(3)
+print(" ".join(sorted(ra)))
+' || return 13
+}
+if ! _RA_DICH_VU=$(_ra_dan_xuat_dich_vu); then
+    error "khong dan xuat duoc danh sach service tu model Compose.
+       Thieu python3/python, hoac 'docker compose config' that bai.
+       DUNG — chep tay danh sach la dung loi da de lot nginx."
+fi
+[ -n "$_RA_DICH_VU" ] || error "danh sach service ghim RONG — fail-closed."
+_RA_SO_DICH_VU=$(printf %s "$_RA_DICH_VU" | wc -w)
+[ "$_RA_SO_DICH_VU" -ge 4 ] || error "chi dan xuat duoc $_RA_SO_DICH_VU service (toi thieu 4) — model Compose bat thuong."
 
 # --- Cổng $OPS: chạy TRƯỚC lần ghi đầu tiên của CẢ Step 3b lẫn Step 8c ------
 # Fail-closed, KHÔNG `mkdir -p`, KHÔNG `chmod` để "sửa hộ". Một đường dẫn
@@ -429,7 +505,11 @@ _ra_kiem_schema_marker() {
     _n=$(grep -c "^# marker-version$(printf '	')" "$_f" || true)
     [ "$_n" -eq 1 ] || error "marker mới: có $_n dòng '# marker-version' (cần 1)."
     _v=$(awk -F"$(printf '	')" '$1=="# marker-version"{print $2}' "$_f")
-    [ "$_v" = "1" ] || error "marker mới: marker-version='$_v' (cần '1')."
+    # Marker MỚI luôn là v2 (nó ghi đủ mọi image runtime bị build ghi đè, kể cả
+    # nginx). Đọc thì chấp nhận cả v1 lẫn v2; GHI thì chỉ v2 — nên phép kiểm này
+    # đòi đúng '2'. Nếu nó còn đòi '1' thì deploy đổ ở bước niêm phong, sau khi
+    # mọi thứ khác đã xong.
+    [ "$_v" = "2" ] || error "marker mới: marker-version='$_v' (cần '2')."
     _n=$(grep -c "^# deployed-sha$(printf '	')" "$_f" || true)
     [ "$_n" -eq 1 ] || error "marker mới: có $_n dòng '# deployed-sha' (cần 1)."
     _sha=$(awk -F"$(printf '	')" '$1=="# deployed-sha"{print $2}' "$_f")
@@ -556,10 +636,24 @@ else
         error "marker: có $_RA_N dòng '# marker-version' (cần đúng 1) — marker hỏng."
     fi
     _RA_VER=$(awk -F'\t' '$1=="# marker-version"{print $2}' "$_RA_MARKER")
-    if [ "$_RA_VER" != "1" ]; then
-        error "marker: marker-version='$_RA_VER', script này chỉ đọc được version 1.
+    case "$_RA_VER" in
+        1|2) : ;;
+        *) error "marker: marker-version='$_RA_VER', script này chỉ đọc được 1 hoặc 2.
        Không đoán định dạng lạ — một marker của phiên bản khác có thể xếp cột
-       khác và ta sẽ ghim nhầm image ID."
+       khác và ta sẽ ghim nhầm image ID." ;;
+    esac
+    # v1 chi ghi BON service ung dung. No khong the chung thuc anh nginx —
+    # luc no duoc ghi, nginx chua tung duoc ghim. Nen: kiem dung nhung service
+    # marker CO ghi, canh bao ro phan con lai, roi van ghim DU theo danh sach
+    # dan xuat (Step 3b doc image ID TRUC TIEP tu container dang chay, khong
+    # can marker biet truoc).
+    _RA_MK_DICH_VU=$(awk -F"$(printf '	')" '/^#/{next} NF==0{next} {print $1}' "$_RA_MARKER" | sort | tr '
+' ' ')
+    _RA_MK_DICH_VU=${_RA_MK_DICH_VU% }
+    if [ "$_RA_VER" = "1" ]; then
+        warn "marker LEGACY (version 1): no chi chung thuc $(printf %s "$_RA_MK_DICH_VU" | wc -w) service.
+       KHONG co image rollback cho service nam ngoai danh sach do — lan nay
+       chung se duoc ghim lan dau. Marker moi se la version 2."
     fi
 
     _RA_N=$(_ra_dem '^# deployed-sha'$'\t')
@@ -577,7 +671,9 @@ else
     # Mỗi service ĐÚNG MỘT dòng, và không có dòng service lạ. Một dòng thừa tên
     # `postgres` hay `nginx` nghĩa là marker được sinh bởi thứ khác — đừng đọc
     # tiếp một tệp ta không hiểu.
-    for _S in $_RA_DICH_VU; do
+    # Lap theo service MA MARKER GHI, khong theo danh sach dan xuat: marker v1
+    # khong co hang nginx, doi no la doi mot thu no chua bao gio hua.
+    for _S in $_RA_MK_DICH_VU; do
         _RA_N=$(_ra_dem "^${_S}"$'\t')
         if [ "$_RA_N" -ne 1 ]; then
             error "marker: service '$_S' xuất hiện $_RA_N lần (cần đúng 1)."
@@ -588,7 +684,7 @@ else
         { ok=0; n=split(ds,a," "); for(i=1;i<=n;i++) if($1==a[i]) ok=1
           if(!ok) print $1 }' "$_RA_MARKER")
     if [ -n "$_RA_LA" ]; then
-        error "marker có dòng service KHÔNG thuộc bốn service ứng dụng: $(printf '%s' "$_RA_LA" | tr '\n' ' ')
+        error "marker có dòng service KHÔNG thuộc model Compose hiện hành: $(printf '%s' "$_RA_LA" | tr '\n' ' ')
        Marker này không do đường deploy sinh ra — từ chối dùng."
     fi
 
@@ -596,7 +692,7 @@ else
     # BỐN, không phải hai: compose đặt tên ảnh theo `<project>-<service>` nên
     # celery-worker/celery-beat có ảnh RIÊNG. Thiếu hai cái đó thì rollback lùi
     # backend mà để worker ở mã MỚI, chạy trên lược đồ CSDL đã lùi.
-    for _S in $_RA_DICH_VU; do
+    for _S in $_RA_MK_DICH_VU; do
         _RA_CID=$($_RA_COMPOSE ps -q "$_S" 2>/dev/null || true)
         if [ -z "$_RA_CID" ]; then
             error "không thấy container đang chạy cho '$_S' — không thể ghim ảnh cũ.
@@ -634,7 +730,8 @@ else
        sai. DỪNG trước build và trước CSDL."
         fi
     done
-    log "  ✓ marker khớp 4/4 container đang chạy — nguồn = $_RA_SRC"
+    _RA_MK_N=$(printf %s "$_RA_MK_DICH_VU" | wc -w)
+    log "  ✓ marker khớp $_RA_MK_N/$_RA_MK_N container đang chạy — nguồn = $_RA_SRC"
 
     # --- Tên tag: không va chạm, không ghi đè -------------------------------
     if ! _RA_TGT=$(git rev-parse HEAD 2>/dev/null); then
@@ -679,6 +776,10 @@ else
     _RA_TMP=$(mktemp "$_RA_DIR/.manifest.XXXXXXXXXX")         || error "không tạo được tệp tạm nguyên tử trong $_RA_DIR"
     _ra_kiem_tmp "$_RA_TMP" "$_RA_DIR" '.manifest.*' "manifest"
     {
+        # schema-version 2 = ban ke ghi DU moi image runtime bi build ghi de,
+        # ke ca nginx. Ban ke v1 (khong co dong nay) chi co bon service ung
+        # dung — rollback-preflight doc duoc nhung PHAI canh bao ro.
+        printf '# schema-version\t2\n'
         printf '# scope\tLOCAL-ONLY - chua publish GHCR/offsite\n'
         printf '# git-rev\t%s\n'    "$_RA_SRC"
         printf '# target-rev\t%s\n' "$_RA_TGT"
@@ -689,6 +790,16 @@ else
     for _S in $_RA_DICH_VU; do
         _RA_CID=$($_RA_COMPOSE ps -q "$_S")
         _RA_IMG=$(docker inspect -f '{{.Image}}' "$_RA_CID")
+        # Tag ghim phai DUY NHAT. Neu no da ton tai va tro vao mot anh KHAC thi
+        # `docker tag` se am tham cuop ten: ban ke lan truoc tro vao mot anh khong
+        # con mang ten do nua, va rollback theo tag se lay nham anh. Fail-closed.
+        _RA_CU=$(docker image inspect -f '{{.Id}}' "qlts-${_S}:${_RA_TAG}" 2>/dev/null || true)
+        if [ -n "$_RA_CU" ] && [ "$_RA_CU" != "$_RA_IMG" ]; then
+            error "tag qlts-${_S}:${_RA_TAG} DA TON TAI va tro vao anh khac:
+       dang co = $_RA_CU
+       sap ghim = $_RA_IMG
+       Ghi de la cuop ten khoi mot ban ke cu. DUNG truoc build."
+        fi
         docker tag "$_RA_IMG" "qlts-${_S}:${_RA_TAG}"
         printf '%s\t%s\t%s\t%s\t%s\n' \
             "$_S" "$_RA_CID" "$_RA_IMG" "qlts-${_S}:${_RA_TAG}" "PENDING_DIGEST" >> "$_RA_TMP"
@@ -697,7 +808,7 @@ else
     # Chỉ xuất bản bản kê khi CẢ BỐN tag đã xong. `set -e` cắt ngang ở trên thì
     # `$_RA_MANIFEST` không bao giờ xuất hiện — preflight của lượt sau sẽ thấy
     # thiếu bản kê và dừng, thay vì đọc một bản kê nửa vời.
-    log "  ✓ đã ghim 4 ảnh vào tag $_RA_TAG"
+    log "  ✓ đã ghim $_RA_SO_DICH_VU ảnh vào tag $_RA_TAG"
 
     # Niêm phong TRƯỚC preflight. Không có mốc này thì "đã qua preflight" chỉ
     # nói về MỘT nội dung nào đó tại MỘT thời điểm nào đó: một byte đổi sau
@@ -1147,7 +1258,7 @@ if [ -e "$_RA_MARKER" ]; then
     _RA_MK_CU_INO=$(stat -c '%d:%i' "$_RA_MARKER")
 fi
 {
-    printf '# marker-version\t1\n'
+    printf '# marker-version\t2\n'
     printf '# deployed-sha\t%s\n' "$_RA_SHA_MOI"
     printf '# deployed-at\t%s\n'  "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     if [ "$_RA_BO_QUA" = "1" ]; then
@@ -1220,7 +1331,7 @@ _RA_MK_HASH2=$(sha256sum "$_RA_MARKER" | awk '{print $1}')
 [ "$_RA_MK_HASH2" = "$_RA_MK_HASH" ]     || error "sau công bố: marker KHÁC bản đã validate ($_RA_MK_HASH2 ≠ $_RA_MK_HASH)."
 _ra_kiem_schema_marker "$_RA_MARKER"
 _ra_kiem_marker_vs_live "sau-mv" "$_RA_MARKER"
-log "  ✓ marker: $_RA_MARKER (sha=$_RA_SHA_MOI, 4/4 ảnh, hash=${_RA_MK_HASH:0:16}…)"
+log "  ✓ marker: $_RA_MARKER (sha=$_RA_SHA_MOI, $_RA_SO_DICH_VU/$_RA_SO_DICH_VU ảnh, hash=${_RA_MK_HASH:0:16}…)"
 
 # =============================================================================
 # Done
