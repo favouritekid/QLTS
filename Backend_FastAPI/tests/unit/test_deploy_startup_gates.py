@@ -291,6 +291,36 @@ case "$_tat_ca" in
 esac
 
 case "$_tat_ca" in
+    *compose*" config "*)
+        # `_ra_dan_xuat_dich_vu` hỏi MODEL Compose để dẫn xuất danh sách service
+        # phải ghim, thay cho một hằng chép tay. Sân khấu này khai BỐN service
+        # ứng dụng — đó là thế giới mà bộ test này mô phỏng.
+        #
+        # ⚠️ Bất biến "bản ghim phủ HẾT tập bị build" KHÔNG thuộc về đây: nó đọc
+        # `docker-compose.yml` THẬT và có một tầng chủ sở hữu duy nhất là
+        # `tests/unit/test_rollback_asset_contract.py`. Khai lại 5 ảnh ở đây là
+        # đẻ ra một nguồn chuẩn thứ hai, rồi hai bản sẽ trôi khỏi nhau.
+        #
+        # `STUB_COMPOSE_CONFIG` lái các ca HỎNG — nó là biến của SÂN KHẤU, không
+        # phải bypass trong script production.
+        case "${STUB_COMPOSE_CONFIG:-ok}" in
+            rong)  exit 0 ;;
+            hong)  printf 'khong phai json\n'; exit 0 ;;
+            rc)    exit 77 ;;
+            thieu) printf '{"services": {"postgres": {"image": "postgres:16"}}}\n'; exit 0 ;;
+        esac
+        cat <<'__QLTS_JSON__'
+{"services": {
+  "backend":       {"build": {"context": "./Backend_FastAPI", "dockerfile": "Dockerfile"}},
+  "celery-worker": {"build": {"context": "./Backend_FastAPI", "dockerfile": "Dockerfile"}},
+  "celery-beat":   {"build": {"context": "./Backend_FastAPI", "dockerfile": "Dockerfile"}},
+  "frontend":      {"build": {"context": "./frontend", "dockerfile": "Dockerfile"}},
+  "postgres":      {"image": "postgres:16-alpine"},
+  "redis":         {"image": "redis:7-alpine"}
+}}
+__QLTS_JSON__
+        exit 0
+        ;;
     *" ps -q "*)
         # Step 3b/8c hỏi ID container theo TỪNG service. Khác hẳn `ps -aq` của
         # vòng chờ health bên dưới — đừng gộp hai giao thức làm một.
@@ -1642,6 +1672,56 @@ def test_ra_loi_giua_chung_khong_xuat_ban_ban_ke(tmp_path: Path) -> None:
 
 
 @_bo_qua_neu_khong_posix
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,gia_tri",
+    [
+        ("compose config in RỖNG", "rong"),
+        ("compose config in JSON hỏng", "hong"),
+        ("compose config thoát khác 0", "rc"),
+        ("model KHÔNG có service nào `build:`", "thieu"),
+    ],
+)
+def test_ra_stub_compose_config_hong_thi_deploy_DUNG(
+    tmp_path: Path, ten_ca: str, gia_tri: str
+) -> None:
+    """Kiểm ngược cho chính SÂN KHẤU vừa thêm.
+
+    Stub `docker` nay trả lời `compose config --format json`, vì `deploy.sh` dẫn
+    xuất danh sách service ghim từ model Compose thay cho một hằng chép tay. Một
+    sân khấu mới mà không có phép kiểm ngược thì nó chỉ đang **làm xanh** mọi ca
+    đi qua Step 3b — đúng loại xanh giả mà bộ test này tồn tại để chặn.
+
+    Bốn biến thể dưới đây phá ĐÚNG MỘT thứ mỗi lần, và cả bốn phải làm `deploy.sh`
+    DỪNG TRƯỚC build, trước khi chạm CSDL.
+    """
+    goc = _dung_san_khau(tmp_path)
+    ket, nhat_ky = _chay_deploy(goc, STUB_COMPOSE_CONFIG=gia_tri)
+
+    assert ket.returncode != 0, (
+        f"{ten_ca}: model Compose không dùng được mà deploy vẫn thoát 0 ⇒ danh "
+        f"sách ghim rỗng/sai vẫn đi tiếp:\n{nhat_ky}"
+    )
+    assert _MOC_BUILD not in nhat_ky, (
+        f"{ten_ca}: đã BUILD dù chưa biết phải ghim những ảnh nào — build ghi đè "
+        f"tag trước khi tài sản rollback tồn tại:\n{nhat_ky}"
+    )
+    assert _MOC_PGDUMP not in nhat_ky, f"{ten_ca}: đã chạm CSDL"
+
+
+def test_ra_stub_compose_config_DUNG_thi_deploy_di_tiep(tmp_path: Path) -> None:
+    """Đối chứng cho bốn ca trên: sân khấu mặc định phải XANH.
+
+    Không có ca này thì bốn ca kia vẫn đỏ ngay cả khi `deploy.sh` hỏng vì một lý
+    do khác hẳn, và ta không biết mình đang đo cái gì.
+    """
+    goc = _dung_san_khau(tmp_path)
+    ket, nhat_ky = _chay_deploy(goc)
+
+    assert ket.returncode == 0, f"đường thuận lợi mà vẫn chặn:\n{nhat_ky}"
+    assert _MOC_BUILD in nhat_ky, "đường thuận lợi phải tới được build"
+
+
 def test_ra_preflight_do_thi_dung_truoc_build(tmp_path: Path) -> None:
     goc = _dung_san_khau(tmp_path)
     ket, nhat_ky = _chay_deploy(goc, STUB_ROLLBACK_PREFLIGHT_RC="1")
@@ -1849,8 +1929,12 @@ def test_ra_log_khong_dien_giai_escape_trong_thong_diep(tmp_path: Path) -> None:
             _noi_dung_marker().replace("# marker-version\t1\n", ""),
         ),
         (
-            "marker-version khác 1",
-            _noi_dung_marker().replace("# marker-version\t1", "# marker-version\t2"),
+            # ĐỔI 24-09-2026: `2` nay là phiên bản HỢP LỆ (marker v2 ghi đủ mọi
+            # image runtime bị build ghi đè, kể cả nginx). Đường ĐỌC chấp nhận cả
+            # 1 lẫn 2; đường GHI luôn là 2. Nên ca "phiên bản lạ" phải dùng một
+            # số thật sự lạ — giữ `2` ở đây là canh một hợp đồng đã hết hiệu lực.
+            "marker-version ngoài {1,2}",
+            _noi_dung_marker().replace("# marker-version\t1", "# marker-version\t3"),
         ),
         (
             "marker-version hai lần",

@@ -54,6 +54,24 @@ services:
     image: qlts-frontend:${QLTS_ROLLBACK_TAG:?dat QLTS_ROLLBACK_TAG}
     build: !reset null
 
-  # nginx CỐ Ý không nằm ở đây: cấu hình của nó đi theo cây git (xem
-  # nginx/Dockerfile), nên lùi cây về đúng commit rồi `build` là đã lùi đúng
-  # nginx. Ghim thêm một tag ảnh chỉ tạo ra một nguồn chuẩn thứ hai.
+  # nginx: ĐÃ ĐỔI CHÍNH SÁCH 24-09-2026 — owner chốt Đường A.
+  #
+  # Câu cũ ở đây là: 'cấu hình nginx đi theo cây git, nên lùi cây rồi build là
+  # đã lùi đúng nginx'. Câu ấy coi *dựng lại từ nguồn* tương đương *lùi về đúng
+  # ảnh cũ* — hai thứ KHÔNG bằng nhau: base image, build-arg và cache đều có thể
+  # đã đổi giữa hai lần build. Nguồn git vẫn là cổng NỘI DUNG của nginx (G1 của
+  # `nginx-apply.sh` so ảnh với cây `nginx/`); ảnh đã ghim là TÀI SẢN ROLLBACK,
+  # không phải nguồn chuẩn thứ hai.
+  #
+  # ⚠️ KHỐI NÀY TỰ SINH MỘT LỐI FAIL-OPEN. Có nó rồi thì một lệnh `up -d` KHÔNG
+  # liệt kê service sẽ dựng lại nginx từ ảnh ghim mà KHÔNG đi qua
+  # `nginx-verify.sh` — đúng thứ `nginx-apply.sh` sinh ra để chặn. Nên:
+  #   * mọi lệnh rollback PHẢI liệt kê bốn service ứng dụng TƯỜNG MINH;
+  #   * nginx đi RIÊNG qua `nginx-apply.sh` với QLTS_NGINX_ANH_GHIM.
+  # `test_rollback_asset_contract.py` khoá cả hai vế ấy.
+  #
+  # Vai trò của khối này là để `rollback-preflight.sh` §3 xác minh được model
+  # Compose CHỌN đúng ảnh đã ghim — KHÔNG phải để `up` tiêu thụ nó.
+  nginx:
+    image: qlts-nginx:${QLTS_ROLLBACK_TAG:?dat QLTS_ROLLBACK_TAG}
+    build: !reset null
