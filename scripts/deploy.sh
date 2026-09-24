@@ -404,14 +404,30 @@ if not ra:
 print(" ".join(sorted(ra)))
 ' || return 13
 }
-if ! _RA_DICH_VU=$(_ra_dan_xuat_dich_vu); then
-    error "khong dan xuat duoc danh sach service tu model Compose.
+# Khoi tao LAZY, khong eager.
+#
+# Ban dau khoi nay chay o CAP CAO NHAT, ngay sau Step 1. Hau qua do duoc:
+# `deploy.sh` chet ngay sau Step 1 trong MOI sandbox test khong mo hinh hoa
+# `docker compose config` — 90 ca do trong ba bo guard, do bang phep so
+# nen/current (nen: 251 collected, 0 failed; sau ban va: 90 failed).
+#
+# Sai lam: bat MOI buoc cua deploy.sh phu thuoc vao mot lenh chi can cho MOT
+# khoi. Nay danh sach duoc tinh o lan dung dau tien, va CHI trong duong di
+# cua tai san rollback.
+#
+# Fail-closed KHONG doi mot ly: moi phep kiem cu van o day, chi doi CHO chay.
+# Khong bien bypass, khong fallback sang danh sach chep tay.
+_ra_bao_dam_dich_vu() {
+    [ -n "${_RA_DICH_VU:-}" ] && return 0
+    if ! _RA_DICH_VU=$(_ra_dan_xuat_dich_vu); then
+        error "khong dan xuat duoc danh sach service tu model Compose.
        Thieu python3/python, hoac 'docker compose config' that bai.
        DUNG — chep tay danh sach la dung loi da de lot nginx."
-fi
-[ -n "$_RA_DICH_VU" ] || error "danh sach service ghim RONG — fail-closed."
-_RA_SO_DICH_VU=$(printf %s "$_RA_DICH_VU" | wc -w)
-[ "$_RA_SO_DICH_VU" -ge 4 ] || error "chi dan xuat duoc $_RA_SO_DICH_VU service (toi thieu 4) — model Compose bat thuong."
+    fi
+    [ -n "$_RA_DICH_VU" ] || error "danh sach service ghim RONG — fail-closed."
+    _RA_SO_DICH_VU=$(printf %s "$_RA_DICH_VU" | wc -w)
+    [ "$_RA_SO_DICH_VU" -ge 4 ] || error "chi dan xuat duoc $_RA_SO_DICH_VU service (toi thieu 4) — model Compose bat thuong."
+}
 
 # --- Cổng $OPS: chạy TRƯỚC lần ghi đầu tiên của CẢ Step 3b lẫn Step 8c ------
 # Fail-closed, KHÔNG `mkdir -p`, KHÔNG `chmod` để "sửa hộ". Một đường dẫn
@@ -614,6 +630,9 @@ if [ "$_RA_BO_QUA" = "1" ]; then
 else
     log "Step 3b: tạo tài sản rollback (trước build)..."
 
+    # Dan xuat TAI DAY — day la cho dau tien that su can danh sach.
+    _ra_bao_dam_dich_vu
+
     # --- Đọc marker ---------------------------------------------------------
     if [ ! -f "$_RA_MARKER" ]; then
         error "THIẾU marker $_RA_MARKER — không biết ảnh đang chạy thuộc commit nào.
@@ -647,11 +666,21 @@ else
     # marker CO ghi, canh bao ro phan con lai, roi van ghim DU theo danh sach
     # dan xuat (Step 3b doc image ID TRUC TIEP tu container dang chay, khong
     # can marker biet truoc).
-    _RA_MK_DICH_VU=$(awk -F"$(printf '	')" '/^#/{next} NF==0{next} {print $1}' "$_RA_MARKER" | sort | tr '
-' ' ')
-    _RA_MK_DICH_VU=${_RA_MK_DICH_VU% }
+    # ⚠️ CỐ Ý KHÔNG dùng `tr` ở đây. `$(...)` đã gộp kết quả thành một chuỗi mà
+    # `for` tự tách theo IFS (có sẵn newline), nên `tr` là thừa — và nó KHÔNG
+    # vô hại: `test_aw_marker_cu_doi_giua_chung_thi_do` dựng một `tr` giả để
+    # sửa marker ở ĐÚNG lần gọi `tr` đầu tiên, vốn nằm ở Step 8c. Thêm một lần
+    # gọi `tr` tại Step 3b làm ca ấy nổ sớm, ở một chỗ hoàn toàn khác.
+    _RA_MK_DICH_VU=$(awk -F"$(printf '	')" '/^#/{next} NF==0{next} {print $1}' "$_RA_MARKER" | sort)
+    _RA_MK_N=$(printf %s "$_RA_MK_DICH_VU" | wc -w)
+    # SÀN cứng: bốn service ứng dụng đã tồn tại từ trước mọi phiên bản marker.
+    # Bỏ sàn này là để lọt marker 3/4 — đúng ca mà
+    # `test_ra_marker_hong_thi_dung_truoc_build` canh, và là fail-open thật.
+    [ "$_RA_MK_N" -ge 4 ] || error "marker chỉ ghi $_RA_MK_N service (tối thiểu 4).
+       Một marker thiếu service thì không chứng thực được ảnh đang chạy của
+       service đó — ghim theo nó là ghim một đường lùi khuyết."
     if [ "$_RA_VER" = "1" ]; then
-        warn "marker LEGACY (version 1): no chi chung thuc $(printf %s "$_RA_MK_DICH_VU" | wc -w) service.
+        warn "marker LEGACY (version 1): no chi chung thuc $_RA_MK_N service.
        KHONG co image rollback cho service nam ngoai danh sach do — lan nay
        chung se duoc ghim lan dau. Marker moi se la version 2."
     fi
@@ -1267,6 +1296,11 @@ fi
         printf '# asset-tag\t%s\n' "$_RA_TAG"
     fi
 } >> "$_RA_MK_TMP"
+
+# Duong BO QUA tai san (`QLTS_SKIP_ROLLBACK_ASSET=1`) khong di qua Step 3b,
+# nhung marker van phai ghi du moi service. Goi lai o day — ham tu no-op neu
+# da tinh roi.
+_ra_bao_dam_dich_vu
 
 for _S in $_RA_DICH_VU; do
     _RA_CID_MOI=$($_RA_COMPOSE ps -q "$_S" 2>/dev/null || true)

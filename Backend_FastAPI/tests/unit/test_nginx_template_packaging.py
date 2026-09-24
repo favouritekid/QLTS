@@ -3314,9 +3314,23 @@ def test_model_compose_rollback_chon_dung_bon_anh_cu(tmp_path):
             f"`{ten}` vẫn còn `build:` — `up -d` sẽ dựng lại từ mã MỚI, tức "
             "không rollback gì cả"
         )
-    assert dich_vu["nginx"].get("build"), (
-        "nginx CỐ Ý vẫn build từ cây git (cấu hình của nó đi theo image); ghim "
-        "thêm một tag ảnh là tạo nguồn chuẩn thứ hai"
+    # ĐỔI CHÍNH SÁCH 24-09-2026 (Đường A): nginx nay CŨNG được ghim bằng ảnh bất
+    # biến. Câu cũ ở đây đòi `nginx` VẪN còn `build:` — đó là chính sách CŨ, và
+    # đây là chỗ THỨ BA mã hoá nó (sau `_SERVICE_PHAI_LUI` và chú thích trong
+    # `docker-compose.rollback.yml`). Nó chỉ chạy khi có Docker CLI, nên nó im
+    # lặng ở máy không có `docker` trong container và chỉ đỏ trên CI.
+    #
+    # Vì sao đổi: "dựng lại từ nguồn" KHÔNG tương đương "lùi về đúng ảnh cũ" —
+    # base image, build-arg và cache đều có thể đã đổi giữa hai lần build. Nguồn
+    # git vẫn là cổng NỘI DUNG của nginx (G1 của `nginx-apply.sh`); ảnh đã ghim
+    # là TÀI SẢN ROLLBACK, không phải nguồn chuẩn thứ hai.
+    s_nginx = dich_vu["nginx"]
+    assert s_nginx.get("image") == "qlts-nginx:tag-cu-kiem-thu", (
+        f"`nginx` không được ghim về ảnh cũ; hiện image={s_nginx.get('image')!r}"
+    )
+    assert not s_nginx.get("build"), (
+        "`nginx` vẫn còn `build:` — `up -d` sẽ dựng lại từ mã MỚI thay vì dùng "
+        "ảnh đã ghim, tức không rollback gì cả"
     )
 
     # Quên tag phải ĐỔ, không được lặng lẽ dựng lại ảnh hiện hành.
