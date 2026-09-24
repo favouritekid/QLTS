@@ -35,6 +35,11 @@ on:
       - '.github/dependabot.yml'
       - '.github/scripts/**'
       - 'scripts/**'
+      # `tests-e2e/**` cũng KHÔNG khớp dòng nào ở trên. PR #650 (hợp
+      # đồng ca kiểm E2E nginx) chỉ chạm thư mục này, nên workflow không kích
+      # hoạt và `Build` + `Check (type+lint+test)` treo ở "expected, not run" —
+      # đúng cái bẫy mà chú thích ngay trên mô tả, chỉ là thiếu mất một dòng.
+      - 'tests-e2e/**'
 
 concurrency:
   group: fe-pr-${{ github.ref }}

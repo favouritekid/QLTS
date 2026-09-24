@@ -41,6 +41,7 @@ POSTGRES_PASSWORD=$(openssl rand -hex 16)
 POSTGRES_DB=ngxtest
 DOMAIN=$D
 NGINX_ADMISSION_FROZEN=false
+ADMISSION_FROZEN=false
 NEXT_PUBLIC_API_URL=http://localhost:8000
 SECRET_KEY=ngxtest-khong-phai-secret-0000000000
 JWT_SECRET_KEY=ngxtest-khong-phai-secret-1111111111
@@ -189,7 +190,16 @@ goi POST /api/admissions/                    # vẫn 200 ⇒ CẦN GẠT CÂM
 # --- quy trình đúng: HAI tầng, cả hai đều phải được DỰNG LẠI ---
 # Tầng backend: `env_file` chỉ được đọc lúc container được TẠO, nên `restart`
 # giữ nguyên ADMISSION_FROZEN cũ. Đã đo hai chiều trên stack này.
+# ⚠️ Fixture do chính README này sinh ra KHÔNG có dòng `ADMISSION_FROZEN=` — nó
+# chỉ có `NGINX_ADMISSION_FROZEN=`. Biểu thức neo `^ADMISSION_FROZEN=` vì thế
+# khớp 0 HÀNG, `sed` trả rc=0 và KHÔNG báo gì. Backend khởi động lại với biến
+# KHÔNG đặt ⇒ `settings.ADMISSION_FROZEN` giữ default=False ⇒ middleware không
+# chặn gì. Mà phép kiểm 503 bên dưới VẪN XANH, vì tầng **nginx** đã trả 503.
+# Tài liệu tuyên bố 'HAI tầng' trong khi chỉ chứng minh được MỘT.
 sed -i 's/^ADMISSION_FROZEN=.*/ADMISSION_FROZEN=true/' $E
+# HẬU KIỂM NGAY TẠI CHỖ — `sed` khớp 0 hàng vẫn rc=0 (CLAUDE.md §8):
+grep -c '^ADMISSION_FROZEN=true$' $E        # phải = 1
+grep -c '^NGINX_ADMISSION_FROZEN=true$' $E  # phải = 1
 $DC up -d --no-deps --wait backend
 
 # Tầng nginx:
@@ -212,12 +222,43 @@ trả 503.
 # Cổng 80 đang bị nginx giữ ⇒ bootstrap PHẢI hỏng. Đây là tiền đề mà bản trước
 # không ghi ở đâu cả, và người vận hành gặp "port is already allocated" giữa
 # lúc đang cấp chứng thư.
-$DC --profile bootstrap up -d --no-deps nginx-bootstrap   # Bind for …:18080 failed
+$DC --profile bootstrap up -d --no-deps nginx-bootstrap
+#   rc=1 — "Bind for 127.0.0.1:18080 failed: port is already allocated"
 
 # Step 1 của setup-ssl.sh làm đúng việc này, CÓ CHỦ ĐÍCH:
 $DC stop nginx
-$DC --profile bootstrap up -d --no-deps nginx-bootstrap
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18080/.well-known/acme-challenge/x  # 404
+
+# ⚠️ `--force-recreate` KHÔNG phải tuỳ chọn trang trí. Lần `up` hỏng ở trên ĐÃ TẠO
+# container `qltsngx-nginx-bootstrap-1`; nó chết ở bước gắn cổng nên **không được
+# gắn vào mạng nào**. `up` lần hai KHÔNG tạo mới mà chỉ KHỞI ĐỘNG LẠI đúng cái xác
+# ấy: rc=0, `State.Status=running`, `HostConfig.PortBindings` vẫn CÓ khai 18080 —
+# mà `NetworkSettings.Networks` RỖNG, `docker port` không in gì, và ACME trả `000`.
+# Đúng một ca "lệnh trả 0 mà việc không xảy ra": đọc rc=0 + `running` rồi kết luận
+# bootstrap đã lên là SAI. Đo 24-09-2026 trên stack E2E `qltsngx` — Docker Desktop /
+# Windows, KHÔNG phải VPS. Thứ đo được là hành vi của Compose khi container đã tồn tại
+# sẵn từ lần `up` hỏng; đó là lớp CLI/daemon nên nhiều khả năng giống nhau trên VPS
+# Linux, NHƯNG chưa xác minh ở đó. Vì vậy ba phép hậu kiểm dưới đây vẫn bắt buộc khi
+# chạy thật trên VPS — đừng bỏ vì "ở máy đã đo rồi".
+$DC --profile bootstrap up -d --no-deps --force-recreate --wait nginx-bootstrap   # rc=0
+
+# BA phép hậu kiểm — chạy HẾT rồi mới được kết luận PASS, vì rc=0 không chứng minh gì:
+B=qltsngx-nginx-bootstrap-1
+
+# 1) Gắn mạng — thứ mà xác container thiếu, và là thứ `running` không nói ra:
+docker inspect -f '{{range $n,$c := .NetworkSettings.Networks}}{{$n}}(ip={{$c.IPAddress}}){{end}}' $B
+#   → qltsngx_default(ip=<khác rỗng>)    ·   in ra RỖNG = xác của lần hỏng, làm lại
+#     Hợp đồng chỉ gồm HAI vế: tên mạng đúng `qltsngx_default`, và ip KHÁC rỗng.
+#     Docker cấp IP lại theo từng lần dựng mạng — đừng ghim con số, đừng "sửa cho khớp".
+
+# 2) Cổng đã publish THẬT — hỏi daemon, không hỏi `PortBindings` (nó khai cả khi chưa gắn):
+docker port $B
+#   → 80/tcp -> 127.0.0.1:18080          ·   không in gì = chưa publish, làm lại
+
+# 3) Phản hồi ACME — đường mà Let's Encrypt thật sẽ đi:
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18080/.well-known/acme-challenge/x
+#   → 404 (từ webroot)                   ·   `000` = không ai nghe ⇒ cấp chứng thư sẽ trượt
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18080/
+#   → 503 của CHÍNH bootstrap            ·   502 = đang chạm cấu hình có `upstream`, nhầm container
 ```
 
 Bootstrap phải lên được **khi backend/frontend chưa hề chạy** — đó là cảnh một VPS mới. Thử

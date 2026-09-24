@@ -2,6 +2,12 @@
 # `nginx -t` sẽ xanh; container LÊN được; healthcheck phải ĐỎ.
 services:
   nginx-candidate:
+    # `certbot_www` PHẢI được khai lại: `volumes: !override` THAY cả danh sách đã
+    # gộp từ `docker-compose.nginx-test.yml`. Bỏ dòng này ra là ca kiểm vi phạm HAI
+    # bất biến cùng lúc — thư mục template (thứ đang đo) VÀ webroot ACME — nên
+    # không còn biết candidate chết vì lý do nào. CLAUDE.md §3: một ca chỉ được
+    # phá MỘT bất biến.
     volumes: !override
       - ./tests-e2e/nginx-packaging/rong:/etc/nginx/templates:ro
       - ./tests-e2e/nginx-packaging/nginx-test-certs:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
