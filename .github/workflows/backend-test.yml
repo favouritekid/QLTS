@@ -1010,12 +1010,21 @@ jobs:
           # Vì sao BẮT BUỘC có selector: nó canh chính `tests/conftest.py`, tệp
           # toàn cục của cả bộ test. Nằm ngoài mọi tier thì không shard nào chạy
           # mà required check vẫn xanh — đúng lớp lỗ hổng `ci-allowlist`.
+          # `test_rollback_asset_contract.py` vào Tier 5, cùng họ phép kiểm CẤU
+          # TRÚC: nó đọc `docker-compose.yml`, `docker-compose.rollback.yml`,
+          # `scripts/*.sh` và RUNBOOK như VĂN BẢN/YAML. Không đụng CSDL, không
+          # cần Docker (PyYAML tự giải merge key `<<: *nginx-base`).
+          # Ghim WHOLE-FILE chứ không `::node`.
+          # Vì sao BẮT BUỘC có selector: nó canh bất biến 'mọi image runtime bị
+          # build ghi đè đều có tài sản rollback'. Nằm ngoài mọi tier thì không
+          # shard nào chạy mà required check vẫn xanh.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
               tests/unit/test_celery_heartbeat_monitor_script.py
               tests/unit/test_ci_test_visibility.py
               tests/unit/test_conftest_db_url_guard.py
+              tests/unit/test_rollback_asset_contract.py
               tests/unit/test_e2e_catalog_fixture.py
               tests/unit/test_e2e_credential_contract.py
               tests/unit/test_import_moet_schools.py

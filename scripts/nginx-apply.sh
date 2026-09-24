@@ -577,6 +577,48 @@ fi
 
 # --- Nhịp 1+2: dựng candidate rồi đo ----------------------------------------
 log "dựng nginx-candidate để thử cấu hình mới..."
+# --- Chế độ ẢNH GHIM (rollback) ---------------------------------------------
+# `QLTS_NGINX_ANH_GHIM` = image id/ref của ảnh nginx đã được ghim TRƯỚC lần
+# deploy hỏng (cột 3 của bản kê rollback v2). Dùng khi lùi: ta muốn đúng ảnh
+# CŨ chứ không phải một ảnh dựng lại từ nguồn — base image, build-arg và cache
+# đều có thể đã đổi từ lần build ấy.
+#
+# KHÔNG có đường tắt nào bỏ kiểm: sau khi trỏ `qlts-nginx:local` vào ảnh ghim,
+# luồng đi tiếp NGUYÊN VẸN — candidate → G1 (nội dung) → nginx-verify.sh (TLS +
+# SNI thật) → G2 (đồng nhất ảnh) → mới thay container phục vụ.
+#
+# ⭐ Thứ tự tự cưỡng chế: G1 so nội dung ảnh với cây `nginx/` HIỆN TẠI. Chạy
+# chế độ này TRƯỚC `git checkout $PRE_SHA -- nginx/` thì G1 từ chối — đúng, vì
+# ảnh cũ không khớp cây mới. Không cần thêm cổng thứ tự nào.
+#
+# Hỏng ở bất kỳ đâu ⇒ trả `qlts-nginx:local` về đúng ảnh cũ. Không để lại một
+# cái tag trỏ nửa vời.
+_ANH_LOCAL_CU=''
+_khoi_phuc_tag_local() {
+    [ -n "$_ANH_LOCAL_CU" ] || return 0
+    docker tag "$_ANH_LOCAL_CU" qlts-nginx:local >/dev/null 2>&1 || true
+}
+if [ -n "${QLTS_NGINX_ANH_GHIM:-}" ]; then
+    _GHIM="$QLTS_NGINX_ANH_GHIM"
+    _GHIM_ID=$(docker image inspect -f '{{.Id}}' "$_GHIM" 2>/dev/null) \
+        || error "QLTS_NGINX_ANH_GHIM='$_GHIM' không phân giải được thành ảnh có trên máy này.
+       Lấy ảnh về trước (theo DIGEST, xem rollback-preflight.sh) rồi chạy lại.
+       Container đang phục vụ CHƯA bị đụng tới."
+    case "$_GHIM_ID" in
+        sha256:*) : ;;
+        *) error "image id của ảnh ghim sai dạng: '$_GHIM_ID'" ;;
+    esac
+    _ANH_LOCAL_CU=$(docker image inspect -f '{{.Id}}' qlts-nginx:local 2>/dev/null || true)
+    trap '_don_candidate; _khoi_phuc_tag_local' EXIT
+    log "chế độ ẢNH GHIM: trỏ qlts-nginx:local -> $_GHIM_ID"
+    docker tag "$_GHIM_ID" qlts-nginx:local \
+        || error "không trỏ được qlts-nginx:local vào ảnh ghim — dừng trước khi dựng candidate."
+else
+    # Đường bình thường: ảnh phải do `compose build` vừa dựng. Script này KHÔNG
+    # build (xem đầu tệp) — G1 bên dưới là thứ bắt ca 'quên build'.
+    :
+fi
+
 if ! "${_COMPOSE[@]}" --profile candidate up -d --no-deps --force-recreate nginx-candidate; then
     _nhat_ky nginx-candidate
     error "không dựng được nginx-candidate — cấu hình mới hỏng; container đang phục vụ giữ nguyên"

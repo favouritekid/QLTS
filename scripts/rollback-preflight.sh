@@ -156,7 +156,6 @@ TAG="${QLTS_ROLLBACK_TAG:?dat QLTS_ROLLBACK_TAG = tag da ghi o RUNBOOK 5.4}"
 ENV_FILE="${QLTS_COMPOSE_ENV_FILE:-.env.production}"
 read -r -a _EXTRA <<< "${QLTS_COMPOSE_EXTRA:-}"
 
-DICH_VU=(backend celery-worker celery-beat frontend)
 MANIFEST="${QLTS_ROLLBACK_MANIFEST:-rollback_manifest_${TAG}.txt}"
 
 log "tag = $TAG"
@@ -167,6 +166,38 @@ log "manifest = $MANIFEST"
 # động. Tag `:latest` có thể đã trôi sang bản khác giữa lúc tag và lúc rollback;
 # ID ảnh thì không.
 [ -f "$MANIFEST" ] || error "thiếu $MANIFEST — không có bằng chứng ảnh nào là ảnh cũ"
+
+# --- 1a. Schema + danh sách service ĐỌC TỪ MANIFEST -------------------------
+# Trước 24-09 danh sách này là một hằng chép tay, TRÙNG LẶP với `_RA_DICH_VU`
+# của `deploy.sh`. Hai bản chép của cùng một danh sách thì sớm muộn trôi khỏi
+# nhau — và bản yếu hơn là bản còn sống. Nay preflight đọc đúng bộ tài sản mà
+# LƯỢT DEPLOY ẤY đã ghim, nên nó không thể đòi nhiều hơn hay ít hơn thực tế.
+SCHEMA=$(awk -F'\t' '$1=="# schema-version"{print $2}' "$MANIFEST" | head -1)
+SCHEMA="${SCHEMA:-1}"
+case "$SCHEMA" in
+    1|2) : ;;
+    *) error "$MANIFEST: schema-version='$SCHEMA' — script này chỉ đọc được 1 hoặc 2.
+  Không đoán định dạng lạ: một bản kê phiên bản khác có thể xếp cột khác." ;;
+esac
+
+mapfile -t DICH_VU < <(awk -F'\t' '/^#/{next} NF==0{next} {print $1}' "$MANIFEST")
+[ "${#DICH_VU[@]}" -ge 4 ] || error "$MANIFEST chỉ có ${#DICH_VU[@]} hàng service (tối thiểu 4) — bản kê hỏng."
+
+_co_nginx=0
+for _s in "${DICH_VU[@]}"; do [ "$_s" = "nginx" ] && _co_nginx=1; done
+if [ "$SCHEMA" = "2" ]; then
+    [ "$_co_nginx" = "1" ] || error "$MANIFEST khai schema-version 2 nhưng THIẾU hàng 'nginx'.
+  v2 nghĩa là mọi image runtime bị build ghi đè đều có tài sản rollback. Thiếu
+  nginx thì lời hứa ấy sai, và ta sẽ lùi bốn ảnh app trên một nginx KHÔNG lùi được.
+  DỪNG LẠI — chưa đụng gì tới CSDL."
+    log "  ✓ bản kê v2: ${#DICH_VU[@]} service, có nginx"
+else
+    warn "$MANIFEST là bản kê LEGACY (schema-version 1, ${#DICH_VU[@]} service)."
+    warn "   KHÔNG có image rollback cho nginx. Rollback sẽ DỰNG LẠI nginx từ nguồn:"
+    warn "   base image, build-arg và cache đều có thể đã đổi từ lần build cũ."
+    warn "   Đây KHÔNG tương đương lùi về đúng ảnh cũ — biết rồi mới được đi tiếp."
+    [ "$_co_nginx" = "0" ] || warn "   (bản kê v1 này lại CÓ hàng nginx — bất thường, nhưng không chặn.)"
+fi
 
 # --- 1b. Revision git phải kiểm TẠI ĐÂY, không đợi tới lúc restore ----------
 # §8.1 Step 5 mới `git checkout "$PRE_SHA" -- nginx/`, mà Step 5 chạy SAU
@@ -195,6 +226,15 @@ for S in "${DICH_VU[@]}"; do
     REF="qlts-${S}:${TAG}"
     ID_GHI=$(awk -F'\t' -v s="$S" '$1==s {print $3}' "$MANIFEST" | head -1)
     [ -n "$ID_GHI" ] || error "$MANIFEST không ghi image ID cho '$S'"
+
+    # Đối chiếu CẢ THAM CHIẾU, không chỉ ID. Bản trước tính `REF` rồi không bao
+    # giờ so nó với cột 4: một bản kê ghi tag KHÁC vẫn qua sạch, và ta lùi bằng
+    # một tag không phải tag bản kê nói.
+    REF_GHI=$(awk -F'\t' -v s="$S" '$1==s {print $4}' "$MANIFEST" | head -1)
+    [ -n "$REF_GHI" ] || error "$MANIFEST không ghi image reference cho '$S'"
+    [ "$REF_GHI" = "$REF" ] || error "$MANIFEST ghi reference '$REF_GHI' cho '$S',
+  nhưng tag đang rollback là '$REF'. Bản kê và lệnh đang nói về HAI tag khác nhau.
+  DỪNG LẠI — chưa đụng gì tới CSDL."
 
     # Ảnh CÓ TRÊN MÁY NÀY không chứng minh còn rollback được sau khi mất máy:
     # phép so ID luôn ĐẠT nếu tag vừa được tạo cục bộ ở §5.4, kể cả khi mọi

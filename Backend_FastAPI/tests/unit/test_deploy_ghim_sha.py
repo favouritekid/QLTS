@@ -688,6 +688,36 @@ _cid_gia() {
 }
 
 case "$_tat_ca" in
+    *compose*" config "*)
+        # `_ra_dan_xuat_dich_vu` hỏi MODEL Compose để dẫn xuất danh sách service
+        # phải ghim, thay cho một hằng chép tay. Sân khấu này khai BỐN service
+        # ứng dụng — đó là thế giới mà bộ test này mô phỏng.
+        #
+        # ⚠️ Bất biến "bản ghim phủ HẾT tập bị build" KHÔNG thuộc về đây: nó đọc
+        # `docker-compose.yml` THẬT và có một tầng chủ sở hữu duy nhất là
+        # `tests/unit/test_rollback_asset_contract.py`. Khai lại 5 ảnh ở đây là
+        # đẻ ra một nguồn chuẩn thứ hai, rồi hai bản sẽ trôi khỏi nhau.
+        #
+        # `STUB_COMPOSE_CONFIG` lái các ca HỎNG (xem kiểm ngược bên dưới) — nó là
+        # biến của SÂN KHẤU, không phải bypass trong script production.
+        case "${STUB_COMPOSE_CONFIG:-ok}" in
+            rong)  exit 0 ;;
+            hong)  printf 'khong phai json\n'; exit 0 ;;
+            rc)    exit 77 ;;
+            thieu) printf '{"services": {"postgres": {"image": "postgres:16"}}}\n'; exit 0 ;;
+        esac
+        cat <<'__QLTS_JSON__'
+{"services": {
+  "backend":       {"build": {"context": "./Backend_FastAPI", "dockerfile": "Dockerfile"}},
+  "celery-worker": {"build": {"context": "./Backend_FastAPI", "dockerfile": "Dockerfile"}},
+  "celery-beat":   {"build": {"context": "./Backend_FastAPI", "dockerfile": "Dockerfile"}},
+  "frontend":      {"build": {"context": "./frontend", "dockerfile": "Dockerfile"}},
+  "postgres":      {"image": "postgres:16-alpine"},
+  "redis":         {"image": "redis:7-alpine"}
+}}
+__QLTS_JSON__
+        exit 0
+        ;;
     *" ps -q "*)
         # Step 3b/8c hỏi ID container theo TỪNG service. Khác hẳn `ps -aq` của
         # vòng chờ health bên dưới, và KHÔNG chịu ảnh hưởng `STUB_PSQ_*` —

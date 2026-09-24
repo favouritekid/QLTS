@@ -3237,13 +3237,28 @@ _SERVICE_PHAI_LUI = ["backend", "celery-worker", "celery-beat", "frontend"]
 
 
 def test_co_tep_rollback_ghim_anh_cu():
+    """Bốn service ứng dụng KHÔNG được rơi khỏi bản ghim.
+
+    ⚠️ Phép kiểm này CỐ Ý không còn đòi bằng ĐÚNG bốn. Owner chốt Đường A ngày
+    24-09-2026: mọi image runtime bị ``compose build`` ghi đè đều phải có tài sản
+    rollback — nghĩa là **nginx cũng nằm trong bản ghim**, và một service
+    ``build:`` thứ sáu sau này cũng vậy. Đòi bằng đúng bốn ở đây là mã hoá chính
+    sách CŨ vào một chỗ thứ ba, và nó sẽ đỏ ở đúng ca đang làm ĐÚNG.
+
+    Bất biến "bản ghim phủ HẾT tập bị build" có **một tầng chủ sở hữu duy nhất**:
+    ``tests/unit/test_rollback_asset_contract.py``. Tệp này chỉ giữ mối lo riêng
+    của nó — bốn service ứng dụng không được quên.
+    """
     assert _ROLLBACK.is_file(), (
         "thiếu docker-compose.rollback.yml — không có nó thì rollback phải sinh "
         "ad-hoc giữa lúc sự cố, đúng thứ runbook cấm"
     )
-    noi_dung = _tai_compose(_ROLLBACK)["services"]
-    assert sorted(noi_dung) == sorted(_SERVICE_PHAI_LUI), (
-        f"rollback phải ghim ĐÚNG {sorted(_SERVICE_PHAI_LUI)}; hiện: {sorted(noi_dung)}"
+    noi_dung = set(_tai_compose(_ROLLBACK)["services"])
+    thieu = sorted(set(_SERVICE_PHAI_LUI) - noi_dung)
+    assert not thieu, (
+        f"rollback THIẾU service ứng dụng {thieu}; hiện ghim: {sorted(noi_dung)}. "
+        "Lùi backend mà quên celery là chạy worker phiên bản MỚI trên lược đồ "
+        "CSDL đã lùi."
     )
 
 
@@ -3299,9 +3314,23 @@ def test_model_compose_rollback_chon_dung_bon_anh_cu(tmp_path):
             f"`{ten}` vẫn còn `build:` — `up -d` sẽ dựng lại từ mã MỚI, tức "
             "không rollback gì cả"
         )
-    assert dich_vu["nginx"].get("build"), (
-        "nginx CỐ Ý vẫn build từ cây git (cấu hình của nó đi theo image); ghim "
-        "thêm một tag ảnh là tạo nguồn chuẩn thứ hai"
+    # ĐỔI CHÍNH SÁCH 24-09-2026 (Đường A): nginx nay CŨNG được ghim bằng ảnh bất
+    # biến. Câu cũ ở đây đòi `nginx` VẪN còn `build:` — đó là chính sách CŨ, và
+    # đây là chỗ THỨ BA mã hoá nó (sau `_SERVICE_PHAI_LUI` và chú thích trong
+    # `docker-compose.rollback.yml`). Nó chỉ chạy khi có Docker CLI, nên nó im
+    # lặng ở máy không có `docker` trong container và chỉ đỏ trên CI.
+    #
+    # Vì sao đổi: "dựng lại từ nguồn" KHÔNG tương đương "lùi về đúng ảnh cũ" —
+    # base image, build-arg và cache đều có thể đã đổi giữa hai lần build. Nguồn
+    # git vẫn là cổng NỘI DUNG của nginx (G1 của `nginx-apply.sh`); ảnh đã ghim
+    # là TÀI SẢN ROLLBACK, không phải nguồn chuẩn thứ hai.
+    s_nginx = dich_vu["nginx"]
+    assert s_nginx.get("image") == "qlts-nginx:tag-cu-kiem-thu", (
+        f"`nginx` không được ghim về ảnh cũ; hiện image={s_nginx.get('image')!r}"
+    )
+    assert not s_nginx.get("build"), (
+        "`nginx` vẫn còn `build:` — `up -d` sẽ dựng lại từ mã MỚI thay vì dùng "
+        "ảnh đã ghim, tức không rollback gì cả"
     )
 
     # Quên tag phải ĐỔ, không được lặng lẽ dựng lại ảnh hiện hành.
