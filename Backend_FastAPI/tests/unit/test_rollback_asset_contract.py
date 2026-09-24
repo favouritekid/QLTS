@@ -64,6 +64,12 @@ def _bo_nhay(dong: str) -> str:
     return _TRONG_NHAY.sub(" ", dong).split("#", 1)[0]
 
 
+#: Đường tới `bash`. Khai Ở ĐÂY chứ không ở cuối tệp: decorator `skipif`
+#: được định giá lúc DỰNG CLASS, nên một biến khai sau class dùng nó sẽ
+#: `NameError` ngay lúc thu thập — cả tệp không chạy ca nào.
+_BASH = shutil.which("bash")
+
+
 @pytest.fixture(scope="module")
 def dich_vu_bi_build() -> list[str]:
     """Đại diện (theo ẢNH) của mọi service mà ``compose build`` sẽ dựng lại.
@@ -131,6 +137,20 @@ def _nhanh_schema(nhan: str) -> str:
     k = nguon.find("\nfi", j)
     assert 0 < j < k, "không đọc được cấu trúc if/else của nhánh schema"
     return nguon[i:j] if nhan == "v2" else nguon[j:k]
+
+
+def _doan_tien_de_schema() -> str:
+    """Đoạn `rollback-preflight.sh` từ ``mapfile -t DICH_VU`` tới TRƯỚC nhánh schema.
+
+    Vì sao cần một lát cắt RIÊNG: ``_nhanh_schema`` cắt từ ``if [ "$SCHEMA" = "2" ]``
+    trở xuống, nên **sàn số hàng service** — nằm ngay TRÊN dòng ấy — rơi ra ngoài
+    mọi lát cắt đang có. Đó đúng là lý do không ca nào từng nhìn thấy nó.
+    """
+    nguon = _doc(DUONG_PREFLIGHT)
+    i = nguon.index("mapfile -t DICH_VU")
+    j = nguon.index('if [ "$SCHEMA" = "2" ]', i)
+    assert i < j, "rollback-preflight.sh đổi thứ tự: sàn không còn đứng trước nhánh schema"
+    return nguon[i:j]
 
 
 # ===========================================================================
@@ -273,6 +293,96 @@ class TestManifestV1Legacy:
         assert "KHÔNG có image rollback" in nhanh, (
             "cảnh báo v1 phải nói THẲNG là không có image rollback cho nginx. Một "
             "dòng cảnh báo mơ hồ để người trực tưởng vẫn còn đường lùi."
+        )
+
+    @pytest.mark.skipif(_BASH is None, reason="không có bash để chạy đoạn shell")
+    def test_san_hang_service_cua_ban_ke_legacy_van_la_bon(self, tmp_path):
+        """Sàn của `rollback-preflight.sh` phải là 4 — nâng lên 5 là chặn ĐƯỜNG LÙI.
+
+        Bản kê v1 có đúng BỐN hàng service ứng dụng và KHÔNG có `nginx`: lúc
+        chúng được ghi, nginx chưa từng được ghim. Nâng sàn lên 5 sẽ từ chối hết
+        những bản kê ấy ở diễn tập §5.4 và rollback §8.1 — mà **không lượt deploy
+        nào đỏ**, vì deploy chỉ gọi preflight với bản kê v2 nó vừa sinh. CI xanh
+        toàn tập trong khi đường lùi đã chết. Hỏng đúng lúc không còn thời gian
+        điều tra.
+
+        Sàn này nằm NGOÀI lát cắt của ``_nhanh_schema`` (xem ``_doan_tien_de_schema``),
+        và không ca nào khác thi hành ``rollback-preflight.sh`` — mọi harness deploy
+        đều thay nó bằng stub. Nên trước ca này nó hoàn toàn không được canh.
+
+        Ca này KHÔNG phủ "bản kê CỤT phải bị chặn". Đó là bất biến khác
+        (fail-closed trên bản kê hỏng); trộn vào đây thì màu đỏ không nói được
+        đỏ vì gì.
+        """
+        tien_de = _doan_tien_de_schema()
+
+        # --- (1) sàn phải còn, đúng toán tử, đúng con số ---------------------
+        m = re.search(
+            r'\[ "\$\{#DICH_VU\[@\]\}" (-[a-z]+) (\d+) \]\s*\|\| error',
+            tien_de,
+        )
+        assert m, (
+            "không còn phép kiểm số hàng service nào giữa `mapfile` và nhánh "
+            "schema. Gỡ nó đi thì một bản kê cụt đi thẳng vào phần restore."
+        )
+        assert m.group(1) == "-ge", (
+            "sàn dùng toán tử %s. Nó phải là một SÀN DƯỚI (`-ge`): bản kê v2 có "
+            "năm hàng, v1 có bốn, và cả hai đều hợp lệ." % m.group(1)
+        )
+        assert m.group(2) == "4", (
+            "sàn là %s, không phải 4. Bản kê LEGACY v1 có đúng bốn hàng service "
+            "ứng dụng; mọi giá trị lớn hơn 4 từ chối hết chúng, và phép từ chối "
+            "ấy chỉ nổ ở đường ROLLBACK chứ không ở đường deploy." % m.group(2)
+        )
+
+        # --- (2) tiền đề chỉ được có ĐÚNG MỘT ràng buộc: chính cái sàn -------
+        # Tiền đề CÓ nhắc `nginx` một cách hợp lệ — vòng dò `_co_nginx`. Dò thì
+        # được; ĐÒI thì không. Yêu cầu `nginx` là việc của nhánh v2: kéo nó lên
+        # tiền đề thì bản kê v1 chết trước khi tới nhánh legacy, và
+        # `test_v1_khong_bi_chan` vẫn XANH vì nhánh `else` không hề đổi.
+        rang_buoc = re.findall(r"\|\| error", tien_de)
+        assert len(rang_buoc) == 1, (
+            "phần tiền đề (trước nhánh schema) có %d ràng buộc `|| error`, phải "
+            "đúng 1 — chính cái sàn. Thêm ràng buộc ở đây là áp nó cho CẢ bản kê "
+            "legacy v1, mà ca canh nhánh v1 sẽ không thấy." % len(rang_buoc)
+        )
+        assert "nginx" in _nhanh_schema("v2"), (
+            "nhánh v2 không còn đòi hàng `nginx` — vậy thì không tầng nào đòi nữa."
+        )
+
+        # --- (3) chạy THẬT: bản kê v1 bốn hàng phải ĐI QUA --------------------
+        tab = chr(9)
+        hang = []
+        for k, s in enumerate(("backend", "celery-beat", "celery-worker", "frontend")):
+            hex64 = str(k % 10) * 64
+            hang.append(
+                tab.join((s, hex64, "sha256:" + hex64, "qlts-%s:pre-cccccccc" % s, "PENDING_DIGEST"))
+            )
+        # KHÔNG có dòng `# schema-version` ⇒ đúng hình dạng bản kê v1.
+        ban_ke = tmp_path / "rollback_manifest_pre-cccccccc.txt"
+        ban_ke.write_text(chr(10).join(hang) + chr(10), encoding="utf-8")
+
+        kich_ban = tmp_path / "chay-tien-de.sh"
+        kich_ban.write_text(
+            "set -u\n"
+            "error() { printf '%s\\n' \"$*\" >&2; exit 1; }\n"
+            'MANIFEST="$1"\n'
+            + tien_de
+            + "\n"
+            + "printf 'SO_HANG=%s\\n' \"${#DICH_VU[@]}\"\n",
+            encoding="utf-8",
+        )
+        p = subprocess.run(
+            [_BASH, str(kich_ban), str(ban_ke)], capture_output=True
+        )
+        err = p.stderr.decode("utf-8", "replace").strip()
+        assert p.returncode == 0, (
+            "bản kê LEGACY v1 bốn hàng bị TỪ CHỐI: %s\n"
+            "Mọi mốc rollback cũ vừa mất đường lùi, và không lượt deploy nào sẽ "
+            "báo cho ai biết." % (err or "(không có stderr)")
+        )
+        assert "SO_HANG=4" in p.stdout.decode("utf-8", "replace"), (
+            "đoạn tiền đề không đọc ra đủ bốn hàng service từ bản kê v1"
         )
 
 
@@ -515,7 +625,6 @@ class TestHaiCongPhuTro:
 # chuẩn thứ hai — chính chú thích trong các stub ấy cấm việc đó.
 # --------------------------------------------------------------------------
 
-_BASH = shutil.which("bash")
 
 #: `deployed-sha` của marker giả — phải khớp `$_RA_SHA_MOI` mà harness đặt.
 _SHA_GIA = "c" * 40
