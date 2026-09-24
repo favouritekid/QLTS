@@ -31,6 +31,7 @@ import collections
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 
@@ -499,3 +500,234 @@ class TestHaiCongPhuTro:
             "một đường áp ảnh mà không đo hành vi thật."
         )
         assert "_cong_noi_dung" in sau, "chế độ ảnh ghim bỏ qua cổng NỘI DUNG (G1)"
+
+
+# --------------------------------------------------------------------------
+# Số dòng mà marker PHẢI có: dẫn xuất, không viết tay.
+#
+# Cùng một cặp GHI/KIỂM với ``marker-version`` ở trên, chỉ khác con số — nên nó
+# ở cùng một tầng chủ sở hữu. Tách sang tệp khác là chia đôi một bất biến.
+#
+# Ba bộ guard `deploy.sh` khác (`test_deploy_startup_gates`,
+# `test_deploy_atomic_writers`, `test_deploy_ghim_sha`) chạy trong một sân khấu
+# stub khai ĐÚNG BỐN service, nên ở đó marker có 8 dòng và hằng `-eq 8` khớp
+# tình cờ. Chúng không thể thấy lỗi này, và nâng stub lên năm là đẻ ra nguồn
+# chuẩn thứ hai — chính chú thích trong các stub ấy cấm việc đó.
+# --------------------------------------------------------------------------
+
+_BASH = shutil.which("bash")
+
+#: `deployed-sha` của marker giả — phải khớp `$_RA_SHA_MOI` mà harness đặt.
+_SHA_GIA = "c" * 40
+
+
+def _trich_ham_shell(nguon: str, ten: str) -> str:
+    """Cắt nguyên văn một hàm shell khỏi `deploy.sh`.
+
+    Cùng thủ pháp với ``TestPhepDanXuatChayDuoc._doan_nhung``: thi hành CHÍNH mã
+    đã ship, không chép lại logic sang test — một bản chép sẽ chứng minh giả
+    định của người viết test chứ không chứng minh `deploy.sh`.
+    """
+    moc = ten + "() {"
+    i = nguon.index(moc)
+    dong = nguon[i:].split("\n")
+    for k, d in enumerate(dong):
+        if k and d == "}":
+            return "\n".join(dong[: k + 1])
+    raise AssertionError("khong tim thay dau dong cua ham %r" % ten)
+
+
+def _chay_kiem_schema(tmp_path, noi_dung: str, dich_vu: str):
+    """Chạy THẬT `_ra_kiem_schema_marker` trên một marker tổng hợp."""
+    marker = tmp_path / "last-deploy.marker"
+    marker.write_bytes(noi_dung.encode("utf-8"))
+    than = _trich_ham_shell(_doc(DUONG_DEPLOY), "_ra_kiem_schema_marker")
+    kich_ban = tmp_path / "chay.sh"
+    kich_ban.write_text(
+        "set -u\n"
+        "error() { printf '%s\\n' \"$*\" >&2; exit 1; }\n"
+        + than
+        + "\n"
+        + '_RA_SHA_MOI="' + _SHA_GIA + '"\n'
+        + '_RA_DICH_VU="' + dich_vu + '"\n'
+        + '_RA_SO_DICH_VU=$(printf %s "$_RA_DICH_VU" | wc -w)\n'
+        + '_ra_kiem_schema_marker "$1"\n',
+        encoding="utf-8",
+    )
+    p = subprocess.run(
+        [_BASH, str(kich_ban), str(marker)], capture_output=True
+    )
+    return p.returncode, p.stderr.decode("utf-8", "replace").strip()
+
+
+def _marker(dich_vu: list[str], tieu_de_them: list[str] | None = None,
+            hang_them: list[str] | None = None) -> str:
+    """Dựng một marker hợp lệ cho `dich_vu`, rồi chèn thêm nếu ca cần."""
+    tab = chr(9)
+    d = [
+        "# marker-version" + tab + "2",
+        "# deployed-sha" + tab + _SHA_GIA,
+        "# deployed-at" + tab + "2026-09-24T00:00:00Z",
+        "# asset-tag" + tab + "pre-cccccccc",
+    ]
+    d += list(tieu_de_them or [])
+    for k, s in enumerate(dich_vu):
+        hex64 = str(k % 10) * 64
+        d.append(s + tab + "sha256:" + hex64 + tab + hex64)
+    d += list(hang_them or [])
+    return chr(10).join(d) + chr(10)
+
+
+class TestSoDongMarkerPhaiDanXuat:
+    """Cổng đếm dòng của marker phải dẫn xuất từ số service, không phải hằng."""
+
+    # --- tầng CHỦ SỞ HỮU: đọc văn bản -----------------------------------
+    def test_phep_dem_dong_khong_duoc_la_hang_viet_tay(self):
+        """Hằng `-eq 8` làm deploy đổ ở bước niêm phong, SAU build và `up -d`.
+
+        Bắt được ba biến thể phá: khôi phục `-eq 8`; đổi sang `-eq 9` (hằng số
+        MỚI, vẫn hỏng khi có service thứ sáu); và nới `-eq` thành `-ge`.
+        """
+        nguon = _doc(DUONG_DEPLOY)
+        m = re.search(
+            r'\n\s*_n=\$\(wc -l < "\$_f"\)\n\s*'
+            r'(?P<giua>.*?)'
+            r'\[ "\$_n" (?P<op>-[a-z]+) (?P<ve_phai>\S+) \] \|\| error "marker mới: có \$_n dòng',
+            nguon,
+            re.S,
+        )
+        assert m, (
+            "không tìm thấy cổng đếm dòng marker trong deploy.sh — nếu nó bị gỡ "
+            "hẳn thì một marker thừa dòng rác sẽ lọt qua mọi cổng còn lại, vì "
+            "`awk` bỏ qua mọi dòng bắt đầu bằng `#`."
+        )
+        assert m.group("op") == "-eq", (
+            "cổng đếm dòng dùng toán tử %s thay vì -eq. Nới thành -ge/-le nghĩa "
+            "là marker THỪA dòng vẫn lọt." % m.group("op")
+        )
+        canh = m.group("giua") + m.group("ve_phai")
+        assert "_RA_SO_DICH_VU" in canh or "_RA_DICH_VU" in canh, (
+            "vế phải của cổng đếm dòng là một hằng viết tay (%s). Nó phải dẫn "
+            "xuất từ $_RA_SO_DICH_VU — danh sách service nay đến từ model "
+            "Compose và sẽ đổi khi thêm/bớt service." % m.group("ve_phai").strip()
+        )
+
+    def test_so_hang_tieu_de_trong_phep_kiem_khop_voi_writer(self):
+        """Số hạng cộng thêm phải bằng ĐÚNG số dòng tiêu đề writer ghi ra.
+
+        Biến thể tinh vi nhất là lệch một: `4 + N` đổi thành `5 + N` vẫn "dẫn
+        xuất", nên một guard chỉ hỏi "có nhắc `_RA_SO_DICH_VU` không" sẽ xanh.
+        """
+        nguon = _doc(DUONG_DEPLOY)
+        m = re.search(r"_can=\$\(\( *(\d+) *\+ *_RA_SO_DICH_VU *\)\)", nguon)
+        assert m, "không tìm thấy biểu thức dẫn xuất số dòng mong đợi"
+        khai = int(m.group(1))
+
+        i = nguon.index("printf '# marker-version")
+        j = nguon.index('} >> "$_RA_MK_TMP"', i)
+        khoi = nguon[i:j]
+        # Hai nhánh `asset-skipped` / `asset-tag` loại trừ nhau ⇒ góp đúng 1 dòng.
+        vo_dk = len(re.findall(r"printf '# (?:marker-version|deployed-sha|deployed-at)", khoi))
+        cap = re.findall(r"printf '# (?:asset-skipped|asset-tag)", khoi)
+        assert len(cap) == 2, (
+            "khối ghi tiêu đề không còn đúng cặp asset-tag/asset-skipped loại trừ "
+            "nhau (thấy %d) — phép đếm tiêu đề bên dưới mất cơ sở." % len(cap)
+        )
+        that = vo_dk + 1
+        assert khai == that, (
+            "phép kiểm cộng %d dòng tiêu đề nhưng writer ghi ra %d. Lệch một là "
+            "đủ để deploy đổ ở bước niêm phong." % (khai, that)
+        )
+
+    def test_moi_loi_goi_validator_deu_sau_mot_lan_bao_dam_danh_sach(self):
+        """`$_RA_SO_DICH_VU` phải luôn có giá trị tại điểm kiểm.
+
+        Dưới `set -u` một biến chưa đặt sẽ giết script — ở đường bỏ qua tài sản,
+        chỗ chết nằm SAU `mv` công bố marker.
+        """
+        nguon = _doc(DUONG_DEPLOY)
+        dong = nguon.split(chr(10))
+        goi_bao_dam = [k for k, d in enumerate(dong) if _bo_nhay(d).strip() == "_ra_bao_dam_dich_vu"]
+        goi_kiem = [
+            k for k, d in enumerate(dong)
+            if "_ra_kiem_schema_marker " in _bo_nhay(d) and "()" not in _bo_nhay(d)
+        ]
+        assert goi_kiem, "không tìm thấy lời gọi _ra_kiem_schema_marker nào"
+        assert goi_bao_dam, "không tìm thấy lời gọi _ra_bao_dam_dich_vu nào"
+        for k in goi_kiem:
+            assert any(b < k for b in goi_bao_dam), (
+                "lời gọi _ra_kiem_schema_marker ở dòng %d không có "
+                "_ra_bao_dam_dich_vu nào đứng trước — $_RA_SO_DICH_VU có thể "
+                "chưa được đặt." % (k + 1)
+            )
+
+    def test_khong_con_bien_tat_qua_bien_moi_truong(self):
+        """`_RA_DICH_VU` kế thừa từ môi trường = một bypass không khai báo."""
+        nguon = _doc(DUONG_DEPLOY)
+        assert re.search(r"^_RA_DICH_VU=\"\"$", nguon, re.M), (
+            "deploy.sh không xoá giá trị kế thừa của _RA_DICH_VU. Một "
+            "`export _RA_DICH_VU=...` từ ngoài sẽ bỏ qua toàn bộ phép dẫn xuất "
+            "từ model Compose."
+        )
+
+    # --- tầng CHẠY THẬT: phòng thủ chiều sâu -----------------------------
+    @pytest.mark.skipif(_BASH is None, reason="không có bash để chạy hàm shell")
+    @pytest.mark.parametrize(
+        "dich_vu",
+        [
+            ["backend", "celery-beat", "celery-worker", "frontend"],
+            ["backend", "celery-beat", "celery-worker", "frontend", "nginx"],
+            ["backend", "celery-beat", "celery-worker", "frontend", "nginx", "worker2"],
+        ],
+        ids=["bon-service", "nam-service-hien-tai", "sau-service-tuong-lai"],
+    )
+    def test_marker_dung_so_hang_thi_DAT(self, tmp_path, dich_vu):
+        """Phải ĐẠT với mọi N, không riêng N=5.
+
+        Cố định ở N=5 thì một hằng `-eq 9` vẫn xanh — vẫn là hằng viết tay, chỉ
+        đổi con số, và sẽ hỏng đúng như vậy ở service thứ sáu.
+        """
+        rc, err = _chay_kiem_schema(tmp_path, _marker(dich_vu), " ".join(dich_vu))
+        assert rc == 0, "marker %d service (%d dòng) bị từ chối: %s" % (
+            len(dich_vu), 4 + len(dich_vu), err
+        )
+        assert err == ""
+
+    @pytest.mark.skipif(_BASH is None, reason="không có bash để chạy hàm shell")
+    def test_marker_thua_mot_dong_khong_phai_service_thi_DO(self, tmp_path):
+        """Ca DUY NHẤT phân biệt được cổng đếm dòng.
+
+        Dòng thêm bắt đầu bằng `#` nên `awk` dò service lạ bỏ qua nó, và nó
+        không phải một trong bốn khoá tiêu đề nên không `grep -c` nào thấy.
+        Chỉ `wc -l` bắt được. Nới `-eq` thành `-ge` ⇒ ca này xanh trở lại.
+        """
+        dv = ["backend", "celery-beat", "celery-worker", "frontend", "nginx"]
+        noi_dung = _marker(dv, tieu_de_them=["# ghi-chu" + chr(9) + "dong nay khong thuoc schema"])
+        rc, err = _chay_kiem_schema(tmp_path, noi_dung, " ".join(dv))
+        assert rc != 0, "marker 10 dòng vẫn được chấp nhận"
+        assert "có 10 dòng (cần đúng 9" in err, (
+            "đỏ nhưng KHÔNG phải vì cổng đếm dòng: %s" % err
+        )
+
+    @pytest.mark.skipif(_BASH is None, reason="không có bash để chạy hàm shell")
+    def test_marker_thieu_mot_service_thi_DO(self, tmp_path):
+        """Đỏ ở cổng 'mỗi service đúng một dòng', KHÔNG phải cổng đếm dòng.
+
+        Ghi rõ điều này vì neo bằng `rc != 0` sẽ khiến ca vẫn xanh sau khi cổng
+        đếm dòng bị gỡ — đúng lớp 'phép kiểm gộp vẫn xanh'.
+        """
+        dv = ["backend", "celery-beat", "celery-worker", "frontend", "nginx"]
+        thieu = [s for s in dv if s != "nginx"]
+        rc, err = _chay_kiem_schema(tmp_path, _marker(thieu), " ".join(dv))
+        assert rc != 0
+        assert "service 'nginx' xuất hiện 0 lần" in err, err
+
+    @pytest.mark.skipif(_BASH is None, reason="không có bash để chạy hàm shell")
+    def test_marker_thua_mot_service_thi_DO(self, tmp_path):
+        """Đỏ ở cổng 'dòng service LẠ', KHÔNG phải cổng đếm dòng."""
+        dv = ["backend", "celery-beat", "celery-worker", "frontend", "nginx"]
+        hex64 = "6" * 64
+        noi_dung = _marker(dv, hang_them=["postgres" + chr(9) + "sha256:" + hex64 + chr(9) + hex64])
+        rc, err = _chay_kiem_schema(tmp_path, noi_dung, " ".join(dv))
+        assert rc != 0
+        assert "dòng service LẠ: postgres" in err, err
