@@ -2,10 +2,13 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import logging
+import uuid
+from datetime import timedelta
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
+from aiobreaker import CircuitBreakerError, CircuitBreakerState
 from httpx import AsyncClient
 from redis.exceptions import ConnectionError, TimeoutError
 from sqlalchemy import select
@@ -17,7 +20,9 @@ from tests.fixtures.users import get_auth_headers
 from app.config import settings
 
 # Import các thành phần app
+from app import database as db_module
 from app.database import AsyncSessionLocal
+from app.security.account_lockout import AccountLockoutService
 from app.services import organization_service, pipeline_service
 
 # Import constants
@@ -258,3 +263,157 @@ async def test_resilience_redis_auth_fail_open(
     log.info("API correctly returned 200 OK (fail-open) on active token.")
     assert mock_safe_exists.await_count == 2
     log.info("Auth dependency (safe_redis_exists) was called twice as expected.")
+
+
+# ===========================================================================
+# === Circuit breaker Redis: mở đúng, phục hồi đúng, lockout vẫn fail-closed
+# ===========================================================================
+#
+# Các ca dưới đây dùng CHÍNH `app.database.redis_breaker` (singleton cấp
+# module), không dựng breaker mới — thứ đang canh là CẤU HÌNH của nó.
+# aiobreaker 1.2.0 khai `timeout_duration: Optional[timedelta]` và giữ nguyên
+# giá trị truyền vào nếu truthy. Truyền số nguyên `60` thì `opened_at + 60` là
+# datetime + int ⇒ TypeError ở lượt thứ `fail_max` và MỌI lượt sau đó, vĩnh
+# viễn: breaker không bao giờ sang HALF_OPEN nên không bao giờ phục hồi.
+#
+# Lỗi Redis được mô phỏng ở tầng CLIENT (`redis_client.<lệnh>`), không patch
+# wrapper, và bằng một hàm `async def` THƯỜNG — KHÔNG dùng AsyncMock/MagicMock.
+# `CircuitBreaker.call_async` đọc `getattr(func, "_ignore_on_call", False)`,
+# mà Mock tự sinh thuộc tính ấy (truthy) ⇒ lời gọi đi VÒNG breaker, bộ đếm
+# đứng ở 0 và breaker không bao giờ mở. Đo trên wheel aiobreaker 1.2.0: 8 lượt
+# lỗi qua AsyncMock, state vẫn CLOSED, counter 0.
+
+
+def _force_redis_breaker_closed(breaker) -> None:
+    """Đưa breaker về trạng thái ban đầu: CLOSED, bộ đếm 0, chưa từng mở."""
+    breaker.close()
+    breaker._state_storage.reset_counter()
+    breaker._state_storage.opened_at = None
+    assert breaker.current_state is CircuitBreakerState.CLOSED
+    assert breaker.fail_counter == 0
+
+
+@pytest.fixture
+def redis_breaker_closed():
+    """Breaker singleton sạch TRƯỚC ca và được trả về sạch SAU ca.
+
+    Phần sau `yield` chạy cả khi ca đỏ. Không dọn thì breaker OPEN rò sang ca
+    kế tiếp trong cùng tiến trình: mọi `safe_redis_*` ở đó nhận
+    CircuitBreakerError suốt 60 giây (hoặc TypeError vĩnh viễn nếu cấu hình
+    hỏng) — tức đỏ vì một lý do không liên quan gì tới ca ấy.
+    """
+    breaker = db_module.redis_breaker
+    _force_redis_breaker_closed(breaker)
+    try:
+        yield breaker
+    finally:
+        _force_redis_breaker_closed(breaker)
+
+
+def _failing_redis_command(calls: list):
+    """Lệnh Redis giả: luôn ném ConnectionError của redis-py, ghi lại mỗi lượt."""
+
+    async def _command(*args, **kwargs):
+        calls.append(args)
+        raise ConnectionError("Simulated Redis outage")
+
+    return _command
+
+
+async def _trip_redis_breaker(breaker, calls: list) -> None:
+    """Gây đúng `fail_max` lỗi LIÊN TIẾP qua `safe_redis_exists`.
+
+    Chỉ là TIỀN ĐIỀU KIỆN. Lượt thứ `fail_max` là lượt làm breaker mở, và thứ
+    nó ném ra là đối tượng của ca (a), không phải của helper — nên helper nuốt
+    exception ở đây và chỉ khẳng định trạng thái cuối.
+    """
+    key = f"test:breaker_trip:{uuid.uuid4().hex}"
+    for _ in range(breaker.fail_max):
+        assert breaker.current_state is CircuitBreakerState.CLOSED
+        try:
+            await db_module.safe_redis_exists(key)
+        except Exception:
+            pass
+    assert breaker.current_state is CircuitBreakerState.OPEN
+    assert len(calls) == breaker.fail_max
+
+
+@pytest.mark.asyncio
+async def test_resilience_redis_breaker_open_raises_circuit_breaker_error(
+    redis_breaker_closed,
+):
+    """(a) Breaker OPEN ⇒ lượt kế tiếp ném CircuitBreakerError, không chạm Redis.
+
+    Với `timeout_duration=60` (số nguyên) lượt này ném TypeError.
+    """
+    breaker = redis_breaker_closed
+    calls = []
+    with patch.object(db_module.redis_client, "exists", _failing_redis_command(calls)):
+        await _trip_redis_breaker(breaker, calls)
+        with pytest.raises(CircuitBreakerError) as excinfo:
+            await db_module.safe_redis_exists(f"test:breaker_open:{uuid.uuid4().hex}")
+
+    assert excinfo.type is CircuitBreakerError
+    assert len(calls) == breaker.fail_max, "Breaker OPEN mà lệnh vẫn tới Redis."
+
+
+@pytest.mark.asyncio
+async def test_resilience_redis_breaker_recovers_after_timeout(redis_breaker_closed):
+    """(b) Quá hạn timeout và Redis sống lại ⇒ wrapper trả đúng giá trị thật."""
+    breaker = redis_breaker_closed
+    key = f"test:breaker_recover:{uuid.uuid4().hex}"
+    calls = []
+    with patch.object(db_module.redis_client, "exists", _failing_redis_command(calls)):
+        await _trip_redis_breaker(breaker, calls)
+
+    # Redis "sống lại": patch đã gỡ, client là FakeRedis dùng chung của bộ test.
+    await db_module.redis_client.set(key, "1", ex=60)
+    try:
+        # Lùi mốc mở 10 phút thay vì ngủ thật. 10 phút ≫ 60 giây nên ca không
+        # phụ thuộc giá trị timeout cụ thể, chỉ phụ thuộc việc breaker CÓ hết
+        # hạn và CÓ thử lại.
+        storage = breaker._state_storage
+        storage.opened_at = storage.opened_at - timedelta(minutes=10)
+
+        assert await db_module.safe_redis_exists(key) is True
+        assert breaker.current_state is CircuitBreakerState.CLOSED
+    finally:
+        await db_module.redis_client.delete(key)
+
+
+@pytest.mark.asyncio
+async def test_resilience_redis_breaker_open_keeps_lockout_fail_closed(
+    redis_breaker_closed,
+):
+    """(c) Breaker OPEN ⇒ `check_lockout` vẫn FAIL-CLOSED: `(True, 60)`.
+
+    Hợp đồng lấy từ nhánh `except Exception` của
+    `AccountLockoutService.check_lockout`: không kiểm được thì coi như ĐANG
+    KHOÁ 60 giây. Nó chỉ đúng khi CircuitBreakerError ĐI XUYÊN
+    `safe_redis_exists`; wrapper nào nuốt nó thành `False` thì lockout đọc ra
+    "không bị khoá" — fail-OPEN đúng lúc Redis sự cố.
+    """
+    breaker = redis_breaker_closed
+    calls = []
+    with patch.object(db_module.redis_client, "exists", _failing_redis_command(calls)):
+        await _trip_redis_breaker(breaker, calls)
+        result = await AccountLockoutService.check_lockout(
+            f"breaker_lockout_{uuid.uuid4().hex[:12]}"
+        )
+
+    assert result == (True, 60)
+
+
+def test_resilience_redis_breaker_exceptions_exclude_circuit_breaker_error():
+    """(d) Hợp đồng exception của các wrapper `safe_redis_*` không đổi.
+
+    Thêm CircuitBreakerError vào tuple này (đã bị review chặn) làm
+    `safe_redis_exists` trả `False` và `safe_redis_get` trả `None` khi breaker
+    mở ⇒ lockout fail-OPEN, còn `deps.py` STEP 4 đọc thành "phiên đã bị thu hồi".
+    """
+    # `ConnectionError`/`TimeoutError` ở tệp này là của redis.exceptions.
+    assert db_module.REDIS_BREAKER_EXCEPTIONS == (ConnectionError, TimeoutError)
+    assert not any(
+        issubclass(CircuitBreakerError, exc_type)
+        for exc_type in db_module.REDIS_BREAKER_EXCEPTIONS
+    )

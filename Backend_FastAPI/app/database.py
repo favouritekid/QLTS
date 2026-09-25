@@ -1,5 +1,6 @@
 # app/database.py
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from enum import Enum
 
 import redis.asyncio as redis
@@ -80,7 +81,7 @@ async def get_redis():
 # === 🔧 CIRCUIT BREAKER PATTERN (ĐÃ SỬA safe_redis_pipeline) ===
 # ===============================================================
 
-redis_breaker = CircuitBreaker(fail_max=5, timeout_duration=60)
+redis_breaker = CircuitBreaker(fail_max=5, timeout_duration=timedelta(seconds=60))
 
 REDIS_BREAKER_EXCEPTIONS = (ConnectionError, TimeoutError)
 
