@@ -19,6 +19,8 @@ import os
 import shutil
 import subprocess as _sp
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -415,13 +417,20 @@ def test_workflow_luon_sinh_tren_push_main_va_co_manual_dispatch():
 
 
 def test_chi_job_deploy_so_huu_environment_va_concurrency():
+    """Duyệt TOÀN BỘ jobs, không chỉ hai tên cố định.
+
+    Bản trước chỉ assert trên `classify-changes` và `deploy`. Tên hàm hứa "chỉ
+    job deploy sở hữu", nhưng thân hàm không kiểm điều đó: thêm một job thứ ba
+    mang `environment: production` thì phép kiểm VẪN XANH. Đúng loại guard
+    canh hụt mà CLAUDE.md §3 nói tới.
+    """
     jobs = _workflow(_DEPLOY)["jobs"]
-    classifier_job = jobs["classify-changes"]
-    deploy_job = jobs["deploy"]
-    assert "environment" not in classifier_job
-    assert "concurrency" not in classifier_job
-    assert deploy_job["environment"] == "production"
-    assert deploy_job["concurrency"] == {
+    co_env = sorted(ten for ten, job in jobs.items() if "environment" in job)
+    co_conc = sorted(ten for ten, job in jobs.items() if "concurrency" in job)
+    assert co_env == ["deploy"], f"chỉ `deploy` được mang environment, thấy {co_env}"
+    assert co_conc == ["deploy"], f"chỉ `deploy` được mang concurrency, thấy {co_conc}"
+    assert jobs["deploy"]["environment"] == "production"
+    assert jobs["deploy"]["concurrency"] == {
         "group": "deploy-production",
         "cancel-in-progress": True,
     }
@@ -430,10 +439,11 @@ def test_chi_job_deploy_so_huu_environment_va_concurrency():
 def test_deploy_chi_chay_sau_ket_luan_deploy_tuong_minh():
     jobs = _workflow(_DEPLOY)["jobs"]
     deploy_job = jobs["deploy"]
-    assert deploy_job["needs"] == "classify-changes"
+    assert deploy_job["needs"] == ["classify-changes", "reap-stale-production-runs"]
     assert deploy_job["if"] == (
         "needs.classify-changes.result == 'success' && "
-        "needs.classify-changes.outputs.deploy == 'true'"
+        "needs.classify-changes.outputs.deploy == 'true' && "
+        "needs.reap-stale-production-runs.result == 'success'"
     )
     assert jobs["classify-changes"]["outputs"]["deploy"] == (
         "${{ steps.plan.outputs.deploy }}"
@@ -1196,4 +1206,412 @@ def test_dh_duong_thuan_loi_DI_QUA_step_3b_va_tao_tai_san(tmp_path: Path) -> Non
     assert len(ban_ke) == 1, f"phải xuất bản đúng một bản kê, thấy {ban_ke}"
     assert f"# git-rev\t{_SHA_MARKER_DH}" in ban_ke[0].read_text(encoding="utf-8"), (
         "bản kê phải ghim SHA từ MARKER (phiên bản cũ), không phải HEAD hiện tại"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Reaper: run production chờ duyệt cho SHA đã bị `main` vượt qua phải bị huỷ
+# ---------------------------------------------------------------------------
+#
+# Vì sao mục này tồn tại — đo 24-09-2026, deployment 6637504446:
+# `deploy` là job DUY NHẤT mang `environment` + `concurrency: deploy-production`.
+# Một push SAFE_NO_DEPLOY làm job ấy bị `if:` loại ⇒ nó không bao giờ vào nhóm
+# concurrency ⇒ `cancel-in-progress` không chạy ⇒ run cũ nằm `waiting` với một
+# SHA mà cổng SHA chắc chắn sẽ từ chối.
+#
+# Số đo: ba push DEPLOY liên tiếp dọn được run cũ trong 11-16 giây; push safe
+# `0b2dd8a7` (xong sau 14 giây) KHÔNG dọn gì, để 6637504446 treo thêm 83 phút
+# rồi đỏ ngay sau khi được approve. Production không hại, nhưng một lượt phê
+# duyệt bị đốt và deployment đỏ vĩnh viễn.
+#
+# Các ca dưới đây **thi hành đúng đoạn Python đã ship** trong `deploy.yml`.
+# Một bản chép tay vào test chỉ chứng minh giả định của người viết test.
+
+_TEN_REAPER = "reap-stale-production-runs"
+_TIP = "c" * 40
+_SHA_CU = "a" * 40
+
+
+def _job_reaper() -> dict:
+    jobs = _workflow(_DEPLOY)["jobs"]
+    assert _TEN_REAPER in jobs, f"thiếu job {_TEN_REAPER} trong deploy.yml"
+    return jobs[_TEN_REAPER]
+
+
+def _ma_reaper() -> str:
+    """Nguyên văn đoạn Python đã ship trong bước huỷ run."""
+    buoc = _job_reaper()["steps"]
+    assert len(buoc) == 1, f"reaper phải có đúng một bước, thấy {len(buoc)}"
+    m = re.search(r"<<'PY'\n(.*?)\nPY\s*$", buoc[0]["run"], re.S)
+    assert m, "không trích được đoạn Python của reaper"
+    return m.group(1)
+
+
+def _kiem_reaper_luon_chay(doc: dict) -> None:
+    """Tách riêng để ca đột biến chứng minh được phép kiểm này ĐỎ được."""
+    job = doc["jobs"][_TEN_REAPER]
+    assert job.get("if") == "always()", (
+        "reaper phải `always()`: ca cần dọn nhất CHÍNH LÀ push SAFE_NO_DEPLOY, "
+        f"nhận {job.get('if')!r}"
+    )
+
+
+# --- cấu trúc ---------------------------------------------------------------
+
+
+def test_reaper_ton_tai_va_luon_chay():
+    _kiem_reaper_luon_chay(_workflow(_DEPLOY))
+    assert _job_reaper()["needs"] == "classify-changes"
+
+
+def test_dot_bien_gate_reaper_theo_deploy_thi_DO():
+    """Gate reaper theo `deploy == 'true'` là tái tạo ĐÚNG lỗi 6637504446."""
+    doc = _workflow(_DEPLOY)
+    doc["jobs"][_TEN_REAPER]["if"] = "needs.classify-changes.outputs.deploy == 'true'"
+    with pytest.raises(AssertionError):
+        _kiem_reaper_luon_chay(doc)
+
+
+def test_reaper_khong_environment_khong_concurrency():
+    """Job dọn thứ đang chờ duyệt thì không được tự đi chờ duyệt.
+
+    Và không được mượn nhóm `deploy-production`: hành vi "job không có
+    environment vào nhóm có huỷ nổi job đang chờ duyệt hay không" CHƯA AI ĐO.
+    """
+    job = _job_reaper()
+    assert "environment" not in job
+    assert "concurrency" not in job
+
+
+def test_reaper_chi_xin_dung_quyen_actions_write():
+    """Không `contents`, không `deployments`, không `packages`.
+
+    `deployments: write` không cần: deployment tự chuyển `error` khi run bị
+    huỷ (đo 24-09: 6630723643 → error đúng giây run 35958984186 bị huỷ).
+    """
+    assert _job_reaper()["permissions"] == {"actions": "write"}
+
+
+def test_deploy_phu_thuoc_reaper_o_CA_needs_LAN_if():
+    """Chỉ thêm vào `needs` là CHƯA ĐỦ.
+
+    Một job khai `if:` tuỳ biến thì GitHub BỎ yêu cầu `success()` ngầm của
+    `needs`. Thiếu vế `result == 'success'` thì reaper đỏ — ví dụ HTTP 403 vì
+    không được cấp `actions: write` — mà `deploy` vẫn chạy: cơ chế dọn stale
+    tự biến thành fail-open, đúng thứ nó sinh ra để loại bỏ.
+    """
+    job = _workflow(_DEPLOY)["jobs"]["deploy"]
+    needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
+    assert _TEN_REAPER in needs, f"`deploy` phải `needs` reaper, thấy {needs}"
+    assert f"needs.{_TEN_REAPER}.result == 'success'" in job["if"], (
+        f"`if` của deploy phải đòi reaper thành công, nhận: {job['if']!r}"
+    )
+
+
+# --- hành vi: thi hành đoạn đã ship ------------------------------------------
+
+
+_KHONG_DAT = object()
+
+
+class _PhanHoiGia:
+    def __init__(self, status, payload, tho=None):
+        self.status = status
+        if tho is not None:
+            self._raw = tho          # byte thô, để giả lập thân KHÔNG phải JSON
+        else:
+            self._raw = b"" if payload is None else json.dumps(payload).encode()
+
+    def read(self):
+        return self._raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+
+def _ban_ghi_run(rid, sha, *, status="waiting", so=1):
+    return {"id": rid, "head_sha": sha, "status": status, "run_number": so}
+
+
+def _thi_hanh_reaper(
+    monkeypatch,
+    *,
+    danh_sach,
+    tip=_TIP,
+    run_id=900,
+    so_hieu=9,
+    ma_liet_ke=200,
+    ma_cancel=None,
+    doc_lai=None,
+    doc_lai_ma=200,
+    than_liet_ke=_KHONG_DAT,
+    tho_liet_ke=None,
+    loi_mang=None,
+    ma_nguon=None,
+):
+    ma_cancel = ma_cancel or {}
+    doc_lai = doc_lai or {}
+    da_huy = []
+    da_goi = []
+
+    def urlopen(req, timeout=None):
+        url = req.full_url
+        cach = req.get_method()
+        da_goi.append(f"{cach} {url}")
+        if cach == "GET" and "/runs?" in url:
+            if loi_mang is not None:
+                raise loi_mang           # KHÔNG phải HTTPError: mạng/DNS/timeout
+            if ma_liet_ke != 200:
+                raise urllib.error.HTTPError(url, ma_liet_ke, "loi", None, None)
+            if tho_liet_ke is not None:
+                return _PhanHoiGia(200, None, tho=tho_liet_ke)
+            than = (
+                {"workflow_runs": danh_sach}
+                if than_liet_ke is _KHONG_DAT
+                else than_liet_ke
+            )
+            return _PhanHoiGia(200, than)
+        if cach == "POST" and url.endswith("/cancel"):
+            rid = int(url.rsplit("/", 2)[-2])
+            da_huy.append(rid)
+            ma = ma_cancel.get(rid, 202)
+            if ma != 202:
+                raise urllib.error.HTTPError(url, ma, "loi", None, None)
+            return _PhanHoiGia(202, None)
+        if cach == "GET":
+            rid = int(url.rsplit("/", 1)[-1])
+            if doc_lai_ma != 200:
+                raise urllib.error.HTTPError(url, doc_lai_ma, "loi", None, None)
+            return _PhanHoiGia(200, doc_lai.get(rid, {"status": "completed"}))
+        raise AssertionError(f"gọi API ngoài dự kiến: {cach} {url}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    for ten, gia_tri in {
+        "GH_API_URL": "https://api.github.test",
+        "GH_REPO": "chu/kho",
+        "GH_TOKEN": "khong-phai-bi-mat",
+        "GH_RUN_ID": str(run_id),
+        "GH_RUN_NUMBER": str(so_hieu),
+        "GH_TIP_SHA": tip,
+        "GH_WORKFLOW_REF": "chu/kho/.github/workflows/deploy.yml@refs/heads/main",
+    }.items():
+        monkeypatch.setenv(ten, gia_tri)
+
+    khong_gian = {"__name__": "__reaper__"}
+    rc = 0
+    try:
+        exec(compile(ma_nguon or _ma_reaper(), "<reaper>", "exec"), khong_gian)
+    except SystemExit as loi:
+        rc = loi.code if isinstance(loi.code, int) else 1
+    return rc, da_huy, da_goi
+
+
+def test_reaper_huy_dung_run_CU_dang_cho_duyet(monkeypatch):
+    rc, huy, _ = _thi_hanh_reaper(
+        monkeypatch, danh_sach=[_ban_ghi_run(111, _SHA_CU, so=5)]
+    )
+    assert rc == 0, "đường thuận lợi không được đỏ"
+    assert huy == [111]
+
+
+@pytest.mark.parametrize(
+    ("ly_do", "ban_ghi"),
+    [
+        ("chính run hiện tại", _ban_ghi_run(900, _SHA_CU, so=5)),
+        ("mang đúng SHA tip", _ban_ghi_run(112, _TIP, so=5)),
+        ("đang chạy", _ban_ghi_run(113, _SHA_CU, status="in_progress", so=5)),
+        ("đã xong", _ban_ghi_run(114, _SHA_CU, status="completed", so=5)),
+        ("đang xếp hàng", _ban_ghi_run(115, _SHA_CU, status="queued", so=5)),
+        ("MỚI hơn run này", _ban_ghi_run(116, _SHA_CU, so=12)),
+    ],
+)
+def test_reaper_khong_duoc_dung_toi(monkeypatch, ly_do, ban_ghi):
+    rc, huy, _ = _thi_hanh_reaper(monkeypatch, danh_sach=[ban_ghi])
+    assert rc == 0
+    assert huy == [], f"KHÔNG được huỷ run {ly_do}"
+
+
+def test_reaper_chi_hoi_run_cua_CHINH_workflow_nay(monkeypatch):
+    """Không được quét toàn repo: chỉ `workflows/deploy.yml/runs`."""
+    _, _, goi = _thi_hanh_reaper(monkeypatch, danh_sach=[])
+    liet_ke = [g for g in goi if "/runs?" in g]
+    assert len(liet_ke) == 1, f"phải liệt kê đúng một lần, thấy {liet_ke}"
+    assert "/actions/workflows/deploy.yml/runs?" in liet_ke[0], (
+        f"phải hỏi theo workflow của chính nó, nhận: {liet_ke[0]}"
+    )
+    assert "status=waiting" in liet_ke[0]
+
+
+def test_reaper_liet_ke_hong_thi_DO_va_khong_huy_gi(monkeypatch):
+    """Không đọc được danh sách ⇒ không kết luận được ⇒ chặn deploy."""
+    rc, huy, _ = _thi_hanh_reaper(monkeypatch, danh_sach=[], ma_liet_ke=500)
+    assert rc != 0
+    assert huy == []
+
+
+def test_reaper_403_thi_DO_va_neu_dich_danh_quyen_thieu(monkeypatch, capsys):
+    """Không được cấp `actions: write` ⇒ dừng an toàn, không im lặng bỏ qua."""
+    rc, _, _ = _thi_hanh_reaper(
+        monkeypatch,
+        danh_sach=[_ban_ghi_run(111, _SHA_CU, so=5)],
+        ma_cancel={111: 403},
+    )
+    assert rc != 0
+    ra = capsys.readouterr().out
+    assert "actions: write" in ra and "403" in ra
+
+
+def test_reaper_409_vo_hai_CHI_KHI_run_da_roi_waiting(monkeypatch):
+    rc, _, _ = _thi_hanh_reaper(
+        monkeypatch,
+        danh_sach=[_ban_ghi_run(111, _SHA_CU, so=5)],
+        ma_cancel={111: 409},
+        doc_lai={111: {"status": "completed"}},
+    )
+    assert rc == 0
+
+
+def test_reaper_409_ma_van_waiting_thi_DO(monkeypatch):
+    """Chiều ngược: thiếu ca này thì một `except 409: pass` vẫn làm ca trên xanh."""
+    rc, _, _ = _thi_hanh_reaper(
+        monkeypatch,
+        danh_sach=[_ban_ghi_run(111, _SHA_CU, so=5)],
+        ma_cancel={111: 409},
+        doc_lai={111: {"status": "waiting"}},
+    )
+    assert rc != 0
+
+
+# --- kiểm ngược: mỗi guard MỘT đột biến riêng (CLAUDE.md §3) -----------------
+
+
+def _dot_bien(mau: str) -> str:
+    nguon = _ma_reaper()
+    assert nguon.count(mau) == 1, f"mẫu đột biến khớp {nguon.count(mau)} lần, cần đúng 1"
+    return nguon.replace(mau, "if False:  # DOT BIEN", 1)
+
+
+def test_dot_bien_bo_kiem_TIP_thi_huy_nham_run_con_deploy_duoc(monkeypatch):
+    """Gỡ vế `head_sha != tip` ⇒ một run VẪN deploy được bị huỷ."""
+    mut = _dot_bien('if (run.get("head_sha") or "").strip().lower() == TIP_SHA:')
+    _, huy, _ = _thi_hanh_reaper(
+        monkeypatch, danh_sach=[_ban_ghi_run(112, _TIP, so=5)], ma_nguon=mut
+    )
+    assert huy == [112], "đột biến KHÔNG lọt ⇒ phép kiểm gốc đang canh hụt"
+
+
+def test_dot_bien_bo_kiem_SO_HIEU_thi_huy_nham_run_MOI_hon(monkeypatch):
+    """Hai push liên tiếp: run cũ không được phép huỷ run mới hơn nó."""
+    mut = _dot_bien('if int(run.get("run_number") or 0) >= RUN_NUMBER:')
+    _, huy, _ = _thi_hanh_reaper(
+        monkeypatch, danh_sach=[_ban_ghi_run(116, _SHA_CU, so=12)], ma_nguon=mut
+    )
+    assert huy == [116], "đột biến KHÔNG lọt ⇒ phép kiểm gốc đang canh hụt"
+
+
+def test_dot_bien_bo_TU_LOAI_TRU_thi_reaper_tu_huy_chinh_minh(monkeypatch):
+    """Bản ghi ở đây là TỔNG HỢP, và phải nói rõ vì sao.
+
+    Run hiện tại ngoài đời luôn mang đúng SHA tip và đúng số hiệu của chính
+    nó, nên ba vế (`id`, `tip`, `run_number`) cùng che nó — gỡ một vế thôi thì
+    không ca thật nào đỏ được. Ca này cố ý dựng một bản ghi mang `id` của run
+    hiện tại nhưng SHA khác và số hiệu nhỏ hơn, để chứng minh vế `id` là mã
+    SỐNG chứ không phải một dòng thừa ăn theo hai vế kia.
+    """
+    mut = _dot_bien('if int(run.get("id") or 0) == RUN_ID:')
+    _, huy, _ = _thi_hanh_reaper(
+        monkeypatch, danh_sach=[_ban_ghi_run(900, _SHA_CU, so=5)], ma_nguon=mut
+    )
+    assert huy == [900], "đột biến KHÔNG lọt ⇒ vế tự-loại-trừ là mã chết"
+
+
+# --- fail-closed: MỌI nhánh "không kết luận được" phải CHẶN deploy -----------
+#
+# Bản đầu của reaper đọc `payload.get("workflow_runs") or []`, nên một phản hồi
+# HTTP 200 SAI HÌNH DẠNG bị hoá thành "không có run nào chờ duyệt": reaper lặng
+# lẽ không dọn gì rồi thoát 0, và `deploy` đi tiếp. Đó đúng là lỗi
+# `return-value-conflates-two-cases` — gộp "API nói không có" với "phản hồi
+# hỏng" — nằm ngay trong bản vá sinh ra để diệt fail-open.
+#
+# Bốn nhánh `stop()` còn lại cũng chưa ca kiểm nào chứng minh bắn được. Một
+# guard chưa ai thấy nó đỏ là một guard chưa được chứng minh (CLAUDE.md §3).
+
+
+@pytest.mark.parametrize(
+    ("ly_do", "than"),
+    [
+        ("thiếu hẳn khoá `workflow_runs`", {"total_count": 0}),
+        ("`workflow_runs` là null", {"workflow_runs": None}),
+        ("`workflow_runs` không phải danh sách", {"workflow_runs": {"id": 1}}),
+        ("thân rỗng hoàn toàn", {}),
+    ],
+)
+def test_reaper_than_200_SAI_HINH_DANG_thi_DO(monkeypatch, capsys, ly_do, than):
+    """200 mà thân hỏng KHÔNG được hoá thành "không có run nào"."""
+    rc, huy, _ = _thi_hanh_reaper(monkeypatch, danh_sach=[], than_liet_ke=than)
+    assert rc != 0, f"phải CHẶN deploy khi {ly_do}"
+    assert huy == [], "không được huỷ gì khi chưa đọc nổi danh sách"
+    assert "SAI HINH DANG" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("ly_do", "dung_loi", "than_tho"),
+    [
+        ("mạng/DNS đứt", OSError("gia lap dut mang"), None),
+        ("thân KHÔNG phải JSON", None, b"<html>502 Bad Gateway</html>"),
+    ],
+)
+def test_reaper_loi_MANG_hoac_JSON_thi_DO(monkeypatch, ly_do, dung_loi, than_tho):
+    """Cả hai rơi vào cùng nhánh `except Exception` — và nhánh ấy phải CHẶN."""
+    rc, huy, _ = _thi_hanh_reaper(
+        monkeypatch, danh_sach=[], loi_mang=dung_loi, tho_liet_ke=than_tho
+    )
+    assert rc != 0, f"phải CHẶN deploy khi {ly_do}"
+    assert huy == []
+
+
+def test_reaper_409_roi_DOC_LAI_CUNG_HONG_thi_DO(monkeypatch):
+    """409 chỉ vô hại khi đọc lại XÁC NHẬN được. Đọc lại hỏng ⇒ không biết gì."""
+    rc, _, _ = _thi_hanh_reaper(
+        monkeypatch,
+        danh_sach=[_ban_ghi_run(111, _SHA_CU, so=5)],
+        ma_cancel={111: 409},
+        doc_lai_ma=500,
+    )
+    assert rc != 0
+
+
+@pytest.mark.parametrize("ma", [400, 401, 422, 500, 502])
+def test_reaper_ma_HTTP_LA_khi_huy_thi_DO(monkeypatch, ma):
+    """Mọi mã ngoài 202/403/409 đều là "không biết" ⇒ chặn, không đoán."""
+    rc, huy, _ = _thi_hanh_reaper(
+        monkeypatch,
+        danh_sach=[_ban_ghi_run(111, _SHA_CU, so=5)],
+        ma_cancel={111: ma},
+    )
+    assert rc != 0, f"HTTP {ma} khi huỷ mà vẫn cho deploy đi tiếp"
+    assert huy == [111], "đã thử huỷ rồi mới hỏng — không phải bỏ qua"
+
+
+def test_dot_bien_bo_kiem_HINH_DANG_thi_lai_fail_open(monkeypatch):
+    """Kiểm ngược cho chính F1: gỡ vế hình dạng ⇒ quay lại fail-open cũ.
+
+    Bản đột biến biến `isinstance(run_list, list)` thành luôn đúng, rồi nuốt
+    `TypeError` của vòng lặp — tức tái tạo đúng hành vi cũ: thoát 0, không dọn
+    gì, `deploy` đi tiếp.
+    """
+    nguon = _ma_reaper()
+    mau = "if not isinstance(run_list, list):"
+    assert nguon.count(mau) == 1
+    mut = nguon.replace(mau, "if False:  # DOT BIEN", 1).replace(
+        "for run in run_list:", "for run in (run_list or []):", 1
+    )
+    rc, huy, _ = _thi_hanh_reaper(
+        monkeypatch, danh_sach=[], than_liet_ke={"total_count": 0}, ma_nguon=mut
+    )
+    assert rc == 0 and huy == [], (
+        "đột biến KHÔNG lọt ⇒ phép kiểm hình dạng đang canh hụt"
     )
