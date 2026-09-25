@@ -1,0 +1,125 @@
+name: Probe actions write
+
+# =============================================================================
+# TỆP TẠM — chỉ sống trên nhánh `probe/actions-write-20260925`, KHÔNG lên main.
+# =============================================================================
+# Mục đích: đo MỘT điều duy nhất — `GITHUB_TOKEN` có `POST …/runs/{id}/cancel`
+# được hay không, khi repo đang đặt `default_workflow_permissions=read`.
+#
+# Cách đo KHÔNG phá gì: huỷ một run ĐÃ COMPLETED. Thao tác ấy là no-op, nhưng
+# mã trả về phân biệt đúng hai ca không lẫn được vào nhau:
+#   * 409 Conflict  ⇒ token ĐƯỢC PHÉP huỷ, chỉ là run đã xong  → ĐẠT
+#   * 403 / 404     ⇒ token KHÔNG có quyền                      → THẤT BẠI
+#   * mã khác       ⇒ KHÔNG suy diễn                            → BLOCK
+#
+# ⚠️ `workflow_dispatch` được khai cho đủ, nhưng nó KHÔNG kích hoạt được từ đây:
+# GitHub chỉ dispatch workflow nằm trên nhánh MẶC ĐỊNH. Thứ thật sự bắn là
+# `push` ghim đúng nhánh probe — đã kiểm: không workflow nào khác của repo kích
+# hoạt trên push một nhánh bất kỳ, nên đẩy nhánh này không đánh thức gì cả.
+#
+# Không Docker, không SSH, không deploy, không `environment`, không đụng nhóm
+# concurrency `deploy-production`.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [probe/actions-write-20260925]
+
+permissions: {}
+
+jobs:
+  probe:
+    name: Probe cancel permission
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: POST cancel lên một run ĐÃ COMPLETED của chính workflow probe
+        env:
+          API_URL: ${{ github.api_url }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          API_URL = os.environ["API_URL"].rstrip("/")
+          REPO = os.environ["REPO"]
+          TOKEN = os.environ["TOKEN"]
+          RUN_ID = int(os.environ["RUN_ID"])
+          WORKFLOW_FILE = "probe-actions-write.yml"
+
+
+          def call(method, path):
+              req = urllib.request.Request(API_URL + "/" + path, method=method)
+              req.add_header("Authorization", "Bearer " + TOKEN)
+              req.add_header("Accept", "application/vnd.github+json")
+              req.add_header("X-GitHub-Api-Version", "2022-11-28")
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      return resp.status, resp.read().decode("utf-8", "replace")
+              except urllib.error.HTTPError as err:
+                  try:
+                      body = err.read().decode("utf-8", "replace")
+                  except Exception:
+                      body = ""
+                  return err.code, body
+              except Exception as err:
+                  print("LOI MANG/DNS: " + err.__class__.__name__)
+                  sys.exit(2)
+
+
+          print("== buoc 1: liet ke run DA COMPLETED cua chinh workflow probe ==")
+          status, body = call(
+              "GET",
+              "repos/%s/actions/workflows/%s/runs?status=completed&per_page=20"
+              % (REPO, WORKFLOW_FILE),
+          )
+          print("GET runs -> HTTP %s" % status)
+          if status == 403:
+              print("KET LUAN: token khong doc noi `actions` => KHONG co quyen. PROBE THAT BAI.")
+              sys.exit(1)
+          if status != 200:
+              print("KET LUAN: ma la o buoc liet ke, KHONG suy dien. BLOCK.")
+              print("body: " + body[:300])
+              sys.exit(2)
+
+          runs = [r for r in json.loads(body)["workflow_runs"] if int(r["id"]) != RUN_ID]
+          print("so run completed (khong ke run nay): %d" % len(runs))
+          if not runs:
+              print("LUOT DAU: chua co run completed nao de thu. KHONG POST gi ca.")
+              print("KET QUA: CHUA DO - day chi la luot tao du lieu cho luot sau.")
+              sys.exit(0)
+
+          muc_tieu = runs[0]
+          print(
+              "== buoc 2: POST cancel len run %d (status=%s, conclusion=%s) =="
+              % (muc_tieu["id"], muc_tieu.get("status"), muc_tieu.get("conclusion"))
+          )
+          status, body = call(
+              "POST", "repos/%s/actions/runs/%d/cancel" % (REPO, int(muc_tieu["id"]))
+          )
+          print("POST cancel -> HTTP %s" % status)
+          print("body: " + body[:300])
+
+          if status == 409:
+              print("KET LUAN: 409 Conflict = token DUOC PHEP huy, chi la run da xong.")
+              print("PROBE DAT - `permissions: actions: write` duoc cap that.")
+              sys.exit(0)
+          if status in (403, 404):
+              print("KET LUAN: %s = token KHONG co quyen `actions: write`." % status)
+              print("PROBE THAT BAI - patch reaper se chan moi luot deploy.")
+              sys.exit(1)
+          if status == 202:
+              print("KET LUAN: 202 tren mot run DA COMPLETED - ngoai kich ban.")
+              print("Co quyen, nhung hanh vi khong nhu tai lieu. BLOCK, khong suy dien.")
+              sys.exit(2)
+          print("KET LUAN: HTTP %s ngoai kich ban. KHONG suy dien. BLOCK." % status)
+          sys.exit(2)
+          PY
