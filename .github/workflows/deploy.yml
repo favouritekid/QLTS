@@ -161,8 +161,21 @@ jobs:
                   "duoc gi nen KHONG cho deploy di tiep." % status
               )
 
+          # Mot phan hoi 200 ma THIEU `workflow_runs` KHONG phai "khong co run
+          # nao cho duyet" - do la phan hoi SAI HINH DANG. Gop hai ca ay lai
+          # chinh la fail-open: reaper lang le khong don gi va cho deploy di
+          # tiep, dung thu no sinh ra de diet.
+          run_list = payload.get("workflow_runs")
+          if not isinstance(run_list, list):
+              stop(
+                  "HTTP 200 nhung than phan hoi SAI HINH DANG: `workflow_runs` "
+                  "thieu, null, hoac khong phai danh sach (%s). Khong ket luan "
+                  "duoc gi nen KHONG cho deploy di tiep."
+                  % type(run_list).__name__
+              )
+
           stale = []
-          for run in payload.get("workflow_runs") or []:
+          for run in run_list:
               if int(run.get("id") or 0) == RUN_ID:
                   continue
               # KHONG tin bo loc `status=waiting` cua API - hoi lai ban ghi.
@@ -193,12 +206,12 @@ jobs:
                   )
               elif status == 409:
                   # 409 CHI vo hai sau khi doc lai va thay run da roi `waiting`.
-                  lai, ban_ghi = call("GET", "repos/%s/actions/runs/%d" % (REPO, rid))
-                  if lai != 200 or not isinstance(ban_ghi, dict):
-                      stop("409 khi huy run %d ma doc lai cung hong (HTTP %s)" % (rid, lai))
-                  if ban_ghi.get("status") == "waiting":
+                  recheck, record = call("GET", "repos/%s/actions/runs/%d" % (REPO, rid))
+                  if recheck != 200 or not isinstance(record, dict):
+                      stop("409 khi huy run %d ma doc lai cung hong (HTTP %s)" % (rid, recheck))
+                  if record.get("status") == "waiting":
                       stop("409 khi huy run %d nhung no VAN waiting - khong phai race vo hai" % rid)
-                  print("run %d da roi waiting (%s) truoc khi kip huy - vo hai" % (rid, ban_ghi.get("status")))
+                  print("run %d da roi waiting (%s) truoc khi kip huy - vo hai" % (rid, record.get("status")))
               else:
                   stop("HTTP %s khi huy run %d" % (status, rid))
 

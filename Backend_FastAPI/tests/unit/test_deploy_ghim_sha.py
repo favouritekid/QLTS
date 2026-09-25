@@ -1311,10 +1311,16 @@ def test_deploy_phu_thuoc_reaper_o_CA_needs_LAN_if():
 # --- hành vi: thi hành đoạn đã ship ------------------------------------------
 
 
+_KHONG_DAT = object()
+
+
 class _PhanHoiGia:
-    def __init__(self, status, payload):
+    def __init__(self, status, payload, tho=None):
         self.status = status
-        self._raw = b"" if payload is None else json.dumps(payload).encode()
+        if tho is not None:
+            self._raw = tho          # byte thô, để giả lập thân KHÔNG phải JSON
+        else:
+            self._raw = b"" if payload is None else json.dumps(payload).encode()
 
     def read(self):
         return self._raw
@@ -1340,6 +1346,10 @@ def _thi_hanh_reaper(
     ma_liet_ke=200,
     ma_cancel=None,
     doc_lai=None,
+    doc_lai_ma=200,
+    than_liet_ke=_KHONG_DAT,
+    tho_liet_ke=None,
+    loi_mang=None,
     ma_nguon=None,
 ):
     ma_cancel = ma_cancel or {}
@@ -1352,9 +1362,18 @@ def _thi_hanh_reaper(
         cach = req.get_method()
         da_goi.append(f"{cach} {url}")
         if cach == "GET" and "/runs?" in url:
+            if loi_mang is not None:
+                raise loi_mang           # KHÔNG phải HTTPError: mạng/DNS/timeout
             if ma_liet_ke != 200:
                 raise urllib.error.HTTPError(url, ma_liet_ke, "loi", None, None)
-            return _PhanHoiGia(200, {"workflow_runs": danh_sach})
+            if tho_liet_ke is not None:
+                return _PhanHoiGia(200, None, tho=tho_liet_ke)
+            than = (
+                {"workflow_runs": danh_sach}
+                if than_liet_ke is _KHONG_DAT
+                else than_liet_ke
+            )
+            return _PhanHoiGia(200, than)
         if cach == "POST" and url.endswith("/cancel"):
             rid = int(url.rsplit("/", 2)[-2])
             da_huy.append(rid)
@@ -1364,6 +1383,8 @@ def _thi_hanh_reaper(
             return _PhanHoiGia(202, None)
         if cach == "GET":
             rid = int(url.rsplit("/", 1)[-1])
+            if doc_lai_ma != 200:
+                raise urllib.error.HTTPError(url, doc_lai_ma, "loi", None, None)
             return _PhanHoiGia(200, doc_lai.get(rid, {"status": "completed"}))
         raise AssertionError(f"gọi API ngoài dự kiến: {cach} {url}")
 
@@ -1505,3 +1526,92 @@ def test_dot_bien_bo_TU_LOAI_TRU_thi_reaper_tu_huy_chinh_minh(monkeypatch):
         monkeypatch, danh_sach=[_ban_ghi_run(900, _SHA_CU, so=5)], ma_nguon=mut
     )
     assert huy == [900], "đột biến KHÔNG lọt ⇒ vế tự-loại-trừ là mã chết"
+
+
+# --- fail-closed: MỌI nhánh "không kết luận được" phải CHẶN deploy -----------
+#
+# Bản đầu của reaper đọc `payload.get("workflow_runs") or []`, nên một phản hồi
+# HTTP 200 SAI HÌNH DẠNG bị hoá thành "không có run nào chờ duyệt": reaper lặng
+# lẽ không dọn gì rồi thoát 0, và `deploy` đi tiếp. Đó đúng là lỗi
+# `return-value-conflates-two-cases` — gộp "API nói không có" với "phản hồi
+# hỏng" — nằm ngay trong bản vá sinh ra để diệt fail-open.
+#
+# Bốn nhánh `stop()` còn lại cũng chưa ca kiểm nào chứng minh bắn được. Một
+# guard chưa ai thấy nó đỏ là một guard chưa được chứng minh (CLAUDE.md §3).
+
+
+@pytest.mark.parametrize(
+    ("ly_do", "than"),
+    [
+        ("thiếu hẳn khoá `workflow_runs`", {"total_count": 0}),
+        ("`workflow_runs` là null", {"workflow_runs": None}),
+        ("`workflow_runs` không phải danh sách", {"workflow_runs": {"id": 1}}),
+        ("thân rỗng hoàn toàn", {}),
+    ],
+)
+def test_reaper_than_200_SAI_HINH_DANG_thi_DO(monkeypatch, capsys, ly_do, than):
+    """200 mà thân hỏng KHÔNG được hoá thành "không có run nào"."""
+    rc, huy, _ = _thi_hanh_reaper(monkeypatch, danh_sach=[], than_liet_ke=than)
+    assert rc != 0, f"phải CHẶN deploy khi {ly_do}"
+    assert huy == [], "không được huỷ gì khi chưa đọc nổi danh sách"
+    assert "SAI HINH DANG" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("ly_do", "dung_loi", "than_tho"),
+    [
+        ("mạng/DNS đứt", OSError("gia lap dut mang"), None),
+        ("thân KHÔNG phải JSON", None, b"<html>502 Bad Gateway</html>"),
+    ],
+)
+def test_reaper_loi_MANG_hoac_JSON_thi_DO(monkeypatch, ly_do, dung_loi, than_tho):
+    """Cả hai rơi vào cùng nhánh `except Exception` — và nhánh ấy phải CHẶN."""
+    rc, huy, _ = _thi_hanh_reaper(
+        monkeypatch, danh_sach=[], loi_mang=dung_loi, tho_liet_ke=than_tho
+    )
+    assert rc != 0, f"phải CHẶN deploy khi {ly_do}"
+    assert huy == []
+
+
+def test_reaper_409_roi_DOC_LAI_CUNG_HONG_thi_DO(monkeypatch):
+    """409 chỉ vô hại khi đọc lại XÁC NHẬN được. Đọc lại hỏng ⇒ không biết gì."""
+    rc, _, _ = _thi_hanh_reaper(
+        monkeypatch,
+        danh_sach=[_ban_ghi_run(111, _SHA_CU, so=5)],
+        ma_cancel={111: 409},
+        doc_lai_ma=500,
+    )
+    assert rc != 0
+
+
+@pytest.mark.parametrize("ma", [400, 401, 422, 500, 502])
+def test_reaper_ma_HTTP_LA_khi_huy_thi_DO(monkeypatch, ma):
+    """Mọi mã ngoài 202/403/409 đều là "không biết" ⇒ chặn, không đoán."""
+    rc, huy, _ = _thi_hanh_reaper(
+        monkeypatch,
+        danh_sach=[_ban_ghi_run(111, _SHA_CU, so=5)],
+        ma_cancel={111: ma},
+    )
+    assert rc != 0, f"HTTP {ma} khi huỷ mà vẫn cho deploy đi tiếp"
+    assert huy == [111], "đã thử huỷ rồi mới hỏng — không phải bỏ qua"
+
+
+def test_dot_bien_bo_kiem_HINH_DANG_thi_lai_fail_open(monkeypatch):
+    """Kiểm ngược cho chính F1: gỡ vế hình dạng ⇒ quay lại fail-open cũ.
+
+    Bản đột biến biến `isinstance(run_list, list)` thành luôn đúng, rồi nuốt
+    `TypeError` của vòng lặp — tức tái tạo đúng hành vi cũ: thoát 0, không dọn
+    gì, `deploy` đi tiếp.
+    """
+    nguon = _ma_reaper()
+    mau = "if not isinstance(run_list, list):"
+    assert nguon.count(mau) == 1
+    mut = nguon.replace(mau, "if False:  # DOT BIEN", 1).replace(
+        "for run in run_list:", "for run in (run_list or []):", 1
+    )
+    rc, huy, _ = _thi_hanh_reaper(
+        monkeypatch, danh_sach=[], than_liet_ke={"total_count": 0}, ma_nguon=mut
+    )
+    assert rc == 0 and huy == [], (
+        "đột biến KHÔNG lọt ⇒ phép kiểm hình dạng đang canh hụt"
+    )
