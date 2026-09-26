@@ -144,6 +144,46 @@ class PaymentIntentService:
     # CREATE INTENT
     # ==========================================================================
 
+    async def _find_replay_in_scope(
+        self,
+        invoice_id: int,
+        idempotency_key: str,
+        unit_id: Optional[int],
+    ) -> Tuple[Invoice, Optional[PaymentIntent]]:
+        """Kiểm phạm vi hoá đơn TRƯỚC, rồi mới tra intent cũ theo idempotency.
+
+        Đây là TẦNG CHỦ SỞ HỮU của bất biến: *không intent nào — cũ hay mới —
+        được trả cho người gọi khi hoá đơn nằm ngoài phạm vi tài chính của họ*.
+        ``unit_id`` là phạm vi do ``deps.finance_scope_unit_id`` phân giải
+        (admin/accountant ⇒ ``None`` = toàn hệ thống; vai khác ⇒ đơn vị của
+        mình). Phép lọc thật là ``InvoiceRepository.get_by_id_with_relations``
+        (``Lead.unit_id``), cùng khuôn với ``get_intent``/``cancel_intent``.
+
+        Vì sao phải là MỘT hàm, và phép kiểm phải đứng TRƯỚC:
+        ``PaymentIntentRepository.get_by_idempotency_key`` KHÔNG lọc đơn vị.
+        Trước bản vá có HAI đường tra nó trước khi kiểm hoá đơn —
+        ``create_or_get_intent`` (đường của ``POST /api/payments/intents``) và
+        nhánh trả sớm của ``create_intent`` — nên ai biết ``invoice_id`` +
+        ``idempotency_key`` của đơn vị khác đều nhận được ``pay_url`` của họ.
+        Cả hai đường nay chỉ chạm được phép tra ấy qua hàm này.
+
+        Ngoài phạm vi và không tồn tại ném CÙNG một lỗi (``Invoice not found``
+        → 404): 404 không được phân biệt "có mà không được xem" với "không có".
+
+        Returns:
+            ``(invoice, existing)`` — ``existing`` là intent cùng khoá trên hoá
+            đơn này (có thể đã ở trạng thái kết thúc), hoặc ``None``. Người gọi
+            tự quyết replay hay tạo mới.
+        """
+        invoice = await self.invoice_repo.get_by_id_with_relations(invoice_id, unit_id)
+        if not invoice:
+            raise ResourceNotFoundError("Invoice not found")
+
+        existing = await self.intent_repo.get_by_idempotency_key(
+            idempotency_key, invoice_id
+        )
+        return invoice, existing
+
     async def create_intent(
         self,
         invoice_id: int,
@@ -173,7 +213,9 @@ class PaymentIntentService:
             Tuple of (PaymentIntent, post_commit_callback)
 
         Raises:
-            ResourceNotFoundError: If invoice or method not found
+            ResourceNotFoundError: If invoice or method not found, or the
+                invoice is outside ``unit_id`` scope (checked BEFORE the
+                idempotency replay — see ``_find_replay_in_scope``)
             BusinessRuleViolation: If amount exceeds remaining or invalid method
             BadRequest: If amount is not positive
         """
@@ -184,9 +226,10 @@ class PaymentIntentService:
         if not idempotency_key:
             raise BadRequest("Idempotency key is required")
 
-        # Check for existing intent with same idempotency key
-        existing = await self.intent_repo.get_by_idempotency_key(
-            idempotency_key, invoice_id
+        # Invoice scope FIRST, idempotency replay second — the replay below must
+        # never hand an out-of-scope caller another unit's intent (IDOR).
+        invoice, existing = await self._find_replay_in_scope(
+            invoice_id, idempotency_key, unit_id
         )
         if existing:
             if not existing.is_terminal:
@@ -202,11 +245,6 @@ class PaymentIntentService:
                 old_intent_id=existing.id,
                 old_status=existing.status,
             )
-
-        # Get invoice
-        invoice = await self.invoice_repo.get_by_id_with_relations(invoice_id, unit_id)
-        if not invoice:
-            raise ResourceNotFoundError("Invoice not found")
 
         # Check invoice status allows payment
         allowed_statuses = [
@@ -342,10 +380,17 @@ class PaymentIntentService:
 
         Returns:
             Tuple of (PaymentIntent, is_existing)
+
+        Raises:
+            ResourceNotFoundError: Invoice not found OR outside ``unit_id``
+                scope — checked BEFORE the idempotency replay, so a caller from
+                another unit who knows ``invoice_id`` + ``idempotency_key`` gets
+                404, never the existing intent's ``pay_url``.
         """
-        # Check for existing intent with same idempotency key
-        existing = await self.intent_repo.get_by_idempotency_key(
-            idempotency_key, invoice_id
+        # Invoice scope FIRST, idempotency replay second (IDOR) — this is the
+        # path of POST /api/payments/intents.
+        _, existing = await self._find_replay_in_scope(
+            invoice_id, idempotency_key, unit_id
         )
         if existing and not existing.is_terminal:
             return existing, True
