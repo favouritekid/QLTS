@@ -40,6 +40,9 @@ from app.utils.exceptions import (
     BadRequest,
     BusinessRuleViolation,
 )
+from app.database import AsyncSessionLocal
+from tests.fixtures.constants import AuthURLs
+from tests.fixtures.users import get_auth_headers
 
 pytestmark = pytest.mark.asyncio
 
@@ -1374,3 +1377,282 @@ class TestCallbackFailClosed:
         assert (
             await db.execute(select(func.count()).select_from(OverpaymentRecord))
         ).scalar_one() == 0
+
+
+# =============================================================================
+# IDOR — REPLAY THEO IDEMPOTENCY PHẢI KIỂM PHẠM VI HOÁ ĐƠN TRƯỚC
+# =============================================================================
+#
+# `PaymentIntentRepository.get_by_idempotency_key` KHÔNG lọc đơn vị. Trước bản
+# vá, HAI đường tra nó trước khi lấy hoá đơn có lọc đơn vị:
+#
+#   * `create_or_get_intent` — đường của `POST /api/payments/intents`;
+#   * nhánh trả sớm của `create_intent`.
+#
+# Người ở đơn vị khác, biết `invoice_id` + `idempotency_key`, nhận nguyên
+# intent của đơn vị kia — kể cả `pay_url`. Bản vá dồn cả hai đường qua MỘT hàm
+# (`_find_replay_in_scope`) kiểm phạm vi hoá đơn TRƯỚC.
+#
+# Mỗi ca âm chỉ khác ca dương đi cặp với nó ở ĐÚNG MỘT chỗ: đơn vị của người
+# gọi. Cùng hoá đơn, cùng khoá, cùng phương thức, cùng số tiền.
+#
+# Cặp dương của `create_intent` là
+# `TestCreateIntent.test_create_intent_idempotency_same_key` ở đầu tệp.
+
+
+async def _count_intents(session, invoice_id: int) -> int:
+    """Đếm bằng SELECT — thấy cả hàng mới `flush` mà chưa commit."""
+    return (
+        await session.execute(
+            select(func.count())
+            .select_from(PaymentIntent)
+            .where(PaymentIntent.invoice_id == invoice_id)
+        )
+    ).scalar_one()
+
+
+async def _seed_live_intent(db, ctx: dict, idempotency_key: str) -> PaymentIntent:
+    """Intent CÒN SỐNG của đơn vị sở hữu hoá đơn, đã commit."""
+    intent, _ = await PaymentIntentService(db).create_intent(
+        invoice_id=ctx["invoice"].id,
+        method_id=ctx["online_method"].id,
+        amount=Decimal("1000000"),
+        idempotency_key=idempotency_key,
+        return_url=VALID_RETURN_URL,
+        unit_id=ctx["unit_id"],
+    )
+    await db.commit()
+    assert not intent.is_terminal, "tiền đề: intent phải còn replay được"
+    return intent
+
+
+class TestIntentReplayScope:
+    """Tầng service — gọi thẳng, không qua router."""
+
+    async def test_create_or_get_same_unit_replays_existing(
+        self, db, intent_fixtures
+    ):
+        """Ca DƯƠNG của cặp dưới: cùng đơn vị ⇒ trả đúng intent cũ, như trước."""
+        key = str(uuid.uuid4())
+        seeded = await _seed_live_intent(db, intent_fixtures, key)
+
+        intent, is_existing = await PaymentIntentService(db).create_or_get_intent(
+            invoice_id=intent_fixtures["invoice"].id,
+            method_id=intent_fixtures["online_method"].id,
+            amount=Decimal("1000000"),
+            idempotency_key=key,
+            return_url=VALID_RETURN_URL,
+            unit_id=intent_fixtures["unit_id"],
+        )
+
+        assert is_existing is True
+        assert intent.id == seeded.id
+
+    async def test_create_or_get_other_unit_is_not_found(
+        self, db, intent_fixtures, second_unit
+    ):
+        """Đường của API: đơn vị khác ⇒ `Invoice not found`, không intent mới."""
+        key = str(uuid.uuid4())
+        await _seed_live_intent(db, intent_fixtures, key)
+        invoice_id = intent_fixtures["invoice"].id
+
+        with pytest.raises(ResourceNotFoundError) as exc_info:
+            await PaymentIntentService(db).create_or_get_intent(
+                invoice_id=invoice_id,
+                method_id=intent_fixtures["online_method"].id,
+                amount=Decimal("1000000"),
+                idempotency_key=key,
+                return_url=VALID_RETURN_URL,
+                unit_id=second_unit.id,
+            )
+
+        assert str(exc_info.value) == "Invoice not found"
+        # Đếm trong CÙNG phiên, CHƯA rollback: bản vá nào flush intent rồi mới
+        # ném vẫn lộ ra ở đây.
+        assert await _count_intents(db, invoice_id) == 1
+
+    async def test_create_intent_other_unit_is_not_found(
+        self, db, intent_fixtures, second_unit
+    ):
+        """Nhánh trả sớm của `create_intent` — cửa thứ hai, gọi thẳng.
+
+        `POST /api/payments/intents` KHÔNG tới được nhánh này với một intent
+        còn sống (`create_or_get_intent` trả hoặc chặn trước), nên chỉ ca
+        service này canh nó.
+        """
+        key = str(uuid.uuid4())
+        await _seed_live_intent(db, intent_fixtures, key)
+        invoice_id = intent_fixtures["invoice"].id
+
+        with pytest.raises(ResourceNotFoundError) as exc_info:
+            await PaymentIntentService(db).create_intent(
+                invoice_id=invoice_id,
+                method_id=intent_fixtures["online_method"].id,
+                amount=Decimal("1000000"),
+                idempotency_key=key,
+                return_url=VALID_RETURN_URL,
+                unit_id=second_unit.id,
+            )
+
+        assert str(exc_info.value) == "Invoice not found"
+        assert await _count_intents(db, invoice_id) == 1
+
+
+# ---------------------------------------------------------------------------
+# Tầng HTTP — `POST /api/payments/intents` qua ASGI THẬT
+# ---------------------------------------------------------------------------
+#
+# Chỉ dùng fixture của conftest GỐC (`seed_lead_dependencies`,
+# `admin_user_in_db`, `manager_user_in_db`, `manager_other_unit_user_in_db`).
+# KHÔNG trộn với `intent_fixtures`/`seeded_dependencies` của
+# `tests/services/conftest.py`: hai bộ seed cùng ghi `stg01`/`sts02` ⇒ đụng
+# khoá chính. Cùng khuôn với `tests/api/test_payment_maker_checker.py`.
+
+_API_INVOICE_AMOUNT = Decimal("2000000")
+_API_INTENT_AMOUNT = Decimal("1000000")
+
+
+@pytest_asyncio.fixture
+async def api_replay_context(seed_lead_dependencies: dict, admin_user_in_db: dict):
+    """Hoá đơn `issued` ở đơn vị seed + MỘT intent còn sống trên nó, đã commit."""
+    unit_id = seed_lead_dependencies["unit_id"]
+    idempotency_key = str(uuid.uuid4())
+
+    async with AsyncSessionLocal() as session:
+        method = PaymentMethod(
+            code="idor_replay_online",
+            name="Online IDOR Replay",
+            is_online=True,
+            is_active=True,
+        )
+        session.add(method)
+
+        lead = models.Lead(
+            full_name="Intent Replay Student",
+            phone="0901770001",
+            source="test",
+            unit_id=unit_id,
+            consultation_status_id=seed_lead_dependencies["initial_status_id"],
+        )
+        session.add(lead)
+        await session.flush()
+
+        profile = models.AdmissionProfile(
+            lead_id=lead.id, status="submitted", academic_year=2025, applied_rules={}
+        )
+        session.add(profile)
+        await session.flush()
+
+        fee, _ = await FeeCalculationService(session).calculate_fee(
+            admission_profile_id=profile.id,
+            fee_type=FeeTypeEnum.application,
+            base_amount=_API_INVOICE_AMOUNT,
+            academic_year=2025,
+            user_id=admin_user_in_db["id"],
+            unit_id=unit_id,
+        )
+        await session.flush()
+
+        invoice = Invoice(
+            fee_id=fee.id,
+            invoice_number="INV-IDOR-REPLAY-1",
+            installment_no=1,
+            amount=_API_INVOICE_AMOUNT,
+            status=InvoiceStatusEnum.issued.value,
+            due_date=date.today() + timedelta(days=30),
+        )
+        session.add(invoice)
+        await session.commit()
+
+        intent, _ = await PaymentIntentService(session).create_intent(
+            invoice_id=invoice.id,
+            method_id=method.id,
+            amount=_API_INTENT_AMOUNT,
+            idempotency_key=idempotency_key,
+            return_url=VALID_RETURN_URL,
+            unit_id=unit_id,
+        )
+        await session.commit()
+        assert intent.pay_url and intent.gateway_ref, "tiền đề: intent có pay_url"
+
+        return {
+            "invoice_id": invoice.id,
+            "method_id": method.id,
+            "idempotency_key": idempotency_key,
+            "intent_id": intent.id,
+            "pay_url": intent.pay_url,
+            "gateway_ref": intent.gateway_ref,
+        }
+
+
+def _replay_body(ctx: dict) -> dict:
+    """CÙNG một thân cho mọi ca HTTP — chỉ người gọi thay đổi."""
+    return {
+        "invoice_id": ctx["invoice_id"],
+        "method_id": ctx["method_id"],
+        "amount": str(_API_INTENT_AMOUNT),
+        "idempotency_key": ctx["idempotency_key"],
+        "return_url": VALID_RETURN_URL,
+    }
+
+
+class TestIntentReplayScopeApi:
+    """Ba ca, cùng thân request; khác nhau DUY NHẤT ở người gọi."""
+
+    async def test_same_unit_manager_replays_existing_intent(
+        self, client, api_replay_context, manager_user_in_db
+    ):
+        """Ca DƯƠNG: manager CÙNG đơn vị replay ⇒ đúng intent cũ, như trước."""
+        headers = await get_auth_headers(client, manager_user_in_db, AuthURLs.LOGIN)
+
+        r = await client.post(
+            "/api/payments/intents",
+            json=_replay_body(api_replay_context),
+            headers=headers,
+        )
+
+        assert r.status_code == 201, r.text
+        assert r.json()["id"] == api_replay_context["intent_id"]
+
+    async def test_other_unit_manager_gets_404_without_pay_url(
+        self, client, api_replay_context, manager_other_unit_user_in_db
+    ):
+        """Ca ÂM: manager ĐƠN VỊ KHÁC, cùng `invoice_id` + `idempotency_key`.
+
+        404 chứ không phải 403 (403 xác nhận hoá đơn có thật); thân lỗi không
+        được mang `pay_url`/`gateway_ref`; CSDL không thêm intent nào.
+        """
+        headers = await get_auth_headers(
+            client, manager_other_unit_user_in_db, AuthURLs.LOGIN
+        )
+
+        r = await client.post(
+            "/api/payments/intents",
+            json=_replay_body(api_replay_context),
+            headers=headers,
+        )
+
+        assert r.status_code == 404, r.text
+        assert "pay_url" not in r.text
+        assert api_replay_context["pay_url"] not in r.text
+        assert api_replay_context["gateway_ref"] not in r.text
+        async with AsyncSessionLocal() as session:
+            assert await _count_intents(session, api_replay_context["invoice_id"]) == 1
+
+    async def test_admin_replays_existing_intent(
+        self, client, api_replay_context, admin_user_in_db
+    ):
+        """Admin có phạm vi TOÀN HỆ THỐNG (`finance_scope_unit_id` ⇒ `None`).
+
+        Bản vá không được chặn nhầm admin: replay vẫn trả đúng intent cũ.
+        """
+        headers = await get_auth_headers(client, admin_user_in_db, AuthURLs.LOGIN)
+
+        r = await client.post(
+            "/api/payments/intents",
+            json=_replay_body(api_replay_context),
+            headers=headers,
+        )
+
+        assert r.status_code == 201, r.text
+        assert r.json()["id"] == api_replay_context["intent_id"]
