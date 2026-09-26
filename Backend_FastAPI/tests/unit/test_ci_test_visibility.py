@@ -1247,8 +1247,13 @@ PHAN_VUNG_CAN = {"a", "c"}
 #: `test_admission_assign_officer_permission.py`) nên KHÔNG ảnh hưởng digest này —
 #: digest chỉ phủ hợp 2a∪2c. Giá trị cũ là
 #: `2a57b3c14d4fb5b124ca84a242d421b4fe12ba325c1e8bd974889310fe6ef2e1`.
+#: Cập nhật 25-09-2026: Tier 2a nhận
+#: `tests/services/test_auth_security_hardening.py`, Tier 2c nhận
+#: `tests/unit/test_admission_idor_filters.py` — hai tệp trước nay ngoài mọi
+#: tier. Đây là THÊM selector nên digest phải đổi; giá trị cũ là
+#: `88b4096f125101ad34720356bf1eed6bec2012b016c378770a0672117629fb94`.
 SHA_HOP_SELECTOR_TIER2 = (
-    "88b4096f125101ad34720356bf1eed6bec2012b016c378770a0672117629fb94"
+    "225f70b986cb46137c5a30606594384dd86a4aa2814e8de7d091902a28ae1e0b"
 )
 
 # --- Phân hoạch Tier 4 (SPLIT 18-09-2026) -------------------------------------
