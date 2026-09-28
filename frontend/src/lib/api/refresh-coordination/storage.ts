@@ -10,6 +10,7 @@
  * chạy — đúng thời điểm tệ nhất, khi ta đang quyết định có được POST hay không.
  */
 import type { JournalRecord, JournalStore } from "./types";
+import { isSafeRetryableResponse } from "./safe-retry";
 
 const DB_NAME = "qlts-refresh-coordination";
 const DB_VERSION = 1;
@@ -106,21 +107,18 @@ function validateRecord(value: unknown): JournalRecord {
     // `safe-retryable` là trạng thái DUY NHẤT cấp lại quyền POST, nên nó phải
     // chịu kiểm chặt nhất — kể cả quan hệ chéo giữa các trường.
     //
-    // Cơ sở để coi nó an toàn rất hẹp: slowapi chặn ở decorator, TRƯỚC khi thân
-    // hàm chạy, nên `429 RATE_LIMITED` chắc chắn chưa chạm rotation. Một `5xx`
-    // hay một mã 429 khác KHÔNG có bảo đảm đó. Chỉ cần chấp nhận
+    // Cơ sở để coi nó an toàn rất hẹp: chỉ những cặp (status, error_code) mà
+    // backend chứng minh được là lỗi xảy ra TRƯỚC rotation (`safe-retry.ts`).
+    // Một `5xx` khác hay một mã lạ KHÔNG có bảo đảm đó. Chỉ cần chấp nhận
     // `resultKind: "safe-retryable"` kèm `status: 500` là ta tự cấp phép POST
     // lại sau một lần thử có thể đã rotate xong.
     if (r.resultKind === "safe-retryable") {
       if (!isFiniteNumber(r.retryAt)) {
         throw new CorruptJournalError("safe-retryable thiếu retryAt hữu hạn");
       }
-      if (r.status !== 429) {
-        throw new CorruptJournalError(`safe-retryable status=${String(r.status)}`);
-      }
-      if (r.errorCode !== "RATE_LIMITED") {
+      if (!isSafeRetryableResponse(r.status, r.errorCode)) {
         throw new CorruptJournalError(
-          `safe-retryable errorCode=${String(r.errorCode)}`,
+          `safe-retryable status=${String(r.status)} errorCode=${String(r.errorCode)}`,
         );
       }
     }

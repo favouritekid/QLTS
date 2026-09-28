@@ -515,6 +515,31 @@ class AccountLockoutStateUnavailable(AuthStateUnavailable):
     """
 
 
+class RefreshStateUnavailable(AuthStateUnavailable):
+    """Whether this refresh token may rotate could not be verified (HTTP 503).
+
+    Raised by ``POST /auth/refresh`` when Redis did not answer one of the three
+    reads that decide it — ``blacklist:{jti}`` (EXISTS), ``user_blacklist:{user_id}``
+    (EXISTS) and ``session:{jti}`` (GET) — whether a connection/timeout error or
+    an OPEN breaker. All three reads run BEFORE the rotation: no Redis write has
+    happened, no DB change survives (the first read runs before the DB is even
+    read, the other two inside a savepoint that rolls back) and no cookie is
+    set, so the refresh token the client holds is untouched and trying again
+    after ``Retry-After`` is safe.
+    The frontend retries exactly this (status, ``error_code``) pair for that
+    reason (``frontend/src/lib/api/refresh-coordination/safe-retry.ts``).
+
+    NOT a 401: nothing says the token is bad, and ``/refresh``'s 401 path
+    counts ``refresh_fail`` and, at the threshold, revokes every session.
+    ``refresh_access_token`` re-raises ``AuthStateUnavailable`` untouched so it
+    never reaches that path. A failure AFTER the rotation started proves
+    nothing of the sort and must never use this class.
+
+    Declares nothing of its own: code, text and ``Retry-After`` come from
+    ``AuthStateUnavailable``.
+    """
+
+
 # ============================================================================
 # SERVICE LAYER EXCEPTIONS (500)
 # ============================================================================
@@ -691,4 +716,5 @@ EXCEPTION_HTTP_STATUS_MAP = {
     # 503 Service Unavailable (auth state in Redis could not be verified — fail-closed)
     AuthStateUnavailable: 503,
     AccountLockoutStateUnavailable: 503,
+    RefreshStateUnavailable: 503,
 }

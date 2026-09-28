@@ -237,6 +237,43 @@ describe("validator — dữ liệu tồn tại mà không hợp lệ phải fai
       resultKind: "safe-retryable",
     });
   });
+
+  // Cặp thứ hai được thử lại: `503 AUTH_STATE_UNAVAILABLE` (backend chứng minh
+  // lỗi xảy ra TRƯỚC rotation). Validator phải nhận ĐÚNG cặp đó — không phải
+  // mọi 503, không phải mã đó đi kèm status khác.
+  it("safe-retryable 503 AUTH_STATE_UNAVAILABLE ⇒ đọc được", async () => {
+    const record = validRecord({
+      resultKind: "safe-retryable",
+      retryAt: T0 + 60_000,
+      status: 503,
+      errorCode: "AUTH_STATE_UNAVAILABLE",
+    });
+
+    await expect(readWith(JSON.stringify(record))).resolves.toMatchObject({
+      resultKind: "safe-retryable",
+      status: 503,
+      errorCode: "AUTH_STATE_UNAVAILABLE",
+    });
+  });
+
+  it.each([
+    ["503 thiếu errorCode", { status: 503 }],
+    ["503 HTTP_503", { status: 503, errorCode: "HTTP_503" }],
+    ["503 kèm mã của 429", { status: 503, errorCode: "RATE_LIMITED" }],
+    ["500 kèm AUTH_STATE_UNAVAILABLE", { status: 500, errorCode: "AUTH_STATE_UNAVAILABLE" }],
+    ["429 kèm AUTH_STATE_UNAVAILABLE", { status: 429, errorCode: "AUTH_STATE_UNAVAILABLE" }],
+    ["thiếu status, có AUTH_STATE_UNAVAILABLE", { errorCode: "AUTH_STATE_UNAVAILABLE" }],
+  ])("safe-retryable %s ⇒ ném", async (_label, extra) => {
+    const record = validRecord({
+      resultKind: "safe-retryable",
+      retryAt: T0 + 60_000,
+      ...extra,
+    });
+
+    await expect(readWith(JSON.stringify(record))).rejects.toBeInstanceOf(
+      CorruptJournalError,
+    );
+  });
 });
 
 describe("localStorage ghi hỏng sau khi probe qua được", () => {

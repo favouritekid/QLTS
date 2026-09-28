@@ -27,11 +27,10 @@ import {
 } from "./refresh-coordination/lifecycle";
 import { selectJournalStore } from "./refresh-coordination/storage";
 import { isProofFresh } from "./refresh-coordination/proof";
+import { isSafeRetryableResponse } from "./refresh-coordination/safe-retry";
 import { writeThrottleAt } from "./session-flags";
 import type { JournalRecord, ResultKind } from "./refresh-coordination/types";
 
-/** `error_code` của 429 do rate limit hạ tầng (slowapi). */
-const TRANSIENT_RATE_LIMIT_CODE = "RATE_LIMITED";
 /** Mã lỗi chứng minh phiên đã chết phía server. Mở rộng phải rất dè dặt. */
 const TERMINAL_ERROR_CODES = new Set(["REFRESH_ABUSE_LOCKED"]);
 
@@ -50,7 +49,13 @@ const COOKIE_PERSIST_MS = 100;
 export type RefreshOutcome =
   | { kind: "success" }
   | { kind: "terminal"; status?: number; errorCode?: string }
-  | { kind: "safe-retryable"; retryAt: number }
+  | {
+      kind: "safe-retryable";
+      retryAt: number;
+      /** Cặp đã khớp `safe-retry.ts` — ghi nguyên vào nhật ký cho tab khác. */
+      status?: number;
+      errorCode?: string;
+    }
   | { kind: "nonterminal-stop"; status?: number; errorCode?: string }
   | {
       kind: "ambiguous";
@@ -125,21 +130,28 @@ function isValidOutcome(value: unknown): boolean {
     return false;
   }
 
-  if (outcome.kind === "safe-retryable") {
-    return typeof outcome.retryAt === "number" && Number.isFinite(outcome.retryAt);
-  }
-
   if (outcome.kind === "ambiguous") {
     return typeof outcome.reason === "string" && AMBIGUOUS_REASONS.has(outcome.reason);
   }
 
-  // terminal / nonterminal-stop: hai trường tuỳ chọn, nhưng nếu có thì phải
-  // đúng kiểu — `status` sai kiểu sẽ làm caller so sánh sai ở nhánh dưới.
+  // terminal / nonterminal-stop / safe-retryable: hai trường tuỳ chọn, nhưng
+  // nếu có thì phải đúng kiểu — `status` sai kiểu sẽ làm caller so sánh sai ở
+  // nhánh dưới.
   const statusOk =
     outcome.status === undefined ||
     (typeof outcome.status === "number" && Number.isFinite(outcome.status));
   const codeOk =
     outcome.errorCode === undefined || typeof outcome.errorCode === "string";
+
+  if (outcome.kind === "safe-retryable") {
+    return (
+      typeof outcome.retryAt === "number" &&
+      Number.isFinite(outcome.retryAt) &&
+      statusOk &&
+      codeOk
+    );
+  }
+
   return statusOk && codeOk;
 }
 
@@ -254,14 +266,24 @@ function classify(
     return { kind: "terminal", status, errorCode };
   }
 
-  // Chỉ 429 RATE_LIMITED mới an toàn để thử lại: slowapi chặn ở decorator,
-  // TRƯỚC khi thân hàm chạy, nên chắc chắn chưa chạm rotation. Một 429 của
-  // cổng chống lạm dụng M4 thì ngược lại — phiên đã bị thu hồi.
-  if (status === 429 && errorCode === TRANSIENT_RATE_LIMIT_CODE) {
-    return { kind: "safe-retryable", retryAt: now + cooldownFromError(error) };
+  // Chỉ các cặp (status, error_code) trong `safe-retry.ts` mới an toàn để thử
+  // lại — mỗi cặp là một chỗ backend chứng minh được lỗi xảy ra TRƯỚC khi chạm
+  // rotation: `429 RATE_LIMITED` (slowapi chặn ở decorator) và
+  // `503 AUTH_STATE_UNAVAILABLE` (Redis không trả lời phép đọc quyết định).
+  // Một 429 của cổng chống lạm dụng M4 thì ngược lại — phiên đã bị thu hồi.
+  // Chờ theo `Retry-After`, có trần (`cooldownFromError`).
+  if (isSafeRetryableResponse(status, errorCode)) {
+    return {
+      kind: "safe-retryable",
+      retryAt: now + cooldownFromError(error),
+      status,
+      errorCode,
+    };
   }
 
-  // 5xx: server hỏng giữa chừng. Có thể đã commit rotation rồi mới lỗi.
+  // 5xx còn lại (kể cả 503 không mã của nginx `limit_req`, hay 503 sau khi
+  // rotation đã bắt đầu): server hỏng giữa chừng. Có thể đã commit rotation
+  // rồi mới lỗi.
   if (status >= 500) return { kind: "ambiguous", reason: "server" };
 
   // Phần còn lại (400, 403 mã lạ, 404, 422, 429 mã lạ): không tự phục hồi
@@ -367,8 +389,11 @@ async function runAsLeader(handle: LockHandle, baseline: string | null) {
     ...(outcome.kind === "terminal" || outcome.kind === "nonterminal-stop"
       ? { status: outcome.status, errorCode: outcome.errorCode }
       : {}),
+    // Ghi ĐÚNG cặp đã nhận: `storage.ts` chỉ tin bản ghi `safe-retryable` mang
+    // một cặp trong `safe-retry.ts`, và tab khác cần biết lý do thật khi chẩn
+    // đoán.
     ...(outcome.kind === "safe-retryable"
-      ? { status: 429, errorCode: TRANSIENT_RATE_LIMIT_CODE, retryAt: outcome.retryAt }
+      ? { status: outcome.status, errorCode: outcome.errorCode, retryAt: outcome.retryAt }
       : {}),
   };
 

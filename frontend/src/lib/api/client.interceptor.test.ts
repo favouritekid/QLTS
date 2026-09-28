@@ -73,13 +73,14 @@ vi.mock("@/lib/stores/auth.store", () => ({
   useAuthStore: { getState: () => authStore },
 }));
 
-import { AxiosError } from "axios";
+import axios, { AxiosError } from "axios";
 import {
   refreshAccessToken,
   RefreshFailure,
   isSessionKeptAliveError,
 } from "./refresh";
 import { isApiLoggedOut, setApiLoggedOut } from "./client";
+import { installFakeIdb, removeWebLocks } from "./refresh-coordination/test-harness";
 
 const mockedRefresh = vi.mocked(refreshAccessToken);
 
@@ -158,6 +159,41 @@ describe("interceptor 401 — quyết định logout khi refresh thất bại", 
     await expectKeptAlive(
       refreshFailure({ kind: "safe-retryable", retryAt: Date.now() + 60_000 }),
     );
+  });
+
+  // Chuỗi THẬT cho ca 503 AUTH_STATE_UNAVAILABLE: classifier thật của
+  // `refresh.ts` (không dựng tay `RefreshFailure`) nối vào interceptor thật.
+  // Dựng tay outcome ở đây sẽ vẫn xanh cả khi classifier xếp mã này vào
+  // `terminal` — đúng hồi quy làm officer bị đá về /login mỗi lần Redis chập.
+  it("503 AUTH_STATE_UNAVAILABLE qua classifier THẬT → GIỮ phiên, trả đúng 401 gốc", async () => {
+    installFakeIdb();
+    removeWebLocks();
+    document.cookie = "csrf_token=gen-old; path=/";
+    const post = vi.mocked(axios.post);
+    post.mockRejectedValueOnce(
+      new AxiosError(
+        "Service Unavailable",
+        "ERR_BAD_RESPONSE",
+        { headers: {} } as never,
+        undefined,
+        {
+          status: 503,
+          data: { detail: "x", error_code: "AUTH_STATE_UNAVAILABLE" },
+          statusText: "Service Unavailable",
+          headers: { "retry-after": "60" },
+          config: {},
+        } as never,
+      ),
+    );
+    const real = await vi.importActual<typeof import("./refresh")>("./refresh");
+
+    const failure = await real.refreshAccessToken().catch((e) => e);
+
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(real.isRefreshFailure(failure)).toBe(true);
+    expect(failure.outcome.kind).toBe("safe-retryable");
+    await expectKeptAlive(failure);
+    expect(authStore.logout).not.toHaveBeenCalled();
   });
 
   it.each([

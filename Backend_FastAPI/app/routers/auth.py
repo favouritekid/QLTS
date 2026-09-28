@@ -25,16 +25,20 @@ from ..config import settings
 from ..core import deps
 from ..utils.exceptions import (  # ✅ PHASE 1: Import custom exceptions
     AccountLockoutStateUnavailable,
+    AuthStateUnavailable,
     CacheServiceError,
     InvalidCredentials,
+    RefreshStateUnavailable,
     UserServiceError,
 )
 from ..middleware.csrf import set_csrf_cookie  # ✅ CSRF Protection
 from ..database import (
     KetQuaChiem,
+    RedisUnavailableError,
+    redis_exists_or_raise,
+    redis_get_or_raise,
     safe_redis_claim_once,
     safe_redis_delete,
-    safe_redis_exists,
     safe_redis_get,
     safe_redis_khoa_ton_tai,
     safe_redis_pipeline,
@@ -1005,16 +1009,54 @@ async def refresh_access_token(
         except Exception as e:
             log.error("Redis refresh rate limit check failed", error=str(e))
 
-        # (STEP 2: Check Blacklist - Giữ nguyên)
+        # (STEP 2: jti blacklist) — strict read, the FIRST of the three Redis
+        # reads that decide whether this token may rotate (STEP 3 and STEP 4
+        # below are the other two).
+        #
+        # ``blacklist:{jti}`` is what logout, session revocation, re-login on
+        # the same device, the session cap, a detected reuse and the rotation
+        # itself leave behind. When such a revocation could not delete
+        # ``session:{jti}`` (and could not revoke the DB row), this key is the
+        # ONLY record that the token is dead and nothing after this read
+        # refuses it. The lenient read answered an outage with "not
+        # blacklisted", so the dead token rotated into a fresh, usable pair.
+        #
+        # - Redis did not answer (ConnectionError/TimeoutError, OPEN breaker)
+        #   ⇒ ``RefreshStateUnavailable``: the same 503 as STEP 3/4, raised
+        #   before any Redis/DB write and before the DB is even read.
+        # - Anything else (a Redis ``ResponseError``, a bug) ⇒ 500, also before
+        #   any write. NOT that 503: its (status, error_code) pair tells the
+        #   client that retrying is safe and may work, which nothing here
+        #   establishes.
+        # - Redis ANSWERED "blacklisted" ⇒ 401 via ``credentials_exception``,
+        #   counted in ``refresh_fail`` as before.
+        #
+        # These logs carry a label and the exception CLASS only: never the jti,
+        # the key or the exception message (no ``str(e)``, no traceback).
         try:
-            is_blacklisted = await safe_redis_exists(f"blacklist:{old_refresh_jti}")
-            if is_blacklisted:
-                log.warning("Refresh token is blacklisted", jti=old_refresh_jti)
-                raise credentials_exception
-        except InvalidToken:
-            raise
-        except Exception as e:
-            log.error("Blacklist check failed", error=str(e), exc_info=True)
+            is_blacklisted = await redis_exists_or_raise(
+                f"blacklist:{old_refresh_jti}", "auth.refresh_jti_blacklist"
+            )
+        except RedisUnavailableError:
+            log.error(
+                "Refresh deferred: jti blacklist unreadable",
+                username=username,
+                action="auth.refresh_state_unavailable",
+            )
+            raise RefreshStateUnavailable() from None
+        except Exception as exc:
+            log.error(
+                "Refresh refused: jti blacklist check failed",
+                username=username,
+                error_type=type(exc).__name__,
+                action="auth.refresh_jti_blacklist_error",
+            )
+            raise HTTPException(
+                status_code=500, detail="An unexpected error occurred"
+            ) from None
+        if is_blacklisted:
+            log.warning("Refresh token is blacklisted", username=username)
+            raise credentials_exception
 
         # ✅ FIX: Use begin_nested() (savepoint) to avoid conflict with implicit transaction
         async with db.begin_nested():
@@ -1040,8 +1082,17 @@ async def refresh_access_token(
                 # SECURITY: Check user-level blacklist (set by invalidate_all_sessions
                 # on password change/reset). Without this, old refresh tokens could
                 # still rotate even after all sessions were invalidated.
+                #
+                # Strict read: "Redis did not answer" is NOT "not blacklisted"
+                # (the lenient wrapper returned False and let the token rotate
+                # while the breaker was CLOSED) and NOT "blacklisted" either (an
+                # OPEN breaker used to land in the 401 arm below, which the
+                # client reads as "session dead" and logs out). It is a 503,
+                # raised before any write.
                 try:
-                    is_user_blacklisted = await safe_redis_exists(f"user_blacklist:{user.id}")
+                    is_user_blacklisted = await redis_exists_or_raise(
+                        f"user_blacklist:{user.id}", "auth.user_blacklist"
+                    )
                     if is_user_blacklisted:
                         log.warning(
                             "Refresh blocked: user in global blacklist (password changed?)",
@@ -1050,13 +1101,35 @@ async def refresh_access_token(
                         raise credentials_exception
                 except InvalidToken:
                     raise
+                except RedisUnavailableError:
+                    log.error(
+                        "Refresh deferred: user blacklist unreadable",
+                        user_id=user.id,
+                        action="auth.refresh_state_unavailable",
+                    )
+                    raise RefreshStateUnavailable() from None
                 except Exception as e:
                     log.error("Redis user blacklist check failed during refresh", error=str(e))
                     # Fail-closed: if we can't verify, reject the refresh
                     raise credentials_exception
 
-                # (STEP 4: Validate JTI - Giữ nguyên)
-                stored_user_id = await safe_redis_get(f"session:{old_refresh_jti}")
+                # (STEP 4: Validate JTI)
+                # Strict read: only an ANSWERED miss/mismatch is the reuse
+                # signal below (blacklist the jti, count toward
+                # REFRESH_MAX_FAILURES). The lenient wrapper answered an outage
+                # with None, so every refresh during a Redis blip was scored as
+                # token reuse and its still-valid jti blacklisted.
+                try:
+                    stored_user_id = await redis_get_or_raise(
+                        f"session:{old_refresh_jti}", "auth.session"
+                    )
+                except RedisUnavailableError:
+                    log.error(
+                        "Refresh deferred: session unreadable",
+                        user_id=user.id,
+                        action="auth.refresh_state_unavailable",
+                    )
+                    raise RefreshStateUnavailable() from None
 
                 if not stored_user_id or int(stored_user_id) != user.id:
                     log.warning(
@@ -1278,6 +1351,16 @@ async def refresh_access_token(
         # Non-active account denied at the Tầng A gate above. Route to a clean
         # 401 via the global handler WITHOUT tripping the refresh-abuse counter
         # or revoking sessions (this is a legitimate deny, not token abuse).
+        raise
+    except AuthStateUnavailable:
+        # Redis could not ANSWER one of the three reads that decide whether
+        # this token may rotate (``RefreshStateUnavailable``, raised before any
+        # write). Re-raised untouched: the global handler builds the 503 —
+        # status, ``detail``, ``error_code``, ``Retry-After`` — from
+        # ``AuthStateUnavailable``, the same single source as ``/login``'s
+        # 503. It must not reach the ``except (JWTError, InvalidToken)`` arm
+        # below (an outage is not token abuse: no ``refresh_fail`` count, no
+        # ``invalidate_all_sessions``) nor ``except Exception`` (a 500).
         raise
     except (JWTError, InvalidToken):
         # ✅ M4: Increment failed refresh counter

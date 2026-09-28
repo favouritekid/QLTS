@@ -7,8 +7,11 @@
 
 /**
  * The backend refused an auth request because it could not verify auth state
- * kept in Redis (e.g. the account lockout checked by `/auth/login`). Always
- * sent with status 503.
+ * kept in Redis (the account lockout checked by `/auth/login`; the user
+ * blacklist / session reads of `/auth/refresh`, before any rotation). Always
+ * sent with status 503, the same response on both endpoints.
+ *
+ * Also the code of the 503 pair `refresh-coordination/safe-retry.ts` retries.
  *
  * Backend source of the code (and of its `Retry-After` hint):
  * `AuthStateUnavailable` in `Backend_FastAPI/app/utils/exceptions.py`.

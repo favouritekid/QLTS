@@ -27,9 +27,13 @@ export type ResultKind =
   /** `401` hoặc mã terminal trong allowlist. Phiên chết thật ⇒ `force_login`. */
   | "terminal"
   /**
-   * CHỈ `429 RATE_LIMITED`. slowapi chặn ở decorator — TRƯỚC khi thân hàm chạy
-   * (`auth.py`: `@limiter.limit` nằm dưới `@router.post`) — nên chắc chắn chưa
-   * chạm rotation. Đây là loại DUY NHẤT được phép POST lại.
+   * CHỈ các cặp trong `safe-retry.ts`, mỗi cặp là một lỗi backend chứng minh
+   * được là xảy ra TRƯỚC rotation:
+   * - `429 RATE_LIMITED`: slowapi chặn ở decorator — TRƯỚC khi thân hàm chạy
+   *   (`auth.py`: `@limiter.limit` nằm dưới `@router.post`);
+   * - `503 AUTH_STATE_UNAVAILABLE`: Redis không trả lời một trong ba phép đọc
+   *   `blacklist:{jti}`/`user_blacklist`/`session`, ném trước mọi lần ghi.
+   * Đây là loại DUY NHẤT được phép POST lại, và chỉ sau `retryAt`.
    */
   | "safe-retryable"
   /**
@@ -39,7 +43,8 @@ export type ResultKind =
    */
   | "nonterminal-stop"
   /**
-   * `5xx`, lỗi gateway, network/timeout, và `200` mà KHÔNG có bằng chứng cookie
+   * `5xx` (trừ `503 AUTH_STATE_UNAVAILABLE`), lỗi gateway, network/timeout,
+   * và `200` mà KHÔNG có bằng chứng cookie
    * đổi. Không biết server đã rotate hay chưa ⇒ fail-closed: không tab nào POST
    * lại. Tự phục hồi ca này cần backend idempotency thật (xem plan §backlog),
    * không phải một cửa sổ ân hạn bỏ đếm lỗi.
