@@ -458,6 +458,63 @@ class InitialLeadStatusNotConfigured(ServiceUnavailableError):
     error_code = "INITIAL_LEAD_STATUS_NOT_CONFIGURED"
 
 
+class AuthStateUnavailable(ServiceUnavailableError):
+    """Auth state kept in Redis could not be verified, so the request is refused (HTTP 503).
+
+    This class is the ONE backend source of that refusal's response contract:
+
+    - ``error_code`` — what the client branches on. The frontend mirrors it in
+      ``frontend/src/lib/api/error-codes.ts``; it lets the client tell this 503
+      apart from a gateway 503 (nginx answers with an HTML body, no code)
+      without parsing ``detail``.
+    - ``detail`` — the user-facing text.
+    - ``retry_after_seconds`` — sent as ``Retry-After`` through ``headers``,
+      which ``base_app_exception_handler`` copies onto the response.
+
+    Raise a subclass and let the global handler build the response. A router
+    must not re-declare the code or the header value.
+
+    ``Retry-After`` is only a HINT of when trying again is reasonable, not a
+    promise that it will work: 60 s is ``redis_breaker``'s
+    ``timeout_duration``, the earliest an OPEN breaker lets a trial call
+    through. Nothing says Redis has recovered by then.
+
+    "Could not verify" is its own answer: neither the negative answer of the
+    check (it would blame the user for something nobody established) nor the
+    positive one (it would fail open for the length of every outage).
+    """
+
+    detail = "Hệ thống xác thực tạm thời không sẵn sàng. Vui lòng thử lại sau."
+    error_code = "AUTH_STATE_UNAVAILABLE"
+    retry_after_seconds: int = 60
+
+    @property
+    def headers(self) -> Dict[str, str]:
+        """``Retry-After`` derived from ``retry_after_seconds`` (never a second literal)."""
+        return {"Retry-After": str(self.retry_after_seconds)}
+
+
+class AccountLockoutStateUnavailable(AuthStateUnavailable):
+    """Whether the account is locked could not be verified (HTTP 503).
+
+    Raised by ``AccountLockoutService.check_lockout`` when:
+
+    - Redis did not answer the lockout EXISTS or TTL (connection/timeout
+      error, circuit breaker OPEN), or the check failed in an unexpected way;
+    - Redis answered that the lockout key exists with NO expiry (TTL -1): not
+      a lockout this service writes (it always sets one), so it is neither a
+      lockout with a known end nor "not locked".
+
+    NOT a 429: nothing says this user typed a wrong password too many times.
+    NOT "not locked": that hands brute force a free window. ``/login`` refuses
+    BEFORE any credential is checked, so nothing (token, cookie, session, MFA
+    token) is created and no failed attempt is counted.
+
+    Declares nothing of its own: code, text and ``Retry-After`` come from
+    ``AuthStateUnavailable``.
+    """
+
+
 # ============================================================================
 # SERVICE LAYER EXCEPTIONS (500)
 # ============================================================================
@@ -631,4 +688,7 @@ EXCEPTION_HTTP_STATUS_MAP = {
     # 503 Service Unavailable (thiếu cấu hình/dữ liệu tham chiếu — fail-closed)
     ServiceUnavailableError: 503,
     InitialLeadStatusNotConfigured: 503,
+    # 503 Service Unavailable (auth state in Redis could not be verified — fail-closed)
+    AuthStateUnavailable: 503,
+    AccountLockoutStateUnavailable: 503,
 }

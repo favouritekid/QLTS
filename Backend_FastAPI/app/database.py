@@ -6,7 +6,7 @@ from enum import Enum
 import redis.asyncio as redis
 import structlog
 from typing import NamedTuple
-from aiobreaker import CircuitBreaker
+from aiobreaker import CircuitBreaker, CircuitBreakerError
 from redis.exceptions import ConnectionError, TimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -229,6 +229,70 @@ async def safe_redis_expire(key: str, seconds: int):
     except REDIS_BREAKER_EXCEPTIONS:
         log.error("Redis EXPIRE failed", key=key, seconds=seconds, exc_info=True)
         return False
+
+
+# =============================================================================
+# STRICT READS — "absent" and "unavailable" must not be the same answer
+# =============================================================================
+# ``safe_redis_get``/``safe_redis_exists``/``safe_redis_ttl`` answer a Redis
+# outage (ConnectionError/TimeoutError) with the same value as "key absent"
+# (``None``/``False``/``-2``), while an OPEN breaker raises
+# ``CircuitBreakerError`` straight through them. A security check that reads
+# them therefore takes one decision for an outage while the breaker is CLOSED
+# and the opposite decision once it is OPEN.
+#
+# The helpers below return the value ONLY when Redis answered, and raise
+# ``RedisUnavailableError`` for all three outage signals, so the caller's own
+# "cannot verify" branch runs in both states. They do NOT decide fail-open vs
+# fail-closed: that stays with each caller, next to the contract it states.
+#
+# ``safe_redis_*`` are unchanged (100+ call sites; changing their contract is
+# out of scope), and so is ``REDIS_BREAKER_EXCEPTIONS`` — adding
+# ``CircuitBreakerError`` there would make ``safe_redis_exists`` return False
+# on an OPEN breaker (see test_resilience.py).
+#
+# The error path logs a caller-supplied LABEL and the exception class name
+# only: never the key (``session:{jti}`` names a live session) and never the
+# exception message (a redis-py ConnectionError carries the endpoint).
+
+REDIS_UNAVAILABLE_EXCEPTIONS = (*REDIS_BREAKER_EXCEPTIONS, CircuitBreakerError)
+
+
+class RedisUnavailableError(Exception):
+    """Redis did not answer: connection/timeout error or the breaker is OPEN."""
+
+
+async def _call_or_raise_unavailable(key_label: str, func, *args):
+    try:
+        return await redis_breaker.call_async(func, *args)
+    except REDIS_UNAVAILABLE_EXCEPTIONS as exc:
+        error_type = type(exc).__name__
+        log.error("Redis unavailable", key_label=key_label, error_type=error_type)
+        raise RedisUnavailableError(f"{key_label}: {error_type}") from None
+
+
+async def redis_get_or_raise(key: str, key_label: str):
+    """GET: the value, or ``None`` when Redis ANSWERED that the key is absent.
+
+    Raises ``RedisUnavailableError`` when Redis could not answer.
+    """
+    return await _call_or_raise_unavailable(key_label, redis_client.get, key)
+
+
+async def redis_exists_or_raise(key: str, key_label: str) -> bool:
+    """EXISTS: ``False`` only when Redis ANSWERED that the key is absent.
+
+    Raises ``RedisUnavailableError`` when Redis could not answer.
+    """
+    return bool(await _call_or_raise_unavailable(key_label, redis_client.exists, key))
+
+
+async def redis_ttl_or_raise(key: str, key_label: str) -> int:
+    """TTL as Redis answered it (``-2`` absent, ``-1`` no expiry).
+
+    Raises ``RedisUnavailableError`` when Redis could not answer.
+    """
+    return await _call_or_raise_unavailable(key_label, redis_client.ttl, key)
 
 
 class DatChoMFA(NamedTuple):

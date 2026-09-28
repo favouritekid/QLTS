@@ -24,6 +24,7 @@ from .. import database, models, schemas, security
 from ..config import settings
 from ..core import deps
 from ..utils.exceptions import (  # ✅ PHASE 1: Import custom exceptions
+    AccountLockoutStateUnavailable,
     CacheServiceError,
     InvalidCredentials,
     UserServiceError,
@@ -500,9 +501,28 @@ async def login_for_access_token(
     # ✅ SECURITY FIX: Check account lockout before authentication
     from ..security.account_lockout import AccountLockoutService
 
-    is_locked, lockout_ttl = await AccountLockoutService.check_lockout(
-        form_data.username
-    )
+    # BEFORE authenticate_user, on purpose: when the lockout state cannot be
+    # verified, the login is refused before any credential is checked, so
+    # nothing (token, cookie, Redis/DB session, mfa_token) can be created and
+    # no failed attempt is counted. That answer is a 503, NOT the 429 below:
+    # nothing says this account is locked, and a 429 would tell every user,
+    # correct password or not, that they typed a wrong password too often.
+    #
+    # The 503 itself (status, ``detail``, ``error_code``, ``Retry-After``) is
+    # built by the global handler from ``AuthStateUnavailable``, its one
+    # source. Only the log line is added here; the exception is re-raised
+    # untouched.
+    try:
+        is_locked, lockout_ttl = await AccountLockoutService.check_lockout(
+            form_data.username
+        )
+    except AccountLockoutStateUnavailable:
+        log.warning(
+            "Login refused: account lockout state unavailable",
+            username=form_data.username,
+            ip_address=request.client.host if request.client else None,
+        )
+        raise
 
     if is_locked:
         # Add delay to slow down attacker

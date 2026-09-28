@@ -24,6 +24,7 @@ from app import database as db_module
 from app.database import AsyncSessionLocal
 from app.security.account_lockout import AccountLockoutService
 from app.services import organization_service, pipeline_service
+from app.utils.exceptions import AccountLockoutStateUnavailable
 
 # Import constants
 from tests.fixtures.constants import (  # Sửa import này nếu cần
@@ -385,23 +386,26 @@ async def test_resilience_redis_breaker_recovers_after_timeout(redis_breaker_clo
 async def test_resilience_redis_breaker_open_keeps_lockout_fail_closed(
     redis_breaker_closed,
 ):
-    """(c) Breaker OPEN ⇒ `check_lockout` vẫn FAIL-CLOSED: `(True, 60)`.
+    """(c) Breaker OPEN ⇒ `check_lockout` vẫn FAIL-CLOSED: ném
+    `AccountLockoutStateUnavailable` (router trả 503 AUTH_STATE_UNAVAILABLE).
 
-    Hợp đồng lấy từ nhánh `except Exception` của
-    `AccountLockoutService.check_lockout`: không kiểm được thì coi như ĐANG
-    KHOÁ 60 giây. Nó chỉ đúng khi CircuitBreakerError ĐI XUYÊN
-    `safe_redis_exists`; wrapper nào nuốt nó thành `False` thì lockout đọc ra
-    "không bị khoá" — fail-OPEN đúng lúc Redis sự cố.
+    Không kiểm được thì KHÔNG được trả lời "không bị khoá" (fail-OPEN đúng lúc
+    Redis sự cố), mà cũng KHÔNG được trả lời "đang khoá": bản trước trả
+    `(True, 60)` và `/login` báo 429 "tài khoản tạm thời bị khóa do nhập sai
+    quá nhiều lần" cho MỌI người dùng — sai sự thật. "Không kiểm được" nay là
+    câu trả lời thứ ba, riêng.
     """
     breaker = redis_breaker_closed
     calls = []
     with patch.object(db_module.redis_client, "exists", _failing_redis_command(calls)):
         await _trip_redis_breaker(breaker, calls)
-        result = await AccountLockoutService.check_lockout(
-            f"breaker_lockout_{uuid.uuid4().hex[:12]}"
-        )
+        with pytest.raises(AccountLockoutStateUnavailable):
+            await AccountLockoutService.check_lockout(
+                f"breaker_lockout_{uuid.uuid4().hex[:12]}"
+            )
 
-    assert result == (True, 60)
+    assert breaker.current_state is CircuitBreakerState.OPEN
+    assert len(calls) == breaker.fail_max, "Breaker OPEN mà lệnh vẫn tới Redis."
 
 
 def test_resilience_redis_breaker_exceptions_exclude_circuit_breaker_error():
