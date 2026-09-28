@@ -19,6 +19,7 @@ from .. import models
 from ..database import safe_redis_delete, safe_redis_set
 from ..repositories import SessionRepository  # ✅ PHASE 2: Use Repository Pattern
 from ..utils.exceptions import (
+    RefreshSessionNotLive,
     SessionRevocationError,
     SessionServiceError,
 )
@@ -508,7 +509,13 @@ async def update_session_activity(
     db: AsyncSession, old_refresh_jti: str, new_refresh_jti: str, user_id: int
 ) -> Optional[models.UserSession]:
     """
-    Update session's last_activity_at and refresh_jti when token is refreshed.
+    Rotate a LIVE session's refresh_jti on /auth/refresh.
+
+    Redis ``session:{jti}`` passing is NOT proof the session is alive: logout
+    and session revoke swallow Redis write errors, so the key can outlive a
+    revoke that DID commit in the DB. The DB row is the source of truth (as in
+    deps.py STEP 4b), so only a live row — this user's, not revoked, not
+    expired — is locked and rotated.
 
     Args:
         db: Database session
@@ -517,21 +524,47 @@ async def update_session_activity(
         user_id: User ID
 
     Returns:
-        Updated UserSession instance, or None if not found
-    """
-    # ✅ PHASE 2: Use SessionRepository instead of direct SQL
-    repo = SessionRepository(db)
-    session = await repo.get_by_jti(old_refresh_jti)
+        Updated UserSession instance, or None when no row carries
+        ``old_refresh_jti`` for this user (desync: the caller answers a plain
+        401 re-login, unchanged).
 
-    # Verify ownership
-    if session and session.user_id != user_id:
-        log.warning(
-            "Session JTI found but belongs to different user",
-            old_refresh_jti=old_refresh_jti[:8],
-            session_user_id=session.user_id,
-            requested_user_id=user_id,
-        )
-        return None
+    Raises:
+        RefreshSessionNotLive: the row exists for this user but is revoked or
+            expired. It is never rotated, and nothing else is written: no
+            Redis command at all on this path. The stale ``session:{jti}`` key
+            is left in place (it expires with the token): every reader of it —
+            this rotation, deps.py STEP 4b, socket connect and
+            ``revalidate_auth`` — re-checks this DB row, so the key alone
+            grants nothing, and a Redis call here could only turn the refusal
+            into an error (breaker open).
+    """
+    repo = SessionRepository(db)
+    session = await repo.get_live_by_refresh_jti_for_update(old_refresh_jti, user_id)
+
+    if session is None:
+        # Classify only — the row returned here is never rotated.
+        known = await repo.get_by_jti(old_refresh_jti)
+        if known is not None and known.user_id == user_id:
+            # The DB row decides: refused. Security event with the JTI prefix
+            # only; no Redis command (see Raises).
+            log.warning(
+                "Refresh refused: DB session is revoked or expired",
+                session_id=known.id,
+                user_id=user_id,
+                old_refresh_jti=old_refresh_jti[:8],
+                revoked=known.revoked_at is not None,
+                security_event="REFRESH_DEAD_SESSION",
+            )
+            raise RefreshSessionNotLive(
+                context={"session_id": known.id, "user_id": user_id},
+            )
+        if known is not None:
+            log.warning(
+                "Session JTI found but belongs to different user",
+                old_refresh_jti=old_refresh_jti[:8],
+                session_user_id=known.user_id,
+                requested_user_id=user_id,
+            )
 
     if session:
         session.last_activity_at = datetime.now(timezone.utc)

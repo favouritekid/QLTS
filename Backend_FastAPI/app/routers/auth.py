@@ -55,7 +55,7 @@ from ..services import session_service, user_service
 from ..services import login_history_service  # Security: Persistent login audit trail
 from ..services.notification_dispatcher import safe_dispatch  # Security: Suspicious login alerts
 # PHASE 1: Removed AnomalyDetector import (detection now in login_history_service)
-from ..utils.exceptions import InvalidToken
+from ..utils.exceptions import InvalidToken, RefreshSessionNotLive
 from ..core.events import SystemEvents  # Security: Event registry
 
 router = APIRouter(tags=["Authentication"])
@@ -1216,6 +1216,10 @@ async def refresh_access_token(
                     user_id=user.id,
                 )
 
+            except RefreshSessionNotLive:
+                # Before ``except InvalidToken`` (it IS one): leave the
+                # savepoint untouched so the outer arm answers it uncounted.
+                raise
             except InvalidToken:
                 raise credentials_exception
             except HTTPException:
@@ -1362,6 +1366,14 @@ async def refresh_access_token(
         # below (an outage is not token abuse: no ``refresh_fail`` count, no
         # ``invalidate_all_sessions``) nor ``except Exception`` (a 500).
         raise
+    except RefreshSessionNotLive:
+        # The DB row of this user's session is revoked or expired (refused and
+        # logged as REFRESH_DEAD_SESSION in update_session_activity). Same 401
+        # body as every other refused refresh, but NOT counted: the server
+        # ended this session itself, which is not token abuse — no
+        # ``refresh_fail`` increment, no ``invalidate_all_sessions``, no Redis
+        # command. Must stay above the arm below (it IS an InvalidToken).
+        raise credentials_exception
     except (JWTError, InvalidToken):
         # ✅ M4: Increment failed refresh counter
         if _refresh_username:

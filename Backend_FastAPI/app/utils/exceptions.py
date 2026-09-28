@@ -387,6 +387,27 @@ class InvalidToken(AuthenticationError):
     error_code = "INVALID_TOKEN"
 
 
+class RefreshSessionNotLive(InvalidToken):
+    """The refresh token names a session row of THIS user that the DB has
+    already revoked, or whose ``expires_at`` has passed (HTTP 401
+    ``INVALID_TOKEN``).
+
+    Raised by ``session_service.update_session_activity`` after the Redis
+    ``session:{jti}`` check passed: the key outlived a revoke whose Redis write
+    was lost. The DB row is the source of truth, so the refresh is refused.
+
+    A class of its own so ``/auth/refresh`` can answer it BEFORE its generic
+    ``InvalidToken`` arms: the server itself ended this session, which is not
+    evidence of token abuse, so it must not feed ``refresh_fail:{username}``
+    nor trigger ``invalidate_all_sessions``. A subclass of ``InvalidToken`` so
+    that any caller unaware of it still refuses with the same 401
+    ``INVALID_TOKEN`` (for ``/auth/refresh`` that means falling back to being
+    counted, never to a 500).
+    """
+
+    detail = "Refresh session is revoked or expired."
+
+
 class SessionRevokedError(AuthenticationError):
     """User session has been revoked."""
 
