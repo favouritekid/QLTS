@@ -166,10 +166,11 @@ class AccountLockoutService:
             ip_address: IP address of the attempt (for logging)
 
         Returns:
-            True only if THIS call wrote the lockout key (the account is now
-            locked). False otherwise — including when the attempt could not
-            be recorded because Redis was unavailable (logged; the stored
-            counter is left as it was).
+            True only when THIS call's SET of the lockout key returned
+            successfully (Redis acknowledged the lock). False otherwise. False
+            does NOT prove the account is unlocked or that the stored counter
+            is unchanged: when a Redis write fails (e.g. a timeout) its outcome
+            is ambiguous — Redis may still have applied it.
 
         Example:
             >>> is_locked = await AccountLockoutService.record_failed_attempt(
@@ -260,19 +261,27 @@ class AccountLockoutService:
                 error=str(e),
                 exc_info=True,
             )
-            # This branch writes nothing and locks nothing. It returns what
-            # actually happened before the failure:
-            # - the counter could not be read or written ⇒ this attempt is not
-            #   counted, the stored count is left as it was (a read error never
-            #   resets it to 1), and the account is NOT locked;
-            # - the lockout key could not be written ⇒ the attempt is counted
-            #   but the account is NOT locked (the next failure retries);
-            # - Redis failed AFTER the lockout key was written ⇒ the account
-            #   IS locked.
+            # What is known after a failure here:
+            # - ``locked_now`` is True only if the SET of the lockout key
+            #   returned successfully before the failure.
+            # - If reading or parsing the counter failed, this call issued no
+            #   write (the stored count is never reset to 1).
+            # - If the counter SET failed, this attempt may or may not have
+            #   been counted.
+            # - If only the lockout SET failed, the counter may already have
+            #   been incremented (its SET returned), but the lock is not
+            #   confirmed.
+            # - A timeout after a write does not show whether Redis applied it.
             # The caller's answer does not change (the credential was wrong).
-            # While Redis stays unavailable the NEXT login is refused by
-            # check_lockout (AccountLockoutStateUnavailable), so an outage does
-            # not open an uncounted brute-force window.
+            #
+            # Known OPEN debt, fail-open counting: while no lockout key exists,
+            # Redis keeps answering reads and the counter SETs are really
+            # refused or lost (e.g. MISCONF), failed logins MAY go uncounted and
+            # the lockout may never be reached. For reference, check_lockout
+            # answers "not locked" when the lockout key is absent or its TTL is
+            # -2; it refuses the login with AccountLockoutStateUnavailable when
+            # the state cannot be read, the check fails unexpectedly, or the key
+            # has no expiry (TTL -1).
             return locked_now
 
     @staticmethod

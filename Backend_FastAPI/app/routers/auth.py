@@ -1031,8 +1031,11 @@ async def refresh_access_token(
         # - Redis ANSWERED "blacklisted" ⇒ 401 via ``credentials_exception``,
         #   counted in ``refresh_fail`` as before.
         #
-        # These logs carry a label and the exception CLASS only: never the jti,
-        # the key or the exception message (no ``str(e)``, no traceback).
+        # The error logs of this step never carry the jti, the Redis key, the
+        # exception message (no ``str(e)``) or a traceback. Depending on the
+        # branch they carry the username and the action (plus the exception
+        # CLASS on the 500), or, from the Redis helper, the caller's key label
+        # and the error class.
         try:
             is_blacklisted = await redis_exists_or_raise(
                 f"blacklist:{old_refresh_jti}", "auth.refresh_jti_blacklist"
