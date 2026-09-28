@@ -1586,6 +1586,89 @@ class TestRefreshRedisStateUnavailable:
 
         await self._assert_rotates(client, logged_in["refresh"], logged_in["user"]["id"])
 
+    STEP3_REFUSED_EVENT = "Refresh refused: user blacklist check failed"
+
+    @pytest.mark.parametrize(
+        "exc_type", [RedisResponseError, TypeError], ids=["response_error", "type_error"]
+    )
+    async def test_user_blacklist_other_error_is_500_fail_closed(
+        self, client, logged_in, test_redis_client, breaker, exc_type
+    ):
+        """STEP 3 like STEP 2: not "Redis did not answer" ⇒ a plain 500, never counted.
+
+        Before, ``except Exception`` answered it with the counted 401: an ACL
+        ``NOPERM`` on ``user_blacklist:`` scored every refresh as token abuse
+        and, at the threshold, ran ``invalidate_all_sessions``.
+        """
+        user = logged_in["user"]
+        attempts = settings.REFRESH_MAX_FAILURES + 1
+        rows_before = await self._session_rows(user["id"])
+        keys_before = await self._auth_keys(test_redis_client)
+
+        failed = []
+        with ExitStack() as stack:
+            revoked = stack.enter_context(self._spy_revocations())
+            writes = stack.enter_context(self._record_redis_writes())
+            stack.enter_context(
+                _redis_command_failing_on("exists", "user_blacklist:", exc_type, failed)
+            )
+            responses = [
+                await self._refresh(client, logged_in["refresh"]) for _ in range(attempts)
+            ]
+
+        statuses = [res.status_code for res in responses]
+        assert revoked == [], f"invalidate_all_sessions ran; statuses={statuses}"
+        for res in responses:
+            self._assert_fail_closed_500(res)
+        assert len(failed) == attempts, failed
+        assert writes == [], writes
+        assert await test_redis_client.get(f"refresh_fail:{user['username']}") is None
+        self._assert_auth_keys_unchanged(keys_before, await self._auth_keys(test_redis_client))
+        assert await self._session_rows(user["id"]) == rows_before
+        assert breaker.current_state is CircuitBreakerState.CLOSED
+
+        await self._assert_rotates(client, logged_in["refresh"], user["id"])
+
+    @pytest.mark.parametrize("fault", ["response_error", "type_error"])
+    async def test_step3_error_log_carries_no_jti_key_or_message(
+        self, client, logged_in, test_redis_client, breaker, caplog, fault
+    ):
+        """STEP 3's refusal logs event/action, user_id and the exception CLASS.
+
+        Never the JTI, the Redis key or the exception message.
+        The injected message is a canary (the old arm logged ``error=str(e)``);
+        the key and the jti must not ride on the refusal event either.
+        Asserting the event first proves the capture sees these logs at all.
+        """
+        user = logged_in["user"]
+        key = f"user_blacklist:{user['id']}"
+        message = f"CANARYMSG{uuid.uuid4().hex}"
+        exc_type = {"response_error": RedisResponseError, "type_error": TypeError}[fault]
+        original = db_module.redis_client.exists
+        hits = []
+
+        async def _exists(*args, **kwargs):
+            if args and args[0] == key:
+                hits.append(key)
+                raise exc_type(message)
+            return await original(*args, **kwargs)
+
+        caplog.set_level(logging.DEBUG)
+        with patch.object(db_module.redis_client, "exists", _exists):
+            res = await self._refresh(client, logged_in["refresh"])
+
+        self._assert_fail_closed_500(res)
+        assert hits == [key], hits
+        lines = [record.getMessage() for record in caplog.records]
+        refused = [line for line in lines if self.STEP3_REFUSED_EVENT in line]
+        assert refused, lines
+        assert all(exc_type.__name__ in line for line in refused), refused
+        for line in refused:
+            assert key not in line, line
+            assert logged_in["jti"] not in line, line
+        for text in lines + [caplog.text]:
+            assert message[:9] not in text, text
+
     async def test_blacklisted_user_unreadable_is_503_then_401_once_answered(
         self, client, logged_in, test_redis_client
     ):

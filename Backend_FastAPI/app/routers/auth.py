@@ -1093,14 +1093,6 @@ async def refresh_access_token(
                     is_user_blacklisted = await redis_exists_or_raise(
                         f"user_blacklist:{user.id}", "auth.user_blacklist"
                     )
-                    if is_user_blacklisted:
-                        log.warning(
-                            "Refresh blocked: user in global blacklist (password changed?)",
-                            user_id=user.id,
-                        )
-                        raise credentials_exception
-                except InvalidToken:
-                    raise
                 except RedisUnavailableError:
                     log.error(
                         "Refresh deferred: user blacklist unreadable",
@@ -1108,9 +1100,31 @@ async def refresh_access_token(
                         action="auth.refresh_state_unavailable",
                     )
                     raise RefreshStateUnavailable() from None
-                except Exception as e:
-                    log.error("Redis user blacklist check failed during refresh", error=str(e))
-                    # Fail-closed: if we can't verify, reject the refresh
+                except Exception as exc:
+                    # Redis ANSWERED with an error (ResponseError: NOPERM,
+                    # WRONGTYPE ...) or a bug: not an outage, so not the
+                    # retryable 503; not token abuse, so not the counted 401
+                    # either (it used to be, and at the threshold it ran
+                    # invalidate_all_sessions). Same as STEP 2: a plain 500,
+                    # nothing rotated. The log carries the event/action,
+                    # user_id and the exception CLASS; never the JTI, the
+                    # Redis key or the exception message.
+                    log.error(
+                        "Refresh refused: user blacklist check failed",
+                        user_id=user.id,
+                        error_type=type(exc).__name__,
+                        action="auth.refresh_user_blacklist_error",
+                    )
+                    raise HTTPException(
+                        status_code=500, detail="An unexpected error occurred"
+                    ) from None
+                # Outside the try on purpose: the refusal below is a business
+                # outcome and must not be caught by the error arms above.
+                if is_user_blacklisted:
+                    log.warning(
+                        "Refresh blocked: user in global blacklist (password changed?)",
+                        user_id=user.id,
+                    )
                     raise credentials_exception
 
                 # (STEP 4: Validate JTI)
