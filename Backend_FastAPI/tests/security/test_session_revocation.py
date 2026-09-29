@@ -9,6 +9,7 @@ while other sessions for the same user remain connected.
 import asyncio
 import inspect
 import logging
+import uuid
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -815,6 +816,57 @@ async def test_refresh_does_not_rotate_row_owned_by_another_user(
 
     assert res.status_code == 401, res.text
     assert (await _row_by_jti(jti)) is not None, "hàng của người khác bị xoay mất jti"
+
+
+@pytest.mark.asyncio
+async def test_refresh_with_no_db_row_for_jti_is_uncounted_desync_401(
+    client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Redis `session:{jti}` matches the user but NO DB row carries the jti
+    (desync) ⇒ the plain re-login 401 (`HTTP_401`, not the dead-row
+    `INVALID_TOKEN`), not counted in `refresh_fail`, no token cookie issued."""
+    user = regular_user_in_db
+    _, refresh, jti = await _login_as(client, user)
+    async with AsyncSessionLocal() as s:
+        await s.execute(
+            update(models.UserSession)
+            .where(models.UserSession.refresh_jti == jti)
+            .values(refresh_jti=str(uuid.uuid4()))
+        )
+        await s.commit()
+    assert await _row_by_jti(jti) is None, "tiền đề: không hàng nào còn mang jti"
+    assert await test_redis_client.get(f"session:{jti}") == str(user["id"]), (
+        "tiền đề: khoá session: còn nguyên, khớp người dùng"
+    )
+
+    res = await _post_with_cookies(client, REFRESH_URL, refresh_token=refresh)
+
+    outcome = (
+        res.status_code,
+        res.json().get("error_code"),
+        await test_redis_client.get(_refresh_fail_key(user)),
+    )
+    assert outcome == (401, "HTTP_401", None), res.text
+    assert _issued_token_cookies(res) == [], _issued_token_cookies(res)
+
+
+@pytest.mark.asyncio
+async def test_refresh_rotation_keeps_absolute_session_expiry(
+    client, regular_user_in_db, fresh_breaker
+):
+    """A successful refresh rotates the row's `refresh_jti` but never moves
+    `expires_at`: the session keeps the absolute deadline set at login."""
+    _, refresh, jti = await _login_as(client, regular_user_in_db)
+    before = await _row_by_jti(jti)
+
+    res = await _post_with_cookies(client, REFRESH_URL, refresh_token=refresh)
+    after = await _row_by_id(before.id)
+
+    assert res.status_code == 200, res.text
+    assert after.refresh_jti != jti, "tiền đề: hàng phải được xoay"
+    assert after.expires_at == before.expires_at, (
+        f"refresh dời hạn phiên: {before.expires_at} -> {after.expires_at}"
+    )
 
 
 async def _wait_for_lock_waiter(timeout: float = 15.0) -> None:
