@@ -29,6 +29,7 @@ from ..utils.exceptions import (  # ✅ PHASE 1: Import custom exceptions
     CacheServiceError,
     InvalidCredentials,
     RefreshStateUnavailable,
+    SessionRevocationError,
     UserServiceError,
 )
 from ..middleware.csrf import set_csrf_cookie  # ✅ CSRF Protection
@@ -608,6 +609,21 @@ async def login_for_access_token(
     return await _complete_login_flow(user, request, db)
 
 
+def _delete_auth_cookies(response: Response) -> None:
+    """✅ SECURITY FIX: Delete both token cookies — on every logout answer, the
+    error one included (browsers apply ``Set-Cookie`` whatever the status)."""
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        samesite="lax",
+    )
+    response.delete_cookie(
+        key="refresh_token",
+        path="/api",  # ✅ FIX: Changed from "/api/auth" to "/api" to match set_cookie path
+        samesite="strict",
+    )
+
+
 @router.post("/logout")
 @limiter.limit(RateLimits.DATA_WRITE)  # ✅ RATE LIMIT: 200/hour - Normal write operation
 async def logout(
@@ -670,6 +686,16 @@ async def logout(
 
     if refresh_jti:
         # ✅ PHASE 2: Use session_service instead of direct SQL
+        #
+        # The DB row is what every reader of a session trusts (deps STEP 4b,
+        # socket auth, ``/refresh``); the Redis writes above are the fast path,
+        # and one lost there is still refused by the row. So THIS step decides
+        # whether the server logged the session out. If the revocation is not
+        # committed, answer ``SessionRevocationError`` (500, like
+        # ``DELETE /sessions/{id}``) instead of the 204 the client reads as
+        # "the session is dead" — and still clear the cookies. ``revoked``
+        # False means no live row for this jti: nothing left to revoke.
+        # ``get_db`` closes the session, which rolls a failed commit back.
         try:
             revoked, callback = await session_service.revoke_session_by_jti(
                 db=db,
@@ -678,35 +704,34 @@ async def logout(
             )
             if revoked:
                 await db.commit()
-                if callback:
-                    await callback()
-                log.info(
-                    "Session revoked on logout",
-                    user_id=current_user.id,
-                )
-            else:
-                log.warning(
-                    "Session not found for revocation on logout",
-                    user_id=current_user.id,
-                )
         except Exception as session_error:
-            log.warning(
-                "Failed to revoke session on logout",
+            log.error(
+                "Logout failed: session revocation not committed",
                 user_id=current_user.id,
-                error=str(session_error),
+                error_type=type(session_error).__name__,
+            )
+            failure = SessionRevocationError()
+            error_response = JSONResponse(
+                status_code=failure.status_code,
+                content={"detail": failure.detail, "error_code": failure.error_code},
+            )
+            _delete_auth_cookies(error_response)
+            return error_response
+
+        if revoked:
+            if callback:
+                await callback()
+            log.info(
+                "Session revoked on logout",
+                user_id=current_user.id,
+            )
+        else:
+            log.warning(
+                "Session not found for revocation on logout",
+                user_id=current_user.id,
             )
 
-    # ✅ SECURITY FIX: Delete both cookies
-    response.delete_cookie(
-        key="access_token",
-        path="/",
-        samesite="lax",
-    )
-    response.delete_cookie(
-        key="refresh_token",
-        path="/api",  # ✅ FIX: Changed from "/api/auth" to "/api" to match set_cookie path
-        samesite="strict",
-    )
+    _delete_auth_cookies(response)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
 
