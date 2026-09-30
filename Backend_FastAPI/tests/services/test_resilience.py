@@ -232,14 +232,22 @@ async def test_resilience_redis_cache_fallback(
 
 @pytest.mark.asyncio
 @patch("app.core.deps.safe_redis_exists", new_callable=AsyncMock)
-async def test_resilience_redis_auth_fail_open(
+async def test_resilience_redis_jti_blacklist_read_still_fail_open(
     mock_safe_exists: AsyncMock,
     client: AsyncClient,
     regular_user_in_db: dict,
     test_redis_client,
 ):
-    log.info("--- Running: test_resilience_redis_auth_fail_open ---")
-    log.info("--- Testing fail-open on ACTIVE token ---")
+    """Chỉ còn STEP 2 của `get_current_user` (`blacklist:{access_jti}`) đọc qua
+    `safe_redis_exists`: lỗi Redis ở đó vẫn bị nuốt và request đi tiếp.
+
+    Đây là NỢ ĐÃ BIẾT, không phải hợp đồng mong muốn — ca này ghi lại hiện
+    trạng để bản vá STEP 2 phải đổi nó có chủ ý. STEP 3 (`user_blacklist:{id}`)
+    nay đọc NGHIÊM (`redis_exists_or_raise`), không còn đi qua wrapper này:
+    Redis không trả lời ở đó ⇒ 503, xem `TestUserBlacklistUnreadable` trong
+    `test_auth_security_hardening.py`.
+    """
+    log.info("--- Running: test_resilience_redis_jti_blacklist_read_still_fail_open ---")
     # Dung HELPER CHUNG thay vi tu doc `login_res.json()["access_token"]`:
     # 46cc9633 chuyen sang httpOnly cookie, login van tra 200 nhung KHONG con
     # dat access_token trong THAN phan hoi -> ban cu chet bang KeyError. Helper
@@ -261,9 +269,11 @@ async def test_resilience_redis_auth_fail_open(
     assert response_fail_open.status_code == 200
     data = response_fail_open.json()
     assert data["id"] == regular_user_in_db["id"]
-    log.info("API correctly returned 200 OK (fail-open) on active token.")
-    assert mock_safe_exists.await_count == 2
-    log.info("Auth dependency (safe_redis_exists) was called twice as expected.")
+    # MỘT lượt, và đúng khoá của STEP 2. Trước bản vá STEP 3 là hai lượt:
+    # lượt thứ hai (`user_blacklist:`) rơi vào fallback CSDL "user còn phiên
+    # nào đó" và cũng cho qua.
+    assert mock_safe_exists.await_count == 1
+    assert mock_safe_exists.await_args.args[0].startswith("blacklist:")
 
 
 # ===========================================================================

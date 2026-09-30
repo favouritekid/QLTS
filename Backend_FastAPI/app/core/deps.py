@@ -1,5 +1,5 @@
 # app/core/deps.py
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 import casbin
 import structlog
@@ -14,9 +14,16 @@ import hmac
 
 from .. import database, models, security  # ✅ THÊM IMPORT security
 from ..config import settings
-from ..database import safe_redis_delete, safe_redis_exists, safe_redis_get
+from ..database import (
+    RedisUnavailableError,
+    redis_exists_or_raise,
+    safe_redis_delete,
+    safe_redis_exists,
+    safe_redis_get,
+)
 from ..services import user_service
 from ..utils.exceptions import (
+    AccessStateUnavailable,
     AuthenticationError,
     BusinessRuleViolation,
     InvalidToken,
@@ -60,6 +67,7 @@ async def verify_intake_api_key(
 __all__ = [
     # Authentication (Layer 1)
     "get_current_user",
+    "get_logout_target",  # POST /auth/logout — signature + own DB rows, no Redis
     "get_current_active_user",
     "require_password_not_forced",
     "verify_intake_api_key",  # Public website lead intake (X-API-Key gate)
@@ -117,6 +125,7 @@ __all__ = [
     "resolve_kpi_plan_officer_id",
 
     # Data Classes
+    "LogoutTarget",
     "DashboardScopeContext",
     "OfficerDashboardScope",  # alias for migration, remove later
     "LeadListFilter",
@@ -130,6 +139,26 @@ __all__ = [
 
 # ✅ SECURITY FIX: Keep OAuth2 scheme for backwards compatibility, but make it optional
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+
+
+def _pick_access_token(
+    access_token_cookie: Optional[str],
+    authorization: Optional[str],
+    token_from_oauth: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """The access token a request carries, and where it came from.
+
+    ONE precedence for every dependency that authenticates an access token
+    (``get_current_user``, ``get_logout_target``): the httpOnly cookie first
+    (browsers), then ``Authorization: Bearer``, then the OAuth2 scheme.
+    """
+    if access_token_cookie:
+        return access_token_cookie, "cookie"
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization.split(" ")[1], "header"
+    if token_from_oauth:
+        return token_from_oauth, "oauth_scheme"
+    return None, None
 
 
 async def get_current_user(
@@ -149,6 +178,8 @@ async def get_current_user(
     Checks: JWT validity, access-JTI blacklist, user existence, user global
     blacklist, and session validity (Redis `session:{r_jti}` corroborated by a
     non-revoked, non-expired DB session row — DB is the source of truth).
+    A user global blacklist Redis cannot answer is a 503
+    (`AccessStateUnavailable`), never a pass.
 
     Does NOT gate `User.status` — intentional. Recovery / self-service endpoints
     (change-password, secure-account, logout, sessions, trusted devices, MFA
@@ -159,18 +190,9 @@ async def get_current_user(
     credentials_exception = InvalidToken(detail="Could not validate credentials")
 
     # === ✅ SECURITY FIX: Read token from httpOnly cookie first ===
-    token = None
-    token_source = None
-
-    if access_token_cookie:
-        token = access_token_cookie
-        token_source = "cookie"
-    elif authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(" ")[1]
-        token_source = "header"
-    elif token_from_oauth:
-        token = token_from_oauth
-        token_source = "oauth_scheme"
+    token, token_source = _pick_access_token(
+        access_token_cookie, authorization, token_from_oauth
+    )
 
     if not token:
         log.warning("No authentication token provided (no cookie, header, or oauth)")
@@ -236,47 +258,50 @@ async def get_current_user(
             log.warning("Token validation failed: User not found", username=username)
             raise credentials_exception
 
+        # Strict read, same contract as ``/auth/refresh`` STEP 3.
+        # ``user_blacklist:{id}`` is set by ``invalidate_all_sessions``; the DB
+        # revoke that goes with it is only staged in the caller's transaction,
+        # and a caller that rolls back or never commits leaves this key as the
+        # ONLY record that every session of the user is dead.
+        #
+        # - Redis did not answer (ConnectionError/TimeoutError, OPEN breaker)
+        #   ⇒ ``AccessStateUnavailable`` (503). The lenient wrapper answered
+        #   "not blacklisted" while the breaker was CLOSED, and the DB fallback
+        #   that ran once it was OPEN ("the user has SOME active session")
+        #   passed the user too: a revoked user got through either way.
+        # - Anything else (a Redis ``ResponseError`` such as NOPERM or
+        #   WRONGTYPE, a bug) ⇒ 500: not an outage, so not the retryable 503.
+        # - Redis ANSWERED "blacklisted" ⇒ 401. Outside the try on purpose.
+        #
+        # The error logs carry the event/action, user_id and the exception
+        # CLASS; never the Redis key or the exception message.
         try:
-            is_user_blacklisted = await safe_redis_exists(f"user_blacklist:{user.id}")
-            if is_user_blacklisted:
-                log.info(
-                    "Token rejected: User found in global blacklist (password changed?)",
-                    user_id=user.id,
-                )
-                raise credentials_exception
-        except InvalidToken:
-            raise
-        except Exception as e:
-            log.error(
-                "Redis user blacklist check failed", user_id=user.id, error=str(e)
+            is_user_blacklisted = await redis_exists_or_raise(
+                f"user_blacklist:{user.id}", "auth.user_blacklist"
             )
-            # (Giữ nguyên logic fallback CSDL cho user blacklist)
-            # (✅ PHASE 2: Use SessionRepository instead of direct SQL)
-            try:
-                from app.repositories import SessionRepository
-
-                repo = SessionRepository(db)
-                active_sessions = await repo.get_active_by_user(user.id)
-                active_session = active_sessions[0] if active_sessions else None
-                if active_session is None:
-                    log.warning(
-                        "Database fallback: No active sessions found for user",
-                        user_id=user.id,
-                    )
-                    raise credentials_exception
-                log.info(
-                    "Database fallback successful: User has active sessions",
-                    user_id=user.id,
-                )
-            except InvalidToken:
-                raise
-            except Exception as db_error:
-                log.error(
-                    "Database fallback failed during user blacklist check",
-                    user_id=user.id,
-                    error=str(db_error),
-                )
-                raise credentials_exception
+        except RedisUnavailableError:
+            log.error(
+                "Access deferred: user blacklist unreadable",
+                user_id=user.id,
+                action="auth.access_state_unavailable",
+            )
+            raise AccessStateUnavailable() from None
+        except Exception as exc:
+            log.error(
+                "Access refused: user blacklist check failed",
+                user_id=user.id,
+                error_type=type(exc).__name__,
+                action="auth.access_user_blacklist_error",
+            )
+            raise HTTPException(
+                status_code=500, detail="An unexpected error occurred"
+            ) from None
+        if is_user_blacklisted:
+            log.info(
+                "Token rejected: User found in global blacklist (password changed?)",
+                user_id=user.id,
+            )
+            raise credentials_exception
 
         # === STEP 4: CHECK SESSION VALIDITY (Redis cache + DB authoritative) ===
         # Redis is only a cache. A Redis `session:{jti}` hit can be STALE (an
@@ -369,10 +394,144 @@ async def get_current_user(
     except (JWTError, InvalidToken):
         # Đã log lỗi bên trong security.decode_token hoặc ở trên
         raise credentials_exception
+    except (AccessStateUnavailable, HTTPException):
+        # STEP 3's 503/500, already logged: turning them into the 401 below
+        # would tell the client its token is bad, which nothing established.
+        raise
     except Exception as e:
         # Bắt các lỗi chung khác
         log.error("Unhandled error in get_current_user", error=str(e), exc_info=True)
         raise credentials_exception
+
+
+# =============================================================================
+# LOGOUT: authenticate + resolve the caller's own sessions WITHOUT Redis
+# =============================================================================
+
+
+class LogoutTarget(NamedTuple):
+    """What ``POST /auth/logout`` may revoke, resolved by ``get_logout_target``.
+
+    ``sessions`` are LIVE ``user_session`` rows of ``user_id``. ``None`` means
+    the DB could not be read: nothing is known to be revoked, and the router
+    must not answer 204. ``access_exp`` is the ``exp`` of the access token the
+    request authenticated with (Unix time), for its own blacklist entry.
+    """
+
+    user_id: Optional[int]
+    access_jti: str
+    access_exp: int
+    sessions: Optional[List[models.UserSession]]
+
+
+def _signed_refresh_cookie_jti(refresh_token: Optional[str]) -> Optional[str]:
+    """``jti`` of the refresh cookie, only if it is a validly SIGNED, unexpired refresh token."""
+    if not refresh_token:
+        return None
+    try:
+        payload = security.decode_token(refresh_token)
+    except InvalidToken:
+        return None
+    if payload.get("type") != "refresh":
+        return None
+    return payload.get("jti")
+
+
+async def get_logout_target(
+    access_token_cookie: Optional[str] = Cookie(None, alias="access_token"),
+    authorization: Optional[str] = Header(None),
+    token_from_oauth: Optional[str] = Depends(oauth2_scheme),
+    refresh_token_cookie: Optional[str] = Cookie(None, alias="refresh_token"),
+    db: AsyncSession = Depends(database.get_db),
+) -> LogoutTarget:
+    """Authenticate a logout and resolve the sessions it may end, reading no Redis.
+
+    Not ``get_current_user``: that refuses with 503 whenever Redis cannot answer
+    the user-blacklist read, which is right for every endpoint that GRANTS
+    something. A logout only ENDS sessions — the most a token holder can do here
+    is end its own — so two checks are enough, and neither needs Redis:
+
+    1. Authentication by SIGNATURE and expiry (``security.decode_token``): an
+       ``access`` token carrying ``sub``, ``jti`` and ``r_jti`` whose ``sub``
+       names an existing user. ``User.status`` is not gated, as in
+       ``get_current_user``.
+    2. Ownership (this endpoint's IDOR check; this layer owns it): a refresh JTI
+       is revoked only if it names a LIVE ``user_session`` row of THAT user —
+       ``get_by_refresh_jti_and_user``, the predicate deps STEP 4b, socket auth
+       and ``/refresh`` share. Candidates: the ``r_jti`` of the access token
+       (the session it rides on; Bearer-only clients have nothing else) and the
+       ``jti`` of the refresh cookie when it is a validly signed refresh token.
+       A candidate naming another user's session, a dead one or none is
+       dropped: neither the DB nor Redis is ever written for it. The router and
+       service act only on the rows returned here. When the access token and the
+       refresh cookie name two different LIVE sessions of that user, the logout
+       ends BOTH (this browser's access-token session and its cookie session);
+       narrowing it to one must change
+       ``test_logout_ends_both_sessions_when_access_token_and_refresh_cookie_differ``.
+
+    A DB error while resolving gives ``sessions=None`` (the router answers
+    ``SessionRevocationError`` and clears the cookies) instead of an exception
+    here, whose response could not clear them.
+    """
+    credentials_exception = InvalidToken(detail="Could not validate credentials")
+
+    token, _ = _pick_access_token(access_token_cookie, authorization, token_from_oauth)
+    if not token:
+        raise credentials_exception
+    try:
+        payload = security.decode_token(token)
+    except InvalidToken:
+        raise credentials_exception
+
+    username = payload.get("sub")
+    access_jti = payload.get("jti")
+    refresh_jti = payload.get("r_jti")
+    access_exp = payload.get("exp")
+    if (
+        not username
+        or not access_jti
+        or not refresh_jti
+        or not isinstance(access_exp, int)
+        or payload.get("type", "access") != "access"
+    ):
+        raise credentials_exception
+
+    candidates = [refresh_jti]
+    cookie_jti = _signed_refresh_cookie_jti(refresh_token_cookie)
+    if cookie_jti and cookie_jti != refresh_jti:
+        candidates.append(cookie_jti)
+
+    try:
+        user = await user_service.get_user_by_username(db, username=username)
+        sessions = None
+        if user is not None:
+            from app.repositories import SessionRepository
+
+            repo = SessionRepository(db)
+            sessions = []
+            for jti in candidates:
+                row = await repo.get_by_refresh_jti_and_user(jti, user.id)
+                if row is not None and all(row.id != s.id for s in sessions):
+                    sessions.append(row)
+    except Exception as exc:
+        log.error(
+            "Logout target unresolved: DB read failed",
+            error_type=type(exc).__name__,
+            action="auth.logout_target_unresolved",
+        )
+        return LogoutTarget(None, access_jti, access_exp, None)
+
+    if user is None:
+        log.warning("Logout rejected: token names no user")
+        raise credentials_exception
+    if len(sessions) < len(candidates):
+        log.info(
+            "Logout: refresh JTIs without a live session of this user dropped",
+            user_id=user.id,
+            dropped=len(candidates) - len(sessions),
+            action="auth.logout_candidates_dropped",
+        )
+    return LogoutTarget(user.id, access_jti, access_exp, sessions)
 
 
 # =============================================================================

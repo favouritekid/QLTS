@@ -24,6 +24,11 @@ Covers:
    ``AuthStateUnavailable``); any OTHER error on the jti-blacklist read is a
    plain 500 (never that retryable 503, never a fall-through); none of these
    paths logs the jti, the key or the exception message
+10. ``get_current_user`` (HTTP), Socket.IO connect and ``revalidate_auth``:
+   Redis not answering the ``user_blacklist`` read is never "not blacklisted"
+   (HTTP 503 ``AUTH_STATE_UNAVAILABLE`` / connection refused / disconnected),
+   for a blacklisted and a normal user alike; any other error on that read
+   over HTTP is a plain 500
 """
 import hashlib
 import logging
@@ -2241,3 +2246,289 @@ class TestRefreshRedisStateUnavailable:
         }, res.text
         assert res.headers.get("retry-after") == "137", dict(res.headers)
         assert res.headers.get_list("set-cookie") == []
+
+
+# =============================================================================
+# 10. get_current_user (HTTP) and Socket.IO: the ``user_blacklist`` read
+# =============================================================================
+#
+# ``user_blacklist:{user_id}`` is what ``invalidate_all_sessions`` leaves when
+# it ends every session of a user. The DB revoke that goes with it is only
+# staged in the caller's transaction, and a caller that rolls back or never
+# commits leaves the key as the ONLY record. So a read Redis did not answer
+# (connection/timeout error, breaker OPEN) must never count as "not
+# blacklisted". The lenient ``safe_redis_*`` reads did exactly that, and the
+# old DB fallback ("the user has SOME active session") passed the user once
+# the breaker was OPEN.
+#
+# While Redis does not answer, nobody can tell a blacklisted user from a
+# normal one, so both get the same outcome:
+#
+# * HTTP (``get_current_user`` STEP 3): 503 ``AUTH_STATE_UNAVAILABLE`` — never
+#   200 (blacklisted user), never 401 (normal user: a 401 says the token is
+#   bad). Any OTHER error on that read ⇒ a plain 500.
+# * Socket connect (``_get_user_from_token``): refused.
+# * ``revalidate_auth``: disconnected, ``valid`` False.
+#
+# Every case keeps the user's DB session row and ``session:{jti}`` LIVE, so the
+# blacklist read is the only check left that can refuse, and first asks the
+# same question with Redis healthy (the control) so the answer an outage hides
+# is known.
+
+from app import socket_manager  # noqa: E402
+
+_BLACKLIST_PREFIX = "user_blacklist:"
+_FAULT_EXC = {"connection": RedisConnectionError, "timeout": RedisTimeoutError}
+
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestUserBlacklistUnreadable:
+    """HTTP auth and Socket.IO must tell "Redis did not answer" from "not blacklisted"."""
+
+    CHECK_URL = "/api/auth/check-status"
+    SID = "sid-user-blacklist-unreadable"
+
+    @pytest.fixture
+    def breaker(self, redis_breaker_reset):
+        """The module's ``redis_breaker_reset``: clean before AND after, even on red."""
+        return redis_breaker_reset
+
+    @pytest_asyncio.fixture
+    async def authed(self, client, regular_user_in_db, clear_redis_keys, breaker):
+        """Log in with Redis healthy; return the user, the access token and its session jti."""
+        user = regular_user_in_db
+        client.cookies.clear()
+        res = await client.post(
+            "/api/auth/login", data={"username": user["username"], "password": user["password"]}
+        )
+        client.cookies.clear()
+        assert res.status_code == 200, res.text
+        access = res.cookies.get("access_token")
+        assert access, "login did not set the access cookie"
+        payload = jwt.decode(access, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        return {"user": user, "access": access, "r_jti": payload["r_jti"]}
+
+    # --- helpers -----------------------------------------------------------------
+
+    async def _check(self, client, access: str):
+        client.cookies.clear()
+        try:
+            return await client.get(self.CHECK_URL, headers={"Cookie": f"access_token={access}"})
+        finally:
+            client.cookies.clear()
+
+    @staticmethod
+    async def _blacklist(redis, user_id: int) -> None:
+        await redis.set(f"{_BLACKLIST_PREFIX}{user_id}", "sessions_invalidated", ex=3600)
+
+    @staticmethod
+    @contextmanager
+    def _blacklist_unreadable(exc_type):
+        """GET and EXISTS on ``user_blacklist:*`` raise ``exc_type``; every other key is served.
+
+        Both commands, so the case does not depend on which one the code under
+        test reads the key with.
+        """
+        failed = []
+        with ExitStack() as stack:
+            for command in ("get", "exists"):
+                stack.enter_context(
+                    _redis_command_failing_on(command, _BLACKLIST_PREFIX, exc_type, failed)
+                )
+            yield failed
+
+    @staticmethod
+    @contextmanager
+    def _breaker_opens_after_session_read(breaker):
+        """The ``session:*`` GET is answered, then the breaker is OPEN for what follows.
+
+        Socket connect and ``revalidate_auth`` read ``session:{jti}`` BEFORE the
+        blacklist; opening the breaker up front would refuse at that first read
+        and never reach the one under test.
+        """
+        original = db_module.redis_client.get
+        opened = []
+
+        async def _get(*args, **kwargs):
+            value = await original(*args, **kwargs)
+            if args and isinstance(args[0], str) and args[0].startswith("session:"):
+                breaker.open()
+                opened.append(args[0])
+            return value
+
+        with patch.object(db_module.redis_client, "get", _get):
+            yield opened
+
+    @contextmanager
+    def _http_fault(self, fault, breaker):
+        if fault in _FAULT_EXC:
+            with self._blacklist_unreadable(_FAULT_EXC[fault]) as failed:
+                yield failed
+        elif fault == "breaker_open":
+            breaker.open()
+            yield ["breaker"]
+        else:
+            assert fault == "all_down", fault
+            with _redis_down() as calls:
+                yield calls
+
+    @contextmanager
+    def _socket_fault(self, fault, breaker):
+        if fault in _FAULT_EXC:
+            with self._blacklist_unreadable(_FAULT_EXC[fault]) as failed:
+                yield failed
+        else:
+            assert fault == "breaker_open", fault
+            with self._breaker_opens_after_session_read(breaker) as opened:
+                yield opened
+
+    @staticmethod
+    def _fake_sio(user_id: int, jti: str):
+        fake = MagicMock()
+        fake.get_session = AsyncMock(return_value={"user_id": user_id, "jti": jti})
+        fake.disconnect = AsyncMock()
+        return fake
+
+    # --- HTTP: get_current_user STEP 3 ---------------------------------------------
+
+    @pytest.mark.parametrize("who", ["blacklisted", "normal"])
+    @pytest.mark.parametrize("fault", ["connection", "timeout", "breaker_open", "all_down"])
+    async def test_http_unreadable_is_503_whatever_the_answer_would_be(
+        self, client, authed, test_redis_client, breaker, who, fault
+    ):
+        """No answer ⇒ 503: never 200 for the blacklisted user, never 401 for the normal one.
+
+        ``all_down`` is the outage as it starts (breaker CLOSED, every command
+        fails); ``breaker_open`` is the outage once it has settled. Nothing the
+        outage touches is revoked: the DB row and the Redis session key stay.
+        """
+        user, access, jti = authed["user"], authed["access"], authed["r_jti"]
+        if who == "blacklisted":
+            await self._blacklist(test_redis_client, user["id"])
+        control = await self._check(client, access)
+        assert control.status_code == (401 if who == "blacklisted" else 200), control.text
+        rows_before = await TestRefreshRedisStateUnavailable._session_rows(user["id"])
+
+        with self._http_fault(fault, breaker) as failed:
+            res = await self._check(client, access)
+
+        assert failed, "the fault never reached Redis"
+        _assert_auth_state_unavailable(res)
+        _reset_redis_breaker(breaker)
+        assert await TestRefreshRedisStateUnavailable._session_rows(user["id"]) == rows_before
+        assert await test_redis_client.get(f"session:{jti}") == str(user["id"])
+
+    @pytest.mark.parametrize(
+        "exc_type", [RedisResponseError, TypeError], ids=["response_error", "type_error"]
+    )
+    async def test_http_other_error_is_500_never_200(
+        self, client, authed, test_redis_client, breaker, exc_type
+    ):
+        """Redis ANSWERED with an error (NOPERM, WRONGTYPE…) or a bug ⇒ plain 500, not a pass."""
+        user = authed["user"]
+        await self._blacklist(test_redis_client, user["id"])
+
+        with self._blacklist_unreadable(exc_type) as failed:
+            res = await self._check(client, authed["access"])
+
+        assert failed, "the fault never reached Redis"
+        TestRefreshRedisStateUnavailable._assert_fail_closed_500(res)
+        assert breaker.current_state is CircuitBreakerState.CLOSED
+
+    @pytest.mark.parametrize("fault", ["connection", "response_error"])
+    async def test_http_error_logs_carry_no_key_jti_or_message(
+        self, client, authed, test_redis_client, breaker, caplog, fault
+    ):
+        """The refusal logs event/action, user_id and (500) the exception CLASS.
+
+        Never the Redis key, the session jti or the exception message (a canary).
+        Asserting the event first proves the capture sees these logs at all.
+        """
+        user = authed["user"]
+        key = f"{_BLACKLIST_PREFIX}{user['id']}"
+        message = f"CANARYMSG{uuid.uuid4().hex}"
+        exc_type = {"connection": RedisConnectionError, "response_error": RedisResponseError}[fault]
+        event = {
+            "connection": "Access deferred: user blacklist unreadable",
+            "response_error": "Access refused: user blacklist check failed",
+        }[fault]
+        original = db_module.redis_client.exists
+
+        async def _exists(*args, **kwargs):
+            if args and args[0] == key:
+                raise exc_type(message)
+            return await original(*args, **kwargs)
+
+        caplog.set_level(logging.DEBUG)
+        with patch.object(db_module.redis_client, "exists", _exists):
+            res = await self._check(client, authed["access"])
+
+        assert res.status_code == (503 if fault == "connection" else 500), res.text
+        lines = [record.getMessage() for record in caplog.records]
+        refused = [line for line in lines if event in line]
+        assert refused, lines
+        for line in refused:
+            assert "user_id" in line, line
+            assert key not in line, line
+            assert authed["r_jti"] not in line, line
+        for text in lines + [caplog.text]:
+            assert message[:9] not in text, text
+
+    # --- Socket.IO connect: _get_user_from_token -----------------------------------
+
+    @pytest.mark.parametrize("who", ["blacklisted", "normal"])
+    @pytest.mark.parametrize("fault", ["connection", "timeout", "breaker_open"])
+    async def test_socket_connect_unreadable_is_refused(
+        self, authed, test_redis_client, breaker, who, fault
+    ):
+        """No answer ⇒ the connection is refused, blacklisted or not.
+
+        Before, a connection/timeout error read as "not blacklisted" and an OPEN
+        breaker fell back to "the user has SOME active session" — already true
+        for the exact-jti DB check that runs just before.
+        """
+        user, access = authed["user"], authed["access"]
+        if who == "blacklisted":
+            await self._blacklist(test_redis_client, user["id"])
+            with pytest.raises(ConnectionRefusedError):
+                await socket_manager._get_user_from_token(access)
+        else:
+            assert (await socket_manager._get_user_from_token(access)).id == user["id"]
+
+        with self._socket_fault(fault, breaker) as failed:
+            with pytest.raises(ConnectionRefusedError):
+                await socket_manager._get_user_from_token(access)
+
+        assert failed, "the fault never reached Redis"
+
+    # --- Socket.IO periodic check: revalidate_auth ---------------------------------
+
+    @pytest.mark.parametrize("who", ["blacklisted", "normal"])
+    @pytest.mark.parametrize("fault", ["connection", "timeout", "breaker_open"])
+    async def test_socket_revalidate_unreadable_disconnects(
+        self, authed, test_redis_client, breaker, who, fault
+    ):
+        """No answer ⇒ ``valid`` False and the socket is disconnected, blacklisted or not.
+
+        Before, a connection/timeout error read as "not blacklisted" and the
+        socket stayed connected. For a normal user the frontend treats any
+        server disconnect as a logout (``frontend/src/lib/socket/client.ts``);
+        that is the price of not serving a socket nobody can vouch for.
+        """
+        user, jti = authed["user"], authed["r_jti"]
+        fake_sio = self._fake_sio(user["id"], jti)
+        if who == "blacklisted":
+            await self._blacklist(test_redis_client, user["id"])
+
+        with patch.object(socket_manager, "sio", fake_sio):
+            control = await socket_manager.revalidate_auth(self.SID)
+            assert control["valid"] is (who == "normal"), control
+            fake_sio.disconnect.reset_mock()
+
+            with self._socket_fault(fault, breaker) as failed:
+                verdict = await socket_manager.revalidate_auth(self.SID)
+
+        assert failed, "the fault never reached Redis"
+        assert verdict["valid"] is False, verdict
+        fake_sio.disconnect.assert_awaited_once_with(self.SID)
