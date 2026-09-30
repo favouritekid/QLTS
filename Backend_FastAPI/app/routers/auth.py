@@ -1412,8 +1412,17 @@ async def refresh_access_token(
                         user = await user_service.get_user_by_username(db, _refresh_username)
                         if user:
                             await user_service.invalidate_all_sessions(db, user)
+                            # The service only stages the revoked rows (flush).
+                            # Without this commit they rolled back when the
+                            # request's session closed, while the Redis side
+                            # (``user_blacklist``, ``session:*``) stayed written.
+                            # A failed commit lands in the arm below: logged,
+                            # rolled back, and still the counted 401 — never a
+                            # 500.
+                            await db.commit()
                     except Exception as revoke_err:
                         log.error("Failed to revoke sessions after refresh abuse", error=str(revoke_err))
+                        await db.rollback()
             except Exception as redis_err:
                 log.error("Failed to track refresh failure", error=str(redis_err))
 

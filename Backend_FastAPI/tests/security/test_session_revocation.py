@@ -1312,3 +1312,200 @@ async def test_counted_failures_still_revoke_all_sessions_at_threshold(
         assert live.status_code != 200 and _issued_token_cookies(live) == [], live.text
     finally:
         await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+# -----------------------------------------------------------------------------
+# NGƯỠNG LẠM DỤNG: `invalidate_all_sessions` chỉ flush — router phải COMMIT. Nhánh
+# ngưỡng từng không commit: hàng CSDL quay lui khi session của request đóng, còn
+# phía Redis (`user_blacklist`, `session:*`) đã ghi — trạng thái tách đôi. Mọi
+# phép đọc CSDL ở đây dùng session MỚI, không phải session của request.
+# -----------------------------------------------------------------------------
+
+
+async def _live_session_jtis(user_id: int) -> list:
+    """`refresh_jti` các hàng CHƯA thu hồi của người dùng (session CSDL mới)."""
+    async with AsyncSessionLocal() as s:
+        rows = await s.execute(
+            select(models.UserSession.refresh_jti).where(
+                models.UserSession.user_id == user_id,
+                models.UserSession.revoked_at.is_(None),
+            )
+        )
+        return sorted(rows.scalars().all())
+
+
+async def _two_live_sessions_one_blacklisted(client, test_redis_client, user: dict):
+    """Hai phiên sống (desktop + mobile); refresh token phiên desktop đã blacklist."""
+    _kiem_ua_phan_loai_dong()
+    _, refresh_bad, jti_bad = await _login_as(client, user, ua=UA_DESKTOP)
+    _, _, jti_live = await _login_as(client, user, ua=UA_MOBILE)
+    await test_redis_client.set(f"blacklist:{jti_bad}", "rotated", ex=300)
+    assert await _live_session_jtis(user["id"]) == sorted([jti_bad, jti_live]), (
+        "tiền đề: hai hàng phiên phải cùng sống trước khi chạm ngưỡng"
+    )
+    return refresh_bad, jti_bad, jti_live
+
+
+@pytest.mark.asyncio
+async def test_refresh_abuse_threshold_revocation_is_committed(
+    client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Chạm `REFRESH_MAX_FAILURES` ⇒ mọi hàng phiên của người dùng đã thu hồi VÀ
+    đã commit — đọc bằng session CSDL mới sau khi request kết thúc.
+
+    Tiền đề: phía Redis của `invalidate_all_sessions` đã chạy (`user_blacklist`);
+    thiếu nó thì "hàng còn sống" có thể chỉ vì nhánh ngưỡng không chạy.
+    """
+    user = regular_user_in_db
+    refresh_bad, _, _ = await _two_live_sessions_one_blacklisted(
+        client, test_redis_client, user
+    )
+    try:
+        for _ in range(settings.REFRESH_MAX_FAILURES):
+            await _post_with_cookies(client, REFRESH_URL, refresh_token=refresh_bad)
+
+        assert await test_redis_client.exists(f"user_blacklist:{user['id']}"), (
+            "tiền đề: nhánh ngưỡng phải chạy invalidate_all_sessions"
+        )
+        live = await _live_session_jtis(user["id"])
+        assert live == [], (
+            f"Redis đã thu hồi mà {len(live)} hàng phiên vẫn sống trong CSDL"
+        )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_refresh_abuse_threshold_commit_failure_is_still_401(
+    client, regular_user_in_db, test_redis_client, fresh_breaker, monkeypatch, caplog
+):
+    """COMMIT của nhánh ngưỡng hỏng ⇒ vẫn 401 `INVALID_TOKEN` như mọi lần đếm,
+    không 500, và lỗi được ghi log. Hàng phiên khi ấy còn sống: đó là trạng thái
+    tách đôi duy nhất còn lại, và nó hiện trong log thay vì im lặng."""
+    from app.services import user_service
+
+    user = regular_user_in_db
+    refresh_bad, _, _ = await _two_live_sessions_one_blacklisted(
+        client, test_redis_client, user
+    )
+    real_invalidate = user_service.invalidate_all_sessions
+    commits: list = []
+
+    async def _invalidate_then_break_commit(db, target, **kwargs):
+        await real_invalidate(db, target, **kwargs)
+
+        async def _commit():
+            commits.append("commit")
+            raise OperationalError("COMMIT", {}, Exception("tiêm lỗi: CSDL từ chối COMMIT"))
+
+        db.commit = _commit
+
+    try:
+        for _ in range(settings.REFRESH_MAX_FAILURES - 1):
+            await _post_with_cookies(client, REFRESH_URL, refresh_token=refresh_bad)
+        monkeypatch.setattr(
+            user_service, "invalidate_all_sessions", _invalidate_then_break_commit
+        )
+        caplog.clear()
+        with caplog.at_level(logging.ERROR, logger="app"):
+            res = await _post_with_cookies(client, REFRESH_URL, refresh_token=refresh_bad)
+
+        assert commits, "tiền đề: nhánh ngưỡng phải thử COMMIT"
+        assert (res.status_code, res.json().get("error_code")) == (401, "INVALID_TOKEN"), (
+            res.text
+        )
+        assert any(
+            "Failed to revoke sessions after refresh abuse" in r.getMessage()
+            for r in caplog.records
+            if r.name == "app.routers.auth"
+        ), "COMMIT hỏng mà không có dòng log nào"
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_threshold_crossings_commit_one_consistent_revocation(
+    client, regular_user_in_db, test_redis_client, fresh_breaker, monkeypatch, caplog
+):
+    """Hai refresh hỏng CÙNG vượt ngưỡng ⇒ hai `invalidate_all_sessions` + COMMIT
+    song song: cả hai 401 (không 500), không kẹt khoá, trạng thái cuối nhất quán
+    — mọi hàng đã thu hồi (session CSDL mới), có `user_blacklist`, hết `session:`.
+
+    Hai rào ép đúng kịch bản thay vì trông vào lập lịch: cả hai request đọc bộ
+    đếm ở cổng M4 TRƯỚC khi request nào ghi nó (nên cả hai qua cổng và cùng chạm
+    ngưỡng — đúng chỗ đếm GET→SET không nguyên tử), rồi cả hai vào
+    `invalidate_all_sessions` cùng lúc (nên hai `SELECT … FOR UPDATE` tranh nhau
+    thật). Rào hết giờ ⇒ đỏ ở tiền đề, không treo.
+    """
+    from app.routers import auth as auth_router
+    from app.services import user_service
+
+    user = regular_user_in_db
+    fail_key = _refresh_fail_key(user)
+    refresh_bad, jti_bad, jti_live = await _two_live_sessions_one_blacklisted(
+        client, test_redis_client, user
+    )
+    await test_redis_client.set(fail_key, str(settings.REFRESH_MAX_FAILURES - 1), ex=300)
+
+    gate = asyncio.Barrier(2)
+    revoke = asyncio.Barrier(2)
+    gate_reads: list = []
+    passed_gate: list = []
+    entered_revoke: list = []
+    real_get = auth_router.safe_redis_get
+    real_invalidate = user_service.invalidate_all_sessions
+
+    async def _get(key, *args, **kwargs):
+        value = await real_get(key, *args, **kwargs)
+        if key == fail_key and len(gate_reads) < 2:
+            gate_reads.append(value)
+            await asyncio.wait_for(gate.wait(), 10)
+            passed_gate.append(value)
+        return value
+
+    async def _invalidate(db, target, **kwargs):
+        await asyncio.wait_for(revoke.wait(), 10)
+        entered_revoke.append(target.id)
+        return await real_invalidate(db, target, **kwargs)
+
+    monkeypatch.setattr(auth_router, "safe_redis_get", _get)
+    monkeypatch.setattr(user_service, "invalidate_all_sessions", _invalidate)
+
+    async def _refresh():
+        return await client.post(
+            REFRESH_URL, headers={"Cookie": f"refresh_token={refresh_bad}"}
+        )
+
+    try:
+        client.cookies.clear()
+        caplog.clear()
+        with caplog.at_level(logging.ERROR, logger="app"):
+            results = await asyncio.wait_for(asyncio.gather(_refresh(), _refresh()), 60)
+        client.cookies.clear()
+
+        assert passed_gate == [str(settings.REFRESH_MAX_FAILURES - 1)] * 2, (
+            "tiền đề: cả hai phải đọc bộ đếm ở cổng trước khi nó bị ghi",
+            gate_reads,
+            passed_gate,
+        )
+        assert entered_revoke == [user["id"]] * 2, (
+            "tiền đề: cả hai phải cùng vào invalidate_all_sessions",
+            entered_revoke,
+        )
+        assert [r.status_code for r in results] == [401, 401], [r.text for r in results]
+        failures = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == "app.routers.auth"
+            and "Failed to revoke sessions after refresh abuse" in r.getMessage()
+        ]
+        assert failures == [], failures
+        assert await _live_session_jtis(user["id"]) == [], (
+            "hàng phiên vẫn sống trong CSDL sau hai lần thu hồi"
+        )
+        assert await test_redis_client.exists(f"user_blacklist:{user['id']}")
+        assert (
+            await test_redis_client.exists(f"session:{jti_bad}", f"session:{jti_live}") == 0
+        )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
