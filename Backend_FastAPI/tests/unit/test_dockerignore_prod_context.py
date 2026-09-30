@@ -62,6 +62,9 @@ _MAU_BAT_BUOC = (
     "**/smoke-*.png",
     "**/*.dump",
     "**/*.md",
+    # Không phải smoke nhưng cùng loại: công cụ ghi dữ liệu GIẢ vào CSDL mà
+    # `app.database` trỏ tới. Không đường runtime/migration nào gọi nó.
+    "scripts/faker_leads.py",
 )
 
 
@@ -191,9 +194,11 @@ def test_image_khong_chua_cong_cu_va_hien_vat_smoke(context_probe):
     ra = _trong_probe(nhan, r"""
         for p in /ctx/scripts/smoke* /ctx/scripts/seed_smoke_dev.py \
                  /ctx/.smoke /ctx/.smoke_* /ctx/smoke_ids.json /ctx/smoke_ids.json.tmp \
-                 /ctx/scripts/SMOKE_SEED_GUIDE.md; do
+                 /ctx/scripts/SMOKE_SEED_GUIDE.md /ctx/scripts/faker_leads.py; do
           # SMOKE_SEED_GUIDE.md là tệp THẬT trong repo, không phải sentinel do
           # test sinh: bằng chứng sống của bẫy "mẫu trần chỉ khớp gốc context".
+          # faker_leads.py cũng là tệp THẬT: ca tĩnh ở trên KHÔNG thấy một dòng
+          # `!scripts/faker_leads.py` đặt sau mẫu loại, chỉ probe này thấy.
           [ -e "$p" ] && echo "LOT:$p"
         done
         find /ctx \( -name '*.dump' -o -name 'smoke-*.png' -o -name '*.md' \) \
