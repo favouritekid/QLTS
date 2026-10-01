@@ -20,6 +20,7 @@ from .database import (
     RedisUnavailableError,
     redis_client,
     redis_exists_or_raise,
+    redis_get_or_raise,
     safe_redis_get,
 )
 from .utils.token_logging import token_fingerprint
@@ -210,7 +211,13 @@ async def _get_user_from_token(token: str) -> models.User:
         if not username or not refresh_jti:
             raise HTTPException(status_code=400, detail="Invalid token claims")
 
-        # Check session validity
+        # Check session validity. Lenient on purpose, unlike deps STEP 4 and
+        # ``revalidate_auth``: a read Redis did not answer refuses the
+        # connection here (None ⇒ 401 below; an OPEN breaker's error ⇒ the
+        # ``except`` at the end), which is fail-closed and costs no logout —
+        # the client retries a refused connect a few times, then stops quietly.
+        # Letting the DB decide would widen what connects: connect never reads
+        # ``blacklist:{access_jti}``.
         stored_user_id = await safe_redis_get(f"session:{refresh_jti}")
         if not stored_user_id:
             raise HTTPException(status_code=401, detail="Session revoked or expired")
@@ -516,10 +523,33 @@ async def revalidate_auth(sid):
                 await sio.disconnect(sid)
                 return {"valid": False, "reason": "Invalid session"}
 
-            # Check if this specific session is still valid in Redis
+            # Check if this specific session is still valid in Redis.
+            # Three answers, as in HTTP deps STEP 4: ``session:{jti}`` is a
+            # CACHE of the DB row checked below.
+            # - Redis ANSWERED "no such key" ⇒ revoked, disconnect (fast path).
+            # - Redis did not answer (ConnectionError/TimeoutError, OPEN
+            #   breaker) ⇒ NOT "revoked". The lenient read said "revoked" for
+            #   a connection/timeout error ("Validation error" for an OPEN
+            #   breaker), and the frontend logs the user out on any
+            #   ``valid: False`` (``frontend/src/lib/socket/client.ts``). Not a
+            #   pass either: the strict ``user_blacklist`` read and the
+            #   exact-jti DB check below still run, and only they reach
+            #   ``valid: True``.
             if refresh_jti:
-                session_valid = await safe_redis_get(f"session:{refresh_jti}")
-                if not session_valid:
+                try:
+                    cached = await redis_get_or_raise(
+                        f"session:{refresh_jti}", "auth.session"
+                    )
+                    session_valid = bool(cached)
+                except RedisUnavailableError:
+                    log.warning(
+                        "Revalidation: session cache unreadable; the DB row decides",
+                        sid=sid,
+                        user_id=user_id,
+                        action="socket.session_cache_unavailable",
+                    )
+                    session_valid = None
+                if session_valid is False:
                     log.warning(
                         "Revalidation failed: Session revoked",
                         sid=sid,

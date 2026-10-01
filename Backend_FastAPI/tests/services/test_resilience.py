@@ -231,49 +231,55 @@ async def test_resilience_redis_cache_fallback(
 
 
 @pytest.mark.asyncio
-@patch("app.core.deps.safe_redis_exists", new_callable=AsyncMock)
-async def test_resilience_redis_jti_blacklist_read_still_fail_open(
-    mock_safe_exists: AsyncMock,
+async def test_resilience_redis_jti_blacklist_unreadable_is_503(
     client: AsyncClient,
     regular_user_in_db: dict,
     test_redis_client,
+    redis_breaker_closed,
 ):
-    """Chỉ còn STEP 2 của `get_current_user` (`blacklist:{access_jti}`) đọc qua
-    `safe_redis_exists`: lỗi Redis ở đó vẫn bị nuốt và request đi tiếp.
+    """STEP 2 của `get_current_user` (`blacklist:{access_jti}`) nay đọc NGHIÊM
+    (`redis_exists_or_raise`): Redis không trả lời ở đó ⇒ 503
+    `AUTH_STATE_UNAVAILABLE`, không còn đi tiếp như "chưa bị blacklist".
 
-    Đây là NỢ ĐÃ BIẾT, không phải hợp đồng mong muốn — ca này ghi lại hiện
-    trạng để bản vá STEP 2 phải đổi nó có chủ ý. STEP 3 (`user_blacklist:{id}`)
-    nay đọc NGHIÊM (`redis_exists_or_raise`), không còn đi qua wrapper này:
-    Redis không trả lời ở đó ⇒ 503, xem `TestUserBlacklistUnreadable` trong
-    `test_auth_security_hardening.py`.
+    Ca này trước đây (`…_jti_blacklist_read_still_fail_open`) ghi lại NỢ ĐÃ
+    BIẾT: patch `deps.safe_redis_exists` ném ConnectionError và khẳng định 200.
+    Bản vá STEP 2 đổi nó có chủ ý; tên cũ không còn trong `deps`. Ca đầy đủ
+    (logout rồi, breaker OPEN, lỗi khác ⇒ 500, log) ở
+    `TestAccessJtiBlacklistUnreadable` trong `test_auth_security_hardening.py`.
+
+    Lỗi tiêm ở CLIENT bằng hàm `async def` thường, không Mock (xem ghi chú
+    breaker bên dưới), và CHỈ cho khoá `blacklist:` — STEP 3 và STEP 4 vẫn được
+    trả lời, nên 503 là của STEP 2.
     """
-    log.info("--- Running: test_resilience_redis_jti_blacklist_read_still_fail_open ---")
+    log.info("--- Running: test_resilience_redis_jti_blacklist_unreadable_is_503 ---")
     # Dung HELPER CHUNG thay vi tu doc `login_res.json()["access_token"]`:
     # 46cc9633 chuyen sang httpOnly cookie, login van tra 200 nhung KHONG con
     # dat access_token trong THAN phan hoi -> ban cu chet bang KeyError. Helper
     # `get_auth_headers` la duong ma moi fixture token khac dang di (doc tu
     # `res.cookies`), nen giu mot nguon chuan duy nhat cho viec lay token.
-    #
-    # Van dang nhap TRONG than test (khong dung fixture token) de lan login
-    # nam trong cua so `@patch` giong ban goc, gia nguyen phep dem
-    # `mock_safe_exists.await_count` o cuoi ca.
     active_headers = await get_auth_headers(
         client, regular_user_in_db, AuthURLs.LOGIN
     )
-    log.info("Logged in with new active token.")
-    mock_safe_exists.side_effect = ConnectionError(
-        "Simulated Redis Connection Error during blacklist check"
-    )
-    log.info("Calling /profile with ACTIVE token while Redis check is failing...")
-    response_fail_open = await client.get(ProfileURLs.PROFILE, headers=active_headers)
-    assert response_fail_open.status_code == 200
-    data = response_fail_open.json()
-    assert data["id"] == regular_user_in_db["id"]
-    # MỘT lượt, và đúng khoá của STEP 2. Trước bản vá STEP 3 là hai lượt:
-    # lượt thứ hai (`user_blacklist:`) rơi vào fallback CSDL "user còn phiên
-    # nào đó" và cũng cho qua.
-    assert mock_safe_exists.await_count == 1
-    assert mock_safe_exists.await_args.args[0].startswith("blacklist:")
+    control = await client.get(ProfileURLs.PROFILE, headers=active_headers)
+    assert control.status_code == 200, control.text
+
+    calls = []
+    original_exists = db_module.redis_client.exists
+
+    async def _exists(*args, **kwargs):
+        if args and isinstance(args[0], str) and args[0].startswith("blacklist:"):
+            calls.append(args[0])
+            raise ConnectionError("Simulated Redis Connection Error during blacklist check")
+        return await original_exists(*args, **kwargs)
+
+    log.info("Calling /profile with ACTIVE token while the STEP 2 read is failing...")
+    with patch.object(db_module.redis_client, "exists", _exists):
+        response = await client.get(ProfileURLs.PROFILE, headers=active_headers)
+    assert response.status_code == 503, response.text
+    assert response.json().get("error_code") == "AUTH_STATE_UNAVAILABLE", response.text
+    # MỘT lượt, và đúng khoá của STEP 2.
+    assert len(calls) == 1, calls
+    assert calls[0].startswith("blacklist:"), calls
 
 
 # ===========================================================================

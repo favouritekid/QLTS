@@ -17,9 +17,8 @@ from ..config import settings
 from ..database import (
     RedisUnavailableError,
     redis_exists_or_raise,
+    redis_get_or_raise,
     safe_redis_delete,
-    safe_redis_exists,
-    safe_redis_get,
 )
 from ..services import user_service
 from ..utils.exceptions import (
@@ -179,8 +178,9 @@ async def get_current_user(
     Checks: JWT validity, access-JTI blacklist, user existence, user global
     blacklist, and session validity (Redis `session:{r_jti}` corroborated by a
     non-revoked, non-expired DB session row — DB is the source of truth).
-    A user global blacklist Redis cannot answer is a 503
-    (`AccessStateUnavailable`), never a pass.
+    An access-JTI or user global blacklist Redis cannot answer is a 503
+    (`AccessStateUnavailable`), never a pass. A `session:{r_jti}` Redis cannot
+    answer is neither a miss nor a pass: the DB row decides (STEP 4b).
 
     Does NOT gate `User.status` — intentional. Recovery / self-service endpoints
     (change-password, secure-account, logout, sessions, trusted devices, MFA
@@ -237,21 +237,48 @@ async def get_current_user(
 
         # === STEP 2: CHECK ACCESS JTI BLACKLIST ===
         # (Kiểm tra xem chính Access Token này đã bị logout/xoay vòng chưa)
+        # Strict read, same contract as STEP 3 below. ``blacklist:{access_jti}``
+        # is what logout writes for the access token it authenticated
+        # (``session_service.revoke_sessions_on_logout``), BEFORE its COMMIT:
+        # when that COMMIT fails (the client got a 500) the DB row stays live
+        # and only Redis says this token was logged out.
+        #
+        # - Redis did not answer (ConnectionError/TimeoutError, OPEN breaker)
+        #   ⇒ ``AccessStateUnavailable`` (503). The lenient wrapper answered
+        #   "not blacklisted" while the breaker was CLOSED, and the ``except``
+        #   that followed swallowed the OPEN breaker's error: a logged-out
+        #   token got through either way.
+        # - Anything else (a Redis ``ResponseError``, a bug) ⇒ 500.
+        # - Redis ANSWERED "blacklisted" ⇒ 401. Outside the try on purpose.
+        #
+        # The error logs carry the event/action and the exception CLASS; never
+        # the JTI, the Redis key or the exception message (no user_id either:
+        # the user is only read at STEP 3).
         try:
-            is_jti_blacklisted = await safe_redis_exists(f"blacklist:{access_jti}")
-            if is_jti_blacklisted:
-                log.info(
-                    "Token validation failed: Access JTI found in blacklist",
-                    jti=access_jti,
-                )
-                raise credentials_exception
-        except InvalidToken:
-            raise
-        except Exception as e:
-            log.error(
-                "Redis Access JTI blacklist check failed", jti=access_jti, error=str(e)
+            is_jti_blacklisted = await redis_exists_or_raise(
+                f"blacklist:{access_jti}", "auth.access_jti_blacklist"
             )
-            # (Không cần fallback CSDL cho access JTI)
+        except RedisUnavailableError:
+            log.error(
+                "Access deferred: access token blacklist unreadable",
+                action="auth.access_state_unavailable",
+            )
+            raise AccessStateUnavailable() from None
+        except Exception as exc:
+            log.error(
+                "Access refused: access token blacklist check failed",
+                error_type=type(exc).__name__,
+                action="auth.access_jti_blacklist_error",
+            )
+            raise HTTPException(
+                status_code=500, detail="An unexpected error occurred"
+            ) from None
+        if is_jti_blacklisted:
+            log.info(
+                "Token validation failed: Access JTI found in blacklist",
+                jti=access_jti,
+            )
+            raise credentials_exception
 
         # === STEP 3: GET USER & CHECK USER BLACKLIST ===
         user = await user_service.get_user_by_username(db, username=username)
@@ -312,12 +339,32 @@ async def get_current_user(
         # cleared by a later login. So: fast-reject on a clear Redis miss, then
         # ALWAYS corroborate against a non-revoked, non-expired DB session row
         # (the source of truth for revocation).
+        #
+        # Three answers, not two: "Redis could not answer" is not a miss. The
+        # lenient read returned None for a connection/timeout error, i.e. a
+        # clear miss ⇒ a 401 on every Redis blip (the client refreshes, and
+        # logs the user out when that fails too), while an OPEN breaker's
+        # error fell through to the DB. Now both mean "unreadable" ⇒ STEP 4b
+        # decides. Not a pass either: STEP 4b runs on every path and admits
+        # only a live, unexpired DB row of THIS user for THIS jti (a DB error
+        # there is a 401), and the Redis-only records (``blacklist:{access_jti}``,
+        # ``user_blacklist:{id}``) were ANSWERED at STEP 2/3 or the request
+        # already stopped there (503/500).
         try:
-            stored_user_id = await safe_redis_get(f"session:{refresh_jti}")
-            # True = hit, False = clear miss, None = Redis unavailable (DB decides)
+            stored_user_id = await redis_get_or_raise(
+                f"session:{refresh_jti}", "auth.session"
+            )
+            # True = hit, False = ANSWERED miss/mismatch (fast reject below)
             redis_session_ok = (
                 bool(stored_user_id) and int(stored_user_id) == user.id
             )
+        except RedisUnavailableError:
+            log.warning(
+                "Session cache unreadable; the DB row decides",
+                user_id=user.id,
+                action="auth.session_cache_unavailable",
+            )
+            redis_session_ok = None
         except InvalidToken:
             raise
         except Exception as e:
@@ -396,7 +443,7 @@ async def get_current_user(
         # Đã log lỗi bên trong security.decode_token hoặc ở trên
         raise credentials_exception
     except (AccessStateUnavailable, HTTPException):
-        # STEP 3's 503/500, already logged: turning them into the 401 below
+        # STEP 2/3's 503/500, already logged: turning them into the 401 below
         # would tell the client its token is bad, which nothing established.
         raise
     except Exception as e:

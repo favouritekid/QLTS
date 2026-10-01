@@ -564,16 +564,24 @@ class RefreshStateUnavailable(AuthStateUnavailable):
 class AccessStateUnavailable(AuthStateUnavailable):
     """Whether this access token may still be used could not be verified (HTTP 503).
 
-    Raised by ``get_current_user`` (``app/core/deps.py``, STEP 3) when Redis did
-    not answer the ``user_blacklist:{user_id}`` EXISTS — a connection/timeout
-    error or an OPEN breaker. ``invalidate_all_sessions`` sets that key when it
-    ends every session of the user; the DB revoke that goes with it is only
-    staged in the caller's transaction, so when the caller rolls back or never
-    commits, the key is the only record of that decision.
+    Raised by ``get_current_user`` (``app/core/deps.py``) when Redis did not
+    answer one of its two blacklist EXISTS reads — a connection/timeout error or
+    an OPEN breaker:
 
-    NOT "not blacklisted": that let a revoked user through for the length of
-    every outage. NOT a 401: nothing says the token is bad. The request is
-    refused before the endpoint runs; nothing has been written.
+    - STEP 2, ``blacklist:{access_jti}``: logout writes it for the access token
+      it authenticated, before its COMMIT; when that COMMIT fails the DB row
+      stays live and only Redis records the logout.
+    - STEP 3, ``user_blacklist:{user_id}``: ``invalidate_all_sessions`` sets it
+      when it ends every session of the user; the DB revoke that goes with it
+      is only staged in the caller's transaction, so when the caller rolls back
+      or never commits, the key is the only record of that decision.
+
+    NOT "not blacklisted": that let a logged-out token or a revoked user through
+    for the length of every outage. NOT a 401: nothing says the token is bad.
+    The request is refused before the endpoint runs; nothing has been written.
+
+    STEP 4's ``session:{r_jti}`` is NOT one of these reads: it caches the DB
+    row STEP 4b always checks, so when Redis cannot answer it the DB decides.
 
     Declares nothing of its own: code, text and ``Retry-After`` come from
     ``AuthStateUnavailable``.
