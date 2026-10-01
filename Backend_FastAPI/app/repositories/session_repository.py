@@ -19,6 +19,24 @@ from app.models import UserSession
 from app.repositories.base import BaseRepository
 
 
+def _live_session_by_refresh_jti(jti: str, user_id: int):
+    """ONE definition of "this refresh JTI names a LIVE session of this user".
+
+    Live = the row carries ``jti``, belongs to ``user_id``, is not revoked and
+    is not expired. Shared by the read-only check (``get_by_refresh_jti_and_user``
+    — deps.py STEP 4b, socket auth, logout, MFA) and the /auth/refresh rotation
+    lock (``get_live_by_refresh_jti_for_update``) so the two can never disagree
+    about which rows are alive.
+    """
+    now = datetime.now(timezone.utc)
+    return and_(
+        UserSession.user_id == user_id,
+        UserSession.refresh_jti == jti,
+        UserSession.revoked_at.is_(None),
+        UserSession.expires_at > now,
+    )
+
+
 class SessionRepository(BaseRepository[UserSession]):
     """
     Repository for UserSession model.
@@ -181,16 +199,43 @@ class SessionRepository(BaseRepository[UserSession]):
         Returns:
             Active UserSession if found and valid, None otherwise
         """
-        now = datetime.now(timezone.utc)
         result = await self.db.execute(
-            select(UserSession).where(
-                and_(
-                    UserSession.user_id == user_id,
-                    UserSession.refresh_jti == jti,
-                    UserSession.revoked_at.is_(None),
-                    UserSession.expires_at > now,
-                )
-            )
+            select(UserSession).where(_live_session_by_refresh_jti(jti, user_id))
+        )
+        return result.scalar_one_or_none()
+
+    async def get_live_by_refresh_jti_for_update(
+        self,
+        jti: str,
+        user_id: int
+    ) -> Optional[UserSession]:
+        """
+        Lock and return the LIVE session a /auth/refresh may rotate.
+
+        Only for the rotation path. ``get_by_jti`` must NOT be used there: it
+        returns a row whatever its state, and Redis ``session:{jti}`` can
+        outlive the DB revoke (logout / session revoke swallow Redis write
+        errors), so a refresh that trusted Redis + ``get_by_jti`` rotated a
+        revoked or expired row back into circulation.
+
+        ``SELECT ... FOR UPDATE``: a revoke already in flight on this row
+        (logout, ``DELETE /sessions/{id}``, ``invalidate_all_sessions``) is
+        waited for, and PostgreSQL re-checks the predicate on the committed
+        row, so the rotation cannot overwrite a revoke that commits first.
+        Lock order is unchanged: the refresh already holds the user row
+        (``get_user_for_refresh``) and used to take this row lock at flush.
+
+        Args:
+            jti: Refresh token JTI presented by the client
+            user_id: User ID the token was issued to
+
+        Returns:
+            The locked live UserSession, or None if no live row matches
+        """
+        result = await self.db.execute(
+            select(UserSession)
+            .where(_live_session_by_refresh_jti(jti, user_id))
+            .with_for_update()
         )
         return result.scalar_one_or_none()
 

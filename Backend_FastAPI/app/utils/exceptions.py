@@ -387,6 +387,27 @@ class InvalidToken(AuthenticationError):
     error_code = "INVALID_TOKEN"
 
 
+class RefreshSessionNotLive(InvalidToken):
+    """The refresh token names a session row of THIS user that the DB has
+    already revoked, or whose ``expires_at`` has passed (HTTP 401
+    ``INVALID_TOKEN``).
+
+    Raised by ``session_service.update_session_activity`` after the Redis
+    ``session:{jti}`` check passed: the key outlived a revoke whose Redis write
+    was lost. The DB row is the source of truth, so the refresh is refused.
+
+    A class of its own so ``/auth/refresh`` can answer it BEFORE its generic
+    ``InvalidToken`` arms: the server itself ended this session, which is not
+    evidence of token abuse, so it must not feed ``refresh_fail:{username}``
+    nor trigger ``invalidate_all_sessions``. A subclass of ``InvalidToken`` so
+    that any caller unaware of it still refuses with the same 401
+    ``INVALID_TOKEN`` (for ``/auth/refresh`` that means falling back to being
+    counted, never to a 500).
+    """
+
+    detail = "Refresh session is revoked or expired."
+
+
 class SessionRevokedError(AuthenticationError):
     """User session has been revoked."""
 
@@ -456,6 +477,88 @@ class InitialLeadStatusNotConfigured(ServiceUnavailableError):
         "Liên hệ quản trị để seed lại bảng trạng thái tư vấn."
     )
     error_code = "INITIAL_LEAD_STATUS_NOT_CONFIGURED"
+
+
+class AuthStateUnavailable(ServiceUnavailableError):
+    """Auth state kept in Redis could not be verified, so the request is refused (HTTP 503).
+
+    This class is the ONE backend source of that refusal's response contract:
+
+    - ``error_code`` — what the client branches on. The frontend mirrors it in
+      ``frontend/src/lib/api/error-codes.ts``; it lets the client tell this 503
+      apart from a gateway 503 (nginx answers with an HTML body, no code)
+      without parsing ``detail``.
+    - ``detail`` — the user-facing text.
+    - ``retry_after_seconds`` — sent as ``Retry-After`` through ``headers``,
+      which ``base_app_exception_handler`` copies onto the response.
+
+    Raise a subclass and let the global handler build the response. A router
+    must not re-declare the code or the header value.
+
+    ``Retry-After`` is only a HINT of when trying again is reasonable, not a
+    promise that it will work: 60 s is ``redis_breaker``'s
+    ``timeout_duration``, the earliest an OPEN breaker lets a trial call
+    through. Nothing says Redis has recovered by then.
+
+    "Could not verify" is its own answer: neither the negative answer of the
+    check (it would blame the user for something nobody established) nor the
+    positive one (it would fail open for the length of every outage).
+    """
+
+    detail = "Hệ thống xác thực tạm thời không sẵn sàng. Vui lòng thử lại sau."
+    error_code = "AUTH_STATE_UNAVAILABLE"
+    retry_after_seconds: int = 60
+
+    @property
+    def headers(self) -> Dict[str, str]:
+        """``Retry-After`` derived from ``retry_after_seconds`` (never a second literal)."""
+        return {"Retry-After": str(self.retry_after_seconds)}
+
+
+class AccountLockoutStateUnavailable(AuthStateUnavailable):
+    """Whether the account is locked could not be verified (HTTP 503).
+
+    Raised by ``AccountLockoutService.check_lockout`` when:
+
+    - Redis did not answer the lockout EXISTS or TTL (connection/timeout
+      error, circuit breaker OPEN), or the check failed in an unexpected way;
+    - Redis answered that the lockout key exists with NO expiry (TTL -1): not
+      a lockout this service writes (it always sets one), so it is neither a
+      lockout with a known end nor "not locked".
+
+    NOT a 429: nothing says this user typed a wrong password too many times.
+    NOT "not locked": that hands brute force a free window. ``/login`` refuses
+    BEFORE any credential is checked, so nothing (token, cookie, session, MFA
+    token) is created and no failed attempt is counted.
+
+    Declares nothing of its own: code, text and ``Retry-After`` come from
+    ``AuthStateUnavailable``.
+    """
+
+
+class RefreshStateUnavailable(AuthStateUnavailable):
+    """Whether this refresh token may rotate could not be verified (HTTP 503).
+
+    Raised by ``POST /auth/refresh`` when Redis did not answer one of the three
+    reads that decide it — ``blacklist:{jti}`` (EXISTS), ``user_blacklist:{user_id}``
+    (EXISTS) and ``session:{jti}`` (GET) — whether a connection/timeout error or
+    an OPEN breaker. All three reads run BEFORE the rotation: no Redis write has
+    happened, no DB change survives (the first read runs before the DB is even
+    read, the other two inside a savepoint that rolls back) and no cookie is
+    set, so the refresh token the client holds is untouched and trying again
+    after ``Retry-After`` is safe.
+    The frontend retries exactly this (status, ``error_code``) pair for that
+    reason (``frontend/src/lib/api/refresh-coordination/safe-retry.ts``).
+
+    NOT a 401: nothing says the token is bad, and ``/refresh``'s 401 path
+    counts ``refresh_fail`` and, at the threshold, revokes every session.
+    ``refresh_access_token`` re-raises ``AuthStateUnavailable`` untouched so it
+    never reaches that path. A failure AFTER the rotation started proves
+    nothing of the sort and must never use this class.
+
+    Declares nothing of its own: code, text and ``Retry-After`` come from
+    ``AuthStateUnavailable``.
+    """
 
 
 # ============================================================================
@@ -631,4 +734,8 @@ EXCEPTION_HTTP_STATUS_MAP = {
     # 503 Service Unavailable (thiếu cấu hình/dữ liệu tham chiếu — fail-closed)
     ServiceUnavailableError: 503,
     InitialLeadStatusNotConfigured: 503,
+    # 503 Service Unavailable (auth state in Redis could not be verified — fail-closed)
+    AuthStateUnavailable: 503,
+    AccountLockoutStateUnavailable: 503,
+    RefreshStateUnavailable: 503,
 }

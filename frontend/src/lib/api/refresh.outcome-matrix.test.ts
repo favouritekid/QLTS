@@ -306,3 +306,125 @@ describe("dọn dẹp trên MỌI lối ra", () => {
     expect(locks.held()).toBe(0);
   });
 });
+
+
+/**
+ * `503 AUTH_STATE_UNAVAILABLE` — cặp THỨ HAI được thử lại, và CHỈ cặp đó.
+ *
+ * Backend ném mã này đúng tại ba phép đọc Redis quyết định (`blacklist:{jti}`,
+ * `user_blacklist`, `session`) khi Redis không trả lời, TRƯỚC mọi lần ghi —
+ * test backend `TestRefreshRedisStateUnavailable` khoá điều đó. Nhờ vậy
+ * refresh token còn nguyên và thử lại sau `Retry-After` không bị tính là reuse.
+ *
+ * Mọi 503 khác thì KHÔNG: nginx `limit_req` trả 503 không có `error_code`, và
+ * 503 sau khi rotation đã bắt đầu mang `HTTP_503` — cả hai có thể đã rotate.
+ *
+ * Giả lập riêng `Date` để so `retryAt` BẰNG, không chỉ "lớn hơn": một hồi quy
+ * bỏ qua `Retry-After` rồi dùng cooldown mặc định (60s) vẫn qua phép so lỏng
+ * nếu header là 30.
+ */
+describe("503 AUTH_STATE_UNAVAILABLE", () => {
+  const T0 = 1_800_000_000_000;
+  const STATE_UNAVAILABLE = { error_code: "AUTH_STATE_UNAVAILABLE" };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(T0);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("503 + mã ⇒ safe-retryable, retryAt ĐÚNG theo Retry-After, GIỮ cookie, nhật ký ghi đúng cặp", async () => {
+    post.mockRejectedValue(axiosError(503, STATE_UNAVAILABLE, { "retry-after": "30" }));
+    const { refreshAccessToken, shouldClearAuthCookies, isRefreshFailure } =
+      await loadFresh();
+
+    const error = await refreshAccessToken().catch((e) => e);
+
+    expect(isRefreshFailure(error)).toBe(true);
+    expect(error.outcome.kind).toBe("safe-retryable");
+    expect(error.outcome.retryAt).toBe(T0 + 30_000);
+    expect(shouldClearAuthCookies(error)).toBe(false);
+    // Không đụng cookie phiên: `csrf_token` vẫn là thế hệ cũ.
+    expect(document.cookie).toContain("csrf_token=gen-old");
+
+    const record = await readJournal();
+    expect(record?.resultKind).toBe("safe-retryable");
+    expect(record?.status).toBe(503);
+    expect(record?.errorCode).toBe("AUTH_STATE_UNAVAILABLE");
+    expect(record?.retryAt).toBe(T0 + 30_000);
+  });
+
+  it.each([
+    ["Retry-After quá trần ⇒ chặn ở 5 phút", { "retry-after": "3600" }, 5 * 60_000],
+    ["thiếu Retry-After ⇒ cooldown mặc định", {}, 60_000],
+    ["Retry-After không phải số ⇒ cooldown mặc định", { "retry-after": "sớm thôi" }, 60_000],
+    ["Retry-After = 0 ⇒ cooldown mặc định, không thử lại ngay", { "retry-after": "0" }, 60_000],
+  ])("%s", async (_label, headers, expectedCooldown) => {
+    post.mockRejectedValue(axiosError(503, STATE_UNAVAILABLE, headers));
+    const { refreshAccessToken } = await loadFresh();
+
+    const error = await refreshAccessToken().catch((e) => e);
+
+    expect(error.outcome.kind).toBe("safe-retryable");
+    expect(error.outcome.retryAt).toBe(T0 + expectedCooldown);
+  });
+
+  it.each([
+    ["503 KHÔNG mã (nginx limit_req, thân HTML)", 503, "<html>503</html>"],
+    ["503 KHÔNG mã (JSON rỗng)", 503, {}],
+    ["503 HTTP_503 (hỏng SAU khi rotation bắt đầu)", 503, { error_code: "HTTP_503" }],
+    ["503 mã của 429 tạm thời", 503, { error_code: "RATE_LIMITED" }],
+    ["503 mã viết thường", 503, { error_code: "auth_state_unavailable" }],
+    ["503 mã nằm lồng trong detail", 503, { detail: { error_code: "AUTH_STATE_UNAVAILABLE" } }],
+    ["500 kèm đúng mã", 500, STATE_UNAVAILABLE],
+    ["502 kèm đúng mã", 502, STATE_UNAVAILABLE],
+    ["504 kèm đúng mã", 504, STATE_UNAVAILABLE],
+    ["504 không mã", 504, {}],
+  ])("%s ⇒ VẪN ambiguous/server, không thử lại", async (_label, status, data) => {
+    post.mockRejectedValue(axiosError(status, data, { "retry-after": "30" }));
+    const { refreshAccessToken, shouldClearAuthCookies } = await loadFresh();
+
+    const error = await refreshAccessToken().catch((e) => e);
+
+    expect(error.outcome).toEqual({ kind: "ambiguous", reason: "server" });
+    expect(shouldClearAuthCookies(error)).toBe(false);
+    expect((await readJournal())?.resultKind).toBe("ambiguous");
+  });
+
+  it("429 kèm mã AUTH_STATE_UNAVAILABLE ⇒ nonterminal-stop (cặp phải khớp CẢ HAI vế)", async () => {
+    post.mockRejectedValue(axiosError(429, STATE_UNAVAILABLE, { "retry-after": "30" }));
+    const { refreshAccessToken } = await loadFresh();
+
+    const error = await refreshAccessToken().catch((e) => e);
+
+    expect(error.outcome.kind).toBe("nonterminal-stop");
+  });
+
+  it("401 kèm mã AUTH_STATE_UNAVAILABLE ⇒ VẪN terminal (401 luôn thắng)", async () => {
+    post.mockRejectedValue(axiosError(401, STATE_UNAVAILABLE));
+    const { refreshAccessToken, shouldClearAuthCookies } = await loadFresh();
+
+    const error = await refreshAccessToken().catch((e) => e);
+
+    expect(error.outcome.kind).toBe("terminal");
+    expect(shouldClearAuthCookies(error)).toBe(true);
+  });
+
+  it("lỗi mạng (không response) ⇒ VẪN ambiguous/network", async () => {
+    post.mockRejectedValue(networkError());
+    const { refreshAccessToken } = await loadFresh();
+
+    const error = await refreshAccessToken().catch((e) => e);
+
+    expect(error.outcome).toEqual({ kind: "ambiguous", reason: "network" });
+  });
+
+  it("AxiosError 503 + mã (thô, chưa qua refresh) ⇒ KHÔNG được xoá cookie", async () => {
+    const { shouldClearAuthCookies } = await loadFresh();
+
+    expect(shouldClearAuthCookies(axiosError(503, STATE_UNAVAILABLE))).toBe(false);
+  });
+});

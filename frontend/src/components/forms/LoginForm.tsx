@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
 import { useCountdown } from "@/hooks/useCountdown";
 import { clearClientAuthState } from "@/lib/auth/clear-client-auth-state";
+import { isAuthStateUnavailable } from "@/lib/api/error-codes";
 import { noteSessionTransition } from "@/lib/api/refresh";
 import type { ClearTrigger } from "@/lib/api/refresh-coordination/lifecycle";
 import { MfaVerifyForm } from "./MfaVerifyForm";
@@ -32,6 +33,10 @@ const loginSchema = z.object({
 });
 
 type LoginFormValues = z.infer<typeof loginSchema>;
+
+/** Fallback when the backend's AUTH_STATE_UNAVAILABLE 503 carries no `detail`. */
+const AUTH_STATE_UNAVAILABLE_MESSAGE =
+  "Hệ thống xác thực tạm thời không sẵn sàng. Vui lòng thử lại sau.";
 
 function getLoginErrorMessage(error: unknown): string | undefined {
   if (!error) return undefined;
@@ -49,6 +54,15 @@ function getLoginErrorMessage(error: unknown): string | undefined {
   }
   if (status === 401) {
     return "Tên đăng nhập hoặc mật khẩu không đúng.";
+  }
+  // The backend could not verify the account lockout state. Only ITS 503 with
+  // exactly this code: nginx's 503 (HTML body, no code) and a 503 with any
+  // other code keep the generic message below. Nothing is known about the
+  // account, so this is not the lockout message, and no countdown: the
+  // backend's Retry-After is only a hint.
+  if (isAuthStateUnavailable(axiosError.response)) {
+    if (typeof detail === "string" && detail.length > 0) return detail;
+    return AUTH_STATE_UNAVAILABLE_MESSAGE;
   }
 
   return "Đã xảy ra lỗi. Vui lòng thử lại.";
