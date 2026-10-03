@@ -1252,8 +1252,12 @@ PHAN_VUNG_CAN = {"a", "c"}
 #: `tests/unit/test_admission_idor_filters.py` — hai tệp trước nay ngoài mọi
 #: tier. Đây là THÊM selector nên digest phải đổi; giá trị cũ là
 #: `88b4096f125101ad34720356bf1eed6bec2012b016c378770a0672117629fb94`.
+#: Cập nhật 03-10-2026: Tier 2c nhận `tests/security/test_az_phan_quyen.py`
+#: (test âm tính phân quyền theo phạm vi — tệp mới). THÊM selector nên digest
+#: phải đổi (61 → 62 selector); giá trị cũ là
+#: `225f70b986cb46137c5a30606594384dd86a4aa2814e8de7d091902a28ae1e0b`.
 SHA_HOP_SELECTOR_TIER2 = (
-    "225f70b986cb46137c5a30606594384dd86a4aa2814e8de7d091902a28ae1e0b"
+    "f71ff45fb5e1fc9af90ab8c3d9925013afd1cfa3f38df0932f72cf53d6cac893"
 )
 
 # --- Phân hoạch Tier 4 (SPLIT 18-09-2026) -------------------------------------

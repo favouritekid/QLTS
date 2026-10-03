@@ -1067,6 +1067,7 @@ async def get_pipeline_board(
     db: AsyncSession,
     unit_id: Optional[int] = None,
     officer_id: Optional[int] = None,
+    unit_ids: Optional[List[int]] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     include_leads: bool = True,
@@ -1086,7 +1087,11 @@ async def get_pipeline_board(
     # 2. Query leads with filters (soft-delete uses deleted_at, not is_deleted)
     lead_query = select(models.Lead).where(models.Lead.deleted_at.is_(None))
 
-    if unit_id:
+    # unit_ids (cây đơn vị từ deps) ưu tiên như lead_repository.
+    # ``is not None``: danh sách rỗng = không đơn vị nào ⇒ không lead nào.
+    if unit_ids is not None:
+        lead_query = lead_query.where(models.Lead.unit_id.in_(list(unit_ids)))
+    elif unit_id:
         lead_query = lead_query.where(models.Lead.unit_id == unit_id)
     if officer_id:
         lead_query = lead_query.where(models.Lead.assigned_officer_id == officer_id)
