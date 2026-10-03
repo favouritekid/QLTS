@@ -1204,6 +1204,144 @@ async def test_stale_session_key_fails_socket_revalidation(
 
 
 # -----------------------------------------------------------------------------
+# LOGOUT: 204 CHỈ KHI HÀNG CSDL ĐÃ THU HỒI VÀ ĐÃ COMMIT. Hàng CSDL là thứ mọi
+# đường đọc phiên tin (deps STEP 4b, socket, `/refresh`); lệnh ghi Redis chỉ là
+# lối nhanh — Redis hỏng một mình thì hàng CSDL vẫn khước từ (nhóm ca "khoá cũ
+# còn mà không cấp quyền" ngay trên). Khi chính hàng CSDL không được commit, 204
+# là lời nói dối: client (`useAuth.ts`) đọc nó là "backend xác nhận phiên chết".
+# -----------------------------------------------------------------------------
+
+
+@contextmanager
+def _request_db_commit_fails():
+    """Session CSDL của request có `commit()` ném `OperationalError`; mọi thứ khác
+    thật. Trả danh sách lượt COMMIT đã thử — để ca kiểm chứng minh lỗi tiêm tới
+    được đúng chỗ, không xanh vì COMMIT chưa từng được gọi."""
+    from app.main import fastapi_app
+
+    attempts: list = []
+
+    async def _get_db_commit_fails():
+        async with AsyncSessionLocal() as s:
+            async def _commit():
+                attempts.append("commit")
+                raise OperationalError(
+                    "COMMIT", {}, Exception("tiêm lỗi: CSDL từ chối COMMIT")
+                )
+
+            s.commit = _commit
+            yield s
+
+    fastapi_app.dependency_overrides[db_module.get_db] = _get_db_commit_fails
+    try:
+        yield attempts
+    finally:
+        fastapi_app.dependency_overrides.pop(db_module.get_db, None)
+
+
+def _status_and_code(res) -> tuple:
+    """(status, error_code) — `error_code` là None khi thân rỗng (204)."""
+    return res.status_code, (res.json().get("error_code") if res.content else None)
+
+
+def _deleted_auth_cookies(res) -> set:
+    """(tên, path) các cookie token mà phản hồi XOÁ (`Max-Age=0`)."""
+    deleted = set()
+    for raw in res.headers.get_list("set-cookie"):
+        name, _, rest = raw.partition("=")
+        attrs = {}
+        for part in rest.split(";")[1:]:
+            key, _, value = part.strip().partition("=")
+            attrs[key.lower()] = value
+        if name.strip() in ("access_token", "refresh_token") and attrs.get("max-age") == "0":
+            deleted.add((name.strip(), attrs.get("path")))
+    return deleted
+
+
+@pytest.mark.asyncio
+async def test_logout_is_not_204_when_db_revoke_is_not_committed(
+    client, regular_user_in_db, test_redis_client
+):
+    """COMMIT hỏng, Redis lành ⇒ 500 `SESSION_REVOCATION_ERROR`, không phải 204.
+
+    Tiền đề đo ngay trong ca: lệnh ghi Redis đã chạy (khoá `session:` mất) mà
+    hàng CSDL — đọc bằng session MỚI — vẫn sống. Redis lành không cứu được: nguồn
+    chuẩn vẫn ghi phiên này là đang sống.
+    """
+    user = regular_user_in_db
+    access, refresh, jti = await _login_as(client, user)
+
+    with _request_db_commit_fails() as commits:
+        res = await _post_with_cookies(
+            client, LOGOUT_URL, access_token=access, refresh_token=refresh
+        )
+
+    assert commits, "tiền đề: logout phải thử COMMIT"
+    assert not await test_redis_client.exists(f"session:{jti}"), (
+        "tiền đề: lệnh ghi Redis của logout phải đã chạy"
+    )
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is None, (
+        "tiền đề: hàng CSDL phải còn sống sau COMMIT hỏng"
+    )
+    assert _status_and_code(res) == (500, "SESSION_REVOCATION_ERROR"), (
+        f"logout báo {res.status_code} trong khi hàng CSDL chưa thu hồi: {res.text!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_logout_is_not_204_when_neither_redis_nor_db_revoked_the_session(
+    client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Redis từ chối lệnh ghi VÀ COMMIT hỏng ⇒ không 204.
+
+    Không tầng nào thu hồi: Redis hồi lại thì access token cũ vẫn được nhận như
+    chưa hề logout. Tiền đề ấy đo TRƯỚC, để thấy một 204 ở đây nói ngược hẳn sự
+    thật.
+    """
+    user = regular_user_in_db
+    access, refresh, jti = await _login_as(client, user)
+
+    with _redis_writes_down(), _request_db_commit_fails() as commits:
+        res = await _post_with_cookies(
+            client, LOGOUT_URL, access_token=access, refresh_token=refresh
+        )
+    fresh_breaker()
+
+    assert commits, "tiền đề: logout phải thử COMMIT"
+    assert await test_redis_client.get(f"session:{jti}") == str(user["id"]), (
+        "tiền đề: lệnh ghi Redis phải hỏng thật — khoá session: còn nguyên"
+    )
+    assert (await _check_access(client, access)).status_code == 200, (
+        "tiền đề: phiên phải còn nguyên — access token cũ vẫn được nhận"
+    )
+    assert _status_and_code(res) == (500, "SESSION_REVOCATION_ERROR"), (
+        f"logout báo {res.status_code} trong khi phiên còn sống: {res.text!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_logout_failure_response_still_clears_auth_cookies(
+    client, regular_user_in_db
+):
+    """Logout thất bại vẫn XOÁ hai cookie token, đúng path như nhánh 204:
+    trình duyệt áp `Set-Cookie` ở mọi mã trạng thái, và client đằng nào cũng đã
+    dọn trạng thái cục bộ."""
+    access, refresh, _ = await _login_as(client, regular_user_in_db)
+
+    with _request_db_commit_fails() as commits:
+        res = await _post_with_cookies(
+            client, LOGOUT_URL, access_token=access, refresh_token=refresh
+        )
+
+    assert commits, "tiền đề: logout phải thử COMMIT"
+    assert _deleted_auth_cookies(res) == {("access_token", "/"), ("refresh_token", "/api")}, (
+        res.status_code,
+        res.headers.get_list("set-cookie"),
+    )
+
+
+# -----------------------------------------------------------------------------
 # ĐỐI CHỨNG: thứ KHÔNG phải hàng chết vẫn đếm như cũ. Nhánh không-đếm phải hẹp
 # đúng một lỗi miền; nới nó ra là mất bộ đếm chống lạm dụng của mọi ca khác.
 # -----------------------------------------------------------------------------
@@ -1312,3 +1450,455 @@ async def test_counted_failures_still_revoke_all_sessions_at_threshold(
         assert live.status_code != 200 and _issued_token_cookies(live) == [], live.text
     finally:
         await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+# -----------------------------------------------------------------------------
+# NGƯỠNG LẠM DỤNG: `invalidate_all_sessions` chỉ flush — router phải COMMIT. Nhánh
+# ngưỡng từng không commit: hàng CSDL quay lui khi session của request đóng, còn
+# phía Redis (`user_blacklist`, `session:*`) đã ghi — trạng thái tách đôi. Mọi
+# phép đọc CSDL ở đây dùng session MỚI, không phải session của request.
+# -----------------------------------------------------------------------------
+
+
+async def _live_session_jtis(user_id: int) -> list:
+    """`refresh_jti` các hàng CHƯA thu hồi của người dùng (session CSDL mới)."""
+    async with AsyncSessionLocal() as s:
+        rows = await s.execute(
+            select(models.UserSession.refresh_jti).where(
+                models.UserSession.user_id == user_id,
+                models.UserSession.revoked_at.is_(None),
+            )
+        )
+        return sorted(rows.scalars().all())
+
+
+async def _two_live_sessions_one_blacklisted(client, test_redis_client, user: dict):
+    """Hai phiên sống (desktop + mobile); refresh token phiên desktop đã blacklist."""
+    _kiem_ua_phan_loai_dong()
+    _, refresh_bad, jti_bad = await _login_as(client, user, ua=UA_DESKTOP)
+    _, _, jti_live = await _login_as(client, user, ua=UA_MOBILE)
+    await test_redis_client.set(f"blacklist:{jti_bad}", "rotated", ex=300)
+    assert await _live_session_jtis(user["id"]) == sorted([jti_bad, jti_live]), (
+        "tiền đề: hai hàng phiên phải cùng sống trước khi chạm ngưỡng"
+    )
+    return refresh_bad, jti_bad, jti_live
+
+
+@pytest.mark.asyncio
+async def test_refresh_abuse_threshold_revocation_is_committed(
+    client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Chạm `REFRESH_MAX_FAILURES` ⇒ mọi hàng phiên của người dùng đã thu hồi VÀ
+    đã commit — đọc bằng session CSDL mới sau khi request kết thúc.
+
+    Tiền đề: phía Redis của `invalidate_all_sessions` đã chạy (`user_blacklist`);
+    thiếu nó thì "hàng còn sống" có thể chỉ vì nhánh ngưỡng không chạy.
+    """
+    user = regular_user_in_db
+    refresh_bad, _, _ = await _two_live_sessions_one_blacklisted(
+        client, test_redis_client, user
+    )
+    try:
+        for _ in range(settings.REFRESH_MAX_FAILURES):
+            await _post_with_cookies(client, REFRESH_URL, refresh_token=refresh_bad)
+
+        assert await test_redis_client.exists(f"user_blacklist:{user['id']}"), (
+            "tiền đề: nhánh ngưỡng phải chạy invalidate_all_sessions"
+        )
+        live = await _live_session_jtis(user["id"])
+        assert live == [], (
+            f"Redis đã thu hồi mà {len(live)} hàng phiên vẫn sống trong CSDL"
+        )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_refresh_abuse_threshold_commit_failure_is_still_401(
+    client, regular_user_in_db, test_redis_client, fresh_breaker, monkeypatch, caplog
+):
+    """COMMIT của nhánh ngưỡng hỏng ⇒ vẫn 401 `INVALID_TOKEN` như mọi lần đếm,
+    không 500, và lỗi được ghi log. Hàng phiên khi ấy còn sống: đó là trạng thái
+    tách đôi duy nhất còn lại, và nó hiện trong log thay vì im lặng."""
+    from app.services import user_service
+
+    user = regular_user_in_db
+    refresh_bad, _, _ = await _two_live_sessions_one_blacklisted(
+        client, test_redis_client, user
+    )
+    real_invalidate = user_service.invalidate_all_sessions
+    commits: list = []
+
+    async def _invalidate_then_break_commit(db, target, **kwargs):
+        await real_invalidate(db, target, **kwargs)
+
+        async def _commit():
+            commits.append("commit")
+            raise OperationalError("COMMIT", {}, Exception("tiêm lỗi: CSDL từ chối COMMIT"))
+
+        db.commit = _commit
+
+    try:
+        for _ in range(settings.REFRESH_MAX_FAILURES - 1):
+            await _post_with_cookies(client, REFRESH_URL, refresh_token=refresh_bad)
+        monkeypatch.setattr(
+            user_service, "invalidate_all_sessions", _invalidate_then_break_commit
+        )
+        caplog.clear()
+        with caplog.at_level(logging.ERROR, logger="app"):
+            res = await _post_with_cookies(client, REFRESH_URL, refresh_token=refresh_bad)
+
+        assert commits, "tiền đề: nhánh ngưỡng phải thử COMMIT"
+        assert (res.status_code, res.json().get("error_code")) == (401, "INVALID_TOKEN"), (
+            res.text
+        )
+        assert any(
+            "Failed to revoke sessions after refresh abuse" in r.getMessage()
+            for r in caplog.records
+            if r.name == "app.routers.auth"
+        ), "COMMIT hỏng mà không có dòng log nào"
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_threshold_crossings_commit_one_consistent_revocation(
+    client, regular_user_in_db, test_redis_client, fresh_breaker, monkeypatch, caplog
+):
+    """Hai refresh hỏng CÙNG vượt ngưỡng ⇒ hai `invalidate_all_sessions` + COMMIT
+    song song: cả hai 401 (không 500), không kẹt khoá, trạng thái cuối nhất quán
+    — mọi hàng đã thu hồi (session CSDL mới), có `user_blacklist`, hết `session:`.
+
+    Hai rào ép đúng kịch bản thay vì trông vào lập lịch: cả hai request đọc bộ
+    đếm ở cổng M4 TRƯỚC khi request nào ghi nó (nên cả hai qua cổng và cùng chạm
+    ngưỡng — đúng chỗ đếm GET→SET không nguyên tử), rồi cả hai vào
+    `invalidate_all_sessions` cùng lúc (nên hai `SELECT … FOR UPDATE` tranh nhau
+    thật). Rào hết giờ ⇒ đỏ ở tiền đề, không treo.
+    """
+    from app.routers import auth as auth_router
+    from app.services import user_service
+
+    user = regular_user_in_db
+    fail_key = _refresh_fail_key(user)
+    refresh_bad, jti_bad, jti_live = await _two_live_sessions_one_blacklisted(
+        client, test_redis_client, user
+    )
+    await test_redis_client.set(fail_key, str(settings.REFRESH_MAX_FAILURES - 1), ex=300)
+
+    gate = asyncio.Barrier(2)
+    revoke = asyncio.Barrier(2)
+    gate_reads: list = []
+    passed_gate: list = []
+    entered_revoke: list = []
+    real_get = auth_router.safe_redis_get
+    real_invalidate = user_service.invalidate_all_sessions
+
+    async def _get(key, *args, **kwargs):
+        value = await real_get(key, *args, **kwargs)
+        if key == fail_key and len(gate_reads) < 2:
+            gate_reads.append(value)
+            await asyncio.wait_for(gate.wait(), 10)
+            passed_gate.append(value)
+        return value
+
+    async def _invalidate(db, target, **kwargs):
+        await asyncio.wait_for(revoke.wait(), 10)
+        entered_revoke.append(target.id)
+        return await real_invalidate(db, target, **kwargs)
+
+    monkeypatch.setattr(auth_router, "safe_redis_get", _get)
+    monkeypatch.setattr(user_service, "invalidate_all_sessions", _invalidate)
+
+    async def _refresh():
+        return await client.post(
+            REFRESH_URL, headers={"Cookie": f"refresh_token={refresh_bad}"}
+        )
+
+    try:
+        client.cookies.clear()
+        caplog.clear()
+        with caplog.at_level(logging.ERROR, logger="app"):
+            results = await asyncio.wait_for(asyncio.gather(_refresh(), _refresh()), 60)
+        client.cookies.clear()
+
+        assert passed_gate == [str(settings.REFRESH_MAX_FAILURES - 1)] * 2, (
+            "tiền đề: cả hai phải đọc bộ đếm ở cổng trước khi nó bị ghi",
+            gate_reads,
+            passed_gate,
+        )
+        assert entered_revoke == [user["id"]] * 2, (
+            "tiền đề: cả hai phải cùng vào invalidate_all_sessions",
+            entered_revoke,
+        )
+        assert [r.status_code for r in results] == [401, 401], [r.text for r in results]
+        failures = [
+            r.getMessage()
+            for r in caplog.records
+            if r.name == "app.routers.auth"
+            and "Failed to revoke sessions after refresh abuse" in r.getMessage()
+        ]
+        assert failures == [], failures
+        assert await _live_session_jtis(user["id"]) == [], (
+            "hàng phiên vẫn sống trong CSDL sau hai lần thu hồi"
+        )
+        assert await test_redis_client.exists(f"user_blacklist:{user['id']}")
+        assert (
+            await test_redis_client.exists(f"session:{jti_bad}", f"session:{jti_live}") == 0
+        )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+# -----------------------------------------------------------------------------
+# LOGOUT KHÔNG PHỤ THUỘC REDIS. `get_current_user` trả 503 khi Redis không trả
+# lời lượt đọc `user_blacklist` — đúng cho mọi endpoint CẤP quyền. `/logout` chỉ
+# HUỶ phiên, không cấp gì, nên đi đường riêng (`deps.get_logout_target`): chữ ký
+# của access token + hàng CSDL của CHÍNH user đó. Hàng CSDL quyết định kết quả;
+# lệnh ghi Redis chỉ là lối nhanh, và chỉ chạm jti đã được xác nhận là của user.
+# -----------------------------------------------------------------------------
+
+_REDIS_READ_COMMANDS = ("get", "exists", "ttl")
+
+
+@contextmanager
+def _redis_unreachable(fault: str):
+    """Redis không trả lời, hai trạng thái của một sự cố thật.
+
+    * ``connection``: mọi lệnh ĐỌC lẫn GHI của client dùng chung ném
+      ConnectionError, breaker còn CLOSED (sự cố vừa bắt đầu).
+    * ``breaker_open``: breaker OPEN (sự cố đã ổn định) — lệnh không tới Redis.
+
+    Cần fixture ``fresh_breaker`` (breaker riêng mỗi ca) và gọi nó sau khối này.
+    """
+    if fault == "breaker_open":
+        db_module.redis_breaker.open()
+        yield
+        return
+    assert fault == "connection", fault
+
+    async def _down(*args, **kwargs):
+        raise RedisConnectionError("tiêm lỗi: Redis không trả lời")
+
+    with ExitStack() as stack:
+        for name in _REDIS_READ_COMMANDS + _REDIS_WRITE_COMMANDS:
+            stack.enter_context(patch.object(db_module.redis_client, name, _down))
+        yield
+
+
+_AUTH_COOKIES_CLEARED = {("access_token", "/"), ("refresh_token", "/api")}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["connection", "breaker_open"])
+async def test_logout_revokes_the_db_session_while_redis_does_not_answer(
+    fault, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Redis không trả lời ⇒ logout vẫn thu hồi hàng CSDL, COMMIT, 204, xoá cookie.
+
+    Tiền đề đo SAU ca: lệnh ghi Redis đã hỏng thật (khoá `session:` còn nguyên).
+    204 phải là sự thật: Redis hồi, access token cũ bị khước từ ở deps STEP 4b
+    chỉ nhờ hàng CSDL đã thu hồi.
+    """
+    user = regular_user_in_db
+    access, refresh, jti = await _login_as(client, user)
+
+    with _redis_unreachable(fault):
+        res = await _post_with_cookies(
+            client, LOGOUT_URL, access_token=access, refresh_token=refresh
+        )
+    fresh_breaker()
+
+    assert res.status_code == 204, f"logout khi Redis không trả lời: {res.text!r}"
+    assert _deleted_auth_cookies(res) == _AUTH_COOKIES_CLEARED, res.headers.get_list(
+        "set-cookie"
+    )
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is not None, (
+        "hàng CSDL phải đã thu hồi VÀ commit (đọc bằng session mới)"
+    )
+    assert await test_redis_client.get(f"session:{jti}") == str(user["id"]), (
+        "tiền đề: lệnh ghi Redis phải hỏng thật — khoá session: còn nguyên"
+    )
+    assert (await _check_access(client, access)).status_code == 401, (
+        "Redis hồi mà access token cũ vẫn được nhận: 204 đã nói sai"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["connection", "breaker_open"])
+async def test_logout_commit_failure_while_redis_does_not_answer_is_not_204(
+    fault, client, regular_user_in_db, fresh_breaker
+):
+    """Redis không trả lời VÀ COMMIT hỏng ⇒ 500 `SESSION_REVOCATION_ERROR`, xoá cookie.
+
+    Không tầng nào xác nhận được việc thu hồi, nên không có 204; cookie vẫn xoá
+    như mọi phản hồi logout.
+    """
+    user = regular_user_in_db
+    access, refresh, jti = await _login_as(client, user)
+
+    with _redis_unreachable(fault), _request_db_commit_fails() as commits:
+        res = await _post_with_cookies(
+            client, LOGOUT_URL, access_token=access, refresh_token=refresh
+        )
+    fresh_breaker()
+
+    assert _status_and_code(res) == (500, "SESSION_REVOCATION_ERROR"), (
+        f"logout báo {res.status_code} trong khi không gì được thu hồi: {res.text!r}"
+    )
+    assert commits, "tiền đề: logout phải thử COMMIT"
+    assert _deleted_auth_cookies(res) == _AUTH_COOKIES_CLEARED, res.headers.get_list(
+        "set-cookie"
+    )
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is None, (
+        "tiền đề: hàng CSDL phải còn sống sau COMMIT hỏng"
+    )
+
+
+@pytest.mark.asyncio
+async def test_logout_with_another_users_refresh_cookie_leaves_that_session_alone(
+    client, regular_user_in_db, admin_user_in_db, test_redis_client, fresh_breaker
+):
+    """Access token của A + cookie refresh của B ⇒ phiên của B không bị đụng tới.
+
+    Không thu hồi hàng CSDL của B, không xoá `session:{jti_B}`, không ghi
+    `blacklist:{jti_B}`, và access token của B vẫn được nhận. Bản trước ghi Redis
+    cho jti của cookie refresh TRƯỚC khi kiểm hàng phiên thuộc ai.
+    """
+    victim = admin_user_in_db
+    victim_access, victim_refresh, victim_jti = await _login_as(client, victim)
+    access, _, _ = await _login_as(client, regular_user_in_db)
+
+    res = await _post_with_cookies(
+        client, LOGOUT_URL, access_token=access, refresh_token=victim_refresh
+    )
+
+    victim_row = await _row_by_jti(victim_jti)
+    assert victim_row is not None and victim_row.revoked_at is None, (
+        "logout của A đã thu hồi hàng phiên của B"
+    )
+    assert await test_redis_client.get(f"session:{victim_jti}") == str(victim["id"]), (
+        f"logout của A đã xoá khoá session: của B (status {res.status_code})"
+    )
+    assert not await test_redis_client.exists(f"blacklist:{victim_jti}"), (
+        "logout của A đã blacklist refresh jti của B"
+    )
+    assert (await _check_access(client, victim_access)).status_code == 200, (
+        "access token của B bị khước từ sau logout của A"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bearer_only_logout_revokes_the_session_of_the_access_token(
+    client, regular_user_in_db
+):
+    """Không có cookie refresh (client chỉ gửi Bearer) ⇒ vẫn thu hồi phiên mà
+    access token thuộc về (`r_jti`), rồi mới 204. Bản trước trả 204 mà không thu
+    hồi gì — nợ A2 ghi lại."""
+    access, _, jti = await _login_as(client, regular_user_in_db)
+
+    client.cookies.clear()
+    try:
+        res = await client.post(LOGOUT_URL, headers={"Authorization": f"Bearer {access}"})
+    finally:
+        client.cookies.clear()
+
+    assert res.status_code == 204, res.text
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is not None, (
+        "logout chỉ-Bearer trả 204 mà hàng phiên của access token vẫn sống"
+    )
+
+
+_LOGOUT_DB_READS = {
+    "user": "app.services.user_service.get_user_by_username",
+    "session_row": (
+        "app.repositories.session_repository.SessionRepository.get_by_refresh_jti_and_user"
+    ),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read", sorted(_LOGOUT_DB_READS))
+async def test_logout_db_read_failure_in_dependency_is_not_204_and_writes_nothing(
+    read, client, regular_user_in_db, test_redis_client
+):
+    """`get_logout_target` không đọc được CSDL (tra user, hoặc tra hàng phiên) ⇒
+    500 `SESSION_REVOCATION_ERROR`, xoá cả hai cookie, KHÔNG ghi Redis, hàng phiên
+    vẫn sống. Không biết hàng nào của ai thì không được thu hồi gì, không được
+    nói 204 (nhánh `sessions=None`).
+
+    Redis đo bằng khoá THẬT sau request: lệnh ghi của logout sẽ xoá
+    `session:{jti}` hoặc đặt `blacklist:{jti}` / `blacklist:{access_jti}`.
+    """
+    user = regular_user_in_db
+    access, refresh, jti = await _login_as(client, user)
+    access_jti = jwt.decode(
+        access, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+    )["jti"]
+    hits: list = []
+
+    async def _db_read_fails(*args, **kwargs):
+        hits.append(read)
+        raise OperationalError("SELECT", {}, Exception("tiêm lỗi: CSDL không đọc được"))
+
+    with patch(_LOGOUT_DB_READS[read], new=_db_read_fails):
+        res = await _post_with_cookies(
+            client, LOGOUT_URL, access_token=access, refresh_token=refresh
+        )
+
+    assert _status_and_code(res) == (500, "SESSION_REVOCATION_ERROR"), (
+        f"logout báo {res.status_code} khi chưa đọc được CSDL: {res.text!r}"
+    )
+    assert hits, "tiền đề: lỗi phải được tiêm tới đúng lượt đọc CSDL của dependency"
+    assert _deleted_auth_cookies(res) == _AUTH_COOKIES_CLEARED, res.headers.get_list(
+        "set-cookie"
+    )
+    assert not await test_redis_client.exists(f"blacklist:{access_jti}"), (
+        "logout đã blacklist access token khi chưa đọc được CSDL"
+    )
+    assert not await test_redis_client.exists(f"blacklist:{jti}"), (
+        "logout đã blacklist refresh jti khi chưa đọc được CSDL"
+    )
+    assert await test_redis_client.get(f"session:{jti}") == str(user["id"]), (
+        "logout đã xoá khoá session: khi chưa đọc được CSDL"
+    )
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is None, (
+        "hàng phiên bị thu hồi dù CSDL không đọc được"
+    )
+
+
+@pytest.mark.asyncio
+async def test_logout_ends_both_sessions_when_access_token_and_refresh_cookie_differ(
+    client, regular_user_in_db, test_redis_client
+):
+    """Access token của phiên 1 + cookie refresh của phiên 2, CÙNG user ⇒ 204 và
+    CẢ HAI phiên kết thúc: hai hàng CSDL thu hồi, hai khoá `session:` mất, hai
+    `blacklist:` được đặt. Lựa chọn thiết kế ghi ở docstring `get_logout_target`;
+    đổi thành "chỉ một phiên" thì phải sửa ca này."""
+    _kiem_ua_phan_loai_dong()
+    user = regular_user_in_db
+    access_1, _, jti_1 = await _login_as(client, user, ua=UA_DESKTOP)
+    _, refresh_2, jti_2 = await _login_as(client, user, ua=UA_MOBILE)
+    sessions = {"phiên của access token": jti_1, "phiên của cookie refresh": jti_2}
+    assert jti_1 != jti_2
+    for label, jti in sessions.items():
+        row = await _row_by_jti(jti)
+        assert row is not None and row.revoked_at is None, f"tiền đề: {label} phải sống"
+
+    res = await _post_with_cookies(
+        client, LOGOUT_URL, access_token=access_1, refresh_token=refresh_2
+    )
+
+    assert res.status_code == 204, res.text
+    for label, jti in sessions.items():
+        row = await _row_by_jti(jti)
+        assert row is not None and row.revoked_at is not None, f"{label} vẫn sống"
+        assert not await test_redis_client.exists(f"session:{jti}"), (
+            f"khoá session: của {label} còn"
+        )
+        assert await test_redis_client.get(f"blacklist:{jti}") == "revoked", (
+            f"thiếu blacklist cho {label}"
+        )

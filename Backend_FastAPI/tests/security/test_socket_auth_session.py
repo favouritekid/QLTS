@@ -60,17 +60,23 @@ async def test_revalidate_exact_jti_revoked_disconnects():
     repo.get_by_refresh_jti_and_user = AsyncMock(return_value=None)  # exact jti gone
 
     async def _redis_get(key):
-        # Redis session valid + user NOT blacklisted → reach the DB cross-check.
+        # Redis session valid → reach the blacklist read, then the DB cross-check.
         return "5" if key.startswith("session:") else None
+
+    # Redis ANSWERED "not blacklisted" (the strict read; the lenient GET no
+    # longer decides this).
+    blacklist_read = AsyncMock(return_value=False)
 
     with patch.object(sm, "sio", fake_sio), \
             patch.object(sm, "safe_redis_get", AsyncMock(side_effect=_redis_get)), \
+            patch.object(sm, "redis_exists_or_raise", blacklist_read), \
             patch.object(sm, "AsyncSessionLocal", _fake_session_local(MagicMock())), \
             patch("app.repositories.SessionRepository", MagicMock(return_value=repo)):
         out = await sm.revalidate_auth("sid1")
 
     assert out["valid"] is False
     fake_sio.disconnect.assert_awaited_once_with("sid1")
+    blacklist_read.assert_awaited_once_with("user_blacklist:5", "auth.user_blacklist")
     repo.get_by_refresh_jti_and_user.assert_awaited_once_with("old-jti", 5)
 
 
@@ -84,17 +90,22 @@ async def test_revalidate_exact_jti_valid_passes():
     repo.get_by_refresh_jti_and_user = AsyncMock(return_value=MagicMock())  # live row
 
     async def _redis_get(key):
-        # session valid, user not blacklisted
+        # session valid
         return "5" if key.startswith("session:") else None
+
+    # Redis ANSWERED "not blacklisted".
+    blacklist_read = AsyncMock(return_value=False)
 
     with patch.object(sm, "sio", fake_sio), \
             patch.object(sm, "safe_redis_get", AsyncMock(side_effect=_redis_get)), \
+            patch.object(sm, "redis_exists_or_raise", blacklist_read), \
             patch.object(sm, "AsyncSessionLocal", _fake_session_local(MagicMock())), \
             patch("app.repositories.SessionRepository", MagicMock(return_value=repo)):
         out = await sm.revalidate_auth("sid1")
 
     assert out["valid"] is True
     fake_sio.disconnect.assert_not_awaited()
+    blacklist_read.assert_awaited_once_with("user_blacklist:5", "auth.user_blacklist")
 
 
 @pytest.mark.asyncio
