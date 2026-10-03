@@ -131,6 +131,18 @@ def _sort_direction(column, order: str):
     return column.desc() if order == "desc" else column.asc()
 
 
+def _officer_scope_condition(column, ctx):
+    """Bộ lọc phạm vi officer cho MỌI truy vấn drill-down.
+
+    ``ctx.effective_officer_ids`` do deps.get_officer_dashboard_scope dựng sẵn.
+    Danh sách RỖNG nghĩa là "phạm vi này không có officer nào" ⇒ phải ra KHÔNG
+    hàng nào (``IN ()`` = false), đúng như officer_service trả số liệu rỗng cho
+    cùng phạm vi. Đừng bọc lời gọi trong ``if ctx.effective_officer_ids:`` —
+    danh sách rỗng bị hiểu thành "không lọc" là trả dữ liệu toàn tổ chức.
+    """
+    return column.in_(list(ctx.effective_officer_ids))
+
+
 def _consulted_leads_subquery(officer_ids: list[int]):
     return (
         select(models.Consultation.lead_id)
@@ -169,8 +181,7 @@ async def get_consultations_drilldown(
         models.Consultation.deleted_at.is_(None),
         models.Lead.deleted_at.is_(None),
     ]
-    if ctx.effective_officer_ids:
-        conditions.append(models.Consultation.officer_id.in_(ctx.effective_officer_ids))
+    conditions.append(_officer_scope_condition(models.Consultation.officer_id, ctx))
 
     _apply_datetime_bounds(conditions, models.Consultation.consultation_date, start_dt, end_exclusive)
 
@@ -303,8 +314,7 @@ async def get_transitions_drilldown(
     )
 
     common_conditions = [models.Lead.deleted_at.is_(None)]
-    if ctx.effective_officer_ids:
-        common_conditions.append(models.Lead.assigned_officer_id.in_(ctx.effective_officer_ids))
+    common_conditions.append(_officer_scope_condition(models.Lead.assigned_officer_id, ctx))
     if stage_id:
         common_conditions.append(
             or_(
@@ -353,9 +363,10 @@ async def get_transitions_drilldown(
         current_stage_alias = aliased(models.PipelineStage)
         current_status_alias = aliased(models.ConsultationStatus)
 
+        # Phạm vi officer KHÔNG thêm ở đây: history_conditions chép từ
+        # common_conditions — chủ sở hữu DUY NHẤT của bộ lọc phạm vi cho mọi
+        # nhánh transitions — và cả hai cùng vào một .where() trên cùng hàng Lead.
         enrollment_conditions = [models.Lead.deleted_at.is_(None)]
-        if ctx.effective_officer_ids:
-            enrollment_conditions.append(models.Lead.assigned_officer_id.in_(ctx.effective_officer_ids))
         _apply_datetime_bounds(enrollment_conditions, models.Lead.updated_at, start_dt, end_exclusive)
         enrollment_conditions.extend([
             current_stage_alias.is_final_stage.is_(True),
@@ -468,8 +479,7 @@ async def get_cohorts_drilldown(
     current_status_alias = aliased(models.ConsultationStatus)
 
     conditions = [models.Lead.deleted_at.is_(None)]
-    if ctx.effective_officer_ids:
-        conditions.append(models.Lead.assigned_officer_id.in_(ctx.effective_officer_ids))
+    conditions.append(_officer_scope_condition(models.Lead.assigned_officer_id, ctx))
     _apply_datetime_bounds(conditions, models.Lead.created_at, start_dt, end_exclusive)
 
     if cohort_result == "converted":
