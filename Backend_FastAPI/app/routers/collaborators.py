@@ -18,6 +18,8 @@ from app.core.deps import (
     get_collaborator_for_user,
     get_lead_claim_for_review,
     get_own_collaborator,
+    get_validated_collaborator_create,
+    manager_unit_scope_or_deny,
     require_admin_or_manager,
 )
 from app.repositories.collaborator_repository import CollaboratorRepository
@@ -72,9 +74,9 @@ async def list_collaborators(
     """List collaborators with filters."""
     repo = CollaboratorRepository(db)
 
-    # Manager: force own unit filter
+    # Manager: force own unit filter (chưa gán đơn vị ⇒ 403, không rơi về None = mọi đơn vị)
     if current_user.role == UserRole.MANAGER:
-        unit_id = current_user.unit_id
+        unit_id = manager_unit_scope_or_deny(current_user)
 
     # Officer: force own managed CTV only, hard-block inactive
     if current_user.role == UserRole.OFFICER:
@@ -104,7 +106,7 @@ async def list_collaborators(
 
 @admin_router.post("", response_model=CollaboratorResponse, status_code=201)
 async def create_collaborator(
-    data: CollaboratorCreate,
+    data: CollaboratorCreate = Depends(get_validated_collaborator_create),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(check_permission),  # Casbin enforced
 ):
@@ -154,10 +156,10 @@ async def list_claims(
 
     repo = LeadClaimRepository(db)
 
-    # Manager: filter by own unit
+    # Manager: filter by own unit (chưa gán đơn vị ⇒ 403)
     unit_id = None
     if current_user.role == UserRole.MANAGER:
-        unit_id = current_user.unit_id
+        unit_id = manager_unit_scope_or_deny(current_user)
 
     total, claims = await repo.get_filtered(
         skip=skip,

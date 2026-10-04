@@ -71,15 +71,20 @@ async def get_pipeline_board(
 
     **RBAC:** Officers see only their leads, Managers see their unit only.
     """
-    # Apply role-enforced scope (same pattern as leads list endpoint)
+    # Apply role-enforced scope (same pattern as leads list endpoint).
+    # Phạm vi đơn vị CHỈ lấy từ lead_filter (deps đã áp vai trò: admin giữ
+    # unit_id client gửi, manager bị ép đơn vị của mình, có scope thì dùng
+    # unit_ids của cây đơn vị). KHÔNG fallback về ``unit_id`` thô của client:
+    # deps để lead_filter.unit_id = None khi đã có unit_ids, nên fallback ấy
+    # cho manager có scope chọn đơn vị bất kỳ.
     effective_officer_id = None
     if lead_filter.assigned_officer_id:
         effective_officer_id = int(lead_filter.assigned_officer_id.split(",")[0])
-    effective_unit_id = lead_filter.unit_id
 
     return await pipeline_service.get_pipeline_board(
         db,
-        unit_id=effective_unit_id or unit_id,
+        unit_id=lead_filter.unit_id,
+        unit_ids=lead_filter.unit_ids,
         officer_id=effective_officer_id or officer_id,
         date_from=date_from,
         date_to=date_to,

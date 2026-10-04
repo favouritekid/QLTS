@@ -33,6 +33,7 @@ from ..utils.exceptions import (
 )
 # ✅ IMPORT REPOSITORY FOR DEPENDENCY
 from ..repositories.admission_config_repository import AdmissionConfigRepository
+from ..schemas.collaborator import CollaboratorCreate
 
 
 log = structlog.get_logger(__name__)
@@ -785,6 +786,23 @@ def finance_scope_unit_id(current_user: models.User) -> Optional[int]:
     return current_user.unit_id
 
 
+def manager_unit_scope_or_deny(current_user: models.User) -> int:
+    """Đơn vị mà một MANAGER được phép thấy — fail-closed khi chưa gán đơn vị.
+
+    TẦNG CHỦ SỞ HỮU của bất biến "manager chỉ thấy đơn vị của mình" cho danh
+    sách lead, pipeline board, danh sách CTV và claim. Các repository coi
+    ``unit_id=None`` là "không lọc / mọi đơn vị", nên một manager chưa gán đơn
+    vị mà rơi thẳng xuống repository là lộ toàn bộ dữ liệu. Cùng mẫu với
+    ``finance_scope_unit_id`` ở trên.
+    """
+    if current_user.unit_id is None:
+        raise PermissionDeniedError(
+            detail="Tài khoản quản lý chưa được gán đơn vị; không xác định được "
+            "phạm vi dữ liệu."
+        )
+    return current_user.unit_id
+
+
 async def require_any_staff(
     current_user: models.User = Depends(get_current_active_user),
 ) -> models.User:
@@ -819,6 +837,11 @@ class DashboardScopeContext:
     from this object instead of resolving scope/descendants themselves.
 
     Replaces the old OfficerDashboardScope (V12 plan).
+
+    Hợp đồng: ``effective_officer_ids`` RỖNG = phạm vi KHÔNG có
+    officer nào ⇒ mọi consumer phải trả KẾT QUẢ RỖNG, không được hiểu là
+    "không lọc" (xem drilldown_service._officer_scope_condition,
+    officer_service._empty_aggregated_stats).
     """
     __slots__ = (
         "scope_kind",
@@ -2459,6 +2482,10 @@ async def get_lead_list_filter(
         LeadListFilter with validated/sanitized parameters
     """
     user_role = current_user.role
+    if user_role == UserRole.MANAGER:
+        # Manager chưa gán đơn vị KHÔNG được rơi xuống nhánh dưới với
+        # effective_unit_id = None (repository hiểu None là mọi đơn vị).
+        manager_unit_scope_or_deny(current_user)
     normalized_scope = "unit" if scope == "team" else scope
     dashboard_ctx = None
     effective_scope = None
@@ -3296,6 +3323,54 @@ async def get_collaborator_for_user(
         if collab.managed_by_officer_id == current_user.id:
             return collab
     raise ResourceNotFoundError("Collaborator not found")
+
+
+# Vai trò được phép GẮN vào một hồ sơ CTV qua ``user_id``. create_collaborator
+# ĐỔI User.role của người đó thành 'collaborator', mà Casbin lấy subject =
+# role:{User.role} ⇒ gắn một tài khoản nhân sự là tước quyền của họ.
+COLLABORATOR_LINKABLE_ROLES = frozenset({UserRole.USER, UserRole.COLLABORATOR})
+
+
+async def validate_collaborator_create(
+    data,
+    db: AsyncSession,
+    current_user: models.User,
+) -> None:
+    """Cổng phân quyền cho POST /api/collaborators — TẦNG CHỦ SỞ HỮU.
+
+    Hai bất biến, mỗi cái một nhánh (để mỗi nhánh có test và đột biến riêng):
+      (a) ``user_id`` chỉ trỏ tới tài khoản KHÔNG phải nhân sự
+          (COLLABORATOR_LINKABLE_ROLES) — áp cho MỌI vai, kể cả admin;
+      (b) người không phải admin chỉ thao tác TRONG đơn vị của mình: đơn vị của
+          CTV mới và đơn vị của user được gắn đều phải là đơn vị người gọi.
+    Officer vẫn bị service ép unit_id/managed_by về chính mình (không đổi).
+    404 thay 403 cho user không hợp lệ: không lộ sự tồn tại.
+    """
+    caller_unit = None
+    if current_user.role != UserRole.ADMIN:
+        caller_unit = current_user.unit_id
+        if caller_unit is None:
+            raise PermissionDeniedError(
+                detail="Tài khoản chưa được gán đơn vị; không thể tạo cộng tác viên."
+            )
+        if current_user.role == UserRole.MANAGER and data.unit_id not in (None, caller_unit):
+            raise ResourceNotFoundError("Organization unit not found")
+    if data.user_id is not None:
+        target = await db.get(models.User, data.user_id)
+        if target is None or target.role not in COLLABORATOR_LINKABLE_ROLES:
+            raise ResourceNotFoundError(f"User {data.user_id} not found")
+        if caller_unit is not None and target.unit_id != caller_unit:
+            raise ResourceNotFoundError(f"User {data.user_id} not found")
+
+
+async def get_validated_collaborator_create(
+    data: CollaboratorCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(check_permission),
+) -> CollaboratorCreate:
+    """Dependency bọc ``validate_collaborator_create`` cho router (body parse một lần)."""
+    await validate_collaborator_create(data, db, current_user)
+    return data
 
 
 async def get_lead_claim_for_review(
