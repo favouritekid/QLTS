@@ -551,6 +551,17 @@ jobs:
           # ~1 phút vẫn dưới đường tới hạn Tier 1 (38m57) và xa trần 75 phút.
           # Đây là THÊM selector ⇒ `SHA_HOP_SELECTOR_TIER2` đổi (giá trị cũ ghi ở
           # chú thích của chính hằng số trong test_ci_test_visibility.py).
+          #
+          # 03-10-2026 — 2c nhận `tests/security/test_az_phan_quyen.py`: test ÂM
+          # TÍNH cho phân quyền theo phạm vi — gắn `user_id` khi tạo CTV không
+          # được đổi role của nhân sự; drill-down với phạm vi 0 officer phải ra 0
+          # hàng; pipeline board / danh sách lead / CTV / claim không lộ đơn vị
+          # khác khi manager gửi tham số scope hoặc chưa gán đơn vị. CẦN Postgres
+          # (fixture `client`). Vào 2c cạnh `test_authorization_deps.py` +
+          # `test_idor_protection.py` — cùng họ A01. Tệp mới: ngoài mọi tier thì
+          # không leg PR nào chạy mà required check vẫn xanh. Đo local: 20 ca
+          # ~148s ⇒ 2c (~29m33 ở run 36083658692) vẫn dưới Tier 1 (38m57).
+          # THÊM selector ⇒ `SHA_HOP_SELECTOR_TIER2` đổi lần nữa.
           - tier: Tier 2a — Ma trận quyền + phiên + MFA guard
             partition_contract: tier2-rbac-security-v1
             partition_part: a
@@ -621,6 +632,7 @@ jobs:
               tests/security/test_socket_force_disconnect.py
               tests/security/test_socket_offboarding.py
               tests/unit/test_admission_idor_filters.py
+              tests/security/test_az_phan_quyen.py
 
           # ---------------------------------------------------------------
           # Tier 2b: Luồng XUẤT tệp (danh sách khoản phí + báo cáo công nợ)
