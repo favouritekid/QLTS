@@ -15,7 +15,13 @@ from fastapi import HTTPException
 from . import models, security
 from .core.constants import UserRole
 from .config import settings
-from .database import AsyncSessionLocal, redis_client, safe_redis_get
+from .database import (
+    AsyncSessionLocal,
+    RedisUnavailableError,
+    redis_client,
+    redis_exists_or_raise,
+    safe_redis_get,
+)
 from .utils.token_logging import token_fingerprint
 # NOTE: user_service import moved inside function to avoid circular import
 from .socket_metrics import track_event_latency  # ✅ Thêm latency tracker
@@ -240,50 +246,41 @@ async def _get_user_from_token(token: str) -> models.User:
                 )
 
             # ✅ FIX-3: Check user blacklist (CRITICAL SECURITY FIX)
+            # Strict read, same contract as HTTP deps STEP 3: a read Redis did
+            # not answer refuses the connection. The lenient GET read "no
+            # answer" as "not blacklisted", and the DB fallback that ran once
+            # the breaker was OPEN ("the user has SOME active session") was
+            # already true after the exact-jti check above, so a revoked user
+            # connected either way. Logs carry user_id and the exception
+            # CLASS; never the Redis key or the exception message.
             try:
-                is_user_blacklisted = await safe_redis_get(f"user_blacklist:{user.id}")
-                if is_user_blacklisted:
-                    log.warning(
-                        "Socket auth rejected: User in global blacklist (password changed?)",
-                        user_id=user.id
-                    )
-                    raise HTTPException(
-                        status_code=401,
-                        detail="User session invalidated"
-                    )
-            except HTTPException:
-                raise
-            except Exception as e:
+                is_user_blacklisted = await redis_exists_or_raise(
+                    f"user_blacklist:{user.id}", "auth.user_blacklist"
+                )
+            except RedisUnavailableError:
                 log.error(
-                    "Redis user blacklist check failed for WebSocket auth",
+                    "Socket auth deferred: user blacklist unreadable",
                     user_id=user.id,
-                    error=str(e)
+                    action="socket.auth_state_unavailable",
                 )
-                # Fallback to DB check (same logic as HTTP auth in deps.py)
-                from datetime import datetime, timezone
-                from sqlalchemy import and_, select
-
-                result = await db.execute(
-                    select(models.UserSession)
-                    .where(
-                        and_(
-                            models.UserSession.user_id == user.id,
-                            models.UserSession.revoked_at.is_(None),
-                            models.UserSession.expires_at > datetime.now(timezone.utc),
-                        )
-                    )
-                    .limit(1)
+                raise ConnectionRefusedError("Auth state unavailable") from None
+            except Exception as exc:
+                log.error(
+                    "Socket auth refused: user blacklist check failed",
+                    user_id=user.id,
+                    error_type=type(exc).__name__,
+                    action="socket.user_blacklist_error",
                 )
-                active_session = result.scalar_one_or_none()
-                if active_session is None:
-                    log.warning(
-                        "DB fallback: No active sessions found for user",
-                        user_id=user.id
-                    )
-                    raise HTTPException(
-                        status_code=401,
-                        detail="No active sessions"
-                    )
+                raise ConnectionRefusedError("Auth failed") from None
+            if is_user_blacklisted:
+                log.warning(
+                    "Socket auth rejected: User in global blacklist (password changed?)",
+                    user_id=user.id
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail="User session invalidated"
+                )
 
             return user
 
@@ -533,7 +530,33 @@ async def revalidate_auth(sid):
                     return {"valid": False, "reason": "Session revoked"}
 
             # Check user blacklist (Password changed or admin ban)
-            is_blacklisted = await safe_redis_get(f"user_blacklist:{user_id}")
+            # Strict read, same contract as connect: a read Redis did not
+            # answer disconnects. The lenient GET read "no answer" as "not
+            # blacklisted" and kept the socket serving events. Logs carry
+            # user_id and the exception CLASS; never the key or the message.
+            try:
+                is_blacklisted = await redis_exists_or_raise(
+                    f"user_blacklist:{user_id}", "auth.user_blacklist"
+                )
+            except RedisUnavailableError:
+                log.error(
+                    "Revalidation deferred: user blacklist unreadable",
+                    sid=sid,
+                    user_id=user_id,
+                    action="socket.auth_state_unavailable",
+                )
+                await sio.disconnect(sid)
+                return {"valid": False, "reason": "Auth state unavailable"}
+            except Exception as exc:
+                log.error(
+                    "Revalidation refused: user blacklist check failed",
+                    sid=sid,
+                    user_id=user_id,
+                    error_type=type(exc).__name__,
+                    action="socket.user_blacklist_error",
+                )
+                await sio.disconnect(sid)
+                return {"valid": False, "reason": "Validation error"}
             if is_blacklisted:
                 log.warning(
                     "Revalidation failed: User blacklisted",

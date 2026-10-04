@@ -29,6 +29,7 @@ from ..utils.exceptions import (  # ✅ PHASE 1: Import custom exceptions
     CacheServiceError,
     InvalidCredentials,
     RefreshStateUnavailable,
+    SessionRevocationError,
     UserServiceError,
 )
 from ..middleware.csrf import set_csrf_cookie  # ✅ CSRF Protection
@@ -608,95 +609,9 @@ async def login_for_access_token(
     return await _complete_login_flow(user, request, db)
 
 
-@router.post("/logout")
-@limiter.limit(RateLimits.DATA_WRITE)  # ✅ RATE LIMIT: 200/hour - Normal write operation
-async def logout(
-    request: Request,
-    response: Response,
-    refresh_token: str = Cookie(None, alias="refresh_token"),
-    db: AsyncSession = Depends(database.get_db),
-    authorization: Annotated[str | None, Header()] = None,
-    current_user: models.User = Depends(deps.get_current_user),
-):
-    # (Giữ nguyên logic)
-    access_token = None
-    if authorization and authorization.lower().startswith("bearer "):
-        access_token = authorization.split(" ")[1]
-
-    if access_token:
-        access_jti, access_ttl = security.decode_token_for_invalidation(access_token)
-        if access_jti and access_ttl is not None and access_ttl > 0:
-            try:
-                await safe_redis_set(
-                    f"blacklist:{access_jti}", "revoked", ex=access_ttl
-                )
-                log.info(
-                    "Access token blacklisted on logout",
-                    jti=access_jti,
-                    user_id=current_user.id,
-                )
-            except Exception as e:
-                log.error(
-                    "Failed to blacklist access token on logout",
-                    jti=access_jti,
-                    error=str(e),
-                )
-
-    refresh_jti = None
-    try:
-        refresh_jti, refresh_ttl = security.decode_token_for_invalidation(refresh_token)
-        if refresh_jti:
-            await safe_redis_delete(f"session:{refresh_jti}")
-            if refresh_ttl and refresh_ttl > 0:
-                await safe_redis_set(
-                    f"blacklist:{refresh_jti}", "revoked", ex=refresh_ttl
-                )
-            else:
-                refresh_token_ttl = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
-                await safe_redis_set(
-                    f"blacklist:{refresh_jti}", "revoked", ex=int(refresh_token_ttl)
-                )
-            log.info(
-                "Refresh token blacklisted on logout",
-                jti=refresh_jti,
-                user_id=current_user.id,
-            )
-    except Exception as e:
-        log.error(
-            "Failed to blacklist refresh token on logout",
-            user_id=current_user.id,
-            error=str(e),
-        )
-
-    if refresh_jti:
-        # ✅ PHASE 2: Use session_service instead of direct SQL
-        try:
-            revoked, callback = await session_service.revoke_session_by_jti(
-                db=db,
-                refresh_jti=refresh_jti,
-                user_id=current_user.id
-            )
-            if revoked:
-                await db.commit()
-                if callback:
-                    await callback()
-                log.info(
-                    "Session revoked on logout",
-                    user_id=current_user.id,
-                )
-            else:
-                log.warning(
-                    "Session not found for revocation on logout",
-                    user_id=current_user.id,
-                )
-        except Exception as session_error:
-            log.warning(
-                "Failed to revoke session on logout",
-                user_id=current_user.id,
-                error=str(session_error),
-            )
-
-    # ✅ SECURITY FIX: Delete both cookies
+def _delete_auth_cookies(response: Response) -> None:
+    """✅ SECURITY FIX: Delete both token cookies — on every logout answer, the
+    error one included (browsers apply ``Set-Cookie`` whatever the status)."""
     response.delete_cookie(
         key="access_token",
         path="/",
@@ -707,6 +622,68 @@ async def logout(
         path="/api",  # ✅ FIX: Changed from "/api/auth" to "/api" to match set_cookie path
         samesite="strict",
     )
+
+
+def _logout_not_confirmed() -> JSONResponse:
+    """``SessionRevocationError`` (500, like ``DELETE /sessions/{id}``), cookies cleared."""
+    failure = SessionRevocationError()
+    error_response = JSONResponse(
+        status_code=failure.status_code,
+        content={"detail": failure.detail, "error_code": failure.error_code},
+    )
+    _delete_auth_cookies(error_response)
+    return error_response
+
+
+@router.post("/logout")
+@limiter.limit(RateLimits.DATA_WRITE)  # ✅ RATE LIMIT: 200/hour - Normal write operation
+async def logout(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(database.get_db),
+    target: deps.LogoutTarget = Depends(deps.get_logout_target),
+):
+    # Not ``get_current_user``: that answers 503 while Redis cannot be read,
+    # and a logout stuck there leaves the session alive and the cookies set.
+    # ``get_logout_target`` authenticates by signature and resolves the
+    # caller's OWN live session rows from the DB; nothing on this path reads
+    # Redis, and Redis is only written for those rows and for the caller's
+    # own access token (in the service).
+    #
+    # The DB row is what every reader of a session trusts (deps STEP 4b,
+    # socket auth, ``/refresh``), so the COMMIT of its revoke decides the
+    # answer: 204 once it is committed, or when no live row of the caller is
+    # left (the session is already dead). Otherwise ``SessionRevocationError``
+    # instead of the 204 the client reads as "the session is dead" — and the
+    # cookies are cleared either way. ``get_db`` closes the session, which
+    # rolls a failed commit back.
+    if target.sessions is None:
+        return _logout_not_confirmed()
+    try:
+        callback = await session_service.revoke_sessions_on_logout(
+            db,
+            target.sessions,
+            access_jti=target.access_jti,
+            access_exp=target.access_exp,
+        )
+        if target.sessions:
+            await db.commit()
+    except Exception as session_error:
+        log.error(
+            "Logout failed: session revocation not committed",
+            user_id=target.user_id,
+            error_type=type(session_error).__name__,
+        )
+        return _logout_not_confirmed()
+
+    if callback:
+        await callback()
+    log.info(
+        "Logout completed",
+        user_id=target.user_id,
+        sessions_revoked=len(target.sessions),
+    )
+    _delete_auth_cookies(response)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
 
@@ -1412,8 +1389,17 @@ async def refresh_access_token(
                         user = await user_service.get_user_by_username(db, _refresh_username)
                         if user:
                             await user_service.invalidate_all_sessions(db, user)
+                            # The service only stages the revoked rows (flush).
+                            # Without this commit they rolled back when the
+                            # request's session closed, while the Redis side
+                            # (``user_blacklist``, ``session:*``) stayed written.
+                            # A failed commit lands in the arm below: logged,
+                            # rolled back, and still the counted 401 — never a
+                            # 500.
+                            await db.commit()
                     except Exception as revoke_err:
                         log.error("Failed to revoke sessions after refresh abuse", error=str(revoke_err))
+                        await db.rollback()
             except Exception as redis_err:
                 log.error("Failed to track refresh failure", error=str(redis_err))
 

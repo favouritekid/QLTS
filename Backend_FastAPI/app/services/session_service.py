@@ -738,3 +738,67 @@ async def revoke_session_by_jti(
         await _emit_session_updated(user_id)
 
     return True, callback
+
+
+async def revoke_sessions_on_logout(
+    db: AsyncSession,
+    sessions: list,
+    *,
+    access_jti: str,
+    access_exp: int,
+) -> Optional[PostCommitCallback]:
+    """End the sessions a logout resolved, then take the Redis fast path.
+
+    ``sessions`` come from ``get_logout_target`` (``app/core/deps.py``), the
+    layer that owns the ownership check: every row is a LIVE session of the
+    caller. This function trusts them and looks nothing up again.
+
+    1. Every row is marked revoked and flushed — staged in the caller's
+       transaction. The ROUTER commits, and that commit is what makes the
+       logout true.
+    2. Redis, best effort, only for those rows and for the caller's own access
+       token: delete ``session:{jti}``, set ``blacklist:{jti}`` until the row
+       expires, set ``blacklist:{access_jti}`` until the access token expires.
+       A failed write is counted and logged (never a JTI) and swallowed: the
+       committed row is what deps STEP 4b, socket auth and ``/refresh`` trust.
+
+    Returns the post-commit callback (``session_updated``), or None when there
+    was no row to revoke.
+    """
+    now = datetime.now(timezone.utc)
+    for session in sessions:
+        session.revoked_at = now
+        db.add(session)
+    if sessions:
+        await db.flush()
+
+    failed_writes = 0
+    for session in sessions:
+        try:
+            await safe_redis_delete(f"session:{session.refresh_jti}")
+            ttl = int((session.expires_at - now).total_seconds())
+            if ttl > 0:
+                await safe_redis_set(f"blacklist:{session.refresh_jti}", "revoked", ex=ttl)
+        except Exception:
+            failed_writes += 1
+    access_ttl = int(access_exp - now.timestamp())
+    if access_ttl > 0:
+        try:
+            await safe_redis_set(f"blacklist:{access_jti}", "revoked", ex=access_ttl)
+        except Exception:
+            failed_writes += 1
+    if failed_writes:
+        log.warning(
+            "Logout: Redis fast path incomplete; the DB revoke decides",
+            failed_writes=failed_writes,
+            action="session.logout_redis_incomplete",
+        )
+
+    if not sessions:
+        return None
+    user_id = sessions[0].user_id
+
+    async def callback():
+        await _emit_session_updated(user_id)
+
+    return callback
