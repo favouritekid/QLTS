@@ -59,16 +59,16 @@ async def test_revalidate_exact_jti_revoked_disconnects():
     repo = MagicMock()
     repo.get_by_refresh_jti_and_user = AsyncMock(return_value=None)  # exact jti gone
 
-    async def _redis_get(key):
-        # Redis session valid → reach the blacklist read, then the DB cross-check.
-        return "5" if key.startswith("session:") else None
-
+    # Redis ANSWERED "session present" (the strict read: revalidate no longer
+    # reads ``session:`` through the lenient GET) → reach the blacklist read,
+    # then the DB cross-check.
+    session_read = AsyncMock(return_value="5")
     # Redis ANSWERED "not blacklisted" (the strict read; the lenient GET no
     # longer decides this).
     blacklist_read = AsyncMock(return_value=False)
 
     with patch.object(sm, "sio", fake_sio), \
-            patch.object(sm, "safe_redis_get", AsyncMock(side_effect=_redis_get)), \
+            patch.object(sm, "redis_get_or_raise", session_read), \
             patch.object(sm, "redis_exists_or_raise", blacklist_read), \
             patch.object(sm, "AsyncSessionLocal", _fake_session_local(MagicMock())), \
             patch("app.repositories.SessionRepository", MagicMock(return_value=repo)):
@@ -76,6 +76,7 @@ async def test_revalidate_exact_jti_revoked_disconnects():
 
     assert out["valid"] is False
     fake_sio.disconnect.assert_awaited_once_with("sid1")
+    session_read.assert_awaited_once_with("session:old-jti", "auth.session")
     blacklist_read.assert_awaited_once_with("user_blacklist:5", "auth.user_blacklist")
     repo.get_by_refresh_jti_and_user.assert_awaited_once_with("old-jti", 5)
 
@@ -89,15 +90,13 @@ async def test_revalidate_exact_jti_valid_passes():
     repo = MagicMock()
     repo.get_by_refresh_jti_and_user = AsyncMock(return_value=MagicMock())  # live row
 
-    async def _redis_get(key):
-        # session valid
-        return "5" if key.startswith("session:") else None
-
+    # Redis ANSWERED "session present" (strict read).
+    session_read = AsyncMock(return_value="5")
     # Redis ANSWERED "not blacklisted".
     blacklist_read = AsyncMock(return_value=False)
 
     with patch.object(sm, "sio", fake_sio), \
-            patch.object(sm, "safe_redis_get", AsyncMock(side_effect=_redis_get)), \
+            patch.object(sm, "redis_get_or_raise", session_read), \
             patch.object(sm, "redis_exists_or_raise", blacklist_read), \
             patch.object(sm, "AsyncSessionLocal", _fake_session_local(MagicMock())), \
             patch("app.repositories.SessionRepository", MagicMock(return_value=repo)):
@@ -105,6 +104,7 @@ async def test_revalidate_exact_jti_valid_passes():
 
     assert out["valid"] is True
     fake_sio.disconnect.assert_not_awaited()
+    session_read.assert_awaited_once_with("session:good-jti", "auth.session")
     blacklist_read.assert_awaited_once_with("user_blacklist:5", "auth.user_blacklist")
 
 

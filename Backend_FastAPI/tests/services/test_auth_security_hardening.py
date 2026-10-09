@@ -28,7 +28,18 @@ Covers:
    Redis not answering the ``user_blacklist`` read is never "not blacklisted"
    (HTTP 503 ``AUTH_STATE_UNAVAILABLE`` / connection refused / disconnected),
    for a blacklisted and a normal user alike; any other error on that read
-   over HTTP is a plain 500
+   over HTTP is a plain 500. Also with STEP 2's read ANSWERED and STEP 3's
+   alone unanswered (breaker OPEN / everything else down), so STEP 2 being
+   strict too cannot hide a lenient STEP 3
+11. ``get_current_user`` STEP 2: Redis not answering the ``blacklist:{access_jti}``
+   read is the same 503 (a logged-out and a live token alike), any other error
+   a plain 500. ``session:{r_jti}`` (HTTP STEP 4, ``revalidate_auth``) Redis
+   cannot answer is neither a miss nor a pass: the DB row decides — live ⇒
+   allowed, revoked or unreadable ⇒ refused; an ANSWERED miss is still refused
+12. ONE ``session:`` fault, two readers: ``/auth/check-status`` lets the DB row
+   decide (200) while ``/refresh`` answers the 503 (never scored, never a
+   rotation); the access token's 503 (STEP 2 and STEP 3) takes code, text and
+   ``Retry-After`` from ``AuthStateUnavailable`` itself
 """
 import hashlib
 import logging
@@ -130,6 +141,37 @@ def _redis_down(exc_type=RedisConnectionError):
         for name in _REDIS_COMMANDS_USED_BY_LOGIN:
             stack.enter_context(patch.object(db_module.redis_client, name, _command))
         yield calls
+
+
+@contextmanager
+def _redis_down_except(exact_key: str, exc_type=RedisConnectionError):
+    """``_redis_down``, except that Redis still answers every command on ``exact_key``.
+
+    Yields ``(served, failed)``: ``(command, key)`` of each command that reached
+    Redis for ``exact_key``, and the key of each command that failed. A case can
+    then prove the ONE read it spares was really answered (an OPEN breaker
+    would refuse it before the client is called, leaving ``served`` empty).
+    """
+    served, failed = [], []
+    client = db_module.redis_client
+
+    def _make(name):
+        original = getattr(client, name)
+
+        async def _command(*args, **kwargs):
+            key = args[0] if args else None
+            if key == exact_key:
+                served.append((name, key))
+                return await original(*args, **kwargs)
+            failed.append(key)
+            raise exc_type("simulated Redis outage")
+
+        return _command
+
+    with ExitStack() as stack:
+        for name in _REDIS_COMMANDS_USED_BY_LOGIN:
+            stack.enter_context(patch.object(client, name, _make(name)))
+        yield served, failed
 
 
 @pytest_asyncio.fixture
@@ -2419,6 +2461,63 @@ class TestUserBlacklistUnreadable:
         assert await TestRefreshRedisStateUnavailable._session_rows(user["id"]) == rows_before
         assert await test_redis_client.get(f"session:{jti}") == str(user["id"])
 
+    STEP2_DEFERRED_EVENT = "Access deferred: access token blacklist unreadable"
+    STEP3_DEFERRED_EVENT = "Access deferred: user blacklist unreadable"
+
+    @pytest.mark.parametrize("who", ["blacklisted", "normal"])
+    @pytest.mark.parametrize("fault", ["breaker_open", "all_down_but_step2"])
+    async def test_http_step3_alone_unreadable_is_503(
+        self, client, authed, test_redis_client, breaker, caplog, who, fault
+    ):
+        """STEP 3 alone gets no answer; STEP 2's ``blacklist:{access_jti}`` read IS answered.
+
+        STEP 2 is a strict read too, and it runs first: in the ``breaker_open``
+        and ``all_down`` cases above it is STEP 2 that answers the 503, so those
+        cases pass with a lenient STEP 3 as well. Here the outage spares exactly
+        STEP 2's read, so the 503 can only come from STEP 3:
+
+        * ``breaker_open`` — the REAL breaker is OPEN for the ``user_blacklist``
+          read only, CLOSED again right after (``_reads_unanswered``);
+        * ``all_down_but_step2`` — every Redis command fails with the breaker
+          CLOSED, except those on STEP 2's key (``_redis_down_except``).
+        """
+        user, access = authed["user"], authed["access"]
+        access_jti = jwt.decode(
+            access, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+        )["jti"]
+        step2_key = f"blacklist:{access_jti}"
+        step3_key = f"{_BLACKLIST_PREFIX}{user['id']}"
+        if who == "blacklisted":
+            await self._blacklist(test_redis_client, user["id"])
+        control = await self._check(client, access)
+        assert control.status_code == (401 if who == "blacklisted" else 200), control.text
+        caplog.clear()
+
+        served = None
+        with caplog.at_level(logging.WARNING, logger="app"), ExitStack() as stack:
+            if fault == "breaker_open":
+                failed = stack.enter_context(
+                    _reads_unanswered("breaker_open", _BLACKLIST_PREFIX, breaker)
+                )
+            else:
+                served, failed = stack.enter_context(_redis_down_except(step2_key))
+            res = await self._check(client, access)
+        _reset_redis_breaker(breaker)
+
+        _assert_auth_state_unavailable(res)
+        assert step3_key in failed, failed
+        if fault == "breaker_open":
+            assert failed == [step3_key], failed
+        else:
+            assert served == [("exists", step2_key)], served
+        assert _logged(caplog, "app.core.deps", self.STEP3_DEFERRED_EVENT), (
+            "the 503 did not come from STEP 3"
+        )
+        assert not _logged(caplog, "app.core.deps", self.STEP2_DEFERRED_EVENT), (
+            "STEP 2 did not get its answer: the case no longer isolates STEP 3"
+        )
+        assert await test_redis_client.get(f"session:{authed['r_jti']}") == str(user["id"])
+
     @pytest.mark.parametrize(
         "exc_type", [RedisResponseError, TypeError], ids=["response_error", "type_error"]
     )
@@ -2532,3 +2631,530 @@ class TestUserBlacklistUnreadable:
         assert failed, "the fault never reached Redis"
         assert verdict["valid"] is False, verdict
         fake_sio.disconnect.assert_awaited_once_with(self.SID)
+
+
+# =============================================================================
+# 11. get_current_user STEP 2 (``blacklist:{access_jti}``), and the
+#     ``session:{r_jti}`` read of HTTP STEP 4 and ``revalidate_auth``
+# =============================================================================
+#
+# STEP 2 reads a record only Redis may hold: logout writes
+# ``blacklist:{access_jti}`` BEFORE its COMMIT, so when that COMMIT fails the
+# DB row stays live and only Redis records the logout. No answer ⇒
+# the same 503 as STEP 3, for a logged-out and a live token alike; any other
+# error ⇒ a plain 500.
+#
+# ``session:{r_jti}`` is a CACHE of the DB row that deps STEP 4b and the
+# exact-jti check of ``revalidate_auth`` read on every path. No answer is
+# neither a miss (a 401, or a disconnect the frontend turns into a logout) nor
+# a pass: the DB row decides — live ⇒ allowed; revoked, or the DB unreadable
+# too ⇒ refused. An ANSWERED miss stays the fast reject.
+#
+# ``fault``: ``connection``/``timeout`` raise at the CLIENT for GET/EXISTS of
+# the keys under test (breaker CLOSED); ``breaker_open`` is the REAL breaker
+# OPEN for exactly that read and CLOSED again for the next one, so the read
+# under test is the only one Redis does not answer.
+
+from sqlalchemy import update  # noqa: E402
+from sqlalchemy.exc import OperationalError  # noqa: E402
+
+from app.repositories import SessionRepository  # noqa: E402
+
+_READ_COMMANDS = ("get", "exists")
+
+
+@contextmanager
+def _reads_unanswered(fault: str, key_prefix: str, breaker):
+    """Redis does not answer GET/EXISTS of keys under ``key_prefix``; every other key is served.
+
+    Yields the keys the fault hit, so a case can prove the fault reached the
+    read it is about.
+    """
+    hit: list = []
+    if fault in _FAULT_EXC:
+        with ExitStack() as stack:
+            for command in _READ_COMMANDS:
+                stack.enter_context(
+                    _redis_command_failing_on(command, key_prefix, _FAULT_EXC[fault], hit)
+                )
+            yield hit
+        return
+    assert fault == "breaker_open", fault
+    original = breaker.call_async
+
+    async def _call(func, *args, **kwargs):
+        key = args[0] if args else None
+        if (
+            getattr(func, "__name__", None) in _READ_COMMANDS
+            and isinstance(key, str)
+            and key.startswith(key_prefix)
+        ):
+            hit.append(key)
+            breaker.open()
+            try:
+                return await original(func, *args, **kwargs)
+            finally:
+                _reset_redis_breaker(breaker)
+        return await original(func, *args, **kwargs)
+
+    with patch.object(breaker, "call_async", _call):
+        yield hit
+
+
+@contextmanager
+def _session_row_unreadable():
+    """The exact-jti DB read (``get_by_refresh_jti_and_user``) raises; yields its calls."""
+    calls: list = []
+
+    async def _down(self, jti, user_id):
+        calls.append((jti, user_id))
+        raise OperationalError("SELECT", {}, Exception("injected: DB did not answer"))
+
+    with patch.object(SessionRepository, "get_by_refresh_jti_and_user", _down):
+        yield calls
+
+
+async def _login_tokens(client, user: dict) -> dict:
+    """Log in with Redis healthy: the access token, its jti and its session's ``r_jti``."""
+    client.cookies.clear()
+    res = await client.post(
+        "/api/auth/login", data={"username": user["username"], "password": user["password"]}
+    )
+    client.cookies.clear()
+    assert res.status_code == 200, res.text
+    access = res.cookies.get("access_token")
+    assert access, "login did not set the access cookie"
+    payload = jwt.decode(access, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+    return {"user": user, "access": access, "access_jti": payload["jti"], "r_jti": payload["r_jti"]}
+
+
+async def _check_status(client, access: str):
+    """``/api/auth/check-status`` with only the access cookie."""
+    client.cookies.clear()
+    try:
+        return await client.get(
+            "/api/auth/check-status", headers={"Cookie": f"access_token={access}"}
+        )
+    finally:
+        client.cookies.clear()
+
+
+async def _revoke_row_in_db_only(jti: str) -> None:
+    """Revoke the DB row and commit; ``session:{jti}`` stays in Redis (a stale cache)."""
+    async with db_module.AsyncSessionLocal() as session:
+        await session.execute(
+            update(models.UserSession)
+            .where(models.UserSession.refresh_jti == jti)
+            .values(revoked_at=datetime.now(timezone.utc))
+        )
+        await session.commit()
+
+
+def _assert_401(res) -> None:
+    assert (res.status_code, res.json().get("error_code")) == (401, "INVALID_TOKEN"), res.text
+    _assert_no_tokens(res)
+
+
+def _logged(caplog, logger: str, text: str) -> bool:
+    return any(text in r.getMessage() for r in caplog.records if r.name == logger)
+
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestAccessJtiBlacklistUnreadable:
+    """HTTP STEP 2 must tell "Redis did not answer" from "not logged out"."""
+
+    PREFIX = "blacklist:"
+
+    @pytest.fixture
+    def breaker(self, redis_breaker_reset):
+        """The module's ``redis_breaker_reset``: clean before AND after, even on red."""
+        return redis_breaker_reset
+
+    @pytest_asyncio.fixture
+    async def authed(self, client, regular_user_in_db, clear_redis_keys, breaker):
+        return await _login_tokens(client, regular_user_in_db)
+
+    @staticmethod
+    async def _log_out_in_redis_only(redis, access_jti: str) -> None:
+        """What a logout leaves when its ``session:`` delete was lost and its COMMIT failed.
+
+        ``blacklist:{access_jti}`` is set; the DB row and ``session:{r_jti}``
+        stay live, so STEP 2 is the ONLY check that refuses the token.
+        """
+        await redis.set(f"blacklist:{access_jti}", "revoked", ex=900)
+
+    @pytest.mark.parametrize("who", ["logged_out", "live"])
+    @pytest.mark.parametrize("fault", ["connection", "timeout", "breaker_open"])
+    async def test_unreadable_is_503_whatever_the_answer_would_be(
+        self, client, authed, test_redis_client, breaker, who, fault
+    ):
+        """No answer ⇒ 503: never 200 for the logged-out token, never 401 for the live one."""
+        user, access = authed["user"], authed["access"]
+        if who == "logged_out":
+            await self._log_out_in_redis_only(test_redis_client, authed["access_jti"])
+        control = await _check_status(client, access)
+        assert control.status_code == (401 if who == "logged_out" else 200), control.text
+        rows_before = await TestRefreshRedisStateUnavailable._session_rows(user["id"])
+
+        with _reads_unanswered(fault, self.PREFIX, breaker) as hit:
+            res = await _check_status(client, access)
+
+        assert hit == [f"blacklist:{authed['access_jti']}"], hit
+        _assert_auth_state_unavailable(res)
+        assert breaker.current_state is CircuitBreakerState.CLOSED
+        assert await TestRefreshRedisStateUnavailable._session_rows(user["id"]) == rows_before
+        assert await test_redis_client.get(f"session:{authed['r_jti']}") == str(user["id"])
+
+    @pytest.mark.parametrize(
+        "exc_type", [RedisResponseError, TypeError], ids=["response_error", "type_error"]
+    )
+    async def test_other_error_is_500_never_200(
+        self, client, authed, test_redis_client, breaker, exc_type
+    ):
+        """Redis ANSWERED with an error (NOPERM, WRONGTYPE…) or a bug ⇒ plain 500, not a pass."""
+        await self._log_out_in_redis_only(test_redis_client, authed["access_jti"])
+        hit: list = []
+        with ExitStack() as stack:
+            for command in _READ_COMMANDS:
+                stack.enter_context(
+                    _redis_command_failing_on(command, self.PREFIX, exc_type, hit)
+                )
+            res = await _check_status(client, authed["access"])
+
+        assert hit, "the fault never reached Redis"
+        TestRefreshRedisStateUnavailable._assert_fail_closed_500(res)
+        assert breaker.current_state is CircuitBreakerState.CLOSED
+
+    @pytest.mark.parametrize("fault", ["connection", "response_error"])
+    async def test_error_logs_carry_no_key_jti_or_message(
+        self, client, authed, breaker, caplog, fault
+    ):
+        """The refusal logs event/action and (500) the exception CLASS.
+
+        Never the Redis key, the access jti, the session jti or the exception
+        message (a canary). Asserting the event first proves the capture sees
+        these logs at all.
+        """
+        key = f"blacklist:{authed['access_jti']}"
+        message = f"CANARYMSG{uuid.uuid4().hex}"
+        exc_type = {"connection": RedisConnectionError, "response_error": RedisResponseError}[fault]
+        event, action = {
+            "connection": (
+                "Access deferred: access token blacklist unreadable",
+                "auth.access_state_unavailable",
+            ),
+            "response_error": (
+                "Access refused: access token blacklist check failed",
+                "auth.access_jti_blacklist_error",
+            ),
+        }[fault]
+        original = db_module.redis_client.exists
+
+        async def _exists(*args, **kwargs):
+            if args and args[0] == key:
+                raise exc_type(message)
+            return await original(*args, **kwargs)
+
+        caplog.set_level(logging.DEBUG)
+        with patch.object(db_module.redis_client, "exists", _exists):
+            res = await _check_status(client, authed["access"])
+
+        assert res.status_code == (503 if fault == "connection" else 500), res.text
+        lines = [record.getMessage() for record in caplog.records]
+        refused = [line for line in lines if event in line]
+        assert refused, lines
+        for line in refused:
+            assert action in line, line
+            assert key not in line, line
+            assert authed["access_jti"] not in line, line
+            assert authed["r_jti"] not in line, line
+        for text in lines + [caplog.text]:
+            assert message[:9] not in text, text
+
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestSessionCacheUnreadable:
+    """``session:{r_jti}`` Redis did not answer: neither a miss nor a pass — the DB row decides."""
+
+    PREFIX = "session:"
+    SID = "sid-session-cache-unreadable"
+
+    @pytest.fixture
+    def breaker(self, redis_breaker_reset):
+        """The module's ``redis_breaker_reset``: clean before AND after, even on red."""
+        return redis_breaker_reset
+
+    @pytest_asyncio.fixture
+    async def authed(self, client, regular_user_in_db, clear_redis_keys, breaker):
+        return await _login_tokens(client, regular_user_in_db)
+
+    # --- HTTP: get_current_user STEP 4 / 4b ----------------------------------------
+
+    @pytest.mark.parametrize("row", ["live", "revoked"])
+    @pytest.mark.parametrize("fault", ["connection", "timeout", "breaker_open"])
+    async def test_http_unreadable_lets_the_db_row_decide(
+        self, client, authed, test_redis_client, breaker, caplog, row, fault
+    ):
+        """Live row ⇒ 200 (not the 401 of a miss); revoked row ⇒ 401 from STEP 4b.
+
+        The key stays in Redis for the revoked row (a stale cache): with Redis
+        healthy that row is refused by STEP 4b too, never by the fast path.
+        """
+        user, access, jti = authed["user"], authed["access"], authed["r_jti"]
+        control = await _check_status(client, access)
+        assert control.status_code == 200, control.text
+        if row == "revoked":
+            await _revoke_row_in_db_only(jti)
+        assert await test_redis_client.get(f"session:{jti}") == str(user["id"])
+
+        with caplog.at_level(logging.WARNING, logger="app"):
+            with _reads_unanswered(fault, self.PREFIX, breaker) as hit:
+                res = await _check_status(client, access)
+
+        assert hit == [f"session:{jti}"], hit
+        if row == "live":
+            assert res.status_code == 200, res.text
+            assert res.json()["user_id"] == user["id"], res.text
+        else:
+            _assert_401(res)
+            assert _logged(caplog, "app.core.deps", "no non-revoked DB row"), (
+                "the 401 did not come from the DB row (STEP 4b)"
+            )
+        assert breaker.current_state is CircuitBreakerState.CLOSED
+
+    @pytest.mark.parametrize("fault", ["connection", "breaker_open"])
+    async def test_http_unreadable_and_db_unreadable_is_refused(
+        self, client, authed, breaker, fault
+    ):
+        """Neither Redis nor the DB answered ⇒ refused (STEP 4b's own 401), never 200."""
+        with _reads_unanswered(fault, self.PREFIX, breaker) as hit, \
+                _session_row_unreadable() as db_calls:
+            res = await _check_status(client, authed["access"])
+
+        assert hit == [f"session:{authed['r_jti']}"], hit
+        assert db_calls == [(authed["r_jti"], authed["user"]["id"])], db_calls
+        _assert_401(res)
+
+    async def test_http_answered_miss_is_still_refused(
+        self, client, authed, test_redis_client, breaker
+    ):
+        """Redis ANSWERED "no such session" ⇒ 401, even though the DB row is live."""
+        await test_redis_client.delete(f"session:{authed['r_jti']}")
+        rows = await TestRefreshRedisStateUnavailable._session_rows(authed["user"]["id"])
+        assert [(row[1], row[2]) for row in rows] == [(authed["r_jti"], None)], rows
+
+        res = await _check_status(client, authed["access"])
+
+        _assert_401(res)
+
+    # --- Socket.IO periodic check: revalidate_auth ---------------------------------
+
+    @pytest.mark.parametrize("who", ["live", "session_revoked", "user_blacklisted"])
+    @pytest.mark.parametrize("fault", ["connection", "timeout", "breaker_open"])
+    async def test_socket_revalidate_unreadable_lets_the_db_row_decide(
+        self, authed, test_redis_client, breaker, caplog, who, fault
+    ):
+        """No answer ⇒ not "Session revoked": the strict blacklist read and the DB row decide.
+
+        Live ⇒ ``valid`` True and no disconnect (before: disconnected, and the
+        frontend logs the user out on that). Revoked row ⇒ refused by the DB
+        check; blacklisted user ⇒ refused by the strict ``user_blacklist``
+        read. Nothing passes on the unreadable read alone.
+        """
+        user, jti = authed["user"], authed["r_jti"]
+        fake_sio = TestUserBlacklistUnreadable._fake_sio(user["id"], jti)
+        expected = {
+            "live": {"valid": True},
+            "session_revoked": {"valid": False, "reason": "Session revoked"},
+            "user_blacklisted": {"valid": False, "reason": "User session invalidated"},
+        }[who]
+
+        with patch.object(socket_manager, "sio", fake_sio):
+            control = await socket_manager.revalidate_auth(self.SID)
+            assert control == {"valid": True}, control
+            fake_sio.disconnect.reset_mock()
+            if who == "session_revoked":
+                await _revoke_row_in_db_only(jti)
+            elif who == "user_blacklisted":
+                await test_redis_client.set(
+                    f"user_blacklist:{user['id']}", "sessions_invalidated", ex=3600
+                )
+
+            with caplog.at_level(logging.WARNING, logger="app"):
+                with _reads_unanswered(fault, self.PREFIX, breaker) as hit:
+                    verdict = await socket_manager.revalidate_auth(self.SID)
+
+        assert hit == [f"session:{jti}"], hit
+        assert verdict == expected, verdict
+        if who == "live":
+            fake_sio.disconnect.assert_not_awaited()
+        else:
+            fake_sio.disconnect.assert_awaited_once_with(self.SID)
+        if who == "session_revoked":
+            assert _logged(caplog, "app.socket_manager", "in DB (exact jti)"), (
+                "the refusal did not come from the exact-jti DB check"
+            )
+        assert breaker.current_state is CircuitBreakerState.CLOSED
+
+    @pytest.mark.parametrize("fault", ["connection", "breaker_open"])
+    async def test_socket_revalidate_unreadable_and_db_unreadable_disconnects(
+        self, authed, breaker, fault
+    ):
+        """Neither Redis nor the DB answered ⇒ disconnected, never ``valid`` True."""
+        user, jti = authed["user"], authed["r_jti"]
+        fake_sio = TestUserBlacklistUnreadable._fake_sio(user["id"], jti)
+
+        with patch.object(socket_manager, "sio", fake_sio), \
+                _reads_unanswered(fault, self.PREFIX, breaker) as hit, \
+                _session_row_unreadable() as db_calls:
+            verdict = await socket_manager.revalidate_auth(self.SID)
+
+        assert hit == [f"session:{jti}"], hit
+        assert db_calls == [(jti, user["id"])], db_calls
+        assert verdict == {"valid": False, "reason": "Validation error"}, verdict
+        fake_sio.disconnect.assert_awaited_once_with(self.SID)
+
+    async def test_socket_revalidate_answered_miss_is_still_revoked(
+        self, authed, test_redis_client, breaker
+    ):
+        """Redis ANSWERED "no such session" ⇒ disconnected, even though the DB row is live."""
+        user, jti = authed["user"], authed["r_jti"]
+        await test_redis_client.delete(f"session:{jti}")
+        fake_sio = TestUserBlacklistUnreadable._fake_sio(user["id"], jti)
+
+        with patch.object(socket_manager, "sio", fake_sio):
+            verdict = await socket_manager.revalidate_auth(self.SID)
+
+        assert verdict == {"valid": False, "reason": "Session revoked"}, verdict
+        fake_sio.disconnect.assert_awaited_once_with(self.SID)
+
+
+# =============================================================================
+# 12. ONE outage, TWO readers: ``get_current_user`` and ``/refresh``
+# =============================================================================
+#
+# ``session:{r_jti}`` Redis cannot answer is read two ways ON PURPOSE:
+# ``get_current_user`` lets the DB row decide (section 11: it only admits an
+# existing session, and only once the Redis-only records were ANSWERED), while
+# ``/refresh`` answers the 503 (section 9: its 401 is scored as token abuse,
+# and its 200 mints a fresh 30-day credential). Each half has its own cases;
+# here both run under ONE injected fault, so neither can drift alone.
+#
+# The access token's 503 (``AccessStateUnavailable``, STEP 2 and STEP 3) must
+# take code, text and ``Retry-After`` from ``AuthStateUnavailable`` itself. The
+# cases above compare with the literal ``"60"``, which a subclass re-declaring
+# the same value passes too; only a changed class tells the copy apart.
+
+from app.utils.exceptions import AccessStateUnavailable  # noqa: E402
+
+
+@pytest.mark.asyncio
+@pytest.mark.security
+class TestAccessAndRefreshUnderOneOutage:
+    """HTTP deps and ``/refresh`` under the same Redis fault."""
+
+    REFRESH_URL = "/api/auth/refresh"
+
+    @pytest.fixture
+    def breaker(self, redis_breaker_reset):
+        """The module's ``redis_breaker_reset``: clean before AND after, even on red."""
+        return redis_breaker_reset
+
+    @pytest_asyncio.fixture
+    async def logged_in(self, client, regular_user_in_db, clear_redis_keys, breaker):
+        """Log in with Redis healthy: both tokens, the access jti and the session jti."""
+        user = regular_user_in_db
+        client.cookies.clear()
+        res = await client.post(
+            "/api/auth/login", data={"username": user["username"], "password": user["password"]}
+        )
+        client.cookies.clear()
+        assert res.status_code == 200, res.text
+        access, refresh = res.cookies.get("access_token"), res.cookies.get("refresh_token")
+        assert access and refresh, "login did not set both auth cookies"
+        payload = jwt.decode(access, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        return {
+            "user": user,
+            "access": access,
+            "refresh": refresh,
+            "access_jti": payload["jti"],
+            "r_jti": payload["r_jti"],
+        }
+
+    async def _refresh(self, client, refresh: str):
+        client.cookies.clear()
+        try:
+            return await client.post(
+                self.REFRESH_URL, headers={"Cookie": f"refresh_token={refresh}"}
+            )
+        finally:
+            client.cookies.clear()
+
+    @staticmethod
+    async def _rows(user_id: int) -> list:
+        """``(id, refresh_jti, revoked_at)`` of every DB session row of the user."""
+        rows = await TestRefreshRedisStateUnavailable._session_rows(user_id)
+        return [row[:3] for row in rows]
+
+    @pytest.mark.parametrize("fault", ["connection", "breaker_open"])
+    async def test_session_unreadable_check_status_200_but_refresh_503(
+        self, client, logged_in, test_redis_client, breaker, fault
+    ):
+        """Same fault, same session: ``/check-status`` 200 (DB row live) and ``/refresh`` 503.
+
+        The 503 is ``/login``'s (code, text, ``Retry-After``, no cookie), and the
+        refresh is never scored: no ``refresh_fail``, no reuse blacklist, no
+        rotation, the Redis session key and the DB row as they were.
+        """
+        user, jti = logged_in["user"], logged_in["r_jti"]
+        rows_before = await self._rows(user["id"])
+        assert [row[1:] for row in rows_before] == [(jti, None)], rows_before
+
+        with _reads_unanswered(fault, "session:", breaker) as hit:
+            access_res = await _check_status(client, logged_in["access"])
+            refresh_res = await self._refresh(client, logged_in["refresh"])
+
+        assert hit == [f"session:{jti}", f"session:{jti}"], hit
+        assert access_res.status_code == 200, (
+            f"HTTP deps did not let the live DB row decide: {access_res.text}"
+        )
+        assert access_res.json()["user_id"] == user["id"], access_res.text
+        TestRefreshRedisStateUnavailable._assert_state_unavailable(refresh_res)
+        assert await test_redis_client.get(f"refresh_fail:{user['username']}") is None
+        assert not await test_redis_client.exists(f"blacklist:{jti}")
+        assert await test_redis_client.get(f"session:{jti}") == str(user["id"])
+        assert await self._rows(user["id"]) == rows_before
+        assert breaker.current_state is CircuitBreakerState.CLOSED
+
+    @pytest.mark.parametrize("step", ["step2", "step3"])
+    async def test_access_503_takes_everything_from_the_class(
+        self, client, logged_in, breaker, monkeypatch, step
+    ):
+        """Change ``AuthStateUnavailable`` and the access token's 503 must follow.
+
+        Same probe as ``TestAuthStateUnavailableSingleSource`` (``/login``) and
+        ``test_refresh_takes_everything_from_the_class`` (``/refresh``), for the
+        two reads of ``get_current_user`` that raise ``AccessStateUnavailable``.
+        """
+        assert issubclass(AccessStateUnavailable, AuthStateUnavailable)
+        prefix, key = {
+            "step2": ("blacklist:", f"blacklist:{logged_in['access_jti']}"),
+            "step3": ("user_blacklist:", f"user_blacklist:{logged_in['user']['id']}"),
+        }[step]
+        monkeypatch.setattr(AuthStateUnavailable, "error_code", "AUTH_STATE_SOURCE_PROBE")
+        monkeypatch.setattr(AuthStateUnavailable, "detail", "single-source probe")
+        monkeypatch.setattr(AuthStateUnavailable, "retry_after_seconds", 137)
+
+        with _reads_unanswered("connection", prefix, breaker) as hit:
+            res = await _check_status(client, logged_in["access"])
+
+        assert hit == [key], hit
+        assert res.status_code == 503, res.text
+        assert res.json() == {
+            "detail": "single-source probe",
+            "error_code": "AUTH_STATE_SOURCE_PROBE",
+        }, res.text
+        assert res.headers.get("retry-after") == "137", dict(res.headers)
+        _assert_no_tokens(res)
