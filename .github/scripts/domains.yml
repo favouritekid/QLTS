@@ -186,6 +186,13 @@ domains:
       # be mat AN TOAN ma khong map = them mot dong lenh sai vao runbook thi CI
       # chon 0 test.
       - CLAUDE.md
+      # Hai dong duoi cung ca: `test_claude_md_lenh_production_ghim_docker_compose_yml`
+      # soi chung qua `_TEP_HUONG_DAN_AGENT`. Do 10-10-2026 truoc khi them: PR chi
+      # `M AGENTS.md` (`SAFE_RE`) hay chi `M frontend/CLAUDE.md` (`SAFE_PREFIXES`)
+      # deu ra `NO_BACKEND_IMPACT`/0 test. `Backend_FastAPI/CLAUDE.md` thi khong
+      # can: duong backend khong map ⇒ `unknown_backend_path` ⇒ BROAD.
+      - AGENTS.md
+      - frontend/CLAUDE.md
     tests:
       - Backend_FastAPI/tests/unit/test_nginx_template_packaging.py
       - Backend_FastAPI/tests/unit/test_ci_test_visibility.py

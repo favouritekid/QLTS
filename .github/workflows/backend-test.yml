@@ -187,6 +187,16 @@ on:
       - '.gitignore'
       - 'Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md'
       - 'Documents/PRODUCTION_DEPLOY_GUIDE.md'
+      # 10-10-2026 — tệp hướng dẫn agent ở GỐC. Agent đọc NGUYÊN VĂN rồi làm
+      # theo, và `test_claude_md_lenh_production_ghim_docker_compose_yml` canh
+      # lệnh production trong đó phải ghim `-f docker-compose.yml`. Không có hai
+      # dòng này thì một PR CHỈ sửa CLAUDE.md/AGENTS.md không kích hoạt workflow:
+      # guard không chạy, required check treo "expected, not run" — cùng ca
+      # `PRODUCTION_DEPLOY_GUIDE.md` ở trên. Hai CLAUDE.md con đã được
+      # `Backend_FastAPI/**` và `frontend/**` phủ. Giá: mỗi PR như thế chạy đủ
+      # tám shard.
+      - 'CLAUDE.md'
+      - 'AGENTS.md'
 
 concurrency:
   group: be-pr-${{ github.ref }}

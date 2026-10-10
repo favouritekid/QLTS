@@ -661,8 +661,9 @@ def test_manifest_paths_tren_be_mat_AN_TOAN_duoc_chap_nhan():
 
     `CLAUDE.md` la ca that: `test_nginx_template_packaging.py` mo no bang
     `_CLAUDE_MD` va khang dinh ve noi dung. No PHAI khai duoc trong `paths:`.
+    `AGENTS.md` cung vay, qua `_TEP_HUONG_DAN_AGENT`.
     """
-    for xau in ("['CLAUDE.md']", "['frontend/src/lib/zod/finance.ts']",
+    for xau in ("['CLAUDE.md']", "['AGENTS.md']", "['frontend/src/lib/zod/finance.ts']",
                 "['Documents/PRODUCTION_DEPLOY_GUIDE.md']",
                 "['docker-compose']", "['.env']", "['nginx/']",
                 "['Backend_FastAPI/']"):

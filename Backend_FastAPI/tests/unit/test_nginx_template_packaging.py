@@ -3106,8 +3106,9 @@ def test_bo_loc_paths_cua_gate_phu_moi_duong_ma_guard_doc():
     # `_TAI_LIEU_VAN_HANH` cũng phải nằm trong danh sách: guard tài liệu ĐỌC
     # từng tệp trong đó, nên một tệp không có mặt ở `paths:` là một tệp mà guard
     # canh trên giấy còn CI thì không bao giờ chạy để canh. `PRODUCTION_DEPLOY_
-    # GUIDE.md` đã đúng vào ca đó.
-    can_phu = _DUONG_GUARD_DOC + _TAI_LIEU_VAN_HANH
+    # GUIDE.md` đã đúng vào ca đó. `_TEP_HUONG_DAN_AGENT` cũng thế: guard `-f`
+    # đọc từng tệp trong đó, mà CLAUDE.md/AGENTS.md ở gốc không thuộc mẫu nào.
+    can_phu = _DUONG_GUARD_DOC + _TAI_LIEU_VAN_HANH + _TEP_HUONG_DAN_AGENT
     thieu = [d for d in can_phu if not any(_khop_glob(d, m) for m in mau)]
     assert not thieu, (
         f"gate `pytest` KHÔNG chạy khi các đường sau đổi: {thieu}. "
@@ -4594,7 +4595,15 @@ def test_claude_md_lenh_production_ghim_docker_compose_yml():
     """
     if not _CLAUDE_MD.is_file():
         pytest.skip("không có CLAUDE.md")
-    tep = [_GOC / t for t in _TEP_HUONG_DAN_AGENT if (_GOC / t).is_file()]
+    # Có CLAUDE.md gốc tức là đang đứng trên cả cây kho; khi ấy một tệp trong danh
+    # sách mà vắng là ĐỎ, không lặng lẽ bỏ qua — đổi tên AGENTS.md mà guard vẫn
+    # xanh là guard đã thôi canh nó.
+    vang = [t for t in _TEP_HUONG_DAN_AGENT if not (_GOC / t).is_file()]
+    assert not vang, (
+        f"tệp hướng dẫn agent trong danh sách không tồn tại: {vang} — "
+        "sửa `_TEP_HUONG_DAN_AGENT` cùng lúc với việc đổi tên/xoá tệp"
+    )
+    tep = [_GOC / t for t in _TEP_HUONG_DAN_AGENT]
     assert _CLAUDE_MD in tep, (
         "danh sách tệp hướng dẫn không còn chứa CLAUDE.md gốc — guard đang canh hụt"
     )
@@ -4675,6 +4684,16 @@ def test_guard_huong_dan_agent_bat_lenh_production_thieu_f(
                 "```bash",
                 "docker compose -f docker-compose.yml \\",
                 "    --env-file .env.production up -d --wait backend",
+                "```",
+            ],
+        ),
+        # Đối chứng của `f_chi_nam_trong_chu_thich`: CÙNG dòng, chỉ chuyển
+        # `-f docker-compose.yml` từ chú thích vào lệnh.
+        (
+            "doi_chung_f_chuyen_tu_chu_thich_vao_lenh",
+            [
+                "```bash",
+                "docker compose -f docker-compose.yml --env-file .env.production up -d --wait backend",
                 "```",
             ],
         ),
