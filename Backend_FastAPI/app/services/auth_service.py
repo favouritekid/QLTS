@@ -248,6 +248,29 @@ def decode_token(token: str) -> Dict:
         raise InvalidToken(detail=f"Invalid token: {e}")
 
 
+def decode_expired_token(token: str) -> Optional[Dict]:
+    """Payload of a token whose ONLY defect is expiry — signature, algorithm and form all valid.
+
+    Returns ``None`` when the token is still valid (callers use ``decode_token``) or
+    fails for any other reason. ONLY for logout (F62): an expired token grants
+    nothing; logout uses it solely to find the session it rides on, and the caller
+    must additionally require a validly signed refresh cookie naming that session.
+    """
+    try:
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+            options={"verify_exp": False},
+        )
+    except JWTError:
+        return None
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)) or exp > datetime.now(timezone.utc).timestamp():
+        return None
+    return payload
+
+
 def decode_token_for_invalidation(token: str) -> Tuple[Optional[str], Optional[int]]:
     """
     Decode token for blacklisting/invalidation purposes.
