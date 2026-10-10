@@ -502,7 +502,13 @@ async def get_logout_target(
     1. Authentication by SIGNATURE and expiry (``security.decode_token``): an
        ``access`` token carrying ``sub``, ``jti`` and ``r_jti`` whose ``sub``
        names an existing user. ``User.status`` is not gated, as in
-       ``get_current_user``.
+       ``get_current_user``. F62: a token whose ONLY defect is expiry
+       (``security.decode_expired_token`` — signature still verified) is also
+       accepted, but then ONLY together with a validly signed, unexpired refresh
+       cookie whose ``jti`` equals the token's ``r_jti`` — possession of that
+       session's refresh credential, which can already mint new tokens, so
+       ending the session with it grants nothing more. Same type, user and
+       ownership checks; only that one session is a candidate.
     2. Ownership (this endpoint's IDOR check; this layer owns it): a refresh JTI
        is revoked only if it names a LIVE ``user_session`` row of THAT user —
        ``get_by_refresh_jti_and_user``, the predicate deps STEP 4b, socket auth
@@ -526,10 +532,19 @@ async def get_logout_target(
     token, _ = _pick_access_token(access_token_cookie, authorization, token_from_oauth)
     if not token:
         raise credentials_exception
+    expired = False
     try:
         payload = security.decode_token(token)
     except InvalidToken:
-        raise credentials_exception
+        # F62: the access cookie outlives its JWT (max_age = refresh_ttl), so a
+        # browser left idle past 15 minutes logs out with an EXPIRED access token.
+        # Refusing it left the session alive and the cookies set. An expired token
+        # is accepted ONLY when its sole defect is expiry (signature checked) AND a
+        # validly signed refresh cookie names the very session it rides on (below).
+        payload = security.decode_expired_token(token)
+        if payload is None:
+            raise credentials_exception
+        expired = True
 
     username = payload.get("sub")
     access_jti = payload.get("jti")
@@ -546,7 +561,13 @@ async def get_logout_target(
 
     candidates = [refresh_jti]
     cookie_jti = _signed_refresh_cookie_jti(refresh_token_cookie)
-    if cookie_jti and cookie_jti != refresh_jti:
+    if expired:
+        # Expired access token: proof of possession of the session's refresh
+        # credential is required — the cookie must name exactly the session the
+        # token rides on. No second candidate on this path.
+        if cookie_jti != refresh_jti:
+            raise credentials_exception
+    elif cookie_jti and cookie_jti != refresh_jti:
         candidates.append(cookie_jti)
 
     try:

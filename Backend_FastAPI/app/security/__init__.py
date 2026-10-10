@@ -17,6 +17,7 @@ Token Functions (re-exported from auth_service):
 - create_password_reset_token()
 - verify_password_reset_token()
 - decode_token()
+- decode_expired_token() — logout only (F62)
 - decode_token_for_invalidation()
 """
 
@@ -30,6 +31,7 @@ from ..services.auth_service import (
     create_password_reset_token,
     verify_password_reset_token,
     decode_token,
+    decode_expired_token,
     decode_token_for_invalidation,
 )
 

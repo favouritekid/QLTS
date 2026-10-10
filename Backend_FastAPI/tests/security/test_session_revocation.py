@@ -2596,3 +2596,186 @@ async def test_socket_revalidate_total_outage_disconnects_as_auth_state_unavaila
     assert await test_redis_client.get(f"session:{jti}") == str(user["id"]), (
         "sự cố Redis đã xoá khoá session:"
     )
+
+
+# -----------------------------------------------------------------------------
+# F62 (S24 sau deploy, 10-10): đăng xuất khi ACCESS TOKEN ĐÃ HẾT HẠN nhưng phiên
+# refresh còn sống. Cookie `access_token` sống bằng refresh (max_age = refresh_ttl)
+# nên trình duyệt VẪN gửi token hết hạn cùng cookie refresh. Đo trên prod: logout
+# 401, phiên không bị thu hồi, lượt tải sau làm mới được ⇒ người dùng tưởng đã
+# thoát. Hợp đồng: token hết hạn CHỈ được chấp nhận khi đúng chữ ký, đúng loại
+# `access`, và cookie refresh có chữ ký hợp lệ trỏ ĐÚNG phiên mà token ấy cưỡi
+# (`jti` cookie == `r_jti` token) — quyền sở hữu vẫn do
+# `get_by_refresh_jti_and_user` quyết. Mỗi ca phá MỘT bất biến.
+# -----------------------------------------------------------------------------
+
+
+def _resign(token: str, *, exp_offset: int = -60, key: str | None = None, **overrides) -> str:
+    """Ký lại ĐÚNG claims của ``token`` (chữ ký khoá thật trừ khi ``key``), chỉ đổi ``exp`` và các trường ``overrides``."""
+    payload = jwt.decode(
+        token,
+        settings.JWT_SECRET_KEY,
+        algorithms=[settings.JWT_ALGORITHM],
+        options={"verify_exp": False},
+    )
+    payload["exp"] = int(datetime.now(timezone.utc).timestamp()) + exp_offset
+    payload.update(overrides)
+    return jwt.encode(payload, key or settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+async def _refresh_with(client, refresh_token: str):
+    return await _post_with_cookies(client, REFRESH_URL, refresh_token=refresh_token)
+
+
+def _issued_token_names(res) -> list:
+    """Tên cookie token được phát mới — CHỈ tên: assertion đỏ in giá trị so sánh ra log (CI của kho public)."""
+    return [raw.partition("=")[0].strip() for raw in _issued_token_cookies(res)]
+
+
+@pytest.mark.asyncio
+async def test_f62_logout_fresh_token_revokes_and_blocks_refresh(client, regular_user_in_db):
+    """Đối chứng: access còn hạn ⇒ 204, hàng thu hồi, cookie refresh không mở lại được phiên."""
+    access, refresh, jti = await _login_as(client, regular_user_in_db)
+
+    res = await _post_with_cookies(client, LOGOUT_URL, access_token=access, refresh_token=refresh)
+
+    assert res.status_code == 204, res.text
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is not None, "phiên còn sống sau logout"
+    again = await _refresh_with(client, refresh)
+    assert again.status_code == 401, (again.status_code, again.text)
+    assert _issued_token_names(again) == [], "refresh sau logout phát token mới"
+
+
+@pytest.mark.asyncio
+async def test_f62_logout_expired_access_same_session_revokes(client, regular_user_in_db):
+    """F62: access HẾT HẠN (đúng chữ ký) + cookie refresh CÙNG phiên ⇒ 204, hàng thu hồi, cookie xoá, refresh 401."""
+    access, refresh, jti = await _login_as(client, regular_user_in_db)
+    expired = _resign(access)
+
+    res = await _post_with_cookies(client, LOGOUT_URL, access_token=expired, refresh_token=refresh)
+
+    assert res.status_code == 204, f"logout với access hết hạn trả {res.status_code}: {res.text!r}"
+    assert _deleted_auth_cookies(res) == _AUTH_COOKIES_CLEARED, "logout không xoá đủ cookie token"
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is not None, "phiên còn sống sau logout (F62)"
+    again = await _refresh_with(client, refresh)
+    assert again.status_code == 401, (
+        f"phiên mở lại được bằng cookie refresh sau logout: {again.status_code} {again.text!r}"
+    )
+    assert _issued_token_names(again) == [], "refresh sau logout phát token mới (F62)"
+
+
+@pytest.mark.asyncio
+async def test_f62_expired_access_without_refresh_cookie_401(client, regular_user_in_db):
+    """Access hết hạn, KHÔNG có cookie refresh ⇒ 401, không thu hồi gì (token hết hạn một mình không đủ)."""
+    access, _refresh, jti = await _login_as(client, regular_user_in_db)
+
+    res = await _post_with_cookies(client, LOGOUT_URL, access_token=_resign(access))
+
+    assert res.status_code == 401, (res.status_code, res.text)
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is None, "thu hồi phiên chỉ bằng access token hết hạn"
+
+
+@pytest.mark.asyncio
+async def test_f62_expired_access_with_other_session_cookie_401(client, regular_user_in_db):
+    """Access hết hạn của phiên 1 + cookie refresh của phiên 2 (cùng user) ⇒ 401, KHÔNG phiên nào bị thu hồi.
+
+    Với token CÒN hạn, logout kết thúc cả hai (ca ``..._ends_both_sessions_...``); token hết hạn thì cookie phải trỏ
+    ĐÚNG phiên mà token cưỡi."""
+    user = regular_user_in_db
+    access_1, _r1, jti_1 = await _login_as(client, user, ua=UA_DESKTOP)
+    _a2, refresh_2, jti_2 = await _login_as(client, user, ua=UA_MOBILE)
+
+    res = await _post_with_cookies(client, LOGOUT_URL, access_token=_resign(access_1), refresh_token=refresh_2)
+
+    assert res.status_code == 401, (res.status_code, res.text)
+    for jti in (jti_1, jti_2):
+        row = await _row_by_jti(jti)
+        assert row is not None and row.revoked_at is None, f"phiên {jti[:8]} bị thu hồi"
+
+
+@pytest.mark.asyncio
+async def test_f62_expired_access_wrong_signature_401(client, regular_user_in_db):
+    """Access hết hạn ký bằng KHOÁ KHÁC + cookie refresh đúng phiên ⇒ 401, phiên còn sống."""
+    access, refresh, jti = await _login_as(client, regular_user_in_db)
+    forged = _resign(access, key=settings.JWT_SECRET_KEY + "-wrong-key")
+
+    res = await _post_with_cookies(client, LOGOUT_URL, access_token=forged, refresh_token=refresh)
+
+    assert res.status_code == 401, (res.status_code, res.text)
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is None, "thu hồi phiên bằng token sai chữ ký"
+
+
+@pytest.mark.asyncio
+async def test_f62_expired_refresh_type_token_as_access_401(client, regular_user_in_db):
+    """Token HẾT HẠN đúng chữ ký nhưng ``type=refresh`` đặt vào chỗ access + cookie refresh đúng phiên ⇒ 401."""
+    access, refresh, jti = await _login_as(client, regular_user_in_db)
+
+    res = await _post_with_cookies(
+        client, LOGOUT_URL, access_token=_resign(access, type="refresh"), refresh_token=refresh
+    )
+
+    assert res.status_code == 401, (res.status_code, res.text)
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is None, "thu hồi phiên bằng token sai loại"
+
+
+@pytest.mark.asyncio
+async def test_f62_decode_expired_token_only_accepts_expired(client, regular_user_in_db):
+    """``decode_expired_token`` chỉ nhận token ĐÃ hết hạn (đúng chữ ký): token còn hạn ⇒ None — bên gọi phải dùng ``decode_token``."""
+    access, _refresh, _jti = await _login_as(client, regular_user_in_db)
+    # So trên bool/jti, không đưa ``access`` vào biểu thức assert — pytest in đối số khi đỏ.
+    accepted_fresh = security.decode_expired_token(access) is not None
+    expected_jti = jwt.decode(access, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])["jti"]
+    payload = security.decode_expired_token(_resign(access))
+
+    assert not accepted_fresh, "nhận token còn hạn ở nhánh hết hạn"
+    assert payload is not None and payload["jti"] == expected_jti, "token hết hạn đúng chữ ký phải trả đúng payload"
+
+
+# F64: access hết hạn ĐÚNG phiên + cookie refresh mang ĐÚNG jti của phiên ấy, nhưng
+# cookie hỏng đúng MỘT thuộc tính — chữ ký, hạn, hoặc loại. ``jti`` khớp ``r_jti``
+# không đủ: cookie phải là refresh token hợp lệ thì mới chứng minh được phiên.
+
+
+@pytest.mark.asyncio
+async def test_f62_expired_access_refresh_cookie_wrong_signature_401(client, regular_user_in_db):
+    """Cookie refresh đúng jti, CÒN hạn, đúng loại nhưng ký bằng KHOÁ KHÁC ⇒ 401, phiên còn sống."""
+    access, refresh, jti = await _login_as(client, regular_user_in_db)
+    forged_refresh = _resign(refresh, exp_offset=3600, key=settings.JWT_SECRET_KEY + "-wrong-key")
+
+    res = await _post_with_cookies(client, LOGOUT_URL, access_token=_resign(access), refresh_token=forged_refresh)
+
+    assert res.status_code == 401, (res.status_code, res.text)
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is None, "thu hồi phiên bằng cookie refresh sai chữ ký"
+
+
+@pytest.mark.asyncio
+async def test_f62_expired_access_expired_refresh_cookie_401(client, regular_user_in_db):
+    """Cookie refresh đúng jti, đúng chữ ký, đúng loại nhưng ĐÃ HẾT HẠN ⇒ 401, phiên còn sống."""
+    access, refresh, jti = await _login_as(client, regular_user_in_db)
+
+    res = await _post_with_cookies(
+        client, LOGOUT_URL, access_token=_resign(access), refresh_token=_resign(refresh, exp_offset=-60)
+    )
+
+    assert res.status_code == 401, (res.status_code, res.text)
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is None, "thu hồi phiên bằng cookie refresh đã hết hạn"
+
+
+@pytest.mark.asyncio
+async def test_f62_expired_access_refresh_cookie_wrong_type_401(client, regular_user_in_db):
+    """Cookie refresh đúng jti, đúng chữ ký, CÒN hạn nhưng ``type=access`` ⇒ 401, phiên còn sống."""
+    access, refresh, jti = await _login_as(client, regular_user_in_db)
+    wrong_type = _resign(refresh, exp_offset=3600, type="access")
+
+    res = await _post_with_cookies(client, LOGOUT_URL, access_token=_resign(access), refresh_token=wrong_type)
+
+    assert res.status_code == 401, (res.status_code, res.text)
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is None, "thu hồi phiên bằng cookie sai loại"
