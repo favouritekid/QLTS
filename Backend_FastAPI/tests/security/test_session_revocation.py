@@ -2726,3 +2726,48 @@ async def test_f62_decode_expired_token_only_accepts_expired(client, regular_use
     assert payload is not None and payload["jti"] == jwt.decode(
         access, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
     )["jti"], "token hết hạn đúng chữ ký phải trả đúng payload"
+
+
+# F64: access hết hạn ĐÚNG phiên + cookie refresh mang ĐÚNG jti của phiên ấy, nhưng
+# cookie hỏng đúng MỘT thuộc tính — chữ ký, hạn, hoặc loại. ``jti`` khớp ``r_jti``
+# không đủ: cookie phải là refresh token hợp lệ thì mới chứng minh được phiên.
+
+
+@pytest.mark.asyncio
+async def test_f62_expired_access_refresh_cookie_wrong_signature_401(client, regular_user_in_db):
+    """Cookie refresh đúng jti, CÒN hạn, đúng loại nhưng ký bằng KHOÁ KHÁC ⇒ 401, phiên còn sống."""
+    access, refresh, jti = await _login_as(client, regular_user_in_db)
+    forged_refresh = _resign(refresh, exp_offset=3600, key=settings.JWT_SECRET_KEY + "-wrong-key")
+
+    res = await _post_with_cookies(client, LOGOUT_URL, access_token=_resign(access), refresh_token=forged_refresh)
+
+    assert res.status_code == 401, (res.status_code, res.text)
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is None, "thu hồi phiên bằng cookie refresh sai chữ ký"
+
+
+@pytest.mark.asyncio
+async def test_f62_expired_access_expired_refresh_cookie_401(client, regular_user_in_db):
+    """Cookie refresh đúng jti, đúng chữ ký, đúng loại nhưng ĐÃ HẾT HẠN ⇒ 401, phiên còn sống."""
+    access, refresh, jti = await _login_as(client, regular_user_in_db)
+
+    res = await _post_with_cookies(
+        client, LOGOUT_URL, access_token=_resign(access), refresh_token=_resign(refresh, exp_offset=-60)
+    )
+
+    assert res.status_code == 401, (res.status_code, res.text)
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is None, "thu hồi phiên bằng cookie refresh đã hết hạn"
+
+
+@pytest.mark.asyncio
+async def test_f62_expired_access_refresh_cookie_wrong_type_401(client, regular_user_in_db):
+    """Cookie refresh đúng jti, đúng chữ ký, CÒN hạn nhưng ``type=access`` ⇒ 401, phiên còn sống."""
+    access, refresh, jti = await _login_as(client, regular_user_in_db)
+    wrong_type = _resign(refresh, exp_offset=3600, type="access")
+
+    res = await _post_with_cookies(client, LOGOUT_URL, access_token=_resign(access), refresh_token=wrong_type)
+
+    assert res.status_code == 401, (res.status_code, res.text)
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is None, "thu hồi phiên bằng cookie sai loại"
