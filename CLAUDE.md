@@ -260,9 +260,46 @@ tới backend, một route tới frontend — rồi **chỉ khi đạt** mới t
 | `docker compose restart nginx` | `restart` không đọc lại `.env`; biến được nướng vào container lúc **TẠO** |
 | `envsubst … > nginx/conf.d/…` | đường đã bỏ; `conf.d` không còn được mount |
 
-Cấu hình nginx **đi theo image** (`nginx/Dockerfile`), không bind-mount: thiếu
-template ⇒ `docker build` ĐỎ. Bind-mount không cứu được — daemon tự tạo thư mục
-rỗng và `up` vẫn exit 0 (`create_host_path: false` không ngăn).
+Cấu hình nginx **đi theo image** (`nginx/Dockerfile`), không bind-mount. Một
+clean checkout không có tệp render sẵn vẫn dựng được site.
+
+⚠️ Hai vế hay bị nói tắt, ghi cho đúng:
+
+- **"Thiếu template ⇒ `docker build` ĐỎ"** chỉ chắc khi thiếu **cả thư mục**
+  `nginx/templates/`. `COPY templates/` KHÔNG tự kiểm riêng
+  `default.conf.template`. Thứ chặn ca thiếu đúng tệp ấy là
+  `scripts/deploy.sh:189` (`[ ! -f nginx/templates/default.conf.template ]`),
+  chạy **TRƯỚC** build.
+- **"Đổi template ⇒ `up -d` recreate"** đòi đã **build ra image mới**. Chuỗi
+  đúng là: `Dockerfile COPY` → `compose build` → `compose up`. Compose recreate
+  vì **image ID đổi**, không phải vì thấy tệp nguồn đổi.
+
+⚠️ Lý do KHÔNG phải "`create_host_path: false` không ngăn được" — câu đó SAI
+trên **đường dẫn Linux đã đo**, và trái với tài liệu Compose về ý nghĩa của
+cờ. Đo 21-09-2026 (Docker 29.7.2 · Compose v5.3.1):
+
+| Cách khai | Đường dẫn | rc | Thư mục |
+|---|---|---|---|
+| ngắn `- ./x:/y` | Windows | 0 | bị tạo |
+| `create_host_path: false` | Windows | 0 | **bị tạo** |
+| ngắn `- /var/tmp/x:/y` | **Linux** | 0 | bị tạo |
+| `create_host_path: false` | **Linux** | **1** | **KHÔNG tạo** |
+| `docker run -v` | Linux | 0 | bị tạo |
+| `docker run --mount` | Linux | **125** | **KHÔNG tạo** |
+
+Thông điệp ở hai ca đỏ: `bind source path does not exist`. Compose CÓ đọc cờ
+(`docker compose config` in ra nguyên `create_host_path: false`) — không phải
+lỗi parse. Nghĩa là: `create_host_path: false` **phù hợp tài liệu Compose và
+là cách fail-closed trên đường dẫn Linux ĐÃ ĐO** — **chưa xác minh trên chính
+VPS này**. Thứ luôn tạo thư mục rỗng là cú pháp NGẮN.
+
+**Hai giới hạn của phép đo này, đừng đọc quá:**
+
+1. Nó chứng minh khác biệt giữa **đường dẫn Windows và đường dẫn Linux** trên
+   cùng một Docker Desktop. Quy nguyên nhân cho lớp chia sẻ tệp là **SUY LUẬN**,
+   chưa có trace trực tiếp.
+2. Ca Linux chạy trong VM của Docker Desktop và khớp tài liệu Compose, nhưng
+   **chưa phải phép đo trên chính VPS**.
 
 ### Cần gạt đóng băng tuyển sinh — RUNBOOK §6.1b
 

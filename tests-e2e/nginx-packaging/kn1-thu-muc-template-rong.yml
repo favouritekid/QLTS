@@ -1,4 +1,4 @@
-# Ca 1 — thư mục template RỖNG (mô phỏng bind source thiếu, daemon tự tạo).
+# Ca 1 — thư mục template RỖNG (mô phỏng bind source thiếu + cú pháp ngắn).
 # Kỳ vọng: container DỪNG HẲN với thông điệp guard, KHÔNG phải "unhealthy".
 services:
   nginx-candidate:
