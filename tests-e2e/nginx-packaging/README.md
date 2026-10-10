@@ -12,11 +12,14 @@ của nginx **chỉ** render template ở `/etc/nginx/templates/`. Template khô
 render ⇒ nginx chạy **không có server block nào**. Production sống sót nhờ một
 `default.conf` đã render nằm ngoài git (`.gitignore` loại nó).
 
-**Vòng hai**: bản vá đầu chuyển template sang `nginx/templates/` rồi bind-mount thư mục đó.
-Nhưng bind-mount một thư mục **không tồn tại** thì Docker daemon **tự tạo nó rỗng** — đo trên
-Docker 29.7.2, `create_host_path: false` chỉ ngăn Compose tạo chứ không ngăn daemon, và `up`
-vẫn exit 0. Nay cấu hình được **COPY vào image** (`nginx/Dockerfile`): thiếu template là
-`docker build` đỏ.
+**Vòng hai**: bản vá đầu chuyển template sang `nginx/templates/` rồi bind-mount thư mục đó
+bằng **cú pháp ngắn**. Bind-mount một thư mục **không tồn tại** theo cú pháp ấy (vốn hàm ý
+`create_host_path: true`) thì thư mục bị **tạo rỗng** và `up` vẫn exit 0. Nay cấu hình được
+**COPY vào image** (`nginx/Dockerfile`).
+
+> ⚠️ **Đính chính 21-09-2026.** Bản trước viết `create_host_path: false` "chỉ ngăn Compose
+> tạo chứ không ngăn daemon". SAI trên đường dẫn Linux đã đo: rc≠0 và Docker trả lỗi
+> `bind source path does not exist`. Bảng đo + hai giới hạn: `CLAUDE.md` → "Nginx & Deploy".
 
 Triệu chứng đánh lừa của cả hai vòng: `nginx -t` báo *syntax is ok*, container `Up`, Docker
 publish 80/443 — nhưng từ ngoài là `ECONNREFUSED`.

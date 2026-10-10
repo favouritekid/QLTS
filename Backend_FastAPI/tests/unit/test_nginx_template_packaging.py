@@ -11,12 +11,14 @@ Production sống sót nhiều tuần chỉ nhờ một `nginx/conf.d/default.co
 nằm ngoài git — nên **một clean checkout thì site chết**.
 
 Vòng hai (bản vá đầu của chính sự cố trên): template chuyển sang
-`nginx/templates/` rồi bind-mount thư mục ấy vào container. Đo thật trên Docker
-29.7.2: bind-mount một thư mục KHÔNG tồn tại thì daemon TỰ TẠO nó rỗng —
-`create_host_path: false` chỉ ngăn Compose tạo, không ngăn daemon, và `up` vẫn
+`nginx/templates/` rồi bind-mount thư mục ấy vào container bằng CÚ PHÁP NGẮN.
+Bind-mount một thư mục KHÔNG tồn tại theo cú pháp ấy (hàm ý
+`create_host_path: true`) thì thư mục bị TẠO RỖNG và `up` vẫn
 exit 0 — nên clean checkout vẫn cho ra đúng trạng thái vòng một, cộng thêm vhost
 mặc định của image lộ ra (cổng 80 trả 200 "Welcome to nginx!" trong khi site
-chết). Nay cấu hình được COPY VÀO IMAGE: thiếu template là `docker build` đỏ.
+chết). Nay cấu hình được COPY VÀO IMAGE — xem docstring của
+`test_cau_hinh_di_theo_image_chu_khong_theo_thu_muc_host` để biết chính xác
+ca nào làm `docker build` đỏ và ca nào do `scripts/deploy.sh` chặn.
 
 Điều khiến cả hai vòng khó thấy: `nginx -t` vẫn báo *syntax is ok* (config rỗng
 vẫn hợp lệ), container vẫn `Up`, Docker vẫn publish 80/443.
@@ -237,17 +239,29 @@ def test_khong_con_template_trong_conf_d():
 
 
 def test_cau_hinh_di_theo_image_chu_khong_theo_thu_muc_host():
-    """Thiếu template phải làm `docker build` ĐỎ, không thành thư mục rỗng.
+    """Cấu hình phải ĐI THEO IMAGE, không theo một thư mục trên host.
 
-    Đo trên Docker 29.7.2: `create_host_path: false` chỉ ngăn Compose tạo thư
-    mục nguồn, daemon vẫn tạo và `up` vẫn exit 0 — nên bind-mount KHÔNG thể là
-    cơ chế fail-closed cho ca "clean checkout thiếu tệp".
+    Bind-mount bằng CÚ PHÁP NGẮN vào một source không tồn tại thì thư mục bị
+    tạo rỗng và `up` vẫn exit 0 — nên cú pháp ấy KHÔNG thể là cơ chế fail-closed
+    cho ca "clean checkout thiếu tệp".
+
+    Chính xác hai ca, đừng nói tắt thành "thiếu template ⇒ build đỏ":
+      - thiếu CẢ THƯ MỤC `templates/` ⇒ `COPY templates/` làm build ĐỎ;
+      - thiếu RIÊNG `default.conf.template` ⇒ `COPY` một THƯ MỤC vẫn qua; ca
+        đó do `scripts/deploy.sh` chặn TRƯỚC build, không phải do Dockerfile.
+
+    ⚠️ Đính chính 21-09-2026: bản trước quy điều đó cho `create_host_path: false`
+    ("chỉ ngăn Compose, daemon vẫn tạo"). SAI trên đường dẫn Linux đã đo — cho
+    rc≠0 và Docker trả lỗi `bind source path does not exist`. Các khẳng định của
+    ca kiểm này KHÔNG dựa vào mệnh đề ấy: nó chỉ đòi `COPY` có mặt trong
+    Dockerfile.
     """
     assert _DOCKERFILE.is_file(), "thiếu nginx/Dockerfile"
     df = _doc(_DOCKERFILE)
     assert re.search(r"^COPY\s+templates/\s+/etc/nginx/templates/", df, re.M), (
         "nginx/Dockerfile phải COPY templates/ vào image — đó là thứ biến "
-        "'thiếu template' thành một lần build đỏ thay vì một site chết im lặng"
+        "\"thiếu CẢ THƯ MỤC templates/\" thành một lần build đỏ thay vì một site "
+        "chết im lặng"
     )
     assert re.search(r"^COPY\s+nginx\.conf\s+/etc/nginx/nginx\.conf", df, re.M), (
         "nginx/Dockerfile phải COPY nginx.conf vào image"
