@@ -94,7 +94,13 @@ cho cả tài liệu vận hành lẫn script chạm production.
 - `Backend_FastAPI/Dockerfile` only installs `requirements.txt` (production deps)
 - `tests/` is in `.dockerignore` -- excluded from image, available in dev via bind mount
 - Test deps (`requirements-dev.txt`) must be installed manually into running container
-- `docker-entrypoint.sh` runs `alembic upgrade head` on container start
+- Migrations run **twice per routine deploy**: `scripts/deploy.sh` Step 6 runs a
+  one-off `docker compose -f docker-compose.yml --profile production --env-file .env.production run --rm --no-deps --entrypoint alembic backend upgrade head`
+  (`--entrypoint` keeps the image entrypoint out of that pass), then
+  `docker-entrypoint.sh` runs `alembic upgrade head` again whenever the backend
+  container is (re)created — a no-op when already at head. The entrypoint pass is
+  gated by `RUN_MIGRATIONS_ON_STARTUP` (backend default `true`; `celery-worker` and
+  `celery-beat` set `"false"`). Cold cutover skips Step 6; the operator runs it by hand.
 
 ---
 
@@ -268,7 +274,7 @@ clean checkout không có tệp render sẵn vẫn dựng được site.
 - **"Thiếu template ⇒ `docker build` ĐỎ"** chỉ chắc khi thiếu **cả thư mục**
   `nginx/templates/`. `COPY templates/` KHÔNG tự kiểm riêng
   `default.conf.template`. Thứ chặn ca thiếu đúng tệp ấy là
-  `scripts/deploy.sh:189` (`[ ! -f nginx/templates/default.conf.template ]`),
+  phép kiểm `[ ! -f nginx/templates/default.conf.template ]` trong `scripts/deploy.sh`,
   chạy **TRƯỚC** build.
 - **"Đổi template ⇒ `up -d` recreate"** đòi đã **build ra image mới**. Chuỗi
   đúng là: `Dockerfile COPY` → `compose build` → `compose up`. Compose recreate
@@ -374,8 +380,12 @@ REPOSITORY (SQLAlchemy ORM)
 - Active status + trusted device tracking
 
 ### Authorization (Casbin RBAC)
-- **Roles**: `admin`, `manager`, `officer`, `accountant`, `user`
-- **Diamond inheritance**: admin > (manager + accountant) > officer > user
+- **Roles** (`UserRole` in `app/core/constants.py`, `SYSTEM_ROLES` in the templates):
+  `admin`, `manager`, `accountant`, `officer`, `collaborator`, `user`
+- **Inheritance** (`role_inheritance` in `app/main.py`): admin → manager → officer → user;
+  accountant → officer. Neither admin nor manager inherits accountant (separation of
+  duties). `collaborator` (external CTV: submit leads, view own stats) has its own
+  template and inherits nothing.
 - Templates: `Backend_FastAPI/app/casbin_config/policy_templates.py`
 - Dependency gates in `deps.py`: `get_current_active_user`, `check_permission`, `require_admin`
 
@@ -390,10 +400,25 @@ REPOSITORY (SQLAlchemy ORM)
 
 ### Admission Profile State Machine
 
+15 statuses (CHECK constraint in `app/models/admission.py`). Source of truth for the
+edges: `ALLOWED_TRANSITIONS` in `app/services/admission_state_machine.py` — the
+summary below is derived from it; when they disagree, the table wins.
+
 ```
-draft -> submitted -> approved -> confirmed -> enrolled
-                   -> rejected -> resubmitted -> (re-evaluation)
-                   -> overridden (manager/admin override)
+Main:        draft -> submitted -> approved -> confirmed -> enrolled
+             resubmitted -> approved            (resubmitted has the same exits as submitted)
+Override:    approved -> overridden -> enrolled                       (manager/admin)
+Review:      submitted|resubmitted|revision_requested -> reviewing -> result_published
+             result_published -> admitted | waitlisted | rejected
+             admitted -> confirmed ;  waitlisted -> admitted | rejected
+Revision:    submitted|resubmitted|reviewing -> revision_requested -> resubmitted
+Rejection:   submitted|resubmitted|revision_requested|result_published|waitlisted
+               -> rejected -> resubmitted
+Withdrawal:  draft|submitted|resubmitted|revision_requested|reviewing|rejected|waitlisted
+               -> withdrawal_pending (awaiting refund) -> withdrawn
+             the same states, plus admitted, may also go -> withdrawn directly
+Back:        every non-final state may return -> draft
+Final:       enrolled, withdrawn
 ```
 
 ### Claim/Unclaim (Soft Review Assignment)
@@ -410,11 +435,18 @@ draft -> submitted -> approved -> confirmed -> enrolled
 ## Error Handling
 
 ### Backend Domain Exceptions (`app/utils/exceptions.py`)
+42 classes (counted at `3b2097ef`, including the base `BaseAppException`); each
+carries its own `status_code` — read the file, the list below is only the most used:
 - `ResourceNotFoundError` -> 404
 - `DuplicateResourceError` -> 409
 - `BusinessRuleViolation` -> 400
 - `ValidationError` -> 400
 - `ConflictError` -> 409
+- **503 fail-closed family** — `ServiceUnavailableError` and its subclasses
+  `InitialLeadStatusNotConfigured`, `AuthStateUnavailable`,
+  `AccountLockoutStateUnavailable`, `RefreshStateUnavailable`,
+  `AccessStateUnavailable`: server-side reference data missing, or auth state in
+  Redis could not be verified ⇒ the request is REFUSED, never let through.
 
 **NEVER** raise `HTTPException` in services.
 
