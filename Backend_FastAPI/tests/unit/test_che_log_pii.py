@@ -99,6 +99,8 @@ chuoi("P8", "info", event="v6_p8", phone="0900000001",
 chuoi("P9", "info", event="v6_p9", profile_id=4242, error_code="V6_MA_LOI_GIA",
       amount=215100000, ghi_chu="thu 215100000 dong cho ho so 4242")
 chuoi("P10", "info", event="v6_p10", redis_url="redis://:GIAMATKHAUP10@redis:6379/1")
+chuoi("P11", "info", event="v6_p11",
+      du_lieu={"api_key": "GIAV6KHOAP11A", "lop": {"authorization": "GIAV6KHOAP11B"}})
 
 # ---- (E/L/A) CỬA RA THẬT: logger -> handler gốc -> stderr
 slog = structlog.get_logger("v6.probe")
@@ -350,6 +352,14 @@ def test_structlog_giu_ma_ho_so_ma_loi_so_tien(web):
 def test_structlog_che_mat_khau_trong_url(web):
     dong = _dong_chuoi(web, "P10")
     assert "GIAMATKHAUP10" not in dong, "mật khẩu trong redis_url lọt: %s" % dong
+
+
+def test_structlog_che_khoa_bi_mat_long_trong_dict(web):
+    """Khoá bí mật nằm LỒNG trong dict: ``api_key``/``authorization`` không thuộc tập
+    khoá VĂN BẢN của filter gốc ⇒ chỉ processor che được (đo riêng chuỗi processor)."""
+    dong = _dong_chuoi(web, "P11")
+    lo = [v for v in ("GIAV6KHOAP11A", "GIAV6KHOAP11B") if v in dong]
+    assert lo == [], "khoá bí mật LỒNG trong dict (api_key/authorization) lọt: %s" % dong
 
 
 # ---------------------------------------------------------------------------

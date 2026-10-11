@@ -113,6 +113,40 @@ def test_map_nginx_trung_tap_tien_to_token_cua_python():
         % (lech, mong_doi))
 
 
+def _ap_map(khoi: str, gia_tri: str) -> str | None:
+    """Mô phỏng ``map`` nginx trên một giá trị: regex ĐẦU TIÊN khớp thắng (``~``
+    phân biệt hoa thường, ``~*`` không), ``$n`` trong đích = nhóm bắt. Không regex
+    nào khớp ⇒ ``None`` (đi ``default`` = giá trị THÔ)."""
+    for m in re.finditer(r'^\s*"([^"]*)"\s+"([^"]*)"\s*;', khoi, re.M):
+        khoa, dich = m.group(1), m.group(2)
+        if not khoa.startswith("~"):
+            continue
+        hoa_thuong = khoa.startswith("~*")
+        k = re.search(khoa[2:] if hoa_thuong else khoa[1:], gia_tri, re.I if hoa_thuong else 0)
+        if k:
+            return re.sub(r"\$(\d)", lambda g: k.group(int(g.group(1))) or "", dich)
+    return None
+
+
+def test_map_nginx_che_gia_tri_tham_so_query_chua_token():
+    """``/reset-password?token=…`` (``user_service``) vào cột request lẫn referer của
+    access log ⇒ CẢ HAI map phải che giá trị tham số query có tên chứa ``token``.
+    Tiền tố đường dẫn đã có test riêng; ca này canh nhánh query."""
+    conf = _doc(NGINX_CONF)
+    mau = {
+        ("$request", "$qlts_request_log"):
+            "GET /reset-password?token=GIAV6QTOKEN01&x=1 HTTP/1.1",
+        ("$http_referer", "$qlts_referer_log"):
+            "https://example.invalid/reset-password?reset_token=GIAV6QTOKEN01",
+    }
+    lo = {}
+    for (nguon, dich), gia_tri in mau.items():
+        ra = _ap_map(_khoi_map(conf, nguon, dich), gia_tri)
+        if ra is None or "GIAV6QTOKEN01" in ra:
+            lo[dich] = ra if ra is not None else "<không regex nào khớp ⇒ ghi THÔ>"
+    assert lo == {}, "map nginx để lọt token trong tham số query: %s" % lo
+
+
 def test_log_format_main_chi_dung_bien_da_che():
     lf = [c for c in _cau_lenh(_doc(NGINX_CONF), "log_format") if c.startswith("log_format main ")]
     assert len(lf) == 1, "HẠ TẦNG: không thấy đúng một log_format main"
