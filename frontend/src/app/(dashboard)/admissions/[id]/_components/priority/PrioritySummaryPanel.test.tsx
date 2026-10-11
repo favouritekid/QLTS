@@ -513,3 +513,39 @@ describe("PrioritySummaryPanel — chú giải căn cứ pháp lý", () => {
     expect(li?.textContent).not.toMatch(/Mục \d/)
   })
 })
+
+// ---------------------------------------------------------------------------
+// V3 F24 — chú giải căn cứ đi theo THÔNG TƯ backend trả (`applicable_circular_effective`).
+// Hồ sơ TT 76 không được hiện TT 05 / "Mục 6" (khung điểm TT 05); căn cứ phân loại KV tách
+// khỏi căn cứ mức điểm của nhà trường. Mỗi ca khoá MỘT ý.
+// ---------------------------------------------------------------------------
+
+function moChuGiaiTheoThongTu(thongTu: "TT05_2021" | "TT76_2026"): HTMLElement {
+  render(
+    <PrioritySummaryPanel
+      profile={buildProfileForCap({ applicable_circular_effective: thongTu } as Partial<AdmissionProfileResponse>)}
+      preview={null}
+    />,
+  )
+  fireEvent.click(screen.getByTestId("priority-summary-law-toggle"))
+  return screen.getByTestId("priority-summary-law-content")
+}
+
+describe("PrioritySummaryPanel — căn cứ theo thông tư áp dụng (V3 F24)", () => {
+  it("hồ sơ TT 76: nêu Thông tư 76, KHÔNG nêu Thông tư 05 hay 'Mục 6'", () => {
+    const t = moChuGiaiTheoThongTu("TT76_2026").textContent ?? ""
+    expect(t).toMatch(/76\/2026/)
+    expect(t).not.toMatch(/05\/2021/)
+    expect(t).not.toMatch(/Mục 6/)
+  })
+
+  it("hồ sơ TT 76: căn cứ phân loại KV tách khỏi căn cứ mức điểm của nhà trường", () => {
+    const noiDung = moChuGiaiTheoThongTu("TT76_2026")
+    expect(noiDung.querySelector('[data-testid="can-cu-phan-loai-kv"]')?.textContent).toMatch(/Phụ lục I/)
+    expect(noiDung.querySelector('[data-testid="can-cu-muc-diem"]')?.textContent).toMatch(/quyết định của nhà trường/)
+  })
+
+  it("hồ sơ TT 05 (tường minh): vẫn là TT 05/2021 Phụ lục 01", () => {
+    expect(moChuGiaiTheoThongTu("TT05_2021").textContent).toMatch(/05\/2021/)
+  })
+})

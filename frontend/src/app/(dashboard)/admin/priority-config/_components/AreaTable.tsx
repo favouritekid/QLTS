@@ -182,7 +182,7 @@ export function AreaTable({ academicYear }: AreaTableProps) {
         <div>
           <h3 className="text-base font-semibold">Khu vực (KV)</h3>
           <p className="text-muted-foreground text-sm">
-            Cộng điểm theo khu vực trường THPT (TT 05/2021 Phụ lục 01)
+            Cộng điểm theo khu vực trường THPT. Mức dùng chung cho hồ sơ TT 05/2021 và TT 76/2026: theo TT 05/2021 Phụ lục 01; với hồ sơ TT 76/2026 là mức theo quyết định của nhà trường — chưa có số văn bản.
           </p>
         </div>
         <Button size="sm" onClick={openCreate} data-testid="area-add-btn">

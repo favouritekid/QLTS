@@ -1256,8 +1256,13 @@ PHAN_VUNG_CAN = {"a", "c"}
 #: (test âm tính phân quyền theo phạm vi — tệp mới). THÊM selector nên digest
 #: phải đổi (61 → 62 selector); giá trị cũ là
 #: `225f70b986cb46137c5a30606594384dd86a4aa2814e8de7d091902a28ae1e0b`.
+#: Cập nhật 11-10-2026 (V3 — thông tư áp dụng theo hồ sơ): Tier 2c nhận
+#: `tests/api/test_applicable_circular_endpoint.py` (tệp MỚI — quyền + IDOR +
+#: version của endpoint đổi thông tư). THÊM selector nên digest phải đổi
+#: (62 → 63 selector); giá trị cũ là
+#: `f71ff45fb5e1fc9af90ab8c3d9925013afd1cfa3f38df0932f72cf53d6cac893`.
 SHA_HOP_SELECTOR_TIER2 = (
-    "f71ff45fb5e1fc9af90ab8c3d9925013afd1cfa3f38df0932f72cf53d6cac893"
+    "846230dbed53b1d5fcd35afed65eb22c288dd76b5eeae69547cad207ee27cc8e"
 )
 
 # --- Phân hoạch Tier 4 (SPLIT 18-09-2026) -------------------------------------

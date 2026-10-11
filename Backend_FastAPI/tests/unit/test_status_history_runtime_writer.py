@@ -55,6 +55,19 @@ def _user(uid: int, role: str):
     return SimpleNamespace(id=uid, role=role)
 
 
+def _hang_lich_su(db):
+    """Hàng lịch sử DUY NHẤT mà ``transition()`` thêm vào phiên.
+
+    Từ V3, cạnh ``draft → submitted`` còn thêm một hàng ``priority_audit_log`` ``circular_defaulted`` (đóng dấu lần
+    nộp đầu + thông tư mặc định) ⇒ lấy hàng lịch sử theo KIỂU, không theo "lần ``add`` cuối".
+    """
+    from app.models.admission_profile_status_history import AdmissionProfileStatusHistory
+
+    hang = [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], AdmissionProfileStatusHistory)]
+    assert len(hang) == 1, hang
+    return hang[0]
+
+
 def _profile(pid: int = 1, status: str = "draft", lead_id: int = 100, version: int = 1):
     """``AdmissionProfile`` double — only the fields ``transition()``
     mutates or reads (status, version, updated_at, lead_id, id)."""
@@ -178,10 +191,10 @@ class TestTransitionWriterContract:
                 source="api",
                 skip_dispatch=True,
             )
-        # Single ``db.add()`` for the history row — dispatch is skipped
-        # so no outbox row competes for the call count.
-        assert db.add.call_count == 1
-        history_row = db.add.call_args[0][0]
+        # Single history row — dispatch is skipped so no outbox row is added.
+        # V3: the draft→submitted edge ALSO adds one ``circular_defaulted``
+        # audit row (first-submission stamp) ⇒ select the history row by TYPE.
+        history_row = _hang_lich_su(db)
         assert history_row.profile_id == profile.id
         assert history_row.from_status == "draft"
         assert history_row.to_status == "submitted"
@@ -207,7 +220,7 @@ class TestTransitionWriterContract:
                 source="api",
                 skip_dispatch=True,
             )
-        history_row = db.add.call_args[0][0]
+        history_row = _hang_lich_su(db)
         assert history_row.from_status == "submitted"
         assert history_row.to_status == "approved"
 
@@ -231,7 +244,7 @@ class TestTransitionWriterContract:
                 source="api",
                 skip_dispatch=True,
             )
-        history_row = db.add.call_args[0][0]
+        history_row = _hang_lich_su(db)
         # The model maps ``transitioned_by_role`` (legacy ENUM) to a
         # plain attribute despite the column being mapped under the
         # same name; resolver returns it under the same key.
@@ -277,7 +290,7 @@ class TestTransitionWriterContract:
         # carrying the override context so admin audit queries can
         # branch on it without joining the legacy log_changes row.
         assert db.add.call_count == 1
-        history_row = db.add.call_args[0][0]
+        history_row = _hang_lich_su(db)
         assert history_row.from_status == "approved"
         assert history_row.to_status == "overridden"
         assert history_row.transition_reason == "Admin force-approve"
@@ -328,7 +341,7 @@ class TestTransitionWriterContract:
                 source="bulk",
                 skip_dispatch=True,
             )
-        history_row = db.add.call_args[0][0]
+        history_row = _hang_lich_su(db)
         assert history_row.metadata_["source"] == "bulk"
 
     @pytest.mark.asyncio
@@ -352,7 +365,7 @@ class TestTransitionWriterContract:
                 event_metadata={"override": True, "bypass_rules": True},
                 skip_dispatch=True,
             )
-        history_row = db.add.call_args[0][0]
+        history_row = _hang_lich_su(db)
         assert history_row.metadata_["override"] is True
         assert history_row.metadata_["bypass_rules"] is True
         assert history_row.metadata_["source"] == "override"
@@ -399,7 +412,7 @@ class TestTransitionWriterContract:
                 source="system",
                 skip_dispatch=True,
             )
-        history_row = db.add.call_args[0][0]
+        history_row = _hang_lich_su(db)
         assert history_row.transitioned_by_role == "system"
         assert history_row.actor_actual_role == "system"
         assert history_row.transitioned_by_user_id is None
@@ -425,7 +438,7 @@ class TestTransitionWriterContract:
                 source="magic_link",
                 skip_dispatch=True,
             )
-        history_row = db.add.call_args[0][0]
+        history_row = _hang_lich_su(db)
         assert history_row.transitioned_by_role == "candidate"
         assert history_row.actor_actual_role == "candidate"
         assert history_row.transitioned_by_user_id is None
@@ -450,5 +463,5 @@ class TestTransitionWriterContract:
                 source="api",
                 skip_dispatch=True,
             )
-        history_row = db.add.call_args[0][0]
+        history_row = _hang_lich_su(db)
         assert history_row.occurred_at == profile.updated_at
