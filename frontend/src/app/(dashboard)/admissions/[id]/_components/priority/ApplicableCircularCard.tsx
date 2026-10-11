@@ -56,6 +56,7 @@ const MAX_REASON = 500
 
 type CircularProfile = Pick<
   AdmissionProfileResponse,
+  | "applicable_circular"
   | "applicable_circular_effective"
   | "applicable_circular_effective_basis"
   | "applicable_circular_source"
@@ -159,7 +160,8 @@ export function ApplicableCircularCard({ profile }: ApplicableCircularCardProps)
           onOpenChange={setOpen}
           profileId={profile.id}
           profileVersion={profile.version ?? 0}
-          current={profile.applicable_circular_effective}
+          stored={profile.applicable_circular ?? null}
+          effective={profile.applicable_circular_effective}
           requiresAck={Boolean(profile.permissions?.change_applicable_circular_requires_ack)}
         />
       )}
@@ -172,7 +174,10 @@ interface ApplicableCircularDialogProps {
   onOpenChange: (open: boolean) => void
   profileId: number
   profileVersion: number
-  current: ApplicableCircular
+  /** Giá trị ĐÃ LƯU (NULL khi chưa nộp và chưa đặt tay) — backend từ chối đổi sang đúng giá trị này. */
+  stored: ApplicableCircular | null
+  /** Giá trị đang áp/dự kiến do backend tính — chỉ để hiển thị. */
+  effective: ApplicableCircular
   requiresAck: boolean
 }
 
@@ -181,7 +186,8 @@ export function ApplicableCircularDialog({
   onOpenChange,
   profileId,
   profileVersion,
-  current,
+  stored,
+  effective,
   requiresAck,
 }: ApplicableCircularDialogProps) {
   const mutation = useChangeApplicableCircular(profileId)
@@ -193,7 +199,9 @@ export function ApplicableCircularDialog({
   const reasonLen = reason.trim().length
   const canSubmit =
     circular !== "" &&
-    circular !== current &&
+    // So với giá trị ĐÃ LƯU như backend (`cu == circular` ⇒ 400). So với giá trị DỰ KIẾN thì hồ sơ chưa nộp
+    // không ghim được chính thông tư đang dự kiến (vd giữ TT 05 qua 03-11).
+    circular !== stored &&
     reasonLen >= MIN_REASON &&
     reasonLen <= MAX_REASON &&
     (!requiresAck || ack) &&
@@ -244,7 +252,10 @@ export function ApplicableCircularDialog({
         <ResponsiveDialogHeader>
           <ResponsiveDialogTitle>Đổi thông tư áp dụng</ResponsiveDialogTitle>
           <ResponsiveDialogDescription>
-            Hiện tại: {CIRCULAR_LABEL[current]}. Thay đổi được ghi vào nhật ký kèm lý do.
+            {stored
+              ? `Đang áp dụng: ${CIRCULAR_LABEL[stored]} (đã lưu).`
+              : `Chưa đặt — dự kiến ${CIRCULAR_LABEL[effective]} nếu nộp hôm nay; chọn để ghim.`}{" "}
+            Thay đổi được ghi vào nhật ký kèm lý do.
           </ResponsiveDialogDescription>
         </ResponsiveDialogHeader>
 
@@ -259,7 +270,7 @@ export function ApplicableCircularDialog({
               </SelectTrigger>
               <SelectContent>
                 {(Object.keys(CIRCULAR_LABEL) as ApplicableCircular[])
-                  .filter((c) => c !== current)
+                  .filter((c) => c !== stored)
                   .map((c) => (
                     <SelectItem key={c} value={c}>
                       {CIRCULAR_LABEL[c]}

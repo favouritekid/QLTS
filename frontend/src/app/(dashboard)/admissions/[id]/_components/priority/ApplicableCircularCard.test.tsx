@@ -39,6 +39,7 @@ const BASE = {
   id: 7,
   version: 3,
   permissions: {} as Record<string, boolean>,
+  applicable_circular: "TT05_2021" as "TT05_2021" | "TT76_2026" | null,
   applicable_circular_effective: "TT05_2021" as const,
   applicable_circular_effective_basis: "stored" as const,
   applicable_circular_source: "default_first_submit" as const,
@@ -65,6 +66,7 @@ describe("deriveCircularDisplay", () => {
   it("hồ sơ chưa nộp: nhãn 'Dự kiến' và 'Chưa nộp'", () => {
     const v = deriveCircularDisplay({
       ...BASE,
+      applicable_circular: null,
       applicable_circular_effective: "TT76_2026",
       applicable_circular_effective_basis: "predicted",
       applicable_circular_source: null,
@@ -132,7 +134,8 @@ describe("ApplicableCircularDialog", () => {
         onOpenChange={vi.fn()}
         profileId={7}
         profileVersion={3}
-        current="TT05_2021"
+        stored="TT05_2021"
+        effective="TT05_2021"
         requiresAck={false}
       />,
     )
@@ -156,7 +159,8 @@ describe("ApplicableCircularDialog", () => {
         onOpenChange={vi.fn()}
         profileId={7}
         profileVersion={3}
-        current="TT05_2021"
+        stored="TT05_2021"
+        effective="TT05_2021"
         requiresAck
       />,
     )
@@ -164,5 +168,45 @@ describe("ApplicableCircularDialog", () => {
     expect(screen.getByTestId("circular-submit")).toBeDisabled()
     await user.click(screen.getByTestId("circular-ack-checkbox"))
     expect(screen.getByTestId("circular-submit")).toBeEnabled()
+  })
+})
+
+describe("ApplicableCircularCard — ghim thông tư đang DỰ KIẾN (V3 F25)", () => {
+  it("chưa lưu, đang dự kiến TT 05: hộp thoại cho chọn TT 05 để ghim qua 03-11", async () => {
+    const user = userEvent.setup()
+    wrap(
+      <ApplicableCircularCard
+        profile={{
+          ...BASE,
+          applicable_circular: null,
+          applicable_circular_source: null,
+          applicable_circular_effective_basis: "predicted",
+          first_submitted_at: null,
+          first_submitted_source: null,
+          permissions: { change_applicable_circular: true },
+        }}
+      />,
+    )
+    await user.click(screen.getByTestId("applicable-circular-change-button"))
+    await user.click(screen.getByTestId("circular-select"))
+    expect(await screen.findByRole("option", { name: "TT 05/2021/TT-BLĐTBXH" })).toBeInTheDocument()
+  })
+
+  it("đã lưu TT 05: không đề nghị đổi sang chính TT 05", async () => {
+    const user = userEvent.setup()
+    wrap(
+      <ApplicableCircularCard
+        profile={{
+          ...BASE,
+          applicable_circular: "TT05_2021",
+          applicable_circular_source: "manual",
+          permissions: { change_applicable_circular: true },
+        }}
+      />,
+    )
+    await user.click(screen.getByTestId("applicable-circular-change-button"))
+    await user.click(screen.getByTestId("circular-select"))
+    await screen.findByRole("option", { name: "TT 76/2026/TT-BGDĐT" })
+    expect(screen.queryByRole("option", { name: "TT 05/2021/TT-BLĐTBXH" })).not.toBeInTheDocument()
   })
 })

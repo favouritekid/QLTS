@@ -161,6 +161,9 @@ export function resolveCap(
 export function PrioritySummaryPanel({ profile, preview }: PrioritySummaryPanelProps) {
   const [auditOpen, setAuditOpen] = useState(false)
   const [lawOpen, setLawOpen] = useState(false)
+  // V3 — căn cứ theo thông tư ÁP DỤNG do backend tính (lưu, hoặc dự kiến cho hồ sơ chưa nộp).
+  // Thiếu trường (dữ liệu cũ) ⇒ TT 05, khớp mặc định của zod schema.
+  const thongTu = profile.applicable_circular_effective ?? "TT05_2021"
 
   const { kv, areaBonus, verifiedBucket } = resolveSummaryDisplay(profile, preview)
 
@@ -288,36 +291,62 @@ export function PrioritySummaryPanel({ profile, preview }: PrioritySummaryPanelP
             className="mt-2 space-y-2 rounded-md border border-border bg-muted/40 p-3 text-xs"
             data-testid="priority-summary-law-content"
           >
-            <p>
-              <strong>Thông tư 05/2021/TT-BLĐTBXH</strong> Phụ lục 01 — Các chính
-              sách ưu tiên.
-            </p>
-            <ul className="list-disc space-y-1 pl-5">
-              <li>
-                <strong>Mục 5.a:</strong> học liên tục và tốt nghiệp ở khu vực nào
-                thì hưởng khu vực đó; chuyển trường thì theo khu vực học lâu hơn;
-                mỗi năm một trường hoặc nửa thời gian mỗi trường thì theo khu vực
-                nơi tốt nghiệp.
-              </li>
-              <li>
-                <strong>Mục 5.b:</strong> các trường hợp hưởng khu vực theo hộ khẩu
-                thường trú (phổ thông dân tộc nội trú, dự bị, lớp tạo nguồn, hộ khẩu
-                trên 18 tháng ở xã khó khăn theo quy định, quân nhân/công an).
-              </li>
-              <li>
-                <strong>Mục 5.c:</strong> danh sách khu vực KV1, KV2-NT, KV2, KV3.
-              </li>
-              <li>
-                <strong>Mục 6:</strong> khung điểm ưu tiên — chênh lệch 1,0 điểm giữa
-                hai nhóm đối tượng kế tiếp, 0,25 điểm giữa hai khu vực kế tiếp (thang
-                điểm 10).
-              </li>
-              <li>
-                <strong>Ấn định khu vực thủ công:</strong> thao tác xác nhận nội bộ
-                của nhà trường (bắt buộc lý do, có nhật ký) — không thuộc mục nào
-                của thông tư.
-              </li>
-            </ul>
+            {thongTu === "TT76_2026" ? (
+              <>
+                <p>
+                  <strong>Thông tư 76/2026/TT-BGDĐT</strong> — hồ sơ áp dụng thông tư này
+                  (theo ngày nộp lần đầu hoặc đặt tay).
+                </p>
+                <ul className="list-disc space-y-1 pl-5">
+                  <li data-testid="can-cu-phan-loai-kv">
+                    <strong>Phân loại khu vực, đối tượng ưu tiên:</strong> theo Phụ lục I của
+                    Thông tư 76/2026/TT-BGDĐT. Số mục cụ thể chưa được đối chiếu nguyên văn.
+                  </li>
+                  <li data-testid="can-cu-muc-diem">
+                    <strong>Mức điểm cộng:</strong> dùng chung bảng mức hiện hành, theo quyết định
+                    của nhà trường — chưa có số văn bản.
+                  </li>
+                  <li>
+                    <strong>Ấn định khu vực thủ công:</strong> thao tác xác nhận nội bộ
+                    của nhà trường (bắt buộc lý do, có nhật ký) — không thuộc mục nào
+                    của thông tư.
+                  </li>
+                </ul>
+              </>
+            ) : (
+              <>
+                <p>
+                  <strong>Thông tư 05/2021/TT-BLĐTBXH</strong> Phụ lục 01 — Các chính
+                  sách ưu tiên.
+                </p>
+                <ul className="list-disc space-y-1 pl-5">
+                  <li>
+                    <strong>Mục 5.a:</strong> học liên tục và tốt nghiệp ở khu vực nào
+                    thì hưởng khu vực đó; chuyển trường thì theo khu vực học lâu hơn;
+                    mỗi năm một trường hoặc nửa thời gian mỗi trường thì theo khu vực
+                    nơi tốt nghiệp.
+                  </li>
+                  <li>
+                    <strong>Mục 5.b:</strong> các trường hợp hưởng khu vực theo hộ khẩu
+                    thường trú (phổ thông dân tộc nội trú, dự bị, lớp tạo nguồn, hộ khẩu
+                    trên 18 tháng ở xã khó khăn theo quy định, quân nhân/công an).
+                  </li>
+                  <li>
+                    <strong>Mục 5.c:</strong> danh sách khu vực KV1, KV2-NT, KV2, KV3.
+                  </li>
+                  <li>
+                    <strong>Mục 6:</strong> khung điểm ưu tiên — chênh lệch 1,0 điểm giữa
+                    hai nhóm đối tượng kế tiếp, 0,25 điểm giữa hai khu vực kế tiếp (thang
+                    điểm 10).
+                  </li>
+                  <li>
+                    <strong>Ấn định khu vực thủ công:</strong> thao tác xác nhận nội bộ
+                    của nhà trường (bắt buộc lý do, có nhật ký) — không thuộc mục nào
+                    của thông tư.
+                  </li>
+                </ul>
+              </>
+            )}
           </div>
         )}
       </div>
