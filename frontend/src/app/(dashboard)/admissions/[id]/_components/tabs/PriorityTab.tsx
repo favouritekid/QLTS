@@ -31,6 +31,7 @@ import type {
   AdmissionProfileUpdateInput,
 } from "@/lib/zod/admissions"
 
+import { ApplicableCircularCard } from "../priority/ApplicableCircularCard"
 import { EngineResultCard } from "../priority/EngineResultCard"
 import { PriorityHeaderBanner } from "../priority/PriorityHeaderBanner"
 import { PriorityInputsSection } from "../priority/PriorityInputsSection"
@@ -125,6 +126,9 @@ export function PriorityTab({
     <div className="space-y-4" data-testid="priority-tab-workbench">
       {/* Compact header — 1-dòng "Tạm tính KV + UT = +X,XXđ" with state badge */}
       <PriorityHeaderBanner profile={profile} preview={preview ?? null} />
+
+      {/* V3 — thông tư áp dụng + nguồn + ngày nộp đầu + cảnh báo danh mục KV tạm */}
+      <ApplicableCircularCard profile={profile} />
 
       {/* § 1 Inputs — cultural + vocational + special-case + commune */}
       <PriorityInputsSection form={form} isEditable={isEditable} />

@@ -878,8 +878,15 @@ async def preview_priority_kv(
 
     # Phase E.4 — resolve citation pháp lý cho FE EngineResultCard hiển thị
     # "Căn cứ: <citation>". None nếu rule_applied=ambiguous_requires_manual.
+    # V3 — câu căn cứ + cảnh báo danh mục theo THÔNG TƯ ĐANG ÁP của hồ sơ (lưu, hoặc dự kiến
+    # theo hôm nay giờ VN khi hồ sơ chưa nộp/chưa đặt tay).
+    from datetime import datetime as _dt, timezone as _tz
+
+    from app.constants.admission_circular import circular_effective, kv_catalog_warning
     from app.services.priority_service import resolve_law_citation
-    rule_law_citation = resolve_law_citation(meta.get("rule_applied"))
+
+    thong_tu, _can_cu_thong_tu = circular_effective(profile.applicable_circular, _dt.now(_tz.utc))
+    rule_law_citation = resolve_law_citation(meta.get("rule_applied"), thong_tu)
 
     # Code review 2026-05-22 — denorm path_bonus_rule trong preview để FE
     # hiển thị cap consistent giữa draft (preview) và frozen (snapshot).
@@ -918,6 +925,8 @@ async def preview_priority_kv(
         total_bonus_potential=total_bonus_potential,
         rule_law_citation=rule_law_citation,
         path_bonus_rule=path_bonus_rule_dict,
+        applicable_circular_effective=thong_tu,
+        priority_catalog_warning=kv_catalog_warning(thong_tu),
     )
 
 
@@ -1076,6 +1085,77 @@ async def override_priority_kv(
     # post-mutation to set permissions/available_actions/etc.
     from app.services import admission_service
 
+    await admission_service._populate_response_fields(
+        db, reloaded, current_user=current_user
+    )
+    return reloaded
+
+
+# =============================================================================
+# V3 — Đổi thông tư áp dụng của hồ sơ (manager/admin; owner T2c + Q3 + Q4)
+# =============================================================================
+
+
+@router.post(
+    "/{profile_id}/applicable-circular",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Đổi thông tư áp dụng của hồ sơ (manager/admin)",
+)
+async def change_applicable_circular(
+    profile_id: int,
+    payload: schemas.ApplicableCircularChangeRequest = Body(...),
+    db: AsyncSession = Depends(database.get_db),
+    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    current_user: models.User = CasbinAuth,
+):
+    """Ghi thông tư mới + một hàng nhật ký ``circular_changed`` + tăng version, trong MỘT giao dịch.
+
+    * Casbin (``v3circ20261011b``): manager/admin allow, accountant deny tường minh, officer không có dòng.
+    * IDOR: ``get_admission_for_user`` — sai phạm vi ⇒ 404.
+    * Service ``applicable_circular_service.change_applicable_circular``: version (409), vai trò/trạng thái theo
+      đúng ma trận của ấn định KV (``PermissionError`` ⇒ 403), lý do 20–500.
+    """
+    from fastapi import HTTPException
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from app.services import admission_service
+    from app.services.applicable_circular_service import (
+        change_applicable_circular as _change,
+    )
+
+    try:
+        await _change(
+            db,
+            profile,
+            circular=payload.circular,
+            reason=payload.reason,
+            expected_version=payload.version,
+            actor=current_user,
+            acknowledge_post_publish=payload.acknowledge_post_publish,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+    await db.commit()
+
+    log.info(
+        "admissions_v2.change_applicable_circular",
+        profile_id=profile_id,
+        actor_id=current_user.id,
+        circular=payload.circular,
+    )
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
+    )
+    reloaded = (await db.execute(stmt)).scalar_one()
     await admission_service._populate_response_fields(
         db, reloaded, current_user=current_user
     )

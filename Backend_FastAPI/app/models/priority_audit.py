@@ -63,7 +63,10 @@ class PriorityAuditLog(Base):
             "'ut_evidence_rejected',"
             "'admin_bulk_fill',"
             "'ut_evidence_untick',"
-            "'ut_evidence_warning_dismissed'"
+            "'ut_evidence_warning_dismissed',"
+            # V3 (v3circ20261011b): thông tư áp dụng theo hồ sơ — mặc định lúc nộp đầu / đổi tay.
+            "'circular_defaulted',"
+            "'circular_changed'"
             ")",
             name="ck_priority_audit_log_action_type",
         ),

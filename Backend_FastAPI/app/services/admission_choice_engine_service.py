@@ -383,6 +383,29 @@ class CascadeResult:
 # ============================================================================
 
 
+def ghi_dau_vet_thong_tu(choice: "AdmissionProfileChoice", profile: "AdmissionProfile") -> None:
+    """V3 — chép thông tư ÁP DỤNG của hồ sơ + trạng thái danh mục KV của thông tư ấy vào
+    ``choice.priority_config_snapshot``: dấu vết lúc chấm (owner Q6 + Q11).
+
+    Đọc CỘT ``applicable_circular``. Không bao giờ thay bằng thông tư "dự kiến theo hôm nay": hồ sơ nộp trước
+    03-11 chấm sau 03-11 vẫn là TT 05.
+
+    Cột NULL trên hồ sơ đã nộp không xảy ra ở production (CHECK ``ck_admission_profile_post_submit_stamped`` +
+    ``ck_admission_profile_submitted_has_circular``); chỉ gặp ở fixture tạo hồ sơ thẳng ở ``submitted``. Khi ấy
+    ghi ``None`` + log cảnh báo, KHÔNG chặn chấm: thông tư không đổi điểm (mức và danh mục KV dùng chung).
+    """
+    from ..constants.admission_circular import KV_CATALOG_STATUS
+
+    thong_tu = profile.applicable_circular
+    if thong_tu is None:
+        log.warning("engine_t6_applicable_circular_missing", profile_id=getattr(profile, "id", None))
+    choice.priority_config_snapshot = {
+        **(choice.priority_config_snapshot or {}),
+        "circular": thong_tu,
+        "kv_catalog_status": KV_CATALOG_STATUS[thong_tu] if thong_tu is not None else None,
+    }
+
+
 def resolve_effective_bonus_rule(path: "AdmissionPath") -> Optional[Dict[str, Any]]:
     """Resolve BonusRule per chain: path.bonus_rule_override
     ?? method.default_bonus_rule. Returns dict (JSONB-shaped) or None.
@@ -942,6 +965,7 @@ async def evaluate_cascade(
                 rule=choice.bonus_rule_snapshot,
                 academic_year=academic_year,
             )
+            ghi_dau_vet_thong_tu(choice, profile)
 
         # Q9 #07 CR-P0: feed the priority bonus total into the decision
         # so the snapshot columns actually affect admit/reject. Without

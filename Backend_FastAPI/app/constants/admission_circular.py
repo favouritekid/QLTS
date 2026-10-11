@@ -117,3 +117,40 @@ def default_circular_for(day: date) -> str:
         # mà hàm này sinh ra để chặn.
         raise TypeError("default_circular_for nhận NGÀY (date), hãy qua vn_calendar_date() trước")
     return TT76_2026 if day >= CIRCULAR_CUTOVER_DATE else TT05_2021
+
+
+CIRCULAR_BASIS_STORED = "stored"
+CIRCULAR_BASIS_PREDICTED = "predicted"
+
+
+def circular_effective(stored: "str | None", now: datetime) -> "tuple[str, str]":
+    """Thông tư ĐANG ÁP cho hiển thị: ``(mã, căn_cứ)``.
+
+    * Có giá trị lưu (đã nộp, hoặc đã đặt tay) ⇒ giá trị ấy, ``stored``. Hồ sơ đã nộp KHÔNG BAO GIỜ rơi về
+      "hôm nay": ràng buộc ``ck_admission_profile_submitted_has_circular`` bảo đảm đã nộp thì có thông tư.
+    * Chưa nộp, chưa đặt tay ⇒ dự kiến theo ngày lịch VN của ``now``, ``predicted`` — nộp hôm nay thì sẽ áp.
+    """
+    if stored is not None:
+        return stored, CIRCULAR_BASIS_STORED
+    return default_circular_for(vn_calendar_date(now)), CIRCULAR_BASIS_PREDICTED
+
+
+KV_CATALOG_WARNING_CODE = "kv_catalog_provisional"
+_TEN_THONG_TU = {TT05_2021: "TT 05/2021", TT76_2026: "TT 76/2026"}
+
+
+def kv_catalog_warning(circular: str) -> "dict[str, str] | None":
+    """Cảnh báo danh mục KV TẠM cho thông tư ``circular``; ``None`` khi danh mục của thông tư ấy đã xác nhận.
+
+    Mã thông tư lạ ⇒ ``KeyError`` (không đoán "không cảnh báo").
+    """
+    if KV_CATALOG_STATUS[circular] != KV_CATALOG_PROVISIONAL:
+        return None
+    return {
+        "code": KV_CATALOG_WARNING_CODE,
+        "circular": circular,
+        "message": (
+            "Danh mục khu vực ưu tiên đang dùng cho %s là danh mục TẠM, chưa được nhà trường xác nhận khớp "
+            "danh sách chính thức. Kết quả khu vực cần được kiểm lại." % _TEN_THONG_TU[circular]
+        ),
+    }

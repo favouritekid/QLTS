@@ -245,6 +245,8 @@ ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     ("POST", "/api/v2/admin/years/{academic_year}/rounds/bulk-create"),
     ("POST", "/api/v2/admissions/magic-link/{action}/{token}"),
     ("POST", "/api/v2/admissions/{profile_id}/admin-rollback"),
+    # V3 — đổi thông tư áp dụng: thao tác ghi tuyển sinh ⇒ bị đóng băng như ấn định KV.
+    ("POST", "/api/v2/admissions/{profile_id}/applicable-circular"),
     ("POST", "/api/v2/admissions/{profile_id}/choices"),
     ("DELETE", "/api/v2/admissions/{profile_id}/choices/{choice_id}"),
     ("PATCH", "/api/v2/admissions/{profile_id}/choices/{choice_id}"),

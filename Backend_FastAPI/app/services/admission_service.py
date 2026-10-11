@@ -2242,6 +2242,27 @@ def _missing_submit_required_data(profile: models.AdmissionProfile) -> List[str]
     return missing
 
 
+def _co_quyen_doi_thong_tu(status: str, *, is_admin: bool, is_manager: bool) -> bool:
+    """Cờ ``permissions.change_applicable_circular`` — CÙNG ma trận với service đổi thông tư (owner Q3).
+
+    Hai tập trạng thái lấy từ ``priority_override_service`` (import muộn: tránh vòng import lúc nạp module).
+    """
+    from .priority_override_service import _HARD_DENIED_STATUS, _POST_PUBLISH_STATUS
+
+    if status in _HARD_DENIED_STATUS:
+        return False
+    if status in _POST_PUBLISH_STATUS:
+        return is_admin
+    return is_admin or is_manager
+
+
+def _doi_thong_tu_can_xac_nhan(status: str) -> bool:
+    """Đổi thông tư ở trạng thái này có cần ``acknowledge_post_publish`` không (cùng tập với service)."""
+    from .priority_override_service import _POST_PUBLISH_STATUS
+
+    return status in _POST_PUBLISH_STATUS
+
+
 def _compute_frontend_fields(
     profile: models.AdmissionProfile,
     current_user: models.User,
@@ -2407,6 +2428,16 @@ def _compute_frontend_fields(
                 )
             )
         ),
+        # V3 — đổi thông tư áp dụng (owner Q3 "Như ấn định KV"): cấm ở các
+        # trạng thái rút/loại; sau công bố chỉ admin; còn lại manager + admin.
+        # Dùng CHÍNH hai tập của ``priority_override_service`` — cờ này và
+        # service ``applicable_circular_service`` cùng đọc một nguồn.
+        "change_applicable_circular": _co_quyen_doi_thong_tu(
+            status, is_admin=is_admin, is_manager=is_manager
+        ),
+        # Hồ sơ đã công bố ⇒ hộp thoại phải có ô xác nhận (service đòi
+        # ``acknowledge_post_publish``). Server nói, FE không tự suy trạng thái.
+        "change_applicable_circular_requires_ack": _doi_thong_tu_can_xac_nhan(status),
         # Q9 #07 Phase E.3 — UT evidence verify/reject (officer write-path).
         # Used by FE UtEvidenceTab (Step 8 officer-only). Service-layer
         # (priority_override_service._evidence_mutation_common_checks) refuses

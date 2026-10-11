@@ -643,6 +643,7 @@ jobs:
               tests/security/test_socket_offboarding.py
               tests/unit/test_admission_idor_filters.py
               tests/security/test_az_phan_quyen.py
+              tests/api/test_applicable_circular_endpoint.py
 
           # ---------------------------------------------------------------
           # Tier 2b: Luồng XUẤT tệp (danh sách khoản phí + báo cáo công nợ)
@@ -1071,6 +1072,7 @@ jobs:
             tests: >-
               tests/integration/test_admission_state_transitions.py
               tests/api/test_v3_first_submission_backfill_migration.py
+              tests/integration/test_first_submission_stamp.py
           # `test_conftest_db_url_guard.py` vào Tier 5, cùng họ phép kiểm CẤU
           # TRÚC với `test_nginx_template_packaging` / `test_ci_test_visibility`:
           # nó đọc `tests/conftest.py` và `tests/fixtures/database.py` như VĂN
@@ -1149,6 +1151,7 @@ jobs:
               tests/integration/test_document_audience_config_panel.py
               tests/unit/test_phase_e4_audit_fixes.py
               tests/unit/test_admission_circular_constants.py
+              tests/unit/test_priority_catalog_warning.py
 
     env:
       APP_ENV: test

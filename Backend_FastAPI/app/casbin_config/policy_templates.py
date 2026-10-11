@@ -509,6 +509,9 @@ ACCOUNTANT_TEMPLATE: PolicyTemplate = {
         # evidence. Mirror officer ALLOW block above so accountant via tree
         # inheritance (role:accountant → role:officer) bounces off deny effect.
         {"subject": "{role}", "object": "/api/v2/admissions/*/override-priority-kv",          "action": "POST",  "eft": "deny"},
+        # V3 — đổi thông tư áp dụng của hồ sơ: chỉ manager/admin (owner T2c + Q3). Accountant kế thừa officer ⇒
+        # deny TƯỜNG MINH. Seed DB: migration v3circ20261011b.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/applicable-circular",           "action": "POST",  "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/verify",     "action": "PATCH", "eft": "deny"},
         {"subject": "{role}", "object": "/api/v2/admissions/*/priority-objects/*/reject",     "action": "PATCH", "eft": "deny"},
         # Q9 #07 Phase E.4 PR-2 — Priority evidence upload + untick (accountant
@@ -636,6 +639,9 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         # officer hard-blocked at service level per nghiệp vụ #10). Admin
         # inherits via wildcard `/*`.
         {"subject": "{role}", "object": "/api/v2/admissions/*/override-priority-kv", "action": "POST"},
+        # V3 — đổi thông tư áp dụng (owner T2c + Q3: manager + admin; sau công bố chỉ admin — service chặn).
+        # Officer KHÔNG có dòng. Seed DB: migration v3circ20261011b.
+        {"subject": "{role}", "object": "/api/v2/admissions/*/applicable-circular", "action": "POST"},
         # NOTE: /withdraw lives in OFFICER_TEMPLATE — manager inherits via diamond.
         {"subject": "{role}", "object": "/api/admissions/{id}/claim", "action": "POST"},  # Claim profile for review
         {"subject": "{role}", "object": "/api/admissions/{id}/unclaim", "action": "POST"},  # Unclaim profile

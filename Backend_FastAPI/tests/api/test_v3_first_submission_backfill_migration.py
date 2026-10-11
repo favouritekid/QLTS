@@ -128,9 +128,21 @@ async def _loi_cua(coro):
     return None
 
 
+def _thong_diep_goc(loi) -> str:
+    """Thông điệp của DRIVER, KHÔNG gồm câu SQL.
+
+    ``str(DBAPIError)`` của SQLAlchemy nối thêm ``[SQL: …]`` — nguyên văn câu lệnh. Câu ``DO`` của downgrade CHỨA
+    chính chuỗi ``'V3M1 downgrade bi chan: '`` trong mã nguồn của nó, nên ``"…" in str(loi)`` khớp trúng DÒNG LỆNH
+    dù lỗi thật là lỗi khác (bộ đột biến bắt được: gỡ phép kiểm mà ca A9 vẫn xanh). Chỉ so trên ``loi.orig``.
+    """
+    if loi is None:
+        return ""
+    return str(getattr(loi, "orig", loi))
+
+
 def _ma_vi_pham(loi) -> set:
     """Tập mã của khối kiểm V3M1 trong thông điệp lỗi; rỗng nếu không có lỗi hoặc lỗi không phải của khối kiểm."""
-    m = re.search(r"V3M1 khoi kiem DO: ([a-z0-9= ]+)", str(loi)) if loi is not None else None
+    m = re.search(r"V3M1 khoi kiem DO: ([a-z0-9= ]+)", _thong_diep_goc(loi)) if loi is not None else None
     return {tung.split("=")[0] for tung in m.group(1).split()} if m else set()
 
 
@@ -394,7 +406,7 @@ async def test_a9_downgrade_khong_nuot_thay_doi_tay(seed_lead_dependencies):
                 await s.execute(text(M1.DOWNGRADE_DO_SQL))
 
     loi = await _loi_cua(_ha_cap())
-    assert "V3M1 downgrade bi chan" in str(loi)
+    assert "V3M1 downgrade bi chan" in _thong_diep_goc(loi)
 
 
 async def test_a10_ck5_chan_trang_thai_sau_nop_khong_dau(seed_lead_dependencies):
@@ -415,7 +427,7 @@ async def test_a10_ck5_chan_trang_thai_sau_nop_khong_dau(seed_lead_dependencies)
                 )
 
     loi = await _loi_cua(_nop_khong_dau())
-    assert M1.CK5_NAME in str(loi)
+    assert M1.CK5_NAME in _thong_diep_goc(loi)
 
 
 async def test_a13_raise_trong_cau_do_lui_ca_backfill(seed_lead_dependencies):
