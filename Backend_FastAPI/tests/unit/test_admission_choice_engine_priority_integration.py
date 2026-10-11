@@ -162,12 +162,12 @@ def test_priority_service_returns_decimal_for_snapshot_columns() -> None:
     }
 
 
-def test_engine_skips_priority_if_academic_year_missing() -> None:
-    """If round_obj.academic_year is None (legacy / mis-eager-loaded),
-    engine must skip the priority calculation to avoid crashing the
-    whole cascade — defensive guard for prod safety."""
+def test_engine_lay_nam_tu_ho_so_khong_bo_cham() -> None:
+    """Owner Q10(a): T6 tra mức theo NĂM TUYỂN SINH của hồ sơ; không còn nhánh "đợt chưa nạp ⇒ bỏ chấm 0đ"."""
     src = _ENGINE_SRC.read_text(encoding="utf-8")
-    assert "if academic_year is not None:" in src
+    assert "academic_year = priority_academic_year(profile)" in src
+    assert "priority_bonus_skipped_missing_academic_year" not in src
+    assert "if academic_year is not None:" not in src
 
 
 def test_snapshot_freeze_pattern_matches_bonus_rule_snapshot() -> None:
@@ -187,36 +187,23 @@ def test_snapshot_freeze_pattern_matches_bonus_rule_snapshot() -> None:
 
 
 def test_publish_result_router_eager_loads_admission_round() -> None:
-    """Review-3 MAJOR fix lock: production publish_result router must
-    eager-load AdmissionPath.admission_round so the engine can read
-    academic_year for priority_*_config lookup.
-
-    Without this, the engine's defensive ``__dict__.get`` returns None,
-    priority calc is silently skipped, and every candidate gets 0đ
-    bonus — a regression of the CR-P0 fix that was caught in review-3.
-    """
+    """Router publish-result nạp chuỗi T6 qua MỘT nguồn ``t6_profile_load_options()``, và chuỗi ấy có
+    ``AdmissionPath.admission_round`` — T6 so năm đợt với năm hồ sơ (lệch ⇒ ``PriorityYearMismatch``)."""
     router_src = (
         _ENGINE_SRC.parent.parent
         / "routers"
         / "admissions_v2.py"
     ).read_text(encoding="utf-8")
-
-    # The eager-load chain must include admission_round on the path
-    # used for cascade. We assert both the relation reference and the
-    # comment marker so reviewers know it's intentional, not orphan.
-    assert "AdmissionPath.admission_round" in router_src, (
-        "publish_result router missing selectinload(admission_round) — "
-        "priority bonus will silently be 0đ in prod."
-    )
-
-
-def test_engine_warns_on_skipped_priority() -> None:
-    """Review-3 MAJOR: defensive log.warning when priority calc is
-    skipped due to missing academic_year — so future eager-load
-    regressions surface in logs instead of silently scoring 0đ."""
+    assert "choice_engine.t6_profile_load_options()" in router_src
     src = _ENGINE_SRC.read_text(encoding="utf-8")
-    assert "priority_bonus_skipped_missing_academic_year" in src
-    assert "log.warning(" in src
+    ham = src[src.index("def t6_profile_load_options()"):src.index("# PR-1 (2026-05-28) — Capacity check helper")]
+    assert "AdmissionPath.admission_round" in ham
+
+
+def test_engine_nam_dot_lech_thi_dung() -> None:
+    """Đợt đã nạp mà khác năm hồ sơ ⇒ DỪNG có nhãn (``PriorityYearMismatch``), không chấm theo năm đợt."""
+    src = _ENGINE_SRC.read_text(encoding="utf-8")
+    assert "raise PriorityYearMismatch(" in src
 
 
 def test_nap_engine_khong_keo_theo_priority_service() -> None:

@@ -178,10 +178,11 @@ async def validation_error_handler(
         },
     )
 
-    response_data = {
-        "detail": exc.detail,
-        "error_code": exc.error_code,
-    }
+    # ``public_payload`` là hợp đồng API của lỗi (xem ``BaseAppException``): đổ vào TRƯỚC, ``detail``/``error_code``
+    # ghi đè SAU — cùng hàng rào với ``base_app_exception_handler``. Trước đây handler 400 bỏ mất payload.
+    response_data = dict(getattr(exc, "public_payload", None) or {})
+    response_data["detail"] = exc.detail
+    response_data["error_code"] = exc.error_code
 
     # Include validation errors if present
     if exc.context and "errors" in exc.context:
@@ -238,12 +239,14 @@ async def service_error_handler(
         exc_info=True,  # Include stack trace
     )
 
+    # ``public_payload`` (JSON thuần, người ném chủ động điền) đi ra như ở ``base_app_exception_handler``;
+    # ``context`` thì KHÔNG. ``detail``/``error_code`` ghi đè sau.
+    response_data = dict(getattr(exc, "public_payload", None) or {})
+    response_data["detail"] = exc.detail
+    response_data["error_code"] = exc.error_code
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "detail": exc.detail,
-            "error_code": exc.error_code,
-        },
+        content=response_data,
     )
 
 

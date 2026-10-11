@@ -141,6 +141,8 @@ def _make_profile(*, status="reviewing", gpa=None, choices=None):
         updated_at=None,
         gpa_overall=Decimal(str(gpa)) if gpa is not None else None,
         graduation_year=2024,
+        # NOT NULL ở model; T6 tra mức theo năm tuyển sinh của hồ sơ (owner Q10(a)).
+        academic_year=2026,
         uses_choice_engine=True,
         choices=choices or [],
         # Q9 #07 Phase E.4 — _evaluate_single_choice Gate 0 also calls
@@ -168,14 +170,22 @@ def db_session():
 
 @pytest.fixture
 def patched_state_and_dispatch():
-    """Patch state_service.transition + dispatch_event."""
+    """Patch state_service.transition + dispatch_event + đóng băng KV T6.
+
+    Đóng băng (``freeze_priority_snapshot``) cần CSDL thật; trước C8b T6 NUỐT lỗi đóng băng nên stub MagicMock
+    "chạy được". Từ owner Q17(a) đóng băng hỏng ⇒ T6 DỪNG ⇒ các ca cascade ở đây (không nghiệm thu đóng băng) phải
+    thay nó bằng no-op. Đường đóng băng thật được canh ở ``tests/api/test_t6_dung_co_nhan.py`` (K4/K5).
+    """
     with patch(
         "app.services.admission_state_service.transition",
         new=AsyncMock(return_value=(SimpleNamespace(), None)),
     ) as transition_mock, patch(
         "app.services.notification_dispatcher.dispatch_event",
         new=AsyncMock(return_value=([], None)),
-    ) as dispatch_mock:
+    ) as dispatch_mock, patch(
+        "app.services.priority_service.freeze_priority_snapshot",
+        new=AsyncMock(return_value={}),
+    ):
         yield transition_mock, dispatch_mock
 
 

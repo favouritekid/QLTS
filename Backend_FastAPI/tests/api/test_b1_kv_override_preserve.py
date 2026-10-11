@@ -38,19 +38,17 @@ Chạy: docker compose -p b1t -f docker-compose.b1t.yml run --rm --no-deps backe
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import delete, select
-from sqlalchemy.orm import selectinload
 
 from app import models
 from app.database import AsyncSessionLocal
 from app.models.priority_audit import PriorityAuditLog
-from app.models.priority_config import PriorityAreaConfig
 
 # asyncio_mode=auto (pytest.ini) tự nhận async test; KHÔNG đặt pytestmark asyncio
 # (ca đồng bộ số 10 sẽ ăn mark thừa và pytest cảnh báo).
@@ -75,30 +73,11 @@ async def _seed_area_rates(session) -> None:
     > 0" CHỈ có thể đến từ override KV1 được giữ lại — không thể xanh nhờ
     engine.
     """
-    existing = (
-        await session.execute(
-            select(PriorityAreaConfig.area_code).where(
-                PriorityAreaConfig.academic_year == ACADEMIC_YEAR
-            )
-        )
-    ).scalars().all()
-    for code, name, pts in (
-        ("KV1", "Khu vuc 1", KV1_RATE),
-        ("KV3", "Khu vuc 3", KV3_RATE),
-    ):
-        if code in existing:
-            continue
-        session.add(
-            PriorityAreaConfig(
-                academic_year=ACADEMIC_YEAR,
-                area_code=code,
-                area_name=name,
-                bonus_points=pts,
-                effective_from=date(2025, 1, 1),
-                effective_to=None,
-            )
-        )
-    await session.flush()
+    from tests.fixtures.cascade import seed_area_rates
+
+    await seed_area_rates(
+        session, academic_year=ACADEMIC_YEAR, rates={"KV1": KV1_RATE, "KV3": KV3_RATE},
+    )
 
 
 async def _seed_profile(
@@ -482,8 +461,15 @@ async def test_snapshot_day_du_nhung_khong_co_hang_audit_thi_fail_closed(
     assert snap["rule_applied"] == "manual_override_unverified", snap
     assert snap["reason"] == "manual_override_unverified:no_audit_row", snap
 
-    area, _cfg = await _area_bonus_for(pid)
-    assert area == Decimal("0.00")
+    # C8b (owner Q17(a)): KV chưa được công nhận ⇒ chấm điểm KV DỪNG có nhãn — trước đây trả 0đ lặng lẽ.
+    from app.utils.exceptions import PriorityKvUnresolved
+
+    loi = None
+    try:
+        await _area_bonus_for(pid)
+    except Exception as exc:  # noqa: BLE001
+        loi = exc
+    assert isinstance(loi, PriorityKvUnresolved), repr(loi)
 
 
 # ===========================================================================
@@ -596,100 +582,21 @@ async def test_hang_audit_khong_co_van_tay_thi_fail_closed(
 async def _seed_cascade_profile(
     seed_lead_dependencies: dict, *, status: str,
 ) -> dict:
-    """Hồ sơ multi-NV thật: 1 NV, path bật ``apply_area_bonus``."""
-    from tests.fixtures.builders import (
-        AdmissionRoundBuilder,
-        ensure_submittable_ward,
-        seed_submittable_offering_config,
-        submittable_profile_fields,
+    """Hồ sơ multi-NV thật: 1 NV, path bật ``apply_area_bonus`` (khung chung ``tests/fixtures/cascade.py``)."""
+    from tests.fixtures.cascade import seed_cascade_profile
+
+    out = await seed_cascade_profile(
+        seed_lead_dependencies,
+        status=status,
+        academic_year=ACADEMIC_YEAR,
+        area_rates={"KV1": KV1_RATE, "KV3": KV3_RATE},
+        nhan="B1",
     )
-
-    await ensure_submittable_ward()
-    async with AsyncSessionLocal() as s:
-        async with s.begin():
-            seed = await seed_submittable_offering_config(
-                s, unit_id=seed_lead_dependencies["unit_id"],
-                academic_year=ACADEMIC_YEAR,
-            )
-            await _seed_area_rates(s)
-
-            ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
-            round_id = await AdmissionRoundBuilder.get_or_create_default_round(
-                s, academic_year=ACADEMIC_YEAR,
-            )
-            method = models.AdmissionMethod(
-                code=f"B1M_{ts}",
-                name=f"B1 method {ts}",
-                requires_subject_scores=False,
-                requires_gpa=False,
-                is_active=True,
-            )
-            s.add(method)
-            await s.flush()
-            path = models.AdmissionPath(
-                academic_info_id=seed["academic_info_id"],
-                admission_method_id=method.id,
-                admission_round_id=round_id,
-                status="active",
-                admit_quota=10,
-                round_quota=10,
-                # Bật KV bonus — đây là cái engine đọc ở T6.
-                bonus_rule_override={
-                    "apply_area_bonus": True,
-                    "apply_object_bonus": False,
-                },
-            )
-            s.add(path)
-            await s.flush()
-
-            sg = models.SubjectGroup(code=f"B1G{ts}"[:20], name=f"B1 grp {ts}")
-            s.add(sg)
-            await s.flush()
-            config = models.PathSubjectGroupConfig(
-                admission_path_id=path.id,
-                subject_group_id=sg.id,
-                min_score=Decimal("0.0"),
-            )
-            s.add(config)
-            await s.flush()
-
-            lead = models.Lead(
-                full_name=f"B1 cascade lead {ts}",
-                phone=f"08{ts:08d}"[:10],
-                unit_id=seed_lead_dependencies["unit_id"],
-                pipeline_stage_id=seed_lead_dependencies["stage_id"],
-                source="walkin",
-            )
-            s.add(lead)
-            await s.flush()
-
-            fields = submittable_profile_fields(seed)
-            fields["uses_choice_engine"] = True
-            profile = models.AdmissionProfile(
-                lead_id=lead.id,
-                citizen_id=f"9{ts:08d}0"[:12],
-                status=status,
-                academic_year=ACADEMIC_YEAR,
-                applied_rules={},
-                **fields,
-            )
-            s.add(profile)
-            await s.flush()
-            choice = models.AdmissionProfileChoice(
-                admission_profile_id=profile.id,
-                admission_path_id=path.id,
-                path_subject_group_config_id=config.id,
-                display_order=1,
-                decision="pending",
-            )
-            s.add(choice)
-            await s.flush()
-            out = {
-                "profile_id": profile.id,
-                "choice_id": choice.id,
-                "path_id": path.id,
-            }
-    return out
+    return {
+        "profile_id": out["profile_id"],
+        "choice_id": out["choice_ids"][0],
+        "path_id": out["path_ids"][0],
+    }
 
 
 @pytest_asyncio.fixture
@@ -709,33 +616,11 @@ async def _run_engine(profile_id: int, *, entry: str) -> None:
     ``tests/integration/test_choice_engine_quota_concurrent.py``): thứ đang
     nghiệm thu nằm NGAY TRƯỚC nó trong cùng vòng lặp — freeze T6 rồi
     ``calculate_priority_bonus`` — nên thay quyết định admit/reject bằng hàm giả
-    sẽ che mất đúng đoạn cần đo.
+    sẽ che mất đúng đoạn cần đo. Nạp hồ sơ bằng ĐÚNG chuỗi eager-load của router.
     """
-    from app.services import admission_choice_engine_service as engine_mod
+    from tests.fixtures.cascade import run_engine
 
-    async with AsyncSessionLocal() as s:
-        stmt = (
-            select(models.AdmissionProfile)
-            .where(models.AdmissionProfile.id == profile_id)
-            .options(
-                selectinload(models.AdmissionProfile.lead),
-                selectinload(models.AdmissionProfile.choices)
-                .selectinload(models.AdmissionProfileChoice.admission_path)
-                .selectinload(models.AdmissionPath.academic_info),
-                selectinload(models.AdmissionProfile.choices)
-                .selectinload(models.AdmissionProfileChoice.admission_path)
-                .selectinload(models.AdmissionPath.admission_method),
-                selectinload(models.AdmissionProfile.choices)
-                .selectinload(models.AdmissionProfileChoice.admission_path)
-                .selectinload(models.AdmissionPath.admission_round),
-            )
-        )
-        profile = (await s.execute(stmt)).scalar_one()
-        if entry == "publish_result":
-            await engine_mod.publish_result(s, profile)
-        else:
-            await engine_mod.evaluate_cascade(s, profile)
-        await s.commit()
+    await run_engine(profile_id, entry=entry)
 
 
 async def _assert_choice_scored_kv1(profile_id: int, choice_id: int, where: str):
