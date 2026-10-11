@@ -10,14 +10,14 @@ Global exception handlers in middleware/exception_handlers.py handle all errors.
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database
-from .. import models, schemas, security
+from .. import models, schemas
 from ..core import deps
 from ..services import session_service
-from ..utils.exceptions import SessionNotFoundError
+from ..utils.exceptions import SessionNotFoundError, SessionRevokedError
 
 log = structlog.get_logger(__name__)
 
@@ -29,8 +29,8 @@ router = APIRouter(prefix="/sessions", tags=["Sessions"])
 async def get_active_sessions(
     request: Request,
     current_user: models.User = Depends(deps.get_current_user),
+    current_session: Optional[models.UserSession] = Depends(deps.get_current_session),
     db: AsyncSession = Depends(database.get_db),
-    refresh_token: Optional[str] = Cookie(None, alias="refresh_token"),
 ):
     """
     Get all active sessions for the current user.
@@ -38,30 +38,19 @@ async def get_active_sessions(
     Security:
         - Requires authentication
         - Users can only see their own sessions
-        - Current session is identified by refresh token cookie
+        - Current session = ``deps.get_current_session`` (the ``r_jti`` of the
+          authenticated access token) — the same source ``POST /revoke-all``
+          uses to pick the session it keeps.
     """
     log.info("Fetching active sessions", user_id=current_user.id)
 
-    # PR1 Commit 2: prefer the live refresh jti that get_current_user derived
-    # from the access token's r_jti (request.state.refresh_jti). This resolves
-    # is_current even when the refresh cookie isn't sent on this request, and is
-    # consistent with the DB session.refresh_jti now that /auth/refresh commits
-    # the rotation. Fall back to decoding the refresh cookie.
-    current_refresh_jti = getattr(request.state, "refresh_jti", None)
-    if not current_refresh_jti and refresh_token:
-        try:
-            payload = security.decode_token(refresh_token)
-            current_refresh_jti = payload.get("jti")
-            log.info(
-                "Current session identified (cookie fallback)",
-                refresh_jti=current_refresh_jti,
-            )
-        except Exception as e:
-            log.warning(
-                "Failed to decode refresh token for session identification",
-                error=str(e),
-            )
-            # Continue without marking current session - this is intentional
+    # Cookie fallback removed: ``get_current_user`` refuses any access token
+    # without ``r_jti`` and always sets ``request.state.refresh_jti``, so the
+    # old "decode the refresh cookie" branch was unreachable — and it trusted
+    # the cookie without checking its type or ``sub``.
+    current_refresh_jti = (
+        current_session.refresh_jti if current_session is not None else None
+    )
 
     # Fetch sessions from service
     db_sessions = await session_service.get_active_sessions(
@@ -152,31 +141,59 @@ async def revoke_session(
 @router.post("/revoke-all", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_all_other_sessions(
     request: Request,
-    request_data: schemas.RevokeAllSessionsRequest,
+    request_data: Optional[schemas.RevokeAllSessionsRequest] = None,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(deps.get_current_user),
+    current_session: Optional[models.UserSession] = Depends(deps.get_current_session),
 ):
     """
-    Revoke all other sessions for the current user except optionally one.
+    Revoke every other session of the current user, KEEPING the one this
+    request authenticated with.
 
-    Args:
-        request_data: Request body with optional current_session_id to preserve
+    The kept session is ``deps.get_current_session`` — the live session named
+    by the ``r_jti`` of the validated access token — never the body. The body
+    (``current_session_id``) is still accepted so the current frontend does not
+    break, but it decides nothing: a different value is only logged.
+
+    Current session not resolvable (revoked / expired between
+    ``get_current_user`` and this lookup) ⇒ 401 ``SESSION_REVOKED`` and NOTHING
+    is revoked — không mở rộng thao tác phá huỷ khi không biết phiên cần giữ
+    (review F27, owner 11-10); the body is NOT used as a fallback either.
 
     Returns:
         204 No Content on success
     """
-    session_id_to_preserve = request_data.current_session_id
+    keep_session_id = current_session.id if current_session is not None else None
+    claimed_session_id = (
+        request_data.current_session_id if request_data is not None else None
+    )
+
+    if claimed_session_id is not None and claimed_session_id != keep_session_id:
+        log.warning(
+            "revoke-all: body current_session_id ignored; kept session comes from the token",
+            user_id=current_user.id,
+            kept_session_id=keep_session_id,
+            claimed_session_id=claimed_session_id,
+            action="session.revoke_all_body_ignored",
+        )
+    if keep_session_id is None:
+        log.warning(
+            "revoke-all: current session not resolved; refused (401), nothing revoked",
+            user_id=current_user.id,
+            action="session.revoke_all_current_unresolved",
+        )
+        raise SessionRevokedError()
 
     log.info(
         "Revoking all other sessions",
         user_id=current_user.id,
-        preserve_session_id=session_id_to_preserve,
+        kept_session_id=keep_session_id,
     )
 
     revoked_count, callback = await session_service.revoke_all_other_sessions(
         db=db,
         user_id=current_user.id,
-        except_session_id=session_id_to_preserve
+        except_session_id=keep_session_id,
     )
 
     await db.commit()
