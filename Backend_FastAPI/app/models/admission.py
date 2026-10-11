@@ -101,6 +101,42 @@ class AdmissionProfile(Base):
             "('none', 'so_cap', 'trung_cap', 'cao_dang')",
             name="ck_admission_profile_vocational_qualification"
         ),
+        # V3 (v3circ20261011) — thông tư áp dụng theo từng hồ sơ. Bốn ràng buộc
+        # dưới đây khai Ở CẢ model lẫn migration (CSDL test dựng bằng
+        # ``create_all()``); test ``test_admission_circular_constants.py`` khoá
+        # chuỗi hai bên bằng nhau. Ràng buộc thứ năm (trạng thái sau nộp phải có
+        # dấu ngày nộp) CHỈ ở migration: hàng trăm fixture tạo hồ sơ thẳng ở
+        # ``submitted`` mà không qua ``transition()``; tầng chủ sở hữu của bất biến
+        # ấy là ``transition()``, CHECK ở production là lưới cho SQL tay.
+        CheckConstraint(
+            "first_submitted_source IS NULL OR first_submitted_source IN "
+            "('submit_transition', 'status_history', 'missing_evidence', 'manual')",
+            name="ck_admission_profile_first_submitted_source"
+        ),
+        CheckConstraint(
+            "applicable_circular IS NULL OR applicable_circular IN "
+            "('TT05_2021', 'TT76_2026')",
+            name="ck_admission_profile_applicable_circular"
+        ),
+        CheckConstraint(
+            "applicable_circular_source IS NULL OR applicable_circular_source IN "
+            "('default_first_submit', 'backfill_first_submit', "
+            "'backfill_missing_evidence', 'manual')",
+            name="ck_admission_profile_applicable_circular_source"
+        ),
+        CheckConstraint(
+            "(first_submitted_at IS NOT NULL) = (first_submitted_source IS NOT NULL "
+            "AND first_submitted_source IN ('submit_transition', 'status_history', 'manual'))",
+            name="ck_admission_profile_first_submitted_pair"
+        ),
+        CheckConstraint(
+            "(applicable_circular IS NULL) = (applicable_circular_source IS NULL)",
+            name="ck_admission_profile_applicable_circular_pair"
+        ),
+        CheckConstraint(
+            "first_submitted_source IS NULL OR applicable_circular IS NOT NULL",
+            name="ck_admission_profile_submitted_has_circular"
+        ),
     )
 
     # Primary Key
@@ -296,6 +332,45 @@ class AdmissionProfile(Base):
             "priority_audit_log table. "
             "Empty {} = draft state (service computes real-time preview)."
         )
+    )
+
+    # --- V3: lần nộp đầu + thông tư áp dụng (v3circ20261011) ---
+    # Hằng và luật ở ``app/constants/admission_circular.py``. Tầng chủ sở hữu việc
+    # đóng dấu: ``admission_state_service.transition()``.
+    first_submitted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment=(
+            "Thời điểm cạnh draft→submitted ĐẦU TIÊN = occurred_at của hàng lịch sử ấy. "
+            "NULL khi chưa từng nộp HOẶC nguồn = missing_evidence. Không bao giờ lấp bằng "
+            "updated_at / applicable_circular_set_at / hôm nay."
+        ),
+    )
+    first_submitted_source: Mapped[Optional[str]] = mapped_column(
+        String(24),
+        nullable=True,
+        comment="submit_transition | status_history | missing_evidence | manual",
+    )
+    applicable_circular: Mapped[Optional[str]] = mapped_column(
+        String(16),
+        nullable=True,
+        comment="TT05_2021 | TT76_2026 — thông tư áp dụng cho hồ sơ",
+    )
+    applicable_circular_source: Mapped[Optional[str]] = mapped_column(
+        String(32),
+        nullable=True,
+        comment="default_first_submit | backfill_first_submit | backfill_missing_evidence | manual",
+    )
+    applicable_circular_set_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Lúc ghi applicable_circular. KHÔNG phải ngày nộp.",
+    )
+    applicable_circular_set_by_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Người đặt thông tư; NULL khi do backfill hoặc mặc định lúc nộp không có người đăng nhập",
     )
 
     place_of_birth: Mapped[str] = mapped_column(String(255), nullable=True)

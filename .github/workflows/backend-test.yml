@@ -1060,9 +1060,17 @@ jobs:
           # merge, o nightly — dung lop lo hong ma `test_ci_test_visibility.py`
           # sinh ra de bit. Ghim WHOLE-FILE, khong dung `::node`: chon theo node
           # la cach ma mot ca moi them vao lop se im lang khong duoc chay.
+          #
+          # V3 (thông tư áp dụng theo hồ sơ): nhóm A — backfill M1 `v3circ20261011`
+          # — ở ĐÂY chứ không ở Tier 4i, vì `TestLegCachLy` khoá 4i chỉ chứa
+          # `adm_024`. An toàn tuần tự theo đúng lập luận của chính ca ấy: một
+          # tiến trình, không xdist, fixture chuẩn TRUNCATE trước mỗi ca. UPDATE
+          # toàn bảng chỉ thấy hàng của ca hiện tại; DDL (CK5 tạm, câu DO của
+          # downgrade, câu DO của upgrade) đều trong giao dịch bị ROLLBACK.
           - tier: Tier 4s — Admission state transitions + confirmation token
             tests: >-
               tests/integration/test_admission_state_transitions.py
+              tests/api/test_v3_first_submission_backfill_migration.py
           # `test_conftest_db_url_guard.py` vào Tier 5, cùng họ phép kiểm CẤU
           # TRÚC với `test_nginx_template_packaging` / `test_ci_test_visibility`:
           # nó đọc `tests/conftest.py` và `tests/fixtures/database.py` như VĂN
@@ -1087,6 +1095,10 @@ jobs:
           # (Tier 4b). Trước đây nằm ngoài mọi tier nên nó khoá đúng các chuỗi SAI
           # ("Mục 5.b", "Mục 4") mà không shard nào chạy. Đặt ở Tier 5 chứ không
           # 4b để khỏi đổi `SHA_HOP_SELECTOR_TIER4`. Ghim WHOLE-FILE.
+          # `test_admission_circular_constants.py` (V3) vào Tier 5: hàm thuần +
+          # đọc tệp migration/model như CẤU TRÚC, không đụng CSDL. Nó khoá mốc
+          # giờ VN 03-11, tập trạng thái sau nộp (tính lại từ máy trạng thái) và
+          # bản chép đông cứng trong migration `v3circ20261011`.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1136,6 +1148,7 @@ jobs:
               tests/unit/test_docgrp_audience_backfill_migration.py
               tests/integration/test_document_audience_config_panel.py
               tests/unit/test_phase_e4_audit_fixes.py
+              tests/unit/test_admission_circular_constants.py
 
     env:
       APP_ENV: test
