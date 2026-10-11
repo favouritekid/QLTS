@@ -70,6 +70,21 @@ const nextConfig: NextConfig = {
           // TODO: Add Content-Security-Policy (CSP) once asset & API domains are finalized
         ],
       },
+      // V6: trang mang token trên đường dẫn KHÔNG gửi Referer — nếu không,
+      // mọi request kế tiếp cùng origin (asset `/_next/…`, API) mang nguyên
+      // URL `/confirm/<token>` vào cột referer của access log. PHẢI đứng SAU
+      // khối `/(.*)` (Next: cùng khoá header thì khối sau thắng) và PHẢI cùng
+      // giá trị với map `$qlts_referrer_policy` trong `nginx/nginx.conf` (nginx
+      // cũng gửi header này — hai giá trị lệch nhau thì trình duyệt lấy cái
+      // đứng sau). Khoá bởi `tests/unit/test_che_log_token_nginx.py`.
+      {
+        source: "/confirm/:path*",
+        headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
+      },
+      {
+        source: "/magic-link/:path*",
+        headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
+      },
     ];
   },
 

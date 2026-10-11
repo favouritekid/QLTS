@@ -268,6 +268,29 @@ Bootstrap phải lên được **khi backend/frontend chưa hề chạy** — đ
 lại sau `$DC stop backend frontend postgres redis`: nó vẫn `healthy`, vì nó dùng
 `nginx-bootstrap.conf` không khai `upstream` nào.
 
+## V6 — access log che token nhưng VẪN ghi dòng (`kiem-log-che-token.sh`)
+
+Không cần ảnh backend/frontend: script dựng image từ `nginx/Dockerfile`, chạy template thật
+với chứng thư tự ký, trỏ `backend`/`frontend` về server stub trong cùng container, gửi request
+thật qua TLS + SNI thật, rồi đọc `docker logs`.
+
+```bash
+bash tests-e2e/nginx-packaging/kiem-log-che-token.sh          # KET-LUAN=DAT, rc=0
+NGINX_DIR=<bản sao nginx/ đã đột biến> bash …/kiem-log-che-token.sh   # chạy đột biến
+```
+
+| Mã | Đo gì |
+|---|---|
+| T1 | 0 dòng access log chứa token giả |
+| T2 | MỖI đầu dò (trang + API confirm/magic-link, Referer, `?token=`, cổng 80) vẫn để lại dòng có `<redacted>` — bắt đột biến `access_log off` |
+| T3 | dòng đối chứng `/login` có mặt |
+| R1/R2 | trang + API token trả `Referrer-Policy: no-referrer` |
+| R3 | trang thường vẫn `strict-origin-when-cross-origin` |
+
+> ⚠️ `error_log` (khi upstream lỗi hoặc `limit_req` từ chối) vẫn in `request:`/`referrer:` NGUYÊN
+> VĂN — `log_format` không chạm tới. Script chỉ GHI NHẬN số dòng ấy, không tính đạt/đỏ. Đây là
+> phần dư còn mở, không được ghi "đã hết rò token trong log nginx".
+
 ## Dọn
 
 ```bash

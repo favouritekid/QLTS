@@ -5800,7 +5800,6 @@ async def update_profile(
                 log.warning(
                     "Cannot update citizen_id: Duplicate in same academic year",
                     profile_id=profile.id,
-                    new_citizen_id=new_citizen_id,
                     academic_year=profile.academic_year,
                     duplicate_profile_id=duplicate_profile.id,
                 )
@@ -5821,7 +5820,6 @@ async def update_profile(
                 log.warning(
                     "Cannot update citizen_id: Already enrolled as student",
                     profile_id=profile.id,
-                    new_citizen_id=new_citizen_id,
                     student_code=existing_student.student_code,
                 )
                 raise DuplicateResourceError(
@@ -7841,7 +7839,6 @@ async def submit_and_evaluate(
             "Admission profile submitted successfully",
             profile_id=profile_id,
             user_id=current_user.id if current_user else None,
-            citizen_id=profile.citizen_id,
         )
 
         # Đổi ngành: hook reprice HK1 fee sang ngành mới + báo kế toán. LUÔN clear
@@ -9543,7 +9540,6 @@ async def _perform_enrollment_core(
         log.error(
             "CRITICAL: Citizen ID duplicate detected at enrollment time",
             profile_id=profile_id,
-            citizen_id=profile.citizen_id,
             existing_student_code=duplicate_student.student_code,
             existing_student_id=duplicate_student.id,
         )
@@ -10024,7 +10020,6 @@ async def approve_profile(
         profile_id=profile.id,
         approver_id=approver.id,
         previous_status=profile.status,
-        citizen_id=profile.citizen_id,
     )
 
     # Path C / Arch-3: paired notification bundle + commission callback.

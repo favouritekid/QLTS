@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.core.log_redaction import SMS_BEARER_PREFIXES, redact_text
 from app.utils.exceptions import (
     BaseAppException,
     ResourceNotFoundError,
@@ -55,24 +56,22 @@ from app.utils.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-# SMS bearer-code routes (PR-5): path chứa raw short-code → KHÔNG được log
-# nguyên (design §11.3). Redact phần code khi ghi log lỗi.
-_SMS_BEARER_PREFIXES = ("/r/", "/lp/", "/api/public/sms/landing/")
+# Đường dẫn mang bí mật (mã SMS PR-5 §11.3, token xác nhận nhập học,
+# magic-link) → KHÔNG được log nguyên. Mẫu che chỉ khai MỘT lần ở
+# `app/core/log_redaction.py` (V6) — đừng chép lại danh sách tiền tố ở đây.
+# Ghi chú: dòng log của các handler dưới đây còn đi qua `RedactingFilter` ở
+# handler gốc; `_redact_path` là lớp phụ cho trường `extra["path"]`.
 
 
 def _redact_path(path: str) -> str:
-    """Che raw bearer code trong path SMS trước khi log (tránh lộ code↔PII).
-    Giữ prefix để vẫn nhận diện route; thay phần code bằng '<redacted>'."""
-    for prefix in _SMS_BEARER_PREFIXES:
-        if path.startswith(prefix):
-            return prefix + "<redacted>"
-    return path
+    """Che phần bí mật trong path trước khi đưa vào log (giữ tiền tố route)."""
+    return redact_text(path)
 
 
 def _is_sms_bearer_route(path: str) -> bool:
     """Route mang bearer code (path HOẶC body opt-out) → error 'input' lúc 422
     có thể chứa raw code → KHÔNG log input (§11.3)."""
-    return path.startswith(_SMS_BEARER_PREFIXES) or path == "/api/public/sms/opt-out"
+    return path.startswith(SMS_BEARER_PREFIXES) or path == "/api/public/sms/opt-out"
 
 
 # ============================================================================
