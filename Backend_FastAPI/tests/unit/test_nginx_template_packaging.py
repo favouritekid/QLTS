@@ -3106,8 +3106,9 @@ def test_bo_loc_paths_cua_gate_phu_moi_duong_ma_guard_doc():
     # `_TAI_LIEU_VAN_HANH` cũng phải nằm trong danh sách: guard tài liệu ĐỌC
     # từng tệp trong đó, nên một tệp không có mặt ở `paths:` là một tệp mà guard
     # canh trên giấy còn CI thì không bao giờ chạy để canh. `PRODUCTION_DEPLOY_
-    # GUIDE.md` đã đúng vào ca đó.
-    can_phu = _DUONG_GUARD_DOC + _TAI_LIEU_VAN_HANH
+    # GUIDE.md` đã đúng vào ca đó. `_TEP_HUONG_DAN_AGENT` cũng thế: guard `-f`
+    # đọc từng tệp trong đó, mà CLAUDE.md/AGENTS.md ở gốc không thuộc mẫu nào.
+    can_phu = _DUONG_GUARD_DOC + _TAI_LIEU_VAN_HANH + _TEP_HUONG_DAN_AGENT
     thieu = [d for d in can_phu if not any(_khop_glob(d, m) for m in mau)]
     assert not thieu, (
         f"gate `pytest` KHÔNG chạy khi các đường sau đổi: {thieu}. "
@@ -4553,21 +4554,182 @@ def test_claude_md_khong_day_lenh_production_cham_nginx():
     )
 
 
-def test_claude_md_lenh_production_ghim_docker_compose_yml():
-    """Thiếu `-f docker-compose.yml` là Compose tự nạp override DEV lên production."""
-    if not _CLAUDE_MD.is_file():
-        pytest.skip("không có CLAUDE.md")
-    pham = [
+# Tệp hướng dẫn mà agent đọc NGUYÊN VĂN rồi làm theo — lệnh production dạy sai ở
+# đây đi thẳng ra máy chủ. Guard trước chỉ soi CLAUDE.md gốc, trong khi AGENTS.md
+# dạy `docker compose --profile production up -d` trần suốt nhiều tháng mà CI vẫn
+# xanh. Danh sách TƯỜNG MINH chứ không rglob: cây làm việc tại máy có thể chứa
+# worktree lồng và node_modules mang CLAUDE.md/AGENTS.md không thuộc kho này.
+_TEP_HUONG_DAN_AGENT = [
+    "CLAUDE.md",
+    "AGENTS.md",
+    "Backend_FastAPI/CLAUDE.md",
+    "frontend/CLAUDE.md",
+]
+
+# Dấu hiệu một lệnh CHẠM PRODUCTION. Mục DEV cố ý dùng `docker compose up -d`
+# với override — áp luật production lên đó là bẻ gãy hướng dẫn đúng.
+_DAU_HIEU_PRODUCTION = ("--profile production", ".env.production")
+
+
+def _lenh_production_thieu_f(duong: Path) -> list[str]:
+    r"""Lệnh compose CHẠM PRODUCTION trong khối ``` mà thiếu `-f docker-compose.yml`.
+
+    Đi qua `_lenh_ghep_trong_tai_lieu` nên: dòng nối `\` được ghép thành MỘT
+    lệnh; chú thích cuối dòng bị cắt (chữ `-f docker-compose.yml` nằm trong lời
+    nhắc không được tính là đã ghim); dòng chú thích, dòng ngoài khối và dòng có
+    van `CO-Y-LENH-CHET` không bị soi — đó là chỗ để viết câu CẤM.
+    """
+    return [
         f"{so}: {d.strip()[:90]}"
-        for so, d in _lenh_ghep_trong_tai_lieu(_CLAUDE_MD)
-        if ("--profile production" in d or ".env.production" in d)
+        for so, d in _lenh_ghep_trong_tai_lieu(duong)
+        if any(dau in d for dau in _DAU_HIEU_PRODUCTION)
         and _co_lenh_compose(d)
         and "-f docker-compose.yml" not in d
     ]
+
+
+def test_claude_md_lenh_production_ghim_docker_compose_yml():
+    """Thiếu `-f docker-compose.yml` là Compose tự nạp override DEV lên production.
+
+    Soi MỌI tệp trong `_TEP_HUONG_DAN_AGENT`, không chỉ CLAUDE.md gốc.
+    """
+    if not _CLAUDE_MD.is_file():
+        pytest.skip("không có CLAUDE.md")
+    # Có CLAUDE.md gốc tức là đang đứng trên cả cây kho; khi ấy một tệp trong danh
+    # sách mà vắng là ĐỎ, không lặng lẽ bỏ qua — đổi tên AGENTS.md mà guard vẫn
+    # xanh là guard đã thôi canh nó.
+    vang = [t for t in _TEP_HUONG_DAN_AGENT if not (_GOC / t).is_file()]
+    assert not vang, (
+        f"tệp hướng dẫn agent trong danh sách không tồn tại: {vang} — "
+        "sửa `_TEP_HUONG_DAN_AGENT` cùng lúc với việc đổi tên/xoá tệp"
+    )
+    tep = [_GOC / t for t in _TEP_HUONG_DAN_AGENT]
+    assert _CLAUDE_MD in tep, (
+        "danh sách tệp hướng dẫn không còn chứa CLAUDE.md gốc — guard đang canh hụt"
+    )
+    pham = [
+        f"{p.relative_to(_GOC).as_posix()}:{x}"
+        for p in tep
+        for x in _lenh_production_thieu_f(p)
+    ]
     assert not pham, (
-        "lệnh production trong CLAUDE.md thiếu `-f docker-compose.yml`:\n  "
+        "lệnh production trong tệp hướng dẫn agent thiếu `-f docker-compose.yml`:\n  "
         + "\n  ".join(pham)
     )
+
+
+def _tep_md(tmp_path: Path, *dong: str) -> Path:
+    p = tmp_path / "HUONG_DAN.md"
+    p.write_text("\n".join(dong) + "\n", encoding="utf-8")
+    return p
+
+
+# Mỗi ca vi phạm ĐÚNG MỘT bất biến (CLAUDE.md §3), và mỗi ca ĐỎ có một ca đối
+# chứng XANH chỉ khác nó đúng chỗ ấy — nếu không thì không biết guard đỏ vì gì.
+@pytest.mark.parametrize(
+    "ten_ca, dong",
+    [
+        (
+            "production_thieu_f",
+            [
+                "```bash",
+                "docker compose --env-file .env.production --profile production up -d --wait backend",
+                "```",
+            ],
+        ),
+        # Biến thể tinh vi: dòng 1 có `docker compose` mà không có dấu hiệu
+        # production, dòng 2 có dấu hiệu mà không có `docker compose` — kiểm
+        # từng dòng thì không thấy gì cả.
+        (
+            "production_thieu_f_noi_dong",
+            [
+                "```bash",
+                "docker compose \\",
+                "    --env-file .env.production up -d --wait backend",
+                "```",
+            ],
+        ),
+        # Chữ `-f docker-compose.yml` chỉ nằm trong chú thích cuối dòng.
+        (
+            "f_chi_nam_trong_chu_thich",
+            [
+                "```bash",
+                "docker compose --env-file .env.production up -d --wait backend  # -f docker-compose.yml",
+                "```",
+            ],
+        ),
+    ],
+)
+def test_guard_huong_dan_agent_bat_lenh_production_thieu_f(
+    tmp_path: Path, ten_ca: str, dong: list[str]
+) -> None:
+    pham = _lenh_production_thieu_f(_tep_md(tmp_path, *dong))
+    assert len(pham) == 1, f"{ten_ca}: guard phải bắt đúng MỘT lệnh, được {pham}"
+
+
+@pytest.mark.parametrize(
+    "ten_ca, dong",
+    [
+        (
+            "doi_chung_co_f",
+            [
+                "```bash",
+                "docker compose -f docker-compose.yml --env-file .env.production --profile production up -d --wait backend",
+                "```",
+            ],
+        ),
+        (
+            "doi_chung_co_f_noi_dong",
+            [
+                "```bash",
+                "docker compose -f docker-compose.yml \\",
+                "    --env-file .env.production up -d --wait backend",
+                "```",
+            ],
+        ),
+        # Đối chứng của `f_chi_nam_trong_chu_thich`: CÙNG dòng, chỉ chuyển
+        # `-f docker-compose.yml` từ chú thích vào lệnh.
+        (
+            "doi_chung_f_chuyen_tu_chu_thich_vao_lenh",
+            [
+                "```bash",
+                "docker compose -f docker-compose.yml --env-file .env.production up -d --wait backend",
+                "```",
+            ],
+        ),
+        (
+            "lenh_dev_khong_dau_hieu_production",
+            [
+                "```bash",
+                "docker compose up -d",
+                "docker compose exec backend python -m pytest -q",
+                "```",
+            ],
+        ),
+        # Câu CẤM — ba chỗ quy ước cho phép nhắc lệnh sai mà không bị soi.
+        (
+            "cau_cam_ngoai_khoi_lenh",
+            ["| `docker compose --env-file .env.production restart nginx` | không đọc lại env |"],
+        ),
+        (
+            "cau_cam_la_dong_chu_thich",
+            ["```bash", "# ❌ docker compose --env-file .env.production up -d", "```"],
+        ),
+        (
+            "cau_cam_mang_van_thoat",
+            [
+                "```bash",
+                "docker compose --env-file .env.production up -d  # CO-Y-LENH-CHET: ca đối chứng",
+                "```",
+            ],
+        ),
+    ],
+)
+def test_guard_huong_dan_agent_khong_bat_nham(
+    tmp_path: Path, ten_ca: str, dong: list[str]
+) -> None:
+    pham = _lenh_production_thieu_f(_tep_md(tmp_path, *dong))
+    assert pham == [], f"{ten_ca}: guard bắt nhầm {pham}"
 
 
 # =============================================================================
