@@ -1621,5 +1621,3 @@ async def derive_profile_target_context(
         )
 
     return ctx
-
-
