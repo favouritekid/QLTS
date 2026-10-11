@@ -2797,6 +2797,8 @@ async def test_f62_expired_access_refresh_cookie_wrong_type_401(client, regular_
 #
 # Mỗi ca canh MỘT bất biến; khẳng định nằm ngay trong thân ca (bộ chấm đột biến
 # đòi khung traceback cuối là thân ca). Không `pytest.raises`, không parametrize.
+# Tên ca ≤ 72 ký tự: tiêu đề khối lỗi của pytest (80 cột) mới còn ≥ 3 dấu `_`
+# mỗi bên — bộ chấm đột biến tìm khối lỗi theo đúng mẫu đó.
 # -----------------------------------------------------------------------------
 
 REVOKE_ALL_URL = "/api/sessions/revoke-all"
@@ -2992,7 +2994,7 @@ async def test_revoke_all_with_null_session_id_keeps_token_session(client, regul
 
 
 @pytest.mark.asyncio
-async def test_revoke_all_with_revoked_session_token_is_refused_and_revokes_nothing(
+async def test_revoke_all_by_revoked_session_is_401_and_revokes_nothing(
     client, regular_user_in_db, test_redis_client
 ):
     """Ca 4a — phiên A đã bị THU HỒI trong CSDL (khoá `session:` còn) ⇒
@@ -3014,7 +3016,7 @@ async def test_revoke_all_with_revoked_session_token_is_refused_and_revokes_noth
 
 
 @pytest.mark.asyncio
-async def test_revoke_all_with_expired_session_token_is_refused_and_revokes_nothing(
+async def test_revoke_all_by_expired_session_is_401_and_revokes_nothing(
     client, regular_user_in_db, test_redis_client
 ):
     """Ca 4b — phiên A đã HẾT HẠN trong CSDL (chưa thu hồi, khoá `session:` còn) ⇒
@@ -3145,7 +3147,7 @@ async def test_revoke_all_after_refresh_rotation_keeps_the_rotated_session(
 
 
 @pytest.mark.asyncio
-async def test_revoke_all_with_pre_rotation_access_token_is_refused_and_revokes_nothing(
+async def test_revoke_all_by_pre_rotation_token_is_401_and_revokes_nothing(
     client, regular_user_in_db
 ):
     """Ca 5b — sau /refresh, access token CŨ (mang jti trước xoay) gọi revoke-all,
