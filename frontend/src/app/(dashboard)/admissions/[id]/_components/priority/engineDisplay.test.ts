@@ -23,7 +23,7 @@ const HAPPY_PREVIEW: PreviewPriorityKvResponse = {
   object_bonus_verified: null,
   ut_breakdown: null,
   total_bonus_potential: 0.75,
-  rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.b (preview)",
+  rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.a (preview)",
   path_bonus_rule: null,
 }
 
@@ -38,11 +38,20 @@ function buildProfile(status: string, snapshot: SnapshotInput = {} as SnapshotIn
 }
 
 describe("deriveLawCitationFallback", () => {
+  // Số mục đối chiếu nguyên văn TT 05/2021 Phụ lục 01 (11-10-2026): luật học nhiều
+  // trường ở 5.a; mục 4 là tuyển thẳng; mục 6 là khung điểm — không phải căn cứ
+  // ấn định tay. Bảng BE (app/constants/priority_law_citation.py) khoá bảng này
+  // từ phía pytest; ở đây khoá câu chữ người dùng thấy.
   it("returns mapped citation cho 4 rule_applied chuẩn", () => {
-    expect(deriveLawCitationFallback("longest_duration")).toMatch(/Mục 5\.b/)
-    expect(deriveLawCitationFallback("tiebreak_graduation_school")).toMatch(/Mục 5\.a/)
-    expect(deriveLawCitationFallback("commune_lookup")).toMatch(/Mục 4/)
-    expect(deriveLawCitationFallback("manual_override")).toMatch(/Mục 6/)
+    expect(deriveLawCitationFallback("longest_duration")).toBe("TT 05/2021 Phụ lục 01 Mục 5.a")
+    expect(deriveLawCitationFallback("tiebreak_graduation_school")).toBe("TT 05/2021 Phụ lục 01 Mục 5.a")
+    expect(deriveLawCitationFallback("commune_lookup")).toBe("TT 05/2021 Phụ lục 01 Mục 5")
+  })
+
+  it("manual_override là xác nhận nội bộ, KHÔNG gán sang một mục thông tư", () => {
+    const c = deriveLawCitationFallback("manual_override")
+    expect(c).toMatch(/xác nhận nội bộ/)
+    expect(c).not.toMatch(/Mục \d/)
   })
 
   it("returns null cho 'ambiguous_requires_manual'", () => {
@@ -76,7 +85,7 @@ describe("resolveEngineDisplay — post-draft (frozen snapshot)", () => {
       rule_applied: "longest_duration",
     } as SnapshotInput)
     const r = resolveEngineDisplay(profile, null)
-    expect(r.lawCitation).toMatch(/Mục 5\.b/)
+    expect(r.lawCitation).toBe("TT 05/2021 Phụ lục 01 Mục 5.a")
   })
 
   it("ignore preview khi post-draft (defensive)", () => {

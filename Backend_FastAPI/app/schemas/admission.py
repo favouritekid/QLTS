@@ -1119,6 +1119,21 @@ class AdmissionProfileResponse(BaseModel):
         default_factory=list
     )
     priority_resolution_snapshot: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("priority_resolution_snapshot", mode="before")
+    @classmethod
+    def _law_citation_from_current_rule(cls, value):
+        """Câu căn cứ trong snapshot ĐÓNG BĂNG được tính lại từ ``rule_applied`` khi trả ra.
+
+        Snapshot cũ mang câu ghi lúc phân giải (từng sai số mục; snapshot ấn định tay còn
+        giữ câu của lần phân giải trước). Chạy ở ``mode='before'`` trên BẢN SAO do
+        ``with_current_law_citation`` tạo: thuộc tính JSONB của ORM không bị chạm, không có
+        gì để phiên SQLAlchemy flush xuống CSDL. Nguồn câu: ``app.constants.priority_law_citation``.
+        """
+        from app.constants.priority_law_citation import with_current_law_citation
+
+        return with_current_law_citation(value)
+
     # Q9 #07 Phase E.4 — workbench audit timeline.
     # Last 20 priority_audit_log entries DESC (KV override + UT verify/reject
     # + admin bulk-fill). Empty list khi profile chưa có intervention nào.
@@ -2677,12 +2692,12 @@ class PreviewPriorityKvResponse(BaseModel):
     )
 
     # Q9 #07 Phase E.4 — law citation cho FE hiển thị trong EngineResultCard.
-    # Resolve qua services.priority_service.resolve_law_citation(rule_applied).
+    # Resolve qua app.constants.priority_law_citation.resolve_law_citation(rule_applied).
     # None khi rule_applied không match map (vd ambiguous_requires_manual).
     rule_law_citation: Optional[str] = Field(
         None,
         description=(
-            "Citation pháp lý (vd 'TT 05/2021 Phụ lục 01 Mục 5.b') resolved "
+            "Citation pháp lý (vd 'TT 05/2021 Phụ lục 01 Mục 5.a') resolved "
             "từ rule_applied. FE EngineResultCard hiển thị để officer scan/trust."
         )
     )

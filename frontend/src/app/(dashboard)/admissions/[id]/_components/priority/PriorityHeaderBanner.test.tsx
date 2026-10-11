@@ -29,7 +29,7 @@ const HAPPY_PREVIEW: PreviewPriorityKvResponse = {
   object_bonus_verified: null,
   ut_breakdown: null,
   total_bonus_potential: 0.75,
-  rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.b",
+  rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.a",
   path_bonus_rule: null,
 }
 
