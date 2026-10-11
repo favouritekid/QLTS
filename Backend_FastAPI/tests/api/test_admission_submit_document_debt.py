@@ -788,9 +788,15 @@ async def _build_choice_engine_profile_submitted(
     ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
     async with AsyncSessionLocal() as s:
         async with s.begin():
+            # Ngành ĐỦ cấu hình trình độ/loại hình — owner Q20(a): thiếu ⇒ T6 DỪNG 503 (không còn ghi "trượt").
+            from tests.fixtures.builders import ensure_target_level_config
+
+            loai_hinh, trinh_do = await ensure_target_level_config(s)
+            (await s.get(models.MajorProgram, major_program_id)).degree_level_id = trinh_do.id
             offering = models.ProgramOffering(
                 program_id=major_program_id,
                 offering_type="full_time",
+                offering_type_id=loai_hinh.id,
                 duration_semesters=8,
             )
             s.add(offering)

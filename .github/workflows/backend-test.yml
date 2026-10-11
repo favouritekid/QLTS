@@ -379,6 +379,8 @@ jobs:
           - tier: Tier 1 — Phase 3 multi-NV core
             tests: >-
               tests/api/test_b1_kv_override_preserve.py
+              tests/api/test_t6_dung_co_nhan.py
+              tests/api/test_admission_submit_document_debt.py
               tests/unit/test_phase3_pr3a_choice_and_score.py
               tests/unit/test_phase3_pr3b_state_machine.py
               tests/unit/test_phase3_pr3c_sub1_scoring_gates.py
@@ -1156,6 +1158,11 @@ jobs:
               tests/unit/test_phase_e4_audit_fixes.py
               tests/unit/test_admission_circular_constants.py
               tests/unit/test_priority_catalog_warning.py
+              tests/unit/test_t6_dung_co_nhan_mot_nguon.py
+              tests/unit/test_preview_priority_kv_path_aware.py
+              tests/unit/test_priority_service.py
+              tests/unit/test_priority_kv_resolution.py
+              tests/unit/test_priority_kv_phase_e4_matrix.py
               tests/unit/test_status_history_runtime_writer.py
 
     env:

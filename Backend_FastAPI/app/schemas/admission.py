@@ -2688,6 +2688,16 @@ class PreviewPriorityKvRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
 
 
+class PriorityRateWarning(BaseModel):
+    """Một bảng mức thiếu hàng ĐANG MỞ cho năm tuyển sinh — hình dạng = ``PriorityRateNotConfigured.public_payload``
+    + ``code``."""
+
+    code: Literal["PRIORITY_RATE_NOT_CONFIGURED"]
+    table: Literal["priority_area_config", "priority_object_config"]
+    academic_year: int
+    missing_codes: List[str]
+
+
 class PreviewPriorityKvResponse(BaseModel):
     """Engine resolve_kv_for_profile() + UT potential bonus result for FE preview.
 
@@ -2762,6 +2772,8 @@ class PreviewPriorityKvResponse(BaseModel):
     # V3 — thông tư đang áp của hồ sơ (lưu, hoặc dự kiến theo hôm nay giờ VN) + cảnh báo danh mục KV tạm.
     applicable_circular_effective: Optional[str] = None
     priority_catalog_warning: Optional[Dict[str, str]] = None
+    # C8 — thiếu hàng mức ĐANG MỞ cho năm tuyển sinh (owner Q10-kèm): điểm của bên thiếu = None, kèm một mục / bảng.
+    priority_rate_warnings: List[PriorityRateWarning] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 

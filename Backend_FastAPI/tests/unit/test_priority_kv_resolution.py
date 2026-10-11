@@ -101,6 +101,8 @@ def _mock_profile(**kwargs):
         "area_resolution_basis": None,
         "permanent_commune_code": None,
         "academic_history": [],
+        # NOT NULL ở model; resolver không còn rơi về năm của máy (owner Q10(a)).
+        "academic_year": 2026,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)

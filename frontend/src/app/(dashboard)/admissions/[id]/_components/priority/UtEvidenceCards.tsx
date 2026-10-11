@@ -609,7 +609,9 @@ function UtAddDisclosure({
   currentCodes,
   onCodesChange,
 }: UtAddDisclosureProps) {
-  const { data: catalog = [], isLoading } = useUtCatalog(profile.academic_year ?? new Date().getFullYear())
+  // Owner Q10(a): danh mục theo NĂM TUYỂN SINH của hồ sơ — không rơi về năm của máy.
+  const namTuyenSinh = typeof profile.academic_year === "number" ? profile.academic_year : null
+  const { data: catalog = [], isLoading } = useUtCatalog(namTuyenSinh ?? Number.NaN, namTuyenSinh !== null)
   const existingCodes = new Set(currentCodes)
 
   const toggleCode = (subCode: string) => {
@@ -636,10 +638,15 @@ function UtAddDisclosure({
       </Button>
       {open && (
         <div className="space-y-2 border-t border-border p-3" data-testid="ut-add-catalog">
-          {isLoading && (
+          {namTuyenSinh === null && (
+            <p className="text-xs text-muted-foreground" data-testid="ut-add-catalog-no-year">
+              Hồ sơ chưa có năm tuyển sinh — chưa tải được danh mục đối tượng ưu tiên.
+            </p>
+          )}
+          {namTuyenSinh !== null && isLoading && (
             <p className="text-xs text-muted-foreground">Đang tải catalog...</p>
           )}
-          {!isLoading && catalog.length === 0 && (
+          {namTuyenSinh !== null && !isLoading && catalog.length === 0 && (
             <p className="text-xs text-muted-foreground">
               Chưa có danh mục đối tượng ưu tiên cho năm {profile.academic_year}.
               Vui lòng liên hệ quản trị hệ thống.

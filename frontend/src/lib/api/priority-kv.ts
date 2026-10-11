@@ -63,6 +63,15 @@ export interface PreviewPriorityKvResponse {
   // và cảnh báo danh mục KV tạm. BE tính; FE chỉ hiện.
   applicable_circular_effective?: "TT05_2021" | "TT76_2026" | null
   priority_catalog_warning?: { code: string; circular: "TT05_2021" | "TT76_2026"; message: string } | null
+  // C8 — bảng mức thiếu hàng ĐANG MỞ cho năm tuyển sinh: điểm bên thiếu = null (không 0).
+  priority_rate_warnings?: PriorityRateWarning[]
+}
+
+export interface PriorityRateWarning {
+  code: "PRIORITY_RATE_NOT_CONFIGURED"
+  table: "priority_area_config" | "priority_object_config"
+  academic_year: number
+  missing_codes: string[]
 }
 
 export const priorityKvApi = {
