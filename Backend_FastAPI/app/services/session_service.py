@@ -599,7 +599,11 @@ async def revoke_all_other_sessions(
     Args:
         db: Database session (injected via DI)
         user_id: User ID
-        except_session_id: Optional session ID to preserve
+        except_session_id: Optional session ID to preserve. MUST come from an
+            authenticated source (``deps.get_current_session`` — the session
+            of the validated access token), never from a client-sent value:
+            this function trusts it as given. ``None`` revokes every live
+            session of the user.
 
     Returns:
         Tuple[int, PostCommitCallback]: Number of sessions revoked and callback

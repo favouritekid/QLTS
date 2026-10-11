@@ -69,6 +69,18 @@ class UserSessionListResponse(BaseModel):
     total: int
     current_session_id: Optional[int] = None
 
-# ✅ THÊM SCHEMA NÀY VÀO CUỐI FILE
+
 class RevokeAllSessionsRequest(BaseModel):
-    current_session_id: Optional[int] = None
+    """Body (tuỳ chọn) của ``POST /sessions/revoke-all`` — giữ để FE hiện tại không vỡ.
+
+    ``current_session_id`` KHÔNG quyết định phiên nào được giữ: phiên giữ lại
+    luôn là phiên của access token đã xác thực (``deps.get_current_session``).
+    Giá trị khác phiên ấy chỉ được ghi log cảnh báo rồi bỏ qua.
+    """
+
+    current_session_id: Optional[int] = Field(
+        default=None,
+        description=(
+            "Bỏ qua — phiên giữ lại lấy từ access token. Giữ trường để client cũ không vỡ."
+        ),
+    )
