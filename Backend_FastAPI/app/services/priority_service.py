@@ -329,7 +329,7 @@ def _derive_kv_basis_level(
 
     Returns ``(basis, basis_reason)``:
       basis ∈ {
-        'LICH_SU_THPT'           — multi-school rule TT 05/2021 Mục 5.b
+        'LICH_SU_THPT'           — multi-school rule TT 05/2021 Phụ lục 01 Mục 5.a
         'THUONG_TRU'             — vn_commune_area_map lookup
         'COMMUNE_SPECIAL'        — exception override (PT DTNT / ĐBKK 18+ tháng)
         'MANUAL'                 — admin/manager override KV trực tiếp
@@ -649,7 +649,7 @@ async def resolve_kv_for_profile(
             breakdown={"commune_code_used": commune_code},
         )
 
-    # --- LICH_SU_THPT: multi-school rule TT 05/2021 Phụ lục 01 Mục 5.b. ---
+    # --- LICH_SU_THPT: multi-school rule TT 05/2021 Phụ lục 01 Mục 5.a. ---
     # Aggregate duration per KV qua academic_history, longest duration wins,
     # tie → graduation school (year_to + grade_to).
     accepted_levels = {"THPT", "THCS_THPT", "GDTX"}
@@ -890,7 +890,7 @@ def kv_inputs_fingerprint(profile: "AdmissionProfile") -> str:
     ``cultural_education_level``, ``vocational_qualification``,
     ``permanent_commune_code``, ``academic_year`` (biến ``kv_year``) và
     ``academic_history``. Từ ``academic_history`` chỉ lấy các khoá mà luật
-    multi-school TT 05/2021 Mục 5.b dùng (``school_id``/``level``/
+    multi-school TT 05/2021 Phụ lục 01 Mục 5.a dùng (``school_id``/``level``/
     ``year_from``/``year_to``/``grade_to``/``graduation_type``) — thêm GPA hay
     đổi thứ tự phần tử KHÔNG được làm hết hiệu lực một quyết định đúng.
 
@@ -1461,29 +1461,14 @@ def normalize_target_level(level: str) -> str:
 # Map rule_applied (returned by resolve_kv_for_profile) → citation pháp lý.
 # FE EngineResultCard hiển thị "Căn cứ: <citation>" để officer scan/trust.
 #
-# Keys MUST match the rule_applied values emitted by resolve_kv_for_profile
-# (longest_duration, tiebreak_graduation_school, commune_lookup,
-# manual_override, ambiguous_requires_manual). New rule_applied values
-# added in tương lai PHẢI có entry tương ứng tại đây — nếu không,
-# resolve_law_citation() returns None silently.
-RULE_LAW_CITATION: dict[str, Optional[str]] = {
-    # Rows 1, 2: THPT multi-school, một KV winner by duration (3+ năm)
-    "longest_duration": "TT 05/2021 Phụ lục 01 Mục 5.b",
-    # Rows 1, 2: THPT multi-school, tied by duration → resolve by graduation school
-    "tiebreak_graduation_school": "TT 05/2021 Phụ lục 01 Mục 5.a",
-    # Rows 3, 5, 6 (fallback) + Row 8 (PT DTNT / dự bị / quân nhân / xuất ngũ)
-    "commune_lookup": "TT 05/2021 Phụ lục 01 Mục 4",
-    # Row 9: admin/officer ấn định KV thủ công
-    "manual_override": "TT 05/2021 Phụ lục 01 Mục 6 (admin override)",
-    # Phase E.4 commit 5 — fail-closed codes mới. Citation = None (engine
-    # không quyết định được; admin xử lý qua override hoặc catalog seed).
-    "ambiguous_requires_manual": None,
-    "address_not_normalized": None,
-    "catalog_gap_commune": None,
-    "catalog_gap_school": None,
-    "insufficient_data": None,
-    "not_resolved": None,
-}
+# Bảng và hàm phân giải nằm ở ``app.constants.priority_law_citation`` (MỘT nguồn,
+# dùng chung với schema response cho snapshot đã đóng băng). Re-export tên cũ để
+# các nơi đang ``from app.services.priority_service import resolve_law_citation``
+# không đổi. Sửa câu căn cứ thì sửa Ở ĐÓ, không khai lại bảng ở đây.
+from app.constants.priority_law_citation import (  # noqa: E402
+    RULE_LAW_CITATION,
+    resolve_law_citation,
+)
 
 
 async def derive_profile_target_context(
@@ -1638,26 +1623,3 @@ async def derive_profile_target_context(
     return ctx
 
 
-def resolve_law_citation(rule_applied: Optional[str]) -> Optional[str]:
-    """Resolve citation pháp lý cho rule_applied value.
-
-    Args:
-        rule_applied: Engine return value từ resolve_kv_for_profile() meta.
-                      Acceptable: longest_duration | tiebreak_graduation_school
-                      | commune_lookup | manual_override | ambiguous_requires_manual.
-
-    Returns:
-        Citation string (vd "TT 05/2021 Phụ lục 01 Mục 5.b") nếu rule_applied
-        match RULE_LAW_CITATION map.
-        None nếu rule_applied=None, hoặc rule_applied không nằm trong map
-        (defensive — không crash khi engine emit rule_applied mới chưa có entry).
-
-    Called by:
-        - PreviewPriorityKvResponse builder trong /preview-priority-kv endpoint
-          (priority_kv_preview router) — set response.rule_law_citation.
-        - _populate_response_fields for frozen priority_resolution_snapshot —
-          resolve citation cho snapshot.rule_applied (optional, defer post-launch).
-    """
-    if not rule_applied:
-        return None
-    return RULE_LAW_CITATION.get(rule_applied)

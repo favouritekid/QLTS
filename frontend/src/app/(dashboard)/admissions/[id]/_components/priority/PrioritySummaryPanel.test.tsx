@@ -27,7 +27,7 @@ const HAPPY_PREVIEW: PreviewPriorityKvResponse = {
   object_bonus_verified: null,
   ut_breakdown: null,
   total_bonus_potential: 0.75,
-  rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.b",
+  rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.a",
   path_bonus_rule: null,
 }
 
@@ -356,7 +356,7 @@ describe("PrioritySummaryPanel — cap display (Commit 3)", () => {
         applied_rate_verified: "1.50",
       },
       total_bonus_potential: 2.25,
-      rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.b",
+      rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.a",
       path_bonus_rule: { max_total_bonus: 2.0 },
     }
 
@@ -392,7 +392,7 @@ describe("PrioritySummaryPanel — cap display (Commit 3)", () => {
         applied_rate_verified: "1.00",
       },
       total_bonus_potential: 1.75,
-      rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.b",
+      rule_law_citation: "TT 05/2021 Phụ lục 01 Mục 5.a",
       path_bonus_rule: { max_total_bonus: 3.0 },
     }
 
@@ -464,5 +464,52 @@ describe("resolveCap — cap precedence", () => {
       isCapped: false,
       appliedBonus: 2.0,
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Chú giải "Căn cứ pháp lý" — đối chiếu nguyên văn TT 05/2021 Phụ lục 01 (11-10-2026).
+// Bản cũ ghi "Mục 4" cho hộ khẩu (mục 4 là tuyển thẳng), "Mục 5.b" cho luật học lâu hơn
+// (thuộc 5.a) và "Mục 6" cho ấn định tay (mục 6 là khung điểm). Mỗi ca khoá MỘT ý.
+// ---------------------------------------------------------------------------
+
+import { fireEvent } from "@testing-library/react"
+
+function moChuGiaiCanCu(): HTMLElement {
+  render(<PrioritySummaryPanel profile={buildProfileForCap()} preview={null} />)
+  fireEvent.click(screen.getByTestId("priority-summary-law-toggle"))
+  return screen.getByTestId("priority-summary-law-content")
+}
+
+describe("PrioritySummaryPanel — chú giải căn cứ pháp lý", () => {
+  it("luật học lâu hơn / nơi tốt nghiệp nằm ở Mục 5.a", () => {
+    const li = Array.from(moChuGiaiCanCu().querySelectorAll("li")).find((e) =>
+      e.textContent?.includes("học lâu hơn"),
+    )
+    expect(li?.textContent).toMatch(/^Mục 5\.a:/)
+  })
+
+  it("các trường hợp theo hộ khẩu thường trú nằm ở Mục 5.b, không phải Mục 4", () => {
+    const noiDung = moChuGiaiCanCu()
+    const li = Array.from(noiDung.querySelectorAll("li")).find((e) =>
+      e.textContent?.includes("hộ khẩu"),
+    )
+    expect(li?.textContent).toMatch(/^Mục 5\.b:/)
+    expect(noiDung.textContent).not.toMatch(/Mục 4/)
+  })
+
+  it("Mục 6 là khung điểm ưu tiên", () => {
+    const li = Array.from(moChuGiaiCanCu().querySelectorAll("li")).find((e) =>
+      e.textContent?.startsWith("Mục 6:"),
+    )
+    expect(li?.textContent).toMatch(/khung điểm ưu tiên/)
+  })
+
+  it("ấn định thủ công là xác nhận nội bộ, không gán sang mục thông tư", () => {
+    const li = Array.from(moChuGiaiCanCu().querySelectorAll("li")).find((e) =>
+      e.textContent?.includes("thủ công"),
+    )
+    expect(li?.textContent).toMatch(/xác nhận nội bộ/)
+    expect(li?.textContent).not.toMatch(/Mục \d/)
   })
 })
