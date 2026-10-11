@@ -3035,13 +3035,14 @@ async def test_revoke_all_by_expired_session_is_401_and_revokes_nothing(
 
 
 @pytest.mark.asyncio
-async def test_revoke_all_when_current_session_unresolved_revokes_every_session(
+async def test_revoke_all_when_current_session_unresolved_is_401_revokes_nothing(
     client, app_instance, regular_user_in_db
 ):
     """Ca 4c — `get_current_user` đã cho qua nhưng `get_current_session` trả None
     (hàng bị thu hồi/hết hạn XEN GIỮA STEP 4b và lượt tra — dựng bằng override)
-    ⇒ thu hồi MỌI phiên sống; body KHÔNG được dùng làm phương án dự phòng, kể cả
-    khi nó nêu đúng phiên của token."""
+    ⇒ 401 và KHÔNG thu hồi phiên nào (review F27, owner 11-10): không biết phiên cần
+    giữ thì không mở rộng thao tác phá huỷ; body KHÔNG được dùng làm phương án dự
+    phòng, kể cả khi nó nêu đúng phiên của token."""
     user = regular_user_in_db
     p = await _hai_phien_song(client, user)
 
@@ -3054,9 +3055,9 @@ async def test_revoke_all_when_current_session_unresolved_revokes_every_session(
     finally:
         app_instance.dependency_overrides.pop(deps.get_current_session, None)
 
-    assert res.status_code == 204, res.text
-    assert await _live_session_jtis(user["id"]) == [], (
-        "không xác định được phiên hiện tại mà vẫn giữ phiên do body nêu"
+    assert res.status_code == 401, res.text
+    assert sorted(await _live_session_jtis(user["id"])) == sorted([p["jti_a"], p["jti_b"]]), (
+        "không xác định được phiên hiện tại mà vẫn thu hồi phiên"
     )
 
 

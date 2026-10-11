@@ -17,7 +17,7 @@ from .. import database
 from .. import models, schemas
 from ..core import deps
 from ..services import session_service
-from ..utils.exceptions import SessionNotFoundError
+from ..utils.exceptions import SessionNotFoundError, SessionRevokedError
 
 log = structlog.get_logger(__name__)
 
@@ -156,8 +156,9 @@ async def revoke_all_other_sessions(
     break, but it decides nothing: a different value is only logged.
 
     Current session not resolvable (revoked / expired between
-    ``get_current_user`` and this lookup) ⇒ every live session of the user is
-    revoked; the body is NOT used as a fallback.
+    ``get_current_user`` and this lookup) ⇒ 401 ``SESSION_REVOKED`` and NOTHING
+    is revoked — không mở rộng thao tác phá huỷ khi không biết phiên cần giữ
+    (review F27, owner 11-10); the body is NOT used as a fallback either.
 
     Returns:
         204 No Content on success
@@ -177,10 +178,11 @@ async def revoke_all_other_sessions(
         )
     if keep_session_id is None:
         log.warning(
-            "revoke-all: current session not resolved; revoking every live session",
+            "revoke-all: current session not resolved; refused (401), nothing revoked",
             user_id=current_user.id,
             action="session.revoke_all_current_unresolved",
         )
+        raise SessionRevokedError()
 
     log.info(
         "Revoking all other sessions",
