@@ -396,7 +396,7 @@ def ghi_dau_vet_thong_tu(choice: "AdmissionProfileChoice", profile: "AdmissionPr
     """
     from ..constants.admission_circular import KV_CATALOG_STATUS
 
-    thong_tu = profile.applicable_circular
+    thong_tu = getattr(profile, "applicable_circular", None)
     if thong_tu is None:
         log.warning("engine_t6_applicable_circular_missing", profile_id=getattr(profile, "id", None))
     choice.priority_config_snapshot = {

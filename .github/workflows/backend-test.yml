@@ -1101,6 +1101,10 @@ jobs:
           # đọc tệp migration/model như CẤU TRÚC, không đụng CSDL. Nó khoá mốc
           # giờ VN 03-11, tập trạng thái sau nộp (tính lại từ máy trạng thái) và
           # bản chép đông cứng trong migration `v3circ20261011`.
+          # `test_status_history_runtime_writer.py` vào Tier 5 (V3): unit, DB là
+          # MagicMock. Trước đây NGOÀI mọi tier — V3 làm 4 ca đỏ (đếm `db.add`
+          # khi cạnh draft→submitted nay thêm hàng `circular_defaulted`) mà CI PR
+          # không thấy; đã sửa ca lấy hàng lịch sử theo KIỂU. Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1152,6 +1156,7 @@ jobs:
               tests/unit/test_phase_e4_audit_fixes.py
               tests/unit/test_admission_circular_constants.py
               tests/unit/test_priority_catalog_warning.py
+              tests/unit/test_status_history_runtime_writer.py
 
     env:
       APP_ENV: test

@@ -300,7 +300,7 @@ def _dong_dau_lan_nop_dau(
 
     profile.first_submitted_at = now
     profile.first_submitted_source = FIRST_SUBMITTED_SOURCE_TRANSITION
-    if profile.applicable_circular is not None:
+    if getattr(profile, "applicable_circular", None) is not None:
         return
 
     from ..models.priority_audit import PriorityAuditLog
@@ -486,7 +486,8 @@ async def transition(
     if (
         old_status == "draft"
         and new_status == "submitted"
-        and profile.first_submitted_source is None
+        # getattr: stub ``SimpleNamespace`` của test Phase 3 không có cột V3; ORM thật luôn có thuộc tính.
+        and getattr(profile, "first_submitted_source", None) is None
     ):
         _dong_dau_lan_nop_dau(db, profile, now=now, actor=actor)
 
