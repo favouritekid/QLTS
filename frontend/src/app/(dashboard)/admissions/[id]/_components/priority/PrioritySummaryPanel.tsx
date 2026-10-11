@@ -289,25 +289,33 @@ export function PrioritySummaryPanel({ profile, preview }: PrioritySummaryPanelP
             data-testid="priority-summary-law-content"
           >
             <p>
-              <strong>Thông tư 05/2021/TT-BLĐTBXH</strong> Phụ lục 01 — Quy định
-              điểm ưu tiên tuyển sinh giáo dục nghề nghiệp.
+              <strong>Thông tư 05/2021/TT-BLĐTBXH</strong> Phụ lục 01 — Các chính
+              sách ưu tiên.
             </p>
             <ul className="list-disc space-y-1 pl-5">
               <li>
-                <strong>Mục 4:</strong> KV theo mã xã/phường thường trú (trường hợp
-                đặc biệt: PTDT nội trú, dự bị ĐH, lớp tạo nguồn, quân nhân/CAND).
+                <strong>Mục 5.a:</strong> học liên tục và tốt nghiệp ở khu vực nào
+                thì hưởng khu vực đó; chuyển trường thì theo khu vực học lâu hơn;
+                mỗi năm một trường hoặc nửa thời gian mỗi trường thì theo khu vực
+                nơi tốt nghiệp.
               </li>
               <li>
-                <strong>Mục 5.a:</strong> KV theo trường tốt nghiệp khi học &lt; 3
-                năm hoặc tied duration.
+                <strong>Mục 5.b:</strong> các trường hợp hưởng khu vực theo hộ khẩu
+                thường trú (phổ thông dân tộc nội trú, dự bị, lớp tạo nguồn, hộ khẩu
+                trên 18 tháng ở xã khó khăn theo quy định, quân nhân/công an).
               </li>
               <li>
-                <strong>Mục 5.b:</strong> KV theo trường học &gt; 3 năm
-                (longest_duration rule).
+                <strong>Mục 5.c:</strong> danh sách khu vực KV1, KV2-NT, KV2, KV3.
               </li>
               <li>
-                <strong>Mục 6:</strong> Admin override KV thủ công — yêu cầu lý do
-                + audit trail.
+                <strong>Mục 6:</strong> khung điểm ưu tiên — chênh lệch 1,0 điểm giữa
+                hai nhóm đối tượng kế tiếp, 0,25 điểm giữa hai khu vực kế tiếp (thang
+                điểm 10).
+              </li>
+              <li>
+                <strong>Ấn định khu vực thủ công:</strong> thao tác xác nhận nội bộ
+                của nhà trường (bắt buộc lý do, có nhật ký) — không thuộc mục nào
+                của thông tư.
               </li>
             </ul>
           </div>

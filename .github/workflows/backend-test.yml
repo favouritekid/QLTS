@@ -1081,6 +1081,12 @@ jobs:
           # Vì sao BẮT BUỘC có selector: nó canh bất biến 'mọi image runtime bị
           # build ghi đè đều có tài sản rollback'. Nằm ngoài mọi tier thì không
           # shard nào chạy mà required check vẫn xanh.
+          # `test_phase_e4_audit_fixes.py` vào Tier 5: unit thuần, DB là
+          # MagicMock, không đụng CSDL thật. Nó khoá bảng căn cứ pháp lý KV
+          # (`priority_law_citation.py`) cùng `test_phase_e4_pr4_compliance.py`
+          # (Tier 4b). Trước đây nằm ngoài mọi tier nên nó khoá đúng các chuỗi SAI
+          # ("Mục 5.b", "Mục 4") mà không shard nào chạy. Đặt ở Tier 5 chứ không
+          # 4b để khỏi đổi `SHA_HOP_SELECTOR_TIER4`. Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1129,6 +1135,7 @@ jobs:
               tests/integration/test_document_audience_reresolve.py
               tests/unit/test_docgrp_audience_backfill_migration.py
               tests/integration/test_document_audience_config_panel.py
+              tests/unit/test_phase_e4_audit_fixes.py
 
     env:
       APP_ENV: test

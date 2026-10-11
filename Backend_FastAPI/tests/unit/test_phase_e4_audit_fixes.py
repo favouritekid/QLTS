@@ -266,11 +266,15 @@ def test_resolve_law_citation_map_alignment() -> None:
     """
     from app.services.priority_service import resolve_law_citation
 
-    # 4 keys với citation
-    assert resolve_law_citation("longest_duration") == "TT 05/2021 Phụ lục 01 Mục 5.b"
-    assert resolve_law_citation("tiebreak_graduation_school") == "TT 05/2021 Phụ lục 01 Mục 5.a"
-    assert resolve_law_citation("commune_lookup") == "TT 05/2021 Phụ lục 01 Mục 4"
-    assert resolve_law_citation("manual_override") == "TT 05/2021 Phụ lục 01 Mục 6 (admin override)"
+    # 4 keys với citation — giá trị lấy từ bảng nguồn (app.constants.priority_law_citation);
+    # câu chữ cụ thể được khoá trong tests/unit/test_phase_e4_pr4_compliance.py (tệp Tier 4b —
+    # tệp NÀY không thuộc tier PR nào nên không được dùng để khoá câu chữ). 11-10-2026: bản cũ
+    # ở đây khoá đúng các số mục SAI (5.b / 4 / 6).
+    from app.constants.priority_law_citation import RULE_LAW_CITATION
+
+    for rule in ("longest_duration", "tiebreak_graduation_school", "commune_lookup", "manual_override"):
+        assert resolve_law_citation(rule) == RULE_LAW_CITATION[rule]
+        assert resolve_law_citation(rule), rule
 
     # ambiguous → None (no clear citation)
     assert resolve_law_citation("ambiguous_requires_manual") is None

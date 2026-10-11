@@ -30,15 +30,18 @@ export interface EngineDisplay {
 
 /**
  * Fallback law citation cho frozen snapshot khi BE chưa trả `rule_law_citation`
- * (legacy snapshot pre-Commit-3 deploy). Map MUST align BE
- * priority_service.RULE_LAW_CITATION (5 keys).
+ * (legacy snapshot pre-Commit-3 deploy). BE đã tính lại câu cho snapshot đóng
+ * băng ở schema response, nên nhánh này hiếm khi chạy — nhưng nếu chạy thì PHẢI
+ * nói giống BE. Nguồn: `Backend_FastAPI/app/constants/priority_law_citation.py`
+ * (RULE_LAW_CITATION). `tests/unit/test_phase_e4_pr4_compliance.py` đọc chính
+ * bảng dưới đây và khoá nó bằng bảng BE — sửa câu thì sửa BE trước.
  */
 export function deriveLawCitationFallback(ruleApplied: string): string | null {
   const map: Record<string, string | null> = {
-    longest_duration: "TT 05/2021 Phụ lục 01 Mục 5.b",
+    longest_duration: "TT 05/2021 Phụ lục 01 Mục 5.a",
     tiebreak_graduation_school: "TT 05/2021 Phụ lục 01 Mục 5.a",
-    commune_lookup: "TT 05/2021 Phụ lục 01 Mục 4",
-    manual_override: "TT 05/2021 Phụ lục 01 Mục 6 (admin override)",
+    commune_lookup: "TT 05/2021 Phụ lục 01 Mục 5",
+    manual_override: "Ấn định thủ công — xác nhận nội bộ của nhà trường, không thuộc mục nào của thông tư",
     ambiguous_requires_manual: null,
   }
   return map[ruleApplied] ?? null

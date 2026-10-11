@@ -994,3 +994,154 @@ async def test_evidence_mutation_hard_denied_states_block_everyone() -> None:
                 profile, "07", _ut_actor(role="admin"),
                 expected_version=5, acknowledge_post_publish=True,
             )
+
+
+# =============================================================================
+# Căn cứ pháp lý hiển thị cạnh kết quả phân giải KV (11-10-2026)
+# =============================================================================
+# Đối chiếu nguyên văn TT 05/2021/TT-BLĐTBXH Phụ lục 01: luật học nhiều trường ở 5.a; mục 4 thuộc
+# tuyển thẳng; mục 6 là khung điểm. Bảng cũ ghi 5.b / 4 / 6 và test cũ khoá đúng chuỗi sai đó — trong
+# một tệp không thuộc tier PR nào nên CI chưa từng chạy. Các ca dưới nằm ở tệp Tier 4b; mỗi ca khoá
+# MỘT bất biến.
+
+
+def test_can_cu_hoc_nhieu_truong_la_muc_5a() -> None:
+    from app.constants.priority_law_citation import RULE_LAW_CITATION
+
+    assert RULE_LAW_CITATION["longest_duration"] == "TT 05/2021 Phụ lục 01 Mục 5.a"
+    assert RULE_LAW_CITATION["tiebreak_graduation_school"] == "TT 05/2021 Phụ lục 01 Mục 5.a"
+
+
+def test_can_cu_tra_theo_xa_chi_toi_muc_5() -> None:
+    """commune_lookup phủ cả ca hộ khẩu (5.b) lẫn ca trường tự quyết dùng nơi thường trú."""
+    from app.constants.priority_law_citation import RULE_LAW_CITATION
+
+    assert RULE_LAW_CITATION["commune_lookup"] == "TT 05/2021 Phụ lục 01 Mục 5"
+
+
+def test_an_dinh_tay_khong_gan_sang_muc_thong_tu() -> None:
+    import re
+
+    from app.constants.priority_law_citation import RULE_LAW_CITATION
+
+    cau = RULE_LAW_CITATION["manual_override"]
+    assert cau and "xác nhận nội bộ" in cau
+    assert not re.search(r"Mục \d", cau), cau
+
+
+def test_service_dung_dung_bang_cua_constants() -> None:
+    """priority_service re-export — không được khai lại một bảng thứ hai."""
+    from app.constants import priority_law_citation as goc
+    from app.services import priority_service
+
+    assert priority_service.RULE_LAW_CITATION is goc.RULE_LAW_CITATION
+    assert priority_service.resolve_law_citation is goc.resolve_law_citation
+
+
+def test_snapshot_dong_bang_hien_cau_tinh_lai_tu_rule_applied() -> None:
+    from app.constants.priority_law_citation import with_current_law_citation
+
+    snap = {"rule_applied": "longest_duration", "rule_law_citation": "TT 05/2021 Phụ lục 01 Mục 5.b"}
+    assert with_current_law_citation(snap)["rule_law_citation"] == "TT 05/2021 Phụ lục 01 Mục 5.a"
+
+
+def test_snapshot_an_dinh_tay_khong_giu_cau_cua_lan_phan_giai_truoc() -> None:
+    """priority_override_service dựng snapshot bằng **prev_snapshot ⇒ câu cũ bám theo."""
+    from app.constants.priority_law_citation import RULE_LAW_CITATION, with_current_law_citation
+
+    snap = {"rule_applied": "manual_override", "rule_law_citation": "TT 05/2021 Phụ lục 01 Mục 5.b"}
+    assert with_current_law_citation(snap)["rule_law_citation"] == RULE_LAW_CITATION["manual_override"]
+
+
+def test_snapshot_khong_bi_sua_tai_cho() -> None:
+    """Snapshot có thể chính là thuộc tính JSONB của ORM — sửa tại chỗ là sửa dữ liệu."""
+    from app.constants.priority_law_citation import with_current_law_citation
+
+    snap = {"rule_applied": "longest_duration", "rule_law_citation": "câu đã lưu"}
+    truoc = dict(snap)
+    out = with_current_law_citation(snap)
+    assert out is not snap
+    assert snap == truoc
+
+
+def test_rule_applied_la_giu_nguyen_cau_da_luu() -> None:
+    from app.constants.priority_law_citation import with_current_law_citation
+
+    snap = {"rule_applied": "rule_moi_chua_co_trong_bang", "rule_law_citation": "câu đã lưu"}
+    assert with_current_law_citation(snap)["rule_law_citation"] == "câu đã lưu"
+
+
+def _response_toi_thieu(snapshot: dict) -> dict:
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 10, 11, tzinfo=timezone.utc)
+    return {
+        "id": 1, "lead_id": 1, "status": "submitted", "version": 1, "academic_year": 2026,
+        "applied_rules": {}, "created_at": now, "updated_at": now,
+        "priority_resolution_snapshot": snapshot,
+    }
+
+
+def test_response_profile_tra_cau_tinh_lai() -> None:
+    from app.schemas.admission import AdmissionProfileResponse
+
+    snap = {"rule_applied": "commune_lookup", "rule_law_citation": "TT 05/2021 Phụ lục 01 Mục 4"}
+    resp = AdmissionProfileResponse.model_validate(_response_toi_thieu(snap))
+    assert resp.priority_resolution_snapshot["rule_law_citation"] == "TT 05/2021 Phụ lục 01 Mục 5"
+
+
+def test_response_profile_khong_sua_snapshot_nguon() -> None:
+    from app.schemas.admission import AdmissionProfileResponse
+
+    snap = {"rule_applied": "commune_lookup", "rule_law_citation": "TT 05/2021 Phụ lục 01 Mục 4"}
+    truoc = dict(snap)
+    AdmissionProfileResponse.model_validate(_response_toi_thieu(snap))
+    assert snap == truoc
+
+
+def _bang_du_phong_frontend() -> dict:
+    """Đọc bảng ``deriveLawCitationFallback`` trong ``engineDisplay.ts`` (khối ``const map``)."""
+    import re
+    from pathlib import Path
+
+    tep = None
+    for goc in Path(__file__).resolve().parents:
+        ung_vien = goc / "frontend" / "src" / "app" / "(dashboard)" / "admissions" / "[id]" / (
+            "_components/priority/engineDisplay.ts"
+        )
+        if ung_vien.is_file():
+            tep = ung_vien
+            break
+    if tep is None:
+        pytest.skip("không thấy cây frontend (chạy trong container chỉ có Backend_FastAPI)")
+    noi_dung = tep.read_text(encoding="utf-8")
+    khoi = re.search(
+        r"function deriveLawCitationFallback\b.*?const map[^{]*\{(.*?)\n  \}", noi_dung, re.S
+    )
+    assert khoi, "không tìm thấy khối `const map` trong deriveLawCitationFallback"
+    bang: dict = {}
+    for dong in khoi.group(1).splitlines():
+        m = re.match(r'\s*(\w+):\s*(?:"([^"]*)"|(null))\s*,?\s*$', dong)
+        if m:
+            bang[m.group(1)] = None if m.group(3) else m.group(2)
+        elif dong.strip() and not dong.strip().startswith("//"):
+            raise AssertionError(f"dòng không đọc được trong bảng frontend: {dong!r}")
+    assert bang, "bảng frontend rỗng — bộ đọc đang canh hụt"
+    return bang
+
+
+def test_bang_du_phong_frontend_noi_giong_backend() -> None:
+    from app.constants.priority_law_citation import RULE_LAW_CITATION
+
+    fe = _bang_du_phong_frontend()
+    lech = {k: (v, RULE_LAW_CITATION.get(k, "<không có ở BE>")) for k, v in fe.items()
+            if RULE_LAW_CITATION.get(k, "<không có ở BE>") != v}
+    assert not lech, f"bảng frontend lệch bảng BE: {lech}"
+
+
+def test_bang_du_phong_frontend_phu_moi_cau_cua_backend() -> None:
+    from app.constants.priority_law_citation import RULE_LAW_CITATION
+
+    fe = _bang_du_phong_frontend()
+    thieu = [k for k, v in RULE_LAW_CITATION.items() if v is not None and k not in fe]
+    assert not thieu, f"bảng frontend thiếu khoá có câu căn cứ: {thieu}"
