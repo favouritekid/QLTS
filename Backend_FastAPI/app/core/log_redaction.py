@@ -109,28 +109,36 @@ PII_KEYS: frozenset[str] = frozenset({
     "full_name", "lead_full_name",
 })
 
-#: Cột trong ``DETAIL: Key (…)=(…)`` của PostgreSQL ⇒ che phần giá trị. Cột
+#: Đoạn TÊN CỘT trong ``Key (…)=(…)`` của PostgreSQL ⇒ che phần giá trị. Cột
 #: khác (``profile_id``, ``lead_id``…) giữ nguyên để chẩn đoán khoá ngoại.
-_SQL_PII_COLUMN_RE = re.compile(
-    r"citizen|cccd|cmnd|id_number|phone|email|full_name", re.IGNORECASE
-)
+SQL_PII_COLUMN_STEMS: tuple[str, ...] = (
+    "citizen", "cccd", "cmnd", "id_number", "phone", "email", "full_name",
+) + SECRET_TEXT_KEY_SUBSTRINGS
+_SQL_PII_COLUMN_RE = re.compile("|".join(SQL_PII_COLUMN_STEMS), re.IGNORECASE)
+
+#: Dấu hiệu tham số query mang bí mật — TÊN tham số chứa ``token`` (nginx).
+NGINX_QUERY_TOKEN_MARKER = r"[?&][a-z0-9_-]*token[a-z0-9_-]*="
 
 
 def _slash(fragment: str) -> str:
-    """Thoát regex rồi cho mỗi ``/`` khớp cả bản ujson thoát thành ``\\/``."""
-    return re.escape(fragment).replace("/", r"\\?/")
+    """Thoát regex rồi cho mỗi ``/`` khớp cả bản ujson ``\\/`` lẫn bản mã hoá
+    URL ``%2F`` (vd ``?next=%2Fconfirm%2F<token>``)."""
+    return re.escape(fragment).replace("/", r"(?:\\?/|%2[Ff])")
 
 
 def _prefix_regex(prefix: str) -> str:
     return _slash(prefix).replace(r"\*", r"[A-Za-z_-]+")
 
 
-def nginx_token_path_alternation() -> str:
-    """Tập :data:`TOKEN_PATH_PREFIXES` viết theo cú pháp regex của ``map`` nginx.
-
-    Hằng duy nhất mà ``nginx/nginx.conf`` phải chép nguyên văn; test so khớp.
-    """
-    return "|".join(p.replace("*", "[A-Za-z_-]+") for p in TOKEN_PATH_PREFIXES)
+def nginx_token_marker_alternation() -> str:
+    """Tập DẤU HIỆU token viết theo cú pháp regex của ``map`` nginx (dùng với
+    ``~*``): :data:`TOKEN_PATH_PREFIXES` (``/`` khớp cả ``%2f``) + tham số query
+    có tên chứa ``token``. Hằng duy nhất ``nginx/nginx.conf`` phải chép nguyên
+    văn; ``tests/unit/test_che_log_token_nginx.py`` so khớp."""
+    duong = [
+        p.replace("*", "[a-z_-]+").replace("/", "(?:/|%2f)") for p in TOKEN_PATH_PREFIXES
+    ]
+    return "|".join(duong + [NGINX_QUERY_TOKEN_MARKER])
 
 
 # (1) token trong đường dẫn — khớp ở bất kỳ vị trí nào, cả dạng ``\/``. Đoạn
@@ -159,9 +167,13 @@ _KV_QUOTED_RE = re.compile(
 _CCCD_LABEL_RE = re.compile(
     r"(?i)(?P<lbl>(?:cccd|cmnd|citizen[ _-]?id)\W{0,5}?)(?P<num>\d{9,})(?!\d)"
 )
-# (4) DETAIL của PostgreSQL: ``Key (citizen_id, academic_year)=(0…, 2026)``.
+# (4) DETAIL của PostgreSQL: ``Key (citizen_id, academic_year)=(0…, 2026)`` —
+# unique (``already exists``), khoá ngoại (``is not present`` / ``is still
+# referenced``), tạo index (``is duplicated``) và exclusion constraint, nơi
+# nhóm THỨ HAI viết thường: ``… conflicts with existing key (…)=(…)``.
 _SQL_KEY_RE = re.compile(
-    r"(?P<head>Key \((?P<cols>[^=]*?)\)=\()(?P<vals>.*?)(?P<tail>\)(?=[\s.,;\"'\\]|$))"
+    r"(?<![A-Za-z_])(?P<head>[Kk]ey \((?P<cols>[^=]*?)\)=\()(?P<vals>.*?)"
+    r"(?P<tail>\)(?=[\s.,;\"'\\]|$))"
 )
 # (5) tham số bind trong câu lỗi SQLAlchemy: ``[parameters: ('Nguyen…', '0…')]``.
 _SQL_PARAMS_RE = re.compile(
@@ -172,7 +184,79 @@ _URL_CRED_RE = re.compile(
     r"(?P<pre>\b[A-Za-z][A-Za-z0-9+.-]*:\\?/\\?/[^:/\s@\"']*:)[^@\s\"']+?@"
 )
 
+# (7) Thông báo PostgreSQL 16 / asyncpg NHÚNG GIÁ TRỊ ĐẦU VÀO (bảng quyết định
+# che / không che + lý do: báo cáo V6 vòng 2). Dấu nháy kép có thể ở dạng thoát
+# JSON ``\"`` khi dòng đã qua renderer ⇒ ``(?P<q>\\?")`` + ``(?P=q)``.
+#
+# (7a) ``DETAIL: Failing row contains (…)`` — vi phạm CHECK / NOT NULL / ràng
+# buộc phân vùng: PG in NGUYÊN hàng (mọi cột: CCCD, họ tên, email, SĐT…), không
+# kèm tên cột ⇒ không giữ chọn lọc được ⇒ che TOÀN BỘ nhóm. Ưu tiên cắt tới
+# mốc cấu trúc kế tiếp (``[SQL:`` / ``HINT:`` / ``CONTEXT:`` / ``(Background``)
+# để phủ cả giá trị có xuống dòng; không có mốc thì che tới HẾT DÒNG — kể cả khi
+# dòng bị cắt cụt không còn ngoặc đóng.
+_PG_FAILING_ROW_RE = re.compile(
+    r"Failing row contains \((?:"
+    r"(?P<moc>.{0,8000}?\)\.?(?=(?:\\r|\\n|\r|\n)+(?:\[SQL:|HINT:|CONTEXT:|\(Background)))"
+    r"|(?P<dong>[^\r\n]*?)(?=\\r|\\n|(?<!\\)\"|$|\r|\n)"
+    r")",
+    re.S,
+)
+# (7b) ``<nhãn>: "<giá trị>"`` — kiểu dữ liệu sai (``invalid input syntax for
+# type integer: "…"``), enum sai, ngày giờ ngoài miền, hex sai.
+_PG_NHAN_GIA_TRI_RE = re.compile(
+    r"(?P<head>(?:invalid input syntax for(?: type)? [^:\r\n\"]{1,80}"
+    r"|invalid input value for enum [^:\r\n\"]{1,80}"
+    r"|date/time field value out of range"
+    r"|invalid hexadecimal digit): )(?P<q>\\?\")(?P<v>.*?)(?P=q)"
+)
+# (7c) ``<từ> "<giá trị>" <đuôi>`` — ``value "…" is out of range for type …``,
+# ``invalid value "…" for "…"``, ``time zone "…" not recognized``.
+_PG_GIA_TRI_GIUA_RE = re.compile(
+    r"(?P<head>(?:\bvalue|\binvalid value|\btime zone) )(?P<q>\\?\")(?P<v>.*?)(?P=q)"
+    r"(?P<tail> (?:is out of range|for |not recognized))"
+)
+# (7d) asyncpg (phía client): ``invalid input for query argument $2: '…' (…)``
+# — giá trị là repr của tham số bind. Chuỗi trong nháy ⇒ che chuỗi; repr khác
+# (số, datetime…) ⇒ che tới hết dòng (mất cả lý do — chấp nhận).
+_ASYNCPG_THAM_SO_RE = re.compile(
+    r"(?P<head>invalid input for query argument \$\d+: )"
+    r"(?P<v><redacted>|'(?:[^'\\\r\n]|\\.)*'|\"(?:[^\"\\\r\n]|\\.)*\""
+    r"|[^\r\n]*?(?=\\r|\\n|\r|\n|$))"
+)
+# (7e) JSON đầu vào: ``DETAIL: Token "…" is invalid.`` + ``CONTEXT: JSON data,
+# line N: <nội dung>`` (nội dung JSON người dùng gửi).
+_PG_JSON_TOKEN_RE = re.compile(r"(?P<head>\bToken )(?P<q>\\?\")(?P<v>.*?)(?P=q)(?P<tail> is invalid)")
+_PG_JSON_DONG_RE = re.compile(
+    r"(?P<head>JSON data, line \d+: )(?P<v>[^\r\n]*?)(?=\\r|\\n|\r|\n|(?<!\\)\"|$)"
+)
+# (7f) giá trị tham số bind trong CONTEXT/DETAIL: ``unnamed portal parameter
+# $1 = '…'`` (log_parameter_max_length_on_error) và ``parameters: $1 = '…'``.
+_PG_THAM_SO_BIND_RE = re.compile(r"(?P<head>\$\d+ = )(?P<v>'(?:[^']|'')*')")
+# (7g) ``CONTEXT: COPY bảng, line N, column c: "…"`` (hoặc cả dòng COPY).
+_PG_COPY_RE = re.compile(
+    r"(?P<head>COPY [^,\r\n]{1,128}, line \d+(?:, column [^:\r\n]{1,128})?: )"
+    r"(?P<q>\\?\")(?P<v>.*?)(?P=q)"
+)
+
 _DA_CHE = (REDACTED, REDACTED_KEY)
+
+
+def _thay_nhan_nhay(m: "re.Match[str]") -> str:
+    """Giữ nhãn + dấu nháy (+ đuôi nếu có), thay thân giá trị."""
+    tail = m.groupdict().get("tail") or ""
+    return m.group("head") + m.group("q") + REDACTED + m.group("q") + tail
+
+
+def _redact_postgres(s: str) -> str:
+    s = _PG_FAILING_ROW_RE.sub("Failing row contains (" + REDACTED + ").", s)
+    s = _PG_NHAN_GIA_TRI_RE.sub(_thay_nhan_nhay, s)
+    s = _PG_GIA_TRI_GIUA_RE.sub(_thay_nhan_nhay, s)
+    s = _ASYNCPG_THAM_SO_RE.sub(lambda m: m.group("head") + REDACTED, s)
+    s = _PG_JSON_TOKEN_RE.sub(_thay_nhan_nhay, s)
+    s = _PG_JSON_DONG_RE.sub(lambda m: m.group("head") + REDACTED, s)
+    s = _PG_THAM_SO_BIND_RE.sub(lambda m: m.group("head") + "'" + REDACTED + "'", s)
+    s = _PG_COPY_RE.sub(_thay_nhan_nhay, s)
+    return s
 
 
 def _thay_kv(m: "re.Match[str]") -> str:
@@ -204,6 +288,7 @@ def redact_text(text: str) -> str:
     try:
         s = _SQL_PARAMS_RE.sub("[parameters: " + REDACTED + "]", text)
         s = _SQL_KEY_RE.sub(_thay_sql_key, s)
+        s = _redact_postgres(s)
         s = _TOKEN_PATH_RE.sub(lambda m: m.group(1) + REDACTED, s)
         s = _URL_CRED_RE.sub(lambda m: m.group("pre") + REDACTED + "@", s)
         s = _KV_QUOTED_RE.sub(_thay_kv, s)

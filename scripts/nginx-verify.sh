@@ -83,6 +83,7 @@ log "đo '$CT' tại $IP trên mạng '$MANG' (domain=$DOMAIN, strict_tls=$STRIC
 # qua những thứ mà client thật không hề với tới được.
 # Dùng lại đúng image của container đang đo: chắc chắn có sẵn, có curl thật
 # (nginx:1.27-alpine đóng gói curl 8.12 + OpenSSL), không phải tải thêm gì.
+KQ_CHUC_NANG=0
 docker run --rm --network "$MANG" \
     -e DOMAIN="$DOMAIN" -e IP="$IP" -e STRICT="$STRICT" \
     --entrypoint sh "$IMAGE" -c '
@@ -153,4 +154,55 @@ if [ "$SO_HONG" -eq 0 ]; then
 fi
 echo "HỎNG — $SO_HONG phép kiểm không đạt."
 exit 1
-'
+' || KQ_CHUC_NANG=$?
+
+# --- Đầu dò TOKEN trong access log (V6) -------------------------------------
+# Gửi MỘT request mang token GIẢ ở cả ba chỗ access log ghi lại — đường dẫn
+# (`/confirm/<giả>`), query (`?token=<giả>&refresh_token=<giả>`), Referer — rồi
+# đọc access log của CHÍNH container đang đo. HAI vế, thiếu vế nào cũng ĐỎ:
+#   (a) VẪN có dòng log cho request ấy. `access_log off` cũng cho "0 dòng lộ",
+#       nên chỉ đếm "không lộ" là một phép kiểm xanh vô nghĩa;
+#   (b) dòng ấy KHÔNG chứa token giả nào, và mang dấu `<redacted>`.
+# Dòng được nhận ra nhờ User-Agent mang nonce riêng của lượt đo. CHỈ in dòng của
+# chính đầu dò (dữ liệu giả) — log của container đang phục vụ chứa traffic thật,
+# không bao giờ in ra. `docker logs` lấy stdout = access log của ảnh nginx chính
+# thức; stderr (`error_log`) bị bỏ qua — phần dư đã biết, không thuộc phép đo này.
+NONCE="$(date +%s)$$"
+GIA="qltsgia${NONCE}x"
+UA="qlts-verify-dau-do-token/${NONCE}"
+docker run --rm --network "$MANG" \
+    -e DOMAIN="$DOMAIN" -e IP="$IP" -e GIA="$GIA" -e UA="$UA" \
+    --entrypoint sh "$IMAGE" -c '
+curl --silent --output /dev/null --max-time 8 --retry 0 --insecure \
+    --resolve "$DOMAIN:443:$IP" --user-agent "$UA" \
+    --referer "https://$DOMAIN/magic-link/withdraw/${GIA}r?token=${GIA}s" \
+    "https://$DOMAIN/confirm/${GIA}p?token=${GIA}q&refresh_token=${GIA}t" || true
+' >/dev/null 2>&1 || true
+
+KQ_TOKEN=0
+DONG_DAU_DO=""
+for _ in 1 2 3 4 5; do
+    DONG_DAU_DO="$(docker logs --since 10m "$CT" 2>/dev/null | grep -F -- "$UA" || true)"
+    [ -n "$DONG_DAU_DO" ] && break
+    sleep 1
+done
+echo "--- đầu dò token trong access log ---"
+if [ -z "$DONG_DAU_DO" ]; then
+    echo "  ✗ đầu dò token: KHÔNG thấy dòng access log của request đầu dò (access_log off? log không ra stdout?)"
+    KQ_TOKEN=1
+elif printf '%s\n' "$DONG_DAU_DO" | grep -qF -- "$GIA"; then
+    echo "  ✗ đầu dò token: access log LỘ token giả:"
+    printf '%s\n' "$DONG_DAU_DO" | sed 's/^/      /'
+    KQ_TOKEN=1
+elif ! printf '%s\n' "$DONG_DAU_DO" | grep -qF -- "<redacted>"; then
+    echo "  ✗ đầu dò token: dòng log của đầu dò không mang dấu <redacted> (khuôn log đã đổi?)"
+    KQ_TOKEN=1
+else
+    echo "  ✓ đầu dò token: có dòng access log, đã che, không lộ token giả"
+fi
+
+if [ "$KQ_CHUC_NANG" -eq 0 ] && [ "$KQ_TOKEN" -eq 0 ]; then
+    exit 0
+fi
+echo "HỎNG — phép kiểm chức năng rc=$KQ_CHUC_NANG, đầu dò token rc=$KQ_TOKEN."
+exit 1

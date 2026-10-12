@@ -868,7 +868,31 @@ _qlts_mo_hinh_anh() {
       [ "${STUB_NEN_KHONG_MOC:-0}" = "1" ] || echo "@MOC@"
       exit 0
     fi
+    # Đầu dò token của `nginx-verify.sh` (V6) truyền `-e UA=… -e GIA=…`: ghi lại
+    # để `docker logs` giả bên dưới trả đúng dòng access log của request ấy.
+    if [ -n "${QLTS_STUB_LOG:-}" ]; then
+      for _a in "$@"; do
+        case "$_a" in
+          UA=*)  printf '%s\n' "${_a#UA=}"  > "$QLTS_STUB_LOG.ua" ;;
+          GIA=*) printf '%s\n' "${_a#GIA=}" > "$QLTS_STUB_LOG.gia" ;;
+        esac
+      done
+    fi
     exit "${STUB_RUN_RC:-0}" ;;
+  logs)
+    # Access log giả của container được đo. `STUB_LOG_TOKEN`: `che` (mặc định —
+    # dòng của request đầu dò, token đã che), `lo` (dòng mang token giả THÔ),
+    # `rong` (không có dòng — như `access_log off`).
+    _ua=$(cat "${QLTS_STUB_LOG:-/khong-co}.ua" 2>/dev/null || true)
+    _gia=$(cat "${QLTS_STUB_LOG:-/khong-co}.gia" 2>/dev/null || true)
+    if [ -n "$_ua" ]; then
+      case "${STUB_LOG_TOKEN:-che}" in
+        che) printf '172.30.0.10 - - [01/Jan/2026:00:00:00 +0000] "GET /confirm/<redacted> HTTP/1.1" 200 0 "https://nginx-test.local/magic-link/withdraw/<redacted>" "%s" "-"\n' "$_ua" ;;
+        lo)  printf '172.30.0.10 - - [01/Jan/2026:00:00:00 +0000] "GET /confirm/%sp?token=%sq HTTP/1.1" 200 0 "-" "%s" "-"\n' "$_gia" "$_gia" "$_ua" ;;
+        rong) ;;
+      esac
+    fi
+    exit 0 ;;
   esac
 }
 """
@@ -5799,3 +5823,57 @@ def test_hau_kiem_khong_liet_ke_duoc_thi_cung_phai_keu():
         f"`rclone lsf` hỏng (mã 7) mà RETENTION_RC={rc} — script sẽ thoát 0 và "
         f"báo HOÀN TẤT cho một lượt dọn dẹp chưa hề được xác minh:\n{ra}"
     )
+
+
+# ---------------------------------------------------------------------------
+# V6 — ĐẦU DÒ TOKEN trong `scripts/nginx-verify.sh` (cổng nginx-apply)
+# ---------------------------------------------------------------------------
+# Chạy THẬT `nginx-verify.sh` trên `docker` giả của sân khấu `_san_khau_ngx`.
+# `docker run` giả ghi lại `UA=`/`GIA=` của request đầu dò; `docker logs` giả trả
+# access log theo cần gạt `STUB_LOG_TOKEN` (`che` | `rong` | `lo`). Hành vi với
+# nginx THẬT (access_log off ⇒ mất dòng, log_format `$request` thô ⇒ lộ) được
+# chứng minh ở E2E `tests-e2e/nginx-packaging/kiem-log-che-token.sh`.
+
+
+def _chay_verify_dau_do(tmp_path, che_do: str) -> subprocess.CompletedProcess:
+    repo, anh = _san_khau_ngx(tmp_path)
+    nhat_ky = repo.parent / "lenh.log"
+    nhat_ky.write_text("", encoding="utf-8")
+    moi_truong = {
+        **os.environ,
+        "MSYS_NO_PATHCONV": "1",
+        "PATH": str(repo.parent / "bin") + os.pathsep + os.environ.get("PATH", ""),
+        **_bien_mo_hinh_anh(repo / "nginx", anh.parent),
+        "QLTS_STUB_LOG": str(nhat_ky).replace("\\", "/"),
+        "STUB_ANH_CANDIDATE": _ANH_A,
+        "STUB_LOG_TOKEN": che_do,
+    }
+    return subprocess.run(
+        [_BASH, str(repo / "scripts" / "nginx-verify.sh"), "cand1111", "nginx-test.local"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=moi_truong, cwd=str(repo), timeout=120,
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_token_xanh_khi_co_dong_da_che(tmp_path):
+    """Đối chứng: access log có dòng của request đầu dò, đã che ⇒ verify ĐẠT."""
+    kq = _chay_verify_dau_do(tmp_path, "che")
+    assert kq.returncode == 0 and "✓ đầu dò token" in kq.stdout, (
+        f"ca đối chứng phải XANH:\n{kq.stdout}\n{kq.stderr}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_token_do_khi_access_log_mat_dong(tmp_path):
+    """`access_log off` cho "0 dòng lộ" — đầu dò phải ĐỎ vì MẤT DÒNG, không xanh."""
+    kq = _chay_verify_dau_do(tmp_path, "rong")
+    assert kq.returncode != 0 and "KHÔNG thấy dòng access log" in kq.stdout, (
+        f"verify phải ĐỎ khi không có dòng log của đầu dò:\n{kq.stdout}\n{kq.stderr}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_token_do_khi_access_log_lo_token(tmp_path):
+    """Khuôn log ghi `$request` thô ⇒ dòng mang token giả ⇒ verify phải ĐỎ vì LỘ."""
+    kq = _chay_verify_dau_do(tmp_path, "lo")
+    assert kq.returncode != 0 and "LỘ token giả" in kq.stdout, (
+        f"verify phải ĐỎ khi access log mang token giả:\n{kq.stdout}\n{kq.stderr}")

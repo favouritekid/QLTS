@@ -72,14 +72,21 @@ def _cau_lenh(conf: str, ten: str) -> list[str]:
 
 def _khoi_chua(conf: str, chi_thi: str) -> list[str]:
     """Đầu khối (``location …``/``server``/``http``) bao quanh mỗi lần xuất hiện
+    ``chi_thi``."""
+    return [khoi for khoi, _ in _chi_thi_theo_khoi(conf, chi_thi)]
+
+
+def _chi_thi_theo_khoi(conf: str, chi_thi: str) -> list[tuple[str, str]]:
+    """``(đầu khối bao quanh, dòng chỉ thị đã gọn)`` cho mỗi dòng bắt đầu bằng
     ``chi_thi``. Bỏ chuỗi trong ngoặc trước khi đếm ``{`` ``}`` (thân `return 503
     '{"detail":…}'` có ngoặc nhọn)."""
     ngan_xep: list[str] = []
-    ket_qua: list[str] = []
+    ket_qua: list[tuple[str, str]] = []
     for dong in conf.splitlines():
         sach = re.sub(r"'[^']*'|\"[^\"]*\"", "''", dong).split("#", 1)[0]
         if " ".join(sach.split()).startswith(chi_thi):
-            ket_qua.append(ngan_xep[-1] if ngan_xep else "<ngoai-cung>")
+            ket_qua.append((ngan_xep[-1] if ngan_xep else "<ngoai-cung>",
+                            " ".join(_bo_chu_thich(dong).split())))
         i = 0
         while i < len(sach):
             c = sach[i]
@@ -99,18 +106,25 @@ def _khoi_chua(conf: str, chi_thi: str) -> list[str]:
 
 
 def test_map_nginx_trung_tap_tien_to_token_cua_python():
-    from app.core.log_redaction import nginx_token_path_alternation
+    """Tập DẤU HIỆU của hai map = ``nginx_token_marker_alternation()`` (nguồn chuẩn
+    Python: ``TOKEN_PATH_PREFIXES`` + tham số query chứa ``token``) — CLAUDE.md §7."""
+    from app.core.log_redaction import nginx_token_marker_alternation
 
-    mong_doi = '"~^(.*?(?:%s))[^/?#\\s]+(.*)$" "$1<redacted>$2";' % nginx_token_path_alternation()
+    alt = nginx_token_marker_alternation()
+    mong_doi = {
+        ("$request", "$qlts_request_log"):
+            '"~*^(.*?(?:%s))(.*?)( HTTP/[0-9.]+)?$" "$1<redacted>$3";' % alt,
+        ("$http_referer", "$qlts_referer_log"):
+            '"~*^(.*?(?:%s))(.*)$" "$1<redacted>";' % alt,
+    }
     conf = _doc(NGINX_CONF)
     lech = [
-        dich for nguon, dich in (("$request", "$qlts_request_log"),
-                                 ("$http_referer", "$qlts_referer_log"))
-        if mong_doi not in _khoi_map(conf, nguon, dich)
+        dich for (nguon, dich), dong in mong_doi.items()
+        if dong not in _khoi_map(conf, nguon, dich)
     ]
     assert lech == [], (
-        "map %s không phủ ĐÚNG TOKEN_PATH_PREFIXES của log_redaction.py; mong đợi dòng:\n%s"
-        % (lech, mong_doi))
+        "map %s không phủ ĐÚNG tập dấu hiệu của log_redaction.py; mong đợi:\n%s"
+        % (lech, "\n".join(mong_doi.values())))
 
 
 def _ap_map(khoi: str, gia_tri: str) -> str | None:
@@ -147,6 +161,57 @@ def test_map_nginx_che_gia_tri_tham_so_query_chua_token():
     assert lo == {}, "map nginx để lọt token trong tham số query: %s" % lo
 
 
+# URI mang NHIỀU token / token ở dạng khó (F31). Mỗi giá trị giả bắt đầu ``GIA``.
+_URI_NHIEU_TOKEN = [
+    "/confirm/GIAV6A?token=GIAV6B",
+    "/reset-password?token=GIAV6A&refresh_token=GIAV6B",
+    "/x?a=1&refresh_token=GIAV6A&token=GIAV6B",
+    "/magic-link/withdraw/GIAV6A/confirm/GIAV6B",
+    "/api/admissions/confirm/GIAV6A?Token=GIAV6B&x=1",
+    "/login?next=%2Fconfirm%2FGIAV6A&access-token=GIAV6B",
+    "/r/GIAV6A?lp=1&id_token=GIAV6B",
+]
+
+
+def _gia_tri_mau() -> list[tuple[tuple[str, str], str]]:
+    mau = []
+    for uri in _URI_NHIEU_TOKEN:
+        for ban in ("HTTP/1.1", "HTTP/2.0"):
+            mau.append((("$request", "$qlts_request_log"), "GET %s %s" % (uri, ban)))
+        mau.append((("$http_referer", "$qlts_referer_log"), "https://example.invalid" + uri))
+    return mau
+
+
+def test_map_nginx_che_het_khi_mot_gia_tri_co_nhieu_token():
+    """F31: ``map`` chỉ áp MỘT regex (khớp đầu tiên thắng). Kiểu "thay một token,
+    giữ đuôi" để lọt token thứ hai ⇒ thiết kế cắt từ DẤU HIỆU ĐẦU TIÊN. Canh: không
+    giá trị giả nào sống sót, ở CẢ ``$request`` lẫn ``$http_referer``."""
+    conf = _doc(NGINX_CONF)
+    lo = {}
+    for (nguon, dich), gia_tri in _gia_tri_mau():
+        ra = _ap_map(_khoi_map(conf, nguon, dich), gia_tri)
+        if ra is None or "GIAV6" in ra:
+            lo[gia_tri] = ra if ra is not None else "<không regex nào khớp ⇒ ghi THÔ>"
+    assert lo == {}, "map nginx để lọt token khi một giá trị có nhiều token:\n%s" % "\n".join(
+        "  %s  →  %s" % kv for kv in lo.items())
+
+
+def test_map_nginx_van_giu_phan_truoc_dau_hieu_va_giao_thuc():
+    """Dòng log vẫn CÓ ÍCH: giữ phương thức + đường dẫn tới dấu hiệu đầu tiên + giao
+    thức (``$request``) / gốc URL (``$http_referer``); chỉ phần sau bị thay."""
+    conf = _doc(NGINX_CONF)
+    thuc = (
+        _ap_map(_khoi_map(conf, "$request", "$qlts_request_log"),
+                "GET /confirm/GIAV6A?token=GIAV6B HTTP/1.1"),
+        _ap_map(_khoi_map(conf, "$http_referer", "$qlts_referer_log"),
+                "https://example.invalid/reset-password?token=GIAV6A&refresh_token=GIAV6B"),
+    )
+    assert thuc == (
+        "GET /confirm/<redacted> HTTP/1.1",
+        "https://example.invalid/reset-password?token=<redacted>",
+    ), "map nginx không giữ phần trước dấu hiệu / giao thức: %s" % (thuc,)
+
+
 def test_log_format_main_chi_dung_bien_da_che():
     lf = [c for c in _cau_lenh(_doc(NGINX_CONF), "log_format") if c.startswith("log_format main ")]
     assert len(lf) == 1, "HẠ TẦNG: không thấy đúng một log_format main"
@@ -180,35 +245,76 @@ def test_access_log_off_khong_lan_sang_location_token():
 # ---------------------------------------------------------------------------
 
 
-def test_nginx_trang_token_gui_no_referrer():
-    khoi = _khoi_map(_doc(NGINX_CONF), "$uri", "$qlts_referrer_policy")
-    dung_bien = [
-        c for c in _cau_lenh(_doc(TEMPLATE), "add_header")
-        if c.startswith("add_header Referrer-Policy ")
-    ]
-    assert ('"~/(?:confirm|magic-link)/" "no-referrer";' in khoi
-            and 'default "strict-origin-when-cross-origin";' in khoi
-            and "add_header Referrer-Policy $qlts_referrer_policy always;" in dung_bien), (
-        "nginx: map $qlts_referrer_policy hoặc add_header cấp server sai: %s / %s"
-        % (khoi.strip(), dung_bien))
+#: Trang FE mang bí mật trên URL (route param hoặc ``?token=``) — rà V6 vòng 2:
+#: ``app/confirm/[token]``, ``app/magic-link/[action]/[token]``,
+#: ``app/(auth)/reset-password`` (``ResetPasswordForm`` đọc ``?token=``),
+#: ``app/lp/[code]`` (mã SMS).
+_TRANG_TOKEN = ("/confirm/GIA", "/magic-link/withdraw/GIA", "/reset-password", "/lp/GIA")
+_TRANG_THUONG = ("/login", "/", "/dashboard", "/reset-password-cu")
 
 
-def test_next_trang_token_gui_no_referrer_sau_khoi_chung():
+def _referrer_nginx(duong: str) -> str | None:
+    """Referrer-Policy nginx THỰC SỰ gửi cho trang FE ``duong`` ở khối HTTPS: location
+    tiền tố dài nhất có ``add_header Referrer-Policy`` riêng thắng (add_header không
+    kế thừa); không có thì giá trị cấp server — literal, hoặc biến map ``$uri``."""
+    rieng, cap_server = {}, None
+    for khoi, dong in _chi_thi_theo_khoi(_doc(TEMPLATE), "add_header Referrer-Policy"):
+        gia_tri = dong.split()[2].strip('"')
+        if khoi.startswith("location ") and len(khoi.split()) == 2:
+            rieng[khoi.split()[1]] = gia_tri
+        elif khoi == "server":
+            cap_server = gia_tri
+    khop = [p for p in rieng if duong.startswith(p)]
+    if khop:
+        return rieng[max(khop, key=len)]
+    if cap_server == "$qlts_referrer_policy":
+        khoi_map = _khoi_map(_doc(NGINX_CONF), "$uri", "$qlts_referrer_policy")
+        ra = _ap_map(khoi_map, duong)
+        if ra is not None:
+            return ra
+        m = re.search(r'^\s*default\s+"([^"]*)"\s*;', khoi_map, re.M)
+        return m.group(1) if m else None
+    return cap_server
+
+
+def _referrer_next(duong: str) -> str | None:
+    """Referrer-Policy Next gửi cho ``duong``: luật ``headers()`` khớp SAU CÙNG thắng
+    (tài liệu Next: cùng khoá header thì khối sau ghi đè)."""
     src = _doc(NEXT_CONFIG)
-    vi_tri_chung = src.find('source: "/(.*)"')
-    assert vi_tri_chung >= 0, "HẠ TẦNG: không thấy khối headers source /(.*)"
-    thieu = []
-    for trang in ("/confirm/:path*", "/magic-link/:path*"):
-        m = re.search(
-            r'source:\s*"%s",\s*headers:\s*\[\s*\{\s*key:\s*"Referrer-Policy",\s*value:\s*"no-referrer"'
-            % re.escape(trang),
-            src,
-        )
-        if not m or m.start() < vi_tri_chung:
-            thieu.append(trang)
-    assert thieu == [], (
-        "next.config.ts: trang %s không có Referrer-Policy no-referrer ĐỨNG SAU khối /(.*)"
-        % thieu)
+    ra = None
+    for m in re.finditer(r'source:\s*"([^"]+)",\s*headers:\s*\[(.*?)\]\s*,?\s*\}', src, re.S):
+        nguon, than = m.group(1), m.group(2)
+        rp = re.search(r'key:\s*"Referrer-Policy",\s*value:\s*"([^"]+)"', than)
+        if not rp:
+            continue
+        assert ":" not in nguon.replace("/:path*", ""), "HẠ TẦNG: dạng source chưa hỗ trợ: %s" % nguon
+        mau = re.escape(nguon).replace(r"/:path\*", r"(?:/.*)?").replace(r"\(\.\*\)", r"(.*)")
+        if re.fullmatch(mau, duong):
+            ra = rp.group(1)
+    return ra
+
+
+def test_referrer_policy_trang_token_ca_hai_tang_no_referrer():
+    """Trang token: CẢ nginx lẫn Next phải gửi ``no-referrer`` — hai tầng cùng gửi
+    header, lệch nhau thì trình duyệt lấy cái đứng sau."""
+    sai = {
+        trang: (_referrer_nginx(trang), _referrer_next(trang))
+        for trang in _TRANG_TOKEN
+        if (_referrer_nginx(trang), _referrer_next(trang)) != ("no-referrer", "no-referrer")
+    }
+    assert sai == {}, "trang token không đồng nhất no-referrer (nginx, Next): %s" % sai
+
+
+def test_referrer_policy_trang_thuong_hai_tang_giu_strict_origin():
+    """Đối chứng: trang thường vẫn ``strict-origin-when-cross-origin`` ở cả hai tầng
+    (map/nguồn quá rộng sẽ làm hỏng chính sách chung)."""
+    mong = "strict-origin-when-cross-origin"
+    sai = {
+        trang: (_referrer_nginx(trang), _referrer_next(trang))
+        for trang in _TRANG_THUONG
+        if (_referrer_nginx(trang), _referrer_next(trang)) != (mong, mong)
+    }
+    assert sai == {}, "trang thường lệch chính sách chung (nginx, Next): %s" % sai
 
 
 # ---------------------------------------------------------------------------

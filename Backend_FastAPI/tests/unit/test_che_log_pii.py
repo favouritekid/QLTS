@@ -53,6 +53,22 @@ def loi_sql(cccd):
         ("Nguyen Van Gia", cccd),
         goc,
     )
+
+
+def loi_hang(cccd, email, sdt, rang_buoc):
+    """IntegrityError giả của vi phạm CHECK: PostgreSQL in NGUYÊN hàng lỗi.
+    Không truyền tham số bind ⇒ giá trị CHỈ nằm trong ``Failing row contains``."""
+    goc = Exception(
+        'new row for relation "admission_profiles" violates check constraint "%s"\n'
+        "DETAIL:  Failing row contains (4242, Nguyen Van Gia, %s, %s, %s, null)."
+        % (rang_buoc, cccd, email, sdt)
+    )
+    return IntegrityError(
+        "INSERT INTO admission_profiles (id, full_name, citizen_id, email, phone, note)"
+        " VALUES ($1, $2, $3, $4, $5, $6)",
+        None,
+        goc,
+    )
 '''
 
 _DRIVER_WEB = _DRIVER_CHUNG + r'''
@@ -101,6 +117,41 @@ chuoi("P9", "info", event="v6_p9", profile_id=4242, error_code="V6_MA_LOI_GIA",
 chuoi("P10", "info", event="v6_p10", redis_url="redis://:GIAMATKHAUP10@redis:6379/1")
 chuoi("P11", "info", event="v6_p11",
       du_lieu={"api_key": "GIAV6KHOAP11A", "lop": {"authorization": "GIAV6KHOAP11B"}})
+# ---- F30: thông báo PostgreSQL 16 / asyncpg NHÚNG GIÁ TRỊ (mỗi họ một đầu dò)
+chuoi("P12", "error", event="v6_p12", error=(
+    'new row for relation "admission_profiles" violates check constraint "ck_v6"\n'
+    "DETAIL:  Failing row contains (4242, Nguyen Van Gia, 099999000512, "
+    "gia512@example.invalid, 0900000512, null)."))
+chuoi("P13", "error", event="v6_p13", error=(
+    'conflicting key value violates exclusion constraint "ex_v6"\n'
+    "DETAIL:  Key (phone, unit_id)=(0900000513, 7) conflicts with existing key "
+    "(phone, unit_id)=(0900000613, 7)."))
+chuoi("P14", "error", event="v6_p14",
+      error='invalid input syntax for type integer: "GIAV6NHAP14"')
+chuoi("P15", "error", event="v6_p15",
+      error='value "099999000515" is out of range for type integer')
+chuoi("P16", "error", event="v6_p16",
+      error="invalid input for query argument $2: '099999000516' (expected int, got str)")
+chuoi("P17", "error", event="v6_p17", error=(
+    "invalid input syntax for type json\n"
+    'DETAIL:  Token "GIAV6JSON17" is invalid.\n'
+    "CONTEXT:  JSON data, line 1: {ghi_chu: GIAV6JSON27"))
+chuoi("P18", "error", event="v6_p18", error=(
+    "CONTEXT:  unnamed portal parameter $1 = '099999000518'"))
+# Cột KHÔNG mang nhãn CCCD — nếu là `citizen_id` thì luật nhãn CCCD che hộ và ca
+# này không còn canh được mẫu COPY (đã thấy ở lượt đỏ-trước đầu tiên).
+chuoi("P19", "error", event="v6_p19", error=(
+    'CONTEXT:  COPY admission_profiles, line 3, column ghi_chu: "GIAV6COPY19"'))
+chuoi("P20", "error", event="v6_p20",
+      error='invalid input value for enum gioi_tinh: "GIAV6ENUM20"')
+chuoi("P21", "error", event="v6_p21", error=(
+    'insert or update on table "admission_profiles" violates foreign key constraint "fk"\n'
+    'DETAIL:  Key (lead_id)=(4242) is not present in table "leads".'))
+chuoi("P22", "error", event="v6_p22", error=(
+    'new row for relation "admission_profiles" violates check constraint "ck_v6"\n'
+    "DETAIL:  Failing row contains (4242, dong mot\ndong hai 099999000522, "
+    "gia522@example.invalid, null).\n"
+    "[SQL: INSERT INTO admission_profiles VALUES ($1)]"))
 
 # ---- (E/L/A) CỬA RA THẬT: logger -> handler gốc -> stderr
 slog = structlog.get_logger("v6.probe")
@@ -123,6 +174,13 @@ thuong.info('v6_l6_escape {"path":"\\/api\\/v2\\/admissions\\/magic-link\\/confi
 thuong.info("v6_l7_query GET /reset-password?token=GIAV6TOKENL07&lang=vi")
 thuong.warning("v6_l8_giu: thu 215100000 dong, ho so 4242, ma loi V6_MA_LOI_GIA")
 thuong.info("v6_l9_kv email=gia2@example.invalid phone=0900000002")
+thuong.warning(
+    'v6_l10_failing_row: new row for relation "admission_profiles" violates check '
+    'constraint "ck_v6_l10"\nDETAIL:  Failing row contains (4242, Nguyen Van Gia, '
+    "099999000530, gia530@example.invalid, 0900000530, null).")
+asyncio.run(generic_exception_handler(yeu_cau, loi_hang(
+    "099999000531", "gia531@example.invalid", "0900000531", "ck_v6_l11")))
+thuong.info("v6_l12_ma_hoa GET /login?next=%2Fconfirm%2FGIAV6TOKENL12")
 truy_cap = logging.getLogger("uvicorn.access")
 truy_cap.info('%s - "%s %s HTTP/%s" %d', "10.0.0.1:5000", "GET",
               "/api/admissions/confirm/GIAV6TOKENA01", "1.1", 200)
@@ -362,6 +420,70 @@ def test_structlog_che_khoa_bi_mat_long_trong_dict(web):
     assert lo == [], "khoá bí mật LỒNG trong dict (api_key/authorization) lọt: %s" % dong
 
 
+# ---- F30: thông báo PostgreSQL / asyncpg nhúng giá trị (qua chuỗi processor THẬT)
+
+
+def test_structlog_che_failing_row_contains(web):
+    dong = _dong_chuoi(web, "P12")
+    lo = [v for v in ("099999000512", "gia512@example.invalid", "0900000512",
+                      "Nguyen Van Gia") if v in dong]
+    assert lo == [], "DETAIL 'Failing row contains (…)' lọt %s: %s" % (lo, dong)
+
+
+def test_structlog_che_failing_row_gia_tri_xuong_dong(web):
+    dong = _dong_chuoi(web, "P22")
+    lo = [v for v in ("099999000522", "gia522@example.invalid") if v in dong]
+    assert lo == [], "hàng lỗi có giá trị XUỐNG DÒNG lọt phần sau dòng đầu %s: %s" % (lo, dong)
+
+
+def test_structlog_che_exclusion_existing_key_chu_thuong(web):
+    dong = _dong_chuoi(web, "P13")
+    lo = [v for v in ("0900000513", "0900000613") if v in dong]
+    assert lo == [], "exclusion constraint '… existing key (…)=(…)' lọt %s: %s" % (lo, dong)
+
+
+def test_structlog_che_invalid_input_syntax(web):
+    dong = _dong_chuoi(web, "P14")
+    assert "GIAV6NHAP14" not in dong, "'invalid input syntax for type …: \"…\"' lọt: %s" % dong
+
+
+def test_structlog_che_value_out_of_range(web):
+    dong = _dong_chuoi(web, "P15")
+    assert "099999000515" not in dong, "'value \"…\" is out of range' lọt: %s" % dong
+
+
+def test_structlog_che_tham_so_asyncpg_query_argument(web):
+    dong = _dong_chuoi(web, "P16")
+    assert "099999000516" not in dong, "asyncpg 'query argument $n: …' lọt: %s" % dong
+
+
+def test_structlog_che_json_token_va_context(web):
+    dong = _dong_chuoi(web, "P17")
+    lo = [v for v in ("GIAV6JSON17", "GIAV6JSON27") if v in dong]
+    assert lo == [], "JSON đầu vào (Token \"…\" / JSON data, line N) lọt %s: %s" % (lo, dong)
+
+
+def test_structlog_che_tham_so_bind_trong_context(web):
+    dong = _dong_chuoi(web, "P18")
+    assert "099999000518" not in dong, "'portal parameter $1 = …' lọt: %s" % dong
+
+
+def test_structlog_che_copy_context(web):
+    dong = _dong_chuoi(web, "P19")
+    assert "GIAV6COPY19" not in dong, "'COPY …, column …: \"…\"' lọt: %s" % dong
+
+
+def test_structlog_che_invalid_input_value_for_enum(web):
+    dong = _dong_chuoi(web, "P20")
+    assert "GIAV6ENUM20" not in dong, "'invalid input value for enum …' lọt: %s" % dong
+
+
+def test_structlog_giu_key_khoa_ngoai_khong_phai_pii(web):
+    dong = _dong_chuoi(web, "P21")
+    assert "Key (lead_id)=(4242)" in dong, (
+        "che NHẦM giá trị khoá ngoại không phải PII (mất chẩn đoán): %s" % dong)
+
+
 # ---------------------------------------------------------------------------
 # (E/L/A) Cửa ra thật của tiến trình web: logger → handler gốc → stderr
 # ---------------------------------------------------------------------------
@@ -421,6 +543,24 @@ def test_logging_thuong_che_pii_dang_khoa_bang_gia_tri(web):
     out = _co_dau_do(web, "v6_l9_kv")
     lo = [v for v in ("gia2@example.invalid", "0900000002") if v in out]
     assert lo == [], "email=/phone= trong câu log thường lọt %s" % lo
+
+
+def test_logging_thuong_che_failing_row_contains(web):
+    out = _co_dau_do(web, "v6_l10_failing_row")
+    lo = [v for v in ("099999000530", "gia530@example.invalid", "0900000530") if v in out]
+    assert lo == [], "'Failing row contains' qua logging thường lọt %s" % lo
+
+
+def test_handler_loi_ghi_failing_row_qua_generic_handler(web):
+    out = _co_dau_do(web, "ck_v6_l11")
+    lo = [v for v in ("099999000531", "gia531@example.invalid", "0900000531") if v in out]
+    assert lo == [], (
+        "generic_exception_handler ghi str(IntegrityError) lọt hàng lỗi %s" % lo)
+
+
+def test_logging_thuong_che_token_duong_dan_ma_hoa_url(web):
+    out = _co_dau_do(web, "v6_l12_ma_hoa")
+    assert "GIAV6TOKENL12" not in out, "token sau '%2Fconfirm%2F' (mã hoá URL) lọt"
 
 
 def test_access_log_web_che_token(web):
