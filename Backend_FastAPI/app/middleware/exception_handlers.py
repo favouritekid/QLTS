@@ -25,7 +25,12 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.log_redaction import SMS_BEARER_PREFIXES, redact_text
+from app.core.log_redaction import (
+    SMS_BEARER_PREFIXES,
+    mo_ta_loi,
+    redact_text,
+    thay_loi_csdl_trong_chuoi,
+)
 from app.utils.exceptions import (
     BaseAppException,
     ResourceNotFoundError,
@@ -68,6 +73,13 @@ def _redact_path(path: str) -> str:
     return redact_text(path)
 
 
+def _chi_tiet_an_toan(exc: BaseException) -> str:
+    """``exc.detail`` để GHI LOG: nếu ngoại lệ bọc một lỗi CSDL (``raise …(f"…{e}")
+    from e``) thì phần chữ đã nội suy từ lỗi CSDL được thay bằng tóm tắt (V6 vòng 4 —
+    ngừng ghi nội dung lỗi PostgreSQL). Phản hồi cho client KHÔNG đổi."""
+    return thay_loi_csdl_trong_chuoi(str(getattr(exc, "detail", "")), exc)
+
+
 def _is_sms_bearer_route(path: str) -> bool:
     """Route mang bearer code (path HOẶC body opt-out) → error 'input' lúc 422
     có thể chứa raw code → KHÔNG log input (§11.3)."""
@@ -100,7 +112,7 @@ async def base_app_exception_handler(
     """
     # Log the exception with context
     logger.warning(
-        f"{exc.__class__.__name__}: {exc.detail}",
+        f"{exc.__class__.__name__}: {_chi_tiet_an_toan(exc)}",
         extra={
             "error_code": exc.error_code,
             "context": exc.context,
@@ -143,7 +155,7 @@ async def resource_not_found_handler(
     Provides more specific logging for missing resources.
     """
     logger.info(
-        f"Resource not found: {exc.detail}",
+        f"Resource not found: {_chi_tiet_an_toan(exc)}",
         extra={
             "error_code": exc.error_code,
             "context": exc.context,
@@ -169,7 +181,7 @@ async def validation_error_handler(
     Includes validation context when available.
     """
     logger.info(
-        f"Validation error: {exc.detail}",
+        f"Validation error: {_chi_tiet_an_toan(exc)}",
         extra={
             "error_code": exc.error_code,
             "context": exc.context,
@@ -201,7 +213,7 @@ async def authentication_error_handler(
     Includes WWW-Authenticate header as required by HTTP spec.
     """
     logger.warning(
-        f"Authentication error: {exc.detail}",
+        f"Authentication error: {_chi_tiet_an_toan(exc)}",
         extra={
             "error_code": exc.error_code,
             "path": _redact_path(request.url.path),
@@ -227,7 +239,7 @@ async def service_error_handler(
     Logs full error details for debugging while returning safe message to client.
     """
     logger.error(
-        f"Service error: {exc.detail}",
+        f"Service error: {_chi_tiet_an_toan(exc)}",
         extra={
             "error_code": exc.error_code,
             "context": exc.context,
@@ -318,7 +330,7 @@ async def http_exception_handler(
     This handles any HTTPException raised directly (e.g., from dependencies).
     """
     logger.warning(
-        f"HTTP {exc.status_code}: {exc.detail}",
+        f"HTTP {exc.status_code}: {_chi_tiet_an_toan(exc)}",
         extra={
             "status_code": exc.status_code,
             "path": _redact_path(request.url.path),
@@ -354,7 +366,8 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
     leaking implementation details.
     """
     logger.error(
-        f"Unhandled exception: {type(exc).__name__}: {str(exc)}",
+        # V6 vòng 4: KHÔNG str(exc) — lỗi CSDL mang giá trị (DETAIL, tham số) ⇒ tóm tắt.
+        f"Unhandled exception: {type(exc).__name__}: {mo_ta_loi(exc)}",
         extra={
             "path": _redact_path(request.url.path),
             "method": request.method,

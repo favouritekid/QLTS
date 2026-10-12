@@ -48,7 +48,7 @@ import enum
 import logging
 import re
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from typing import Any, Optional, Union
 
 # ---------------------------------------------------------------------------
@@ -149,10 +149,14 @@ _TOKEN_PATH_RE = re.compile(
     + r"[^\s/?#&\"'\\<>]+"
 )
 
-#: Hết DÒNG: xuống dòng thật, ``\\n``/``\\r`` đã thoát JSON (dòng đã render) hoặc hết chuỗi.
-#: Mọi giá trị "không xác định được điểm kết thúc an toàn" bị che TỚI ĐÂY (che THỪA
-#: hơn che THIẾU — V6 vòng 3: dừng ở dấu nháy đầu tiên đã để lộ đuôi giá trị có nháy).
-_HET_DONG = r"(?=\\r|\\n|\r|\n|$)"
+#: Hết DÒNG: xuống dòng THẬT hoặc hết chuỗi. Mọi giá trị "không xác định được
+#: điểm kết thúc an toàn" bị che TỚI ĐÂY (che THỪA hơn che THIẾU — V6 vòng 3:
+#: dừng ở dấu nháy đầu tiên đã để lộ đuôi giá trị có nháy). V6 vòng 4: KHÔNG
+#: còn dừng ở ``\\n`` đã thoát — repr của chuỗi (asyncpg ``'GIA\\n0…'``) mang
+#: ``\\n`` NGAY TRONG giá trị nên dừng ở đó để lộ phần sau. Đánh đổi: ở dòng
+#: JSON đã render mà processor chưa che (hiếm — processor che giá trị thô
+#: trước), lần che ở handler gốc nuốt tới cuối dòng JSON.
+_HET_DONG = r"(?=\r|\n|$)"
 #: Sau nháy ĐÓNG hợp lệ phải là dấu phân cách — nếu không, nháy ấy nằm TRONG giá trị.
 _SAU_NHAY = r"(?=[\s,;&)}\]]|\\[nr\"]|$)"
 _DA_CHE_RE = r"(?:<redacted>|\[REDACTED\])"
@@ -234,7 +238,9 @@ _PG_FAILING_ROW_RE = re.compile(
     r"Failing row contains \((?:"
     r"(?P<da><redacted>\)\.?)"
     r"|(?P<moc>.{0,8000}?\)\.?(?=(?:\\r|\\n|\r|\n)+(?:\[SQL:|HINT:|CONTEXT:|\(Background)))"
-    r"|(?P<dong>[^\r\n]*?)" + _HET_DONG
+    # V6 vòng 4: không có mốc ⇒ che tới HẾT CHUỖI (giá trị có xuống dòng THẬT,
+    # vd "Failing row contains (4242, GIA\n0…, …)." từng lộ dòng thứ hai).
+    r"|(?P<dong>.*)"
     + r")",
     re.S,
 )
@@ -353,32 +359,245 @@ _SCALAR_AN_TOAN = (
 _SAU_TOI_DA = 8
 
 
-def redact_value(value: Any, _sau: int = 0) -> Any:
+def redact_value(value: Any, _sau: int = 0, _loi_csdl: Optional[BaseException] = None) -> Any:
     """Che một giá trị bất kỳ (đệ quy dict/list/tuple/set).
 
     Đối tượng lạ (ngoại lệ, model…) thành chuỗi rồi che — renderer JSON vốn
     cũng ``repr()`` chúng, và chuỗi ấy có thể mang ``DETAIL`` SQL.
+    ``_loi_csdl``: lỗi CSDL đang xử lý — mọi chuỗi (kể cả lồng trong dict/list)
+    được thay phần nội suy từ nó trước khi che regex (V6 vòng 4).
     """
     if isinstance(value, str):
+        if _loi_csdl is not None:
+            return thay_loi_csdl_trong_chuoi(value, _loi_csdl)
         return redact_text(value)
     if isinstance(value, enum.Enum) or isinstance(value, _SCALAR_AN_TOAN):
         return value
+    if isinstance(value, BaseException):
+        return mo_ta_loi(value)
     if _sau >= _SAU_TOI_DA:
-        return redact_text(repr(value))
+        return redact_value(repr(value), _sau, _loi_csdl)
     if isinstance(value, Mapping):
         return {
-            k: (REDACTED_KEY if is_sensitive_key(k) else redact_value(v, _sau + 1))
+            k: (REDACTED_KEY if is_sensitive_key(k) else redact_value(v, _sau + 1, _loi_csdl))
             for k, v in value.items()
         }
-    if isinstance(value, list):
-        return [redact_value(v, _sau + 1) for v in value]
+    if isinstance(value, (list, set, frozenset)):
+        return [redact_value(v, _sau + 1, _loi_csdl) for v in value]
     if isinstance(value, tuple):
-        return tuple(redact_value(v, _sau + 1) for v in value)
-    if isinstance(value, (set, frozenset)):
-        return [redact_value(v, _sau + 1) for v in value]
-    if isinstance(value, BaseException):
-        return redact_text(str(value))
-    return redact_text(repr(value))
+        return tuple(redact_value(v, _sau + 1, _loi_csdl) for v in value)
+    return redact_value(repr(value), _sau, _loi_csdl)
+
+
+# ---------------------------------------------------------------------------
+# LỖI CSDL — NGỪNG GHI NỘI DUNG (V6 vòng 4, owner chốt 12-10-2026)
+# ---------------------------------------------------------------------------
+# Lỗi PostgreSQL / asyncpg / SQLAlchemy mang GIÁ TRỊ trong thông điệp (DETAIL
+# hàng lỗi, khoá trùng, tham số bind, repr đầu vào, ``[parameters: …]``) dưới
+# vô số dạng — regex không đuổi kịp (F30 lộ lại ở cả ba vòng trước). Nên với lỗi
+# CSDL, MỌI cửa ra chỉ ghi TÓM TẮT dựng từ THUỘC TÍNH của ngoại lệ: loại lỗi,
+# SQLSTATE, tên ràng buộc, schema/bảng/cột — KHÔNG thông điệp, KHÔNG DETAIL,
+# KHÔNG câu SQL, KHÔNG tham số. Các regex ở trên GIỮ làm LỚP PHỤ cho chuỗi đã
+# nội suy sẵn mà ta không biết là lỗi CSDL.
+#
+# Đánh đổi chẩn đoán: MẤT giá trị gây lỗi (hàng / khoá / tham số), câu SQL và
+# chữ của thông báo PostgreSQL. CÒN: loại lỗi theo cả chuỗi (vd
+# ``IntegrityError<-CheckViolationError``), SQLSTATE, tên ràng buộc, bảng/cột,
+# khung traceback (tệp/dòng/hàm), và mọi trường ngữ cảnh của lời gọi log
+# (``profile_id``, mã lỗi…).
+
+#: (nhãn trong tóm tắt, các tên thuộc tính có thể mang nó — asyncpg / adapter SA)
+_THUOC_TINH_CSDL: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("sqlstate", ("sqlstate", "pgcode")),
+    ("constraint", ("constraint_name",)),
+    ("schema", ("schema_name",)),
+    ("table", ("table_name",)),
+    ("column", ("column_name",)),
+)
+_DINH_DANH_AN_TOAN = re.compile(r"[^A-Za-z0-9_.$-]")
+_CHUOI_TOI_DA = 16
+
+
+def _la_loi_csdl_don(e: BaseException) -> bool:
+    """MỘT ngoại lệ (không xét chuỗi) có phải lỗi CSDL: ``sqlalchemy.exc.
+    StatementError`` (gồm ``DBAPIError`` và lớp con), mọi ngoại lệ của
+    ``asyncpg`` (``PostgresError`` + lỗi phía client như ``DataError``), và lỗi
+    của adapter DBAPI trong ``sqlalchemy.dialects.*``."""
+    try:
+        from sqlalchemy.exc import StatementError
+
+        if isinstance(e, StatementError):
+            return True
+    except Exception:  # noqa: BLE001 — thiếu SQLAlchemy thì xét theo module
+        pass
+    mod = type(e).__module__ or ""
+    return mod == "asyncpg" or mod.startswith(("asyncpg.", "sqlalchemy.dialects."))
+
+
+def _chuoi_ngoai_le(exc: BaseException) -> list:
+    """Mọi ngoại lệ liên quan: chính nó, ``__cause__``, ``__context__`` và
+    ``.orig`` của SQLAlchemy — đệ quy, không lặp, có trần."""
+    kq: list = []
+    da_xet: set = set()
+    hang = [exc]
+    while hang and len(kq) < _CHUOI_TOI_DA:
+        e = hang.pop(0)
+        if not isinstance(e, BaseException) or id(e) in da_xet:
+            continue
+        da_xet.add(id(e))
+        kq.append(e)
+        for tiep in (getattr(e, "orig", None), e.__cause__, e.__context__):
+            if isinstance(tiep, BaseException):
+                hang.append(tiep)
+    return kq
+
+
+def loi_csdl_trong_chuoi(exc: Any) -> list:
+    """Các lỗi CSDL nằm trong chuỗi của ``exc`` (rỗng nếu không có)."""
+    if not isinstance(exc, BaseException):
+        return []
+    return [e for e in _chuoi_ngoai_le(exc) if _la_loi_csdl_don(e)]
+
+
+def la_loi_csdl(exc: Any) -> bool:
+    """``exc`` là lỗi CSDL, hoặc BỌC một lỗi CSDL ở bất kỳ đâu trong chuỗi."""
+    return bool(loi_csdl_trong_chuoi(exc))
+
+
+def tom_tat_loi_csdl(exc: BaseException) -> str:
+    """Tóm tắt CHỈ từ THUỘC TÍNH, ví dụ
+    ``DBError[IntegrityError<-CheckViolationError sqlstate=23514 constraint=ck_x table=t]``.
+    Không bao giờ đọc ``str()``/``args`` của ngoại lệ."""
+    dbs = loi_csdl_trong_chuoi(exc) or [exc]
+    ten: list = []
+    for e in dbs:
+        n = type(e).__name__
+        if n not in ten:
+            ten.append(n)
+    phan = ["<-".join(ten)]
+    for nhan, cac_thuoc_tinh in _THUOC_TINH_CSDL:
+        gia_tri = None
+        for e in dbs:
+            for a in cac_thuoc_tinh:
+                v = getattr(e, a, None)
+                if v:
+                    gia_tri = v
+                    break
+            if gia_tri:
+                break
+        if gia_tri:
+            phan.append("%s=%s" % (nhan, _DINH_DANH_AN_TOAN.sub("_", str(gia_tri))[:63]))
+    return "DBError[" + " ".join(phan) + "]"
+
+
+def _bien_the(s: str) -> set:
+    """Chuỗi thô + dạng thoát JSON (có/không ``ensure_ascii``, có/không thoát ``/``)."""
+    import json
+
+    out = {s}
+    for ascii_ in (True, False):
+        try:
+            j = json.dumps(s, ensure_ascii=ascii_)[1:-1]
+        except Exception:  # noqa: BLE001
+            continue
+        out.add(j)
+        out.add(j.replace("/", "\\/"))
+    return out
+
+
+def thay_loi_csdl_trong_chuoi(text: Any, exc: Any) -> Any:
+    """Thay MỌI đoạn chữ đã nội suy từ lỗi CSDL trong chuỗi của ``exc`` (``str``/
+    ``repr`` đầy đủ ⇒ tóm tắt; từng dòng ≥ 12 ký tự của thông điệp ⇒
+    ``<redacted>``; cả dạng đã thoát JSON), rồi áp regex lớp phụ."""
+    if not isinstance(text, str) or not text:
+        return text
+    dbs = loi_csdl_trong_chuoi(exc)
+    if dbs:
+        tom = tom_tat_loi_csdl(exc)
+        cap: list = []
+        for e in dbs:
+            for s in (str(e), repr(e)):
+                if len(s) >= 8:
+                    cap += [(b, tom) for b in _bien_the(s)]
+            for d in str(e).splitlines():
+                d = d.strip()
+                if len(d) >= 12:
+                    cap += [(b, REDACTED) for b in _bien_the(d)]
+        for s, thay_bang in sorted(cap, key=lambda x: -len(x[0])):
+            if s and s in text:
+                text = text.replace(s, thay_bang)
+    return redact_text(text)
+
+
+def mo_ta_loi(exc: Any) -> str:
+    """Dùng THAY ``str(exc)`` khi ghi log: lỗi CSDL ⇒ tóm tắt; ngoại lệ BỌC lỗi
+    CSDL ⇒ chữ của nó với phần nội suy từ lỗi CSDL đã thay; khác ⇒ che regex."""
+    if not isinstance(exc, BaseException):
+        return redact_text(str(exc))
+    if _la_loi_csdl_don(exc):
+        return tom_tat_loi_csdl(exc)
+    return thay_loi_csdl_trong_chuoi(str(exc), exc)
+
+
+def dinh_dang_traceback_an_toan(exc: BaseException) -> str:
+    """Traceback như ``traceback.format_exception`` — giữ khung (tệp/dòng/hàm) và
+    nối chuỗi cause/context — nhưng dòng thông điệp của lỗi CSDL thay bằng tóm
+    tắt, của ngoại lệ khác thì đã thay phần nội suy từ lỗi CSDL + regex."""
+    import traceback
+
+    chuoi: list = []  # (ngoại lệ, câu nối với ngoại lệ ĐỨNG SAU nó trong bản in)
+    da_xet: set = set()
+    e, noi = exc, None
+    while isinstance(e, BaseException) and id(e) not in da_xet and len(chuoi) < _CHUOI_TOI_DA:
+        da_xet.add(id(e))
+        chuoi.append((e, noi))
+        if e.__cause__ is not None:
+            e, noi = e.__cause__, (
+                "\nThe above exception was the direct cause of the following exception:\n\n")
+        elif e.__context__ is not None and not e.__suppress_context__:
+            e, noi = e.__context__, (
+                "\nDuring handling of the above exception, another exception occurred:\n\n")
+        else:
+            e = None
+    phan: list = []
+    for i in range(len(chuoi) - 1, -1, -1):
+        e, noi = chuoi[i]
+        if e.__traceback__ is not None:
+            phan.append("Traceback (most recent call last):\n")
+            phan.extend(traceback.format_list(traceback.extract_tb(e.__traceback__)))
+        lop = type(e)
+        ten = lop.__qualname__ if lop.__module__ in ("builtins", "__main__") else (
+            "%s.%s" % (lop.__module__, lop.__qualname__))
+        if _la_loi_csdl_don(e):
+            phan.append("%s: %s\n" % (ten, tom_tat_loi_csdl(e)))
+        else:
+            phan.append("%s: %s\n" % (ten, thay_loi_csdl_trong_chuoi(str(e), exc)))
+        if noi:
+            phan.append(noi)
+    return "".join(phan).rstrip("\n")
+
+
+def _lay_ngoai_le(ei: Any) -> Optional[BaseException]:
+    """Ngoại lệ từ ``exc_info`` dạng ``True`` / ngoại lệ / bộ ba."""
+    import sys
+
+    if ei is True:
+        return sys.exc_info()[1]
+    if isinstance(ei, BaseException):
+        return ei
+    if isinstance(ei, tuple) and len(ei) == 3 and isinstance(ei[1], BaseException):
+        return ei[1]
+    return None
+
+
+def _loi_csdl_dang_xu_ly() -> Optional[BaseException]:
+    """Ngoại lệ ĐANG được xử lý (lời gọi log nằm trong ``except``) nếu nó là /
+    bọc lỗi CSDL — để thay ``error=str(e)`` / ``f"…{e}"`` mà không cần sửa từng
+    lời gọi."""
+    import sys
+
+    e = sys.exc_info()[1]
+    return e if la_loi_csdl(e) else None
 
 
 # ---------------------------------------------------------------------------
@@ -386,16 +605,35 @@ def redact_value(value: Any, _sau: int = 0) -> Any:
 # ---------------------------------------------------------------------------
 
 
+def tom_tat_loi_csdl_event(logger: Any, method_name: str, event_dict: dict) -> dict:
+    """Processor structlog — PHẢI đứng TRƯỚC ``format_exc_info``: ``exc_info``
+    là / bọc lỗi CSDL ⇒ tự dựng ``exception`` bằng
+    :func:`dinh_dang_traceback_an_toan` và bỏ ``exc_info`` (nên
+    ``format_exc_info`` không in traceback thô)."""
+    try:
+        exc = _lay_ngoai_le(event_dict.get("exc_info"))
+        if exc is not None and la_loi_csdl(exc):
+            event_dict.pop("exc_info", None)
+            event_dict["exception"] = dinh_dang_traceback_an_toan(exc)
+    except Exception:  # noqa: BLE001
+        event_dict.pop("exc_info", None)
+        event_dict["exception"] = REDACTED
+    return event_dict
+
+
 def redact_event_dict(logger: Any, method_name: str, event_dict: dict) -> dict:
     """Processor structlog: khoá nhạy cảm ⇒ ``[REDACTED]``; mọi giá trị khác
     (gồm ``event``, ``error``, ``exception`` do ``format_exc_info`` sinh) ⇒
-    :func:`redact_value`. PHẢI đứng SAU ``format_exc_info``."""
+    :func:`redact_value`. PHẢI đứng SAU ``format_exc_info``. Gọi trong ``except``
+    lỗi CSDL thì mọi chuỗi (cả chuỗi lồng trong dict/list) còn được thay phần
+    nội suy từ lỗi ấy (``error=str(e)``, ``ctx={"loi": f"{e}"}``)."""
+    dang = _loi_csdl_dang_xu_ly()
     for key in list(event_dict.keys()):
         try:
             if is_sensitive_key(key):
                 event_dict[key] = REDACTED_KEY
             else:
-                event_dict[key] = redact_value(event_dict[key])
+                event_dict[key] = redact_value(event_dict[key], _loi_csdl=dang)
         except Exception:  # noqa: BLE001
             event_dict[key] = REDACTED_KEY
     return event_dict
@@ -434,29 +672,57 @@ class RedactingFilter(logging.Filter):
 
     @staticmethod
     def _che(record: logging.LogRecord) -> None:
+        # Lỗi CSDL liên quan tới bản ghi: ngoại lệ gắn kèm (exc_info) và ngoại lệ
+        # ĐANG xử lý (lời gọi log nằm trong ``except``) — để thay phần chữ đã nội
+        # suy từ chúng (``f"…{e}"``, ``str(e)``, câu ``%(exc)s`` của celery).
+        lien_quan = [
+            e for e in (_lay_ngoai_le(record.exc_info), _loi_csdl_dang_xu_ly())
+            if e is not None and la_loi_csdl(e)
+        ]
+
+        def che(t: Any) -> Any:
+            for e in lien_quan:
+                t = thay_loi_csdl_trong_chuoi(t, e)
+            return redact_text(t)
+
         args = record.args
         if args:
             if isinstance(args, tuple):
-                record.args = tuple(redact_text(a) if isinstance(a, str) else a for a in args)
+                record.args = tuple(
+                    che(a) if isinstance(a, str)
+                    else (mo_ta_loi(a) if isinstance(a, BaseException) else a)
+                    for a in args
+                )
+            elif isinstance(args, MutableMapping):
+                for k in list(args.keys()):
+                    if isinstance(args[k], BaseException):
+                        args[k] = mo_ta_loi(args[k])
             try:
                 da_dung = record.getMessage()
             except Exception:  # noqa: BLE001 — định dạng hỏng: đừng để logging in args thô
-                record.msg = redact_text("%s %r" % (record.msg, record.args))
+                record.msg = che("%s %r" % (record.msg, record.args))
                 record.args = None
             else:
-                da_che = redact_text(da_dung)
+                da_che = che(da_dung)
                 if da_che != da_dung:
                     record.msg = da_che
                     record.args = None
         elif isinstance(record.msg, str):
-            record.msg = redact_text(record.msg)
+            record.msg = che(record.msg)
+        elif isinstance(record.msg, BaseException):
+            record.msg = mo_ta_loi(record.msg)
         elif record.msg is not None:
             tho = str(record.msg)
-            da_che = redact_text(tho)
+            da_che = che(tho)
             if da_che != tho:
                 record.msg = da_che
         if record.exc_info and not record.exc_text:
-            record.exc_text = _FORMATTER_MAC_DINH.formatException(record.exc_info)
+            exc = _lay_ngoai_le(record.exc_info)
+            if exc is not None and la_loi_csdl(exc):
+                # Lỗi CSDL: traceback giữ khung, thông điệp thay bằng tóm tắt.
+                record.exc_text = dinh_dang_traceback_an_toan(exc)
+            else:
+                record.exc_text = _FORMATTER_MAC_DINH.formatException(record.exc_info)
         if record.exc_text:
             record.exc_text = redact_text(record.exc_text)
         if record.stack_info:
@@ -517,6 +783,7 @@ def structlog_processors(renderer: Any) -> list:
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
+        tom_tat_loi_csdl_event,  # V6 vòng 4: lỗi CSDL ⇒ traceback tóm tắt, TRƯỚC format_exc_info
         structlog.processors.format_exc_info,
         redact_event_dict,  # V6: che SAU khi traceback đã thành chuỗi
         renderer,

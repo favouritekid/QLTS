@@ -157,49 +157,89 @@ exit 1
 ' || KQ_CHUC_NANG=$?
 
 # --- Đầu dò TOKEN trong access log (V6) -------------------------------------
-# Gửi MỘT request mang token GIẢ ở cả ba chỗ access log ghi lại — đường dẫn
-# (`/confirm/<giả>`), query (`?token=<giả>&refresh_token=<giả>`), Referer — rồi
-# đọc access log của CHÍNH container đang đo. HAI vế, thiếu vế nào cũng ĐỎ:
+# BA đầu dò ĐỘC LẬP — mỗi đầu dò MỘT request, MỘT User-Agent mang nonce riêng,
+# MỘT token GIẢ riêng, đặt ở đúng MỘT chỗ mà access log ghi lại:
+#   đường dẫn — `GET /confirm/<giả>`
+#   query     — `GET /login?token=<giả>&refresh_token=<giả>2`
+#   Referer   — `GET /login`, Referer `…/magic-link/withdraw/<giả>?token=<giả>2`
+# Gộp chung một request thì chỗ được che này có thể "che hộ" chỗ kia (`map
+# $request` cắt từ dấu hiệu đầu tiên nuốt luôn query đứng sau) — tách ra để MỖI
+# vị trí tự chứng minh. Mỗi đầu dò HAI vế, thiếu vế nào cũng ĐỎ:
 #   (a) VẪN có dòng log cho request ấy. `access_log off` cũng cho "0 dòng lộ",
 #       nên chỉ đếm "không lộ" là một phép kiểm xanh vô nghĩa;
-#   (b) dòng ấy KHÔNG chứa token giả nào, và mang dấu `<redacted>`.
-# Dòng được nhận ra nhờ User-Agent mang nonce riêng của lượt đo. CHỈ in dòng của
-# chính đầu dò (dữ liệu giả) — log của container đang phục vụ chứa traffic thật,
-# không bao giờ in ra. `docker logs` lấy stdout = access log của ảnh nginx chính
-# thức; stderr (`error_log`) bị bỏ qua — phần dư đã biết, không thuộc phép đo này.
+#   (b) KHÔNG đâu trong access log chứa token giả của nó, và dòng ấy mang
+#       dấu `<redacted>`.
+# Nguồn `docker logs` phải THÀNH CÔNG: mã thoát của nó giữ TÁCH khỏi bộ lọc.
+# Bản trước viết `docker logs … | grep … || true` — `|| true` nuốt mã thoát
+# nguồn, nên docker in một dòng đã che rồi thoát lỗi vẫn ra ĐẠT (F36, cùng
+# kiểu F29). Nguồn lỗi ⇒ ĐỎ dù có đầu ra.
+# CHỈ in dòng của chính đầu dò (dữ liệu giả) — log của container đang phục vụ
+# chứa traffic thật, không bao giờ in ra. `docker logs` lấy stdout = access log
+# của ảnh nginx chính thức; stderr (`error_log`) bị bỏ qua — phần dư đã biết.
 NONCE="$(date +%s)$$"
-GIA="qltsgia${NONCE}x"
-UA="qlts-verify-dau-do-token/${NONCE}"
+GIA_P="qltsgiap${NONCE}x"
+GIA_Q="qltsgiaq${NONCE}x"
+GIA_R="qltsgiar${NONCE}x"
+UA_P="qlts-verify-dau-do-token-p/${NONCE}"
+UA_Q="qlts-verify-dau-do-token-q/${NONCE}"
+UA_R="qlts-verify-dau-do-token-r/${NONCE}"
 docker run --rm --network "$MANG" \
-    -e DOMAIN="$DOMAIN" -e IP="$IP" -e GIA="$GIA" -e UA="$UA" \
+    -e DOMAIN="$DOMAIN" -e IP="$IP" \
+    -e GIA_P="$GIA_P" -e GIA_Q="$GIA_Q" -e GIA_R="$GIA_R" \
+    -e UA_P="$UA_P" -e UA_Q="$UA_Q" -e UA_R="$UA_R" \
     --entrypoint sh "$IMAGE" -c '
-curl --silent --output /dev/null --max-time 8 --retry 0 --insecure \
-    --resolve "$DOMAIN:443:$IP" --user-agent "$UA" \
-    --referer "https://$DOMAIN/magic-link/withdraw/${GIA}r?token=${GIA}s" \
-    "https://$DOMAIN/confirm/${GIA}p?token=${GIA}q&refresh_token=${GIA}t" || true
+C="curl --silent --output /dev/null --max-time 8 --retry 0 --insecure --resolve $DOMAIN:443:$IP"
+$C --user-agent "$UA_P" "https://$DOMAIN/confirm/${GIA_P}" || true
+$C --user-agent "$UA_Q" "https://$DOMAIN/login?token=${GIA_Q}&refresh_token=${GIA_Q}2" || true
+$C --user-agent "$UA_R" --referer "https://$DOMAIN/magic-link/withdraw/${GIA_R}?token=${GIA_R}2" \
+    "https://$DOMAIN/login" || true
 ' >/dev/null 2>&1 || true
 
-KQ_TOKEN=0
-DONG_DAU_DO=""
+co_du_ba_dong() {
+    printf '%s\n' "$NHAT_KY" | grep -qF -- "$UA_P" \
+        && printf '%s\n' "$NHAT_KY" | grep -qF -- "$UA_Q" \
+        && printf '%s\n' "$NHAT_KY" | grep -qF -- "$UA_R"
+}
+NHAT_KY=""
+NHAT_KY_RC=0
 for _ in 1 2 3 4 5; do
-    DONG_DAU_DO="$(docker logs --since 10m "$CT" 2>/dev/null | grep -F -- "$UA" || true)"
-    [ -n "$DONG_DAU_DO" ] && break
+    NHAT_KY_RC=0
+    NHAT_KY="$(docker logs --since 10m "$CT" 2>/dev/null)" || NHAT_KY_RC=$?
+    if [ "$NHAT_KY_RC" -eq 0 ] && co_du_ba_dong; then
+        break
+    fi
     sleep 1
 done
+
+kiem_dau_do() {  # kiem_dau_do <tên> <User-Agent> <token giả> — 0 = đạt
+    local ten="$1" ua="$2" gia="$3" dong
+    dong="$(printf '%s\n' "$NHAT_KY" | grep -F -- "$ua" || true)"   # bộ lọc: 0 dòng là KẾT QUẢ, không phải lỗi
+    if [ -z "$dong" ]; then
+        echo "  ✗ đầu dò token $ten: KHÔNG thấy dòng access log của request đầu dò (access_log off? log không ra stdout?)"
+        return 1
+    fi
+    if printf '%s\n' "$NHAT_KY" | grep -qF -- "$gia"; then
+        echo "  ✗ đầu dò token $ten: access log LỘ token giả:"
+        printf '%s\n' "$dong" | sed 's/^/      /'
+        return 1
+    fi
+    if ! printf '%s\n' "$dong" | grep -qF -- "<redacted>"; then
+        echo "  ✗ đầu dò token $ten: dòng log của đầu dò không mang dấu <redacted> (khuôn log đã đổi?)"
+        return 1
+    fi
+    echo "  ✓ đầu dò token $ten: có dòng access log, đã che, không lộ token giả"
+    return 0
+}
+
+KQ_TOKEN=0
 echo "--- đầu dò token trong access log ---"
-if [ -z "$DONG_DAU_DO" ]; then
-    echo "  ✗ đầu dò token: KHÔNG thấy dòng access log của request đầu dò (access_log off? log không ra stdout?)"
+if [ "$NHAT_KY_RC" -ne 0 ]; then
+    echo "  ✗ đầu dò token: KHÔNG đọc được access log — docker logs rc=$NHAT_KY_RC (nguồn lỗi ⇒ ĐỎ dù có đầu ra)"
     KQ_TOKEN=1
-elif printf '%s\n' "$DONG_DAU_DO" | grep -qF -- "$GIA"; then
-    echo "  ✗ đầu dò token: access log LỘ token giả:"
-    printf '%s\n' "$DONG_DAU_DO" | sed 's/^/      /'
-    KQ_TOKEN=1
-elif ! printf '%s\n' "$DONG_DAU_DO" | grep -qF -- "<redacted>"; then
-    echo "  ✗ đầu dò token: dòng log của đầu dò không mang dấu <redacted> (khuôn log đã đổi?)"
-    KQ_TOKEN=1
-else
-    echo "  ✓ đầu dò token: có dòng access log, đã che, không lộ token giả"
 fi
+kiem_dau_do "đường dẫn" "$UA_P" "$GIA_P" || KQ_TOKEN=1
+kiem_dau_do "query" "$UA_Q" "$GIA_Q" || KQ_TOKEN=1
+kiem_dau_do "Referer" "$UA_R" "$GIA_R" || KQ_TOKEN=1
 
 if [ "$KQ_CHUC_NANG" -eq 0 ] && [ "$KQ_TOKEN" -eq 0 ]; then
     exit 0

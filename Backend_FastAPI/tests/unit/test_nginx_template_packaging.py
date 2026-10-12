@@ -868,31 +868,40 @@ _qlts_mo_hinh_anh() {
       [ "${STUB_NEN_KHONG_MOC:-0}" = "1" ] || echo "@MOC@"
       exit 0
     fi
-    # Đầu dò token của `nginx-verify.sh` (V6) truyền `-e UA=… -e GIA=…`: ghi lại
-    # để `docker logs` giả bên dưới trả đúng dòng access log của request ấy.
+    # Ba đầu dò token của `nginx-verify.sh` (V6) truyền `-e UA_P=… -e GIA_P=…`
+    # (P = đường dẫn, Q = query, R = Referer): ghi lại để `docker logs` giả bên
+    # dưới trả đúng dòng access log của từng request.
     if [ -n "${QLTS_STUB_LOG:-}" ]; then
       for _a in "$@"; do
         case "$_a" in
-          UA=*)  printf '%s\n' "${_a#UA=}"  > "$QLTS_STUB_LOG.ua" ;;
-          GIA=*) printf '%s\n' "${_a#GIA=}" > "$QLTS_STUB_LOG.gia" ;;
+          UA_[PQR]=*|GIA_[PQR]=*) printf '%s\n' "${_a#*=}" > "$QLTS_STUB_LOG.${_a%%=*}" ;;
         esac
       done
     fi
     exit "${STUB_RUN_RC:-0}" ;;
   logs)
-    # Access log giả của container được đo. `STUB_LOG_TOKEN`: `che` (mặc định —
-    # dòng của request đầu dò, token đã che), `lo` (dòng mang token giả THÔ),
-    # `rong` (không có dòng — như `access_log off`).
-    _ua=$(cat "${QLTS_STUB_LOG:-/khong-co}.ua" 2>/dev/null || true)
-    _gia=$(cat "${QLTS_STUB_LOG:-/khong-co}.gia" 2>/dev/null || true)
-    if [ -n "$_ua" ]; then
-      case "${STUB_LOG_TOKEN:-che}" in
-        che) printf '172.30.0.10 - - [01/Jan/2026:00:00:00 +0000] "GET /confirm/<redacted> HTTP/1.1" 200 0 "https://nginx-test.local/magic-link/withdraw/<redacted>" "%s" "-"\n' "$_ua" ;;
-        lo)  printf '172.30.0.10 - - [01/Jan/2026:00:00:00 +0000] "GET /confirm/%sp?token=%sq HTTP/1.1" 200 0 "-" "%s" "-"\n' "$_gia" "$_gia" "$_ua" ;;
-        rong) ;;
-      esac
-    fi
-    exit 0 ;;
+    # Access log giả của container được đo. `STUB_LOG_TOKEN`:
+    #   che (mặc định) — mỗi đầu dò một dòng, token đã che;
+    #   rong           — không dòng nào (như `access_log off`);
+    #   lo             — mọi dòng mang token giả THÔ (khuôn log ghi `$request` thô);
+    #   lo_query       — chỉ đầu dò query lộ, hai đầu dò kia che đúng;
+    #   thieu_referer  — thiếu đúng dòng của đầu dò Referer.
+    # `STUB_LOG_RC`: mã thoát của `docker logs` SAU KHI đã in (nguồn lỗi có đầu ra).
+    _d="${QLTS_STUB_LOG:-/khong-co}"
+    _m="${STUB_LOG_TOKEN:-che}"
+    for _k in P Q R; do
+      _ua=$(cat "$_d.UA_$_k" 2>/dev/null || true)
+      _gia=$(cat "$_d.GIA_$_k" 2>/dev/null || true)
+      [ -n "$_ua" ] || continue
+      [ "$_m" = "rong" ] && continue
+      [ "$_m" = "thieu_referer" ] && [ "$_k" = "R" ] && continue
+      if [ "$_m" = "lo" ] || { [ "$_m" = "lo_query" ] && [ "$_k" = "Q" ]; }; then
+        printf '172.30.0.10 - - [01/Jan/2026:00:00:00 +0000] "GET /x?token=%s HTTP/1.1" 200 0 "-" "%s" "-"\n' "$_gia" "$_ua"
+      else
+        printf '172.30.0.10 - - [01/Jan/2026:00:00:00 +0000] "GET /confirm/<redacted> HTTP/1.1" 200 0 "https://nginx-test.local/magic-link/withdraw/<redacted>" "%s" "-"\n' "$_ua"
+      fi
+    done
+    exit "${STUB_LOG_RC:-0}" ;;
   esac
 }
 """
@@ -5835,7 +5844,9 @@ def test_hau_kiem_khong_liet_ke_duoc_thi_cung_phai_keu():
 # chứng minh ở E2E `tests-e2e/nginx-packaging/kiem-log-che-token.sh`.
 
 
-def _chay_verify_dau_do(tmp_path, che_do: str) -> subprocess.CompletedProcess:
+def _chay_verify_dau_do(
+    tmp_path, che_do: str, rc_nguon: int = 0
+) -> subprocess.CompletedProcess:
     repo, anh = _san_khau_ngx(tmp_path)
     nhat_ky = repo.parent / "lenh.log"
     nhat_ky.write_text("", encoding="utf-8")
@@ -5847,6 +5858,7 @@ def _chay_verify_dau_do(tmp_path, che_do: str) -> subprocess.CompletedProcess:
         "QLTS_STUB_LOG": str(nhat_ky).replace("\\", "/"),
         "STUB_ANH_CANDIDATE": _ANH_A,
         "STUB_LOG_TOKEN": che_do,
+        "STUB_LOG_RC": str(rc_nguon),
     }
     return subprocess.run(
         [_BASH, str(repo / "scripts" / "nginx-verify.sh"), "cand1111", "nginx-test.local"],
@@ -5857,9 +5869,10 @@ def _chay_verify_dau_do(tmp_path, che_do: str) -> subprocess.CompletedProcess:
 
 @_bo_qua_neu_khong_chay_duoc_bash
 def test_verify_dau_do_token_xanh_khi_co_dong_da_che(tmp_path):
-    """Đối chứng: access log có dòng của request đầu dò, đã che ⇒ verify ĐẠT."""
+    """Đối chứng: access log có dòng của CẢ BA đầu dò (đường dẫn, query, Referer),
+    đã che ⇒ verify ĐẠT với đúng ba dòng ✓."""
     kq = _chay_verify_dau_do(tmp_path, "che")
-    assert kq.returncode == 0 and "✓ đầu dò token" in kq.stdout, (
+    assert kq.returncode == 0 and kq.stdout.count("✓ đầu dò token") == 3, (
         f"ca đối chứng phải XANH:\n{kq.stdout}\n{kq.stderr}")
 
 
@@ -5877,3 +5890,30 @@ def test_verify_dau_do_token_do_khi_access_log_lo_token(tmp_path):
     kq = _chay_verify_dau_do(tmp_path, "lo")
     assert kq.returncode != 0 and "LỘ token giả" in kq.stdout, (
         f"verify phải ĐỎ khi access log mang token giả:\n{kq.stdout}\n{kq.stderr}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_nguon_loi_co_dau_ra_van_do(tmp_path):
+    """F36: `docker logs` in đủ ba dòng ĐÃ CHE rồi thoát lỗi ⇒ verify phải ĐỎ — mã
+    thoát nguồn không được bị bộ lọc (`| grep … || true`) nuốt mất."""
+    kq = _chay_verify_dau_do(tmp_path, "che", rc_nguon=3)
+    assert kq.returncode != 0 and "docker logs rc=3" in kq.stdout, (
+        f"verify phải ĐỎ khi nguồn access log lỗi dù có đầu ra:\n{kq.stdout}\n{kq.stderr}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_chi_query_lo_thi_do(tmp_path):
+    """Đầu dò ĐỘC LẬP: chỉ vị trí query lộ token (đường dẫn, Referer che đúng) ⇒ ĐỎ
+    và chỉ đúng đầu dò query."""
+    kq = _chay_verify_dau_do(tmp_path, "lo_query")
+    assert kq.returncode != 0 and "đầu dò token query: access log LỘ" in kq.stdout, (
+        f"verify phải ĐỎ ở đầu dò query:\n{kq.stdout}\n{kq.stderr}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_thieu_dong_referer_thi_do(tmp_path):
+    """Đầu dò ĐỘC LẬP: thiếu đúng dòng của request đầu dò Referer ⇒ ĐỎ — một dòng
+    của đầu dò khác không được "đứng thay"."""
+    kq = _chay_verify_dau_do(tmp_path, "thieu_referer")
+    assert kq.returncode != 0 and "đầu dò token Referer: KHÔNG thấy dòng" in kq.stdout, (
+        f"verify phải ĐỎ ở đầu dò Referer:\n{kq.stdout}\n{kq.stderr}")

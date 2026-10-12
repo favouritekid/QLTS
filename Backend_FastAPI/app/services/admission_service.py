@@ -44,6 +44,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from .. import models
 from ..admission_metrics import admission_quota_skip_total
 from ..core.events import SystemEvents
+from ..core.log_redaction import mo_ta_loi
 from ..core.admission_correction_constants import (
     SAFE_MINOR_CORRECTION_FIELDS,
     HARD_DENY_FIELDS,
@@ -4952,7 +4953,7 @@ async def create_profile(
     try:
         await db.flush()  # Get ID without committing (router commits)
     except IntegrityError as e:
-        log.error("IntegrityError during profile creation (race condition)", error=str(e))
+        log.error("IntegrityError during profile creation (race condition)", error=mo_ta_loi(e))
         raise ConflictError(f"Lead {lead_id} already has an admission profile (detected at DB layer)")
 
     # Initial state row — Phase 1 PLAN line 1067 service contract:
@@ -11097,7 +11098,7 @@ async def record_application_fee_payment(
                 "Application fee ledger create hit integrity race; reconciling",
                 profile_id=profile_id,
                 receipt_key=receipt_key,
-                error=str(exc),
+                error=mo_ta_loi(exc),  # V6 vòng 4: không ghi DETAIL/tham số
             )
 
         await _assert_receipt_not_used_by_other_profile(

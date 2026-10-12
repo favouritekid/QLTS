@@ -107,7 +107,7 @@ Nó đo từ một container khác trên cùng mạng, bằng `curl --resolve` (
 | 4 | SNI lạ | không có phản hồi HTTP (`000`) — catch-all từ chối bắt tay |
 | 5 | `GET /` cổng 80 | 301 |
 | 6 | `/.well-known/acme-challenge/…` | 404 (từ webroot) — **không** phải 301 |
-| 7 | đầu dò token (V6): request mang token GIẢ ở đường dẫn + query + Referer, rồi đọc `docker logs` của chính container | CÓ dòng access log của request ấy, mang `<redacted>`, KHÔNG chứa token giả — bắt cả `access_log off` (mất dòng) lẫn khuôn log ghi `$request` thô (lộ) |
+| 7 | đầu dò token (V6): BA request ĐỘC LẬP mang token GIẢ — ở đường dẫn, ở query, ở Referer — rồi đọc `docker logs` của chính container | `docker logs` thoát 0 (nguồn lỗi ⇒ ĐỎ dù có đầu ra); MỖI đầu dò có dòng access log riêng, mang `<redacted>`, KHÔNG chứa token giả của nó — bắt cả `access_log off` (mất dòng) lẫn khuôn log ghi `$request` thô (lộ) |
 
 > `NGINX_PROBE_STRICT_TLS=0` chỉ vì chứng thư ở đây tự ký. Trên prod để mặc định (`1`) thì
 > có thêm một phép kiểm chuỗi chứng thư khớp `$DOMAIN`.

@@ -55,20 +55,73 @@ def loi_sql(cccd):
     )
 
 
+import asyncpg
+import sqlalchemy.exc as _sa_exc
+from sqlalchemy.dialects.postgresql.asyncpg import AsyncAdapt_asyncpg_dbapi as _dbapi
+
+
+def _nem(e, tu=None):
+    """Ném rồi bắt lại ⇒ ngoại lệ có traceback thật và chuỗi ``__cause__``."""
+    try:
+        if tu is None:
+            raise e
+        raise e from tu
+    except BaseException as x:
+        return x
+
+
+def loi_db(rang_buoc, thong_diep, chi_tiet=None, tham_so=None, sqlstate="23514",
+           lop_sa=_sa_exc.IntegrityError, lop_ad="IntegrityError", pg=None):
+    """Lỗi CSDL GIẢ đúng chuỗi thật: asyncpg → adapter DBAPI của SQLAlchemy
+    (``raise … from``, gắn ``sqlstate``) → ``sqlalchemy.exc.*`` (``orig``)."""
+    if pg is None:
+        truong = {"C": sqlstate, "M": thong_diep, "S": "ERROR",
+                  "n": rang_buoc, "t": "admission_profiles"}
+        if chi_tiet:
+            truong["D"] = chi_tiet
+        pg = asyncpg.exceptions.PostgresError.new(truong)
+    pg = _nem(pg)
+    ad = getattr(_dbapi, lop_ad)("%s: %s" % (type(pg), pg))
+    ad.pgcode = ad.sqlstate = getattr(pg, "sqlstate", None)
+    ad = _nem(ad, pg)
+    sa = lop_sa("INSERT INTO admission_profiles (full_name, citizen_id) VALUES ($1, $2)",
+                tham_so, ad)
+    return _nem(sa, ad)
+
+
+def loi_db_moc(ma):
+    """Lỗi CSDL mang giá trị giả ở DẠNG MÀ KHÔNG REGEX NÀO NHẬN RA (thông điệp,
+    DETAIL) + tham số bind ⇒ chỉ tầng TÓM TẮT lỗi CSDL che được. Mốc ``ck_v6_<ma>``
+    nằm cả trong thông điệp (trước vá) lẫn thuộc tính ràng buộc (sau vá)."""
+    return loi_db("ck_v6_" + ma, 'violates check constraint "ck_v6_%s": gia tri GIAV6DB%sA' % (ma, ma),
+                  chi_tiet="Chi tiet GIAV6DB%sB" % ma, tham_so=("GIAV6DB%sC" % ma,))
+
+
+def loi_db_hang(ma, cccd):
+    """Chuỗi owner (1): DETAIL ``Failing row`` có xuống dòng THẬT, không mốc phía sau."""
+    return loi_db("ck_v6_" + ma, 'new row for relation "admission_profiles" violates check '
+                  'constraint "ck_v6_%s"' % ma,
+                  chi_tiet="Failing row contains (4242, GIA\n%s, Gia Lap Ten)." % cccd,
+                  tham_so=("Gia Lap Ten", cccd))
+
+
+def loi_db_asyncpg_repr(cccd):
+    """Chuỗi owner (3): asyncpg DataError — repr tham số có ``\\n``."""
+    pg = asyncpg.exceptions.DataError(
+        "invalid input for query argument $1: 'GIA\\n%s Gia Lap Ten' (expected str, got int)" % cccd)
+    return loi_db(None, None, pg=pg, lop_sa=_sa_exc.DataError, lop_ad="DataError")
+
+
 def loi_hang(cccd, email, sdt, rang_buoc):
     """IntegrityError giả của vi phạm CHECK: PostgreSQL in NGUYÊN hàng lỗi.
-    Không truyền tham số bind ⇒ giá trị CHỈ nằm trong ``Failing row contains``."""
-    goc = Exception(
-        'new row for relation "admission_profiles" violates check constraint "%s"\n'
-        "DETAIL:  Failing row contains (4242, Nguyen Van Gia, %s, %s, %s, null)."
-        % (rang_buoc, cccd, email, sdt)
-    )
-    return IntegrityError(
-        "INSERT INTO admission_profiles (id, full_name, citizen_id, email, phone, note)"
-        " VALUES ($1, $2, $3, $4, $5, $6)",
-        None,
-        goc,
-    )
+    Không truyền tham số bind ⇒ giá trị CHỈ nằm trong ``Failing row contains``.
+    V6 vòng 4: dựng qua ĐÚNG chuỗi asyncpg → adapter → SQLAlchemy (``loi_db``) để
+    tên ràng buộc đi bằng THUỘC TÍNH — bản tóm tắt lỗi CSDL không đọc thông điệp."""
+    return loi_db(rang_buoc,
+                  'new row for relation "admission_profiles" violates check constraint "%s"'
+                  % rang_buoc,
+                  chi_tiet="Failing row contains (4242, Nguyen Van Gia, %s, %s, %s, null)."
+                  % (cccd, email, sdt))
 '''
 
 _DRIVER_WEB = _DRIVER_CHUNG + r'''
@@ -79,7 +132,7 @@ from app.middleware.exception_handlers import (
     base_app_exception_handler,
     generic_exception_handler,
 )
-from app.utils.exceptions import DuplicateResourceError
+from app.utils.exceptions import ConflictError, DuplicateResourceError
 
 # ---- (P) CHUỖI PROCESSOR structlog THẬT, tách khỏi handler: đo riêng tầng structlog
 _procs = structlog.get_config()["processors"]
@@ -156,6 +209,25 @@ chuoi("P30", "info", event="v6_p30",
       du_lieu='{"full_name": "Gia \\"Lap\\" Ten30", "x": 1}')
 chuoi("P31", "info", event="v6_p31", dich='redis://:pa"ss31@redis:6379/1')
 chuoi("P32", "error", event="v6_p32", error="DETAIL:  Key (phone)=(0900000932")
+# ---- Vòng 4: lỗi CSDL ⇒ chỉ TÓM TẮT (loại, SQLSTATE, ràng buộc, bảng) — tầng tóm tắt
+LOI_D1 = loi_db_moc("d1")
+chuoi("D1", "error", event="v6_d1", exc_info=LOI_D1)          # traceback qua processor
+chuoi("D6", "error", event="v6_d6", error=loi_db_moc("d6"))   # giá trị là đối tượng ngoại lệ
+try:
+    raise loi_db_moc("d5s")
+except Exception as _e:                                        # error=str(e) trong except
+    chuoi("D5s", "error", event="v6_d5s", error=str(_e))
+try:
+    raise loi_db_moc("d5n")
+except Exception as _e:                                        # chuỗi LỒNG trong dict/list
+    chuoi("D5n", "error", event="v6_d5n", ngu_canh={"loi": [f"that bai: {_e}"]})
+# ---- Vòng 4: chuỗi owner dạng CHỮ THƯỜNG (lớp phụ regex) — đúng nguyên văn
+chuoi("P33", "error", event="v6_p33",
+      error="DETAIL:  Failing row contains (4242, GIA\n099999000999, Gia Lap Ten).")
+chuoi("P34", "error", event="v6_p34",
+      error="DETAIL:  Failing row contains (4242, GIA\\n099999000999, Gia Lap Ten).")
+chuoi("P35", "error", event="v6_p35", error=(
+    "invalid input for query argument $1: 'GIA\\n099999000999 Gia Lap Ten' (expected str, got int)"))
 # Cột KHÔNG mang nhãn CCCD — nếu là `citizen_id` thì luật nhãn CCCD che hộ và ca
 # này không còn canh được mẫu COPY (đã thấy ở lượt đỏ-trước đầu tiên).
 chuoi("P19", "error", event="v6_p19", error=(
@@ -217,6 +289,24 @@ thuong.info("v6_l14 " + _json.dumps(
 thuong.info('v6_l15 full_name="Gia "Lap" Ten 0900000993"')
 thuong.info("v6_l16 " + _json.dumps(
     'DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000964, Gia Lap Ten).'))
+# ---- Vòng 4: lỗi CSDL qua cửa ra thật — mỗi đầu dò tách một tầng
+thuong.error("v6_d2", exc_info=loi_db_moc("d2"))               # traceback qua handler gốc
+thuong.error("v6_d4", exc_info=_nem(ConflictError("Khong luu duoc ho so 4242"),
+                                    loi_db_moc("d4")))         # bọc lỗi CSDL (__cause__)
+try:
+    raise loi_db_moc("d5")
+except Exception as _e:                                        # f"…{e}" trong except
+    thuong.error("v6_d5 loi luu: " + str(_e))
+thuong.error("v6_d7 %s", loi_db_moc("d7"))                     # đối số là đối tượng ngoại lệ
+asyncio.run(generic_exception_handler(yeu_cau, loi_db_moc("d3")))
+_LOI_D8 = loi_db_moc("d8")
+asyncio.run(base_app_exception_handler(yeu_cau, _nem(
+    ConflictError("Loi luu ho so: %s" % _LOI_D8), _LOI_D8)))  # detail nội suy str(lỗi CSDL)
+# ---- Vòng 4: chuỗi owner (1) và (3) dưới dạng lỗi CSDL thật, qua 3 cửa ra web
+slog.bind(dau_do="v6_s1s").error("v6_s1s", exc_info=loi_db_hang("s1s", "099999000901"))
+thuong.error("v6_s1t", exc_info=loi_db_hang("s1t", "099999000902"))
+asyncio.run(generic_exception_handler(yeu_cau, loi_db_hang("s1c", "099999000904")))
+asyncio.run(generic_exception_handler(yeu_cau, loi_db_asyncpg_repr("099999000903")))
 truy_cap = logging.getLogger("uvicorn.access")
 truy_cap.info('%s - "%s %s HTTP/%s" %d', "10.0.0.1:5000", "GET",
               "/api/admissions/confirm/GIAV6TOKENA01", "1.1", 200)
@@ -295,6 +385,9 @@ get_task_logger("v6.celery.task").warning(
 # Vòng 3: formatter thường của celery (fmt) — KHÔNG có lớp thoát JSON thứ hai.
 logging.getLogger("v6.celery.thuong").warning(
     'v6_c5 DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000965, Gia Lap Ten).')
+# Vòng 4: lỗi CSDL qua formatter celery (fmt).
+logging.getLogger("v6.celery.thuong").error("v6_c6", exc_info=loi_db_moc("c6"))
+logging.getLogger("v6.celery.thuong").error("v6_c7", exc_info=loi_db_hang("c7", "099999000905"))
 structlog.get_logger("v6.celery").info(
     "v6_c4_redis", redis_url="redis://:GIAMATKHAUC04@redis:6379/2")
 sys.stdout.flush()
@@ -572,6 +665,62 @@ def test_structlog_key_dong_cut_cot_pii(web):
     assert "0900000932" not in dong, "Key (phone)=(… bị cắt cụt (không đuôi) lộ: %s" % dong
 
 
+# ---- Vòng 4: lỗi CSDL — chỉ TÓM TẮT (giá trị giả GIAV6DB… ở dạng KHÔNG regex nào nhận ra)
+
+
+def _moc_db(ma: str) -> tuple:
+    return tuple("GIAV6DB%s%s" % (ma, h) for h in "ABC")
+
+
+def test_structlog_traceback_loi_csdl_chi_tom_tat(web):
+    dong = _dong_chuoi(web, "D1")
+    lo = [v for v in _moc_db("d1") if v in dong]
+    assert lo == [], "traceback lỗi CSDL qua processor lộ thông điệp/DETAIL/tham số %s: %s" % (lo, dong)
+
+
+def test_structlog_tom_tat_loi_csdl_giu_chan_doan(web):
+    dong = _dong_chuoi(web, "D1")
+    mat = [v for v in ("IntegrityError", "CheckViolationError", "sqlstate=23514",
+                       "constraint=ck_v6_d1", "table=admission_profiles") if v not in dong]
+    assert mat == [], "tóm tắt lỗi CSDL mất thông tin chẩn đoán %s: %s" % (mat, dong)
+
+
+def test_structlog_gia_tri_la_doi_tuong_loi_csdl(web):
+    dong = _dong_chuoi(web, "D6")
+    lo = [v for v in _moc_db("d6") if v in dong]
+    assert lo == [], "error=<ngoại lệ CSDL> lộ %s: %s" % (lo, dong)
+
+
+def test_structlog_str_loi_csdl_trong_except(web):
+    dong = _dong_chuoi(web, "D5s")
+    lo = [v for v in _moc_db("d5s") if v in dong]
+    assert lo == [], "error=str(e) trong except lỗi CSDL lộ %s: %s" % (lo, dong)
+
+
+def test_structlog_str_loi_csdl_long_trong_dict_trong_except(web):
+    dong = _dong_chuoi(web, "D5n")
+    lo = [v for v in _moc_db("d5n") if v in dong]
+    assert lo == [], "ctx={'loi': [f'{e}']} trong except lỗi CSDL lộ %s: %s" % (lo, dong)
+
+
+def test_structlog_chu_owner_failing_row_xuong_dong(web):
+    dong = _dong_chuoi(web, "P33")
+    lo = [v for v in ("099999000999", "Gia Lap Ten") if v in dong]
+    assert lo == [], "lớp phụ: Failing row xuống dòng THẬT, không mốc, lộ dòng 2 %s: %s" % (lo, dong)
+
+
+def test_structlog_chu_owner_failing_row_da_thoat_json(web):
+    dong = _dong_chuoi(web, "P34")
+    lo = [v for v in ("099999000999", "Gia Lap Ten") if v in dong]
+    assert lo == [], "lớp phụ: Failing row dạng đã thoát JSON lộ %s: %s" % (lo, dong)
+
+
+def test_structlog_chu_owner_asyncpg_repr_xuong_dong(web):
+    dong = _dong_chuoi(web, "P35")
+    lo = [v for v in ("099999000999", "Gia Lap Ten") if v in dong]
+    assert lo == [], "lớp phụ: repr asyncpg có \\n lộ phần sau %s: %s" % (lo, dong)
+
+
 def test_structlog_giu_key_khoa_ngoai_khong_phai_pii(web):
     dong = _dong_chuoi(web, "P21")
     assert "Key (lead_id)=(4242)" in dong, (
@@ -716,6 +865,62 @@ def test_logging_thuong_failing_row_dang_da_thoat_json(web):
     assert "099999000964" not in out, "Failing row ở dạng đã thoát JSON lộ"
 
 
+def test_logging_thuong_traceback_loi_csdl_chi_tom_tat(web):
+    out = _co_dau_do(web, "v6_d2")
+    lo = [v for v in _moc_db("d2") if v in out]
+    assert lo == [], "traceback lỗi CSDL qua handler gốc lộ %s" % lo
+
+
+def test_logging_thuong_loi_boc_loi_csdl_qua_cause(web):
+    out = _co_dau_do(web, "v6_d4")
+    lo = [v for v in _moc_db("d4") if v in out]
+    assert lo == [], "ngoại lệ BỌC lỗi CSDL (__cause__) — traceback chuỗi lộ %s" % lo
+
+
+def test_logging_thuong_str_loi_csdl_trong_except(web):
+    out = _co_dau_do(web, "v6_d5")
+    lo = [v for v in _moc_db("d5") if v in out]
+    assert lo == [], "f'…{e}' trong except lỗi CSDL lộ %s" % lo
+
+
+def test_logging_thuong_doi_so_la_loi_csdl(web):
+    out = _co_dau_do(web, "v6_d7")
+    lo = [v for v in _moc_db("d7") if v in out]
+    assert lo == [], "logger.error('%%s', <lỗi CSDL>) lộ %s" % lo
+
+
+def test_generic_handler_loi_csdl_chi_tom_tat(web):
+    out = _co_dau_do(web, "ck_v6_d3")
+    lo = [v for v in _moc_db("d3") if v in out]
+    assert lo == [], "generic_exception_handler ghi str(lỗi CSDL) lộ %s" % lo
+
+
+def test_base_handler_detail_noi_suy_loi_csdl(web):
+    out = _co_dau_do(web, "ck_v6_d8")
+    lo = [v for v in _moc_db("d8") if v in out]
+    assert lo == [], "ConflictError(detail=f'…{lỗi CSDL}') qua handler lộ %s" % lo
+
+
+def test_web_structlog_loi_csdl_failing_row_xuong_dong(web):
+    out = _co_dau_do(web, "v6_s1s")
+    assert "099999000901" not in out, "structlog thật: lỗi CSDL có Failing row xuống dòng lộ"
+
+
+def test_logging_thuong_loi_csdl_failing_row_xuong_dong(web):
+    out = _co_dau_do(web, "v6_s1t")
+    assert "099999000902" not in out, "handler gốc: lỗi CSDL có Failing row xuống dòng lộ"
+
+
+def test_generic_handler_loi_csdl_failing_row_xuong_dong(web):
+    out = _co_dau_do(web, "ck_v6_s1c")
+    assert "099999000904" not in out, "generic handler: lỗi CSDL có Failing row xuống dòng lộ"
+
+
+def test_generic_handler_loi_asyncpg_repr_xuong_dong(web):
+    out = _co_dau_do(web, "Unhandled exception: DataError")
+    assert "099999000903" not in out, "generic handler: asyncpg DataError (repr có \\n) lộ"
+
+
 def test_logging_thuong_che_token_duong_dan_ma_hoa_url(web):
     out = _co_dau_do(web, "v6_l12_ma_hoa")
     assert "GIAV6TOKENL12" not in out, "token sau '%2Fconfirm%2F' (mã hoá URL) lọt"
@@ -792,6 +997,17 @@ def test_celery_fmt_failing_row_gia_tri_co_nhay(celery_worker):
     out = _khong_nap_app_main(celery_worker, "v6_c5")
     lo = [v for v in ("099999000965", "Gia Lap Ten") if v in out]
     assert lo == [], "worker: Failing row có nháy lộ qua formatter celery %s" % lo
+
+
+def test_celery_fmt_loi_csdl_chi_tom_tat(celery_worker):
+    out = _khong_nap_app_main(celery_worker, "v6_c6")
+    lo = [v for v in _moc_db("c6") if v in out]
+    assert lo == [], "worker: traceback lỗi CSDL qua formatter celery lộ %s" % lo
+
+
+def test_celery_fmt_loi_csdl_failing_row_xuong_dong(celery_worker):
+    out = _khong_nap_app_main(celery_worker, "v6_c7")
+    assert "099999000905" not in out, "worker: lỗi CSDL có Failing row xuống dòng lộ"
 
 
 def test_celery_worker_che_mat_khau_redis_url(celery_worker):
