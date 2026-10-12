@@ -274,7 +274,7 @@ thuong.info("v6_l12_ma_hoa GET /login?next=%2Fconfirm%2FGIAV6TOKENL12")
 # ---- Vòng 3: giá trị chứa nháy qua cửa ra THẬT (không có lớp thoát JSON thứ hai)
 import json as _json
 slog.warning("v6_e2_json", error=(
-    'DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000963, Gia Lap Ten).\n'
+    'DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000963, Gia Lap Hai).\n'
     'full_name="Gia "Lap" Ten 0900000966"'))
 # Giá trị đã che nằm ở CUỐI chuỗi JSON (ngay trước nháy đóng, không có `\n` thoát phía
 # sau) — đúng chỗ lần che thứ hai ở handler gốc có thể nuốt tới hết dòng. Mốc `dau_do`
@@ -283,7 +283,7 @@ slog.bind(dau_do="v6_e3_json").warning("v6_e3", error=(
     'DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000967, Gia Lap Ten).'))
 slog.bind(dau_do="v6_e4_json").warning("v6_e4", ghi_chu='full_name="Gia "Lap" Ten 0900000968"')
 thuong.warning('v6_l13 DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000997, '
-               "Gia Lap Ten). khi luu ho so")
+               "Gia Lap Ba). khi luu ho so")
 thuong.info("v6_l14 " + _json.dumps(
     "invalid input for query argument $1: 'O\\'Gia 099999000990' (expected int)"))
 thuong.info('v6_l15 full_name="Gia "Lap" Ten 0900000993"')
@@ -384,7 +384,7 @@ get_task_logger("v6.celery.task").warning(
     "v6_c3_task GET /api/admissions/confirm/GIAV6TOKENC03")
 # Vòng 3: formatter thường của celery (fmt) — KHÔNG có lớp thoát JSON thứ hai.
 logging.getLogger("v6.celery.thuong").warning(
-    'v6_c5 DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000965, Gia Lap Ten).')
+    'v6_c5 DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000965, Gia Lap Nam).')
 # Vòng 4: lỗi CSDL qua formatter celery (fmt).
 logging.getLogger("v6.celery.thuong").error("v6_c6", exc_info=loi_db_moc("c6"))
 logging.getLogger("v6.celery.thuong").error("v6_c7", exc_info=loi_db_hang("c7", "099999000905"))
@@ -820,7 +820,9 @@ def _doc_json(dong: str) -> dict:
 
 def test_web_structlog_failing_row_nhay_qua_handler_goc(web):
     out = _co_dau_do(web, "v6_e2_json")
-    lo = [v for v in ("099999000963", "0900000966", "Gia Lap Ten") if v in out]
+    # Tên giả RIÊNG của đầu dò (vòng 4): chuỗi owner cũng mang "Gia Lap Ten" — quét cả
+    # đầu ra mà dùng tên chung thì ca đỏ vì đầu dò KHÁC (đã thấy ở lượt đỏ-trước đầu).
+    lo = [v for v in ("099999000963", "0900000966", "Gia Lap Hai") if v in out]
     assert lo == [], "dòng structlog thật (Failing row + KV nháy hỏng) lộ %s" % lo
 
 
@@ -846,7 +848,7 @@ def test_web_structlog_kv_da_che_cuoi_gia_tri_json_hop_le(web):
 
 def test_logging_thuong_failing_row_nhay_chu_phia_sau(web):
     out = _co_dau_do(web, "v6_l13")
-    lo = [v for v in ("099999000997", "Gia Lap Ten") if v in out]
+    lo = [v for v in ("099999000997", "Gia Lap Ba") if v in out]  # tên giả riêng (vòng 4)
     assert lo == [], "logging thường: Failing row có nháy lộ %s" % lo
 
 
@@ -995,7 +997,7 @@ def test_celery_worker_task_logger_che(celery_worker):
 def test_celery_fmt_failing_row_gia_tri_co_nhay(celery_worker):
     """Formatter thường của celery (khuôn ``fmt``) — không có lớp thoát JSON thứ hai."""
     out = _khong_nap_app_main(celery_worker, "v6_c5")
-    lo = [v for v in ("099999000965", "Gia Lap Ten") if v in out]
+    lo = [v for v in ("099999000965", "Gia Lap Nam") if v in out]  # tên giả riêng (vòng 4)
     assert lo == [], "worker: Failing row có nháy lộ qua formatter celery %s" % lo
 
 

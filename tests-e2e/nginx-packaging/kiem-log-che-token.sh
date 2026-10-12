@@ -147,7 +147,8 @@ kiem R3 "$([ "$H8" = "strict-origin-when-cross-origin" ] && echo 1 || echo 0)" \
 kiem R4 "$([ "$H6" = "no-referrer" ] && echo 1 || echo 0)" \
     "trang /reset-password?token=…: Referrer-Policy='$H6' (phải no-referrer)"
 
-dong_v=$(printf '%s\n' "$VERIFY_OUT" | grep -E "^  [✓✗] đầu dò token" | sed 's/^  //' | paste -sd'|' -)
+# `(✓|✗)` chứ không `[✓✗]`: ngoặc vuông của grep khớp MỘT byte, ký tự nhiều byte không bao giờ khớp.
+dong_v=$(printf '%s\n' "$VERIFY_OUT" | grep -E "^  (✓|✗) đầu dò token" | sed 's/^  //' | paste -sd'|' -)
 kiem V1 "$([ "$VERIFY_RC" -eq 0 ] && echo 1 || echo 0)" \
     "scripts/nginx-verify.sh rc=$VERIFY_RC · ${dong_v:-<không có dòng đầu dò token>}"
 

@@ -6049,7 +6049,7 @@ async def update_profile(
         log.error(
             "Update failed due to integrity error",
             profile_id=profile.id,
-            error=error_msg
+            error=mo_ta_loi(e),  # V6 vòng 4: error_msg chỉ dùng để phân loại, không ghi
         )
 
         if "citizen_id" in error_msg.lower():
@@ -9700,7 +9700,7 @@ async def _perform_enrollment_core(
         log.error(
             "Enrollment failed due to integrity error",
             profile_id=profile_id,
-            error=error_msg,
+            error=mo_ta_loi(e),  # V6 vòng 4: error_msg chỉ dùng để phân loại, không ghi
         )
 
         # Parse error message

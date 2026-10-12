@@ -875,6 +875,10 @@ _qlts_mo_hinh_anh() {
       for _a in "$@"; do
         case "$_a" in
           UA_[PQR]=*|GIA_[PQR]=*) printf '%s\n' "${_a#*=}" > "$QLTS_STUB_LOG.${_a%%=*}" ;;
+          # Giao thức MỘT đầu dò của bản verify trước (6c607c41: `-e UA=… -e GIA=…`) —
+          # giữ để lượt đỏ-trước chạy bản cũ trên CÙNG stub: đỏ đúng ở vế F36, không đỏ
+          # dây chuyền vì stub đổi giao thức. Bản mới không bao giờ truyền `UA=`.
+          UA=*|GIA=*) printf '%s\n' "${_a#*=}" > "$QLTS_STUB_LOG.${_a%%=*}" ;;
         esac
       done
     fi
@@ -889,9 +893,9 @@ _qlts_mo_hinh_anh() {
     # `STUB_LOG_RC`: mã thoát của `docker logs` SAU KHI đã in (nguồn lỗi có đầu ra).
     _d="${QLTS_STUB_LOG:-/khong-co}"
     _m="${STUB_LOG_TOKEN:-che}"
-    for _k in P Q R; do
-      _ua=$(cat "$_d.UA_$_k" 2>/dev/null || true)
-      _gia=$(cat "$_d.GIA_$_k" 2>/dev/null || true)
+    for _k in P Q R ""; do   # "" = giao thức một đầu dò của bản cũ (tệp .UA / .GIA)
+      _ua=$(cat "$_d.UA${_k:+_$_k}" 2>/dev/null || true)
+      _gia=$(cat "$_d.GIA${_k:+_$_k}" 2>/dev/null || true)
       [ -n "$_ua" ] || continue
       [ "$_m" = "rong" ] && continue
       [ "$_m" = "thieu_referer" ] && [ "$_k" = "R" ] && continue

@@ -40,6 +40,7 @@ from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
 from ..repositories.collaborator_repository import CollaboratorRepository
 from .lead_profile_sync import sync_profile_from_lead, detect_changed_personal_fields, SYNCABLE_FIELDS
 from ..core.events import SystemEvents
+from ..core.log_redaction import mo_ta_loi
 from .notification_dispatcher import dispatch, log_dispatch_failure
 from .notification_payloads import EventPayload
 
@@ -4858,8 +4859,8 @@ async def import_leads_from_file_content(
                                 phone2=phone2,
                             )
                 except IntegrityError as exc:
-                    detail = str(exc.orig) if exc.orig else str(exc)
-                    log.warning("Batch insert IntegrityError", batch_offset=i, detail=detail)
+                    # V6 vòng 4: không ghi DETAIL/tham số — chỉ tóm tắt lỗi CSDL.
+                    log.warning("Batch insert IntegrityError", batch_offset=i, detail=mo_ta_loi(exc))
                     # Một dòng lỗi CHO MỖI DÒNG bị mất, không phải một dòng cho cả
                     # lô: ``failed_imports`` và giao diện đều đọc theo dòng, nên gộp
                     # 100 dòng thành 1 thông báo là nói với người nhập rằng chỉ có
