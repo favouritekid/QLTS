@@ -21,6 +21,13 @@ gỡ đúng guard ấy trên một bản sao và chứng minh điều xấu lạ
 Bằng chứng "0 mất ghi" bằng request thật nằm ở bộ diễn tập LOCAL (stack Docker
 thật), không ở đây: tệp này khoá HỢP ĐỒNG lệnh — dừng gì, lúc nào, mở lại bằng
 gì, và khi nào TUYỆT ĐỐI không phát lại.
+
+Vòng 2 (review F35/F37, owner 12-10): "revision cũ" KHÔNG chứng minh "lược đồ cũ"
+(AUTOCOMMIT) ⇒ mở lại chỉ khi vân tay lược đồ khớp bản 4c; hướng dẫn in trạng
+thái ĐO THẬT; lỗi ghi tệp trạng thái không bị nuốt (trước migration ⇒ dừng,
+sau ⇒ giữ nhánh an toàn + cảnh báo); nhánh lùi đo nginx qua SNI thật và khởi
+động lại ĐÚNG container nginx cũ khi IP backend đổi. Mỗi ca `test_v2_*` hành vi
+đã được chạy trên `748f09fe` và ĐỎ trước khi vá.
 """
 
 from __future__ import annotations
@@ -269,7 +276,7 @@ def test_pre_deploy_check_do_sau_migrate_xanh_thi_giu_dung(tmp_path: Path) -> No
     assert ket.returncode != 0
     assert _start_cua_deploy(nk) == []
     assert _MOC_STEP8 not in nk
-    assert "lược đồ CHƯA RÕ hoặc đã MỚI" in _ra(ket)
+    assert "KHÔNG tự mở ứng dụng" in _ra(ket)
     assert _cac_pha(goc)[-1] == "da_migrate"
 
 
@@ -435,3 +442,197 @@ def test_bo_lenh_dung_thi_phep_do_4c_chan_truoc_pg_dump(tmp_path: Path) -> None:
     assert ket.returncode != 0
     assert _MOC_PGDUMP not in nk, "không dừng container mà vẫn sao lưu/migrate"
     assert "ĐANG CHẠY" in _ra(ket)
+
+
+# =============================================================================
+# VÒNG 2 (review F35/F37 + phục hồi nginx) — mỗi ca ĐỎ trên 748f09fe, XANH sau vá
+# =============================================================================
+_TS_CO_DINH = "20261012_000000"
+_SHIM_DATE = """#!/usr/bin/env bash
+# Chỉ cố định TIMESTAMP của deploy.sh (để ca kiểm biết trước tên tệp trạng thái);
+# mọi định dạng khác đi thẳng tới `date` thật.
+if [ "$#" = "1" ] && [ "$1" = "+%Y%m%d_%H%M%S" ]; then
+    echo "20261012_000000"
+    exit 0
+fi
+for d in /bin/date /usr/bin/date; do [ -x "$d" ] && exec "$d" "$@"; done
+exit 127
+"""
+
+
+def _san_khau_ts(tmp_path: Path, deploy_sh: str | None = None) -> Path:
+    goc = _dung_san_khau(tmp_path, deploy_sh=deploy_sh)
+    p = goc / "bin" / "date"
+    p.write_text(_SHIM_DATE, encoding="utf-8", newline="\n")
+    p.chmod(0o755)
+    return goc
+
+
+def _tep_tt_co_dinh(goc: Path) -> Path:
+    return goc / "backups" / f"deploy_{_TS_CO_DINH}.trang-thai"
+
+
+def _lenh_restart_nginx(nhat_ky: str) -> list[int]:
+    cn = _cid_gia("nginx")
+    return [i for i, d in enumerate(_dong(nhat_ky)) if d.startswith("docker restart ") and d.endswith(cn)]
+
+
+# --- F35: hướng dẫn KHÔNG suy "revision cũ ⇒ lược đồ cũ"; in trạng thái ĐO THẬT ---
+@_bo_qua_neu_khong_posix
+def test_v2_huong_dan_khong_suy_tu_revision_va_in_trang_thai_do(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _chay_deploy(goc, STUB_TIN_HIEU_O_MIGRATE="TERM", **_NHANH)
+    ra = _ra(ket)
+    assert "Revision = bản CŨ" not in ra, "hướng dẫn còn suy lược đồ từ revision (F35)"
+    assert "ĐANG DỪNG — CỐ Ý" not in ra, "hướng dẫn khẳng định trạng thái thay vì ĐO"
+    assert "Trạng thái ĐO THẬT" in ra, ra[-2500:]
+    for dv in _DV_GHI:
+        assert f"'{dv}': container cũ {_cid_gia(dv)}" in ra and "đo: exited|" in ra, ra[-2500:]
+    assert "So vân tay lược đồ với bản 4c" in ra
+    assert "vân tay lược đồ BÂY GIỜ: KHỚP bản 4c" in ra
+
+
+# --- F35: sau phát lại, vân tay lệch / không đo được ⇒ KHÔNG mở ---------------
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,kich_ban,thong_diep",
+    [
+        ("migration hỏng để lại bảng mới", {"STUB_VAN_TAY_LECH_SAU_MIGRATE": "1"}, "+ rel|public.bang_moi_r2|r"),
+        ("không đo được vân tay sau phát lại", {"STUB_VAN_TAY_RC_SAU_MIGRATE": "2"}, "KHÔNG đo được vân tay"),
+    ],
+)
+def test_v2_sau_phat_lai_van_tay_khong_chung_minh_thi_khong_mo(
+    tmp_path: Path, ten_ca: str, kich_ban: dict, thong_diep: str
+) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, nk = _chay_deploy(goc, STUB_ALEMBIC_RC="1", **kich_ban, **_NHANH)
+    ra = _ra(ket)
+    assert ket.returncode != 0
+    assert _MOC_PHAT_LAI in nk, f"{ten_ca}: chưa tới phát lại — ca không chạm cổng vân tay"
+    assert _start_cua_deploy(nk) == [], f"{ten_ca}: mở mã CŨ lên lược đồ CHƯA chứng minh tương thích"
+    assert thong_diep in ra, f"{ten_ca}: thiếu {thong_diep!r}:\n{ra[-2500:]}"
+    assert _cac_pha(goc)[-1] == "lech_van_tay", _cac_pha(goc)
+
+
+# --- Phục hồi nginx CÓ KIỂM CHỨNG ở nhánh lùi -------------------------------
+@_bo_qua_neu_khong_posix
+def test_v2_ip_backend_doi_thi_khoi_dong_lai_dung_nginx_cu_roi_do_sni(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, nk = _chay_deploy(goc, STUB_ALEMBIC_RC="1", STUB_IP_DOI="1", **_NHANH)
+    ra = _ra(ket)
+    st = _start_cua_deploy(nk)
+    assert st, "không mở lại container cũ"
+    rs = _lenh_restart_nginx(nk)
+    assert len(rs) == 1, f"IP backend đổi mà không khởi động lại ĐÚNG container nginx cũ:\n{nk}"
+    assert rs[0] > max(i for i, _ in st), "khởi động lại nginx TRƯỚC khi backend cũ chạy lại"
+    i_vf = _vt(nk, f"nginx-verify {_cid_gia('nginx')} vidu.test")
+    i_than = _vt(nk, "THAN-NGINX")
+    assert rs[0] < i_vf < i_than, f"thứ tự restart → nginx-verify → so thân sai:\n{nk}"
+    assert "Ứng dụng CŨ đã chạy lại" in ra and "nginx đo qua SNI thật" in ra, ra[-2000:]
+
+
+@_bo_qua_neu_khong_posix
+def test_v2_ip_khong_doi_van_do_nginx_khong_restart(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    _, nk = _chay_deploy(goc, STUB_ALEMBIC_RC="1", **_NHANH)
+    assert _lenh_restart_nginx(nk) == [], "IP không đổi mà vẫn khởi động lại nginx"
+    assert _vt(nk, f"nginx-verify {_cid_gia('nginx')} vidu.test") >= 0, (
+        "nhánh lùi không đo đường của người dùng (nginx, SNI thật)")
+    assert _vt(nk, "THAN-NGINX") >= 0
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,kich_ban,thong_diep",
+    [
+        ("nginx-verify đỏ", {"STUB_NGINX_VERIFY_RC": "1"}, "nginx-verify KHÔNG ĐẠT"),
+        ("thân qua nginx khác thân backend", {"STUB_THAN_LECH": "1"}, "KHÁC thân lấy thẳng từ backend"),
+    ],
+)
+def test_v2_do_nginx_khong_dat_thi_do_va_huong_dan(
+    tmp_path: Path, ten_ca: str, kich_ban: dict, thong_diep: str
+) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, nk = _chay_deploy(goc, STUB_ALEMBIC_RC="1", STUB_IP_DOI="1", **kich_ban, **_NHANH)
+    ra = _ra(ket)
+    assert ket.returncode != 0
+    assert thong_diep in ra, f"{ten_ca}:\n{ra[-2000:]}"
+    assert "Ứng dụng CŨ đã chạy lại" not in ra, f"{ten_ca}: báo đã chạy lại dù đo nginx đỏ"
+    assert "Trạng thái ĐO THẬT" in ra, f"{ten_ca}: thiếu hướng dẫn kèm trạng thái đo"
+
+
+# --- F37: tệp trạng thái KHÔNG ghi được -------------------------------------
+@_bo_qua_neu_khong_posix
+def test_v2_tep_trang_thai_khong_ghi_duoc_truoc_khi_dung_thi_dung(tmp_path: Path) -> None:
+    goc = _san_khau_ts(tmp_path)
+    (goc / "backups").mkdir()
+    _tep_tt_co_dinh(goc).mkdir()   # cùng tên ⇒ `>>` không ghi được
+    ket, nk = _chay_deploy(goc, **_NHANH)
+    ra = _ra(ket)
+    assert ket.returncode != 0, "tệp trạng thái không ghi được mà deploy thoát 0"
+    assert "KHÔNG ghi được" in ra, ra[-1500:]
+    assert "docker stop " not in nk, "đã dừng container dù không ghi được tệp trạng thái"
+    assert _MOC_PGDUMP not in nk
+
+
+@_bo_qua_neu_khong_posix
+def test_v2_tep_trang_thai_hong_sau_migrate_van_giu_nhanh_an_toan(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, nk = _chay_deploy(goc, STUB_ALEMBIC_RC="1", STUB_TT_HONG_O_MIGRATE="1", **_NHANH)
+    ra = _ra(ket)
+    assert _MOC_PHAT_LAI in nk, "tệp trạng thái hỏng SAU migrate đã bẻ gãy nhánh phát lại"
+    assert [_cid_ve_dv(c) for _, c in _start_cua_deploy(nk)] == list(_THU_TU_MO)
+    assert "KHÔNG ghi được" in ra, "lỗi ghi tệp trạng thái bị NUỐT"
+    for p in ("dang_phat_lai", "da_phat_lai", "da_mo_lai_cu"):
+        assert f"[pha] {p}" in ra, f"pha {p} không còn trong log deploy:\n{ra[-2500:]}"
+    assert "đã có lần KHÔNG ghi được" in ra
+
+
+# --- Kiểm ngược vòng 2 ------------------------------------------------------
+@_bo_qua_neu_khong_posix
+def test_v2_kiem_nguoc_bo_so_van_tay_thi_mo_tren_luoc_do_lech(tmp_path: Path) -> None:
+    dot_bien = _ban_dot_bien(
+        "        if _dcg_so_van_tay; then kq=0; else kq=$?; fi\n",
+        "        kq=0\n",
+    )
+    goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien)
+    _, nk = _chay_deploy(goc, STUB_ALEMBIC_RC="1", STUB_VAN_TAY_LECH_SAU_MIGRATE="1", **_NHANH)
+    assert _start_cua_deploy(nk), "bỏ so vân tay mà vẫn không mở ⇒ ca vân tay xanh vì lý do khác"
+
+
+@_bo_qua_neu_khong_posix
+def test_v2_kiem_nguoc_mo_chi_dua_revision_thi_mo_tren_luoc_do_lech(tmp_path: Path) -> None:
+    dot_bien = _ban_dot_bien(
+        "        if _dcg_so_van_tay; then kq=0; else kq=$?; fi\n",
+        '        if [ -n "$(_dcg_psql "SELECT version_num FROM alembic_version")" ]; then kq=0; else kq=4; fi\n',
+    )
+    goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien)
+    _, nk = _chay_deploy(goc, STUB_ALEMBIC_RC="1", STUB_VAN_TAY_LECH_SAU_MIGRATE="1", **_NHANH)
+    assert _start_cua_deploy(nk), "cổng 'revision' vẫn chặn ⇒ đột biến không tái hiện F35"
+
+
+@_bo_qua_neu_khong_posix
+def test_v2_kiem_nguoc_bo_phuc_hoi_nginx_thi_khong_restart_khong_do(tmp_path: Path) -> None:
+    than = _DEPLOY.read_text(encoding="utf-8")
+    dau = than.index('    ip=$(_dcg_ip "${_DCG_CID[backend]}" 2>/dev/null || true)\n')
+    cuoi_neo = "    _dcg_do_nginx || return 1\n"
+    cuoi = than.index(cuoi_neo, dau) + len(cuoi_neo)
+    than = than[:dau] + than[cuoi:]
+    goc = _dung_san_khau(tmp_path, deploy_sh=than)
+    _, nk = _chay_deploy(goc, STUB_ALEMBIC_RC="1", STUB_IP_DOI="1", **_NHANH)
+    assert _start_cua_deploy(nk)
+    assert _lenh_restart_nginx(nk) == [] and "nginx-verify" not in nk, (
+        "gỡ phục hồi nginx mà vẫn restart/đo ⇒ ca nginx xanh vì lý do khác")
+
+
+@_bo_qua_neu_khong_posix
+def test_v2_kiem_nguoc_nuot_loi_ghi_tep_trang_thai_thi_deploy_chay_tiep(tmp_path: Path) -> None:
+    dot_bien = _ban_dot_bien(
+        """    if printf '%s\\n' "$dong" >> "$_DCG_TT" 2>/dev/null; then\n""",
+        """    if printf '%s\\n' "$dong" >> "$_DCG_TT" 2>/dev/null || true; then\n""",
+    )
+    goc = _san_khau_ts(tmp_path, deploy_sh=dot_bien)
+    (goc / "backups").mkdir()
+    _tep_tt_co_dinh(goc).mkdir()
+    _, nk = _chay_deploy(goc, **_NHANH)
+    assert _MOC_PGDUMP in nk, "nuốt lỗi ghi mà deploy vẫn dừng ⇒ ca F37 xanh vì lý do khác"

@@ -201,6 +201,7 @@ domains:
       # truoc pg_dump, buoc (d) truoc phat lai, trap theo pha). Sua `scripts/`
       # ma khong keo tep nay = guard dong cua ghi khong ai chay.
       - Backend_FastAPI/tests/unit/test_deploy_dong_cua_ghi.py
+      - Backend_FastAPI/tests/integration/test_deploy_van_tay_luoc_do_sql.py
       # ⚠️ Cac tep tren KHONG doc phan lon be mat ma `infra` nhan. Do that: mot PR
       # chi sua `docker-compose.smoke.yml` ra ke hoach ba test, va ca ba deu
       # khong mo tep do — trong khi guard THAT nam o `test_smoke_stack_co_lap.py`.

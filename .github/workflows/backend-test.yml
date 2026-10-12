@@ -1109,6 +1109,9 @@ jobs:
           # họ với ba tệp `test_deploy_*` — chạy THẬT `scripts/deploy.sh` với
           # stub `docker`/`git`, không đụng CSDL. Nó khoá Step 4c (đóng cửa ghi
           # trước pg_dump, bước (d) trước phát lại, trap theo pha). Ghim WHOLE-FILE.
+          # `test_deploy_van_tay_luoc_do_sql.py` (vòng 2) cũng ở đây: nó chạy THẬT các câu SQL
+          # của Step 4c (vân tay lược đồ, phiên lạ, bộ đếm) trên CSDL test — stub `docker`
+          # không bao giờ đưa SQL tới PostgreSQL. Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1138,6 +1141,7 @@ jobs:
               tests/unit/test_deploy_ghim_sha.py
               tests/unit/test_deploy_atomic_writers.py
               tests/unit/test_deploy_dong_cua_ghi.py
+              tests/integration/test_deploy_van_tay_luoc_do_sql.py
               tests/unit/test_smoke_stack_co_lap.py
               tests/unit/test_smoke_bootstrap_personas.py
               tests/unit/test_smoke_seed_persona_registry.py

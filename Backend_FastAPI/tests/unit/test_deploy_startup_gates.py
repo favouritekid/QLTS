@@ -259,7 +259,12 @@ def test_model_compose_that_giu_celery_false_du_bien_host_dat_true(
 #                                   bash đang chạy deploy.sh ($PPID) đúng lúc ấy.
 #   STUB_PHIEN_LA, STUB_PHIEN_LA_SAU_MIGRATE, STUB_PSQL_RC — pg_stat_activity.
 #   STUB_DEM_RC, STUB_DEM_T1_LECH — bộ đếm pg_stat_user_tables (PA2).
-#   STUB_RESTART_POLICY, STUB_STOP_RC, STUB_START_RC.
+#   STUB_RESTART_POLICY, STUB_STOP_RC, STUB_START_RC, STUB_RESTART_RC.
+#   (vòng 2) STUB_VAN_TAY_RC, STUB_VAN_TAY_LECH_SAU_MIGRATE — vân tay lược đồ;
+#   STUB_IP_DOI — IP backend đổi sau khi deploy `docker start` backend cũ;
+#   STUB_THAN_LECH — thân /health qua nginx khác thân từ backend;
+#   STUB_TT_HONG_O_MIGRATE — tệp trạng thái bị thay bằng thư mục lúc migrate.
+#   `scripts/nginx-verify.sh` của sân khấu đọc STUB_NGINX_VERIFY_RC.
 _MANH_STUB_CUA_GHI = r"""# --- mô hình cửa ghi (chèn từ test_deploy_startup_gates._MANH_STUB_CUA_GHI) ---
 _da_dung() {
     awk -v c="$1" '
@@ -269,12 +274,59 @@ _da_dung() {
         END { exit (st ? 0 : 1) }' "$QLTS_STUB_LOG"
 }
 _dem_lenh() { grep -c "^docker $1 .*$2" "$QLTS_STUB_LOG" || true; }
+_cn=$(_cid_gia nginx)
 case "$_tat_ca" in
     "stop "*)
         exit "${STUB_STOP_RC:-0}" ;;
     "start "*)
         exit "${STUB_START_RC:-0}" ;;
+    "restart "*)
+        exit "${STUB_RESTART_RC:-0}" ;;
+    "run --network "*THAN-NGINX*)
+        # Đầu dò so THÂN /health qua nginx (SNI) với thân lấy thẳng từ backend.
+        _h=1111111111111111111111111111111111111111111111111111111111111111
+        echo "THAN-NGINX $_h"
+        if [ "${STUB_THAN_LECH:-0}" = "1" ]; then
+            echo "THAN-BACKEND 2222222222222222222222222222222222222222222222222222222222222222"
+        else
+            echo "THAN-BACKEND $_h"
+        fi
+        exit 0 ;;
+    *"'nsp|'"*)
+        # Vân tay lược đồ (catalog). STUB_VAN_TAY_LECH_SAU_MIGRATE=1: migration
+        # hỏng để lại một bảng MỚI mà dump --clean không xoá.
+        if [ "${STUB_VAN_TAY_RC:-0}" != "0" ]; then exit "$STUB_VAN_TAY_RC"; fi
+        if [ "${STUB_VAN_TAY_RC_SAU_MIGRATE:-0}" != "0" ] && grep -q ' upgrade head' "$QLTS_STUB_LOG"; then
+            exit "$STUB_VAN_TAY_RC_SAU_MIGRATE"
+        fi
+        printf 'col|public.ghi_thu|khoa|text|true|\nnsp|public\nrel|public.ghi_thu|r\n'
+        if [ "${STUB_VAN_TAY_LECH_SAU_MIGRATE:-0}" = "1" ] && grep -q ' upgrade head' "$QLTS_STUB_LOG"; then
+            printf 'rel|public.bang_moi_r2|r\n'
+        fi
+        exit 0 ;;
+    *pg_stat_database*)
+        echo "100|200|10|10|0"
+        exit 0 ;;
+    *" ps -q nginx"|*" ps -aq nginx")
+        echo "$_cn"
+        exit 0 ;;
+    inspect*".Image"*"$_cn"*)
+        echo "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        exit 0 ;;
+    inspect*'$k'*".NetworkSettings.Networks"*)
+        echo "dtda_default"
+        exit 0 ;;
+    inspect*"index .NetworkSettings.Networks"*)
+        echo "172.30.0.9"
+        exit 0 ;;
+    *"FROM alembic_version"*)
+        echo "r1_cu"
+        exit 0 ;;
     *" upgrade head"*)
+        if [ "${STUB_TT_HONG_O_MIGRATE:-0}" = "1" ]; then
+            # Tệp trạng thái hỏng GIỮA chừng: thay bằng một THƯ MỤC cùng tên.
+            for _t in backups/deploy_*.trang-thai; do rm -f -- "$_t"; mkdir -- "$_t"; done
+        fi
         case "${STUB_HOI_SINH:-}" in
             chay)
                 echo "docker start $(_cid_gia backend) # tac-nhan-ngoai" >> "$QLTS_STUB_LOG" ;;
@@ -314,7 +366,13 @@ case "$_tat_ca" in
         echo "${STUB_RESTART_POLICY:-unless-stopped}"
         exit 0 ;;
     inspect*".NetworkSettings.Networks"*)
-        echo "172.30.0.2 "
+        # IP backend. STUB_IP_DOI=1: sau khi CHÍNH deploy `docker start` backend
+        # cũ thì IP đổi (container khác đã chiếm IP cũ).
+        if [ "${STUB_IP_DOI:-0}" = "1" ] && grep -qx "docker start $(_cid_gia backend)" "$QLTS_STUB_LOG"; then
+            echo "172.30.0.7 "
+        else
+            echo "172.30.0.2 "
+        fi
         exit 0 ;;
     inspect*".State.StartedAt"*)
         for _s in backend celery-worker celery-beat; do
@@ -593,6 +651,13 @@ echo "nginx-apply $*" >> "$QLTS_STUB_LOG"
 exit 0
 """
 
+# Nhánh lùi của Step 4c đo nginx ĐANG PHỤC VỤ bằng `scripts/nginx-verify.sh`.
+# Một nguồn cho cả hai bộ deploy (test_deploy_ghim_sha import hằng này).
+_STUB_NGINX_VERIFY = r"""#!/usr/bin/env bash
+echo "nginx-verify $*" >> "$QLTS_STUB_LOG"
+exit "${STUB_NGINX_VERIFY_RC:-0}"
+"""
+
 _STUB_ROLLBACK_PREFLIGHT = r"""#!/usr/bin/env bash
 # Ghi lại HỢP ĐỒNG chứ không chỉ "đã được gọi": ba biến này là toàn bộ giao
 # diện giữa deploy.sh và preflight. Một lượt gọi thiếu `LOCAL_ONLY=1` sẽ đi
@@ -764,6 +829,7 @@ def _dung_san_khau(
     (goc / "scripts" / "deploy.sh").write_text(noi_dung, encoding="utf-8", newline="\n")
     for ten, than in (
         ("scripts/nginx-apply.sh", _STUB_NGINX_APPLY),
+        ("scripts/nginx-verify.sh", _STUB_NGINX_VERIFY),
         ("scripts/rollback-preflight.sh", _STUB_ROLLBACK_PREFLIGHT),
         ("bin/docker", _STUB_DOCKER),
         ("bin/git", _STUB_GIT),
