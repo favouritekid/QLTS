@@ -138,6 +138,24 @@ chuoi("P17", "error", event="v6_p17", error=(
     "CONTEXT:  JSON data, line 1: {ghi_chu: GIAV6JSON27"))
 chuoi("P18", "error", event="v6_p18", error=(
     "CONTEXT:  unnamed portal parameter $1 = '099999000518'"))
+# ---- Vòng 3: giá trị CHỨA nháy / ngoặc lồng — các mẫu từng dừng ở dấu nháy đầu tiên
+chuoi("P23", "error", event="v6_p23", error=(
+    'DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000995, Gia Lap Ten).'))
+chuoi("P24", "error", event="v6_p24", error=(
+    'DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000996, Gia Lap Ten).'
+    " khi luu ho so"))
+chuoi("P25", "error", event="v6_p25",
+      error='invalid input syntax for type integer: "12"3 099999000981"')
+chuoi("P26", "error", event="v6_p26",
+      error='CONTEXT:  COPY admission_profiles, line 3, column ghi_chu: "a"b GIAV6COPY26"')
+chuoi("P27", "error", event="v6_p27",
+      error='CONTEXT:  JSON data, line 1: {"ghi_chu": "GIAV6JSON37", "x": 1}')
+chuoi("P29", "error", event="v6_p29", error=(
+    "DETAIL:  Key (full_name, citizen_id)=(Gia (Lap) Ten, 099999000999) already exists."))
+chuoi("P30", "info", event="v6_p30",
+      du_lieu='{"full_name": "Gia \\"Lap\\" Ten30", "x": 1}')
+chuoi("P31", "info", event="v6_p31", dich='redis://:pa"ss31@redis:6379/1')
+chuoi("P32", "error", event="v6_p32", error="DETAIL:  Key (phone)=(0900000932")
 # Cột KHÔNG mang nhãn CCCD — nếu là `citizen_id` thì luật nhãn CCCD che hộ và ca
 # này không còn canh được mẫu COPY (đã thấy ở lượt đỏ-trước đầu tiên).
 chuoi("P19", "error", event="v6_p19", error=(
@@ -181,6 +199,18 @@ thuong.warning(
 asyncio.run(generic_exception_handler(yeu_cau, loi_hang(
     "099999000531", "gia531@example.invalid", "0900000531", "ck_v6_l11")))
 thuong.info("v6_l12_ma_hoa GET /login?next=%2Fconfirm%2FGIAV6TOKENL12")
+# ---- Vòng 3: giá trị chứa nháy qua cửa ra THẬT (không có lớp thoát JSON thứ hai)
+import json as _json
+slog.warning("v6_e2_json", error=(
+    'DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000963, Gia Lap Ten).\n'
+    'full_name="Gia "Lap" Ten 0900000966"'))
+thuong.warning('v6_l13 DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000997, '
+               "Gia Lap Ten). khi luu ho so")
+thuong.info("v6_l14 " + _json.dumps(
+    "invalid input for query argument $1: 'O\\'Gia 099999000990' (expected int)"))
+thuong.info('v6_l15 full_name="Gia "Lap" Ten 0900000993"')
+thuong.info("v6_l16 " + _json.dumps(
+    'DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000964, Gia Lap Ten).'))
 truy_cap = logging.getLogger("uvicorn.access")
 truy_cap.info('%s - "%s %s HTTP/%s" %d', "10.0.0.1:5000", "GET",
               "/api/admissions/confirm/GIAV6TOKENA01", "1.1", 200)
@@ -256,6 +286,9 @@ logging.getLogger("v6.celery.thuong").warning(
     "DuplicateResourceError: CCCD 099999000302 da duoc su dung")
 get_task_logger("v6.celery.task").warning(
     "v6_c3_task GET /api/admissions/confirm/GIAV6TOKENC03")
+# Vòng 3: formatter thường của celery (fmt) — KHÔNG có lớp thoát JSON thứ hai.
+logging.getLogger("v6.celery.thuong").warning(
+    'v6_c5 DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000965, Gia Lap Ten).')
 structlog.get_logger("v6.celery").info(
     "v6_c4_redis", redis_url="redis://:GIAMATKHAUC04@redis:6379/2")
 sys.stdout.flush()
@@ -478,6 +511,61 @@ def test_structlog_che_invalid_input_value_for_enum(web):
     assert "GIAV6ENUM20" not in dong, "'invalid input value for enum …' lọt: %s" % dong
 
 
+# ---- Vòng 3: giá trị chứa nháy / ngoặc lồng (che THỪA tới hết dòng thay vì che thiếu)
+
+
+def test_structlog_failing_row_gia_tri_json_co_nhay(web):
+    dong = _dong_chuoi(web, "P23")
+    lo = [v for v in ("099999000995", "Gia Lap Ten") if v in dong]
+    assert lo == [], "hàng lỗi có giá trị JSON (nháy) lộ phần đuôi %s: %s" % (lo, dong)
+
+
+def test_structlog_failing_row_nhay_va_chu_phia_sau(web):
+    dong = _dong_chuoi(web, "P24")
+    lo = [v for v in ("099999000996", "Gia Lap Ten") if v in dong]
+    assert lo == [], "hàng lỗi có nháy + chữ phía sau lộ %s: %s" % (lo, dong)
+
+
+def test_structlog_nhan_gia_tri_chua_nhay(web):
+    dong = _dong_chuoi(web, "P25")
+    assert "099999000981" not in dong, "'…for type integer: \"12\"3 …\"' lộ đuôi: %s" % dong
+
+
+def test_structlog_copy_gia_tri_chua_nhay(web):
+    dong = _dong_chuoi(web, "P26")
+    assert "GIAV6COPY26" not in dong, "COPY với giá trị chứa nháy lộ đuôi: %s" % dong
+
+
+def test_structlog_json_data_co_nhay(web):
+    dong = _dong_chuoi(web, "P27")
+    assert "GIAV6JSON37" not in dong, "'JSON data, line N: {\"…\"' dừng ở nháy, lộ: %s" % dong
+
+
+def test_structlog_key_gia_tri_co_ngoac_long(web):
+    dong = _dong_chuoi(web, "P29")
+    assert "099999000999" not in dong, "Key (…)=(… (…) …) ngoặc lồng lộ đuôi: %s" % dong
+
+
+def test_structlog_kv_nhay_thoat_khong_lo(web):
+    dong = _dong_chuoi(web, "P30")
+    assert "Ten30" not in dong, "\"full_name\": \"… \\\"…\\\" …\" (nháy thoát) lộ đuôi: %s" % dong
+
+
+def test_structlog_kv_nhay_thoat_giu_phan_sau(web):
+    dong = _dong_chuoi(web, "P30")
+    assert '\\"x\\": 1}' in dong, "che THỪA khi điểm kết thúc giá trị xác định được: %s" % dong
+
+
+def test_structlog_mat_khau_url_chua_nhay(web):
+    dong = _dong_chuoi(web, "P31")
+    assert "ss31" not in dong, "mật khẩu URL chứa nháy lộ: %s" % dong
+
+
+def test_structlog_key_dong_cut_cot_pii(web):
+    dong = _dong_chuoi(web, "P32")
+    assert "0900000932" not in dong, "Key (phone)=(… bị cắt cụt (không đuôi) lộ: %s" % dong
+
+
 def test_structlog_giu_key_khoa_ngoai_khong_phai_pii(web):
     dong = _dong_chuoi(web, "P21")
     assert "Key (lead_id)=(4242)" in dong, (
@@ -558,6 +646,54 @@ def test_handler_loi_ghi_failing_row_qua_generic_handler(web):
         "generic_exception_handler ghi str(IntegrityError) lọt hàng lỗi %s" % lo)
 
 
+def _dong_json_e2(r: subprocess.CompletedProcess) -> str:
+    out = _co_dau_do(r, "v6_e2_json")
+    dong = [x for x in r.stderr.splitlines() if '"v6_e2_json"' in x]
+    assert len(dong) == 1, "HẠ TẦNG: không thấy đúng một dòng JSON v6_e2_json"
+    return dong[0]
+
+
+def test_web_structlog_failing_row_nhay_qua_handler_goc(web):
+    out = _co_dau_do(web, "v6_e2_json")
+    lo = [v for v in ("099999000963", "0900000966", "Gia Lap Ten") if v in out]
+    assert lo == [], "dòng structlog thật (Failing row + KV nháy hỏng) lộ %s" % lo
+
+
+def test_web_structlog_dong_json_van_hop_le_sau_hai_lop(web):
+    """Processor che giá trị THÔ, filter gốc che lại dòng đã render: lần che thứ hai
+    KHÔNG được nuốt tới hết dòng làm hỏng JSON (idempotent)."""
+    import json
+
+    dong = _dong_json_e2(web)
+    try:
+        ob = json.loads(dong)
+    except ValueError as exc:
+        ob = {"LOI_JSON": repr(exc)}
+    assert ob.get("event") == "v6_e2_json" and "logger" in ob and "level" in ob, (
+        "dòng structlog không còn là JSON đủ trường sau hai lớp che: %s" % dong)
+
+
+def test_logging_thuong_failing_row_nhay_chu_phia_sau(web):
+    out = _co_dau_do(web, "v6_l13")
+    lo = [v for v in ("099999000997", "Gia Lap Ten") if v in out]
+    assert lo == [], "logging thường: Failing row có nháy lộ %s" % lo
+
+
+def test_logging_thuong_asyncpg_repr_da_thoat(web):
+    out = _co_dau_do(web, "v6_l14")
+    assert "099999000990" not in out, "asyncpg repr ('O\\\\'Gia…) đã thoát thêm một lớp lộ đuôi"
+
+
+def test_logging_thuong_kv_nhay_hong_che_toi_het_dong(web):
+    out = _co_dau_do(web, "v6_l15")
+    assert "0900000993" not in out, "full_name=\"Gia \"Lap\" Ten …\" (nháy lồng) lộ đuôi"
+
+
+def test_logging_thuong_failing_row_dang_da_thoat_json(web):
+    out = _co_dau_do(web, "v6_l16")
+    assert "099999000964" not in out, "Failing row ở dạng đã thoát JSON lộ"
+
+
 def test_logging_thuong_che_token_duong_dan_ma_hoa_url(web):
     out = _co_dau_do(web, "v6_l12_ma_hoa")
     assert "GIAV6TOKENL12" not in out, "token sau '%2Fconfirm%2F' (mã hoá URL) lọt"
@@ -627,6 +763,13 @@ def test_celery_worker_logging_thuong_che(celery_worker):
 def test_celery_worker_task_logger_che(celery_worker):
     out = _khong_nap_app_main(celery_worker, "v6_c3_task")
     assert "GIAV6TOKENC03" not in out, "worker: task logger lọt token"
+
+
+def test_celery_fmt_failing_row_gia_tri_co_nhay(celery_worker):
+    """Formatter thường của celery (khuôn ``fmt``) — không có lớp thoát JSON thứ hai."""
+    out = _khong_nap_app_main(celery_worker, "v6_c5")
+    lo = [v for v in ("099999000965", "Gia Lap Ten") if v in out]
+    assert lo == [], "worker: Failing row có nháy lộ qua formatter celery %s" % lo
 
 
 def test_celery_worker_che_mat_khau_redis_url(celery_worker):

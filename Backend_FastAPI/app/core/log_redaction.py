@@ -149,19 +149,40 @@ _TOKEN_PATH_RE = re.compile(
     + r"[^\s/?#&\"'\\<>]+"
 )
 
+#: Hết DÒNG: xuống dòng thật, ``\\n``/``\\r`` đã thoát JSON (dòng đã render) hoặc hết chuỗi.
+#: Mọi giá trị "không xác định được điểm kết thúc an toàn" bị che TỚI ĐÂY (che THỪA
+#: hơn che THIẾU — V6 vòng 3: dừng ở dấu nháy đầu tiên đã để lộ đuôi giá trị có nháy).
+_HET_DONG = r"(?=\\r|\\n|\r|\n|$)"
+#: Sau nháy ĐÓNG hợp lệ phải là dấu phân cách — nếu không, nháy ấy nằm TRONG giá trị.
+_SAU_NHAY = r"(?=[\s,;&)}\]]|\\[nr\"]|$)"
+_DA_CHE_RE = r"(?:<redacted>|\[REDACTED\])"
+
 _TEXT_KEY_ALT = (
     "|".join(re.escape(k) for k in sorted(PII_KEYS, key=len, reverse=True))
     + "|"
     + "|".join(r"[A-Za-z0-9_]*%s[A-Za-z0-9_]*" % s for s in SECRET_TEXT_KEY_SUBSTRINGS)
 )
-_VALUE = r"(?:\"(?P<dq>[^\"]*)\"|'(?P<sq>[^']*)'|(?P<bare>[^\s\"'&,;)}\]]+))"
+_VALUE = (
+    r"(?P<v>"
+    # đã che ⇒ giữ nguyên (idempotent — bản ghi có thể qua hai lớp che; sau nó có thể
+    # là nháy đóng của chuỗi JSON bao ngoài)
+    r"\\?[\"']?" + _DA_CHE_RE + r"\\?[\"']?(?![^\s,;&)}\]\"'\\])"
+    # nháy kép / đơn hợp lệ: hiểu ký tự thoát (``\\"``), nháy đóng phải theo sau là phân cách
+    r"|\"(?:[^\"\\\r\n]|\\.)*\"" + _SAU_NHAY
+    + r"|'(?:[^'\\\r\n]|\\.)*'" + _SAU_NHAY
+    # nháy hỏng/lồng (``"Gia "Lap" Ten"``) hoặc đã thoát thêm một lớp (``\\"…``) ⇒ che THỪA tới hết dòng
+    + r"|\\?[\"'][^\r\n]*?" + _HET_DONG
+    # không nháy
+    + r"|[^\s\"'&,;)}\]]+"
+    r")"
+)
 # (2a) dạng ``khoá=giá trị`` (query string, câu log tự do).
 _KV_EQ_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9_])(?P<k>%s)(?P<sep>\s*=\s*)%s" % (_TEXT_KEY_ALT, _VALUE)
 )
 # (2b) dạng khoá CÓ NGOẶC rồi ``:`` (JSON / repr của dict).
 _KV_QUOTED_RE = re.compile(
-    r"(?i)(?P<q>[\"'])(?P<k>%s)(?P=q)(?P<sep>\s*:\s*)%s" % (_TEXT_KEY_ALT, _VALUE)
+    r"(?i)(?P<q>\\?[\"'])(?P<k>%s)(?P=q)(?P<sep>\s*:\s*)%s" % (_TEXT_KEY_ALT, _VALUE)
 )
 # (3) CCCD sau nhãn: "CCCD 0…", "Citizen ID 0…", "citizen_id=0…", "cccd": "0…".
 _CCCD_LABEL_RE = re.compile(
@@ -171,9 +192,22 @@ _CCCD_LABEL_RE = re.compile(
 # unique (``already exists``), khoá ngoại (``is not present`` / ``is still
 # referenced``), tạo index (``is duplicated``) và exclusion constraint, nơi
 # nhóm THỨ HAI viết thường: ``… conflicts with existing key (…)=(…)``.
+#  Giá trị có thể chứa ngoặc / nháy / dấu phẩy (``(Gia (Lap) Ten, 0…)``) ⇒ nhóm giá
+#  trị kết thúc ở ``)`` ngay trước một ĐUÔI PostgreSQL đã biết, hoặc ``)``/``).``
+#  cuối dòng. Không thấy đuôi nào (dòng cụt) mà cột là PII ⇒ ``_SQL_KEY_CUT_RE`` che
+#  tới hết dòng.
+_KEY_DUOI = r" (?:already exists|is not present|is still referenced|is duplicated|conflicts with)"
 _SQL_KEY_RE = re.compile(
     r"(?<![A-Za-z_])(?P<head>[Kk]ey \((?P<cols>[^=]*?)\)=\()(?P<vals>.*?)"
-    r"(?P<tail>\)(?=[\s.,;\"'\\]|$))"
+    r"(?P<tail>\)(?=" + _KEY_DUOI + r"|\.?(?:\\r|\\n|\r|\n|$|(?<!\\)\")))"
+)
+#  Chỉ khớp khi TÊN CỘT là PII — khớp cả khoá không-PII thì nó nuốt tới hết dòng
+#  và che mất một ``Key (phone)=(…`` cụt đứng sau trên cùng dòng.
+_SQL_KEY_CUT_RE = re.compile(
+    r"(?<![A-Za-z_])(?P<head>[Kk]ey \((?P<cols>[^=)]*?(?:%s)[^=]*?)\)=\()"
+    r"(?!<redacted>\))(?P<vals>[^\r\n]*?)" % "|".join(SQL_PII_COLUMN_STEMS)
+    + _HET_DONG,
+    re.IGNORECASE,
 )
 # (5) tham số bind trong câu lỗi SQLAlchemy: ``[parameters: ('Nguyen…', '0…')]``.
 _SQL_PARAMS_RE = re.compile(
@@ -181,7 +215,7 @@ _SQL_PARAMS_RE = re.compile(
 )
 # (6) mật khẩu trong URL: ``redis://:pw@host``, ``postgresql://u:pw@host``.
 _URL_CRED_RE = re.compile(
-    r"(?P<pre>\b[A-Za-z][A-Za-z0-9+.-]*:\\?/\\?/[^:/\s@\"']*:)[^@\s\"']+?@"
+    r"(?P<pre>\b[A-Za-z][A-Za-z0-9+.-]*:\\?/\\?/[^:/\s@\"']*:)[^@\s]+?@"
 )
 
 # (7) Thông báo PostgreSQL 16 / asyncpg NHÚNG GIÁ TRỊ ĐẦU VÀO (bảng quyết định
@@ -193,12 +227,15 @@ _URL_CRED_RE = re.compile(
 # kèm tên cột ⇒ không giữ chọn lọc được ⇒ che TOÀN BỘ nhóm. Ưu tiên cắt tới
 # mốc cấu trúc kế tiếp (``[SQL:`` / ``HINT:`` / ``CONTEXT:`` / ``(Background``)
 # để phủ cả giá trị có xuống dòng; không có mốc thì che tới HẾT DÒNG — kể cả khi
-# dòng bị cắt cụt không còn ngoặc đóng.
+# dòng bị cắt cụt không còn ngoặc đóng. KHÔNG dừng ở dấu nháy (V6 vòng 3: giá trị
+# JSON/chuỗi có nháy từng làm lộ đuôi hàng). Đánh đổi: phần chữ sau hàng lỗi trên
+# CÙNG dòng (vd " khi lưu hồ sơ") cũng bị che.
 _PG_FAILING_ROW_RE = re.compile(
     r"Failing row contains \((?:"
-    r"(?P<moc>.{0,8000}?\)\.?(?=(?:\\r|\\n|\r|\n)+(?:\[SQL:|HINT:|CONTEXT:|\(Background)))"
-    r"|(?P<dong>[^\r\n]*?)(?=\\r|\\n|(?<!\\)\"|$|\r|\n)"
-    r")",
+    r"(?P<da><redacted>\)\.?)"
+    r"|(?P<moc>.{0,8000}?\)\.?(?=(?:\\r|\\n|\r|\n)+(?:\[SQL:|HINT:|CONTEXT:|\(Background)))"
+    r"|(?P<dong>[^\r\n]*?)" + _HET_DONG
+    + r")",
     re.S,
 )
 # (7b) ``<nhãn>: "<giá trị>"`` — kiểu dữ liệu sai (``invalid input syntax for
@@ -207,7 +244,8 @@ _PG_NHAN_GIA_TRI_RE = re.compile(
     r"(?P<head>(?:invalid input syntax for(?: type)? [^:\r\n\"]{1,80}"
     r"|invalid input value for enum [^:\r\n\"]{1,80}"
     r"|date/time field value out of range"
-    r"|invalid hexadecimal digit): )(?P<q>\\?\")(?P<v>.*?)(?P=q)"
+    r"|invalid hexadecimal digit): )(?P<q>\\?\")(?!<redacted>(?P=q))(?P<v>[^\r\n]*?)"
+    + _HET_DONG
 )
 # (7c) ``<từ> "<giá trị>" <đuôi>`` — ``value "…" is out of range for type …``,
 # ``invalid value "…" for "…"``, ``time zone "…" not recognized``.
@@ -216,18 +254,17 @@ _PG_GIA_TRI_GIUA_RE = re.compile(
     r"(?P<tail> (?:is out of range|for |not recognized))"
 )
 # (7d) asyncpg (phía client): ``invalid input for query argument $2: '…' (…)``
-# — giá trị là repr của tham số bind. Chuỗi trong nháy ⇒ che chuỗi; repr khác
-# (số, datetime…) ⇒ che tới hết dòng (mất cả lý do — chấp nhận).
+# — giá trị là repr của tham số bind ⇒ che TỚI HẾT DÒNG (mất cả lý do — chấp nhận;
+# V6 vòng 3: repr có ``\\'`` đã thoát thêm một lớp làm lộ đuôi nếu dừng ở nháy).
 _ASYNCPG_THAM_SO_RE = re.compile(
-    r"(?P<head>invalid input for query argument \$\d+: )"
-    r"(?P<v><redacted>|'(?:[^'\\\r\n]|\\.)*'|\"(?:[^\"\\\r\n]|\\.)*\""
-    r"|[^\r\n]*?(?=\\r|\\n|\r|\n|$))"
+    r"(?P<head>invalid input for query argument \$\d+: )(?!<redacted>)(?P<v>[^\r\n]*?)"
+    + _HET_DONG
 )
 # (7e) JSON đầu vào: ``DETAIL: Token "…" is invalid.`` + ``CONTEXT: JSON data,
 # line N: <nội dung>`` (nội dung JSON người dùng gửi).
 _PG_JSON_TOKEN_RE = re.compile(r"(?P<head>\bToken )(?P<q>\\?\")(?P<v>.*?)(?P=q)(?P<tail> is invalid)")
 _PG_JSON_DONG_RE = re.compile(
-    r"(?P<head>JSON data, line \d+: )(?P<v>[^\r\n]*?)(?=\\r|\\n|\r|\n|(?<!\\)\"|$)"
+    r"(?P<head>JSON data, line \d+: )(?!<redacted>)(?P<v>[^\r\n]*?)" + _HET_DONG
 )
 # (7f) giá trị tham số bind trong CONTEXT/DETAIL: ``unnamed portal parameter
 # $1 = '…'`` (log_parameter_max_length_on_error) và ``parameters: $1 = '…'``.
@@ -235,7 +272,7 @@ _PG_THAM_SO_BIND_RE = re.compile(r"(?P<head>\$\d+ = )(?P<v>'(?:[^']|'')*')")
 # (7g) ``CONTEXT: COPY bảng, line N, column c: "…"`` (hoặc cả dòng COPY).
 _PG_COPY_RE = re.compile(
     r"(?P<head>COPY [^,\r\n]{1,128}, line \d+(?:, column [^:\r\n]{1,128})?: )"
-    r"(?P<q>\\?\")(?P<v>.*?)(?P=q)"
+    r"(?P<q>\\?\")(?!<redacted>(?P=q))(?P<v>[^\r\n]*?)" + _HET_DONG
 )
 
 _DA_CHE = (REDACTED, REDACTED_KEY)
@@ -260,25 +297,26 @@ def _redact_postgres(s: str) -> str:
 
 
 def _thay_kv(m: "re.Match[str]") -> str:
-    giu = m.group("dq") if m.group("dq") is not None else (
-        m.group("sq") if m.group("sq") is not None else m.group("bare")
-    )
-    if giu in _DA_CHE:
+    """Giữ khoá + phân cách; thay CẢ giá trị (kể cả phần bị che thừa tới hết dòng)
+    bằng ``<redacted>`` trong đúng kiểu nháy mở đầu."""
+    v = m.group("v")
+    if v.strip("\\\"'") in _DA_CHE:
         return m.group(0)
-    full = m.group(0)
-    # Giữ nguyên khoá + dấu phân cách + ngoặc; chỉ thay thân giá trị.
-    start = m.start("dq") if m.group("dq") is not None else (
-        m.start("sq") if m.group("sq") is not None else m.start("bare")
-    )
-    end = start + len(giu)
-    off = m.start(0)
-    return full[: start - off] + REDACTED + full[end - off:]
+    nhay = "\\\"" if v.startswith("\\\"") else (v[0] if v[0] in "\"'" else "")
+    return m.group(0)[: m.start("v") - m.start(0)] + nhay + REDACTED + nhay
 
 
 def _thay_sql_key(m: "re.Match[str]") -> str:
     if not _SQL_PII_COLUMN_RE.search(m.group("cols")):
         return m.group(0)
     return m.group("head") + REDACTED + m.group("tail")
+
+
+def _thay_sql_key_cut(m: "re.Match[str]") -> str:
+    """``Key (cột PII)=(`` không tìm được đuôi ⇒ che tới hết dòng."""
+    if not _SQL_PII_COLUMN_RE.search(m.group("cols")):
+        return m.group(0)
+    return m.group("head") + REDACTED + ")"
 
 
 def redact_text(text: str) -> str:
@@ -288,6 +326,7 @@ def redact_text(text: str) -> str:
     try:
         s = _SQL_PARAMS_RE.sub("[parameters: " + REDACTED + "]", text)
         s = _SQL_KEY_RE.sub(_thay_sql_key, s)
+        s = _SQL_KEY_CUT_RE.sub(_thay_sql_key_cut, s)
         s = _redact_postgres(s)
         s = _TOKEN_PATH_RE.sub(lambda m: m.group(1) + REDACTED, s)
         s = _URL_CRED_RE.sub(lambda m: m.group("pre") + REDACTED + "@", s)
