@@ -697,6 +697,7 @@ _cid_gia() {
     printf '%s\n' "$_c8$_c8$_c8$_c8$_c8$_c8$_c8$_c8"
 }
 
+# @MO_HINH_CUA_GHI@
 case "$_tat_ca" in
     *compose*" config "*)
         # `_ra_dan_xuat_dich_vu` hỏi MODEL Compose để dẫn xuất danh sách service
@@ -888,9 +889,16 @@ _bo_qua_neu_khong_posix_dh = pytest.mark.skipif(
 # Đây là lớp mô phỏng môi trường, không phải stub nghiệp vụ: khai bản thứ hai ở
 # đây là mời hai bản trôi khỏi nhau, rồi một bộ xanh còn bộ kia đỏ vì ngữ cảnh.
 from tests.unit.test_deploy_startup_gates import (  # noqa: E402
+    _MANH_STUB_CUA_GHI,
     _sandbox_cua,
     _viet_shim_ngu_canh,
 )
+
+# Mô hình cửa ghi (Step 4c) cũng là lớp mô phỏng MÔI TRƯỜNG dùng chung — một
+# nguồn, chèn vào đúng dấu đặt sẵn, TRƯỚC giao thức riêng của stub này (nhờ vậy
+# `STUB_INSPECT_RC`/`STUB_PSQ_*` vẫn chỉ đánh vào cổng health như thiết kế).
+assert _STUB_DOCKER_DH.count("# @MO_HINH_CUA_GHI@\n") == 1, "stub docker mất dấu chèn"
+_STUB_DOCKER_DH = _STUB_DOCKER_DH.replace("# @MO_HINH_CUA_GHI@\n", _MANH_STUB_CUA_GHI, 1)
 
 
 def _san_khau_dh(

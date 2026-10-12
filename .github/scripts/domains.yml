@@ -197,7 +197,11 @@ domains:
       - Backend_FastAPI/tests/unit/test_nginx_template_packaging.py
       - Backend_FastAPI/tests/unit/test_ci_test_visibility.py
       - Backend_FastAPI/tests/unit/test_deploy_startup_gates.py
-      # ⚠️ Ba tep tren KHONG doc phan lon be mat ma `infra` nhan. Do that: mot PR
+      # Duong A (12-10-2026): khoa Step 4c cua `scripts/deploy.sh` (dong cua ghi
+      # truoc pg_dump, buoc (d) truoc phat lai, trap theo pha). Sua `scripts/`
+      # ma khong keo tep nay = guard dong cua ghi khong ai chay.
+      - Backend_FastAPI/tests/unit/test_deploy_dong_cua_ghi.py
+      # ⚠️ Cac tep tren KHONG doc phan lon be mat ma `infra` nhan. Do that: mot PR
       # chi sua `docker-compose.smoke.yml` ra ke hoach ba test, va ca ba deu
       # khong mo tep do — trong khi guard THAT nam o `test_smoke_stack_co_lap.py`.
       # Sau tep duoi day la nhung tep DOC THAT cac be mat cua mien nay.

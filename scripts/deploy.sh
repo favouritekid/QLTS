@@ -1001,169 +1001,14 @@ docker compose -f docker-compose.yml --profile production --env-file .env.produc
 log "Config preflight passed — CSDL chưa bị chạm"
 
 # =============================================================================
-# Step 5: Database backup (before migration)
-# =============================================================================
-log "Step 5/8: Backing up database..."
-mkdir -p "$BACKUP_DIR"
-
-# Review 2026-07-20: ba sửa đổi, cùng một gốc — bản backup này là đường
-# rollback DUY NHẤT của Step 6 nên nó phải hoặc dùng được, hoặc biến mất
-# hẳn; tuyệt đối không được tồn tại ở dạng "có file nhưng vô dụng".
-#   1. Bỏ ``2>/dev/null``: trước đây lý do pg_dump chết bị nuốt sạch, vận
-#      hành chỉ thấy "may be first deploy" — câu chẩn đoán sai hướng.
-#   2. ``--clean --if-exists``: dump cũ KHÔNG có DROP nên khi Step 6 phát
-#      lại lên DB còn nguyên object thì mọi câu lệnh lỗi "already exists".
-#      Tức đường rollback trước đây KHÔNG THỂ khôi phục kể cả với file dump
-#      hoàn hảo. Có DROP thì replay mới thực sự đưa DB về trạng thái cũ.
-#   3. Xoá xác file khi dump fail: phép chuyển hướng ``>`` tạo file NGAY CẢ
-#      khi pg_dump chết, để lại file 0 byte. Cổng ``[ -s ]`` ở Step 6 đã
-#      chặn được, nhưng dọn luôn cho khỏi ai nhặt nhầm sau này.
-#   4. Vá 13-08-2026 — FAIL-CLOSED. Ba nhánh dưới đây trước đây đều chỉ
-#      ``warn`` rồi để script đi tiếp vào Step 6, tức deploy vẫn chạy
-#      migration khi KHÔNG có đường lùi. Nay cả ba đều ``error``.
-#      Riêng nhánh "PostgreSQL không sẵn sàng" trước đây đoán là "first
-#      deploy?" — một suy đoán nguy hiểm: nó không phân biệt nổi máy trắng
-#      với **sự cố của một CSDL đang có dữ liệu**, mà ca thứ hai thì đi
-#      tiếp là hỏng nặng. Bootstrap máy trắng, nếu cần, phải là một mode
-#      RIÊNG (``INITIAL_DEPLOY=true``) có guard chứng minh chưa hề có
-#      DB/volume — cố tình KHÔNG mở lối bỏ backup chung ở đây.
-_BAN_SAO="$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"
-if ! docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_isready -U "${POSTGRES_USER:-qlts}" >/dev/null 2>&1; then
-    error "PostgreSQL không sẵn sàng — KHÔNG sao lưu được, nên KHÔNG đi tiếp vào migration.
-       Đây có thể là sự cố của một CSDL đang có dữ liệu, không phải lần cài đầu.
-       Kiểm tra: docker compose -f docker-compose.yml --profile production ps postgres"
-fi
-
-if ! docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_dump \
-    --clean --if-exists \
-    -U "${POSTGRES_USER:-qlts}" \
-    "${POSTGRES_DB:-qlts_production}" \
-    > "$_BAN_SAO"; then
-    rm -f "$_BAN_SAO"
-    error "pg_dump THẤT BẠI — deploy dừng tại đây, KHÔNG chạy migration khi không có đường lùi."
-fi
-
-# ``>`` tạo tệp kể cả khi pg_dump chết giữa chừng, nên kích thước là phép
-# kiểm cuối trước khi coi bản sao là dùng được.
-if [ ! -s "$_BAN_SAO" ]; then
-    rm -f "$_BAN_SAO"
-    error "Bản sao lưu RỖNG — deploy dừng tại đây, KHÔNG chạy migration khi không có đường lùi."
-fi
-
-log "Database backup saved: pre_deploy_${TIMESTAMP}.sql"
-
-# =============================================================================
-# Step 6: Start infrastructure & run migrations
-# =============================================================================
-log "Step 6/8: Starting infrastructure & running migrations..."
-
-# Start infra services first (always — postgres + redis needed both modes)
-docker compose -f docker-compose.yml --profile production --env-file .env.production up -d postgres redis
-log "Waiting for PostgreSQL to be healthy..."
-sleep 5
-
-if [ "${IS_CUTOVER}" -eq 1 ]; then
-    # Cold cutover: skip auto-alembic. Operator runs ``alembic upgrade head``
-    # manually post-deploy per RUNBOOK §7.2 T+1:30 to stream log per
-    # migration step + checkpoint mid-flow. Auto-rollback path also
-    # disabled here because cutover scenario uses snapshot-restore (not
-    # in-place SQL replay) per RUNBOOK §8.1.
-    cutover "Step 6: SKIP auto-alembic (cutover mode)"
-    cutover "Operator runs manually post-deploy:"
-    cutover "  docker compose -f docker-compose.yml --profile production exec backend alembic upgrade head"
-else
-    # Routine deploy: auto-migrate with built-in rollback on failure.
-    #
-    # ``--entrypoint`` là BẮT BUỘC (vá 13-08-2026): ảnh backend khai
-    # ENTRYPOINT ["/app/docker-entrypoint.sh"], mà ``docker compose run`` chỉ
-    # đè CMD chứ KHÔNG đè ENTRYPOINT. Thiếu nó thì one-off này chạy TRỌN
-    # entrypoint — `alembic upgrade head` + `sync_notification_rules` — rồi
-    # mới chạy tới lệnh mình gọi, tức migrate hai lượt cho một lần deploy.
-    # ``--no-deps`` vì postgres/redis vừa được dựng ngay phía trên.
-    docker compose -f docker-compose.yml --profile production --env-file .env.production \
-        run --rm --no-deps --entrypoint alembic backend upgrade head \
-        && log "Migrations completed successfully" \
-        || {
-            warn "Migration failed! Rolling back..."
-            # Review 2026-07-20: cổng này trước đây NÓI DỐI theo hai cách.
-            #   1. ``[ -f ]`` chỉ hỏi "file có tồn tại", mà Step 5 tạo file
-            #      kể cả khi pg_dump chết ⇒ luôn TRUE ⇒ phát lại 0 byte.
-            #      Nay ``[ -s ]`` đòi file KHÁC RỖNG.
-            #   2. psql không có ``ON_ERROR_STOP=1`` nên chạy tiếp qua mọi
-            #      lỗi rồi thoát 0 ⇒ dòng "Database restored" in ra vô điều
-            #      kiện, kể cả khi không một câu lệnh nào chạy được. Nay
-            #      psql dừng ở lỗi đầu tiên và ta CHỈ báo đã khôi phục khi
-            #      psql thực sự thành công.
-            # Trạng thái tệ nhất (migration hỏng VÀ restore hỏng) giờ được
-            # nói thẳng kèm đường dẫn file, thay vì bị che bằng lời trấn an.
-            #
-            # ⚠️ GIỚI HẠN ĐÃ ĐO (diễn tập 2026-07-20, postgres 16.13):
-            # dump chỉ DROP những object nó BIẾT, tức những gì tồn tại lúc
-            # chụp ở Step 5. Bảng/kiểu do migration hỏng tạo ra SAU đó sẽ
-            # SỐNG SÓT qua restore. Dữ liệu, cột, index và alembic_version
-            # đều về đúng bản cũ (đã kiểm), nhưng "restored" KHÔNG đồng
-            # nghĩa "sạch như chưa từng deploy" — kiểm object thừa bằng
-            # ``\dt`` trước khi deploy lại.
-            if [ -s "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql" ]; then
-                if docker compose -f docker-compose.yml --env-file .env.production exec -T postgres psql \
-                    -v ON_ERROR_STOP=1 \
-                    -U "${POSTGRES_USER:-qlts}" \
-                    "${POSTGRES_DB:-qlts_production}" \
-                    < "$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"; then
-                    error "Migration failed. Database restored from backup."
-                fi
-                error "Migration failed AND restore FAILED. DB có thể đang ở trạng thái LAI (schema nửa cũ nửa mới). KHÔNG deploy tiếp. Khôi phục tay từ: $BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"
-            fi
-            error "Migration failed. No backup available to restore."
-        }
-fi
-
-# =============================================================================
-# Step 7: Pre-deploy checks (Casbin policies)
-# =============================================================================
-log "Step 7/8: Running pre-deploy checks..."
-
-# Vá 13-08-2026: bỏ nhánh ``|| warn``. `pre_deploy_check.py` TỰ phân loại
-# rồi mới chọn mã thoát — thiếu WARNING_POLICIES hay thiếu kế thừa vai trò
-# thì in cảnh báo và vẫn exit 0; chỉ thiếu CRITICAL_POLICIES (hoặc không nối
-# được CSDL) mới exit 1 kèm "CRITICAL: DEPLOY BLOCKED". Nhánh ``|| warn`` cũ
-# đã nuốt đúng cái mã thoát ấy, biến một cổng chặn thành một dòng chữ vàng:
-# script vẫn đi tiếp sang Step 8 và mở traffic vào một hệ thống mà chính nó
-# vừa tuyên bố là UNUSABLE. Nay để mã thoát khác 0 tự chặn deploy
-# (``set -e`` ở đầu tệp).
-# ``--entrypoint python`` — cùng lý do với Step 6, nhưng ở đây hậu quả nặng
-# hơn: bước này chạy TRƯỚC Step 8, tức trước chỗ cold cutover export ba cờ =
-# false. Thiếu override thì ngay cả `COLD_CUTOVER=true` cũng tự migrate + sync
-# tại đây, phá đúng lời hứa "operator chạy tay" mà RUNBOOK §7.2 dựa vào.
-docker compose -f docker-compose.yml --profile production --env-file .env.production \
-    run --rm --no-deps --entrypoint python backend scripts/pre_deploy_check.py
-log "Pre-deploy checks passed"
-
-# =============================================================================
-# Step 8: Rolling restart
-# =============================================================================
-log "Step 8/8: Rolling restart..."
-
-if [ "${IS_CUTOVER}" -eq 1 ]; then
-    # Cold cutover: inject 3 entrypoint gate flags = false so backend
-    # container starts without auto-running migration / sync / Casbin
-    # policy load. Operator runs those steps manually per RUNBOOK §7.2.
-    # Defensive: explicit ``false`` lowercase per docker-entrypoint.sh
-    # parse contract (any other value = run as usual).
-    cutover "Step 8: Backend env: 3 cutover flags = false (operator manual sequence)"
-    export RUN_MIGRATIONS_ON_STARTUP="false"
-    export RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP="false"
-    export RUN_CASBIN_LOAD_ON_STARTUP="false"
-fi
-
-# Start backend + celery (env flags propagate via process env when cutover mode;
-# routine mode = unset → entrypoint defaults to ``true`` = auto-run as before)
-docker compose -f docker-compose.yml --profile production --env-file .env.production up -d \
-    backend celery-worker celery-beat
-
-# =============================================================================
 # CỔNG HEALTH (vá 09-09-2026) — MỘT helper cho cả backend lẫn frontend
 # =============================================================================
+# Dời lên ĐÂY (vá 12-10-2026, đường A): nhánh migration ĐỎ của Step 6 phải
+# chờ backend CŨ healthy sau `docker start`, mà bash chỉ biết một hàm SAU khi
+# đã chạy qua dòng định nghĩa nó — để ở chỗ cũ (sau Step 8) thì nhánh ấy gọi
+# một hàm chưa tồn tại. Thân hàm và phép kiểm `QLTS_HEALTH_TIMEOUT` KHÔNG đổi
+# một ký tự; chỉ đổi CHỖ (nên giá trị hạn sai nay bị chặn sớm hơn, trước pg_dump).
+#
 # Bản cũ có hai vòng lặp chép tay, và cả hai đọc health bằng
 # `docker compose ps <svc> | grep -q "healthy"`. Hai lỗi chồng nhau:
 #
@@ -1248,6 +1093,578 @@ _cho_healthy_dv() {
     done
     error "'$ten' quá hạn ${han}s (status=${tt:-?}, health=${sk:-?}) — KHÔNG deploy tiếp"
 }
+
+# =============================================================================
+# Step 4c: ĐÓNG CỬA GHI — PA1 + PA2 + trap theo pha (vá 12-10-2026, F28/F32)
+# =============================================================================
+# Vì sao: nhánh migration ĐỎ ở Step 6 phát lại bản sao của Step 5 bằng `psql`.
+# Bản sao chỉ chứa những gì đã commit TRƯỚC lúc `pg_dump` bắt đầu. Trước bản
+# vá này `backend`, `celery-worker`, `celery-beat` CŨ chạy suốt Step 5 → 7 và
+# vẫn ghi (người dùng, webhook, `GET /r/{code}`, 27 lịch beat) ⇒ lượt phát lại
+# XOÁ mọi ghi ấy, kể cả request đã nhận 2xx. "Giờ vắng" chỉ giảm xác suất.
+#
+# BẤT BIẾN (PA1 — đây là BẢO ĐẢM): từ trước `pg_dump` tới khi lượt phát lại
+# kết thúc, KHÔNG container nào của ba service ấy chạy. Tự phát lại CHỈ KHI bất
+# biến được ĐO là còn giữ ngay trước khi phát lại (bước (d) ở Step 6): ba
+# container cũ vẫn `exited`, mốc vòng đời (StartedAt|FinishedAt) KHÔNG đổi so
+# với lúc đóng, service không có container nào khác đang chạy, 0 phiên lạ.
+#
+# PA2 (bộ đếm `pg_stat_user_tables` T0/T1) CHỈ là lớp PHÁT HIỆN: hiệu ≠ 0 ⇒
+# chặn; hiệu = 0 KHÔNG kết luận gì. Bộ đếm có thể trễ, đệm, bị đặt lại ⇒ âm
+# tính giả. Nó không bao giờ là lý do để CHO PHÉP phát lại.
+#
+# Phạm vi bảo đảm: ĐÚNG ba container. `psql` tay, cron… KHÔNG bị cửa này đóng;
+# phép đo "0 phiên lạ" chỉ PHÁT HIỆN chúng tại đúng thời điểm đo.
+#
+# Cách đóng / mở — đọc kỹ trước khi "đơn giản hoá":
+#   * `docker stop <CID>` đúng container đã GHI LẠI. Không `compose stop`
+#     (frontend/nginx `depends_on` backend — đừng để Compose suy ra phạm vi),
+#     không `down`/`rm`: mất container CŨ là mất đường mở lại đúng ảnh cũ.
+#   * `restart: unless-stopped` + dừng tay ⇒ dockerd không tự bật lại, kể cả
+#     khi dockerd khởi động lại. Chính sách khác ⇒ DỪNG trước khi chạm gì.
+#   * Nhánh lùi mở lại bằng `docker start <CID cũ>`, KHÔNG `up -d`: `up -d` TẠO
+#     LẠI container bằng ảnh MỚI vừa build ở Step 4, trên lược đồ CŨ vừa phát
+#     lại. Sau khi mở, ĐO lại: CID đang chạy = CID cũ, ảnh = ảnh cũ.
+#
+# Trap theo PHA (`_DCG_PHA`) — chạy ở MỌI lối ra (error/exit) và khi nhận
+# HUP/INT/TERM/PIPE (runner bị `cancel-in-progress` giết, phiên SSH rớt ⇒ lần
+# ghi stdout kế tiếp nhận SIGPIPE):
+#   chua_dong                     → không làm gì (chưa đụng container nào)
+#   dang_dong, da_dong            → CSDL CHƯA bị ghi ⇒ mở lại ĐÚNG container cũ
+#   dang_migrate, dang_phat_lai,
+#   da_migrate                    → lược đồ CHƯA RÕ hoặc đã MỚI ⇒ KHÔNG mở; in
+#                                   trạng thái + việc tay; cửa giữ ĐÓNG
+#   da_phat_lai                   → phát lại ĐẠT (lược đồ CŨ) ⇒ mở lại cũ
+#   dang_mo_lai_cu                → đang mở lại cũ: bị NGẮT thì làm tiếp; lỗi
+#                                   thường (vd backend unhealthy) thì chỉ in
+#   da_mo_lai_cu, buoc8, xong     → không làm gì
+# SIGKILL không có trap: container nằm DỪNG (fail-closed). Pha cuối cùng đọc ở
+# tệp trạng thái `$BACKUP_DIR/deploy_<TIMESTAMP>.trang-thai` (ghi theo từng pha).
+#
+# Chỉ áp ở chế độ ROUTINE. Cold cutover không tự migrate và không tự phát lại
+# (Step 6 bỏ qua), nên không có đường mất ghi này; giữ nguyên hành vi cũ.
+_DCG_PHA="khong_ap_dung"
+_DCG_TIN_HIEU=""
+_DCG_DICH_VU="celery-beat backend celery-worker"      # thứ tự DỪNG
+_DCG_THU_TU_MO="backend celery-worker celery-beat"    # thứ tự MỞ LẠI
+_DCG_TT="$BACKUP_DIR/deploy_${TIMESTAMP}.trang-thai"
+_DCG_DEM_T0="$BACKUP_DIR/deploy_${TIMESTAMP}.dem-T0"
+_DCG_DEM_T1="$BACKUP_DIR/deploy_${TIMESTAMP}.dem-T1"
+_DCG_DEM_T2="$BACKUP_DIR/deploy_${TIMESTAMP}.dem-T2"
+declare -A _DCG_CID=() _DCG_ANH=() _DCG_MOC=() _DCG_IP=()
+
+_DCG_HAN_PHIEN="${QLTS_HAN_PHIEN_LA:-30}"
+case "$_DCG_HAN_PHIEN" in
+    ''|*[!0-9]*) error "QLTS_HAN_PHIEN_LA phải là số nguyên, nhận: '$_DCG_HAN_PHIEN'" ;;
+esac
+if [ "$_DCG_HAN_PHIEN" -lt 1 ] || [ "$_DCG_HAN_PHIEN" -gt 300 ]; then
+    error "QLTS_HAN_PHIEN_LA ngoài khoảng 1..300: '$_DCG_HAN_PHIEN'"
+fi
+
+# Hạn `docker stop -t`: backend > graceful_timeout 30 của gunicorn; worker cho
+# tác vụ đang chạy kết thúc (acks_late — bị giết thì chạy lại sau); beat thoát ngay.
+_dcg_han_dung() {
+    case "$1" in
+        backend)       echo 35 ;;
+        celery-worker) echo 60 ;;
+        *)             echo 10 ;;
+    esac
+}
+
+# Tệp trạng thái — ghi theo từng pha để còn đọc được sau SIGKILL / mất log.
+# Chỉ ghi CID, image ID, tên pha: không dữ liệu hàng, không biến môi trường.
+_dcg_ghi() {
+    printf '%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "${2:-}" >> "$_DCG_TT" 2>/dev/null || true
+}
+_dcg_pha() {
+    [ "$_DCG_PHA" = "khong_ap_dung" ] && return 0
+    _DCG_PHA="$1"
+    _dcg_ghi pha "$1"
+}
+
+# MỘT câu SQL chỉ đọc. `</dev/null`: `exec` của Compose gắn stdin theo mặc
+# định — không được nuốt stdin của tiến trình gọi script.
+_dcg_psql() {
+    $_RA_COMPOSE exec -T postgres psql -X -A -t -q -v ON_ERROR_STOP=1 \
+        -U "${POSTGRES_USER:-qlts}" -d "${POSTGRES_DB:-qlts_production}" \
+        -c "$1" </dev/null
+}
+
+# Phiên của chính lệnh đo bị loại bằng `pg_backend_pid()`. Chỉ in pid/user/
+# application_name/state — KHÔNG in câu truy vấn (có thể chứa PII; log Actions
+# của kho này là CÔNG KHAI).
+_DCG_SQL_PHIEN="SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid()"
+_DCG_SQL_PHIEN_CT="SELECT pid || ' user=' || coalesce(usename, '?') || ' app=' || coalesce(nullif(application_name, ''), '-') || ' state=' || coalesce(state, '?') FROM pg_stat_activity WHERE datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid() ORDER BY pid"
+_DCG_SQL_DEM="SELECT schemaname || '.' || relname || '|' || (n_tup_ins + n_tup_upd + n_tup_del) FROM pg_stat_user_tables ORDER BY 1"
+
+# Mốc vòng đời của MỘT container: Status|StartedAt|FinishedAt. Container bị bật
+# rồi tắt lại giữa chừng vẫn `exited`, nhưng hai mốc thời gian đã đổi.
+_dcg_moc() {
+    docker inspect -f '{{.State.Status}}|{{.State.StartedAt}}|{{.State.FinishedAt}}' "$1"
+}
+_dcg_ip() {
+    docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$1"
+}
+
+# Đo cửa ghi phía CONTAINER. Trả ≠0 kèm lý do; không `error` ở đây — bên gọi
+# quyết định (4c: dừng + mở lại; bước (d): KHÔNG phát lại, KHÔNG mở).
+# Hàm này được gọi trong ngữ cảnh `if`/`||` (set -e TẮT) nên mọi lệnh đều được
+# kiểm tường minh.
+_dcg_cua_dong() {
+    local nhan="$1" s ds m
+    for s in $_DCG_DICH_VU; do
+        if ! ds=$($_RA_COMPOSE ps -q "$s"); then
+            warn "[$nhan] không liệt kê được container ĐANG CHẠY của '$s' — không đo được"
+            return 1
+        fi
+        if [ -n "$ds" ]; then
+            warn "[$nhan] '$s' có container ĐANG CHẠY: ${ds//[[:space:]]/ }"
+            return 1
+        fi
+        if ! m=$(_dcg_moc "${_DCG_CID[$s]}"); then
+            warn "[$nhan] không đọc được trạng thái container cũ của '$s'"
+            return 1
+        fi
+        if [ "${m%%|*}" != "exited" ]; then
+            warn "[$nhan] container cũ của '$s' ở trạng thái '${m%%|*}' (cần exited)"
+            return 1
+        fi
+        if [ "$m" != "${_DCG_MOC[$s]}" ]; then
+            warn "[$nhan] container cũ của '$s' ĐÃ CHẠY LẠI giữa chừng — mốc vòng đời đổi:
+       lúc đóng: ${_DCG_MOC[$s]}
+       bây giờ : $m"
+            return 1
+        fi
+    done
+    log "  ✓ [$nhan] 3 container ghi đều exited, mốc vòng đời không đổi, service không có container nào đang chạy"
+}
+
+# Đo cửa ghi phía CSDL: 0 phiên client nào khác trong CSDL đích. Chờ tối đa
+# QLTS_HAN_PHIEN_LA giây (phiên của container vừa dừng cần một nhịp để rời đi).
+_dcg_phien_la_bang_0() {
+    local nhan="$1" n het
+    het=$((SECONDS + _DCG_HAN_PHIEN))
+    while :; do
+        if ! n=$(_dcg_psql "$_DCG_SQL_PHIEN"); then
+            warn "[$nhan] KHÔNG đo được pg_stat_activity — coi như cửa CHƯA đóng"
+            return 1
+        fi
+        case "$n" in
+            ''|*[!0-9]*) warn "[$nhan] pg_stat_activity trả '$n' (không phải số) — không đo được"; return 1 ;;
+        esac
+        if [ "$n" = "0" ]; then
+            log "  ✓ [$nhan] 0 phiên lạ trên CSDL"
+            return 0
+        fi
+        [ "$SECONDS" -ge "$het" ] && break
+        sleep 1
+    done
+    warn "[$nhan] còn $n phiên lạ trên CSDL sau ${_DCG_HAN_PHIEN}s:"
+    _dcg_psql "$_DCG_SQL_PHIEN_CT" | sed 's/^/       /' || true
+    return 1
+}
+
+# Chụp bộ đếm ghi theo bảng (chỉ TÊN bảng + số đếm). Rỗng/sai dạng ⇒ ≠0.
+_dcg_chup_dem() {
+    local ra
+    ra=$(_dcg_psql "$_DCG_SQL_DEM") || return 1
+    [ -n "$ra" ] || return 1
+    # awk đọc HẾT đầu vào (không thoát sớm như `grep -q`) ⇒ không có SIGPIPE
+    # nào biến pipeline thành "không khớp" dưới `pipefail`.
+    printf '%s\n' "$ra" | awk -F'|' 'NF != 2 || $1 == "" || $2 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }' \
+        || return 1
+    printf '%s\n' "$ra" > "$1" || return 1
+}
+
+# So hai lần chụp. In bảng có hiệu ≠ 0, bảng mới / biến mất. Trả 0 CHỈ khi
+# cùng tập bảng và MỌI hiệu = 0 — mà như thế cũng KHÔNG chứng minh gì (PA2).
+_dcg_so_dem() {
+    awk -F'|' -v nhan="$3" '
+        NR == FNR { a[$1] = $2; next }
+        {
+            seen[$1] = 1
+            if (!($1 in a)) { print "       [" nhan "] bảng MỚI xuất hiện: " $1; bad = 1; next }
+            d = $2 - a[$1]
+            if (d != 0) { print "       [" nhan "] " $1 ": hiệu = " d; bad = 1 }
+        }
+        END {
+            for (k in a) if (!(k in seen)) { print "       [" nhan "] bảng BIẾN MẤT: " k; bad = 1 }
+            exit bad
+        }' "$1" "$2"
+}
+
+# PA2 — lớp PHÁT HIỆN, chạy SAU bước (d), TRƯỚC phát lại.
+_dcg_pa2() {
+    local ok=0
+    log "[PA2] chỉ PHÁT HIỆN: hiệu bộ đếm T1−T0 ≠ 0 ⇒ chặn; = 0 KHÔNG chứng minh '0 mất ghi'"
+    if [ ! -s "$_DCG_DEM_T0" ] || [ ! -s "$_DCG_DEM_T1" ]; then
+        warn "[PA2] thiếu mốc T0/T1 — không đo được ⇒ chặn"
+        return 1
+    fi
+    if ! _dcg_so_dem "$_DCG_DEM_T0" "$_DCG_DEM_T1" "T1-T0"; then
+        warn "[PA2] có dấu hiệu ghi (hoặc bộ đếm bị đặt lại) trong cửa sổ dump ⇒ chặn"
+        ok=1
+    fi
+    if _dcg_chup_dem "$_DCG_DEM_T2"; then
+        log "[PA2] T2−T1 (CHỈ ĐỂ ĐỌC — lẫn ghi của chính migration AUTOCOMMIT):"
+        _dcg_so_dem "$_DCG_DEM_T1" "$_DCG_DEM_T2" "T2-T1" || true
+    else
+        warn "[PA2] không chụp được T2 (chỉ để đọc, không phải cổng)"
+    fi
+    return "$ok"
+}
+
+# Mở lại ĐÚNG container cũ đã ghi ở 4c, rồi ĐO: CID đang chạy = CID cũ, ảnh =
+# ảnh cũ. Không `error` trực tiếp ở đây (trừ `_cho_healthy_dv`, vốn exit) — trap
+# gọi hàm này trong subshell.
+_dcg_mo_lai_cu() {
+    local s live anh st ip
+    for s in $_DCG_THU_TU_MO; do
+        if ! docker start "${_DCG_CID[$s]}" >/dev/null; then
+            warn "docker start container cũ của '$s' THẤT BẠI"
+            return 1
+        fi
+        if [ "$s" = "backend" ]; then
+            _cho_healthy_dv backend "$_HAN_HEALTH"
+        fi
+    done
+    for s in $_DCG_THU_TU_MO; do
+        if ! live=$($_RA_COMPOSE ps -q "$s"); then
+            warn "không liệt kê được container đang chạy của '$s' sau khi mở lại"
+            return 1
+        fi
+        if [ "$live" != "${_DCG_CID[$s]}" ]; then
+            warn "'$s': container đang chạy ($live) KHÁC container cũ (${_DCG_CID[$s]})"
+            return 1
+        fi
+        anh=$(docker inspect -f '{{.Image}}' "$live") || { warn "không đọc được ảnh của '$s'"; return 1; }
+        if [ "$anh" != "${_DCG_ANH[$s]}" ]; then
+            warn "'$s': ảnh đang chạy $anh KHÁC ảnh cũ ${_DCG_ANH[$s]}"
+            return 1
+        fi
+        st=$(docker inspect -f '{{.State.Status}}' "$live") || { warn "không đọc được trạng thái '$s'"; return 1; }
+        if [ "$st" != "running" ]; then
+            warn "'$s' sau khi mở lại ở trạng thái '$st' (cần running)"
+            return 1
+        fi
+    done
+    # `upstream backend { server backend:8000; }` của nginx phân giải tên MỘT lần
+    # lúc nạp cấu hình. IP đổi sau `docker start` ⇒ nginx gọi vào IP chết (502)
+    # tới khi container nginx được dựng/khởi động lại. Chỉ CẢNH BÁO: dựng lại
+    # nginx là việc của `scripts/nginx-apply.sh`, không làm ngầm ở nhánh lùi.
+    ip=$(_dcg_ip "${_DCG_CID[backend]}" 2>/dev/null || true)
+    if [ "$ip" != "${_DCG_IP[backend]}" ]; then
+        warn "IP backend ĐỔI sau khi mở lại (trước='${_DCG_IP[backend]}' sau='$ip') — nginx có thể trả 502 tới khi được dựng lại"
+    fi
+    _dcg_ghi "mo_lai_cu" "dat"
+    log "  ✓ đã mở lại 3 container CŨ — cùng CID, cùng ảnh (đã đo)"
+}
+
+_dcg_huong_dan() {
+    local s
+    warn "[cửa ghi] $1"
+    warn "  pha=$_DCG_PHA · tín hiệu=${_DCG_TIN_HIEU:--} · backend, celery-worker, celery-beat ĐANG DỪNG — CỐ Ý"
+    for s in $_DCG_THU_TU_MO; do
+        warn "  container CŨ '$s': ${_DCG_CID[$s]:-?} · ảnh ${_DCG_ANH[$s]:-?}"
+    done
+    warn "  bản sao trước deploy: ${_BAN_SAO:-CHƯA tạo}"
+    warn "  tệp trạng thái: $_DCG_TT"
+    warn "  Việc tay, theo thứ tự:"
+    warn "   1. Chắc chắn KHÔNG còn migration/phát lại nào chạy, và dọn container one-off còn sót (bị ngắt thì \`--rm\` không kịp dọn — \`_cho_healthy_dv\` sẽ thấy 2 container backend): docker ps -a --filter label=com.docker.compose.oneoff=True"
+    warn "   2. Đọc revision: docker compose -f docker-compose.yml --profile production --env-file .env.production exec -T postgres psql -U ${POSTGRES_USER:-qlts} -d ${POSTGRES_DB:-qlts_production} -Atc 'SELECT version_num FROM alembic_version'"
+    warn "   3. Revision = bản CŨ: mở lại ĐÚNG ảnh cũ bằng docker start (đủ ba CID ở trên, backend trước). KHÔNG dùng up -d — nó dựng ảnh MỚI."
+    warn "   4. Revision LAI/MỚI: quyết định tay — tiến (deploy lại) hoặc phát lại bản sao khi CHẮC không còn ghi nào sau mốc dump."
+}
+
+_dcg_bat_tin_hieu() {
+    _DCG_TIN_HIEU="$1"
+    exit "$2"
+}
+
+_dcg_khi_thoat() {
+    local rc=$?
+    trap - EXIT
+    trap '' HUP INT TERM PIPE
+    set +eu
+    _dcg_ghi "thoat" "rc=$rc tin_hieu=${_DCG_TIN_HIEU:--} pha=$_DCG_PHA"
+    case "$_DCG_PHA" in
+        khong_ap_dung|chua_dong|da_mo_lai_cu|buoc8|xong)
+            : ;;
+        dang_dong|da_dong|da_phat_lai)
+            warn "[cửa ghi] deploy dừng ở pha '$_DCG_PHA' (rc=$rc, tín hiệu=${_DCG_TIN_HIEU:--}) — lược đồ là bản CŨ ⇒ mở lại ĐÚNG container cũ"
+            if ( _dcg_mo_lai_cu ); then
+                warn "[cửa ghi] ĐÃ mở lại container CŨ (cùng CID, cùng ảnh — đã đo). Deploy KHÔNG thành công."
+            else
+                _dcg_ghi "mo_lai_cu" "KHONG_DAT"
+                _dcg_huong_dan "mở lại container cũ KHÔNG đạt"
+            fi ;;
+        dang_mo_lai_cu)
+            if [ -n "$_DCG_TIN_HIEU" ] && ( _dcg_mo_lai_cu ); then
+                warn "[cửa ghi] bị ngắt khi đang mở lại — ĐÃ mở lại xong container CŨ."
+            else
+                _dcg_huong_dan "mở lại container cũ sau phát lại KHÔNG đạt — CSDL đã về bản sao (lược đồ CŨ)"
+            fi ;;
+        *)
+            _dcg_huong_dan "lược đồ CHƯA RÕ hoặc đã MỚI — KHÔNG tự mở ứng dụng, cửa ghi giữ ĐÓNG" ;;
+    esac
+    exit "$rc"
+}
+
+if [ "${IS_CUTOVER}" -eq 1 ]; then
+    cutover "Step 4c: KHÔNG đóng cửa ghi (cutover không tự migrate, không tự phát lại)"
+else
+    log "Step 4c/8: Đóng cửa ghi (backend, celery-worker, celery-beat) trước pg_dump..."
+    mkdir -p "$BACKUP_DIR"
+    _DCG_PHA="chua_dong"
+    _dcg_ghi pha chua_dong
+    trap '_dcg_bat_tin_hieu HUP 129' HUP
+    trap '_dcg_bat_tin_hieu INT 130' INT
+    trap '_dcg_bat_tin_hieu TERM 143' TERM
+    trap '_dcg_bat_tin_hieu PIPE 141' PIPE
+    trap '_dcg_khi_thoat' EXIT
+
+    # --- Ghi lại container CŨ: đúng MỘT container đang chạy mỗi service -------
+    # Cùng hợp đồng với Step 3b (`ps -q` = container ĐANG chạy, ID đủ 64 hex).
+    # Trước lệnh `stop` đầu tiên ⇒ mọi `error` ở đây để nguyên hiện trạng.
+    for _S in $_DCG_DICH_VU; do
+        _DS=$($_RA_COMPOSE ps -q "$_S") || error "[4c] không liệt kê được container của '$_S' — chưa đụng gì, DỪNG."
+        _SO=$(printf '%s\n' "$_DS" | grep -c '[^[:space:]]' || true)
+        [ "$_SO" -eq 1 ] || error "[4c] '$_S' có $_SO container ĐANG CHẠY (cần đúng 1). Chưa đụng gì, DỪNG.
+       PA1 phải biết CHÍNH XÁC container cũ để mở lại đúng ảnh cũ khi cần."
+        _CID=${_DS//[[:space:]]/}
+        case "$_CID" in *[!0-9a-f]*) error "[4c] CID của '$_S' có ký tự lạ: '$_CID'" ;; esac
+        [ "${#_CID}" -eq 64 ] || error "[4c] CID của '$_S' dài ${#_CID} (cần 64 hex)"
+        _ANH=$(docker inspect -f '{{.Image}}' "$_CID") || error "[4c] không đọc được ảnh của '$_S'"
+        case "$_ANH" in sha256:*) : ;; *) error "[4c] ảnh của '$_S' không hợp lệ: '$_ANH'" ;; esac
+        _CS=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$_CID") || error "[4c] không đọc được restart policy của '$_S'"
+        case "$_CS" in
+            unless-stopped|no) : ;;
+            *) error "[4c] '$_S' có restart policy '$_CS' — chỉ nhận 'unless-stopped' hoặc 'no'.
+       Chính sách khác có thể làm dockerd TỰ BẬT LẠI container giữa cửa sổ dump → phát lại." ;;
+        esac
+        _DCG_CID[$_S]=$_CID
+        _DCG_ANH[$_S]=$_ANH
+        _dcg_ghi "cu" "$_S $_CID $_ANH restart=$_CS"
+    done
+    _DCG_IP[backend]=$(_dcg_ip "${_DCG_CID[backend]}") || error "[4c] không đọc được IP của backend"
+
+    # --- Dừng ---------------------------------------------------------------
+    _dcg_pha dang_dong
+    for _S in $_DCG_DICH_VU; do
+        log "  dừng '$_S' (docker stop -t $(_dcg_han_dung "$_S"))..."
+        docker stop -t "$(_dcg_han_dung "$_S")" "${_DCG_CID[$_S]}" >/dev/null \
+            || error "[4c] docker stop '$_S' THẤT BẠI"
+    done
+    for _S in $_DCG_DICH_VU; do
+        _DCG_MOC[$_S]=$(_dcg_moc "${_DCG_CID[$_S]}") || error "[4c] không đọc được mốc vòng đời của '$_S'"
+        _dcg_ghi "moc" "$_S ${_DCG_MOC[$_S]}"
+    done
+
+    # --- Đo cửa đã đóng (container + CSDL) rồi chụp T0 cho PA2 --------------
+    _dcg_cua_dong "4c" || error "[4c] cửa ghi CHƯA đóng (phía container) — DỪNG trước pg_dump. CSDL chưa bị chạm."
+    _dcg_phien_la_bang_0 "4c" || error "[4c] cửa ghi CHƯA đóng (còn phiên lạ trên CSDL) — DỪNG trước pg_dump. CSDL chưa bị chạm."
+    _dcg_chup_dem "$_DCG_DEM_T0" || error "[4c] không chụp được bộ đếm T0 (PA2) — DỪNG trước pg_dump. CSDL chưa bị chạm."
+    _dcg_pha da_dong
+    log "  ✓ cửa ghi ĐÓNG — giữ đóng xuyên suốt dump → migrate → (nếu đỏ) phát lại"
+fi
+
+# =============================================================================
+# Step 5: Database backup (before migration)
+# =============================================================================
+log "Step 5/8: Backing up database..."
+mkdir -p "$BACKUP_DIR"
+
+# Review 2026-07-20: ba sửa đổi, cùng một gốc — bản backup này là đường
+# rollback DUY NHẤT của Step 6 nên nó phải hoặc dùng được, hoặc biến mất
+# hẳn; tuyệt đối không được tồn tại ở dạng "có file nhưng vô dụng".
+#   1. Bỏ ``2>/dev/null``: trước đây lý do pg_dump chết bị nuốt sạch, vận
+#      hành chỉ thấy "may be first deploy" — câu chẩn đoán sai hướng.
+#   2. ``--clean --if-exists``: dump cũ KHÔNG có DROP nên khi Step 6 phát
+#      lại lên DB còn nguyên object thì mọi câu lệnh lỗi "already exists".
+#      Tức đường rollback trước đây KHÔNG THỂ khôi phục kể cả với file dump
+#      hoàn hảo. Có DROP thì replay mới thực sự đưa DB về trạng thái cũ.
+#   3. Xoá xác file khi dump fail: phép chuyển hướng ``>`` tạo file NGAY CẢ
+#      khi pg_dump chết, để lại file 0 byte. Cổng ``[ -s ]`` ở Step 6 đã
+#      chặn được, nhưng dọn luôn cho khỏi ai nhặt nhầm sau này.
+#   4. Vá 13-08-2026 — FAIL-CLOSED. Ba nhánh dưới đây trước đây đều chỉ
+#      ``warn`` rồi để script đi tiếp vào Step 6, tức deploy vẫn chạy
+#      migration khi KHÔNG có đường lùi. Nay cả ba đều ``error``.
+#      Riêng nhánh "PostgreSQL không sẵn sàng" trước đây đoán là "first
+#      deploy?" — một suy đoán nguy hiểm: nó không phân biệt nổi máy trắng
+#      với **sự cố của một CSDL đang có dữ liệu**, mà ca thứ hai thì đi
+#      tiếp là hỏng nặng. Bootstrap máy trắng, nếu cần, phải là một mode
+#      RIÊNG (``INITIAL_DEPLOY=true``) có guard chứng minh chưa hề có
+#      DB/volume — cố tình KHÔNG mở lối bỏ backup chung ở đây.
+_BAN_SAO="$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"
+if ! docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_isready -U "${POSTGRES_USER:-qlts}" >/dev/null 2>&1; then
+    error "PostgreSQL không sẵn sàng — KHÔNG sao lưu được, nên KHÔNG đi tiếp vào migration.
+       Đây có thể là sự cố của một CSDL đang có dữ liệu, không phải lần cài đầu.
+       Kiểm tra: docker compose -f docker-compose.yml --profile production ps postgres"
+fi
+
+if ! docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_dump \
+    --clean --if-exists \
+    -U "${POSTGRES_USER:-qlts}" \
+    "${POSTGRES_DB:-qlts_production}" \
+    > "$_BAN_SAO"; then
+    rm -f "$_BAN_SAO"
+    error "pg_dump THẤT BẠI — deploy dừng tại đây, KHÔNG chạy migration khi không có đường lùi."
+fi
+
+# ``>`` tạo tệp kể cả khi pg_dump chết giữa chừng, nên kích thước là phép
+# kiểm cuối trước khi coi bản sao là dùng được.
+if [ ! -s "$_BAN_SAO" ]; then
+    rm -f "$_BAN_SAO"
+    error "Bản sao lưu RỖNG — deploy dừng tại đây, KHÔNG chạy migration khi không có đường lùi."
+fi
+
+log "Database backup saved: pre_deploy_${TIMESTAMP}.sql"
+
+# =============================================================================
+# Step 6: Start infrastructure & run migrations
+# =============================================================================
+log "Step 6/8: Starting infrastructure & running migrations..."
+
+# Start infra services first (always — postgres + redis needed both modes)
+docker compose -f docker-compose.yml --profile production --env-file .env.production up -d postgres redis
+log "Waiting for PostgreSQL to be healthy..."
+sleep 5
+
+if [ "${IS_CUTOVER}" -eq 1 ]; then
+    # Cold cutover: skip auto-alembic. Operator runs ``alembic upgrade head``
+    # manually post-deploy per RUNBOOK §7.2 T+1:30 to stream log per
+    # migration step + checkpoint mid-flow. Auto-rollback path also
+    # disabled here because cutover scenario uses snapshot-restore (not
+    # in-place SQL replay) per RUNBOOK §8.1.
+    cutover "Step 6: SKIP auto-alembic (cutover mode)"
+    cutover "Operator runs manually post-deploy:"
+    cutover "  docker compose -f docker-compose.yml --profile production exec backend alembic upgrade head"
+else
+    # Routine deploy: auto-migrate with built-in rollback on failure.
+    #
+    # ``--entrypoint`` là BẮT BUỘC (vá 13-08-2026): ảnh backend khai
+    # ENTRYPOINT ["/app/docker-entrypoint.sh"], mà ``docker compose run`` chỉ
+    # đè CMD chứ KHÔNG đè ENTRYPOINT. Thiếu nó thì one-off này chạy TRỌN
+    # entrypoint — `alembic upgrade head` + `sync_notification_rules` — rồi
+    # mới chạy tới lệnh mình gọi, tức migrate hai lượt cho một lần deploy.
+    # ``--no-deps`` vì postgres/redis vừa được dựng ngay phía trên.
+    #
+    # Vá 12-10-2026 (đường A): mốc T1 của PA2 chụp NGAY TRƯỚC migration — cửa
+    # ghi đã đóng từ Step 4c và vẫn đóng ở đây. Không chụp được ⇒ dừng TRƯỚC khi
+    # chạm lược đồ (pha `da_dong` ⇒ trap mở lại đúng container cũ).
+    _dcg_chup_dem "$_DCG_DEM_T1" \
+        || error "[PA2] không chụp được bộ đếm T1 — DỪNG trước migration. CSDL chưa bị ghi."
+    _dcg_pha dang_migrate
+    if docker compose -f docker-compose.yml --profile production --env-file .env.production \
+        run --rm --no-deps --entrypoint alembic backend upgrade head; then
+        _dcg_pha da_migrate
+        log "Migrations completed successfully"
+    else
+        _RC_MIG=$?
+        warn "Migration failed (rc=$_RC_MIG)! Rolling back — đo cửa ghi TRƯỚC khi phát lại..."
+        # Review 2026-07-20: cổng này trước đây NÓI DỐI theo hai cách.
+        #   1. ``[ -f ]`` chỉ hỏi "file có tồn tại", mà Step 5 tạo file
+        #      kể cả khi pg_dump chết ⇒ luôn TRUE ⇒ phát lại 0 byte.
+        #      Nay ``[ -s ]`` đòi file KHÁC RỖNG.
+        #   2. psql không có ``ON_ERROR_STOP=1`` nên chạy tiếp qua mọi
+        #      lỗi rồi thoát 0 ⇒ dòng "Database restored" in ra vô điều
+        #      kiện, kể cả khi không một câu lệnh nào chạy được. Nay
+        #      psql dừng ở lỗi đầu tiên và ta CHỈ báo đã khôi phục khi
+        #      psql thực sự thành công.
+        # Trạng thái tệ nhất (migration hỏng VÀ restore hỏng) giờ được
+        # nói thẳng kèm đường dẫn file, thay vì bị che bằng lời trấn an.
+        #
+        # ⚠️ GIỚI HẠN ĐÃ ĐO (diễn tập 2026-07-20, postgres 16.13):
+        # dump chỉ DROP những object nó BIẾT, tức những gì tồn tại lúc
+        # chụp ở Step 5. Bảng/kiểu do migration hỏng tạo ra SAU đó sẽ
+        # SỐNG SÓT qua restore. Dữ liệu, cột, index và alembic_version
+        # đều về đúng bản cũ (đã kiểm), nhưng "restored" KHÔNG đồng
+        # nghĩa "sạch như chưa từng deploy" — kiểm object thừa bằng
+        # ``\dt`` trước khi deploy lại.
+        #
+        # Vá 12-10-2026 (đường A, F28/F32) — thứ tự BẮT BUỘC: (d) → PA2 → phát
+        # lại → `docker start` container CŨ → đo CID/ảnh. (d) hay PA2 không đạt
+        # ⇒ `error` ở pha `dang_migrate` ⇒ trap KHÔNG mở ứng dụng: lược đồ lúc
+        # này có thể LAI (alembic chạy AUTOCOMMIT), cửa ghi giữ ĐÓNG tới khi
+        # người vận hành quyết định. Nếu (d) đỏ vì một container ĐÃ chạy lại thì
+        # script KHÔNG dừng nó hộ — thông điệp nói rõ để xử lý tay.
+        if [ ! -s "$_BAN_SAO" ]; then
+            error "Migration failed. No backup available to restore."
+        fi
+        # (d) — ĐIỀU KIỆN để tự phát lại: bất biến PA1 còn giữ, ĐO ngay lúc này.
+        if ! _dcg_cua_dong "d" || ! _dcg_phien_la_bang_0 "d"; then
+            error "Migration failed. Bước (d) KHÔNG ĐẠT — cửa ghi KHÔNG còn được chứng minh là đóng ⇒ KHÔNG phát lại, KHÔNG mở ứng dụng. Xem các dòng [d] phía trên."
+        fi
+        # PA2 — lớp PHÁT HIỆN. Đạt KHÔNG phải bằng chứng "0 mất ghi".
+        if ! _dcg_pa2; then
+            error "Migration failed. PA2 phát hiện dấu hiệu ghi trong cửa sổ dump (hoặc không đo được) ⇒ KHÔNG phát lại, KHÔNG mở ứng dụng. Số PA2 thấy chỉ là CẬN DƯỚI."
+        fi
+        _dcg_pha dang_phat_lai
+        if ! docker compose -f docker-compose.yml --env-file .env.production exec -T postgres psql \
+            -v ON_ERROR_STOP=1 \
+            -U "${POSTGRES_USER:-qlts}" \
+            "${POSTGRES_DB:-qlts_production}" \
+            < "$_BAN_SAO"; then
+            error "Migration failed AND restore FAILED. DB có thể đang ở trạng thái LAI (schema nửa cũ nửa mới). KHÔNG deploy tiếp. Khôi phục tay từ: $_BAN_SAO"
+        fi
+        _dcg_pha da_phat_lai
+        log "Database restored from backup — mở lại ĐÚNG container cũ (docker start, KHÔNG up -d)..."
+        _dcg_pha dang_mo_lai_cu
+        _dcg_mo_lai_cu \
+            || error "Migration failed. Database restored from backup, NHƯNG mở lại container cũ KHÔNG đạt — xem các dòng phía trên."
+        _dcg_pha da_mo_lai_cu
+        error "Migration failed. Database restored from backup. Ứng dụng CŨ đã chạy lại (cùng container, cùng ảnh — đã đo). Deploy DỪNG."
+    fi
+fi
+
+# =============================================================================
+# Step 7: Pre-deploy checks (Casbin policies)
+# =============================================================================
+log "Step 7/8: Running pre-deploy checks..."
+
+# Vá 13-08-2026: bỏ nhánh ``|| warn``. `pre_deploy_check.py` TỰ phân loại
+# rồi mới chọn mã thoát — thiếu WARNING_POLICIES hay thiếu kế thừa vai trò
+# thì in cảnh báo và vẫn exit 0; chỉ thiếu CRITICAL_POLICIES (hoặc không nối
+# được CSDL) mới exit 1 kèm "CRITICAL: DEPLOY BLOCKED". Nhánh ``|| warn`` cũ
+# đã nuốt đúng cái mã thoát ấy, biến một cổng chặn thành một dòng chữ vàng:
+# script vẫn đi tiếp sang Step 8 và mở traffic vào một hệ thống mà chính nó
+# vừa tuyên bố là UNUSABLE. Nay để mã thoát khác 0 tự chặn deploy
+# (``set -e`` ở đầu tệp).
+# ``--entrypoint python`` — cùng lý do với Step 6, nhưng ở đây hậu quả nặng
+# hơn: bước này chạy TRƯỚC Step 8, tức trước chỗ cold cutover export ba cờ =
+# false. Thiếu override thì ngay cả `COLD_CUTOVER=true` cũng tự migrate + sync
+# tại đây, phá đúng lời hứa "operator chạy tay" mà RUNBOOK §7.2 dựa vào.
+docker compose -f docker-compose.yml --profile production --env-file .env.production \
+    run --rm --no-deps --entrypoint python backend scripts/pre_deploy_check.py
+log "Pre-deploy checks passed"
+
+# =============================================================================
+# Step 8: Rolling restart
+# =============================================================================
+log "Step 8/8: Rolling restart..."
+
+if [ "${IS_CUTOVER}" -eq 1 ]; then
+    # Cold cutover: inject 3 entrypoint gate flags = false so backend
+    # container starts without auto-running migration / sync / Casbin
+    # policy load. Operator runs those steps manually per RUNBOOK §7.2.
+    # Defensive: explicit ``false`` lowercase per docker-entrypoint.sh
+    # parse contract (any other value = run as usual).
+    cutover "Step 8: Backend env: 3 cutover flags = false (operator manual sequence)"
+    export RUN_MIGRATIONS_ON_STARTUP="false"
+    export RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP="false"
+    export RUN_CASBIN_LOAD_ON_STARTUP="false"
+fi
+
+# Từ dòng dưới, container CŨ bị thay bằng container ảnh MỚI ⇒ trap không còn
+# gì để mở lại (pha `buoc8`). No-op ở cold cutover.
+_dcg_pha buoc8
+# Start backend + celery (env flags propagate via process env when cutover mode;
+# routine mode = unset → entrypoint defaults to ``true`` = auto-run as before)
+docker compose -f docker-compose.yml --profile production --env-file .env.production up -d \
+    backend celery-worker celery-beat
+
+# CỔNG HEALTH (`_HAN_HEALTH` + `_cho_healthy_dv`) nay được định nghĩa TRƯỚC
+# Step 4c — nhánh lùi của Step 6 cần nó (vá 12-10-2026). Thân hàm không đổi.
 
 log "Waiting for backend to be healthy..."
 _cho_healthy_dv backend "$_HAN_HEALTH"
@@ -1403,6 +1820,8 @@ _RA_MK_HASH2=$(sha256sum "$_RA_MARKER" | awk '{print $1}')
 _ra_kiem_schema_marker "$_RA_MARKER"
 _ra_kiem_marker_vs_live "sau-mv" "$_RA_MARKER"
 log "  ✓ marker: $_RA_MARKER (sha=$_RA_SHA_MOI, $_RA_SO_DICH_VU/$_RA_SO_DICH_VU ảnh, hash=${_RA_MK_HASH:0:16}…)"
+
+_dcg_pha xong
 
 # =============================================================================
 # Done

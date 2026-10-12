@@ -241,6 +241,112 @@ def test_model_compose_that_giu_celery_false_du_bien_host_dat_true(
 # =============================================================================
 # F7 + F8 — chạy THẬT scripts/deploy.sh với docker/git giả
 # =============================================================================
+# Mô hình CỬA GHI (Step 4c, vá 12-10-2026 — đường A). MỘT nguồn cho CẢ HAI stub
+# `docker` (tệp này và `test_deploy_ghim_sha.py`): chèn vào chỗ đặt dấu
+# `# @MO_HINH_CUA_GHI@`, TRƯỚC giao thức sẵn có của từng stub.
+#
+# Trạng thái ba container ghi đọc từ NHẬT KÝ LỆNH, không từ biến: `docker stop
+# <CID>` ⇒ exited; `docker start <CID>` hoặc `up -d backend celery-worker
+# celery-beat` (Step 8) ⇒ running. Nhờ vậy mọi phép đo của 4c / bước (d) / nhánh
+# lùi hỏi đúng HẬU QUẢ của lệnh script vừa chạy, không hỏi một hằng.
+#
+# Biến của SÂN KHẤU (không phải bypass trong script production):
+#   STUB_HOI_SINH=chay|dung_lai   — một tác nhân NGOÀI deploy.sh bật backend cũ
+#                                   lên (chay) hoặc bật rồi tắt lại (dung_lai)
+#                                   trong lúc migrate; dòng nhật ký mang đuôi
+#                                   `# tac-nhan-ngoai`.
+#   STUB_TIN_HIEU_O_MIGRATE / _O_DUMP=<TÊN TÍN HIỆU> — gửi tín hiệu cho CHÍNH
+#                                   bash đang chạy deploy.sh ($PPID) đúng lúc ấy.
+#   STUB_PHIEN_LA, STUB_PHIEN_LA_SAU_MIGRATE, STUB_PSQL_RC — pg_stat_activity.
+#   STUB_DEM_RC, STUB_DEM_T1_LECH — bộ đếm pg_stat_user_tables (PA2).
+#   STUB_RESTART_POLICY, STUB_STOP_RC, STUB_START_RC.
+_MANH_STUB_CUA_GHI = r"""# --- mô hình cửa ghi (chèn từ test_deploy_startup_gates._MANH_STUB_CUA_GHI) ---
+_da_dung() {
+    awk -v c="$1" '
+        index($0, "docker stop ") == 1 && index($0, c) { st = 1 }
+        index($0, "docker start ") == 1 && index($0, c) { st = 0 }
+        index($0, "up -d backend celery-worker celery-beat") { st = 0 }
+        END { exit (st ? 0 : 1) }' "$QLTS_STUB_LOG"
+}
+_dem_lenh() { grep -c "^docker $1 .*$2" "$QLTS_STUB_LOG" || true; }
+case "$_tat_ca" in
+    "stop "*)
+        exit "${STUB_STOP_RC:-0}" ;;
+    "start "*)
+        exit "${STUB_START_RC:-0}" ;;
+    *" upgrade head"*)
+        case "${STUB_HOI_SINH:-}" in
+            chay)
+                echo "docker start $(_cid_gia backend) # tac-nhan-ngoai" >> "$QLTS_STUB_LOG" ;;
+            dung_lai)
+                echo "docker start $(_cid_gia backend) # tac-nhan-ngoai" >> "$QLTS_STUB_LOG"
+                echo "docker stop $(_cid_gia backend) # tac-nhan-ngoai" >> "$QLTS_STUB_LOG" ;;
+        esac
+        if [ -n "${STUB_TIN_HIEU_O_MIGRATE:-}" ]; then
+            kill -s "$STUB_TIN_HIEU_O_MIGRATE" "$PPID"; sleep 1
+        fi
+        exit "${STUB_ALEMBIC_RC:-0}" ;;
+    *pg_dump*)
+        # KHÔNG exit: gửi tín hiệu rồi rơi xuống giao thức pg_dump sẵn có.
+        if [ -n "${STUB_TIN_HIEU_O_DUMP:-}" ]; then
+            kill -s "$STUB_TIN_HIEU_O_DUMP" "$PPID"; sleep 1
+        fi ;;
+    *pg_stat_activity*)
+        if [ "${STUB_PSQL_RC:-0}" != "0" ]; then exit "$STUB_PSQL_RC"; fi
+        _n="${STUB_PHIEN_LA:-0}"
+        if [ -n "${STUB_PHIEN_LA_SAU_MIGRATE:-}" ] && grep -q ' upgrade head' "$QLTS_STUB_LOG"; then
+            _n="$STUB_PHIEN_LA_SAU_MIGRATE"
+        fi
+        case "$_tat_ca" in
+            *"count(*)"*) echo "$_n" ;;
+            *) [ "$_n" = "0" ] || echo "4242 user=gia app=psql-tay state=idle" ;;
+        esac
+        exit 0 ;;
+    *pg_stat_user_tables*)
+        if [ "${STUB_DEM_RC:-0}" != "0" ]; then exit "$STUB_DEM_RC"; fi
+        _d=10
+        if [ "${STUB_DEM_T1_LECH:-0}" = "1" ] && grep -q 'up -d postgres redis' "$QLTS_STUB_LOG"; then
+            _d=11
+        fi
+        printf 'public.ghi_thu|%s\npublic.nhip|7\n' "$_d"
+        exit 0 ;;
+    inspect*".HostConfig.RestartPolicy.Name"*)
+        echo "${STUB_RESTART_POLICY:-unless-stopped}"
+        exit 0 ;;
+    inspect*".NetworkSettings.Networks"*)
+        echo "172.30.0.2 "
+        exit 0 ;;
+    inspect*".State.StartedAt"*)
+        for _s in backend celery-worker celery-beat; do
+            _c=$(_cid_gia "$_s")
+            case "$_tat_ca" in
+                *"$_c"*)
+                    if _da_dung "$_c"; then _tt=exited; else _tt=running; fi
+                    echo "$_tt|S$(_dem_lenh start "$_c")|F$(_dem_lenh stop "$_c")"
+                    exit 0 ;;
+            esac
+        done
+        echo "STUB: mốc vòng đời cho container lạ: $_tat_ca" >&2
+        exit 94 ;;
+    inspect*".State.Status"*)
+        # Container ĐÃ DỪNG trả `exited`; còn lại rơi xuống giao thức sẵn có
+        # (STUB_STATUS_* của cổng health).
+        for _s in backend celery-worker celery-beat; do
+            _c=$(_cid_gia "$_s")
+            case "$_tat_ca" in
+                *"$_c"*) if _da_dung "$_c"; then echo exited; exit 0; fi ;;
+            esac
+        done ;;
+    *" ps -q "*)
+        # `ps -q` chỉ liệt kê container ĐANG CHẠY: đã dừng ⇒ rỗng, exit 0.
+        for _s in backend celery-worker celery-beat; do
+            case "$_tat_ca" in
+                *" ps -q $_s") if _da_dung "$(_cid_gia "$_s")"; then exit 0; fi ;;
+            esac
+        done ;;
+esac
+"""
+
 _STUB_DOCKER = r"""#!/usr/bin/env bash
 # `docker` giả: ghi lại mọi lệnh rồi trả mã thoát theo kịch bản của test.
 echo "docker $*" >> "$QLTS_STUB_LOG"
@@ -290,6 +396,7 @@ case "$_tat_ca" in
         ;;
 esac
 
+# @MO_HINH_CUA_GHI@
 case "$_tat_ca" in
     *compose*" config "*)
         # `_ra_dan_xuat_dich_vu` hỏi MODEL Compose để dẫn xuất danh sách service
@@ -330,11 +437,15 @@ __QLTS_JSON__
                     # Kịch bản "thiếu một container": trả RỖNG đúng như compose
                     # khi service không chạy (và vẫn exit 0 — đó mới là cái bẫy).
                     if [ "${STUB_PS_Q_THIEU:-}" = "$_sv" ]; then exit 0; fi
-                    # Biến thể theo GIAI ĐOẠN: chỉ hỏng SAU khi đã build, tức
-                    # ở Step 8c. Không có nó thì Step 3b đỏ trước và nhánh lỗi
-                    # của 8c không bao giờ được thi hành.
+                    # Biến thể theo GIAI ĐOẠN: chỉ hỏng ở Step 8c. Không có nó
+                    # thì Step 3b đỏ trước và nhánh lỗi của 8c không bao giờ
+                    # được thi hành.
+                    # Mốc là lệnh DỰNG container mới của Step 8, KHÔNG phải
+                    # `build --parallel`: từ vá 12-10-2026 Step 4c (sau build)
+                    # cũng đọc `ps -q` của celery-*/backend, nên mốc "sau build"
+                    # làm ca 8c đỏ ở 4c — xanh vì lý do khác.
                     if [ "${STUB_PS_Q_THIEU_SAU_BUILD:-}" = "$_sv" ] \
-                       && grep -q 'build --parallel' "$QLTS_STUB_LOG"; then exit 0; fi
+                       && grep -q 'up -d backend celery-worker celery-beat' "$QLTS_STUB_LOG"; then exit 0; fi
                     _cid_gia "$_sv"; exit 0 ;;
             esac
         done
@@ -464,6 +575,8 @@ __QLTS_JSON__
         ;;
 esac
 """
+assert _STUB_DOCKER.count("# @MO_HINH_CUA_GHI@\n") == 1, "stub docker mất dấu chèn mô hình cửa ghi"
+_STUB_DOCKER = _STUB_DOCKER.replace("# @MO_HINH_CUA_GHI@\n", _MANH_STUB_CUA_GHI, 1)
 
 _STUB_GIT = r"""#!/usr/bin/env bash
 case "$1" in
@@ -2051,6 +2164,10 @@ def test_ra_loi_o_step_8c_giu_marker_cu_nguyen_ven(
     ket, nhat_ky = _chay_deploy(goc, **kich_ban)
 
     assert _MOC_BUILD in nhat_ky, f"{ten_ca}: chưa tới build ⇒ chưa chạm được 8c"
+    # Từ Step 4c (vá 12-10-2026) "đã build" KHÔNG còn đồng nghĩa "tới được 8c":
+    # 4c cũng đọc `ps -q`. Đòi thấy lệnh dựng container của Step 8 để ca này
+    # không xanh vì đỏ ở một bước khác.
+    assert _MOC_STEP8 in nhat_ky, f"{ten_ca}: chưa tới Step 8 ⇒ chưa chạm được 8c:\n{nhat_ky}"
     assert ket.returncode != 0, f"{ten_ca}: lỗi ở 8c mà deploy vẫn thoát 0"
 
     sau = (goc / "ops" / "last-deploy.marker").read_bytes()
