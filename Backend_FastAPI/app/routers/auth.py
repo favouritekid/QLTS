@@ -30,6 +30,7 @@ from ..utils.exceptions import (  # ✅ PHASE 1: Import custom exceptions
     InvalidCredentials,
     RefreshStateUnavailable,
     SessionRevocationError,
+    SessionRevokedError,
     UserServiceError,
 )
 from ..middleware.csrf import set_csrf_cookie  # ✅ CSRF Protection
@@ -1673,11 +1674,18 @@ async def mfa_enable(
     enable_data: schemas.MfaEnableRequest,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = Depends(deps.get_current_user),
-    refresh_token_cookie: str = Cookie(None, alias="refresh_token"),
+    current_session: Optional[models.UserSession] = Depends(deps.get_current_session),
 ):
     """
     Enable MFA after verifying TOTP code from authenticator app.
     Returns one-time backup codes. Revokes all other sessions.
+
+    The session to keep is ``deps.get_current_session`` (the live session of the
+    validated access token), never the refresh cookie. Not resolvable ⇒ 401
+    ``SESSION_REVOKED`` BEFORE any DB/Redis change: ``enable_mfa`` with no session
+    to keep would turn MFA on and delete the setup secret while revoking NOTHING
+    (its ``current_session_id=None`` branch skips revocation), leaving every
+    pre-MFA session alive (owner contract 12-10).
     """
     from ..services import mfa_service
 
@@ -1687,28 +1695,19 @@ async def mfa_enable(
             detail="MFA is already enabled.",
         )
 
-    # Get current session ID to preserve it during session revocation
-    current_session_id = None
-    if refresh_token_cookie:
-        try:
-            payload = security.decode_token(refresh_token_cookie)
-            current_refresh_jti = payload.get("jti")
-            if current_refresh_jti:
-                from ..repositories.session_repository import SessionRepository
-                session_repo = SessionRepository(db)
-                session_record = await session_repo.get_by_refresh_jti_and_user(
-                    current_refresh_jti, current_user.id
-                )
-                if session_record:
-                    current_session_id = session_record.id
-        except Exception:
-            pass  # Continue without preserving current session
+    if current_session is None:
+        log.warning(
+            "mfa-enable: current session not resolved; refused (401), nothing changed",
+            user_id=current_user.id,
+            action="mfa.enable_current_unresolved",
+        )
+        raise SessionRevokedError()
 
     backup_codes, callback = await mfa_service.enable_mfa(
         db=db,
         user=current_user,
         code=enable_data.code,
-        current_session_id=current_session_id,
+        current_session_id=current_session.id,
     )
 
     await db.commit()

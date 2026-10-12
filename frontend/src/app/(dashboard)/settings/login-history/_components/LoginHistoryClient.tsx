@@ -35,6 +35,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/common/EmptyState";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import { api } from "@/lib/api/client";
+import { secureAccountOutcome } from "@/lib/auth/secure-account-outcome";
 import type {
   LoginHistoryItem,
   LoginHistoryResponse,
@@ -287,12 +288,18 @@ export function LoginHistoryClient() {
   const secureMutation = useMutation({
     mutationFn: secureAccount,
     onSuccess: (response) => {
+      const outcome = secureAccountOutcome(response);
+      setSecureDialogOpen(false);
+      setSuccessMessage(outcome.message);
+      const next = outcome.next;
+      if (next.kind === "relogin") {
+        // Mọi phiên (kể cả phiên này) đã bị thu hồi, cookie đã xoá: KHÔNG refetch
+        // (chỉ ra 401), tải trang đầy đủ tới login để dọn state client.
+        setTimeout(() => window.location.assign(next.url), 2000);
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ["loginHistory"] });
       queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
-      setSecureDialogOpen(false);
-      setSuccessMessage(
-        `Tài khoản đã được bảo mật. ${response.sessions_revoked} phiên đăng nhập đã bị thu hồi. Đang chuyển đến trang đổi mật khẩu...`
-      );
       // R1+R2: Redirect to settings page after 2 seconds (user should change password)
       setTimeout(() => {
         setSuccessMessage(null);
