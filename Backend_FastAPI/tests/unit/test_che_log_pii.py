@@ -204,6 +204,12 @@ import json as _json
 slog.warning("v6_e2_json", error=(
     'DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000963, Gia Lap Ten).\n'
     'full_name="Gia "Lap" Ten 0900000966"'))
+# Giá trị đã che nằm ở CUỐI chuỗi JSON (ngay trước nháy đóng, không có `\n` thoát phía
+# sau) — đúng chỗ lần che thứ hai ở handler gốc có thể nuốt tới hết dòng. Mốc `dau_do`
+# gắn bằng bind ⇒ đứng TRƯỚC giá trị trong dòng JSON, sống sót nếu phần sau bị nuốt.
+slog.bind(dau_do="v6_e3_json").warning("v6_e3", error=(
+    'DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000967, Gia Lap Ten).'))
+slog.bind(dau_do="v6_e4_json").warning("v6_e4", ghi_chu='full_name="Gia "Lap" Ten 0900000968"')
 thuong.warning('v6_l13 DETAIL:  Failing row contains (4242, {"ghi_chu": "x"}, 099999000997, '
                "Gia Lap Ten). khi luu ho so")
 thuong.info("v6_l14 " + _json.dumps(
@@ -646,11 +652,21 @@ def test_handler_loi_ghi_failing_row_qua_generic_handler(web):
         "generic_exception_handler ghi str(IntegrityError) lọt hàng lỗi %s" % lo)
 
 
-def _dong_json_e2(r: subprocess.CompletedProcess) -> str:
-    out = _co_dau_do(r, "v6_e2_json")
-    dong = [x for x in r.stderr.splitlines() if '"v6_e2_json"' in x]
-    assert len(dong) == 1, "HẠ TẦNG: không thấy đúng một dòng JSON v6_e2_json"
+def _dong_json(r: subprocess.CompletedProcess, dau_do: str) -> str:
+    """Dòng JSON structlog mang mốc ``"dau_do":"<dau_do>"`` (mốc đứng ĐẦU dòng)."""
+    _co_dau_do(r, dau_do)
+    dong = [x for x in r.stderr.splitlines() if '"dau_do":"%s"' % dau_do in x]
+    assert len(dong) == 1, "HẠ TẦNG: không thấy đúng một dòng JSON %s" % dau_do
     return dong[0]
+
+
+def _doc_json(dong: str) -> dict:
+    import json
+
+    try:
+        return json.loads(dong)
+    except ValueError as exc:
+        return {"LOI_JSON": repr(exc)}
 
 
 def test_web_structlog_failing_row_nhay_qua_handler_goc(web):
@@ -659,17 +675,23 @@ def test_web_structlog_failing_row_nhay_qua_handler_goc(web):
     assert lo == [], "dòng structlog thật (Failing row + KV nháy hỏng) lộ %s" % lo
 
 
-def test_web_structlog_dong_json_van_hop_le_sau_hai_lop(web):
-    """Processor che giá trị THÔ, filter gốc che lại dòng đã render: lần che thứ hai
-    KHÔNG được nuốt tới hết dòng làm hỏng JSON (idempotent)."""
-    import json
+def test_web_structlog_failing_row_cuoi_gia_tri_json_hop_le(web):
+    """Processor che giá trị THÔ, filter gốc che lại dòng đã render: với ``Failing row
+    contains (<redacted>).`` đứng cuối chuỗi, lần che thứ hai KHÔNG được nuốt tới hết
+    dòng làm hỏng JSON (nhánh "đã che" — idempotent)."""
+    dong = _dong_json(web, "v6_e3_json")
+    ob = _doc_json(dong)
+    assert ob.get("event") == "v6_e3" and "logger" in ob and "level" in ob, (
+        "dòng structlog không còn là JSON đủ trường sau hai lớp che: %s" % dong)
 
-    dong = _dong_json_e2(web)
-    try:
-        ob = json.loads(dong)
-    except ValueError as exc:
-        ob = {"LOI_JSON": repr(exc)}
-    assert ob.get("event") == "v6_e2_json" and "logger" in ob and "level" in ob, (
+
+def test_web_structlog_kv_da_che_cuoi_gia_tri_json_hop_le(web):
+    """``full_name=\\"<redacted>\\"`` đứng cuối chuỗi JSON (sau nó là nháy đóng của
+    chuỗi bao ngoài): nhánh "đã che" của KV phải nhận nháy ấy, không che thừa tới
+    hết dòng."""
+    dong = _dong_json(web, "v6_e4_json")
+    ob = _doc_json(dong)
+    assert ob.get("event") == "v6_e4" and "logger" in ob and "level" in ob, (
         "dòng structlog không còn là JSON đủ trường sau hai lớp che: %s" % dong)
 
 
