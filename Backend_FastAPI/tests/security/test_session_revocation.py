@@ -3171,3 +3171,224 @@ async def test_revoke_all_by_pre_rotation_token_is_401_and_revokes_nothing(
     assert await _live_session_jtis(user["id"]) == sorted([jti_moi, p["jti_b"]]), (
         "access token CŨ (trước xoay) đã thu hồi được phiên"
     )
+
+
+# -----------------------------------------------------------------------------
+# Anh em của revoke-all: secure-account và MFA-enable (hợp đồng owner 12-10)
+#
+# Cả hai dùng CHUNG `deps.get_current_session` (r_jti của access token đã xác
+# thực), không còn tự giải mã cookie refresh. Hành vi khi KHÔNG xác định được
+# phiên là RIÊNG từng thao tác:
+#   * secure-account: thu hồi TOÀN BỘ phiên (kể cả phiên này), xoá cookie xác
+#     thực, trả `relogin_required=true` — bảo mật tài khoản không được bỏ dở.
+#   * MFA-enable: 401 TRƯỚC mọi thay đổi CSDL/Redis — `enable_mfa` với
+#     `current_session_id=None` bật MFA mà KHÔNG thu hồi phiên nào.
+# -----------------------------------------------------------------------------
+
+SECURE_ACCOUNT_URL = "/api/security/secure-account"
+MFA_SETUP_URL = "/api/auth/mfa/setup"
+MFA_ENABLE_URL = "/api/auth/mfa/enable"
+
+
+async def _post_cookies_json(client, url: str, cookies: dict, body=None):
+    """POST chỉ mang ĐÚNG các cookie truyền vào (như FE), body JSON tuỳ chọn."""
+    client.cookies.clear()
+    try:
+        kwargs = {} if body is None else {"json": body}
+        return await client.post(
+            url,
+            headers={"Cookie": "; ".join(f"{k}={v}" for k, v in cookies.items())},
+            **kwargs,
+        )
+    finally:
+        client.cookies.clear()
+
+
+async def _login_id_moi_nhat(user_id: int) -> int:
+    """Một hàng `login_history` của chính người dùng (session CSDL mới)."""
+    async with AsyncSessionLocal() as s:
+        row = await s.execute(
+            select(models.LoginHistory.id)
+            .where(models.LoginHistory.user_id == user_id)
+            .order_by(models.LoginHistory.id.desc())
+            .limit(1)
+        )
+        login_id = row.scalar_one_or_none()
+    assert login_id is not None, "tiền đề: người dùng phải có lịch sử đăng nhập"
+    return login_id
+
+
+async def _secure_account(client, cookies: dict, login_id: int):
+    return await _post_cookies_json(
+        client, f"{SECURE_ACCOUNT_URL}?login_id={login_id}", cookies
+    )
+
+
+@contextmanager
+def _phien_khong_xac_dinh(app_instance):
+    """`get_current_user` đã cho qua nhưng `get_current_session` trả None (hàng bị
+    thu hồi/hết hạn XEN GIỮA STEP 4b và lượt tra — dựng bằng override)."""
+
+    async def _khong_xac_dinh_duoc():
+        return None
+
+    app_instance.dependency_overrides[deps.get_current_session] = _khong_xac_dinh_duoc
+    try:
+        yield
+    finally:
+        app_instance.dependency_overrides.pop(deps.get_current_session, None)
+
+
+def _cookie_bi_xoa(res, ten: str) -> bool:
+    """Phản hồi có `Set-Cookie` xoá cookie ``ten`` (Max-Age=0 hoặc hết hạn quá khứ)."""
+    for h in res.headers.get_list("set-cookie"):
+        dau = h.split(";", 1)[0].strip()
+        if dau.split("=", 1)[0] == ten and (
+            "max-age=0" in h.lower() or "1970" in h
+        ):
+            return True
+    return False
+
+
+@pytest.mark.asyncio
+async def test_secure_account_unresolved_session_revokes_every_session(
+    client, app_instance, regular_user_in_db
+):
+    """Không xác định được phiên ⇒ thu hồi TOÀN BỘ, kể cả phiên của request."""
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+    login_id = await _login_id_moi_nhat(user["id"])
+
+    with _phien_khong_xac_dinh(app_instance):
+        res = await _secure_account(client, {"access_token": p["access_a"]}, login_id)
+
+    assert res.status_code == 200, res.text
+    assert await _live_session_jtis(user["id"]) == [], (
+        "secure-account không xác định được phiên mà vẫn để phiên sống"
+    )
+
+
+@pytest.mark.asyncio
+async def test_secure_account_unresolved_session_forces_relogin(
+    client, app_instance, regular_user_in_db
+):
+    """Không xác định được phiên ⇒ báo `relogin_required` VÀ xoá cookie xác thực."""
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+    login_id = await _login_id_moi_nhat(user["id"])
+
+    with _phien_khong_xac_dinh(app_instance):
+        res = await _secure_account(client, {"access_token": p["access_a"]}, login_id)
+
+    assert res.status_code == 200, res.text
+    bao = res.json().get("relogin_required")
+    xoa = {t: _cookie_bi_xoa(res, t) for t in ("access_token", "refresh_token")}
+    assert bao is True and all(xoa.values()), (
+        f"chưa buộc đăng nhập lại: relogin_required={bao}, cookie bị xoá={xoa}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_secure_account_keeps_token_session_without_refresh_cookie(
+    client, regular_user_in_db
+):
+    """Chỉ mang cookie access (không cookie refresh) ⇒ giữ ĐÚNG phiên của token."""
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+    login_id = await _login_id_moi_nhat(user["id"])
+
+    res = await _secure_account(client, {"access_token": p["access_a"]}, login_id)
+
+    assert res.status_code == 200, res.text
+    assert await _live_session_jtis(user["id"]) == [p["jti_a"]], (
+        "secure-account phải giữ phiên của access token, thu hồi phiên còn lại"
+    )
+
+
+@pytest.mark.asyncio
+async def test_secure_account_ignores_refresh_cookie_of_other_session(
+    client, regular_user_in_db
+):
+    """Cookie refresh nêu phiên B, access token của phiên A ⇒ giữ A, không giữ B."""
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+    _, refresh_b, jti_b = await _login_as(client, user, ua=UA_MOBILE)
+    login_id = await _login_id_moi_nhat(user["id"])
+
+    res = await _secure_account(
+        client, {"access_token": p["access_a"], "refresh_token": refresh_b}, login_id
+    )
+
+    assert res.status_code == 200, res.text
+    assert await _live_session_jtis(user["id"]) == [p["jti_a"]], (
+        "secure-account giữ phiên do cookie refresh nêu thay vì phiên của token"
+    )
+
+
+async def _mfa_setup(client, access_token: str) -> str:
+    res = await _post_cookies_json(client, MFA_SETUP_URL, {"access_token": access_token})
+    assert res.status_code == 200, res.text
+    return res.json()["secret"]
+
+
+async def _mfa_trang_thai(user_id: int) -> bool:
+    async with AsyncSessionLocal() as s:
+        return bool((await s.get(models.User, user_id)).mfa_enabled)
+
+
+@pytest.mark.asyncio
+async def test_mfa_enable_unresolved_session_is_401_changes_nothing(
+    client, app_instance, regular_user_in_db, test_redis_client
+):
+    """Không xác định được phiên ⇒ 401 và KHÔNG đổi gì: MFA vẫn tắt, khoá
+    `mfa_setup:` còn, hai phiên vẫn sống."""
+    import pyotp
+
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+    secret = await _mfa_setup(client, p["access_a"])
+    ma = pyotp.TOTP(secret).now()
+
+    with _phien_khong_xac_dinh(app_instance):
+        res = await _post_cookies_json(
+            client, MFA_ENABLE_URL, {"access_token": p["access_a"]}, {"code": ma}
+        )
+
+    con_khoa = await test_redis_client.get(f"mfa_setup:{user['id']}") is not None
+    sau = {
+        "status": res.status_code,
+        "mfa_enabled": await _mfa_trang_thai(user["id"]),
+        "mfa_setup_con": con_khoa,
+        "phien_song": await _live_session_jtis(user["id"]),
+    }
+    assert sau == {
+        "status": 401,
+        "mfa_enabled": False,
+        "mfa_setup_con": True,
+        "phien_song": sorted([p["jti_a"], p["jti_b"]]),
+    }, f"MFA-enable không xác định được phiên mà vẫn đổi trạng thái: {sau}"
+
+
+@pytest.mark.asyncio
+async def test_mfa_enable_keeps_token_session_not_refresh_cookie_one(
+    client, regular_user_in_db, test_redis_client
+):
+    """Cookie refresh nêu phiên B, access token của phiên A ⇒ bật MFA, giữ A."""
+    import pyotp
+
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+    _, refresh_b, _ = await _login_as(client, user, ua=UA_MOBILE)
+    secret = await _mfa_setup(client, p["access_a"])
+
+    res = await _post_cookies_json(
+        client,
+        MFA_ENABLE_URL,
+        {"access_token": p["access_a"], "refresh_token": refresh_b},
+        {"code": pyotp.TOTP(secret).now()},
+    )
+
+    assert res.status_code == 200, res.text
+    assert await _live_session_jtis(user["id"]) == [p["jti_a"]], (
+        "MFA-enable giữ phiên do cookie refresh nêu thay vì phiên của token"
+    )
