@@ -1133,6 +1133,17 @@ def _them_pha_buoc8(goc: Path) -> None:
         f.write("2026-10-13T01:30:00Z\tpha\tbuoc8\n")
 
 
+# Vòng 4b (X4): symlink NẰM TRONG backups/, đúng khuôn tên, trỏ tới tệp trạng thái
+# HỢP LỆ của lượt đỏ — biến thể tinh vi nhất: chỉ "là symlink" sai, mọi thứ khác đúng.
+_TS_SYMLINK = "20261013_015959"
+
+
+def _tao_symlink_tt(goc: Path) -> None:
+    lk = _tt(goc, _TS_SYMLINK)
+    lk.symlink_to(_tt(goc, _TS_DO).name)
+    assert lk.is_symlink() and lk.resolve() == _tt(goc, _TS_DO).resolve()
+
+
 _TU_CHOI = [
     # Một container KHÁC của service đang chạy (vd ai đó `up -d`); CID cũ vẫn exited đúng mốc.
     ("service có container khác ĐANG CHẠY", None, {}, {"STUB_PS_Q_KHAC": "backend"}, "có container ĐANG CHẠY"),
@@ -1144,6 +1155,8 @@ _TU_CHOI = [
      "còn one-off của service backend ĐANG CHẠY"),
     ("pha cuối không phải dừng-sau-migration", _them_pha_buoc8, {}, {}, "KHÔNG phải pha dừng-có-chủ-ý"),
     ("nginx khác CID ghi nhận", None, {}, {"STUB_NGINX_CID_KHAC": "1"}, "KHÁC CID ghi nhận"),
+    ("tệp trạng thái là symlink (trong backups/, trỏ tới tệp hợp lệ)", _tao_symlink_tt, {},
+     {"QLTS_DI_TIEP_TU": f"backups/deploy_{_TS_SYMLINK}.trang-thai"}, "không có tệp trạng thái thường"),
 ]
 
 
@@ -1158,10 +1171,11 @@ def test_v4_di_tiep_tu_choi_khi_trang_thai_that_khong_khop(
         chen_giua(goc)
     ket, n0 = _luot_tiep(goc, **kb_tiep)
     ra = _ra(ket)
-    assert ket.returncode != 0, f"{ten_ca}: đi tiếp mà KHÔNG từ chối"
-    assert thong_diep in ra, f"{ten_ca}: thiếu {thong_diep!r}:\n{ra[-2000:]}"
+    # HÀNH VI trước, chữ sau: đột biến gỡ guard phải đỏ vì "đã đụng hệ thống".
     assert _lenh_ghi(goc, n0) == [], f"{ten_ca}: từ chối nhưng ĐÃ đụng vào hệ thống: {_lenh_ghi(goc, n0)}"
     assert not _tt(goc, _TS_TIEP).exists(), f"{ten_ca}: đã sang Step 4c"
+    assert ket.returncode != 0, f"{ten_ca}: đi tiếp mà KHÔNG từ chối"
+    assert thong_diep in ra, f"{ten_ca}: thiếu {thong_diep!r}:\n{ra[-2000:]}"
 
 
 @_bo_qua_neu_khong_posix
@@ -1201,6 +1215,56 @@ def test_v4_di_tiep_do_truoc_migrate_thi_khong_mo_ma_cu_va_in_lenh_voi_tep_goc(t
     assert f"QLTS_DI_TIEP_TU={_tt(goc, _TS_DO)} bash scripts/deploy.sh" in ra, "không in lệnh đi tiếp với tệp GỐC"
 
 
+# --- Vòng 4b: hai guard SAU Step 3a (kiểm độc lập của coordinator: X6, X7 sống) ---
+def _co_pg_dump(goc: Path, tu: int) -> bool:
+    return any(_MOC_PGDUMP in " ".join(g["args"]) for g in _cac_loi_goi(goc)[tu:])
+
+
+def _ca_x6(goc: Path):
+    """Lượt đỏ, rồi lượt đi tiếp mà tác nhân ngoài bật-rồi-tắt celery-beat lúc build."""
+    _luot_do(goc)
+    return _luot_tiep(goc, STUB_BAT_TAT_O_BUILD="celery-beat")
+
+
+def _ca_x7(goc: Path):
+    """Lượt đỏ, rồi lượt đi tiếp mà đầu dò dịch vụ qua SNI thấy /health 502 sau Step 8b."""
+    _luot_do(goc)
+    marker = (goc / "ops" / "last-deploy.marker").read_bytes()
+    ket, n0 = _luot_tiep(goc, STUB_MA_HEALTH="502")
+    return ket, n0, marker
+
+
+@_bo_qua_neu_khong_posix
+def test_v4_di_tiep_container_chay_lai_giua_3a_va_4c_thi_dung_truoc_pg_dump(tmp_path: Path) -> None:
+    # Bất biến DUY NHẤT bị vi phạm: mốc vòng đời của container ghi nhận đổi SAU khi
+    # Step 3a đã đo khớp (vẫn `exited`, không container nào khác chạy).
+    goc = _san_khau_hai_luot(tmp_path)
+    ket, n0 = _ca_x6(goc)
+    ra = _ra(ket)
+    assert "✓ [đi tiếp] trạng thái khớp lượt đỏ" in ra, "tiền đề: Step 3a phải ĐẠT (bật-tắt xảy ra SAU 3a)"
+    assert _MOC_MOC_NGOAI in (goc / "lenh.log").read_text(encoding="utf-8"), "tiền đề: tác nhân ngoài chưa chạy"
+    assert not _co_pg_dump(goc, n0), "container chạy lại giữa 3a và 4c mà VẪN pg_dump"
+    assert _lenh_mo_lai_cu(goc, n0) == [], f"trap BẬT mã cũ: {_lenh_mo_lai_cu(goc, n0)}"
+    assert _lenh_dung_moi(goc, n0) == [], f"vẫn dựng mã mới: {_lenh_dung_moi(goc, n0)}"
+    assert ket.returncode != 0
+    assert "'celery-beat' ĐÃ CHẠY LẠI sau Step 3a" in ra, ra[-2500:]
+    assert "ĐI TIẾP dừng TRƯỚC migration" in ra, ra[-2500:]
+
+
+@_bo_qua_neu_khong_posix
+def test_v4_di_tiep_hau_kiem_sni_khong_dat_thi_do_khong_ghi_marker(tmp_path: Path) -> None:
+    # Bất biến DUY NHẤT bị vi phạm: đầu dò dịch vụ qua SNI sau Step 8b không đạt.
+    goc = _san_khau_hai_luot(tmp_path)
+    ket, n0, marker_truoc = _ca_x7(goc)
+    ra = _ra(ket)
+    assert any(_MOC_STEP8 in " ".join(g["args"]) for g in _cac_loi_goi(goc)[n0:]), "tiền đề: phải tới Step 8"
+    assert "[nginx · dịch vụ] KHÔNG ĐẠT" in ra, "tiền đề: đầu dò phải thấy KHÔNG ĐẠT"
+    assert (goc / "ops" / "last-deploy.marker").read_bytes() == marker_truoc, "hậu kiểm SNI KHÔNG ĐẠT mà vẫn ghi marker Step 8c"
+    assert ket.returncode != 0, "hậu kiểm SNI KHÔNG ĐẠT mà deploy thoát 0"
+    assert "Deployment completed successfully" not in ra
+    assert "✓ [đi tiếp] hậu kiểm dịch vụ qua SNI thật ĐẠT" not in ra
+
+
 # --- Kiểm ngược: gỡ từng guard của đường đi tiếp (biến thể tinh vi nhất) ---------
 @_bo_qua_neu_khong_posix
 @pytest.mark.parametrize(
@@ -1234,6 +1298,10 @@ def test_v4_di_tiep_do_truoc_migrate_thi_khong_mo_ma_cu_va_in_lenh_voi_tep_goc(t
          """    [ "${_DS//[[:space:]]/}" = "$_DT_NGINX" ] || error""",
          """    true || error""",
          None, {}, {"STUB_NGINX_CID_KHAC": "1"}),
+        ("bỏ cấm symlink tệp trạng thái",
+         """    [ ! -L "$_DT_TT_CU" ] && [ -f "$_DT_TT_CU" ] || error""",
+         """    [ -f "$_DT_TT_CU" ] || error""",
+         _tao_symlink_tt, {}, {"QLTS_DI_TIEP_TU": f"backups/deploy_{_TS_SYMLINK}.trang-thai"}),
     ],
 )
 def test_kiem_nguoc_v4_go_tung_guard_di_tiep_thi_dung_vao_he_thong(
@@ -1245,6 +1313,30 @@ def test_kiem_nguoc_v4_go_tung_guard_di_tiep_thi_dung_vao_he_thong(
         chen_giua(goc)
     _, n0 = _luot_tiep(goc, **kb_tiep)
     assert _lenh_ghi(goc, n0), f"{ten_ca}: gỡ guard mà lượt đi tiếp vẫn không đụng gì ⇒ ca tương ứng xanh vì lý do khác"
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,cu,moi",
+    [
+        ("4c không so lại mốc (X6)",
+         """        [ "${_DCG_MOC[$_S]}" = "${_DT_MOC[$_S]}" ] || error "[đi tiếp] '$_S' ĐÃ CHẠY LẠI sau Step 3a""",
+         """        true || error "[đi tiếp] '$_S' ĐÃ CHẠY LẠI sau Step 3a"""),
+        ("hậu kiểm SNI chỉ cảnh báo (X7)",
+         """    _dcg_do_dich_vu_nginx || error "[đi tiếp] hậu kiểm dịch vụ qua SNI thật KHÔNG ĐẠT""",
+         """    _dcg_do_dich_vu_nginx || warn "[đi tiếp] hậu kiểm dịch vụ qua SNI thật KHÔNG ĐẠT"""),
+    ],
+)
+def test_kiem_nguoc_v4b_go_guard_sau_3a_thi_lo_mo_lai(tmp_path: Path, ten_ca: str, cu: str, moi: str) -> None:
+    goc = _san_khau_hai_luot(tmp_path, deploy_sh=_ban_dot_bien(cu, moi))
+    if "X6" in ten_ca:
+        _, n0 = _ca_x6(goc)
+        assert _co_pg_dump(goc, n0), f"{ten_ca}: gỡ guard mà vẫn không pg_dump ⇒ ca X6 xanh vì lý do khác"
+    else:
+        ket, _, marker_truoc = _ca_x7(goc)
+        assert (goc / "ops" / "last-deploy.marker").read_bytes() != marker_truoc and ket.returncode == 0, (
+            f"{ten_ca}: gỡ guard mà vẫn không ghi marker/thoát 0 ⇒ ca X7 xanh vì lý do khác"
+        )
 
 
 @_bo_qua_neu_khong_posix

@@ -277,6 +277,9 @@ def test_model_compose_that_giu_celery_false_du_bien_host_dat_true(
 #   STUB_ONEOFF_NHAN_CHAY=1 — còn one-off của service backend ĐANG CHẠY trong
 #     project; STUB_ONEOFF=chay_roi_xong + STUB_ONEOFF_SO_LAN_CHAY=N — one-off của
 #     lượt `running` N lần hỏi đầu rồi `exited`.
+#   (vòng 4b) STUB_BAT_TAT_O_BUILD=<service> — tác nhân NGOÀI bật rồi tắt container
+#     ghi nhận của service ấy đúng lúc Step 4 `build --parallel`, tức GIỮA Step 3a và
+#     Step 4c của đường đi tiếp: vẫn `exited`, chỉ mốc vòng đời (đếm start/stop) đổi.
 #   STUB_CHAY_SH_THAT=1 — `docker run … -c <đoạn sh>` chạy THẬT đoạn sh ấy (với
 #     biến -e của nó và `curl` giả của sân khấu); `docker logs` đọc
 #     $QLTS_NGINX_LOG. Dùng cho ca F39 chạy `nginx-verify.sh` THẬT của kho.
@@ -350,6 +353,14 @@ _da_dung() {
         END { exit (st ? 0 : 1) }' "$QLTS_STUB_LOG"
 }
 _dem_lenh() { grep -c "^docker $1 .*$2" "$QLTS_STUB_LOG" || true; }
+if [ -n "${STUB_BAT_TAT_O_BUILD:-}" ]; then
+    case "$_tat_ca" in
+        *" build --parallel"*)
+            # Không exit: lệnh build vẫn rơi xuống giao thức sẵn có.
+            echo "docker start $(_cid_gia "$STUB_BAT_TAT_O_BUILD") # tac-nhan-ngoai" >> "$QLTS_STUB_LOG"
+            echo "docker stop $(_cid_gia "$STUB_BAT_TAT_O_BUILD") # tac-nhan-ngoai" >> "$QLTS_STUB_LOG" ;;
+    esac
+fi
 _cn=$(_cid_gia nginx)
 case "$_tat_ca" in
     "stop "*)
