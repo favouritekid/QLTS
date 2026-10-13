@@ -1174,7 +1174,7 @@ def test_v4_di_tiep_tu_choi_khi_trang_thai_that_khong_khop(
         ("tệp trạng thái ngoài backups/", {"QLTS_DI_TIEP_TU": f"/tmp/deploy_{_TS_DO}.trang-thai"}, "",
          "phải nằm trong"),
         ("cờ nằm trong .env.production", {"QLTS_DI_TIEP_SAU_MIGRATE_DO": None, "QLTS_DI_TIEP_TU": None},
-         "QLTS_DI_TIEP_SAU_MIGRATE_DO=1\n", "được khai báo trong .env.production"),
+         "QLTS_DI_TIEP_SAU_MIGRATE_DO=1\n", "[đi tiếp] QLTS_DI_TIEP_SAU_MIGRATE_DO / QLTS_DI_TIEP_TU nằm trong .env.production"),
     ],
 )
 def test_v4_co_di_tiep_sai_cach_thi_tu_choi(
@@ -1254,7 +1254,7 @@ def test_kiem_nguoc_v4_bo_cam_env_file_thi_co_trong_tep_bi_bo_qua_am_tham(tmp_pa
     cuoi = than.index("fi\n", dau) + len("fi\n")
     goc = _san_khau_hai_luot(tmp_path, deploy_sh=than[:dau] + than[cuoi:], env_them="QLTS_DI_TIEP_SAU_MIGRATE_DO=1\n")
     ket, _ = _luot_tiep(goc, QLTS_DI_TIEP_SAU_MIGRATE_DO=None, QLTS_DI_TIEP_TU=None)
-    assert "được khai báo trong .env.production" not in _ra(ket)
+    assert "nằm trong .env.production" not in _ra(ket)
     assert ket.returncode == 0, "gỡ cấm mà deploy vẫn đỏ ⇒ ca .env.production xanh vì lý do khác"
 
 

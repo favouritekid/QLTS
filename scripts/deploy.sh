@@ -200,7 +200,7 @@ if [ "${QLTS_SKIP_ROLLBACK_ASSET+co}" = "co" ] \
 fi
 unset QLTS_SKIP_ROLLBACK_ASSET QLTS_SKIP_ROLLBACK_ASSET_REASON
 if [ "${QLTS_DI_TIEP_SAU_MIGRATE_DO+co}" = "co" ] || [ "${QLTS_DI_TIEP_TU+co}" = "co" ]; then
-    error "QLTS_DI_TIEP_SAU_MIGRATE_DO / QLTS_DI_TIEP_TU được khai báo trong .env.production.
+    error "[đi tiếp] QLTS_DI_TIEP_SAU_MIGRATE_DO / QLTS_DI_TIEP_TU nằm trong .env.production — từ chối.
        Đường đi tiếp sau migration đỏ là thao tác THỦ CÔNG TỪNG LƯỢT, không phải cấu
        hình thường trực. Gỡ chúng khỏi .env.production; đặt trên dòng lệnh của lượt đó."
 fi
