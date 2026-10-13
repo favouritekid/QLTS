@@ -152,6 +152,8 @@ dong_v=$(printf '%s\n' "$VERIFY_OUT" | grep -E "^  (✓|✗) đầu dò token" |
 kiem V1 "$([ "$VERIFY_RC" -eq 0 ] && echo 1 || echo 0)" \
     "scripts/nginx-verify.sh rc=$VERIFY_RC · ${dong_v:-<không có dòng đầu dò token>}"
 
+# Kích thước access log đã đọc (ghi nhận — ca đột biến đệm 4 MiB của vòng 5 cần thấy nó thật).
+echo "E2E-V6 GHI-NHAN access log (stdout): ${#OUT} ký tự"
 # Không phải phép kiểm đạt/đỏ: error_log là PHẦN DƯ đã biết (log_format không chạm).
 echo "E2E-V6 GHI-NHAN error_log: dòng chứa token giả = $(dem "$ERR" GIAV6TOKEN) (phần dư còn mở — chỉ ghi nhận)"
 
