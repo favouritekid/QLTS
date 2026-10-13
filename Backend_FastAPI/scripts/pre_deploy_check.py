@@ -28,6 +28,12 @@ Reference: AUTHORIZATION_DECISIONS.md Decision 1
 import asyncio
 import os
 import sys
+
+# V6 vòng 6 (F41, §6): đầu ra của script này vào log deploy (Actions, kho PUBLIC) ⇒
+# chữ lỗi CSDL qua CHỦ SỞ HỮU bộ che. Chạy theo đường tệp (`python scripts/…`) nên
+# sys.path[0] là /app/scripts — THÊM (cuối danh sách, không che gói đã cài) gốc backend.
+sys.path.append(os.path.realpath(os.path.join(os.path.dirname(__file__), "..")))
+from app.core.log_redaction import mo_ta_loi, thoat_cli_an_toan  # noqa: E402
 from typing import List, Tuple
 
 # ============================================================
@@ -164,7 +170,7 @@ async def check_critical_policies() -> Tuple[bool, List[str], List[str], List[st
                     missing_inheritance.append(f"({child} -> {parent})")
 
     except Exception as e:
-        return False, [f"Database error: {e}"], [], []
+        return False, [f"Database error: {mo_ta_loi(e)}"], [], []
 
     finally:
         await engine.dispose()
@@ -196,7 +202,7 @@ async def get_policy_counts() -> dict:
                 counts[row[0]] = row[1]
 
     except Exception as e:
-        print(f"Warning: Could not get policy counts: {e}")
+        print(f"Warning: Could not get policy counts: {mo_ta_loi(e)}")
 
     finally:
         await engine.dispose()
@@ -280,5 +286,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    result = asyncio.run(main())
+    try:
+        result = asyncio.run(main())
+    except BaseException as _loi:  # noqa: BLE001 — cửa ra CLI: mọi ngoại lệ
+        thoat_cli_an_toan(_loi, ten="pre_deploy_check")
     sys.exit(0 if result else 1)

@@ -1281,13 +1281,21 @@ _S6_KIEU = {
 _S6_HAM_BOC = {
     "chu_loi_an_toan", "mo_ta_loi", "tom_tat_loi_csdl", "_safe_bulk_error_message",
     "type", "isinstance", "_is_lock_not_available", "_handle_lead_integrity_error",
-    "log_dispatch_failure",
+    "log_dispatch_failure", "thoat_cli_an_toan",
 }
 #: Hàm chuyển đổi — tự nó không phải lối ra; kết quả đi đâu thì lối ra ở đó.
 _S6_TRUNG_TINH = {"str", "repr", "len", "getattr", "format"}
 #: Lời gọi log/in — thuộc tầng che log, không phải lối ra ở đây.
 _S6_LOG = {"debug", "info", "warning", "warn", "error", "exception", "critical", "log",
            "_log_warning", "print"}
+#: V6 vòng 6 (F41): tiến trình DÒNG LỆNH chạy NGOÀI web/celery lúc deploy / tạo container —
+#: đầu ra của chúng vào log deploy (Actions, kho PUBLIC) hoặc ``docker logs``. Ở các tệp này
+#: ``print`` LÀ lối ra (không phải tầng che log).
+_S6_CLI = (
+    "alembic/env.py",                          # one-off deploy.sh Step 6 + docker-entrypoint.sh
+    "scripts/pre_deploy_check.py",             # deploy.sh Step 7
+    "app/scripts/sync_notification_rules.py",  # docker-entrypoint.sh + chạy tay lúc cutover
+)
 #: Lối ra ĐÃ RÀ, KHÔNG mang lỗi CSDL — (tệp, hàm bao, loại): (số chỗ, lý do).
 #: Miễn trừ CHỈ hợp lệ khi khối ``try`` KHÔNG có thao tác CSDL (guard tự kiểm — vòng 5b: một
 #: miễn trừ ghi nhầm "lỗi SMTP" đã giấu ``email_channel.send``, nơi ``try`` bọc ``db.execute``).
@@ -1301,6 +1309,8 @@ _S6_MIEN = {
     ("app/services/payment_import_service.py", "parse_template", "raise"): (1, "lỗi đọc tệp Excel tải lên"),
     ("app/services/sms_contact_service.py", "_parse_rows", "raise"): (1, "lỗi đọc tệp CSV tải lên"),
     ("app/tasks/utils.py", "_runner", "gan"): (1, "giữ ĐỐI TƯỢNG ngoại lệ để ném lại ở luồng gọi"),
+    ("app/scripts/sync_notification_rules.py", "_recipient_config_for", "raise"): (
+        1, "lỗi dựng resolver từ cấu hình hạt giống trong mã (không chạm CSDL); thông điệp ra qua cửa ra CLI an toàn"),
 }
 
 
@@ -1372,10 +1382,13 @@ def _s6_quet() -> dict:
 
     kq: dict = {}
     goc = BACKEND / "app"
-    for p in sorted(goc.rglob("*.py")):
+    tep_quet = [p for p in sorted(goc.rglob("*.py"))
+                if "/scripts/" not in p.relative_to(BACKEND).as_posix()
+                and "__pycache__" not in p.relative_to(BACKEND).as_posix()]
+    tep_quet += [BACKEND / r for r in _S6_CLI]
+    for p in tep_quet:
         rel = p.relative_to(BACKEND).as_posix()
-        if "/scripts/" in rel or "__pycache__" in rel:
-            continue
+        la_cli = rel in _S6_CLI
         cay = ast.parse(p.read_text(encoding="utf-8"))
         cha = {c: n for n in ast.walk(cay) for c in ast.iter_child_nodes(n)}
         for h in ast.walk(cay):
@@ -1393,8 +1406,9 @@ def _s6_quet() -> dict:
                 for n in ast.walk(than):
                     if isinstance(n, ast.Assign) and lo(n.value, nhiem):
                         nhiem |= {t.id for t in n.targets if isinstance(t, ast.Name)}
+            log_o_day = _S6_LOG - {"print"} if la_cli else _S6_LOG
             bo_qua = {id(m) for n in ast.walk(than)
-                      if isinstance(n, ast.Call) and ten(n.func) in _S6_LOG for m in ast.walk(n)}
+                      if isinstance(n, ast.Call) and ten(n.func) in log_o_day for m in ast.walk(n)}
             for n in ast.walk(than):
                 if id(n) in bo_qua:
                     continue
@@ -1443,3 +1457,214 @@ def test_v5_khong_dua_chu_loi_csdl_ra_ngoai_log():
         "lối ra chữ ngoại lệ CHƯA rà (bọc bằng chu_loi_an_toan, hoặc thêm vào _S6_MIEN kèm lý do "
         "nếu chắc chắn không mang lỗi CSDL): %s\nmiễn trừ không còn khớp: %s\n"
         "miễn trừ phủ khối try CÓ thao tác CSDL (phải bọc, không được miễn): %s" % (moi, cu, mien_sai))
+
+
+
+# =============================================================================
+# V6 vòng 6 — F41: Alembic CLI (deploy one-off + docker-entrypoint.sh) KHÔNG in chữ lỗi CSDL
+# =============================================================================
+# Đi qua ĐÚNG cửa ra thật (CLAUDE.md §10): subprocess ``alembic upgrade head`` (= one-off
+# ``--entrypoint alembic backend upgrade head`` của deploy.sh) và ``bash docker-entrypoint.sh``
+# (``alembic upgrade head`` lúc tạo container). ``alembic/env.py`` THẬT; chỉ thư mục phiên bản
+# là tạm (``version_locations`` trong một alembic.ini chép, trỏ qua ``ALEMBIC_CONFIG``) và CSDL
+# là một CSDL nháp riêng (không chạm qlts_test). Migration tạm gây vi phạm CHECK THẬT trên
+# Postgres với giá trị GIẢ ngắn (< 8 ký tự) và dài, có DETAIL (hàng lỗi) + tham số bind.
+
+_F41_DB = "v6_alembic_gia"
+_F41_KICH_BAN = {
+    # mã: (giá trị ngắn, giá trị dài) — riêng từng kịch bản ⇒ quét cả đầu ra không nhiễm chéo
+    "loi": ("Gia Ut", "099999000992 Nguyen Van Gia dai hon tam ky tu"),
+    "log": ("Gia Uy", "099999000993 Tran Thi Gia dai hon tam ky tu"),
+}
+_F41_MIGRATION = """\
+\"\"\"V6 vòng 6 — migration TẠM gây lỗi CSDL giả (kịch bản {kb}).\"\"\"
+import logging
+
+import sqlalchemy as sa
+from alembic import op
+
+revision = "v6gia_{kb}"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    b = op.get_bind()
+    b.execute(sa.text("DROP TABLE IF EXISTS v6_gia_alembic"))
+    b.execute(sa.text(
+        "CREATE TABLE v6_gia_alembic (id int, ten text, cccd text, "
+        "CONSTRAINT ck_v6_gia_alembic CHECK (length(ten) > 100))"))
+    try:
+        b.execute(sa.text("INSERT INTO v6_gia_alembic VALUES (1, :ten, :cccd)"),
+                  {{"ten": "{ngan}", "cccd": "{dai}"}})
+    except Exception as e:
+        if "{kb}" != "log":
+            raise
+        # Thư viện / migration ghi log lỗi qua logger (alembic, sqlalchemy) rồi dừng bằng một
+        # lỗi KHÔNG mang chữ của lỗi CSDL — đo RIÊNG tầng phủ logger của fileConfig.
+        logging.getLogger("alembic.runtime.migration").error("v6 ghi log loi: %s", e, exc_info=True)
+        logging.getLogger("sqlalchemy.engine").warning("v6 ghi log chuoi: " + str(e))
+        raise RuntimeError("v6 dung sau khi ghi log") from None
+
+
+def downgrade():
+    pass
+"""
+
+
+def _f41_url(ten_db: str) -> str:
+    import re
+
+    url = os.environ.get("DATABASE_URL", "")
+    m = re.match(r"^(postgresql(?:\+asyncpg)?://[^/]+/)([^?]+)(\?.*)?$", url)
+    assert m, "HẠ TẦNG: DATABASE_URL không đúng dạng postgresql://…/<db>"
+    return m.group(1) + ten_db + (m.group(3) or "")
+
+
+def _f41_db(lenh: str) -> None:
+    import asyncio
+
+    import asyncpg
+
+    async def _chay():
+        c = await asyncpg.connect(_f41_url("postgres").replace("+asyncpg", ""))
+        try:
+            await c.execute(lenh)
+        finally:
+            await c.close()
+
+    asyncio.run(_chay())
+
+
+def _f41_chay(tmp: Path, kb: str, duong: str) -> subprocess.CompletedProcess:
+    import shutil
+
+    ngan, dai = _F41_KICH_BAN[kb]
+    thu_muc = tmp / ("%s-%s" % (kb, duong))
+    (thu_muc / "versions").mkdir(parents=True)
+    (thu_muc / "versions" / ("v6gia_%s.py" % kb)).write_text(
+        _F41_MIGRATION.format(kb=kb, ngan=ngan, dai=dai), encoding="utf-8")
+    ini = (BACKEND / "alembic.ini").read_text(encoding="utf-8")
+    assert "script_location = %(here)s/alembic" in ini, "HẠ TẦNG: alembic.ini đổi khuôn"
+    ini = ini.replace(
+        "script_location = %(here)s/alembic",
+        "script_location = %s\nversion_locations = %s"
+        % ((BACKEND / "alembic").as_posix(), (thu_muc / "versions").as_posix()))
+    (thu_muc / "alembic.ini").write_text(ini, encoding="utf-8")
+    env = dict(os.environ)
+    env.update({
+        "ALEMBIC_CONFIG": str(thu_muc / "alembic.ini"),
+        "DATABASE_URL": _f41_url(_F41_DB),
+        "RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP": "false",  # chỉ đo bước alembic của entrypoint
+        "PYTHONIOENCODING": "utf-8",
+    })
+    if duong == "tran":
+        alembic_bin = shutil.which("alembic")
+        assert alembic_bin, "HẠ TẦNG: không thấy lệnh alembic"
+        lenh = [alembic_bin, "upgrade", "head"]
+    else:
+        lenh = ["bash", str(BACKEND / "docker-entrypoint.sh"), "echo", "V6_KHONG_DUOC_TOI_DAY"]
+    _f41_db("DROP DATABASE IF EXISTS %s WITH (FORCE)" % _F41_DB)
+    _f41_db("CREATE DATABASE %s" % _F41_DB)
+    try:
+        return subprocess.run(lenh, cwd=str(BACKEND), capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=240, env=env)
+    finally:
+        _f41_db("DROP DATABASE IF EXISTS %s WITH (FORCE)" % _F41_DB)
+
+
+@pytest.fixture(scope="module")
+def f41(tmp_path_factory) -> dict:
+    tmp = tmp_path_factory.mktemp("v6_alembic")
+    return {(kb, d): _f41_chay(tmp, kb, d) for kb in _F41_KICH_BAN for d in ("tran", "entrypoint")}
+
+
+def _f41_dau_ra(r: subprocess.CompletedProcess, kb: str) -> str:
+    """Toàn bộ stdout + stderr, sau khi xác nhận migration tạm THẬT SỰ đã chạy tới lỗi."""
+    out = (r.stdout or "") + "\n" + (r.stderr or "")
+    assert "v6gia_%s" % kb in out, "HẠ TẦNG: migration tạm không chạy:\n%s" % out[-3000:]
+    assert "V6_KHONG_DUOC_TOI_DAY" not in out, "HẠ TẦNG: entrypoint chạy tiếp sau alembic hỏng"
+    if kb == "log":
+        assert "v6 ghi log loi:" in out, "HẠ TẦNG: dòng log của kịch bản log không có mặt"
+    return out
+
+
+def _f41_lo(out: str, kb: str) -> list:
+    ngan, dai = _F41_KICH_BAN[kb]
+    return [v for v in (ngan, dai, dai[:12]) if v in out]
+
+
+def test_v6_alembic_cli_tran_loi_csdl_khong_lo(f41):
+    """One-off ``alembic upgrade head`` (deploy.sh Step 6): traceback không bắt ⇒ chỉ còn
+    tóm tắt; mã thoát KHÁC 0."""
+    r = f41[("loi", "tran")]
+    out = _f41_dau_ra(r, "loi")
+    lo = _f41_lo(out, "loi")
+    assert r.returncode != 0 and lo == [] and "DBError[" in out and "alembic: THẤT BẠI" in out, (
+        "alembic CLI lộ %s (rc=%s):\n%s" % (lo, r.returncode, out[-3000:]))
+
+
+def test_v6_alembic_entrypoint_loi_csdl_khong_lo(f41):
+    """``docker-entrypoint.sh`` (``alembic upgrade head`` lúc tạo container ⇒ docker logs)."""
+    r = f41[("loi", "entrypoint")]
+    out = _f41_dau_ra(r, "loi")
+    lo = _f41_lo(out, "loi")
+    assert r.returncode != 0 and lo == [] and "DBError[" in out and "alembic: THẤT BẠI" in out, (
+        "entrypoint lộ %s (rc=%s):\n%s" % (lo, r.returncode, out[-3000:]))
+
+
+def test_v6_alembic_cli_tran_logger_filecfg_khong_lo(f41):
+    """Logger ``alembic`` / ``sqlalchemy.engine`` do ``fileConfig(alembic.ini)`` dựng (handler
+    console ra stderr): dòng log mang lỗi CSDL ⇒ chỉ còn tóm tắt."""
+    r = f41[("log", "tran")]
+    out = _f41_dau_ra(r, "log")
+    lo = _f41_lo(out, "log")
+    assert r.returncode != 0 and lo == [] and "DBError[" in out, (
+        "logger của fileConfig lộ %s (rc=%s):\n%s" % (lo, r.returncode, out[-3000:]))
+
+
+def test_v6_alembic_entrypoint_logger_filecfg_khong_lo(f41):
+    r = f41[("log", "entrypoint")]
+    out = _f41_dau_ra(r, "log")
+    lo = _f41_lo(out, "log")
+    assert r.returncode != 0 and lo == [] and "DBError[" in out, (
+        "entrypoint: logger của fileConfig lộ %s (rc=%s):\n%s" % (lo, r.returncode, out[-3000:]))
+
+
+def test_v6_cli_deploy_bat_ngoai_le_o_cua_ra():
+    """Mỗi tiến trình dòng lệnh chạy lúc deploy / tạo container bắt ngoại lệ không bắt ở
+    CỬA RA bằng ``thoat_cli_an_toan`` (in mô tả an toàn, thoát mã khác 0); ``alembic/env.py``
+    còn phủ bộ che lên handler do ``fileConfig`` dựng."""
+    import ast
+
+    def goi(n, ten_ham):
+        return isinstance(n, ast.Call) and (
+            (isinstance(n.func, ast.Name) and n.func.id == ten_ham)
+            or (isinstance(n.func, ast.Attribute) and n.func.attr == ten_ham))
+
+    def try_bat_o_cua_ra(khoi) -> bool:
+        for n in khoi:
+            if isinstance(n, ast.Try) and any(
+                    any(goi(m, "thoat_cli_an_toan") for m in ast.walk(h)) for h in n.handlers):
+                return True
+        return False
+
+    thieu = []
+    for rel in _S6_CLI:
+        cay = ast.parse((BACKEND / rel).read_text(encoding="utf-8"))
+        if rel == "alembic/env.py":
+            than = cay.body
+            ok = try_bat_o_cua_ra(than)
+            vt_cfg = [i for i, n in enumerate(than) if any(goi(m, "fileConfig") for m in ast.walk(n))]
+            vt_che = [i for i, n in enumerate(than)
+                      if isinstance(n, ast.Expr) and goi(n.value, "gan_bo_che_moi_handler")]
+            if not (vt_cfg and vt_che and min(vt_che) > max(vt_cfg)):
+                thieu.append("%s: thiếu gan_bo_che_moi_handler() SAU fileConfig ở mức module" % rel)
+        else:
+            khoi_main = [n for n in cay.body if isinstance(n, ast.If)
+                         and "__main__" in ast.unparse(n.test)]
+            ok = bool(khoi_main) and try_bat_o_cua_ra(khoi_main[0].body)
+        if not ok:
+            thieu.append("%s: ngoại lệ không bắt KHÔNG qua thoat_cli_an_toan ở cửa ra" % rel)
+    assert thieu == [], "\n".join(thieu)

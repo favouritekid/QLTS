@@ -391,4 +391,11 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # V6 vòng 6 (F41, §6): chạy trong docker-entrypoint.sh (docker logs) và bằng tay
+    # lúc cutover — ngoại lệ không bắt qua cửa ra CLI của CHỦ SỞ HỮU bộ che.
+    from app.core.log_redaction import thoat_cli_an_toan
+
+    try:
+        asyncio.run(main())
+    except BaseException as _loi:  # noqa: BLE001 — cửa ra CLI: mọi ngoại lệ
+        thoat_cli_an_toan(_loi, ten="sync_notification_rules")

@@ -49,7 +49,7 @@ import logging
 import re
 import uuid
 from collections.abc import Mapping, MutableMapping
-from typing import Any, Optional, Union
+from typing import Any, NoReturn, Optional, Union
 
 # ---------------------------------------------------------------------------
 # MỘT NGUỒN MẪU
@@ -970,6 +970,62 @@ def _gan_filter(handler: logging.Handler) -> logging.Handler:
     if not any(isinstance(f, RedactingFilter) for f in handler.filters):
         handler.addFilter(RedactingFilter())
     return handler
+
+
+# ---------------------------------------------------------------------------
+# CỬA RA 4 — tiến trình DÒNG LỆNH (Alembic CLI, script chạy một lần lúc deploy)
+# ---------------------------------------------------------------------------
+# V6 vòng 6 (F41): ``alembic upgrade head`` (one-off của deploy.sh và
+# docker-entrypoint.sh) KHÔNG đi qua :func:`configure_logging` — ``alembic/env.py``
+# cấu hình log bằng ``fileConfig(alembic.ini)`` (handler console ra stderr, KHÔNG
+# bộ che), và ngoại lệ không bắt được Python in THÔ ra stderr (``DETAIL``,
+# ``[SQL: …]``, ``[parameters: …]``, hàng lỗi) ⇒ log deploy ⇒ log Actions (kho
+# PUBLIC) và ``docker logs``. Hai hàm dưới đây là cửa ra của các tiến trình ấy —
+# dùng lại đúng bộ che của các cửa ra 1–3, KHÔNG phải bộ che thứ hai.
+
+
+def gan_bo_che_moi_handler() -> int:
+    """Gắn :class:`RedactingFilter` vào MỌI handler đang có — của logger gốc và
+    của mọi logger có tên (``alembic``, ``sqlalchemy.*``…). Dành cho tiến trình
+    TỰ cấu hình log mà không qua :func:`configure_logging` (Alembic:
+    ``fileConfig(alembic.ini)``). Gọi SAU bước cấu hình ấy. Idempotent; trả số
+    handler đã phủ."""
+    cac_logger = [logging.getLogger()] + [
+        lg for lg in list(logging.Logger.manager.loggerDict.values())
+        if isinstance(lg, logging.Logger)
+    ]
+    so = 0
+    for lg in cac_logger:
+        for h in lg.handlers:
+            _gan_filter(h)
+            so += 1
+    install_log_redaction()
+    return so
+
+
+def thoat_cli_an_toan(exc: BaseException, ten: str = "cli", tep: Any = None) -> NoReturn:
+    """Cửa ra của ngoại lệ KHÔNG BẮT ở một tiến trình dòng lệnh: thay traceback
+    THÔ của Python bằng :func:`dinh_dang_traceback_an_toan` (giữ khung tệp/dòng/
+    hàm và chuỗi cause/context; lỗi CSDL chỉ còn ``DBError[loại · SQLSTATE ·
+    ràng buộc · bảng]``; ngoại lệ khác qua regex), ghi ra stderr, rồi THOÁT VỚI
+    MÃ KHÁC 0 (``SystemExit(1)``; Ctrl-C ⇒ 130) — báo hỏng phải ra mã thoát.
+    ``SystemExit`` mang mã số hoặc ``None`` được ném lại NGUYÊN VẸN."""
+    import sys
+
+    if isinstance(exc, SystemExit) and (exc.code is None or isinstance(exc.code, int)):
+        raise exc
+    ra = tep if tep is not None else sys.stderr
+    try:
+        mo_ta = dinh_dang_traceback_an_toan(exc)
+    except Exception:  # noqa: BLE001 — cửa ra cuối không được tự ném
+        mo_ta = "%s (không dựng được mô tả an toàn)" % type(exc).__name__
+    try:
+        ra.write("%s: THẤT BẠI — ngoại lệ không bắt (mô tả an toàn, lỗi CSDL chỉ còn "
+                 "tóm tắt thuộc tính):\n%s\n" % (ten, mo_ta))
+        ra.flush()
+    except Exception:  # noqa: BLE001
+        pass
+    raise SystemExit(130 if isinstance(exc, KeyboardInterrupt) else 1)
 
 
 # ---------------------------------------------------------------------------
