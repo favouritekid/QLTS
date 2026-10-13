@@ -6,6 +6,7 @@ Phase 3: send() — batch inline, reads from Notification row (legacy path for b
 Phase C1: execute_delivery() — worker path, reads from payload_snapshot (no Notification dependency)
 """
 import structlog
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 from typing import TYPE_CHECKING, Dict, Any, List
 
 from .base import BaseChannel, ChannelResult
@@ -246,7 +247,8 @@ class EmailChannel(BaseChannel):
                     success=False,
                     sent_count=0,
                     failed_ids=recipient_ids,
-                    error_message=str(e)
+                    # V6 vòng 5b: try bọc db.execute — error_message đi vào cột error_reason.
+                    error_message=chu_loi_an_toan(e)
                 )
 
         return ChannelResult(

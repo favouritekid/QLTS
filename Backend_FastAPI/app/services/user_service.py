@@ -1398,7 +1398,7 @@ async def invalidate_all_sessions(
                     context={
                         "operation": "redis_blacklist",
                         "user_id": user_id,
-                        "error": str(e_redis_set),
+                        "error": chu_loi_an_toan(e_redis_set),  # V6 vòng 5b
                     }
                 )
 
@@ -1471,7 +1471,7 @@ async def invalidate_all_sessions(
             )
             raise UserServiceError(
                 detail="Could not invalidate sessions",
-                context={"user_id": user_id, "error": str(e)}
+                context={"user_id": user_id, "error": chu_loi_an_toan(e)}  # V6 vòng 5b
             )
         else:
             raise  # Re-raise custom exceptions (e.g., CacheServiceError)

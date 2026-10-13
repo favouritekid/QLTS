@@ -1289,26 +1289,34 @@ _S6_TRUNG_TINH = {"str", "repr", "len", "getattr", "format"}
 _S6_LOG = {"debug", "info", "warning", "warn", "error", "exception", "critical", "log",
            "_log_warning", "print"}
 #: Lối ra ĐÃ RÀ, KHÔNG mang lỗi CSDL — (tệp, hàm bao, loại): (số chỗ, lý do).
+#: Miễn trừ CHỈ hợp lệ khi khối ``try`` KHÔNG có thao tác CSDL (guard tự kiểm — vòng 5b: một
+#: miễn trừ ghi nhầm "lỗi SMTP" đã giấu ``email_channel.send``, nơi ``try`` bọc ``db.execute``).
 _S6_MIEN = {
     ("app/gateways/zalo.py", "_call_template_api", "return"): (1, "lỗi HTTP của Zalo API, khối try không chạm CSDL"),
     ("app/gateways/zalo_bot.py", "send_message", "return"): (1, "đã qua _safe_error_message; lỗi HTTP Zalo Bot"),
     ("app/routers/monitoring.py", "get_notification_metrics", "gan"): (1, "lỗi Redis (safe_redis_*), không CSDL"),
     ("app/routers/monitoring.py", "get_system_overview", "gan"): (3, "Redis / Celery / Socket.IO — nhánh CSDL đã qua chu_loi_an_toan"),
-    ("app/services/notification_channels/email_channel.py", "execute_delivery", "return"): (1, "lỗi SMTP"),
-    ("app/services/notification_channels/email_channel.py", "send", "return"): (1, "lỗi SMTP"),
+    ("app/services/notification_channels/email_channel.py", "execute_delivery", "return"): (1, "lỗi SMTP (khối try chỉ gọi send_delivery_email; rủi ro riêng: chữ lỗi SMTP có thể mang địa chỉ email — ngoài F30)"),
     ("app/services/notification_rule_loader.py", "get_rule_for_event", "raise"): (1, "lỗi kiểm cấu hình recipient_config (pydantic)"),
     ("app/services/payment_import_service.py", "parse_template", "raise"): (1, "lỗi đọc tệp Excel tải lên"),
     ("app/services/sms_contact_service.py", "_parse_rows", "raise"): (1, "lỗi đọc tệp CSV tải lên"),
-    ("app/services/session_service.py", "revoke_session", "raise"): (1, "chữ lỗi chỉ ở context — context KHÔNG bao giờ ra phản hồi (exception_handlers)"),
-    ("app/services/user_service.py", "invalidate_all_sessions", "raise"): (2, "lỗi Redis; chữ lỗi chỉ ở context"),
     ("app/tasks/utils.py", "_runner", "gan"): (1, "giữ ĐỐI TƯỢNG ngoại lệ để ném lại ở luồng gọi"),
 }
 
 
+#: Thuộc tính mà ``await <x>.<thuộc tính>(…)`` là thao tác CSDL (xấp xỉ RỘNG có chủ ý: ``await
+#: redis.get`` cũng bị tính — hệ quả chỉ là phải bọc ``chu_loi_an_toan``, vốn vô hại với lỗi khác).
+_S6_THAO_TAC_CSDL = {
+    "execute", "get", "scalar", "scalars", "scalar_one", "scalar_one_or_none", "commit", "flush",
+    "refresh", "delete", "merge", "rollback", "stream", "run_sync", "begin", "begin_nested",
+}
+
+
 def _s6_quet() -> dict:
-    """Mọi lối ra NGOÀI log của chữ ngoại lệ trong ``except`` có thể bắt lỗi CSDL."""
+    """Mọi lối ra NGOÀI log của chữ ngoại lệ trong ``except`` có thể bắt lỗi CSDL.
+    Trả ``{(tệp, hàm bao, loại): {"n": số chỗ, "dong": [dòng…], "csdl": bool}}`` — ``csdl``:
+    khối ``try`` có thao tác CSDL trực tiếp, hoặc ``except`` bắt KIỂU lỗi CSDL."""
     import ast
-    from collections import Counter
 
     def ten(f):
         return f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else "")
@@ -1327,7 +1335,42 @@ def _s6_quet() -> dict:
             return True
         return any(lo(c, nhiem) for c in ast.iter_child_nodes(node))
 
-    dem = Counter()
+    def dong_lo(node, nhiem):
+        """Dòng của chỗ dùng biến nhiễm ĐẦU TIÊN không qua hàm bọc (báo đúng dòng lối ra)."""
+        if isinstance(node, ast.Call) and ten(node.func) in _S6_HAM_BOC:
+            return None
+        if isinstance(node, ast.Name) and node.id in nhiem:
+            return node.lineno
+        for c in ast.iter_child_nodes(node):
+            d = dong_lo(c, nhiem)
+            if d is not None:
+                return d
+        return None
+
+    def la_with_csdl(w):
+        for it in w.items:
+            e = it.context_expr
+            if isinstance(e, ast.Call) and (ten(e.func) == "AsyncSessionLocal"
+                                            or ten(e.func) in ("begin", "begin_nested")):
+                return True
+        return False
+
+    def try_co_csdl(t, cha):
+        for n in ast.walk(ast.Module(body=t.body, type_ignores=[])):
+            if isinstance(n, ast.Await) and isinstance(n.value, ast.Call) \
+                    and isinstance(n.value.func, ast.Attribute) \
+                    and n.value.func.attr in _S6_THAO_TAC_CSDL:
+                return True
+            if isinstance(n, ast.AsyncWith) and la_with_csdl(n):
+                return True
+        ong = cha.get(t)
+        while ong is not None and not isinstance(ong, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if isinstance(ong, ast.AsyncWith) and la_with_csdl(ong):
+                return True
+            ong = cha.get(ong)
+        return False
+
+    kq: dict = {}
     goc = BACKEND / "app"
     for p in sorted(goc.rglob("*.py")):
         rel = p.relative_to(BACKEND).as_posix()
@@ -1342,6 +1385,8 @@ def _s6_quet() -> dict:
             while bao in cha and not isinstance(bao, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 bao = cha[bao]
             ten_bao = getattr(bao, "name", "<module>")
+            csdl = bool(kieu(h.type) & (_S6_KIEU - {"Exception", "BaseException"})) or (
+                isinstance(cha.get(h), ast.Try) and try_co_csdl(cha[h], cha))
             than = ast.Module(body=h.body, type_ignores=[])
             nhiem = {h.name}
             for _ in range(3):  # lan truyền qua biến cục bộ (error_msg = str(e.orig) …)
@@ -1375,19 +1420,26 @@ def _s6_quet() -> dict:
                     if not trong:
                         loai = "goi:" + ten(n.func)
                 if loai:
-                    dem[(rel, ten_bao, loai)] += 1
-    return dict(dem)
+                    o = kq.setdefault((rel, ten_bao, loai), {"n": 0, "dong": [], "csdl": False})
+                    o["n"] += 1
+                    o["dong"].append(dong_lo(n.exc if isinstance(n, ast.Raise) else n, nhiem)
+                                     or n.lineno)
+                    o["csdl"] = o["csdl"] or csdl
+    return kq
 
 
 def test_v5_khong_dua_chu_loi_csdl_ra_ngoai_log():
-    """§6 (vòng 5): chữ ngoại lệ trong ``except`` có thể bắt lỗi CSDL KHÔNG được đi ra
-    phản hồi HTTP / cột CSDL / danh sách trả về mà không qua ``chu_loi_an_toan``
-    (hoặc ``mo_ta_loi``). Lối ra đã rà và KHÔNG mang lỗi CSDL nằm ở ``_S6_MIEN`` kèm
-    lý do — khoá HAI chiều: chỗ mới chưa rà ⇒ ĐỎ; chỗ miễn đã biến mất ⇒ ĐỎ (dọn)."""
+    """§6 (vòng 5, v2 ở 5b): chữ ngoại lệ trong ``except`` có thể bắt lỗi CSDL KHÔNG được
+    đi ra phản hồi HTTP / cột CSDL / danh sách trả về mà không qua ``chu_loi_an_toan``
+    (hoặc ``mo_ta_loi``). Lối ra đã rà và KHÔNG mang lỗi CSDL nằm ở ``_S6_MIEN`` kèm lý do
+    — khoá HAI chiều (chỗ mới ⇒ ĐỎ; miễn trừ biến mất ⇒ ĐỎ), và miễn trừ KHÔNG được phủ
+    khối ``try`` có thao tác CSDL (⇒ ĐỎ: phải bọc)."""
     thuc = _s6_quet()
     mong = {k: v[0] for k, v in _S6_MIEN.items()}
-    moi = {k: n for k, n in thuc.items() if mong.get(k) != n}
-    cu = {k: n for k, n in mong.items() if thuc.get(k) != n}
-    assert not moi and not cu, (
+    moi = {k: v for k, v in thuc.items() if mong.get(k) != v["n"]}
+    cu = {k: n for k, n in mong.items() if k not in thuc or thuc[k]["n"] != n}
+    mien_sai = {k: v for k, v in thuc.items() if k in _S6_MIEN and v["csdl"]}
+    assert not moi and not cu and not mien_sai, (
         "lối ra chữ ngoại lệ CHƯA rà (bọc bằng chu_loi_an_toan, hoặc thêm vào _S6_MIEN kèm lý do "
-        "nếu chắc chắn không mang lỗi CSDL): %s\nmiễn trừ không còn khớp: %s" % (moi, cu))
+        "nếu chắc chắn không mang lỗi CSDL): %s\nmiễn trừ không còn khớp: %s\n"
+        "miễn trừ phủ khối try CÓ thao tác CSDL (phải bọc, không được miễn): %s" % (moi, cu, mien_sai))
