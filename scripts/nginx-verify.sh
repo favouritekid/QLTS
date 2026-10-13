@@ -56,7 +56,11 @@ TRANG_THAI=$(docker inspect -f '{{.State.Status}}' "$CT" 2>/dev/null) \
 [ "$TRANG_THAI" = "running" ] \
     || loi "container '$CT' đang ở trạng thái '$TRANG_THAI', không phải running"
 
-MANG=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$CT" | head -1)
+# Không `| head -1`: dưới `pipefail`, đầu đọc thoát sớm làm đầu ghi nhận SIGPIPE
+# và cả pipeline thành lỗi — lấy dòng đầu bằng mở rộng tham số, không pipeline.
+MANG_TAT_CA=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$CT") \
+    || MANG_TAT_CA=""
+MANG="${MANG_TAT_CA%%$'\n'*}"
 IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$MANG\").IPAddress}}" "$CT")
 # `{{.Image}}`, KHÔNG `{{.Config.Image}}`. Cái sau trả về TÊN:TAG mà container
 # được yêu cầu chạy — một nhãn DI ĐỘNG: `nginx` và `nginx-candidate` dùng chung
@@ -195,10 +199,25 @@ $C --user-agent "$UA_R" --referer "https://$DOMAIN/magic-link/withdraw/${GIA_R}?
     "https://$DOMAIN/login" || true
 ' >/dev/null 2>&1 || true
 
+# tim <mẫu> <văn bản> — 0: CÓ · 1: KHÔNG · 2: LỖI tìm kiếm.
+# Đọc HẾT đầu vào (here-string + `grep -c`), KHÔNG `printf … | grep -q`: dưới
+# `set -o pipefail`, `grep -q` thoát ngay ở dòng khớp đầu tiên, `printf` phía
+# trước nhận SIGPIPE (141) và cả pipeline thành "không khớp" — token lộ SỚM
+# trong một access log dài bị báo là KHÔNG lộ (F36 vòng 5). "Không khớp" chỉ
+# được nhận khi grep đã chạy, đọc hết và ĐẾM 0; mọi trường hợp khác (grep hỏng
+# rc ≥ 2, here-string không tạo được, số đếm lạ) là LỖI.
+tim() {
+    local n rc=0
+    n="$(grep -cF -- "$1" <<<"$2")" || rc=$?
+    case "$rc:$n" in
+        0:[1-9]*) return 0 ;;
+        1:0) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
 co_du_ba_dong() {
-    printf '%s\n' "$NHAT_KY" | grep -qF -- "$UA_P" \
-        && printf '%s\n' "$NHAT_KY" | grep -qF -- "$UA_Q" \
-        && printf '%s\n' "$NHAT_KY" | grep -qF -- "$UA_R"
+    tim "$UA_P" "$NHAT_KY" && tim "$UA_Q" "$NHAT_KY" && tim "$UA_R" "$NHAT_KY"
 }
 NHAT_KY=""
 NHAT_KY_RC=0
@@ -212,19 +231,33 @@ for _ in 1 2 3 4 5; do
 done
 
 kiem_dau_do() {  # kiem_dau_do <tên> <User-Agent> <token giả> — 0 = đạt
-    local ten="$1" ua="$2" gia="$3" dong
-    dong="$(printf '%s\n' "$NHAT_KY" | grep -F -- "$ua" || true)"   # bộ lọc: 0 dòng là KẾT QUẢ, không phải lỗi
+    local ten="$1" ua="$2" gia="$3" dong r=0
+    # Lọc dòng của đầu dò: grep KHÔNG -q nên đọc hết; rc 1 (0 dòng) là KẾT QUẢ,
+    # rc ≥ 2 là LỖI — tách riêng, không gộp vào "không thấy".
+    dong="$(grep -F -- "$ua" <<<"$NHAT_KY")" || r=$?
+    if [ "$r" -ge 2 ]; then
+        echo "  ✗ đầu dò token $ten: LỖI khi lọc access log (grep rc=$r)"
+        return 1
+    fi
     if [ -z "$dong" ]; then
         echo "  ✗ đầu dò token $ten: KHÔNG thấy dòng access log của request đầu dò (access_log off? log không ra stdout?)"
         return 1
     fi
-    if printf '%s\n' "$NHAT_KY" | grep -qF -- "$gia"; then
+    r=0; tim "$gia" "$NHAT_KY" || r=$?
+    if [ "$r" -eq 0 ]; then
         echo "  ✗ đầu dò token $ten: access log LỘ token giả:"
         printf '%s\n' "$dong" | sed 's/^/      /'
         return 1
+    elif [ "$r" -ne 1 ]; then
+        echo "  ✗ đầu dò token $ten: LỖI khi tìm token giả trong access log — không kết luận được là không lộ"
+        return 1
     fi
-    if ! printf '%s\n' "$dong" | grep -qF -- "<redacted>"; then
+    r=0; tim "<redacted>" "$dong" || r=$?
+    if [ "$r" -eq 1 ]; then
         echo "  ✗ đầu dò token $ten: dòng log của đầu dò không mang dấu <redacted> (khuôn log đã đổi?)"
+        return 1
+    elif [ "$r" -ne 0 ]; then
+        echo "  ✗ đầu dò token $ten: LỖI khi tìm dấu <redacted> trong dòng của đầu dò"
         return 1
     fi
     echo "  ✓ đầu dò token $ten: có dòng access log, đã che, không lộ token giả"

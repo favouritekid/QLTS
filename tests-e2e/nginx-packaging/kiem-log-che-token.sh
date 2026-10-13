@@ -126,7 +126,7 @@ for ma in a51 a52 a53 a54 a55 a56 a57 a58 a60 a62 a64 a66 a67; do
     dong=$(printf '%s\n' "$OUT" | grep -F -- "\"v6-e2e-$ma\"" || true)
     if [ -z "$dong" ]; then
         thieu="$thieu [$ma: KHÔNG có dòng]"
-    elif ! printf '%s\n' "$dong" | grep -qF -- "<redacted>"; then
+    elif ! grep -F -- "<redacted>" <<<"$dong" >/dev/null; then   # đọc HẾT, không `| grep -q` (SIGPIPE dưới pipefail)
         thieu="$thieu [$ma: dòng không mang <redacted>]"
     fi
 done

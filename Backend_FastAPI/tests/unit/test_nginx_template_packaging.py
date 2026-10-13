@@ -889,7 +889,10 @@ _qlts_mo_hinh_anh() {
     #   rong           — không dòng nào (như `access_log off`);
     #   lo             — mọi dòng mang token giả THÔ (khuôn log ghi `$request` thô);
     #   lo_query       — chỉ đầu dò query lộ, hai đầu dò kia che đúng;
-    #   thieu_referer  — thiếu đúng dòng của đầu dò Referer.
+    #   thieu_referer  — thiếu đúng dòng của đầu dò Referer;
+    #   lo_som_dem_4mib — dòng đầu dò đường dẫn VỪA mang <redacted> VỪA còn token
+    #                    THÔ, phía sau ĐỆM 4 MiB (F36 vòng 5: `printf … | grep -q`
+    #                    dưới pipefail nhận SIGPIPE ⇒ báo nhầm "không lộ").
     # `STUB_LOG_RC`: mã thoát của `docker logs` SAU KHI đã in (nguồn lỗi có đầu ra).
     _d="${QLTS_STUB_LOG:-/khong-co}"
     _m="${STUB_LOG_TOKEN:-che}"
@@ -899,6 +902,12 @@ _qlts_mo_hinh_anh() {
       [ -n "$_ua" ] || continue
       [ "$_m" = "rong" ] && continue
       [ "$_m" = "thieu_referer" ] && [ "$_k" = "R" ] && continue
+      if [ "$_m" = "lo_som_dem_4mib" ] && [ "$_k" = "P" ]; then
+        printf '172.30.0.10 - - [01/Jan/2026:00:00:00 +0000] "GET /confirm/<redacted>?token=%s HTTP/1.1" 200 0 "-" "%s" "-"\n' "$_gia" "$_ua"
+        yes '172.30.0.11 - - [01/Jan/2026:00:00:00 +0000] "GET /static/dem HTTP/1.1" 200 0 "-" "dem" "-"' | head -c 4194304
+        echo
+        continue
+      fi
       if [ "$_m" = "lo" ] || { [ "$_m" = "lo_query" ] && [ "$_k" = "Q" ]; }; then
         printf '172.30.0.10 - - [01/Jan/2026:00:00:00 +0000] "GET /x?token=%s HTTP/1.1" 200 0 "-" "%s" "-"\n' "$_gia" "$_ua"
       else
@@ -5849,11 +5858,24 @@ def test_hau_kiem_khong_liet_ke_duoc_thi_cung_phai_keu():
 
 
 def _chay_verify_dau_do(
-    tmp_path, che_do: str, rc_nguon: int = 0
+    tmp_path, che_do: str, rc_nguon: int = 0, grep_loi: bool = False
 ) -> subprocess.CompletedProcess:
     repo, anh = _san_khau_ngx(tmp_path)
     nhat_ky = repo.parent / "lenh.log"
     nhat_ky.write_text("", encoding="utf-8")
+    if grep_loi:
+        # `grep` giả HỎNG (rc=2) đúng khi được gọi với token giả của đầu dò —
+        # phân biệt "tìm kiếm lỗi" với "không khớp" (F36 vòng 5).
+        grep_that = shutil.which("grep")
+        assert grep_that, "HẠ TẦNG: không thấy grep thật"
+        gia = repo.parent / "bin" / "grep"
+        gia.write_text(
+            "#!/usr/bin/env bash\n"
+            'for _a in "$@"; do case "$_a" in qltsgia*) exit 2 ;; esac; done\n'
+            f'exec "{Path(grep_that).as_posix()}" "$@"\n',
+            encoding="utf-8", newline="\n",
+        )
+        gia.chmod(0o755)
     moi_truong = {
         **os.environ,
         "MSYS_NO_PATHCONV": "1",
@@ -5903,6 +5925,25 @@ def test_verify_dau_do_nguon_loi_co_dau_ra_van_do(tmp_path):
     kq = _chay_verify_dau_do(tmp_path, "che", rc_nguon=3)
     assert kq.returncode != 0 and "docker logs rc=3" in kq.stdout, (
         f"verify phải ĐỎ khi nguồn access log lỗi dù có đầu ra:\n{kq.stdout}\n{kq.stderr}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_lo_som_trong_log_dai_thi_do(tmp_path):
+    """F36 vòng 5: dòng đầu dò VỪA có ``<redacted>`` VỪA còn token thô, phía sau
+    đệm 4 MiB ⇒ phải ĐỎ. ``printf … | grep -q`` dưới ``pipefail``: grep thoát ở
+    dòng khớp đầu, printf nhận SIGPIPE (141) ⇒ pipeline "không khớp" ⇒ xanh sai."""
+    kq = _chay_verify_dau_do(tmp_path, "lo_som_dem_4mib")
+    assert kq.returncode != 0 and "đầu dò token đường dẫn: access log LỘ" in kq.stdout, (
+        f"verify phải ĐỎ khi token lộ sớm trong access log dài:\n{kq.stdout[-3000:]}\n{kq.stderr[-2000:]}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_tim_kiem_loi_khong_coi_la_khong_lo(tmp_path):
+    """F36 vòng 5: phép tìm token giả LỖI (grep rc=2) KHÔNG được hiểu là "không
+    lộ" — phải ĐỎ và nói rõ là lỗi."""
+    kq = _chay_verify_dau_do(tmp_path, "che", grep_loi=True)
+    assert kq.returncode != 0 and "LỖI khi tìm token giả" in kq.stdout, (
+        f"verify phải ĐỎ khi phép tìm token lỗi:\n{kq.stdout}\n{kq.stderr}")
 
 
 @_bo_qua_neu_khong_chay_duoc_bash
