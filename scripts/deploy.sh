@@ -989,6 +989,10 @@ docker compose -f docker-compose.yml --profile production --env-file .env.produc
 # chưa có bản sao nào được tạo, chưa migration nào chạy, và nhánh restore không
 # bao giờ được chạm tới).
 #
+# (Vòng 3, 13-10-2026 — F28: Step 6 KHÔNG còn tự phát lại bản sao; migration
+# đỏ ⇒ ứng dụng giữ DỪNG. Cổng này vẫn cần: lỗi cấu hình ở đây nay sẽ để
+# ứng dụng nằm DỪNG chờ người, thay vì một lượt restore không cần thiết.)
+#
 # ``--entrypoint python`` — cùng lý do với Step 6 và Step 7: `docker compose run`
 # KHÔNG đè ENTRYPOINT, nên thiếu cờ này thì chính bước preflight sẽ chạy trọn
 # ``alembic upgrade head`` + ``sync_notification_rules`` trước khi tới script,
@@ -1095,39 +1099,50 @@ _cho_healthy_dv() {
 }
 
 # =============================================================================
-# Step 4c: ĐÓNG CỬA GHI — PA1 + PA2 + trap theo pha (vá 12-10-2026, F28/F32;
-#          vòng 2: F35 vân tay lược đồ, F37 lỗi ghi tệp trạng thái, phục hồi nginx)
+# Step 4c: ĐÓNG CỬA GHI — PA1 + trap theo pha (vá 12-10-2026, F28/F32; vòng 2:
+#          F35 vân tay lược đồ, F37 tệp trạng thái; vòng 3 13-10-2026: owner
+#          chốt F28 BỎ TỰ PHÁT LẠI DUMP, F39 tách phục hồi dịch vụ khỏi kiểm PII,
+#          dọn one-off alembic của chính lượt)
 # =============================================================================
-# Vì sao: nhánh migration ĐỎ ở Step 6 phát lại bản sao của Step 5 bằng `psql`.
-# Bản sao chỉ chứa những gì đã commit TRƯỚC lúc `pg_dump` bắt đầu. Trước bản
-# vá này `backend`, `celery-worker`, `celery-beat` CŨ chạy suốt Step 5 → 7 và
-# vẫn ghi (người dùng, webhook, `GET /r/{code}`, 27 lịch beat) ⇒ lượt phát lại
-# XOÁ mọi ghi ấy, kể cả request đã nhận 2xx. "Giờ vắng" chỉ giảm xác suất.
+# Vì sao đóng cửa: bản sao Step 5 chỉ chứa những gì commit TRƯỚC lúc `pg_dump`
+# bắt đầu. Trước vá 12-10, `backend`, `celery-worker`, `celery-beat` CŨ chạy
+# suốt Step 5 → 7 và vẫn ghi (người dùng, webhook, `GET /r/{code}`, 27 lịch
+# beat); nhánh migration ĐỎ khi ấy TỰ phát lại bản sao ⇒ XOÁ mọi ghi ấy, kể cả
+# request đã nhận 2xx.
 #
-# BẤT BIẾN (PA1 — đây là BẢO ĐẢM): từ trước `pg_dump` tới khi lượt phát lại
-# kết thúc, KHÔNG container nào của ba service ấy chạy. Tự phát lại CHỈ KHI bất
-# biến được ĐO là còn giữ ngay trước khi phát lại (bước (d) ở Step 6): ba
-# container cũ vẫn `exited`, mốc vòng đời (StartedAt|FinishedAt) KHÔNG đổi so
-# với lúc đóng, service không có container nào khác đang chạy, 0 phiên lạ.
+# VÒNG 3 — KHÔNG CÒN TỰ PHÁT LẠI (owner chốt F28, 13-10-2026). Migration đỏ ⇒
+# ứng dụng giữ DỪNG, CSDL giữ NGUYÊN hiện trạng (kể cả phần migration đã
+# AUTOCOMMIT) để phục hồi TAY có đối soát. Lý do: diễn tập vòng 2 đo được một
+# phiên CSDL ngoài nối SAU T1, ghi 20 giao dịch rồi ngắt TRƯỚC bước (d) — lọt
+# mọi lớp đo, và lượt tự phát lại xoá 20/20 giao dịch đã commit. Không hàng
+# rào nào ở đây chặn được ca ấy một cách BẢO ĐẢM, nên script không được tự
+# quyết thay người một thao tác phá dữ liệu.
 #
-# PA2 (bộ đếm `pg_stat_user_tables` T0/T1) CHỈ là lớp PHÁT HIỆN: hiệu ≠ 0 ⇒
-# chặn; hiệu = 0 KHÔNG kết luận gì. Bộ đếm có thể trễ, đệm, bị đặt lại ⇒ âm
-# tính giả. Nó không bao giờ là lý do để CHO PHÉP phát lại.
+# BẤT BIẾN (PA1): từ trước `pg_dump` tới hết deploy, KHÔNG container nào của ba
+# service ấy chạy, TRỪ: (i) script mở lại ĐÚNG container cũ khi CSDL CHƯA bị
+# migration chạm (pha `dang_dong`/`da_dong`), hoặc (ii) Step 8 dựng container
+# MỚI sau migration XANH. Cửa đóng vẫn cần dù không còn tự phát lại: bản sao
+# Step 5 khớp một mốc mà sau đó ỨNG DỤNG không ghi nữa (đối soát tay chỉ còn
+# phải nhìn nguồn NGOÀI), và mã CŨ không ghi lên lược đồ đang bị migration sửa.
 #
-# Phạm vi bảo đảm: ĐÚNG ba container. `psql` tay, cron… KHÔNG bị cửa này đóng;
-# phép đo "0 phiên lạ" chỉ PHÁT HIỆN chúng tại đúng thời điểm đo. Một phiên
-# ngoài nối SAU T1, ghi rồi ngắt TRƯỚC (d) lọt cả (d) lẫn PA2 — đã diễn tập,
-# KHÔNG lớp nào ở đây chặn được; số liệu `pg_stat_database` T1→T2 chỉ in để đọc.
+# Bước (d) + PA2 (bộ đếm `pg_stat_user_tables` T0/T1/T2) KHÔNG còn là CỔNG:
+# không nhánh nào đổi hành vi theo kết quả của chúng. Ở nhánh đỏ chúng ĐO để IN
+# cho người đối soát — cửa có còn được chứng minh là đóng, bảng nào có ghi
+# trong cửa sổ dump. Hiệu = 0 vẫn KHÔNG chứng minh "0 ghi" (bộ đếm trễ, đệm,
+# bị đặt lại); `pg_stat_database` T1→T2 lẫn phiên của healthcheck.
+#
+# Phạm vi: ĐÚNG ba container. `psql` tay… KHÔNG bị cửa này đóng; phép đo "0
+# phiên lạ" ở 4c chỉ PHÁT HIỆN chúng tại đúng thời điểm đo (còn phiên lạ ⇒ DỪNG
+# trước pg_dump). Kiểm kê cron VPS 13-10-2026: tác nhân định kỳ duy nhất chạm
+# CSDL là `pg_dump` lúc 03:00 (`backup-cron.sh`, CHỈ ĐỌC) — nó là một "phiên lạ"
+# ⇒ deploy trùng khung ~03:00 bị chặn ở 4c (đúng thiết kế: chọn giờ khác).
 #
 # VÂN TAY LƯỢC ĐỒ (F35): "revision cũ" KHÔNG chứng minh "lược đồ cũ" — alembic
 # chạy AUTOCOMMIT nên DDL có thể đã commit trong khi `alembic_version` chưa đổi.
-# Vì vậy mọi lần MỞ LẠI ứng dụng cũ đều đòi vân tay lược đồ (bảng, cột, kiểu,
-# mặc định, ràng buộc, index, trigger, kiểu tự định nghĩa, hàm, view, policy,
-# event trigger, extension — đọc từ catalog) KHỚP từng dòng với bản chụp ở 4c.
-# Lệch ⇒ KHÔNG mở. Đặc biệt: `pg_dump --clean --if-exists` KHÔNG xoá object do
-# migration hỏng tạo THÊM (bảng/kiểu/hàm mới), nên sau phát lại vân tay có thể
-# lệch dù dữ liệu đã về; ta KHÔNG tự đoán object thừa là vô hại — dọn tay rồi so
-# lại vân tay (lệnh in trong hướng dẫn).
+# Mở lại mã cũ (nay chỉ còn ở pha CHƯA migrate) đòi vân tay (bảng, cột, kiểu, mặc
+# định, ràng buộc, index, trigger, kiểu tự định nghĩa, hàm, view, policy, event
+# trigger, extension — đọc từ catalog) KHỚP từng dòng với bản chụp ở 4c. Ở nhánh
+# đỏ, vân tay hiện tại được so và in để người đối soát biết lược đồ lệch tới đâu.
 #
 # Cách đóng / mở — đọc kỹ trước khi "đơn giản hoá":
 #   * `docker stop <CID>` đúng container đã GHI LẠI. Không `compose stop`
@@ -1135,26 +1150,31 @@ _cho_healthy_dv() {
 #     không `down`/`rm`: mất container CŨ là mất đường mở lại đúng ảnh cũ.
 #   * `restart: unless-stopped` + dừng tay ⇒ dockerd không tự bật lại, kể cả
 #     khi dockerd khởi động lại. Chính sách khác ⇒ DỪNG trước khi chạm gì.
-#   * Nhánh lùi mở lại bằng `docker start <CID cũ>`, KHÔNG `up -d`: `up -d` TẠO
-#     LẠI container bằng ảnh MỚI vừa build ở Step 4, trên lược đồ CŨ vừa phát
-#     lại. Sau khi mở, ĐO lại: CID đang chạy = CID cũ, ảnh = ảnh cũ.
+#   * Mở lại bằng `docker start <CID cũ>`, KHÔNG `up -d`: `up -d` TẠO LẠI
+#     container bằng ảnh MỚI vừa build ở Step 4. Sau khi mở, ĐO lại: CID đang
+#     chạy = CID cũ, ảnh = ảnh cũ.
 #   * `upstream backend { server backend:8000; }` của nginx phân giải tên MỘT lần
 #     lúc nạp cấu hình. IP backend đổi sau `docker start` ⇒ khởi động lại ĐÚNG
-#     container nginx đã ghi ở 4c (cùng ảnh, cùng cấu hình) rồi ĐO qua SNI thật
-#     (`nginx-verify.sh`) + so THÂN `/health` qua nginx với thân lấy thẳng từ
-#     backend. "Backend healthy" một mình KHÔNG chứng minh người dùng tới được.
+#     container nginx đã ghi ở 4c (cùng ảnh, cùng cấu hình), rồi ĐO PHỤC HỒI
+#     DỊCH VỤ (`_dcg_do_dich_vu_nginx`, BẮT BUỘC): TLS + SNI thật, route backend /
+#     frontend / API, so THÂN `/health` qua nginx với thân lấy thẳng từ backend.
+#     `nginx-verify.sh` (đi theo mã MỚI, gồm đầu dò token/PII) chạy SAU đó CHỈ ĐỂ
+#     THÔNG TIN (F39): nginx đang đo ở đây là nginx CŨ — ảnh cũ ghi token thô —
+#     và một đầu dò PII đỏ không nói gì về việc người dùng có tới được ứng dụng.
+#     Đường deploy bản MỚI vẫn BẮT BUỘC kiểm PII: Step 8b `nginx-apply.sh` gọi
+#     `nginx-verify.sh` trên candidate và chặn khi không đạt.
 #
 # Trap theo PHA (`_DCG_PHA`) — chạy ở MỌI lối ra (error/exit) và khi nhận
 # HUP/INT/TERM/PIPE (runner bị `cancel-in-progress` giết, phiên SSH rớt ⇒ lần
 # ghi stdout kế tiếp nhận SIGPIPE):
-#   chua_dong                     → không làm gì (chưa đụng container nào)
-#   dang_dong, da_dong            → CSDL CHƯA bị ghi ⇒ mở lại ĐÚNG container cũ
-#                                   (vẫn qua cổng vân tay khi đã có bản chụp 4c)
-#   dang_migrate, dang_phat_lai,
-#   da_migrate, lech_van_tay      → KHÔNG mở; in trạng thái ĐO THẬT + việc tay
-#   da_phat_lai                   → phát lại ĐẠT ⇒ thử mở lại cũ (qua cổng vân tay)
-#   dang_mo_lai_cu                → bị NGẮT thì làm tiếp; lỗi thường thì chỉ in
-#   da_mo_lai_cu, buoc8, xong     → không làm gì
+#   chua_dong                → không làm gì (chưa đụng container nào)
+#   dang_dong, da_dong       → CSDL CHƯA bị migration chạm ⇒ mở lại ĐÚNG container
+#                              cũ (qua cổng vân tay khi đã có bản chụp 4c)
+#   dang_migrate             → dọn one-off alembic CỦA LƯỢT NÀY (chỉ khi exited);
+#                              KHÔNG mở, KHÔNG phát lại; in hướng dẫn đối soát
+#   migrate_do, da_migrate   → KHÔNG mở, KHÔNG phát lại; in trạng thái ĐO THẬT +
+#                              hướng dẫn phục hồi có đối soát
+#   buoc8, xong              → không làm gì
 # SIGKILL không có trap: container nằm DỪNG (fail-closed). Pha cuối cùng đọc ở
 # tệp trạng thái `$BACKUP_DIR/deploy_<TIMESTAMP>.trang-thai`.
 #
@@ -1162,19 +1182,19 @@ _cho_healthy_dv() {
 # hỏng (hết đĩa, quyền) KHÔNG bị nuốt:
 #   * trước khi migration chạy (chua_dong, dang_dong, da_dong, dang_migrate) ⇒
 #     DỪNG deploy (fail-closed), trap mở lại đúng container cũ;
-#   * sau khi migration đã chạy ⇒ KHÔNG bẻ gãy nhánh an toàn đang dở (dừng giữa
-#     phát lại / mở lại còn tệ hơn): cảnh báo to, pha vẫn còn trong log deploy,
-#     cờ `_DCG_TT_HONG=1` được nhắc lại lúc thoát. Phép so vân tay sau phát lại
-#     làm trong BỘ NHỚ, không cần ghi đĩa.
+#   * sau khi migration đã chạy ⇒ cảnh báo to, pha vẫn còn trong log deploy, cờ
+#     `_DCG_TT_HONG=1` được nhắc lại lúc thoát; nhánh sau migration chỉ còn ĐO
+#     và IN (không ghi gì vào CSDL), nên không có gì để bẻ gãy giữa chừng.
 #
-# Chỉ áp ở chế độ ROUTINE. Cold cutover không tự migrate và không tự phát lại
-# (Step 6 bỏ qua), nên không có đường mất ghi này; giữ nguyên hành vi cũ.
+# Chỉ áp ở chế độ ROUTINE. Cold cutover không tự migrate (Step 6 bỏ qua), nên
+# không có đường mất ghi này; giữ nguyên hành vi cũ.
 _DCG_PHA="khong_ap_dung"
 _DCG_TIN_HIEU=""
 _DCG_TT_HONG=0
 _DCG_SO_PSQL=0
 _DCG_NGINX_CID=""
 _DCG_VT_4C_ND=""
+_DCG_GIO_T0=""
 _DCG_DICH_VU="celery-beat backend celery-worker"      # thứ tự DỪNG
 _DCG_THU_TU_MO="backend celery-worker celery-beat"    # thứ tự MỞ LẠI
 _DCG_TT="$BACKUP_DIR/deploy_${TIMESTAMP}.trang-thai"
@@ -1185,6 +1205,12 @@ _DCG_CSDL_T1=""
 _DCG_PSQL_T1=0
 _DCG_VT_4C="$BACKUP_DIR/deploy_${TIMESTAMP}.van-tay-4c"
 _DCG_VT_SQL="$BACKUP_DIR/deploy_${TIMESTAMP}.van-tay.sql"
+# One-off alembic của CHÍNH lượt này: tên riêng (thời điểm + PID) và CID được
+# ghi nhận lúc nó xuất hiện. Dọn CHỈ theo CID ấy, CHỈ khi `exited`.
+_DCG_ONEOFF_TEN="dcg-mig-${TIMESTAMP}-$$"
+_DCG_ONEOFF_GHI="$BACKUP_DIR/deploy_${TIMESTAMP}.oneoff-cid"
+_DCG_ONEOFF_THEO=""
+_DCG_ONEOFF_XONG=0
 declare -A _DCG_CID=() _DCG_ANH=() _DCG_MOC=() _DCG_IP=()
 
 _DCG_HAN_PHIEN="${QLTS_HAN_PHIEN_LA:-30}"
@@ -1231,7 +1257,7 @@ _dcg_pha() {
             _DCG_PHA="$truoc"
             error "[trạng thái] tệp trạng thái KHÔNG ghi được TRƯỚC khi migration chạy — DỪNG (fail-closed). CSDL chưa bị migration chạm." ;;
         *)
-            warn "[trạng thái] tiếp tục nhánh an toàn đang dở; pha '$1' chỉ còn trong log deploy này" ;;
+            warn "[trạng thái] tiếp tục; pha '$1' chỉ còn trong log deploy này" ;;
     esac
 }
 
@@ -1338,7 +1364,7 @@ _dcg_ip() {
 }
 
 # Đo cửa ghi phía CONTAINER. Trả ≠0 kèm lý do; không `error` ở đây — bên gọi
-# quyết định (4c: dừng + mở lại; bước (d): KHÔNG phát lại, KHÔNG mở).
+# quyết định (4c: dừng + mở lại; bước (d) ở nhánh đỏ: CHỈ in để đối soát).
 # Hàm này được gọi trong ngữ cảnh `if`/`||` (set -e TẮT) nên mọi lệnh đều được
 # kiểm tường minh.
 _dcg_cua_dong() {
@@ -1436,75 +1462,118 @@ _dcg_so_dem() {
         }' "$1" "$2"
 }
 
-# PA2 — lớp PHÁT HIỆN, chạy SAU bước (d), TRƯỚC phát lại.
+# PA2 — CHỈ ĐO ĐỂ ĐỐI SOÁT (vòng 3: không còn là cổng của thao tác nào). Trả ≠0
+# khi THẤY dấu hiệu ghi trong cửa sổ dump hoặc thiếu mốc; trả 0 KHÔNG chứng minh
+# "0 ghi". Bên gọi chỉ in, không rẽ nhánh theo kết quả.
 _dcg_pa2() {
     local ok=0 c2 so_tu_do
-    log "[PA2] chỉ PHÁT HIỆN: hiệu bộ đếm T1−T0 ≠ 0 ⇒ chặn; = 0 KHÔNG chứng minh '0 mất ghi'"
+    log "[PA2] đo để ĐỐI SOÁT: hiệu bộ đếm T1−T0 ≠ 0 ⇒ có ghi trong cửa sổ dump (phát lại bản sao sẽ xoá chúng); = 0 KHÔNG chứng minh '0 ghi'"
     if [ ! -s "$_DCG_DEM_T0" ] || [ ! -s "$_DCG_DEM_T1" ]; then
-        warn "[PA2] thiếu mốc T0/T1 — không đo được ⇒ chặn"
+        warn "[PA2] thiếu mốc T0/T1 — không đo được"
         return 1
     fi
     if ! _dcg_so_dem "$_DCG_DEM_T0" "$_DCG_DEM_T1" "T1-T0"; then
-        warn "[PA2] có dấu hiệu ghi (hoặc bộ đếm bị đặt lại) trong cửa sổ dump ⇒ chặn"
+        warn "[PA2] có dấu hiệu ghi (hoặc bộ đếm bị đặt lại) trong cửa sổ dump"
         ok=1
     fi
     if _dcg_chup_dem "$_DCG_DEM_T2"; then
-        log "[PA2] T2−T1 (CHỈ ĐỂ ĐỌC — lẫn ghi của chính migration AUTOCOMMIT):"
+        log "[PA2] T2−T1 (lẫn ghi của chính migration AUTOCOMMIT và mọi ghi ngoài SAU T1):"
         _dcg_so_dem "$_DCG_DEM_T1" "$_DCG_DEM_T2" "T2-T1" || true
     else
-        warn "[PA2] không chụp được T2 (chỉ để đọc, không phải cổng)"
+        warn "[PA2] không chụp được T2"
     fi
-    # pg_stat_database T1→T2: CHỈ ĐỂ ĐỌC. Phiên deploy tự mở trong khoảng này
-    # được đếm; alembic ≥ 1 phiên; healthcheck postgres cũng có thể đếm là phiên.
+    # pg_stat_database T1→T2: phiên deploy tự mở trong khoảng này được đếm;
+    # alembic ≥ 1 phiên; healthcheck postgres cũng có thể đếm là phiên.
     so_tu_do=$((_DCG_SO_PSQL - _DCG_PSQL_T1 + 1))
     if [ -n "$_DCG_CSDL_T1" ] && c2=$(_dcg_chup_csdl); then
         awk -F'|' -v a="$_DCG_CSDL_T1" -v b="$c2" -v t="$so_tu_do" 'BEGIN {
             split(a, x, "|"); split(b, y, "|")
-            printf "       [T2-T1 pg_stat_database, CHỈ ĐỂ ĐỌC] phiên +%d (deploy tự mở %d phiên đo; alembic ≥1) · commit +%d · chèn +%d · sửa +%d · xoá +%d\n",
+            printf "       [T2-T1 pg_stat_database] phiên +%d (deploy tự mở %d phiên đo; alembic ≥1; healthcheck) · commit +%d · chèn +%d · sửa +%d · xoá +%d\n",
                 y[1]-x[1], t, y[2]-x[2], y[3]-x[3], y[4]-x[4], y[5]-x[5] }'
     else
-        warn "[PA2] không chụp được pg_stat_database T1/T2 (chỉ để đọc)"
+        warn "[PA2] không chụp được pg_stat_database T1/T2"
     fi
     return "$ok"
 }
 
-# Đo nginx ĐANG PHỤC VỤ bằng đường của client thật: `nginx-verify.sh` (TLS + SNI
-# thật, route backend, route frontend…) + so THÂN `/health` đi qua nginx với thân
-# lấy THẲNG từ backend (cùng mạng) — một 200 từ catch-all sẽ lệch thân.
-_dcg_do_nginx() {
-    local mang ipn anh ra a b rong
+# PHỤC HỒI DỊCH VỤ qua nginx ĐANG PHỤC VỤ — BẮT BUỘC ở nhánh lùi (F39). Đo bằng
+# đường của client thật, từ MỘT container khác trên cùng mạng (ảnh của chính
+# nginx ấy, có curl): TLS + SNI thật (`--resolve`, không `Host:`), /health →
+# backend 200 và THÂN trùng thân lấy thẳng từ backend (một 200 từ catch-all sẽ
+# lệch thân), /login → frontend 200, /api/ còn cưỡng chế xác thực (401), và khi
+# NGINX_PROBE_STRICT_TLS=1 (mặc định, như nginx-verify.sh) chứng thư hợp lệ cho
+# đúng $DOMAIN. Tầng chủ sở hữu của "người dùng tới được ứng dụng cũ" là HÀM
+# NÀY — không phải `nginx-verify.sh` (xem `_dcg_thong_tin_pii_nginx`).
+_dcg_do_dich_vu_nginx() {
+    local mang ipn anh ra a b strict rong mh ml mp mc
     rong=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-    if ! bash "$SCRIPT_DIR/nginx-verify.sh" "$_DCG_NGINX_CID" "$DOMAIN"; then
-        warn "[nginx] nginx-verify KHÔNG ĐẠT trên container nginx đang phục vụ ($_DCG_NGINX_CID)"
-        return 1
-    fi
+    strict="${NGINX_PROBE_STRICT_TLS:-1}"
     mang=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$_DCG_NGINX_CID" \
         | awk 'NF && !x { print; x = 1 }') || mang=""
-    [ -n "$mang" ] || { warn "[nginx] không đọc được mạng của nginx"; return 1; }
+    [ -n "$mang" ] || { warn "[nginx · dịch vụ] không đọc được mạng của nginx"; return 1; }
     ipn=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$mang\").IPAddress}}" "$_DCG_NGINX_CID") || ipn=""
     anh=$(docker inspect -f '{{.Image}}' "$_DCG_NGINX_CID") || anh=""
-    [ -n "$ipn" ] && [ -n "$anh" ] || { warn "[nginx] không đọc được IP/ảnh của nginx"; return 1; }
-    # `docker run` THƯỜNG (không phải one-off Compose): ảnh nginx đang phục vụ, có
-    # curl; `--entrypoint sh` tường minh; không có khái niệm `--no-deps`.
-    ra=$(docker run --network "$mang" --rm -e DOMAIN="$DOMAIN" -e IPN="$ipn" --entrypoint sh "$anh" -c '
+    [ -n "$ipn" ] && [ -n "$anh" ] || { warn "[nginx · dịch vụ] không đọc được IP/ảnh của nginx"; return 1; }
+    # `docker run` THƯỜNG (không phải one-off Compose): `--entrypoint sh` tường
+    # minh; không có khái niệm `--no-deps`. Mỗi phép đo in MỘT dòng `NHÃN giá-trị`.
+    ra=$(docker run --network "$mang" --rm -e DOMAIN="$DOMAIN" -e IPN="$ipn" -e STRICT="$strict" \
+        --entrypoint sh "$anh" -c '
+ma() { c=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 8 --retry 0 "$@" 2>/dev/null || true); echo "${c:-000}"; }
+echo "MA-HEALTH $(ma --insecure --resolve "$DOMAIN:443:$IPN" "https://$DOMAIN/health")"
+echo "MA-LOGIN $(ma --insecure --resolve "$DOMAIN:443:$IPN" "https://$DOMAIN/login")"
+echo "MA-API $(ma --insecure --resolve "$DOMAIN:443:$IPN" "https://$DOMAIN/api/payments/1")"
+if [ "$STRICT" = "1" ]; then echo "MA-CHUNG-THU $(ma --resolve "$DOMAIN:443:$IPN" "https://$DOMAIN/health")"; else echo "MA-CHUNG-THU bo-qua"; fi
 a=$(curl -sS --max-time 8 --insecure --resolve "$DOMAIN:443:$IPN" "https://$DOMAIN/health" 2>/dev/null | sha256sum | cut -d" " -f1)
 b=$(curl -sS --max-time 8 http://backend:8000/health 2>/dev/null | sha256sum | cut -d" " -f1)
 echo "THAN-NGINX $a"
 echo "THAN-BACKEND $b"' 2>/dev/null) || ra=""
+    mh=$(printf '%s\n' "$ra" | awk '$1 == "MA-HEALTH" { print $2 }')
+    ml=$(printf '%s\n' "$ra" | awk '$1 == "MA-LOGIN" { print $2 }')
+    mp=$(printf '%s\n' "$ra" | awk '$1 == "MA-API" { print $2 }')
+    mc=$(printf '%s\n' "$ra" | awk '$1 == "MA-CHUNG-THU" { print $2 }')
     a=$(printf '%s\n' "$ra" | awk '$1 == "THAN-NGINX" { print $2 }')
     b=$(printf '%s\n' "$ra" | awk '$1 == "THAN-BACKEND" { print $2 }')
-    if [ -z "$a" ] || [ "$a" = "$rong" ] || [ "$a" != "$b" ]; then
-        warn "[nginx] thân /health qua nginx (SNI thật) KHÁC thân lấy thẳng từ backend (nginx=${a:-?} backend=${b:-?})"
+    log "  [nginx · dịch vụ] SNI=$DOMAIN → /health ${mh:-?} · /login ${ml:-?} · /api/payments/1 ${mp:-?} · chứng thư ${mc:-?}"
+    if [ "$mh" != "200" ] || [ "$ml" != "200" ] || [ "$mp" != "401" ]; then
+        warn "[nginx · dịch vụ] KHÔNG ĐẠT: cần /health 200, /login 200, /api/payments/1 401 qua SNI thật"
         return 1
     fi
-    log "  ✓ [nginx] đo qua SNI thật ĐẠT + thân /health qua nginx = thân từ backend"
+    if [ "$strict" = "1" ] && [ "$mc" != "200" ]; then
+        warn "[nginx · dịch vụ] KHÔNG ĐẠT: chứng thư không hợp lệ cho $DOMAIN (NGINX_PROBE_STRICT_TLS=1)"
+        return 1
+    fi
+    if [ -z "$a" ] || [ "$a" = "$rong" ] || [ "$a" != "$b" ]; then
+        warn "[nginx · dịch vụ] KHÔNG ĐẠT: thân /health qua nginx (SNI thật) KHÁC thân lấy thẳng từ backend (nginx=${a:-?} backend=${b:-?})"
+        return 1
+    fi
+    log "  ✓ [nginx · dịch vụ] PHỤC HỒI DỊCH VỤ ĐẠT — TLS/SNI thật, route backend/frontend/API, thân /health qua nginx = thân từ backend"
 }
 
-# Mở lại ĐÚNG container cũ đã ghi ở 4c. Thứ tự: CỔNG VÂN TAY (F35) → docker start
-# → đo CID/ảnh/running → IP đổi thì khởi động lại đúng nginx cũ → đo nginx thật.
-# Trả: 0 đạt · 3 vân tay lệch (CHƯA bật gì) · 4 không đo được vân tay (CHƯA bật
-# gì) · 1 lỗi khác. Không `error` trực tiếp (trừ `_cho_healthy_dv`, vốn exit) —
-# trap gọi hàm này trong subshell.
+# KIỂM PII trên nginx đang phục vụ — ở nhánh lùi CHỈ LÀ THÔNG TIN (F39). Chạy
+# `nginx-verify.sh` của mã MỚI (gồm đầu dò token trong access log) lên nginx CŨ:
+# ảnh cũ ghi `$request`/`$http_referer` THÔ nên đầu dò token đỏ là kết quả
+# ĐÚNG về nginx cũ, không phải lỗi phục hồi. Luôn trả 0; kết quả ghi vào log
+# deploy và tệp trạng thái để người vận hành biết nginx cũ còn lộ token.
+_dcg_thong_tin_pii_nginx() {
+    local rc=0
+    log "  [nginx · PII — THÔNG TIN, KHÔNG chặn nhánh lùi] chạy nginx-verify.sh (mã mới) lên nginx CŨ đang phục vụ..."
+    bash "$SCRIPT_DIR/nginx-verify.sh" "$_DCG_NGINX_CID" "$DOMAIN" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        log "  [nginx · PII — THÔNG TIN] nginx-verify.sh ĐẠT trên nginx cũ"
+        _dcg_ghi "pii_nginx_cu" "dat" || true
+    else
+        warn "[nginx · PII — THÔNG TIN, KHÔNG chặn] nginx-verify.sh KHÔNG ĐẠT (rc=$rc) trên nginx CŨ — ảnh nginx cũ có thể ghi token THÔ vào access log (F39). Dịch vụ đã được đo RIÊNG ở trên; lộ token chỉ hết khi bản mới qua Step 8b."
+        _dcg_ghi "pii_nginx_cu" "KHONG_DAT rc=$rc" || true
+    fi
+    return 0
+}
+
+# Mở lại ĐÚNG container cũ đã ghi ở 4c — CHỈ ở pha CHƯA migrate (CSDL chưa bị
+# migration chạm). Thứ tự: CỔNG VÂN TAY (F35) → docker start → đo CID/ảnh/running
+# → IP đổi thì khởi động lại đúng nginx cũ → ĐO PHỤC HỒI DỊCH VỤ (bắt buộc) →
+# kiểm PII (thông tin). Trả: 0 đạt · 3 vân tay lệch (CHƯA bật gì) · 4 không đo
+# được vân tay (CHƯA bật gì) · 1 lỗi khác. Không `error` trực tiếp (trừ
+# `_cho_healthy_dv`, vốn exit) — trap gọi hàm này trong subshell.
 _dcg_mo_lai_cu() {
     local s live anh st ip kq vt="lược đồ khớp 4c"
     if [ "$_DCG_PHA" = "dang_dong" ] && [ -z "$_DCG_VT_4C_ND" ]; then
@@ -1552,22 +1621,99 @@ _dcg_mo_lai_cu() {
         # Khởi động lại ĐÚNG container nginx đã ghi ở 4c (theo CID) — CỐ Ý giữ NGUYÊN
         # ảnh, biến môi trường và bản render; mục đích DUY NHẤT là để nginx phân giải
         # lại tên upstream. KHÔNG phải cách áp cấu hình mới (việc đó chỉ đi qua
-        # scripts/nginx-apply.sh) — và kết quả được ĐO ngay dưới bằng nginx-verify.sh.
+        # scripts/nginx-apply.sh) — và kết quả được ĐO ngay dưới qua SNI thật.
+        # Đây là lời gọi DUY NHẤT được guard "lệnh đã chết" miễn trừ (khai đúng dòng
+        # trong test_nginx_template_packaging.py); thêm một lời gọi khác ⇒ guard đỏ.
         if ! docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null; then
             warn "[nginx] khởi động lại container nginx cũ THẤT BẠI"
             return 1
         fi
         _cho_healthy_dv nginx "$_HAN_HEALTH"
     fi
-    _dcg_do_nginx || return 1
+    _dcg_do_dich_vu_nginx || return 1
+    _dcg_thong_tin_pii_nginx
     _dcg_ghi "mo_lai_cu" "dat" || true
-    log "  ✓ đã mở lại 3 container CŨ — cùng CID, cùng ảnh, $vt, nginx đo qua SNI thật (đã đo)"
+    log "  ✓ đã mở lại 3 container CŨ — cùng CID, cùng ảnh, $vt, phục hồi dịch vụ qua SNI thật ĐẠT (đã đo)"
+}
+
+# Ghi nhận CID one-off alembic của CHÍNH lượt này ngay khi nó xuất hiện. Chạy
+# NỀN trong lúc `compose run` (tiền cảnh) làm việc: tiền cảnh giữ nguyên ngữ
+# nghĩa tín hiệu (trap chạy SAU khi `compose run` trả về). Tên riêng của lượt
+# (`$_DCG_ONEOFF_TEN`) không bao giờ trùng tên lượt khác; CID 64 hex được ghi
+# vào `$_DCG_ONEOFF_GHI` — tệp RIÊNG, không chen vào tệp trạng thái.
+_dcg_theo_oneoff() {
+    local i=0 cid
+    while [ "$i" -lt 600 ]; do
+        cid=$(docker inspect -f '{{.Id}}' "$_DCG_ONEOFF_TEN" 2>/dev/null) || cid=""
+        case "$cid" in
+            ''|*[!0-9a-f]*) : ;;
+            *)
+                if [ "${#cid}" -eq 64 ]; then
+                    printf '%s\n' "$cid" > "$_DCG_ONEOFF_GHI"
+                    return 0
+                fi ;;
+        esac
+        i=$((i + 1))
+        sleep 0.2
+    done
+}
+_dcg_dung_theo_oneoff() {
+    [ -n "$_DCG_ONEOFF_THEO" ] || return 0
+    kill "$_DCG_ONEOFF_THEO" 2>/dev/null || true
+    wait "$_DCG_ONEOFF_THEO" 2>/dev/null || true
+    _DCG_ONEOFF_THEO=""
+}
+
+# Dọn one-off alembic CỦA CHÍNH LƯỢT NÀY: CHỈ theo CID đã ghi nhận, CHỈ khi
+# container ấy mang đúng tên của lượt, nhãn one-off của service backend, và đang
+# `exited`. Đang chạy / không khớp ⇒ KHÔNG đụng (alembic có thể VẪN đang chạy).
+# `docker rm` không `-f`. Không bao giờ dọn theo nhãn chung: one-off của lượt
+# khác (hoặc của người vận hành) không thuộc quyền lượt này.
+_dcg_don_oneoff() {
+    local cid tt
+    _DCG_ONEOFF_XONG=1
+    _dcg_dung_theo_oneoff
+    cid=$(cat "$_DCG_ONEOFF_GHI" 2>/dev/null) || cid=""
+    case "$cid" in
+        '')
+            log "  [one-off] chưa ghi nhận CID one-off nào của lượt này ($_DCG_ONEOFF_TEN) — không dọn gì"
+            return 0 ;;
+        *[!0-9a-f]*)
+            warn "[one-off] CID ghi nhận có ký tự lạ ('$cid') — KHÔNG dọn"
+            return 1 ;;
+    esac
+    if [ "${#cid}" -ne 64 ]; then
+        warn "[one-off] CID ghi nhận dài ${#cid} (cần 64 hex) — KHÔNG dọn"
+        return 1
+    fi
+    if ! tt=$(docker inspect -f '{{.Name}}|{{index .Config.Labels "com.docker.compose.oneoff"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.State.Status}}' "$cid" 2>/dev/null); then
+        log "  [one-off] $cid không còn (\`--rm\` đã dọn) — không dọn gì"
+        _dcg_ghi "oneoff" "$cid khong_con" || true
+        return 0
+    fi
+    case "$tt" in
+        "/$_DCG_ONEOFF_TEN|True|backend|exited")
+            if docker rm "$cid" >/dev/null; then
+                log "  ✓ [one-off] đã dọn one-off alembic của CHÍNH lượt này ($cid, exited)"
+                _dcg_ghi "oneoff" "$cid da_don" || true
+                return 0
+            fi
+            warn "[one-off] docker rm $cid THẤT BẠI"
+            return 1 ;;
+        "/$_DCG_ONEOFF_TEN|True|backend|"*)
+            warn "[one-off] one-off alembic của lượt này ($cid) đang '${tt##*|}' — KHÔNG dọn (chỉ dọn khi exited). Alembic có thể VẪN đang chạy."
+            _dcg_ghi "oneoff" "$cid giu ${tt##*|}" || true
+            return 1 ;;
+        *)
+            warn "[one-off] $cid KHÔNG khớp one-off của lượt này (đo: '$tt') — KHÔNG dọn"
+            return 1 ;;
+    esac
 }
 
 _dcg_huong_dan() {
-    local s m ds
+    local s m ds cid
     warn "[cửa ghi] $1"
-    warn "  pha=$_DCG_PHA · tín hiệu=${_DCG_TIN_HIEU:--} · script KHÔNG tự mở ứng dụng ở pha này. Trạng thái ĐO THẬT:"
+    warn "  pha=$_DCG_PHA · tín hiệu=${_DCG_TIN_HIEU:--} · script KHÔNG tự mở ứng dụng và KHÔNG tự phát lại bản sao (F28). Trạng thái ĐO THẬT:"
     for s in $_DCG_THU_TU_MO; do
         m=$(_dcg_moc "${_DCG_CID[$s]:-khong-co}" 2>/dev/null) || m="KHÔNG đọc được"
         ds=$($_RA_COMPOSE ps -q "$s" 2>/dev/null) || ds="?"
@@ -1575,6 +1721,13 @@ _dcg_huong_dan() {
     done
     m=$(docker inspect -f '{{.State.Status}}' "${_DCG_NGINX_CID:-khong-co}" 2>/dev/null) || m="KHÔNG đọc được"
     warn "  'nginx': ${_DCG_NGINX_CID:-?} · đo: $m"
+    cid=$(cat "$_DCG_ONEOFF_GHI" 2>/dev/null) || cid=""
+    if [ -n "$cid" ]; then
+        m=$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null) || m="không còn"
+        warn "  one-off alembic của lượt này: tên $_DCG_ONEOFF_TEN · CID ghi nhận $cid · đo: $m"
+    else
+        warn "  one-off alembic của lượt này: tên $_DCG_ONEOFF_TEN · chưa ghi nhận CID"
+    fi
     if [ -n "$_DCG_VT_4C_ND" ]; then
         _dcg_so_van_tay >/dev/null 2>&1
         case $? in
@@ -1584,13 +1737,15 @@ _dcg_huong_dan() {
         esac
     fi
     [ "$_DCG_TT_HONG" = "1" ] && warn "  ⚠ tệp trạng thái đã có lần KHÔNG ghi được — đọc pha ở log deploy này"
-    warn "  bản sao trước deploy: ${_BAN_SAO:-CHƯA tạo} · vân tay 4c: $_DCG_VT_4C · câu SQL vân tay: $_DCG_VT_SQL"
-    warn "  tệp trạng thái: $_DCG_TT"
-    warn "  Việc tay, theo thứ tự:"
-    warn "   1. Chắc chắn KHÔNG còn migration/phát lại nào chạy, và dọn container one-off còn sót (bị ngắt thì \`--rm\` không kịp dọn — \`_cho_healthy_dv\` sẽ thấy 2 container backend): docker ps -a --filter label=com.docker.compose.oneoff=True"
+    warn "  bản sao Step 5 (chụp khi cửa ghi ĐÃ đóng, mốc T0 ${_DCG_GIO_T0:-?}): ${_BAN_SAO:-CHƯA tạo} · vân tay 4c: $_DCG_VT_4C · câu SQL vân tay: $_DCG_VT_SQL"
+    warn "  bộ đếm T0/T1/T2: $_DCG_DEM_T0 · $_DCG_DEM_T1 · $_DCG_DEM_T2 · tệp trạng thái: $_DCG_TT"
+    warn "  PHỤC HỒI CÓ ĐỐI SOÁT — theo thứ tự, KHÔNG bỏ bước. CSDL đang giữ MỌI ghi đã commit; đừng phá nó trước khi đối chiếu:"
+    warn "   1. Chắc chắn KHÔNG còn migration nào chạy. One-off của lượt này: docker inspect -f '{{.State.Status}}' <CID ghi nhận ở trên>; CHỈ khi 'exited' mới docker rm <CID ấy>. KHÔNG dọn one-off nào khác (lượt khác / đang chạy)."
     warn "   2. So vân tay lược đồ với bản 4c (rỗng = KHỚP): docker compose -f docker-compose.yml --profile production --env-file .env.production exec -T postgres psql -X -A -t -q -U ${POSTGRES_USER:-qlts} -d ${POSTGRES_DB:-qlts_production} < $_DCG_VT_SQL | diff $_DCG_VT_4C -"
-    warn "   3. CHỈ KHI vân tay KHỚP: docker start đủ ba CID ở trên (backend trước), rồi đo nginx thật: bash scripts/nginx-verify.sh ${_DCG_NGINX_CID:-<nginx>} $DOMAIN. KHÔNG dùng up -d — nó dựng ảnh MỚI. Revision cũ KHÔNG đủ: alembic chạy AUTOCOMMIT."
-    warn "   4. Vân tay LỆCH: KHÔNG bật mã cũ. Tiến (deploy lại bản sửa), hoặc phát lại bản sao khi CHẮC không còn ghi sau mốc dump — dump --clean --if-exists KHÔNG xoá object migration hỏng tạo thêm (các dòng '+'): dọn có chủ đích rồi so lại vân tay."
+    warn "   3. Ưu tiên ĐI TIẾP: sửa migration rồi deploy lại bản sửa — CSDL giữ nguyên, KHÔNG mất ghi nào. Đây là đường mặc định."
+    warn "   4. Vân tay KHỚP chỉ nói về LƯỢC ĐỒ: migration dữ liệu đã AUTOCOMMIT vẫn có thể đã sửa hàng — đọc migration hỏng trước. Chỉ khi chắc mã cũ chạy đúng trên dữ liệu hiện tại: docker start đủ ba CID ở trên (backend trước; KHÔNG up -d — nó dựng ảnh MỚI)."
+    warn "      Sau đó: IP backend đổi thì khởi động lại ĐÚNG CID nginx ở trên, rồi đo dịch vụ qua SNI thật (curl --resolve $DOMAIN:443:<IP nginx> https://$DOMAIN/health và /login)."
+    warn "   5. Vân tay LỆCH: KHÔNG mở mã cũ. Nếu buộc phải LÙI bằng bản sao, ĐỐI SOÁT TRƯỚC: (a) mọi ghi commit SAU mốc T0 sẽ MẤT — so bộ đếm T0/T1/T2, xem phiên đã/đang nối (pg_stat_activity), tra các bảng có cột thời gian (created_at/updated_at > T0) để liệt kê TỪNG khoá; (b) có ghi ⇒ trích chúng ra TRƯỚC để nhập lại; (c) phát lại: docker compose -f docker-compose.yml --env-file .env.production exec -T postgres psql -v ON_ERROR_STOP=1 -U ${POSTGRES_USER:-qlts} ${POSTGRES_DB:-qlts_production} < bản sao; (d) dump --clean --if-exists KHÔNG xoá object migration hỏng tạo thêm (dòng '+' ở bước 2) — dọn có chủ đích; (e) so lại vân tay, CHỈ KHI KHỚP mới làm bước 4."
 }
 
 _dcg_bat_tin_hieu() {
@@ -1605,31 +1760,31 @@ _dcg_khi_thoat() {
     set +eu
     _dcg_ghi "thoat" "rc=$rc tin_hieu=${_DCG_TIN_HIEU:--} pha=$_DCG_PHA"
     case "$_DCG_PHA" in
-        khong_ap_dung|chua_dong|da_mo_lai_cu|buoc8|xong)
+        khong_ap_dung|chua_dong|buoc8|xong)
             : ;;
-        dang_dong|da_dong|da_phat_lai)
-            warn "[cửa ghi] deploy dừng ở pha '$_DCG_PHA' (rc=$rc, tín hiệu=${_DCG_TIN_HIEU:--}) — thử mở lại ĐÚNG container cũ (qua cổng vân tay lược đồ)"
+        dang_dong|da_dong)
+            warn "[cửa ghi] deploy dừng ở pha '$_DCG_PHA' (rc=$rc, tín hiệu=${_DCG_TIN_HIEU:--}) — CSDL CHƯA bị migration chạm; thử mở lại ĐÚNG container cũ (qua cổng vân tay lược đồ)"
             if ( _dcg_mo_lai_cu ); then
                 warn "[cửa ghi] ĐÃ mở lại container CŨ (đã đo — xem các dòng ✓ ngay trên). Deploy KHÔNG thành công."
             else
                 _dcg_ghi "mo_lai_cu" "KHONG_DAT"
                 _dcg_huong_dan "mở lại container cũ KHÔNG đạt / KHÔNG được phép"
             fi ;;
-        dang_mo_lai_cu)
-            if [ -n "$_DCG_TIN_HIEU" ] && ( _dcg_mo_lai_cu ); then
-                warn "[cửa ghi] bị ngắt khi đang mở lại — ĐÃ mở lại xong container CŨ."
-            else
-                _dcg_huong_dan "mở lại container cũ sau phát lại KHÔNG đạt"
-            fi ;;
+        dang_migrate)
+            [ "$_DCG_ONEOFF_XONG" = "1" ] || _dcg_don_oneoff
+            _dcg_huong_dan "bị ngắt khi migration ĐANG chạy — lược đồ CHƯA RÕ; KHÔNG tự mở ứng dụng, KHÔNG phát lại" ;;
+        migrate_do)
+            [ "$_DCG_ONEOFF_XONG" = "1" ] || _dcg_don_oneoff
+            _dcg_huong_dan "migration ĐỎ — KHÔNG phát lại bản sao (F28); ứng dụng giữ DỪNG, CSDL giữ nguyên để đối soát" ;;
         *)
-            _dcg_huong_dan "lược đồ CHƯA RÕ, đã MỚI, hoặc LỆCH bản 4c — KHÔNG tự mở ứng dụng" ;;
+            _dcg_huong_dan "lược đồ đã MỚI hoặc chưa rõ — KHÔNG tự mở ứng dụng cũ" ;;
     esac
     [ "$_DCG_TT_HONG" = "1" ] && warn "[trạng thái] ⚠ tệp trạng thái $_DCG_TT đã có lần KHÔNG ghi được trong lượt này — log deploy là bản ghi pha đầy đủ."
     exit "$rc"
 }
 
 if [ "${IS_CUTOVER}" -eq 1 ]; then
-    cutover "Step 4c: KHÔNG đóng cửa ghi (cutover không tự migrate, không tự phát lại)"
+    cutover "Step 4c: KHÔNG đóng cửa ghi (cutover không tự migrate)"
 else
     log "Step 4c/8: Đóng cửa ghi (backend, celery-worker, celery-beat) trước pg_dump..."
     mkdir -p "$BACKUP_DIR"
@@ -1660,7 +1815,7 @@ else
         case "$_CS" in
             unless-stopped|no) : ;;
             *) error "[4c] '$_S' có restart policy '$_CS' — chỉ nhận 'unless-stopped' hoặc 'no'.
-       Chính sách khác có thể làm dockerd TỰ BẬT LẠI container giữa cửa sổ dump → phát lại." ;;
+       Chính sách khác có thể làm dockerd TỰ BẬT LẠI container giữa cửa sổ dump → migrate." ;;
         esac
         _DCG_CID[$_S]=$_CID
         _DCG_ANH[$_S]=$_ANH
@@ -1689,7 +1844,8 @@ else
 
     # --- Đo cửa đã đóng (container + CSDL), chụp vân tay + T0 ----------------
     _dcg_cua_dong "4c" || error "[4c] cửa ghi CHƯA đóng (phía container) — DỪNG trước pg_dump. CSDL chưa bị chạm."
-    _dcg_phien_la_bang_0 "4c" || error "[4c] cửa ghi CHƯA đóng (còn phiên lạ trên CSDL) — DỪNG trước pg_dump. CSDL chưa bị chạm."
+    _dcg_phien_la_bang_0 "4c" || error "[4c] cửa ghi CHƯA đóng (còn phiên lạ trên CSDL) — DỪNG trước pg_dump. CSDL chưa bị chạm.
+       Lưu ý: cron \`pg_dump\` 03:00 (backup-cron.sh) cũng là một phiên lạ — đừng deploy trong khung ~03:00."
     _DCG_VT_4C_ND=$(_dcg_van_tay) || error "[4c] không đo được vân tay lược đồ — DỪNG trước pg_dump. CSDL chưa bị chạm."
     printf '%s\n' "$_DCG_VT_4C_ND" > "$_DCG_VT_4C" \
         || error "[4c] không ghi được bản chụp vân tay $_DCG_VT_4C — DỪNG trước pg_dump."
@@ -1697,8 +1853,10 @@ else
         || error "[4c] không ghi được câu SQL vân tay $_DCG_VT_SQL — DỪNG trước pg_dump."
     log "  ✓ [4c] vân tay lược đồ: $(printf '%s\n' "$_DCG_VT_4C_ND" | wc -l) dòng → $_DCG_VT_4C"
     _dcg_chup_dem "$_DCG_DEM_T0" || error "[4c] không chụp được bộ đếm T0 (PA2) — DỪNG trước pg_dump. CSDL chưa bị chạm."
+    _DCG_GIO_T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    _dcg_ghi "T0" "$_DCG_GIO_T0" || error "[trạng thái] KHÔNG ghi được mốc T0 — DỪNG trước pg_dump."
     _dcg_pha da_dong
-    log "  ✓ cửa ghi ĐÓNG — giữ đóng xuyên suốt dump → migrate → (nếu đỏ) phát lại"
+    log "  ✓ cửa ghi ĐÓNG — giữ đóng xuyên suốt dump → migrate → (nếu đỏ) ứng dụng giữ DỪNG"
 fi
 
 # =============================================================================
@@ -1710,6 +1868,8 @@ mkdir -p "$BACKUP_DIR"
 # Review 2026-07-20: ba sửa đổi, cùng một gốc — bản backup này là đường
 # rollback DUY NHẤT của Step 6 nên nó phải hoặc dùng được, hoặc biến mất
 # hẳn; tuyệt đối không được tồn tại ở dạng "có file nhưng vô dụng".
+# (Vòng 3, 13-10-2026 — F28: nay là đường lùi TAY có đối soát; Step 6 KHÔNG
+# còn tự phát lại. Nó vẫn bắt buộc phải có trước khi migration chạy.)
 #   1. Bỏ ``2>/dev/null``: trước đây lý do pg_dump chết bị nuốt sạch, vận
 #      hành chỉ thấy "may be first deploy" — câu chẩn đoán sai hướng.
 #   2. ``--clean --if-exists``: dump cũ KHÔNG có DROP nên khi Step 6 phát
@@ -1773,7 +1933,8 @@ if [ "${IS_CUTOVER}" -eq 1 ]; then
     cutover "Operator runs manually post-deploy:"
     cutover "  docker compose -f docker-compose.yml --profile production exec backend alembic upgrade head"
 else
-    # Routine deploy: auto-migrate with built-in rollback on failure.
+    # Routine deploy: auto-migrate. Đỏ ⇒ KHÔNG tự phát lại bản sao (vòng 3,
+    # F28): ứng dụng giữ DỪNG, CSDL giữ nguyên, trap in hướng dẫn đối soát.
     #
     # ``--entrypoint`` là BẮT BUỘC (vá 13-08-2026): ảnh backend khai
     # ENTRYPOINT ["/app/docker-entrypoint.sh"], mà ``docker compose run`` chỉ
@@ -1782,9 +1943,9 @@ else
     # mới chạy tới lệnh mình gọi, tức migrate hai lượt cho một lần deploy.
     # ``--no-deps`` vì postgres/redis vừa được dựng ngay phía trên.
     #
-    # Vá 12-10-2026 (đường A): mốc T1 của PA2 chụp NGAY TRƯỚC migration — cửa
-    # ghi đã đóng từ Step 4c và vẫn đóng ở đây. Không chụp được ⇒ dừng TRƯỚC khi
-    # chạm lược đồ (pha `da_dong` ⇒ trap mở lại đúng container cũ).
+    # Vá 12-10-2026 (đường A): mốc T1 chụp NGAY TRƯỚC migration — cửa ghi đã
+    # đóng từ Step 4c và vẫn đóng ở đây. Không chụp được ⇒ dừng TRƯỚC khi chạm
+    # lược đồ (pha `da_dong` ⇒ trap mở lại đúng container cũ).
     _dcg_chup_dem "$_DCG_DEM_T1" \
         || error "[PA2] không chụp được bộ đếm T1 — DỪNG trước migration. CSDL chưa bị ghi."
     # Số liệu toàn CSDL tại T1 — CHỈ ĐỂ ĐỌC (xem `_dcg_pa2`). Đếm phiên đo của chính
@@ -1793,73 +1954,53 @@ else
     _DCG_PSQL_T1=$_DCG_SO_PSQL
     _DCG_CSDL_T1=$(_dcg_chup_csdl) || { _DCG_CSDL_T1=""; warn "[PA2] không chụp được pg_stat_database T1 (chỉ để đọc)"; }
     _dcg_pha dang_migrate
+    # Vòng 3: one-off mang tên RIÊNG của lượt (`--name`); `_dcg_theo_oneoff` (nền)
+    # ghi nhận CID của nó ngay khi nó xuất hiện ⇒ bị ngắt trước khi `--rm` kịp
+    # dọn thì trap dọn được ĐÚNG nó, và chỉ khi nó đã `exited`.
+    _dcg_theo_oneoff </dev/null >/dev/null 2>&1 &
+    _DCG_ONEOFF_THEO=$!
     if docker compose -f docker-compose.yml --profile production --env-file .env.production \
-        run --rm --no-deps --entrypoint alembic backend upgrade head; then
+        run --rm --name "$_DCG_ONEOFF_TEN" --no-deps --entrypoint alembic backend upgrade head; then
+        _dcg_dung_theo_oneoff
         _dcg_pha da_migrate
         log "Migrations completed successfully"
     else
         _RC_MIG=$?
-        warn "Migration failed (rc=$_RC_MIG)! Rolling back — đo cửa ghi TRƯỚC khi phát lại..."
-        # Review 2026-07-20: cổng này trước đây NÓI DỐI theo hai cách.
-        #   1. ``[ -f ]`` chỉ hỏi "file có tồn tại", mà Step 5 tạo file
-        #      kể cả khi pg_dump chết ⇒ luôn TRUE ⇒ phát lại 0 byte.
-        #      Nay ``[ -s ]`` đòi file KHÁC RỖNG.
-        #   2. psql không có ``ON_ERROR_STOP=1`` nên chạy tiếp qua mọi
-        #      lỗi rồi thoát 0 ⇒ dòng "Database restored" in ra vô điều
-        #      kiện, kể cả khi không một câu lệnh nào chạy được. Nay
-        #      psql dừng ở lỗi đầu tiên và ta CHỈ báo đã khôi phục khi
-        #      psql thực sự thành công.
-        # Trạng thái tệ nhất (migration hỏng VÀ restore hỏng) giờ được
-        # nói thẳng kèm đường dẫn file, thay vì bị che bằng lời trấn an.
+        _dcg_dung_theo_oneoff
+        _dcg_pha migrate_do
+        warn "Migration failed (rc=$_RC_MIG)! KHÔNG tự phát lại bản sao — ứng dụng giữ DỪNG, CSDL giữ NGUYÊN hiện trạng."
+        # =====================================================================
+        # Vòng 3 (13-10-2026, owner chốt F28): BỎ TỰ PHÁT LẠI DUMP.
+        # =====================================================================
+        # Trước đây nhánh này `psql < $_BAN_SAO` (dump `--clean --if-exists`)
+        # khi bước (d) + PA2 không thấy gì. Diễn tập vòng 2 chứng minh hàng rào
+        # ấy KHÔNG bảo đảm: một phiên CSDL ngoài nối SAU T1, ghi 20 giao dịch rồi
+        # ngắt TRƯỚC (d) lọt cả (d) lẫn PA2, và lượt phát lại XOÁ 20/20 giao
+        # dịch đã commit. Không lớp đo nào ở đây chặn được ca ấy một cách đáng
+        # tin (bộ đếm lẫn ghi của chính migration; phiên ngoài đã rời đi).
         #
-        # ⚠️ GIỚI HẠN ĐÃ ĐO (diễn tập 2026-07-20, postgres 16.13; đo lại
-        # 12-10-2026): dump chỉ DROP những object nó BIẾT, tức những gì tồn
-        # tại lúc chụp ở Step 5. Bảng/kiểu do migration hỏng tạo ra SAU đó sẽ
-        # SỐNG SÓT qua restore. Dữ liệu, cột, index và alembic_version
-        # đều về đúng bản cũ (đã kiểm), nhưng "restored" KHÔNG đồng
-        # nghĩa "sạch như chưa từng deploy". Từ vòng 2 (F35) cổng VÂN TAY
-        # lược đồ bắt đúng ca này: lệch bản 4c ⇒ KHÔNG mở ứng dụng.
+        # Nay: migration đỏ ⇒ KHÔNG ghi gì thêm vào CSDL. Cửa ghi giữ ĐÓNG
+        # (3 container cũ nằm dừng), CSDL giữ nguyên trạng thái hiện tại — mọi
+        # ghi đã commit (kể cả từ nguồn ngoài) còn nguyên để đối soát. Bản sao
+        # Step 5 VẪN được giữ, chỉ để phục hồi TAY có đối soát (hướng dẫn in ở
+        # trap, pha `migrate_do`). Giới hạn đã đo của bản sao (diễn tập
+        # 20-07-2026, đo lại 12-10-2026): dump chỉ DROP object nó BIẾT, nên
+        # bảng/kiểu do migration hỏng tạo thêm SỐNG SÓT qua phát lại tay.
         #
-        # Vá 12-10-2026 (đường A, F28/F32/F35) — thứ tự BẮT BUỘC: (d) → PA2 →
-        # phát lại → cổng VÂN TAY → `docker start` container CŨ → đo CID/ảnh →
-        # nginx (khởi động lại nếu IP backend đổi) đo qua SNI thật. (d) hay PA2
-        # không đạt ⇒ `error` ở pha `dang_migrate` ⇒ trap KHÔNG mở ứng dụng:
-        # lược đồ lúc này có thể LAI (alembic chạy AUTOCOMMIT), cửa ghi giữ ĐÓNG
-        # tới khi người vận hành quyết định. Nếu (d) đỏ vì một container ĐÃ chạy
-        # lại thì script KHÔNG dừng nó hộ — hướng dẫn in trạng thái ĐO THẬT.
-        if [ ! -s "$_BAN_SAO" ]; then
-            error "Migration failed. No backup available to restore."
+        # (d) và PA2 không còn là CỔNG (không nhánh nào phụ thuộc kết quả của
+        # chúng): chúng ĐO để IN cho người đối soát — cửa có còn đóng không,
+        # bảng nào có ghi trong cửa sổ — tức bằng chứng cần có TRƯỚC khi ai đó
+        # quyết định phát lại tay.
+        _dcg_don_oneoff || true
+        if [ -s "$_BAN_SAO" ]; then
+            log "[đối soát] bản sao Step 5 còn nguyên: $_BAN_SAO ($(wc -c < "$_BAN_SAO") byte) — KHÔNG được phát lại tự động"
+        else
+            warn "[đối soát] bản sao Step 5 KHÔNG còn / RỖNG: $_BAN_SAO"
         fi
-        # (d) — ĐIỀU KIỆN để tự phát lại: bất biến PA1 còn giữ, ĐO ngay lúc này.
-        if ! _dcg_cua_dong "d" || ! _dcg_phien_la_bang_0 "d"; then
-            error "Migration failed. Bước (d) KHÔNG ĐẠT — cửa ghi KHÔNG còn được chứng minh là đóng ⇒ KHÔNG phát lại, KHÔNG mở ứng dụng. Xem các dòng [d] phía trên."
-        fi
-        # PA2 — lớp PHÁT HIỆN. Đạt KHÔNG phải bằng chứng "0 mất ghi".
-        if ! _dcg_pa2; then
-            error "Migration failed. PA2 phát hiện dấu hiệu ghi trong cửa sổ dump (hoặc không đo được) ⇒ KHÔNG phát lại, KHÔNG mở ứng dụng. Số PA2 thấy chỉ là CẬN DƯỚI."
-        fi
-        _dcg_pha dang_phat_lai
-        if ! docker compose -f docker-compose.yml --env-file .env.production exec -T postgres psql \
-            -v ON_ERROR_STOP=1 \
-            -U "${POSTGRES_USER:-qlts}" \
-            "${POSTGRES_DB:-qlts_production}" \
-            < "$_BAN_SAO"; then
-            error "Migration failed AND restore FAILED. DB có thể đang ở trạng thái LAI (schema nửa cũ nửa mới). KHÔNG deploy tiếp. Khôi phục tay từ: $_BAN_SAO"
-        fi
-        _dcg_pha da_phat_lai
-        log "Database restored from backup — so vân tay lược đồ rồi mới mở lại ĐÚNG container cũ (docker start, KHÔNG up -d)..."
-        _dcg_pha dang_mo_lai_cu
-        if _dcg_mo_lai_cu; then _KQ_MO=0; else _KQ_MO=$?; fi
-        case "$_KQ_MO" in
-            0)  : ;;
-            3|4)
-                _dcg_pha lech_van_tay
-                error "Migration failed. Database restored from backup, NHƯNG lược đồ KHÔNG chứng minh được là khớp bản 4c (vân tay lệch / không đo được) ⇒ KHÔNG mở ứng dụng cũ. Xem các dòng [vân tay] phía trên." ;;
-            *)
-                error "Migration failed. Database restored from backup, NHƯNG mở lại container cũ / đo nginx KHÔNG đạt — xem các dòng phía trên." ;;
-        esac
-        _dcg_pha da_mo_lai_cu
-        error "Migration failed. Database restored from backup. Ứng dụng CŨ đã chạy lại (cùng container, cùng ảnh, lược đồ khớp 4c, nginx đo qua SNI thật — đã đo). Deploy DỪNG."
+        _dcg_cua_dong "d" || warn "[đối soát] cửa ghi KHÔNG còn được chứng minh là đóng (xem dòng [d]) — container đã chạy lại giữa chừng?"
+        _dcg_phien_la_bang_0 "d" || warn "[đối soát] còn phiên lạ trên CSDL ngay lúc này (xem dòng [d])."
+        _dcg_pa2 || warn "[đối soát] PA2 THẤY dấu hiệu ghi trong cửa sổ dump (hoặc thiếu mốc) — phát lại bản sao sẽ XOÁ chúng."
+        error "Migration failed. KHÔNG phát lại bản sao (F28): ứng dụng GIỮ DỪNG, CSDL giữ nguyên để đối soát — xem hướng dẫn phục hồi có đối soát ngay dưới."
     fi
 fi
 

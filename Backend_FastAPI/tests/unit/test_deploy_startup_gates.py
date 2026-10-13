@@ -265,7 +265,41 @@ def test_model_compose_that_giu_celery_false_du_bien_host_dat_true(
 #   STUB_THAN_LECH — thân /health qua nginx khác thân từ backend;
 #   STUB_TT_HONG_O_MIGRATE — tệp trạng thái bị thay bằng thư mục lúc migrate.
 #   `scripts/nginx-verify.sh` của sân khấu đọc STUB_NGINX_VERIFY_RC.
+#   (vòng 3) STUB_MA_HEALTH — mã /health mà đầu dò PHỤC HỒI DỊCH VỤ thấy qua nginx;
+#   STUB_VAN_TAY_LECH_SAU_DUMP — lược đồ đổi (DDL ngoài) sau khi pg_dump đã chạy;
+#   STUB_VAN_TAY_RC_SAU_DUMP — vân tay KHÔNG đo được sau khi pg_dump đã chạy;
+#   STUB_ONEOFF=exited|running — one-off alembic của lượt còn sót sau migrate
+#     (CID 66…6, tên lấy từ `--name` trong nhật ký); STUB_ONEOFF_TEN_KHAC=1 — CID
+#     ghi nhận mang tên KHÁC tên lượt; `ps -aq --filter label=…oneoff=True` liệt
+#     kê thêm one-off 77…7 của LƯỢT KHÁC (chỉ đột biến dọn theo nhãn mới hỏi).
+#   STUB_CHAY_SH_THAT=1 — `docker run … -c <đoạn sh>` chạy THẬT đoạn sh ấy (với
+#     biến -e của nó và `curl` giả của sân khấu); `docker logs` đọc
+#     $QLTS_NGINX_LOG. Dùng cho ca F39 chạy `nginx-verify.sh` THẬT của kho.
 _MANH_STUB_CUA_GHI = r"""# --- mô hình cửa ghi (chèn từ test_deploy_startup_gates._MANH_STUB_CUA_GHI) ---
+if [ "${STUB_CHAY_SH_THAT:-0}" = "1" ]; then
+    case "$_tat_ca" in
+        "run "*" -c "*)
+            # Chạy THẬT đoạn `sh -c` mà script gửi vào container đo (ảnh nginx).
+            _ev=(); _scr=""
+            shift
+            while [ "$#" -gt 0 ]; do
+                case "$1" in
+                    -e) _ev+=("$2"); shift 2 ;;
+                    -c) _scr="$2"; shift 2 ;;
+                    --network|--entrypoint) shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            exec env "${_ev[@]}" sh -c "$_scr" ;;
+        "logs "*)
+            cat "${QLTS_NGINX_LOG:-/khong-co}" 2>/dev/null
+            exit 0 ;;
+    esac
+fi
+_oo=6666666666666666666666666666666666666666666666666666666666666666
+_oo_khac=7777777777777777777777777777777777777777777777777777777777777777
+_ten_oo() { sed -n 's/.* --name \([^ ]*\) .*/\1/p' "$QLTS_STUB_LOG" | head -n 1; }
+_oo_con() { [ -n "${STUB_ONEOFF:-}" ] && grep -q -- ' --name dcg-mig-' "$QLTS_STUB_LOG" && ! grep -qx "docker rm $_oo" "$QLTS_STUB_LOG"; }
 _da_dung() {
     awk -v c="$1" '
         index($0, "docker stop ") == 1 && index($0, c) { st = 1 }
@@ -283,7 +317,12 @@ case "$_tat_ca" in
     "restart "*)
         exit "${STUB_RESTART_RC:-0}" ;;
     "run --network "*THAN-NGINX*)
-        # Đầu dò so THÂN /health qua nginx (SNI) với thân lấy thẳng từ backend.
+        # Đầu dò PHỤC HỒI DỊCH VỤ: mã trạng thái qua SNI + so THÂN /health qua
+        # nginx với thân lấy thẳng từ backend.
+        echo "MA-HEALTH ${STUB_MA_HEALTH:-200}"
+        echo "MA-LOGIN 200"
+        echo "MA-API 401"
+        echo "MA-CHUNG-THU 200"
         _h=1111111111111111111111111111111111111111111111111111111111111111
         echo "THAN-NGINX $_h"
         if [ "${STUB_THAN_LECH:-0}" = "1" ]; then
@@ -299,9 +338,15 @@ case "$_tat_ca" in
         if [ "${STUB_VAN_TAY_RC_SAU_MIGRATE:-0}" != "0" ] && grep -q ' upgrade head' "$QLTS_STUB_LOG"; then
             exit "$STUB_VAN_TAY_RC_SAU_MIGRATE"
         fi
+        if [ "${STUB_VAN_TAY_RC_SAU_DUMP:-0}" != "0" ] && grep -q 'pg_dump' "$QLTS_STUB_LOG"; then
+            exit "$STUB_VAN_TAY_RC_SAU_DUMP"
+        fi
         printf 'col|public.ghi_thu|khoa|text|true|\nnsp|public\nrel|public.ghi_thu|r\n'
         if [ "${STUB_VAN_TAY_LECH_SAU_MIGRATE:-0}" = "1" ] && grep -q ' upgrade head' "$QLTS_STUB_LOG"; then
             printf 'rel|public.bang_moi_r2|r\n'
+        fi
+        if [ "${STUB_VAN_TAY_LECH_SAU_DUMP:-0}" = "1" ] && grep -q 'pg_dump' "$QLTS_STUB_LOG"; then
+            printf 'rel|public.bang_ngoai_ddl|r\n'
         fi
         exit 0 ;;
     *pg_stat_database*)
@@ -327,6 +372,7 @@ case "$_tat_ca" in
             # Tệp trạng thái hỏng GIỮA chừng: thay bằng một THƯ MỤC cùng tên.
             for _t in backups/deploy_*.trang-thai; do rm -f -- "$_t"; mkdir -- "$_t"; done
         fi
+        if [ -n "${STUB_ONEOFF:-}" ]; then sleep 1; fi
         case "${STUB_HOI_SINH:-}" in
             chay)
                 echo "docker start $(_cid_gia backend) # tac-nhan-ngoai" >> "$QLTS_STUB_LOG" ;;
@@ -361,6 +407,27 @@ case "$_tat_ca" in
             _d=11
         fi
         printf 'public.ghi_thu|%s\npublic.nhip|7\n' "$_d"
+        exit 0 ;;
+    inspect*"{{.Id}}"*)
+        # `_dcg_theo_oneoff` hỏi CID theo TÊN riêng của lượt.
+        if _oo_con && [ "$_tat_ca" = "inspect -f {{.Id}} $(_ten_oo)" ]; then echo "$_oo"; exit 0; fi
+        echo "Error: No such object" >&2
+        exit 1 ;;
+    inspect*"{{.Name}}|"*"$_oo"*)
+        _oo_con || { echo "Error: No such object: $_oo" >&2; exit 1; }
+        if [ "${STUB_ONEOFF_TEN_KHAC:-0}" = "1" ]; then
+            echo "/dcg-mig-luot-khac|True|backend|${STUB_ONEOFF}"
+        else
+            echo "/$(_ten_oo)|True|backend|${STUB_ONEOFF}"
+        fi
+        exit 0 ;;
+    "ps -aq --filter label=com.docker.compose.oneoff=True"*)
+        _oo_con && echo "$_oo"
+        echo "$_oo_khac"
+        exit 0 ;;
+    inspect*".State.Status"*"$_oo")
+        _oo_con || exit 1
+        echo "$STUB_ONEOFF"
         exit 0 ;;
     inspect*".HostConfig.RestartPolicy.Name"*)
         echo "${STUB_RESTART_POLICY:-unless-stopped}"
