@@ -272,6 +272,11 @@ def test_model_compose_that_giu_celery_false_du_bien_host_dat_true(
 #     (CID 66…6, tên lấy từ `--name` trong nhật ký); STUB_ONEOFF_TEN_KHAC=1 — CID
 #     ghi nhận mang tên KHÁC tên lượt; `ps -aq --filter label=…oneoff=True` liệt
 #     kê thêm one-off 77…7 của LƯỢT KHÁC (chỉ đột biến dọn theo nhãn mới hỏi).
+#   (vòng 4) STUB_NGINX_CID_KHAC=1 — nginx đang phục vụ là container khác CID ghi;
+#   STUB_CID_MAT=<service> — container ghi nhận của service ấy không còn;
+#   STUB_ONEOFF_NHAN_CHAY=1 — còn one-off của service backend ĐANG CHẠY trong
+#     project; STUB_ONEOFF=chay_roi_xong + STUB_ONEOFF_SO_LAN_CHAY=N — one-off của
+#     lượt `running` N lần hỏi đầu rồi `exited`.
 #   STUB_CHAY_SH_THAT=1 — `docker run … -c <đoạn sh>` chạy THẬT đoạn sh ấy (với
 #     biến -e của nó và `curl` giả của sân khấu); `docker logs` đọc
 #     $QLTS_NGINX_LOG. Dùng cho ca F39 chạy `nginx-verify.sh` THẬT của kho.
@@ -326,6 +331,17 @@ _oo=6666666666666666666666666666666666666666666666666666666666666666
 _oo_khac=7777777777777777777777777777777777777777777777777777777777777777
 _ten_oo() { sed -n 's/.* --name \([^ ]*\) .*/\1/p' "$QLTS_STUB_LOG" | head -n 1; }
 _oo_con() { [ -n "${STUB_ONEOFF:-}" ] && grep -q -- ' --name dcg-mig-' "$QLTS_STUB_LOG" && ! grep -qx "docker rm $_oo" "$QLTS_STUB_LOG"; }
+# Trạng thái one-off. STUB_ONEOFF=chay_roi_xong: `running` cho STUB_ONEOFF_SO_LAN_CHAY
+# lần hỏi `.State.Status` đầu (đếm trong tệp), rồi `exited` — mô phỏng alembic chạy
+# tiếp một lúc sau khi deploy.sh bị ngắt (vòng 4, trap CHỜ one-off).
+_oo_tt() {
+    case "${STUB_ONEOFF:-}" in
+        chay_roi_xong)
+            _n=$(cat "${QLTS_STUB_LOG}.oo_dem" 2>/dev/null || echo 0)
+            if [ "$_n" -lt "${STUB_ONEOFF_SO_LAN_CHAY:-2}" ]; then echo running; else echo exited; fi ;;
+        *) echo "${STUB_ONEOFF:-}" ;;
+    esac
+}
 _da_dung() {
     awk -v c="$1" '
         index($0, "docker stop ") == 1 && index($0, c) { st = 1 }
@@ -379,7 +395,12 @@ case "$_tat_ca" in
         echo "100|200|10|10|0"
         exit 0 ;;
     *" ps -q nginx"|*" ps -aq nginx")
-        echo "$_cn"
+        # STUB_NGINX_CID_KHAC=1 (vòng 4): nginx đang phục vụ là một container KHÁC CID đã ghi.
+        if [ "${STUB_NGINX_CID_KHAC:-0}" = "1" ]; then
+            echo 8888888888888888888888888888888888888888888888888888888888888888
+        else
+            echo "$_cn"
+        fi
         exit 0 ;;
     inspect*".Image"*"$_cn"*)
         echo "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
@@ -442,18 +463,27 @@ case "$_tat_ca" in
     inspect*"{{.Name}}|"*"$_oo"*)
         _oo_con || { echo "Error: No such object: $_oo" >&2; exit 1; }
         if [ "${STUB_ONEOFF_TEN_KHAC:-0}" = "1" ]; then
-            echo "/dcg-mig-luot-khac|True|backend|${STUB_ONEOFF}"
+            echo "/dcg-mig-luot-khac|True|backend|$(_oo_tt)"
         else
-            echo "/$(_ten_oo)|True|backend|${STUB_ONEOFF}"
+            echo "/$(_ten_oo)|True|backend|$(_oo_tt)"
         fi
         exit 0 ;;
     "ps -aq --filter label=com.docker.compose.oneoff=True"*)
         _oo_con && echo "$_oo"
         echo "$_oo_khac"
         exit 0 ;;
+    "ps -q --filter label=com.docker.compose.project="*)
+        # Step 3a (vòng 4) quét one-off ĐANG CHẠY của service backend trong project.
+        if [ "${STUB_ONEOFF_NHAN_CHAY:-0}" = "1" ]; then echo "$_oo_khac"; fi
+        exit 0 ;;
+    inspect*"com.docker.compose.project"*)
+        echo qlts
+        exit 0 ;;
     inspect*".State.Status"*"$_oo")
         _oo_con || exit 1
-        echo "$STUB_ONEOFF"
+        _n=$(cat "${QLTS_STUB_LOG}.oo_dem" 2>/dev/null || echo 0)
+        echo $((_n + 1)) > "${QLTS_STUB_LOG}.oo_dem"
+        _oo_tt
         exit 0 ;;
     inspect*".HostConfig.RestartPolicy.Name"*)
         echo "${STUB_RESTART_POLICY:-unless-stopped}"
@@ -472,6 +502,8 @@ case "$_tat_ca" in
             _c=$(_cid_gia "$_s")
             case "$_tat_ca" in
                 *"$_c"*)
+                    # STUB_CID_MAT=<service> (vòng 4): container ghi nhận đã bị xoá.
+                    if [ "${STUB_CID_MAT:-}" = "$_s" ]; then echo "Error: No such object: $_c" >&2; exit 1; fi
                     if _da_dung "$_c"; then _tt=exited; else _tt=running; fi
                     echo "$_tt|S$(_dem_lenh start "$_c")|F$(_dem_lenh stop "$_c")"
                     exit 0 ;;
@@ -489,6 +521,13 @@ case "$_tat_ca" in
             esac
         done ;;
     *" ps -q "*)
+        # STUB_PS_Q_KHAC=<service> (vòng 4): một container KHÁC (không phải CID cũ
+        # đã ghi) của service ấy đang chạy — CID cũ vẫn nằm `exited` đúng mốc.
+        case "$_tat_ca" in
+            *" ps -q ${STUB_PS_Q_KHAC:-khong-co-service-nay}")
+                echo 9999999999999999999999999999999999999999999999999999999999999999
+                exit 0 ;;
+        esac
         # `ps -q` chỉ liệt kê container ĐANG CHẠY: đã dừng ⇒ rỗng, exit 0.
         for _s in backend celery-worker celery-beat; do
             case "$_tat_ca" in
@@ -941,11 +980,21 @@ def _dung_san_khau(
     return goc
 
 
-def _chay_deploy(goc: Path, **kich_ban: str) -> tuple[subprocess.CompletedProcess, str]:
+def _chay_deploy(
+    goc: Path, _giu_nhat_ky: bool = False, **kich_ban: str
+) -> tuple[subprocess.CompletedProcess, str]:
+    """Chạy `scripts/deploy.sh` của sân khấu.
+
+    ``_giu_nhat_ky=True`` (vòng 4): KHÔNG xoá nhật ký lệnh/hành vi của lượt trước —
+    mô hình container của stub suy trạng thái từ nhật ký, nên lượt "đi tiếp" phải
+    thấy đúng các container mà lượt đỏ đã dừng. Chuỗi trả về vẫn là TOÀN BỘ nhật ký.
+    """
     nhat_ky = goc / "lenh.log"
-    nhat_ky.write_text("", encoding="utf-8")
-    # Nhật ký HÀNH VI (vòng 3b): stub ghi stdin + argv của mọi lời gọi docker.
-    (goc / "lenh.log.goi").write_text("", encoding="utf-8")
+    if not _giu_nhat_ky or not nhat_ky.exists():
+        nhat_ky.write_text("", encoding="utf-8")
+    if not _giu_nhat_ky or not (goc / "lenh.log.goi").exists():
+        # Nhật ký HÀNH VI (vòng 3b): stub ghi stdin + argv của mọi lời gọi docker.
+        (goc / "lenh.log.goi").write_text("", encoding="utf-8")
     moi_truong = {
         **os.environ,
         "PATH": f"{goc / 'bin'}:{os.environ.get('PATH', '')}",
@@ -1054,9 +1103,9 @@ def _la_phep_do_psql(lenh: list[str]) -> bool:
     return not any(t in ("-f", "--file") or t.startswith("--file=") for t in lenh)
 
 
-def _vi_pham_phat_lai(goc: Path) -> list[str]:
-    """Các vi phạm "KHÔNG phát lại bản sao" (R1/R2/R3) của lượt vừa chạy; rỗng = sạch."""
-    goi = _cac_loi_goi(goc)
+def _vi_pham_phat_lai(goc: Path, tu: int = 0) -> list[str]:
+    """Các vi phạm "KHÔNG phát lại bản sao" (R1/R2/R3) kể từ lời gọi thứ ``tu``; rỗng = sạch."""
+    goi = _cac_loi_goi(goc)[tu:]
     moc = _vi_tri_alembic(goi)
     ra: list[str] = []
     for i, g in enumerate(goi):

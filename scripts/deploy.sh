@@ -166,6 +166,23 @@ if [ "${QLTS_SKIP_ROLLBACK_ASSET_REASON+co}" = "co" ]; then
 fi
 unset QLTS_SKIP_ROLLBACK_ASSET QLTS_SKIP_ROLLBACK_ASSET_REASON
 
+# Vòng 4 (F40): hai biến của đường ĐI TIẾP SAU MIGRATION ĐỎ — cùng luật với cổng
+# thoát hiểm ở trên: chỉ được đến từ DÒNG LỆNH của đúng lượt đó, chụp TRƯỚC khi
+# nạp .env.production, và có mặt trong tệp ấy ⇒ DỪNG (xem ngay sau `source`).
+_DT_CO=0
+_DT_CO_GIATRI=""
+_DT_TU=0
+_DT_TU_GIATRI=""
+if [ "${QLTS_DI_TIEP_SAU_MIGRATE_DO+co}" = "co" ]; then
+    _DT_CO=1
+    _DT_CO_GIATRI="$QLTS_DI_TIEP_SAU_MIGRATE_DO"
+fi
+if [ "${QLTS_DI_TIEP_TU+co}" = "co" ]; then
+    _DT_TU=1
+    _DT_TU_GIATRI="$QLTS_DI_TIEP_TU"
+fi
+unset QLTS_DI_TIEP_SAU_MIGRATE_DO QLTS_DI_TIEP_TU
+
 # Load env vars for template substitution
 set -a
 source .env.production
@@ -182,6 +199,12 @@ if [ "${QLTS_SKIP_ROLLBACK_ASSET+co}" = "co" ] \
        trên dòng lệnh của lượt deploy đó."
 fi
 unset QLTS_SKIP_ROLLBACK_ASSET QLTS_SKIP_ROLLBACK_ASSET_REASON
+if [ "${QLTS_DI_TIEP_SAU_MIGRATE_DO+co}" = "co" ] || [ "${QLTS_DI_TIEP_TU+co}" = "co" ]; then
+    error "QLTS_DI_TIEP_SAU_MIGRATE_DO / QLTS_DI_TIEP_TU được khai báo trong .env.production.
+       Đường đi tiếp sau migration đỏ là thao tác THỦ CÔNG TỪNG LƯỢT, không phải cấu
+       hình thường trực. Gỡ chúng khỏi .env.production; đặt trên dòng lệnh của lượt đó."
+fi
+unset QLTS_DI_TIEP_SAU_MIGRATE_DO QLTS_DI_TIEP_TU
 
 if [ -z "${DOMAIN:-}" ]; then
     error "DOMAIN is not set in .env.production"
@@ -302,6 +325,133 @@ if [ ! -f nginx/templates/default.conf.template ]; then
     error "Thiếu nginx/templates/default.conf.template — entrypoint nginx sẽ không có gì để render"
 fi
 log "Nginx template sẽ được render TRONG container (domain=$DOMAIN, admission_frozen=$NGINX_ADMISSION_FROZEN)"
+
+# =============================================================================
+# Step 3a: ĐI TIẾP SAU MIGRATION ĐỎ (vòng 4, F40) — chỉ khi được CHO PHÉP tường minh
+# =============================================================================
+# Sau F28, migration đỏ để ba service (backend, celery-worker, celery-beat) NẰM
+# DỪNG có chủ ý và CSDL giữ nguyên (có thể đã migrate dở). Deploy routine bình
+# thường không chạy nổi từ trạng thái ấy: Step 3b đòi container ĐANG chạy để ghim
+# ảnh cũ, Step 4c đòi đúng một container ĐANG chạy mỗi service. Bật mã cũ chỉ để
+# vượt tiền kiểm là SAI — mã cũ trên lược đồ dở dang chính là điều F28 tránh.
+#
+# Đường này đi tiếp TỪ CHÍNH trạng thái dừng ấy:
+#   QLTS_DI_TIEP_SAU_MIGRATE_DO=1  — cờ CHO PHÉP, mặc định tắt; chỉ nhận '0'/'1'
+#   QLTS_DI_TIEP_TU=<backups/deploy_<TS>.trang-thai của lượt đỏ>  — tầng thứ hai
+# Hai biến phải đi CÙNG nhau; chỉ có một ⇒ DỪNG. Trước MỌI mutation, đo trạng thái
+# THẬT và đối chiếu với tệp trạng thái của lượt đỏ — lệch bất kỳ điểm nào ⇒ DỪNG,
+# không đụng gì:
+#   * pha cuối ∈ {dang_migrate, migrate_do, da_migrate} (dừng có chủ ý sau khi
+#     migration đã chạm CSDL; pha trước đó thì trap đã/định mở lại mã cũ);
+#   * ba service KHÔNG có container nào đang chạy;
+#   * ba CID ghi nhận còn, `exited`, mốc vòng đời Status|StartedAt|FinishedAt
+#     KHỚP đúng mốc ghi lúc đóng (không ai bật lại giữa chừng), ảnh = ảnh ghi nhận;
+#   * nginx đang phục vụ đúng MỘT container, đúng CID ghi nhận;
+#   * one-off alembic của lượt đỏ (CID ghi nhận) và MỌI one-off của service
+#     backend trong cùng project đều KHÔNG còn chạy.
+# Đạt thì: Step 3b ghim ảnh cũ từ ĐÚNG ba CID exited đã ghi nhận (không đoán từ
+# tag, không từ HEAD); Step 4c KHÔNG dừng gì (đã dừng) mà đo lại cửa; Step 5 chụp
+# bản sao MỚI; Step 6 migrate bằng mã SỬA; Step 8 dựng mã mới; sau Step 8b đo dịch
+# vụ qua SNI thật (`_dcg_do_dich_vu_nginx`). Trap ở đường này KHÔNG BAO GIỜ mở lại
+# mã cũ (lược đồ có thể đã migrate dở).
+#
+# Người vận hành gọi trên VPS (deploy.yml không forward hai biến này — cố ý):
+#   cd /opt/qlts && <đưa cây tới commit SỬA> && \
+#   SHA_MONG_DOI=<40 hex commit sửa> QLTS_DI_TIEP_SAU_MIGRATE_DO=1 \
+#   QLTS_DI_TIEP_TU=backups/deploy_<TS>.trang-thai bash scripts/deploy.sh
+# Trap của lượt đỏ in sẵn đúng lệnh này với đường dẫn thật.
+_DI_TIEP=0
+_DT_COMPOSE="docker compose -f docker-compose.yml --profile production --env-file .env.production"
+_DT_TT_CU=""
+_DT_NGINX=""
+declare -A _DT_CID=() _DT_ANH=() _DT_MOC=()
+if [ "$_DT_CO" = "1" ]; then
+    case "$_DT_CO_GIATRI" in
+        0) : ;;
+        1) _DI_TIEP=1 ;;
+        *) error "QLTS_DI_TIEP_SAU_MIGRATE_DO='$_DT_CO_GIATRI' không hợp lệ — chỉ nhận '0' hoặc '1'." ;;
+    esac
+fi
+if [ "$_DI_TIEP" = "1" ]; then
+    [ "$_DT_TU" = "1" ] && [ -n "$_DT_TU_GIATRI" ] || error "[đi tiếp] QLTS_DI_TIEP_SAU_MIGRATE_DO=1 nhưng THIẾU QLTS_DI_TIEP_TU (tệp trạng thái của lượt migration đỏ)."
+    [ "${IS_CUTOVER}" -eq 0 ] || error "[đi tiếp] không dùng cùng COLD_CUTOVER."
+    log "Step 3a: ĐI TIẾP sau migration đỏ — kiểm trạng thái THẬT trước mọi thay đổi..."
+    case "$_DT_TU_GIATRI" in
+        /*) _DT_TT_CU="$_DT_TU_GIATRI" ;;
+        *)  _DT_TT_CU="$PROJECT_DIR/$_DT_TU_GIATRI" ;;
+    esac
+    case "$(basename -- "$_DT_TT_CU")" in
+        deploy_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9].trang-thai) : ;;
+        *) error "[đi tiếp] QLTS_DI_TIEP_TU phải là tệp deploy_<YYYYMMDD_HHMMSS>.trang-thai, nhận: '$_DT_TU_GIATRI'" ;;
+    esac
+    [ "$(cd "$(dirname -- "$_DT_TT_CU")" 2>/dev/null && pwd -P)" = "$(cd "$BACKUP_DIR" 2>/dev/null && pwd -P)" ] \
+        || error "[đi tiếp] tệp trạng thái phải nằm trong $BACKUP_DIR, nhận: '$_DT_TU_GIATRI'"
+    [ ! -L "$_DT_TT_CU" ] && [ -f "$_DT_TT_CU" ] || error "[đi tiếp] không có tệp trạng thái thường '$_DT_TT_CU'."
+    _dt_doc() { awk -F'\t' -v k="$1" '$2 == k { print $3 }' "$_DT_TT_CU"; }
+    _DT_PHA_CUOI=$(_dt_doc pha | tail -n 1)
+    case "$_DT_PHA_CUOI" in
+        dang_migrate|migrate_do|da_migrate) : ;;
+        *) error "[đi tiếp] pha cuối của lượt trước là '${_DT_PHA_CUOI:-?}' — KHÔNG phải pha dừng-có-chủ-ý sau migration (dang_migrate/migrate_do/da_migrate). Từ chối." ;;
+    esac
+    for _S in celery-beat backend celery-worker; do
+        _DT_DONG=$(_dt_doc cu | awk -v s="$_S" '$1 == s')
+        [ "$(printf '%s\n' "$_DT_DONG" | grep -c '[^[:space:]]' || true)" -eq 1 ] \
+            || error "[đi tiếp] tệp trạng thái không có ĐÚNG MỘT dòng 'cu' cho '$_S'."
+        _CID=$(printf '%s\n' "$_DT_DONG" | awk '{ print $2 }')
+        _ANH=$(printf '%s\n' "$_DT_DONG" | awk '{ print $3 }')
+        case "$_CID" in ''|*[!0-9a-f]*) error "[đi tiếp] CID ghi nhận của '$_S' không hợp lệ: '$_CID'" ;; esac
+        [ "${#_CID}" -eq 64 ] || error "[đi tiếp] CID ghi nhận của '$_S' dài ${#_CID} (cần 64 hex)."
+        case "$_ANH" in sha256:*) : ;; *) error "[đi tiếp] ảnh ghi nhận của '$_S' không hợp lệ: '$_ANH'" ;; esac
+        _DT_DONG=$(_dt_doc moc | awk -v s="$_S" '$1 == s')
+        [ "$(printf '%s\n' "$_DT_DONG" | grep -c '[^[:space:]]' || true)" -eq 1 ] \
+            || error "[đi tiếp] tệp trạng thái không có ĐÚNG MỘT dòng 'moc' cho '$_S'."
+        _DT_CID[$_S]=$_CID
+        _DT_ANH[$_S]=$_ANH
+        _DT_MOC[$_S]=$(printf '%s\n' "$_DT_DONG" | awk '{ print $2 }')
+        # Trạng thái THẬT — mọi phép đọc thất bại cũng là DỪNG.
+        _DS=$($_DT_COMPOSE ps -q "$_S") || error "[đi tiếp] không liệt kê được container đang chạy của '$_S'."
+        [ -z "${_DS//[[:space:]]/}" ] || error "[đi tiếp] '$_S' có container ĐANG CHẠY (${_DS//[[:space:]]/ }) — trạng thái không phải 'dừng sau migration đỏ'. Từ chối, không đụng gì."
+        _M=$(docker inspect -f '{{.State.Status}}|{{.State.StartedAt}}|{{.State.FinishedAt}}' "$_CID" 2>/dev/null) \
+            || error "[đi tiếp] CID ghi nhận của '$_S' ($_CID) KHÔNG còn — không ghim được ảnh cũ từ container đã ghi nhận. Từ chối."
+        [ "${_M%%|*}" = "exited" ] || error "[đi tiếp] container ghi nhận của '$_S' đang '${_M%%|*}' (cần exited). Từ chối."
+        [ "$_M" = "${_DT_MOC[$_S]}" ] || error "[đi tiếp] container ghi nhận của '$_S' ĐÃ CHẠY LẠI từ lúc đóng (mốc ghi=${_DT_MOC[$_S]} · đo=$_M). Từ chối."
+        _M=$(docker inspect -f '{{.Image}}' "$_CID" 2>/dev/null) || error "[đi tiếp] không đọc được ảnh của '$_S'."
+        [ "$_M" = "$_ANH" ] || error "[đi tiếp] ảnh container '$_S' ($_M) KHÁC ảnh ghi nhận ($_ANH). Từ chối."
+    done
+    _DT_DONG=$(_dt_doc nginx)
+    [ "$(printf '%s\n' "$_DT_DONG" | grep -c '[^[:space:]]' || true)" -eq 1 ] || error "[đi tiếp] tệp trạng thái không có ĐÚNG MỘT dòng 'nginx'."
+    _DT_NGINX=${_DT_DONG//[[:space:]]/}
+    _DS=$($_DT_COMPOSE ps -q nginx) || error "[đi tiếp] không liệt kê được container nginx."
+    [ "${_DS//[[:space:]]/}" = "$_DT_NGINX" ] || error "[đi tiếp] nginx đang phục vụ (${_DS//[[:space:]]/ }) KHÁC CID ghi nhận ($_DT_NGINX). Từ chối."
+    _M=$(docker inspect -f '{{.State.Status}}' "$_DT_NGINX" 2>/dev/null) || _M="?"
+    [ "$_M" = "running" ] || error "[đi tiếp] nginx ghi nhận đang '$_M' (cần running). Từ chối."
+    _DT_OO=$(cat "${_DT_TT_CU%.trang-thai}.oneoff-cid" 2>/dev/null) || _DT_OO=""
+    if [ -n "$_DT_OO" ]; then
+        if _M=$(docker inspect -f '{{.State.Status}}' "$_DT_OO" 2>/dev/null); then
+            case "$_M" in exited|dead) : ;; *) error "[đi tiếp] one-off alembic của lượt đỏ ($_DT_OO) đang '$_M' — migration có thể VẪN chạy. Chờ nó kết thúc rồi chạy lại." ;; esac
+        fi
+    fi
+    _DT_DU_AN=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "${_DT_CID[backend]}" 2>/dev/null) || _DT_DU_AN=""
+    [ -n "$_DT_DU_AN" ] || error "[đi tiếp] không đọc được nhãn project Compose của backend ghi nhận."
+    _DS=$(docker ps -q --filter "label=com.docker.compose.project=$_DT_DU_AN" \
+        --filter label=com.docker.compose.oneoff=True --filter label=com.docker.compose.service=backend) \
+        || error "[đi tiếp] không liệt kê được one-off đang chạy."
+    [ -z "${_DS//[[:space:]]/}" ] || error "[đi tiếp] còn one-off của service backend ĐANG CHẠY (${_DS//[[:space:]]/ }) — có thể là migration. Chờ nó kết thúc rồi chạy lại."
+    log "  ✓ [đi tiếp] trạng thái khớp lượt đỏ ($(basename -- "$_DT_TT_CU"), pha '$_DT_PHA_CUOI'): 3 CID exited đúng mốc, 0 container đang chạy, nginx đúng CID, 0 one-off đang chạy"
+elif [ "$_DT_TU" = "1" ]; then
+    error "QLTS_DI_TIEP_TU có mặt nhưng QLTS_DI_TIEP_SAU_MIGRATE_DO không phải '1' — ý định mâu thuẫn, DỪNG."
+fi
+
+# Container đang phục vụ của một service, cho Step 3b. Đường đi tiếp: ba service
+# ghi lấy ĐÚNG CID exited đã ghi nhận và đã đo ở Step 3a (không đoán); còn lại
+# (frontend, nginx) vẫn là container ĐANG chạy như mọi lượt.
+_ra_cid_phuc_vu() {
+    if [ "$_DI_TIEP" = "1" ] && [ -n "${_DT_CID[$1]:-}" ]; then
+        printf '%s\n' "${_DT_CID[$1]}"
+        return 0
+    fi
+    $_RA_COMPOSE ps -q "$1"
+}
 
 # =============================================================================
 # Step 3b: TÀI SẢN ROLLBACK — tạo TRƯỚC build, fail-closed
@@ -759,7 +909,7 @@ else
     # celery-worker/celery-beat có ảnh RIÊNG. Thiếu hai cái đó thì rollback lùi
     # backend mà để worker ở mã MỚI, chạy trên lược đồ CSDL đã lùi.
     for _S in $_RA_MK_DICH_VU; do
-        _RA_CID=$($_RA_COMPOSE ps -q "$_S" 2>/dev/null || true)
+        _RA_CID=$(_ra_cid_phuc_vu "$_S" 2>/dev/null || true)
         if [ -z "$_RA_CID" ]; then
             error "không thấy container đang chạy cho '$_S' — không thể ghim ảnh cũ.
        Đừng build đè lên một stack đang thiếu service."
@@ -854,7 +1004,7 @@ else
     } >> "$_RA_TMP"
 
     for _S in $_RA_DICH_VU; do
-        _RA_CID=$($_RA_COMPOSE ps -q "$_S")
+        _RA_CID=$(_ra_cid_phuc_vu "$_S")
         _RA_IMG=$(docker inspect -f '{{.Image}}' "$_RA_CID")
         # Tag ghim phai DUY NHAT. Neu no da ton tai va tro vao mot anh KHAC thi
         # `docker tag` se am tham cuop ten: ban ke lan truoc tro vao mot anh khong
@@ -1211,6 +1361,17 @@ _DCG_ONEOFF_TEN="dcg-mig-${TIMESTAMP}-$$"
 _DCG_ONEOFF_GHI="$BACKUP_DIR/deploy_${TIMESTAMP}.oneoff-cid"
 _DCG_ONEOFF_THEO=""
 _DCG_ONEOFF_XONG=0
+# Vòng 4: trap CHỜ one-off của lượt kết thúc trong thời hạn hữu hạn rồi mới in
+# trạng thái; hết hạn ⇒ báo "còn chạy / chưa xác định", KHÔNG dọn cưỡng bức, và
+# mọi số đo in sau đó KHÔNG được gọi là trạng thái cuối (`_DCG_ONEOFF_CON_CHAY=1`).
+_DCG_ONEOFF_CON_CHAY=0
+_DCG_HAN_ONEOFF="${QLTS_HAN_CHO_ONEOFF:-60}"
+case "$_DCG_HAN_ONEOFF" in
+    ''|*[!0-9]*) error "QLTS_HAN_CHO_ONEOFF phải là số nguyên giây, nhận: '$_DCG_HAN_ONEOFF'" ;;
+esac
+[ "$_DCG_HAN_ONEOFF" -le 600 ] || error "QLTS_HAN_CHO_ONEOFF ngoài khoảng 0..600: '$_DCG_HAN_ONEOFF'"
+# Vòng 4 (F40): lượt này là ĐƯỜNG ĐI TIẾP sau migration đỏ (đã kiểm ở Step 3a).
+_DCG_DI_TIEP="$_DI_TIEP"
 declare -A _DCG_CID=() _DCG_ANH=() _DCG_MOC=() _DCG_IP=()
 
 _DCG_HAN_PHIEN="${QLTS_HAN_PHIEN_LA:-30}"
@@ -1670,7 +1831,7 @@ _dcg_dung_theo_oneoff() {
 # `docker rm` không `-f`. Không bao giờ dọn theo nhãn chung: one-off của lượt
 # khác (hoặc của người vận hành) không thuộc quyền lượt này.
 _dcg_don_oneoff() {
-    local cid tt
+    local cid tt het da_bao=0
     _DCG_ONEOFF_XONG=1
     _dcg_dung_theo_oneoff
     cid=$(cat "$_DCG_ONEOFF_GHI" 2>/dev/null) || cid=""
@@ -1686,6 +1847,27 @@ _dcg_don_oneoff() {
         warn "[one-off] CID ghi nhận dài ${#cid} (cần 64 hex) — KHÔNG dọn"
         return 1
     fi
+    # Vòng 4 (owner chốt): CHỜ one-off kết thúc trong thời hạn HỮU HẠN. Đo được:
+    # bị ngắt giữa migrate thì alembic CHẠY TIẾP sau khi deploy.sh thoát — in trạng
+    # thái lúc ấy là in một ảnh chụp giữa chừng. Hết hạn ⇒ KHÔNG dọn cưỡng bức.
+    het=$((SECONDS + _DCG_HAN_ONEOFF))
+    while tt=$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null); do
+        case "$tt" in
+            running|restarting|created|paused|removing) : ;;
+            *) break ;;
+        esac
+        if [ "$SECONDS" -ge "$het" ]; then
+            _DCG_ONEOFF_CON_CHAY=1
+            warn "[one-off] one-off alembic của lượt này ($cid) VẪN '$tt' sau ${_DCG_HAN_ONEOFF}s chờ — CÒN CHẠY / CHƯA XÁC ĐỊNH. KHÔNG dọn cưỡng bức; mọi số đo in sau đây KHÔNG phải trạng thái cuối."
+            _dcg_ghi "oneoff" "$cid con_chay_sau_${_DCG_HAN_ONEOFF}s" || true
+            return 1
+        fi
+        if [ "$da_bao" = "0" ]; then
+            log "  [one-off] one-off alembic của lượt này ($cid) đang '$tt' — CHỜ tối đa ${_DCG_HAN_ONEOFF}s cho nó kết thúc (không dọn cưỡng bức)..."
+            da_bao=1
+        fi
+        sleep 1
+    done
     if ! tt=$(docker inspect -f '{{.Name}}|{{index .Config.Labels "com.docker.compose.oneoff"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.State.Status}}' "$cid" 2>/dev/null); then
         log "  [one-off] $cid không còn (\`--rm\` đã dọn) — không dọn gì"
         _dcg_ghi "oneoff" "$cid khong_con" || true
@@ -1711,8 +1893,11 @@ _dcg_don_oneoff() {
 }
 
 _dcg_huong_dan() {
-    local s m ds cid
+    local s m ds cid tt_nguon
     warn "[cửa ghi] $1"
+    if [ "$_DCG_ONEOFF_CON_CHAY" = "1" ]; then
+        warn "  ⚠ one-off alembic của lượt này CÒN CHẠY / CHƯA XÁC ĐỊNH sau ${_DCG_HAN_ONEOFF}s chờ — số đo dưới là LÚC IN, KHÔNG phải trạng thái cuối; lược đồ có thể còn đang đổi."
+    fi
     warn "  pha=$_DCG_PHA · tín hiệu=${_DCG_TIN_HIEU:--} · script KHÔNG tự mở ứng dụng và KHÔNG tự phát lại bản sao (F28). Trạng thái ĐO THẬT:"
     for s in $_DCG_THU_TU_MO; do
         m=$(_dcg_moc "${_DCG_CID[$s]:-khong-co}" 2>/dev/null) || m="KHÔNG đọc được"
@@ -1742,7 +1927,17 @@ _dcg_huong_dan() {
     warn "  PHỤC HỒI CÓ ĐỐI SOÁT — theo thứ tự, KHÔNG bỏ bước. CSDL đang giữ MỌI ghi đã commit; đừng phá nó trước khi đối chiếu:"
     warn "   1. Chắc chắn KHÔNG còn migration nào chạy. One-off của lượt này: docker inspect -f '{{.State.Status}}' <CID ghi nhận ở trên>; CHỈ khi 'exited' mới docker rm <CID ấy>. KHÔNG dọn one-off nào khác (lượt khác / đang chạy)."
     warn "   2. So vân tay lược đồ với bản 4c (rỗng = KHỚP): docker compose -f docker-compose.yml --profile production --env-file .env.production exec -T postgres psql -X -A -t -q -U ${POSTGRES_USER:-qlts} -d ${POSTGRES_DB:-qlts_production} < $_DCG_VT_SQL | diff $_DCG_VT_4C -"
-    warn "   3. Ưu tiên ĐI TIẾP: sửa migration rồi deploy lại bản sửa — CSDL giữ nguyên, KHÔNG mất ghi nào. Đây là đường mặc định."
+    case "$_DCG_PHA" in
+        dang_migrate|migrate_do|da_migrate) tt_nguon="$_DCG_TT" ;;
+        *) tt_nguon="${_DT_TT_CU:-}" ;;
+    esac
+    if [ -n "$tt_nguon" ]; then
+        warn "   3. Ưu tiên ĐI TIẾP (KHÔNG bật mã cũ, CSDL giữ nguyên, KHÔNG mất ghi nào): sửa nguyên nhân, đưa cây tới commit SỬA, rồi TRÊN VPS chạy đúng lệnh:"
+        warn "      SHA_MONG_DOI=<40 hex commit sửa> QLTS_DI_TIEP_SAU_MIGRATE_DO=1 QLTS_DI_TIEP_TU=$tt_nguon bash scripts/deploy.sh"
+        warn "      Lệnh tự kiểm trước mọi thay đổi và TỪ CHỐI nếu: có container đang chạy, CID ghi nhận mất/không exited/đã chạy lại, one-off alembic còn chạy, pha không phải dừng-sau-migration, nginx khác CID ghi nhận."
+    else
+        warn "   3. Đường ĐI TIẾP KHÔNG áp dụng ở pha '$_DCG_PHA' (migration chưa chạy): điều tra theo trạng thái đo ở trên."
+    fi
     warn "   4. Vân tay KHỚP chỉ nói về LƯỢC ĐỒ: migration dữ liệu đã AUTOCOMMIT vẫn có thể đã sửa hàng — đọc migration hỏng trước. Chỉ khi chắc mã cũ chạy đúng trên dữ liệu hiện tại: docker start đủ ba CID ở trên (backend trước; KHÔNG up -d — nó dựng ảnh MỚI)."
     warn "      Sau đó: IP backend đổi thì khởi động lại ĐÚNG CID nginx ở trên, rồi đo dịch vụ qua SNI thật (curl --resolve $DOMAIN:443:<IP nginx> https://$DOMAIN/health và /login)."
     warn "   5. Vân tay LỆCH: KHÔNG mở mã cũ. Nếu buộc phải LÙI bằng bản sao, ĐỐI SOÁT TRƯỚC: (a) mọi ghi commit SAU mốc T0 sẽ MẤT — so bộ đếm T0/T1/T2, xem phiên đã/đang nối (pg_stat_activity), tra các bảng có cột thời gian (created_at/updated_at > T0) để liệt kê TỪNG khoá; (b) có ghi ⇒ trích chúng ra TRƯỚC để nhập lại; (c) phát lại: docker compose -f docker-compose.yml --env-file .env.production exec -T postgres psql -v ON_ERROR_STOP=1 -U ${POSTGRES_USER:-qlts} ${POSTGRES_DB:-qlts_production} < bản sao; (d) dump --clean --if-exists KHÔNG xoá object migration hỏng tạo thêm (dòng '+' ở bước 2) — dọn có chủ đích; (e) so lại vân tay, CHỈ KHI KHỚP mới làm bước 4."
@@ -1760,15 +1955,23 @@ _dcg_khi_thoat() {
     set +eu
     _dcg_ghi "thoat" "rc=$rc tin_hieu=${_DCG_TIN_HIEU:--} pha=$_DCG_PHA"
     case "$_DCG_PHA" in
-        khong_ap_dung|chua_dong|buoc8|xong)
+        khong_ap_dung|buoc8|xong)
             : ;;
-        dang_dong|da_dong)
+        chua_dong|dang_dong|da_dong)
+            if [ "$_DCG_DI_TIEP" = "1" ]; then
+                # Đường đi tiếp: ba service ĐÃ nằm dừng từ lượt đỏ và lược đồ có thể
+                # đã migrate dở ⇒ KHÔNG BAO GIỜ mở lại mã cũ ở đây.
+                _dcg_huong_dan "ĐI TIẾP dừng TRƯỚC migration (pha '$_DCG_PHA') — ứng dụng VẪN DỪNG như sau lượt đỏ; KHÔNG bật mã cũ (lược đồ có thể đã migrate dở)"
+            elif [ "$_DCG_PHA" = "chua_dong" ]; then
+                :
+            else
             warn "[cửa ghi] deploy dừng ở pha '$_DCG_PHA' (rc=$rc, tín hiệu=${_DCG_TIN_HIEU:--}) — CSDL CHƯA bị migration chạm; thử mở lại ĐÚNG container cũ (qua cổng vân tay lược đồ)"
             if ( _dcg_mo_lai_cu ); then
                 warn "[cửa ghi] ĐÃ mở lại container CŨ (đã đo — xem các dòng ✓ ngay trên). Deploy KHÔNG thành công."
             else
                 _dcg_ghi "mo_lai_cu" "KHONG_DAT"
                 _dcg_huong_dan "mở lại container cũ KHÔNG đạt / KHÔNG được phép"
+            fi
             fi ;;
         dang_migrate)
             [ "$_DCG_ONEOFF_XONG" = "1" ] || _dcg_don_oneoff
@@ -1798,6 +2001,27 @@ else
     _dcg_ghi pha chua_dong \
         || error "[trạng thái] tệp trạng thái KHÔNG ghi được — DỪNG trước khi dừng container nào (fail-closed)."
 
+    if [ "$_DCG_DI_TIEP" = "1" ]; then
+    # --- ĐI TIẾP (vòng 4, F40): cửa ghi ĐÃ đóng từ lượt đỏ — KHÔNG dừng gì ------
+    # Ghi lại đúng ba CID exited + nginx đã đo ở Step 3a vào tệp trạng thái MỚI
+    # (để chính lượt này, nếu lại đỏ sau migration, là nguồn hợp lệ cho lượt đi
+    # tiếp kế), rồi ĐO LẠI mốc vòng đời ngay bây giờ: Step 3b → 4b có thể đã tốn
+    # vài phút, đừng tin số đo ở Step 3a.
+    _dcg_ghi "di_tiep_tu" "$_DT_TT_CU" || error "[trạng thái] KHÔNG ghi được tệp trạng thái — DỪNG."
+    for _S in $_DCG_DICH_VU; do
+        _DCG_CID[$_S]=${_DT_CID[$_S]}
+        _DCG_ANH[$_S]=${_DT_ANH[$_S]}
+        _dcg_ghi "cu" "$_S ${_DCG_CID[$_S]} ${_DCG_ANH[$_S]} restart=dung_tu_luot_truoc" \
+            || error "[trạng thái] KHÔNG ghi được container cũ vào tệp trạng thái — DỪNG."
+    done
+    _DCG_NGINX_CID=$_DT_NGINX
+    _dcg_ghi "nginx" "$_DCG_NGINX_CID" || error "[trạng thái] KHÔNG ghi được tệp trạng thái — DỪNG."
+    for _S in $_DCG_DICH_VU; do
+        _DCG_MOC[$_S]=$(_dcg_moc "${_DCG_CID[$_S]}") || error "[đi tiếp] không đọc được mốc vòng đời của '$_S'"
+        [ "${_DCG_MOC[$_S]}" = "${_DT_MOC[$_S]}" ] || error "[đi tiếp] '$_S' ĐÃ CHẠY LẠI sau Step 3a (ghi=${_DT_MOC[$_S]} · đo=${_DCG_MOC[$_S]}) — DỪNG."
+        _dcg_ghi "moc" "$_S ${_DCG_MOC[$_S]}" || error "[trạng thái] KHÔNG ghi được mốc vòng đời — DỪNG."
+    done
+    else
     # --- Ghi lại container CŨ: đúng MỘT container đang chạy mỗi service -------
     # Cùng hợp đồng với Step 3b (`ps -q` = container ĐANG chạy, ID đủ 64 hex).
     # Trước lệnh `stop` đầu tiên ⇒ mọi `error` ở đây để nguyên hiện trạng.
@@ -1841,6 +2065,7 @@ else
         _DCG_MOC[$_S]=$(_dcg_moc "${_DCG_CID[$_S]}") || error "[4c] không đọc được mốc vòng đời của '$_S'"
         _dcg_ghi "moc" "$_S ${_DCG_MOC[$_S]}" || error "[trạng thái] KHÔNG ghi được mốc vòng đời — DỪNG."
     done
+    fi
 
     # --- Đo cửa đã đóng (container + CSDL), chụp vân tay + T0 ----------------
     _dcg_cua_dong "4c" || error "[4c] cửa ghi CHƯA đóng (phía container) — DỪNG trước pg_dump. CSDL chưa bị chạm."
@@ -2083,6 +2308,18 @@ log "Frontend healthy"
 # chạy được ĐÚNG đoạn mã này thay vì một bản chép lại trong test.
 log "Step 8b: áp cấu hình nginx (thử trên candidate trước)..."
 bash "$SCRIPT_DIR/nginx-apply.sh" "$DOMAIN"     || error "không áp được cấu hình nginx — xem log phía trên"
+
+# Vòng 4 (F40): đường ĐI TIẾP kết thúc bằng phép đo DỊCH VỤ qua SNI thật trên
+# container nginx ĐANG phục vụ sau Step 8b — ứng dụng đã nằm dừng từ lượt đỏ,
+# "backend healthy" một mình không chứng minh người dùng tới được.
+if [ "${_DCG_DI_TIEP:-0}" = "1" ]; then
+    _DS=$($_RA_COMPOSE ps -q nginx) || error "[đi tiếp] không liệt kê được nginx sau Step 8b."
+    [ "$(printf '%s\n' "$_DS" | grep -c '[^[:space:]]' || true)" -eq 1 ] \
+        || error "[đi tiếp] sau Step 8b 'nginx' không có ĐÚNG MỘT container đang chạy."
+    _DCG_NGINX_CID=${_DS//[[:space:]]/}
+    _dcg_do_dich_vu_nginx || error "[đi tiếp] hậu kiểm dịch vụ qua SNI thật KHÔNG ĐẠT sau Step 8b — xem dòng [nginx · dịch vụ] phía trên."
+    log "  ✓ [đi tiếp] hậu kiểm dịch vụ qua SNI thật ĐẠT trên nginx $_DCG_NGINX_CID"
+fi
 
 
 # =============================================================================

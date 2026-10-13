@@ -57,6 +57,7 @@ from tests.unit.test_deploy_startup_gates import (
     _lenh_mo_app,
     _lenh_mo_lai_cu,
     _tach_exec,
+    _tach_lenh,
     _vi_pham_phat_lai,
     _vi_tri_alembic,
 )
@@ -73,7 +74,7 @@ _OO = "6" * 64                          # CID one-off alembic của CHÍNH lư�
 _OO_KHAC = "7" * 64                     # one-off của LƯỢT KHÁC (stub)
 _VERIFY_THAT = _DEPLOY.parent / "nginx-verify.sh"
 # Hạn ngắn cho MỌI ca: cùng ngữ nghĩa, không đốt 30 s ở nhánh "còn phiên lạ".
-_NHANH = {"QLTS_HAN_PHIEN_LA": "1", "QLTS_HEALTH_TIMEOUT": "4"}
+_NHANH = {"QLTS_HAN_PHIEN_LA": "1", "QLTS_HEALTH_TIMEOUT": "4", "QLTS_HAN_CHO_ONEOFF": "1"}
 
 
 def _dong(nhat_ky: str) -> list[str]:
@@ -393,11 +394,20 @@ def test_v3_oneoff_exited_cua_chinh_luot_duoc_don_theo_cid_ghi_nhan(
 
 
 @_bo_qua_neu_khong_posix
-def test_v3_oneoff_dang_chay_thi_khong_don(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "trang_thai,thong_diep",
+    [
+        # Vòng 4: `running` ⇒ trap CHỜ (hữu hạn, _NHANH = 1 s) rồi báo còn chạy.
+        ("running", "CÒN CHẠY / CHƯA XÁC ĐỊNH"),
+        # Trạng thái không chờ được mà cũng không phải exited ⇒ điều kiện "chỉ khi exited".
+        ("dead", "KHÔNG dọn (chỉ dọn khi exited)"),
+    ],
+)
+def test_v3_oneoff_dang_chay_thi_khong_don(tmp_path: Path, trang_thai: str, thong_diep: str) -> None:
     goc = _dung_san_khau(tmp_path)
-    ket, nk = _chay_deploy(goc, STUB_ONEOFF="running", STUB_TIN_HIEU_O_MIGRATE="TERM", **_NHANH)
-    assert not any(d.startswith("docker rm ") for d in _dong(nk)), "dọn one-off ĐANG CHẠY"
-    assert "KHÔNG dọn (chỉ dọn khi exited)" in _ra(ket), _ra(ket)[-2000:]
+    ket, nk = _chay_deploy(goc, STUB_ONEOFF=trang_thai, STUB_TIN_HIEU_O_MIGRATE="TERM", **_NHANH)
+    assert not any(d.startswith("docker rm ") for d in _dong(nk)), f"dọn one-off '{trang_thai}'"
+    assert thong_diep in _ra(ket), _ra(ket)[-2000:]
 
 
 @_bo_qua_neu_khong_posix
@@ -786,8 +796,8 @@ def test_kiem_nguoc_trap_mo_sau_khi_migrate_chay_thi_app_chay_tren_luoc_do_chua_
     tmp_path: Path, ten_ca: str, pha: str, kich_ban: dict
 ) -> None:
     dot_bien = _ban_dot_bien(
-        "        dang_dong|da_dong)\n",
-        f"        dang_dong|da_dong|{pha})\n",
+        "        chua_dong|dang_dong|da_dong)\n",
+        f"        chua_dong|dang_dong|da_dong|{pha})\n",
     )
     goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien)
     _, nk = _chay_deploy(goc, **kich_ban, **_NHANH)
@@ -986,8 +996,8 @@ def test_kiem_nguoc_bo_dieu_kien_exited_thi_xoa_oneoff_dang_chay(tmp_path: Path)
         '        "/$_DCG_ONEOFF_TEN|True|backend|"*)\n',
     )
     goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien)
-    _, nk = _chay_deploy(goc, STUB_ONEOFF="running", STUB_TIN_HIEU_O_MIGRATE="TERM", **_NHANH)
-    assert f"docker rm {_OO}" in _dong(nk), "bỏ điều kiện exited mà one-off đang chạy còn ⇒ ca 'đang chạy' không canh gì"
+    _, nk = _chay_deploy(goc, STUB_ONEOFF="dead", STUB_TIN_HIEU_O_MIGRATE="TERM", **_NHANH)
+    assert f"docker rm {_OO}" in _dong(nk), "bỏ điều kiện exited mà one-off 'dead' còn ⇒ ca 'chỉ khi exited' không canh gì"
 
 
 @_bo_qua_neu_khong_posix
@@ -1012,3 +1022,309 @@ def test_kiem_nguoc_khong_ghi_nhan_cid_thi_khong_don_duoc(tmp_path: Path) -> Non
     goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien)
     _, nk = _chay_deploy(goc, STUB_ONEOFF="exited", STUB_TIN_HIEU_O_MIGRATE="TERM", **_NHANH)
     assert f"docker rm {_OO}" not in _dong(nk), "không ghi nhận CID mà vẫn dọn ⇒ dọn không theo CID ghi nhận"
+
+
+# =============================================================================
+# IX. Vòng 4 (F40) — ĐI TIẾP sau migration đỏ; trap CHỜ one-off có hạn
+# =============================================================================
+# Hai lượt trên CÙNG một sân khấu: lượt 1 migration đỏ (ba service nằm dừng), lượt 2
+# đi tiếp bằng `QLTS_DI_TIEP_SAU_MIGRATE_DO=1 QLTS_DI_TIEP_TU=<tệp trạng thái lượt 1>`.
+# Mô hình container của stub suy từ nhật ký lệnh ⇒ lượt 2 giữ nhật ký (`_giu_nhat_ky`).
+_TS_DO = "20261013_010000"
+_TS_TIEP = "20261013_020000"
+_SHIM_DATE_BIEN = """#!/usr/bin/env bash
+# TIMESTAMP của deploy.sh (và tên thư mục tài sản rollback) lấy từ QLTS_TEST_TS khi
+# có: hai lượt trong cùng một giây không được đè tệp trạng thái của nhau.
+if [ -n "${QLTS_TEST_TS:-}" ]; then
+    if [ "$#" = "1" ] && [ "$1" = "+%Y%m%d_%H%M%S" ]; then echo "$QLTS_TEST_TS"; exit 0; fi
+    if [ "$#" = "2" ] && [ "$1" = "-u" ] && [ "$2" = "+%Y%m%dT%H%M%SZ" ]; then echo "${QLTS_TEST_TS/_/T}Z"; exit 0; fi
+fi
+for d in /bin/date /usr/bin/date; do [ -x "$d" ] && exec "$d" "$@"; done
+exit 127
+"""
+_NGUON_DO = f"backups/deploy_{_TS_DO}.trang-thai"
+
+
+def _san_khau_hai_luot(tmp_path: Path, deploy_sh: str | None = None, env_them: str = "") -> Path:
+    goc = _dung_san_khau(tmp_path, deploy_sh=deploy_sh, env_them=env_them)
+    p = goc / "bin" / "date"
+    p.write_text(_SHIM_DATE_BIEN, encoding="utf-8", newline="\n")
+    p.chmod(0o755)
+    return goc
+
+
+def _luot_do(goc: Path, **kich_ban: str):
+    ket, _ = _chay_deploy(goc, STUB_ALEMBIC_RC="1", QLTS_TEST_TS=_TS_DO, **{**_NHANH, **kich_ban})
+    assert ket.returncode != 0, "lượt 1 phải đỏ (migration đỏ)"
+    return ket
+
+
+def _luot_tiep(goc: Path, **kich_ban):
+    """Lượt 2. Giá trị None trong kich_ban = GỠ biến đó. Trả (ket, chỉ số lời gọi đầu tiên của lượt 2)."""
+    n0 = len(_cac_loi_goi(goc)) if (goc / "lenh.log.goi").exists() else 0
+    env = {**_NHANH, "QLTS_TEST_TS": _TS_TIEP, "QLTS_DI_TIEP_SAU_MIGRATE_DO": "1", "QLTS_DI_TIEP_TU": _NGUON_DO}
+    env.update(kich_ban)
+    env = {k: v for k, v in env.items() if v is not None}
+    ket, _ = _chay_deploy(goc, _giu_nhat_ky=True, **env)
+    return ket, n0
+
+
+def _lenh_ghi(goc: Path, tu: int) -> list[str]:
+    """Lời gọi docker KHÔNG chỉ-đọc kể từ ``tu`` (mọi thứ ngoài ps/inspect/logs/config)."""
+    ra = []
+    for g in _cac_loi_goi(goc)[tu:]:
+        ho, lenh, con = _tach_lenh(g["args"])
+        if ho == "compose" and lenh in ("ps", "config"):
+            continue
+        if ho == "docker" and (lenh in ("inspect", "ps", "logs") or (lenh == "image" and con[:1] == ["inspect"])):
+            continue
+        ra.append(" ".join(g["args"])[:120])
+    return ra
+
+
+def _tt(goc: Path, ts: str) -> Path:
+    return goc / "backups" / f"deploy_{ts}.trang-thai"
+
+
+def _pha_cua(tep: Path) -> list[str]:
+    return [d.split("\t")[2] for d in tep.read_text(encoding="utf-8").splitlines() if d.split("\t")[1:2] == ["pha"]]
+
+
+@_bo_qua_neu_khong_posix
+def test_v4_trap_in_dung_lenh_di_tiep_va_lenh_ay_dua_he_thong_len(tmp_path: Path) -> None:
+    import re
+
+    goc = _san_khau_hai_luot(tmp_path)
+    ra1 = _ra(_luot_do(goc))
+    m = re.search(r"QLTS_DI_TIEP_SAU_MIGRATE_DO=1 QLTS_DI_TIEP_TU=(\S+) bash scripts/deploy\.sh", ra1)
+    assert m, f"trap không in lệnh đi tiếp:\n{ra1[-2500:]}"
+    assert m.group(1) == str(_tt(goc, _TS_DO)), f"lệnh in sai tệp trạng thái: {m.group(1)}"
+    # Chạy ĐÚNG đường dẫn trap in ra.
+    ket, n0 = _luot_tiep(goc, QLTS_DI_TIEP_TU=m.group(1))
+    ra = _ra(ket)
+    assert ket.returncode == 0, ra[-3000:]
+    assert _pha_cua(_tt(goc, _TS_TIEP)) == ["chua_dong", "da_dong", "dang_migrate", "da_migrate", "buoc8", "xong"]
+    tt2 = _tt(goc, _TS_TIEP).read_text(encoding="utf-8")
+    assert f"di_tiep_tu\t{m.group(1)}" in tt2
+    goi = _cac_loi_goi(goc)[n0:]
+    assert not any(g["args"][:1] == ["stop"] for g in goi), "đi tiếp mà vẫn `docker stop` — ba service đã dừng từ lượt đỏ"
+    assert _lenh_mo_lai_cu(goc, n0) == [], f"đi tiếp mà bật mã CŨ: {_lenh_mo_lai_cu(goc, n0)}"
+    assert any("up -d backend celery-worker celery-beat" in " ".join(g["args"]) for g in goi), "không dựng mã MỚI"
+    assert _vi_pham_phat_lai(goc, n0) == []
+    assert "✓ [đi tiếp] hậu kiểm dịch vụ qua SNI thật ĐẠT" in ra
+    # Tài sản rollback của lượt 2 ghim ảnh cũ từ ĐÚNG ba CID exited đã ghi nhận.
+    bk = list((goc / "ops").glob("*20261013T020000Z/rollback_manifest_*.txt"))
+    assert len(bk) == 1, bk
+    dong = {d.split("\t")[0]: d.split("\t") for d in bk[0].read_text(encoding="utf-8").splitlines() if not d.startswith("#")}
+    for dv, k in (("backend", "b"), ("celery-worker", "c"), ("celery-beat", "d")):
+        assert dong[dv][1] == _cid_gia(dv) and dong[dv][2] == "sha256:" + k * 64, dong[dv]
+    assert "# deployed-sha\t" + "1" * 40 in (goc / "ops" / "last-deploy.marker").read_text(encoding="utf-8")
+
+
+# --- Từ chối khi trạng thái thật KHÔNG khớp — mỗi ca vi phạm ĐÚNG MỘT bất biến ---
+def _bat_roi_tat_tu_ngoai(goc: Path) -> None:
+    with (goc / "lenh.log").open("a", encoding="utf-8") as f:
+        f.write(f"docker start {_cid_gia('celery-beat')} # tac-nhan-ngoai\n")
+        f.write(f"docker stop {_cid_gia('celery-beat')} # tac-nhan-ngoai\n")
+
+
+def _them_pha_buoc8(goc: Path) -> None:
+    with _tt(goc, _TS_DO).open("a", encoding="utf-8") as f:
+        f.write("2026-10-13T01:30:00Z\tpha\tbuoc8\n")
+
+
+_TU_CHOI = [
+    # Một container KHÁC của service đang chạy (vd ai đó `up -d`); CID cũ vẫn exited đúng mốc.
+    ("service có container khác ĐANG CHẠY", None, {}, {"STUB_PS_Q_KHAC": "backend"}, "có container ĐANG CHẠY"),
+    ("bật rồi tắt — vẫn exited nhưng mốc vòng đời đổi", _bat_roi_tat_tu_ngoai, {}, {}, "ĐÃ CHẠY LẠI từ lúc đóng"),
+    ("CID ghi nhận không còn", None, {}, {"STUB_CID_MAT": "celery-worker"}, "KHÔNG còn"),
+    ("one-off của lượt đỏ còn chạy", None, {"STUB_ONEOFF": "running"}, {"STUB_ONEOFF": "running"},
+     "one-off alembic của lượt đỏ"),
+    ("one-off khác của backend còn chạy (theo nhãn project)", None, {}, {"STUB_ONEOFF_NHAN_CHAY": "1"},
+     "còn one-off của service backend ĐANG CHẠY"),
+    ("pha cuối không phải dừng-sau-migration", _them_pha_buoc8, {}, {}, "KHÔNG phải pha dừng-có-chủ-ý"),
+    ("nginx khác CID ghi nhận", None, {}, {"STUB_NGINX_CID_KHAC": "1"}, "KHÁC CID ghi nhận"),
+]
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize("ten_ca,chen_giua,kb_do,kb_tiep,thong_diep", _TU_CHOI)
+def test_v4_di_tiep_tu_choi_khi_trang_thai_that_khong_khop(
+    tmp_path: Path, ten_ca, chen_giua, kb_do: dict, kb_tiep: dict, thong_diep: str
+) -> None:
+    goc = _san_khau_hai_luot(tmp_path)
+    _luot_do(goc, **kb_do)
+    if chen_giua:
+        chen_giua(goc)
+    ket, n0 = _luot_tiep(goc, **kb_tiep)
+    ra = _ra(ket)
+    assert ket.returncode != 0, f"{ten_ca}: đi tiếp mà KHÔNG từ chối"
+    assert thong_diep in ra, f"{ten_ca}: thiếu {thong_diep!r}:\n{ra[-2000:]}"
+    assert _lenh_ghi(goc, n0) == [], f"{ten_ca}: từ chối nhưng ĐÃ đụng vào hệ thống: {_lenh_ghi(goc, n0)}"
+    assert not _tt(goc, _TS_TIEP).exists(), f"{ten_ca}: đã sang Step 4c"
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,kich_ban,env_them,thong_diep",
+    [
+        ("chỉ có QLTS_DI_TIEP_TU", {"QLTS_DI_TIEP_SAU_MIGRATE_DO": None}, "", "ý định mâu thuẫn"),
+        ("cờ =1 mà thiếu QLTS_DI_TIEP_TU", {"QLTS_DI_TIEP_TU": None}, "", "THIẾU QLTS_DI_TIEP_TU"),
+        ("cờ giá trị lạ", {"QLTS_DI_TIEP_SAU_MIGRATE_DO": "yes"}, "", "chỉ nhận '0' hoặc '1'"),
+        ("tệp trạng thái ngoài backups/", {"QLTS_DI_TIEP_TU": f"/tmp/deploy_{_TS_DO}.trang-thai"}, "",
+         "phải nằm trong"),
+        ("cờ nằm trong .env.production", {"QLTS_DI_TIEP_SAU_MIGRATE_DO": None, "QLTS_DI_TIEP_TU": None},
+         "QLTS_DI_TIEP_SAU_MIGRATE_DO=1\n", "được khai báo trong .env.production"),
+    ],
+)
+def test_v4_co_di_tiep_sai_cach_thi_tu_choi(
+    tmp_path: Path, ten_ca: str, kich_ban: dict, env_them: str, thong_diep: str
+) -> None:
+    goc = _san_khau_hai_luot(tmp_path, env_them=env_them)
+    _luot_do(goc) if not env_them else None
+    ket, n0 = _luot_tiep(goc, **kich_ban)
+    ra = _ra(ket)
+    assert ket.returncode != 0, f"{ten_ca}: không từ chối"
+    assert thong_diep in ra, f"{ten_ca}: thiếu {thong_diep!r}:\n{ra[-1500:]}"
+    assert _lenh_ghi(goc, n0) == [], f"{ten_ca}: đã đụng vào hệ thống: {_lenh_ghi(goc, n0)}"
+
+
+@_bo_qua_neu_khong_posix
+def test_v4_di_tiep_do_truoc_migrate_thi_khong_mo_ma_cu_va_in_lenh_voi_tep_goc(tmp_path: Path) -> None:
+    goc = _san_khau_hai_luot(tmp_path)
+    _luot_do(goc)
+    ket, n0 = _luot_tiep(goc, STUB_PGDUMP_RC="1")
+    ra = _ra(ket)
+    assert ket.returncode != 0
+    assert "ĐI TIẾP dừng TRƯỚC migration" in ra, ra[-2500:]
+    assert _lenh_mo_lai_cu(goc, n0) == [], f"đi tiếp đỏ trước migrate mà BẬT mã cũ: {_lenh_mo_lai_cu(goc, n0)}"
+    assert f"QLTS_DI_TIEP_TU={_tt(goc, _TS_DO)} bash scripts/deploy.sh" in ra, "không in lệnh đi tiếp với tệp GỐC"
+
+
+# --- Kiểm ngược: gỡ từng guard của đường đi tiếp (biến thể tinh vi nhất) ---------
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,cu,moi,chen_giua,kb_do,kb_tiep",
+    [
+        ("bỏ phép 'không container đang chạy'",
+         """        [ -z "${_DS//[[:space:]]/}" ] || error "[đi tiếp] '$_S' có container ĐANG CHẠY""",
+         """        true || error "[đi tiếp] '$_S' có container ĐANG CHẠY""",
+         None, {}, {"STUB_PS_Q_KHAC": "backend"}),
+        ("bỏ so mốc vòng đời (chỉ còn xem exited)",
+         """        [ "$_M" = "${_DT_MOC[$_S]}" ] || error "[đi tiếp] container ghi nhận của '$_S' ĐÃ CHẠY LẠI từ lúc đóng""",
+         """        true || error "[đi tiếp] container ghi nhận của '$_S' ĐÃ CHẠY LẠI từ lúc đóng""",
+         _bat_roi_tat_tu_ngoai, {}, {}),
+        ("giả số đo khi CID mất",
+         """            || error "[đi tiếp] CID ghi nhận của '$_S' ($_CID) KHÔNG còn""",
+         """            || _M="${_DT_MOC[$_S]}" || error "[đi tiếp] CID ghi nhận của '$_S' ($_CID) KHÔNG còn""",
+         None, {}, {"STUB_CID_MAT": "celery-worker"}),
+        ("bỏ phép one-off ghi nhận còn chạy",
+         """*) error "[đi tiếp] one-off alembic của lượt đỏ ($_DT_OO) đang '$_M'""",
+         """*) : "[đi tiếp] one-off alembic của lượt đỏ ($_DT_OO) đang '$_M'""",
+         None, {"STUB_ONEOFF": "running"}, {"STUB_ONEOFF": "running"}),
+        ("bỏ quét one-off theo nhãn project",
+         """    [ -z "${_DS//[[:space:]]/}" ] || error "[đi tiếp] còn one-off""",
+         """    true || error "[đi tiếp] còn one-off""",
+         None, {}, {"STUB_ONEOFF_NHAN_CHAY": "1"}),
+        ("nhận thêm pha buoc8",
+         "        dang_migrate|migrate_do|da_migrate) : ;;\n",
+         "        dang_migrate|migrate_do|da_migrate|buoc8) : ;;\n",
+         _them_pha_buoc8, {}, {}),
+        ("bỏ so CID nginx",
+         """    [ "${_DS//[[:space:]]/}" = "$_DT_NGINX" ] || error""",
+         """    true || error""",
+         None, {}, {"STUB_NGINX_CID_KHAC": "1"}),
+    ],
+)
+def test_kiem_nguoc_v4_go_tung_guard_di_tiep_thi_dung_vao_he_thong(
+    tmp_path: Path, ten_ca: str, cu: str, moi: str, chen_giua, kb_do: dict, kb_tiep: dict
+) -> None:
+    goc = _san_khau_hai_luot(tmp_path, deploy_sh=_ban_dot_bien(cu, moi))
+    _luot_do(goc, **kb_do)
+    if chen_giua:
+        chen_giua(goc)
+    _, n0 = _luot_tiep(goc, **kb_tiep)
+    assert _lenh_ghi(goc, n0), f"{ten_ca}: gỡ guard mà lượt đi tiếp vẫn không đụng gì ⇒ ca tương ứng xanh vì lý do khác"
+
+
+@_bo_qua_neu_khong_posix
+def test_kiem_nguoc_v4_bo_cam_env_file_thi_co_trong_tep_bi_bo_qua_am_tham(tmp_path: Path) -> None:
+    than = _DEPLOY.read_text(encoding="utf-8")
+    dau = than.index('if [ "${QLTS_DI_TIEP_SAU_MIGRATE_DO+co}" = "co" ] || [ "${QLTS_DI_TIEP_TU+co}" = "co" ]; then\n')
+    cuoi = than.index("fi\n", dau) + len("fi\n")
+    goc = _san_khau_hai_luot(tmp_path, deploy_sh=than[:dau] + than[cuoi:], env_them="QLTS_DI_TIEP_SAU_MIGRATE_DO=1\n")
+    ket, _ = _luot_tiep(goc, QLTS_DI_TIEP_SAU_MIGRATE_DO=None, QLTS_DI_TIEP_TU=None)
+    assert "được khai báo trong .env.production" not in _ra(ket)
+    assert ket.returncode == 0, "gỡ cấm mà deploy vẫn đỏ ⇒ ca .env.production xanh vì lý do khác"
+
+
+@_bo_qua_neu_khong_posix
+def test_kiem_nguoc_v4_trap_mo_ma_cu_o_duong_di_tiep(tmp_path: Path) -> None:
+    dot_bien = _ban_dot_bien('            if [ "$_DCG_DI_TIEP" = "1" ]; then\n', "            if false; then\n")
+    goc = _san_khau_hai_luot(tmp_path, deploy_sh=dot_bien)
+    _luot_do(goc)
+    _, n0 = _luot_tiep(goc, STUB_PGDUMP_RC="1")
+    assert _lenh_mo_lai_cu(goc, n0), "gỡ nhánh đi tiếp của trap mà vẫn không mở mã cũ ⇒ ca trap đi tiếp xanh vì lý do khác"
+
+
+# --- Trap CHỜ one-off của lượt (owner chốt): hữu hạn, không dọn cưỡng bức ---------
+# Dòng ĐẦU khối hướng dẫn (không phải dòng cảnh báo của bước dọn): đánh dấu mọi số
+# đo in sau là ảnh chụp giữa chừng.
+_DAU_CHUA_CUOI = "số đo dưới là LÚC IN, KHÔNG phải trạng thái cuối"
+@_bo_qua_neu_khong_posix
+def test_v4_trap_cho_oneoff_het_han_thi_bao_con_chay_khong_don(tmp_path: Path) -> None:
+    import time
+
+    goc = _dung_san_khau(tmp_path)
+    t = time.monotonic()
+    ket, nk = _chay_deploy(goc, STUB_ONEOFF="running", STUB_TIN_HIEU_O_MIGRATE="TERM",
+                           **{**_NHANH, "QLTS_HAN_CHO_ONEOFF": "2"})
+    ra = _ra(ket)
+    assert time.monotonic() - t >= 2, "trap không CHỜ one-off"
+    assert "VẪN 'running' sau 2s chờ — CÒN CHẠY / CHƯA XÁC ĐỊNH" in ra, ra[-2500:]
+    assert _DAU_CHUA_CUOI in ra, "hướng dẫn in số đo mà không nói đó KHÔNG phải trạng thái cuối"
+    assert not any(d.startswith("docker rm") for d in _dong(nk)), "hết hạn mà dọn cưỡng bức"
+    assert f"oneoff\t{_OO} con_chay_sau_2s" in _tep_trang_thai(goc)
+
+
+@_bo_qua_neu_khong_posix
+def test_v4_trap_cho_oneoff_ket_thuc_trong_han_thi_don_dung_cid(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, nk = _chay_deploy(goc, STUB_ONEOFF="chay_roi_xong", STUB_ONEOFF_SO_LAN_CHAY="3",
+                           STUB_TIN_HIEU_O_MIGRATE="TERM", **{**_NHANH, "QLTS_HAN_CHO_ONEOFF": "20"})
+    ra = _ra(ket)
+    assert "CHỜ tối đa 20s" in ra, ra[-2500:]
+    assert f"docker rm {_OO}" in _dong(nk), "one-off đã kết thúc trong hạn mà không dọn"
+    assert _DAU_CHUA_CUOI not in ra
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,cu,moi,kich_ban,ky_vong",
+    [
+        ("bỏ vòng chờ",
+         """    while tt=$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null); do\n""",
+         "    while false; do\n",
+         {"STUB_ONEOFF": "chay_roi_xong", "STUB_ONEOFF_SO_LAN_CHAY": "3", "QLTS_HAN_CHO_ONEOFF": "20"},
+         "khong_don"),
+        ("hết hạn thì dọn cưỡng bức",
+         """            _dcg_ghi "oneoff" "$cid con_chay_sau_${_DCG_HAN_ONEOFF}s" || true\n""",
+         """            _dcg_ghi "oneoff" "$cid con_chay_sau_${_DCG_HAN_ONEOFF}s" || true; docker rm -f "$cid" >/dev/null\n""",
+         {"STUB_ONEOFF": "running", "QLTS_HAN_CHO_ONEOFF": "1"},
+         "don_cuong_buc"),
+        ("không đánh dấu 'chưa phải trạng thái cuối'",
+         "            _DCG_ONEOFF_CON_CHAY=1\n", "",
+         {"STUB_ONEOFF": "running", "QLTS_HAN_CHO_ONEOFF": "1"},
+         "khong_canh_bao"),
+    ],
+)
+def test_kiem_nguoc_v4_trap_cho_oneoff(tmp_path: Path, ten_ca: str, cu: str, moi: str, kich_ban: dict, ky_vong: str) -> None:
+    goc = _dung_san_khau(tmp_path, deploy_sh=_ban_dot_bien(cu, moi))
+    ket, nk = _chay_deploy(goc, STUB_TIN_HIEU_O_MIGRATE="TERM", **{**_NHANH, **kich_ban})
+    ra = _ra(ket)
+    if ky_vong == "khong_don":
+        assert f"docker rm {_OO}" not in _dong(nk), f"{ten_ca}: vẫn dọn ⇒ ca 'chờ rồi dọn' không canh vòng chờ"
+    elif ky_vong == "don_cuong_buc":
+        assert any(d.startswith(f"docker rm -f {_OO}") for d in _dong(nk)), f"{ten_ca}: đột biến không dọn"
+    else:
+        assert _DAU_CHUA_CUOI not in ra, f"{ten_ca}: vẫn cảnh báo ⇒ ca cảnh báo không canh cờ"
