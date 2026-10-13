@@ -980,7 +980,9 @@ def _chay_dh(goc: Path, **kich_ban: str):
     moi_truong.update(kich_ban)
     ket = _sp.run(
         ["bash", "scripts/deploy.sh"],
-        cwd=str(goc), env=moi_truong, capture_output=True, text=True, timeout=300,
+        # stdin RỖNG xác định: stub `docker` (mô hình cửa ghi, vòng 3b) đọc stdin
+        # của từng lời gọi — không được treo vì kế thừa một pipe còn mở.
+        cwd=str(goc), env=moi_truong, stdin=_sp.DEVNULL, capture_output=True, text=True, timeout=300,
     )
     return ket, nhat_ky.read_text(encoding="utf-8"), (ket.stdout or "") + (ket.stderr or "")
 

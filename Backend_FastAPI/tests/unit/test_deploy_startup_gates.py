@@ -276,6 +276,32 @@ def test_model_compose_that_giu_celery_false_du_bien_host_dat_true(
 #     biến -e của nó và `curl` giả của sân khấu); `docker logs` đọc
 #     $QLTS_NGINX_LOG. Dùng cho ca F39 chạy `nginx-verify.sh` THẬT của kho.
 _MANH_STUB_CUA_GHI = r"""# --- mô hình cửa ghi (chèn từ test_deploy_startup_gates._MANH_STUB_CUA_GHI) ---
+# Vòng 3b — ghi HÀNH VI của MỌI lời gọi docker vào "$QLTS_STUB_LOG.goi", một dòng:
+#   <số byte stdin> TAB <sha256 stdin | -> TAB <stdin chứa bản sao 0|1>
+#   TAB <đối số chứa bản sao / trỏ tới tệp chứa bản sao 0|1> TAB <base64 của argv, NUL-ngăn>
+# Bản sao = đầu ra `pg_dump` của stub (chứa "ban sao gia"). Phép phát hiện phát lại
+# bám vào đây — dữ liệu đi đâu — chứ không bám cách viết lệnh.
+_goi_n=0; _goi_sha=-; _goi_in=0; _goi_arg=0
+if [ ! -t 0 ] && ! [ /dev/stdin -ef /dev/null ]; then
+    _goi_f="${QLTS_STUB_LOG}.in.$$"
+    cat > "$_goi_f" 2>/dev/null || :
+    _goi_n=$(wc -c < "$_goi_f" | tr -d ' ')
+    if [ "$_goi_n" != "0" ]; then
+        _goi_sha=$(sha256sum < "$_goi_f" | cut -d' ' -f1)
+        if grep -qF 'ban sao gia' "$_goi_f"; then _goi_in=1; fi
+    fi
+    rm -f "$_goi_f"
+fi
+for _goi_a in "$@"; do
+    case "$_goi_a" in *"ban sao gia"*) _goi_arg=1 ;; esac
+    _goi_ifs=$IFS; IFS=':,='; set -f
+    for _goi_p in $_goi_a; do
+        if [ -f "$_goi_p" ] && grep -qF 'ban sao gia' "$_goi_p" 2>/dev/null; then _goi_arg=1; fi
+    done
+    set +f; IFS=$_goi_ifs
+done
+printf '%s\t%s\t%s\t%s\t%s\n' "$_goi_n" "$_goi_sha" "$_goi_in" "$_goi_arg" \
+    "$(printf '%s\0' "$@" | base64 -w0)" >> "${QLTS_STUB_LOG}.goi"
 if [ "${STUB_CHAY_SH_THAT:-0}" = "1" ]; then
     case "$_tat_ca" in
         "run "*" -c "*)
@@ -918,6 +944,8 @@ def _dung_san_khau(
 def _chay_deploy(goc: Path, **kich_ban: str) -> tuple[subprocess.CompletedProcess, str]:
     nhat_ky = goc / "lenh.log"
     nhat_ky.write_text("", encoding="utf-8")
+    # Nhật ký HÀNH VI (vòng 3b): stub ghi stdin + argv của mọi lời gọi docker.
+    (goc / "lenh.log.goi").write_text("", encoding="utf-8")
     moi_truong = {
         **os.environ,
         "PATH": f"{goc / 'bin'}:{os.environ.get('PATH', '')}",
@@ -949,11 +977,180 @@ def _chay_deploy(goc: Path, **kich_ban: str) -> tuple[subprocess.CompletedProces
         ["bash", "scripts/deploy.sh"],
         cwd=str(goc),
         env=moi_truong,
+        # stdin RỖNG xác định: stub đọc stdin của từng lời gọi docker để biết dữ
+        # liệu nào được đẩy vào container (vòng 3b) — không được treo vì kế thừa
+        # một pipe còn mở của tiến trình chạy test.
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         timeout=300,
     )
     return ket, nhat_ky.read_text(encoding="utf-8")
+
+
+# =============================================================================
+# Vòng 3b — phát hiện theo HÀNH VI (đọc "$QLTS_STUB_LOG.goi" do stub ghi)
+# =============================================================================
+# Review độc lập 13-10 trên 57b21155: phép "không phát lại" cũ chỉ nhận dòng có
+# `postgres psql` mà thiếu ` -c ` ⇒ `exec -T postgres sh -c 'psql …' < bản_sao`
+# LỌT (59 passed). Nay hỏi DỮ LIỆU đi đâu và lệnh nào chạm vào container, bất kể
+# cách viết. Ba luật phát lại, mỗi luật một ca kiểm ngược riêng
+# (`test_deploy_dong_cua_ghi.py::test_kiem_nguoc_phat_lai_bien_the`):
+#   R1 — kể từ mốc alembic, MỌI `exec` (vào bất kỳ container/service nào) phải
+#        đúng dạng phép đo `_dcg_psql`: `psql … -c <câu>`, không `-f`/`--file`,
+#        câu không mở đầu bằng lệnh `\` của psql, VÀ stdin rỗng;
+#   R2 — không lời gọi docker nào nhận stdin chứa nội dung bản sao;
+#   R3 — không lời gọi docker nào mang nội dung bản sao trong đối số, hay trỏ tới
+#        một tệp chứa bản sao (`docker cp`, `-v nguồn:đích`, `--mount source=`…).
+_DAU_BAN_SAO = "ban sao gia"   # đầu ra `pg_dump` của stub chứa chuỗi này
+
+
+def _cac_loi_goi(goc: Path) -> list[dict]:
+    """Mọi lời gọi `docker` của lượt chạy, theo thứ tự, kèm thông tin stdin."""
+    import base64
+
+    ra: list[dict] = []
+    p = goc / "lenh.log.goi"
+    for dong in p.read_text(encoding="utf-8").splitlines():
+        n, sha, vao, doi_so, b64 = dong.split("\t")
+        tho = base64.b64decode(b64) if b64 else b""
+        args = [a.decode("utf-8", "replace") for a in tho.split(b"\0")[:-1]]
+        ra.append({"stdin_byte": int(n), "stdin_sha": sha, "stdin_ban_sao": vao == "1",
+                   "doi_so_ban_sao": doi_so == "1", "args": args})
+    return ra
+
+
+def _vi_tri_alembic(goi: list[dict]) -> int:
+    """Chỉ số lời gọi migration (`… upgrade head`) đầu tiên; -1 nếu không có."""
+    for i, g in enumerate(goi):
+        a = g["args"]
+        if any(a[k] == "upgrade" and a[k + 1] == "head" for k in range(len(a) - 1)):
+            return i
+    return -1
+
+
+_CO_EXEC_KEM_GIA_TRI = {"-u", "--user", "-e", "--env", "-w", "--workdir", "--index", "--detach-keys", "--env-file"}
+
+
+def _tach_exec(args: list[str]) -> tuple[str, list[str]] | None:
+    """`docker [compose …|container] exec [cờ] ĐÍCH lệnh…` ⇒ (ĐÍCH, lệnh); không phải exec ⇒ None."""
+    if "exec" not in args:
+        return None
+    j = args.index("exec") + 1
+    while j < len(args) and args[j].startswith("-"):
+        j += 2 if args[j] in _CO_EXEC_KEM_GIA_TRI else 1
+    if j >= len(args):
+        return None
+    return args[j], args[j + 1:]
+
+
+def _la_phep_do_psql(lenh: list[str]) -> bool:
+    """Đúng dạng `_dcg_psql`: `psql … -c <câu>`, không `-f`/`--file`, câu không mở bằng `\\`."""
+    if not lenh or lenh[0] != "psql" or "-c" not in lenh:
+        return False
+    k = lenh.index("-c")
+    if k + 1 >= len(lenh) or lenh[k + 1].lstrip().startswith("\\"):
+        return False
+    return not any(t in ("-f", "--file") or t.startswith("--file=") for t in lenh)
+
+
+def _vi_pham_phat_lai(goc: Path) -> list[str]:
+    """Các vi phạm "KHÔNG phát lại bản sao" (R1/R2/R3) của lượt vừa chạy; rỗng = sạch."""
+    goi = _cac_loi_goi(goc)
+    moc = _vi_tri_alembic(goi)
+    ra: list[str] = []
+    for i, g in enumerate(goi):
+        mo_ta = " ".join(g["args"])[:140]
+        if g["stdin_ban_sao"]:
+            ra.append(f"R2 stdin mang bản sao ({g['stdin_byte']} byte): {mo_ta}")
+        if g["doi_so_ban_sao"]:
+            ra.append(f"R3 đối số mang/trỏ tới bản sao: {mo_ta}")
+        if moc >= 0 and i > moc:
+            ex = _tach_exec(g["args"])
+            if ex is not None and not (_la_phep_do_psql(ex[1]) and g["stdin_byte"] == 0):
+                ra.append(f"R1 exec ngoài dạng phép đo (stdin {g['stdin_byte']} byte) vào '{ex[0]}': {mo_ta}")
+    return ra
+
+
+# --- "KHÔNG mở ứng dụng" / "KHÔNG dựng container" theo HÀNH VI -----------------
+_DV_UNG_DUNG = ("backend", "celery-worker", "celery-beat", "frontend", "nginx", "certbot")
+_CO_COMPOSE_KEM_GIA_TRI = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file",
+                           "--project-directory", "--ansi", "--progress", "--parallel"}
+_LENH_BAT = {"start", "restart", "unpause"}
+_LENH_DUNG = {"up", "create", "run", "scale"}
+
+
+def _tach_lenh(args: list[str]) -> tuple[str, str, list[str]]:
+    """⇒ (họ, lệnh con, phần còn lại): họ ∈ {compose, docker}; `docker container X` ≡ `docker X`."""
+    if args and args[0] == "compose":
+        i = 1
+        while i < len(args) and args[i].startswith("-"):
+            i += 1 if ("=" in args[i] or args[i] not in _CO_COMPOSE_KEM_GIA_TRI) else 2
+        return ("compose", args[i] if i < len(args) else "", args[i + 1:])
+    if len(args) >= 2 and args[0] == "container":
+        return ("docker", args[1], args[2:])
+    return ("docker", args[0] if args else "", args[1:])
+
+
+_CO_LENH_CON_KEM_GIA_TRI = {
+    "--name", "--entrypoint", "-e", "--env", "-u", "--user", "-w", "--workdir", "-v", "--volume",
+    "-p", "--publish", "-l", "--label", "--pull", "--scale", "-t", "--timeout", "--wait-timeout",
+    "--exit-code-from", "--attach", "--no-attach", "--cap-add", "--cap-drop", "--env-from-file", "--index",
+}
+
+
+def _dich_cua(con: list[str]) -> list[str]:
+    """Đối số vị trí (service / CID / ảnh…) của lệnh con — bỏ cờ VÀ giá trị của cờ."""
+    ra, i = [], 0
+    while i < len(con):
+        t = con[i]
+        if t.startswith("-"):
+            i += 2 if (t in _CO_LENH_CON_KEM_GIA_TRI and "=" not in t) else 1
+            continue
+        ra.append(t)
+        i += 1
+    return ra
+
+
+def _la_mot_lan_khong_phuc_vu(con: list[str]) -> bool:
+    """`run`/`create` một-lần có `--entrypoint` và KHÔNG chạy nền ⇒ công cụ, không phải ứng dụng."""
+    return "--entrypoint" in con and not any(t in ("-d", "--detach") for t in con)
+
+
+def _lenh_dung_moi(goc: Path, tu: int = 0) -> list[str]:
+    """Lời gọi DỰNG/BẬT container ứng dụng qua Compose, hoặc `docker run/create` chạy nền."""
+    ra = []
+    for g in _cac_loi_goi(goc)[tu:]:
+        ho, lenh, con = _tach_lenh(g["args"])
+        mo_ta = " ".join(g["args"])[:140]
+        if ho == "compose" and lenh in _LENH_BAT | _LENH_DUNG:
+            if lenh in ("run", "create") and _la_mot_lan_khong_phuc_vu(con):
+                continue
+            dich = _dich_cua(con)
+            if lenh in ("up", "start", "restart", "unpause", "create") and not dich:
+                ra.append(f"compose {lenh} KHÔNG nêu service (= tất cả): {mo_ta}")
+            elif any(t in _DV_UNG_DUNG for t in dich) or any(
+                t.split("=", 1)[0] in _DV_UNG_DUNG for t in con if t.count("=") == 1 and not t.startswith("-")
+            ):
+                ra.append(f"compose {lenh} service ứng dụng: {mo_ta}")
+        elif ho == "docker" and lenh in ("run", "create") and not _la_mot_lan_khong_phuc_vu(con):
+            ra.append(f"docker {lenh} (chạy nền / không phải công cụ một-lần): {mo_ta}")
+    return ra
+
+
+def _lenh_mo_lai_cu(goc: Path, tu: int = 0) -> list[str]:
+    """`docker [container] start|restart|unpause` vào CID của backend/worker/beat/frontend."""
+    cu = {_cid_gia(s): s for s in ("backend", "celery-worker", "celery-beat", "frontend")}
+    ra = []
+    for g in _cac_loi_goi(goc)[tu:]:
+        ho, lenh, con = _tach_lenh(g["args"])
+        if ho == "docker" and lenh in _LENH_BAT and any(t in cu for t in con):
+            ra.append(" ".join(g["args"])[:140])
+    return ra
+
+
+def _lenh_mo_app(goc: Path, tu: int = 0) -> list[str]:
+    return _lenh_dung_moi(goc, tu) + _lenh_mo_lai_cu(goc, tu)
 
 
 @_bo_qua_neu_khong_posix
@@ -976,7 +1173,7 @@ def test_f7_moi_nhanh_sao_luu_hong_deu_dung_truoc_alembic(
         f"{ten_ca}: đã chạy `{_MOC_ALEMBIC}` dù không có đường lùi.\n"
         f"nhật ký:\n{nhat_ky}"
     )
-    assert _MOC_STEP8 not in nhat_ky, f"{ten_ca}: đã tới Step 8"
+    assert _lenh_dung_moi(goc) == [], f"{ten_ca}: đã dựng/bật container ứng dụng mới: {_lenh_dung_moi(goc)}"
 
 
 @_bo_qua_neu_khong_posix
@@ -997,7 +1194,7 @@ def test_f8_pre_deploy_check_do_thi_chan_truoc_step8(tmp_path: Path) -> None:
     ket, nhat_ky = _chay_deploy(goc, STUB_PREDEPLOY_RC="1")
 
     assert ket.returncode != 0, "pre_deploy_check exit 1 mà deploy vẫn thoát 0"
-    assert _MOC_STEP8 not in nhat_ky, (
+    assert _lenh_dung_moi(goc) == [], (
         "đã mở traffic (Step 8) vào hệ thống mà pre_deploy_check vừa tuyên bố là "
         f"UNUSABLE.\nnhật ký:\n{nhat_ky}"
     )
@@ -1247,7 +1444,7 @@ def test_p2_cau_hinh_hong_dung_truoc_pg_dump(tmp_path: Path) -> None:
         f"phân loại lỗi cấu hình thành migration failure.\nnhật ký:\n{nhat_ky}"
     )
     assert _MOC_ALEMBIC not in nhat_ky, f"đã chạy migration:\n{nhat_ky}"
-    assert _MOC_STEP8 not in nhat_ky, f"đã tới Step 8:\n{nhat_ky}"
+    assert _lenh_dung_moi(goc) == [], f"đã dựng/bật container ứng dụng mới:\n{nhat_ky}"
     # Không có bản sao nào được tạo ⇒ không có gì để nhánh restore chạm vào.
     assert not list((goc / "backups").glob("pre_deploy_*.sql")), (
         "cấu hình hỏng mà vẫn tạo bản sao lưu"

@@ -26,6 +26,14 @@ và chứng minh điều xấu lại xảy ra. Mỗi ca `test_v3_*` hành vi đ�
 
 Bằng chứng "0 mất ghi" bằng request thật (đối soát TỪNG KHOÁ) nằm ở bộ diễn tập
 LOCAL (stack Docker thật), không ở đây: tệp này khoá HỢP ĐỒNG lệnh.
+
+Vòng 3b (review độc lập 13-10): phép "không phát lại" cũ bám CHUỖI (`postgres psql`
+thiếu ` -c `) nên `exec -T postgres sh -c 'psql …' < bản_sao` LỌT. Nay mọi phép
+"không phát lại" / "không mở app" / "không dựng container" đọc nhật ký HÀNH VI của
+stub (`lenh.log.goi`: stdin từng lời gọi docker + argv) qua các helper
+`_vi_pham_phat_lai`, `_lenh_mo_app`, `_lenh_dung_moi`, `_lenh_mo_lai_cu` của
+`test_deploy_startup_gates.py`; mỗi luật có biến thể phá riêng
+(`test_kiem_nguoc_phat_lai_bien_the`, `test_kiem_nguoc_mo_app_dang_lenh_khac`).
 """
 
 from __future__ import annotations
@@ -41,9 +49,16 @@ from tests.unit.test_deploy_startup_gates import (
     _MOC_PGDUMP,
     _MOC_STEP8,
     _bo_qua_neu_khong_posix,
+    _cac_loi_goi,
     _chay_deploy,
     _cid_gia,
     _dung_san_khau,
+    _lenh_dung_moi,
+    _lenh_mo_app,
+    _lenh_mo_lai_cu,
+    _tach_exec,
+    _vi_pham_phat_lai,
+    _vi_tri_alembic,
 )
 
 yaml = pytest.importorskip("yaml", reason="cần PyYAML để đọc docker-compose.yml")
@@ -89,13 +104,19 @@ def _start_cua_deploy(nhat_ky: str) -> list[tuple[int, str]]:
     return ra
 
 
-def _phat_lai(nhat_ky: str) -> list[str]:
-    """Mọi lời gọi `psql` KHÔNG kèm `-c` — tức psql đọc SQL từ stdin (phát lại).
+def _moc(goc: Path) -> int:
+    """Chỉ số lời gọi migration trong nhật ký HÀNH VI (phải có)."""
+    i = _vi_tri_alembic(_cac_loi_goi(goc))
+    assert i >= 0, "không thấy lời gọi migration trong nhật ký hành vi"
+    return i
 
-    Mọi phép đo của deploy đều là `psql … -c <câu>`; một lượt phát lại bản sao
-    (bất kể cờ nào) là `psql` không có `-c`. Bám HÀNH VI, không bám cách viết.
-    """
-    return [d for d in _dong(nhat_ky) if "postgres psql" in d and " -c " not in d]
+
+def _sau_lan_dung_cuoi(goc: Path) -> int:
+    """Chỉ số NGAY SAU lời gọi `docker stop` cuối cùng (Step 4c)."""
+    goi = _cac_loi_goi(goc)
+    dung = [i for i, g in enumerate(goi) if g["args"][:1] == ["stop"]]
+    assert dung, "không thấy lời gọi `docker stop`"
+    return dung[-1] + 1
 
 
 def _cid_ve_dv(cid: str) -> str:
@@ -158,7 +179,8 @@ def test_xanh_dong_ba_container_sau_3b_truoc_pg_dump(tmp_path: Path) -> None:
         f"thứ tự sai: dừng={i_dung} pg_dump={i_dump} migrate={i_mig} step8={i_8}\n{nk}"
     )
     assert _start_cua_deploy(nk) == [], "đường xanh KHÔNG được mở lại container CŨ"
-    assert _phat_lai(nk) == [], "đường xanh mà phát lại bản sao"
+    assert _lenh_mo_lai_cu(goc) == [], f"đường xanh mở lại container CŨ: {_lenh_mo_lai_cu(goc)}"
+    assert _vi_pham_phat_lai(goc) == [], f"đường xanh mà phát lại bản sao: {_vi_pham_phat_lai(goc)}"
 
 
 @_bo_qua_neu_khong_posix
@@ -204,11 +226,13 @@ def test_v3_migration_do_khong_phat_lai_giu_dung(
     ra = _ra(ket)
 
     assert ket.returncode != 0, f"{ten_ca}: migration đỏ mà deploy thoát 0"
-    assert _phat_lai(nk) == [], f"{ten_ca}: VẪN phát lại bản sao (F28):\n{_phat_lai(nk)}"
-    assert _start_cua_deploy(nk) == [], f"{ten_ca}: script tự mở ứng dụng sau migration đỏ"
-    i_mig = _vt(nk, _MOC_ALEMBIC)
-    assert "up -d" not in "\n".join(_dong(nk)[i_mig:]), f"{ten_ca}: dựng container sau migration đỏ"
-    assert _MOC_STEP8 not in nk
+    # Vòng 3b: theo HÀNH VI — dữ liệu bản sao không đi vào lời gọi docker nào,
+    # và sau migration mọi `exec` đều đúng dạng phép đo `psql -c` với stdin rỗng.
+    assert _vi_pham_phat_lai(goc) == [], f"{ten_ca}: VẪN phát lại bản sao (F28): {_vi_pham_phat_lai(goc)}"
+    moc = _moc(goc)
+    # Phép R1 không được rỗng nghĩa: sau migration PHẢI có các phép đo `exec … psql -c` (bước (d), PA2).
+    assert any(_tach_exec(g["args"]) for g in _cac_loi_goi(goc)[moc + 1:]), "không có exec nào sau migration — R1 rỗng nghĩa"
+    assert _lenh_mo_app(goc, moc + 1) == [], f"{ten_ca}: mở/dựng ứng dụng sau migration đỏ: {_lenh_mo_app(goc, moc + 1)}"
     assert _cac_pha(goc)[-1] == "migrate_do", f"{ten_ca}: dừng sai pha {_cac_pha(goc)}"
     assert "KHÔNG phát lại bản sao (F28)" in ra, ra[-2000:]
     assert "PHỤC HỒI CÓ ĐỐI SOÁT" in ra, f"{ten_ca}: thiếu hướng dẫn phục hồi có đối soát"
@@ -237,7 +261,7 @@ def test_v3_migration_do_van_tay_lech_thi_huong_dan_noi_lech(tmp_path: Path) -> 
     ket, nk = _chay_deploy(goc, STUB_ALEMBIC_RC="1", STUB_VAN_TAY_LECH_SAU_MIGRATE="1", **_NHANH)
     ra = _ra(ket)
     assert "vân tay lược đồ BÂY GIỜ: LỆCH bản 4c — KHÔNG được bật mã cũ" in ra, ra[-2500:]
-    assert _start_cua_deploy(nk) == [] and _phat_lai(nk) == []
+    assert _lenh_mo_app(goc, _moc(goc) + 1) == [] and _vi_pham_phat_lai(goc) == []
 
 
 # =============================================================================
@@ -267,8 +291,9 @@ def test_do_truoc_khi_cham_csdl_thi_dung_va_mo_lai_dung_container_cu(
     assert [_cid_ve_dv(c) for _, c in st] == list(_THU_TU_MO), (
         f"{ten_ca}: CSDL chưa bị chạm mà không mở lại đủ 3 container cũ: {st}\n{ra[-1500:]}"
     )
-    i_dung = max(_vt_dung(nk, dv) for dv in _DV_GHI)
-    assert "up -d" not in "\n".join(_dong(nk)[i_dung:]), f"{ten_ca}: nhánh lùi dùng `up -d` — dựng ảnh MỚI"
+    # Nhánh lùi chỉ được `docker start` ĐÚNG CID cũ — không dựng/bật container nào khác (mọi dạng lệnh).
+    assert _lenh_dung_moi(goc, _sau_lan_dung_cuoi(goc)) == [], (
+        f"{ten_ca}: nhánh lùi dựng container — ảnh MỚI: {_lenh_dung_moi(goc, _sau_lan_dung_cuoi(goc))}")
     assert "✓ [nginx · dịch vụ] PHỤC HỒI DỊCH VỤ ĐẠT" in ra, f"{ten_ca}: không đo phục hồi dịch vụ"
     assert "ĐÃ mở lại container CŨ" in ra
 
@@ -306,9 +331,8 @@ def test_pre_deploy_check_do_sau_migrate_xanh_thi_giu_dung(tmp_path: Path) -> No
     goc = _dung_san_khau(tmp_path)
     ket, nk = _chay_deploy(goc, STUB_PREDEPLOY_RC="1", **_NHANH)
     assert ket.returncode != 0
-    assert _start_cua_deploy(nk) == []
-    assert _phat_lai(nk) == []
-    assert _MOC_STEP8 not in nk
+    assert _lenh_mo_app(goc, _moc(goc) + 1) == [], f"mở/dựng ứng dụng sau Step 7 đỏ: {_lenh_mo_app(goc, _moc(goc) + 1)}"
+    assert _vi_pham_phat_lai(goc) == []
     assert "KHÔNG tự mở ứng dụng" in _ra(ket)
     assert _cac_pha(goc)[-1] == "da_migrate"
 
@@ -324,9 +348,8 @@ def test_ngat_trong_migrate_thi_khong_mo_khong_phat_lai(
     goc = _dung_san_khau(tmp_path)
     ket, nk = _chay_deploy(goc, STUB_TIN_HIEU_O_MIGRATE=tin_hieu, **_NHANH)
     assert ket.returncode == rc, f"{tin_hieu}: rc={ket.returncode}\n{_ra(ket)[-1500:]}"
-    assert _start_cua_deploy(nk) == [], f"{tin_hieu}: tự mở ứng dụng trên lược đồ chưa rõ"
-    assert _phat_lai(nk) == []
-    assert _MOC_STEP8 not in nk
+    assert _lenh_mo_app(goc, _moc(goc) + 1) == [], f"{tin_hieu}: tự mở/dựng ứng dụng trên lược đồ chưa rõ"
+    assert _vi_pham_phat_lai(goc) == []
     tt = _tep_trang_thai(goc)
     assert f"rc={rc} tin_hieu={tin_hieu} pha=dang_migrate" in tt, tt
 
@@ -617,7 +640,7 @@ def test_v3_mo_lai_truoc_migrate_van_qua_cong_van_tay(
     ket, nk = _chay_deploy(goc, **kich_ban, **_LUI, **_NHANH)
     ra = _ra(ket)
     assert ket.returncode != 0
-    assert _start_cua_deploy(nk) == [], f"{ten_ca}: mở mã CŨ lên lược đồ CHƯA chứng minh tương thích"
+    assert _lenh_mo_app(goc) == [], f"{ten_ca}: mở mã CŨ lên lược đồ CHƯA chứng minh tương thích: {_lenh_mo_app(goc)}"
     assert thong_diep in ra, f"{ten_ca}: thiếu {thong_diep!r}:\n{ra[-2500:]}"
     assert "mo_lai_cu\tKHONG_DAT" in _tep_trang_thai(goc)
 
@@ -644,7 +667,7 @@ def test_v3_tep_trang_thai_hong_sau_migrate_van_in_huong_dan_khong_phat_lai(tmp_
     assert "[pha] migrate_do" in ra, f"pha migrate_do không còn trong log deploy:\n{ra[-2500:]}"
     assert "PHỤC HỒI CÓ ĐỐI SOÁT" in ra, "tệp trạng thái hỏng đã bẻ gãy hướng dẫn"
     assert "đã có lần KHÔNG ghi được" in ra
-    assert _phat_lai(nk) == [] and _start_cua_deploy(nk) == []
+    assert _vi_pham_phat_lai(goc) == [] and _lenh_mo_app(goc, _moc(goc) + 1) == []
 
 
 # =============================================================================
@@ -666,8 +689,89 @@ def test_kiem_nguoc_them_lai_phat_lai_khi_rao_dat_thi_phat_lai(tmp_path: Path) -
         '        fi\n' + _NEO_LOI_DO,
     )
     goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien)
+    _chay_deploy(goc, STUB_ALEMBIC_RC="1", **_NHANH)
+    assert _vi_pham_phat_lai(goc), "thêm lại phát lại mà ca F28 không thấy ⇒ ca F28 không canh gì"
+
+
+# Vòng 3b — review độc lập: `exec -T postgres sh -c 'psql …' < bản_sao` LỌT phép cũ
+# (bám chuỗi `postgres psql` thiếu ` -c `). Mỗi biến thể dưới đây là MỘT cách phát lại
+# (một đột biến, cùng cổng "(d) + PA2 đạt" như vòng 1/2), chèn ngay sau dọn one-off ở
+# nhánh đỏ; cột cuối là ĐÚNG tập luật bắt được nó — ba biến thể cuối mỗi cái chỉ chạm
+# MỘT luật, chứng minh từng luật tự có sức bắt riêng.
+_NEO_SAU_DON_ONEOFF = "        _dcg_don_oneoff || true\n"
+_CONG_RAO = "        if _dcg_cua_dong d && _dcg_phien_la_bang_0 d && _dcg_pa2; then "
+_PSQL_UD = '-U "${POSTGRES_USER:-qlts}" -d "${POSTGRES_DB:-qlts_production}"'
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,dong_chen,luat",
+    [
+        ("M1 exec sh -c 'psql' < bản sao",
+         _CONG_RAO + """$_RA_COMPOSE exec -T postgres sh -c 'psql -X -q -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < "$_BAN_SAO" || true; fi\n""",
+         {"R1", "R2"}),
+        ("M2 exec psql < bản sao",
+         _CONG_RAO + f'$_RA_COMPOSE exec -T postgres psql -X -q {_PSQL_UD} < "$_BAN_SAO" || true; fi\n',
+         {"R1", "R2"}),
+        ("cat bản sao | exec psql",
+         _CONG_RAO + f'cat "$_BAN_SAO" | $_RA_COMPOSE exec -T postgres psql -X -q {_PSQL_UD} || true; fi\n',
+         {"R1", "R2"}),
+        ("docker cp + exec psql -f",
+         _CONG_RAO + 'docker cp "$_BAN_SAO" qlts-postgres-1:/tmp/x.sql || true; '
+         f'$_RA_COMPOSE exec -T postgres psql -X -q {_PSQL_UD} -f /tmp/x.sql </dev/null || true; fi\n',
+         {"R1", "R3"}),
+        ("exec sh -c 'psql -f /dev/stdin' < bản sao",
+         _CONG_RAO + """$_RA_COMPOSE exec -T postgres sh -c 'psql -f /dev/stdin' < "$_BAN_SAO" || true; fi\n""",
+         {"R1", "R2"}),
+        ("CHỈ R2: container client psql nối qua mạng, stdin = bản sao",
+         _CONG_RAO + f'docker run -i --rm --network qlts_default postgres:16-alpine psql -h postgres {_PSQL_UD} < "$_BAN_SAO" || true; fi\n',
+         {"R2"}),
+        ("CHỈ R3: psql -c \"$(cat bản sao)\" — đúng dạng phép đo, stdin rỗng",
+         _CONG_RAO + f'$_RA_COMPOSE exec -T postgres psql -X -A -t -q -v ON_ERROR_STOP=1 {_PSQL_UD} -c "$(cat "$_BAN_SAO")" </dev/null || true; fi\n',
+         {"R3"}),
+        ("CHỈ R1: exec psql -f tệp đặt sẵn trong container",
+         _CONG_RAO + f'$_RA_COMPOSE exec -T postgres psql -X -q {_PSQL_UD} -f /var/lib/postgresql/data/ban_sao.sql </dev/null || true; fi\n',
+         {"R1"}),
+        ("CHỈ R3: docker cp bản sao vào initdb của container",
+         _CONG_RAO + 'docker cp "$_BAN_SAO" qlts-postgres-1:/docker-entrypoint-initdb.d/zz.sql || true; fi\n',
+         {"R3"}),
+    ],
+)
+def test_kiem_nguoc_phat_lai_bien_the(tmp_path: Path, ten_ca: str, dong_chen: str, luat: set) -> None:
+    dot_bien = _ban_dot_bien(_NEO_SAU_DON_ONEOFF, _NEO_SAU_DON_ONEOFF + dong_chen)
+    goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien)
+    _chay_deploy(goc, STUB_ALEMBIC_RC="1", **_NHANH)
+    vp = _vi_pham_phat_lai(goc)
+    assert {v.split()[0] for v in vp} == luat, f"{ten_ca}: luật bắt được {vp}, mong {sorted(luat)}"
+
+
+# --- §6 "KHÔNG mở ứng dụng": các dạng lệnh mà phép cũ (chuỗi `docker start `,
+# `up -d`, Step 8) để LỌT — phép hành vi phải bắt; phép cũ được khẳng định lọt
+# để ghi lại VÌ SAO phải đổi.
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,dong_chen,cu_lot",
+    [
+        ("docker container start CID cũ", '        docker container start "${_DCG_CID[backend]}" >/dev/null || true\n', True),
+        ("compose start service", "        $_RA_COMPOSE start backend >/dev/null || true\n", True),
+        ("compose up KHÔNG -d", "        $_RA_COMPOSE up --no-deps backend celery-worker celery-beat >/dev/null || true\n", True),
+        ("compose up --detach", "        $_RA_COMPOSE up --detach --no-deps backend >/dev/null || true\n", True),
+        ("docker restart CID cũ", '        docker restart "${_DCG_CID[celery-worker]}" >/dev/null || true\n', True),
+        # Phép cũ bắt được ca này (có chữ "up -d") — giữ để canh luật "không nêu service = tất cả".
+        ("compose up -d không nêu service (= tất cả)", "        $_RA_COMPOSE up -d --wait-timeout 30 >/dev/null || true\n", False),
+    ],
+)
+def test_kiem_nguoc_mo_app_dang_lenh_khac(tmp_path: Path, ten_ca: str, dong_chen: str, cu_lot: bool) -> None:
+    dot_bien = _ban_dot_bien(_NEO_SAU_DON_ONEOFF, _NEO_SAU_DON_ONEOFF + dong_chen)
+    goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien)
     _, nk = _chay_deploy(goc, STUB_ALEMBIC_RC="1", **_NHANH)
-    assert _phat_lai(nk), "thêm lại phát lại mà ca F28 không thấy ⇒ ca F28 không canh gì"
+    moc = _moc(goc)
+    assert _lenh_mo_app(goc, moc + 1), f"{ten_ca}: phép HÀNH VI không thấy lệnh mở app"
+    # Phép cũ bám chuỗi (`docker start `, "up -d", mốc Step 8) — ghi lại nó LỌT ở đâu (lý do vòng 3b).
+    i_mig = _vt(nk, _MOC_ALEMBIC)
+    lot_cu = (_start_cua_deploy(nk) == [] and _MOC_STEP8 not in nk
+              and "up -d" not in "\n".join(_dong(nk)[i_mig:]))
+    assert lot_cu == cu_lot, f"{ten_ca}: phép cũ lọt={lot_cu}, mong {cu_lot}"
 
 
 @_bo_qua_neu_khong_posix
@@ -687,7 +791,7 @@ def test_kiem_nguoc_trap_mo_sau_khi_migrate_chay_thi_app_chay_tren_luoc_do_chua_
     )
     goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien)
     _, nk = _chay_deploy(goc, **kich_ban, **_NHANH)
-    assert _start_cua_deploy(nk), f"{ten_ca}: đột biến không mở app ⇒ ca tương ứng xanh vì lý do khác"
+    assert _lenh_mo_app(goc, _moc(goc) + 1), f"{ten_ca}: đột biến không mở app ⇒ ca tương ứng xanh vì lý do khác"
 
 
 @_bo_qua_neu_khong_posix
@@ -721,8 +825,7 @@ def test_kiem_nguoc_nhanh_lui_dung_up_d_thi_lo_ra(tmp_path: Path) -> None:
     )
     goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien)
     _, nk = _chay_deploy(goc, **_LUI, **_NHANH)
-    i_dung = max(_vt_dung(nk, dv) for dv in _DV_GHI)
-    assert "up -d" in "\n".join(_dong(nk)[i_dung:]), "đột biến không đổi được lệnh mở lại"
+    assert _lenh_dung_moi(goc, _sau_lan_dung_cuoi(goc)), "đột biến không đổi được lệnh mở lại"
     assert _start_cua_deploy(nk) == []
 
 
@@ -742,7 +845,7 @@ def test_kiem_nguoc_bo_trap_thi_ngat_trong_dump_bo_app_nam_chet(tmp_path: Path) 
     goc = _dung_san_khau(tmp_path, deploy_sh=than)
     ket, nk = _chay_deploy(goc, STUB_TIN_HIEU_O_DUMP="TERM", **_NHANH)
     assert ket.returncode != 0
-    assert _start_cua_deploy(nk) == [], "bỏ trap mà app vẫn được mở lại ⇒ ca trap xanh vì lý do khác"
+    assert _lenh_mo_app(goc) == [], "bỏ trap mà app vẫn được mở lại ⇒ ca trap xanh vì lý do khác"
 
 
 @_bo_qua_neu_khong_posix
