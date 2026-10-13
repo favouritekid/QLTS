@@ -1281,7 +1281,7 @@ _S6_KIEU = {
 _S6_HAM_BOC = {
     "chu_loi_an_toan", "mo_ta_loi", "tom_tat_loi_csdl", "_safe_bulk_error_message",
     "type", "isinstance", "_is_lock_not_available", "_handle_lead_integrity_error",
-    "log_dispatch_failure", "thoat_cli_an_toan",
+    "log_dispatch_failure", "thoat_cli_an_toan", "loai_loi_an_toan",
 }
 #: Hàm chuyển đổi — tự nó không phải lối ra; kết quả đi đâu thì lối ra ở đó.
 _S6_TRUNG_TINH = {"str", "repr", "len", "getattr", "format"}
@@ -1304,7 +1304,6 @@ _S6_MIEN = {
     ("app/gateways/zalo_bot.py", "send_message", "return"): (1, "đã qua _safe_error_message; lỗi HTTP Zalo Bot"),
     ("app/routers/monitoring.py", "get_notification_metrics", "gan"): (1, "lỗi Redis (safe_redis_*), không CSDL"),
     ("app/routers/monitoring.py", "get_system_overview", "gan"): (3, "Redis / Celery / Socket.IO — nhánh CSDL đã qua chu_loi_an_toan"),
-    ("app/services/notification_channels/email_channel.py", "execute_delivery", "return"): (1, "lỗi SMTP (khối try chỉ gọi send_delivery_email; rủi ro riêng: chữ lỗi SMTP có thể mang địa chỉ email — ngoài F30)"),
     ("app/services/notification_rule_loader.py", "get_rule_for_event", "raise"): (1, "lỗi kiểm cấu hình recipient_config (pydantic)"),
     ("app/services/payment_import_service.py", "parse_template", "raise"): (1, "lỗi đọc tệp Excel tải lên"),
     ("app/services/sms_contact_service.py", "_parse_rows", "raise"): (1, "lỗi đọc tệp CSV tải lên"),
@@ -1668,3 +1667,107 @@ def test_v6_cli_deploy_bat_ngoai_le_o_cua_ra():
         if not ok:
             thieu.append("%s: ngoại lệ không bắt KHÔNG qua thoat_cli_an_toan ở cửa ra" % rel)
     assert thieu == [], "\n".join(thieu)
+
+
+
+# =============================================================================
+# V6 vòng 6 — SMTP: error_reason của email_channel.execute_delivery chỉ giữ loại lỗi + mã SMTP
+# =============================================================================
+# ``error_message`` của ChannelResult đi vào cột ``error_reason`` (delivery_tasks,
+# dispatcher). Chữ lỗi SMTP mang địa chỉ email (``SMTPRecipientsRefused`` in nguyên dict
+# người nhận). Ghi chú: ``EmailService.send_email`` tự nuốt lỗi gửi (trả False ⇒ thông báo
+# cố định); nhánh ``except`` ở ``execute_delivery`` nhận lỗi dựng nội dung, và lỗi SMTP nếu
+# lớp dưới đổi — ca kiểm cho ``send_delivery_email`` ném thẳng để đo đúng nhánh ấy.
+
+
+def _smtp_loi_mau() -> list:
+    import smtplib
+
+    return [
+        smtplib.SMTPRecipientsRefused(
+            {"gia991@example.invalid": (550, b"5.1.1 <gia991@example.invalid> user unknown")}),
+        smtplib.SMTPSenderRefused(553, b"sender gia992@example.invalid rejected", "gia992@example.invalid"),
+        smtplib.SMTPDataError(554, b"message for gia993@example.invalid refused"),
+        smtplib.SMTPAuthenticationError(535, b"auth failed gia994@example.invalid"),
+        smtplib.SMTPResponseException(452, b"mailbox gia995@example.invalid full"),
+        smtplib.SMTPConnectError(421, b"busy gia996@example.invalid"),
+        smtplib.SMTPServerDisconnected("closed while sending to gia997@example.invalid"),
+        ConnectionRefusedError(111, "Connection refused gia998@example.invalid"),
+        TimeoutError("timed out sending to gia999@example.invalid"),
+        KeyError("gia990@example.invalid"),
+    ]
+
+
+def _smtp_chay_execute_delivery(loi: BaseException):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from app.services.notification_channels.email_channel import EmailChannel
+
+    giao = SimpleNamespace(id=4242, user_id=None, destination="gia-nhan@example.invalid",
+                           payload_snapshot={"title": "t", "message": "m", "type": "info"})
+    with patch("app.services.email_service.email_service.send_delivery_email", side_effect=loi):
+        return asyncio.run(EmailChannel().execute_delivery(giao, db=None))
+
+
+def test_v6_smtp_error_reason_khong_mang_email():
+    """``error_reason`` (qua ``ChannelResult.error_message``) KHÔNG mang địa chỉ email / chữ lỗi
+    SMTP; CÓ loại lỗi, mã SMTP (nếu có) và delivery id."""
+    sai = []
+    for loi in _smtp_loi_mau():
+        kq = _smtp_chay_execute_delivery(loi)
+        em = kq.error_message or ""
+        ma = getattr(loi, "smtp_code", None)
+        if ma is None and getattr(loi, "recipients", None):
+            ma = 550
+        if ("@example.invalid" in em or type(loi).__name__ not in em or "delivery=4242" not in em
+                or (isinstance(ma, int) and "smtp_code=%d" % ma not in em)):
+            sai.append((type(loi).__name__, em))
+    assert sai == [], "error_reason của lỗi SMTP sai khuôn / mang email: %s" % sai
+
+
+def test_v6_smtp_phan_loai_retry_dead_letter_khong_doi():
+    """Bảng lỗi SMTP → nhánh của ``delivery_tasks._is_permanent_error`` (dead-letter hay thử
+    lại): giá trị MỚI phải cho CÙNG nhánh với giá trị CŨ (``str(e)``) — đổi khuôn chữ không
+    được đổi cách xử lý."""
+    from app.tasks.delivery_tasks import _is_permanent_error
+
+    lech = []
+    for loi in _smtp_loi_mau():
+        moi = _smtp_chay_execute_delivery(loi).error_message
+        if _is_permanent_error(moi) != _is_permanent_error(str(loi)):
+            lech.append((type(loi).__name__, _is_permanent_error(str(loi)), _is_permanent_error(moi)))
+    assert lech == [], "phân loại retry/dead-letter đổi (loại, cũ, mới): %s" % lech
+
+
+
+def test_v6_smtp_dong_log_khong_mang_chu_loi_smtp():
+    """Anh em của ``error_reason`` (§6): dòng LOG của ``execute_delivery`` và của
+    ``EmailService.send_email`` (đường lỗi SMTP THẬT — send_email tự nuốt lỗi gửi) ghi
+    ``error=`` chỉ loại + mã. ``capture_logs`` lấy giá trị TRƯỚC mọi processor — tức đúng
+    thứ mã nguồn đưa cho logger, không nhờ tầng che nào."""
+    import smtplib
+    from unittest.mock import patch
+
+    import structlog
+
+    from app.services.email_service import email_service
+
+    sai = []
+    for loi in _smtp_loi_mau():
+        with structlog.testing.capture_logs() as cap:
+            _smtp_chay_execute_delivery(loi)
+        sai += [("execute_delivery", type(loi).__name__, d.get("error")) for d in cap
+                if "@example.invalid" in str(d.get("error", ""))]
+    loi_gui = smtplib.SMTPRecipientsRefused(
+        {"gia981@example.invalid": (550, b"5.1.1 <gia981@example.invalid> user unknown")})
+    with patch.object(email_service, "smtp_user", "gia-user"), \
+            patch.object(email_service, "smtp_password", "gia-mat-khau"), \
+            patch.object(email_service, "_create_connection", side_effect=loi_gui), \
+            structlog.testing.capture_logs() as cap:
+        assert email_service.send_email("gia-nhan@example.invalid", "t", "<p>h</p>", "h") is False
+    sai += [("send_email", d.get("event"), d.get("error")) for d in cap
+            if "@example.invalid" in str(d.get("error", ""))]
+    assert cap, "HẠ TẦNG: send_email không ghi dòng log nào"
+    assert sai == [], "dòng log ghi chữ lỗi SMTP (mang email): %s" % sai

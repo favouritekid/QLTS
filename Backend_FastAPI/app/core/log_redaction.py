@@ -694,6 +694,37 @@ def mo_ta_loi(exc: Any) -> str:
     return thay_loi_csdl_trong_chuoi(_chu_an(exc, str), exc)
 
 
+#: Thuộc tính MÃ SỐ của ngoại lệ (chỉ nhận ``int``) — không bao giờ là chữ tự do.
+_THUOC_TINH_MA_SO = ("smtp_code", "errno", "status_code", "code")
+
+
+def loai_loi_an_toan(exc: Any) -> str:
+    """CHỈ loại ngoại lệ + MÃ SỐ — KHÔNG BAO GIỜ đọc chữ (``str``, ``args``,
+    ``smtp_error``, ``recipients`` keys). Dành cho cột / thông báo mà chữ lỗi có
+    thể mang địa chỉ email (SMTP: ``SMTPRecipientsRefused`` in nguyên địa chỉ
+    người nhận). ``SMTPRecipientsRefused`` ⇒ các mã SMTP của người nhận (không
+    địa chỉ); lỗi CSDL ⇒ tóm tắt thuộc tính. Ví dụ
+    ``SMTPRecipientsRefused[smtp_code=550]``, ``ConnectionRefusedError[errno=111]``."""
+    if not isinstance(exc, BaseException):
+        return type(exc).__name__
+    if la_loi_csdl(exc):
+        return tom_tat_loi_csdl(exc)
+    ma: list = []
+    for ten in _THUOC_TINH_MA_SO:
+        v = getattr(exc, ten, None)
+        if isinstance(v, int) and not isinstance(v, bool):
+            ma.append("%s=%d" % (ten, v))
+    nguoi_nhan = getattr(exc, "recipients", None)
+    if isinstance(nguoi_nhan, Mapping):
+        cac_ma = sorted({
+            v[0] for v in nguoi_nhan.values()
+            if isinstance(v, tuple) and v and isinstance(v[0], int) and not isinstance(v[0], bool)
+        })
+        if cac_ma:
+            ma.append("smtp_code=" + ",".join(str(x) for x in cac_ma))
+    return type(exc).__name__ + ("[" + " ".join(ma) + "]" if ma else "")
+
+
 def chu_loi_an_toan(exc: Any) -> str:
     """Chữ của ngoại lệ để đưa RA NGOÀI log (thông báo cho người dùng, cột CSDL):
     lỗi CSDL ⇒ tóm tắt thuộc tính; ngoại lệ BỌC lỗi CSDL ⇒ phần lấy từ lỗi thành
