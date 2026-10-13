@@ -522,3 +522,54 @@ class TestSyncEdgeCases:
         # Verify lead was updated
         await db.refresh(bidirectional_sync_lead)
         assert bidirectional_sync_lead.phone == "0905555555"
+
+
+# ==============================================================================
+# V6 vòng 5 — lỗi CSDL KHÔNG đi ra thông báo cho người dùng (owner GO 13-10)
+# ==============================================================================
+# Ở tệp này (Tier 4) vì đây là đường SỬA HỒ SƠ thật; tệp
+# tests/services/test_admission_profile_identity_sync.py không có tier nào —
+# cổng độ nhìn thấy (`pytest_visibility_guard.py`) chặn một ca gác đặt ở đó.
+
+
+class TestUpdateProfileLoiRangBuocKhongLoGiaTri:
+    """Vi phạm CHECK khi lưu hồ sơ ⇒ ``ConflictError`` trả cho NGƯỜI DÙNG trước đây
+    nối nguyên ``str(e.orig)`` — gồm ``DETAIL: Failing row contains (…)`` với
+    CCCD/SĐT/email/họ tên của CẢ hàng. Nay chỉ tóm tắt thuộc tính (loại lỗi,
+    SQLSTATE, tên ràng buộc, bảng)."""
+
+    async def test_vi_pham_check_thong_bao_khong_mang_gia_tri_hang(
+        self,
+        db: AsyncSession,
+        draft_profile: models.AdmissionProfile,
+        bidirectional_sync_user: models.User,
+        monkeypatch,
+    ):
+        from app.services import admission_service
+        from app.utils.exceptions import ConflictError
+
+        async def _khong_lam_gi(*args, **kwargs):  # tách khỏi bước tính lại hồ sơ giấy tờ
+            return None
+
+        monkeypatch.setattr(admission_service, "_reresolve_documents_snapshot", _khong_lam_gi)
+
+        # Dữ liệu GIẢ riêng của ca này — phải KHÔNG xuất hiện trong thông báo.
+        draft_profile.citizen_id = "099999000983"
+        draft_profile.full_name = "Gia Rang Buoc Ten"
+        draft_profile.phone = "0900000983"
+        draft_profile.email = "gia983@example.invalid"
+        await db.flush()
+
+        with pytest.raises(ConflictError) as exc_info:
+            await admission_service.update_profile(
+                db=db,
+                profile_id=draft_profile.id,
+                data={"vocational_qualification": "gia_tri_sai_v5"},
+                current_user=bidirectional_sync_user,
+            )
+        thong_bao = str(exc_info.value.detail)
+        lo = [v for v in ("099999000983", "Gia Rang Buoc Ten", "0900000983",
+                          "gia983@example.invalid", "gia_tri_sai_v5") if v in thong_bao]
+        assert lo == [], "thông báo cho người dùng mang giá trị của hàng lỗi %s: %r" % (lo, thong_bao)
+        assert "constraint=ck_admission_profile_vocational_qualification" in thong_bao, (
+            "HẠ TẦNG: không đi đúng nhánh vi phạm CHECK: %r" % thong_bao)
