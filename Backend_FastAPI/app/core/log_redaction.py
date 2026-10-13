@@ -515,8 +515,10 @@ def _bien_the(s: str) -> set:
     return out
 
 
-#: Thuộc tính CHỮ của lỗi CSDL (asyncpg) có thể bị nội suy RIÊNG vào câu log.
-_THUOC_TINH_CHU_CSDL = ("message", "detail", "hint", "where", "internal_query")
+#: Thuộc tính CHỮ của lỗi CSDL có thể bị nội suy RIÊNG vào câu log. asyncpg 0.30 (đã đo):
+#: ``message``/``detail``/``hint`` (hai cái sau có trong ``str``), ``context`` (CONTEXT —
+#: KHÔNG có trong ``str``), ``internal_query``; ``where`` là tên của trình điều khiển khác.
+_THUOC_TINH_CHU_CSDL = ("message", "detail", "hint", "context", "where", "internal_query")
 #: Nhãn đầu dòng của thông báo PostgreSQL / SQLAlchemy: ``DETAIL:  …``, ``[SQL: …]``.
 _NHAN_DONG_RE = re.compile(
     r"^\s*(?:\[[A-Za-z ]+:\s*(?P<a>.*?)\]?|[A-Z][A-Z ]*:\s+(?P<b>.*?))\s*$", re.S
@@ -541,7 +543,7 @@ def _co_chu_so(x: str) -> bool:
 def _manh_cua(e: BaseException) -> set:
     """MỌI mảnh chữ của MỘT lỗi CSDL — KHÔNG ngưỡng độ dài: ``str``/``repr``;
     mọi chuỗi trong ``args``; thuộc tính chữ (``message``, ``detail``, ``hint``,
-    ``where``, ``internal_query``); câu SQL và ``repr`` bộ tham số của
+    ``context``, ``where``, ``internal_query``); câu SQL và ``repr`` bộ tham số của
     ``StatementError``; rồi TỪNG DÒNG của các mảnh ấy và phần sau nhãn đầu dòng
     (``DETAIL:  …`` ⇒ ``…``). Bỏ mảnh không có chữ/số nào (``)``, ``...``) —
     không mang giá trị, mà thay chúng thì phá mọi câu log. KHÔNG tách TỪNG tham
@@ -807,9 +809,6 @@ def tom_tat_loi_csdl_event(logger: Any, method_name: str, event_dict: dict) -> d
             event_dict[_KHOA_LOI_CSDL] = _GiuLoiCsdl(exc)
         doi_so = event_dict.get("positional_args")
         if isinstance(doi_so, tuple):
-            for a in doi_so:
-                if la_loi_csdl(a) and _KHOA_LOI_CSDL not in event_dict:
-                    event_dict[_KHOA_LOI_CSDL] = _GiuLoiCsdl(a)
             event_dict["positional_args"] = tuple(
                 mo_ta_loi(a) if isinstance(a, BaseException) else a for a in doi_so
             )

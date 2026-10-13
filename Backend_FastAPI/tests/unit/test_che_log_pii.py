@@ -375,6 +375,10 @@ try:
     raise loi_ngan("Gia Nam Truong")
 except Exception as _e:
     chuoi("V5T", "error", event="v5_t", error=str(_e)[:9])      # bản CẮT của str(e)
+try:
+    raise loi_ngan("Gia Wa", W="Gia Wo ngu canh")             # CONTEXT: KHÔNG có trong str(e)
+except Exception as _e:
+    chuoi("V5A", "error", event="v5_a", error=_e.context)      # nội suy riêng thuộc tính
 truy_cap = logging.getLogger("uvicorn.access")
 truy_cap.info('%s - "%s %s HTTP/%s" %d', "10.0.0.1:5000", "GET",
               "/api/admissions/confirm/GIAV6TOKENA01", "1.1", 200)
@@ -1209,6 +1213,13 @@ def test_v5_generic_handler_loi_boc_ngan(web):
 def test_v5_ban_cat_cua_str_loi(web):
     v = _truong(web, "V5T", "error")
     assert _la_tom_tat(v) and "Gia Nam" not in v, "bản CẮT str(e)[:9] lộ: %r" % v
+
+
+def test_v5_thuoc_tinh_context_ngoai_str(web):
+    """``e.context`` (CONTEXT của PostgreSQL) KHÔNG có trong ``str(e)`` của asyncpg — chỉ
+    tầng thuộc tính chữ nhận ra nó là chữ của lỗi CSDL."""
+    v = _truong(web, "V5A", "error")
+    assert _la_tom_tat(v) and "Gia Wo" not in v, "error=e.context lộ: %r" % v
 
 
 def test_v5_celery_doi_so_str_loi_ngan(celery_worker):
