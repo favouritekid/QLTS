@@ -947,7 +947,13 @@ else
         fi
     done
     _RA_MK_N=$(printf %s "$_RA_MK_DICH_VU" | wc -w)
-    log "  ✓ marker khớp $_RA_MK_N/$_RA_MK_N container đang chạy — nguồn = $_RA_SRC"
+    if [ "$_DI_TIEP" = "1" ]; then
+        # Đường đi tiếp: ảnh của 3 service ghi đọc từ container EXITED đã ghi nhận
+        # ở lượt đỏ (Step 3a đã đo), không phải container đang chạy.
+        log "  ✓ marker khớp $_RA_MK_N/$_RA_MK_N container phục vụ (backend/celery-worker/celery-beat = container EXITED đã ghi nhận ở lượt đỏ) — nguồn = $_RA_SRC"
+    else
+        log "  ✓ marker khớp $_RA_MK_N/$_RA_MK_N container đang chạy — nguồn = $_RA_SRC"
+    fi
 
     # --- Tên tag: không va chạm, không ghi đè -------------------------------
     if ! _RA_TGT=$(git rev-parse HEAD 2>/dev/null); then
