@@ -529,10 +529,14 @@ def test_v3_f39_nginx_verify_that_tren_nginx_cu_khong_chan_phuc_hoi(tmp_path: Pa
         goc, STUB_CHAY_SH_THAT="1", QLTS_NGINX_LOG=str(log_nginx), STUB_IP_DOI="1", **_LUI, **_NHANH
     )
     ra = _ra(ket)
+    # Bất biến F39 kiểm TRƯỚC (đỏ-trước trên e1c6c9fc phải đỏ ĐÚNG ở đây), kèm các dòng của verify để thấy lý do.
+    dong_verify = [d for d in ra.splitlines() if "đầu dò token" in d or "nginx-verify" in d or "HỎNG —" in d]
+    assert "ĐÃ mở lại container CŨ" in ra, (
+        "kiểm PII trên nginx cũ chặn phục hồi:\n" + "\n".join(dong_verify[-12:]) + "\n---\n" + ra[-1500:]
+    )
     assert len(_lenh_restart_nginx(nk)) == 1
     assert "[nginx · dịch vụ] SNI=vidu.test → /health 200 · /login 200 · /api/payments/1 401 · chứng thư 200" in ra, ra[-3000:]
     assert "✓ [nginx · dịch vụ] PHỤC HỒI DỊCH VỤ ĐẠT" in ra, ra[-3000:]
-    assert "ĐÃ mở lại container CŨ" in ra, f"kiểm PII trên nginx cũ chặn phục hồi:\n{ra[-3000:]}"
     if "đầu dò token" in verify:
         assert "qltsgiap" in log_nginx.read_text(encoding="utf-8"), "sân khấu không mô phỏng log THÔ"
         assert "phép kiểm chức năng rc=0, đầu dò token rc=1" in ra, ra[-3000:]
