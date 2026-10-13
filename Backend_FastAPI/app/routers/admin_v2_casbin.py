@@ -49,6 +49,7 @@ separates this cutover-only surface from the v1 admin tree mounted at
 ``/api/admin/...``).
 """
 from datetime import datetime, timezone
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 
 import casbin
 import structlog
@@ -120,7 +121,7 @@ async def reload_casbin_policy(
                 action="casbin_reload_failed",
                 resource_type="casbin_policy",
                 actor_id=current_admin.id,
-                description=f"Casbin reload failed: {exc!s}",
+                description=f"Casbin reload failed: {chu_loi_an_toan(exc)}",
                 ip_address=request.client.host if request.client else None,
                 user_agent=request.headers.get("user-agent"),
             )
@@ -133,7 +134,7 @@ async def reload_casbin_policy(
             content={
                 "success": False,
                 "reloaded_at": started_at,
-                "error": str(exc),
+                "error": chu_loi_an_toan(exc),
                 "actor_id": current_admin.id,
                 "scope": "current_process",
             },

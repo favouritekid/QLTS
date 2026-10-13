@@ -40,7 +40,7 @@ from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
 from ..repositories.collaborator_repository import CollaboratorRepository
 from .lead_profile_sync import sync_profile_from_lead, detect_changed_personal_fields, SYNCABLE_FIELDS
 from ..core.events import SystemEvents
-from ..core.log_redaction import mo_ta_loi
+from ..core.log_redaction import chu_loi_an_toan, mo_ta_loi
 from .notification_dispatcher import dispatch, log_dispatch_failure
 from .notification_payloads import EventPayload
 
@@ -5068,7 +5068,7 @@ async def bulk_assign_leads(
         except Exception as e:
             errors.append({
                 "lead_id": lead_id,
-                "error": f"Unexpected error: {str(e)}"
+                "error": f"Unexpected error: {chu_loi_an_toan(e)}"
             })
             log.error(
                 "Bulk assign: Unexpected error",

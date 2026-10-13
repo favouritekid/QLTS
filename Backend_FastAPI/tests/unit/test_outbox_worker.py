@@ -197,6 +197,68 @@ async def test_dispatch_failure_increments_attempts_writes_last_error(
         assert "simulated dispatch failure" in fresh.last_error
 
 
+
+def _loi_csdl_gia_v5():
+    """Lỗi CSDL GIẢ đúng chuỗi thật (asyncpg → adapter → SQLAlchemy) mang giá trị
+    giả ở thông điệp, DETAIL và tham số bind."""
+    import asyncpg
+    import sqlalchemy.exc as sa_exc
+    from sqlalchemy.dialects.postgresql.asyncpg import AsyncAdapt_asyncpg_dbapi as dbapi
+
+    def nem(e, tu=None):
+        try:
+            if tu is None:
+                raise e
+            raise e from tu
+        except BaseException as x:  # noqa: BLE001
+            return x
+
+    pg = nem(asyncpg.exceptions.PostgresError.new({
+        "C": "23514", "S": "ERROR", "n": "ck_v5_outbox", "t": "notifications",
+        "M": "violates check constraint ck_v5_outbox: Gia Outbox Ten",
+        "D": "Failing row contains (7, 099999000981, Gia Outbox Ten).",
+    }))
+    ad = dbapi.IntegrityError("%s: %s" % (type(pg), pg))
+    ad.pgcode = ad.sqlstate = pg.sqlstate
+    ad = nem(ad, pg)
+    return nem(sa_exc.IntegrityError(
+        "INSERT INTO notifications (user_id, body) VALUES ($1, $2)",
+        ("099999000982", "Gia Outbox Ten"), ad), ad)
+
+
+async def test_v5_last_error_cua_loi_csdl_chi_con_tom_tat(setup_test_database):
+    """V6 vòng 5 (owner GO 13-10): cột ``last_error`` là DỮ LIỆU LƯU LÂU — lỗi CSDL
+    chỉ được ghi bản tóm tắt thuộc tính, không DETAIL/hàng lỗi/tham số."""
+    from app.database import AsyncSessionLocal
+    from app.models import NotificationOutbox
+
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            row = NotificationOutbox(
+                event_code="admission_decision_admitted",
+                payload={"profile_id": 7},
+                idempotency_key="V5-LAST-ERROR-CSDL",
+            )
+            session.add(row)
+            await session.flush()
+            row_id = row.id
+
+    with patch(
+        "app.tasks.notification_outbox_tasks.dispatch",
+        new_callable=AsyncMock,
+        side_effect=_loi_csdl_gia_v5(),
+    ):
+        result = _run_worker_sync()
+    assert result["failed"] == 1, "HẠ TẦNG: hàng outbox không đi nhánh lỗi"
+
+    async with AsyncSessionLocal() as session:
+        fresh = await session.get(NotificationOutbox, row_id)
+        loi = fresh.last_error or ""
+    lo = [v for v in ("099999000981", "099999000982", "Gia Outbox Ten") if v in loi]
+    assert lo == [] and loi.startswith("DBError[") and "constraint=ck_v5_outbox" in loi, (
+        "last_error mang chữ lỗi CSDL %s: %r" % (lo, loi))
+
+
 # --- 4. Lease expiry → re-claim --------------------------------------------
 
 

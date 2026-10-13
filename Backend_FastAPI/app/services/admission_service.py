@@ -44,7 +44,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from .. import models
 from ..admission_metrics import admission_quota_skip_total
 from ..core.events import SystemEvents
-from ..core.log_redaction import mo_ta_loi
+from ..core.log_redaction import chu_loi_an_toan, mo_ta_loi
 from ..core.admission_correction_constants import (
     SAFE_MINOR_CORRECTION_FIELDS,
     HARD_DENY_FIELDS,
@@ -6061,7 +6061,8 @@ async def update_profile(
                 "Dữ liệu trùng lặp (CCCD hoặc thông tin đã tồn tại)"
             )
         else:
-            raise ConflictError(f"Vi phạm ràng buộc dữ liệu: {error_msg}")
+            # V6 vòng 5: thông báo cho NGƯỜI DÙNG không mang DETAIL/hàng lỗi.
+            raise ConflictError(f"Vi phạm ràng buộc dữ liệu: {chu_loi_an_toan(e)}")
 
     # ── Đẩy identity (full_name/phone/email) xuống Lead qua module chung có
     # guard (parity update_lead). Đặt SAU flush profile ở trên: citizen_id của

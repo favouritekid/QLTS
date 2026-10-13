@@ -1,4 +1,5 @@
 import csv
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 import io
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
@@ -1607,7 +1608,7 @@ async def bulk_delete_leads(
                 ))
         except Exception as e:
             log.warning(f"Failed to delete lead {lead_id}: {e}")
-            skipped.append({"lead_id": lead_id, "reason": str(e)})
+            skipped.append({"lead_id": lead_id, "reason": chu_loi_an_toan(e)})
 
     await db.commit()
 

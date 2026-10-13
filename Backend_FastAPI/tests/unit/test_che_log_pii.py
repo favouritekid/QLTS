@@ -105,6 +105,26 @@ def loi_db_hang(ma, cccd):
                   tham_so=("Gia Lap Ten", cccd))
 
 
+def loi_ngan(thong_diep, **truong_them):
+    """V6 vòng 5: lỗi asyncpg GIẢ có thông điệp NGẮN (< 8 ký tự) — phản ví dụ của
+    review F30 (vòng 4 bỏ qua chuỗi < 8 / dòng < 12 ký tự)."""
+    truong = {"C": "22000", "M": thong_diep, "S": "ERROR"}
+    truong.update(truong_them)
+    return _nem(asyncpg.exceptions.PostgresError.new(truong))
+
+
+def boc_context(loi_csdl, mau="loi khi ghi: %s", lop=ValueError):
+    """Ngoại lệ BỌC lỗi CSDL qua ``__context__`` (ném trong ``except``, KHÔNG ``from``);
+    ``str`` của lỗi bọc chứa chữ của lỗi CSDL."""
+    try:
+        raise loi_csdl
+    except Exception as _x:
+        try:
+            raise lop(mau % _x)
+        except lop as _w:
+            return _w
+
+
 def loi_db_asyncpg_repr(cccd):
     """Chuỗi owner (3): asyncpg DataError — repr tham số có ``\\n``."""
     pg = asyncpg.exceptions.DataError(
@@ -307,6 +327,54 @@ slog.bind(dau_do="v6_s1s").error("v6_s1s", exc_info=loi_db_hang("s1s", "09999900
 thuong.error("v6_s1t", exc_info=loi_db_hang("s1t", "099999000902"))
 asyncio.run(generic_exception_handler(yeu_cau, loi_db_hang("s1c", "099999000904")))
 asyncio.run(generic_exception_handler(yeu_cau, loi_db_asyncpg_repr("099999000903")))
+# ---- Vòng 5: thông điệp lỗi CSDL NGẮN — mỗi đầu dò một tên giả RIÊNG (quét cả đầu ra)
+try:
+    raise asyncpg.exceptions.DataError("Gia An")               # đúng phản ví dụ của review
+except Exception as _e:
+    thuong.error("v5_l1 loi: %s", str(_e))                     # đối số %s = str(e)
+try:
+    raise loi_ngan("Gia Vu")
+except Exception as _e:
+    thuong.error("v5_l4 %s", "ngu canh " + str(_e))            # đối số có chữ khác ⇒ CẢ đối số
+try:
+    raise loi_ngan("Gia Bo")
+except Exception:
+    thuong.exception("v5_l2")                                  # logging.exception
+try:
+    raise loi_ngan("Gia Cu")
+except Exception as _e:
+    thuong.error(f"v5_l3 that bai khi luu: {_e} (thu lai sau)")  # câu đã nội suy
+slog.bind(dau_do="v5_s1").error("v5_s1", exc_info=loi_ngan("Gia Du"))  # structlog exc_info
+try:
+    raise asyncpg.exceptions.DataError("0999")
+except Exception as _e:
+    chuoi("V5S2", "error", event="v5_s2", error=str(_e))       # structlog error=str(e)
+chuoi("V5S3", "error", event="v5_s3", error=loi_ngan("Gia Em"))  # giá trị là ngoại lệ
+try:
+    raise loi_ngan("Gia Ga")
+except Exception as _e:
+    chuoi("V5S4", "error", event=f"v5_s4 that bai: {_e}")      # CÂU event: giữ chữ khác
+_LOI_V5S5 = loi_ngan("Gia Hy")
+chuoi("V5S5", "error", event="v5_s5", exc_info=_LOI_V5S5,      # NGOÀI except: exc_info
+      error=str(_LOI_V5S5))                                    # đi kèm error=str(e)
+chuoi("V5P", "error", event="v5_p %s", positional_args=(loi_ngan("Gia Po"),))  # đối số vị trí
+_LOI_W1 = loi_ngan("Gia Ky")
+_W1 = _nem(ConflictError("Khong luu: %s" % _LOI_W1), _LOI_W1)  # bọc qua __cause__
+thuong.error("v5_w1", exc_info=_W1)                            # traceback của lỗi bọc
+thuong.error("v5_w1b %s", _W1)                                 # đối số là lỗi bọc
+_LOI_W1S = loi_ngan("Gia Ra")
+chuoi("V5W1", "error", event="v5_w1c",
+      error=_nem(ConflictError("Khong luu: %s" % _LOI_W1S), _LOI_W1S))  # structlog giá trị lỗi bọc
+thuong.error("v5_w2", exc_info=boc_context(loi_ngan("Gia Lo")))  # bọc qua __context__
+try:
+    raise boc_context(loi_ngan("Gia Mi"))
+except ValueError as _w:
+    chuoi("V5W3", "error", event="v5_w3", error=str(_w))       # str(lỗi bọc) trong except
+asyncio.run(generic_exception_handler(yeu_cau, boc_context(loi_ngan("Gia Mo"))))
+try:
+    raise loi_ngan("Gia Nam Truong")
+except Exception as _e:
+    chuoi("V5T", "error", event="v5_t", error=str(_e)[:9])      # bản CẮT của str(e)
 truy_cap = logging.getLogger("uvicorn.access")
 truy_cap.info('%s - "%s %s HTTP/%s" %d', "10.0.0.1:5000", "GET",
               "/api/admissions/confirm/GIAV6TOKENA01", "1.1", 200)
@@ -388,6 +456,11 @@ logging.getLogger("v6.celery.thuong").warning(
 # Vòng 4: lỗi CSDL qua formatter celery (fmt).
 logging.getLogger("v6.celery.thuong").error("v6_c6", exc_info=loi_db_moc("c6"))
 logging.getLogger("v6.celery.thuong").error("v6_c7", exc_info=loi_db_hang("c7", "099999000905"))
+# Vòng 5: lỗi CSDL thông điệp NGẮN qua formatter celery (fmt).
+try:
+    raise asyncpg.exceptions.DataError("Gia Pho")
+except Exception as _e:
+    logging.getLogger("v6.celery.thuong").error("v5_c1 loi: %s", str(_e))
 structlog.get_logger("v6.celery").info(
     "v6_c4_redis", redis_url="redis://:GIAMATKHAUC04@redis:6379/2")
 sys.stdout.flush()
@@ -1020,3 +1093,285 @@ def test_celery_worker_che_mat_khau_redis_url(celery_worker):
 def test_celery_beat_structlog_che(celery_beat):
     out = _khong_nap_app_main(celery_beat, "v6_b1_struct")
     assert "099999000401" not in out, "beat: structlog lọt CCCD — chưa nạp bộ che"
+
+
+
+# =============================================================================
+# V6 vòng 5 — F30: thay TOÀN BỘ nội dung lỗi CSDL đã nhận diện, KHÔNG ngưỡng độ dài
+# =============================================================================
+# Mỗi đầu dò một tên giả RIÊNG (``Gia An``, ``Gia Vu``…) ⇒ quét cả đầu ra không nhiễm
+# chéo. "Chỉ còn metadata": giá trị/đối số lấy từ lỗi CSDL phải là ĐÚNG bản tóm tắt.
+
+
+def _dong_co(out: str, moc: str) -> str:
+    dong = [x for x in out.splitlines() if moc in x]
+    assert dong, "HẠ TẦNG: không thấy dòng mang mốc %r" % moc
+    return "\n".join(dong)
+
+
+def _truong(r: subprocess.CompletedProcess, ma: str, khoa: str):
+    import json
+
+    dong = _dong_chuoi(r, ma)
+    return json.loads(dong.split("|", 2)[2]).get(khoa)
+
+
+def _la_tom_tat(v) -> bool:
+    return isinstance(v, str) and v.startswith("DBError[") and v.endswith("]")
+
+
+def test_v5_logging_doi_so_str_loi_ngan_chi_con_tom_tat(web):
+    out = _co_dau_do(web, "v5_l1 loi:")
+    assert "Gia An" not in out and "v5_l1 loi: DBError[" in _dong_co(out, "v5_l1 loi:"), (
+        "logging %%s với str(DataError('Gia An')) — 6 ký tự: %s" % _dong_co(out, "v5_l1"))
+
+
+def test_v5_logging_doi_so_co_chu_khac_ca_gia_tri_thanh_tom_tat(web):
+    out = _co_dau_do(web, "v5_l4")
+    dong = _dong_co(out, "v5_l4")
+    assert "Gia Vu" not in out and "v5_l4 DBError[" in dong, (
+        "đối số lấy từ lỗi CSDL phải thành CẢ bản tóm tắt: %s" % dong)
+
+
+def test_v5_logging_exception_loi_ngan(web):
+    out = _co_dau_do(web, "v5_l2")
+    assert "Gia Bo" not in out, "logging.exception với lỗi CSDL thông điệp ngắn lộ"
+
+
+def test_v5_logging_cau_noi_suy_giu_chu_khac(web):
+    out = _co_dau_do(web, "v5_l3")
+    dong = _dong_co(out, "v5_l3")
+    assert "Gia Cu" not in out and "v5_l3 that bai khi luu: DBError[" in dong \
+        and "(thu lai sau)" in dong, "câu f'…{e}…': chỉ phần lấy từ lỗi thành tóm tắt: %s" % dong
+
+
+def test_v5_structlog_exc_info_loi_ngan(web):
+    out = _co_dau_do(web, '"dau_do":"v5_s1"')
+    assert "Gia Du" not in out, "structlog exc_info với lỗi CSDL thông điệp ngắn lộ"
+
+
+def test_v5_structlog_error_str_chi_con_tom_tat(web):
+    v = _truong(web, "V5S2", "error")
+    assert _la_tom_tat(v) and "0999" not in v, "error=str(e) phải là ĐÚNG bản tóm tắt: %r" % v
+
+
+def test_v5_structlog_gia_tri_ngoai_le_ngan(web):
+    dong = _dong_chuoi(web, "V5S3")
+    assert "Gia Em" not in dong and _la_tom_tat(_truong(web, "V5S3", "error")), dong
+
+
+def test_v5_structlog_cau_event_giu_chu_khac(web):
+    ev = _truong(web, "V5S4", "event")
+    assert isinstance(ev, str) and ev.startswith("v5_s4 that bai: DBError[") and "Gia Ga" not in ev, (
+        "event: chỉ phần lấy từ lỗi thành tóm tắt, chữ khác GIỮ: %r" % ev)
+
+
+def test_v5_structlog_exc_info_kem_error_str_ngoai_except(web):
+    dong = _dong_chuoi(web, "V5S5")
+    assert "Gia Hy" not in dong and _la_tom_tat(_truong(web, "V5S5", "error")), (
+        "error=str(e) đi kèm exc_info=e NGOÀI except lộ: %s" % dong)
+
+
+def test_v5_structlog_doi_so_vi_tri_la_loi_csdl(web):
+    ev = _truong(web, "V5P", "event")
+    assert isinstance(ev, str) and ev.startswith("v5_p DBError[") and "Gia Po" not in ev, (
+        "log.error('… %%s', lỗi CSDL) — đối số vị trí lộ: %r" % ev)
+
+
+def test_v5_boc_cause_traceback_va_doi_so(web):
+    out = _co_dau_do(web, "v5_w1b")
+    assert "Gia Ky" not in out and "v5_w1b Khong luu: DBError[" in _dong_co(out, "v5_w1b"), (
+        "lỗi BỌC (__cause__): traceback/đối số còn chữ của lỗi CSDL")
+
+
+def test_v5_boc_cause_gia_tri_structlog(web):
+    v = _truong(web, "V5W1", "error")
+    assert isinstance(v, str) and v.startswith("Khong luu: DBError[") and "Gia Ra" not in v, (
+        "structlog error=<lỗi bọc>: %r" % v)
+
+
+def test_v5_boc_context_traceback(web):
+    out = _co_dau_do(web, "v5_w2")
+    assert "Gia Lo" not in out, "lỗi BỌC qua __context__: traceback còn chữ của lỗi CSDL"
+
+
+def test_v5_boc_context_str_trong_except_chi_con_tom_tat(web):
+    v = _truong(web, "V5W3", "error")
+    assert _la_tom_tat(v) and "Gia Mi" not in v, (
+        "str(lỗi bọc) trong except phải là ĐÚNG bản tóm tắt: %r" % v)
+
+
+def test_v5_generic_handler_loi_boc_ngan(web):
+    out = _co_dau_do(web, "Unhandled exception: ValueError: loi khi ghi: DBError[")
+    assert "Gia Mo" not in out, "generic handler: lỗi bọc lỗi CSDL ngắn lộ"
+
+
+def test_v5_ban_cat_cua_str_loi(web):
+    v = _truong(web, "V5T", "error")
+    assert _la_tom_tat(v) and "Gia Nam" not in v, "bản CẮT str(e)[:9] lộ: %r" % v
+
+
+def test_v5_celery_doi_so_str_loi_ngan(celery_worker):
+    out = _khong_nap_app_main(celery_worker, "v5_c1 loi:")
+    assert "Gia Pho" not in out and "v5_c1 loi: DBError[" in out, (
+        "worker: logging %s với str(lỗi CSDL ngắn) lộ")
+
+
+# ---- chu_loi_an_toan: chữ lỗi đưa RA NGOÀI log (phản hồi HTTP, cột CSDL) ----------
+
+
+def test_v5_chu_loi_an_toan_loi_csdl_chi_tom_tat():
+    import asyncpg
+
+    from app.core.log_redaction import chu_loi_an_toan
+
+    v = chu_loi_an_toan(asyncpg.exceptions.DataError("Gia Qu"))
+    assert _la_tom_tat(v) and "Gia Qu" not in v, v
+
+
+def test_v5_chu_loi_an_toan_giu_nguyen_loi_khong_csdl():
+    """Thông điệp nghiệp vụ cho NGƯỜI DÙNG không bị che nhầm (không regex)."""
+    from app.core.log_redaction import chu_loi_an_toan
+
+    loi = ValueError("Email gia@example.invalid khong hop le")
+    assert chu_loi_an_toan(loi) == str(loi)
+
+
+def test_v5_chu_loi_an_toan_loi_boc_giu_chu_nghiep_vu():
+    import asyncpg
+
+    from app.core.log_redaction import chu_loi_an_toan
+
+    goc = asyncpg.exceptions.DataError("Gia Su")
+    try:
+        try:
+            raise goc
+        except Exception as e:
+            raise RuntimeError("Khong luu: %s" % e) from e
+    except RuntimeError as boc:
+        v = chu_loi_an_toan(boc)
+    assert v.startswith("Khong luu: DBError[") and "Gia Su" not in v, v
+
+
+# ---- §6: chữ của ngoại lệ (có thể là lỗi CSDL) KHÔNG đi ra ngoài log thô ----------
+
+_S6_KIEU = {
+    "Exception", "BaseException", "IntegrityError", "DBAPIError", "OperationalError",
+    "DataError", "ProgrammingError", "StatementError", "SQLAlchemyError", "PostgresError",
+    "InterfaceError", "InternalError", "NotSupportedError", "DatabaseError",
+    "UniqueViolationError", "ForeignKeyViolationError", "CheckViolationError",
+}
+#: Hàm BỌC an toàn — chữ ngoại lệ đi qua chúng thì không còn là chữ thô.
+_S6_HAM_BOC = {
+    "chu_loi_an_toan", "mo_ta_loi", "tom_tat_loi_csdl", "_safe_bulk_error_message",
+    "type", "isinstance", "_is_lock_not_available", "_handle_lead_integrity_error",
+    "log_dispatch_failure",
+}
+#: Hàm chuyển đổi — tự nó không phải lối ra; kết quả đi đâu thì lối ra ở đó.
+_S6_TRUNG_TINH = {"str", "repr", "len", "getattr", "format"}
+#: Lời gọi log/in — thuộc tầng che log, không phải lối ra ở đây.
+_S6_LOG = {"debug", "info", "warning", "warn", "error", "exception", "critical", "log",
+           "_log_warning", "print"}
+#: Lối ra ĐÃ RÀ, KHÔNG mang lỗi CSDL — (tệp, hàm bao, loại): (số chỗ, lý do).
+_S6_MIEN = {
+    ("app/gateways/zalo.py", "_call_template_api", "return"): (1, "lỗi HTTP của Zalo API, khối try không chạm CSDL"),
+    ("app/gateways/zalo_bot.py", "send_message", "return"): (1, "đã qua _safe_error_message; lỗi HTTP Zalo Bot"),
+    ("app/routers/monitoring.py", "get_notification_metrics", "gan"): (1, "lỗi Redis (safe_redis_*), không CSDL"),
+    ("app/routers/monitoring.py", "get_system_overview", "gan"): (3, "Redis / Celery / Socket.IO — nhánh CSDL đã qua chu_loi_an_toan"),
+    ("app/services/notification_channels/email_channel.py", "execute_delivery", "return"): (1, "lỗi SMTP"),
+    ("app/services/notification_channels/email_channel.py", "send", "return"): (1, "lỗi SMTP"),
+    ("app/services/notification_rule_loader.py", "get_rule_for_event", "raise"): (1, "lỗi kiểm cấu hình recipient_config (pydantic)"),
+    ("app/services/payment_import_service.py", "parse_template", "raise"): (1, "lỗi đọc tệp Excel tải lên"),
+    ("app/services/sms_contact_service.py", "_parse_rows", "raise"): (1, "lỗi đọc tệp CSV tải lên"),
+    ("app/services/session_service.py", "revoke_session", "raise"): (1, "chữ lỗi chỉ ở context — context KHÔNG bao giờ ra phản hồi (exception_handlers)"),
+    ("app/services/user_service.py", "invalidate_all_sessions", "raise"): (2, "lỗi Redis; chữ lỗi chỉ ở context"),
+    ("app/tasks/utils.py", "_runner", "gan"): (1, "giữ ĐỐI TƯỢNG ngoại lệ để ném lại ở luồng gọi"),
+}
+
+
+def _s6_quet() -> dict:
+    """Mọi lối ra NGOÀI log của chữ ngoại lệ trong ``except`` có thể bắt lỗi CSDL."""
+    import ast
+    from collections import Counter
+
+    def ten(f):
+        return f.id if isinstance(f, ast.Name) else (f.attr if isinstance(f, ast.Attribute) else "")
+
+    def kieu(t):
+        if t is None:
+            return {"<bare>"}
+        if isinstance(t, ast.Tuple):
+            return set().union(*(kieu(x) for x in t.elts))
+        return {ten(t) or "?"}
+
+    def lo(node, nhiem):
+        if isinstance(node, ast.Call) and ten(node.func) in _S6_HAM_BOC:
+            return False
+        if isinstance(node, ast.Name) and node.id in nhiem:
+            return True
+        return any(lo(c, nhiem) for c in ast.iter_child_nodes(node))
+
+    dem = Counter()
+    goc = BACKEND / "app"
+    for p in sorted(goc.rglob("*.py")):
+        rel = p.relative_to(BACKEND).as_posix()
+        if "/scripts/" in rel or "__pycache__" in rel:
+            continue
+        cay = ast.parse(p.read_text(encoding="utf-8"))
+        cha = {c: n for n in ast.walk(cay) for c in ast.iter_child_nodes(n)}
+        for h in ast.walk(cay):
+            if not isinstance(h, ast.ExceptHandler) or not h.name or not (kieu(h.type) & _S6_KIEU):
+                continue
+            bao = h
+            while bao in cha and not isinstance(bao, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                bao = cha[bao]
+            ten_bao = getattr(bao, "name", "<module>")
+            than = ast.Module(body=h.body, type_ignores=[])
+            nhiem = {h.name}
+            for _ in range(3):  # lan truyền qua biến cục bộ (error_msg = str(e.orig) …)
+                for n in ast.walk(than):
+                    if isinstance(n, ast.Assign) and lo(n.value, nhiem):
+                        nhiem |= {t.id for t in n.targets if isinstance(t, ast.Name)}
+            bo_qua = {id(m) for n in ast.walk(than)
+                      if isinstance(n, ast.Call) and ten(n.func) in _S6_LOG for m in ast.walk(n)}
+            for n in ast.walk(than):
+                if id(n) in bo_qua:
+                    continue
+                loai = None
+                if isinstance(n, ast.Raise) and n.exc is not None:
+                    if not (isinstance(n.exc, ast.Name) and n.exc.id in nhiem) and lo(n.exc, nhiem):
+                        loai = "raise"
+                elif isinstance(n, (ast.Return, ast.Yield, ast.YieldFrom)) and n.value is not None \
+                        and lo(n.value, nhiem):
+                    loai = type(n).__name__.lower()
+                elif isinstance(n, ast.Assign) and lo(n.value, nhiem) and any(
+                        isinstance(t, (ast.Attribute, ast.Subscript)) for t in n.targets):
+                    loai = "gan"
+                elif isinstance(n, ast.Call) and ten(n.func) not in _S6_HAM_BOC | _S6_TRUNG_TINH \
+                        and any(lo(a, nhiem) for a in list(n.args) + [k.value for k in n.keywords]):
+                    ong, trong = cha.get(n), False
+                    while ong is not None and ong is not h:
+                        if isinstance(ong, (ast.Raise, ast.Return, ast.Yield, ast.YieldFrom,
+                                            ast.Assign, ast.Call)):
+                            trong = True
+                            break
+                        ong = cha.get(ong)
+                    if not trong:
+                        loai = "goi:" + ten(n.func)
+                if loai:
+                    dem[(rel, ten_bao, loai)] += 1
+    return dict(dem)
+
+
+def test_v5_khong_dua_chu_loi_csdl_ra_ngoai_log():
+    """§6 (vòng 5): chữ ngoại lệ trong ``except`` có thể bắt lỗi CSDL KHÔNG được đi ra
+    phản hồi HTTP / cột CSDL / danh sách trả về mà không qua ``chu_loi_an_toan``
+    (hoặc ``mo_ta_loi``). Lối ra đã rà và KHÔNG mang lỗi CSDL nằm ở ``_S6_MIEN`` kèm
+    lý do — khoá HAI chiều: chỗ mới chưa rà ⇒ ĐỎ; chỗ miễn đã biến mất ⇒ ĐỎ (dọn)."""
+    thuc = _s6_quet()
+    mong = {k: v[0] for k, v in _S6_MIEN.items()}
+    moi = {k: n for k, n in thuc.items() if mong.get(k) != n}
+    cu = {k: n for k, n in mong.items() if thuc.get(k) != n}
+    assert not moi and not cu, (
+        "lối ra chữ ngoại lệ CHƯA rà (bọc bằng chu_loi_an_toan, hoặc thêm vào _S6_MIEN kèm lý do "
+        "nếu chắc chắn không mang lỗi CSDL): %s\nmiễn trừ không còn khớp: %s" % (moi, cu))

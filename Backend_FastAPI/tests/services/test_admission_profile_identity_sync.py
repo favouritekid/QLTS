@@ -401,6 +401,46 @@ class TestUpdateProfileEndToEnd:
         assert "0901111111" not in actives       # số cũ dọn qua đường thật
 
 
+class TestUpdateProfileLoiRangBuocKhongLoGiaTri:
+    """V6 vòng 5 (owner GO 13-10): vi phạm CHECK khi lưu hồ sơ ⇒ ``ConflictError``
+    trả cho NGƯỜI DÙNG trước đây nối nguyên ``str(e.orig)`` — gồm ``DETAIL: Failing
+    row contains (…)`` với CCCD/SĐT/email/họ tên của CẢ hàng. Nay chỉ tóm tắt thuộc
+    tính (loại lỗi, SQLSTATE, tên ràng buộc, bảng)."""
+
+    async def test_vi_pham_check_thong_bao_khong_mang_gia_tri_hang(
+        self, db, seeded_dependencies, admin_user, monkeypatch
+    ):
+        from app.services import admission_service
+        from app.utils.exceptions import ConflictError
+
+        async def _khong_lam_gi(*args, **kwargs):  # tách khỏi bước tính lại hồ sơ giấy tờ
+            return None
+
+        monkeypatch.setattr(admission_service, "_reresolve_documents_snapshot", _khong_lam_gi)
+
+        lead = await _make_lead(
+            db, seeded_dependencies, phone="0900000981", full_name="Gia Rang Buoc Ten",
+            email="gia981@example.invalid",
+        )
+        profile = await _make_draft_profile(db, lead)
+        await db.flush()
+        cccd = profile.citizen_id
+
+        with pytest.raises(ConflictError) as exc_info:
+            await admission_service.update_profile(
+                db=db,
+                profile_id=profile.id,
+                data={"vocational_qualification": "gia_tri_sai_v5"},
+                current_user=admin_user,
+            )
+        thong_bao = str(exc_info.value.detail)
+        lo = [v for v in (cccd, "0900000981", "Gia Rang Buoc Ten", "gia981@example.invalid",
+                          "gia_tri_sai_v5") if v and v in thong_bao]
+        assert lo == [], "thông báo cho người dùng mang giá trị của hàng lỗi %s: %r" % (lo, thong_bao)
+        assert "constraint=ck_admission_profile_vocational_qualification" in thong_bao, (
+            "HẠ TẦNG: không đi đúng nhánh vi phạm CHECK: %r" % thong_bao)
+
+
 # =============================================================================
 # SCHEMA: AdmissionProfileUpdate.phone mirror validate_vietnam_phone (chặn 422)
 # =============================================================================
