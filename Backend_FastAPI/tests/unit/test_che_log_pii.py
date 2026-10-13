@@ -1206,8 +1206,10 @@ def test_v5_boc_context_str_trong_except_chi_con_tom_tat(web):
 
 
 def test_v5_generic_handler_loi_boc_ngan(web):
-    out = _co_dau_do(web, "Unhandled exception: ValueError: loi khi ghi: DBError[")
-    assert "Gia Mo" not in out, "generic handler: lỗi bọc lỗi CSDL ngắn lộ"
+    out = _co_dau_do(web, "Unhandled exception: ValueError: loi khi ghi:")
+    dong = _dong_co(out, "Unhandled exception: ValueError: loi khi ghi:")
+    assert "Gia Mo" not in out and "loi khi ghi: DBError[" in dong, (
+        "generic handler: lỗi bọc lỗi CSDL ngắn lộ: %s" % dong)
 
 
 def test_v5_ban_cat_cua_str_loi(web):
@@ -1241,10 +1243,13 @@ def test_v5_chu_loi_an_toan_loi_csdl_chi_tom_tat():
 
 
 def test_v5_chu_loi_an_toan_giu_nguyen_loi_khong_csdl():
-    """Thông điệp nghiệp vụ cho NGƯỜI DÙNG không bị che nhầm (không regex)."""
-    from app.core.log_redaction import chu_loi_an_toan
+    """Thông điệp nghiệp vụ cho NGƯỜI DÙNG không bị che nhầm (không regex).
+    Dùng đúng dạng thông báo trùng CCCD của hệ thống — regex lớp phụ CÓ che nó
+    (khẳng định ngay dưới), nên ca này phân biệt được "không regex" với "có regex"."""
+    from app.core.log_redaction import chu_loi_an_toan, redact_text
 
-    loi = ValueError("Email gia@example.invalid khong hop le")
+    loi = ValueError("CCCD 099999000984 đã tồn tại trong hệ thống")
+    assert redact_text(str(loi)) != str(loi), "HẠ TẦNG: regex không đổi thông điệp mẫu"
     assert chu_loi_an_toan(loi) == str(loi)
 
 

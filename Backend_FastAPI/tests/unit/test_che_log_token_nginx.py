@@ -212,13 +212,23 @@ def test_map_nginx_van_giu_phan_truoc_dau_hieu_va_giao_thuc():
     ), "map nginx không giữ phần trước dấu hiệu / giao thức: %s" % (thuc,)
 
 
+#: Biến DUY NHẤT được phép trong ``log_format main`` (V6 vòng 5: danh sách CHO PHÉP thay
+#: danh sách cấm — đột biến thêm ``$uri`` thô làm lộ token mà ca cũ chỉ cấm
+#: ``$request``/``$http_referer`` vẫn xanh; E2E thật bắt được, ca tĩnh thì không).
+_BIEN_LOG_FORMAT_CHO_PHEP = {
+    "remote_addr", "remote_user", "time_local", "qlts_request_log", "status",
+    "body_bytes_sent", "qlts_referer_log", "http_user_agent", "http_x_forwarded_for",
+}
+
+
 def test_log_format_main_chi_dung_bien_da_che():
     lf = [c for c in _cau_lenh(_doc(NGINX_CONF), "log_format") if c.startswith("log_format main ")]
     assert len(lf) == 1, "HẠ TẦNG: không thấy đúng một log_format main"
-    tho = re.findall(r"\$(?:request|http_referer)(?![A-Za-z0-9_])", lf[0])
-    assert tho == [] and "$qlts_request_log" in lf[0] and "$qlts_referer_log" in lf[0], (
-        "log_format main còn ghi biến THÔ %s (phải là $qlts_request_log/$qlts_referer_log): %s"
-        % (tho, lf[0]))
+    bien = set(re.findall(r"\$\{?([A-Za-z0-9_]+)", lf[0]))
+    la = sorted(bien - _BIEN_LOG_FORMAT_CHO_PHEP)
+    assert la == [] and "$qlts_request_log" in lf[0] and "$qlts_referer_log" in lf[0], (
+        "log_format main ghi biến NGOÀI danh sách cho phép %s (URL/Referer phải qua "
+        "$qlts_request_log/$qlts_referer_log đã che): %s" % (la, lf[0]))
 
 
 def test_access_log_cap_http_van_bat_bang_khuon_main():

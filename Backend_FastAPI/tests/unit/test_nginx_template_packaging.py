@@ -865,6 +865,12 @@ _qlts_mo_hinh_anh() {
     if printf '%s' "$*" | grep -q '@MOC@'; then
       [ "${STUB_NEN_RC:-0}" = "0" ] || exit "${STUB_NEN_RC}"
       for _t in ${STUB_NEN_TEP:-}; do echo "$_t"; done
+      # `STUB_NEN_DEM_BYTE`: đệm thêm N byte tên tệp của ảnh nền SAU các tệp thật
+      # (F36 vòng 5 — danh sách ảnh nền dài: `printf … | grep -q` nhận SIGPIPE).
+      if [ -n "${STUB_NEN_DEM_BYTE:-}" ]; then
+        yes /usr/share/nginx/dem/tep-dem | head -c "$STUB_NEN_DEM_BYTE"
+        echo
+      fi
       [ "${STUB_NEN_KHONG_MOC:-0}" = "1" ] || echo "@MOC@"
       exit 0
     fi
@@ -1150,6 +1156,20 @@ def _chay_apply(repo: Path, anh: Path, **bien: str) -> subprocess.CompletedProce
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         env=moi_truong, cwd=str(repo),
     )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_cong_noi_dung_ds_nen_dai_khong_bao_mo_coi_nham(tmp_path):
+    """F36 vòng 5 (§6 ``nginx-apply.sh``): danh sách tệp ẢNH NỀN dài (đệm 4 MiB SAU các
+    tệp thật) — tệp của ảnh nền nằm SỚM. ``printf … | grep -qxF`` dưới ``pipefail``:
+    grep thoát ở dòng khớp, printf nhận SIGPIPE ⇒ "không khớp" ⇒ tệp ảnh nền bị báo
+    nhầm là MỒ CÔI và cổng ĐỎ giả. Phép tìm đọc hết ⇒ cổng phải XANH như ca đối chứng."""
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A,
+                     STUB_NEN_DEM_BYTE=str(4 * 1024 * 1024))
+    assert kq.returncode == 0 and "MỒ CÔI" not in kq.stdout, (
+        f"danh sách ảnh nền dài không được làm tệp ảnh nền thành MỒ CÔI:\n"
+        f"{kq.stdout[-3000:]}\n{kq.stderr[-2000:]}")
 
 
 @_bo_qua_neu_khong_chay_duoc_bash
