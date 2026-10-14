@@ -333,11 +333,10 @@ log "Nginx template sẽ được render TRONG container (domain=$DOMAIN, admiss
 # mất. `docker inspect` lỗi chỉ được hiểu là "không tồn tại" khi phép liệt kê
 # `docker ps -a --filter id=…` CHẠY ĐƯỢC (rc 0) và trả RỖNG; mọi trường hợp khác
 # là KHÔNG ĐỌC ĐƯỢC. Mỗi lệnh đọc có hạn riêng (QLTS_HAN_LENH_DOCKER, mặc định
-# 5 s): daemon kẹt không được giữ trap / hướng dẫn / vòng chờ mãi.
-# Vòng 6 (N21.07): mặc định 10 → 5 s. Đo local `docker inspect` ≈ 0,2–0,3 s (biên ×17);
-# với 10 s, trần trap nhánh mở lại (≈ 60 lần đọc) là 1.214 s > `command_timeout: 20m` của
-# ssh-action; với 5 s là 914 s. Ghi đè bằng biến nếu VPS chậm hơn.
-_DCG_HAN_LENH="${QLTS_HAN_LENH_DOCKER:-5}"
+# 10 s): daemon kẹt không được giữ trap / hướng dẫn / vòng chờ mãi.
+# Vòng 6b (F45, owner chốt): KHÔI PHỤC 10 s. Vòng 6 hạ xuống 5 s chỉ để trần trap < 20 phút —
+# lý do không đủ: `command_timeout: 20m` là của CẢ phiên SSH, không phải phần còn lại cho trap.
+_DCG_HAN_LENH="${QLTS_HAN_LENH_DOCKER:-10}"
 case "$_DCG_HAN_LENH" in
     ''|*[!0-9]*) error "QLTS_HAN_LENH_DOCKER phải là số nguyên giây, nhận: '$_DCG_HAN_LENH'" ;;
 esac
@@ -351,7 +350,42 @@ esac
     || error "QLTS_HAN_PSQL ngoài khoảng 5..600: '$_DCG_HAN_PSQL'"
 command -v timeout >/dev/null 2>&1 \
     || error "thiếu lệnh 'timeout' (coreutils) — không giới hạn được thời gian từng lệnh đọc Docker. DỪNG trước mọi thay đổi."
-_dcg_dk() { timeout -k 2 "$_DCG_HAN_LENH" docker "$@"; }
+# Vòng 6b (F45): HẠN TỔNG của trap được THỰC THI, không chỉ so ở cuối. `_DCG_TRAP_HET` (mốc
+# SECONDS) chỉ đặt khi trap bắt đầu = lúc bắt đầu + ngân sách của pha/chế độ. Trước MỖI bước:
+# hạn của lệnh = min(hạn riêng, phần còn lại); hết ⇒ lệnh KHÔNG chạy (rc 124, "không đọc được").
+# Lệnh GHI chỉ được BẮT ĐẦU khi phần còn lại ≥ hạn của nó + 5 s (-k) — không có tiến trình giám
+# sát nào giết trap giữa một lệnh ghi. Ngoài trap: không giới hạn thêm.
+_DCG_TRAP_HET=""
+_dcg_con_lai() {
+    local r
+    if [ -z "${_DCG_TRAP_HET:-}" ]; then printf '%s\n' 999999; return 0; fi
+    r=$((_DCG_TRAP_HET - SECONDS))
+    [ "$r" -gt 0 ] || r=0
+    printf '%s\n' "$r"
+}
+# _dcg_han_con <hạn riêng> — in min(hạn riêng, phần còn lại); trả 1 (in 0) khi ngân sách đã hết.
+# KHÔNG bao giờ in 0 cho `timeout` (0 = TẮT hạn).
+_dcg_han_con() {
+    local r
+    r=$(_dcg_con_lai)
+    if [ "$r" -le 0 ]; then printf '0\n'; return 1; fi
+    if [ "$1" -le "$r" ]; then printf '%s\n' "$1"; else printf '%s\n' "$r"; fi
+}
+# _dcg_du_ngan_sach <hạn lệnh ghi> <bước> — 0 nếu phần còn lại đủ cho hạn + 5 s; nếu không: báo,
+# ghi `het_ngan_sach` vào tệp trạng thái, trả 1 (người gọi KHÔNG bắt đầu lệnh ghi).
+_dcg_du_ngan_sach() {
+    local r
+    r=$(_dcg_con_lai)
+    [ "$r" -ge $(( $1 + 5 )) ] && return 0
+    warn "[trap] HẾT NGÂN SÁCH: còn ${r}s < $(( $1 + 5 ))s cần cho $2 — KHÔNG bắt đầu lệnh ghi; trạng thái CHƯA XÁC ĐỊNH"
+    _dcg_ghi "het_ngan_sach" "${2// /_} con=${r}s" 2>/dev/null || true
+    return 1
+}
+_dcg_dk() {
+    local h
+    h=$(_dcg_han_con "$_DCG_HAN_LENH") || { echo "hết ngân sách trap — không đọc Docker" >&2; return 124; }
+    timeout -k 2 "$h" docker "$@"
+}
 # Vòng 6 (N21.07): hạn RIÊNG cho lệnh GHI và đầu dò của đường phục hồi — KHÔNG dùng chung
 # hạn đọc trạng thái. Đo local 14-10 (Docker 29.8.0, `vong6/do-thoi-luong.log`): `docker
 # start` ≈ 0,4–0,5 s · `docker restart -t 10` nginx ≈ 0,6–0,7 s · `docker run` đầu dò một
@@ -370,6 +404,11 @@ _dcg_dat_han _DCG_HAN_KHOI_DONG QLTS_HAN_KHOI_DONG 10 1 600
 _dcg_dat_han _DCG_HAN_NGINX_RESTART QLTS_HAN_NGINX_RESTART 30 1 600
 _dcg_dat_han _DCG_HAN_DO_SNI QLTS_HAN_DO_SNI 60 1 600
 _dcg_dat_han _DCG_HAN_PII QLTS_HAN_PII 90 1 600
+# Vòng 6b: ghi đè (chỉ HẠ) ngân sách tổng của trap — để diễn tập/kiểm hạn tổng; rỗng = theo bảng.
+_DCG_TRAN_GHI_DE=""
+if [ -n "${QLTS_TRAN_TRAP:-}" ]; then
+    _dcg_dat_han _DCG_TRAN_GHI_DE QLTS_TRAN_TRAP 1 1 3600
+fi
 # Lệnh có hạn hết giờ: `timeout` trả 124 (TERM) hoặc 137 (KILL sau -k).
 _dcg_het_han() { [ "$1" = "124" ] || [ "$1" = "137" ]; }
 # _dcg_doc_ct <định dạng> <CID> — in kết quả `docker inspect -f`. Mã trả:
@@ -1300,7 +1339,7 @@ _cho_healthy_dv() {
 
     # `ps -aq` trả ID, không trả chữ — cắt hẳn đường đọc health bằng cách grep
     # một dòng văn bản dành cho người đọc.
-    if ! ds=$(timeout -k 2 "$_DCG_HAN_LENH" docker compose -f docker-compose.yml --profile production \
+    if ! ds=$(_dcg_dk compose -f docker-compose.yml --profile production \
                   --env-file .env.production ps -aq "$ten" 2>/dev/null); then
         error "không liệt kê được container của service '$ten' (docker compose ps -aq thất bại)"
     fi
@@ -1533,7 +1572,9 @@ _dcg_pha() {
 # định — không được nuốt stdin của tiến trình gọi script.
 _dcg_psql() {
     # Vòng 5 (F43): có hạn — daemon/CSDL kẹt không được giữ cổng hay trap mãi.
-    timeout -k 5 "$_DCG_HAN_PSQL" $_RA_COMPOSE exec -T postgres psql -X -A -t -q -v ON_ERROR_STOP=1 \
+    local h
+    h=$(_dcg_han_con "$_DCG_HAN_PSQL") || { echo "hết ngân sách trap — không hỏi CSDL" >&2; return 124; }
+    timeout -k 5 "$h" $_RA_COMPOSE exec -T postgres psql -X -A -t -q -v ON_ERROR_STOP=1 \
         -U "${POSTGRES_USER:-qlts}" -d "${POSTGRES_DB:-qlts_production}" \
         -c "$1" </dev/null
 }
@@ -1639,7 +1680,7 @@ _dcg_ip() {
 _dcg_cua_dong() {
     local nhan="$1" s ds m
     for s in $_DCG_DICH_VU; do
-        if ! ds=$(timeout -k 2 "$_DCG_HAN_LENH" $_RA_COMPOSE ps -q "$s"); then
+        if ! ds=$(_dcg_dk ${_RA_COMPOSE#docker } ps -q "$s"); then
             warn "[$nhan] không liệt kê được container ĐANG CHẠY của '$s' (lỗi hoặc hết hạn Docker) — không đo được"
             return 1
         fi
@@ -1788,7 +1829,9 @@ _dcg_do_dich_vu_nginx() {
     # `docker run` THƯỜNG (không phải one-off Compose): `--entrypoint sh` tường
     # minh; không có khái niệm `--no-deps`. Mỗi phép đo in MỘT dòng `NHÃN giá-trị`.
     # Vòng 6: hạn RIÊNG `QLTS_HAN_DO_SNI` (≥ 6 curl × 8 s bên trong + dựng container).
-    ra=$(timeout -k 5 "$_DCG_HAN_DO_SNI" docker run --network "$mang" --rm -e DOMAIN="$DOMAIN" -e IPN="$ipn" -e STRICT="$strict" \
+    kq=$(_dcg_han_con "$_DCG_HAN_DO_SNI") \
+        || { warn "[nginx · dịch vụ] HẾT NGÂN SÁCH trap trước đầu dò — dịch vụ CHƯA ĐƯỢC CHỨNG MINH (CHƯA XÁC ĐỊNH)"; return 5; }
+    ra=$(timeout -k 5 "$kq" docker run --network "$mang" --rm -e DOMAIN="$DOMAIN" -e IPN="$ipn" -e STRICT="$strict" \
         --entrypoint sh "$anh" -c '
 ma() { c=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 8 --retry 0 "$@" 2>/dev/null || true); echo "${c:-000}"; }
 echo "MA-HEALTH $(ma --insecure --resolve "$DOMAIN:443:$IPN" "https://$DOMAIN/health")"
@@ -1800,7 +1843,7 @@ b=$(curl -sS --max-time 8 http://backend:8000/health 2>/dev/null | sha256sum | c
 echo "THAN-NGINX $a"
 echo "THAN-BACKEND $b"' 2>/dev/null) && kq=0 || kq=$?
     if _dcg_het_han "$kq"; then
-        warn "[nginx · dịch vụ] đầu dò SNI HẾT HẠN (${_DCG_HAN_DO_SNI}s) — dịch vụ CHƯA ĐƯỢC CHỨNG MINH (CHƯA XÁC ĐỊNH, không phải ĐẠT)"
+        warn "[nginx · dịch vụ] đầu dò SNI HẾT HẠN (hạn ${_DCG_HAN_DO_SNI}s, còn ngân sách trap $(_dcg_con_lai)s) — dịch vụ CHƯA ĐƯỢC CHỨNG MINH (CHƯA XÁC ĐỊNH, không phải ĐẠT)"
         return 5
     fi
     mh=$(printf '%s\n' "$ra" | awk '$1 == "MA-HEALTH" { print $2 }')
@@ -1834,7 +1877,13 @@ _dcg_thong_tin_pii_nginx() {
     local rc=0
     log "  [nginx · PII — THÔNG TIN, KHÔNG chặn nhánh lùi] chạy nginx-verify.sh (mã mới) lên nginx CŨ đang phục vụ..."
     # Vòng 6: có hạn RIÊNG (`QLTS_HAN_PII`); `timeout` cắt cả nhóm tiến trình (bash + docker).
-    timeout -k 5 "$_DCG_HAN_PII" bash "$SCRIPT_DIR/nginx-verify.sh" "$_DCG_NGINX_CID" "$DOMAIN" || rc=$?
+    local h
+    if ! h=$(_dcg_han_con "$_DCG_HAN_PII"); then
+        warn "[nginx · PII — THÔNG TIN, KHÔNG chặn] HẾT NGÂN SÁCH trap — BỎ kiểm PII. Kết quả phục hồi dịch vụ ở trên KHÔNG đổi (F39)."
+        _dcg_ghi "pii_nginx_cu" "BO_QUA het_ngan_sach" || true
+        return 0
+    fi
+    timeout -k 5 "$h" bash "$SCRIPT_DIR/nginx-verify.sh" "$_DCG_NGINX_CID" "$DOMAIN" || rc=$?
     if _dcg_het_han "$rc"; then
         warn "[nginx · PII — THÔNG TIN, KHÔNG chặn] nginx-verify.sh HẾT HẠN (${_DCG_HAN_PII}s) — chưa biết nginx cũ có lộ token. Kết quả phục hồi dịch vụ ở trên KHÔNG đổi (F39)."
         _dcg_ghi "pii_nginx_cu" "HET_HAN ${_DCG_HAN_PII}s" || true
@@ -1930,13 +1979,14 @@ _dcg_mo_lai_cu() {
         # Mốc StartedAt lúc ĐÓNG (4c): sau `start` phải thấy LẦN KHỞI ĐỘNG MỚI. Chưa có
         # mốc (bị ngắt giữa `docker stop`) ⇒ container có thể chưa từng dừng: running là đủ.
         truoc=${_DCG_MOC[$s]:-}; truoc=${truoc#*|}; truoc=${truoc%%|*}
+        _dcg_du_ngan_sach "$_DCG_HAN_KHOI_DONG" "mở lại · $s (docker start)" || return 5
         timeout -k 5 "$_DCG_HAN_KHOI_DONG" docker start "${_DCG_CID[$s]}" >/dev/null && kq=0 || kq=$?
         if [ "$kq" -ne 0 ]; then
             warn "docker start container cũ của '$s' THẤT BẠI/HẾT HẠN (rc=$kq, hạn ${_DCG_HAN_KHOI_DONG}s) — ĐO LẠI, KHÔNG chạy lại lệnh"
         fi
         _dcg_sau_lenh_ghi "mở lại · $s" "${_DCG_CID[$s]}" "$truoc" "${_DCG_ANH[$s]}" "$kq" || return $?
         if [ "$s" = "backend" ]; then
-            if ! ( _cho_healthy_dv backend "$_HAN_HEALTH" ); then
+            if ! ( _cho_healthy_dv backend "$(_dcg_han_con "$_HAN_HEALTH")" ); then
                 # Không healthy: container còn chạy lần mới ⇒ KHÔNG đạt; không đọc được ⇒ CHƯA XÁC ĐỊNH.
                 _dcg_sau_lenh_ghi "mở lại · backend (sau chờ healthy)" "${_DCG_CID[backend]}" "$truoc" "${_DCG_ANH[backend]}" 0 || return $?
                 warn "'backend' không tới healthy — KHÔNG đạt"
@@ -1945,7 +1995,7 @@ _dcg_mo_lai_cu() {
         fi
     done
     for s in $_DCG_THU_TU_MO; do
-        if ! live=$(timeout -k 2 "$_DCG_HAN_LENH" $_RA_COMPOSE ps -q "$s"); then
+        if ! live=$(_dcg_dk ${_RA_COMPOSE#docker } ps -q "$s"); then
             warn "KHÔNG ĐỌC ĐƯỢC container đang chạy của '$s' sau khi mở lại (lỗi hoặc hết hạn) — CHƯA XÁC ĐỊNH"
             return 5
         fi
@@ -1992,6 +2042,7 @@ _dcg_mo_lai_cu() {
         # minh được lần khởi động mới).
         truoc=$(_dcg_doc_ct '{{.State.StartedAt}}' "$_DCG_NGINX_CID") \
             || { warn "[nginx] KHÔNG ĐỌC ĐƯỢC mốc khởi động nginx TRƯỚC khi khởi động lại — KHÔNG khởi động lại; CHƯA XÁC ĐỊNH"; return 5; }
+        _dcg_du_ngan_sach "$_DCG_HAN_NGINX_RESTART" "khởi động lại nginx" || return 5
         timeout -k 5 "$_DCG_HAN_NGINX_RESTART" docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null && kq=0 || kq=$?
         if [ "$kq" -ne 0 ]; then
             warn "[nginx] khởi động lại container nginx cũ THẤT BẠI/HẾT HẠN (rc=$kq, hạn ${_DCG_HAN_NGINX_RESTART}s) — ĐO LẠI, KHÔNG chạy lại lệnh"
@@ -2001,7 +2052,7 @@ _dcg_mo_lai_cu() {
             [ "$kq" -eq 5 ] && _dcg_nginx_tay "CHƯA XÁC ĐỊNH sau khởi động lại" "$truoc" || _dcg_nginx_tay "DỪNG / KHÔNG mở được sau khởi động lại" "$truoc"
             return "$kq"
         fi
-        if ! ( _cho_healthy_dv nginx "$_HAN_HEALTH" ); then
+        if ! ( _cho_healthy_dv nginx "$(_dcg_han_con "$_HAN_HEALTH")" ); then
             _dcg_sau_lenh_ghi "nginx (sau chờ healthy)" "$_DCG_NGINX_CID" "$truoc" "" 0 && kq=1 || kq=$?
             [ "$kq" -eq 5 ] && _dcg_nginx_tay "CHƯA XÁC ĐỊNH sau chờ healthy" "$truoc" || _dcg_nginx_tay "không tới healthy" "$truoc"
             return "$kq"
@@ -2114,6 +2165,11 @@ _dcg_don_oneoff() {
         else
             tt="KHÔNG ĐỌC ĐƯỢC"
         fi
+        if [ "$(_dcg_con_lai)" -le 0 ]; then
+            warn "[one-off] HẾT NGÂN SÁCH trap khi chờ one-off alembic ($cid) — CHƯA XÁC ĐỊNH, KHÔNG dọn; mọi số đo in sau đây KHÔNG phải trạng thái cuối."
+            _dcg_oneoff_chua_xd "HẾT NGÂN SÁCH trap khi chờ" "$cid het_ngan_sach"
+            return 1
+        fi
         if [ "$SECONDS" -ge "$het" ]; then
             if [ "$kq" -ne 0 ]; then
                 warn "[one-off] KHÔNG ĐỌC ĐƯỢC trạng thái one-off alembic của lượt này ($cid) trong ${_DCG_HAN_ONEOFF}s (lỗi hoặc hết hạn Docker) — CHƯA XÁC ĐỊNH, có thể VẪN chạy. KHÔNG dọn; mọi số đo in sau đây KHÔNG phải trạng thái cuối."
@@ -2151,6 +2207,7 @@ _dcg_don_oneoff() {
     fi
     case "$tt" in
         "/$_DCG_ONEOFF_TEN|True|backend|exited")
+            _dcg_du_ngan_sach "$_DCG_HAN_LENH" "dọn one-off $cid" || return 1
             if _dcg_dk rm "$cid" >/dev/null; then
                 log "  ✓ [one-off] đã dọn one-off alembic của CHÍNH lượt này ($cid, exited)"
                 _dcg_ghi "oneoff" "$cid da_don" || true
@@ -2170,6 +2227,15 @@ _dcg_don_oneoff() {
 
 _dcg_huong_dan() {
     local s m ds cid tt_nguon oo kq
+    if [ -n "${_DCG_TRAP_HET:-}" ] && [ "$(_dcg_con_lai)" -le 0 ]; then
+        # Vòng 6b: HẾT ngân sách ⇒ in NGẮN, KHÔNG đọc Docker/CSDL.
+        warn "[cửa ghi] $1"
+        warn "  ⚠ HẾT NGÂN SÁCH trap — KHÔNG đo thêm Docker/CSDL: trạng thái container/one-off/lược đồ CHƯA XÁC ĐỊNH; daemon có thể VẪN đang làm lệnh cuối."
+        warn "  pha=$_DCG_PHA · container ghi nhận: backend ${_DCG_CID[backend]:-?} · celery-worker ${_DCG_CID[celery-worker]:-?} · celery-beat ${_DCG_CID[celery-beat]:-?} · nginx ${_DCG_NGINX_CID:-?} · one-off: tên $_DCG_ONEOFF_TEN"
+        warn "  Đo TAY theo tệp trạng thái $_DCG_TT; bản sao Step 5: ${_BAN_SAO:-CHƯA tạo} (KHÔNG phát lại tự động); vân tay 4c: $_DCG_VT_4C · câu SQL: $_DCG_VT_SQL"
+        _dcg_ghi "het_ngan_sach" "huong_dan_ngan" || true
+        return 0
+    fi
     # Vòng 5 (F43): đo one-off của lượt TRƯỚC khi in đầu khối — còn chạy hoặc KHÔNG
     # ĐỌC ĐƯỢC thì cả khối là ảnh chụp giữa chừng. Lỗi đọc KHÔNG BAO GIỜ thành "không còn".
     cid=$(cat "$_DCG_ONEOFF_GHI" 2>/dev/null) || cid=""
@@ -2214,7 +2280,7 @@ _dcg_huong_dan() {
     warn "  pha=$_DCG_PHA · tín hiệu=${_DCG_TIN_HIEU:--} · script KHÔNG tự mở ứng dụng và KHÔNG tự phát lại bản sao (F28). Trạng thái ĐO THẬT:"
     for s in $_DCG_THU_TU_MO; do
         m=$(_dcg_moc "${_DCG_CID[$s]:-khong-co}" 2>/dev/null) || m="KHÔNG đọc được"
-        ds=$(timeout -k 2 "$_DCG_HAN_LENH" $_RA_COMPOSE ps -q "$s" 2>/dev/null) || ds="KHÔNG ĐỌC ĐƯỢC"
+        ds=$(_dcg_dk ${_RA_COMPOSE#docker } ps -q "$s" 2>/dev/null) || ds="KHÔNG ĐỌC ĐƯỢC"
         warn "  '$s': container cũ ${_DCG_CID[$s]:-?} · ảnh ${_DCG_ANH[$s]:-?} · đo: $m · container ĐANG CHẠY của service: [${ds//[[:space:]]/ }]"
     done
     m=$(_dcg_dk inspect -f '{{.State.Status}}' "${_DCG_NGINX_CID:-khong-co}" 2>/dev/null) || m="KHÔNG đọc được"
@@ -2276,10 +2342,17 @@ _dcg_ngan_sach_trap() {
                 ct="mở_lại=$G(vân_tay=$P,start=3×$K,healthy=2×$H,sni=$D,pii=$V,đọc=${L}s/lần) + hướng_dẫn=$HD"
             fi ;;
         dang_migrate|migrate_do)
-            # chờ one-off: tra tên L + hạn chờ + vòng cuối 2L + 1 s + chi tiết 2L + rm L.
+            # (cả hai chế độ) chờ one-off: tra tên L + hạn chờ + vòng cuối 2L + 1 s + chi tiết 2L + rm L.
             O=$((L + _DCG_HAN_ONEOFF + 2 * L + 1 + 2 * L + L))
             tong=$((O + HD)); ct="chờ_one-off=$O + hướng_dẫn=$HD" ;;
-        khong_ap_dung|buoc8|xong|chua_dong)
+        chua_dong)
+            # Vòng 6b (F45): đường đi tiếp vẫn IN hướng dẫn (đọc Docker/CSDL); đường thường không làm gì.
+            if [ "${_DCG_DI_TIEP:-0}" = "1" ]; then
+                tong=$HD; ct="đi_tiếp: hướng_dẫn=$HD"
+            else
+                tong=0; ct="không làm gì"
+            fi ;;
+        khong_ap_dung|buoc8|xong)
             tong=0; ct="không làm gì" ;;
         *)
             tong=$HD; ct="hướng_dẫn=$HD" ;;
@@ -2304,8 +2377,14 @@ _dcg_khi_thoat() {
     ns=$(_dcg_ngan_sach_trap); ns_ct=${ns#* }; ns=${ns%% *}
     bd_trap=$SECONDS
     if [ "$ns" -gt 0 ]; then
-        log "[trap] trần thời gian của trap (pha '$_DCG_PHA'): ${ns}s — $ns_ct"
-        _dcg_ghi "tran_trap" "${ns}s pha=$_DCG_PHA bat_dau=$(date +%s)" || true
+        if [ -n "$_DCG_TRAN_GHI_DE" ] && [ "$_DCG_TRAN_GHI_DE" -lt "$ns" ]; then
+            ns_ct="$ns_ct — GHI ĐÈ QLTS_TRAN_TRAP=${_DCG_TRAN_GHI_DE}s (bảng ${ns}s)"
+            ns=$_DCG_TRAN_GHI_DE
+        fi
+        # Vòng 6b (F45): hạn chót THỰC THI — mọi bước sau đây lấy hạn = min(hạn riêng, phần còn lại).
+        _DCG_TRAP_HET=$((bd_trap + ns))
+        log "[trap] trần thời gian của trap (pha '$_DCG_PHA', đi tiếp=${_DCG_DI_TIEP:-0}): ${ns}s — $ns_ct"
+        _dcg_ghi "tran_trap" "${ns}s pha=$_DCG_PHA bat_dau=$(date +%s) di_tiep=${_DCG_DI_TIEP:-0}" || true
     fi
     case "$_DCG_PHA" in
         khong_ap_dung|buoc8|xong)
@@ -2346,7 +2425,7 @@ _dcg_khi_thoat() {
         local da=$((SECONDS - bd_trap))
         _dcg_ghi "thoi_gian_trap" "${da}s/${ns}s" || true
         if [ "$da" -gt "$ns" ]; then
-            warn "[trap] ⚠ trap chạy ${da}s — VƯỢT trần ${ns}s (có bước chưa được tính vào trần)"
+            warn "[trap] ⚠ trap chạy ${da}s — VƯỢT trần ${ns}s (phần vượt = ân hạn -k của lệnh cuối hoặc bước chưa tính)"
         else
             log "[trap] trap chạy ${da}s / trần ${ns}s"
         fi

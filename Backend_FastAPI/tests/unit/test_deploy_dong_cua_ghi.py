@@ -1561,8 +1561,9 @@ def test_v5_d_doi_chung_cid_chua_ghi_va_xac_nhan_khong_co_thi_khong_danh_dau(tmp
          """    ds=$(_dcg_dk ps -a -q --no-trunc --filter "name=^/?$1\\$" 2>/dev/null) || return 1\n""",
          """    ds=$(_dcg_dk ps -a -q --no-trunc --filter "name=^/?$1\\$" 2>/dev/null) || true\n"""),
         ("bỏ hạn từng lệnh",
-         """_dcg_dk() { timeout -k 2 "$_DCG_HAN_LENH" docker "$@"; }\n""",
-         """_dcg_dk() { docker "$@"; }\n"""),
+         # vòng 6b: `_dcg_dk` nay lấy hạn = min(hạn đọc, phần còn lại của trap) — gỡ đúng dòng có `timeout`.
+         """    timeout -k 2 "$h" docker "$@"\n""",
+         """    docker "$@"\n"""),
         ("bỏ cờ CHƯA XÁC ĐỊNH",
          """_dcg_oneoff_chua_xd() {\n    _DCG_ONEOFF_CON_CHAY=1\n""",
          """_dcg_oneoff_chua_xd() {\n"""),
@@ -1773,24 +1774,22 @@ def test_v6_doc_treo_o_tung_buoc_thi_dung_fail_closed_trong_han(
 
 
 @_bo_qua_neu_khong_posix
-def test_v6_tran_trap_mac_dinh_tinh_tu_gia_tri_mac_dinh_va_nho_hon_command_timeout(tmp_path: Path) -> None:
+def test_v6_tran_trap_mac_dinh_tinh_tu_gia_tri_mac_dinh(tmp_path: Path) -> None:
     import re
 
     goc = _dung_san_khau(tmp_path)
     ket, _ = _chay_deploy(goc, **_LUI)   # giá trị MẶC ĐỊNH, không ghi đè hạn nào
     ra = _ra(ket)
-    m = re.search(r"\[trap\] trần thời gian của trap \(pha 'da_dong'\): (\d+)s — (.+)", ra)
+    m = re.search(r"\[trap\] trần thời gian của trap \(pha 'da_dong', đi tiếp=0\): (\d+)s — (.+)", ra)
     assert m, f"đầu trap KHÔNG in trần thời gian:\n{ra[-2000:]}"
     tran = int(m.group(1))
-    # Mặc định (đọc 5 s, psql 60 s, start 10 s, restart 30 s, đầu dò 60 s, PII 90 s, healthy 60 s):
-    # mở lại 779 s + hướng dẫn cuối 135 s. Đổi một hạn mặc định ⇒ ca này đỏ ⇒ xét lại trần.
-    assert tran == 914, f"trần mặc định đổi: {tran}s ({m.group(2)})"
+    # Mặc định (đọc 10 s, psql 60 s, start 10 s, restart 30 s, đầu dò 60 s, PII 90 s, healthy 60 s):
+    # mở lại 1.029 s + hướng dẫn cuối 185 s. Đổi một hạn mặc định ⇒ ca này đỏ ⇒ xét lại trần.
+    # Vòng 6b (owner): KHÔNG so với `command_timeout: 20m` — đó là hạn của CẢ phiên SSH; trần
+    # 1.214 s là giới hạn phải ĐO trên VPS, không phải một con số đặt cho vừa.
+    assert tran == 1214, f"trần mặc định đổi: {tran}s ({m.group(2)})"
     for phan in ("vân_tay=", "start=3×", "healthy=2×", "sni=", "pii=", "hướng_dẫn="):
         assert phan in m.group(2), f"trần thiếu thành phần {phan}: {m.group(2)}"
-    yml = (_DEPLOY.parent.parent / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
-    phut = re.search(r"command_timeout:\s*(\d+)m", yml)
-    assert phut, "không đọc được command_timeout của ssh-action"
-    assert tran < int(phut.group(1)) * 60, f"trần trap {tran}s ≥ command_timeout {phut.group(1)}m của ssh-action"
     assert f"tran_trap\t{tran}s pha=da_dong" in _tep_trang_thai(goc), "trần không được ghi vào nhật ký local"
 
 
@@ -1834,12 +1833,12 @@ def test_v6_trap_that_ket_thuc_trong_tran_khi_cac_lenh_treo(tmp_path: Path) -> N
         ("restart nginx: bỏ hạn",
          """timeout -k 5 "$_DCG_HAN_NGINX_RESTART" docker restart""", "docker restart"),
         ("đầu dò: bỏ hạn",
-         """timeout -k 5 "$_DCG_HAN_DO_SNI" docker run""", "docker run"),
+         """timeout -k 5 "$kq" docker run""", "docker run"),
         ("đầu dò: hết hạn coi là KHÔNG ĐẠT",
-         """        warn "[nginx · dịch vụ] đầu dò SNI HẾT HẠN (${_DCG_HAN_DO_SNI}s) — dịch vụ CHƯA ĐƯỢC CHỨNG MINH (CHƯA XÁC ĐỊNH, không phải ĐẠT)"\n        return 5\n""",
+         """        warn "[nginx · dịch vụ] đầu dò SNI HẾT HẠN (hạn ${_DCG_HAN_DO_SNI}s, còn ngân sách trap $(_dcg_con_lai)s) — dịch vụ CHƯA ĐƯỢC CHỨNG MINH (CHƯA XÁC ĐỊNH, không phải ĐẠT)"\n        return 5\n""",
          """        return 1\n"""),
         ("PII: bỏ hạn",
-         """timeout -k 5 "$_DCG_HAN_PII" bash "$SCRIPT_DIR/nginx-verify.sh\"""", """bash "$SCRIPT_DIR/nginx-verify.sh\""""),
+         """timeout -k 5 "$h" bash "$SCRIPT_DIR/nginx-verify.sh\"""", """bash "$SCRIPT_DIR/nginx-verify.sh\""""),
         ("đọc 3b: bỏ hạn",
          """        _RA_IMG=$(_dcg_dk inspect -f '{{.Image}}' "$_RA_CID" 2>/dev/null || true)\n""",
          """        _RA_IMG=$(docker inspect -f '{{.Image}}' "$_RA_CID" 2>/dev/null || true)\n"""),
@@ -1896,5 +1895,152 @@ def test_kiem_nguoc_v6_go_tung_guard(tmp_path: Path, ten_ca: str, cu: str, moi: 
         assert _tu_luc_treo(goc) >= 20, f"{ten_ca}: vẫn xong nhanh ⇒ ca đọc-treo {buoc} không canh hạn"
     else:
         ket, _ = _chay_deploy(goc, **_LUI)
-        m = re.search(r"\[trap\] trần thời gian của trap \(pha 'da_dong'\): (\d+)s", _ra(ket))
-        assert m and int(m.group(1)) != 914, f"{ten_ca}: trần không đổi ⇒ ca trần mặc định không canh công thức"
+        m = re.search(r"\[trap\] trần thời gian của trap \(pha 'da_dong', đi tiếp=0\): (\d+)s", _ra(ket))
+        assert m and int(m.group(1)) != 1214, f"{ten_ca}: trần không đổi ⇒ ca trần mặc định không canh công thức"
+
+
+# =============================================================================
+# XII. Vòng 6b (F45) — ngân sách trap theo pha × đi tiếp; hạn tổng được THỰC THI
+# =============================================================================
+# Hạn chót = lúc bắt đầu trap + ngân sách; trước mỗi bước: hạn lệnh = min(hạn riêng, phần còn
+# lại); lệnh GHI chỉ bắt đầu khi phần còn lại ≥ hạn của nó + 5 s; hết ngân sách ⇒ CHƯA XÁC ĐỊNH,
+# hướng dẫn NGẮN không đọc Docker/CSDL; KHÔNG chạy lại lệnh ghi. `QLTS_TRAN_TRAP` chỉ HẠ trần.
+_DAU_HET_NS = "HẾT NGÂN SÁCH trap — KHÔNG đo thêm Docker/CSDL"
+
+
+def _bang_ngan_sach(pha: str, di_tiep: str, deploy_sh: str | None = None) -> int:
+    """Chạy ĐÚNG hàm `_dcg_ngan_sach_trap` của deploy.sh với hạn MẶC ĐỊNH."""
+    import re
+    import subprocess
+
+    than = _DEPLOY.read_text(encoding="utf-8") if deploy_sh is None else deploy_sh
+    ham = re.search(r"^_dcg_ngan_sach_trap\(\) \{\n.*?^\}\n", than, re.S | re.M).group(0)
+    kich = (
+        "set -eu\n_DCG_HAN_LENH=10; _DCG_HAN_PSQL=60; _DCG_HAN_KHOI_DONG=10; _DCG_HAN_NGINX_RESTART=30\n"
+        "_DCG_HAN_DO_SNI=60; _DCG_HAN_PII=90; _HAN_HEALTH=60; _DCG_HAN_ONEOFF=60\n"
+        f"_DCG_PHA={pha}; _DCG_DI_TIEP={di_tiep}\n" + ham + "\n_dcg_ngan_sach_trap\n"
+    )
+    ra = subprocess.run(["bash", "-c", kich], capture_output=True, text=True, timeout=30)
+    assert ra.returncode == 0, ra.stderr
+    return int(ra.stdout.split()[0])
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "pha,di_tiep,ky_vong",
+    [
+        ("chua_dong", "1", 185), ("chua_dong", "0", 0),
+        ("dang_dong", "1", 185), ("dang_dong", "0", 1214),
+        ("da_dong", "1", 185), ("da_dong", "0", 1214),
+        ("dang_migrate", "1", 318), ("dang_migrate", "0", 318),
+        ("migrate_do", "1", 318), ("migrate_do", "0", 318),
+        ("da_migrate", "0", 185), ("da_migrate", "1", 185),
+        ("khong_ap_dung", "0", 0), ("buoc8", "1", 0), ("xong", "0", 0),
+    ],
+)
+def test_v6b_bang_ngan_sach_theo_pha_va_che_do_di_tiep(pha: str, di_tiep: str, ky_vong: int) -> None:
+    # Mọi nhánh trap có thể gọi đều có ngân sách: đi tiếp ở pha trước migration vẫn IN hướng dẫn
+    # (đọc Docker/CSDL) ⇒ > 0. Hạn MẶC ĐỊNH (đọc 10 s).
+    assert _bang_ngan_sach(pha, di_tiep) == ky_vong
+
+
+@_bo_qua_neu_khong_posix
+def test_v6b_chua_dong_di_tiep_co_ngan_sach_va_trap_ket_thuc_trong_ngan_sach(tmp_path: Path) -> None:
+    import re
+    import time
+
+    goc = _san_khau_hai_luot(tmp_path)
+    ket, _ = _ca_x6(goc)   # lượt đi tiếp đỏ ở 4c (pha chua_dong) ⇒ trap IN hướng dẫn
+    t_xong = time.time()
+    ra = _ra(ket)
+    tt = _tt(goc, _TS_TIEP).read_text(encoding="utf-8")
+    m = re.search(r"tran_trap\t(\d+)s pha=chua_dong bat_dau=(\d+) di_tiep=1", tt)
+    assert m, f"chua_dong + đi tiếp KHÔNG có ngân sách:\n{tt}"
+    assert int(m.group(1)) > 0
+    assert t_xong - int(m.group(2)) <= int(m.group(1)), "trap vượt ngân sách"
+    assert "ĐI TIẾP dừng TRƯỚC migration" in ra
+
+
+def _ca_ns_do_treo(goc: Path, treo: str = "40", **them):
+    # Đầu dò SNI treo; hạn riêng của đầu dò LỚN (60 s) nhưng ngân sách tổng NHỎ (15 s).
+    return _chay_deploy(goc, STUB_DO_TREO="1", STUB_TREO_GIAY=treo, **_LUI,
+                        **{**_V6, "QLTS_HAN_DO_SNI": "60", "QLTS_TRAN_TRAP": "15", **them})
+
+
+def _thoi_gian_trap(goc: Path, t_xong: float) -> tuple[int, float]:
+    import re
+
+    m = re.search(r"tran_trap\t(\d+)s pha=\w+ bat_dau=(\d+)", _tep_trang_thai(goc))
+    assert m, _tep_trang_thai(goc)
+    return int(m.group(1)), t_xong - int(m.group(2))
+
+
+@_bo_qua_neu_khong_posix
+def test_v6b_treo_voi_ngan_sach_nho_thi_trap_dung_dung_han_chua_xac_dinh(tmp_path: Path) -> None:
+    import time
+
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _ca_ns_do_treo(goc)
+    tran, da = _thoi_gian_trap(goc, time.time())
+    ra, tt = _ra(ket), _tep_trang_thai(goc)
+    assert tran == 15, f"ghi đè QLTS_TRAN_TRAP không hạ trần: {tran}"
+    assert da <= tran + 3, f"trap chạy {da:.1f}s — VƯỢT ngân sách {tran}s (hạn tổng không được thực thi)"
+    assert "mo_lai_cu\tCHUA_XAC_DINH" in tt
+    assert _DAU_HET_NS in ra and "het_ngan_sach\thuong_dan_ngan" in tt
+    for dv in ("backend", "celery-worker", "celery-beat"):
+        assert _so_lan_goi(goc, "start", _cid_gia(dv)) == 1, f"lệnh ghi cho {dv} bị CHẠY LẠI"
+
+
+@_bo_qua_neu_khong_posix
+def test_v6b_khong_bat_dau_lenh_ghi_khi_ngan_sach_khong_du(tmp_path: Path) -> None:
+    import time
+
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _chay_deploy(goc, **_LUI, **{**_V6, "QLTS_HAN_KHOI_DONG": "30", "QLTS_TRAN_TRAP": "10"})
+    tran, da = _thoi_gian_trap(goc, time.time())
+    tt = _tep_trang_thai(goc)
+    assert sum(_so_lan_goi(goc, "start", _cid_gia(dv)) for dv in _DV_GHI) == 0, (
+        "còn 10 s mà vẫn BẮT ĐẦU `docker start` hạn 30 s")
+    assert "het_ngan_sach\tmở_lại_·_backend_(docker_start)" in tt, tt
+    assert "mo_lai_cu\tCHUA_XAC_DINH" in tt
+    assert da <= tran + 3
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,cu,moi",
+    [
+        ("bỏ cơ chế thực thi (chỉ còn so cuối)",
+         """    if [ -z "${_DCG_TRAP_HET:-}" ]; then printf '%s\\n' 999999; return 0; fi\n""",
+         """    printf '%s\\n' 999999; return 0\n"""),
+        ("bảng: chua_dong = 0 khi đi tiếp",
+         """                tong=$HD; ct="đi_tiếp: hướng_dẫn=$HD"\n""", """                tong=0; ct="không làm gì"\n"""),
+        ("lệnh ghi bắt đầu dù không đủ ngân sách",
+         """    [ "$r" -ge $(( $1 + 5 )) ] && return 0\n""", """    return 0\n"""),
+        ("hết ngân sách vẫn in hướng dẫn đầy đủ",
+         """    if [ -n "${_DCG_TRAP_HET:-}" ] && [ "$(_dcg_con_lai)" -le 0 ]; then\n""", """    if false; then\n"""),
+    ],
+)
+def test_kiem_nguoc_v6b_go_tung_guard(tmp_path: Path, ten_ca: str, cu: str, moi: str) -> None:
+    import time
+
+    dot = _ban_dot_bien(cu, moi)
+    if ten_ca.startswith("bỏ cơ chế"):
+        goc = _dung_san_khau(tmp_path, deploy_sh=dot)
+        _ca_ns_do_treo(goc, treo="25")
+        tran, da = _thoi_gian_trap(goc, time.time())
+        assert da > tran + 3, f"{ten_ca}: trap vẫn dừng trong {tran}s ⇒ ca treo không canh cơ chế thực thi"
+    elif ten_ca.startswith("bảng"):
+        assert _bang_ngan_sach("chua_dong", "1", dot) == 0
+        goc = _san_khau_hai_luot(tmp_path, deploy_sh=dot)
+        _ca_x6(goc)
+        assert "tran_trap" not in _tt(goc, _TS_TIEP).read_text(encoding="utf-8"), (
+            f"{ten_ca}: vẫn có ngân sách ⇒ ca chua_dong+đi tiếp không canh bảng")
+    elif ten_ca.startswith("lệnh ghi"):
+        goc = _dung_san_khau(tmp_path, deploy_sh=dot)
+        _chay_deploy(goc, **_LUI, **{**_V6, "QLTS_HAN_KHOI_DONG": "30", "QLTS_TRAN_TRAP": "10"})
+        assert _so_lan_goi(goc, "start", _cid_gia("backend")) >= 1, f"{ten_ca}: vẫn không start ⇒ ca không canh"
+    else:
+        goc = _dung_san_khau(tmp_path, deploy_sh=dot)
+        ket, _ = _ca_ns_do_treo(goc)
+        assert _DAU_HET_NS not in _ra(ket), f"{ten_ca}: vẫn in bản ngắn ⇒ ca không canh nhánh in ngắn"
