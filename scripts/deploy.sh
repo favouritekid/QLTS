@@ -327,6 +327,54 @@ fi
 log "Nginx template sẽ được render TRONG container (domain=$DOMAIN, admission_frozen=$NGINX_ADMISSION_FROZEN)"
 
 # =============================================================================
+# Đọc Docker CÓ HẠN, phân biệt "KHÔNG TỒN TẠI" với "KHÔNG ĐỌC ĐƯỢC" (vòng 5, F43)
+# =============================================================================
+# Lỗi đọc (daemon mất kết nối, lệnh treo) KHÔNG phải bằng chứng container đã biến
+# mất. `docker inspect` lỗi chỉ được hiểu là "không tồn tại" khi phép liệt kê
+# `docker ps -a --filter id=…` CHẠY ĐƯỢC (rc 0) và trả RỖNG; mọi trường hợp khác
+# là KHÔNG ĐỌC ĐƯỢC. Mỗi lệnh đọc có hạn riêng (QLTS_HAN_LENH_DOCKER, mặc định
+# 10 s): daemon kẹt không được giữ trap / hướng dẫn / vòng chờ mãi.
+_DCG_HAN_LENH="${QLTS_HAN_LENH_DOCKER:-10}"
+case "$_DCG_HAN_LENH" in
+    ''|*[!0-9]*) error "QLTS_HAN_LENH_DOCKER phải là số nguyên giây, nhận: '$_DCG_HAN_LENH'" ;;
+esac
+{ [ "$_DCG_HAN_LENH" -ge 1 ] && [ "$_DCG_HAN_LENH" -le 120 ]; } \
+    || error "QLTS_HAN_LENH_DOCKER ngoài khoảng 1..120: '$_DCG_HAN_LENH'"
+_DCG_HAN_PSQL="${QLTS_HAN_PSQL:-60}"
+case "$_DCG_HAN_PSQL" in
+    ''|*[!0-9]*) error "QLTS_HAN_PSQL phải là số nguyên giây, nhận: '$_DCG_HAN_PSQL'" ;;
+esac
+{ [ "$_DCG_HAN_PSQL" -ge 5 ] && [ "$_DCG_HAN_PSQL" -le 600 ]; } \
+    || error "QLTS_HAN_PSQL ngoài khoảng 5..600: '$_DCG_HAN_PSQL'"
+command -v timeout >/dev/null 2>&1 \
+    || error "thiếu lệnh 'timeout' (coreutils) — không giới hạn được thời gian từng lệnh đọc Docker. DỪNG trước mọi thay đổi."
+_dcg_dk() { timeout -k 2 "$_DCG_HAN_LENH" docker "$@"; }
+# _dcg_doc_ct <định dạng> <CID> — in kết quả `docker inspect -f`. Mã trả:
+#   0 đọc được · 2 ĐÃ XÁC NHẬN không tồn tại · 1 KHÔNG ĐỌC ĐƯỢC (lỗi, hết hạn,
+#   hoặc liệt kê vẫn thấy container mà inspect hỏng).
+_dcg_doc_ct() {
+    local ra ds
+    if ra=$(_dcg_dk inspect -f "$1" "$2" 2>/dev/null); then
+        printf '%s\n' "$ra"
+        return 0
+    fi
+    ds=$(_dcg_dk ps -a -q --no-trunc --filter "id=$2" 2>/dev/null) || return 1
+    [ -z "${ds//[[:space:]]/}" ] || return 1
+    return 2
+}
+# _dcg_cid_theo_ten <tên> — in CID 64 hex của container mang ĐÚNG tên ấy. Mã trả như
+# `_dcg_doc_ct`: 0 thấy · 2 ĐÃ XÁC NHẬN không có · 1 KHÔNG ĐỌC ĐƯỢC.
+_dcg_cid_theo_ten() {
+    local ds
+    ds=$(_dcg_dk ps -a -q --no-trunc --filter "name=^/?$1\$" 2>/dev/null) || return 1
+    ds=${ds//[[:space:]]/}
+    [ -n "$ds" ] || return 2
+    case "$ds" in *[!0-9a-f]*) return 1 ;; esac
+    [ "${#ds}" -eq 64 ] || return 1
+    printf '%s\n' "$ds"
+}
+
+# =============================================================================
 # Step 3a: ĐI TIẾP SAU MIGRATION ĐỎ (vòng 4, F40) — chỉ khi được CHO PHÉP tường minh
 # =============================================================================
 # Sau F28, migration đỏ để ba service (backend, celery-worker, celery-beat) NẰM
@@ -409,33 +457,38 @@ if [ "$_DI_TIEP" = "1" ]; then
         _DT_ANH[$_S]=$_ANH
         _DT_MOC[$_S]=$(printf '%s\n' "$_DT_DONG" | awk '{ print $2 }')
         # Trạng thái THẬT — mọi phép đọc thất bại cũng là DỪNG.
-        _DS=$($_DT_COMPOSE ps -q "$_S") || error "[đi tiếp] không liệt kê được container đang chạy của '$_S'."
+        _DS=$(timeout -k 2 "$_DCG_HAN_LENH" $_DT_COMPOSE ps -q "$_S") || error "[đi tiếp] không liệt kê được container đang chạy của '$_S' (lỗi hoặc hết hạn Docker)."
         [ -z "${_DS//[[:space:]]/}" ] || error "[đi tiếp] '$_S' có container ĐANG CHẠY (${_DS//[[:space:]]/ }) — trạng thái không phải 'dừng sau migration đỏ'. Từ chối, không đụng gì."
-        _M=$(docker inspect -f '{{.State.Status}}|{{.State.StartedAt}}|{{.State.FinishedAt}}' "$_CID" 2>/dev/null) \
-            || error "[đi tiếp] CID ghi nhận của '$_S' ($_CID) KHÔNG còn — không ghim được ảnh cũ từ container đã ghi nhận. Từ chối."
+        _M=$(_dcg_dk inspect -f '{{.State.Status}}|{{.State.StartedAt}}|{{.State.FinishedAt}}' "$_CID" 2>/dev/null) \
+            || error "[đi tiếp] CID ghi nhận của '$_S' ($_CID) KHÔNG còn hoặc KHÔNG đọc được (lỗi/hết hạn Docker) — không ghim được ảnh cũ từ container đã ghi nhận. Từ chối."
         [ "${_M%%|*}" = "exited" ] || error "[đi tiếp] container ghi nhận của '$_S' đang '${_M%%|*}' (cần exited). Từ chối."
         [ "$_M" = "${_DT_MOC[$_S]}" ] || error "[đi tiếp] container ghi nhận của '$_S' ĐÃ CHẠY LẠI từ lúc đóng (mốc ghi=${_DT_MOC[$_S]} · đo=$_M). Từ chối."
-        _M=$(docker inspect -f '{{.Image}}' "$_CID" 2>/dev/null) || error "[đi tiếp] không đọc được ảnh của '$_S'."
+        _M=$(_dcg_dk inspect -f '{{.Image}}' "$_CID" 2>/dev/null) || error "[đi tiếp] không đọc được ảnh của '$_S'."
         [ "$_M" = "$_ANH" ] || error "[đi tiếp] ảnh container '$_S' ($_M) KHÁC ảnh ghi nhận ($_ANH). Từ chối."
     done
     _DT_DONG=$(_dt_doc nginx)
     [ "$(printf '%s\n' "$_DT_DONG" | grep -c '[^[:space:]]' || true)" -eq 1 ] || error "[đi tiếp] tệp trạng thái không có ĐÚNG MỘT dòng 'nginx'."
     _DT_NGINX=${_DT_DONG//[[:space:]]/}
-    _DS=$($_DT_COMPOSE ps -q nginx) || error "[đi tiếp] không liệt kê được container nginx."
+    _DS=$(timeout -k 2 "$_DCG_HAN_LENH" $_DT_COMPOSE ps -q nginx) || error "[đi tiếp] không liệt kê được container nginx (lỗi hoặc hết hạn Docker)."
     [ "${_DS//[[:space:]]/}" = "$_DT_NGINX" ] || error "[đi tiếp] nginx đang phục vụ (${_DS//[[:space:]]/ }) KHÁC CID ghi nhận ($_DT_NGINX). Từ chối."
-    _M=$(docker inspect -f '{{.State.Status}}' "$_DT_NGINX" 2>/dev/null) || _M="?"
+    _M=$(_dcg_dk inspect -f '{{.State.Status}}' "$_DT_NGINX" 2>/dev/null) || _M="KHÔNG đọc được"
     [ "$_M" = "running" ] || error "[đi tiếp] nginx ghi nhận đang '$_M' (cần running). Từ chối."
     _DT_OO=$(cat "${_DT_TT_CU%.trang-thai}.oneoff-cid" 2>/dev/null) || _DT_OO=""
     if [ -n "$_DT_OO" ]; then
-        if _M=$(docker inspect -f '{{.State.Status}}' "$_DT_OO" 2>/dev/null); then
-            case "$_M" in exited|dead) : ;; *) error "[đi tiếp] one-off alembic của lượt đỏ ($_DT_OO) đang '$_M' — migration có thể VẪN chạy. Chờ nó kết thúc rồi chạy lại." ;; esac
-        fi
+        # Vòng 5 (F43): đọc lỗi KHÔNG phải "đã hết" — chỉ exited/dead hoặc "ĐÃ XÁC NHẬN
+        # không tồn tại" (`--rm` đã dọn) mới qua; KHÔNG đọc được ⇒ TỪ CHỐI.
+        _M=$(_dcg_doc_ct '{{.State.Status}}' "$_DT_OO") && _KQ=0 || _KQ=$?
+        case "$_KQ" in
+            0) case "$_M" in exited|dead) : ;; *) error "[đi tiếp] one-off alembic của lượt đỏ ($_DT_OO) đang '$_M' — migration có thể VẪN chạy. Chờ nó kết thúc rồi chạy lại." ;; esac ;;
+            2) : ;;
+            *) error "[đi tiếp] KHÔNG ĐỌC ĐƯỢC trạng thái one-off alembic của lượt đỏ ($_DT_OO) (lỗi hoặc hết hạn Docker) — không chứng minh được migration đã dừng. Từ chối." ;;
+        esac
     fi
-    _DT_DU_AN=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "${_DT_CID[backend]}" 2>/dev/null) || _DT_DU_AN=""
+    _DT_DU_AN=$(_dcg_dk inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "${_DT_CID[backend]}" 2>/dev/null) || _DT_DU_AN=""
     [ -n "$_DT_DU_AN" ] || error "[đi tiếp] không đọc được nhãn project Compose của backend ghi nhận."
-    _DS=$(docker ps -q --filter "label=com.docker.compose.project=$_DT_DU_AN" \
+    _DS=$(_dcg_dk ps -q --filter "label=com.docker.compose.project=$_DT_DU_AN" \
         --filter label=com.docker.compose.oneoff=True --filter label=com.docker.compose.service=backend) \
-        || error "[đi tiếp] không liệt kê được one-off đang chạy."
+        || error "[đi tiếp] không liệt kê được one-off đang chạy (lỗi hoặc hết hạn Docker) — không chứng minh được migration đã dừng. Từ chối."
     [ -z "${_DS//[[:space:]]/}" ] || error "[đi tiếp] còn one-off của service backend ĐANG CHẠY (${_DS//[[:space:]]/ }) — có thể là migration. Chờ nó kết thúc rồi chạy lại."
     log "  ✓ [đi tiếp] trạng thái khớp lượt đỏ ($(basename -- "$_DT_TT_CU"), pha '$_DT_PHA_CUOI'): 3 CID exited đúng mốc, 0 container đang chạy, nginx đúng CID, 0 one-off đang chạy"
 elif [ "$_DT_TU" = "1" ]; then
@@ -1371,6 +1424,8 @@ _DCG_ONEOFF_XONG=0
 # trạng thái; hết hạn ⇒ báo "còn chạy / chưa xác định", KHÔNG dọn cưỡng bức, và
 # mọi số đo in sau đó KHÔNG được gọi là trạng thái cuối (`_DCG_ONEOFF_CON_CHAY=1`).
 _DCG_ONEOFF_CON_CHAY=0
+# Vòng 5 (F43): lý do của trạng thái CHƯA XÁC ĐỊNH (còn chạy / KHÔNG ĐỌC ĐƯỢC Docker / CID hỏng).
+_DCG_ONEOFF_LY_DO=""
 _DCG_HAN_ONEOFF="${QLTS_HAN_CHO_ONEOFF:-60}"
 case "$_DCG_HAN_ONEOFF" in
     ''|*[!0-9]*) error "QLTS_HAN_CHO_ONEOFF phải là số nguyên giây, nhận: '$_DCG_HAN_ONEOFF'" ;;
@@ -1431,7 +1486,8 @@ _dcg_pha() {
 # MỘT câu SQL chỉ đọc. `</dev/null`: `exec` của Compose gắn stdin theo mặc
 # định — không được nuốt stdin của tiến trình gọi script.
 _dcg_psql() {
-    $_RA_COMPOSE exec -T postgres psql -X -A -t -q -v ON_ERROR_STOP=1 \
+    # Vòng 5 (F43): có hạn — daemon/CSDL kẹt không được giữ cổng hay trap mãi.
+    timeout -k 5 "$_DCG_HAN_PSQL" $_RA_COMPOSE exec -T postgres psql -X -A -t -q -v ON_ERROR_STOP=1 \
         -U "${POSTGRES_USER:-qlts}" -d "${POSTGRES_DB:-qlts_production}" \
         -c "$1" </dev/null
 }
@@ -1524,10 +1580,10 @@ _dcg_so_van_tay() {
 # Mốc vòng đời của MỘT container: Status|StartedAt|FinishedAt. Container bị bật
 # rồi tắt lại giữa chừng vẫn `exited`, nhưng hai mốc thời gian đã đổi.
 _dcg_moc() {
-    docker inspect -f '{{.State.Status}}|{{.State.StartedAt}}|{{.State.FinishedAt}}' "$1"
+    _dcg_dk inspect -f '{{.State.Status}}|{{.State.StartedAt}}|{{.State.FinishedAt}}' "$1"
 }
 _dcg_ip() {
-    docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$1"
+    _dcg_dk inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$1"
 }
 
 # Đo cửa ghi phía CONTAINER. Trả ≠0 kèm lý do; không `error` ở đây — bên gọi
@@ -1537,8 +1593,8 @@ _dcg_ip() {
 _dcg_cua_dong() {
     local nhan="$1" s ds m
     for s in $_DCG_DICH_VU; do
-        if ! ds=$($_RA_COMPOSE ps -q "$s"); then
-            warn "[$nhan] không liệt kê được container ĐANG CHẠY của '$s' — không đo được"
+        if ! ds=$(timeout -k 2 "$_DCG_HAN_LENH" $_RA_COMPOSE ps -q "$s"); then
+            warn "[$nhan] không liệt kê được container ĐANG CHẠY của '$s' (lỗi hoặc hết hạn Docker) — không đo được"
             return 1
         fi
         if [ -n "$ds" ]; then
@@ -1810,8 +1866,11 @@ _dcg_mo_lai_cu() {
 # vào `$_DCG_ONEOFF_GHI` — tệp RIÊNG, không chen vào tệp trạng thái.
 _dcg_theo_oneoff() {
     local i=0 cid
+    # Vòng 5 (F43): mỗi lần tra có hạn (`_dcg_dk`). Tra lỗi ở đây KHÔNG kết luận gì —
+    # chỉ là chưa ghi được; người KẾT LUẬN là `_dcg_don_oneoff`/hướng dẫn, và chúng
+    # tra lại theo tên, phân biệt "ĐÃ XÁC NHẬN không có" với "KHÔNG ĐỌC ĐƯỢC".
     while [ "$i" -lt 600 ]; do
-        cid=$(docker inspect -f '{{.Id}}' "$_DCG_ONEOFF_TEN" 2>/dev/null) || cid=""
+        cid=$(_dcg_dk inspect -f '{{.Id}}' "$_DCG_ONEOFF_TEN" 2>/dev/null) || cid=""
         case "$cid" in
             ''|*[!0-9a-f]*) : ;;
             *)
@@ -1831,40 +1890,84 @@ _dcg_dung_theo_oneoff() {
     _DCG_ONEOFF_THEO=""
 }
 
+# Vòng 5 (F43): đánh dấu trạng thái one-off CHƯA XÁC ĐỊNH — mọi số đo in sau đó
+# KHÔNG được gọi là trạng thái cuối. <lý do> <giá trị dòng 'oneoff' của tệp trạng thái>
+_dcg_oneoff_chua_xd() {
+    _DCG_ONEOFF_CON_CHAY=1
+    _DCG_ONEOFF_LY_DO="$1"
+    _dcg_ghi "oneoff" "$2" || true
+}
+
 # Dọn one-off alembic CỦA CHÍNH LƯỢT NÀY: CHỈ theo CID đã ghi nhận, CHỈ khi
 # container ấy mang đúng tên của lượt, nhãn one-off của service backend, và đang
 # `exited`. Đang chạy / không khớp ⇒ KHÔNG đụng (alembic có thể VẪN đang chạy).
 # `docker rm` không `-f`. Không bao giờ dọn theo nhãn chung: one-off của lượt
 # khác (hoặc của người vận hành) không thuộc quyền lượt này.
 _dcg_don_oneoff() {
-    local cid tt het da_bao=0
+    local cid tt het da_bao=0 nguon=ghi_nhan kq
     _DCG_ONEOFF_XONG=1
     _dcg_dung_theo_oneoff
     cid=$(cat "$_DCG_ONEOFF_GHI" 2>/dev/null) || cid=""
     case "$cid" in
         '')
-            log "  [one-off] chưa ghi nhận CID one-off nào của lượt này ($_DCG_ONEOFF_TEN) — không dọn gì"
-            return 0 ;;
+            # Vòng 5 (F43): CHƯA ghi nhận CID KHÔNG có nghĩa là không có one-off — bộ
+            # theo dõi nền có thể đã đọc lỗi trong khi migration chạy. Tra theo TÊN
+            # riêng của lượt: chỉ ĐO (không bao giờ dọn theo tên — chỉ dọn CID ghi nhận).
+            cid=$(_dcg_cid_theo_ten "$_DCG_ONEOFF_TEN") && kq=0 || kq=$?
+            case "$kq" in
+                0)
+                    nguon=theo_ten
+                    log "  [one-off] chưa ghi nhận CID, nhưng tra theo tên $_DCG_ONEOFF_TEN thấy $cid — chỉ ĐO, KHÔNG dọn (chỉ dọn CID đã ghi nhận)" ;;
+                2)
+                    log "  [one-off] chưa ghi nhận CID; tra theo tên: ĐÃ XÁC NHẬN không có container nào tên $_DCG_ONEOFF_TEN — không dọn gì"
+                    _dcg_ghi "oneoff" "- khong_co_theo_ten" || true
+                    return 0 ;;
+                *)
+                    warn "[one-off] chưa ghi nhận CID và KHÔNG ĐỌC ĐƯỢC Docker khi tra theo tên $_DCG_ONEOFF_TEN (lỗi hoặc hết hạn) — one-off CÓ THỂ VẪN CHẠY: CHƯA XÁC ĐỊNH. KHÔNG dọn; mọi số đo in sau đây KHÔNG phải trạng thái cuối."
+                    _dcg_oneoff_chua_xd "chưa ghi nhận CID, tra theo tên KHÔNG ĐỌC ĐƯỢC" "- khong_doc_duoc_theo_ten"
+                    return 1 ;;
+            esac ;;
         *[!0-9a-f]*)
-            warn "[one-off] CID ghi nhận có ký tự lạ ('$cid') — KHÔNG dọn"
+            warn "[one-off] CID ghi nhận có ký tự lạ ('$cid') — KHÔNG dọn; trạng thái one-off CHƯA XÁC ĐỊNH"
+            _dcg_oneoff_chua_xd "CID ghi nhận hỏng" "- cid_hong"
             return 1 ;;
     esac
     if [ "${#cid}" -ne 64 ]; then
-        warn "[one-off] CID ghi nhận dài ${#cid} (cần 64 hex) — KHÔNG dọn"
+        warn "[one-off] CID ghi nhận dài ${#cid} (cần 64 hex) — KHÔNG dọn; trạng thái one-off CHƯA XÁC ĐỊNH"
+        _dcg_oneoff_chua_xd "CID ghi nhận hỏng" "- cid_hong"
         return 1
     fi
     # Vòng 4 (owner chốt): CHỜ one-off kết thúc trong thời hạn HỮU HẠN. Đo được:
     # bị ngắt giữa migrate thì alembic CHẠY TIẾP sau khi deploy.sh thoát — in trạng
     # thái lúc ấy là in một ảnh chụp giữa chừng. Hết hạn ⇒ KHÔNG dọn cưỡng bức.
+    # Vòng 5 (F43): mỗi lần đọc có hạn (`_dcg_doc_ct`); đọc lỗi KHÔNG thoát vòng —
+    # thử lại tới hết hạn rồi báo CHƯA XÁC ĐỊNH. Chỉ "ĐÃ XÁC NHẬN không tồn tại" mới
+    # được gọi là `--rm` đã dọn.
     het=$((SECONDS + _DCG_HAN_ONEOFF))
-    while tt=$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null); do
-        case "$tt" in
-            running|restarting|created|paused|removing) : ;;
-            *) break ;;
-        esac
+    while :; do
+        tt=$(_dcg_doc_ct '{{.State.Status}}' "$cid") && kq=0 || kq=$?
+        if [ "$kq" -eq 2 ]; then
+            log "  [one-off] $cid không còn (\`--rm\` đã dọn — ĐÃ XÁC NHẬN: docker ps -a không thấy) — không dọn gì"
+            _dcg_ghi "oneoff" "$cid khong_con" || true
+            return 0
+        fi
+        if [ "$kq" -eq 0 ]; then
+            case "$tt" in
+                running|restarting|created|paused|removing) : ;;
+                *) break ;;
+            esac
+        else
+            tt="KHÔNG ĐỌC ĐƯỢC"
+        fi
         if [ "$SECONDS" -ge "$het" ]; then
+            if [ "$kq" -ne 0 ]; then
+                warn "[one-off] KHÔNG ĐỌC ĐƯỢC trạng thái one-off alembic của lượt này ($cid) trong ${_DCG_HAN_ONEOFF}s (lỗi hoặc hết hạn Docker) — CHƯA XÁC ĐỊNH, có thể VẪN chạy. KHÔNG dọn; mọi số đo in sau đây KHÔNG phải trạng thái cuối."
+                _dcg_oneoff_chua_xd "KHÔNG ĐỌC ĐƯỢC Docker trong ${_DCG_HAN_ONEOFF}s" "$cid khong_doc_duoc_sau_${_DCG_HAN_ONEOFF}s"
+                return 1
+            fi
             _DCG_ONEOFF_CON_CHAY=1
             warn "[one-off] one-off alembic của lượt này ($cid) VẪN '$tt' sau ${_DCG_HAN_ONEOFF}s chờ — CÒN CHẠY / CHƯA XÁC ĐỊNH. KHÔNG dọn cưỡng bức; mọi số đo in sau đây KHÔNG phải trạng thái cuối."
+            _DCG_ONEOFF_LY_DO="VẪN '$tt' sau ${_DCG_HAN_ONEOFF}s chờ"
             _dcg_ghi "oneoff" "$cid con_chay_sau_${_DCG_HAN_ONEOFF}s" || true
             return 1
         fi
@@ -1874,14 +1977,26 @@ _dcg_don_oneoff() {
         fi
         sleep 1
     done
-    if ! tt=$(docker inspect -f '{{.Name}}|{{index .Config.Labels "com.docker.compose.oneoff"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.State.Status}}' "$cid" 2>/dev/null); then
-        log "  [one-off] $cid không còn (\`--rm\` đã dọn) — không dọn gì"
-        _dcg_ghi "oneoff" "$cid khong_con" || true
+    tt=$(_dcg_doc_ct '{{.Name}}|{{index .Config.Labels "com.docker.compose.oneoff"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.State.Status}}' "$cid") && kq=0 || kq=$?
+    case "$kq" in
+        0) : ;;
+        2)
+            log "  [one-off] $cid không còn (\`--rm\` đã dọn — ĐÃ XÁC NHẬN: docker ps -a không thấy) — không dọn gì"
+            _dcg_ghi "oneoff" "$cid khong_con" || true
+            return 0 ;;
+        *)
+            warn "[one-off] KHÔNG ĐỌC ĐƯỢC chi tiết one-off $cid (lỗi hoặc hết hạn Docker) — CHƯA XÁC ĐỊNH. KHÔNG dọn; mọi số đo in sau đây KHÔNG phải trạng thái cuối."
+            _dcg_oneoff_chua_xd "KHÔNG ĐỌC ĐƯỢC chi tiết one-off" "$cid khong_doc_duoc"
+            return 1 ;;
+    esac
+    if [ "$nguon" = "theo_ten" ]; then
+        log "  [one-off] (tra theo tên) $cid đo: '${tt##*|}' — KHÔNG dọn (CID chưa được ghi nhận)"
+        _dcg_ghi "oneoff" "$cid theo_ten ${tt##*|}" || true
         return 0
     fi
     case "$tt" in
         "/$_DCG_ONEOFF_TEN|True|backend|exited")
-            if docker rm "$cid" >/dev/null; then
+            if _dcg_dk rm "$cid" >/dev/null; then
                 log "  ✓ [one-off] đã dọn one-off alembic của CHÍNH lượt này ($cid, exited)"
                 _dcg_ghi "oneoff" "$cid da_don" || true
                 return 0
@@ -1899,26 +2014,54 @@ _dcg_don_oneoff() {
 }
 
 _dcg_huong_dan() {
-    local s m ds cid tt_nguon
+    local s m ds cid tt_nguon oo kq
+    # Vòng 5 (F43): đo one-off của lượt TRƯỚC khi in đầu khối — còn chạy hoặc KHÔNG
+    # ĐỌC ĐƯỢC thì cả khối là ảnh chụp giữa chừng. Lỗi đọc KHÔNG BAO GIỜ thành "không còn".
+    cid=$(cat "$_DCG_ONEOFF_GHI" 2>/dev/null) || cid=""
+    case "$_DCG_PHA" in
+        chua_dong|dang_dong|da_dong) oo="migration CHƯA chạy ở lượt này" ;;
+        *)
+            if [ -z "$cid" ]; then
+                cid=$(_dcg_cid_theo_ten "$_DCG_ONEOFF_TEN") && kq=0 || kq=$?
+                case "$kq" in
+                    0) oo="chưa ghi nhận CID · tra theo tên: $cid" ;;
+                    2) oo="chưa ghi nhận CID · tra theo tên: KHÔNG có (ĐÃ XÁC NHẬN)"; cid="" ;;
+                    *) oo="chưa ghi nhận CID · tra theo tên: KHÔNG ĐỌC ĐƯỢC"; cid=""
+                       [ "$_DCG_ONEOFF_CON_CHAY" = "1" ] \
+                           || _dcg_oneoff_chua_xd "tra theo tên KHÔNG ĐỌC ĐƯỢC lúc in hướng dẫn" "- khong_doc_duoc_luc_in" ;;
+                esac
+            else
+                oo="CID ghi nhận $cid"
+            fi
+            if [ -n "$cid" ]; then
+                m=$(_dcg_doc_ct '{{.State.Status}}' "$cid") && kq=0 || kq=$?
+                case "$kq" in
+                    0) oo="$oo · đo: $m"
+                       case "$m" in
+                           running|restarting|created|paused|removing)
+                               [ "$_DCG_ONEOFF_CON_CHAY" = "1" ] \
+                                   || _dcg_oneoff_chua_xd "đang '$m' lúc in hướng dẫn" "$cid ${m}_luc_in" ;;
+                       esac ;;
+                    2) oo="$oo · đo: không còn (ĐÃ XÁC NHẬN: docker ps -a không thấy)" ;;
+                    *) oo="$oo · đo: KHÔNG ĐỌC ĐƯỢC (lỗi hoặc hết hạn Docker)"
+                       [ "$_DCG_ONEOFF_CON_CHAY" = "1" ] \
+                           || _dcg_oneoff_chua_xd "KHÔNG ĐỌC ĐƯỢC lúc in hướng dẫn" "$cid khong_doc_duoc_luc_in" ;;
+                esac
+            fi ;;
+    esac
     warn "[cửa ghi] $1"
     if [ "$_DCG_ONEOFF_CON_CHAY" = "1" ]; then
-        warn "  ⚠ one-off alembic của lượt này CÒN CHẠY / CHƯA XÁC ĐỊNH sau ${_DCG_HAN_ONEOFF}s chờ — số đo dưới là LÚC IN, KHÔNG phải trạng thái cuối; lược đồ có thể còn đang đổi."
+        warn "  ⚠ one-off alembic của lượt này CÒN CHẠY / CHƯA XÁC ĐỊNH (${_DCG_ONEOFF_LY_DO:-?}) — số đo dưới là LÚC IN, KHÔNG phải trạng thái cuối; lược đồ có thể còn đang đổi."
     fi
     warn "  pha=$_DCG_PHA · tín hiệu=${_DCG_TIN_HIEU:--} · script KHÔNG tự mở ứng dụng và KHÔNG tự phát lại bản sao (F28). Trạng thái ĐO THẬT:"
     for s in $_DCG_THU_TU_MO; do
         m=$(_dcg_moc "${_DCG_CID[$s]:-khong-co}" 2>/dev/null) || m="KHÔNG đọc được"
-        ds=$($_RA_COMPOSE ps -q "$s" 2>/dev/null) || ds="?"
+        ds=$(timeout -k 2 "$_DCG_HAN_LENH" $_RA_COMPOSE ps -q "$s" 2>/dev/null) || ds="KHÔNG ĐỌC ĐƯỢC"
         warn "  '$s': container cũ ${_DCG_CID[$s]:-?} · ảnh ${_DCG_ANH[$s]:-?} · đo: $m · container ĐANG CHẠY của service: [${ds//[[:space:]]/ }]"
     done
-    m=$(docker inspect -f '{{.State.Status}}' "${_DCG_NGINX_CID:-khong-co}" 2>/dev/null) || m="KHÔNG đọc được"
+    m=$(_dcg_dk inspect -f '{{.State.Status}}' "${_DCG_NGINX_CID:-khong-co}" 2>/dev/null) || m="KHÔNG đọc được"
     warn "  'nginx': ${_DCG_NGINX_CID:-?} · đo: $m"
-    cid=$(cat "$_DCG_ONEOFF_GHI" 2>/dev/null) || cid=""
-    if [ -n "$cid" ]; then
-        m=$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null) || m="không còn"
-        warn "  one-off alembic của lượt này: tên $_DCG_ONEOFF_TEN · CID ghi nhận $cid · đo: $m"
-    else
-        warn "  one-off alembic của lượt này: tên $_DCG_ONEOFF_TEN · chưa ghi nhận CID"
-    fi
+    warn "  one-off alembic của lượt này: tên $_DCG_ONEOFF_TEN · $oo"
     if [ -n "$_DCG_VT_4C_ND" ]; then
         _dcg_so_van_tay >/dev/null 2>&1
         case $? in

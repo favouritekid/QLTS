@@ -1157,6 +1157,12 @@ _TU_CHOI = [
     ("nginx khác CID ghi nhận", None, {}, {"STUB_NGINX_CID_KHAC": "1"}, "KHÁC CID ghi nhận"),
     ("tệp trạng thái là symlink (trong backups/, trỏ tới tệp hợp lệ)", _tao_symlink_tt, {},
      {"QLTS_DI_TIEP_TU": f"backups/deploy_{_TS_SYMLINK}.trang-thai"}, "không có tệp trạng thái thường"),
+    # Vòng 5 (F43): đọc lỗi KHÔNG phải "one-off đã hết" — one-off ghi nhận của lượt đỏ
+    # đã exited (đã dọn) nhưng lần này daemon trả lỗi khi hỏi nó.
+    ("đọc lỗi one-off ghi nhận của lượt đỏ", None, {"STUB_ONEOFF": "exited"},
+     {"STUB_ONEOFF": "exited", "STUB_ONEOFF_DOC": "loi"}, "KHÔNG ĐỌC ĐƯỢC trạng thái one-off alembic của lượt đỏ"),
+    # Lưới đỡ theo nhãn project: phép quét đọc lỗi ⇒ fail-closed.
+    ("quét one-off theo nhãn đọc lỗi", None, {}, {"STUB_PS_NHAN_LOI": "1"}, "không liệt kê được one-off đang chạy"),
 ]
 
 
@@ -1302,6 +1308,14 @@ def test_v4_di_tiep_hau_kiem_sni_khong_dat_thi_do_khong_ghi_marker(tmp_path: Pat
          """    [ ! -L "$_DT_TT_CU" ] && [ -f "$_DT_TT_CU" ] || error""",
          """    [ -f "$_DT_TT_CU" ] || error""",
          _tao_symlink_tt, {}, {"QLTS_DI_TIEP_TU": f"backups/deploy_{_TS_SYMLINK}.trang-thai"}),
+        ("đọc lỗi one-off lượt đỏ coi như đã hết (F43)",
+         """            *) error "[đi tiếp] KHÔNG ĐỌC ĐƯỢC trạng thái one-off alembic của lượt đỏ""",
+         """            *) : "[đi tiếp] KHÔNG ĐỌC ĐƯỢC trạng thái one-off alembic của lượt đỏ""",
+         None, {"STUB_ONEOFF": "exited"}, {"STUB_ONEOFF": "exited", "STUB_ONEOFF_DOC": "loi"}),
+        ("quét nhãn đọc lỗi mà bỏ qua (F43)",
+         """        || error "[đi tiếp] không liệt kê được one-off đang chạy""",
+         """        || true "[đi tiếp] không liệt kê được one-off đang chạy""",
+         None, {}, {"STUB_PS_NHAN_LOI": "1"}),
     ],
 )
 def test_kiem_nguoc_v4_go_tung_guard_di_tiep_thi_dung_vao_he_thong(
@@ -1395,8 +1409,8 @@ def test_v4_trap_cho_oneoff_ket_thuc_trong_han_thi_don_dung_cid(tmp_path: Path) 
     "ten_ca,cu,moi,kich_ban,ky_vong",
     [
         ("bỏ vòng chờ",
-         """    while tt=$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null); do\n""",
-         "    while false; do\n",
+         """    while :; do\n        tt=$(_dcg_doc_ct '{{.State.Status}}' "$cid") && kq=0 || kq=$?\n""",
+         """    while false; do\n        tt=$(_dcg_doc_ct '{{.State.Status}}' "$cid") && kq=0 || kq=$?\n""",
          {"STUB_ONEOFF": "chay_roi_xong", "STUB_ONEOFF_SO_LAN_CHAY": "3", "QLTS_HAN_CHO_ONEOFF": "20"},
          "khong_don"),
         ("hết hạn thì dọn cưỡng bức",
@@ -1404,14 +1418,22 @@ def test_v4_trap_cho_oneoff_ket_thuc_trong_han_thi_don_dung_cid(tmp_path: Path) 
          """            _dcg_ghi "oneoff" "$cid con_chay_sau_${_DCG_HAN_ONEOFF}s" || true; docker rm -f "$cid" >/dev/null\n""",
          {"STUB_ONEOFF": "running", "QLTS_HAN_CHO_ONEOFF": "1"},
          "don_cuong_buc"),
+        # Vòng 5: HAI lớp cùng che — vòng chờ hết hạn đặt cờ, VÀ hướng dẫn tự đo lại
+        # one-off lúc in (thấy 'running' thì đặt cờ). Gỡ một lớp vẫn xanh (§3) ⇒ gỡ CẢ HAI.
         ("không đánh dấu 'chưa phải trạng thái cuối'",
-         "            _DCG_ONEOFF_CON_CHAY=1\n", "",
+         ["            _DCG_ONEOFF_CON_CHAY=1\n",
+          """|| _dcg_oneoff_chua_xd "đang '$m' lúc in hướng dẫn\""""],
+         ["",
+          """|| : "đang '$m' lúc in hướng dẫn\""""],
          {"STUB_ONEOFF": "running", "QLTS_HAN_CHO_ONEOFF": "1"},
          "khong_canh_bao"),
     ],
 )
-def test_kiem_nguoc_v4_trap_cho_oneoff(tmp_path: Path, ten_ca: str, cu: str, moi: str, kich_ban: dict, ky_vong: str) -> None:
-    goc = _dung_san_khau(tmp_path, deploy_sh=_ban_dot_bien(cu, moi))
+def test_kiem_nguoc_v4_trap_cho_oneoff(tmp_path: Path, ten_ca: str, cu, moi, kich_ban: dict, ky_vong: str) -> None:
+    than = None
+    for a, b in zip(*((cu, moi) if isinstance(cu, list) else ([cu], [moi]))):
+        than = _ban_dot_bien(a, b, than)
+    goc = _dung_san_khau(tmp_path, deploy_sh=than)
     ket, nk = _chay_deploy(goc, STUB_TIN_HIEU_O_MIGRATE="TERM", **{**_NHANH, **kich_ban})
     ra = _ra(ket)
     if ky_vong == "khong_don":
@@ -1420,3 +1442,146 @@ def test_kiem_nguoc_v4_trap_cho_oneoff(tmp_path: Path, ten_ca: str, cu: str, moi
         assert any(d.startswith(f"docker rm -f {_OO}") for d in _dong(nk)), f"{ten_ca}: đột biến không dọn"
     else:
         assert _DAU_CHUA_CUOI not in ra, f"{ten_ca}: vẫn cảnh báo ⇒ ca cảnh báo không canh cờ"
+
+
+# =============================================================================
+# X. Vòng 5 (F43) — lỗi đọc Docker KHÔNG phải "container đã biến mất"
+# =============================================================================
+# Trap / hướng dẫn chỉ được nói "không còn" khi phép liệt kê theo id CHẠY ĐƯỢC và
+# RỖNG. Không đọc được (lỗi, treo), hoặc chưa ghi được CID khi migration có thể đã
+# chạy mà tra theo tên cũng không đọc được ⇒ CHƯA XÁC ĐỊNH: bật cờ, ghi tệp trạng
+# thái, không dọn, hướng dẫn không gọi số đo là trạng thái cuối.
+def _cid_ghi_nhan(goc: Path) -> str:
+    tep = list((goc / "backups").glob("deploy_*.oneoff-cid"))
+    return tep[0].read_text(encoding="utf-8").strip() if tep else ""
+
+
+def _noi_khong_con(ra: str) -> list[str]:
+    """Dòng one-off nói 'không còn' (đã dọn / đo: không còn)."""
+    return [d for d in ra.splitlines() if "one-off" in d and "không còn" in d and "KHÔNG còn migration" not in d]
+
+
+_V5_HAN = {**_NHANH, "QLTS_HAN_CHO_ONEOFF": "2", "QLTS_HAN_LENH_DOCKER": "1"}
+
+
+def _ca_a(goc: Path):
+    """(a) one-off còn chạy; CID đã ghi; daemon đọc LỖI từ lúc lệnh migration trả về."""
+    return _chay_deploy(goc, STUB_ONEOFF="running", STUB_ONEOFF_DOC="loi_sau_migrate",
+                        STUB_TIN_HIEU_O_MIGRATE="TERM", **_V5_HAN)
+
+
+def _ca_b(goc: Path, treo_giay: str = "45"):
+    """(b) one-off còn chạy; CID đã ghi; `docker inspect` của nó TREO."""
+    return _chay_deploy(goc, STUB_ONEOFF="running", STUB_ONEOFF_DOC="treo", STUB_TREO_GIAY=treo_giay,
+                        STUB_TIN_HIEU_O_MIGRATE="TERM", **_V5_HAN)
+
+
+def _ca_d(goc: Path):
+    """(d) CID CHƯA ghi (đọc lỗi từ đầu) + pha dang_migrate + tra theo tên đọc lỗi."""
+    return _chay_deploy(goc, STUB_ONEOFF="running", STUB_ONEOFF_DOC="loi",
+                        STUB_TIN_HIEU_O_MIGRATE="TERM", **_V5_HAN)
+
+
+@_bo_qua_neu_khong_posix
+def test_v5_a_doc_loi_khi_oneoff_con_chay_thi_chua_xac_dinh(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, nk = _ca_a(goc)
+    ra = _ra(ket)
+    assert _cid_ghi_nhan(goc) == _OO, "tiền đề: CID phải đã được ghi nhận trước khi daemon lỗi"
+    assert _noi_khong_con(ra) == [], f"đọc lỗi mà vẫn nói 'không còn': {_noi_khong_con(ra)}"
+    assert _DAU_CHUA_CUOI in ra, "đọc lỗi mà hướng dẫn KHÔNG nói số đo không phải trạng thái cuối"
+    assert f"oneoff\t{_OO} khong_doc_duoc_sau_2s" in _tep_trang_thai(goc)
+    assert not any(d.startswith("docker rm") for d in _dong(nk)), "không đọc được mà vẫn dọn"
+    assert ket.returncode == 143, f"rc={ket.returncode} (TERM ⇒ 143)"
+
+
+@_bo_qua_neu_khong_posix
+def test_v5_b_inspect_treo_thi_trap_ket_thuc_trong_han_va_chua_xac_dinh(tmp_path: Path) -> None:
+    import time
+
+    goc = _dung_san_khau(tmp_path)
+    ket, nk = _ca_b(goc)
+    t_xong = time.time()
+    ra = _ra(ket)
+    assert _cid_ghi_nhan(goc) == _OO, "tiền đề: CID phải đã được ghi nhận"
+    t_treo = float((goc / "lenh.log.treo").read_text(encoding="utf-8"))
+    assert t_xong - t_treo < 25, f"docker inspect TREO giữ trap {t_xong - t_treo:.1f}s (hạn 2s + mỗi lệnh 1s)"
+    assert _noi_khong_con(ra) == [], f"treo mà vẫn nói 'không còn': {_noi_khong_con(ra)}"
+    assert _DAU_CHUA_CUOI in ra
+    assert "KHÔNG ĐỌC ĐƯỢC trạng thái one-off" in ra
+    assert not any(d.startswith("docker rm") for d in _dong(nk))
+    assert ket.returncode == 143
+
+
+@_bo_qua_neu_khong_posix
+def test_v5_c_oneoff_that_su_bi_rm_don_thi_van_ghi_khong_con(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, nk = _chay_deploy(goc, STUB_ONEOFF="da_rm", STUB_TIN_HIEU_O_MIGRATE="TERM", **_V5_HAN)
+    ra = _ra(ket)
+    assert _cid_ghi_nhan(goc) == _OO, "tiền đề: CID phải đã được ghi nhận"
+    assert "không còn (`--rm` đã dọn — ĐÃ XÁC NHẬN" in ra, ra[-2500:]
+    assert f"oneoff\t{_OO} khong_con" in _tep_trang_thai(goc)
+    assert _DAU_CHUA_CUOI not in ra, "container đã thật sự bị dọn mà vẫn gọi là CHƯA XÁC ĐỊNH"
+    assert not any(d.startswith("docker rm") for d in _dong(nk))
+
+
+@_bo_qua_neu_khong_posix
+def test_v5_d_cid_chua_ghi_doc_loi_o_dang_migrate_thi_chua_xac_dinh(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, nk = _ca_d(goc)
+    ra = _ra(ket)
+    assert _cid_ghi_nhan(goc) == "", "tiền đề: CID phải CHƯA được ghi nhận"
+    assert "[pha] dang_migrate" in ra, "tiền đề: bị ngắt khi migration ĐANG chạy"
+    assert "không dọn gì" not in ra, "chưa ghi CID + đọc lỗi mà vẫn kết luận 'không có gì để dọn'"
+    assert _DAU_CHUA_CUOI in ra
+    assert "oneoff\t- khong_doc_duoc_theo_ten" in _tep_trang_thai(goc)
+    assert "tra theo tên: KHÔNG ĐỌC ĐƯỢC" in ra
+    assert not any(d.startswith("docker rm") for d in _dong(nk))
+
+
+@_bo_qua_neu_khong_posix
+def test_v5_d_doi_chung_cid_chua_ghi_va_xac_nhan_khong_co_thi_khong_danh_dau(tmp_path: Path) -> None:
+    # Đối chứng của (d): cùng pha, CID chưa ghi, nhưng tra theo tên ĐỌC ĐƯỢC và RỖNG.
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _chay_deploy(goc, STUB_TIN_HIEU_O_MIGRATE="TERM", **_V5_HAN)
+    ra = _ra(ket)
+    assert "[pha] dang_migrate" in ra
+    assert "ĐÃ XÁC NHẬN không có container nào tên" in ra, ra[-2500:]
+    assert _DAU_CHUA_CUOI not in ra
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,cu,moi",
+    [
+        ("bỏ phân biệt theo CID (lỗi liệt kê ⇒ 'không tồn tại')",
+         """    ds=$(_dcg_dk ps -a -q --no-trunc --filter "id=$2" 2>/dev/null) || return 1\n""",
+         """    ds=$(_dcg_dk ps -a -q --no-trunc --filter "id=$2" 2>/dev/null) || true\n"""),
+        ("bỏ phân biệt theo tên (lỗi liệt kê ⇒ 'không có')",
+         """    ds=$(_dcg_dk ps -a -q --no-trunc --filter "name=^/?$1\\$" 2>/dev/null) || return 1\n""",
+         """    ds=$(_dcg_dk ps -a -q --no-trunc --filter "name=^/?$1\\$" 2>/dev/null) || true\n"""),
+        ("bỏ hạn từng lệnh",
+         """_dcg_dk() { timeout -k 2 "$_DCG_HAN_LENH" docker "$@"; }\n""",
+         """_dcg_dk() { docker "$@"; }\n"""),
+        ("bỏ cờ CHƯA XÁC ĐỊNH",
+         """_dcg_oneoff_chua_xd() {\n    _DCG_ONEOFF_CON_CHAY=1\n""",
+         """_dcg_oneoff_chua_xd() {\n"""),
+    ],
+)
+def test_kiem_nguoc_v5_go_tung_guard_f43(tmp_path: Path, ten_ca: str, cu: str, moi: str) -> None:
+    import time
+
+    goc = _dung_san_khau(tmp_path, deploy_sh=_ban_dot_bien(cu, moi))
+    if "theo CID" in ten_ca:
+        ket, _ = _ca_a(goc)
+        assert _noi_khong_con(_ra(ket)), f"{ten_ca}: vẫn không nói 'không còn' ⇒ ca (a) xanh vì lý do khác"
+    elif "theo tên" in ten_ca:
+        ket, _ = _ca_d(goc)
+        assert "ĐÃ XÁC NHẬN không có container nào tên" in _ra(ket), f"{ten_ca}: ca (d) không canh phép liệt kê theo tên"
+    elif "hạn" in ten_ca:
+        _, _ = _ca_b(goc, treo_giay="20")
+        tre = time.time() - float((goc / "lenh.log.treo").read_text(encoding="utf-8"))
+        assert tre >= 25, f"{ten_ca}: bỏ hạn mà trap vẫn xong sau {tre:.1f}s ⇒ ca (b) không canh hạn"
+    else:
+        ket, _ = _ca_a(goc)
+        assert _DAU_CHUA_CUOI not in _ra(ket), f"{ten_ca}: vẫn cảnh báo ⇒ ca (a) không canh cờ"

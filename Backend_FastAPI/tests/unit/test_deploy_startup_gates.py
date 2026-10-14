@@ -280,6 +280,15 @@ def test_model_compose_that_giu_celery_false_du_bien_host_dat_true(
 #   (vòng 4b) STUB_BAT_TAT_O_BUILD=<service> — tác nhân NGOÀI bật rồi tắt container
 #     ghi nhận của service ấy đúng lúc Step 4 `build --parallel`, tức GIỮA Step 3a và
 #     Step 4c của đường đi tiếp: vẫn `exited`, chỉ mốc vòng đời (đếm start/stop) đổi.
+#   (vòng 5, F43) STUB_ONEOFF=da_rm — one-off của lượt TỒN TẠI (running) trong lúc
+#     migration chạy, rồi bị `--rm` dọn khi lệnh migration trả về (mốc "$QLTS_STUB_LOG.mig_xong");
+#   STUB_ONEOFF_DOC=loi|loi_sau_migrate|treo — phép ĐỌC Docker nhắm vào one-off của
+#     lượt (inspect theo CID, `ps -a --filter id=` / `--filter name=`): `loi` = daemon
+#     trả lỗi TỪ ĐẦU (bộ theo dõi nền không ghi được CID); `loi_sau_migrate` = chỉ lỗi
+#     sau khi lệnh migration trả về (CID đã kịp ghi); `treo` = `docker inspect` của
+#     one-off TREO STUB_TREO_GIAY giây (mặc định 3600) rồi lỗi, `ps` vẫn trả lời.
+#     Stub ghi giờ bắt đầu lần treo đầu vào "$QLTS_STUB_LOG.treo".
+#   STUB_PS_NHAN_LOI=1 — phép quét one-off theo nhãn project của Step 3a đọc lỗi.
 #   STUB_CHAY_SH_THAT=1 — `docker run … -c <đoạn sh>` chạy THẬT đoạn sh ấy (với
 #     biến -e của nó và `curl` giả của sân khấu); `docker logs` đọc
 #     $QLTS_NGINX_LOG. Dùng cho ca F39 chạy `nginx-verify.sh` THẬT của kho.
@@ -333,7 +342,10 @@ fi
 _oo=6666666666666666666666666666666666666666666666666666666666666666
 _oo_khac=7777777777777777777777777777777777777777777777777777777777777777
 _ten_oo() { sed -n 's/.* --name \([^ ]*\) .*/\1/p' "$QLTS_STUB_LOG" | head -n 1; }
-_oo_con() { [ -n "${STUB_ONEOFF:-}" ] && grep -q -- ' --name dcg-mig-' "$QLTS_STUB_LOG" && ! grep -qx "docker rm $_oo" "$QLTS_STUB_LOG"; }
+_oo_con() {
+    [ -n "${STUB_ONEOFF:-}" ] && grep -q -- ' --name dcg-mig-' "$QLTS_STUB_LOG" && ! grep -qx "docker rm $_oo" "$QLTS_STUB_LOG" \
+        && ! { [ "$STUB_ONEOFF" = "da_rm" ] && [ -f "${QLTS_STUB_LOG}.mig_xong" ]; }
+}
 # Trạng thái one-off. STUB_ONEOFF=chay_roi_xong: `running` cho STUB_ONEOFF_SO_LAN_CHAY
 # lần hỏi `.State.Status` đầu (đếm trong tệp), rồi `exited` — mô phỏng alembic chạy
 # tiếp một lúc sau khi deploy.sh bị ngắt (vòng 4, trap CHỜ one-off).
@@ -342,6 +354,7 @@ _oo_tt() {
         chay_roi_xong)
             _n=$(cat "${QLTS_STUB_LOG}.oo_dem" 2>/dev/null || echo 0)
             if [ "$_n" -lt "${STUB_ONEOFF_SO_LAN_CHAY:-2}" ]; then echo running; else echo exited; fi ;;
+        da_rm) echo running ;;
         *) echo "${STUB_ONEOFF:-}" ;;
     esac
 }
@@ -362,6 +375,25 @@ if [ -n "${STUB_BAT_TAT_O_BUILD:-}" ]; then
     esac
 fi
 _cn=$(_cid_gia nginx)
+# Vòng 5 (F43): phép ĐỌC nhắm vào one-off của lượt hỏng theo STUB_ONEOFF_DOC.
+case "$_tat_ca" in
+    inspect*"$_oo"*|"inspect -f {{.Id}} dcg-mig-"*|"ps -a -q --no-trunc --filter id=$_oo"|"ps -a -q --no-trunc --filter name="*)
+        case "${STUB_ONEOFF_DOC:-}" in
+            loi)
+                echo "Cannot connect to the Docker daemon (stub)" >&2; exit 1 ;;
+            loi_sau_migrate)
+                if [ -f "${QLTS_STUB_LOG}.mig_xong" ]; then
+                    echo "Cannot connect to the Docker daemon (stub)" >&2; exit 1
+                fi ;;
+            treo)
+                case "$_tat_ca" in
+                    inspect*"$_oo"*)
+                        [ -f "${QLTS_STUB_LOG}.treo" ] || date +%s.%N > "${QLTS_STUB_LOG}.treo"
+                        sleep "${STUB_TREO_GIAY:-3600}"
+                        echo "stub: hết giờ chờ daemon" >&2; exit 1 ;;
+                esac ;;
+        esac ;;
+esac
 case "$_tat_ca" in
     "stop "*)
         exit "${STUB_STOP_RC:-0}" ;;
@@ -441,6 +473,7 @@ case "$_tat_ca" in
         if [ -n "${STUB_TIN_HIEU_O_MIGRATE:-}" ]; then
             kill -s "$STUB_TIN_HIEU_O_MIGRATE" "$PPID"; sleep 1
         fi
+        : > "${QLTS_STUB_LOG}.mig_xong"
         exit "${STUB_ALEMBIC_RC:-0}" ;;
     *pg_dump*)
         # KHÔNG exit: gửi tín hiệu rồi rơi xuống giao thức pg_dump sẵn có.
@@ -466,6 +499,25 @@ case "$_tat_ca" in
         fi
         printf 'public.ghi_thu|%s\npublic.nhip|7\n' "$_d"
         exit 0 ;;
+    "ps -a -q --no-trunc --filter name="*)
+        # Vòng 5: tra one-off theo TÊN riêng của lượt (bộ theo dõi nền, trap, hướng dẫn).
+        if _oo_con; then echo "$_oo"; fi
+        exit 0 ;;
+    "ps -a -q --no-trunc --filter id="*)
+        # Vòng 5: "có tồn tại không?" theo CID — rc 0 + rỗng = ĐÃ XÁC NHẬN không tồn tại.
+        _id=${_tat_ca##*id=}
+        if [ "$_id" = "$_oo" ]; then
+            if _oo_con; then echo "$_oo"; fi
+            exit 0
+        fi
+        for _s in backend celery-worker celery-beat; do
+            if [ "$_id" = "$(_cid_gia "$_s")" ]; then
+                [ "${STUB_CID_MAT:-}" = "$_s" ] || echo "$_id"
+                exit 0
+            fi
+        done
+        if [ "$_id" = "$_cn" ]; then echo "$_cn"; fi
+        exit 0 ;;
     inspect*"{{.Id}}"*)
         # `_dcg_theo_oneoff` hỏi CID theo TÊN riêng của lượt.
         if _oo_con && [ "$_tat_ca" = "inspect -f {{.Id}} $(_ten_oo)" ]; then echo "$_oo"; exit 0; fi
@@ -485,6 +537,8 @@ case "$_tat_ca" in
         exit 0 ;;
     "ps -q --filter label=com.docker.compose.project="*)
         # Step 3a (vòng 4) quét one-off ĐANG CHẠY của service backend trong project.
+        # STUB_PS_NHAN_LOI=1 (vòng 5): phép quét ấy đọc lỗi (daemon) — phải fail-closed.
+        if [ "${STUB_PS_NHAN_LOI:-0}" = "1" ]; then echo "Cannot connect to the Docker daemon (stub)" >&2; exit 1; fi
         if [ "${STUB_ONEOFF_NHAN_CHAY:-0}" = "1" ]; then echo "$_oo_khac"; fi
         exit 0 ;;
     inspect*"com.docker.compose.project"*)
