@@ -697,6 +697,7 @@ _cid_gia() {
     printf '%s\n' "$_c8$_c8$_c8$_c8$_c8$_c8$_c8$_c8"
 }
 
+# @MO_HINH_CUA_GHI@
 case "$_tat_ca" in
     *compose*" config "*)
         # `_ra_dan_xuat_dich_vu` hỏi MODEL Compose để dẫn xuất danh sách service
@@ -888,9 +889,17 @@ _bo_qua_neu_khong_posix_dh = pytest.mark.skipif(
 # Đây là lớp mô phỏng môi trường, không phải stub nghiệp vụ: khai bản thứ hai ở
 # đây là mời hai bản trôi khỏi nhau, rồi một bộ xanh còn bộ kia đỏ vì ngữ cảnh.
 from tests.unit.test_deploy_startup_gates import (  # noqa: E402
+    _MANH_STUB_CUA_GHI,
+    _STUB_NGINX_VERIFY,
     _sandbox_cua,
     _viet_shim_ngu_canh,
 )
+
+# Mô hình cửa ghi (Step 4c) cũng là lớp mô phỏng MÔI TRƯỜNG dùng chung — một
+# nguồn, chèn vào đúng dấu đặt sẵn, TRƯỚC giao thức riêng của stub này (nhờ vậy
+# `STUB_INSPECT_RC`/`STUB_PSQ_*` vẫn chỉ đánh vào cổng health như thiết kế).
+assert _STUB_DOCKER_DH.count("# @MO_HINH_CUA_GHI@\n") == 1, "stub docker mất dấu chèn"
+_STUB_DOCKER_DH = _STUB_DOCKER_DH.replace("# @MO_HINH_CUA_GHI@\n", _MANH_STUB_CUA_GHI, 1)
 
 
 def _san_khau_dh(
@@ -919,6 +928,7 @@ def _san_khau_dh(
     (goc / "scripts" / "deploy.sh").write_text(than, encoding="utf-8", newline="\n")
     for ten, noi_dung in (
         ("scripts/nginx-apply.sh", _STUB_NGINX_APPLY_DH),
+        ("scripts/nginx-verify.sh", _STUB_NGINX_VERIFY),
         ("scripts/rollback-preflight.sh", _STUB_ROLLBACK_PREFLIGHT_DH),
         ("bin/docker", _STUB_DOCKER_DH),
         ("bin/git", _STUB_GIT_DH),
@@ -970,7 +980,9 @@ def _chay_dh(goc: Path, **kich_ban: str):
     moi_truong.update(kich_ban)
     ket = _sp.run(
         ["bash", "scripts/deploy.sh"],
-        cwd=str(goc), env=moi_truong, capture_output=True, text=True, timeout=300,
+        # stdin RỖNG xác định: stub `docker` (mô hình cửa ghi, vòng 3b) đọc stdin
+        # của từng lời gọi — không được treo vì kế thừa một pipe còn mở.
+        cwd=str(goc), env=moi_truong, stdin=_sp.DEVNULL, capture_output=True, text=True, timeout=300,
     )
     return ket, nhat_ky.read_text(encoding="utf-8"), (ket.stdout or "") + (ket.stderr or "")
 

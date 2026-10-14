@@ -1475,6 +1475,15 @@ _LENH_DA_CHET = [
         r"cp\s+-r\s+nginx_conf_backup",
         "khôi phục vào một thư mục không còn được mount — im lặng không làm gì",
     ),
+    (
+        # Vòng 3 (13-10-2026): `docker restart` theo TÊN hay theo CID cùng họ với
+        # `compose restart` — tái dùng biến môi trường + bản render đã nướng lúc
+        # TẠO container. Guard cũ chỉ thấy `restart … nginx` theo TÊN, nên
+        # `docker restart "$CID"` lọt. Ngoại lệ DUY NHẤT: `_NGOAI_LE_DOCKER_RESTART`.
+        r"\bdocker\s+(container\s+)?restart\b",
+        "`docker restart` (tên hay CID) tái dùng biến + bản render đã nướng lúc TẠO "
+        "— chỉ dòng khai trong _NGOAI_LE_DOCKER_RESTART được miễn",
+    ),
 ]
 
 _TAI_LIEU_VAN_HANH = [
@@ -2039,18 +2048,128 @@ def test_tai_lieu_khong_bao_dat_bien_ma_khong_ai_doc():
     )
 
 
-def test_script_khong_con_lenh_da_chet():
-    """Cùng bộ luật, áp lên `scripts/*.sh`."""
-    assert _cac_script(), "không thấy scripts/*.sh — guard đang xanh vô nghĩa"
-    pham = []
-    for sh in _cac_script():
-        for so, dong in enumerate(_doc(sh).splitlines(), 1):
-            if dong.lstrip().startswith("#") or _VAN_THOAT in dong:
+# Ngoại lệ HẸP cho `docker restart`: (tệp, dòng lệnh NGUYÊN VĂN sau khi bỏ thụt
+# lề) — mỗi cặp phải xuất hiện ĐÚNG MỘT lần. Lý do của dòng duy nhất này: nhánh
+# lùi (pha CHƯA migrate) của `scripts/deploy.sh` khởi động lại CHÍNH container
+# nginx cũ (theo CID ghi ở Step 4c, cùng ảnh, cùng bản render) để nó phân giải
+# lại `upstream backend` khi IP backend đổi sau `docker start` — KHÔNG phải cách
+# (vòng 6: lời gọi được bọc `timeout` với hạn riêng QLTS_HAN_NGINX_RESTART; dòng ngoại
+# lệ đổi theo, vẫn ĐÚNG MỘT lời gọi, và `docker restart` vẫn nằm NGUYÊN VĂN trong dòng
+# để mẫu của guard thấy nó — gói vào một hàm bọc sẽ giấu lời gọi khỏi guard)
+# áp cấu hình (việc đó chỉ qua `nginx-apply.sh`), và kết quả được ĐO ngay sau qua
+# SNI thật. Thêm một `docker restart` khác, chép dòng này lần hai, hay mang nó
+# sang tệp khác ⇒ đỏ. Dòng này biến mất ⇒ cũng đỏ (ngoại lệ chết phải dọn).
+_MAU_DOCKER_RESTART = r"\bdocker\s+(container\s+)?restart\b"
+_NGOAI_LE_DOCKER_RESTART = frozenset({
+    ("scripts/deploy.sh", 'timeout -k 5 "$_DCG_HAN_NGINX_RESTART" docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null && kq=0 || kq=$?'),
+})
+assert any(m == _MAU_DOCKER_RESTART for m, _ in _LENH_DA_CHET), "mẫu docker restart rời _LENH_DA_CHET"
+
+
+def _dong_lenh_logic(noi_dung: str) -> list[tuple[int, str]]:
+    """Dòng LỆNH logic: nối các dòng tiếp `\\` — `docker \\` + `restart …` là MỘT lệnh."""
+    ra: list[tuple[int, str]] = []
+    gom: list[str] = []
+    bat_dau = 0
+    for so, dong in enumerate(noi_dung.splitlines(), 1):
+        if not gom:
+            bat_dau = so
+        if dong.rstrip().endswith("\\") and not dong.lstrip().startswith("#"):
+            gom.append(dong.rstrip()[:-1].strip())
+            continue
+        gom.append(dong.strip())
+        ra.append((bat_dau, " ".join(x for x in gom if x)))
+        gom = []
+    if gom:
+        ra.append((bat_dau, " ".join(x for x in gom if x)))
+    return ra
+
+
+def _quet_lenh_da_chet(
+    cac_tep: list[tuple[str, str]],
+    ngoai_le: frozenset = _NGOAI_LE_DOCKER_RESTART,
+) -> list[str]:
+    """Quét (tên tương đối, nội dung) theo `_LENH_DA_CHET`; trả danh sách vi phạm."""
+    pham: list[str] = []
+    da_dung: dict[tuple[str, str], int] = {}
+    for ten, noi_dung in cac_tep:
+        for so, dong in _dong_lenh_logic(noi_dung):
+            if dong.startswith("#") or _VAN_THOAT in dong:
                 continue
             for mau, ly_do in _LENH_DA_CHET:
-                if re.search(mau, dong):
-                    pham.append(f"{sh.relative_to(_GOC)}:{so}: {dong.strip()[:90]}  ← {ly_do}")
+                if not re.search(mau, dong):
+                    continue
+                if mau == _MAU_DOCKER_RESTART and (ten, dong) in ngoai_le:
+                    da_dung[(ten, dong)] = da_dung.get((ten, dong), 0) + 1
+                    continue
+                pham.append(f"{ten}:{so}: {dong[:90]}  ← {ly_do}")
+    for (ten, dong) in sorted(ngoai_le):
+        n = da_dung.get((ten, dong), 0)
+        if n != 1:
+            pham.append(f"{ten}: ngoại lệ `docker restart` xuất hiện {n} lần (phải ĐÚNG 1): {dong[:70]}")
+    return pham
+
+
+def _cac_script_va_noi_dung() -> list[tuple[str, str]]:
+    return [(sh.relative_to(_GOC).as_posix(), _doc(sh)) for sh in _cac_script()]
+
+
+def test_script_khong_con_lenh_da_chet():
+    """Cùng bộ luật, áp lên `scripts/*.sh` (theo dòng LỆNH logic, có ngoại lệ hẹp)."""
+    assert _cac_script(), "không thấy scripts/*.sh — guard đang xanh vô nghĩa"
+    pham = _quet_lenh_da_chet(_cac_script_va_noi_dung())
     assert not pham, "còn lệnh đã chết trong scripts:\n  " + "\n  ".join(pham)
+
+
+# --- Kiểm ngược guard `docker restart` — mỗi ca vi phạm ĐÚNG MỘT bất biến ------
+_DONG_NGOAI_LE = 'timeout -k 5 "$_DCG_HAN_NGINX_RESTART" docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null && kq=0 || kq=$?'
+
+
+def _ban_deploy_va_con_lai() -> tuple[str, list[tuple[str, str]]]:
+    tep = _cac_script_va_noi_dung()
+    deploy = [nd for ten, nd in tep if ten == "scripts/deploy.sh"]
+    assert len(deploy) == 1, "không thấy scripts/deploy.sh"
+    assert deploy[0].count(_DONG_NGOAI_LE) == 1, "dòng ngoại lệ không còn ĐÚNG MỘT lần trong deploy.sh"
+    return deploy[0], [(t, nd) for t, nd in tep if t != "scripts/deploy.sh"]
+
+
+@pytest.mark.parametrize(
+    "ten_ca,them",
+    [
+        ("thêm một `docker restart` theo CID nginx khác", '    docker restart "$_DCG_NGINX_CID" >/dev/null\n'),
+        ("`docker container restart`", '    docker container restart "$_DCG_NGINX_CID"\n'),
+        ("xuống dòng giữa `docker` và `restart`", '    if ! docker \\\n        restart "$_DCG_NGINX_CID"; then :; fi\n'),
+        ("chép ĐÚNG dòng ngoại lệ lần hai", "        " + _DONG_NGOAI_LE + "\n"),
+        # Vòng 6: bọc `timeout` KHÔNG được làm guard mù — một lời gọi thứ hai cũng bọc
+        # `timeout` (khác hạn) vẫn phải đỏ.
+        ("lời gọi thứ hai cũng bọc timeout", '        timeout -k 5 60 docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null || true\n'),
+    ],
+)
+def test_kiem_nguoc_docker_restart_ngoai_ngoai_le_thi_do(ten_ca: str, them: str):
+    deploy, con_lai = _ban_deploy_va_con_lai()
+    assert _quet_lenh_da_chet([("scripts/deploy.sh", deploy)] + con_lai) == [], "bản gốc phải xanh"
+    pham = _quet_lenh_da_chet([("scripts/deploy.sh", deploy + them)] + con_lai)
+    assert pham, f"{ten_ca}: guard KHÔNG đỏ — `docker restart` lọt"
+
+
+def test_kiem_nguoc_dong_ngoai_le_mang_sang_tep_khac_thi_do():
+    deploy, con_lai = _ban_deploy_va_con_lai()
+    pham = _quet_lenh_da_chet(
+        [("scripts/deploy.sh", deploy), ("scripts/nginx-apply.sh", "        " + _DONG_NGOAI_LE + "\n")]
+    )
+    assert any(p.startswith("scripts/nginx-apply.sh:") for p in pham), pham
+
+
+def test_kiem_nguoc_bo_ngoai_le_thi_dong_phuc_hoi_bi_bat():
+    """Không có ngoại lệ ⇒ đúng MỘT vi phạm, đúng dòng phục hồi: ngoại lệ HẸP và CẦN."""
+    pham = _quet_lenh_da_chet(_cac_script_va_noi_dung(), ngoai_le=frozenset())
+    assert len(pham) == 1 and pham[0].startswith("scripts/deploy.sh:") and "_DCG_NGINX_CID" in pham[0], pham
+
+
+def test_kiem_nguoc_ngoai_le_chet_thi_do():
+    deploy, con_lai = _ban_deploy_va_con_lai()
+    pham = _quet_lenh_da_chet([("scripts/deploy.sh", deploy.replace(_DONG_NGOAI_LE, "if ! true; then"))] + con_lai)
+    assert any("xuất hiện 0 lần" in p for p in pham), pham
 
 
 # ---------------------------------------------------------------------------
