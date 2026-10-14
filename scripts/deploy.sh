@@ -333,8 +333,11 @@ log "Nginx template sẽ được render TRONG container (domain=$DOMAIN, admiss
 # mất. `docker inspect` lỗi chỉ được hiểu là "không tồn tại" khi phép liệt kê
 # `docker ps -a --filter id=…` CHẠY ĐƯỢC (rc 0) và trả RỖNG; mọi trường hợp khác
 # là KHÔNG ĐỌC ĐƯỢC. Mỗi lệnh đọc có hạn riêng (QLTS_HAN_LENH_DOCKER, mặc định
-# 10 s): daemon kẹt không được giữ trap / hướng dẫn / vòng chờ mãi.
-_DCG_HAN_LENH="${QLTS_HAN_LENH_DOCKER:-10}"
+# 5 s): daemon kẹt không được giữ trap / hướng dẫn / vòng chờ mãi.
+# Vòng 6 (N21.07): mặc định 10 → 5 s. Đo local `docker inspect` ≈ 0,2–0,3 s (biên ×17);
+# với 10 s, trần trap nhánh mở lại (≈ 60 lần đọc) là 1.214 s > `command_timeout: 20m` của
+# ssh-action; với 5 s là 914 s. Ghi đè bằng biến nếu VPS chậm hơn.
+_DCG_HAN_LENH="${QLTS_HAN_LENH_DOCKER:-5}"
 case "$_DCG_HAN_LENH" in
     ''|*[!0-9]*) error "QLTS_HAN_LENH_DOCKER phải là số nguyên giây, nhận: '$_DCG_HAN_LENH'" ;;
 esac
@@ -349,6 +352,26 @@ esac
 command -v timeout >/dev/null 2>&1 \
     || error "thiếu lệnh 'timeout' (coreutils) — không giới hạn được thời gian từng lệnh đọc Docker. DỪNG trước mọi thay đổi."
 _dcg_dk() { timeout -k 2 "$_DCG_HAN_LENH" docker "$@"; }
+# Vòng 6 (N21.07): hạn RIÊNG cho lệnh GHI và đầu dò của đường phục hồi — KHÔNG dùng chung
+# hạn đọc trạng thái. Đo local 14-10 (Docker 29.8.0, `vong6/do-thoi-luong.log`): `docker
+# start` ≈ 0,4–0,5 s · `docker restart -t 10` nginx ≈ 0,6–0,7 s · `docker run` đầu dò một
+# curl ≈ 1 s · `docker inspect` ≈ 0,2–0,3 s. Mặc định = đo × biên rộng (VPS chậm hơn, ứng
+# dụng thật khởi động lâu hơn alpine), và không nhỏ hơn trần nội tại của lệnh: restart có
+# `-t 10`; đầu dò dịch vụ ≤ 6 curl × 8 s; nginx-verify ≤ 7 curl × 8 s.
+_dcg_dat_han() {  # <biến đích> <biến môi trường> <mặc định> <min> <max>
+    local gt="${!2:-$3}"
+    case "$gt" in
+        ''|*[!0-9]*) error "$2 phải là số nguyên giây, nhận: '$gt'" ;;
+    esac
+    { [ "$gt" -ge "$4" ] && [ "$gt" -le "$5" ]; } || error "$2 ngoài khoảng $4..$5: '$gt'"
+    printf -v "$1" '%s' "$gt"
+}
+_dcg_dat_han _DCG_HAN_KHOI_DONG QLTS_HAN_KHOI_DONG 10 1 600
+_dcg_dat_han _DCG_HAN_NGINX_RESTART QLTS_HAN_NGINX_RESTART 30 1 600
+_dcg_dat_han _DCG_HAN_DO_SNI QLTS_HAN_DO_SNI 60 1 600
+_dcg_dat_han _DCG_HAN_PII QLTS_HAN_PII 90 1 600
+# Lệnh có hạn hết giờ: `timeout` trả 124 (TERM) hoặc 137 (KILL sau -k).
+_dcg_het_han() { [ "$1" = "124" ] || [ "$1" = "137" ]; }
 # _dcg_doc_ct <định dạng> <CID> — in kết quả `docker inspect -f`. Mã trả:
 #   0 đọc được · 2 ĐÃ XÁC NHẬN không tồn tại · 1 KHÔNG ĐỌC ĐƯỢC (lỗi, hết hạn,
 #   hoặc liệt kê vẫn thấy container mà inspect hỏng).
@@ -359,6 +382,19 @@ _dcg_doc_ct() {
         return 0
     fi
     ds=$(_dcg_dk ps -a -q --no-trunc --filter "id=$2" 2>/dev/null) || return 1
+    [ -z "${ds//[[:space:]]/}" ] || return 1
+    return 2
+}
+# _dcg_doc_anh <định dạng> <tham chiếu ẢNH> — như `_dcg_doc_ct` nhưng cho ảnh: 0 đọc được ·
+# 2 ĐÃ XÁC NHẬN không có (`image ls -q` rc 0 + rỗng) · 1 KHÔNG ĐỌC ĐƯỢC. Vòng 6: phép "tag
+# đã tồn tại chưa?" của Step 3b trước đây coi MỌI lỗi `image inspect` là "chưa có".
+_dcg_doc_anh() {
+    local ra ds
+    if ra=$(_dcg_dk image inspect -f "$1" "$2" 2>/dev/null); then
+        printf '%s\n' "$ra"
+        return 0
+    fi
+    ds=$(_dcg_dk image ls -q --no-trunc "$2" 2>/dev/null) || return 1
     [ -z "${ds//[[:space:]]/}" ] || return 1
     return 2
 }
@@ -503,7 +539,7 @@ _ra_cid_phuc_vu() {
         printf '%s\n' "${_DT_CID[$1]}"
         return 0
     fi
-    $_RA_COMPOSE ps -q "$1"
+    timeout -k 2 "$_DCG_HAN_LENH" $_RA_COMPOSE ps -q "$1"
 }
 
 # =============================================================================
@@ -817,12 +853,12 @@ _ra_kiem_marker_vs_live() {
     for _s in $_RA_DICH_VU; do
         _mi=$(awk -F"$(printf '	')" -v s="$_s" '$1==s{print $2}' "$_f")
         _mc=$(awk -F"$(printf '	')" -v s="$_s" '$1==s{print $3}' "$_f")
-        _lc=$($_RA_COMPOSE ps -q "$_s" 2>/dev/null || true)
+        _lc=$(timeout -k 2 "$_DCG_HAN_LENH" $_RA_COMPOSE ps -q "$_s" 2>/dev/null || true)
         [ -n "$_lc" ] || error "[$_n] không thấy container đang chạy cho '$_s'."
         [ "$_mc" = "$_lc" ] || error "[$_n] CID của '$_s' lệch container hiện hành (marker=$_mc live=$_lc)."
-        _st=$(docker inspect -f '{{.State.Status}}' "$_lc" 2>/dev/null || true)
+        _st=$(_dcg_dk inspect -f '{{.State.Status}}' "$_lc" 2>/dev/null || true)
         [ "$_st" = "running" ] || error "[$_n] '$_s' không running (=$_st)."
-        _li=$(docker inspect -f '{{.Image}}' "$_lc" 2>/dev/null || true)
+        _li=$(_dcg_dk inspect -f '{{.Image}}' "$_lc" 2>/dev/null || true)
         [ "$_mi" = "$_li" ] || error "[$_n] image của '$_s' lệch container hiện hành (marker=$_mi live=$_li)."
     done
 }
@@ -967,7 +1003,7 @@ else
             error "không thấy container đang chạy cho '$_S' — không thể ghim ảnh cũ.
        Đừng build đè lên một stack đang thiếu service."
         fi
-        _RA_IMG=$(docker inspect -f '{{.Image}}' "$_RA_CID" 2>/dev/null || true)
+        _RA_IMG=$(_dcg_dk inspect -f '{{.Image}}' "$_RA_CID" 2>/dev/null || true)
         case "$_RA_IMG" in
             sha256:*) : ;;
             *) error "docker inspect '$_S' trả image ID không hợp lệ: '$_RA_IMG'
@@ -1020,7 +1056,12 @@ else
         error "$_RA_DIR đã tồn tại — từ chối ghi đè một bộ tài sản có sẵn."
     fi
     for _S in $_RA_DICH_VU; do
-        if docker image inspect "qlts-${_S}:${_RA_TAG}" >/dev/null 2>&1; then
+        # Vòng 6: lỗi đọc KHÔNG phải "chưa có" — chỉ "ĐÃ XÁC NHẬN không có" mới qua.
+        _dcg_doc_anh '{{.Id}}' "qlts-${_S}:${_RA_TAG}" >/dev/null && _RA_KQ=0 || _RA_KQ=$?
+        if [ "$_RA_KQ" -eq 1 ]; then
+            error "KHÔNG ĐỌC ĐƯỢC (lỗi hoặc hết hạn Docker) tag qlts-${_S}:${_RA_TAG} có tồn tại chưa — DỪNG trước build (không ghim mù)."
+        fi
+        if [ "$_RA_KQ" -eq 0 ]; then
             error "tag qlts-${_S}:${_RA_TAG} ĐÃ TỒN TẠI — từ chối ghi đè.
        Nếu đây là tàn dư của một lượt hỏng giữa chừng, dọn tay ĐÍCH DANH từng
        tag rồi chạy lại. Tuyệt đối không \`image prune\`."
@@ -1064,11 +1105,14 @@ else
 
     for _S in $_RA_DICH_VU; do
         _RA_CID=$(_ra_cid_phuc_vu "$_S")
-        _RA_IMG=$(docker inspect -f '{{.Image}}' "$_RA_CID")
+        _RA_IMG=$(_dcg_dk inspect -f '{{.Image}}' "$_RA_CID")
         # Tag ghim phai DUY NHAT. Neu no da ton tai va tro vao mot anh KHAC thi
         # `docker tag` se am tham cuop ten: ban ke lan truoc tro vao mot anh khong
         # con mang ten do nua, va rollback theo tag se lay nham anh. Fail-closed.
-        _RA_CU=$(docker image inspect -f '{{.Id}}' "qlts-${_S}:${_RA_TAG}" 2>/dev/null || true)
+        # Vòng 6: KHÔNG ĐỌC ĐƯỢC ≠ "chưa có" ⇒ DỪNG.
+        _RA_CU=$(_dcg_doc_anh '{{.Id}}' "qlts-${_S}:${_RA_TAG}") && _RA_KQ=0 || _RA_KQ=$?
+        [ "$_RA_KQ" -ne 1 ] || error "KHÔNG ĐỌC ĐƯỢC tag qlts-${_S}:${_RA_TAG} trước khi ghim (lỗi hoặc hết hạn Docker) — DỪNG trước build."
+        [ "$_RA_KQ" -eq 0 ] || _RA_CU=""
         if [ -n "$_RA_CU" ] && [ "$_RA_CU" != "$_RA_IMG" ]; then
             error "tag qlts-${_S}:${_RA_TAG} DA TON TAI va tro vao anh khac:
        dang co = $_RA_CU
@@ -1256,7 +1300,7 @@ _cho_healthy_dv() {
 
     # `ps -aq` trả ID, không trả chữ — cắt hẳn đường đọc health bằng cách grep
     # một dòng văn bản dành cho người đọc.
-    if ! ds=$(docker compose -f docker-compose.yml --profile production \
+    if ! ds=$(timeout -k 2 "$_DCG_HAN_LENH" docker compose -f docker-compose.yml --profile production \
                   --env-file .env.production ps -aq "$ten" 2>/dev/null); then
         error "không liệt kê được container của service '$ten' (docker compose ps -aq thất bại)"
     fi
@@ -1272,12 +1316,12 @@ _cho_healthy_dv() {
 
     het=$((SECONDS + han))
     while [ "$SECONDS" -lt "$het" ]; do
-        if ! tt=$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null); then
-            error "docker inspect THẤT BẠI khi đọc State.Status của '$ten' (cid=$cid)"
+        if ! tt=$(_dcg_dk inspect -f '{{.State.Status}}' "$cid" 2>/dev/null); then
+            error "docker inspect THẤT BẠI (lỗi hoặc hết hạn) khi đọc State.Status của '$ten' (cid=$cid)"
         fi
         # `{{else}}` biến "không khai healthcheck" thành một giá trị NÓI ĐƯỢC
         # THÀNH LỜI, thay vì chuỗi rỗng trôi qua mọi phép so mà không ai thấy.
-        if ! sk=$(docker inspect \
+        if ! sk=$(_dcg_dk inspect \
                     -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}khong-co-healthcheck{{end}}' \
                     "$cid" 2>/dev/null); then
             error "docker inspect THẤT BẠI khi đọc State.Health.Status của '$ten' (cid=$cid)"
@@ -1285,7 +1329,7 @@ _cho_healthy_dv() {
 
         case "$tt" in
             exited|dead)
-                ma=$(docker inspect -f '{{.State.ExitCode}}' "$cid" 2>/dev/null || echo "?")
+                ma=$(_dcg_dk inspect -f '{{.State.ExitCode}}' "$cid" 2>/dev/null || echo "?")
                 error "'$ten' đã DỪNG (status=$tt, exit=$ma) — KHÔNG deploy tiếp" ;;
             restarting)
                 error "'$ten' đang quay vòng khởi động lại — KHÔNG deploy tiếp" ;;
@@ -1426,6 +1470,8 @@ _DCG_ONEOFF_XONG=0
 _DCG_ONEOFF_CON_CHAY=0
 # Vòng 5 (F43): lý do của trạng thái CHƯA XÁC ĐỊNH (còn chạy / KHÔNG ĐỌC ĐƯỢC Docker / CID hỏng).
 _DCG_ONEOFF_LY_DO=""
+# Vòng 6: nhánh mở lại container cũ kết thúc CHƯA XÁC ĐỊNH (lệnh ghi hết hạn / không đọc được).
+_DCG_MO_CHUA_XD=0
 _DCG_HAN_ONEOFF="${QLTS_HAN_CHO_ONEOFF:-60}"
 case "$_DCG_HAN_ONEOFF" in
     ''|*[!0-9]*) error "QLTS_HAN_CHO_ONEOFF phải là số nguyên giây, nhận: '$_DCG_HAN_ONEOFF'" ;;
@@ -1727,19 +1773,22 @@ _dcg_pa2() {
 # NGINX_PROBE_STRICT_TLS=1 (mặc định, như nginx-verify.sh) chứng thư hợp lệ cho
 # đúng $DOMAIN. Tầng chủ sở hữu của "người dùng tới được ứng dụng cũ" là HÀM
 # NÀY — không phải `nginx-verify.sh` (xem `_dcg_thong_tin_pii_nginx`).
+# Trả: 0 ĐẠT · 1 KHÔNG ĐẠT (đo được, sai) · 5 CHƯA XÁC ĐỊNH (vòng 6: không đọc được nginx,
+# hoặc đầu dò HẾT HẠN — dịch vụ CHƯA được chứng minh theo chiều nào).
 _dcg_do_dich_vu_nginx() {
-    local mang ipn anh ra a b strict rong mh ml mp mc
+    local mang ipn anh ra a b strict rong mh ml mp mc kq
     rong=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     strict="${NGINX_PROBE_STRICT_TLS:-1}"
-    mang=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$_DCG_NGINX_CID" \
+    mang=$(_dcg_dk inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$_DCG_NGINX_CID" \
         | awk 'NF && !x { print; x = 1 }') || mang=""
-    [ -n "$mang" ] || { warn "[nginx · dịch vụ] không đọc được mạng của nginx"; return 1; }
-    ipn=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$mang\").IPAddress}}" "$_DCG_NGINX_CID") || ipn=""
-    anh=$(docker inspect -f '{{.Image}}' "$_DCG_NGINX_CID") || anh=""
-    [ -n "$ipn" ] && [ -n "$anh" ] || { warn "[nginx · dịch vụ] không đọc được IP/ảnh của nginx"; return 1; }
+    [ -n "$mang" ] || { warn "[nginx · dịch vụ] KHÔNG ĐỌC ĐƯỢC mạng của nginx — dịch vụ CHƯA XÁC ĐỊNH"; return 5; }
+    ipn=$(_dcg_dk inspect -f "{{(index .NetworkSettings.Networks \"$mang\").IPAddress}}" "$_DCG_NGINX_CID") || ipn=""
+    anh=$(_dcg_dk inspect -f '{{.Image}}' "$_DCG_NGINX_CID") || anh=""
+    [ -n "$ipn" ] && [ -n "$anh" ] || { warn "[nginx · dịch vụ] KHÔNG ĐỌC ĐƯỢC IP/ảnh của nginx — dịch vụ CHƯA XÁC ĐỊNH"; return 5; }
     # `docker run` THƯỜNG (không phải one-off Compose): `--entrypoint sh` tường
     # minh; không có khái niệm `--no-deps`. Mỗi phép đo in MỘT dòng `NHÃN giá-trị`.
-    ra=$(docker run --network "$mang" --rm -e DOMAIN="$DOMAIN" -e IPN="$ipn" -e STRICT="$strict" \
+    # Vòng 6: hạn RIÊNG `QLTS_HAN_DO_SNI` (≥ 6 curl × 8 s bên trong + dựng container).
+    ra=$(timeout -k 5 "$_DCG_HAN_DO_SNI" docker run --network "$mang" --rm -e DOMAIN="$DOMAIN" -e IPN="$ipn" -e STRICT="$strict" \
         --entrypoint sh "$anh" -c '
 ma() { c=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 8 --retry 0 "$@" 2>/dev/null || true); echo "${c:-000}"; }
 echo "MA-HEALTH $(ma --insecure --resolve "$DOMAIN:443:$IPN" "https://$DOMAIN/health")"
@@ -1749,7 +1798,11 @@ if [ "$STRICT" = "1" ]; then echo "MA-CHUNG-THU $(ma --resolve "$DOMAIN:443:$IPN
 a=$(curl -sS --max-time 8 --insecure --resolve "$DOMAIN:443:$IPN" "https://$DOMAIN/health" 2>/dev/null | sha256sum | cut -d" " -f1)
 b=$(curl -sS --max-time 8 http://backend:8000/health 2>/dev/null | sha256sum | cut -d" " -f1)
 echo "THAN-NGINX $a"
-echo "THAN-BACKEND $b"' 2>/dev/null) || ra=""
+echo "THAN-BACKEND $b"' 2>/dev/null) && kq=0 || kq=$?
+    if _dcg_het_han "$kq"; then
+        warn "[nginx · dịch vụ] đầu dò SNI HẾT HẠN (${_DCG_HAN_DO_SNI}s) — dịch vụ CHƯA ĐƯỢC CHỨNG MINH (CHƯA XÁC ĐỊNH, không phải ĐẠT)"
+        return 5
+    fi
     mh=$(printf '%s\n' "$ra" | awk '$1 == "MA-HEALTH" { print $2 }')
     ml=$(printf '%s\n' "$ra" | awk '$1 == "MA-LOGIN" { print $2 }')
     mp=$(printf '%s\n' "$ra" | awk '$1 == "MA-API" { print $2 }')
@@ -1780,7 +1833,13 @@ echo "THAN-BACKEND $b"' 2>/dev/null) || ra=""
 _dcg_thong_tin_pii_nginx() {
     local rc=0
     log "  [nginx · PII — THÔNG TIN, KHÔNG chặn nhánh lùi] chạy nginx-verify.sh (mã mới) lên nginx CŨ đang phục vụ..."
-    bash "$SCRIPT_DIR/nginx-verify.sh" "$_DCG_NGINX_CID" "$DOMAIN" || rc=$?
+    # Vòng 6: có hạn RIÊNG (`QLTS_HAN_PII`); `timeout` cắt cả nhóm tiến trình (bash + docker).
+    timeout -k 5 "$_DCG_HAN_PII" bash "$SCRIPT_DIR/nginx-verify.sh" "$_DCG_NGINX_CID" "$DOMAIN" || rc=$?
+    if _dcg_het_han "$rc"; then
+        warn "[nginx · PII — THÔNG TIN, KHÔNG chặn] nginx-verify.sh HẾT HẠN (${_DCG_HAN_PII}s) — chưa biết nginx cũ có lộ token. Kết quả phục hồi dịch vụ ở trên KHÔNG đổi (F39)."
+        _dcg_ghi "pii_nginx_cu" "HET_HAN ${_DCG_HAN_PII}s" || true
+        return 0
+    fi
     if [ "$rc" -eq 0 ]; then
         log "  [nginx · PII — THÔNG TIN] nginx-verify.sh ĐẠT trên nginx cũ"
         _dcg_ghi "pii_nginx_cu" "dat" || true
@@ -1791,14 +1850,72 @@ _dcg_thong_tin_pii_nginx() {
     return 0
 }
 
+# Vòng 6 (N21.07): ĐO LẠI sau một lệnh GHI (`docker start` / `docker restart`), bất kể mã
+# trả: hết hạn KHÔNG chứng minh thao tác đã bị huỷ (daemon có thể vẫn làm), và rc 0 cũng
+# chưa chứng minh nó có hiệu lực. KHÔNG BAO GIỜ tự chạy lại lệnh ghi.
+#   <nhãn> <CID> <StartedAt TRƯỚC lệnh, rỗng nếu chưa biết> <ảnh mong đợi> <rc của lệnh ghi>
+# Trả: 0 thao tác ĐÃ có hiệu lực (đúng CID, đúng ảnh, running, LẦN KHỞI ĐỘNG MỚI) ⇒ đi tiếp
+#        hậu kiểm (CHƯA phải thành công — chỉ hậu kiểm SNI/vân tay mới kết luận);
+#      1 KHÔNG mở được (đã dừng / ĐÃ XÁC NHẬN không tồn tại / ảnh khác);
+#      5 CHƯA XÁC ĐỊNH (không đọc được; còn chạy LẦN CŨ — có thể restart chưa xong; trạng
+#        thái trung gian; hoặc lệnh báo lỗi mà container lại đang chạy lần mới).
+_dcg_sau_lenh_ghi() {
+    local nhan="$1" cid="$2" truoc="$3" anh_mong="$4" rc="$5" m kq st bd anh
+    m=$(_dcg_doc_ct '{{.State.Status}}|{{.State.StartedAt}}|{{.State.FinishedAt}}' "$cid") && kq=0 || kq=$?
+    case "$kq" in
+        2) warn "[$nhan] sau lệnh (rc=$rc): $cid ĐÃ XÁC NHẬN không tồn tại — KHÔNG mở được"; return 1 ;;
+        0) : ;;
+        *) warn "[$nhan] sau lệnh (rc=$rc): KHÔNG ĐỌC ĐƯỢC trạng thái $cid — CHƯA XÁC ĐỊNH (không chạy lại lệnh)"; return 5 ;;
+    esac
+    st=${m%%|*}; bd=${m#*|}; bd=${bd%%|*}
+    if [ -n "$anh_mong" ]; then
+        anh=$(_dcg_doc_ct '{{.Image}}' "$cid") && kq=0 || kq=$?
+        case "$kq" in
+            0) [ "$anh" = "$anh_mong" ] || { warn "[$nhan] sau lệnh: ảnh $anh KHÁC ảnh ghi nhận $anh_mong — KHÔNG mở được"; return 1; } ;;
+            2) warn "[$nhan] sau lệnh: $cid ĐÃ XÁC NHẬN không tồn tại — KHÔNG mở được"; return 1 ;;
+            *) warn "[$nhan] sau lệnh: KHÔNG ĐỌC ĐƯỢC ảnh của $cid — CHƯA XÁC ĐỊNH"; return 5 ;;
+        esac
+    fi
+    case "$st" in
+        running)
+            if [ -n "$truoc" ] && [ "$bd" = "$truoc" ]; then
+                warn "[$nhan] sau lệnh (rc=$rc): $cid running nhưng VẪN lần khởi động CŨ (StartedAt=$bd) — thao tác CHƯA hoàn tất, CHƯA XÁC ĐỊNH"
+                return 5
+            fi
+            if [ "$rc" != "0" ] && ! _dcg_het_han "$rc"; then
+                warn "[$nhan] lệnh báo lỗi (rc=$rc) mà $cid lại running lần MỚI — CHƯA XÁC ĐỊNH"
+                return 5
+            fi
+            _dcg_het_han "$rc" && warn "[$nhan] lệnh HẾT HẠN (rc=$rc) nhưng ĐO LẠI: đúng CID, đúng ảnh, running, LẦN KHỞI ĐỘNG MỚI (StartedAt=$bd) ⇒ đi tiếp hậu kiểm (chưa kết luận thành công)"
+            return 0 ;;
+        exited|dead)
+            warn "[$nhan] sau lệnh (rc=$rc): $cid đang '$st' — KHÔNG mở được"
+            return 1 ;;
+        *)
+            warn "[$nhan] sau lệnh (rc=$rc): $cid đang '$st' (trung gian) — CHƯA XÁC ĐỊNH"
+            return 5 ;;
+    esac
+}
+
+# Vòng 6: nginx DỪNG hoặc trạng thái chưa rõ sau khi khởi động lại ⇒ cảnh báo rõ + phục hồi
+# TAY theo ĐÚNG CID. <lý do> <StartedAt trước khởi động lại>
+_dcg_nginx_tay() {
+    warn "[nginx] ⚠ nginx $_DCG_NGINX_CID: $1 — NGƯỜI DÙNG CÓ THỂ KHÔNG TỚI ĐƯỢC DỊCH VỤ. Phục hồi TAY theo ĐÚNG CID (không dựng container mới):"
+    warn "   a. docker inspect -f '{{.State.Status}} {{.State.StartedAt}}' $_DCG_NGINX_CID   (mốc TRƯỚC khởi động lại: ${2:-?}; StartedAt khác mốc ⇒ đã có lần khởi động mới)"
+    warn "   b. 'exited' ⇒ docker start $_DCG_NGINX_CID   (KHÔNG compose up — nó dựng container MỚI từ ảnh/biến hiện hành)"
+    warn "   c. đo qua SNI thật: curl --resolve $DOMAIN:443:<IP nginx> https://$DOMAIN/health và /login (IP: docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' $_DCG_NGINX_CID)"
+    _dcg_ghi "nginx_tay" "$_DCG_NGINX_CID ${1// /_}" || true
+}
+
 # Mở lại ĐÚNG container cũ đã ghi ở 4c — CHỈ ở pha CHƯA migrate (CSDL chưa bị
 # migration chạm). Thứ tự: CỔNG VÂN TAY (F35) → docker start → đo CID/ảnh/running
 # → IP đổi thì khởi động lại đúng nginx cũ → ĐO PHỤC HỒI DỊCH VỤ (bắt buộc) →
 # kiểm PII (thông tin). Trả: 0 đạt · 3 vân tay lệch (CHƯA bật gì) · 4 không đo
-# được vân tay (CHƯA bật gì) · 1 lỗi khác. Không `error` trực tiếp (trừ
-# `_cho_healthy_dv`, vốn exit) — trap gọi hàm này trong subshell.
+# được vân tay (CHƯA bật gì) · 1 KHÔNG mở được / KHÔNG đạt · 5 CHƯA XÁC ĐỊNH (vòng 6:
+# lệnh hết hạn hoặc không đọc được — xem `_dcg_sau_lenh_ghi`). Không `error` trực
+# tiếp — `_cho_healthy_dv` (vốn exit) chạy trong subshell riêng rồi được PHÂN LOẠI lại.
 _dcg_mo_lai_cu() {
-    local s live anh st ip kq vt="lược đồ khớp 4c"
+    local s live anh st ip kq vt="lược đồ khớp 4c" truoc m
     if [ "$_DCG_PHA" = "dang_dong" ] && [ -z "$_DCG_VT_4C_ND" ]; then
         vt="CSDL chưa bị chạm, chưa có vân tay 4c"
         log "  (chưa chụp vân tay 4c và CSDL chưa bị chạm — mở lại không qua cổng vân tay)"
@@ -1810,35 +1927,58 @@ _dcg_mo_lai_cu() {
         fi
     fi
     for s in $_DCG_THU_TU_MO; do
-        if ! docker start "${_DCG_CID[$s]}" >/dev/null; then
-            warn "docker start container cũ của '$s' THẤT BẠI"
-            return 1
+        # Mốc StartedAt lúc ĐÓNG (4c): sau `start` phải thấy LẦN KHỞI ĐỘNG MỚI. Chưa có
+        # mốc (bị ngắt giữa `docker stop`) ⇒ container có thể chưa từng dừng: running là đủ.
+        truoc=${_DCG_MOC[$s]:-}; truoc=${truoc#*|}; truoc=${truoc%%|*}
+        timeout -k 5 "$_DCG_HAN_KHOI_DONG" docker start "${_DCG_CID[$s]}" >/dev/null && kq=0 || kq=$?
+        if [ "$kq" -ne 0 ]; then
+            warn "docker start container cũ của '$s' THẤT BẠI/HẾT HẠN (rc=$kq, hạn ${_DCG_HAN_KHOI_DONG}s) — ĐO LẠI, KHÔNG chạy lại lệnh"
         fi
+        _dcg_sau_lenh_ghi "mở lại · $s" "${_DCG_CID[$s]}" "$truoc" "${_DCG_ANH[$s]}" "$kq" || return $?
         if [ "$s" = "backend" ]; then
-            _cho_healthy_dv backend "$_HAN_HEALTH"
+            if ! ( _cho_healthy_dv backend "$_HAN_HEALTH" ); then
+                # Không healthy: container còn chạy lần mới ⇒ KHÔNG đạt; không đọc được ⇒ CHƯA XÁC ĐỊNH.
+                _dcg_sau_lenh_ghi "mở lại · backend (sau chờ healthy)" "${_DCG_CID[backend]}" "$truoc" "${_DCG_ANH[backend]}" 0 || return $?
+                warn "'backend' không tới healthy — KHÔNG đạt"
+                return 1
+            fi
         fi
     done
     for s in $_DCG_THU_TU_MO; do
-        if ! live=$($_RA_COMPOSE ps -q "$s"); then
-            warn "không liệt kê được container đang chạy của '$s' sau khi mở lại"
-            return 1
+        if ! live=$(timeout -k 2 "$_DCG_HAN_LENH" $_RA_COMPOSE ps -q "$s"); then
+            warn "KHÔNG ĐỌC ĐƯỢC container đang chạy của '$s' sau khi mở lại (lỗi hoặc hết hạn) — CHƯA XÁC ĐỊNH"
+            return 5
         fi
         if [ "$live" != "${_DCG_CID[$s]}" ]; then
             warn "'$s': container đang chạy ($live) KHÁC container cũ (${_DCG_CID[$s]})"
             return 1
         fi
-        anh=$(docker inspect -f '{{.Image}}' "$live") || { warn "không đọc được ảnh của '$s'"; return 1; }
+        anh=$(_dcg_doc_ct '{{.Image}}' "$live") && kq=0 || kq=$?
+        case "$kq" in
+            0) : ;;
+            2) warn "'$s': $live ĐÃ XÁC NHẬN không tồn tại sau khi mở lại"; return 1 ;;
+            *) warn "KHÔNG ĐỌC ĐƯỢC ảnh của '$s' sau khi mở lại — CHƯA XÁC ĐỊNH"; return 5 ;;
+        esac
         if [ "$anh" != "${_DCG_ANH[$s]}" ]; then
             warn "'$s': ảnh đang chạy $anh KHÁC ảnh cũ ${_DCG_ANH[$s]}"
             return 1
         fi
-        st=$(docker inspect -f '{{.State.Status}}' "$live") || { warn "không đọc được trạng thái '$s'"; return 1; }
+        st=$(_dcg_doc_ct '{{.State.Status}}' "$live") && kq=0 || kq=$?
+        case "$kq" in
+            0) : ;;
+            2) warn "'$s': $live ĐÃ XÁC NHẬN không tồn tại sau khi mở lại"; return 1 ;;
+            *) warn "KHÔNG ĐỌC ĐƯỢC trạng thái '$s' sau khi mở lại — CHƯA XÁC ĐỊNH"; return 5 ;;
+        esac
         if [ "$st" != "running" ]; then
             warn "'$s' sau khi mở lại ở trạng thái '$st' (cần running)"
             return 1
         fi
     done
-    ip=$(_dcg_ip "${_DCG_CID[backend]}" 2>/dev/null || true)
+    ip=$(_dcg_doc_ct '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "${_DCG_CID[backend]}") && kq=0 || kq=$?
+    if [ "$kq" -ne 0 ]; then
+        warn "KHÔNG ĐỌC ĐƯỢC IP backend sau khi mở lại — CHƯA XÁC ĐỊNH (không đụng nginx khi Docker không trả lời)"
+        return 5
+    fi
     if [ "$ip" != "${_DCG_IP[backend]}" ]; then
         warn "IP backend ĐỔI sau khi mở lại (trước='${_DCG_IP[backend]}' sau='$ip') — khởi động lại ĐÚNG container nginx cũ ($_DCG_NGINX_CID) để nó phân giải lại upstream"
         # Khởi động lại ĐÚNG container nginx đã ghi ở 4c (theo CID) — CỐ Ý giữ NGUYÊN
@@ -1847,13 +1987,28 @@ _dcg_mo_lai_cu() {
         # scripts/nginx-apply.sh) — và kết quả được ĐO ngay dưới qua SNI thật.
         # Đây là lời gọi DUY NHẤT được guard "lệnh đã chết" miễn trừ (khai đúng dòng
         # trong test_nginx_template_packaging.py); thêm một lời gọi khác ⇒ guard đỏ.
-        if ! docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null; then
-            warn "[nginx] khởi động lại container nginx cũ THẤT BẠI"
-            return 1
+        # Vòng 6: chụp mốc khởi động TRƯỚC — running thôi chưa đủ: lần chạy CŨ còn sống có
+        # thể là restart chưa hoàn tất. Không đọc được mốc ⇒ không restart (không chứng
+        # minh được lần khởi động mới).
+        truoc=$(_dcg_doc_ct '{{.State.StartedAt}}' "$_DCG_NGINX_CID") \
+            || { warn "[nginx] KHÔNG ĐỌC ĐƯỢC mốc khởi động nginx TRƯỚC khi khởi động lại — KHÔNG khởi động lại; CHƯA XÁC ĐỊNH"; return 5; }
+        timeout -k 5 "$_DCG_HAN_NGINX_RESTART" docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null && kq=0 || kq=$?
+        if [ "$kq" -ne 0 ]; then
+            warn "[nginx] khởi động lại container nginx cũ THẤT BẠI/HẾT HẠN (rc=$kq, hạn ${_DCG_HAN_NGINX_RESTART}s) — ĐO LẠI, KHÔNG chạy lại lệnh"
         fi
-        _cho_healthy_dv nginx "$_HAN_HEALTH"
+        _dcg_sau_lenh_ghi "nginx" "$_DCG_NGINX_CID" "$truoc" "" "$kq" && kq=0 || kq=$?
+        if [ "$kq" -ne 0 ]; then
+            [ "$kq" -eq 5 ] && _dcg_nginx_tay "CHƯA XÁC ĐỊNH sau khởi động lại" "$truoc" || _dcg_nginx_tay "DỪNG / KHÔNG mở được sau khởi động lại" "$truoc"
+            return "$kq"
+        fi
+        if ! ( _cho_healthy_dv nginx "$_HAN_HEALTH" ); then
+            _dcg_sau_lenh_ghi "nginx (sau chờ healthy)" "$_DCG_NGINX_CID" "$truoc" "" 0 && kq=1 || kq=$?
+            [ "$kq" -eq 5 ] && _dcg_nginx_tay "CHƯA XÁC ĐỊNH sau chờ healthy" "$truoc" || _dcg_nginx_tay "không tới healthy" "$truoc"
+            return "$kq"
+        fi
     fi
-    _dcg_do_dich_vu_nginx || return 1
+    _dcg_do_dich_vu_nginx && kq=0 || kq=$?
+    [ "$kq" -eq 0 ] || return "$kq"
     _dcg_thong_tin_pii_nginx
     _dcg_ghi "mo_lai_cu" "dat" || true
     log "  ✓ đã mở lại 3 container CŨ — cùng CID, cùng ảnh, $vt, phục hồi dịch vụ qua SNI thật ĐẠT (đã đo)"
@@ -2050,6 +2205,9 @@ _dcg_huong_dan() {
             fi ;;
     esac
     warn "[cửa ghi] $1"
+    if [ "${_DCG_MO_CHUA_XD:-0}" = "1" ]; then
+        warn "  ⚠ trạng thái container sau lệnh mở lại CHƯA XÁC ĐỊNH (lệnh hết hạn / Docker không trả lời) — số đo dưới là LÚC IN, KHÔNG phải trạng thái cuối; daemon có thể VẪN đang thực hiện lệnh."
+    fi
     if [ "$_DCG_ONEOFF_CON_CHAY" = "1" ]; then
         warn "  ⚠ one-off alembic của lượt này CÒN CHẠY / CHƯA XÁC ĐỊNH (${_DCG_ONEOFF_LY_DO:-?}) — số đo dưới là LÚC IN, KHÔNG phải trạng thái cuối; lược đồ có thể còn đang đổi."
     fi
@@ -2092,6 +2250,43 @@ _dcg_huong_dan() {
     warn "   5. Vân tay LỆCH: KHÔNG mở mã cũ. Nếu buộc phải LÙI bằng bản sao, ĐỐI SOÁT TRƯỚC: (a) mọi ghi commit SAU mốc T0 sẽ MẤT — so bộ đếm T0/T1/T2, xem phiên đã/đang nối (pg_stat_activity), tra các bảng có cột thời gian (created_at/updated_at > T0) để liệt kê TỪNG khoá; (b) có ghi ⇒ trích chúng ra TRƯỚC để nhập lại; (c) phát lại: docker compose -f docker-compose.yml --env-file .env.production exec -T postgres psql -v ON_ERROR_STOP=1 -U ${POSTGRES_USER:-qlts} ${POSTGRES_DB:-qlts_production} < bản sao; (d) dump --clean --if-exists KHÔNG xoá object migration hỏng tạo thêm (dòng '+' ở bước 2) — dọn có chủ đích; (e) so lại vân tay, CHỈ KHI KHỚP mới làm bước 4."
 }
 
+# Vòng 6 (N21.07): TRẦN thời gian của trap theo pha = tổng hạn của MỌI bước trap có thể
+# chạy (mỗi bước đều có hạn riêng ⇒ tổng là trần THỰC THI được, không phải ước lượng).
+# Đơn vị đọc = hạn đọc + 2 s (-k); lệnh ghi/đầu dò = hạn riêng + 5 s (-k); chờ healthy =
+# 1 lần liệt kê + hạn + vòng cuối (3 lần đọc + 2 s ngủ). In: "<tổng> <chi tiết>".
+_dcg_ngan_sach_trap() {
+    local L P K R D V H HD G O tong ct
+    L=$((_DCG_HAN_LENH + 2)); P=$((_DCG_HAN_PSQL + 5))
+    K=$((_DCG_HAN_KHOI_DONG + 5)); R=$((_DCG_HAN_NGINX_RESTART + 5))
+    D=$((_DCG_HAN_DO_SNI + 5)); V=$((_DCG_HAN_PII + 5))
+    H=$((L + _HAN_HEALTH + 3 * L + 2))
+    # Hướng dẫn cuối: 3 × (mốc + liệt kê) + nginx + one-off (tra tên + 2 đọc) + vân tay.
+    HD=$((10 * L + P))
+    case "$_DCG_PHA" in
+        dang_dong|da_dong)
+            # (đường đi tiếp: trap chỉ in hướng dẫn, KHÔNG mở lại mã cũ)
+            if [ "${_DCG_DI_TIEP:-0}" = "1" ]; then
+                tong=$HD; ct="hướng_dẫn=$HD"
+            else
+                # mở lại: vân tay P · 3 × (start K + đo lại 4L) · healthy backend H + đo lại 4L ·
+                # hậu kiểm 3 × (liệt kê L + ảnh 2L + trạng thái 2L) · IP 2L · nginx: mốc 2L + restart R + đo lại 2L + healthy H + đo lại 2L ·
+                # SNI 3L + D · PII V · rồi hướng dẫn nếu không đạt.
+                G=$((P + 3 * (K + 4 * L) + H + 4 * L + 15 * L + 2 * L + 2 * L + R + 2 * L + H + 2 * L + 3 * L + D + V))
+                tong=$((G + HD))
+                ct="mở_lại=$G(vân_tay=$P,start=3×$K,healthy=2×$H,sni=$D,pii=$V,đọc=${L}s/lần) + hướng_dẫn=$HD"
+            fi ;;
+        dang_migrate|migrate_do)
+            # chờ one-off: tra tên L + hạn chờ + vòng cuối 2L + 1 s + chi tiết 2L + rm L.
+            O=$((L + _DCG_HAN_ONEOFF + 2 * L + 1 + 2 * L + L))
+            tong=$((O + HD)); ct="chờ_one-off=$O + hướng_dẫn=$HD" ;;
+        khong_ap_dung|buoc8|xong|chua_dong)
+            tong=0; ct="không làm gì" ;;
+        *)
+            tong=$HD; ct="hướng_dẫn=$HD" ;;
+    esac
+    printf '%s %s\n' "$tong" "$ct"
+}
+
 _dcg_bat_tin_hieu() {
     _DCG_TIN_HIEU="$1"
     exit "$2"
@@ -2103,6 +2298,15 @@ _dcg_khi_thoat() {
     trap '' HUP INT TERM PIPE
     set +eu
     _dcg_ghi "thoat" "rc=$rc tin_hieu=${_DCG_TIN_HIEU:--} pha=$_DCG_PHA"
+    # Vòng 6: trần thời gian — IN ngay đầu trap và GHI vào tệp trạng thái (nhật ký local);
+    # cuối trap ĐO thời gian thật và so với trần.
+    local ns ns_ct bd_trap kq
+    ns=$(_dcg_ngan_sach_trap); ns_ct=${ns#* }; ns=${ns%% *}
+    bd_trap=$SECONDS
+    if [ "$ns" -gt 0 ]; then
+        log "[trap] trần thời gian của trap (pha '$_DCG_PHA'): ${ns}s — $ns_ct"
+        _dcg_ghi "tran_trap" "${ns}s pha=$_DCG_PHA bat_dau=$(date +%s)" || true
+    fi
     case "$_DCG_PHA" in
         khong_ap_dung|buoc8|xong)
             : ;;
@@ -2115,8 +2319,14 @@ _dcg_khi_thoat() {
                 :
             else
             warn "[cửa ghi] deploy dừng ở pha '$_DCG_PHA' (rc=$rc, tín hiệu=${_DCG_TIN_HIEU:--}) — CSDL CHƯA bị migration chạm; thử mở lại ĐÚNG container cũ (qua cổng vân tay lược đồ)"
-            if ( _dcg_mo_lai_cu ); then
+            ( _dcg_mo_lai_cu ) && kq=0 || kq=$?
+            if [ "$kq" -eq 0 ]; then
                 warn "[cửa ghi] ĐÃ mở lại container CŨ (đã đo — xem các dòng ✓ ngay trên). Deploy KHÔNG thành công."
+            elif [ "$kq" -eq 5 ]; then
+                # Vòng 6: lệnh hết hạn hoặc Docker không trả lời — KHÔNG kết luận phục hồi.
+                _DCG_MO_CHUA_XD=1
+                _dcg_ghi "mo_lai_cu" "CHUA_XAC_DINH"
+                _dcg_huong_dan "mở lại container cũ CHƯA XÁC ĐỊNH — lệnh Docker hết hạn hoặc không đọc được; KHÔNG kết luận đã phục hồi, KHÔNG tự chạy lại"
             else
                 _dcg_ghi "mo_lai_cu" "KHONG_DAT"
                 _dcg_huong_dan "mở lại container cũ KHÔNG đạt / KHÔNG được phép"
@@ -2132,6 +2342,15 @@ _dcg_khi_thoat() {
             _dcg_huong_dan "lược đồ đã MỚI hoặc chưa rõ — KHÔNG tự mở ứng dụng cũ" ;;
     esac
     [ "$_DCG_TT_HONG" = "1" ] && warn "[trạng thái] ⚠ tệp trạng thái $_DCG_TT đã có lần KHÔNG ghi được trong lượt này — log deploy là bản ghi pha đầy đủ."
+    if [ "$ns" -gt 0 ]; then
+        local da=$((SECONDS - bd_trap))
+        _dcg_ghi "thoi_gian_trap" "${da}s/${ns}s" || true
+        if [ "$da" -gt "$ns" ]; then
+            warn "[trap] ⚠ trap chạy ${da}s — VƯỢT trần ${ns}s (có bước chưa được tính vào trần)"
+        else
+            log "[trap] trap chạy ${da}s / trần ${ns}s"
+        fi
+    fi
     exit "$rc"
 }
 
@@ -2175,16 +2394,16 @@ else
     # Cùng hợp đồng với Step 3b (`ps -q` = container ĐANG chạy, ID đủ 64 hex).
     # Trước lệnh `stop` đầu tiên ⇒ mọi `error` ở đây để nguyên hiện trạng.
     for _S in $_DCG_DICH_VU; do
-        _DS=$($_RA_COMPOSE ps -q "$_S") || error "[4c] không liệt kê được container của '$_S' — chưa đụng gì, DỪNG."
+        _DS=$(timeout -k 2 "$_DCG_HAN_LENH" $_RA_COMPOSE ps -q "$_S") || error "[4c] không liệt kê được container của '$_S' (lỗi hoặc hết hạn) — chưa đụng gì, DỪNG."
         _SO=$(printf '%s\n' "$_DS" | grep -c '[^[:space:]]' || true)
         [ "$_SO" -eq 1 ] || error "[4c] '$_S' có $_SO container ĐANG CHẠY (cần đúng 1). Chưa đụng gì, DỪNG.
        PA1 phải biết CHÍNH XÁC container cũ để mở lại đúng ảnh cũ khi cần."
         _CID=${_DS//[[:space:]]/}
         case "$_CID" in *[!0-9a-f]*) error "[4c] CID của '$_S' có ký tự lạ: '$_CID'" ;; esac
         [ "${#_CID}" -eq 64 ] || error "[4c] CID của '$_S' dài ${#_CID} (cần 64 hex)"
-        _ANH=$(docker inspect -f '{{.Image}}' "$_CID") || error "[4c] không đọc được ảnh của '$_S'"
+        _ANH=$(_dcg_dk inspect -f '{{.Image}}' "$_CID") || error "[4c] không đọc được ảnh của '$_S' (lỗi hoặc hết hạn)"
         case "$_ANH" in sha256:*) : ;; *) error "[4c] ảnh của '$_S' không hợp lệ: '$_ANH'" ;; esac
-        _CS=$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$_CID") || error "[4c] không đọc được restart policy của '$_S'"
+        _CS=$(_dcg_dk inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$_CID") || error "[4c] không đọc được restart policy của '$_S' (lỗi hoặc hết hạn)"
         case "$_CS" in
             unless-stopped|no) : ;;
             *) error "[4c] '$_S' có restart policy '$_CS' — chỉ nhận 'unless-stopped' hoặc 'no'.
@@ -2196,7 +2415,7 @@ else
     done
     _DCG_IP[backend]=$(_dcg_ip "${_DCG_CID[backend]}") || error "[4c] không đọc được IP của backend"
     # Nhánh lùi cần ĐÚNG container nginx đang phục vụ để khởi động lại/đo qua SNI thật.
-    _DS=$($_RA_COMPOSE ps -q nginx) || error "[4c] không liệt kê được container nginx — chưa đụng gì, DỪNG."
+    _DS=$(timeout -k 2 "$_DCG_HAN_LENH" $_RA_COMPOSE ps -q nginx) || error "[4c] không liệt kê được container nginx (lỗi hoặc hết hạn) — chưa đụng gì, DỪNG."
     _SO=$(printf '%s\n' "$_DS" | grep -c '[^[:space:]]' || true)
     [ "$_SO" -eq 1 ] || error "[4c] 'nginx' có $_SO container ĐANG CHẠY (cần đúng 1). Chưa đụng gì, DỪNG.
        Nhánh lùi phải đo được đường của người dùng (nginx, SNI thật), không chỉ backend healthy."
@@ -2462,7 +2681,7 @@ bash "$SCRIPT_DIR/nginx-apply.sh" "$DOMAIN"     || error "không áp được c�
 # container nginx ĐANG phục vụ sau Step 8b — ứng dụng đã nằm dừng từ lượt đỏ,
 # "backend healthy" một mình không chứng minh người dùng tới được.
 if [ "${_DCG_DI_TIEP:-0}" = "1" ]; then
-    _DS=$($_RA_COMPOSE ps -q nginx) || error "[đi tiếp] không liệt kê được nginx sau Step 8b."
+    _DS=$(timeout -k 2 "$_DCG_HAN_LENH" $_RA_COMPOSE ps -q nginx) || error "[đi tiếp] không liệt kê được nginx sau Step 8b (lỗi hoặc hết hạn)."
     [ "$(printf '%s\n' "$_DS" | grep -c '[^[:space:]]' || true)" -eq 1 ] \
         || error "[đi tiếp] sau Step 8b 'nginx' không có ĐÚNG MỘT container đang chạy."
     _DCG_NGINX_CID=${_DS//[[:space:]]/}
@@ -2530,14 +2749,14 @@ fi
 _ra_bao_dam_dich_vu
 
 for _S in $_RA_DICH_VU; do
-    _RA_CID_MOI=$($_RA_COMPOSE ps -q "$_S" 2>/dev/null || true)
+    _RA_CID_MOI=$(timeout -k 2 "$_DCG_HAN_LENH" $_RA_COMPOSE ps -q "$_S" 2>/dev/null || true)
     if [ -z "$_RA_CID_MOI" ]; then
         rm -f -- "$_RA_MK_TMP"
         error "sau deploy vẫn không thấy container cho '$_S' — từ chối ghi marker nửa vời.
        Marker sai còn nguy hiểm hơn marker thiếu: lượt deploy sau sẽ ghim ảnh cũ
        theo một SHA không đúng."
     fi
-    _RA_IMG_MOI=$(docker inspect -f '{{.Image}}' "$_RA_CID_MOI" 2>/dev/null || true)
+    _RA_IMG_MOI=$(_dcg_dk inspect -f '{{.Image}}' "$_RA_CID_MOI" 2>/dev/null || true)
     case "$_RA_IMG_MOI" in
         sha256:*) : ;;
         *) rm -f -- "$_RA_MK_TMP"

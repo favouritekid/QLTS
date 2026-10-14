@@ -830,8 +830,8 @@ def test_kiem_nguoc_bo_do_phien_la_o_4c_thi_pg_dump_chay(tmp_path: Path) -> None
 @_bo_qua_neu_khong_posix
 def test_kiem_nguoc_nhanh_lui_dung_up_d_thi_lo_ra(tmp_path: Path) -> None:
     dot_bien = _ban_dot_bien(
-        '        if ! docker start "${_DCG_CID[$s]}" >/dev/null; then\n',
-        '        if ! $_RA_COMPOSE up -d "$s" >/dev/null; then\n',
+        '        timeout -k 5 "$_DCG_HAN_KHOI_DONG" docker start "${_DCG_CID[$s]}" >/dev/null && kq=0 || kq=$?\n',
+        '        $_RA_COMPOSE up -d "$s" >/dev/null && kq=0 || kq=$?\n',
     )
     goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien)
     _, nk = _chay_deploy(goc, **_LUI, **_NHANH)
@@ -932,9 +932,9 @@ def test_v2_kiem_nguoc_nuot_loi_ghi_tep_trang_thai_thi_deploy_chay_tiep(tmp_path
 @_bo_qua_neu_khong_posix
 def test_kiem_nguoc_bo_khoi_dong_lai_nginx_khi_ip_doi(tmp_path: Path) -> None:
     than = _DEPLOY.read_text(encoding="utf-8")
-    dau = than.index('    ip=$(_dcg_ip "${_DCG_CID[backend]}" 2>/dev/null || true)\n')
-    cuoi_neo = '        _cho_healthy_dv nginx "$_HAN_HEALTH"\n    fi\n'
-    cuoi = than.index(cuoi_neo, dau) + len(cuoi_neo)
+    # Vòng 6: khối IP + khởi động lại nginx nay kết thúc ngay trước đầu dò dịch vụ.
+    dau = than.index("    ip=$(_dcg_doc_ct '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' \"${_DCG_CID[backend]}\") && kq=0 || kq=$?\n")
+    cuoi = than.index('    _dcg_do_dich_vu_nginx && kq=0 || kq=$?\n', dau)
     than = than[:dau] + than[cuoi:]
     goc = _dung_san_khau(tmp_path, deploy_sh=than)
     _, nk = _chay_deploy(goc, STUB_IP_DOI="1", **_LUI, **_NHANH)
@@ -944,7 +944,7 @@ def test_kiem_nguoc_bo_khoi_dong_lai_nginx_khi_ip_doi(tmp_path: Path) -> None:
 
 @_bo_qua_neu_khong_posix
 def test_kiem_nguoc_bo_do_dich_vu_thi_bao_mo_du_502(tmp_path: Path) -> None:
-    dot_bien = _ban_dot_bien("    _dcg_do_dich_vu_nginx || return 1\n", "")
+    dot_bien = _ban_dot_bien('    _dcg_do_dich_vu_nginx && kq=0 || kq=$?\n    [ "$kq" -eq 0 ] || return "$kq"\n', "")
     goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien)
     ket, _ = _chay_deploy(goc, STUB_MA_HEALTH="502", **_LUI, **_NHANH)
     assert "ĐÃ mở lại container CŨ" in _ra(ket), "bỏ đo dịch vụ mà vẫn không báo mở ⇒ ca 502 xanh vì lý do khác"
@@ -1585,3 +1585,316 @@ def test_kiem_nguoc_v5_go_tung_guard_f43(tmp_path: Path, ten_ca: str, cu: str, m
     else:
         ket, _ = _ca_a(goc)
         assert _DAU_CHUA_CUOI not in _ra(ket), f"{ten_ca}: vẫn cảnh báo ⇒ ca (a) không canh cờ"
+
+
+# =============================================================================
+# XI. Vòng 6 (N21.07) — hạn cho TOÀN đường phục hồi; bảng quyết định sau lệnh GHI
+# =============================================================================
+# Lệnh GHI hết hạn KHÔNG chứng minh thao tác đã bị huỷ: đo lại bằng đường đọc có hạn —
+# đúng CID/ảnh + running + LẦN KHỞI ĐỘNG MỚI ⇒ đi tiếp hậu kiểm; đã dừng / ĐÃ XÁC NHẬN không
+# tồn tại ⇒ KHÔNG mở được; không đọc được / chưa thấy lần khởi động mới ⇒ CHƯA XÁC ĐỊNH.
+# KHÔNG bao giờ chạy lại lệnh ghi. Mỗi ca dưới đây chỉ vi phạm MỘT bất biến.
+_V6 = {
+    **_NHANH,
+    "QLTS_HAN_LENH_DOCKER": "1",
+    "QLTS_HAN_KHOI_DONG": "2",
+    "QLTS_HAN_NGINX_RESTART": "2",
+    "QLTS_HAN_DO_SNI": "2",
+    "QLTS_HAN_PII": "2",
+    "QLTS_HAN_PSQL": "5",
+}
+_MO_DAT = "ĐÃ mở lại container CŨ"
+_DAU_MO_CHUA_XD = "trạng thái container sau lệnh mở lại CHƯA XÁC ĐỊNH"
+_TREO = "30"          # giây stub treo — hạn đúng cắt ở 1–2 s
+_TREO_DOT_BIEN = "25"  # đột biến bỏ hạn ⇒ chờ trọn số giây này
+
+
+def _tu_luc_treo(goc: Path) -> float:
+    """Giây từ lần TREO đầu tiên (stub ghi mốc) tới lúc deploy.sh thoát."""
+    import time
+
+    return time.time() - float((goc / "lenh.log.treo").read_text(encoding="utf-8"))
+
+
+def _so_lan_goi(goc: Path, lenh: str, cid: str) -> int:
+    return sum(1 for g in _cac_loi_goi(goc) if g["args"][:1] == [lenh] and g["args"][-1:] == [cid])
+
+
+def _ca_start(goc: Path, kieu: str, treo: str = _TREO, **them):
+    return _chay_deploy(goc, STUB_GHI_TREO="start:backend", STUB_GHI_TREO_KIEU=kieu, STUB_TREO_GIAY=treo,
+                        **_LUI, **{**_V6, **them})
+
+
+def _ca_restart(goc: Path, kieu: str, treo: str = _TREO, **them):
+    return _chay_deploy(goc, STUB_IP_DOI="1", STUB_GHI_TREO="restart", STUB_GHI_TREO_KIEU=kieu,
+                        STUB_TREO_GIAY=treo, **_LUI, **{**_V6, **them})
+
+
+@_bo_qua_neu_khong_posix
+def test_v6_start_het_han_nhung_da_lam_thi_do_lai_va_di_tiep_hau_kiem(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _ca_start(goc, "da_lam")
+    ra, t = _ra(ket), _tu_luc_treo(goc)
+    assert _so_lan_goi(goc, "start", _cid_gia("backend")) == 1, "lệnh ghi bị CHẠY LẠI"
+    assert t < 20, f"`docker start` treo giữ trap {t:.1f}s (hạn 2 s)"
+    assert "nhưng ĐO LẠI: đúng CID, đúng ảnh, running, LẦN KHỞI ĐỘNG MỚI" in ra, ra[-2500:]
+    assert _MO_DAT in ra, "đã đo lại thấy start có hiệu lực mà không đi tiếp hậu kiểm"
+    assert "mo_lai_cu\tdat" in _tep_trang_thai(goc)
+
+
+@_bo_qua_neu_khong_posix
+def test_v6_start_het_han_chua_co_hieu_luc_thi_khong_mo_duoc_va_dung_ngay(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _ca_start(goc, "chua_lam")
+    ra = _ra(ket)
+    goi = _cac_loi_goi(goc)
+    i_start = max(i for i, g in enumerate(goi) if g["args"][:1] == ["start"])
+    sau = [" ".join(g["args"]) for g in goi[i_start + 1:]]
+    assert not [x for x in sau if " ps -aq backend" in f" {x}"], f"KHÔNG mở được mà vẫn chờ healthy: {sau}"
+    assert _so_lan_goi(goc, "start", _cid_gia("backend")) == 1, "lệnh ghi bị CHẠY LẠI"
+    assert _so_lan_goi(goc, "start", _cid_gia("celery-worker")) == 0, "đã KHÔNG mở được backend mà vẫn mở tiếp"
+    assert "mo_lai_cu\tKHONG_DAT" in _tep_trang_thai(goc)
+    assert _MO_DAT not in ra
+    assert "KHÔNG mở được" in ra
+
+
+@_bo_qua_neu_khong_posix
+def test_v6_start_het_han_khong_doc_duoc_thi_chua_xac_dinh(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _ca_start(goc, "khong_doc")
+    ra = _ra(ket)
+    assert "mo_lai_cu\tCHUA_XAC_DINH" in _tep_trang_thai(goc), ra[-2500:]
+    assert _DAU_MO_CHUA_XD in ra and "LÚC IN, KHÔNG phải trạng thái cuối" in ra
+    assert _MO_DAT not in ra
+    assert _so_lan_goi(goc, "start", _cid_gia("backend")) == 1, "lệnh ghi bị CHẠY LẠI"
+
+
+@_bo_qua_neu_khong_posix
+def test_v6_restart_nginx_het_han_da_lam_thi_xac_nhan_lan_khoi_dong_moi(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _ca_restart(goc, "da_lam")
+    ra, t = _ra(ket), _tu_luc_treo(goc)
+    assert _so_lan_goi(goc, "restart", _cid_gia("nginx")) == 1, "lệnh ghi bị CHẠY LẠI"
+    assert t < 20, f"`docker restart` treo giữ trap {t:.1f}s (hạn 2 s)"
+    assert "LẦN KHỞI ĐỘNG MỚI (StartedAt=R1)" in ra, ra[-2500:]
+    assert _MO_DAT in ra
+
+
+@_bo_qua_neu_khong_posix
+def test_v6_restart_nginx_het_han_chua_xong_thi_chua_xac_dinh_va_huong_dan_tay(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _ca_restart(goc, "chua_lam")
+    ra = _ra(ket)
+    cn = _cid_gia("nginx")
+    assert "mo_lai_cu\tCHUA_XAC_DINH" in _tep_trang_thai(goc), ra[-2500:]
+    assert "VẪN lần khởi động CŨ" in ra
+    assert f"docker start {cn}" in ra and f"nginx_tay\t{cn}" in _tep_trang_thai(goc), "thiếu hướng dẫn tay theo ĐÚNG CID"
+    assert _so_lan_goi(goc, "restart", cn) == 1, "lệnh ghi bị CHẠY LẠI"
+    assert _MO_DAT not in ra
+
+
+@_bo_qua_neu_khong_posix
+def test_v6_restart_nginx_het_han_nginx_dung_thi_khong_mo_duoc_va_huong_dan_tay(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _ca_restart(goc, "dung")
+    ra = _ra(ket)
+    cn = _cid_gia("nginx")
+    assert f"docker start {cn}" in ra, "nginx DỪNG mà không in hướng dẫn tay theo ĐÚNG CID"
+    assert "DỪNG / KHÔNG mở được sau khởi động lại" in ra
+    assert "mo_lai_cu\tKHONG_DAT" in _tep_trang_thai(goc)
+    assert _MO_DAT not in ra
+
+
+@_bo_qua_neu_khong_posix
+def test_v6_restart_nginx_rc0_ma_khong_co_lan_khoi_dong_moi_thi_chua_xac_dinh(tmp_path: Path) -> None:
+    # "running" chưa đủ: lệnh trả 0 tức thì nhưng lần chạy CŨ vẫn sống.
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _ca_restart(goc, "chua_lam", treo="0", STUB_GHI_RC_SAU_TREO="0")
+    ra = _ra(ket)
+    assert _MO_DAT not in ra, "restart trả 0 mà KHÔNG có lần khởi động mới vẫn báo đã mở lại"
+    assert "mo_lai_cu\tCHUA_XAC_DINH" in _tep_trang_thai(goc)
+
+
+@_bo_qua_neu_khong_posix
+def test_v6_dau_do_sni_treo_thi_chua_xac_dinh_trong_han(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _chay_deploy(goc, STUB_DO_TREO="1", STUB_TREO_GIAY=_TREO, **_LUI, **_V6)
+    ra, t = _ra(ket), _tu_luc_treo(goc)
+    assert t < 20, f"đầu dò SNI treo giữ trap {t:.1f}s (hạn 2 s)"
+    assert "đầu dò SNI HẾT HẠN" in ra
+    assert "mo_lai_cu\tCHUA_XAC_DINH" in _tep_trang_thai(goc), "đầu dò hết hạn bị coi là đo được"
+    assert _MO_DAT not in ra
+
+
+@_bo_qua_neu_khong_posix
+def test_v6_kiem_pii_treo_thi_ghi_het_han_khong_doi_ket_qua_phuc_hoi(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _chay_deploy(goc, STUB_NGINX_VERIFY_TREO="1", STUB_TREO_GIAY=_TREO, **_LUI, **_V6)
+    ra, t = _ra(ket), _tu_luc_treo(goc)
+    assert t < 20, f"kiểm PII treo giữ trap {t:.1f}s (hạn 2 s)"
+    assert "pii_nginx_cu\tHET_HAN 2s" in _tep_trang_thai(goc)
+    assert _MO_DAT in ra, "F39: kết quả kiểm PII (THÔNG TIN) đã thay kết quả phục hồi dịch vụ"
+
+
+_DOC_TREO = [
+    # (bước, mẫu, sau, trước) — đọc TREO ở đúng một bước; phải dừng fail-closed trong hạn.
+    ("3b", "inspect -f {{.Image}} " + _cid_gia("backend"), "", "build --parallel"),
+    ("4c", "inspect -f {{.Image}} " + _cid_gia("backend"), "build --parallel", _MOC_STEP8),
+    ("8c", "inspect -f {{.Image}} " + _cid_gia("backend"), _MOC_STEP8, ""),
+    ("healthy", "inspect -f {{if .State.Health}}*", _MOC_STEP8, ""),
+]
+
+
+def _ca_doc_treo(goc: Path, mau: str, sau: str, truoc: str, treo: str = _TREO):
+    them = {"STUB_TREO_KHI": mau, "STUB_TREO_GIAY": treo}
+    if sau:
+        them["STUB_TREO_SAU"] = sau
+    if truoc:
+        them["STUB_TREO_TRUOC"] = truoc
+    return _chay_deploy(goc, **{**_V6, **them})
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize("buoc,mau,sau,truoc", _DOC_TREO)
+def test_v6_doc_treo_o_tung_buoc_thi_dung_fail_closed_trong_han(
+    tmp_path: Path, buoc: str, mau: str, sau: str, truoc: str
+) -> None:
+    goc = _dung_san_khau(tmp_path)
+    marker = (goc / "ops" / "last-deploy.marker").read_bytes()
+    ket, nk = _ca_doc_treo(goc, mau, sau, truoc)
+    t = _tu_luc_treo(goc)
+    assert t < 20, f"{buoc}: đọc treo giữ deploy {t:.1f}s (hạn đọc 1 s)"
+    assert ket.returncode != 0, f"{buoc}: đọc treo mà deploy thoát 0"
+    assert (goc / "ops" / "last-deploy.marker").read_bytes() == marker, f"{buoc}: marker bị ghi"
+    if buoc == "3b":
+        assert "build --parallel" not in nk, "3b: đọc treo mà vẫn build"
+    if buoc == "4c":
+        assert not any(d.startswith("docker stop ") for d in _dong(nk)), "4c: đọc treo mà vẫn dừng container"
+
+
+@_bo_qua_neu_khong_posix
+def test_v6_tran_trap_mac_dinh_tinh_tu_gia_tri_mac_dinh_va_nho_hon_command_timeout(tmp_path: Path) -> None:
+    import re
+
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _chay_deploy(goc, **_LUI)   # giá trị MẶC ĐỊNH, không ghi đè hạn nào
+    ra = _ra(ket)
+    m = re.search(r"\[trap\] trần thời gian của trap \(pha 'da_dong'\): (\d+)s — (.+)", ra)
+    assert m, f"đầu trap KHÔNG in trần thời gian:\n{ra[-2000:]}"
+    tran = int(m.group(1))
+    # Mặc định (đọc 5 s, psql 60 s, start 10 s, restart 30 s, đầu dò 60 s, PII 90 s, healthy 60 s):
+    # mở lại 779 s + hướng dẫn cuối 135 s. Đổi một hạn mặc định ⇒ ca này đỏ ⇒ xét lại trần.
+    assert tran == 914, f"trần mặc định đổi: {tran}s ({m.group(2)})"
+    for phan in ("vân_tay=", "start=3×", "healthy=2×", "sni=", "pii=", "hướng_dẫn="):
+        assert phan in m.group(2), f"trần thiếu thành phần {phan}: {m.group(2)}"
+    yml = (_DEPLOY.parent.parent / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
+    phut = re.search(r"command_timeout:\s*(\d+)m", yml)
+    assert phut, "không đọc được command_timeout của ssh-action"
+    assert tran < int(phut.group(1)) * 60, f"trần trap {tran}s ≥ command_timeout {phut.group(1)}m của ssh-action"
+    assert f"tran_trap\t{tran}s pha=da_dong" in _tep_trang_thai(goc), "trần không được ghi vào nhật ký local"
+
+
+@_bo_qua_neu_khong_posix
+def test_v6_trap_that_ket_thuc_trong_tran_khi_cac_lenh_treo(tmp_path: Path) -> None:
+    import re
+    import time
+
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _chay_deploy(goc, STUB_GHI_TREO="start:backend", STUB_DO_TREO="1", STUB_TREO_GIAY=_TREO,
+                          **_LUI, **_V6)
+    t_xong = time.time()
+    ra, tt = _ra(ket), _tep_trang_thai(goc)
+    m = re.search(r"tran_trap\t(\d+)s pha=da_dong bat_dau=(\d+)", tt)
+    assert m, tt
+    tran, bat_dau = int(m.group(1)), int(m.group(2))
+    da = t_xong - bat_dau
+    assert da <= tran, f"trap chạy {da:.1f}s VƯỢT trần {tran}s"
+    assert da >= 4, f"trap chỉ chạy {da:.1f}s — hai lệnh treo (2 s mỗi lệnh) KHÔNG được chờ tới hạn"
+    assert re.search(r"thoi_gian_trap\t\d+s/" + str(tran) + "s", tt)
+    assert "[trap] trap chạy" in ra
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,cu,moi",
+    [
+        ("start: bỏ hạn",
+         """timeout -k 5 "$_DCG_HAN_KHOI_DONG" docker start""", "docker start"),
+        ("start: hết hạn ⇒ KHÔNG mở được, không đo lại",
+         """        _dcg_sau_lenh_ghi "mở lại · $s" "${_DCG_CID[$s]}" "$truoc" "${_DCG_ANH[$s]}" "$kq" || return $?\n""",
+         """        [ "$kq" -eq 0 ] || return 1\n"""),
+        ("start: không đo lại, tin là đã mở",
+         """        _dcg_sau_lenh_ghi "mở lại · $s" "${_DCG_CID[$s]}" "$truoc" "${_DCG_ANH[$s]}" "$kq" || return $?\n""",
+         """        :\n"""),
+        ("nginx: running là đủ (bỏ LẦN KHỞI ĐỘNG MỚI)",
+         """            if [ -n "$truoc" ] && [ "$bd" = "$truoc" ]; then\n""", """            if false; then\n"""),
+        ("nginx: không in hướng dẫn tay",
+         """            [ "$kq" -eq 5 ] && _dcg_nginx_tay "CHƯA XÁC ĐỊNH sau khởi động lại" "$truoc" || _dcg_nginx_tay "DỪNG / KHÔNG mở được sau khởi động lại" "$truoc"\n""",
+         """            :\n"""),
+        ("restart nginx: bỏ hạn",
+         """timeout -k 5 "$_DCG_HAN_NGINX_RESTART" docker restart""", "docker restart"),
+        ("đầu dò: bỏ hạn",
+         """timeout -k 5 "$_DCG_HAN_DO_SNI" docker run""", "docker run"),
+        ("đầu dò: hết hạn coi là KHÔNG ĐẠT",
+         """        warn "[nginx · dịch vụ] đầu dò SNI HẾT HẠN (${_DCG_HAN_DO_SNI}s) — dịch vụ CHƯA ĐƯỢC CHỨNG MINH (CHƯA XÁC ĐỊNH, không phải ĐẠT)"\n        return 5\n""",
+         """        return 1\n"""),
+        ("PII: bỏ hạn",
+         """timeout -k 5 "$_DCG_HAN_PII" bash "$SCRIPT_DIR/nginx-verify.sh\"""", """bash "$SCRIPT_DIR/nginx-verify.sh\""""),
+        ("đọc 3b: bỏ hạn",
+         """        _RA_IMG=$(_dcg_dk inspect -f '{{.Image}}' "$_RA_CID" 2>/dev/null || true)\n""",
+         """        _RA_IMG=$(docker inspect -f '{{.Image}}' "$_RA_CID" 2>/dev/null || true)\n"""),
+        ("đọc 4c: bỏ hạn",
+         """        _ANH=$(_dcg_dk inspect -f '{{.Image}}' "$_CID")""",
+         """        _ANH=$(docker inspect -f '{{.Image}}' "$_CID")"""),
+        ("đọc 8c: bỏ hạn",
+         """    _RA_IMG_MOI=$(_dcg_dk inspect -f '{{.Image}}' "$_RA_CID_MOI" 2>/dev/null || true)\n""",
+         """    _RA_IMG_MOI=$(docker inspect -f '{{.Image}}' "$_RA_CID_MOI" 2>/dev/null || true)\n"""),
+        ("chờ healthy: bỏ hạn",
+         """        if ! sk=$(_dcg_dk inspect \\\n""", """        if ! sk=$(docker inspect \\\n"""),
+        ("trần: bỏ phần hướng dẫn cuối",
+         """                tong=$((G + HD))\n""", """                tong=$G\n"""),
+    ],
+)
+def test_kiem_nguoc_v6_go_tung_guard(tmp_path: Path, ten_ca: str, cu: str, moi: str) -> None:
+    import re
+
+    goc = _dung_san_khau(tmp_path, deploy_sh=_ban_dot_bien(cu, moi))
+    if ten_ca == "start: bỏ hạn":
+        _ca_start(goc, "da_lam", treo=_TREO_DOT_BIEN)
+        assert _tu_luc_treo(goc) >= 20, f"{ten_ca}: vẫn xong nhanh ⇒ ca start-treo không canh hạn"
+    elif ten_ca.startswith("start: hết hạn"):
+        ket, _ = _ca_start(goc, "da_lam")
+        assert _MO_DAT not in _ra(ket), f"{ten_ca}: vẫn mở được ⇒ ca 'đã làm' không canh phép đo lại"
+    elif ten_ca.startswith("start: không đo lại"):
+        _ca_start(goc, "chua_lam")
+        goi = _cac_loi_goi(goc)
+        i_start = max(i for i, g in enumerate(goi) if g["args"][:1] == ["start"])
+        assert any(" ps -aq backend" in " " + " ".join(g["args"]) for g in goi[i_start + 1:]), (
+            f"{ten_ca}: không chờ healthy ⇒ ca 'chưa có hiệu lực' không canh phép đo lại")
+    elif ten_ca.startswith("nginx: running"):
+        ket, _ = _ca_restart(goc, "chua_lam", treo="0", STUB_GHI_RC_SAU_TREO="0")
+        assert _MO_DAT in _ra(ket), f"{ten_ca}: vẫn không báo mở ⇒ ca rc0 không canh lần khởi động mới"
+    elif ten_ca.startswith("nginx: không in"):
+        ket, _ = _ca_restart(goc, "dung")
+        assert f"docker start {_cid_gia('nginx')}" not in _ra(ket), f"{ten_ca}: vẫn có hướng dẫn tay"
+    elif ten_ca == "restart nginx: bỏ hạn":
+        _ca_restart(goc, "da_lam", treo=_TREO_DOT_BIEN)
+        assert _tu_luc_treo(goc) >= 20, f"{ten_ca}: vẫn xong nhanh"
+    elif ten_ca == "đầu dò: bỏ hạn":
+        _chay_deploy(goc, STUB_DO_TREO="1", STUB_TREO_GIAY=_TREO_DOT_BIEN, **_LUI, **_V6)
+        assert _tu_luc_treo(goc) >= 20, f"{ten_ca}: vẫn xong nhanh"
+    elif ten_ca.startswith("đầu dò: hết hạn"):
+        _chay_deploy(goc, STUB_DO_TREO="1", STUB_TREO_GIAY=_TREO, **_LUI, **_V6)
+        assert "mo_lai_cu\tKHONG_DAT" in _tep_trang_thai(goc), f"{ten_ca}: vẫn CHƯA XÁC ĐỊNH"
+    elif ten_ca == "PII: bỏ hạn":
+        _chay_deploy(goc, STUB_NGINX_VERIFY_TREO="1", STUB_TREO_GIAY=_TREO_DOT_BIEN, **_LUI, **_V6)
+        assert _tu_luc_treo(goc) >= 20, f"{ten_ca}: vẫn xong nhanh"
+    elif ten_ca.startswith("đọc ") or ten_ca.startswith("chờ healthy"):
+        buoc = {"đọc 3b": "3b", "đọc 4c": "4c", "đọc 8c": "8c", "chờ healthy": "healthy"}[ten_ca.split(":")[0]]
+        _, mau, sau, truoc = next(x for x in _DOC_TREO if x[0] == buoc)
+        _ca_doc_treo(goc, mau, sau, truoc, treo=_TREO_DOT_BIEN)
+        assert _tu_luc_treo(goc) >= 20, f"{ten_ca}: vẫn xong nhanh ⇒ ca đọc-treo {buoc} không canh hạn"
+    else:
+        ket, _ = _chay_deploy(goc, **_LUI)
+        m = re.search(r"\[trap\] trần thời gian của trap \(pha 'da_dong'\): (\d+)s", _ra(ket))
+        assert m and int(m.group(1)) != 914, f"{ten_ca}: trần không đổi ⇒ ca trần mặc định không canh công thức"

@@ -2053,12 +2053,15 @@ def test_tai_lieu_khong_bao_dat_bien_ma_khong_ai_doc():
 # lùi (pha CHƯA migrate) của `scripts/deploy.sh` khởi động lại CHÍNH container
 # nginx cũ (theo CID ghi ở Step 4c, cùng ảnh, cùng bản render) để nó phân giải
 # lại `upstream backend` khi IP backend đổi sau `docker start` — KHÔNG phải cách
+# (vòng 6: lời gọi được bọc `timeout` với hạn riêng QLTS_HAN_NGINX_RESTART; dòng ngoại
+# lệ đổi theo, vẫn ĐÚNG MỘT lời gọi, và `docker restart` vẫn nằm NGUYÊN VĂN trong dòng
+# để mẫu của guard thấy nó — gói vào một hàm bọc sẽ giấu lời gọi khỏi guard)
 # áp cấu hình (việc đó chỉ qua `nginx-apply.sh`), và kết quả được ĐO ngay sau qua
 # SNI thật. Thêm một `docker restart` khác, chép dòng này lần hai, hay mang nó
 # sang tệp khác ⇒ đỏ. Dòng này biến mất ⇒ cũng đỏ (ngoại lệ chết phải dọn).
 _MAU_DOCKER_RESTART = r"\bdocker\s+(container\s+)?restart\b"
 _NGOAI_LE_DOCKER_RESTART = frozenset({
-    ("scripts/deploy.sh", 'if ! docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null; then'),
+    ("scripts/deploy.sh", 'timeout -k 5 "$_DCG_HAN_NGINX_RESTART" docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null && kq=0 || kq=$?'),
 })
 assert any(m == _MAU_DOCKER_RESTART for m, _ in _LENH_DA_CHET), "mẫu docker restart rời _LENH_DA_CHET"
 
@@ -2119,7 +2122,7 @@ def test_script_khong_con_lenh_da_chet():
 
 
 # --- Kiểm ngược guard `docker restart` — mỗi ca vi phạm ĐÚNG MỘT bất biến ------
-_DONG_NGOAI_LE = 'if ! docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null; then'
+_DONG_NGOAI_LE = 'timeout -k 5 "$_DCG_HAN_NGINX_RESTART" docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null && kq=0 || kq=$?'
 
 
 def _ban_deploy_va_con_lai() -> tuple[str, list[tuple[str, str]]]:
@@ -2136,7 +2139,10 @@ def _ban_deploy_va_con_lai() -> tuple[str, list[tuple[str, str]]]:
         ("thêm một `docker restart` theo CID nginx khác", '    docker restart "$_DCG_NGINX_CID" >/dev/null\n'),
         ("`docker container restart`", '    docker container restart "$_DCG_NGINX_CID"\n'),
         ("xuống dòng giữa `docker` và `restart`", '    if ! docker \\\n        restart "$_DCG_NGINX_CID"; then :; fi\n'),
-        ("chép ĐÚNG dòng ngoại lệ lần hai", "        " + _DONG_NGOAI_LE + "\n            :\n        fi\n"),
+        ("chép ĐÚNG dòng ngoại lệ lần hai", "        " + _DONG_NGOAI_LE + "\n"),
+        # Vòng 6: bọc `timeout` KHÔNG được làm guard mù — một lời gọi thứ hai cũng bọc
+        # `timeout` (khác hạn) vẫn phải đỏ.
+        ("lời gọi thứ hai cũng bọc timeout", '        timeout -k 5 60 docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null || true\n'),
     ],
 )
 def test_kiem_nguoc_docker_restart_ngoai_ngoai_le_thi_do(ten_ca: str, them: str):

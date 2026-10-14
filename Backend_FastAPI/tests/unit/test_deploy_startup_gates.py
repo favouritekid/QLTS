@@ -289,6 +289,15 @@ def test_model_compose_that_giu_celery_false_du_bien_host_dat_true(
 #     one-off TREO STUB_TREO_GIAY giây (mặc định 3600) rồi lỗi, `ps` vẫn trả lời.
 #     Stub ghi giờ bắt đầu lần treo đầu vào "$QLTS_STUB_LOG.treo".
 #   STUB_PS_NHAN_LOI=1 — phép quét one-off theo nhãn project của Step 3a đọc lỗi.
+#   (vòng 6, N21.07) STUB_GHI_TREO=start:<service>|restart — lệnh GHI ấy của deploy (theo CID
+#     của service / nginx) TREO STUB_TREO_GIAY giây (mặc định 3600) rồi trả STUB_GHI_RC_SAU_TREO
+#     (mặc định 1). STUB_GHI_TREO_KIEU: da_lam (mặc định — daemon ĐÃ làm, chỉ phản hồi bị giữ)
+#     | chua_lam (lệnh chưa có hiệu lực) | dung (nginx nằm DỪNG sau đó) | khong_doc (sau đó mọi
+#     phép đọc container ấy lỗi daemon). Giờ bắt đầu treo ghi vào "$QLTS_STUB_LOG.treo".
+#   STUB_DO_TREO=1 — đầu dò dịch vụ qua SNI (`docker run … THAN-NGINX`) treo.
+#   STUB_TREO_KHI=<mẫu glob của lệnh> [+ STUB_TREO_SAU / STUB_TREO_TRUOC=<chuỗi đã / CHƯA có
+#     trong nhật ký lệnh>] — lệnh khớp TREO (đo hạn của phép đọc ở đúng một bước).
+#   nginx: mốc khởi động = R<số lần `docker restart` CÓ HIỆU LỰC>; "$QLTS_STUB_LOG.nginx_dung" ⇒ exited.
 #   STUB_CHAY_SH_THAT=1 — `docker run … -c <đoạn sh>` chạy THẬT đoạn sh ấy (với
 #     biến -e của nó và `curl` giả của sân khấu); `docker logs` đọc
 #     $QLTS_NGINX_LOG. Dùng cho ca F39 chạy `nginx-verify.sh` THẬT của kho.
@@ -375,6 +384,47 @@ if [ -n "${STUB_BAT_TAT_O_BUILD:-}" ]; then
     esac
 fi
 _cn=$(_cid_gia nginx)
+# --- Vòng 6 (N21.07) ---------------------------------------------------------
+_treo_bat_dau() { [ -f "${QLTS_STUB_LOG}.treo" ] || date +%s.%N > "${QLTS_STUB_LOG}.treo"; }
+# Đọc treo theo mẫu, chỉ ở ĐÚNG một bước (mốc trong nhật ký lệnh).
+if [ -n "${STUB_TREO_KHI:-}" ]; then
+    case "$_tat_ca" in
+        $STUB_TREO_KHI)
+            if { [ -z "${STUB_TREO_SAU:-}" ] || grep -qF -- "$STUB_TREO_SAU" "$QLTS_STUB_LOG"; } \
+               && { [ -z "${STUB_TREO_TRUOC:-}" ] || ! grep -qF -- "$STUB_TREO_TRUOC" "$QLTS_STUB_LOG"; }; then
+                _treo_bat_dau
+                sleep "${STUB_TREO_GIAY:-3600}"
+                echo "stub: hết giờ chờ daemon" >&2; exit 1
+            fi ;;
+    esac
+fi
+# Container mà một lệnh GHI treo kiểu `khong_doc` để lại: mọi phép đọc nó lỗi daemon.
+for _f in "${QLTS_STUB_LOG}".doc_hong.*; do
+    [ -e "$_f" ] || continue
+    _x=${_f##*.doc_hong.}
+    case "$_tat_ca" in
+        inspect*"$_x"*|"ps -a -q --no-trunc --filter id=$_x"|*" ps -q "*|*" ps -aq "*)
+            echo "Cannot connect to the Docker daemon (stub)" >&2; exit 1 ;;
+    esac
+done
+# Lệnh GHI (`start` / `restart`) của deploy TREO theo STUB_GHI_TREO / STUB_GHI_TREO_KIEU.
+_ghi_treo() {
+    local dich
+    case "${STUB_GHI_TREO:-}" in
+        "start:"*) [ "$1" = start ] || return 0; dich=$(_cid_gia "${STUB_GHI_TREO#start:}") ;;
+        restart) [ "$1" = restart ] || return 0; dich=$_cn ;;
+        *) return 0 ;;
+    esac
+    case "$_tat_ca" in *"$dich"*) : ;; *) return 0 ;; esac
+    case "${STUB_GHI_TREO_KIEU:-da_lam}" in
+        chua_lam) sed -i '$ s/^docker \(start\|restart\) /docker \1-khong-hieu-luc /' "$QLTS_STUB_LOG" ;;
+        dung) : > "${QLTS_STUB_LOG}.nginx_dung" ;;
+        khong_doc) : > "${QLTS_STUB_LOG}.doc_hong.$dich" ;;
+    esac
+    _treo_bat_dau
+    sleep "${STUB_TREO_GIAY:-3600}"
+    exit "${STUB_GHI_RC_SAU_TREO:-1}"
+}
 # Vòng 5 (F43): phép ĐỌC nhắm vào one-off của lượt hỏng theo STUB_ONEOFF_DOC.
 case "$_tat_ca" in
     inspect*"$_oo"*|"inspect -f {{.Id}} dcg-mig-"*|"ps -a -q --no-trunc --filter id=$_oo"|"ps -a -q --no-trunc --filter name="*)
@@ -398,10 +448,15 @@ case "$_tat_ca" in
     "stop "*)
         exit "${STUB_STOP_RC:-0}" ;;
     "start "*)
+        _ghi_treo start
         exit "${STUB_START_RC:-0}" ;;
     "restart "*)
+        _ghi_treo restart
         exit "${STUB_RESTART_RC:-0}" ;;
     "run --network "*THAN-NGINX*)
+        if [ "${STUB_DO_TREO:-0}" = "1" ]; then
+            _treo_bat_dau; sleep "${STUB_TREO_GIAY:-3600}"; exit 1
+        fi
         # Đầu dò PHỤC HỒI DỊCH VỤ: mã trạng thái qua SNI + so THÂN /health qua
         # nginx với thân lấy thẳng từ backend.
         echo "MA-HEALTH ${STUB_MA_HEALTH:-200}"
@@ -562,6 +617,15 @@ case "$_tat_ca" in
             echo "172.30.0.2 "
         fi
         exit 0 ;;
+    inspect*".State.StartedAt"*"$_cn"*)
+        # Vòng 6: nginx có mốc khởi động — R<số lần restart CÓ HIỆU LỰC>.
+        _n=$(grep -c "^docker restart .*$_cn" "$QLTS_STUB_LOG" || true)
+        _st=running; [ -f "${QLTS_STUB_LOG}.nginx_dung" ] && _st=exited
+        case "$_tat_ca" in
+            *"{{.State.Status}}|{{.State.StartedAt}}"*) echo "$_st|R$_n|-" ;;
+            *) echo "R$_n" ;;
+        esac
+        exit 0 ;;
     inspect*".State.StartedAt"*)
         for _s in backend celery-worker celery-beat; do
             _c=$(_cid_gia "$_s")
@@ -576,6 +640,8 @@ case "$_tat_ca" in
         done
         echo "STUB: mốc vòng đời cho container lạ: $_tat_ca" >&2
         exit 94 ;;
+    inspect*".State.Status"*"$_cn")
+        if [ -f "${QLTS_STUB_LOG}.nginx_dung" ]; then echo exited; exit 0; fi ;;
     inspect*".State.Status"*)
         # Container ĐÃ DỪNG trả `exited`; còn lại rơi xuống giao thức sẵn có
         # (STUB_STATUS_* của cổng health).
@@ -852,6 +918,11 @@ exit 0
 # Một nguồn cho cả hai bộ deploy (test_deploy_ghim_sha import hằng này).
 _STUB_NGINX_VERIFY = r"""#!/usr/bin/env bash
 echo "nginx-verify $*" >> "$QLTS_STUB_LOG"
+# Vòng 6: STUB_NGINX_VERIFY_TREO=1 — kiểm PII (thông tin) treo.
+if [ "${STUB_NGINX_VERIFY_TREO:-0}" = "1" ]; then
+    [ -f "${QLTS_STUB_LOG}.treo" ] || date +%s.%N > "${QLTS_STUB_LOG}.treo"
+    sleep "${STUB_TREO_GIAY:-3600}"
+fi
 exit "${STUB_NGINX_VERIFY_RC:-0}"
 """
 
