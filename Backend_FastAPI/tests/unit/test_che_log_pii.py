@@ -1863,10 +1863,18 @@ def test_v7_cli_nap_cau_hinh_trong_cua_ra():
 # =============================================================================
 # ``app/config.py`` từng ``raise e`` lại ``ValidationError`` thô (``input_value=``) ⇒ MỌI
 # tiến trình import ``app.config`` in thô vào docker logs. Mỗi tiến trình dưới đây chạy với
-# cấu hình GIẢ hỏng, CÓ HẠN; còn sống quá hạn = cấu hình lọt (tiến trình đã lên) ⇒ ĐỎ. Dọn
-# ĐÚNG nhóm tiến trình của lượt (``start_new_session`` ⇒ pgid = pid; giết cả nhóm sau khi
-# xong — worker gunicorn / tiến trình con celery không mồ côi). Lệnh = lệnh của ảnh / compose
-# production (Dockerfile CMD, ``command:`` của celery-worker / celery-beat).
+# cấu hình GIẢ hỏng, CÓ HẠN; còn sống quá hạn = cấu hình lọt (tiến trình đã lên) hoặc treo ⇒
+# ĐỎ. Dọn ĐÚNG nhóm tiến trình của lượt (``start_new_session`` ⇒ pgid = pid; giết cả nhóm sau
+# khi xong — worker gunicorn / tiến trình con celery không mồ côi). Lệnh = lệnh của ảnh /
+# compose production (Dockerfile CMD, ``command:`` của celery-worker / celery-beat).
+#
+# V6 vòng 8b (F44): MỖI ca chạy RIÊNG tiến trình của nó (không fixture module chạy nối tiếp
+# cả năm trong setup ca đầu); hạn nội bộ ``_V8_HAN_S`` ≈ 10 s, nhỏ hơn RÕ ``--timeout=60``
+# mỗi ca của CI (lượt bình thường: cả năm ≈ 3,9 s); quá hạn được xét TRƯỚC mọi điều kiện
+# khác (kể cả mốc HẠ TẦNG "có dòng CRITICAL" — tiến trình treo bị SIGKILL có thể chưa xả bộ
+# đệm stdout); giết nhóm + thu stdout/stderr đều CÓ HẠN. Ca xấu nhất mỗi test:
+# ``_V8_HAN_S + 2 × _V8_HAN_DON_S`` = 20 s < 60 s ⇒ tiến trình treo đỏ TẠI khẳng định
+# "quá hạn (còn sống)", không phải ERROR của pytest-timeout.
 
 _V8_GIA = {"MAIL_PORT": "GiaCfg8", "PUBLIC_INTAKE_API_KEY": "GIA-KHOA-BI-MAT-V8-ngan"}
 _V8_CAM = ("GiaCfg8", "GiaCfg", "GIA-KHOA-BI-MAT-V8-ngan", "GIA-KHOA", "input_value")
@@ -1884,12 +1892,26 @@ _V8_TIEN_TRINH = {
     # script vận hành thật (RUNBOOK STS20; mặc định DRY-RUN) import app.config ở mức module
     "script-backfill": [sys.executable, "scripts/backfill_sts20_giveup.py"],
 }
-_V8_HAN_S = 120
+_V8_HAN_S = 10        # hạn sống của tiến trình đo
+_V8_HAN_DON_S = 5     # hạn thu đầu ra / gặt tiến trình SAU khi giết nhóm
+
+
+def _v8_chu(x) -> str:
+    if x is None:
+        return ""
+    return x.decode("utf-8", "replace") if isinstance(x, bytes) else x
+
+
+def _v8_giet_nhom(pgid: int) -> None:
+    import signal
+
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 def _v8_chay(ten: str) -> dict:
-    import signal
-
     env = dict(os.environ)
     env.update(_V8_GIA)
     env.update({
@@ -1902,66 +1924,78 @@ def _v8_chay(ten: str) -> dict:
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                          encoding="utf-8", errors="replace")
     het_gio = False
+    thu_thieu = False
     try:
         out, err = p.communicate(timeout=_V8_HAN_S)
     except subprocess.TimeoutExpired:
         het_gio = True
-        os.killpg(p.pid, signal.SIGKILL)
-        out, err = p.communicate()
+        _v8_giet_nhom(p.pid)
+        try:
+            out, err = p.communicate(timeout=_V8_HAN_DON_S)
+        except subprocess.TimeoutExpired as qh:
+            # một tiến trình đã thoát khỏi nhóm vẫn giữ ống ⇒ KHÔNG chờ vô hạn
+            thu_thieu = True
+            out, err = _v8_chu(qh.output), _v8_chu(qh.stderr)
+            for ong in (p.stdout, p.stderr):
+                try:
+                    ong.close()
+                except OSError:
+                    pass
     finally:
-        try:  # dọn MỌI tiến trình còn lại của nhóm (worker gunicorn, con của celery)
-            os.killpg(p.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    return {"rc": p.returncode, "het_gio": het_gio, "out": (out or "") + "\n" + (err or "")}
-
-
-@pytest.fixture(scope="module")
-def v8_tien_trinh() -> dict:
-    return {ten: _v8_chay(ten) for ten in _V8_TIEN_TRINH}
+        _v8_giet_nhom(p.pid)  # dọn MỌI tiến trình còn lại của nhóm (worker gunicorn, con celery)
+    try:
+        p.wait(timeout=_V8_HAN_DON_S)
+    except subprocess.TimeoutExpired:
+        thu_thieu = True
+    return {"rc": p.returncode, "het_gio": het_gio, "thu_thieu": thu_thieu,
+            "out": _v8_chu(out) + "\n" + _v8_chu(err)}
 
 
 def _v8_vi_pham(kq: dict) -> list:
     out = kq["out"]
+    if kq["het_gio"]:  # xét TRƯỚC mọi điều kiện khác, kể cả mốc HẠ TẦNG bên dưới
+        return ["quá hạn (còn sống) sau %d s — tiến trình KHÔNG dừng với cấu hình hỏng (đã giết "
+                "cả nhóm%s)\n%s" % (_V8_HAN_S, "; KHÔNG thu hết đầu ra trong hạn" if kq["thu_thieu"]
+                                    else "", out[-3000:])]
     assert "CRITICAL [config.py]: Failed to initialize Settings" in out, (
         "HẠ TẦNG: lỗi cấu hình giả không xảy ra:\n%s" % out[-3000:])
     lo = [v for v in _V8_CAM if v in out]
     # dòng của LỖI ném ra (không phải dòng CRITICAL) mang mô tả an toàn
     dong_loi = [d for d in out.splitlines() if "LoiCauHinh" in d and "CRITICAL [config.py]" not in d]
     co_mo_ta = any(all(m in d for m in _V8_MO_TA) for d in dong_loi)
-    if kq["het_gio"] or kq["rc"] == 0 or lo or not co_mo_ta:
-        return ["quá hạn (còn sống): %s · rc=%s · lộ %s · có dòng lỗi mang mô tả an toàn: %s\n%s"
-                % (kq["het_gio"], kq["rc"], lo, co_mo_ta, out[-3000:])]
+    if kq["rc"] == 0 or lo or not co_mo_ta:
+        return ["quá hạn (còn sống): False · rc=%s · lộ %s · có dòng lỗi mang mô tả an toàn: %s\n%s"
+                % (kq["rc"], lo, co_mo_ta, out[-3000:])]
     return []
 
 
-def test_v8_gunicorn_loi_cau_hinh_khong_lo(v8_tien_trinh):
+def test_v8_gunicorn_loi_cau_hinh_khong_lo():
     """``gunicorn app.main:app -c gunicorn.conf.py`` (CMD của ảnh backend)."""
-    sai = _v8_vi_pham(v8_tien_trinh["gunicorn"])
+    sai = _v8_vi_pham(_v8_chay("gunicorn"))
     assert sai == [], "gunicorn — lỗi cấu hình:\n" + "\n".join(sai)
 
 
-def test_v8_celery_worker_loi_cau_hinh_khong_lo(v8_tien_trinh):
+def test_v8_celery_worker_loi_cau_hinh_khong_lo():
     """``celery -A app.celery_app worker …`` (command của celery-worker)."""
-    sai = _v8_vi_pham(v8_tien_trinh["celery-worker"])
+    sai = _v8_vi_pham(_v8_chay("celery-worker"))
     assert sai == [], "celery worker — lỗi cấu hình:\n" + "\n".join(sai)
 
 
-def test_v8_celery_beat_loi_cau_hinh_khong_lo(v8_tien_trinh):
+def test_v8_celery_beat_loi_cau_hinh_khong_lo():
     """``celery -A app.celery_app beat …`` (command của celery-beat)."""
-    sai = _v8_vi_pham(v8_tien_trinh["celery-beat"])
+    sai = _v8_vi_pham(_v8_chay("celery-beat"))
     assert sai == [], "celery beat — lỗi cấu hình:\n" + "\n".join(sai)
 
 
-def test_v8_entrypoint_tat_hai_gate_loi_cau_hinh_khong_lo(v8_tien_trinh):
+def test_v8_entrypoint_tat_hai_gate_loi_cau_hinh_khong_lo():
     """``docker-entrypoint.sh`` với CẢ HAI gate tắt ⇒ ``exec gunicorn``."""
-    sai = _v8_vi_pham(v8_tien_trinh["entrypoint-gunicorn"])
+    sai = _v8_vi_pham(_v8_chay("entrypoint-gunicorn"))
     assert sai == [], "entrypoint (hai gate tắt) — lỗi cấu hình:\n" + "\n".join(sai)
 
 
-def test_v8_script_that_loi_cau_hinh_khong_lo(v8_tien_trinh):
+def test_v8_script_that_loi_cau_hinh_khong_lo():
     """Script vận hành thật import ``app.config`` ở mức module."""
-    sai = _v8_vi_pham(v8_tien_trinh["script-backfill"])
+    sai = _v8_vi_pham(_v8_chay("script-backfill"))
     assert sai == [], "script backfill_sts20_giveup — lỗi cấu hình:\n" + "\n".join(sai)
 
 
