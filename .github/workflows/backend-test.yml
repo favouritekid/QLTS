@@ -1109,6 +1109,12 @@ jobs:
           # che CCCD/token trong log): tiến trình con nạp đúng cấu hình log của
           # web/gunicorn/celery + đọc tĩnh nginx/next.config — KHÔNG đụng CSDL.
           # Ghim WHOLE-FILE.
+          # `tests/utils/test_config_loading.py` vào Tier 5 (V6 vòng 8, N17.14):
+          # khoá hợp đồng ĐƯỜNG NẠP MODULE `app.config` (ném `LoiCauHinh` không
+          # giữ lỗi gốc, không giá trị) + hợp đồng gọi trực tiếp `Settings()`.
+          # Trước đây NGOÀI mọi tier — ca `pytest.raises(ValidationError)` của nó
+          # không shard PR nào chạy. Unit thuần (reload module), KHÔNG đụng CSDL.
+          # Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1163,6 +1169,7 @@ jobs:
               tests/unit/test_status_history_runtime_writer.py
               tests/unit/test_che_log_pii.py
               tests/unit/test_che_log_token_nginx.py
+              tests/utils/test_config_loading.py
 
     env:
       APP_ENV: test

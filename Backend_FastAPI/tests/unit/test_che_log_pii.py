@@ -1857,6 +1857,114 @@ def test_v7_cli_nap_cau_hinh_trong_cua_ra():
     assert sai == [], "\n".join(sai)
 
 
+# =============================================================================
+# V6 vòng 8 — N17.14: lỗi cấu hình được che NGAY TẠI NGUỒN CHUNG (app/config.py) — đo
+# qua TIẾN TRÌNH THẬT của production
+# =============================================================================
+# ``app/config.py`` từng ``raise e`` lại ``ValidationError`` thô (``input_value=``) ⇒ MỌI
+# tiến trình import ``app.config`` in thô vào docker logs. Mỗi tiến trình dưới đây chạy với
+# cấu hình GIẢ hỏng, CÓ HẠN; còn sống quá hạn = cấu hình lọt (tiến trình đã lên) ⇒ ĐỎ. Dọn
+# ĐÚNG nhóm tiến trình của lượt (``start_new_session`` ⇒ pgid = pid; giết cả nhóm sau khi
+# xong — worker gunicorn / tiến trình con celery không mồ côi). Lệnh = lệnh của ảnh / compose
+# production (Dockerfile CMD, ``command:`` của celery-worker / celery-beat).
+
+_V8_GIA = {"MAIL_PORT": "GiaCfg8", "PUBLIC_INTAKE_API_KEY": "GIA-KHOA-BI-MAT-V8-ngan"}
+_V8_CAM = ("GiaCfg8", "GiaCfg", "GIA-KHOA-BI-MAT-V8-ngan", "GIA-KHOA", "input_value")
+_V8_MO_TA = ("MAIL_PORT: không phải số nguyên hợp lệ [int_parsing]",
+             "PUBLIC_INTAKE_API_KEY: validator từ chối giá trị [value_error]")
+_V8_GUNICORN = ["gunicorn", "app.main:app", "-c", "gunicorn.conf.py"]
+_V8_TIEN_TRINH = {
+    "gunicorn": _V8_GUNICORN,
+    "celery-worker": ["celery", "-A", "app.celery_app", "worker", "-Q", "default,celery",
+                      "--loglevel=info", "--concurrency=2"],
+    "celery-beat": ["celery", "-A", "app.celery_app", "beat", "--loglevel=info"],
+    # cả HAI gate tắt ⇒ entrypoint đi thẳng tới ``exec gunicorn`` (chế độ của celery và của
+    # backend khi lùi ảnh + tắt sync)
+    "entrypoint-gunicorn": ["bash", "docker-entrypoint.sh"] + _V8_GUNICORN,
+    # script vận hành thật (RUNBOOK STS20; mặc định DRY-RUN) import app.config ở mức module
+    "script-backfill": [sys.executable, "scripts/backfill_sts20_giveup.py"],
+}
+_V8_HAN_S = 120
+
+
+def _v8_chay(ten: str) -> dict:
+    import signal
+
+    env = dict(os.environ)
+    env.update(_V8_GIA)
+    env.update({
+        "DATABASE_URL": _f41_url("v8_cau_hinh_khong_ton_tai"),
+        "PYTHONIOENCODING": "utf-8",
+        "RUN_MIGRATIONS_ON_STARTUP": "false",
+        "RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP": "false",
+    })
+    p = subprocess.Popen(_V8_TIEN_TRINH[ten], cwd=str(BACKEND), env=env, start_new_session=True,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         encoding="utf-8", errors="replace")
+    het_gio = False
+    try:
+        out, err = p.communicate(timeout=_V8_HAN_S)
+    except subprocess.TimeoutExpired:
+        het_gio = True
+        os.killpg(p.pid, signal.SIGKILL)
+        out, err = p.communicate()
+    finally:
+        try:  # dọn MỌI tiến trình còn lại của nhóm (worker gunicorn, con của celery)
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    return {"rc": p.returncode, "het_gio": het_gio, "out": (out or "") + "\n" + (err or "")}
+
+
+@pytest.fixture(scope="module")
+def v8_tien_trinh() -> dict:
+    return {ten: _v8_chay(ten) for ten in _V8_TIEN_TRINH}
+
+
+def _v8_vi_pham(kq: dict) -> list:
+    out = kq["out"]
+    assert "CRITICAL [config.py]: Failed to initialize Settings" in out, (
+        "HẠ TẦNG: lỗi cấu hình giả không xảy ra:\n%s" % out[-3000:])
+    lo = [v for v in _V8_CAM if v in out]
+    # dòng của LỖI ném ra (không phải dòng CRITICAL) mang mô tả an toàn
+    dong_loi = [d for d in out.splitlines() if "LoiCauHinh" in d and "CRITICAL [config.py]" not in d]
+    co_mo_ta = any(all(m in d for m in _V8_MO_TA) for d in dong_loi)
+    if kq["het_gio"] or kq["rc"] == 0 or lo or not co_mo_ta:
+        return ["quá hạn (còn sống): %s · rc=%s · lộ %s · có dòng lỗi mang mô tả an toàn: %s\n%s"
+                % (kq["het_gio"], kq["rc"], lo, co_mo_ta, out[-3000:])]
+    return []
+
+
+def test_v8_gunicorn_loi_cau_hinh_khong_lo(v8_tien_trinh):
+    """``gunicorn app.main:app -c gunicorn.conf.py`` (CMD của ảnh backend)."""
+    sai = _v8_vi_pham(v8_tien_trinh["gunicorn"])
+    assert sai == [], "gunicorn — lỗi cấu hình:\n" + "\n".join(sai)
+
+
+def test_v8_celery_worker_loi_cau_hinh_khong_lo(v8_tien_trinh):
+    """``celery -A app.celery_app worker …`` (command của celery-worker)."""
+    sai = _v8_vi_pham(v8_tien_trinh["celery-worker"])
+    assert sai == [], "celery worker — lỗi cấu hình:\n" + "\n".join(sai)
+
+
+def test_v8_celery_beat_loi_cau_hinh_khong_lo(v8_tien_trinh):
+    """``celery -A app.celery_app beat …`` (command của celery-beat)."""
+    sai = _v8_vi_pham(v8_tien_trinh["celery-beat"])
+    assert sai == [], "celery beat — lỗi cấu hình:\n" + "\n".join(sai)
+
+
+def test_v8_entrypoint_tat_hai_gate_loi_cau_hinh_khong_lo(v8_tien_trinh):
+    """``docker-entrypoint.sh`` với CẢ HAI gate tắt ⇒ ``exec gunicorn``."""
+    sai = _v8_vi_pham(v8_tien_trinh["entrypoint-gunicorn"])
+    assert sai == [], "entrypoint (hai gate tắt) — lỗi cấu hình:\n" + "\n".join(sai)
+
+
+def test_v8_script_that_loi_cau_hinh_khong_lo(v8_tien_trinh):
+    """Script vận hành thật import ``app.config`` ở mức module."""
+    sai = _v8_vi_pham(v8_tien_trinh["script-backfill"])
+    assert sai == [], "script backfill_sts20_giveup — lỗi cấu hình:\n" + "\n".join(sai)
+
+
 
 # =============================================================================
 # V6 vòng 6 — SMTP: error_reason của email_channel.execute_delivery chỉ giữ loại lỗi + mã SMTP

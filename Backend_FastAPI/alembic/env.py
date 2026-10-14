@@ -20,12 +20,12 @@ from app.core.log_redaction import gan_bo_che_moi_handler, thoat_cli_an_toan  # 
 # module không side effect, import được cả khi app.config không import nổi).
 from app.utils.redact import mo_ta_loi_an_toan  # noqa: E402
 
-# GIAI ĐOẠN NẠP CẤU HÌNH — mọi thứ có thể ném TRƯỚC khối migration. `app.config` dựng
-# Settings() ở mức module và `raise e` lại ValidationError của pydantic (chữ lỗi chèn
-# `input_value=<giá trị đặt sai>`); `set_main_option` ném ValueError mang NGUYÊN URL khi có
-# `%` (configparser); import models / fileConfig nằm cùng khối để KHÔNG lỗi nào của giai đoạn
-# này ra thô. Ném ở đây ⇒ cửa ra CLI với bộ mô tả của chủ sở hữu lỗi cấu hình (chỉ vị trí +
-# mã lỗi, hoặc chỉ tên lớp), mã thoát 1.
+# GIAI ĐOẠN NẠP CẤU HÌNH — mọi thứ có thể ném TRƯỚC khối migration. Lỗi dựng Settings()
+# do NGUỒN `app/config.py` che (tầng chủ sở hữu, V6 vòng 8: ném `LoiCauHinh` không giữ lỗi
+# gốc); khối này là lớp phòng thủ THỨ HAI cho cả giai đoạn — riêng `set_main_option` ném
+# ValueError mang NGUYÊN URL khi có `%` (configparser) thì chỉ khối này chặn; import models /
+# fileConfig nằm cùng khối để KHÔNG lỗi nào của giai đoạn này ra thô. Ném ở đây ⇒ cửa ra CLI
+# với bộ mô tả của chủ sở hữu lỗi cấu hình (chỉ vị trí + mã lỗi, hoặc chỉ tên lớp), mã thoát 1.
 try:
     from app.config import settings
     from app.models.base import Base

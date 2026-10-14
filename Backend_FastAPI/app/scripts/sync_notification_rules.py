@@ -30,9 +30,10 @@ from app.utils.redact import mo_ta_loi_an_toan
 # Imported at module scope ON PURPOSE: if these cannot be imported the sync
 # must fail loudly at startup, not degrade to the old recipient config.
 # V6 vòng 7: vẫn dừng to (mã thoát 1) — nhưng GIAI ĐOẠN NẠP CẤU HÌNH (các import `app.*`
-# kéo theo `app.config` ⇒ Settings() ở mức module, `raise e` lại ValidationError mang
-# `input_value=`) đi qua cửa ra CLI khi chạy như tiến trình (`python -m …`: entrypoint
-# Gate 2, cutover tay). Import như thư viện (test, mã khác) ⇒ ném lại NGUYÊN VẸN.
+# kéo theo `app.config` ⇒ Settings() ở mức module) đi qua cửa ra CLI khi chạy như tiến trình
+# (`python -m …`: entrypoint Gate 2, cutover tay). Tầng CHỦ SỞ HỮU của việc che lỗi cấu hình
+# là nguồn `app/config.py` (vòng 8: `LoiCauHinh` không giữ lỗi gốc); đây là lớp phòng thủ
+# thứ hai. Import như thư viện (test, mã khác) ⇒ ném lại NGUYÊN VẸN.
 try:
     from app.core.events import SystemEvents
     from app.core.notification_seed_defaults import NOTIFICATION_SEED_DEFAULTS
