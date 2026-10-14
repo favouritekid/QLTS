@@ -9,6 +9,13 @@ là in thô (rò), hoặc là trống rỗng (vô dụng).
 
 Một bản cài đặt duy nhất cho mọi chỗ in: hai bản là hai cơ hội để một bản quên
 mất một dạng URL.
+
+Ranh giới với ``app/core/log_redaction.py`` (V6 vòng 7): tệp này là CHỦ SỞ HỮU
+mô tả lỗi CẤU HÌNH (``config.py``, preflight Step 4b, và giai đoạn NẠP CẤU HÌNH
+của mọi tiến trình dòng lệnh). ``log_redaction`` sở hữu bộ che LOG / lỗi CSDL và
+CƠ CHẾ cửa ra dòng lệnh (``thoat_cli_an_toan``: ghi stderr, mã thoát khác 0) —
+cửa ra ấy nhận :func:`mo_ta_loi_an_toan` qua tham số ``bo_mo_ta`` chứ không tự
+mô tả lỗi cấu hình. Hai tệp KHÔNG import nhau; tiến trình dòng lệnh ghép chúng.
 """
 from __future__ import annotations
 

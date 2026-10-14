@@ -1655,8 +1655,11 @@ def test_v6_cli_deploy_bat_ngoai_le_o_cua_ra():
         if rel == "alembic/env.py":
             than = cay.body
             ok = try_bat_o_cua_ra(than)
-            vt_cfg = [i for i, n in enumerate(than) if any(goi(m, "fileConfig") for m in ast.walk(n))]
-            vt_che = [i for i, n in enumerate(than)
+            # Thứ tự THỰC THI ở mức module — kể cả thân khối ``try`` của giai đoạn nạp cấu
+            # hình (V6 vòng 7: fileConfig + phủ bộ che nằm TRONG cửa ra CLI).
+            phang = [m for n in than for m in (n.body if isinstance(n, ast.Try) else [n])]
+            vt_cfg = [i for i, n in enumerate(phang) if any(goi(m, "fileConfig") for m in ast.walk(n))]
+            vt_che = [i for i, n in enumerate(phang)
                       if isinstance(n, ast.Expr) and goi(n.value, "gan_bo_che_moi_handler")]
             if not (vt_cfg and vt_che and min(vt_che) > max(vt_cfg)):
                 thieu.append("%s: thiếu gan_bo_che_moi_handler() SAU fileConfig ở mức module" % rel)
@@ -1667,6 +1670,191 @@ def test_v6_cli_deploy_bat_ngoai_le_o_cua_ra():
         if not ok:
             thieu.append("%s: ngoại lệ không bắt KHÔNG qua thoat_cli_an_toan ở cửa ra" % rel)
     assert thieu == [], "\n".join(thieu)
+
+
+# =============================================================================
+# V6 vòng 7 — F41: lỗi CẤU HÌNH lúc nạp (import app.config) qua cửa ra CLI, mô tả của CHỦ
+# SỞ HỮU lỗi cấu hình (app/utils/redact.py)
+# =============================================================================
+# ``app/config.py`` dựng ``Settings()`` ở mức module rồi ``raise e`` lại ``ValidationError``
+# của pydantic — chữ lỗi chèn ``input_value=<giá trị đặt sai>``. Đo qua ĐÚNG đường thật
+# (subprocess): Alembic CLI trần (= one-off deploy.sh Step 6), ``bash docker-entrypoint.sh``
+# Gate 1, ``python -m app.scripts.sync_notification_rules`` trần (cutover tay) và qua
+# entrypoint Gate 2 (``RUN_MIGRATIONS_ON_STARTUP=false`` — chế độ lùi ảnh). Hai lỗi giả: sai
+# KIỂU (giá trị ngắn < 8 ký tự) và validator TỪ CHỐI một khoá bí mật (giá trị dài).
+# DATABASE_URL trỏ một CSDL KHÔNG tồn tại + thư mục phiên bản RỖNG ⇒ kể cả khi lỗi cấu hình
+# không xảy ra thì cũng không chạm CSDL nào (và điều kiện HẠ TẦNG dưới đây ĐỎ).
+
+_V7_URL_GIA = "postgresql+asyncpg://gia_v7:GiaMk%40v7q@127.0.0.1:1/v7_cau_hinh_khong_ton_tai"
+_V7_KICH_BAN = {
+    # mã: (biến, giá trị GIẢ, chuỗi CẤM có mặt, dòng mô tả an toàn mong đợi ở cửa ra,
+    #      mốc HẠ TẦNG chứng minh lỗi giả THẬT SỰ xảy ra, các đường áp dụng)
+    "kieu": ("MAIL_PORT", "GiaCfg7", ("GiaCfg7", "GiaCfg", "input_value"),
+             "MAIL_PORT: không phải số nguyên hợp lệ [int_parsing]",
+             "CRITICAL [config.py]: Failed to initialize Settings", "*"),
+    "bimat": ("PUBLIC_INTAKE_API_KEY", "GIA-KHOA-BI-MAT-V7-ngan",
+              ("GIA-KHOA-BI-MAT-V7-ngan", "GIA-KHOA", "input_value"),
+              "PUBLIC_INTAKE_API_KEY: validator từ chối giá trị [value_error]",
+              "CRITICAL [config.py]: Failed to initialize Settings", "*"),
+    # ``%`` trong DATABASE_URL (mật khẩu mã hoá URL, ``%40`` = ``@``): configparser của
+    # ``set_main_option`` ném ``ValueError("invalid interpolation syntax in '<NGUYÊN URL>'…")``
+    # — Settings dựng ĐƯỢC; chỉ Alembic gọi set_main_option.
+    "url": ("DATABASE_URL", _V7_URL_GIA, ("GiaMk", "gia_v7:", "invalid interpolation syntax in '"),
+            "ValueError — không in message", "set_main_option", "alembic"),
+}
+_V7_DUONG = ("alembic-tran", "alembic-entrypoint", "sync-tran", "sync-entrypoint")
+
+
+def _v7_chay(tmp: Path, kb: str, duong: str) -> subprocess.CompletedProcess:
+    import shutil
+
+    bien, gia = _V7_KICH_BAN[kb][:2]
+    thu_muc = tmp / ("%s-%s" % (kb, duong))
+    (thu_muc / "versions").mkdir(parents=True)
+    ini = (BACKEND / "alembic.ini").read_text(encoding="utf-8")
+    assert "script_location = %(here)s/alembic" in ini, "HẠ TẦNG: alembic.ini đổi khuôn"
+    ini = ini.replace(
+        "script_location = %(here)s/alembic",
+        "script_location = %s\nversion_locations = %s"
+        % ((BACKEND / "alembic").as_posix(), (thu_muc / "versions").as_posix()))
+    (thu_muc / "alembic.ini").write_text(ini, encoding="utf-8")
+    env = dict(os.environ)
+    env.update({
+        "ALEMBIC_CONFIG": str(thu_muc / "alembic.ini"),
+        "DATABASE_URL": _f41_url("v7_cau_hinh_khong_ton_tai"),
+        "PYTHONIOENCODING": "utf-8",
+        bien: gia,
+    })
+    if duong == "alembic-tran":
+        alembic_bin = shutil.which("alembic")
+        assert alembic_bin, "HẠ TẦNG: không thấy lệnh alembic"
+        lenh = [alembic_bin, "upgrade", "head"]
+    elif duong == "sync-tran":
+        lenh = [sys.executable, "-m", "app.scripts.sync_notification_rules"]
+    else:
+        alembic_truoc = duong == "alembic-entrypoint"
+        env["RUN_MIGRATIONS_ON_STARTUP"] = "true" if alembic_truoc else "false"
+        env["RUN_SYNC_NOTIFICATION_RULES_ON_STARTUP"] = "false" if alembic_truoc else "true"
+        lenh = ["bash", str(BACKEND / "docker-entrypoint.sh"), "echo", "V6_KHONG_DUOC_TOI_DAY"]
+    return subprocess.run(lenh, cwd=str(BACKEND), capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=240, env=env)
+
+
+@pytest.fixture(scope="module")
+def f41cfg(tmp_path_factory) -> dict:
+    tmp = tmp_path_factory.mktemp("v7_cau_hinh")
+    return {(kb, d): _v7_chay(tmp, kb, d) for kb, v in _V7_KICH_BAN.items() for d in _V7_DUONG
+            if v[5] == "*" or d.startswith(v[5])}
+
+
+def _v7_vi_pham(f41cfg: dict, duong: str, ten: str) -> list:
+    """Vi phạm (rỗng = đạt) của MỌI kịch bản trên một đường: rc ≠ 0; stdout + stderr KHÔNG
+    chứa giá trị giả (cả tiền tố) lẫn ``input_value``; SAU dòng ``<ten>: THẤT BẠI`` của cửa ra
+    CLI có dòng mô tả an toàn của chủ sở hữu lỗi cấu hình (vị trí + mã lỗi / chỉ tên lớp)."""
+    sai = []
+    for kb, (bien, gia, cam, dong, moc_ht, _) in _V7_KICH_BAN.items():
+        if (kb, duong) not in f41cfg:
+            continue
+        r = f41cfg[(kb, duong)]
+        out = (r.stdout or "") + "\n" + (r.stderr or "")
+        assert moc_ht in out, (
+            "HẠ TẦNG: lỗi cấu hình giả (%s) không xảy ra trên %s:\n%s" % (kb, duong, out[-3000:]))
+        lo = [v for v in cam if v in out]
+        moc = ten + ": THẤT BẠI"
+        sau = out.split(moc, 1)[1] if moc in out else ""
+        # entrypoint chạy TIẾP sau bước hỏng = fail-open (cùng họ với rc = 0)
+        chay_tiep = "V6_KHONG_DUOC_TOI_DAY" in out
+        if r.returncode == 0 or chay_tiep or lo or dong not in sau:
+            sai.append("[%s] lộ %s · rc=%s · chạy tiếp: %s · có dòng mô tả an toàn ở cửa ra: %s\n%s"
+                       % (kb, lo, r.returncode, chay_tiep, dong in sau, out[-2500:]))
+    return sai
+
+
+def test_v7_alembic_cli_tran_loi_cau_hinh_khong_lo(f41cfg):
+    """One-off ``alembic upgrade head`` (deploy.sh Step 6) với cấu hình hỏng lúc nạp."""
+    sai = _v7_vi_pham(f41cfg, "alembic-tran", "alembic")
+    assert sai == [], "alembic CLI — lỗi cấu hình lúc nạp:\n" + "\n".join(sai)
+
+
+def test_v7_alembic_entrypoint_loi_cau_hinh_khong_lo(f41cfg):
+    """``docker-entrypoint.sh`` Gate 1 (``alembic upgrade head`` lúc tạo container)."""
+    sai = _v7_vi_pham(f41cfg, "alembic-entrypoint", "alembic")
+    assert sai == [], "entrypoint Gate 1 — lỗi cấu hình lúc nạp:\n" + "\n".join(sai)
+
+
+def test_v7_sync_rules_tran_loi_cau_hinh_khong_lo(f41cfg):
+    """``python -m app.scripts.sync_notification_rules`` (cutover tay)."""
+    sai = _v7_vi_pham(f41cfg, "sync-tran", "sync_notification_rules")
+    assert sai == [], "sync_notification_rules — lỗi cấu hình lúc nạp:\n" + "\n".join(sai)
+
+
+def test_v7_sync_rules_entrypoint_loi_cau_hinh_khong_lo(f41cfg):
+    """``docker-entrypoint.sh`` Gate 2 khi Gate 1 tắt (``RUN_MIGRATIONS_ON_STARTUP=false``)."""
+    sai = _v7_vi_pham(f41cfg, "sync-entrypoint", "sync_notification_rules")
+    assert sai == [], "entrypoint Gate 2 — lỗi cấu hình lúc nạp:\n" + "\n".join(sai)
+
+
+def test_v7_cli_nap_cau_hinh_trong_cua_ra():
+    """Ở mỗi tiến trình dòng lệnh của ``_S6_CLI``: MỌI import ``app.*`` ở mức module (trừ hai
+    chủ sở hữu không side effect) nằm trong một khối ``try`` mà nhánh bắt gọi
+    ``thoat_cli_an_toan(…, bo_mo_ta=mo_ta_loi_an_toan)``. Riêng ``alembic/env.py``: câu lệnh
+    THỰC THI ở mức module ngoài các khối cửa ra chỉ được là import / ``sys.path.*`` / định
+    nghĩa hàm — thứ gì khác ném ra thì ra THÔ."""
+    import ast
+
+    chu = {"app.core.log_redaction", "app.utils.redact"}
+
+    def cua_ra(n, can_bo_mo_ta: bool) -> bool:
+        if not isinstance(n, ast.Try):
+            return False
+        for h in n.handlers:
+            for m in ast.walk(h):
+                if not (isinstance(m, ast.Call) and (
+                        getattr(m.func, "id", None) == "thoat_cli_an_toan"
+                        or getattr(m.func, "attr", None) == "thoat_cli_an_toan")):
+                    continue
+                if not can_bo_mo_ta or any(
+                        k.arg == "bo_mo_ta" and isinstance(k.value, ast.Name)
+                        and k.value.id == "mo_ta_loi_an_toan" for k in m.keywords):
+                    return True
+        return False
+
+    def import_app(n) -> bool:
+        if isinstance(n, ast.ImportFrom):
+            ten = n.module or ""
+            return (ten == "app" or ten.startswith("app.")) and ten not in chu
+        if isinstance(n, ast.Import):
+            return any((a.name == "app" or a.name.startswith("app.")) and a.name not in chu
+                       for a in n.names)
+        return False
+
+    sai = []
+    for rel in _S6_CLI:
+        cay = ast.parse((BACKEND / rel).read_text(encoding="utf-8"))
+        for n in cay.body:
+            if cua_ra(n, True):
+                continue
+            for m in (n.body if isinstance(n, ast.Try) else [n]):
+                if import_app(m):
+                    sai.append("%s:%d: import ứng dụng NGOÀI cửa ra nạp cấu hình: %s"
+                               % (rel, m.lineno, ast.unparse(m)[:80]))
+        if rel != "alembic/env.py":
+            continue
+        if not any(cua_ra(n, True) for n in cay.body):
+            sai.append("%s: không có khối nạp cấu hình bắt về thoat_cli_an_toan(bo_mo_ta=…)" % rel)
+        for n in cay.body:
+            if isinstance(n, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if isinstance(n, ast.Try) and cua_ra(n, False):
+                continue
+            if isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant):
+                continue
+            if (isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+                    and ast.unparse(n.value.func).startswith("sys.path.")):
+                continue
+            sai.append("%s:%d: câu lệnh THỰC THI ngoài cửa ra CLI: %s"
+                       % (rel, n.lineno, ast.unparse(n)[:80]))
+    assert sai == [], "\n".join(sai)
 
 
 

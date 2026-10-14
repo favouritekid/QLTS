@@ -49,7 +49,7 @@ import logging
 import re
 import uuid
 from collections.abc import Mapping, MutableMapping
-from typing import Any, NoReturn, Optional, Union
+from typing import Any, Callable, NoReturn, Optional, Union
 
 # ---------------------------------------------------------------------------
 # MỘT NGUỒN MẪU
@@ -1034,25 +1034,53 @@ def gan_bo_che_moi_handler() -> int:
     return so
 
 
-def thoat_cli_an_toan(exc: BaseException, ten: str = "cli", tep: Any = None) -> NoReturn:
+def thoat_cli_an_toan(
+    exc: BaseException,
+    ten: str = "cli",
+    tep: Any = None,
+    bo_mo_ta: Optional[Callable[[BaseException], str]] = None,
+) -> NoReturn:
     """Cửa ra của ngoại lệ KHÔNG BẮT ở một tiến trình dòng lệnh: thay traceback
     THÔ của Python bằng :func:`dinh_dang_traceback_an_toan` (giữ khung tệp/dòng/
     hàm và chuỗi cause/context; lỗi CSDL chỉ còn ``DBError[loại · SQLSTATE ·
     ràng buộc · bảng]``; ngoại lệ khác qua regex), ghi ra stderr, rồi THOÁT VỚI
     MÃ KHÁC 0 (``SystemExit(1)``; Ctrl-C ⇒ 130) — báo hỏng phải ra mã thoát.
-    ``SystemExit`` mang mã số hoặc ``None`` được ném lại NGUYÊN VẸN."""
+    ``SystemExit`` mang mã số hoặc ``None`` được ném lại NGUYÊN VẸN.
+
+    ``bo_mo_ta`` — RANH GIỚI chủ sở hữu (V6 vòng 7): hàm này giữ CƠ CHẾ của cửa
+    ra (ghi stderr, mã thoát). NỘI DUNG mặc định là của bộ che này — đúng cho lỗi
+    CSDL, KHÔNG đủ cho lỗi CẤU HÌNH: ``ValidationError`` của pydantic chèn
+    ``input_value=<giá trị đặt sai>`` theo một khuôn không khoá nào trong regex
+    nhận ra. Giai đoạn NẠP CẤU HÌNH của tiến trình dòng lệnh truyền
+    ``bo_mo_ta=app.utils.redact.mo_ta_loi_an_toan`` — chủ sở hữu lỗi cấu hình
+    (cũng là bộ mô tả của preflight Step 4b): chỉ vị trí + mã lỗi, không chữ lỗi.
+    Khi có ``bo_mo_ta``: in KHUNG (tệp/dòng/hàm — mã nguồn, không giá trị) của
+    ngoại lệ NGOÀI CÙNG rồi đúng MỘT dòng ``bo_mo_ta(exc)``; KHÔNG đi chuỗi
+    cause/context (chữ của chúng không qua chủ sở hữu ấy)."""
     import sys
 
     if isinstance(exc, SystemExit) and (exc.code is None or isinstance(exc.code, int)):
         raise exc
     ra = tep if tep is not None else sys.stderr
+    if bo_mo_ta is None:
+        dau = "mô tả an toàn, lỗi CSDL chỉ còn tóm tắt thuộc tính"
+    else:
+        dau = "mô tả an toàn theo chủ sở hữu miền lỗi, không chữ lỗi"
     try:
-        mo_ta = dinh_dang_traceback_an_toan(exc)
+        if bo_mo_ta is None:
+            mo_ta = dinh_dang_traceback_an_toan(exc)
+        else:
+            import traceback
+
+            khung = ""
+            if exc.__traceback__ is not None:
+                khung = "Traceback (most recent call last):\n" + "".join(
+                    traceback.format_list(traceback.extract_tb(exc.__traceback__)))
+            mo_ta = khung + str(bo_mo_ta(exc))
     except Exception:  # noqa: BLE001 — cửa ra cuối không được tự ném
         mo_ta = "%s (không dựng được mô tả an toàn)" % type(exc).__name__
     try:
-        ra.write("%s: THẤT BẠI — ngoại lệ không bắt (mô tả an toàn, lỗi CSDL chỉ còn "
-                 "tóm tắt thuộc tính):\n%s\n" % (ten, mo_ta))
+        ra.write("%s: THẤT BẠI — ngoại lệ không bắt (%s):\n%s\n" % (ten, dau, mo_ta))
         ra.flush()
     except Exception:  # noqa: BLE001
         pass

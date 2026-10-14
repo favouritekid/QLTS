@@ -21,19 +21,34 @@ from typing import Any, Dict
 
 from copy import deepcopy
 
+# V6 vòng 6–7 (F41): cửa ra CLI (cơ chế: log_redaction) + mô tả lỗi CẤU HÌNH (chủ sở
+# hữu: app/utils/redact.py). Cả hai là module không side effect, import được kể cả khi
+# app.config không import nổi.
+from app.core.log_redaction import thoat_cli_an_toan
+from app.utils.redact import mo_ta_loi_an_toan
+
 # Imported at module scope ON PURPOSE: if these cannot be imported the sync
 # must fail loudly at startup, not degrade to the old recipient config.
-from app.core.events import SystemEvents
-from app.core.notification_seed_defaults import NOTIFICATION_SEED_DEFAULTS
-from app.services.notification_rule_loader import deserialize_resolver
+# V6 vòng 7: vẫn dừng to (mã thoát 1) — nhưng GIAI ĐOẠN NẠP CẤU HÌNH (các import `app.*`
+# kéo theo `app.config` ⇒ Settings() ở mức module, `raise e` lại ValidationError mang
+# `input_value=`) đi qua cửa ra CLI khi chạy như tiến trình (`python -m …`: entrypoint
+# Gate 2, cutover tay). Import như thư viện (test, mã khác) ⇒ ném lại NGUYÊN VẸN.
+try:
+    from app.core.events import SystemEvents
+    from app.core.notification_seed_defaults import NOTIFICATION_SEED_DEFAULTS
+    from app.services.notification_rule_loader import deserialize_resolver
 
-import structlog
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    import structlog
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app import models
-from app.config import settings
-from app.core.event_catalog import EVENT_CATALOG, get_notifiable_events
+    from app import models
+    from app.config import settings
+    from app.core.event_catalog import EVENT_CATALOG, get_notifiable_events
+except BaseException as _loi:  # noqa: BLE001 — cửa ra CLI: giai đoạn nạp cấu hình
+    if __name__ != "__main__":
+        raise
+    thoat_cli_an_toan(_loi, ten="sync_notification_rules", bo_mo_ta=mo_ta_loi_an_toan)
 
 log = structlog.get_logger(__name__)
 
@@ -392,9 +407,8 @@ async def main():
 
 if __name__ == "__main__":
     # V6 vòng 6 (F41, §6): chạy trong docker-entrypoint.sh (docker logs) và bằng tay
-    # lúc cutover — ngoại lệ không bắt qua cửa ra CLI của CHỦ SỞ HỮU bộ che.
-    from app.core.log_redaction import thoat_cli_an_toan
-
+    # lúc cutover — ngoại lệ không bắt qua cửa ra CLI của CHỦ SỞ HỮU bộ che
+    # (`thoat_cli_an_toan` đã import ở đầu tệp, trước giai đoạn nạp cấu hình).
     try:
         asyncio.run(main())
     except BaseException as _loi:  # noqa: BLE001 — cửa ra CLI: mọi ngoại lệ
