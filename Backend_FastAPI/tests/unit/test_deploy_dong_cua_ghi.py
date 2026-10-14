@@ -2019,6 +2019,18 @@ def test_v6b_khong_bat_dau_lenh_ghi_khi_ngan_sach_khong_du(tmp_path: Path) -> No
          """    [ "$r" -ge $(( $1 + 5 )) ] && return 0\n""", """    return 0\n"""),
         ("hết ngân sách vẫn in hướng dẫn đầy đủ",
          """    if [ -n "${_DCG_TRAP_HET:-}" ] && [ "$(_dcg_con_lai)" -le 0 ]; then\n""", """    if false; then\n"""),
+        # Vòng 6c (F46) — kiểm độc lập của coordinator: W6, W5 sống trên bộ 6b.
+        ("W6: hết ngân sách vẫn trả 0 (bỏ `return 1`, nguyên văn coordinator)",
+         """    if [ "$r" -le 0 ]; then printf '0\\n'; return 1; fi\n""",
+         """    if [ "$r" -le 0 ]; then printf '0\\n'; fi\n"""),
+        ("W6b · Docker: hết ngân sách in 0 VÀ trả 0 (`timeout 0` = TẮT hạn)",
+         """    if [ "$r" -le 0 ]; then printf '0\\n'; return 1; fi\n""",
+         """    if [ "$r" -le 0 ]; then printf '0\\n'; return 0; fi\n"""),
+        ("W6b · psql: hết ngân sách in 0 VÀ trả 0 (`timeout 0` = TẮT hạn)",
+         """    if [ "$r" -le 0 ]; then printf '0\\n'; return 1; fi\n""",
+         """    if [ "$r" -le 0 ]; then printf '0\\n'; return 0; fi\n"""),
+        ("W5: bỏ đệm +5 s của lệnh ghi",
+         """    [ "$r" -ge $(( $1 + 5 )) ] && return 0\n""", """    [ "$r" -ge "$1" ] && return 0\n"""),
     ],
 )
 def test_kiem_nguoc_v6b_go_tung_guard(tmp_path: Path, ten_ca: str, cu: str, moi: str) -> None:
@@ -2040,7 +2052,237 @@ def test_kiem_nguoc_v6b_go_tung_guard(tmp_path: Path, ten_ca: str, cu: str, moi:
         goc = _dung_san_khau(tmp_path, deploy_sh=dot)
         _chay_deploy(goc, **_LUI, **{**_V6, "QLTS_HAN_KHOI_DONG": "30", "QLTS_TRAN_TRAP": "10"})
         assert _so_lan_goi(goc, "start", _cid_gia("backend")) >= 1, f"{ten_ca}: vẫn không start ⇒ ca không canh"
+    elif ten_ca.startswith("W6:"):
+        # Nguyên văn W6 in "0\n0" (nhánh dưới vẫn in phần còn lại) ⇒ GNU `timeout` từ chối hạn
+        # nhiều dòng (rc 125) nên KHÔNG treo — lệnh đọc không chạy là nhờ tình cờ, không nhờ guard.
+        # Thứ nó phá thật: hàm KHÔNG còn từ chối ⇒ người gọi vẫn gọi `timeout` với hạn rác.
+        kq = _chay_han_con(tmp_path, "0", "docker", deploy_sh=dot)
+        assert kq["timeout"], f"{ten_ca}: hết ngân sách mà vẫn KHÔNG gọi timeout ⇒ ca hợp đồng không canh `return 1`"
+    elif ten_ca.startswith("W6b"):
+        goc = _dung_san_khau(tmp_path, deploy_sh=dot)
+        (_ca_6c_docker if "Docker" in ten_ca else _ca_6c_psql)(goc)
+        tran, da = _thoi_gian_trap(goc, time.time())
+        assert da > tran + 3, (
+            f"{ten_ca}: trap vẫn dừng trong {da:.1f}s/{tran}s ⇒ ca đọc-SAU-khi-hết-ngân-sách không canh `timeout 0`")
+    elif ten_ca.startswith("W5:"):
+        goc = _dung_san_khau(tmp_path, deploy_sh=dot)
+        _ca_6c_bien(goc)
+        assert _so_lan_goi(goc, "start", _cid_gia("backend")) >= 1, (
+            f"{ten_ca}: vẫn không start ⇒ ca biên [hạn, hạn+5) không canh đệm 5 s")
     else:
         goc = _dung_san_khau(tmp_path, deploy_sh=dot)
         ket, _ = _ca_ns_do_treo(goc)
         assert _DAU_HET_NS not in _ra(ket), f"{ten_ca}: vẫn in bản ngắn ⇒ ca không canh nhánh in ngắn"
+
+
+# =============================================================================
+# XIII. Vòng 6c (F46) — SAU khi ngân sách đã hết, lệnh đọc kế tiếp KHÔNG được chạy
+# =============================================================================
+# Kiểm độc lập của coordinator (14-10): các ca treo của 6b đều treo TRƯỚC khi hết ngân sách,
+# nên không ca nào canh phép đọc ĐI SAU bước đã tiêu hết ngân sách — đúng chỗ `_dcg_han_con`
+# phải TỪ CHỐI (trả 1) thay vì đưa 0 cho `timeout` (0 = TẮT hạn). Ở đây một bước Docker tiêu
+# trọn ngân sách (hạn đọc 30 s > ngân sách 12 s ⇒ hạn thực = phần còn lại), rồi phép đọc KẾ
+# TIẾP (Docker ở một ca, psql ở ca kia) TREO trong stub. Mỗi ca chỉ vi phạm MỘT bất biến.
+_V6C = {**_V6, "QLTS_HAN_LENH_DOCKER": "30", "QLTS_TRAN_TRAP": "12"}
+_TREO_6C = "25"   # giây stub treo — đúng: phép ấy KHÔNG chạy; `timeout 0`: chờ trọn
+
+
+def _cac_loi_goi_va_cha(goc: Path) -> list[tuple[list[str], list[str]]]:
+    """(argv lời gọi docker, argv tiến trình CHA) theo thứ tự — từ "$QLTS_STUB_LOG.cha"."""
+    import base64
+
+    def tach(b64: str) -> list[str]:
+        tho = base64.b64decode(b64) if b64 else b""
+        return [x.decode("utf-8", "replace") for x in tho.split(b"\0")[:-1]]
+
+    ra = []
+    for dong in (goc / "lenh.log.cha").read_text(encoding="utf-8").splitlines():
+        a, _, c = dong.partition("\t")
+        ra.append((tach(a), tach(c)))
+    return ra
+
+
+def _han_cua_cha(cha: list[str]) -> str | None:
+    """Hạn mà `timeout` cha đặt cho lời gọi; None khi cha KHÔNG phải `timeout` (= không hạn)."""
+    if not cha or Path(cha[0]).name != "timeout":
+        return None
+    i = 1
+    while i < len(cha) and cha[i].startswith("-"):
+        i += 2 if cha[i] in ("-k", "-s", "--kill-after", "--signal") else 1
+    return cha[i] if i < len(cha) else ""
+
+
+def _goi_khong_han_sau(goc: Path, moc: str) -> list[str]:
+    """Lời gọi docker SAU lời gọi đầu tiên chứa `moc` mà KHÔNG chạy dưới `timeout <nguyên dương>`."""
+    import re
+
+    goi = _cac_loi_goi_va_cha(goc)
+    vt = [i for i, (a, _) in enumerate(goi) if moc in " ".join(a)]
+    assert vt, f"không thấy lời gọi chứa {moc!r} trong nhật ký tiến trình cha"
+    xau = []
+    for a, cha in goi[vt[0] + 1:]:
+        h = _han_cua_cha(cha)
+        if h is None or not re.fullmatch(r"[1-9][0-9]*", h):
+            xau.append(f"hạn={h!r} · {' '.join(a)[:100]}")
+    return xau
+
+
+def _ca_6c_docker(goc: Path):
+    # Sau `docker start` backend: mọi phép ĐỌC theo CID backend (inspect / ps --filter id=) TREO.
+    # Phép inspect của bước đo-lại tiêu hết ngân sách; `_dcg_doc_ct` rồi hỏi `ps -a --filter id=`
+    # — phép đọc Docker SAU khi hết ngân sách.
+    cb = _cid_gia("backend")
+    return _chay_deploy(goc, STUB_TREO_KHI=f"[ip]*{cb}*", STUB_TREO_SAU=f"docker start {cb}",
+                        STUB_TREO_GIAY=_TREO_6C, **_LUI, **_V6C)
+
+
+def _ca_6c_psql(goc: Path):
+    # `docker start` backend hết hạn (2 s) rồi Docker KHÔNG đọc được backend (lỗi tức thì) ⇒ CHƯA
+    # XÁC ĐỊNH ⇒ hướng dẫn ĐẦY ĐỦ khi còn ngân sách; trong đó phép đọc nginx TREO tiêu hết ngân
+    # sách, rồi tới vân tay lược đồ (psql) — cũng TREO. Sau phép đọc nginx không còn phép Docker nào.
+    cn = _cid_gia("nginx")
+    return _chay_deploy(goc, STUB_GHI_TREO="start:backend", STUB_GHI_TREO_KIEU="khong_doc",
+                        STUB_TREO_KHI=f"inspect -f {{{{.State.Status}}}} {cn}", STUB_TREO_SAU="docker start ",
+                        STUB_PSQL_TREO_SAU="docker start ", STUB_TREO_GIAY=_TREO_6C, **_LUI, **_V6C)
+
+
+@_bo_qua_neu_khong_posix
+def test_v6c_doc_docker_sau_khi_het_ngan_sach_khong_chay_trap_dung_trong_ngan_sach(tmp_path: Path) -> None:
+    import time
+
+    goc = _dung_san_khau(tmp_path)
+    _ca_6c_docker(goc)
+    tran, da = _thoi_gian_trap(goc, time.time())
+    tt = _tep_trang_thai(goc)
+    assert tran == 12, f"ghi đè QLTS_TRAN_TRAP không hạ trần: {tran}"
+    assert da >= tran - 3, (
+        f"trap chỉ chạy {da:.1f}s/{tran}s — bước treo KHÔNG tiêu hết ngân sách ⇒ ca không canh phép đọc SAU")
+    assert da <= tran + 3, (
+        f"trap chạy {da:.1f}s — VƯỢT ngân sách {tran}s: phép đọc Docker SAU khi hết ngân sách vẫn chạy (không hạn)")
+    xau = _goi_khong_han_sau(goc, "pg_dump")
+    assert xau == [], "lời gọi docker trong trap chạy với hạn 0 / KHÔNG hạn:\n" + "\n".join(xau)
+    assert "mo_lai_cu\tCHUA_XAC_DINH" in tt, tt
+    assert _so_lan_goi(goc, "start", _cid_gia("backend")) == 1, "lệnh ghi bị CHẠY LẠI"
+    assert sum(_so_lan_goi(goc, "start", _cid_gia(dv)) for dv in ("celery-worker", "celery-beat")) == 0, (
+        "đo lại backend CHƯA XÁC ĐỊNH mà vẫn mở tiếp")
+
+
+@_bo_qua_neu_khong_posix
+def test_v6c_psql_sau_khi_het_ngan_sach_khong_chay_trap_dung_trong_ngan_sach(tmp_path: Path) -> None:
+    import time
+
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _ca_6c_psql(goc)
+    tran, da = _thoi_gian_trap(goc, time.time())
+    ra, tt = _ra(ket), _tep_trang_thai(goc)
+    assert tran == 12, f"ghi đè QLTS_TRAN_TRAP không hạ trần: {tran}"
+    assert "vân tay lược đồ BÂY GIỜ: KHÔNG đo được" in ra, (
+        "ca không tới phép vân tay (psql) của hướng dẫn ⇒ không canh psql SAU khi hết ngân sách:\n" + ra[-2000:])
+    assert da >= tran - 3, (
+        f"trap chỉ chạy {da:.1f}s/{tran}s — phép đọc nginx KHÔNG tiêu hết ngân sách ⇒ ca không canh psql SAU")
+    assert da <= tran + 3, (
+        f"trap chạy {da:.1f}s — VƯỢT ngân sách {tran}s: phép psql SAU khi hết ngân sách vẫn chạy (không hạn)")
+    xau = _goi_khong_han_sau(goc, "pg_dump")
+    assert xau == [], "lời gọi docker trong trap chạy với hạn 0 / KHÔNG hạn:\n" + "\n".join(xau)
+    assert "mo_lai_cu\tCHUA_XAC_DINH" in tt, tt
+    assert _so_lan_goi(goc, "start", _cid_gia("backend")) == 1, "lệnh ghi bị CHẠY LẠI"
+
+
+# --- Hợp đồng của `_dcg_han_con` ở TẦNG chủ sở hữu (hàm thật của deploy.sh) ----------------
+def _ham_cua(than: str, ten: str) -> str:
+    import re
+
+    m = re.search(rf"^{ten}\(\) \{{\n.*?^\}}\n", than, re.S | re.M)
+    assert m, f"không thấy hàm {ten} trong deploy.sh"
+    return m.group(0)
+
+
+def _chay_han_con(thu_muc: Path, ngan_sach: str | None, lenh: str, deploy_sh: str | None = None) -> dict:
+    """Chạy ĐÚNG `_dcg_con_lai` / `_dcg_han_con` / `_dcg_dk` / `_dcg_psql` của deploy.sh.
+
+    ``ngan_sach``: số giây còn lại của trap (None = ngoài trap). `timeout` được bọc bằng một hàm
+    shell ghi đối số rồi gọi `timeout` THẬT; `docker` giả ghi lời gọi. Trả rc của lời gọi, argv
+    mọi lần gọi `timeout` và mọi lời gọi `docker`.
+    """
+    import base64
+    import os
+    import subprocess
+
+    than = _DEPLOY.read_text(encoding="utf-8") if deploy_sh is None else deploy_sh
+    bin_ = thu_muc / "bin"
+    bin_.mkdir(parents=True, exist_ok=True)
+    gia = bin_ / "docker"
+    gia.write_text("#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$LOG_D\"\necho ok\n", encoding="utf-8")
+    gia.chmod(0o755)
+    lt, ld = thu_muc / "timeout.log", thu_muc / "docker.log"
+    lt.write_text("", encoding="utf-8")
+    ld.write_text("", encoding="utf-8")
+    kich = (
+        "set -u\n_DCG_HAN_LENH=10; _DCG_HAN_PSQL=60; _RA_COMPOSE='docker compose'\n"
+        "timeout() { printf '%s\\0' \"$@\" | base64 -w0 >> \"$LOG_T\"; echo >> \"$LOG_T\"; command timeout \"$@\"; }\n"
+        + "".join(_ham_cua(than, t) for t in ("_dcg_con_lai", "_dcg_han_con", "_dcg_dk", "_dcg_psql"))
+        + ("_DCG_TRAP_HET=\n" if ngan_sach is None else f"_DCG_TRAP_HET=$((SECONDS + {ngan_sach}))\n")
+        + ("_dcg_dk inspect x\n" if lenh == "docker" else "_dcg_psql 'SELECT 1'\n")
+        + 'echo "rc=$?"\n'
+    )
+    ra = subprocess.run(
+        ["bash", "-c", kich], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+        env={**os.environ, "PATH": f"{bin_}:{os.environ.get('PATH', '')}", "LOG_T": str(lt), "LOG_D": str(ld)},
+    )
+    rc = [d for d in ra.stdout.splitlines() if d.startswith("rc=")]
+    assert rc, ra.stdout + ra.stderr
+    return {
+        "rc": int(rc[-1][3:]),
+        "timeout": [[x.decode("utf-8", "replace") for x in base64.b64decode(d).split(b"\0")[:-1]]
+                    for d in lt.read_text(encoding="utf-8").splitlines() if d],
+        "docker": ld.read_text(encoding="utf-8").splitlines(),
+        "loi": ra.stderr,
+    }
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize("lenh", ["docker", "psql"])
+def test_v6c_het_ngan_sach_thi_khong_goi_timeout_khong_chay_lenh(tmp_path: Path, lenh: str) -> None:
+    # Hết ngân sách ⇒ `_dcg_han_con` TỪ CHỐI (người gọi trả 124 = "không đọc được"), KHÔNG BAO GIỜ
+    # đưa 0 (= TẮT hạn) hay bất cứ hạn nào cho `timeout`.
+    kq = _chay_han_con(tmp_path, "0", lenh)
+    assert kq["timeout"] == [], (
+        f"hết ngân sách mà `{lenh}` VẪN gọi timeout với {kq['timeout']} — phải TỪ CHỐI, không chạy lệnh")
+    assert kq["docker"] == [], f"hết ngân sách mà docker VẪN chạy: {kq['docker']}"
+    assert kq["rc"] == 124, f"rc={kq['rc']} — hết ngân sách phải là 124 (`_dcg_het_han`):\n{kq['loi']}"
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize("lenh,han_rieng", [("docker", 10), ("psql", 60)])
+def test_v6c_con_ngan_sach_thi_han_la_min_nguyen_duong(tmp_path: Path, lenh: str, han_rieng: int) -> None:
+    import re
+
+    for ten, ngan_sach, tran in (("trong trap, còn 7 s", "7", 7), ("ngoài trap", None, han_rieng)):
+        kq = _chay_han_con(tmp_path / ("ngoai" if ngan_sach is None else "trong"), ngan_sach, lenh)
+        assert kq["rc"] == 0 and len(kq["timeout"]) == 1 and len(kq["docker"]) == 1, f"{ten}: {kq}"
+        h = _han_cua_cha(["timeout", *kq["timeout"][0]])
+        assert h is not None and re.fullmatch(r"[1-9][0-9]*", h), f"{ten}: hạn {h!r} không phải số nguyên dương"
+        assert tran - 1 <= int(h) <= tran, f"{ten}: hạn {h}s ≠ min(hạn riêng {han_rieng}s, phần còn lại)"
+
+
+# --- Đệm 5 s của lệnh GHI: còn lại ∈ [hạn, hạn + 5) ⇒ KHÔNG bắt đầu (W5) -------------------
+def _ca_6c_bien(goc: Path):
+    # Hạn start 8 s, ngân sách 12 s: lúc tới `docker start` còn 8–12 s — ĐỦ cho hạn nhưng THIẾU
+    # đệm 5 s cho ân hạn `-k 5` (cần ≥ 13) ⇒ không được bắt đầu.
+    return _chay_deploy(goc, **_LUI, **{**_V6, "QLTS_HAN_KHOI_DONG": "8", "QLTS_TRAN_TRAP": "12"})
+
+
+@_bo_qua_neu_khong_posix
+def test_v6c_con_lai_giua_han_va_han_cong_5_thi_khong_bat_dau_lenh_ghi(tmp_path: Path) -> None:
+    import re
+
+    goc = _dung_san_khau(tmp_path)
+    _ca_6c_bien(goc)
+    tt = _tep_trang_thai(goc)
+    assert sum(_so_lan_goi(goc, "start", _cid_gia(dv)) for dv in _DV_GHI) == 0, (
+        "còn < hạn + 5 s mà vẫn BẮT ĐẦU `docker start` hạn 8 s — mất đệm cho ân hạn -k 5")
+    m = re.search(r"het_ngan_sach\tmở_lại_·_backend_\(docker_start\) con=(\d+)s", tt)
+    assert m, tt
+    assert 8 <= int(m.group(1)) < 13, (
+        f"còn {m.group(1)}s — ca KHÔNG rơi vào cửa sổ biên [8, 13) nên không canh đệm 5 s")
+    assert "mo_lai_cu\tCHUA_XAC_DINH" in tt

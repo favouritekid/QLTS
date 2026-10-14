@@ -297,6 +297,11 @@ def test_model_compose_that_giu_celery_false_du_bien_host_dat_true(
 #   STUB_DO_TREO=1 — đầu dò dịch vụ qua SNI (`docker run … THAN-NGINX`) treo.
 #   STUB_TREO_KHI=<mẫu glob của lệnh> [+ STUB_TREO_SAU / STUB_TREO_TRUOC=<chuỗi đã / CHƯA có
 #     trong nhật ký lệnh>] — lệnh khớp TREO (đo hạn của phép đọc ở đúng một bước).
+#   (vòng 6c, F46) STUB_PSQL_TREO_SAU=<chuỗi đã có trong nhật ký lệnh> — mọi `exec -T postgres
+#     psql` SAU mốc ấy TREO STUB_TREO_GIAY giây rồi lỗi (độc lập với STUB_TREO_KHI: một bước
+#     Docker tiêu hết ngân sách, phép psql KẾ TIẾP mới là thứ được canh).
+#   Mọi lời gọi còn ghi TIẾN TRÌNH CHA vào "$QLTS_STUB_LOG.cha" (một dòng: base64 argv lời gọi
+#     TAB base64 /proc/$PPID/cmdline) — đọc ra lời gọi ấy chạy dưới `timeout <hạn>` hay KHÔNG hạn.
 #   nginx: mốc khởi động = R<số lần `docker restart` CÓ HIỆU LỰC>; "$QLTS_STUB_LOG.nginx_dung" ⇒ exited.
 #   STUB_CHAY_SH_THAT=1 — `docker run … -c <đoạn sh>` chạy THẬT đoạn sh ấy (với
 #     biến -e của nó và `curl` giả của sân khấu); `docker logs` đọc
@@ -328,6 +333,10 @@ for _goi_a in "$@"; do
 done
 printf '%s\t%s\t%s\t%s\t%s\n' "$_goi_n" "$_goi_sha" "$_goi_in" "$_goi_arg" \
     "$(printf '%s\0' "$@" | base64 -w0)" >> "${QLTS_STUB_LOG}.goi"
+# Vòng 6c: tiến trình CHA (vd. `timeout -k 2 7 docker …`, hay bash = KHÔNG hạn) — tệp RIÊNG,
+# một dòng tự đủ nghĩa (không lệ thuộc thứ tự dòng của `.goi`).
+printf '%s\t%s\n' "$(printf '%s\0' "$@" | base64 -w0)" \
+    "$(base64 -w0 2>/dev/null < "/proc/$PPID/cmdline")" >> "${QLTS_STUB_LOG}.cha"
 if [ "${STUB_CHAY_SH_THAT:-0}" = "1" ]; then
     case "$_tat_ca" in
         "run "*" -c "*)
@@ -395,6 +404,17 @@ if [ -n "${STUB_TREO_KHI:-}" ]; then
                 _treo_bat_dau
                 sleep "${STUB_TREO_GIAY:-3600}"
                 echo "stub: hết giờ chờ daemon" >&2; exit 1
+            fi ;;
+    esac
+fi
+# Vòng 6c: phép psql TREO sau một mốc (xem STUB_PSQL_TREO_SAU ở đầu tệp).
+if [ -n "${STUB_PSQL_TREO_SAU:-}" ]; then
+    case "$_tat_ca" in
+        *" exec -T postgres psql "*)
+            if grep -qF -- "$STUB_PSQL_TREO_SAU" "$QLTS_STUB_LOG"; then
+                _treo_bat_dau
+                sleep "${STUB_TREO_GIAY:-3600}"
+                echo "stub: hết giờ chờ CSDL" >&2; exit 1
             fi ;;
     esac
 fi
@@ -1131,6 +1151,8 @@ def _chay_deploy(
     if not _giu_nhat_ky or not (goc / "lenh.log.goi").exists():
         # Nhật ký HÀNH VI (vòng 3b): stub ghi stdin + argv của mọi lời gọi docker.
         (goc / "lenh.log.goi").write_text("", encoding="utf-8")
+        # Vòng 6c: tiến trình cha của từng lời gọi (có `timeout <hạn>` hay không).
+        (goc / "lenh.log.cha").write_text("", encoding="utf-8")
     moi_truong = {
         **os.environ,
         "PATH": f"{goc / 'bin'}:{os.environ.get('PATH', '')}",
