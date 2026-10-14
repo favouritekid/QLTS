@@ -13,6 +13,7 @@ Business Rules:
 """
 
 from typing import Any, Callable, Dict, List, Tuple
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 import logging
 
 import casbin
@@ -202,7 +203,7 @@ async def remove_role_from_users(
                 )
 
         except Exception as e:
-            failed_users.append({"user_id": user_id, "error": str(e)})
+            failed_users.append({"user_id": user_id, "error": chu_loi_an_toan(e)})
             log.error(
                 "Failed to remove role from user %s",
                 user_id,

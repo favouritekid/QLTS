@@ -141,31 +141,85 @@ def test_override_simulated_env_file_with_os_env(reload_settings_and_clear_env):
             )
 
 
-# === SỬA BÀI TEST NÀY ===
+# === V6 vòng 8 (N17.14): hợp đồng MỚI của ĐƯỜNG NẠP MODULE ===
+_BIEN_BAT_BUOC = ("SECRET_KEY", "DATABASE_URL", "JWT_SECRET_KEY", "MAIL_USERNAME",
+                  "MAIL_PASSWORD", "MAIL_FROM", "MAIL_SERVER")
+
+
 def test_required_variables_missing(reload_settings_and_clear_env):
-    """Test lỗi validation khi thiếu biến bắt buộc (cô lập hoàn toàn)."""
+    """Thiếu biến bắt buộc. Hai hợp đồng:
+
+    * NẠP MODULE (``import app.config`` / ``importlib.reload``) — đường của MỌI tiến
+      trình (gunicorn, celery, Alembic, script): ném ``LoiCauHinh`` mang tên trường +
+      mã ``missing`` (mô tả của chủ sở hữu ``app/utils/redact.py``), KHÔNG chữ lỗi pydantic.
+    * GỌI TRỰC TIẾP ``Settings()`` — KHÔNG đổi: vẫn ``ValidationError`` của pydantic."""
+    from app.utils.redact import LoiCauHinh
+
     log.info("--- Running: test_required_variables_missing ---")
     env_vars_to_set = {"APP_ENV": "test_missing"}
 
     with patch.dict(os.environ, env_vars_to_set, clear=True):
         with patch("app.config.os.path.exists", return_value=False):
-            # === SỬA LỖI: Bắt lỗi ngay tại importlib.reload ===
-            with pytest.raises(ValidationError) as exc_info:
-                importlib.reload(config_module)  # Lỗi sẽ xảy ra ở đây
+            with pytest.raises(LoiCauHinh) as exc_info:
+                importlib.reload(config_module)  # Lỗi xảy ra ở đây
 
-            # Kiểm tra lỗi validation cụ thể (Giữ nguyên phần này)
-            log.debug(f"Validation Error Info: {exc_info.value}")
             error_str = str(exc_info.value)
-            assert "SECRET_KEY" in error_str and "Field required" in error_str
-            assert "DATABASE_URL" in error_str and "Field required" in error_str
-            assert "JWT_SECRET_KEY" in error_str and "Field required" in error_str
-            assert "MAIL_USERNAME" in error_str and "Field required" in error_str
-            assert "MAIL_PASSWORD" in error_str and "Field required" in error_str
-            assert "MAIL_FROM" in error_str and "Field required" in error_str
-            assert "MAIL_SERVER" in error_str and "Field required" in error_str
-            log.info(
-                "ValidationError raised correctly during reload when required variables are missing."
-            )
+            for bien in _BIEN_BAT_BUOC:
+                assert "%s: thiếu giá trị [missing]" % bien in error_str, error_str
+            assert "Field required" not in error_str and "input_value" not in error_str, error_str
+
+            # Hợp đồng gọi trực tiếp Settings() giữ nguyên.
+            with pytest.raises(ValidationError) as truc_tiep:
+                config_module.Settings()
+            assert "Field required" in str(truc_tiep.value)
+
+
+# Hai lỗi GIẢ: sai KIỂU (giá trị ngắn < 8 ký tự) và validator từ chối một khoá bí mật
+# (giá trị dài).
+_V8_GIA = {"MAIL_PORT": "GiaCfg8", "PUBLIC_INTAKE_API_KEY": "GIA-KHOA-BI-MAT-V8-ngan"}
+_V8_CAM = ("GiaCfg8", "GiaCfg", "GIA-KHOA-BI-MAT-V8-ngan", "GIA-KHOA", "input_value")
+
+
+def _v8_loi_nap() -> BaseException:
+    """Lỗi mà ĐƯỜNG NẠP MODULE ném ra với cấu hình giả hỏng (bắt RỘNG: kiểu lỗi cũng là
+    thứ đang kiểm — ``pytest.raises(<kiểu>)`` sẽ để lỗi khác kiểu thoát ra thành lỗi hạ
+    tầng thay vì một khẳng định đỏ)."""
+    loi = None
+    with patch.dict(os.environ, {**get_minimal_required_env(), **_V8_GIA}, clear=True):
+        with patch("app.config.os.path.exists", return_value=False):
+            try:
+                importlib.reload(config_module)
+            except Exception as bat:  # noqa: BLE001
+                loi = bat
+    assert loi is not None, "HẠ TẦNG: cấu hình giả hỏng mà app.config vẫn nạp được"
+    return loi
+
+
+def test_v8_loi_nap_cau_hinh_khong_giu_loi_goc(reload_settings_and_clear_env):
+    """Lỗi từ ĐƯỜNG NẠP MODULE ``app.config`` là ``LoiCauHinh`` và KHÔNG giữ lỗi gốc:
+    ``__cause__`` và ``__context__`` đều ``None``. (``raise … from None`` đặt TRONG
+    ``except`` vẫn để lại ``__context__`` — chỉ ẩn khi in; mọi bộ in / bộ thu lỗi tự đi
+    chuỗi vẫn tới được ``ValidationError`` gốc mang ``input_value=``.)"""
+    from app.utils.redact import LoiCauHinh
+
+    loi = _v8_loi_nap()
+    assert isinstance(loi, LoiCauHinh) and loi.__cause__ is None and loi.__context__ is None, (
+        "lỗi nạp cấu hình: kiểu %s · __cause__=%s · __context__=%s" % (
+            type(loi).__name__,
+            type(loi.__cause__).__name__ if loi.__cause__ is not None else None,
+            type(loi.__context__).__name__ if loi.__context__ is not None else None))
+
+
+def test_v8_loi_nap_cau_hinh_khong_mang_gia_tri(reload_settings_and_clear_env):
+    """``str`` / ``repr`` của lỗi nạp cấu hình KHÔNG chứa giá trị giả (cả tiền tố) lẫn
+    ``input_value``, và CÓ mô tả an toàn (tên trường + mã lỗi) của chủ sở hữu."""
+    loi = _v8_loi_nap()
+    chu = str(loi) + "\n" + repr(loi)
+    lo = [v for v in _V8_CAM if v in chu]
+    co_mo_ta = ("MAIL_PORT: không phải số nguyên hợp lệ [int_parsing]" in chu
+                and "PUBLIC_INTAKE_API_KEY: validator từ chối giá trị [value_error]" in chu)
+    assert lo == [] and co_mo_ta, "lỗi nạp cấu hình lộ %s · có mô tả an toàn: %s\n%s" % (
+        lo, co_mo_ta, chu[:1500])
 
 
 # (test_calculated_values, test_type_coercion giữ nguyên như bản sửa lần 2)

@@ -40,12 +40,14 @@ loglevel = os.getenv("LOG_LEVEL", "info").lower()
 
 
 def post_worker_init(worker):
-    """Redact raw SMS bearer code khỏi gunicorn.access (§11.3) — gắn SAU khi
-    gunicorn dựng access logger per-worker (access_log='-' vẫn log request line
-    `GET /r/<code>` mỗi hit thành công)."""
-    from app.core.log_redaction import install_sms_log_redaction
+    """Gắn bộ che log (V6) vào access/error logger của app-server — SAU khi
+    gunicorn dựng handler per-worker. Các logger ấy mang handler RIÊNG với
+    ``propagate=False`` nên handler gốc (có ``RedactingFilter``) không thấy
+    chúng; dòng request `GET /api/admissions/confirm/<token>`, `GET /r/<code>`
+    phải được che ngay ở mức logger. Mẫu che: `app/core/log_redaction.py`."""
+    from app.core.log_redaction import install_log_redaction
 
-    install_sms_log_redaction()
+    install_log_redaction()
 
 
 # --- Keep-Alive ---

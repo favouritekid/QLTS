@@ -18,6 +18,7 @@ Thread-safety:
 - No locks needed thanks to atomic increment
 """
 from typing import Optional
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 
 import structlog
 from sqlalchemy import and_, select
@@ -468,5 +469,5 @@ async def get_distribution_stats(db: AsyncSession, offering_id: int) -> dict:
         )
         return {
             "offering_id": offering_id,
-            "error": str(e)
+            "error": chu_loi_an_toan(e)
         }

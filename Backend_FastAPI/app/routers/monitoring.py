@@ -1,4 +1,5 @@
 from app.core.rate_limits import limiter, RateLimits
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 # app/routers/monitoring.py
 """
 System Monitoring Router
@@ -583,7 +584,7 @@ async def get_system_overview(
 
     except Exception as e:
         overview["database"]["status"] = "error"
-        overview["database"]["error"] = str(e)
+        overview["database"]["error"] = chu_loi_an_toan(e)
         log.error("Database check failed in overview", error=str(e))
 
     # 2. Redis check
