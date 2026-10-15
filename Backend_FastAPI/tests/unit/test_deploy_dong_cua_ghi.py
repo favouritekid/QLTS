@@ -882,7 +882,8 @@ def test_kiem_nguoc_doi_4c_xuong_sau_pg_dump_thi_lo_thu_tu(tmp_path: Path) -> No
 def test_bo_lenh_dung_thi_phep_do_4c_chan_truoc_pg_dump(tmp_path: Path) -> None:
     """Phòng thủ chiều sâu TRONG PA1: quên `docker stop` thì phép đo 4c chặn."""
     dot_bien = _ban_dot_bien(
-        '        docker stop -t "$(_dcg_han_dung "$_S")" "${_DCG_CID[$_S]}" >/dev/null \\\n',
+        # Vòng 7c: lệnh dừng nay có `timeout` bọc ngoài — gỡ CẢ dòng như cũ.
+        '        timeout -k 5 "$(( $(_dcg_han_dung "$_S") + _DCG_HAN_LENH ))" docker stop -t "$(_dcg_han_dung "$_S")" "${_DCG_CID[$_S]}" >/dev/null \\\n',
         '        true \\\n',
     )
     goc = _dung_san_khau(tmp_path, deploy_sh=dot_bien)
