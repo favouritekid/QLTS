@@ -2633,3 +2633,29 @@ def test_kiem_nguoc_v7e_log_tra_loi_ghi_thi_bao_sai_khong_dat(tmp_path: Path) ->
     _chay_deploy(goc, _boc=_boc_kenh_dong_o(goc, "[pha] da_dong"), **_NHANH)
     assert "mo_lai_cu\tdat" not in _tep_trang_thai(goc), (
         "log trả lỗi ghi mà vẫn ghi `dat` ⇒ ca kênh-đóng không canh tính độc lập của log")
+
+
+# =============================================================================
+# XVII. Vòng 7f — `pg_isready` (Step 5, cửa ghi ĐÃ đóng) có hạn đọc
+# =============================================================================
+@_bo_qua_neu_khong_posix
+def test_v7f_pg_isready_treo_thi_dung_trong_han_khong_pg_dump_va_mo_lai(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, nk = _chay_deploy(goc, STUB_TREO_KHI="* pg_isready *", STUB_TREO_GIAY=_TREO, **_V6)
+    ra, t = _ra(ket), _tu_luc_treo(goc)
+    assert t < 20, f"`pg_isready` treo giữ deploy {t:.1f}s (hạn đọc 1 s) — cửa ghi đang ĐÓNG suốt lúc ấy"
+    assert ket.returncode != 0
+    assert "PostgreSQL không sẵn sàng" in ra, ra[-2000:]
+    assert _MOC_PGDUMP not in nk, "pg_isready hết hạn mà vẫn pg_dump"
+    assert "mo_lai_cu\tdat" in _tep_trang_thai(goc), "cửa đã đóng mà trap không mở lại container cũ"
+
+
+@_bo_qua_neu_khong_posix
+def test_kiem_nguoc_v7f_bo_han_pg_isready(tmp_path: Path) -> None:
+    dot = _ban_dot_bien(
+        """if ! timeout -k 2 "$_DCG_HAN_LENH" docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_isready""",
+        """if ! docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_isready""",
+    )
+    goc = _dung_san_khau(tmp_path, deploy_sh=dot)
+    _chay_deploy(goc, STUB_TREO_KHI="* pg_isready *", STUB_TREO_GIAY=_TREO_DOT_BIEN, **_V6)
+    assert _tu_luc_treo(goc) >= 20, "bỏ hạn mà vẫn xong nhanh ⇒ ca pg_isready-treo không canh hạn"

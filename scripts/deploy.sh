@@ -2795,7 +2795,10 @@ mkdir -p "$BACKUP_DIR"
 #      RIÊNG (``INITIAL_DEPLOY=true``) có guard chứng minh chưa hề có
 #      DB/volume — cố tình KHÔNG mở lối bỏ backup chung ở đây.
 _BAN_SAO="$BACKUP_DIR/pre_deploy_${TIMESTAMP}.sql"
-if ! docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_isready -U "${POSTGRES_USER:-qlts}" >/dev/null 2>&1; then
+# Vòng 7f: `pg_isready` là phép ĐỌC rẻ ⇒ hạn đọc + -k 2 (giết client an toàn: pg_isready tự thoát).
+# Treo/hết hạn ⇒ coi như không sẵn sàng ⇒ DỪNG trước pg_dump (cửa đã đóng ⇒ trap mở lại cũ).
+# H_5 (QLTS_HAN_PG_DUMP) đo CẢ Step 5: pg_isready + pg_dump.
+if ! timeout -k 2 "$_DCG_HAN_LENH" docker compose -f docker-compose.yml --env-file .env.production exec -T postgres pg_isready -U "${POSTGRES_USER:-qlts}" >/dev/null 2>&1; then
     error "PostgreSQL không sẵn sàng — KHÔNG sao lưu được, nên KHÔNG đi tiếp vào migration.
        Đây có thể là sự cố của một CSDL đang có dữ liệu, không phải lần cài đầu.
        Kiểm tra: docker compose -f docker-compose.yml --profile production ps postgres"
