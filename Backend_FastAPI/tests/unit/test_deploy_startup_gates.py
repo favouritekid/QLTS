@@ -1137,9 +1137,12 @@ def _dung_san_khau(
 
 
 def _chay_deploy(
-    goc: Path, _giu_nhat_ky: bool = False, **kich_ban: str
+    goc: Path, _giu_nhat_ky: bool = False, _boc: str | None = None, **kich_ban: str
 ) -> tuple[subprocess.CompletedProcess, str]:
     """Chạy `scripts/deploy.sh` của sân khấu.
+
+    ``_boc`` (vòng 7b): đoạn bash chạy TRƯỚC `bash scripts/deploy.sh` trong CÙNG một
+    shell (vd. lấy khoá fd 9 như deploy.yml) — None = gọi thẳng như cũ.
 
     ``_giu_nhat_ky=True`` (vòng 4): KHÔNG xoá nhật ký lệnh/hành vi của lượt trước —
     mô hình container của stub suy trạng thái từ nhật ký, nên lượt "đi tiếp" phải
@@ -1162,7 +1165,11 @@ def _chay_deploy(
         "QLTS_ROLLBACK_OPS_DIR": str(goc / "ops"),
         # Ngữ cảnh production mà shim `stat`/`id` mô phỏng.
         "QLTS_TEST_SANDBOX": _sandbox_cua(goc),
+        # Vòng 7b: khoá VPS của RIÊNG sân khấu này (mặc định /run/lock/… là của máy).
+        "QLTS_KHOA_DEPLOY": str(goc / "deploy.lock"),
     }
+    # Vòng 7b: khoá kế thừa chỉ do ca nào cần tự dựng (qua `_boc`).
+    moi_truong.pop("QLTS_KHOA_DEPLOY_FD", None)
     # Cùng lý do với ba cờ entrypoint bên dưới: hai biến thoát hiểm PHẢI đến từ
     # kịch bản của test. Nếu môi trường người chạy đang đặt chúng thì mọi ca
     # fail-closed sẽ xanh giả vì khối asset bị bỏ qua hoàn toàn.
@@ -1181,7 +1188,7 @@ def _chay_deploy(
         moi_truong.pop(co, None)
     moi_truong.update(kich_ban)
     ket = subprocess.run(
-        ["bash", "scripts/deploy.sh"],
+        ["bash", "scripts/deploy.sh"] if _boc is None else ["bash", "-c", _boc + "\nbash scripts/deploy.sh"],
         cwd=str(goc),
         env=moi_truong,
         # stdin RỖNG xác định: stub đọc stdin của từng lời gọi docker để biết dữ
@@ -2801,3 +2808,192 @@ def test_ra_lop_chup_truoc_source_tu_no_da_du_vo_hieu_env(tmp_path: Path) -> Non
         "giá trị từ .env.production KHÔNG được có hiệu lực — lớp chụp-trước-source "
         "phải khiến deploy vẫn tạo tài sản bình thường"
     )
+
+
+# =============================================================================
+# Vòng 7b (N10) — KHOÁ VPS `flock`: một lượt deploy tại một thời điểm, fail-closed
+# =============================================================================
+# Khoá được lấy NGAY ĐẦU deploy.sh, trước mọi thay đổi. Mỗi ca dưới đây vi phạm
+# ĐÚNG MỘT bất biến; "trước mọi thay đổi" đo bằng nhật ký lệnh docker (rỗng) và
+# việc chưa in tới Step 1.
+_MSG_KHOA_BAN = "một lượt deploy KHÁC đang giữ khoá"
+
+
+def _giu_khoa(duong: Path):
+    """Giữ khoá `flock` LOCK_EX trên tệp ở tiến trình test (tiến trình khác deploy.sh)."""
+    import fcntl
+
+    f = open(duong, "a")
+    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return f
+
+
+def _khoa_ranh(duong: Path) -> bool:
+    import fcntl
+
+    with open(duong, "a") as f:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        return True
+
+
+def _chua_dung_gi(goc: Path, ket, nk: str) -> list[str]:
+    ra = (ket.stdout or "") + (ket.stderr or "")
+    xau = []
+    if nk:
+        xau.append("deploy.sh VẪN gọi docker:\n" + nk[:600])
+    if (goc / "lenh.log.goi").read_text(encoding="utf-8"):
+        xau.append("nhật ký hành vi docker KHÔNG rỗng")
+    if "Step 1/8" in ra:
+        xau.append("đã chạy tới Step 1")
+    return xau
+
+
+@_bo_qua_neu_khong_posix
+def test_v7b_khoa_dang_bi_giu_thi_dung_truoc_moi_thay_doi(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    f = _giu_khoa(goc / "deploy.lock")
+    try:
+        ket, nk = _chay_deploy(goc)
+    finally:
+        f.close()
+    ra = (ket.stdout or "") + (ket.stderr or "")
+    assert ket.returncode != 0, f"khoá đang bị giữ mà deploy thoát 0:\n{ra[-1500:]}"
+    assert _chua_dung_gi(goc, ket, nk) == [], _chua_dung_gi(goc, ket, nk)
+    assert _MSG_KHOA_BAN in ra, ra[-1500:]
+
+
+@_bo_qua_neu_khong_posix
+def test_v7b_khoa_ke_thua_tu_workflow_thi_chap_nhan(tmp_path: Path) -> None:
+    # Đúng cách deploy.yml làm: mở fd 9 trên tệp khoá, `flock -n 9`, export FD, rồi gọi deploy.sh.
+    goc = _dung_san_khau(tmp_path)
+    khoa = goc / "deploy.lock"
+    ket, _ = _chay_deploy(goc, _boc=f'exec 9>>"{khoa}" && flock -n 9 && export QLTS_KHOA_DEPLOY_FD=9')
+    ra = (ket.stdout or "") + (ket.stderr or "")
+    assert ket.returncode == 0, f"khoá kế thừa hợp lệ mà deploy đỏ:\n{ra[-2000:]}"
+    assert "Khoá deploy: kế thừa từ workflow (fd 9" in ra
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,boc,giu_tu_ngoai,thong_diep",
+    [
+        ("fd 9 trỏ tệp KHÁC", 'exec 9>>"{khac}" && flock -n 9 && export QLTS_KHOA_DEPLOY_FD=9', False,
+         "fd 9 KHÔNG trỏ tới"),
+        ("khai FD mà fd 9 không mở", "export QLTS_KHOA_DEPLOY_FD=9", False, "fd 9 KHÔNG trỏ tới"),
+        ("FD khác 9", 'exec 8>>"{khoa}" && flock -n 8 && export QLTS_KHOA_DEPLOY_FD=8', False, "chỉ nhận 9"),
+        # Tinh vi nhất: fd 9 trỏ ĐÚNG tệp nhưng KHÔNG mang khoá — tiến trình KHÁC đang giữ.
+        ("fd 9 đúng tệp nhưng khoá ở tiến trình khác", 'exec 9>>"{khoa}" && export QLTS_KHOA_DEPLOY_FD=9', True,
+         "KHÔNG giữ được khoá"),
+    ],
+)
+def test_v7b_khoa_ke_thua_sai_thi_dung_truoc_moi_thay_doi(
+    tmp_path: Path, ten_ca: str, boc: str, giu_tu_ngoai: bool, thong_diep: str
+) -> None:
+    goc = _dung_san_khau(tmp_path)
+    khoa, khac = goc / "deploy.lock", goc / "khac.lock"
+    f = _giu_khoa(khoa) if giu_tu_ngoai else None
+    try:
+        ket, nk = _chay_deploy(goc, _boc=boc.format(khoa=khoa, khac=khac))
+    finally:
+        if f is not None:
+            f.close()
+    ra = (ket.stdout or "") + (ket.stderr or "")
+    assert ket.returncode != 0, f"{ten_ca}: deploy thoát 0:\n{ra[-1500:]}"
+    assert _chua_dung_gi(goc, ket, nk) == [], f"{ten_ca}: {_chua_dung_gi(goc, ket, nk)}"
+    assert thong_diep in ra, f"{ten_ca}:\n{ra[-1500:]}"
+
+
+@_bo_qua_neu_khong_posix
+def test_v7b_khoa_duoc_giu_suot_luot_ke_ca_trap_va_nha_khi_thoat(tmp_path: Path) -> None:
+    import threading
+    import time
+
+    goc = _dung_san_khau(tmp_path)
+    khoa = goc / "deploy.lock"
+    kq: dict = {}
+    # pg_dump hỏng SAU khi cửa ghi đã đóng ⇒ trap mở lại container cũ; đầu dò SNI của TRAP treo 6 s.
+    luong = threading.Thread(target=lambda: kq.update(r=_chay_deploy(
+        goc, STUB_PGDUMP_RC="1", STUB_DO_TREO="1", STUB_TREO_GIAY="6", QLTS_HAN_DO_SNI="30")))
+    luong.start()
+    het = time.time() + 120
+    while not (goc / "lenh.log.treo").exists() and time.time() < het and luong.is_alive():
+        time.sleep(0.2)
+    assert (goc / "lenh.log.treo").exists(), "trap không tới đầu dò treo — ca không đo được khoá TRONG trap"
+    giua_trap = _khoa_ranh(khoa)
+    luong.join(timeout=200)
+    assert not luong.is_alive()
+    ket, _ = kq["r"]
+    assert "trần thời gian của trap" in (ket.stdout or ""), "ca không chạy vào trap"
+    assert giua_trap is False, "đang trong TRAP (mở lại container cũ) mà khoá deploy đã RẢNH — lượt khác chen được"
+    assert _khoa_ranh(khoa) is True, "deploy.sh đã thoát mà khoá VẪN bị giữ"
+
+
+# --- kiểm ngược: mỗi guard của khoá một đột biến riêng -----------------------
+_NEO_KHOA_TAY = """    flock -n 9 \\
+        || error "một lượt deploy KHÁC đang giữ khoá"""
+_NEO_KHOA_EF = """    { [ -e /proc/self/fd/9 ] && [ /proc/self/fd/9 -ef "$_KHOA_DEPLOY" ]; } \\
+        || error"""
+_NEO_KHOA_GIU = """    flock -n 9 \\
+        || error "khoá kế thừa: fd 9 trỏ đúng tệp nhưng KHÔNG giữ được khoá"""
+
+
+def _ban_dot_bien_khoa(cu: str, moi: str) -> str:
+    than = _DEPLOY.read_text(encoding="utf-8")
+    assert than.count(cu) == 1, f"neo đột biến không khớp DUY NHẤT: {cu[:70]!r}"
+    return than.replace(cu, moi, 1)
+
+
+def _ban_khoa_doi_xuong_truoc_build() -> str:
+    """Đột biến THỨ TỰ: cùng khối khoá, nhưng lấy muộn — ngay trước Step 4 (build)."""
+    than = _DEPLOY.read_text(encoding="utf-8")
+    dau = than.index("_KHOA_DEPLOY=\"${QLTS_KHOA_DEPLOY:-")
+    cuoi = than.index("\nfi\n", dau) + len("\nfi\n")
+    khoi = than[dau:cuoi]
+    moc = 'log "Step 4/8: Building Docker images..."\n'
+    assert than.count(moc) == 1
+    than = than[:dau] + than[cuoi:]
+    return than.replace(moc, khoi + moc, 1)
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca",
+    [
+        "đường tay: bỏ `|| error` (khoá bận vẫn chạy)",
+        "kế thừa: bỏ phép fd 9 trỏ ĐÚNG tệp",
+        "kế thừa: bỏ phép fd 9 GIỮ khoá",
+        "thứ tự: lấy khoá muộn (trước build)",
+    ],
+)
+def test_kiem_nguoc_v7b_go_tung_guard_khoa(tmp_path: Path, ten_ca: str) -> None:
+    if ten_ca.startswith("đường tay"):
+        # Giữ nguyên chuỗi thông báo (dấu nháy cân) — chỉ `error` thành `:`.
+        dot = _ban_dot_bien_khoa(_NEO_KHOA_TAY, '    flock -n 9 \\\n        || : "một lượt deploy KHÁC đang giữ khoá')
+    elif "trỏ ĐÚNG" in ten_ca:
+        dot = _ban_dot_bien_khoa(_NEO_KHOA_EF, "    : \\\n        || error")
+    elif "GIỮ khoá" in ten_ca:
+        dot = _ban_dot_bien_khoa(_NEO_KHOA_GIU, '    : \\\n        || error "khoá kế thừa: fd 9 trỏ đúng tệp nhưng KHÔNG giữ được khoá')
+    else:
+        dot = _ban_khoa_doi_xuong_truoc_build()
+    goc = _dung_san_khau(tmp_path, deploy_sh=dot)
+    khoa, khac = goc / "deploy.lock", goc / "khac.lock"
+    if "trỏ ĐÚNG" in ten_ca:
+        ket, nk = _chay_deploy(goc, _boc=f'exec 9>>"{khac}" && flock -n 9 && export QLTS_KHOA_DEPLOY_FD=9')
+    elif "GIỮ khoá" in ten_ca:
+        f = _giu_khoa(khoa)
+        try:
+            ket, nk = _chay_deploy(goc, _boc=f'exec 9>>"{khoa}" && export QLTS_KHOA_DEPLOY_FD=9')
+        finally:
+            f.close()
+    else:
+        f = _giu_khoa(khoa)
+        try:
+            ket, nk = _chay_deploy(goc)
+        finally:
+            f.close()
+    assert _chua_dung_gi(goc, ket, nk) != [], (
+        f"{ten_ca}: đột biến mà deploy.sh VẪN dừng trước mọi thay đổi ⇒ ca khoá không canh guard này")

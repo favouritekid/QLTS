@@ -956,10 +956,14 @@ def _chay_dh(goc: Path, **kich_ban: str):
         "QLTS_ROLLBACK_OPS_DIR": str(goc / "ops"),
         # Ngữ cảnh production mà shim `stat`/`id` mô phỏng.
         "QLTS_TEST_SANDBOX": _sandbox_cua(goc),
+        # Vòng 7b: khoá VPS của RIÊNG sân khấu này (mặc định /run/lock/… là của máy).
+        "QLTS_KHOA_DEPLOY": str(goc / "deploy.lock"),
     }
     # Các biến điều khiển PHẢI đến từ kịch bản của ca, không từ môi trường
     # người chạy — nếu không, một ca có thể xanh mà chẳng chứng minh gì.
     for bien in (
+        # Vòng 7b: khoá kế thừa chỉ do ca nào cần tự dựng.
+        "QLTS_KHOA_DEPLOY_FD",
         # Hai cổng thoát hiểm của Step 3b: nếu môi trường người chạy đang đặt
         # chúng thì MỌI ca dưới đây bỏ qua khối tài sản và xanh giả.
         "QLTS_SKIP_ROLLBACK_ASSET", "QLTS_SKIP_ROLLBACK_ASSET_REASON",
@@ -1983,3 +1987,125 @@ def test_van_tay_reaper_KHONG_do_oan_khi_chi_sua_chu_thich():
     )
     assert mut != _NOI_DUNG
     assert _van_tay_reaper(mut) == _VAN_TAY_REAPER
+
+
+# ---------------------------------------------------------------------------
+# Vòng 7b (N10): KHOÁ VPS trong script SSH — lấy TRƯỚC mọi thay đổi cây
+# ---------------------------------------------------------------------------
+# `cancel-in-progress: false` (O2) chỉ chặn GitHub huỷ run đang chạy; khoá `flock`
+# chặn lượt mới chen vào khi phiên SSH của lượt cũ bị cắt mà bash trên VPS vẫn chạy.
+# Script SSH lấy khoá TRƯỚC `git fetch`/`git merge`, rồi để fd 9 kế thừa xuống
+# deploy.sh (QLTS_KHOA_DEPLOY_FD=9). Mỗi bất biến một ca, mỗi ca một đột biến.
+_KHOA_VPS = "/run/lock/qlts-deploy.lock"
+
+
+def _dong_lenh_cua(van_ban: str) -> list[str]:
+    return [d.strip() for d in van_ban.splitlines() if d.strip() and not d.lstrip().startswith("#")]
+
+
+def _vt_lenh_dau(dong: list[str], mau: str) -> int:
+    for i, d in enumerate(dong):
+        if d.startswith(mau):
+            return i
+    return -1
+
+
+def _kiem_v7b_thu_tu_khoa(van_ban: str) -> None:
+    dong = _dong_lenh_cua(van_ban)
+    i_mo = _vt_lenh_dau(dong, f"exec 9>>{_KHOA_VPS}")
+    i_flock = _vt_lenh_dau(dong, "if ! flock -n 9; then")
+    i_fetch = _vt_lenh_dau(dong, "git fetch origin main")
+    i_merge = _vt_lenh_dau(dong, 'git merge --ff-only "$SHA_MONG_DOI"')
+    i_xuat = _vt_lenh_dau(dong, "export QLTS_KHOA_DEPLOY_FD=9")
+    i_deploy = _vt_lenh_dau(dong, "bash scripts/deploy.sh")
+    assert min(i_mo, i_flock, i_fetch, i_merge, i_xuat, i_deploy) >= 0, (
+        f"thiếu lệnh: mở={i_mo} flock={i_flock} fetch={i_fetch} merge={i_merge} export={i_xuat} deploy={i_deploy}")
+    assert i_mo < i_flock < i_fetch < i_merge, (
+        "khoá VPS phải lấy TRƯỚC `git fetch`/`git merge` — lấy muộn là để lượt mới dịch cây dưới chân "
+        f"lượt cũ còn sống (mở={i_mo} flock={i_flock} fetch={i_fetch} merge={i_merge})")
+    assert i_flock < i_xuat < i_deploy, "fd 9 phải được khai cho deploy.sh TRƯỚC khi gọi nó"
+
+
+def _trich_khoi_khoa(van_ban: str) -> str:
+    m = re.search(
+        r"^(\s*)command -v flock .*?^\1export QLTS_KHOA_DEPLOY_FD=9$", van_ban, re.S | re.M
+    )
+    assert m, "không thấy khối khoá VPS trong deploy.yml"
+    thut = len(m.group(1))
+    return "\n".join(d[thut:] if d[:thut].strip() == "" else d for d in m.group(0).splitlines())
+
+
+def _chay_khoi_khoa(khoi: str, duong: Path):
+    kich = "set -euo pipefail\n" + khoi.replace(_KHOA_VPS, str(duong)) + "\necho QUA_KHOA\n"
+    return _sp.run(["bash", "-c", kich], capture_output=True, text=True, timeout=60)
+
+
+def _giu_khoa_tep(duong: Path):
+    import fcntl
+
+    f = open(duong, "a")
+    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return f
+
+
+_CO_FLOCK = shutil.which("flock") is not None and shutil.which("bash") is not None
+
+
+def test_v7b_workflow_lay_khoa_truoc_khi_dich_cay():
+    _kiem_v7b_thu_tu_khoa(_NOI_DUNG)
+
+
+def test_v7b_duong_khoa_workflow_trung_mac_dinh_cua_deploy_sh():
+    than = (_goc_repo() / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    assert f'_KHOA_DEPLOY="${{QLTS_KHOA_DEPLOY:-{_KHOA_VPS}}}"' in than, (
+        "deploy.sh không còn mặc định khoá ở đúng đường mà deploy.yml lấy — hai lớp sẽ khoá HAI tệp khác nhau")
+    assert "QLTS_KHOA_DEPLOY:" not in _NOI_DUNG and "QLTS_KHOA_DEPLOY=" not in _NOI_DUNG, (
+        "deploy.yml không được đổi đường khoá của deploy.sh")
+
+
+@pytest.mark.skipif(not _CO_FLOCK, reason="cần bash + flock để thi hành khối khoá đã ship")
+def test_v7b_khoi_khoa_workflow_dung_khi_khoa_bi_giu(tmp_path):
+    khoa = tmp_path / "deploy.lock"
+    f = _giu_khoa_tep(khoa)
+    try:
+        ket = _chay_khoi_khoa(_trich_khoi_khoa(_NOI_DUNG), khoa)
+    finally:
+        f.close()
+    ra = (ket.stdout or "") + (ket.stderr or "")
+    assert ket.returncode != 0 and "QUA_KHOA" not in ra, f"khoá bị giữ mà khối khoá cho đi tiếp: {ra[:400]}"
+    assert "đang giữ" in ra and "KHÔNG bị đụng" in ra, ra[:400]
+
+
+@pytest.mark.skipif(not _CO_FLOCK, reason="cần bash + flock để thi hành khối khoá đã ship")
+def test_v7b_khoi_khoa_workflow_cho_di_tiep_khi_khoa_ranh(tmp_path):
+    # Chiều ngược: thiếu ca này thì một khối `exit 1` vô điều kiện vẫn làm ca trên xanh.
+    ket = _chay_khoi_khoa(_trich_khoi_khoa(_NOI_DUNG), tmp_path / "deploy.lock")
+    assert ket.returncode == 0 and "QUA_KHOA" in (ket.stdout or ""), (ket.stdout or "") + (ket.stderr or "")
+
+
+# --- kiểm ngược ---------------------------------------------------------------
+def test_dot_bien_v7b_fetch_truoc_khoa_thi_DO():
+    """Tinh vi nhất: khối khoá còn nguyên, chỉ `git fetch` lên TRƯỚC nó."""
+    dong_fetch = "            git fetch origin main\n"
+    assert _NOI_DUNG.count(dong_fetch) == 1
+    mut = _NOI_DUNG.replace(dong_fetch, "", 1)
+    moc = "            command -v flock "
+    assert mut.count(moc) == 1
+    mut = mut.replace(moc, dong_fetch + moc, 1)
+    with pytest.raises(AssertionError):
+        _kiem_v7b_thu_tu_khoa(mut)
+
+
+@pytest.mark.skipif(not _CO_FLOCK, reason="cần bash + flock để thi hành khối khoá đã ship")
+def test_dot_bien_v7b_bo_kiem_flock_thi_DO(tmp_path):
+    cu = "if ! flock -n 9; then"
+    assert _NOI_DUNG.count(cu) == 1
+    mut = _NOI_DUNG.replace(cu, "if false; then", 1)
+    khoa = tmp_path / "deploy.lock"
+    f = _giu_khoa_tep(khoa)
+    try:
+        ket = _chay_khoi_khoa(_trich_khoi_khoa(mut), khoa)
+    finally:
+        f.close()
+    assert ket.returncode == 0 and "QUA_KHOA" in (ket.stdout or ""), (
+        "đột biến KHÔNG lọt ⇒ ca 'khoá bị giữ' đang canh hụt")

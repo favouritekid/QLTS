@@ -101,6 +101,43 @@ warn() { printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$1"; }
 error() { printf '%b[ERROR]%b %s\n' "$RED" "$NC" "$1"; exit 1; }
 cutover() { printf '%b[CUTOVER]%b %s\n' "$YELLOW" "$NC" "$1"; }
 
+# =============================================================================
+# KHOÁ VPS (vòng 7b, N10) — MỘT lượt deploy tại một thời điểm, fail-closed
+# =============================================================================
+# `cancel-in-progress: false` (7a) chỉ chặn GitHub huỷ một run đang chạy. Nó KHÔNG
+# biết gì về tiến trình trên VPS: phiên SSH bị cắt (command_timeout, mạng) mà bash
+# từ xa SỐNG TIẾP thì với GitHub run ấy đã xong, run kế được chạy — và hai lượt
+# deploy cùng ghi một cây/CSDL. Khoá `flock` ở đây là lớp chủ sở hữu của bất biến
+# "một lượt tại một thời điểm" trên VPS; nhóm concurrency là lớp phía GitHub.
+#
+# Lấy NGAY ĐẦU, trước mọi thay đổi (cây, ảnh, container, CSDL) và trước khi nạp
+# .env.production. deploy.yml lấy khoá TRƯỚC `git fetch`/`git merge` rồi để fd 9
+# kế thừa xuống đây (QLTS_KHOA_DEPLOY_FD=9): kiểm fd ấy trỏ ĐÚNG tệp khoá và đang
+# giữ khoá. Chạy tay: tự lấy. Không chờ (`-n`): đang có lượt khác ⇒ DỪNG ngay.
+# Khoá theo fd ⇒ được giữ tới khi tiến trình (kể cả trap) và mọi tiến trình con
+# còn giữ fd thoát — một `docker compose run` migration sống sót sau SIGKILL vẫn
+# giữ khoá, nên lượt sau không chen vào giữa migration. Đường dẫn đổi được qua
+# QLTS_KHOA_DEPLOY (sân khấu test); deploy.yml dùng ĐÚNG giá trị mặc định (test khoá).
+_KHOA_DEPLOY="${QLTS_KHOA_DEPLOY:-/run/lock/qlts-deploy.lock}"
+command -v flock >/dev/null 2>&1 \
+    || error "thiếu lệnh 'flock' (util-linux) — không lấy được khoá deploy $_KHOA_DEPLOY. DỪNG trước mọi thay đổi."
+if [ "${QLTS_KHOA_DEPLOY_FD+co}" = "co" ]; then
+    [ "$QLTS_KHOA_DEPLOY_FD" = "9" ] \
+        || error "QLTS_KHOA_DEPLOY_FD='$QLTS_KHOA_DEPLOY_FD' — chỉ nhận 9 (khoá kế thừa từ deploy.yml). DỪNG trước mọi thay đổi."
+    { [ -e /proc/self/fd/9 ] && [ /proc/self/fd/9 -ef "$_KHOA_DEPLOY" ]; } \
+        || error "khoá kế thừa: fd 9 KHÔNG trỏ tới $_KHOA_DEPLOY — DỪNG trước mọi thay đổi."
+    flock -n 9 \
+        || error "khoá kế thừa: fd 9 trỏ đúng tệp nhưng KHÔNG giữ được khoá $_KHOA_DEPLOY — DỪNG trước mọi thay đổi."
+    log "Khoá deploy: kế thừa từ workflow (fd 9 → $_KHOA_DEPLOY)"
+else
+    exec 9>>"$_KHOA_DEPLOY" \
+        || error "không mở được tệp khoá $_KHOA_DEPLOY — DỪNG trước mọi thay đổi."
+    flock -n 9 \
+        || error "một lượt deploy KHÁC đang giữ khoá $_KHOA_DEPLOY — DỪNG trước mọi thay đổi (cây, ảnh, container, CSDL chưa bị đụng).
+       Có thể là lượt trước mất SSH mà bash trên VPS vẫn chạy tiếp. Xem: fuser -v $_KHOA_DEPLOY ; ps -ef | grep -E 'deploy.sh|docker compose'"
+    log "Khoá deploy: đã lấy $_KHOA_DEPLOY"
+fi
+
 # ============================================================================
 # Cold cutover mode detection (Phase1-Hotfix-4 / 2026-05-07)
 # ============================================================================

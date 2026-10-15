@@ -271,6 +271,22 @@ jobs:
             set -euo pipefail
             cd /opt/qlts
 
+            # 🔒 KHOÁ VPS (vòng 7b, N10): lấy khoá TRƯỚC mọi thay đổi cây
+            # (`git fetch`/`git merge` bên dưới), rồi để fd 9 kế thừa xuống
+            # deploy.sh (QLTS_KHOA_DEPLOY_FD=9) — deploy.sh kiểm fd ấy trỏ đúng tệp
+            # khoá và đang giữ khoá. `cancel-in-progress: false` chỉ chặn GitHub
+            # huỷ run đang chạy; khoá này chặn lượt MỚI chen vào khi phiên SSH của
+            # lượt cũ đã bị cắt mà bash trên VPS vẫn chạy tiếp. Không chờ: đang bị
+            # giữ ⇒ DỪNG, cây KHÔNG bị đụng. Đường dẫn = mặc định của deploy.sh.
+            command -v flock >/dev/null 2>&1 || { echo "🔴 DỪNG: thiếu flock trên VPS — không lấy được khoá deploy."; exit 1; }
+            exec 9>>/run/lock/qlts-deploy.lock
+            if ! flock -n 9; then
+              echo "🔴 DỪNG: một lượt deploy khác đang giữ /run/lock/qlts-deploy.lock (có thể là lượt mất SSH vẫn chạy tiếp)."
+              echo "   Cây /opt/qlts KHÔNG bị đụng. Xem: fuser -v /run/lock/qlts-deploy.lock"
+              exit 1
+            fi
+            export QLTS_KHOA_DEPLOY_FD=9
+
             # 🚨 SELF-UPDATE: bash nạp toàn bộ script vào bộ nhớ lúc gọi. Nếu
             # gọi `./scripts/deploy.sh` ngay thì bản CŨ chạy, rồi Step 2 của nó
             # `git pull` cây mới — nhưng logic đang chạy vẫn là bản cũ. Lần
