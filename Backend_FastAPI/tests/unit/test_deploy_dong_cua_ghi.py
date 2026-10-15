@@ -2351,3 +2351,237 @@ def test_kiem_nguoc_v7c_go_tung_han(tmp_path: Path, ten_ca: str, cu: str, moi: s
     goc = _dung_san_khau(tmp_path, deploy_sh=_ban_dot_bien(cu, moi))
     _ca_7c(goc, mau, treo=_TREO_DOT_BIEN)
     assert _tu_luc_treo(goc) >= 20, f"{ten_ca}: vẫn xong nhanh ⇒ ca treo không canh hạn của lệnh này"
+
+
+# =============================================================================
+# XV. Vòng 7d — NGÂN SÁCH CẢ PHIÊN SSH: trước mỗi bước không đảo ngược được, phần còn
+#     lại của phiên ≥ hạn bước + max(dự trữ trap của pha, phần cần cho mọi bước sau)
+# =============================================================================
+# Đồng hồ tường của sân khấu là shim `date +%s` cộng dồn các "bước nhảy" mà stub ghi
+# (STUB_NHAY_KHI / STUB_NHAY_GIAY): mô phỏng một bước chậm mà không chờ thật. SECONDS của
+# bash (hạn từng lệnh, trần trap) KHÔNG bị shim — chỉ hạn chót PHIÊN đọc đồng hồ tường.
+# Với hạn `_V6` và bốn hạn đo = 5 s: H_4c = 225, H_8c = 120, R(da_dong) = 254,
+# R(migrate_do) = 60, R(da_migrate) = 40 ⇒ C_8b = 125, C_7 = 130, C_6 = 135, C_5 = 259,
+# C_4c = 484 (tính tay từ bảng ở đầu khối phiên của deploy.sh).
+_SHIM_DATE_NHAY = r"""#!/usr/bin/env bash
+if [ "$#" = "1" ] && [ "$1" = "+%s" ]; then
+    t=$( { /bin/date +%s || /usr/bin/date +%s; } 2>/dev/null ); n=0
+    [ -f "${QLTS_STUB_LOG}.nhay" ] && n=$(awk '{ s += $1 } END { print s + 0 }' "${QLTS_STUB_LOG}.nhay")
+    echo $((t + n)); exit 0
+fi
+for d in /bin/date /usr/bin/date; do [ -x "$d" ] && exec "$d" "$@"; done
+exit 127
+"""
+_HAN_DO_7D = {"QLTS_HAN_PG_DUMP": "5", "QLTS_HAN_MIGRATION": "5", "QLTS_HAN_BUOC7_8": "5", "QLTS_HAN_NGINX_APPLY": "5"}
+_C4C_V6 = 484
+_DAU_KHONG_VUA = "KẾ HOẠCH KHÔNG VỪA PHIÊN"
+
+
+def _san_khau_7d(tmp_path: Path, deploy_sh: str | None = None, env_them: str = "") -> Path:
+    goc = _dung_san_khau(tmp_path, deploy_sh=deploy_sh, env_them=env_them)
+    p = goc / "bin" / "date"
+    p.write_text(_SHIM_DATE_NHAY, encoding="utf-8", newline="\n")
+    p.chmod(0o755)
+    return goc
+
+
+def _phien(giay: int, lui: int = 0, **bo) -> dict:
+    import time
+
+    kq = {"QLTS_PHIEN_GIAY": str(giay), "QLTS_PHIEN_BAT_DAU": str(int(time.time()) - lui), **_HAN_DO_7D}
+    for k, v in bo.items():
+        if v is None:
+            kq.pop(k, None)
+        else:
+            kq[k] = v
+    return kq
+
+
+def _chay_7d(goc: Path, phien: dict, **them):
+    return _chay_deploy(goc, **{**_V6, **phien, **them})
+
+
+def _tran_ghi(goc: Path) -> tuple[int, str]:
+    import re
+
+    m = re.search(r"tran_trap\t(\d+)s pha=(\w+) ", _tep_trang_thai(goc))
+    assert m, _tep_trang_thai(goc)
+    return int(m.group(1)), m.group(2)
+
+
+@_bo_qua_neu_khong_posix
+def test_v7d_ke_hoach_khong_vua_phien_thi_dung_truoc_moi_thay_doi(tmp_path: Path) -> None:
+    goc = _san_khau_7d(tmp_path)
+    ket, nk = _chay_7d(goc, _phien(300))
+    ra = _ra(ket)
+    assert ket.returncode != 0, ra[-1500:]
+    assert nk == "", f"kế hoạch không vừa phiên mà VẪN gọi docker (tag/build/dừng…):\n{nk[:800]}"
+    assert _DAU_KHONG_VUA in ra and f"cần {_C4C_V6}s" in ra, ra[-1500:]
+
+
+@_bo_qua_neu_khong_posix
+def test_v7d_ke_hoach_mac_dinh_tinh_tu_han_mac_dinh(tmp_path: Path) -> None:
+    import re
+
+    # Hạn MẶC ĐỊNH của mọi lệnh + bốn hạn đo = 60 s. Đổi một hạn mặc định / công thức ⇒ ca này
+    # đỏ ⇒ xét lại bảng ngân sách phiên trong báo cáo (C_4c = 681 + max(1214, 1274) = 1955).
+    goc = _san_khau_7d(tmp_path)
+    han = {k: "60" for k in _HAN_DO_7D}
+    ket, nk = _chay_deploy(goc, **{**_phien(1200), **han})
+    ra = _ra(ket)
+    m = re.search(r"\[phiên\] ngân sách: (.+)", ra)
+    assert m, ra[-1500:]
+    assert "H_4c=681 " in m.group(1) and "H_8c=480" in m.group(1), m.group(1)
+    assert "R(da_dong)=1214 R(migrate_do)=318 R(da_migrate)=185" in m.group(1), m.group(1)
+    assert "C_4c=1955 C_5=1274 C_6=660 C_7=600 C_8b=540" in m.group(1), m.group(1)
+    assert _DAU_KHONG_VUA in ra and nk == "", "phiên 20 phút với hạn mặc định phải DỪNG trước mọi thay đổi"
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize("thieu", sorted(_HAN_DO_7D))
+def test_v7d_thieu_han_do_tren_vps_thi_dung(tmp_path: Path, thieu: str) -> None:
+    goc = _san_khau_7d(tmp_path)
+    for gt in (None, ""):   # vắng hẳn, và có mặt mà RỖNG (deploy.yml khai "")
+        ket, nk = _chay_7d(goc, _phien(900, **{thieu: gt}))
+        ra = _ra(ket)
+        assert ket.returncode != 0 and nk == "", f"{thieu}={gt!r}: vẫn chạy:\n{ra[-1200:]}"
+        assert f"thiếu hạn ĐO trên VPS: {thieu}" in ra, ra[-1200:]
+
+
+@_bo_qua_neu_khong_posix
+def test_v7d_bien_phien_trong_env_production_thi_dung(tmp_path: Path) -> None:
+    goc = _san_khau_7d(tmp_path, env_them="QLTS_PHIEN_GIAY=99999\n")
+    ket, nk = _chay_7d(goc, _phien(900))
+    ra = _ra(ket)
+    assert ket.returncode != 0 and nk == ""
+    assert "QLTS_PHIEN_GIAY nằm trong .env.production" in ra, ra[-1200:]
+
+
+@_bo_qua_neu_khong_posix
+def test_v7d_chi_mot_trong_hai_bien_phien_thi_dung(tmp_path: Path) -> None:
+    goc = _san_khau_7d(tmp_path)
+    ket, nk = _chay_7d(goc, _phien(900, QLTS_PHIEN_BAT_DAU=None))
+    assert ket.returncode != 0 and nk == ""
+    assert "chỉ có MỘT trong hai" in _ra(ket)
+
+
+@_bo_qua_neu_khong_posix
+def test_v7d_ke_hoach_vua_thi_xanh_qua_moi_cong(tmp_path: Path) -> None:
+    goc = _san_khau_7d(tmp_path)
+    ket, nk = _chay_7d(goc, _phien(900))
+    ra = _ra(ket)
+    assert ket.returncode == 0, ra[-2500:]
+    for b in ("Step 4c (đóng cửa ghi)", "Step 5 (pg_dump)", "Step 6 (migration)",
+              "Step 7–8 (kiểm trước + khởi động mã mới)", "Step 8b (nginx-apply)"):
+        assert f"[phiên] trước {b}: còn" in ra, f"thiếu cổng trước {b}"
+    assert "Step 4 (build): hạn ĐỘNG" in ra and "Step 4b (preflight): hạn ĐỘNG" in ra
+
+
+# --- Cổng giữa lượt: một bước "tốn" thời gian ⇒ cổng KẾ dừng tại điểm an toàn --------
+# Phần còn lại lúc đầu ≈ 900 − 30 = 870. Nhảy J ⇒ phần còn lại ≈ 870 − J.
+_CONG_GIUA = [
+    # (bước, mẫu lời gọi "tốn" thời gian, J, mốc KHÔNG được chạy, pha trap)
+    ("5", "stop -t * " + _cid_gia("backend"), 700, _MOC_PGDUMP, "da_dong"),
+    ("6", "*pg_dump*", 750, _MOC_ALEMBIC, "da_dong"),
+    ("7", "* upgrade head*", 760, "pre_deploy_check", "da_migrate"),
+    ("8b", "*up -d backend celery-worker celery-beat*", 770, "nginx-apply", "buoc8"),
+]
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize("buoc,mau,nhay,moc,pha", _CONG_GIUA)
+def test_v7d_buoc_truoc_an_mat_ngan_sach_thi_cong_ke_dung(
+    tmp_path: Path, buoc: str, mau: str, nhay: int, moc: str, pha: str
+) -> None:
+    goc = _san_khau_7d(tmp_path)
+    ket, nk = _chay_7d(goc, _phien(900), STUB_NHAY_KHI=mau, STUB_NHAY_GIAY=str(nhay))
+    ra, tt = _ra(ket), _tep_trang_thai(goc)
+    assert ket.returncode != 0, f"bước {buoc}: phiên cạn mà deploy thoát 0"
+    assert moc not in nk, f"bước {buoc}: phiên KHÔNG đủ mà vẫn BẮT ĐẦU ({moc})"
+    assert f"het_ngan_sach_phien\tbuoc={buoc} " in tt, tt
+    assert f"thoat\trc=1 tin_hieu=- pha={pha}" in tt, f"bước {buoc}: dừng sai pha:\n{tt}"
+
+
+@_bo_qua_neu_khong_posix
+def test_v7d_trap_bi_gioi_han_boi_han_chot_phien(tmp_path: Path) -> None:
+    import re
+    import time
+
+    # Cổng 5 dừng khi còn ≈ 165 s < R(da_dong) = 254 (bước 4c "tốn" 700 s, vượt H_4c) ⇒ trap
+    # KHÔNG được lấy đủ 254 s của bảng: tự dừng TRƯỚC hạn chót phiên.
+    goc = _san_khau_7d(tmp_path)
+    ket, _ = _chay_7d(goc, _phien(900), STUB_NHAY_KHI="stop -t * " + _cid_gia("backend"), STUB_NHAY_GIAY="700")
+    t_xong = time.time()
+    tran, pha = _tran_ghi(goc)
+    m = re.search(r"phien_con=(\d+)", _tep_trang_thai(goc))
+    assert pha == "da_dong" and m, _tep_trang_thai(goc)
+    assert tran <= int(m.group(1)) < 254, f"trần trap {tran}s VƯỢT phần còn lại của phiên {m.group(1)}s"
+    assert "GIỚI HẠN bởi hạn chót PHIÊN" in _ra(ket)
+    bd = int(re.search(r"tran_trap\t\d+s pha=da_dong bat_dau=(\d+)", _tep_trang_thai(goc)).group(1))
+    assert t_xong - bd <= tran + 3
+
+
+@_bo_qua_neu_khong_posix
+def test_v7d_build_bi_cat_o_han_dong(tmp_path: Path) -> None:
+    import time
+
+    # Phần còn lại lúc build ≈ C_4c + 30 (ân hạn) + vài giây ⇒ hạn ĐỘNG của build chỉ vài giây.
+    goc = _san_khau_7d(tmp_path)
+    t0 = time.time()
+    ket, nk = _chay_7d(goc, _phien(900, lui=900 - 30 - (_C4C_V6 + 30 + 6)),
+                       STUB_TREO_KHI="*build --parallel*", STUB_TREO_GIAY="40")
+    da = time.time() - t0
+    ra = _ra(ket)
+    assert ket.returncode != 0, ra[-1500:]
+    assert da < 25, f"build treo giữ deploy {da:.1f}s — hạn ĐỘNG (vài giây) không được thực thi"
+    assert not any(d.startswith("docker stop ") for d in _dong(nk)), "build hết hạn mà vẫn đóng cửa ghi"
+    assert "HẾT HẠN ĐỘNG" in ra or "HẾT NGÂN SÁCH PHIÊN trước Step 4 (build)" in ra, ra[-1500:]
+
+
+# --- kiểm ngược: mỗi guard của ngân sách phiên một đột biến riêng -----------------
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,cu,moi",
+    [
+        ("G0: bỏ kiểm kế hoạch", """    if [ "$_PH_CON" -lt "$_PH_CAN" ]; then\n""", """    if false; then\n"""),
+        ("cổng 5: bỏ", """_ph_cong 5 "Step 5 (pg_dump)"\n""", ""),
+        ("C_5: bỏ dự trữ trap da_dong",
+         """    c5=$((_PH_H5 + $(_ph_max "$(_ph_tran_pha da_dong)" "$c6")))\n""", """    c5=$((_PH_H5 + c6))\n"""),
+        ("trap: không giới hạn bởi phiên", """            if [ "$con_ph" -lt "$ns" ]; then\n""", """            if false; then\n"""),
+        ("build: bỏ hạn động",
+         """    timeout -k 30 "$_PH_H_DONG" docker compose -f docker-compose.yml --profile production --env-file .env.production build --parallel \\\n""",
+         """    docker compose -f docker-compose.yml --profile production --env-file .env.production build --parallel \\\n"""),
+        ("biến phiên: cho .env.production khai",
+         """    [ "${!_PH_V+co}" != "co" ] || error "[phiên] $_PH_V nằm trong .env.production""",
+         """    : || error "[phiên] $_PH_V nằm trong .env.production"""),
+    ],
+)
+def test_kiem_nguoc_v7d_go_tung_guard_phien(tmp_path: Path, ten_ca: str, cu: str, moi: str) -> None:
+    import re
+    import time
+
+    dot = _ban_dot_bien(cu, moi)
+    if ten_ca.startswith("G0"):
+        goc = _san_khau_7d(tmp_path, deploy_sh=dot)
+        _, nk = _chay_7d(goc, _phien(300))
+        assert nk != "", f"{ten_ca}: vẫn dừng trước mọi thay đổi ⇒ ca G0 không canh"
+    elif ten_ca.startswith("cổng 5") or ten_ca.startswith("C_5"):
+        goc = _san_khau_7d(tmp_path, deploy_sh=dot)
+        _, nk = _chay_7d(goc, _phien(900), STUB_NHAY_KHI="stop -t * " + _cid_gia("backend"), STUB_NHAY_GIAY="700")
+        assert _MOC_PGDUMP in nk, f"{ten_ca}: vẫn không pg_dump ⇒ ca cổng giữa lượt không canh"
+    elif ten_ca.startswith("trap"):
+        goc = _san_khau_7d(tmp_path, deploy_sh=dot)
+        _chay_7d(goc, _phien(900), STUB_NHAY_KHI="stop -t * " + _cid_gia("backend"), STUB_NHAY_GIAY="700")
+        tran, _ = _tran_ghi(goc)
+        con = int(re.search(r"phien_con=(\d+)", _tep_trang_thai(goc)).group(1))
+        assert tran > con, f"{ten_ca}: trần trap vẫn ≤ phần còn lại ⇒ ca giới hạn trap không canh"
+    elif ten_ca.startswith("build"):
+        goc = _san_khau_7d(tmp_path, deploy_sh=dot)
+        t0 = time.time()
+        _chay_7d(goc, _phien(900, lui=900 - 30 - (_C4C_V6 + 30 + 6)),
+                 STUB_TREO_KHI="*build --parallel*", STUB_TREO_GIAY=_TREO_DOT_BIEN)
+        assert time.time() - t0 >= 20, f"{ten_ca}: build treo vẫn bị cắt sớm ⇒ ca hạn động không canh"
+    else:
+        goc = _san_khau_7d(tmp_path, deploy_sh=dot, env_them="QLTS_PHIEN_GIAY=99999\n")
+        ket, _ = _chay_7d(goc, _phien(900))
+        assert "QLTS_PHIEN_GIAY nằm trong .env.production" not in _ra(ket), f"{ten_ca}: vẫn từ chối"

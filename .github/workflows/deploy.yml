@@ -253,6 +253,20 @@ jobs:
     concurrency:
       group: deploy-production
       cancel-in-progress: false
+    # Vòng 7d — NGÂN SÁCH CẢ PHIÊN SSH, MỘT nguồn: `command_timeout` bên dưới đọc ĐÚNG
+    # QLTS_PHIEN_GIAY, deploy.sh nhận cùng giá trị qua `envs:` cùng mốc bắt đầu phiên và lập
+    # kế hoạch — trước mỗi bước không đảo ngược được, phần còn lại của phiên phải ≥ hạn bước +
+    # phần cần sau nó / dự trữ trap của pha; thiếu ⇒ DỪNG tại điểm an toàn. KHÔNG nâng số này
+    # cho vừa phép cộng: nâng theo số ĐO trên VPS.
+    env:
+      QLTS_PHIEN_GIAY: "1200"
+      # Bốn hạn KHÔNG giết được giữa chừng (pg_dump · Step 6 migration · Step 7+8 · Step 8b
+      # nginx-apply), giây — PHẢI ĐO trên VPS rồi khai. Để RỖNG CÓ CHỦ Ý: deploy.sh DỪNG ở
+      # Step 1, trước mọi thay đổi, tới khi có số đo (không đặt hạn bằng suy đoán).
+      QLTS_HAN_PG_DUMP: ""
+      QLTS_HAN_MIGRATION: ""
+      QLTS_HAN_BUOC7_8: ""
+      QLTS_HAN_NGINX_APPLY: ""
 
     steps:
       - name: Deploy via SSH
@@ -265,9 +279,11 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          command_timeout: 20m
-          envs: SHA_MONG_DOI
+          command_timeout: ${{ env.QLTS_PHIEN_GIAY }}s
+          envs: SHA_MONG_DOI,QLTS_PHIEN_GIAY,QLTS_HAN_PG_DUMP,QLTS_HAN_MIGRATION,QLTS_HAN_BUOC7_8,QLTS_HAN_NGINX_APPLY
           script: |
+            # Vòng 7d: mốc bắt đầu PHIÊN — dòng ĐẦU TIÊN, trước mọi lệnh (kể cả lấy khoá).
+            QLTS_PHIEN_BAT_DAU=$(date +%s); export QLTS_PHIEN_BAT_DAU
             set -euo pipefail
             cd /opt/qlts
 

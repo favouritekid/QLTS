@@ -47,8 +47,10 @@ _SHA_B = "b" * 40
 def test_workflow_truyen_github_sha_sang_vps():
     """Thiếu `envs:` thì biến không sang tới VPS và cổng thành no-op câm lặng."""
     assert "SHA_MONG_DOI: ${{ github.sha }}" in _NOI_DUNG, "chưa khai github.sha ở env:"
-    assert re.search(r"^\s*envs:\s*SHA_MONG_DOI\s*$", _NOI_DUNG, re.M), (
-        "thiếu `envs: SHA_MONG_DOI` — appleboy/ssh-action chỉ chuyển biến được "
+    # Vòng 7d: `envs:` là danh sách phẩy — SHA_MONG_DOI phải là MỘT phần tử nguyên vẹn của nó.
+    m = re.search(r"^\s*envs:\s*(\S+)\s*$", _NOI_DUNG, re.M)
+    assert m and "SHA_MONG_DOI" in m.group(1).split(","), (
+        "thiếu `SHA_MONG_DOI` trong `envs:` — appleboy/ssh-action chỉ chuyển biến được "
         "liệt kê ở đây; không có nó thì `$SHA_MONG_DOI` rỗng trên VPS"
     )
 
@@ -2109,3 +2111,73 @@ def test_dot_bien_v7b_bo_kiem_flock_thi_DO(tmp_path):
         f.close()
     assert ket.returncode == 0 and "QUA_KHOA" in (ket.stdout or ""), (
         "đột biến KHÔNG lọt ⇒ ca 'khoá bị giữ' đang canh hụt")
+
+
+# ---------------------------------------------------------------------------
+# Vòng 7d: NGÂN SÁCH CẢ PHIÊN — MỘT nguồn cho `command_timeout` và deploy.sh
+# ---------------------------------------------------------------------------
+# `command_timeout` của ssh-action phải đọc ĐÚNG QLTS_PHIEN_GIAY của job; cùng biến ấy và bốn
+# hạn đo trên VPS đi qua `envs:`; mốc bắt đầu phiên ghi ở dòng lệnh ĐẦU TIÊN của script SSH.
+# Không ghim GIÁ TRỊ bốn hạn đo (owner khai sau khi đo VPS) — chỉ ghim việc chúng được KHAI.
+_BIEN_PHIEN = ("QLTS_PHIEN_GIAY", "QLTS_HAN_PG_DUMP", "QLTS_HAN_MIGRATION", "QLTS_HAN_BUOC7_8", "QLTS_HAN_NGINX_APPLY")
+_DONG_MOC_PHIEN = "QLTS_PHIEN_BAT_DAU=$(date +%s); export QLTS_PHIEN_BAT_DAU"
+
+
+def _kiem_v7d_mot_nguon(van_ban: str) -> None:
+    job = _doc_tu_van_ban(van_ban)["jobs"]["deploy"]
+    env = job.get("env") or {}
+    for ten in _BIEN_PHIEN:
+        assert ten in env, f"job deploy thiếu khai `{ten}` ở `env:`"
+    assert re.fullmatch(r"[1-9][0-9]*", str(env["QLTS_PHIEN_GIAY"])), (
+        f"QLTS_PHIEN_GIAY phải là số giây nguyên dương, nhận {env['QLTS_PHIEN_GIAY']!r}")
+    buoc = next(b for b in job["steps"] if str(b.get("uses", "")).startswith("appleboy/ssh-action"))
+    assert buoc["with"]["command_timeout"] == "${{ env.QLTS_PHIEN_GIAY }}s", (
+        "command_timeout phải đọc ĐÚNG QLTS_PHIEN_GIAY (một nguồn) — số viết tay là hai nguồn lệch nhau; "
+        f"nhận {buoc['with']['command_timeout']!r}")
+    ds = str(buoc["with"]["envs"]).split(",")
+    for ten in ("SHA_MONG_DOI",) + _BIEN_PHIEN:
+        assert ten in ds, f"`envs:` thiếu {ten} — deploy.sh không thấy biến ấy trên VPS"
+
+
+def _kiem_v7d_moc_phien_dau_tien(van_ban: str) -> None:
+    buoc = next(b for b in _doc_tu_van_ban(van_ban)["jobs"]["deploy"]["steps"]
+                if str(b.get("uses", "")).startswith("appleboy/ssh-action"))
+    dong = [d.strip() for d in buoc["with"]["script"].splitlines() if d.strip() and not d.lstrip().startswith("#")]
+    assert dong and dong[0] == _DONG_MOC_PHIEN, (
+        f"dòng lệnh ĐẦU TIÊN của script SSH phải ghi mốc phiên `{_DONG_MOC_PHIEN}`, thấy {dong[:1]}")
+
+
+def test_v7d_command_timeout_mot_nguon_voi_QLTS_PHIEN_GIAY():
+    _kiem_v7d_mot_nguon(_NOI_DUNG)
+
+
+def test_v7d_moc_phien_la_lenh_dau_tien_cua_script_ssh():
+    _kiem_v7d_moc_phien_dau_tien(_NOI_DUNG)
+
+
+def test_dot_bien_v7d_command_timeout_viet_tay_thi_DO():
+    cu = "command_timeout: ${{ env.QLTS_PHIEN_GIAY }}s"
+    assert _NOI_DUNG.count(cu) == 1
+    with pytest.raises(AssertionError):
+        _kiem_v7d_mot_nguon(_NOI_DUNG.replace(cu, "command_timeout: 20m", 1))
+
+
+@pytest.mark.parametrize("ten", ["QLTS_PHIEN_GIAY", "QLTS_HAN_PG_DUMP"])
+def test_dot_bien_v7d_envs_thieu_bien_phien_thi_DO(ten):
+    m = re.search(r"^(\s*envs:\s*)(\S+)\s*$", _NOI_DUNG, re.M)
+    assert m
+    con = ",".join(x for x in m.group(2).split(",") if x != ten)
+    assert con != m.group(2)
+    with pytest.raises(AssertionError):
+        _kiem_v7d_mot_nguon(_NOI_DUNG.replace(m.group(0), m.group(1) + con, 1))
+
+
+def test_dot_bien_v7d_moc_phien_sau_khoa_thi_DO():
+    """Tinh vi nhất: dòng mốc còn nguyên, chỉ dời xuống SAU lệnh lấy khoá — phiên đã chạy mà chưa tính."""
+    dong = "            " + _DONG_MOC_PHIEN + "\n"
+    assert _NOI_DUNG.count(dong) == 1
+    mut = _NOI_DUNG.replace(dong, "", 1)
+    moc = "            export QLTS_KHOA_DEPLOY_FD=9\n"
+    assert mut.count(moc) == 1
+    with pytest.raises(AssertionError):
+        _kiem_v7d_moc_phien_dau_tien(mut.replace(moc, moc + dong, 1))

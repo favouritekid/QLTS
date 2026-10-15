@@ -300,6 +300,9 @@ def test_model_compose_that_giu_celery_false_du_bien_host_dat_true(
 #   (vòng 6c, F46) STUB_PSQL_TREO_SAU=<chuỗi đã có trong nhật ký lệnh> — mọi `exec -T postgres
 #     psql` SAU mốc ấy TREO STUB_TREO_GIAY giây rồi lỗi (độc lập với STUB_TREO_KHI: một bước
 #     Docker tiêu hết ngân sách, phép psql KẾ TIẾP mới là thứ được canh).
+#   (vòng 7d) STUB_NHAY_KHI=<mẫu glob> + STUB_NHAY_GIAY=<N> — lời gọi khớp "tốn" N giây ĐỒNG HỒ
+#     TƯỜNG (cộng vào "$QLTS_STUB_LOG.nhay"; shim `date +%s` của ca 7d cộng dồn) — mô phỏng một
+#     bước chậm mà không phải chờ thật.
 #   Mọi lời gọi còn ghi TIẾN TRÌNH CHA vào "$QLTS_STUB_LOG.cha" (một dòng: base64 argv lời gọi
 #     TAB base64 /proc/$PPID/cmdline) — đọc ra lời gọi ấy chạy dưới `timeout <hạn>` hay KHÔNG hạn.
 #   nginx: mốc khởi động = R<số lần `docker restart` CÓ HIỆU LỰC>; "$QLTS_STUB_LOG.nginx_dung" ⇒ exited.
@@ -405,6 +408,12 @@ if [ -n "${STUB_TREO_KHI:-}" ]; then
                 sleep "${STUB_TREO_GIAY:-3600}"
                 echo "stub: hết giờ chờ daemon" >&2; exit 1
             fi ;;
+    esac
+fi
+# Vòng 7d: lời gọi khớp "tốn" N giây đồng hồ tường (xem STUB_NHAY_KHI ở đầu tệp).
+if [ -n "${STUB_NHAY_KHI:-}" ]; then
+    case "$_tat_ca" in
+        $STUB_NHAY_KHI) echo "${STUB_NHAY_GIAY:-0}" >> "${QLTS_STUB_LOG}.nhay" ;;
     esac
 fi
 # Vòng 6c: phép psql TREO sau một mốc (xem STUB_PSQL_TREO_SAU ở đầu tệp).

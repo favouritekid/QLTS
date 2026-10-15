@@ -220,6 +220,16 @@ if [ "${QLTS_DI_TIEP_TU+co}" = "co" ]; then
 fi
 unset QLTS_DI_TIEP_SAU_MIGRATE_DO QLTS_DI_TIEP_TU
 
+# Vòng 7d: biến PHIÊN (độ dài phiên SSH, mốc bắt đầu, bốn hạn đo trên VPS) chỉ đến từ
+# deploy.yml qua môi trường của lượt — cùng luật với hai nhóm trên: chụp TRƯỚC khi nạp
+# .env.production, tệp ấy khai lại ⇒ DỪNG, rồi trả lại đúng giá trị đã chụp.
+_PH_DS="QLTS_PHIEN_GIAY QLTS_PHIEN_BAT_DAU QLTS_HAN_PG_DUMP QLTS_HAN_MIGRATION QLTS_HAN_BUOC7_8 QLTS_HAN_NGINX_APPLY"
+declare -A _PH_CHUP=()
+for _PH_V in $_PH_DS; do
+    if [ "${!_PH_V+co}" = "co" ]; then _PH_CHUP[$_PH_V]="${!_PH_V}"; fi
+    unset "$_PH_V"
+done
+
 # Load env vars for template substitution
 set -a
 source .env.production
@@ -242,6 +252,18 @@ if [ "${QLTS_DI_TIEP_SAU_MIGRATE_DO+co}" = "co" ] || [ "${QLTS_DI_TIEP_TU+co}" =
        hình thường trực. Gỡ chúng khỏi .env.production; đặt trên dòng lệnh của lượt đó."
 fi
 unset QLTS_DI_TIEP_SAU_MIGRATE_DO QLTS_DI_TIEP_TU
+for _PH_V in $_PH_DS; do
+    [ "${!_PH_V+co}" != "co" ] || error "[phiên] $_PH_V nằm trong .env.production — biến phiên chỉ đến từ deploy.yml (một nguồn với command_timeout). Gỡ khỏi tệp. DỪNG."
+done
+for _PH_V in "${!_PH_CHUP[@]}"; do export "$_PH_V=${_PH_CHUP[$_PH_V]}"; done
+_PH_CO=0
+_PH_BAT_DAU=""
+if [ "${_PH_CHUP[QLTS_PHIEN_GIAY]+co}" = "co" ] || [ "${_PH_CHUP[QLTS_PHIEN_BAT_DAU]+co}" = "co" ]; then
+    { [ "${_PH_CHUP[QLTS_PHIEN_GIAY]+co}" = "co" ] && [ "${_PH_CHUP[QLTS_PHIEN_BAT_DAU]+co}" = "co" ]; } \
+        || error "[phiên] chỉ có MỘT trong hai QLTS_PHIEN_GIAY / QLTS_PHIEN_BAT_DAU — deploy.yml truyền thiếu. DỪNG trước mọi thay đổi."
+    _PH_CO=1
+    _PH_BAT_DAU="${_PH_CHUP[QLTS_PHIEN_BAT_DAU]}"
+fi
 
 if [ -z "${DOMAIN:-}" ]; then
     error "DOMAIN is not set in .env.production"
@@ -448,6 +470,210 @@ if [ -n "${QLTS_TRAN_TRAP:-}" ]; then
 fi
 # Lệnh có hạn hết giờ: `timeout` trả 124 (TERM) hoặc 137 (KILL sau -k).
 _dcg_het_han() { [ "$1" = "124" ] || [ "$1" = "137" ]; }
+# Vòng 7d: các hạn/bảng mà kế hoạch ngân sách PHIÊN (ngay dưới) cần — DỜI LÊN ĐÂY NGUYÊN VĂN
+# từ chỗ cũ (chờ healthy, one-off, phiên lạ, docker stop, thứ tự dịch vụ, trần trap).
+_HAN_HEALTH="${QLTS_HEALTH_TIMEOUT:-60}"
+case "$_HAN_HEALTH" in
+    ''|*[!0-9]*) error "QLTS_HEALTH_TIMEOUT phải là số nguyên, nhận: '$_HAN_HEALTH'" ;;
+esac
+if [ "$_HAN_HEALTH" -lt 1 ] || [ "$_HAN_HEALTH" -gt 600 ]; then
+    error "QLTS_HEALTH_TIMEOUT ngoài khoảng 1..600: '$_HAN_HEALTH'"
+fi
+_DCG_HAN_ONEOFF="${QLTS_HAN_CHO_ONEOFF:-60}"
+case "$_DCG_HAN_ONEOFF" in
+    ''|*[!0-9]*) error "QLTS_HAN_CHO_ONEOFF phải là số nguyên giây, nhận: '$_DCG_HAN_ONEOFF'" ;;
+esac
+[ "$_DCG_HAN_ONEOFF" -le 600 ] || error "QLTS_HAN_CHO_ONEOFF ngoài khoảng 0..600: '$_DCG_HAN_ONEOFF'"
+_DCG_HAN_PHIEN="${QLTS_HAN_PHIEN_LA:-30}"
+case "$_DCG_HAN_PHIEN" in
+    ''|*[!0-9]*) error "QLTS_HAN_PHIEN_LA phải là số nguyên, nhận: '$_DCG_HAN_PHIEN'" ;;
+esac
+if [ "$_DCG_HAN_PHIEN" -lt 1 ] || [ "$_DCG_HAN_PHIEN" -gt 300 ]; then
+    error "QLTS_HAN_PHIEN_LA ngoài khoảng 1..300: '$_DCG_HAN_PHIEN'"
+fi
+# Hạn `docker stop -t`: backend > graceful_timeout 30 của gunicorn; worker cho
+# tác vụ đang chạy kết thúc (acks_late — bị giết thì chạy lại sau); beat thoát ngay.
+_dcg_han_dung() {
+    case "$1" in
+        backend)       echo 35 ;;
+        celery-worker) echo 60 ;;
+        *)             echo 10 ;;
+    esac
+}
+_DCG_DICH_VU="celery-beat backend celery-worker"      # thứ tự DỪNG
+_DCG_THU_TU_MO="backend celery-worker celery-beat"    # thứ tự MỞ LẠI
+# Vòng 6 (N21.07): TRẦN thời gian của trap theo pha = tổng hạn của MỌI bước trap có thể
+# chạy (mỗi bước đều có hạn riêng ⇒ tổng là trần THỰC THI được, không phải ước lượng).
+# Đơn vị đọc = hạn đọc + 2 s (-k); lệnh ghi/đầu dò = hạn riêng + 5 s (-k); chờ healthy =
+# 1 lần liệt kê + hạn + vòng cuối (3 lần đọc + 2 s ngủ). In: "<tổng> <chi tiết>".
+_dcg_ngan_sach_trap() {
+    local L P K R D V H HD G O tong ct
+    L=$((_DCG_HAN_LENH + 2)); P=$((_DCG_HAN_PSQL + 5))
+    K=$((_DCG_HAN_KHOI_DONG + 5)); R=$((_DCG_HAN_NGINX_RESTART + 5))
+    D=$((_DCG_HAN_DO_SNI + 5)); V=$((_DCG_HAN_PII + 5))
+    H=$((L + _HAN_HEALTH + 3 * L + 2))
+    # Hướng dẫn cuối: 3 × (mốc + liệt kê) + nginx + one-off (tra tên + 2 đọc) + vân tay.
+    HD=$((10 * L + P))
+    case "$_DCG_PHA" in
+        dang_dong|da_dong)
+            # (đường đi tiếp: trap chỉ in hướng dẫn, KHÔNG mở lại mã cũ)
+            if [ "${_DCG_DI_TIEP:-0}" = "1" ]; then
+                tong=$HD; ct="hướng_dẫn=$HD"
+            else
+                # mở lại: vân tay P · 3 × (start K + đo lại 4L) · healthy backend H + đo lại 4L ·
+                # hậu kiểm 3 × (liệt kê L + ảnh 2L + trạng thái 2L) · IP 2L · nginx: mốc 2L + restart R + đo lại 2L + healthy H + đo lại 2L ·
+                # SNI 3L + D · PII V · rồi hướng dẫn nếu không đạt.
+                G=$((P + 3 * (K + 4 * L) + H + 4 * L + 15 * L + 2 * L + 2 * L + R + 2 * L + H + 2 * L + 3 * L + D + V))
+                tong=$((G + HD))
+                ct="mở_lại=$G(vân_tay=$P,start=3×$K,healthy=2×$H,sni=$D,pii=$V,đọc=${L}s/lần) + hướng_dẫn=$HD"
+            fi ;;
+        dang_migrate|migrate_do)
+            # (cả hai chế độ) chờ one-off: tra tên L + hạn chờ + vòng cuối 2L + 1 s + chi tiết 2L + rm L.
+            O=$((L + _DCG_HAN_ONEOFF + 2 * L + 1 + 2 * L + L))
+            tong=$((O + HD)); ct="chờ_one-off=$O + hướng_dẫn=$HD" ;;
+        chua_dong)
+            # Vòng 6b (F45): đường đi tiếp vẫn IN hướng dẫn (đọc Docker/CSDL); đường thường không làm gì.
+            if [ "${_DCG_DI_TIEP:-0}" = "1" ]; then
+                tong=$HD; ct="đi_tiếp: hướng_dẫn=$HD"
+            else
+                tong=0; ct="không làm gì"
+            fi ;;
+        khong_ap_dung|buoc8|xong)
+            tong=0; ct="không làm gì" ;;
+        *)
+            tong=$HD; ct="hướng_dẫn=$HD" ;;
+    esac
+    printf '%s %s\n' "$tong" "$ct"
+}
+
+# =============================================================================
+# Vòng 7d — NGÂN SÁCH CẢ PHIÊN SSH (một nguồn với `command_timeout` của deploy.yml)
+# =============================================================================
+# deploy.yml khai QLTS_PHIEN_GIAY một lần (cùng giá trị làm `command_timeout`) và ghi
+# QLTS_PHIEN_BAT_DAU (epoch, dòng đầu của script SSH). Có QLTS_PHIEN_GIAY ⇒ ĐƯỜNG PHIÊN:
+# hạn chót = BAT_DAU + GIAY − 30 s đệm đóng phiên (hằng THIẾT KẾ cho ân hạn -k của lệnh
+# cuối và làm tròn giây — KHÔNG phải số đo). Không có ⇒ chạy TAY: không giới hạn phiên.
+#
+# Luật: TRƯỚC mỗi bước không đảo ngược được, phần còn lại của phiên phải ≥ hạn của bước
+# + max(dự trữ trap của pha nếu bước ấy đỏ, phần cần cho MỌI bước sau nó) — tính ngược:
+#   C_8b = H_8b + H_8c                          (sau 8b không còn nhánh lùi)
+#   C_7  = H_78 + max(R(da_migrate), C_8b)
+#   C_6  = H_6  + max(R(migrate_do), C_7)
+#   C_5  = H_5  + max(R(da_dong), C_6)
+#   C_4c = H_4c + max(R(da_dong), C_5)
+# R(pha) = trần trap của pha (bảng `_dcg_ngan_sach_trap`, đã áp QLTS_TRAN_TRAP). Thiếu ⇒
+# DỪNG đúng tại điểm an toàn ấy: `error` ⇒ trap của pha hiện tại, và phần còn lại vẫn ≥ dự
+# trữ của nó vì cổng TRƯỚC đã giữ chỗ. Kế hoạch C_4c được kiểm NGAY ĐÂY (trước Step 3a/3b,
+# trước mọi thay đổi trên đường phiên). Bước trước 4c (build, preflight 4b) giết được an toàn
+# ⇒ hạn ĐỘNG = phần còn lại − C_4c − ân hạn -k. H_4c, H_8c tính từ hạn từng lệnh đã có
+# (đếm lệnh theo mã tại commit này). Bốn hạn KHÔNG giết được giữa chừng — pg_dump (giết
+# client không dừng server), Step 6 migration, Step 7+8 (`up -d` + chờ healthy), Step 8b
+# nginx-apply (đang hoán container) — là hạn ĐO trên VPS khai trong deploy.yml, KHÔNG có mặc
+# định: đường phiên thiếu một trong bốn ⇒ DỪNG. Lệnh chạy quá hạn đã khai là ĐIỂM CÒN CHẶN
+# (cổng sau đo lại bằng thời gian THẬT, nhưng không cắt được lệnh đang chạy).
+_PH_DEM_DONG=30
+_PH_HET=""
+_PH_BANG=""
+if [ "$_PH_CO" = "1" ]; then
+    _dcg_dat_han _PH_GIAY QLTS_PHIEN_GIAY 0 60 86400
+    case "$_PH_BAT_DAU" in
+        ''|*[!0-9]*) error "[phiên] QLTS_PHIEN_BAT_DAU phải là epoch giây (deploy.yml ghi ở dòng đầu script SSH), nhận: '$_PH_BAT_DAU' — DỪNG trước mọi thay đổi." ;;
+    esac
+    _PH_BAY_GIO=$(date +%s)
+    { [ "$_PH_BAT_DAU" -le "$_PH_BAY_GIO" ] && [ "$_PH_BAT_DAU" -ge $((_PH_BAY_GIO - _PH_GIAY)) ]; } \
+        || error "[phiên] QLTS_PHIEN_BAT_DAU=$_PH_BAT_DAU không nằm trong [bây giờ − ${_PH_GIAY}s, bây giờ] — đồng hồ lệch hoặc biến sai. DỪNG trước mọi thay đổi."
+    for _PH_V in QLTS_HAN_PG_DUMP QLTS_HAN_MIGRATION QLTS_HAN_BUOC7_8 QLTS_HAN_NGINX_APPLY; do
+        [ -n "${!_PH_V:-}" ] || error "[phiên] thiếu hạn ĐO trên VPS: $_PH_V (khai trong deploy.yml cạnh QLTS_PHIEN_GIAY) — không có hạn đo thì KHÔNG giữ chỗ được cho bước không giết được giữa chừng. DỪNG trước mọi thay đổi."
+    done
+    _dcg_dat_han _PH_H5 QLTS_HAN_PG_DUMP 0 1 7200
+    _dcg_dat_han _PH_H6 QLTS_HAN_MIGRATION 0 1 7200
+    _dcg_dat_han _PH_H78 QLTS_HAN_BUOC7_8 0 1 7200
+    _dcg_dat_han _PH_H8B QLTS_HAN_NGINX_APPLY 0 1 7200
+    [ "${IS_CUTOVER:-0}" -eq 0 ] || error "[phiên] COLD_CUTOVER qua workflow KHÔNG được hỗ trợ (cutover là thao tác TAY theo RUNBOOK §7.2). DỪNG."
+    [ "$_DT_CO" = "0" ] || error "[phiên] đường ĐI TIẾP chỉ chạy TAY trên VPS (không qua workflow). DỪNG."
+    _PH_HET=$((_PH_BAT_DAU + _PH_GIAY - _PH_DEM_DONG))
+fi
+_ph_con_lai() {
+    local r
+    if [ -z "$_PH_HET" ]; then printf '%s\n' 999999; return 0; fi
+    r=$((_PH_HET - $(date +%s)))
+    [ "$r" -gt 0 ] || r=0
+    printf '%s\n' "$r"
+}
+# Trần trap của <pha> trên đường thường, đã áp QLTS_TRAN_TRAP (đúng thứ trap sẽ dùng).
+_ph_tran_pha() {
+    local ns
+    ns=$(_DCG_PHA="$1"; _DCG_DI_TIEP=0; _dcg_ngan_sach_trap); ns=${ns%% *}
+    if [ -n "$_DCG_TRAN_GHI_DE" ] && [ "$ns" -gt 0 ] && [ "$_DCG_TRAN_GHI_DE" -lt "$ns" ]; then
+        ns=$_DCG_TRAN_GHI_DE
+    fi
+    printf '%s\n' "$ns"
+}
+_ph_max() { if [ "$1" -ge "$2" ]; then printf '%s\n' "$1"; else printf '%s\n' "$2"; fi; }
+# H_4c (cận trên, đếm theo mã Step 4c): đọc trước dừng 11 lần · 3 × `docker stop` (-t + hạn
+# đọc + -k 5) · mốc 3 lần · đo cửa đóng 6 lần · phiên lạ (hạn chờ + 2 psql + 1 s) · vân tay ·
+# bộ đếm T0. H_8c: liệt kê + ảnh × 5 service + 2 lượt đối chiếu marker × 5 × 3 lần đọc.
+_ph_han_4c() {
+    local L=$((_DCG_HAN_LENH + 2)) P=$((_DCG_HAN_PSQL + 5)) s d=0
+    for s in $_DCG_DICH_VU; do d=$((d + $(_dcg_han_dung "$s") + _DCG_HAN_LENH + 5)); done
+    printf '%s\n' $((11 * L + d + 3 * L + 6 * L + _DCG_HAN_PHIEN + 2 * P + 1 + 2 * P))
+}
+_ph_han_8c() { printf '%s\n' $((40 * (_DCG_HAN_LENH + 2))); }
+# Phần cần (C_x) từ đầu bước <x> tới hết lượt — xem bảng ở đầu khối.
+_ph_can() {
+    local c8b c7 c6 c5
+    c8b=$((_PH_H8B + $(_ph_han_8c)))
+    c7=$((_PH_H78 + $(_ph_max "$(_ph_tran_pha da_migrate)" "$c8b")))
+    c6=$((_PH_H6 + $(_ph_max "$(_ph_tran_pha migrate_do)" "$c7")))
+    c5=$((_PH_H5 + $(_ph_max "$(_ph_tran_pha da_dong)" "$c6")))
+    case "$1" in
+        8b) printf '%s\n' "$c8b" ;;
+        7)  printf '%s\n' "$c7" ;;
+        6)  printf '%s\n' "$c6" ;;
+        5)  printf '%s\n' "$c5" ;;
+        4c) printf '%s\n' $(($(_ph_han_4c) + $(_ph_max "$(_ph_tran_pha da_dong)" "$c5"))) ;;
+        *)  error "[phiên] bước '$1' không có trong kế hoạch ngân sách" ;;
+    esac
+}
+# Cổng TRƯỚC bước không đảo ngược được: <bước> <mô tả>. Đường tay: luôn qua.
+_ph_cong() {
+    local can con
+    [ -n "$_PH_HET" ] || return 0
+    can=$(_ph_can "$1"); con=$(_ph_con_lai)
+    if [ "$con" -lt "$can" ]; then
+        _dcg_ghi "het_ngan_sach_phien" "buoc=$1 con=${con}s can=${can}s" 2>/dev/null || true
+        error "[phiên] HẾT NGÂN SÁCH PHIÊN trước $2: còn ${con}s < cần ${can}s (hạn bước + phần sau / dự trữ trap) — DỪNG tại điểm an toàn này, KHÔNG bắt đầu bước."
+    fi
+    log "  [phiên] trước $2: còn ${con}s ≥ cần ${can}s"
+}
+# Hạn ĐỘNG cho bước giết được an toàn TRƯỚC 4c: <ân hạn -k> <mô tả>. Đặt `_PH_H_DONG` (giây);
+# đường tay để rỗng (bước chạy không giới hạn như trước). Gọi TRỰC TIẾP (không trong `$(…)`)
+# để `error` dừng đúng tiến trình deploy.
+_PH_H_DONG=""
+_ph_han_dong() {
+    local h
+    _PH_H_DONG=""
+    [ -n "$_PH_HET" ] || return 0
+    h=$(( $(_ph_con_lai) - $(_ph_can 4c) - $1 ))
+    if [ "$h" -lt 1 ]; then
+        error "[phiên] HẾT NGÂN SÁCH PHIÊN trước $2: phần còn lại $(_ph_con_lai)s không đủ cho kế hoạch từ Step 4c ($(_ph_can 4c)s) + ân hạn ${1}s — DỪNG, chưa đụng container/CSDL."
+    fi
+    _PH_H_DONG=$h
+    log "  [phiên] $2: hạn ĐỘNG ${h}s (= còn $(_ph_con_lai)s − cần $(_ph_can 4c)s từ 4c − ân hạn ${1}s)"
+}
+if [ -n "$_PH_HET" ]; then
+    _PH_BANG="phiên ${_PH_GIAY}s (đệm đóng ${_PH_DEM_DONG}s) · H_4c=$(_ph_han_4c) H_5=$_PH_H5 H_6=$_PH_H6 H_78=$_PH_H78 H_8b=$_PH_H8B H_8c=$(_ph_han_8c) · R(da_dong)=$(_ph_tran_pha da_dong) R(migrate_do)=$(_ph_tran_pha migrate_do) R(da_migrate)=$(_ph_tran_pha da_migrate) · C_4c=$(_ph_can 4c) C_5=$(_ph_can 5) C_6=$(_ph_can 6) C_7=$(_ph_can 7) C_8b=$(_ph_can 8b)"
+    log "[phiên] ngân sách: $_PH_BANG"
+    _PH_CON=$(_ph_con_lai)
+    _PH_CAN=$(_ph_can 4c)
+    if [ "$_PH_CON" -lt "$_PH_CAN" ]; then
+        error "[phiên] KẾ HOẠCH KHÔNG VỪA PHIÊN: còn ${_PH_CON}s < cần ${_PH_CAN}s từ Step 4c (chưa kể build) — DỪNG TRƯỚC mọi thay đổi (chưa tag/build/dừng gì).
+       KHÔNG hạ hạn Docker cho vừa phép cộng; nâng QLTS_PHIEN_GIAY (= command_timeout) theo số ĐO, hoặc đo lại các hạn trên VPS."
+    fi
+    log "[phiên] kế hoạch vừa: còn ${_PH_CON}s ≥ cần ${_PH_CAN}s từ Step 4c"
+else
+    warn "[phiên] KHÔNG có QLTS_PHIEN_GIAY — chạy TAY: không giới hạn phiên, KHÔNG có cổng ngân sách phiên."
+fi
 # _dcg_doc_ct <định dạng> <CID> — in kết quả `docker inspect -f`. Mã trả:
 #   0 đọc được · 2 ĐÃ XÁC NHẬN không tồn tại · 1 KHÔNG ĐỌC ĐƯỢC (lỗi, hết hạn,
 #   hoặc liệt kê vẫn thấy container mà inspect hỏng).
@@ -1300,7 +1526,15 @@ if [ "${SHA_MONG_DOI+co}" = "co" ]; then
     fi
 fi
 
+# Vòng 7d: đường phiên ⇒ build có hạn ĐỘNG (phần còn lại − kế hoạch từ 4c − ân hạn 30 s). Giết
+# client build TRƯỚC 4c là an toàn: chưa dừng container nào, chưa chạm CSDL.
+_ph_han_dong 30 "Step 4 (build)"
+if [ -n "$_PH_H_DONG" ]; then
+    timeout -k 30 "$_PH_H_DONG" docker compose -f docker-compose.yml --profile production --env-file .env.production build --parallel \
+        || error "Step 4 build THẤT BẠI hoặc HẾT HẠN ĐỘNG (${_PH_H_DONG}s) — DỪNG trước 4c, chưa đụng container/CSDL."
+else
 docker compose -f docker-compose.yml --profile production --env-file .env.production build --parallel
+fi
 
 # =============================================================================
 # Step 4b: Config preflight (ẢNH VỪA BUILD, TRƯỚC KHI CHẠM CSDL)
@@ -1332,8 +1566,16 @@ docker compose -f docker-compose.yml --profile production --env-file .env.produc
 #
 # Không có ``|| warn``: ``set -e`` ở đầu tệp để mã thoát khác 0 tự dừng deploy.
 log "Step 4b/8: Config preflight (candidate image)..."
+# Vòng 7d: đường phiên ⇒ hạn ĐỘNG như build (chỉ đọc cấu hình, CSDL chưa bị chạm).
+_ph_han_dong 10 "Step 4b (preflight)"
+if [ -n "$_PH_H_DONG" ]; then
+    timeout -k 10 "$_PH_H_DONG" docker compose -f docker-compose.yml --profile production --env-file .env.production \
+        run --rm --no-deps --entrypoint python backend -m scripts.preflight_config \
+        || error "Step 4b preflight THẤT BẠI hoặc HẾT HẠN ĐỘNG (${_PH_H_DONG}s) — DỪNG, CSDL chưa bị chạm."
+else
 docker compose -f docker-compose.yml --profile production --env-file .env.production \
     run --rm --no-deps --entrypoint python backend -m scripts.preflight_config
+fi
 log "Config preflight passed — CSDL chưa bị chạm"
 
 # =============================================================================
@@ -1364,13 +1606,6 @@ log "Config preflight passed — CSDL chưa bị chạm"
 # nào sau đó, và `return 1` trong thân `if` sẽ bị `set -e` bỏ qua, đúng loại
 # fail-open đang vá; (c) CHẶN khi có nhiều container thay vì `| head -1` chọn
 # bừa; (d) chặn NGAY khi service không khai healthcheck thay vì chờ hết hạn.
-_HAN_HEALTH="${QLTS_HEALTH_TIMEOUT:-60}"
-case "$_HAN_HEALTH" in
-    ''|*[!0-9]*) error "QLTS_HEALTH_TIMEOUT phải là số nguyên, nhận: '$_HAN_HEALTH'" ;;
-esac
-if [ "$_HAN_HEALTH" -lt 1 ] || [ "$_HAN_HEALTH" -gt 600 ]; then
-    error "QLTS_HEALTH_TIMEOUT ngoài khoảng 1..600: '$_HAN_HEALTH'"
-fi
 
 # Chờ MỘT service tới đúng trạng thái `healthy`. Mọi kết cục khác đều exit 1.
 _cho_healthy_dv() {
@@ -1527,8 +1762,6 @@ _DCG_SO_PSQL=0
 _DCG_NGINX_CID=""
 _DCG_VT_4C_ND=""
 _DCG_GIO_T0=""
-_DCG_DICH_VU="celery-beat backend celery-worker"      # thứ tự DỪNG
-_DCG_THU_TU_MO="backend celery-worker celery-beat"    # thứ tự MỞ LẠI
 _DCG_TT="$BACKUP_DIR/deploy_${TIMESTAMP}.trang-thai"
 _DCG_DEM_T0="$BACKUP_DIR/deploy_${TIMESTAMP}.dem-T0"
 _DCG_DEM_T1="$BACKUP_DIR/deploy_${TIMESTAMP}.dem-T1"
@@ -1551,32 +1784,11 @@ _DCG_ONEOFF_CON_CHAY=0
 _DCG_ONEOFF_LY_DO=""
 # Vòng 6: nhánh mở lại container cũ kết thúc CHƯA XÁC ĐỊNH (lệnh ghi hết hạn / không đọc được).
 _DCG_MO_CHUA_XD=0
-_DCG_HAN_ONEOFF="${QLTS_HAN_CHO_ONEOFF:-60}"
-case "$_DCG_HAN_ONEOFF" in
-    ''|*[!0-9]*) error "QLTS_HAN_CHO_ONEOFF phải là số nguyên giây, nhận: '$_DCG_HAN_ONEOFF'" ;;
-esac
-[ "$_DCG_HAN_ONEOFF" -le 600 ] || error "QLTS_HAN_CHO_ONEOFF ngoài khoảng 0..600: '$_DCG_HAN_ONEOFF'"
 # Vòng 4 (F40): lượt này là ĐƯỜNG ĐI TIẾP sau migration đỏ (đã kiểm ở Step 3a).
 _DCG_DI_TIEP="$_DI_TIEP"
 declare -A _DCG_CID=() _DCG_ANH=() _DCG_MOC=() _DCG_IP=()
 
-_DCG_HAN_PHIEN="${QLTS_HAN_PHIEN_LA:-30}"
-case "$_DCG_HAN_PHIEN" in
-    ''|*[!0-9]*) error "QLTS_HAN_PHIEN_LA phải là số nguyên, nhận: '$_DCG_HAN_PHIEN'" ;;
-esac
-if [ "$_DCG_HAN_PHIEN" -lt 1 ] || [ "$_DCG_HAN_PHIEN" -gt 300 ]; then
-    error "QLTS_HAN_PHIEN_LA ngoài khoảng 1..300: '$_DCG_HAN_PHIEN'"
-fi
 
-# Hạn `docker stop -t`: backend > graceful_timeout 30 của gunicorn; worker cho
-# tác vụ đang chạy kết thúc (acks_late — bị giết thì chạy lại sau); beat thoát ngay.
-_dcg_han_dung() {
-    case "$1" in
-        backend)       echo 35 ;;
-        celery-worker) echo 60 ;;
-        *)             echo 10 ;;
-    esac
-}
 
 # Tệp trạng thái — ghi theo từng pha để còn đọc được sau SIGKILL / mất log.
 # Chỉ ghi CID, image ID, tên pha: không dữ liệu hàng, không biến môi trường.
@@ -2356,49 +2568,6 @@ _dcg_huong_dan() {
     warn "   5. Vân tay LỆCH: KHÔNG mở mã cũ. Nếu buộc phải LÙI bằng bản sao, ĐỐI SOÁT TRƯỚC: (a) mọi ghi commit SAU mốc T0 sẽ MẤT — so bộ đếm T0/T1/T2, xem phiên đã/đang nối (pg_stat_activity), tra các bảng có cột thời gian (created_at/updated_at > T0) để liệt kê TỪNG khoá; (b) có ghi ⇒ trích chúng ra TRƯỚC để nhập lại; (c) phát lại: docker compose -f docker-compose.yml --env-file .env.production exec -T postgres psql -v ON_ERROR_STOP=1 -U ${POSTGRES_USER:-qlts} ${POSTGRES_DB:-qlts_production} < bản sao; (d) dump --clean --if-exists KHÔNG xoá object migration hỏng tạo thêm (dòng '+' ở bước 2) — dọn có chủ đích; (e) so lại vân tay, CHỈ KHI KHỚP mới làm bước 4."
 }
 
-# Vòng 6 (N21.07): TRẦN thời gian của trap theo pha = tổng hạn của MỌI bước trap có thể
-# chạy (mỗi bước đều có hạn riêng ⇒ tổng là trần THỰC THI được, không phải ước lượng).
-# Đơn vị đọc = hạn đọc + 2 s (-k); lệnh ghi/đầu dò = hạn riêng + 5 s (-k); chờ healthy =
-# 1 lần liệt kê + hạn + vòng cuối (3 lần đọc + 2 s ngủ). In: "<tổng> <chi tiết>".
-_dcg_ngan_sach_trap() {
-    local L P K R D V H HD G O tong ct
-    L=$((_DCG_HAN_LENH + 2)); P=$((_DCG_HAN_PSQL + 5))
-    K=$((_DCG_HAN_KHOI_DONG + 5)); R=$((_DCG_HAN_NGINX_RESTART + 5))
-    D=$((_DCG_HAN_DO_SNI + 5)); V=$((_DCG_HAN_PII + 5))
-    H=$((L + _HAN_HEALTH + 3 * L + 2))
-    # Hướng dẫn cuối: 3 × (mốc + liệt kê) + nginx + one-off (tra tên + 2 đọc) + vân tay.
-    HD=$((10 * L + P))
-    case "$_DCG_PHA" in
-        dang_dong|da_dong)
-            # (đường đi tiếp: trap chỉ in hướng dẫn, KHÔNG mở lại mã cũ)
-            if [ "${_DCG_DI_TIEP:-0}" = "1" ]; then
-                tong=$HD; ct="hướng_dẫn=$HD"
-            else
-                # mở lại: vân tay P · 3 × (start K + đo lại 4L) · healthy backend H + đo lại 4L ·
-                # hậu kiểm 3 × (liệt kê L + ảnh 2L + trạng thái 2L) · IP 2L · nginx: mốc 2L + restart R + đo lại 2L + healthy H + đo lại 2L ·
-                # SNI 3L + D · PII V · rồi hướng dẫn nếu không đạt.
-                G=$((P + 3 * (K + 4 * L) + H + 4 * L + 15 * L + 2 * L + 2 * L + R + 2 * L + H + 2 * L + 3 * L + D + V))
-                tong=$((G + HD))
-                ct="mở_lại=$G(vân_tay=$P,start=3×$K,healthy=2×$H,sni=$D,pii=$V,đọc=${L}s/lần) + hướng_dẫn=$HD"
-            fi ;;
-        dang_migrate|migrate_do)
-            # (cả hai chế độ) chờ one-off: tra tên L + hạn chờ + vòng cuối 2L + 1 s + chi tiết 2L + rm L.
-            O=$((L + _DCG_HAN_ONEOFF + 2 * L + 1 + 2 * L + L))
-            tong=$((O + HD)); ct="chờ_one-off=$O + hướng_dẫn=$HD" ;;
-        chua_dong)
-            # Vòng 6b (F45): đường đi tiếp vẫn IN hướng dẫn (đọc Docker/CSDL); đường thường không làm gì.
-            if [ "${_DCG_DI_TIEP:-0}" = "1" ]; then
-                tong=$HD; ct="đi_tiếp: hướng_dẫn=$HD"
-            else
-                tong=0; ct="không làm gì"
-            fi ;;
-        khong_ap_dung|buoc8|xong)
-            tong=0; ct="không làm gì" ;;
-        *)
-            tong=$HD; ct="hướng_dẫn=$HD" ;;
-    esac
-    printf '%s %s\n' "$tong" "$ct"
-}
 
 _dcg_bat_tin_hieu() {
     _DCG_TIN_HIEU="$1"
@@ -2421,10 +2590,21 @@ _dcg_khi_thoat() {
             ns_ct="$ns_ct — GHI ĐÈ QLTS_TRAN_TRAP=${_DCG_TRAN_GHI_DE}s (bảng ${ns}s)"
             ns=$_DCG_TRAN_GHI_DE
         fi
+        # Vòng 7d: trap KHÔNG được chạy quá hạn chót của PHIÊN (SSH sẽ cắt giữa lệnh) — tự dừng
+        # trước, CHƯA XÁC ĐỊNH phần chưa làm. Cổng trước bước đã giữ chỗ ⇒ bình thường không chạm tới.
+        local con_ph
+        if [ -n "${_PH_HET:-}" ]; then
+            con_ph=$(_ph_con_lai)
+            if [ "$con_ph" -lt "$ns" ]; then
+                ns_ct="$ns_ct — GIỚI HẠN bởi hạn chót PHIÊN (còn ${con_ph}s, bảng ${ns}s)"
+                ns=$con_ph
+                [ "$ns" -ge 1 ] || ns=1
+            fi
+        fi
         # Vòng 6b (F45): hạn chót THỰC THI — mọi bước sau đây lấy hạn = min(hạn riêng, phần còn lại).
         _DCG_TRAP_HET=$((bd_trap + ns))
         log "[trap] trần thời gian của trap (pha '$_DCG_PHA', đi tiếp=${_DCG_DI_TIEP:-0}): ${ns}s — $ns_ct"
-        _dcg_ghi "tran_trap" "${ns}s pha=$_DCG_PHA bat_dau=$(date +%s) di_tiep=${_DCG_DI_TIEP:-0}" || true
+        _dcg_ghi "tran_trap" "${ns}s pha=$_DCG_PHA bat_dau=$(date +%s) di_tiep=${_DCG_DI_TIEP:-0} phien_con=${con_ph:--}" || true
     fi
     case "$_DCG_PHA" in
         khong_ap_dung|buoc8|xong)
@@ -2487,6 +2667,8 @@ else
     log "  [pha] chua_dong"
     _dcg_ghi pha chua_dong \
         || error "[trạng thái] tệp trạng thái KHÔNG ghi được — DỪNG trước khi dừng container nào (fail-closed)."
+    # Vòng 7d: cổng ngân sách PHIÊN trước bước không đảo ngược được ĐẦU TIÊN (đóng cửa ghi).
+    _ph_cong 4c "Step 4c (đóng cửa ghi)"
 
     if [ "$_DCG_DI_TIEP" = "1" ]; then
     # --- ĐI TIẾP (vòng 4, F40): cửa ghi ĐÃ đóng từ lượt đỏ — KHÔNG dừng gì ------
@@ -2577,6 +2759,9 @@ fi
 # Step 5: Database backup (before migration)
 # =============================================================================
 log "Step 5/8: Backing up database..."
+# Vòng 7d: pg_dump KHÔNG bị giết giữa chừng (giết client `exec` không dừng pg_dump trong
+# container) ⇒ CHẶN TRƯỚC khi bắt đầu theo hạn đo QLTS_HAN_PG_DUMP + phần sau.
+_ph_cong 5 "Step 5 (pg_dump)"
 mkdir -p "$BACKUP_DIR"
 
 # Review 2026-07-20: ba sửa đổi, cùng một gốc — bản backup này là đường
@@ -2631,6 +2816,9 @@ log "Database backup saved: pre_deploy_${TIMESTAMP}.sql"
 # Step 6: Start infrastructure & run migrations
 # =============================================================================
 log "Step 6/8: Starting infrastructure & running migrations..."
+# Vòng 7d: migration KHÔNG bị giết giữa chừng (DDL/AUTOCOMMIT dở dang tệ hơn chờ) ⇒ CHẶN
+# TRƯỚC theo hạn đo QLTS_HAN_MIGRATION + max(dự trữ trap migrate_do, phần sau).
+_ph_cong 6 "Step 6 (migration)"
 
 # Start infra services first (always — postgres + redis needed both modes)
 docker compose -f docker-compose.yml --profile production --env-file .env.production up -d postgres redis
@@ -2722,6 +2910,8 @@ fi
 # Step 7: Pre-deploy checks (Casbin policies)
 # =============================================================================
 log "Step 7/8: Running pre-deploy checks..."
+# Vòng 7d: từ đây KHÔNG còn nhánh lùi mở mã cũ ⇒ giữ chỗ cho CẢ đường tới hết lượt (7, 8, 8b, 8c).
+_ph_cong 7 "Step 7–8 (kiểm trước + khởi động mã mới)"
 
 # Vá 13-08-2026: bỏ nhánh ``|| warn``. `pre_deploy_check.py` TỰ phân loại
 # rồi mới chọn mã thoát — thiếu WARNING_POLICIES hay thiếu kế thừa vai trò
@@ -2796,6 +2986,8 @@ log "Frontend healthy"
 # mới đụng tới container đang phục vụ. Tách ra tệp riêng để bài kiểm hồi quy
 # chạy được ĐÚNG đoạn mã này thay vì một bản chép lại trong test.
 log "Step 8b: áp cấu hình nginx (thử trên candidate trước)..."
+# Vòng 7d: nginx-apply hoán container đang phục vụ — KHÔNG giết giữa chừng ⇒ chặn TRƯỚC.
+_ph_cong 8b "Step 8b (nginx-apply)"
 bash "$SCRIPT_DIR/nginx-apply.sh" "$DOMAIN"     || error "không áp được cấu hình nginx — xem log phía trên"
 
 # Vòng 4 (F40): đường ĐI TIẾP kết thúc bằng phép đo DỊCH VỤ qua SNI thật trên
