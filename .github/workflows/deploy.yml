@@ -77,6 +77,10 @@ jobs:
     # một lượt phê duyệt để lấy một deployment đỏ.
     #
     # Gate job này theo `deploy == 'true'` là tái tạo đúng lỗi ấy.
+    #
+    # Từ N10 · O2 (`cancel-in-progress: false` ở job `deploy`), nhóm concurrency
+    # KHÔNG còn huỷ run cũ nào nữa — kể cả run DEPLOY: job này là cơ chế DUY
+    # NHẤT dọn run chờ duyệt mang SHA đã bị `main` vượt qua.
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -236,9 +240,19 @@ jobs:
       needs.reap-stale-production-runs.result == 'success'
     runs-on: ubuntu-latest
     environment: production
+    # N10 · O2: `cancel-in-progress: false` CỐ Ý; hàng chờ để mặc định
+    # (`single`), KHÔNG khai `queue:`. Khi còn `true`, job deploy của run khác
+    # vào nhóm đã huỷ lượt đang ở step "Deploy via SSH" 4 lần (#167, #168,
+    # #256, #303 — #167 bị run CŨ hơn huỷ). VPS sau các lần ấy: CHƯA BIẾT.
+    #
+    # Theo tài liệu GitHub: không `true` thì nhóm không huỷ job đang chạy; job
+    # tới khi nhóm bận nằm `pending`, `pending` mới THAY `pending` cũ. CHƯA ĐO
+    # ở repo này: job CHỜ DUYỆT có giữ chỗ trong nhóm không; run chờ nhóm mang
+    # `status` REST gì. Vì vậy có thể gặp lượt chờ duyệt mang SHA đã bị `main`
+    # vượt qua: Reject nó, KHÔNG Approve.
     concurrency:
       group: deploy-production
-      cancel-in-progress: true
+      cancel-in-progress: false
 
     steps:
       - name: Deploy via SSH

@@ -13,6 +13,7 @@ chỉ chứng minh giả định của người viết test, không chứng minh
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -430,10 +431,8 @@ def test_chi_job_deploy_so_huu_environment_va_concurrency():
     assert co_env == ["deploy"], f"chỉ `deploy` được mang environment, thấy {co_env}"
     assert co_conc == ["deploy"], f"chỉ `deploy` được mang concurrency, thấy {co_conc}"
     assert jobs["deploy"]["environment"] == "production"
-    assert jobs["deploy"]["concurrency"] == {
-        "group": "deploy-production",
-        "cancel-in-progress": True,
-    }
+    # Hình dạng khối concurrency của `deploy` (nhóm, `cancel-in-progress: false`,
+    # không `queue`) do các guard N10 · O2 ở cuối tệp canh — mỗi bất biến một ca.
 
 
 def test_deploy_chi_chay_sau_ket_luan_deploy_tuong_minh():
@@ -1627,3 +1626,360 @@ def test_dot_bien_bo_kiem_HINH_DANG_thi_lai_fail_open(monkeypatch):
     assert rc == 0 and huy == [], (
         "đột biến KHÔNG lọt ⇒ phép kiểm hình dạng đang canh hụt"
     )
+
+
+# ---------------------------------------------------------------------------
+# N10 · O2: nhóm `deploy-production` KHÔNG được huỷ lượt deploy ĐANG CHẠY
+# ---------------------------------------------------------------------------
+#
+# Khi còn `cancel-in-progress: true`, job deploy của một run KHÁC vào nhóm đã
+# huỷ lượt đang ở step "Deploy via SSH" 4 lần: #167, #168, #256, #303 (API: step
+# `cancelled` sau 39/48/651/184 giây, annotation "Canceling since a higher
+# priority waiting request for deploy-production exists"). #167 bị chính run CŨ
+# hơn (#166) huỷ. Trạng thái VPS sau các lần ấy: CHƯA BIẾT.
+#
+# Owner chọn O2: `cancel-in-progress: false`, hàng chờ mặc định (`single`),
+# KHÔNG `queue:`. Mỗi bất biến dưới đây có MỘT hàm kiểm và đột biến RIÊNG
+# (CLAUDE.md §3), dùng biến thể tinh vi nhất tìm được.
+#
+# Các ca này chỉ KHOÁ CẤU HÌNH. Chúng không chứng minh hành vi của GitHub: job
+# chờ duyệt có giữ chỗ trong nhóm không (U1), run chờ nhóm mang `status` REST
+# gì (U2) — cả hai CHƯA ĐO.
+
+_NHOM_DEPLOY = "deploy-production"
+_THU_MUC_WF = _goc_repo() / ".github" / "workflows"
+#: Bool `false` theo YAML 1.2 core schema, viết TRƠN (không nháy).
+_CHU_FALSE_YAML12 = {"false", "False", "FALSE"}
+
+
+def _doc_tu_van_ban(van_ban: str) -> dict:
+    doc = yaml.load(van_ban, Loader=_StrictYamlLoader)
+    assert isinstance(doc, dict)
+    return doc
+
+
+def _moi_workflow() -> dict:
+    tep = sorted(_THU_MUC_WF.glob("*.yml")) + sorted(_THU_MUC_WF.glob("*.yaml"))
+    assert tep, "không thấy workflow nào — phép quét toàn repo sẽ xanh rỗng"
+    return {p.name: _workflow(p) for p in tep}
+
+
+def _cac_khoi_concurrency(doc: dict):
+    """(vị trí, giá trị) của MỌI khối concurrency: cấp workflow lẫn từng job."""
+    if "concurrency" in doc:
+        yield "<workflow>", doc["concurrency"]
+    for ten, job in (doc.get("jobs") or {}).items():
+        if isinstance(job, dict) and "concurrency" in job:
+            yield ten, job["concurrency"]
+
+
+def _nhom_chuan_hoa(cc) -> str:
+    """Tên nhóm, bỏ hoa/thường và mọi ký tự không phải chữ-số.
+
+    GitHub coi tên nhóm KHÔNG phân biệt hoa thường (tài liệu
+    control-workflow-concurrency). Bỏ ký tự lạ để `deploy-${{ 'production' }}`
+    vẫn lộ ra. Đây là heuristic, KHÔNG phải bộ đánh giá biểu thức.
+    """
+    nhom = cc.get("group", "") if isinstance(cc, dict) else cc
+    return re.sub(r"[^0-9a-z]", "", str(nhom).lower())
+
+
+def _nut_yaml(van_ban: str, *duong: str):
+    """Nút YAML THÔ tại một đường khoá — để thấy giá trị được VIẾT ra thế nào."""
+    nut = yaml.compose(van_ban, Loader=yaml.SafeLoader)
+    for khoa in duong:
+        assert isinstance(nut, yaml.MappingNode), f"cha của `{khoa}` không phải mapping"
+        khop = [v for k, v in nut.value if getattr(k, "value", None) == khoa]
+        assert len(khop) == 1, f"`{khoa}` xuất hiện {len(khop)} lần"
+        nut = khop[0]
+    return nut
+
+
+def _kiem_o2_deploy_khong_huy_luot_dang_chay(van_ban: str) -> None:
+    """`deploy`: đúng nhóm, `cancel-in-progress` là bool `false` viết trơn.
+
+    Đòi khối tường minh chứ không dạng chuỗi `concurrency: deploy-production`
+    (dù mặc định cũng không huỷ): ý định phải đọc được tại chỗ.
+
+    Vì sao soi cả NÚT YAML: PyYAML theo YAML 1.1 nên dựng `no`/`off` thành
+    `False`, trong khi GitHub đọc workflow theo luật khác (nó không biến khoá
+    `on` thành `True`) — `no` ở đó có thể là CHUỖI, CHƯA kiểm. `'false'` có nháy
+    và `${{ … }}` cũng là chuỗi. Chỉ chữ `false` trơn là không mơ hồ.
+    """
+    cc = _doc_tu_van_ban(van_ban)["jobs"]["deploy"].get("concurrency")
+    assert isinstance(cc, dict), (
+        f"`deploy` phải khai concurrency dạng khối tường minh, nhận {cc!r}"
+    )
+    assert cc.get("group") == _NHOM_DEPLOY, (
+        f"nhóm phải là chuỗi cố định {_NHOM_DEPLOY!r}; nhận {cc.get('group')!r}"
+    )
+    assert cc.get("cancel-in-progress", _KHONG_DAT) is False, (
+        "N10: `cancel-in-progress` phải là boolean `false` — `true` là huỷ lượt "
+        f"deploy ĐANG CHẠY; nhận {cc.get('cancel-in-progress', '<thiếu>')!r}"
+    )
+    nut = _nut_yaml(van_ban, "jobs", "deploy", "concurrency", "cancel-in-progress")
+    assert (
+        nut.tag == "tag:yaml.org,2002:bool"
+        and nut.style is None
+        and nut.value in _CHU_FALSE_YAML12
+    ), (
+        "N10: `cancel-in-progress` phải VIẾT là `false` trơn, không `no`/`off`/"
+        f"nháy/biểu thức; thấy {nut.value!r} (style={nut.style!r})"
+    )
+
+
+def _kiem_o2_khong_queue(van_ban: str) -> None:
+    """Không khối concurrency nào của deploy.yml được mang khoá `queue`.
+
+    `queue: max` HỢP LỆ khi `cancel-in-progress` là false (GitHub chỉ cấm nó
+    đi với `true`), nên đây là cửa lùi dễ nhất sang O3: tới 100 run xếp hàng,
+    mỗi SHA cũ lên chờ duyệt một lần, thứ tự không bảo đảm. Owner đã loại O3.
+    Cấm cả khoá (kể cả `single`): actionlint 1.7.12 không nhận khoá `queue`.
+    """
+    co_queue = [
+        vi_tri
+        for vi_tri, cc in _cac_khoi_concurrency(_doc_tu_van_ban(van_ban))
+        if isinstance(cc, dict) and "queue" in cc
+    ]
+    assert co_queue == [], f"khối concurrency có `queue` ở: {co_queue}"
+
+
+def _kiem_o2_khong_concurrency_cap_workflow(van_ban: str) -> None:
+    """deploy.yml không được có concurrency cấp WORKFLOW.
+
+    Khối cấp workflow gom NGUYÊN run. Với `cancel-in-progress: true` và một nhóm
+    bất kỳ mà hai run cùng rơi vào (vd. `${{ github.workflow }}-${{ github.ref }}`),
+    nó huỷ cả run đang ở step SSH: N10 quay lại qua cửa khác, trong khi khối của
+    job `deploy` vẫn nguyên. Cùng nhóm `deploy-production` thì run giữ chỗ mà
+    chính job `deploy` của nó cũng cần — hành vi CHƯA ĐO. Nên cấm cả khối.
+    """
+    doc = _doc_tu_van_ban(van_ban)
+    assert "concurrency" not in doc, (
+        f"deploy.yml không được có concurrency cấp workflow, nhận {doc['concurrency']!r}"
+    )
+
+
+def _kiem_o2_nhom_deploy_doc_quyen(cac_wf: dict) -> None:
+    """Nhóm `deploy-production` chỉ ở deploy.yml/jobs.deploy — TOÀN repo.
+
+    Tên nhóm dùng chung cả repo. Job/workflow nào khác vào nhóm — kể cả với
+    `false` — cũng đổi hàng chờ của deploy; với `true` thì huỷ được lượt đang
+    chạy mà deploy.yml không đổi một chữ.
+    """
+    thay = [
+        (ten_tep, vi_tri)
+        for ten_tep, doc in sorted(cac_wf.items())
+        for vi_tri, cc in _cac_khoi_concurrency(doc)
+        if _nhom_chuan_hoa(_NHOM_DEPLOY) in _nhom_chuan_hoa(cc)
+    ]
+    assert thay == [("deploy.yml", "deploy")], (
+        f"nhóm {_NHOM_DEPLOY!r} chỉ được ở deploy.yml/jobs.deploy, thấy {thay}"
+    )
+
+
+#: Vân tay NGỮ NGHĨA của job reaper, lấy tại nền 876be1a4 (trước O2).
+_VAN_TAY_REAPER = "f3ea555ac19f555f2723723407cb683ab5946c5b1830f8b233289a50007bd559"
+
+
+def _van_tay_reaper(van_ban: str) -> str:
+    """sha256 của job reaper ĐÃ PARSE, bỏ dòng chú thích/dòng trống trong `run`.
+
+    Vì sao cách này:
+    * Không so với nền bằng `git show`: CI checkout nông, và sau khi merge thì
+      "nền" hết nghĩa.
+    * Không băm văn bản thô: sửa chú thích YAML của reaper (vd. dòng nhắc
+      "nhờ `cancel-in-progress` của job `deploy`", lỗi thời sau O2) là việc
+      theo sau hợp lệ, không được làm đỏ oan. Bỏ cả dòng `#` và dòng trống
+      trong đoạn Python vì cùng lý do.
+    * Mọi khoá/giá trị còn lại — `if`, `needs`, `permissions`, bộ lọc
+      `status`, mã huỷ — đều nằm trong vân tay.
+
+    Đỏ ở đây KHÔNG có nghĩa là sai. Nó nghĩa là reaper — cơ chế DUY NHẤT dọn
+    run chờ duyệt SHA cũ dưới O2 — vừa đổi hành vi. Người sửa phải đọc lại giả
+    định O2 (U1/U2/U9 CHƯA ĐO) rồi mới cập nhật hằng số, trong CÙNG PR.
+    """
+    job = _doc_tu_van_ban(van_ban)["jobs"][_TEN_REAPER]
+    for buoc in job.get("steps") or []:
+        if isinstance(buoc.get("run"), str):
+            buoc["run"] = "\n".join(
+                dong.rstrip()
+                for dong in buoc["run"].splitlines()
+                if dong.strip() and not dong.lstrip().startswith("#")
+            )
+    tho = json.dumps(job, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(tho).hexdigest()
+
+
+def test_o2_deploy_khong_huy_luot_dang_chay():
+    _kiem_o2_deploy_khong_huy_luot_dang_chay(_NOI_DUNG)
+
+
+def test_o2_khong_khoa_queue():
+    _kiem_o2_khong_queue(_NOI_DUNG)
+
+
+def test_o2_khong_concurrency_cap_workflow():
+    _kiem_o2_khong_concurrency_cap_workflow(_NOI_DUNG)
+
+
+def test_o2_nhom_deploy_production_chi_o_mot_cho_trong_repo():
+    cac_wf = _moi_workflow()
+    assert "deploy.yml" in cac_wf
+    _kiem_o2_nhom_deploy_doc_quyen(cac_wf)
+
+
+def test_o2_reaper_khong_doi_so_voi_nen():
+    thay = _van_tay_reaper(_NOI_DUNG)
+    assert thay == _VAN_TAY_REAPER, (
+        f"job {_TEN_REAPER} đã đổi ngữ nghĩa (vân tay {thay}). Dưới O2 nó là cơ "
+        "chế DUY NHẤT dọn run chờ duyệt SHA cũ: đọc lại giả định O2 rồi mới cập "
+        "nhật `_VAN_TAY_REAPER`."
+    )
+
+
+@pytest.mark.parametrize("trang_thai", ["pending", "requested"])
+def test_o2_reaper_CHUA_mo_rong_sang_run_chua_toi_luot(monkeypatch, trang_thai):
+    """Owner: CHƯA mở rộng reaper sang run `pending` — phải đo U2/U9 trước.
+
+    Dưới O2 một run SHA cũ có thể nằm chờ nhóm. Huỷ nó hay không là quyết định
+    CHÍNH SÁCH (có thể chôn nội dung DEPLOY chưa lên) và phụ thuộc hai điều chưa
+    đo: API gắn `status` gì cho run ấy (U2), `POST cancel` lên nó trả gì (U9).
+    """
+    rc, huy, _ = _thi_hanh_reaper(
+        monkeypatch, danh_sach=[_ban_ghi_run(117, _SHA_CU, status=trang_thai, so=5)]
+    )
+    assert rc == 0
+    assert huy == [], f"reaper KHÔNG được huỷ run `{trang_thai}` khi chưa có quyết định"
+
+
+# --- kiểm ngược: mỗi guard O2 một đột biến riêng (CLAUDE.md §3) --------------
+
+_DONG_CANCEL_O2 = r"^(?P<tl>[ \t]+)cancel-in-progress: false[ \t]*$"
+
+
+def _dot_bien_o2(mau: str, thay: str, van_ban: str = _NOI_DUNG) -> str:
+    moi, so = re.subn(mau, thay, van_ban, flags=re.M)
+    assert so == 1, f"mẫu đột biến khớp {so} lần, cần đúng 1"
+    return moi
+
+
+def test_dot_bien_o2_quay_lai_true_thi_DO():
+    mut = _dot_bien_o2(_DONG_CANCEL_O2, r"\g<tl>cancel-in-progress: true")
+    with pytest.raises(AssertionError):
+        _kiem_o2_deploy_khong_huy_luot_dang_chay(mut)
+
+
+@pytest.mark.parametrize(
+    ("ly_do", "gia_tri", "pyyaml_thay_false"),
+    [
+        ("chuỗi có nháy", "'false'", False),
+        ("biểu thức", "${{ false }}", False),
+        # Tinh vi nhất: PyYAML dựng `no` thành False, chỉ phép soi nút bắt được.
+        ("`no` kiểu YAML 1.1", "no", True),
+    ],
+)
+def test_dot_bien_o2_false_khong_tron_thi_DO(ly_do, gia_tri, pyyaml_thay_false):
+    mut = _dot_bien_o2(
+        _DONG_CANCEL_O2,
+        lambda m: m.group("tl") + "cancel-in-progress: " + gia_tri,
+    )
+    cc = _doc_tu_van_ban(mut)["jobs"]["deploy"]["concurrency"]
+    assert (cc["cancel-in-progress"] is False) is pyyaml_thay_false
+    with pytest.raises(AssertionError):
+        _kiem_o2_deploy_khong_huy_luot_dang_chay(mut)
+
+
+def test_dot_bien_o2_them_queue_max_thi_DO():
+    """`queue: max` + `false` là cấu hình GitHub CHẤP NHẬN — vì thế nguy hiểm."""
+    mut = _dot_bien_o2(
+        _DONG_CANCEL_O2,
+        lambda m: m.group(0) + "\n" + m.group("tl") + "queue: max",
+    )
+    _kiem_o2_deploy_khong_huy_luot_dang_chay(mut)  # guard khác vẫn xanh
+    with pytest.raises(AssertionError):
+        _kiem_o2_khong_queue(mut)
+
+
+def test_dot_bien_o2_nhom_theo_sha_thi_DO():
+    """Nhóm theo SHA: mỗi lượt một nhóm riêng ⇒ HAI deploy chạy song song trên
+    một VPS — tệ hơn N10. Guard độc quyền nhóm KHÔNG thấy (tên vẫn chứa
+    `deploy-production`), chỉ phép so nhóm của guard này bắt được."""
+    mut = _dot_bien_o2(
+        r"^(?P<tl>[ \t]+)group: deploy-production[ \t]*$",
+        lambda m: m.group("tl") + "group: deploy-production-${{ github.sha }}",
+    )
+    _kiem_o2_nhom_deploy_doc_quyen({**_moi_workflow(), "deploy.yml": _doc_tu_van_ban(mut)})
+    with pytest.raises(AssertionError):
+        _kiem_o2_deploy_khong_huy_luot_dang_chay(mut)
+
+
+@pytest.mark.parametrize(
+    "nhom",
+    [
+        # Tinh vi nhất: nhóm KHÁC `deploy-production` nên guard độc quyền không
+        # thấy, khối của job `deploy` vẫn nguyên, mà run đang SSH vẫn bị huỷ.
+        "${{ github.workflow }}-${{ github.ref }}",
+        _NHOM_DEPLOY,
+    ],
+)
+def test_dot_bien_o2_concurrency_cap_workflow_thi_DO(nhom):
+    mut = _dot_bien_o2(
+        r"^jobs:[ \t]*$",
+        lambda m: "concurrency:\n  group: " + nhom
+        + "\n  cancel-in-progress: true\n\n" + m.group(0),
+    )
+    _kiem_o2_deploy_khong_huy_luot_dang_chay(mut)
+    with pytest.raises(AssertionError):
+        _kiem_o2_khong_concurrency_cap_workflow(mut)
+
+
+@pytest.mark.parametrize(
+    "nhom",
+    ["Deploy-Production", "deploy-${{ 'production' }}"],
+)
+def test_dot_bien_o2_workflow_khac_vao_nhom_deploy_thi_DO(nhom):
+    """Tinh vi nhất: workflow KHÁC, cấp job, khác hoa thường hoặc qua biểu thức."""
+    cac_wf = _moi_workflow()
+    ten_khac = next(t for t in sorted(cac_wf) if t != "deploy.yml")
+    job_dau = next(iter(cac_wf[ten_khac]["jobs"]))
+    cac_wf[ten_khac]["jobs"][job_dau]["concurrency"] = {
+        "group": nhom,
+        "cancel-in-progress": True,
+    }
+    with pytest.raises(AssertionError):
+        _kiem_o2_nhom_deploy_doc_quyen(cac_wf)
+
+
+def test_dot_bien_o2_reaper_doi_mot_tham_so_thi_van_tay_DO():
+    """Đổi nhỏ nhất mà không ca hành vi nào thấy: `per_page=100` → `99`."""
+    mut = _dot_bien_o2(r"per_page=100", "per_page=99")
+    assert _van_tay_reaper(mut) != _VAN_TAY_REAPER
+
+
+def test_dot_bien_o2_reaper_mo_rong_sang_pending_thi_DO(monkeypatch):
+    """Đúng việc owner CHƯA cho làm: nới bộ lọc `status` sang `pending`."""
+    cu = 'if run.get("status") != "waiting":'
+    moi = 'if run.get("status") not in ("waiting", "pending"):'
+    nguon = _ma_reaper()
+    assert nguon.count(cu) == 1
+    _, huy, _ = _thi_hanh_reaper(
+        monkeypatch,
+        danh_sach=[_ban_ghi_run(117, _SHA_CU, status="pending", so=5)],
+        ma_nguon=nguon.replace(cu, moi, 1),
+    )
+    assert huy == [117], "đột biến KHÔNG lọt ⇒ ca `pending` đang canh hụt"
+
+
+def test_van_tay_reaper_KHONG_do_oan_khi_chi_sua_chu_thich():
+    """Chiều ngược: chỉ sửa chú thích YAML/Python của reaper thì không đỏ."""
+    mut = _dot_bien_o2(
+        r"^([ \t]+)# Gate job này theo `deploy == 'true'` là tái tạo đúng lỗi ấy\.[ \t]*$",
+        lambda m: m.group(1) + "# (chú thích YAML đã sửa)",
+    )
+    mut = _dot_bien_o2(
+        r"^([ \t]+)# KHONG tin bo loc `status=waiting` cua API - hoi lai ban ghi\.[ \t]*$",
+        lambda m: m.group(1) + "# (chú thích Python đã sửa)\n",
+        mut,
+    )
+    assert mut != _NOI_DUNG
+    assert _van_tay_reaper(mut) == _VAN_TAY_REAPER
