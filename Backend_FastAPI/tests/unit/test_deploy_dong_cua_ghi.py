@@ -2585,3 +2585,51 @@ def test_kiem_nguoc_v7d_go_tung_guard_phien(tmp_path: Path, ten_ca: str, cu: str
         goc = _san_khau_7d(tmp_path, deploy_sh=dot, env_them="QLTS_PHIEN_GIAY=99999\n")
         ket, _ = _chay_7d(goc, _phien(900))
         assert "QLTS_PHIEN_GIAY nằm trong .env.production" not in _ra(ket), f"{ten_ca}: vẫn từ chối"
+
+
+# =============================================================================
+# XVI. Vòng 7e — MẤT KÊNH SSH giữa lượt: log hỏng KHÔNG được đổi kết quả phục hồi
+# =============================================================================
+# Diễn tập `mat-ssh-dong-v7` (Docker thật, 15-10): kênh đóng ở pha da_dong ⇒ trap mở lại 3
+# container cũ, SNI ĐẠT thật (2xx qua nginx, bản cũ) — vậy mà ghi `mo_lai_cu KHONG_DAT`: trong
+# trap SIGPIPE bị bỏ qua nên `printf` trả EPIPE và `_dcg_do_dich_vu_nginx` (kết thúc bằng dòng
+# "✓ … ĐẠT") trả về chính lỗi ghi log. Sân khấu: stdout/stderr của deploy.sh đi qua MỘT ống tới
+# một tiến trình đọc; tiến trình ấy thoát ngay khi thấy "[pha] da_dong" (kênh đóng) ⇒ lần ghi kế
+# nhận SIGPIPE ⇒ trap chạy với kênh đã đóng.
+def _boc_kenh_dong_o(goc: Path, moc: str) -> str:
+    ong, ghi = goc / "kenh.fifo", goc / "kenh.log"
+    return (
+        f'rm -f "{ong}"; mkfifo "{ong}"\n'
+        f'( while IFS= read -r l; do printf "%s\\n" "$l" >> "{ghi}"; '
+        f'case "$l" in *"{moc}"*) exit 0 ;; esac; done < "{ong}" ) &\n'
+        f'exec > "{ong}" 2>&1'
+    )
+
+
+@_bo_qua_neu_khong_posix
+def test_v7e_kenh_ssh_dong_o_da_dong_trap_van_ghi_dung_ket_qua_phuc_hoi(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    _chay_deploy(goc, _boc=_boc_kenh_dong_o(goc, "[pha] da_dong"), **_NHANH)
+    tt = _tep_trang_thai(goc)
+    assert "\tthoat\trc=141 tin_hieu=PIPE pha=da_dong" in tt, f"kênh không đóng đúng pha da_dong:\n{tt}"
+    assert "\tthoi_gian_trap\t" in tt, "trap không chạy HẾT sau khi mất kênh"
+    assert "mo_lai_cu\tdat" in tt, (
+        "kênh SSH đã đóng mà trap ghi phục hồi KHÔNG ĐẠT — kết quả bị quyết định bởi lỗi GHI LOG:\n" + tt)
+    assert [_cid_ve_dv(c) for _, c in _start_cua_deploy(_doc_nhat_ky(goc))] == list(_THU_TU_MO), (
+        "trap không mở lại ĐÚNG ba container cũ (mỗi cái MỘT lần)")
+
+
+def _doc_nhat_ky(goc: Path) -> str:
+    return (goc / "lenh.log").read_text(encoding="utf-8")
+
+
+@_bo_qua_neu_khong_posix
+def test_kiem_nguoc_v7e_log_tra_loi_ghi_thi_bao_sai_khong_dat(tmp_path: Path) -> None:
+    dot = _ban_dot_bien(
+        """log() { printf '%b[DEPLOY]%b %s\\n' "$GREEN" "$NC" "$1" || :; }\n""",
+        """log() { printf '%b[DEPLOY]%b %s\\n' "$GREEN" "$NC" "$1"; }\n""",
+    )
+    goc = _dung_san_khau(tmp_path, deploy_sh=dot)
+    _chay_deploy(goc, _boc=_boc_kenh_dong_o(goc, "[pha] da_dong"), **_NHANH)
+    assert "mo_lai_cu\tdat" not in _tep_trang_thai(goc), (
+        "log trả lỗi ghi mà vẫn ghi `dat` ⇒ ca kênh-đóng không canh tính độc lập của log")

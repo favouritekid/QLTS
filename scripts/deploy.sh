@@ -96,10 +96,17 @@ NC='\033[0m'
 # `printf '%b…%s…'`: `%b` chỉ áp cho biến MÀU (vốn cần escape), còn `%s` in
 # thông điệp NGUYÊN VĂN. Đã kiểm: 0 lời gọi log/warn/error/cutover trong tệp
 # này dựa vào escape trong thông điệp, nên đổi là an toàn.
-log() { printf '%b[DEPLOY]%b %s\n' "$GREEN" "$NC" "$1"; }
-warn() { printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$1"; }
+#
+# Vòng 7e (diễn tập mất kênh SSH): ba hàm in LUÔN trả 0. Kênh SSH đóng ⇒ stdout là ống không
+# còn đầu đọc; trong trap SIGPIPE bị bỏ qua nên `printf` trả LỖI (EPIPE) — và hàm nào kết
+# thúc bằng một dòng `log` (vd. `_dcg_do_dich_vu_nginx` in "✓ … ĐẠT" ở cuối) trả về chính lỗi
+# ghi log ấy: phục hồi đã ĐẠT mà trap ghi `mo_lai_cu KHONG_DAT`. Log là bản tin cho người đọc,
+# KHÔNG được quyết định kết quả; tệp trạng thái mới là bản ghi. Ngoài trap, lần ghi đầu sau
+# khi mất kênh vẫn nhận SIGPIPE ⇒ `_dcg_bat_tin_hieu PIPE 141` dừng lượt như cũ.
+log() { printf '%b[DEPLOY]%b %s\n' "$GREEN" "$NC" "$1" || :; }
+warn() { printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$1" || :; }
 error() { printf '%b[ERROR]%b %s\n' "$RED" "$NC" "$1"; exit 1; }
-cutover() { printf '%b[CUTOVER]%b %s\n' "$YELLOW" "$NC" "$1"; }
+cutover() { printf '%b[CUTOVER]%b %s\n' "$YELLOW" "$NC" "$1" || :; }
 
 # =============================================================================
 # KHOÁ VPS (vòng 7b, N10) — MỘT lượt deploy tại một thời điểm, fail-closed
