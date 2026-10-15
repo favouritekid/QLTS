@@ -2286,3 +2286,67 @@ def test_v6c_con_lai_giua_han_va_han_cong_5_thi_khong_bat_dau_lenh_ghi(tmp_path:
     assert 8 <= int(m.group(1)) < 13, (
         f"còn {m.group(1)}s — ca KHÔNG rơi vào cửa sổ biên [8, 13) nên không canh đệm 5 s")
     assert "mo_lai_cu\tCHUA_XAC_DINH" in tt
+
+
+# =============================================================================
+# XIV. Vòng 7c — hạn cho lệnh CHƯA có hạn ở chỗ giết được an toàn
+# =============================================================================
+# `docker compose config` + `docker tag` (Step 3b, TRƯỚC build): hạn đọc; `docker stop`
+# (4c): -t + hạn đọc + -k 5 — hết hạn ⇒ `error` ⇒ trap ĐO LẠI rồi mở lại, KHÔNG chạy lại
+# `stop`. Mỗi ca một lệnh treo (stub giữ 30 s); hạn đọc 1 s ⇒ dừng ở vài giây.
+_V7C = {**_NHANH, "QLTS_HAN_LENH_DOCKER": "1"}
+_MAU_CONFIG = "compose * config --no-interpolate*"
+_MAU_TAG = "tag *"
+
+
+def _ca_7c(goc: Path, mau: str, treo: str = _TREO, **them):
+    return _chay_deploy(goc, STUB_TREO_KHI=mau, STUB_TREO_GIAY=treo, **{**_V7C, **them})
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize("ten_ca,mau", [("compose config", _MAU_CONFIG), ("docker tag", _MAU_TAG)])
+def test_v7c_lenh_3b_treo_thi_dung_truoc_build_trong_han(tmp_path: Path, ten_ca: str, mau: str) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, nk = _ca_7c(goc, mau)
+    t = _tu_luc_treo(goc)
+    assert t < 20, f"{ten_ca} treo giữ deploy {t:.1f}s (hạn 1 s)"
+    assert ket.returncode != 0, f"{ten_ca} treo mà deploy thoát 0"
+    assert "build --parallel" not in nk, f"{ten_ca} treo mà vẫn build"
+    assert not any(d.startswith("docker stop ") for d in _dong(nk)), f"{ten_ca} treo mà vẫn dừng container"
+
+
+@_bo_qua_neu_khong_posix
+def test_v7c_docker_stop_treo_thi_dung_trong_han_khong_chay_lai_va_mo_lai(tmp_path: Path) -> None:
+    # celery-beat dừng ĐẦU TIÊN (-t 10) ⇒ hạn 10 + 1 + -k 5.
+    cb = _cid_gia("celery-beat")
+    goc = _dung_san_khau(tmp_path)
+    ket, nk = _ca_7c(goc, f"stop -t * {cb}", treo="40")
+    ra, t = _ra(ket), _tu_luc_treo(goc)
+    assert t < 25, f"`docker stop` treo giữ deploy {t:.1f}s (hạn 11 s + -k 5)"
+    assert "docker stop 'celery-beat' THẤT BẠI hoặc HẾT HẠN" in ra, ra[-2000:]
+    assert _so_lan_goi(goc, "stop", cb) == 1, "lệnh `stop` bị CHẠY LẠI"
+    assert not any(d.startswith("docker stop ") and d.endswith(_cid_gia("backend")) for d in _dong(nk)), (
+        "stop của celery-beat chưa rõ mà vẫn dừng tiếp backend")
+    assert _MOC_PGDUMP not in nk, "stop chưa rõ mà vẫn pg_dump"
+    assert "rc=1 tin_hieu=- pha=dang_dong" in _tep_trang_thai(goc), "trap không chạy ở pha dang_dong"
+    assert _so_lan_goi(goc, "start", cb) >= 1, "trap không mở lại container của lệnh stop chưa rõ"
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,cu,moi,mau",
+    [
+        ("compose config: bỏ hạn",
+         """    _json=$(timeout -k 2 "$_DCG_HAN_LENH" docker compose -f""", """    _json=$(docker compose -f""",
+         _MAU_CONFIG),
+        ("docker tag: bỏ hạn",
+         """        timeout -k 2 "$_DCG_HAN_LENH" docker tag "$_RA_IMG\"""", """        docker tag "$_RA_IMG\"""", _MAU_TAG),
+        ("docker stop: bỏ hạn",
+         """        timeout -k 5 "$(( $(_dcg_han_dung "$_S") + _DCG_HAN_LENH ))" docker stop -t""",
+         """        docker stop -t""", "stop -t * " + _cid_gia("celery-beat")),
+    ],
+)
+def test_kiem_nguoc_v7c_go_tung_han(tmp_path: Path, ten_ca: str, cu: str, moi: str, mau: str) -> None:
+    goc = _dung_san_khau(tmp_path, deploy_sh=_ban_dot_bien(cu, moi))
+    _ca_7c(goc, mau, treo=_TREO_DOT_BIEN)
+    assert _tu_luc_treo(goc) >= 20, f"{ten_ca}: vẫn xong nhanh ⇒ ca treo không canh hạn của lệnh này"

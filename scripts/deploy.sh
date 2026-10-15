@@ -678,7 +678,8 @@ _RA_COMPOSE="docker compose -f docker-compose.yml --profile production --env-fil
 _ra_dan_xuat_dich_vu() {
     local _json _py
     _py=$(command -v python3 || command -v python) || return 11
-    _json=$(docker compose -f docker-compose.yml --profile production config --no-interpolate --no-env-resolution --format json) || return 12
+    # Vòng 7c: có hạn (đọc cấu hình, giết an toàn — Step 3b, trước build).
+    _json=$(timeout -k 2 "$_DCG_HAN_LENH" docker compose -f docker-compose.yml --profile production config --no-interpolate --no-env-resolution --format json) || return 12
     printf %s "$_json" | "$_py" -c '
 import json,sys
 try:
@@ -1195,7 +1196,9 @@ else
        sap ghim = $_RA_IMG
        Ghi de la cuop ten khoi mot ban ke cu. DUNG truoc build."
         fi
-        docker tag "$_RA_IMG" "qlts-${_S}:${_RA_TAG}"
+        # Vòng 7c: có hạn (siêu dữ liệu ảnh, TRƯỚC build — giết an toàn; lượt sau kiểm lại tag trước khi ghim).
+        timeout -k 2 "$_DCG_HAN_LENH" docker tag "$_RA_IMG" "qlts-${_S}:${_RA_TAG}" \
+            || error "docker tag qlts-${_S}:${_RA_TAG} THẤT BẠI hoặc HẾT HẠN (hạn ${_DCG_HAN_LENH}s) — DỪNG trước build. Tag có thể ĐÃ hoặc CHƯA tạo: lượt sau kiểm tag trước khi ghim."
         printf '%s\t%s\t%s\t%s\t%s\n' \
             "$_S" "$_RA_CID" "$_RA_IMG" "qlts-${_S}:${_RA_TAG}" "PENDING_DIGEST" >> "$_RA_TMP"
     done
@@ -2542,8 +2545,10 @@ else
     _dcg_pha dang_dong
     for _S in $_DCG_DICH_VU; do
         log "  dừng '$_S' (docker stop -t $(_dcg_han_dung "$_S"))..."
-        docker stop -t "$(_dcg_han_dung "$_S")" "${_DCG_CID[$_S]}" >/dev/null \
-            || error "[4c] docker stop '$_S' THẤT BẠI"
+        # Vòng 7c: hạn = -t + hạn đọc (phản hồi daemon) + -k 5. Hết hạn ⇒ trạng thái container CHƯA RÕ ⇒
+        # `error` ⇒ trap pha dang_dong ĐO LẠI rồi mở lại; KHÔNG chạy lại `stop`.
+        timeout -k 5 "$(( $(_dcg_han_dung "$_S") + _DCG_HAN_LENH ))" docker stop -t "$(_dcg_han_dung "$_S")" "${_DCG_CID[$_S]}" >/dev/null \
+            || error "[4c] docker stop '$_S' THẤT BẠI hoặc HẾT HẠN (hạn $(( $(_dcg_han_dung "$_S") + _DCG_HAN_LENH ))s) — KHÔNG chạy lại; trap đo lại trạng thái"
     done
     for _S in $_DCG_DICH_VU; do
         _DCG_MOC[$_S]=$(_dcg_moc "${_DCG_CID[$_S]}") || error "[4c] không đọc được mốc vòng đời của '$_S'"
