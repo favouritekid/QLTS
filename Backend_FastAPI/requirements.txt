@@ -61,7 +61,7 @@ packaging==25.0
 paginate==0.5.7
 pandas==2.3.3
 passlib==1.7.4
-Pillow==12.3.0
+Pillow==13.0.0
 prometheus_client==0.23.1
 prompt_toolkit==3.0.52
 propcache==0.4.1
