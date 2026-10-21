@@ -1068,11 +1068,20 @@ jobs:
           # tiến trình, không xdist, fixture chuẩn TRUNCATE trước mỗi ca. UPDATE
           # toàn bảng chỉ thấy hàng của ca hiện tại; DDL (CK5 tạm, câu DO của
           # downgrade, câu DO của upgrade) đều trong giao dịch bị ROLLBACK.
+          # F54 (21-10-2026, nâng Pillow 13 / certifi 2026.10.19): ba tệp ĐƯỜNG UPLOAD tài liệu hồ sơ cần CSDL vào
+          # Tier 4s — trước đó KHÔNG tier PR nào chọn, nên CI xanh không nói gì về upload ảnh. Không vào 4a/4b:
+          # hai lát ấy khoá `SHA_HOP_SELECTOR_TIER4` và 4b đã ~28 phút; 4s ngắn (~8 phút) và cùng miền admission.
+          #   test_admission_doc_mutations_response_parity — route upload (PDF) + fixture `parity_config`
+          #   test_upload_anh_http — route upload với ẢNH thật: byte ghi ra = byte gửi lên; 400 không đổi thư mục
+          #   test_document_operations — thao tác tài liệu (upload / xác minh / từ chối) + nhật ký
           - tier: Tier 4s — Admission state transitions + confirmation token
             tests: >-
               tests/integration/test_admission_state_transitions.py
               tests/api/test_v3_first_submission_backfill_migration.py
               tests/integration/test_first_submission_stamp.py
+              tests/api/test_admission_doc_mutations_response_parity.py
+              tests/api/test_upload_anh_http.py
+              tests/integration/test_document_operations.py
           # `test_conftest_db_url_guard.py` vào Tier 5, cùng họ phép kiểm CẤU
           # TRÚC với `test_nginx_template_packaging` / `test_ci_test_visibility`:
           # nó đọc `tests/conftest.py` và `tests/fixtures/database.py` như VĂN
@@ -1105,6 +1114,14 @@ jobs:
           # MagicMock. Trước đây NGOÀI mọi tier — V3 làm 4 ca đỏ (đếm `db.add`
           # khi cạnh draft→submitted nay thêm hàng `circular_defaulted`) mà CI PR
           # không thấy; đã sửa ca lấy hàng lịch sử theo KIỂU. Ghim WHOLE-FILE.
+          # F54 (21-10-2026, nâng Pillow 13 / certifi 2026.10.19): năm tệp unit chạm Pillow / qrcode / certifi vào
+          # Tier 5, ghim WHOLE-FILE. Trước đó `test_upload_image_verify.py` — tệp DUY NHẤT import PIL — cùng bốn tệp
+          # dưới KHÔNG tier PR nào chọn ⇒ nâng Pillow mà CI xanh không nói gì. Unit thuần / MagicMock, không CSDL
+          # thật; đặt ở Tier 5 chứ không 4b để khỏi đổi `SHA_HOP_SELECTOR_TIER4`.
+          #   test_upload_image_verify / test_admission_file_signature — helper sniff + PIL verify của upload
+          #   test_phase_e4_pr2_priority_evidence — đường upload bằng chứng ưu tiên
+          #   test_vietqr_utils — QR thanh toán (qrcode → Pillow)
+          #   test_hoi_quy_phu_thuoc_anh_va_tls — con trỏ tệp mọi nhánh, byte ghi ra, asset PDF, QR, certifi
           # `test_che_log_pii.py` + `test_che_log_token_nginx.py` vào Tier 5 (V6
           # che CCCD/token trong log): tiến trình con nạp đúng cấu hình log của
           # web/gunicorn/celery + đọc tĩnh nginx/next.config — KHÔNG đụng CSDL.
@@ -1167,6 +1184,11 @@ jobs:
               tests/unit/test_admission_circular_constants.py
               tests/unit/test_priority_catalog_warning.py
               tests/unit/test_status_history_runtime_writer.py
+              tests/unit/test_upload_image_verify.py
+              tests/unit/test_admission_file_signature.py
+              tests/unit/test_phase_e4_pr2_priority_evidence.py
+              tests/unit/test_vietqr_utils.py
+              tests/unit/test_hoi_quy_phu_thuoc_anh_va_tls.py
               tests/unit/test_che_log_pii.py
               tests/unit/test_che_log_token_nginx.py
               tests/utils/test_config_loading.py
