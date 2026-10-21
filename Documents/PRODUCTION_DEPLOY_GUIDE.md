@@ -306,6 +306,12 @@ set -a && source .env.production && set +a
 bash scripts/nginx-apply.sh "$DOMAIN"
 
 # 3. Rollback DB (nếu cần)
+#    ⚠️ (13-10-2026, F28) Phát lại một bản sao XOÁ mọi ghi đã commit SAU lúc chụp
+#    nó — kể cả request đã nhận 2xx và phiên `psql`/cron ngoài ứng dụng. ĐỐI SOÁT
+#    TỪNG KHOÁ TRƯỚC (bộ đếm T0/T1/T2, bảng có cột thời gian > mốc chụp, phiên đã
+#    nối), trích phần sẽ mất ra trước; so vân tay lược đồ trước khi bật mã cũ.
+#    `scripts/deploy.sh` KHÔNG còn tự phát lại khi migration đỏ — nó in đúng các
+#    bước này (mục "PHỤC HỒI CÓ ĐỐI SOÁT").
 gunzip < /root/backup_YYYYMMDD_HHMMSS.sql.gz | docker exec -i qlts-postgres-1 psql -U qlts -d qlts_production
 ```
 
