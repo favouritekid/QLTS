@@ -2047,6 +2047,33 @@ def test_v8_on_starting_cau_hinh_hop_le_khong_giu_module_app():
             r.returncode, dong, (r.stdout + "\n" + r.stderr)[-2000:]))
 
 
+# F59b: stdout là ỐNG (như docker logs, ảnh không đặt PYTHONUNBUFFERED) ⇒ có bộ đệm. Con fork ra
+# xả bộ đệm thừa hưởng như một worker; hook không xả trước fork ⇒ dòng "Settings loaded" của
+# master in HAI lần (con + master).
+_V8_DRIVER_FORK = r'''
+import os, runpy, sys
+cau_hinh = runpy.run_path("gunicorn.conf.py")
+cau_hinh["on_starting"](None)
+pid = os.fork()
+if pid == 0:
+    sys.stdout.flush()
+    os._exit(0)
+os.waitpid(pid, 0)
+'''
+
+
+def test_v8_on_starting_xa_bo_dem_truoc_khi_fork():
+    """Sau ``on_starting`` (cấu hình hợp lệ), bộ đệm stdout của master phải RỖNG trước khi fork
+    worker: dòng in khi nạp ``app.config`` xuất hiện đúng MỘT lần dù có tiến trình con."""
+    r = subprocess.run([sys.executable, "-c", _V8_DRIVER_FORK], cwd=str(BACKEND),
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=_V8_HAN_S)
+    n = r.stdout.count("INFO [config.py]: Settings loaded successfully")
+    assert r.returncode == 0 and n == 1, (
+        "on_starting rồi fork: rc=%s · 'Settings loaded' in %d lần (mong 1)\n%s" % (
+            r.returncode, n, (r.stdout + "\n" + r.stderr)[-2000:]))
+
+
 
 # =============================================================================
 # V6 vòng 6 — SMTP: error_reason của email_channel.execute_delivery chỉ giữ loại lỗi + mã SMTP

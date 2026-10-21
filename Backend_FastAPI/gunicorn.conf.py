@@ -64,7 +64,12 @@ def on_starting(server):
     Nạp được ⇒ gỡ các module ``app`` khỏi ``sys.modules`` để worker tự nạp lại như trước
     (``preload_app = False`` giữ nguyên nghĩa). ``LoiCauHinh`` mang mô tả an toàn của
     ``app/utils/redact.py`` ⇒ in đúng một dòng ``LoiCauHinh: <mô tả>`` rồi thoát mã ≠ 0;
-    lỗi khác đi nguyên đường mặc định."""
+    lỗi khác đi nguyên đường mặc định.
+
+    F59b: ``app/config.py`` ``print`` khi nạp. Ảnh production không đặt
+    ``PYTHONUNBUFFERED`` ⇒ stdout của master là ống có bộ đệm; không xả TRƯỚC khi fork thì
+    MỖI worker (cả worker tái sinh theo ``max_requests``) thừa hưởng bản sao bộ đệm và in lại
+    các dòng ấy (đo khởi động thật 21-10: 4 dòng "Settings loaded" thay vì 3)."""
     import sys
 
     from app.utils.redact import LoiCauHinh
@@ -76,6 +81,8 @@ def on_starting(server):
     finally:
         for ten in [k for k in sys.modules if k == "app" or k.startswith("app.")]:
             del sys.modules[ten]
+        sys.stdout.flush()
+        sys.stderr.flush()
 
 
 # --- Keep-Alive ---
