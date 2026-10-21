@@ -14,21 +14,33 @@ from app import config as config_module
 log = logging.getLogger(__name__)
 
 
-# --- Fixture để Reload Settings và Dọn dẹp Env (Giữ nguyên) ---
+# --- Fixture để Reload Settings và Dọn dẹp Env ---
 @pytest.fixture(autouse=True)
 def reload_settings_and_clear_env():
-    """Fixture để reload module config và dọn dẹp os.environ."""
-    log.debug("Saving original os.environ and reloading config module before test...")
+    """Fixture để reload module config và dọn dẹp os.environ.
+
+    F58 (21-10): ``importlib.reload`` dựng ``app.config.settings`` MỚI từ mặc định, mất
+    override mà ``tests/conftest.py`` đặt lên đối tượng gốc (``MFA_ENFORCE_ROLES = []``,
+    pepper backup code). Bản cũ reload thêm một lần khi dọn ⇒ nơi đọc
+    ``app.config.settings`` lúc GỌI (``deps.get_current_active_user``) ở các tệp chạy SAU
+    trong cùng tiến trình nhận 403 "MFA is required". Nay chụp ``__dict__`` của module
+    trước reload đầu và trả lại NGUYÊN bản chụp khi dọn (cùng đối tượng ``settings``, cùng
+    lớp ``Settings``) — kể cả khi test để module dở dang vì reload ném lỗi."""
+    log.debug("Saving original os.environ and config module state before test...")
     original_environ = os.environ.copy()
+    original_module_state = dict(vars(config_module))
     # Reload lần đầu
     importlib.reload(config_module)
     yield
-    log.debug("Restoring os.environ and reloading config module after test...")
+    log.debug("Restoring os.environ and config module state after test...")
     # Khôi phục os.environ
     os.environ.clear()
     os.environ.update(original_environ)
-    # Reload lại lần cuối
-    importlib.reload(config_module)
+    # Trả module về bản chụp — KHÔNG reload lần cuối: reload dựng settings mới
+    module_state = vars(config_module)
+    for ten in set(module_state) - set(original_module_state):
+        del module_state[ten]
+    module_state.update(original_module_state)
 
 
 # === Helper (Giữ nguyên) ===
