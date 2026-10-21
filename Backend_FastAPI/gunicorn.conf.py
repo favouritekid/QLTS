@@ -50,5 +50,33 @@ def post_worker_init(worker):
     install_log_redaction()
 
 
+def on_starting(server):
+    """F59 (21-10): nạp ``app.config`` MỘT lần trong master, TRƯỚC khi sinh worker.
+
+    Cấu hình hỏng ⇒ mọi worker chết GẦN như cùng lúc khi boot. gunicorn 23.0.0
+    ``Arbiter.reap_workers`` ném ``HaltServer`` ngay sau worker ĐẦU TIÊN gặt được, chưa
+    gặt worker còn lại; nếu worker ấy đã thoát trước khi handler SIGCHLD chạy thì hai tín
+    hiệu gộp làm một, không đến lần nữa ⇒ nó thành zombie mà vẫn nằm trong ``WORKERS``
+    (``os.kill`` lên zombie không báo ESRCH) và ``stop()`` chờ trọn ``graceful_timeout``
+    rồi mới thoát. Đo 21-10: 3/131 lượt khởi động với cấu hình giả hỏng, ~31,5 s thay vì
+    ~1,5 s. Dừng ở master thì không có worker nào để đua.
+
+    Nạp được ⇒ gỡ các module ``app`` khỏi ``sys.modules`` để worker tự nạp lại như trước
+    (``preload_app = False`` giữ nguyên nghĩa). ``LoiCauHinh`` mang mô tả an toàn của
+    ``app/utils/redact.py`` ⇒ in đúng một dòng ``LoiCauHinh: <mô tả>`` rồi thoát mã ≠ 0;
+    lỗi khác đi nguyên đường mặc định."""
+    import sys
+
+    from app.utils.redact import LoiCauHinh
+
+    try:
+        import app.config  # noqa: F401
+    except LoiCauHinh as loi:
+        raise SystemExit("%s: %s" % (type(loi).__name__, loi)) from None
+    finally:
+        for ten in [k for k in sys.modules if k == "app" or k.startswith("app.")]:
+            del sys.modules[ten]
+
+
 # --- Keep-Alive ---
 keepalive = 5

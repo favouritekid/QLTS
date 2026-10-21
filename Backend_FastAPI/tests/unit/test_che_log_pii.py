@@ -1999,6 +1999,54 @@ def test_v8_script_that_loi_cau_hinh_khong_lo():
     assert sai == [], "script backfill_sts20_giveup — lỗi cấu hình:\n" + "\n".join(sai)
 
 
+# F59 (21-10): cấu hình hỏng ⇒ master gunicorn dừng TRƯỚC khi sinh worker
+# (``gunicorn.conf.py::on_starting``). Còn sinh worker thì mọi worker cùng chết khi boot và
+# master có thể chờ trọn ``graceful_timeout`` vì một worker thành zombie không được gặt — chỉ
+# lộ ra ở vài phần trăm lượt (đo 21-10: 3/131), nên ca "quá hạn" ở trên không bắt được việc
+# hook bị gỡ. Ca dưới đây bắt TẤT ĐỊNH: có dòng "Booting worker" là đỏ.
+def _v8_worker_da_sinh(kq: dict) -> list:
+    assert "CRITICAL [config.py]: Failed to initialize Settings" in kq["out"], (
+        "HẠ TẦNG: lỗi cấu hình giả không xảy ra:\n%s" % kq["out"][-3000:])
+    boot = [d for d in kq["out"].splitlines() if "Booting worker with pid" in d]
+    if boot:
+        return ["master vẫn sinh %d worker trước khi dừng — cấu hình hỏng phải dừng ở master "
+                "(on_starting)\n%s" % (len(boot), kq["out"][-3000:])]
+    return []
+
+
+def test_v8_gunicorn_cau_hinh_hong_dung_truoc_khi_sinh_worker():
+    """``gunicorn app.main:app -c gunicorn.conf.py`` với cấu hình hỏng KHÔNG sinh worker nào."""
+    sai = _v8_worker_da_sinh(_v8_chay("gunicorn"))
+    assert sai == [], "gunicorn — cấu hình hỏng:\n" + "\n".join(sai)
+
+
+def test_v8_entrypoint_cau_hinh_hong_dung_truoc_khi_sinh_worker():
+    """``docker-entrypoint.sh`` (hai gate tắt ⇒ ``exec gunicorn``) với cấu hình hỏng KHÔNG sinh worker nào."""
+    sai = _v8_worker_da_sinh(_v8_chay("entrypoint-gunicorn"))
+    assert sai == [], "entrypoint (hai gate tắt) — cấu hình hỏng:\n" + "\n".join(sai)
+
+
+_V8_DRIVER_ON_STARTING = r'''
+import runpy, sys
+cau_hinh = runpy.run_path("gunicorn.conf.py")
+cau_hinh["on_starting"](None)
+print("V8_ON_STARTING_CON=%s" % ",".join(sorted(k for k in sys.modules if k == "app" or k.startswith("app."))))
+'''
+
+
+def test_v8_on_starting_cau_hinh_hop_le_khong_giu_module_app():
+    """Cấu hình HỢP LỆ (môi trường của bộ test): hook ``on_starting`` chạy qua, không thoát,
+    và không để lại module ``app`` nào trong master — worker tự nạp lại như ``preload_app =
+    False``. Hook hỏng ở đường này thì backend production KHÔNG lên."""
+    r = subprocess.run([sys.executable, "-c", _V8_DRIVER_ON_STARTING], cwd=str(BACKEND),
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=_V8_HAN_S)
+    dong = [d for d in r.stdout.splitlines() if d.startswith("V8_ON_STARTING_CON=")]
+    assert r.returncode == 0 and dong == ["V8_ON_STARTING_CON="], (
+        "on_starting với cấu hình hợp lệ: rc=%s · %s\n%s" % (
+            r.returncode, dong, (r.stdout + "\n" + r.stderr)[-2000:]))
+
+
 
 # =============================================================================
 # V6 vòng 6 — SMTP: error_reason của email_channel.execute_delivery chỉ giữ loại lỗi + mã SMTP
