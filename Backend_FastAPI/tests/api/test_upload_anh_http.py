@@ -10,12 +10,16 @@ Test sẵn có chỉ gửi PDF qua HTTP; ảnh JPEG/PNG chỉ được kiểm �
 
 ``uploads/admissions/<id>`` sống suốt phiên pytest trong khi id hồ sơ được dùng lại sau mỗi lần dựng lại CSDL,
 nên thư mục có thể chứa sẵn tệp của test khác. Vì thế so ẢNH CHỤP {đường dẫn: sha256} ngay trước và sau request,
-không giả định thư mục rỗng.
+không giả định thư mục rỗng. Mỗi ca CẮM SẴN một tệp mồi (nội dung ngẫu nhiên) trước request, để phép so luôn có
+một tệp có sẵn mà việc ghi đè / xoá sẽ làm lộ ra — không phụ thuộc thư mục tình cờ còn tệp của test khác.
+Thông điệp của phép so mang nhãn ``ANH_CHUP:`` để kiểm ngược đối chiếu được đúng chỗ bắt.
 """
 from __future__ import annotations
 
 import hashlib
 import io
+import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -52,14 +56,19 @@ def _chup(pid: int) -> dict[Path, str]:
 
 
 async def _gui(client, cfg, admin_h, officer, suffix, ten, data, ct):
+    """Trả (pid, response, ảnh chụp trước, tệp mồi). Người gọi PHẢI dọn tệp mồi (``finally``)."""
     prof = await _create_profile(client, admin_h, officer, cfg, suffix)
     oh = await _login(client, officer["username"], officer["password"])
+    d = Path("uploads") / "admissions" / str(prof["id"])
+    d.mkdir(parents=True, exist_ok=True)
+    moi = d / ("moi_%s.bin" % uuid.uuid4().hex)
+    moi.write_bytes(os.urandom(64))
     truoc = _chup(prof["id"])
     r = await client.post(
         f"{ADMISSIONS}/{prof['id']}/documents/{cfg['upload_doc_code']}/upload",
         headers=oh, files={"file": (ten, data, ct)}, data={"actual_submission_format": "photo"},
     )
-    return prof["id"], r, truoc
+    return prof["id"], r, truoc, moi
 
 
 @pytest.mark.asyncio
@@ -67,21 +76,27 @@ async def _gui(client, cfg, admin_h, officer, suffix, ten, data, ct):
 async def test_http_anh_hop_le_ghi_dung_byte(client: AsyncClient, admin_token_headers, officer_user_in_db,
                                               parity_config, fmt, ct, duoi):
     data = _anh(fmt, size=(120, 90))
-    pid, r, truoc = await _gui(client, parity_config, admin_token_headers, officer_user_in_db, "ok" + fmt, "a" + duoi, data, ct)
-    assert r.status_code in (200, 201), r.text
-    sau = _chup(pid)
-    assert {p: h for p, h in sau.items() if p in truoc} == truoc, "tệp có sẵn bị ghi đè hoặc xoá"
-    moi = set(sau) - set(truoc)
-    async with AsyncSessionLocal() as s:
-        paths = (await s.execute(select(models.ProfileDocument.file_path).where(
-            models.ProfileDocument.profile_id == pid, models.ProfileDocument.file_path.isnot(None)))).scalars().all()
-    assert len(paths) == 1 and paths[0].endswith(duoi), paths
-    p = Path(paths[0])
-    assert moi == {p}, "đúng MỘT tệp mới, và là tệp CSDL trỏ tới (không sót .staging): %s vs %s" % (
-        sorted(map(str, moi)), p)
-    ghi = p.read_bytes()
-    assert ghi == data, "BYTE_GHI_RA: trên đĩa %d byte, gửi lên %d byte" % (len(ghi), len(data))
-    p.unlink()
+    pid, r, truoc, moi_cam = await _gui(client, parity_config, admin_token_headers, officer_user_in_db, "ok" + fmt,
+                                        "a" + duoi, data, ct)
+    try:
+        assert r.status_code in (200, 201), r.text
+        sau = _chup(pid)
+        giu = {p: h for p, h in sau.items() if p in truoc}
+        assert giu == truoc, "ANH_CHUP: tệp có sẵn bị ghi đè hoặc xoá: %s" % sorted(
+            str(p) for p in truoc if giu.get(p) != truoc[p])
+        moi = set(sau) - set(truoc)
+        async with AsyncSessionLocal() as s:
+            paths = (await s.execute(select(models.ProfileDocument.file_path).where(
+                models.ProfileDocument.profile_id == pid, models.ProfileDocument.file_path.isnot(None)))).scalars().all()
+        assert len(paths) == 1 and paths[0].endswith(duoi), paths
+        p = Path(paths[0])
+        assert moi == {p}, "đúng MỘT tệp mới, và là tệp CSDL trỏ tới (không sót .staging): %s vs %s" % (
+            sorted(map(str, moi)), p)
+        ghi = p.read_bytes()
+        assert ghi == data, "BYTE_GHI_RA: trên đĩa %d byte, gửi lên %d byte" % (len(ghi), len(data))
+        p.unlink()
+    finally:
+        moi_cam.unlink(missing_ok=True)
 
 
 _CA_XAU = [
@@ -98,7 +113,13 @@ _CA_XAU = [
 @pytest.mark.parametrize("ten,data,ct,khop", _CA_XAU, ids=[c[0] for c in _CA_XAU])
 async def test_http_anh_xau_tra_400_thu_muc_khong_doi(client: AsyncClient, admin_token_headers, officer_user_in_db,
                                                        parity_config, ten, data, ct, khop):
-    pid, r, truoc = await _gui(client, parity_config, admin_token_headers, officer_user_in_db, "x" + ten, ten + ".png", data, ct)
-    assert r.status_code == 400, (ten, r.status_code, r.text[:300])
-    assert khop in r.text, (ten, r.text[:300])
-    assert _chup(pid) == truoc, "%s: bị từ chối mà thư mục vẫn đổi (thêm / ghi đè / xoá tệp)" % ten
+    pid, r, truoc, moi_cam = await _gui(client, parity_config, admin_token_headers, officer_user_in_db, "x" + ten,
+                                        ten + ".png", data, ct)
+    try:
+        assert r.status_code == 400, (ten, r.status_code, r.text[:300])
+        assert khop in r.text, (ten, r.text[:300])
+        sau = _chup(pid)
+        assert sau == truoc, "ANH_CHUP: %s bị từ chối mà thư mục vẫn đổi — thêm %s · đổi/xoá %s" % (
+            ten, sorted(str(p) for p in set(sau) - set(truoc)), sorted(str(p) for p in truoc if sau.get(p) != truoc[p]))
+    finally:
+        moi_cam.unlink(missing_ok=True)
