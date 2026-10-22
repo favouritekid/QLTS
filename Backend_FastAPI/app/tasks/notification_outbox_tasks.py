@@ -57,6 +57,7 @@ See ``Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md`` §3.5
 T0-4b and ``Documents/ADMISSION_REFACTOR_PLAN.md`` §3.3.e/f.
 """
 import logging
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 
 from typing import Any, Optional
 
@@ -366,7 +367,8 @@ async def _dispatch_each(session, pending) -> list[tuple]:
                 await session.rollback()
             except Exception:  # noqa: BLE001
                 pass
-            results.append((row_id, "error", str(e)[:1000]))
+            # V6 vòng 5: cột last_error không mang DETAIL/tham số của lỗi CSDL.
+            results.append((row_id, "error", chu_loi_an_toan(e)[:1000]))
             continue
 
         if notif_cb is not None:

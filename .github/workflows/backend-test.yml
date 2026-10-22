@@ -1129,6 +1129,16 @@ jobs:
           # `test_deploy_van_tay_luoc_do_sql.py` (vòng 2) cũng ở đây: nó chạy THẬT các câu SQL
           # của Step 4c (vân tay lược đồ, phiên lạ, bộ đếm) trên CSDL test — stub `docker`
           # không bao giờ đưa SQL tới PostgreSQL. Ghim WHOLE-FILE.
+          # `test_che_log_pii.py` + `test_che_log_token_nginx.py` vào Tier 5 (V6
+          # che CCCD/token trong log): tiến trình con nạp đúng cấu hình log của
+          # web/gunicorn/celery + đọc tĩnh nginx/next.config — KHÔNG đụng CSDL.
+          # Ghim WHOLE-FILE.
+          # `tests/utils/test_config_loading.py` vào Tier 5 (V6 vòng 8, N17.14):
+          # khoá hợp đồng ĐƯỜNG NẠP MODULE `app.config` (ném `LoiCauHinh` không
+          # giữ lỗi gốc, không giá trị) + hợp đồng gọi trực tiếp `Settings()`.
+          # Trước đây NGOÀI mọi tier — ca `pytest.raises(ValidationError)` của nó
+          # không shard PR nào chạy. Unit thuần (reload module), KHÔNG đụng CSDL.
+          # Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1188,6 +1198,9 @@ jobs:
               tests/unit/test_phase_e4_pr2_priority_evidence.py
               tests/unit/test_vietqr_utils.py
               tests/unit/test_hoi_quy_phu_thuoc_anh_va_tls.py
+              tests/unit/test_che_log_pii.py
+              tests/unit/test_che_log_token_nginx.py
+              tests/utils/test_config_loading.py
 
     env:
       APP_ENV: test

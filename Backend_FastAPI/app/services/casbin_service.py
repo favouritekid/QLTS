@@ -10,6 +10,7 @@ This service provides high-level operations for managing Casbin policies with:
 """
 
 import asyncio
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 import weakref
 from typing import List, Optional, Tuple
 from dataclasses import dataclass
@@ -232,7 +233,7 @@ async def dong_bo_tu_nguon_ben_vung(enforcer) -> Optional[str]:
             await enforcer.load_policy()
         return None
     except Exception as e:
-        return f"{type(e).__name__}: {e}"
+        return f"{type(e).__name__}: {chu_loi_an_toan(e)}"
 
 
 async def xoa_nhom_rule_fail_closed(
@@ -761,7 +762,7 @@ class CasbinPolicyService:
                     )
             except Exception as e:
                 errors.append(
-                    f"Failed to add policy {subject} {obj} {action} {eft}: {str(e)}"
+                    f"Failed to add policy {subject} {obj} {action} {eft}: {chu_loi_an_toan(e)}"
                 )
 
         # Update template tracking for added policies
@@ -901,7 +902,7 @@ class CasbinPolicyService:
                 return False
             except Exception as e:
                 errors.append(
-                    f"Failed to remove policy {subject} {obj} {action}: {str(e)}"
+                    f"Failed to remove policy {subject} {obj} {action}: {chu_loi_an_toan(e)}"
                 )
                 return False
 
@@ -1356,7 +1357,7 @@ class CasbinPolicyService:
         except Exception as e:
             return {
                 "success": False,
-                "error": str(e),
+                "error": chu_loi_an_toan(e),
                 "role": role,
                 "template_id": template_id,
             }

@@ -21,6 +21,7 @@ from jinja2.sandbox import SandboxedEnvironment
 from jinja2 import FileSystemLoader, select_autoescape
 
 from ..config import settings
+from ..core.log_redaction import loai_loi_an_toan  # V6 vòng 6: chữ lỗi SMTP có thể mang email
 from .. import models
 
 log = structlog.get_logger(__name__)
@@ -178,7 +179,7 @@ class EmailService:
 
             return server
         except Exception as e:
-            log.error("Failed to create SMTP connection", error=str(e))
+            log.error("Failed to create SMTP connection", error=loai_loi_an_toan(e))
             raise
 
     def send_email(
@@ -235,7 +236,8 @@ class EmailService:
 
         except Exception as e:
             log.error(
-                "Failed to send email", to_email=to_email, subject=subject, error=str(e)
+                "Failed to send email", to_email=to_email, subject=subject,
+                error=loai_loi_an_toan(e),  # V6 vòng 6: chữ lỗi SMTP có thể mang email
             )
             return False
 

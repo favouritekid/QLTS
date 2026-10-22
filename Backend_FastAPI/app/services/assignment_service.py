@@ -18,6 +18,7 @@ from sqlalchemy.orm import aliased
 from .. import models
 from ..core.constants import UserRole
 from ..core.events import SystemEvents
+from ..core.log_redaction import mo_ta_loi
 from ..core.status_mapping import is_lead_consultation_terminal
 from ..core.task_constants import AssignmentResult, AssignmentFailureReason
 from ..utils.exceptions import LockContentionError
@@ -1072,7 +1073,7 @@ async def automatically_assign_lead(
             # Raise LockContentionError - Celery's autoretry_for=(Exception,) will handle retry
             raise LockContentionError(
                 f"Lock contention on lead {lead_id}",
-                context={"lead_id": lead_id, "original_error": str(e)}
+                context={"lead_id": lead_id, "original_error": mo_ta_loi(e)}
             )
         else:
             # Nếu là lỗi OperationalError khác (vd: mất kết nối), log và ném ra
