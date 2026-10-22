@@ -256,17 +256,32 @@ jobs:
     # Vòng 7d — NGÂN SÁCH CẢ PHIÊN SSH, MỘT nguồn: `command_timeout` bên dưới đọc ĐÚNG
     # QLTS_PHIEN_GIAY, deploy.sh nhận cùng giá trị qua `envs:` cùng mốc bắt đầu phiên và lập
     # kế hoạch — trước mỗi bước không đảo ngược được, phần còn lại của phiên phải ≥ hạn bước +
-    # phần cần sau nó / dự trữ trap của pha; thiếu ⇒ DỪNG tại điểm an toàn. KHÔNG nâng số này
-    # cho vừa phép cộng: nâng theo số ĐO trên VPS.
+    # phần cần sau nó / dự trữ trap của pha; thiếu ⇒ DỪNG tại điểm an toàn. KHÔNG hạ hạn từng
+    # lệnh Docker cho vừa phép cộng.
+    #
+    # Mọi số dưới đây là DỰ TOÁN (owner chọn làm ứng viên 22-10-2026), CHƯA phải số đo VPS: lượt
+    # deploy thật đầu tiên đo từng bước (dòng `[phiên]`) để thay. Nhãn nguồn: ĐO = VPS 22-10 chỉ
+    # đọc · LỊCH SỬ = log lượt production 10-10 (deploy.sh CŨ, một mẫu, build có cache).
+    # Phiên ≥ 30 (đệm đóng) + C_4c + thời gian tới hết build + 30 (ân hạn -k build). C_4c = 1.955 s
+    # với bốn hạn dưới (tính bằng `_ph_can` của deploy.sh, hạn từng lệnh MẶC ĐỊNH — ĐO 22-10:
+    # .env.production không khai hạn nào) ⇒ chừa ~1.485 s cho build trượt cache (CHƯA ĐO). Build
+    # quá hạn động ⇒ deploy.sh DỪNG trước 4c, chưa đụng container/CSDL.
     env:
-      QLTS_PHIEN_GIAY: "1200"
+      QLTS_PHIEN_GIAY: "3600"
       # Bốn hạn KHÔNG giết được giữa chừng (pg_dump · Step 6 migration · Step 7+8 · Step 8b
-      # nginx-apply), giây — PHẢI ĐO trên VPS rồi khai. Để RỖNG CÓ CHỦ Ý: deploy.sh DỪNG ở
-      # Step 1, trước mọi thay đổi, tới khi có số đo (không đặt hạn bằng suy đoán).
-      QLTS_HAN_PG_DUMP: ""
-      QLTS_HAN_MIGRATION: ""
-      QLTS_HAN_BUOC7_8: ""
-      QLTS_HAN_NGINX_APPLY: ""
+      # nginx-apply), giây. Khai thấp hơn thực tế: lệnh KHÔNG bị giết; cổng sau đo lại bằng thời
+      # gian THẬT và DỪNG tại điểm an toàn (trap bị hạn chót phiên kẹp). Ba hạn sau KHÔNG làm phiên
+      # dài thêm khi MIGRATION ≤ 533 VÀ MIGRATION + BUOC7_8 + NGINX_APPLY ≤ 734 (nhánh `H_6 + 681`
+      # có từ F65); PG_DUMP luôn cộng thẳng vào C_4c.
+      #   PG_DUMP 60     — LỊCH SỬ 1,94 s; dấu vết tệp dump 2 s × 10; ĐO CSDL 159,5 MB.
+      #   MIGRATION 180  — LỊCH SỬ phần cố định 10,4 s (0 revision); 3 revision v3circ trên dữ liệu
+      #                    production CHƯA ĐO.
+      #   BUOC7_8 300    — LỊCH SỬ 42,9 s (luồng cũ); luồng mới CHƯA ĐO.
+      #   NGINX_APPLY 240 — LỊCH SỬ 28,5 s với nginx-verify cũ; đầu dò token mới CHƯA ĐO.
+      QLTS_HAN_PG_DUMP: "60"
+      QLTS_HAN_MIGRATION: "180"
+      QLTS_HAN_BUOC7_8: "300"
+      QLTS_HAN_NGINX_APPLY: "240"
 
     steps:
       - name: Deploy via SSH
