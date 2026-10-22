@@ -2731,8 +2731,8 @@ def test_f65_migration_qua_han_phien_can_thi_khong_doi_soat_them_va_huong_dan_ng
     t = _tu_luc_treo(goc) if (goc / "lenh.log.treo").exists() else 0.0
     ra, tt, sau = _ra(ket), _tep_trang_thai(goc), _goi_sau_migration(goc)
     assert t <= 1 + 5 + 4, f"phiên đã cạn mà đối soát + trap còn chạy {t:.1f}s — kênh SSH sẽ bị cắt giữa chừng"
-    assert len(sau) <= 3, f"phiên đã cạn mà vẫn gọi {len(sau)} lệnh Docker/psql sau migration đỏ:\n" + "\n".join(sau)
-    assert _han_chung(goc) == 1, tt
+    assert sau == [], f"phiên đã cạn mà vẫn gọi {len(sau)} lệnh Docker/psql sau migration đỏ:\n" + "\n".join(sau)
+    assert _han_chung(goc) == 0, tt   # F67: phiên đã hết ⇒ 0, KHÔNG tự cấp 1 s
     for b in ("(d)_cửa_ghi", "(d)_phiên_lạ", "PA2"):
         assert f"het_ngan_sach\tdoi_soat {b}" in tt, f"bước đối soát {b} không được ghi CHƯA XÁC ĐỊNH:\n{tt}"
     assert _DAU_HET_NS in ra and "het_ngan_sach\thuong_dan_ngan" in tt, ra[-1500:]
@@ -2758,10 +2758,47 @@ def test_f65_mat_kenh_giua_pa2_trap_khong_gia_han(tmp_path: Path) -> None:
     assert "chung=25s" in tt and "\tthoi_gian_trap\t" in tt, tt
 
 
+def _ca_f67_nhanh(goc: Path):
+    # F67: Docker/psql giả trả lời NHANH (không treo); migration "tốn" 900 s ⇒ phiên ĐÃ HẾT trước khi nó trả lỗi.
+    return _chay_7d(goc, _phien(900), STUB_NHAY_KHI="* upgrade head*", STUB_NHAY_GIAY="900",
+                    STUB_ONEOFF="running", STUB_ALEMBIC_RC="1")
+
+
+@_bo_qua_neu_khong_posix
+def test_f67_phien_het_truoc_migration_do_docker_nhanh_thi_0_loi_goi_moi(tmp_path: Path) -> None:
+    goc = _san_khau_7d(tmp_path)
+    ket, nk = _ca_f67_nhanh(goc)
+    ra, tt, sau = _ra(ket), _tep_trang_thai(goc), _goi_sau_migration(goc)
+    assert sau == [], f"phiên đã hết mà luồng chính vẫn BẮT ĐẦU {len(sau)} lệnh sau migration đỏ:\n" + "\n".join(sau)
+    assert _han_chung(goc) == 0, tt
+    assert "tran_trap\t0s pha=migrate_do " in tt and "chung=0s" in tt, f"EXIT trap gia hạn / cấp thêm thời gian:\n{tt}"
+    for b in ("(d)_cửa_ghi", "(d)_phiên_lạ", "PA2"):
+        assert f"het_ngan_sach\tdoi_soat {b}" in tt, f"bước đối soát {b} không được ghi CHƯA XÁC ĐỊNH:\n{tt}"
+    assert _DAU_HET_NS in ra and "het_ngan_sach\thuong_dan_ngan" in tt, ra[-1500:]
+    assert _goi_khong_han_sau(goc, _MOC_ALEMBIC) == [], "có lời gọi docker chạy với hạn 0 / KHÔNG hạn"
+    assert _vi_pham_phat_lai(goc) == [] and "KHÔNG phát lại bản sao (F28)" in ra
+    assert not any(d.startswith("docker rm") for d in _dong(nk)), "one-off CÒN CHẠY bị dọn"
+
+
+@_bo_qua_neu_khong_posix
+def test_f67_trap_pha_khac_khi_phien_het_thi_tran_0(tmp_path: Path) -> None:
+    # Nhánh anh em: lỗi ở cổng 5 khi phiên ĐÃ HẾT (bước 4c "tốn" 2000 s) ⇒ trap pha da_dong: trần 0, KHÔNG cấp 1 s.
+    goc = _san_khau_7d(tmp_path)
+    ket, _ = _chay_7d(goc, _phien(900), STUB_NHAY_KHI="stop -t * " + _cid_gia("backend"), STUB_NHAY_GIAY="2000")
+    tt = _tep_trang_thai(goc)
+    assert "tran_trap\t0s pha=da_dong " in tt, f"phiên đã hết mà trap vẫn có trần > 0:\n{tt}"
+    assert "\tthoi_gian_trap\t" in tt, "trần 0 thì vẫn phải ghi thời gian trap thật"
+    assert sum(_so_lan_goi(goc, "start", _cid_gia(dv)) for dv in _DV_GHI) == 0
+    assert _DAU_HET_NS in _ra(ket)
+
+
 @_bo_qua_neu_khong_posix
 @pytest.mark.parametrize(
     "ten_ca,cu,moi",
     [
+        ("F67: phiên hết vẫn cấp thêm vài giây",
+         "        if [ \"$con_ph\" -lt \"$ns\" ]; then ns=$con_ph; fi\n    fi\n    # F67 (22-10)",
+         "        if [ \"$con_ph\" -lt \"$ns\" ]; then ns=$con_ph; fi\n    fi\n    if [ \"$ns\" -lt 2 ]; then ns=2; fi\n    # F67 (22-10)"),
         ("bỏ đặt hạn chót chung lúc migration đỏ",
          "        _RC_MIG=$?\n        _dcg_dat_han_chot_chung\n", "        _RC_MIG=$?\n"),
         ("trap đặt lại hạn (gia hạn)",
@@ -2791,6 +2828,10 @@ def test_kiem_nguoc_f65_go_tung_phan_ban_va(tmp_path: Path, ten_ca: str, cu: str
         t_treo = float((goc / "lenh.log.treo").read_text(encoding="utf-8"))
         assert m and int(m.group(1)) + (int(m.group(2)) - t_treo) > 25 + 2, (
             f"{ten_ca}: trap vẫn không gia hạn ⇒ ca mất-kênh không canh việc đặt lại hạn:\n{tt}")
+    elif ten_ca.startswith("F67"):
+        goc = _san_khau_7d(tmp_path, deploy_sh=dot)
+        _ca_f67_nhanh(goc)
+        assert _goi_sau_migration(goc) != [], f"{ten_ca}: vẫn 0 lời gọi ⇒ ca Docker-nhanh không canh việc cấp thêm thời gian"
     elif ten_ca.startswith("bỏ cổng"):
         goc = _san_khau_7d(tmp_path, deploy_sh=dot)
         _ca_f65_qua_han(goc)

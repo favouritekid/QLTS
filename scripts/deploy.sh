@@ -2601,7 +2601,8 @@ _dcg_dat_han_chot_chung() {
         con_ph=$(_ph_con_lai)
         if [ "$con_ph" -lt "$ns" ]; then ns=$con_ph; fi
     fi
-    if [ "$ns" -lt 1 ]; then ns=1; fi
+    # F67 (22-10): phiên ĐÃ HẾT ⇒ ngân sách 0 — KHÔNG tự cấp thêm giây nào (Docker trả lời nhanh thì một giây "tặng" đủ
+    # để bắt đầu lệnh đọc SAU hạn chót). `_DCG_TRAP_HET` vẫn được đặt ⇒ `_dcg_con_lai` = 0 ⇒ mọi lệnh bị từ chối.
     _DCG_HC_BD=$SECONDS
     _DCG_HC_NS=$ns
     _DCG_TRAP_HET=$((SECONDS + ns))
@@ -2629,7 +2630,7 @@ _dcg_khi_thoat() {
     _dcg_ghi "thoat" "rc=$rc tin_hieu=${_DCG_TIN_HIEU:--} pha=$_DCG_PHA"
     # Vòng 6: trần thời gian — IN ngay đầu trap và GHI vào tệp trạng thái (nhật ký local);
     # cuối trap ĐO thời gian thật và so với trần.
-    local ns ns_ct bd_trap kq
+    local ns ns_ct bd_trap kq co_tran=0
     ns=$(_dcg_ngan_sach_trap); ns_ct=${ns#* }; ns=${ns%% *}
     bd_trap=$SECONDS
     if [ -n "${_DCG_HC_BD:-}" ]; then
@@ -2650,13 +2651,14 @@ _dcg_khi_thoat() {
             if [ "$con_ph" -lt "$ns" ]; then
                 ns_ct="$ns_ct — GIỚI HẠN bởi hạn chót PHIÊN (còn ${con_ph}s, bảng ${ns}s)"
                 ns=$con_ph
-                [ "$ns" -ge 1 ] || ns=1
+                # F67 (22-10, nhánh anh em của hạn chót chung): phiên ĐÃ HẾT ⇒ trần 0, KHÔNG cấp thêm 1 s.
             fi
         fi
         # Vòng 6b (F45): hạn chót THỰC THI — mọi bước sau đây lấy hạn = min(hạn riêng, phần còn lại).
         _DCG_TRAP_HET=$((bd_trap + ns))
         log "[trap] trần thời gian của trap (pha '$_DCG_PHA', đi tiếp=${_DCG_DI_TIEP:-0}): ${ns}s — $ns_ct"
         _dcg_ghi "tran_trap" "${ns}s pha=$_DCG_PHA bat_dau=$(date +%s) di_tiep=${_DCG_DI_TIEP:-0} phien_con=${con_ph:--}" || true
+        co_tran=1
     fi
     case "$_DCG_PHA" in
         khong_ap_dung|buoc8|xong)
@@ -2696,12 +2698,15 @@ _dcg_khi_thoat() {
     if [ -n "${_DCG_HC_BD:-}" ]; then
         local dc=$((SECONDS - _DCG_HC_BD))
         _dcg_ghi "thoi_gian_trap" "${dc}s/${_DCG_HC_NS}s chung" || true
-        if [ "$dc" -gt "$_DCG_HC_NS" ]; then
+        if [ "$_DCG_HC_NS" -eq 0 ]; then
+            log "[trap] trap chạy ${dc}s tính từ lúc migration đỏ — phiên ĐÃ HẾT lúc ấy (hạn chót chung 0 s): không đo gì, chỉ in hướng dẫn ngắn"
+        elif [ "$dc" -gt "$_DCG_HC_NS" ]; then
             warn "[trap] ⚠ trap chạy ${dc}s tính từ lúc migration đỏ (đối soát + trap) — VƯỢT hạn chót chung ${_DCG_HC_NS}s (phần vượt = ân hạn -k của lệnh cuối)"
         else
             log "[trap] trap chạy ${dc}s tính từ lúc migration đỏ (đối soát + trap) / hạn chót chung ${_DCG_HC_NS}s"
         fi
-    elif [ "$ns" -gt 0 ]; then
+    elif [ "$co_tran" = 1 ]; then
+        # (F67: trần có thể là 0 khi phiên đã hết — vẫn ghi thời gian thật)
         local da=$((SECONDS - bd_trap))
         _dcg_ghi "thoi_gian_trap" "${da}s/${ns}s" || true
         if [ "$da" -gt "$ns" ]; then
