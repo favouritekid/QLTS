@@ -58,9 +58,16 @@ async def two_profiles_one_seat(seed_lead_dependencies: dict) -> dict:
     ts = int(datetime.now(timezone.utc).timestamp() * 1000) % 1_000_000
     async with AsyncSessionLocal() as s:
         async with s.begin():
+            # Ngành ĐỦ cấu hình trình độ/loại hình — owner Q20(a): thiếu ⇒ T6 DỪNG (không còn ghi "trượt").
+            from tests.fixtures.builders import ensure_target_level_config
+
+            loai_hinh, trinh_do = await ensure_target_level_config(s)
+            nganh = await s.get(models.MajorProgram, seed_lead_dependencies["major_program_id"])
+            nganh.degree_level_id = trinh_do.id
             offering = models.ProgramOffering(
                 program_id=seed_lead_dependencies["major_program_id"],
                 offering_type="full_time",
+                offering_type_id=loai_hinh.id,
                 duration_semesters=8,
                 is_active=True,
             )
@@ -158,26 +165,15 @@ async def two_profiles_one_seat(seed_lead_dependencies: dict) -> dict:
 async def _cascade_in_own_session(profile_id: int) -> str:
     """Run evaluate_cascade in an isolated session and return final_status."""
     from sqlalchemy import select as sa_select
-    from sqlalchemy.orm import selectinload as sa_sl
     from app.services import admission_choice_engine_service as engine_mod
 
     async with AsyncSessionLocal() as s:
         try:
+            # Nạp ĐÚNG chuỗi của router publish-result (một nguồn) — T6 cần chuỗi trình độ/loại hình.
             stmt = (
                 sa_select(models.AdmissionProfile)
                 .where(models.AdmissionProfile.id == profile_id)
-                .options(
-                    sa_sl(models.AdmissionProfile.lead),
-                    sa_sl(models.AdmissionProfile.choices)
-                    .selectinload(models.AdmissionProfileChoice.admission_path)
-                    .selectinload(models.AdmissionPath.academic_info),
-                    sa_sl(models.AdmissionProfile.choices)
-                    .selectinload(models.AdmissionProfileChoice.admission_path)
-                    .selectinload(models.AdmissionPath.admission_method),
-                    sa_sl(models.AdmissionProfile.choices)
-                    .selectinload(models.AdmissionProfileChoice.admission_path)
-                    .selectinload(models.AdmissionPath.admission_round),
-                )
+                .options(*engine_mod.t6_profile_load_options())
             )
             profile = (await s.execute(stmt)).scalar_one()
             result, _cb = await engine_mod.evaluate_cascade(s, profile)

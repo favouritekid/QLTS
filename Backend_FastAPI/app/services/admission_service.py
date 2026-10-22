@@ -3519,6 +3519,8 @@ async def _populate_priority_evidence_projections(
                 .where(
                     models.PriorityObjectConfig.academic_year == profile.academic_year,
                     models.PriorityObjectConfig.sub_code.in_(priority_codes),
+                    # Owner Q10(a): chỉ hàng ĐANG MỞ (cùng định nghĩa ``select_open_priority_rates``).
+                    models.PriorityObjectConfig.effective_to.is_(None),
                 )
             )
             catalog_by_code = {
@@ -6288,12 +6290,9 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
 # Empty/None snapshot → pass defensive (engine T1 freeze fail infra; warning
 # đã log ở freeze try/except). Mọi rule_applied khác / kv_resolved None →
 # block với BadRequest tiếng Việt + guidance.
-_KV_SUCCESS_RULE_APPLIED = frozenset({
-    "longest_duration",
-    "tiebreak_graduation_school",
-    "commune_lookup",
-    "manual_override",
-})
+# Một nguồn (C8b): tập và vị từ sống ở ``priority_service`` — T6 dùng CHUNG. Tên cũ giữ làm bí danh.
+from .priority_service import KV_SUCCESS_RULE_APPLIED as _KV_SUCCESS_RULE_APPLIED  # noqa: E402
+from .priority_service import kv_snapshot_resolved as _kv_snapshot_resolved  # noqa: E402
 
 
 def _kv_unresolved_error_message(
@@ -6331,8 +6330,8 @@ def _kv_unresolved_error_message(
     rule_applied = snapshot.get("rule_applied")
     kv_resolved = snapshot.get("kv_resolved")
 
-    # Pass: rule trong success whitelist VÀ kv_resolved có giá trị.
-    if rule_applied in _KV_SUCCESS_RULE_APPLIED and kv_resolved is not None:
+    # Pass: rule trong success whitelist VÀ kv_resolved có giá trị (vị từ chung với T6).
+    if _kv_snapshot_resolved(snapshot):
         return None
 
     # Otherwise build error message — fail-closed default.
@@ -8424,7 +8423,11 @@ async def upload_priority_evidence_document(
         .where(
             models.PriorityObjectConfig.academic_year == profile.academic_year,
             models.PriorityObjectConfig.sub_code == sub_code,
+            # Hàng ĐANG MỞ (owner Q10(a)); không ``scalar_one_or_none`` — sau lần xoay mức đầu tiên (đóng hàng cũ
+            # + tạo hàng mới cùng mã cùng năm) có 2 hàng ⇒ MultipleResultsFound ⇒ 500 (review C8 R3).
+            models.PriorityObjectConfig.effective_to.is_(None),
         )
+        .limit(1)
     )
     if catalog_check.scalar_one_or_none() is None:
         raise BusinessRuleViolation(
