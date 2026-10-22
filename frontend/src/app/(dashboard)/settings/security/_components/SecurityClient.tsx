@@ -16,6 +16,7 @@ import {
 import { api } from "@/lib/api/client";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import type { UserSessionListResponse } from "@/lib/api/sessions";
+import { secureAccountOutcome } from "@/lib/auth/secure-account-outcome";
 import type {
   LoginHistoryResponse,
   ConfirmLoginRequest,
@@ -116,15 +117,21 @@ export function SecurityClient({ initialSessionsData }: SecurityClientProps) {
   const secureMutation = useMutation({
     mutationFn: secureAccount,
     onSuccess: (response) => {
+      const outcome = secureAccountOutcome(response);
+      setSecureDialogOpen(false);
+      setSuccessMessage(outcome.message);
+      const next = outcome.next;
+      if (next.kind === "relogin") {
+        // Mọi phiên (kể cả phiên này) đã bị thu hồi, cookie đã xoá: KHÔNG refetch
+        // (chỉ ra 401), tải trang đầy đủ tới login để dọn state client.
+        setTimeout(() => window.location.assign(next.url), 2000);
+        return;
+      }
       // Cross-invalidation: secure account affects sessions, login history, and auth.
       // ``["suspiciousCount"]`` removed — see confirmMutation comment above.
       queryClient.invalidateQueries({ queryKey: ["loginHistory"] });
       queryClient.invalidateQueries({ queryKey: sessionKeys.all });
       queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
-      setSecureDialogOpen(false);
-      setSuccessMessage(
-        `Tài khoản đã được bảo mật. ${response.sessions_revoked} phiên đã bị thu hồi. Đang chuyển đến trang đổi mật khẩu...`
-      );
       setTimeout(() => {
         setSuccessMessage(null);
         router.push("/settings");

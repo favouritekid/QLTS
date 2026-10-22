@@ -14,7 +14,7 @@ Global exception handlers in middleware/exception_handlers.py handle all errors.
 from typing import List, Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -98,6 +98,9 @@ class SecureAccountResponse(BaseModel):
     """Response after securing account."""
     message: str
     sessions_revoked: int
+    # True ⇒ the current session could not be resolved, so EVERY session was
+    # revoked (this one included) and the auth cookies were cleared: log in again.
+    relogin_required: bool = False
 
 
 # =============================================================================
@@ -234,58 +237,50 @@ async def confirm_login(
 @limiter.limit(RateLimits.AUTH_PASSWORD_CHANGE)
 async def secure_account(
     request: Request,  # Required by slowapi
+    response: Response,
     login_id: int = Query(..., description="ID of the suspicious login"),
     current_user: models.User = Depends(deps.get_current_user),
+    current_session: Optional[models.UserSession] = Depends(deps.get_current_session),
     db: AsyncSession = Depends(database.get_db),
 ):
     """
     Secure account after suspicious login ("This wasn't me").
-    
+
     This will:
     1. Mark the login as "secured"
     2. Revoke all other sessions (R7 FIX: EXCEPT current session)
     3. Remove all trusted devices
     4. Force password change on next protected endpoint
+
+    The session kept in step 2 is ``deps.get_current_session`` (the live session
+    of the validated access token), never the refresh cookie. Not resolvable ⇒
+    revoke EVERY session, this one included, clear the auth cookies and answer
+    ``relogin_required=true`` — securing the account must not be skipped, and
+    keeping an unknown session alive is what "secure" is meant to stop (owner
+    contract 12-10).
     """
-    from fastapi import Cookie
-    from ..services.auth_service import decode_token
-    from ..repositories.session_repository import SessionRepository
     from ..services import session_service
-    
+    from .auth import _delete_auth_cookies
+
     login, callback = await login_history_service.secure_account(
         db=db,
         user_id=current_user.id,
         login_id=login_id,
     )
-    
-    # R7 FIX: Get current session ID to exclude from revocation
-    # This prevents user from being logged out when securing their account
-    current_session_id = None
-    try:
-        # Get refresh_token from cookie (manual extraction since we're mid-function)
-        refresh_token = request.cookies.get("refresh_token")
-        if refresh_token:
-            payload = decode_token(refresh_token)
-            jti = payload.get("jti")  # refresh token's own JTI
-            if jti:
-                session_repo = SessionRepository(db)
-                current_session = await session_repo.get_by_jti(jti)
-                if current_session and current_session.user_id == current_user.id:
-                    current_session_id = current_session.id
-                    log.info(
-                        "R7: Will preserve current session during secure_account",
-                        session_id=current_session_id,
-                        user_id=current_user.id
-                    )
-    except Exception as e:
-        # If we can't get session, continue anyway (user will be logged out - acceptable fallback)
-        log.warning("R7: Could not get current session, will revoke all", error=str(e))
-    
-    # Revoke all sessions EXCEPT current (R7 FIX)
+
+    keep_session_id = current_session.id if current_session is not None else None
+    if keep_session_id is None:
+        log.warning(
+            "secure-account: current session not resolved; revoking ALL sessions, re-login required",
+            user_id=current_user.id,
+            action="security.secure_account_current_unresolved",
+        )
+
+    # Revoke all sessions EXCEPT the current one (R7) — or ALL when unresolved.
     sessions_revoked, revoke_callback = await session_service.revoke_all_other_sessions(
         db=db,
         user_id=current_user.id,
-        except_session_id=current_session_id  # R7: Preserve current session
+        except_session_id=keep_session_id,
     )
     
     # Remove all trusted devices
@@ -302,10 +297,18 @@ async def secure_account(
         user_id=current_user.id,
         login_id=login_id,
         sessions_revoked=sessions_revoked,
-        current_session_preserved=current_session_id is not None,
+        current_session_preserved=keep_session_id is not None,
     )
-    
-    # R7: Update message to reflect user stays logged in
+
+    if keep_session_id is None:
+        _delete_auth_cookies(response)
+        return SecureAccountResponse(
+            message="Account secured. All sessions were signed out — log in again and change your password.",
+            sessions_revoked=sessions_revoked,
+            relogin_required=True,
+        )
+
+    # R7: the current session stays logged in
     return SecureAccountResponse(
         message="Account secured. Please change your password.",
         sessions_revoked=sessions_revoked,

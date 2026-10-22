@@ -77,4 +77,6 @@ export interface ConfirmLoginResponse {
 export interface SecureAccountResponse {
   message: string;
   sessions_revoked: number;
+  /** true ⇒ backend đã thu hồi MỌI phiên (kể cả phiên này) và xoá cookie: phải đăng nhập lại. */
+  relogin_required: boolean;
 }
