@@ -2697,9 +2697,9 @@ _dcg_khi_thoat() {
         local dc=$((SECONDS - _DCG_HC_BD))
         _dcg_ghi "thoi_gian_trap" "${dc}s/${_DCG_HC_NS}s chung" || true
         if [ "$dc" -gt "$_DCG_HC_NS" ]; then
-            warn "[trap] ⚠ đường migration đỏ (đối soát + trap) chạy ${dc}s — VƯỢT hạn chót chung ${_DCG_HC_NS}s (phần vượt = ân hạn -k của lệnh cuối)"
+            warn "[trap] ⚠ trap chạy ${dc}s tính từ lúc migration đỏ (đối soát + trap) — VƯỢT hạn chót chung ${_DCG_HC_NS}s (phần vượt = ân hạn -k của lệnh cuối)"
         else
-            log "[trap] đường migration đỏ (đối soát + trap) chạy ${dc}s / hạn chót chung ${_DCG_HC_NS}s"
+            log "[trap] trap chạy ${dc}s tính từ lúc migration đỏ (đối soát + trap) / hạn chót chung ${_DCG_HC_NS}s"
         fi
     elif [ "$ns" -gt 0 ]; then
         local da=$((SECONDS - bd_trap))
