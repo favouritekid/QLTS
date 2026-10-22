@@ -1918,7 +1918,7 @@ def _bang_ngan_sach(pha: str, di_tiep: str, deploy_sh: str | None = None) -> int
     ham = re.search(r"^_dcg_ngan_sach_trap\(\) \{\n.*?^\}\n", than, re.S | re.M).group(0)
     kich = (
         "set -eu\n_DCG_HAN_LENH=10; _DCG_HAN_PSQL=60; _DCG_HAN_KHOI_DONG=10; _DCG_HAN_NGINX_RESTART=30\n"
-        "_DCG_HAN_DO_SNI=60; _DCG_HAN_PII=90; _HAN_HEALTH=60; _DCG_HAN_ONEOFF=60\n"
+        "_DCG_HAN_DO_SNI=60; _DCG_HAN_PII=90; _HAN_HEALTH=60; _DCG_HAN_ONEOFF=60; _DCG_HAN_PHIEN=30\n"
         f"_DCG_PHA={pha}; _DCG_DI_TIEP={di_tiep}\n" + ham + "\n_dcg_ngan_sach_trap\n"
     )
     ra = subprocess.run(["bash", "-c", kich], capture_output=True, text=True, timeout=30)
@@ -1934,7 +1934,9 @@ def _bang_ngan_sach(pha: str, di_tiep: str, deploy_sh: str | None = None) -> int
         ("dang_dong", "1", 185), ("dang_dong", "0", 1214),
         ("da_dong", "1", 185), ("da_dong", "0", 1214),
         ("dang_migrate", "1", 318), ("dang_migrate", "0", 318),
-        ("migrate_do", "1", 318), ("migrate_do", "0", 318),
+        # F65 (22-10): migrate_do = HẠN CHÓT CHUNG từ lúc migration đỏ ⇒ gồm cả đối soát trước trap:
+        # chờ one-off 133 + đối soát 363 (cửa ghi 6L=72 · phiên lạ 30+2P+1=161 · PA2 2P=130) + hướng dẫn 185.
+        ("migrate_do", "1", 681), ("migrate_do", "0", 681),
         ("da_migrate", "0", 185), ("da_migrate", "1", 185),
         ("khong_ap_dung", "0", 0), ("buoc8", "1", 0), ("xong", "0", 0),
     ],
@@ -2361,7 +2363,8 @@ def test_kiem_nguoc_v7c_go_tung_han(tmp_path: Path, ten_ca: str, cu: str, moi: s
 # (STUB_NHAY_KHI / STUB_NHAY_GIAY): mô phỏng một bước chậm mà không chờ thật. SECONDS của
 # bash (hạn từng lệnh, trần trap) KHÔNG bị shim — chỉ hạn chót PHIÊN đọc đồng hồ tường.
 # Với hạn `_V6` và bốn hạn đo = 5 s: H_4c = 225, H_8c = 120, R(da_dong) = 254,
-# R(migrate_do) = 60, R(da_migrate) = 40 ⇒ C_8b = 125, C_7 = 130, C_6 = 135, C_5 = 259,
+# R(migrate_do) = 120 (F65: chờ one-off 20 + đối soát 60 + hướng dẫn 40), R(da_migrate) = 40 ⇒ C_8b = 125, C_7 = 130,
+# C_6 = 135, C_5 = 259,
 # C_4c = 484 (tính tay từ bảng ở đầu khối phiên của deploy.sh).
 _SHIM_DATE_NHAY = r"""#!/usr/bin/env bash
 if [ "$#" = "1" ] && [ "$1" = "+%s" ]; then
@@ -2432,8 +2435,9 @@ def test_v7d_ke_hoach_mac_dinh_tinh_tu_han_mac_dinh(tmp_path: Path) -> None:
     m = re.search(r"\[phiên\] ngân sách: (.+)", ra)
     assert m, ra[-1500:]
     assert "H_4c=681 " in m.group(1) and "H_8c=480" in m.group(1), m.group(1)
-    assert "R(da_dong)=1214 R(migrate_do)=318 R(da_migrate)=185" in m.group(1), m.group(1)
-    assert "C_4c=1955 C_5=1274 C_6=660 C_7=600 C_8b=540" in m.group(1), m.group(1)
+    # F65 (22-10): R(migrate_do) 318 → 681 (gồm đối soát trước trap) ⇒ C_6 = 60 + max(681, 600) = 741; C_5/C_4c không đổi.
+    assert "R(da_dong)=1214 R(migrate_do)=681 R(da_migrate)=185" in m.group(1), m.group(1)
+    assert "C_4c=1955 C_5=1274 C_6=741 C_7=600 C_8b=540" in m.group(1), m.group(1)
     assert _DAU_KHONG_VUA in ra and nk == "", "phiên 20 phút với hạn mặc định phải DỪNG trước mọi thay đổi"
 
 
@@ -2659,3 +2663,129 @@ def test_kiem_nguoc_v7f_bo_han_pg_isready(tmp_path: Path) -> None:
     goc = _dung_san_khau(tmp_path, deploy_sh=dot)
     _chay_deploy(goc, STUB_TREO_KHI="* pg_isready *", STUB_TREO_GIAY=_TREO_DOT_BIEN, **_V6)
     assert _tu_luc_treo(goc) >= 20, "bỏ hạn mà vẫn xong nhanh ⇒ ca pg_isready-treo không canh hạn"
+
+
+# =============================================================================
+# XVIII. F65 (22-10, phương án B) — HẠN CHÓT CHUNG từ lúc migration ĐỎ tới hết trap
+# =============================================================================
+# Trước bản vá: `_DCG_TRAP_HET` chỉ đặt lúc VÀO trap ⇒ đối soát của nhánh đỏ (dọn one-off, (d), PA2) chạy không
+# giới hạn ngoài hạn từng lệnh, rồi trap mở hạn MỚI (đo bằng lệnh giả 22-10: lệnh Docker/psql vẫn chạy sau hạn chót
+# phiên, người xem mất hướng dẫn khi kênh bị cắt). Nay MỘT hạn chót đặt NGAY khi nhận lỗi = trần pha migrate_do
+# (gồm đối soát) kẹp bởi hạn chót phiên; trap KHÔNG đặt lại; hết ngân sách ⇒ không bắt đầu bước đối soát nào nữa
+# (`het_ngan_sach\tdoi_soat …`), trap in hướng dẫn NGẮN. Không đổi: không tự phát lại dump, không cưỡng bức dọn
+# one-off. Mỗi ca chỉ vi phạm MỘT bất biến; phép đo thời gian đặt TRƯỚC mọi phép kiểm khác để đỏ-trước (deploy.sh
+# chưa vá) đỏ đúng lý do.
+_F65_TREO = {"STUB_ALEMBIC_RC": "1", "STUB_PSQL_TREO_SAU": _MOC_ALEMBIC, "STUB_TREO_GIAY": _TREO}
+
+
+def _han_chung(goc: Path) -> int:
+    import re
+
+    m = re.search(r"han_chot_chung\t(\d+)s ", _tep_trang_thai(goc))
+    assert m, "không có hạn chót CHUNG trong tệp trạng thái:\n" + _tep_trang_thai(goc)
+    return int(m.group(1))
+
+
+def _ca_f65_tran(goc: Path):
+    # (A) psql TREO từ sau migration; trần hạ còn 8 s (< đối soát chưa vá ≈ 3 psql × 5 s ⇒ đỏ-trước phân biệt được).
+    return _chay_deploy(goc, **_F65_TREO, **{**_V6, "QLTS_TRAN_TRAP": "8"})
+
+
+def _ca_f65_qua_han(goc: Path):
+    # (B) migration "tốn" 900 s đồng hồ tường (QUÁ H_6) ⇒ lúc đỏ phiên còn 0; one-off còn chạy, đọc nó TREO; psql TREO.
+    return _chay_7d(goc, _phien(900), STUB_NHAY_KHI="* upgrade head*", STUB_NHAY_GIAY="900",
+                    STUB_ONEOFF="running", STUB_ONEOFF_DOC="treo", **_F65_TREO)
+
+
+def _ca_f65_mat_kenh(goc: Path):
+    # (C) kênh SSH đóng khi PA2 bắt đầu ⇒ lần ghi kế: SIGPIPE ⇒ trap pha migrate_do; trần hạ còn 25 s.
+    return _chay_deploy(goc, _boc=_boc_kenh_dong_o(goc, "[PA2] đo để ĐỐI SOÁT"), **_F65_TREO,
+                        **{**_V6, "QLTS_TRAN_TRAP": "25"})
+
+
+@_bo_qua_neu_khong_posix
+def test_f65_doi_soat_treo_ket_thuc_trong_han_chot_chung(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    ket, _ = _ca_f65_tran(goc)
+    t, ra, tt = _tu_luc_treo(goc), _ra(ket), _tep_trang_thai(goc)
+    assert t <= 8 + 5 + 3, f"đối soát + trap chạy {t:.1f}s sau lần treo đầu — VƯỢT hạn chót chung 8 s (+ ân hạn -k)"
+    assert ket.returncode != 0
+    assert _han_chung(goc) == 8, tt
+    assert "chung=8s" in tt, "trap KHÔNG dùng hạn chót chung:\n" + tt
+    assert _vi_pham_phat_lai(goc) == [] and "KHÔNG phát lại bản sao (F28)" in ra
+    assert _DAU_HET_NS in ra or "PHỤC HỒI CÓ ĐỐI SOÁT" in ra, "không còn hướng dẫn phục hồi nào:\n" + ra[-1500:]
+
+
+@_bo_qua_neu_khong_posix
+def test_f65_migration_qua_han_phien_can_thi_khong_doi_soat_them_va_huong_dan_ngan(tmp_path: Path) -> None:
+    goc = _san_khau_7d(tmp_path)
+    ket, nk = _ca_f65_qua_han(goc)
+    t, ra, tt = _tu_luc_treo(goc), _ra(ket), _tep_trang_thai(goc)
+    assert t <= 1 + 5 + 4, f"phiên đã cạn mà đối soát + trap còn chạy {t:.1f}s — kênh SSH sẽ bị cắt giữa chừng"
+    assert _han_chung(goc) == 1, tt
+    for b in ("(d)_cửa_ghi", "(d)_phiên_lạ", "PA2"):
+        assert f"het_ngan_sach\tdoi_soat {b}" in tt, f"bước đối soát {b} không được ghi CHƯA XÁC ĐỊNH:\n{tt}"
+    assert _DAU_HET_NS in ra and "het_ngan_sach\thuong_dan_ngan" in tt, ra[-1500:]
+    assert _vi_pham_phat_lai(goc) == []
+    assert not any(d.startswith("docker rm") for d in _dong(nk)), "one-off CÒN CHẠY bị dọn"
+
+
+@_bo_qua_neu_khong_posix
+def test_f65_mat_kenh_giua_pa2_trap_khong_gia_han(tmp_path: Path) -> None:
+    import re
+
+    goc = _dung_san_khau(tmp_path)
+    _ca_f65_mat_kenh(goc)
+    tt = _tep_trang_thai(goc)
+    t_treo = float((goc / "lenh.log.treo").read_text(encoding="utf-8"))
+    m = re.search(r"tran_trap\t(\d+)s pha=migrate_do bat_dau=(\d+)", tt)
+    assert m, tt
+    tran, bat_dau = int(m.group(1)), int(m.group(2))
+    assert tran + (bat_dau - t_treo) <= 25 + 2, (
+        f"trap lấy trần {tran}s lúc đã dùng {bat_dau - t_treo:.0f}s — GIA HẠN quá hạn chót chung 25 s:\n{tt}")
+    assert "\tthoat\trc=141 tin_hieu=PIPE pha=migrate_do" in tt, f"kênh không đóng giữa đối soát:\n{tt}"
+    assert _tu_luc_treo(goc) <= 25 + 5 + 3
+    assert "chung=25s" in tt and "\tthoi_gian_trap\t" in tt, tt
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,cu,moi",
+    [
+        ("bỏ đặt hạn chót chung lúc migration đỏ",
+         "        _RC_MIG=$?\n        _dcg_dat_han_chot_chung\n", "        _RC_MIG=$?\n"),
+        ("trap đặt lại hạn (gia hạn)",
+         '    if [ -n "${_DCG_HC_BD:-}" ]; then\n        # F65: hạn chót CHUNG đã đặt lúc migration đỏ',
+         '    if false; then\n        # F65: hạn chót CHUNG đã đặt lúc migration đỏ'),
+        ("bảng migrate_do bỏ phần đối soát",
+         '                tong=$((O + DS + HD)); ct="chờ_one-off=$O + đối_soát=$DS + hướng_dẫn=$HD"\n',
+         '                tong=$((O + HD)); ct="chờ_one-off=$O + hướng_dẫn=$HD"\n'),
+        ("bỏ cổng trước từng bước đối soát",
+         '    [ "$(_dcg_con_lai)" -gt 0 ] && return 0\n    warn "[đối soát] HẾT hạn chót chung',
+         '    return 0\n    warn "[đối soát] HẾT hạn chót chung'),
+        ("hạn chung không kẹp theo hạn chót phiên",
+         '        if [ "$con_ph" -lt "$ns" ]; then ns=$con_ph; fi\n', ''),
+    ],
+)
+def test_kiem_nguoc_f65_go_tung_phan_ban_va(tmp_path: Path, ten_ca: str, cu: str, moi: str) -> None:
+    import re
+
+    dot = _ban_dot_bien(cu, moi)
+    if ten_ca.startswith("bảng"):
+        assert _bang_ngan_sach("migrate_do", "0", dot) == 318, f"{ten_ca}: bảng không đổi ⇒ ca bảng không canh"
+    elif ten_ca.startswith("trap đặt lại"):
+        goc = _dung_san_khau(tmp_path, deploy_sh=dot)
+        _ca_f65_mat_kenh(goc)
+        tt = _tep_trang_thai(goc)
+        m = re.search(r"tran_trap\t(\d+)s pha=migrate_do bat_dau=(\d+)", tt)
+        t_treo = float((goc / "lenh.log.treo").read_text(encoding="utf-8"))
+        assert m and int(m.group(1)) + (int(m.group(2)) - t_treo) > 25 + 2, (
+            f"{ten_ca}: trap vẫn không gia hạn ⇒ ca mất-kênh không canh việc đặt lại hạn:\n{tt}")
+    elif ten_ca.startswith("bỏ cổng"):
+        goc = _san_khau_7d(tmp_path, deploy_sh=dot)
+        _ca_f65_qua_han(goc)
+        assert "het_ngan_sach\tdoi_soat " not in _tep_trang_thai(goc), f"{ten_ca}: vẫn ghi ⇒ ca quá-hạn không canh cổng"
+    else:
+        goc = _san_khau_7d(tmp_path, deploy_sh=dot)
+        _ca_f65_qua_han(goc)
+        assert _tu_luc_treo(goc) > 1 + 5 + 4, f"{ten_ca}: vẫn xong nhanh ⇒ ca quá-hạn không canh {ten_ca}"
