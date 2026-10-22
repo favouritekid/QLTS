@@ -19,7 +19,7 @@ interface AuditReviewCardProps {
 
 /**
  * Translate the audit action_type → a Vietnamese label (never render the raw enum).
- * Covers ALL 6 values the backend CHECK constraint allows
+ * Covers ALL 8 values the backend CHECK constraint allows
  * (Backend_FastAPI/app/models/priority_audit.py:58-69) so live events like
  * `ut_evidence_untick` / `ut_evidence_warning_dismissed` are not masked by a
  * generic fallback.
@@ -38,6 +38,10 @@ function auditActionLabel(actionType: string): string {
       return "Bỏ qua cảnh báo thiếu UT"
     case "admin_bulk_fill":
       return "Admin điền hồ sơ hàng loạt"
+    case "circular_defaulted":
+      return "Gán thông tư mặc định theo ngày nộp đầu"
+    case "circular_changed":
+      return "Đổi thông tư áp dụng"
     default:
       return "Cập nhật hồ sơ ưu tiên"
   }

@@ -33,22 +33,42 @@ export interface EngineDisplay {
  * (legacy snapshot pre-Commit-3 deploy). BE đã tính lại câu cho snapshot đóng
  * băng ở schema response, nên nhánh này hiếm khi chạy — nhưng nếu chạy thì PHẢI
  * nói giống BE. Nguồn: `Backend_FastAPI/app/constants/priority_law_citation.py`
- * (RULE_LAW_CITATION). `tests/unit/test_phase_e4_pr4_compliance.py` đọc chính
- * bảng dưới đây và khoá nó bằng bảng BE — sửa câu thì sửa BE trước.
+ * (RULE_LAW_CITATION_BY_CIRCULAR). `tests/unit/test_phase_e4_pr4_compliance.py`
+ * đọc chính bảng dưới đây và khoá nó bằng bảng BE — sửa câu thì sửa BE trước.
+ *
+ * V3: câu phụ thuộc THÔNG TƯ ÁP DỤNG của hồ sơ (`applicable_circular_effective`
+ * do BE tính). TT 76 chỉ trích tới cấp phụ lục — số mục chưa đối chiếu nguyên văn.
  */
-export function deriveLawCitationFallback(ruleApplied: string): string | null {
-  const map: Record<string, string | null> = {
+const LAW_CITATION_FALLBACK: Record<string, Record<string, string | null>> = {
+  TT05_2021: {
     longest_duration: "TT 05/2021 Phụ lục 01 Mục 5.a",
     tiebreak_graduation_school: "TT 05/2021 Phụ lục 01 Mục 5.a",
     commune_lookup: "TT 05/2021 Phụ lục 01 Mục 5",
     manual_override: "Ấn định thủ công — xác nhận nội bộ của nhà trường, không thuộc mục nào của thông tư",
     ambiguous_requires_manual: null,
-  }
+  },
+  TT76_2026: {
+    longest_duration: "TT 76/2026/TT-BGDĐT Phụ lục I",
+    tiebreak_graduation_school: "TT 76/2026/TT-BGDĐT Phụ lục I",
+    commune_lookup: "TT 76/2026/TT-BGDĐT Phụ lục I",
+    manual_override: "Ấn định thủ công — xác nhận nội bộ của nhà trường, không thuộc mục nào của thông tư",
+    ambiguous_requires_manual: null,
+  },
+}
+
+export function deriveLawCitationFallback(
+  ruleApplied: string,
+  circular: string | null | undefined = "TT05_2021",
+): string | null {
+  // Thông tư lạ ⇒ null: không đoán câu của một văn bản khác.
+  const map = LAW_CITATION_FALLBACK[circular ?? "TT05_2021"]
+  if (!map) return null
   return map[ruleApplied] ?? null
 }
 
 export function resolveEngineDisplay(
-  profile: Pick<AdmissionProfileResponse, "status" | "priority_resolution_snapshot">,
+  profile: Pick<AdmissionProfileResponse, "status" | "priority_resolution_snapshot"> &
+    Partial<Pick<AdmissionProfileResponse, "applicable_circular_effective">>,
   preview: PreviewPriorityKvResponse | null,
 ): EngineDisplay {
   const snapshot = profile.priority_resolution_snapshot ?? {}
@@ -67,7 +87,7 @@ export function resolveEngineDisplay(
         : null
     const snapshotFallback =
       snapshot.rule_applied && typeof snapshot.rule_applied === "string"
-        ? deriveLawCitationFallback(snapshot.rule_applied as string)
+        ? deriveLawCitationFallback(snapshot.rule_applied as string, profile.applicable_circular_effective)
         : null
 
     if (isPostDraft) {

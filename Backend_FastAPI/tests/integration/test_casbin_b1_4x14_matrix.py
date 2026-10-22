@@ -402,7 +402,10 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
       - Bảng "điểm bận" (2026-07-19) added 1 deny row on
         /api/officer/distribution-panel (migration
         `distpanelcasbin20260719`).
-      - Total NOW: 54 deny rows. (Con số này từng ghi 42 trong khi tập
+      - V3 (2026-10-11) added 1 deny row on
+        /api/v2/admissions/*/applicable-circular (đổi thông tư áp dụng —
+        accountant kế thừa officer; migration `v3circ20261011b`).
+      - Total NOW: 55 deny rows. (Con số này từng ghi 42 trong khi tập
         thật đã là 53 — các wave sau không cập nhật docstring. Đã đếm
         lại theo `expected` bên dưới.)
     """
@@ -513,6 +516,10 @@ async def test_accountant_deny_rows_seeded(setup_test_database):
             # finance không giám sát năng suất nhân sự). Migration
             # `distpanelcasbin20260719`.
             ("/api/officer/distribution-panel",                    "GET"),
+            # V3 (2026-10-11) — đổi thông tư áp dụng của hồ sơ: chỉ manager/admin
+            # (owner T2c + Q3). Accountant kế thừa officer ⇒ deny tường minh.
+            # Migration `v3circ20261011b`.
+            ("/api/v2/admissions/*/applicable-circular",           "POST"),
         }
         assert observed == expected, (
             f"Accountant deny-row set drifted. "

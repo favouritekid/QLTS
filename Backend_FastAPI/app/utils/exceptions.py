@@ -701,6 +701,188 @@ class NotificationConfigError(ServiceError):
 
 
 # ============================================================================
+# T6 (CÔNG BỐ KẾT QUẢ) — DỪNG CÓ NHÃN, KHÔNG GHI QUYẾT ĐỊNH
+# ============================================================================
+#
+# Owner Q10-kèm, Q17(a), Q19(d)(ii), Q20(a): thiếu dữ liệu/cấu hình thì T6 DỪNG hồ sơ ấy, không chấm 0 điểm và
+# không ghi "trượt". Lỗi nổi lên tới router ⇒ giao dịch của request rollback ⇒ không quyết định nào được ghi,
+# trạng thái giữ nguyên. ``detail`` nói cán bộ phải làm gì; ``public_payload`` là JSON thuần; ``context`` chỉ để log.
+# Tập lỗi dừng của T6 là ``T6_PER_PROFILE_STOP_ERRORS`` ở ``admission_choice_engine_service``; FE khoá tập mã ở
+# ``frontend/src/lib/api/error-codes.ts`` (test khoá hai bên bằng nhau).
+
+
+class PriorityRateNotConfigured(ServiceUnavailableError):
+    """Không có hàng mức điểm ưu tiên ĐANG MỞ cho năm tuyển sinh của hồ sơ (HTTP 503).
+
+    Dữ liệu tham chiếu của máy chủ thiếu — cùng họ ``InitialLeadStatusNotConfigured``. Mã nào thiếu thì ném, kể cả
+    khi mã khác có hàng: không lấy max trên phần còn lại vì không chứng minh được max khi thiếu một mã.
+    """
+
+    detail = "Chưa có mức điểm ưu tiên đang áp dụng."
+    error_code = "PRIORITY_RATE_NOT_CONFIGURED"
+
+    def __init__(
+        self,
+        *,
+        table: str,
+        academic_year: int,
+        missing_codes: list,
+        context: Optional[Dict[str, Any]] = None,
+    ):
+        loai = "khu vực" if table == "priority_area_config" else "đối tượng"
+        ma = ", ".join(str(m) for m in missing_codes)
+        super().__init__(
+            detail=(
+                f"Chưa có mức điểm ưu tiên đang áp dụng cho {loai} {ma} năm {academic_year}. "
+                "Cấu hình mức rồi công bố lại."
+            ),
+            context=context,
+            public_payload={
+                "table": table,
+                "academic_year": int(academic_year),
+                "missing_codes": [str(m) for m in missing_codes],
+            },
+        )
+        self.table = table
+        self.academic_year = academic_year
+        self.missing_codes = list(missing_codes)
+
+
+class PriorityYearMismatch(BusinessRuleViolation):
+    """Năm tuyển sinh của hồ sơ khác năm của đợt xét tuyển của nguyện vọng (HTTP 400)."""
+
+    detail = "Năm tuyển sinh của hồ sơ khác năm của đợt xét tuyển."
+    error_code = "PRIORITY_YEAR_MISMATCH"
+
+    def __init__(self, *, profile_year: int, round_year: int, context: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            detail=(
+                f"Năm tuyển sinh của hồ sơ ({profile_year}) khác năm của đợt xét tuyển ({round_year}). "
+                "Chưa công bố."
+            ),
+            context=context,
+            public_payload={"profile_year": int(profile_year), "round_year": int(round_year)},
+        )
+
+
+class PriorityKvUnresolved(BusinessRuleViolation):
+    """T6 cần điểm khu vực nhưng KV của hồ sơ chưa phân giải được (HTTP 400).
+
+    Trạng thái hồ sơ mà cán bộ sửa được (ấn định KV thủ công hoặc sửa khai báo quá trình học) — cùng họ các tiền
+    kiểm khác của ``publish_result``.
+    """
+
+    detail = "Chưa xác định được khu vực ưu tiên."
+    error_code = "PRIORITY_KV_UNRESOLVED"
+
+    def __init__(
+        self,
+        *,
+        rule_applied: Optional[str],
+        reason: Optional[str],
+        context: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            detail=(
+                f"Chưa xác định được khu vực ưu tiên ({rule_applied or 'không rõ'}: {reason or 'không rõ'}). "
+                "Ấn định khu vực thủ công hoặc sửa khai báo quá trình học, rồi công bố lại."
+            ),
+            context=context,
+            public_payload={"rule_applied": rule_applied, "reason": reason},
+        )
+
+
+class PrioritySnapshotFreezeFailed(ServiceError):
+    """T6 không đóng băng lại được dữ liệu ưu tiên (HTTP 500).
+
+    Lỗi máy chủ ngoài dự kiến trong ``freeze_priority_snapshot``. Trước đây T6 chỉ log rồi chấm tiếp trên snapshot
+    CŨ; nay dừng: không ra quyết định trên dữ liệu không đóng băng được.
+    """
+
+    detail = (
+        "Không đóng băng lại được dữ liệu ưu tiên lúc công bố — chưa ghi kết quả nào. Báo quản trị hệ thống."
+    )
+    error_code = "PRIORITY_FREEZE_FAILED"
+
+    def __init__(self, context: Optional[Dict[str, Any]] = None):
+        super().__init__(context=context, public_payload={"stage": "freeze_priority_snapshot"})
+
+
+class TargetLevelConfigGap(BusinessRuleViolation):
+    """``derive_target_level_and_type`` không suy ra được (trình độ, loại hình) của nguyện vọng (HTTP 400).
+
+    Giữ lớp cha ``BusinessRuleViolation`` + chuỗi ``CONFIG_GAP_TARGET_LEVEL: …`` để mọi chỗ đang bắt/đọc không đổi.
+    ``gap_kind`` tách BA nguyên nhân khác bản chất (review C8 R2):
+
+    * ``relation_not_loaded`` — chuỗi quan hệ chưa nạp: LỖI MÃ của nơi gọi, không phải cấu hình;
+    * ``degree_level_missing`` / ``offering_type_missing`` — FK NULL: cấu hình ngành thiếu;
+    * ``level_out_of_scope`` — trình độ có nhưng ngoài phạm vi hệ thống đang hỗ trợ (vd trung học nghề).
+    """
+
+    def __init__(self, detail: str, *, gap_kind: str, level_code: Optional[str] = None):
+        super().__init__(detail=detail)
+        self.gap_kind = gap_kind
+        self.level_code = level_code
+
+
+class ChoiceTargetLevelNotConfigured(ServiceUnavailableError):
+    """Ngành/hệ của nguyện vọng thiếu/ngoài phạm vi trình độ hoặc loại hình đào tạo (HTTP 503) — owner Q20(a).
+
+    Lỗi cấu hình/phạm vi của trường, KHÔNG phải kết luận thí sinh không đạt: T6 dừng, không ghi ``rejected``.
+    ``gap_kind`` ∈ {``degree_level_missing``, ``offering_type_missing``, ``level_out_of_scope``}; chuỗi quan hệ
+    chưa nạp KHÔNG đi đường này (``T6ChainNotLoaded``, 500).
+    """
+
+    detail = "Nguyện vọng chưa đủ cấu hình trình độ/loại hình đào tạo."
+    error_code = "CHOICE_TARGET_LEVEL_NOT_CONFIGURED"
+
+    def __init__(
+        self,
+        *,
+        display_order: Optional[int],
+        gap_kind: str,
+        level_code: Optional[str] = None,
+        major_code: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ):
+        nv = f"Nguyện vọng {display_order}" if display_order is not None else "Nguyện vọng"
+        nganh = f" (ngành {major_code})" if major_code else ""
+        if gap_kind == "level_out_of_scope":
+            cau = (
+                f"{nv}{nganh} thuộc trình độ '{level_code}', ngoài phạm vi xét tuyển hệ thống đang hỗ trợ (cao đẳng, "
+                "trung cấp, sơ cấp) — chưa công bố. Đây không phải lỗi khai báo ngành; cần mở rộng hệ thống."
+            )
+        elif gap_kind == "offering_type_missing":
+            cau = f"{nv}{nganh} chưa gán loại hình đào tạo — chưa công bố. Cấu hình ngành rồi công bố lại."
+        else:
+            cau = f"{nv}{nganh} chưa gán trình độ đào tạo — chưa công bố. Cấu hình ngành rồi công bố lại."
+        super().__init__(
+            detail=cau,
+            context=context,
+            public_payload={
+                "display_order": display_order,
+                "gap_kind": gap_kind,
+                "level_code": level_code,
+                "major_code": major_code,
+            },
+        )
+
+
+class T6ChainNotLoaded(ServiceError):
+    """T6 nhận nguyện vọng mà chuỗi quan hệ path → … → trình độ/loại hình CHƯA nạp (HTTP 500).
+
+    Lỗi mã của nơi gọi (thiếu ``t6_profile_load_options()``), không phải dữ liệu của trường ⇒ KHÔNG thuộc
+    ``T6_PER_PROFILE_STOP_ERRORS`` (lô tương lai phải dừng cả lô, không bỏ qua hồ sơ).
+    """
+
+    detail = "Lỗi máy chủ khi nạp dữ liệu nguyện vọng — chưa công bố. Báo quản trị hệ thống."
+    error_code = "T6_CHAIN_NOT_LOADED"
+
+    def __init__(self, context: Optional[Dict[str, Any]] = None):
+        super().__init__(context=context)
+
+
+# ============================================================================
 # LEGACY SUPPORT (Deprecated)
 # ============================================================================
 
@@ -761,6 +943,14 @@ EXCEPTION_HTTP_STATUS_MAP = {
     # 503 Service Unavailable (thiếu cấu hình/dữ liệu tham chiếu — fail-closed)
     ServiceUnavailableError: 503,
     InitialLeadStatusNotConfigured: 503,
+    # T6 dừng có nhãn (owner Q10-kèm/Q17/Q20)
+    PriorityRateNotConfigured: 503,
+    ChoiceTargetLevelNotConfigured: 503,
+    PriorityYearMismatch: 400,
+    PriorityKvUnresolved: 400,
+    TargetLevelConfigGap: 400,
+    PrioritySnapshotFreezeFailed: 500,
+    T6ChainNotLoaded: 500,
     # 503 Service Unavailable (auth state in Redis could not be verified — fail-closed)
     AuthStateUnavailable: 503,
     AccountLockoutStateUnavailable: 503,

@@ -3,6 +3,7 @@
 Repository for NotificationConsent — latest-state consent management.
 """
 from datetime import datetime, timezone
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import select, func, and_
@@ -126,7 +127,7 @@ class NotificationConsentRepository(BaseRepository[NotificationConsent]):
                 elif result.consent_status == "revoked":
                     summary["revoked"] += 1
             except Exception as e:
-                summary["errors"].append({"line": i + 1, "message": str(e)})
+                summary["errors"].append({"line": i + 1, "message": chu_loi_an_toan(e)})
                 summary["skipped"] += 1
 
         return summary

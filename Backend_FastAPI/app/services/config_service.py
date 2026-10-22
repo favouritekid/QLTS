@@ -5,6 +5,7 @@
 Refactored to use Repository pattern for all database queries.
 """
 import json
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 from typing import Any, Callable, List, Tuple
 
 import structlog
@@ -76,7 +77,7 @@ async def import_system_categories(
         
     except Exception as e:
         log.error("Failed to import categories", error=str(e))
-        raise BadRequest(detail=f"Import failed: {str(e)}")
+        raise BadRequest(detail=f"Import failed: {chu_loi_an_toan(e)}")
 
 from ..repositories.organization_repository import OrganizationRepository
 from ..services.pipeline_service import invalidate_pipeline_cache

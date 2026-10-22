@@ -19,8 +19,10 @@ import {
   useApproveAdmission,
   useEnrollStudent,
   useRecordApplicationFeePayment,
+  usePublishAdmissionResult,
   admissionsKeys,
 } from "./useAdmissions";
+import { toast } from "sonner";
 import { feesKeys } from "@/hooks/finance/useFees";
 import { handleApiError } from "@/lib/error-handler";
 
@@ -472,6 +474,56 @@ describe("useAdmissions – BUG-14 & BUG-16 invalidation", () => {
 
       expect(replaceMock).toHaveBeenCalledWith(`/admissions/${MOCK_ADMISSION_ID}`);
       expect(pushMock).not.toHaveBeenCalledWith("/students/321");
+    });
+  });
+
+  describe("usePublishAdmissionResult — T6 dừng có nhãn (C8/C8b)", () => {
+    // BE source of the codes: T6_PER_PROFILE_STOP_ERRORS; detail nói cán bộ phải làm gì.
+    it("503 PRIORITY_RATE_NOT_CONFIGURED: hiện detail của BE, không đi qua handleApiError", async () => {
+      vi.mocked(toast.error).mockClear();
+      vi.mocked(handleApiError).mockClear();
+      const detail = "Chưa có mức điểm ưu tiên đang áp dụng cho khu vực KV3 năm 2026. Cấu hình mức rồi công bố lại.";
+      server.use(
+        http.post(
+          `${API_BASE_URL}/api/v2/admissions/:id/publish-result`,
+          () =>
+            HttpResponse.json(
+              { error_code: "PRIORITY_RATE_NOT_CONFIGURED", detail, missing_codes: ["KV3"] },
+              { status: 503 },
+            ),
+        ),
+      );
+      const { Wrapper } = createWrapperWithClient();
+      const { result } = renderHook(() => usePublishAdmissionResult(MOCK_ADMISSION_ID), { wrapper: Wrapper });
+
+      await act(async () => {
+        await expect(result.current.mutateAsync()).rejects.toBeTruthy();
+      });
+
+      expect(toast.error).toHaveBeenCalledWith("Chưa công bố kết quả", { description: detail });
+      expect(handleApiError).not.toHaveBeenCalled();
+    });
+
+    it("lỗi 500 KHÔNG thuộc tập dừng vẫn đi qua handleApiError", async () => {
+      vi.mocked(toast.error).mockClear();
+      vi.mocked(handleApiError).mockClear();
+      server.use(
+        http.post(
+          `${API_BASE_URL}/api/v2/admissions/:id/publish-result`,
+          () => HttpResponse.json({ error_code: "INTERNAL_ERROR", detail: "x" }, { status: 500 }),
+        ),
+      );
+      const { Wrapper } = createWrapperWithClient();
+      const { result } = renderHook(() => usePublishAdmissionResult(MOCK_ADMISSION_ID), { wrapper: Wrapper });
+
+      await act(async () => {
+        await expect(result.current.mutateAsync()).rejects.toBeTruthy();
+      });
+
+      expect(handleApiError).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ context: "công bố kết quả xét tuyển" }),
+      );
     });
   });
 });

@@ -218,6 +218,8 @@ export type UntickPriorityEvidenceRequest = z.infer<
  *
  * `action_type` whitelist matches DB CHECK constraint:
  * kv_manual_override | ut_evidence_verified | ut_evidence_rejected | admin_bulk_fill
+ * | ut_evidence_untick | ut_evidence_warning_dismissed
+ * | circular_defaulted | circular_changed (V3 — thông tư áp dụng theo hồ sơ)
  */
 export const priorityAuditEntrySchema = z.object({
   id: z.number().int(),
@@ -231,6 +233,27 @@ export const priorityAuditEntrySchema = z.object({
 })
 
 export type PriorityAuditEntry = z.infer<typeof priorityAuditEntrySchema>
+
+/** V3 — mã thông tư áp dụng (khớp `app/constants/admission_circular.py`). */
+export const applicableCircularSchema = z.enum(["TT05_2021", "TT76_2026"])
+export type ApplicableCircular = z.infer<typeof applicableCircularSchema>
+
+/** V3 — cảnh báo danh mục KV tạm (BE `kv_catalog_warning`). Không đổi điểm. */
+export const priorityCatalogWarningSchema = z.object({
+  code: z.string(),
+  circular: applicableCircularSchema,
+  message: z.string(),
+})
+export type PriorityCatalogWarning = z.infer<typeof priorityCatalogWarningSchema>
+
+/** V3 — body `POST /api/v2/admissions/{id}/applicable-circular` (mirror `ApplicableCircularChangeRequest`). */
+export const applicableCircularChangeRequestSchema = z.object({
+  version: z.number().int().min(0),
+  circular: applicableCircularSchema,
+  reason: z.string().trim().min(20, "Lý do tối thiểu 20 ký tự").max(500, "Lý do tối đa 500 ký tự"),
+  acknowledge_post_publish: z.boolean().default(false),
+})
+export type ApplicableCircularChangeRequest = z.infer<typeof applicableCircularChangeRequestSchema>
 
 /**
  * Priority Resolution Snapshot Schema
@@ -876,6 +899,25 @@ export const admissionProfileResponseSchema = z.object({
   // via service _populate_response_fields. Empty array khi profile chưa có
   // intervention nào.
   priority_audit_log: z.array(priorityAuditEntrySchema).nullable().default(null),
+
+  // V3 — lần nộp đầu + thông tư áp dụng (cột BE, không phải snapshot). BE
+  // tính `applicable_circular_effective` (lưu, hoặc dự kiến theo hôm nay giờ
+  // VN cho hồ sơ chưa nộp) và `priority_catalog_warning` — FE chỉ hiển thị.
+  first_submitted_at: z.string().datetime({ offset: true }).nullable().default(null),
+  first_submitted_source: z
+    .enum(["submit_transition", "status_history", "missing_evidence", "manual"])
+    .nullable()
+    .default(null),
+  applicable_circular: applicableCircularSchema.nullable().default(null),
+  applicable_circular_source: z
+    .enum(["default_first_submit", "backfill_first_submit", "backfill_missing_evidence", "manual"])
+    .nullable()
+    .default(null),
+  applicable_circular_set_at: z.string().datetime({ offset: true }).nullable().default(null),
+  applicable_circular_set_by_id: z.number().int().nullable().default(null),
+  applicable_circular_effective: applicableCircularSchema.default("TT05_2021"),
+  applicable_circular_effective_basis: z.enum(["stored", "predicted"]).default("stored"),
+  priority_catalog_warning: priorityCatalogWarningSchema.nullable().default(null),
 
   union_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_entry_date: z.string().datetime({ offset: true }).nullable(),

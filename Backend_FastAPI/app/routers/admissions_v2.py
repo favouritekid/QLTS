@@ -97,61 +97,14 @@ async def publish_admission_result(
     Returns CascadeResult với per-choice decisions trace cho audit.
     """
     # Re-query profile WITH choices eager-loaded (the IDOR gate returns
-    # a thin profile row; cascade needs full relations chain).
+    # a thin profile row; cascade needs full relations chain). Một nguồn:
+    # ``t6_profile_load_options()`` — test T6 nạp đúng chuỗi này.
     from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
 
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
-        .options(
-            # P2 fix 2026-05-22 — eager-load `.lead` cho cascade gọi
-            # sync_lead_from_admission() sau khi profile.status flip
-            # (reviewing → result_published → admitted/rejected). Trước
-            # đây không eager-load → sync silent fail "Lead not loaded".
-            selectinload(models.AdmissionProfile.lead),
-            selectinload(models.AdmissionProfile.choices)
-            .selectinload(models.AdmissionProfileChoice.admission_path)
-            .selectinload(models.AdmissionPath.admission_method),
-            # Q9 #07 review-3 fix: eager-load admission_round so the
-            # priority bonus engine (CR-P0) can read academic_year for
-            # priority_*_config lookup. Without this chain, the engine
-            # falls back to __dict__.get(...) → None → skip priority
-            # calc → 0đ bonus on every candidate (silent regression).
-            selectinload(models.AdmissionProfile.choices)
-            .selectinload(models.AdmissionProfileChoice.admission_path)
-            .selectinload(models.AdmissionPath.admission_round),
-            selectinload(models.AdmissionProfile.choices)
-            .selectinload(models.AdmissionProfileChoice.admission_path)
-            .selectinload(models.AdmissionPath.criteria),
-            # Q9 #07 Phase E.4 — choice-engine gate 0 (eligibility) needs
-            # derive_target_level_and_type(path), which reads:
-            #   path.academic_info.offering.program.degree_level_ref.code
-            #   path.academic_info.offering.offering_type_config.code
-            # Without this chain, gate 0 raises CONFIG_GAP_TARGET_LEVEL and
-            # every choice rejects silently. Mirrors the bonus_rule chain.
-            selectinload(models.AdmissionProfile.choices)
-            .selectinload(models.AdmissionProfileChoice.admission_path)
-            .selectinload(models.AdmissionPath.academic_info)
-            .selectinload(models.OfferingAcademicInfo.offering)
-            .selectinload(models.ProgramOffering.program)
-            .selectinload(models.MajorProgram.degree_level_ref),
-            selectinload(models.AdmissionProfile.choices)
-            .selectinload(models.AdmissionProfileChoice.admission_path)
-            .selectinload(models.AdmissionPath.academic_info)
-            .selectinload(models.OfferingAcademicInfo.offering)
-            .selectinload(models.ProgramOffering.offering_type_config),
-            # SubjectGroup uses subject_mappings (M2M) → SubjectGroupSubject.subject
-            # NOT direct `subjects` relation (em earlier drift, fixed).
-            selectinload(models.AdmissionProfile.choices)
-            .selectinload(models.AdmissionProfileChoice.path_subject_group_config)
-            .selectinload(models.PathSubjectGroupConfig.subject_group)
-            .selectinload(models.SubjectGroup.subject_mappings)
-            .selectinload(models.SubjectGroupSubject.subject),
-            selectinload(models.AdmissionProfile.choices)
-            .selectinload(models.AdmissionProfileChoice.scores)
-            .selectinload(models.ProfileChoiceScore.subject),
-        )
+        .options(*choice_engine.t6_profile_load_options())
     )
     result = await db.execute(stmt)
     full_profile = result.scalar_one()
@@ -756,59 +709,39 @@ async def preview_priority_kv(
         admission_type=target_ctx.get("admission_type"),
     )
 
-    # Look up bonus rates — KV area_bonus + UT object_bonus (potential + verified)
-    # academic_year derived từ profile.admission_path.admission_round nếu có
-    # (canonical pattern from evaluate_cascade); fallback current year.
+    # Mức điểm — owner Q10(a): NĂM TUYỂN SINH của hồ sơ, hàng ĐANG MỞ, không lọc ngày; một nguồn
+    # ``select_open_priority_rates``. Thiếu hàng ⇒ xem trước VẪN 200 (cán bộ cần thấy kết quả KV), điểm của bên
+    # thiếu = None (không 0) + ``priority_rate_warnings`` — không 503: chỉ T6 mới dừng.
     from decimal import Decimal
-    from sqlalchemy import select as _sel
-    from app.models.priority_config import PriorityAreaConfig, PriorityObjectConfig
 
-    # Best-effort academic_year — preview doesn't always have round loaded.
-    # Source order: admission_round (eager-loaded chain) → profile.academic_year
-    # snapshot column → DEFAULT_ADMISSION_YEAR (last resort, log warning).
-    # See `profile.academic_year` (models/admission.py:148) — always populated
-    # at profile creation per ADM-017.
-    academic_year = None
-    try:
-        path = getattr(profile, "admission_path", None)
-        round_obj = path.__dict__.get("admission_round") if path else None
-        academic_year = round_obj.__dict__.get("academic_year") if round_obj else None
-    except Exception:
-        academic_year = None
-    if academic_year is None:
-        academic_year = profile.academic_year
-    if academic_year is None:
-        log.warning(
-            "preview_priority_kv.no_academic_year",
-            profile_id=profile_id,
-            fallback=2026,
-        )
-        academic_year = 2026
+    from app.services.priority_service import (
+        RATE_TABLE_AREA,
+        RATE_TABLE_OBJECT,
+        best_code_by_rate,
+        priority_academic_year,
+        select_open_priority_rates,
+    )
+    from app.utils.exceptions import PriorityRateNotConfigured
+
+    academic_year = priority_academic_year(profile)
+    priority_rate_warnings: list[dict] = []
 
     area_bonus = None
     if kv:
-        from datetime import date as _date
-        today = _date.today()
-        rate_stmt = (
-            _sel(PriorityAreaConfig.bonus_points)
-            .where(
-                PriorityAreaConfig.academic_year == academic_year,
-                PriorityAreaConfig.area_code == kv,
-                PriorityAreaConfig.effective_from <= today,
-            )
-            .where(
-                (PriorityAreaConfig.effective_to.is_(None))
-                | (PriorityAreaConfig.effective_to > today)
-            )
-            .limit(1)
-        )
-        rate_res = await db.execute(rate_stmt)
-        area_bonus = rate_res.scalar_one_or_none()
+        try:
+            area_bonus = (
+                await select_open_priority_rates(
+                    db, table=RATE_TABLE_AREA, academic_year=academic_year, codes=[kv]
+                )
+            )[kv]
+        except PriorityRateNotConfigured as exc:
+            priority_rate_warnings.append({"code": exc.error_code, **exc.public_payload})
 
     # UT preview — MAX rate logic per TT 05/2021 "chỉ hưởng một diện cao nhất".
     # Compute 2 buckets:
     #   potential = MAX across ALL submitted codes (assume all verified)
     #   verified  = MAX across codes status='verified' (engine T6 actual)
+    # Thiếu hàng của BẤT KỲ mã nào trong nhóm ⇒ nhóm ấy None (không lấy max trên phần còn lại).
     object_bonus_potential = None
     object_bonus_verified = None
     ut_breakdown_data = {
@@ -821,31 +754,18 @@ async def preview_priority_kv(
     }
 
     submitted_codes = list(preview_profile.priority_object_codes or [])
+    ut_thieu_muc: list[str] = []
     if submitted_codes:
-        from datetime import date as _date
-        today = _date.today()
-        ut_stmt = (
-            _sel(
-                PriorityObjectConfig.sub_code,
-                PriorityObjectConfig.bonus_points,
+        try:
+            muc_pot = await select_open_priority_rates(
+                db, table=RATE_TABLE_OBJECT, academic_year=academic_year, codes=submitted_codes
             )
-            .where(
-                PriorityObjectConfig.academic_year == academic_year,
-                PriorityObjectConfig.sub_code.in_(submitted_codes),
-                PriorityObjectConfig.effective_from <= today,
-            )
-            .where(
-                (PriorityObjectConfig.effective_to.is_(None))
-                | (PriorityObjectConfig.effective_to > today)
-            )
-        )
-        ut_rows = (await db.execute(ut_stmt)).all()
-        if ut_rows:
-            # Potential MAX (assume all verified)
-            top_pot = max(ut_rows, key=lambda r: r[1])
-            object_bonus_potential = top_pot[1]
-            ut_breakdown_data["applied_code_potential"] = top_pot[0]
-            ut_breakdown_data["applied_rate_potential"] = str(top_pot[1])
+            ma_pot = best_code_by_rate(muc_pot, submitted_codes)
+            object_bonus_potential = muc_pot[ma_pot]
+            ut_breakdown_data["applied_code_potential"] = ma_pot
+            ut_breakdown_data["applied_rate_potential"] = str(muc_pot[ma_pot])
+        except PriorityRateNotConfigured as exc:
+            ut_thieu_muc.extend(exc.missing_codes)
 
         # Verified MAX (engine T6 actual)
         evidence = profile.priority_object_evidence or {}
@@ -855,13 +775,24 @@ async def preview_priority_kv(
             and evidence[c].get("status") == "verified"
         ]
         ut_breakdown_data["verified_codes"] = verified_codes
-        if verified_codes and ut_rows:
-            verified_rows = [r for r in ut_rows if r[0] in verified_codes]
-            if verified_rows:
-                top_ver = max(verified_rows, key=lambda r: r[1])
-                object_bonus_verified = top_ver[1]
-                ut_breakdown_data["applied_code_verified"] = top_ver[0]
-                ut_breakdown_data["applied_rate_verified"] = str(top_ver[1])
+        if verified_codes:
+            try:
+                muc_ver = await select_open_priority_rates(
+                    db, table=RATE_TABLE_OBJECT, academic_year=academic_year, codes=verified_codes
+                )
+                ma_ver = best_code_by_rate(muc_ver, verified_codes)
+                object_bonus_verified = muc_ver[ma_ver]
+                ut_breakdown_data["applied_code_verified"] = ma_ver
+                ut_breakdown_data["applied_rate_verified"] = str(muc_ver[ma_ver])
+            except PriorityRateNotConfigured as exc:
+                ut_thieu_muc.extend(exc.missing_codes)
+    if ut_thieu_muc:
+        priority_rate_warnings.append({
+            "code": PriorityRateNotConfigured.error_code,
+            "table": RATE_TABLE_OBJECT,
+            "academic_year": academic_year,
+            "missing_codes": list(dict.fromkeys(ut_thieu_muc)),
+        })
 
     total_bonus_potential = None
     if area_bonus is not None or object_bonus_potential is not None:
@@ -878,8 +809,15 @@ async def preview_priority_kv(
 
     # Phase E.4 — resolve citation pháp lý cho FE EngineResultCard hiển thị
     # "Căn cứ: <citation>". None nếu rule_applied=ambiguous_requires_manual.
+    # V3 — câu căn cứ + cảnh báo danh mục theo THÔNG TƯ ĐANG ÁP của hồ sơ (lưu, hoặc dự kiến
+    # theo hôm nay giờ VN khi hồ sơ chưa nộp/chưa đặt tay).
+    from datetime import datetime as _dt, timezone as _tz
+
+    from app.constants.admission_circular import circular_effective, kv_catalog_warning
     from app.services.priority_service import resolve_law_citation
-    rule_law_citation = resolve_law_citation(meta.get("rule_applied"))
+
+    thong_tu, _can_cu_thong_tu = circular_effective(profile.applicable_circular, _dt.now(_tz.utc))
+    rule_law_citation = resolve_law_citation(meta.get("rule_applied"), thong_tu)
 
     # Code review 2026-05-22 — denorm path_bonus_rule trong preview để FE
     # hiển thị cap consistent giữa draft (preview) và frozen (snapshot).
@@ -918,6 +856,9 @@ async def preview_priority_kv(
         total_bonus_potential=total_bonus_potential,
         rule_law_citation=rule_law_citation,
         path_bonus_rule=path_bonus_rule_dict,
+        applicable_circular_effective=thong_tu,
+        priority_catalog_warning=kv_catalog_warning(thong_tu),
+        priority_rate_warnings=priority_rate_warnings,
     )
 
 
@@ -932,35 +873,30 @@ async def preview_priority_kv(
     summary="Get UT (đối tượng ưu tiên) catalog for candidate picker",
 )
 async def get_priority_object_catalog(
-    academic_year: int = 2026,
+    academic_year: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
     """Return list of UT codes admin có configure cho year nhất định.
 
     Used by candidate FE PriorityTab (Phase E wireframe) for the
-    UT multi-select picker. Returns active rows only (effective window
-    includes today).
+    UT multi-select picker.
+
+    Owner Q10(a): ``academic_year`` BẮT BUỘC (thiếu ⇒ 422, không rơi về năm cứng); chỉ hàng ĐANG MỞ
+    (``effective_to IS NULL``), không lọc ngày — cùng định nghĩa với ``select_open_priority_rates``. Danh sách rỗng
+    chính là nhãn "chưa có danh mục năm …" (FE hiện câu ấy).
 
     Auth: any authenticated user (candidate/officer/admin/manager).
     Catalog is org-wide public info, not IDOR-scoped.
-
-    Defaults `academic_year=2026` per current mùa tuyển sinh.
     """
-    from datetime import date as _date
     from sqlalchemy import select as _sel
     from app.models.priority_config import PriorityObjectConfig
 
-    today = _date.today()
     stmt = (
         _sel(PriorityObjectConfig)
         .where(
             PriorityObjectConfig.academic_year == academic_year,
-            PriorityObjectConfig.effective_from <= today,
-        )
-        .where(
-            (PriorityObjectConfig.effective_to.is_(None))
-            | (PriorityObjectConfig.effective_to > today)
+            PriorityObjectConfig.effective_to.is_(None),
         )
         .order_by(
             PriorityObjectConfig.bonus_points.desc(),
@@ -1076,6 +1012,77 @@ async def override_priority_kv(
     # post-mutation to set permissions/available_actions/etc.
     from app.services import admission_service
 
+    await admission_service._populate_response_fields(
+        db, reloaded, current_user=current_user
+    )
+    return reloaded
+
+
+# =============================================================================
+# V3 — Đổi thông tư áp dụng của hồ sơ (manager/admin; owner T2c + Q3 + Q4)
+# =============================================================================
+
+
+@router.post(
+    "/{profile_id}/applicable-circular",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Đổi thông tư áp dụng của hồ sơ (manager/admin)",
+)
+async def change_applicable_circular(
+    profile_id: int,
+    payload: schemas.ApplicableCircularChangeRequest = Body(...),
+    db: AsyncSession = Depends(database.get_db),
+    profile: models.AdmissionProfile = Depends(get_admission_for_user),
+    current_user: models.User = CasbinAuth,
+):
+    """Ghi thông tư mới + một hàng nhật ký ``circular_changed`` + tăng version, trong MỘT giao dịch.
+
+    * Casbin (``v3circ20261011b``): manager/admin allow, accountant deny tường minh, officer không có dòng.
+    * IDOR: ``get_admission_for_user`` — sai phạm vi ⇒ 404.
+    * Service ``applicable_circular_service.change_applicable_circular``: version (409), vai trò/trạng thái theo
+      đúng ma trận của ấn định KV (``PermissionError`` ⇒ 403), lý do 20–500.
+    """
+    from fastapi import HTTPException
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from app.services import admission_service
+    from app.services.applicable_circular_service import (
+        change_applicable_circular as _change,
+    )
+
+    try:
+        await _change(
+            db,
+            profile,
+            circular=payload.circular,
+            reason=payload.reason,
+            expected_version=payload.version,
+            actor=current_user,
+            acknowledge_post_publish=payload.acknowledge_post_publish,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+    await db.commit()
+
+    log.info(
+        "admissions_v2.change_applicable_circular",
+        profile_id=profile_id,
+        actor_id=current_user.id,
+        circular=payload.circular,
+    )
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(
+            selectinload(models.AdmissionProfile.lead)
+            .selectinload(models.Lead.assigned_officer),
+            selectinload(models.AdmissionProfile.assigned_reviewer),
+        )
+    )
+    reloaded = (await db.execute(stmt)).scalar_one()
     await admission_service._populate_response_fields(
         db, reloaded, current_user=current_user
     )

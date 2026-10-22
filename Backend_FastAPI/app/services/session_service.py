@@ -8,6 +8,7 @@ Router → Service → Repository
 No direct SQL queries - all data access through SessionRepository.
 """
 from datetime import datetime, timezone
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 from typing import Optional, Callable, Coroutine, Any, Tuple
 PostCommitCallback = Callable[[], Coroutine[Any, Any, None]]
 
@@ -480,7 +481,7 @@ async def revoke_session(
             context={
                 "session_id": session_id,
                 "user_id": user_id,
-                "error": str(e),
+                "error": chu_loi_an_toan(e),  # V6 vòng 5b: try có thao tác CSDL
             }
         )
 

@@ -276,6 +276,58 @@ TRANSITION_PAIR_TO_EVENT: Dict[Tuple[str, str], SystemEvents] = {
 DEFERRED_ADMISSION_EVENTS: frozenset[str] = frozenset()
 
 
+def _dong_dau_lan_nop_dau(
+    db: AsyncSession,
+    profile: "AdmissionProfile",
+    *,
+    now: datetime,
+    actor: Optional["User"],
+) -> None:
+    """Ghi ngày nộp đầu và — nếu chưa ai đặt tay — thông tư mặc định theo ngày lịch giờ VN của ``now``.
+
+    Chỉ gọi từ ``transition()`` ở cạnh ``draft → submitted`` khi ``first_submitted_source`` còn NULL. Hồ sơ
+    ``missing_evidence`` (đã từng nộp, không còn chứng cứ ngày) KHÔNG đi vào đây: nguồn của nó khác NULL.
+
+    Thông tư đã đặt tay trước khi nộp được GIỮ — chỉ đóng dấu ngày, không sinh hàng ``circular_defaulted``.
+    """
+    from ..constants.admission_circular import (
+        CIRCULAR_CUTOVER_DATE,
+        CIRCULAR_SOURCE_DEFAULT,
+        FIRST_SUBMITTED_SOURCE_TRANSITION,
+        default_circular_for,
+        vn_calendar_date,
+    )
+
+    profile.first_submitted_at = now
+    profile.first_submitted_source = FIRST_SUBMITTED_SOURCE_TRANSITION
+    if getattr(profile, "applicable_circular", None) is not None:
+        return
+
+    from ..models.priority_audit import PriorityAuditLog
+
+    ngay_vn = vn_calendar_date(now)
+    thong_tu = default_circular_for(ngay_vn)
+    profile.applicable_circular = thong_tu
+    profile.applicable_circular_source = CIRCULAR_SOURCE_DEFAULT
+    profile.applicable_circular_set_at = now
+    # Người bấm nộp không CHỌN thông tư — đây là giá trị mặc định ⇒ không gán người đặt.
+    profile.applicable_circular_set_by_id = None
+    db.add(
+        PriorityAuditLog(
+            profile_id=profile.id,
+            action_type="circular_defaulted",
+            actor_id=actor.id if actor else None,
+            old_value=None,
+            new_value={"applicable_circular": thong_tu},
+            audit_metadata={
+                "first_submitted_at": now.isoformat(),
+                "first_submitted_date_vn": ngay_vn.isoformat(),
+                "cutover_date": CIRCULAR_CUTOVER_DATE.isoformat(),
+            },
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # transition() — THE single mutation point
 # ---------------------------------------------------------------------------
@@ -425,6 +477,19 @@ async def transition(
             **actor_fields,
         )
     )
+
+    # 3.6. V3 — đóng dấu LẦN NỘP ĐẦU + thông tư mặc định. Đây là tầng chủ sở
+    # hữu (nơi duy nhất ghi ``profile.status``); CHECK
+    # ``ck_admission_profile_post_submit_stamped`` ở production chỉ là lưới.
+    # Dùng CHÍNH ``now`` của hàng lịch sử ở trên — gọi đồng hồ lần hai thì
+    # hai giá trị có thể nằm hai bên nửa đêm 03-11.
+    if (
+        old_status == "draft"
+        and new_status == "submitted"
+        # getattr: stub ``SimpleNamespace`` của test Phase 3 không có cột V3; ORM thật luôn có thuộc tính.
+        and getattr(profile, "first_submitted_source", None) is None
+    ):
+        _dong_dau_lan_nop_dau(db, profile, now=now, actor=actor)
 
     # 4. Audit log — legacy ``entity_audit_log`` sink. Override flows
     # set ``skip_audit=True`` because ``audit_service.log_changes``

@@ -44,6 +44,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from .. import models
 from ..admission_metrics import admission_quota_skip_total
 from ..core.events import SystemEvents
+from ..core.log_redaction import chu_loi_an_toan, mo_ta_loi
 from ..core.admission_correction_constants import (
     SAFE_MINOR_CORRECTION_FIELDS,
     HARD_DENY_FIELDS,
@@ -2242,6 +2243,27 @@ def _missing_submit_required_data(profile: models.AdmissionProfile) -> List[str]
     return missing
 
 
+def _co_quyen_doi_thong_tu(status: str, *, is_admin: bool, is_manager: bool) -> bool:
+    """Cờ ``permissions.change_applicable_circular`` — CÙNG ma trận với service đổi thông tư (owner Q3).
+
+    Hai tập trạng thái lấy từ ``priority_override_service`` (import muộn: tránh vòng import lúc nạp module).
+    """
+    from .priority_override_service import _HARD_DENIED_STATUS, _POST_PUBLISH_STATUS
+
+    if status in _HARD_DENIED_STATUS:
+        return False
+    if status in _POST_PUBLISH_STATUS:
+        return is_admin
+    return is_admin or is_manager
+
+
+def _doi_thong_tu_can_xac_nhan(status: str) -> bool:
+    """Đổi thông tư ở trạng thái này có cần ``acknowledge_post_publish`` không (cùng tập với service)."""
+    from .priority_override_service import _POST_PUBLISH_STATUS
+
+    return status in _POST_PUBLISH_STATUS
+
+
 def _compute_frontend_fields(
     profile: models.AdmissionProfile,
     current_user: models.User,
@@ -2407,6 +2429,16 @@ def _compute_frontend_fields(
                 )
             )
         ),
+        # V3 — đổi thông tư áp dụng (owner Q3 "Như ấn định KV"): cấm ở các
+        # trạng thái rút/loại; sau công bố chỉ admin; còn lại manager + admin.
+        # Dùng CHÍNH hai tập của ``priority_override_service`` — cờ này và
+        # service ``applicable_circular_service`` cùng đọc một nguồn.
+        "change_applicable_circular": _co_quyen_doi_thong_tu(
+            status, is_admin=is_admin, is_manager=is_manager
+        ),
+        # Hồ sơ đã công bố ⇒ hộp thoại phải có ô xác nhận (service đòi
+        # ``acknowledge_post_publish``). Server nói, FE không tự suy trạng thái.
+        "change_applicable_circular_requires_ack": _doi_thong_tu_can_xac_nhan(status),
         # Q9 #07 Phase E.3 — UT evidence verify/reject (officer write-path).
         # Used by FE UtEvidenceTab (Step 8 officer-only). Service-layer
         # (priority_override_service._evidence_mutation_common_checks) refuses
@@ -3487,6 +3519,8 @@ async def _populate_priority_evidence_projections(
                 .where(
                     models.PriorityObjectConfig.academic_year == profile.academic_year,
                     models.PriorityObjectConfig.sub_code.in_(priority_codes),
+                    # Owner Q10(a): chỉ hàng ĐANG MỞ (cùng định nghĩa ``select_open_priority_rates``).
+                    models.PriorityObjectConfig.effective_to.is_(None),
                 )
             )
             catalog_by_code = {
@@ -4921,7 +4955,7 @@ async def create_profile(
     try:
         await db.flush()  # Get ID without committing (router commits)
     except IntegrityError as e:
-        log.error("IntegrityError during profile creation (race condition)", error=str(e))
+        log.error("IntegrityError during profile creation (race condition)", error=mo_ta_loi(e))
         raise ConflictError(f"Lead {lead_id} already has an admission profile (detected at DB layer)")
 
     # Initial state row — Phase 1 PLAN line 1067 service contract:
@@ -5769,7 +5803,6 @@ async def update_profile(
                 log.warning(
                     "Cannot update citizen_id: Duplicate in same academic year",
                     profile_id=profile.id,
-                    new_citizen_id=new_citizen_id,
                     academic_year=profile.academic_year,
                     duplicate_profile_id=duplicate_profile.id,
                 )
@@ -5790,7 +5823,6 @@ async def update_profile(
                 log.warning(
                     "Cannot update citizen_id: Already enrolled as student",
                     profile_id=profile.id,
-                    new_citizen_id=new_citizen_id,
                     student_code=existing_student.student_code,
                 )
                 raise DuplicateResourceError(
@@ -6019,7 +6051,7 @@ async def update_profile(
         log.error(
             "Update failed due to integrity error",
             profile_id=profile.id,
-            error=error_msg
+            error=mo_ta_loi(e),  # V6 vòng 4: error_msg chỉ dùng để phân loại, không ghi
         )
 
         if "citizen_id" in error_msg.lower():
@@ -6031,7 +6063,8 @@ async def update_profile(
                 "Dữ liệu trùng lặp (CCCD hoặc thông tin đã tồn tại)"
             )
         else:
-            raise ConflictError(f"Vi phạm ràng buộc dữ liệu: {error_msg}")
+            # V6 vòng 5: thông báo cho NGƯỜI DÙNG không mang DETAIL/hàng lỗi.
+            raise ConflictError(f"Vi phạm ràng buộc dữ liệu: {chu_loi_an_toan(e)}")
 
     # ── Đẩy identity (full_name/phone/email) xuống Lead qua module chung có
     # guard (parity update_lead). Đặt SAU flush profile ở trên: citizen_id của
@@ -6257,12 +6290,9 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
 # Empty/None snapshot → pass defensive (engine T1 freeze fail infra; warning
 # đã log ở freeze try/except). Mọi rule_applied khác / kv_resolved None →
 # block với BadRequest tiếng Việt + guidance.
-_KV_SUCCESS_RULE_APPLIED = frozenset({
-    "longest_duration",
-    "tiebreak_graduation_school",
-    "commune_lookup",
-    "manual_override",
-})
+# Một nguồn (C8b): tập và vị từ sống ở ``priority_service`` — T6 dùng CHUNG. Tên cũ giữ làm bí danh.
+from .priority_service import KV_SUCCESS_RULE_APPLIED as _KV_SUCCESS_RULE_APPLIED  # noqa: E402
+from .priority_service import kv_snapshot_resolved as _kv_snapshot_resolved  # noqa: E402
 
 
 def _kv_unresolved_error_message(
@@ -6300,8 +6330,8 @@ def _kv_unresolved_error_message(
     rule_applied = snapshot.get("rule_applied")
     kv_resolved = snapshot.get("kv_resolved")
 
-    # Pass: rule trong success whitelist VÀ kv_resolved có giá trị.
-    if rule_applied in _KV_SUCCESS_RULE_APPLIED and kv_resolved is not None:
+    # Pass: rule trong success whitelist VÀ kv_resolved có giá trị (vị từ chung với T6).
+    if _kv_snapshot_resolved(snapshot):
         return None
 
     # Otherwise build error message — fail-closed default.
@@ -7810,7 +7840,6 @@ async def submit_and_evaluate(
             "Admission profile submitted successfully",
             profile_id=profile_id,
             user_id=current_user.id if current_user else None,
-            citizen_id=profile.citizen_id,
         )
 
         # Đổi ngành: hook reprice HK1 fee sang ngành mới + báo kế toán. LUÔN clear
@@ -8394,7 +8423,11 @@ async def upload_priority_evidence_document(
         .where(
             models.PriorityObjectConfig.academic_year == profile.academic_year,
             models.PriorityObjectConfig.sub_code == sub_code,
+            # Hàng ĐANG MỞ (owner Q10(a)); không ``scalar_one_or_none`` — sau lần xoay mức đầu tiên (đóng hàng cũ
+            # + tạo hàng mới cùng mã cùng năm) có 2 hàng ⇒ MultipleResultsFound ⇒ 500 (review C8 R3).
+            models.PriorityObjectConfig.effective_to.is_(None),
         )
+        .limit(1)
     )
     if catalog_check.scalar_one_or_none() is None:
         raise BusinessRuleViolation(
@@ -9512,7 +9545,6 @@ async def _perform_enrollment_core(
         log.error(
             "CRITICAL: Citizen ID duplicate detected at enrollment time",
             profile_id=profile_id,
-            citizen_id=profile.citizen_id,
             existing_student_code=duplicate_student.student_code,
             existing_student_id=duplicate_student.id,
         )
@@ -9672,7 +9704,7 @@ async def _perform_enrollment_core(
         log.error(
             "Enrollment failed due to integrity error",
             profile_id=profile_id,
-            error=error_msg,
+            error=mo_ta_loi(e),  # V6 vòng 4: error_msg chỉ dùng để phân loại, không ghi
         )
 
         # Parse error message
@@ -9993,7 +10025,6 @@ async def approve_profile(
         profile_id=profile.id,
         approver_id=approver.id,
         previous_status=profile.status,
-        citizen_id=profile.citizen_id,
     )
 
     # Path C / Arch-3: paired notification bundle + commission callback.
@@ -11071,7 +11102,7 @@ async def record_application_fee_payment(
                 "Application fee ledger create hit integrity race; reconciling",
                 profile_id=profile_id,
                 receipt_key=receipt_key,
-                error=str(exc),
+                error=mo_ta_loi(exc),  # V6 vòng 4: không ghi DETAIL/tham số
             )
 
         await _assert_receipt_not_used_by_other_profile(

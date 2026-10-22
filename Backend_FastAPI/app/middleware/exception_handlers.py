@@ -25,6 +25,12 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.core.log_redaction import (
+    SMS_BEARER_PREFIXES,
+    mo_ta_loi,
+    redact_text,
+    thay_loi_csdl_trong_chuoi,
+)
 from app.utils.exceptions import (
     BaseAppException,
     ResourceNotFoundError,
@@ -55,24 +61,29 @@ from app.utils.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-# SMS bearer-code routes (PR-5): path chứa raw short-code → KHÔNG được log
-# nguyên (design §11.3). Redact phần code khi ghi log lỗi.
-_SMS_BEARER_PREFIXES = ("/r/", "/lp/", "/api/public/sms/landing/")
+# Đường dẫn mang bí mật (mã SMS PR-5 §11.3, token xác nhận nhập học,
+# magic-link) → KHÔNG được log nguyên. Mẫu che chỉ khai MỘT lần ở
+# `app/core/log_redaction.py` (V6) — đừng chép lại danh sách tiền tố ở đây.
+# Ghi chú: dòng log của các handler dưới đây còn đi qua `RedactingFilter` ở
+# handler gốc; `_redact_path` là lớp phụ cho trường `extra["path"]`.
 
 
 def _redact_path(path: str) -> str:
-    """Che raw bearer code trong path SMS trước khi log (tránh lộ code↔PII).
-    Giữ prefix để vẫn nhận diện route; thay phần code bằng '<redacted>'."""
-    for prefix in _SMS_BEARER_PREFIXES:
-        if path.startswith(prefix):
-            return prefix + "<redacted>"
-    return path
+    """Che phần bí mật trong path trước khi đưa vào log (giữ tiền tố route)."""
+    return redact_text(path)
+
+
+def _chi_tiet_an_toan(exc: BaseException) -> str:
+    """``exc.detail`` để GHI LOG: nếu ngoại lệ bọc một lỗi CSDL (``raise …(f"…{e}")
+    from e``) thì phần chữ đã nội suy từ lỗi CSDL được thay bằng tóm tắt (V6 vòng 4 —
+    ngừng ghi nội dung lỗi PostgreSQL). Phản hồi cho client KHÔNG đổi."""
+    return thay_loi_csdl_trong_chuoi(str(getattr(exc, "detail", "")), exc)
 
 
 def _is_sms_bearer_route(path: str) -> bool:
     """Route mang bearer code (path HOẶC body opt-out) → error 'input' lúc 422
     có thể chứa raw code → KHÔNG log input (§11.3)."""
-    return path.startswith(_SMS_BEARER_PREFIXES) or path == "/api/public/sms/opt-out"
+    return path.startswith(SMS_BEARER_PREFIXES) or path == "/api/public/sms/opt-out"
 
 
 # ============================================================================
@@ -101,7 +112,7 @@ async def base_app_exception_handler(
     """
     # Log the exception with context
     logger.warning(
-        f"{exc.__class__.__name__}: {exc.detail}",
+        f"{exc.__class__.__name__}: {_chi_tiet_an_toan(exc)}",
         extra={
             "error_code": exc.error_code,
             "context": exc.context,
@@ -144,7 +155,7 @@ async def resource_not_found_handler(
     Provides more specific logging for missing resources.
     """
     logger.info(
-        f"Resource not found: {exc.detail}",
+        f"Resource not found: {_chi_tiet_an_toan(exc)}",
         extra={
             "error_code": exc.error_code,
             "context": exc.context,
@@ -170,7 +181,7 @@ async def validation_error_handler(
     Includes validation context when available.
     """
     logger.info(
-        f"Validation error: {exc.detail}",
+        f"Validation error: {_chi_tiet_an_toan(exc)}",
         extra={
             "error_code": exc.error_code,
             "context": exc.context,
@@ -178,10 +189,11 @@ async def validation_error_handler(
         },
     )
 
-    response_data = {
-        "detail": exc.detail,
-        "error_code": exc.error_code,
-    }
+    # ``public_payload`` là hợp đồng API của lỗi (xem ``BaseAppException``): đổ vào TRƯỚC, ``detail``/``error_code``
+    # ghi đè SAU — cùng hàng rào với ``base_app_exception_handler``. Trước đây handler 400 bỏ mất payload.
+    response_data = dict(getattr(exc, "public_payload", None) or {})
+    response_data["detail"] = exc.detail
+    response_data["error_code"] = exc.error_code
 
     # Include validation errors if present
     if exc.context and "errors" in exc.context:
@@ -202,7 +214,7 @@ async def authentication_error_handler(
     Includes WWW-Authenticate header as required by HTTP spec.
     """
     logger.warning(
-        f"Authentication error: {exc.detail}",
+        f"Authentication error: {_chi_tiet_an_toan(exc)}",
         extra={
             "error_code": exc.error_code,
             "path": _redact_path(request.url.path),
@@ -228,7 +240,7 @@ async def service_error_handler(
     Logs full error details for debugging while returning safe message to client.
     """
     logger.error(
-        f"Service error: {exc.detail}",
+        f"Service error: {_chi_tiet_an_toan(exc)}",
         extra={
             "error_code": exc.error_code,
             "context": exc.context,
@@ -238,12 +250,14 @@ async def service_error_handler(
         exc_info=True,  # Include stack trace
     )
 
+    # ``public_payload`` (JSON thuần, người ném chủ động điền) đi ra như ở ``base_app_exception_handler``;
+    # ``context`` thì KHÔNG. ``detail``/``error_code`` ghi đè sau.
+    response_data = dict(getattr(exc, "public_payload", None) or {})
+    response_data["detail"] = exc.detail
+    response_data["error_code"] = exc.error_code
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "detail": exc.detail,
-            "error_code": exc.error_code,
-        },
+        content=response_data,
     )
 
 
@@ -319,7 +333,7 @@ async def http_exception_handler(
     This handles any HTTPException raised directly (e.g., from dependencies).
     """
     logger.warning(
-        f"HTTP {exc.status_code}: {exc.detail}",
+        f"HTTP {exc.status_code}: {_chi_tiet_an_toan(exc)}",
         extra={
             "status_code": exc.status_code,
             "path": _redact_path(request.url.path),
@@ -355,7 +369,8 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
     leaking implementation details.
     """
     logger.error(
-        f"Unhandled exception: {type(exc).__name__}: {str(exc)}",
+        # V6 vòng 4: KHÔNG str(exc) — lỗi CSDL mang giá trị (DETAIL, tham số) ⇒ tóm tắt.
+        f"Unhandled exception: {type(exc).__name__}: {mo_ta_loi(exc)}",
         extra={
             "path": _redact_path(request.url.path),
             "method": request.method,

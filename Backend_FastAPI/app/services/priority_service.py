@@ -137,61 +137,132 @@ async def calculate_priority_bonus(
     return area_bonus, object_bonus, snapshot
 
 
+# =============================================================================
+# Một nguồn: năm tuyển sinh, hàng mức đang mở, vị từ "KV đã phân giải"
+# =============================================================================
+#
+# Owner Q10(a): mức điểm chọn theo NĂM TUYỂN SINH của hồ sơ, hàng ĐANG MỞ (``effective_to IS NULL``), KHÔNG lọc
+# ngày nào (cả ngày nộp lẫn ngày chạy). Thiếu hàng ⇒ dừng có nhãn, không 0 điểm. Mọi nơi tra mức (T6, xem trước,
+# nhóm UT đã xác minh, danh mục) đi qua ``select_open_priority_rates``; không nơi nào tự so ``effective_from``.
+
+#: Tên bảng trong ``PriorityRateNotConfigured.table`` — cũng là tên bảng thật.
+RATE_TABLE_AREA = "priority_area_config"
+RATE_TABLE_OBJECT = "priority_object_config"
+
+#: ``rule_applied`` mà resolver phát ra khi phân giải KV THÀNH CÔNG. Whitelist: mã ngoài tập (kể cả mã tương lai,
+#: ``manual_override_unverified``, ``catalog_gap_*``) là CHƯA phân giải. Cổng nộp (T1) và T6 dùng chung qua
+#: ``kv_snapshot_resolved``.
+KV_SUCCESS_RULE_APPLIED = frozenset({
+    "longest_duration",
+    "tiebreak_graduation_school",
+    "commune_lookup",
+    "manual_override",
+})
+
+
+def kv_snapshot_resolved(snapshot: Optional[dict]) -> bool:
+    """KV đã phân giải ⇔ ``rule_applied`` thuộc whitelist VÀ ``kv_resolved`` có giá trị."""
+    s = snapshot if isinstance(snapshot, dict) else {}
+    return s.get("rule_applied") in KV_SUCCESS_RULE_APPLIED and s.get("kv_resolved") is not None
+
+
+def priority_academic_year(profile: Any) -> int:
+    """Năm tuyển sinh của hồ sơ — nguồn năm DUY NHẤT để tra mức (owner Q10(a)).
+
+    ``admission_profile.academic_year`` là NOT NULL (gán lúc tạo từ ``academic_info``), nên ``None`` chỉ xảy ra với
+    stub test. Không rơi về năm của máy hay một năm cứng.
+    """
+    nam = getattr(profile, "academic_year", None)
+    if nam is None:
+        raise ValueError(
+            f"admission_profile {getattr(profile, 'id', None)} không có academic_year — "
+            "không có năm để tra mức điểm ưu tiên (không rơi về năm khác)."
+        )
+    return int(nam)
+
+
+async def select_open_priority_rates(
+    db: "AsyncSession",
+    *,
+    table: str,
+    academic_year: int,
+    codes: list[str],
+) -> dict[str, Decimal]:
+    """Hàng mức ĐANG MỞ của ``academic_year`` cho từng mã trong ``codes``: ``{mã: điểm}``.
+
+    * "Đang mở" = ``effective_to IS NULL`` (khớp partial UNIQUE ``uq_priority_*_active`` của production). Hàng có
+      ``effective_to`` — kể cả ở tương lai — là đã đóng; hàng mở có ``effective_from`` ở tương lai áp ngay.
+    * Mã nào thiếu hàng ⇒ ``PriorityRateNotConfigured`` liệt kê MỌI mã thiếu.
+    * Hai hàng mở cùng mã (test DB dựng bằng ``create_all`` không có partial UNIQUE) ⇒ ``RuntimeError``: không chọn
+      bừa một hàng.
+    """
+    from app.models.priority_config import PriorityAreaConfig, PriorityObjectConfig
+    from app.utils.exceptions import PriorityRateNotConfigured
+
+    if table == RATE_TABLE_AREA:
+        model, cot_ma = PriorityAreaConfig, PriorityAreaConfig.area_code
+    elif table == RATE_TABLE_OBJECT:
+        model, cot_ma = PriorityObjectConfig, PriorityObjectConfig.sub_code
+    else:
+        raise ValueError(f"Bảng mức không hỗ trợ: {table!r}")
+
+    can = list(dict.fromkeys(codes))
+    if not can:
+        return {}
+    stmt = select(cot_ma, model.bonus_points).where(
+        model.academic_year == academic_year,
+        cot_ma.in_(can),
+        model.effective_to.is_(None),
+    )
+    rows = (await db.execute(stmt)).all()
+    muc: dict[str, Decimal] = {}
+    for ma, diem in rows:
+        if ma in muc:
+            raise RuntimeError(
+                f"{table}: hơn một hàng ĐANG MỞ cho mã {ma!r} năm {academic_year} — dữ liệu mức không nhất quán."
+            )
+        muc[ma] = Decimal(diem)
+    thieu = [m for m in can if m not in muc]
+    if thieu:
+        raise PriorityRateNotConfigured(table=table, academic_year=academic_year, missing_codes=thieu)
+    return muc
+
+
+def best_code_by_rate(muc: dict[str, Decimal], ordered_codes: list[str]) -> str:
+    """Mã có mức cao nhất trong ``muc`` (TT: chỉ hưởng MỘT diện cao nhất); hoà ⇒ mã đứng trước trong
+    ``ordered_codes``. Một nguồn cho T6, xem trước và nhóm UT đã xác minh."""
+    return max(muc, key=lambda c: (muc[c], -ordered_codes.index(c)))
+
+
 async def _resolve_area_bonus(
     db: "AsyncSession",
     profile: "AdmissionProfile",
     academic_year: int,
 ) -> tuple[Decimal, dict[str, Any]]:
-    """Lookup the KV rate for the profile's resolved area_code.
+    """Điểm KV của hồ sơ — chỉ gọi khi luật cộng điểm bật ``apply_area_bonus``.
 
-    v1.3 phase1_09: KV resolved code lives in
-    ``profile.priority_resolution_snapshot.kv_resolved`` (frozen at T1
-    submit + re-frozen at T6 engine, per Q-P3-11 snapshot pattern).
-    Falls back to legacy ``profile.high_school_kv_resolved`` getattr
-    for backward-compat during cutover transition (column DROPPED in
-    phase1_09 so getattr returns None on real ORM, but kept for test
-    SimpleNamespace stubs).
+    KV đọc từ ``priority_resolution_snapshot`` (đóng băng ở T1, đóng băng lại ở T6). KV chưa phân giải
+    (``kv_snapshot_resolved`` sai) ⇒ ``PriorityKvUnresolved`` — owner Q17(a): dừng có nhãn, KHÔNG 0 điểm. Thiếu hàng
+    mức ⇒ ``PriorityRateNotConfigured`` (owner Q10-kèm).
 
-    NULL → 0đ (graceful — candidate chưa fill diploma info).
-
-    Returns ``(bonus_points, meta_dict)`` where meta is merged into the
-    config_snapshot for audit.
+    Returns ``(bonus_points, meta_dict)`` where meta is merged into the config_snapshot for audit.
     """
-    from app.models.priority_config import PriorityAreaConfig
+    from app.utils.exceptions import PriorityKvUnresolved
 
-    # v1.3: read from snapshot.kv_resolved (canonical post-phase1_09)
-    snapshot = getattr(profile, "priority_resolution_snapshot", None) or {}
-    area_code = snapshot.get("kv_resolved") if isinstance(snapshot, dict) else None
-    # Backward-compat fallback for test stubs + legacy code paths
-    if not area_code:
-        area_code = getattr(profile, "high_school_kv_resolved", None)
-    meta: dict[str, Any] = {"area_code": area_code, "area_rate": None}
-    if not area_code:
-        return _ZERO, meta
-
-    stmt = (
-        select(PriorityAreaConfig.bonus_points)
-        .where(
-            PriorityAreaConfig.academic_year == academic_year,
-            PriorityAreaConfig.area_code == area_code,
-            PriorityAreaConfig.effective_from <= _today(),
+    snapshot = getattr(profile, "priority_resolution_snapshot", None)
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    if not kv_snapshot_resolved(snapshot):
+        raise PriorityKvUnresolved(
+            rule_applied=snapshot.get("rule_applied"),
+            reason=snapshot.get("reason"),
+            context={"profile_id": getattr(profile, "id", None)},
         )
-        .where(
-            (PriorityAreaConfig.effective_to.is_(None))
-            | (PriorityAreaConfig.effective_to > _today())
-        )
-        .limit(1)
+    area_code = snapshot["kv_resolved"]
+    muc = await select_open_priority_rates(
+        db, table=RATE_TABLE_AREA, academic_year=academic_year, codes=[area_code]
     )
-    result = await db.execute(stmt)
-    rate = result.scalar_one_or_none()
-    if rate is None:
-        # Admin chưa seed rate cho năm này → engine ghi 0đ (graceful);
-        # snapshot vẫn lưu area_code để audit thấy "candidate khai KV1
-        # nhưng rate chưa có config".
-        return _ZERO, meta
-
-    meta["area_rate"] = str(rate)
-    return Decimal(rate), meta
+    rate = muc[area_code]
+    return rate, {"area_code": area_code, "area_rate": str(rate)}
 
 
 async def _resolve_object_bonus(
@@ -208,10 +279,11 @@ async def _resolve_object_bonus(
     ``profile.priority_object_evidence[code].status == 'verified'``.
     Missing key / 'pending' / 'rejected' → 0 contribution.
 
+    Thiếu hàng mức ĐANG MỞ cho BẤT KỲ mã đã xác minh nào ⇒ ``PriorityRateNotConfigured`` (owner Q10-kèm): không lấy
+    max trên các mã còn lại.
+
     Returns ``(bonus_points, meta_dict)``.
     """
-    from app.models.priority_config import PriorityObjectConfig
-
     codes = getattr(profile, "priority_object_codes", None) or []
     evidence = getattr(profile, "priority_object_evidence", None) or {}
 
@@ -228,40 +300,16 @@ async def _resolve_object_bonus(
     if not verified_codes:
         return _ZERO, meta
 
-    stmt = (
-        select(
-            PriorityObjectConfig.sub_code,
-            PriorityObjectConfig.bonus_points,
-        )
-        .where(
-            PriorityObjectConfig.academic_year == academic_year,
-            PriorityObjectConfig.sub_code.in_(verified_codes),
-            PriorityObjectConfig.effective_from <= _today(),
-        )
-        .where(
-            (PriorityObjectConfig.effective_to.is_(None))
-            | (PriorityObjectConfig.effective_to > _today())
-        )
+    muc = await select_open_priority_rates(
+        db, table=RATE_TABLE_OBJECT, academic_year=academic_year, codes=verified_codes
     )
-    result = await db.execute(stmt)
-    rows = result.all()
-    if not rows:
-        return _ZERO, meta
-
     # Pick max bonus + record which sub_code won (audit "candidate had
     # UT1+UT2 verified, engine applied UT1 because higher rate").
-    best_code, best_rate = max(rows, key=lambda r: r[1])
+    best_code = best_code_by_rate(muc, verified_codes)
+    best_rate = muc[best_code]
     meta["object_max_code"] = best_code
     meta["object_rate"] = str(best_rate)
-    return Decimal(best_rate), meta
-
-
-def _today():
-    """date.today() — extracted so tests can monkeypatch a fixed value
-    without freezing the whole datetime module."""
-    from datetime import date
-
-    return date.today()
+    return best_rate, meta
 
 
 # =============================================================================
@@ -514,7 +562,7 @@ async def resolve_kv_for_profile(
 
     Fail-closed: tuyệt đối KHÔNG silent 0đ. Khi catalog/data thiếu, trả
     rule_applied đặc tả lỗi:
-      - "catalog_gap_school"      — vn_school_kv_assignment thiếu row
+      - "catalog_gap_school"      — vn_school_kv_assignment thiếu row (mọi năm, hoặc MỘT PHẦN năm — Q19(d))
       - "catalog_gap_commune"     — vn_commune_area_map thiếu commune_code
       - "address_not_normalized"  — profile thiếu permanent_commune_code
       - "ambiguous_requires_manual" — tied graduation
@@ -550,9 +598,9 @@ async def resolve_kv_for_profile(
     academic_history = getattr(profile, "academic_history", None) or []
     # Temporal KV: resolve commune KV as-of the profile's admission year so a
     # mid-year KV reclassification doesn't silently mis-score. Mirrors the
-    # academic_year semantics of lookup_kv_for_school_year. Fallback to current
-    # year for drafts without academic_year set.
-    kv_year = getattr(profile, "academic_year", None) or date.today().year
+    # academic_year semantics of lookup_kv_for_school_year. Năm tuyển sinh của
+    # hồ sơ luôn có (NOT NULL) — không rơi về năm của máy (owner Q10(a)).
+    kv_year = priority_academic_year(profile)
 
     basis, basis_reason = _derive_kv_basis_level(
         cultural=cultural,
@@ -720,6 +768,23 @@ async def resolve_kv_for_profile(
             },
         )
 
+    if missing_lookups:
+        # Owner Q19(d)(ii): MỘT PHẦN năm/trường thiếu danh mục KV ⇒ DỪNG có nhãn, không tính KV từ phần còn lại.
+        # Trước đây bỏ các năm thiếu rồi vẫn chọn KV thắng (``partial_catalog_missing``) — KV thắng có thể chỉ do
+        # năm của trường thiếu danh mục bị loại khỏi phép đếm. Chặn Ở ĐÂY (nhánh resolver), không ở tầng gọi:
+        # nhìn từ ngoài, ca này ra một KV hợp lệ nên guard "không xác định được KV" không thấy.
+        return None, _meta_base(
+            rule_applied="catalog_gap_school",
+            pathway=pathway,
+            requires_manual_override=True,
+            reason="some_school_lookups_failed",
+            breakdown={
+                "entries": breakdown_entries,
+                "kv_totals": kv_years,
+                "missing_lookups": missing_lookups,
+            },
+        )
+
     max_yrs = max(kv_years.values())
     winners = [kv for kv, y in kv_years.items() if y == max_yrs]
 
@@ -728,10 +793,6 @@ async def resolve_kv_for_profile(
         "kv_totals": kv_years,
         "winner_years": max_yrs,
     }
-    if missing_lookups:
-        # Partial catalog gap — engine vẫn resolve theo entries có data,
-        # nhưng audit ghi lại để admin biết catalog cần seed.
-        breakdown_base["partial_catalog_missing"] = missing_lookups
 
     if len(winners) == 1:
         return winners[0], _meta_base(
@@ -1276,58 +1337,77 @@ def derive_target_level_and_type(path: "AdmissionPath") -> tuple[str, str]:
           .selectinload(OfferingAcademicInfo.offering)
           .selectinload(ProgramOffering.offering_type_obj)  # FK config_offering_type
     """
-    from ..utils.exceptions import BusinessRuleViolation
+    from ..utils.exceptions import TargetLevelConfigGap
 
     _GDNN_TARGET_LEVELS = frozenset({"cao_dang", "trung_cap", "so_cap"})
 
+    # Khoá VẮNG trong ``__dict__`` = quan hệ CHƯA NẠP (lỗi mã của nơi gọi); khoá CÓ mà giá trị None = FK NULL
+    # (cấu hình thiếu). Hai ca khác bản chất ⇒ ``gap_kind`` khác nhau (review C8 R2).
     academic_info = path.__dict__.get("academic_info")
     if academic_info is None:
-        raise BusinessRuleViolation(
+        raise TargetLevelConfigGap(
             "CONFIG_GAP_TARGET_LEVEL: AdmissionPath thiếu academic_info "
-            "(relation chưa eager-load hoặc DB không nhất quán)."
+            "(relation chưa eager-load hoặc DB không nhất quán).",
+            gap_kind="relation_not_loaded",
         )
     offering = academic_info.__dict__.get("offering")
     if offering is None:
-        raise BusinessRuleViolation(
-            "CONFIG_GAP_TARGET_LEVEL: OfferingAcademicInfo thiếu offering."
+        raise TargetLevelConfigGap(
+            "CONFIG_GAP_TARGET_LEVEL: OfferingAcademicInfo thiếu offering.",
+            gap_kind="relation_not_loaded",
         )
     program = offering.__dict__.get("program")
     if program is None:
-        raise BusinessRuleViolation(
-            "CONFIG_GAP_TARGET_LEVEL: ProgramOffering thiếu program (MajorProgram)."
+        raise TargetLevelConfigGap(
+            "CONFIG_GAP_TARGET_LEVEL: ProgramOffering thiếu program (MajorProgram).",
+            gap_kind="relation_not_loaded",
         )
 
     # degree_level — model relationship `MajorProgram.degree_level_ref` →
     # ConfigDegreeLevel(.code). Eager-load via selectinload(program.degree_level_ref).
+    if "degree_level_ref" not in program.__dict__:
+        raise TargetLevelConfigGap(
+            "CONFIG_GAP_TARGET_LEVEL: MajorProgram.degree_level_ref chưa eager-load.",
+            gap_kind="relation_not_loaded",
+        )
     degree_level_obj = program.__dict__.get("degree_level_ref")
     target_code: Optional[str] = (
         getattr(degree_level_obj, "code", None) if degree_level_obj else None
     )
     if target_code is None:
-        raise BusinessRuleViolation(
+        raise TargetLevelConfigGap(
             "CONFIG_GAP_TARGET_LEVEL: MajorProgram chưa gán degree_level_id "
             "(config_degree_level FK NULL). Vui lòng cấu hình bậc đào tạo "
-            "trước khi cho hồ sơ submit."
+            "trước khi cho hồ sơ submit.",
+            gap_kind="degree_level_missing",
         )
     if target_code not in _GDNN_TARGET_LEVELS:
-        raise BusinessRuleViolation(
+        raise TargetLevelConfigGap(
             f"CONFIG_GAP_TARGET_LEVEL: bậc đào tạo '{target_code}' nằm ngoài "
             f"phạm vi GDNN ({sorted(_GDNN_TARGET_LEVELS)}). Phase E.4 chỉ "
-            f"hỗ trợ CĐ/TC/SC."
+            f"hỗ trợ CĐ/TC/SC.",
+            gap_kind="level_out_of_scope",
+            level_code=target_code,
         )
 
     # offering_type — model relationship `ProgramOffering.offering_type_config`
     # → ConfigOfferingType(.code). Eager-load via
     # selectinload(offering.offering_type_config).
+    if "offering_type_config" not in offering.__dict__:
+        raise TargetLevelConfigGap(
+            "CONFIG_GAP_TARGET_LEVEL: ProgramOffering.offering_type_config chưa eager-load.",
+            gap_kind="relation_not_loaded",
+        )
     offering_type_obj = offering.__dict__.get("offering_type_config")
     admission_type: Optional[str] = (
         getattr(offering_type_obj, "code", None) if offering_type_obj else None
     )
     if admission_type is None:
-        raise BusinessRuleViolation(
+        raise TargetLevelConfigGap(
             "CONFIG_GAP_TARGET_LEVEL: ProgramOffering chưa gán offering_type_id "
             "(config_offering_type FK NULL). Vui lòng cấu hình hệ đào tạo "
-            "(chính quy / liên thông / VLVH...) trước khi cho hồ sơ submit."
+            "(chính quy / liên thông / VLVH...) trước khi cho hồ sơ submit.",
+            gap_kind="offering_type_missing",
         )
 
     return target_code, admission_type

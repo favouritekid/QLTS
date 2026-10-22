@@ -52,9 +52,17 @@ async def pr3a_seed(seed_lead_dependencies: dict) -> dict:
     async with AsyncSessionLocal() as s:
         async with s.begin():
             khoa = await khoa_duy_nhat(s)
+            # Ngành ĐỦ cấu hình trình độ/loại hình: từ owner Q20(a) thiếu cấu hình ⇒ T6 DỪNG (503), không còn ghi
+            # "trượt" rồi trả 200 như các ca dưới đây từng dựa vào.
+            from tests.fixtures.builders import ensure_target_level_config
+
+            loai_hinh, trinh_do = await ensure_target_level_config(s)
+            nganh = await s.get(models.MajorProgram, seed_lead_dependencies["major_program_id"])
+            nganh.degree_level_id = trinh_do.id
             offering = models.ProgramOffering(
                 program_id=seed_lead_dependencies["major_program_id"],
                 offering_type="full_time",
+                offering_type_id=loai_hinh.id,
                 duration_semesters=8,
             )
             s.add(offering)
@@ -2256,23 +2264,13 @@ async def test_cascade_waitlist_when_path_quota_exhausted(
     # Load profile via direct service call (engine cascade) — eager-load
     # chain mirror PR-3C router signature.
     from sqlalchemy import select as sa_select
-    from sqlalchemy.orm import selectinload as sa_sl
     async with AsyncSessionLocal() as s:
         stmt = (
             sa_select(models.AdmissionProfile)
             .where(models.AdmissionProfile.id == seed["profile_id"])
-            .options(
-                sa_sl(models.AdmissionProfile.lead),
-                sa_sl(models.AdmissionProfile.choices)
-                .selectinload(models.AdmissionProfileChoice.admission_path)
-                .selectinload(models.AdmissionPath.academic_info),
-                sa_sl(models.AdmissionProfile.choices)
-                .selectinload(models.AdmissionProfileChoice.admission_path)
-                .selectinload(models.AdmissionPath.admission_method),
-                sa_sl(models.AdmissionProfile.choices)
-                .selectinload(models.AdmissionProfileChoice.admission_path)
-                .selectinload(models.AdmissionPath.admission_round),
-            )
+            # ĐÚNG chuỗi của router publish-result (một nguồn): T6 cần chuỗi trình độ/loại hình, thiếu ⇒
+            # ``T6ChainNotLoaded`` (review C8 R2).
+            .options(*engine_mod.t6_profile_load_options())
         )
         profile = (await s.execute(stmt)).scalar_one()
 
@@ -2331,23 +2329,13 @@ async def test_cascade_admits_when_no_quota_pressure(
     monkeypatch.setattr(engine_mod, "_evaluate_single_choice", _force_admit)
 
     from sqlalchemy import select as sa_select
-    from sqlalchemy.orm import selectinload as sa_sl
     async with AsyncSessionLocal() as s:
         stmt = (
             sa_select(models.AdmissionProfile)
             .where(models.AdmissionProfile.id == seed["profile_id"])
-            .options(
-                sa_sl(models.AdmissionProfile.lead),
-                sa_sl(models.AdmissionProfile.choices)
-                .selectinload(models.AdmissionProfileChoice.admission_path)
-                .selectinload(models.AdmissionPath.academic_info),
-                sa_sl(models.AdmissionProfile.choices)
-                .selectinload(models.AdmissionProfileChoice.admission_path)
-                .selectinload(models.AdmissionPath.admission_method),
-                sa_sl(models.AdmissionProfile.choices)
-                .selectinload(models.AdmissionProfileChoice.admission_path)
-                .selectinload(models.AdmissionPath.admission_round),
-            )
+            # ĐÚNG chuỗi của router publish-result (một nguồn): T6 cần chuỗi trình độ/loại hình, thiếu ⇒
+            # ``T6ChainNotLoaded`` (review C8 R2).
+            .options(*engine_mod.t6_profile_load_options())
         )
         profile = (await s.execute(stmt)).scalar_one()
         result, _cb = await engine_mod.evaluate_cascade(s, profile)

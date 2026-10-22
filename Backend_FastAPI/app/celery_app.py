@@ -30,8 +30,26 @@ import tempfile
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import setup_logging
 
 from .config import settings
+
+
+# =============================================================================
+# LOGGING (V6) — worker và beat nạp CÙNG cấu hình log + bộ che với web
+# =============================================================================
+# `celery -A app.celery_app worker|beat` chỉ nạp module NÀY (không nạp
+# `app.main`) ⇒ trước V6 worker/beat không có `structlog.configure` lẫn bộ che:
+# structlog chạy mặc định (in thẳng stdout), CCCD/token/`redis_url=` đi ra
+# nguyên văn. Cả worker (`Worker.setup_logging`) lẫn beat (`Beat.setup_logging`)
+# đều đi qua `app.log.setup()` → phát `setup_logging`. Có receiver thì Celery
+# KHÔNG tự cấu hình root logger nữa ⇒ handler gốc có `RedactingFilter` của ta là
+# cửa ra duy nhất. Giữ khuôn dòng của Celery (`format`) để log còn giờ/mức.
+@setup_logging.connect
+def _cau_hinh_log_celery(loglevel=None, format=None, **_kwargs):  # noqa: A002
+    from .core.log_redaction import configure_logging
+
+    configure_logging("celery", loglevel=loglevel, fmt=format)
 
 # =============================================================================
 # CELERY APPLICATION INSTANCE

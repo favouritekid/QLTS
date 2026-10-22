@@ -56,7 +56,11 @@ TRANG_THAI=$(docker inspect -f '{{.State.Status}}' "$CT" 2>/dev/null) \
 [ "$TRANG_THAI" = "running" ] \
     || loi "container '$CT' đang ở trạng thái '$TRANG_THAI', không phải running"
 
-MANG=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$CT" | head -1)
+# Không `| head -1`: dưới `pipefail`, đầu đọc thoát sớm làm đầu ghi nhận SIGPIPE
+# và cả pipeline thành lỗi — lấy dòng đầu bằng mở rộng tham số, không pipeline.
+MANG_TAT_CA=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' "$CT") \
+    || MANG_TAT_CA=""
+MANG="${MANG_TAT_CA%%$'\n'*}"
 IP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$MANG\").IPAddress}}" "$CT")
 # `{{.Image}}`, KHÔNG `{{.Config.Image}}`. Cái sau trả về TÊN:TAG mà container
 # được yêu cầu chạy — một nhãn DI ĐỘNG: `nginx` và `nginx-candidate` dùng chung
@@ -83,6 +87,7 @@ log "đo '$CT' tại $IP trên mạng '$MANG' (domain=$DOMAIN, strict_tls=$STRIC
 # qua những thứ mà client thật không hề với tới được.
 # Dùng lại đúng image của container đang đo: chắc chắn có sẵn, có curl thật
 # (nginx:1.27-alpine đóng gói curl 8.12 + OpenSSL), không phải tải thêm gì.
+KQ_CHUC_NANG=0
 docker run --rm --network "$MANG" \
     -e DOMAIN="$DOMAIN" -e IP="$IP" -e STRICT="$STRICT" \
     --entrypoint sh "$IMAGE" -c '
@@ -153,4 +158,124 @@ if [ "$SO_HONG" -eq 0 ]; then
 fi
 echo "HỎNG — $SO_HONG phép kiểm không đạt."
 exit 1
-'
+' || KQ_CHUC_NANG=$?
+
+# --- Đầu dò TOKEN trong access log (V6) -------------------------------------
+# BA đầu dò ĐỘC LẬP — mỗi đầu dò MỘT request, MỘT User-Agent mang nonce riêng,
+# MỘT token GIẢ riêng, đặt ở đúng MỘT chỗ mà access log ghi lại:
+#   đường dẫn — `GET /confirm/<giả>`
+#   query     — `GET /login?token=<giả>&refresh_token=<giả>2`
+#   Referer   — `GET /login`, Referer `…/magic-link/withdraw/<giả>?token=<giả>2`
+# Gộp chung một request thì chỗ được che này có thể "che hộ" chỗ kia (`map
+# $request` cắt từ dấu hiệu đầu tiên nuốt luôn query đứng sau) — tách ra để MỖI
+# vị trí tự chứng minh. Mỗi đầu dò HAI vế, thiếu vế nào cũng ĐỎ:
+#   (a) VẪN có dòng log cho request ấy. `access_log off` cũng cho "0 dòng lộ",
+#       nên chỉ đếm "không lộ" là một phép kiểm xanh vô nghĩa;
+#   (b) KHÔNG đâu trong access log chứa token giả của nó, và dòng ấy mang
+#       dấu `<redacted>`.
+# Nguồn `docker logs` phải THÀNH CÔNG: mã thoát của nó giữ TÁCH khỏi bộ lọc.
+# Bản trước viết `docker logs … | grep … || true` — `|| true` nuốt mã thoát
+# nguồn, nên docker in một dòng đã che rồi thoát lỗi vẫn ra ĐẠT (F36, cùng
+# kiểu F29). Nguồn lỗi ⇒ ĐỎ dù có đầu ra.
+# CHỈ in dòng của chính đầu dò (dữ liệu giả) — log của container đang phục vụ
+# chứa traffic thật, không bao giờ in ra. `docker logs` lấy stdout = access log
+# của ảnh nginx chính thức; stderr (`error_log`) bị bỏ qua — phần dư đã biết.
+NONCE="$(date +%s)$$"
+GIA_P="qltsgiap${NONCE}x"
+GIA_Q="qltsgiaq${NONCE}x"
+GIA_R="qltsgiar${NONCE}x"
+UA_P="qlts-verify-dau-do-token-p/${NONCE}"
+UA_Q="qlts-verify-dau-do-token-q/${NONCE}"
+UA_R="qlts-verify-dau-do-token-r/${NONCE}"
+docker run --rm --network "$MANG" \
+    -e DOMAIN="$DOMAIN" -e IP="$IP" \
+    -e GIA_P="$GIA_P" -e GIA_Q="$GIA_Q" -e GIA_R="$GIA_R" \
+    -e UA_P="$UA_P" -e UA_Q="$UA_Q" -e UA_R="$UA_R" \
+    --entrypoint sh "$IMAGE" -c '
+C="curl --silent --output /dev/null --max-time 8 --retry 0 --insecure --resolve $DOMAIN:443:$IP"
+$C --user-agent "$UA_P" "https://$DOMAIN/confirm/${GIA_P}" || true
+$C --user-agent "$UA_Q" "https://$DOMAIN/login?token=${GIA_Q}&refresh_token=${GIA_Q}2" || true
+$C --user-agent "$UA_R" --referer "https://$DOMAIN/magic-link/withdraw/${GIA_R}?token=${GIA_R}2" \
+    "https://$DOMAIN/login" || true
+' >/dev/null 2>&1 || true
+
+# tim <mẫu> <văn bản> — 0: CÓ · 1: KHÔNG · 2: LỖI tìm kiếm.
+# Đọc HẾT đầu vào (here-string + `grep -c`), KHÔNG `printf … | grep -q`: dưới
+# `set -o pipefail`, `grep -q` thoát ngay ở dòng khớp đầu tiên, `printf` phía
+# trước nhận SIGPIPE (141) và cả pipeline thành "không khớp" — token lộ SỚM
+# trong một access log dài bị báo là KHÔNG lộ (F36 vòng 5). "Không khớp" chỉ
+# được nhận khi grep đã chạy, đọc hết và ĐẾM 0; mọi trường hợp khác (grep hỏng
+# rc ≥ 2, here-string không tạo được, số đếm lạ) là LỖI.
+tim() {
+    local n rc=0
+    n="$(grep -cF -- "$1" <<<"$2")" || rc=$?
+    case "$rc:$n" in
+        0:[1-9]*) return 0 ;;
+        1:0) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
+co_du_ba_dong() {
+    tim "$UA_P" "$NHAT_KY" && tim "$UA_Q" "$NHAT_KY" && tim "$UA_R" "$NHAT_KY"
+}
+NHAT_KY=""
+NHAT_KY_RC=0
+for _ in 1 2 3 4 5; do
+    NHAT_KY_RC=0
+    NHAT_KY="$(docker logs --since 10m "$CT" 2>/dev/null)" || NHAT_KY_RC=$?
+    if [ "$NHAT_KY_RC" -eq 0 ] && co_du_ba_dong; then
+        break
+    fi
+    sleep 1
+done
+
+kiem_dau_do() {  # kiem_dau_do <tên> <User-Agent> <token giả> — 0 = đạt
+    local ten="$1" ua="$2" gia="$3" dong r=0
+    # Lọc dòng của đầu dò: grep KHÔNG -q nên đọc hết; rc 1 (0 dòng) là KẾT QUẢ,
+    # rc ≥ 2 là LỖI — tách riêng, không gộp vào "không thấy".
+    dong="$(grep -F -- "$ua" <<<"$NHAT_KY")" || r=$?
+    if [ "$r" -ge 2 ]; then
+        echo "  ✗ đầu dò token $ten: LỖI khi lọc access log (grep rc=$r)"
+        return 1
+    fi
+    if [ -z "$dong" ]; then
+        echo "  ✗ đầu dò token $ten: KHÔNG thấy dòng access log của request đầu dò (access_log off? log không ra stdout?)"
+        return 1
+    fi
+    r=0; tim "$gia" "$NHAT_KY" || r=$?
+    if [ "$r" -eq 0 ]; then
+        echo "  ✗ đầu dò token $ten: access log LỘ token giả:"
+        printf '%s\n' "$dong" | sed 's/^/      /'
+        return 1
+    elif [ "$r" -ne 1 ]; then
+        echo "  ✗ đầu dò token $ten: LỖI khi tìm token giả trong access log — không kết luận được là không lộ"
+        return 1
+    fi
+    r=0; tim "<redacted>" "$dong" || r=$?
+    if [ "$r" -eq 1 ]; then
+        echo "  ✗ đầu dò token $ten: dòng log của đầu dò không mang dấu <redacted> (khuôn log đã đổi?)"
+        return 1
+    elif [ "$r" -ne 0 ]; then
+        echo "  ✗ đầu dò token $ten: LỖI khi tìm dấu <redacted> trong dòng của đầu dò"
+        return 1
+    fi
+    echo "  ✓ đầu dò token $ten: có dòng access log, đã che, không lộ token giả"
+    return 0
+}
+
+KQ_TOKEN=0
+echo "--- đầu dò token trong access log ---"
+if [ "$NHAT_KY_RC" -ne 0 ]; then
+    echo "  ✗ đầu dò token: KHÔNG đọc được access log — docker logs rc=$NHAT_KY_RC (nguồn lỗi ⇒ ĐỎ dù có đầu ra)"
+    KQ_TOKEN=1
+fi
+kiem_dau_do "đường dẫn" "$UA_P" "$GIA_P" || KQ_TOKEN=1
+kiem_dau_do "query" "$UA_Q" "$GIA_Q" || KQ_TOKEN=1
+kiem_dau_do "Referer" "$UA_R" "$GIA_R" || KQ_TOKEN=1
+
+if [ "$KQ_CHUC_NANG" -eq 0 ] && [ "$KQ_TOKEN" -eq 0 ]; then
+    exit 0
+fi
+echo "HỎNG — phép kiểm chức năng rc=$KQ_CHUC_NANG, đầu dò token rc=$KQ_TOKEN."
+exit 1

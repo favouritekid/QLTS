@@ -36,6 +36,37 @@ const STATE_BADGES: Record<PriorityBannerState, { icon: string; label: string; t
   override:  { icon: "🔧", label: "Cán bộ ấn định",        tone: "text-purple-700 bg-purple-50 border-purple-200" },
 }
 
+/** Pure helper — câu cảnh báo "chưa có mức" (C8, owner Q10-kèm). BE quyết định
+ * thiếu hay không; FE chỉ diễn đạt. Nguồn: `preview.priority_rate_warnings`
+ * (xem trước) hoặc `ut_verified_bucket.rate_status = "not_configured"` (nhóm UT
+ * đã xác minh lưu sau khi xác minh minh chứng). Exported for tests.
+ */
+export function deriveRateWarnings(
+  profile: Pick<AdmissionProfileResponse, "academic_year" | "priority_resolution_snapshot">,
+  preview?: PreviewPriorityKvResponse | null,
+): string[] {
+  const cau: string[] = []
+  for (const w of preview?.priority_rate_warnings ?? []) {
+    const loai = w.table === "priority_area_config" ? "khu vực" : "đối tượng"
+    cau.push(
+      `Chưa có mức điểm ưu tiên đang áp dụng cho ${loai} ${w.missing_codes.join(", ")} năm ${w.academic_year}`,
+    )
+  }
+  if (cau.length === 0) {
+    const bucket = (profile.priority_resolution_snapshot ?? {}).ut_verified_bucket
+    if (bucket && typeof bucket === "object") {
+      const b = bucket as { rate_status?: unknown; missing_codes?: unknown }
+      if (b.rate_status === "not_configured") {
+        const ma = Array.isArray(b.missing_codes) ? b.missing_codes.join(", ") : ""
+        cau.push(
+          `Chưa có mức điểm ưu tiên đang áp dụng cho đối tượng ${ma} năm ${profile.academic_year ?? "?"}`,
+        )
+      }
+    }
+  }
+  return cau
+}
+
 /** Pure helper — derive banner state from profile + live preview.
  *
  * Precedence (per PR-3 audit cycle P1 fix):
@@ -177,8 +208,10 @@ export function PriorityHeaderBanner({ profile, preview }: PriorityHeaderBannerP
   })()
 
   const tongTamTinh = (areaBonus ?? 0) + (verifiedBucket?.rate ?? 0)
+  const canhBaoMuc = deriveRateWarnings(profile, preview)
 
   return (
+    <>
     <div
       data-testid="priority-header-banner"
       data-state={state}
@@ -206,14 +239,30 @@ export function PriorityHeaderBanner({ profile, preview }: PriorityHeaderBannerP
         </>
       )}
       <span className="opacity-60">=</span>
-      <span className="tabular-nums font-bold">
-        +{tongTamTinh.toFixed(2)}đ
-      </span>
+      {canhBaoMuc.length > 0 ? (
+        <span className="font-bold">chưa đủ mức</span>
+      ) : (
+        <span className="tabular-nums font-bold">
+          +{tongTamTinh.toFixed(2)}đ
+        </span>
+      )}
       {pendingCodes.length > 0 && (
         <span className="ml-auto text-xs font-normal opacity-80">
           {pendingCodes.map((c) => `UT${c}`).join(", ")} chờ duyệt
         </span>
       )}
     </div>
+    {canhBaoMuc.length > 0 && (
+      <ul
+        data-testid="priority-rate-warning"
+        role="alert"
+        className="mt-1 list-disc rounded-md border border-amber-200 bg-amber-50 px-6 py-1.5 text-xs text-amber-800"
+      >
+        {canhBaoMuc.map((c) => (
+          <li key={c}>{c} — cấu hình mức trước khi công bố kết quả.</li>
+        ))}
+      </ul>
+    )}
+    </>
   )
 }

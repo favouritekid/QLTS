@@ -31,6 +31,7 @@ import type {
 
 // Phase 7: Architecture Standards
 import { handleApiError, type ApiErrorResponse } from "@/lib/error-handler"
+import { t6PublishStopDetail } from "@/lib/api/error-codes"
 import { getStatusConfig } from "@/lib/status-config"
 
 // ============================================
@@ -529,6 +530,14 @@ export function usePublishAdmissionResult(id: number) {
       queryClient.invalidateQueries({ queryKey: [...admissionsKeys.all, "stats"] })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
+      // T6 dừng có nhãn (thiếu mức/KV/năm/cấu hình): hiện `detail` của BE ở MỌI
+      // status — handleApiError gộp 500/503 thành "Lỗi hệ thống, thử lại sau",
+      // sai lời khuyên cho ca thiếu cấu hình.
+      const stopDetail = t6PublishStopDetail(error.response)
+      if (stopDetail) {
+        toast.error("Chưa công bố kết quả", { description: stopDetail })
+        return
+      }
       handleApiError(error, {
         queryClient,
         invalidateKeys: [[...admissionsKeys.detail(id)]],
