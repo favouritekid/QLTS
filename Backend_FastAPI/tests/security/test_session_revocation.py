@@ -12,6 +12,7 @@ import logging
 import uuid
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import jwt
@@ -27,6 +28,7 @@ from user_agents import parse as parse_user_agent
 from app import database as db_module
 from app import models, security, socket_manager
 from app.config import settings
+from app.core import deps
 from app.database import AsyncSessionLocal
 from app.services import session_service
 from .socket_test_helpers import assert_redis_sach, get_user_auth
@@ -2779,3 +2781,393 @@ async def test_f62_expired_access_refresh_cookie_wrong_type_401(client, regular_
     assert res.status_code == 401, (res.status_code, res.text)
     row = await _row_by_jti(jti)
     assert row is not None and row.revoked_at is None, "thu hồi phiên bằng cookie sai loại"
+
+
+# -----------------------------------------------------------------------------
+# POST /api/sessions/revoke-all — phiên GIỮ LẠI lấy từ TOKEN, không từ body.
+#
+# Lỗi cũ: router giữ phiên mà body `current_session_id` nêu. Client gửi id một
+# phiên KHÁC của chính mình ⇒ phiên ấy được giữ, phiên đang dùng bị thu hồi.
+# (Truy vấn thu hồi vẫn lọc theo user_id: chưa có bằng chứng thu hồi chéo tài
+# khoản — các ca 2a/2b canh điều đó.)
+#
+# Hợp đồng mới: phiên giữ lại = `deps.get_current_session` — hàng SỐNG của CHÍNH
+# người dùng mang `r_jti` của access token đã xác thực. Body được nhận (FE cũ vẫn
+# gửi) nhưng không quyết định gì. Không xác định được phiên ⇒ thu hồi MỌI phiên.
+#
+# Mỗi ca canh MỘT bất biến; khẳng định nằm ngay trong thân ca (bộ chấm đột biến
+# đòi khung traceback cuối là thân ca). Không `pytest.raises`, không parametrize.
+# Tên ca ≤ 72 ký tự: tiêu đề khối lỗi của pytest (80 cột) mới còn ≥ 3 dấu `_`
+# mỗi bên — bộ chấm đột biến tìm khối lỗi theo đúng mẫu đó.
+# -----------------------------------------------------------------------------
+
+REVOKE_ALL_URL = "/api/sessions/revoke-all"
+_KHONG_BODY = object()
+
+
+async def _revoke_all(client, access_token: str, body=_KHONG_BODY):
+    """POST revoke-all chỉ mang cookie ``access_token`` (như FE), body JSON tuỳ chọn.
+
+    ``_KHONG_BODY`` = không gửi body nào (không byte, không Content-Type JSON).
+    """
+    client.cookies.clear()
+    try:
+        kwargs = {} if body is _KHONG_BODY else {"json": body}
+        return await client.post(
+            REVOKE_ALL_URL, headers={"Cookie": f"access_token={access_token}"}, **kwargs
+        )
+    finally:
+        client.cookies.clear()
+
+
+async def _hai_phien_song(client, user: dict) -> dict:
+    """Hai phiên SỐNG của cùng người dùng: A (desktop) và B (mobile).
+
+    Khác dấu vân tay thiết bị — nếu không, lượt đăng nhập B thu hồi A ngay (xem
+    chú thích ở `UA_DESKTOP`).
+    """
+    _kiem_ua_phan_loai_dong()
+    access_a, refresh_a, jti_a = await _login_as(client, user, ua=UA_DESKTOP)
+    access_b, _, jti_b = await _login_as(client, user, ua=UA_MOBILE)
+    assert await _live_session_jtis(user["id"]) == sorted([jti_a, jti_b]), (
+        "tiền đề: hai phiên A và B phải cùng sống"
+    )
+    return {
+        "access_a": access_a,
+        "refresh_a": refresh_a,
+        "jti_a": jti_a,
+        "id_a": (await _row_by_jti(jti_a)).id,
+        "access_b": access_b,
+        "jti_b": jti_b,
+        "id_b": (await _row_by_jti(jti_b)).id,
+    }
+
+
+async def _revoke_row_in_db_only(test_redis_client, user: dict, jti: str):
+    """Hàng CSDL của ``jti`` bị THU HỒI; khoá `session:{jti}` còn nguyên (CSDL quyết)."""
+    async with AsyncSessionLocal() as s:
+        await s.execute(
+            update(models.UserSession)
+            .where(models.UserSession.refresh_jti == jti)
+            .values(revoked_at=datetime.now(timezone.utc))
+        )
+        await s.commit()
+    row = await _row_by_jti(jti)
+    assert row is not None and row.revoked_at is not None, (
+        "tiền đề: hàng phải đã bị thu hồi"
+    )
+    assert await test_redis_client.get(f"session:{jti}") == str(user["id"]), (
+        "tiền đề: khoá session: còn nguyên"
+    )
+    return row
+
+
+async def _get_current_session_for(user_id: int, refresh_jti: str):
+    """Gọi THẲNG `deps.get_current_session` như FastAPI gọi sau `get_current_user`.
+
+    `get_current_user` chỉ cho qua `r_jti` có hàng sống của chính người dùng, nên
+    qua HTTP các nhánh "jti của người khác / hàng đã chết" của dependency không
+    với tới được — chúng chỉ mở ra khi có request thu hồi khác COMMIT xen giữa.
+    Gọi thẳng để canh từng điều kiện của vị từ.
+    """
+    async with AsyncSessionLocal() as s:
+        return await deps.get_current_session(
+            request=SimpleNamespace(state=SimpleNamespace(refresh_jti=refresh_jti)),
+            current_user=SimpleNamespace(id=user_id),
+            db=s,
+        )
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_keeps_token_session_not_body_session(client, regular_user_in_db):
+    """Ca 1 — access token của phiên A, body nêu ID phiên B (của CHÍNH mình) ⇒
+    còn sống ĐÚNG phiên A; B bị thu hồi.
+
+    Bản cũ giữ phiên body nêu: B sống, phiên đang dùng A bị thu hồi.
+    """
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+
+    res = await _revoke_all(client, p["access_a"], {"current_session_id": p["id_b"]})
+
+    assert res.status_code == 204, res.text
+    assert await _live_session_jtis(user["id"]) == [p["jti_a"]], (
+        "phiên còn sống sau revoke-all phải ĐÚNG là phiên của access token (A), "
+        f"không phải phiên body nêu (B, id={p['id_b']})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_with_other_users_session_id_leaves_that_user_untouched(
+    client, regular_user_in_db, admin_user_in_db
+):
+    """Ca 2a — body nêu ID phiên của NGƯỜI KHÁC ⇒ mọi phiên của người ấy không đổi:
+    hàng CSDL còn sống và access token của họ vẫn được nhận."""
+    victim = admin_user_in_db
+    victim_access, _, victim_jti = await _login_as(client, victim)
+    victim_session_id = (await _row_by_jti(victim_jti)).id
+    access, _, _ = await _login_as(client, regular_user_in_db)
+
+    res = await _revoke_all(client, access, {"current_session_id": victim_session_id})
+
+    assert res.status_code == 204, res.text
+    assert await _live_session_jtis(victim["id"]) == [victim_jti], (
+        "revoke-all của một người dùng đã thu hồi phiên của người khác"
+    )
+    assert (await _check_access(client, victim_access)).status_code == 200, (
+        "access token của người kia bị khước từ sau revoke-all của người dùng khác"
+    )
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_with_other_users_session_id_still_keeps_token_session(
+    client, regular_user_in_db, admin_user_in_db
+):
+    """Ca 2b — body nêu ID phiên của NGƯỜI KHÁC ⇒ body bị bỏ qua: phiên A (của
+    token) vẫn được giữ, phiên B của chính mình bị thu hồi.
+
+    Bản cũ dùng ID lạ làm phiên giữ lại ⇒ không phiên nào của người gọi khớp ⇒
+    cả phiên đang dùng cũng bị thu hồi.
+    """
+    _, _, victim_jti = await _login_as(client, admin_user_in_db)
+    victim_session_id = (await _row_by_jti(victim_jti)).id
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+
+    res = await _revoke_all(client, p["access_a"], {"current_session_id": victim_session_id})
+
+    assert res.status_code == 204, res.text
+    assert await _live_session_jtis(user["id"]) == [p["jti_a"]], (
+        "body nêu phiên của người khác đã làm mất phiên của access token (A)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_without_body_keeps_token_session(client, regular_user_in_db):
+    """Ca 3a — KHÔNG gửi body ⇒ 204, còn sống ĐÚNG phiên A (lấy từ token).
+
+    Bản cũ bắt buộc body ⇒ 422 và không thu hồi gì.
+    """
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+
+    res = await _revoke_all(client, p["access_a"])
+
+    assert res.status_code == 204, res.text
+    assert await _live_session_jtis(user["id"]) == [p["jti_a"]], (
+        "revoke-all không body phải giữ ĐÚNG phiên của access token"
+    )
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_with_empty_body_keeps_token_session(client, regular_user_in_db):
+    """Ca 3b — body rỗng ``{}`` ⇒ còn sống ĐÚNG phiên A (lấy từ token).
+
+    Bản cũ hiểu "không nêu phiên" là "không giữ phiên nào" ⇒ thu hồi cả A.
+    """
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+
+    res = await _revoke_all(client, p["access_a"], {})
+
+    assert res.status_code == 204, res.text
+    assert await _live_session_jtis(user["id"]) == [p["jti_a"]], (
+        "revoke-all với body rỗng phải giữ ĐÚNG phiên của access token"
+    )
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_with_null_session_id_keeps_token_session(client, regular_user_in_db):
+    """Ca 3c — ``{"current_session_id": null}`` ⇒ còn sống ĐÚNG phiên A (lấy từ token).
+
+    Đây là đúng body FE gửi khi chưa biết phiên hiện tại (`sessions.ts`).
+    """
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+
+    res = await _revoke_all(client, p["access_a"], {"current_session_id": None})
+
+    assert res.status_code == 204, res.text
+    assert await _live_session_jtis(user["id"]) == [p["jti_a"]], (
+        "revoke-all với current_session_id=null phải giữ ĐÚNG phiên của access token"
+    )
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_by_revoked_session_is_401_and_revokes_nothing(
+    client, regular_user_in_db, test_redis_client
+):
+    """Ca 4a — phiên A đã bị THU HỒI trong CSDL (khoá `session:` còn) ⇒
+    `get_current_user` khước từ 401 trước khi vào endpoint; phiên B không bị đụng.
+
+    Đo thật: ở tầng HTTP, "phiên hiện tại đã chết" không bao giờ tới được router.
+    """
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+    await _revoke_row_in_db_only(test_redis_client, user, p["jti_a"])
+
+    res = await _revoke_all(client, p["access_a"], {"current_session_id": p["id_a"]})
+
+    assert res.status_code == 401, (res.status_code, res.text)
+    row_b = await _row_by_jti(p["jti_b"])
+    assert row_b is not None and row_b.revoked_at is None, (
+        "access token của một phiên ĐÃ THU HỒI đã điều khiển được revoke-all"
+    )
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_by_expired_session_is_401_and_revokes_nothing(
+    client, regular_user_in_db, test_redis_client
+):
+    """Ca 4b — phiên A đã HẾT HẠN trong CSDL (chưa thu hồi, khoá `session:` còn) ⇒
+    401 trước khi vào endpoint; phiên B không bị đụng."""
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+    await _expire_row_in_db_only(test_redis_client, user, p["jti_a"])
+
+    res = await _revoke_all(client, p["access_a"], {"current_session_id": p["id_a"]})
+
+    assert res.status_code == 401, (res.status_code, res.text)
+    row_b = await _row_by_jti(p["jti_b"])
+    assert row_b is not None and row_b.revoked_at is None, (
+        "access token của một phiên ĐÃ HẾT HẠN đã điều khiển được revoke-all"
+    )
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_when_current_session_unresolved_is_401_revokes_nothing(
+    client, app_instance, regular_user_in_db
+):
+    """Ca 4c — `get_current_user` đã cho qua nhưng `get_current_session` trả None
+    (hàng bị thu hồi/hết hạn XEN GIỮA STEP 4b và lượt tra — dựng bằng override)
+    ⇒ 401 và KHÔNG thu hồi phiên nào (review F27, owner 11-10): không biết phiên cần
+    giữ thì không mở rộng thao tác phá huỷ; body KHÔNG được dùng làm phương án dự
+    phòng, kể cả khi nó nêu đúng phiên của token."""
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+
+    async def _khong_xac_dinh_duoc():
+        return None
+
+    app_instance.dependency_overrides[deps.get_current_session] = _khong_xac_dinh_duoc
+    try:
+        res = await _revoke_all(client, p["access_a"], {"current_session_id": p["id_a"]})
+    finally:
+        app_instance.dependency_overrides.pop(deps.get_current_session, None)
+
+    assert res.status_code == 401, res.text
+    assert sorted(await _live_session_jtis(user["id"])) == sorted([p["jti_a"], p["jti_b"]]), (
+        "không xác định được phiên hiện tại mà vẫn thu hồi phiên"
+    )
+
+
+@pytest.mark.asyncio
+async def test_current_session_dependency_ignores_other_users_session(
+    client, regular_user_in_db, admin_user_in_db
+):
+    """Guard user_id — `get_current_session` với `r_jti` là phiên SỐNG của người
+    KHÁC ⇒ None (không trả hàng của người kia)."""
+    _, _, victim_jti = await _login_as(client, admin_user_in_db)
+    user = regular_user_in_db
+    _, _, own_jti = await _login_as(client, user)
+    own = await _get_current_session_for(user["id"], own_jti)
+    assert own is not None and own.refresh_jti == own_jti, (
+        "đối chứng hỏng: jti sống của chính mình phải ra đúng hàng"
+    )
+
+    found = await _get_current_session_for(user["id"], victim_jti)
+
+    assert found is None, (
+        f"get_current_session trả phiên của người dùng khác (user_id={found.user_id})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_current_session_dependency_ignores_revoked_own_session(
+    client, regular_user_in_db, test_redis_client
+):
+    """Guard "chưa thu hồi" — `r_jti` là phiên của chính mình nhưng ĐÃ THU HỒI ⇒ None."""
+    user = regular_user_in_db
+    _, _, jti = await _login_as(client, user)
+    own = await _get_current_session_for(user["id"], jti)
+    assert own is not None and own.refresh_jti == jti, (
+        "đối chứng hỏng: jti sống của chính mình phải ra đúng hàng"
+    )
+    await _revoke_row_in_db_only(test_redis_client, user, jti)
+
+    found = await _get_current_session_for(user["id"], jti)
+
+    assert found is None, "get_current_session trả một phiên ĐÃ THU HỒI"
+
+
+@pytest.mark.asyncio
+async def test_current_session_dependency_ignores_expired_own_session(
+    client, regular_user_in_db, test_redis_client
+):
+    """Guard "chưa hết hạn" — `r_jti` là phiên của chính mình nhưng ĐÃ HẾT HẠN ⇒ None."""
+    user = regular_user_in_db
+    _, _, jti = await _login_as(client, user)
+    own = await _get_current_session_for(user["id"], jti)
+    assert own is not None and own.refresh_jti == jti, (
+        "đối chứng hỏng: jti sống của chính mình phải ra đúng hàng"
+    )
+    await _expire_row_in_db_only(test_redis_client, user, jti)
+
+    found = await _get_current_session_for(user["id"], jti)
+
+    assert found is None, "get_current_session trả một phiên ĐÃ HẾT HẠN"
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_after_refresh_rotation_keeps_the_rotated_session(
+    client, regular_user_in_db
+):
+    """Ca 5a — đăng nhập → /refresh (xoay jti trên CÙNG hàng A) → revoke-all bằng
+    access token MỚI ⇒ còn sống đúng hàng A (mang jti mới); B bị thu hồi."""
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+    rotated = await _post_with_cookies(client, REFRESH_URL, refresh_token=p["refresh_a"])
+    assert rotated.status_code == 200, rotated.text
+    access_moi = rotated.cookies.get("access_token")
+    jti_moi = jwt.decode(
+        rotated.cookies.get("refresh_token"),
+        settings.JWT_SECRET_KEY,
+        algorithms=[settings.JWT_ALGORITHM],
+    )["jti"]
+    row_a = await _row_by_jti(jti_moi)
+    assert access_moi and jti_moi != p["jti_a"] and row_a is not None and row_a.id == p["id_a"], (
+        "tiền đề: /refresh phải xoay jti trên CHÍNH hàng A và phát access token mới"
+    )
+
+    res = await _revoke_all(client, access_moi)
+
+    assert res.status_code == 204, res.text
+    assert await _live_session_jtis(user["id"]) == [jti_moi], (
+        "revoke-all bằng access token sau xoay phải giữ ĐÚNG hàng A (jti mới)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_by_pre_rotation_token_is_401_and_revokes_nothing(
+    client, regular_user_in_db
+):
+    """Ca 5b — sau /refresh, access token CŨ (mang jti trước xoay) gọi revoke-all,
+    body nêu đúng hàng A ⇒ 401; không phiên nào bị thu hồi. jti cũ không chọn
+    được phiên nào để giữ hay để thu hồi."""
+    user = regular_user_in_db
+    p = await _hai_phien_song(client, user)
+    rotated = await _post_with_cookies(client, REFRESH_URL, refresh_token=p["refresh_a"])
+    assert rotated.status_code == 200, rotated.text
+    jti_moi = jwt.decode(
+        rotated.cookies.get("refresh_token"),
+        settings.JWT_SECRET_KEY,
+        algorithms=[settings.JWT_ALGORITHM],
+    )["jti"]
+    assert jti_moi != p["jti_a"], "tiền đề: /refresh phải xoay jti"
+
+    res = await _revoke_all(client, p["access_a"], {"current_session_id": p["id_a"]})
+
+    assert res.status_code == 401, (res.status_code, res.text)
+    assert await _live_session_jtis(user["id"]) == sorted([jti_moi, p["jti_b"]]), (
+        "access token CŨ (trước xoay) đã thu hồi được phiên"
+    )

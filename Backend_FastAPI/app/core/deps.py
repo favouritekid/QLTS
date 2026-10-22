@@ -1630,6 +1630,42 @@ async def get_session_for_user(
     return session
 
 
+async def get_current_session(
+    request: Request,
+    current_user: models.User = Depends(get_current_user),
+    db: AsyncSession = Depends(database.get_db),
+) -> Optional[models.UserSession]:
+    """Phiên SỐNG mà request đã xác thực đang chạy trên — MỘT nguồn chuẩn cho "phiên hiện tại".
+
+    Tầng này sở hữu câu hỏi "phiên nào là phiên của request này" cho mọi
+    endpoint cần biết nó (``GET /sessions`` đánh dấu ``is_current``,
+    ``POST /sessions/revoke-all`` chọn phiên GIỮ LẠI).
+
+    Nguồn DUY NHẤT: ``request.state.refresh_jti`` — claim ``r_jti`` mà
+    ``get_current_user`` rút từ access token SAU KHI đã kiểm chữ ký, hạn, loại
+    token và hàng CSDL sống (STEP 4b). Không bao giờ lấy từ body, query hay
+    cookie refresh: một ``current_session_id`` do client gửi chỉ là một con số,
+    không chứng minh request đang chạy trên phiên ấy.
+
+    Tra bằng ``get_by_refresh_jti_and_user`` — cùng vị từ "phiên sống" với
+    STEP 4b, socket auth, logout và ``/refresh``: hàng của CHÍNH người dùng,
+    chưa thu hồi, chưa hết hạn.
+
+    ``None`` = không xác định được: hàng bị thu hồi / hết hạn trong khoảng giữa
+    STEP 4b và lượt tra này (một request thu hồi khác COMMIT xen vào). Người
+    gọi KHÔNG được thay ``None`` bằng giá trị client gửi.
+    """
+    refresh_jti = getattr(request.state, "refresh_jti", None)
+    if not refresh_jti:
+        return None
+
+    from ..repositories.session_repository import SessionRepository
+
+    return await SessionRepository(db).get_by_refresh_jti_and_user(
+        refresh_jti, current_user.id
+    )
+
+
 async def get_user_managed_units(
     db: AsyncSession,
     user_id: int
