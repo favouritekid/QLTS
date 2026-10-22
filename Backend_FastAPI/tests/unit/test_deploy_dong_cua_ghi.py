@@ -2686,6 +2686,12 @@ def _han_chung(goc: Path) -> int:
     return int(m.group(1))
 
 
+def _goi_sau_migration(goc: Path) -> list[str]:
+    """Lời gọi docker SAU lời gọi migration — trừ bộ theo dõi one-off chạy nền (`inspect -f {{.Id}} dcg-mig-…`)."""
+    goi = _cac_loi_goi(goc)
+    return [" ".join(g["args"])[:100] for g in goi[_moc(goc) + 1:] if g["args"][:3] != ["inspect", "-f", "{{.Id}}"]]
+
+
 def _ca_f65_tran(goc: Path):
     # (A) psql TREO từ sau migration; trần hạ còn 8 s (< đối soát chưa vá ≈ 3 psql × 5 s ⇒ đỏ-trước phân biệt được).
     return _chay_deploy(goc, **_F65_TREO, **{**_V6, "QLTS_TRAN_TRAP": "8"})
@@ -2720,8 +2726,12 @@ def test_f65_doi_soat_treo_ket_thuc_trong_han_chot_chung(tmp_path: Path) -> None
 def test_f65_migration_qua_han_phien_can_thi_khong_doi_soat_them_va_huong_dan_ngan(tmp_path: Path) -> None:
     goc = _san_khau_7d(tmp_path)
     ket, nk = _ca_f65_qua_han(goc)
-    t, ra, tt = _tu_luc_treo(goc), _ra(ket), _tep_trang_thai(goc)
+    # Mốc `.treo` = lần lệnh TREO đầu sau khi đỏ. Bản vá có thể KHÔNG bắt đầu lệnh nào (hạn chung 1 s đã hết trước lần gọi
+    # Docker đầu) ⇒ không có mốc ⇒ thời gian treo = 0 (lượt 22-10 đầu tiên đọc mốc bắt buộc ⇒ FileNotFoundError, lỗi CỦA TEST).
+    t = _tu_luc_treo(goc) if (goc / "lenh.log.treo").exists() else 0.0
+    ra, tt, sau = _ra(ket), _tep_trang_thai(goc), _goi_sau_migration(goc)
     assert t <= 1 + 5 + 4, f"phiên đã cạn mà đối soát + trap còn chạy {t:.1f}s — kênh SSH sẽ bị cắt giữa chừng"
+    assert len(sau) <= 3, f"phiên đã cạn mà vẫn gọi {len(sau)} lệnh Docker/psql sau migration đỏ:\n" + "\n".join(sau)
     assert _han_chung(goc) == 1, tt
     for b in ("(d)_cửa_ghi", "(d)_phiên_lạ", "PA2"):
         assert f"het_ngan_sach\tdoi_soat {b}" in tt, f"bước đối soát {b} không được ghi CHƯA XÁC ĐỊNH:\n{tt}"
