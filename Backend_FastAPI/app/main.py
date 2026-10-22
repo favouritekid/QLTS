@@ -1,6 +1,5 @@
 # app/main.py
 import asyncio  # ✅ V5: Thêm import
-import logging
 import os  # ✅ Import os để check path
 import uuid
 from contextlib import asynccontextmanager
@@ -9,7 +8,6 @@ from pathlib import Path  # ✅ Import Path để tạo absolute path
 import casbin
 import socketio  # ✅ V5: Thêm import
 import structlog
-import ujson
 from casbin_async_sqlalchemy_adapter import Adapter as AsyncCasbinAdapter
 from casbin_async_sqlalchemy_adapter import Base as CasbinBase
 from fastapi import Depends, FastAPI, Request, Response, status  # ✅ V5: Thêm Response
@@ -132,105 +130,16 @@ if settings.SENTRY_DSN:
     except Exception as e:
         print(f"WARNING [main.py]: Failed to initialize Sentry: {e}")
 
-# === ✅ H3: Log Sanitization - Redact sensitive fields from log output ===
-_SENSITIVE_FIELDS = frozenset({
-    "password", "token", "secret", "payload", "authorization",
-    "csrf", "access_token", "refresh_token", "mfa_token",
-    "api_key", "credit_card", "ssn",
-})
+# === Cấu hình log + che dữ liệu cá nhân/token (V6) ===
+# MỘT tầng chủ sở hữu: `app/core/log_redaction.py`. Cùng một hàm được celery
+# worker/beat gọi qua tín hiệu `setup_logging` (`app/celery_app.py`) — worker
+# KHÔNG nạp module này. Nó dựng structlog (bộ che SAU `format_exc_info`), handler
+# gốc có `RedactingFilter`, handler `LOG_FILE` (nếu đặt), hạ mức các logger ồn
+# ào, trỏ `uvicorn.access`/`uvicorn.error` về handler gốc, và gắn filter cho
+# access logger (gunicorn còn gắn lại trong `post_worker_init`).
+from app.core.log_redaction import configure_logging  # noqa: E402
 
-def _sanitize_sensitive_data(logger, method_name, event_dict):
-    """Structlog processor that redacts sensitive fields from log output."""
-    for key in list(event_dict.keys()):
-        if any(sensitive in key.lower() for sensitive in _SENSITIVE_FIELDS):
-            event_dict[key] = "[REDACTED]"
-    return event_dict
-
-# === Cấu hình Structured Logging ===
-structlog.configure(
-    processors=[
-        structlog.contextvars.merge_contextvars,
-        structlog.stdlib.add_logger_name,
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.PositionalArgumentsFormatter(),
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        _sanitize_sensitive_data,  # ✅ H3: Redact sensitive fields before rendering
-        (
-            structlog.dev.ConsoleRenderer()
-            if settings.APP_ENV == "development"
-            else structlog.processors.JSONRenderer(serializer=ujson.dumps)
-        ),
-    ],
-    context_class=dict,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-    # ✅ SỬA LỖI (V5): Chuyển sang đồng bộ (sync) để không cần `await`
-    wrapper_class=structlog.stdlib.BoundLogger,
-    cache_logger_on_first_use=True,
-)
-
-# Cấu hình handler cho logging
-log_handler = logging.StreamHandler()
-root_logger = logging.getLogger()
-root_logger.handlers.clear()
-root_logger.addHandler(log_handler)
-root_logger.setLevel(settings.LOG_LEVEL.upper())
-
-# ✅ L2: Optional file logging with rotation (set LOG_FILE in .env to enable)
-if settings.LOG_FILE:
-    from logging.handlers import RotatingFileHandler
-    file_handler = RotatingFileHandler(
-        settings.LOG_FILE,
-        maxBytes=settings.LOG_FILE_MAX_BYTES,     # Default: 10 MB
-        backupCount=settings.LOG_FILE_BACKUP_COUNT,  # Default: 5 files
-        encoding="utf-8",
-    )
-    file_handler.setLevel(settings.LOG_LEVEL.upper())
-    root_logger.addHandler(file_handler)
-    print(f"INFO [main.py]: ✅ File logging enabled: {settings.LOG_FILE} (max={settings.LOG_FILE_MAX_BYTES//1024//1024}MB, backups={settings.LOG_FILE_BACKUP_COUNT})")
-
-# === ✅ BẮT ĐẦU TẮT TIẾNG LOG THỪA ===
-
-# Tắt log ồn ào của SQLAlchemy
-logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
-logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
-
-# Tắt log DEBUG của Uvicorn (chỉ hiển thị INFO trở lên)
-logging.getLogger("uvicorn.access").setLevel(logging.INFO)
-logging.getLogger("uvicorn.error").setLevel(logging.INFO)
-
-# Tắt log verbose của Socket.IO và Engine.IO (chỉ hiển thị WARNING trở lên)
-logging.getLogger("socketio").setLevel(logging.WARNING)
-logging.getLogger("engineio").setLevel(logging.WARNING)
-
-# Tắt log DEBUG của thư viện user-agents
-logging.getLogger("user_agents").setLevel(logging.INFO)
-
-# Tắt log verbose của bcrypt và passlib (chỉ hiển thị WARNING)
-logging.getLogger("passlib").setLevel(logging.WARNING)
-logging.getLogger("bcrypt").setLevel(logging.WARNING)
-
-# Tắt log verbose của multipart form parser (chỉ hiển thị WARNING)
-logging.getLogger("multipart").setLevel(logging.WARNING)
-logging.getLogger("python_multipart").setLevel(logging.WARNING)
-
-# Tắt log verbose của Casbin (chỉ hiển thị WARNING)
-logging.getLogger("casbin").setLevel(logging.WARNING)
-
-# === ✅ KẾT THÚC TẮT TIẾNG LOG THỪA ===
-
-# Cấu hình log uvicorn
-logging.getLogger("uvicorn.access").handlers.clear()
-logging.getLogger("uvicorn.access").addHandler(log_handler)
-logging.getLogger("uvicorn.error").handlers.clear()
-logging.getLogger("uvicorn.error").addHandler(log_handler)
-
-# Redact raw SMS bearer code khỏi access log (§11.3) — uvicorn.access (dev) +
-# gunicorn.access (prod, qua post_worker_init).
-from app.core.log_redaction import install_sms_log_redaction  # noqa: E402
-
-install_sms_log_redaction()
+configure_logging("web")
 
 # Logger chính của app (giờ là đồng bộ)
 log = structlog.get_logger("app.main")

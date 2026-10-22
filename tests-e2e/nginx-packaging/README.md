@@ -89,7 +89,7 @@ Kiểm rằng `certbot` **không** hề nằm trong stack (bẫy gộp `profiles
 $DC config --services | grep -c certbot     # phải là 0
 ```
 
-### Sáu phép kiểm chức năng
+### Bảy phép kiểm (sáu chức năng + đầu dò token)
 
 Chạy bằng đúng script mà deploy dùng — không có phiên bản chép tay thứ hai:
 
@@ -107,6 +107,7 @@ Nó đo từ một container khác trên cùng mạng, bằng `curl --resolve` (
 | 4 | SNI lạ | không có phản hồi HTTP (`000`) — catch-all từ chối bắt tay |
 | 5 | `GET /` cổng 80 | 301 |
 | 6 | `/.well-known/acme-challenge/…` | 404 (từ webroot) — **không** phải 301 |
+| 7 | đầu dò token (V6): BA request ĐỘC LẬP mang token GIẢ — ở đường dẫn, ở query, ở Referer — rồi đọc `docker logs` của chính container | `docker logs` thoát 0 (nguồn lỗi ⇒ ĐỎ dù có đầu ra); MỖI đầu dò có dòng access log riêng, mang `<redacted>`, KHÔNG chứa token giả của nó — bắt cả `access_log off` (mất dòng) lẫn khuôn log ghi `$request` thô (lộ) |
 
 > `NGINX_PROBE_STRICT_TLS=0` chỉ vì chứng thư ở đây tự ký. Trên prod để mặc định (`1`) thì
 > có thêm một phép kiểm chuỗi chứng thư khớp `$DOMAIN`.
@@ -267,6 +268,32 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18080/
 Bootstrap phải lên được **khi backend/frontend chưa hề chạy** — đó là cảnh một VPS mới. Thử
 lại sau `$DC stop backend frontend postgres redis`: nó vẫn `healthy`, vì nó dùng
 `nginx-bootstrap.conf` không khai `upstream` nào.
+
+## V6 — access log che token nhưng VẪN ghi dòng (`kiem-log-che-token.sh`)
+
+Không cần ảnh backend/frontend: script dựng image từ `nginx/Dockerfile`, chạy template thật
+với chứng thư tự ký, trỏ `backend`/`frontend` về server stub trong cùng container, gửi request
+thật qua TLS + SNI thật, rồi đọc `docker logs`.
+
+```bash
+bash tests-e2e/nginx-packaging/kiem-log-che-token.sh          # KET-LUAN=DAT, rc=0
+NGINX_DIR=<bản sao nginx/ đã đột biến> bash …/kiem-log-che-token.sh   # chạy đột biến
+```
+
+| Mã | Đo gì |
+|---|---|
+| T1 | 0 dòng access log chứa token giả |
+| T2 | MỖI đầu dò (mã riêng trong User-Agent) vẫn để lại dòng có `<redacted>` — trang + API confirm/magic-link, Referer, `?token=`, cổng 80, và các ca NHIỀU token trong một giá trị (F31: `/confirm/A?token=B`, `?token=A&refresh_token=B`, ở cả request lẫn Referer), `%2Fconfirm%2F`, `Access-Token=` — bắt đột biến `access_log off` |
+| T3 | dòng đối chứng `/login` có mặt |
+| T4 | dòng 301 của cổng 80 có mặt |
+| R1/R2 | trang + API token trả `Referrer-Policy: no-referrer` |
+| R3 | trang thường vẫn `strict-origin-when-cross-origin` |
+| R4 | `/reset-password?token=…` trả `no-referrer` |
+| V1 | chính `scripts/nginx-verify.sh` (cổng deploy) ĐẠT, kể cả đầu dò token |
+
+> ⚠️ `error_log` (khi upstream lỗi hoặc `limit_req` từ chối) vẫn in `request:`/`referrer:` NGUYÊN
+> VĂN — `log_format` không chạm tới. Script chỉ GHI NHẬN số dòng ấy, không tính đạt/đỏ. Đây là
+> phần dư còn mở, không được ghi "đã hết rò token trong log nginx".
 
 ## Dọn
 

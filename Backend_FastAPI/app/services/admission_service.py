@@ -44,6 +44,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from .. import models
 from ..admission_metrics import admission_quota_skip_total
 from ..core.events import SystemEvents
+from ..core.log_redaction import chu_loi_an_toan, mo_ta_loi
 from ..core.admission_correction_constants import (
     SAFE_MINOR_CORRECTION_FIELDS,
     HARD_DENY_FIELDS,
@@ -4954,7 +4955,7 @@ async def create_profile(
     try:
         await db.flush()  # Get ID without committing (router commits)
     except IntegrityError as e:
-        log.error("IntegrityError during profile creation (race condition)", error=str(e))
+        log.error("IntegrityError during profile creation (race condition)", error=mo_ta_loi(e))
         raise ConflictError(f"Lead {lead_id} already has an admission profile (detected at DB layer)")
 
     # Initial state row — Phase 1 PLAN line 1067 service contract:
@@ -5802,7 +5803,6 @@ async def update_profile(
                 log.warning(
                     "Cannot update citizen_id: Duplicate in same academic year",
                     profile_id=profile.id,
-                    new_citizen_id=new_citizen_id,
                     academic_year=profile.academic_year,
                     duplicate_profile_id=duplicate_profile.id,
                 )
@@ -5823,7 +5823,6 @@ async def update_profile(
                 log.warning(
                     "Cannot update citizen_id: Already enrolled as student",
                     profile_id=profile.id,
-                    new_citizen_id=new_citizen_id,
                     student_code=existing_student.student_code,
                 )
                 raise DuplicateResourceError(
@@ -6052,7 +6051,7 @@ async def update_profile(
         log.error(
             "Update failed due to integrity error",
             profile_id=profile.id,
-            error=error_msg
+            error=mo_ta_loi(e),  # V6 vòng 4: error_msg chỉ dùng để phân loại, không ghi
         )
 
         if "citizen_id" in error_msg.lower():
@@ -6064,7 +6063,8 @@ async def update_profile(
                 "Dữ liệu trùng lặp (CCCD hoặc thông tin đã tồn tại)"
             )
         else:
-            raise ConflictError(f"Vi phạm ràng buộc dữ liệu: {error_msg}")
+            # V6 vòng 5: thông báo cho NGƯỜI DÙNG không mang DETAIL/hàng lỗi.
+            raise ConflictError(f"Vi phạm ràng buộc dữ liệu: {chu_loi_an_toan(e)}")
 
     # ── Đẩy identity (full_name/phone/email) xuống Lead qua module chung có
     # guard (parity update_lead). Đặt SAU flush profile ở trên: citizen_id của
@@ -7840,7 +7840,6 @@ async def submit_and_evaluate(
             "Admission profile submitted successfully",
             profile_id=profile_id,
             user_id=current_user.id if current_user else None,
-            citizen_id=profile.citizen_id,
         )
 
         # Đổi ngành: hook reprice HK1 fee sang ngành mới + báo kế toán. LUÔN clear
@@ -9546,7 +9545,6 @@ async def _perform_enrollment_core(
         log.error(
             "CRITICAL: Citizen ID duplicate detected at enrollment time",
             profile_id=profile_id,
-            citizen_id=profile.citizen_id,
             existing_student_code=duplicate_student.student_code,
             existing_student_id=duplicate_student.id,
         )
@@ -9706,7 +9704,7 @@ async def _perform_enrollment_core(
         log.error(
             "Enrollment failed due to integrity error",
             profile_id=profile_id,
-            error=error_msg,
+            error=mo_ta_loi(e),  # V6 vòng 4: error_msg chỉ dùng để phân loại, không ghi
         )
 
         # Parse error message
@@ -10027,7 +10025,6 @@ async def approve_profile(
         profile_id=profile.id,
         approver_id=approver.id,
         previous_status=profile.status,
-        citizen_id=profile.citizen_id,
     )
 
     # Path C / Arch-3: paired notification bundle + commission callback.
@@ -11105,7 +11102,7 @@ async def record_application_fee_payment(
                 "Application fee ledger create hit integrity race; reconciling",
                 profile_id=profile_id,
                 receipt_key=receipt_key,
-                error=str(exc),
+                error=mo_ta_loi(exc),  # V6 vòng 4: không ghi DETAIL/tham số
             )
 
         await _assert_receipt_not_used_by_other_profile(

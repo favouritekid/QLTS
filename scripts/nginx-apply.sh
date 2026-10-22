@@ -484,8 +484,22 @@ _cong_noi_dung() {
                 hong=$((hong + 1)); continue
                 ;;
         esac
-        # thuộc ảnh nền ⇒ không phải tệp cấu hình của QLTS
-        if printf '%s\n' "$ds_nen" | grep -qxF "$f"; then continue; fi
+        # thuộc ảnh nền ⇒ không phải tệp cấu hình của QLTS.
+        # Đọc HẾT danh sách (here-string + `grep -c`), KHÔNG `printf … | grep -q`:
+        # danh sách tệp của ẢNH NỀN không có trần cỡ; dưới `pipefail`, grep -q thoát
+        # ở dòng khớp đầu, printf nhận SIGPIPE (141) ⇒ "không khớp" ⇒ tệp của ảnh
+        # nền bị báo nhầm là MỒ CÔI (F36 vòng 5, §6). "Không khớp" chỉ khi grep đã
+        # chạy và ĐẾM 0; lỗi tìm kiếm ⇒ ĐỎ, không đoán.
+        _rc_nen=0
+        _n_nen=$(grep -cxF -- "$f" <<<"$ds_nen") || _rc_nen=$?
+        case "$_rc_nen:$_n_nen" in
+            0:[1-9]*) continue ;;
+            1:0) ;;
+            *)
+                log "  ✗ LỖI khi tìm '$f' trong danh sách tệp của ảnh nền (grep rc=$_rc_nen)"
+                hong=$((hong + 1)); continue
+                ;;
+        esac
         # có trong bảng COPY ⇒ đã đối chiếu ở chiều xuôi
         case "$cho_phep" in *"|$f|"*) continue ;; esac
         log "  ✗ MỒ CÔI: $f còn trong ảnh nhưng KHÔNG còn ở cây nguồn"

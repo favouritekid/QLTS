@@ -12,10 +12,15 @@
 # =============================================================================
 
 # Default log rotation policy. Docker's json-file driver retains logs
-# indefinitely without explicit limits, and a deploy/restart wipes the
-# in-memory ring buffer that `docker logs` reads. Cap at 50MB × 10 files
+# indefinitely without explicit limits. Cap at 50MB × 10 files
 # (compressed) → ~500MB per service, ~7-10 days retention at current traffic.
 # Anchor referenced by services that benefit most from post-mortem log access.
+#
+# Vòng đời tệp log (V6 — đính chính câu cũ "deploy/restart wipes"): log nằm ở
+# `/var/lib/docker/containers/<id>/` và chỉ mất khi CONTAINER BỊ XOÁ (dựng lại
+# vì ảnh/cấu hình đổi, hoặc `--force-recreate`). `restart` GIỮ NGUYÊN log.
+# Dọn dòng log cũ mang PII/token = đi cùng lượt deploy dựng lại container; xoá
+# thư mục ≠ huỷ an toàn (khối đĩa còn tới khi bị ghi đè).
 x-logging: &default-logging
   driver: json-file
   options:

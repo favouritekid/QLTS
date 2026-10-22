@@ -6,6 +6,8 @@ Phase 3: send() — batch inline, reads from Notification row (legacy path for b
 Phase C1: execute_delivery() — worker path, reads from payload_snapshot (no Notification dependency)
 """
 import structlog
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
+from app.core.log_redaction import loai_loi_an_toan  # V6 vòng 6: lỗi SMTP vào error_reason ⇒ chỉ loại + mã
 from typing import TYPE_CHECKING, Dict, Any, List
 
 from .base import BaseChannel, ChannelResult
@@ -142,13 +144,15 @@ class EmailChannel(BaseChannel):
                 "Email delivery failed",
                 delivery_id=delivery.id,
                 to_email=to_email,
-                error=str(e),
+                error=loai_loi_an_toan(e),  # V6 vòng 6: chữ lỗi SMTP có thể mang email
             )
             return ChannelResult(
                 success=False,
                 sent_count=0,
                 failed_ids=[delivery.user_id] if delivery.user_id else [],
-                error_message=str(e),
+                # V6 vòng 6 (owner chốt): error_message đi vào cột error_reason — chữ lỗi
+                # SMTP có thể mang địa chỉ email ⇒ chỉ LOẠI lỗi + MÃ SMTP + delivery id.
+                error_message="%s delivery=%s" % (loai_loi_an_toan(e), delivery.id),
                 delivery_id=delivery.id,
             )
 
@@ -236,7 +240,7 @@ class EmailChannel(BaseChannel):
                             "Email send failed",
                             user_id=user_id,
                             email=user.email,
-                            error=str(e)
+                            error=loai_loi_an_toan(e),  # V6 vòng 6: chữ lỗi SMTP có thể mang email
                         )
                         failed_ids.append(user_id)
 
@@ -246,7 +250,8 @@ class EmailChannel(BaseChannel):
                     success=False,
                     sent_count=0,
                     failed_ids=recipient_ids,
-                    error_message=str(e)
+                    # V6 vòng 5b: try bọc db.execute — error_message đi vào cột error_reason.
+                    error_message=chu_loi_an_toan(e)
                 )
 
         return ChannelResult(

@@ -865,10 +865,62 @@ _qlts_mo_hinh_anh() {
     if printf '%s' "$*" | grep -q '@MOC@'; then
       [ "${STUB_NEN_RC:-0}" = "0" ] || exit "${STUB_NEN_RC}"
       for _t in ${STUB_NEN_TEP:-}; do echo "$_t"; done
+      # `STUB_NEN_DEM_BYTE`: đệm thêm N byte tên tệp của ảnh nền SAU các tệp thật
+      # (F36 vòng 5 — danh sách ảnh nền dài: `printf … | grep -q` nhận SIGPIPE).
+      if [ -n "${STUB_NEN_DEM_BYTE:-}" ]; then
+        yes /usr/share/nginx/dem/tep-dem | head -c "$STUB_NEN_DEM_BYTE"
+        echo
+      fi
       [ "${STUB_NEN_KHONG_MOC:-0}" = "1" ] || echo "@MOC@"
       exit 0
     fi
+    # Ba đầu dò token của `nginx-verify.sh` (V6) truyền `-e UA_P=… -e GIA_P=…`
+    # (P = đường dẫn, Q = query, R = Referer): ghi lại để `docker logs` giả bên
+    # dưới trả đúng dòng access log của từng request.
+    if [ -n "${QLTS_STUB_LOG:-}" ]; then
+      for _a in "$@"; do
+        case "$_a" in
+          UA_[PQR]=*|GIA_[PQR]=*) printf '%s\n' "${_a#*=}" > "$QLTS_STUB_LOG.${_a%%=*}" ;;
+          # Giao thức MỘT đầu dò của bản verify trước (6c607c41: `-e UA=… -e GIA=…`) —
+          # giữ để lượt đỏ-trước chạy bản cũ trên CÙNG stub: đỏ đúng ở vế F36, không đỏ
+          # dây chuyền vì stub đổi giao thức. Bản mới không bao giờ truyền `UA=`.
+          UA=*|GIA=*) printf '%s\n' "${_a#*=}" > "$QLTS_STUB_LOG.${_a%%=*}" ;;
+        esac
+      done
+    fi
     exit "${STUB_RUN_RC:-0}" ;;
+  logs)
+    # Access log giả của container được đo. `STUB_LOG_TOKEN`:
+    #   che (mặc định) — mỗi đầu dò một dòng, token đã che;
+    #   rong           — không dòng nào (như `access_log off`);
+    #   lo             — mọi dòng mang token giả THÔ (khuôn log ghi `$request` thô);
+    #   lo_query       — chỉ đầu dò query lộ, hai đầu dò kia che đúng;
+    #   thieu_referer  — thiếu đúng dòng của đầu dò Referer;
+    #   lo_som_dem_4mib — dòng đầu dò đường dẫn VỪA mang <redacted> VỪA còn token
+    #                    THÔ, phía sau ĐỆM 4 MiB (F36 vòng 5: `printf … | grep -q`
+    #                    dưới pipefail nhận SIGPIPE ⇒ báo nhầm "không lộ").
+    # `STUB_LOG_RC`: mã thoát của `docker logs` SAU KHI đã in (nguồn lỗi có đầu ra).
+    _d="${QLTS_STUB_LOG:-/khong-co}"
+    _m="${STUB_LOG_TOKEN:-che}"
+    for _k in P Q R ""; do   # "" = giao thức một đầu dò của bản cũ (tệp .UA / .GIA)
+      _ua=$(cat "$_d.UA${_k:+_$_k}" 2>/dev/null || true)
+      _gia=$(cat "$_d.GIA${_k:+_$_k}" 2>/dev/null || true)
+      [ -n "$_ua" ] || continue
+      [ "$_m" = "rong" ] && continue
+      [ "$_m" = "thieu_referer" ] && [ "$_k" = "R" ] && continue
+      if [ "$_m" = "lo_som_dem_4mib" ] && [ "$_k" = "P" ]; then
+        printf '172.30.0.10 - - [01/Jan/2026:00:00:00 +0000] "GET /confirm/<redacted>?token=%s HTTP/1.1" 200 0 "-" "%s" "-"\n' "$_gia" "$_ua"
+        yes '172.30.0.11 - - [01/Jan/2026:00:00:00 +0000] "GET /static/dem HTTP/1.1" 200 0 "-" "dem" "-"' | head -c 4194304
+        echo
+        continue
+      fi
+      if [ "$_m" = "lo" ] || { [ "$_m" = "lo_query" ] && [ "$_k" = "Q" ]; }; then
+        printf '172.30.0.10 - - [01/Jan/2026:00:00:00 +0000] "GET /x?token=%s HTTP/1.1" 200 0 "-" "%s" "-"\n' "$_gia" "$_ua"
+      else
+        printf '172.30.0.10 - - [01/Jan/2026:00:00:00 +0000] "GET /confirm/<redacted> HTTP/1.1" 200 0 "https://nginx-test.local/magic-link/withdraw/<redacted>" "%s" "-"\n' "$_ua"
+      fi
+    done
+    exit "${STUB_LOG_RC:-0}" ;;
   esac
 }
 """
@@ -1104,6 +1156,20 @@ def _chay_apply(repo: Path, anh: Path, **bien: str) -> subprocess.CompletedProce
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         env=moi_truong, cwd=str(repo),
     )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_cong_noi_dung_ds_nen_dai_khong_bao_mo_coi_nham(tmp_path):
+    """F36 vòng 5 (§6 ``nginx-apply.sh``): danh sách tệp ẢNH NỀN dài (đệm 4 MiB SAU các
+    tệp thật) — tệp của ảnh nền nằm SỚM. ``printf … | grep -qxF`` dưới ``pipefail``:
+    grep thoát ở dòng khớp, printf nhận SIGPIPE ⇒ "không khớp" ⇒ tệp ảnh nền bị báo
+    nhầm là MỒ CÔI và cổng ĐỎ giả. Phép tìm đọc hết ⇒ cổng phải XANH như ca đối chứng."""
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(repo, anh, STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A,
+                     STUB_NEN_DEM_BYTE=str(4 * 1024 * 1024))
+    assert kq.returncode == 0 and "MỒ CÔI" not in kq.stdout, (
+        f"danh sách ảnh nền dài không được làm tệp ảnh nền thành MỒ CÔI:\n"
+        f"{kq.stdout[-3000:]}\n{kq.stderr[-2000:]}")
 
 
 @_bo_qua_neu_khong_chay_duoc_bash
@@ -1474,6 +1540,15 @@ _LENH_DA_CHET = [
     (
         r"cp\s+-r\s+nginx_conf_backup",
         "khôi phục vào một thư mục không còn được mount — im lặng không làm gì",
+    ),
+    (
+        # Vòng 3 (13-10-2026): `docker restart` theo TÊN hay theo CID cùng họ với
+        # `compose restart` — tái dùng biến môi trường + bản render đã nướng lúc
+        # TẠO container. Guard cũ chỉ thấy `restart … nginx` theo TÊN, nên
+        # `docker restart "$CID"` lọt. Ngoại lệ DUY NHẤT: `_NGOAI_LE_DOCKER_RESTART`.
+        r"\bdocker\s+(container\s+)?restart\b",
+        "`docker restart` (tên hay CID) tái dùng biến + bản render đã nướng lúc TẠO "
+        "— chỉ dòng khai trong _NGOAI_LE_DOCKER_RESTART được miễn",
     ),
 ]
 
@@ -2039,18 +2114,128 @@ def test_tai_lieu_khong_bao_dat_bien_ma_khong_ai_doc():
     )
 
 
-def test_script_khong_con_lenh_da_chet():
-    """Cùng bộ luật, áp lên `scripts/*.sh`."""
-    assert _cac_script(), "không thấy scripts/*.sh — guard đang xanh vô nghĩa"
-    pham = []
-    for sh in _cac_script():
-        for so, dong in enumerate(_doc(sh).splitlines(), 1):
-            if dong.lstrip().startswith("#") or _VAN_THOAT in dong:
+# Ngoại lệ HẸP cho `docker restart`: (tệp, dòng lệnh NGUYÊN VĂN sau khi bỏ thụt
+# lề) — mỗi cặp phải xuất hiện ĐÚNG MỘT lần. Lý do của dòng duy nhất này: nhánh
+# lùi (pha CHƯA migrate) của `scripts/deploy.sh` khởi động lại CHÍNH container
+# nginx cũ (theo CID ghi ở Step 4c, cùng ảnh, cùng bản render) để nó phân giải
+# lại `upstream backend` khi IP backend đổi sau `docker start` — KHÔNG phải cách
+# (vòng 6: lời gọi được bọc `timeout` với hạn riêng QLTS_HAN_NGINX_RESTART; dòng ngoại
+# lệ đổi theo, vẫn ĐÚNG MỘT lời gọi, và `docker restart` vẫn nằm NGUYÊN VĂN trong dòng
+# để mẫu của guard thấy nó — gói vào một hàm bọc sẽ giấu lời gọi khỏi guard)
+# áp cấu hình (việc đó chỉ qua `nginx-apply.sh`), và kết quả được ĐO ngay sau qua
+# SNI thật. Thêm một `docker restart` khác, chép dòng này lần hai, hay mang nó
+# sang tệp khác ⇒ đỏ. Dòng này biến mất ⇒ cũng đỏ (ngoại lệ chết phải dọn).
+_MAU_DOCKER_RESTART = r"\bdocker\s+(container\s+)?restart\b"
+_NGOAI_LE_DOCKER_RESTART = frozenset({
+    ("scripts/deploy.sh", 'timeout -k 5 "$_DCG_HAN_NGINX_RESTART" docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null && kq=0 || kq=$?'),
+})
+assert any(m == _MAU_DOCKER_RESTART for m, _ in _LENH_DA_CHET), "mẫu docker restart rời _LENH_DA_CHET"
+
+
+def _dong_lenh_logic(noi_dung: str) -> list[tuple[int, str]]:
+    """Dòng LỆNH logic: nối các dòng tiếp `\\` — `docker \\` + `restart …` là MỘT lệnh."""
+    ra: list[tuple[int, str]] = []
+    gom: list[str] = []
+    bat_dau = 0
+    for so, dong in enumerate(noi_dung.splitlines(), 1):
+        if not gom:
+            bat_dau = so
+        if dong.rstrip().endswith("\\") and not dong.lstrip().startswith("#"):
+            gom.append(dong.rstrip()[:-1].strip())
+            continue
+        gom.append(dong.strip())
+        ra.append((bat_dau, " ".join(x for x in gom if x)))
+        gom = []
+    if gom:
+        ra.append((bat_dau, " ".join(x for x in gom if x)))
+    return ra
+
+
+def _quet_lenh_da_chet(
+    cac_tep: list[tuple[str, str]],
+    ngoai_le: frozenset = _NGOAI_LE_DOCKER_RESTART,
+) -> list[str]:
+    """Quét (tên tương đối, nội dung) theo `_LENH_DA_CHET`; trả danh sách vi phạm."""
+    pham: list[str] = []
+    da_dung: dict[tuple[str, str], int] = {}
+    for ten, noi_dung in cac_tep:
+        for so, dong in _dong_lenh_logic(noi_dung):
+            if dong.startswith("#") or _VAN_THOAT in dong:
                 continue
             for mau, ly_do in _LENH_DA_CHET:
-                if re.search(mau, dong):
-                    pham.append(f"{sh.relative_to(_GOC)}:{so}: {dong.strip()[:90]}  ← {ly_do}")
+                if not re.search(mau, dong):
+                    continue
+                if mau == _MAU_DOCKER_RESTART and (ten, dong) in ngoai_le:
+                    da_dung[(ten, dong)] = da_dung.get((ten, dong), 0) + 1
+                    continue
+                pham.append(f"{ten}:{so}: {dong[:90]}  ← {ly_do}")
+    for (ten, dong) in sorted(ngoai_le):
+        n = da_dung.get((ten, dong), 0)
+        if n != 1:
+            pham.append(f"{ten}: ngoại lệ `docker restart` xuất hiện {n} lần (phải ĐÚNG 1): {dong[:70]}")
+    return pham
+
+
+def _cac_script_va_noi_dung() -> list[tuple[str, str]]:
+    return [(sh.relative_to(_GOC).as_posix(), _doc(sh)) for sh in _cac_script()]
+
+
+def test_script_khong_con_lenh_da_chet():
+    """Cùng bộ luật, áp lên `scripts/*.sh` (theo dòng LỆNH logic, có ngoại lệ hẹp)."""
+    assert _cac_script(), "không thấy scripts/*.sh — guard đang xanh vô nghĩa"
+    pham = _quet_lenh_da_chet(_cac_script_va_noi_dung())
     assert not pham, "còn lệnh đã chết trong scripts:\n  " + "\n  ".join(pham)
+
+
+# --- Kiểm ngược guard `docker restart` — mỗi ca vi phạm ĐÚNG MỘT bất biến ------
+_DONG_NGOAI_LE = 'timeout -k 5 "$_DCG_HAN_NGINX_RESTART" docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null && kq=0 || kq=$?'
+
+
+def _ban_deploy_va_con_lai() -> tuple[str, list[tuple[str, str]]]:
+    tep = _cac_script_va_noi_dung()
+    deploy = [nd for ten, nd in tep if ten == "scripts/deploy.sh"]
+    assert len(deploy) == 1, "không thấy scripts/deploy.sh"
+    assert deploy[0].count(_DONG_NGOAI_LE) == 1, "dòng ngoại lệ không còn ĐÚNG MỘT lần trong deploy.sh"
+    return deploy[0], [(t, nd) for t, nd in tep if t != "scripts/deploy.sh"]
+
+
+@pytest.mark.parametrize(
+    "ten_ca,them",
+    [
+        ("thêm một `docker restart` theo CID nginx khác", '    docker restart "$_DCG_NGINX_CID" >/dev/null\n'),
+        ("`docker container restart`", '    docker container restart "$_DCG_NGINX_CID"\n'),
+        ("xuống dòng giữa `docker` và `restart`", '    if ! docker \\\n        restart "$_DCG_NGINX_CID"; then :; fi\n'),
+        ("chép ĐÚNG dòng ngoại lệ lần hai", "        " + _DONG_NGOAI_LE + "\n"),
+        # Vòng 6: bọc `timeout` KHÔNG được làm guard mù — một lời gọi thứ hai cũng bọc
+        # `timeout` (khác hạn) vẫn phải đỏ.
+        ("lời gọi thứ hai cũng bọc timeout", '        timeout -k 5 60 docker restart -t 10 "$_DCG_NGINX_CID" >/dev/null || true\n'),
+    ],
+)
+def test_kiem_nguoc_docker_restart_ngoai_ngoai_le_thi_do(ten_ca: str, them: str):
+    deploy, con_lai = _ban_deploy_va_con_lai()
+    assert _quet_lenh_da_chet([("scripts/deploy.sh", deploy)] + con_lai) == [], "bản gốc phải xanh"
+    pham = _quet_lenh_da_chet([("scripts/deploy.sh", deploy + them)] + con_lai)
+    assert pham, f"{ten_ca}: guard KHÔNG đỏ — `docker restart` lọt"
+
+
+def test_kiem_nguoc_dong_ngoai_le_mang_sang_tep_khac_thi_do():
+    deploy, con_lai = _ban_deploy_va_con_lai()
+    pham = _quet_lenh_da_chet(
+        [("scripts/deploy.sh", deploy), ("scripts/nginx-apply.sh", "        " + _DONG_NGOAI_LE + "\n")]
+    )
+    assert any(p.startswith("scripts/nginx-apply.sh:") for p in pham), pham
+
+
+def test_kiem_nguoc_bo_ngoai_le_thi_dong_phuc_hoi_bi_bat():
+    """Không có ngoại lệ ⇒ đúng MỘT vi phạm, đúng dòng phục hồi: ngoại lệ HẸP và CẦN."""
+    pham = _quet_lenh_da_chet(_cac_script_va_noi_dung(), ngoai_le=frozenset())
+    assert len(pham) == 1 and pham[0].startswith("scripts/deploy.sh:") and "_DCG_NGINX_CID" in pham[0], pham
+
+
+def test_kiem_nguoc_ngoai_le_chet_thi_do():
+    deploy, con_lai = _ban_deploy_va_con_lai()
+    pham = _quet_lenh_da_chet([("scripts/deploy.sh", deploy.replace(_DONG_NGOAI_LE, "if ! true; then"))] + con_lai)
+    assert any("xuất hiện 0 lần" in p for p in pham), pham
 
 
 # ---------------------------------------------------------------------------
@@ -5799,3 +5984,120 @@ def test_hau_kiem_khong_liet_ke_duoc_thi_cung_phai_keu():
         f"`rclone lsf` hỏng (mã 7) mà RETENTION_RC={rc} — script sẽ thoát 0 và "
         f"báo HOÀN TẤT cho một lượt dọn dẹp chưa hề được xác minh:\n{ra}"
     )
+
+
+# ---------------------------------------------------------------------------
+# V6 — ĐẦU DÒ TOKEN trong `scripts/nginx-verify.sh` (cổng nginx-apply)
+# ---------------------------------------------------------------------------
+# Chạy THẬT `nginx-verify.sh` trên `docker` giả của sân khấu `_san_khau_ngx`.
+# `docker run` giả ghi lại `UA=`/`GIA=` của request đầu dò; `docker logs` giả trả
+# access log theo cần gạt `STUB_LOG_TOKEN` (`che` | `rong` | `lo`). Hành vi với
+# nginx THẬT (access_log off ⇒ mất dòng, log_format `$request` thô ⇒ lộ) được
+# chứng minh ở E2E `tests-e2e/nginx-packaging/kiem-log-che-token.sh`.
+
+
+def _chay_verify_dau_do(
+    tmp_path, che_do: str, rc_nguon: int = 0, grep_loi: bool = False
+) -> subprocess.CompletedProcess:
+    repo, anh = _san_khau_ngx(tmp_path)
+    nhat_ky = repo.parent / "lenh.log"
+    nhat_ky.write_text("", encoding="utf-8")
+    if grep_loi:
+        # `grep` giả HỎNG (rc=2) đúng khi được gọi với token giả của đầu dò —
+        # phân biệt "tìm kiếm lỗi" với "không khớp" (F36 vòng 5).
+        grep_that = shutil.which("grep")
+        assert grep_that, "HẠ TẦNG: không thấy grep thật"
+        gia = repo.parent / "bin" / "grep"
+        gia.write_text(
+            "#!/usr/bin/env bash\n"
+            'for _a in "$@"; do case "$_a" in qltsgia*) exit 2 ;; esac; done\n'
+            f'exec "{Path(grep_that).as_posix()}" "$@"\n',
+            encoding="utf-8", newline="\n",
+        )
+        gia.chmod(0o755)
+    moi_truong = {
+        **os.environ,
+        "MSYS_NO_PATHCONV": "1",
+        "PATH": str(repo.parent / "bin") + os.pathsep + os.environ.get("PATH", ""),
+        **_bien_mo_hinh_anh(repo / "nginx", anh.parent),
+        "QLTS_STUB_LOG": str(nhat_ky).replace("\\", "/"),
+        "STUB_ANH_CANDIDATE": _ANH_A,
+        "STUB_LOG_TOKEN": che_do,
+        "STUB_LOG_RC": str(rc_nguon),
+    }
+    return subprocess.run(
+        [_BASH, str(repo / "scripts" / "nginx-verify.sh"), "cand1111", "nginx-test.local"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=moi_truong, cwd=str(repo), timeout=120,
+    )
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_token_xanh_khi_co_dong_da_che(tmp_path):
+    """Đối chứng: access log có dòng của CẢ BA đầu dò (đường dẫn, query, Referer),
+    đã che ⇒ verify ĐẠT với đúng ba dòng ✓."""
+    kq = _chay_verify_dau_do(tmp_path, "che")
+    assert kq.returncode == 0 and kq.stdout.count("✓ đầu dò token") == 3, (
+        f"ca đối chứng phải XANH:\n{kq.stdout}\n{kq.stderr}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_token_do_khi_access_log_mat_dong(tmp_path):
+    """`access_log off` cho "0 dòng lộ" — đầu dò phải ĐỎ vì MẤT DÒNG, không xanh."""
+    kq = _chay_verify_dau_do(tmp_path, "rong")
+    assert kq.returncode != 0 and "KHÔNG thấy dòng access log" in kq.stdout, (
+        f"verify phải ĐỎ khi không có dòng log của đầu dò:\n{kq.stdout}\n{kq.stderr}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_token_do_khi_access_log_lo_token(tmp_path):
+    """Khuôn log ghi `$request` thô ⇒ dòng mang token giả ⇒ verify phải ĐỎ vì LỘ."""
+    kq = _chay_verify_dau_do(tmp_path, "lo")
+    assert kq.returncode != 0 and "LỘ token giả" in kq.stdout, (
+        f"verify phải ĐỎ khi access log mang token giả:\n{kq.stdout}\n{kq.stderr}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_nguon_loi_co_dau_ra_van_do(tmp_path):
+    """F36: `docker logs` in đủ ba dòng ĐÃ CHE rồi thoát lỗi ⇒ verify phải ĐỎ — mã
+    thoát nguồn không được bị bộ lọc (`| grep … || true`) nuốt mất."""
+    kq = _chay_verify_dau_do(tmp_path, "che", rc_nguon=3)
+    assert kq.returncode != 0 and "docker logs rc=3" in kq.stdout, (
+        f"verify phải ĐỎ khi nguồn access log lỗi dù có đầu ra:\n{kq.stdout}\n{kq.stderr}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_lo_som_trong_log_dai_thi_do(tmp_path):
+    """F36 vòng 5: dòng đầu dò VỪA có ``<redacted>`` VỪA còn token thô, phía sau
+    đệm 4 MiB ⇒ phải ĐỎ. ``printf … | grep -q`` dưới ``pipefail``: grep thoát ở
+    dòng khớp đầu, printf nhận SIGPIPE (141) ⇒ pipeline "không khớp" ⇒ xanh sai."""
+    kq = _chay_verify_dau_do(tmp_path, "lo_som_dem_4mib")
+    assert kq.returncode != 0 and "đầu dò token đường dẫn: access log LỘ" in kq.stdout, (
+        f"verify phải ĐỎ khi token lộ sớm trong access log dài:\n{kq.stdout[-3000:]}\n{kq.stderr[-2000:]}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_tim_kiem_loi_khong_coi_la_khong_lo(tmp_path):
+    """F36 vòng 5: phép tìm token giả LỖI (grep rc=2) KHÔNG được hiểu là "không
+    lộ" — phải ĐỎ và nói rõ là lỗi."""
+    kq = _chay_verify_dau_do(tmp_path, "che", grep_loi=True)
+    assert kq.returncode != 0 and "LỖI khi tìm token giả" in kq.stdout, (
+        f"verify phải ĐỎ khi phép tìm token lỗi:\n{kq.stdout}\n{kq.stderr}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_chi_query_lo_thi_do(tmp_path):
+    """Đầu dò ĐỘC LẬP: chỉ vị trí query lộ token (đường dẫn, Referer che đúng) ⇒ ĐỎ
+    và chỉ đúng đầu dò query."""
+    kq = _chay_verify_dau_do(tmp_path, "lo_query")
+    assert kq.returncode != 0 and "đầu dò token query: access log LỘ" in kq.stdout, (
+        f"verify phải ĐỎ ở đầu dò query:\n{kq.stdout}\n{kq.stderr}")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_thieu_dong_referer_thi_do(tmp_path):
+    """Đầu dò ĐỘC LẬP: thiếu đúng dòng của request đầu dò Referer ⇒ ĐỎ — một dòng
+    của đầu dò khác không được "đứng thay"."""
+    kq = _chay_verify_dau_do(tmp_path, "thieu_referer")
+    assert kq.returncode != 0 and "đầu dò token Referer: KHÔNG thấy dòng" in kq.stdout, (
+        f"verify phải ĐỎ ở đầu dò Referer:\n{kq.stdout}\n{kq.stderr}")
