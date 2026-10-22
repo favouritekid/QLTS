@@ -15,7 +15,7 @@
 import { describe, expect, it } from "vitest"
 import type { PreviewPriorityKvResponse } from "@/lib/api/priority-kv"
 
-import { deriveBannerState } from "./PriorityHeaderBanner"
+import { deriveBannerState, deriveRateWarnings } from "./PriorityHeaderBanner"
 
 const HAPPY_PREVIEW: PreviewPriorityKvResponse = {
   kv_resolved: "KV1",
@@ -169,5 +169,43 @@ describe("deriveBannerState — draft + no preview (initial load fallback)", () 
       priority_resolution_snapshot: {},
     }
     expect(deriveBannerState(profile, undefined)).toBe("ambiguous")
+  })
+})
+
+describe("deriveRateWarnings — C8 chưa có mức (BE quyết định, FE diễn đạt)", () => {
+  const profile = { academic_year: 2026, priority_resolution_snapshot: {} }
+
+  it("xem trước có priority_rate_warnings ⇒ câu nêu bảng, mã, năm", () => {
+    const preview: PreviewPriorityKvResponse = {
+      ...HAPPY_PREVIEW,
+      area_bonus: null,
+      priority_rate_warnings: [
+        {
+          code: "PRIORITY_RATE_NOT_CONFIGURED",
+          table: "priority_area_config",
+          academic_year: 2026,
+          missing_codes: ["KV3"],
+        },
+      ],
+    }
+    expect(deriveRateWarnings(profile, preview)).toEqual([
+      "Chưa có mức điểm ưu tiên đang áp dụng cho khu vực KV3 năm 2026",
+    ])
+  })
+
+  it("nhóm UT đã xác minh mang rate_status=not_configured ⇒ có câu cảnh báo", () => {
+    const p = {
+      academic_year: 2026,
+      priority_resolution_snapshot: {
+        ut_verified_bucket: { applied_code: null, applied_rate: null, rate_status: "not_configured", missing_codes: ["06"] },
+      },
+    }
+    expect(deriveRateWarnings(p, null)).toEqual([
+      "Chưa có mức điểm ưu tiên đang áp dụng cho đối tượng 06 năm 2026",
+    ])
+  })
+
+  it("đủ mức ⇒ không cảnh báo", () => {
+    expect(deriveRateWarnings(profile, HAPPY_PREVIEW)).toEqual([])
   })
 })

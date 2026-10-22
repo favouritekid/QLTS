@@ -86,6 +86,11 @@ describe("AuditReviewCard — one-line", () => {
     expect(screen.getByText("Bỏ qua cảnh báo thiếu UT")).toBeInTheDocument()
   })
 
+  it("V3 — circular_defaulted / circular_changed có nhãn riêng", () => {
+    render(<AuditReviewCard profile={buildProfile([buildEntry({ action_type: "circular_changed" })])} />)
+    expect(screen.getByText("Đổi thông tư áp dụng")).toBeInTheDocument()
+  })
+
   it("unknown action_type → generic label, no raw enum", () => {
     render(<AuditReviewCard profile={buildProfile([buildEntry({ action_type: "some_new_action" })])} />)
     const card = screen.getByTestId("audit-review-card")

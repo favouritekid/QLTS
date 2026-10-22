@@ -10,6 +10,7 @@ import { describe, it, expect } from "vitest";
 import {
   AUTH_STATE_UNAVAILABLE_ERROR_CODE,
   isAuthStateUnavailable,
+  t6PublishStopDetail,
 } from "./error-codes";
 
 const NGINX_503_HTML =
@@ -48,5 +49,24 @@ describe("isAuthStateUnavailable", () => {
     ["429 carrying the code", { status: 429, data: { error_code: "AUTH_STATE_UNAVAILABLE" } }],
   ])("false for %s", (_name, response) => {
     expect(isAuthStateUnavailable(response)).toBe(false);
+  });
+});
+
+describe("t6PublishStopDetail — T6 dừng có nhãn ở MỌI status", () => {
+  it("503 / 500 / 400 có mã dừng ⇒ trả detail của BE", () => {
+    for (const [status, code] of [
+      [503, "PRIORITY_RATE_NOT_CONFIGURED"],
+      [500, "PRIORITY_FREEZE_FAILED"],
+      [400, "PRIORITY_KV_UNRESOLVED"],
+    ] as const) {
+      expect(
+        t6PublishStopDetail({ status, data: { error_code: code, detail: `d-${code}` } }),
+      ).toBe(`d-${code}`);
+    }
+  });
+
+  it("mã khác hoặc thân không phải JSON ⇒ null", () => {
+    expect(t6PublishStopDetail({ status: 500, data: { error_code: "INTERNAL_ERROR", detail: "x" } })).toBeNull();
+    expect(t6PublishStopDetail({ status: 503, data: NGINX_503_HTML })).toBeNull();
   });
 });

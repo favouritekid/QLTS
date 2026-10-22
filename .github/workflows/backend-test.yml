@@ -379,6 +379,8 @@ jobs:
           - tier: Tier 1 — Phase 3 multi-NV core
             tests: >-
               tests/api/test_b1_kv_override_preserve.py
+              tests/api/test_t6_dung_co_nhan.py
+              tests/api/test_admission_submit_document_debt.py
               tests/unit/test_phase3_pr3a_choice_and_score.py
               tests/unit/test_phase3_pr3b_state_machine.py
               tests/unit/test_phase3_pr3c_sub1_scoring_gates.py
@@ -643,6 +645,7 @@ jobs:
               tests/security/test_socket_offboarding.py
               tests/unit/test_admission_idor_filters.py
               tests/security/test_az_phan_quyen.py
+              tests/api/test_applicable_circular_endpoint.py
 
           # ---------------------------------------------------------------
           # Tier 2b: Luồng XUẤT tệp (danh sách khoản phí + báo cáo công nợ)
@@ -1060,9 +1063,27 @@ jobs:
           # merge, o nightly — dung lop lo hong ma `test_ci_test_visibility.py`
           # sinh ra de bit. Ghim WHOLE-FILE, khong dung `::node`: chon theo node
           # la cach ma mot ca moi them vao lop se im lang khong duoc chay.
+          #
+          # V3 (thông tư áp dụng theo hồ sơ): nhóm A — backfill M1 `v3circ20261011`
+          # — ở ĐÂY chứ không ở Tier 4i, vì `TestLegCachLy` khoá 4i chỉ chứa
+          # `adm_024`. An toàn tuần tự theo đúng lập luận của chính ca ấy: một
+          # tiến trình, không xdist, fixture chuẩn TRUNCATE trước mỗi ca. UPDATE
+          # toàn bảng chỉ thấy hàng của ca hiện tại; DDL (CK5 tạm, câu DO của
+          # downgrade, câu DO của upgrade) đều trong giao dịch bị ROLLBACK.
+          # F54 (21-10-2026, nâng Pillow 13 / certifi 2026.10.19): ba tệp ĐƯỜNG UPLOAD tài liệu hồ sơ cần CSDL vào
+          # Tier 4s — trước đó KHÔNG tier PR nào chọn, nên CI xanh không nói gì về upload ảnh. Không vào 4a/4b:
+          # hai lát ấy khoá `SHA_HOP_SELECTOR_TIER4` và 4b đã ~28 phút; 4s ngắn (~8 phút) và cùng miền admission.
+          #   test_admission_doc_mutations_response_parity — route upload (PDF) + fixture `parity_config`
+          #   test_upload_anh_http — route upload với ẢNH thật: byte ghi ra = byte gửi lên; 400 không đổi thư mục
+          #   test_document_operations — thao tác tài liệu (upload / xác minh / từ chối) + nhật ký
           - tier: Tier 4s — Admission state transitions + confirmation token
             tests: >-
               tests/integration/test_admission_state_transitions.py
+              tests/api/test_v3_first_submission_backfill_migration.py
+              tests/integration/test_first_submission_stamp.py
+              tests/api/test_admission_doc_mutations_response_parity.py
+              tests/api/test_upload_anh_http.py
+              tests/integration/test_document_operations.py
           # `test_conftest_db_url_guard.py` vào Tier 5, cùng họ phép kiểm CẤU
           # TRÚC với `test_nginx_template_packaging` / `test_ci_test_visibility`:
           # nó đọc `tests/conftest.py` và `tests/fixtures/database.py` như VĂN
@@ -1087,6 +1108,39 @@ jobs:
           # (Tier 4b). Trước đây nằm ngoài mọi tier nên nó khoá đúng các chuỗi SAI
           # ("Mục 5.b", "Mục 4") mà không shard nào chạy. Đặt ở Tier 5 chứ không
           # 4b để khỏi đổi `SHA_HOP_SELECTOR_TIER4`. Ghim WHOLE-FILE.
+          # `test_admission_circular_constants.py` (V3) vào Tier 5: hàm thuần +
+          # đọc tệp migration/model như CẤU TRÚC, không đụng CSDL. Nó khoá mốc
+          # giờ VN 03-11, tập trạng thái sau nộp (tính lại từ máy trạng thái) và
+          # bản chép đông cứng trong migration `v3circ20261011`.
+          # `test_status_history_runtime_writer.py` vào Tier 5 (V3): unit, DB là
+          # MagicMock. Trước đây NGOÀI mọi tier — V3 làm 4 ca đỏ (đếm `db.add`
+          # khi cạnh draft→submitted nay thêm hàng `circular_defaulted`) mà CI PR
+          # không thấy; đã sửa ca lấy hàng lịch sử theo KIỂU. Ghim WHOLE-FILE.
+          # F54 (21-10-2026, nâng Pillow 13 / certifi 2026.10.19): năm tệp unit chạm Pillow / qrcode / certifi vào
+          # Tier 5, ghim WHOLE-FILE. Trước đó `test_upload_image_verify.py` — tệp DUY NHẤT import PIL — cùng bốn tệp
+          # dưới KHÔNG tier PR nào chọn ⇒ nâng Pillow mà CI xanh không nói gì. Unit thuần / MagicMock, không CSDL
+          # thật; đặt ở Tier 5 chứ không 4b để khỏi đổi `SHA_HOP_SELECTOR_TIER4`.
+          #   test_upload_image_verify / test_admission_file_signature — helper sniff + PIL verify của upload
+          #   test_phase_e4_pr2_priority_evidence — đường upload bằng chứng ưu tiên
+          #   test_vietqr_utils — QR thanh toán (qrcode → Pillow)
+          #   test_hoi_quy_phu_thuoc_anh_va_tls — con trỏ tệp mọi nhánh, byte ghi ra, asset PDF, QR, certifi
+          # `test_deploy_dong_cua_ghi.py` vào Tier 5 (đường A, 12-10-2026): cùng
+          # họ với ba tệp `test_deploy_*` — chạy THẬT `scripts/deploy.sh` với
+          # stub `docker`/`git`, không đụng CSDL. Nó khoá Step 4c (đóng cửa ghi
+          # trước pg_dump, bước (d) trước phát lại, trap theo pha). Ghim WHOLE-FILE.
+          # `test_deploy_van_tay_luoc_do_sql.py` (vòng 2) cũng ở đây: nó chạy THẬT các câu SQL
+          # của Step 4c (vân tay lược đồ, phiên lạ, bộ đếm) trên CSDL test — stub `docker`
+          # không bao giờ đưa SQL tới PostgreSQL. Ghim WHOLE-FILE.
+          # `test_che_log_pii.py` + `test_che_log_token_nginx.py` vào Tier 5 (V6
+          # che CCCD/token trong log): tiến trình con nạp đúng cấu hình log của
+          # web/gunicorn/celery + đọc tĩnh nginx/next.config — KHÔNG đụng CSDL.
+          # Ghim WHOLE-FILE.
+          # `tests/utils/test_config_loading.py` vào Tier 5 (V6 vòng 8, N17.14):
+          # khoá hợp đồng ĐƯỜNG NẠP MODULE `app.config` (ném `LoiCauHinh` không
+          # giữ lỗi gốc, không giá trị) + hợp đồng gọi trực tiếp `Settings()`.
+          # Trước đây NGOÀI mọi tier — ca `pytest.raises(ValidationError)` của nó
+          # không shard PR nào chạy. Unit thuần (reload module), KHÔNG đụng CSDL.
+          # Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1115,6 +1169,8 @@ jobs:
               tests/unit/test_gitignore_export_pii.py
               tests/unit/test_deploy_ghim_sha.py
               tests/unit/test_deploy_atomic_writers.py
+              tests/unit/test_deploy_dong_cua_ghi.py
+              tests/integration/test_deploy_van_tay_luoc_do_sql.py
               tests/unit/test_smoke_stack_co_lap.py
               tests/unit/test_smoke_bootstrap_personas.py
               tests/unit/test_smoke_seed_persona_registry.py
@@ -1136,6 +1192,22 @@ jobs:
               tests/unit/test_docgrp_audience_backfill_migration.py
               tests/integration/test_document_audience_config_panel.py
               tests/unit/test_phase_e4_audit_fixes.py
+              tests/unit/test_admission_circular_constants.py
+              tests/unit/test_priority_catalog_warning.py
+              tests/unit/test_t6_dung_co_nhan_mot_nguon.py
+              tests/unit/test_preview_priority_kv_path_aware.py
+              tests/unit/test_priority_service.py
+              tests/unit/test_priority_kv_resolution.py
+              tests/unit/test_priority_kv_phase_e4_matrix.py
+              tests/unit/test_status_history_runtime_writer.py
+              tests/unit/test_upload_image_verify.py
+              tests/unit/test_admission_file_signature.py
+              tests/unit/test_phase_e4_pr2_priority_evidence.py
+              tests/unit/test_vietqr_utils.py
+              tests/unit/test_hoi_quy_phu_thuoc_anh_va_tls.py
+              tests/unit/test_che_log_pii.py
+              tests/unit/test_che_log_token_nginx.py
+              tests/utils/test_config_loading.py
 
     env:
       APP_ENV: test

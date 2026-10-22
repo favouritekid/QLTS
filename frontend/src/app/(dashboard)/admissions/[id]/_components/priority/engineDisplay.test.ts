@@ -61,6 +61,21 @@ describe("deriveLawCitationFallback", () => {
   it("returns null cho rule_applied unknown", () => {
     expect(deriveLawCitationFallback("foo_unknown_rule")).toBeNull()
   })
+
+  // V3 — câu theo thông tư áp dụng; TT 76 chỉ trích tới cấp phụ lục (chưa đối
+  // chiếu số mục nguyên văn).
+  it("TT 76: trích Phụ lục I, không nêu số mục", () => {
+    expect(deriveLawCitationFallback("longest_duration", "TT76_2026")).toBe("TT 76/2026/TT-BGDĐT Phụ lục I")
+    expect(deriveLawCitationFallback("commune_lookup", "TT76_2026")).not.toMatch(/Mục/)
+  })
+
+  it("thông tư lạ ⇒ null, không đoán câu của văn bản khác", () => {
+    expect(deriveLawCitationFallback("longest_duration", "TT99_2030")).toBeNull()
+  })
+
+  it("thiếu thông tư ⇒ bảng TT 05 (giữ hành vi cũ)", () => {
+    expect(deriveLawCitationFallback("longest_duration", null)).toBe("TT 05/2021 Phụ lục 01 Mục 5.a")
+  })
 })
 
 describe("resolveEngineDisplay — post-draft (frozen snapshot)", () => {

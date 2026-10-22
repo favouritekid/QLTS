@@ -183,7 +183,7 @@ export function ObjectTable({ academicYear }: ObjectTableProps) {
         <div>
           <h3 className="text-base font-semibold">Đối tượng (UT)</h3>
           <p className="text-muted-foreground text-sm">
-            Cộng điểm theo đối tượng ưu tiên (TT 05/2021 Phụ lục 01)
+            Cộng điểm theo đối tượng ưu tiên. Mức dùng chung cho hồ sơ TT 05/2021 và TT 76/2026: theo TT 05/2021 Phụ lục 01; với hồ sơ TT 76/2026 là mức theo quyết định của nhà trường — chưa có số văn bản.
           </p>
         </div>
         <Button size="sm" onClick={openCreate} data-testid="object-add-btn">

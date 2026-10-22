@@ -13,7 +13,7 @@ Architecture Compliance:
 - Field validators sanitize inputs at schema level
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Annotated, Any, Dict, List, Literal, Optional
 import html
@@ -26,6 +26,7 @@ from pydantic import (
     field_validator,
     model_validator,
     ConfigDict,
+    ValidationInfo,
     computed_field,
 )
 
@@ -1118,21 +1119,66 @@ class AdmissionProfileResponse(BaseModel):
     priority_evidence_documents: list[PriorityEvidenceDocumentItem] = Field(
         default_factory=list
     )
+    # V3 — lần nộp đầu + thông tư áp dụng (cột, không phải snapshot). Luật ở
+    # ``app/constants/admission_circular.py``; đóng dấu ở ``transition()``.
+    first_submitted_at: Optional[datetime] = None
+    first_submitted_source: Optional[str] = None
+    applicable_circular: Optional[str] = None
+    applicable_circular_source: Optional[str] = None
+    applicable_circular_set_at: Optional[datetime] = None
+    applicable_circular_set_by_id: Optional[int] = None
+
+    # ⚠️ Khối cột trên PHẢI đứng TRƯỚC ``priority_resolution_snapshot``: validator dưới đọc
+    # ``applicable_circular`` qua ``info.data``, mà ``info.data`` chỉ chứa các trường KHAI TRƯỚC.
     priority_resolution_snapshot: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("priority_resolution_snapshot", mode="before")
     @classmethod
-    def _law_citation_from_current_rule(cls, value):
-        """Câu căn cứ trong snapshot ĐÓNG BĂNG được tính lại từ ``rule_applied`` khi trả ra.
+    def _law_citation_from_current_rule(cls, value, info: ValidationInfo):
+        """Câu căn cứ trong snapshot ĐÓNG BĂNG được tính lại từ ``rule_applied`` THEO THÔNG TƯ ĐANG ÁP.
 
         Snapshot cũ mang câu ghi lúc phân giải (từng sai số mục; snapshot ấn định tay còn
         giữ câu của lần phân giải trước). Chạy ở ``mode='before'`` trên BẢN SAO do
         ``with_current_law_citation`` tạo: thuộc tính JSONB của ORM không bị chạm, không có
         gì để phiên SQLAlchemy flush xuống CSDL. Nguồn câu: ``app.constants.priority_law_citation``.
+
+        V3: thông tư lấy từ cột ``applicable_circular`` (hoặc dự kiến theo hôm nay khi hồ sơ chưa
+        nộp/chưa đặt tay) — validator cũ chỉ thấy snapshot nên hồ sơ TT 76 vẫn hiện câu TT 05.
         """
+        from app.constants.admission_circular import circular_effective
         from app.constants.priority_law_citation import with_current_law_citation
 
-        return with_current_law_citation(value)
+        thong_tu, _ = circular_effective(
+            (info.data or {}).get("applicable_circular"), datetime.now(timezone.utc)
+        )
+        return with_current_law_citation(value, thong_tu)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def applicable_circular_effective(self) -> str:
+        """Thông tư đang áp: giá trị lưu, hoặc DỰ KIẾN theo hôm nay (giờ VN) cho hồ sơ chưa nộp/chưa đặt tay."""
+        from app.constants.admission_circular import circular_effective
+
+        return circular_effective(self.applicable_circular, datetime.now(timezone.utc))[0]
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def applicable_circular_effective_basis(self) -> Literal["stored", "predicted"]:
+        """``stored`` = đã lưu (đã nộp hoặc đặt tay); ``predicted`` = dự kiến, nộp hôm nay thì áp."""
+        from app.constants.admission_circular import circular_effective
+
+        return circular_effective(self.applicable_circular, datetime.now(timezone.utc))[1]  # type: ignore[return-value]
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def priority_catalog_warning(self) -> Optional[Dict[str, str]]:
+        """Cảnh báo danh mục KV TẠM của thông tư đang áp (owner Q6 + Q11). Server tính, FE chỉ hiện.
+
+        Không đổi điểm — chỉ báo danh mục KV xã/trường dùng để phân giải chưa được trường xác nhận.
+        """
+        from app.constants.admission_circular import kv_catalog_warning
+
+        return kv_catalog_warning(self.applicable_circular_effective)
 
     # Q9 #07 Phase E.4 — workbench audit timeline.
     # Last 20 priority_audit_log entries DESC (KV override + UT verify/reject
@@ -2642,6 +2688,16 @@ class PreviewPriorityKvRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
 
 
+class PriorityRateWarning(BaseModel):
+    """Một bảng mức thiếu hàng ĐANG MỞ cho năm tuyển sinh — hình dạng = ``PriorityRateNotConfigured.public_payload``
+    + ``code``."""
+
+    code: Literal["PRIORITY_RATE_NOT_CONFIGURED"]
+    table: Literal["priority_area_config", "priority_object_config"]
+    academic_year: int
+    missing_codes: List[str]
+
+
 class PreviewPriorityKvResponse(BaseModel):
     """Engine resolve_kv_for_profile() + UT potential bonus result for FE preview.
 
@@ -2713,6 +2769,11 @@ class PreviewPriorityKvResponse(BaseModel):
             "đọc để hiển thị cap badge + applied_bonus = min(total, cap) trong draft."
         )
     )
+    # V3 — thông tư đang áp của hồ sơ (lưu, hoặc dự kiến theo hôm nay giờ VN) + cảnh báo danh mục KV tạm.
+    applicable_circular_effective: Optional[str] = None
+    priority_catalog_warning: Optional[Dict[str, str]] = None
+    # C8 — thiếu hàng mức ĐANG MỞ cho năm tuyển sinh (owner Q10-kèm): điểm của bên thiếu = None, kèm một mục / bảng.
+    priority_rate_warnings: List[PriorityRateWarning] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -2806,6 +2867,25 @@ class OverridePriorityKvRequest(BaseModel):
         False,
         description="Admin-only escape hatch for post-publish profile (enrolled/approved/confirmed/...). "
         "Officer always refused for those states.",
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+
+
+class ApplicableCircularChangeRequest(BaseModel):
+    """Đổi thông tư áp dụng của hồ sơ (V3 — owner T2c + Q3 + Q4).
+
+    Ma trận trạng thái/vai trò giống ``OverridePriorityKvRequest`` (service dùng CHUNG ba tập trạng thái của
+    ``priority_override_service``). Độ dài lý do 20–500 = ``_MIN_REASON_LEN``/``_MAX_REASON_LEN`` của service —
+    ``test_applicable_circular_endpoint.py`` khoá hai bên bằng nhau.
+    """
+
+    version: int = Field(..., ge=0, description="profile.version phía client — lệch ⇒ 409.")
+    circular: Literal["TT05_2021", "TT76_2026"] = Field(..., description="Thông tư áp dụng mới.")
+    reason: str = Field(..., min_length=20, max_length=500, description="Lý do 20–500 ký tự, ghi vào nhật ký.")
+    acknowledge_post_publish: bool = Field(
+        False,
+        description="Chỉ admin, bắt buộc khi hồ sơ đã công bố; được ghi vào nhật ký.",
     )
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")

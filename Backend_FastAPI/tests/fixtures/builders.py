@@ -90,6 +90,46 @@ async def ensure_submittable_ward() -> str:
     return SUBMITTABLE_WARD_CODE
 
 
+async def ensure_target_level_config(session):
+    """Get-or-create ``ConfigOfferingType('chinh_quy')`` + ``ConfigDegreeLevel('cao_dang')`` (mã UNIQUE dùng chung).
+
+    MỘT nguồn cho mọi fixture cần ngành "đủ cấu hình" để T6 không dừng ``ChoiceTargetLevelNotConfigured`` (owner
+    Q20(a): thiếu trình độ/loại hình ⇒ DỪNG, không còn ghi "trượt"). Trả ``(offering_type, degree_level)``.
+    """
+    from sqlalchemy import select
+
+    from app import models
+
+    offering_type = (
+        await session.execute(
+            select(models.ConfigOfferingType).where(
+                models.ConfigOfferingType.code == "chinh_quy"
+            )
+        )
+    ).scalar_one_or_none()
+    if offering_type is None:
+        offering_type = models.ConfigOfferingType(
+            code="chinh_quy", name="Chính quy", is_active=True,
+        )
+        session.add(offering_type)
+        await session.flush()
+
+    degree_level = (
+        await session.execute(
+            select(models.ConfigDegreeLevel).where(
+                models.ConfigDegreeLevel.code == "cao_dang"
+            )
+        )
+    ).scalar_one_or_none()
+    if degree_level is None:
+        degree_level = models.ConfigDegreeLevel(
+            code="cao_dang", name="Cao đẳng", display_order=2, is_active=True,
+        )
+        session.add(degree_level)
+        await session.flush()
+    return offering_type, degree_level
+
+
 async def seed_submittable_offering_config(
     session, unit_id: int, academic_year: int = 2026
 ) -> dict:
@@ -127,33 +167,7 @@ async def seed_submittable_offering_config(
 
     suffix = _next_id()
 
-    offering_type = (
-        await session.execute(
-            select(models.ConfigOfferingType).where(
-                models.ConfigOfferingType.code == "chinh_quy"
-            )
-        )
-    ).scalar_one_or_none()
-    if offering_type is None:
-        offering_type = models.ConfigOfferingType(
-            code="chinh_quy", name="Chính quy", is_active=True,
-        )
-        session.add(offering_type)
-        await session.flush()
-
-    degree_level = (
-        await session.execute(
-            select(models.ConfigDegreeLevel).where(
-                models.ConfigDegreeLevel.code == "cao_dang"
-            )
-        )
-    ).scalar_one_or_none()
-    if degree_level is None:
-        degree_level = models.ConfigDegreeLevel(
-            code="cao_dang", name="Cao đẳng", display_order=2, is_active=True,
-        )
-        session.add(degree_level)
-        await session.flush()
+    offering_type, degree_level = await ensure_target_level_config(session)
 
     # MajorProgram.degree_level_id (FK) is what derive_target_level_and_type
     # reads; the legacy ``degree_level`` text column is still NOT NULL so it

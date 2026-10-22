@@ -95,8 +95,11 @@ cho cả tài liệu vận hành lẫn script chạm production.
 - `tests/` is in `.dockerignore` -- excluded from image, available in dev via bind mount
 - Test deps (`requirements-dev.txt`) must be installed manually into running container
 - Migrations run **twice per routine deploy**: `scripts/deploy.sh` Step 6 runs a
-  one-off `docker compose -f docker-compose.yml --profile production --env-file .env.production run --rm --no-deps --entrypoint alembic backend upgrade head`
-  (`--entrypoint` keeps the image entrypoint out of that pass), then
+  one-off `docker compose -f docker-compose.yml --profile production --env-file .env.production run --rm --name dcg-mig-<TIMESTAMP>-<PID> --no-deps --entrypoint alembic backend upgrade head`
+  (`--entrypoint` keeps the image entrypoint out of that pass; `--name` lets the
+  trap clean up only THIS run's one-off, and only once it has exited). A red
+  migration does **not** replay the Step 5 dump (F28, 13-10-2026): the app stays
+  stopped and the DB is kept as-is for a reconciled manual recovery. Then
   `docker-entrypoint.sh` runs `alembic upgrade head` again whenever the backend
   container is (re)created — a no-op when already at head. The entrypoint pass is
   gated by `RUN_MIGRATIONS_ON_STARTUP` (backend default `true`; `celery-worker` and

@@ -14,6 +14,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { render, screen, fireEvent } from "@/test/utils/test-utils"
 
 import { UtEvidenceCards } from "./UtEvidenceCards"
+import { priorityObjectsApi } from "@/lib/api/priority-objects"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 function makeProfile(
@@ -352,5 +353,27 @@ describe("UtEvidenceCards — paper-only badge (Decision #3)", () => {
       ),
     )
     expect(screen.getByText("Hồ sơ giấy")).toBeInTheDocument()
+  })
+})
+
+describe("UtEvidenceCards — danh mục theo NĂM TUYỂN SINH của hồ sơ (owner Q10(a))", () => {
+  it("hồ sơ thiếu academic_year ⇒ không gọi API danh mục, hiện câu thiếu năm (không rơi về năm của máy)", () => {
+    const getCatalogSpy = vi.spyOn(priorityObjectsApi, "getCatalog")
+    const profile = makeProfile({ status: "draft", academic_year: null as never })
+    render(
+      wrap(
+        <UtEvidenceCards
+          profile={profile}
+          canVerify={false}
+          isEditable
+          onNavigateToDocuments={() => {}}
+          onCodesChange={() => {}}
+        />,
+      ),
+    )
+    fireEvent.click(screen.getByTestId("ut-add-disclosure-trigger"))
+    expect(screen.getByTestId("ut-add-catalog-no-year")).toBeInTheDocument()
+    expect(getCatalogSpy).not.toHaveBeenCalled()
+    getCatalogSpy.mockRestore()
   })
 })

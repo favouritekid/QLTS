@@ -1032,6 +1032,15 @@ class Settings(BaseSettings):
 
 
 # --- Khởi tạo Settings ---
+# V6 vòng 8 (N17.14) — NGUỒN CHUNG của mọi tiến trình import ``app.config`` (gunicorn,
+# celery worker/beat, Alembic, mọi script): lỗi dựng cấu hình KHÔNG được ném lại thô.
+# ``raise e`` cũ đẩy ``ValidationError`` của pydantic (chữ lỗi chèn ``input_value=<giá
+# trị đặt sai>``) vào traceback của MỌI tiến trình ⇒ docker logs. Nay: mô tả an toàn tạo
+# và LƯU trong ``except`` (chủ sở hữu ``app/utils/redact.py``), rồi ném ``LoiCauHinh``
+# NGOÀI ``except`` — lỗi mới không giữ lỗi gốc qua ``__cause__`` lẫn ``__context__``
+# (``raise … from None`` đặt TRONG ``except`` vẫn để lại ``__context__``: chỉ ẩn khi in,
+# đối tượng lỗi gốc vẫn bám theo cho mọi bộ in / bộ thu lỗi tự đi chuỗi).
+_mo_ta_loi_cau_hinh: Optional[str] = None
 try:
     settings = Settings()
     # ✅ SECURITY: Fail-fast validation for production secrets
@@ -1053,9 +1062,11 @@ try:
             f"INFO [config.py]: GeoIP DEV MODE DISABLED - Set DEV_GEOIP_TEST_IP in .env to test GeoIP on localhost"
         )
 except Exception as e:
+    _mo_ta_loi_cau_hinh = mo_ta_loi_an_toan(e)
     print(
         f"CRITICAL [config.py]: Failed to initialize Settings. Ensure all required "
         f"variables are in '{_env_file}' or system environment. "
-        f"Error: {mo_ta_loi_an_toan(e)}"
+        f"Error: {_mo_ta_loi_cau_hinh}"
     )
-    raise e
+if _mo_ta_loi_cau_hinh is not None:
+    raise LoiCauHinh(_mo_ta_loi_cau_hinh)

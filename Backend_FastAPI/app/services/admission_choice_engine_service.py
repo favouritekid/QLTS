@@ -68,7 +68,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
 from ..core.events import SystemEvents
-from ..utils.exceptions import BusinessRuleViolation
+from ..utils.exceptions import (
+    BadRequest,
+    BusinessRuleViolation,
+    ChoiceTargetLevelNotConfigured,
+    PriorityKvUnresolved,
+    PriorityRateNotConfigured,
+    PrioritySnapshotFreezeFailed,
+    PriorityYearMismatch,
+    T6ChainNotLoaded,
+    TargetLevelConfigGap,
+)
 from .admission_scoring_service import (
     AdmissionScoringService,
     AdmissionScoreResult,
@@ -84,6 +94,79 @@ if TYPE_CHECKING:
     )
 
 log = structlog.get_logger(__name__)
+
+
+#: Lỗi làm T6 DỪNG MỘT hồ sơ, không ghi quyết định nào (owner Q10-kèm, Q17(a), Q19(d)(ii), Q20(a)).
+#:
+#: Hôm nay T6 chỉ có MỘT lối gọi — ``POST /api/v2/admissions/{id}/publish-result`` → ``publish_result`` →
+#: ``evaluate_cascade``, mỗi hồ sơ một request, một giao dịch: lỗi nổi lên ⇒ router không ``commit`` ⇒ rollback.
+#: Hợp đồng cho lối gọi HÀNG LOẠT trong tương lai: bọc MỖI hồ sơ trong ``async with db.begin_nested()``; bắt ĐÚNG
+#: bộ này ⇒ ``ROLLBACK TO SAVEPOINT`` ⇒ ghi ``{profile_id, error_code, public_payload}`` vào kết quả lô ⇒ sang hồ
+#: sơ kế; mọi lỗi khác ⇒ dừng cả lô; callback sau commit chỉ chạy cho hồ sơ thành công. Test khoá "một lối gọi"
+#: (``test_t6_dung_co_nhan.py``) đỏ khi ai thêm lối gọi thứ hai — sửa test có chủ ý sau khi đọc hợp đồng này.
+#: FE khoá tập ``error_code`` ở ``frontend/src/lib/api/error-codes.ts`` (test khoá bằng nhau).
+T6_PER_PROFILE_STOP_ERRORS = (
+    PriorityRateNotConfigured,
+    PriorityYearMismatch,
+    PriorityKvUnresolved,
+    PrioritySnapshotFreezeFailed,
+    ChoiceTargetLevelNotConfigured,
+)
+
+
+def t6_profile_load_options() -> list:
+    """Chuỗi eager-load mà T6 cần — MỘT nguồn cho router ``publish-result`` và test.
+
+    Thiếu chuỗi trình độ/loại hình thì ``derive_target_level_and_type`` ném và T6 DỪNG
+    (``ChoiceTargetLevelNotConfigured``, owner Q20(a)); thiếu ``admission_round`` thì không so được năm đợt.
+    """
+    from sqlalchemy.orm import selectinload
+
+    return [
+        # P2 fix 2026-05-22 — eager-load `.lead` cho cascade gọi
+        # sync_lead_from_admission() sau khi profile.status flip
+        # (reviewing → result_published → admitted/rejected). Trước
+        # đây không eager-load → sync silent fail "Lead not loaded".
+        selectinload(models.AdmissionProfile.lead),
+        selectinload(models.AdmissionProfile.choices)
+        .selectinload(models.AdmissionProfileChoice.admission_path)
+        .selectinload(models.AdmissionPath.admission_method),
+        # admission_round: T6 so năm của đợt với năm tuyển sinh của hồ sơ (lệch ⇒ PriorityYearMismatch). Mức điểm
+        # tra theo năm của HỒ SƠ (owner Q10(a)), không theo đợt.
+        selectinload(models.AdmissionProfile.choices)
+        .selectinload(models.AdmissionProfileChoice.admission_path)
+        .selectinload(models.AdmissionPath.admission_round),
+        selectinload(models.AdmissionProfile.choices)
+        .selectinload(models.AdmissionProfileChoice.admission_path)
+        .selectinload(models.AdmissionPath.criteria),
+        # Q9 #07 Phase E.4 — choice-engine gate 0 (eligibility) needs
+        # derive_target_level_and_type(path), which reads:
+        #   path.academic_info.offering.program.degree_level_ref.code
+        #   path.academic_info.offering.offering_type_config.code
+        # Without this chain, gate 0 raises CONFIG_GAP_TARGET_LEVEL and
+        # every choice rejects silently. Mirrors the bonus_rule chain.
+        selectinload(models.AdmissionProfile.choices)
+        .selectinload(models.AdmissionProfileChoice.admission_path)
+        .selectinload(models.AdmissionPath.academic_info)
+        .selectinload(models.OfferingAcademicInfo.offering)
+        .selectinload(models.ProgramOffering.program)
+        .selectinload(models.MajorProgram.degree_level_ref),
+        selectinload(models.AdmissionProfile.choices)
+        .selectinload(models.AdmissionProfileChoice.admission_path)
+        .selectinload(models.AdmissionPath.academic_info)
+        .selectinload(models.OfferingAcademicInfo.offering)
+        .selectinload(models.ProgramOffering.offering_type_config),
+        # SubjectGroup uses subject_mappings (M2M) → SubjectGroupSubject.subject
+        # NOT direct `subjects` relation (em earlier drift, fixed).
+        selectinload(models.AdmissionProfile.choices)
+        .selectinload(models.AdmissionProfileChoice.path_subject_group_config)
+        .selectinload(models.PathSubjectGroupConfig.subject_group)
+        .selectinload(models.SubjectGroup.subject_mappings)
+        .selectinload(models.SubjectGroupSubject.subject),
+        selectinload(models.AdmissionProfile.choices)
+        .selectinload(models.AdmissionProfileChoice.scores)
+        .selectinload(models.ProfileChoiceScore.subject),
+    ]
 
 
 # ============================================================================
@@ -383,6 +466,29 @@ class CascadeResult:
 # ============================================================================
 
 
+def ghi_dau_vet_thong_tu(choice: "AdmissionProfileChoice", profile: "AdmissionProfile") -> None:
+    """V3 — chép thông tư ÁP DỤNG của hồ sơ + trạng thái danh mục KV của thông tư ấy vào
+    ``choice.priority_config_snapshot``: dấu vết lúc chấm (owner Q6 + Q11).
+
+    Đọc CỘT ``applicable_circular``. Không bao giờ thay bằng thông tư "dự kiến theo hôm nay": hồ sơ nộp trước
+    03-11 chấm sau 03-11 vẫn là TT 05.
+
+    Cột NULL trên hồ sơ đã nộp không xảy ra ở production (CHECK ``ck_admission_profile_post_submit_stamped`` +
+    ``ck_admission_profile_submitted_has_circular``); chỉ gặp ở fixture tạo hồ sơ thẳng ở ``submitted``. Khi ấy
+    ghi ``None`` + log cảnh báo, KHÔNG chặn chấm: thông tư không đổi điểm (mức và danh mục KV dùng chung).
+    """
+    from ..constants.admission_circular import KV_CATALOG_STATUS
+
+    thong_tu = getattr(profile, "applicable_circular", None)
+    if thong_tu is None:
+        log.warning("engine_t6_applicable_circular_missing", profile_id=getattr(profile, "id", None))
+    choice.priority_config_snapshot = {
+        **(choice.priority_config_snapshot or {}),
+        "circular": thong_tu,
+        "kv_catalog_status": KV_CATALOG_STATUS[thong_tu] if thong_tu is not None else None,
+    }
+
+
 def resolve_effective_bonus_rule(path: "AdmissionPath") -> Optional[Dict[str, Any]]:
     """Resolve BonusRule per chain: path.bonus_rule_override
     ?? method.default_bonus_rule. Returns dict (JSONB-shaped) or None.
@@ -409,6 +515,46 @@ def resolve_effective_bonus_rule(path: "AdmissionPath") -> Optional[Dict[str, An
 # ============================================================================
 # Per-choice evaluation (gates + score + decision)
 # ============================================================================
+
+
+def _target_context_or_stop(
+    profile: "AdmissionProfile",
+    choice: "AdmissionProfileChoice",
+) -> Tuple[str, str]:
+    """``(target_level, admission_type)`` của nguyện vọng; thiếu cấu hình ⇒ DỪNG T6 (owner Q20(a)).
+
+    ``derive_target_level_and_type`` ném ``BusinessRuleViolation("CONFIG_GAP_TARGET_LEVEL…")`` khi ngành/hệ chưa gán
+    trình độ hoặc loại hình (hoặc chuỗi quan hệ chưa nạp). Đó là lỗi cấu hình của TRƯỜNG ⇒ không ghi ``rejected``
+    cho thí sinh; ném ``ChoiceTargetLevelNotConfigured`` để giao dịch của request rollback. Một hàm cho cả hai nơi
+    hỏi câu này (đầu vòng NV của ``evaluate_cascade`` và cổng 0 của ``_evaluate_single_choice``).
+    """
+    from app.services.priority_service import derive_major_code, derive_target_level_and_type
+
+    path = choice.admission_path
+    ngu_canh = {
+        "profile_id": getattr(profile, "id", None),
+        "choice_id": getattr(choice, "id", None),
+        "path_id": getattr(path, "id", None),
+    }
+    try:
+        return derive_target_level_and_type(path)
+    except TargetLevelConfigGap as gap_exc:
+        log.warning(
+            "choice_target_level_not_configured",
+            gap_kind=gap_exc.gap_kind,
+            error=str(gap_exc)[:200],
+            **ngu_canh,
+        )
+        if gap_exc.gap_kind == "relation_not_loaded":
+            # Lỗi mã của nơi gọi (thiếu chuỗi eager-load), không phải cấu hình ⇒ 500, NGOÀI bộ lỗi dừng.
+            raise T6ChainNotLoaded(context=ngu_canh) from gap_exc
+        raise ChoiceTargetLevelNotConfigured(
+            display_order=getattr(choice, "display_order", None),
+            gap_kind=gap_exc.gap_kind,
+            level_code=gap_exc.level_code,
+            major_code=derive_major_code(path),
+            context=ngu_canh,
+        ) from gap_exc
 
 
 def _evaluate_single_choice(
@@ -442,32 +588,16 @@ def _evaluate_single_choice(
     #
     # Lazy import (cùng pattern với calculate_priority_bonus): priority_service
     # imports app.models → circular dep nếu top-level import.
-    try:
-        from app.services.priority_service import (
-            derive_major_code,
-            derive_target_level_and_type,
-            validate_eligibility,
-        )
+    from app.services.priority_service import derive_major_code, validate_eligibility
 
-        target_level, admission_type = derive_target_level_and_type(path)
-        passed_elig, elig_reason = validate_eligibility(
-            profile, target_level, admission_type, derive_major_code(path)
-        )
-        if not passed_elig:
-            reason_codes.append(f"ELIGIBILITY_FAIL:{elig_reason}")
-            return "rejected", None, reason_codes
-    except BusinessRuleViolation as gap_exc:
-        # CONFIG_GAP_TARGET_LEVEL — eager-load chain rỗng hoặc config missing.
-        # Mark reject với explicit code để admin debug. Engine KHÔNG fallback
-        # SC (per yêu cầu nghiệp vụ #5).
-        reason_codes.append(f"CONFIG_GAP_TARGET_LEVEL:{str(gap_exc)[:200]}")
-        log.warning(
-            "choice_eligibility_config_gap",
-            profile_id=getattr(profile, "id", None),
-            choice_id=getattr(choice, "id", None),
-            path_id=getattr(path, "id", None),
-            error=str(gap_exc),
-        )
+    # Thiếu cấu hình trình độ/loại hình ⇒ DỪNG (Q20(a)), không ghi "rejected". Engine KHÔNG fallback SC
+    # (yêu cầu nghiệp vụ #5).
+    target_level, admission_type = _target_context_or_stop(profile, choice)
+    passed_elig, elig_reason = validate_eligibility(
+        profile, target_level, admission_type, derive_major_code(path)
+    )
+    if not passed_elig:
+        reason_codes.append(f"ELIGIBILITY_FAIL:{elig_reason}")
         return "rejected", None, reason_codes
 
     # Gate 1: min GPA threshold (Sub-1 helper)
@@ -845,18 +975,21 @@ async def evaluate_cascade(
         # Q9 #07 PR2b: snapshot priority bonus (KV + UT) at T6 publish
         # time alongside bonus_rule_snapshot. Same freeze semantic — later
         # admin edits to priority_*_config tables do NOT mutate the
-        # snapshot. Engine treats NULL rule + missing rates as 0đ
-        # (graceful for legacy 315 profiles without backfill).
+        # snapshot. Luật cộng điểm NULL hoặc cờ ``apply_*`` tắt ⇒ 0 điểm có chủ đích; thiếu dữ liệu/cấu hình thì
+        # DỪNG có nhãn (``T6_PER_PROFILE_STOP_ERRORS``), không 0 điểm lặng lẽ.
         # Lazy import: priority_service imports app.models which would
         # create a circular dep at module load time of this engine file.
         from app.services.priority_service import (
             calculate_priority_bonus,
             derive_major_code,
-            derive_profile_target_context,
-            derive_target_level_and_type,
             freeze_priority_snapshot,
+            priority_academic_year,
             validate_eligibility,
         )
+
+        # Q20(a): nguyện vọng thiếu cấu hình trình độ/loại hình ⇒ DỪNG TRƯỚC khi đóng băng — nếu để đóng băng chạy
+        # với ngữ cảnh rỗng thì lỗi nổi ra sẽ là "KV chưa phân giải", sai nhãn.
+        t6_target_level, t6_admission_type = _target_context_or_stop(profile, choice)
 
         # Q9 #07 Phase C — Re-freeze priority_resolution_snapshot at T6 engine.
         # T1 submit already froze with submit-time data; T6 re-freezes in
@@ -867,24 +1000,13 @@ async def evaluate_cascade(
         # Phase E.4 commit 5: T6 freeze bơm context từ choice hiện tại (eager-
         # loaded path đầy đủ qua chain academic_info/offering/program). Cheaper
         # than derive_profile_target_context() vì path đã ở memory.
+        ok, reason = validate_eligibility(
+            profile, t6_target_level, t6_admission_type, derive_major_code(path)
+        )
+        t6_bonus_rule: Optional[dict] = (
+            dict(choice.bonus_rule_snapshot) if choice.bonus_rule_snapshot else None
+        )
         try:
-            t6_target_level: Optional[str] = None
-            t6_admission_type: Optional[str] = None
-            t6_eligibility: Optional[dict] = None
-            t6_bonus_rule: Optional[dict] = (
-                dict(choice.bonus_rule_snapshot) if choice.bonus_rule_snapshot else None
-            )
-            try:
-                t6_target_level, t6_admission_type = derive_target_level_and_type(path)
-                ok, reason = validate_eligibility(
-                    profile, t6_target_level, t6_admission_type, derive_major_code(path)
-                )
-                t6_eligibility = {"passed": ok, "reason": reason}
-            except Exception:  # noqa: BLE001
-                # Path chain missing → defer context, snapshot vẫn freeze với basis
-                # = INSUFFICIENT_DATA hoặc legacy matrix.
-                pass
-
             await freeze_priority_snapshot(
                 profile=profile,
                 db=db,
@@ -892,56 +1014,56 @@ async def evaluate_cascade(
                 resolved_by="system",
                 target_level=t6_target_level,
                 admission_type=t6_admission_type,
-                eligibility=t6_eligibility,
+                eligibility={"passed": ok, "reason": reason},
                 path_bonus_rule=t6_bonus_rule,
             )
+        except (BadRequest, BusinessRuleViolation):
+            # Lỗi miền giữ nguyên nhãn — ĐÚNG tập mà cổng nộp T1 bắt (``admission_service`` quanh freeze ở T1).
+            raise
         except Exception as kv_freeze_exc:  # noqa: BLE001
-            log.warning(
+            # Q17(a): KHÔNG chấm tiếp trên snapshot cũ. Handler chung chỉ log detail + context ⇒ giữ traceback ở đây.
+            log.error(
                 "priority_snapshot_freeze_failed_at_engine",
                 profile_id=getattr(profile, "id", None),
                 choice_id=getattr(choice, "id", None),
-                error=str(kv_freeze_exc),
+                error_type=type(kv_freeze_exc).__name__,
+                exc_info=True,
             )
+            raise PrioritySnapshotFreezeFailed(
+                context={
+                    "profile_id": getattr(profile, "id", None),
+                    "choice_id": getattr(choice, "id", None),
+                    "error_type": type(kv_freeze_exc).__name__,
+                }
+            ) from kv_freeze_exc
 
-        # Eager-load-safe access via __dict__.get (NOT getattr): plain
-        # ``getattr(path, "admission_round", None)`` would trigger a
-        # SQLAlchemy lazy-load in async context → MissingGreenlet on
-        # paths that don't pre-load the relation (existing Phase 3 API
-        # tests + legacy callers). __dict__.get returns None when the
-        # relation hasn't been eager-loaded, letting us skip the
-        # priority calc gracefully instead of crashing.
+        # Owner Q10(a): mức theo NĂM TUYỂN SINH của hồ sơ. Đợt của nguyện vọng (nếu đã nạp — đọc qua __dict__ để
+        # không lazy-load trong async) phải cùng năm, lệch ⇒ dừng. Trước đây năm lấy từ đợt và đợt chưa nạp thì
+        # BỎ chấm (0 điểm lặng lẽ).
+        academic_year = priority_academic_year(profile)
         round_obj = path.__dict__.get("admission_round")
-        academic_year = (
-            round_obj.__dict__.get("academic_year") if round_obj else None
+        round_year = round_obj.__dict__.get("academic_year") if round_obj is not None else None
+        if round_year is not None and int(round_year) != academic_year:
+            raise PriorityYearMismatch(
+                profile_year=academic_year,
+                round_year=int(round_year),
+                context={
+                    "profile_id": getattr(profile, "id", None),
+                    "choice_id": getattr(choice, "id", None),
+                    "path_id": getattr(path, "id", None),
+                },
+            )
+        (
+            choice.priority_area_bonus_snapshot,
+            choice.priority_object_bonus_snapshot,
+            choice.priority_config_snapshot,
+        ) = await calculate_priority_bonus(
+            db=db,
+            profile=profile,
+            rule=choice.bonus_rule_snapshot,
+            academic_year=academic_year,
         )
-        if academic_year is None:
-            # Review-3 MAJOR fix: observable defense-in-depth so a prod
-            # caller that forgot to eager-load admission_round surfaces
-            # in logs instead of silently scoring 0đ for every candidate.
-            # The router-side fix (selectinload AdmissionPath.admission_round)
-            # closes the current gap; this warning catches future regressions.
-            log.warning(
-                "priority_bonus_skipped_missing_academic_year",
-                profile_id=getattr(profile, "id", None),
-                choice_id=getattr(choice, "id", None),
-                path_id=getattr(path, "id", None),
-                reason=(
-                    "admission_round relation not eager-loaded (or NULL "
-                    "academic_year). Priority bonus will be 0đ for this "
-                    "choice — verify the caller's selectinload chain."
-                ),
-            )
-        if academic_year is not None:
-            (
-                choice.priority_area_bonus_snapshot,
-                choice.priority_object_bonus_snapshot,
-                choice.priority_config_snapshot,
-            ) = await calculate_priority_bonus(
-                db=db,
-                profile=profile,
-                rule=choice.bonus_rule_snapshot,
-                academic_year=academic_year,
-            )
+        ghi_dau_vet_thong_tu(choice, profile)
 
         # Q9 #07 CR-P0: feed the priority bonus total into the decision
         # so the snapshot columns actually affect admit/reject. Without

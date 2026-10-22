@@ -12,11 +12,6 @@ For new code, import from:
 This file re-exports everything for existing imports to continue working.
 """
 import asyncio
-import logging
-
-from celery.signals import worker_process_init, worker_process_shutdown
-
-from .config import settings
 
 # Re-export celery_app from new location
 from .celery_app import celery_app
@@ -48,28 +43,12 @@ from .tasks.utils import (
 )
 
 
-log = logging.getLogger(__name__)
-
-
-@worker_process_init.connect
-def init_worker(**kwargs):
-    """
-    Initialize logging when worker process starts.
-    Note: Async engine is now created per-task to avoid event loop issues.
-    """
-    print("INFO [celery_utils.py/init_worker]: Initializing worker process...")
-    logging.basicConfig(
-        level=settings.LOG_LEVEL.upper(),
-        format="%(asctime)s [%(levelname)-5.5s] [%(name)s] %(message)s",
-    )
-    log.info(f"Root logger level set to {settings.LOG_LEVEL.upper()}")
-    print("INFO [celery_utils.py/init_worker]: Worker logging configured.")
-
-
-@worker_process_shutdown.connect
-def shutdown_worker(**kwargs):
-    """Cleanup when worker shuts down."""
-    log.info("Shutting down worker process...")
+# V6: hai hook `worker_process_init` / `worker_process_shutdown` từng nằm ở
+# đây đã được GỠ. Chúng là hook CHẾT: lệnh worker `celery -A app.celery_app`
+# không bao giờ nạp module này (chỉ web/router/service import nó để `.delay()`),
+# nên "nơi cấu hình log của worker" này trông như đang chạy mà không chạy.
+# Cấu hình log của worker/beat nay nằm ở `app/celery_app.py` (tín hiệu
+# `setup_logging` → `app.core.log_redaction.configure_logging`).
 
 
 # Export all for backward compatibility

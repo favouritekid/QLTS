@@ -566,12 +566,17 @@ async def _recompute_ut_verified_bucket(
     == 'verified'``. If no verified codes, returns ``{applied_code: None,
     applied_rate: 0}``.
 
-    Catalog rate lookup honors ``effective_from``/``effective_to`` window —
-    same query shape as ``admissions_v2.preview_priority_kv``.
+    Mức: owner Q10(a) — năm tuyển sinh của hồ sơ, hàng ĐANG MỞ, một nguồn ``select_open_priority_rates``. Thiếu
+    hàng của BẤT KỲ mã đã xác minh ⇒ nhóm mang nhãn ``rate_status="not_configured"`` (điểm ``None``, không 0); thao
+    tác xác minh/từ chối minh chứng VẪN thành công vì nhóm này chỉ để hiển thị — chỉ T6 mới dừng.
     """
-    from datetime import date as _date
-    from sqlalchemy import select as _sel
-    from app.models.priority_config import PriorityObjectConfig
+    from app.services.priority_service import (
+        RATE_TABLE_OBJECT,
+        best_code_by_rate,
+        priority_academic_year,
+        select_open_priority_rates,
+    )
+    from app.utils.exceptions import PriorityRateNotConfigured
 
     evidence = profile.priority_object_evidence or {}
     submitted_codes = list(profile.priority_object_codes or [])
@@ -585,27 +590,23 @@ async def _recompute_ut_verified_bucket(
     if not verified_codes:
         return {"applied_code": None, "applied_rate": 0}
 
-    # Academic year: fall back chain mirrors preview endpoint.
-    academic_year = profile.academic_year or 2026
-    today = _date.today()
-    stmt = (
-        _sel(PriorityObjectConfig.sub_code, PriorityObjectConfig.bonus_points)
-        .where(
-            PriorityObjectConfig.academic_year == academic_year,
-            PriorityObjectConfig.sub_code.in_(verified_codes),
-            PriorityObjectConfig.effective_from <= today,
+    try:
+        muc = await select_open_priority_rates(
+            db,
+            table=RATE_TABLE_OBJECT,
+            academic_year=priority_academic_year(profile),
+            codes=verified_codes,
         )
-        .where(
-            (PriorityObjectConfig.effective_to.is_(None))
-            | (PriorityObjectConfig.effective_to > today)
-        )
-    )
-    rows = (await db.execute(stmt)).all()
-    if not rows:
-        return {"applied_code": None, "applied_rate": 0}
+    except PriorityRateNotConfigured as exc:
+        return {
+            "applied_code": None,
+            "applied_rate": None,
+            "rate_status": "not_configured",
+            "missing_codes": list(exc.missing_codes),
+        }
 
-    top = max(rows, key=lambda r: r[1])
-    return {"applied_code": top[0], "applied_rate": float(top[1])}
+    top = best_code_by_rate(muc, verified_codes)
+    return {"applied_code": top, "applied_rate": float(muc[top])}
 
 
 async def _evidence_mutation_common_checks(

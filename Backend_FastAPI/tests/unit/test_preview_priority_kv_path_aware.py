@@ -49,6 +49,8 @@ async def test_preview_passes_target_context_to_engine_resolve() -> None:
         priority_object_codes=[],
         admission_path=None,
         academic_year=2026,
+        # V3 (#681): preview đọc thông tư đang áp; None ⇒ dự kiến theo hôm nay.
+        applicable_circular=None,
     )
 
     captured = {}
@@ -77,7 +79,8 @@ async def test_preview_passes_target_context_to_engine_resolve() -> None:
 
     # Mock db.execute cho bonus rate lookup (PriorityAreaConfig + PriorityObjectConfig)
     bonus_result = MagicMock()
-    bonus_result.scalar_one_or_none = MagicMock(return_value=None)  # no rate row
+    bonus_result.scalar_one_or_none = MagicMock(return_value=None)
+    bonus_result.all = MagicMock(return_value=[])  # C8: tra mức qua select_open_priority_rates  # no rate row
     object_result = MagicMock()
     object_result.all = MagicMock(return_value=[])
 
@@ -138,6 +141,8 @@ async def test_preview_missing_target_context_still_calls_engine_with_none() -> 
         priority_object_codes=[],
         admission_path=None,
         academic_year=2026,
+        # V3 (#681): preview đọc thông tư đang áp; None ⇒ dự kiến theo hôm nay.
+        applicable_circular=None,
     )
 
     captured = {}
@@ -166,6 +171,7 @@ async def test_preview_missing_target_context_still_calls_engine_with_none() -> 
 
     bonus_result = MagicMock()
     bonus_result.scalar_one_or_none = MagicMock(return_value=None)
+    bonus_result.all = MagicMock(return_value=[])  # C8: tra mức qua select_open_priority_rates
     object_result = MagicMock()
     object_result.all = MagicMock(return_value=[])
 

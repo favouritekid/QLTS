@@ -16,6 +16,7 @@ Flow:
   7. On failure: classify error → transient (retry w/ backoff) or permanent (dead-letter)
 """
 import logging
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 from datetime import datetime, timedelta, timezone
 
 from ..celery_app import celery_app
@@ -243,7 +244,7 @@ def execute_notification_delivery(self, delivery_id: int):
                 return {"status": "dead_lettered", "reason": "not_supported", "delivery_id": delivery_id}
             except Exception as e:
                 # Unexpected exception — treat as transient
-                error_msg = f"Unexpected error: {str(e)}"
+                error_msg = f"Unexpected error: {chu_loi_an_toan(e)}"  # cột error_reason
                 task_log.error(f"Delivery {delivery_id} exception: {e}", exc_info=True)
                 result = None  # Will be handled in failure path below
 

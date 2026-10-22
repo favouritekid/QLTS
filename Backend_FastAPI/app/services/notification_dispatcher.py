@@ -38,6 +38,7 @@ Usage:
     )
 """
 import asyncio
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 import structlog
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
@@ -542,7 +543,7 @@ async def _send_via_channel(
         return (channel_name, None, f"Unknown channel: {str(e)}")
     except Exception as e:
         # Channel send failed
-        return (channel_name, None, f"Delivery failed: {str(e)}")
+        return (channel_name, None, f"Delivery failed: {chu_loi_an_toan(e)}")
 
 
 def _build_action_snapshot(

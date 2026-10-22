@@ -1071,13 +1071,16 @@ def test_rule_applied_la_giu_nguyen_cau_da_luu() -> None:
     assert with_current_law_citation(snap)["rule_law_citation"] == "câu đã lưu"
 
 
-def _response_toi_thieu(snapshot: dict) -> dict:
+def _response_toi_thieu(snapshot: dict, applicable_circular: str = "TT05_2021") -> dict:
+    """Phản hồi tối thiểu. Thông tư GHI RÕ: để trống thì câu căn cứ theo thông tư DỰ KIẾN của hôm nay — ca
+    test sẽ tự đổi kết quả sau 03-11-2026 mà không ai sửa mã."""
     from datetime import datetime, timezone
 
     now = datetime(2026, 10, 11, tzinfo=timezone.utc)
     return {
         "id": 1, "lead_id": 1, "status": "submitted", "version": 1, "academic_year": 2026,
         "applied_rules": {}, "created_at": now, "updated_at": now,
+        "applicable_circular": applicable_circular,
         "priority_resolution_snapshot": snapshot,
     }
 
@@ -1100,7 +1103,8 @@ def test_response_profile_khong_sua_snapshot_nguon() -> None:
 
 
 def _bang_du_phong_frontend() -> dict:
-    """Đọc bảng ``deriveLawCitationFallback`` trong ``engineDisplay.ts`` (khối ``const map``)."""
+    """Đọc bảng dự phòng trong ``engineDisplay.ts``: ``{thông_tư: {rule_applied: câu}}`` (khối
+    ``LAW_CITATION_FALLBACK``, mỗi thông tư một khối con)."""
     import re
     from pathlib import Path
 
@@ -1115,33 +1119,116 @@ def _bang_du_phong_frontend() -> dict:
     if tep is None:
         pytest.skip("không thấy cây frontend (chạy trong container chỉ có Backend_FastAPI)")
     noi_dung = tep.read_text(encoding="utf-8")
-    khoi = re.search(
-        r"function deriveLawCitationFallback\b.*?const map[^{]*\{(.*?)\n  \}", noi_dung, re.S
-    )
-    assert khoi, "không tìm thấy khối `const map` trong deriveLawCitationFallback"
-    bang: dict = {}
-    for dong in khoi.group(1).splitlines():
-        m = re.match(r'\s*(\w+):\s*(?:"([^"]*)"|(null))\s*,?\s*$', dong)
-        if m:
-            bang[m.group(1)] = None if m.group(3) else m.group(2)
-        elif dong.strip() and not dong.strip().startswith("//"):
-            raise AssertionError(f"dòng không đọc được trong bảng frontend: {dong!r}")
-    assert bang, "bảng frontend rỗng — bộ đọc đang canh hụt"
-    return bang
+    ngoai = re.search(r"const LAW_CITATION_FALLBACK\b[^=]*=\s*\{\n(.*?)\n\}\n", noi_dung, re.S)
+    assert ngoai, "không tìm thấy khối `LAW_CITATION_FALLBACK` trong engineDisplay.ts"
+    ket_qua: dict = {}
+    for thong_tu, than in re.findall(r"^  (\w+): \{\n(.*?)\n  \},?$", ngoai.group(1), re.S | re.M):
+        bang: dict = {}
+        for dong in than.splitlines():
+            m = re.match(r'\s*(\w+):\s*(?:"([^"]*)"|(null))\s*,?\s*$', dong)
+            if m:
+                bang[m.group(1)] = None if m.group(3) else m.group(2)
+            elif dong.strip() and not dong.strip().startswith("//"):
+                raise AssertionError(f"dòng không đọc được trong bảng frontend: {dong!r}")
+        assert bang, f"bảng frontend của {thong_tu} rỗng — bộ đọc đang canh hụt"
+        ket_qua[thong_tu] = bang
+    assert ket_qua, "không đọc được khối thông tư nào — bộ đọc đang canh hụt"
+    return ket_qua
 
 
 def test_bang_du_phong_frontend_noi_giong_backend() -> None:
-    from app.constants.priority_law_citation import RULE_LAW_CITATION
+    """H2 — FE = BE cho TỪNG thông tư. Đột biến: sửa một câu TT 76 ở FE."""
+    from app.constants.priority_law_citation import RULE_LAW_CITATION_BY_CIRCULAR
 
     fe = _bang_du_phong_frontend()
-    lech = {k: (v, RULE_LAW_CITATION.get(k, "<không có ở BE>")) for k, v in fe.items()
-            if RULE_LAW_CITATION.get(k, "<không có ở BE>") != v}
+    lech = {}
+    for thong_tu, bang_fe in fe.items():
+        bang_be = RULE_LAW_CITATION_BY_CIRCULAR.get(thong_tu, {})
+        for k, v in bang_fe.items():
+            if bang_be.get(k, "<không có ở BE>") != v:
+                lech[(thong_tu, k)] = (v, bang_be.get(k, "<không có ở BE>"))
     assert not lech, f"bảng frontend lệch bảng BE: {lech}"
 
 
 def test_bang_du_phong_frontend_phu_moi_cau_cua_backend() -> None:
-    from app.constants.priority_law_citation import RULE_LAW_CITATION
+    """H2 — FE có đủ MỌI thông tư và mọi câu không rỗng của BE. Đột biến: bỏ khối TT76_2026 ở FE."""
+    from app.constants.priority_law_citation import RULE_LAW_CITATION_BY_CIRCULAR
 
     fe = _bang_du_phong_frontend()
-    thieu = [k for k, v in RULE_LAW_CITATION.items() if v is not None and k not in fe]
+    thieu = [
+        (tt, k)
+        for tt, bang in RULE_LAW_CITATION_BY_CIRCULAR.items()
+        for k, v in bang.items()
+        if v is not None and k not in fe.get(tt, {})
+    ]
     assert not thieu, f"bảng frontend thiếu khoá có câu căn cứ: {thieu}"
+
+
+def test_h1_cau_can_cu_theo_thong_tu_cua_ho_so() -> None:
+    """H1 — hồ sơ TT 76 + ``longest_duration`` ⇒ câu TT 76; hồ sơ TT 05 ⇒ câu của #680.
+
+    Đột biến: validator bỏ qua thông tư (gọi ``with_current_law_citation(value)`` không truyền thông tư).
+    """
+    from app.schemas.admission import AdmissionProfileResponse
+
+    snap = {"rule_applied": "longest_duration", "rule_law_citation": "câu cũ"}
+    tt76 = AdmissionProfileResponse.model_validate(_response_toi_thieu(snap, "TT76_2026"))
+    tt05 = AdmissionProfileResponse.model_validate(_response_toi_thieu(snap, "TT05_2021"))
+    assert (
+        tt76.priority_resolution_snapshot["rule_law_citation"],
+        tt05.priority_resolution_snapshot["rule_law_citation"],
+    ) == ("TT 76/2026/TT-BGDĐT Phụ lục I", "TT 05/2021 Phụ lục 01 Mục 5.a")
+
+
+def test_h1b_hai_bang_cung_tap_rule() -> None:
+    """Bảng TT 76 có đúng tập ``rule_applied`` của bảng TT 05 — thiếu khoá thì câu rơi về None lặng lẽ.
+
+    Đột biến: bỏ ``commune_lookup`` khỏi ``RULE_LAW_CITATION_TT76``.
+    """
+    from app.constants.priority_law_citation import RULE_LAW_CITATION, RULE_LAW_CITATION_TT76
+
+    assert set(RULE_LAW_CITATION_TT76) == set(RULE_LAW_CITATION)
+
+
+def test_h1c_tt76_khong_trich_so_muc() -> None:
+    """Số mục TT 76 Phụ lục I CHƯA đối chiếu nguyên văn ⇒ không câu TT 76 nào được nêu "Mục".
+
+    Đột biến: gán "Mục 2.a" cho ``longest_duration`` của TT 76.
+    """
+    from app.constants.priority_law_citation import RULE_LAW_CITATION_TT76
+
+    assert [v for v in RULE_LAW_CITATION_TT76.values() if v and "Mục" in v] == []
+
+
+def test_h1d_thong_tu_la_bi_tu_choi() -> None:
+    """Mã thông tư lạ ⇒ ValueError, không rơi về bảng TT 05.
+
+    Đột biến: ``_bang_cho`` trả bảng TT 05 cho mã lạ.
+    """
+    from app.constants.priority_law_citation import resolve_law_citation
+
+    try:
+        resolve_law_citation("longest_duration", "TT99_2030")
+        loi = None
+    except ValueError as e:
+        loi = e
+    assert isinstance(loi, ValueError)
+
+
+def test_h1e_moi_rule_engine_phat_ra_deu_co_trong_moi_bang() -> None:
+    """Mọi ``rule_applied`` mà ``priority_service`` có thể ghi đều là khoá của MỌI bảng căn cứ.
+
+    Khoá thiếu ⇒ ``with_current_law_citation`` GIỮ câu đã lưu (có thể là câu của thông tư khác / câu sai cũ) thay vì
+    tính lại. Bản đầu thiếu ``manual_override_unverified`` ở cả hai bảng (qlts-22 phát hiện 11-10).
+    Đột biến: bỏ ``manual_override_unverified`` khỏi bảng TT 76.
+    """
+    import re
+    from pathlib import Path
+
+    from app.constants.priority_law_citation import RULE_LAW_CITATION_BY_CIRCULAR
+    from app.services import priority_service
+
+    nguon = Path(priority_service.__file__).read_text(encoding="utf-8")
+    phat_ra = set(re.findall(r'rule_applied="([a-z_]+)"', nguon)) | {priority_service._MANUAL_OVERRIDE_UNVERIFIED_RULE}
+    thieu = {tt: sorted(phat_ra - set(bang)) for tt, bang in RULE_LAW_CITATION_BY_CIRCULAR.items() if phat_ra - set(bang)}
+    assert thieu == {}

@@ -94,6 +94,37 @@ settings.MFA_ENFORCE_ROLES = []
 # dùng trong test; production bắt buộc set thật và config.py chặn ở startup.
 settings.MFA_BACKUP_CODE_PEPPER = "test-only-backup-code-pepper-do-not-reuse"
 
+# F58 (21-10): mọi test phải trả lại ĐÚNG đối tượng mang hai override trên. Một test thay
+# ``app.config.settings`` (vd. ``importlib.reload``) mà không trả lại thì mọi test chạy SAU
+# trong cùng tiến trình mất override — lỗi hiện ở tệp KHÁC (403 "MFA is required"), không
+# ở test gây ra. Guard dưới đây đỏ ĐÚNG test gây ra.
+_SETTINGS_GOC = settings
+_OVERRIDE_GOC = {
+    "MFA_ENFORCE_ROLES": list(settings.MFA_ENFORCE_ROLES),
+    "MFA_BACKUP_CODE_PEPPER": settings.MFA_BACKUP_CODE_PEPPER,
+}
+
+
+@pytest.fixture(autouse=True)
+def canh_settings_goc_khong_bi_thay():
+    """Sau MỖI test: ``app.config.settings`` vẫn là ``_SETTINGS_GOC``, ``app.config.Settings``
+    vẫn là lớp của nó, và hai override còn nguyên. Lệch ⇒ trả lại trạng thái gốc (lỗi không
+    lây sang test sau) rồi ĐỎ ở teardown của chính test gây ra. Chỉ in TÊN, không in giá trị."""
+    yield
+    from app import config as cfg
+
+    lech = []
+    if cfg.settings is not _SETTINGS_GOC:
+        lech.append("app.config.settings bị thay bằng đối tượng khác")
+    if cfg.Settings is not type(_SETTINGS_GOC):
+        lech.append("app.config.Settings bị thay bằng lớp khác")
+    lech += ["%s lệch" % k for k, v in _OVERRIDE_GOC.items() if getattr(_SETTINGS_GOC, k) != v]
+    if lech:
+        cfg.settings, cfg.Settings = _SETTINGS_GOC, type(_SETTINGS_GOC)
+        for k, v in _OVERRIDE_GOC.items():
+            setattr(_SETTINGS_GOC, k, list(v) if isinstance(v, list) else v)
+        pytest.fail("trạng thái settings của bộ test không được trả lại: " + "; ".join(lech), pytrace=False)
+
 
 # --- IMPORT CONSTANTS ---
 try:

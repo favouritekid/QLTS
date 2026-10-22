@@ -1,5 +1,6 @@
 # app/services/user_service.py
 import hashlib
+from app.core.log_redaction import chu_loi_an_toan  # V6 vòng 5: lỗi CSDL ra ngoài log ⇒ tóm tắt
 import io
 import csv
 from typing import AsyncGenerator
@@ -1397,7 +1398,7 @@ async def invalidate_all_sessions(
                     context={
                         "operation": "redis_blacklist",
                         "user_id": user_id,
-                        "error": str(e_redis_set),
+                        "error": chu_loi_an_toan(e_redis_set),  # V6 vòng 5b
                     }
                 )
 
@@ -1470,7 +1471,7 @@ async def invalidate_all_sessions(
             )
             raise UserServiceError(
                 detail="Could not invalidate sessions",
-                context={"user_id": user_id, "error": str(e)}
+                context={"user_id": user_id, "error": chu_loi_an_toan(e)}  # V6 vòng 5b
             )
         else:
             raise  # Re-raise custom exceptions (e.g., CacheServiceError)
@@ -1801,7 +1802,8 @@ async def stream_users_csv(
     except Exception as e:
         log.error("Error during CSV stream query", error=str(e), exc_info=True)
         # Gửi thông báo lỗi vào file CSV nếu có thể
-        yield f"\"Error streaming data: {str(e)}\""
+        # V6 vòng 5: tệp CSV tải về là PHẢN HỒI — không mang chữ lỗi CSDL.
+        yield f"\"Error streaming data: {chu_loi_an_toan(e)}\""
 
     log.info("CSV stream generation complete", filters=params)
 
@@ -1919,7 +1921,7 @@ async def sync_users_to_casbin(
             failed_users.append({
                 "user_id": user.id,
                 "username": getattr(user, 'username', 'unknown'),
-                "error": str(e)
+                "error": chu_loi_an_toan(e)
             })
 
     # Note: Caller is responsible for db.commit()

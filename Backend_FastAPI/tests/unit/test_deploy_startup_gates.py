@@ -241,6 +241,462 @@ def test_model_compose_that_giu_celery_false_du_bien_host_dat_true(
 # =============================================================================
 # F7 + F8 — chạy THẬT scripts/deploy.sh với docker/git giả
 # =============================================================================
+# Mô hình CỬA GHI (Step 4c, vá 12-10-2026 — đường A). MỘT nguồn cho CẢ HAI stub
+# `docker` (tệp này và `test_deploy_ghim_sha.py`): chèn vào chỗ đặt dấu
+# `# @MO_HINH_CUA_GHI@`, TRƯỚC giao thức sẵn có của từng stub.
+#
+# Trạng thái ba container ghi đọc từ NHẬT KÝ LỆNH, không từ biến: `docker stop
+# <CID>` ⇒ exited; `docker start <CID>` hoặc `up -d backend celery-worker
+# celery-beat` (Step 8) ⇒ running. Nhờ vậy mọi phép đo của 4c / bước (d) / nhánh
+# lùi hỏi đúng HẬU QUẢ của lệnh script vừa chạy, không hỏi một hằng.
+#
+# Biến của SÂN KHẤU (không phải bypass trong script production):
+#   STUB_HOI_SINH=chay|dung_lai   — một tác nhân NGOÀI deploy.sh bật backend cũ
+#                                   lên (chay) hoặc bật rồi tắt lại (dung_lai)
+#                                   trong lúc migrate; dòng nhật ký mang đuôi
+#                                   `# tac-nhan-ngoai`.
+#   STUB_TIN_HIEU_O_MIGRATE / _O_DUMP=<TÊN TÍN HIỆU> — gửi tín hiệu cho CHÍNH
+#                                   bash đang chạy deploy.sh ($PPID) đúng lúc ấy.
+#   STUB_PHIEN_LA, STUB_PHIEN_LA_SAU_MIGRATE, STUB_PSQL_RC — pg_stat_activity.
+#   STUB_DEM_RC, STUB_DEM_T1_LECH — bộ đếm pg_stat_user_tables (PA2).
+#   STUB_RESTART_POLICY, STUB_STOP_RC, STUB_START_RC, STUB_RESTART_RC.
+#   (vòng 2) STUB_VAN_TAY_RC, STUB_VAN_TAY_LECH_SAU_MIGRATE — vân tay lược đồ;
+#   STUB_IP_DOI — IP backend đổi sau khi deploy `docker start` backend cũ;
+#   STUB_THAN_LECH — thân /health qua nginx khác thân từ backend;
+#   STUB_TT_HONG_O_MIGRATE — tệp trạng thái bị thay bằng thư mục lúc migrate.
+#   `scripts/nginx-verify.sh` của sân khấu đọc STUB_NGINX_VERIFY_RC.
+#   (vòng 3) STUB_MA_HEALTH — mã /health mà đầu dò PHỤC HỒI DỊCH VỤ thấy qua nginx;
+#   STUB_VAN_TAY_LECH_SAU_DUMP — lược đồ đổi (DDL ngoài) sau khi pg_dump đã chạy;
+#   STUB_VAN_TAY_RC_SAU_DUMP — vân tay KHÔNG đo được sau khi pg_dump đã chạy;
+#   STUB_ONEOFF=exited|running — one-off alembic của lượt còn sót sau migrate
+#     (CID 66…6, tên lấy từ `--name` trong nhật ký); STUB_ONEOFF_TEN_KHAC=1 — CID
+#     ghi nhận mang tên KHÁC tên lượt; `ps -aq --filter label=…oneoff=True` liệt
+#     kê thêm one-off 77…7 của LƯỢT KHÁC (chỉ đột biến dọn theo nhãn mới hỏi).
+#   (vòng 4) STUB_NGINX_CID_KHAC=1 — nginx đang phục vụ là container khác CID ghi;
+#   STUB_CID_MAT=<service> — container ghi nhận của service ấy không còn;
+#   STUB_ONEOFF_NHAN_CHAY=1 — còn one-off của service backend ĐANG CHẠY trong
+#     project; STUB_ONEOFF=chay_roi_xong + STUB_ONEOFF_SO_LAN_CHAY=N — one-off của
+#     lượt `running` N lần hỏi đầu rồi `exited`.
+#   (vòng 4b) STUB_BAT_TAT_O_BUILD=<service> — tác nhân NGOÀI bật rồi tắt container
+#     ghi nhận của service ấy đúng lúc Step 4 `build --parallel`, tức GIỮA Step 3a và
+#     Step 4c của đường đi tiếp: vẫn `exited`, chỉ mốc vòng đời (đếm start/stop) đổi.
+#   (vòng 5, F43) STUB_ONEOFF=da_rm — one-off của lượt TỒN TẠI (running) trong lúc
+#     migration chạy, rồi bị `--rm` dọn khi lệnh migration trả về (mốc "$QLTS_STUB_LOG.mig_xong");
+#   STUB_ONEOFF_DOC=loi|loi_sau_migrate|treo — phép ĐỌC Docker nhắm vào one-off của
+#     lượt (inspect theo CID, `ps -a --filter id=` / `--filter name=`): `loi` = daemon
+#     trả lỗi TỪ ĐẦU (bộ theo dõi nền không ghi được CID); `loi_sau_migrate` = chỉ lỗi
+#     sau khi lệnh migration trả về (CID đã kịp ghi); `treo` = `docker inspect` của
+#     one-off TREO STUB_TREO_GIAY giây (mặc định 3600) rồi lỗi, `ps` vẫn trả lời.
+#     Stub ghi giờ bắt đầu lần treo đầu vào "$QLTS_STUB_LOG.treo".
+#   STUB_PS_NHAN_LOI=1 — phép quét one-off theo nhãn project của Step 3a đọc lỗi.
+#   (vòng 6, N21.07) STUB_GHI_TREO=start:<service>|restart — lệnh GHI ấy của deploy (theo CID
+#     của service / nginx) TREO STUB_TREO_GIAY giây (mặc định 3600) rồi trả STUB_GHI_RC_SAU_TREO
+#     (mặc định 1). STUB_GHI_TREO_KIEU: da_lam (mặc định — daemon ĐÃ làm, chỉ phản hồi bị giữ)
+#     | chua_lam (lệnh chưa có hiệu lực) | dung (nginx nằm DỪNG sau đó) | khong_doc (sau đó mọi
+#     phép đọc container ấy lỗi daemon). Giờ bắt đầu treo ghi vào "$QLTS_STUB_LOG.treo".
+#   STUB_DO_TREO=1 — đầu dò dịch vụ qua SNI (`docker run … THAN-NGINX`) treo.
+#   STUB_TREO_KHI=<mẫu glob của lệnh> [+ STUB_TREO_SAU / STUB_TREO_TRUOC=<chuỗi đã / CHƯA có
+#     trong nhật ký lệnh>] — lệnh khớp TREO (đo hạn của phép đọc ở đúng một bước).
+#   (vòng 6c, F46) STUB_PSQL_TREO_SAU=<chuỗi đã có trong nhật ký lệnh> — mọi `exec -T postgres
+#     psql` SAU mốc ấy TREO STUB_TREO_GIAY giây rồi lỗi (độc lập với STUB_TREO_KHI: một bước
+#     Docker tiêu hết ngân sách, phép psql KẾ TIẾP mới là thứ được canh).
+#   (vòng 7d) STUB_NHAY_KHI=<mẫu glob> + STUB_NHAY_GIAY=<N> — lời gọi khớp "tốn" N giây ĐỒNG HỒ
+#     TƯỜNG (cộng vào "$QLTS_STUB_LOG.nhay"; shim `date +%s` của ca 7d cộng dồn) — mô phỏng một
+#     bước chậm mà không phải chờ thật.
+#   Mọi lời gọi còn ghi TIẾN TRÌNH CHA vào "$QLTS_STUB_LOG.cha" (một dòng: base64 argv lời gọi
+#     TAB base64 /proc/$PPID/cmdline) — đọc ra lời gọi ấy chạy dưới `timeout <hạn>` hay KHÔNG hạn.
+#   nginx: mốc khởi động = R<số lần `docker restart` CÓ HIỆU LỰC>; "$QLTS_STUB_LOG.nginx_dung" ⇒ exited.
+#   STUB_CHAY_SH_THAT=1 — `docker run … -c <đoạn sh>` chạy THẬT đoạn sh ấy (với
+#     biến -e của nó và `curl` giả của sân khấu); `docker logs` đọc
+#     $QLTS_NGINX_LOG. Dùng cho ca F39 chạy `nginx-verify.sh` THẬT của kho.
+_MANH_STUB_CUA_GHI = r"""# --- mô hình cửa ghi (chèn từ test_deploy_startup_gates._MANH_STUB_CUA_GHI) ---
+# Vòng 3b — ghi HÀNH VI của MỌI lời gọi docker vào "$QLTS_STUB_LOG.goi", một dòng:
+#   <số byte stdin> TAB <sha256 stdin | -> TAB <stdin chứa bản sao 0|1>
+#   TAB <đối số chứa bản sao / trỏ tới tệp chứa bản sao 0|1> TAB <base64 của argv, NUL-ngăn>
+# Bản sao = đầu ra `pg_dump` của stub (chứa "ban sao gia"). Phép phát hiện phát lại
+# bám vào đây — dữ liệu đi đâu — chứ không bám cách viết lệnh.
+_goi_n=0; _goi_sha=-; _goi_in=0; _goi_arg=0
+if [ ! -t 0 ] && ! [ /dev/stdin -ef /dev/null ]; then
+    _goi_f="${QLTS_STUB_LOG}.in.$$"
+    cat > "$_goi_f" 2>/dev/null || :
+    _goi_n=$(wc -c < "$_goi_f" | tr -d ' ')
+    if [ "$_goi_n" != "0" ]; then
+        _goi_sha=$(sha256sum < "$_goi_f" | cut -d' ' -f1)
+        if grep -qF 'ban sao gia' "$_goi_f"; then _goi_in=1; fi
+    fi
+    rm -f "$_goi_f"
+fi
+for _goi_a in "$@"; do
+    case "$_goi_a" in *"ban sao gia"*) _goi_arg=1 ;; esac
+    _goi_ifs=$IFS; IFS=':,='; set -f
+    for _goi_p in $_goi_a; do
+        if [ -f "$_goi_p" ] && grep -qF 'ban sao gia' "$_goi_p" 2>/dev/null; then _goi_arg=1; fi
+    done
+    set +f; IFS=$_goi_ifs
+done
+printf '%s\t%s\t%s\t%s\t%s\n' "$_goi_n" "$_goi_sha" "$_goi_in" "$_goi_arg" \
+    "$(printf '%s\0' "$@" | base64 -w0)" >> "${QLTS_STUB_LOG}.goi"
+# Vòng 6c: tiến trình CHA (vd. `timeout -k 2 7 docker …`, hay bash = KHÔNG hạn) — tệp RIÊNG,
+# một dòng tự đủ nghĩa (không lệ thuộc thứ tự dòng của `.goi`).
+printf '%s\t%s\n' "$(printf '%s\0' "$@" | base64 -w0)" \
+    "$(base64 -w0 2>/dev/null < "/proc/$PPID/cmdline")" >> "${QLTS_STUB_LOG}.cha"
+if [ "${STUB_CHAY_SH_THAT:-0}" = "1" ]; then
+    case "$_tat_ca" in
+        "run "*" -c "*)
+            # Chạy THẬT đoạn `sh -c` mà script gửi vào container đo (ảnh nginx).
+            _ev=(); _scr=""
+            shift
+            while [ "$#" -gt 0 ]; do
+                case "$1" in
+                    -e) _ev+=("$2"); shift 2 ;;
+                    -c) _scr="$2"; shift 2 ;;
+                    --network|--entrypoint) shift 2 ;;
+                    *) shift ;;
+                esac
+            done
+            exec env "${_ev[@]}" sh -c "$_scr" ;;
+        "logs "*)
+            cat "${QLTS_NGINX_LOG:-/khong-co}" 2>/dev/null
+            exit 0 ;;
+    esac
+fi
+_oo=6666666666666666666666666666666666666666666666666666666666666666
+_oo_khac=7777777777777777777777777777777777777777777777777777777777777777
+_ten_oo() { sed -n 's/.* --name \([^ ]*\) .*/\1/p' "$QLTS_STUB_LOG" | head -n 1; }
+_oo_con() {
+    [ -n "${STUB_ONEOFF:-}" ] && grep -q -- ' --name dcg-mig-' "$QLTS_STUB_LOG" && ! grep -qx "docker rm $_oo" "$QLTS_STUB_LOG" \
+        && ! { [ "$STUB_ONEOFF" = "da_rm" ] && [ -f "${QLTS_STUB_LOG}.mig_xong" ]; }
+}
+# Trạng thái one-off. STUB_ONEOFF=chay_roi_xong: `running` cho STUB_ONEOFF_SO_LAN_CHAY
+# lần hỏi `.State.Status` đầu (đếm trong tệp), rồi `exited` — mô phỏng alembic chạy
+# tiếp một lúc sau khi deploy.sh bị ngắt (vòng 4, trap CHỜ one-off).
+_oo_tt() {
+    case "${STUB_ONEOFF:-}" in
+        chay_roi_xong)
+            _n=$(cat "${QLTS_STUB_LOG}.oo_dem" 2>/dev/null || echo 0)
+            if [ "$_n" -lt "${STUB_ONEOFF_SO_LAN_CHAY:-2}" ]; then echo running; else echo exited; fi ;;
+        da_rm) echo running ;;
+        *) echo "${STUB_ONEOFF:-}" ;;
+    esac
+}
+_da_dung() {
+    awk -v c="$1" '
+        index($0, "docker stop ") == 1 && index($0, c) { st = 1 }
+        index($0, "docker start ") == 1 && index($0, c) { st = 0 }
+        index($0, "up -d backend celery-worker celery-beat") { st = 0 }
+        END { exit (st ? 0 : 1) }' "$QLTS_STUB_LOG"
+}
+_dem_lenh() { grep -c "^docker $1 .*$2" "$QLTS_STUB_LOG" || true; }
+if [ -n "${STUB_BAT_TAT_O_BUILD:-}" ]; then
+    case "$_tat_ca" in
+        *" build --parallel"*)
+            # Không exit: lệnh build vẫn rơi xuống giao thức sẵn có.
+            echo "docker start $(_cid_gia "$STUB_BAT_TAT_O_BUILD") # tac-nhan-ngoai" >> "$QLTS_STUB_LOG"
+            echo "docker stop $(_cid_gia "$STUB_BAT_TAT_O_BUILD") # tac-nhan-ngoai" >> "$QLTS_STUB_LOG" ;;
+    esac
+fi
+_cn=$(_cid_gia nginx)
+# --- Vòng 6 (N21.07) ---------------------------------------------------------
+_treo_bat_dau() { [ -f "${QLTS_STUB_LOG}.treo" ] || date +%s.%N > "${QLTS_STUB_LOG}.treo"; }
+# Đọc treo theo mẫu, chỉ ở ĐÚNG một bước (mốc trong nhật ký lệnh).
+if [ -n "${STUB_TREO_KHI:-}" ]; then
+    case "$_tat_ca" in
+        $STUB_TREO_KHI)
+            if { [ -z "${STUB_TREO_SAU:-}" ] || grep -qF -- "$STUB_TREO_SAU" "$QLTS_STUB_LOG"; } \
+               && { [ -z "${STUB_TREO_TRUOC:-}" ] || ! grep -qF -- "$STUB_TREO_TRUOC" "$QLTS_STUB_LOG"; }; then
+                _treo_bat_dau
+                sleep "${STUB_TREO_GIAY:-3600}"
+                echo "stub: hết giờ chờ daemon" >&2; exit 1
+            fi ;;
+    esac
+fi
+# Vòng 7d: lời gọi khớp "tốn" N giây đồng hồ tường (xem STUB_NHAY_KHI ở đầu tệp).
+if [ -n "${STUB_NHAY_KHI:-}" ]; then
+    case "$_tat_ca" in
+        $STUB_NHAY_KHI) echo "${STUB_NHAY_GIAY:-0}" >> "${QLTS_STUB_LOG}.nhay" ;;
+    esac
+fi
+# Vòng 6c: phép psql TREO sau một mốc (xem STUB_PSQL_TREO_SAU ở đầu tệp).
+if [ -n "${STUB_PSQL_TREO_SAU:-}" ]; then
+    case "$_tat_ca" in
+        *" exec -T postgres psql "*)
+            if grep -qF -- "$STUB_PSQL_TREO_SAU" "$QLTS_STUB_LOG"; then
+                _treo_bat_dau
+                sleep "${STUB_TREO_GIAY:-3600}"
+                echo "stub: hết giờ chờ CSDL" >&2; exit 1
+            fi ;;
+    esac
+fi
+# Container mà một lệnh GHI treo kiểu `khong_doc` để lại: mọi phép đọc nó lỗi daemon.
+for _f in "${QLTS_STUB_LOG}".doc_hong.*; do
+    [ -e "$_f" ] || continue
+    _x=${_f##*.doc_hong.}
+    case "$_tat_ca" in
+        inspect*"$_x"*|"ps -a -q --no-trunc --filter id=$_x"|*" ps -q "*|*" ps -aq "*)
+            echo "Cannot connect to the Docker daemon (stub)" >&2; exit 1 ;;
+    esac
+done
+# Lệnh GHI (`start` / `restart`) của deploy TREO theo STUB_GHI_TREO / STUB_GHI_TREO_KIEU.
+_ghi_treo() {
+    local dich
+    case "${STUB_GHI_TREO:-}" in
+        "start:"*) [ "$1" = start ] || return 0; dich=$(_cid_gia "${STUB_GHI_TREO#start:}") ;;
+        restart) [ "$1" = restart ] || return 0; dich=$_cn ;;
+        *) return 0 ;;
+    esac
+    case "$_tat_ca" in *"$dich"*) : ;; *) return 0 ;; esac
+    case "${STUB_GHI_TREO_KIEU:-da_lam}" in
+        chua_lam) sed -i '$ s/^docker \(start\|restart\) /docker \1-khong-hieu-luc /' "$QLTS_STUB_LOG" ;;
+        dung) : > "${QLTS_STUB_LOG}.nginx_dung" ;;
+        khong_doc) : > "${QLTS_STUB_LOG}.doc_hong.$dich" ;;
+    esac
+    _treo_bat_dau
+    sleep "${STUB_TREO_GIAY:-3600}"
+    exit "${STUB_GHI_RC_SAU_TREO:-1}"
+}
+# Vòng 5 (F43): phép ĐỌC nhắm vào one-off của lượt hỏng theo STUB_ONEOFF_DOC.
+case "$_tat_ca" in
+    inspect*"$_oo"*|"inspect -f {{.Id}} dcg-mig-"*|"ps -a -q --no-trunc --filter id=$_oo"|"ps -a -q --no-trunc --filter name="*)
+        case "${STUB_ONEOFF_DOC:-}" in
+            loi)
+                echo "Cannot connect to the Docker daemon (stub)" >&2; exit 1 ;;
+            loi_sau_migrate)
+                if [ -f "${QLTS_STUB_LOG}.mig_xong" ]; then
+                    echo "Cannot connect to the Docker daemon (stub)" >&2; exit 1
+                fi ;;
+            treo)
+                case "$_tat_ca" in
+                    inspect*"$_oo"*)
+                        [ -f "${QLTS_STUB_LOG}.treo" ] || date +%s.%N > "${QLTS_STUB_LOG}.treo"
+                        sleep "${STUB_TREO_GIAY:-3600}"
+                        echo "stub: hết giờ chờ daemon" >&2; exit 1 ;;
+                esac ;;
+        esac ;;
+esac
+case "$_tat_ca" in
+    "stop "*)
+        exit "${STUB_STOP_RC:-0}" ;;
+    "start "*)
+        _ghi_treo start
+        exit "${STUB_START_RC:-0}" ;;
+    "restart "*)
+        _ghi_treo restart
+        exit "${STUB_RESTART_RC:-0}" ;;
+    "run --network "*THAN-NGINX*)
+        if [ "${STUB_DO_TREO:-0}" = "1" ]; then
+            _treo_bat_dau; sleep "${STUB_TREO_GIAY:-3600}"; exit 1
+        fi
+        # Đầu dò PHỤC HỒI DỊCH VỤ: mã trạng thái qua SNI + so THÂN /health qua
+        # nginx với thân lấy thẳng từ backend.
+        echo "MA-HEALTH ${STUB_MA_HEALTH:-200}"
+        echo "MA-LOGIN 200"
+        echo "MA-API 401"
+        echo "MA-CHUNG-THU 200"
+        _h=1111111111111111111111111111111111111111111111111111111111111111
+        echo "THAN-NGINX $_h"
+        if [ "${STUB_THAN_LECH:-0}" = "1" ]; then
+            echo "THAN-BACKEND 2222222222222222222222222222222222222222222222222222222222222222"
+        else
+            echo "THAN-BACKEND $_h"
+        fi
+        exit 0 ;;
+    *"'nsp|'"*)
+        # Vân tay lược đồ (catalog). STUB_VAN_TAY_LECH_SAU_MIGRATE=1: migration
+        # hỏng để lại một bảng MỚI mà dump --clean không xoá.
+        if [ "${STUB_VAN_TAY_RC:-0}" != "0" ]; then exit "$STUB_VAN_TAY_RC"; fi
+        if [ "${STUB_VAN_TAY_RC_SAU_MIGRATE:-0}" != "0" ] && grep -q ' upgrade head' "$QLTS_STUB_LOG"; then
+            exit "$STUB_VAN_TAY_RC_SAU_MIGRATE"
+        fi
+        if [ "${STUB_VAN_TAY_RC_SAU_DUMP:-0}" != "0" ] && grep -q 'pg_dump' "$QLTS_STUB_LOG"; then
+            exit "$STUB_VAN_TAY_RC_SAU_DUMP"
+        fi
+        printf 'col|public.ghi_thu|khoa|text|true|\nnsp|public\nrel|public.ghi_thu|r\n'
+        if [ "${STUB_VAN_TAY_LECH_SAU_MIGRATE:-0}" = "1" ] && grep -q ' upgrade head' "$QLTS_STUB_LOG"; then
+            printf 'rel|public.bang_moi_r2|r\n'
+        fi
+        if [ "${STUB_VAN_TAY_LECH_SAU_DUMP:-0}" = "1" ] && grep -q 'pg_dump' "$QLTS_STUB_LOG"; then
+            printf 'rel|public.bang_ngoai_ddl|r\n'
+        fi
+        exit 0 ;;
+    *pg_stat_database*)
+        echo "100|200|10|10|0"
+        exit 0 ;;
+    *" ps -q nginx"|*" ps -aq nginx")
+        # STUB_NGINX_CID_KHAC=1 (vòng 4): nginx đang phục vụ là một container KHÁC CID đã ghi.
+        if [ "${STUB_NGINX_CID_KHAC:-0}" = "1" ]; then
+            echo 8888888888888888888888888888888888888888888888888888888888888888
+        else
+            echo "$_cn"
+        fi
+        exit 0 ;;
+    inspect*".Image"*"$_cn"*)
+        echo "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        exit 0 ;;
+    inspect*'$k'*".NetworkSettings.Networks"*)
+        echo "dtda_default"
+        exit 0 ;;
+    inspect*"index .NetworkSettings.Networks"*)
+        echo "172.30.0.9"
+        exit 0 ;;
+    *"FROM alembic_version"*)
+        echo "r1_cu"
+        exit 0 ;;
+    *" upgrade head"*)
+        if [ "${STUB_TT_HONG_O_MIGRATE:-0}" = "1" ]; then
+            # Tệp trạng thái hỏng GIỮA chừng: thay bằng một THƯ MỤC cùng tên.
+            for _t in backups/deploy_*.trang-thai; do rm -f -- "$_t"; mkdir -- "$_t"; done
+        fi
+        if [ -n "${STUB_ONEOFF:-}" ]; then sleep 1; fi
+        case "${STUB_HOI_SINH:-}" in
+            chay)
+                echo "docker start $(_cid_gia backend) # tac-nhan-ngoai" >> "$QLTS_STUB_LOG" ;;
+            dung_lai)
+                echo "docker start $(_cid_gia backend) # tac-nhan-ngoai" >> "$QLTS_STUB_LOG"
+                echo "docker stop $(_cid_gia backend) # tac-nhan-ngoai" >> "$QLTS_STUB_LOG" ;;
+        esac
+        if [ -n "${STUB_TIN_HIEU_O_MIGRATE:-}" ]; then
+            kill -s "$STUB_TIN_HIEU_O_MIGRATE" "$PPID"; sleep 1
+        fi
+        : > "${QLTS_STUB_LOG}.mig_xong"
+        exit "${STUB_ALEMBIC_RC:-0}" ;;
+    *pg_dump*)
+        # KHÔNG exit: gửi tín hiệu rồi rơi xuống giao thức pg_dump sẵn có.
+        if [ -n "${STUB_TIN_HIEU_O_DUMP:-}" ]; then
+            kill -s "$STUB_TIN_HIEU_O_DUMP" "$PPID"; sleep 1
+        fi ;;
+    *pg_stat_activity*)
+        if [ "${STUB_PSQL_RC:-0}" != "0" ]; then exit "$STUB_PSQL_RC"; fi
+        _n="${STUB_PHIEN_LA:-0}"
+        if [ -n "${STUB_PHIEN_LA_SAU_MIGRATE:-}" ] && grep -q ' upgrade head' "$QLTS_STUB_LOG"; then
+            _n="$STUB_PHIEN_LA_SAU_MIGRATE"
+        fi
+        case "$_tat_ca" in
+            *"count(*)"*) echo "$_n" ;;
+            *) [ "$_n" = "0" ] || echo "4242 user=gia app=psql-tay state=idle" ;;
+        esac
+        exit 0 ;;
+    *pg_stat_user_tables*)
+        if [ "${STUB_DEM_RC:-0}" != "0" ]; then exit "$STUB_DEM_RC"; fi
+        _d=10
+        if [ "${STUB_DEM_T1_LECH:-0}" = "1" ] && grep -q 'up -d postgres redis' "$QLTS_STUB_LOG"; then
+            _d=11
+        fi
+        printf 'public.ghi_thu|%s\npublic.nhip|7\n' "$_d"
+        exit 0 ;;
+    "ps -a -q --no-trunc --filter name="*)
+        # Vòng 5: tra one-off theo TÊN riêng của lượt (bộ theo dõi nền, trap, hướng dẫn).
+        if _oo_con; then echo "$_oo"; fi
+        exit 0 ;;
+    "ps -a -q --no-trunc --filter id="*)
+        # Vòng 5: "có tồn tại không?" theo CID — rc 0 + rỗng = ĐÃ XÁC NHẬN không tồn tại.
+        _id=${_tat_ca##*id=}
+        if [ "$_id" = "$_oo" ]; then
+            if _oo_con; then echo "$_oo"; fi
+            exit 0
+        fi
+        for _s in backend celery-worker celery-beat; do
+            if [ "$_id" = "$(_cid_gia "$_s")" ]; then
+                [ "${STUB_CID_MAT:-}" = "$_s" ] || echo "$_id"
+                exit 0
+            fi
+        done
+        if [ "$_id" = "$_cn" ]; then echo "$_cn"; fi
+        exit 0 ;;
+    inspect*"{{.Id}}"*)
+        # `_dcg_theo_oneoff` hỏi CID theo TÊN riêng của lượt.
+        if _oo_con && [ "$_tat_ca" = "inspect -f {{.Id}} $(_ten_oo)" ]; then echo "$_oo"; exit 0; fi
+        echo "Error: No such object" >&2
+        exit 1 ;;
+    inspect*"{{.Name}}|"*"$_oo"*)
+        _oo_con || { echo "Error: No such object: $_oo" >&2; exit 1; }
+        if [ "${STUB_ONEOFF_TEN_KHAC:-0}" = "1" ]; then
+            echo "/dcg-mig-luot-khac|True|backend|$(_oo_tt)"
+        else
+            echo "/$(_ten_oo)|True|backend|$(_oo_tt)"
+        fi
+        exit 0 ;;
+    "ps -aq --filter label=com.docker.compose.oneoff=True"*)
+        _oo_con && echo "$_oo"
+        echo "$_oo_khac"
+        exit 0 ;;
+    "ps -q --filter label=com.docker.compose.project="*)
+        # Step 3a (vòng 4) quét one-off ĐANG CHẠY của service backend trong project.
+        # STUB_PS_NHAN_LOI=1 (vòng 5): phép quét ấy đọc lỗi (daemon) — phải fail-closed.
+        if [ "${STUB_PS_NHAN_LOI:-0}" = "1" ]; then echo "Cannot connect to the Docker daemon (stub)" >&2; exit 1; fi
+        if [ "${STUB_ONEOFF_NHAN_CHAY:-0}" = "1" ]; then echo "$_oo_khac"; fi
+        exit 0 ;;
+    inspect*"com.docker.compose.project"*)
+        echo qlts
+        exit 0 ;;
+    inspect*".State.Status"*"$_oo")
+        _oo_con || exit 1
+        _n=$(cat "${QLTS_STUB_LOG}.oo_dem" 2>/dev/null || echo 0)
+        echo $((_n + 1)) > "${QLTS_STUB_LOG}.oo_dem"
+        _oo_tt
+        exit 0 ;;
+    inspect*".HostConfig.RestartPolicy.Name"*)
+        echo "${STUB_RESTART_POLICY:-unless-stopped}"
+        exit 0 ;;
+    inspect*".NetworkSettings.Networks"*)
+        # IP backend. STUB_IP_DOI=1: sau khi CHÍNH deploy `docker start` backend
+        # cũ thì IP đổi (container khác đã chiếm IP cũ).
+        if [ "${STUB_IP_DOI:-0}" = "1" ] && grep -qx "docker start $(_cid_gia backend)" "$QLTS_STUB_LOG"; then
+            echo "172.30.0.7 "
+        else
+            echo "172.30.0.2 "
+        fi
+        exit 0 ;;
+    inspect*".State.StartedAt"*"$_cn"*)
+        # Vòng 6: nginx có mốc khởi động — R<số lần restart CÓ HIỆU LỰC>.
+        _n=$(grep -c "^docker restart .*$_cn" "$QLTS_STUB_LOG" || true)
+        _st=running; [ -f "${QLTS_STUB_LOG}.nginx_dung" ] && _st=exited
+        case "$_tat_ca" in
+            *"{{.State.Status}}|{{.State.StartedAt}}"*) echo "$_st|R$_n|-" ;;
+            *) echo "R$_n" ;;
+        esac
+        exit 0 ;;
+    inspect*".State.StartedAt"*)
+        for _s in backend celery-worker celery-beat; do
+            _c=$(_cid_gia "$_s")
+            case "$_tat_ca" in
+                *"$_c"*)
+                    # STUB_CID_MAT=<service> (vòng 4): container ghi nhận đã bị xoá.
+                    if [ "${STUB_CID_MAT:-}" = "$_s" ]; then echo "Error: No such object: $_c" >&2; exit 1; fi
+                    if _da_dung "$_c"; then _tt=exited; else _tt=running; fi
+                    echo "$_tt|S$(_dem_lenh start "$_c")|F$(_dem_lenh stop "$_c")"
+                    exit 0 ;;
+            esac
+        done
+        echo "STUB: mốc vòng đời cho container lạ: $_tat_ca" >&2
+        exit 94 ;;
+    inspect*".State.Status"*"$_cn")
+        if [ -f "${QLTS_STUB_LOG}.nginx_dung" ]; then echo exited; exit 0; fi ;;
+    inspect*".State.Status"*)
+        # Container ĐÃ DỪNG trả `exited`; còn lại rơi xuống giao thức sẵn có
+        # (STUB_STATUS_* của cổng health).
+        for _s in backend celery-worker celery-beat; do
+            _c=$(_cid_gia "$_s")
+            case "$_tat_ca" in
+                *"$_c"*) if _da_dung "$_c"; then echo exited; exit 0; fi ;;
+            esac
+        done ;;
+    *" ps -q "*)
+        # STUB_PS_Q_KHAC=<service> (vòng 4): một container KHÁC (không phải CID cũ
+        # đã ghi) của service ấy đang chạy — CID cũ vẫn nằm `exited` đúng mốc.
+        case "$_tat_ca" in
+            *" ps -q ${STUB_PS_Q_KHAC:-khong-co-service-nay}")
+                echo 9999999999999999999999999999999999999999999999999999999999999999
+                exit 0 ;;
+        esac
+        # `ps -q` chỉ liệt kê container ĐANG CHẠY: đã dừng ⇒ rỗng, exit 0.
+        for _s in backend celery-worker celery-beat; do
+            case "$_tat_ca" in
+                *" ps -q $_s") if _da_dung "$(_cid_gia "$_s")"; then exit 0; fi ;;
+            esac
+        done ;;
+esac
+"""
+
 _STUB_DOCKER = r"""#!/usr/bin/env bash
 # `docker` giả: ghi lại mọi lệnh rồi trả mã thoát theo kịch bản của test.
 echo "docker $*" >> "$QLTS_STUB_LOG"
@@ -290,6 +746,7 @@ case "$_tat_ca" in
         ;;
 esac
 
+# @MO_HINH_CUA_GHI@
 case "$_tat_ca" in
     *compose*" config "*)
         # `_ra_dan_xuat_dich_vu` hỏi MODEL Compose để dẫn xuất danh sách service
@@ -330,11 +787,15 @@ __QLTS_JSON__
                     # Kịch bản "thiếu một container": trả RỖNG đúng như compose
                     # khi service không chạy (và vẫn exit 0 — đó mới là cái bẫy).
                     if [ "${STUB_PS_Q_THIEU:-}" = "$_sv" ]; then exit 0; fi
-                    # Biến thể theo GIAI ĐOẠN: chỉ hỏng SAU khi đã build, tức
-                    # ở Step 8c. Không có nó thì Step 3b đỏ trước và nhánh lỗi
-                    # của 8c không bao giờ được thi hành.
+                    # Biến thể theo GIAI ĐOẠN: chỉ hỏng ở Step 8c. Không có nó
+                    # thì Step 3b đỏ trước và nhánh lỗi của 8c không bao giờ
+                    # được thi hành.
+                    # Mốc là lệnh DỰNG container mới của Step 8, KHÔNG phải
+                    # `build --parallel`: từ vá 12-10-2026 Step 4c (sau build)
+                    # cũng đọc `ps -q` của celery-*/backend, nên mốc "sau build"
+                    # làm ca 8c đỏ ở 4c — xanh vì lý do khác.
                     if [ "${STUB_PS_Q_THIEU_SAU_BUILD:-}" = "$_sv" ] \
-                       && grep -q 'build --parallel' "$QLTS_STUB_LOG"; then exit 0; fi
+                       && grep -q 'up -d backend celery-worker celery-beat' "$QLTS_STUB_LOG"; then exit 0; fi
                     _cid_gia "$_sv"; exit 0 ;;
             esac
         done
@@ -464,6 +925,8 @@ __QLTS_JSON__
         ;;
 esac
 """
+assert _STUB_DOCKER.count("# @MO_HINH_CUA_GHI@\n") == 1, "stub docker mất dấu chèn mô hình cửa ghi"
+_STUB_DOCKER = _STUB_DOCKER.replace("# @MO_HINH_CUA_GHI@\n", _MANH_STUB_CUA_GHI, 1)
 
 _STUB_GIT = r"""#!/usr/bin/env bash
 case "$1" in
@@ -478,6 +941,18 @@ exit 0
 _STUB_NGINX_APPLY = r"""#!/usr/bin/env bash
 echo "nginx-apply $*" >> "$QLTS_STUB_LOG"
 exit 0
+"""
+
+# Nhánh lùi của Step 4c đo nginx ĐANG PHỤC VỤ bằng `scripts/nginx-verify.sh`.
+# Một nguồn cho cả hai bộ deploy (test_deploy_ghim_sha import hằng này).
+_STUB_NGINX_VERIFY = r"""#!/usr/bin/env bash
+echo "nginx-verify $*" >> "$QLTS_STUB_LOG"
+# Vòng 6: STUB_NGINX_VERIFY_TREO=1 — kiểm PII (thông tin) treo.
+if [ "${STUB_NGINX_VERIFY_TREO:-0}" = "1" ]; then
+    [ -f "${QLTS_STUB_LOG}.treo" ] || date +%s.%N > "${QLTS_STUB_LOG}.treo"
+    sleep "${STUB_TREO_GIAY:-3600}"
+fi
+exit "${STUB_NGINX_VERIFY_RC:-0}"
 """
 
 _STUB_ROLLBACK_PREFLIGHT = r"""#!/usr/bin/env bash
@@ -651,6 +1126,7 @@ def _dung_san_khau(
     (goc / "scripts" / "deploy.sh").write_text(noi_dung, encoding="utf-8", newline="\n")
     for ten, than in (
         ("scripts/nginx-apply.sh", _STUB_NGINX_APPLY),
+        ("scripts/nginx-verify.sh", _STUB_NGINX_VERIFY),
         ("scripts/rollback-preflight.sh", _STUB_ROLLBACK_PREFLIGHT),
         ("bin/docker", _STUB_DOCKER),
         ("bin/git", _STUB_GIT),
@@ -669,9 +1145,26 @@ def _dung_san_khau(
     return goc
 
 
-def _chay_deploy(goc: Path, **kich_ban: str) -> tuple[subprocess.CompletedProcess, str]:
+def _chay_deploy(
+    goc: Path, _giu_nhat_ky: bool = False, _boc: str | None = None, **kich_ban: str
+) -> tuple[subprocess.CompletedProcess, str]:
+    """Chạy `scripts/deploy.sh` của sân khấu.
+
+    ``_boc`` (vòng 7b): đoạn bash chạy TRƯỚC `bash scripts/deploy.sh` trong CÙNG một
+    shell (vd. lấy khoá fd 9 như deploy.yml) — None = gọi thẳng như cũ.
+
+    ``_giu_nhat_ky=True`` (vòng 4): KHÔNG xoá nhật ký lệnh/hành vi của lượt trước —
+    mô hình container của stub suy trạng thái từ nhật ký, nên lượt "đi tiếp" phải
+    thấy đúng các container mà lượt đỏ đã dừng. Chuỗi trả về vẫn là TOÀN BỘ nhật ký.
+    """
     nhat_ky = goc / "lenh.log"
-    nhat_ky.write_text("", encoding="utf-8")
+    if not _giu_nhat_ky or not nhat_ky.exists():
+        nhat_ky.write_text("", encoding="utf-8")
+    if not _giu_nhat_ky or not (goc / "lenh.log.goi").exists():
+        # Nhật ký HÀNH VI (vòng 3b): stub ghi stdin + argv của mọi lời gọi docker.
+        (goc / "lenh.log.goi").write_text("", encoding="utf-8")
+        # Vòng 6c: tiến trình cha của từng lời gọi (có `timeout <hạn>` hay không).
+        (goc / "lenh.log.cha").write_text("", encoding="utf-8")
     moi_truong = {
         **os.environ,
         "PATH": f"{goc / 'bin'}:{os.environ.get('PATH', '')}",
@@ -681,7 +1174,11 @@ def _chay_deploy(goc: Path, **kich_ban: str) -> tuple[subprocess.CompletedProces
         "QLTS_ROLLBACK_OPS_DIR": str(goc / "ops"),
         # Ngữ cảnh production mà shim `stat`/`id` mô phỏng.
         "QLTS_TEST_SANDBOX": _sandbox_cua(goc),
+        # Vòng 7b: khoá VPS của RIÊNG sân khấu này (mặc định /run/lock/… là của máy).
+        "QLTS_KHOA_DEPLOY": str(goc / "deploy.lock"),
     }
+    # Vòng 7b: khoá kế thừa chỉ do ca nào cần tự dựng (qua `_boc`).
+    moi_truong.pop("QLTS_KHOA_DEPLOY_FD", None)
     # Cùng lý do với ba cờ entrypoint bên dưới: hai biến thoát hiểm PHẢI đến từ
     # kịch bản của test. Nếu môi trường người chạy đang đặt chúng thì mọi ca
     # fail-closed sẽ xanh giả vì khối asset bị bỏ qua hoàn toàn.
@@ -700,14 +1197,183 @@ def _chay_deploy(goc: Path, **kich_ban: str) -> tuple[subprocess.CompletedProces
         moi_truong.pop(co, None)
     moi_truong.update(kich_ban)
     ket = subprocess.run(
-        ["bash", "scripts/deploy.sh"],
+        ["bash", "scripts/deploy.sh"] if _boc is None else ["bash", "-c", _boc + "\nbash scripts/deploy.sh"],
         cwd=str(goc),
         env=moi_truong,
+        # stdin RỖNG xác định: stub đọc stdin của từng lời gọi docker để biết dữ
+        # liệu nào được đẩy vào container (vòng 3b) — không được treo vì kế thừa
+        # một pipe còn mở của tiến trình chạy test.
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         timeout=300,
     )
     return ket, nhat_ky.read_text(encoding="utf-8")
+
+
+# =============================================================================
+# Vòng 3b — phát hiện theo HÀNH VI (đọc "$QLTS_STUB_LOG.goi" do stub ghi)
+# =============================================================================
+# Review độc lập 13-10 trên 57b21155: phép "không phát lại" cũ chỉ nhận dòng có
+# `postgres psql` mà thiếu ` -c ` ⇒ `exec -T postgres sh -c 'psql …' < bản_sao`
+# LỌT (59 passed). Nay hỏi DỮ LIỆU đi đâu và lệnh nào chạm vào container, bất kể
+# cách viết. Ba luật phát lại, mỗi luật một ca kiểm ngược riêng
+# (`test_deploy_dong_cua_ghi.py::test_kiem_nguoc_phat_lai_bien_the`):
+#   R1 — kể từ mốc alembic, MỌI `exec` (vào bất kỳ container/service nào) phải
+#        đúng dạng phép đo `_dcg_psql`: `psql … -c <câu>`, không `-f`/`--file`,
+#        câu không mở đầu bằng lệnh `\` của psql, VÀ stdin rỗng;
+#   R2 — không lời gọi docker nào nhận stdin chứa nội dung bản sao;
+#   R3 — không lời gọi docker nào mang nội dung bản sao trong đối số, hay trỏ tới
+#        một tệp chứa bản sao (`docker cp`, `-v nguồn:đích`, `--mount source=`…).
+_DAU_BAN_SAO = "ban sao gia"   # đầu ra `pg_dump` của stub chứa chuỗi này
+
+
+def _cac_loi_goi(goc: Path) -> list[dict]:
+    """Mọi lời gọi `docker` của lượt chạy, theo thứ tự, kèm thông tin stdin."""
+    import base64
+
+    ra: list[dict] = []
+    p = goc / "lenh.log.goi"
+    for dong in p.read_text(encoding="utf-8").splitlines():
+        n, sha, vao, doi_so, b64 = dong.split("\t")
+        tho = base64.b64decode(b64) if b64 else b""
+        args = [a.decode("utf-8", "replace") for a in tho.split(b"\0")[:-1]]
+        ra.append({"stdin_byte": int(n), "stdin_sha": sha, "stdin_ban_sao": vao == "1",
+                   "doi_so_ban_sao": doi_so == "1", "args": args})
+    return ra
+
+
+def _vi_tri_alembic(goi: list[dict]) -> int:
+    """Chỉ số lời gọi migration (`… upgrade head`) đầu tiên; -1 nếu không có."""
+    for i, g in enumerate(goi):
+        a = g["args"]
+        if any(a[k] == "upgrade" and a[k + 1] == "head" for k in range(len(a) - 1)):
+            return i
+    return -1
+
+
+_CO_EXEC_KEM_GIA_TRI = {"-u", "--user", "-e", "--env", "-w", "--workdir", "--index", "--detach-keys", "--env-file"}
+
+
+def _tach_exec(args: list[str]) -> tuple[str, list[str]] | None:
+    """`docker [compose …|container] exec [cờ] ĐÍCH lệnh…` ⇒ (ĐÍCH, lệnh); không phải exec ⇒ None."""
+    if "exec" not in args:
+        return None
+    j = args.index("exec") + 1
+    while j < len(args) and args[j].startswith("-"):
+        j += 2 if args[j] in _CO_EXEC_KEM_GIA_TRI else 1
+    if j >= len(args):
+        return None
+    return args[j], args[j + 1:]
+
+
+def _la_phep_do_psql(lenh: list[str]) -> bool:
+    """Đúng dạng `_dcg_psql`: `psql … -c <câu>`, không `-f`/`--file`, câu không mở bằng `\\`."""
+    if not lenh or lenh[0] != "psql" or "-c" not in lenh:
+        return False
+    k = lenh.index("-c")
+    if k + 1 >= len(lenh) or lenh[k + 1].lstrip().startswith("\\"):
+        return False
+    return not any(t in ("-f", "--file") or t.startswith("--file=") for t in lenh)
+
+
+def _vi_pham_phat_lai(goc: Path, tu: int = 0) -> list[str]:
+    """Các vi phạm "KHÔNG phát lại bản sao" (R1/R2/R3) kể từ lời gọi thứ ``tu``; rỗng = sạch."""
+    goi = _cac_loi_goi(goc)[tu:]
+    moc = _vi_tri_alembic(goi)
+    ra: list[str] = []
+    for i, g in enumerate(goi):
+        mo_ta = " ".join(g["args"])[:140]
+        if g["stdin_ban_sao"]:
+            ra.append(f"R2 stdin mang bản sao ({g['stdin_byte']} byte): {mo_ta}")
+        if g["doi_so_ban_sao"]:
+            ra.append(f"R3 đối số mang/trỏ tới bản sao: {mo_ta}")
+        if moc >= 0 and i > moc:
+            ex = _tach_exec(g["args"])
+            if ex is not None and not (_la_phep_do_psql(ex[1]) and g["stdin_byte"] == 0):
+                ra.append(f"R1 exec ngoài dạng phép đo (stdin {g['stdin_byte']} byte) vào '{ex[0]}': {mo_ta}")
+    return ra
+
+
+# --- "KHÔNG mở ứng dụng" / "KHÔNG dựng container" theo HÀNH VI -----------------
+_DV_UNG_DUNG = ("backend", "celery-worker", "celery-beat", "frontend", "nginx", "certbot")
+_CO_COMPOSE_KEM_GIA_TRI = {"-f", "--file", "-p", "--project-name", "--profile", "--env-file",
+                           "--project-directory", "--ansi", "--progress", "--parallel"}
+_LENH_BAT = {"start", "restart", "unpause"}
+_LENH_DUNG = {"up", "create", "run", "scale"}
+
+
+def _tach_lenh(args: list[str]) -> tuple[str, str, list[str]]:
+    """⇒ (họ, lệnh con, phần còn lại): họ ∈ {compose, docker}; `docker container X` ≡ `docker X`."""
+    if args and args[0] == "compose":
+        i = 1
+        while i < len(args) and args[i].startswith("-"):
+            i += 1 if ("=" in args[i] or args[i] not in _CO_COMPOSE_KEM_GIA_TRI) else 2
+        return ("compose", args[i] if i < len(args) else "", args[i + 1:])
+    if len(args) >= 2 and args[0] == "container":
+        return ("docker", args[1], args[2:])
+    return ("docker", args[0] if args else "", args[1:])
+
+
+_CO_LENH_CON_KEM_GIA_TRI = {
+    "--name", "--entrypoint", "-e", "--env", "-u", "--user", "-w", "--workdir", "-v", "--volume",
+    "-p", "--publish", "-l", "--label", "--pull", "--scale", "-t", "--timeout", "--wait-timeout",
+    "--exit-code-from", "--attach", "--no-attach", "--cap-add", "--cap-drop", "--env-from-file", "--index",
+}
+
+
+def _dich_cua(con: list[str]) -> list[str]:
+    """Đối số vị trí (service / CID / ảnh…) của lệnh con — bỏ cờ VÀ giá trị của cờ."""
+    ra, i = [], 0
+    while i < len(con):
+        t = con[i]
+        if t.startswith("-"):
+            i += 2 if (t in _CO_LENH_CON_KEM_GIA_TRI and "=" not in t) else 1
+            continue
+        ra.append(t)
+        i += 1
+    return ra
+
+
+def _la_mot_lan_khong_phuc_vu(con: list[str]) -> bool:
+    """`run`/`create` một-lần có `--entrypoint` và KHÔNG chạy nền ⇒ công cụ, không phải ứng dụng."""
+    return "--entrypoint" in con and not any(t in ("-d", "--detach") for t in con)
+
+
+def _lenh_dung_moi(goc: Path, tu: int = 0) -> list[str]:
+    """Lời gọi DỰNG/BẬT container ứng dụng qua Compose, hoặc `docker run/create` chạy nền."""
+    ra = []
+    for g in _cac_loi_goi(goc)[tu:]:
+        ho, lenh, con = _tach_lenh(g["args"])
+        mo_ta = " ".join(g["args"])[:140]
+        if ho == "compose" and lenh in _LENH_BAT | _LENH_DUNG:
+            if lenh in ("run", "create") and _la_mot_lan_khong_phuc_vu(con):
+                continue
+            dich = _dich_cua(con)
+            if lenh in ("up", "start", "restart", "unpause", "create") and not dich:
+                ra.append(f"compose {lenh} KHÔNG nêu service (= tất cả): {mo_ta}")
+            elif any(t in _DV_UNG_DUNG for t in dich) or any(
+                t.split("=", 1)[0] in _DV_UNG_DUNG for t in con if t.count("=") == 1 and not t.startswith("-")
+            ):
+                ra.append(f"compose {lenh} service ứng dụng: {mo_ta}")
+        elif ho == "docker" and lenh in ("run", "create") and not _la_mot_lan_khong_phuc_vu(con):
+            ra.append(f"docker {lenh} (chạy nền / không phải công cụ một-lần): {mo_ta}")
+    return ra
+
+
+def _lenh_mo_lai_cu(goc: Path, tu: int = 0) -> list[str]:
+    """`docker [container] start|restart|unpause` vào CID của backend/worker/beat/frontend."""
+    cu = {_cid_gia(s): s for s in ("backend", "celery-worker", "celery-beat", "frontend")}
+    ra = []
+    for g in _cac_loi_goi(goc)[tu:]:
+        ho, lenh, con = _tach_lenh(g["args"])
+        if ho == "docker" and lenh in _LENH_BAT and any(t in cu for t in con):
+            ra.append(" ".join(g["args"])[:140])
+    return ra
+
+
+def _lenh_mo_app(goc: Path, tu: int = 0) -> list[str]:
+    return _lenh_dung_moi(goc, tu) + _lenh_mo_lai_cu(goc, tu)
 
 
 @_bo_qua_neu_khong_posix
@@ -730,7 +1396,7 @@ def test_f7_moi_nhanh_sao_luu_hong_deu_dung_truoc_alembic(
         f"{ten_ca}: đã chạy `{_MOC_ALEMBIC}` dù không có đường lùi.\n"
         f"nhật ký:\n{nhat_ky}"
     )
-    assert _MOC_STEP8 not in nhat_ky, f"{ten_ca}: đã tới Step 8"
+    assert _lenh_dung_moi(goc) == [], f"{ten_ca}: đã dựng/bật container ứng dụng mới: {_lenh_dung_moi(goc)}"
 
 
 @_bo_qua_neu_khong_posix
@@ -751,7 +1417,7 @@ def test_f8_pre_deploy_check_do_thi_chan_truoc_step8(tmp_path: Path) -> None:
     ket, nhat_ky = _chay_deploy(goc, STUB_PREDEPLOY_RC="1")
 
     assert ket.returncode != 0, "pre_deploy_check exit 1 mà deploy vẫn thoát 0"
-    assert _MOC_STEP8 not in nhat_ky, (
+    assert _lenh_dung_moi(goc) == [], (
         "đã mở traffic (Step 8) vào hệ thống mà pre_deploy_check vừa tuyên bố là "
         f"UNUSABLE.\nnhật ký:\n{nhat_ky}"
     )
@@ -1001,7 +1667,7 @@ def test_p2_cau_hinh_hong_dung_truoc_pg_dump(tmp_path: Path) -> None:
         f"phân loại lỗi cấu hình thành migration failure.\nnhật ký:\n{nhat_ky}"
     )
     assert _MOC_ALEMBIC not in nhat_ky, f"đã chạy migration:\n{nhat_ky}"
-    assert _MOC_STEP8 not in nhat_ky, f"đã tới Step 8:\n{nhat_ky}"
+    assert _lenh_dung_moi(goc) == [], f"đã dựng/bật container ứng dụng mới:\n{nhat_ky}"
     # Không có bản sao nào được tạo ⇒ không có gì để nhánh restore chạm vào.
     assert not list((goc / "backups").glob("pre_deploy_*.sql")), (
         "cấu hình hỏng mà vẫn tạo bản sao lưu"
@@ -2051,6 +2717,10 @@ def test_ra_loi_o_step_8c_giu_marker_cu_nguyen_ven(
     ket, nhat_ky = _chay_deploy(goc, **kich_ban)
 
     assert _MOC_BUILD in nhat_ky, f"{ten_ca}: chưa tới build ⇒ chưa chạm được 8c"
+    # Từ Step 4c (vá 12-10-2026) "đã build" KHÔNG còn đồng nghĩa "tới được 8c":
+    # 4c cũng đọc `ps -q`. Đòi thấy lệnh dựng container của Step 8 để ca này
+    # không xanh vì đỏ ở một bước khác.
+    assert _MOC_STEP8 in nhat_ky, f"{ten_ca}: chưa tới Step 8 ⇒ chưa chạm được 8c:\n{nhat_ky}"
     assert ket.returncode != 0, f"{ten_ca}: lỗi ở 8c mà deploy vẫn thoát 0"
 
     sau = (goc / "ops" / "last-deploy.marker").read_bytes()
@@ -2147,3 +2817,192 @@ def test_ra_lop_chup_truoc_source_tu_no_da_du_vo_hieu_env(tmp_path: Path) -> Non
         "giá trị từ .env.production KHÔNG được có hiệu lực — lớp chụp-trước-source "
         "phải khiến deploy vẫn tạo tài sản bình thường"
     )
+
+
+# =============================================================================
+# Vòng 7b (N10) — KHOÁ VPS `flock`: một lượt deploy tại một thời điểm, fail-closed
+# =============================================================================
+# Khoá được lấy NGAY ĐẦU deploy.sh, trước mọi thay đổi. Mỗi ca dưới đây vi phạm
+# ĐÚNG MỘT bất biến; "trước mọi thay đổi" đo bằng nhật ký lệnh docker (rỗng) và
+# việc chưa in tới Step 1.
+_MSG_KHOA_BAN = "một lượt deploy KHÁC đang giữ khoá"
+
+
+def _giu_khoa(duong: Path):
+    """Giữ khoá `flock` LOCK_EX trên tệp ở tiến trình test (tiến trình khác deploy.sh)."""
+    import fcntl
+
+    f = open(duong, "a")
+    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return f
+
+
+def _khoa_ranh(duong: Path) -> bool:
+    import fcntl
+
+    with open(duong, "a") as f:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        return True
+
+
+def _chua_dung_gi(goc: Path, ket, nk: str) -> list[str]:
+    ra = (ket.stdout or "") + (ket.stderr or "")
+    xau = []
+    if nk:
+        xau.append("deploy.sh VẪN gọi docker:\n" + nk[:600])
+    if (goc / "lenh.log.goi").read_text(encoding="utf-8"):
+        xau.append("nhật ký hành vi docker KHÔNG rỗng")
+    if "Step 1/8" in ra:
+        xau.append("đã chạy tới Step 1")
+    return xau
+
+
+@_bo_qua_neu_khong_posix
+def test_v7b_khoa_dang_bi_giu_thi_dung_truoc_moi_thay_doi(tmp_path: Path) -> None:
+    goc = _dung_san_khau(tmp_path)
+    f = _giu_khoa(goc / "deploy.lock")
+    try:
+        ket, nk = _chay_deploy(goc)
+    finally:
+        f.close()
+    ra = (ket.stdout or "") + (ket.stderr or "")
+    assert ket.returncode != 0, f"khoá đang bị giữ mà deploy thoát 0:\n{ra[-1500:]}"
+    assert _chua_dung_gi(goc, ket, nk) == [], _chua_dung_gi(goc, ket, nk)
+    assert _MSG_KHOA_BAN in ra, ra[-1500:]
+
+
+@_bo_qua_neu_khong_posix
+def test_v7b_khoa_ke_thua_tu_workflow_thi_chap_nhan(tmp_path: Path) -> None:
+    # Đúng cách deploy.yml làm: mở fd 9 trên tệp khoá, `flock -n 9`, export FD, rồi gọi deploy.sh.
+    goc = _dung_san_khau(tmp_path)
+    khoa = goc / "deploy.lock"
+    ket, _ = _chay_deploy(goc, _boc=f'exec 9>>"{khoa}" && flock -n 9 && export QLTS_KHOA_DEPLOY_FD=9')
+    ra = (ket.stdout or "") + (ket.stderr or "")
+    assert ket.returncode == 0, f"khoá kế thừa hợp lệ mà deploy đỏ:\n{ra[-2000:]}"
+    assert "Khoá deploy: kế thừa từ workflow (fd 9" in ra
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca,boc,giu_tu_ngoai,thong_diep",
+    [
+        ("fd 9 trỏ tệp KHÁC", 'exec 9>>"{khac}" && flock -n 9 && export QLTS_KHOA_DEPLOY_FD=9', False,
+         "fd 9 KHÔNG trỏ tới"),
+        ("khai FD mà fd 9 không mở", "export QLTS_KHOA_DEPLOY_FD=9", False, "fd 9 KHÔNG trỏ tới"),
+        ("FD khác 9", 'exec 8>>"{khoa}" && flock -n 8 && export QLTS_KHOA_DEPLOY_FD=8', False, "chỉ nhận 9"),
+        # Tinh vi nhất: fd 9 trỏ ĐÚNG tệp nhưng KHÔNG mang khoá — tiến trình KHÁC đang giữ.
+        ("fd 9 đúng tệp nhưng khoá ở tiến trình khác", 'exec 9>>"{khoa}" && export QLTS_KHOA_DEPLOY_FD=9', True,
+         "KHÔNG giữ được khoá"),
+    ],
+)
+def test_v7b_khoa_ke_thua_sai_thi_dung_truoc_moi_thay_doi(
+    tmp_path: Path, ten_ca: str, boc: str, giu_tu_ngoai: bool, thong_diep: str
+) -> None:
+    goc = _dung_san_khau(tmp_path)
+    khoa, khac = goc / "deploy.lock", goc / "khac.lock"
+    f = _giu_khoa(khoa) if giu_tu_ngoai else None
+    try:
+        ket, nk = _chay_deploy(goc, _boc=boc.format(khoa=khoa, khac=khac))
+    finally:
+        if f is not None:
+            f.close()
+    ra = (ket.stdout or "") + (ket.stderr or "")
+    assert ket.returncode != 0, f"{ten_ca}: deploy thoát 0:\n{ra[-1500:]}"
+    assert _chua_dung_gi(goc, ket, nk) == [], f"{ten_ca}: {_chua_dung_gi(goc, ket, nk)}"
+    assert thong_diep in ra, f"{ten_ca}:\n{ra[-1500:]}"
+
+
+@_bo_qua_neu_khong_posix
+def test_v7b_khoa_duoc_giu_suot_luot_ke_ca_trap_va_nha_khi_thoat(tmp_path: Path) -> None:
+    import threading
+    import time
+
+    goc = _dung_san_khau(tmp_path)
+    khoa = goc / "deploy.lock"
+    kq: dict = {}
+    # pg_dump hỏng SAU khi cửa ghi đã đóng ⇒ trap mở lại container cũ; đầu dò SNI của TRAP treo 6 s.
+    luong = threading.Thread(target=lambda: kq.update(r=_chay_deploy(
+        goc, STUB_PGDUMP_RC="1", STUB_DO_TREO="1", STUB_TREO_GIAY="6", QLTS_HAN_DO_SNI="30")))
+    luong.start()
+    het = time.time() + 120
+    while not (goc / "lenh.log.treo").exists() and time.time() < het and luong.is_alive():
+        time.sleep(0.2)
+    assert (goc / "lenh.log.treo").exists(), "trap không tới đầu dò treo — ca không đo được khoá TRONG trap"
+    giua_trap = _khoa_ranh(khoa)
+    luong.join(timeout=200)
+    assert not luong.is_alive()
+    ket, _ = kq["r"]
+    assert "trần thời gian của trap" in (ket.stdout or ""), "ca không chạy vào trap"
+    assert giua_trap is False, "đang trong TRAP (mở lại container cũ) mà khoá deploy đã RẢNH — lượt khác chen được"
+    assert _khoa_ranh(khoa) is True, "deploy.sh đã thoát mà khoá VẪN bị giữ"
+
+
+# --- kiểm ngược: mỗi guard của khoá một đột biến riêng -----------------------
+_NEO_KHOA_TAY = """    flock -n 9 \\
+        || error "một lượt deploy KHÁC đang giữ khoá"""
+_NEO_KHOA_EF = """    { [ -e /proc/self/fd/9 ] && [ /proc/self/fd/9 -ef "$_KHOA_DEPLOY" ]; } \\
+        || error"""
+_NEO_KHOA_GIU = """    flock -n 9 \\
+        || error "khoá kế thừa: fd 9 trỏ đúng tệp nhưng KHÔNG giữ được khoá"""
+
+
+def _ban_dot_bien_khoa(cu: str, moi: str) -> str:
+    than = _DEPLOY.read_text(encoding="utf-8")
+    assert than.count(cu) == 1, f"neo đột biến không khớp DUY NHẤT: {cu[:70]!r}"
+    return than.replace(cu, moi, 1)
+
+
+def _ban_khoa_doi_xuong_truoc_build() -> str:
+    """Đột biến THỨ TỰ: cùng khối khoá, nhưng lấy muộn — ngay trước Step 4 (build)."""
+    than = _DEPLOY.read_text(encoding="utf-8")
+    dau = than.index("_KHOA_DEPLOY=\"${QLTS_KHOA_DEPLOY:-")
+    cuoi = than.index("\nfi\n", dau) + len("\nfi\n")
+    khoi = than[dau:cuoi]
+    moc = 'log "Step 4/8: Building Docker images..."\n'
+    assert than.count(moc) == 1
+    than = than[:dau] + than[cuoi:]
+    return than.replace(moc, khoi + moc, 1)
+
+
+@_bo_qua_neu_khong_posix
+@pytest.mark.parametrize(
+    "ten_ca",
+    [
+        "đường tay: bỏ `|| error` (khoá bận vẫn chạy)",
+        "kế thừa: bỏ phép fd 9 trỏ ĐÚNG tệp",
+        "kế thừa: bỏ phép fd 9 GIỮ khoá",
+        "thứ tự: lấy khoá muộn (trước build)",
+    ],
+)
+def test_kiem_nguoc_v7b_go_tung_guard_khoa(tmp_path: Path, ten_ca: str) -> None:
+    if ten_ca.startswith("đường tay"):
+        # Giữ nguyên chuỗi thông báo (dấu nháy cân) — chỉ `error` thành `:`.
+        dot = _ban_dot_bien_khoa(_NEO_KHOA_TAY, '    flock -n 9 \\\n        || : "một lượt deploy KHÁC đang giữ khoá')
+    elif "trỏ ĐÚNG" in ten_ca:
+        dot = _ban_dot_bien_khoa(_NEO_KHOA_EF, "    : \\\n        || error")
+    elif "GIỮ khoá" in ten_ca:
+        dot = _ban_dot_bien_khoa(_NEO_KHOA_GIU, '    : \\\n        || error "khoá kế thừa: fd 9 trỏ đúng tệp nhưng KHÔNG giữ được khoá')
+    else:
+        dot = _ban_khoa_doi_xuong_truoc_build()
+    goc = _dung_san_khau(tmp_path, deploy_sh=dot)
+    khoa, khac = goc / "deploy.lock", goc / "khac.lock"
+    if "trỏ ĐÚNG" in ten_ca:
+        ket, nk = _chay_deploy(goc, _boc=f'exec 9>>"{khac}" && flock -n 9 && export QLTS_KHOA_DEPLOY_FD=9')
+    elif "GIỮ khoá" in ten_ca:
+        f = _giu_khoa(khoa)
+        try:
+            ket, nk = _chay_deploy(goc, _boc=f'exec 9>>"{khoa}" && export QLTS_KHOA_DEPLOY_FD=9')
+        finally:
+            f.close()
+    else:
+        f = _giu_khoa(khoa)
+        try:
+            ket, nk = _chay_deploy(goc)
+        finally:
+            f.close()
+    assert _chua_dung_gi(goc, ket, nk) != [], (
+        f"{ten_ca}: đột biến mà deploy.sh VẪN dừng trước mọi thay đổi ⇒ ca khoá không canh guard này")

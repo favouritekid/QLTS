@@ -46,6 +46,21 @@ function actionMeta(actionType: string) {
         color: "text-red-700",
         bg: "bg-red-50",
       }
+    // V3 — thông tư áp dụng theo hồ sơ
+    case "circular_defaulted":
+      return {
+        icon: History,
+        label: "Gán thông tư mặc định",
+        color: "text-sky-700",
+        bg: "bg-sky-50",
+      }
+    case "circular_changed":
+      return {
+        icon: ShieldCheck,
+        label: "Đổi thông tư",
+        color: "text-amber-700",
+        bg: "bg-amber-50",
+      }
     default:
       return {
         icon: History,
@@ -75,6 +90,15 @@ function summarize(entry: PriorityAuditEntry): string {
     const newKv = (entry.new_value as { kv_resolved?: string } | null)?.kv_resolved
     const reason = (entry.new_value as { reason?: string } | null)?.reason
     return `${oldKv ?? "—"} → ${newKv ?? "—"}${reason ? ` · ${reason}` : ""}`
+  }
+  if (entry.action_type === "circular_defaulted" || entry.action_type === "circular_changed") {
+    const oldTt = (entry.old_value as { applicable_circular?: string | null } | null)?.applicable_circular
+    const newTt = (entry.new_value as { applicable_circular?: string } | null)?.applicable_circular
+    const reason = (entry.new_value as { reason?: string } | null)?.reason
+    const ten = (tt?: string | null) => (tt === "TT76_2026" ? "TT 76/2026" : tt === "TT05_2021" ? "TT 05/2021" : "—")
+    return entry.action_type === "circular_defaulted"
+      ? ten(newTt)
+      : `${ten(oldTt)} → ${ten(newTt)}${reason ? ` · ${reason}` : ""}`
   }
   if (entry.action_type === "ut_evidence_verified") {
     const subCode =
