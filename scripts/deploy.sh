@@ -417,11 +417,14 @@ esac
 command -v timeout >/dev/null 2>&1 \
     || error "thiếu lệnh 'timeout' (coreutils) — không giới hạn được thời gian từng lệnh đọc Docker. DỪNG trước mọi thay đổi."
 # Vòng 6b (F45): HẠN TỔNG của trap được THỰC THI, không chỉ so ở cuối. `_DCG_TRAP_HET` (mốc
-# SECONDS) chỉ đặt khi trap bắt đầu = lúc bắt đầu + ngân sách của pha/chế độ. Trước MỖI bước:
+# SECONDS) đặt khi trap bắt đầu = lúc bắt đầu + ngân sách của pha/chế độ — HOẶC (F65, 22-10) ngay khi
+# migration ĐỎ (`_dcg_dat_han_chot_chung`): một hạn chót CHUNG cho đối soát + trap. Trước MỖI bước:
 # hạn của lệnh = min(hạn riêng, phần còn lại); hết ⇒ lệnh KHÔNG chạy (rc 124, "không đọc được").
 # Lệnh GHI chỉ được BẮT ĐẦU khi phần còn lại ≥ hạn của nó + 5 s (-k) — không có tiến trình giám
 # sát nào giết trap giữa một lệnh ghi. Ngoài trap: không giới hạn thêm.
 _DCG_TRAP_HET=""
+_DCG_HC_BD=""   # F65: mốc SECONDS lúc đặt hạn chót CHUNG (rỗng = chưa đặt)
+_DCG_HC_NS=""   # F65: độ dài hạn chót chung (giây)
 _dcg_con_lai() {
     local r
     if [ -z "${_DCG_TRAP_HET:-}" ]; then printf '%s\n' 999999; return 0; fi
@@ -537,7 +540,16 @@ _dcg_ngan_sach_trap() {
         dang_migrate|migrate_do)
             # (cả hai chế độ) chờ one-off: tra tên L + hạn chờ + vòng cuối 2L + 1 s + chi tiết 2L + rm L.
             O=$((L + _DCG_HAN_ONEOFF + 2 * L + 1 + 2 * L + L))
-            tong=$((O + HD)); ct="chờ_one-off=$O + hướng_dẫn=$HD" ;;
+            if [ "$_DCG_PHA" = "migrate_do" ]; then
+                # F65 (22-10): migrate_do là HẠN CHÓT CHUNG từ lúc nhận migration đỏ — gồm cả ĐỐI SOÁT chạy TRƯỚC
+                # trap ở nhánh đỏ Step 6: (d) cửa ghi 3 × (liệt kê L + mốc L) · phiên lạ (hạn chờ + 2P + 1) · PA2
+                # (bộ đếm T2 P + pg_stat_database P). Dọn one-off chạy MỘT lần (trước trap, hoặc trong trap nếu
+                # bị ngắt trước đó) ⇒ O tính một lần.
+                DS=$((6 * L + _DCG_HAN_PHIEN + 2 * P + 1 + 2 * P))
+                tong=$((O + DS + HD)); ct="chờ_one-off=$O + đối_soát=$DS + hướng_dẫn=$HD"
+            else
+                tong=$((O + HD)); ct="chờ_one-off=$O + hướng_dẫn=$HD"
+            fi ;;
         chua_dong)
             # Vòng 6b (F45): đường đi tiếp vẫn IN hướng dẫn (đọc Docker/CSDL); đường thường không làm gì.
             if [ "${_DCG_DI_TIEP:-0}" = "1" ]; then
@@ -2576,6 +2588,35 @@ _dcg_huong_dan() {
 }
 
 
+# F65 (22-10, phương án B): HẠN CHÓT CHUNG cho đường migration đỏ — đặt NGAY khi nhận lỗi, phủ CẢ đối soát
+# chạy TRƯỚC trap (dọn one-off, (d), PA2) lẫn EXIT trap. Trước đây `_DCG_TRAP_HET` chỉ đặt lúc VÀO trap ⇒
+# đối soát chạy không giới hạn ngoài hạn từng lệnh, rồi trap lại mở hạn MỚI: phiên SSH có thể hết giữa đối
+# soát và người xem mất hướng dẫn phục hồi (đo bằng lệnh giả 22-10, ca K09). Ngân sách = trần pha migrate_do
+# (bảng `_dcg_ngan_sach_trap`, đã áp QLTS_TRAN_TRAP — qua `_ph_tran_pha`), kẹp bởi hạn chót PHIÊN — đúng cách
+# trap tính. Trap thấy hạn đã đặt ⇒ KHÔNG đặt lại (không gia hạn).
+_dcg_dat_han_chot_chung() {
+    local ns tran con_ph="-"
+    tran=$(_ph_tran_pha migrate_do); ns=$tran
+    if [ -n "${_PH_HET:-}" ]; then
+        con_ph=$(_ph_con_lai)
+        if [ "$con_ph" -lt "$ns" ]; then ns=$con_ph; fi
+    fi
+    # F67 (22-10): phiên ĐÃ HẾT ⇒ ngân sách 0 — KHÔNG tự cấp thêm giây nào (Docker trả lời nhanh thì một giây "tặng" đủ
+    # để bắt đầu lệnh đọc SAU hạn chót). `_DCG_TRAP_HET` vẫn được đặt ⇒ `_dcg_con_lai` = 0 ⇒ mọi lệnh bị từ chối.
+    _DCG_HC_BD=$SECONDS
+    _DCG_HC_NS=$ns
+    _DCG_TRAP_HET=$((SECONDS + ns))
+    log "[đối soát] hạn chót CHUNG từ lúc migration đỏ tới hết trap: ${ns}s (trần pha migrate_do ${tran}s · phiên còn ${con_ph}s) — vào trap KHÔNG gia hạn"
+    _dcg_ghi "han_chot_chung" "${ns}s bat_dau=$(date +%s) tran_pha=${tran}s phien_con=${con_ph}" || true
+}
+# F65: TRƯỚC mỗi bước đối soát — hết hạn chót chung ⇒ KHÔNG bắt đầu bước (không gọi Docker/psql), ghi CHƯA XÁC ĐỊNH.
+_dcg_con_ngan_sach_doi_soat() {
+    [ "$(_dcg_con_lai)" -gt 0 ] && return 0
+    warn "[đối soát] HẾT hạn chót chung — KHÔNG đo $1: CHƯA XÁC ĐỊNH (đo TAY theo hướng dẫn bên dưới)"
+    _dcg_ghi "het_ngan_sach" "doi_soat ${1// /_}" || true
+    return 1
+}
+
 _dcg_bat_tin_hieu() {
     _DCG_TIN_HIEU="$1"
     exit "$2"
@@ -2589,10 +2630,15 @@ _dcg_khi_thoat() {
     _dcg_ghi "thoat" "rc=$rc tin_hieu=${_DCG_TIN_HIEU:--} pha=$_DCG_PHA"
     # Vòng 6: trần thời gian — IN ngay đầu trap và GHI vào tệp trạng thái (nhật ký local);
     # cuối trap ĐO thời gian thật và so với trần.
-    local ns ns_ct bd_trap kq
+    local ns ns_ct bd_trap kq co_tran=0
     ns=$(_dcg_ngan_sach_trap); ns_ct=${ns#* }; ns=${ns%% *}
     bd_trap=$SECONDS
-    if [ "$ns" -gt 0 ]; then
+    if [ -n "${_DCG_HC_BD:-}" ]; then
+        # F65: hạn chót CHUNG đã đặt lúc migration đỏ ⇒ KHÔNG đặt lại (không gia hạn); trần trap = phần còn lại.
+        ns=$(_dcg_con_lai)
+        log "[trap] trần thời gian của trap (pha '$_DCG_PHA', đi tiếp=${_DCG_DI_TIEP:-0}): ${ns}s — phần còn lại của hạn chót CHUNG ${_DCG_HC_NS}s đặt lúc migration đỏ (đã dùng $((SECONDS - _DCG_HC_BD))s)"
+        _dcg_ghi "tran_trap" "${ns}s pha=$_DCG_PHA bat_dau=$(date +%s) di_tiep=${_DCG_DI_TIEP:-0} phien_con=- chung=${_DCG_HC_NS}s" || true
+    elif [ "$ns" -gt 0 ]; then
         if [ -n "$_DCG_TRAN_GHI_DE" ] && [ "$_DCG_TRAN_GHI_DE" -lt "$ns" ]; then
             ns_ct="$ns_ct — GHI ĐÈ QLTS_TRAN_TRAP=${_DCG_TRAN_GHI_DE}s (bảng ${ns}s)"
             ns=$_DCG_TRAN_GHI_DE
@@ -2605,13 +2651,14 @@ _dcg_khi_thoat() {
             if [ "$con_ph" -lt "$ns" ]; then
                 ns_ct="$ns_ct — GIỚI HẠN bởi hạn chót PHIÊN (còn ${con_ph}s, bảng ${ns}s)"
                 ns=$con_ph
-                [ "$ns" -ge 1 ] || ns=1
+                # F67 (22-10, nhánh anh em của hạn chót chung): phiên ĐÃ HẾT ⇒ trần 0, KHÔNG cấp thêm 1 s.
             fi
         fi
         # Vòng 6b (F45): hạn chót THỰC THI — mọi bước sau đây lấy hạn = min(hạn riêng, phần còn lại).
         _DCG_TRAP_HET=$((bd_trap + ns))
         log "[trap] trần thời gian của trap (pha '$_DCG_PHA', đi tiếp=${_DCG_DI_TIEP:-0}): ${ns}s — $ns_ct"
         _dcg_ghi "tran_trap" "${ns}s pha=$_DCG_PHA bat_dau=$(date +%s) di_tiep=${_DCG_DI_TIEP:-0} phien_con=${con_ph:--}" || true
+        co_tran=1
     fi
     case "$_DCG_PHA" in
         khong_ap_dung|buoc8|xong)
@@ -2648,7 +2695,18 @@ _dcg_khi_thoat() {
             _dcg_huong_dan "lược đồ đã MỚI hoặc chưa rõ — KHÔNG tự mở ứng dụng cũ" ;;
     esac
     [ "$_DCG_TT_HONG" = "1" ] && warn "[trạng thái] ⚠ tệp trạng thái $_DCG_TT đã có lần KHÔNG ghi được trong lượt này — log deploy là bản ghi pha đầy đủ."
-    if [ "$ns" -gt 0 ]; then
+    if [ -n "${_DCG_HC_BD:-}" ]; then
+        local dc=$((SECONDS - _DCG_HC_BD))
+        _dcg_ghi "thoi_gian_trap" "${dc}s/${_DCG_HC_NS}s chung" || true
+        if [ "$_DCG_HC_NS" -eq 0 ]; then
+            log "[trap] trap chạy ${dc}s tính từ lúc migration đỏ — phiên ĐÃ HẾT lúc ấy (hạn chót chung 0 s): không đo gì, chỉ in hướng dẫn ngắn"
+        elif [ "$dc" -gt "$_DCG_HC_NS" ]; then
+            warn "[trap] ⚠ trap chạy ${dc}s tính từ lúc migration đỏ (đối soát + trap) — VƯỢT hạn chót chung ${_DCG_HC_NS}s (phần vượt = ân hạn -k của lệnh cuối)"
+        else
+            log "[trap] trap chạy ${dc}s tính từ lúc migration đỏ (đối soát + trap) / hạn chót chung ${_DCG_HC_NS}s"
+        fi
+    elif [ "$co_tran" = 1 ]; then
+        # (F67: trần có thể là 0 khi phiên đã hết — vẫn ghi thời gian thật)
         local da=$((SECONDS - bd_trap))
         _dcg_ghi "thoi_gian_trap" "${da}s/${ns}s" || true
         if [ "$da" -gt "$ns" ]; then
@@ -2878,6 +2936,7 @@ else
         log "Migrations completed successfully"
     else
         _RC_MIG=$?
+        _dcg_dat_han_chot_chung
         _dcg_dung_theo_oneoff
         _dcg_pha migrate_do
         warn "Migration failed (rc=$_RC_MIG)! KHÔNG tự phát lại bản sao — ứng dụng giữ DỪNG, CSDL giữ NGUYÊN hiện trạng."
@@ -2909,9 +2968,15 @@ else
         else
             warn "[đối soát] bản sao Step 5 KHÔNG còn / RỖNG: $_BAN_SAO"
         fi
-        _dcg_cua_dong "d" || warn "[đối soát] cửa ghi KHÔNG còn được chứng minh là đóng (xem dòng [d]) — container đã chạy lại giữa chừng?"
-        _dcg_phien_la_bang_0 "d" || warn "[đối soát] còn phiên lạ trên CSDL ngay lúc này (xem dòng [d])."
-        _dcg_pa2 || warn "[đối soát] PA2 THẤY dấu hiệu ghi trong cửa sổ dump (hoặc thiếu mốc) — phát lại bản sao sẽ XOÁ chúng."
+        if _dcg_con_ngan_sach_doi_soat "(d) cửa ghi"; then
+            _dcg_cua_dong "d" || warn "[đối soát] cửa ghi KHÔNG còn được chứng minh là đóng (xem dòng [d]) — container đã chạy lại giữa chừng?"
+        fi
+        if _dcg_con_ngan_sach_doi_soat "(d) phiên lạ"; then
+            _dcg_phien_la_bang_0 "d" || warn "[đối soát] còn phiên lạ trên CSDL ngay lúc này (xem dòng [d])."
+        fi
+        if _dcg_con_ngan_sach_doi_soat "PA2"; then
+            _dcg_pa2 || warn "[đối soát] PA2 THẤY dấu hiệu ghi trong cửa sổ dump (hoặc thiếu mốc) — phát lại bản sao sẽ XOÁ chúng."
+        fi
         error "Migration failed. KHÔNG phát lại bản sao (F28): ứng dụng GIỮ DỪNG, CSDL giữ nguyên để đối soát — xem hướng dẫn phục hồi có đối soát ngay dưới."
     fi
 fi
