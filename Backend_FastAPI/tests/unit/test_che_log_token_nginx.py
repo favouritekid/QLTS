@@ -278,7 +278,7 @@ _URI_THUONG = (
     "/", "/login", "/dashboard", "/reset-password-cu", "/confirmation", "/api/payments/1",
     "/api/auth/login", "/socket.io/", "/_next/static/a.js", "/health",
 )
-#: Đánh đổi ĐÃ CHẤP NHẬN — khoá để không ai tưởng là lỗi: API tuyển sinh không
+#: Đánh đổi ĐỀ XUẤT, CHỜ OWNER CHỐT — khoá để không ai tưởng là lỗi: API tuyển sinh không
 #: token cũng mất error_log vì dùng chung location có cổng đóng băng.
 _URI_TUYEN_SINH_KHONG_TOKEN = ("/api/admissions/123", "/api/v2/admin/rounds")
 _DEV_NULL = "error_log /dev/null;"

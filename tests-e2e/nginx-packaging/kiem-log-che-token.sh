@@ -119,11 +119,18 @@ E_TOKEN=(
     "e08 https://$D/api/admissions/confirm/GIAV6TOKEN88GIAN17LOI"
     "e09 https://$D/api/v2/admissions/magic-link/confirm/GIAV6TOKEN89GIAN17LOI"
 )
-for muc in "${E_TOKEN[@]}"; do goi "${muc%% *}" "${muc#* }" >/dev/null; done
 # Đối chứng (location thường): PHẢI có dòng error_log — không có ⇒ error_log bị tắt toàn cục (lựa chọn C),
 # hoặc stub không gây lỗi và E1 xanh vô nghĩa.
-goi k01 "https://$D/dashboard/GIAN17LOI-K01" >/dev/null
-goi k02 "https://$D/api/khong-token/GIAN17LOI-K02" >/dev/null
+E_DOI_CHUNG=("k01 https://$D/dashboard/GIAN17LOI-K01" "k02 https://$D/api/khong-token/GIAN17LOI-K02")
+# E0 (F84): MỖI request lỗi giả phải truyền tải xong (curl rc 0) VÀ nhận đúng 502 — kể cả /lp/, /r/, SMS landing vốn
+# `access_log off`, nơi không còn dòng log nào để khẳng định request đã tới và đã lỗi đúng kiểu.
+sai_e0=""
+for muc in "${E_TOKEN[@]}" "${E_DOI_CHUNG[@]}"; do
+    ma="${muc%% *}"
+    http=$(docker exec "$CT" curl -sk -o /dev/null -w '%{http_code}' -A "v6-e2e-$ma" \
+        --resolve "$D:443:127.0.0.1" "${muc#* }"); rc=$?
+    [ "$rc" = 0 ] && [ "$http" = 502 ] || sai_e0="$sai_e0 [$ma: curl rc=$rc http=$http]"
+done
 
 # Mục 5 (V6): đầu dò token của CHÍNH cổng deploy `scripts/nginx-verify.sh`.
 VERIFY_OUT="$(NGINX_PROBE_STRICT_TLS=0 bash "$GOC/scripts/nginx-verify.sh" "$CT" "$D" 2>&1)"
@@ -131,12 +138,16 @@ VERIFY_RC=$?
 
 # N17.10 B: `limit_req` từ chối (sau nginx-verify để không làm đỏ oan cổng deploy). Một tiến trình curl,
 # glob 300 URL liên tiếp ⇒ vượt 50 r/s + burst 30 của zone `general`. Token: trang /confirm/; đối chứng: /dashboard/.
-docker exec "$CT" sh -c "curl -sk -A v6-e2e-e10 --resolve '$D:443:127.0.0.1' 'https://$D/confirm/GIAV6TOKEN90RL[1-300]' >/dev/null 2>&1"
-docker exec "$CT" sh -c "curl -sk -A v6-e2e-k10 --resolve '$D:443:127.0.0.1' 'https://$D/dashboard/GIAN17RL[1-300]' >/dev/null 2>&1"
+docker exec "$CT" sh -c "curl -sk -A v6-e2e-e10 --resolve '$D:443:127.0.0.1' 'https://$D/confirm/GIAV6TOKEN90RL[1-300]' >/dev/null 2>&1"; RL_TOK_RC=$?
+docker exec "$CT" sh -c "curl -sk -A v6-e2e-k10 --resolve '$D:443:127.0.0.1' 'https://$D/dashboard/GIAN17RL[1-300]' >/dev/null 2>&1"; RL_K_RC=$?
 sleep 1
 
-OUT="$(docker logs "$CT" 2>/dev/null)"
-ERR="$(docker logs "$CT" 2>&1 >/dev/null)"
+# F84: đọc log MỘT lần, stdout (access log) và stderr (error_log) vào hai tệp riêng, mã thoát của `docker logs` PHẢI 0 —
+# nguồn hỏng thì OUT/ERR rỗng và mọi phép "0 dòng chứa token" (T1, E1) sẽ xanh vô nghĩa.
+docker logs "$CT" >"$WORK/access.log" 2>"$WORK/error.log"; LOGS_RC=$?
+[ "$LOGS_RC" = 0 ] || ha_tang "docker logs rc=$LOGS_RC — không kết luận từ log"
+OUT="$(cat "$WORK/access.log")"
+ERR="$(cat "$WORK/error.log")"
 
 do_=0
 kiem() {  # kiem <mã> <điều kiện 0/1> <mô tả>
@@ -179,6 +190,8 @@ kiem V1 "$([ "$VERIFY_RC" -eq 0 ] && echo 1 || echo 0)" \
     "scripts/nginx-verify.sh rc=$VERIFY_RC · ${dong_v:-<không có dòng đầu dò token>}"
 
 # --- N17.10 B: error_log ---
+kiem E0 "$([ -z "$sai_e0" ] && echo 1 || echo 0)" \
+    "mỗi request lỗi giả (9 URL token + 2 đối chứng): curl rc 0 VÀ HTTP 502 (sai:${sai_e0:- không})"
 n_err_token=$(dem "$ERR" GIAV6TOKEN)
 kiem E1 "$([ "$n_err_token" -eq 0 ] && echo 1 || echo 0)" "error_log: dòng chứa token giả = $n_err_token (phải 0; 502 ở 9 dạng URL token + limit_req)"
 
@@ -201,8 +214,8 @@ kiem E3 "$([ -z "$thieu_e" ] && echo 1 || echo 0)" "access log VẪN ghi 502 (đ
 
 n_rl_tok=$(printf '%s\n' "$OUT" | grep -F '"v6-e2e-e10"' | grep -cF '" 503 ' || true)
 n_rl_k=$(printf '%s\n' "$ERR" | grep -F 'limiting requests' | grep -cF GIAN17RL || true)
-kiem E4 "$([ "$n_rl_tok" -ge 1 ] && [ "$n_rl_k" -ge 1 ] && echo 1 || echo 0)" \
-    "limit_req THẬT SỰ từ chối: trang token 503 = $n_rl_tok dòng access log · đối chứng error_log 'limiting requests' = $n_rl_k (phải ≥1 mỗi bên)"
+kiem E4 "$([ "$RL_TOK_RC" = 0 ] && [ "$RL_K_RC" = 0 ] && [ "$n_rl_tok" -ge 1 ] && [ "$n_rl_k" -ge 1 ] && echo 1 || echo 0)" \
+    "limit_req THẬT SỰ từ chối: curl rc $RL_TOK_RC/$RL_K_RC · trang token 503 = $n_rl_tok dòng access log · đối chứng error_log 'limiting requests' = $n_rl_k (phải rc 0 và ≥1 mỗi bên)"
 
 # Kích thước access log đã đọc (ghi nhận — ca đột biến đệm 4 MiB của vòng 5 cần thấy nó thật).
 echo "E2E-V6 GHI-NHAN access log (stdout): ${#OUT} ký tự · error_log (stderr): ${#ERR} ký tự"

@@ -142,7 +142,7 @@ server {
         # (`/api/admissions/confirm/<token>`, `/api/v2/admissions/magic-link/
         # <action>/<token>`). KHÔNG tách hai API ấy ra location riêng: location
         # riêng sẽ không chạy cổng đóng băng bên dưới (rewrite không kế thừa) ⇒
-        # phải chép cổng sang hai nơi. Đánh đổi đã chấp nhận: mất dòng error_log
+        # phải chép cổng sang hai nơi. Đánh đổi ĐỀ XUẤT, CHỜ OWNER CHỐT: mất dòng error_log
         # (502/504/limit_req) của MỌI API tuyển sinh; access log vẫn ghi mã
         # trạng thái (URL đã che).
         error_log /dev/null;

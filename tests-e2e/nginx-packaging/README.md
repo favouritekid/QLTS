@@ -290,6 +290,7 @@ NGINX_DIR=<bản sao nginx/ đã đột biến> bash …/kiem-log-che-token.sh  
 | R3 | trang thường vẫn `strict-origin-when-cross-origin` |
 | R4 | `/reset-password?token=…` trả `no-referrer` |
 | V1 | chính `scripts/nginx-verify.sh` (cổng deploy) ĐẠT, kể cả đầu dò token |
+| E0 | mỗi request lỗi giả (9 URL token + 2 đối chứng) truyền tải xong (curl rc 0) VÀ nhận đúng HTTP 502 — khẳng định cả `/lp/` `/r/` SMS landing, nơi `access_log off` không để lại dòng nào; `docker logs` phải rc 0 (nguồn hỏng ⇒ HẠ TẦNG, không kết luận "0 dòng") |
 | E1 | N17.10 B: 0 dòng `error_log` chứa token giả — stub trả `444` cho request có `GIAN17LOI` ⇒ 502 THẬT ở 9 dạng URL token (trang confirm/magic-link/reset-password, `/lp/`, `/r/`, SMS landing, API confirm/magic-link, `/Confirm/` hoa) + `limit_req` từ chối ở trang token |
 | E2 | đối chứng: 502 ở location thường (`/dashboard/`, `/api/`) VẪN ghi `error_log` — bắt đột biến tắt toàn cục, và bắt ca stub không gây lỗi (E1 xanh vô nghĩa) |
 | E3 | access log VẪN ghi 502 (đã che) cho URL token lỗi — trừ `/lp/` `/r/` SMS landing vốn `access_log off` |
