@@ -179,7 +179,9 @@ exit 1
 # kiểu F29). Nguồn lỗi ⇒ ĐỎ dù có đầu ra.
 # CHỈ in dòng của chính đầu dò (dữ liệu giả) — log của container đang phục vụ
 # chứa traffic thật, không bao giờ in ra. `docker logs` lấy stdout = access log
-# của ảnh nginx chính thức; stderr (`error_log`) bị bỏ qua — phần dư đã biết.
+# của ảnh nginx chính thức; stderr (`error_log`) bị bỏ qua — đầu dò ở đây
+# không gây lỗi upstream nên không sinh dòng error_log; hành vi error_log của
+# location token (N17.10 B) đo ở E2E `kiem-log-che-token.sh` (E1–E4).
 NONCE="$(date +%s)$$"
 GIA_P="qltsgiap${NONCE}x"
 GIA_Q="qltsgiaq${NONCE}x"

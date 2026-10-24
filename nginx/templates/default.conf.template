@@ -137,6 +137,15 @@ server {
     # inspection. Any other value (false / unset / typo) falls through.
     # See `Documents/ADMISSION_PRODUCTION_REPLACEMENT_RUNBOOK.md` §3.5 + §6.1.
     location ~ ^/api/(admissions|admission-config|public/admissions|v2/admissions|v2/admin/admission-backfill-exceptions|v2/admin/admission-paths|v2/admin/path-subject-group-configs|v2/admin/priority-config|v2/admin/rounds|v2/admin/years)(/.*)?$ {
+        # N17.10 B — `error_log` in NGUYÊN `request:` khi upstream lỗi /
+        # `limit_req` từ chối, mà location này phục vụ hai API token
+        # (`/api/admissions/confirm/<token>`, `/api/v2/admissions/magic-link/
+        # <action>/<token>`). KHÔNG tách hai API ấy ra location riêng: location
+        # riêng sẽ không chạy cổng đóng băng bên dưới (rewrite không kế thừa) ⇒
+        # phải chép cổng sang hai nơi. Đánh đổi đã chấp nhận: mất dòng error_log
+        # (502/504/limit_req) của MỌI API tuyển sinh; access log vẫn ghi mã
+        # trạng thái (URL đã che).
+        error_log /dev/null;
         set $freeze_check "$request_method:${NGINX_ADMISSION_FROZEN}";
 
         if ($freeze_check ~ "^(POST|PUT|PATCH|DELETE):true$") {
@@ -215,6 +224,7 @@ server {
     # dài hơn nên thắng /api/ và catch-all (nginx longest-prefix match).
     location /r/ {
         access_log off;
+        error_log /dev/null;
         limit_req zone=general burst=30 nodelay;
         proxy_pass http://backend;
         proxy_read_timeout 30s;
@@ -233,6 +243,7 @@ server {
     # --- SMS landing API (code trong path) → backend ---
     location /api/public/sms/landing/ {
         access_log off;
+        error_log /dev/null;
         limit_req zone=general burst=30 nodelay;
         proxy_pass http://backend;
         # add_header KHÔNG kế thừa khi location tự khai → lặp lại header
@@ -250,6 +261,7 @@ server {
     # --- SMS landing page (code trong path) → frontend ---
     location /lp/ {
         access_log off;
+        error_log /dev/null;
         limit_req zone=general burst=30 nodelay;
         proxy_pass http://frontend;
         # add_header KHÔNG kế thừa khi location tự khai → lặp lại header
@@ -262,6 +274,28 @@ server {
         add_header Referrer-Policy "no-referrer" always;
         add_header Cache-Control "no-store" always;
         add_header X-Robots-Tag "noindex" always;
+    }
+
+    # --- Trang FE mang token trên URL (N17.10 B) → frontend ---
+    # `/confirm/<token>`, `/magic-link/<action>/<token>`, `/reset-password?token=…`
+    # vốn rơi vào catch-all `location /`. `error_log` in nguyên `request:` khi
+    # frontend lỗi / `limit_req` từ chối ⇒ token vào log Docker. Hai location
+    # dưới GIỐNG HỆT catch-all, chỉ thêm `error_log /dev/null;` (không
+    # `add_header` ⇒ vẫn kế thừa header cấp server, kể cả Referrer-Policy).
+    # `~*`: không phân biệt hoa thường, như tập dấu hiệu che log. nginx so khớp
+    # URI ĐÃ giải mã nên `%2f` cũng rơi vào đây. Tập trang token PHẢI phủ
+    # `TOKEN_PATH_PREFIXES` (`app/core/log_redaction.py`) —
+    # `tests/unit/test_che_log_token_nginx.py` khoá.
+    location ~* ^/(?:confirm|magic-link)/ {
+        error_log /dev/null;
+        limit_req zone=general burst=30 nodelay;
+        proxy_pass http://frontend;
+    }
+
+    location ~* ^/reset-password/?$ {
+        error_log /dev/null;
+        limit_req zone=general burst=30 nodelay;
+        proxy_pass http://frontend;
     }
 
     # --- Catch-all: Next.js pages ---

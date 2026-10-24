@@ -290,10 +290,16 @@ NGINX_DIR=<bản sao nginx/ đã đột biến> bash …/kiem-log-che-token.sh  
 | R3 | trang thường vẫn `strict-origin-when-cross-origin` |
 | R4 | `/reset-password?token=…` trả `no-referrer` |
 | V1 | chính `scripts/nginx-verify.sh` (cổng deploy) ĐẠT, kể cả đầu dò token |
+| E1 | N17.10 B: 0 dòng `error_log` chứa token giả — stub trả `444` cho request có `GIAN17LOI` ⇒ 502 THẬT ở 9 dạng URL token (trang confirm/magic-link/reset-password, `/lp/`, `/r/`, SMS landing, API confirm/magic-link, `/Confirm/` hoa) + `limit_req` từ chối ở trang token |
+| E2 | đối chứng: 502 ở location thường (`/dashboard/`, `/api/`) VẪN ghi `error_log` — bắt đột biến tắt toàn cục, và bắt ca stub không gây lỗi (E1 xanh vô nghĩa) |
+| E3 | access log VẪN ghi 502 (đã che) cho URL token lỗi — trừ `/lp/` `/r/` SMS landing vốn `access_log off` |
+| E4 | `limit_req` THẬT SỰ từ chối: 503 ở trang token + dòng `limiting requests` ở location thường |
 
-> ⚠️ `error_log` (khi upstream lỗi hoặc `limit_req` từ chối) vẫn in `request:`/`referrer:` NGUYÊN
-> VĂN — `log_format` không chạm tới. Script chỉ GHI NHẬN số dòng ấy, không tính đạt/đỏ. Đây là
-> phần dư còn mở, không được ghi "đã hết rò token trong log nginx".
+> ⚠️ N17.10 B chặn `error_log` ở MỌI location phục vụ URL token (`error_log /dev/null;`) — kể cả
+> location tuyển sinh (dùng chung với hai API token; tách ra thì phải chép cổng đóng băng). Còn mở:
+> tham số query chứa `token` gửi tới location KHÁC (không route nào phát URL như vậy — rà 24-10),
+> lỗi xảy ra TRƯỚC khi chọn location, `%252F`. Mức `crit` (đột biến M8) không phân biệt được ở E2E vì
+> 502/`limit_req` là mức `error` — guard tĩnh `test_che_log_token_nginx.py` khoá dạng `/dev/null`.
 
 ## Dọn
 
