@@ -88,7 +88,7 @@ for v in true false; do
   docker run --rm -i -e NGINX_ADMISSION_FROZEN=$v \
     -v "$PWD/nginx:/nginx:ro" \
     -v "$PWD/tests-e2e/admission-freeze/smoke-nginx.sh:/tmp/smoke.sh:ro" \
-    nginx:1.27-alpine sh -c 'apk add --no-cache curl gettext >/dev/null && sh /tmp/smoke.sh'
+    "$(sed -n 's/^FROM //p' nginx/Dockerfile)" sh -c 'apk add --no-cache curl gettext >/dev/null && sh /tmp/smoke.sh'
 done
 ```
 

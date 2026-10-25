@@ -54,7 +54,7 @@ All services run in Docker containers. **Never run backend/frontend directly on 
 | `redis` | `redis:7-alpine` | Cache, rate limiting, Celery broker |
 | `celery-worker` | Same as backend | Background task processing |
 | `celery-beat` | Same as backend | Periodic task scheduler (singleton) |
-| `nginx` | `nginx:1.27-alpine` | Reverse proxy + SSL (production profile only) |
+| `nginx` | `nginx/Dockerfile` (nền `nginx:1.30.6-alpine`, ghim digest) | Reverse proxy + SSL (production profile only) |
 
 ### Dev vs Production
 

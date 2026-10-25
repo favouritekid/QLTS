@@ -86,7 +86,7 @@ log "đo '$CT' tại $IP trên mạng '$MANG' (domain=$DOMAIN, strict_tls=$STRIC
 # Gọi từ bên trong thì mọi request đều là 127.0.0.1 và `allow 127.0.0.1` cho
 # qua những thứ mà client thật không hề với tới được.
 # Dùng lại đúng image của container đang đo: chắc chắn có sẵn, có curl thật
-# (nginx:1.27-alpine đóng gói curl 8.12 + OpenSSL), không phải tải thêm gì.
+# (ảnh nginx alpine chính thức tự `apk add curl ca-certificates`), không phải tải thêm gì.
 KQ_CHUC_NANG=0
 docker run --rm --network "$MANG" \
     -e DOMAIN="$DOMAIN" -e IP="$IP" -e STRICT="$STRICT" \

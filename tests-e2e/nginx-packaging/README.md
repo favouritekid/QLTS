@@ -177,7 +177,7 @@ Diễn tập được ở đây mà không đụng prod. Cặp 200 ↔ 503 mới
 ```bash
 E=tests-e2e/nginx-packaging/nginx-test.env
 IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' qltsngx-nginx-1)
-goi() { docker run --rm --network qltsngx_default --entrypoint sh nginx:1.27-alpine -c \
+goi() { docker run --rm --network qltsngx_default --entrypoint sh "$(sed -n 's/^FROM //p' nginx/Dockerfile)" -c \
   "curl -sk -o /dev/null -w '%{http_code}' -X $1 --resolve 'nginx-test.local:443:$IP' \
    'https://nginx-test.local$2'"; }
 
