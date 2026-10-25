@@ -1,0 +1,125 @@
+name: Frontend Image Smoke
+
+# Dựng ĐÚNG ảnh production của frontend (`frontend/Dockerfile`, target cuối
+# `runner`, `npx next build --webpack`) rồi chạy nó với backend GIẢ và đo bằng
+# request thật.
+#
+# Vì sao có workflow này: job `Build` của frontend-test.yml chạy `npm run build`
+# (Turbopack) trên runner, còn ảnh production build bằng webpack và chỉ được
+# dựng lúc deploy. Một lượt `Build` xanh KHÔNG chứng minh đường production —
+# nâng next/@sentry có thể vỡ riêng đường webpack, standalone hay `use cache`
+# mà không check nào đỏ trước khi lên VPS.
+#
+# Ba phép đo, mỗi phép một bước:
+#   1. ảnh dựng được từ Dockerfile (log phải có lệnh webpack + "Compiled");
+#   2. phiên bản next / sharp / libvips TRONG ảnh = phiên bản lockfile khoá
+#      (frontend-smoke-versions.js, chạy bên trong ảnh; không đọc được ⇒ HỎNG);
+#   3. ảnh chạy dưới giới hạn 512m của service frontend trong docker-compose.yml,
+#      render /login và /dashboard qua getCachedUserStatistics, có kiểm ngược
+#      bằng dữ liệu giả (frontend-smoke-check.sh R0–R4).
+#
+# KHÔNG phải required check (branch protection do owner đặt). Không secret,
+# không push ảnh, chỉ đọc repo. Token trong phép đo là JWT GIẢ không chữ ký.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-image-smoke.yml'
+      - '.github/scripts/frontend-smoke-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fe-image-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # Khai tường minh: không khai `shell:` thì GitHub chạy `bash -e {0}`, KHÔNG
+    # có pipefail — `docker build … | tee` đỏ vẫn ra xanh.
+    shell: bash
+
+jobs:
+  image-smoke:
+    name: 'Frontend image smoke'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANH: qlts-frontend-smoke:ci
+      FE_PORT: '13000'
+      BE_PORT: '18000'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Chỉ để chạy backend giả, tạo token giả và so phiên bản — KHÔNG npm ci.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Dựng ảnh production (frontend/Dockerfile)
+        run: |
+          set -euo pipefail
+          docker build --progress=plain \
+            --build-arg NEXT_PUBLIC_API_URL=http://localhost:8000 \
+            --tag "$ANH" frontend 2>&1 | tee "$RUNNER_TEMP/docker-build.log"
+          # Ảnh phải ra từ ĐÚNG lệnh của stage builder, không phải Turbopack.
+          grep -m1 -F 'npx next build --webpack' "$RUNNER_TEMP/docker-build.log"
+          grep -m1 -E 'Compiled (successfully|with warnings)' "$RUNNER_TEMP/docker-build.log"
+
+      # Script chạy BÊN TRONG ảnh, đọc thẳng /app/node_modules. KHÔNG `docker cp`
+      # metadata ra ngoài: mọi lỗi chép từng bị đọc thành "gói vắng" (`|| echo`).
+      # Script tự phân biệt "đã xác nhận vắng" với "không đọc được" (luôn HỎNG).
+      - name: Phiên bản trong ảnh phải bằng phiên bản lockfile khoá
+        run: |
+          set -euo pipefail
+          docker run --rm --network none --entrypoint node \
+            -v "$GITHUB_WORKSPACE/.github/scripts:/smoke:ro" \
+            -v "$GITHUB_WORKSPACE/frontend/package-lock.json:/smoke-lock/package-lock.json:ro" \
+            "$ANH" /smoke/frontend-smoke-versions.js /smoke-lock/package-lock.json /app/node_modules
+
+      - name: Chạy ảnh với backend giả và đo render (R0–R4)
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/smoke"
+          mkdir -p "$OUT"
+          node .github/scripts/frontend-smoke-backend.js "$BE_PORT" "$OUT/backend.jsonl" \
+            > "$OUT/backend.out" 2>&1 &
+          timeout 30 bash -c "until curl -sf -o /dev/null http://127.0.0.1:$BE_PORT/healthz; do sleep 1; done"
+
+          # 512m = deploy.resources.limits.memory của service frontend (docker-compose.yml).
+          docker run --detach --name fe-smoke --network host --memory 512m \
+            -e PORT="$FE_PORT" -e HOSTNAME=127.0.0.1 \
+            -e BACKEND_URL="http://127.0.0.1:$BE_PORT" \
+            -e BACKEND_INTERNAL_URL="http://127.0.0.1:$BE_PORT" \
+            "$ANH" > /dev/null
+          timeout 90 bash -c "until curl -sf -o /dev/null http://127.0.0.1:$FE_PORT/login; do sleep 2; done"
+
+          rc=0
+          bash .github/scripts/frontend-smoke-check.sh \
+            "http://127.0.0.1:$FE_PORT" "$OUT/backend.jsonl" "$OUT" || rc=$?
+
+          trang_thai=$(docker inspect fe-smoke --format \
+            'Running={{.State.Running}} OOMKilled={{.State.OOMKilled}} RestartCount={{.RestartCount}}')
+          echo "container: $trang_thai"
+          echo "--- docker logs fe-smoke (40 dòng cuối) ---"
+          docker logs fe-smoke 2>&1 | tail -n 40
+          {
+            echo '### Frontend image smoke'
+            echo '```'
+            cat "$OUT/ket-qua.txt"
+            echo "container: $trang_thai"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          case "$trang_thai" in
+            "Running=true OOMKilled=false"*) ;;
+            *) echo "::error::container frontend không còn chạy bình thường: $trang_thai"; rc=1 ;;
+          esac
+          exit "$rc"
