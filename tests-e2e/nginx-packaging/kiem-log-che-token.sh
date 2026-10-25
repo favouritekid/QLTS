@@ -58,8 +58,11 @@ cp "$WORK/le/live/$D/fullchain.pem" "$WORK/le/live/$D/chain.pem"
 cat > "$WORK/zz-v6-stub.conf" <<'EOF'
 # Stub upstream CHỈ cho E2E — không phải cấu hình production.
 # `/api/` trả 401 để phép kiểm #3 của scripts/nginx-verify.sh (chưa đăng nhập ⇒ 401) đúng ngữ nghĩa.
-server { listen 127.0.0.1:8000; access_log off; location /api/ { return 401 "stub-401\n"; } location / { return 200 "stub-backend\n"; } }
-server { listen 127.0.0.1:3000; access_log off; location / { return 200 "stub-frontend\n"; } }
+# N17.10: request có `GIAN17LOI` (đường dẫn HOẶC query) ⇒ `444` (đóng kết nối) ⇒ nginx trả 502 và ghi
+# `upstream prematurely closed …, request: "…"` vào error_log — đúng ca rò token cần đo. `error_log /dev/null`
+# để chính stub không ghi dòng nào lẫn vào phép đếm.
+server { listen 127.0.0.1:8000; access_log off; error_log /dev/null; if ($request_uri ~ GIAN17LOI) { return 444; } location /api/ { return 401 "stub-401\n"; } location / { return 200 "stub-backend\n"; } }
+server { listen 127.0.0.1:3000; access_log off; error_log /dev/null; if ($request_uri ~ GIAN17LOI) { return 444; } location / { return 200 "stub-frontend\n"; } }
 EOF
 
 docker run -d --name "$CT" \
@@ -104,13 +107,47 @@ goi a66 "https://$D/login?next=%2Fconfirm%2FGIAV6TOKEN66" >/dev/null
 goi a67 "https://$D/login?x=1&Access-Token=GIAV6TOKEN67" >/dev/null
 H8=$(goi a80 "https://$D/login" | rp)
 
+# N17.10 B: upstream lỗi (502) ở MỌI dạng URL token — error_log KHÔNG được mang token.
+E_TOKEN=(
+    "e01 https://$D/confirm/GIAV6TOKEN81GIAN17LOI"
+    "e02 https://$D/Confirm/GIAV6TOKEN82GIAN17LOI"
+    "e03 https://$D/magic-link/withdraw/GIAV6TOKEN83GIAN17LOI"
+    "e04 https://$D/reset-password?token=GIAV6TOKEN84GIAN17LOI"
+    "e05 https://$D/lp/GIAV6TOKEN85GIAN17LOI"
+    "e06 https://$D/r/GIAV6TOKEN86GIAN17LOI"
+    "e07 https://$D/api/public/sms/landing/GIAV6TOKEN87GIAN17LOI"
+    "e08 https://$D/api/admissions/confirm/GIAV6TOKEN88GIAN17LOI"
+    "e09 https://$D/api/v2/admissions/magic-link/confirm/GIAV6TOKEN89GIAN17LOI"
+)
+# Đối chứng (location thường): PHẢI có dòng error_log — không có ⇒ error_log bị tắt toàn cục (lựa chọn C),
+# hoặc stub không gây lỗi và E1 xanh vô nghĩa.
+E_DOI_CHUNG=("k01 https://$D/dashboard/GIAN17LOI-K01" "k02 https://$D/api/khong-token/GIAN17LOI-K02")
+# E0 (F84): MỖI request lỗi giả phải truyền tải xong (curl rc 0) VÀ nhận đúng 502 — kể cả /lp/, /r/, SMS landing vốn
+# `access_log off`, nơi không còn dòng log nào để khẳng định request đã tới và đã lỗi đúng kiểu.
+sai_e0=""
+for muc in "${E_TOKEN[@]}" "${E_DOI_CHUNG[@]}"; do
+    ma="${muc%% *}"
+    http=$(docker exec "$CT" curl -sk -o /dev/null -w '%{http_code}' -A "v6-e2e-$ma" \
+        --resolve "$D:443:127.0.0.1" "${muc#* }"); rc=$?
+    [ "$rc" = 0 ] && [ "$http" = 502 ] || sai_e0="$sai_e0 [$ma: curl rc=$rc http=$http]"
+done
+
 # Mục 5 (V6): đầu dò token của CHÍNH cổng deploy `scripts/nginx-verify.sh`.
 VERIFY_OUT="$(NGINX_PROBE_STRICT_TLS=0 bash "$GOC/scripts/nginx-verify.sh" "$CT" "$D" 2>&1)"
 VERIFY_RC=$?
+
+# N17.10 B: `limit_req` từ chối (sau nginx-verify để không làm đỏ oan cổng deploy). Một tiến trình curl,
+# glob 300 URL liên tiếp ⇒ vượt 50 r/s + burst 30 của zone `general`. Token: trang /confirm/; đối chứng: /dashboard/.
+docker exec "$CT" sh -c "curl -sk -A v6-e2e-e10 --resolve '$D:443:127.0.0.1' 'https://$D/confirm/GIAV6TOKEN90RL[1-300]' >/dev/null 2>&1"; RL_TOK_RC=$?
+docker exec "$CT" sh -c "curl -sk -A v6-e2e-k10 --resolve '$D:443:127.0.0.1' 'https://$D/dashboard/GIAN17RL[1-300]' >/dev/null 2>&1"; RL_K_RC=$?
 sleep 1
 
-OUT="$(docker logs "$CT" 2>/dev/null)"
-ERR="$(docker logs "$CT" 2>&1 >/dev/null)"
+# F84: đọc log MỘT lần, stdout (access log) và stderr (error_log) vào hai tệp riêng, mã thoát của `docker logs` PHẢI 0 —
+# nguồn hỏng thì OUT/ERR rỗng và mọi phép "0 dòng chứa token" (T1, E1) sẽ xanh vô nghĩa.
+docker logs "$CT" >"$WORK/access.log" 2>"$WORK/error.log"; LOGS_RC=$?
+[ "$LOGS_RC" = 0 ] || ha_tang "docker logs rc=$LOGS_RC — không kết luận từ log"
+OUT="$(cat "$WORK/access.log")"
+ERR="$(cat "$WORK/error.log")"
 
 do_=0
 kiem() {  # kiem <mã> <điều kiện 0/1> <mô tả>
@@ -152,10 +189,36 @@ dong_v=$(printf '%s\n' "$VERIFY_OUT" | grep -E "^  (✓|✗) đầu dò token" |
 kiem V1 "$([ "$VERIFY_RC" -eq 0 ] && echo 1 || echo 0)" \
     "scripts/nginx-verify.sh rc=$VERIFY_RC · ${dong_v:-<không có dòng đầu dò token>}"
 
+# --- N17.10 B: error_log ---
+kiem E0 "$([ -z "$sai_e0" ] && echo 1 || echo 0)" \
+    "mỗi request lỗi giả (9 URL token + 2 đối chứng): curl rc 0 VÀ HTTP 502 (sai:${sai_e0:- không})"
+n_err_token=$(dem "$ERR" GIAV6TOKEN)
+kiem E1 "$([ "$n_err_token" -eq 0 ] && echo 1 || echo 0)" "error_log: dòng chứa token giả = $n_err_token (phải 0; 502 ở 9 dạng URL token + limit_req)"
+
+n_k01=$(dem "$ERR" GIAN17LOI-K01); n_k02=$(dem "$ERR" GIAN17LOI-K02)
+kiem E2 "$([ "$n_k01" -ge 1 ] && [ "$n_k02" -ge 1 ] && echo 1 || echo 0)" \
+    "đối chứng: 502 ở location thường VẪN ghi error_log (/dashboard: $n_k01 · /api/: $n_k02; phải ≥1 mỗi bên)"
+
+thieu_e=""
+# e05–e07 (`/lp/`, `/r/`, SMS landing) vốn `access_log off` (test_access_log_off_khong_lan_sang_location_token) ⇒
+# không có dòng để kiểm; error_log của chúng vẫn nằm trong E1 (bản phá gỡ error_log ở /lp/, /r/ ⇒ E1 ĐỎ).
+for ma in e01 e02 e03 e04 e08 e09; do
+    dong=$(printf '%s\n' "$OUT" | grep -F -- "\"v6-e2e-$ma\"" || true)
+    if [ -z "$dong" ]; then
+        thieu_e="$thieu_e [$ma: KHÔNG có dòng]"
+    elif ! grep -F -- '" 502 ' <<<"$dong" >/dev/null || ! grep -F -- "<redacted>" <<<"$dong" >/dev/null; then
+        thieu_e="$thieu_e [$ma: dòng không phải 502 có <redacted>]"
+    fi
+done
+kiem E3 "$([ -z "$thieu_e" ] && echo 1 || echo 0)" "access log VẪN ghi 502 (đã che) cho mỗi URL token lỗi (thiếu:${thieu_e:- không})"
+
+n_rl_tok=$(printf '%s\n' "$OUT" | grep -F '"v6-e2e-e10"' | grep -cF '" 503 ' || true)
+n_rl_k=$(printf '%s\n' "$ERR" | grep -F 'limiting requests' | grep -cF GIAN17RL || true)
+kiem E4 "$([ "$RL_TOK_RC" = 0 ] && [ "$RL_K_RC" = 0 ] && [ "$n_rl_tok" -ge 1 ] && [ "$n_rl_k" -ge 1 ] && echo 1 || echo 0)" \
+    "limit_req THẬT SỰ từ chối: curl rc $RL_TOK_RC/$RL_K_RC · trang token 503 = $n_rl_tok dòng access log · đối chứng error_log 'limiting requests' = $n_rl_k (phải rc 0 và ≥1 mỗi bên)"
+
 # Kích thước access log đã đọc (ghi nhận — ca đột biến đệm 4 MiB của vòng 5 cần thấy nó thật).
-echo "E2E-V6 GHI-NHAN access log (stdout): ${#OUT} ký tự"
-# Không phải phép kiểm đạt/đỏ: error_log là PHẦN DƯ đã biết (log_format không chạm).
-echo "E2E-V6 GHI-NHAN error_log: dòng chứa token giả = $(dem "$ERR" GIAV6TOKEN) (phần dư còn mở — chỉ ghi nhận)"
+echo "E2E-V6 GHI-NHAN access log (stdout): ${#OUT} ký tự · error_log (stderr): ${#ERR} ký tự"
 
 if [ "$do_" = 0 ]; then echo "KET-LUAN=DAT"; exit 0; fi
 echo "--- access log (đuôi) ---"; printf '%s\n' "$OUT" | tail -15

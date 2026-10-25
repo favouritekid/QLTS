@@ -30,6 +30,12 @@ cd "$(dirname "$0")/.."
 
 MW=Backend_FastAPI/app/middleware/admission_freeze.py
 TPL=nginx/templates/default.conf.template
+# Ảnh dùng cho `nginx -t` = ĐÚNG ảnh nền của production, suy từ dòng FROM của
+# nginx/Dockerfile — không chép tag ở đây: bản chép cứng `nginx:1.27-alpine` đã
+# khiến harness kiểm cú pháp trên một nginx khác bản đang chạy. Không đúng MỘT
+# dòng `FROM <ảnh>` thì DỪNG, không đoán.
+NGINX_BASE=$(awk 'toupper($1)=="FROM" {n++; if (NF==2) a=$2} END {if (n==1 && a!="") print a}' nginx/Dockerfile)
+[ -n "$NGINX_BASE" ] || { echo "✗ không suy được ảnh nền từ nginx/Dockerfile (cần đúng một dòng 'FROM <ảnh>')"; exit 2; }
 PASS=0
 FAIL=0
 
@@ -136,13 +142,13 @@ test_syntax() {
     fi
 
     if docker run --rm -v "$tmpdir/nginx.conf:/etc/nginx/nginx.conf:ro" \
-            nginx:1.27-alpine nginx -t 2>&1 | grep -q "test is successful"; then
+            "$NGINX_BASE" nginx -t 2>&1 | grep -q "test is successful"; then
         echo "  ✓ nginx -t syntax PASS"
         PASS=$((PASS + 1))
     else
         echo "  ✗ nginx -t syntax FAIL"
         docker run --rm -v "$tmpdir/nginx.conf:/etc/nginx/nginx.conf:ro" \
-            nginx:1.27-alpine nginx -t 2>&1 | sed 's/^/    /'
+            "$NGINX_BASE" nginx -t 2>&1 | sed 's/^/    /'
         FAIL=$((FAIL + 1))
     fi
     rm -rf "$tmpdir"

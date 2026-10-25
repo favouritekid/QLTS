@@ -6101,3 +6101,67 @@ def test_verify_dau_do_thieu_dong_referer_thi_do(tmp_path):
     kq = _chay_verify_dau_do(tmp_path, "thieu_referer")
     assert kq.returncode != 0 and "đầu dò token Referer: KHÔNG thấy dòng" in kq.stdout, (
         f"verify phải ĐỎ ở đầu dò Referer:\n{kq.stdout}\n{kq.stderr}")
+
+
+# ---------------------------------------------------------------------------
+# Upstream KHÔNG cache kết nối — giữ hành vi của nginx 1.27 sau khi nâng 1.30.6
+# ---------------------------------------------------------------------------
+# Từ 1.29.7 nginx mặc định `keepalive 32 local` + `proxy_http_version 1.1`;
+# gunicorn (`keepalive = 5`) và Next/Node đóng kết nối rảnh sau ~5 s. Đợt nâng
+# vì CVE chủ ý KHÔNG đổi cách quản lý kết nối ⇒ MỌI khối `upstream` khai đúng
+# một `keepalive 0;` và không tinh chỉnh keepalive nào khác. Đo hành vi thật
+# (số kết nối TCP được tái dùng) là việc của E2E; ca ở đây khoá cấu hình.
+
+
+def _khoi_upstream(van_ban: str) -> dict[str, list[str]]:
+    """Chỉ thị (đã bỏ chú thích) của từng khối `upstream <tên> { … }`."""
+    sach = re.sub(r"#[^\n]*", "", van_ban)
+    khoi: dict[str, list[str]] = {}
+    for m in re.finditer(r"\bupstream\s+(\S+)\s*\{([^{}]*)\}", sach):
+        assert m.group(1) not in khoi, f"upstream {m.group(1)!r} khai hai lần"
+        khoi[m.group(1)] = [
+            " ".join(d.split()) for d in m.group(2).split(";") if d.strip()
+        ]
+    return khoi
+
+
+def _kiem_upstream_tat_keepalive(van_ban: str) -> None:
+    khoi = _khoi_upstream(van_ban)
+    assert {"backend", "frontend"} <= set(khoi), (
+        f"nginx.conf phải có upstream backend và frontend, thấy {sorted(khoi)}"
+    )
+    for ten, chi_thi in khoi.items():
+        ka = [d for d in chi_thi if d.split()[0] == "keepalive"]
+        assert ka == ["keepalive 0"], (
+            f"upstream {ten}: phải khai đúng một `keepalive 0;` (giữ hành vi 1.27), "
+            f"thấy {ka}"
+        )
+        khac = [d for d in chi_thi if d.split()[0].startswith("keepalive_")]
+        assert not khac, f"upstream {ten}: không tinh chỉnh keepalive khi đã tắt: {khac}"
+
+
+def test_upstream_tat_keepalive_giu_hanh_vi_1_27():
+    _kiem_upstream_tat_keepalive(_doc(_THU_MUC_NGINX / "nginx.conf"))
+
+
+@pytest.mark.parametrize(
+    ("ca", "cu", "moi"),
+    [
+        # tinh vi nhất: chỉ MỘT trong hai khối mất dòng
+        ("frontend_mat_dong", "server frontend:3000;\n        keepalive 0;",
+         "server frontend:3000;"),
+        ("backend_bi_chu_thich", "server backend:8000;\n        keepalive 0;",
+         "server backend:8000;\n        # keepalive 0;"),
+        ("backend_khac_0", "server backend:8000;\n        keepalive 0;",
+         "server backend:8000;\n        keepalive 1;"),
+        ("frontend_them_timeout", "server frontend:3000;\n        keepalive 0;",
+         "server frontend:3000;\n        keepalive 0;\n        keepalive_timeout 4s;"),
+        ("upstream_moi_thieu_dong", "    upstream frontend {",
+         "    upstream api2 {\n        server api2:9000;\n    }\n\n    upstream frontend {"),
+    ],
+)
+def test_dot_bien_upstream_keepalive_thi_DO(ca, cu, moi):
+    van_ban = _doc(_THU_MUC_NGINX / "nginx.conf")
+    assert van_ban.count(cu) == 1, f"{ca}: neo đột biến phải khớp đúng một lần"
+    with pytest.raises(AssertionError):
+        _kiem_upstream_tat_keepalive(van_ban.replace(cu, moi, 1))

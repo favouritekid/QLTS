@@ -86,7 +86,7 @@ log "đo '$CT' tại $IP trên mạng '$MANG' (domain=$DOMAIN, strict_tls=$STRIC
 # Gọi từ bên trong thì mọi request đều là 127.0.0.1 và `allow 127.0.0.1` cho
 # qua những thứ mà client thật không hề với tới được.
 # Dùng lại đúng image của container đang đo: chắc chắn có sẵn, có curl thật
-# (nginx:1.27-alpine đóng gói curl 8.12 + OpenSSL), không phải tải thêm gì.
+# (ảnh nginx alpine chính thức tự `apk add curl ca-certificates`), không phải tải thêm gì.
 KQ_CHUC_NANG=0
 docker run --rm --network "$MANG" \
     -e DOMAIN="$DOMAIN" -e IP="$IP" -e STRICT="$STRICT" \
@@ -179,7 +179,9 @@ exit 1
 # kiểu F29). Nguồn lỗi ⇒ ĐỎ dù có đầu ra.
 # CHỈ in dòng của chính đầu dò (dữ liệu giả) — log của container đang phục vụ
 # chứa traffic thật, không bao giờ in ra. `docker logs` lấy stdout = access log
-# của ảnh nginx chính thức; stderr (`error_log`) bị bỏ qua — phần dư đã biết.
+# của ảnh nginx chính thức; stderr (`error_log`) bị bỏ qua — đầu dò ở đây
+# không gây lỗi upstream nên không sinh dòng error_log; hành vi error_log của
+# location token (N17.10 B) đo ở E2E `kiem-log-che-token.sh` (E1–E4).
 NONCE="$(date +%s)$$"
 GIA_P="qltsgiap${NONCE}x"
 GIA_Q="qltsgiaq${NONCE}x"

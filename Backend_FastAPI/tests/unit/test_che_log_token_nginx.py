@@ -251,6 +251,171 @@ def test_access_log_off_khong_lan_sang_location_token():
 
 
 # ---------------------------------------------------------------------------
+# nginx — error_log (N17.10 B): location phục vụ URL token KHÔNG ghi error_log
+# ---------------------------------------------------------------------------
+#
+# `error_log` in nguyên `request: "…"` khi upstream lỗi / `limit_req` từ chối —
+# `log_format` không chạm tới. Ở đây khoá TĨNH: location mà nginx THỰC SỰ chọn
+# cho mỗi URL token có `error_log /dev/null;`, còn location thường vẫn giữ mức
+# `warn` của nginx.conf. Bằng chứng HÀNH VI (502 thật, `limit_req` thật) ở E2E
+# `tests-e2e/nginx-packaging/kiem-log-che-token.sh` (mã E1–E4).
+
+#: URI (nginx chọn location theo URI ĐÃ giải mã, không có query) của MỌI dạng URL
+#: token ứng dụng phát ra — rà 24-10: trang FE ``app/confirm/[token]``,
+#: ``app/magic-link/[action]/[token]``, ``app/(auth)/reset-password`` (``?token=``
+#: do ``user_service.py`` dựng), ``app/lp/[code]``; backend ``/r/{code}``,
+#: ``/api/public/sms/landing/{code}``, ``/api/admissions/confirm/{token}``,
+#: ``/api/v2/admissions/magic-link/{action}/{token}``. Kèm biến thể hoa/thường và
+#: dấu ``/`` cuối.
+_URI_TOKEN = (
+    "/confirm/GIA", "/Confirm/GIA", "/magic-link/withdraw/GIA",
+    "/reset-password", "/reset-password/", "/lp/GIA", "/lp/GIA/nganh", "/r/GIA",
+    "/api/public/sms/landing/GIA", "/api/admissions/confirm/GIA",
+    "/api/v2/admissions/magic-link/confirm/GIA",
+)
+#: Đối chứng: tắt error_log toàn cục (lựa chọn C) là mất chẩn đoán 502/504 cả site.
+_URI_THUONG = (
+    "/", "/login", "/dashboard", "/reset-password-cu", "/confirmation", "/api/payments/1",
+    "/api/auth/login", "/socket.io/", "/_next/static/a.js", "/health",
+)
+#: Đánh đổi ĐỀ XUẤT, CHỜ OWNER CHỐT — khoá để không ai tưởng là lỗi: API tuyển sinh không
+#: token cũng mất error_log vì dùng chung location có cổng đóng băng.
+_URI_TUYEN_SINH_KHONG_TOKEN = ("/api/admissions/123", "/api/v2/admin/rounds")
+_DEV_NULL = "error_log /dev/null;"
+_MUC_MAIN = "error_log /var/log/nginx/error.log warn;"
+
+
+def _cac_khoi(text: str) -> list[tuple[str, int, int, int]]:
+    """Mọi khối ``đầu { thân }``: ``(đầu đã gọn, vị trí đầu thân, vị trí cuối thân,
+    độ sâu)``. ``text`` đã bỏ chú thích và chuỗi ngoặc."""
+    ra, ngan, moc = [], [], 0
+    for i, c in enumerate(text):
+        if c == "{":
+            ngan.append((" ".join(text[moc:i].split()), i + 1))
+        elif c == "}":
+            dau, bat_dau = ngan.pop()
+            ra.append((dau, bat_dau, i, len(ngan)))
+        if c in ";{}":
+            moc = i + 1
+    assert not ngan, "HẠ TẦNG: ngoặc nhọn không cân"
+    return ra
+
+
+def _sach(text: str) -> str:
+    return "\n".join(
+        re.sub(r"'[^']*'|\"[^\"]*\"", "''", d).split("#", 1)[0] for d in text.splitlines()
+    )
+
+
+def _cap_dau(than: str) -> str:
+    """Chỉ thị cấp đầu của một thân khối (bỏ khối con lồng bên trong)."""
+    while re.search(r"\{[^{}]*\}", than):
+        than = re.sub(r"[^;{}]*\{[^{}]*\}", "", than)
+    return than
+
+
+def _error_log(than: str) -> str | None:
+    el = [" ".join(m.group(0).split()) for m in re.finditer(r"\berror_log\b[^;]*;", _cap_dau(than))]
+    assert len(el) <= 1, "HẠ TẦNG: nhiều error_log cùng cấp: %s" % el
+    return el[0] if el else None
+
+
+def _https_locations() -> tuple[str, list[tuple[str, str, str]]]:
+    """``(thân server HTTPS có tên, [(bổ ngữ, mẫu, thân location)] theo thứ tự)``."""
+    sach = _sach(_doc(TEMPLATE))
+    khoi = _cac_khoi(sach)
+    server = [
+        (b, e, d) for dau, b, e, d in khoi
+        if dau == "server" and re.search(r"\blisten\s+443\s+ssl\s*;", _cap_dau(sach[b:e]))
+        and "default_server" not in _cap_dau(sach[b:e])
+    ]
+    assert len(server) == 1, "HẠ TẦNG: không thấy đúng MỘT server 443 có tên"
+    sb, se, sd = server[0]
+    locs = []
+    for dau, b, e, d in sorted(khoi, key=lambda k: k[1]):
+        if d == sd + 1 and sb <= b < se and dau.startswith("location "):
+            phan = dau.split(None, 2)
+            if phan[1] in ("=", "~", "~*", "^~"):
+                locs.append((phan[1], phan[2], sach[b:e]))
+            else:
+                locs.append(("", phan[1], sach[b:e]))
+    return sach[sb:se], locs
+
+
+def _location_chon(uri: str) -> tuple[str, str, str]:
+    """Thuật toán chọn location của nginx: ``=`` khớp đúng → tiền tố dài nhất (``^~``
+    dừng ở đó) → regex THEO THỨ TỰ, khớp đầu tiên thắng → tiền tố dài nhất."""
+    _, locs = _https_locations()
+    for l in locs:
+        if l[0] == "=" and l[1] == uri:
+            return l
+    tien_to = [l for l in locs if l[0] in ("", "^~") and uri.startswith(l[1])]
+    dai_nhat = max(tien_to, key=lambda l: len(l[1])) if tien_to else None
+    if dai_nhat and dai_nhat[0] == "^~":
+        return dai_nhat
+    for l in locs:
+        if l[0] in ("~", "~*") and re.search(l[1], uri, re.I if l[0] == "~*" else 0):
+            return l
+    assert dai_nhat, "HẠ TẦNG: không location nào nhận %s" % uri
+    return dai_nhat
+
+
+def _error_log_hieu_luc(uri: str) -> tuple[str, str]:
+    """``(location được chọn, error_log có hiệu lực)``: của location, không có thì
+    của server, không có nữa thì cấp main của nginx.conf (kế thừa từ trên xuống)."""
+    l = _location_chon(uri)
+    server, _ = _https_locations()
+    tren = _cau_lenh(_cap_dau(_sach(_doc(NGINX_CONF))), "error_log")
+    el = _error_log(l[2]) or _error_log(server) or (tren[0] if len(tren) == 1 else None)
+    return "location %s %s" % (l[0], l[1]) if l[0] else "location %s" % l[1], el or "<không có>"
+
+
+def test_moi_tien_to_token_co_uri_mau():
+    """Thêm tiền tố vào ``TOKEN_PATH_PREFIXES`` (nguồn chuẩn) mà không thêm URI mẫu
+    ở đây ⇒ ĐỎ, nên tiền tố mới không lọt khỏi phép kiểm error_log bên dưới."""
+    from app.core.log_redaction import TOKEN_PATH_PREFIXES
+
+    thieu = [
+        p for p in TOKEN_PATH_PREFIXES
+        if not any(re.search(re.escape(p).replace(r"\*", "[^/]+"), u) for u in _URI_TOKEN)
+    ]
+    assert thieu == [], "tiền tố token chưa có URI mẫu trong _URI_TOKEN: %s" % thieu
+
+
+def test_error_log_tat_o_moi_location_phuc_vu_uri_token():
+    sai = {u: v for u in _URI_TOKEN for v in [_error_log_hieu_luc(u)] if v[1] != _DEV_NULL}
+    assert sai == {}, "URL token rơi vào location VẪN ghi error_log (location, error_log): %s" % sai
+
+
+def test_error_log_location_thuong_giu_muc_warn_cua_nginx_conf():
+    sai = {u: v for u in _URI_THUONG for v in [_error_log_hieu_luc(u)] if v[1] != _MUC_MAIN}
+    assert sai == {}, "location thường KHÔNG còn error_log mức warn (location, error_log): %s" % sai
+
+
+def test_error_log_api_tuyen_sinh_khong_token_cung_tat_la_danh_doi_da_biet():
+    """Tách API token ra location riêng thì ca này ĐỎ — có chủ đích: location riêng
+    không chạy cổng đóng băng (rewrite không kế thừa), phải quyết lại có ý thức."""
+    mong = _error_log_hieu_luc("/api/admissions/confirm/GIA")
+    sai = {u: v for u in _URI_TUYEN_SINH_KHONG_TOKEN for v in [_error_log_hieu_luc(u)] if v != mong}
+    assert mong[1] == _DEV_NULL and sai == {}, (
+        "API tuyển sinh không token phải dùng CHUNG location (và error_log) với API "
+        "token %s: %s" % (mong, sai))
+
+
+def test_error_log_template_chi_dang_dev_null_va_chi_trong_location():
+    """``error_log`` ở cấp server = tắt cả site (lựa chọn C); dạng khác ``/dev/null``
+    (vd. ``/dev/stderr crit``) vẫn để lọt dòng ``crit`` mang ``request:``."""
+    co = _chi_thi_theo_khoi(_doc(TEMPLATE), "error_log")
+    sai = [(k, d) for k, d in co if d != _DEV_NULL or not k.startswith("location ")]
+    assert co and sai == [], "error_log trong template sai dạng hoặc sai chỗ: %s" % sai
+
+
+def test_error_log_cap_main_nginx_conf_giu_warn():
+    assert _cau_lenh(_doc(NGINX_CONF), "error_log") == [_MUC_MAIN], (
+        "nginx.conf phải giữ đúng một error_log cấp main mức warn (không crit, không /dev/null)")
+
+
+# ---------------------------------------------------------------------------
 # Referrer-Policy cho trang token — nginx + Next
 # ---------------------------------------------------------------------------
 

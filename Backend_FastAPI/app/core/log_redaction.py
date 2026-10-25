@@ -27,7 +27,8 @@ dùng chung nó:
 
 Ngoài phạm vi (ghi rõ, không phải sót): ``print()`` và mọi thứ ghi thẳng
 stdout/stderr không qua ``logging``; Sentry (nếu bật — ``send_default_pii=False``,
-chưa đo); ``error_log`` của nginx (xem ``nginx/nginx.conf``).
+chưa đo); ``error_log`` của nginx — chặn ở location phục vụ URL token (N17.10 B,
+xem ``nginx/nginx.conf`` và ``nginx/templates/default.conf.template``), phần dư ghi ở đó.
 
 Khoảng trống CÓ CHỦ Ý
 ---------------------
