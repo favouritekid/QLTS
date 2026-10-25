@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import collections
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -840,3 +841,182 @@ class TestSoDongMarkerPhaiDanXuat:
         rc, err = _chay_kiem_schema(tmp_path, noi_dung, " ".join(dv))
         assert rc != 0
         assert "dòng service LẠ: postgres" in err, err
+
+
+# --------------------------------------------------------------------------
+# Chế độ ẢNH GHIM của `nginx-apply.sh` giữ được tham chiếu ảnh cũ (F90, review 25-10).
+#
+# Thi hành CHÍNH vùng mã đã ship — từ `_ANH_LOCAL_CU=''` tới `fi` của khối
+# `QLTS_NGINX_ANH_GHIM` — với một `docker` giả mô phỏng store containerd: đổi tag
+# mà ảnh cũ không còn tên nào thì ảnh bị GỠ (đo trên Docker Desktop 25-10). Cắt
+# theo VÙNG chứ không theo tên hàm để cùng bộ ca chạy được trên bản trước vá
+# (đối chứng §3: bản cũ phải đỏ đúng lý do ở từng ca).
+# --------------------------------------------------------------------------
+
+_ANH_CU_LOCAL = "sha256:" + "a" * 64   # `qlts-nginx:local` TRƯỚC khi lùi (bản build vừa hỏng)
+_ANH_GHIM = "sha256:" + "b" * 64       # tài sản rollback, có tag riêng
+
+_DOCKER_GIA_STORE = r'''#!/usr/bin/env bash
+set -u
+S="$DOCKER_GIA"
+echo "$*" >> "$S/goi.log"
+f() { printf '%s' "$1" | tr ':/@' '___'; }
+id_cua() {
+    if [ -f "$S/tag/$(f "$1")" ]; then cat "$S/tag/$(f "$1")"; return 0; fi
+    case "$1" in sha256:*) [ -e "$S/anh/${1#sha256:}" ] && { echo "$1"; return 0; } ;; esac
+    return 1
+}
+gc() { grep -rqx "$1" "$S/tag" 2>/dev/null || rm -f "$S/anh/${1#sha256:}"; }
+case "${1:-} ${2:-}" in
+    "image inspect")
+        ref="${!#}"
+        if [ -f "$S/insp_loi" ] && [ "$(cat "$S/insp_loi")" = "$ref" ]; then
+            echo "Cannot connect to the Docker daemon" >&2; exit 1
+        fi
+        if id=$(id_cua "$ref") && [ -e "$S/anh/${id#sha256:}" ]; then echo "$id"; exit 0; fi
+        echo "Error response from daemon: No such image: $ref" >&2; exit 1 ;;
+    "image rm")
+        id=$(id_cua "$3") || exit 1
+        rm -f "$S/tag/$(f "$3")"; gc "$id"; exit 0 ;;
+esac
+if [ "${1:-}" = tag ]; then
+    n=$(( $(cat "$S/tag.dem" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$S/tag.dem"
+    [ "$(cat "$S/tag_hong_lan" 2>/dev/null)" = "$n" ] && exit 1
+    [ "$(cat "$S/tag_noop_lan" 2>/dev/null)" = "$n" ] && exit 0
+    if ! id=$(id_cua "$2") || [ ! -e "$S/anh/${id#sha256:}" ]; then
+        echo "Error response from daemon: No such image: $2" >&2; exit 1
+    fi
+    cu=$(cat "$S/tag/$(f "$3")" 2>/dev/null || true)
+    echo "$id" > "$S/tag/$(f "$3")"
+    if [ -n "$cu" ] && [ "$cu" != "$id" ]; then gc "$cu"; fi
+    exit 0
+fi
+echo "docker gia: lenh khong ho tro: $*" >&2
+exit 99
+'''
+
+
+def _vung_anh_ghim(nguon: str) -> str:
+    """Nguyên văn vùng chế độ ảnh ghim: từ `_ANH_LOCAL_CU=''` tới `fi` đóng khối."""
+    i = nguon.index("_ANH_LOCAL_CU=''\n")
+    j = nguon.index('if [ -n "${QLTS_NGINX_ANH_GHIM:-}" ]; then', i)
+    k = nguon.index("\nfi\n", j)
+    return nguon[i:k + 4]
+
+
+def _ten_tep_tag(ref: str) -> str:
+    return ref.replace(":", "_").replace("/", "_").replace("@", "_")
+
+
+def _chay_anh_ghim(tmp_path, ket_cuc: str, chuan_bi=None):
+    """Chạy vùng ảnh ghim rồi kết thúc 'thanh-cong' (như cuối script thật) hoặc 'hong'."""
+    st = tmp_path / "st"
+    (st / "tag").mkdir(parents=True)
+    (st / "anh").mkdir()
+    for anh in (_ANH_CU_LOCAL, _ANH_GHIM):
+        (st / "anh" / anh[len("sha256:"):]).write_text("")
+    (st / "tag" / _ten_tep_tag("qlts-nginx:local")).write_text(_ANH_CU_LOCAL + "\n")
+    (st / "tag" / _ten_tep_tag("qlts-nginx:pre-ghim")).write_text(_ANH_GHIM + "\n")
+    if chuan_bi:
+        chuan_bi(st)
+    thu_muc_bin = tmp_path / "bin"
+    thu_muc_bin.mkdir()
+    gia = thu_muc_bin / "docker"
+    gia.write_bytes(_DOCKER_GIA_STORE.encode("utf-8"))
+    gia.chmod(0o755)
+    kich_ban = tmp_path / "chay.sh"
+    kich_ban.write_bytes((
+        "set -euo pipefail\n"
+        "RED=''; GREEN=''; NC=''\n"
+        'log() { echo "[NGINX] $1"; }\n'
+        'error() { echo "[ERROR] $1" >&2; exit 1; }\n'
+        "_don_candidate() { :; }\n"
+        "trap _don_candidate EXIT\n"
+        + _vung_anh_ghim(_doc(DUONG_NGINX_APPLY))
+        + 'case "$1" in\n'
+        + "    thanh-cong) _GHIM_DA_AP=1; exit 0 ;;\n"
+        + '    *) error "gia lap: candidate hong" ;;\n'
+        + "esac\n"
+    ).encode("utf-8"))
+    env = dict(os.environ, PATH=str(thu_muc_bin) + os.pathsep + os.environ.get("PATH", ""),
+               DOCKER_GIA=str(st), QLTS_NGINX_ANH_GHIM="qlts-nginx:pre-ghim")
+    p = subprocess.run([_BASH, str(kich_ban), ket_cuc], capture_output=True, env=env)
+    return p, st
+
+
+def _id_tag(st, ref: str):
+    t = st / "tag" / _ten_tep_tag(ref)
+    return t.read_text().strip() if t.exists() else None
+
+
+def _con_anh(st, anh: str) -> bool:
+    return (st / "anh" / anh[len("sha256:"):]).exists()
+
+
+def _tag_cuu_ho(st) -> list:
+    return sorted(p.name for p in (st / "tag").iterdir() if p.name.startswith("qlts-nginx_truoc-ghim-"))
+
+
+class TestAnhGhimGiuThamChieuAnhCu:
+    @pytest.mark.skipif(_BASH is None, reason="không có bash để chạy đoạn shell")
+    def test_hong_thi_tra_local_ve_anh_cu_du_doi_tag_lam_mat_ten(self, tmp_path):
+        p, st = _chay_anh_ghim(tmp_path, "hong")
+        err = p.stderr.decode("utf-8", "replace")
+        assert p.returncode != 0, err
+        assert _con_anh(st, _ANH_CU_LOCAL), (
+            "ảnh local cũ bị GỠ khi đổi tag sang ảnh ghim — phải ghim tag cứu hộ TRƯỚC khi đổi")
+        assert _id_tag(st, "qlts-nginx:local") == _ANH_CU_LOCAL, (
+            "hỏng mà qlts-nginx:local không về ảnh cũ: %r · %s" % (_id_tag(st, "qlts-nginx:local"), err))
+        assert _tag_cuu_ho(st) == [], "đã trả xong mà vẫn còn tag cứu hộ: %r" % _tag_cuu_ho(st)
+
+    @pytest.mark.skipif(_BASH is None, reason="không có bash để chạy đoạn shell")
+    def test_tra_tag_hong_thi_bao_va_giu_tag_cuu_ho(self, tmp_path):
+        # lần `tag` 1 = ghim cứu hộ · 2 = trỏ local sang ảnh ghim · 3 = trả local
+        p, st = _chay_anh_ghim(tmp_path, "hong", lambda st: (st / "tag_hong_lan").write_text("3"))
+        err = p.stderr.decode("utf-8", "replace")
+        assert p.returncode != 0
+        assert "KHÔNG trả được qlts-nginx:local" in err, "trả tag hỏng mà không báo: %s" % err
+        cuu = _tag_cuu_ho(st)
+        assert len(cuu) == 1 and (st / "tag" / cuu[0]).read_text().strip() == _ANH_CU_LOCAL, cuu
+        assert _con_anh(st, _ANH_CU_LOCAL), "trả tag hỏng và ảnh cũ đã mất"
+
+    @pytest.mark.skipif(_BASH is None, reason="không có bash để chạy đoạn shell")
+    def test_tra_tag_tra_0_ma_khong_lam_gi_van_bi_bat(self, tmp_path):
+        p, st = _chay_anh_ghim(tmp_path, "hong", lambda st: (st / "tag_noop_lan").write_text("3"))
+        err = p.stderr.decode("utf-8", "replace")
+        assert p.returncode != 0
+        assert "KHÔNG trả được qlts-nginx:local" in err, (
+            "`docker tag` trả 0 mà không đổi gì vẫn được coi là đã trả: %s" % err)
+        cuu = _tag_cuu_ho(st)
+        assert len(cuu) == 1 and (st / "tag" / cuu[0]).read_text().strip() == _ANH_CU_LOCAL, cuu
+
+    @pytest.mark.skipif(_BASH is None, reason="không có bash để chạy đoạn shell")
+    def test_thanh_cong_thi_local_giu_anh_ghim_va_cuu_ho_giu_anh_cu(self, tmp_path):
+        # Ảnh cũ có thêm một tag khác ⇒ không bị gỡ dù không ghim: ca này cô lập riêng
+        # vế "trap EXIT chạy cả khi THÀNH CÔNG" (bản cũ trả local về ảnh cũ).
+        p, st = _chay_anh_ghim(tmp_path, "thanh-cong", lambda st: (
+            st / "tag" / _ten_tep_tag("qlts-nginx:khac")).write_text(_ANH_CU_LOCAL + "\n"))
+        err = p.stderr.decode("utf-8", "replace")
+        assert p.returncode == 0, err
+        assert _id_tag(st, "qlts-nginx:local") == _ANH_GHIM, (
+            "lùi THÀNH CÔNG mà qlts-nginx:local không trỏ ảnh đang phục vụ: %r" % _id_tag(st, "qlts-nginx:local"))
+        cuu = _tag_cuu_ho(st)
+        assert len(cuu) == 1 and (st / "tag" / cuu[0]).read_text().strip() == _ANH_CU_LOCAL, (
+            "thành công mà không còn tag cứu hộ giữ ảnh trước khi lùi (mất đường tiến lại): %r" % cuu)
+
+    @pytest.mark.skipif(_BASH is None, reason="không có bash để chạy đoạn shell")
+    def test_doc_local_loi_thi_dung_truoc_khi_doi_tag(self, tmp_path):
+        p, st = _chay_anh_ghim(tmp_path, "hong", lambda st: (st / "insp_loi").write_text("qlts-nginx:local"))
+        err = p.stderr.decode("utf-8", "replace")
+        assert p.returncode != 0
+        assert "không đọc được qlts-nginx:local" in err, "lỗi ĐỌC bị hiểu thành 'chưa có': %s" % err
+        assert not (st / "tag.dem").exists(), "đã gọi `docker tag` dù không đọc được tag local"
+        assert _id_tag(st, "qlts-nginx:local") == _ANH_CU_LOCAL
+
+    def test_co_thanh_cong_dat_sau_phep_do_cuoi(self):
+        """Wiring (§10): cờ chỉ được bật SAU phép đo cuối trên container đang phục vụ."""
+        dong = _doc(DUONG_NGINX_APPLY).splitlines()
+        dat = [k for k, d in enumerate(dong) if d == "_GHIM_DA_AP=1"]
+        assert len(dat) == 1, "phải có ĐÚNG một dòng bật cờ ở cấp script: %r" % dat
+        do_cuoi = max(k for k, d in enumerate(dong) if 'nginx-verify.sh" "$_CID_NGINX"' in d)
+        assert dat[0] > do_cuoi, "cờ thành công bật TRƯỚC phép đo cuối — hỏng sau đó sẽ không trả tag"
