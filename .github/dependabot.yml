@@ -118,9 +118,28 @@ updates:
       - "dependencies"
       - "docker"
 
-  # docker-compose.yml ở gốc repo pin 4 image KHÔNG nằm trong 2 Dockerfile
-  # trên: postgres:16-alpine, redis:7-alpine, nginx:1.27-alpine,
-  # certbot/certbot. nginx là thành phần DUY NHẤT phơi ra Internet, còn
+  # nginx KHÔNG nằm trong compose: service nginx dựng từ `nginx/Dockerfile`
+  # (`image: qlts-nginx:local`), nên mục `/` bên dưới không bao giờ thấy ảnh
+  # nền của nó — 1.27 đã hết vá mà không PR nào báo. nginx là thành phần DUY
+  # NHẤT phơi ra Internet ⇒ quét HẰNG TUẦN. Dependabot chỉ báo có bản mới;
+  # advisory nginx.org + chạy thử ảnh (nginx-apply.sh) vẫn bắt buộc trước khi
+  # phát hành. Dòng FROM ghim tag + digest: Dependabot đổi cả hai.
+  - package-ecosystem: "docker"
+    directory: "/nginx"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "02:00"
+      timezone: "Asia/Ho_Chi_Minh"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "chore(docker)"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # docker-compose.yml ở gốc repo pin 3 image ngoài KHÔNG nằm trong các
+  # Dockerfile trên: postgres:16-alpine, redis:7-alpine, certbot/certbot.
   # postgres giữ toàn bộ dữ liệu — thiếu mục này thì chúng mục ruỗng âm thầm
   # vì npm/pip audit không nhìn thấy image.
   - package-ecosystem: "docker"
