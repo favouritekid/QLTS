@@ -607,12 +607,63 @@ log "dựng nginx-candidate để thử cấu hình mới..."
 #
 # Hỏng ở bất kỳ đâu ⇒ trả `qlts-nginx:local` về đúng ảnh cũ. Không để lại một
 # cái tag trỏ nửa vời.
+#
+# Ba vế, mỗi vế từng hỏng một cách riêng (đo 25-10, Docker Desktop store
+# containerd):
+#  1. Đổi tag là MẤT tham chiếu: ảnh cũ không còn tên nào và không container
+#     nào dùng thì store containerd GỠ nó ngay — "trả tag về ID cũ" khi ấy
+#     không còn gì để trả. ⇒ ghim một tag CỨU HỘ và XÁC NHẬN nó trước khi đổi.
+#  2. Trả tag phải được KIỂM: `docker tag … || true` nuốt lỗi, và một lệnh trả
+#     0 mà không làm gì cũng lọt. ⇒ đọc lại ID; không khớp thì GIỮ tag cứu hộ
+#     và nói rõ lệnh trả tay.
+#  3. Chỉ trả khi HỎNG. Trap EXIT chạy cả khi THÀNH CÔNG — bản cũ khi ấy trả
+#     `qlts-nginx:local` về ảnh TRƯỚC khi lùi (đo: E2E lùi đạt, container phục
+#     vụ ảnh ghim, tag local lại trỏ ảnh khác) ⇒ lần `nginx-apply.sh` kế tiếp
+#     (vd cần gạt đóng băng) dựng candidate bằng ảnh sai và bị G1 chặn. Thành
+#     công thì tag local GIỮ ảnh ghim (= ảnh đang phục vụ); tag cứu hộ GIỮ ảnh
+#     trước khi lùi để còn đường tiến lại.
 _ANH_LOCAL_CU=''
-_khoi_phuc_tag_local() {
-    [ -n "$_ANH_LOCAL_CU" ] || return 0
-    docker tag "$_ANH_LOCAL_CU" qlts-nginx:local >/dev/null 2>&1 || true
+_CUU_HO_LOCAL=''
+_GHIM_DA_AP=0
+# _doc_id_anh <ref> — in image id khi rc 0. rc: 0 có · 3 CHƯA CÓ (daemon nói
+# đúng "No such image") · 1 lỗi đọc (mọi ca khác, kể cả rc ≠ 0 mà vẫn in ra
+# một id hợp lệ). Lỗi đọc KHÔNG được hiểu thành "chưa có".
+_doc_id_anh() {
+    local ra r
+    ra=$(docker image inspect -f '{{.Id}}' "$1" 2>&1) && r=0 || r=$?
+    if [ "$r" = 0 ]; then
+        # Regex của bash, không `printf | grep -q`: dưới `pipefail`, grep thoát
+        # sớm có thể làm printf ăn SIGPIPE ⇒ một id đúng bị coi là lỗi.
+        if [[ $ra =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            printf '%s\n' "$ra"
+            return 0
+        fi
+        return 1
+    fi
+    case "$ra" in *"No such image"*) return 3 ;; esac
+    return 1
 }
-if [ -n "${QLTS_NGINX_ANH_GHIM:-}" ]; then
+_khoi_phuc_tag_local() {
+    local v
+    if [ "$_GHIM_DA_AP" = 1 ]; then
+        [ -z "$_CUU_HO_LOCAL" ] || log "giữ tag cứu hộ $_CUU_HO_LOCAL = ảnh TRƯỚC khi lùi ($_ANH_LOCAL_CU); bỏ khi không còn cần tiến lại: docker image rm $_CUU_HO_LOCAL"
+        return 0
+    fi
+    [ -n "$_CUU_HO_LOCAL" ] || return 0
+    if docker tag "$_CUU_HO_LOCAL" qlts-nginx:local \
+        && v=$(_doc_id_anh qlts-nginx:local) && [ "$v" = "$_ANH_LOCAL_CU" ]; then
+        docker image rm "$_CUU_HO_LOCAL" >/dev/null \
+            || echo -e "${RED}[CẢNH BÁO]${NC} đã trả qlts-nginx:local, nhưng không bỏ được tag cứu hộ $_CUU_HO_LOCAL (ảnh vẫn an toàn)" >&2
+        return 0
+    fi
+    echo -e "${RED}[ERROR]${NC} KHÔNG trả được qlts-nginx:local về $_ANH_LOCAL_CU.
+       Ảnh cũ vẫn GIỮ ở tag cứu hộ $_CUU_HO_LOCAL. Trả tay rồi đọc lại ID:
+         docker tag $_CUU_HO_LOCAL qlts-nginx:local
+         docker image inspect -f '{{.Id}}' qlts-nginx:local" >&2
+    return 1
+}
+_vao_che_do_anh_ghim() {
+    local r v
     _GHIM="$QLTS_NGINX_ANH_GHIM"
     _GHIM_ID=$(docker image inspect -f '{{.Id}}' "$_GHIM" 2>/dev/null) \
         || error "QLTS_NGINX_ANH_GHIM='$_GHIM' không phân giải được thành ảnh có trên máy này.
@@ -622,11 +673,24 @@ if [ -n "${QLTS_NGINX_ANH_GHIM:-}" ]; then
         sha256:*) : ;;
         *) error "image id của ảnh ghim sai dạng: '$_GHIM_ID'" ;;
     esac
-    _ANH_LOCAL_CU=$(docker image inspect -f '{{.Id}}' qlts-nginx:local 2>/dev/null || true)
+    _ANH_LOCAL_CU=$(_doc_id_anh qlts-nginx:local) && r=0 || r=$?
+    case "$r" in
+        0)  _CUU_HO_LOCAL="qlts-nginx:truoc-ghim-$(date -u +%Y%m%dT%H%M%SZ)"
+            docker tag "$_ANH_LOCAL_CU" "$_CUU_HO_LOCAL" \
+                || error "không ghim được tag cứu hộ $_CUU_HO_LOCAL — qlts-nginx:local CHƯA bị đổi."
+            v=$(_doc_id_anh "$_CUU_HO_LOCAL") && [ "$v" = "$_ANH_LOCAL_CU" ] \
+                || error "tag cứu hộ $_CUU_HO_LOCAL không xác nhận được = $_ANH_LOCAL_CU — qlts-nginx:local CHƯA bị đổi." ;;
+        3)  _ANH_LOCAL_CU=''
+            log "qlts-nginx:local chưa có trên máy — không có ảnh cũ để giữ" ;;
+        *)  error "không đọc được qlts-nginx:local (lỗi khác 'No such image') — dừng TRƯỚC khi đổi tag." ;;
+    esac
     trap '_don_candidate; _khoi_phuc_tag_local' EXIT
     log "chế độ ẢNH GHIM: trỏ qlts-nginx:local -> $_GHIM_ID"
     docker tag "$_GHIM_ID" qlts-nginx:local \
         || error "không trỏ được qlts-nginx:local vào ảnh ghim — dừng trước khi dựng candidate."
+}
+if [ -n "${QLTS_NGINX_ANH_GHIM:-}" ]; then
+    _vao_che_do_anh_ghim
 else
     # Đường bình thường: ảnh phải do `compose build` vừa dựng. Script này KHÔNG
     # build (xem đầu tệp) — G1 bên dưới là thứ bắt ca 'quên build'.
@@ -719,3 +783,6 @@ if ! bash "$SCRIPT_DIR/nginx-verify.sh" "$_CID_NGINX" "$DOMAIN"; then
     error "nginx đang chạy nhưng KHÔNG phục vụ đúng — xem log phía trên"
 fi
 log "nginx healthy, chạy đúng ảnh đã chứng minh ($_ANH_DANG_PHUC_VU), và đã được đo bằng request thật — cấu hình mới đã được áp"
+# Đặt SAU phép đo cuối cùng: trap EXIT đọc cờ này để KHÔNG trả tag local khi đã
+# thành công (xem `_khoi_phuc_tag_local`).
+_GHIM_DA_AP=1
