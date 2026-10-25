@@ -13,7 +13,7 @@ name: Frontend Image Smoke
 # Ba phép đo, mỗi phép một bước:
 #   1. ảnh dựng được từ Dockerfile (log phải có lệnh webpack + "Compiled");
 #   2. phiên bản next / sharp / libvips TRONG ảnh = phiên bản lockfile khoá
-#      (frontend-smoke-versions.js);
+#      (frontend-smoke-versions.js, chạy bên trong ảnh; không đọc được ⇒ HỎNG);
 #   3. ảnh chạy dưới giới hạn 512m của service frontend trong docker-compose.yml,
 #      render /login và /dashboard qua getCachedUserStatistics, có kiểm ngược
 #      bằng dữ liệu giả (frontend-smoke-check.sh R0–R4).
@@ -74,18 +74,16 @@ jobs:
           grep -m1 -F 'npx next build --webpack' "$RUNNER_TEMP/docker-build.log"
           grep -m1 -E 'Compiled (successfully|with warnings)' "$RUNNER_TEMP/docker-build.log"
 
+      # Script chạy BÊN TRONG ảnh, đọc thẳng /app/node_modules. KHÔNG `docker cp`
+      # metadata ra ngoài: mọi lỗi chép từng bị đọc thành "gói vắng" (`|| echo`).
+      # Script tự phân biệt "đã xác nhận vắng" với "không đọc được" (luôn HỎNG).
       - name: Phiên bản trong ảnh phải bằng phiên bản lockfile khoá
         run: |
           set -euo pipefail
-          DIR="$RUNNER_TEMP/anh"
-          cid=$(docker create "$ANH")
-          for g in next sharp @img/sharp-linuxmusl-x64 @img/sharp-libvips-linuxmusl-x64; do
-            mkdir -p "$DIR/$g"
-            docker cp "$cid:/app/node_modules/$g/package.json" "$DIR/$g/package.json" \
-              2> /dev/null || echo "  $g: không có trong ảnh"
-          done
-          docker rm "$cid" > /dev/null
-          node .github/scripts/frontend-smoke-versions.js frontend/package-lock.json "$DIR"
+          docker run --rm --network none --entrypoint node \
+            -v "$GITHUB_WORKSPACE/.github/scripts:/smoke:ro" \
+            -v "$GITHUB_WORKSPACE/frontend/package-lock.json:/smoke-lock/package-lock.json:ro" \
+            "$ANH" /smoke/frontend-smoke-versions.js /smoke-lock/package-lock.json /app/node_modules
 
       - name: Chạy ảnh với backend giả và đo render (R0–R4)
         run: |
