@@ -21,8 +21,16 @@
 #
 # Muốn thử một template khác (các ca hồi quy E2E) thì mount đè
 # `/etc/nginx/templates` — mount vẫn thắng nội dung image.
+#
+# Ảnh nền: nhánh STABLE 1.30.6 (nginx.org, 14-10-2026) — 0 advisory của
+# nginx.org còn phủ bản này. 1.27.x đã hết vá: 1.27.5 nằm trong 23 advisory, có
+# CVE-2026-42533 (`map` + regex capture không tên — đúng dạng hai `map` che
+# token trong `nginx.conf`). Ghim theo DIGEST của OCI index (đa nền tảng), đối
+# chiếu trực tiếp trên registry-1.docker.io 25-10-2026: trùng `1.30-alpine` và
+# `stable-alpine`; config amd64 khai NGINX_VERSION=1.30.6, Alpine 3.24.3.
+# Đổi bản thì đổi CẢ tag lẫn digest — tag trôi được, digest thì không.
 # =============================================================================
-FROM nginx:1.27-alpine
+FROM nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951
 
 # Vhost mặc định của image chính là trang "Welcome to nginx!" đã biến ca "không
 # có config" từ một ECONNREFUSED ầm ĩ thành một 200 OK im lặng. Xoá hẳn: từ đây
