@@ -343,6 +343,55 @@ async def test_strict_sessions_publishes_one_session_command_no_users():
 
 
 @pytest.mark.asyncio
+async def test_force_disconnect_user_notify_tells_then_cuts():
+    """Revoke-ALL (``notify=True``): the user's sockets get ``force_logout_batch``
+    (``revoked_jtis: []``, local emit) FIRST, then the DISCONNECTs."""
+    order = []
+    fake_sio = MagicMock()
+    fake_sio.manager.get_participants.return_value = [("sidA", "e1"), ("sidB", "e2")]
+    fake_sio.emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
+    fake_sio.disconnect = AsyncMock(side_effect=lambda sid: order.append(sid))
+    with patch.object(sm, "sio", fake_sio):
+        n = await sm.force_disconnect_user([7], notify=True)
+
+    assert order == ["emit", "sidA", "sidB"], order
+    assert n == 2
+    fake_sio.emit.assert_awaited_once_with(
+        "force_logout_batch", {"revoked_jtis": []}, room="user_room_7", ignore_queue=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_handler_user_command_without_notify_never_notifies():
+    """Offboarding's command (``user_ids``, no ``notify``) is unchanged: the user
+    cut runs WITHOUT a notice — offboarding cuts before its commit and may roll
+    back, so it must not tell anyone they are out."""
+    rc = AsyncMock()
+    cut_users = AsyncMock(return_value=0)
+    with patch.object(sm, "_worker_id", "w-self"), \
+            patch.object(sm, "redis_client", rc), \
+            patch.object(sm, "force_disconnect_user", cut_users):
+        await sm._handle_force_disconnect(
+            json.dumps({"command_id": "c5", "user_ids": [7]})
+        )
+    cut_users.assert_awaited_once_with([7], notify=False)
+
+
+@pytest.mark.asyncio
+async def test_strict_user_default_command_has_no_notify():
+    """``force_disconnect_user_strict`` as offboarding calls it publishes the SAME
+    command as before (``user_ids`` only, no ``notify``)."""
+    rc = AsyncMock()
+    rc.smembers.return_value = {"w1"}  # immediate ACK
+    with patch.object(sm, "redis_client", rc), \
+            patch.object(sm, "_required_workers", AsyncMock(return_value={"w1"})):
+        await sm.force_disconnect_user_strict(7)
+
+    payload = json.loads(rc.publish.await_args.args[1])
+    assert set(payload) == {"command_id", "user_ids"}, payload
+
+
+@pytest.mark.asyncio
 async def test_strict_sessions_one_worker_missing_ack_raises():
     """Multi-worker: one required worker never ACKs ⇒ TimeoutError (never "done")."""
     rc = AsyncMock()

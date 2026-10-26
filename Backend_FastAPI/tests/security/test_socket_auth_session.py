@@ -400,13 +400,45 @@ async def test_emit_force_logout_unconfirmed_cut_is_never_reported_done():
 
 
 @pytest.mark.asyncio
-async def test_emit_force_logout_all_sessions_still_goes_to_user_room():
-    """``revoked_jtis=[]`` (invalidate_all_sessions) keeps meaning ALL sessions."""
+async def test_emit_force_logout_all_sessions_cuts_whole_user_with_notice():
+    """``revoked_jtis=[]`` (invalidate_all_sessions, post-commit) keeps meaning ALL
+    sessions — and is ENFORCED: one ACK-confirmed USER command with ``notify``
+    (each worker tells the user's sockets, then cuts them); never the session
+    command; no queued notice once confirmed."""
     fake_sio = MagicMock()
     fake_sio.emit = AsyncMock()
-    with patch.object(sm, "sio", fake_sio):
+    strict_user = AsyncMock(return_value="cmd")
+    strict_sessions = AsyncMock(return_value="cmd")
+    with patch.object(sm, "sio", fake_sio), \
+            patch.object(sm, "force_disconnect_user_strict", strict_user), \
+            patch.object(sm, "force_disconnect_sessions_strict", strict_sessions):
         await sm.emit_force_logout(user_id=5, revoked_jtis=[], reason="Password changed")
 
+    strict_user.assert_awaited_once_with(5, notify=True)
+    strict_sessions.assert_not_awaited()
+    fake_sio.emit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_emit_force_logout_all_unconfirmed_is_never_reported_done():
+    """Revoke-ALL whose user command is not ACKed ⇒ logged NOT confirmed, never
+    confirmed; still ANNOUNCED through the queue (advisory); no raise."""
+    fake_sio = MagicMock()
+    fake_sio.emit = AsyncMock()
+    fake_log = MagicMock()
+    strict_user = AsyncMock(side_effect=TimeoutError("w2 did not ACK"))
+    with patch.object(sm, "sio", fake_sio), \
+            patch.object(sm, "log", fake_log), \
+            patch.object(sm, "force_disconnect_user_strict", strict_user):
+        await sm.emit_force_logout(user_id=5, revoked_jtis=[], reason="Password changed")
+
+    actions = [c.kwargs.get("action") for c in fake_log.error.call_args_list]
+    assert "socket.user_disconnect_unconfirmed" in actions, fake_log.error.call_args_list
+    claimed = [
+        c for c in fake_log.info.call_args_list
+        if c.kwargs.get("action") == "socket.user_disconnect_confirmed"
+    ]
+    assert claimed == [], f"an unconfirmed cut was reported as done: {claimed}"
     fake_sio.emit.assert_awaited_once_with(
         "force_logout_batch", {"revoked_jtis": []}, room="user_room_5"
     )

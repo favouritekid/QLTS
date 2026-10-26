@@ -20,6 +20,7 @@ import pytest
 import pytest_asyncio
 import socketio
 from aiobreaker import CircuitBreaker, CircuitBreakerState
+from httpx import ASGITransport, AsyncClient
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import select, text, update
 from sqlalchemy.exc import OperationalError
@@ -2426,6 +2427,22 @@ async def test_socket_revalidate_expired_row_is_refused_by_the_shared_predicate(
     ), "revalidate không được ghi vào hàng"
 
 
+@contextmanager
+def _lenh_ngat_that_lac():
+    """Lệnh ngắt hậu-commit của thu hồi theo phiên (F108) KHÔNG tới worker nào:
+    ``force_disconnect_sessions_strict`` ném như kênh liên worker hỏng. Trả danh
+    sách lượt gọi — để ca kiểm chứng minh lệnh ĐÃ được phát (và thất lạc), không
+    xanh vì đường ngắt chưa từng chạy."""
+    goi: list = []
+
+    async def _hong(pairs, *args, **kwargs):
+        goi.append(pairs)
+        raise RedisConnectionError("tiêm lỗi: lệnh ngắt thất lạc trên kênh liên worker")
+
+    with patch.object(socket_manager, "force_disconnect_sessions_strict", _hong):
+        yield goi
+
+
 async def _logout_while_redis_does_not_answer(
     fault, client, test_redis_client, user: dict, access: str, refresh: str, jti: str, recover
 ):
@@ -2507,6 +2524,12 @@ async def test_socket_revalidate_after_logout_during_redis_outage_is_refused_by_
     """Ô b2 (socket): socket nối TRƯỚC logout; logout B2 khi Redis không trả lời ⇒
     Redis hồi, trừ lượt đọc `session:` ⇒ revalidate `Session revoked` từ phép đối
     chiếu CSDL exact-jti, không bao giờ `valid: True`.
+
+    Ô này canh revalidate cho socket đã LỠ lệnh ngắt hậu-commit của logout (F108
+    nhánh anh em). Kênh liên worker chỉ hỏng tự nhiên ở ``connection``;
+    ``breaker_open`` không chặn ``publish`` nên lệnh tới nơi và socket bị cắt ngay
+    lúc logout ⇒ tiêm thất lạc cho CẢ HAI tham số. Logout ngắt thật được canh ở
+    ``test_f108s_logout_cuts_every_tab_of_that_session_only``.
     """
     user = regular_user_in_db
     access, refresh, jti = await _login_as(client, user)
@@ -2516,8 +2539,13 @@ async def test_socket_revalidate_after_logout_during_redis_outage_is_refused_by_
             "đối chứng hỏng: revalidate phải hợp lệ trước logout"
         )
         sid = sio.get_sid("/")
-        before = await _logout_while_redis_does_not_answer(
-            fault, client, test_redis_client, user, access, refresh, jti, fresh_breaker
+        with _lenh_ngat_that_lac() as lenh_ngat:
+            before = await _logout_while_redis_does_not_answer(
+                fault, client, test_redis_client, user, access, refresh, jti, fresh_breaker
+            )
+        assert len(lenh_ngat) == 1, f"tiền đề: logout phải phát lệnh ngắt (rồi thất lạc): {lenh_ngat}"
+        assert _phuc_vu({"socket": sid}) == {"socket": True}, (
+            "tiền đề: lệnh ngắt thất lạc ⇒ server vẫn phục vụ socket"
         )
         caplog.clear()
 
@@ -3145,6 +3173,281 @@ async def test_f108_unacked_worker_reported_unconfirmed_revoke_stands(
         "socket disconnect NOT confirmed" in m for m in _logs(caplog, "app.socket_manager")
     ), _logs(caplog, "app.socket_manager")
     assert (await _row_by_id(h["id_a"])).revoked_at is not None, "thu hồi trong CSDL không đứng"
+
+
+# -----------------------------------------------------------------------------
+# F108 — NHÁNH ANH EM (review 26-10 ~06:05Z): mọi đường thu hồi khác cũng phải
+# để SERVER ngắt socket, và CHỈ SAU COMMIT. Thu hồi THEO PHIÊN (logout, đăng nhập
+# lại cùng thiết bị, FIFO) ngắt đúng phiên ấy, phiên khác của cùng người dùng
+# sống; CHỈ thu hồi toàn bộ (`invalidate_all_sessions`: đổi/đặt lại mật khẩu,
+# ngưỡng refresh) ngắt toàn user. Giao dịch rollback ⇒ không ngắt gì. Không ACK ⇒
+# "chưa xác nhận", HTTP giữ nguyên. Offboarding giữ cơ chế strict trước commit.
+# -----------------------------------------------------------------------------
+
+UA_FIREFOX_LINUX = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+CHANGE_PASSWORD_URL = "/api/auth/change-password"
+MAT_KHAU_MOI = "NewSecurePassword!123"
+
+
+def _phuc_vu(sids: dict) -> dict:
+    """{tên tab: server còn phục vụ socket ấy không} — đo ở `manager`, phía server."""
+    return {ten: socket_manager.sio.manager.is_connected(sid, "/") for ten, sid in sids.items()}
+
+
+async def _noi(tab, test_server, access_token: str) -> str:
+    """Nối một tab Socket.IO bằng access token; trả sid."""
+    await tab.connect(test_server, auth={"token": access_token}, transports=["websocket"])
+    return tab.get_sid("/")
+
+
+async def _doi_mat_khau(client, access_token: str, cu: str, moi: str = MAT_KHAU_MOI):
+    """`POST /api/auth/change-password` chỉ mang cookie ``access_token``."""
+    client.cookies.clear()
+    try:
+        return await client.post(
+            CHANGE_PASSWORD_URL,
+            json={"old_password": cu, "new_password": moi},
+            headers={"Cookie": f"access_token={access_token}"},
+        )
+    finally:
+        client.cookies.clear()
+
+
+@contextmanager
+def _spy_ket_qua(ten_ham: str):
+    """Ghi kết quả THẬT của ``socket_manager.<ten_ham>`` (True = mọi worker ACK)."""
+    original = getattr(socket_manager, ten_ham)
+    ket_qua: list = []
+
+    async def _spy(*args, **kwargs):
+        out = await original(*args, **kwargs)
+        ket_qua.append(out)
+        return out
+
+    with patch.object(socket_manager, ten_ham, _spy):
+        yield ket_qua
+
+
+@pytest.mark.asyncio
+async def test_f108s_logout_cuts_every_tab_of_that_session_only(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Logout của phiên A (hai tab) ⇒ khi 204 về, server đã ngắt CẢ HAI tab A; tab
+    của phiên B (cùng người dùng) vẫn được phục vụ."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1, _sio() as a_2, _sio() as b_1:
+        sids = {
+            "tab A1": await _noi(a_1, test_server, h["access_a"]),
+            "tab A2": await _noi(a_2, test_server, h["access_a"]),
+            "tab B": await _noi(b_1, test_server, h["access_b"]),
+        }
+
+        res = await _post_with_cookies(
+            client, LOGOUT_URL, access_token=h["access_a"], refresh_token=h["refresh_a"]
+        )
+
+        assert res.status_code == 204, res.text
+        assert _phuc_vu(sids) == {"tab A1": False, "tab A2": False, "tab B": True}, (
+            f"logout không ngắt đúng phiên A: {_phuc_vu(sids)}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_f108s_relogin_same_device_cuts_old_session_only(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Đăng nhập lại từ CÙNG thiết bị với phiên A thu hồi A
+    (`_revoke_previous_sessions_on_device`) ⇒ khi lượt đăng nhập trả 200, tab của
+    A đã bị server ngắt; tab của phiên B (thiết bị khác) vẫn được phục vụ."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1, _sio() as b_1:
+        sids = {
+            "tab A": await _noi(a_1, test_server, h["access_a"]),
+            "tab B": await _noi(b_1, test_server, h["access_b"]),
+        }
+
+        await _login_as(client, user, ua=UA_DESKTOP)
+
+        assert (await _row_by_id(h["id_a"])).revoked_at is not None, (
+            "tiền đề: đăng nhập lại cùng thiết bị phải thu hồi phiên A"
+        )
+        assert _phuc_vu(sids) == {"tab A": False, "tab B": True}, (
+            f"đăng nhập lại không ngắt đúng phiên cũ: {_phuc_vu(sids)}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_f108s_fifo_eviction_cuts_evicted_session_only(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker, monkeypatch
+):
+    """Giới hạn 2 phiên; đăng nhập THỨ BA từ thiết bị thứ ba đẩy phiên CŨ NHẤT (A)
+    ra (`_enforce_max_sessions`) ⇒ tab A bị server ngắt; tab B vẫn sống."""
+    monkeypatch.setattr(settings, "ANOMALY_MAX_SESSIONS_PER_USER", 2)
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1, _sio() as b_1:
+        sids = {
+            "tab A": await _noi(a_1, test_server, h["access_a"]),
+            "tab B": await _noi(b_1, test_server, h["access_b"]),
+        }
+
+        await _login_as(client, user, ua=UA_FIREFOX_LINUX)
+
+        assert (await _row_by_id(h["id_a"])).revoked_at is not None, (
+            "tiền đề: FIFO phải đẩy phiên A (cũ nhất) ra"
+        )
+        assert (await _row_by_id(h["id_b"])).revoked_at is None, "tiền đề: B phải còn sống"
+        assert _phuc_vu(sids) == {"tab A": False, "tab B": True}, (
+            f"FIFO không ngắt đúng phiên bị đẩy: {_phuc_vu(sids)}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_f108s_revoke_all_cuts_every_socket_of_the_user(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Đổi mật khẩu = thu hồi TOÀN BỘ (`invalidate_all_sessions`) ⇒ khi 204 về,
+    server đã ngắt socket của MỌI phiên của người dùng (A và B) — sau COMMIT."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    try:
+        async with _sio() as a_1, _sio() as b_1:
+            sids = {
+                "tab A": await _noi(a_1, test_server, h["access_a"]),
+                "tab B": await _noi(b_1, test_server, h["access_b"]),
+            }
+
+            res = await _doi_mat_khau(client, h["access_a"], user["password"])
+
+            assert res.status_code == 204, res.text
+            assert _phuc_vu(sids) == {"tab A": False, "tab B": False}, (
+                f"thu hồi toàn bộ không ngắt mọi socket của người dùng: {_phuc_vu(sids)}"
+            )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f108s_rolled_back_revoke_all_cuts_nothing(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Đổi mật khẩu mà COMMIT hỏng ⇒ thu hồi rollback ⇒ KHÔNG socket nào bị ngắt
+    (lệnh ngắt chỉ chạy sau commit).
+
+    Route đổi mật khẩu không tự bắt lỗi COMMIT: người dùng nhận 500 từ
+    ServerErrorMiddleware, còn ``client`` (``ASGITransport`` mặc định) ném lại
+    ngoại lệ ⇒ gọi qua transport ``raise_app_exceptions=False`` để đo đúng mã đó."""
+    from app.main import fastapi_app
+
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    try:
+        async with _sio() as a_1, _sio() as b_1, AsyncClient(
+            transport=ASGITransport(app=fastapi_app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as client_500:
+            sids = {
+                "tab A": await _noi(a_1, test_server, h["access_a"]),
+                "tab B": await _noi(b_1, test_server, h["access_b"]),
+            }
+
+            with _request_db_commit_fails() as commits:
+                res = await _doi_mat_khau(client_500, h["access_a"], user["password"])
+
+            assert commits, "tiền đề: đổi mật khẩu phải thử COMMIT"
+            assert res.status_code >= 500, res.text
+            assert await _live_session_jtis(user["id"]) == sorted([h["jti_a"], h["jti_b"]]), (
+                "tiền đề: thu hồi phải đã rollback"
+            )
+            assert _phuc_vu(sids) == {"tab A": True, "tab B": True}, (
+                f"giao dịch rollback mà socket bị ngắt: {_phuc_vu(sids)}"
+            )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f108s_rolled_back_logout_cuts_nothing(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Logout mà COMMIT hỏng (500, phiên A vẫn sống) ⇒ không tab nào bị ngắt."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1, _sio() as b_1:
+        sids = {
+            "tab A": await _noi(a_1, test_server, h["access_a"]),
+            "tab B": await _noi(b_1, test_server, h["access_b"]),
+        }
+
+        with _request_db_commit_fails() as commits:
+            res = await _post_with_cookies(
+                client, LOGOUT_URL, access_token=h["access_a"], refresh_token=h["refresh_a"]
+            )
+
+        assert commits, "tiền đề: logout phải thử COMMIT"
+        assert _status_and_code(res) == (500, "SESSION_REVOCATION_ERROR"), res.text
+        assert (await _row_by_id(h["id_a"])).revoked_at is None, "tiền đề: phiên A còn sống"
+        assert _phuc_vu(sids) == {"tab A": True, "tab B": True}, (
+            f"logout rollback mà socket bị ngắt: {_phuc_vu(sids)}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_f108s_unacked_logout_cut_unconfirmed_http_unchanged(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker, caplog
+):
+    """Logout khi một worker NHẬN lệnh mà không ACK ⇒ vẫn 204 (thu hồi đã commit);
+    việc ngắt được ghi là CHƯA xác nhận, không bao giờ là đã ngắt."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1:
+        await _noi(a_1, test_server, h["access_a"])
+        caplog.clear()
+
+        with caplog.at_level(logging.WARNING, logger="app"), \
+                _spy_ket_qua("_enforce_session_revocation") as ket_qua:
+            async with _worker_thu_hai(test_redis_client, ack=False) as nhan:
+                res = await _post_with_cookies(
+                    client, LOGOUT_URL, access_token=h["access_a"], refresh_token=h["refresh_a"]
+                )
+
+    assert res.status_code == 204, res.text
+    assert len(nhan) == 1, f"tiền đề: worker thứ hai phải NHẬN lệnh: {nhan}"
+    assert ket_qua == [False], f"ngắt chưa xác nhận mà bị báo là xong: {ket_qua}"
+    assert any(
+        "socket disconnect NOT confirmed" in m for m in _logs(caplog, "app.socket_manager")
+    ), _logs(caplog, "app.socket_manager")
+
+
+@pytest.mark.asyncio
+async def test_f108s_unacked_revoke_all_unconfirmed_http_unchanged(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker, caplog
+):
+    """Đổi mật khẩu khi một worker NHẬN lệnh mà không ACK ⇒ vẫn 204 (thu hồi toàn
+    bộ đã commit); việc ngắt toàn user được ghi là CHƯA xác nhận."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    try:
+        async with _sio() as a_1:
+            await _noi(a_1, test_server, h["access_a"])
+            caplog.clear()
+
+            with caplog.at_level(logging.WARNING, logger="app"), \
+                    _spy_ket_qua("_enforce_user_revocation") as ket_qua:
+                async with _worker_thu_hai(test_redis_client, ack=False) as nhan:
+                    res = await _doi_mat_khau(client, h["access_a"], user["password"])
+
+        assert res.status_code == 204, res.text
+        assert len(nhan) == 1, f"tiền đề: worker thứ hai phải NHẬN lệnh: {nhan}"
+        assert ket_qua == [False], f"ngắt chưa xác nhận mà bị báo là xong: {ket_qua}"
+        assert any(
+            "Revoke-all: socket disconnect NOT confirmed" in m
+            for m in _logs(caplog, "app.socket_manager")
+        ), _logs(caplog, "app.socket_manager")
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
 
 
 # -----------------------------------------------------------------------------

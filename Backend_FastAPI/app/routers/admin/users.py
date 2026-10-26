@@ -1089,6 +1089,9 @@ async def update_existing_user(
     if "status" in changes and changes["status"]["new"] != "active":
         await db.flush()
         try:
+            # The post-commit callback it returns (user-wide socket cut) is NOT
+            # run here on purpose: offboarding cuts strictly BEFORE commit just
+            # below and rolls everything back if a worker does not ACK.
             await user_service.invalidate_all_sessions(
                 db,
                 db_user,
