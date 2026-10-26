@@ -2526,6 +2526,25 @@ def test_v7d_trap_bi_gioi_han_boi_han_chot_phien(tmp_path: Path) -> None:
 
 
 @_bo_qua_neu_khong_posix
+def test_v7d_keo_anh_nen_nhan_han_dong_cua_phien(tmp_path: Path) -> None:
+    """Chuẩn bị ảnh nền nginx (Step 4, ngay trước build — giết được an toàn trước 4c) lấy hạn ĐỘNG của phiên, không phải 300 s cố định.
+
+    Phần còn lại lúc ấy ≈ C_4c + 10 (ân hạn) + vài chục giây ⇒ hạn chỉ vài chục giây. Một hạn cố định
+    300 s ở đây cho phép bước chuẩn bị ăn sang phần đã giữ chỗ cho 4c → 8c. F101: hạn ấy là ngân sách
+    của CẢ bước (`QLTS_NGINX_NEN_NGAN_SACH` — đọc trước, kéo, đọc lại), không riêng lần kéo.
+    """
+    import re
+
+    goc = _san_khau_7d(tmp_path)
+    ket, nk = _chay_7d(goc, _phien(900, lui=900 - 30 - (_C4C_V6 + 10 + 25)))
+    ra = _ra(ket)
+    assert "Step 4 (ảnh nền nginx): hạn ĐỘNG" in ra, ra[-1500:]
+    m = re.search(r"^nginx-anh-nen ngan_sach=(\d+)$", nk, re.M)
+    assert m, f"bước chuẩn bị ảnh nền không chạy hoặc không nhận ngân sách:\n{nk[:800]}"
+    assert 1 <= int(m.group(1)) <= 40, f"ngân sách bước chuẩn bị ảnh nền {m.group(1)}s không theo phần còn lại của phiên"
+
+
+@_bo_qua_neu_khong_posix
 def test_v7d_build_bi_cat_o_han_dong(tmp_path: Path) -> None:
     import time
 

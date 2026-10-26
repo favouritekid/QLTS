@@ -1545,6 +1545,27 @@ if [ "${SHA_MONG_DOI+co}" = "co" ]; then
     fi
 fi
 
+# Ảnh NỀN của nginx (FROM ghim digest) phải nằm trong image store TRƯỚC build:
+# cổng nội dung G1 của `nginx-apply.sh` (Step 8b) cần nó để đối chiếu chiều
+# ngược và cố ý KHÔNG kéo mạng giữa lúc áp. Run 40184923904 (25-10-2026): build
+# trên store containerd thành công mà không để lại ảnh nền mang tên tham chiếu
+# ⇒ Step 8b dừng SAU KHI ứng dụng đã được thay. Chuẩn bị ở ĐÂY — ngay trước
+# build, trước khi dừng ứng dụng (4c) — nên hỏng thì chưa build, chưa dừng gì,
+# chưa chạm CSDL (tài sản rollback 3b, nếu đã tạo, giữ nguyên như khi build
+# hỏng). KHÔNG đặt trước 3b: hạn động bên dưới cũng dừng khi phiên không đủ, nên
+# đặt sớm hơn sẽ CHE cổng kế hoạch phiên (G0) — kiểm ngược v7d mất sức bắt. Mọi
+# lời gọi Docker của bước (đọc, kéo, đọc lại) giết được an toàn ⇒ CẢ bước nằm
+# trong MỘT ngân sách = hạn ĐỘNG như build (trần 300 s), kể cả ân hạn -k của
+# từng lời gọi (F101: trước đây chỉ lần kéo có hạn — `docker image inspect` treo
+# vượt được ngân sách); giữ rc, kiểm lại sau khi kéo: `scripts/nginx-anh-nen.sh`.
+_ph_han_dong 10 "Step 4 (ảnh nền nginx)"
+_NEN_NGAN_SACH=300
+if [ -n "$_PH_H_DONG" ] && [ "$_PH_H_DONG" -lt "$_NEN_NGAN_SACH" ]; then
+    _NEN_NGAN_SACH=$_PH_H_DONG
+fi
+QLTS_NGINX_NEN_NGAN_SACH="$_NEN_NGAN_SACH" bash "$SCRIPT_DIR/nginx-anh-nen.sh" chuan-bi \
+    || error "chưa chuẩn bị được ảnh nền nginx (lý do ở dòng trên) — DỪNG trước build: chưa build, chưa dừng ứng dụng, chưa chạm CSDL."
+
 # Vòng 7d: đường phiên ⇒ build có hạn ĐỘNG (phần còn lại − kế hoạch từ 4c − ân hạn 30 s). Giết
 # client build TRƯỚC 4c là an toàn: chưa dừng container nào, chưa chạm CSDL.
 _ph_han_dong 30 "Step 4 (build)"
