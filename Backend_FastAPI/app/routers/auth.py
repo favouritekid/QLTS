@@ -757,7 +757,7 @@ async def perform_password_reset(
     # If revocation fails, rollback so old password stays active — fail-closed:
     # no dangling sessions with a changed password.
     try:
-        await user_service.invalidate_all_sessions(db, user)
+        sessions_post_commit = await user_service.invalidate_all_sessions(db, user)
         log.warning(
             "All user sessions invalidated after password reset",
             user_id=user_id,
@@ -792,6 +792,9 @@ async def perform_password_reset(
     # Session invalidation succeeded — now commit password change
     await db.commit()
     await post_commit_callback()
+    # F108 sibling: only now, with the revoke committed, cut every socket of
+    # the user server-side (rolled back above ⇒ never reached).
+    await sessions_post_commit()
 
     # Refresh user object — may fail if session management detached it
     try:
@@ -868,7 +871,7 @@ async def perform_change_password(
     # If revocation fails, rollback so the old password stays active —
     # fail-closed: no dangling sessions with a changed password.
     try:
-        await user_service.invalidate_all_sessions(db, current_user)
+        sessions_post_commit = await user_service.invalidate_all_sessions(db, current_user)
         log.info(
             "All user sessions invalidated after password change",
             user_id=current_user_id,
@@ -901,6 +904,9 @@ async def perform_change_password(
     # Session invalidation succeeded — now commit the password change
     await db.commit()
     await post_commit_callback()
+    # F108 sibling: only now, with the revoke committed, cut every socket of
+    # the user server-side (rolled back above ⇒ never reached).
+    await sessions_post_commit()
 
     # Clear auth cookies — forces browser to stop sending blacklisted tokens
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -1389,7 +1395,9 @@ async def refresh_access_token(
                     try:
                         user = await user_service.get_user_by_username(db, _refresh_username)
                         if user:
-                            await user_service.invalidate_all_sessions(db, user)
+                            sessions_post_commit = await user_service.invalidate_all_sessions(
+                                db, user
+                            )
                             # The service only stages the revoked rows (flush).
                             # Without this commit they rolled back when the
                             # request's session closed, while the Redis side
@@ -1398,6 +1406,9 @@ async def refresh_access_token(
                             # rolled back, and still the counted 401 — never a
                             # 500.
                             await db.commit()
+                            # F108 sibling: cut the user's sockets only once
+                            # the revoke is committed (never raises).
+                            await sessions_post_commit()
                     except Exception as revoke_err:
                         log.error("Failed to revoke sessions after refresh abuse", error=str(revoke_err))
                         await db.rollback()

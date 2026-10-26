@@ -50,13 +50,46 @@ async def _emit_session_updated(user_id: int):
 
 
 
+async def _dispatch_force_logout_for_sessions(user_id: int, revoked_pairs: list) -> None:
+    """POST-COMMIT ONLY: socket enforcement for sessions this request revoked.
+
+    ``revoked_pairs`` = ``[(session_id, refresh_jti), ...]`` — exactly the rows
+    revoked, never the user's other sessions. Dispatches the targeted
+    ``USER_FORCE_LOGOUT`` (``socket_manager.emit_force_logout``): every live
+    worker notifies and disconnects the sockets of those sessions only, and a
+    cut no worker confirmed is logged as unconfirmed (F108 sibling paths:
+    logout, re-login on the same device, FIFO eviction). Never raises: the
+    revoke is committed and stays the source of truth.
+    """
+    if not revoked_pairs:
+        return
+    async with track_event_latency("force_logout_batch"):
+        try:
+            await dispatcher.dispatch(
+                TransportEvents.USER_FORCE_LOGOUT,
+                user_id=user_id,
+                revoked_jtis=[jti for _, jti in revoked_pairs],
+                revoked_session_ids=[session_id for session_id, _ in revoked_pairs],
+            )
+            socket_events_emitted_total.labels(event_type="force_logout_batch").inc(
+                len(revoked_pairs)
+            )
+        except Exception as e_dispatch:
+            socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
+            log.error(
+                "Failed to dispatch force_logout for revoked sessions",
+                user_id=user_id,
+                error_type=type(e_dispatch).__name__,
+            )
+
+
 async def _revoke_previous_sessions_on_device(
     db: AsyncSession,
     user_id: int,
     device_type: str,
     browser: str,
     os: str
-):
+) -> list:
     """
     ✅ SECURITY FIX: Auto-revoke old sessions on same device to prevent session leak.
 
@@ -79,7 +112,9 @@ async def _revoke_previous_sessions_on_device(
         os: Operating system name and version
 
     Returns:
-        None (modifies database state)
+        ``[(session_id, refresh_jti), ...]`` of the rows revoked and flushed —
+        the caller's post-commit callback cuts their sockets (F108 sibling).
+        ``[]`` when nothing was revoked or the step failed (non-critical).
     """
     try:
         # ✅ PHASE 2: Use SessionRepository instead of direct SQL
@@ -97,7 +132,7 @@ async def _revoke_previous_sessions_on_device(
                 user_id=user_id,
                 device_type=device_type
             )
-            return
+            return []
 
         # Revoke all old sessions
         now = datetime.now(timezone.utc)
@@ -140,6 +175,8 @@ async def _revoke_previous_sessions_on_device(
             os=os[:20],
             revoked_count=revoked_count
         )
+        # Only AFTER the flush succeeded: these rows are staged as revoked.
+        return [(session.id, session.refresh_jti) for session in old_sessions]
 
     except Exception as e:
         # Log error but don't fail the login process
@@ -150,18 +187,22 @@ async def _revoke_previous_sessions_on_device(
             error=str(e),
             exc_info=True
         )
+        return []
 
 
 async def _enforce_max_sessions(
     db: AsyncSession,
     user_id: int,
-):
+) -> list:
     """
     ✅ H1: Enforce maximum concurrent sessions per user (FIFO eviction).
 
     If user has >= ANOMALY_MAX_SESSIONS_PER_USER active sessions,
     revoke the oldest sessions until under the limit, leaving room for
     the new session about to be created.
+
+    Returns ``[(session_id, refresh_jti), ...]`` of the evicted rows (flushed)
+    for the caller's post-commit socket cut (F108 sibling); ``[]`` otherwise.
     """
     from ..config import settings
 
@@ -172,7 +213,7 @@ async def _enforce_max_sessions(
         active_count = len(active_sessions)
 
         if active_count < max_sessions:
-            return
+            return []
 
         # Sessions are ordered by last_activity_at DESC, so oldest are at the end
         # Revoke oldest sessions to make room for the new one
@@ -212,6 +253,8 @@ async def _enforce_max_sessions(
             max_allowed=max_sessions,
             security_event="MAX_SESSIONS_ENFORCED",
         )
+        # Only AFTER the flush succeeded: these rows are staged as revoked.
+        return [(session.id, session.refresh_jti) for session in sessions_to_revoke]
 
     except Exception as e:
         log.error(
@@ -220,6 +263,7 @@ async def _enforce_max_sessions(
             error=str(e),
             exc_info=True,
         )
+        return []
 
 
 async def create_session(
@@ -302,7 +346,7 @@ async def create_session(
 
     # ✅ SECURITY FIX: Auto-revoke old sessions on same device before creating new one
     # This prevents session leak (38+ zombie sessions per user)
-    await _revoke_previous_sessions_on_device(
+    revoked_pairs = await _revoke_previous_sessions_on_device(
         db=db,
         user_id=user_id,
         device_type=device_type,
@@ -311,7 +355,7 @@ async def create_session(
     )
 
     # ✅ H1: Enforce concurrent session limit (FIFO eviction)
-    await _enforce_max_sessions(db=db, user_id=user_id)
+    revoked_pairs += await _enforce_max_sessions(db=db, user_id=user_id)
 
     # Create session record
     session = models.UserSession(
@@ -344,6 +388,10 @@ async def create_session(
     )
 
     async def callback():
+        # Post-commit (the login router runs it only after its COMMIT): cut
+        # the sockets of the sessions this login revoked — same device, FIFO.
+        # Only those rows; the user's other sessions stay connected.
+        await _dispatch_force_logout_for_sessions(user_id, revoked_pairs)
         await _emit_session_updated(user_id)
 
     return session, callback
@@ -422,7 +470,8 @@ async def revoke_session(
     Raises:
         SessionRevocationError: If revocation fails
     """
-    session_to_emit = None  # Store session JTI for socket emission
+    session_to_emit = None  # Store session JTI for socket emission (payload)
+    session_id_to_emit = None  # Stable row id: the socket room key (F103)
 
     try:
         # ✅ PHASE 2: Use SessionRepository with pessimistic lock
@@ -447,6 +496,7 @@ async def revoke_session(
             session.revoked_at = datetime.now(timezone.utc)
             db.add(session)
             session_to_emit = session.refresh_jti  # Store JTI for socket event
+            session_id_to_emit = session.id
 
             # 2. Update Redis (within transaction)
             ttl = int(
@@ -490,10 +540,14 @@ async def revoke_session(
         if session_to_emit:
             async with track_event_latency("force_logout_batch"):
                 try:
+                    # Routed by the stable session id: a socket connected
+                    # before any /auth/refresh of this session is still in
+                    # its room (F103); the JTI only rides in the payload.
                     await dispatcher.dispatch(
                         TransportEvents.USER_FORCE_LOGOUT,
                         user_id=user_id,
-                        revoked_jtis=[session_to_emit]
+                        revoked_jtis=[session_to_emit],
+                        revoked_session_ids=[session_id_to_emit],
                     )
                     socket_events_emitted_total.labels(event_type="force_logout_batch").inc()
                     log.info("Dispatched force_logout event (single)", session_id=session_id)
@@ -610,6 +664,7 @@ async def revoke_all_other_sessions(
         Tuple[int, PostCommitCallback]: Number of sessions revoked and callback
     """
     revoked_jtis = []
+    revoked_session_ids = []  # Same order as revoked_jtis: socket room keys (F103)
     revoked_count = 0
 
     try:
@@ -628,6 +683,7 @@ async def revoke_all_other_sessions(
             session.revoked_at = now
             db.add(session)
             revoked_jtis.append(session.refresh_jti)
+            revoked_session_ids.append(session.id)
 
             # Cập nhật Redis
             ttl = int((session.expires_at - now).total_seconds())
@@ -666,7 +722,8 @@ async def revoke_all_other_sessions(
                     await dispatcher.dispatch(
                         TransportEvents.USER_FORCE_LOGOUT,
                         user_id=user_id,
-                        revoked_jtis=revoked_jtis
+                        revoked_jtis=revoked_jtis,
+                        revoked_session_ids=revoked_session_ids,
                     )
                     socket_events_emitted_total.labels(event_type="force_logout_batch").inc(
                         len(revoked_jtis)
@@ -767,8 +824,9 @@ async def revoke_sessions_on_logout(
        A failed write is counted and logged (never a JTI) and swallowed: the
        committed row is what deps STEP 4b, socket auth and ``/refresh`` trust.
 
-    Returns the post-commit callback (``session_updated``), or None when there
-    was no row to revoke.
+    Returns the post-commit callback (server-side cut of these sessions'
+    sockets — F108 sibling — then ``session_updated``), or None when there was
+    no row to revoke.
     """
     now = datetime.now(timezone.utc)
     for session in sessions:
@@ -802,8 +860,13 @@ async def revoke_sessions_on_logout(
     if not sessions:
         return None
     user_id = sessions[0].user_id
+    revoked_pairs = [(session.id, session.refresh_jti) for session in sessions]
 
     async def callback():
+        # Post-commit (the logout router runs it only after its COMMIT): cut
+        # every socket of the logged-out session(s) — the OTHER tabs of the
+        # same session too — and nothing else of the user (F108 sibling).
+        await _dispatch_force_logout_for_sessions(user_id, revoked_pairs)
         await _emit_session_updated(user_id)
 
     return callback
