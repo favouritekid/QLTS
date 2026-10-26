@@ -20,6 +20,7 @@ import pytest
 import pytest_asyncio
 import socketio
 from aiobreaker import CircuitBreaker, CircuitBreakerState
+from httpx import ASGITransport, AsyncClient
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import select, text, update
 from sqlalchemy.exc import OperationalError
@@ -74,10 +75,10 @@ async def _socket_redis_isolation(clear_redis_keys, test_redis_client):
 def _r_jti(access_token: str, nhan: str) -> str:
     """Rút `r_jti` — jti của refresh token — ra khỏi access token.
 
-    `r_jti` là thứ định danh PHIÊN: nó vừa là khoá room `session_room_{r_jti}`
-    mà handler connect tham gia, vừa là `UserSession.refresh_jti` trong CSDL.
-    Nhờ vậy một access token đủ để ghép phiên ở cả ba tầng (JWT ↔ room ↔ hàng
-    CSDL) mà không cần đọc refresh cookie.
+    `r_jti` là `UserSession.refresh_jti` HIỆN HÀNH của phiên trong CSDL (và là
+    thứ payload `force_logout_batch` nêu). Nó KHÔNG còn là khoá room: từ F103
+    room thu hồi khoá theo `UserSession.id` (`socket_manager.session_room`), vì
+    /auth/refresh xoay `refresh_jti` trên cùng hàng còn `id` thì không đổi.
     """
     payload = jwt.decode(
         access_token,
@@ -274,9 +275,10 @@ async def test_targeted_revocation_flow(test_server, client, regular_user_in_db)
         except asyncio.TimeoutError:
             pytest.fail(
                 "Client A KHÔNG nhận force_logout_batch sau 10s. "
-                f"`emit_force_logout` bắn vào room session_room_{r_jti_a}; "
-                "A không nhận nghĩa là nó không ở trong room đó, hoặc callback "
-                "hậu-commit của revoke_session đã không chạy."
+                "`emit_force_logout` bắn vào room "
+                f"{socket_manager.session_room(session_a_id)}; A không nhận "
+                "nghĩa là nó không ở trong room đó, hoặc callback hậu-commit của "
+                "revoke_session đã không chạy."
             )
         assert nhan_a == [{"revoked_jtis": [r_jti_a]}], (
             "Payload A nhận phải nêu ĐÚNG r_jti của phiên A. Một sự kiện "
@@ -2213,66 +2215,49 @@ async def test_failed_logout_socket_session_unreadable_stays_valid_OWNER_DECISIO
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fault", ["answered", "connection", "breaker_open"])
-async def test_socket_revalidate_after_refresh_rotation_is_never_valid(
+async def test_socket_revalidate_after_refresh_rotation_stays_valid(
     fault, test_server, client, regular_user_in_db, test_redis_client, fresh_breaker, caplog
 ):
-    """Ô b8: socket nối TRƯỚC khi /refresh xoay vẫn giữ jti CŨ; revalidate với jti
-    ấy không bao giờ `valid: True`, Redis trả lời hay không.
+    """Ô b8 (ĐẢO CHIỀU ở F103): socket nối TRƯỚC khi /refresh xoay vẫn `valid: True`
+    sau xoay, Redis trả lời `session:` hay không.
 
-    Thiết kế hiện tại: `connect` lưu `r_jti` của access token lúc nối vào phiên
-    socket; /refresh không chạm phiên socket. Sau xoay, `session:{cũ}` đã xoá ⇒
-    Redis trả lời thì lối nhanh khước từ; hàng CSDL đã mang jti MỚI ⇒ Redis không
-    trả lời thì phép đối chiếu exact-jti khước từ.
-
-    Hệ quả (NỢ, ngoài lát này): frontend coi mọi `valid: false` là đăng xuất và
-    không nối lại socket sau refresh (`frontend/src/lib/socket/client.ts`,
-    `components/layouts/SocketHandler.tsx`) ⇒ người dùng bị đăng xuất ở lượt
-    revalidate kế tiếp sau một lần xoay. Vá nợ ấy bằng cách cập nhật jti của phiên
-    socket khi xoay sẽ làm đỏ TIỀN ĐỀ "phiên socket giữ jti cũ": sửa ca cùng lúc.
+    Trước F103 ca này GHIM lỗi: `connect` lưu `r_jti` lúc bắt tay vào phiên
+    socket, /refresh xoá `session:{cũ}` và đổi jti của hàng ⇒ revalidate luôn
+    `Session revoked` ⇒ frontend đăng xuất (đo trên prod 26-10). Nay phiên socket
+    mang `session_id` = `UserSession.id`, KHÔNG mang jti; revalidate tra jti HIỆN
+    HÀNH của hàng ấy rồi mới hỏi Redis/CSDL. Bằng chứng là chính lượt đọc cache:
+    lỗi tiêm chạm `session:{MỚI}`, không phải `session:{cũ}`.
     """
     user = regular_user_in_db
     access, refresh, jti_old = await _login_as(client, user)
+    session_id = (await _row_by_jti(jti_old)).id
     async with _sio() as sio:
         await sio.connect(test_server, auth={"token": access}, transports=["websocket"])
         assert await sio.call("revalidate_auth", timeout=10) == {"valid": True}, (
             "đối chứng hỏng: revalidate phải hợp lệ trước khi xoay"
         )
         sid = sio.get_sid("/")
+        phien_socket = await socket_manager.sio.get_session(sid)
+        assert phien_socket.get("session_id") == session_id, phien_socket
+        assert "jti" not in phien_socket, f"phiên socket còn giữ jti: {phien_socket}"
 
-        rotated = await _post_with_cookies(client, REFRESH_URL, refresh_token=refresh)
-        assert rotated.status_code == 200, rotated.text
-        jti_new = jwt.decode(
-            rotated.cookies.get("refresh_token"),
-            settings.JWT_SECRET_KEY,
-            algorithms=[settings.JWT_ALGORITHM],
-        )["jti"]
+        _, jti_new = await _rotate(client, refresh)
         assert jti_new != jti_old
         assert await _row_by_jti(jti_old) is None, "tiền đề: hàng CSDL phải đã mang jti mới"
-        assert (await _row_by_jti(jti_new)).revoked_at is None
+        assert (await _row_by_jti(jti_new)).id == session_id, "tiền đề: xoay giữ đúng hàng"
         assert not await test_redis_client.exists(f"session:{jti_old}")
-        assert (await socket_manager.sio.get_session(sid))["jti"] == jti_old, (
-            "tiền đề: phiên socket phải giữ jti CŨ — thiết kế đã đổi thì sửa ca này"
-        )
         caplog.clear()
 
         with caplog.at_level(logging.WARNING, logger="app"), ExitStack() as stack:
-            hit = (
-                []
-                if fault == "answered"
-                else stack.enter_context(_reads_unanswered(fault, "session:"))
-            )
+            hit = _unanswered_unless(fault, stack, "session:")
             verdict = await socket_manager.revalidate_auth(sid)
+        still_served = socket_manager.sio.manager.is_connected(sid, "/")
 
-    assert verdict == {"valid": False, "reason": "Session revoked"}, verdict
+    assert verdict == {"valid": True}, verdict
+    assert still_served, "server đã ngắt socket của một phiên còn sống"
+    assert hit == ([] if fault == "answered" else [f"session:{jti_new}"]), hit
     logs = _logs(caplog, "app.socket_manager")
-    from_db = any("in DB (exact jti)" in m for m in logs)
-    fast_path = any("Revalidation failed: Session revoked" in m for m in logs)
-    if fault == "answered":
-        assert hit == []
-        assert fast_path and not from_db, f"khước từ không đến từ lối nhanh: {logs}"
-    else:
-        assert hit == [f"session:{jti_old}"], hit
-        assert from_db and not fast_path, f"khước từ không đến từ phép đối chiếu CSDL: {logs}"
+    assert not any("Revalidation failed" in m for m in logs), logs
 
 
 @pytest.mark.asyncio
@@ -2442,6 +2427,22 @@ async def test_socket_revalidate_expired_row_is_refused_by_the_shared_predicate(
     ), "revalidate không được ghi vào hàng"
 
 
+@contextmanager
+def _lenh_ngat_that_lac():
+    """Lệnh ngắt hậu-commit của thu hồi theo phiên (F108) KHÔNG tới worker nào:
+    ``force_disconnect_sessions_strict`` ném như kênh liên worker hỏng. Trả danh
+    sách lượt gọi — để ca kiểm chứng minh lệnh ĐÃ được phát (và thất lạc), không
+    xanh vì đường ngắt chưa từng chạy."""
+    goi: list = []
+
+    async def _hong(pairs, *args, **kwargs):
+        goi.append(pairs)
+        raise RedisConnectionError("tiêm lỗi: lệnh ngắt thất lạc trên kênh liên worker")
+
+    with patch.object(socket_manager, "force_disconnect_sessions_strict", _hong):
+        yield goi
+
+
 async def _logout_while_redis_does_not_answer(
     fault, client, test_redis_client, user: dict, access: str, refresh: str, jti: str, recover
 ):
@@ -2523,6 +2524,12 @@ async def test_socket_revalidate_after_logout_during_redis_outage_is_refused_by_
     """Ô b2 (socket): socket nối TRƯỚC logout; logout B2 khi Redis không trả lời ⇒
     Redis hồi, trừ lượt đọc `session:` ⇒ revalidate `Session revoked` từ phép đối
     chiếu CSDL exact-jti, không bao giờ `valid: True`.
+
+    Ô này canh revalidate cho socket đã LỠ lệnh ngắt hậu-commit của logout (F108
+    nhánh anh em). Kênh liên worker chỉ hỏng tự nhiên ở ``connection``;
+    ``breaker_open`` không chặn ``publish`` nên lệnh tới nơi và socket bị cắt ngay
+    lúc logout ⇒ tiêm thất lạc cho CẢ HAI tham số. Logout ngắt thật được canh ở
+    ``test_f108s_logout_cuts_every_tab_of_that_session_only``.
     """
     user = regular_user_in_db
     access, refresh, jti = await _login_as(client, user)
@@ -2532,8 +2539,13 @@ async def test_socket_revalidate_after_logout_during_redis_outage_is_refused_by_
             "đối chứng hỏng: revalidate phải hợp lệ trước logout"
         )
         sid = sio.get_sid("/")
-        before = await _logout_while_redis_does_not_answer(
-            fault, client, test_redis_client, user, access, refresh, jti, fresh_breaker
+        with _lenh_ngat_that_lac() as lenh_ngat:
+            before = await _logout_while_redis_does_not_answer(
+                fault, client, test_redis_client, user, access, refresh, jti, fresh_breaker
+            )
+        assert len(lenh_ngat) == 1, f"tiền đề: logout phải phát lệnh ngắt (rồi thất lạc): {lenh_ngat}"
+        assert _phuc_vu({"socket": sid}) == {"socket": True}, (
+            "tiền đề: lệnh ngắt thất lạc ⇒ server vẫn phục vụ socket"
         )
         caplog.clear()
 
@@ -2563,7 +2575,10 @@ async def test_socket_revalidate_total_outage_disconnects_as_auth_state_unavaila
 
     Không bao giờ `valid: True`: hàng CSDL sống nhưng không ai trả lời được
     `user_blacklist`, bản ghi CHỈ Redis giữ khi `invalidate_all_sessions` chưa
-    commit. Hàng CSDL không được hỏi; sự cố không thu hồi gì, không xoá khoá nào.
+    commit. Phép đối chiếu hàng SỐNG (exact-jti) không được hỏi — nó không được
+    quyết thay `user_blacklist`; từ F103, bước tra jti hiện hành theo
+    `UserSession.id` (`get_refresh_jti_for_share`) chạy TRƯỚC, nhưng chỉ để biết
+    hỏi Redis khoá nào, không phán hợp lệ. Sự cố không thu hồi gì, không xoá khoá nào.
 
     Ghim cả LÝ DO, không chỉ `valid: False`: lý do này là thứ duy nhất phân biệt
     "không xác định được" với "đã thu hồi" (`Session revoked`) hay lỗi lạ
@@ -2588,7 +2603,7 @@ async def test_socket_revalidate_total_outage_disconnects_as_auth_state_unavaila
 
     assert verdict == {"valid": False, "reason": "Auth state unavailable"}, verdict
     assert hit == [f"session:{jti}", f"user_blacklist:{user['id']}"], hit
-    assert db_reads == [], f"hàng CSDL không được quyết thay user_blacklist: {db_reads}"
+    assert db_reads == [], f"hàng SỐNG không được quyết thay user_blacklist: {db_reads}"
     assert any(
         "Revalidation deferred: user blacklist unreadable" in m
         for m in _logs(caplog, "app.socket_manager")
@@ -2598,6 +2613,841 @@ async def test_socket_revalidate_total_outage_disconnects_as_auth_state_unavaila
     assert await test_redis_client.get(f"session:{jti}") == str(user["id"]), (
         "sự cố Redis đã xoá khoá session:"
     )
+
+
+# -----------------------------------------------------------------------------
+# F103 (đo trên prod `4e5707e0`, 26-10): socket bám refresh jti của LÚC BẮT TAY.
+# Client refresh chủ động (~phút 12) ⇒ /auth/refresh xoá `session:{cũ}` và đổi
+# `refresh_jti` của hàng ⇒ lượt `revalidate_auth` phút 15 thấy khoá vắng ⇒ server
+# ngắt trước khi ACK ⇒ client "io server disconnect" ⇒ `useAuthStore.logout()`.
+# Room thu hồi cũng khoá theo jti ấy ⇒ sau refresh, thu hồi phiên bắn vào room
+# của jti MỚI mà socket chưa từng vào.
+#
+# Nay socket bám `UserSession.id` — định danh ổn định do server đặt lúc đăng nhập
+# — cho CẢ `revalidate_auth` (tra jti hiện hành của hàng ấy, giữ `FOR SHARE`)
+# LẪN room thu hồi (`socket_manager.session_room`). Mỗi ca vi phạm MỘT bất biến,
+# khẳng định nằm trong thân ca; mọi socket nối TRƯỚC lần xoay đầu tiên.
+# -----------------------------------------------------------------------------
+
+
+async def _rotate(client, refresh_token: str) -> tuple:
+    """Một /auth/refresh THẬT chỉ mang cookie refresh; trả (refresh mới, jti mới)."""
+    res = await _post_with_cookies(client, REFRESH_URL, refresh_token=refresh_token)
+    assert res.status_code == 200, res.text
+    new_refresh = res.cookies.get("refresh_token")
+    assert new_refresh, "refresh không phát cookie refresh mới"
+    new_jti = jwt.decode(
+        new_refresh, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+    )["jti"]
+    return new_refresh, new_jti
+
+
+def _ghi_force_logout(sio) -> tuple:
+    """Ghi mọi `force_logout_batch` socket nhận; trả (danh sách payload, cờ đã nhận)."""
+    nhan: list = []
+    co = asyncio.Event()
+
+    def _on(data):
+        nhan.append(data)
+        co.set()
+
+    sio.on("force_logout_batch", _on)
+    return nhan, co
+
+
+def _cho_ngat(sio) -> asyncio.Event:
+    """Cờ bật khi CLIENT thấy socket bị ngắt (gói DISCONNECT của server tới nơi)."""
+    ngat = asyncio.Event()
+    sio.on("disconnect", lambda *args: ngat.set())
+    return ngat
+
+
+@contextmanager
+def _session_jti_lookup_unreadable():
+    """CSDL không trả lời bước tra jti theo `UserSession.id`; trả các lượt gọi."""
+    from app.repositories import SessionRepository
+
+    calls: list = []
+
+    async def _down(self, session_id, user_id):
+        calls.append((session_id, user_id))
+        raise OperationalError("SELECT", {}, Exception("tiêm lỗi: CSDL không trả lời"))
+
+    with patch.object(SessionRepository, "get_refresh_jti_for_share", _down):
+        yield calls
+
+
+@contextmanager
+def _refresh_pauses_after_redis_rotate():
+    """/auth/refresh THẬT dừng ngay SAU pipeline Redis xoay (STEP 7), TRƯỚC COMMIT
+    (STEP 8): hàng phiên đang bị refresh giữ `FOR UPDATE`, Redis đã có
+    `session:{mới}` và mất `session:{cũ}`, còn CSDL đã commit vẫn mang jti CŨ.
+
+    Trả (rotated, release): chờ ``rotated``; đặt ``release`` để refresh đi tiếp.
+    """
+    from app.routers import auth as auth_router
+
+    original = auth_router.safe_redis_pipeline
+    rotated, release = asyncio.Event(), asyncio.Event()
+
+    @asynccontextmanager
+    async def _pipeline(*args, **kwargs):
+        async with original(*args, **kwargs) as pipe:
+            execute = pipe.execute
+
+            async def _execute_then_pause(*a, **k):
+                out = await execute(*a, **k)
+                rotated.set()
+                await release.wait()
+                return out
+
+            pipe.execute = _execute_then_pause
+            yield pipe
+
+    with patch.object(auth_router, "safe_redis_pipeline", _pipeline):
+        yield rotated, release
+
+
+async def _task_waits_on_row_lock(task: "asyncio.Task", timeout: float = 15.0) -> bool:
+    """True khi một backend CHỜ KHOÁ trong CSDL test lúc ``task`` CHƯA xong.
+
+    False nếu ``task`` xong trước (nó không chờ gì) hoặc hết giờ. Mỗi lượt hỏi
+    một kết nối mới (cùng lý do với `_wait_for_lock_waiter`).
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if task.done():
+            return False
+        async with AsyncSessionLocal() as s:
+            waiting = (
+                await s.execute(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity "
+                        "WHERE datname = current_database() "
+                        "AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()"
+                    )
+                )
+            ).scalar()
+        if waiting:
+            return True
+        await asyncio.sleep(0.05)
+    return False
+
+
+@pytest.mark.asyncio
+async def test_f103_revalidate_valid_across_consecutive_refreshes(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """(1) Ba lần /refresh LIÊN TIẾP; sau MỖI lần, `revalidate_auth` qua ACK thật
+    vẫn `valid: True` và socket còn nối.
+
+    Tiền đề kiểm sau mỗi lần xoay — jti đổi, vẫn đúng hàng, `session:{cũ}` đã xoá —
+    để ca không xanh vì refresh thôi xoay.
+    """
+    user = regular_user_in_db
+    access, refresh, jti = await _login_as(client, user)
+    session_id = (await _row_by_jti(jti)).id
+    async with _sio() as sio:
+        await sio.connect(test_server, auth={"token": access}, transports=["websocket"])
+        assert await sio.call("revalidate_auth", timeout=10) == {"valid": True}, (
+            "đối chứng hỏng: revalidate phải hợp lệ trước khi xoay"
+        )
+        da_thay = [jti]
+        for lan in (1, 2, 3):
+            refresh, jti = await _rotate(client, refresh)
+            assert jti not in da_thay, f"tiền đề: lần xoay {lan} không đổi jti"
+            assert (await _row_by_jti(jti)).id == session_id, "tiền đề: xoay giữ đúng hàng"
+            assert not await test_redis_client.exists(f"session:{da_thay[-1]}"), (
+                f"tiền đề: lần xoay {lan} không xoá khoá session: cũ"
+            )
+            da_thay.append(jti)
+
+            ack = await sio.call("revalidate_auth", timeout=10)
+
+            assert ack == {"valid": True}, f"sau lần xoay {lan}: {ack}"
+            assert sio.connected, f"sau lần xoay {lan}: socket bị ngắt"
+
+
+@pytest.mark.asyncio
+async def test_f103_every_tab_of_session_valid_after_refresh(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """(2) HAI socket (hai tab) của CÙNG một phiên — cùng access token — nối trước
+    khi xoay; sau một /refresh, CẢ HAI `revalidate_auth` đều `valid: True`."""
+    user = regular_user_in_db
+    access, refresh, jti_old = await _login_as(client, user)
+    async with _sio() as tab_1, _sio() as tab_2:
+        for tab in (tab_1, tab_2):
+            await tab.connect(test_server, auth={"token": access}, transports=["websocket"])
+        assert tab_1.get_sid("/") != tab_2.get_sid("/"), "tiền đề: hai socket riêng"
+        _, jti_new = await _rotate(client, refresh)
+        assert jti_new != jti_old
+
+        ack_1 = await tab_1.call("revalidate_auth", timeout=10)
+        ack_2 = await tab_2.call("revalidate_auth", timeout=10)
+
+        assert ack_1 == {"valid": True}, f"tab 1: {ack_1}"
+        assert ack_2 == {"valid": True}, f"tab 2: {ack_2}"
+        assert tab_1.connected and tab_2.connected, "một tab bị ngắt"
+
+
+@pytest.mark.asyncio
+async def test_f103_revoked_after_refresh_refused_and_server_disconnects(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker, caplog
+):
+    """(3a) Sau xoay, hàng phiên bị THU HỒI trong CSDL (khoá `session:{mới}` còn —
+    chỉ CSDL nói "chết") ⇒ `Session revoked` từ đối chiếu exact-jti trên jti MỚI,
+    và SERVER tự ngắt: handler được gọi thẳng phía server, không qua client."""
+    user = regular_user_in_db
+    access, refresh, _ = await _login_as(client, user)
+    async with _sio() as sio:
+        await sio.connect(test_server, auth={"token": access}, transports=["websocket"])
+        sid = sio.get_sid("/")
+        ngat = _cho_ngat(sio)
+        _, jti_new = await _rotate(client, refresh)
+        await _revoke_row_in_db_only(test_redis_client, user, jti_new)
+        assert socket_manager.sio.manager.is_connected(sid, "/"), "tiền đề: socket đang được phục vụ"
+        caplog.clear()
+
+        with caplog.at_level(logging.WARNING, logger="app"), _spy_session_row_reads() as db_reads:
+            verdict = await socket_manager.revalidate_auth(sid)
+
+        assert verdict == {"valid": False, "reason": "Session revoked"}, verdict
+        assert db_reads == [(jti_new, user["id"])], f"không đối chiếu jti MỚI: {db_reads}"
+        assert any(_SOCKET_DB_REFUSAL in m for m in _logs(caplog, "app.socket_manager"))
+        assert not socket_manager.sio.manager.is_connected(sid, "/"), (
+            "server KHÔNG tự ngắt socket của phiên đã thu hồi"
+        )
+        await asyncio.wait_for(ngat.wait(), timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_f103_expired_after_refresh_refused_and_server_disconnects(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker, caplog
+):
+    """(3b) Như (3a) nhưng hàng HẾT HẠN (chưa thu hồi; khoá `session:{mới}` còn)."""
+    user = regular_user_in_db
+    access, refresh, _ = await _login_as(client, user)
+    async with _sio() as sio:
+        await sio.connect(test_server, auth={"token": access}, transports=["websocket"])
+        sid = sio.get_sid("/")
+        ngat = _cho_ngat(sio)
+        _, jti_new = await _rotate(client, refresh)
+        await _expire_row_in_db_only(test_redis_client, user, jti_new, ago=_A3_EXPIRED_AGO)
+        assert socket_manager.sio.manager.is_connected(sid, "/"), "tiền đề: socket đang được phục vụ"
+        caplog.clear()
+
+        with caplog.at_level(logging.WARNING, logger="app"), _spy_session_row_reads() as db_reads:
+            verdict = await socket_manager.revalidate_auth(sid)
+
+        assert verdict == {"valid": False, "reason": "Session revoked"}, verdict
+        assert db_reads == [(jti_new, user["id"])], f"không đối chiếu jti MỚI: {db_reads}"
+        assert any(_SOCKET_DB_REFUSAL in m for m in _logs(caplog, "app.socket_manager"))
+        assert not socket_manager.sio.manager.is_connected(sid, "/"), (
+            "server KHÔNG tự ngắt socket của phiên đã hết hạn"
+        )
+        await asyncio.wait_for(ngat.wait(), timeout=10)
+
+
+@pytest.mark.asyncio
+async def test_f103_other_live_session_does_not_rescue_revoked_one(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker, caplog
+):
+    """(4) Phiên A (socket nối, đã xoay) bị thu hồi trong CSDL; phiên B của CÙNG
+    người dùng SỐNG (đăng nhập sau, thiết bị khác). Socket của A ⇒ `Session
+    revoked` từ đối chiếu exact-jti của CHÍNH A — B sống không cứu được A."""
+    _kiem_ua_phan_loai_dong()
+    user = regular_user_in_db
+    access_a, refresh_a, _ = await _login_as(client, user, ua=UA_DESKTOP)
+    async with _sio() as sio:
+        await sio.connect(test_server, auth={"token": access_a}, transports=["websocket"])
+        sid = sio.get_sid("/")
+        _, jti_a = await _rotate(client, refresh_a)
+        _, _, jti_b = await _login_as(client, user, ua=UA_MOBILE)
+        assert await _live_session_jtis(user["id"]) == sorted([jti_a, jti_b]), (
+            "tiền đề: A (đã xoay) và B cùng sống"
+        )
+        await _revoke_row_in_db_only(test_redis_client, user, jti_a)
+        assert await _live_session_jtis(user["id"]) == [jti_b], "tiền đề: B còn sống"
+        caplog.clear()
+
+        with caplog.at_level(logging.WARNING, logger="app"), _spy_session_row_reads() as db_reads:
+            verdict = await socket_manager.revalidate_auth(sid)
+
+        assert verdict == {"valid": False, "reason": "Session revoked"}, verdict
+        assert db_reads == [(jti_a, user["id"])], f"không hỏi đúng hàng của A: {db_reads}"
+        assert any(_SOCKET_DB_REFUSAL in m for m in _logs(caplog, "app.socket_manager"))
+        assert not socket_manager.sio.manager.is_connected(sid, "/")
+
+
+@pytest.mark.asyncio
+async def test_f103_redis_down_after_refresh_is_auth_state_unavailable(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """(5a) Sau xoay, Redis không trả lời CẢ `session:` lẫn `user_blacklist:` ⇒
+    `Auth state unavailable` và server ngắt — hợp đồng fail-closed của b4, nay
+    trên jti MỚI (lượt đọc cache chạm `session:{mới}`)."""
+    user = regular_user_in_db
+    access, refresh, _ = await _login_as(client, user)
+    async with _sio() as sio:
+        await sio.connect(test_server, auth={"token": access}, transports=["websocket"])
+        sid = sio.get_sid("/")
+        _, jti_new = await _rotate(client, refresh)
+
+        with _reads_unanswered("connection", "session:", "user_blacklist:") as hit:
+            verdict = await socket_manager.revalidate_auth(sid)
+
+        assert verdict == {"valid": False, "reason": "Auth state unavailable"}, verdict
+        assert hit == [f"session:{jti_new}", f"user_blacklist:{user['id']}"], hit
+        assert not socket_manager.sio.manager.is_connected(sid, "/")
+
+
+@pytest.mark.asyncio
+async def test_f103_session_row_unreadable_is_validation_error(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """(5b) CSDL không trả lời bước tra jti theo `UserSession.id` ⇒ `Validation
+    error` và server ngắt (hợp đồng của mọi lỗi CSDL trong revalidate)."""
+    user = regular_user_in_db
+    access, refresh, jti = await _login_as(client, user)
+    session_id = (await _row_by_jti(jti)).id
+    async with _sio() as sio:
+        await sio.connect(test_server, auth={"token": access}, transports=["websocket"])
+        sid = sio.get_sid("/")
+        await _rotate(client, refresh)
+
+        with _session_jti_lookup_unreadable() as calls:
+            verdict = await socket_manager.revalidate_auth(sid)
+
+        assert verdict == {"valid": False, "reason": "Validation error"}, verdict
+        assert calls == [(session_id, user["id"])], calls
+        assert not socket_manager.sio.manager.is_connected(sid, "/")
+
+
+@pytest.mark.asyncio
+async def test_f103_revalidate_waits_for_inflight_refresh_then_valid(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """(6) /refresh ĐANG BAY — Redis đã xoay, CSDL chưa COMMIT — đúng lúc socket
+    revalidate. Đọc thường thấy jti CŨ đã commit mà `session:{cũ}` đã xoá ⇒
+    "Session revoked" GIẢ ⇒ đăng xuất (cùng triệu chứng F103). `FOR SHARE` bắt
+    revalidate CHỜ COMMIT rồi đọc jti MỚI ⇒ `valid: True`."""
+    user = regular_user_in_db
+    access, refresh, jti_old = await _login_as(client, user)
+    async with _sio() as sio:
+        await sio.connect(test_server, auth={"token": access}, transports=["websocket"])
+        sid = sio.get_sid("/")
+        pending_verdict = None
+        with _refresh_pauses_after_redis_rotate() as (rotated, release):
+            pending_refresh = asyncio.create_task(
+                _post_with_cookies(client, REFRESH_URL, refresh_token=refresh)
+            )
+            try:
+                await asyncio.wait_for(rotated.wait(), timeout=10)
+                assert not await test_redis_client.exists(f"session:{jti_old}"), (
+                    "tiền đề: Redis phải đã xoay"
+                )
+                assert await _row_by_jti(jti_old) is not None, (
+                    "tiền đề: CSDL đã commit phải còn mang jti cũ"
+                )
+                pending_verdict = asyncio.create_task(socket_manager.revalidate_auth(sid))
+                waited = await _task_waits_on_row_lock(pending_verdict)
+            finally:
+                release.set()
+            res = await asyncio.wait_for(pending_refresh, timeout=30)
+        verdict = await asyncio.wait_for(pending_verdict, timeout=30)
+
+    assert res.status_code == 200, res.text
+    assert waited, f"revalidate không chờ refresh đang bay; phán quyết: {verdict}"
+    assert verdict == {"valid": True}, verdict
+
+
+@pytest.mark.asyncio
+async def test_f103_revoke_after_refresh_reaches_every_tab_of_session(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """(7) Nhánh anh em — room thu hồi. Hai tab của phiên A nối TRƯỚC khi A xoay;
+    B thu hồi A qua `DELETE /api/sessions/{id}` ⇒ CẢ HAI tab nhận
+    `force_logout_batch` nêu jti HIỆN HÀNH của A. Room khoá theo jti lúc bắt tay
+    thì lệnh thu hồi sau xoay rơi vào room của jti MỚI, không socket nào nghe."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as tab_1, _sio() as tab_2:
+        nhan_1, co_1 = _ghi_force_logout(tab_1)
+        nhan_2, co_2 = _ghi_force_logout(tab_2)
+        for tab in (tab_1, tab_2):
+            await tab.connect(test_server, auth={"token": h["access_a"]}, transports=["websocket"])
+        _, jti_a_new = await _rotate(client, h["refresh_a"])
+
+        client.cookies.clear()
+        try:
+            res = await client.delete(
+                f"/api/sessions/{h['id_a']}",
+                headers={"Cookie": f"access_token={h['access_b']}"},
+            )
+        finally:
+            client.cookies.clear()
+        assert res.status_code == 204, res.text
+        await asyncio.wait_for(asyncio.gather(co_1.wait(), co_2.wait()), timeout=10)
+
+    assert nhan_1 == [{"revoked_jtis": [jti_a_new]}], nhan_1
+    assert nhan_2 == [{"revoked_jtis": [jti_a_new]}], nhan_2
+
+
+@pytest.mark.asyncio
+async def test_f103_revoke_all_after_refresh_reaches_other_session_tab(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """(8) Nhánh anh em thứ hai — `POST /api/sessions/revoke-all` (giữ phiên B đang
+    gọi, thu hồi A). Socket của A nối TRƯỚC khi A xoay vẫn nhận `force_logout_batch`
+    nêu jti HIỆN HÀNH của A."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as tab_a:
+        nhan_a, co_a = _ghi_force_logout(tab_a)
+        await tab_a.connect(test_server, auth={"token": h["access_a"]}, transports=["websocket"])
+        _, jti_a_new = await _rotate(client, h["refresh_a"])
+
+        res = await _revoke_all(client, h["access_b"])
+        assert res.status_code == 204, res.text
+        await asyncio.wait_for(co_a.wait(), timeout=10)
+
+    assert nhan_a == [{"revoked_jtis": [jti_a_new]}], nhan_a
+
+
+# -----------------------------------------------------------------------------
+# F108 (review 26-10): thu hồi có mục tiêu từng chỉ PHÁT `force_logout_batch` —
+# client bỏ qua sự kiện và không gọi `revalidate_auth` thì giữ socket mãi. Nay
+# chính thao tác thu hồi CƯỠNG CHẾ ngắt phía server qua kênh liên worker sẵn có
+# (`socket:force_disconnect`, lệnh `sessions` nhắm `session_room(id)`), ACK từ MỌI
+# worker sống; không xác nhận được thì ghi là CHƯA xác nhận, thu hồi trong CSDL
+# vẫn đứng. Mỗi ca vi phạm MỘT bất biến.
+# -----------------------------------------------------------------------------
+
+
+async def _delete_session_as(client, access_token: str, session_id: int):
+    """`DELETE /api/sessions/{id}` chỉ mang cookie ``access_token`` (như FE)."""
+    client.cookies.clear()
+    try:
+        return await client.delete(
+            f"/api/sessions/{session_id}",
+            headers={"Cookie": f"access_token={access_token}"},
+        )
+    finally:
+        client.cookies.clear()
+
+
+@asynccontextmanager
+async def _worker_thu_hai(test_redis_client, *, ack: bool):
+    """Một worker THỨ HAI giả lập (không giữ socket nào): đăng ký vào
+    `socket:workers` với heartbeat sống — nên bên phát BẮT BUỘC chờ nó ACK — và
+    nghe kênh `socket:force_disconnect`. ``ack=True``: ACK như worker thật;
+    ``ack=False``: nhận lệnh mà không ACK (worker treo). Trả các lệnh đã nhận."""
+    import json
+
+    wid = f"w-thu-hai-{uuid.uuid4().hex[:8]}"
+    await test_redis_client.set(socket_manager._WORKER_HB_PREFIX + wid, "1", ex=60)
+    await test_redis_client.sadd(socket_manager._WORKERS_SET, wid)
+    nhan: list = []
+    pubsub = test_redis_client.pubsub()
+    await pubsub.subscribe(socket_manager.FORCE_DISCONNECT_CHANNEL)
+
+    async def _nghe():
+        async for msg in pubsub.listen():
+            if not msg or msg.get("type") != "message":
+                continue
+            lenh = json.loads(msg["data"])
+            nhan.append(lenh)
+            if ack:
+                await test_redis_client.sadd(
+                    socket_manager._ACK_PREFIX + lenh["command_id"], wid
+                )
+
+    task = asyncio.create_task(_nghe())
+    try:
+        yield nhan
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await pubsub.unsubscribe(socket_manager.FORCE_DISCONNECT_CHANNEL)
+        await pubsub.aclose()
+        await test_redis_client.srem(socket_manager._WORKERS_SET, wid)
+        await test_redis_client.delete(socket_manager._WORKER_HB_PREFIX + wid)
+
+
+@contextmanager
+def _spy_enforcement():
+    """Ghi kết quả THẬT của `_enforce_session_revocation` (True = mọi worker ACK)."""
+    original = socket_manager._enforce_session_revocation
+    ket_qua: list = []
+
+    async def _spy(*args, **kwargs):
+        out = await original(*args, **kwargs)
+        ket_qua.append(out)
+        return out
+
+    with patch.object(socket_manager, "_enforce_session_revocation", _spy):
+        yield ket_qua
+
+
+@pytest.mark.asyncio
+async def test_f108_revoke_cuts_every_tab_of_session_even_if_client_ignores(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """(Q1 — ca quyết định) Hai tab của phiên A (ĐÃ refresh) và một tab của phiên
+    B. Tab A KHÔNG nghe `force_logout_batch` và KHÔNG gọi `revalidate_auth` —
+    client cố tình bỏ qua. B thu hồi A ⇒ lúc `DELETE` trả 204, SERVER đã ngắt
+    CẢ HAI tab A (`manager.is_connected` False; client nhận DISCONNECT); tab B
+    vẫn được phục vụ."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1, _sio() as a_2, _sio() as b_1:
+        for tab, access in ((a_1, h["access_a"]), (a_2, h["access_a"]), (b_1, h["access_b"])):
+            await tab.connect(test_server, auth={"token": access}, transports=["websocket"])
+        ngat_1, ngat_2 = _cho_ngat(a_1), _cho_ngat(a_2)
+        sids = {"tab A1": a_1.get_sid("/"), "tab A2": a_2.get_sid("/"), "tab B": b_1.get_sid("/")}
+        await _rotate(client, h["refresh_a"])
+
+        res = await _delete_session_as(client, h["access_b"], h["id_a"])
+
+        assert res.status_code == 204, res.text
+        dang_phuc_vu = {
+            ten: socket_manager.sio.manager.is_connected(sid, "/") for ten, sid in sids.items()
+        }
+        assert dang_phuc_vu == {"tab A1": False, "tab A2": False, "tab B": True}, (
+            f"server không ngắt đúng phiên A khi thu hồi: {dang_phuc_vu}"
+        )
+        await asyncio.wait_for(asyncio.gather(ngat_1.wait(), ngat_2.wait()), timeout=10)
+        assert b_1.connected, "tab B bị ngắt dù phiên B không bị thu hồi"
+
+
+@pytest.mark.asyncio
+async def test_f108_revoke_is_enforced_through_inter_worker_channel(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """(Q1 — đa worker) Một worker THỨ HAI nghe `socket:force_disconnect` và ACK
+    như worker thật. Thu hồi A (đã refresh) ⇒ worker ấy nhận ĐÚNG MỘT lệnh, nêu
+    đúng phiên A (id + jti HIỆN HÀNH), không có `user_ids`; việc ngắt chỉ được
+    xác nhận vì CẢ HAI worker đã ACK."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1:
+        await a_1.connect(test_server, auth={"token": h["access_a"]}, transports=["websocket"])
+        _, jti_a = await _rotate(client, h["refresh_a"])
+
+        with _spy_enforcement() as ket_qua:
+            async with _worker_thu_hai(test_redis_client, ack=True) as nhan:
+                res = await _delete_session_as(client, h["access_b"], h["id_a"])
+
+    assert res.status_code == 204, res.text
+    khong_ma_lenh = [{k: v for k, v in lenh.items() if k != "command_id"} for lenh in nhan]
+    assert khong_ma_lenh == [{"sessions": [[h["id_a"], jti_a]]}], (
+        f"lệnh trên kênh liên worker sai đích: {nhan}"
+    )
+    assert ket_qua == [True], f"ngắt không được xác nhận dù mọi worker ACK: {ket_qua}"
+
+
+@pytest.mark.asyncio
+async def test_f108_unacked_worker_reported_unconfirmed_revoke_stands(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker, caplog
+):
+    """(Q1 — nhánh không xác nhận) Worker thứ hai NHẬN lệnh mà KHÔNG ACK. Thu hồi
+    A ⇒ vẫn 204, hàng A đã thu hồi trong CSDL (nguồn sự thật); việc ngắt được ghi
+    là CHƯA xác nhận — không bao giờ báo là đã ngắt."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1:
+        await a_1.connect(test_server, auth={"token": h["access_a"]}, transports=["websocket"])
+        await _rotate(client, h["refresh_a"])
+        caplog.clear()
+
+        with caplog.at_level(logging.WARNING, logger="app"), _spy_enforcement() as ket_qua:
+            async with _worker_thu_hai(test_redis_client, ack=False) as nhan:
+                res = await _delete_session_as(client, h["access_b"], h["id_a"])
+
+    assert res.status_code == 204, res.text
+    assert len(nhan) == 1, f"tiền đề: worker thứ hai phải NHẬN lệnh: {nhan}"
+    assert ket_qua == [False], f"ngắt chưa xác nhận mà bị báo là xong: {ket_qua}"
+    assert any(
+        "socket disconnect NOT confirmed" in m for m in _logs(caplog, "app.socket_manager")
+    ), _logs(caplog, "app.socket_manager")
+    assert (await _row_by_id(h["id_a"])).revoked_at is not None, "thu hồi trong CSDL không đứng"
+
+
+# -----------------------------------------------------------------------------
+# F108 — NHÁNH ANH EM (review 26-10 ~06:05Z): mọi đường thu hồi khác cũng phải
+# để SERVER ngắt socket, và CHỈ SAU COMMIT. Thu hồi THEO PHIÊN (logout, đăng nhập
+# lại cùng thiết bị, FIFO) ngắt đúng phiên ấy, phiên khác của cùng người dùng
+# sống; CHỈ thu hồi toàn bộ (`invalidate_all_sessions`: đổi/đặt lại mật khẩu,
+# ngưỡng refresh) ngắt toàn user. Giao dịch rollback ⇒ không ngắt gì. Không ACK ⇒
+# "chưa xác nhận", HTTP giữ nguyên. Offboarding giữ cơ chế strict trước commit.
+# -----------------------------------------------------------------------------
+
+UA_FIREFOX_LINUX = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+CHANGE_PASSWORD_URL = "/api/auth/change-password"
+MAT_KHAU_MOI = "NewSecurePassword!123"
+
+
+def _phuc_vu(sids: dict) -> dict:
+    """{tên tab: server còn phục vụ socket ấy không} — đo ở `manager`, phía server."""
+    return {ten: socket_manager.sio.manager.is_connected(sid, "/") for ten, sid in sids.items()}
+
+
+async def _noi(tab, test_server, access_token: str) -> str:
+    """Nối một tab Socket.IO bằng access token; trả sid."""
+    await tab.connect(test_server, auth={"token": access_token}, transports=["websocket"])
+    return tab.get_sid("/")
+
+
+async def _doi_mat_khau(client, access_token: str, cu: str, moi: str = MAT_KHAU_MOI):
+    """`POST /api/auth/change-password` chỉ mang cookie ``access_token``."""
+    client.cookies.clear()
+    try:
+        return await client.post(
+            CHANGE_PASSWORD_URL,
+            json={"old_password": cu, "new_password": moi},
+            headers={"Cookie": f"access_token={access_token}"},
+        )
+    finally:
+        client.cookies.clear()
+
+
+@contextmanager
+def _spy_ket_qua(ten_ham: str):
+    """Ghi kết quả THẬT của ``socket_manager.<ten_ham>`` (True = mọi worker ACK)."""
+    original = getattr(socket_manager, ten_ham)
+    ket_qua: list = []
+
+    async def _spy(*args, **kwargs):
+        out = await original(*args, **kwargs)
+        ket_qua.append(out)
+        return out
+
+    with patch.object(socket_manager, ten_ham, _spy):
+        yield ket_qua
+
+
+@pytest.mark.asyncio
+async def test_f108s_logout_cuts_every_tab_of_that_session_only(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Logout của phiên A (hai tab) ⇒ khi 204 về, server đã ngắt CẢ HAI tab A; tab
+    của phiên B (cùng người dùng) vẫn được phục vụ."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1, _sio() as a_2, _sio() as b_1:
+        sids = {
+            "tab A1": await _noi(a_1, test_server, h["access_a"]),
+            "tab A2": await _noi(a_2, test_server, h["access_a"]),
+            "tab B": await _noi(b_1, test_server, h["access_b"]),
+        }
+
+        res = await _post_with_cookies(
+            client, LOGOUT_URL, access_token=h["access_a"], refresh_token=h["refresh_a"]
+        )
+
+        assert res.status_code == 204, res.text
+        assert _phuc_vu(sids) == {"tab A1": False, "tab A2": False, "tab B": True}, (
+            f"logout không ngắt đúng phiên A: {_phuc_vu(sids)}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_f108s_relogin_same_device_cuts_old_session_only(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Đăng nhập lại từ CÙNG thiết bị với phiên A thu hồi A
+    (`_revoke_previous_sessions_on_device`) ⇒ khi lượt đăng nhập trả 200, tab của
+    A đã bị server ngắt; tab của phiên B (thiết bị khác) vẫn được phục vụ."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1, _sio() as b_1:
+        sids = {
+            "tab A": await _noi(a_1, test_server, h["access_a"]),
+            "tab B": await _noi(b_1, test_server, h["access_b"]),
+        }
+
+        await _login_as(client, user, ua=UA_DESKTOP)
+
+        assert (await _row_by_id(h["id_a"])).revoked_at is not None, (
+            "tiền đề: đăng nhập lại cùng thiết bị phải thu hồi phiên A"
+        )
+        assert _phuc_vu(sids) == {"tab A": False, "tab B": True}, (
+            f"đăng nhập lại không ngắt đúng phiên cũ: {_phuc_vu(sids)}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_f108s_fifo_eviction_cuts_evicted_session_only(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker, monkeypatch
+):
+    """Giới hạn 2 phiên; đăng nhập THỨ BA từ thiết bị thứ ba đẩy phiên CŨ NHẤT (A)
+    ra (`_enforce_max_sessions`) ⇒ tab A bị server ngắt; tab B vẫn sống."""
+    monkeypatch.setattr(settings, "ANOMALY_MAX_SESSIONS_PER_USER", 2)
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1, _sio() as b_1:
+        sids = {
+            "tab A": await _noi(a_1, test_server, h["access_a"]),
+            "tab B": await _noi(b_1, test_server, h["access_b"]),
+        }
+
+        await _login_as(client, user, ua=UA_FIREFOX_LINUX)
+
+        assert (await _row_by_id(h["id_a"])).revoked_at is not None, (
+            "tiền đề: FIFO phải đẩy phiên A (cũ nhất) ra"
+        )
+        assert (await _row_by_id(h["id_b"])).revoked_at is None, "tiền đề: B phải còn sống"
+        assert _phuc_vu(sids) == {"tab A": False, "tab B": True}, (
+            f"FIFO không ngắt đúng phiên bị đẩy: {_phuc_vu(sids)}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_f108s_revoke_all_cuts_every_socket_of_the_user(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Đổi mật khẩu = thu hồi TOÀN BỘ (`invalidate_all_sessions`) ⇒ khi 204 về,
+    server đã ngắt socket của MỌI phiên của người dùng (A và B) — sau COMMIT."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    try:
+        async with _sio() as a_1, _sio() as b_1:
+            sids = {
+                "tab A": await _noi(a_1, test_server, h["access_a"]),
+                "tab B": await _noi(b_1, test_server, h["access_b"]),
+            }
+
+            res = await _doi_mat_khau(client, h["access_a"], user["password"])
+
+            assert res.status_code == 204, res.text
+            assert _phuc_vu(sids) == {"tab A": False, "tab B": False}, (
+                f"thu hồi toàn bộ không ngắt mọi socket của người dùng: {_phuc_vu(sids)}"
+            )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f108s_rolled_back_revoke_all_cuts_nothing(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Đổi mật khẩu mà COMMIT hỏng ⇒ thu hồi rollback ⇒ KHÔNG socket nào bị ngắt
+    (lệnh ngắt chỉ chạy sau commit).
+
+    Route đổi mật khẩu không tự bắt lỗi COMMIT: người dùng nhận 500 từ
+    ServerErrorMiddleware, còn ``client`` (``ASGITransport`` mặc định) ném lại
+    ngoại lệ ⇒ gọi qua transport ``raise_app_exceptions=False`` để đo đúng mã đó."""
+    from app.main import fastapi_app
+
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    try:
+        async with _sio() as a_1, _sio() as b_1, AsyncClient(
+            transport=ASGITransport(app=fastapi_app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as client_500:
+            sids = {
+                "tab A": await _noi(a_1, test_server, h["access_a"]),
+                "tab B": await _noi(b_1, test_server, h["access_b"]),
+            }
+
+            with _request_db_commit_fails() as commits:
+                res = await _doi_mat_khau(client_500, h["access_a"], user["password"])
+
+            assert commits, "tiền đề: đổi mật khẩu phải thử COMMIT"
+            assert res.status_code >= 500, res.text
+            assert await _live_session_jtis(user["id"]) == sorted([h["jti_a"], h["jti_b"]]), (
+                "tiền đề: thu hồi phải đã rollback"
+            )
+            assert _phuc_vu(sids) == {"tab A": True, "tab B": True}, (
+                f"giao dịch rollback mà socket bị ngắt: {_phuc_vu(sids)}"
+            )
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
+
+
+@pytest.mark.asyncio
+async def test_f108s_rolled_back_logout_cuts_nothing(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """Logout mà COMMIT hỏng (500, phiên A vẫn sống) ⇒ không tab nào bị ngắt."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1, _sio() as b_1:
+        sids = {
+            "tab A": await _noi(a_1, test_server, h["access_a"]),
+            "tab B": await _noi(b_1, test_server, h["access_b"]),
+        }
+
+        with _request_db_commit_fails() as commits:
+            res = await _post_with_cookies(
+                client, LOGOUT_URL, access_token=h["access_a"], refresh_token=h["refresh_a"]
+            )
+
+        assert commits, "tiền đề: logout phải thử COMMIT"
+        assert _status_and_code(res) == (500, "SESSION_REVOCATION_ERROR"), res.text
+        assert (await _row_by_id(h["id_a"])).revoked_at is None, "tiền đề: phiên A còn sống"
+        assert _phuc_vu(sids) == {"tab A": True, "tab B": True}, (
+            f"logout rollback mà socket bị ngắt: {_phuc_vu(sids)}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_f108s_unacked_logout_cut_unconfirmed_http_unchanged(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker, caplog
+):
+    """Logout khi một worker NHẬN lệnh mà không ACK ⇒ vẫn 204 (thu hồi đã commit);
+    việc ngắt được ghi là CHƯA xác nhận, không bao giờ là đã ngắt."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1:
+        await _noi(a_1, test_server, h["access_a"])
+        caplog.clear()
+
+        with caplog.at_level(logging.WARNING, logger="app"), \
+                _spy_ket_qua("_enforce_session_revocation") as ket_qua:
+            async with _worker_thu_hai(test_redis_client, ack=False) as nhan:
+                res = await _post_with_cookies(
+                    client, LOGOUT_URL, access_token=h["access_a"], refresh_token=h["refresh_a"]
+                )
+
+    assert res.status_code == 204, res.text
+    assert len(nhan) == 1, f"tiền đề: worker thứ hai phải NHẬN lệnh: {nhan}"
+    assert ket_qua == [False], f"ngắt chưa xác nhận mà bị báo là xong: {ket_qua}"
+    assert any(
+        "socket disconnect NOT confirmed" in m for m in _logs(caplog, "app.socket_manager")
+    ), _logs(caplog, "app.socket_manager")
+
+
+@pytest.mark.asyncio
+async def test_f108s_unacked_revoke_all_unconfirmed_http_unchanged(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker, caplog
+):
+    """Đổi mật khẩu khi một worker NHẬN lệnh mà không ACK ⇒ vẫn 204 (thu hồi toàn
+    bộ đã commit); việc ngắt toàn user được ghi là CHƯA xác nhận."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    try:
+        async with _sio() as a_1:
+            await _noi(a_1, test_server, h["access_a"])
+            caplog.clear()
+
+            with caplog.at_level(logging.WARNING, logger="app"), \
+                    _spy_ket_qua("_enforce_user_revocation") as ket_qua:
+                async with _worker_thu_hai(test_redis_client, ack=False) as nhan:
+                    res = await _doi_mat_khau(client, h["access_a"], user["password"])
+
+        assert res.status_code == 204, res.text
+        assert len(nhan) == 1, f"tiền đề: worker thứ hai phải NHẬN lệnh: {nhan}"
+        assert ket_qua == [False], f"ngắt chưa xác nhận mà bị báo là xong: {ket_qua}"
+        assert any(
+            "Revoke-all: socket disconnect NOT confirmed" in m
+            for m in _logs(caplog, "app.socket_manager")
+        ), _logs(caplog, "app.socket_manager")
+    finally:
+        await test_redis_client.delete(f"user_blacklist:{user['id']}")
 
 
 # -----------------------------------------------------------------------------

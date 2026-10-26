@@ -1342,10 +1342,14 @@ async def invalidate_all_sessions(
     *,
     reason: str = "Password changed",
     fail_on_cache_cleanup: bool = False,
-):
+) -> Callable:
     """
     (V5 - Fixed) Vô hiệu hóa tất cả các phiên hoạt động.
     Sửa lỗi Race Condition bằng cách khóa (lock) và cập nhật DB trong 1 transaction.
+
+    Does NOT commit. Returns the post-commit callback (F108 sibling): the
+    caller commits, THEN awaits it — the user's sockets are cut server-side
+    only once the revoke is durable. A rolled-back caller never runs it.
     """
     revoked_jtis = []
     user_id = user.id
@@ -1444,21 +1448,34 @@ async def invalidate_all_sessions(
                         },
                     )
 
-        # 6. ✅ DISPATCH EVENT (Event Dispatcher Pattern - SAU KHI MỌI THỨ HOÀN TẤT)
-        try:
-            await dispatcher.dispatch(
-                TransportEvents.USER_FORCE_LOGOUT,
-                user_id=user_id,
-                reason=reason,
-                revoked_jtis=[]  # All sessions revoked
-            )
-            socket_events_emitted_total.labels(event_type="force_logout_all").inc()
-            log.info("Dispatched force_logout event", user_id=user_id, reason=reason)
-        except Exception as e_dispatch:
-            socket_emit_failures_total.labels(event_type="force_logout_all").inc()
-            log.error(
-                "Failed to dispatch logout event", error=str(e_dispatch)
-            )
+        # 6. Socket enforcement is POST-COMMIT (F108 sibling). It used to be
+        #    dispatched HERE, while the revoke above was still only staged in
+        #    the caller's transaction: a caller that then rolled back had
+        #    already told every socket of the user it was logged out. Now the
+        #    caller commits FIRST, then runs this callback — the project's
+        #    ``(result, post_commit_callback)`` contract. Offboarding does not
+        #    run it: it already cut the user's sockets strictly BEFORE its
+        #    commit (``app/routers/admin/users.py``), rollback on failure.
+        async def _post_commit():
+            """Run ONLY after the caller committed the revoke: every socket of
+            the user is notified and disconnected on every live worker
+            (``emit_force_logout`` ALL branch, ACK-confirmed or logged as not)."""
+            try:
+                await dispatcher.dispatch(
+                    TransportEvents.USER_FORCE_LOGOUT,
+                    user_id=user_id,
+                    reason=reason,
+                    revoked_jtis=[]  # All sessions revoked
+                )
+                socket_events_emitted_total.labels(event_type="force_logout_all").inc()
+                log.info("Dispatched force_logout event", user_id=user_id, reason=reason)
+            except Exception as e_dispatch:
+                socket_emit_failures_total.labels(event_type="force_logout_all").inc()
+                log.error(
+                    "Failed to dispatch logout event", error=str(e_dispatch)
+                )
+
+        return _post_commit
 
     except Exception as e:
         # Rollback tự động nếu lỗi trong `async with db.begin()`
@@ -1682,6 +1699,8 @@ async def perform_bulk_action(
                 for uid in sorted(ids_changed):
                     u = by_id.get(uid)
                     if u is not None:
+                        # Its post-commit callback is not run: the router cuts
+                        # these users strictly BEFORE commit (offboarding).
                         await invalidate_all_sessions(
                             db,
                             u,

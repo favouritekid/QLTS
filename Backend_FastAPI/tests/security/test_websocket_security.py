@@ -462,8 +462,9 @@ async def test_fix3_force_logout_batch_event(
     `revoke_all_other_sessions()` và `user_service.invalidate_all_sessions()`
     đều dùng. Nó đi qua đăng ký `dispatcher.register(USER_FORCE_LOGOUT,
     emit_force_logout)` ở `app/socket_manager.py`, rồi vào chính
-    `emit_force_logout()`, rồi ra room `session_room_{jti}` mà handler
-    `connect` đã cho socket này vào.
+    `emit_force_logout()`, rồi ra room `session_room(UserSession.id)` mà
+    handler `connect` đã cho socket này vào (F103: room khoá theo id ổn định
+    của hàng phiên, không theo refresh jti — jti chỉ còn nằm trong payload).
 
     Vì sao KHÔNG đi qua HTTP API ở đây: đường API thật
     (`DELETE /api/sessions/{id}`) đã được
@@ -483,8 +484,14 @@ async def test_fix3_force_logout_batch_event(
 
     access_token = await get_user_token(client, username, password)
 
-    # r_jti là khoá room `session_room_{r_jti}` mà handler connect dùng.
+    # r_jti là jti HIỆN HÀNH của phiên (payload); room khoá theo `UserSession.id`
+    # của chính hàng mang r_jti ấy (F103).
     import jwt
+    from sqlalchemy import select
+
+    from app import models
+    from app.database import AsyncSessionLocal
+
     payload = jwt.decode(
         access_token,
         settings.JWT_SECRET_KEY,
@@ -492,6 +499,14 @@ async def test_fix3_force_logout_batch_event(
     )
     r_jti = payload.get("r_jti")
     assert r_jti, "Could not extract r_jti from token"
+    async with AsyncSessionLocal() as s:
+        session_id = (
+            await s.execute(
+                select(models.UserSession.id).where(
+                    models.UserSession.refresh_jti == r_jti
+                )
+            )
+        ).scalar_one()
 
     logout_event_received = asyncio.Event()
     received: list = []
@@ -527,6 +542,7 @@ async def test_fix3_force_logout_batch_event(
             TransportEvents.USER_FORCE_LOGOUT,
             user_id=user_id,
             revoked_jtis=[r_jti],
+            revoked_session_ids=[session_id],
         )
 
         try:
@@ -534,8 +550,8 @@ async def test_fix3_force_logout_batch_event(
         except asyncio.TimeoutError:
             pytest.fail(
                 "Không nhận được 'force_logout_batch' trong 10s sau khi "
-                f"dispatch tới session_room_{r_jti}. Sự kiện thu hồi phiên "
-                "không tới được client."
+                f"dispatch tới room của phiên id={session_id}. Sự kiện thu hồi "
+                "phiên không tới được client."
             )
 
         assert received, "Event fired but no payload captured"
