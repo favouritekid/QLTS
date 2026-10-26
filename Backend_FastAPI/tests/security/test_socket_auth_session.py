@@ -301,33 +301,102 @@ def test_session_room_is_keyed_by_session_id_only():
     assert "42" in sm.session_room(42)
 
 
+def _one_worker_channel():
+    """``force_disconnect_sessions_strict`` as ONE in-process worker runs it: the
+    command reaches the real local handler (``force_disconnect_sessions``)."""
+    async def _strict(sessions, **kwargs):
+        await sm.force_disconnect_sessions(sessions)
+        return "cmd-1"
+    return AsyncMock(side_effect=_strict)
+
+
 @pytest.mark.asyncio
 async def test_emit_force_logout_targets_room_of_stable_session_id():
-    """F103: a targeted revoke goes to the room of the revoked session's id; the
-    payload keeps naming the jti (unchanged client contract)."""
+    """F103/F108: a targeted revoke reaches the room of the revoked session's id;
+    the payload keeps naming the jti (unchanged client contract). The notice is
+    a LOCAL emit on each worker (same websocket as the cut that follows)."""
     fake_sio = MagicMock()
     fake_sio.emit = AsyncMock()
-    with patch.object(sm, "sio", fake_sio):
+    fake_sio.disconnect = AsyncMock()
+    fake_sio.manager.get_participants.return_value = [("sidA", "e1")]
+    with patch.object(sm, "sio", fake_sio), \
+            patch.object(sm, "force_disconnect_sessions_strict", _one_worker_channel()):
         await sm.emit_force_logout(
             user_id=5, revoked_jtis=["cur-jti"], revoked_session_ids=[42]
         )
 
     fake_sio.emit.assert_awaited_once_with(
-        "force_logout_batch", {"revoked_jtis": ["cur-jti"]}, room=sm.session_room(42)
+        "force_logout_batch",
+        {"revoked_jtis": ["cur-jti"]},
+        room=sm.session_room(42),
+        ignore_queue=True,
     )
+    fake_sio.manager.get_participants.assert_called_once_with("/", sm.session_room(42))
 
 
 @pytest.mark.asyncio
 async def test_emit_force_logout_unpaired_jti_is_not_widened_to_user():
     """A targeted revoke without its session id is a caller bug: nothing is
     emitted — above all not to ``user_room_{id}``, which would log out the
-    user's OTHER, live sessions."""
+    user's OTHER, live sessions — and nothing is disconnected."""
     fake_sio = MagicMock()
     fake_sio.emit = AsyncMock()
-    with patch.object(sm, "sio", fake_sio):
+    strict_sessions = AsyncMock(return_value="cmd")
+    strict_user = AsyncMock(return_value="cmd")
+    with patch.object(sm, "sio", fake_sio), \
+            patch.object(sm, "force_disconnect_sessions_strict", strict_sessions), \
+            patch.object(sm, "force_disconnect_user_strict", strict_user):
         await sm.emit_force_logout(user_id=5, revoked_jtis=["cur-jti"])
 
     fake_sio.emit.assert_not_awaited()
+    strict_sessions.assert_not_awaited()
+    strict_user.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_emit_force_logout_enforces_server_cut_of_revoked_sessions():
+    """F108: a targeted revoke is ENFORCED through the ACK-confirmed session
+    command — exactly the revoked (session id, jti) pairs; never the user-wide
+    command, never only a queued event the client may ignore."""
+    fake_sio = MagicMock()
+    fake_sio.emit = AsyncMock()
+    strict_sessions = AsyncMock(return_value="cmd")
+    strict_user = AsyncMock(return_value="cmd")
+    with patch.object(sm, "sio", fake_sio), \
+            patch.object(sm, "force_disconnect_sessions_strict", strict_sessions), \
+            patch.object(sm, "force_disconnect_user_strict", strict_user):
+        await sm.emit_force_logout(
+            user_id=5, revoked_jtis=["j1", "j2"], revoked_session_ids=[41, 42]
+        )
+
+    strict_sessions.assert_awaited_once_with([(41, "j1"), (42, "j2")])
+    strict_user.assert_not_awaited()
+    fake_sio.emit.assert_not_awaited()  # confirmed ⇒ no queued fallback notice
+
+
+@pytest.mark.asyncio
+async def test_emit_force_logout_unconfirmed_cut_is_never_reported_done():
+    """F108: the session command not ACKed (here: TimeoutError) ⇒ logged as NOT
+    confirmed, never as confirmed; the handler does not raise (the revoke is
+    already committed and stays the source of truth)."""
+    fake_sio = MagicMock()
+    fake_sio.emit = AsyncMock()
+    fake_log = MagicMock()
+    strict_sessions = AsyncMock(side_effect=TimeoutError("w2 did not ACK"))
+    with patch.object(sm, "sio", fake_sio), \
+            patch.object(sm, "log", fake_log), \
+            patch.object(sm, "force_disconnect_sessions_strict", strict_sessions):
+        await sm.emit_force_logout(
+            user_id=5, revoked_jtis=["cur-jti"], revoked_session_ids=[42]
+        )
+
+    actions = [c.kwargs.get("action") for c in fake_log.error.call_args_list]
+    assert "socket.session_disconnect_unconfirmed" in actions, fake_log.error.call_args_list
+    claimed = [
+        c for c in fake_log.info.call_args_list
+        if c.kwargs.get("action") == "socket.session_disconnect_confirmed"
+    ]
+    assert claimed == [], f"an unconfirmed cut was reported as done: {claimed}"
 
 
 @pytest.mark.asyncio

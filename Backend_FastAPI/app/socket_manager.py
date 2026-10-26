@@ -761,6 +761,12 @@ async def emit_force_logout(
             this stable id: a socket joined its session's room at connect and
             stays in it across every /auth/refresh, while the JTI rotates.
         **kwargs: Additional event data (ignored)
+
+    F108: a targeted revoke is ENFORCED server-side, not only announced: a
+    client that ignores ``force_logout_batch`` and never calls
+    ``revalidate_auth`` used to keep its socket. Runs post-commit (the
+    callers' callbacks), so a socket cut here cannot reconnect: connect
+    re-checks the DB row, which is already revoked.
     """
     try:
         if revoked_jtis or revoked_session_ids:
@@ -777,13 +783,33 @@ async def emit_force_logout(
                     "targeted force_logout needs one session id per revoked jti "
                     f"(jtis={len(jtis)}, session_ids={len(session_ids)})"
                 )
-            for revoked_session_id, jti in zip(session_ids, jtis):
-                await sio.emit(
-                    "force_logout_batch",
-                    {"revoked_jtis": [jti]},
-                    room=session_room(revoked_session_id),
-                )
-            log.info("Emitted targeted force_logout_batch", user_id=user_id, count=len(jtis))
+            # F108: ONE ACK-confirmed command on the force-disconnect channel;
+            # every live worker tells the session's LOCAL sockets why
+            # (force_logout_batch) and then disconnects them — same websocket,
+            # so the reason lands before the DISCONNECT. (Sent through the
+            # Socket.IO queue instead, the notice and the cut would travel on
+            # two Redis channels and the cut could overtake the notice.)
+            pairs = list(zip(session_ids, jtis))
+            confirmed = await _enforce_session_revocation(user_id, pairs)
+            if not confirmed:
+                # Enforcement NOT confirmed (already logged as such): still tell
+                # the sockets through the normal Socket.IO queue — advisory
+                # only. The DB revoke stands and revalidate_auth refuses these
+                # sessions. A worker that ACKed already cut its sockets, so they
+                # miss this notice; a worker that runs the command late may
+                # notify twice (harmless: the client logs out either way).
+                for fallback_session_id, jti in pairs:
+                    await sio.emit(
+                        "force_logout_batch",
+                        {"revoked_jtis": [jti]},
+                        room=session_room(fallback_session_id),
+                    )
+            log.info(
+                "Targeted force_logout_batch",
+                user_id=user_id,
+                count=len(pairs),
+                enforced=confirmed,
+            )
         else:
             # Broadcast logout: Emit to all user sessions
             room_name = f"user_room_{user_id}"
@@ -797,17 +823,57 @@ async def emit_force_logout(
         log.error("Failed to emit force_logout event", user_id=user_id, error=str(e))
 
 
+async def _enforce_session_revocation(user_id: int, pairs: list) -> bool:
+    """F108: cut every socket of the revoked sessions on every live worker.
+
+    ``pairs`` = ``[(session_id, jti), ...]``. True ONLY when every required
+    worker ACKed the session command (``force_disconnect_sessions_strict``).
+    Anything else — no live worker, a worker that did not ACK, Redis error — is
+    logged as NOT confirmed and returns False: never reported as done. Never
+    raises: the revoke is already committed and stays the source of truth;
+    ``revalidate_auth`` and connect refuse these sessions from the DB row.
+    """
+    session_ids = [session_id for session_id, _ in pairs]
+    try:
+        await force_disconnect_sessions_strict(pairs)
+    except Exception as exc:
+        socket_emit_failures_total.labels(event_type="force_disconnect_session").inc()
+        log.error(
+            "Targeted revoke: socket disconnect NOT confirmed; the DB revoke stands"
+            " and revalidate_auth refuses these sessions",
+            user_id=user_id,
+            session_ids=session_ids,
+            error_type=type(exc).__name__,
+            action="socket.session_disconnect_unconfirmed",
+        )
+        return False
+    log.info(
+        "Targeted revoke: sockets disconnected on every live worker (ACK-confirmed)",
+        user_id=user_id,
+        session_ids=session_ids,
+        action="socket.session_disconnect_confirmed",
+    )
+    return True
+
+
 # =====================================================================
 # SERVER-SIDE FORCE-DISCONNECT (enforcement, NOT client-dependent)
 # =====================================================================
-# emit_force_logout() above only EMITS an event the client must honour — a
-# custom/malicious client can ignore it and keep receiving realtime. For real
-# offboarding we disconnect sockets server-side, across ALL Gunicorn workers,
-# with confirmation. Mechanism: the offboarding request publishes a command on a
-# Redis channel; every worker runs a subscriber that disconnects its LOCAL
+# Events alone (force_logout_batch) need the client to honour them — a
+# custom/malicious client can ignore them and keep receiving realtime. So
+# offboarding (by user) and, since F108, targeted session revokes (by session)
+# disconnect sockets server-side, across ALL Gunicorn workers,
+# with confirmation. Mechanism: the request publishes a command on a Redis
+# channel; every worker runs a subscriber that disconnects its LOCAL
 # participants (AsyncRedisManager.get_participants is local-only) and ACKs. The
-# publisher BLOCKS until every REQUIRED worker ACKs, else raises → the admin
-# request rolls back the status change (fail-closed).
+# publisher BLOCKS until every REQUIRED worker ACKs, else raises. Offboarding:
+# the admin request rolls back the status change (fail-closed). Session revoke
+# (F108, post-commit): the revoke stands and the missing confirmation is logged
+# as such (``_enforce_session_revocation``) — never reported as done.
+#
+# A command names EITHER ``user_ids`` (offboarding: the user's room) OR
+# ``sessions`` (targeted revoke: ``session_room(id)`` only) — a session command
+# never touches a user room.
 #
 # A "required" worker is any registered worker whose heartbeat key still exists.
 # The heartbeat is refreshed by a DEDICATED THREAD (not a coroutine) so it keeps
@@ -970,12 +1036,55 @@ async def force_disconnect_user(user_ids) -> int:
     return count
 
 
+async def force_disconnect_sessions(sessions) -> int:
+    """LOCAL (F108): for each revoked session ``(session_id, jti)``, tell the
+    sockets of ``session_room(session_id)`` on THIS worker why
+    (``force_logout_batch``, local emit) and then disconnect them. Same
+    websocket, so the notice lands before the DISCONNECT. Only that session's
+    room — never the user's room. The notice is advisory: its failure never
+    blocks the cut. Snapshots participants first (disconnect mutates room
+    membership). Raises on any disconnect failure → caller does NOT ACK →
+    publisher reports the cut as unconfirmed."""
+    count = 0
+    for revoked_session_id, jti in sessions:
+        room = session_room(revoked_session_id)
+        sids = [sid for sid, _ in sio.manager.get_participants("/", room)]
+        if jti:
+            try:
+                await sio.emit(
+                    "force_logout_batch",
+                    {"revoked_jtis": [jti]},
+                    room=session_room(revoked_session_id),
+                    ignore_queue=True,
+                )
+            except Exception as exc:
+                log.warning(
+                    "force_logout_batch notice failed; disconnecting anyway",
+                    session_id=revoked_session_id,
+                    error_type=type(exc).__name__,
+                )
+        for sid in sids:
+            await sio.disconnect(sid)
+            count += 1
+    log.info(
+        "force_disconnect_sessions (local)",
+        session_ids=[session_id for session_id, _ in sessions],
+        disconnected=count,
+    )
+    return count
+
+
 async def _handle_force_disconnect(raw: str):
     """Subscriber handler: disconnect the whole batch locally, then ACK ONCE.
-    No ACK if the disconnect raises (publisher fail-closes)."""
+    No ACK if the disconnect raises (publisher fail-closes). A session command
+    (``sessions``) disconnects only those sessions' rooms; a user command
+    (``user_ids``) only those users' rooms."""
     data = json.loads(raw)
     command_id = data["command_id"]
-    await force_disconnect_user(data["user_ids"])  # raises → no ACK below
+    if "sessions" in data:
+        await force_disconnect_sessions(data["sessions"])  # raises → no ACK below
+    else:
+        await force_disconnect_user(data["user_ids"])  # raises → no ACK below
     ack_key = _ACK_PREFIX + command_id
     await redis_client.sadd(ack_key, _worker_id)
     await redis_client.expire(ack_key, _ACK_TTL)
@@ -1024,6 +1133,36 @@ async def force_disconnect_user_strict(
     user_ids = list(user_ids)
     if not user_ids:
         return ""
+    return await _publish_force_disconnect_strict(
+        {"user_ids": user_ids},
+        timeout=timeout,
+        label="force_disconnect_user_strict",
+        log_ctx={"user_ids": user_ids},
+    )
+
+
+async def force_disconnect_sessions_strict(
+    sessions, *, timeout: float = _ACK_TIMEOUT
+) -> str:
+    """ENFORCEMENT (F108): ONE command naming the revoked sessions
+    ``[(session_id, jti), ...]``; every live worker notifies and disconnects the
+    sockets of ``session_room(session_id)`` and ACKs. Same ACK contract as
+    ``force_disconnect_user_strict``: raises unless EVERY required worker ACKs."""
+    sessions = [[session_id, jti] for session_id, jti in sessions]
+    if not sessions:
+        return ""
+    return await _publish_force_disconnect_strict(
+        {"sessions": sessions},
+        timeout=timeout,
+        label="force_disconnect_sessions_strict",
+        log_ctx={"session_ids": [session_id for session_id, _ in sessions]},
+    )
+
+
+async def _publish_force_disconnect_strict(
+    targets: dict, *, timeout: float, label: str, log_ctx: dict
+) -> str:
+    """The ONE publish-and-await-every-ACK loop behind both strict commands."""
     command_id = uuid.uuid4().hex
     ack_key = _ACK_PREFIX + command_id
     # Snapshot required workers BEFORE publishing. Workers that start AFTER are
@@ -1032,7 +1171,7 @@ async def force_disconnect_user_strict(
     if not required:
         # No worker alive → cannot guarantee enforcement → fail-closed.
         raise RuntimeError("No live socket workers to enforce force-disconnect")
-    payload = json.dumps({"command_id": command_id, "user_ids": user_ids})
+    payload = json.dumps({"command_id": command_id, **targets})
     await redis_client.publish(FORCE_DISCONNECT_CHANNEL, payload)
     try:
         max_polls = max(1, int(math.ceil(timeout / _ACK_POLL)))
@@ -1045,18 +1184,18 @@ async def force_disconnect_user_strict(
         missing = required - acked
         if missing:
             log.error(
-                "force_disconnect_user_strict: ACK timeout",
-                user_ids=user_ids,
+                f"{label}: ACK timeout",
                 command_id=command_id,
                 missing=list(missing),
+                **log_ctx,
             )
             raise TimeoutError(
                 f"Force-disconnect not ACKed by workers: {sorted(missing)}"
             )
         log.info(
-            "force_disconnect_user_strict OK",
-            user_ids=user_ids,
+            f"{label} OK",
             workers=len(required),
+            **log_ctx,
         )
         return command_id
     finally:

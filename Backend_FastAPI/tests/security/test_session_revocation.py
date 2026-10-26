@@ -2989,6 +2989,165 @@ async def test_f103_revoke_all_after_refresh_reaches_other_session_tab(
 
 
 # -----------------------------------------------------------------------------
+# F108 (review 26-10): thu hồi có mục tiêu từng chỉ PHÁT `force_logout_batch` —
+# client bỏ qua sự kiện và không gọi `revalidate_auth` thì giữ socket mãi. Nay
+# chính thao tác thu hồi CƯỠNG CHẾ ngắt phía server qua kênh liên worker sẵn có
+# (`socket:force_disconnect`, lệnh `sessions` nhắm `session_room(id)`), ACK từ MỌI
+# worker sống; không xác nhận được thì ghi là CHƯA xác nhận, thu hồi trong CSDL
+# vẫn đứng. Mỗi ca vi phạm MỘT bất biến.
+# -----------------------------------------------------------------------------
+
+
+async def _delete_session_as(client, access_token: str, session_id: int):
+    """`DELETE /api/sessions/{id}` chỉ mang cookie ``access_token`` (như FE)."""
+    client.cookies.clear()
+    try:
+        return await client.delete(
+            f"/api/sessions/{session_id}",
+            headers={"Cookie": f"access_token={access_token}"},
+        )
+    finally:
+        client.cookies.clear()
+
+
+@asynccontextmanager
+async def _worker_thu_hai(test_redis_client, *, ack: bool):
+    """Một worker THỨ HAI giả lập (không giữ socket nào): đăng ký vào
+    `socket:workers` với heartbeat sống — nên bên phát BẮT BUỘC chờ nó ACK — và
+    nghe kênh `socket:force_disconnect`. ``ack=True``: ACK như worker thật;
+    ``ack=False``: nhận lệnh mà không ACK (worker treo). Trả các lệnh đã nhận."""
+    import json
+
+    wid = f"w-thu-hai-{uuid.uuid4().hex[:8]}"
+    await test_redis_client.set(socket_manager._WORKER_HB_PREFIX + wid, "1", ex=60)
+    await test_redis_client.sadd(socket_manager._WORKERS_SET, wid)
+    nhan: list = []
+    pubsub = test_redis_client.pubsub()
+    await pubsub.subscribe(socket_manager.FORCE_DISCONNECT_CHANNEL)
+
+    async def _nghe():
+        async for msg in pubsub.listen():
+            if not msg or msg.get("type") != "message":
+                continue
+            lenh = json.loads(msg["data"])
+            nhan.append(lenh)
+            if ack:
+                await test_redis_client.sadd(
+                    socket_manager._ACK_PREFIX + lenh["command_id"], wid
+                )
+
+    task = asyncio.create_task(_nghe())
+    try:
+        yield nhan
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await pubsub.unsubscribe(socket_manager.FORCE_DISCONNECT_CHANNEL)
+        await pubsub.aclose()
+        await test_redis_client.srem(socket_manager._WORKERS_SET, wid)
+        await test_redis_client.delete(socket_manager._WORKER_HB_PREFIX + wid)
+
+
+@contextmanager
+def _spy_enforcement():
+    """Ghi kết quả THẬT của `_enforce_session_revocation` (True = mọi worker ACK)."""
+    original = socket_manager._enforce_session_revocation
+    ket_qua: list = []
+
+    async def _spy(*args, **kwargs):
+        out = await original(*args, **kwargs)
+        ket_qua.append(out)
+        return out
+
+    with patch.object(socket_manager, "_enforce_session_revocation", _spy):
+        yield ket_qua
+
+
+@pytest.mark.asyncio
+async def test_f108_revoke_cuts_every_tab_of_session_even_if_client_ignores(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """(Q1 — ca quyết định) Hai tab của phiên A (ĐÃ refresh) và một tab của phiên
+    B. Tab A KHÔNG nghe `force_logout_batch` và KHÔNG gọi `revalidate_auth` —
+    client cố tình bỏ qua. B thu hồi A ⇒ lúc `DELETE` trả 204, SERVER đã ngắt
+    CẢ HAI tab A (`manager.is_connected` False; client nhận DISCONNECT); tab B
+    vẫn được phục vụ."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1, _sio() as a_2, _sio() as b_1:
+        for tab, access in ((a_1, h["access_a"]), (a_2, h["access_a"]), (b_1, h["access_b"])):
+            await tab.connect(test_server, auth={"token": access}, transports=["websocket"])
+        ngat_1, ngat_2 = _cho_ngat(a_1), _cho_ngat(a_2)
+        sids = {"tab A1": a_1.get_sid("/"), "tab A2": a_2.get_sid("/"), "tab B": b_1.get_sid("/")}
+        await _rotate(client, h["refresh_a"])
+
+        res = await _delete_session_as(client, h["access_b"], h["id_a"])
+
+        assert res.status_code == 204, res.text
+        dang_phuc_vu = {
+            ten: socket_manager.sio.manager.is_connected(sid, "/") for ten, sid in sids.items()
+        }
+        assert dang_phuc_vu == {"tab A1": False, "tab A2": False, "tab B": True}, (
+            f"server không ngắt đúng phiên A khi thu hồi: {dang_phuc_vu}"
+        )
+        await asyncio.wait_for(asyncio.gather(ngat_1.wait(), ngat_2.wait()), timeout=10)
+        assert b_1.connected, "tab B bị ngắt dù phiên B không bị thu hồi"
+
+
+@pytest.mark.asyncio
+async def test_f108_revoke_is_enforced_through_inter_worker_channel(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker
+):
+    """(Q1 — đa worker) Một worker THỨ HAI nghe `socket:force_disconnect` và ACK
+    như worker thật. Thu hồi A (đã refresh) ⇒ worker ấy nhận ĐÚNG MỘT lệnh, nêu
+    đúng phiên A (id + jti HIỆN HÀNH), không có `user_ids`; việc ngắt chỉ được
+    xác nhận vì CẢ HAI worker đã ACK."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1:
+        await a_1.connect(test_server, auth={"token": h["access_a"]}, transports=["websocket"])
+        _, jti_a = await _rotate(client, h["refresh_a"])
+
+        with _spy_enforcement() as ket_qua:
+            async with _worker_thu_hai(test_redis_client, ack=True) as nhan:
+                res = await _delete_session_as(client, h["access_b"], h["id_a"])
+
+    assert res.status_code == 204, res.text
+    khong_ma_lenh = [{k: v for k, v in lenh.items() if k != "command_id"} for lenh in nhan]
+    assert khong_ma_lenh == [{"sessions": [[h["id_a"], jti_a]]}], (
+        f"lệnh trên kênh liên worker sai đích: {nhan}"
+    )
+    assert ket_qua == [True], f"ngắt không được xác nhận dù mọi worker ACK: {ket_qua}"
+
+
+@pytest.mark.asyncio
+async def test_f108_unacked_worker_reported_unconfirmed_revoke_stands(
+    test_server, client, regular_user_in_db, test_redis_client, fresh_breaker, caplog
+):
+    """(Q1 — nhánh không xác nhận) Worker thứ hai NHẬN lệnh mà KHÔNG ACK. Thu hồi
+    A ⇒ vẫn 204, hàng A đã thu hồi trong CSDL (nguồn sự thật); việc ngắt được ghi
+    là CHƯA xác nhận — không bao giờ báo là đã ngắt."""
+    user = regular_user_in_db
+    h = await _hai_phien_song(client, user)
+    async with _sio() as a_1:
+        await a_1.connect(test_server, auth={"token": h["access_a"]}, transports=["websocket"])
+        await _rotate(client, h["refresh_a"])
+        caplog.clear()
+
+        with caplog.at_level(logging.WARNING, logger="app"), _spy_enforcement() as ket_qua:
+            async with _worker_thu_hai(test_redis_client, ack=False) as nhan:
+                res = await _delete_session_as(client, h["access_b"], h["id_a"])
+
+    assert res.status_code == 204, res.text
+    assert len(nhan) == 1, f"tiền đề: worker thứ hai phải NHẬN lệnh: {nhan}"
+    assert ket_qua == [False], f"ngắt chưa xác nhận mà bị báo là xong: {ket_qua}"
+    assert any(
+        "socket disconnect NOT confirmed" in m for m in _logs(caplog, "app.socket_manager")
+    ), _logs(caplog, "app.socket_manager")
+    assert (await _row_by_id(h["id_a"])).revoked_at is not None, "thu hồi trong CSDL không đứng"
+
+
+# -----------------------------------------------------------------------------
 # F62 (S24 sau deploy, 10-10): đăng xuất khi ACCESS TOKEN ĐÃ HẾT HẠN nhưng phiên
 # refresh còn sống. Cookie `access_token` sống bằng refresh (max_age = refresh_ttl)
 # nên trình duyệt VẪN gửi token hết hạn cùng cookie refresh. Đo trên prod: logout

@@ -9,7 +9,9 @@ Covers the invariants hardened during review:
 - ``force_disconnect_user_strict`` fails closed: no live workers → raise,
   missing ACK → TimeoutError, and emits ONE batched command for all user ids,
 - a handler failure does NOT ACK (publisher fail-closes),
-- ``force_disconnect_user`` disconnects every local SID of the user.
+- ``force_disconnect_user`` disconnects every local SID of the user,
+- F108: a ``sessions`` command (targeted revoke) notifies then cuts ONLY
+  ``session_room(id)``, never a user room, under the same ACK contract.
 
 These are pure unit tests with mocked Redis / Socket.IO — no live app needed.
 """
@@ -266,3 +268,87 @@ async def test_force_disconnect_user_disconnects_all_local_sids():
     assert n == 2
     assert fake_sio.disconnect.await_count == 2
     fake_sio.manager.get_participants.assert_called_with("/", "user_room_7")
+
+
+# --------------------------------------------------------------------------- #
+# F108 — targeted session revoke over the SAME channel (by session, not user)
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_force_disconnect_sessions_tells_then_cuts_only_that_session():
+    """LOCAL: the session's sockets get ``force_logout_batch`` FIRST (local emit,
+    same websocket), THEN the DISCONNECT; only ``session_room(id)`` is read."""
+    order = []
+    fake_sio = MagicMock()
+    fake_sio.manager.get_participants.return_value = [("sidA", "e1"), ("sidB", "e2")]
+    fake_sio.emit = AsyncMock(side_effect=lambda *a, **k: order.append("emit"))
+    fake_sio.disconnect = AsyncMock(side_effect=lambda sid: order.append(sid))
+    with patch.object(sm, "sio", fake_sio):
+        n = await sm.force_disconnect_sessions([[42, "cur-jti"]])
+
+    assert order == ["emit", "sidA", "sidB"], order
+    assert n == 2
+    fake_sio.manager.get_participants.assert_called_once_with("/", sm.session_room(42))
+
+
+@pytest.mark.asyncio
+async def test_handler_session_command_cuts_sessions_never_users():
+    """A ``sessions`` command runs the SESSION cut only (never the user cut) and
+    ACKs once."""
+    rc = AsyncMock()
+    cut_sessions = AsyncMock(return_value=1)
+    cut_users = AsyncMock(return_value=0)
+    with patch.object(sm, "_worker_id", "w-self"), \
+            patch.object(sm, "redis_client", rc), \
+            patch.object(sm, "force_disconnect_sessions", cut_sessions), \
+            patch.object(sm, "force_disconnect_user", cut_users):
+        await sm._handle_force_disconnect(
+            json.dumps({"command_id": "c3", "sessions": [[42, "cur-jti"]]})
+        )
+    cut_sessions.assert_awaited_once_with([[42, "cur-jti"]])
+    cut_users.assert_not_awaited()
+    rc.sadd.assert_awaited_once_with(sm._ACK_PREFIX + "c3", "w-self")
+
+
+@pytest.mark.asyncio
+async def test_handler_session_cut_failure_does_not_ack():
+    """The session cut raised ⇒ no ACK (the publisher reports unconfirmed)."""
+    rc = AsyncMock()
+    with patch.object(sm, "redis_client", rc), \
+            patch.object(sm, "force_disconnect_sessions",
+                         AsyncMock(side_effect=Exception("boom"))):
+        with pytest.raises(Exception):
+            await sm._handle_force_disconnect(
+                json.dumps({"command_id": "c4", "sessions": [[42, "cur-jti"]]})
+            )
+    rc.sadd.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_strict_sessions_publishes_one_session_command_no_users():
+    """ONE published command naming the sessions, with NO ``user_ids`` key — so
+    no worker can read it as a user-wide cut."""
+    rc = AsyncMock()
+    rc.smembers.return_value = {"w1"}  # immediate ACK
+    with patch.object(sm, "redis_client", rc), \
+            patch.object(sm, "_required_workers", AsyncMock(return_value={"w1"})):
+        cmd = await sm.force_disconnect_sessions_strict([(41, "j1"), (42, "j2")])
+
+    assert cmd
+    rc.publish.assert_awaited_once()
+    channel, raw = rc.publish.await_args.args
+    assert channel == sm.FORCE_DISCONNECT_CHANNEL
+    payload = json.loads(raw)
+    assert payload["sessions"] == [[41, "j1"], [42, "j2"]]
+    assert "user_ids" not in payload, payload
+
+
+@pytest.mark.asyncio
+async def test_strict_sessions_one_worker_missing_ack_raises():
+    """Multi-worker: one required worker never ACKs ⇒ TimeoutError (never "done")."""
+    rc = AsyncMock()
+    rc.smembers.return_value = {"w1"}  # w2 never ACKs
+    with patch.object(sm, "redis_client", rc), \
+            patch.object(sm, "_required_workers", AsyncMock(return_value={"w1", "w2"})), \
+            patch.object(sm.asyncio, "sleep", AsyncMock()):
+        with pytest.raises(TimeoutError):
+            await sm.force_disconnect_sessions_strict([(42, "j")], timeout=0.3)
