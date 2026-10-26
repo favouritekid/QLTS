@@ -239,6 +239,56 @@ class SessionRepository(BaseRepository[UserSession]):
         )
         return result.scalar_one_or_none()
 
+    async def get_refresh_jti_for_share(
+        self,
+        session_id: int,
+        user_id: int
+    ) -> Optional[str]:
+        """
+        The CURRENT refresh JTI of session ``session_id`` of ``user_id``, read
+        under ``FOR SHARE``. Only for Socket.IO ``revalidate_auth`` (F103).
+
+        A socket is bound to its session's STABLE id (``UserSession.id``),
+        never to a refresh JTI: ``/auth/refresh`` rotates ``refresh_jti`` on
+        this same row, so a JTI captured at handshake goes stale on the first
+        refresh. ``revalidate_auth`` resolves the current JTI here, then runs
+        the per-JTI checks (``session:{jti}``, ``user_blacklist``, the shared
+        live predicate via ``get_by_refresh_jti_and_user``) unchanged.
+
+        NOT filtered on live on purpose: a revoked or expired row still names
+        its JTI, and the refusal comes from ``_live_session_by_refresh_jti`` —
+        the ONE live predicate deps STEP 4b, socket connect and ``/refresh``
+        share. ``None`` only when no row of this id belongs to this user.
+
+        ``FOR SHARE``: ``/auth/refresh`` holds this row ``FOR UPDATE``
+        (``get_live_by_refresh_jti_for_update``) from before its Redis rotate
+        (``session:{old}`` deleted, ``session:{new}`` set) until its COMMIT.
+        A plain read in that window returns the committed OLD JTI whose Redis
+        key is already gone — a false "Session revoked" and a logout. The
+        share lock waits for that COMMIT and then returns the row as
+        committed; held by the caller until its transaction ends, it also
+        keeps a new rotation from starting between this read and the caller's
+        Redis read of ``session:{jti}``.
+
+        Args:
+            session_id: ``UserSession.id`` saved in the socket session at connect
+            user_id: User ID saved in the socket session at connect
+
+        Returns:
+            The row's current ``refresh_jti``, or None if no such row of this user
+        """
+        result = await self.db.execute(
+            select(UserSession.refresh_jti)
+            .where(
+                and_(
+                    UserSession.id == session_id,
+                    UserSession.user_id == user_id,
+                )
+            )
+            .with_for_update(read=True)
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_ip(
         self,
         user_id: int,

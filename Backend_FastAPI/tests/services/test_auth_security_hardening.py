@@ -2323,6 +2323,18 @@ _BLACKLIST_PREFIX = "user_blacklist:"
 _FAULT_EXC = {"connection": RedisConnectionError, "timeout": RedisTimeoutError}
 
 
+async def _session_id_of(refresh_jti: str) -> int:
+    """``UserSession.id`` of the row carrying ``refresh_jti`` — what a socket is bound to (F103)."""
+    async with db_module.AsyncSessionLocal() as session:
+        return (
+            await session.execute(
+                select(models.UserSession.id).where(
+                    models.UserSession.refresh_jti == refresh_jti
+                )
+            )
+        ).scalar_one()
+
+
 @pytest.mark.asyncio
 @pytest.mark.security
 class TestUserBlacklistUnreadable:
@@ -2349,7 +2361,12 @@ class TestUserBlacklistUnreadable:
         access = res.cookies.get("access_token")
         assert access, "login did not set the access cookie"
         payload = jwt.decode(access, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
-        return {"user": user, "access": access, "r_jti": payload["r_jti"]}
+        return {
+            "user": user,
+            "access": access,
+            "r_jti": payload["r_jti"],
+            "session_id": await _session_id_of(payload["r_jti"]),
+        }
 
     # --- helpers -----------------------------------------------------------------
 
@@ -2426,9 +2443,12 @@ class TestUserBlacklistUnreadable:
                 yield opened
 
     @staticmethod
-    def _fake_sio(user_id: int, jti: str):
+    def _fake_sio(user_id: int, session_id: int):
+        """The socket session ``connect`` saves (F103: the stable ``session_id``, no jti)."""
         fake = MagicMock()
-        fake.get_session = AsyncMock(return_value={"user_id": user_id, "jti": jti})
+        fake.get_session = AsyncMock(
+            return_value={"user_id": user_id, "session_id": session_id}
+        )
         fake.disconnect = AsyncMock()
         return fake
 
@@ -2593,7 +2613,7 @@ class TestUserBlacklistUnreadable:
             with pytest.raises(ConnectionRefusedError):
                 await socket_manager._get_user_from_token(access)
         else:
-            assert (await socket_manager._get_user_from_token(access)).id == user["id"]
+            assert (await socket_manager._get_user_from_token(access)).user.id == user["id"]
 
         with self._socket_fault(fault, breaker) as failed:
             with pytest.raises(ConnectionRefusedError):
@@ -2615,8 +2635,8 @@ class TestUserBlacklistUnreadable:
         server disconnect as a logout (``frontend/src/lib/socket/client.ts``);
         that is the price of not serving a socket nobody can vouch for.
         """
-        user, jti = authed["user"], authed["r_jti"]
-        fake_sio = self._fake_sio(user["id"], jti)
+        user = authed["user"]
+        fake_sio = self._fake_sio(user["id"], authed["session_id"])
         if who == "blacklisted":
             await self._blacklist(test_redis_client, user["id"])
 
@@ -2725,7 +2745,13 @@ async def _login_tokens(client, user: dict) -> dict:
     access = res.cookies.get("access_token")
     assert access, "login did not set the access cookie"
     payload = jwt.decode(access, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
-    return {"user": user, "access": access, "access_jti": payload["jti"], "r_jti": payload["r_jti"]}
+    return {
+        "user": user,
+        "access": access,
+        "access_jti": payload["jti"],
+        "r_jti": payload["r_jti"],
+        "session_id": await _session_id_of(payload["r_jti"]),
+    }
 
 
 async def _check_status(client, access: str):
@@ -2964,7 +2990,7 @@ class TestSessionCacheUnreadable:
         read. Nothing passes on the unreadable read alone.
         """
         user, jti = authed["user"], authed["r_jti"]
-        fake_sio = TestUserBlacklistUnreadable._fake_sio(user["id"], jti)
+        fake_sio = TestUserBlacklistUnreadable._fake_sio(user["id"], authed["session_id"])
         expected = {
             "live": {"valid": True},
             "session_revoked": {"valid": False, "reason": "Session revoked"},
@@ -3004,7 +3030,7 @@ class TestSessionCacheUnreadable:
     ):
         """Neither Redis nor the DB answered ⇒ disconnected, never ``valid`` True."""
         user, jti = authed["user"], authed["r_jti"]
-        fake_sio = TestUserBlacklistUnreadable._fake_sio(user["id"], jti)
+        fake_sio = TestUserBlacklistUnreadable._fake_sio(user["id"], authed["session_id"])
 
         with patch.object(socket_manager, "sio", fake_sio), \
                 _reads_unanswered(fault, self.PREFIX, breaker) as hit, \
@@ -3022,7 +3048,7 @@ class TestSessionCacheUnreadable:
         """Redis ANSWERED "no such session" ⇒ disconnected, even though the DB row is live."""
         user, jti = authed["user"], authed["r_jti"]
         await test_redis_client.delete(f"session:{jti}")
-        fake_sio = TestUserBlacklistUnreadable._fake_sio(user["id"], jti)
+        fake_sio = TestUserBlacklistUnreadable._fake_sio(user["id"], authed["session_id"])
 
         with patch.object(socket_manager, "sio", fake_sio):
             verdict = await socket_manager.revalidate_auth(self.SID)

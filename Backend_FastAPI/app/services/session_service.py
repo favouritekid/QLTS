@@ -422,7 +422,8 @@ async def revoke_session(
     Raises:
         SessionRevocationError: If revocation fails
     """
-    session_to_emit = None  # Store session JTI for socket emission
+    session_to_emit = None  # Store session JTI for socket emission (payload)
+    session_id_to_emit = None  # Stable row id: the socket room key (F103)
 
     try:
         # ✅ PHASE 2: Use SessionRepository with pessimistic lock
@@ -447,6 +448,7 @@ async def revoke_session(
             session.revoked_at = datetime.now(timezone.utc)
             db.add(session)
             session_to_emit = session.refresh_jti  # Store JTI for socket event
+            session_id_to_emit = session.id
 
             # 2. Update Redis (within transaction)
             ttl = int(
@@ -490,10 +492,14 @@ async def revoke_session(
         if session_to_emit:
             async with track_event_latency("force_logout_batch"):
                 try:
+                    # Routed by the stable session id: a socket connected
+                    # before any /auth/refresh of this session is still in
+                    # its room (F103); the JTI only rides in the payload.
                     await dispatcher.dispatch(
                         TransportEvents.USER_FORCE_LOGOUT,
                         user_id=user_id,
-                        revoked_jtis=[session_to_emit]
+                        revoked_jtis=[session_to_emit],
+                        revoked_session_ids=[session_id_to_emit],
                     )
                     socket_events_emitted_total.labels(event_type="force_logout_batch").inc()
                     log.info("Dispatched force_logout event (single)", session_id=session_id)
@@ -610,6 +616,7 @@ async def revoke_all_other_sessions(
         Tuple[int, PostCommitCallback]: Number of sessions revoked and callback
     """
     revoked_jtis = []
+    revoked_session_ids = []  # Same order as revoked_jtis: socket room keys (F103)
     revoked_count = 0
 
     try:
@@ -628,6 +635,7 @@ async def revoke_all_other_sessions(
             session.revoked_at = now
             db.add(session)
             revoked_jtis.append(session.refresh_jti)
+            revoked_session_ids.append(session.id)
 
             # Cập nhật Redis
             ttl = int((session.expires_at - now).total_seconds())
@@ -666,7 +674,8 @@ async def revoke_all_other_sessions(
                     await dispatcher.dispatch(
                         TransportEvents.USER_FORCE_LOGOUT,
                         user_id=user_id,
-                        revoked_jtis=revoked_jtis
+                        revoked_jtis=revoked_jtis,
+                        revoked_session_ids=revoked_session_ids,
                     )
                     socket_events_emitted_total.labels(event_type="force_logout_batch").inc(
                         len(revoked_jtis)

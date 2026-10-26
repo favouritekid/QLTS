@@ -6,6 +6,7 @@ import math
 import os
 import threading
 import uuid
+from typing import NamedTuple
 
 import redis as _redis_sync  # sync client for the heartbeat watchdog thread
 import socketio
@@ -196,12 +197,39 @@ def parse_cookies(cookie_string: str) -> dict[str, str]:
     return cookies
 
 
-async def _get_user_from_token(token: str) -> models.User:
+# === F103: a socket belongs to a login SESSION, named by its stable id ===
+# ``UserSession.id`` is set once at login and never changes; ``refresh_jti`` of
+# the same row is ROTATED by every ``/auth/refresh``. A socket used to keep the
+# refresh JTI it saw at handshake, both for ``revalidate_auth`` and for its
+# revocation room — so after the client's first proactive refresh (~12 min)
+# the next revalidation (15 min) found ``session:{old jti}`` gone and logged
+# the user out (measured on prod 26-10), and a targeted revoke emitted to the
+# room of the CURRENT jti, which the socket had never joined.
+def session_room(session_id: int) -> str:
+    """ONE name for the room of login session ``session_id`` (``UserSession.id``).
+
+    Joined at ``connect``, left at ``disconnect``, targeted by
+    ``emit_force_logout``. Keyed by the stable row id, never by a refresh JTI.
+    """
+    return f"user_session_{session_id}"
+
+
+class SocketAuth(NamedTuple):
+    """What a socket handshake authenticated: the user and the session row."""
+
+    user: models.User
+    session_id: int
+
+
+async def _get_user_from_token(token: str) -> SocketAuth:
     """
     Hàm helper xác thực token cho WebSocket (V6 - with user blacklist check).
 
     ✅ FIX-3: Added user blacklist check for security parity with HTTP auth.
     Now checks 3 layers: JWT validity, session validity, user blacklist.
+
+    F103: returns the user AND the id of the live DB session row the token's
+    ``r_jti`` names — the stable identity the socket is bound to.
     """
     try:
         payload = security.decode_token(token)
@@ -289,7 +317,7 @@ async def _get_user_from_token(token: str) -> models.User:
                     detail="User session invalidated"
                 )
 
-            return user
+            return SocketAuth(user=user, session_id=db_session.id)
 
     except Exception as e:
         # Log lỗi mà không log token
@@ -335,20 +363,20 @@ async def connect(sid, environ, auth):
             if not token:
                 raise ConnectionRefusedError("Authentication failed: No token in cookie or auth")
 
-            user = await _get_user_from_token(token)
-            
-            # ✅ SECURITY FIX: Extract JTI from token for session-specific room
-            # We already verified the token in _get_user_from_token
-            payload = security.decode_token(token)
-            refresh_jti = payload.get("r_jti")
+            auth_result = await _get_user_from_token(token)
+            user = auth_result.user
 
-            # Save session with extended info
+            # Save session with extended info. F103: the socket is bound to the
+            # STABLE id of its DB session row (``session_id``), NOT to the
+            # refresh JTI of the handshake token — /auth/refresh rotates that
+            # JTI on the same row. No ``jti`` is stored: nothing may read a
+            # value that goes stale on the first refresh.
             await sio.save_session(sid, {
                 "user_id": user.id,
                 "username": user.username,
                 "role": user.role,
                 "unit_id": user.unit_id,
-                "jti": refresh_jti  # Store JTI in socket session
+                "session_id": auth_result.session_id,
             })
 
             # === Join rooms based on user attributes ===
@@ -359,11 +387,12 @@ async def connect(sid, environ, auth):
             await sio.enter_room(sid, room_name)
             rooms_joined.append(room_name)
 
-            # 2. Session-specific room (Targeted Revocation)
-            if refresh_jti:
-                session_room = f"session_room_{refresh_jti}"
-                await sio.enter_room(sid, session_room)
-                rooms_joined.append(session_room)
+            # 2. Session-specific room (Targeted Revocation), keyed by the
+            # stable session id so a revoke after any number of refreshes
+            # still reaches every socket (tab) of this session.
+            own_session_room = session_room(auth_result.session_id)
+            await sio.enter_room(sid, own_session_room)
+            rooms_joined.append(own_session_room)
 
             # 2. Role-based room (for role-specific broadcasts)
             if user.role:
@@ -416,7 +445,7 @@ async def disconnect(sid):
             user_id = session.get("user_id")
             role = session.get("role")
             unit_id = session.get("unit_id")
-            refresh_jti = session.get("jti")
+            session_id = session.get("session_id")
             socket_connections_active.dec()  # Giảm bộ đếm
 
             # === Leave all rooms ===
@@ -427,11 +456,11 @@ async def disconnect(sid):
             await sio.leave_room(sid, room_name)
             rooms_left.append(room_name)
 
-            # 2. Session room
-            if refresh_jti:
-                session_room = f"session_room_{refresh_jti}"
-                await sio.leave_room(sid, session_room)
-                rooms_left.append(session_room)
+            # 2. Session room (stable session id, F103)
+            if session_id:
+                own_session_room = session_room(session_id)
+                await sio.leave_room(sid, own_session_room)
+                rooms_left.append(own_session_room)
 
             # 2. Role room
             if role:
@@ -488,17 +517,145 @@ async def logout_confirmed(sid, data):
         socket_events_received_total.labels(event_type="logout_confirmed").inc()
 
 
+async def _session_refusal_reason(sid, user_id: int, session_id: int) -> str | None:
+    """The periodic checks of socket ``sid``, bound to DB session ``session_id``.
+
+    Returns None when the session is still valid, else the refusal reason
+    (already logged); ``revalidate_auth`` then disconnects SERVER-side. A DB
+    error raises: the caller answers ``Validation error`` and disconnects
+    (fail-closed), as before.
+
+    F103: the socket names its session by the stable row id, so the refresh
+    JTI is RESOLVED here on every run — the row's current one, not the one of
+    the handshake token. Every check after that is the per-JTI check this
+    handler always ran (Redis ``session:{jti}`` cache, strict
+    ``user_blacklist``, the shared live predicate), in the same order.
+
+    Everything runs in ONE DB transaction that holds the row ``FOR SHARE``
+    (``get_refresh_jti_for_share``): an in-flight /auth/refresh (row locked,
+    Redis already rotated, DB not yet committed) is waited for instead of
+    half-seen, and no new rotation can start between the reads below.
+    """
+    from app.repositories import SessionRepository
+
+    async with AsyncSessionLocal() as db:
+        repo = SessionRepository(db)
+
+        refresh_jti = await repo.get_refresh_jti_for_share(session_id, user_id)
+        if refresh_jti is None:
+            log.warning(
+                "Revalidation failed: no session row of this user (session id)",
+                sid=sid,
+                user_id=user_id,
+                session_id=session_id,
+            )
+            return "Session revoked"
+
+        # Check if this specific session is still valid in Redis.
+        # Three answers, as in HTTP deps STEP 4: ``session:{jti}`` is a
+        # CACHE of the DB row checked below.
+        # - Redis ANSWERED "no such key" ⇒ revoked, disconnect (fast path).
+        # - Redis did not answer (ConnectionError/TimeoutError, OPEN
+        #   breaker) ⇒ NOT "revoked". The lenient read said "revoked" for
+        #   a connection/timeout error ("Validation error" for an OPEN
+        #   breaker), and the frontend logs the user out on any
+        #   ``valid: False`` (``frontend/src/lib/socket/client.ts``). Not a
+        #   pass either: the strict ``user_blacklist`` read and the
+        #   exact-jti DB check below still run, and only they reach
+        #   ``valid: True``.
+        try:
+            cached = await redis_get_or_raise(
+                f"session:{refresh_jti}", "auth.session"
+            )
+            session_valid = bool(cached)
+        except RedisUnavailableError:
+            log.warning(
+                "Revalidation: session cache unreadable; the DB row decides",
+                sid=sid,
+                user_id=user_id,
+                action="socket.session_cache_unavailable",
+            )
+            session_valid = None
+        if session_valid is False:
+            log.warning(
+                "Revalidation failed: Session revoked",
+                sid=sid,
+                user_id=user_id,
+                jti=refresh_jti
+            )
+            return "Session revoked"
+
+        # Check user blacklist (Password changed or admin ban)
+        # Strict read, same contract as connect: a read Redis did not
+        # answer disconnects. The lenient GET read "no answer" as "not
+        # blacklisted" and kept the socket serving events. Logs carry
+        # user_id and the exception CLASS; never the key or the message.
+        try:
+            is_blacklisted = await redis_exists_or_raise(
+                f"user_blacklist:{user_id}", "auth.user_blacklist"
+            )
+        except RedisUnavailableError:
+            log.error(
+                "Revalidation deferred: user blacklist unreadable",
+                sid=sid,
+                user_id=user_id,
+                action="socket.auth_state_unavailable",
+            )
+            return "Auth state unavailable"
+        except Exception as exc:
+            log.error(
+                "Revalidation refused: user blacklist check failed",
+                sid=sid,
+                user_id=user_id,
+                error_type=type(exc).__name__,
+                action="socket.user_blacklist_error",
+            )
+            return "Validation error"
+        if is_blacklisted:
+            log.warning(
+                "Revalidation failed: User blacklisted",
+                sid=sid,
+                user_id=user_id
+            )
+            return "User session invalidated"
+
+        # DB-authoritative cross-check for THIS jti (NOT "any active session"
+        # of the user). The old code passed an old/revoked socket as long as
+        # the user had *some* active session — so a fresh login after
+        # deactivate→reactivate kept a stale socket alive. Require a
+        # non-revoked, non-expired DB row matching exactly refresh_jti — the
+        # jti resolved above from THIS session's row, so another live session
+        # of the same user can never stand in for it.
+        db_session = await repo.get_by_refresh_jti_and_user(refresh_jti, user_id)
+        if db_session is None:
+            log.warning(
+                "Revalidation failed: session revoked/expired in DB (exact jti)",
+                sid=sid,
+                user_id=user_id,
+                jti=refresh_jti,
+            )
+            return "Session revoked"
+
+    return None
+
+
 # ✅ FIX-3: Periodic revalidation event handler
 @sio.event
 async def revalidate_auth(sid):
     """
     Periodic re-validation của user session.
-    Client nên gọi mỗi 5 phút để verify session vẫn hợp lệ.
+    Client gọi mỗi 15 phút (``frontend/src/lib/socket/client.ts``) để verify
+    session vẫn hợp lệ.
 
     This catches cases where:
     - User changed password but socket didn't receive force_logout event
     - User was blacklisted by admin
     - Session was revoked by another device
+
+    F103: the socket is bound to its DB session's stable id, so a session the
+    client refreshed (refresh JTI rotated) stays valid, while a session that
+    was really revoked/expired is refused and disconnected HERE, server-side,
+    whatever the client does with the answer.
     """
     async with track_event_latency("revalidate_auth"):
         try:
@@ -509,114 +666,25 @@ async def revalidate_auth(sid):
                 return {"valid": False, "reason": "No session"}
 
             user_id = session.get("user_id")
-            refresh_jti = session.get("jti")
+            session_id = session.get("session_id")
 
-            # Fail-closed: a session without user_id/jti cannot be validated
-            # against the DB (the exact-jti check below would be skipped),
-            # leaving it permanently trusted. Disconnect immediately.
-            if not user_id or not refresh_jti:
+            # Fail-closed: a socket session without user_id/session_id cannot
+            # be tied to a DB session row, leaving it permanently trusted.
+            # That includes a socket session shaped before F103 (``jti`` only):
+            # refused, never validated through a JTI that may have rotated.
+            if not user_id or not session_id:
                 log.warning(
-                    "Revalidation failed: missing user_id/jti in socket session",
+                    "Revalidation failed: missing user_id/session_id in socket session",
                     sid=sid,
                     user_id=user_id,
                 )
                 await sio.disconnect(sid)
                 return {"valid": False, "reason": "Invalid session"}
 
-            # Check if this specific session is still valid in Redis.
-            # Three answers, as in HTTP deps STEP 4: ``session:{jti}`` is a
-            # CACHE of the DB row checked below.
-            # - Redis ANSWERED "no such key" ⇒ revoked, disconnect (fast path).
-            # - Redis did not answer (ConnectionError/TimeoutError, OPEN
-            #   breaker) ⇒ NOT "revoked". The lenient read said "revoked" for
-            #   a connection/timeout error ("Validation error" for an OPEN
-            #   breaker), and the frontend logs the user out on any
-            #   ``valid: False`` (``frontend/src/lib/socket/client.ts``). Not a
-            #   pass either: the strict ``user_blacklist`` read and the
-            #   exact-jti DB check below still run, and only they reach
-            #   ``valid: True``.
-            if refresh_jti:
-                try:
-                    cached = await redis_get_or_raise(
-                        f"session:{refresh_jti}", "auth.session"
-                    )
-                    session_valid = bool(cached)
-                except RedisUnavailableError:
-                    log.warning(
-                        "Revalidation: session cache unreadable; the DB row decides",
-                        sid=sid,
-                        user_id=user_id,
-                        action="socket.session_cache_unavailable",
-                    )
-                    session_valid = None
-                if session_valid is False:
-                    log.warning(
-                        "Revalidation failed: Session revoked",
-                        sid=sid,
-                        user_id=user_id,
-                        jti=refresh_jti
-                    )
-                    await sio.disconnect(sid)
-                    return {"valid": False, "reason": "Session revoked"}
-
-            # Check user blacklist (Password changed or admin ban)
-            # Strict read, same contract as connect: a read Redis did not
-            # answer disconnects. The lenient GET read "no answer" as "not
-            # blacklisted" and kept the socket serving events. Logs carry
-            # user_id and the exception CLASS; never the key or the message.
-            try:
-                is_blacklisted = await redis_exists_or_raise(
-                    f"user_blacklist:{user_id}", "auth.user_blacklist"
-                )
-            except RedisUnavailableError:
-                log.error(
-                    "Revalidation deferred: user blacklist unreadable",
-                    sid=sid,
-                    user_id=user_id,
-                    action="socket.auth_state_unavailable",
-                )
+            reason = await _session_refusal_reason(sid, user_id, session_id)
+            if reason is not None:
                 await sio.disconnect(sid)
-                return {"valid": False, "reason": "Auth state unavailable"}
-            except Exception as exc:
-                log.error(
-                    "Revalidation refused: user blacklist check failed",
-                    sid=sid,
-                    user_id=user_id,
-                    error_type=type(exc).__name__,
-                    action="socket.user_blacklist_error",
-                )
-                await sio.disconnect(sid)
-                return {"valid": False, "reason": "Validation error"}
-            if is_blacklisted:
-                log.warning(
-                    "Revalidation failed: User blacklisted",
-                    sid=sid,
-                    user_id=user_id
-                )
-                await sio.disconnect(sid)
-                return {"valid": False, "reason": "User session invalidated"}
-
-            # DB-authoritative cross-check for THIS jti (NOT "any active session"
-            # of the user). The old code passed an old/revoked socket as long as
-            # the user had *some* active session — so a fresh login after
-            # deactivate→reactivate kept a stale socket alive. Require a
-            # non-revoked, non-expired DB row matching exactly refresh_jti.
-            if refresh_jti:
-                async with AsyncSessionLocal() as db:
-                    from app.repositories import SessionRepository
-
-                    db_session = await SessionRepository(
-                        db
-                    ).get_by_refresh_jti_and_user(refresh_jti, user_id)
-                if db_session is None:
-                    log.warning(
-                        "Revalidation failed: session revoked/expired in DB (exact jti)",
-                        sid=sid,
-                        user_id=user_id,
-                        jti=refresh_jti,
-                    )
-                    await sio.disconnect(sid)
-                    return {"valid": False, "reason": "Session revoked"}
+                return {"valid": False, "reason": reason}
 
             log.debug("Revalidation successful", sid=sid, user_id=user_id)
             socket_events_received_total.labels(event_type="revalidate_auth").inc()
@@ -674,26 +742,48 @@ async def emit_to_all(event: str, data: dict, namespace: str = "/"):
 from .core.events import dispatcher, TransportEvents
 
 
-async def emit_force_logout(user_id: int, revoked_jtis: list, **kwargs):
+async def emit_force_logout(
+    user_id: int,
+    revoked_jtis: list,
+    revoked_session_ids: list | None = None,
+    **kwargs,
+):
     """
     Socket.IO handler for user.force_logout event.
 
     Args:
         user_id: User to logout
-        revoked_jtis: List of revoked session JTIs. If empty, logout all sessions for user.
+        revoked_jtis: List of revoked session JTIs (the event payload). If
+            empty AND ``revoked_session_ids`` is empty, logout all sessions
+            for user.
+        revoked_session_ids: ``UserSession.id`` of each revoked session, in
+            the SAME order as ``revoked_jtis`` (F103). The rooms are keyed by
+            this stable id: a socket joined its session's room at connect and
+            stays in it across every /auth/refresh, while the JTI rotates.
         **kwargs: Additional event data (ignored)
     """
     try:
-        if revoked_jtis:
-            # Targeted logout: Emit to specific session rooms
-            for jti in revoked_jtis:
-                session_room = f"session_room_{jti}"
+        if revoked_jtis or revoked_session_ids:
+            # Targeted logout: one event per revoked session, to the room of
+            # its STABLE id. The payload keeps naming the JTI (unchanged
+            # client contract). A caller that cannot pair every JTI with its
+            # session id is a bug: refuse loudly (caught below, logged) and
+            # never widen a targeted revoke to the user room — that would log
+            # out the user's OTHER, live sessions.
+            jtis = list(revoked_jtis or [])
+            session_ids = list(revoked_session_ids or [])
+            if len(jtis) != len(session_ids):
+                raise ValueError(
+                    "targeted force_logout needs one session id per revoked jti "
+                    f"(jtis={len(jtis)}, session_ids={len(session_ids)})"
+                )
+            for revoked_session_id, jti in zip(session_ids, jtis):
                 await sio.emit(
                     "force_logout_batch",
                     {"revoked_jtis": [jti]},
-                    room=session_room
+                    room=session_room(revoked_session_id),
                 )
-            log.info("Emitted targeted force_logout_batch", user_id=user_id, count=len(revoked_jtis))
+            log.info("Emitted targeted force_logout_batch", user_id=user_id, count=len(jtis))
         else:
             # Broadcast logout: Emit to all user sessions
             room_name = f"user_room_{user_id}"
