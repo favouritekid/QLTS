@@ -344,7 +344,7 @@ _dich_copy_trong_lich_su() {
 _cong_noi_dung() {
     local cid="$1" bang so=0 hong=0 loai nguon dich
     local hh hc nen dich_tm=() cho_phep="|" ds_anh ds_nen f thua=""
-    local anh_ref roots_anh loai_ls r d co
+    local anh_ref roots_anh loai_ls r d co nen_ra nen_rc
     if [ -z "$cid" ]; then
         log "  cổng nội dung: không có container để soi"
         return 1
@@ -398,10 +398,26 @@ _cong_noi_dung() {
         log "  cổng nội dung: không suy được ảnh nền từ dòng FROM của nginx/Dockerfile"
         return 1
     fi
-    if ! docker image inspect "$nen" >/dev/null 2>&1; then
-        log "  cổng nội dung: ảnh nền '$nen' KHÔNG có sẵn cục bộ."
-        log "                 Từ chối ở đây thay vì để docker run đi kéo từ mạng — chạy compose build trước."
-        return 1
+    # Ảnh nền vắng ⇒ chiều ngược KHÔNG đo được. Trả mã RIÊNG để người gọi nói
+    # đúng nguyên nhân: run 40184923904 (25-10-2026) dừng ở đây với thông điệp
+    # chung "candidate KHÔNG mang cấu hình", trong khi chiều xuôi đã khớp và
+    # thứ thiếu chỉ là ảnh nền trong image store. Rc ≠ 0 mà không có đúng chữ
+    # "No such image" là LỖI ĐỌC, không phải "vắng". Chiều xuôi đã thấy lệch
+    # thì vẫn báo lệch — kết luận ấy mạnh hơn "chưa đo được".
+    nen_ra=$(docker image inspect -f '{{.Id}}' "$nen" 2>&1) && nen_rc=0 || nen_rc=$?
+    if [ "$nen_rc" != 0 ]; then
+        if [ "$hong" -ne 0 ]; then
+            log "  cổng nội dung: $hong tệp lệch/không đọc được ở chiều xuôi (ở trên); chiều ngược cũng không đo được (ảnh nền '$nen' rc=$nen_rc)"
+            return 1
+        fi
+        case "$nen_ra" in
+            *"No such image"*)
+                log "  cổng nội dung: ảnh nền '$nen' CHƯA CÓ trong image store (Docker: No such image)."
+                log "                 Không kéo mạng giữa lúc áp — chiều ngược KHÔNG đối chiếu được."
+                return 3 ;;
+        esac
+        log "  cổng nội dung: KHÔNG đọc được ảnh nền '$nen' (lỗi Docker khác 'No such image', rc=$nen_rc): ${nen_ra:0:200}"
+        return 2
     fi
 
     # Tập đích cần soi = HỢP của (Dockerfile HIỆN TẠI) và (lịch sử của CHÍNH ẢNH
@@ -715,13 +731,27 @@ _CID_CANDIDATE=$("${_COMPOSE[@]}" --profile candidate ps -q nginx-candidate | he
 # đo hành vi KHÔNG THỂ thấy: ảnh cũ phục vụ hoàn hảo, cả sáu phép kiểm đều xanh.
 # Đo trước thì hỏng dừng sớm và thông điệp nói đúng nguyên nhân.
 log "đối chiếu nội dung trong candidate với nguồn sẽ được áp..."
-if ! _cong_noi_dung "$_CID_CANDIDATE"; then
+# Ba kết cục KHÁC NHAU, ba thông điệp khác nhau — gộp làm một là thứ đã chỉ sai
+# hướng ở run 40184923904 (thiếu ảnh nền bị báo thành "không mang cấu hình").
+_RC_G1=0
+_cong_noi_dung "$_CID_CANDIDATE" || _RC_G1=$?
+if [ "$_RC_G1" != 0 ]; then
     _nhat_ky nginx-candidate
-    error "candidate KHÔNG mang cấu hình của cây nguồn hiện tại — script này không build.
+    case "$_RC_G1" in
+        3) error "ảnh NỀN của nginx/Dockerfile CHƯA CÓ trong image store — cổng nội dung KHÔNG đối chiếu được.
+       Đây KHÔNG phải lệch cấu hình. Chuẩn bị đúng ảnh nền theo digest rồi chạy lại:
+         bash scripts/nginx-anh-nen.sh chuan-bi
+         bash scripts/nginx-apply.sh \"$DOMAIN\"
+       Container đang phục vụ CHƯA bị đụng tới." ;;
+        2) error "KHÔNG đọc được ảnh nền (lỗi Docker, lý do ở dòng trên) — cổng nội dung không kết luận được.
+       Đây KHÔNG phải lệch cấu hình: kiểm Docker rồi chạy lại.
+       Container đang phục vụ CHƯA bị đụng tới." ;;
+        *) error "candidate KHÔNG mang cấu hình của cây nguồn hiện tại — script này không build.
        Dựng lại ảnh rồi chạy lại:
          docker compose -f docker-compose.yml --env-file \"$_ENV_FILE\" build nginx
          bash scripts/nginx-apply.sh \"$DOMAIN\"
-       Container đang phục vụ CHƯA bị đụng tới."
+       Container đang phục vụ CHƯA bị đụng tới." ;;
+    esac
 fi
 
 if ! bash "$SCRIPT_DIR/nginx-verify.sh" "$_CID_CANDIDATE" "$DOMAIN"; then

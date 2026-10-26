@@ -891,6 +891,7 @@ _bo_qua_neu_khong_posix_dh = pytest.mark.skipif(
 # đây là mời hai bản trôi khỏi nhau, rồi một bộ xanh còn bộ kia đỏ vì ngữ cảnh.
 from tests.unit.test_deploy_startup_gates import (  # noqa: E402
     _MANH_STUB_CUA_GHI,
+    _STUB_NGINX_ANH_NEN,
     _STUB_NGINX_VERIFY,
     _sandbox_cua,
     _viet_shim_ngu_canh,
@@ -930,6 +931,7 @@ def _san_khau_dh(
     for ten, noi_dung in (
         ("scripts/nginx-apply.sh", _STUB_NGINX_APPLY_DH),
         ("scripts/nginx-verify.sh", _STUB_NGINX_VERIFY),
+        ("scripts/nginx-anh-nen.sh", _STUB_NGINX_ANH_NEN),
         ("scripts/rollback-preflight.sh", _STUB_ROLLBACK_PREFLIGHT_DH),
         ("bin/docker", _STUB_DOCKER_DH),
         ("bin/git", _STUB_GIT_DH),

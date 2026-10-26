@@ -826,6 +826,11 @@ _qlts_mo_hinh_anh() {
     esac
     exit 0 ;;
   image)
+    # `STUB_NEN_CO_RA` / `STUB_NEN_CO_LOI`: thứ `image inspect` ảnh nền in ra
+    # stdout / stderr TRƯỚC mã thoát `STUB_NEN_CO_RC` — dựng ca "No such image"
+    # (vắng) tách khỏi lỗi Docker khác, kể cả lỗi mà VẪN in một ID trông hợp lệ.
+    [ -z "${STUB_NEN_CO_RA:-}" ] || printf '%s\n' "$STUB_NEN_CO_RA"
+    [ -z "${STUB_NEN_CO_LOI:-}" ] || printf '%s\n' "$STUB_NEN_CO_LOI" >&2
     exit "${STUB_NEN_CO_RC:-0}" ;;
   history)
     # history --no-trunc --format '{{.CreatedBy}}' <ảnh>
@@ -1414,6 +1419,304 @@ def test_ca8_anh_nen_vang_mat_cuc_bo_thi_DO_va_KHONG_keo_mang(tmp_path):
     assert not re.search(r"^docker run .*__QLTS_HET__", nhat_ky, re.M), (
         "đã gọi `docker run` trên ảnh nền dù nó vắng mặt cục bộ (⇒ pull từ mạng)"
     )
+
+
+# Ca 8b–8e: chiều ngược KHÔNG đọc được ảnh nền có ba nguyên nhân khác nhau, và
+# người trực phải được nói ĐÚNG nguyên nhân. Run 40184923904 (25-10-2026) gộp
+# chúng làm một thông điệp "candidate KHÔNG mang cấu hình" trong khi chiều xuôi
+# đã khớp và thứ thiếu chỉ là ảnh nền trong image store ⇒ chỉ sai hướng xử lý.
+# Mỗi ca vi phạm đúng MỘT điều; ca 8 ở trên giữ hợp đồng chung (đỏ + không kéo).
+_NO_SUCH_IMAGE = "Error response from daemon: No such image: nginx:x@sha256:" + "0" * 64
+_THONG_DIEP_LECH_CAU_HINH = "KHÔNG mang cấu hình"
+
+
+def _nhat_ky_apply(repo: Path) -> str:
+    return (repo.parent / "lenh.log").read_text(encoding="utf-8")
+
+
+def _da_chay_anh_nen(nhat_ky: str) -> bool:
+    return bool(re.search(r"^docker run .*__QLTS_HET__", nhat_ky, re.M))
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca8b_anh_nen_CHUA_CO_thi_DO_va_noi_DUNG_nguyen_nhan(tmp_path):
+    """Daemon nói đúng "No such image" ⇒ báo THIẾU ẢNH NỀN + lệnh chuẩn bị, không báo lệch."""
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(
+        repo, anh, STUB_NEN_CO_RC="1", STUB_NEN_CO_LOI=_NO_SUCH_IMAGE,
+        STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A,
+    )
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"ảnh nền vắng mà cổng vẫn XANH:\n{ra}"
+    assert "CHƯA CÓ trong image store" in ra, f"không nói ra nguyên nhân thiếu ảnh nền:\n{ra}"
+    assert "bash scripts/nginx-anh-nen.sh chuan-bi" in ra, f"không chỉ lệnh chuẩn bị ảnh nền:\n{ra}"
+    assert _THONG_DIEP_LECH_CAU_HINH not in ra, f"thiếu ảnh nền bị báo thành lệch cấu hình:\n{ra}"
+    nhat_ky = _nhat_ky_apply(repo)
+    assert not _da_chay_anh_nen(nhat_ky), "đã `docker run` ảnh nền vắng mặt (⇒ kéo mạng)"
+    assert "profile production up -d" not in nhat_ky, "đã đụng container đang phục vụ"
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+@pytest.mark.parametrize(
+    "bien",
+    [
+        pytest.param({"STUB_NEN_CO_LOI": "Cannot connect to the Docker daemon at unix:///var/run/docker.sock"},
+                     id="loi-docker-khac"),
+        pytest.param({"STUB_NEN_CO_RA": _ANH_B}, id="loi-ma-van-in-ID-hop-le"),
+    ],
+)
+def test_ca8c_loi_doc_anh_nen_KHONG_thanh_thieu_anh_cung_KHONG_thanh_co(tmp_path, bien):
+    """Rc ≠ 0 mà không có đúng chữ "No such image" là LỖI ĐỌC — kể cả khi stdout là một ID hợp lệ."""
+    repo, anh = _san_khau_ngx(tmp_path)
+    kq = _chay_apply(
+        repo, anh, STUB_NEN_CO_RC="1", **bien,
+        STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A,
+    )
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"không đọc được ảnh nền mà cổng vẫn XANH:\n{ra}"
+    assert "KHÔNG đọc được ảnh nền" in ra, f"lỗi đọc không được báo là lỗi đọc:\n{ra}"
+    assert "CHƯA CÓ trong image store" not in ra, f"lỗi Docker bị hiểu thành thiếu ảnh:\n{ra}"
+    assert _THONG_DIEP_LECH_CAU_HINH not in ra, f"lỗi Docker bị báo thành lệch cấu hình:\n{ra}"
+    assert not _da_chay_anh_nen(_nhat_ky_apply(repo)), "lỗi đọc bị coi là 'có ảnh nền' ⇒ đã `docker run`"
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_ca8e_chieu_xuoi_LECH_va_anh_nen_vang_thi_van_bao_LECH(tmp_path):
+    """Chiều xuôi đã thấy lệch thì kết luận là LỆCH — "chưa đo được chiều ngược" yếu hơn, không được che nó."""
+    repo, anh = _san_khau_ngx(tmp_path)
+    t = repo / "nginx" / "templates" / "default.conf.template"
+    t.write_text(_doc(t) + "\n# dòng mới chưa vào ảnh\n", encoding="utf-8", newline="")
+    kq = _chay_apply(
+        repo, anh, STUB_NEN_CO_RC="1", STUB_NEN_CO_LOI=_NO_SUCH_IMAGE,
+        STUB_ANH_CANDIDATE=_ANH_A, STUB_ANH_NGINX=_ANH_A,
+    )
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode != 0, f"template trôi + ảnh nền vắng mà cổng vẫn XANH:\n{ra}"
+    assert "LỆCH" in ra and _THONG_DIEP_LECH_CAU_HINH in ra, f"lệch nội dung không được báo:\n{ra}"
+    assert "CHƯA CÓ trong image store" not in ra, f"lệch nội dung bị che bằng 'thiếu ảnh nền':\n{ra}"
+
+
+# =============================================================================
+# scripts/nginx-anh-nen.sh — chuẩn bị ảnh nền TRƯỚC build (deploy Step 4, sau 3b)
+# =============================================================================
+# Sân khấu riêng, docker giả tối giản: script chỉ dùng `image inspect` và
+# `pull`. Mỗi ca vi phạm đúng MỘT điều; ca "da-co" là ĐỐI CHỨNG. `treo` của
+# `image inspect` ngủ 30 s không in gì — dài hơn mọi ngân sách ca test đặt, ngắn
+# hơn `--timeout=60` của bộ đột biến (bản phá đỏ bằng phép đo thời gian của
+# chính ca, không bằng pytest-timeout).
+_DG_NEN_GIA = "sha256:" + "4" * 64
+_STUB_DOCKER_NEN = r"""#!/usr/bin/env bash
+printf '%s\n' "docker $*" >> "$QLTS_STUB_LOG"
+_D=@DG@
+case "$1 $2" in
+  "image inspect")
+    if [ -e "$QLTS_STUB_LOG.da_keo" ]; then _m="${STUB_SAU_KEO:-co}"; else _m="${STUB_TRUOC:-thieu}"; fi
+    case "$_m" in
+      co)         echo "$_D nginx@$_D" ;;
+      co-co-dien) echo "sha256:9999999999999999999999999999999999999999999999999999999999999999 nginx@$_D" ;;
+      thieu)      echo "Error response from daemon: No such image: ${*: -1}" >&2; exit 1 ;;
+      loi)        echo "Cannot connect to the Docker daemon (CANARY)" >&2; exit 1 ;;
+      loi-in-id)  echo "$_D nginx@$_D"; exit 1 ;;
+      sai-digest) echo "sha256:8888888888888888888888888888888888888888888888888888888888888888 nginx@sha256:8888888888888888888888888888888888888888888888888888888888888888" ;;
+      treo)       exec sleep 30 ;;
+    esac ;;
+  "pull "*)
+    case "${STUB_KEO:-ok}" in
+      ok)     : > "$QLTS_STUB_LOG.da_keo"; echo "Status: Downloaded newer image for $2" ;;
+      loi-in) echo "Digest: $_D"; echo "Status: Downloaded newer image for $2"; exit 1 ;;
+      treo)   exec sleep 60 ;;
+    esac ;;
+  *) echo "docker gia: lenh la: $*" >&2; exit 98 ;;
+esac
+exit 0
+"""
+_FROM_NEN_GIA = f"FROM nginx:1.30.6-alpine@{_DG_NEN_GIA}\nCOPY nginx.conf /etc/nginx/nginx.conf\n"
+
+
+def _san_khau_nen(tmp_path: Path, dockerfile: str = _FROM_NEN_GIA) -> Path:
+    san = tmp_path / "nen"
+    repo = san / "repo"
+    (san / "bin").mkdir(parents=True)
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "nginx").mkdir()
+    shutil.copy2(_GOC / "scripts" / "nginx-anh-nen.sh", repo / "scripts" / "nginx-anh-nen.sh")
+    (repo / "nginx" / "Dockerfile").write_text(dockerfile, encoding="utf-8", newline="")
+    stub = san / "bin" / "docker"
+    stub.write_text(_STUB_DOCKER_NEN.replace("@DG@", _DG_NEN_GIA), encoding="utf-8", newline="\n")
+    stub.chmod(0o755)
+    return repo
+
+
+def _chay_nen(repo: Path, lenh: str, **bien: str) -> tuple[subprocess.CompletedProcess, str]:
+    nhat_ky = repo.parent / "lenh.log"
+    nhat_ky.write_text("", encoding="utf-8")
+    moi_truong = {
+        **os.environ,
+        "MSYS_NO_PATHCONV": "1",
+        "PATH": str(repo.parent / "bin") + os.pathsep + os.environ.get("PATH", ""),
+        "QLTS_STUB_LOG": str(nhat_ky).replace("\\", "/"),
+        **bien,
+    }
+    kq = subprocess.run(
+        [_BASH, str(repo / "scripts" / "nginx-anh-nen.sh"), lenh],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=moi_truong, cwd=str(repo), timeout=120,
+    )
+    return kq, nhat_ky.read_text(encoding="utf-8")
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+@pytest.mark.parametrize(
+    "bien,rc_mong,so_keo,so_doc,chuoi",
+    [
+        pytest.param({"STUB_TRUOC": "co"}, 0, 0, 1, "ĐÃ CÓ", id="da-co-doi-chung"),
+        pytest.param({"STUB_TRUOC": "co-co-dien"}, 0, 0, 1, "ĐÃ CÓ", id="da-co-store-co-dien-qua-RepoDigest"),
+        pytest.param({}, 0, 1, 2, "✓ ảnh nền", id="vang-thi-keo-roi-kiem-lai"),
+        pytest.param({"STUB_KEO": "loi-in"}, 3, 1, 1, "docker pull rc=1", id="keo-loi-ma-van-in-Downloaded"),
+        pytest.param({"STUB_KEO": "treo", "QLTS_NGINX_NEN_HAN_PULL": "2"}, 3, 1, 1, "rc=124",
+                     id="keo-treo-thi-het-han"),
+        pytest.param({"STUB_SAU_KEO": "thieu"}, 4, 1, 2, "sau khi kéo", id="keo-xong-van-vang"),
+        pytest.param({"STUB_SAU_KEO": "sai-digest"}, 4, 1, 2, "sau khi kéo", id="keo-xong-sai-digest"),
+        pytest.param({"STUB_TRUOC": "loi"}, 2, 0, 1, "KHÔNG đọc được", id="loi-docker-thi-KHONG-keo"),
+        pytest.param({"STUB_TRUOC": "loi-in-id"}, 2, 0, 1, "KHÔNG đọc được", id="loi-ma-van-in-ID-thi-KHONG-keo"),
+        pytest.param({"STUB_TRUOC": "sai-digest"}, 4, 0, 1, "KHÔNG mang digest", id="co-ten-sai-digest-thi-KHONG-keo-de"),
+        pytest.param({"QLTS_NGINX_NEN_HAN_PULL": "5m"}, 1, 0, 0, "không phải số giây", id="han-keo-khong-phai-so"),
+        pytest.param({"QLTS_NGINX_NEN_NGAN_SACH": "5m"}, 1, 0, 0, "không phải số giây", id="ngan-sach-khong-phai-so"),
+        # F101: ngân sách 5 s không chứa nổi một lần kéo (hạn ≥ 1 s + ân hạn -k 10 s) ⇒ KHÔNG bắt đầu kéo.
+        # Docker giả kéo tức thì: bản nào vẫn kéo (vd. đưa `timeout 0` = TẮT hạn) đỏ ở rc + số lần kéo.
+        pytest.param({"QLTS_NGINX_NEN_NGAN_SACH": "5"}, 5, 0, 1, "HẾT NGÂN SÁCH", id="ngan-sach-khong-du-thi-KHONG-keo"),
+    ],
+)
+def test_nginx_anh_nen_chuan_bi(tmp_path, bien, rc_mong, so_keo, so_doc, chuoi):
+    repo = _san_khau_nen(tmp_path)
+    kq, nhat_ky = _chay_nen(repo, "chuan-bi", **bien)
+    ra = kq.stdout + kq.stderr
+    assert kq.returncode == rc_mong, f"mã {kq.returncode}, mong {rc_mong}:\n{ra}\n{nhat_ky}"
+    assert chuoi in ra, f"thiếu '{chuoi}':\n{ra}"
+    keo = [d for d in nhat_ky.splitlines() if d.startswith("docker pull ")]
+    doc = [d for d in nhat_ky.splitlines() if d.startswith("docker image inspect ")]
+    assert len(keo) == so_keo, f"{len(keo)} lần kéo, mong {so_keo}:\n{nhat_ky}"
+    assert len(doc) == so_doc, f"{len(doc)} lần đọc, mong {so_doc}:\n{nhat_ky}"
+    for d in keo:
+        assert d == f"docker pull nginx:1.30.6-alpine@{_DG_NEN_GIA}", f"không kéo ĐÚNG tham chiếu ghim digest: {d}"
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+@pytest.mark.parametrize(
+    "bien,so_keo,so_doc,cum",
+    [
+        # Ngân sách 4 s: lần đọc ĐẦU treo; chưa kéo gì.
+        pytest.param({"STUB_TRUOC": "treo", "QLTS_NGINX_NEN_NGAN_SACH": "4"}, 0, 1, "TRƯỚC khi kéo",
+                     id="doc-treo-TRUOC-keo"),
+        # Ngân sách 14 s: đọc đầu "No such image", kéo tức thì (cần còn ≥ 11 s mới được BẮT ĐẦU kéo), lần
+        # đọc LẠI treo — hạn của nó là phần còn lại của CÙNG ngân sách, không phải một hạn mới.
+        pytest.param({"STUB_SAU_KEO": "treo", "QLTS_NGINX_NEN_NGAN_SACH": "14"}, 1, 2, "SAU khi kéo",
+                     id="doc-treo-SAU-keo"),
+    ],
+)
+def test_nginx_anh_nen_doc_treo_thi_HET_HAN_trong_ngan_sach(tmp_path, bien, so_keo, so_doc, cum):
+    """F101: MỌI lời gọi Docker của `chuan-bi` nằm trong ngân sách của bước, không riêng `docker pull`.
+
+    Bất biến: một `docker image inspect` treo bị cắt TRONG `QLTS_NGINX_NEN_NGAN_SACH` (deploy.sh truyền
+    hạn động của phiên) ⇒ mã 5 và thông điệp HẾT HẠN — trạng thái CHƯA BIẾT, không bị đọc thành "không có
+    ảnh" (mã 3 sẽ đi kéo, mã 4 nói "vẫn không có"). Mỗi ca treo đúng MỘT lần đọc; phần còn lại là đường
+    thuận lợi. Phép đo thời gian đứng ĐẦU: bản gỡ hạn đỏ vì bước chạy quá ngân sách, đúng lý do.
+    """
+    import time
+
+    repo = _san_khau_nen(tmp_path)
+    bd = time.monotonic()
+    kq, nhat_ky = _chay_nen(repo, "chuan-bi", **bien)
+    tg = time.monotonic() - bd
+    ra = kq.stdout + kq.stderr
+    ngan_sach = int(bien["QLTS_NGINX_NEN_NGAN_SACH"])
+    assert tg <= ngan_sach + 3, (
+        f"bước chạy {tg:.1f}s > ngân sách {ngan_sach}s (+3 s dung sai): đọc Docker treo KHÔNG bị cắt\n{ra}\n{nhat_ky}"
+    )
+    assert kq.returncode == 5, f"mã {kq.returncode}, mong 5 (HẾT HẠN):\n{ra}\n{nhat_ky}"
+    assert "HẾT HẠN" in ra and cum in ra, f"thông điệp không nói HẾT HẠN {cum}:\n{ra}"
+    assert "vẫn không đạt" not in ra and "KHÔNG đọc được ảnh nền" not in ra, (
+        f"hết hạn bị báo thành vắng ảnh / lỗi đọc khác:\n{ra}"
+    )
+    keo = [d for d in nhat_ky.splitlines() if d.startswith("docker pull ")]
+    doc = [d for d in nhat_ky.splitlines() if d.startswith("docker image inspect ")]
+    assert len(keo) == so_keo, f"{len(keo)} lần kéo, mong {so_keo}:\n{nhat_ky}"
+    assert len(doc) == so_doc, f"{len(doc)} lần đọc, mong {so_doc}:\n{nhat_ky}"
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+@pytest.mark.parametrize(
+    "dockerfile",
+    [
+        pytest.param("FROM nginx:1.27-alpine\n", id="tag-troi-khong-digest"),
+        pytest.param("FROM nginx@sha256:abc\n", id="digest-cut"),
+        pytest.param(f"FROM a@{_DG_NEN_GIA}\nFROM b@{_DG_NEN_GIA}\n", id="hai-FROM"),
+        pytest.param(f"FROM --platform=linux/amd64 a@{_DG_NEN_GIA}\n", id="co-platform"),
+        pytest.param(f"FROM a@{_DG_NEN_GIA} AS x\n", id="co-AS"),
+    ],
+)
+def test_nginx_anh_nen_tu_choi_FROM_khong_ghim_digest_va_KHONG_goi_docker(tmp_path, dockerfile):
+    repo = _san_khau_nen(tmp_path, dockerfile)
+    for lenh in ("in", "chuan-bi"):
+        kq, nhat_ky = _chay_nen(repo, lenh)
+        assert kq.returncode == 1, f"`{lenh}` nhận FROM không hợp lệ:\n{kq.stdout}{kq.stderr}"
+        assert nhat_ky == "", f"`{lenh}` vẫn gọi docker khi FROM không hợp lệ:\n{nhat_ky}"
+
+
+def _ham_anh_nen_cua_apply() -> str:
+    ma = _doc(_GOC / "scripts" / "nginx-apply.sh")
+    m = re.search(r"^_anh_nen\(\) \{\n.*?^\}\n", ma, re.M | re.S)
+    assert m, "không tìm thấy hàm `_anh_nen` trong nginx-apply.sh"
+    return m.group(0)
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+@pytest.mark.parametrize(
+    "dockerfile",
+    [
+        pytest.param(f"FROM nginx:1.30.6-alpine@{_DG_NEN_GIA}\n", id="tag-va-digest"),
+        pytest.param(f"  FROM   nginx@{_DG_NEN_GIA}   \n", id="khoang-trang"),
+        pytest.param(f"FROM nginx:1.30.6-alpine@{_DG_NEN_GIA}\r\nCOPY a /b\r\n", id="CRLF"),
+        pytest.param("FROM nginx:1.27-alpine\n", id="tag-troi"),
+        pytest.param(f"FROM a@{_DG_NEN_GIA}\nFROM b@{_DG_NEN_GIA}\n", id="hai-FROM"),
+        pytest.param(f"FROM --platform=linux/amd64 a@{_DG_NEN_GIA}\n", id="co-platform"),
+        pytest.param(f"FROM a@{_DG_NEN_GIA} AS x\n", id="co-AS"),
+        pytest.param(None, id="nginx-Dockerfile-that"),
+    ],
+)
+def test_hai_bo_phan_tich_FROM_cho_CUNG_tham_chieu(tmp_path, dockerfile):
+    """CLAUDE.md §7: `_anh_nen` (G1) và `nginx-anh-nen.sh in` (chuẩn bị) là HAI bản phân tích FROM.
+
+    Khoá: bản chuẩn bị nhận ⇒ G1 nhận và ra CÙNG chuỗi (ảnh được kéo đúng là ảnh
+    G1 sẽ hỏi). Bản chuẩn bị chỉ được khắt khe HƠN ở đúng một chỗ: bắt buộc digest.
+    """
+    df = tmp_path / "Dockerfile"
+    if dockerfile is None:
+        df.write_bytes((_THU_MUC_NGINX / "Dockerfile").read_bytes())
+    else:
+        df.write_bytes(dockerfile.encode("utf-8"))
+    duong = str(df).replace("\\", "/")
+    g1 = subprocess.run(
+        [_BASH, "-c", _ham_anh_nen_cua_apply() + "\n_anh_nen"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "_DOCKERFILE_NGINX": duong},
+    )
+    moi = subprocess.run(
+        [_BASH, str(_GOC / "scripts" / "nginx-anh-nen.sh"), "in"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "QLTS_NGINX_DOCKERFILE": duong},
+    )
+    if moi.returncode == 0:
+        assert g1.returncode == 0 and g1.stdout == moi.stdout, (
+            f"hai bộ phân tích ra KHÁC nhau: G1 rc={g1.returncode} '{g1.stdout.strip()}' "
+            f"≠ chuẩn bị '{moi.stdout.strip()}'"
+        )
+    else:
+        assert g1.returncode != 0 or not re.search(
+            r"@sha256:[0-9a-f]{64}$", g1.stdout.strip()
+        ), f"bản chuẩn bị từ chối một FROM ghim digest mà G1 nhận: '{g1.stdout.strip()}'\n{moi.stderr}"
+    if dockerfile is None:
+        assert moi.returncode == 0, f"nginx/Dockerfile THẬT không ghim digest:\n{moi.stderr}"
 
 
 @_bo_qua_neu_khong_chay_duoc_bash

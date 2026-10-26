@@ -943,6 +943,17 @@ echo "nginx-apply $*" >> "$QLTS_STUB_LOG"
 exit 0
 """
 
+# Step 4 gọi `scripts/nginx-anh-nen.sh chuan-bi` (ảnh nền nginx vào image store
+# ngay TRƯỚC build, trước 4c). Hành vi thật của script được kiểm ở
+# test_nginx_template_packaging.py; ở đây chỉ cần dấu vết lượt gọi, ngân sách
+# TỔNG của bước (F101) + cần gạt mã thoát. Một nguồn cho cả hai bộ deploy
+# (test_deploy_ghim_sha import hằng này).
+_STUB_NGINX_ANH_NEN = r"""#!/usr/bin/env bash
+echo "nginx-anh-nen $*" >> "$QLTS_STUB_LOG"
+echo "nginx-anh-nen ngan_sach=${QLTS_NGINX_NEN_NGAN_SACH:-KHONG_DAT}" >> "$QLTS_STUB_LOG"
+exit "${STUB_NGINX_ANH_NEN_RC:-0}"
+"""
+
 # Nhánh lùi của Step 4c đo nginx ĐANG PHỤC VỤ bằng `scripts/nginx-verify.sh`.
 # Một nguồn cho cả hai bộ deploy (test_deploy_ghim_sha import hằng này).
 _STUB_NGINX_VERIFY = r"""#!/usr/bin/env bash
@@ -1127,6 +1138,7 @@ def _dung_san_khau(
     for ten, than in (
         ("scripts/nginx-apply.sh", _STUB_NGINX_APPLY),
         ("scripts/nginx-verify.sh", _STUB_NGINX_VERIFY),
+        ("scripts/nginx-anh-nen.sh", _STUB_NGINX_ANH_NEN),
         ("scripts/rollback-preflight.sh", _STUB_ROLLBACK_PREFLIGHT),
         ("bin/docker", _STUB_DOCKER),
         ("bin/git", _STUB_GIT),
@@ -2157,6 +2169,62 @@ def test_p6_mo_ta_khong_lay_msg_tu_pydantic() -> None:
         if isinstance(n, ast.Constant) and n.value == "msg"
     ]
     assert not doc_msg, f"mo_ta_loi_an_toan còn đọc 'msg' tại dòng {doc_msg}"
+
+
+# =============================================================================
+# Step 4 — ảnh nền nginx vào image store ngay TRƯỚC build, trước 4c (run 40184923904)
+# =============================================================================
+# Run 40184923904 (25-10-2026): build thành công trên image store containerd mà
+# không để lại ảnh nền mang tên tham chiếu ⇒ Step 8b dừng ở cổng G1 SAU KHI ứng
+# dụng đã được thay. Bất biến: chuẩn bị ảnh nền chạy TRƯỚC build và trước khi
+# đóng cửa ghi (4c); hỏng thì dừng ngay — chưa build, chưa dừng, chưa CSDL. Nó
+# đứng SAU 3b có chủ ý: đặt trước 3b thì hạn động của nó che cổng kế hoạch phiên
+# (xem test_kiem_nguoc_v7d_go_tung_guard_phien[G0]). Hành vi của chính
+# `nginx-anh-nen.sh` được kiểm ở test_nginx_template_packaging.py.
+
+_MOC_ANH_NEN = "nginx-anh-nen chuan-bi"
+
+
+@_bo_qua_neu_khong_posix
+def test_anh_nen_nginx_chuan_bi_TRUOC_build_va_dong_cua(tmp_path: Path) -> None:
+    """Đường thuận lợi: gọi ĐÚNG MỘT lần, trước build và trước `docker stop` đầu tiên (4c)."""
+    goc = _dung_san_khau(tmp_path)
+    ket, nhat_ky = _chay_deploy(goc)
+
+    assert ket.returncode == 0, (
+        f"stdout:\n{ket.stdout[-3000:]}\nstderr:\n{ket.stderr[-3000:]}"
+    )
+    dong = nhat_ky.splitlines()
+    goi = [i for i, d in enumerate(dong) if d == _MOC_ANH_NEN]
+    assert len(goi) == 1, f"phải gọi `{_MOC_ANH_NEN}` đúng một lần, thấy {len(goi)}:\n{nhat_ky}"
+    vt_build = next(i for i, d in enumerate(dong) if _MOC_BUILD in d)
+    vt_dung = next(i for i, d in enumerate(dong) if d.startswith("docker stop "))
+    assert goi[0] < vt_build, "chuẩn bị ảnh nền chạy SAU build (4)"
+    assert goi[0] < vt_dung, "chuẩn bị ảnh nền chạy SAU khi đã đóng cửa ghi (4c)"
+    # Đường TAY (không phiên): ngân sách CẢ bước (đọc + kéo + đọc lại) là trần 300 s. Đường phiên: xem
+    # test_v7d_keo_anh_nen_* .
+    assert "nginx-anh-nen ngan_sach=300" in dong, (
+        f"ngân sách bước chuẩn bị ảnh nền ở đường tay không phải trần 300 s:\n{nhat_ky}"
+    )
+
+
+@_bo_qua_neu_khong_posix
+def test_anh_nen_nginx_hong_thi_DUNG_truoc_build_va_dong_cua(tmp_path: Path) -> None:
+    """Chuẩn bị ảnh nền hỏng ⇒ deploy dừng: không build, không đóng cửa ghi, không chạm CSDL."""
+    goc = _dung_san_khau(tmp_path)
+    ket, nhat_ky = _chay_deploy(goc, STUB_NGINX_ANH_NEN_RC="3")
+    ra = ket.stdout + ket.stderr
+
+    assert ket.returncode != 0, f"ảnh nền hỏng mà deploy vẫn xanh:\n{ra[-3000:]}"
+    assert _MOC_ANH_NEN in nhat_ky, "deploy không gọi bước chuẩn bị ảnh nền"
+    assert "chưa chuẩn bị được ảnh nền nginx" in ra, f"thông điệp không nói đúng ca:\n{ra[-2000:]}"
+    for moc, buoc in (
+        (_MOC_BUILD, "4 build"),
+        ("docker stop", "4c đóng cửa ghi"),
+        (_MOC_PGDUMP, "5 pg_dump"),
+        (_MOC_ALEMBIC, "6 migration"),
+    ):
+        assert moc not in nhat_ky, f"ảnh nền hỏng mà vẫn chạy tới Step {buoc}:\n{nhat_ky}"
 
 
 # =============================================================================
