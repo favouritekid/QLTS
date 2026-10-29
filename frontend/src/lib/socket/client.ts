@@ -4,9 +4,25 @@ import { env } from "@/lib/config/env";
 import { useAuthStore } from "../stores/auth.store";
 import { toast } from "sonner";
 import { buildLoginRedirect } from "@/lib/auth/login-redirect";
+import {
+  FORCED_PASSWORD_CHANGE_URL,
+  PASSWORD_CHANGE_REQUIRED_SOCKET_EVENT,
+  PASSWORD_CHANGE_REQUIRED_SOCKET_REASON,
+  isOnForcedPasswordChangePage,
+} from "@/lib/auth/forced-password-change";
+
+/** F131: tới form đổi mật khẩu bị buộc — trừ khi đang ở đó (không tải lại). */
+function goToForcedPasswordChange() {
+  if (typeof window === "undefined") return;
+  if (isOnForcedPasswordChangePage(window.location.pathname)) return;
+  window.location.assign(FORCED_PASSWORD_CHANGE_URL);
+}
 
 class SocketService {
   private socket: Socket | null = null;
+  // F128: server báo socket này sắp bị cắt vì phải đổi mật khẩu ⇒ lần
+  // "io server disconnect" ngay sau KHÔNG phải đăng xuất (phiên HTTP còn sống).
+  private passwordChangeCut = false;
   private pingInterval: NodeJS.Timeout | null = null;
   private revalidateInterval: NodeJS.Timeout | null = null; // ✅ FIX-3
   private reconnectAttempts = 0;
@@ -72,6 +88,9 @@ class SocketService {
       }
       this.reconnectAttempts = 0;
       this.reconnectDelay = 1000;
+      // Cờ chỉ dành cho ĐÚNG lần cắt đã báo trước; kết nối mới thì xoá, để
+      // không nuốt một lần đăng xuất thật về sau.
+      this.passwordChangeCut = false;
       if (this.shutdownReconnectTimer) {
         clearTimeout(this.shutdownReconnectTimer);
         this.shutdownReconnectTimer = null;
@@ -89,11 +108,25 @@ class SocketService {
       }
     });
 
+    // F128/F131: thông báo tới TRƯỚC lệnh cắt (cùng websocket). Không có nó,
+    // lần cắt sau đây bị coi là đăng xuất và xoá auth store — người dùng mất
+    // form cho tới khi tự F5.
+    this.socket.on(PASSWORD_CHANGE_REQUIRED_SOCKET_EVENT, () => {
+      console.warn("[SocketService] 🔐 Password change required — socket will be cut");
+      this.passwordChangeCut = true;
+      goToForcedPasswordChange();
+    });
+
     this.socket.on("disconnect", (reason) => {
       console.warn("[SocketService] ❌ Disconnected:", reason);
       this.stopHeartbeat();
       this.stopRevalidation(); // ✅ FIX-3: Stop revalidation on disconnect
       if (reason === "io server disconnect") {
+        if (this.passwordChangeCut) {
+          // Cắt vì phải đổi mật khẩu, KHÔNG phải mất phiên: giữ auth store.
+          this.passwordChangeCut = false;
+          return;
+        }
         console.error("[SocketService] Server disconnected session. Forcing logout.");
         useAuthStore.getState().logout();
       }
@@ -185,6 +218,13 @@ class SocketService {
                 "[SocketService] Revalidation failed:",
                 response.reason
               );
+              if (response.reason === PASSWORD_CHANGE_REQUIRED_SOCKET_REASON) {
+                // F131: phiên còn sống, chỉ phải đổi mật khẩu ⇒ tới form,
+                // không đăng xuất.
+                this.disconnect();
+                goToForcedPasswordChange();
+                return;
+              }
               this.disconnect();
 
               // Force logout user

@@ -34,6 +34,11 @@ import {
   isRefreshFailure,
 } from "./refresh";
 import { buildLoginRedirect } from "@/lib/auth/login-redirect";
+import {
+  FORCED_PASSWORD_CHANGE_URL,
+  isOnForcedPasswordChangePage,
+  isPasswordChangeRequiredBody,
+} from "@/lib/auth/forced-password-change";
 import { isApiLoggedOut, setApiLoggedOut } from "./session-flags";
 import { clearClientAuthState } from "@/lib/auth/clear-client-auth-state";
 export const API_BASE_URL = env.NEXT_PUBLIC_API_URL;
@@ -279,19 +284,17 @@ api.interceptors.response.use(
     // ========================================
     if (
       error.response?.status === 403 &&
-      typeof error.response?.data === "object" &&
-      error.response.data !== null &&
-      "detail" in error.response.data &&
-      typeof error.response.data.detail === "object" &&
-      error.response.data.detail !== null &&
-      "code" in error.response.data.detail &&
-      error.response.data.detail.code === "PASSWORD_CHANGE_REQUIRED"
+      isPasswordChangeRequiredBody(error.response?.data)
     ) {
-      console.log("[API Client] 🔐 Password change required - redirecting...");
-
-      if (typeof window !== "undefined") {
-        // Redirect to change-password page with a flag
-        window.location.href = "/settings/change-password?forced=true";
+      // F131: tới trang CÓ form (`/settings`). Đang ở đó rồi thì chỉ reject —
+      // các query của khung dashboard vẫn 403 và mỗi lần chuyển trang lại bắn
+      // chúng lần nữa (vòng lặp tải lại).
+      if (
+        typeof window !== "undefined" &&
+        !isOnForcedPasswordChangePage(window.location.pathname)
+      ) {
+        console.log("[API Client] 🔐 Password change required - redirecting...");
+        window.location.href = FORCED_PASSWORD_CHANGE_URL;
       }
 
       return Promise.reject(error);

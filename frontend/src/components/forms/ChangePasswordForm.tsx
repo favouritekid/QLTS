@@ -64,18 +64,25 @@ const changePasswordSchema = z
 type ChangePasswordFormValues = z.infer<typeof changePasswordSchema>;
 
 export function ChangePasswordForm() {
-  const { changePassword, isLoading: isChangingPassword } = useAuth();
+  const { changePassword, isLoading: isChangingPassword, user } = useAuth();
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [pendingData, setPendingData] = useState<ChangePasswordFormValues | null>(null);
-  
-  // C2 SECURITY FIX: Check if user was forced to change password
-  const searchParams = useSearchParams();
-  const isForced = searchParams.get("forced") === "true";
 
-  // Fetch active sessions count
+  // C2 SECURITY FIX: Check if user was forced to change password.
+  // F131: URL `?forced=true` (do interceptor/SSR/socket dẫn tới) HOẶC cờ của
+  // chính user (`/users/me`, vẫn đọc được khi bị buộc) — vào thẳng `/settings`
+  // cũng phải nhận ra.
+  const searchParams = useSearchParams();
+  const isForced =
+    searchParams.get("forced") === "true" || user?.password_reset_required === true;
+
+  // Fetch active sessions count — chỉ để hiện số thiết bị. Khi bị buộc đổi mật
+  // khẩu backend chặn `GET /api/sessions` (403), và đổi mật khẩu đằng nào cũng
+  // thu hồi MỌI phiên ⇒ không gọi.
   const { data: sessionsData, isLoading: isLoadingSessions } = useQuery({
     queryKey: sessionKeys.list(),
     queryFn: getActiveSessions,
+    enabled: !isForced,
     retry: 1,
     staleTime: 5000, // 5 seconds - refresh faster after session changes
     refetchOnWindowFocus: true, // Refetch when user switches back to this tab

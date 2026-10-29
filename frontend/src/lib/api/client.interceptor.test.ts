@@ -350,3 +350,73 @@ describe("interceptor CSRF-recovery — cùng một triage với nhánh 401", ()
     expect(authStore.logout).toHaveBeenCalled();
   });
 });
+
+describe("interceptor 403 PASSWORD_CHANGE_REQUIRED (F131) — tới form, không lặp", () => {
+  function passwordChangeRequired403(): AxiosError {
+    return new AxiosError(
+      "Forbidden",
+      "ERR_BAD_REQUEST",
+      { url: "/api/notifications", headers: {} } as never,
+      undefined,
+      {
+        status: 403,
+        data: {
+          detail: { code: "PASSWORD_CHANGE_REQUIRED", message: "x" },
+          error_code: "HTTP_403",
+        },
+        statusText: "Forbidden",
+        headers: {},
+        config: {},
+      } as never,
+    );
+  }
+
+  function at(pathname: string) {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: { pathname, search: "", href: "" },
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setApiLoggedOut(false);
+  });
+
+  afterEach(() => {
+    setApiLoggedOut(false);
+  });
+
+  it("ở trang khác → chuyển tới /settings?forced=true (route CÓ form), giữ phiên", async () => {
+    at("/leads");
+    const original = passwordChangeRequired403();
+
+    const rejected = await captured.onError!(original).catch((e) => e);
+
+    expect(rejected).toBe(original);
+    expect(window.location.href).toBe("/settings?forced=true");
+    expect(isApiLoggedOut()).toBe(false);
+    expect(authStore.logout).not.toHaveBeenCalled();
+    expect(mockedRefresh).not.toHaveBeenCalled();
+  });
+
+  it("một trang con khác của Cài đặt vẫn chuyển (chỉ /settings có form)", async () => {
+    at("/settings/security");
+
+    await captured.onError!(passwordChangeRequired403()).catch(() => undefined);
+
+    expect(window.location.href).toBe("/settings?forced=true");
+  });
+
+  it("ĐANG ở /settings → KHÔNG chuyển nữa (khung dashboard vẫn 403 ⇒ vòng lặp tải lại)", async () => {
+    at("/settings");
+    const original = passwordChangeRequired403();
+
+    const rejected = await captured.onError!(original).catch((e) => e);
+
+    expect(rejected).toBe(original);
+    expect(window.location.href).toBe("");
+    expect(mockedRefresh).not.toHaveBeenCalled();
+  });
+});

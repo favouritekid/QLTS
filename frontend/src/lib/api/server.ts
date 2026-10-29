@@ -31,6 +31,10 @@
 import { cookies, headers as nextHeaders } from 'next/headers';
 import { redirect, unstable_rethrow } from 'next/navigation';
 import { isValidRedirect, stripRsc } from '@/lib/auth/login-redirect';
+import {
+  FORCED_PASSWORD_CHANGE_URL,
+  isPasswordChangeRequiredBody,
+} from '@/lib/auth/forced-password-change';
 import type {
   Lead,
   LeadDetail,
@@ -261,6 +265,22 @@ async function serverFetch<T>(
 
     const errorText = await response.text();
     let errorMessage: string;
+
+    // F131: người dùng bị buộc đổi mật khẩu ⇒ tới form, không rơi vào error
+    // boundary (`detail` là object nên thông điệp dưới thành `[object Object]`).
+    // Trang đích (`/settings`) không gọi API khi render phía server nên không
+    // thể quay lại đây thành vòng lặp.
+    if (response.status === 403) {
+      let errorBody: unknown;
+      try {
+        errorBody = JSON.parse(errorText);
+      } catch {
+        errorBody = undefined;
+      }
+      if (isPasswordChangeRequiredBody(errorBody)) {
+        redirect(FORCED_PASSWORD_CHANGE_URL);
+      }
+    }
 
     try {
       const errorJson = JSON.parse(errorText);

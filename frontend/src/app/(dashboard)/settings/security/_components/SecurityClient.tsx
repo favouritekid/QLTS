@@ -11,7 +11,6 @@ import {
   useSessions,
   useRevokeSession,
   useRevokeAllOtherSessions,
-  sessionKeys,
 } from "@/hooks/useSessions";
 import { api } from "@/lib/api/client";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
@@ -127,14 +126,13 @@ export function SecurityClient({ initialSessionsData }: SecurityClientProps) {
         setTimeout(() => window.location.assign(next.url), 2000);
         return;
       }
-      // Cross-invalidation: secure account affects sessions, login history, and auth.
+      // F131: cờ đã bật ⇒ login history / sessions giờ chỉ ra 403; chỉ làm mới
+      // `/users/me` (vẫn đọc được) để form thấy cờ.
       // ``["suspiciousCount"]`` removed — see confirmMutation comment above.
-      queryClient.invalidateQueries({ queryKey: ["loginHistory"] });
-      queryClient.invalidateQueries({ queryKey: sessionKeys.all });
       queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
       setTimeout(() => {
         setSuccessMessage(null);
-        router.push("/settings");
+        router.push(next.url);
       }, 2000);
     },
     onError: () => {

@@ -16,9 +16,9 @@ describe("secureAccountOutcome", () => {
     expect(kq.message).not.toContain("đổi mật khẩu");
   });
 
-  it("relogin_required=false ⇒ giữ phiên, tới trang cài đặt để đổi mật khẩu", () => {
+  it("relogin_required=false ⇒ giữ phiên, tới form đổi mật khẩu BỊ BUỘC", () => {
     const kq = secureAccountOutcome({ message: "x", sessions_revoked: 2, relogin_required: false });
-    expect(kq.next).toEqual({ kind: "settings" });
+    expect(kq.next).toEqual({ kind: "settings", url: "/settings?forced=true" });
     expect(kq.message).toContain("2 phiên");
     expect(kq.message).toContain("đổi mật khẩu");
   });
@@ -39,5 +39,13 @@ describe("call site ở hai màn hình Bảo mật tài khoản", () => {
     expect(nguon).toMatch(/secureAccountOutcome\(response\)/);
     expect(nguon).toMatch(/kind === "relogin"[\s\S]{0,400}window\.location\.assign\(next\.url\)/);
     expect(nguon).not.toMatch(/Đang chuyển đến trang đổi mật khẩu/);
+  });
+
+  // F131: nhánh giữ phiên phải tới ĐÚNG đích của helper (form bị buộc), không
+  // còn `router.push("/settings")` cứng.
+  it.each(MAN_HINH)("%s: nhánh giữ phiên đi tới next.url của helper", (tep) => {
+    const nguon = readFileSync(join(process.cwd(), tep), "utf8");
+    expect(nguon).toMatch(/router\.push\(next\.url\)/);
+    expect(nguon).not.toMatch(/router\.push\("\/settings"\)/);
   });
 });
