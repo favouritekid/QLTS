@@ -30,7 +30,7 @@ click-repl==0.3.0
 colorama==0.4.6
 cryptography==49.0.0
 Deprecated==1.2.18
-dnspython==2.8.0
+dnspython==2.9.0
 ecdsa==0.19.2
 email-validator==2.3.0
 et_xmlfile==2.0.0
