@@ -13,13 +13,17 @@
  *    401 rồi rơi vào lối `reauth`, vốn dành cho phiên CÒN hiệu lực).
  */
 import type { SecureAccountResponse } from "@/types/security";
+import { FORCED_PASSWORD_CHANGE_URL } from "./forced-password-change";
 import { buildLoginRedirect } from "./login-redirect";
 
 export interface SecureAccountOutcome {
   /** Câu báo thành công hiển thị cho người dùng. */
   message: string;
-  /** Đích điều hướng sau khi báo. */
-  next: { kind: "settings" } | { kind: "relogin"; url: string };
+  /**
+   * Đích điều hướng sau khi báo. `settings`: form đổi mật khẩu ở chế độ BỊ
+   * BUỘC (F131) — backend đã bật cờ, mọi API khác giờ trả 403.
+   */
+  next: { kind: "settings"; url: string } | { kind: "relogin"; url: string };
 }
 
 export function secureAccountOutcome(response: SecureAccountResponse): SecureAccountOutcome {
@@ -35,6 +39,6 @@ export function secureAccountOutcome(response: SecureAccountResponse): SecureAcc
     message:
       `Tài khoản đã được bảo mật. ${response.sessions_revoked} phiên đã bị thu hồi. ` +
       "Đang chuyển đến trang đổi mật khẩu...",
-    next: { kind: "settings" },
+    next: { kind: "settings", url: FORCED_PASSWORD_CHANGE_URL },
   };
 }

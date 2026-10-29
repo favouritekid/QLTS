@@ -298,12 +298,13 @@ export function LoginHistoryClient() {
         setTimeout(() => window.location.assign(next.url), 2000);
         return;
       }
-      queryClient.invalidateQueries({ queryKey: ["loginHistory"] });
+      // F131: cờ đã bật ⇒ `loginHistory` giờ chỉ ra 403; chỉ làm mới
+      // `/users/me` (vẫn đọc được) để form thấy cờ.
       queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
-      // R1+R2: Redirect to settings page after 2 seconds (user should change password)
+      // R1+R2: Redirect to the forced change-password form after 2 seconds
       setTimeout(() => {
         setSuccessMessage(null);
-        router.push("/settings");
+        router.push(next.url);
       }, 2000);
     },
     onError: () => {

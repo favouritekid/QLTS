@@ -12,6 +12,7 @@ import redis as _redis_sync  # sync client for the heartbeat watchdog thread
 import socketio
 import structlog
 from fastapi import HTTPException
+from sqlalchemy import select
 
 from . import models, security
 from .core.constants import UserRole
@@ -25,6 +26,10 @@ from .database import (
     safe_redis_get,
 )
 from .utils.token_logging import token_fingerprint
+from .core.password_change import (
+    password_change_required,
+    password_change_required_sql,
+)
 # NOTE: user_service import moved inside function to avoid circular import
 from .socket_metrics import track_event_latency  # ✅ Thêm latency tracker
 from .socket_metrics import (
@@ -214,6 +219,28 @@ def session_room(session_id: int) -> str:
     return f"user_session_{session_id}"
 
 
+# === F128: a user who must change the password keeps NO socket ===
+# Four layers, one predicate (``core.password_change``):
+#   S1 connect refuses (``_get_user_from_token``);
+#   S2 secure-account cuts the user's sockets on every worker, ACK-confirmed
+#      (``enforce_password_change_cut``);
+#   S3 ``revalidate_auth`` refuses (client-driven, every 15 min);
+#   F134 the per-worker watchdog (``password_change_watchdog``) cuts what the
+#      others missed — an unconfirmed S2, a client that never revalidates, a
+#      flag set by hand — about one interval later while flags are readable,
+#      and within ``_PWD_WATCHDOG_BOUND`` whatever happens (F135; scope in the
+#      watchdog's docstring).
+# Every cut tells the socket why FIRST (``PASSWORD_CHANGE_REQUIRED_EVENT``,
+# same websocket), so the client opens the change-password form instead of
+# treating the disconnect as a logout. The notice is advisory; the cut is not.
+PASSWORD_CHANGE_REQUIRED_EVENT = "password_change_required"
+PASSWORD_CHANGE_REFUSAL = "Password change required"
+_PWD_WATCHDOG_INTERVAL = 30.0    # s between two passes over this worker's sockets
+_PWD_WATCHDOG_MAX_STALE = 110.0  # s with no completed pass ⇒ cut every local socket
+_PWD_WATCHDOG_CUT_BUDGET = 10.0  # s that cut may take; overrun ⇒ the loop ends (worker exit)
+_PWD_WATCHDOG_BOUND = _PWD_WATCHDOG_MAX_STALE + _PWD_WATCHDOG_CUT_BUDGET  # 120 s
+
+
 class SocketAuth(NamedTuple):
     """What a socket handshake authenticated: the user and the session row."""
 
@@ -315,6 +342,18 @@ async def _get_user_from_token(token: str) -> SocketAuth:
                 raise HTTPException(
                     status_code=401,
                     detail="User session invalidated"
+                )
+
+            # F128 S1: a user who must change the password gets no socket —
+            # rooms carry business events. Last, like the HTTP gate.
+            if password_change_required(user):
+                log.warning(
+                    "Socket auth refused: password change required",
+                    user_id=user.id,
+                    action="socket.password_change_required",
+                )
+                raise HTTPException(
+                    status_code=403, detail=PASSWORD_CHANGE_REFUSAL
                 )
 
             return SocketAuth(user=user, session_id=db_session.id)
@@ -636,6 +675,16 @@ async def _session_refusal_reason(sid, user_id: int, session_id: int) -> str | N
             )
             return "Session revoked"
 
+        # F128 S3: the session is valid, but its user must change the password.
+        if user_id in await _users_pending_password_change([user_id], db=db):
+            log.warning(
+                "Revalidation failed: password change required",
+                sid=sid,
+                user_id=user_id,
+                action="socket.password_change_required",
+            )
+            return PASSWORD_CHANGE_REFUSAL
+
     return None
 
 
@@ -682,6 +731,9 @@ async def revalidate_auth(sid):
                 return {"valid": False, "reason": "Invalid session"}
 
             reason = await _session_refusal_reason(sid, user_id, session_id)
+            if reason == PASSWORD_CHANGE_REFUSAL:
+                await _notify_and_cut_password_change(sid)
+                return {"valid": False, "reason": reason}
             if reason is not None:
                 await sio.disconnect(sid)
                 return {"valid": False, "reason": reason}
@@ -1134,15 +1186,55 @@ async def force_disconnect_sessions(sessions) -> int:
     return count
 
 
+async def _notify_and_cut_password_change(sid) -> None:
+    """F128: tell socket ``sid`` it is cut for a pending password change (local
+    emit, same websocket ⇒ lands before the DISCONNECT), then cut it. The
+    notice is advisory: its failure never blocks the cut."""
+    try:
+        await sio.emit(
+            PASSWORD_CHANGE_REQUIRED_EVENT, {}, room=sid, ignore_queue=True
+        )
+    except Exception as exc:
+        log.warning(
+            "password_change_required notice failed; disconnecting anyway",
+            sid=sid,
+            error_type=type(exc).__name__,
+        )
+    await sio.disconnect(sid)
+
+
+async def cut_password_change_sockets(user_ids) -> int:
+    """LOCAL (F128 S2): notify then cut every socket of ``user_ids`` on THIS
+    worker. Snapshots participants first (disconnect mutates rooms). Raises on
+    a disconnect failure → caller does NOT ACK (publisher: unconfirmed)."""
+    count = 0
+    for uid in list(user_ids):
+        room = f"user_room_{uid}"
+        for sid in [sid for sid, _ in sio.manager.get_participants("/", room)]:
+            await _notify_and_cut_password_change(sid)
+            count += 1
+    log.info(
+        "cut_password_change_sockets (local)",
+        user_ids=list(user_ids),
+        disconnected=count,
+    )
+    return count
+
+
 async def _handle_force_disconnect(raw: str):
     """Subscriber handler: disconnect the whole batch locally, then ACK ONCE.
     No ACK if the disconnect raises (publisher fail-closes). A session command
-    (``sessions``) disconnects only those sessions' rooms; a user command
-    (``user_ids``) only those users' rooms."""
+    (``sessions``) disconnects only those sessions' rooms; a password-change
+    command (``password_change_user_ids``) notifies then cuts those users'
+    rooms; a user command (``user_ids``) only those users' rooms."""
     data = json.loads(raw)
     command_id = data["command_id"]
     if "sessions" in data:
         await force_disconnect_sessions(data["sessions"])  # raises → no ACK below
+    elif "password_change_user_ids" in data:
+        await cut_password_change_sockets(  # raises → no ACK below
+            data["password_change_user_ids"]
+        )
     else:
         await force_disconnect_user(  # raises → no ACK below
             data["user_ids"], notify=bool(data.get("notify"))
@@ -1181,6 +1273,182 @@ async def consume_force_disconnect(pubsub):
         except Exception:
             pass
 
+
+# =====================================================================
+# F128 / F134: password-change flag — DB read + per-worker watchdog
+# =====================================================================
+
+
+async def _users_pending_password_change(user_ids, db=None) -> set:
+    """The subset of ``user_ids`` whose flag blocks (``password_change_required_sql``).
+    Uses ``db`` when given (``_session_refusal_reason``'s transaction), else a
+    session of its own. No ids ⇒ no query. A DB error RAISES: callers decide
+    (revalidate: refuse; watchdog: bounded staleness)."""
+    ids = sorted({int(uid) for uid in user_ids})
+    if not ids:
+        return set()
+    stmt = select(models.User.id).where(
+        models.User.id.in_(ids), password_change_required_sql()
+    )
+    if db is not None:
+        return set((await db.execute(stmt)).scalars().all())
+    async with AsyncSessionLocal() as own:
+        return set((await own.execute(stmt)).scalars().all())
+
+
+async def _local_socket_users() -> dict:
+    """``{sid: user_id}`` of the sockets connected to THIS worker. A sid with no
+    ``user_id`` yet is mid-``connect`` (S1 judges it) and is skipped; one that
+    left meanwhile is skipped too."""
+    out = {}
+    for sid, _ in list(sio.manager.get_participants("/", None)):
+        try:
+            session = await sio.get_session(sid)
+        except KeyError:
+            continue
+        user_id = (session or {}).get("user_id")
+        if user_id:
+            out[sid] = user_id
+    return out
+
+
+async def _password_change_sweep() -> int:
+    """ONE watchdog pass: read the flags of this worker's socket users, then
+    notify and cut every socket of a flagged user. Raises on any failure
+    (unreadable flags, a cut that fails) — the loop decides; its deadline,
+    not this function, bounds how long the loop waits for it. Returns the
+    number of sockets cut."""
+    socket_users = await _local_socket_users()
+    pending = await _users_pending_password_change(socket_users.values())
+    cut = 0
+    for sid, user_id in socket_users.items():
+        if user_id in pending:
+            await _notify_and_cut_password_change(sid)
+            cut += 1
+    if cut:
+        log.warning(
+            "Password-change watchdog: cut sockets of flagged users",
+            disconnected=cut,
+            user_ids=sorted(pending),
+            action="socket.password_change_watchdog_cut",
+        )
+    return cut
+
+
+async def _cut_every_local_socket() -> int:
+    """Fail-closed: cut EVERY socket of this worker, with no notice (no reason
+    is known). Unbounded by itself — the loop runs it under
+    ``_PWD_WATCHDOG_CUT_BUDGET``."""
+    sids = [sid for sid, _ in list(sio.manager.get_participants("/", None))]
+    for sid in sids:
+        await sio.disconnect(sid)
+    return len(sids)
+
+
+def _reap(task: asyncio.Task) -> None:
+    """Done-callback of a task the watchdog stopped waiting for: collect its
+    outcome so it is never reported as 'exception was never retrieved'."""
+    if not task.cancelled():
+        task.exception()
+
+
+async def _within(coro, timeout: float):
+    """Run ``coro`` as its own task and wait AT MOST ``timeout`` seconds.
+
+    On timeout the task is cancelled and NOT awaited: a coroutine that delays
+    or swallows its cancellation (a slow ``finally``, a driver that ignores
+    it) cannot hold the caller — unlike ``asyncio.timeout``, whose exit waits
+    for the cancelled code to finish. Returns the result, re-raises the
+    task's exception, or raises ``TimeoutError``."""
+    task = asyncio.ensure_future(coro)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=max(0.0, timeout))
+    except asyncio.CancelledError:
+        task.cancel()
+        task.add_done_callback(_reap)
+        raise
+    if task in done:
+        return task.result()
+    task.cancel()
+    task.add_done_callback(_reap)
+    raise TimeoutError(f"not done within {timeout:.3f}s")
+
+
+async def password_change_watchdog():
+    """Per-worker loop (F134/F135), started by the lifespan next to the
+    force-disconnect consumer and supervised the same way: if it ends, the
+    lifespan exits the worker (``os._exit``) and Gunicorn restarts it.
+
+    BOUND (``_PWD_WATCHDOG_BOUND`` = 120 s): a flag committed at ``t`` gets
+    every local socket of that user cut by ``max(t, v) + MAX_STALE +
+    CUT_BUDGET`` — ``v`` = when the socket became visible to a pass (its
+    session saved, after S1) — or this loop ends (worker exit).
+
+    How it holds whatever a pass or a cut does (slow, failing, never
+    returning, delaying or swallowing its cancellation):
+    - ``last_ok`` = the START of the last pass that completed (its read ran
+      after that instant); ``deadline = last_ok + MAX_STALE``;
+    - while fresh, no wait ends after the deadline and the loop waits for a
+      pass only until the deadline (``_within`` — it never waits on the
+      cancelled pass);
+    - at the deadline every local socket is cut, waited for at most
+      ``CUT_BUDGET``; not done ⇒ ``TimeoutError`` ends the loop;
+    - once stale, a recovery pass runs every interval with an interval's
+      budget; each failure cuts every socket again (a socket that connected
+      meanwhile lives at most ``2 × INTERVAL + CUT_BUDGET``).
+
+    SCOPE: the bound is in time the worker's event loop RUNS. A loop blocked
+    by synchronous code runs nothing — this watchdog, the lifespan's exit,
+    and every socket emit alike; once it runs again the overdue deadline is
+    handled at the next step, but emits already queued may run first. A
+    wall-clock bound regardless of the loop needs an independent thread
+    (``os._exit``) — not built (owner decision).
+    """
+    loop = asyncio.get_running_loop()
+    last_ok = loop.time()
+    log.info(
+        "Password-change watchdog running",
+        worker_id=_worker_id,
+        interval_s=_PWD_WATCHDOG_INTERVAL,
+        max_stale_s=_PWD_WATCHDOG_MAX_STALE,
+        cut_budget_s=_PWD_WATCHDOG_CUT_BUDGET,
+    )
+    while True:
+        deadline = last_ok + _PWD_WATCHDOG_MAX_STALE
+        now = loop.time()
+        if now < deadline:
+            await asyncio.sleep(min(_PWD_WATCHDOG_INTERVAL, deadline - now))
+            pass_end = deadline
+        else:
+            # Stale: every local socket was cut at the end of the last turn.
+            await asyncio.sleep(_PWD_WATCHDOG_INTERVAL)
+            pass_end = loop.time() + _PWD_WATCHDOG_INTERVAL
+        start = loop.time()
+        if start < pass_end:
+            try:
+                await _within(_password_change_sweep(), pass_end - start)
+                last_ok = start
+                continue
+            except Exception as exc:  # TimeoutError included; cancel is not
+                log.warning(
+                    "Password-change watchdog pass failed",
+                    stale_s=round(loop.time() - last_ok, 1),
+                    error_type=type(exc).__name__,
+                    action="socket.password_change_watchdog_pass_failed",
+                )
+        if loop.time() >= deadline:
+            log.error(
+                "Password-change watchdog: no pass read the flags within the"
+                " bound; cutting every local socket",
+                stale_s=round(loop.time() - last_ok, 1),
+                action="socket.password_change_watchdog_fail_closed",
+            )
+            n = await _within(_cut_every_local_socket(), _PWD_WATCHDOG_CUT_BUDGET)
+            log.error(
+                "Password-change watchdog: every local socket cut",
+                disconnected=n,
+                action="socket.password_change_watchdog_cut_all_done",
+            )
 
 async def force_disconnect_user_strict(
     user_ids, *, timeout: float = _ACK_TIMEOUT, notify: bool = False
@@ -1225,6 +1493,52 @@ async def force_disconnect_sessions_strict(
         label="force_disconnect_sessions_strict",
         log_ctx={"session_ids": [session_id for session_id, _ in sessions]},
     )
+
+
+async def force_password_change_cut_strict(
+    user_ids, *, timeout: float = _ACK_TIMEOUT
+) -> str:
+    """ENFORCEMENT (F128 S2): ONE command naming ``user_ids``; every live worker
+    notifies then cuts those users' sockets and ACKs. Same ACK contract as
+    ``force_disconnect_user_strict``: raises unless EVERY required worker ACKs."""
+    user_ids = list(user_ids)
+    if not user_ids:
+        return ""
+    return await _publish_force_disconnect_strict(
+        {"password_change_user_ids": user_ids},
+        timeout=timeout,
+        label="force_password_change_cut_strict",
+        log_ctx={"user_ids": user_ids},
+    )
+
+
+async def enforce_password_change_cut(user_id: int) -> bool:
+    """F128 S2, post-commit: cut every socket of ``user_id`` on every live worker.
+
+    True ONLY when every required worker ACKed. Anything else is logged as NOT
+    confirmed and returns False — never reported as done. Never raises: the
+    flag is committed and stays the source of truth; connect refuses the user,
+    and the watchdog cuts a surviving socket about one interval later while
+    flags are readable, within ``_PWD_WATCHDOG_BOUND`` at worst.
+    """
+    try:
+        await force_password_change_cut_strict([user_id])
+    except Exception as exc:
+        socket_emit_failures_total.labels(event_type="password_change_cut").inc()
+        log.error(
+            "Password change: socket cut NOT confirmed; the flag stands and the"
+            " watchdog cuts surviving sockets",
+            user_id=user_id,
+            error_type=type(exc).__name__,
+            action="socket.password_change_cut_unconfirmed",
+        )
+        return False
+    log.info(
+        "Password change: sockets cut on every live worker (ACK-confirmed)",
+        user_id=user_id,
+        action="socket.password_change_cut_confirmed",
+    )
+    return True
 
 
 async def _publish_force_disconnect_strict(

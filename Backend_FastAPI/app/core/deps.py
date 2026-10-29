@@ -21,6 +21,12 @@ from ..database import (
     safe_redis_delete,
 )
 from ..services import user_service
+from .password_change import (
+    PASSWORD_CHANGE_REQUIRED_CODE,
+    is_allowed_while_forced,
+    password_change_required,
+    route_key,
+)
 from ..utils.exceptions import (
     AccessStateUnavailable,
     AuthenticationError,
@@ -69,6 +75,7 @@ __all__ = [
     "get_current_user",
     "get_logout_target",  # POST /auth/logout — signature + own DB rows, no Redis
     "get_current_active_user",
+    "get_current_user_self_read",  # GET /api/users/me only (F133)
     "require_password_not_forced",
     "verify_intake_api_key",  # Public website lead intake (X-API-Key gate)
 
@@ -187,6 +194,13 @@ async def get_current_user(
     setup/disable, public config) must let an inactive user still authenticate
     here. `status` is enforced by `get_current_active_user` for business APIs
     and by the token-issuance gate in /login, /verify-mfa and /refresh.
+
+    DOES gate `User.password_reset_required` (F128), as the LAST step, once the
+    token is fully verified: a flagged user gets 403 `PASSWORD_CHANGE_REQUIRED`
+    on every route except `password_change.ALLOWED_ROUTES`. Here and not in
+    `get_current_active_user`: routes and IDOR dependencies that authenticate
+    straight through this function, and every route written later, are covered
+    without opting in.
     """
     credentials_exception = InvalidToken(detail="Could not validate credentials")
 
@@ -413,6 +427,11 @@ async def get_current_user(
                 pass
             raise credentials_exception
 
+        # === STEP 5: FORCED PASSWORD CHANGE (F128) ===
+        # After every check above: an unverified token never learns the flag.
+        if password_change_required(user) and not is_allowed_while_forced(request):
+            raise _password_change_required_error(user, request)
+
         # ← PHASE 2: Auto-sync DB role to match Casbin (source of truth)
         # ⚠️ DISABLED (Phase 7): This was causing issues because:
         #    - get_highest_priority_role_from_casbin() checks g-rules for user:X
@@ -604,30 +623,41 @@ async def get_logout_target(
 
 
 # =============================================================================
-# C2 SECURITY FIX: Password Reset Required Check
+# C2 / F128: Forced password change
 # =============================================================================
 
 
-class PasswordChangeRequired(Exception):
-    """Exception raised when user must change password before accessing system."""
-    pass
+def _password_change_required_error(
+    current_user: models.User, request: Optional[Request] = None
+) -> HTTPException:
+    """The ONE 403 a flagged user gets; the frontend reads ``detail.code``."""
+    log.warning(
+        "Access blocked: Password change required",
+        user_id=current_user.id,
+        route=route_key(request) if request is not None else None,
+        action="auth.password_change_required",
+    )
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": PASSWORD_CHANGE_REQUIRED_CODE,
+            "message": "You must change your password before accessing the system. "
+                       "Your account was flagged for security reasons.",
+        },
+    )
 
 
-async def get_current_active_user(
-    current_user: models.User = Depends(get_current_user),
-) -> models.User:
-    """
-    Dependency to check if user is active.
-    Also enforces MFA for privileged roles (admin, manager) per OWASP ASVS 5.0.
-    """
-    from ..config import settings
-
+def _require_active_status(current_user: models.User) -> None:
     if current_user.status != "active":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user"
         )
 
-    # OWASP ASVS 5.0: Enforce MFA for privileged accounts
+
+def _require_mfa_if_enforced(current_user: models.User) -> None:
+    """OWASP ASVS 5.0: Enforce MFA for privileged accounts."""
+    from ..config import settings
+
     if (
         current_user.role in settings.MFA_ENFORCE_ROLES
         and not getattr(current_user, "mfa_enabled", False)
@@ -637,6 +667,36 @@ async def get_current_active_user(
             detail="MFA is required for privileged accounts. Please enable MFA in Settings.",
         )
 
+
+async def get_current_active_user(
+    current_user: models.User = Depends(get_current_user),
+) -> models.User:
+    """
+    Dependency to check if user is active.
+    Also enforces MFA for privileged roles (admin, manager) per OWASP ASVS 5.0.
+    """
+    _require_active_status(current_user)
+    _require_mfa_if_enforced(current_user)
+    return current_user
+
+
+async def get_current_user_self_read(
+    current_user: models.User = Depends(get_current_user),
+) -> models.User:
+    """``GET /api/users/me`` ONLY — ``get_current_active_user`` with one
+    deferral (F133).
+
+    While a password change is forced, the MFA-enrolment gate is deferred so
+    the frontend can still read the user (and its flag) and show the form: a
+    flagged admin/manager without MFA must change the password first and
+    enrol MFA after logging in again. Business APIs are untouched — the
+    flagged user never gets past ``get_current_user`` on them — and the
+    deferral ends with the flag (change-password clears it). ``status`` is
+    still enforced.
+    """
+    _require_active_status(current_user)
+    if not password_change_required(current_user):
+        _require_mfa_if_enforced(current_user)
     return current_user
 
 
@@ -645,42 +705,16 @@ async def require_password_not_forced(
 ) -> models.User:
     """
     C2 SECURITY FIX: Dependency to block users who must change their password.
-    
-    When user clicks "Not Me" (secure_account), their password_reset_required
-    flag is set to True. This dependency blocks all protected endpoints until
-    they change their password.
-    
-    Use this dependency on all endpoints EXCEPT:
-    - /auth/change-password (user needs this to change password)
-    - /auth/logout (user should be able to logout)
-    - /auth/refresh (needed for token rotation)
-    
+
+    F128: redundant since ``get_current_user`` gates the flag on every route —
+    no router uses this dependency. It raises the very same 403 as the root
+    gate (``_password_change_required_error``), so it cannot drift from it.
+
     Raises:
-        HTTPException 403: If password_reset_required is True
-    
-    Example:
-        @router.get("/leads")
-        async def get_leads(
-            current_user: models.User = Depends(require_password_not_forced)
-        ):
-            # User is guaranteed to NOT have password_reset_required=True
-            ...
+        HTTPException 403: If password_reset_required is not False
     """
-    if hasattr(current_user, 'password_reset_required') and current_user.password_reset_required:
-        log.warning(
-            "Access blocked: Password change required",
-            user_id=current_user.id,
-            username=current_user.username
-        )
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": "PASSWORD_CHANGE_REQUIRED",
-                "message": "You must change your password before accessing the system. "
-                           "Your account was flagged for security reasons.",
-            }
-        )
+    if password_change_required(current_user):
+        raise _password_change_required_error(current_user)
     return current_user
 
 

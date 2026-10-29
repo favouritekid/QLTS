@@ -125,7 +125,9 @@ async def test_revalidate_exact_jti_valid_passes():
             patch.object(sm, "redis_get_or_raise", session_read), \
             patch.object(sm, "redis_exists_or_raise", blacklist_read), \
             patch.object(sm, "AsyncSessionLocal", _fake_session_local(MagicMock())), \
-            patch("app.repositories.SessionRepository", MagicMock(return_value=repo)):
+            patch("app.repositories.SessionRepository", MagicMock(return_value=repo)), \
+            patch.object(sm, "_users_pending_password_change",
+                         AsyncMock(return_value=set())):  # F128: user not flagged
         out = await sm.revalidate_auth("sid1")
 
     assert out == {"valid": True}
@@ -155,7 +157,9 @@ async def test_revalidate_checks_current_jti_of_session_not_handshake_one():
             patch.object(sm, "redis_get_or_raise", session_read), \
             patch.object(sm, "redis_exists_or_raise", blacklist_read), \
             patch.object(sm, "AsyncSessionLocal", _fake_session_local(MagicMock())), \
-            patch("app.repositories.SessionRepository", MagicMock(return_value=repo)):
+            patch("app.repositories.SessionRepository", MagicMock(return_value=repo)), \
+            patch.object(sm, "_users_pending_password_change",
+                         AsyncMock(return_value=set())):  # F128: user not flagged
         out = await sm.revalidate_auth("sid1")
 
     assert out == {"valid": True}
@@ -249,6 +253,7 @@ async def test_get_user_from_token_returns_id_of_the_live_session_row():
     payload = {"sub": "u", "r_jti": "jx"}
     user = MagicMock()
     user.id = 9
+    user.password_reset_required = False  # F128: a flagged user gets no socket
     row = MagicMock()
     row.id = 42
     repo = MagicMock()

@@ -24,6 +24,29 @@ import { AxiosError } from "axios";
 import { triggerBannerCheck, triggerSuspiciousLoginBanner } from "@/components/layouts/SecurityBanner";
 import { adminUsersKeys } from "@/hooks/useAdminUsers";
 import { isValidRedirect, buildLoginRedirect } from "@/lib/auth/login-redirect";
+import { FORCED_PASSWORD_CHANGE_URL } from "@/lib/auth/forced-password-change";
+
+/**
+ * Đích sau đăng nhập thành công — MỘT nguồn cho login và verify-mfa.
+ *
+ * F131: người bị buộc đổi mật khẩu đi THẲNG tới form (bỏ qua cả `?redirect=`):
+ * mọi trang khác chỉ nhận 403 rồi mới bị đẩy sang đó.
+ */
+export function postLoginTarget(
+  user: Pick<User, "role" | "password_reset_required">,
+  search: string,
+): string {
+  if (user.password_reset_required === true) {
+    return FORCED_PASSWORD_CHANGE_URL;
+  }
+  const redirect = new URLSearchParams(search).get("redirect");
+  const defaultPath = user.role === "officer"
+    ? "/dashboard/officer"
+    : user.role === "collaborator"
+      ? "/ctv"
+      : "/dashboard";
+  return isValidRedirect(redirect) ? redirect : defaultPath;
+}
 
 /**
  * ✅ PHASE 1 - WEEK 3 - DAY 2: Added initialData support for SSR
@@ -129,13 +152,7 @@ export function useAuth(options?: UseAuthOptions) {
         );
       }
 
-      const redirect = new URLSearchParams(window.location.search).get("redirect");
-      const defaultPath = user.role === "officer"
-        ? "/dashboard/officer"
-        : user.role === "collaborator"
-          ? "/ctv"
-          : "/dashboard";
-      router.push(isValidRedirect(redirect) ? redirect : defaultPath);
+      router.push(postLoginTarget(user, window.location.search));
     },
     // No toast here - LoginForm shows inline error via loginError
   });
@@ -177,13 +194,7 @@ export function useAuth(options?: UseAuthOptions) {
         );
       }
 
-      const redirect = new URLSearchParams(window.location.search).get("redirect");
-      const defaultPath = user.role === "officer"
-        ? "/dashboard/officer"
-        : user.role === "collaborator"
-          ? "/ctv"
-          : "/dashboard";
-      router.push(isValidRedirect(redirect) ? redirect : defaultPath);
+      router.push(postLoginTarget(user, window.location.search));
     },
     // No toast here - LoginForm shows inline error via verifyMfaError
   });

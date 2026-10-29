@@ -291,7 +291,14 @@ async def secure_account(
     await callback()
     if revoke_callback:
         await revoke_callback()
-    
+
+    # F128 S2: the flag is committed — cut the user's sockets on every worker
+    # (the session kept above included). Never raises; an unconfirmed cut is
+    # logged as such and left to the watchdog.
+    from ..socket_manager import enforce_password_change_cut
+
+    await enforce_password_change_cut(current_user.id)
+
     log.warning(
         "User secured account after suspicious login",
         user_id=current_user.id,

@@ -1261,8 +1261,13 @@ PHAN_VUNG_CAN = {"a", "c"}
 #: version của endpoint đổi thông tư). THÊM selector nên digest phải đổi
 #: (62 → 63 selector); giá trị cũ là
 #: `f71ff45fb5e1fc9af90ab8c3d9925013afd1cfa3f38df0932f72cf53d6cac893`.
+#: Cập nhật 28-10-2026 (F128 — cưỡng chế `password_reset_required`): Tier 2a
+#: nhận `tests/security/test_password_reset_enforced.py`, Tier 2c nhận
+#: `tests/security/test_password_change_socket_unit.py` (hai tệp MỚI). THÊM
+#: selector nên digest phải đổi (63 → 65 selector); giá trị cũ là
+#: `846230dbed53b1d5fcd35afed65eb22c288dd76b5eeae69547cad207ee27cc8e`.
 SHA_HOP_SELECTOR_TIER2 = (
-    "846230dbed53b1d5fcd35afed65eb22c288dd76b5eeae69547cad207ee27cc8e"
+    "bb0cbdf890169fc216d757d8ec5e366a0fa1353658f6a4f02d72373c5a9be2b7"
 )
 
 # --- Phân hoạch Tier 4 (SPLIT 18-09-2026) -------------------------------------
