@@ -462,6 +462,7 @@ async def lifespan(app: FastAPI):
         start_heartbeat_thread,
         subscribe_force_disconnect,
         consume_force_disconnect,
+        password_change_watchdog,
     )
 
     # Readiness handshake: SUBSCRIBE first, register this worker as live only
@@ -488,6 +489,24 @@ async def lifespan(app: FastAPI):
         os._exit(1)
 
     fastapi_app.state._socket_dc_task.add_done_callback(_socket_task_died)
+
+    # F134: the per-worker password-change watchdog — same supervision. It
+    # raises only once the flags have been unreadable past its bound; exiting
+    # the worker then drops every socket it holds (fail-closed).
+    def _pwd_watchdog_died(task: asyncio.Task):
+        if task.cancelled():
+            return  # expected during graceful shutdown
+        exc = task.exception()
+        log.critical(
+            "Password-change watchdog died — exiting worker for Gunicorn restart",
+            error_type=type(exc).__name__ if exc else "returned unexpectedly",
+        )
+        os._exit(1)
+
+    fastapi_app.state._pwd_watchdog_task = asyncio.create_task(
+        password_change_watchdog()
+    )
+    fastapi_app.state._pwd_watchdog_task.add_done_callback(_pwd_watchdog_died)
 
     # --- Ứng dụng chạy ---
     yield
@@ -544,6 +563,9 @@ async def lifespan(app: FastAPI):
         _dc = getattr(fastapi_app.state, "_socket_dc_task", None)
         if _dc is not None:
             _dc.cancel()
+        _wd = getattr(fastapi_app.state, "_pwd_watchdog_task", None)
+        if _wd is not None:
+            _wd.cancel()
         stop_heartbeat_thread()
         await deregister_socket_worker()
     except Exception as e_sock:

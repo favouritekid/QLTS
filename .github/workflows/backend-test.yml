@@ -574,6 +574,20 @@ jobs:
           # không leg PR nào chạy mà required check vẫn xanh. Đo local: 20 ca
           # ~148s ⇒ 2c (~29m33 ở run 36083658692) vẫn dưới Tier 1 (38m57).
           # THÊM selector ⇒ `SHA_HOP_SELECTOR_TIER2` đổi lần nữa.
+          #
+          # 28-10-2026 — F128/F131/F133/F134 (cưỡng chế `password_reset_required`),
+          # HAI tệp MỚI:
+          #   * 2a · `tests/security/test_password_reset_enforced.py` — cổng ở
+          #     gốc `get_current_user` + allowlist 2 route qua router ASGI thật,
+          #     luồng đổi mật khẩu/đăng nhập lại, `/users/me` khi bắt buộc MFA,
+          #     Socket.IO S1/S2/S3 + watchdog với uvicorn thật. CẦN Postgres
+          #     (fixture `client`, `test_server`). Cạnh `test_session_revocation.py`
+          #     + `test_websocket_security.py` — cùng mặt phiên/xác thực.
+          #   * 2c · `tests/security/test_password_change_socket_unit.py` — unit
+          #     thuần (mock) của các lớp socket + watchdog; cạnh
+          #     `test_socket_force_disconnect.py`.
+          # Ngoài mọi tier thì không leg PR nào chạy mà required check vẫn xanh
+          # (CLAUDE.md §11). THÊM selector ⇒ `SHA_HOP_SELECTOR_TIER2` đổi.
           - tier: Tier 2a — Ma trận quyền + phiên + MFA guard
             partition_contract: tier2-rbac-security-v1
             partition_part: a
@@ -608,6 +622,7 @@ jobs:
               tests/security/test_session_revocation.py
               tests/security/test_websocket_security.py
               tests/services/test_auth_security_hardening.py
+              tests/security/test_password_reset_enforced.py
 
           - tier: Tier 2c — Phân quyền endpoint + MFA biên
             partition_contract: tier2-rbac-security-v1
@@ -642,6 +657,7 @@ jobs:
               tests/security/test_security_phase0.py
               tests/security/test_socket_auth_session.py
               tests/security/test_socket_force_disconnect.py
+              tests/security/test_password_change_socket_unit.py
               tests/security/test_socket_offboarding.py
               tests/unit/test_admission_idor_filters.py
               tests/security/test_az_phan_quyen.py

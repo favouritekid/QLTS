@@ -12,7 +12,9 @@ router = APIRouter(tags=["Users"])
 @router.get("/me", response_model=schemas.User)
 async def read_users_me(
     request: Request,
-    current_user: models.User = Depends(deps.get_current_active_user)
+    # F133: get_current_active_user, except the MFA gate waits while a password
+    # change is forced — the frontend must read the flag to show the form.
+    current_user: models.User = Depends(deps.get_current_user_self_read)
 ):
     """
     Lấy thông tin của chính người dùng đang đăng nhập.
