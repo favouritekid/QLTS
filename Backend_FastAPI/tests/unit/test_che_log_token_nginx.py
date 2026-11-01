@@ -106,11 +106,12 @@ def _chi_thi_theo_khoi(conf: str, chi_thi: str) -> list[tuple[str, str]]:
 
 
 def test_map_nginx_trung_tap_tien_to_token_cua_python():
-    """Tập DẤU HIỆU của hai map = ``nginx_token_marker_alternation()`` (nguồn chuẩn
-    Python: ``TOKEN_PATH_PREFIXES`` + tham số query chứa ``token``) — CLAUDE.md §7."""
-    from app.core.log_redaction import nginx_token_marker_alternation
+    """Tập DẤU HIỆU của hai map = ``nginx_access_log_marker_alternation()`` (nguồn
+    chuẩn Python: ``TOKEN_PATH_PREFIXES`` + tham số query chứa ``token`` + ``[?]``
+    của N17.04) — CLAUDE.md §7."""
+    from app.core.log_redaction import nginx_access_log_marker_alternation
 
-    alt = nginx_token_marker_alternation()
+    alt = nginx_access_log_marker_alternation()
     mong_doi = {
         ("$request", "$qlts_request_log"):
             '"~*^(.*?(?:%s))(.*?)( HTTP/[0-9.]+)?$" "$1<redacted>$3";' % alt,
@@ -125,6 +126,21 @@ def test_map_nginx_trung_tap_tien_to_token_cua_python():
     assert lech == [], (
         "map %s không phủ ĐÚNG tập dấu hiệu của log_redaction.py; mong đợi:\n%s"
         % (lech, "\n".join(mong_doi.values())))
+
+
+def test_tap_dau_hieu_log_nginx_giu_tron_tap_token_va_them_dau_hoi():
+    """N17.04 chỉ được THÊM ``[?]`` — tập dấu hiệu token cũ phải còn NGUYÊN (bỏ
+    tiền tố token khỏi tập mới thì phần ĐƯỜNG DẪN sau ``/confirm/`` … lại lọt, vì
+    ``[?]`` chỉ cắt từ query)."""
+    from app.core.log_redaction import (
+        NGINX_QUERY_CUT_MARKER,
+        nginx_access_log_marker_alternation,
+        nginx_token_marker_alternation,
+    )
+
+    assert NGINX_QUERY_CUT_MARKER == "[?]"
+    assert nginx_access_log_marker_alternation() == (
+        nginx_token_marker_alternation() + "|" + NGINX_QUERY_CUT_MARKER)
 
 
 def _ap_map(khoi: str, gia_tri: str) -> str | None:
@@ -208,8 +224,55 @@ def test_map_nginx_van_giu_phan_truoc_dau_hieu_va_giao_thuc():
     )
     assert thuc == (
         "GET /confirm/<redacted> HTTP/1.1",
+        # N17.04: ở CÙNG vị trí `?`, nhánh `?token=` đứng TRƯỚC `[?]` trong phép chọn
+        # ⇒ vẫn thắng (Python re và PCRE của nginx cùng luật: vị trí sớm nhất, rồi nhánh
+        # đứng trước) — chỉ còn TÊN tham số, mọi giá trị sau đó bị che.
         "https://example.invalid/reset-password?token=<redacted>",
     ), "map nginx không giữ phần trước dấu hiệu / giao thức: %s" % (thuc,)
+
+
+#: Dạng thật thấy ở phân loại log prod 01-11-2026 (N17.04): giá trị dạng SĐT ở
+#: ``search`` (request), ``q`` (Referer = URL trang giao diện) và một tham số tên
+#: NGOÀI danh sách mã. Số giả, dải ``0912345``; mỗi mẫu kèm KẾT QUẢ ĐÚNG.
+_N17_04_MAU = [
+    (("$request", "$qlts_request_log"),
+     "GET /api/leads?search=0912345601&page=1 HTTP/1.1", "GET /api/leads?<redacted> HTTP/1.1"),
+    (("$request", "$qlts_request_log"),
+     "GET /api/v2/admissions?ten_la_bat_ky=0912345602 HTTP/2.0",
+     "GET /api/v2/admissions?<redacted> HTTP/2.0"),
+    (("$request", "$qlts_request_log"),
+     "GET /leads?q=0912345603&_rsc=abc HTTP/1.1", "GET /leads?<redacted> HTTP/1.1"),
+    (("$http_referer", "$qlts_referer_log"),
+     "https://example.invalid/leads?q=0912345604", "https://example.invalid/leads?<redacted>"),
+    (("$http_referer", "$qlts_referer_log"),
+     "https://example.invalid/admissions?SEARCH=0912345605&tab=1",
+     "https://example.invalid/admissions?<redacted>"),
+]
+
+
+def test_map_nginx_bo_gia_tri_query_moi_ten_tham_so_n17_04():
+    """N17.04: GIÁ TRỊ query KHÔNG vào access log, bất kể TÊN tham số — cả cột
+    request lẫn Referer. Giữ phương thức, đường dẫn, dấu ``?`` và giao thức."""
+    conf = _doc(NGINX_CONF)
+    sai = {}
+    for (nguon, dich), gia_tri, dung in _N17_04_MAU:
+        ra = _ap_map(_khoi_map(conf, nguon, dich), gia_tri)
+        if ra != dung:
+            sai[gia_tri] = ra if ra is not None else "<không regex nào khớp ⇒ ghi THÔ>"
+    assert sai == {}, "map nginx để lọt / cắt sai giá trị query (N17.04):\n%s" % "\n".join(
+        "  %s  →  %s" % kv for kv in sai.items())
+
+
+def test_map_nginx_khong_query_thi_giu_nguyen_dong():
+    """Không có ``?`` (và không dấu hiệu token) ⇒ không regex nào khớp ⇒ ``default``
+    ghi THÔ: bản vá N17.04 không được che lan sang đường dẫn thường."""
+    conf = _doc(NGINX_CONF)
+    thuc = (
+        _ap_map(_khoi_map(conf, "$request", "$qlts_request_log"), "GET /api/leads/123 HTTP/1.1"),
+        _ap_map(_khoi_map(conf, "$http_referer", "$qlts_referer_log"),
+                "https://example.invalid/leads/123"),
+    )
+    assert thuc == (None, None), "map nginx che cả dòng KHÔNG có query: %s" % (thuc,)
 
 
 #: Biến DUY NHẤT được phép trong ``log_format main`` (V6 vòng 5: danh sách CHO PHÉP thay

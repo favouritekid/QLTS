@@ -927,6 +927,17 @@ set -a && source .env.production && set +a
 # ⭐ `git checkout "$PRE_SHA" -- nginx/` ở Step 5 BẮT BUỘC đứng TRƯỚC lệnh này:
 # G1 so nội dung ảnh với cây `nginx/` hiện tại, nên chạy sai thứ tự thì G1 từ
 # chối — đó là hành vi ĐÚNG, không phải lỗi.
+#
+# ⚠️ ẢNH nginx TRƯỚC N17.04 BỊ VERIFY MỚI TỪ CHỐI (PR #718, 01-11-2026). Step 5
+# chỉ lùi `nginx/`; `scripts/nginx-verify.sh` vẫn là bản MỚI, có đầu dò query
+# thường N17.04 (`/api/leads?search=<giả>` + Referer `…/leads?q=<giả>` phải ra
+# `?<redacted>`). Ảnh dựng từ cấu hình chỉ che token (mọi `$PRE_SHA` trước PR
+# #718) ghi nguyên giá trị query ⇒ đầu dò ĐỎ ⇒ `nginx-apply.sh` KHÔNG thay
+# container (fail-closed: nginx đang phục vụ giữ nguyên). Cùng kiểu với đầu dò
+# token V6 đối với ảnh trước V6.
+# ⇒ Phương án lùi nginx phải được XÉT RIÊNG, TRƯỚC deploy có PR #718 — không
+# quyết giữa cửa sổ rollback. Lùi cả `scripts/nginx-verify.sh` để cho ảnh cũ
+# qua cổng là MỞ LẠI rò PII N17.04: thao tác có chủ đích, cần owner chấp thuận.
 QLTS_NGINX_ANH_GHIM="${NGINX_ANH_GHIM:-}" bash scripts/nginx-apply.sh "$DOMAIN"
 
 # Step 6: Verify smoke

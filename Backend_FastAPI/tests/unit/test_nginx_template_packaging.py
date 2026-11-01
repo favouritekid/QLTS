@@ -880,12 +880,18 @@ _qlts_mo_hinh_anh() {
       exit 0
     fi
     # Ba đầu dò token của `nginx-verify.sh` (V6) truyền `-e UA_P=… -e GIA_P=…`
-    # (P = đường dẫn, Q = query, R = Referer): ghi lại để `docker logs` giả bên
-    # dưới trả đúng dòng access log của từng request.
+    # (P = đường dẫn, Q = query, R = Referer) và đầu dò query thường N17.04
+    # truyền `-e UA_N=… -e GIA_S=… -e GIA_T=…` (S = query của request, T = query
+    # của Referer): ghi lại để `docker logs` giả bên dưới trả đúng dòng access
+    # log của từng request.
     if [ -n "${QLTS_STUB_LOG:-}" ]; then
       for _a in "$@"; do
         case "$_a" in
-          UA_[PQR]=*|GIA_[PQR]=*) printf '%s\n' "${_a#*=}" > "$QLTS_STUB_LOG.${_a%%=*}" ;;
+          UA_[PQRN]=*|GIA_[PQRST]=*) printf '%s\n' "${_a#*=}" > "$QLTS_STUB_LOG.${_a%%=*}" ;;
+          # Referer của đầu dò N17.04 mang `https://$DOMAIN/…` và verify kiểm dấu che
+          # theo ĐÚNG domain ấy ⇒ stub dựng dòng log bằng domain mà verify truyền vào,
+          # không chép cứng (sân khấu setup-ssl dùng `vi-du.test`, không phải `nginx-test.local`).
+          DOMAIN=*) printf '%s\n' "${_a#*=}" > "$QLTS_STUB_LOG.DOMAIN" ;;
           # Giao thức MỘT đầu dò của bản verify trước (6c607c41: `-e UA=… -e GIA=…`) —
           # giữ để lượt đỏ-trước chạy bản cũ trên CÙNG stub: đỏ đúng ở vế F36, không đỏ
           # dây chuyền vì stub đổi giao thức. Bản mới không bao giờ truyền `UA=`.
@@ -925,6 +931,27 @@ _qlts_mo_hinh_anh() {
         printf '172.30.0.10 - - [01/Jan/2026:00:00:00 +0000] "GET /confirm/<redacted> HTTP/1.1" 200 0 "https://nginx-test.local/magic-link/withdraw/<redacted>" "%s" "-"\n' "$_ua"
       fi
     done
+    # Đầu dò query thường N17.04 (MỘT request, HAI vị trí). `STUB_LOG_TOKEN`:
+    #   che (mặc định) / lo_query / thieu_referer / lo_som_dem_4mib — hai vị trí
+    #                    đã che: `/api/leads?<redacted>` + Referer `…/leads?<redacted>`;
+    #   rong, thieu_n17 — không dòng;
+    #   lo, lo_n17      — cả hai vị trí THÔ (lo_n17 = cấu hình CHỈ che token, trước N17.04);
+    #   lo_n17_referer  — chỉ Referer thô;
+    #   n17_referer_khong_dau — Referer bị bỏ query (không lộ, KHÔNG có `?<redacted>`
+    #                    của Referer) trong khi request vẫn mang `?<redacted>`.
+    _ua=$(cat "$_d.UA_N" 2>/dev/null || true)
+    if [ -n "$_ua" ] && [ "$_m" != "rong" ] && [ "$_m" != "thieu_n17" ]; then
+      _s=$(cat "$_d.GIA_S" 2>/dev/null || true)
+      _t=$(cat "$_d.GIA_T" 2>/dev/null || true)
+      _dm=$(cat "$_d.DOMAIN" 2>/dev/null || true)   # rỗng ⇒ dòng sai domain ⇒ verify ĐỎ (không đoán)
+      case "$_m" in
+        lo|lo_n17)       _rq="/api/leads?search=$_s";  _rf="https://$_dm/leads?q=$_t" ;;
+        lo_n17_referer)  _rq="/api/leads?<redacted>";  _rf="https://$_dm/leads?q=$_t" ;;
+        n17_referer_khong_dau) _rq="/api/leads?<redacted>"; _rf="https://$_dm/leads" ;;
+        *)               _rq="/api/leads?<redacted>";  _rf="https://$_dm/leads?<redacted>" ;;
+      esac
+      printf '172.30.0.10 - - [01/Jan/2026:00:00:00 +0000] "GET %s HTTP/1.1" 401 0 "%s" "%s" "-"\n' "$_rq" "$_rf" "$_ua"
+    fi
     exit "${STUB_LOG_RC:-0}" ;;
   esac
 }
@@ -6337,11 +6364,15 @@ def _chay_verify_dau_do(
 
 @_bo_qua_neu_khong_chay_duoc_bash
 def test_verify_dau_do_token_xanh_khi_co_dong_da_che(tmp_path):
-    """Đối chứng: access log có dòng của CẢ BA đầu dò (đường dẫn, query, Referer),
-    đã che ⇒ verify ĐẠT với đúng ba dòng ✓."""
+    """Đối chứng: access log có dòng của CẢ BA đầu dò token (đường dẫn, query,
+    Referer) và của đầu dò query thường N17.04, đã che ⇒ verify ĐẠT với đúng ba
+    dòng ✓ token và hai dòng ✓ query (request, Referer)."""
     kq = _chay_verify_dau_do(tmp_path, "che")
-    assert kq.returncode == 0 and kq.stdout.count("✓ đầu dò token") == 3, (
-        f"ca đối chứng phải XANH:\n{kq.stdout}\n{kq.stderr}")
+    assert (
+        kq.returncode == 0
+        and kq.stdout.count("✓ đầu dò token") == 3
+        and kq.stdout.count("✓ đầu dò query") == 2
+    ), f"ca đối chứng phải XANH:\n{kq.stdout}\n{kq.stderr}"
 
 
 @_bo_qua_neu_khong_chay_duoc_bash
@@ -6404,6 +6435,63 @@ def test_verify_dau_do_thieu_dong_referer_thi_do(tmp_path):
     kq = _chay_verify_dau_do(tmp_path, "thieu_referer")
     assert kq.returncode != 0 and "đầu dò token Referer: KHÔNG thấy dòng" in kq.stdout, (
         f"verify phải ĐỎ ở đầu dò Referer:\n{kq.stdout}\n{kq.stderr}")
+
+
+# --- Đầu dò query thường N17.04 (cùng sân khấu) -----------------------------
+# Mỗi ca vi phạm ĐÚNG MỘT bất biến; ba đầu dò token luôn che đúng trong các ca
+# này, nên ĐỎ chỉ có thể đến từ đầu dò query.
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_n17_04_do_khi_cau_hinh_chi_che_token(tmp_path):
+    """Đối chứng ĐỎ của N17.04: cấu hình trước bản vá (chỉ che token) ghi nguyên
+    query thường ⇒ ba đầu dò token VẪN xanh, verify phải ĐỎ ở đầu dò query — đúng
+    lỗ mà ba đầu dò token không khoá được."""
+    kq = _chay_verify_dau_do(tmp_path, "lo_n17")
+    assert (
+        kq.returncode != 0
+        and kq.stdout.count("✓ đầu dò token") == 3
+        and "đầu dò query request (N17.04): access log LỘ giá trị giả" in kq.stdout
+        and "đầu dò query Referer (N17.04): access log LỘ giá trị giả" in kq.stdout
+        and "đầu dò token rc=0, đầu dò query rc=1" in kq.stdout
+    ), f"verify phải ĐỎ ở đầu dò query (token vẫn xanh):\n{kq.stdout}\n{kq.stderr}"
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_n17_04_chi_referer_lo_thi_do(tmp_path):
+    """Hai vị trí ĐỘC LẬP: request đã che, chỉ Referer còn query thô ⇒ ĐỎ đúng ở
+    vế Referer; vế request vẫn ✓."""
+    kq = _chay_verify_dau_do(tmp_path, "lo_n17_referer")
+    assert (
+        kq.returncode != 0
+        and "✓ đầu dò query request (N17.04)" in kq.stdout
+        and "đầu dò query Referer (N17.04): access log LỘ giá trị giả" in kq.stdout
+    ), f"verify phải ĐỎ ở vế Referer:\n{kq.stdout}\n{kq.stderr}"
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_n17_04_dau_che_kiem_dung_vi_tri(tmp_path):
+    """Referer bị bỏ query khỏi dòng log (không lộ gì) trong khi request vẫn mang
+    `?<redacted>` ⇒ vế Referer phải ĐỎ vì THIẾU dấu che ở đúng vị trí của nó. Kiểm
+    dấu chung `?<redacted>` sẽ để dấu của request "đứng thay" cho Referer."""
+    kq = _chay_verify_dau_do(tmp_path, "n17_referer_khong_dau")
+    assert (
+        kq.returncode != 0
+        and "✓ đầu dò query request (N17.04)" in kq.stdout
+        and "đầu dò query Referer (N17.04): dòng log của đầu dò không mang dấu" in kq.stdout
+    ), f"verify phải ĐỎ ở vế Referer (thiếu dấu che đúng vị trí):\n{kq.stdout}\n{kq.stderr}"
+
+
+@_bo_qua_neu_khong_chay_duoc_bash
+def test_verify_dau_do_n17_04_thieu_dong_thi_do(tmp_path):
+    """Thiếu dòng access log của request N17.04 (ba đầu dò token đủ dòng) ⇒ ĐỎ —
+    "không lộ" vì không có dòng thì không phải bằng chứng."""
+    kq = _chay_verify_dau_do(tmp_path, "thieu_n17")
+    assert (
+        kq.returncode != 0
+        and kq.stdout.count("✓ đầu dò token") == 3
+        and "đầu dò query request (N17.04): KHÔNG thấy dòng" in kq.stdout
+    ), f"verify phải ĐỎ khi thiếu dòng của đầu dò query:\n{kq.stdout}\n{kq.stderr}"
 
 
 # ---------------------------------------------------------------------------
