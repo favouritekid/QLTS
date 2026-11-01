@@ -142,6 +142,24 @@ def nginx_token_marker_alternation() -> str:
     return "|".join(duong + [NGINX_QUERY_TOKEN_MARKER])
 
 
+#: N17.04 (01-11-2026): access log nginx KHÔNG ghi GIÁ TRỊ query — cắt từ dấu
+#: ``?`` ĐẦU TIÊN, bất kể tên tham số. Phân loại log prod 01-11 thấy dãy dạng
+#: SĐT là giá trị của ``q`` (Referer), ``search`` VÀ một tham số tên lạ ⇒ che
+#: theo TÊN không đủ; owner chọn "bỏ giá trị query". Viết ``[?]`` (không ``\?``)
+#: để nginx lẫn Python đọc như nhau, không phụ thuộc cách thoát ``\``. CHỈ áp
+#: cho ``map`` nginx — lớp che log backend ở dưới KHÔNG đổi.
+NGINX_QUERY_CUT_MARKER = "[?]"
+
+
+def nginx_access_log_marker_alternation() -> str:
+    """Tập dấu hiệu CẮT của hai ``map`` log nginx (``$qlts_request_log`` /
+    ``$qlts_referer_log``) = dấu hiệu token (:func:`nginx_token_marker_alternation`)
+    + :data:`NGINX_QUERY_CUT_MARKER`. Map cắt từ dấu hiệu ĐẦU TIÊN ⇒ phần còn giữ
+    không chứa query nào, cũng không chứa token sau tiền tố đường dẫn. Hằng duy
+    nhất ``nginx/nginx.conf`` phải chép nguyên văn; test khoá."""
+    return nginx_token_marker_alternation() + "|" + NGINX_QUERY_CUT_MARKER
+
+
 # (1) token trong đường dẫn — khớp ở bất kỳ vị trí nào, cả dạng ``\/``. Đoạn
 # token dừng ở ``/ ? # & " ' \`` khoảng trắng và ``<`` (nên ``<redacted>`` không
 # bị che lại — idempotent, vì bản ghi có thể đi qua hai lớp che).
