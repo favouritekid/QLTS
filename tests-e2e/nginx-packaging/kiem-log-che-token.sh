@@ -132,7 +132,7 @@ for muc in "${E_TOKEN[@]}" "${E_DOI_CHUNG[@]}"; do
     [ "$rc" = 0 ] && [ "$http" = 502 ] || sai_e0="$sai_e0 [$ma: curl rc=$rc http=$http]"
 done
 
-# Mục 5 (V6): đầu dò token của CHÍNH cổng deploy `scripts/nginx-verify.sh`.
+# Mục 5 (V6): đầu dò token của CHÍNH cổng deploy `scripts/nginx-verify.sh` — và (N17.04) đầu dò query thường.
 VERIFY_OUT="$(NGINX_PROBE_STRICT_TLS=0 bash "$GOC/scripts/nginx-verify.sh" "$CT" "$D" 2>&1)"
 VERIFY_RC=$?
 
@@ -185,9 +185,9 @@ kiem R4 "$([ "$H6" = "no-referrer" ] && echo 1 || echo 0)" \
     "trang /reset-password?token=…: Referrer-Policy='$H6' (phải no-referrer)"
 
 # `(✓|✗)` chứ không `[✓✗]`: ngoặc vuông của grep khớp MỘT byte, ký tự nhiều byte không bao giờ khớp.
-dong_v=$(printf '%s\n' "$VERIFY_OUT" | grep -E "^  (✓|✗) đầu dò token" | sed 's/^  //' | paste -sd'|' -)
+dong_v=$(printf '%s\n' "$VERIFY_OUT" | grep -E "^  (✓|✗) đầu dò (token|query)" | sed 's/^  //' | paste -sd'|' -)
 kiem V1 "$([ "$VERIFY_RC" -eq 0 ] && echo 1 || echo 0)" \
-    "scripts/nginx-verify.sh rc=$VERIFY_RC · ${dong_v:-<không có dòng đầu dò token>}"
+    "scripts/nginx-verify.sh rc=$VERIFY_RC · ${dong_v:-<không có dòng đầu dò token/query>}"
 
 # --- N17.10 B: error_log ---
 kiem E0 "$([ -z "$sai_e0" ] && echo 1 || echo 0)" \

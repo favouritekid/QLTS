@@ -182,23 +182,44 @@ exit 1
 # của ảnh nginx chính thức; stderr (`error_log`) bị bỏ qua — đầu dò ở đây
 # không gây lỗi upstream nên không sinh dòng error_log; hành vi error_log của
 # location token (N17.10 B) đo ở E2E `kiem-log-che-token.sh` (E1–E4).
+#
+# --- Đầu dò QUERY THƯỜNG (N17.04, 01-11-2026) ---
+# `map` bỏ GIÁ TRỊ query (dấu hiệu `[?]`, nguồn chuẩn
+# `nginx_access_log_marker_alternation()`). Ba đầu dò token KHÔNG khoá hành vi
+# này: chúng chỉ dùng tiền tố đường dẫn token và tham số tên chứa `token` — cấu
+# hình CHỈ che token vẫn qua cả ba. Nên thêm MỘT request, HAI vị trí, HAI giá
+# trị giả riêng, tên tham số KHÔNG chứa `token`, đường dẫn KHÔNG thuộc tiền tố
+# token (đúng dạng đã thấy trong log prod 01-11):
+#   request — `GET /api/leads?search=<giả S>`  ⇒ phải ghi `/api/leads?<redacted> HTTP/…`
+#   Referer — `https://$DOMAIN/leads?q=<giả T>` ⇒ phải ghi `://$DOMAIN/leads?<redacted>`
+# Hai vị trí đi qua HAI `map` độc lập (`$request` / `$http_referer`) nên vị trí
+# này không "che hộ" vị trí kia; mỗi vị trí một giá trị giả ⇒ mỗi vế tự chứng
+# minh. Dấu che kiểm theo ĐÚNG vị trí (không chỉ `?<redacted>`): Referer bị bỏ
+# khỏi khuôn log thì dòng vẫn có `?<redacted>` của request mà Referer chẳng được
+# chứng minh gì. Chung một request (không tách hai) để cổng chỉ thêm một curl.
 NONCE="$(date +%s)$$"
 GIA_P="qltsgiap${NONCE}x"
 GIA_Q="qltsgiaq${NONCE}x"
 GIA_R="qltsgiar${NONCE}x"
+GIA_S="qltsgias${NONCE}x"
+GIA_T="qltsgiat${NONCE}x"
 UA_P="qlts-verify-dau-do-token-p/${NONCE}"
 UA_Q="qlts-verify-dau-do-token-q/${NONCE}"
 UA_R="qlts-verify-dau-do-token-r/${NONCE}"
+UA_N="qlts-verify-dau-do-query-n17/${NONCE}"
 docker run --rm --network "$MANG" \
     -e DOMAIN="$DOMAIN" -e IP="$IP" \
     -e GIA_P="$GIA_P" -e GIA_Q="$GIA_Q" -e GIA_R="$GIA_R" \
     -e UA_P="$UA_P" -e UA_Q="$UA_Q" -e UA_R="$UA_R" \
+    -e GIA_S="$GIA_S" -e GIA_T="$GIA_T" -e UA_N="$UA_N" \
     --entrypoint sh "$IMAGE" -c '
 C="curl --silent --output /dev/null --max-time 8 --retry 0 --insecure --resolve $DOMAIN:443:$IP"
 $C --user-agent "$UA_P" "https://$DOMAIN/confirm/${GIA_P}" || true
 $C --user-agent "$UA_Q" "https://$DOMAIN/login?token=${GIA_Q}&refresh_token=${GIA_Q}2" || true
 $C --user-agent "$UA_R" --referer "https://$DOMAIN/magic-link/withdraw/${GIA_R}?token=${GIA_R}2" \
     "https://$DOMAIN/login" || true
+$C --user-agent "$UA_N" --referer "https://$DOMAIN/leads?q=${GIA_T}" \
+    "https://$DOMAIN/api/leads?search=${GIA_S}" || true
 ' >/dev/null 2>&1 || true
 
 # tim <mẫu> <văn bản> — 0: CÓ · 1: KHÔNG · 2: LỖI tìm kiếm.
@@ -218,51 +239,56 @@ tim() {
     esac
 }
 
-co_du_ba_dong() {
-    tim "$UA_P" "$NHAT_KY" && tim "$UA_Q" "$NHAT_KY" && tim "$UA_R" "$NHAT_KY"
+co_du_dong_dau_do() {
+    tim "$UA_P" "$NHAT_KY" && tim "$UA_Q" "$NHAT_KY" && tim "$UA_R" "$NHAT_KY" && tim "$UA_N" "$NHAT_KY"
 }
 NHAT_KY=""
 NHAT_KY_RC=0
 for _ in 1 2 3 4 5; do
     NHAT_KY_RC=0
     NHAT_KY="$(docker logs --since 10m "$CT" 2>/dev/null)" || NHAT_KY_RC=$?
-    if [ "$NHAT_KY_RC" -eq 0 ] && co_du_ba_dong; then
+    if [ "$NHAT_KY_RC" -eq 0 ] && co_du_dong_dau_do; then
         break
     fi
     sleep 1
 done
 
-kiem_dau_do() {  # kiem_dau_do <tên> <User-Agent> <token giả> — 0 = đạt
-    local ten="$1" ua="$2" gia="$3" dong r=0
+# kiem_dau_do <tên> <User-Agent> <giá trị giả> [dấu che] [nhóm] — 0 = đạt.
+# Mặc định (nhóm `token`, dấu `<redacted>`) giữ NGUYÊN câu chữ của ba đầu dò
+# token. Nhóm `query` (N17.04) truyền dấu che theo ĐÚNG vị trí.
+kiem_dau_do() {
+    local ten="$1" ua="$2" gia="$3" dau="${4:-<redacted>}" nhom="${5:-token}" dong r=0 vat
+    if [ "$nhom" = "token" ]; then vat="token giả"; else vat="giá trị giả"; fi
+    ten="$nhom $ten"
     # Lọc dòng của đầu dò: grep KHÔNG -q nên đọc hết; rc 1 (0 dòng) là KẾT QUẢ,
     # rc ≥ 2 là LỖI — tách riêng, không gộp vào "không thấy".
     dong="$(grep -F -- "$ua" <<<"$NHAT_KY")" || r=$?
     if [ "$r" -ge 2 ]; then
-        echo "  ✗ đầu dò token $ten: LỖI khi lọc access log (grep rc=$r)"
+        echo "  ✗ đầu dò $ten: LỖI khi lọc access log (grep rc=$r)"
         return 1
     fi
     if [ -z "$dong" ]; then
-        echo "  ✗ đầu dò token $ten: KHÔNG thấy dòng access log của request đầu dò (access_log off? log không ra stdout?)"
+        echo "  ✗ đầu dò $ten: KHÔNG thấy dòng access log của request đầu dò (access_log off? log không ra stdout?)"
         return 1
     fi
     r=0; tim "$gia" "$NHAT_KY" || r=$?
     if [ "$r" -eq 0 ]; then
-        echo "  ✗ đầu dò token $ten: access log LỘ token giả:"
+        echo "  ✗ đầu dò $ten: access log LỘ $vat:"
         printf '%s\n' "$dong" | sed 's/^/      /'
         return 1
     elif [ "$r" -ne 1 ]; then
-        echo "  ✗ đầu dò token $ten: LỖI khi tìm token giả trong access log — không kết luận được là không lộ"
+        echo "  ✗ đầu dò $ten: LỖI khi tìm $vat trong access log — không kết luận được là không lộ"
         return 1
     fi
-    r=0; tim "<redacted>" "$dong" || r=$?
+    r=0; tim "$dau" "$dong" || r=$?
     if [ "$r" -eq 1 ]; then
-        echo "  ✗ đầu dò token $ten: dòng log của đầu dò không mang dấu <redacted> (khuôn log đã đổi?)"
+        echo "  ✗ đầu dò $ten: dòng log của đầu dò không mang dấu $dau (khuôn log đã đổi?)"
         return 1
     elif [ "$r" -ne 0 ]; then
-        echo "  ✗ đầu dò token $ten: LỖI khi tìm dấu <redacted> trong dòng của đầu dò"
+        echo "  ✗ đầu dò $ten: LỖI khi tìm dấu $dau trong dòng của đầu dò"
         return 1
     fi
-    echo "  ✓ đầu dò token $ten: có dòng access log, đã che, không lộ token giả"
+    echo "  ✓ đầu dò $ten: có dòng access log, đã che, không lộ $vat"
     return 0
 }
 
@@ -276,8 +302,17 @@ kiem_dau_do "đường dẫn" "$UA_P" "$GIA_P" || KQ_TOKEN=1
 kiem_dau_do "query" "$UA_Q" "$GIA_Q" || KQ_TOKEN=1
 kiem_dau_do "Referer" "$UA_R" "$GIA_R" || KQ_TOKEN=1
 
-if [ "$KQ_CHUC_NANG" -eq 0 ] && [ "$KQ_TOKEN" -eq 0 ]; then
+KQ_QUERY=0
+echo "--- đầu dò query thường trong access log (N17.04) ---"
+if [ "$NHAT_KY_RC" -ne 0 ]; then
+    echo "  ✗ đầu dò query: KHÔNG đọc được access log — docker logs rc=$NHAT_KY_RC (nguồn lỗi ⇒ ĐỎ dù có đầu ra)"
+    KQ_QUERY=1
+fi
+kiem_dau_do "request (N17.04)" "$UA_N" "$GIA_S" "/api/leads?<redacted> HTTP/" query || KQ_QUERY=1
+kiem_dau_do "Referer (N17.04)" "$UA_N" "$GIA_T" "://$DOMAIN/leads?<redacted>" query || KQ_QUERY=1
+
+if [ "$KQ_CHUC_NANG" -eq 0 ] && [ "$KQ_TOKEN" -eq 0 ] && [ "$KQ_QUERY" -eq 0 ]; then
     exit 0
 fi
-echo "HỎNG — phép kiểm chức năng rc=$KQ_CHUC_NANG, đầu dò token rc=$KQ_TOKEN."
+echo "HỎNG — phép kiểm chức năng rc=$KQ_CHUC_NANG, đầu dò token rc=$KQ_TOKEN, đầu dò query rc=$KQ_QUERY."
 exit 1

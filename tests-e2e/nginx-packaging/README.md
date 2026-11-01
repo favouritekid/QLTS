@@ -89,7 +89,7 @@ Kiểm rằng `certbot` **không** hề nằm trong stack (bẫy gộp `profiles
 $DC config --services | grep -c certbot     # phải là 0
 ```
 
-### Bảy phép kiểm (sáu chức năng + đầu dò token)
+### Tám phép kiểm (sáu chức năng + đầu dò token + đầu dò query N17.04)
 
 Chạy bằng đúng script mà deploy dùng — không có phiên bản chép tay thứ hai:
 
@@ -108,6 +108,7 @@ Nó đo từ một container khác trên cùng mạng, bằng `curl --resolve` (
 | 5 | `GET /` cổng 80 | 301 |
 | 6 | `/.well-known/acme-challenge/…` | 404 (từ webroot) — **không** phải 301 |
 | 7 | đầu dò token (V6): BA request ĐỘC LẬP mang token GIẢ — ở đường dẫn, ở query, ở Referer — rồi đọc `docker logs` của chính container | `docker logs` thoát 0 (nguồn lỗi ⇒ ĐỎ dù có đầu ra); MỖI đầu dò có dòng access log riêng, mang `<redacted>`, KHÔNG chứa token giả của nó — bắt cả `access_log off` (mất dòng) lẫn khuôn log ghi `$request` thô (lộ) |
+| 8 | đầu dò query thường (N17.04): MỘT request `GET /api/leads?search=<giả S>`, Referer `https://$DOMAIN/leads?q=<giả T>` — tên tham số KHÔNG chứa `token`, đường dẫn KHÔNG thuộc tiền tố token | có dòng access log; KHÔNG chứa giá trị giả nào; request mang `/api/leads?<redacted> HTTP/`, Referer mang `://$DOMAIN/leads?<redacted>` — bắt cấu hình CHỈ che token (trước N17.04), vốn qua cả ba đầu dò token |
 
 > `NGINX_PROBE_STRICT_TLS=0` chỉ vì chứng thư ở đây tự ký. Trên prod để mặc định (`1`) thì
 > có thêm một phép kiểm chuỗi chứng thư khớp `$DOMAIN`.
@@ -289,7 +290,7 @@ NGINX_DIR=<bản sao nginx/ đã đột biến> bash …/kiem-log-che-token.sh  
 | R1/R2 | trang + API token trả `Referrer-Policy: no-referrer` |
 | R3 | trang thường vẫn `strict-origin-when-cross-origin` |
 | R4 | `/reset-password?token=…` trả `no-referrer` |
-| V1 | chính `scripts/nginx-verify.sh` (cổng deploy) ĐẠT, kể cả đầu dò token |
+| V1 | chính `scripts/nginx-verify.sh` (cổng deploy) ĐẠT, kể cả đầu dò token và đầu dò query N17.04 |
 | E0 | mỗi request lỗi giả (9 URL token + 2 đối chứng) truyền tải xong (curl rc 0) VÀ nhận đúng HTTP 502 — khẳng định cả `/lp/` `/r/` SMS landing, nơi `access_log off` không để lại dòng nào; `docker logs` phải rc 0 (nguồn hỏng ⇒ HẠ TẦNG, không kết luận "0 dòng") |
 | E1 | N17.10 B: 0 dòng `error_log` chứa token giả — stub trả `444` cho request có `GIAN17LOI` ⇒ 502 THẬT ở 9 dạng URL token (trang confirm/magic-link/reset-password, `/lp/`, `/r/`, SMS landing, API confirm/magic-link, `/Confirm/` hoa) + `limit_req` từ chối ở trang token |
 | E2 | đối chứng: 502 ở location thường (`/dashboard/`, `/api/`) VẪN ghi `error_log` — bắt đột biến tắt toàn cục, và bắt ca stub không gây lỗi (E1 xanh vô nghĩa) |
