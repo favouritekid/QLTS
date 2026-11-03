@@ -14,17 +14,21 @@ số), ô gộp + bề rộng ô gộp, xlsx, kiểm đầu vào / mẫu (fail-c
 mã hồ sơ), metadata, tính tất định.
 """
 
+import dataclasses
 import hashlib
 import io
+import re
 import zipfile
 from datetime import date
 
 import docx
 import openpyxl
 import pytest
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from pydantic import ValidationError as PydanticValidationError
 
+import app.services.council_document_render_service as svc
 from app.services.council_document_render_service import (
     CANDIDATE_FIELDS,
     LUAT_RENDER,
@@ -783,3 +787,114 @@ def test_tat_dinh_tung_phan_zip(mau):
             p1.pop("docProps/core.xml")
             p2.pop("docProps/core.xml")
         assert p1 == p2, f1.path
+
+
+# ═══════════════════════════════ F204 — chữ KHÔNG thành công thức ════════════
+# Chuỗi mở đầu bằng "=" / "+" / "-" / "@" (và mã lỗi Excel) đặt vào MỌI trường chữ đi
+# vào xlsx: phải nằm nguyên văn, kiểu CHUỖI, và không có phần tử công thức nào.
+NGUY_HIEM = ["=1+1", '=HYPERLINK("x")', "+1", "-1", "@x", "#N/A"]
+TRUONG_CHU_XLSX = (
+    "ma_ho_so", "ho", "ten", "gioi_tinh", "ngay_sinh", "noi_sinh", "dan_toc",
+    "dia_chi", "nganh", "to_hop", "phuong_thuc", "mon_to_hop", "m1", "m2", "m3",
+    "tong_diem", "ut_ma", "kv",
+)  # fmt: skip
+
+
+@pytest.mark.parametrize("p", NGUY_HIEM)
+def test_xlsx_chuoi_nguy_hiem_ghi_nguyen_van_la_chuoi(mau, p):
+    assert chuan_dia_chi(p) == p  # địa chỉ in ra đúng chuỗi đầu vào
+    h = _hs("GIA-X", "X", OTO, CD, "6510216", "10").model_copy(
+        update={k: p for k in TRUONG_CHU_XLSX}
+    )
+    kq = render_council_documents([h], mau)
+    xlsx = [f for f in kq.files if f.path.endswith(".xlsx")]
+    assert len(xlsx) == 1
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx[0].content))
+    ky_vong = {
+        "1-Hồ sơ đăng ký": {c: p for c in "BCDEFGHI"},
+        "2-Xét tuyển": {c: p for c in "BCDEFGHIJKLMNP"},
+        "3-Trúng tuyển": {c: p for c in "BCDEFGHIJKLMNP"},
+    }
+    for ten, o in ky_vong.items():
+        for cot, gia_tri in o.items():
+            c = wb[ten]["%s4" % cot]
+            assert (c.value, c.data_type) == (gia_tri, "s"), (ten, cot)
+    pt = wb["4-Phương thức"]
+    assert (pt["C2"].value, pt["C2"].data_type) == (p, "s")
+    assert (pt["D2"].value, pt["D2"].data_type) == ("%s - %s" % (p, p), "s")
+    assert p in wb["1-Hồ sơ đăng ký"]["A1"].value
+    z = zipfile.ZipFile(io.BytesIO(xlsx[0].content))
+    sheet = [n for n in z.namelist() if re.fullmatch(r"xl/worksheets/[^/]+\.xml", n)]
+    assert len(sheet) == 4
+    for n in sheet:
+        x = z.read(n)
+        assert not re.search(rb"<f[ >/]", x), n  # không phần tử công thức
+        assert b't="e"' not in x, n  # không ô lỗi
+
+
+# ═══════════════════════════════ F205 — dòng mẫu thiếu cột / có ô gộp ════════
+def _sua_dong_mau(b, bang, dong, kieu):
+    d = _doc(b)
+    t = d.tables[bang]._tbl
+    tr = t.findall(qn("w:tr"))[dong]
+    tc = tr.findall(qn("w:tc"))[2]
+    if kieu == "thieu_cot":  # bỏ một ô của dòng mẫu + một cột lưới
+        tr.remove(tc)
+        grid = t.find(qn("w:tblGrid"))
+        grid.remove(grid.findall(qn("w:gridCol"))[2])
+    else:  # ô dữ liệu gộp dọc — số ô và lưới KHÔNG đổi
+        tc.get_or_add_tcPr().append(OxmlElement("w:vMerge"))
+    return _luu(d)
+
+
+VI_TRI_DONG_MAU = [
+    ("bien_ban", 1, 4),
+    ("bien_ban", 2, 4),
+    ("quyet_dinh", 3, 1),
+    ("danh_sach", 1, 3),
+    ("danh_sach", 4, 3),
+    ("danh_sach", 8, 3),
+    ("danh_sach", 5, 1),
+]
+
+
+@pytest.mark.parametrize("kieu", ["thieu_cot", "o_gop"])
+@pytest.mark.parametrize("loai, bang, dong", VI_TRI_DONG_MAU)
+def test_dong_mau_sai_thi_dung_truoc_moi_tep(mau, monkeypatch, loai, bang, dong, kieu):
+    hong = dataclasses.replace(
+        mau, **{loai: _sua_dong_mau(getattr(mau, loai), bang, dong, kieu)}
+    )
+    da_luu = []
+    goc = svc._luu_docx
+    monkeypatch.setattr(svc, "_luu_docx", lambda d: da_luu.append(1) or goc(d))
+    with pytest.raises(FileValidationError, match="dòng mẫu dữ liệu") as e:
+        render_council_documents(_bo_giai(), hong)
+    assert "GIA-" not in str(e.value)
+    assert da_luu == []  # dừng TRƯỚC khi dựng bất kỳ tệp nào
+
+
+def test_dong_mau_hop_le_van_qua(mau):
+    # Mẫu giả của bộ test này đúng cấu trúc ⇒ dựng đủ 2 + 2×4 tệp, đủ 8 cột ở QĐ.
+    kq = render_council_documents(_bo_giai(), mau)
+    assert len(kq.files) == 10
+    qd = _doc(kq.files[1].content)
+    assert all(len(r.cells) == 8 for r in qd.tables[3].rows)
+    assert [r.cells[7].text for r in qd.tables[3].rows[1:]] == ["Kinh", "Kinh"]
+
+
+# ═══════════════════════════════ địa chỉ — đủ 10 cụm + ranh giới từ ══════════
+def test_dia_chi_du_muoi_cum_va_ranh_gioi_tu():
+    vao = (
+        "thành phố a, thị xã b, thị trấn c, khu phố d, khu vực e, tiểu khu f, "
+        "tổ dân phố g, cụm dân cư h, khu dân cư i, tổ dân cư k"
+    )
+    ra = (
+        "Thành phố A, Thị xã B, Thị trấn C, Khu phố D, Khu vực E, Tiểu khu F, "
+        "TDP G, Cụm dân cư H, Khu dân cư I, Tổ dân cư K"
+    )
+    assert chuan_dia_chi(vao) == ra
+    assert len(svc.DON_VI_GHEP) == 10
+    # Cụm nằm TRONG một từ dài hơn ⇒ không phải đơn vị ghép ⇒ giữ dạng viết hoa từng từ.
+    assert chuan_dia_chi("xthành phố, thành phốx, khu phốhội") == (
+        "Xthành Phố, Thành Phốx, Khu Phốhội"
+    )

@@ -70,6 +70,7 @@ from docx.table import Table, _Row
 from docx.text.paragraph import Paragraph
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils.exceptions import IllegalCharacterError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.utils.exceptions import DataValidationError, FileValidationError
@@ -77,7 +78,7 @@ from app.utils.exceptions import DataValidationError, FileValidationError
 # Nhãn luật render — ghi vào metadata của mỗi bộ văn bản.
 LUAT_RENDER = "v1.1"
 
-# Trần tổng điểm ưu tiên (khu vực + đối tượng) của luật v1 — bộ xuất ghim 2.75 theo
+# Trần tổng điểm ưu tiên (khu vực + đối tượng) của luật v1.1 (= v1) — bộ xuất ghim 2.75 theo
 # ``max_total_bonus`` của quy tắc mặc định trên production lúc in. KHÔNG phải cấu
 # hình sống: giai đoạn 2 dùng bộ phân giải ưu tiên v2, không dùng hằng số này.
 TRAN_UU_TIEN_V1 = 2.75
@@ -106,7 +107,7 @@ CHUYEN_MON_HOP_LE = ("", "none", "so_cap", "trung_cap", "cao_dang")
 
 _KY_HIEU = {"certified_copy": "Ct", "photo": "Pt", "original": "C"}
 
-# Số chỗ trống của từng tham số trong mẫu Quyết định v1. Lệch ⇒ mẫu đã đổi cấu
+# Số chỗ trống của từng tham số trong mẫu Quyết định đang dùng. Lệch ⇒ mẫu đã đổi cấu
 # trúc ⇒ DỪNG thay vì in một văn bản điền nửa vời.
 SO_CHO_SO_QD = 2  # ô tiêu đề "Số:" + đoạn "(Ban hành kèm theo Quyết định số"
 SO_CHO_NGAY_QD = 2  # ô tiêu đề "…, ngày … tháng … năm" + đoạn "Ban hành kèm theo"
@@ -116,7 +117,7 @@ SO_CHO_SO_BB = 1  # "Căn cứ Biên bản số …/BB-"
 
 # ═══════════════════════════════ DTO + tham số ═══════════════════════════════
 class CandidateRowV1(BaseModel):
-    """Một hồ sơ trong danh sách đã chọn — đúng các cột bộ xuất v1 đọc từ CSV của
+    """Một hồ sơ trong danh sách đã chọn — đúng các cột bộ xuất đọc từ CSV của
     ``xettuyen_theo_ds.sql``. Tên trường = tên cột, giá trị = CHUỖI như cột CSV
     (điểm giữ nguyên dạng chữ vì Danh sách in ``m1``/``m2``/``m3``/``tong_diem``
     nguyên văn). Không cắt khoảng trắng, không chuẩn hoá — đó là việc của tầng đọc.
@@ -174,7 +175,7 @@ CANDIDATE_FIELDS: Tuple[str, ...] = tuple(CandidateRowV1.model_fields)
 
 class DecisionParams(BaseModel):
     """Tham số điền vào Quyết định. Mỗi trường độc lập: vắng thì chỗ ấy để trống
-    (như bộ xuất v1). Ngày in theo quy ước văn thư (ngày < 10 và tháng 1, 2 thêm
+    (như bộ xuất). Ngày in theo quy ước văn thư (ngày < 10 và tháng 1, 2 thêm
     số 0): ``ngày 08 tháng 9``, ``08/9/2026``."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -437,28 +438,75 @@ def _dat_doan(p, txt: str) -> None:
         p.add_run(txt)
 
 
+def _kiem_dong_mau(tbl, mau_idx: int, so_truong: int, ten: str) -> None:
+    """NGUỒN DUY NHẤT kiểm dòng mẫu của mọi bảng dữ liệu (Biên bản, Quyết định, Danh
+    sách). Dòng mẫu phải có ĐÚNG ``so_truong`` ô ``w:tc``, mỗi ô đúng MỘT cột lưới
+    (không ``gridSpan`` > 1, không ``vMerge`` / ``hMerge``, dòng không ``gridBefore`` /
+    ``gridAfter``) và lưới bảng đúng ``so_truong`` cột. Thiếu cột thì dữ liệu bị cắt
+    bớt im lặng, ô gộp thì hai trường ghi đè lên cùng một ô ⇒ DỪNG. Thông báo chỉ có
+    tên mẫu và số đếm, không có dữ liệu."""
+    rows = tbl._tbl.findall(qn("w:tr"))
+    if mau_idx >= len(rows):
+        raise FileValidationError("Mẫu %s: không có dòng mẫu dữ liệu." % ten)
+    tr = rows[mau_idx]
+    grid = tbl._tbl.find(qn("w:tblGrid"))
+    so_luoi = len(grid.findall(qn("w:gridCol"))) if grid is not None else 0
+    tcs = tr.findall(qn("w:tc"))
+    gop = 0
+    for tc in tcs:
+        pr = tc.find(qn("w:tcPr"))
+        if pr is None:
+            continue
+        gs = pr.find(qn("w:gridSpan"))
+        if (
+            (gs is not None and gs.get(qn("w:val")) not in (None, "1"))
+            or pr.find(qn("w:vMerge")) is not None
+            or pr.find(qn("w:hMerge")) is not None
+        ):
+            gop += 1
+    trpr = tr.find(qn("w:trPr"))
+    lech = trpr is not None and (
+        trpr.find(qn("w:gridBefore")) is not None
+        or trpr.find(qn("w:gridAfter")) is not None
+    )
+    if len(tcs) != so_truong or so_luoi != so_truong or gop or lech:
+        raise FileValidationError(
+            "Mẫu %s: dòng mẫu dữ liệu phải có đúng %d ô KHÔNG gộp trên lưới %d cột "
+            "(đo được: %d ô, lưới %d cột, %d ô gộp%s)."
+            % (
+                ten,
+                so_truong,
+                so_truong,
+                len(tcs),
+                so_luoi,
+                gop,
+                ", dòng lệch lưới" if lech else "",
+            )
+        )
+
+
 def _do_bang_chen_truoc(tbl, data, mau_idx: int) -> None:
     """Nhân bản dòng mẫu cho từng dòng dữ liệu, chèn NGAY TRƯỚC dòng mẫu rồi xoá
-    dòng mẫu — bảng có dòng "Tổng cộng" ở cuối thì dữ liệu nằm trên dòng tổng."""
+    dòng mẫu — bảng có dòng "Tổng cộng" ở cuối thì dữ liệu nằm trên dòng tổng.
+    Dòng mẫu đã qua :func:`_kiem_dong_mau`: mỗi trường đúng một ô, không cắt bớt."""
     mau = tbl.rows[mau_idx]._tr
     for dl in data:
         tr = copy.deepcopy(mau)
         mau.addprevious(tr)
-        hang = _Row(tr, tbl)
-        for j, v in enumerate(dl[: len(hang.cells)]):
-            _dat_o(hang.cells[j], v)
+        for o, v in zip(_Row(tr, tbl).cells, dl, strict=True):
+            _dat_o(o, v)
     mau.getparent().remove(mau)
 
 
 def _do_bang_noi_cuoi(tbl, data, mau_idx: int = 3) -> None:
-    """Nhân bản dòng mẫu cho từng dòng dữ liệu, NỐI vào cuối bảng rồi xoá dòng mẫu."""
+    """Nhân bản dòng mẫu cho từng dòng dữ liệu, NỐI vào cuối bảng rồi xoá dòng mẫu.
+    Dòng mẫu đã qua :func:`_kiem_dong_mau`: mỗi trường đúng một ô, không cắt bớt."""
     mau = tbl.rows[mau_idx]._tr
     for dl in data:
         tr = copy.deepcopy(mau)
         tbl._tbl.append(tr)
-        hang = _Row(tr, tbl)
-        for j, v in enumerate(dl[: len(hang.cells)]):
-            _dat_o(hang.cells[j], v)
+        for o, v in zip(_Row(tr, tbl).cells, dl, strict=True):
+            _dat_o(o, v)
     mau.getparent().remove(mau)
 
 
@@ -554,11 +602,20 @@ def _trinh_do_chung(hs: Sequence[_HoSo]) -> str:
 
 
 # ═══════════════════════════════ BIÊN BẢN ════════════════════════════════════
+# Số trường của một dòng bảng số liệu: TT + ngành + 9 số đếm (+ tổ hợp | số xét tuyển
+# + điểm). Bằng số ô của dòng mẫu — :func:`_kiem_dong_mau`.
+SO_COT_BIEN_BAN_1 = 2 + 9 + 1
+SO_COT_BIEN_BAN_2 = 4 + 9
+
+
 def _kiem_mau_bien_ban(d) -> None:
     if len(d.tables) < 3 or len(d.tables[1].rows) < 6 or len(d.tables[2].rows) < 6:
         raise FileValidationError(
-            "Mẫu Biên bản không đúng cấu trúc v1 (cần bảng số liệu 1 và 2, mỗi bảng ≥ 6 dòng)."
+            "Mẫu Biên bản không đúng cấu trúc mẫu đang dùng (cần bảng số liệu 1 và 2, "
+            "mỗi bảng ≥ 6 dòng)."
         )
+    _kiem_dong_mau(d.tables[1], 4, SO_COT_BIEN_BAN_1, "Biên bản (bảng số liệu 1)")
+    _kiem_dong_mau(d.tables[2], 4, SO_COT_BIEN_BAN_2, "Biên bản (bảng số liệu 2)")
 
 
 def _dung_bien_ban(hs, nganh_ds, trinh_do: str, mau: bytes) -> bytes:
@@ -641,8 +698,15 @@ def _kiem_mau_quyet_dinh(d) -> None:
     )
     if not ok:
         raise FileValidationError(
-            "Mẫu Quyết định không đúng cấu trúc v1 (đoạn Điều 1 / hai khối ngành / dòng tổng)."
+            "Mẫu Quyết định không đúng cấu trúc mẫu đang dùng (đoạn Điều 1 / hai khối "
+            "ngành / dòng tổng)."
         )
+    # Bảng danh sách của khối ngành thứ NHẤT là bản gốc được nhân cho mọi ngành.
+    _kiem_dong_mau(d.tables[3], 1, SO_COT_QUYET_DINH, "Quyết định (bảng danh sách)")
+
+
+# TT · số CCCD · họ · tên · giới tính · ngày sinh · nơi sinh · dân tộc
+SO_COT_QUYET_DINH = 8
 
 
 def _dat_dong_nganh(par, txt: str) -> None:
@@ -769,7 +833,7 @@ def _dung_quyet_dinh(
     return _luu_docx(d), da_dien
 
 
-# Chỗ trống của mẫu Quyết định v1 (khớp trên CHỮ của đoạn, xuyên run).
+# Chỗ trống của mẫu Quyết định đang dùng (khớp trên CHỮ của đoạn, xuyên run).
 _RE_SO_QD = re.compile(r"(?<=Số:)\s+(?=/QĐ)|(?<=Quyết định số)\s+(?=/QĐ)")
 _RE_NGAY_QD = re.compile(r"ngày\s+tháng\s+năm")
 _RE_DOT = re.compile(r"đợt\s*…+\.*\s*tháng\s*…+\.*\s*(?=năm)")
@@ -779,8 +843,9 @@ _RE_NAM_SAU = re.compile(r"ngày \d{2} tháng \d{1,2} năm\s+(\d{4})")
 
 
 def _dien_tham_so_quyet_dinh(d, ts: DecisionParams) -> Dict[str, int]:
-    """Điền số + ngày QĐ, đợt, số + ngày Biên bản vào đúng chỗ trống của mẫu v1.
-    Mỗi tham số CÓ GIÁ TRỊ phải khớp đúng số chỗ trống của mẫu v1; lệch ⇒ DỪNG."""
+    """Điền số + ngày QĐ, đợt, số + ngày Biên bản vào đúng chỗ trống của mẫu đang dùng.
+    Mỗi tham số CÓ GIÁ TRỊ phải khớp đúng số chỗ trống của mẫu đang dùng; lệch ⇒ DỪNG.
+    """
     doan = _moi_doan(d)
     da: Dict[str, int] = {}
 
@@ -790,7 +855,7 @@ def _dien_tham_so_quyet_dinh(d, ts: DecisionParams) -> Dict[str, int]:
             sau += _thay_trong_doan(p, pattern, repl)
         if len(sau) != can:
             raise FileValidationError(
-                "Mẫu Quyết định: chỗ điền `%s` có %d, mẫu v1 có %d — mẫu đã đổi?"
+                "Mẫu Quyết định: chỗ điền `%s` có %d, mẫu đang dùng có %d — mẫu đã đổi?"
                 % (ten, len(sau), can)
             )
         da[ten] = len(sau)
@@ -822,7 +887,7 @@ def _dien_tham_so_quyet_dinh(d, ts: DecisionParams) -> Dict[str, int]:
             if m and p.text[m.end() :].lstrip().startswith("ngày"):
                 raise FileValidationError(
                     "Mẫu Quyết định: căn cứ Biên bản đã có chữ `ngày` — "
-                    "luật điền v1 không áp được."
+                    "luật điền hiện hành không áp được."
                 )
         ngay, thang = _ngay_thang(ts.ngay_bien_ban)
         dien(
@@ -939,7 +1004,8 @@ def _tinh_luoi(tbl, noi_dung) -> List[int]:
     rk = [_rong_ky_tu(tbl.rows[3].cells[j]) for j in range(nc)]
     dai = [0] * nc
     for dl in noi_dung:
-        for j, v in enumerate(dl[:nc]):
+        # Lưới = số trường (đã qua _kiem_dong_mau) ⇒ ghép đủ cặp, không cắt bớt.
+        for j, v in zip(range(nc), dl, strict=True):
             dai[j] = max(dai[j], len(str(v or "")))
     can = [max(int((dai[j] + 1) * rk[j]), SAN_COT) for j in range(nc)]
     if sum(can) <= tong:
@@ -972,8 +1038,22 @@ def _kiem_mau_danh_sach(d) -> None:
     )
     if not ok:
         raise FileValidationError(
-            "Mẫu Danh sách xét tuyển không đúng cấu trúc v1 (ba danh sách + bảng phương thức)."
+            "Mẫu Danh sách xét tuyển không đúng cấu trúc mẫu đang dùng (ba danh sách + "
+            "bảng phương thức)."
         )
+    for i, so_cot, ten in (
+        (1, len(HDR_DS1), "hồ sơ đăng ký"),
+        (4, len(HDR_DIEM), "xét tuyển"),
+        (8, len(HDR_DIEM), "trúng tuyển"),
+    ):
+        _kiem_dong_mau(d.tables[i], 3, so_cot, "Danh sách xét tuyển (%s)" % ten)
+    _kiem_dong_mau(
+        d.tables[5], 1, SO_COT_PHUONG_THUC, "Danh sách xét tuyển (phương thức)"
+    )
+
+
+# TT · ký hiệu · phương thức · tổ hợp / điểm sử dụng · số thí sinh · ghi chú
+SO_COT_PHUONG_THUC = 6
 
 
 def _dung_ds_docx(mau: bytes, ng, ds1, ds2, ds3, pt_rows, luoi) -> bytes:
@@ -1006,6 +1086,43 @@ def _dung_ds_docx(mau: bytes, ng, ds1, ds2, ds3, pt_rows, luoi) -> bytes:
 
 _VIEN = Border(*[Side(style="thin", color="BFBFBF")] * 4)
 
+# Giới hạn ký tự một ô của Excel — openpyxl CẮT im lặng phần thừa ⇒ dừng thay vì mất chữ.
+_O_XLSX_TOI_DA = 32767
+
+
+def _ghi_o_xlsx(ws, hang: int, cot: int, v):
+    """NGUỒN DUY NHẤT ghi ô xlsx của bộ dựng (mọi sheet, mọi dòng, kể cả tiêu đề và
+    bảng phương thức).
+
+    Chuỗi luôn ghi là CHUỖI (``data_type = 's'``): openpyxl tự biến chuỗi mở đầu bằng
+    ``=`` thành CÔNG THỨC và chuỗi trùng mã lỗi (``#N/A``…) thành ô lỗi — dữ liệu hồ sơ
+    không bao giờ được chạy như công thức trong Excel. Giữ nguyên TỪNG ký tự (không
+    thêm dấu nháy, không cắt khoảng trắng, không ghi giá trị ra log). Số giữ kiểu số.
+    Thông báo lỗi chỉ có toạ độ ô, không có giá trị."""
+    o = ws.cell(row=hang, column=cot)
+    if isinstance(v, str):
+        if len(v) > _O_XLSX_TOI_DA:
+            raise DataValidationError(
+                "Danh sách xlsx: ô %s dài hơn %d ký tự."
+                % (o.coordinate, _O_XLSX_TOI_DA)
+            )
+        try:
+            o.value = v
+        except IllegalCharacterError:
+            raise DataValidationError(
+                "Danh sách xlsx: ô %s chứa ký tự điều khiển không ghi được."
+                % o.coordinate
+            ) from None
+        o.data_type = "s"
+    else:
+        o.value = v
+    return o
+
+
+def _ghi_dong_xlsx(ws, hang: int, gia_tri) -> None:
+    for cot, v in enumerate(gia_tri, 1):
+        _ghi_o_xlsx(ws, hang, cot, v)
+
 
 def _dung_ds_xlsx(ng, ds1, ds2, ds3, pt_rows) -> bytes:
     wb = Workbook()
@@ -1016,9 +1133,12 @@ def _dung_ds_xlsx(ng, ds1, ds2, ds3, pt_rows) -> bytes:
         ("3-Trúng tuyển", HDR_DIEM, ds3, _dong_diem),
     ):
         ws = wb.create_sheet(ten)
-        ws.append(["%s — Ngành: %s — Trình độ: %s" % ((ten[2:].upper(),) + ng)])
-        ws.append([])
-        ws.append(hdr)
+        # Dòng 1 tiêu đề · dòng 2 trống · dòng 3 tên cột · dòng 4.. dữ liệu · một dòng
+        # trống · dòng TỔNG CỘNG (đúng bố cục của bộ xuất).
+        _ghi_dong_xlsx(
+            ws, 1, ["%s — Ngành: %s — Trình độ: %s" % ((ten[2:].upper(),) + ng)]
+        )
+        _ghi_dong_xlsx(ws, 3, hdr)
         for c in ws[3]:
             c.font = Font(bold=True, color="FFFFFF", size=10)
             c.fill = PatternFill("solid", fgColor="1F4E79")
@@ -1027,12 +1147,11 @@ def _dung_ds_xlsx(ng, ds1, ds2, ds3, pt_rows) -> bytes:
             )
             c.border = _VIEN
         for i, h in enumerate(data, 1):
-            ws.append(fn(i, h))
-            for c in ws[ws.max_row]:
+            _ghi_dong_xlsx(ws, 3 + i, fn(i, h))
+            for c in ws[3 + i]:
                 c.border = _VIEN
                 c.alignment = Alignment(vertical="center", wrap_text=True)
-        ws.append([])
-        ws.append(["TỔNG CỘNG", len(data), "hồ sơ"])
+        _ghi_dong_xlsx(ws, 3 + len(data) + 2, ["TỔNG CỘNG", len(data), "hồ sơ"])
         ws.freeze_panes = "A4"
         ws.auto_filter.ref = "A3:%s%d" % (chr(64 + len(hdr)), 3 + len(data))
         for j, hd in enumerate(hdr, 1):
@@ -1044,7 +1163,9 @@ def _dung_ds_xlsx(ng, ds1, ds2, ds3, pt_rows) -> bytes:
             ws.column_dimensions[chr(64 + j)].width = min(max(dai + 2, 8), 30)
         ws.row_dimensions[3].height = 34
     ws = wb.create_sheet("4-Phương thức")
-    ws.append(
+    _ghi_dong_xlsx(
+        ws,
+        1,
         [
             "TT",
             "Ký hiệu",
@@ -1052,13 +1173,13 @@ def _dung_ds_xlsx(ng, ds1, ds2, ds3, pt_rows) -> bytes:
             "Tổ hợp môn/Điểm sử dụng xét tuyển",
             "Số thí sinh",
             "Ghi chú",
-        ]
+        ],
     )
     for c in ws[1]:
         c.font = Font(bold=True, color="FFFFFF")
         c.fill = PatternFill("solid", fgColor="1F4E79")
-    for dl in pt_rows:
-        ws.append(dl)
+    for k, dl in enumerate(pt_rows, 2):
+        _ghi_dong_xlsx(ws, k, dl)
     for j, w in enumerate([5, 10, 30, 34, 12, 20], 1):
         ws.column_dimensions[chr(64 + j)].width = w
     buf = io.BytesIO()
@@ -1141,9 +1262,16 @@ def render_council_documents(
     templates: CouncilTemplates,
     decision_params: Optional[DecisionParams] = None,
 ) -> CouncilDocumentSet:
-    """Dựng bộ văn bản Hội đồng (luật v1) cho đúng danh sách ``rows`` theo thứ tự
-    truyền vào. Không lọc, không đọc CSDL, không ghi đĩa."""
+    """Dựng bộ văn bản Hội đồng (luật v1.1) cho đúng danh sách ``rows`` theo thứ tự
+    truyền vào. Không lọc, không đọc CSDL, không ghi đĩa. Kiểm ĐỦ đầu vào và CẢ BA mẫu
+    trước khi dựng tệp nào — lỗi ở bất kỳ đâu ⇒ không trả tệp nào."""
     hs = _chuan_bi(list(rows))
+    for ten, b, kiem in (
+        ("Biên bản", templates.bien_ban, _kiem_mau_bien_ban),
+        ("Quyết định", templates.quyet_dinh, _kiem_mau_quyet_dinh),
+        ("Danh sách xét tuyển", templates.danh_sach, _kiem_mau_danh_sach),
+    ):
+        kiem(_mo_docx(b, ten))
     nganh_ds = sorted({h.khoa_nganh for h in hs})
     ma = _ma_nganh(hs, nganh_ds)
     trinh_do = _trinh_do_chung(hs)
