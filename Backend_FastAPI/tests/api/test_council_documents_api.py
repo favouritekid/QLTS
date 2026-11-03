@@ -25,6 +25,7 @@ import logging
 import os
 import re
 import threading
+import zipfile
 from datetime import date
 from pathlib import Path
 from urllib.parse import unquote
@@ -213,6 +214,19 @@ async def _tai_ba_mau_api(client, h, ngay="2026-01-01"):
     return out
 
 
+DAU_VET = b"GIA-DAU-VET-E2"
+
+
+def _danh_dau(b):
+    """Bản sao gói zip ``b`` mang chú thích zip ``DAU_VET`` (nội dung các mục giữ nguyên)."""
+    o = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(b)) as z, zipfile.ZipFile(o, "w") as w:
+        for i in z.infolist():
+            w.writestr(i, z.read(i))
+        w.comment = DAU_VET
+    return o.getvalue()
+
+
 def _than_tao(hs, nhan=HO_SO_U1, **them):
     return dict(
         {
@@ -360,14 +374,43 @@ async def test_tao_bo_qua_api_tai_tung_tep_la_bytes_da_luu(client, tk, hs, monke
     monkeypatch.setattr(
         bo_dung, "render_council_documents", lambda *a, **k: pytest.fail("dựng lại")
     )
+    # Đóng DẤU VẾT vào bytes đã lưu (chú thích zip — tệp vẫn mở được như cũ): không cách dựng
+    # lại nào (python-docx mở + lưu lại, dựng từ ảnh chụp) tái tạo được dấu vết ⇒ tải tệp PHẢI
+    # trả đúng bytes trong CSDL. Không có bước này thì "mở + lưu lại" chỉ lộ khi đồng hồ qua
+    # mốc 2 giây của dấu giờ zip (kiểm ngược D1a: lần xanh, lần đỏ).
+    async with csdl.engine.begin() as c:
+        cu = (
+            await c.execute(
+                text(
+                    "SELECT thu_tu, noi_dung FROM council_document_set_file "
+                    "WHERE set_id = :s"
+                ),
+                {"s": bo["id"]},
+            )
+        ).all()
+        for row in cu:
+            b = _danh_dau(bytes(row.noi_dung))
+            await c.execute(
+                text(
+                    "UPDATE council_document_set_file SET noi_dung = :b, sha256 = :h, "
+                    "kich_thuoc = :n WHERE set_id = :s AND thu_tu = :t"
+                ),
+                {
+                    "b": b,
+                    "h": hashlib.sha256(b).hexdigest(),
+                    "n": len(b),
+                    "s": bo["id"],
+                    "t": row.thu_tu,
+                },
+            )
     async with csdl.engine.connect() as c:
         luu = {
-            row.thu_tu: (row.path, bytes(row.noi_dung))
+            row.thu_tu: (row.path, bytes(row.noi_dung), row.sha256)
             for row in (
                 await c.execute(
                     text(
-                        "SELECT thu_tu, path, noi_dung FROM council_document_set_file "
-                        "WHERE set_id = :s"
+                        "SELECT thu_tu, path, noi_dung, sha256 FROM "
+                        "council_document_set_file WHERE set_id = :s"
                     ),
                     {"s": bo["id"]},
                 )
@@ -379,8 +422,9 @@ async def test_tao_bo_qua_api_tai_tung_tep_la_bytes_da_luu(client, tk, hs, monke
             P + "/sets/%d/files/%d" % (bo["id"], t["thu_tu"]), headers=h
         )
         assert r.status_code == 200
-        path, b = luu[t["thu_tu"]]
-        assert r.content == b and hashlib.sha256(r.content).hexdigest() == t["sha256"]
+        path, b, sha = luu[t["thu_tu"]]
+        assert r.content == b and hashlib.sha256(r.content).hexdigest() == sha
+        assert DAU_VET in r.content  # đúng bytes ĐÃ LƯU (có dấu vết), không dựng lại
         assert r.headers["cache-control"] == "no-store"
         assert r.headers["x-content-type-options"] == "nosniff"
         cd = r.headers["content-disposition"]
