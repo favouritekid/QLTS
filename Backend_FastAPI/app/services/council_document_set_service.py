@@ -120,17 +120,20 @@ async def tao_bo_van_ban(
     # dựng (bộ dựng còn kiểm lại một lần nữa ở điểm vào của nó).
     tham_so = bo_dung.kiem_lai_tham_so_quyet_dinh(tham_so)
 
-    # Tối đa MỘT lần dựng cùng lúc trên toàn hệ (mọi worker / container cùng CSDL): khoá tư
+    # (i) đọc — giao dịch riêng, chỉ đọc, đã KẾT THÚC khi hàm này trả về.
+    anh = await doc_ho_so_theo_ma(engine, ma_ho_so, academic_year=academic_year)
+
+    # Tối đa MỘT lần DỰNG cùng lúc trên toàn hệ (mọi worker / container cùng CSDL): khoá tư
     # vấn trên giao dịch của request — giữ tới khi router commit / rollback, tự nhả khi lỗi.
     # Trần 16 MB chỉ kiểm SAU khi dựng ⇒ đây là thứ chặn đỉnh RAM do nhiều lần dựng chồng
-    # nhau (Codex lần 4). Lần thứ hai ⇒ lỗi miền NGAY, không đọc, không dựng, không ghi.
+    # nhau (Codex lần 4). Lấy SAU giao dịch đọc (không trước): câu khoá là câu đầu tiên của
+    # giao dịch request trong service ⇒ lấy trước thì giao dịch ghi bắt đầu TRƯỚC mốc chụp
+    # (đo: Tier 5, ``test_ghi_bo_o_giao_dich_sau_giao_dich_doc``). Lần thứ hai ⇒ lỗi miền
+    # trước khi chọn mẫu / dựng / ghi.
     if not await CouncilDocumentRepository(db).thu_khoa_dung():
         raise ConflictError(
             "Đang dựng một bộ văn bản khác — chờ bộ ấy xong rồi thử lại."
         )
-
-    # (i) đọc — giao dịch riêng, chỉ đọc, đã KẾT THÚC khi hàm này trả về.
-    anh = await doc_ho_so_theo_ma(engine, ma_ho_so, academic_year=academic_year)
 
     # (ii) mẫu theo ngày ký
     ngay_ky = ngay_ky_chon_mau(tham_so, luc_tao)

@@ -573,24 +573,24 @@ async def _dung(db, hs):
 
 async def test_phien_khac_giu_khoa_thi_lan_dung_sau_bi_tu_choi(hs, monkeypatch):
     await _tai_ba_mau_service(hs)
-    goi = []
-    goc = bo_vb.doc_ho_so_theo_ma
+    dung = []
+    goc = bo_dung.render_council_documents
 
-    async def gian(*a, **k):
-        goi.append(1)
-        return await goc(*a, **k)
+    def gian(*a, **k):
+        dung.append(1)
+        return goc(*a, **k)
 
-    monkeypatch.setattr(bo_vb, "doc_ho_so_theo_ma", gian)
+    monkeypatch.setattr(bo_dung, "render_council_documents", gian)
     async with AsyncSessionLocal() as a, AsyncSessionLocal() as b:
         assert await CouncilDocumentRepository(a).thu_khoa_dung() is True  # A giữ khoá
         with pytest.raises(ConflictError, match="Đang dựng một bộ văn bản khác"):
             await _dung(b, hs)
-        assert goi == []  # B không đọc hồ sơ
+        assert dung == [] and await _dem() == (3, 0, 0)  # B không dựng, không ghi
         await b.rollback()
         await a.rollback()  # A kết thúc giao dịch ⇒ khoá tự nhả
         await _dung(b, hs)
         await b.commit()
-    assert goi == [1] and (await _dem())[1] == 1
+    assert dung == [1] and (await _dem())[1] == 1
 
 
 async def test_hai_lan_dung_dong_thoi_lan_thu_hai_bi_tu_choi(hs, monkeypatch):
