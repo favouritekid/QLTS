@@ -26,7 +26,10 @@ Ranh giới — đọc trước khi sửa
 * **Thứ tự đầu vào có nghĩa.** Mọi phép sắp ở đây là sắp ổn định: hai hồ sơ trùng
   khoá sắp giữ thứ tự đầu vào (bộ xuất cũng vậy). Người gọi truyền danh sách theo
   một thứ tự xác định; metadata trả lại đúng thứ tự ấy.
-* **Không ghi dữ liệu cá nhân vào thông báo lỗi** — chỉ số thứ tự dòng đầu vào.
+* **Không ghi dữ liệu cá nhân vào thông báo lỗi** — chỉ số thứ tự dòng đầu vào (và tên
+  trường), không bao giờ có giá trị.
+* **Ký tự ghi được vào Word / Excel** (tập Char của XML 1.0) kiểm MỘT lần ở đầu vào
+  (:func:`_chuan_bi`), trước khi dựng tệp nào.
 
 Luật v1.1 — ba chỗ khác v1 (owner chốt 03-11 lượt 7)
 ====================================================
@@ -171,6 +174,18 @@ class CandidateRowV1(BaseModel):
 
 #: Tên các cột CSV mà DTO dùng — cũng là danh sách trường phải so ở N1b.
 CANDIDATE_FIELDS: Tuple[str, ...] = tuple(CandidateRowV1.model_fields)
+
+#: Các trường CHUỖI của DTO — đều phải qua phép kiểm ký tự ở :func:`_chuan_bi`.
+_TRUONG_CHUOI: Tuple[str, ...] = tuple(
+    k for k, f in CandidateRowV1.model_fields.items() if f.annotation is str
+)
+
+# Ký tự NGOÀI tập Char của XML 1.0 (cho phép \t \n \r, U+0020–U+D7FF, U+E000–U+FFFD,
+# U+10000–U+10FFFF): C0 khác ba ký tự trên, surrogate đơn lẻ, U+FFFE / U+FFFF. Pydantic
+# NHẬN chúng vào DTO; lxml từ chối giữa lúc dựng docx (``ValueError``, surrogate thì
+# ``UnicodeEncodeError``) và openpyxl cấm một phần (``ILLEGAL_CHARACTERS_RE`` — tập này
+# BAO TRÙM tập ấy). Chặn ở đầu vào để mọi đầu vào xấu thành lỗi miền, không lộ giá trị.
+_RE_NGOAI_XML = re.compile(r"[^\t\n\r\x20-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF]")
 
 
 class DecisionParams(BaseModel):
@@ -339,6 +354,22 @@ def _chuan_bi(rows: Sequence[CandidateRowV1]) -> List[_HoSo]:
     for i, r in enumerate(rows, 1):
         if not isinstance(r, CandidateRowV1):
             raise DataValidationError("Dòng %d không phải CandidateRowV1." % i)
+        # TẦNG CHỦ SỞ HỮU của "chữ ghi được vào Word / Excel": MỌI trường chuỗi,
+        # TRƯỚC mọi phép kiểm khác (thông báo nêu đúng trường) và trước khi dựng tệp
+        # nào. Kiểu lạ (``model_copy`` / ``model_construct`` bỏ qua kiểm kiểu của
+        # pydantic) cũng dừng ở đây. Thông báo: số dòng + tên trường, KHÔNG có giá trị.
+        for ten in _TRUONG_CHUOI:
+            v = getattr(r, ten)
+            if not isinstance(v, str):
+                raise DataValidationError(
+                    "Dòng %d, trường %s: không phải chuỗi." % (i, ten)
+                )
+            if _RE_NGOAI_XML.search(v):
+                raise DataValidationError(
+                    "Dòng %d, trường %s: có ký tự không ghi được vào Word / Excel "
+                    "(ký tự điều khiển hoặc ngoài tập ký tự XML) — không dựng văn bản."
+                    % (i, ten)
+                )
         if r.ma_ho_so in gap:
             raise DataValidationError(
                 "Danh sách có mã hồ sơ TRÙNG (dòng %d trùng dòng %d) — mỗi người một dòng."
@@ -510,14 +541,76 @@ def _do_bang_noi_cuoi(tbl, data, mau_idx: int = 3) -> None:
     mau.getparent().remove(mau)
 
 
-def _dong_tong(tbl):
-    """Dòng "Tổng cộng" THẬT — không dùng ``rows[-1]``."""
-    for h in tbl.rows:
-        if h.cells[0].text.strip().lower().startswith("tổng cộng"):
-            return h
-    raise FileValidationError(
-        "Mẫu Biên bản: không tìm thấy dòng `Tổng cộng` trong bảng số liệu."
+def _dong_tong(tbl, ten: str):
+    """Dòng "Tổng cộng" THẬT — không dùng ``rows[-1]``. Bảng phải có ĐÚNG MỘT dòng tổng:
+    hai dòng thì chỉ dòng đầu nhận số, dòng sau giữ nguyên chữ mẫu mà bộ dựng vẫn trả
+    bộ tệp ⇒ DỪNG. Dùng chung cho phép kiểm mẫu (:func:`_kiem_dong_tong`) và chỗ ghi."""
+    dong = [
+        h
+        for h in tbl.rows
+        if h.cells and h.cells[0].text.strip().lower().startswith("tổng cộng")
+    ]
+    if len(dong) != 1:
+        raise FileValidationError(
+            "Mẫu %s: cần đúng MỘT dòng `Tổng cộng`, đo được %d." % (ten, len(dong))
+        )
+    return dong[0]
+
+
+def _kiem_dong_tong(tbl, so_truong: int, bo: int, ten: str) -> None:
+    """NGUỒN DUY NHẤT (tầng chủ sở hữu) kiểm dòng "Tổng cộng" của bảng số liệu Biên bản
+    — gọi trong :func:`_kiem_mau_bien_ban`, tức TRƯỚC khi dựng bất kỳ tệp nào.
+
+    ``_Row.cells`` của python-docx trả MỘT phần tử cho MỖI cột lưới: ô ``gridSpan=k``
+    lặp k lần, ô ``vMerge`` "continue" trả ô GỐC ở dòng trên, ô thiếu ở cuối dòng thì
+    danh sách ngắn hơn. Ghi tổng theo chỉ số cột trên một dòng như thế thì mất số tổng
+    (thiếu ô), hai số ghi đè cùng một ô (gộp ngang) hoặc số tổng đè lên dòng dữ liệu
+    phía trên (gộp dọc) — mà vẫn trả bộ tệp. Vì vậy dòng tổng phải: đúng MỘT dòng
+    (:func:`_dong_tong`); không ``gridBefore`` / ``gridAfter``; tổng ``gridSpan`` các ô
+    = số cột lưới = ``so_truong``; vùng nhãn phủ đúng các cột ``[0, bo)`` — gộp nhãn
+    "Tổng cộng" như mẫu đang dùng là HỢP LỆ — và không ô nào vắt qua ranh giới nhãn /
+    số; mọi ô từ cột ``bo`` trở đi đúng MỘT cột lưới, không ``vMerge`` / ``hMerge``.
+    Độ rộng đọc bằng ``grid_span`` của python-docx — cùng cách ``_Row.cells`` đọc khi
+    ghi. Thông báo chỉ có tên mẫu và số đếm, không có dữ liệu."""
+    tr = _dong_tong(tbl, ten)._tr
+    grid = tbl._tbl.find(qn("w:tblGrid"))
+    so_luoi = len(grid.findall(qn("w:gridCol"))) if grid is not None else 0
+    trpr = tr.find(qn("w:trPr"))
+    lech = trpr is not None and (
+        trpr.find(qn("w:gridBefore")) is not None
+        or trpr.find(qn("w:gridAfter")) is not None
     )
+    tcs = tr.findall(qn("w:tc"))
+    cot = 0  # cột lưới bắt đầu của ô đang xét = TỔNG gridSpan các ô đứng trước
+    vat_qua = gop = 0
+    for tc in tcs:
+        rong = tc.grid_span
+        pr = tc.find(qn("w:tcPr"))
+        gop_doc = pr is not None and (
+            pr.find(qn("w:vMerge")) is not None or pr.find(qn("w:hMerge")) is not None
+        )
+        if cot < bo < cot + rong:
+            vat_qua += 1
+        elif cot >= bo and (rong != 1 or gop_doc):
+            gop += 1
+        cot += rong
+    if lech or so_luoi != so_truong or cot != so_luoi or vat_qua or gop:
+        raise FileValidationError(
+            "Mẫu %s: dòng `Tổng cộng` phải phủ đúng %d cột lưới — nhãn ở %d cột "
+            "đầu, mỗi cột số một ô KHÔNG gộp (đo được: %d ô phủ %d cột, lưới %d "
+            "cột, %d ô vắt qua ranh giới nhãn, %d ô số gộp%s)."
+            % (
+                ten,
+                so_truong,
+                bo,
+                len(tcs),
+                cot,
+                so_luoi,
+                vat_qua,
+                gop,
+                ", dòng lệch lưới" if lech else "",
+            )
+        )
 
 
 def _thay_trong_doan(par, pattern: "re.Pattern[str]", repl: str) -> List[str]:
@@ -606,6 +699,13 @@ def _trinh_do_chung(hs: Sequence[_HoSo]) -> str:
 # + điểm). Bằng số ô của dòng mẫu — :func:`_kiem_dong_mau`.
 SO_COT_BIEN_BAN_1 = 2 + 9 + 1
 SO_COT_BIEN_BAN_2 = 4 + 9
+# Dòng "Tổng cộng": nhãn ở hai cột đầu (TT + ngành); số tổng ghi từ cột này trở đi.
+SO_COT_NHAN_TONG_BB = 2
+# (chỉ số bảng, số trường, tên trong thông báo) — dùng chung cho phép kiểm và chỗ ghi.
+_BANG_BIEN_BAN = (
+    (1, SO_COT_BIEN_BAN_1, "Biên bản (bảng số liệu 1)"),
+    (2, SO_COT_BIEN_BAN_2, "Biên bản (bảng số liệu 2)"),
+)
 
 
 def _kiem_mau_bien_ban(d) -> None:
@@ -614,8 +714,10 @@ def _kiem_mau_bien_ban(d) -> None:
             "Mẫu Biên bản không đúng cấu trúc mẫu đang dùng (cần bảng số liệu 1 và 2, "
             "mỗi bảng ≥ 6 dòng)."
         )
-    _kiem_dong_mau(d.tables[1], 4, SO_COT_BIEN_BAN_1, "Biên bản (bảng số liệu 1)")
-    _kiem_dong_mau(d.tables[2], 4, SO_COT_BIEN_BAN_2, "Biên bản (bảng số liệu 2)")
+    for i, so_truong, ten in _BANG_BIEN_BAN:
+        _kiem_dong_mau(d.tables[i], 4, so_truong, ten)
+    for i, so_truong, ten in _BANG_BIEN_BAN:
+        _kiem_dong_tong(d.tables[i], so_truong, SO_COT_NHAN_TONG_BB, ten)
 
 
 def _dung_bien_ban(hs, nganh_ds, trinh_do: str, mau: bytes) -> bytes:
@@ -635,21 +737,24 @@ def _dung_bien_ban(hs, nganh_ds, trinh_do: str, mau: bytes) -> bytes:
 
     _do_bang_chen_truoc(d.tables[1], b1, mau_idx=4)
     _do_bang_chen_truoc(d.tables[2], b2, mau_idx=4)
-    for tb, ds, bo in ((d.tables[1], b1, 2), (d.tables[2], b2, 2)):
-        hang = _dong_tong(tb)
-        n = len(hang.cells)
-        if n > len(ds[0]):
+    for (i, so_truong, ten), ds in zip(_BANG_BIEN_BAN, (b1, b2), strict=True):
+        hang = _dong_tong(d.tables[i], ten)
+        # Lớp PHỤ. Tầng chủ sở hữu là :func:`_kiem_dong_tong` (gọi trong
+        # _kiem_mau_bien_ban, TRƯỚC khi dựng tệp nào): qua nó thì mỗi cột từ
+        # SO_COT_NHAN_TONG_BB là đúng một ô riêng của dòng tổng ⇒ ở đây chỉ khẳng định.
+        if len(hang.cells) != so_truong or len(ds[0]) != so_truong:
             raise FileValidationError(
-                "Mẫu Biên bản: dòng tổng có %d ô, nhiều hơn số cột số liệu." % n
+                "Mẫu %s: dòng `Tổng cộng` có %d cột, bảng có %d trường."
+                % (ten, len(hang.cells), so_truong)
             )
-        for j in range(bo, n):
+        for j in range(SO_COT_NHAN_TONG_BB, so_truong):
             cot = [x[j] for x in ds]
             if all(re.fullmatch(r"\d+", x or "") for x in cot):
                 _dat_o(hang.cells[j], str(sum(int(x) for x in cot)))
             else:
                 _dat_o(hang.cells[j], "")
     # Bảng 2: cột 2 là "Số lượng xét tuyển" (cộng được), cột 3 là điểm (không cộng).
-    ht = _dong_tong(d.tables[2])
+    ht = _dong_tong(d.tables[2], _BANG_BIEN_BAN[1][2])
     _dat_o(ht.cells[2], str(sum(int(x[2]) for x in b2)))
     _dat_o(ht.cells[3], "")
 
@@ -700,6 +805,21 @@ def _kiem_mau_quyet_dinh(d) -> None:
         raise FileValidationError(
             "Mẫu Quyết định không đúng cấu trúc mẫu đang dùng (đoạn Điều 1 / hai khối "
             "ngành / dòng tổng)."
+        )
+    # Khối ngành = đoạn "Ngành:" → bảng danh sách → đoạn "Số thí sinh" LIỀN NHAU. Bộ
+    # dựng lấy bảng theo chỉ số (bảng 3 nhân cho mọi ngành, bảng 4 bị XOÁ cùng khối
+    # mẫu thứ hai): lệch vị trí thì xoá nhầm một bảng khác của mẫu, hoặc danh sách
+    # ngành 1 nằm dưới tiêu đề ngành khác — mà vẫn trả bộ tệp ⇒ DỪNG.
+    lien = [
+        ps[a]._p.getnext() is d.tables[t]._tbl
+        and d.tables[t]._tbl.getnext() is ps[b]._p
+        for a, t, b in ((20, 3, 21), (22, 4, 23))
+    ]
+    if not all(lien):
+        raise FileValidationError(
+            "Mẫu Quyết định: khối ngành phải là đoạn `Ngành:`, bảng danh sách, đoạn "
+            "`Số thí sinh` liền nhau (khối 1: %s, khối 2: %s)."
+            % tuple("liền" if x else "KHÔNG liền" for x in lien)
         )
     # Bảng danh sách của khối ngành thứ NHẤT là bản gốc được nhân cho mọi ngành.
     _kiem_dong_mau(d.tables[3], 1, SO_COT_QUYET_DINH, "Quyết định (bảng danh sách)")
@@ -1098,7 +1218,11 @@ def _ghi_o_xlsx(ws, hang: int, cot: int, v):
     ``=`` thành CÔNG THỨC và chuỗi trùng mã lỗi (``#N/A``…) thành ô lỗi — dữ liệu hồ sơ
     không bao giờ được chạy như công thức trong Excel. Giữ nguyên TỪNG ký tự (không
     thêm dấu nháy, không cắt khoảng trắng, không ghi giá trị ra log). Số giữ kiểu số.
-    Thông báo lỗi chỉ có toạ độ ô, không có giá trị."""
+    Thông báo lỗi chỉ có toạ độ ô, không có giá trị.
+
+    Ký tự điều khiển: nhánh ``IllegalCharacterError`` là lớp PHỤ. Tầng chủ sở hữu là
+    phép kiểm đầu vào ở :func:`_chuan_bi` (``_RE_NGOAI_XML``, bao trùm tập cấm của
+    openpyxl) — chuỗi từ DTO không tới được đây với ký tự cấm."""
     o = ws.cell(row=hang, column=cot)
     if isinstance(v, str):
         if len(v) > _O_XLSX_TOI_DA:
