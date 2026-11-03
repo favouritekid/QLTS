@@ -832,6 +832,21 @@ def test_xlsx_chuoi_nguy_hiem_ghi_nguyen_van_la_chuoi(mau, p):
         assert b't="e"' not in x, n  # không ô lỗi
 
 
+def test_xlsx_o_qua_dai_hoac_ky_tu_dieu_khien_thi_dung_khong_lo_gia_tri(mau):
+    # openpyxl CẮT im lặng chuỗi > 32.767 ký tự ⇒ hàm ghi chung dừng thay vì mất chữ.
+    dai = "Q" * 32768
+    h = _hs("GIA-X", "X", OTO, CD, "6510216", "10", noi_sinh=dai)
+    with pytest.raises(DataValidationError, match="dài hơn 32767") as e:
+        render_council_documents([h], mau)
+    assert "QQQ" not in str(e.value)
+    # Ký tự điều khiển: lỗi chỉ có toạ độ ô, không có giá trị, không giữ ngoại lệ gốc.
+    ws = openpyxl.Workbook().active
+    with pytest.raises(DataValidationError, match="ô C7 chứa ký tự điều khiển") as e:
+        svc._ghi_o_xlsx(ws, 7, 3, "GIA\x01BI-MAT")
+    assert "BI-MAT" not in str(e.value) and e.value.__cause__ is None
+    assert e.value.__suppress_context__
+
+
 # ═══════════════════════════════ F205 — dòng mẫu thiếu cột / có ô gộp ════════
 def _sua_dong_mau(b, bang, dong, kieu):
     d = _doc(b)
