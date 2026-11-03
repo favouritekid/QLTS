@@ -233,19 +233,20 @@ ROUTE_DOC_BO = [
 ]
 
 
-async def _goi(client, method, duong, h, ba_bo=None, hs=None):
+async def _goi(client, method, duong, h, ba_bo=None, hs=None, goc=P):
+    """Gọi ``goc + duong``; ``goc=""`` ⇒ ``duong`` là đường ĐẦY ĐỦ (lấy từ bảng route)."""
     if ba_bo is not None:
         duong = duong.replace("{u1}", str(ba_bo["u1"][0]))
     if method == "GET":
-        return await client.get(P + duong, headers=h)
-    if duong == "/templates":
+        return await client.get(goc + duong, headers=h)
+    if duong.endswith("/templates"):
         return await client.post(
-            P + duong,
+            goc + duong,
             data={"loai": "bien_ban", "hieu_luc_tu": "2026-01-01"},
             files={"file": ("m.docx", MAU_GIA["bien_ban"], KIEU_DOCX)},
             headers=h,
         )
-    return await client.post(P + duong, json=_than_tao(hs), headers=h)
+    return await client.post(goc + duong, json=_than_tao(hs), headers=h)
 
 
 @pytest.mark.parametrize("vai", ["ql_u1", "can_bo", "ke_toan"])
@@ -442,21 +443,23 @@ async def test_dong_bang_chan_moi_route_ghi_cua_module(client, tk, hs, dong_bang
     # Bảng route THẬT — module có đúng hai route ghi, không có route xoá.
     assert [m for m, _ in ghi] == ["POST", "POST"]
     for m, duong in ghi:
-        r = await _goi(client, m, duong[len(P) :], (await tk("admin")), hs=hs)
+        # Gọi ĐÚNG đường của bảng route — KHÔNG ghép lại từ hằng P: router bị dời ra ngoài
+        # tiền tố đóng băng thì ca này phải ĐỎ (kiểm ngược F1 lần đầu: ghép từ P làm ca XANH).
+        r = await _goi(client, m, duong, (await tk("admin")), hs=hs, goc="")
         assert r.status_code == 503, (duong, r.status_code, r.text)
         assert r.json()["code"] == "ADMISSION_FROZEN"
     assert await _dem() == (0, 0, 0)
 
 
 async def test_dong_bang_van_cho_route_doc(client, tk, ba_bo, dong_bang):
-    for duong in (
-        "/sets",
-        "/sets/%d" % ba_bo["u1"][0],
-        "/sets/%d/files/1" % ba_bo["u1"][0],
-        "/templates",
-    ):
-        r = await client.get(P + duong, headers=(await tk("admin")))
-        assert r.status_code == 200, (duong, r.text)
+    # Mọi route ĐỌC của module (bảng route thật) vẫn 200 khi đóng băng — như mọi route đọc
+    # khác của tiền tố (middleware chỉ chặn POST / PUT / PATCH / DELETE).
+    doc = sorted(p for m, p in _route_cua_module() if m == "GET")
+    assert len(doc) == 4
+    for duong in doc:
+        url = duong.replace("{set_id}", str(ba_bo["u1"][0])).replace("{thu_tu}", "1")
+        r = await client.get(url, headers=(await tk("admin")))
+        assert r.status_code == 200, (url, r.text)
 
 
 def test_khoi_dong_bang_nginx_phu_moi_route_ghi_cua_module():
