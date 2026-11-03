@@ -14,6 +14,7 @@ số), ô gộp + bề rộng ô gộp, xlsx, kiểm đầu vào / mẫu (fail-c
 mã hồ sơ), metadata, tính tất định.
 """
 
+import copy
 import dataclasses
 import hashlib
 import io
@@ -853,12 +854,19 @@ def _sua_dong_mau(b, bang, dong, kieu):
     t = d.tables[bang]._tbl
     tr = t.findall(qn("w:tr"))[dong]
     tc = tr.findall(qn("w:tc"))[2]
+    grid = t.find(qn("w:tblGrid"))
     if kieu == "thieu_cot":  # bỏ một ô của dòng mẫu + một cột lưới
         tr.remove(tc)
-        grid = t.find(qn("w:tblGrid"))
         grid.remove(grid.findall(qn("w:gridCol"))[2])
-    else:  # ô dữ liệu gộp dọc — số ô và lưới KHÔNG đổi
+    elif kieu == "o_gop":  # ô dữ liệu gộp dọc — số ô và lưới KHÔNG đổi
         tc.get_or_add_tcPr().append(OxmlElement("w:vMerge"))
+    else:
+        # THỪA cột (lượt C2): thêm một cột lưới; "thua_o" thêm cả một ô vào dòng mẫu
+        # (ô cuối nhân bản), "thua_luoi" giữ đúng số ô — chỉ lưới thừa.
+        cot = copy.deepcopy(grid.findall(qn("w:gridCol"))[-1])
+        grid.append(cot)
+        if kieu == "thua_o":
+            tr.append(copy.deepcopy(tr.findall(qn("w:tc"))[-1]))
     return _luu(d)
 
 
@@ -873,7 +881,7 @@ VI_TRI_DONG_MAU = [
 ]
 
 
-@pytest.mark.parametrize("kieu", ["thieu_cot", "o_gop"])
+@pytest.mark.parametrize("kieu", ["thieu_cot", "o_gop", "thua_o", "thua_luoi"])
 @pytest.mark.parametrize("loai, bang, dong", VI_TRI_DONG_MAU)
 def test_dong_mau_sai_thi_dung_truoc_moi_tep(mau, monkeypatch, loai, bang, dong, kieu):
     hong = dataclasses.replace(
