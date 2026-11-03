@@ -549,16 +549,17 @@ async def test_tao_bo_ghi_metadata_va_bytes_nguyen_tung_tep(hs, monkeypatch):
         assert [t.path for t in tep] == [f.path for f in kq.files]
         assert all("noi_dung" in inspect(t).unloaded for t in tep)
         for t, f in zip(tep, kq.files):
-            luu, sha = await bo_vb.doc_tep_da_luu(db, b.id, t.path)
-            assert luu == f.content and sha == f.sha256 == t.sha256  # bytes NGUYÊN
+            luu = await bo_vb.doc_tep_da_luu(db, b.id, t.thu_tu)
+            assert luu.noi_dung == f.content  # bytes NGUYÊN
+            assert luu.sha256 == f.sha256 == t.sha256 and luu.path == t.path == f.path
     # Tải lại KHÔNG dựng lại.
     monkeypatch.setattr(
         bo_dung, "render_council_documents", lambda *a, **k: pytest.fail("dựng lại")
     )
     async with AsyncSessionLocal() as db:
-        await bo_vb.doc_tep_da_luu(db, b.id, kq.files[0].path)
+        await bo_vb.doc_tep_da_luu(db, b.id, 1)
         with pytest.raises(ResourceNotFoundError):
-            await bo_vb.doc_tep_da_luu(db, b.id, "khong/co.docx")
+            await bo_vb.doc_tep_da_luu(db, b.id, len(kq.files) + 1)
 
 
 @pytest.mark.parametrize(

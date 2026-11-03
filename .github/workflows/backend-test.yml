@@ -1177,6 +1177,11 @@ jobs:
           # ROLLBACK — bảng nào còn hàng ⇒ dừng không xoá gì; cờ CHO PHÉP đúng "1" ⇒ xoá được).
           # Trước đây guard hạ cấp chỉ được canh bằng script chạy tay (Codex lần 4, K6). Ghim
           # WHOLE-FILE.
+          # `tests/api/test_council_documents_api.py` (lượt E2 — API văn bản Hội đồng): request
+          # THẬT qua app thật + CSDL test — quyền theo vai (Casbin), IDOR hai chiều đơn vị (404),
+          # bộ unit NULL chỉ admin, tải tệp = bytes đã lưu, đóng băng 503 trên mọi route ghi
+          # của module (lấy từ bảng route thật), log 422 không có CCCD, một lần dựng cùng lúc
+          # (hai phiên CSDL), không lộ qua đường tĩnh. Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1249,6 +1254,7 @@ jobs:
               tests/integration/test_council_candidate_snapshot.py
               tests/integration/test_council_document_store.py
               tests/integration/test_council_document_migration_downgrade.py
+              tests/api/test_council_documents_api.py
 
     env:
       APP_ENV: test

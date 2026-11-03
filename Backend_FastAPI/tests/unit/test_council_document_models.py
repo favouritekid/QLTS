@@ -91,11 +91,47 @@ def test_khoa_ngoai_tep_xoa_theo_bo():
     assert dv.ondelete == "SET NULL"  # đơn vị bị xoá ⇒ bộ THU HẸP về chỉ admin
 
 
+TEP_MIGRATION_CASBIN = (
+    GOC / "alembic" / "versions" / "hdts20261103b_council_document_casbin.py"
+)
+
+
+def _migration_casbin():
+    spec = importlib.util.spec_from_file_location("hdts20261103b", TEP_MIGRATION_CASBIN)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def test_migration_la_head_duy_nhat_noi_tiep_head_cu():
     cfg = Config(str(GOC / "alembic.ini"))
     cfg.set_main_option("script_location", str(GOC / "alembic"))
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    assert heads == ["hdts20261103"]
+    assert heads == ["hdts20261103b"]  # lượt E2: quyền Casbin của API nối sau bảng
     mig = _migration()
     assert (mig.revision, mig.down_revision) == ("hdts20261103", "v3circ20261011c")
     assert mig.CO_CHO_PHEP_XOA.endswith("_ENABLED")  # cờ CHO PHÉP, mặc định tắt
+    cb = _migration_casbin()
+    assert (cb.revision, cb.down_revision) == ("hdts20261103b", "hdts20261103")
+
+
+def test_quyen_manager_trong_template_co_migration_cap():
+    # Production KHÔNG tự đồng bộ template ⇒ mọi dòng manager của API văn bản Hội đồng
+    # trong template PHẢI là đúng các dòng migration hdts20261103b chèn (và ngược lại).
+    from app.casbin_config.policy_templates import (
+        ACCOUNTANT_TEMPLATE,
+        MANAGER_TEMPLATE,
+        OFFICER_TEMPLATE,
+    )
+
+    cb = _migration_casbin()
+    tien_to = "/api/admission-config/council-documents"
+    template = {
+        ("role:manager", p["object"], p["action"], p.get("eft", "allow"))
+        for p in MANAGER_TEMPLATE["policies"]
+        if p["object"].startswith(tien_to)
+    }
+    assert template == set(cb.POLICIES) and len(template) == 3
+    assert all(p[2] == "GET" for p in cb.POLICIES)  # manager CHỈ ĐỌC
+    for t in (OFFICER_TEMPLATE, ACCOUNTANT_TEMPLATE):
+        assert not [p for p in t["policies"] if p["object"].startswith(tien_to)]
