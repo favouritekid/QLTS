@@ -436,6 +436,32 @@ class Settings(BaseSettings):
     # tài khoản, người ký). ⚠️ SAU retention KHÔNG re-render lại được nguyên
     # văn — đó là đánh đổi CÓ CHỦ Ý giữa data-minimization và tái lập. Cần lưu
     # lâu hơn thì nâng số ngày này, đừng bỏ bước scrub.
+    # -- Văn bản Hội đồng tuyển sinh (giai đoạn 1 "Lần xét tuyển") --
+    # GIỚI HẠN KỸ THUẬT (chống tệp nén bom, bộ quá cỡ làm phình CSDL / bản sao lưu),
+    # KHÔNG phải số nghiệp vụ. Ba mẫu thật đo 03-11: ≤ 155 KB nén, ≤ 0,5 MB giải nén,
+    # ≤ 16 mục zip. Mẫu và tệp sinh lưu trong CSDL (bytea) ⇒ mỗi byte vào cả pg_dump.
+    COUNCIL_TEMPLATE_MAX_BYTES: int = Field(
+        default=5 * 1024 * 1024, ge=64 * 1024, le=50 * 1024 * 1024,
+        validation_alias="COUNCIL_TEMPLATE_MAX_BYTES",
+    )  # kích thước tệp mẫu .docx tải lên
+    COUNCIL_TEMPLATE_MAX_UNCOMPRESSED_BYTES: int = Field(
+        default=30 * 1024 * 1024, ge=1024 * 1024, le=200 * 1024 * 1024,
+        validation_alias="COUNCIL_TEMPLATE_MAX_UNCOMPRESSED_BYTES",
+    )  # tổng kích thước GIẢI NÉN của mọi mục zip (đo thật khi đọc, không tin tiêu đề)
+    COUNCIL_TEMPLATE_MAX_ZIP_ENTRIES: int = Field(
+        default=300, ge=10, le=5000,
+        validation_alias="COUNCIL_TEMPLATE_MAX_ZIP_ENTRIES",
+    )  # số mục trong gói zip của mẫu
+    COUNCIL_SET_MAX_PROFILES: int = Field(
+        default=1000, ge=1, le=10000,
+        validation_alias="COUNCIL_SET_MAX_PROFILES",
+    )  # số hồ sơ tối đa của MỘT bộ văn bản. Đo 03-11 (1.000 hồ sơ giả, 12 ngành, máy dev
+    # 8 vCPU): dựng ~11 s, đi qua nginx proxy_read_timeout 60s ⇒ nâng trần thì đo lại thời gian
+    COUNCIL_SET_MAX_TOTAL_BYTES: int = Field(
+        default=16 * 1024 * 1024, ge=1024 * 1024, le=512 * 1024 * 1024,
+        validation_alias="COUNCIL_SET_MAX_TOTAL_BYTES",
+    )  # tổng bytes các tệp sinh của MỘT bộ (vượt ⇒ không ghi gì). Đo 03-11: 1.000 hồ sơ giả
+    # ⇒ 2,6 MB tệp (mẫu giả mang ~130 KB không nén được như phông nhúng của mẫu thật)
     # -- Landing page công khai /lp/{code} (PR-5) --
     SMS_LANDING_SCHOOL_NAME: str = Field(
         default="Cao đẳng Bách khoa Tây Nguyên",
