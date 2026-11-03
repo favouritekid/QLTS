@@ -944,7 +944,11 @@ def _sua_dong_tong(b, bang, kieu):
     elif kieu == "thua_o":  # (d) thừa một ô (nhân bản ô cuối)
         tr.append(copy.deepcopy(tcs[-1]))
     elif kieu == "hai_dong":  # (e) HAI dòng tổng, mỗi dòng đúng cấu trúc
-        tr.addnext(copy.deepcopy(tr))
+        # Lượt E1: số dòng của bảng nay cũng bị khoá (F207) ⇒ dòng tổng thứ hai THAY dòng
+        # tiêu đề cuối (bảng vẫn 6 dòng) để ca này chỉ vi phạm "đúng một dòng tổng".
+        trs = d.tables[bang]._tbl.findall(qn("w:tr"))
+        trs[3].addprevious(copy.deepcopy(tr))
+        trs[3].getparent().remove(trs[3])
     elif kieu == "nhan_vat_qua":  # nhãn gộp 3 cột (vắt sang cột số 2), bỏ ô cột 2
         tcs[0].grid_span = 3
         tr.remove(tcs[1])
@@ -1186,3 +1190,458 @@ def test_khoi_nganh_quyet_dinh_khong_lien_thi_dung_truoc_moi_tep(
         render_council_documents(_bo_giai(), hong)
     assert "GIA-" not in str(e.value)
     assert da_luu == []
+
+
+# ═══════════════════════════════ F207 — vùng dữ liệu của mẫu chỉ có cấu trúc cho phép ══
+# Hàm đổ bảng chỉ xoá MỘT dòng mẫu và chỉ ghi đè chữ của RUN TRỰC TIẾP. Dòng dư / chữ ở
+# chỗ khác (hyperlink, bảng lồng, trường, khung nội dung, hình, khung chữ, sửa đổi theo
+# dõi) bị IN KÈM dữ liệu ⇒ phép kiểm mẫu phải từ chối. Mỗi ca dưới đây vi phạm ĐÚNG MỘT
+# bất biến; phần còn lại của mẫu giả giữ nguyên.
+_NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+_NS_V = "urn:schemas-microsoft-com:vml"
+
+
+def _el(tag, *con, **thuoc):
+    e = OxmlElement(tag)
+    for k, v in thuoc.items():
+        e.set(qn(k.replace("__", ":")), v)
+    for c in con:
+        e.append(c)
+    return e
+
+
+def _run_chu(chu="GIA-SOT"):
+    t = _el("w:t")
+    t.text = chu
+    return _el("w:r", t)
+
+
+def _cai_noi_dung_la(tc, kieu):
+    """Đặt vào ô ``tc`` (dòng mẫu / ô số dòng tổng) đúng MỘT thứ ngoài run trực tiếp."""
+    p = tc.findall(qn("w:p"))[-1]
+    if kieu == "hyperlink":
+        p.append(_el("w:hyperlink", _run_chu()))
+    elif kieu == "bang_long":
+        long = _el("w:tbl", _el("w:tblPr"), _el("w:tblGrid", _el("w:gridCol")))
+        long.append(_el("w:tr", _el("w:tc", _el("w:p", _run_chu()))))
+        p.addprevious(long)  # ô phải kết thúc bằng một đoạn
+    elif kieu == "fld_simple":
+        p.append(_el("w:fldSimple", _run_chu(), w__instr="PAGE"))
+    elif kieu == "fld_char":
+        p.append(_el("w:r", _el("w:fldChar", w__fldCharType="begin")))
+    elif kieu == "sdt_o":
+        p.addprevious(_el("w:sdt", _el("w:sdtContent", _el("w:p", _run_chu()))))
+    elif kieu == "sdt_doan":
+        p.append(_el("w:sdt", _el("w:sdtContent", _run_chu())))
+    elif kieu == "hinh":
+        p.append(_el("w:r", _el("w:drawing")))
+    elif kieu == "khung_chu":
+        tb = docx.oxml.parse_xml(
+            '<v:shape xmlns:v="%s"><v:textbox><w:txbxContent xmlns:w="%s"><w:p><w:r>'
+            "<w:t>GIA-SOT</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape>"
+            % (_NS_V, svc._NS_W)
+        )
+        p.append(_el("w:r", _el("w:pict", tb)))
+    elif kieu == "lua_chon_mc":
+        mc = docx.oxml.parse_xml('<mc:AlternateContent xmlns:mc="%s"/>' % _NS_MC)
+        p.append(_el("w:r", mc))
+    elif kieu == "sua_doi_theo_doi":
+        p.append(_el("w:ins", _run_chu(), w__id="1", w__author="GIA"))
+    else:
+        raise AssertionError(kieu)
+
+
+KIEU_NOI_DUNG_LA = [
+    "hyperlink",
+    "bang_long",
+    "fld_simple",
+    "fld_char",
+    "sdt_o",
+    "sdt_doan",
+    "hinh",
+    "khung_chu",
+    "lua_chon_mc",
+    "sua_doi_theo_doi",
+]
+
+
+def _dem_luu(monkeypatch):
+    da_luu = []
+    goc = svc._luu_docx
+    monkeypatch.setattr(svc, "_luu_docx", lambda d: da_luu.append(1) or goc(d))
+    return da_luu
+
+
+@pytest.mark.parametrize("loai, bang, dong", VI_TRI_DONG_MAU)
+def test_vung_du_lieu_co_dong_nguoi_mau_du_thi_tu_choi(
+    mau, monkeypatch, loai, bang, dong
+):
+    # Một dòng "người mẫu" (bản sao dòng mẫu mang tên + điểm) nằm ngay SAU dòng mẫu.
+    d = _doc(getattr(mau, loai))
+    tr = d.tables[bang]._tbl.findall(qn("w:tr"))[dong]
+    du = copy.deepcopy(tr)
+    for tc in du.findall(qn("w:tc")):
+        tc.findall(qn("w:p"))[-1].append(_run_chu("GIA-NGUOI-MAU 9.99"))
+    tr.addnext(du)
+    hong = dataclasses.replace(mau, **{loai: _luu(d)})
+    da_luu = _dem_luu(monkeypatch)
+    with pytest.raises(
+        FileValidationError, match=r"bảng dữ liệu phải có đúng \d+ dòng"
+    ) as e:
+        render_council_documents(_bo_giai(), hong)
+    assert "GIA-" not in str(e.value) and "9.99" not in str(e.value)
+    assert da_luu == []
+
+
+@pytest.mark.parametrize("kieu", KIEU_NOI_DUNG_LA)
+@pytest.mark.parametrize("loai, bang, dong", VI_TRI_DONG_MAU)
+def test_o_dong_mau_co_noi_dung_ngoai_run_truc_tiep_thi_tu_choi(
+    mau, monkeypatch, loai, bang, dong, kieu
+):
+    d = _doc(getattr(mau, loai))
+    tc = d.tables[bang]._tbl.findall(qn("w:tr"))[dong].findall(qn("w:tc"))[1]
+    _cai_noi_dung_la(tc, kieu)
+    hong = dataclasses.replace(mau, **{loai: _luu(d)})
+    da_luu = _dem_luu(monkeypatch)
+    with pytest.raises(
+        FileValidationError,
+        match=r"ô 2 của dòng mẫu chỉ được có đoạn văn với run trực tiếp",
+    ) as e:
+        render_council_documents(_bo_giai(), hong)
+    assert "GIA-" not in str(e.value)
+    assert da_luu == []
+
+
+@pytest.mark.parametrize("kieu", ["hyperlink", "bang_long", "fld_simple", "hinh"])
+@pytest.mark.parametrize("bang", [1, 2])
+def test_o_so_dong_tong_co_noi_dung_ngoai_run_thi_tu_choi(mau, monkeypatch, bang, kieu):
+    d = _doc(mau.bien_ban)
+    tc = d.tables[bang]._tbl.findall(qn("w:tr"))[-1].findall(qn("w:tc"))[3]
+    _cai_noi_dung_la(tc, kieu)
+    hong = dataclasses.replace(mau, bien_ban=_luu(d))
+    da_luu = _dem_luu(monkeypatch)
+    with pytest.raises(
+        FileValidationError,
+        match=r"ô số của dòng `Tổng cộng` chỉ được có đoạn văn với run trực tiếp",
+    ) as e:
+        render_council_documents(_bo_giai(), hong)
+    assert "GIA-" not in str(e.value)
+    assert da_luu == []
+
+
+@pytest.mark.parametrize("muc", ["bang", "dong"])
+@pytest.mark.parametrize("loai, bang, dong", VI_TRI_DONG_MAU)
+def test_dong_hoac_o_an_trong_khung_noi_dung_thi_tu_choi(
+    mau, monkeypatch, loai, bang, dong, muc
+):
+    # Dòng / ô nằm trong ``w:sdt`` thì python-docx KHÔNG thấy (số dòng, số ô vẫn đúng)
+    # mà Word vẫn in ⇒ mức bảng / mức dòng chỉ được có thẻ cho phép.
+    d = _doc(getattr(mau, loai))
+    t = d.tables[bang]._tbl
+    tr = t.findall(qn("w:tr"))[dong]
+    if muc == "bang":
+        t.append(_el("w:sdt", _el("w:sdtContent", copy.deepcopy(tr))))
+    else:
+        o_an = copy.deepcopy(tr.findall(qn("w:tc"))[-1])
+        tr.append(_el("w:sdt", _el("w:sdtContent", o_an)))
+    hong = dataclasses.replace(mau, **{loai: _luu(d)})
+    da_luu = _dem_luu(monkeypatch)
+    with pytest.raises(
+        FileValidationError, match=r"có phần tử <w:sdt> ngoài dòng / ô thường"
+    ):
+        render_council_documents(_bo_giai(), hong)
+    assert da_luu == []
+
+
+# Đoạn mà bộ dựng VIẾT LẠI cả đoạn: (loại, chỉ số đoạn thân văn bản của mẫu giả).
+DOAN_VIET_LAI = [
+    ("bien_ban", 1), ("bien_ban", 3),  # chỗ điền trình độ
+    ("quyet_dinh", 2), ("quyet_dinh", 8),  # <<trinh_do>>
+    ("quyet_dinh", 11), ("quyet_dinh", 20), ("quyet_dinh", 21), ("quyet_dinh", 24),
+    ("danh_sach", 1), ("danh_sach", 3), ("danh_sach", 6), ("danh_sach", 8),
+    ("danh_sach", 12), ("danh_sach", 13),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("kieu", ["hyperlink", "fld_simple"])
+@pytest.mark.parametrize("loai, k", DOAN_VIET_LAI)
+def test_doan_bi_viet_lai_co_noi_dung_ngoai_run_thi_tu_choi(
+    mau, monkeypatch, loai, k, kieu
+):
+    d = _doc(getattr(mau, loai))
+    p = d.paragraphs[k]._p
+    if kieu == "hyperlink":
+        p.append(_el("w:hyperlink", _run_chu()))
+    else:
+        p.append(_el("w:fldSimple", _run_chu(), w__instr="PAGE"))
+    hong = dataclasses.replace(mau, **{loai: _luu(d)})
+    da_luu = _dem_luu(monkeypatch)
+    with pytest.raises(
+        FileValidationError,
+        match=r"đoạn %d.* chỉ được có đoạn văn với run trực tiếp" % (k + 1),
+    ) as e:
+        render_council_documents(_bo_giai(), hong)
+    assert "GIA-" not in str(e.value)
+    assert da_luu == []
+
+
+def test_the_cho_phep_trong_dong_mau_van_dung(mau):
+    # Chữ / tab / ngắt dòng trong run trực tiếp của dòng mẫu là HỢP LỆ (bị ghi đè khi đổ).
+    d = _doc(mau.quyet_dinh)
+    tc = d.tables[3]._tbl.findall(qn("w:tr"))[1].findall(qn("w:tc"))[1]
+    r = _run_chu("chu mau")
+    r.append(_el("w:tab"))
+    r.append(_el("w:br"))
+    tc.findall(qn("w:p"))[-1].append(r)
+    kq = render_council_documents(
+        _bo_giai(), dataclasses.replace(mau, quyet_dinh=_luu(d))
+    )
+    qd = _doc(kq.files[1].content)
+    assert [r.cells[1].text for r in qd.tables[3].rows[1:]] == ["GIA-03", "GIA-07"]
+
+
+# ═══════════════════════════════ dòng tổng nằm TRÊN / TRÙNG dòng mẫu ══════════════════
+def _doi_dong_tong(b, bang, vi_tri):
+    """Đúng một dòng "Tổng cộng" nhưng ở TRÊN (thay dòng tiêu đề cuối) hoặc TRÙNG dòng
+    mẫu; dòng tổng cũ đổi nhãn ⇒ bảng vẫn 6 dòng, dòng mẫu vẫn hợp lệ."""
+    d = _doc(b)
+    trs = d.tables[bang]._tbl.findall(qn("w:tr"))
+    tong, mau_tr = trs[5], trs[4]
+    if vi_tri == "tren":
+        trs[3].addprevious(copy.deepcopy(tong))
+        trs[3].getparent().remove(trs[3])
+    else:  # "trung": ô đầu của chính dòng mẫu mang chữ "Tổng cộng"
+        mau_tr.findall(qn("w:tc"))[0].findall(qn("w:p"))[0].append(
+            _run_chu("Tổng cộng")
+        )
+    for t in tong.iter(qn("w:t")):
+        if "Tổng cộng" in (t.text or ""):
+            t.text = "Cộng"
+    return _luu(d)
+
+
+@pytest.mark.parametrize("vi_tri", ["tren", "trung"])
+@pytest.mark.parametrize("bang", [1, 2])
+def test_dong_tong_tren_hoac_trung_dong_mau_thi_dung_o_phep_kiem_mau(
+    mau, monkeypatch, bang, vi_tri
+):
+    hong = dataclasses.replace(mau, bien_ban=_doi_dong_tong(mau.bien_ban, bang, vi_tri))
+    da_do = []
+    goc = svc._do_bang_chen_truoc
+    monkeypatch.setattr(
+        svc, "_do_bang_chen_truoc", lambda *a, **k: da_do.append(1) or goc(*a, **k)
+    )
+    da_luu = _dem_luu(monkeypatch)
+    with pytest.raises(
+        FileValidationError,
+        match=r"\(bảng số liệu %d\): dòng `Tổng cộng` phải nằm SAU dòng mẫu" % bang,
+    ):
+        render_council_documents(_bo_giai(), hong)
+    assert da_do == [] and da_luu == []
+
+
+# ═══════════════════════════════ hai đoạn "Điều 1." ══════════════════════════════════
+def test_hai_doan_dieu_1_thi_dung(mau, monkeypatch):
+    # Đoạn TRỐNG thứ 17 của mẫu giả thành "Điều 1. …" — chỉ số các đoạn khác giữ nguyên.
+    d = _doc(mau.quyet_dinh)
+    d.paragraphs[16].add_run("Điều 1. Công nhận …. thí sinh (đoạn thứ hai)")
+    hong = dataclasses.replace(mau, quyet_dinh=_luu(d))
+    da_luu = _dem_luu(monkeypatch)
+    with pytest.raises(
+        FileValidationError, match=r"cần đúng MỘT đoạn `Điều 1.`, đo được 2"
+    ):
+        render_council_documents(_bo_giai(), hong)
+    assert da_luu == []
+
+
+# ═══════════════════════════════ gridSpan — MỘT helper, giá trị phải hợp lệ ═══════════
+# (loại, bảng, dòng, ô): dòng mẫu BB / QĐ / DS, ô nhãn dòng tổng BB, ô gộp tiêu đề DS.
+VI_TRI_GRIDSPAN = [
+    ("bien_ban", 1, 4, 2),
+    ("quyet_dinh", 3, 1, 2),
+    ("danh_sach", 1, 3, 2),
+    ("bien_ban", 2, 5, 0),
+    ("danh_sach", 4, 0, 10),
+]
+GRIDSPAN_SAI = [
+    "thieu_val",
+    "abc",
+    "0",
+    "-1",
+    "1.5",
+    "+1",
+    " 2",
+    "toan_hinh",
+    "vuot_luoi",
+    "hai_the",
+]
+
+
+def _dat_gridspan(b, bang, dong, o, gia_tri):
+    d = _doc(b)
+    tc = d.tables[bang]._tbl.findall(qn("w:tr"))[dong].findall(qn("w:tc"))[o]
+    pr = tc.get_or_add_tcPr()
+    for cu in pr.findall(qn("w:gridSpan")):
+        pr.remove(cu)
+    gs = OxmlElement("w:gridSpan")
+    if gia_tri == "toan_hinh":
+        gs.set(qn("w:val"), chr(0xFF12))  # chữ số "2" toàn hình — int() của Python nhận
+    elif gia_tri == "vuot_luoi":
+        gs.set(qn("w:val"), "99")
+    elif gia_tri == "hai_the":
+        gs.set(qn("w:val"), "1")
+    elif gia_tri != "thieu_val":
+        gs.set(qn("w:val"), gia_tri)
+    pr.insert(0, gs)
+    if gia_tri == "hai_the":
+        pr.insert(1, copy.deepcopy(gs))
+    return _luu(d)
+
+
+@pytest.mark.parametrize("gia_tri", GRIDSPAN_SAI)
+@pytest.mark.parametrize("loai, bang, dong, o", VI_TRI_GRIDSPAN)
+def test_gridspan_khong_hop_le_thi_loi_mien(
+    mau, monkeypatch, loai, bang, dong, o, gia_tri
+):
+    sai = _dat_gridspan(getattr(mau, loai), bang, dong, o, gia_tri)
+    hong = dataclasses.replace(mau, **{loai: sai})
+    da_luu = _dem_luu(monkeypatch)
+    with pytest.raises(FileValidationError, match=r"gridSpan"):
+        render_council_documents(_bo_giai(), hong)
+    assert da_luu == []
+
+
+def test_gridspan_bang_1_tuong_minh_van_hop_le(mau):
+    hong = dataclasses.replace(
+        mau, quyet_dinh=_dat_gridspan(mau.quyet_dinh, 3, 1, 2, "1")
+    )
+    assert len(render_council_documents(_bo_giai(), hong).files) == 10
+
+
+def test_moi_cho_doc_gridspan_deu_qua_mot_helper(mau, monkeypatch):
+    # Khoá "một nguồn": phép kiểm vùng dữ liệu, phép kiểm dòng tổng và chỗ đặt bề rộng
+    # đều GỌI helper; mã nguồn không còn chỗ nào khác đọc gridSpan.
+    import inspect
+    import sys
+
+    goi = set()
+    goc = svc._do_rong_o
+
+    def gian(*a, **k):
+        goi.add(sys._getframe(1).f_code.co_name)
+        return goc(*a, **k)
+
+    monkeypatch.setattr(svc, "_do_rong_o", gian)
+    render_council_documents(_bo_giai(), mau)
+    assert {"_kiem_dong_mau", "_kiem_dong_tong", "_dat_rong"} <= goi
+    nguon = inspect.getsource(svc)
+    assert nguon.count('qn("w:gridSpan")') == 1  # chỉ trong _do_rong_o
+    assert ".grid_span" not in nguon
+
+
+# ═══════════════════════════════ tham số Quyết định kiểm LẠI ở điểm vào ══════════════
+CA_THAM_SO_LACH = {
+    "so_quyet_dinh": dict(so_quyet_dinh="CANARY\x00"),
+    "dot_so": dict(dot_so="CANARY", dot_thang=9),
+    "so_bien_ban": dict(so_bien_ban="1\nCANARY"),
+    "dot_thang": dict(dot_so="03", dot_thang=13),
+    "ngay_quyet_dinh": dict(ngay_quyet_dinh="CANARY"),
+    "ràng buộc giữa các trường": dict(dot_so="03"),  # thiếu tháng — kiểm cặp của model
+}
+
+
+@pytest.mark.parametrize("duong", ["model_construct", "model_copy"])
+@pytest.mark.parametrize("truong", list(CA_THAM_SO_LACH))
+def test_tham_so_quyet_dinh_lach_pydantic_bi_kiem_lai(mau, monkeypatch, truong, duong):
+    import warnings
+
+    gia_tri = CA_THAM_SO_LACH[truong]
+    if duong == "model_construct":
+        ts = DecisionParams.model_construct(**gia_tri)
+    else:
+        rong = {k: None for k in DecisionParams.model_fields}
+        ts = TS_1844_GIA.model_copy(update=rong).model_copy(update=gia_tri)
+    da_luu = _dem_luu(monkeypatch)
+    with warnings.catch_warnings(record=True) as canh_bao:
+        warnings.simplefilter("always")
+        with pytest.raises(
+            DataValidationError, match="Tham số Quyết định không hợp lệ ở: %s" % truong
+        ) as e:
+            render_council_documents(_bo_giai(), mau, ts)
+    assert "CANARY" not in str(e.value)
+    assert e.value.__cause__ is None and e.value.__suppress_context__
+    assert not [w for w in canh_bao if "CANARY" in str(w.message)]
+    assert da_luu == []
+
+
+def test_tham_so_quyet_dinh_sai_kieu_thi_loi_mien(mau):
+    with pytest.raises(DataValidationError, match="không đúng kiểu"):
+        render_council_documents(_bo_giai(), mau, {"so_quyet_dinh": "1844"})
+
+
+def test_tham_so_quyet_dinh_hop_le_di_qua_kiem_lai():
+    assert svc.kiem_lai_tham_so_quyet_dinh(TS_1844_GIA) == TS_1844_GIA
+    assert svc.kiem_lai_tham_so_quyet_dinh(None) is None
+
+
+# ═══════════════════════════════ kiem_mau — MỘT nguồn cho kho mẫu và bộ dựng ══════════
+def _goi_zip(phan):
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        for n, v in phan.items():
+            z.writestr(n, v)
+    return b.getvalue()
+
+
+def _goi_hong(mau_docx):
+    phan = _phan(mau_docx)
+    ca = {"khong_phai_zip": b"GIA khong phai zip", "zip_rong": _goi_zip({})}
+    for ten, n, v in (
+        ("document_xml_hong", "word/document.xml", b"<w:document"),
+        ("goc_khong_phai_document", "word/document.xml", b"<?xml version='1.0'?><k/>"),
+        ("content_types_hong", "[Content_Types].xml", b"<Types"),
+        ("rels_hong", "word/_rels/document.xml.rels", b"<Rel"),
+    ):
+        ca[ten] = _goi_zip(dict(phan, **{n: v}))
+    ca["thieu_document"] = _goi_zip(
+        {k: v for k, v in phan.items() if k != "word/document.xml"}
+    )
+    xb = io.BytesIO()
+    openpyxl.Workbook().save(xb)
+    ca["la_xlsx"] = xb.getvalue()
+    return ca
+
+
+@pytest.mark.parametrize("loai", svc.LOAI_MAU)
+def test_kiem_mau_goi_hong_luon_la_loi_mien(mau, loai):
+    lot = []
+    for ten, b in _goi_hong(getattr(mau, loai)).items():
+        try:
+            svc.kiem_mau(loai, b)
+        except FileValidationError:
+            continue
+        except Exception as e:  # noqa: BLE001 — ghi lại ĐÚNG ca lọt lỗi của thư viện
+            lot.append((ten, type(e).__name__))
+        else:
+            lot.append((ten, "qua"))
+    assert lot == []
+
+
+def test_kiem_mau_loai_va_kieu_noi_dung(mau):
+    for loai in svc.LOAI_MAU:
+        svc.kiem_mau(loai, getattr(mau, loai))  # mẫu giả hợp lệ
+    with pytest.raises(DataValidationError, match="Loại mẫu"):
+        svc.kiem_mau("phu_luc", mau.bien_ban)
+    with pytest.raises(FileValidationError, match="không phải bytes"):
+        svc.kiem_mau("bien_ban", bytearray(mau.bien_ban))
+    # Mẫu của loại khác đưa nhầm chỗ ⇒ phép kiểm của loại được nêu từ chối.
+    with pytest.raises(FileValidationError):
+        svc.kiem_mau("quyet_dinh", mau.bien_ban)
+
+
+def test_diem_vao_bo_dung_chay_dung_kiem_mau(mau, monkeypatch):
+    goi = []
+    goc = svc.kiem_mau
+    monkeypatch.setattr(svc, "kiem_mau", lambda l, b: goi.append(l) or goc(l, b))
+    render_council_documents(_bo_giai(), mau)
+    assert goi == list(svc.LOAI_MAU)
