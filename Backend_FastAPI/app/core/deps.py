@@ -3740,3 +3740,58 @@ async def get_backfill_exception_for_admin(
             detail=f"Backfill exception {exception_id} not found"
         )
     return row
+
+
+# =============================================================================
+# VĂN BẢN HỘI ĐỒNG TUYỂN SINH (Lần xét tuyển GĐ1 — bộ văn bản + kho mẫu)
+# =============================================================================
+#
+# Tầng chủ sở hữu của hai bất biến (CLAUDE.md §7):
+#   1. VAI được gọi route nào ⇒ Casbin (``check_permission`` — template + migration
+#      ``hdts20261103b``): admin qua wildcard ``/*``; manager CHỈ ba route ĐỌC bộ văn
+#      bản; officer / accountant / user không có dòng nào ⇒ 403.
+#   2. PHẠM VI bộ nào được thấy ⇒ hai dependency dưới đây: admin mọi bộ; manager CHỈ bộ
+#      có ``unit_id`` = ``current_user.unit_id`` (đúng cột kiểm quyền hồ sơ của manager,
+#      ``admission_service._check_idor_access``); bộ ``unit_id`` NULL (nhiều đơn vị / hồ
+#      sơ chưa gán đơn vị) CHỈ admin. Ngoài phạm vi ⇒ 404 (không lộ bộ có tồn tại).
+#      Vai khác lọt qua Casbin (cấu hình sai) ⇒ vẫn bị chặn ở đây (fail-closed).
+
+
+class CouncilDocumentScope(NamedTuple):
+    """Phạm vi xem bộ văn bản Hội đồng. ``tat_ca`` CHỈ đúng với admin; không thì
+    ``unit_id`` là đơn vị (khác None) mà người dùng được thấy."""
+
+    tat_ca: bool
+    unit_id: Optional[int]
+
+
+async def get_council_document_scope(
+    current_user: models.User = Depends(check_permission),
+) -> CouncilDocumentScope:
+    if current_user.role == UserRole.ADMIN:
+        return CouncilDocumentScope(tat_ca=True, unit_id=None)
+    if current_user.role == UserRole.MANAGER:
+        # Manager chưa gán đơn vị ⇒ 403 (không bao giờ hiểu thành "mọi đơn vị").
+        return CouncilDocumentScope(
+            tat_ca=False, unit_id=manager_unit_scope_or_deny(current_user)
+        )
+    raise PermissionDeniedError(
+        detail="Chỉ admin hoặc quản lý đơn vị được xem bộ văn bản Hội đồng."
+    )
+
+
+async def get_council_document_set_for_user(
+    set_id: int = Path(..., ge=1, description="ID bộ văn bản Hội đồng"),
+    scope: CouncilDocumentScope = Depends(get_council_document_scope),
+    db: AsyncSession = Depends(database.get_db),
+) -> "models.CouncilDocumentSet":
+    """Bộ văn bản ``set_id`` nếu người gọi được thấy nó; không có HOẶC ngoài phạm vi ⇒
+    ``ResourceNotFoundError`` (404) — cùng một thông báo cho cả hai ca (IDOR)."""
+    from ..repositories.council_document_repository import CouncilDocumentRepository
+
+    bo = await CouncilDocumentRepository(db).bo_theo_id(set_id)
+    if bo is None or not (
+        scope.tat_ca or (bo.unit_id is not None and bo.unit_id == scope.unit_id)
+    ):
+        raise ResourceNotFoundError(detail="Không có bộ văn bản này.")
+    return bo

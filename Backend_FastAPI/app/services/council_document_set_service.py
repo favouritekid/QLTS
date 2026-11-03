@@ -25,9 +25,10 @@ lúc nạp module. Không dùng nhãn ảnh Docker (đã biết rỗng / thiếu
 import asyncio
 import hashlib
 import sys
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -47,6 +48,7 @@ from app.services.council_document_template_service import (
     kiem_goi_mau,
 )
 from app.utils.exceptions import (
+    ConflictError,
     DataValidationError,
     ResourceNotFoundError,
     ServiceError,
@@ -118,6 +120,15 @@ async def tao_bo_van_ban(
     # dựng (bộ dựng còn kiểm lại một lần nữa ở điểm vào của nó).
     tham_so = bo_dung.kiem_lai_tham_so_quyet_dinh(tham_so)
 
+    # Tối đa MỘT lần dựng cùng lúc trên toàn hệ (mọi worker / container cùng CSDL): khoá tư
+    # vấn trên giao dịch của request — giữ tới khi router commit / rollback, tự nhả khi lỗi.
+    # Trần 16 MB chỉ kiểm SAU khi dựng ⇒ đây là thứ chặn đỉnh RAM do nhiều lần dựng chồng
+    # nhau (Codex lần 4). Lần thứ hai ⇒ lỗi miền NGAY, không đọc, không dựng, không ghi.
+    if not await CouncilDocumentRepository(db).thu_khoa_dung():
+        raise ConflictError(
+            "Đang dựng một bộ văn bản khác — chờ bộ ấy xong rồi thử lại."
+        )
+
     # (i) đọc — giao dịch riêng, chỉ đọc, đã KẾT THÚC khi hàm này trả về.
     anh = await doc_ho_so_theo_ma(engine, ma_ho_so, academic_year=academic_year)
 
@@ -187,13 +198,45 @@ async def tao_bo_van_ban(
     return bo, None
 
 
-async def doc_tep_da_luu(db: AsyncSession, set_id: int, path: str) -> Tuple[bytes, str]:
-    """(bytes, sha256) của một tệp đã lưu — KHÔNG dựng lại. Kiểm quyền / IDOR ở lượt E2
-    (``deps.py``). Không có ⇒ ``ResourceNotFoundError``."""
-    t = await CouncilDocumentRepository(db).tep_cua_bo(set_id, path)
+@dataclass(frozen=True)
+class TepDaLuu:
+    path: str
+    sha256: str
+    noi_dung: bytes
+
+
+async def doc_tep_da_luu(db: AsyncSession, set_id: int, thu_tu: int) -> TepDaLuu:
+    """Tệp thứ ``thu_tu`` của bộ ``set_id`` = bytes ĐÃ LƯU — KHÔNG dựng lại. Kiểm quyền /
+    IDOR ở ``deps.py`` (bộ đã qua ``get_council_document_set_for_user``). Không có ⇒
+    ``ResourceNotFoundError``; bytes lệch sha đã lưu ⇒ ``ServiceError`` (không trả)."""
+    t = await CouncilDocumentRepository(db).tep_cua_bo(set_id, thu_tu)
     if t is None:
         raise ResourceNotFoundError("Không có tệp này trong bộ văn bản.")
     b = bytes(t.noi_dung)
     if hashlib.sha256(b).hexdigest() != t.sha256:
         raise ServiceError("Tệp đã lưu lệch sha256 — không trả.")
-    return b, t.sha256
+    return TepDaLuu(path=t.path, sha256=t.sha256, noi_dung=b)
+
+
+async def liet_ke_bo(
+    db: AsyncSession,
+    *,
+    tat_ca: bool,
+    chi_don_vi: Optional[int],
+    limit: int,
+    offset: int,
+) -> List[CouncilDocumentSet]:
+    """Danh sách bộ (không nạp cột dữ liệu cá nhân). ``tat_ca`` = phạm vi admin; không thì
+    CHỈ bộ của đơn vị ``chi_don_vi`` (bộ ``unit_id`` NULL không bao giờ vào). Phạm vi do
+    ``deps.py`` quyết; tổ hợp "không tất cả mà không có đơn vị" ⇒ ``ServiceError``
+    (fail-closed — không bao giờ hiểu "không có đơn vị" thành "mọi đơn vị")."""
+    if not tat_ca and chi_don_vi is None:
+        raise ServiceError("Phạm vi xem bộ văn bản không xác định — không liệt kê.")
+    return await CouncilDocumentRepository(db).danh_sach_bo(
+        chi_don_vi=chi_don_vi, tat_ca=tat_ca, limit=limit, offset=offset
+    )
+
+
+async def tep_cua_bo(db: AsyncSession, set_id: int) -> List[CouncilDocumentSetFile]:
+    """Metadata các tệp của một bộ (không bytes), theo thứ tự bộ dựng trả."""
+    return await CouncilDocumentRepository(db).danh_sach_tep(set_id)

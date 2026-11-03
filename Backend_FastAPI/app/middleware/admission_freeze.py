@@ -59,6 +59,8 @@ ADMISSION_ROUTER_MODULES: Final[frozenset[str]] = frozenset(
         "app.routers.admissions_magic_link",
         "app.routers.admission_config",
         "app.routers.admission_paths",
+        # Văn bản Hội đồng (Lần xét tuyển GĐ1) — dưới tiền tố v1 /api/admission-config.
+        "app.routers.council_documents",
         "app.routers.admin_backfill",
         "app.routers.admin_priority_config",
         "app.routers.admin_v2_admission_round",
@@ -157,6 +159,9 @@ FROZEN_PREFIXES: Final[tuple[str, ...]] = (
 # Rà từ bảng route thật của ``fastapi_app`` trên main@0c3031d7 (633 route-method,
 # 347 đường ghi). ĐỪNG sửa tay: chạy lại kiểm kê rồi cập nhật cả khối.
 ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
+    # Lần xét tuyển GĐ1 (lượt E2): tải mẫu + dựng bộ văn bản Hội đồng — rà tay 03-11.
+    ("POST", "/api/admission-config/council-documents/sets"),
+    ("POST", "/api/admission-config/council-documents/templates"),
     ("POST", "/api/admission-config/criteria"),
     ("DELETE", "/api/admission-config/criteria/{criteria_id}"),
     ("PUT", "/api/admission-config/criteria/{criteria_id}"),

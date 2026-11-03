@@ -20,7 +20,7 @@ import zipfile
 import zlib
 from dataclasses import dataclass
 from datetime import date
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -179,6 +179,11 @@ async def tai_mau_len(
             "Đã có mẫu %s hiệu lực từ ngày %s." % (ten, hieu_luc_tu.isoformat())
         ) from None
     return mau, None
+
+
+async def liet_ke_mau(db: AsyncSession) -> List[CouncilDocumentTemplate]:
+    """Mọi mẫu trong kho — metadata, KHÔNG nạp bytes (cột ``noi_dung`` deferred)."""
+    return await CouncilDocumentRepository(db).danh_sach_mau()
 
 
 async def chon_mau(

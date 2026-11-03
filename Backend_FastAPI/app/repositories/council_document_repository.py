@@ -6,9 +6,9 @@ Chạy trên phiên của request: repository chỉ ``add`` / ``flush``, router 
 một tệp). Không bao giờ log nội dung tệp, danh sách mã hay DTO.
 """
 from datetime import date
-from typing import Optional, Sequence
+from typing import List, Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
@@ -18,10 +18,30 @@ from app.models.council_document import (
     CouncilDocumentTemplate,
 )
 
+#: Tên miền khoá tư vấn của việc DỰNG bộ văn bản (dạng hai khoá int4: ``hashtext(tên)``,
+#: ``0``). Khoá hai-khoá và khoá một-khoá bigint không chồng nhau (tài liệu PostgreSQL);
+#: các khoá hai-khoá khác của mã (``invoice_service``, ``public_lead_intake_service``) dùng
+#: tên miền / khoá thứ hai khác.
+KHOA_DUNG_BO = "council_document_set:dung"
+
 
 class CouncilDocumentRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    # ---------------------------------------------------------------- khoá dựng
+    async def thu_khoa_dung(self) -> bool:
+        """``pg_try_advisory_xact_lock`` trên GIAO DỊCH của phiên này: True = đã giữ khoá
+        (tự nhả khi giao dịch commit / rollback — không rò khoá khi request lỗi), False =
+        một giao dịch khác (bất kỳ tiến trình nào dùng cùng CSDL) đang giữ."""
+        return bool(
+            (
+                await self.db.execute(
+                    text("SELECT pg_try_advisory_xact_lock(hashtext(:ten), 0)"),
+                    {"ten": KHOA_DUNG_BO},
+                )
+            ).scalar_one()
+        )
 
     # ---------------------------------------------------------------- kho mẫu
     async def mau_cung_ngay(
@@ -41,6 +61,22 @@ class CouncilDocumentRepository:
         self.db.add(mau)
         await self.db.flush()
         return mau
+
+    async def danh_sach_mau(self) -> List[CouncilDocumentTemplate]:
+        """Mọi mẫu — KHÔNG nạp bytes (cột deferred). Theo loại, ngày hiệu lực mới trước."""
+        return list(
+            (
+                await self.db.execute(
+                    select(CouncilDocumentTemplate).order_by(
+                        CouncilDocumentTemplate.loai,
+                        CouncilDocumentTemplate.hieu_luc_tu.desc(),
+                        CouncilDocumentTemplate.id.desc(),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
 
     async def mau_hieu_luc(
         self, loai: str, ngay_ky: date
@@ -73,8 +109,45 @@ class CouncilDocumentRepository:
         await self.db.flush()
         return bo
 
+    async def bo_theo_id(self, set_id: int) -> Optional[CouncilDocumentSet]:
+        """Một bộ — KHÔNG nạp hai cột dữ liệu cá nhân (deferred)."""
+        return (
+            await self.db.execute(
+                select(CouncilDocumentSet).where(CouncilDocumentSet.id == set_id)
+            )
+        ).scalar_one_or_none()
+
+    async def danh_sach_bo(
+        self, *, chi_don_vi: Optional[int], tat_ca: bool, limit: int, offset: int
+    ) -> List[CouncilDocumentSet]:
+        """Bộ mới trước. ``tat_ca`` ⇒ mọi bộ; không thì CHỈ bộ có ``unit_id == chi_don_vi``
+        (bộ ``unit_id`` NULL không bao giờ khớp). Người gọi (service) chặn tổ hợp lạ."""
+        q = select(CouncilDocumentSet)
+        if not tat_ca:
+            q = q.where(CouncilDocumentSet.unit_id == chi_don_vi)
+        q = (
+            q.order_by(CouncilDocumentSet.tao_luc.desc(), CouncilDocumentSet.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list((await self.db.execute(q)).scalars().all())
+
+    async def danh_sach_tep(self, set_id: int) -> List[CouncilDocumentSetFile]:
+        """Các tệp của một bộ theo ``thu_tu`` — KHÔNG nạp bytes."""
+        return list(
+            (
+                await self.db.execute(
+                    select(CouncilDocumentSetFile)
+                    .where(CouncilDocumentSetFile.set_id == set_id)
+                    .order_by(CouncilDocumentSetFile.thu_tu)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
     async def tep_cua_bo(
-        self, set_id: int, path: str
+        self, set_id: int, thu_tu: int
     ) -> Optional[CouncilDocumentSetFile]:
         """Một tệp đã lưu, NẠP bytes — tải lại = đọc bytes đã lưu, không dựng lại."""
         return (
@@ -83,7 +156,7 @@ class CouncilDocumentRepository:
                 .options(undefer(CouncilDocumentSetFile.noi_dung))
                 .where(
                     CouncilDocumentSetFile.set_id == set_id,
-                    CouncilDocumentSetFile.path == path,
+                    CouncilDocumentSetFile.thu_tu == thu_tu,
                 )
             )
         ).scalar_one_or_none()

@@ -26,6 +26,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.log_redaction import (
+    PII_BODY_ROUTE_PREFIXES,
     SMS_BEARER_PREFIXES,
     mo_ta_loi,
     redact_text,
@@ -80,10 +81,20 @@ def _chi_tiet_an_toan(exc: BaseException) -> str:
     return thay_loi_csdl_trong_chuoi(str(getattr(exc, "detail", "")), exc)
 
 
-def _is_sms_bearer_route(path: str) -> bool:
-    """Route mang bearer code (path HOẶC body opt-out) → error 'input' lúc 422
-    có thể chứa raw code → KHÔNG log input (§11.3)."""
-    return path.startswith(SMS_BEARER_PREFIXES) or path == "/api/public/sms/opt-out"
+def _khong_log_input_422(path: str) -> bool:
+    """MỘT vị từ: route mà ``input`` của lỗi 422 KHÔNG được ghi vào log.
+
+    * Route mang bearer code SMS (path HOẶC body opt-out) — ``input`` có thể là raw code
+      (§11.3).
+    * Route văn bản Hội đồng (``PII_BODY_ROUTE_PREFIXES``) — thân request mang danh sách mã
+      hồ sơ (CCCD); lỗi kiểu ``missing`` trả CẢ thân request trong ``input``. Khớp theo
+      ĐOẠN đường dẫn (``/api/admission-config/council-documentsX`` không khớp).
+    """
+    return (
+        path.startswith(SMS_BEARER_PREFIXES)
+        or path == "/api/public/sms/opt-out"
+        or any(path == t or path.startswith(t + "/") for t in PII_BODY_ROUTE_PREFIXES)
+    )
 
 
 # ============================================================================
@@ -292,11 +303,11 @@ async def pydantic_validation_error_handler(
 
     safe_errors = [serialize_error(e) for e in exc.errors()]
 
-    # Route bearer (/r/, /lp/, landing, body opt-out): error 'input' có thể là
-    # raw bearer code → loại 'input' khỏi LOG (vẫn giữ trong response cho chính
-    # người gửi). §11.3.
+    # Route bearer (/r/, /lp/, landing, body opt-out) và route văn bản Hội đồng (thân
+    # request = danh sách CCCD): error 'input' có thể là raw bearer code / dữ liệu cá nhân
+    # → loại 'input' khỏi LOG (vẫn giữ trong response cho chính người gửi). §11.3.
     log_errors = safe_errors
-    if _is_sms_bearer_route(request.url.path):
+    if _khong_log_input_422(request.url.path):
         log_errors = [
             {k: v for k, v in e.items() if k != "input"} for e in safe_errors
         ]

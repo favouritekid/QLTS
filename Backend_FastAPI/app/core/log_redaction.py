@@ -78,6 +78,10 @@ TOKEN_PATH_PREFIXES: tuple[str, ...] = (
 #: Tập con là route mang mã SMS — ``exception_handlers`` dùng để bỏ ``input``
 #: của lỗi 422 trên các route này.
 SMS_BEARER_PREFIXES: tuple[str, ...] = TOKEN_PATH_PREFIXES[:3]
+#: Tiền tố route mà THÂN request mang dữ liệu cá nhân (danh sách CCCD của bộ văn bản Hội
+#: đồng — Lần xét tuyển GĐ1) — ``exception_handlers`` cũng bỏ ``input`` của lỗi 422 trên
+#: các route này (cùng MỘT vị từ với route mã SMS). Khớp theo ĐOẠN đường dẫn.
+PII_BODY_ROUTE_PREFIXES: tuple[str, ...] = ("/api/admission-config/council-documents",)
 
 #: Đoạn chuỗi trong TÊN khoá ⇒ khoá bí mật (so chuỗi con, như bản H3 cũ ở
 #: ``main.py``). ``token`` phủ ``confirm_token``, ``access_token``, ``token_id``…
