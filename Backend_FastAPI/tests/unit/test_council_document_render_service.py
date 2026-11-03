@@ -27,6 +27,7 @@ import openpyxl
 import pytest
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from pydantic import ValidationError as PydanticValidationError
 
 import app.services.council_document_render_service as svc
@@ -921,3 +922,267 @@ def test_dia_chi_du_muoi_cum_va_ranh_gioi_tu():
     assert chuan_dia_chi("xthành phố, thành phốx, khu phốhội") == (
         "Xthành Phố, Thành Phốx, Khu Phốhội"
     )
+
+
+# ═══════════════════════════════ F205 (phần còn lại) — dòng "Tổng cộng" Biên bản ═
+def _sua_dong_tong(b, bang, kieu):
+    """Sửa dòng "Tổng cộng" của bảng số liệu ``bang`` trong mẫu Biên bản giả. Mỗi kiểu
+    vi phạm ĐÚNG MỘT bất biến của phép kiểm dòng tổng; lưới bảng và dòng mẫu dữ liệu
+    giữ nguyên. Mẫu giả có cấu trúc dòng tổng như mẫu thật: ô nhãn gộp 2 cột
+    (``gridSpan=2``) + một ô cho mỗi cột số (ô thứ k ⇒ cột k + 1)."""
+    d = _doc(b)
+    tr = d.tables[bang]._tbl.findall(qn("w:tr"))[-1]
+    tcs = tr.findall(qn("w:tc"))
+    assert tcs[0].grid_span == 2 and "Tổng cộng" in "".join(tcs[0].itertext())
+    if kieu == "thieu_o":  # (a) bỏ ô thống kê CUỐI
+        tr.remove(tcs[-1])
+    elif kieu == "gop_ngang":  # (b) cột 4, 5 gộp (gridSpan=2, bỏ ô cột 5)
+        tcs[3].grid_span = 2
+        tr.remove(tcs[4])
+    elif kieu == "gop_doc":  # (c) ô cột 4 gộp dọc với dòng trên — số ô, lưới không đổi
+        tcs[3].vMerge = "continue"
+    elif kieu == "thua_o":  # (d) thừa một ô (nhân bản ô cuối)
+        tr.append(copy.deepcopy(tcs[-1]))
+    elif kieu == "hai_dong":  # (e) HAI dòng tổng, mỗi dòng đúng cấu trúc
+        tr.addnext(copy.deepcopy(tr))
+    elif kieu == "nhan_vat_qua":  # nhãn gộp 3 cột (vắt sang cột số 2), bỏ ô cột 2
+        tcs[0].grid_span = 3
+        tr.remove(tcs[1])
+    elif kieu == "h_merge":  # ô cột 4 mang hMerge (gộp ngang kiểu cũ) — số ô, lưới đúng
+        tcs[3].get_or_add_tcPr().append(OxmlElement("w:hMerge"))
+    else:  # "grid_before" / "grid_after": dòng lệch lưới, các ô giữ nguyên
+        e = OxmlElement("w:" + ("gridBefore" if kieu == "grid_before" else "gridAfter"))
+        e.set(qn("w:val"), "1")
+        tr.get_or_add_trPr().append(e)
+    return _luu(d)
+
+
+KIEU_DONG_TONG_SAI = [
+    "thieu_o",
+    "gop_ngang",
+    "gop_doc",
+    "thua_o",
+    "hai_dong",
+    "nhan_vat_qua",
+    "h_merge",
+    "grid_before",
+    "grid_after",
+]
+
+
+@pytest.mark.parametrize("kieu", KIEU_DONG_TONG_SAI)
+@pytest.mark.parametrize("bang", [1, 2])
+def test_dong_tong_sai_cau_truc_thi_dung_truoc_moi_tep(mau, monkeypatch, bang, kieu):
+    hong = dataclasses.replace(mau, bien_ban=_sua_dong_tong(mau.bien_ban, bang, kieu))
+    da_luu, da_do = [], []
+    goc_luu, goc_do = svc._luu_docx, svc._do_bang_chen_truoc
+    monkeypatch.setattr(svc, "_luu_docx", lambda d: da_luu.append(1) or goc_luu(d))
+    monkeypatch.setattr(
+        svc, "_do_bang_chen_truoc", lambda *a, **k: da_do.append(1) or goc_do(*a, **k)
+    )
+    with pytest.raises(
+        FileValidationError,
+        match=r"Mẫu Biên bản \(bảng số liệu %d\): .*dòng `Tổng cộng`" % bang,
+    ) as e:
+        render_council_documents(_bo_giai(), hong)
+    assert "GIA-" not in str(e.value)
+    # Dừng ở PHÉP KIỂM MẪU: chưa đổ bảng nào, chưa ghi tệp nào.
+    assert da_do == [] and da_luu == []
+
+
+# Nhãn văn hoá → cột của Biên bản, viết LẠI trong test (không dùng VAN_HOA_THEO_COT /
+# _thong_ke của service) để số tổng kỳ vọng là phép tính ĐỘC LẬP.
+_COT_VAN_HOA_GIA = {
+    "THCS": 0,
+    "THCS (chưa TN)": 0,
+    "Hoàn thành THCS": 0,
+    "THPT (chưa TN)": 1,
+    "Hoàn thành THPT": 1,
+    "THPT": 2,
+    "GDTX": 2,
+}
+
+
+def _tong_doc_lap(bo):
+    """(cộng, THCS, hoàn thành THPT, THPT, TC, CĐ, ĐH, nữ, DTTS) của cả danh sách."""
+    vh = [0, 0, 0]
+    for h in bo:
+        vh[_COT_VAN_HOA_GIA[h.van_hoa]] += 1
+    return [
+        len(bo),
+        *vh,
+        sum(h.chuyen_mon == "trung_cap" for h in bo),
+        sum(h.chuyen_mon == "cao_dang" for h in bo),
+        0,
+        sum(h.gioi_tinh == "Nữ" for h in bo),
+        sum(h.dan_toc not in ("Kinh", "") for h in bo),
+    ]
+
+
+def _tach_nhan(b):
+    """Dòng tổng KHÔNG gộp nhãn: ô "Tổng cộng" 1 cột + một ô rỗng (phủ 2 cột đầu)."""
+    d = _doc(b)
+    for i in (1, 2):
+        tcs = d.tables[i]._tbl.findall(qn("w:tr"))[-1].findall(qn("w:tc"))
+        tcs[0].grid_span = 1
+        tcs[0].addnext(copy.deepcopy(tcs[1]))  # tcs[1] = ô số rỗng của mẫu
+    return _luu(d)
+
+
+@pytest.mark.parametrize("nhan", ["gop_nhu_mau_that", "khong_gop"])
+def test_dong_tong_hop_le_so_tong_tinh_doc_lap(mau, nhan):
+    bb = mau.bien_ban if nhan == "gop_nhu_mau_that" else _tach_nhan(mau.bien_ban)
+    bo = _bo_giai()
+    kq = render_council_documents(bo, dataclasses.replace(mau, bien_ban=bb))
+    tong = [str(x) for x in _tong_doc_lap(bo)]
+    assert tong == TONG_V11  # hai cách viết kỳ vọng của test khớp nhau
+    ra, goc = _doc(kq.files[0].content), _doc(bb)
+    b1 = [[c.text for c in r.cells] for r in ra.tables[1].rows]
+    b2 = [[c.text for c in r.cells] for r in ra.tables[2].rows]
+    nhan_in = ["Tổng cộng"] * 2 if nhan == "gop_nhu_mau_that" else ["Tổng cộng", ""]
+    assert b1[-1] == nhan_in + tong + [""]  # cột tổ hợp không cộng
+    # Bảng 2: số lượng xét tuyển = tổng; cột điểm RỖNG; rồi chín cột thống kê.
+    assert b2[-1] == nhan_in + [str(len(bo)), ""] + tong
+    # Cùng số với tổng các dòng dữ liệu ĐÃ IN (không ô tổng nào đè lên dòng dữ liệu).
+    for j in range(2, 11):
+        assert int(b1[-1][j]) == sum(int(r[j]) for r in b1[4:-1]), j
+    for j in [2] + list(range(4, 13)):
+        assert int(b2[-1][j]) == sum(int(r[j]) for r in b2[4:-1]), j
+    for i in (1, 2):  # cấu trúc gộp của dòng tổng sau khi dựng = như mẫu
+        assert _gop(ra.tables[i])[-1] == _gop(goc.tables[i])[-1]
+
+
+# ═══════════════════════════════ ký tự không ghi được vào Word / Excel ═══════════
+# Ngoài tập Char của XML 1.0: C0 (trừ \t \n \r), surrogate đơn lẻ, U+FFFE. Pydantic NHẬN
+# chúng vào DTO ⇒ phép kiểm đầu vào của service là lớp chặn.
+KY_TU_XAU = ["\x00", "\x0b", "\x1f", "\ud800", "\ufffe"]
+ID_KY_TU_XAU = ["U+0000", "U+000B", "U+001F", "U+D800", "U+FFFE"]
+
+
+def test_tham_so_hoa_phu_moi_truong_chuoi_cua_dto():
+    # Các ca bên dưới tham số hoá theo CANDIDATE_FIELDS (mọi trường của DTO): khoá rằng
+    # danh sách không rỗng và đó đúng là MỌI trường chuỗi.
+    assert CANDIDATE_FIELDS == tuple(CandidateRowV1.model_fields)
+    assert CANDIDATE_FIELDS
+    assert all(f.annotation is str for f in CandidateRowV1.model_fields.values())
+
+
+@pytest.mark.parametrize("kt", KY_TU_XAU, ids=ID_KY_TU_XAU)
+@pytest.mark.parametrize("truong", CANDIDATE_FIELDS)
+def test_ky_tu_khong_ghi_duoc_thi_loi_mien_khong_lo_gia_tri(
+    mau, monkeypatch, truong, kt
+):
+    xau = _hs("GIA-02", "Y", OTO, CD, "6510216", "10").model_copy(
+        update={truong: "CANARY" + kt + "X"}
+    )
+    bo = [_hs("GIA-01", "X", OTO, CD, "6510216", "10"), xau]
+    da_dung = []
+    for ten in ("_luu_docx", "_dung_ds_xlsx"):
+        goc = getattr(svc, ten)
+        monkeypatch.setattr(
+            svc, ten, lambda *a, _g=goc, **k: da_dung.append(1) or _g(*a, **k)
+        )
+    with pytest.raises(DataValidationError) as e:
+        render_council_documents(bo, mau)
+    msg = str(e.value)
+    assert ("Dòng 2, trường %s:" % truong) in msg, msg
+    assert "CANARY" not in msg and kt not in msg
+    assert da_dung == []  # dừng ở đầu vào — không tệp nào được dựng
+
+
+def test_kiem_dau_vao_bao_trum_tap_cam_cua_openpyxl(mau):
+    cam = [chr(c) for c in range(0x110000) if ILLEGAL_CHARACTERS_RE.search(chr(c))]
+    assert "\x00" in cam and "\x1f" in cam  # tập đo được không rỗng
+    lot = []
+    for kt in cam:
+        h = _hs("GIA-X", "X", OTO, CD, "6510216", "10").model_copy(
+            update={"ho": "CANARY" + kt + "X"}
+        )
+        try:
+            render_council_documents([h], mau)
+        except DataValidationError as e:
+            if "Dòng 1, trường ho:" not in str(e):
+                lot.append((hex(ord(kt)), "thông báo khác"))
+        except Exception as e:  # noqa: BLE001 — ghi lại để báo ĐÚNG ký tự lọt lớp chặn
+            lot.append((hex(ord(kt)), type(e).__name__))
+        else:
+            lot.append((hex(ord(kt)), "dựng được"))
+    assert lot == []  # mọi ký tự openpyxl cấm đều bị kiểm đầu vào chặn
+
+
+HOP_LE_BIEN = ["\x20", "\ud7ff", "\ue000", "\ufffd", "\U00010000", "\t", "Ửng Đồ Kỷ"]
+ID_HOP_LE_BIEN = ["U+0020", "U+D7FF", "U+E000", "U+FFFD", "U+10000", "tab", "chu-viet"]
+
+
+@pytest.mark.parametrize("kt", HOP_LE_BIEN, ids=ID_HOP_LE_BIEN)
+def test_ky_tu_bien_hop_le_van_dung(mau, kt):
+    v = "Nơi" + kt + "Giả"
+    kq = render_council_documents(
+        [_hs("GIA-X", "X", OTO, CD, "6510216", "10", noi_sinh=v)], mau
+    )
+    assert len(kq.files) == 4
+    ds = _tep(kq, "DanhSachXetTuyen-CD-Cong-nghe-o-to.docx")
+    assert _bang(ds, 1)[3][6] == v
+    assert _doc(kq.files[1].content).tables[3].rows[1].cells[6].text == v
+    wb = openpyxl.load_workbook(
+        io.BytesIO(_tep(kq, "DanhSachXetTuyen-CD-Cong-nghe-o-to.xlsx"))
+    )
+    assert wb["1-Hồ sơ đăng ký"].cell(4, 7).value == v
+
+
+@pytest.mark.parametrize("gia_tri", [None, 123, b"GIA"], ids=["None", "int", "bytes"])
+def test_truong_chuoi_kieu_la_thi_loi_mien(mau, gia_tri):
+    # model_copy bỏ qua kiểm kiểu của pydantic — hàng rào ký tự phải tự chặn kiểu lạ.
+    h = _hs("GIA-X", "X", OTO, CD, "6510216", "10").model_copy(
+        update={"noi_sinh": gia_tri}
+    )
+    with pytest.raises(
+        DataValidationError, match="Dòng 1, trường noi_sinh: không phải chuỗi"
+    ):
+        render_council_documents([h], mau)
+
+
+@pytest.mark.parametrize(
+    "gia_tri",
+    ["1\x00", "1\n", "\ud800", "\uff11"],
+    ids=["U+0000", "xuong-dong-cuoi", "U+D800", "so-toan-hinh"],
+)
+@pytest.mark.parametrize("truong", ["so_quyet_dinh", "dot_so", "so_bien_ban"])
+def test_tham_so_quyet_dinh_chuoi_chi_nhan_chu_so_ascii(truong, gia_tri):
+    # Ba trường chuỗi của DecisionParams có pattern chỉ chữ số (``$`` của pydantic là
+    # CUỐI chuỗi, không nhận "\n" ở cuối) ⇒ không ký tự lạ nào tới được Quyết định.
+    them = {"dot_thang": 9} if truong == "dot_so" else {}
+    assert getattr(DecisionParams(**{truong: "1"}, **them), truong) == "1"  # đối chứng
+    with pytest.raises(PydanticValidationError):
+        DecisionParams(**{truong: gia_tri}, **them)
+
+
+# ═══════════════════════════════ khối ngành của Quyết định phải liền nhau ════════
+def _sua_khoi_qd(b, khoi):
+    """Mẫu QĐ giả có khối ngành KHÔNG liền ("Ngành:" → bảng → "Số thí sinh")."""
+    d = _doc(b)
+    ps, ts = d.paragraphs, d.tables
+    if khoi == 1:  # bảng khối 1 dời xuống SAU đoạn "Số thí sinh" của chính khối 1
+        ps[21]._p.addnext(ts[3]._tbl)
+    else:  # khối 2 mất bảng; một bảng khác (khối ký giả) ở cuối văn bản thành bảng 4
+        ts[4]._tbl.getparent().remove(ts[4]._tbl)
+        d.add_table(rows=1, cols=2).cell(0, 1).text = "KÝ GIẢ"
+    return _luu(d)
+
+
+@pytest.mark.parametrize("khoi", [1, 2])
+def test_khoi_nganh_quyet_dinh_khong_lien_thi_dung_truoc_moi_tep(
+    mau, monkeypatch, khoi
+):
+    hong = dataclasses.replace(mau, quyet_dinh=_sua_khoi_qd(mau.quyet_dinh, khoi))
+    da_luu = []
+    goc = svc._luu_docx
+    monkeypatch.setattr(svc, "_luu_docx", lambda d: da_luu.append(1) or goc(d))
+    ky_vong = {
+        1: "khối 1: KHÔNG liền, khối 2: liền",
+        2: "khối 1: liền, khối 2: KHÔNG liền",
+    }
+    with pytest.raises(FileValidationError, match=ky_vong[khoi]) as e:
+        render_council_documents(_bo_giai(), hong)
+    assert "GIA-" not in str(e.value)
+    assert da_luu == []
