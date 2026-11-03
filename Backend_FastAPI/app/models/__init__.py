@@ -50,6 +50,12 @@ from .admission_survey_feedback import AdmissionSurveyFeedback
 from .student import Student, StudentDocument
 # Official "Giấy báo nhập học" issuance record (phát từ `submitted` trở đi).
 from .enrollment_letter import EnrollmentLetter
+# Kho mẫu + bộ văn bản Hội đồng tuyển sinh (giai đoạn 1 "Lần xét tuyển").
+from .council_document import (
+    CouncilDocumentSet,
+    CouncilDocumentSetFile,
+    CouncilDocumentTemplate,
+)
 
 # Admission Config Domain (Phase 1: Relational admission system)
 from .admission_config import (
@@ -217,6 +223,9 @@ __all__ = [
     "Student",
     "StudentDocument",
     "EnrollmentLetter",
+    "CouncilDocumentTemplate",
+    "CouncilDocumentSet",
+    "CouncilDocumentSetFile",
     "ProfileSubjectScore",
     "ProfileDocument",
     "DocumentAuditLog",  # Audit trail for document operations
