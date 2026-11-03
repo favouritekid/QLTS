@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Bộ dựng văn bản Hội đồng tuyển sinh — luật render v1 (bộ xuất niêm phong cùng QĐ 1844).
+"""Bộ dựng văn bản Hội đồng tuyển sinh — luật render v1.1 (v1 của bộ xuất niêm phong
+cùng QĐ 1844 + ba chỗ owner chốt 03-11).
 
 Giai đoạn 1 kế hoạch "Lần xét tuyển" (PR 1.3). Từ một danh sách hồ sơ ĐÃ CHỌN SẴN,
 tham số văn bản và ba tệp mẫu Word, dựng ra bộ văn bản Hội đồng:
@@ -16,8 +17,10 @@ Ranh giới — đọc trước khi sửa
   ``REPEATABLE READ READ ONLY``) và lưu bộ văn bản là việc của tầng khác.
 * **Không tự lọc ứng viên.** Ai có trong danh sách vào thì vào văn bản — tương
   đương ``--chi-ma`` của bộ xuất. Luật chọn ứng viên thuộc giai đoạn 2.
-* **Luật render = luật v1** của bộ xuất đã niêm phong cùng QĐ 1844. Điểm ưu tiên
-  lấy NGUYÊN từ DTO (``diem_kv``, ``diem_ut``); KHÔNG gọi bộ phân giải ưu tiên v2.
+* **Luật render = luật v1.1**: luật v1 của bộ xuất đã niêm phong cùng QĐ 1844, trừ
+  ba chỗ owner chốt 03-11 (kế hoạch §1, ``Y-TUONG`` J1 dòng 20) — thống kê trình độ
+  của Biên bản, viết hoa đơn vị hành chính ghép trong địa chỉ, cách viết tháng. Điểm
+  ưu tiên lấy NGUYÊN từ DTO (``diem_kv``, ``diem_ut``); KHÔNG gọi phân giải ưu tiên v2.
 * **Một nguồn cho điểm in**: :func:`tinh_diem_in` — cả Biên bản (điểm xét trúng
   tuyển), Quyết định (thứ tự người) lẫn Danh sách (cột điểm, thứ tự) đều đi qua nó.
 * **Thứ tự đầu vào có nghĩa.** Mọi phép sắp ở đây là sắp ổn định: hai hồ sơ trùng
@@ -25,11 +28,21 @@ Ranh giới — đọc trước khi sửa
   một thứ tự xác định; metadata trả lại đúng thứ tự ấy.
 * **Không ghi dữ liệu cá nhân vào thông báo lỗi** — chỉ số thứ tự dòng đầu vào.
 
+Luật v1.1 — ba chỗ khác v1 (owner chốt 03-11 lượt 7)
+====================================================
+* **Thống kê trình độ của Biên bản.** Văn hoá bắt buộc, đếm trước: mỗi em đúng MỘT
+  cột văn hoá (:data:`VAN_HOA_THEO_COT`); tổng ba cột văn hoá = "Cộng", lệch ⇒ DỪNG.
+  Chuyên môn ĐẾM THÊM: ``trung_cap`` ⇒ cột Trung cấp, ``cao_dang`` ⇒ cột Cao đẳng,
+  không phân biệt chính quy / liên thông (bộ dựng không nhận loại hình — loại hình
+  không ảnh hưởng cách đếm); ``so_cap`` / ``none`` / rỗng ⇒ chỉ đếm văn hoá; cột Đại
+  học = 0. Nhãn văn hoá rỗng / lạ hoặc chuyên môn lạ ⇒ DỪNG.
+* **Địa chỉ trên Danh sách**: sau khi viết hoa chữ đầu mỗi từ, đơn vị hành chính ghép
+  nhiều từ trả về đúng chính tả (``Thành phố``, ``Thị trấn``… — :data:`DON_VI_GHEP`),
+  như bộ xuất đang dùng.
+* **Tháng**: "tháng 9" mọi chỗ — chỉ tháng 1, 2 thêm số 0 (:func:`_thang`).
+
 Hành vi v1 được giữ NGUYÊN có chủ ý (đổi thì đổi luật, không phải sửa lỗi)
 =========================================================================
-* Bảng Biên bản: cột "THCS" chỉ đếm nhãn ``THCS``; "Hoàn thành THPT" chỉ đếm
-  ``THPT (chưa TN)``; "THPT" đếm ``THPT`` + ``GDTX``; ba cột trình độ chuyên môn = 0.
-  Nhãn khác (vd ``THCS (chưa TN)``) không vào cột văn hoá nào.
 * "Điểm xét trúng tuyển" của Biên bản = điểm THẤP NHẤT của danh sách ngành.
 * Biên bản và Danh sách giữ nguyên các chỗ trống (đợt, giờ họp, thành phần, số và
   ngày trên chính Biên bản) cho người ký tự điền — như bộ xuất. Chỉ Quyết định
@@ -62,7 +75,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.utils.exceptions import DataValidationError, FileValidationError
 
 # Nhãn luật render — ghi vào metadata của mỗi bộ văn bản.
-LUAT_RENDER = "v1-niem-phong-qd1844"
+LUAT_RENDER = "v1.1"
 
 # Trần tổng điểm ưu tiên (khu vực + đối tượng) của luật v1 — bộ xuất ghim 2.75 theo
 # ``max_total_bonus`` của quy tắc mặc định trên production lúc in. KHÔNG phải cấu
@@ -74,6 +87,22 @@ DA_NOP = ("paper_submitted", "verified")
 
 # Truy vấn nguồn chỉ lấy hai trình độ này (``WHERE … IN ('Cao đẳng','Trung cấp')``).
 TRINH_DO_HOP_LE = ("Cao đẳng", "Trung cấp")
+
+# Cột văn hoá của Biên bản ← nhãn ``van_hoa`` (cột CSV của ``xettuyen_theo_ds.sql``):
+# nhãn cũ (ảnh chụp trước 23-10, "… (chưa TN)") lẫn nhãn mới ("Hoàn thành …"). Đây là
+# NGUỒN DUY NHẤT: tập nhãn hợp lệ = hợp các tập dưới đây. THCS gồm cả em hoàn thành
+# chương trình THCS (Thông tư 10/2026 bỏ cấp bằng tốt nghiệp THCS).
+VAN_HOA_THEO_COT: Tuple[Tuple[str, frozenset], ...] = (
+    ("THCS", frozenset({"THCS", "THCS (chưa TN)", "Hoàn thành THCS"})),
+    ("Hoàn thành THPT", frozenset({"THPT (chưa TN)", "Hoàn thành THPT"})),
+    ("THPT", frozenset({"THPT", "GDTX"})),
+)
+NHAN_VAN_HOA_HOP_LE = frozenset().union(*(nhan for _, nhan in VAN_HOA_THEO_COT))
+
+# ``vocational_qualification`` (CHECK của model: none | so_cap | trung_cap | cao_dang,
+# NOT NULL) — rỗng = ảnh chụp không có cột này (trước 23-10). Chỉ trung cấp / cao đẳng
+# có cột trên Biên bản; sơ cấp và không có ⇒ chỉ đếm văn hoá.
+CHUYEN_MON_HOP_LE = ("", "none", "so_cap", "trung_cap", "cao_dang")
 
 _KY_HIEU = {"certified_copy": "Ct", "photo": "Pt", "original": "C"}
 
@@ -134,6 +163,9 @@ class CandidateRowV1(BaseModel):
     f_cccd: str
     s_anh: str
     f_anh: str
+    # Trình độ chuyên môn (``vocational_qualification``) — được phép RỖNG (ảnh chụp
+    # trước 23-10 không có cột này). Bắt buộc truyền tường minh, không có mặc định.
+    chuyen_mon: str
 
 
 #: Tên các cột CSV mà DTO dùng — cũng là danh sách trường phải so ở N1b.
@@ -245,8 +277,33 @@ def _hoa_dau(s: str) -> str:
     )
 
 
+# Đơn vị hành chính GHÉP nhiều từ: chỉ chữ ĐẦU viết hoa. ``_hoa_dau`` viết hoa MỌI từ
+# nên "Thành phố X" thành "Thành Phố X" — sai chính tả và lệch tên ở danh mục hành chính.
+# Trả về đúng dạng SAU ``_hoa_dau``; khớp không phân biệt hoa thường, khoảng trắng bên
+# trong gộp về một dấu cách (như bộ xuất đang dùng — luật v1.1).
+DON_VI_GHEP = (
+    "Thành phố",
+    "Thị xã",
+    "Thị trấn",
+    "Khu phố",
+    "Khu vực",
+    "Tiểu khu",
+    "Tổ dân phố",
+    "Cụm dân cư",
+    "Khu dân cư",
+    "Tổ dân cư",
+)
+_RE_DON_VI_GHEP = tuple(
+    (re.compile(r"\b" + g.replace(" ", r"\s+") + r"\b", re.IGNORECASE), g)
+    for g in DON_VI_GHEP
+)
+
+
 def chuan_dia_chi(s: str) -> str:
-    return _hoa_dau(_RE_TDP.sub("TDP", s))
+    s = _hoa_dau(_RE_TDP.sub("TDP", s))
+    for rx, dung in _RE_DON_VI_GHEP:
+        s = rx.sub(dung, s)
+    return s
 
 
 def _thang(m: int) -> str:
@@ -291,6 +348,18 @@ def _chuan_bi(rows: Sequence[CandidateRowV1]) -> List[_HoSo]:
         if td not in TRINH_DO_HOP_LE:
             raise DataValidationError(
                 "Dòng %d: trình độ không thuộc %s." % (i, " / ".join(TRINH_DO_HOP_LE))
+            )
+        # Văn hoá BẮT BUỘC (owner 03-11): rỗng hay lạ là lỗi dữ liệu ⇒ dừng, không
+        # đếm sót im lặng. Chuyên môn: chỉ các giá trị của CHECK trên model (+ rỗng).
+        if r.van_hoa not in NHAN_VAN_HOA_HOP_LE:
+            raise DataValidationError(
+                "Dòng %d: trình độ văn hoá rỗng hoặc không thuộc nhãn đã biết "
+                "— không dựng thống kê Biên bản." % i
+            )
+        if r.chuyen_mon not in CHUYEN_MON_HOP_LE:
+            raise DataValidationError(
+                "Dòng %d: trình độ chuyên môn không thuộc %s."
+                % (i, " / ".join(repr(x) for x in CHUYEN_MON_HOP_LE))
             )
         out.append(
             _HoSo(
@@ -451,17 +520,29 @@ def _moi_doan(d):
     return [Paragraph(p, d) for p in body.iter(qn("w:p"))]
 
 
-# ═══════════════════════════════ thống kê Biên bản (v1) ══════════════════════
+# ═══════════════════════════════ thống kê Biên bản (v1.1) ════════════════════
 def _thong_ke(rs: Sequence[_HoSo]):
-    """(cộng, THCS, hoàn thành THPT, THPT, TC, CĐ, ĐH, nữ, dân tộc) — luật v1."""
+    """(cộng, THCS, hoàn thành THPT, THPT, TC, CĐ, ĐH, nữ, dân tộc) — luật v1.1.
+
+    Văn hoá: mỗi em đúng MỘT cột (``VAN_HOA_THEO_COT``); tổng ba cột = cộng, lệch ⇒
+    DỪNG. Chuyên môn đếm THÊM (một em có thể ở một cột văn hoá + một cột chuyên môn),
+    không theo loại hình. Đại học = 0 (CSDL không có mức này)."""
+    van_hoa = [
+        sum(1 for h in rs if h.dto.van_hoa in nhan) for _, nhan in VAN_HOA_THEO_COT
+    ]
+    if sum(van_hoa) != len(rs):
+        raise DataValidationError(
+            "Thống kê Biên bản: tổng cột văn hoá %d ≠ Cộng %d — không dựng văn bản."
+            % (sum(van_hoa), len(rs))
+        )
+    trung_cap = sum(1 for h in rs if h.dto.chuyen_mon == "trung_cap")
+    cao_dang = sum(1 for h in rs if h.dto.chuyen_mon == "cao_dang")
     return (
         len(rs),
-        sum(1 for h in rs if h.dto.van_hoa == "THCS"),
-        sum(1 for h in rs if h.dto.van_hoa == "THPT (chưa TN)"),
-        sum(1 for h in rs if h.dto.van_hoa in ("THPT", "GDTX")),
-        0,
-        0,
-        0,  # trình độ chuyên môn — luật v1 để 0
+        *van_hoa,
+        trung_cap,
+        cao_dang,
+        0,  # Đại học
         sum(1 for h in rs if h.dto.gioi_tinh == "Nữ"),
         sum(1 for h in rs if h.dto.dan_toc not in ("Kinh", "")),
     )

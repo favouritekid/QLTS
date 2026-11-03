@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Khoá hành vi bộ dựng văn bản Hội đồng (luật v1) — DỮ LIỆU GIẢ, MẪU GIẢ.
+"""Khoá hành vi bộ dựng văn bản Hội đồng (luật v1.1) — DỮ LIỆU GIẢ, MẪU GIẢ.
 
 Không có mẫu Word thật hay dữ liệu thật trong kho (kho PUBLIC). Ba mẫu ở đây được
 dựng LÚC CHẠY bằng python-docx, cùng CẤU TRÚC mà luật v1 dựa vào (chỉ số đoạn,
@@ -7,9 +7,11 @@ chỉ số bảng, dòng mẫu, dòng "Tổng cộng", chỗ trống của Quy�
 mẫu thật + bộ niêm phong QĐ 1844 (N1) chạy NGOÀI kho.
 
 Thứ được khoá: thứ tự ngành / người (kể cả giữ thứ tự đầu vào khi trùng khoá), điểm
-in (tổng môn + ưu tiên, trần 2.75), thống kê Biên bản v1, điền tham số Quyết định
-(và giữ chỗ trống khi vắng tham số), ô gộp + bề rộng ô gộp, xlsx, kiểm đầu vào /
-mẫu (fail-closed, thông báo không lộ mã hồ sơ), metadata, tính tất định.
+in (tổng môn + ưu tiên, trần 2.75), thống kê Biên bản v1.1 (văn hoá một cột + chuyên
+môn đếm thêm, nhãn cũ lẫn mới, dừng khi nhãn / chuyên môn lạ), viết hoa đơn vị hành
+chính ghép trong địa chỉ, điền tham số Quyết định (và giữ chỗ trống khi vắng tham
+số), ô gộp + bề rộng ô gộp, xlsx, kiểm đầu vào / mẫu (fail-closed, thông báo không lộ
+mã hồ sơ), metadata, tính tất định.
 """
 
 import hashlib
@@ -30,6 +32,7 @@ from app.services.council_document_render_service import (
     CandidateRowV1,
     CouncilTemplates,
     DecisionParams,
+    chuan_dia_chi,
     render_council_documents,
     tinh_diem_in,
 )
@@ -252,7 +255,7 @@ def _hs(ma, ten, nganh, td, ma_nganh, tong, kv="0.75", ut="0", ho="Họ Giả", 
         s_hocba="paper_submitted", f_hocba="certified_copy", s_bang="paper_submitted", f_bang="photo",
         k_bang="official_diploma", s_cngdpt="missing", f_cngdpt="", s_ks="paper_submitted",
         f_ks="certified_copy", s_cccd="verified", f_cccd="certified_copy", s_anh="paper_submitted",
-        f_anh="original",
+        f_anh="original", chuyen_mon="none",
     )  # fmt: skip
     v.update(kw)
     return CandidateRowV1(**v)
@@ -263,9 +266,13 @@ CD, TC = "Cao đẳng", "Trung cấp"
 
 
 def _bo_giai():
-    """8 hồ sơ, 4 nhóm ngành; thứ tự đầu vào CỐ Ý lộn xộn."""
+    """8 hồ sơ, 4 nhóm ngành; thứ tự đầu vào CỐ Ý lộn xộn. Văn hoá trộn nhãn CŨ
+    ("… (chưa TN)", ảnh chụp trước 23-10) với nhãn MỚI ("Hoàn thành …"); chuyên môn
+    đủ bốn giá trị của model."""
     return [
-        _hs("GIA-01", "Bình", OTO, TC, "5510216", "15.0"),  # 15.75
+        _hs(
+            "GIA-01", "Bình", OTO, TC, "5510216", "15.0", van_hoa="Hoàn thành THCS"
+        ),  # 15.75 · THCS (nhãn mới)
         _hs(
             "GIA-02",
             "An",
@@ -277,10 +284,11 @@ def _bo_giai():
             ut="2.00",
             dan_toc="Ê Đê",
             gioi_tinh="Nữ",
+            van_hoa="Hoàn thành THPT",  # nhãn mới
         ),
         _hs(
             "GIA-03", "Cường", OTO, CD, "6510216", "14.0", van_hoa="THPT (chưa TN)"
-        ),  # 14.75
+        ),  # 14.75 · Hoàn thành THPT (nhãn cũ)
         _hs("GIA-04", "An", OTO, TC, "5510216", "17.0", van_hoa="THCS"),  # 17.75
         _hs(
             "GIA-05",
@@ -292,6 +300,7 @@ def _bo_giai():
             kv="0.75",
             ut="2.00",
             ut_ma="01",
+            chuyen_mon="trung_cap",  # THPT + Trung cấp: có mặt ở HAI cột
         ),  # 20.75
         _hs(
             "GIA-06",
@@ -301,11 +310,21 @@ def _bo_giai():
             "5510216",
             "15.0",
             ho="Họ Bé",  # "Họ Bé" < "Họ Giả": khoá phụ theo HỌ sẽ đảo thứ tự
-            van_hoa="THCS (chưa TN)",
+            van_hoa="THCS (chưa TN)",  # nhãn cũ ⇒ THCS
         ),  # 15.75 trùng điểm + trùng tên với GIA-01
-        _hs("GIA-07", "Giang", OTO, CD, "6510216", "", kv="", ut=""),  # 0.00
         _hs(
-            "GIA-08", "Hà", DUOC, CD, "6720201", "12.5", van_hoa="GDTX", gioi_tinh="Nữ"
+            "GIA-07", "Giang", OTO, CD, "6510216", "", kv="", ut="", chuyen_mon="so_cap"
+        ),  # 0.00 · sơ cấp ⇒ chỉ văn hoá
+        _hs(
+            "GIA-08",
+            "Hà",
+            DUOC,
+            CD,
+            "6720201",
+            "12.5",
+            van_hoa="GDTX",
+            gioi_tinh="Nữ",
+            chuyen_mon="cao_dang",  # THPT (GDTX) + Cao đẳng
         ),  # 13.25
     ]
 
@@ -416,55 +435,39 @@ def test_thu_tu_nguoi_quyet_dinh_va_danh_sach(mau):
     ]
 
 
-# ═══════════════════════════════ Biên bản v1 ═════════════════════════════════
-def test_bien_ban_thong_ke_v1_va_dong_tong(mau):
+# ═══════════════════════════════ Biên bản v1.1════════════════════════════════
+# (cộng, THCS, hoàn thành THPT, THPT, TC, CĐ, ĐH, nữ, DTTS) theo luật v1.1
+KY_VONG_V11 = {
+    "Công nghệ ô tô - Cao đẳng": ["2", "0", "1", "1", "0", "0", "0", "0", "0"],
+    # Ba nhãn THCS: "Hoàn thành THCS" (mới), "THCS", "THCS (chưa TN)" (cũ).
+    "Công nghệ ô tô - Trung cấp": ["3", "3", "0", "0", "0", "0", "0", "0", "0"],
+    # GIA-05 THPT + trung cấp, GIA-08 GDTX + cao đẳng: mỗi em ở HAI cột.
+    "Dược - Cao đẳng": ["2", "0", "0", "2", "1", "1", "0", "1", "0"],
+    "Điều dưỡng - Cao đẳng": ["1", "0", "1", "0", "0", "0", "0", "1", "1"],
+}
+TONG_V11 = ["8", "3", "2", "3", "1", "1", "0", "2", "1"]
+
+
+def test_bien_ban_thong_ke_v11_van_hoa_va_chuyen_mon(mau):
     kq = render_council_documents(_bo_giai(), mau)
     b1 = _bang(kq.files[0].content, 1)
-    hang = {r[1]: r for r in b1[4:-1]}
-    # (cộng, THCS, hoàn thành THPT, THPT, TC, CĐ, ĐH, nữ, DTTS, tổ hợp)
-    assert hang["Công nghệ ô tô - Cao đẳng"][2:] == [
-        "2",
-        "0",
-        "1",
-        "1",
-        "0",
-        "0",
-        "0",
-        "0",
-        "0",
-        "A00",
-    ]
-    # "THCS (chưa TN)" KHÔNG vào cột văn hoá nào — luật v1, giữ nguyên có chủ ý.
-    assert hang["Công nghệ ô tô - Trung cấp"][2:] == [
-        "3",
-        "1",
-        "0",
-        "1",
-        "0",
-        "0",
-        "0",
-        "0",
-        "0",
-        "A00",
-    ]
-    assert hang["Điều dưỡng - Cao đẳng"][2:] == [
-        "1",
-        "0",
-        "0",
-        "1",
-        "0",
-        "0",
-        "0",
-        "1",
-        "1",
-        "A00",
-    ]
-    assert [r[0] for r in b1[4:-1]] == ["1", "2", "3", "4"]
-    tong = b1[-1]
-    assert tong[0] == tong[1] == "Tổng cộng"
-    assert tong[2:] == ["8", "1", "1", "5", "0", "0", "0", "2", "1", ""]
     b2 = _bang(kq.files[0].content, 2)
-    assert b2[-1][2:5] == ["8", "", "8"]  # số xét tuyển cộng được; điểm thì không
+    hang1 = {r[1]: r for r in b1[4:-1]}
+    hang2 = {r[1]: r for r in b2[4:-1]}
+    assert set(hang1) == set(KY_VONG_V11) == set(hang2)
+    for ng, ky_vong in KY_VONG_V11.items():
+        assert hang1[ng][2:] == ky_vong + ["A00"], ng
+        assert hang2[ng][4:] == ky_vong, ng  # bảng 2: danh sách trúng tuyển = cả nhóm
+        assert hang2[ng][2] == ky_vong[0]  # số lượng xét tuyển
+    assert [r[0] for r in b1[4:-1]] == ["1", "2", "3", "4"]
+    # Văn hoá: mỗi em đúng MỘT cột ⇒ THCS + Hoàn thành THPT + THPT = Cộng ở MỌI dòng.
+    for r in b1[4:]:
+        assert sum(int(x) for x in r[3:6]) == int(r[2]), r[1]
+    for r in b2[4:]:
+        assert sum(int(x) for x in r[5:8]) == int(r[4]), r[1]
+    assert b1[-1][0] == b1[-1][1] == "Tổng cộng"
+    assert b1[-1][2:] == TONG_V11 + [""]
+    assert b2[-1][2:] == ["8", ""] + TONG_V11  # số xét tuyển cộng được; điểm thì không
     chu = [p.text for p in _doc(kq.files[0].content).paragraphs]
     assert (
         "Về việc xác định phương án xét trúng tuyển các ngành, nghề trình độ Cao đẳng và Trung cấp "
@@ -472,6 +475,49 @@ def test_bien_ban_thong_ke_v1_va_dong_tong(mau):
     )
     # Chỗ trống của chính Biên bản (đợt…) giữ nguyên cho người ký tự điền — như v1.
     assert "Đợt ….. tháng ….. năm 2026" in chu
+
+
+@pytest.mark.parametrize("nhan", ["", "Tốt nghiệp THPT", "graduated_thpt", "THPT "])
+def test_nhan_van_hoa_rong_hoac_la_thi_dung(mau, nhan):
+    bo = _bo_giai()
+    bo[1] = bo[1].model_copy(update={"van_hoa": nhan})
+    # Lớp chặn ĐẦU VÀO (thông báo theo số dòng) — không phải lớp tổng cột phía sau.
+    with pytest.raises(DataValidationError, match="Dòng 2: trình độ văn hoá") as e:
+        render_council_documents(bo, mau)
+    assert "GIA-02" not in str(e.value)
+
+
+def test_chuyen_mon_hop_le_va_la(mau):
+    for gia_tri in ("", "none", "so_cap"):  # chỉ đếm văn hoá
+        bo = [_hs("GIA-X", "X", OTO, CD, "6510216", "10", chuyen_mon=gia_tri)]
+        b1 = _bang(render_council_documents(bo, mau).files[0].content, 1)
+        assert b1[4][2:9] == ["1", "0", "0", "1", "0", "0", "0"], gia_tri
+    for gia_tri in ("dai_hoc", "Trung cấp", "None", " trung_cap"):
+        bo = [_hs("GIA-X", "X", OTO, CD, "6510216", "10", chuyen_mon=gia_tri)]
+        with pytest.raises(DataValidationError, match="Dòng 1: trình độ chuyên môn"):
+            render_council_documents(bo, mau)
+    v = _hs("GIA-X", "X", OTO, CD, "1", "1").model_dump()
+    v.pop("chuyen_mon")
+    with pytest.raises(PydanticValidationError):  # trường bắt buộc, không mặc định
+        CandidateRowV1(**v)
+
+
+def test_dia_chi_viet_hoa_don_vi_ghep(mau):
+    assert chuan_dia_chi("thành phố buôn ma thuột") == "Thành phố Buôn Ma Thuột"
+    assert (
+        chuan_dia_chi("tổ dân phố 3, thị trấn ea kar, khu  phố 2, tỉnh giả")
+        == "TDP 3, Thị trấn Ea Kar, Khu phố 2, Tỉnh Giả"
+    )
+    assert chuan_dia_chi("THỊ XÃ GIẢ, tiểu khu 5") == "Thị xã GIẢ, Tiểu khu 5"
+    assert chuan_dia_chi("phường giả, tỉnh giả") == "Phường Giả, Tỉnh Giả"
+    bo = [_hs("GIA-X", "X", OTO, CD, "6510216", "10", dia_chi="thành phố giả")]
+    kq = render_council_documents(bo, mau)
+    ds = _tep(kq, "DanhSachXetTuyen-CD-Cong-nghe-o-to.docx")
+    assert _bang(ds, 1)[3][8] == "Thành phố Giả"
+    wb = openpyxl.load_workbook(
+        io.BytesIO(_tep(kq, "DanhSachXetTuyen-CD-Cong-nghe-o-to.xlsx"))
+    )
+    assert wb["1-Hồ sơ đăng ký"].cell(4, 9).value == "Thành phố Giả"
 
 
 # ═══════════════════════════════ tham số Quyết định ══════════════════════════
@@ -704,7 +750,7 @@ def test_metadata(mau):
     bo = _bo_giai()
     kq = render_council_documents(bo, mau, TS_1844_GIA)
     md = kq.metadata
-    assert md["luat_render"] == LUAT_RENDER and md["tran_uu_tien"] == 2.75
+    assert md["luat_render"] == LUAT_RENDER == "v1.1" and md["tran_uu_tien"] == 2.75
     assert md["sha256_mau"] == {
         "bien_ban": hashlib.sha256(mau.bien_ban).hexdigest(),
         "quyet_dinh": hashlib.sha256(mau.quyet_dinh).hexdigest(),
