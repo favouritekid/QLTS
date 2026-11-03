@@ -1172,6 +1172,11 @@ jobs:
           # `tests/integration/test_council_document_store.py` (CSDL test: chống bom zip,
           # chọn mẫu theo ngày ký, lưu bộ ở giao dịch sau, lỗi mọi bước không ghi gì).
           # Dữ liệu + mẫu GIẢ dựng lúc chạy. Ghim WHOLE-FILE.
+          # Lượt E2 (Lần xét tuyển GĐ1): `tests/integration/test_council_document_migration_downgrade.py`
+          # (CSDL test: chạy ĐÚNG `downgrade()` của migration hdts20261103 trong một giao dịch
+          # ROLLBACK — bảng nào còn hàng ⇒ dừng không xoá gì; cờ CHO PHÉP đúng "1" ⇒ xoá được).
+          # Trước đây guard hạ cấp chỉ được canh bằng script chạy tay (Codex lần 4, K6). Ghim
+          # WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1243,6 +1248,7 @@ jobs:
               tests/unit/test_council_document_models.py
               tests/integration/test_council_candidate_snapshot.py
               tests/integration/test_council_document_store.py
+              tests/integration/test_council_document_migration_downgrade.py
 
     env:
       APP_ENV: test

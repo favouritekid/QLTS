@@ -87,13 +87,15 @@ async def giao_dich_chi_doc(
             await gd.rollback()
 
 
-# Mỗi dòng đầu vào khớp bao nhiêu hồ sơ (CCCD = ``admission_profile.citizen_id``). CCCD chỉ
-# UNIQUE theo năm học ⇒ một mã có thể khớp nhiều hồ sơ; người gọi đòi ĐÚNG MỘT.
+# Mỗi dòng đầu vào khớp bao nhiêu hồ sơ (CCCD = ``admission_profile.citizen_id``) TRONG
+# NĂM HỌC đã cho. CCCD chỉ UNIQUE theo năm học (``uq_citizen_academic_year``) ⇒ không lọc
+# năm thì một người có hồ sơ ở hai năm "khớp NHIỀU"; người gọi vẫn đòi ĐÚNG MỘT (lớp phụ).
 SQL_PHAN_GIAI_MA = text(
     """
 SELECT d.stt::int AS stt, count(p.id)::int AS so_khop, min(p.id) AS pid
 FROM unnest(CAST(:ma AS text[])) WITH ORDINALITY AS d(ma, stt)
-LEFT JOIN admission_profile p ON p.citizen_id = d.ma
+LEFT JOIN admission_profile p
+       ON p.citizen_id = d.ma AND p.academic_year = CAST(:nam AS integer)
 GROUP BY d.stt
 ORDER BY d.stt
 """
@@ -271,10 +273,16 @@ ORDER BY chon.stt
 )
 
 
-async def phan_giai_ma(conn: AsyncConnection, ma: Sequence[str]) -> List[tuple]:
-    """[(stt, số hồ sơ khớp, id nhỏ nhất)] theo thứ tự đầu vào."""
+async def phan_giai_ma(
+    conn: AsyncConnection, ma: Sequence[str], academic_year: int
+) -> List[tuple]:
+    """[(stt, số hồ sơ khớp trong năm học ``academic_year``, id nhỏ nhất)] theo thứ tự đầu
+    vào."""
     return [
-        tuple(r) for r in (await conn.execute(SQL_PHAN_GIAI_MA, {"ma": list(ma)})).all()
+        tuple(r)
+        for r in (
+            await conn.execute(SQL_PHAN_GIAI_MA, {"ma": list(ma), "nam": academic_year})
+        ).all()
     ]
 
 

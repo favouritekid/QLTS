@@ -1645,3 +1645,199 @@ def test_diem_vao_bo_dung_chay_dung_kiem_mau(mau, monkeypatch):
     monkeypatch.setattr(svc, "kiem_mau", lambda l, b: goi.append(l) or goc(l, b))
     render_council_documents(_bo_giai(), mau)
     assert goi == list(svc.LOAI_MAU)
+
+
+# ═══════════════════════════════ F211 — mẫu hỏng ở các điểm ĐỌC khác ⇒ lỗi miền ═══════
+# Mỗi ca: một chỗ hỏng duy nhất ⇒ ``kiem_mau`` (đường TẢI MẪU LÊN của kho mẫu — trước F211
+# các ca này nổ lỗi thư viện ⇒ 500) trả ``FileValidationError``, thông báo không có chữ của
+# mẫu. Bắt ĐÚNG loại lỗi tại ĐÚNG điểm đọc — không bọc ``ValueError`` quanh cả luồng.
+def _vi_tri_du_lieu_nen(b, ten_muc):
+    """Vị trí byte ĐẦU của dữ liệu nén của mục ``ten_muc`` (sau tiêu đề cục bộ)."""
+    with zipfile.ZipFile(io.BytesIO(bytes(b))) as z:
+        i = z.getinfo(ten_muc).header_offset
+    n = int.from_bytes(b[i + 26 : i + 28], "little")
+    e = int.from_bytes(b[i + 28 : i + 30], "little")
+    return i + 30 + n + e
+
+
+def _hong_dong_nen(b, ten_muc):
+    """Byte nén đầu của ``ten_muc`` = 0xFF (khối kiểu 11, dành riêng) ⇒ ``zlib.error``."""
+    g = bytearray(b)
+    g[_vi_tri_du_lieu_nen(g, ten_muc)] = 0xFF
+    return bytes(g)
+
+
+def _dat_co_ma_hoa(b, ten_muc, co=0x1):
+    """Bật cờ mã hoá (bit 0 của ``flag_bits``) của ``ten_muc`` ở CẢ tiêu đề cục bộ lẫn thư
+    mục trung tâm — zipfile đọc cờ ở thư mục trung tâm, đòi mật khẩu (RuntimeError)."""
+    out = bytearray(b)
+    ten = ten_muc.encode()
+    i = out.find(b"PK\x03\x04")
+    while i != -1:
+        n = int.from_bytes(out[i + 26 : i + 28], "little")
+        if bytes(out[i + 30 : i + 30 + n]) == ten:
+            v = int.from_bytes(out[i + 6 : i + 8], "little") | co
+            out[i + 6 : i + 8] = v.to_bytes(2, "little")
+        i = out.find(b"PK\x03\x04", i + 4)
+    j = out.find(b"PK\x01\x02")
+    while j != -1:
+        n = int.from_bytes(out[j + 28 : j + 30], "little")
+        if bytes(out[j + 46 : j + 46 + n]) == ten:
+            v = int.from_bytes(out[j + 8 : j + 10], "little") | co
+            out[j + 8 : j + 10] = v.to_bytes(2, "little")
+        j = out.find(b"PK\x01\x02", j + 4)
+    return bytes(out)
+
+
+@pytest.mark.parametrize("loai", svc.LOAI_MAU)
+@pytest.mark.parametrize("kieu", ["dong_nen_hong", "ma_hoa", "ma_hoa_manh"])
+def test_goi_word_nen_hong_hoac_ma_hoa_thi_loi_mien(mau, loai, kieu):
+    b = getattr(mau, loai)
+    if kieu == "dong_nen_hong":
+        sai, khop = (
+            _hong_dong_nen(b, "word/document.xml"),
+            "không đọc được như tệp Word",
+        )
+    else:
+        co = 0x1 if kieu == "ma_hoa" else 0x40
+        sai, khop = _dat_co_ma_hoa(b, "word/document.xml", co), "được mã hoá"
+    with pytest.raises(FileValidationError, match=khop):
+        svc.kiem_mau(loai, sai)
+
+
+# (loại, bảng, ô ở dòng ĐẦU) — mọi bảng dữ liệu (MỘT phép kiểm chung, CLAUDE.md §6).
+VI_TRI_VMERGE_DONG_DAU = [
+    ("bien_ban", 1, 0),
+    ("bien_ban", 2, 1),
+    ("quyet_dinh", 3, 0),
+    ("danh_sach", 1, 0),
+    ("danh_sach", 4, 0),
+    ("danh_sach", 5, 0),
+    ("danh_sach", 8, 0),
+]
+
+
+def _dat_vmerge(b, bang, dong, o, gia_tri):
+    d = _doc(b)
+    tc = d.tables[bang]._tbl.findall(qn("w:tr"))[dong].findall(qn("w:tc"))[o]
+    pr = tc.get_or_add_tcPr()
+    for cu in pr.findall(qn("w:vMerge")):
+        pr.remove(cu)
+    v = OxmlElement("w:vMerge")
+    if gia_tri is not None:
+        v.set(qn("w:val"), gia_tri)
+    pr.append(v)
+    return _luu(d)
+
+
+@pytest.mark.parametrize("gia_tri", ["continue", None], ids=["continue", "khong_val"])
+@pytest.mark.parametrize("loai, bang, o", VI_TRI_VMERGE_DONG_DAU)
+def test_vmerge_continue_o_dong_dau_bang_thi_loi_mien(mau, loai, bang, o, gia_tri):
+    sai = _dat_vmerge(getattr(mau, loai), bang, 0, o, gia_tri)
+    with pytest.raises(FileValidationError, match=r"dòng 1 của bảng có ô gộp dọc") as e:
+        svc.kiem_mau(loai, sai)
+    assert "GIA" not in str(e.value) and "TT" not in str(e.value)
+
+
+def test_vmerge_restart_dong_dau_continue_dong_sau_van_hop_le(mau):
+    # Như mẫu thật (đo 03-11): tiêu đề gộp dọc restart ở dòng đầu, continue ở dòng sau.
+    for loai in svc.LOAI_MAU:
+        svc.kiem_mau(loai, getattr(mau, loai))
+    tb = _doc(mau.bien_ban).tables[1]._tbl.findall(qn("w:tr"))
+    assert (
+        tb[1].findall(qn("w:tc"))[0].find(qn("w:tcPr")).find(qn("w:vMerge")) is not None
+    )
+
+
+SZ_SAI = ["abc", None, "0", "+2", "24.5", " 24", "toan_hinh"]
+
+
+def _dat_sz(b, bang, o, gia_tri):
+    """``w:pPr/w:rPr/w:sz`` của ô ``o`` dòng mẫu (dòng 3) bảng ``bang`` mẫu Danh sách."""
+    d = _doc(b)
+    tc = d.tables[bang]._tbl.findall(qn("w:tr"))[3].findall(qn("w:tc"))[o]
+    p = tc.find(qn("w:p"))
+    ppr = p.get_or_add_pPr()
+    rpr = ppr.find(qn("w:rPr"))
+    if rpr is None:
+        rpr = OxmlElement("w:rPr")
+        ppr.append(rpr)
+    sz = OxmlElement("w:sz")
+    if gia_tri == "toan_hinh":
+        sz.set(qn("w:val"), chr(0xFF12) * 2)  # chữ số toàn hình — int() của Python nhận
+    elif gia_tri is not None:
+        sz.set(qn("w:val"), gia_tri)
+    rpr.append(sz)
+    return _luu(d)
+
+
+@pytest.mark.parametrize("gia_tri", SZ_SAI, ids=[repr(x) for x in SZ_SAI])
+@pytest.mark.parametrize("bang, o", [(1, 0), (4, 5)])
+def test_co_chu_dong_mau_khong_phai_so_thi_loi_mien(mau, monkeypatch, bang, o, gia_tri):
+    sai = _dat_sz(mau.danh_sach, bang, o, gia_tri)
+    with pytest.raises(FileValidationError, match=r"cỡ chữ \(w:sz\)"):
+        svc.kiem_mau("danh_sach", sai)  # đường tải mẫu lên
+    da_luu = _dem_luu(monkeypatch)
+    with pytest.raises(FileValidationError, match=r"cỡ chữ \(w:sz\)"):
+        render_council_documents(_bo_giai(), dataclasses.replace(mau, danh_sach=sai))
+    assert da_luu == []
+
+
+def test_co_chu_dong_mau_hop_le_doi_be_rong_cot(mau):
+    # Cỡ chữ đọc được thật sự đi vào phép tính lưới: 24 nửa-điểm ≠ mặc định ⇒ lưới khác.
+    goc = render_council_documents(_bo_giai(), mau)
+    co = render_council_documents(
+        _bo_giai(),
+        dataclasses.replace(mau, danh_sach=_dat_sz(mau.danh_sach, 1, 0, "40")),
+    )
+    w = [
+        [
+            c.get(qn("w:w"))
+            for c in _doc(_tep(k, "DanhSachXetTuyen-CD-Cong-nghe-o-to.docx"))
+            .tables[1]
+            ._tbl.find(qn("w:tblGrid"))
+        ]
+        for k in (goc, co)
+    ]
+    assert w[0] != w[1]
+
+
+GRIDCOL_SAI = ["abc", None, "0", "1.5", "-5"]
+
+
+def _dat_gridcol(b, bang, j, gia_tri):
+    d = _doc(b)
+    gc = d.tables[bang]._tbl.find(qn("w:tblGrid")).findall(qn("w:gridCol"))[j]
+    if gia_tri is None:
+        gc.attrib.pop(qn("w:w"), None)
+    else:
+        gc.set(qn("w:w"), gia_tri)
+    return _luu(d)
+
+
+@pytest.mark.parametrize("gia_tri", GRIDCOL_SAI, ids=[repr(x) for x in GRIDCOL_SAI])
+@pytest.mark.parametrize("bang", [1, 4])
+def test_be_rong_cot_luoi_khong_phai_so_thi_loi_mien(mau, bang, gia_tri):
+    sai = _dat_gridcol(mau.danh_sach, bang, 3, gia_tri)
+    with pytest.raises(FileValidationError, match=r"bề rộng cột lưới \(w:gridCol\)"):
+        svc.kiem_mau("danh_sach", sai)
+
+
+@pytest.mark.parametrize("loai, bang, dong", VI_TRI_DONG_MAU)
+def test_o_dong_mau_khong_co_doan_van_thi_loi_mien(mau, loai, bang, dong):
+    d = _doc(getattr(mau, loai))
+    tc = d.tables[bang]._tbl.findall(qn("w:tr"))[dong].findall(qn("w:tc"))[1]
+    for p in tc.findall(qn("w:p")):
+        tc.remove(p)
+    with pytest.raises(FileValidationError, match="không có đoạn văn nào"):
+        svc.kiem_mau(loai, _luu(d))
+
+
+@pytest.mark.parametrize("bang", [1, 2])
+def test_o_so_dong_tong_khong_co_doan_van_thi_loi_mien(mau, bang):
+    d = _doc(mau.bien_ban)
+    tc = d.tables[bang]._tbl.findall(qn("w:tr"))[-1].findall(qn("w:tc"))[2]
+    for p in tc.findall(qn("w:p")):
+        tc.remove(p)
+    with pytest.raises(FileValidationError, match="không có đoạn văn nào"):
+        svc.kiem_mau("bien_ban", _luu(d))

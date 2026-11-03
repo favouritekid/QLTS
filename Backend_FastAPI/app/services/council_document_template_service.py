@@ -17,6 +17,7 @@ THUẬT trong cấu hình (``COUNCIL_TEMPLATE_*``), không phải số nghiệp 
 import hashlib
 import io
 import zipfile
+import zlib
 from dataclasses import dataclass
 from datetime import date
 from typing import Dict, Optional, Tuple
@@ -91,8 +92,15 @@ def kiem_goi_mau(
                 "Mẫu %s: tổng kích thước giải nén khai báo %d byte, vượt giới hạn %d."
                 % (ten, khai, gh.giai_nen)
             )
-        # Đọc THẬT theo khúc với trần tổng: tiêu đề khai nhỏ mà dữ liệu nở to thì zipfile
-        # dừng ở số khai + CRC sai ⇒ BadZipFile; không bao giờ giữ quá một khúc trong RAM.
+        # Mục mã hoá (mật khẩu): zipfile nổ RuntimeError khi MỞ mục ⇒ kiểm cờ trước (F211).
+        bo_dung.kiem_goi_khong_ma_hoa(z, ten)
+        # Đọc THẬT theo khúc với trần tổng; không bao giờ giữ quá một khúc trong RAM.
+        # Đo 03-11 (CPython 3.12, ``cong-cu/kham_pha_zip_docx_e2.py``): zipfile CẮT mỗi mục ở
+        # kích thước KHAI trong thư mục trung tâm — tiêu đề khai nhỏ hơn dữ liệu thì phần
+        # dư không bao giờ được giải nén (CRC của phần khai sai ⇒ BadZipFile; CRC khớp phần
+        # khai ⇒ chỉ đọc đúng phần khai). Vì vậy với zipfile, ``da_doc`` không vượt được tổng
+        # khai đã kiểm ở trên; trần dưới đây là lớp PHỤ, giữ cho trường hợp bộ đọc không cắt
+        # theo số khai (test giả lập bộ đọc như thế).
         da_doc = 0
         try:
             for m in muc:
@@ -107,8 +115,17 @@ def kiem_goi_mau(
                                 "Mẫu %s: giải nén vượt giới hạn %d byte."
                                 % (ten, gh.giai_nen)
                             )
-        except (zipfile.BadZipFile, NotImplementedError, EOFError, ValueError, OSError):
-            # zlib.error là OSError; mã nén không hỗ trợ ⇒ NotImplementedError.
+        except (
+            zipfile.BadZipFile,
+            NotImplementedError,
+            EOFError,
+            ValueError,
+            OSError,
+            zlib.error,
+        ):
+            # Dòng nén hỏng ⇒ ``zlib.error`` — KHÔNG phải ``OSError`` (đo: MRO chỉ có
+            # ``Exception``); mã nén không hỗ trợ ⇒ ``NotImplementedError``; CRC sai ⇒
+            # ``BadZipFile``.
             raise FileValidationError(
                 "Mẫu %s: gói zip hỏng (CRC / dữ liệu nén sai)." % ten
             ) from None

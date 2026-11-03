@@ -1,7 +1,8 @@
 # app/services/council_candidate_service.py
 """Hàm đọc hồ sơ cho bộ văn bản Hội đồng (giai đoạn 1 "Lần xét tuyển", PR 1.3 phần đọc).
 
-Vào: danh sách MÃ HỒ SƠ (số CCCD — J1 dòng 8) đúng thứ tự admin đưa. Ra: ``CandidateRowV1``
+Vào: danh sách MÃ HỒ SƠ (số CCCD — J1 dòng 8) đúng thứ tự admin đưa + NĂM HỌC tường minh
+(CCCD chỉ duy nhất trong một năm học; thiếu năm ⇒ lỗi miền). Ra: ``CandidateRowV1``
 đúng thứ tự đó + đơn vị từng hồ sơ + thông tin giao dịch đọc (mức cô lập, chỉ đọc, mốc chụp
 — đo NGAY TRONG giao dịch).
 
@@ -107,10 +108,28 @@ def _thanh_dto(stt: int, hang: dict) -> CandidateRowV1:
         ) from None
 
 
+def kiem_nam_hoc(academic_year: object) -> int:
+    """Năm học TƯỜNG MINH của danh sách mã: CCCD chỉ duy nhất trong một năm học
+    (``uq_citizen_academic_year``) ⇒ không có năm thì "mã hồ sơ" không xác định một hồ sơ.
+    Không phải số nguyên (kể cả ``bool``) ⇒ ``DataValidationError``."""
+    if isinstance(academic_year, bool) or not isinstance(academic_year, int):
+        raise DataValidationError(
+            "Thiếu năm học (academic_year) hoặc năm học không phải số nguyên — mã hồ sơ "
+            "(CCCD) chỉ duy nhất trong một năm học."
+        )
+    return academic_year
+
+
 async def doc_ho_so_theo_ma(
-    engine: AsyncEngine, ma_ho_so: Sequence[str], *, toi_da: Optional[int] = None
+    engine: AsyncEngine,
+    ma_ho_so: Sequence[str],
+    *,
+    academic_year: Optional[int],
+    toi_da: Optional[int] = None,
 ) -> AnhChupHoSo:
-    """Đọc DTO của các hồ sơ có mã ``ma_ho_so`` (đúng thứ tự) trong MỘT giao dịch chỉ đọc."""
+    """Đọc DTO của các hồ sơ có mã ``ma_ho_so`` (đúng thứ tự) THUỘC năm học
+    ``academic_year`` trong MỘT giao dịch chỉ đọc."""
+    nam = kiem_nam_hoc(academic_year)
     ds = chuan_hoa_ma(ma_ho_so)
     gioi_han = settings.COUNCIL_SET_MAX_PROFILES if toi_da is None else toi_da
     if len(ds) > gioi_han:
@@ -120,14 +139,15 @@ async def doc_ho_so_theo_ma(
         )
     try:
         async with giao_dich_chi_doc(engine) as (conn, tt):
-            khop = await phan_giai_ma(conn, ds)
+            khop = await phan_giai_ma(conn, ds, nam)
             khong = [stt for stt, so, _ in khop if so == 0]
             nhieu = [stt for stt, so, _ in khop if so > 1]
             if khong or nhieu:
                 phan = []
                 if khong:
                     phan.append(
-                        "dòng %s không có hồ sơ nào mang mã này" % _neu_dong(khong)
+                        "dòng %s không có hồ sơ nào mang mã này trong năm học đã chọn"
+                        % _neu_dong(khong)
                     )
                 if nhieu:
                     phan.append("dòng %s khớp NHIỀU hồ sơ cùng mã" % _neu_dong(nhieu))

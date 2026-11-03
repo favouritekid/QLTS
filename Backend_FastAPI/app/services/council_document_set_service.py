@@ -17,11 +17,17 @@ Tạo bộ = bốn bước, lỗi ở BẤT KỲ bước nào ⇒ không ghi gì
 dùng (``admission_service._check_idor_access``; ``DocumentActionPolicy`` cùng nguồn; KHÔNG
 dùng ``user_unit_assignment``): mọi hồ sơ cùng MỘT đơn vị ⇒ đơn vị đó, còn lại ⇒ NULL (chỉ
 admin xem — J1 dòng 9). Tải lại một tệp = đọc bytes đã lưu, KHÔNG dựng lại.
+
+Phiên bản mã đã dựng (F212): metadata của mỗi bộ ghi sha256 NỘI DUNG các tệp nguồn quyết
+định bộ văn bản (bộ dựng, kho mẫu, hàm đọc + SQL, tệp này) — tính từ CHÍNH các tệp đã nạp,
+lúc nạp module. Không dùng nhãn ảnh Docker (đã biết rỗng / thiếu).
 """
 import asyncio
 import hashlib
+import sys
 from datetime import date, datetime, timezone
-from typing import Optional, Sequence, Tuple
+from pathlib import Path
+from typing import Dict, Optional, Sequence, Tuple
 
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -29,8 +35,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from app.config import settings
 from app.constants.admission_circular import vn_calendar_date
 from app.models.council_document import CouncilDocumentSet, CouncilDocumentSetFile
+from app.repositories import council_candidate_repository as _kho_doc
 from app.repositories.council_document_repository import CouncilDocumentRepository
+from app.services import council_candidate_service as _ham_doc
 from app.services import council_document_render_service as bo_dung
+from app.services import council_document_template_service as _kho_mau
 from app.services.council_candidate_service import doc_ho_so_theo_ma
 from app.services.council_document_template_service import (
     TEN_LOAI,
@@ -42,6 +51,31 @@ from app.utils.exceptions import (
     ResourceNotFoundError,
     ServiceError,
 )
+
+#: Các module mà mã nguồn quyết định NỘI DUNG một bộ văn bản (F212).
+MODULE_MA_DUNG = (
+    bo_dung,
+    _kho_mau,
+    _ham_doc,
+    _kho_doc,
+    sys.modules[__name__],
+)
+
+
+def _tinh_phien_ban_ma() -> Optional[Dict[str, str]]:
+    """{tên module: sha256 nội dung tệp nguồn ĐÃ NẠP}; không đọc được tệp ⇒ None (tạo bộ
+    sẽ dừng, không dựng một bộ không biết mã nào đã dựng)."""
+    try:
+        return {
+            m.__name__: hashlib.sha256(Path(m.__file__).read_bytes()).hexdigest()
+            for m in MODULE_MA_DUNG
+        }
+    except (OSError, TypeError, AttributeError):  # tệp mất / module không đến từ tệp
+        return None
+
+
+#: Tính MỘT lần lúc nạp module — đúng các tệp mà tiến trình này đang chạy.
+PHIEN_BAN_MA = _tinh_phien_ban_ma()
 
 
 def don_vi_cua_bo(don_vi_ho_so: Sequence[Optional[int]]) -> Optional[int]:
@@ -68,18 +102,24 @@ async def tao_bo_van_ban(
     engine: AsyncEngine,
     *,
     ma_ho_so: Sequence[str],
+    academic_year: Optional[int],
     tham_so: Optional[bo_dung.DecisionParams],
     nguoi_tao_id: Optional[int],
     luc_tao: Optional[datetime] = None,
 ) -> Tuple[CouncilDocumentSet, None]:
-    """Đọc → chọn mẫu → dựng → ghi. Trả ``(bộ đã flush, None)``; router commit."""
+    """Đọc → chọn mẫu → dựng → ghi. Trả ``(bộ đã flush, None)``; router commit.
+    ``academic_year`` BẮT BUỘC (mã hồ sơ chỉ duy nhất trong một năm học)."""
     luc_tao = luc_tao or datetime.now(timezone.utc)
+    if PHIEN_BAN_MA is None:
+        raise ServiceError(
+            "Không đọc được mã nguồn của bộ dựng để ghi phiên bản — không dựng."
+        )
     # Tham số QĐ quyết cả NGÀY KÝ (chọn mẫu) ⇒ kiểm lại ngay từ đầu, bằng đúng hàm của bộ
     # dựng (bộ dựng còn kiểm lại một lần nữa ở điểm vào của nó).
     tham_so = bo_dung.kiem_lai_tham_so_quyet_dinh(tham_so)
 
     # (i) đọc — giao dịch riêng, chỉ đọc, đã KẾT THÚC khi hàm này trả về.
-    anh = await doc_ho_so_theo_ma(engine, ma_ho_so)
+    anh = await doc_ho_so_theo_ma(engine, ma_ho_so, academic_year=academic_year)
 
     # (ii) mẫu theo ngày ký
     ngay_ky = ngay_ky_chon_mau(tham_so, luc_tao)
@@ -108,6 +148,8 @@ async def tao_bo_van_ban(
     md.pop("tham_so_quyet_dinh", None)  # đã có cột riêng
     md["mau_da_dung"] = mau_da_dung
     md["ngay_ky_chon_mau"] = ngay_ky.isoformat()
+    md["nam_hoc"] = academic_year
+    md["phien_ban_ma"] = dict(PHIEN_BAN_MA)
     md["giao_dich_doc"] = {
         "transaction_isolation": anh.giao_dich.transaction_isolation,
         "transaction_read_only": anh.giao_dich.transaction_read_only,

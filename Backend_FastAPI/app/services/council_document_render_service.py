@@ -65,6 +65,7 @@ import io
 import re
 import unicodedata
 import zipfile
+import zlib
 from dataclasses import dataclass
 from datetime import date
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -435,11 +436,34 @@ def _ma_nganh(
 
 
 # ═══════════════════════════════ thao tác Word (giữ định dạng mẫu) ═══════════
+#: Cờ của một mục zip mà ``zipfile`` không đọc được nếu không có mật khẩu: bit 0 (mã hoá
+#: — ``RuntimeError`` "password required") và bit 6 (mã hoá mạnh — ``NotImplementedError``).
+_CO_MA_HOA_ZIP = 0x01 | 0x40
+
+
+def kiem_goi_khong_ma_hoa(z: zipfile.ZipFile, ten: str) -> None:
+    """Gói zip có mục MÃ HOÁ (đặt mật khẩu) ⇒ ``FileValidationError``.
+
+    ``zipfile`` chỉ biết mục bị mã hoá khi MỞ nó — và báo bằng ``RuntimeError`` (lỗi rất
+    rộng của Python). Kiểm CỜ trong thư mục trung tâm TRƯỚC khi đọc thay vì bắt
+    ``RuntimeError`` quanh cả luồng (F211). MỘT nguồn cho hai điểm đọc gói: kho mẫu
+    (``kiem_goi_mau``, đọc bằng ``zipfile``) và :func:`_mo_docx` (python-docx)."""
+    n = sum(1 for m in z.infolist() if m.flag_bits & _CO_MA_HOA_ZIP)
+    if n:
+        raise FileValidationError(
+            "Mẫu %s: gói zip có %d mục được mã hoá (đặt mật khẩu) — không đọc được."
+            % (ten, n)
+        )
+
+
 def _mo_docx(b: bytes, ten: str):
     """Mở mẫu Word. Gói hỏng (không phải zip, thiếu phần, XML hỏng — kể cả
-    ``[Content_Types].xml`` / quan hệ) hoặc phần chính không phải ``w:document`` có
-    ``w:body`` ⇒ ``FileValidationError``, không để lọt lỗi của thư viện."""
+    ``[Content_Types].xml`` / quan hệ — dòng nén hỏng, mục mã hoá) hoặc phần chính không
+    phải ``w:document`` có ``w:body`` ⇒ ``FileValidationError``, không để lọt lỗi của thư
+    viện. ``zlib.error`` KHÔNG phải ``OSError`` (đo: MRO chỉ có ``Exception``)."""
     try:
+        with zipfile.ZipFile(io.BytesIO(b)) as z:
+            kiem_goi_khong_ma_hoa(z, ten)
         d = docx.Document(io.BytesIO(b))
     except (
         PackageNotFoundError,
@@ -447,6 +471,7 @@ def _mo_docx(b: bytes, ten: str):
         KeyError,
         ValueError,
         etree.XMLSyntaxError,
+        zlib.error,
     ) as e:
         raise FileValidationError(
             "Mẫu %s không đọc được như tệp Word (.docx)." % ten
@@ -594,12 +619,35 @@ def _kiem_doan_chi_run(p, ten: str, cho: str) -> None:
 
 def _kiem_o_chi_run(tc, ten: str, cho: str) -> None:
     """Ô ``w:tc`` mà bộ dựng ghi dữ liệu vào: chỉ ``w:tcPr`` + đoạn văn (không bảng lồng,
-    không khung nội dung mức ô); mỗi đoạn qua :func:`_kiem_doan_chi_run`."""
+    không khung nội dung mức ô), ÍT NHẤT một đoạn (:func:`_dat_o` ghi vào đoạn ĐẦU — ô
+    không có đoạn nào thì nổ ``IndexError`` lúc dựng); mỗi đoạn qua
+    :func:`_kiem_doan_chi_run`."""
     la = _the_ngoai(tc, _THE_O)
     if la is not None:
         raise _loi_chi_run(ten, cho, la)
+    if tc.find(qn("w:p")) is None:
+        raise FileValidationError(
+            "Mẫu %s: %s không có đoạn văn nào (w:p)." % (ten, cho)
+        )
     for p in tc.iterchildren(qn("w:p")):
         _kiem_doan_chi_run(p, ten, cho)
+
+
+def _o_luoi_cua_dong(tbl, tr, ten: str, so_dong: int):
+    """``_Row.cells`` của python-docx — đọc ở ĐÚNG MỘT chỗ để bắt đúng lỗi của nó.
+
+    Ô gộp dọc ``vMerge`` "continue" (hoặc ``vMerge`` không có ``w:val`` — mặc định là
+    "continue") trả ô GỐC ở dòng trên; ở dòng ĐẦU bảng (hoặc dòng trên không có ô ở cùng
+    vị trí lưới) python-docx nổ ``ValueError`` ("no tr above topmost tr") — đo 03-11. Bắt
+    ĐÚNG lời gọi này (không bọc cả luồng) ⇒ ``FileValidationError`` chỉ có tên mẫu + số
+    dòng."""
+    try:
+        return _Row(tr, tbl).cells
+    except ValueError:
+        raise FileValidationError(
+            "Mẫu %s: dòng %d của bảng có ô gộp dọc (vMerge) không có ô gốc ở dòng trên "
+            "— không đọc được ô của bảng." % (ten, so_dong)
+        ) from None
 
 
 def _kiem_dong_mau(
@@ -632,6 +680,10 @@ def _kiem_dong_mau(
     for x in rows:
         for tc in x.findall(qn("w:tc")):
             _do_rong_o(tc, so_luoi, ten)
+    # Rồi ``_Row.cells`` của MỌI dòng phải đọc được (``_dong_tong`` duyệt mọi dòng của bảng
+    # số liệu Biên bản qua nó): ô gộp dọc không có ô gốc ⇒ lỗi miền ngay ở phép kiểm mẫu.
+    for k, x in enumerate(rows, 1):
+        _o_luoi_cua_dong(tbl, x, ten, k)
     tcs = tr.findall(qn("w:tc"))
     gop = 0
     for tc in tcs:
@@ -1295,7 +1347,22 @@ HDR_DIEM = ["TT", "Mã hồ sơ", "Họ", "Tên", "Giới tính", "Ngày sinh", 
 SAN_COT = 280
 
 
-def _rong_ky_tu(cell) -> float:
+def _so_nguyen_duong(e, thuoc_tinh: str, ten: str, cho: str) -> int:
+    """Giá trị thuộc tính ``thuoc_tinh`` của phần tử ``e`` trong mẫu — số nguyên ASCII ≥ 1.
+
+    Thiếu, không phải chữ số ASCII (``int()`` của Python còn nhận "+2", " 2", chữ số toàn
+    hình), hoặc < 1 ⇒ ``FileValidationError`` (chỉ tên mẫu + chỗ, không có chữ của mẫu).
+    Dùng ở điểm ĐỌC của bộ dựng (:func:`_doc_luoi`), nên phép kiểm mẫu gọi lại đúng hàm ấy
+    là đủ để mẫu hỏng bị từ chối lúc tải lên, không nổ lúc dựng (F211)."""
+    v = e.get(qn(thuoc_tinh))
+    if v is None or not _RE_SO_NGUYEN_ASCII.fullmatch(v) or int(v) < 1:
+        raise FileValidationError(
+            "Mẫu %s: %s thiếu giá trị hoặc không phải số nguyên dương." % (ten, cho)
+        )
+    return int(v)
+
+
+def _rong_ky_tu(cell, ten: str) -> float:
     """Twip cho một ký tự — Times New Roman rộng trung bình ≈ 0,5 × cỡ chữ."""
     p = cell.paragraphs[0]._p
     r = p.find(qn("w:r"))
@@ -1304,7 +1371,23 @@ def _rong_ky_tu(cell) -> float:
         pPr = p.find(qn("w:pPr"))
         rPr = pPr.find(qn("w:rPr")) if pPr is not None else None
     sz = rPr.find(qn("w:sz")) if rPr is not None else None
-    return (int(sz.get(qn("w:val"))) / 2.0 if sz is not None else 10.0) * 10
+    if sz is None:
+        return 10.0 * 10
+    return _so_nguyen_duong(sz, "w:val", ten, "cỡ chữ (w:sz) ở dòng mẫu") / 2.0 * 10
+
+
+def _doc_luoi(tbl, ten: str) -> Tuple[List[int], List[float]]:
+    """(bề rộng cũ từng cột lưới, twip / ký tự từng cột theo cỡ chữ dòng mẫu) — NGUỒN DUY
+    NHẤT đọc hai giá trị số này của mẫu Danh sách; :func:`_tinh_luoi` và phép kiểm mẫu
+    (:func:`_kiem_mau_danh_sach`) cùng gọi. Bề rộng = 0 ở mọi cột thì phép chia ở
+    :func:`_dat_rong` nổ ⇒ mỗi cột phải ≥ 1."""
+    grid = tbl._tbl.find(qn("w:tblGrid"))
+    cu = [
+        _so_nguyen_duong(c, "w:w", ten, "bề rộng cột lưới (w:gridCol)")
+        for c in grid.findall(qn("w:gridCol"))
+    ]
+    rk = [_rong_ky_tu(tbl.rows[3].cells[j], ten) for j in range(len(cu))]
+    return cu, rk
 
 
 def _dat_rong(tbl, moi: Sequence[int]) -> None:
@@ -1336,11 +1419,9 @@ def _tinh_luoi(tbl, noi_dung) -> List[int]:
     """Bề rộng mới cho từng cột, tính trên MỌI dòng dữ liệu của cả bộ (một lưới
     chung cho mọi ngành — tính riêng từng ngành thì in cạnh nhau cột lệch nhau).
     Lấy bớt từ cột thừa, đơn sang cột thiếu; TỔNG bề rộng bất biến."""
-    grid = tbl._tbl.find(qn("w:tblGrid"))
-    cu = [int(c.get(qn("w:w"))) for c in grid.findall(qn("w:gridCol"))]
+    cu, rk = _doc_luoi(tbl, "Danh sách xét tuyển")
     tong = sum(cu)
     nc = len(cu)
-    rk = [_rong_ky_tu(tbl.rows[3].cells[j]) for j in range(nc)]
     dai = [0] * nc
     for dl in noi_dung:
         # Lưới = số trường (đã qua _kiem_dong_mau) ⇒ ghép đủ cặp, không cắt bớt.
@@ -1389,6 +1470,10 @@ def _kiem_mau_danh_sach(d) -> None:
     _kiem_dong_mau(
         d.tables[5], 1, SO_COT_PHUONG_THUC, "Danh sách xét tuyển (phương thức)"
     )
+    # Bề rộng cột lưới + cỡ chữ dòng mẫu mà bộ dựng ĐỌC để tính lưới (bảng 1 và 4 —
+    # bảng 8 dùng lưới của bảng 4): đọc thử bằng ĐÚNG hàm đọc của bộ dựng (F211).
+    for i in (1, 4):
+        _doc_luoi(d.tables[i], "Danh sách xét tuyển")
     # Sáu đoạn bị VIẾT LẠI cả đoạn (_dat_doan): tiêu đề ngành + dòng tổng của ba danh
     # sách ⇒ chỉ run trực tiếp (F207).
     for k in (1, 3, 6, 8, 12, 13):
