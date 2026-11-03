@@ -1163,6 +1163,15 @@ jobs:
           # người, điểm in (trần ưu tiên 2.75), thống kê Biên bản v1, điền tham số
           # Quyết định, ô gộp — tệp mới, ngoài mọi tier thì không shard PR nào chạy
           # mà required check vẫn xanh (CLAUDE.md §11). Ghim WHOLE-FILE.
+          # Ba tệp lượt E1 (Lần xét tuyển GĐ1 — kho mẫu + hàm đọc hồ sơ + lưu bộ văn bản)
+          # vào Tier 5 cùng bộ dựng: `test_council_document_models.py` (unit, không CSDL —
+          # CHECK / tên ràng buộc model ↔ migration hdts20261103, head duy nhất);
+          # `tests/integration/test_council_candidate_snapshot.py` (CSDL test: DTO của hàm
+          # đọc == cột cùng tên của bản GHIM `sql/xettuyen_theo_ds_khong_chu_thich.sql`,
+          # giao dịch REPEATABLE READ READ ONLY, ghi bị CSDL từ chối) và
+          # `tests/integration/test_council_document_store.py` (CSDL test: chống bom zip,
+          # chọn mẫu theo ngày ký, lưu bộ ở giao dịch sau, lỗi mọi bước không ghi gì).
+          # Dữ liệu + mẫu GIẢ dựng lúc chạy. Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1231,6 +1240,9 @@ jobs:
               tests/unit/test_che_log_token_nginx.py
               tests/utils/test_config_loading.py
               tests/unit/test_council_document_render_service.py
+              tests/unit/test_council_document_models.py
+              tests/integration/test_council_candidate_snapshot.py
+              tests/integration/test_council_document_store.py
 
     env:
       APP_ENV: test
