@@ -1157,6 +1157,12 @@ jobs:
           # Trước đây NGOÀI mọi tier — ca `pytest.raises(ValidationError)` của nó
           # không shard PR nào chạy. Unit thuần (reload module), KHÔNG đụng CSDL.
           # Ghim WHOLE-FILE.
+          # `test_council_document_render_service.py` vào Tier 5 (Lần xét tuyển GĐ1,
+          # PR 1.3 — bộ dựng văn bản Hội đồng): service THUẦN, mẫu Word + hồ sơ GIẢ
+          # dựng lúc chạy, KHÔNG CSDL, không mạng (~8 giây). Nó khoá thứ tự ngành /
+          # người, điểm in (trần ưu tiên 2.75), thống kê Biên bản v1, điền tham số
+          # Quyết định, ô gộp — tệp mới, ngoài mọi tier thì không shard PR nào chạy
+          # mà required check vẫn xanh (CLAUDE.md §11). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1224,6 +1230,7 @@ jobs:
               tests/unit/test_che_log_pii.py
               tests/unit/test_che_log_token_nginx.py
               tests/utils/test_config_loading.py
+              tests/unit/test_council_document_render_service.py
 
     env:
       APP_ENV: test
