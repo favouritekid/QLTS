@@ -1227,8 +1227,12 @@ def _cai_noi_dung_la(tc, kieu):
         p.addprevious(long)  # ô phải kết thúc bằng một đoạn
     elif kieu == "fld_simple":
         p.append(_el("w:fldSimple", _run_chu(), w__instr="PAGE"))
-    elif kieu == "fld_char":
+    elif kieu == "fld_char":  # trường PHỨC đủ begin → câu lệnh PAGE → end
         p.append(_el("w:r", _el("w:fldChar", w__fldCharType="begin")))
+        lenh = _el("w:instrText")
+        lenh.text = " PAGE "
+        p.append(_el("w:r", lenh))
+        p.append(_el("w:r", _el("w:fldChar", w__fldCharType="end")))
     elif kieu == "sdt_o":
         p.addprevious(_el("w:sdt", _el("w:sdtContent", _el("w:p", _run_chu()))))
     elif kieu == "sdt_doan":
@@ -1263,6 +1267,19 @@ KIEU_NOI_DUNG_LA = [
     "lua_chon_mc",
     "sua_doi_theo_doi",
 ]
+
+
+KIEU_TRUONG = ("fld_simple", "fld_char")
+
+
+def _chi_do_cau_truc(monkeypatch, kieu):
+    """Trường (PAGE) trong vùng dữ liệu vi phạm HAI bất biến, mỗi cái một tầng chủ sở hữu: mã
+    trường ngoài danh sách cho phép (phép kiểm CÁC PHẦN gói Word — E4, chạy TRƯỚC) và thẻ lạ ở
+    chỗ bộ dựng viết lại (phép kiểm cấu trúc — F207). Ca của F207 thay TẠM danh sách cho phép =
+    {PAGE} để chỉ F207 có thể chặn (CLAUDE.md §3: mỗi ca một bất biến); cấu hình thật (danh sách
+    rỗng): ``test_truong_trong_vung_du_lieu_bi_danh_sach_cho_phep_chan_truoc``."""
+    if kieu in KIEU_TRUONG:
+        monkeypatch.setattr(svc, "MA_TRUONG_CHO_PHEP", frozenset({"PAGE"}))
 
 
 def _dem_luu(monkeypatch):
@@ -1303,6 +1320,7 @@ def test_o_dong_mau_co_noi_dung_ngoai_run_truc_tiep_thi_tu_choi(
     _cai_noi_dung_la(tc, kieu)
     hong = dataclasses.replace(mau, **{loai: _luu(d)})
     da_luu = _dem_luu(monkeypatch)
+    _chi_do_cau_truc(monkeypatch, kieu)
     with pytest.raises(
         FileValidationError,
         match=r"ô 2 của dòng mẫu chỉ được có đoạn văn với run trực tiếp",
@@ -1320,6 +1338,7 @@ def test_o_so_dong_tong_co_noi_dung_ngoai_run_thi_tu_choi(mau, monkeypatch, bang
     _cai_noi_dung_la(tc, kieu)
     hong = dataclasses.replace(mau, bien_ban=_luu(d))
     da_luu = _dem_luu(monkeypatch)
+    _chi_do_cau_truc(monkeypatch, kieu)
     with pytest.raises(
         FileValidationError,
         match=r"ô số của dòng `Tổng cộng` chỉ được có đoạn văn với run trực tiếp",
@@ -1376,12 +1395,31 @@ def test_doan_bi_viet_lai_co_noi_dung_ngoai_run_thi_tu_choi(
         p.append(_el("w:fldSimple", _run_chu(), w__instr="PAGE"))
     hong = dataclasses.replace(mau, **{loai: _luu(d)})
     da_luu = _dem_luu(monkeypatch)
+    _chi_do_cau_truc(monkeypatch, kieu)
     with pytest.raises(
         FileValidationError,
         match=r"đoạn %d.* chỉ được có đoạn văn với run trực tiếp" % (k + 1),
     ) as e:
         render_council_documents(_bo_giai(), hong)
     assert "GIA-" not in str(e.value)
+    assert da_luu == []
+
+
+@pytest.mark.parametrize("kieu", KIEU_TRUONG)
+def test_truong_trong_vung_du_lieu_bi_danh_sach_cho_phep_chan_truoc(
+    mau, monkeypatch, kieu
+):
+    # Cấu hình THẬT (danh sách mã trường rỗng): trường ở dòng mẫu bị phép kiểm CÁC PHẦN gói Word
+    # chặn TRƯỚC phép kiểm cấu trúc — không tệp nào được lưu.
+    d = _doc(mau.quyet_dinh)
+    tc = d.tables[3]._tbl.findall(qn("w:tr"))[1].findall(qn("w:tc"))[1]
+    _cai_noi_dung_la(tc, kieu)
+    hong = dataclasses.replace(mau, quyet_dinh=_luu(d))
+    da_luu = _dem_luu(monkeypatch)
+    with pytest.raises(
+        FileValidationError, match="mã trường PAGE ngoài danh sách cho phép"
+    ):
+        render_council_documents(_bo_giai(), hong)
     assert da_luu == []
 
 
