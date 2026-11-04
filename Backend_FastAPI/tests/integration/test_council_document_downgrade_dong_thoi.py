@@ -131,6 +131,24 @@ async def _ghi_dong_nhat_ky(c):
     )
 
 
+async def _ghi_vet_xoa(c):
+    """Như luồng Admin xoá bộ: MỘT dòng vết xoá (CSDL dùng một lần của 1104 không có bảng bộ)."""
+    await c.execute(
+        "INSERT INTO council_document_set_deletion (set_id, so_ho_so, so_tep, danh_sach_tep, "
+        "nguoi_xoa_id, ly_do) VALUES (999999, 1, 1, $1::jsonb, 1, 'GIA ly do')",
+        json.dumps([{"thu_tu": 1, "path": "gia.docx", "sha256": "a" * 64}]),
+    )
+
+
+async def _tai_mot_mau(c):
+    """Như luồng tải mẫu lên: MỘT dòng ở bảng mẫu (chỉ bảng mẫu — không bộ, không tệp)."""
+    await c.execute(
+        "INSERT INTO council_document_template (loai, hieu_luc_tu, sha256, kich_thuoc, "
+        "noi_dung) VALUES ('bien_ban', DATE '2026-01-01', encode(sha256('GIA'::bytea), "
+        "'hex'), 3, 'GIA'::bytea)"
+    )
+
+
 async def _tao_mot_bo(c):
     """Như luồng tạo bộ: một bộ + một tệp của nó trong CÙNG giao dịch (dữ liệu GIẢ)."""
     await c.execute(
@@ -251,6 +269,26 @@ async def test_1104_ghi_nhat_ky_chen_vao_khi_ha_cap_thi_khong_mat_dong(csdl_rien
         await k.close()
 
 
+async def test_1104_ghi_vet_xoa_chen_vao_khi_ha_cap_thi_khong_mat_vet(csdl_rieng):
+    # Bảng THỨ HAI của 1104 (người điều phối nêu 04-11): Admin xoá bộ ghi vết xoá chen giữa.
+    await _dung_1104(csdl_rieng)
+    k, bi_chan, rc, out = await _chen_roi_ha_cap(
+        csdl_rieng, _ghi_vet_xoa, "hdts20261103b"
+    )
+    try:
+        dong = await _so_dong(k, VET.XOA)
+        assert dong == 1, "MẤT VẾT XOÁ đã COMMIT khi cờ chưa bật: bảng %s %s" % (
+            VET.XOA,
+            "đã bị xoá" if dong is None else "còn %d dòng" % dong,
+        )
+        assert await _so_dong(k, VET.TAI) == 0
+        assert bi_chan, "phép đo không hợp lệ: hạ cấp không đợi phiên ghi"
+        assert rc != 0 and "ConVetVanBanHoiDong" in out, (rc, out[-600:])
+        assert await _phien_ban(k) == "hdts20261104"
+    finally:
+        await k.close()
+
+
 async def test_1104_phien_ghi_huy_thi_ha_cap_van_xoa_bang_rong(csdl_rieng):
     # ĐỐI CHỨNG: dòng chen bị ROLLBACK ⇒ sau khoá bảng thật sự rỗng ⇒ hạ cấp xoá được mà không
     # cần cờ (không chặn thừa; phép kiểm dùng ảnh chụp SAU khoá, không phải trước).
@@ -324,6 +362,26 @@ async def test_1103_tao_bo_chen_vao_khi_ha_cap_thi_khong_mat_bo(csdl_rieng):
             % ((bo, tep),)
         )
         assert await _so_dong(k, BO_VB.MAU) == 0
+        assert bi_chan, "phép đo không hợp lệ: hạ cấp không đợi phiên ghi"
+        assert rc != 0 and "ConDuLieuVanBanHoiDong" in out, (rc, out[-600:])
+        assert await _phien_ban(k) == "hdts20261103"
+    finally:
+        await k.close()
+
+
+async def test_1103_tai_mau_chen_vao_khi_ha_cap_thi_khong_mat_mau(csdl_rieng):
+    # Bảng THỨ BA của 1103 (người điều phối nêu 04-11): tải mẫu lên chỉ ghi bảng MẪU.
+    await _dung_1103(csdl_rieng)
+    k, bi_chan, rc, out = await _chen_roi_ha_cap(
+        csdl_rieng, _tai_mot_mau, "v3circ20261011c"
+    )
+    try:
+        dong = await _so_dong(k, BO_VB.MAU)
+        assert dong == 1, "MẤT MẪU đã COMMIT khi cờ chưa bật: bảng %s %s" % (
+            BO_VB.MAU,
+            "đã bị xoá" if dong is None else "còn %d dòng" % dong,
+        )
+        assert (await _so_dong(k, BO_VB.BO), await _so_dong(k, BO_VB.TEP)) == (0, 0)
         assert bi_chan, "phép đo không hợp lệ: hạ cấp không đợi phiên ghi"
         assert rc != 0 and "ConDuLieuVanBanHoiDong" in out, (rc, out[-600:])
         assert await _phien_ban(k) == "hdts20261103"
