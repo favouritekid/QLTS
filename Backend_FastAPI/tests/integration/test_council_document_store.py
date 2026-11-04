@@ -4,7 +4,7 @@ MẪU GIẢ (dựng lúc chạy, cùng cấu trúc mẫu thật; mẫu thật kh
 
 Khoá: kiểm gói zip TRƯỚC python-docx + đúng phép kiểm mẫu của bộ dựng (không lưu mẫu hỏng);
 chọn mẫu theo ngày ký (giờ Việt Nam khi không có ngày QĐ); tạo bộ = đọc ở giao dịch chỉ đọc
-→ chọn mẫu → dựng NGOÀI event loop → ghi ở giao dịch SAU, bytes nguyên + sha từng tệp; lỗi
+→ chọn mẫu → dựng NGOÀI event loop → ghi ở giao dịch KHÁC, bytes nguyên + sha từng tệp; lỗi
 ở mọi bước ⇒ không ghi gì; đơn vị của bộ; tải lại = bytes đã lưu; ràng buộc toàn vẹn của
 CSDL (sha / kích thước / độ dài mảng); cột bytes + PII deferred.
 """
@@ -318,6 +318,52 @@ async def test_goi_zip_xau_bi_chan_truoc_python_docx(hs, monkeypatch, ca):
     assert goi == []  # python-docx CHƯA được chạm
 
 
+# F216 — đường TẢI MẪU LÊN: mục nén LZMA / BZIP2 (nhỏ khi nén, nở cả khúc trong RAM khi giải
+# nén) ⇒ lỗi miền TRƯỚC khi mở bất kỳ mục nào: gián điệp ``zipfile._get_decompressor`` (đo E3:
+# zipfile tạo bộ giải nén qua hàm này mỗi lần mở mục) không được gọi lần nào.
+@pytest.mark.parametrize(
+    "kieu", [zipfile.ZIP_LZMA, zipfile.ZIP_BZIP2], ids=["lzma", "bzip2"]
+)
+async def test_kieu_nen_ngoai_danh_sach_bi_chan_luc_tai_len_truoc_khi_giai_nen(
+    hs, monkeypatch, kieu
+):
+    o = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(MAU_GIA["bien_ban"])) as z, zipfile.ZipFile(
+        o, "w"
+    ) as w:
+        for i in z.infolist():
+            w.writestr(i, z.read(i))
+        w.writestr("gia/nen.xml", b"0" * 200_000, compress_type=kieu)
+    b = o.getvalue()
+    giai_nen, goi_docx = [], []
+    goc = zipfile._get_decompressor
+    monkeypatch.setattr(
+        zipfile, "_get_decompressor", lambda k: giai_nen.append(k) or goc(k)
+    )
+    goc_kiem = bo_dung.kiem_mau
+    monkeypatch.setattr(
+        bo_dung, "kiem_mau", lambda l, x: goi_docx.append(l) or goc_kiem(l, x)
+    )
+    async with AsyncSessionLocal() as db:
+        with pytest.raises(
+            FileValidationError, match="kiểu nén ngoài danh sách cho phép"
+        ):
+            await kho_mau.tai_mau_len(
+                db,
+                loai="bien_ban",
+                hieu_luc_tu=date(2026, 1, 1),
+                noi_dung=b,
+                nguoi_tai_id=None,
+            )
+        await db.commit()
+    assert giai_nen == [] and goi_docx == []  # chưa giải nén mục nào, chưa tới python-docx
+    async with csdl.engine.connect() as c:
+        n = (
+            await c.execute(text("SELECT count(*) FROM council_document_template"))
+        ).scalar_one()
+    assert n == 0
+
+
 def test_gioi_han_mac_dinh_doc_tu_cau_hinh_va_mau_gia_qua_duoc():
     gh = kho_mau.GioiHanGoi.tu_cau_hinh()
     assert (gh.tep, gh.giai_nen, gh.so_muc) == (
@@ -613,7 +659,10 @@ async def test_don_vi_cua_bo(hs):
         assert bo.unit_id == hs["_danh_muc"]["u2"]
 
 
-async def test_ghi_bo_o_giao_dich_sau_giao_dich_doc(hs, monkeypatch):
+async def test_ghi_bo_o_giao_dich_khac_giao_dich_doc(hs, monkeypatch):
+    # Bất biến F218 (Codex lần 5): đọc ở giao dịch RIÊNG chỉ đọc, đã kết thúc; ghi ở giao dịch
+    # KHÁC. KHÔNG khoá "giao dịch ghi bắt đầu sau mốc chụp" — qua API, giao dịch của request
+    # đã mở từ bước xác thực (ca đo qua đường API: test_council_documents_api.py).
     bat = {}
     goc = bo_vb.doc_ho_so_theo_ma
 
@@ -654,11 +703,12 @@ async def test_ghi_bo_o_giao_dich_sau_giao_dich_doc(hs, monkeypatch):
     assert await _dem() == (1, bo.so_tep)
     anh = bat["anh"]
     assert do.ro == "off"  # giao dịch ghi là giao dịch đọc-ghi thường của request
-    assert (
-        bo.moc_chup == anh.giao_dich.moc_chup < do.ts
-    )  # giao dịch ghi bắt đầu SAU mốc chụp
+    assert anh.giao_dich.transaction_read_only == "on"  # giao dịch đọc chỉ đọc
+    assert bo.moc_chup == anh.giao_dich.moc_chup  # mốc chụp = mốc của giao dịch ĐỌC
+    # Hai giao dịch KHÁC nhau: (tiến trình máy chủ, lúc bắt đầu giao dịch) khác.
+    assert (do.pid, do.ts) != (anh.giao_dich.backend_pid, anh.giao_dich.moc_chup)
     # Giao dịch đọc đã kết thúc trước khi ghi: kết nối của nó rảnh (hoặc đã đóng), hoặc chính
-    # là kết nối phiên request đang dùng cho một giao dịch KHÁC.
+    # là kết nối phiên request đang dùng cho một giao dịch KHÁC (đã khẳng định ở trên).
     assert trang_thai in (None, "idle") or do.pid == anh.giao_dich.backend_pid
 
 

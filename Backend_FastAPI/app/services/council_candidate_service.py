@@ -8,7 +8,8 @@ Vào: danh sách MÃ HỒ SƠ (số CCCD — J1 dòng 8) đúng thứ tự admin
 
 * Đọc trong MỘT giao dịch ``REPEATABLE READ READ ONLY`` trên kết nối riêng
   (:func:`app.repositories.council_candidate_repository.giao_dich_chi_doc`) — không dùng giao
-  dịch của request, không ghi gì. Ghi bộ văn bản là giao dịch SAU, của request.
+  dịch của request, không ghi gì; giao dịch này KẾT THÚC khi hàm trả về. Ghi bộ văn bản là
+  giao dịch KHÁC, của request (F218).
 * Mỗi trường DTO tính như cột cùng tên của truy vấn bộ xuất (luật v1) — SQL ở repository.
 * KHÔNG lọc trạng thái, KHÔNG lọc trình độ: ai trong danh sách thì vào (danh sách do QĐ
   quyết); trình độ lạ do bộ dựng chặn.

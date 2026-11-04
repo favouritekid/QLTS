@@ -3754,7 +3754,8 @@ async def get_backfill_exception_for_admin(
 #      có ``unit_id`` = ``current_user.unit_id`` (đúng cột kiểm quyền hồ sơ của manager,
 #      ``admission_service._check_idor_access``); bộ ``unit_id`` NULL (nhiều đơn vị / hồ
 #      sơ chưa gán đơn vị) CHỈ admin. Ngoài phạm vi ⇒ 404 (không lộ bộ có tồn tại).
-#      Vai khác lọt qua Casbin (cấu hình sai) ⇒ vẫn bị chặn ở đây (fail-closed).
+#      Vai khác lọt qua Casbin (cấu hình sai) ⇒ vẫn bị chặn ở đây (fail-closed) — lớp phụ
+#      này có test riêng gọi thẳng dependency (F219, ``test_council_documents_api.py``).
 
 
 class CouncilDocumentScope(NamedTuple):

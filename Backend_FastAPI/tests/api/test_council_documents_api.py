@@ -13,7 +13,11 @@ Khoá (mỗi ca một bất biến — CLAUDE.md §3):
   toàn với tên có dấu, ``Cache-Control: no-store``.
 * Đóng băng: request THẬT tới mọi route GHI của module (lấy từ bảng route thật) ⇒ 503; route
   đọc vẫn 200 như mọi route đọc khác của tiền tố.
-* Lỗi 422: log THẬT (``caplog``) không chứa CCCD gửi lên; mọi route của module khớp vị từ.
+* Lỗi 422: log THẬT (``caplog``) không chứa CCCD gửi lên; mọi route của module khớp vị từ;
+  log chỉ nhận bản ĐÃ CHUẨN HOÁ (``type`` + ``loc`` an toàn) — khoá thừa cấp đầu / lồng, lỗi
+  có ``ctx``, route SMS (F217, lượt E3).
+* Bất biến giao dịch đo QUA ĐƯỜNG API (F218); lớp chặn phụ của phạm vi gọi thẳng
+  dependency (F219).
 * Một lần dựng cùng lúc: hai phiên CSDL thật — lần thứ hai ⇒ 409, không đọc / dựng / ghi.
 * Không URL tĩnh / mount nào trả được bytes mẫu hay tệp sinh.
 """
@@ -25,6 +29,7 @@ import logging
 import os
 import re
 import threading
+import types
 import zipfile
 from datetime import date
 from pathlib import Path
@@ -41,6 +46,7 @@ from starlette.staticfiles import StaticFiles
 import app.database as csdl
 from app import models
 from app.config import settings
+from app.core import deps
 from app.database import AsyncSessionLocal
 from app.main import fastapi_app
 from app.middleware import exception_handlers as eh
@@ -49,9 +55,9 @@ from app.routers import council_documents as rt
 from app.services import council_document_render_service as bo_dung
 from app.services import council_document_set_service as bo_vb
 from app.services import council_document_template_service as kho_mau
-from app.utils.exceptions import ConflictError
+from app.utils.exceptions import ConflictError, PermissionDeniedError
 from tests.fixtures.constants import AuthURLs, TestUsers
-from tests.fixtures.hoi_dong_seed import seed_hoi_dong
+from tests.fixtures.hoi_dong_seed import ma_gia, seed_hoi_dong
 from tests.fixtures.users import create_user_with_role, get_auth_headers
 from tests.unit.test_council_document_render_service import (
     _mau_bien_ban,
@@ -707,3 +713,194 @@ async def test_khong_url_tinh_nao_tra_bytes_mau_hay_tep_sinh(client, tk, hs):
     ).read_text(encoding="utf-8")
     thu_muc_nginx = set(re.findall(r"^\s*(?:alias|root)\s+([^;]+);", mau, re.M))
     assert thu_muc_nginx == {"/var/www/certbot", "/app/static/uploads/"}
+
+
+# ═══════════════════ F217 — log 422 chỉ ghi bản ĐÃ CHUẨN HOÁ (type + loc an toàn) ════════════
+# Mỗi ca: một mã giả DẠNG CCCD (sinh lúc chạy) nằm ở MỘT chỗ của thân request; kiểm TOÀN BỘ
+# bản ghi log (``repr(record.__dict__)`` mọi bản ghi + ``caplog.text``, mọi logger ở INFO).
+def _ban_ghi_422(caplog):
+    return [x for x in caplog.records if "Request validation error" in x.getMessage()]
+
+
+def _toan_bo_log(caplog):
+    return repr([x.__dict__ for x in caplog.records]) + caplog.text
+
+
+async def test_422_khoa_thua_cap_dau_la_ma_gia_khong_vao_log(client, tk, hs, caplog):
+    h = await tk("admin")
+    caplog.set_level(logging.INFO)
+    ma = ma_gia(811)
+    than = dict(_than_tao(hs), **{ma: "GIA"})  # khoá JSON thừa = một "CCCD"
+    r = await client.post(P + "/sets", json=than, headers=h)
+    assert r.status_code == 422, r.text
+    assert [e["loc"] for e in r.json()["errors"]] == [["body", ma]]  # phản hồi giữ nguyên
+    bg = _ban_ghi_422(caplog)
+    assert len(bg) == 1  # đo đúng bản ghi của lỗi này (không xanh vì không có log)
+    assert bg[0].errors == [
+        {"type": "extra_forbidden", "loc": ["body", eh.NHAN_LOC_KHONG_KHAI]}
+    ]
+    toan_bo = _toan_bo_log(caplog)
+    assert ma not in toan_bo
+    assert not any(m in toan_bo for m in than["ma_ho_so"])
+
+
+async def test_422_khoa_thua_long_trong_tham_so_khong_vao_log(client, tk, hs, caplog):
+    h = await tk("admin")
+    caplog.set_level(logging.INFO)
+    khoa = "x" + ma_gia(812)  # dạng TÊN ĐỊNH DANH hợp lệ — vẫn không phải tên trường khai
+    than = _than_tao(hs, tham_so_quyet_dinh=dict(TS, **{khoa: 1}))
+    r = await client.post(P + "/sets", json=than, headers=h)
+    assert r.status_code == 422, r.text
+    assert any(e["loc"][-1] == khoa for e in r.json()["errors"])
+    bg = _ban_ghi_422(caplog)
+    assert len(bg) == 1
+    assert bg[0].errors == [
+        {
+            "type": "extra_forbidden",
+            "loc": ["body", "tham_so_quyet_dinh", eh.NHAN_LOC_KHONG_KHAI],
+        }
+    ]
+    assert khoa not in _toan_bo_log(caplog)
+
+
+async def test_422_loi_co_ctx_chi_ghi_type_va_loc(client, tk, hs, caplog):
+    h = await tk("admin")
+    caplog.set_level(logging.INFO)
+    ma = ma_gia(813)  # 12 chữ số ⇒ sai mẫu ^[0-9]{1,6}$ ⇒ lỗi có ``ctx``
+    than = _than_tao(hs, tham_so_quyet_dinh=dict(TS, so_quyet_dinh=ma))
+    r = await client.post(P + "/sets", json=than, headers=h)
+    assert r.status_code == 422, r.text
+    (loi,) = r.json()["errors"]
+    assert loi["ctx"] and loi["input"] == ma and loi["msg"]  # người gửi vẫn nhận đủ
+    bg = _ban_ghi_422(caplog)
+    assert len(bg) == 1
+    assert bg[0].errors == [
+        {
+            "type": "string_pattern_mismatch",
+            "loc": ["body", "tham_so_quyet_dinh", "so_quyet_dinh"],
+        }
+    ]
+    assert ma not in _toan_bo_log(caplog)
+
+
+async def test_422_route_sms_qua_cung_mot_cho_chuan_hoa(client, caplog):
+    caplog.set_level(logging.INFO)
+    ma_bi_mat = "GIA-SMS-" + "k" * 60  # 68 ký tự > 64 ⇒ string_too_long (có ctx)
+    r = await client.post("/api/public/sms/opt-out", json={"code": ma_bi_mat})
+    assert r.status_code == 422, r.text
+    bg = _ban_ghi_422(caplog)
+    assert len(bg) == 1
+    assert bg[0].errors == [{"type": "string_too_long", "loc": ["body", "code"]}]
+    assert ma_bi_mat not in _toan_bo_log(caplog)
+
+
+def test_chuan_hoa_422_khong_co_route_thi_moi_chuoi_thanh_nhan():
+    # Không biết route (scope thiếu "route") ⇒ fail-closed: chỉ giữ nơi tham số + số.
+    loi = {
+        "type": "missing",
+        "loc": ("body", "academic_year", 0),
+        "msg": "GIA",
+        "input": {"GIA": 1},
+        "ctx": {"error": "GIA"},
+    }
+    assert eh._loi_422_an_toan_de_log([loi], None) == [
+        {"type": "missing", "loc": ["body", eh.NHAN_LOC_KHONG_KHAI, 0]}
+    ]
+
+
+# ═══════════════════ F218 — bất biến giao dịch đo QUA ĐƯỜNG API (POST /sets thật) ═══════════
+async def test_qua_api_doc_o_giao_dich_rieng_da_dong_truoc_khi_dung(
+    client, tk, hs, monkeypatch
+):
+    # Bất biến (Codex lần 5): đọc ở giao dịch RIÊNG REPEATABLE READ READ ONLY, KẾT THÚC trước
+    # khi bộ dựng chạy; ghi ở giao dịch KHÁC (của request — đã mở từ bước xác thực, không bị
+    # đóng giữa chừng); câu ghi chạy SAU khi dựng.
+    h = await tk("admin")
+    await _tai_ba_mau_api(client, h)
+    bat = {}
+    loop = asyncio.get_running_loop()
+
+    goc_doc = bo_vb.doc_ho_so_theo_ma
+
+    async def gian_doc(*a, **k):
+        anh = await goc_doc(*a, **k)
+        bat["doc"] = anh.giao_dich
+        return anh
+
+    async def _giao_dich_cua(pid):
+        # Kết nối KHÁC của pool. ``xact_start`` của pg_stat_activity = transaction_timestamp()
+        # của giao dịch đang chạy trên tiến trình ấy (NULL nếu không có giao dịch nào).
+        async with csdl.engine.connect() as c:
+            xs = (
+                await c.execute(
+                    text("SELECT xact_start FROM pg_stat_activity WHERE pid = :p"),
+                    {"p": pid},
+                )
+            ).scalar_one_or_none()
+            luc = (await c.execute(text("SELECT clock_timestamp()"))).scalar_one()
+        return xs, luc
+
+    goc_dung = bo_dung.render_council_documents
+
+    def gian_dung(*a, **k):  # luồng của to_thread: hỏi CSDL qua event loop chính
+        fut = asyncio.run_coroutine_threadsafe(
+            _giao_dich_cua(bat["doc"].backend_pid), loop
+        )
+        bat["xact_doc_luc_dung"], bat["luc_dung"] = fut.result(30)
+        return goc_dung(*a, **k)
+
+    goc_ghi = CouncilDocumentRepository.them_bo
+
+    async def gian_ghi(self, bo, tep):
+        bat["ghi"] = (
+            await self.db.execute(
+                text(
+                    "SELECT pg_backend_pid() AS pid, transaction_timestamp() AS ts, "
+                    "statement_timestamp() AS st, "
+                    "current_setting('transaction_read_only') AS ro"
+                )
+            )
+        ).one()
+        return await goc_ghi(self, bo, tep)
+
+    monkeypatch.setattr(bo_vb, "doc_ho_so_theo_ma", gian_doc)
+    monkeypatch.setattr(bo_dung, "render_council_documents", gian_dung)
+    monkeypatch.setattr(CouncilDocumentRepository, "them_bo", gian_ghi)
+    r = await client.post(P + "/sets", json=_than_tao(hs), headers=h)
+    assert r.status_code == 201, r.text
+    doc, ghi = bat["doc"], bat["ghi"]
+    assert (doc.transaction_isolation, doc.transaction_read_only) == (
+        "repeatable read",
+        "on",
+    )
+    assert ghi.ro == "off"
+    # (1) giao dịch đọc ≠ giao dịch ghi
+    assert (doc.backend_pid, doc.moc_chup) != (ghi.pid, ghi.ts)
+    # (2) lúc bộ dựng chạy, tiến trình của giao dịch đọc KHÔNG còn ở giao dịch ấy
+    assert bat["xact_doc_luc_dung"] != doc.moc_chup
+    # (3) câu ghi chạy SAU khi bộ dựng bắt đầu
+    assert ghi.st > bat["luc_dung"]
+
+
+# ═══════════════════ F219 — lớp chặn phụ của phạm vi (gọi THẲNG dependency) ═════════════════
+def _nguoi_gia(vai, unit_id=7):
+    return types.SimpleNamespace(id=1, role=vai, unit_id=unit_id)
+
+
+@pytest.mark.parametrize("vai", ["officer", "accountant", "user", "collaborator"])
+async def test_lop_phu_pham_vi_chan_vai_khac_admin_va_quan_ly(vai):
+    # Vai lọt Casbin (cấu hình sai) — KỂ CẢ khi đã gán đơn vị — vẫn bị chặn ở đây.
+    with pytest.raises(PermissionDeniedError, match="Chỉ admin hoặc quản lý đơn vị"):
+        await deps.get_council_document_scope(current_user=_nguoi_gia(vai))
+
+
+async def test_lop_phu_pham_vi_admin_tat_ca_quan_ly_chi_don_vi_minh():
+    S = deps.CouncilDocumentScope
+    assert await deps.get_council_document_scope(
+        current_user=_nguoi_gia("admin")
+    ) == S(True, None)
+    assert await deps.get_council_document_scope(
+        current_user=_nguoi_gia("manager", 7)
+    ) == S(False, 7)
+    with pytest.raises(PermissionDeniedError, match="chưa được gán đơn vị"):
+        await deps.get_council_document_scope(current_user=_nguoi_gia("manager", None))

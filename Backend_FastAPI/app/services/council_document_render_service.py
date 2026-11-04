@@ -446,8 +446,7 @@ def kiem_goi_khong_ma_hoa(z: zipfile.ZipFile, ten: str) -> None:
 
     ``zipfile`` chỉ biết mục bị mã hoá khi MỞ nó — và báo bằng ``RuntimeError`` (lỗi rất
     rộng của Python). Kiểm CỜ trong thư mục trung tâm TRƯỚC khi đọc thay vì bắt
-    ``RuntimeError`` quanh cả luồng (F211). MỘT nguồn cho hai điểm đọc gói: kho mẫu
-    (``kiem_goi_mau``, đọc bằng ``zipfile``) và :func:`_mo_docx` (python-docx)."""
+    ``RuntimeError`` quanh cả luồng (F211). Gọi qua :func:`kiem_goi_truoc_khi_mo`."""
     n = sum(1 for m in z.infolist() if m.flag_bits & _CO_MA_HOA_ZIP)
     if n:
         raise FileValidationError(
@@ -456,14 +455,40 @@ def kiem_goi_khong_ma_hoa(z: zipfile.ZipFile, ten: str) -> None:
         )
 
 
+#: Mã nén được phép của MỘT mục zip — danh sách CHO PHÉP, không phải danh sách cấm (F216).
+#: Đo CPython 3.12 (``zipfile.ZipExtFile._read1``): chỉ DEFLATE giải nén có trần độ dài
+#: (``decompress(data, n)``); LZMA / BZIP2 gọi ``decompress(data)`` cho CẢ khúc rồi mới cắt
+#: ``data[:self._left]`` ⇒ một khúc nén nhỏ nở ra rất lớn trong RAM TRƯỚC khi bị cắt theo số
+#: khai. Word chỉ ghi STORED / DEFLATED; ``compress_type`` mà ``zipfile`` dùng khi mở mục
+#: lấy từ thư mục trung tâm (đo: ``cong-cu/kham_pha_e3.py``) ⇒ kiểm ở đó là đủ.
+MA_NEN_CHO_PHEP = frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED})
+
+
+def kiem_goi_truoc_khi_mo(z: zipfile.ZipFile, ten: str) -> None:
+    """MỘT nguồn cho MỌI điểm mở gói mẫu — kho mẫu (``kiem_goi_mau``, đọc bằng
+    ``zipfile``) và :func:`_mo_docx` (python-docx). Chỉ đọc THƯ MỤC TRUNG TÂM, chạy TRƯỚC
+    khi mở bất kỳ mục nào (chưa bộ giải nén nào được tạo):
+
+    1. mã nén của mọi mục thuộc :data:`MA_NEN_CHO_PHEP` (F216) — mã lạ ⇒ lỗi miền;
+    2. không mục nào mã hoá (F211, :func:`kiem_goi_khong_ma_hoa`)."""
+    la = sum(1 for m in z.infolist() if m.compress_type not in MA_NEN_CHO_PHEP)
+    if la:
+        raise FileValidationError(
+            "Mẫu %s: gói zip có %d mục dùng kiểu nén ngoài danh sách cho phép (chỉ lưu "
+            "thẳng hoặc DEFLATE) — không mở." % (ten, la)
+        )
+    kiem_goi_khong_ma_hoa(z, ten)
+
+
 def _mo_docx(b: bytes, ten: str):
     """Mở mẫu Word. Gói hỏng (không phải zip, thiếu phần, XML hỏng — kể cả
-    ``[Content_Types].xml`` / quan hệ — dòng nén hỏng, mục mã hoá) hoặc phần chính không
-    phải ``w:document`` có ``w:body`` ⇒ ``FileValidationError``, không để lọt lỗi của thư
-    viện. ``zlib.error`` KHÔNG phải ``OSError`` (đo: MRO chỉ có ``Exception``)."""
+    ``[Content_Types].xml`` / quan hệ — dòng nén hỏng, mục mã hoá, kiểu nén ngoài danh sách
+    cho phép) hoặc phần chính không phải ``w:document`` có ``w:body`` ⇒
+    ``FileValidationError``, không để lọt lỗi của thư viện. ``zlib.error`` KHÔNG phải
+    ``OSError`` (đo: MRO chỉ có ``Exception``)."""
     try:
         with zipfile.ZipFile(io.BytesIO(b)) as z:
-            kiem_goi_khong_ma_hoa(z, ten)
+            kiem_goi_truoc_khi_mo(z, ten)
         d = docx.Document(io.BytesIO(b))
     except (
         PackageNotFoundError,
@@ -518,6 +543,28 @@ def _dat_doan(p, txt: str) -> None:
 
 _RE_SO_NGUYEN_ASCII = re.compile(r"[0-9]+")
 
+#: Trần SỐ CHỮ SỐ của một thuộc tính số nguyên đọc từ mẫu — kiểm TRƯỚC ``int()`` (``int()``
+#: của Python từ chối chuỗi quá 4.300 chữ số bằng ``ValueError`` thô; đo E3). 20 = số chữ số
+#: lớn nhất của ``xsd:unsignedLong`` — kiểu gốc ``ST_UnsignedDecimalNumber`` của ``w:sz``
+#: (``ST_HpsMeasure``) và ``w:gridCol/@w:w`` (``ST_TwipsMeasure``) trong ECMA-376 Part 1.
+#: ``w:gridSpan`` (``ST_DecimalNumber`` = ``xsd:integer``, không trần) dùng chung trần này —
+#: giá trị của nó còn bị chặn bởi số cột lưới.
+SO_CHU_SO_TOI_DA = 20
+#: Trần GIÁ TRỊ kỹ thuật (giới hạn của Microsoft Word, ĐẶC TẢ OOXML không đặt trần):
+#: cỡ chữ Word nhận 1–1.638 pt ⇒ ``w:sz`` (nửa-point) ≤ 3.276; khổ giấy lớn nhất của Word
+#: 22 in ⇒ một cột lưới ``w:gridCol/@w:w`` (twip) ≤ 22 × 1.440 = 31.680.
+SZ_TOI_DA = 3276
+GRIDCOL_TOI_DA = 31680
+
+
+def _so_nguyen_ascii(v: Optional[str]) -> Optional[int]:
+    """NGUỒN DUY NHẤT đổi một thuộc tính số của mẫu sang ``int``: 1..``SO_CHU_SO_TOI_DA``
+    chữ số ASCII ⇒ số; thiếu / dài hơn / ký tự khác (``int()`` còn nhận "+2", " 2", "2_0",
+    chữ số toàn hình) ⇒ ``None``. Độ dài kiểm TRƯỚC ``int()``."""
+    if v is None or len(v) > SO_CHU_SO_TOI_DA or not _RE_SO_NGUYEN_ASCII.fullmatch(v):
+        return None
+    return int(v)
+
 
 def _do_rong_o(tc, so_luoi: int, ten: str) -> int:
     """NGUỒN DUY NHẤT đọc độ rộng (số cột lưới) của một ô ``w:tc`` = ``w:tcPr/w:gridSpan``.
@@ -525,22 +572,22 @@ def _do_rong_o(tc, so_luoi: int, ten: str) -> int:
     Mọi chỗ của bộ dựng cần biết một ô phủ bao nhiêu cột (kiểm dòng mẫu, kiểm dòng
     "Tổng cộng", đặt bề rộng ô) đều đọc qua đây — hai cách đọc một thuộc tính thì khác
     nhau đúng ở XML hỏng (CLAUDE.md §7). Giá trị phải HỢP LỆ, không chỉ đọc được: không
-    có ``gridSpan`` ⇒ 1; có mà thiếu ``w:val``, không phải số nguyên (chỉ chữ số ASCII —
-    ``int()`` của Python còn nhận "+2", " 2", "2_0", chữ số toàn hình), ≤ 0, vượt số cột
-    lưới, hoặc hai thẻ ``gridSpan`` trong một ô ⇒ ``FileValidationError``. Thông báo chỉ
-    có tên mẫu và số đếm."""
+    có ``gridSpan`` ⇒ 1; có mà thiếu ``w:val``, không phải số nguyên (qua
+    :func:`_so_nguyen_ascii` — chỉ chữ số ASCII, tối đa ``SO_CHU_SO_TOI_DA`` chữ số), ≤ 0,
+    vượt số cột lưới, hoặc hai thẻ ``gridSpan`` trong một ô ⇒ ``FileValidationError``.
+    Thông báo chỉ có tên mẫu và số đếm."""
     pr = tc.find(qn("w:tcPr"))
     the = pr.findall(qn("w:gridSpan")) if pr is not None else []
     if not the:
         return 1
     if len(the) > 1:
         raise FileValidationError("Mẫu %s: một ô có %d thẻ gridSpan." % (ten, len(the)))
-    v = the[0].get(qn("w:val"))
-    if v is None or not _RE_SO_NGUYEN_ASCII.fullmatch(v):
+    n = _so_nguyen_ascii(the[0].get(qn("w:val")))
+    if n is None:
         raise FileValidationError(
-            "Mẫu %s: gridSpan của ô thiếu giá trị hoặc không phải số nguyên." % ten
+            "Mẫu %s: gridSpan của ô thiếu giá trị hoặc không phải số nguyên (tối đa %d "
+            "chữ số)." % (ten, SO_CHU_SO_TOI_DA)
         )
-    n = int(v)
     if not 1 <= n <= so_luoi:
         raise FileValidationError(
             "Mẫu %s: gridSpan của ô là %d, ngoài khoảng 1..%d cột lưới."
@@ -1347,19 +1394,22 @@ HDR_DIEM = ["TT", "Mã hồ sơ", "Họ", "Tên", "Giới tính", "Ngày sinh", 
 SAN_COT = 280
 
 
-def _so_nguyen_duong(e, thuoc_tinh: str, ten: str, cho: str) -> int:
-    """Giá trị thuộc tính ``thuoc_tinh`` của phần tử ``e`` trong mẫu — số nguyên ASCII ≥ 1.
+def _so_nguyen_duong(e, thuoc_tinh: str, ten: str, cho: str, toi_da: int) -> int:
+    """Giá trị thuộc tính ``thuoc_tinh`` của phần tử ``e`` trong mẫu — số nguyên ASCII trong
+    khoảng 1..``toi_da`` (trần KỸ THUẬT — xem ``SZ_TOI_DA`` / ``GRIDCOL_TOI_DA``).
 
-    Thiếu, không phải chữ số ASCII (``int()`` của Python còn nhận "+2", " 2", chữ số toàn
-    hình), hoặc < 1 ⇒ ``FileValidationError`` (chỉ tên mẫu + chỗ, không có chữ của mẫu).
+    Thiếu, không phải chữ số ASCII, dài quá ``SO_CHU_SO_TOI_DA`` chữ số (đọc qua
+    :func:`_so_nguyen_ascii` — không bao giờ tới ``int()`` với chuỗi dài), < 1 hoặc vượt
+    ``toi_da`` ⇒ ``FileValidationError`` (chỉ tên mẫu + chỗ + trần, không có chữ của mẫu).
     Dùng ở điểm ĐỌC của bộ dựng (:func:`_doc_luoi`), nên phép kiểm mẫu gọi lại đúng hàm ấy
     là đủ để mẫu hỏng bị từ chối lúc tải lên, không nổ lúc dựng (F211)."""
-    v = e.get(qn(thuoc_tinh))
-    if v is None or not _RE_SO_NGUYEN_ASCII.fullmatch(v) or int(v) < 1:
+    n = _so_nguyen_ascii(e.get(qn(thuoc_tinh)))
+    if n is None or not 1 <= n <= toi_da:
         raise FileValidationError(
-            "Mẫu %s: %s thiếu giá trị hoặc không phải số nguyên dương." % (ten, cho)
+            "Mẫu %s: %s thiếu giá trị, không phải số nguyên dương hoặc vượt trần kỹ thuật "
+            "%d." % (ten, cho, toi_da)
         )
-    return int(v)
+    return n
 
 
 def _rong_ky_tu(cell, ten: str) -> float:
@@ -1373,7 +1423,11 @@ def _rong_ky_tu(cell, ten: str) -> float:
     sz = rPr.find(qn("w:sz")) if rPr is not None else None
     if sz is None:
         return 10.0 * 10
-    return _so_nguyen_duong(sz, "w:val", ten, "cỡ chữ (w:sz) ở dòng mẫu") / 2.0 * 10
+    return (
+        _so_nguyen_duong(sz, "w:val", ten, "cỡ chữ (w:sz) ở dòng mẫu", SZ_TOI_DA)
+        / 2.0
+        * 10
+    )
 
 
 def _doc_luoi(tbl, ten: str) -> Tuple[List[int], List[float]]:
@@ -1383,7 +1437,9 @@ def _doc_luoi(tbl, ten: str) -> Tuple[List[int], List[float]]:
     :func:`_dat_rong` nổ ⇒ mỗi cột phải ≥ 1."""
     grid = tbl._tbl.find(qn("w:tblGrid"))
     cu = [
-        _so_nguyen_duong(c, "w:w", ten, "bề rộng cột lưới (w:gridCol)")
+        _so_nguyen_duong(
+            c, "w:w", ten, "bề rộng cột lưới (w:gridCol)", GRIDCOL_TOI_DA
+        )
         for c in grid.findall(qn("w:gridCol"))
     ]
     rk = [_rong_ky_tu(tbl.rows[3].cells[j], ten) for j in range(len(cu))]

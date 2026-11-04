@@ -1841,3 +1841,151 @@ def test_o_so_dong_tong_khong_co_doan_van_thi_loi_mien(mau, bang):
         tc.remove(p)
     with pytest.raises(FileValidationError, match="không có đoạn văn nào"):
         svc.kiem_mau("bien_ban", _luu(d))
+
+
+# ═══════════════════ F216 — kiểu nén ngoài danh sách cho phép ⇒ chặn TRƯỚC giải nén ═══
+def _doi_kieu_nen(b, ten_muc, kieu):
+    """Bản sao gói ``b``; RIÊNG mục ``ten_muc`` ghi lại bằng kiểu nén ``kieu``."""
+    o = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(b)) as z, zipfile.ZipFile(o, "w") as w:
+        for i in z.infolist():
+            if i.filename == ten_muc:
+                w.writestr(i.filename, z.read(i), compress_type=kieu)
+            else:
+                w.writestr(i, z.read(i))
+    return o.getvalue()
+
+
+@pytest.fixture
+def giai_nen(monkeypatch):
+    """Gián điệp bộ giải nén: mỗi lần MỞ một mục, ``zipfile`` tạo bộ giải nén qua
+    ``zipfile._get_decompressor(kiểu nén)`` (đo E3, CPython 3.12) ⇒ danh sách = các kiểu nén
+    đã thật sự được GIẢI NÉN."""
+    goi = []
+    goc = zipfile._get_decompressor
+    monkeypatch.setattr(zipfile, "_get_decompressor", lambda k: goi.append(k) or goc(k))
+    return goi
+
+
+KIEU_NEN_LA = {"lzma": zipfile.ZIP_LZMA, "bzip2": zipfile.ZIP_BZIP2}
+
+
+def test_gian_diep_thay_giai_nen_that_va_goi_hop_le_van_nhan(mau, giai_nen):
+    # Đối chứng cho ca "bộ giải nén KHÔNG được gọi": gián điệp THẤY lần giải nén thật; gói
+    # DEFLATE (ba mẫu giả) và gói có mục lưu thẳng (STORED) vẫn được nhận.
+    for loai in svc.LOAI_MAU:
+        svc.kiem_mau(loai, getattr(mau, loai))
+    assert zipfile.ZIP_DEFLATED in giai_nen
+    giai_nen.clear()
+    svc.kiem_mau(
+        "bien_ban", _doi_kieu_nen(mau.bien_ban, "word/document.xml", zipfile.ZIP_STORED)
+    )
+    assert zipfile.ZIP_STORED in giai_nen
+    assert svc.MA_NEN_CHO_PHEP == {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
+
+
+@pytest.mark.parametrize("diem", ["kiem_mau", "bo_dung"])
+@pytest.mark.parametrize("ten", sorted(KIEU_NEN_LA))
+@pytest.mark.parametrize("loai", svc.LOAI_MAU)
+def test_kieu_nen_ngoai_danh_sach_bi_chan_truoc_khi_giai_nen(
+    mau, giai_nen, loai, ten, diem
+):
+    kieu = KIEU_NEN_LA[ten]
+    sai = _doi_kieu_nen(getattr(mau, loai), "word/document.xml", kieu)
+    with zipfile.ZipFile(io.BytesIO(sai)) as z:
+        assert z.getinfo("word/document.xml").compress_type == kieu
+    giai_nen.clear()
+    with pytest.raises(FileValidationError, match="kiểu nén ngoài danh sách cho phép"):
+        if diem == "kiem_mau":  # đường TẢI MẪU LÊN dùng chính hàm này
+            svc.kiem_mau(loai, sai)
+        else:  # điểm vào bộ dựng
+            render_council_documents(_bo_giai(), dataclasses.replace(mau, **{loai: sai}))
+    assert kieu not in giai_nen  # bộ giải nén LZMA / BZIP2 CHƯA từng được tạo
+    if diem == "kiem_mau":
+        assert giai_nen == []  # chưa mở MỤC nào của gói
+
+
+# ═══════════════════ F211 phần còn lại — trần chữ số + trần giá trị kỹ thuật ══════════
+# ``int()`` của Python nổ ``ValueError`` thô từ 4.301 chữ số; trần chữ số kiểm TRƯỚC.
+SZ_O = [(1, 0), (4, 5)]
+
+
+@pytest.mark.parametrize("bang, o", SZ_O)
+def test_co_chu_dung_tran_ky_thuat_thi_nhan(mau, bang, o):
+    svc.kiem_mau("danh_sach", _dat_sz(mau.danh_sach, bang, o, str(svc.SZ_TOI_DA)))
+
+
+@pytest.mark.parametrize("bang, o", SZ_O)
+def test_co_chu_vuot_tran_mot_don_vi_thi_loi_mien(mau, bang, o):
+    sai = _dat_sz(mau.danh_sach, bang, o, str(svc.SZ_TOI_DA + 1))
+    with pytest.raises(FileValidationError, match=r"cỡ chữ \(w:sz\).*vượt trần kỹ thuật"):
+        svc.kiem_mau("danh_sach", sai)
+
+
+@pytest.mark.parametrize("bang, o", SZ_O)
+def test_co_chu_dung_tran_chu_so_co_so_0_dau_thi_nhan(mau, bang, o):
+    v = str(svc.SZ_TOI_DA).rjust(svc.SO_CHU_SO_TOI_DA, "0")
+    assert len(v) == svc.SO_CHU_SO_TOI_DA
+    svc.kiem_mau("danh_sach", _dat_sz(mau.danh_sach, bang, o, v))
+
+
+@pytest.mark.parametrize("bang, o", SZ_O)
+def test_co_chu_qua_tran_chu_so_thi_loi_mien_du_gia_tri_nho(mau, bang, o):
+    v = "24".rjust(svc.SO_CHU_SO_TOI_DA + 1, "0")  # giá trị 24, nhưng 21 chữ số
+    with pytest.raises(FileValidationError, match=r"cỡ chữ \(w:sz\)"):
+        svc.kiem_mau("danh_sach", _dat_sz(mau.danh_sach, bang, o, v))
+
+
+@pytest.mark.parametrize("diem", ["kiem_mau", "bo_dung"])
+def test_co_chu_5000_chu_so_thi_loi_mien_khong_loi_tho(mau, monkeypatch, diem):
+    sai = _dat_sz(mau.danh_sach, 1, 0, "1" * 5000)
+    with pytest.raises(FileValidationError, match=r"cỡ chữ \(w:sz\)"):
+        if diem == "kiem_mau":
+            svc.kiem_mau("danh_sach", sai)
+        else:
+            render_council_documents(_bo_giai(), dataclasses.replace(mau, danh_sach=sai))
+
+
+@pytest.mark.parametrize("bang", [1, 4])
+def test_cot_luoi_dung_tran_ky_thuat_thi_nhan(mau, bang):
+    svc.kiem_mau(
+        "danh_sach", _dat_gridcol(mau.danh_sach, bang, 3, str(svc.GRIDCOL_TOI_DA))
+    )
+
+
+@pytest.mark.parametrize("bang", [1, 4])
+def test_cot_luoi_vuot_tran_mot_don_vi_thi_loi_mien(mau, bang):
+    sai = _dat_gridcol(mau.danh_sach, bang, 3, str(svc.GRIDCOL_TOI_DA + 1))
+    with pytest.raises(
+        FileValidationError, match=r"bề rộng cột lưới \(w:gridCol\).*vượt trần kỹ thuật"
+    ):
+        svc.kiem_mau("danh_sach", sai)
+
+
+@pytest.mark.parametrize("bang", [1, 4])
+def test_cot_luoi_qua_tran_chu_so_thi_loi_mien_du_gia_tri_nho(mau, bang):
+    v = "500".rjust(svc.SO_CHU_SO_TOI_DA + 1, "0")
+    with pytest.raises(FileValidationError, match=r"bề rộng cột lưới \(w:gridCol\)"):
+        svc.kiem_mau("danh_sach", _dat_gridcol(mau.danh_sach, bang, 3, v))
+
+
+@pytest.mark.parametrize("bang", [1, 4])
+def test_cot_luoi_5000_chu_so_thi_loi_mien_khong_loi_tho(mau, bang):
+    sai = _dat_gridcol(mau.danh_sach, bang, 3, "1" * 5000)
+    with pytest.raises(FileValidationError, match=r"bề rộng cột lưới \(w:gridCol\)"):
+        svc.kiem_mau("danh_sach", sai)
+
+
+# Anh em (CLAUDE.md §6): gridSpan đọc qua cùng helper chữ số — 5.000 chữ số từng nổ
+# ``ValueError`` thô ở ``int()`` y như ``w:sz``.
+@pytest.mark.parametrize("v", ["1" * 5000, "1".rjust(21, "0")], ids=["5000", "21"])
+@pytest.mark.parametrize("loai, bang, dong, o", VI_TRI_GRIDSPAN[:3])
+def test_gridspan_qua_tran_chu_so_thi_loi_mien(mau, loai, bang, dong, o, v):
+    sai = _dat_gridspan(getattr(mau, loai), bang, dong, o, v)
+    with pytest.raises(FileValidationError, match=r"gridSpan"):
+        svc.kiem_mau(loai, sai)
+
+
+def test_gridspan_dung_tran_chu_so_co_so_0_dau_thi_nhan(mau):
+    v = "1".rjust(svc.SO_CHU_SO_TOI_DA, "0")
+    svc.kiem_mau("quyet_dinh", _dat_gridspan(mau.quyet_dinh, 3, 1, 2, v))

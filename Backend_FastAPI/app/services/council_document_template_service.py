@@ -2,9 +2,10 @@
 """Kho mẫu văn bản Hội đồng (giai đoạn 1 "Lần xét tuyển", PR 1.2) — service thuần.
 
 * **Tải mẫu lên** = bytes + loại + ngày hiệu lực. Trước khi lưu, theo thứ tự: giới hạn kích
-  thước tệp → đọc gói zip bằng ``zipfile`` (số mục, tổng kích thước giải nén khai báo, rồi
-  ĐỌC THẬT từng mục theo khúc với trần tổng — tiêu đề zip nói dối thì vẫn dừng đúng trần,
-  CRC sai thì dừng) → CHỈ KHI đó mới đưa cho python-docx qua
+  thước tệp → đọc gói zip bằng ``zipfile`` (số mục, tổng kích thước giải nén khai báo, kiểu
+  nén thuộc danh sách CHO PHÉP + không mục nào mã hoá — cả hai trên thư mục trung tâm, trước
+  khi mở mục nào —, rồi ĐỌC THẬT từng mục theo khúc với trần tổng — tiêu đề zip nói dối thì
+  vẫn dừng đúng trần, CRC sai thì dừng) → CHỈ KHI đó mới đưa cho python-docx qua
   :func:`council_document_render_service.kiem_mau` — ĐÚNG phép kiểm cấu trúc bộ dựng chạy
   trước khi dựng (một nguồn: dòng mẫu, dòng tổng, vùng dữ liệu F207, khối ngành…). Hỏng ở
   đâu ⇒ lỗi miền, KHÔNG lưu.
@@ -92,8 +93,10 @@ def kiem_goi_mau(
                 "Mẫu %s: tổng kích thước giải nén khai báo %d byte, vượt giới hạn %d."
                 % (ten, khai, gh.giai_nen)
             )
-        # Mục mã hoá (mật khẩu): zipfile nổ RuntimeError khi MỞ mục ⇒ kiểm cờ trước (F211).
-        bo_dung.kiem_goi_khong_ma_hoa(z, ten)
+        # Thư mục trung tâm TRƯỚC khi mở bất kỳ mục nào — cùng MỘT hàm với ``_mo_docx`` của
+        # bộ dựng: kiểu nén chỉ STORED / DEFLATED (F216 — LZMA / BZIP2 nở cả khúc trong RAM
+        # trước khi zipfile cắt theo số khai) và không mục nào mã hoá (F211).
+        bo_dung.kiem_goi_truoc_khi_mo(z, ten)
         # Đọc THẬT theo khúc với trần tổng; không bao giờ giữ quá một khúc trong RAM.
         # Đo 03-11 (CPython 3.12, ``cong-cu/kham_pha_zip_docx_e2.py``): zipfile CẮT mỗi mục ở
         # kích thước KHAI trong thư mục trung tâm — tiêu đề khai nhỏ hơn dữ liệu thì phần

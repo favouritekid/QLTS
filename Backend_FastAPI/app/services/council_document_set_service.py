@@ -4,7 +4,9 @@
 Tạo bộ = bốn bước, lỗi ở BẤT KỲ bước nào ⇒ không ghi gì:
 
 1. Đọc hồ sơ theo danh sách mã ở MỘT giao dịch ``REPEATABLE READ READ ONLY`` trên kết nối
-   riêng (:func:`council_candidate_service.doc_ho_so_theo_ma`).
+   riêng (:func:`council_candidate_service.doc_ho_so_theo_ma`) — giao dịch ấy KẾT THÚC trước
+   khi dựng; bước ghi (iv) chạy ở giao dịch KHÁC (của request — qua API đã mở từ bước xác
+   thực, không bị đóng giữa chừng).
 2. Chọn mẫu theo ngày ký = ``ngay_quyet_dinh`` nếu có, không thì ngày tạo theo giờ Việt Nam
    (:func:`council_document_template_service.chon_mau`); kiểm lại gói zip của mẫu đã chọn
    (lớp phụ — tầng chủ sở hữu là lúc tải mẫu lên).
@@ -120,16 +122,21 @@ async def tao_bo_van_ban(
     # dựng (bộ dựng còn kiểm lại một lần nữa ở điểm vào của nó).
     tham_so = bo_dung.kiem_lai_tham_so_quyet_dinh(tham_so)
 
+    # BẤT BIẾN GIAO DỊCH (F218 — Codex lần 5 chọn): đọc ở MỘT giao dịch RIÊNG ``REPEATABLE
+    # READ READ ONLY`` trên kết nối riêng, đã KẾT THÚC trước khi dựng; ghi ở giao dịch KHÁC
+    # (của request). KHÔNG hứa "giao dịch ghi bắt đầu sau mốc chụp": qua API, giao dịch của
+    # request đã tự mở từ bước xác thực (đọc người dùng + phiên trên cùng phiên CSDL) và
+    # không bị đóng giữa chừng. Test: ``test_ghi_bo_o_giao_dich_khac_giao_dich_doc`` (gọi
+    # thẳng) + ``test_qua_api_doc_o_giao_dich_rieng_da_dong_truoc_khi_dung`` (POST /sets thật).
     # (i) đọc — giao dịch riêng, chỉ đọc, đã KẾT THÚC khi hàm này trả về.
     anh = await doc_ho_so_theo_ma(engine, ma_ho_so, academic_year=academic_year)
 
     # Tối đa MỘT lần DỰNG cùng lúc trên toàn hệ (mọi worker / container cùng CSDL): khoá tư
     # vấn trên giao dịch của request — giữ tới khi router commit / rollback, tự nhả khi lỗi.
     # Trần 16 MB chỉ kiểm SAU khi dựng ⇒ đây là thứ chặn đỉnh RAM do nhiều lần dựng chồng
-    # nhau (Codex lần 4). Lấy SAU giao dịch đọc (không trước): câu khoá là câu đầu tiên của
-    # giao dịch request trong service ⇒ lấy trước thì giao dịch ghi bắt đầu TRƯỚC mốc chụp
-    # (đo: Tier 5, ``test_ghi_bo_o_giao_dich_sau_giao_dich_doc``). Lần thứ hai ⇒ lỗi miền
-    # trước khi chọn mẫu / dựng / ghi.
+    # nhau (Codex lần 4). Khoá lấy sau bước đọc (như bản ``8015d068``); thứ tự khoá ↔ đọc
+    # KHÔNG thuộc bất biến giao dịch ở trên. Hệ quả: lần thứ hai vẫn đọc hồ sơ (giao dịch chỉ
+    # đọc) rồi mới bị từ chối — lỗi miền trước khi chọn mẫu / dựng / ghi.
     if not await CouncilDocumentRepository(db).thu_khoa_dung():
         raise ConflictError(
             "Đang dựng một bộ văn bản khác — chờ bộ ấy xong rồi thử lại."

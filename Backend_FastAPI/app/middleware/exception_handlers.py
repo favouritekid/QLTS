@@ -19,10 +19,12 @@ Usage:
 """
 
 import logging
+import typing
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.log_redaction import (
@@ -82,19 +84,109 @@ def _chi_tiet_an_toan(exc: BaseException) -> str:
 
 
 def _khong_log_input_422(path: str) -> bool:
-    """MỘT vị từ: route mà ``input`` của lỗi 422 KHÔNG được ghi vào log.
+    """MỘT vị từ: route mà lỗi 422 chỉ được ghi vào log ở dạng ĐÃ CHUẨN HOÁ
+    (:func:`_loi_422_an_toan_de_log`) — không ``input`` / ``msg`` / ``ctx``, ``loc`` chỉ giữ
+    phần chứng minh được an toàn.
 
     * Route mang bearer code SMS (path HOẶC body opt-out) — ``input`` có thể là raw code
       (§11.3).
     * Route văn bản Hội đồng (``PII_BODY_ROUTE_PREFIXES``) — thân request mang danh sách mã
-      hồ sơ (CCCD); lỗi kiểu ``missing`` trả CẢ thân request trong ``input``. Khớp theo
-      ĐOẠN đường dẫn (``/api/admission-config/council-documentsX`` không khớp).
+      hồ sơ (CCCD); lỗi kiểu ``missing`` trả CẢ thân request trong ``input``; khoá JSON thừa
+      (``extra="forbid"``) nằm trong ``loc``. Khớp theo ĐOẠN đường dẫn
+      (``/api/admission-config/council-documentsX`` không khớp).
     """
     return (
         path.startswith(SMS_BEARER_PREFIXES)
         or path == "/api/public/sms/opt-out"
         or any(path == t or path.startswith(t + "/") for t in PII_BODY_ROUTE_PREFIXES)
     )
+
+
+# Phần tử ĐẦU của ``loc`` do FastAPI đặt (nơi tham số nằm) — tập cố định, không do client.
+_NOI_THAM_SO_422 = frozenset({"body", "query", "path", "header", "cookie"})
+# Nhãn cố định thay cho mọi phần tử chuỗi của ``loc`` không chứng minh được là tên trường
+# khai trong schema (khoá JSON thừa, khoá của dict, nhãn nhánh union …).
+NHAN_LOC_KHONG_KHAI = "<khong-khai>"
+
+
+def _ten_khai_cua_kieu(kieu, ra: set, da_xem: set) -> None:
+    """Gom tên (+ alias) mọi trường của các model Pydantic nằm trong chú thích kiểu ``kieu``
+    (đệ quy qua ``Optional`` / ``List`` / ``Dict`` / ``Union`` / model lồng)."""
+    if id(kieu) in da_xem:
+        return
+    da_xem.add(id(kieu))
+    if isinstance(kieu, type) and issubclass(kieu, BaseModel):
+        for ten, f in kieu.model_fields.items():
+            ra.add(ten)
+            if isinstance(f.alias, str):
+                ra.add(f.alias)
+            _ten_khai_cua_kieu(f.annotation, ra, da_xem)
+        return
+    for con in typing.get_args(kieu):
+        _ten_khai_cua_kieu(con, ra, da_xem)
+
+
+def _ten_khai_cua_route(route) -> frozenset:
+    """Tên tham số + tên trường schema mà ROUTE đã khớp khai (body / query / path / header /
+    cookie, kể cả của dependency con). Không đọc được ⇒ tập RỖNG (fail-closed: mọi chuỗi
+    của ``loc`` thành nhãn cố định)."""
+    ra: set = set()
+    try:
+        con = [getattr(route, "dependant")]
+        da_xem: set = set()
+        while con:
+            d = con.pop()
+            for nhom in (
+                "path_params",
+                "query_params",
+                "header_params",
+                "cookie_params",
+                "body_params",
+            ):
+                for f in getattr(d, nhom, None) or ():
+                    for ten in (getattr(f, "name", None), getattr(f, "alias", None)):
+                        if isinstance(ten, str):
+                            ra.add(ten)
+                    _ten_khai_cua_kieu(
+                        getattr(getattr(f, "field_info", None), "annotation", None),
+                        ra,
+                        da_xem,
+                    )
+            con.extend(getattr(d, "dependencies", None) or ())
+    except Exception:  # noqa: BLE001 — bộ chuẩn hoá log không được làm hỏng request
+        return frozenset()
+    return frozenset(ra)
+
+
+def _loi_422_an_toan_de_log(errors: list, route) -> list:
+    """MỘT chỗ chuẩn hoá lỗi 422 trước khi ghi log cho MỌI route của
+    :func:`_khong_log_input_422` (F217). Chỉ giữ thứ CHỨNG MINH được an toàn:
+
+    * ``type`` — mã lỗi do Pydantic / mã nguồn đặt, không lấy từ dữ liệu gửi lên;
+    * ``loc`` đã chuẩn hoá — số nguyên (chỉ số phần tử danh sách) giữ nguyên; phần tử ĐẦU
+      thuộc tập nơi tham số cố định giữ nguyên; chuỗi khác CHỈ giữ khi là tên trường / tham
+      số khai trong schema của route (:func:`_ten_khai_cua_route`), còn lại thay
+      :data:`NHAN_LOC_KHONG_KHAI` (khoá JSON thừa có thể chính là một CCCD).
+
+    Bỏ hẳn ``input``, ``msg``, ``ctx``, ``url`` (``msg`` / ``ctx`` có thể nội suy giá trị)."""
+    ten_khai = _ten_khai_cua_route(route) if route is not None else frozenset()
+    ra = []
+    for e in errors:
+        loc = []
+        for i, p in enumerate(e.get("loc") or ()):
+            if isinstance(p, int) and not isinstance(p, bool):
+                loc.append(p)
+            elif isinstance(p, str) and (
+                (i == 0 and p in _NOI_THAM_SO_422) or (i > 0 and p in ten_khai)
+            ):
+                loc.append(p)
+            else:
+                loc.append(NHAN_LOC_KHONG_KHAI)
+        t = e.get("type")
+        ra.append(
+            {"type": t if isinstance(t, str) else NHAN_LOC_KHONG_KHAI, "loc": loc}
+        )
+    return ra
 
 
 # ============================================================================
@@ -304,13 +396,12 @@ async def pydantic_validation_error_handler(
     safe_errors = [serialize_error(e) for e in exc.errors()]
 
     # Route bearer (/r/, /lp/, landing, body opt-out) và route văn bản Hội đồng (thân
-    # request = danh sách CCCD): error 'input' có thể là raw bearer code / dữ liệu cá nhân
-    # → loại 'input' khỏi LOG (vẫn giữ trong response cho chính người gửi). §11.3.
+    # request = danh sách CCCD): 'input' / 'msg' / 'ctx' có thể mang raw bearer code / dữ
+    # liệu cá nhân, khoá JSON thừa nằm trong 'loc' ⇒ LOG chỉ nhận bản đã chuẩn hoá (vẫn giữ
+    # nguyên trong response cho chính người gửi). §11.3, F217.
     log_errors = safe_errors
     if _khong_log_input_422(request.url.path):
-        log_errors = [
-            {k: v for k, v in e.items() if k != "input"} for e in safe_errors
-        ]
+        log_errors = _loi_422_an_toan_de_log(safe_errors, request.scope.get("route"))
 
     logger.info(
         f"Request validation error: {len(safe_errors)} errors",
