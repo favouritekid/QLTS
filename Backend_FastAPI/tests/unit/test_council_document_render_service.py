@@ -2169,10 +2169,14 @@ def _ca_phan_goi(b, ca):
             _sua_goi(b, them=[("word/gia.khongkieu", b"GIA")]),
             "kiểu nội dung không được phép",
         )
-    if ca == "truong_tach_run":  # INCLUDETEXT tách ra hai w:instrText
+    if ca == "truong_tach_run":
+        # INCLUDETEXT tách ra hai w:instrText, cắt GIỮA từ khoá: không mảnh nào tự nó là một mã
+        # bị cấm ("INCL", "UDETEXT") ⇒ chỉ bắt được khi GHÉP các mảnh của cùng một trường
+        # (kiểm ngược P-khong-ghep-instrtext lần 1: cắt ở " INCLUDE" + "TEXT" thì mảnh đầu đã là
+        # mã INCLUDE bị cấm — ca vẫn bị chặn, đỏ chỉ vì khác thông báo).
         f = {
             "word/document.xml": lambda d: _them_vao_than(
-                d, _truong_phuc(" INCLUDE", "TEXT &quot;" + _DICH_GIA + "&quot; ")
+                d, _truong_phuc(" INCL", "UDETEXT &quot;" + _DICH_GIA + "&quot; ")
             )
         }
         return _sua_goi(b, f), "mã trường INCLUDETEXT"
