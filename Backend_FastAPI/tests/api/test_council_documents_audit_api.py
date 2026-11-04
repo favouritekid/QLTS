@@ -15,15 +15,18 @@ Mỗi ca một bất biến (CLAUDE.md §3). Đóng băng của route xoá: ``te
 (request THẬT ⇒ 503) + kiểm kê ``tests/middleware/test_admission_freeze.py``.
 """
 import hashlib
+import json
 import logging
 
 import pytest
 import pytest_asyncio
 from fastapi.responses import Response
+from fastapi.routing import APIRoute
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 import app.database as csdl
+from app.core import deps
 from app.repositories.council_document_repository import CouncilDocumentRepository
 from app.routers import council_documents as rt
 from tests.api import test_council_documents_api as api
@@ -359,3 +362,72 @@ async def test_xoa_bo_nhat_ky_tai_va_vet_con_nguyen_van_truy_duoc(client, tk, ba
 async def test_xem_nhat_ky_chi_admin(client, tk, vai, duong):
     r = await client.get(P + duong, headers=await tk(vai))
     assert r.status_code == 403, r.text
+
+
+# ═══════════════════ chuỗi dependency của bốn route CHỈ ADMIN (F226, Codex lần 6 — E4) ═══════
+# Casbin là tầng chủ sở hữu VAI; ``deps.require_council_document_admin`` là lớp phụ ở ``deps.py``.
+# Đột biến E3D của người điều phối (DELETE nối vào dependency phạm vi CŨ) để mọi bộ test xanh vì
+# Casbin vẫn chặn ⇒ hai ca cho MỖI route: (a) cây dependency của route THẬT chứa đúng hàm lớp phụ
+# (và Casbin); (b) Casbin trong test CHO quản lý đúng đơn vị đi qua ⇒ lớp phụ vẫn chặn 403 bằng câu
+# của chính nó, không xoá / không vết.
+CHI_ADMIN = [
+    ("DELETE", "/sets/{set_id}"),
+    ("GET", "/sets/{set_id}/ma-ho-so"),
+    ("GET", "/nhat-ky-tai"),
+    ("GET", "/nhat-ky-xoa"),
+]
+_ID_CHI_ADMIN = ["xoa_bo", "ma_ho_so", "nhat_ky_tai", "nhat_ky_xoa"]
+_CAU_LOP_PHU = "Chỉ admin được làm thao tác này với bộ văn bản Hội đồng."
+
+
+def _route_that(app, pt, duong):
+    ds = [
+        r
+        for r in app.routes
+        if isinstance(r, APIRoute) and r.path == P + duong and pt in r.methods
+    ]
+    assert len(ds) == 1, (pt, duong, len(ds))
+    return ds[0]
+
+
+def _ham_phu_thuoc(dependant):
+    """Mọi hàm dependency (đệ quy) của một route."""
+    ra = []
+    for d in dependant.dependencies:
+        ra.append(d.call)
+        ra.extend(_ham_phu_thuoc(d))
+    return ra
+
+
+@pytest.mark.parametrize("pt,duong", CHI_ADMIN, ids=_ID_CHI_ADMIN)
+def test_route_chi_admin_noi_lop_phu_trong_deps(app_instance, pt, duong):
+    ham = _ham_phu_thuoc(_route_that(app_instance, pt, duong).dependant)
+    ten = [getattr(h, "__name__", repr(h)) for h in ham]
+    assert deps.require_council_document_admin in ham, ten
+    assert deps.check_permission in ham, ten  # Casbin (tầng chủ sở hữu) vẫn nối
+
+
+@pytest.mark.parametrize("pt,duong", CHI_ADMIN, ids=_ID_CHI_ADMIN)
+async def test_casbin_cho_quan_ly_qua_thi_lop_phu_van_chan(
+    client, tk, ba_bo, monkeypatch, app_instance, pt, duong
+):
+    h = await tk("ql_u1")  # quản lý của ĐÚNG đơn vị bộ u1
+    url = P + duong.replace("{set_id}", "%d" % ba_bo["u1"][0])
+    enf = app_instance.state.enforcer
+    goc = enf.enforce
+    da_cho = []
+
+    def enforce(sub, obj, act, *them):
+        if (sub, obj, act) == ("role:manager", url, pt):
+            da_cho.append(1)
+            return True
+        return goc(sub, obj, act, *them)
+
+    monkeypatch.setattr(enf, "enforce", enforce)
+    r = await client.request(
+        pt, url, headers=h, json={"ly_do": LY_DO} if pt == "DELETE" else None
+    )
+    assert da_cho, "Casbin giả không được hỏi — phép đo không hợp lệ"
+    assert r.status_code == 403, r.text
+    assert _CAU_LOP_PHU in json.dumps(r.json(), ensure_ascii=False), r.text
+    assert await _dem() == (0, 3, 3) and await _dem_vet() == (0, 0)
