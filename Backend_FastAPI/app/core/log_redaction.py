@@ -26,8 +26,10 @@ dùng chung nó:
    ⇒ :func:`configure_logging` (worker/beat KHÔNG nạp ``app.main``).
 
 Ngoài phạm vi (ghi rõ, không phải sót): ``print()`` và mọi thứ ghi thẳng
-stdout/stderr không qua ``logging``; Sentry (nếu bật — ``send_default_pii=False``,
-chưa đo); ``error_log`` của nginx — chặn ở location phục vụ URL token (N17.10 B,
+stdout/stderr không qua ``logging``; Sentry — cửa ra có chủ sở hữu RIÊNG
+``app/core/sentry_init.py`` (chặt hơn log: không breadcrumb, log không thành sự kiện, chữ ngoại
+lệ chỉ còn loại; dùng lại ``redact_text`` / ``loai_loi_an_toan`` của tệp này — E4, F223);
+``error_log`` của nginx — chặn ở location phục vụ URL token (N17.10 B,
 xem ``nginx/nginx.conf`` và ``nginx/templates/default.conf.template``), phần dư ghi ở đó.
 
 Khoảng trống CÓ CHỦ Ý

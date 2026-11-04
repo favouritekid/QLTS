@@ -1192,7 +1192,9 @@ jobs:
           # Lượt E4 (Codex lần 6): `tests/integration/test_council_document_downgrade_dong_thoi.py`
           # (F222: hạ cấp hdts20261104 / hdts20261103 qua ĐÚNG `alembic/env.py` — tiến trình con,
           # AUTOCOMMIT — khi phiên thứ hai ghi chen giữa kiểm và xoá: không mất dòng; CSDL dùng một
-          # lần riêng từng ca, không chạm `qlts_test`). Ghim WHOLE-FILE.
+          # lần riêng từng ca, không chạm `qlts_test`) và `tests/unit/test_sentry_khoi_tao.py`
+          # (F223: Sentry khởi tạo MỘT nơi, transport giả + chặn socket — thân request, biến cục
+          # bộ, chuỗi truy vấn, chữ ngoại lệ, log, header không vào sự kiện). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1269,6 +1271,7 @@ jobs:
               tests/api/test_council_documents_audit_api.py
               tests/integration/test_council_document_migrations_e3.py
               tests/integration/test_council_document_downgrade_dong_thoi.py
+              tests/unit/test_sentry_khoi_tao.py
 
     env:
       APP_ENV: test
