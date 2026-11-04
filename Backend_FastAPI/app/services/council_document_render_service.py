@@ -480,15 +480,226 @@ def kiem_goi_truoc_khi_mo(z: zipfile.ZipFile, ten: str) -> None:
     kiem_goi_khong_ma_hoa(z, ten)
 
 
+# ═══════════════════ CÁC PHẦN của gói Word — danh sách CHO PHÉP (E3, owner 04-11) ═══════════
+# ``kiem_mau`` chỉ kiểm VÙNG DỮ LIỆU của ``word/document.xml``; mọi phần khác của gói mẫu đi
+# NGUYÊN vào tệp giao cho người tải ⇒ liên kết ra ngoài (Word gọi tới địa chỉ lạ — kể cả đường
+# UNC — khi mở tệp), mẫu đính kèm, đối tượng nhúng, ActiveX, macro, altChunk, subDocument,
+# frame, mã trường nạp nội dung ngoài phải bị chặn ở kho mẫu. Danh sách dưới đây = những gì
+# một tệp Word thường cần; ĐO ba mẫu thật + ba mẫu giả của test trước khi viết
+# (``cong-cu/do_cau_truc_goi_e3.py`` — báo cáo E3, mục "Phần gói Word").
+_NS_CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+_NS_RELS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+_QH_OFFICE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+_CT_OFFICE = "application/vnd.openxmlformats-officedocument."
+_CT_WORD = _CT_OFFICE + "wordprocessingml."
+
+#: Loại quan hệ (``Relationship/@Type``) được phép. Ngoài danh sách — attachedTemplate,
+#: oleObject, package (nhúng), control / activeX, vbaProject, aFChunk (altChunk),
+#: subDocument, frame, hyperlink, … — ⇒ từ chối.
+LOAI_QUAN_HE_CHO_PHEP = frozenset(
+    {
+        "http://schemas.openxmlformats.org/package/2006/relationships/metadata/"
+        "core-properties",
+        "http://schemas.openxmlformats.org/package/2006/relationships/metadata/"
+        "thumbnail",
+        "http://schemas.microsoft.com/office/2007/relationships/stylesWithEffects",
+    }
+    | {
+        _QH_OFFICE + t
+        for t in (
+            "officeDocument",
+            "extended-properties",
+            "custom-properties",
+            "styles",
+            "settings",
+            "webSettings",
+            "fontTable",
+            "theme",
+            "numbering",
+            "footnotes",
+            "endnotes",
+            "header",
+            "footer",
+            "image",
+            "font",
+            "customXml",
+            "customXmlProps",
+        )
+    }
+)
+#: Kiểu nội dung (``[Content_Types].xml``) được phép cho MỖI phần của gói. Không có kiểu
+#: macro (``…macroEnabled…``, ``vbaProject``), nhúng (``oleObject``, ``package``), ActiveX.
+KIEU_NOI_DUNG_CHO_PHEP = frozenset(
+    {
+        "application/vnd.openxmlformats-package.relationships+xml",
+        "application/vnd.openxmlformats-package.core-properties+xml",
+        "application/xml",
+        _CT_OFFICE + "extended-properties+xml",
+        _CT_OFFICE + "custom-properties+xml",
+        _CT_OFFICE + "customXmlProperties+xml",
+        _CT_OFFICE + "theme+xml",
+        _CT_OFFICE + "obfuscatedFont",
+        _CT_WORD + "document.main+xml",
+        _CT_WORD + "styles+xml",
+        _CT_WORD + "settings+xml",
+        _CT_WORD + "webSettings+xml",
+        _CT_WORD + "fontTable+xml",
+        _CT_WORD + "numbering+xml",
+        _CT_WORD + "footnotes+xml",
+        _CT_WORD + "endnotes+xml",
+        _CT_WORD + "header+xml",
+        _CT_WORD + "footer+xml",
+        "application/vnd.ms-word.stylesWithEffects+xml",
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/x-emf",
+        "image/x-wmf",
+    }
+)
+#: Loại mã trường nạp nội dung / gọi ra ngoài — cấm ở BẤT KỲ phần XML nào của gói (thân, đầu /
+#: chân trang, chú thích …), dù ở ``w:instrText`` (trường phức) hay ``w:fldSimple/@w:instr``.
+MA_TRUONG_CAM = frozenset(
+    {"INCLUDETEXT", "INCLUDEPICTURE", "INCLUDE", "DDE", "DDEAUTO", "IMPORT", "LINK"}
+)
+_PARSER_GOI = etree.XMLParser(
+    resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False
+)
+_RE_LOAI_TRUONG = re.compile(r"\s*([A-Za-z]+)")
+_RE_NHAN_LOAI = re.compile(r"[A-Za-z0-9.+/-]{1,120}")
+_W_FLDSIMPLE, _W_FLDCHAR, _W_INSTRTEXT = (
+    qn("w:fldSimple"),
+    qn("w:fldChar"),
+    qn("w:instrText"),
+)
+
+
+def _nhan_loai(s: Optional[str]) -> str:
+    """Tên LOẠI để đưa vào thông báo lỗi: chỉ đoạn cuối của URI loại quan hệ / kiểu nội dung
+    khi nó gồm ký tự an toàn — chuỗi lạ (do mẫu tự đặt) ⇒ nhãn cố định, không nêu nội dung."""
+    if not isinstance(s, str):
+        return "(không có)"
+    s = s.rstrip("/").rsplit("/", 1)[-1] if s.startswith("http") else s
+    return s if _RE_NHAN_LOAI.fullmatch(s) else "(loại lạ)"
+
+
+def _xml_cua_phan(z: zipfile.ZipFile, phan: str, ten: str):
+    try:
+        goc = etree.fromstring(z.read(phan), _PARSER_GOI)
+    except etree.XMLSyntaxError:
+        raise FileValidationError(
+            "Mẫu %s: một phần XML của gói Word hỏng." % ten
+        ) from None
+    if goc.getroottree().docinfo.doctype:
+        raise FileValidationError(
+            "Mẫu %s: một phần XML của gói Word có khai báo DOCTYPE." % ten
+        )
+    return goc
+
+
+def _lenh_cac_truong(goc) -> List[str]:
+    """Câu lệnh của từng trường trong một phần XML: ``w:fldSimple/@w:instr`` và trường phức
+    (``w:fldChar`` begin → các ``w:instrText`` → separate / end, lồng nhau được) — GHÉP mọi
+    ``w:instrText`` của CÙNG một trường (Word hay tách câu lệnh ra nhiều run)."""
+    ra: List[str] = []
+    ngan_xep: List[Optional[List[str]]] = []  # None = trường đã qua "separate"
+    for e in goc.iter(_W_FLDSIMPLE, _W_FLDCHAR, _W_INSTRTEXT):
+        if e.tag == _W_FLDSIMPLE:
+            ra.append(e.get(qn("w:instr")) or "")
+        elif e.tag == _W_INSTRTEXT:
+            if ngan_xep and ngan_xep[-1] is not None:
+                ngan_xep[-1].append(e.text or "")
+            else:  # mảnh câu lệnh ngoài trường nào: xét riêng
+                ra.append(e.text or "")
+        else:
+            loai = e.get(qn("w:fldCharType"))
+            if loai == "begin":
+                ngan_xep.append([])
+            elif ngan_xep and loai in ("separate", "end"):
+                dinh = ngan_xep.pop() if loai == "end" else ngan_xep[-1]
+                if dinh is not None:
+                    ra.append("".join(dinh))
+                if loai == "separate":
+                    ngan_xep[-1] = None
+    ra.extend("".join(x) for x in ngan_xep if x is not None)
+    return ra
+
+
+def kiem_cac_phan_goi_word(z: zipfile.ZipFile, ten: str) -> None:
+    """MỘT nguồn kiểm CÁC PHẦN của gói Word (ngoài vùng dữ liệu của ``document.xml``) — gọi
+    ở mọi điểm mở gói, cùng chỗ với :func:`kiem_goi_truoc_khi_mo` (kho mẫu ``kiem_goi_mau``
+    sau khi đọc thử mọi mục có trần; :func:`_mo_docx` của bộ dựng). Theo thứ tự:
+
+    1. mọi phần (trừ ``[Content_Types].xml``) có kiểu nội dung thuộc
+       :data:`KIEU_NOI_DUNG_CHO_PHEP` (không có kiểu ⇒ từ chối);
+    2. mọi quan hệ trong mọi ``*.rels``: KHÔNG ``TargetMode="External"`` (kể cả hyperlink) và
+       loại thuộc :data:`LOAI_QUAN_HE_CHO_PHEP`;
+    3. không trường nào thuộc :data:`MA_TRUONG_CAM` ở BẤT KỲ phần XML nào.
+
+    XML đọc bằng lxml không nạp DTD / thực thể / mạng; DOCTYPE ⇒ từ chối. Lỗi miền chỉ nêu
+    tên mẫu + LOẠI phần / quan hệ / mã trường — không nêu đích liên kết hay chữ của mẫu."""
+    phan = [i.filename for i in z.infolist() if not i.filename.endswith("/")]
+    if "[Content_Types].xml" not in phan:
+        raise FileValidationError("Mẫu %s: gói Word thiếu [Content_Types].xml." % ten)
+    ct = _xml_cua_phan(z, "[Content_Types].xml", ten)
+    mac_dinh = {
+        (e.get("Extension") or "").lower(): e.get("ContentType")
+        for e in ct.iter(_NS_CT + "Default")
+    }
+    ghi_de = {
+        (e.get("PartName") or "").lower(): e.get("ContentType")
+        for e in ct.iter(_NS_CT + "Override")
+    }
+    kieu_cua = {}
+    for p in phan:
+        if p == "[Content_Types].xml":
+            continue
+        cuoi = p.rsplit("/", 1)[-1]
+        duoi = cuoi.rsplit(".", 1)[-1].lower() if "." in cuoi else ""
+        k = ghi_de.get("/" + p.lower()) or mac_dinh.get(duoi)
+        if k not in KIEU_NOI_DUNG_CHO_PHEP:
+            raise FileValidationError(
+                "Mẫu %s: gói Word có phần kiểu nội dung không được phép (%s)."
+                % (ten, _nhan_loai(k))
+            )
+        kieu_cua[p] = k
+    for p, k in kieu_cua.items():
+        if not p.lower().endswith(".rels"):
+            continue
+        for r in _xml_cua_phan(z, p, ten).iter(_NS_RELS + "Relationship"):
+            loai = r.get("Type")
+            if (r.get("TargetMode") or "").strip().lower() == "external":
+                raise FileValidationError(
+                    "Mẫu %s: gói Word có quan hệ trỏ RA NGOÀI gói (TargetMode External, "
+                    "loại %s)." % (ten, _nhan_loai(loai))
+                )
+            if loai not in LOAI_QUAN_HE_CHO_PHEP:
+                raise FileValidationError(
+                    "Mẫu %s: gói Word có quan hệ loại không được phép (%s)."
+                    % (ten, _nhan_loai(loai))
+                )
+    for p, k in kieu_cua.items():
+        if p.lower().endswith(".rels") or not (k.endswith("+xml") or k == "application/xml"):
+            continue
+        for lenh in _lenh_cac_truong(_xml_cua_phan(z, p, ten)):
+            m = _RE_LOAI_TRUONG.match(lenh)
+            if m and m.group(1).upper() in MA_TRUONG_CAM:
+                raise FileValidationError(
+                    "Mẫu %s: gói Word có mã trường %s (nạp nội dung / gọi ra ngoài)."
+                    % (ten, m.group(1).upper())
+                )
+
+
 def _mo_docx(b: bytes, ten: str):
     """Mở mẫu Word. Gói hỏng (không phải zip, thiếu phần, XML hỏng — kể cả
     ``[Content_Types].xml`` / quan hệ — dòng nén hỏng, mục mã hoá, kiểu nén ngoài danh sách
-    cho phép) hoặc phần chính không phải ``w:document`` có ``w:body`` ⇒
-    ``FileValidationError``, không để lọt lỗi của thư viện. ``zlib.error`` KHÔNG phải
-    ``OSError`` (đo: MRO chỉ có ``Exception``)."""
+    cho phép, phần / quan hệ / mã trường ngoài danh sách cho phép của gói Word) hoặc phần
+    chính không phải ``w:document`` có ``w:body`` ⇒ ``FileValidationError``, không để lọt lỗi
+    của thư viện. ``zlib.error`` KHÔNG phải ``OSError`` (đo: MRO chỉ có ``Exception``)."""
     try:
         with zipfile.ZipFile(io.BytesIO(b)) as z:
             kiem_goi_truoc_khi_mo(z, ten)
+            kiem_cac_phan_goi_word(z, ten)
         d = docx.Document(io.BytesIO(b))
     except (
         PackageNotFoundError,
