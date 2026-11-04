@@ -383,6 +383,19 @@ def test_gioi_han_mac_dinh_doc_tu_cau_hinh_va_mau_gia_qua_duoc():
 GH_BIEN = kho_mau.GioiHanGoi(tep=4 * 1024 * 1024, giai_nen=200_000, so_muc=40)
 
 
+@pytest.fixture
+def bo_qua_phan_goi_word(monkeypatch):
+    """Các ca K4 dùng gói zip TỔNG HỢP (không phải gói Word) để đo RIÊNG trần giải nén; phép
+    kiểm các phần của gói Word (bổ sung E3 — gọi SAU phép đếm byte, có test riêng ở
+    ``test_council_document_render_service.py``) được thay bằng gián điệp ghi lời gọi: ca
+    "nhận" chứng minh kiem_goi_mau đi HẾT phép đếm byte và tới bước kiểm phần gói."""
+    goi = []
+    monkeypatch.setattr(
+        bo_dung, "kiem_cac_phan_goi_word", lambda z, ten: goi.append(ten)
+    )
+    return goi
+
+
 def _goi_tong(tong, so_muc=2):
     """Gói ``so_muc`` mục nén, tiêu đề TRUNG THỰC, TỔNG dữ liệu giải nén đúng ``tong``."""
     phan = [tong // so_muc] * so_muc
@@ -399,10 +412,11 @@ def _tong_khai(b):
         return sum(m.file_size for m in z.infolist())
 
 
-def test_bien_giai_nen_dung_bang_gioi_han_thi_nhan():
+def test_bien_giai_nen_dung_bang_gioi_han_thi_nhan(bo_qua_phan_goi_word):
     b = _goi_tong(GH_BIEN.giai_nen)
     assert _tong_khai(b) == GH_BIEN.giai_nen
     kho_mau.kiem_goi_mau(b, "Biên bản", GH_BIEN)  # đúng bằng giới hạn ⇒ NHẬN
+    assert bo_qua_phan_goi_word == ["Biên bản"]
 
 
 def test_bien_giai_nen_vuot_mot_byte_thi_tu_choi():
@@ -424,7 +438,7 @@ def test_tieu_de_noi_doi_noi_dung_that_vuot_mot_byte_thi_tu_choi():
         kho_mau.kiem_goi_mau(b, "Biên bản", GH_BIEN)
 
 
-def test_zipfile_cat_moi_muc_o_kich_thuoc_khai():
+def test_zipfile_cat_moi_muc_o_kich_thuoc_khai(bo_qua_phan_goi_word):
     # GIẢ ĐỊNH mà thiết kế dựa vào (đo 03-11, CPython 3.12): zipfile — bộ đọc của cả
     # kiem_goi_mau lẫn python-docx — không bao giờ trả quá kích thước KHAI của một mục, kể
     # cả khi dòng nén thật dài hơn và CRC khớp phần khai ⇒ trần TỔNG KHAI là trần RAM thật.
@@ -436,10 +450,13 @@ def test_zipfile_cat_moi_muc_o_kich_thuoc_khai():
     with zipfile.ZipFile(io.BytesIO(b)) as z, z.open("gia/0.bin") as f:
         assert len(f.read()) == 100
     kho_mau.kiem_goi_mau(b, "Biên bản", GH_BIEN)  # phần dư không bao giờ được giải nén
+    assert bo_qua_phan_goi_word == ["Biên bản"]
 
 
 @pytest.mark.parametrize("du", [0, 1], ids=["that_bang_gioi_han", "that_vuot_1_byte"])
-def test_dem_giai_nen_that_doc_lap_voi_kich_thuoc_khai(monkeypatch, du):
+def test_dem_giai_nen_that_doc_lap_voi_kich_thuoc_khai(
+    monkeypatch, bo_qua_phan_goi_word, du
+):
     # Trần đếm byte THẬT là lớp PHỤ (zipfile đã cắt theo số khai — ca trên). Giả lập một bộ
     # đọc KHÔNG cắt: tiêu đề khai 2 × 10 byte, dữ liệu thật = giới hạn + ``du``.
     b = _goi_tong(20)
