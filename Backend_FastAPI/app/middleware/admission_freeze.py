@@ -161,6 +161,8 @@ FROZEN_PREFIXES: Final[tuple[str, ...]] = (
 ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     # Lần xét tuyển GĐ1 (lượt E2): tải mẫu + dựng bộ văn bản Hội đồng — rà tay 03-11.
     ("POST", "/api/admission-config/council-documents/sets"),
+    # Lượt E3 (owner 04-11, J1 dòng 29): Admin xoá bộ văn bản — rà tay 04-11.
+    ("DELETE", "/api/admission-config/council-documents/sets/{set_id}"),
     ("POST", "/api/admission-config/council-documents/templates"),
     ("POST", "/api/admission-config/criteria"),
     ("DELETE", "/api/admission-config/criteria/{criteria_id}"),

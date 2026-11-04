@@ -17,6 +17,7 @@ Vào: danh sách MÃ HỒ SƠ (số CCCD — J1 dòng 8) đúng thứ tự admin
   THỨ TỰ dòng, KHÔNG nêu giá trị. Lỗi CSDL ⇒ ``ServiceError`` không mang câu SQL / tham số
   (thông báo của trình điều khiển chứa danh sách mã). Không log mã, DTO ở bất kỳ mức nào.
 """
+import re
 import unicodedata
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
@@ -39,8 +40,14 @@ from app.services.council_document_render_service import (
 from app.utils.exceptions import DataValidationError, ServiceError
 
 # Độ dài tối đa của một mã đầu vào (CCCD 12 số; CMND cũ 9 số) — giới hạn KỸ THUẬT để chuỗi
-# lạ không tới CSDL, không phải luật nghiệp vụ về định dạng CCCD.
+# lạ không tới CSDL; luật định dạng nghiệp vụ là ``_RE_DINH_DANG_MA`` dưới đây.
 DAI_MA_TOI_DA = 32
+# Định dạng mã hồ sơ (owner 04-11, ``Y-TUONG-…`` J1 dòng 28): ĐÚNG 12 chữ số (CCCD) HOẶC
+# ĐÚNG 9 chữ số (CMND cũ), chỉ chữ số ASCII 0-9 — lớp ký tự viết tường minh, KHÔNG dùng
+# ``\d`` (``\d`` của Python khớp cả chữ số toàn hình / Ả Rập-Ấn). Mã giữ NGUYÊN dạng chuỗi
+# (số 0 đầu giữ nguyên), so CHÍNH XÁC với ``citizen_id`` kèm năm học; KHÔNG đệm 0 biến 9
+# chữ số thành 12.
+_RE_DINH_DANG_MA = re.compile(r"[0-9]{12}|[0-9]{9}")
 # Số dòng tối đa nêu trong một thông báo lỗi (phần còn lại chỉ đếm).
 _NEU_TOI_DA = 20
 
@@ -58,8 +65,9 @@ def _neu_dong(dong: Sequence[int]) -> str:
 
 
 def chuan_hoa_ma(ma: Sequence[str]) -> List[str]:
-    """Bỏ khoảng trắng hai đầu từng mã; rỗng / trùng / có ký tự điều khiển / quá dài ⇒ lỗi
-    nêu số thứ tự dòng (từ 1), không nêu giá trị."""
+    """MỘT nguồn kiểm danh sách mã hồ sơ. Bỏ khoảng trắng hai đầu từng mã; theo thứ tự: rỗng
+    / quá dài / có ký tự nhóm C (kiểm kỹ thuật) → sai định dạng (không phải đúng 9 hoặc 12
+    chữ số ASCII — J1 dòng 28) → trùng ⇒ lỗi nêu số thứ tự dòng (từ 1), KHÔNG nêu giá trị."""
     if not isinstance(ma, (list, tuple)):
         raise DataValidationError("Danh sách mã hồ sơ phải là một danh sách.")
     if not ma:
@@ -75,6 +83,11 @@ def chuan_hoa_ma(ma: Sequence[str]) -> List[str]:
         if len(m) > DAI_MA_TOI_DA or any(unicodedata.category(c)[0] == "C" for c in m):
             raise DataValidationError(
                 "Dòng %d: không phải mã hồ sơ (quá dài hoặc có ký tự điều khiển)." % i
+            )
+        if not _RE_DINH_DANG_MA.fullmatch(m):
+            raise DataValidationError(
+                "Dòng %d: mã hồ sơ phải gồm đúng 12 chữ số (CCCD) hoặc đúng 9 chữ số "
+                "(CMND), chỉ chữ số 0-9." % i
             )
         if m in gap:
             raise DataValidationError(

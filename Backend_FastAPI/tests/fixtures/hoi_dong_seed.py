@@ -2,7 +2,8 @@
 """Dữ liệu GIẢ cho test hàm đọc hồ sơ + bộ văn bản Hội đồng (giai đoạn 1 "Lần xét tuyển").
 
 Chèn bằng SQL thô (không qua ORM: không sự kiện / giá trị mặc định phía Python nào chen vào)
-lên CSDL test đã dựng bằng ``create_all``. Mọi tên, mã, số ở đây là GIẢ (tiền tố ``GIA``).
+lên CSDL test đã dựng bằng ``create_all``. Mọi tên, mã, số ở đây là GIẢ (tiền tố ``GIA``; mã
+hồ sơ do :func:`ma_gia` sinh).
 
 ``seed_hoi_dong(conn)`` dựng danh mục + các hồ sơ phủ những nhánh khó của truy vấn bộ xuất:
 tên một chữ / khoảng trắng thừa, nhiều nguyện vọng (``display_order`` ngược thứ tự ``id``),
@@ -465,7 +466,7 @@ async def seed_hoi_dong(conn) -> dict:
     # Hai NV: NV có display_order 1 được chèn SAU (id lớn hơn) ⇒ NV1 theo display_order ≠ theo id.
     await them(
         "nhieu_nv_khoang_trang",
-        "GIA000000001",
+        ma_gia(1),
         full_name="  Họ   Giả  Một ",
         dob=date(2008, 1, 2),
         gender="Nam",
@@ -499,7 +500,7 @@ async def seed_hoi_dong(conn) -> dict:
     # thiếu ngày sinh; Hoàn thành THPT; Trung cấp; liên thông.
     await them(
         "ten_mot_chu_khong_hoc_phi",
-        "GIA000000002",
+        ma_gia(2),
         full_name="H'Giả",
         gender="Nữ",
         ethnicity="02",
@@ -517,7 +518,7 @@ async def seed_hoi_dong(conn) -> dict:
     # ưu tiên cùng loại giấy với một giấy đường thường (max() gộp cả hai); GDTX + Cao đẳng.
     await them(
         "dtts_kv1_hoc_phi_khong_nganh",
-        "GIA000000003",
+        ma_gia(3),
         status="withdrawal_pending",
         full_name="Họ Giả Ba",
         dob=date(2007, 12, 31),
@@ -554,7 +555,7 @@ async def seed_hoi_dong(conn) -> dict:
     # Xã có hàng khu vực HẾT HIỆU LỰC + hàng HIỆN HÀNH (tên xã khác).
     await them(
         "xa_het_hieu_luc_co_hien_hanh",
-        "GIA000000004",
+        ma_gia(4),
         full_name="Họ Giả Bốn",
         dob=date(2008, 5, 6),
         gender="Nam",
@@ -574,7 +575,7 @@ async def seed_hoi_dong(conn) -> dict:
     # Xã CHỈ còn hàng khu vực hết hiệu lực (KV1) ⇒ coi như không có KV; DTTS ⇒ 06.
     await them(
         "xa_chi_con_het_hieu_luc",
-        "GIA000000005",
+        ma_gia(5),
         status="resubmitted",
         full_name="Họ Giả Năm",
         dob=date(2008, 7, 8),
@@ -596,7 +597,7 @@ async def seed_hoi_dong(conn) -> dict:
     # Xã hiện hành có tên RỖNG ⇒ không rơi về tên trên hồ sơ; mọi phần địa chỉ còn lại rỗng.
     await them(
         "dia_chi_rong",
-        "GIA000000006",
+        ma_gia(6),
         status="approved",
         full_name="Họ Giả Sáu",
         dob=date(2008, 9, 10),
@@ -616,7 +617,7 @@ async def seed_hoi_dong(conn) -> dict:
     # Xã có nút hành chính HẾT HIỆU LỰC ⇒ tỉnh rơi về chữ trên hồ sơ; mã dân tộc lạ.
     await them(
         "nut_xa_het_hieu_luc_dan_toc_la",
-        "GIA000000007",
+        ma_gia(7),
         full_name="Họ Giả Bảy",
         dob=date(2008, 11, 12),
         gender="Nam",
@@ -636,7 +637,7 @@ async def seed_hoi_dong(conn) -> dict:
     # Tỉnh của xã HẾT HIỆU LỰC; dân tộc rỗng; văn hoá rỗng; NV1 KHÔNG có điểm (NV2 có).
     await them(
         "nut_tinh_het_hieu_luc_nv1_khong_diem",
-        "GIA000000008",
+        ma_gia(8),
         full_name="Họ Giả Tám",
         dob=date(2009, 1, 1),
         gender="Nữ",
@@ -651,7 +652,7 @@ async def seed_hoi_dong(conn) -> dict:
     # Không có nguyện vọng nào; học phí có ngành ⇒ ngành theo học phí.
     await them(
         "khong_nguyen_vong",
-        "GIA000000009",
+        ma_gia(9),
         status="draft",
         full_name="Họ Giả Chín",
         dob=date(2008, 2, 3),
@@ -665,8 +666,8 @@ async def seed_hoi_dong(conn) -> dict:
     )
     # Hai loại hình KHÁC nhau, CÙNG chuyên môn (trung cấp), cùng ngành ⇒ cùng số đếm Biên bản.
     for nhan, cccd, lh in (
-        ("loai_hinh_chinh_quy", "GIA000000010", "cq"),
-        ("loai_hinh_lien_thong", "GIA000000011", "lt"),
+        ("loai_hinh_chinh_quy", ma_gia(10), "cq"),
+        ("loai_hinh_lien_thong", ma_gia(11), "lt"),
     ):
         await them(
             nhan,
@@ -686,7 +687,7 @@ async def seed_hoi_dong(conn) -> dict:
     # Đơn vị KHÁC (cho phép đo đơn vị của bộ).
     await them(
         "don_vi_khac",
-        "GIA000000012",
+        ma_gia(12),
         unit="u2",
         full_name="Họ Giả Mười Hai",
         dob=date(2008, 4, 5),

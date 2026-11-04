@@ -107,12 +107,52 @@ def test_migration_la_head_duy_nhat_noi_tiep_head_cu():
     cfg = Config(str(GOC / "alembic.ini"))
     cfg.set_main_option("script_location", str(GOC / "alembic"))
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    assert heads == ["hdts20261103b"]  # lượt E2: quyền Casbin của API nối sau bảng
+    assert heads == ["hdts20261104"]  # lượt E3: hai bảng vết nối sau quyền Casbin (E2)
     mig = _migration()
     assert (mig.revision, mig.down_revision) == ("hdts20261103", "v3circ20261011c")
     assert mig.CO_CHO_PHEP_XOA.endswith("_ENABLED")  # cờ CHO PHÉP, mặc định tắt
     cb = _migration_casbin()
     assert (cb.revision, cb.down_revision) == ("hdts20261103b", "hdts20261103")
+    vet = _migration_vet()
+    assert (vet.revision, vet.down_revision) == ("hdts20261104", "hdts20261103b")
+    assert vet.CO_CHO_PHEP_XOA.endswith("_ENABLED")
+
+
+TEP_MIGRATION_VET = GOC / "alembic" / "versions" / "hdts20261104_council_document_audit.py"
+
+
+def _migration_vet():
+    spec = importlib.util.spec_from_file_location("hdts20261104", TEP_MIGRATION_VET)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_bang_vet_chuoi_check_va_ten_rang_buoc_model_bang_migration():
+    vet = _migration_vet()
+    for ten in ("CHECK_DANH_SACH_TEP", "CHECK_LY_DO", "CHECK_SHA_HEX", "LY_DO_XOA_TOI_DA"):
+        assert getattr(vet, ten) == getattr(m, ten), ten
+    nguon = TEP_MIGRATION_VET.read_text(encoding="utf-8")
+    trong_mig = set(
+        re.findall(r'name="((?:ck|uq)_council_document_[a-z0-9_]+)"', nguon)
+    )
+    o_model = set()
+    for lop in (m.CouncilDocumentSetDeletion, m.CouncilDocumentDownloadLog):
+        o_model |= {
+            n for n in _ten_rang_buoc_model(lop) if n.startswith(("ck_", "uq_"))
+        }
+    assert o_model == trong_mig and len(o_model) == 8
+    assert m.CouncilDocumentSetDeletion.__table__.c.ly_do.type.length == (
+        m.LY_DO_XOA_TOI_DA
+    )
+
+
+def test_bang_vet_khong_co_khoa_ngoai_nao():
+    # Vết xoá + nhật ký tải sống ĐỘC LẬP với bộ (owner 04-11, Codex lần 5): xoá bộ KHÔNG được
+    # cascade mất vết — không khoá ngoại tới bộ (hay tới user).
+    for lop in (m.CouncilDocumentSetDeletion, m.CouncilDocumentDownloadLog):
+        assert not lop.__table__.foreign_keys, lop.__name__
+    assert "ForeignKey" not in TEP_MIGRATION_VET.read_text(encoding="utf-8")
 
 
 def test_quyen_manager_trong_template_co_migration_cap():
@@ -135,3 +175,38 @@ def test_quyen_manager_trong_template_co_migration_cap():
     assert all(p[2] == "GET" for p in cb.POLICIES)  # manager CHỈ ĐỌC
     for t in (OFFICER_TEMPLATE, ACCOUNTANT_TEMPLATE):
         assert not [p for p in t["policies"] if p["object"].startswith(tien_to)]
+
+
+# Route CHỈ ADMIN của lượt E3 (owner 04-11, J1 dòng 29–31) — KHÔNG vai nào ngoài admin có dòng
+# Casbin khớp (so bằng ĐÚNG hàm khớp của mô hình: keyMatch4 + regexMatch).
+ROUTE_CHI_ADMIN = (
+    ("DELETE", "/api/admission-config/council-documents/sets/1"),
+    ("GET", "/api/admission-config/council-documents/sets/1/ma-ho-so"),
+    ("GET", "/api/admission-config/council-documents/nhat-ky-tai"),
+    ("GET", "/api/admission-config/council-documents/nhat-ky-xoa"),
+)
+
+
+def test_route_chi_admin_khong_vai_nao_khac_co_dong_casbin():
+    from casbin.util.builtin_operators import key_match4, regex_match
+
+    from app.casbin_config.policy_templates import POLICY_TEMPLATES
+
+    assert set(POLICY_TEMPLATES) >= {"admin", "manager", "officer", "accountant"}
+    lot = [
+        (vai, method, duong)
+        for vai, t in POLICY_TEMPLATES.items()
+        if vai != "admin"
+        for p in t["policies"]
+        for method, duong in ROUTE_CHI_ADMIN
+        if key_match4(duong, p["object"]) and regex_match(method, p["action"])
+        and p.get("eft", "allow") == "allow"
+    ]
+    assert lot == []
+    cb = _migration_casbin()
+    assert not [
+        (method, duong)
+        for _, v1, v2, _ in cb.POLICIES
+        for method, duong in ROUTE_CHI_ADMIN
+        if key_match4(duong, v1) and regex_match(method, v2)
+    ]

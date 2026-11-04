@@ -47,7 +47,7 @@ from app.utils.exceptions import (
     ResourceNotFoundError,
     ServiceError,
 )
-from tests.fixtures.hoi_dong_seed import seed_hoi_dong
+from tests.fixtures.hoi_dong_seed import ma_gia, seed_hoi_dong
 from tests.unit.test_council_document_render_service import (
     _dat_co_ma_hoa,
     _mau_bien_ban,
@@ -717,7 +717,7 @@ async def _dung_loi_buoc(buoc, hs, db, monkeypatch):
     if buoc != "mau":
         await _tai_ba_mau(db, hs)
     if buoc == "doc":
-        ma, loi = ma + ["GIAKHONGCO01"], DataValidationError
+        ma, loi = ma + [ma_gia(999)], DataValidationError
     elif buoc == "mau":
         loi = BusinessRuleViolation
     elif buoc == "dung":  # văn hoá rỗng ⇒ bộ dựng dừng

@@ -52,7 +52,9 @@ from .student import Student, StudentDocument
 from .enrollment_letter import EnrollmentLetter
 # Kho mẫu + bộ văn bản Hội đồng tuyển sinh (giai đoạn 1 "Lần xét tuyển").
 from .council_document import (
+    CouncilDocumentDownloadLog,
     CouncilDocumentSet,
+    CouncilDocumentSetDeletion,
     CouncilDocumentSetFile,
     CouncilDocumentTemplate,
 )
@@ -226,6 +228,8 @@ __all__ = [
     "CouncilDocumentTemplate",
     "CouncilDocumentSet",
     "CouncilDocumentSetFile",
+    "CouncilDocumentSetDeletion",
+    "CouncilDocumentDownloadLog",
     "ProfileSubjectScore",
     "ProfileDocument",
     "DocumentAuditLog",  # Audit trail for document operations

@@ -8,12 +8,14 @@ một tệp). Không bao giờ log nội dung tệp, danh sách mã hay DTO.
 from datetime import date
 from typing import List, Optional, Sequence
 
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
 from app.models.council_document import (
+    CouncilDocumentDownloadLog,
     CouncilDocumentSet,
+    CouncilDocumentSetDeletion,
     CouncilDocumentSetFile,
     CouncilDocumentTemplate,
 )
@@ -145,6 +147,76 @@ class CouncilDocumentRepository:
             .scalars()
             .all()
         )
+
+    async def ma_ho_so_dau_vao(self, set_id: int) -> Optional[List[str]]:
+        """Danh sách mã hồ sơ đầu vào ĐÚNG THỨ TỰ của một bộ (cột PII deferred) — chỉ route
+        admin dùng; ``None`` khi không có bộ."""
+        return (
+            await self.db.execute(
+                select(CouncilDocumentSet.ma_ho_so_dau_vao).where(
+                    CouncilDocumentSet.id == set_id
+                )
+            )
+        ).scalar_one_or_none()
+
+    # ---------------------------------------------------------------- vết xoá
+    async def them_vet_xoa(
+        self, vet: CouncilDocumentSetDeletion
+    ) -> CouncilDocumentSetDeletion:
+        self.db.add(vet)
+        await self.db.flush()
+        return vet
+
+    async def xoa_bo(self, set_id: int) -> int:
+        """Xoá MỘT bộ (tệp theo ``ON DELETE CASCADE`` của CSDL); trả số bộ đã xoá. Flush,
+        không commit — người gọi giữ vết xoá trong CÙNG giao dịch."""
+        kq = await self.db.execute(
+            delete(CouncilDocumentSet).where(CouncilDocumentSet.id == set_id)
+        )
+        return kq.rowcount
+
+    async def danh_sach_vet_xoa(
+        self, *, limit: int, offset: int
+    ) -> List[CouncilDocumentSetDeletion]:
+        return list(
+            (
+                await self.db.execute(
+                    select(CouncilDocumentSetDeletion)
+                    .order_by(
+                        CouncilDocumentSetDeletion.xoa_luc.desc(),
+                        CouncilDocumentSetDeletion.id.desc(),
+                    )
+                    .limit(limit)
+                    .offset(offset)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    # ---------------------------------------------------------------- nhật ký tải
+    async def them_nhat_ky_tai(
+        self, dong: CouncilDocumentDownloadLog
+    ) -> CouncilDocumentDownloadLog:
+        self.db.add(dong)
+        await self.db.flush()
+        return dong
+
+    async def danh_sach_nhat_ky_tai(
+        self, *, set_id: Optional[int], limit: int, offset: int
+    ) -> List[CouncilDocumentDownloadLog]:
+        q = select(CouncilDocumentDownloadLog)
+        if set_id is not None:
+            q = q.where(CouncilDocumentDownloadLog.set_id == set_id)
+        q = (
+            q.order_by(
+                CouncilDocumentDownloadLog.tai_luc.desc(),
+                CouncilDocumentDownloadLog.id.desc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+        return list((await self.db.execute(q)).scalars().all())
 
     async def tep_cua_bo(
         self, set_id: int, thu_tu: int

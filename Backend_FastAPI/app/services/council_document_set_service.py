@@ -23,10 +23,17 @@ admin xem — J1 dòng 9). Tải lại một tệp = đọc bytes đã lưu, KH�
 Phiên bản mã đã dựng (F212): metadata của mỗi bộ ghi sha256 NỘI DUNG các tệp nguồn quyết
 định bộ văn bản (bộ dựng, kho mẫu, hàm đọc + SQL, tệp này) — tính từ CHÍNH các tệp đã nạp,
 lúc nạp module. Không dùng nhãn ảnh Docker (đã biết rỗng / thiếu).
+
+Xoá bộ + nhật ký tải (lượt E3 — owner 04-11, J1 dòng 29 / 31): xoá = ghi VẾT XOÁ (id bộ, số hồ
+sơ, danh sách tệp + sha, người, lúc, lý do bắt buộc — không CCCD, không DTO) rồi xoá bộ, trong
+CÙNG một SAVEPOINT của giao dịch request (hỏng ⇒ không xoá gì, không vết); tải một tệp = ghi
+MỘT dòng nhật ký (flush ở đây; router COMMIT trước khi trả bytes — ghi lỗi ⇒ không trả). Hai
+bảng vết không có khoá ngoại tới bộ ⇒ sống tiếp khi bộ bị xoá. Kiểm quyền ở ``deps.py``.
 """
 import asyncio
 import hashlib
 import sys
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -37,7 +44,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.config import settings
 from app.constants.admission_circular import vn_calendar_date
-from app.models.council_document import CouncilDocumentSet, CouncilDocumentSetFile
+from app.models.council_document import (
+    LY_DO_XOA_TOI_DA,
+    CouncilDocumentDownloadLog,
+    CouncilDocumentSet,
+    CouncilDocumentSetDeletion,
+    CouncilDocumentSetFile,
+)
 from app.repositories import council_candidate_repository as _kho_doc
 from app.repositories.council_document_repository import CouncilDocumentRepository
 from app.services import council_candidate_service as _ham_doc
@@ -250,3 +263,123 @@ async def liet_ke_bo(
 async def tep_cua_bo(db: AsyncSession, set_id: int) -> List[CouncilDocumentSetFile]:
     """Metadata các tệp của một bộ (không bytes), theo thứ tự bộ dựng trả."""
     return await CouncilDocumentRepository(db).danh_sach_tep(set_id)
+
+
+# ═══════════════════════════════ xoá bộ (Admin) — vết độc lập, cùng giao dịch ═════════════
+def kiem_ly_do_xoa(ly_do: object) -> str:
+    """Lý do xoá BẮT BUỘC (J1 dòng 29): chuỗi; bỏ khoảng trắng hai đầu; không rỗng; tối đa
+    ``LY_DO_XOA_TOI_DA`` ký tự (trần KỸ THUẬT); không ký tự nhóm C ngoài xuống dòng / tab.
+    Thông báo không nêu nội dung lý do."""
+    if not isinstance(ly_do, str):
+        raise DataValidationError("Lý do xoá bộ văn bản phải là chữ.")
+    s = ly_do.strip()
+    if not s:
+        raise DataValidationError("Phải nhập lý do xoá bộ văn bản.")
+    if len(s) > LY_DO_XOA_TOI_DA:
+        raise DataValidationError(
+            "Lý do xoá dài quá giới hạn kỹ thuật %d ký tự." % LY_DO_XOA_TOI_DA
+        )
+    if any(unicodedata.category(c)[0] == "C" and c not in "\n\r\t" for c in s):
+        raise DataValidationError("Lý do xoá có ký tự điều khiển / vô hình — gõ lại.")
+    return s
+
+
+async def xoa_bo_van_ban(
+    db: AsyncSession,
+    bo: CouncilDocumentSet,
+    *,
+    ly_do: object,
+    nguoi_xoa_id: int,
+) -> Tuple[CouncilDocumentSetDeletion, None]:
+    """Ghi vết xoá rồi xoá bộ ``bo`` (đã qua kiểm quyền admin ở ``deps.py``) — CÙNG một
+    SAVEPOINT: lỗi ở bất kỳ câu nào ⇒ không xoá gì, không còn vết. Trả ``(vết, None)``;
+    router commit. Tệp của bộ đi theo ``ON DELETE CASCADE``; nhật ký tải + vết xoá KHÔNG có
+    khoá ngoại tới bộ ⇒ còn nguyên."""
+    ly_do = kiem_ly_do_xoa(ly_do)
+    if isinstance(nguoi_xoa_id, bool) or not isinstance(nguoi_xoa_id, int):
+        raise ServiceError("Không xác định được người xoá — không xoá.")
+    repo = CouncilDocumentRepository(db)
+    tep = await repo.danh_sach_tep(bo.id)  # metadata, KHÔNG nạp bytes
+    vet = CouncilDocumentSetDeletion(
+        set_id=bo.id,
+        so_ho_so=bo.so_ho_so,
+        so_tep=len(tep),
+        danh_sach_tep=[
+            {
+                "thu_tu": t.thu_tu,
+                "path": t.path,
+                "sha256": t.sha256,
+                "kich_thuoc": t.kich_thuoc,
+            }
+            for t in tep
+        ],
+        nguoi_xoa_id=nguoi_xoa_id,
+        ly_do=ly_do,
+    )
+    set_id = bo.id
+    try:
+        async with db.begin_nested():
+            await repo.them_vet_xoa(vet)
+            if await repo.xoa_bo(set_id) != 1:
+                raise ServiceError("Bộ văn bản không còn để xoá — không xoá gì.")
+    except DBAPIError:
+        # Thông báo của trình điều khiển mang tham số câu lệnh (lý do, path) ⇒ không giữ.
+        raise ServiceError("Lỗi CSDL khi xoá bộ văn bản — không xoá gì.") from None
+    return vet, None
+
+
+async def liet_ke_vet_xoa(
+    db: AsyncSession, *, limit: int, offset: int
+) -> List[CouncilDocumentSetDeletion]:
+    return await CouncilDocumentRepository(db).danh_sach_vet_xoa(
+        limit=limit, offset=offset
+    )
+
+
+# ═══════════════════════════════ danh sách mã đầu vào (Admin) ═════════════════════════════
+async def ma_ho_so_dau_vao(db: AsyncSession, set_id: int) -> List[str]:
+    """Mã hồ sơ đầu vào ĐÚNG THỨ TỰ của bộ ``set_id`` (DỮ LIỆU CÁ NHÂN — J1 dòng 30: chỉ
+    Admin; quyền ở ``deps.py``). Không có ⇒ ``ResourceNotFoundError``."""
+    ds = await CouncilDocumentRepository(db).ma_ho_so_dau_vao(set_id)
+    if ds is None:
+        raise ResourceNotFoundError("Không có bộ văn bản này.")
+    if not isinstance(ds, list) or not all(isinstance(m, str) for m in ds):
+        raise ServiceError("Danh sách mã đầu vào đã lưu sai dạng — không trả.")
+    return ds
+
+
+# ═══════════════════════════════ nhật ký tải ═══════════════════════════════════════════
+async def ghi_nhat_ky_tai(
+    db: AsyncSession,
+    *,
+    set_id: int,
+    thu_tu: int,
+    tep: TepDaLuu,
+    nguoi_tai_id: int,
+) -> Tuple[CouncilDocumentDownloadLog, None]:
+    """MỘT dòng nhật ký cho lần máy chủ CẤP tệp ``thu_tu`` của bộ ``set_id`` (flush). Router
+    COMMIT dòng này TRƯỚC khi trả bytes; lỗi ghi ⇒ ``ServiceError`` ⇒ không trả tệp. Ghi nhận
+    việc CẤP tệp, không tuyên bố người dùng đã nhận xong."""
+    if isinstance(nguoi_tai_id, bool) or not isinstance(nguoi_tai_id, int):
+        raise ServiceError("Không xác định được người tải — không trả tệp.")
+    dong = CouncilDocumentDownloadLog(
+        set_id=set_id,
+        thu_tu=thu_tu,
+        path=tep.path,
+        sha256=tep.sha256,
+        nguoi_tai_id=nguoi_tai_id,
+    )
+    try:
+        await CouncilDocumentRepository(db).them_nhat_ky_tai(dong)
+    except DBAPIError:
+        raise ServiceError("Không ghi được nhật ký tải tệp — không trả tệp.") from None
+    return dong, None
+
+
+async def liet_ke_nhat_ky_tai(
+    db: AsyncSession, *, set_id: Optional[int], limit: int, offset: int
+) -> List[CouncilDocumentDownloadLog]:
+    """Nhật ký tải (mới trước) — lọc theo id bộ nếu có; bộ ĐÃ XOÁ vẫn lọc được."""
+    return await CouncilDocumentRepository(db).danh_sach_nhat_ky_tai(
+        set_id=set_id, limit=limit, offset=offset
+    )

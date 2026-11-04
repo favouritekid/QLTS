@@ -35,7 +35,7 @@ from app.services.council_document_render_service import (
     CouncilTemplates,
 )
 from app.utils.exceptions import DataValidationError, ServiceError
-from tests.fixtures.hoi_dong_seed import chen, seed_hoi_dong
+from tests.fixtures.hoi_dong_seed import chen, ma_gia, seed_hoi_dong
 
 pytestmark = pytest.mark.integration
 
@@ -342,19 +342,20 @@ async def test_ket_noi_tra_pool_khong_mang_che_do_chi_doc(hs):
 
 # ═══════════════════════════════ lỗi đầu vào / dữ liệu ═══════════════════════════════
 def test_chuan_hoa_ma_loi_neu_so_dong_khong_neu_gia_tri():
-    assert doc.chuan_hoa_ma([" GIA1 ", "GIA2"]) == ["GIA1", "GIA2"]
+    a, b = ma_gia(901), ma_gia(902)
+    assert doc.chuan_hoa_ma([" " + a + " ", b]) == [a, b]
     for vao, khop in (
         ([], "rỗng"),
-        ("GIA1", "phải là một danh sách"),
-        (["GIA1", "  "], "Dòng 2: mã hồ sơ rỗng"),
-        (["GIA1", 5], "Dòng 2: mã hồ sơ không phải chuỗi"),
-        (["GIA1", "GIA2", " GIA1"], "Dòng 3 trùng mã hồ sơ với dòng 1"),
+        (a, "phải là một danh sách"),
+        ([a, "  "], "Dòng 2: mã hồ sơ rỗng"),
+        ([a, 5], "Dòng 2: mã hồ sơ không phải chuỗi"),
+        ([a, b, " " + a], "Dòng 3 trùng mã hồ sơ với dòng 1"),
         (["GIA\x00X"], "Dòng 1: không phải mã hồ sơ"),
         (["G" * 33], "Dòng 1: không phải mã hồ sơ"),
     ):
         with pytest.raises(DataValidationError, match=khop) as e:
             doc.chuan_hoa_ma(vao)
-        assert "GIA1" not in str(e.value) and "GIA2" not in str(e.value)
+        assert a not in str(e.value) and b not in str(e.value)
 
 
 # K2 — ký tự nhóm C NGOÀI Cc: định dạng vô hình (Cf — gồm đảo chiều phải-trái U+202E và
@@ -375,12 +376,56 @@ def test_ma_co_ky_tu_nhom_c_thi_loi_mien(ten):
     c = KY_TU_NHOM_C[ten]
     assert unicodedata.category(c) == ten[:2]  # đúng nhóm như tên ca
     with pytest.raises(DataValidationError, match="Dòng 2: không phải mã hồ sơ") as e:
-        doc.chuan_hoa_ma(["GIA1", "GIA" + c + "2"])
+        doc.chuan_hoa_ma([ma_gia(1), "GIA" + c + "2"])
     assert "GIA" not in str(e.value)
 
 
+# ═══════════════════ định dạng mã hồ sơ — 12 hoặc 9 chữ số ASCII (J1 dòng 28) ══════════
+DINH_DANG_MA = "Dòng 2: mã hồ sơ phải gồm đúng 12 chữ số [(]CCCD[)] hoặc đúng 9 chữ số"
+
+
+def test_ma_12_hoac_9_chu_so_duoc_nhan_giu_so_0_dau():
+    ma = [ma_gia(1), ma_gia(2, 9), " " + ma_gia(3) + " "]
+    ra = doc.chuan_hoa_ma(ma)
+    assert ra == [ma_gia(1), ma_gia(2, 9), ma_gia(3)]
+    assert [len(m) for m in ra] == [12, 9, 12] and ra[0][0] == "0"  # số 0 đầu GIỮ nguyên
+
+
+@pytest.mark.parametrize("so_chu_so", [8, 10, 11, 13])
+def test_ma_khong_phai_9_hoac_12_chu_so_thi_loi_mien(so_chu_so):
+    sai = (ma_gia(4) * 2)[:so_chu_so]
+    assert len(sai) == so_chu_so and sai.isascii() and sai.isdigit()
+    with pytest.raises(DataValidationError, match=DINH_DANG_MA) as e:
+        doc.chuan_hoa_ma([ma_gia(1), sai])
+    assert sai not in str(e.value) and ma_gia(1) not in str(e.value)
+
+
+# Chữ số KHÔNG ASCII — đều thuộc nhóm Nd (qua được phép kiểm ký tự nhóm C; lớp ``\d`` và
+# ``str.isdigit()`` của Python NHẬN chúng). Viết bằng ``chr()``.
+CHU_SO_LA = {
+    "toan_hinh_U+FF10": 0xFF10,
+    "a_rap_an_U+0660": 0x0660,
+    "ba_tu_U+06F0": 0x06F0,
+    "devanagari_U+0966": 0x0966,
+}
+
+
+@pytest.mark.parametrize("so_chu_so", [12, 9])
+@pytest.mark.parametrize("ten", sorted(CHU_SO_LA))
+def test_chu_so_khong_ascii_thi_loi_mien(ten, so_chu_so):
+    goc = CHU_SO_LA[ten]
+    dung = ma_gia(5, so_chu_so)
+    for sai in (
+        "".join(chr(goc + int(c)) for c in dung),  # cả mã bằng chữ số lạ
+        dung[:-1] + chr(goc + int(dung[-1])),  # chỉ MỘT chữ số cuối lạ
+    ):
+        assert unicodedata.category(sai[-1]) == "Nd" and len(sai) == so_chu_so
+        with pytest.raises(DataValidationError, match=DINH_DANG_MA):
+            doc.chuan_hoa_ma([ma_gia(1), sai])
+
+
 async def test_ma_khong_khop_dung_mot_ho_so_thi_loi_neu_so_dong(hs):
-    ma = [hs["nhieu_nv_khoang_trang"][0], "GIAKHONGCO01", hs["dia_chi_rong"][0]]
+    ma = [hs["nhieu_nv_khoang_trang"][0], ma_gia(999), hs["dia_chi_rong"][0]]
     with pytest.raises(DataValidationError) as e:
         await doc.doc_ho_so_theo_ma(csdl.engine, ma, academic_year=2026)
     msg = str(e.value)
@@ -421,6 +466,37 @@ async def test_cccd_o_hai_nam_hoc_khop_dung_ho_so_cua_nam_da_chon(hs):
     assert cccd not in str(e.value)
 
 
+async def _them_ho_so_ma(hs, ma, ten):
+    """Một hồ sơ GIẢ năm 2026 mang đúng chuỗi mã ``ma``."""
+    from tests.fixtures.hoi_dong_seed import ho_so
+
+    async with csdl.engine.begin() as conn:
+        return await ho_so(
+            conn,
+            hs["_danh_muc"],
+            cccd=ma,
+            nam=2026,
+            full_name="Họ Giả " + ten,
+            cultural_education_level="graduated_thpt",
+            vocational_qualification="none",
+        )
+
+
+async def test_ma_9_chu_so_so_chinh_xac_khong_dem_so_0(hs):
+    # So CHÍNH XÁC chuỗi kèm năm học; KHÔNG đệm 0 biến 9 chữ số thành 12 (hay bỏ 0 đầu).
+    cmnd, goc9 = ma_gia(7, 9), ma_gia(8, 9)
+    await _them_ho_so_ma(hs, cmnd, "Chín")
+    await _them_ho_so_ma(hs, "000" + goc9, "Mười Hai")  # 12 chữ số, ba số 0 đầu
+    anh = await doc.doc_ho_so_theo_ma(csdl.engine, [cmnd], academic_year=2026)
+    assert [r.ma_ho_so for r in anh.rows] == [cmnd] and anh.rows[0].ten == "Chín"
+    anh = await doc.doc_ho_so_theo_ma(csdl.engine, ["000" + goc9], academic_year=2026)
+    assert [r.ma_ho_so for r in anh.rows] == ["000" + goc9]  # số 0 đầu giữ nguyên
+    for sai in (goc9, "000" + cmnd):  # bỏ 0 đầu / đệm 0 ⇒ không phải mã đã lưu
+        with pytest.raises(DataValidationError, match="dòng 1 không có hồ sơ") as e:
+            await doc.doc_ho_so_theo_ma(csdl.engine, [sai], academic_year=2026)
+        assert sai not in str(e.value)
+
+
 @pytest.mark.parametrize("nam", [None, "2026", 2026.0, True], ids=repr)
 async def test_thieu_nam_hoc_thi_loi_mien_truoc_khi_doc(hs, monkeypatch, nam):
     goi = []
@@ -437,7 +513,7 @@ async def test_vuot_gioi_han_so_ho_so_thi_dung_truoc_khi_doc(hs, monkeypatch):
     monkeypatch.setattr(doc, "giao_dich_chi_doc", lambda *a: goi.append(1))
     with pytest.raises(DataValidationError, match="vượt giới hạn kỹ thuật 2 hồ sơ"):
         await doc.doc_ho_so_theo_ma(
-            csdl.engine, ["GIA1", "GIA2", "GIA3"], academic_year=2026, toi_da=2
+            csdl.engine, [ma_gia(1), ma_gia(2), ma_gia(3)], academic_year=2026, toi_da=2
         )
     assert goi == []
 

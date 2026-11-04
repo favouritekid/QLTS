@@ -3788,6 +3788,13 @@ async def get_council_document_set_for_user(
 ) -> "models.CouncilDocumentSet":
     """Bộ văn bản ``set_id`` nếu người gọi được thấy nó; không có HOẶC ngoài phạm vi ⇒
     ``ResourceNotFoundError`` (404) — cùng một thông báo cho cả hai ca (IDOR)."""
+    return await _council_document_set_trong_pham_vi(db, set_id, scope)
+
+
+async def _council_document_set_trong_pham_vi(
+    db: AsyncSession, set_id: int, scope: CouncilDocumentScope
+) -> "models.CouncilDocumentSet":
+    """MỘT nguồn so bộ ↔ phạm vi cho mọi route có ``set_id`` của văn bản Hội đồng."""
     from ..repositories.council_document_repository import CouncilDocumentRepository
 
     bo = await CouncilDocumentRepository(db).bo_theo_id(set_id)
@@ -3796,3 +3803,27 @@ async def get_council_document_set_for_user(
     ):
         raise ResourceNotFoundError(detail="Không có bộ văn bản này.")
     return bo
+
+
+# Route CHỈ ADMIN của văn bản Hội đồng (owner 04-11, J1 dòng 29–31): xoá bộ, xem danh sách mã
+# hồ sơ đầu vào (CCCD), xem nhật ký tải + vết xoá. Tầng chủ sở hữu VAI vẫn là Casbin (chỉ
+# admin có dòng — wildcard; manager KHÔNG có dòng nào cho các route này); dependency dưới
+# đây là LỚP PHỤ fail-closed: manager lọt Casbin (cấu hình sai) vẫn nhận 403 ở đây — kiểm
+# TRƯỚC khi tìm bộ (không lộ bộ có tồn tại).
+async def require_council_document_admin(
+    scope: CouncilDocumentScope = Depends(get_council_document_scope),
+) -> CouncilDocumentScope:
+    if not scope.tat_ca:
+        raise PermissionDeniedError(
+            detail="Chỉ admin được làm thao tác này với bộ văn bản Hội đồng."
+        )
+    return scope
+
+
+async def get_council_document_set_for_admin(
+    set_id: int = Path(..., ge=1, description="ID bộ văn bản Hội đồng"),
+    scope: CouncilDocumentScope = Depends(require_council_document_admin),
+    db: AsyncSession = Depends(database.get_db),
+) -> "models.CouncilDocumentSet":
+    """Bộ ``set_id`` cho route CHỈ ADMIN; không có ⇒ 404."""
+    return await _council_document_set_trong_pham_vi(db, set_id, scope)

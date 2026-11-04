@@ -165,6 +165,21 @@ async def _dem():
         )
 
 
+async def _dem_vet():
+    """(số vết xoá, số dòng nhật ký tải) — hai bảng vết của lượt E3."""
+    async with csdl.engine.connect() as c:
+        return tuple(
+            (
+                await c.execute(
+                    text(
+                        "SELECT (SELECT count(*) FROM council_document_set_deletion), "
+                        "(SELECT count(*) FROM council_document_download_log)"
+                    )
+                )
+            ).one()
+        )
+
+
 async def _chen_bo(unit_id, nhan):
     """Một bộ + một tệp chèn THẲNG (bytes giả riêng từng bộ) — đo quyền, không cần dựng."""
     b = ("GIA-TEP-" + nhan).encode()
@@ -257,8 +272,13 @@ async def _goi(client, method, duong, h, ba_bo=None, hs=None, goc=P):
     """Gọi ``goc + duong``; ``goc=""`` ⇒ ``duong`` là đường ĐẦY ĐỦ (lấy từ bảng route)."""
     if ba_bo is not None:
         duong = duong.replace("{u1}", str(ba_bo["u1"][0]))
+        duong = duong.replace("{set_id}", str(ba_bo["u1"][0]))
     if method == "GET":
         return await client.get(goc + duong, headers=h)
+    if method == "DELETE":
+        return await client.request(
+            "DELETE", goc + duong, json={"ly_do": "GIA ly do xoa"}, headers=h
+        )
     if duong.endswith("/templates"):
         return await client.post(
             goc + duong,
@@ -449,7 +469,7 @@ async def test_tao_bo_loi_mien_khong_lo_ma_ho_so(client, tk, hs):
     h = await tk("admin")
     await _tai_ba_mau_api(client, h)
     than = _than_tao(hs)
-    than["ma_ho_so"] = than["ma_ho_so"] + ["GIA0999E2KHONGCO"]
+    than["ma_ho_so"] = than["ma_ho_so"] + [ma_gia(999)]
     r = await client.post(P + "/sets", json=than, headers=h)
     assert r.status_code == 400 and "dòng 4 không có hồ sơ" in r.json()["detail"]
     assert not any(m in r.text for m in than["ma_ho_so"])
@@ -488,24 +508,28 @@ def dong_bang(monkeypatch):
     monkeypatch.setattr(settings, "ADMISSION_FROZEN", True)
 
 
-async def test_dong_bang_chan_moi_route_ghi_cua_module(client, tk, hs, dong_bang):
+async def test_dong_bang_chan_moi_route_ghi_cua_module(
+    client, tk, hs, ba_bo, dong_bang
+):
     ghi = _route_ghi_cua_module()
-    # Bảng route THẬT — module có đúng hai route ghi, không có route xoá.
-    assert [m for m, _ in ghi] == ["POST", "POST"]
+    # Bảng route THẬT — module có đúng ba route ghi: xoá bộ (E3) + tải mẫu + dựng bộ.
+    assert [m for m, _ in ghi] == ["DELETE", "POST", "POST"]
+    assert await _dem() == (0, 3, 3)  # ba bộ có sẵn (ba_bo)
     for m, duong in ghi:
         # Gọi ĐÚNG đường của bảng route — KHÔNG ghép lại từ hằng P: router bị dời ra ngoài
         # tiền tố đóng băng thì ca này phải ĐỎ (kiểm ngược F1 lần đầu: ghép từ P làm ca XANH).
-        r = await _goi(client, m, duong, (await tk("admin")), hs=hs, goc="")
-        assert r.status_code == 503, (duong, r.status_code, r.text)
+        r = await _goi(client, m, duong, (await tk("admin")), ba_bo=ba_bo, hs=hs, goc="")
+        assert r.status_code == 503, (m, duong, r.status_code, r.text)
         assert r.json()["code"] == "ADMISSION_FROZEN"
-    assert await _dem() == (0, 0, 0)
+    assert await _dem() == (0, 3, 3)  # không tải mẫu, không dựng, KHÔNG xoá
+    assert await _dem_vet() == (0, 0)
 
 
 async def test_dong_bang_van_cho_route_doc(client, tk, ba_bo, dong_bang):
     # Mọi route ĐỌC của module (bảng route thật) vẫn 200 khi đóng băng — như mọi route đọc
     # khác của tiền tố (middleware chỉ chặn POST / PUT / PATCH / DELETE).
     doc = sorted(p for m, p in _route_cua_module() if m == "GET")
-    assert len(doc) == 4
+    assert len(doc) == 7  # E2: 4 + E3: danh sách mã, nhật ký tải, vết xoá
     for duong in doc:
         url = duong.replace("{set_id}", str(ba_bo["u1"][0])).replace("{thu_tu}", "1")
         r = await client.get(url, headers=(await tk("admin")))
@@ -546,7 +570,9 @@ async def test_loi_422_khong_ghi_cccd_vao_log(client, tk, caplog):
 
 def test_moi_route_cua_module_khop_vi_tu_bo_input_422():
     duong = {p for _, p in _route_cua_module()}
-    assert len(duong) == 4  # /templates, /sets, /sets/{id}, /sets/{id}/files/{thu_tu}
+    # /templates, /sets, /sets/{id}, /sets/{id}/files/{thu_tu} + E3: /sets/{id}/ma-ho-so,
+    # /nhat-ky-tai, /nhat-ky-xoa (DELETE dùng chung /sets/{id}).
+    assert len(duong) == 7
     assert all(eh._khong_log_input_422(p) for p in duong)
     assert not eh._khong_log_input_422("/api/admission-config/council-documentsX")
     assert not eh._khong_log_input_422("/api/admission-config/criteria")
@@ -904,3 +930,12 @@ async def test_lop_phu_pham_vi_admin_tat_ca_quan_ly_chi_don_vi_minh():
     ) == S(False, 7)
     with pytest.raises(PermissionDeniedError, match="chưa được gán đơn vị"):
         await deps.get_council_document_scope(current_user=_nguoi_gia("manager", None))
+
+
+async def test_lop_phu_route_chi_admin_chan_moi_pham_vi_khong_phai_tat_ca():
+    S = deps.CouncilDocumentScope
+    with pytest.raises(PermissionDeniedError, match="Chỉ admin được"):
+        await deps.require_council_document_admin(scope=S(False, 7))
+    assert await deps.require_council_document_admin(scope=S(True, None)) == S(
+        True, None
+    )

@@ -18,7 +18,17 @@ migration vì CSDL test dựng bằng ``Base.metadata.create_all()``.
 Nội dung (``noi_dung``) và hai cột PII của bộ là cột *deferred*: liệt kê không nạp chúng.
 CSDL tự canh toàn vẹn: ``kich_thuoc`` = ``octet_length(noi_dung)`` > 0, ``sha256`` = sha-256
 hex (chữ thường) của chính ``noi_dung`` (hàm ``sha256()`` của PostgreSQL ≥ 11 — kéo theo
-luôn định dạng 64 ký tự hex), số phần tử của hai mảng JSON = ``so_ho_so``. Không có đường xoá — hạn lưu chưa chốt (J1 dòng 8).
+luôn định dạng 64 ký tự hex), số phần tử của hai mảng JSON = ``so_ho_so``.
+
+Hai bảng VẾT (lượt E3, migration ``hdts20261104`` — owner 04-11, J1 dòng 29 / 31) sống ĐỘC
+LẬP với bộ: KHÔNG khoá ngoại tới ``council_document_set`` (xoá bộ không cascade mất vết) và
+tới ``user`` (giữ nguyên id người làm); KHÔNG danh sách CCCD, KHÔNG DTO, KHÔNG bytes:
+
+* ``council_document_set_deletion`` — Admin xoá một bộ: id bộ, số hồ sơ, danh sách tệp (thứ
+  tự, path, sha256, kích thước), người xoá, lúc xoá, lý do bắt buộc. Ghi CÙNG giao dịch với
+  lệnh xoá. Xoá trên phần mềm KHÔNG xoá bộ khỏi các bản sao lưu đã có.
+* ``council_document_download_log`` — mỗi lần máy chủ CẤP một tệp: người, bộ, thứ tự tệp,
+  path, sha256, lúc. Ghi BỀN (commit) TRƯỚC khi trả bytes; không tuyên bố người dùng đã nhận.
 """
 
 from datetime import date, datetime
@@ -57,6 +67,16 @@ CHECK_MANG_DTO = (
     "jsonb_typeof(snapshot_dto) = 'array' "
     "AND jsonb_array_length(snapshot_dto) = so_ho_so"
 )
+# -- hai bảng vết (migration hdts20261104) — migration viết lại đúng các chuỗi này --
+#: Trần KỸ THUẬT độ dài lý do xoá (ký tự) — không phải luật nghiệp vụ: đủ một đoạn giải
+#: thích, chặn thân request phình vào bảng vết (mỗi byte vào bản sao lưu).
+LY_DO_XOA_TOI_DA = 1000
+CHECK_DANH_SACH_TEP = (
+    "jsonb_typeof(danh_sach_tep) = 'array' "
+    "AND jsonb_array_length(danh_sach_tep) = so_tep"
+)
+CHECK_LY_DO = "char_length(btrim(ly_do)) > 0"
+CHECK_SHA_HEX = "sha256 ~ '^[0-9a-f]{64}$'"
 
 
 class CouncilDocumentTemplate(Base):
@@ -190,3 +210,69 @@ class CouncilDocumentSetFile(Base):
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     kich_thuoc: Mapped[int] = mapped_column(BigInteger, nullable=False)
     noi_dung: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, deferred=True)
+
+
+class CouncilDocumentSetDeletion(Base):
+    """VẾT XOÁ một bộ văn bản (J1 dòng 29). ``set_id`` KHÔNG là khoá ngoại: bộ đã bị xoá thì
+    vết vẫn còn và vẫn truy được bộ / tệp / sha. Không danh sách CCCD, không DTO."""
+
+    __tablename__ = "council_document_set_deletion"
+    __table_args__ = (
+        UniqueConstraint("set_id", name="uq_council_document_set_deletion_set_id"),
+        CheckConstraint(
+            "so_ho_so > 0", name="ck_council_document_set_deletion_so_ho_so"
+        ),
+        CheckConstraint("so_tep > 0", name="ck_council_document_set_deletion_so_tep"),
+        CheckConstraint(
+            CHECK_DANH_SACH_TEP, name="ck_council_document_set_deletion_danh_sach_tep"
+        ),
+        CheckConstraint(CHECK_LY_DO, name="ck_council_document_set_deletion_ly_do"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    set_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, comment="id bộ đã xoá — KHÔNG khoá ngoại (vết độc lập)"
+    )
+    so_ho_so: Mapped[int] = mapped_column(Integer, nullable=False)
+    so_tep: Mapped[int] = mapped_column(Integer, nullable=False)
+    danh_sach_tep: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment="[{thu_tu, path, sha256, kich_thuoc}] — không bytes, không dữ liệu cá nhân",
+    )
+    nguoi_xoa_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, comment="id người xoá — KHÔNG khoá ngoại (vết độc lập)"
+    )
+    xoa_luc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+    ly_do: Mapped[str] = mapped_column(String(LY_DO_XOA_TOI_DA), nullable=False)
+
+
+class CouncilDocumentDownloadLog(Base):
+    """NHẬT KÝ TẢI tệp bộ văn bản (J1 dòng 31) — một dòng mỗi lần máy chủ CẤP một tệp, ghi
+    bền TRƯỚC khi trả bytes. ``set_id`` KHÔNG là khoá ngoại: xoá bộ không làm mất nhật ký."""
+
+    __tablename__ = "council_document_download_log"
+    __table_args__ = (
+        CheckConstraint("thu_tu >= 1", name="ck_council_document_download_log_thu_tu"),
+        CheckConstraint("path <> ''", name="ck_council_document_download_log_path"),
+        CheckConstraint(CHECK_SHA_HEX, name="ck_council_document_download_log_sha256"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    set_id: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        index=True,
+        comment="id bộ — KHÔNG khoá ngoại (nhật ký sống độc lập khi bộ bị xoá)",
+    )
+    thu_tu: Mapped[int] = mapped_column(Integer, nullable=False)
+    path: Mapped[str] = mapped_column(String(255), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    nguoi_tai_id: Mapped[int] = mapped_column(
+        Integer, nullable=False, comment="id người tải — KHÔNG khoá ngoại (vết độc lập)"
+    )
+    tai_luc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )

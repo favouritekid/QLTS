@@ -1182,10 +1182,13 @@ jobs:
           # bộ unit NULL chỉ admin, tải tệp = bytes đã lưu, đóng băng 503 trên mọi route ghi
           # của module (lấy từ bảng route thật), log 422 không có CCCD, một lần dựng cùng lúc
           # (hai phiên CSDL), không lộ qua đường tĩnh. Ghim WHOLE-FILE.
-          # Lượt E3 (Lần xét tuyển GĐ1 — Codex lần 5, F220): `tests/integration/test_council_document_migrations_e3.py`
-          # (CSDL test: chạy ĐÚNG SQL `upgrade()` / `downgrade()` của migration Casbin hdts20261103b
-          # trong giao dịch ROLLBACK). Ngoài mọi tier thì không shard PR nào chạy mà required
-          # check vẫn xanh (CLAUDE.md §11). Ghim WHOLE-FILE.
+          # Lượt E3 (Lần xét tuyển GĐ1 — owner 04-11, Codex lần 5): `tests/api/test_council_documents_audit_api.py`
+          # (request THẬT: Admin xoá bộ có lý do + vết độc lập cùng giao dịch, danh sách mã đầu vào
+          # chỉ admin, nhật ký tải ghi bền TRƯỚC khi gửi bytes) và
+          # `tests/integration/test_council_document_migrations_e3.py` (CSDL test: chạy ĐÚNG SQL
+          # `upgrade()` / `downgrade()` của migration Casbin hdts20261103b — F220 — và của migration
+          # vết hdts20261104, hạ cấp fail-closed). Ngoài mọi tier thì không shard PR nào chạy mà
+          # required check vẫn xanh (CLAUDE.md §11). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1259,6 +1262,7 @@ jobs:
               tests/integration/test_council_document_store.py
               tests/integration/test_council_document_migration_downgrade.py
               tests/api/test_council_documents_api.py
+              tests/api/test_council_documents_audit_api.py
               tests/integration/test_council_document_migrations_e3.py
 
     env:
