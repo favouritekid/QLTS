@@ -388,7 +388,9 @@ def test_ma_12_hoac_9_chu_so_duoc_nhan_giu_so_0_dau():
     ma = [ma_gia(1), ma_gia(2, 9), " " + ma_gia(3) + " "]
     ra = doc.chuan_hoa_ma(ma)
     assert ra == [ma_gia(1), ma_gia(2, 9), ma_gia(3)]
-    assert [len(m) for m in ra] == [12, 9, 12] and ra[0][0] == "0"  # số 0 đầu GIỮ nguyên
+    assert [len(m) for m in ra] == [12, 9, 12] and ra[0][
+        0
+    ] == "0"  # số 0 đầu GIỮ nguyên
 
 
 @pytest.mark.parametrize("so_chu_so", [8, 10, 11, 13])

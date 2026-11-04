@@ -251,7 +251,8 @@ class CouncilDocumentSetDeletion(Base):
 
 class CouncilDocumentDownloadLog(Base):
     """NHẬT KÝ TẢI tệp bộ văn bản (J1 dòng 31) — một dòng mỗi lần máy chủ CẤP một tệp, ghi
-    bền TRƯỚC khi trả bytes. ``set_id`` KHÔNG là khoá ngoại: xoá bộ không làm mất nhật ký."""
+    bền TRƯỚC khi trả bytes. ``set_id`` KHÔNG là khoá ngoại: xoá bộ không làm mất nhật ký.
+    """
 
     __tablename__ = "council_document_download_log"
     __table_args__ = (

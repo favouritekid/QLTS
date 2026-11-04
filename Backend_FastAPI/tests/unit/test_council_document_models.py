@@ -118,7 +118,9 @@ def test_migration_la_head_duy_nhat_noi_tiep_head_cu():
     assert vet.CO_CHO_PHEP_XOA.endswith("_ENABLED")
 
 
-TEP_MIGRATION_VET = GOC / "alembic" / "versions" / "hdts20261104_council_document_audit.py"
+TEP_MIGRATION_VET = (
+    GOC / "alembic" / "versions" / "hdts20261104_council_document_audit.py"
+)
 
 
 def _migration_vet():
@@ -130,7 +132,12 @@ def _migration_vet():
 
 def test_bang_vet_chuoi_check_va_ten_rang_buoc_model_bang_migration():
     vet = _migration_vet()
-    for ten in ("CHECK_DANH_SACH_TEP", "CHECK_LY_DO", "CHECK_SHA_HEX", "LY_DO_XOA_TOI_DA"):
+    for ten in (
+        "CHECK_DANH_SACH_TEP",
+        "CHECK_LY_DO",
+        "CHECK_SHA_HEX",
+        "LY_DO_XOA_TOI_DA",
+    ):
         assert getattr(vet, ten) == getattr(m, ten), ten
     nguon = TEP_MIGRATION_VET.read_text(encoding="utf-8")
     trong_mig = set(
@@ -199,7 +206,8 @@ def test_route_chi_admin_khong_vai_nao_khac_co_dong_casbin():
         if vai != "admin"
         for p in t["policies"]
         for method, duong in ROUTE_CHI_ADMIN
-        if key_match4(duong, p["object"]) and regex_match(method, p["action"])
+        if key_match4(duong, p["object"])
+        and regex_match(method, p["action"])
         and p.get("eft", "allow") == "allow"
     ]
     assert lot == []

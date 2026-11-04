@@ -1899,7 +1899,9 @@ def test_kieu_nen_ngoai_danh_sach_bi_chan_truoc_khi_giai_nen(
         if diem == "kiem_mau":  # đường TẢI MẪU LÊN dùng chính hàm này
             svc.kiem_mau(loai, sai)
         else:  # điểm vào bộ dựng
-            render_council_documents(_bo_giai(), dataclasses.replace(mau, **{loai: sai}))
+            render_council_documents(
+                _bo_giai(), dataclasses.replace(mau, **{loai: sai})
+            )
     assert kieu not in giai_nen  # bộ giải nén LZMA / BZIP2 CHƯA từng được tạo
     if diem == "kiem_mau":
         assert giai_nen == []  # chưa mở MỤC nào của gói
@@ -1918,7 +1920,9 @@ def test_co_chu_dung_tran_ky_thuat_thi_nhan(mau, bang, o):
 @pytest.mark.parametrize("bang, o", SZ_O)
 def test_co_chu_vuot_tran_mot_don_vi_thi_loi_mien(mau, bang, o):
     sai = _dat_sz(mau.danh_sach, bang, o, str(svc.SZ_TOI_DA + 1))
-    with pytest.raises(FileValidationError, match=r"cỡ chữ \(w:sz\).*vượt trần kỹ thuật"):
+    with pytest.raises(
+        FileValidationError, match=r"cỡ chữ \(w:sz\).*vượt trần kỹ thuật"
+    ):
         svc.kiem_mau("danh_sach", sai)
 
 
@@ -1943,7 +1947,9 @@ def test_co_chu_5000_chu_so_thi_loi_mien_khong_loi_tho(mau, monkeypatch, diem):
         if diem == "kiem_mau":
             svc.kiem_mau("danh_sach", sai)
         else:
-            render_council_documents(_bo_giai(), dataclasses.replace(mau, danh_sach=sai))
+            render_council_documents(
+                _bo_giai(), dataclasses.replace(mau, danh_sach=sai)
+            )
 
 
 @pytest.mark.parametrize("bang", [1, 4])
@@ -1999,7 +2005,9 @@ from app.services import council_document_template_service as _kho_mau  # noqa: 
 
 _RELS_DOC = "word/_rels/document.xml.rels"
 _QH = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
-_DICH_GIA = "gia.invalid"  # đích liên kết giả — KHÔNG được xuất hiện trong thông báo lỗi
+_DICH_GIA = (
+    "gia.invalid"  # đích liên kết giả — KHÔNG được xuất hiện trong thông báo lỗi
+)
 
 
 def _sua_goi(b, sua=None, them=()):
@@ -2049,71 +2057,142 @@ def _truong_phuc(*manh):
     """Một đoạn có trường PHỨC: begin → các mảnh ``w:instrText`` (tách nhiều run) → end."""
     r = "<w:r><w:fldChar w:fldCharType='begin'/></w:r>"
     r += "".join(
-        "<w:r><w:instrText xml:space='preserve'>%s</w:instrText></w:r>" % m for m in manh
+        "<w:r><w:instrText xml:space='preserve'>%s</w:instrText></w:r>" % m
+        for m in manh
     )
     r += "<w:r><w:fldChar w:fldCharType='end'/></w:r>"
     return "<w:p>%s</w:p>" % r
 
 
 def _truong_don(lenh):
-    return "<w:p><w:fldSimple w:instr='%s'><w:r><w:t>x</w:t></w:r></w:fldSimple></w:p>" % lenh
+    return (
+        "<w:p><w:fldSimple w:instr='%s'><w:r><w:t>x</w:t></w:r></w:fldSimple></w:p>"
+        % lenh
+    )
 
 
 def _ca_phan_goi(b, ca):
     """(gói hỏng, mẫu thông báo) cho ca ``ca`` — mỗi ca đúng MỘT thứ bị cấm."""
     ct, rels = "[Content_Types].xml", _RELS_DOC
     if ca == "ngoai_hyperlink":
-        f = {rels: lambda d: _them_quan_he(d, _QH + "hyperlink", "http://" + _DICH_GIA, True)}
+        f = {
+            rels: lambda d: _them_quan_he(
+                d, _QH + "hyperlink", "http://" + _DICH_GIA, True
+            )
+        }
         return _sua_goi(b, f), "RA NGOÀI"
-    if ca == "ngoai_anh_unc":  # loại quan hệ được phép (image) nhưng đích NGOÀI gói (UNC)
-        f = {rels: lambda d: _them_quan_he(d, _QH + "image", "file:////" + _DICH_GIA + "/a.png", True)}
+    if (
+        ca == "ngoai_anh_unc"
+    ):  # loại quan hệ được phép (image) nhưng đích NGOÀI gói (UNC)
+        f = {
+            rels: lambda d: _them_quan_he(
+                d, _QH + "image", "file:////" + _DICH_GIA + "/a.png", True
+            )
+        }
         return _sua_goi(b, f), "RA NGOÀI"
-    if ca == "mau_dinh_kem":  # attachedTemplate trỏ NỘI BỘ — chỉ vi phạm danh sách loại quan hệ
-        them = [("word/_rels/settings.xml.rels", (
-            "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
-            "<Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>"
-            "<Relationship Id='rId1' Type='%sattachedTemplate' Target='gia.dotx'/>"
-            "</Relationships>" % _QH).encode("utf-8"))]
+    if (
+        ca == "mau_dinh_kem"
+    ):  # attachedTemplate trỏ NỘI BỘ — chỉ vi phạm danh sách loại quan hệ
+        them = [
+            (
+                "word/_rels/settings.xml.rels",
+                (
+                    "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
+                    "<Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>"
+                    "<Relationship Id='rId1' Type='%sattachedTemplate' Target='gia.dotx'/>"
+                    "</Relationships>" % _QH
+                ).encode("utf-8"),
+            )
+        ]
         return _sua_goi(b, them=them), "quan hệ loại không được phép"
     if ca in ("altchunk", "subdocument", "frame", "control", "ole_object", "package"):
-        loai = {"altchunk": "aFChunk", "subdocument": "subDocument", "frame": "frame",
-                "control": "control", "ole_object": "oleObject", "package": "package"}[ca]
+        loai = {
+            "altchunk": "aFChunk",
+            "subdocument": "subDocument",
+            "frame": "frame",
+            "control": "control",
+            "ole_object": "oleObject",
+            "package": "package",
+        }[ca]
         f = {rels: lambda d: _them_quan_he(d, _QH + loai, "gia/" + loai)}
         return _sua_goi(b, f), "quan hệ loại không được phép"
     if ca == "vba_project":
-        f = {ct: lambda d: _them_ghi_de(d, "word/vbaProject.bin", "application/vnd.ms-office.vbaProject")}
-        return _sua_goi(b, f, [("word/vbaProject.bin", b"GIA")]), "kiểu nội dung không được phép"
+        f = {
+            ct: lambda d: _them_ghi_de(
+                d, "word/vbaProject.bin", "application/vnd.ms-office.vbaProject"
+            )
+        }
+        return (
+            _sua_goi(b, f, [("word/vbaProject.bin", b"GIA")]),
+            "kiểu nội dung không được phép",
+        )
     if ca == "nhung_ole":
-        f = {ct: lambda d: _them_ghi_de(
-            d, "word/embeddings/oleObject1.bin",
-            "application/vnd.openxmlformats-officedocument.oleObject")}
-        return _sua_goi(b, f, [("word/embeddings/oleObject1.bin", b"GIA")]), "kiểu nội dung không được phép"
+        f = {
+            ct: lambda d: _them_ghi_de(
+                d,
+                "word/embeddings/oleObject1.bin",
+                "application/vnd.openxmlformats-officedocument.oleObject",
+            )
+        }
+        return (
+            _sua_goi(b, f, [("word/embeddings/oleObject1.bin", b"GIA")]),
+            "kiểu nội dung không được phép",
+        )
     if ca == "activex":
-        f = {ct: lambda d: _them_ghi_de(d, "word/activeX/activeX1.xml", "application/vnd.ms-office.activeX+xml")}
-        return _sua_goi(b, f, [("word/activeX/activeX1.xml", b"<x/>")]), "kiểu nội dung không được phép"
+        f = {
+            ct: lambda d: _them_ghi_de(
+                d, "word/activeX/activeX1.xml", "application/vnd.ms-office.activeX+xml"
+            )
+        }
+        return (
+            _sua_goi(b, f, [("word/activeX/activeX1.xml", b"<x/>")]),
+            "kiểu nội dung không được phép",
+        )
     if ca == "chinh_macro":  # phần chính khai kiểu macroEnabled
+
         def macro(d):
             s = d.decode("utf-8")
             cu = "wordprocessingml.document.main+xml"
             assert s.count(cu) == 1
-            return s.replace(cu, "PLACEHOLDER").replace(
-                "application/vnd.openxmlformats-officedocument.PLACEHOLDER",
-                "application/vnd.ms-word.document.macroEnabled.main+xml").encode("utf-8")
+            return (
+                s.replace(cu, "PLACEHOLDER")
+                .replace(
+                    "application/vnd.openxmlformats-officedocument.PLACEHOLDER",
+                    "application/vnd.ms-word.document.macroEnabled.main+xml",
+                )
+                .encode("utf-8")
+            )
+
         return _sua_goi(b, {ct: macro}), "kiểu nội dung không được phép"
     if ca == "phan_khong_kieu":
-        return _sua_goi(b, them=[("word/gia.khongkieu", b"GIA")]), "kiểu nội dung không được phép"
+        return (
+            _sua_goi(b, them=[("word/gia.khongkieu", b"GIA")]),
+            "kiểu nội dung không được phép",
+        )
     if ca == "truong_tach_run":  # INCLUDETEXT tách ra hai w:instrText
-        f = {"word/document.xml": lambda d: _them_vao_than(
-            d, _truong_phuc(" INCLUDE", "TEXT &quot;" + _DICH_GIA + "&quot; "))}
+        f = {
+            "word/document.xml": lambda d: _them_vao_than(
+                d, _truong_phuc(" INCLUDE", "TEXT &quot;" + _DICH_GIA + "&quot; ")
+            )
+        }
         return _sua_goi(b, f), "mã trường INCLUDETEXT"
     if ca == "truong_dau_trang":  # ở phần XML KHÁC thân (đầu trang)
-        dau = ("<?xml version='1.0' encoding='UTF-8' standalone='yes'?><w:hdr %s>%s</w:hdr>"
-               % (_W_NS, _truong_don(" INCLUDEPICTURE &quot;" + _DICH_GIA + "&quot; ")))
-        f = {ct: lambda d: _them_ghi_de(
-            d, "word/header9.xml",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"),
-            rels: lambda d: _them_quan_he(d, _QH + "header", "header9.xml")}
-        return _sua_goi(b, f, [("word/header9.xml", dau.encode("utf-8"))]), "mã trường INCLUDEPICTURE"
+        dau = (
+            "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><w:hdr %s>%s</w:hdr>"
+            % (_W_NS, _truong_don(" INCLUDEPICTURE &quot;" + _DICH_GIA + "&quot; "))
+        )
+        f = {
+            ct: lambda d: _them_ghi_de(
+                d,
+                "word/header9.xml",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+            ),
+            rels: lambda d: _them_quan_he(d, _QH + "header", "header9.xml"),
+        }
+        return (
+            _sua_goi(b, f, [("word/header9.xml", dau.encode("utf-8"))]),
+            "mã trường INCLUDEPICTURE",
+        )
     raise AssertionError(ca)
 
 
@@ -2140,11 +2219,15 @@ def test_phan_goi_word_bi_cam_thi_loi_mien(mau, ca, diem):
 @pytest.mark.parametrize("dang", ["don", "phuc"])
 def test_moi_ma_truong_cam_bi_chan(mau, loai_truong, dang):
     xml = (
-        _truong_don(" %s &quot;x&quot; " % loai_truong.lower())  # không phân biệt hoa thường
+        _truong_don(
+            " %s &quot;x&quot; " % loai_truong.lower()
+        )  # không phân biệt hoa thường
         if dang == "don"
         else _truong_phuc(" " + loai_truong, " &quot;x&quot; ")
     )
-    sai = _sua_goi(mau.quyet_dinh, {"word/document.xml": lambda d: _them_vao_than(d, xml)})
+    sai = _sua_goi(
+        mau.quyet_dinh, {"word/document.xml": lambda d: _them_vao_than(d, xml)}
+    )
     with pytest.raises(FileValidationError, match="mã trường " + loai_truong + " "):
         svc.kiem_mau("quyet_dinh", sai)
 
@@ -2156,18 +2239,23 @@ def test_goi_word_thuong_va_truong_thuong_van_nhan(mau):
         _kho_mau.kiem_goi_mau(getattr(mau, loai), loai)
         svc.kiem_mau(loai, getattr(mau, loai))
     # Trường thường đặt ở ĐẦU TRANG (không đổi cấu trúc thân mà phép kiểm mẫu đọc).
-    dau = "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><w:hdr %s>%s</w:hdr>" % (
-        _W_NS,
-        _truong_don(" PAGE ")
-        + _truong_phuc(" MERGE", "FIELD Ten ")
-        + _truong_don(" NUMPAGES "),
+    dau = (
+        "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><w:hdr %s>%s</w:hdr>"
+        % (
+            _W_NS,
+            _truong_don(" PAGE ")
+            + _truong_phuc(" MERGE", "FIELD Ten ")
+            + _truong_don(" NUMPAGES "),
+        )
     )
     tot = _sua_goi(
         mau.bien_ban,
         {
             "[Content_Types].xml": lambda d: _them_ghi_de(
-                d, "word/header9.xml",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"),
+                d,
+                "word/header9.xml",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+            ),
             _RELS_DOC: lambda d: _them_quan_he(d, _QH + "header", "header9.xml"),
         },
         [("word/header9.xml", dau.encode("utf-8"))],
@@ -2177,7 +2265,10 @@ def test_goi_word_thuong_va_truong_thuong_van_nhan(mau):
 
 
 def test_phan_xml_co_doctype_thi_loi_mien(mau):
-    f = {"word/document.xml": lambda d: d.replace(
-        b"<w:document", b"<!DOCTYPE w:document [<!ENTITY e 'GIA'>]><w:document", 1)}
+    f = {
+        "word/document.xml": lambda d: d.replace(
+            b"<w:document", b"<!DOCTYPE w:document [<!ENTITY e 'GIA'>]><w:document", 1
+        )
+    }
     with pytest.raises(FileValidationError, match="DOCTYPE"):
         svc.kiem_mau("bien_ban", _sua_goi(mau.bien_ban, f))

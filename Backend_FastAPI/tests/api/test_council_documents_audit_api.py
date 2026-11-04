@@ -18,6 +18,7 @@ import hashlib
 import logging
 
 import pytest
+import pytest_asyncio
 from fastapi.responses import Response
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
@@ -25,17 +26,36 @@ from sqlalchemy.exc import DBAPIError
 import app.database as csdl
 from app.repositories.council_document_repository import CouncilDocumentRepository
 from app.routers import council_documents as rt
-from tests.api.test_council_documents_api import (  # noqa: F401 — fixture dùng lại
-    P,
-    _dem,
-    _dem_vet,
-    ba_bo,
-    hs,
-    tk,
-)
-from tests.fixtures.hoi_dong_seed import ma_gia
+from tests.api import test_council_documents_api as api
+from tests.fixtures.hoi_dong_seed import ma_gia, seed_hoi_dong
 
 pytestmark = pytest.mark.integration
+
+P, _dem, _dem_vet = api.P, api._dem, api._dem_vet
+
+
+# Ba fixture như ``test_council_documents_api.py`` (cùng dữ liệu giả, cùng vai) — khai lại ở đây
+# thay vì import tên fixture (flake8 F811 ở mọi tham số test).
+@pytest_asyncio.fixture
+async def hs(setup_test_database):
+    async with csdl.engine.begin() as conn:
+        return await seed_hoi_dong(conn)
+
+
+@pytest_asyncio.fixture
+async def tk(client, hs):
+    return api._TaiKhoan(client, hs)
+
+
+@pytest_asyncio.fixture
+async def ba_bo(hs):
+    d = hs["_danh_muc"]
+    return {
+        "u1": await api._chen_bo(d["u1"], "u1"),
+        "u2": await api._chen_bo(d["u2"], "u2"),
+        "null": await api._chen_bo(None, "null"),
+    }
+
 
 LY_DO = "GIA dựng nhầm danh sách, dựng lại bộ khác"
 TIEU_DE_KHONG_LUU = {
@@ -87,7 +107,12 @@ async def test_admin_xoa_bo_ghi_vet_doc_lap_khong_cccd(client, tk, ba_bo):
     assert (v["set_id"], v["so_ho_so"], v["so_tep"], v["ly_do"]) == (sid, 1, 1, LY_DO)
     assert v["nguoi_xoa_id"] == await _id_nguoi("admin")
     assert v["danh_sach_tep"] == [
-        {"thu_tu": 1, "path": "HoiDong/u1.docx", "sha256": _sha(b), "kich_thuoc": len(b)}
+        {
+            "thu_tu": 1,
+            "path": "HoiDong/u1.docx",
+            "sha256": _sha(b),
+            "kich_thuoc": len(b),
+        }
     ]
     assert "GIA1" not in r.text  # mã hồ sơ đầu vào của bộ KHÔNG vào vết
     assert await _dem() == (0, 2, 2)  # bộ + tệp của nó đã xoá, hai bộ khác còn
@@ -193,9 +218,7 @@ def _ma_dau_vao():
     return [ma_gia(30), ma_gia(10), ma_gia(20, 9)]
 
 
-async def test_admin_xem_danh_sach_ma_dung_thu_tu_khong_luu_dem(
-    client, tk, hs, caplog
-):
+async def test_admin_xem_danh_sach_ma_dung_thu_tu_khong_luu_dem(client, tk, hs, caplog):
     sid = await _chen_bo_nhieu_ma(hs["_danh_muc"]["u1"], _ma_dau_vao())
     h = await tk("admin")
     caplog.set_level(logging.INFO)
@@ -216,7 +239,9 @@ async def test_ngoai_admin_khong_xem_duoc_danh_sach_ma(client, tk, hs, vai):
     r = await client.get(P + "/sets/%d/ma-ho-so" % sid, headers=h)
     assert r.status_code == 403, r.text
     assert not any(m in r.text for m in _ma_dau_vao())
-    if vai == "ql_u1":  # chiều kia: chính quản lý ấy VẪN xem được thông tin chung của bộ
+    if (
+        vai == "ql_u1"
+    ):  # chiều kia: chính quản lý ấy VẪN xem được thông tin chung của bộ
         assert (await client.get(P + "/sets/%d" % sid, headers=h)).status_code == 200
 
 
@@ -251,7 +276,9 @@ def do_luc_gui(monkeypatch):
     return luc_gui
 
 
-async def test_tai_tep_ghi_nhat_ky_ben_truoc_khi_gui_bytes(client, tk, ba_bo, do_luc_gui):
+async def test_tai_tep_ghi_nhat_ky_ben_truoc_khi_gui_bytes(
+    client, tk, ba_bo, do_luc_gui
+):
     sid, b = ba_bo["u1"]
     h = await tk("admin")  # tạo + đăng nhập TRƯỚC khi đọc id người dùng
     dong = (sid, 1, "HoiDong/u1.docx", _sha(b), await _id_nguoi("admin"))
@@ -260,7 +287,9 @@ async def test_tai_tep_ghi_nhat_ky_ben_truoc_khi_gui_bytes(client, tk, ba_bo, do
     assert do_luc_gui == [[dong]]  # dòng đã COMMIT trước lúc gửi bytes
 
 
-async def test_quan_ly_tai_tep_cung_ghi_nhat_ky_dung_nguoi(client, tk, ba_bo, do_luc_gui):
+async def test_quan_ly_tai_tep_cung_ghi_nhat_ky_dung_nguoi(
+    client, tk, ba_bo, do_luc_gui
+):
     sid, b = ba_bo["u1"]
     r = await client.get(P + "/sets/%d/files/1" % sid, headers=await tk("ql_u1"))
     assert r.status_code == 200 and r.content == b
@@ -294,12 +323,16 @@ async def test_xoa_bo_nhat_ky_tai_va_vet_con_nguyen_van_truy_duoc(client, tk, ba
     # khoá ngoại tới bộ.
     h = await tk("admin")
     sid, b = ba_bo["u1"]
-    assert (await client.get(P + "/sets/%d/files/1" % sid, headers=h)).status_code == 200
+    assert (
+        await client.get(P + "/sets/%d/files/1" % sid, headers=h)
+    ).status_code == 200
     assert (
         await client.get(P + "/sets/%d/files/1" % sid, headers=await tk("ql_u1"))
     ).status_code == 200
     assert (await _xoa(client, sid, h)).status_code == 200
-    assert (await client.get(P + "/sets/%d/files/1" % sid, headers=h)).status_code == 404
+    assert (
+        await client.get(P + "/sets/%d/files/1" % sid, headers=h)
+    ).status_code == 404
     tai = (await client.get(P + "/nhat-ky-tai?set_id=%d" % sid, headers=h)).json()
     assert len(tai) == 2
     assert {(x["set_id"], x["thu_tu"], x["path"], x["sha256"]) for x in tai} == {

@@ -356,7 +356,9 @@ async def test_kieu_nen_ngoai_danh_sach_bi_chan_luc_tai_len_truoc_khi_giai_nen(
                 nguoi_tai_id=None,
             )
         await db.commit()
-    assert giai_nen == [] and goi_docx == []  # chưa giải nén mục nào, chưa tới python-docx
+    assert (
+        giai_nen == [] and goi_docx == []
+    )  # chưa giải nén mục nào, chưa tới python-docx
     async with csdl.engine.connect() as c:
         n = (
             await c.execute(text("SELECT count(*) FROM council_document_template"))

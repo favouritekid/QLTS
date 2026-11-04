@@ -67,7 +67,8 @@ def _neu_dong(dong: Sequence[int]) -> str:
 def chuan_hoa_ma(ma: Sequence[str]) -> List[str]:
     """MỘT nguồn kiểm danh sách mã hồ sơ. Bỏ khoảng trắng hai đầu từng mã; theo thứ tự: rỗng
     / quá dài / có ký tự nhóm C (kiểm kỹ thuật) → sai định dạng (không phải đúng 9 hoặc 12
-    chữ số ASCII — J1 dòng 28) → trùng ⇒ lỗi nêu số thứ tự dòng (từ 1), KHÔNG nêu giá trị."""
+    chữ số ASCII — J1 dòng 28) → trùng ⇒ lỗi nêu số thứ tự dòng (từ 1), KHÔNG nêu giá trị.
+    """
     if not isinstance(ma, (list, tuple)):
         raise DataValidationError("Danh sách mã hồ sơ phải là một danh sách.")
     if not ma:

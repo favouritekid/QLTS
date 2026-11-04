@@ -518,7 +518,9 @@ async def test_dong_bang_chan_moi_route_ghi_cua_module(
     for m, duong in ghi:
         # Gọi ĐÚNG đường của bảng route — KHÔNG ghép lại từ hằng P: router bị dời ra ngoài
         # tiền tố đóng băng thì ca này phải ĐỎ (kiểm ngược F1 lần đầu: ghép từ P làm ca XANH).
-        r = await _goi(client, m, duong, (await tk("admin")), ba_bo=ba_bo, hs=hs, goc="")
+        r = await _goi(
+            client, m, duong, (await tk("admin")), ba_bo=ba_bo, hs=hs, goc=""
+        )
         assert r.status_code == 503, (m, duong, r.status_code, r.text)
         assert r.json()["code"] == "ADMISSION_FROZEN"
     assert await _dem() == (0, 3, 3)  # không tải mẫu, không dựng, KHÔNG xoá
@@ -759,7 +761,9 @@ async def test_422_khoa_thua_cap_dau_la_ma_gia_khong_vao_log(client, tk, hs, cap
     than = dict(_than_tao(hs), **{ma: "GIA"})  # khoá JSON thừa = một "CCCD"
     r = await client.post(P + "/sets", json=than, headers=h)
     assert r.status_code == 422, r.text
-    assert [e["loc"] for e in r.json()["errors"]] == [["body", ma]]  # phản hồi giữ nguyên
+    assert [e["loc"] for e in r.json()["errors"]] == [
+        ["body", ma]
+    ]  # phản hồi giữ nguyên
     bg = _ban_ghi_422(caplog)
     assert len(bg) == 1  # đo đúng bản ghi của lỗi này (không xanh vì không có log)
     assert bg[0].errors == [
@@ -773,7 +777,9 @@ async def test_422_khoa_thua_cap_dau_la_ma_gia_khong_vao_log(client, tk, hs, cap
 async def test_422_khoa_thua_long_trong_tham_so_khong_vao_log(client, tk, hs, caplog):
     h = await tk("admin")
     caplog.set_level(logging.INFO)
-    khoa = "x" + ma_gia(812)  # dạng TÊN ĐỊNH DANH hợp lệ — vẫn không phải tên trường khai
+    khoa = "x" + ma_gia(
+        812
+    )  # dạng TÊN ĐỊNH DANH hợp lệ — vẫn không phải tên trường khai
     than = _than_tao(hs, tham_so_quyet_dinh=dict(TS, **{khoa: 1}))
     r = await client.post(P + "/sets", json=than, headers=h)
     assert r.status_code == 422, r.text
@@ -922,9 +928,9 @@ async def test_lop_phu_pham_vi_chan_vai_khac_admin_va_quan_ly(vai):
 
 async def test_lop_phu_pham_vi_admin_tat_ca_quan_ly_chi_don_vi_minh():
     S = deps.CouncilDocumentScope
-    assert await deps.get_council_document_scope(
-        current_user=_nguoi_gia("admin")
-    ) == S(True, None)
+    assert await deps.get_council_document_scope(current_user=_nguoi_gia("admin")) == S(
+        True, None
+    )
     assert await deps.get_council_document_scope(
         current_user=_nguoi_gia("manager", 7)
     ) == S(False, 7)

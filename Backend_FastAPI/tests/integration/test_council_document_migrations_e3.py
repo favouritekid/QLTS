@@ -104,19 +104,35 @@ async def test_casbin_upgrade_khong_chen_trung_dong_da_co(setup_test_database):
             await conn.run_sync(_chay, CB, "upgrade")
             dong = await _dong_casbin_module(conn)
             assert [d for d in dong if d[2] == BA_DUONG_DOC[0]] == [
-                ("p", "role:manager", BA_DUONG_DOC[0], "GET", "allow", "gia_template_khac")
+                (
+                    "p",
+                    "role:manager",
+                    BA_DUONG_DOC[0],
+                    "GET",
+                    "allow",
+                    "gia_template_khac",
+                )
             ]  # dòng có sẵn GIỮ nguyên, không chèn trùng
             assert len(dong) == 3
         finally:
             await gd.rollback()
 
 
-async def test_casbin_downgrade_chi_xoa_dong_mang_template_cua_minh(setup_test_database):
+async def test_casbin_downgrade_chi_xoa_dong_mang_template_cua_minh(
+    setup_test_database,
+):
     async with csdl.engine.connect() as conn:
         gd = await conn.begin()
         try:
             await _xoa_dong_module(conn)
-            gia = ("p", "role:manager", TIEN_TO + "/gia-khac", "GET", "allow", "gia_khac")
+            gia = (
+                "p",
+                "role:manager",
+                TIEN_TO + "/gia-khac",
+                "GET",
+                "allow",
+                "gia_khac",
+            )
             await conn.execute(
                 text(
                     "INSERT INTO casbin_rule (ptype, v0, v1, v2, v3, template_id) VALUES "
@@ -146,7 +162,11 @@ async def test_vet_upgrade_dung_hai_bang_khong_khoa_ngoai_dung_rang_buoc(
     async with csdl.engine.connect() as conn:
         gd = await conn.begin()
         try:
-            for b in HAI_BANG:  # CSDL test dựng từ model ⇒ bỏ đi rồi dựng lại bằng MIGRATION
+            for (
+                b
+            ) in (
+                HAI_BANG
+            ):  # CSDL test dựng từ model ⇒ bỏ đi rồi dựng lại bằng MIGRATION
                 await conn.execute(text('DROP TABLE "%s"' % b))
             assert [await _co_bang(conn, b) for b in HAI_BANG] == [None, None]
             await conn.run_sync(_chay, VET, "upgrade")

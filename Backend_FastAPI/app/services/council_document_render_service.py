@@ -576,7 +576,8 @@ _W_FLDSIMPLE, _W_FLDCHAR, _W_INSTRTEXT = (
 
 def _nhan_loai(s: Optional[str]) -> str:
     """Tên LOẠI để đưa vào thông báo lỗi: chỉ đoạn cuối của URI loại quan hệ / kiểu nội dung
-    khi nó gồm ký tự an toàn — chuỗi lạ (do mẫu tự đặt) ⇒ nhãn cố định, không nêu nội dung."""
+    khi nó gồm ký tự an toàn — chuỗi lạ (do mẫu tự đặt) ⇒ nhãn cố định, không nêu nội dung.
+    """
     if not isinstance(s, str):
         return "(không có)"
     s = s.rstrip("/").rsplit("/", 1)[-1] if s.startswith("http") else s
@@ -637,7 +638,8 @@ def kiem_cac_phan_goi_word(z: zipfile.ZipFile, ten: str) -> None:
     3. không trường nào thuộc :data:`MA_TRUONG_CAM` ở BẤT KỲ phần XML nào.
 
     XML đọc bằng lxml không nạp DTD / thực thể / mạng; DOCTYPE ⇒ từ chối. Lỗi miền chỉ nêu
-    tên mẫu + LOẠI phần / quan hệ / mã trường — không nêu đích liên kết hay chữ của mẫu."""
+    tên mẫu + LOẠI phần / quan hệ / mã trường — không nêu đích liên kết hay chữ của mẫu.
+    """
     phan = [i.filename for i in z.infolist() if not i.filename.endswith("/")]
     if "[Content_Types].xml" not in phan:
         raise FileValidationError("Mẫu %s: gói Word thiếu [Content_Types].xml." % ten)
@@ -679,7 +681,9 @@ def kiem_cac_phan_goi_word(z: zipfile.ZipFile, ten: str) -> None:
                     % (ten, _nhan_loai(loai))
                 )
     for p, k in kieu_cua.items():
-        if p.lower().endswith(".rels") or not (k.endswith("+xml") or k == "application/xml"):
+        if p.lower().endswith(".rels") or not (
+            k.endswith("+xml") or k == "application/xml"
+        ):
             continue
         for lenh in _lenh_cac_truong(_xml_cua_phan(z, p, ten)):
             m = _RE_LOAI_TRUONG.match(lenh)
@@ -695,7 +699,8 @@ def _mo_docx(b: bytes, ten: str):
     ``[Content_Types].xml`` / quan hệ — dòng nén hỏng, mục mã hoá, kiểu nén ngoài danh sách
     cho phép, phần / quan hệ / mã trường ngoài danh sách cho phép của gói Word) hoặc phần
     chính không phải ``w:document`` có ``w:body`` ⇒ ``FileValidationError``, không để lọt lỗi
-    của thư viện. ``zlib.error`` KHÔNG phải ``OSError`` (đo: MRO chỉ có ``Exception``)."""
+    của thư viện. ``zlib.error`` KHÔNG phải ``OSError`` (đo: MRO chỉ có ``Exception``).
+    """
     try:
         with zipfile.ZipFile(io.BytesIO(b)) as z:
             kiem_goi_truoc_khi_mo(z, ten)
@@ -1648,9 +1653,7 @@ def _doc_luoi(tbl, ten: str) -> Tuple[List[int], List[float]]:
     :func:`_dat_rong` nổ ⇒ mỗi cột phải ≥ 1."""
     grid = tbl._tbl.find(qn("w:tblGrid"))
     cu = [
-        _so_nguyen_duong(
-            c, "w:w", ten, "bề rộng cột lưới (w:gridCol)", GRIDCOL_TOI_DA
-        )
+        _so_nguyen_duong(c, "w:w", ten, "bề rộng cột lưới (w:gridCol)", GRIDCOL_TOI_DA)
         for c in grid.findall(qn("w:gridCol"))
     ]
     rk = [_rong_ky_tu(tbl.rows[3].cells[j], ten) for j in range(len(cu))]

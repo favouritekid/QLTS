@@ -27,12 +27,14 @@ LUC = datetime(2026, 10, 1, tzinfo=timezone.utc)
 def ma_gia(n: int, so_chu_so: int = 12) -> str:
     """Mã hồ sơ (số CCCD / CMND) GIẢ đúng định dạng J1 dòng 28 — 12 hoặc 9 chữ số ASCII —,
     SINH LÚC CHẠY (không có chuỗi số dài nằm sẵn trong mã nguồn). 12 chữ số: tiền tố ``099``
-    (mã tỉnh trên CCCD chỉ tới 096 — không có 099) + ``999``; 9 chữ số: tiền tố ``99999``."""
+    (mã tỉnh trên CCCD chỉ tới 096 — không có 099) + ``999``; 9 chữ số: tiền tố ``99999``.
+    """
     if so_chu_so == 12:
         return "099" + "999" + "%06d" % n
     if so_chu_so == 9:
         return "99" + "999" + "%04d" % n
     raise ValueError("so_chu_so phải là 9 hoặc 12")
+
 
 LOAI_GIAY = (
     "phieu_dang_ky_xet_tuyen",
