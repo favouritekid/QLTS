@@ -484,9 +484,9 @@ def kiem_goi_truoc_khi_mo(z: zipfile.ZipFile, ten: str) -> None:
 # ``kiem_mau`` chỉ kiểm VÙNG DỮ LIỆU của ``word/document.xml``; mọi phần khác của gói mẫu đi
 # NGUYÊN vào tệp giao cho người tải ⇒ liên kết ra ngoài (Word gọi tới địa chỉ lạ — kể cả đường
 # UNC — khi mở tệp), mẫu đính kèm, đối tượng nhúng, ActiveX, macro, altChunk, subDocument,
-# frame, mã trường nạp nội dung ngoài phải bị chặn ở kho mẫu. Danh sách dưới đây = những gì
-# một tệp Word thường cần; ĐO ba mẫu thật + ba mẫu giả của test trước khi viết
-# (``cong-cu/do_cau_truc_goi_e3.py`` — báo cáo E3, mục "Phần gói Word").
+# frame, mã trường (nạp nội dung ngoài, đọc nguồn dữ liệu …) phải bị chặn ở kho mẫu. Mọi danh
+# sách dưới đây là danh sách CHO PHÉP, ĐO ba mẫu thật + ba mẫu giả của test trước khi viết
+# (``cong-cu/do_cau_truc_goi_e3.py`` — báo cáo E3; ``cong-cu/do_ma_truong_e4.py`` — báo cáo E4).
 _NS_CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
 _NS_RELS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 _QH_OFFICE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
@@ -509,7 +509,6 @@ LOAI_QUAN_HE_CHO_PHEP = frozenset(
         for t in (
             "officeDocument",
             "extended-properties",
-            "custom-properties",
             "styles",
             "settings",
             "webSettings",
@@ -529,13 +528,19 @@ LOAI_QUAN_HE_CHO_PHEP = frozenset(
 )
 #: Kiểu nội dung (``[Content_Types].xml``) được phép cho MỖI phần của gói. Không có kiểu
 #: macro (``…macroEnabled…``, ``vbaProject``), nhúng (``oleObject``, ``package``), ActiveX.
+#: Đo (E4): ba mẫu thật dùng rels / core / extended / document.main / styles / settings /
+#: webSettings / fontTable / theme / footnotes / endnotes / header / obfuscatedFont; ba mẫu giả
+#: (python-docx) thêm ``application/xml`` (customXml), customXmlProperties, numbering,
+#: stylesWithEffects, ``image/jpeg`` (ảnh thu nhỏ). Giữ thêm ngoài số đo, mỗi loại có ca đối
+#: chứng: footer (cùng lược đồ + cùng phép kiểm với header), ``image/png`` (ảnh raster thường gặp
+#: ở đầu trang). BỎ (Codex lần 6, E4): custom-properties, ``image/gif``, ``image/x-emf``,
+#: ``image/x-wmf`` (metafile — chuỗi bản ghi lệnh vẽ) — chưa mẫu nào dùng, mỗi loại có ca chặn.
 KIEU_NOI_DUNG_CHO_PHEP = frozenset(
     {
         "application/vnd.openxmlformats-package.relationships+xml",
         "application/vnd.openxmlformats-package.core-properties+xml",
         "application/xml",
         _CT_OFFICE + "extended-properties+xml",
-        _CT_OFFICE + "custom-properties+xml",
         _CT_OFFICE + "customXmlProperties+xml",
         _CT_OFFICE + "theme+xml",
         _CT_OFFICE + "obfuscatedFont",
@@ -552,25 +557,29 @@ KIEU_NOI_DUNG_CHO_PHEP = frozenset(
         "application/vnd.ms-word.stylesWithEffects+xml",
         "image/png",
         "image/jpeg",
-        "image/gif",
-        "image/x-emf",
-        "image/x-wmf",
     }
 )
-#: Loại mã trường nạp nội dung / gọi ra ngoài — cấm ở BẤT KỲ phần XML nào của gói (thân, đầu /
-#: chân trang, chú thích …), dù ở ``w:instrText`` (trường phức) hay ``w:fldSimple/@w:instr``.
-MA_TRUONG_CAM = frozenset(
-    {"INCLUDETEXT", "INCLUDEPICTURE", "INCLUDE", "DDE", "DDEAUTO", "IMPORT", "LINK"}
-)
+#: Mã trường Word được phép — danh sách CHO PHÉP (F221, Codex lần 6; thay danh sách CẤM của E3,
+#: vốn thiếu ``DATABASE``). ĐO (E4, ``cong-cu/do_ma_truong_e4.py`` + ``do_dau_ra_e4.py``): ba mẫu
+#: thật có 0 phần tử họ trường ở mọi phần XML; bộ dựng không chèn trường nào (đầu ra dựng trên ba
+#: mẫu thật lẫn ba mẫu giả: 0) ⇒ danh sách RỖNG: MỌI trường — ``w:fldSimple``, trường phức
+#: ``w:fldChar`` + ``w:instrText`` / ``w:delInstrText`` (kể cả lồng), mảnh câu lệnh lẻ — ở BẤT KỲ
+#: phần XML nào của gói ⇒ từ chối. Không mở sẵn mã nào (DATE, PAGE, MERGEFIELD, HYPERLINK … đều
+#: chưa dùng); mở một mã = thêm vào đây + ca đối chứng + review. Đọc lúc gọi (không chép sẵn).
+MA_TRUONG_CHO_PHEP = frozenset()
 _PARSER_GOI = etree.XMLParser(
     resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False
 )
-_RE_LOAI_TRUONG = re.compile(r"\s*([A-Za-z]+)")
+#: Loại của một câu lệnh trường = từ ĐẦU (chỉ khoảng trắng ASCII đứng trước, 1–24 chữ cái ASCII,
+#: không chữ cái nào liền sau). Không khớp (``= 1+1``, rỗng, ký tự lạ) ⇒ loại "không xác định" —
+#: cũng ngoài danh sách cho phép. Tên loại vào thông báo chỉ khi khớp mẫu này (nhãn an toàn).
+_RE_LOAI_TRUONG = re.compile(r"[ \t\r\n]*([A-Za-z]{1,24})(?![A-Za-z])")
 _RE_NHAN_LOAI = re.compile(r"[A-Za-z0-9.+/-]{1,120}")
-_W_FLDSIMPLE, _W_FLDCHAR, _W_INSTRTEXT = (
+_W_FLDSIMPLE, _W_FLDCHAR, _W_INSTRTEXT, _W_DELINSTRTEXT = (
     qn("w:fldSimple"),
     qn("w:fldChar"),
     qn("w:instrText"),
+    qn("w:delInstrText"),
 )
 
 
@@ -585,6 +594,8 @@ def _nhan_loai(s: Optional[str]) -> str:
 
 
 def _xml_cua_phan(z: zipfile.ZipFile, phan: str, ten: str):
+    """Đọc MỘT phần XML của gói (lxml không nạp DTD / thực thể / mạng) — phần có DOCTYPE ⇒
+    từ chối. Mỗi phần chỉ đọc một lần (:func:`kiem_cac_phan_goi_word`, bước 2)."""
     try:
         goc = etree.fromstring(z.read(phan), _PARSER_GOI)
     except etree.XMLSyntaxError:
@@ -600,14 +611,15 @@ def _xml_cua_phan(z: zipfile.ZipFile, phan: str, ten: str):
 
 def _lenh_cac_truong(goc) -> List[str]:
     """Câu lệnh của từng trường trong một phần XML: ``w:fldSimple/@w:instr`` và trường phức
-    (``w:fldChar`` begin → các ``w:instrText`` → separate / end, lồng nhau được) — GHÉP mọi
-    ``w:instrText`` của CÙNG một trường (Word hay tách câu lệnh ra nhiều run)."""
+    (``w:fldChar`` begin → các ``w:instrText`` / ``w:delInstrText`` → separate / end, lồng nhau
+    được) — GHÉP mọi mảnh của CÙNG một trường (Word hay tách câu lệnh ra nhiều run); trường lồng
+    là MỘT câu lệnh riêng (trường ngoài không nuốt câu lệnh của trường trong)."""
     ra: List[str] = []
     ngan_xep: List[Optional[List[str]]] = []  # None = trường đã qua "separate"
-    for e in goc.iter(_W_FLDSIMPLE, _W_FLDCHAR, _W_INSTRTEXT):
+    for e in goc.iter(_W_FLDSIMPLE, _W_FLDCHAR, _W_INSTRTEXT, _W_DELINSTRTEXT):
         if e.tag == _W_FLDSIMPLE:
             ra.append(e.get(qn("w:instr")) or "")
-        elif e.tag == _W_INSTRTEXT:
+        elif e.tag in (_W_INSTRTEXT, _W_DELINSTRTEXT):
             if ngan_xep and ngan_xep[-1] is not None:
                 ngan_xep[-1].append(e.text or "")
             else:  # mảnh câu lệnh ngoài trường nào: xét riêng
@@ -633,12 +645,16 @@ def kiem_cac_phan_goi_word(z: zipfile.ZipFile, ten: str) -> None:
 
     1. mọi phần (trừ ``[Content_Types].xml``) có kiểu nội dung thuộc
        :data:`KIEU_NOI_DUNG_CHO_PHEP` (không có kiểu ⇒ từ chối);
-    2. mọi quan hệ trong mọi ``*.rels``: KHÔNG ``TargetMode="External"`` (kể cả hyperlink) và
+    2. đọc MỌI phần XML (kiểu ``…+xml`` / ``application/xml`` và mọi ``*.rels``) đúng MỘT lần —
+       phần có DOCTYPE ⇒ từ chối. Bước riêng: không phụ thuộc bước 3 / 4 (gỡ quét mã trường
+       không gỡ chặn DOCTYPE, và ngược lại — E3 §9 mục 4);
+    3. mọi quan hệ trong mọi ``*.rels``: KHÔNG ``TargetMode="External"`` (kể cả hyperlink) và
        loại thuộc :data:`LOAI_QUAN_HE_CHO_PHEP`;
-    3. không trường nào thuộc :data:`MA_TRUONG_CAM` ở BẤT KỲ phần XML nào.
+    4. mọi trường ở MỌI phần XML (trừ ``*.rels``) có loại thuộc :data:`MA_TRUONG_CHO_PHEP`
+       (hiện rỗng ⇒ mọi trường bị từ chối).
 
-    XML đọc bằng lxml không nạp DTD / thực thể / mạng; DOCTYPE ⇒ từ chối. Lỗi miền chỉ nêu
-    tên mẫu + LOẠI phần / quan hệ / mã trường — không nêu đích liên kết hay chữ của mẫu.
+    Lỗi miền chỉ nêu tên mẫu + LOẠI phần / quan hệ / mã trường (nhãn an toàn) — không nêu đích
+    liên kết hay chữ của mẫu.
     """
     phan = [i.filename for i in z.infolist() if not i.filename.endswith("/")]
     if "[Content_Types].xml" not in phan:
@@ -665,10 +681,15 @@ def kiem_cac_phan_goi_word(z: zipfile.ZipFile, ten: str) -> None:
                 % (ten, _nhan_loai(k))
             )
         kieu_cua[p] = k
-    for p, k in kieu_cua.items():
+    cay = {
+        p: _xml_cua_phan(z, p, ten)
+        for p, k in kieu_cua.items()
+        if p.lower().endswith(".rels") or k.endswith("+xml") or k == "application/xml"
+    }
+    for p, goc in cay.items():
         if not p.lower().endswith(".rels"):
             continue
-        for r in _xml_cua_phan(z, p, ten).iter(_NS_RELS + "Relationship"):
+        for r in goc.iter(_NS_RELS + "Relationship"):
             loai = r.get("Type")
             if (r.get("TargetMode") or "").strip().lower() == "external":
                 raise FileValidationError(
@@ -680,18 +701,23 @@ def kiem_cac_phan_goi_word(z: zipfile.ZipFile, ten: str) -> None:
                     "Mẫu %s: gói Word có quan hệ loại không được phép (%s)."
                     % (ten, _nhan_loai(loai))
                 )
-    for p, k in kieu_cua.items():
-        if p.lower().endswith(".rels") or not (
-            k.endswith("+xml") or k == "application/xml"
-        ):
+    for p, goc in cay.items():
+        if p.lower().endswith(".rels"):
             continue
-        for lenh in _lenh_cac_truong(_xml_cua_phan(z, p, ten)):
-            m = _RE_LOAI_TRUONG.match(lenh)
-            if m and m.group(1).upper() in MA_TRUONG_CAM:
+        for lenh in _lenh_cac_truong(goc):
+            loai = _loai_truong(lenh)
+            if loai not in MA_TRUONG_CHO_PHEP:
                 raise FileValidationError(
-                    "Mẫu %s: gói Word có mã trường %s (nạp nội dung / gọi ra ngoài)."
-                    % (ten, m.group(1).upper())
+                    "Mẫu %s: gói Word có mã trường %s ngoài danh sách cho phép."
+                    % (ten, loai or "(không xác định)")
                 )
+
+
+def _loai_truong(lenh: str) -> Optional[str]:
+    """Loại (chữ HOA) của một câu lệnh trường theo :data:`_RE_LOAI_TRUONG`; không xác định ⇒
+    ``None``."""
+    m = _RE_LOAI_TRUONG.match(lenh or "")
+    return m.group(1).upper() if m else None
 
 
 def _mo_docx(b: bytes, ten: str):

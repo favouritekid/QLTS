@@ -2219,60 +2219,364 @@ def test_phan_goi_word_bi_cam_thi_loi_mien(mau, ca, diem):
     assert _DICH_GIA not in str(e.value) and "GIA" not in str(e.value)
 
 
-@pytest.mark.parametrize("loai_truong", sorted(svc.MA_TRUONG_CAM))
-@pytest.mark.parametrize("dang", ["don", "phuc"])
-def test_moi_ma_truong_cam_bi_chan(mau, loai_truong, dang):
+# ═══════════════════ mã trường — danh sách CHO PHÉP (F221, Codex lần 6 — E4) ══════════════════
+# E3 dùng danh sách CẤM (7 mã) ⇒ ``DATABASE`` (đọc nguồn dữ liệu ngoài khi cập nhật trường) LỌT
+# (phép dò T3 của người điều phối). E4: danh sách CHO PHÉP, ĐO ba mẫu thật + đầu ra của bộ dựng
+# trước khi chọn — 0 trường ⇒ RỖNG. Ca đặt trường ở ĐẦU / CHÂN TRANG (không đổi cấu trúc thân mà
+# phép kiểm mẫu đọc) ⇒ mỗi ca chỉ vi phạm đúng thứ được cài.
+_CT_DAU_CHAN = {
+    "header": "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    "footer": "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+}
+_NS_R = "xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships'"
+_RELS_GOI = (
+    "<?xml version='1.0' encoding='UTF-8' standalone='yes'?>"
+    "<Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>"
+    "%s</Relationships>"
+)
+_DOAN_THUONG = "<w:p><w:r><w:t>x</w:t></w:r></w:p>"
+
+
+def _them_dau_chan(b, noi_dung, loai="header", rels=None):
+    """Thêm đầu trang (``loai="header"``) / chân trang (``"footer"``) ``word/<loai>9.xml`` có
+    ``noi_dung`` vào gói ``b`` (+ ``.rels`` RIÊNG của phần ấy nếu ``rels`` khác None).
+    """
+    the = "hdr" if loai == "header" else "ftr"
+    ten = "%s9.xml" % loai
     xml = (
-        _truong_don(
-            " %s &quot;x&quot; " % loai_truong.lower()
-        )  # không phân biệt hoa thường
+        "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><w:%s %s %s>%s</w:%s>"
+        % (the, _W_NS, _NS_R, noi_dung, the)
+    )
+    them = [("word/" + ten, xml.encode("utf-8"))]
+    if rels is not None:
+        them.append(("word/_rels/%s.rels" % ten, (_RELS_GOI % rels).encode("utf-8")))
+    return _sua_goi(
+        b,
+        {
+            "[Content_Types].xml": lambda d: _them_ghi_de(
+                d, "word/" + ten, _CT_DAU_CHAN[loai]
+            ),
+            _RELS_DOC: lambda d: _them_quan_he(d, _QH + loai, ten),
+        },
+        them,
+    )
+
+
+def _hai_duong(goi):
+    """Kết quả ở HAI đường của mẫu Biên bản: [tải lên = ``kiem_goi_mau``, bộ dựng = ``kiem_mau``]
+    — "NHAN" hoặc "CHAN: <thông báo>"."""
+    kq = []
+    for f in (
+        lambda: _kho_mau.kiem_goi_mau(goi, "Biên bản"),
+        lambda: svc.kiem_mau("bien_ban", goi),
+    ):
+        try:
+            f()
+            kq.append("NHAN")
+        except FileValidationError as e:
+            kq.append("CHAN: " + str(e))
+    return kq
+
+
+def _chan_ca_hai(kq, khop):
+    return len(kq) == 2 and all(k.startswith("CHAN") and khop in k for k in kq)
+
+
+def test_danh_sach_cho_phep_ma_truong_dung_so_do():
+    # Đo E4: ba mẫu thật 0 phần tử họ trường, bộ dựng không chèn trường ⇒ RỖNG. Mở một mã là sửa
+    # có chủ đích (kèm ca đối chứng) — không lặng lẽ.
+    assert svc.MA_TRUONG_CHO_PHEP == frozenset()
+
+
+MA_TRUONG_NGOAI_DANH_SACH = [
+    # danh sách CẤM của E3 — vẫn chặn
+    "INCLUDETEXT", "INCLUDEPICTURE", "INCLUDE", "DDE", "DDEAUTO", "IMPORT", "LINK",
+    # NGOÀI danh sách cấm cũ — trước E4 được NHẬN (DATABASE = phép dò T3 của người điều phối)
+    "DATABASE", "MACROBUTTON", "HYPERLINK", "MERGEFIELD", "DOCPROPERTY", "IF", "REF",
+    "DATE", "PAGE", "NUMPAGES",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("diem", ["tai_len", "bo_dung"])
+@pytest.mark.parametrize("dang", ["don", "phuc"])
+@pytest.mark.parametrize("ma", MA_TRUONG_NGOAI_DANH_SACH)
+def test_ma_truong_ngoai_danh_sach_bi_chan(mau, ma, dang, diem):
+    xml = (
+        _truong_don(" %s &quot;x&quot; " % ma.lower())  # không phân biệt hoa thường
         if dang == "don"
-        else _truong_phuc(" " + loai_truong, " &quot;x&quot; ")
+        else _truong_phuc(" " + ma, " &quot;x&quot; ")
     )
-    sai = _sua_goi(
-        mau.quyet_dinh, {"word/document.xml": lambda d: _them_vao_than(d, xml)}
-    )
-    with pytest.raises(FileValidationError, match="mã trường " + loai_truong + " "):
-        svc.kiem_mau("quyet_dinh", sai)
+    goi = _them_dau_chan(mau.bien_ban, xml)
+    with pytest.raises(
+        FileValidationError, match="mã trường %s ngoài danh sách cho phép" % ma
+    ):
+        if diem == "tai_len":
+            _kho_mau.kiem_goi_mau(goi, "Biên bản")
+        else:
+            svc.kiem_mau("bien_ban", goi)
 
 
-def test_goi_word_thuong_va_truong_thuong_van_nhan(mau):
-    # Đối chứng: ba mẫu giả + mẫu có trường PAGE / MERGEFIELD và đầu trang hợp lệ ⇒ NHẬN ở cả
-    # hai điểm (phép kiểm không chặn thừa).
+def test_T3_ma_truong_database_doc_nguon_ngoai_bi_chan_o_ca_hai_duong(mau):
+    # Phép dò T3 (người điều phối, E3): DATABASE trỏ nguồn dữ liệu UNC + câu SQL ở đầu trang ⇒
+    # E3 NHẬN cả hai đường. Nay CHẶN cả hai; thông báo không nêu đích.
+    lenh = (
+        " DATABASE \\d &quot;\\\\%s\\a.mdb&quot; \\s &quot;SELECT 1&quot; " % _DICH_GIA
+    )
+    kq = _hai_duong(_them_dau_chan(mau.bien_ban, _truong_don(lenh)))
+    assert _chan_ca_hai(kq, "mã trường DATABASE ngoài danh sách cho phép"), kq
+    assert all(_DICH_GIA not in k for k in kq), kq
+
+
+TRUONG_KHONG_XAC_DINH = {
+    "cong_thuc": _truong_don(" = 1+1 "),
+    "rong_don": "<w:p><w:fldSimple w:instr=''><w:r><w:t>x</w:t></w:r></w:fldSimple></w:p>",
+    "rong_phuc": "<w:p><w:r><w:fldChar w:fldCharType='begin'/></w:r>"
+    "<w:r><w:fldChar w:fldCharType='end'/></w:r></w:p>",
+    "tu_qua_24_chu": _truong_don(" " + "A" * 25 + " "),
+    "chu_so_dau": _truong_don(" 1PAGE "),
+}
+
+
+@pytest.mark.parametrize("ca", sorted(TRUONG_KHONG_XAC_DINH))
+def test_truong_khong_xac_dinh_loai_bi_chan_o_ca_hai_duong(mau, ca):
+    kq = _hai_duong(_them_dau_chan(mau.bien_ban, TRUONG_KHONG_XAC_DINH[ca]))
+    assert _chan_ca_hai(kq, "mã trường (không xác định) ngoài danh sách cho phép"), kq
+
+
+def test_manh_cau_lenh_le_ngoai_truong_bi_chan_o_ca_hai_duong(mau):
+    # ``w:instrText`` không nằm trong ``fldChar`` begin … end nào ⇒ vẫn xét như một câu lệnh.
+    le = "<w:p><w:r><w:instrText xml:space='preserve'> INCLUDETEXT x </w:instrText></w:r></w:p>"
+    kq = _hai_duong(_them_dau_chan(mau.bien_ban, le))
+    assert _chan_ca_hai(kq, "mã trường INCLUDETEXT ngoài danh sách cho phép"), kq
+
+
+def _truong_long(ngoai, trong):
+    """Trường ``ngoai`` mà câu lệnh chứa một trường LỒNG ``trong`` (cách thường gặp để giấu một
+    mã trường — như phép dò T1 của người điều phối)."""
+
+    def r(x):
+        return "<w:r>%s</w:r>" % x
+
+    def it(s):
+        return r("<w:instrText xml:space='preserve'>%s</w:instrText>" % s)
+
+    def fc(t):
+        return r("<w:fldChar w:fldCharType='%s'/>" % t)
+
+    return "<w:p>%s</w:p>" % "".join(
+        [
+            fc("begin"),
+            it(" %s 1 = 1 &quot;" % ngoai),
+            fc("begin"),
+            it(" %s &quot;http://%s/a.png&quot; " % (trong, _DICH_GIA)),
+            fc("end"),
+            it("&quot; &quot;&quot; "),
+            fc("separate"),
+            r("<w:t>x</w:t>"),
+            fc("end"),
+        ]
+    )
+
+
+def test_T1_truong_long_bi_chan_o_ca_hai_duong(mau):
+    # Cấu hình THẬT (danh sách rỗng): IF bọc INCLUDEPICTURE ⇒ chặn cả hai đường.
+    kq = _hai_duong(_them_dau_chan(mau.bien_ban, _truong_long("IF", "INCLUDEPICTURE")))
+    assert _chan_ca_hai(kq, "ngoài danh sách cho phép"), kq
+    assert all(_DICH_GIA not in k for k in kq), kq
+
+
+@pytest.mark.parametrize("viet", ["IF", "if"])
+def test_T1_doi_chung_ma_trong_danh_sach_thi_nhan(mau, monkeypatch, viet):
+    # ĐỐI CHỨNG cơ chế: khi một mã ĐƯỢC cho phép (thay tạm danh sách), trường đó — viết hoa hay
+    # thường — được NHẬN ở cả hai đường ⇒ ca lồng dưới đây đỏ vì trường TRONG, không vì cách dựng.
+    monkeypatch.setattr(svc, "MA_TRUONG_CHO_PHEP", frozenset({"IF"}))
+    goi = _them_dau_chan(
+        mau.bien_ban, _truong_phuc(" %s 1 = 1 &quot;a&quot; &quot;b&quot; " % viet)
+    )
+    assert _hai_duong(goi) == ["NHAN", "NHAN"]
+
+
+def test_T1_truong_long_trong_truong_duoc_phep_van_bi_chan(mau, monkeypatch):
+    # Trường NGOÀI được cho phép (thay tạm danh sách = {IF}) không che trường TRONG: câu lệnh
+    # của trường lồng xét RIÊNG ⇒ INCLUDEPICTURE chặn ở cả hai đường. Gộp câu lệnh trường trong
+    # vào trường ngoài (đột biến E3A của người điều phối) ⇒ ca này NHẬN ⇒ đỏ.
+    monkeypatch.setattr(svc, "MA_TRUONG_CHO_PHEP", frozenset({"IF"}))
+    kq = _hai_duong(_them_dau_chan(mau.bien_ban, _truong_long("IF", "INCLUDEPICTURE")))
+    assert _chan_ca_hai(kq, "mã trường INCLUDEPICTURE ngoài danh sách cho phép"), kq
+
+
+# ═══════════════════ quan hệ External ở .rels của ĐẦU / CHÂN TRANG (F225, T2) ════════════════
+@pytest.mark.parametrize("loai", ["header", "footer"])
+def test_T2_external_o_rels_cua_dau_chan_trang_bi_chan(mau, loai):
+    rels = (
+        "<Relationship Id='rId1' Type='%simage' Target='file:////%s/a.png' "
+        "TargetMode='External'/>" % (_QH, _DICH_GIA)
+    )
+    kq = _hai_duong(_them_dau_chan(mau.bien_ban, _DOAN_THUONG, loai, rels))
+    assert _chan_ca_hai(kq, "RA NGOÀI"), kq
+    assert all(_DICH_GIA not in k for k in kq), kq
+
+
+@pytest.mark.parametrize("loai", ["header", "footer"])
+def test_T2_doi_chung_rels_cua_dau_chan_trang_khong_external_thi_nhan(mau, loai):
+    # Cùng đầu / chân trang + ``.rels`` RIÊNG nhưng không quan hệ ra ngoài ⇒ NHẬN: T2 đỏ đúng vì
+    # External, không vì cách dựng gói.
+    assert _hai_duong(_them_dau_chan(mau.bien_ban, _DOAN_THUONG, loai, "")) == [
+        "NHAN",
+        "NHAN",
+    ]
+
+
+# ═══════════════════ kiểu nội dung — thu hẹp (Codex lần 6 câu 3, E4) ══════════════════════════
+def _them_mac_dinh(ct, duoi, kieu):
+    s = ct.decode("utf-8")
+    assert s.count("</Types>") == 1
+    o = "<Default Extension='%s' ContentType='%s'/>" % (duoi, kieu)
+    return s.replace("</Types>", o + "</Types>").encode("utf-8")
+
+
+def _them_anh(b, duoi, kieu=None):
+    """Ảnh ``word/media/image9.<duoi>`` + quan hệ ``image`` NỘI BỘ từ thân; ``kieu`` khác None ⇒
+    khai kiểu nội dung theo phần mở rộng (gói giả chưa có)."""
+    sua = {_RELS_DOC: lambda d: _them_quan_he(d, _QH + "image", "media/image9." + duoi)}
+    if kieu is not None:
+        sua["[Content_Types].xml"] = lambda d: _them_mac_dinh(d, duoi, kieu)
+    return _sua_goi(b, sua, [("word/media/image9." + duoi, b"GIA")])
+
+
+def _them_phan_xml(b, phan, kieu, the, loai_qh):
+    """Phần XML ``word/…`` (thẻ gốc ``the``) kiểu ``kieu`` + quan hệ ``loai_qh`` từ thân."""
+    xml = (
+        "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><w:%s %s/>"
+        % (the, _W_NS)
+    ).encode("utf-8")
+    return _sua_goi(
+        b,
+        {
+            "[Content_Types].xml": lambda d: _them_ghi_de(d, phan, kieu),
+            _RELS_DOC: lambda d: _them_quan_he(d, _QH + loai_qh, phan.split("/", 1)[1]),
+        },
+        [(phan, xml)],
+    )
+
+
+def _them_phong(b):
+    """Phông nhúng (``obfuscatedFont``) như mẫu Biên bản / Danh sách thật: ``word/fonts/font9.odttf``
+    + quan hệ ``font`` từ ``word/_rels/fontTable.xml.rels`` (gói giả chưa có tệp .rels này).
+    """
+    with zipfile.ZipFile(io.BytesIO(b)) as z:
+        assert "word/_rels/fontTable.xml.rels" not in z.namelist()
+    rels = _RELS_GOI % (
+        "<Relationship Id='rId1' Type='%sfont' Target='fonts/font9.odttf'/>" % _QH
+    )
+    return _sua_goi(
+        b,
+        {
+            "[Content_Types].xml": lambda d: _them_mac_dinh(
+                d,
+                "odttf",
+                "application/vnd.openxmlformats-officedocument.obfuscatedFont",
+            )
+        },
+        [
+            ("word/_rels/fontTable.xml.rels", rels.encode("utf-8")),
+            ("word/fonts/font9.odttf", b"GIA"),
+        ],
+    )
+
+
+_CT_W = "application/vnd.openxmlformats-officedocument.wordprocessingml."
+PHAN_GIU_DOI_CHUNG = {
+    # loại GIỮ mà ba mẫu giả không có sẵn — mỗi loại một ca NHẬN (ba mẫu giả phủ các loại còn lại)
+    "anh_png": lambda b: _them_anh(b, "png", "image/png"),
+    "anh_jpeg": lambda b: _them_anh(b, "jpeg"),  # gói giả đã khai jpeg (ảnh thu nhỏ)
+    "chan_trang": lambda b: _them_dau_chan(b, _DOAN_THUONG, "footer"),
+    "dau_trang": lambda b: _them_dau_chan(b, _DOAN_THUONG, "header"),
+    "chu_thich_cuoi_trang": lambda b: _them_phan_xml(
+        b, "word/footnotes.xml", _CT_W + "footnotes+xml", "footnotes", "footnotes"
+    ),
+    "chu_thich_cuoi_van_ban": lambda b: _them_phan_xml(
+        b, "word/endnotes.xml", _CT_W + "endnotes+xml", "endnotes", "endnotes"
+    ),
+    "phong_nhung": _them_phong,
+}
+
+
+@pytest.mark.parametrize("ca", sorted(PHAN_GIU_DOI_CHUNG))
+def test_phan_goi_duoc_giu_co_doi_chung_thi_nhan(mau, ca):
+    assert _hai_duong(PHAN_GIU_DOI_CHUNG[ca](mau.bien_ban)) == ["NHAN", "NHAN"]
+
+
+KIEU_DA_BO = {
+    "anh_gif": ("gif", "image/gif"),
+    "anh_emf": ("emf", "image/x-emf"),
+    "anh_wmf": ("wmf", "image/x-wmf"),
+}
+
+
+@pytest.mark.parametrize("ca", sorted(KIEU_DA_BO))
+def test_anh_kieu_da_bo_bi_chan_o_ca_hai_duong(mau, ca):
+    duoi, kieu = KIEU_DA_BO[ca]
+    kq = _hai_duong(_them_anh(mau.bien_ban, duoi, kieu))
+    assert _chan_ca_hai(kq, "kiểu nội dung không được phép (%s)" % kieu), kq
+
+
+def test_thuoc_tinh_tuy_bien_kieu_da_bo_bi_chan_o_ca_hai_duong(mau):
+    # ``docProps/custom.xml`` (custom-properties) — chỉ phần + kiểu nội dung (không quan hệ) ⇒
+    # đúng MỘT vi phạm.
+    kieu = "application/vnd.openxmlformats-officedocument.custom-properties+xml"
+    xml = b"<?xml version='1.0' encoding='UTF-8' standalone='yes'?><Properties/>"
+    goi = _sua_goi(
+        mau.bien_ban,
+        {"[Content_Types].xml": lambda d: _them_ghi_de(d, "docProps/custom.xml", kieu)},
+        [("docProps/custom.xml", xml)],
+    )
+    assert _chan_ca_hai(_hai_duong(goi), "kiểu nội dung không được phép (%s)" % kieu)
+
+
+def test_quan_he_thuoc_tinh_tuy_bien_da_bo_bi_chan_o_ca_hai_duong(mau):
+    goi = _sua_goi(
+        mau.bien_ban,
+        {
+            "_rels/.rels": lambda d: _them_quan_he(
+                d, _QH + "custom-properties", "docProps/custom.xml"
+            )
+        },
+    )
+    kq = _hai_duong(goi)
+    assert _chan_ca_hai(kq, "quan hệ loại không được phép (custom-properties)"), kq
+
+
+def test_goi_word_thuong_van_nhan(mau):
+    # Đối chứng: ba mẫu giả (không trường nào) ⇒ NHẬN ở cả hai điểm (phép kiểm không chặn thừa).
     for loai in svc.LOAI_MAU:
         _kho_mau.kiem_goi_mau(getattr(mau, loai), loai)
         svc.kiem_mau(loai, getattr(mau, loai))
-    # Trường thường đặt ở ĐẦU TRANG (không đổi cấu trúc thân mà phép kiểm mẫu đọc).
-    dau = (
-        "<?xml version='1.0' encoding='UTF-8' standalone='yes'?><w:hdr %s>%s</w:hdr>"
-        % (
-            _W_NS,
-            _truong_don(" PAGE ")
-            + _truong_phuc(" MERGE", "FIELD Ten ")
-            + _truong_don(" NUMPAGES "),
-        )
-    )
-    tot = _sua_goi(
-        mau.bien_ban,
-        {
-            "[Content_Types].xml": lambda d: _them_ghi_de(
-                d,
-                "word/header9.xml",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
-            ),
-            _RELS_DOC: lambda d: _them_quan_he(d, _QH + "header", "header9.xml"),
-        },
-        [("word/header9.xml", dau.encode("utf-8"))],
-    )
-    _kho_mau.kiem_goi_mau(tot, "Biên bản")
-    svc.kiem_mau("bien_ban", tot)
 
 
-def test_phan_xml_co_doctype_thi_loi_mien(mau):
-    f = {
-        "word/document.xml": lambda d: d.replace(
-            b"<w:document", b"<!DOCTYPE w:document [<!ENTITY e 'GIA'>]><w:document", 1
-        )
-    }
+# ═══════════════════ DOCTYPE — bước RIÊNG, mọi phần XML (E3 §9 mục 4, E4) ═══════════════════
+VI_TRI_DOCTYPE = {
+    "than": ("word/document.xml", b"<w:document"),
+    "rels": (_RELS_DOC, b"<Relationships"),
+    "content_types": ("[Content_Types].xml", b"<Types"),
+    "thuoc_tinh_loi": ("docProps/core.xml", b"<cp:coreProperties"),
+}
+
+
+@pytest.mark.parametrize("diem", ["tai_len", "bo_dung"])
+@pytest.mark.parametrize("vi_tri", sorted(VI_TRI_DOCTYPE))
+def test_phan_xml_co_doctype_thi_loi_mien(mau, vi_tri, diem):
+    # Không trường nào trong gói ⇒ ca chỉ vi phạm DOCTYPE: gỡ quét mã trường không làm ca này
+    # xanh giả / đỏ theo (hai bước tách nhau).
+    phan, the = VI_TRI_DOCTYPE[vi_tri]
+
+    def chen(d):
+        assert d.count(the) == 1
+        return d.replace(the, b"<!DOCTYPE x [<!ENTITY e 'GIA'>]>" + the, 1)
+
+    sai = _sua_goi(mau.bien_ban, {phan: chen})
     with pytest.raises(FileValidationError, match="DOCTYPE"):
-        svc.kiem_mau("bien_ban", _sua_goi(mau.bien_ban, f))
+        if diem == "tai_len":
+            _kho_mau.kiem_goi_mau(sai, "Biên bản")
+        else:
+            svc.kiem_mau("bien_ban", sai)

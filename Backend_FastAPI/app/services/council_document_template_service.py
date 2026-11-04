@@ -133,8 +133,8 @@ def kiem_goi_mau(
                 "Mẫu %s: gói zip hỏng (CRC / dữ liệu nén sai)." % ten
             ) from None
         # Mọi mục đã đọc thử được trong trần ⇒ kiểm CÁC PHẦN của gói Word (kiểu nội dung,
-        # quan hệ — không TargetMode External —, mã trường gọi ra ngoài) — cùng MỘT hàm với
-        # ``_mo_docx`` của bộ dựng (bổ sung E3, owner 04-11).
+        # DOCTYPE, quan hệ — không TargetMode External —, mã trường theo danh sách CHO PHÉP)
+        # — cùng MỘT hàm với ``_mo_docx`` của bộ dựng (bổ sung E3, owner 04-11; E4).
         bo_dung.kiem_cac_phan_goi_word(z, ten)
 
 
