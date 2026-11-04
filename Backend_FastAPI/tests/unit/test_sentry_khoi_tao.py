@@ -6,7 +6,8 @@ KHÔNG mang dữ liệu cá nhân.
 bị chặn + đếm (phải 0). Ứng dụng FastAPI NHỎ dựng SAU khi khởi tạo (như ``main.py``: route gắn sau
 ``init`` ⇒ tích hợp FastAPI / Starlette của SDK thật sự bọc route). Mỗi ca đặt mã giả (sinh lúc
 chạy) vào ĐÚNG MỘT nguồn — thân JSON, biến cục bộ, chuỗi truy vấn, chữ ngoại lệ, log INFO, log
-ERROR, header Referer, cookie, token trong đường dẫn — rồi kiểm (a) SDK có bắt sự kiện (ca không
+ERROR, header Referer, cookie, token trong đường dẫn, SPAN của giao dịch (câu SQL, chuỗi truy vấn
+gọi ra ngoài, khoá redis — kèm ca đối chứng bỏ lọc ⇒ có mã) — rồi kiểm (a) SDK có bắt sự kiện (ca không
 rỗng), (b) mã giả KHÔNG có trong byte của BẤT KỲ envelope nào. Mỗi tuỳ chọn chặn của
 ``khoi_tao_sentry`` có đúng một ca đỏ khi gỡ nó (đột biến: báo cáo E4 §5).
 
@@ -25,9 +26,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import fakeredis
 import httpx
 import pytest
 import sentry_sdk
+import sqlalchemy
 from fastapi import FastAPI
 from sentry_sdk.transport import Transport
 
@@ -109,6 +112,29 @@ def _dung_app(ma, token):
     @app.get("/api/admissions/confirm/{token}")
     async def xac_nhan(token: str):
         raise RuntimeError("loi gia")
+
+    # SPAN của giao dịch — tích hợp THẬT của SDK (SQLAlchemy, httpx, redis) ghi span; mã giả đặt
+    # thẳng trong câu SQL / chuỗi truy vấn của lời gọi RA NGOÀI / khoá redis. Không mạng: sqlite
+    # trong bộ nhớ, httpx.MockTransport, fakeredis.
+    @app.get("/gia/span-sql")
+    async def span_sql():
+        eng = sqlalchemy.create_engine("sqlite://")
+        with eng.connect() as c:
+            c.execute(sqlalchemy.text("SELECT '%s'" % ma)).all()
+        eng.dispose()
+        return {"ok": True}
+
+    @app.get("/gia/span-http")
+    async def span_http():
+        tr = httpx.MockTransport(lambda yc: httpx.Response(200))
+        with httpx.Client(transport=tr) as c:
+            c.get("http://sms.invalid/gui", params={"ma": ma})
+        return {"ok": True}
+
+    @app.get("/gia/span-redis")
+    async def span_redis():
+        fakeredis.FakeRedis().get("ma:" + ma)
+        return {"ok": True}
 
     return app
 
@@ -273,6 +299,55 @@ async def test_token_trong_ten_giao_dich_khi_khong_khop_route_bi_che(sg):
     assert _khong_co(
         sg, tho, "token"
     ), "token trong tên giao dịch / url có trong envelope"
+
+
+SPAN = {"sql": "/gia/span-sql", "http": "/gia/span-http", "redis": "/gia/span-redis"}
+
+
+@pytest.mark.parametrize("nguon", sorted(SPAN))
+async def test_span_giao_dich_khong_mang_ma(sg, nguon):
+    # loc_su_kien: mỗi span chỉ còn TRUONG_SPAN_GIU (bỏ description / data / tags).
+    r, loi, gd, tho = await _gui(sg, "GET", SPAN[nguon])
+    assert r.status_code == 200 and loi == [] and len(gd) == 1
+    assert _khong_co(sg, tho), "span (%s) mang mã giả vào envelope" % nguon
+    assert gd[0].get("spans"), "giao dịch không có span — phép đo không hợp lệ"
+    assert all(set(s) <= sentry_init.TRUONG_SPAN_GIU for s in gd[0]["spans"])
+
+
+@pytest.mark.parametrize("nguon", sorted(SPAN))
+async def test_span_doi_chung_khong_loc_thi_co_ma(sg, monkeypatch, nguon):
+    # ĐỐI CHỨNG: bỏ RIÊNG bước lọc span ⇒ mã giả CÓ trong envelope (ca trên dựng đúng: SDK thật sự
+    # ghi span mang mã — không xanh giả vì tích hợp không chạy).
+    monkeypatch.setattr(sentry_init, "_loc_span", lambda s: s)
+    r, loi, gd, tho = await _gui(sg, "GET", SPAN[nguon])
+    assert r.status_code == 200 and len(gd) == 1
+    assert not _khong_co(sg, tho), (
+        "đối chứng: span (%s) phải mang mã giả khi KHÔNG lọc" % nguon
+    )
+
+
+def test_span_goc_contexts_trace_chi_giu_truong_cho_phep():
+    ma = ma_gia(random.randrange(10**6))
+    ev = {
+        "type": "transaction",
+        "contexts": {
+            "trace": {
+                "trace_id": "t" * 32,
+                "span_id": "s" * 16,
+                "op": "http.server",
+                "description": "gia " + ma,
+                "data": {"gia": ma},
+                "tags": {"gia": ma},
+            }
+        },
+    }
+    ra = loc_su_kien(ev, {})
+    assert ma not in json.dumps(ra)
+    assert ra["contexts"]["trace"] == {
+        "trace_id": "t" * 32,
+        "span_id": "s" * 16,
+        "op": "http.server",
+    }
 
 
 def test_bo_loc_hong_thi_bo_su_kien():

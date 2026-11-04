@@ -21,7 +21,11 @@ nguồn sentry-sdk 2.22.0 (bản ghim ``requirements.txt``; dòng nguồn: báo 
   thành sự kiện Sentry;
 * chuỗi truy vấn, header ngoài :data:`TIEU_DE_GIU`, token trong đường dẫn / tên giao dịch, chữ
   của ngoại lệ — SDK không có tuỳ chọn ⇒ :func:`loc_su_kien` (``before_send`` +
-  ``before_send_transaction``).
+  ``before_send_transaction``);
+* SPAN của giao dịch (``traces_sample_rate`` > 0): câu SQL / lệnh redis + khoá / URL gọi ra ngoài
+  (``description``), ``http.query`` / ``db.*`` (``data``), ``tags`` — :func:`loc_su_kien` chỉ giữ
+  :data:`TRUONG_SPAN_GIU` (danh sách CHO PHÉP: thời gian, định danh, ``op``, ``status``) của mọi
+  span và của span gốc ``contexts.trace`` — giữ được số đo thời gian, bỏ mọi chữ.
 
 Mọi lỗi khởi tạo chỉ in TÊN lớp lỗi (không chữ lỗi — chữ có thể mang DSN).
 """
@@ -36,6 +40,28 @@ from app.core.log_redaction import loai_loi_an_toan, redact_text
 TIEU_DE_GIU = frozenset(
     {"host", "user-agent", "content-type", "content-length", "accept"}
 )
+#: Trường GIỮ của một span (sự kiện transaction: ``spans[]`` và ``contexts.trace``) — còn lại bỏ.
+TRUONG_SPAN_GIU = frozenset(
+    {
+        "trace_id",
+        "span_id",
+        "parent_span_id",
+        "op",
+        "status",
+        "start_timestamp",
+        "timestamp",
+        "same_process_as_parent",
+        "origin",
+        "exclusive_time",
+    }
+)
+
+
+def _loc_span(span: Any) -> Any:
+    """Một span chỉ còn :data:`TRUONG_SPAN_GIU` (không phải dict ⇒ ``None``)."""
+    if not isinstance(span, dict):
+        return None
+    return {k: v for k, v in span.items() if k in TRUONG_SPAN_GIU}
 
 
 def _chuoi_ngoai_le(exc: Any) -> List[BaseException]:
@@ -56,7 +82,8 @@ def _chuoi_ngoai_le(exc: Any) -> List[BaseException]:
 
 def loc_su_kien(event: Any, hint: Any) -> Optional[Any]:
     """``before_send`` + ``before_send_transaction``: bỏ chuỗi truy vấn, header ngoài danh sách
-    giữ; che token trong đường dẫn + tên giao dịch (bộ che của ``log_redaction``); chữ của ngoại
+    giữ; che token trong đường dẫn + tên giao dịch (bộ che của ``log_redaction``); span chỉ còn
+    :data:`TRUONG_SPAN_GIU`; chữ của ngoại
     lệ chỉ còn LOẠI + mã số (``loai_loi_an_toan`` — lỗi CSDL ⇒ tóm tắt thuộc tính). Thân request
     và biến cục bộ KHÔNG xử lý ở đây — SDK không thu chúng (tuỳ chọn ở :func:`khoi_tao_sentry`).
     Lỗi trong bộ lọc ⇒ BỎ sự kiện (fail-closed)."""
@@ -75,6 +102,13 @@ def loc_su_kien(event: Any, hint: Any) -> Optional[Any]:
                 req["url"] = redact_text(req["url"])
         if isinstance(event.get("transaction"), str):
             event["transaction"] = redact_text(event["transaction"])
+        if isinstance(event.get("spans"), list):
+            event["spans"] = [
+                s for s in (_loc_span(x) for x in event["spans"]) if s is not None
+            ]
+        ngu_canh = event.get("contexts")
+        if isinstance(ngu_canh, dict) and "trace" in ngu_canh:
+            ngu_canh["trace"] = _loc_span(ngu_canh["trace"])
         ngoai_le = event.get("exception")
         if isinstance(ngoai_le, dict):
             exc_info = (hint or {}).get("exc_info")
