@@ -1189,6 +1189,10 @@ jobs:
           # `upgrade()` / `downgrade()` của migration Casbin hdts20261103b — F220 — và của migration
           # vết hdts20261104, hạ cấp fail-closed). Ngoài mọi tier thì không shard PR nào chạy mà
           # required check vẫn xanh (CLAUDE.md §11). Ghim WHOLE-FILE.
+          # Lượt E4 (Codex lần 6): `tests/integration/test_council_document_downgrade_dong_thoi.py`
+          # (F222: hạ cấp hdts20261104 / hdts20261103 qua ĐÚNG `alembic/env.py` — tiến trình con,
+          # AUTOCOMMIT — khi phiên thứ hai ghi chen giữa kiểm và xoá: không mất dòng; CSDL dùng một
+          # lần riêng từng ca, không chạm `qlts_test`). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1264,6 +1268,7 @@ jobs:
               tests/api/test_council_documents_api.py
               tests/api/test_council_documents_audit_api.py
               tests/integration/test_council_document_migrations_e3.py
+              tests/integration/test_council_document_downgrade_dong_thoi.py
 
     env:
       APP_ENV: test

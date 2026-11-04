@@ -26,14 +26,23 @@ Migration chạy ở AUTOCOMMIT (``alembic/env.py``) ⇒ mỗi lệnh tự commi
 nhân, không dựng lại được). Vì vậy nó FAIL-CLOSED: bảng nào còn hàng thì DỪNG, không xoá gì,
 trừ khi đặt ``COUNCIL_DOCS_DOWNGRADE_DROP_DATA_ENABLED=1`` (cờ mang nghĩa CHO PHÉP, mặc định
 tắt — CLAUDE.md §8). Sao lưu trước khi bật cờ.
+
+Kiểm–xoá NGUYÊN TỬ (E4 — nhánh anh em của F222 do người điều phối nêu): dưới AUTOCOMMIT của
+``env.py``, khuôn cũ (``SELECT EXISTS`` rồi ``DROP`` — nhiều câu) để một lần tạo bộ / tải mẫu
+chen giữa ⇒ mất bộ văn bản dù cờ chưa bật. Nay khoá + kiểm + xoá là MỘT câu ``DO``
+(:func:`_sql_ha_cap`; cùng khuôn với ``hdts20261104``): ``LOCK TABLE … ACCESS EXCLUSIVE`` theo thứ
+tự mẫu → bộ → tệp (thứ tự ghi của luồng tạo bộ) TRƯỚC khi kiểm, kiểm bằng ảnh chụp mới sau khoá
+(READ COMMITTED), rồi DROP tệp → bộ → mẫu — vẫn giữ khoá. Mức cô lập khác READ COMMITTED ⇒ từ
+chối, không xoá gì (:class:`HaCapCanReadCommitted`).
 """
 
 import os
 from typing import Sequence, Union
 
 import sqlalchemy as sa
-from sqlalchemy import inspect, text
+from sqlalchemy import text
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import DBAPIError
 
 from alembic import op
 
@@ -63,6 +72,54 @@ CO_CHO_PHEP_XOA = "COUNCIL_DOCS_DOWNGRADE_DROP_DATA_ENABLED"
 
 class ConDuLieuVanBanHoiDong(RuntimeError):
     """downgrade gặp bảng còn hàng mà cờ cho phép xoá chưa bật — không xoá gì."""
+
+
+class HaCapCanReadCommitted(RuntimeError):
+    """downgrade chạy ở mức cô lập khác READ COMMITTED — không xoá gì (kiểm sau khoá cần ảnh
+    chụp mới)."""
+
+
+_DAU_CAN_RC = "HDTS20261103_CAN_READ_COMMITTED"
+
+
+def _sql_ha_cap(cho_phep: bool) -> str:
+    """MỘT câu ``DO`` (cùng khuôn ``hdts20261104``): chặn khi không phải READ COMMITTED; khoá
+    ACCESS EXCLUSIVE mẫu → bộ → tệp (bảng đang có); kiểm còn hàng sau khoá; còn hàng mà cờ chưa
+    bật ⇒ ``RETURN`` (KHÔNG xoá gì, Python báo lỗi miền); không thì DROP tệp → bộ → mẫu.
+    """
+    if not isinstance(cho_phep, bool):
+        raise TypeError("cho_phep phải là bool")
+    khoa = "".join(
+        "    IF to_regclass('%s') IS NOT NULL THEN\n"
+        '        LOCK TABLE "%s" IN ACCESS EXCLUSIVE MODE;\n'
+        "    END IF;\n" % (b, b)
+        for b in (MAU, BO, TEP)
+    )
+    kiem = "".join(
+        "    IF to_regclass('%s') IS NOT NULL THEN\n"
+        '        co_hang := co_hang OR EXISTS (SELECT 1 FROM "%s");\n'
+        "    END IF;\n" % (b, b)
+        for b in (MAU, BO, TEP)
+    )
+    return (
+        "DO $hdts20261103_ha_cap$\n"
+        "DECLARE\n"
+        "    co_hang boolean := false;\n"
+        "BEGIN\n"
+        "    IF current_setting('transaction_isolation') <> 'read committed' THEN\n"
+        "        RAISE EXCEPTION '%s';\n"
+        "    END IF;\n"
+        "%s%s"
+        "    IF co_hang AND NOT %s THEN\n"
+        "        RETURN;\n"
+        "    END IF;\n"
+        '    DROP TABLE IF EXISTS "%s";\n'
+        '    DROP TABLE IF EXISTS "%s";\n'
+        '    DROP TABLE IF EXISTS "%s";\n'
+        "END\n"
+        "$hdts20261103_ha_cap$"
+        % (_DAU_CAN_RC, khoa, kiem, "true" if cho_phep else "false", TEP, BO, MAU)
+    )
 
 
 def upgrade() -> None:
@@ -186,19 +243,28 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
-    co = set(inspect(bind).get_table_names())
-    con_hang = [
+    try:
+        bind.execute(text(_sql_ha_cap(os.environ.get(CO_CHO_PHEP_XOA) == "1")))
+    except DBAPIError as e:
+        if _DAU_CAN_RC in str(e):
+            raise HaCapCanReadCommitted(
+                "Hạ cấp hdts20261103 cần mức cô lập READ COMMITTED. Không xoá gì."
+            ) from None
+        raise
+    # Câu DO KHÔNG xoá ⇔ còn hàng mà cờ chưa bật ⇒ báo lỗi miền (danh sách bảng chỉ để báo).
+    con = [
         b
         for b in (TEP, BO, MAU)
-        if b in co
-        and bind.execute(text('SELECT EXISTS (SELECT 1 FROM "%s")' % b)).scalar()
+        if bind.execute(text("SELECT to_regclass(:b)"), {"b": b}).scalar() is not None
     ]
-    if con_hang and os.environ.get(CO_CHO_PHEP_XOA) != "1":
+    if con:
+        con_hang = [
+            b
+            for b in con
+            if bind.execute(text('SELECT EXISTS (SELECT 1 FROM "%s")' % b)).scalar()
+        ]
         raise ConDuLieuVanBanHoiDong(
             "Bảng %s còn dữ liệu (mẫu / bộ văn bản có dữ liệu cá nhân). Không xoá gì. "
             "Sao lưu rồi đặt %s=1 nếu thật sự muốn xoá."
-            % (", ".join(con_hang), CO_CHO_PHEP_XOA)
+            % (", ".join(con_hang or con), CO_CHO_PHEP_XOA)
         )
-    op.drop_table(TEP, if_exists=True)
-    op.drop_table(BO, if_exists=True)
-    op.drop_table(MAU, if_exists=True)
