@@ -287,9 +287,13 @@ describe("không quyết theo vai ở giao diện", () => {
         .map((t) => path.relative(goc, path.join(__dirname, t))),
     ]
     expect(tep.length).toBeGreaterThanOrEqual(10)
-    const lot = tep.filter((t) =>
-      /\buseAuth\b|\buser\??\.role\b|\.role\s*===|UserRole/.test(fs.readFileSync(path.join(goc, t), "utf8")),
-    )
+    // Bỏ chú thích (khối + dòng) — chú thích được phép NHẮC tới `user.role`.
+    const ma = (t: string) =>
+      fs
+        .readFileSync(path.join(goc, t), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/(^|[^:])\/\/.*$/gm, "$1")
+    const lot = tep.filter((t) => /\buseAuth\b|\buser\??\.role\b|\.role\s*===|UserRole/.test(ma(t)))
     expect(lot).toEqual([])
   })
 })
