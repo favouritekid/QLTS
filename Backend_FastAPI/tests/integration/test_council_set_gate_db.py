@@ -50,6 +50,18 @@ from tests.integration.test_council_document_store import _dem, _tai_ba_mau
 pytestmark = pytest.mark.integration
 
 NV_SACH = [(1, "oto_cd", "cq", "g1")]
+# Ba mức VIẾT TAY theo nguyên văn owner 05-11 — KHÔNG lấy từ mã (lấy từ mã thì đổi tập trong mã là
+# đổi luôn ca kiểm, phép đo thành rỗng).
+OWNER_CHAN = ["draft", "rejected", "withdrawal_pending", "withdrawn"]
+OWNER_CANH_BAO = [
+    "submitted",
+    "resubmitted",
+    "reviewing",
+    "revision_requested",
+    "waitlisted",
+    "result_published",
+]
+OWNER_KHONG = ["approved", "admitted", "confirmed", "enrolled", "overridden"]
 DIEM_SACH = {0: {"toan": "7.25", "ly": "6.50", "hoa": "8.00"}}
 
 
@@ -197,7 +209,7 @@ async def _tao(ma, **kw):
         return bo.id
 
 
-@pytest.mark.parametrize("s", sorted(cong.TRANG_THAI_CHAN))
+@pytest.mark.parametrize("s", OWNER_CHAN)
 async def test_trang_thai_chan_thi_400_khong_ghi(hs, s):
     async with AsyncSessionLocal() as db:
         await _tai_ba_mau(db, hs)
@@ -212,7 +224,7 @@ async def test_trang_thai_chan_thi_400_khong_ghi(hs, s):
     assert await _dem() == (0, 0)
 
 
-@pytest.mark.parametrize("s", sorted(cong.TRANG_THAI_CANH_BAO))
+@pytest.mark.parametrize("s", OWNER_CANH_BAO)
 async def test_trang_thai_canh_bao_thi_409_khong_ghi(hs, s):
     async with AsyncSessionLocal() as db:
         await _tai_ba_mau(db, hs)
@@ -226,7 +238,7 @@ async def test_trang_thai_canh_bao_thi_409_khong_ghi(hs, s):
     assert await _dem() == (0, 0)
 
 
-@pytest.mark.parametrize("s", sorted(cong.TRANG_THAI_KHONG_CANH_BAO))
+@pytest.mark.parametrize("s", OWNER_KHONG)
 async def test_trang_thai_khong_canh_bao_thi_dung_duoc(hs, s):
     async with AsyncSessionLocal() as db:
         await _tai_ba_mau(db, hs)
