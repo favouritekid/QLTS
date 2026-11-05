@@ -272,6 +272,27 @@ def test_xac_nhan_dung_so_dem_thi_qua_lech_thi_409():
         assert e.value.public_payload["kiem_tra_dung_bo"]["muc"] == "xac_nhan_lech"
 
 
+@pytest.mark.parametrize(
+    "lech",
+    [
+        # Cùng TẬP trạng thái, cùng TỔNG, khác PHÂN BỐ — chỉ phép so từng trạng thái bắt được
+        # (kiểm ngược của người điều phối: so tổng + so tập vẫn lọt).
+        {"reviewing": 2, "submitted": 1},
+        # Cùng TỔNG, khác TẬP — so tổng thôi thì lọt (trước đây chỉ ca API bắt).
+        {"reviewing": 3},
+    ],
+    ids=["cung_tap_cung_tong_khac_phan_bo", "cung_tong_khac_tap"],
+)
+def test_xac_nhan_cung_tong_lech_phan_bo_thi_409(lech):
+    kq = cong.danh_gia(_ds("approved", "reviewing", "submitted", "submitted"))
+    with pytest.raises(ConflictError) as e:
+        cong.kiem_va_xac_nhan(kq, xac_nhan=lech, duoc_xac_nhan=True)
+    p = e.value.public_payload["kiem_tra_dung_bo"]
+    assert p["muc"] == "xac_nhan_lech"
+    # Phản hồi trả số đếm THẬT để admin xác nhận lại.
+    assert p["canh_bao"]["so_ho_so_theo_trang_thai"] == {"reviewing": 1, "submitted": 2}
+
+
 def test_khong_canh_bao_ma_van_gui_xac_nhan_thi_409():
     kq = cong.danh_gia(_ds("approved", "enrolled"))
     assert cong.kiem_va_xac_nhan(kq, xac_nhan=None, duoc_xac_nhan=True) is None
