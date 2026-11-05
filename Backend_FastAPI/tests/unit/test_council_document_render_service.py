@@ -2592,7 +2592,7 @@ def test_goi_word_thuong_van_nhan(mau):
         svc.kiem_mau(loai, getattr(mau, loai))
 
 
-# ═══════════════════ DOCTYPE — bước RIÊNG, mọi phần XML (E3 §9 mục 4, E4) ═══════════════════
+# ═════════ DOCTYPE — bước RIÊNG, mọi phần KHAI là XML (E3 §9 mục 4, E4; F232) ═════════
 VI_TRI_DOCTYPE = {
     "than": ("word/document.xml", b"<w:document"),
     "rels": (_RELS_DOC, b"<Relationships"),

@@ -561,10 +561,11 @@ KIEU_NOI_DUNG_CHO_PHEP = frozenset(
 )
 #: Mã trường Word được phép — danh sách CHO PHÉP (F221, Codex lần 6; thay danh sách CẤM của E3,
 #: vốn thiếu ``DATABASE``). ĐO (E4, ``cong-cu/do_ma_truong_e4.py`` + ``do_dau_ra_e4.py``): ba mẫu
-#: thật có 0 phần tử họ trường ở mọi phần XML; bộ dựng không chèn trường nào (đầu ra dựng trên ba
+#: thật có 0 phần tử họ trường ở mọi phần KHAI là XML; bộ dựng không chèn trường nào (đầu ra dựng trên ba
 #: mẫu thật lẫn ba mẫu giả: 0) ⇒ danh sách RỖNG: MỌI trường — ``w:fldSimple``, trường phức
 #: ``w:fldChar`` + ``w:instrText`` / ``w:delInstrText`` (kể cả lồng), mảnh câu lệnh lẻ — ở BẤT KỲ
-#: phần XML nào của gói ⇒ từ chối. Không mở sẵn mã nào (DATE, PAGE, MERGEFIELD, HYPERLINK … đều
+#: phần nào mà ``[Content_Types].xml`` KHAI là XML ⇒ từ chối (F232: phần khai kiểu khác — vd ảnh —
+#: không được đọc như XML; chưa chứng minh Word bỏ qua / nhận một phần XML khai giả là ảnh). Không mở sẵn mã nào (DATE, PAGE, MERGEFIELD, HYPERLINK … đều
 #: chưa dùng); mở một mã = thêm vào đây + ca đối chứng + review. Đọc lúc gọi (không chép sẵn).
 MA_TRUONG_CHO_PHEP = frozenset()
 _PARSER_GOI = etree.XMLParser(
@@ -645,13 +646,17 @@ def kiem_cac_phan_goi_word(z: zipfile.ZipFile, ten: str) -> None:
 
     1. mọi phần (trừ ``[Content_Types].xml``) có kiểu nội dung thuộc
        :data:`KIEU_NOI_DUNG_CHO_PHEP` (không có kiểu ⇒ từ chối);
-    2. đọc MỌI phần XML (kiểu ``…+xml`` / ``application/xml`` và mọi ``*.rels``) đúng MỘT lần —
+    2. đọc MỌI phần mà ``[Content_Types].xml`` KHAI là XML (kiểu ``…+xml`` / ``application/xml``)
+       và mọi ``*.rels`` đúng MỘT lần —
        phần có DOCTYPE ⇒ từ chối. Bước riêng: không phụ thuộc bước 3 / 4 (gỡ quét mã trường
        không gỡ chặn DOCTYPE, và ngược lại — E3 §9 mục 4);
     3. mọi quan hệ trong mọi ``*.rels``: KHÔNG ``TargetMode="External"`` (kể cả hyperlink) và
        loại thuộc :data:`LOAI_QUAN_HE_CHO_PHEP`;
-    4. mọi trường ở MỌI phần XML (trừ ``*.rels``) có loại thuộc :data:`MA_TRUONG_CHO_PHEP`
+    4. mọi trường ở MỌI phần KHAI là XML (trừ ``*.rels``) có loại thuộc :data:`MA_TRUONG_CHO_PHEP`
        (hiện rỗng ⇒ mọi trường bị từ chối).
+
+    Giới hạn (F232, Codex lần 7): phép kiểm tin kiểu nội dung KHAI trong ``[Content_Types].xml`` —
+    một phần khai là ảnh (``image/png`` / ``image/jpeg``) không được đọc như XML ở bước 2 / 4.
 
     Lỗi miền chỉ nêu tên mẫu + LOẠI phần / quan hệ / mã trường (nhãn an toàn) — không nêu đích
     liên kết hay chữ của mẫu.
