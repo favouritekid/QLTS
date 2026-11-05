@@ -32,6 +32,11 @@ kiểm (đợi phiên đang ghi kết thúc; chặn phiên ghi mới tới hết
 sau khoá (READ COMMITTED: mỗi câu trong PL/pgSQL một ảnh chụp), rồi DROP — vẫn giữ khoá. Ở
 REPEATABLE READ / SERIALIZABLE ảnh chụp chốt TRƯỚC khoá (đo: biến thể C mất dòng) ⇒ câu ``DO``
 từ chối chạy (:class:`HaCapCanReadCommitted`), không xoá gì.
+
+Trần chờ khoá (F227, lượt G — Codex lần 7): trước đây câu ``DO`` chờ khoá VÔ HẠN — một giao dịch
+dài đang dùng bảng làm hạ cấp đợi mãi, và trong lúc đợi CHẶN luôn các lượt đọc mới vào bảng ấy.
+Nay câu ``DO`` tự đặt ``lock_timeout`` = :data:`TRAN_CHO_KHOA` (``set_config(…, true)``, trong
+CÙNG câu); quá trần ⇒ :class:`HaCapChoKhoaQuaTran`, không xoá gì, ``alembic`` thoát khác 0.
 """
 
 import os
@@ -72,26 +77,40 @@ class HaCapCanReadCommitted(RuntimeError):
     chụp mới)."""
 
 
+class HaCapChoKhoaQuaTran(RuntimeError):
+    """downgrade chờ khoá bảng quá ``TRAN_CHO_KHOA`` (có giao dịch khác đang dùng bảng) — câu
+    ``DO`` bị huỷ, giao dịch của nó lùi: không xoá gì, phiên bản không đổi."""
+
+
 _DAU_CAN_RC = "HDTS20261104_CAN_READ_COMMITTED"
+_DAU_CHO_KHOA = "HDTS20261104_CHO_KHOA_QUA_TRAN"
+
+#: Trần kỹ thuật chờ khoá của câu hạ cấp (F227 — người điều phối chọn 10 giây, owner có thể
+#: đổi). CÙNG giá trị với ``hdts20261103.TRAN_CHO_KHOA`` (test khoá hai bản bằng nhau).
+TRAN_CHO_KHOA = "10s"
 
 
 def _sql_ha_cap(cho_phep: bool) -> str:
-    """MỘT câu ``DO``: (1) chặn khi không phải READ COMMITTED; (2) khoá ACCESS EXCLUSIVE từng
-    bảng đang có (thứ tự cố định); (3) kiểm còn hàng — ảnh chụp sau khoá; (4) còn hàng mà cờ chưa
-    bật ⇒ ``RETURN`` (KHÔNG xoá gì, Python báo lỗi miền); không thì DROP. ``cho_phep`` chỉ nhận
-    ``bool`` ⇒ chèn đúng một trong hai chữ ``true`` / ``false``."""
+    """MỘT câu ``DO``: (1) chặn khi không phải READ COMMITTED; (2) đặt trần chờ khoá
+    ``TRAN_CHO_KHOA`` bằng ``set_config('lock_timeout', …, true)`` NGAY TRONG câu này — dưới
+    AUTOCOMMIT của ``env.py`` mỗi câu là một giao dịch, nên đặt ở câu RIÊNG trước đó thì hết hiệu
+    lực trước khi câu ``DO`` chạy; ``true`` = chỉ trong giao dịch này; (3) khoá ACCESS EXCLUSIVE
+    từng bảng đang có (thứ tự cố định); (4) kiểm còn hàng — ảnh chụp sau khoá; (5) còn hàng mà cờ
+    chưa bật ⇒ ``RETURN`` (KHÔNG xoá gì, Python báo lỗi miền); không thì DROP. Chờ khoá quá trần
+    (ở bước khoá HAY bước xoá) ⇒ ``RAISE`` mang dấu ``_DAU_CHO_KHOA`` ⇒ cả câu lùi, không xoá gì.
+    ``cho_phep`` chỉ nhận ``bool`` ⇒ chèn đúng một trong hai chữ ``true`` / ``false``."""
     if not isinstance(cho_phep, bool):
         raise TypeError("cho_phep phải là bool")
     khoa = "".join(
-        "    IF to_regclass('%s') IS NOT NULL THEN\n"
-        '        LOCK TABLE "%s" IN ACCESS EXCLUSIVE MODE;\n'
-        "    END IF;\n" % (b, b)
+        "        IF to_regclass('%s') IS NOT NULL THEN\n"
+        '            LOCK TABLE "%s" IN ACCESS EXCLUSIVE MODE;\n'
+        "        END IF;\n" % (b, b)
         for b in (XOA, TAI)
     )
     kiem = "".join(
-        "    IF to_regclass('%s') IS NOT NULL THEN\n"
-        '        co_hang := co_hang OR EXISTS (SELECT 1 FROM "%s");\n'
-        "    END IF;\n" % (b, b)
+        "        IF to_regclass('%s') IS NOT NULL THEN\n"
+        '            co_hang := co_hang OR EXISTS (SELECT 1 FROM "%s");\n'
+        "        END IF;\n" % (b, b)
         for b in (XOA, TAI)
     )
     return (
@@ -102,15 +121,29 @@ def _sql_ha_cap(cho_phep: bool) -> str:
         "    IF current_setting('transaction_isolation') <> 'read committed' THEN\n"
         "        RAISE EXCEPTION '%s';\n"
         "    END IF;\n"
+        "    PERFORM set_config('lock_timeout', '%s', true);\n"
+        "    BEGIN\n"
         "%s%s"
-        "    IF co_hang AND NOT %s THEN\n"
-        "        RETURN;\n"
-        "    END IF;\n"
-        '    DROP TABLE IF EXISTS "%s";\n'
-        '    DROP TABLE IF EXISTS "%s";\n'
+        "        IF co_hang AND NOT %s THEN\n"
+        "            RETURN;\n"
+        "        END IF;\n"
+        '        DROP TABLE IF EXISTS "%s";\n'
+        '        DROP TABLE IF EXISTS "%s";\n'
+        "    EXCEPTION WHEN lock_not_available THEN\n"
+        "        RAISE EXCEPTION '%s';\n"
+        "    END;\n"
         "END\n"
         "$hdts20261104_ha_cap$"
-        % (_DAU_CAN_RC, khoa, kiem, "true" if cho_phep else "false", TAI, XOA)
+        % (
+            _DAU_CAN_RC,
+            TRAN_CHO_KHOA,
+            khoa,
+            kiem,
+            "true" if cho_phep else "false",
+            TAI,
+            XOA,
+            _DAU_CHO_KHOA,
+        )
     )
 
 
@@ -185,9 +218,19 @@ def downgrade() -> None:
     try:
         bind.execute(text(_sql_ha_cap(os.environ.get(CO_CHO_PHEP_XOA) == "1")))
     except DBAPIError as e:
-        if _DAU_CAN_RC in str(e):
+        # So dấu trên THÔNG BÁO của CSDL (``e.orig``), KHÔNG trên ``str(e)``: ``str(e)`` của
+        # SQLAlchemy chép cả câu lệnh — mà câu ``DO`` chứa CẢ HAI dấu ⇒ mọi lỗi (vd chờ khoá quá
+        # trần) từng bị báo nhầm là "cần READ COMMITTED" (lượt G phát hiện bằng ca chờ khoá).
+        loi = str(e.orig) if getattr(e, "orig", None) is not None else ""
+        if _DAU_CAN_RC in loi:
             raise HaCapCanReadCommitted(
                 "Hạ cấp hdts20261104 cần mức cô lập READ COMMITTED. Không xoá gì."
+            ) from None
+        if _DAU_CHO_KHOA in loi:
+            raise HaCapChoKhoaQuaTran(
+                "Hạ cấp hdts20261104 dừng: chờ khoá bảng vết xoá / nhật ký tải quá %s (có "
+                "giao dịch khác đang dùng bảng). Không xoá gì, phiên bản không đổi — chạy lại "
+                "khi bảng rảnh." % TRAN_CHO_KHOA
             ) from None
         raise
     # Câu DO KHÔNG xoá ⇔ còn hàng mà cờ chưa bật ⇒ báo lỗi miền (danh sách bảng chỉ để báo).
