@@ -36,7 +36,15 @@ from app.utils.exceptions import (
     DataValidationError,
     PermissionDeniedError,
 )
-from tests.fixtures.hoi_dong_seed import HP_CD, LUC, chen, ho_so, kv, ma_gia, seed_hoi_dong
+from tests.fixtures.hoi_dong_seed import (
+    HP_CD,
+    LUC,
+    chen,
+    ho_so,
+    kv,
+    ma_gia,
+    seed_hoi_dong,
+)
 from tests.integration.test_council_document_store import _dem, _tai_ba_mau
 
 pytestmark = pytest.mark.integration
@@ -234,8 +242,12 @@ async def test_trang_thai_khong_canh_bao_thi_dung_duoc(hs, s):
 async def test_trang_thai_la_khi_check_noi_ra_thi_chan(hs):
     # Như khi app thêm trạng thái mới (nới CHECK) mà cổng chưa cập nhật: phải CHẶN.
     cccd, pid = await _mot(hs)
-    await _sql("ALTER TABLE admission_profile DROP CONSTRAINT ck_admission_profile_status")
-    await _sql("UPDATE admission_profile SET status = 'trang_thai_moi' WHERE id = :p", p=pid)
+    await _sql(
+        "ALTER TABLE admission_profile DROP CONSTRAINT ck_admission_profile_status"
+    )
+    await _sql(
+        "UPDATE admission_profile SET status = 'trang_thai_moi' WHERE id = :p", p=pid
+    )
     kq, _ = await _cong([cccd])
     assert kq.chan == (("trang_thai_la", "trang_thai_moi", (1,)),)
 
@@ -591,7 +603,9 @@ async def test_khac_nam_lay_muc_nam_hoc_cua_ho_so(hs):
     async with AsyncSessionLocal() as db:
         dto = (
             await db.execute(
-                select(CouncilDocumentSet.snapshot_dto).where(CouncilDocumentSet.id == sid)
+                select(CouncilDocumentSet.snapshot_dto).where(
+                    CouncilDocumentSet.id == sid
+                )
             )
         ).scalar_one()
     assert dto[0]["diem_kv"] == "0.75"
@@ -662,7 +676,9 @@ async def test_ho_so_khai_an_dinh_thu_cong_ma_anh_chup_thuong_van_phai_xac_minh(
     # (priority_service._derive_kv_basis_level + freeze_priority_snapshot) — dù ảnh chụp cũ ghi
     # commune_lookup. Không có sổ ⇒ chặn.
     cccd, _ = await _mot(
-        hs, area_resolution_basis="manual_override", priority_resolution_snapshot=kv("KV1")
+        hs,
+        area_resolution_basis="manual_override",
+        priority_resolution_snapshot=kv("KV1"),
     )
     kq, _ = await _cong([cccd])
     assert kq.chan == _mot_ly_do("khu_vuc_thu_cong_khong_hieu_luc")
@@ -677,7 +693,8 @@ async def test_an_dinh_thu_cong_hop_le_thi_qua(hs):
 async def test_an_dinh_thu_cong_du_lieu_doi_sau_khi_duyet_thi_chan(hs):
     cccd, pid = await _an_dinh_thu_cong(hs)
     await _sql(
-        "UPDATE admission_profile SET permanent_commune_code = 'GX2' WHERE id = :p", p=pid
+        "UPDATE admission_profile SET permanent_commune_code = 'GX2' WHERE id = :p",
+        p=pid,
     )
     kq, _ = await _cong([cccd])
     assert kq.chan == _mot_ly_do("khu_vuc_thu_cong_khong_hieu_luc")

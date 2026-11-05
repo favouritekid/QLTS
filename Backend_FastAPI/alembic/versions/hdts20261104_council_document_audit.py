@@ -98,7 +98,8 @@ def _sql_ha_cap(cho_phep: bool) -> str:
     từng bảng đang có (thứ tự cố định); (4) kiểm còn hàng — ảnh chụp sau khoá; (5) còn hàng mà cờ
     chưa bật ⇒ ``RETURN`` (KHÔNG xoá gì, Python báo lỗi miền); không thì DROP. Chờ khoá quá trần
     (ở bước khoá HAY bước xoá) ⇒ ``RAISE`` mang dấu ``_DAU_CHO_KHOA`` ⇒ cả câu lùi, không xoá gì.
-    ``cho_phep`` chỉ nhận ``bool`` ⇒ chèn đúng một trong hai chữ ``true`` / ``false``."""
+    ``cho_phep`` chỉ nhận ``bool`` ⇒ chèn đúng một trong hai chữ ``true`` / ``false``.
+    """
     if not isinstance(cho_phep, bool):
         raise TypeError("cho_phep phải là bool")
     khoa = "".join(

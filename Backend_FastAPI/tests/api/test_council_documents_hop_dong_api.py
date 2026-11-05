@@ -91,7 +91,9 @@ async def test_policy_theo_id_cu_the_thi_moi_co_tat(client, tk, ba_bo_dao):
     mo_hinh.add_policy("p", "p", dong)
     try:
         r = await client.get(P + "/sets/%d" % sid, headers=h)
-        assert r.status_code == 403, "phép đo không hợp lệ: dòng deny theo id không có tác dụng"
+        assert (
+            r.status_code == 403
+        ), "phép đo không hợp lệ: dòng deny theo id không có tác dụng"
         co = await q._co_qua_http(client, h)
         assert not any(co.values()), co
     finally:
@@ -100,7 +102,9 @@ async def test_policy_theo_id_cu_the_thi_moi_co_tat(client, tk, ba_bo_dao):
     assert all((await q._co_qua_http(client, h)).values())
 
 
-async def test_policy_theo_mau_route_va_ky_tu_dai_dien_khong_tat_co(client, tk, ba_bo_dao):
+async def test_policy_theo_mau_route_va_ky_tu_dai_dien_khong_tat_co(
+    client, tk, ba_bo_dao
+):
     # Dòng theo MẪU route (đúng chuỗi đường của route) hoặc kết thúc bằng ``*`` KHÔNG phải vi phạm.
     # Chủ thể = kế toán: admin KHÔNG kế thừa kế toán (app/main.py role_inheritance) ⇒ dòng deny này
     # không đổi quyền thật của admin; chỉ đo phép kiểm hợp đồng.
@@ -126,7 +130,9 @@ def test_template_va_migration_cua_module_chi_theo_mau_route():
     from app.casbin_config.policy_templates import POLICY_TEMPLATES
 
     duong = {
-        r.path for r in fastapi_app.routes if isinstance(r, APIRoute) and r.path.startswith(P + "/")
+        r.path
+        for r in fastapi_app.routes
+        if isinstance(r, APIRoute) and r.path.startswith(P + "/")
     }
     import importlib.util
 
@@ -140,7 +146,9 @@ def test_template_va_migration_cua_module_chi_theo_mau_route():
         "hdts20261103b_council_document_casbin.py",
         "hdts20261105_council_document_flags_casbin.py",
     ):
-        spec = importlib.util.spec_from_file_location("hd_g_" + mig[:13], q._GOC_MIG / mig)
+        spec = importlib.util.spec_from_file_location(
+            "hd_g_" + mig[:13], q._GOC_MIG / mig
+        )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         doi_tuong += [p[1] for p in mod.POLICIES]

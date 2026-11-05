@@ -67,10 +67,14 @@ async def test_route_tao_bo_noi_quyen_xac_nhan(hs):
     assert deps.get_council_document_confirm_right in goi
 
 
-async def test_admin_canh_bao_chua_xac_nhan_thi_409_kem_so_dem_va_dong(client, tk, hs, mau):
+async def test_admin_canh_bao_chua_xac_nhan_thi_409_kem_so_dem_va_dong(
+    client, tk, hs, mau
+):
     await _dat_trang_thai(hs, "loai_hinh_chinh_quy", "reviewing")
     truoc = await _dem()
-    r = await client.post(P + "/sets", json=_than(hs, SACH), headers=(await tk("admin")))
+    r = await client.post(
+        P + "/sets", json=_than(hs, SACH), headers=(await tk("admin"))
+    )
     assert r.status_code == 409, r.text
     p = r.json()["kiem_tra_dung_bo"]
     assert p["muc"] == "can_xac_nhan" and p["chan"] == []
@@ -155,7 +159,9 @@ async def test_quan_ly_dung_bo_co_canh_bao_thi_409_kem_so_dem_can_admin(
     await _dat_trang_thai(hs, "loai_hinh_chinh_quy", "reviewing")
     da_cho = _casbin_cho_quan_ly_tao_bo(monkeypatch)
     truoc = await _dem()
-    r = await client.post(P + "/sets", json=_than(hs, SACH), headers=(await tk("ql_u1")))
+    r = await client.post(
+        P + "/sets", json=_than(hs, SACH), headers=(await tk("ql_u1"))
+    )
     assert da_cho, "Casbin giả không được hỏi — phép đo không hợp lệ"
     assert r.status_code == 409, r.text
     p = r.json()["kiem_tra_dung_bo"]
@@ -185,5 +191,7 @@ async def test_quan_ly_khong_canh_bao_van_dung_duoc_khi_casbin_cho(
 ):
     # Đối chứng: lớp quyền xác nhận KHÔNG chặn quản lý khi không có gì cần xác nhận.
     _casbin_cho_quan_ly_tao_bo(monkeypatch)
-    r = await client.post(P + "/sets", json=_than(hs, SACH), headers=(await tk("ql_u1")))
+    r = await client.post(
+        P + "/sets", json=_than(hs, SACH), headers=(await tk("ql_u1"))
+    )
     assert r.status_code == 201, r.text

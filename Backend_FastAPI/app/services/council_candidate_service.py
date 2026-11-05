@@ -64,7 +64,9 @@ _NEU_TOI_DA = 20
 
 @dataclass(frozen=True)
 class AnhChupHoSo:
-    rows: Tuple[CandidateRowV1, ...]  # = cột cùng tên của bộ xuất (``diem_kv`` theo luật cũ)
+    rows: Tuple[
+        CandidateRowV1, ...
+    ]  # = cột cùng tên của bộ xuất (``diem_kv`` theo luật cũ)
     don_vi: Tuple[Optional[int], ...]  # ``lead.unit_id`` từng hồ sơ, cùng thứ tự
     giao_dich: ThongTinGiaoDich
     # Dữ liệu cho cổng dựng bộ (lượt G) — cùng giao dịch, cùng thứ tự; KHÔNG ghi gì.
@@ -279,7 +281,9 @@ async def doc_ho_so_theo_ma(
     if [h["stt"] for h in hang_kiem] != list(range(1, len(ds) + 1)) or len(
         khu_vuc
     ) != len(ds):
-        raise ServiceError("Đọc dữ liệu kiểm hồ sơ sai thứ tự / thiếu hàng — không dựng.")
+        raise ServiceError(
+            "Đọc dữ liệu kiểm hồ sơ sai thứ tự / thiếu hàng — không dựng."
+        )
     so_lieu = {h["stt"]: h for h in hang}
     kiem = tuple(
         DuLieuKiem(

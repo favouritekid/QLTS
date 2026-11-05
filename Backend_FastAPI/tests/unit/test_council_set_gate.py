@@ -36,7 +36,12 @@ def _trang_thai_cua_check():
 
 # ═══════════════════════════════ F228 — ba mức phủ đủ 15 trạng thái ═══════════════════════
 def test_ba_muc_dung_nguyen_van_owner_05_11():
-    assert cong.TRANG_THAI_CHAN == {"draft", "rejected", "withdrawal_pending", "withdrawn"}
+    assert cong.TRANG_THAI_CHAN == {
+        "draft",
+        "rejected",
+        "withdrawal_pending",
+        "withdrawn",
+    }
     assert cong.TRANG_THAI_CANH_BAO == {
         "submitted",
         "resubmitted",
@@ -55,7 +60,11 @@ def test_ba_muc_dung_nguyen_van_owner_05_11():
 
 
 def test_ba_muc_roi_nhau_va_phu_dung_15_trang_thai_cua_check_enum_va_bang_chuyen():
-    ba = (cong.TRANG_THAI_CHAN, cong.TRANG_THAI_CANH_BAO, cong.TRANG_THAI_KHONG_CANH_BAO)
+    ba = (
+        cong.TRANG_THAI_CHAN,
+        cong.TRANG_THAI_CANH_BAO,
+        cong.TRANG_THAI_KHONG_CANH_BAO,
+    )
     hop = set().union(*ba)
     assert sum(len(t) for t in ba) == len(hop) == 15  # rời nhau
     tu_check = _trang_thai_cua_check()
@@ -142,7 +151,10 @@ def test_dong_sach_khong_ly_do():
     [
         (dict(uses_choice_engine=None), "luong_khong_xac_dinh"),
         (dict(uses_choice_engine=1), "luong_khong_xac_dinh"),  # 1 KHÔNG phải bool
-        (dict(so_nv=0, nv1_id=None, nv_in_id=None, nv_in_nganh_id=None), "nhieu_nv_khong_co_nv"),
+        (
+            dict(so_nv=0, nv1_id=None, nv_in_id=None, nv_in_nganh_id=None),
+            "nhieu_nv_khong_co_nv",
+        ),
         (dict(nv_in_id=None, nv_in_nganh_id=None), "nv1_thieu_cau_hinh"),
         (dict(nv_in_id=12), "nv_in_khac_nv1"),
         (dict(so_nv_trung=1, nv_trung_id=12), "trung_nv_khac"),
@@ -191,7 +203,9 @@ def test_bo_may_nguyen_vong_khong_doi_bang_diem_ho_so_khi_chi_mot_ben():
 
 # ═══════════════════════════════ đánh giá cả danh sách + xác nhận ═════════════════════════
 def _ds(*trang_thai):
-    return [_sach(stt=i, status=s, kv_muc="0.%d0" % i) for i, s in enumerate(trang_thai, 1)]
+    return [
+        _sach(stt=i, status=s, kv_muc="0.%d0" % i) for i, s in enumerate(trang_thai, 1)
+    ]
 
 
 def test_danh_gia_gom_theo_ly_do_va_trang_thai_so_dong_tang_dan():
@@ -311,6 +325,8 @@ def test_payload_chi_so_dong_ma_ly_do_trang_thai():
         "hoc_phi_khac_nganh_nv",
         "thieu_khu_vuc",
     }
-    assert all(set(c) == {"ma", "mo_ta", "trang_thai", "so_ho_so", "dong"} for c in p["chan"])
+    assert all(
+        set(c) == {"ma", "mo_ta", "trang_thai", "so_ho_so", "dong"} for c in p["chan"]
+    )
     assert all(c["mo_ta"] == cong.LY_DO[c["ma"]] for c in p["chan"])
     assert not re.search(r"\d{9,}", str(e.value.public_payload) + e.value.detail)

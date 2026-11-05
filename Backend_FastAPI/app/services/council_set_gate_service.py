@@ -65,7 +65,8 @@ MUC_KHONG = "khong"
 
 def muc_trang_thai(status: object) -> str:
     """MỘT nguồn phân mức trạng thái. Chỉ hai tập "cho qua" được liệt kê dương; mọi giá trị
-    khác — bốn trạng thái chặn, trạng thái thêm sau này, ``None``, không phải chuỗi — ⇒ CHẶN."""
+    khác — bốn trạng thái chặn, trạng thái thêm sau này, ``None``, không phải chuỗi — ⇒ CHẶN.
+    """
     if isinstance(status, str):
         if status in TRANG_THAI_KHONG_CANH_BAO:
             return MUC_KHONG
@@ -239,7 +240,9 @@ class KetQuaCong:
     """Kết quả cổng cho cả danh sách (thứ tự dòng = thứ tự đầu vào, đếm từ 1)."""
 
     trang_thai: Tuple[Optional[str], ...]
-    chan: Tuple[Tuple[str, Optional[str], Tuple[int, ...]], ...]  # (mã, trạng thái?, dòng)
+    chan: Tuple[
+        Tuple[str, Optional[str], Tuple[int, ...]], ...
+    ]  # (mã, trạng thái?, dòng)
     canh_bao: Dict[str, Tuple[int, ...]]  # trạng thái cảnh báo -> dòng
     diem_kv: Tuple[Optional[str], ...]
 
@@ -282,9 +285,7 @@ def danh_gia(kiem: Sequence[DuLieuKiem]) -> KetQuaCong:
     )
 
 
-def _noi_dung_kiem(
-    kq: KetQuaCong, muc: str, duoc_xac_nhan: bool
-) -> Dict[str, Any]:
+def _noi_dung_kiem(kq: KetQuaCong, muc: str, duoc_xac_nhan: bool) -> Dict[str, Any]:
     """Phần ``public_payload`` (JSON thuần — chỉ số dòng, mã lý do, trạng thái, số đếm)."""
     return {
         "kiem_tra_dung_bo": {
@@ -312,7 +313,8 @@ def _noi_dung_kiem(
 
 def kiem_dang_xac_nhan(xac_nhan: object) -> Optional[Dict[str, int]]:
     """``xac_nhan_trang_thai`` của yêu cầu: ``None`` (không xác nhận) hoặc dict KHÔNG rỗng
-    {trạng thái thuộc tập CẢNH BÁO: số hồ sơ ≥ 1}. Sai dạng ⇒ ``DataValidationError``."""
+    {trạng thái thuộc tập CẢNH BÁO: số hồ sơ ≥ 1}. Sai dạng ⇒ ``DataValidationError``.
+    """
     if xac_nhan is None:
         return None
     if not isinstance(xac_nhan, Mapping) or not xac_nhan:
@@ -331,7 +333,9 @@ def kiem_dang_xac_nhan(xac_nhan: object) -> Optional[Dict[str, int]]:
     return dict(sorted(out.items()))
 
 
-def kiem_quyen_xac_nhan(xac_nhan: Optional[Dict[str, int]], duoc_xac_nhan: bool) -> None:
+def kiem_quyen_xac_nhan(
+    xac_nhan: Optional[Dict[str, int]], duoc_xac_nhan: bool
+) -> None:
     """CHỈ admin được gửi xác nhận (owner 05-11). Quyền ``duoc_xac_nhan`` do ``deps.py`` tính
     (tầng chủ sở hữu); kiểm TRƯỚC khi đọc hồ sơ."""
     if xac_nhan is not None and duoc_xac_nhan is not True:
@@ -348,7 +352,8 @@ def kiem_va_xac_nhan(
 ) -> Optional[Dict[str, int]]:
     """Chặn ⇒ ``DataValidationError`` (400, liệt kê từng dòng — xác nhận KHÔNG gỡ được chặn).
     Có cảnh báo mà không xác nhận / xác nhận lệch số đếm hiện tại ⇒ ``ConflictError`` (409, số
-    đếm theo trạng thái + số dòng). Trả số đếm ĐÃ xác nhận (để ghi vết) hoặc ``None``."""
+    đếm theo trạng thái + số dòng). Trả số đếm ĐÃ xác nhận (để ghi vết) hoặc ``None``.
+    """
     kiem_quyen_xac_nhan(xac_nhan, duoc_xac_nhan)
     if kq.chan:
         so_dong = len({d for _, _, dong in kq.chan for d in dong})

@@ -226,9 +226,7 @@ async def tao_bo_van_ban(
             "nguoi_xac_nhan_id": nguoi_tao_id,
             "luc": luc_tao.isoformat(),
             "so_ho_so_theo_trang_thai": dict(da_xac_nhan),
-            "dong_theo_trang_thai": {
-                s: list(d) for s, d in kq_cong.canh_bao.items()
-            },
+            "dong_theo_trang_thai": {s: list(d) for s, d in kq_cong.canh_bao.items()},
         }
     )
     md["nguon_diem_kv"] = "muc_theo_nam_hoc_cua_ho_so"  # F231 (owner 05-11)
