@@ -724,7 +724,8 @@ PasswordSafeDep = Depends(require_password_not_forced)
 
 def chu_the_casbin(current_user: models.User) -> str:
     """Chủ thể Casbin của một người dùng (``role:<user.role>``) — MỘT nguồn cho
-    ``check_permission`` và phép tính cờ quyền giao diện (``quyen_van_ban_hoi_dong``)."""
+    ``check_permission`` và phép tính cờ quyền giao diện
+    (``quyen_van_ban_hoi_dong``)."""
     return f"role:{current_user.role}"
 
 
@@ -734,9 +735,9 @@ def casbin_cho_phep(
     object_path: str,
     action: str,
 ) -> bool:
-    """Câu hỏi Casbin "người này được ``action`` trên ``object_path`` không" — MỘT nguồn cho
-    ``check_permission`` (chặn request) và ``quyen_van_ban_hoi_dong`` (cờ giao diện). Không log,
-    không ném lỗi: người gọi quyết."""
+    """Câu hỏi Casbin "người này được ``action`` trên ``object_path`` không" — MỘT
+    nguồn cho ``check_permission`` (chặn request) và ``quyen_van_ban_hoi_dong`` (cờ
+    giao diện). Không log, không ném lỗi: người gọi quyết."""
     return bool(enforcer.enforce(chu_the_casbin(current_user), object_path, action))
 
 

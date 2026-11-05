@@ -67,8 +67,9 @@ async def ba_bo(hs):
 
 
 async def _goi_that(client, co, h, sid):
-    """Gọi ĐÚNG route của cờ ``co`` dưới headers ``h`` (bộ ``sid`` thuộc phạm vi người gọi).
-    Route ghi: đầu vào bị SERVICE từ chối (400) — tức đã qua mọi cổng — nên không ghi gì."""
+    """Gọi ĐÚNG route của cờ ``co`` dưới headers ``h`` (bộ ``sid`` thuộc phạm vi người
+    gọi). Route ghi: đầu vào bị SERVICE từ chối (400) — tức đã qua mọi cổng — nên không
+    ghi gì."""
     b = P + "/sets/%d" % sid
     if co == "xem_mau":
         return await client.get(P + "/templates", headers=h)
@@ -151,7 +152,7 @@ def test_moi_route_cua_module_co_dung_mot_co():
     assert len(con_lai) == len(set(con_lai)) == 10  # mỗi hàm đúng MỘT route
     assert set(rt.ENDPOINT_THEO_CO.values()) == set(con_lai)
     assert len(set(rt.ENDPOINT_THEO_CO.values())) == len(rt.ENDPOINT_THEO_CO)
-    assert tuple(rt.ENDPOINT_THEO_CO) == CO  # tên trường schema = khoá bảng cờ, cùng thứ tự
+    assert tuple(rt.ENDPOINT_THEO_CO) == CO  # trường schema = khoá bảng cờ, cùng thứ tự
     assert all(len(r.methods) == 1 for r in route)
 
 
