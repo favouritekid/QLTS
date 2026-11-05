@@ -84,12 +84,15 @@ export interface CouncilPermissionsViewModel {
   error: unknown
 }
 
-export function useCouncilDocumentPermissions(): CouncilPermissionsViewModel {
+export function useCouncilDocumentPermissions(
+  { enabled = true }: { enabled?: boolean } = {},
+): CouncilPermissionsViewModel {
   const q = useQuery({
     queryKey: councilDocumentKeys.permissions(),
     queryFn: getCouncilDocumentPermissions,
     staleTime: 60_000,
     retry: false,
+    enabled,
   })
   return useMemo<CouncilPermissionsViewModel>(() => {
     if (q.isPending) {

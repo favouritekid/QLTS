@@ -189,7 +189,8 @@ describe("CreateCouncilSetForm", () => {
   it("422 (FastAPI kèm `input` = thân có mã): không hiện mã", async () => {
     mocPost(() =>
       HttpResponse.json(
-        { detail: [{ type: "missing", loc: ["body", "academic_year"], msg: "Field required", input: { ma_ho_so: MA } }] },
+        // Lượt G (F236): khuôn THẬT của handler 422 — danh sách ở `errors`, `detail` là chuỗi.
+        { detail: "Request validation failed", error_code: "VALIDATION_ERROR", errors: [{ type: "missing", loc: ["body", "academic_year"], msg: "Field required", input: { ma_ho_so: MA } }] },
         { status: 422 },
       ),
     )

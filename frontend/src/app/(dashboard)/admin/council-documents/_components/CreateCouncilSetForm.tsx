@@ -5,13 +5,24 @@ import { useMemo, useRef, useState, type ChangeEvent } from "react"
 import { Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useCreateCouncilSet } from "@/hooks/admin/useCouncilDocuments"
-import type { DecisionParams } from "@/lib/zod/council-documents"
+import { councilSetGateFromError } from "@/lib/api/council-documents"
+import type { CouncilSetGate, DecisionParams } from "@/lib/zod/council-documents"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
+import { nhanTrangThai } from "./hien-thi"
 
 /**
  * Ô nhập danh sách mã ⇒ mảng gửi máy chủ, GIỮ thứ tự VÀ số dòng: dòng thứ i của
@@ -67,6 +78,9 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
   const [namHoc, setNamHoc] = useState("")
   const [thamSo, setThamSo] = useState<ThamSoNhap>(THAM_SO_TRONG)
   const [moThamSo, setMoThamSo] = useState(false)
+  // Lượt G: cổng của máy chủ báo hồ sơ ở mức cảnh báo VÀ nói người gọi được xác nhận ⇒ mở hộp
+  // xác nhận với ĐÚNG số đếm máy chủ trả (chỉ số đếm theo trạng thái — không mã hồ sơ).
+  const [choXacNhan, setChoXacNhan] = useState<CouncilSetGate | null>(null)
   const lePhai = useRef<HTMLDivElement>(null)
 
   const danhSach = useMemo(() => dongNhapThanhDanhSach(vanBan), [vanBan])
@@ -75,7 +89,7 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
   const coMa = danhSach.some((d) => d.trim() !== "")
   const guiDuoc = coMa && namHocSo !== null && !tao.isPending
 
-  const gui = () => {
+  const gui = (xacNhan?: Record<string, number>) => {
     if (!guiDuoc || namHocSo === null) return
     const ts = thamSoGui(thamSo)
     tao.mutate(
@@ -83,12 +97,19 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
         ma_ho_so: danhSach,
         academic_year: namHocSo,
         ...(ts ? { tham_so_quyet_dinh: ts } : {}),
+        ...(xacNhan ? { xac_nhan_trang_thai: xacNhan } : {}),
       },
       {
         onSuccess: (bo) => {
           setVanBan("")
           toast.success(`Đã dựng bộ văn bản #${bo.id}: ${bo.so_ho_so} hồ sơ, ${bo.so_tep} tệp.`)
           if (canOpenDetail) router.push(`/admin/council-documents/${bo.id}`)
+        },
+        onError: (loi) => {
+          const g = councilSetGateFromError(loi)
+          if (g && g.chan.length === 0 && g.can_admin_xac_nhan && g.nguoi_goi_duoc_xac_nhan) {
+            setChoXacNhan(g)
+          }
         },
       },
     )
@@ -210,6 +231,40 @@ export function CreateCouncilSetForm({ canOpenDetail }: { canOpenDetail: boolean
           "Dựng bộ văn bản"
         )}
       </Button>
+
+      <AlertDialog open={choXacNhan !== null} onOpenChange={(o) => !o && setChoXacNhan(null)}>
+        <AlertDialogContent data-testid="xac-nhan-trang-thai-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Xác nhận dựng bộ có hồ sơ ở trạng thái cần cảnh báo</AlertDialogTitle>
+            <AlertDialogDescription>
+              Các hồ sơ dưới đây chưa ở trạng thái đã duyệt / trúng tuyển. Xác nhận nghĩa là vẫn đưa
+              đúng các hồ sơ này vào văn bản; lần xác nhận được ghi vào bộ (người, lúc, số hồ sơ mỗi
+              trạng thái).
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ul className="list-disc space-y-1 pl-5 text-sm" data-testid="xac-nhan-trang-thai-dem">
+            {Object.entries(choXacNhan?.canh_bao.so_ho_so_theo_trang_thai ?? {}).map(([s, n]) => (
+              <li key={s}>
+                {`${nhanTrangThai(s)}: ${n} hồ sơ — dòng ${(choXacNhan?.canh_bao.dong_theo_trang_thai[s] ?? []).join(", ")}`}
+              </li>
+            ))}
+          </ul>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="xac-nhan-trang-thai-huy">Huỷ</AlertDialogCancel>
+            <Button
+              data-testid="xac-nhan-trang-thai-dong-y"
+              disabled={tao.isPending}
+              onClick={() => {
+                const dem = choXacNhan?.canh_bao.so_ho_so_theo_trang_thai
+                setChoXacNhan(null)
+                if (dem) gui(dem)
+              }}
+            >
+              Xác nhận và dựng bộ
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </form>
   )
 }

@@ -310,13 +310,15 @@ export const navigationConfig: NavigationConfig = {
           roles: ["admin", "manager"],
         },
         {
-          // Lần xét tuyển GĐ1 — văn bản Hội đồng. Vai ở đây chỉ để GỌN thanh bên (khuôn
-          // nav sẵn có, như mọi mục khác); nút / thẻ trong trang ẩn hiện theo cờ quyền của
-          // máy chủ (`GET /api/admission-config/council-documents/quyen`), không theo vai.
+          // Lần xét tuyển GĐ1 — văn bản Hội đồng. Mục HIỆN THEO CỜ máy chủ (F238): chỉ khi
+          // `GET /api/admission-config/council-documents/quyen` trả ít nhất một cờ bật (quản lý
+          // chưa gán đơn vị — mọi cờ tắt — không thấy mục). `roles` chỉ là bộ lọc thô để không hỏi
+          // cờ cho vai không có dòng Casbin nào của module (máy chủ trả 403 ⇒ đằng nào cũng ẩn).
           label: "Văn bản Hội đồng",
           href: "/admin/council-documents",
           icon: FileText,
           roles: ["admin", "manager"],
+          serverFlag: "council-documents",
         },
         {
           // Q9 #07 PR3 — KV/UT bonus rates per TT 05/2021. Admin-only

@@ -11,7 +11,7 @@
  * @see FRONTEND_ARCHITECTURE_V3.md Section 2.4
  */
 
-import { AxiosError } from 'axios'
+import axios, { AxiosError } from 'axios'
 import { toast } from 'sonner'
 import type { QueryClient } from '@tanstack/react-query'
 
@@ -111,8 +111,11 @@ export function handleApiError(
   error: AxiosError<ApiErrorResponse>,
   options: HandleErrorOptions = {}
 ): void {
-  const status = error.response?.status
-  const data = error.response?.data
+  // Đọc lỗi qua ĐÚNG bộ đọc chung (`readApiError`) — cùng nguồn với lỗi hiện tại chỗ của các
+  // module (vd văn bản Hội đồng). Toast giữ nguyên câu chữ như trước.
+  const parsed = readApiError(error)
+  const status = parsed.status
+  const data = parsed.data as ApiErrorResponse | undefined
   const code = data?.code ?? mapStatusToCode(status)
   
   switch (code) {
@@ -161,6 +164,74 @@ export function handleApiError(
     default:
       const contextMsg = options.context ? `Lỗi ${options.context}` : 'Đã có lỗi xảy ra'
       toast.error(contextMsg, { description: extractMessage(data) })
+  }
+}
+
+// =============================================================================
+// SHARED PARSER — MỘT nguồn đọc thân lỗi API (toast của handleApiError + lỗi tại chỗ)
+// =============================================================================
+
+/** Một lỗi kiểm dạng (422) — CHỈ `loc` (phần chuỗi) + `msg`; KHÔNG `input` / `ctx` (có thể mang
+ * dữ liệu người dùng vừa gửi, vd danh sách mã hồ sơ). */
+export interface ApiValidationIssue {
+  loc: string[]
+  msg: string
+}
+
+export interface ApiErrorView {
+  /** lỗi của axios (có thể không có phản hồi) */
+  isAxios: boolean
+  /** có phản hồi HTTP (false = mất mạng / không tới máy chủ) */
+  hasResponse: boolean
+  status?: number
+  /** `error_code` của máy chủ (`base_app_exception_handler` / handler 422) */
+  errorCode?: string
+  /** `code` của máy chủ (vd `ADMISSION_FROZEN` của middleware đóng băng) */
+  serverCode?: string
+  /** `detail` khi là CHUỖI */
+  detail?: string
+  /** 422 — danh sách ở khoá `errors` của handler THẬT (`exception_handlers.py`
+   * `pydantic_validation_error_handler`), không ở `detail` */
+  validation: ApiValidationIssue[]
+  /** 503 + `code: ADMISSION_FROZEN` — đóng băng tuyển sinh */
+  frozen: boolean
+  /** thân lỗi (object) — phần riêng của module đọc thêm (vd cổng dựng bộ); undefined nếu không có */
+  data?: Record<string, unknown>
+}
+
+/** Đọc một lỗi bất kỳ ⇒ dạng chuẩn. Không đọc `config` / thân yêu cầu của lỗi axios. */
+export function readApiError(error: unknown): ApiErrorView {
+  if (!axios.isAxiosError(error)) {
+    return { isAxios: false, hasResponse: false, validation: [], frozen: false }
+  }
+  const res = error.response
+  if (!res) return { isAxios: true, hasResponse: false, validation: [], frozen: false }
+  const data =
+    res.data && typeof res.data === "object" && !Array.isArray(res.data)
+      ? (res.data as Record<string, unknown>)
+      : undefined
+  const chuoi = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : undefined)
+  const errors = Array.isArray(data?.errors) ? (data?.errors as unknown[]) : []
+  const validation = errors
+    .map((x): ApiValidationIssue | undefined => {
+      const o = x && typeof x === "object" ? (x as Record<string, unknown>) : {}
+      const msg = chuoi(o.msg)
+      if (!msg) return undefined
+      const loc = Array.isArray(o.loc) ? o.loc.filter((p): p is string => typeof p === "string") : []
+      return { loc, msg }
+    })
+    .filter((x): x is ApiValidationIssue => x !== undefined)
+  const serverCode = chuoi(data?.code)
+  return {
+    isAxios: true,
+    hasResponse: true,
+    status: res.status,
+    errorCode: chuoi(data?.error_code),
+    serverCode,
+    detail: chuoi(data?.detail),
+    validation,
+    frozen: res.status === 503 && serverCode === "ADMISSION_FROZEN",
+    data,
   }
 }
 

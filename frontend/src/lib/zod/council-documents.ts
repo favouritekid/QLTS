@@ -134,15 +134,43 @@ export const decisionParamsSchema = z
   .strict()
 export type DecisionParams = z.infer<typeof decisionParamsSchema>
 
-/** `CouncilSetCreate` (extra="forbid") — `ma_ho_so` GIỮ thứ tự người nhập. */
+/** `CouncilSetCreate` (extra="forbid") — `ma_ho_so` GIỮ thứ tự người nhập.
+ * `xac_nhan_trang_thai` (lượt G): admin xác nhận ĐÚNG số hồ sơ theo trạng thái máy chủ vừa báo
+ * (409) — giao diện chỉ gửi lại nguyên số đếm của máy chủ, máy chủ kiểm. */
 export const councilSetCreateSchema = z
   .object({
     ma_ho_so: z.array(z.string()).min(1),
     academic_year: z.number().int(),
     tham_so_quyet_dinh: decisionParamsSchema.nullable().optional(),
+    xac_nhan_trang_thai: z.record(z.string(), z.number().int().min(1)).nullable().optional(),
   })
   .strict()
 export type CouncilSetCreate = z.infer<typeof councilSetCreateSchema>
+
+// ── cổng dựng bộ (lượt G — 400 chặn / 409 cần xác nhận): `kiem_tra_dung_bo` của thân lỗi ──
+/** Một lý do chặn: mã, câu của máy chủ, trạng thái (nếu là lý do trạng thái), SỐ DÒNG (đếm từ 1).
+ * Không có mã hồ sơ — chỉ số dòng của ô nhập. */
+export const councilSetGateItemSchema = z.object({
+  ma: z.string(),
+  mo_ta: z.string(),
+  trang_thai: z.string().nullable(),
+  so_ho_so: z.number().int(),
+  dong: z.array(z.number().int()),
+})
+export type CouncilSetGateItem = z.infer<typeof councilSetGateItemSchema>
+
+export const councilSetGateSchema = z.object({
+  muc: z.string(),
+  so_dong: z.number().int(),
+  chan: z.array(councilSetGateItemSchema),
+  canh_bao: z.object({
+    so_ho_so_theo_trang_thai: z.record(z.string(), z.number().int()),
+    dong_theo_trang_thai: z.record(z.string(), z.array(z.number().int())),
+  }),
+  can_admin_xac_nhan: z.boolean(),
+  nguoi_goi_duoc_xac_nhan: z.boolean(),
+})
+export type CouncilSetGate = z.infer<typeof councilSetGateSchema>
 
 /** `CouncilSetDelete` (extra="forbid") — lý do BẮT BUỘC (máy chủ kiểm rỗng / trần). */
 export const councilSetDeleteSchema = z.object({ ly_do: z.string() }).strict()

@@ -88,7 +88,8 @@ describe("createCouncilSet — danh sách mã chỉ ở thân POST", () => {
   it.each([
     [400, { detail: "Dòng 2: mã hồ sơ phải gồm đúng 12 chữ số (CCCD) hoặc đúng 9 chữ số (CMND), chỉ chữ số 0-9.", error_code: "DATA_VALIDATION_ERROR" }],
     [409, { detail: "Đang dựng một bộ văn bản khác — chờ bộ ấy xong rồi thử lại.", error_code: "CONFLICT" }],
-    [422, { detail: [{ type: "extra_forbidden", loc: ["body", "x"], msg: "Extra inputs are not permitted", input: { ma_ho_so: "MA" } }] }],
+    // Lượt G (F236): khuôn THẬT của handler 422 — danh sách ở `errors`, `detail` là chuỗi.
+    [422, { detail: "Request validation failed", error_code: "VALIDATION_ERROR", errors: [{ type: "extra_forbidden", loc: ["body", "x"], msg: "Extra inputs are not permitted", input: { ma_ho_so: "MA" } }] }],
     [503, { detail: "Tuyển sinh đang đóng băng", code: "ADMISSION_FROZEN" }],
     [500, { detail: "Lỗi CSDL khi đọc hồ sơ cho bộ văn bản.", error_code: "SERVICE_ERROR" }],
   ])("lỗi %s: không console / storage / URL mang mã", async (status, body) => {
@@ -161,8 +162,12 @@ describe("describeCouncilDocumentError — câu cho người dùng", () => {
   })
 
   it("422: chỉ loc + msg, KHÔNG input / ctx (FastAPI phản hồi kèm thân có mã)", async () => {
+    // Lượt G (F236): khuôn THẬT của handler 422 (`exception_handlers.py` —
+    // `pydantic_validation_error_handler`): `detail` là CHUỖI, danh sách ở `errors`.
     const m = await loiTu(422, {
-      detail: [
+      detail: "Request validation failed",
+      error_code: "VALIDATION_ERROR",
+      errors: [
         { type: "string_pattern_mismatch", loc: ["body", "tham_so_quyet_dinh", "so_quyet_dinh"], msg: "String should match pattern", input: MA[0], ctx: { pattern: MA[1] } },
         { type: "missing", loc: ["body", "academic_year"], msg: "Field required", input: { ma_ho_so: MA } },
       ],

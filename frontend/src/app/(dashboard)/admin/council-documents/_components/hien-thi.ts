@@ -1,6 +1,13 @@
 /**
  * Văn bản Hội đồng — định dạng HIỂN THỊ (không quyết định nghiệp vụ gì).
  */
+import { getStatusConfig } from "@/lib/status-config"
+
+/** Nhãn trạng thái hồ sơ (chỉ để đọc) + mã gốc của máy chủ — mức chặn / cảnh báo do MÁY CHỦ quyết. */
+export function nhanTrangThai(s: string): string {
+  const nhan = getStatusConfig(s).label
+  return nhan && nhan !== s ? `${nhan} (${s})` : s
+}
 
 /** Nhãn loại mẫu — trùng `TEN_LOAI` của `council_document_template_service.py`. Loại lạ ⇒ in nguyên. */
 const NHAN_LOAI_MAU: Record<string, string> = {

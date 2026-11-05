@@ -54,6 +54,12 @@ export interface NavItem {
   excludePaths?: string[]; // Paths to exclude from parent active state checking
   children?: NavItem[];
   badge?: string | number | NavBadge; // Enhanced: Support both simple and complex badges
+  /**
+   * Mục chỉ hiện khi CỜ QUYỀN của máy chủ cho phép (F238, Codex lần 8) — `roles` khi ấy chỉ là
+   * bộ lọc THÔ để không hỏi máy chủ cho vai chắc chắn không có quyền; hiện / ẩn do cờ quyết
+   * (`useServerFlagNavigation`).
+   */
+  serverFlag?: "council-documents";
 }
 
 /**

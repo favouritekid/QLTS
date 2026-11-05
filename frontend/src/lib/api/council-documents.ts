@@ -11,9 +11,10 @@
  *     `config.data` = thân yêu cầu ⇒ in lỗi là in danh sách mã);
  *   - không lưu ở đâu ngoài bộ nhớ của React Query (xem hook).
  */
-import axios, { AxiosError } from "axios"
+import axios from "axios"
 
 import { api } from "@/lib/api/client"
+import { readApiError } from "@/lib/error-handler"
 import {
   councilDocumentPermissionsOutSchema,
   councilDownloadLogListSchema,
@@ -22,6 +23,7 @@ import {
   councilSetDeletionListSchema,
   councilSetDeletionSchema,
   councilSetDetailSchema,
+  councilSetGateSchema,
   councilSetInputCodesSchema,
   councilSetListSchema,
   councilTemplateListSchema,
@@ -32,6 +34,7 @@ import {
   type CouncilSetCreate,
   type CouncilSetDeletion,
   type CouncilSetDetail,
+  type CouncilSetGate,
   type CouncilSetInputCodes,
   type CouncilTemplate,
   type CouncilTemplateKind,
@@ -218,41 +221,46 @@ export interface CouncilErrorMessage {
   /** câu của MÁY CHỦ (đã che dữ liệu) khi là lỗi miền — hiện nguyên văn */
   detail?: string
   status?: number
+  /** cổng dựng bộ (lượt G): danh sách bị chặn / cần xác nhận theo SỐ DÒNG — chỉ ở 400 / 409 */
+  gate?: CouncilSetGate
 }
 
-interface LoiMayChu {
-  detail?: unknown
-  error_code?: unknown
-  code?: unknown
+/** `kiem_tra_dung_bo` của thân lỗi 400 / 409 (máy chủ: chỉ số dòng, mã lý do, trạng thái, số
+ * đếm). Sai dạng ⇒ undefined (giao diện chỉ hiện câu máy chủ). */
+function docGate(data: Record<string, unknown> | undefined): CouncilSetGate | undefined {
+  const r = councilSetGateSchema.safeParse(data?.kiem_tra_dung_bo)
+  return r.success ? r.data : undefined
 }
 
-function chuoi(v: unknown): string | undefined {
-  return typeof v === "string" && v.length > 0 ? v : undefined
+/** Cổng dựng bộ của một lỗi dựng bộ (400 / 409) — form dùng để mở hộp xác nhận THEO PHẢN HỒI
+ * máy chủ (`nguoi_goi_duoc_xac_nhan`), không theo vai. */
+export function councilSetGateFromError(error: unknown): CouncilSetGate | undefined {
+  return describeCouncilDocumentError(error).gate
 }
 
 /**
- * Lỗi ⇒ câu cho người dùng. KHÔNG đọc `config.data` / `input` / `ctx` của lỗi
- * (có thể mang danh sách mã). Lỗi miền (400 / 409) hiện NGUYÊN VĂN `detail` của
- * máy chủ — máy chủ chỉ nêu số dòng / tên trường, không nêu giá trị. 403 / 404 /
- * 5xx: câu cố định, không lộ chi tiết.
+ * Lỗi ⇒ câu HIỆN TẠI CHỖ cho người dùng (không toast). Thân lỗi đọc qua bộ đọc CHUNG
+ * `readApiError` (`@/lib/error-handler` — cùng nguồn với `handleApiError`; F238): ở đây chỉ còn
+ * CÁCH TRÌNH BÀY riêng của module — lỗi miền (400 / 409) hiện NGUYÊN VĂN `detail` của máy chủ (máy
+ * chủ chỉ nêu số dòng / tên trường, không nêu giá trị) + danh sách cổng dựng bộ; 403 / 404 / 5xx:
+ * câu cố định, không lộ chi tiết; 422: `loc` (bỏ phần tử đầu "body") + `msg` từ khoá `errors` của
+ * handler THẬT (F236), KHÔNG `input` / `ctx`; 503 đóng băng: câu riêng.
  */
 export function describeCouncilDocumentError(error: unknown): CouncilErrorMessage {
-  if (!axios.isAxiosError(error)) {
+  const e = readApiError(error)
+  if (!e.isAxios) {
     if (error && typeof error === "object" && (error as { name?: unknown }).name === "ZodError") {
       return { title: "Dữ liệu không đúng định dạng (máy chủ hoặc ô nhập)." }
     }
     return { title: "Đã có lỗi không xác định." }
   }
-  const e = error as AxiosError<LoiMayChu>
-  if (!e.response) {
+  if (!e.hasResponse || e.status === undefined) {
     return { title: "Không kết nối được máy chủ — kiểm tra mạng rồi thử lại." }
   }
-  const status = e.response.status
-  const data: LoiMayChu =
-    e.response.data && typeof e.response.data === "object" ? e.response.data : {}
+  const status = e.status
   switch (status) {
     case 400:
-      return { status, title: "Máy chủ từ chối dữ liệu.", detail: chuoi(data.detail) }
+      return { status, title: "Máy chủ từ chối dữ liệu.", detail: e.detail, gate: docGate(e.data) }
     case 403:
       return { status, title: "Bạn không có quyền thực hiện thao tác này." }
     case 404:
@@ -261,19 +269,17 @@ export function describeCouncilDocumentError(error: unknown): CouncilErrorMessag
         title: "Không tìm thấy — bộ văn bản / tệp có thể đã bị xoá hoặc ngoài phạm vi của bạn.",
       }
     case 409:
-      return { status, title: "Không thực hiện được lúc này.", detail: chuoi(data.detail) }
+      return {
+        status,
+        title: "Không thực hiện được lúc này.",
+        detail: e.detail,
+        gate: docGate(e.data),
+      }
     case 422: {
-      // Chỉ `loc` (bỏ phần tử đầu "body") + `msg` — KHÔNG `input` / `ctx`.
-      const ds = Array.isArray(data.detail) ? data.detail : []
-      const dong = ds
-        .map((x) => {
-          const loc = Array.isArray((x as { loc?: unknown }).loc)
-            ? ((x as { loc: unknown[] }).loc.slice(1).filter((p) => typeof p === "string") as string[])
-            : []
-          const msg = chuoi((x as { msg?: unknown }).msg)
-          return msg ? (loc.length ? `${loc.join(".")}: ${msg}` : msg) : undefined
-        })
-        .filter((s): s is string => s !== undefined)
+      const dong = e.validation.map((x) => {
+        const loc = x.loc.slice(1)
+        return loc.length ? `${loc.join(".")}: ${x.msg}` : x.msg
+      })
       return {
         status,
         title: "Dữ liệu gửi lên sai dạng.",
@@ -283,7 +289,7 @@ export function describeCouncilDocumentError(error: unknown): CouncilErrorMessag
     case 429:
       return { status, title: "Đã vượt giới hạn số lần thao tác — vui lòng thử lại sau." }
     case 503:
-      if (data.code === "ADMISSION_FROZEN") {
+      if (e.frozen) {
         return {
           status,
           title: "Tuyển sinh đang tạm đóng băng — thao tác ghi bị chặn. Xem / tải vẫn được.",
