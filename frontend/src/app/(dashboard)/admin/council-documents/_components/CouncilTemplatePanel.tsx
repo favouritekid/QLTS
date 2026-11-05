@@ -100,7 +100,7 @@ function UploadTemplateForm() {
       data-testid="upload-template-form"
       onSubmit={(e) => {
         e.preventDefault()
-        if (!guiDuoc || loai === "" || tep === null) return
+        if (loai === "" || hieuLuc === "" || tep === null || tai.isPending) return
         tai.mutate(
           { loai, hieu_luc_tu: hieuLuc, ghi_chu: ghiChu.trim() || undefined, file: tep },
           {

@@ -136,7 +136,6 @@ export function filenameFromContentDisposition(
 ): string {
   const sach = (ten: string) => {
     const cuoi = ten.split(/[\\/]/).pop() ?? ""
-    // eslint-disable-next-line no-control-regex
     const bo = cuoi.replace(/[\u0000-\u001f\u007f]/g, "").trim()
     return bo || fallback
   }
