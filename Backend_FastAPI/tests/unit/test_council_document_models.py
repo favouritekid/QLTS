@@ -107,7 +107,8 @@ def test_migration_la_head_duy_nhat_noi_tiep_head_cu():
     cfg = Config(str(GOC / "alembic.ini"))
     cfg.set_main_option("script_location", str(GOC / "alembic"))
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    assert heads == ["hdts20261104"]  # lượt E3: hai bảng vết nối sau quyền Casbin (E2)
+    # lượt E3: hai bảng vết nối sau quyền Casbin (E2); lượt F: quyền route cờ giao diện
+    assert heads == ["hdts20261105"]
     mig = _migration()
     assert (mig.revision, mig.down_revision) == ("hdts20261103", "v3circ20261011c")
     assert mig.CO_CHO_PHEP_XOA.endswith("_ENABLED")  # cờ CHO PHÉP, mặc định tắt
@@ -116,6 +117,8 @@ def test_migration_la_head_duy_nhat_noi_tiep_head_cu():
     vet = _migration_vet()
     assert (vet.revision, vet.down_revision) == ("hdts20261104", "hdts20261103b")
     assert vet.CO_CHO_PHEP_XOA.endswith("_ENABLED")
+    co = _migration_co()
+    assert (co.revision, co.down_revision) == ("hdts20261105", "hdts20261104")
 
 
 TEP_MIGRATION_VET = (
@@ -162,9 +165,22 @@ def test_bang_vet_khong_co_khoa_ngoai_nao():
     assert "ForeignKey" not in TEP_MIGRATION_VET.read_text(encoding="utf-8")
 
 
+TEP_MIGRATION_CO = (
+    GOC / "alembic" / "versions" / "hdts20261105_council_document_flags_casbin.py"
+)
+
+
+def _migration_co():
+    spec = importlib.util.spec_from_file_location("hdts20261105", TEP_MIGRATION_CO)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def test_quyen_manager_trong_template_co_migration_cap():
     # Production KHÔNG tự đồng bộ template ⇒ mọi dòng manager của API văn bản Hội đồng
-    # trong template PHẢI là đúng các dòng migration hdts20261103b chèn (và ngược lại).
+    # trong template PHẢI là đúng các dòng migration chèn — hdts20261103b (ba route đọc bộ) +
+    # hdts20261105 (route cờ giao diện, lượt F) — và ngược lại.
     from app.casbin_config.policy_templates import (
         ACCOUNTANT_TEMPLATE,
         MANAGER_TEMPLATE,
@@ -172,14 +188,17 @@ def test_quyen_manager_trong_template_co_migration_cap():
     )
 
     cb = _migration_casbin()
+    co = _migration_co()
     tien_to = "/api/admission-config/council-documents"
     template = {
         ("role:manager", p["object"], p["action"], p.get("eft", "allow"))
         for p in MANAGER_TEMPLATE["policies"]
         if p["object"].startswith(tien_to)
     }
-    assert template == set(cb.POLICIES) and len(template) == 3
-    assert all(p[2] == "GET" for p in cb.POLICIES)  # manager CHỈ ĐỌC
+    assert template == set(cb.POLICIES) | set(co.POLICIES) and len(template) == 4
+    assert co.POLICIES == (("role:manager", tien_to + "/quyen", "GET", "allow"),)
+    assert co.TEMPLATE_ID != cb.TEMPLATE_ID  # hạ cấp mỗi bên chỉ xoá dòng của mình
+    assert all(p[2] == "GET" for p in cb.POLICIES + co.POLICIES)  # manager CHỈ ĐỌC
     for t in (OFFICER_TEMPLATE, ACCOUNTANT_TEMPLATE):
         assert not [p for p in t["policies"] if p["object"].startswith(tien_to)]
 
@@ -211,10 +230,10 @@ def test_route_chi_admin_khong_vai_nao_khac_co_dong_casbin():
         and p.get("eft", "allow") == "allow"
     ]
     assert lot == []
-    cb = _migration_casbin()
+    cb, co = _migration_casbin(), _migration_co()
     assert not [
         (method, duong)
-        for _, v1, v2, _ in cb.POLICIES
+        for _, v1, v2, _ in cb.POLICIES + co.POLICIES
         for method, duong in ROUTE_CHI_ADMIN
         if key_match4(duong, v1) and regex_match(method, v2)
     ]

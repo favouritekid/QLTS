@@ -17,6 +17,8 @@ Quyền — hai tầng (``AUTHORIZATION_GUIDELINES.md``):
      ``unit_id`` NULL chỉ admin, ngoài phạm vi ⇒ 404. Route CHỈ ADMIN (owner 04-11, J1 dòng
      29–31) thêm lớp phụ ``deps.require_council_document_admin`` /
      ``deps.get_council_document_set_for_admin`` (không phải admin ⇒ 403).
+  Cờ quyền giao diện (lượt F): ``GET /quyen`` — máy chủ đánh giá CHÍNH hai tầng trên cho từng
+  route (``deps.quyen_van_ban_hoi_dong`` + ``ENDPOINT_THEO_CO`` cuối tệp), không bảng vai thứ hai.
 
 Xoá bộ: lý do bắt buộc + vết xoá độc lập, cùng giao dịch với lệnh xoá (xoá trên phần mềm KHÔNG
 xoá khỏi bản sao lưu đã có). Tải tệp: nhật ký ghi BỀN (commit) TRƯỚC khi trả bytes; ghi lỗi ⇒
@@ -38,6 +40,8 @@ from ..config import settings
 from ..core import deps
 from ..core.rate_limits import RateLimits, limiter
 from ..schemas.council_document import (
+    CouncilDocumentPermissions,
+    CouncilDocumentPermissionsOut,
     CouncilDownloadLogOut,
     CouncilSetCreate,
     CouncilSetDelete,
@@ -335,3 +339,39 @@ async def list_council_document_set_deletions(
 ):
     ds = await bo_vb.liet_ke_vet_xoa(db, limit=limit, offset=offset)
     return [CouncilSetDeletionOut.model_validate(d) for d in ds]
+
+
+# ═══════════════════ cờ quyền GIAO DIỆN (lượt F) ════════════════════════════════════════
+@router.get(
+    "/quyen",
+    response_model=CouncilDocumentPermissionsOut,
+    summary="Cờ quyền giao diện của người gọi (máy chủ đánh giá chính các cổng của từng route)",
+)
+@limiter.limit(RateLimits.DATA_READ)
+async def get_council_document_permissions(
+    request: Request,
+    current_user: models.User = deps.CasbinAuth,
+):
+    """Casbin: admin (wildcard) + manager (template + migration ``hdts20261105``); vai khác
+    403 — giao diện coi 403 ở đây là "mọi cờ tắt". Không log gì ngoài log chung."""
+    quyen = await deps.quyen_van_ban_hoi_dong(request, current_user, ENDPOINT_THEO_CO)
+    return CouncilDocumentPermissionsOut(
+        permissions=CouncilDocumentPermissions(**quyen)
+    )
+
+
+#: Cờ ↔ HÀM xử lý của ĐÚNG MỘT route (phương thức + đường đọc từ bảng route thật của app, không
+#: viết lại ở đây). Thêm route mới vào module ⇒ thêm cờ (test
+#: ``test_moi_route_cua_module_co_dung_mot_co`` đỏ nếu quên).
+ENDPOINT_THEO_CO = {
+    "xem_mau": list_council_templates,
+    "tai_mau_len": upload_council_template,
+    "xem_danh_sach_bo": list_council_document_sets,
+    "tao_bo": create_council_document_set,
+    "xem_chi_tiet_bo": get_council_document_set,
+    "tai_tep": download_council_document_file,
+    "xoa_bo": delete_council_document_set,
+    "xem_ma_ho_so": get_council_document_set_input_codes,
+    "xem_nhat_ky_tai": list_council_document_download_log,
+    "xem_nhat_ky_xoa": list_council_document_set_deletions,
+}

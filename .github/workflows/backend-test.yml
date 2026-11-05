@@ -1195,6 +1195,9 @@ jobs:
           # lần riêng từng ca, không chạm `qlts_test`) và `tests/unit/test_sentry_khoi_tao.py`
           # (F223: Sentry khởi tạo MỘT nơi, transport giả + chặn socket — thân request, biến cục
           # bộ, chuỗi truy vấn, chữ ngoại lệ, log, header không vào sự kiện). Ghim WHOLE-FILE.
+          # Lượt F (giao diện): `tests/api/test_council_documents_quyen_api.py` (request THẬT: cờ
+          # quyền giao diện `GET /quyen` KHỚP hành vi thật của từng route cho năm vai, Casbin giả
+          # cho qua / từ chối, cổng lạ ⇒ cờ tắt; SQL thật của migration hdts20261105). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1272,6 +1275,7 @@ jobs:
               tests/integration/test_council_document_migrations_e3.py
               tests/integration/test_council_document_downgrade_dong_thoi.py
               tests/unit/test_sentry_khoi_tao.py
+              tests/api/test_council_documents_quyen_api.py
 
     env:
       APP_ENV: test

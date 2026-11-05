@@ -1,5 +1,5 @@
 # app/core/deps.py
-from typing import List, NamedTuple, Optional
+from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional
 
 import casbin
 import structlog
@@ -722,8 +722,26 @@ async def require_password_not_forced(
 PasswordSafeDep = Depends(require_password_not_forced)
 
 
+def chu_the_casbin(current_user: models.User) -> str:
+    """Chủ thể Casbin của một người dùng (``role:<user.role>``) — MỘT nguồn cho
+    ``check_permission`` và phép tính cờ quyền giao diện (``quyen_van_ban_hoi_dong``)."""
+    return f"role:{current_user.role}"
+
+
+def casbin_cho_phep(
+    enforcer: casbin.AsyncEnforcer,
+    current_user: models.User,
+    object_path: str,
+    action: str,
+) -> bool:
+    """Câu hỏi Casbin "người này được ``action`` trên ``object_path`` không" — MỘT nguồn cho
+    ``check_permission`` (chặn request) và ``quyen_van_ban_hoi_dong`` (cờ giao diện). Không log,
+    không ném lỗi: người gọi quyết."""
+    return bool(enforcer.enforce(chu_the_casbin(current_user), object_path, action))
+
+
 async def check_permission(
-    request: Request, 
+    request: Request,
     current_user: models.User = Depends(get_current_active_user)  # ✅ PHASE 1 FIX: was get_current_user
 ) -> models.User:
     """
@@ -743,11 +761,11 @@ async def check_permission(
         raise PermissionDeniedError("Permission system is misconfigured.")
 
     # ✅ FIX: Use role:X instead of user:X to match policy templates
-    subject = f"role:{current_user.role}"
+    subject = chu_the_casbin(current_user)
     object_path = request.url.path
     action = request.method
 
-    if not enforcer.enforce(subject, object_path, action):
+    if not casbin_cho_phep(enforcer, current_user, object_path, action):
         log.warning(
             "Permission Denied (Casbin)",
             subject=subject,
@@ -3827,3 +3845,118 @@ async def get_council_document_set_for_admin(
 ) -> "models.CouncilDocumentSet":
     """Bộ ``set_id`` cho route CHỈ ADMIN; không có ⇒ 404."""
     return await _council_document_set_trong_pham_vi(db, set_id, scope)
+
+
+# ── Cờ quyền GIAO DIỆN của văn bản Hội đồng (lượt F) ─────────────────────────────────────────
+# Giao diện ẩn / hiện nút theo cờ của API (FRONTEND_ARCHITECTURE_V3 §2.2), KHÔNG theo
+# ``user.role``. Cờ = máy chủ ĐÁNH GIÁ CHÍNH CÁC CỔNG của từng route cho người gọi — không có
+# bảng "vai nào được gì" thứ hai (CLAUDE.md §7):
+#   * route nào có cổng nào: đọc từ CÂY DEPENDENCY THẬT của route (``route.dependant``) —
+#     không khai lại ở đây;
+#   * Casbin: ``casbin_cho_phep`` (cùng chủ thể / enforcer với ``check_permission``) trên
+#     đường của route, tham số đường thay bằng một id mẫu (keyMatch4 khớp mọi giá trị một đoạn);
+#   * phạm vi / chỉ-admin: gọi ĐÚNG ``get_council_document_scope`` /
+#     ``require_council_document_admin``.
+# Cây có dependency KHÔNG thuộc hai tập dưới ⇒ cờ False (fail-closed) + log TÊN hàm.
+# Ngữ nghĩa: cờ bật ⇔ route không trả 403 / 404 vì QUYỀN với bộ nằm trong phạm vi người gọi
+# thấy (bộ ngoài phạm vi vẫn 404 — lọc ở danh sách / chi tiết, không phải việc của cờ).
+# Đóng băng (503), giới hạn tần suất (429), lỗi đầu vào (400 / 422) không thuộc cờ.
+# Khoá: ``tests/api/test_council_documents_quyen_api.py`` (cờ = hành vi thật từng route, năm vai).
+_CO_CONG_CASBIN = check_permission
+_CO_CONG_PHAM_VI = get_council_document_scope
+_CO_CONG_CHI_ADMIN = require_council_document_admin
+_CONG_VAN_BAN_HOI_DONG = frozenset(
+    {_CO_CONG_CASBIN, _CO_CONG_PHAM_VI, _CO_CONG_CHI_ADMIN}
+)
+# Không phải cổng của module: xác thực + người dùng hoạt động (chính route cờ đã qua, cùng người
+# dùng), phiên CSDL, và tìm bộ theo id (404 ngoài phạm vi do cổng phạm vi ở cây con quyết).
+_KHONG_PHAI_CONG_VAN_BAN_HOI_DONG = frozenset(
+    {
+        get_current_user,
+        get_current_active_user,
+        oauth2_scheme,
+        database.get_db,
+        get_council_document_set_for_user,
+        get_council_document_set_for_admin,
+    }
+)
+
+
+def _ham_trong_cay_dependency(dependant) -> set:
+    """Mọi ``call`` trong cây dependency (đệ quy) của một ``Dependant`` FastAPI."""
+    out, hang = set(), list(dependant.dependencies)
+    while hang:
+        d = hang.pop()
+        if d.call is not None:
+            out.add(d.call)
+        hang.extend(d.dependencies)
+    return out
+
+
+def duong_mau_cua_route(path: str) -> str:
+    """``/sets/{set_id}/files/{thu_tu}`` ⇒ ``/sets/1/files/1`` — đường cụ thể để hỏi Casbin."""
+    import re
+
+    return re.sub(r"\{[^}/]+\}", "1", path)
+
+
+async def quyen_van_ban_hoi_dong(
+    request: Request,
+    current_user: models.User,
+    endpoint_theo_co: Mapping[str, Callable[..., Any]],
+) -> Dict[str, bool]:
+    """``{cờ: bool}`` cho người gọi — mỗi cờ ứng với ĐÚNG MỘT route (tìm theo HÀM xử lý trong
+    bảng route thật của app). Không tìm được đúng một route / route nhiều phương thức /
+    enforcer chưa có ⇒ cờ False."""
+    from fastapi.routing import APIRoute
+
+    enforcer = getattr(request.app.state, "enforcer", None)
+    try:
+        pham_vi: Optional[CouncilDocumentScope] = await get_council_document_scope(
+            current_user
+        )
+    except PermissionDeniedError:
+        pham_vi = None
+    chi_admin_dat = False
+    if pham_vi is not None:
+        try:
+            await require_council_document_admin(pham_vi)
+            chi_admin_dat = True
+        except PermissionDeniedError:
+            chi_admin_dat = False
+
+    out: Dict[str, bool] = {}
+    for co, ham in endpoint_theo_co.items():
+        route = [
+            r
+            for r in request.app.routes
+            if isinstance(r, APIRoute) and r.endpoint is ham
+        ]
+        if enforcer is None or len(route) != 1 or len(route[0].methods) != 1:
+            out[co] = False
+            continue
+        r = route[0]
+        goi = _ham_trong_cay_dependency(r.dependant)
+        la = goi - _CONG_VAN_BAN_HOI_DONG - _KHONG_PHAI_CONG_VAN_BAN_HOI_DONG
+        if la:
+            log.warning(
+                "council_document_flag_unknown_dependency",
+                co=co,
+                ham=sorted(getattr(h, "__name__", type(h).__name__) for h in la),
+            )
+            out[co] = False
+            continue
+        dat = True
+        if _CO_CONG_CASBIN in goi:
+            dat = dat and casbin_cho_phep(
+                enforcer,
+                current_user,
+                duong_mau_cua_route(r.path),
+                next(iter(r.methods)),
+            )
+        if _CO_CONG_PHAM_VI in goi:
+            dat = dat and pham_vi is not None
+        if _CO_CONG_CHI_ADMIN in goi:
+            dat = dat and chi_admin_dat
+        out[co] = dat
+    return out

@@ -132,6 +132,32 @@ class CouncilSetInputCodesOut(BaseModel):
     ma_ho_so: List[str]
 
 
+class CouncilDocumentPermissions(BaseModel):
+    """Cờ quyền GIAO DIỆN (lượt F) — mỗi cờ ứng với ĐÚNG MỘT route của module, do máy chủ đánh
+    giá chính các cổng của route ấy cho người gọi (``deps.quyen_van_ban_hoi_dong``). Giao diện
+    ẩn / hiện theo cờ, không theo vai. Tên trường = khoá của ``ENDPOINT_THEO_CO`` ở router
+    (test khoá bằng nhau)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    xem_mau: bool
+    tai_mau_len: bool
+    xem_danh_sach_bo: bool
+    tao_bo: bool
+    xem_chi_tiet_bo: bool
+    tai_tep: bool
+    xoa_bo: bool
+    xem_ma_ho_so: bool
+    xem_nhat_ky_tai: bool
+    xem_nhat_ky_xoa: bool
+
+
+class CouncilDocumentPermissionsOut(BaseModel):
+    """``GET /quyen`` — khuôn ``permissions`` của giao diện (``src/lib/permissions.ts``)."""
+
+    permissions: CouncilDocumentPermissions
+
+
 class CouncilDownloadLogOut(BaseModel):
     """Một dòng nhật ký: máy chủ đã CẤP tệp ``thu_tu`` của bộ ``set_id`` cho người
     ``nguoi_tai_id`` lúc ``tai_luc`` (không tuyên bố người dùng đã nhận xong)."""

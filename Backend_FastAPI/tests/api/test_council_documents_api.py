@@ -531,7 +531,8 @@ async def test_dong_bang_van_cho_route_doc(client, tk, ba_bo, dong_bang):
     # Mọi route ĐỌC của module (bảng route thật) vẫn 200 khi đóng băng — như mọi route đọc
     # khác của tiền tố (middleware chỉ chặn POST / PUT / PATCH / DELETE).
     doc = sorted(p for m, p in _route_cua_module() if m == "GET")
-    assert len(doc) == 7  # E2: 4 + E3: danh sách mã, nhật ký tải, vết xoá
+    # E2: 4 + E3: danh sách mã, nhật ký tải, vết xoá + lượt F: cờ quyền giao diện (/quyen)
+    assert len(doc) == 8
     for duong in doc:
         url = duong.replace("{set_id}", str(ba_bo["u1"][0])).replace("{thu_tu}", "1")
         r = await client.get(url, headers=(await tk("admin")))
@@ -573,8 +574,8 @@ async def test_loi_422_khong_ghi_cccd_vao_log(client, tk, caplog):
 def test_moi_route_cua_module_khop_vi_tu_bo_input_422():
     duong = {p for _, p in _route_cua_module()}
     # /templates, /sets, /sets/{id}, /sets/{id}/files/{thu_tu} + E3: /sets/{id}/ma-ho-so,
-    # /nhat-ky-tai, /nhat-ky-xoa (DELETE dùng chung /sets/{id}).
-    assert len(duong) == 7
+    # /nhat-ky-tai, /nhat-ky-xoa (DELETE dùng chung /sets/{id}) + lượt F: /quyen.
+    assert len(duong) == 8
     assert all(eh._khong_log_input_422(p) for p in duong)
     assert not eh._khong_log_input_422("/api/admission-config/council-documentsX")
     assert not eh._khong_log_input_422("/api/admission-config/criteria")
