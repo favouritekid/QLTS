@@ -310,6 +310,15 @@ export const navigationConfig: NavigationConfig = {
           roles: ["admin", "manager"],
         },
         {
+          // Lần xét tuyển GĐ1 — văn bản Hội đồng. Vai ở đây chỉ để GỌN thanh bên (khuôn
+          // nav sẵn có, như mọi mục khác); nút / thẻ trong trang ẩn hiện theo cờ quyền của
+          // máy chủ (`GET /api/admission-config/council-documents/quyen`), không theo vai.
+          label: "Văn bản Hội đồng",
+          href: "/admin/council-documents",
+          icon: FileText,
+          roles: ["admin", "manager"],
+        },
+        {
           // Q9 #07 PR3 — KV/UT bonus rates per TT 05/2021. Admin-only
           // (BE enforces require_admin on every endpoint) so manager
           // is excluded from the sidebar entry as well.

@@ -1,0 +1,94 @@
+"use client"
+
+import { useState } from "react"
+import { Loader2 } from "lucide-react"
+
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useCouncilDocumentPermissions } from "@/hooks/admin/useCouncilDocuments"
+import type { CouncilDocumentPermissionKey } from "@/lib/zod/council-documents"
+
+import { CouncilErrorAlert } from "./CouncilErrorAlert"
+import { CouncilDeletionLogPanel, CouncilDownloadLogPanel } from "./CouncilLogPanels"
+import { CouncilSetList } from "./CouncilSetList"
+import { CouncilTemplatePanel } from "./CouncilTemplatePanel"
+import { CreateCouncilSetForm } from "./CreateCouncilSetForm"
+
+type The = "bo" | "tao" | "mau" | "nhat-ky-tai" | "nhat-ky-xoa"
+
+/** Thẻ ↔ cờ của máy chủ: thẻ chỉ hiện khi cờ bật (không xét vai). */
+const THE: { gia_tri: The; nhan: string; co: CouncilDocumentPermissionKey }[] = [
+  { gia_tri: "bo", nhan: "Bộ văn bản", co: "xem_danh_sach_bo" },
+  { gia_tri: "tao", nhan: "Tạo bộ", co: "tao_bo" },
+  { gia_tri: "mau", nhan: "Kho mẫu", co: "xem_mau" },
+  { gia_tri: "nhat-ky-tai", nhan: "Nhật ký tải", co: "xem_nhat_ky_tai" },
+  { gia_tri: "nhat-ky-xoa", nhan: "Nhật ký xoá", co: "xem_nhat_ky_xoa" },
+]
+
+export function CouncilDocumentsClient() {
+  const vm = useCouncilDocumentPermissions()
+  const [the, setThe] = useState<The | null>(null)
+
+  if (vm.state === "loading") {
+    return (
+      <div className="flex items-center gap-2 text-muted-foreground" data-testid="council-loading">
+        <Loader2 className="h-4 w-4 animate-spin" /> Đang tải quyền…
+      </div>
+    )
+  }
+  if (vm.state === "forbidden") {
+    return (
+      <p className="text-muted-foreground" data-testid="council-forbidden">
+        Bạn không có quyền xem văn bản Hội đồng tuyển sinh.
+      </p>
+    )
+  }
+  if (vm.state === "error") return <CouncilErrorAlert error={vm.error} testId="council-permission-error" />
+
+  const q = vm.permissions
+  const hien = THE.filter((t) => q[t.co])
+  if (hien.length === 0) {
+    return (
+      <p className="text-muted-foreground" data-testid="council-forbidden">
+        Bạn không có quyền xem văn bản Hội đồng tuyển sinh.
+      </p>
+    )
+  }
+  const dangChon = the !== null && hien.some((t) => t.gia_tri === the) ? the : hien[0].gia_tri
+
+  return (
+    <Tabs value={dangChon} onValueChange={(v) => setThe(v as The)}>
+      <TabsList>
+        {hien.map((t) => (
+          <TabsTrigger key={t.gia_tri} value={t.gia_tri} data-testid={`tab-${t.gia_tri}`}>
+            {t.nhan}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      {q.xem_danh_sach_bo ? (
+        <TabsContent value="bo" className="pt-4">
+          <CouncilSetList canOpenDetail={q.xem_chi_tiet_bo} />
+        </TabsContent>
+      ) : null}
+      {q.tao_bo ? (
+        <TabsContent value="tao" className="pt-4">
+          <CreateCouncilSetForm canOpenDetail={q.xem_chi_tiet_bo} />
+        </TabsContent>
+      ) : null}
+      {q.xem_mau ? (
+        <TabsContent value="mau" className="pt-4">
+          <CouncilTemplatePanel canUpload={q.tai_mau_len} />
+        </TabsContent>
+      ) : null}
+      {q.xem_nhat_ky_tai ? (
+        <TabsContent value="nhat-ky-tai" className="pt-4">
+          <CouncilDownloadLogPanel />
+        </TabsContent>
+      ) : null}
+      {q.xem_nhat_ky_xoa ? (
+        <TabsContent value="nhat-ky-xoa" className="pt-4">
+          <CouncilDeletionLogPanel />
+        </TabsContent>
+      ) : null}
+    </Tabs>
+  )
+}
