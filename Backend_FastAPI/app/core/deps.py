@@ -3929,7 +3929,9 @@ def _policy_ngoai_mau_route(
         return []
     ham = set(endpoint_theo_co.values())
     duong = {
-        r.path for r in request.app.routes if isinstance(r, APIRoute) and r.endpoint in ham
+        r.path
+        for r in request.app.routes
+        if isinstance(r, APIRoute) and r.endpoint in ham
     }
     if not duong:
         return []
@@ -3944,7 +3946,8 @@ def _policy_ngoai_mau_route(
     }
     try:
         dong = list(enforcer.get_policy())
-    except Exception:  # noqa: BLE001 — không đọc được policy ⇒ fail-closed: coi là ngoài mẫu
+    # Không đọc được policy ⇒ fail-closed: coi là ngoài mẫu.
+    except Exception:  # noqa: BLE001
         return ["<khong-doc-duoc-policy>"]
     out = []
     for d in dong:
@@ -3997,9 +4000,7 @@ async def quyen_van_ban_hoi_dong(
     # bộ thuộc ``deps`` (đơn vị), không thuộc Casbin.
     ngoai_mau = _policy_ngoai_mau_route(request, enforcer, endpoint_theo_co)
     if ngoai_mau:
-        log.warning(
-            "council_document_flag_policy_ngoai_mau", so_dong=len(ngoai_mau)
-        )
+        log.warning("council_document_flag_policy_ngoai_mau", so_dong=len(ngoai_mau))
         return {co: False for co in endpoint_theo_co}
     for co, ham in endpoint_theo_co.items():
         route = [

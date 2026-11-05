@@ -152,8 +152,8 @@ async def test_1104_giu_khoa_qua_tran_thi_dung_khong_mat_gi(csdl_rieng):  # noqa
 
 
 async def test_1104_co_cho_phep_xoa_van_khong_xoa_khi_qua_tran(
-    csdl_rieng,
-):  # noqa: F811
+    csdl_rieng,  # noqa: F811
+):
     await _dung_1104(csdl_rieng)
     k, do, _ = await _giu_khoa_qua_tran(
         csdl_rieng, _ghi_dong_nhat_ky, "hdts20261103b", (VET.CO_CHO_PHEP_XOA, "1")
@@ -186,8 +186,8 @@ async def test_1103_giu_khoa_qua_tran_thi_dung_khong_mat_gi(csdl_rieng):  # noqa
 
 
 async def test_1103_co_cho_phep_xoa_van_khong_xoa_khi_qua_tran(
-    csdl_rieng,
-):  # noqa: F811
+    csdl_rieng,  # noqa: F811
+):
     await _dung_1103(csdl_rieng)
     k, do, _ = await _giu_khoa_qua_tran(
         csdl_rieng, _tao_mot_bo, "v3circ20261011c", (BO_VB.CO_CHO_PHEP_XOA, "1")
