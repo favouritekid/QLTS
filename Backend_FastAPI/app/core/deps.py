@@ -3848,6 +3848,23 @@ async def get_council_document_set_for_admin(
     return await _council_document_set_trong_pham_vi(db, set_id, scope)
 
 
+# Lượt G (owner 05-11, F228): hồ sơ ở mức CẢNH BÁO chỉ vào bộ khi ADMIN xác nhận. Tầng chủ sở hữu
+# câu "ai được xác nhận" = ở đây, cùng nguồn với lớp "chỉ Admin" (gọi ĐÚNG
+# ``get_council_document_scope`` + ``require_council_document_admin``). KHÔNG phải cổng của
+# route (không bao giờ từ chối) — trả ``bool`` cho service; service từ chối yêu cầu mang xác
+# nhận của người không được xác nhận (``council_set_gate_service.kiem_quyen_xac_nhan``).
+async def get_council_document_confirm_right(
+    current_user: models.User = Depends(check_permission),
+) -> bool:
+    try:
+        await require_council_document_admin(
+            await get_council_document_scope(current_user)
+        )
+    except PermissionDeniedError:
+        return False
+    return True
+
+
 # ── Cờ quyền GIAO DIỆN của văn bản Hội đồng (lượt F) ─────────────────────────────────────────
 # Giao diện ẩn / hiện nút theo cờ của API (FRONTEND_ARCHITECTURE_V3 §2.2), KHÔNG theo
 # ``user.role``. Cờ = máy chủ ĐÁNH GIÁ CHÍNH CÁC CỔNG của từng route cho người gọi — không có
@@ -3879,6 +3896,8 @@ _KHONG_PHAI_CONG_VAN_BAN_HOI_DONG = frozenset(
         database.get_db,
         get_council_document_set_for_user,
         get_council_document_set_for_admin,
+        # lượt G: quyền XÁC NHẬN cảnh báo trạng thái — trả bool, không từ chối route nào
+        get_council_document_confirm_right,
     }
 )
 
@@ -3891,6 +3910,50 @@ def _ham_trong_cay_dependency(dependant) -> set:
         if d.call is not None:
             out.add(d.call)
         hang.extend(d.dependencies)
+    return out
+
+
+def _policy_ngoai_mau_route(
+    request: Request,
+    enforcer: Any,
+    endpoint_theo_co: Mapping[str, Callable[..., Any]],
+) -> List[str]:
+    """Đối tượng (``v1``) của các dòng policy thuộc module KHÔNG phải mẫu route (F237): dưới
+    tiền tố chung của các route của module, mà không trùng đúng đường của một route nào và không
+    kết thúc bằng ``*``. Không có enforcer / không đọc được policy ⇒ ``[]`` (cờ tự tắt ở bước
+    sau khi không có enforcer)."""
+    from fastapi.routing import APIRoute
+    import os.path
+
+    if enforcer is None:
+        return []
+    ham = set(endpoint_theo_co.values())
+    duong = {
+        r.path for r in request.app.routes if isinstance(r, APIRoute) and r.endpoint in ham
+    }
+    if not duong:
+        return []
+    tien_to = os.path.commonprefix(sorted(duong)).rsplit("/", 1)[0]
+    if not tien_to:
+        return []
+    # Mọi route dưới tiền tố (kể cả route cờ ``/quyen`` — không nằm trong ``endpoint_theo_co``).
+    duong = {
+        r.path
+        for r in request.app.routes
+        if isinstance(r, APIRoute) and r.path.startswith(tien_to + "/")
+    }
+    try:
+        dong = list(enforcer.get_policy())
+    except Exception:  # noqa: BLE001 — không đọc được policy ⇒ fail-closed: coi là ngoài mẫu
+        return ["<khong-doc-duoc-policy>"]
+    out = []
+    for d in dong:
+        doi_tuong = d[1] if len(d) > 1 else ""
+        if not isinstance(doi_tuong, str) or not doi_tuong.startswith(tien_to + "/"):
+            continue
+        if doi_tuong in duong or doi_tuong.endswith("*"):
+            continue
+        out.append(doi_tuong)
     return out
 
 
@@ -3927,6 +3990,17 @@ async def quyen_van_ban_hoi_dong(
             chi_admin_dat = False
 
     out: Dict[str, bool] = {}
+    # F237 (Codex lần 8) — HỢP ĐỒNG: policy Casbin của module CHỈ theo MẪU route (đúng chuỗi
+    # đường của route, vd ``…/sets/{set_id}``) hoặc ký tự đại diện ``*`` — KHÔNG theo id cụ thể.
+    # Cờ hỏi Casbin bằng đường mẫu (id 1); một dòng theo id cụ thể (vd deny ``…/sets/57``) làm cờ
+    # khác hành vi thật của bộ 57 ⇒ gặp dòng như thế: MỌI cờ tắt (fail-closed) + log. Phạm vi theo
+    # bộ thuộc ``deps`` (đơn vị), không thuộc Casbin.
+    ngoai_mau = _policy_ngoai_mau_route(request, enforcer, endpoint_theo_co)
+    if ngoai_mau:
+        log.warning(
+            "council_document_flag_policy_ngoai_mau", so_dong=len(ngoai_mau)
+        )
+        return {co: False for co in endpoint_theo_co}
     for co, ham in endpoint_theo_co.items():
         route = [
             r

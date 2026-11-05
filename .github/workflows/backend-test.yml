@@ -1198,6 +1198,16 @@ jobs:
           # Lượt F (giao diện): `tests/api/test_council_documents_quyen_api.py` (request THẬT: cờ
           # quyền giao diện `GET /quyen` KHỚP hành vi thật của từng route cho năm vai, Casbin giả
           # cho qua / từ chối, cổng lạ ⇒ cờ tắt; SQL thật của migration hdts20261105). Ghim WHOLE-FILE.
+          # Lượt G (owner 05-11 — F227 / F228 / F229 / F231): `tests/unit/test_council_set_gate.py`
+          # (không CSDL: ba mức trạng thái phủ đủ 15 trạng thái của CHECK / enum / bảng chuyển, luật
+          # từng dòng, luật xác nhận), `tests/integration/test_council_set_gate_db.py` (CSDL test:
+          # cổng dựng bộ trên dữ liệu giả — trạng thái, nguồn ngành / nguyện vọng / điểm, khu vực theo
+          # năm học, ấn định thủ công), `tests/api/test_council_documents_gate_api.py` (request
+          # THẬT: 409 cần admin xác nhận, 400 chặn, vết xác nhận, quản lý bị từ chối / 403) và
+          # `tests/integration/test_council_document_downgrade_cho_khoa.py` (hạ cấp hai migration
+          # dừng sau trần chờ khoá 10 giây qua ĐÚNG `alembic/env.py`, không mất dữ liệu / phiên bản);
+          # Codex lần 8: `tests/api/test_council_documents_hop_dong_api.py` (thân 422 thật = mẫu chung với
+          # giao diện — F236; cờ quyền chỉ theo mẫu route, đối chứng theo id thật — F237). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1276,6 +1286,11 @@ jobs:
               tests/integration/test_council_document_downgrade_dong_thoi.py
               tests/unit/test_sentry_khoi_tao.py
               tests/api/test_council_documents_quyen_api.py
+              tests/unit/test_council_set_gate.py
+              tests/integration/test_council_set_gate_db.py
+              tests/api/test_council_documents_gate_api.py
+              tests/integration/test_council_document_downgrade_cho_khoa.py
+              tests/api/test_council_documents_hop_dong_api.py
 
     env:
       APP_ENV: test

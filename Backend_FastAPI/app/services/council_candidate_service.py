@@ -11,24 +11,29 @@ Vào: danh sách MÃ HỒ SƠ (số CCCD — J1 dòng 8) đúng thứ tự admin
   dịch của request, không ghi gì; giao dịch này KẾT THÚC khi hàm trả về. Ghi bộ văn bản là
   giao dịch KHÁC, của request (F218).
 * Mỗi trường DTO tính như cột cùng tên của truy vấn bộ xuất (luật v1) — SQL ở repository.
-* KHÔNG lọc trạng thái, KHÔNG lọc trình độ: ai trong danh sách thì vào (danh sách do QĐ
-  quyết); trình độ lạ do bộ dựng chặn.
+* KHÔNG lọc trạng thái, KHÔNG lọc trình độ ở tầng đọc: ảnh chụp giữ đúng bộ xuất; trình độ lạ
+  do bộ dựng chặn. Cổng dựng bộ (lượt G — F228 trạng thái, F229 nguồn ngành / nguyện vọng /
+  điểm, F231 khu vực) nằm ở ``council_set_gate_service``, chạy trên ``AnhChupHoSo.kiem`` —
+  dữ liệu kiểm đọc trong CÙNG giao dịch chỉ đọc này.
 * Lỗi đầu vào (mã rỗng, trùng, không khớp ĐÚNG MỘT hồ sơ) ⇒ ``DataValidationError`` nêu SỐ
   THỨ TỰ dòng, KHÔNG nêu giá trị. Lỗi CSDL ⇒ ``ServiceError`` không mang câu SQL / tham số
   (thông báo của trình điều khiển chứa danh sách mã). Không log mã, DTO ở bất kỳ mức nào.
 """
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from types import SimpleNamespace
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from app.config import settings
 from app.repositories.council_candidate_repository import (
     ThongTinGiaoDich,
+    doc_kiem_nguon,
     doc_so_lieu,
     giao_dich_chi_doc,
     phan_giai_ma,
@@ -37,7 +42,12 @@ from app.services.council_document_render_service import (
     CANDIDATE_FIELDS,
     CandidateRowV1,
 )
-from app.utils.exceptions import DataValidationError, ServiceError
+from app.services.council_set_gate_service import DuLieuKiem
+from app.utils.exceptions import (
+    DataValidationError,
+    PriorityRateNotConfigured,
+    ServiceError,
+)
 
 # Độ dài tối đa của một mã đầu vào (CCCD 12 số; CMND cũ 9 số) — giới hạn KỸ THUẬT để chuỗi
 # lạ không tới CSDL; luật định dạng nghiệp vụ là ``_RE_DINH_DANG_MA`` dưới đây.
@@ -54,9 +64,77 @@ _NEU_TOI_DA = 20
 
 @dataclass(frozen=True)
 class AnhChupHoSo:
-    rows: Tuple[CandidateRowV1, ...]
+    rows: Tuple[CandidateRowV1, ...]  # = cột cùng tên của bộ xuất (``diem_kv`` theo luật cũ)
     don_vi: Tuple[Optional[int], ...]  # ``lead.unit_id`` từng hồ sơ, cùng thứ tự
     giao_dich: ThongTinGiaoDich
+    # Dữ liệu cho cổng dựng bộ (lượt G) — cùng giao dịch, cùng thứ tự; KHÔNG ghi gì.
+    kiem: Tuple[DuLieuKiem, ...] = ()
+
+
+async def _tra_khu_vuc(
+    conn: AsyncConnection, hang_kiem: Sequence[dict]
+) -> List[Tuple[Optional[str], Optional[str]]]:
+    """F231 — ``(mã lý do chặn | None, mức điểm KV theo NĂM HỌC | None)`` từng dòng.
+
+    Gọi ĐÚNG các helper app dùng khi tính điểm (``priority_service`` — không chép luật):
+    ``kv_snapshot_resolved`` (vị từ "KV đã phân giải" của T1 / T6), ``verify_manual_override_
+    provenance`` (ấn định thủ công còn hiệu lực — đúng hàm ``freeze_priority_snapshot`` gọi; chỉ
+    ĐỌC sổ ``priority_audit_log``), ``priority_academic_year`` (năm = năm học của hồ sơ) và
+    ``select_open_priority_rates`` (năm học + ``effective_to IS NULL``, không lọc ngày). KHÔNG
+    gọi ``freeze_priority_snapshot`` (hàm GHI) — giao dịch này chỉ đọc."""
+    from app import models
+    from app.services.priority_service import (
+        RATE_TABLE_AREA,
+        kv_snapshot_resolved,
+        priority_academic_year,
+        select_open_priority_rates,
+        verify_manual_override_provenance,
+    )
+
+    muc_da_tra: Dict[Tuple[int, str], Tuple[Optional[str], Optional[str]]] = {}
+    phien: Optional[AsyncSession] = None
+    out: List[Tuple[Optional[str], Optional[str]]] = []
+    try:
+        for h in hang_kiem:
+            snap = h.get("kv_snapshot")
+            if isinstance(snap, str):
+                snap = json.loads(snap)
+            if not kv_snapshot_resolved(snap):
+                out.append(("thieu_khu_vuc", None))
+                continue
+            if (
+                h.get("area_resolution_basis") == "manual_override"
+                or snap.get("rule_applied") == "manual_override"
+            ):
+                if phien is None:
+                    # Phiên ORM trên CHÍNH kết nối đang ở giao dịch chỉ đọc (không mở giao dịch
+                    # mới, không commit / rollback giao dịch ngoài).
+                    phien = AsyncSession(bind=conn)
+                ho_so = await phien.get(models.AdmissionProfile, h["pid"])
+                ok, _ly_do, _ = await verify_manual_override_provenance(phien, ho_so)
+                if not ok:
+                    out.append(("khu_vuc_thu_cong_khong_hieu_luc", None))
+                    continue
+            nam = priority_academic_year(
+                SimpleNamespace(academic_year=h.get("academic_year"), id=h.get("pid"))
+            )
+            kv = snap["kv_resolved"]
+            khoa = (nam, kv)
+            if khoa not in muc_da_tra:
+                try:
+                    muc = await select_open_priority_rates(
+                        conn, table=RATE_TABLE_AREA, academic_year=nam, codes=[kv]
+                    )
+                    muc_da_tra[khoa] = (None, str(muc[kv]))
+                except PriorityRateNotConfigured:
+                    muc_da_tra[khoa] = ("chua_co_muc_khu_vuc", None)
+                except RuntimeError:  # hơn một hàng ĐANG MỞ cùng mã, cùng năm
+                    muc_da_tra[khoa] = ("muc_khu_vuc_khong_nhat_quan", None)
+            out.append(muc_da_tra[khoa])
+    finally:
+        if phien is not None:
+            await phien.close()
+    return out
 
 
 def _neu_dong(dong: Sequence[int]) -> str:
@@ -171,7 +249,15 @@ async def doc_ho_so_theo_ma(
                 )
             if [stt for stt, _, _ in khop] != list(range(1, len(ds) + 1)):
                 raise ServiceError("Phân giải mã hồ sơ trả sai thứ tự — không đọc.")
-            hang = await doc_so_lieu(conn, [pid for _, _, pid in khop])
+            pids = [pid for _, _, pid in khop]
+            hang = await doc_so_lieu(conn, pids)
+            # Cổng dựng bộ (lượt G): dữ liệu kiểm đọc trong CÙNG giao dịch chỉ đọc, theo đúng
+            # nguyện vọng mà truy vấn số liệu in (cột phụ ``nv_in_id``).
+            nv_in = {h["stt"]: h.get("nv_in_id") for h in hang}
+            hang_kiem = await doc_kiem_nguon(
+                conn, pids, [nv_in.get(i) for i in range(1, len(pids) + 1)]
+            )
+            khu_vuc = await _tra_khu_vuc(conn, hang_kiem)
     except DBAPIError:
         # Thông báo của trình điều khiển có câu SQL + tham số (danh sách mã) ⇒ không giữ.
         raise ServiceError("Lỗi CSDL khi đọc hồ sơ cho bộ văn bản.") from None
@@ -190,8 +276,40 @@ async def doc_ho_so_theo_ma(
     if sorted(dem) != list(range(1, len(ds) + 1)):
         raise ServiceError("Đọc số liệu hồ sơ thiếu hàng — không dựng.")
     hang.sort(key=lambda h: h["stt"])
+    if [h["stt"] for h in hang_kiem] != list(range(1, len(ds) + 1)) or len(
+        khu_vuc
+    ) != len(ds):
+        raise ServiceError("Đọc dữ liệu kiểm hồ sơ sai thứ tự / thiếu hàng — không dựng.")
+    so_lieu = {h["stt"]: h for h in hang}
+    kiem = tuple(
+        DuLieuKiem(
+            stt=k["stt"],
+            status=k["status"],
+            uses_choice_engine=k["uses_choice_engine"],
+            so_nv=k["so_nv"],
+            nv1_id=k["nv1_id"],
+            nv_in_id=so_lieu[k["stt"]].get("nv_in_id"),
+            so_nv_trung=k["so_nv_trung"],
+            nv_trung_id=k["nv_trung_id"],
+            hp_co=bool(so_lieu[k["stt"]].get("hp_co")),
+            hp_nganh_id=so_lieu[k["stt"]].get("hp_nganh_id"),
+            nv_in_nganh_id=k["nv_in_nganh_id"],
+            nv_in_path_id=k["nv_in_path_id"],
+            nv_in_sg_id=k["nv_in_sg_id"],
+            lg_nganh_id=k["lg_nganh_id"],
+            lg_path_id=k["lg_path_id"],
+            lg_sg_id=k["lg_sg_id"],
+            diem_ca_hai_khac=k["diem_ca_hai_khac"],
+            diem_chi_nv=k["diem_chi_nv"],
+            diem_chi_hs=k["diem_chi_hs"],
+            kv_ly_do=kv[0],
+            kv_muc=kv[1],
+        )
+        for k, kv in zip(hang_kiem, khu_vuc)
+    )
     return AnhChupHoSo(
         rows=tuple(_thanh_dto(h["stt"], h) for h in hang),
         don_vi=tuple(h["unit_id"] for h in hang),
         giao_dich=tt,
+        kiem=kiem,
     )

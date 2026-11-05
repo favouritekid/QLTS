@@ -155,6 +155,7 @@ async def create_council_document_set(
     request: Request,
     payload: CouncilSetCreate,
     current_user: models.User = deps.CasbinAuth,
+    duoc_xac_nhan: bool = Depends(deps.get_council_document_confirm_right),
     db: AsyncSession = Depends(database.get_db),
 ):
     bo, _ = await bo_vb.tao_bo_van_ban(
@@ -164,14 +165,19 @@ async def create_council_document_set(
         academic_year=payload.academic_year,
         tham_so=payload.tham_so_quyet_dinh,
         nguoi_tao_id=current_user.id,
+        xac_nhan_trang_thai=payload.xac_nhan_trang_thai,
+        duoc_xac_nhan=duoc_xac_nhan,
     )
     await db.commit()
+    xac_nhan = (bo.thong_tin_dung or {}).get("xac_nhan_canh_bao_trang_thai")
     log.info(
         "council_document_set_created",
         set_id=bo.id,
         so_ho_so=bo.so_ho_so,
         so_tep=bo.so_tep,
         actor=current_user.id,
+        # lượt G — chỉ số đếm theo trạng thái (không mã, không số dòng)
+        xac_nhan_canh_bao=(xac_nhan or {}).get("so_ho_so_theo_trang_thai"),
     )
     return CouncilSetDetailOut.tu_bo_va_tep(bo, await bo_vb.tep_cua_bo(db, bo.id))
 

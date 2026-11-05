@@ -13,8 +13,18 @@ chứng ưu tiên trùng loại, Kinh / DTTS / mã dân tộc lạ / rỗng, xã
 ``administrative_nodes`` không còn hiệu lực / không hoạt động (xã lẫn tỉnh), thiếu ngày sinh,
 đủ 5 nhãn văn hoá + rỗng, 4 giá trị chuyên môn, hai loại hình khác nhau cùng chuyên môn,
 nguyện vọng đầu không có điểm, không có nguyện vọng, khu vực ưu tiên có hai mức theo ngày.
-Trạng thái hồ sơ cố ý trộn (nộp, nháp, đã duyệt, chờ hoàn để rút, nộp lại — hàm đọc KHÔNG lọc
-trạng thái). Trả ``{nhãn ca: (cccd, id hồ sơ)}``.
+Trạng thái hồ sơ cố ý trộn (nháp, đã duyệt, đã xác nhận, chờ hoàn để rút, nộp lại, đang xét —
+hàm đọc KHÔNG lọc trạng thái). Trả ``{nhãn ca: (cccd, id hồ sơ)}``.
+
+Lượt G (cổng dựng bộ — F228 / F229 / F231) — dữ liệu chỉnh CÓ CHỦ Ý để các hồ sơ mà test lưu /
+tải / xoá bộ dùng (``DUNG_DUOC`` của ``test_council_document_store.py``, ``HO_SO_U1`` của
+``test_council_documents_api.py``, ``don_vi_khac``) đi qua cổng, KHÔNG đổi cột nào bộ xuất đọc
+ngoài khu vực của ``dia_chi_rong`` / ``nut_tinh_het_hieu_luc_nv1_khong_diem`` (ca "không khu
+vực" chuyển sang nhãn riêng ``khong_khu_vuc``): trạng thái mặc định ``approved``; hồ sơ có
+nguyện vọng ⇒ ``uses_choice_engine`` = true (điểm nằm ở ``profile_choice_score`` — đúng luồng bộ
+máy nguyện vọng); ảnh chụp khu vực có ``rule_applied`` (vị từ ``kv_snapshot_resolved``); mức KV1
+cũ thuộc năm 2025 (production có partial UNIQUE một hàng ĐANG MỞ / năm / mã — hai hàng mở cùng
+năm là dữ liệu lỗi; bộ xuất vẫn chọn mức mới nhất theo ngày như trước).
 """
 import json
 from datetime import date, datetime, timezone
@@ -22,6 +32,11 @@ from datetime import date, datetime, timezone
 from sqlalchemy import text
 
 LUC = datetime(2026, 10, 1, tzinfo=timezone.utc)
+
+
+def kv(ma: str, rule: str = "commune_lookup") -> dict:
+    """Ảnh chụp khu vực ĐÃ PHÂN GIẢI (``priority_service.kv_snapshot_resolved``)."""
+    return {"kv_resolved": ma, "rule_applied": rule}
 
 
 def ma_gia(n: int, so_chu_so: int = 12) -> str:
@@ -293,20 +308,21 @@ async def danh_muc(conn) -> dict:
             valid_to=den,
             is_active=True,
         )
-    # Mức điểm khu vực: KV1 có HAI mức — mới nhất theo effective_from thắng.
-    for kv, diem, tu in (
-        ("KV1", "0.50", date(2024, 1, 1)),
-        ("KV1", "0.75", date(2026, 1, 1)),
-        ("KV2", "0.25", date(2026, 1, 1)),
-        ("KV2-NT", "0.50", date(2026, 1, 1)),
-        ("KV3", "0.00", date(2026, 1, 1)),
+    # Mức điểm khu vực: KV1 có HAI mức — bộ xuất lấy mới nhất theo effective_from; mức cũ
+    # thuộc năm 2025 (lượt G: một hàng ĐANG MỞ / năm / mã, như partial UNIQUE của production).
+    for nam_kv, ma_kv, diem, tu in (
+        (2025, "KV1", "0.50", date(2024, 1, 1)),
+        (2026, "KV1", "0.75", date(2026, 1, 1)),
+        (2026, "KV2", "0.25", date(2026, 1, 1)),
+        (2026, "KV2-NT", "0.50", date(2026, 1, 1)),
+        (2026, "KV3", "0.00", date(2026, 1, 1)),
     ):
         await chen(
             conn,
             "priority_area_config",
-            academic_year=2026,
-            area_code=kv,
-            area_name="Khu vực giả " + kv,
+            academic_year=nam_kv,
+            area_code=ma_kv,
+            area_name="Khu vực giả " + ma_kv,
             bonus_points=diem,
             effective_from=tu,
         )
@@ -324,7 +340,7 @@ async def ho_so(
     hoc_phi=(),
     giay=(),
     diem=None,
-    status="submitted",
+    status="approved",
     **cot
 ) -> int:
     """Một hồ sơ + lead + nguyện vọng + học phí + giấy + điểm.
@@ -334,6 +350,8 @@ async def ho_so(
     ``status`` luôn ghi tường minh (giá trị mặc định phía CSDL của CSDL test không dùng được).
     """
     cot["status"] = status
+    # Lượt G: có nguyện vọng ⇒ luồng bộ máy nguyện vọng (điểm ở profile_choice_score).
+    cot.setdefault("uses_choice_engine", bool(nv))
     lead = await chen(
         conn,
         "lead",
@@ -480,7 +498,7 @@ async def seed_hoi_dong(conn) -> dict:
         permanent_commune_code="GX1",
         cultural_education_level="graduated_thpt",
         vocational_qualification="none",
-        priority_resolution_snapshot={"kv_resolved": "KV1"},
+        priority_resolution_snapshot=kv("KV1"),
         nv=[(2, "duoc_cd", "cq", "g2"), (1, "oto_cd", "cq", "g1")],
         diem={
             0: {"van": "9.00", "toan": "9.00", "ly": "9.00"},
@@ -503,6 +521,7 @@ async def seed_hoi_dong(conn) -> dict:
     await them(
         "ten_mot_chu_khong_hoc_phi",
         ma_gia(2),
+        status="resubmitted",
         full_name="H'Giả",
         gender="Nữ",
         ethnicity="02",
@@ -512,7 +531,7 @@ async def seed_hoi_dong(conn) -> dict:
         permanent_commune_code="GX2",
         cultural_education_level="completed_thpt",
         vocational_qualification="trung_cap",
-        priority_resolution_snapshot={"kv_resolved": "KV2"},
+        priority_resolution_snapshot=kv("KV2"),
         nv=[(1, "oto_tc", "lt", "g1")],
         diem={0: {"toan": "5.00", "ly": "5.50", "hoa": "6.00"}},
     )
@@ -530,7 +549,7 @@ async def seed_hoi_dong(conn) -> dict:
         permanent_ward="Xã trên hồ sơ 3",
         cultural_education_level="graduated_gdtx",
         vocational_qualification="cao_dang",
-        priority_resolution_snapshot={"kv_resolved": "KV1"},
+        priority_resolution_snapshot=kv("KV1"),
         nv=[(1, "duoc_cd", "cq", "g2")],
         diem={0: {"van": "8.00", "toan": "7.00", "ly": "6.00"}},
         hoc_phi=[dict(HP_CD, resolved_major=None, resolved_degree_level="Cao đẳng")],
@@ -567,7 +586,7 @@ async def seed_hoi_dong(conn) -> dict:
         permanent_province="Tỉnh trên hồ sơ 4",
         cultural_education_level="graduated_thcs",
         vocational_qualification="so_cap",
-        priority_resolution_snapshot={"kv_resolved": "KV2-NT"},
+        priority_resolution_snapshot=kv("KV2-NT"),
         nv=[(1, "oto_tc", "cq", "g1")],
         diem={0: {"toan": "6.00", "ly": "6.00", "hoa": "6.00"}},
         hoc_phi=[
@@ -578,7 +597,7 @@ async def seed_hoi_dong(conn) -> dict:
     await them(
         "xa_chi_con_het_hieu_luc",
         ma_gia(5),
-        status="resubmitted",
+        status="confirmed",
         full_name="Họ Giả Năm",
         dob=date(2008, 7, 8),
         gender="Nữ",
@@ -589,7 +608,7 @@ async def seed_hoi_dong(conn) -> dict:
         permanent_province="Tỉnh trên hồ sơ 5",
         cultural_education_level="completed_thcs",
         vocational_qualification="none",
-        priority_resolution_snapshot={"kv_resolved": "KV1"},
+        priority_resolution_snapshot=kv("KV1"),
         nv=[(1, "kt_tc", "cq", "g2")],
         diem={0: {"van": "5.25", "toan": "5.75", "ly": "4.00"}},
         hoc_phi=[
@@ -611,7 +630,7 @@ async def seed_hoi_dong(conn) -> dict:
         permanent_province="",
         cultural_education_level="graduated_thpt",
         vocational_qualification="none",
-        priority_resolution_snapshot={},
+        priority_resolution_snapshot=kv("KV3"),
         nv=[(1, "oto_cd", "cq", "g1")],
         diem={0: {"toan": "8.00", "ly": "8.00", "hoa": "8.00"}},
         hoc_phi=[HP_CD],
@@ -629,7 +648,7 @@ async def seed_hoi_dong(conn) -> dict:
         permanent_province="Tỉnh trên hồ sơ 7",
         cultural_education_level="graduated_thpt",
         vocational_qualification="trung_cap",
-        priority_resolution_snapshot={"kv_resolved": "KV3"},
+        priority_resolution_snapshot=kv("KV3"),
         nv=[(1, "oto_tc", "cq", "g1")],
         diem={0: {"toan": "7.00", "ly": "7.00", "hoa": "7.00"}},
         hoc_phi=[
@@ -647,6 +666,7 @@ async def seed_hoi_dong(conn) -> dict:
         permanent_ward="Xã trên hồ sơ 8",
         permanent_province="Tỉnh trên hồ sơ 8",
         vocational_qualification="none",
+        priority_resolution_snapshot=kv("KV2"),
         nv=[(1, "duoc_cd", "cq", "g2"), (2, "oto_cd", "cq", "g1")],
         diem={1: {"toan": "9.00", "ly": "9.00", "hoa": "9.00"}},
         hoc_phi=[dict(HP_CD, resolved_major="duoc_cd")],
@@ -681,7 +701,7 @@ async def seed_hoi_dong(conn) -> dict:
             permanent_commune_code="GX2",
             cultural_education_level="graduated_thpt",
             vocational_qualification="trung_cap",
-            priority_resolution_snapshot={"kv_resolved": "KV2"},
+            priority_resolution_snapshot=kv("KV2"),
             nv=[(1, "oto_cd", lh, "g1")],
             diem={0: {"toan": "6.50", "ly": "6.50", "hoa": "6.50"}},
             hoc_phi=[HP_CD],
@@ -698,9 +718,27 @@ async def seed_hoi_dong(conn) -> dict:
         permanent_commune_code="GX1",
         cultural_education_level="graduated_thpt",
         vocational_qualification="none",
-        priority_resolution_snapshot={"kv_resolved": "KV1"},
+        priority_resolution_snapshot=kv("KV1"),
         nv=[(1, "oto_cd", "cq", "g1")],
         diem={0: {"toan": "5.00", "ly": "5.00", "hoa": "5.00"}},
+        hoc_phi=[HP_CD],
+    )
+    # Lượt G: KHÔNG có khu vực ưu tiên (ảnh chụp rỗng) — ca "không khu vực" của hàm đọc (bộ xuất
+    # in rỗng / 0; cổng dựng bộ chặn — F231). Trước lượt G ca này nằm ở ``dia_chi_rong``.
+    await them(
+        "khong_khu_vuc",
+        ma_gia(13),
+        status="reviewing",
+        full_name="Họ Giả Mười Ba",
+        dob=date(2008, 6, 7),
+        gender="Nữ",
+        ethnicity="01",
+        permanent_commune_code="GX2",
+        cultural_education_level="graduated_thpt",
+        vocational_qualification="none",
+        priority_resolution_snapshot={},
+        nv=[(1, "oto_cd", "cq", "g1")],
+        diem={0: {"toan": "6.00", "ly": "6.00", "hoa": "6.00"}},
         hoc_phi=[HP_CD],
     )
     hs["_danh_muc"] = d

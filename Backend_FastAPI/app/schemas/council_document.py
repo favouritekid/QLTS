@@ -41,6 +41,10 @@ class CouncilSetCreate(BaseModel):
     ma_ho_so: List[str] = Field(..., min_length=1)
     academic_year: StrictInt
     tham_so_quyet_dinh: Optional[DecisionParams] = None
+    # Lượt G (owner 05-11, F228): admin XÁC NHẬN dựng bộ có hồ sơ ở mức cảnh báo — ĐÚNG số hồ
+    # sơ theo từng trạng thái máy chủ vừa báo (409). Khoá / số đếm do service kiểm
+    # (``council_set_gate_service``); chỉ admin được gửi (``deps.py`` tính quyền).
+    xac_nhan_trang_thai: Optional[Dict[str, StrictInt]] = None
 
 
 class CouncilSetFileOut(BaseModel):

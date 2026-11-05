@@ -57,6 +57,7 @@ NHAN_CA = [
     "loai_hinh_chinh_quy",
     "loai_hinh_lien_thong",
     "don_vi_khac",
+    "khong_khu_vuc",  # lượt G: ca "không khu vực" chuyển từ dia_chi_rong sang đây
 ]
 
 
@@ -204,8 +205,9 @@ async def test_du_lieu_gia_phu_dung_nhanh_kho(hs):
         "Thôn giả 5, Xã trên hồ sơ 5, Tỉnh Giả Một",
         "06",
     )
-    assert r["dia_chi_rong"]["dia_chi"] == "" and r["dia_chi_rong"]["kv"] == ""
-    assert r["dia_chi_rong"]["diem_kv"] == "0"
+    assert r["dia_chi_rong"]["dia_chi"] == ""
+    # Lượt G: ca "không khu vực" (bộ xuất in rỗng / 0) nay ở nhãn riêng ``khong_khu_vuc``.
+    assert r["khong_khu_vuc"]["kv"] == "" and r["khong_khu_vuc"]["diem_kv"] == "0"
     g = r["nut_xa_het_hieu_luc_dan_toc_la"]
     assert (g["dan_toc"], g["ut_ma"]) == ("99", "06")
     assert g["dia_chi"] == "Xã trên hồ sơ 7, Tỉnh trên hồ sơ 7"

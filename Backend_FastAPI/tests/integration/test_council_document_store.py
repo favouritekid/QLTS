@@ -38,6 +38,7 @@ from app.services import council_candidate_service as doc
 from app.services import council_document_render_service as bo_dung
 from app.services import council_document_set_service as bo_vb
 from app.services import council_document_template_service as kho_mau
+from app.services import council_set_gate_service as cong
 from app.utils.exceptions import (
     BusinessRuleViolation,
     DataValidationError,
@@ -64,6 +65,8 @@ MAU_GIA = {
     "danh_sach": _mau_danh_sach(),
 }
 # Hồ sơ giả dựng được (đủ trình độ, mã ngành, văn hoá) — cùng đơn vị u1, hai trình độ.
+# Lượt G: bỏ ``khong_nguyen_vong`` — hồ sơ NHÁP, không nguyện vọng ⇒ cổng dựng bộ CHẶN (F228 +
+# F229) trước khi tới bộ dựng; qua tạo bộ không còn đường nào đưa hồ sơ ấy vào văn bản.
 DUNG_DUOC = [
     "nhieu_nv_khoang_trang",
     "dia_chi_rong",
@@ -72,7 +75,6 @@ DUNG_DUOC = [
     "xa_het_hieu_luc_co_hien_hanh",
     "xa_chi_con_het_hieu_luc",
     "nut_xa_het_hieu_luc_dan_toc_la",
-    "khong_nguyen_vong",
 ]
 TS = bo_dung.DecisionParams(
     so_quyet_dinh="99", ngay_quyet_dinh=date(2026, 9, 8), dot_so="1", dot_thang=9
@@ -562,7 +564,7 @@ async def test_tao_bo_ghi_metadata_va_bytes_nguyen_tung_tep(hs, monkeypatch):
             inspect(b).unloaded
         )  # PII deferred
         assert (b.so_ho_so, b.so_tep, b.trinh_do) == (
-            8,
+            len(DUNG_DUOC),  # lượt G: 7 (bỏ khong_nguyen_vong — bị cổng chặn)
             len(kq.files),
             "Cao đẳng và Trung cấp",
         )
@@ -583,7 +585,7 @@ async def test_tao_bo_ghi_metadata_va_bytes_nguyen_tung_tep(hs, monkeypatch):
         # F212 — phiên bản mã đã dựng: sha256 NỘI DUNG đúng năm tệp nguồn đang nạp.
         assert tt["phien_ban_ma"] == {
             m.__name__: hashlib.sha256(Path(m.__file__).read_bytes()).hexdigest()
-            for m in (bo_dung, kho_mau, doc, kho_doc, bo_vb)
+            for m in (bo_dung, kho_mau, doc, kho_doc, bo_vb, cong)
         }
         assert tt["giao_dich_doc"] == {
             "transaction_isolation": "repeatable read",

@@ -23,11 +23,19 @@ Khác bộ xuất (có chủ ý, không đổi giá trị nào của một hồ 
   thì kết quả trùng bộ xuất; khi hoà thì bộ xuất không xác định.
 * Thêm ``lead.unit_id`` (đơn vị của hồ sơ — đúng cột kiểm quyền Quản lý của
   ``admission_service._check_idor_access`` dùng) để tính đơn vị của bộ văn bản.
+* Thêm ba cột phụ (lượt G): ``nv_in_id`` (nguyện vọng truy vấn này in), ``hp_co`` /
+  ``hp_nganh_id`` (khoản học phí HK1 nó dùng) — để cổng dựng bộ so với nguồn của luồng
+  (``SQL_KIEM_NGUON``). Không cột DTO nào đổi.
+
+``diem_kv`` của ảnh chụp ở đây = luật bộ xuất (mức mới nhất theo ``effective_from``, không theo
+năm) — giữ để khoá bằng bộ xuất. Bộ văn bản KHÔNG in giá trị này: sau cổng dựng bộ,
+``council_document_set_service.tao_bo_van_ban`` thay bằng mức theo NĂM HỌC mà hàm đọc tra qua
+``priority_service.select_open_priority_rates`` (owner 05-11, F231 — khác bộ xuất CÓ CHỦ Ý).
 """
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import AsyncIterator, List, Sequence
+from typing import AsyncIterator, List, Optional, Sequence
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
@@ -185,6 +193,11 @@ SELECT
   chon.stt::int AS stt,
   p.id AS pid,
   l.unit_id AS unit_id,
+  -- cột PHỤ (không thuộc DTO, không có ở bộ xuất): ĐÚNG nguyện vọng + khoản học phí mà
+  -- chính truy vấn này dùng để in — cổng F229 so với nguồn của luồng (lượt G)
+  nv1.choice_id AS nv_in_id,
+  (t.pid IS NOT NULL) AS hp_co,
+  t.resolved_major_id AS hp_nganh_id,
   COALESCE(p.citizen_id, '') AS ma_ho_so,
   -- họ = mọi từ trừ từ cuối; tên một chữ thì họ RỖNG (không lặp tên vào họ)
   CASE WHEN h.ten_gon ~ ' ' THEN regexp_replace(h.ten_gon, '\s+\S+$', '') ELSE '' END AS ho,
@@ -271,6 +284,126 @@ LEFT JOIN administrative_nodes tinh
 ORDER BY chon.stt
 """
 )
+
+
+# Dữ liệu cho cổng dựng bộ (lượt G — F228 / F229 / F231), cùng giao dịch chỉ đọc. KHÔNG là
+# nguồn in: chỉ đọc NGUỒN CỦA LUỒNG để so với cái ``SQL_SO_LIEU`` sẽ in (``:nv_in`` = cột
+# ``nv_in_id`` của chính truy vấn ấy, cùng thứ tự ``:pids``).
+#  * ``nv1_id``: nguyện vọng 1 theo app — ``display_order`` rồi ``id`` (như
+#    ``fee_calculation_service.resolve_fee_academic_info`` / ``_validate_eligibility_all_choices``
+#    sắp theo ``display_order``), KHÔNG đòi chuỗi cấu hình đủ (``SQL_SO_LIEU`` thì đòi ⇒ khi
+#    NV1 thiếu cấu hình nó in nguyện vọng khác — cổng bắt).
+#  * ``lg_*``: hồ sơ một nguyện vọng kiểu cũ — ngành theo cấu hình hồ sơ ĐÚNG thứ tự nhánh
+#    legacy của ``resolve_fee_academic_info`` (``offering_admission_config`` → academic_info,
+#    rồi ``applied_rules.academic_info_id``); đường xét = ``applied_rules.admission_path_id``;
+#    tổ hợp = ``selected_subject_group_id``. Giá trị JSON không phải số ⇒ NULL (không ép kiểu
+#    ⇒ không lỗi CSDL).
+#  * ``diem_*``: trên các môn của tổ hợp IN — điểm nguyện vọng (``profile_choice_score``) so
+#    với bảng điểm hồ sơ (``profile_subject_score``, nơi ``admission_service.update_profile``
+#    ghi — ``admission_repository.update_profile_scores``).
+SQL_KIEM_NGUON = text(
+    r"""
+WITH chon AS (
+    SELECT x.pid, x.nv_in, x.stt
+    FROM unnest(CAST(:pids AS integer[]), CAST(:nv_in AS bigint[]))
+         WITH ORDINALITY AS x(pid, nv_in, stt)
+),
+nv AS (
+    SELECT c.admission_profile_id AS pid, c.id, c.display_order, c.decision,
+           c.admission_path_id AS path_id, psg.subject_group_id AS sg_id,
+           po.program_id AS nganh_id
+    FROM admission_profile_choice c
+    JOIN chon ON chon.pid = c.admission_profile_id
+    LEFT JOIN admission_path ap ON ap.id = c.admission_path_id
+    LEFT JOIN path_subject_group_config psg ON psg.id = c.path_subject_group_config_id
+    LEFT JOIN offering_academic_info oai ON oai.id = ap.academic_info_id
+    LEFT JOIN program_offering po ON po.id = oai.offering_id
+),
+nv1 AS (
+    SELECT DISTINCT ON (pid) pid, id
+    FROM nv
+    ORDER BY pid, display_order, id
+),
+nv_dem AS (
+    SELECT pid, count(*)::int AS so_nv,
+           (count(*) FILTER (WHERE decision = 'admitted'))::int AS so_trung,
+           min(id) FILTER (WHERE decision = 'admitted') AS trung_id
+    FROM nv
+    GROUP BY pid
+),
+mon_in AS (
+    SELECT chon.pid, chon.nv_in, sgs.subject_id
+    FROM chon
+    JOIN nv ON nv.id = chon.nv_in
+    JOIN subject_group_subject sgs ON sgs.subject_group_id = nv.sg_id
+),
+diem AS (
+    SELECT m.pid,
+      (count(*) FILTER (WHERE pcs.score IS NOT NULL AND pss.score IS NOT NULL
+                          AND pcs.score <> pss.score))::int AS ca_hai_khac,
+      (count(*) FILTER (WHERE pcs.score IS NOT NULL AND pss.score IS NULL))::int AS chi_nv,
+      (count(*) FILTER (WHERE pcs.score IS NULL AND pss.score IS NOT NULL))::int AS chi_hs
+    FROM mon_in m
+    LEFT JOIN profile_choice_score pcs
+           ON pcs.admission_profile_choice_id = m.nv_in AND pcs.subject_id = m.subject_id
+    LEFT JOIN profile_subject_score pss
+           ON pss.profile_id = m.pid AND pss.subject_id = m.subject_id
+    GROUP BY m.pid
+)
+SELECT
+  chon.stt::int AS stt,
+  p.id AS pid,
+  p.status::text AS status,
+  p.uses_choice_engine AS uses_choice_engine,
+  p.academic_year AS academic_year,
+  p.area_resolution_basis::text AS area_resolution_basis,
+  p.priority_resolution_snapshot AS kv_snapshot,
+  COALESCE(nv_dem.so_nv, 0) AS so_nv,
+  nv1.id AS nv1_id,
+  COALESCE(nv_dem.so_trung, 0) AS so_nv_trung,
+  nv_dem.trung_id AS nv_trung_id,
+  nvi.nganh_id AS nv_in_nganh_id,
+  nvi.path_id AS nv_in_path_id,
+  nvi.sg_id AS nv_in_sg_id,
+  po_lg.program_id AS lg_nganh_id,
+  ap_lg.id AS lg_path_id,
+  p.selected_subject_group_id AS lg_sg_id,
+  COALESCE(diem.ca_hai_khac, 0) AS diem_ca_hai_khac,
+  COALESCE(diem.chi_nv, 0) AS diem_chi_nv,
+  COALESCE(diem.chi_hs, 0) AS diem_chi_hs
+FROM chon
+JOIN admission_profile p ON p.id = chon.pid
+LEFT JOIN nv_dem ON nv_dem.pid = p.id
+LEFT JOIN nv1 ON nv1.pid = p.id
+LEFT JOIN nv nvi ON nvi.id = chon.nv_in
+LEFT JOIN diem ON diem.pid = p.id
+LEFT JOIN offering_admission_config oac ON oac.id = p.offering_admission_config_id
+LEFT JOIN offering_academic_info oai_oac ON oai_oac.id = oac.academic_info_id
+LEFT JOIN offering_academic_info oai_ar
+       ON oai_ar.id = CASE WHEN p.applied_rules->>'academic_info_id' ~ '^[0-9]{1,9}$'
+                           THEN (p.applied_rules->>'academic_info_id')::int END
+LEFT JOIN program_offering po_lg ON po_lg.id = COALESCE(oai_oac.offering_id, oai_ar.offering_id)
+LEFT JOIN admission_path ap_lg
+       ON ap_lg.id = CASE WHEN p.applied_rules->>'admission_path_id' ~ '^[0-9]{1,9}$'
+                          THEN (p.applied_rules->>'admission_path_id')::int END
+ORDER BY chon.stt
+"""
+)
+
+
+async def doc_kiem_nguon(
+    conn: AsyncConnection, pids: Sequence[int], nv_in: Sequence[Optional[int]]
+) -> List[dict]:
+    """Dữ liệu kiểm (``SQL_KIEM_NGUON``) theo thứ tự ``pids``; ``nv_in[i]`` = nguyện vọng mà
+    ``SQL_SO_LIEU`` in cho ``pids[i]`` (None nếu không có)."""
+    return [
+        dict(r._mapping)
+        for r in (
+            await conn.execute(
+                SQL_KIEM_NGUON, {"pids": list(pids), "nv_in": list(nv_in)}
+            )
+        ).all()
+    ]
 
 
 async def phan_giai_ma(

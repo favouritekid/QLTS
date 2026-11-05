@@ -56,6 +56,7 @@ from app.repositories.council_document_repository import CouncilDocumentReposito
 from app.services import council_candidate_service as _ham_doc
 from app.services import council_document_render_service as bo_dung
 from app.services import council_document_template_service as _kho_mau
+from app.services import council_set_gate_service as cong
 from app.services.council_candidate_service import doc_ho_so_theo_ma
 from app.services.council_document_template_service import (
     TEN_LOAI,
@@ -76,6 +77,7 @@ MODULE_MA_DUNG = (
     _ham_doc,
     _kho_doc,
     sys.modules[__name__],
+    cong,  # lượt G: cổng quyết hồ sơ nào vào bộ + điểm KV in
 )
 
 
@@ -123,14 +125,26 @@ async def tao_bo_van_ban(
     tham_so: Optional[bo_dung.DecisionParams],
     nguoi_tao_id: Optional[int],
     luc_tao: Optional[datetime] = None,
+    xac_nhan_trang_thai: Optional[Dict[str, int]] = None,
+    duoc_xac_nhan: bool = False,
 ) -> Tuple[CouncilDocumentSet, None]:
-    """Đọc → chọn mẫu → dựng → ghi. Trả ``(bộ đã flush, None)``; router commit.
-    ``academic_year`` BẮT BUỘC (mã hồ sơ chỉ duy nhất trong một năm học)."""
+    """Đọc → cổng dựng bộ → chọn mẫu → dựng → ghi. Trả ``(bộ đã flush, None)``; router commit.
+    ``academic_year`` BẮT BUỘC (mã hồ sơ chỉ duy nhất trong một năm học).
+
+    Cổng (lượt G, owner 05-11 — ``council_set_gate_service``): dòng bị CHẶN (F228 trạng thái,
+    F229 nguồn ngành / nguyện vọng / điểm, F231 khu vực) ⇒ 400 liệt kê từng dòng; có hồ sơ ở mức
+    CẢNH BÁO ⇒ 409 trừ khi ``xac_nhan_trang_thai`` = ĐÚNG số đếm theo trạng thái hiện tại và
+    người gọi ``duoc_xac_nhan`` (chỉ admin — ``deps.py`` tính). Lần xác nhận ghi vết vào
+    ``thong_tin_dung`` của bộ (ai, lúc nào, bao nhiêu hồ sơ mỗi trạng thái, số dòng)."""
     luc_tao = luc_tao or datetime.now(timezone.utc)
     if PHIEN_BAN_MA is None:
         raise ServiceError(
             "Không đọc được mã nguồn của bộ dựng để ghi phiên bản — không dựng."
         )
+    # Chỉ admin được gửi xác nhận — kiểm TRƯỚC khi đọc hồ sơ (không đọc dữ liệu cá nhân cho
+    # một yêu cầu không có quyền xác nhận).
+    xac_nhan = cong.kiem_dang_xac_nhan(xac_nhan_trang_thai)
+    cong.kiem_quyen_xac_nhan(xac_nhan, duoc_xac_nhan)
     # Tham số QĐ quyết cả NGÀY KÝ (chọn mẫu) ⇒ kiểm lại ngay từ đầu, bằng đúng hàm của bộ
     # dựng (bộ dựng còn kiểm lại một lần nữa ở điểm vào của nó).
     tham_so = bo_dung.kiem_lai_tham_so_quyet_dinh(tham_so)
@@ -143,6 +157,20 @@ async def tao_bo_van_ban(
     # thẳng) + ``test_qua_api_doc_o_giao_dich_rieng_da_dong_truoc_khi_dung`` (POST /sets thật).
     # (i) đọc — giao dịch riêng, chỉ đọc, đã KẾT THÚC khi hàm này trả về.
     anh = await doc_ho_so_theo_ma(engine, ma_ho_so, academic_year=academic_year)
+
+    # (i-b) cổng dựng bộ (lượt G): chặn / cảnh báo + xác nhận. Không qua ⇒ lỗi miền, KHÔNG ghi.
+    if len(anh.kiem) != len(anh.rows):
+        raise ServiceError("Thiếu dữ liệu kiểm hồ sơ — không dựng.")
+    kq_cong = cong.danh_gia(anh.kiem)
+    da_xac_nhan = cong.kiem_va_xac_nhan(
+        kq_cong, xac_nhan=xac_nhan, duoc_xac_nhan=duoc_xac_nhan
+    )
+    # F231: điểm KV in = mức theo NĂM HỌC (cổng đã chặn mọi dòng không có mức).
+    if any(m is None for m in kq_cong.diem_kv):
+        raise ServiceError("Thiếu mức điểm khu vực sau cổng — không dựng.")
+    hang_in = tuple(
+        r.model_copy(update={"diem_kv": m}) for r, m in zip(anh.rows, kq_cong.diem_kv)
+    )
 
     # Tối đa MỘT lần DỰNG cùng lúc trên toàn hệ (mọi worker / container cùng CSDL): khoá tư
     # vấn trên giao dịch của request — giữ tới khi router commit / rollback, tự nhả khi lỗi.
@@ -163,7 +191,7 @@ async def tao_bo_van_ban(
 
     # (iii) dựng — CPU vài giây, ngoài event loop
     kq = await asyncio.to_thread(
-        bo_dung.render_council_documents, list(anh.rows), mau, tham_so
+        bo_dung.render_council_documents, list(hang_in), mau, tham_so
     )
 
     tong = sum(len(f.content) for f in kq.files)
@@ -188,18 +216,34 @@ async def tao_bo_van_ban(
         "transaction_isolation": anh.giao_dich.transaction_isolation,
         "transaction_read_only": anh.giao_dich.transaction_read_only,
     }
+    # Lượt G — vết đọc được về sau (không dữ liệu cá nhân): số hồ sơ theo trạng thái lúc chụp;
+    # lần xác nhận cảnh báo (owner 05-11: ai, lúc nào, bao nhiêu hồ sơ ở mỗi trạng thái).
+    md["trang_thai_ho_so"] = kq_cong.so_theo_trang_thai()
+    md["xac_nhan_canh_bao_trang_thai"] = (
+        None
+        if da_xac_nhan is None
+        else {
+            "nguoi_xac_nhan_id": nguoi_tao_id,
+            "luc": luc_tao.isoformat(),
+            "so_ho_so_theo_trang_thai": dict(da_xac_nhan),
+            "dong_theo_trang_thai": {
+                s: list(d) for s, d in kq_cong.canh_bao.items()
+            },
+        }
+    )
+    md["nguon_diem_kv"] = "muc_theo_nam_hoc_cua_ho_so"  # F231 (owner 05-11)
     bo = CouncilDocumentSet(
         nguoi_tao_id=nguoi_tao_id,
         tao_luc=luc_tao,
         moc_chup=anh.giao_dich.moc_chup,
         unit_id=don_vi_cua_bo(anh.don_vi),
         trinh_do=kq.metadata["trinh_do"],
-        so_ho_so=len(anh.rows),
+        so_ho_so=len(hang_in),
         so_tep=len(kq.files),
         kich_thuoc_tong=tong,
         tham_so_quyet_dinh=kq.metadata["tham_so_quyet_dinh"],
-        ma_ho_so_dau_vao=[r.ma_ho_so for r in anh.rows],
-        snapshot_dto=[r.model_dump() for r in anh.rows],
+        ma_ho_so_dau_vao=[r.ma_ho_so for r in hang_in],
+        snapshot_dto=[r.model_dump() for r in hang_in],
         thong_tin_dung=md,
     )
     tep = [
