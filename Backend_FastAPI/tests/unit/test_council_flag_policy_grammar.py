@@ -299,6 +299,15 @@ def test_khong_doc_duoc_policy_thi_vi_pham(monkeypatch):
     assert _ngoai_mau(enf) == [("<khong-doc-duoc-policy>", "khong_doc_duoc_policy")]
 
 
+def test_ham_khop_nem_loi_thi_vi_pham():
+    # Hàm khớp ném lỗi khi thử ⇒ không chứng minh được độc lập id ⇒ fail-closed.
+    def hong(duong, doi_tuong):
+        raise RuntimeError("giả: hàm khớp hỏng")
+
+    ly = deps.ly_do_policy_ngoai_hop_dong(P + "/sets/{id}", DUONG, hong)
+    assert ly == "phu_thuoc_id"
+
+
 def test_route_ngoai_dang_chu_tham_so_thi_vi_pham():
     # Bộ chuyển đổi ":path" cho giá trị chứa "/" ⇒ lập luận "ranh giới đoạn cố định" không còn.
     assert (
