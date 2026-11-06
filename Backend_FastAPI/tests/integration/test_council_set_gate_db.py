@@ -784,6 +784,18 @@ async def test_kv_tinh_lai_dung_ngu_canh_trinh_do_cua_anh_chup(hs):
     assert kq.chan == () and kq.diem_kv == ("0.75",)
 
 
+async def test_kv_tinh_lai_khong_phan_giai_duoc_thi_chan(hs):
+    # Bỏ lịch sử THPT ⇒ resolver trả None (thiếu dữ liệu) trong khi ảnh chụp vẫn KV1 ⇒ "KV in"
+    # không còn chứng minh được từ dữ liệu hiện tại ⇒ chặn (None ≠ KV1 — không coi là khớp).
+    cccd, pid = await _mot(hs)
+    await _sql(
+        "UPDATE admission_profile SET academic_history = '[]'::jsonb WHERE id = :p",
+        p=pid,
+    )
+    kq, _ = await _cong([cccd])
+    assert kq.chan == _mot_ly_do("khu_vuc_doi_sau_anh_chup")
+
+
 async def test_resolver_nem_loi_thi_chan(hs, monkeypatch):
     from app.services import priority_service
 
