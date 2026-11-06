@@ -15,13 +15,22 @@
 
 Mỗi ca dựng một hồ sơ vi phạm ĐÚNG MỘT bất biến (trừ ca ghi rõ hai), so ``chan`` NGUYÊN VẸN
 (CLAUDE.md §3).
+
+Lượt H3 — vệ sinh lược đồ: CSDL test dựng lược đồ MỘT lần mỗi phiên pytest, giữa các ca chỉ
+TRUNCATE (``tests/conftest.py``) ⇒ ca nào gỡ ràng buộc phải dựng lại trước khi ra, không thì MỌI ca
+sau trong phiên chạy thiếu ràng buộc ấy. Ca "trạng thái lạ" gỡ CHECK trạng thái qua
+``_tam_go_check_trang_thai`` (dựng lại từ MODEL — cùng câu ``create_all`` sinh — kể cả khi khối
+ném lỗi); ca canh chạy NGAY SAU nó, so định nghĩa với bản đọc trước khi gỡ.
 """
+import contextlib
 import json
 from datetime import date, datetime, timezone
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.schema import AddConstraint
 
 import app.database as csdl
 from app.database import AsyncSessionLocal
@@ -254,17 +263,107 @@ async def test_trang_thai_khong_canh_bao_thi_dung_duoc(hs, s):
         assert b.thong_tin_dung["xac_nhan_canh_bao_trang_thai"] is None
 
 
+TEN_CHECK_TRANG_THAI = "ck_admission_profile_status"
+# Lượt H3: định nghĩa CHECK đọc ngay trước lần gỡ gần nhất trong PHIÊN pytest này (ca canh so với nó).
+_VET_GO_CHECK = {}
+
+
+async def _check_trang_thai():
+    """(định nghĩa, đã xác thực) của CHECK trạng thái hồ sơ ĐỌC TỪ CSDL (``pg_get_constraintdef``);
+    ``None`` nếu không có."""
+    r = await _sql(
+        "SELECT pg_get_constraintdef(oid), convalidated FROM pg_constraint "
+        "WHERE conrelid = 'admission_profile'::regclass AND conname = :t",
+        t=TEN_CHECK_TRANG_THAI,
+    )
+    dong = r.one_or_none()
+    return None if dong is None else tuple(dong)
+
+
+def _check_trang_thai_cua_model():
+    """CHECK trạng thái của MODEL — đúng đối tượng ``create_all`` dùng dựng CSDL test (nguồn
+    chuẩn, không chép tay). Dựng lại từ chuỗi ``pg_get_constraintdef`` thì KHÔNG được:
+    PostgreSQL chuẩn hoá lại thành định nghĩa tương đương nhưng KHÁC CHỮ (đo, H3)."""
+    ds = [
+        c
+        for c in AdmissionProfile.__table__.constraints
+        if c.name == TEN_CHECK_TRANG_THAI
+    ]
+    assert (
+        len(ds) == 1
+    ), "phép đo không hợp lệ: model không có đúng một CHECK trạng thái"
+    return ds[0]
+
+
+@contextlib.asynccontextmanager
+async def _tam_go_check_trang_thai(pid):
+    """Gỡ CHECK trạng thái trong phạm vi khối; LUÔN dựng lại khi ra, kể cả khi khối ném lỗi, từ
+    MODEL (``AddConstraint`` — cùng câu ``create_all`` sinh). Hàng ``pid`` trả về trạng thái gốc
+    TRƯỚC khi dựng lại (hàng vi phạm làm ADD CONSTRAINT đổ) — cùng một giao dịch. Định nghĩa đọc
+    trước khi gỡ được ghi lại để ca canh so: dựng lại phải ĐÚNG như cũ."""
+    rang_buoc = _check_trang_thai_cua_model()
+    truoc = await _check_trang_thai()
+    assert (
+        truoc is not None and truoc[1]
+    ), "phép đo không hợp lệ: không có CHECK trạng thái"
+    goc = (
+        await _sql("SELECT status FROM admission_profile WHERE id = :p", p=pid)
+    ).scalar_one()
+    _VET_GO_CHECK["truoc"] = truoc
+    await _sql(
+        "ALTER TABLE admission_profile DROP CONSTRAINT %s" % TEN_CHECK_TRANG_THAI
+    )
+    try:
+        yield
+    finally:
+        async with csdl.engine.begin() as conn:
+            await conn.execute(
+                text("UPDATE admission_profile SET status = :s WHERE id = :p"),
+                {"s": goc, "p": pid},
+            )
+            await conn.execute(AddConstraint(rang_buoc))
+
+
 async def test_trang_thai_la_khi_check_noi_ra_thi_chan(hs):
     # Như khi app thêm trạng thái mới (nới CHECK) mà cổng chưa cập nhật: phải CHẶN.
     cccd, pid = await _mot(hs)
-    await _sql(
-        "ALTER TABLE admission_profile DROP CONSTRAINT ck_admission_profile_status"
-    )
-    await _sql(
-        "UPDATE admission_profile SET status = 'trang_thai_moi' WHERE id = :p", p=pid
-    )
-    kq, _ = await _cong([cccd])
+    async with _tam_go_check_trang_thai(pid):
+        await _sql(
+            "UPDATE admission_profile SET status = 'trang_thai_moi' WHERE id = :p",
+            p=pid,
+        )
+        kq, _ = await _cong([cccd])
     assert kq.chan == (("trang_thai_la", "trang_thai_moi", (1,)),)
+
+
+async def test_check_trang_thai_con_nguyen_o_ca_ngay_sau_ca_go(hs):
+    # Lượt H3 — ca CANH, đặt NGAY SAU ca gỡ CHECK (cùng phiên pytest, thứ tự theo tệp): CHECK phải
+    # còn, ĐÚNG định nghĩa trước khi gỡ, và còn chặn giá trị lạ. Chạy lẻ / đổi thứ tự (ca gỡ chưa
+    # chạy trong phiên) ⇒ tự chạy ca gỡ trước, để phép canh không bao giờ rỗng.
+    if "truoc" not in _VET_GO_CHECK:
+        await test_trang_thai_la_khi_check_noi_ra_thi_chan(hs)
+    assert (
+        await _check_trang_thai() == _VET_GO_CHECK["truoc"]
+    ), "CHECK trạng thái không còn nguyên như trước khi gỡ"
+    _, pid = await _mot(hs)
+    with pytest.raises(IntegrityError) as e:
+        await _sql(
+            "UPDATE admission_profile SET status = 'trang_thai_moi' WHERE id = :p",
+            p=pid,
+        )
+    assert TEN_CHECK_TRANG_THAI in str(e.value)
+
+
+async def test_go_check_khoi_nem_loi_van_dung_lai(hs):
+    # Lượt H3: khối gỡ CHECK ném lỗi giữa chừng (như một assert đỏ) ⇒ vẫn dựng lại đúng định nghĩa.
+    truoc = await _check_trang_thai()
+    assert truoc is not None, "phép đo không hợp lệ: không có CHECK trạng thái"
+    _, pid = await _mot(hs)
+    with pytest.raises(RuntimeError, match="khoi_loi_gia"):
+        async with _tam_go_check_trang_thai(pid):
+            assert await _check_trang_thai() is None, "phép đo không hợp lệ: chưa gỡ"
+            raise RuntimeError("khoi_loi_gia")
+    assert await _check_trang_thai() == truoc
 
 
 async def test_xac_nhan_dung_so_dem_thi_dung_va_ghi_vet(hs):
