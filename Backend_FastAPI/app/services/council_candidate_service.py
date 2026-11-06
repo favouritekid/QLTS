@@ -178,6 +178,65 @@ async def _tra_khu_vuc(
     return out
 
 
+async def _luat_cong_diem_kv(
+    conn: AsyncConnection, path_ids: Sequence[Optional[int]]
+) -> List[Optional[str]]:
+    """Câu 22 (owner 06-11 — "theo cấu hình đường xét"): luật cộng điểm KV của ĐƯỜNG XÉT của
+    nguyện vọng in, từng dòng — ``cong`` / ``tat`` / ``khong_co_luat`` (``council_set_gate_
+    service.LUAT_KV_*``), ``None`` khi không có đường xét / luật không đọc được.
+
+    Đúng đường mã T6: nạp ``AdmissionPath`` kèm ``admission_method`` (như T6 nạp sẵn) trên phiên
+    ORM của CHÍNH giao dịch chỉ đọc, ``resolve_effective_bonus_rule`` (override của đường xét, không
+    thì mặc định của phương thức; JSON ``null`` qua ORM thành ``None`` ⇒ rơi về phương thức, như
+    T6) rồi ``priority_service.area_bonus_enabled`` (hàm ``calculate_priority_bonus`` dùng). Không
+    chép luật bằng SQL ở đây."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from app.models.admission_config.admission_path import AdmissionPath
+    from app.services.admission_choice_engine_service import (
+        resolve_effective_bonus_rule,
+    )
+    from app.services.council_set_gate_service import (
+        LUAT_KV_CONG,
+        LUAT_KV_KHONG_CO,
+        LUAT_KV_TAT,
+    )
+    from app.services.priority_service import area_bonus_enabled
+
+    ids = sorted({p for p in path_ids if isinstance(p, int)})
+    duong: Dict[int, AdmissionPath] = {}
+    phien = AsyncSession(bind=conn)
+    try:
+        if ids:
+            kq = await phien.execute(
+                select(AdmissionPath)
+                .where(AdmissionPath.id.in_(ids))
+                .options(selectinload(AdmissionPath.admission_method))
+            )
+            duong = {p.id: p for p in kq.scalars()}
+        out: List[Optional[str]] = []
+        for pid in path_ids:
+            p = duong.get(pid) if isinstance(pid, int) else None
+            if p is None:
+                out.append(None)
+                continue
+            luat = resolve_effective_bonus_rule(p)
+            try:
+                bat = area_bonus_enabled(luat)
+            # Luật không phải dict (dữ liệu lỗi) — T6 cũng hỏng ở đây ⇒ không xác định.
+            except Exception:  # noqa: BLE001
+                out.append(None)
+                continue
+            if bat:
+                out.append(LUAT_KV_CONG)
+            else:
+                out.append(LUAT_KV_KHONG_CO if luat is None else LUAT_KV_TAT)
+    finally:
+        await phien.close()
+    return out
+
+
 def _neu_dong(dong: Sequence[int]) -> str:
     s = ", ".join(str(x) for x in dong[:_NEU_TOI_DA])
     return s + (" … (tổng %d dòng)" % len(dong) if len(dong) > _NEU_TOI_DA else "")
@@ -299,6 +358,10 @@ async def doc_ho_so_theo_ma(
                 conn, pids, [nv_in.get(i) for i in range(1, len(pids) + 1)]
             )
             khu_vuc = await _tra_khu_vuc(conn, hang_kiem)
+            # Câu 22: luật cộng điểm KV của đường xét của nguyện vọng in — cùng giao dịch.
+            luat_kv = await _luat_cong_diem_kv(
+                conn, [h.get("nv_in_path_id") for h in hang_kiem]
+            )
     except DBAPIError:
         # Thông báo của trình điều khiển có câu SQL + tham số (danh sách mã) ⇒ không giữ.
         raise ServiceError("Lỗi CSDL khi đọc hồ sơ cho bộ văn bản.") from None
@@ -317,9 +380,11 @@ async def doc_ho_so_theo_ma(
     if sorted(dem) != list(range(1, len(ds) + 1)):
         raise ServiceError("Đọc số liệu hồ sơ thiếu hàng — không dựng.")
     hang.sort(key=lambda h: h["stt"])
-    if [h["stt"] for h in hang_kiem] != list(range(1, len(ds) + 1)) or len(
-        khu_vuc
-    ) != len(ds):
+    if (
+        [h["stt"] for h in hang_kiem] != list(range(1, len(ds) + 1))
+        or len(khu_vuc) != len(ds)
+        or len(luat_kv) != len(ds)
+    ):
         raise ServiceError(
             "Đọc dữ liệu kiểm hồ sơ sai thứ tự / thiếu hàng — không dựng."
         )
@@ -347,8 +412,9 @@ async def doc_ho_so_theo_ma(
             diem_chi_hs=k["diem_chi_hs"],
             kv_ly_do=kv[0],
             kv_muc=kv[1],
+            luat_kv=lk,
         )
-        for k, kv in zip(hang_kiem, khu_vuc)
+        for k, kv, lk in zip(hang_kiem, khu_vuc, luat_kv)
     )
     return AnhChupHoSo(
         rows=tuple(_thanh_dto(h["stt"], h) for h in hang),

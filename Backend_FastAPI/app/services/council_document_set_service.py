@@ -165,7 +165,8 @@ async def tao_bo_van_ban(
     da_xac_nhan = cong.kiem_va_xac_nhan(
         kq_cong, xac_nhan=xac_nhan, duoc_xac_nhan=duoc_xac_nhan
     )
-    # F231: điểm KV in = mức theo NĂM HỌC (cổng đã chặn mọi dòng không có mức).
+    # F231: điểm KV in = mức theo NĂM HỌC (cổng đã chặn mọi dòng không có mức); câu 22: đường
+    # xét tắt / không có luật cộng KV ⇒ 0 (cổng tính — ``diem_kv_in``).
     if any(m is None for m in kq_cong.diem_kv):
         raise ServiceError("Thiếu mức điểm khu vực sau cổng — không dựng.")
     hang_in = tuple(
@@ -230,6 +231,10 @@ async def tao_bo_van_ban(
         }
     )
     md["nguon_diem_kv"] = "muc_theo_nam_hoc_cua_ho_so"  # F231 (owner 05-11)
+    # Câu 22 (owner 06-11): điểm KV in theo luật cộng điểm của đường xét — số hồ sơ theo luật
+    # (``cong`` / ``tat`` / ``khong_co_luat``) để đọc lại được vì sao một dòng in 0.
+    md["luat_diem_kv"] = "theo_luat_cong_diem_cua_duong_xet"
+    md["so_ho_so_theo_luat_kv"] = kq_cong.so_theo_luat_kv()
     bo = CouncilDocumentSet(
         nguoi_tao_id=nguoi_tao_id,
         tao_luc=luc_tao,

@@ -52,6 +52,16 @@ log = structlog.get_logger(__name__)
 _ZERO = Decimal("0.00")
 
 
+def area_bonus_enabled(rule: Optional[dict[str, Any]]) -> bool:
+    """Luật cộng điểm (kết quả ``resolve_effective_bonus_rule``) có cộng điểm KHU VỰC không —
+    MỘT nguồn cho T6 (:func:`calculate_priority_bonus`) và văn bản Hội đồng (câu 22, owner
+    06-11: "theo cấu hình đường xét"). ``None`` (đường xét không override, phương thức không có
+    mặc định) ⇒ không cộng — đúng nhánh "bonus disabled" của T6."""
+    if rule is None:
+        return False
+    return bool(rule.get("apply_area_bonus"))
+
+
 async def calculate_priority_bonus(
     db: "AsyncSession",
     profile: "AdmissionProfile",
@@ -97,7 +107,7 @@ async def calculate_priority_bonus(
         # Legacy path with no method default + no path override = bonus disabled.
         return _ZERO, _ZERO, snapshot
 
-    apply_area = bool(rule.get("apply_area_bonus"))
+    apply_area = area_bonus_enabled(rule)
     apply_object = bool(rule.get("apply_object_bonus"))
     max_total = rule.get("max_total_bonus")
     max_total_dec = Decimal(str(max_total)) if max_total is not None else None

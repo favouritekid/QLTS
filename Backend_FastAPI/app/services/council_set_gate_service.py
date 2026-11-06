@@ -38,6 +38,14 @@ chụp) và so mã KV. Khác ⇒ CHẶN ``khu_vuc_doi_sau_anh_chup``; resolver n
 ``khu_vuc_khong_tinh_lai_duoc``. Ấn định thủ công không tính lại (resolver CỐ Ý không phân giải
 nhánh ấy) — đã qua ``verify_manual_override_provenance``, hàm này tự so dấu vân tay dữ liệu KV.
 
+**Câu 22 (owner 06-11 — theo cấu hình đường xét):** điểm KV IN theo luật cộng điểm của ĐƯỜNG XÉT
+của nguyện vọng in, đúng như T6 của app: hàm đọc lấy luật bằng ``resolve_effective_bonus_rule``
+(override của đường xét, không thì mặc định của phương thức — JSON ``null`` của cột override đọc
+qua ORM thành ``None`` ⇒ rơi về phương thức, như T6) và quyết bằng
+``priority_service.area_bonus_enabled`` (cùng hàm ``calculate_priority_bonus`` dùng). Luật bật ⇒
+mức theo năm học (F231); tắt hoặc không có luật ⇒ ``DIEM_KV_KHONG_CONG``; không xác định ⇒ CHẶN.
+Chỉ điểm KV đổi — điểm đối tượng, trần ưu tiên vẫn theo luật v1 của bộ dựng.
+
 Lỗi chỉ nêu SỐ DÒNG + mã lý do + trạng thái — không mã hồ sơ, không giá trị dữ liệu.
 """
 from dataclasses import dataclass
@@ -158,7 +166,20 @@ LY_DO: Dict[str, str] = {
     "khu_vuc_khong_tinh_lai_duoc": (
         "không tính lại được khu vực từ dữ liệu hiện tại của hồ sơ để đối chiếu"
     ),
+    # Câu 22 (owner 06-11 — theo cấu hình đường xét)
+    "khong_xac_dinh_luat_cong_diem_kv": (
+        "không xác định được luật cộng điểm khu vực của đường xét dùng để in"
+    ),
 }
+
+# Câu 22 — luật cộng điểm KV của đường xét in (do hàm đọc điền bằng ĐÚNG hàm T6 dùng:
+# ``resolve_effective_bonus_rule`` + ``priority_service.area_bonus_enabled``).
+LUAT_KV_CONG = "cong"  # luật bật ``apply_area_bonus`` ⇒ in mức KV theo năm học
+LUAT_KV_TAT = "tat"  # có luật, ``apply_area_bonus`` tắt ⇒ T6 tính 0 ⇒ in 0
+# không override, phương thức không mặc định ⇒ T6 tính 0
+LUAT_KV_KHONG_CO = "khong_co_luat"
+LUAT_KV_HOP_LE = frozenset({LUAT_KV_CONG, LUAT_KV_TAT, LUAT_KV_KHONG_CO})
+DIEM_KV_KHONG_CONG = "0.00"
 
 
 @dataclass(frozen=True)
@@ -192,6 +213,20 @@ class DuLieuKiem:
     diem_chi_hs: int
     kv_ly_do: Optional[str]
     kv_muc: Optional[str]
+    luat_kv: Optional[str]  # câu 22 — một trong LUAT_KV_HOP_LE; None = không xác định
+
+
+def diem_kv_in(k: DuLieuKiem) -> Optional[str]:
+    """Câu 22 — điểm KV IN cho dòng: mức theo năm học (F231) khi luật của đường xét cộng KV;
+    ``DIEM_KV_KHONG_CONG`` khi luật tắt / không có luật (đúng như T6 tính 0); ``None`` khi chưa có
+    mức hoặc luật không xác định (dòng ấy đã bị chặn)."""
+    if k.kv_muc is None:
+        return None
+    if k.luat_kv == LUAT_KV_CONG:
+        return k.kv_muc
+    if k.luat_kv in (LUAT_KV_TAT, LUAT_KV_KHONG_CO):
+        return DIEM_KV_KHONG_CONG
+    return None
 
 
 def ly_do_cua_dong(k: DuLieuKiem) -> List[str]:
@@ -247,6 +282,9 @@ def ly_do_cua_dong(k: DuLieuKiem) -> List[str]:
     # F231
     if k.kv_ly_do is not None:
         out.append(k.kv_ly_do)
+    # Câu 22: đường xét in đã biết (không thì dòng đã bị chặn ở trên) mà luật không xác định.
+    if k.nv_in_path_id is not None and k.luat_kv not in LUAT_KV_HOP_LE:
+        out.append("khong_xac_dinh_luat_cong_diem_kv")
     return out
 
 
@@ -259,7 +297,15 @@ class KetQuaCong:
         Tuple[str, Optional[str], Tuple[int, ...]], ...
     ]  # (mã, trạng thái?, dòng)
     canh_bao: Dict[str, Tuple[int, ...]]  # trạng thái cảnh báo -> dòng
-    diem_kv: Tuple[Optional[str], ...]
+    diem_kv: Tuple[Optional[str], ...]  # điểm KV IN (câu 22: theo luật của đường xét)
+    luat_kv: Tuple[Optional[str], ...] = ()
+
+    def so_theo_luat_kv(self) -> Dict[str, int]:
+        dem: Dict[str, int] = {}
+        for s in self.luat_kv:
+            ten = s if isinstance(s, str) else "(không rõ)"
+            dem[ten] = dem.get(ten, 0) + 1
+        return dict(sorted(dem.items()))
 
     def so_canh_bao(self) -> Dict[str, int]:
         return {s: len(d) for s, d in sorted(self.canh_bao.items())}
@@ -296,7 +342,8 @@ def danh_gia(kiem: Sequence[DuLieuKiem]) -> KetQuaCong:
             )
         ),
         canh_bao={s: tuple(sorted(d)) for s, d in sorted(canh_bao.items())},
-        diem_kv=tuple(k.kv_muc for k in kiem),
+        diem_kv=tuple(diem_kv_in(k) for k in kiem),
+        luat_kv=tuple(k.luat_kv for k in kiem),
     )
 
 

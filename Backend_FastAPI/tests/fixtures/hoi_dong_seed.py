@@ -174,6 +174,9 @@ async def danh_muc(conn) -> dict:
         requires_subject_scores=True,
         display_order=1,
         is_active=True,
+        # Lượt H (câu 22): phương thức giả CỘNG điểm KV + đối tượng (luật mặc định) ⇒ mọi đường xét
+        # giả (không override) in mức KV như trước câu 22; test câu 22 đổi override từng đường.
+        default_bonus_rule={"apply_area_bonus": True, "apply_object_bonus": True},
     )
     # Môn: thứ tự hiển thị ≠ thứ tự id ≠ vị trí trong tổ hợp.
     d["mon"] = {}

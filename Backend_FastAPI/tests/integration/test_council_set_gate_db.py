@@ -823,6 +823,125 @@ async def test_tinh_lai_kv_khong_ghi_gi_vao_ho_so(hs):
     assert (await _sql(q, p=pid)).one() == truoc
 
 
+# ═══════════════ Câu 22 (owner 06-11) — điểm KV in theo luật cộng điểm của đường xét ═══════════
+# Phương thức giả có mặc định CỘNG KV (seed). ``override`` / ``mac_dinh`` là CHỮ SQL cố định của
+# test (không phải đầu vào): ``NULL`` (SQL NULL), ``'null'::jsonb`` (JSON null), hay một luật.
+TAT_KV = """'{"apply_area_bonus": false, "apply_object_bonus": true}'::jsonb"""
+BAT_KV = """'{"apply_area_bonus": true, "apply_object_bonus": true}'::jsonb"""
+
+
+async def _dat_luat(pid, *, override, mac_dinh=None):
+    ap = (
+        await _sql(
+            "SELECT admission_path_id FROM admission_profile_choice "
+            "WHERE admission_profile_id = :p ORDER BY display_order LIMIT 1",
+            p=pid,
+        )
+    ).scalar_one()
+    await _sql(
+        "UPDATE admission_path SET bonus_rule_override = %s WHERE id = :a" % override,
+        a=ap,
+    )
+    if mac_dinh is not None:
+        await _sql(
+            "UPDATE admission_method SET default_bonus_rule = %s WHERE id = "
+            "(SELECT admission_method_id FROM admission_path WHERE id = :a)" % mac_dinh,
+            a=ap,
+        )
+    return ap
+
+
+async def test_override_json_null_thi_theo_phuong_thuc(hs):
+    cccd, pid = await _mot(hs)
+    ap = await _dat_luat(pid, override="'null'::jsonb")
+    # Phép đo hợp lệ: cột là JSON null, KHÔNG phải SQL NULL (COALESCE của SQL không thay nó).
+    loai = await _sql(
+        "SELECT bonus_rule_override IS NULL, jsonb_typeof(bonus_rule_override) "
+        "FROM admission_path WHERE id = :a",
+        a=ap,
+    )
+    assert tuple(loai.one()) == (False, "null")
+    kq, _ = await _cong([cccd])
+    assert kq.luat_kv == ("cong",) and kq.diem_kv == ("0.75",)
+
+
+async def test_override_sql_null_thi_theo_phuong_thuc(hs):
+    cccd, pid = await _mot(hs)
+    ap = await _dat_luat(pid, override="NULL")
+    loai = await _sql(
+        "SELECT bonus_rule_override IS NULL FROM admission_path WHERE id = :a", a=ap
+    )
+    assert loai.scalar_one() is True  # phép đo hợp lệ: SQL NULL
+    kq, _ = await _cong([cccd])
+    assert kq.luat_kv == ("cong",) and kq.diem_kv == ("0.75",)
+
+
+async def test_override_that_tat_kv_thi_in_0(hs):
+    cccd, pid = await _mot(hs)
+    await _dat_luat(pid, override=TAT_KV)
+    kq, anh = await _cong([cccd])
+    assert kq.chan == () and kq.luat_kv == ("tat",) and kq.diem_kv == ("0.00",)
+    # Bộ xuất (luật v1) vẫn cộng KV — khác CÓ CHỦ Ý.
+    assert anh.rows[0].diem_kv == "0.75"
+
+
+async def test_override_bat_kv_thang_phuong_thuc_tat(hs):
+    cccd, pid = await _mot(hs)
+    await _dat_luat(pid, override=BAT_KV, mac_dinh=TAT_KV)
+    kq, _ = await _cong([cccd])
+    assert kq.luat_kv == ("cong",) and kq.diem_kv == ("0.75",)
+
+
+async def test_phuong_thuc_tat_kv_khong_override_thi_in_0(hs):
+    cccd, pid = await _mot(hs)
+    await _dat_luat(pid, override="NULL", mac_dinh=TAT_KV)
+    kq, _ = await _cong([cccd])
+    assert kq.luat_kv == ("tat",) and kq.diem_kv == ("0.00",)
+
+
+@pytest.mark.parametrize(
+    "override, mac_dinh",
+    [("NULL", "NULL"), ("'null'::jsonb", "'null'::jsonb")],
+    ids=["sql_null", "json_null"],
+)
+async def test_khong_co_luat_nao_thi_in_0_nhu_t6(hs, override, mac_dinh):
+    cccd, pid = await _mot(hs)
+    await _dat_luat(pid, override=override, mac_dinh=mac_dinh)
+    kq, _ = await _cong([cccd])
+    assert kq.chan == () and kq.luat_kv == ("khong_co_luat",)
+    assert kq.diem_kv == ("0.00",)
+
+
+async def test_luat_khong_phai_dict_thi_chan(hs):
+    # Override là JSON hợp lệ nhưng không phải luật (chuỗi) — T6 cũng không đọc được ⇒ chặn, không
+    # đoán bên nào.
+    cccd, pid = await _mot(hs)
+    await _dat_luat(pid, override="""'"khong-phai-luat"'::jsonb""")
+    kq, _ = await _cong([cccd])
+    assert kq.chan == _mot_ly_do("khong_xac_dinh_luat_cong_diem_kv")
+    assert kq.diem_kv == (None,)
+
+
+async def test_dung_bo_ghi_diem_kv_theo_luat_va_vet(hs):
+    async with AsyncSessionLocal() as db:
+        await _tai_ba_mau(db, hs)
+        await db.commit()
+    cccd, pid = await _mot(hs)
+    await _dat_luat(pid, override=TAT_KV)
+    sid = await _tao([cccd])
+    async with AsyncSessionLocal() as db:
+        dto, tt = (
+            await db.execute(
+                select(
+                    CouncilDocumentSet.snapshot_dto, CouncilDocumentSet.thong_tin_dung
+                ).where(CouncilDocumentSet.id == sid)
+            )
+        ).one()
+    assert dto[0]["diem_kv"] == "0.00"
+    assert tt["luat_diem_kv"] == "theo_luat_cong_diem_cua_duong_xet"
+    assert tt["so_ho_so_theo_luat_kv"] == {"tat": 1}
+
+
 async def test_giao_dich_doc_van_chi_doc_khi_tra_an_dinh_thu_cong(hs):
     # Phiên ORM tra sổ ấn định chạy TRÊN kết nối chỉ đọc: không mở giao dịch ghi nào.
     cccd, _ = await _an_dinh_thu_cong(hs)

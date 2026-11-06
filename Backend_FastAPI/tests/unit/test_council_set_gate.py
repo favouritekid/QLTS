@@ -123,6 +123,7 @@ def _sach(**kw):
         diem_chi_hs=0,
         kv_ly_do=None,
         kv_muc="0.75",
+        luat_kv=cong.LUAT_KV_CONG,  # câu 22 (lượt H): đường xét in cộng điểm KV
     )
     goc.update(kw)
     return cong.DuLieuKiem(**goc)
@@ -360,3 +361,48 @@ def test_payload_chi_so_dong_ma_ly_do_trang_thai():
     )
     assert all(c["mo_ta"] == cong.LY_DO[c["ma"]] for c in p["chan"])
     assert not re.search(r"\d{9,}", str(e.value.public_payload) + e.value.detail)
+
+
+# ═══════════════ Câu 22 (owner 06-11) — điểm KV in theo luật cộng điểm của đường xét ═══════════
+def test_luat_cong_kv_thi_in_muc_theo_nam_hoc():
+    assert cong.danh_gia([_sach()]).diem_kv == ("0.75",)
+
+
+@pytest.mark.parametrize("luat", [cong.LUAT_KV_TAT, cong.LUAT_KV_KHONG_CO])
+def test_luat_tat_hoac_khong_co_luat_thi_in_0(luat):
+    kq = cong.danh_gia([_sach(luat_kv=luat)])
+    assert kq.chan == () and kq.diem_kv == (cong.DIEM_KV_KHONG_CONG,)
+
+
+@pytest.mark.parametrize("luat", [None, "la", True])
+def test_luat_khong_xac_dinh_thi_chan(luat):
+    k = _sach(luat_kv=luat)
+    assert cong.ly_do_cua_dong(k) == ["khong_xac_dinh_luat_cong_diem_kv"]
+    assert cong.danh_gia([k]).diem_kv == (None,)
+
+
+def test_dem_so_ho_so_theo_luat_kv():
+    kq = cong.danh_gia(
+        [
+            _sach(stt=1),
+            _sach(stt=2, luat_kv=cong.LUAT_KV_TAT),
+            _sach(stt=3, luat_kv=cong.LUAT_KV_TAT),
+        ]
+    )
+    assert kq.so_theo_luat_kv() == {"cong": 1, "tat": 2}
+
+
+@pytest.mark.parametrize(
+    "luat, mong",
+    [
+        (None, False),
+        ({}, False),
+        ({"apply_area_bonus": False, "apply_object_bonus": True}, False),
+        ({"apply_area_bonus": True, "apply_object_bonus": False}, True),
+    ],
+    ids=["khong_co_luat", "luat_rong", "tat_kv", "bat_kv"],
+)
+def test_area_bonus_enabled_mot_nguon_voi_t6(luat, mong):
+    from app.services.priority_service import area_bonus_enabled
+
+    assert area_bonus_enabled(luat) is mong
