@@ -165,6 +165,15 @@ def test_luong_tu_ngay_sau_cho_lech_tien_to_thi_vi_pham(luong_tu, khop_that):
     assert ly_do(doi_tuong) == "ngoai_ngu_phap"
 
 
+def test_doi_tuong_khong_bat_dau_bang_gach_thi_ngoai_ngu_phap():
+    # Lượt H2 (rà nhánh): phần trước "/" đầu tiên bị bỏ khi tách đoạn ⇒ nếu không đòi "/" ở đầu, nhìn trước phủ định
+    # "(?!.*12345)" lọt vào G mà tập thử không có 12345 ⇒ dòng phụ thuộc id bị coi là độc lập. Ngữ nghĩa đo bằng hàm khớp thật.
+    doi_tuong = "(?!.*12345)/api/*"
+    assert HAM_KHOP(P + "/sets/57", doi_tuong) is True
+    assert HAM_KHOP(P + "/sets/12345", doi_tuong) is False
+    assert ly_do(doi_tuong) == "ngoai_ngu_phap"
+
+
 def test_hai_tham_so_trong_mot_doan_ngoai_ngu_phap():
     # "{a}{b}" trong MỘT đoạn: cách tách tên khác nhau giữa các bản casbin (mẫu tham lam / không tham lam) ⇒ ngoài G.
     assert ly_do(P + "/sets/{a}{b}") == "ngoai_ngu_phap"
