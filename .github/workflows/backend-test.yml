@@ -1208,6 +1208,9 @@ jobs:
           # dừng sau trần chờ khoá 10 giây qua ĐÚNG `alembic/env.py`, không mất dữ liệu / phiên bản);
           # Codex lần 8: `tests/api/test_council_documents_hop_dong_api.py` (thân 422 thật = mẫu chung với
           # giao diện — F236; cờ quyền chỉ theo mẫu route, đối chứng theo id thật — F237). Ghim WHOLE-FILE.
+          # Codex lần 9 (lượt H): `tests/unit/test_council_flag_policy_grammar.py` (không CSDL: ngữ
+          # pháp policy của cờ văn bản Hội đồng quyết theo hàm khớp keyMatch4 THẬT của enforcer — lọt /
+          # tắt nhầm, so với vét cạn, nối dây đọc policy). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1291,6 +1294,7 @@ jobs:
               tests/api/test_council_documents_gate_api.py
               tests/integration/test_council_document_downgrade_cho_khoa.py
               tests/api/test_council_documents_hop_dong_api.py
+              tests/unit/test_council_flag_policy_grammar.py
 
     env:
       APP_ENV: test

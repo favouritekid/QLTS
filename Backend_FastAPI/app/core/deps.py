@@ -3872,7 +3872,8 @@ async def get_council_document_confirm_right(
 #   * route nào có cổng nào: đọc từ CÂY DEPENDENCY THẬT của route (``route.dependant``) —
 #     không khai lại ở đây;
 #   * Casbin: ``casbin_cho_phep`` (cùng chủ thể / enforcer với ``check_permission``) trên
-#     đường của route, tham số đường thay bằng một id mẫu (keyMatch4 khớp mọi giá trị một đoạn);
+#     đường của route, tham số đường thay bằng id mẫu 1 — đúng với MỌI id chỉ khi policy theo
+#     ngữ pháp G (khối F237 bên dưới, canh mỗi lần tính cờ);
 #   * phạm vi / chỉ-admin: gọi ĐÚNG ``get_council_document_scope`` /
 #     ``require_council_document_admin``.
 # Cây có dependency KHÔNG thuộc hai tập dưới ⇒ cờ False (fail-closed) + log TÊN hàm.
@@ -3913,50 +3914,242 @@ def _ham_trong_cay_dependency(dependant) -> set:
     return out
 
 
+# ── F237 (Codex lần 8 → lần 9, lượt H): NGỮ PHÁP policy của module, quyết theo matcher THẬT ──
+# Cờ hỏi Casbin bằng đường MẪU (mọi tham số = 1). Cờ đúng với bộ id bất kỳ ⇔ MỖI dòng policy khớp
+# đường của route như nhau với MỌI id. Lượt G canh bằng thao tác chuỗi (``startswith`` tiền tố
+# module, bỏ qua mọi đuôi ``*``, so đúng chuỗi route) ⇒ lọt ``…/sets/57/files/*`` và tham số ở
+# tiền tố, tắt nhầm mẫu chỉ đổi tên tham số. Lượt H: quyết theo NGỮ NGHĨA của chính hàm khớp.
+#
+# Matcher thật (``auth_model.conf``, đo trong image ở lượt H — casbin 1.43.0 và pycasbin 2.4.0
+# cùng cài vào một thư mục ``casbin/``): ``keyMatch4(r_obj, p_obj)``. ``key_match4`` biến đối tượng
+# policy thành regex: ``"/*"`` ⇒ ``"/.*"``; ``{tên}`` ⇒ ``([^/]+)``; neo ``^…$``; rồi nếu một tên
+# lặp lại thì các đoạn khớp với nó phải BẰNG nhau. Mọi ký tự khác GIỮ NGHĨA REGEX (``.`` là ký tự
+# bất kỳ, ``|`` là nhánh thay thế — thoát khỏi neo ``^``…). ``:id`` (cú pháp keyMatch2) KHÔNG phải
+# tham số ở đây: nó là chữ ``:id``.
+#
+# NGỮ PHÁP G được hỗ trợ (đối tượng ``v1`` của dòng ``p``):
+#     doi_tuong := ( "/" doan )+
+#     doan      := "*"            — ≥ 1 đoạn đầy đủ bất kỳ (kể cả nhiều đoạn), ở bất kỳ vị trí nào
+#                | "{" ten "}"    — đúng MỘT đoạn; ten = 1+ ký tự ngoài "/", "{", "}";
+#                                   cùng ten xuất hiện ≥ 2 lần ⇒ các đoạn ấy phải bằng nhau
+#                | chu            — 0+ ký tự ngoài "/" và . ^ $ * + ? { } [ ] \ | ( ) — so cả đoạn
+# Ví dụ trong G: ``/*``, ``/api/*``, ``…/sets/{set_id}``, ``…/sets/{id}`` (đổi tên — cùng nghĩa),
+# ``…/sets/*``, ``/api/v2/admissions/*/choices/*``, ``…/sets/:id`` (chữ, không khớp route thật nào).
+# Ngoài G: ``*`` trần (regex hỏng — Casbin tự ném lỗi), ``…/sets*``, ``…/sets/5[0-9]``,
+# ``(?i)…``, ``a|b``, ``{a}{b}`` trong một đoạn.
+#
+# Quyết định cho TỪNG dòng (allow lẫn deny; MỌI chủ thể, MỌI hành động — chủ ý: dòng theo id ở bất
+# kỳ vai nào là vi phạm hợp đồng, tắt cờ của mọi người để người vận hành sửa policy, không phụ
+# thuộc phép phân giải kế thừa vai):
+#   1. đối tượng không phải chuỗi ⇒ VI PHẠM (fail-closed);
+#   2. ngoài G ⇒ VI PHẠM nếu CÓ THỂ khớp một đường của module (fail-closed CHỦ Ý: không chứng minh
+#      được không phụ thuộc id); "có thể" = chứa ``|``, hoặc phần chữ đứng trước ký tự regex đầu
+#      tiên (bỏ thêm một ký tự nếu ký tự ấy là lượng từ ``* + ? {``) tương thích với tiền tố module
+#      (chuỗi này là tiền tố của chuỗi kia). Không thể ⇒ bỏ qua (module khác không làm tắt cờ);
+#   3. trong G ⇒ gọi CHÍNH hàm khớp của enforcer trên mọi route của module, MỖI vị trí tham số độc
+#      lập, giá trị = {1, 57, 2147483647} ∪ {số chuẩn đứng thành một đoạn chữ của dòng hoặc của
+#      route} ∪ {k số mới lớn hơn mọi số ấy} (k = số tham số của route), lấy MỌI tổ hợp; kết quả
+#      khác nhau ⇒ PHỤ THUỘC ID ⇒ VI PHẠM.
+#   Có vi phạm ⇒ MỌI cờ tắt + log ``council_document_flag_policy_ngoai_mau``. Matcher của enforcer
+#   khác ``MATCHER_CO_VAN_BAN_HOI_DONG`` / không lấy được hàm khớp / không đọc được policy / route
+#   của module ngoài dạng ``/chu/{ten}`` ⇒ cũng tắt mọi cờ (ngữ pháp không còn đúng).
+# Vì sao bước 3 ĐỦ với G: giá trị tham số là số thập phân chuẩn, không chứa ``/`` ⇒ ranh giới đoạn
+# của đường cố định. Trong regex của G, mỗi đoạn chữ đứng giữa ``/`` và ``/``-hoặc-``$`` nên chỉ có
+# thể khớp BẰNG cả đoạn; ``([^/]+)`` và ``.*`` không nhìn nội dung ⇒ cả quá trình khớp (kể cả đường
+# quay lui regex chọn và phép so tên lặp lại) chỉ phụ thuộc: mỗi giá trị bằng số chữ nào của dòng /
+# route, và giá trị nào bằng giá trị nào. Tập thử phủ MỌI kiểu ấy ⇒ dòng không đổi trên tập thử thì
+# không đổi với mọi id ⇒ tập dòng khớp đường mẫu = tập dòng khớp đường thật ⇒ cờ = Casbin thật.
+# Phạm vi giá trị: id thập phân chuẩn (thứ giao diện gửi). Đường phi chuẩn (``/sets/057``,
+# ``/sets/+57``) không thuộc cam kết của cờ — pydantic nhận chúng là 57 (đo lượt H), nên một dòng
+# Casbin theo id cụ thể còn bị lách bằng cách viết id khác đi: thêm một lý do hợp đồng cấm nó.
+# Khoá: ``tests/unit/test_council_flag_policy_grammar.py`` (ngữ pháp + so với vét cạn bằng hàm
+# khớp thật) và ``tests/api/test_council_documents_hop_dong_api.py`` (cờ ↔ route thật, id ≠ 1).
+MATCHER_CO_VAN_BAN_HOI_DONG = (
+    "g(r_sub, p_sub) && keyMatch4(r_obj, p_obj) && regexMatch(r_act, p_act)"
+)
+_HAM_KHOP_DOI_TUONG = "keyMatch4"
+_KY_TU_REGEX_POLICY = frozenset(".^$*+?{}[]\\|()")
+_LUONG_TU_REGEX = frozenset("*+?{")
+ID_DO_CO_DINH = ("1", "57", "2147483647")
+
+
+def _la_id_chuan(s: str) -> bool:
+    """Số thập phân chuẩn (không số 0 ở đầu) — dạng id giao diện gửi."""
+    return s.isascii() and s.isdigit() and (s == "0" or s[0] != "0")
+
+
+def _doan_doi_tuong_trong_ngu_phap(doi_tuong: str) -> Optional[List[str]]:
+    """Các đoạn của ``doi_tuong`` nếu nó thuộc NGỮ PHÁP G (khối chú thích trên); ngoài G ⇒ None."""
+    import re
+
+    if not doi_tuong.startswith("/"):
+        return None
+    doan = doi_tuong.split("/")[1:]
+    for d in doan:
+        if d == "*" or re.fullmatch(r"\{[^/{}]+\}", d):
+            continue
+        if _KY_TU_REGEX_POLICY.intersection(d):
+            return None
+    return doan
+
+
+def _doan_route(path: str) -> Optional[List[Optional[str]]]:
+    """``/a/{x}/b`` ⇒ ``["a", None, "b"]`` (None = vị trí tham số). Tham số không chiếm trọn
+    một đoạn, hoặc có bộ chuyển đổi (``{x:path}`` — giá trị chứa được ``/``) ⇒ None."""
+    import re
+
+    out: List[Optional[str]] = []
+    for d in path.split("/")[1:]:
+        if re.fullmatch(r"\{[A-Za-z_][A-Za-z0-9_]*\}", d):
+            out.append(None)
+        elif "{" in d or "}" in d:
+            return None
+        else:
+            out.append(d)
+    return out
+
+
+def _co_the_khop_module(doi_tuong: str, tien_to_module: str) -> bool:
+    """Bước 2 của ngữ pháp: dòng NGOÀI G có thể khớp một đường bắt đầu bằng ``tien_to_module``
+    không (đánh giá BẢO THỦ — "có thể" khi không loại trừ được)."""
+    if "|" in doi_tuong:
+        return True
+    i = next(
+        (k for k, c in enumerate(doi_tuong) if c in _KY_TU_REGEX_POLICY),
+        len(doi_tuong),
+    )
+    chu = doi_tuong[:i]
+    if i < len(doi_tuong) and doi_tuong[i] in _LUONG_TU_REGEX:
+        chu = chu[:-1]
+    return chu.startswith(tien_to_module) or tien_to_module.startswith(chu)
+
+
+def _phu_thuoc_id(
+    doi_tuong: str,
+    doan_doi_tuong: List[str],
+    doan_cac_route: List[List[Optional[str]]],
+    ham_khop: Callable[..., Any],
+) -> bool:
+    """Bước 3: hàm khớp THẬT trả kết quả khác nhau giữa các tổ hợp id ⇒ True. Hàm khớp ném lỗi
+    ⇒ True (fail-closed)."""
+    import itertools
+
+    so_dong = [d for d in doan_doi_tuong if _la_id_chuan(d)]
+    for doan in doan_cac_route:
+        vi_tri = [i for i, d in enumerate(doan) if d is None]
+        if not vi_tri:
+            continue
+        so_route = [d for d in doan if d is not None and _la_id_chuan(d)]
+        gia_tri = list(dict.fromkeys(list(ID_DO_CO_DINH) + so_dong + so_route))
+        moi = max(int(v) for v in gia_tri) + 1
+        gia_tri += [str(moi + j) for j in range(len(vi_tri))]
+        ket_qua = set()
+        for bo in itertools.product(gia_tri, repeat=len(vi_tri)):
+            cu_the = list(doan)
+            for i, v in zip(vi_tri, bo):
+                cu_the[i] = v
+            try:
+                ket_qua.add(bool(ham_khop("/" + "/".join(cu_the), doi_tuong)))
+            except Exception:  # noqa: BLE001 — hàm khớp ném lỗi ⇒ không chứng minh được
+                return True
+            if len(ket_qua) > 1:
+                return True
+    return False
+
+
+def _phan_tich_route_module(cac_duong_route: List[str]) -> Optional[tuple]:
+    """``(đoạn của từng route, tiền tố module)``; route ngoài dạng ``/chu/{ten}`` ⇒ None.
+    Tiền tố = phần chung của các đường, cắt trước ``{`` đầu tiên rồi tới ``/`` cuối — mọi đường
+    CỤ THỂ của module đều bắt đầu bằng nó."""
+    import os.path
+
+    doan_cac_route = [_doan_route(p) for p in cac_duong_route]
+    if not doan_cac_route or any(d is None for d in doan_cac_route):
+        return None
+    chung = os.path.commonprefix(sorted(cac_duong_route)).split("{", 1)[0]
+    return doan_cac_route, chung.rsplit("/", 1)[0] + "/"
+
+
+def _ly_do_mot_dong(
+    doi_tuong: Any,
+    doan_cac_route: List[List[Optional[str]]],
+    tien_to: str,
+    ham_khop: Callable[..., Any],
+) -> Optional[str]:
+    if not isinstance(doi_tuong, str):
+        return "khong_phai_chuoi"
+    if not _co_the_khop_module(doi_tuong, tien_to):
+        return None  # bước 2: loại trừ được cho MỌI chuỗi (trong hay ngoài G)
+    doan = _doan_doi_tuong_trong_ngu_phap(doi_tuong)
+    if doan is None:
+        return "ngoai_ngu_phap"
+    if _phu_thuoc_id(doi_tuong, doan, doan_cac_route, ham_khop):
+        return "phu_thuoc_id"
+    return None
+
+
+def ly_do_policy_ngoai_hop_dong(
+    doi_tuong: Any,
+    cac_duong_route: List[str],
+    ham_khop: Callable[..., Any],
+) -> Optional[str]:
+    """MỘT dòng policy (đối tượng ``doi_tuong``) có vi phạm hợp đồng cờ của module không, xét
+    trên các route ``cac_duong_route`` (đường mẫu FastAPI) với hàm khớp ``ham_khop`` (hàm của
+    enforcer cho ``keyMatch4``). None = hợp lệ; ngược lại là lý do: ``khong_phai_chuoi`` ·
+    ``ngoai_ngu_phap`` · ``phu_thuoc_id`` · ``route_ngoai_ngu_phap``. Ngữ pháp + chứng minh:
+    khối chú thích ngay trên."""
+    phan_tich = _phan_tich_route_module(list(cac_duong_route))
+    if phan_tich is None:
+        return "route_ngoai_ngu_phap"
+    return _ly_do_mot_dong(doi_tuong, phan_tich[0], phan_tich[1], ham_khop)
+
+
 def _policy_ngoai_mau_route(
     request: Request,
     enforcer: Any,
     endpoint_theo_co: Mapping[str, Callable[..., Any]],
-) -> List[str]:
-    """Đối tượng (``v1``) của các dòng policy thuộc module KHÔNG phải mẫu route (F237): dưới
-    tiền tố chung của các route của module, mà không trùng đúng đường của một route nào và không
-    kết thúc bằng ``*``. Không có enforcer / không đọc được policy ⇒ ``[]`` (cờ tự tắt ở bước
-    sau khi không có enforcer)."""
+) -> List[tuple]:
+    """``[(đối tượng, lý do)]`` của các dòng policy vi phạm hợp đồng cờ (khối chú thích trên),
+    đọc policy + matcher + hàm khớp THẬT của enforcer mỗi lần tính cờ. Không có enforcer /
+    không có route nào ⇒ ``[]`` (cờ tự tắt ở bước sau). Mọi lỗi đọc ⇒ fail-closed."""
     from fastapi.routing import APIRoute
-    import os.path
 
     if enforcer is None:
         return []
     ham = set(endpoint_theo_co.values())
-    duong = {
-        r.path
-        for r in request.app.routes
-        if isinstance(r, APIRoute) and r.endpoint in ham
-    }
+    duong = sorted(
+        {
+            r.path
+            for r in request.app.routes
+            if isinstance(r, APIRoute) and r.endpoint in ham
+        }
+    )
     if not duong:
         return []
-    tien_to = os.path.commonprefix(sorted(duong)).rsplit("/", 1)[0]
-    if not tien_to:
-        return []
-    # Mọi route dưới tiền tố (kể cả route cờ ``/quyen`` — không nằm trong ``endpoint_theo_co``).
-    duong = {
-        r.path
-        for r in request.app.routes
-        if isinstance(r, APIRoute) and r.path.startswith(tien_to + "/")
-    }
+    try:
+        mo_hinh = enforcer.get_model()
+        matcher = mo_hinh["m"]["m"].value
+        chi_so = list(mo_hinh["p"]["p"].tokens).index("p_obj")
+        ham_khop = enforcer.fm.get_functions()[_HAM_KHOP_DOI_TUONG]
+    # Không đọc được matcher / hàm khớp ⇒ fail-closed.
+    except Exception:  # noqa: BLE001
+        return [("<khong-doc-duoc-matcher>", "matcher_khac")]
+    if "".join(str(matcher).split()) != "".join(MATCHER_CO_VAN_BAN_HOI_DONG.split()):
+        return [("<matcher-khac>", "matcher_khac")]
+    phan_tich = _phan_tich_route_module(duong)
+    if phan_tich is None:
+        return [("<route-ngoai-ngu-phap>", "route_ngoai_ngu_phap")]
     try:
         dong = list(enforcer.get_policy())
     # Không đọc được policy ⇒ fail-closed: coi là ngoài mẫu.
     except Exception:  # noqa: BLE001
-        return ["<khong-doc-duoc-policy>"]
+        return [("<khong-doc-duoc-policy>", "khong_doc_duoc_policy")]
     out = []
     for d in dong:
-        doi_tuong = d[1] if len(d) > 1 else ""
-        if not isinstance(doi_tuong, str) or not doi_tuong.startswith(tien_to + "/"):
-            continue
-        if doi_tuong in duong or doi_tuong.endswith("*"):
-            continue
-        out.append(doi_tuong)
+        doi_tuong = d[chi_so] if len(d) > chi_so else None
+        ly_do = _ly_do_mot_dong(doi_tuong, phan_tich[0], phan_tich[1], ham_khop)
+        if ly_do is not None:
+            out.append((doi_tuong, ly_do))
     return out
 
 
@@ -3993,14 +4186,18 @@ async def quyen_van_ban_hoi_dong(
             chi_admin_dat = False
 
     out: Dict[str, bool] = {}
-    # F237 (Codex lần 8) — HỢP ĐỒNG: policy Casbin của module CHỈ theo MẪU route (đúng chuỗi
-    # đường của route, vd ``…/sets/{set_id}``) hoặc ký tự đại diện ``*`` — KHÔNG theo id cụ thể.
-    # Cờ hỏi Casbin bằng đường mẫu (id 1); một dòng theo id cụ thể (vd deny ``…/sets/57``) làm cờ
-    # khác hành vi thật của bộ 57 ⇒ gặp dòng như thế: MỌI cờ tắt (fail-closed) + log. Phạm vi theo
-    # bộ thuộc ``deps`` (đơn vị), không thuộc Casbin.
+    # F237 (Codex lần 8 → lần 9) — HỢP ĐỒNG: mọi dòng policy khớp đường của route như nhau với
+    # MỌI id (ngữ pháp G + cách quyết: khối chú thích trên ``MATCHER_CO_VAN_BAN_HOI_DONG``). Cờ hỏi
+    # Casbin bằng đường mẫu (id 1); một dòng phụ thuộc id (vd deny ``…/sets/57/files/*``) làm cờ
+    # khác hành vi thật của bộ 57 ⇒ gặp dòng như thế: MỌI cờ tắt (fail-closed) + log (số dòng +
+    # lý do, không in đối tượng). Phạm vi theo bộ thuộc ``deps`` (đơn vị), không thuộc Casbin.
     ngoai_mau = _policy_ngoai_mau_route(request, enforcer, endpoint_theo_co)
     if ngoai_mau:
-        log.warning("council_document_flag_policy_ngoai_mau", so_dong=len(ngoai_mau))
+        log.warning(
+            "council_document_flag_policy_ngoai_mau",
+            so_dong=len(ngoai_mau),
+            ly_do=sorted({ly_do for _, ly_do in ngoai_mau}),
+        )
         return {co: False for co in endpoint_theo_co}
     for co, ham in endpoint_theo_co.items():
         route = [
