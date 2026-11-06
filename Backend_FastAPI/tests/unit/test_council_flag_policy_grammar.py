@@ -148,6 +148,28 @@ def test_ngoai_ngu_phap_co_the_khop_module_thi_vi_pham(doi_tuong):
     assert ly_do(doi_tuong) == "ngoai_ngu_phap"
 
 
+@pytest.mark.parametrize(
+    "luong_tu, khop_that",
+    [("?", True), ("*", True), ("+", False), ("{0}", False), ("{0,1}", False)],
+    ids=["hoi", "sao", "cong", "ngoac_0", "ngoac_0_1"],
+)
+def test_luong_tu_ngay_sau_cho_lech_tien_to_thi_vi_pham(luong_tu, khop_that):
+    # Lượt H2 (QH1 của người điều phối): lượng từ đứng NGAY SAU ký tự cuối trước chỗ lệch tiền tố module. "X?" / "X*"
+    # làm X tuỳ chọn ⇒ dòng KHỚP route của module ⇒ khi so tiền tố phải bỏ ký tự trước lượng từ. "X+" và "{…}"
+    # (keyMatch4 thay mọi "{…}" không có "/" bằng nhóm ⇒ KHÔNG phải lượng từ) đòi X ⇒ không khớp thật — vẫn vi phạm vì
+    # bước 2 bảo thủ (ngữ pháp ghi: bỏ thêm một ký tự nếu là * + ? {).
+    doi_tuong = (
+        "/api/admission-config/council-documentsX" + luong_tu + "/sets/57/files/*"
+    )
+    assert HAM_KHOP(P + "/sets/57/files/1", doi_tuong) is khop_that  # ngữ nghĩa thật
+    assert ly_do(doi_tuong) == "ngoai_ngu_phap"
+
+
+def test_hai_tham_so_trong_mot_doan_ngoai_ngu_phap():
+    # "{a}{b}" trong MỘT đoạn: cách tách tên khác nhau giữa các bản casbin (mẫu tham lam / không tham lam) ⇒ ngoài G.
+    assert ly_do(P + "/sets/{a}{b}") == "ngoai_ngu_phap"
+
+
 def test_nhanh_thay_the_thoat_neo_thi_vi_pham():
     # Phần chữ trước "|" là tiền tố module KHÁC, nhưng nhánh thứ hai khớp route của module.
     doi_tuong = "/api/leads|.*council-documents/sets/57"

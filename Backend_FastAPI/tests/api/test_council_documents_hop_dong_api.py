@@ -240,6 +240,18 @@ async def test_tham_so_o_tien_to_thi_moi_co_tat(client, tk, ba_bo_57):
         assert not any(co.values()), co
 
 
+async def test_luong_tu_o_cho_lech_tien_to_thi_moi_co_tat(client, tk, ba_bo_57):
+    # Lượt H2 (QH1): "council-documentsX?" — keyMatch4 coi X là tuỳ chọn ⇒ dòng khớp đường thật của bộ 57.
+    h = await tk("admin")
+    khac = ba_bo_57["u2"][0]
+    dong = "/api/admission-config/council-documentsX?/sets/57/files/*"
+    with _policy_tam(["role:admin", dong, "GET", "deny"]):
+        assert await _ma(client, h, "/sets/57/files/1") == 403, "phép đo không hợp lệ"
+        assert await _ma(client, h, "/sets/%d/files/1" % khac) == 200, "không theo id"
+        co = await q._co_qua_http(client, h)
+        assert not any(co.values()), co
+
+
 async def test_allow_theo_id_khac_1_thi_moi_co_tat(client, tk, ba_bo_57):
     # Quản lý: bỏ dòng MẪU của route chi tiết, thay bằng allow theo id 57 ⇒ route của bộ 57 mở
     # nhờ dòng theo id; cờ (hỏi bằng id 1) sẽ báo tắt sai ⇒ hợp đồng: mọi cờ tắt.
