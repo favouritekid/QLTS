@@ -169,8 +169,16 @@ async def tao_bo_van_ban(
     # xét tắt / không có luật cộng KV ⇒ 0 (cổng tính — ``diem_kv_in``).
     if any(m is None for m in kq_cong.diem_kv):
         raise ServiceError("Thiếu mức điểm khu vực sau cổng — không dựng.")
+    # Lượt H2 (owner 06-11): điểm đối tượng in theo công tắc của đường xét — bật thì GIỮ điểm luật v1
+    # của DTO, tắt / không có luật thì 0 (cổng tính — ``diem_ut_in``).
+    diem_ut = tuple(
+        cong.diem_ut_in(lu, r.diem_ut) for lu, r in zip(kq_cong.luat_ut, anh.rows)
+    )
+    if len(diem_ut) != len(anh.rows) or any(u is None for u in diem_ut):
+        raise ServiceError("Thiếu luật cộng điểm đối tượng sau cổng — không dựng.")
     hang_in = tuple(
-        r.model_copy(update={"diem_kv": m}) for r, m in zip(anh.rows, kq_cong.diem_kv)
+        r.model_copy(update={"diem_kv": m, "diem_ut": u})
+        for r, m, u in zip(anh.rows, kq_cong.diem_kv, diem_ut)
     )
 
     # Tối đa MỘT lần DỰNG cùng lúc trên toàn hệ (mọi worker / container cùng CSDL): khoá tư
@@ -235,6 +243,9 @@ async def tao_bo_van_ban(
     # (``cong`` / ``tat`` / ``khong_co_luat``) để đọc lại được vì sao một dòng in 0.
     md["luat_diem_kv"] = "theo_luat_cong_diem_cua_duong_xet"
     md["so_ho_so_theo_luat_kv"] = kq_cong.so_theo_luat_kv()
+    # Lượt H2: công tắc đối tượng của đường xét (cách suy + trần giữ luật v1).
+    md["luat_diem_ut"] = "cong_tac_doi_tuong_cua_duong_xet_cach_tinh_v1"
+    md["so_ho_so_theo_luat_ut"] = kq_cong.so_theo_luat_ut()
     bo = CouncilDocumentSet(
         nguoi_tao_id=nguoi_tao_id,
         tao_luc=luc_tao,

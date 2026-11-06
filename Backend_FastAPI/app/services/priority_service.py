@@ -62,6 +62,16 @@ def area_bonus_enabled(rule: Optional[dict[str, Any]]) -> bool:
     return bool(rule.get("apply_area_bonus"))
 
 
+def object_bonus_enabled(rule: Optional[dict[str, Any]]) -> bool:
+    """Luật cộng điểm (kết quả ``resolve_effective_bonus_rule``) có cộng điểm ĐỐI TƯỢNG không —
+    MỘT nguồn cho T6 (:func:`calculate_priority_bonus`) và văn bản Hội đồng (owner 06-11: công tắc
+    của đường xét; cách suy đối tượng + trần của văn bản giữ luật v1). ``None`` ⇒ không cộng — đúng
+    nhánh "bonus disabled" của T6."""
+    if rule is None:
+        return False
+    return bool(rule.get("apply_object_bonus"))
+
+
 async def calculate_priority_bonus(
     db: "AsyncSession",
     profile: "AdmissionProfile",
@@ -108,7 +118,7 @@ async def calculate_priority_bonus(
         return _ZERO, _ZERO, snapshot
 
     apply_area = area_bonus_enabled(rule)
-    apply_object = bool(rule.get("apply_object_bonus"))
+    apply_object = object_bonus_enabled(rule)
     max_total = rule.get("max_total_bonus")
     max_total_dec = Decimal(str(max_total)) if max_total is not None else None
 

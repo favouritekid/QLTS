@@ -918,7 +918,11 @@ async def test_luat_khong_phai_dict_thi_chan(hs):
     cccd, pid = await _mot(hs)
     await _dat_luat(pid, override="""'"khong-phai-luat"'::jsonb""")
     kq, _ = await _cong([cccd])
-    assert kq.chan == _mot_ly_do("khong_xac_dinh_luat_cong_diem_kv")
+    # Lượt H2: cùng luật quyết cả công tắc đối tượng ⇒ hai mã (đổi CÓ CHỦ Ý từ một mã).
+    assert kq.chan == (
+        ("khong_xac_dinh_luat_cong_diem_kv", None, (1,)),
+        ("khong_xac_dinh_luat_cong_diem_ut", None, (1,)),
+    )
     assert kq.diem_kv == (None,)
 
 
@@ -940,6 +944,54 @@ async def test_dung_bo_ghi_diem_kv_theo_luat_va_vet(hs):
     assert dto[0]["diem_kv"] == "0.00"
     assert tt["luat_diem_kv"] == "theo_luat_cong_diem_cua_duong_xet"
     assert tt["so_ho_so_theo_luat_kv"] == {"tat": 1}
+
+
+# ═══════ Lượt H2 (owner 06-11) — điểm ĐỐI TƯỢNG theo công tắc của đường xét, giữ cách tính v1 ═══════
+TAT_DOI_TUONG = """'{"apply_area_bonus": true, "apply_object_bonus": false}'::jsonb"""
+
+
+async def _dung_bo_dtts(hs, **luat):
+    """Hồ sơ DTTS ở xã KV1 (luật v1: mã 01, 2,00 điểm đối tượng), đặt luật ``luat`` cho đường xét
+    in rồi DỰNG bộ thật; trả (DTO hàng in, thông tin dựng, DTO đọc ra = bộ xuất)."""
+    async with AsyncSessionLocal() as db:
+        await _tai_ba_mau(db, hs)
+        await db.commit()
+    cccd, pid = await _mot(hs, ethnicity="02")
+    if luat:
+        await _dat_luat(pid, **luat)
+    _, anh = await _cong([cccd])
+    sid = await _tao([cccd])
+    async with AsyncSessionLocal() as db:
+        dto, tt = (
+            await db.execute(
+                select(
+                    CouncilDocumentSet.snapshot_dto, CouncilDocumentSet.thong_tin_dung
+                ).where(CouncilDocumentSet.id == sid)
+            )
+        ).one()
+    return dto[0], tt, anh.rows[0]
+
+
+async def test_cong_tac_doi_tuong_bat_thi_in_diem_v1(hs):
+    dong, tt, xuat = await _dung_bo_dtts(hs)  # phương thức giả: bật cả hai
+    # Phép đo hợp lệ: luật v1 cho mã 01, 2,00 điểm.
+    assert (xuat.ut_ma, xuat.diem_ut) == ("01", "2.00")
+    assert (dong["ut_ma"], dong["diem_ut"]) == ("01", "2.00")
+    assert tt["so_ho_so_theo_luat_ut"] == {"cong": 1}
+
+
+async def test_cong_tac_doi_tuong_tat_thi_in_0_giu_kv(hs):
+    dong, tt, xuat = await _dung_bo_dtts(hs, override=TAT_DOI_TUONG)
+    assert xuat.diem_ut == "2.00"  # bộ xuất (luật v1) vẫn cộng — khác CÓ CHỦ Ý
+    assert (dong["ut_ma"], dong["diem_ut"], dong["diem_kv"]) == ("01", "0", "0.75")
+    assert tt["luat_diem_ut"] == "cong_tac_doi_tuong_cua_duong_xet_cach_tinh_v1"
+    assert tt["so_ho_so_theo_luat_ut"] == {"tat": 1}
+
+
+async def test_khong_co_luat_thi_diem_doi_tuong_0_nhu_t6(hs):
+    dong, tt, _ = await _dung_bo_dtts(hs, override="NULL", mac_dinh="NULL")
+    assert (dong["diem_ut"], dong["diem_kv"]) == ("0", "0.00")
+    assert tt["so_ho_so_theo_luat_ut"] == {"khong_co_luat": 1}
 
 
 async def test_giao_dich_doc_van_chi_doc_khi_tra_an_dinh_thu_cong(hs):

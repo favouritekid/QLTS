@@ -124,6 +124,7 @@ def _sach(**kw):
         kv_ly_do=None,
         kv_muc="0.75",
         luat_kv=cong.LUAT_KV_CONG,  # câu 22 (lượt H): đường xét in cộng điểm KV
+        luat_ut=cong.LUAT_KV_CONG,  # lượt H2: đường xét in cộng điểm đối tượng
     )
     goc.update(kw)
     return cong.DuLieuKiem(**goc)
@@ -406,3 +407,87 @@ def test_area_bonus_enabled_mot_nguon_voi_t6(luat, mong):
     from app.services.priority_service import area_bonus_enabled
 
     assert area_bonus_enabled(luat) is mong
+
+
+# ═══════ Lượt H2 (owner 06-11) — điểm ĐỐI TƯỢNG theo công tắc của đường xét, giữ cách tính v1 ═══════
+def test_cong_tac_doi_tuong_bat_thi_giu_diem_v1():
+    assert cong.diem_ut_in(cong.LUAT_KV_CONG, "2.00") == "2.00"
+
+
+@pytest.mark.parametrize("luat", [cong.LUAT_KV_TAT, cong.LUAT_KV_KHONG_CO])
+def test_cong_tac_doi_tuong_tat_hoac_khong_co_luat_thi_in_0(luat):
+    assert cong.diem_ut_in(luat, "2.00") == cong.DIEM_UT_KHONG_CONG == "0"
+
+
+@pytest.mark.parametrize("luat", [None, "la"])
+def test_cong_tac_doi_tuong_khong_xac_dinh_thi_none(luat):
+    assert cong.diem_ut_in(luat, "2.00") is None
+
+
+def test_luat_doi_tuong_khong_xac_dinh_thi_chan():
+    assert cong.ly_do_cua_dong(_sach(luat_ut=None)) == [
+        "khong_xac_dinh_luat_cong_diem_ut"
+    ]
+
+
+def test_hai_cong_tac_doc_lap():
+    # Tắt đối tượng không đổi điểm KV in; tắt KV không đổi công tắc đối tượng.
+    kq = cong.danh_gia(
+        [
+            _sach(stt=1, luat_ut=cong.LUAT_KV_TAT),
+            _sach(stt=2, luat_kv=cong.LUAT_KV_TAT),
+        ]
+    )
+    assert kq.diem_kv == ("0.75", cong.DIEM_KV_KHONG_CONG)
+    assert kq.luat_ut == (cong.LUAT_KV_TAT, cong.LUAT_KV_CONG)
+
+
+def test_dem_so_ho_so_theo_luat_doi_tuong():
+    kq = cong.danh_gia([_sach(stt=1), _sach(stt=2, luat_ut=cong.LUAT_KV_KHONG_CO)])
+    assert kq.so_theo_luat_ut() == {"cong": 1, "khong_co_luat": 1}
+
+
+@pytest.mark.parametrize(
+    "luat, mong",
+    [
+        (None, False),
+        ({}, False),
+        ({"apply_area_bonus": True, "apply_object_bonus": False}, False),
+        ({"apply_area_bonus": False, "apply_object_bonus": True}, True),
+    ],
+    ids=["khong_co_luat", "luat_rong", "tat_doi_tuong", "bat_doi_tuong"],
+)
+def test_object_bonus_enabled_mot_nguon_voi_t6(luat, mong):
+    from app.services.priority_service import object_bonus_enabled
+
+    assert object_bonus_enabled(luat) is mong
+
+
+@pytest.mark.parametrize(
+    "ten_ham", ["area_bonus_enabled", "object_bonus_enabled"], ids=["kv", "doi_tuong"]
+)
+async def test_t6_goi_dung_helper_cong_tac(monkeypatch, ten_ham):
+    # Nối dây MỘT nguồn: T6 (calculate_priority_bonus) phải hỏi CHÍNH helper mà văn bản dùng. Helper giả trả
+    # False ⇒ T6 không cộng phần ấy dù luật bật (không chạm CSDL: hai phần đều tắt ⇒ không tra mức).
+    from types import SimpleNamespace
+
+    from app.services import priority_service as ps
+
+    goi = []
+
+    def gia(luat):
+        goi.append(luat)
+        return False
+
+    khac = (
+        "object_bonus_enabled"
+        if ten_ham == "area_bonus_enabled"
+        else "area_bonus_enabled"
+    )
+    monkeypatch.setattr(ps, ten_ham, gia)
+    monkeypatch.setattr(ps, khac, lambda luat: False)
+    luat = {"apply_area_bonus": True, "apply_object_bonus": True}
+    kv, dt, _ = await ps.calculate_priority_bonus(
+        None, SimpleNamespace(area_resolution_basis=None), luat, 2026
+    )
+    assert goi == [luat] and (kv, dt) == (0, 0)

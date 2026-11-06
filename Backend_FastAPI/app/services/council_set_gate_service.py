@@ -46,6 +46,12 @@ qua ORM thành ``None`` ⇒ rơi về phương thức, như T6) và quyết bằ
 mức theo năm học (F231); tắt hoặc không có luật ⇒ ``DIEM_KV_KHONG_CONG``; không xác định ⇒ CHẶN.
 Chỉ điểm KV đổi — điểm đối tượng, trần ưu tiên vẫn theo luật v1 của bộ dựng.
 
+**Lượt H2 (owner 06-11 — điểm đối tượng theo công tắc của đường xét, GIỮ cách tính):** cùng luật ấy,
+công tắc ``apply_object_bonus`` qua ``priority_service.object_bonus_enabled`` (hàm T6 dùng). Bật ⇒ GIỮ
+điểm đối tượng của luật v1 (dân tộc + xã thường trú) và trần 2,75 của bộ dựng; tắt / không có luật ⇒ in
+``DIEM_UT_KHONG_CONG`` (:func:`diem_ut_in`); không xác định ⇒ CHẶN ``khong_xac_dinh_luat_cong_diem_ut``.
+KHÔNG dùng ``max_total_bonus`` của đường xét, KHÔNG cắt tỉ lệ như T6. Mã đối tượng in (``ut_ma``) giữ nguyên.
+
 Lỗi chỉ nêu SỐ DÒNG + mã lý do + trạng thái — không mã hồ sơ, không giá trị dữ liệu.
 """
 from dataclasses import dataclass
@@ -170,6 +176,10 @@ LY_DO: Dict[str, str] = {
     "khong_xac_dinh_luat_cong_diem_kv": (
         "không xác định được luật cộng điểm khu vực của đường xét dùng để in"
     ),
+    # Owner 06-11 (lượt H2) — điểm đối tượng theo công tắc của đường xét
+    "khong_xac_dinh_luat_cong_diem_ut": (
+        "không xác định được luật cộng điểm đối tượng của đường xét dùng để in"
+    ),
 }
 
 # Câu 22 — luật cộng điểm KV của đường xét in (do hàm đọc điền bằng ĐÚNG hàm T6 dùng:
@@ -180,6 +190,11 @@ LUAT_KV_TAT = "tat"  # có luật, ``apply_area_bonus`` tắt ⇒ T6 tính 0 ⇒
 LUAT_KV_KHONG_CO = "khong_co_luat"
 LUAT_KV_HOP_LE = frozenset({LUAT_KV_CONG, LUAT_KV_TAT, LUAT_KV_KHONG_CO})
 DIEM_KV_KHONG_CONG = "0.00"
+# Owner 06-11 (lượt H2): công tắc ĐỐI TƯỢNG của cùng luật (``apply_object_bonus`` — hàm đọc điền bằng
+# ``priority_service.object_bonus_enabled``), cùng ba giá trị ``LUAT_KV_*``. Cộng ⇒ GIỮ điểm đối tượng của
+# luật v1 (suy từ dân tộc + xã thường trú; trần 2,75 của bộ dựng); tắt / không có luật ⇒ in "0" (như luật v1
+# in cho người không thuộc diện). KHÔNG dùng ``max_total_bonus``, KHÔNG cắt tỉ lệ như T6.
+DIEM_UT_KHONG_CONG = "0"
 
 
 @dataclass(frozen=True)
@@ -214,6 +229,18 @@ class DuLieuKiem:
     kv_ly_do: Optional[str]
     kv_muc: Optional[str]
     luat_kv: Optional[str]  # câu 22 — một trong LUAT_KV_HOP_LE; None = không xác định
+    # lượt H2 — công tắc đối tượng, cùng ba giá trị; None = không xác định
+    luat_ut: Optional[str]
+
+
+def diem_ut_in(luat_ut: Optional[str], diem_ut_v1: str) -> Optional[str]:
+    """Lượt H2 — điểm ĐỐI TƯỢNG in: luật cộng ⇒ GIỮ ``diem_ut_v1`` (luật v1 của bộ xuất); tắt / không có
+    luật ⇒ ``DIEM_UT_KHONG_CONG``; không xác định ⇒ ``None`` (dòng ấy đã bị chặn)."""
+    if luat_ut == LUAT_KV_CONG:
+        return diem_ut_v1
+    if luat_ut in (LUAT_KV_TAT, LUAT_KV_KHONG_CO):
+        return DIEM_UT_KHONG_CONG
+    return None
 
 
 def diem_kv_in(k: DuLieuKiem) -> Optional[str]:
@@ -285,6 +312,8 @@ def ly_do_cua_dong(k: DuLieuKiem) -> List[str]:
     # Câu 22: đường xét in đã biết (không thì dòng đã bị chặn ở trên) mà luật không xác định.
     if k.nv_in_path_id is not None and k.luat_kv not in LUAT_KV_HOP_LE:
         out.append("khong_xac_dinh_luat_cong_diem_kv")
+    if k.nv_in_path_id is not None and k.luat_ut not in LUAT_KV_HOP_LE:
+        out.append("khong_xac_dinh_luat_cong_diem_ut")
     return out
 
 
@@ -299,13 +328,21 @@ class KetQuaCong:
     canh_bao: Dict[str, Tuple[int, ...]]  # trạng thái cảnh báo -> dòng
     diem_kv: Tuple[Optional[str], ...]  # điểm KV IN (câu 22: theo luật của đường xét)
     luat_kv: Tuple[Optional[str], ...] = ()
+    luat_ut: Tuple[Optional[str], ...] = ()  # lượt H2 — công tắc đối tượng từng dòng
 
-    def so_theo_luat_kv(self) -> Dict[str, int]:
+    @staticmethod
+    def _dem(gia_tri: Tuple[Optional[str], ...]) -> Dict[str, int]:
         dem: Dict[str, int] = {}
-        for s in self.luat_kv:
+        for s in gia_tri:
             ten = s if isinstance(s, str) else "(không rõ)"
             dem[ten] = dem.get(ten, 0) + 1
         return dict(sorted(dem.items()))
+
+    def so_theo_luat_kv(self) -> Dict[str, int]:
+        return self._dem(self.luat_kv)
+
+    def so_theo_luat_ut(self) -> Dict[str, int]:
+        return self._dem(self.luat_ut)
 
     def so_canh_bao(self) -> Dict[str, int]:
         return {s: len(d) for s, d in sorted(self.canh_bao.items())}
@@ -344,6 +381,7 @@ def danh_gia(kiem: Sequence[DuLieuKiem]) -> KetQuaCong:
         canh_bao={s: tuple(sorted(d)) for s, d in sorted(canh_bao.items())},
         diem_kv=tuple(diem_kv_in(k) for k in kiem),
         luat_kv=tuple(k.luat_kv for k in kiem),
+        luat_ut=tuple(k.luat_ut for k in kiem),
     )
 
 
