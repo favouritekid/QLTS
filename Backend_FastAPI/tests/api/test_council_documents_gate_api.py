@@ -4,7 +4,10 @@ test, DỮ LIỆU GIẢ: nối dây của F228 (409 cần admin xác nhận / 40
 ``deps.get_council_document_confirm_right`` tính (chỉ admin), vết xác nhận đọc lại được qua
 ``GET /sets/{id}``; quản lý (Casbin GIẢ cho phép ``POST /sets``) bị từ chối kèm số đếm, gửi xác
 nhận ⇒ 403; không ghi gì ở mọi nhánh từ chối. Mỗi ca một bất biến (CLAUDE.md §3).
+Lượt H: câu 21 (KV đổi sau ảnh chụp ⇒ 400 liệt kê dòng) qua đúng route.
 """
+import json
+
 import pytest
 import pytest_asyncio
 from fastapi.routing import APIRoute
@@ -15,7 +18,7 @@ from app.core import deps
 from app.main import fastapi_app
 from app.routers import council_documents as rt
 from tests.api import test_council_documents_api as api
-from tests.fixtures.hoi_dong_seed import seed_hoi_dong
+from tests.fixtures.hoi_dong_seed import lich_su_thpt, seed_hoi_dong
 
 pytestmark = pytest.mark.integration
 
@@ -134,6 +137,33 @@ async def test_chan_thi_400_xac_nhan_khong_go_duoc(client, tk, hs, mau):
         ("trang_thai_chan", "withdrawn", [1])
     ]
     assert p["canh_bao"]["dong_theo_trang_thai"] == {"reviewing": [3]}
+    assert await _dem() == truoc
+
+
+async def test_kv_doi_sau_anh_chup_thi_400_liet_ke_dong(client, tk, hs, mau):
+    # Câu 21 (owner 06-11) qua ĐÚNG route: hồ sơ dòng 1 đổi nơi học THPT (KV3 ⇒ KV1) sau lần
+    # chụp, không chụp lại ⇒ 400 chặn, nêu đúng mã + số dòng, không ghi gì.
+    async with csdl.engine.begin() as c:
+        await c.execute(
+            text(
+                "UPDATE admission_profile SET academic_history = CAST(:h AS jsonb) "
+                "WHERE id = :p"
+            ),
+            {
+                "h": json.dumps(lich_su_thpt(hs["_danh_muc"], "KV1")),
+                "p": hs["dia_chi_rong"][1],
+            },
+        )
+    truoc = await _dem()
+    r = await client.post(
+        P + "/sets", json=_than(hs, SACH), headers=(await tk("admin"))
+    )
+    assert r.status_code == 400, r.text
+    p = r.json()["kiem_tra_dung_bo"]
+    assert [(c["ma"], c["dong"]) for c in p["chan"]] == [
+        ("khu_vuc_doi_sau_anh_chup", [1])
+    ]
+    assert not any(hs[n][0] in r.text for n in SACH)  # không mã hồ sơ trong phản hồi
     assert await _dem() == truoc
 
 

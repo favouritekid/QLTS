@@ -73,6 +73,39 @@ class AnhChupHoSo:
     kiem: Tuple[DuLieuKiem, ...] = ()
 
 
+async def _kv_tinh_lai_lech(
+    phien: AsyncSession, ho_so: object, snap: dict
+) -> Optional[str]:
+    """Câu 21 (owner 06-11 — "chặn và liệt kê"): mã lý do nếu KV TÍNH LẠI từ dữ liệu HIỆN TẠI
+    của hồ sơ khác KV sẽ in (``kv_resolved`` của ảnh chụp), ``None`` nếu khớp.
+
+    Tính bằng ĐÚNG resolver mà ``freeze_priority_snapshot`` gọi khi chụp (T1 nộp / T6 chấm) —
+    ``priority_service.resolve_kv_for_profile`` (năm = năm học hồ sơ qua ``priority_academic_
+    year`` bên trong nó; bảng KV xã / trường tra theo năm ấy) — với CÙNG ngữ cảnh trình độ /
+    loại hình mà lần chụp đã dùng: ``freeze_priority_snapshot`` ghi ``target_level`` /
+    ``admission_type`` vào ảnh chụp khi và chỉ khi chúng khác ``None`` ⇒ đọc lại từ ảnh chụp
+    (vắng ⇒ ``None``) tái lập đúng lời gọi, chỉ dữ liệu hồ sơ / danh mục là của hiện tại. So MÃ
+    KV (không so ``rule_applied``). Chỉ đọc: resolver chỉ SELECT; giao dịch là READ ONLY ở CSDL.
+    Lỗi CSDL ⇒ để nổi lên (hàm gọi đổi thành ``ServiceError``); lỗi khác ⇒ chặn."""
+    from app.services.priority_service import resolve_kv_for_profile
+
+    try:
+        kv_moi, _ = await resolve_kv_for_profile(
+            ho_so,
+            phien,
+            target_level=snap.get("target_level"),
+            admission_type=snap.get("admission_type"),
+        )
+    except DBAPIError:
+        raise
+    # Không tính lại được ⇒ không chứng minh được KV sẽ in còn đúng ⇒ chặn.
+    except Exception:  # noqa: BLE001
+        return "khu_vuc_khong_tinh_lai_duoc"
+    if kv_moi != snap.get("kv_resolved"):
+        return "khu_vuc_doi_sau_anh_chup"
+    return None
+
+
 async def _tra_khu_vuc(
     conn: AsyncConnection, hang_kiem: Sequence[dict]
 ) -> List[Tuple[Optional[str], Optional[str]]]:
@@ -83,7 +116,8 @@ async def _tra_khu_vuc(
     provenance`` (ấn định thủ công còn hiệu lực — đúng hàm ``freeze_priority_snapshot`` gọi; chỉ
     ĐỌC sổ ``priority_audit_log``), ``priority_academic_year`` (năm = năm học của hồ sơ) và
     ``select_open_priority_rates`` (năm học + ``effective_to IS NULL``, không lọc ngày). KHÔNG
-    gọi ``freeze_priority_snapshot`` (hàm GHI) — giao dịch này chỉ đọc."""
+    gọi ``freeze_priority_snapshot`` (hàm GHI) — giao dịch này chỉ đọc. Câu 21: KV không ấn định
+    thủ công được TÍNH LẠI chỉ đọc (:func:`_kv_tinh_lai_lech`) và so với KV sẽ in."""
     from app import models
     from app.services.priority_service import (
         RATE_TABLE_AREA,
@@ -104,18 +138,23 @@ async def _tra_khu_vuc(
             if not kv_snapshot_resolved(snap):
                 out.append(("thieu_khu_vuc", None))
                 continue
+            if phien is None:
+                # Phiên ORM trên CHÍNH kết nối đang ở giao dịch chỉ đọc (không mở giao dịch
+                # mới, không commit / rollback giao dịch ngoài).
+                phien = AsyncSession(bind=conn)
+            ho_so = await phien.get(models.AdmissionProfile, h["pid"])
             if (
                 h.get("area_resolution_basis") == "manual_override"
                 or snap.get("rule_applied") == "manual_override"
             ):
-                if phien is None:
-                    # Phiên ORM trên CHÍNH kết nối đang ở giao dịch chỉ đọc (không mở giao dịch
-                    # mới, không commit / rollback giao dịch ngoài).
-                    phien = AsyncSession(bind=conn)
-                ho_so = await phien.get(models.AdmissionProfile, h["pid"])
                 ok, _ly_do, _ = await verify_manual_override_provenance(phien, ho_so)
                 if not ok:
                     out.append(("khu_vuc_thu_cong_khong_hieu_luc", None))
+                    continue
+            else:
+                lech = await _kv_tinh_lai_lech(phien, ho_so, snap)
+                if lech is not None:
+                    out.append((lech, None))
                     continue
             nam = priority_academic_year(
                 SimpleNamespace(academic_year=h.get("academic_year"), id=h.get("pid"))

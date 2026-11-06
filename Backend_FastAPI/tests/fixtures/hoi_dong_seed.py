@@ -25,6 +25,14 @@ nguyện vọng ⇒ ``uses_choice_engine`` = true (điểm nằm ở ``profile_c
 máy nguyện vọng); ảnh chụp khu vực có ``rule_applied`` (vị từ ``kv_snapshot_resolved``); mức KV1
 cũ thuộc năm 2025 (production có partial UNIQUE một hàng ĐANG MỞ / năm / mã — hai hàng mở cùng
 năm là dữ liệu lỗi; bộ xuất vẫn chọn mức mới nhất theo ngày như trước).
+
+Lượt H (câu 21 — owner 06-11: tính lại KV chỉ đọc, lệch ⇒ chặn) — dữ liệu chỉnh CÓ CHỦ Ý để ảnh
+chụp KV của hồ sơ giả KHỚP kết quả tính lại của resolver app (như một lần nộp thật): trường THPT
+giả + khu vực theo năm; ``academic_history`` (:func:`lich_su_thpt`) cho các hồ sơ đi nhánh
+LICH_SU_THPT; hàng KV của GX4 có ngày kết thúc 2027 thay vì 2025. Không cột nào bộ xuất in bị
+đổi (bộ xuất chỉ đọc ``academic_history`` ở mục lớp 9 và chỉ lấy hàng KV xã ``effective_to IS
+NULL``). Hồ sơ ``nut_tinh_het_hieu_luc_nv1_khong_diem`` (văn hoá rỗng) vẫn có ảnh chụp KV2 mà
+resolver không tính lại được ⇒ là ca "KV đổi sau ảnh chụp" tự nhiên của bộ giả.
 """
 import json
 from datetime import date, datetime, timezone
@@ -37,6 +45,21 @@ LUC = datetime(2026, 10, 1, tzinfo=timezone.utc)
 def kv(ma: str, rule: str = "commune_lookup") -> dict:
     """Ảnh chụp khu vực ĐÃ PHÂN GIẢI (``priority_service.kv_snapshot_resolved``)."""
     return {"kv_resolved": ma, "rule_applied": rule}
+
+
+def lich_su_thpt(d: dict, ma_kv: str) -> list:
+    """Lịch sử học THPT giả: ba năm ở trường giả có khu vực ``ma_kv`` (``d["truong"]``) — đủ để
+    resolver của app (``resolve_kv_for_profile``, nhánh LICH_SU_THPT) ra ĐÚNG ``ma_kv``. Không có
+    ``grade_to`` ⇒ cột ``lop9_nam`` của bộ xuất (chỉ đọc mục lớp 9) không đổi."""
+    return [
+        {
+            "level": "THPT",
+            "school_id": d["truong"][ma_kv],
+            "school_name": "Trường THPT giả " + ma_kv,
+            "year_from": 2023,
+            "year_to": 2025,
+        }
+    ]
 
 
 def ma_gia(n: int, so_chu_so: int = 12) -> str:
@@ -248,13 +271,18 @@ async def danh_muc(conn) -> dict:
         conn, "config_system_category", type="religion", code="02", name="Tôn giáo giả"
     )
     # Khu vực theo xã: GX1 KV1 · GX2 KV2 · GX3 hết hiệu lực KV1 + HIỆN HÀNH KV2-NT (tên xã
-    # khác) · GX4 CHỈ còn hàng hết hiệu lực (KV1) · GX5 hiện hành, tên xã RỖNG.
+    # khác) · GX4 KHÔNG còn hàng MỞ (bộ xuất chỉ lấy ``effective_to IS NULL``) — hàng KV1 duy nhất
+    # có ngày kết thúc 30-06-2027 · GX5 hiện hành, tên xã RỖNG.
+    # Lượt H (câu 21): trước đây hàng của GX4 hết hạn 30-06-2025 ⇒ resolver của app (tra theo
+    # NĂM 2026, ``_lookup_commune_kv``) không ra KV nào trong khi ảnh chụp ghi KV1 — một hồ sơ
+    # giả "KV đổi sau ảnh chụp". Dời ngày kết thúc sang 2027: với bộ xuất vẫn là "không có hàng
+    # mở" (cột ``ut_ma`` = 06 như cũ), với resolver năm 2026 ra KV1 = ảnh chụp.
     for ma, kv, xa, den in (
         ("GX1", "KV1", "Xã Giả Một", None),
         ("GX2", "KV2", "Xã Giả Hai", None),
         ("GX3", "KV1", "Xã Giả Ba Cũ", date(2025, 6, 30)),
         ("GX3", "KV2-NT", "Xã Giả Ba Mới", None),
-        ("GX4", "KV1", "Xã Giả Bốn Cũ", date(2025, 6, 30)),
+        ("GX4", "KV1", "Xã Giả Bốn Cũ", date(2027, 6, 30)),
         ("GX5", "KV2", "", None),
     ):
         await chen(
@@ -325,6 +353,29 @@ async def danh_muc(conn) -> dict:
             area_name="Khu vực giả " + ma_kv,
             bonus_points=diem,
             effective_from=tu,
+        )
+    # Lượt H (câu 21 — owner 06-11): trường THPT giả, mỗi trường MỘT khu vực từ 2020 (không hết
+    # hạn) — để ảnh chụp KV của hồ sơ giả khớp kết quả tính lại của resolver app (nhánh
+    # LICH_SU_THPT đọc ``academic_history`` + ``vn_school_kv_assignment``). Bộ xuất không đọc hai
+    # bảng này.
+    d["truong"] = {}
+    for i, ma_kv in enumerate(("KV1", "KV2", "KV2-NT", "KV3"), 1):
+        d["truong"][ma_kv] = await chen(
+            conn,
+            "vn_school",
+            moet_school_code="GIA%02d" % i,
+            moet_province_code="99",
+            name="Trường THPT giả " + ma_kv,
+            province="Tỉnh giả",
+            level="THPT",
+        )
+        await chen(
+            conn,
+            "vn_school_kv_assignment",
+            school_id=d["truong"][ma_kv],
+            kv_code=ma_kv,
+            effective_from_year=2020,
+            source="gia",
         )
     return d
 
@@ -499,6 +550,7 @@ async def seed_hoi_dong(conn) -> dict:
         cultural_education_level="graduated_thpt",
         vocational_qualification="none",
         priority_resolution_snapshot=kv("KV1"),
+        academic_history=lich_su_thpt(d, "KV1"),
         nv=[(2, "duoc_cd", "cq", "g2"), (1, "oto_cd", "cq", "g1")],
         diem={
             0: {"van": "9.00", "toan": "9.00", "ly": "9.00"},
@@ -532,6 +584,7 @@ async def seed_hoi_dong(conn) -> dict:
         cultural_education_level="completed_thpt",
         vocational_qualification="trung_cap",
         priority_resolution_snapshot=kv("KV2"),
+        academic_history=lich_su_thpt(d, "KV2"),
         nv=[(1, "oto_tc", "lt", "g1")],
         diem={0: {"toan": "5.00", "ly": "5.50", "hoa": "6.00"}},
     )
@@ -550,6 +603,7 @@ async def seed_hoi_dong(conn) -> dict:
         cultural_education_level="graduated_gdtx",
         vocational_qualification="cao_dang",
         priority_resolution_snapshot=kv("KV1"),
+        academic_history=lich_su_thpt(d, "KV1"),
         nv=[(1, "duoc_cd", "cq", "g2")],
         diem={0: {"van": "8.00", "toan": "7.00", "ly": "6.00"}},
         hoc_phi=[dict(HP_CD, resolved_major=None, resolved_degree_level="Cao đẳng")],
@@ -631,6 +685,7 @@ async def seed_hoi_dong(conn) -> dict:
         cultural_education_level="graduated_thpt",
         vocational_qualification="none",
         priority_resolution_snapshot=kv("KV3"),
+        academic_history=lich_su_thpt(d, "KV3"),
         nv=[(1, "oto_cd", "cq", "g1")],
         diem={0: {"toan": "8.00", "ly": "8.00", "hoa": "8.00"}},
         hoc_phi=[HP_CD],
@@ -649,6 +704,7 @@ async def seed_hoi_dong(conn) -> dict:
         cultural_education_level="graduated_thpt",
         vocational_qualification="trung_cap",
         priority_resolution_snapshot=kv("KV3"),
+        academic_history=lich_su_thpt(d, "KV3"),
         nv=[(1, "oto_tc", "cq", "g1")],
         diem={0: {"toan": "7.00", "ly": "7.00", "hoa": "7.00"}},
         hoc_phi=[
@@ -702,6 +758,7 @@ async def seed_hoi_dong(conn) -> dict:
             cultural_education_level="graduated_thpt",
             vocational_qualification="trung_cap",
             priority_resolution_snapshot=kv("KV2"),
+            academic_history=lich_su_thpt(d, "KV2"),
             nv=[(1, "oto_cd", lh, "g1")],
             diem={0: {"toan": "6.50", "ly": "6.50", "hoa": "6.50"}},
             hoc_phi=[HP_CD],
@@ -719,6 +776,7 @@ async def seed_hoi_dong(conn) -> dict:
         cultural_education_level="graduated_thpt",
         vocational_qualification="none",
         priority_resolution_snapshot=kv("KV1"),
+        academic_history=lich_su_thpt(d, "KV1"),
         nv=[(1, "oto_cd", "cq", "g1")],
         diem={0: {"toan": "5.00", "ly": "5.00", "hoa": "5.00"}},
         hoc_phi=[HP_CD],

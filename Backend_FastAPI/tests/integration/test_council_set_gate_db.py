@@ -42,6 +42,7 @@ from tests.fixtures.hoi_dong_seed import (
     chen,
     ho_so,
     kv,
+    lich_su_thpt,
     ma_gia,
     seed_hoi_dong,
 )
@@ -136,6 +137,8 @@ async def _mot(hs, **kw):
         cultural_education_level="graduated_thpt",
         vocational_qualification="none",
         priority_resolution_snapshot=kv("KV1"),
+        # Lượt H (câu 21): lịch sử THPT để resolver của app tính lại ra đúng KV1 của ảnh chụp.
+        academic_history=lich_su_thpt(d, "KV1"),
         nv=NV_SACH,
         diem=DIEM_SACH,
         hoc_phi=[HP_CD],
@@ -710,6 +713,102 @@ async def test_an_dinh_thu_cong_du_lieu_doi_sau_khi_duyet_thi_chan(hs):
     )
     kq, _ = await _cong([cccd])
     assert kq.chan == _mot_ly_do("khu_vuc_thu_cong_khong_hieu_luc")
+
+
+# ═══════════════ Câu 21 (owner 06-11) — tính lại KV chỉ đọc, lệch ⇒ chặn và liệt kê ══════════
+async def _doi_lich_su(hs, pid, ma_kv):
+    """Mô phỏng "sửa nơi học THPT rồi Nộp lại": dữ liệu KV đổi, ảnh chụp KHÔNG chụp lại."""
+    await _sql(
+        "UPDATE admission_profile SET academic_history = CAST(:h AS jsonb) WHERE id = :p",
+        h=json.dumps(lich_su_thpt(hs["_danh_muc"], ma_kv)),
+        p=pid,
+    )
+
+
+async def test_kv_tinh_lai_khac_anh_chup_thi_chan(hs):
+    cccd, pid = await _mot(hs)  # ảnh chụp KV1, đang học trường KV1
+    await _doi_lich_su(hs, pid, "KV2")
+    kq, anh = await _cong([cccd])
+    assert kq.chan == _mot_ly_do("khu_vuc_doi_sau_anh_chup") and kq.diem_kv == (None,)
+    assert anh.rows[0].kv == "KV1"  # bộ xuất vẫn in KV cũ của ảnh chụp
+
+
+async def test_kv_tinh_lai_theo_thuong_tru_khac_anh_chup_thi_chan(hs):
+    # Nhánh THƯỜNG TRÚ (văn hoá THCS): đổi xã thường trú GX3 (KV2-NT) ⇒ GX1 (KV1).
+    cccd, pid = await _mot(
+        hs,
+        permanent_commune_code="GX3",
+        cultural_education_level="graduated_thcs",
+        vocational_qualification="so_cap",
+        priority_resolution_snapshot=kv("KV2-NT"),
+        academic_history=[],
+    )
+    assert (await _cong([cccd]))[0].chan == ()  # phép đo hợp lệ: trước khi đổi thì qua
+    await _sql(
+        "UPDATE admission_profile SET permanent_commune_code = 'GX1' WHERE id = :p",
+        p=pid,
+    )
+    kq, _ = await _cong([cccd])
+    assert kq.chan == _mot_ly_do("khu_vuc_doi_sau_anh_chup")
+
+
+async def test_du_lieu_doi_ma_kv_tinh_lai_khong_doi_thi_qua(hs):
+    # Đổi xã thường trú của hồ sơ đi nhánh LỊCH SỬ THPT ⇒ KV tính lại vẫn KV1: so MÃ KV, không
+    # so dữ liệu đầu vào.
+    cccd, pid = await _mot(hs)
+    await _sql(
+        "UPDATE admission_profile SET permanent_commune_code = 'GX2' WHERE id = :p",
+        p=pid,
+    )
+    kq, _ = await _cong([cccd])
+    assert kq.chan == () and kq.diem_kv == ("0.75",)
+
+
+async def test_kv_tinh_lai_dung_ngu_canh_trinh_do_cua_anh_chup(hs):
+    # "Hoàn thành THPT, không chuyên môn": không ngữ cảnh trình độ ⇒ resolver đi THƯỜNG TRÚ (GX2 =
+    # KV2); ngữ cảnh "cao đẳng chính quy" ghi trong ảnh chụp ⇒ LỊCH SỬ THPT (trường KV1). Tính lại
+    # phải dùng ĐÚNG ngữ cảnh của lần chụp ⇒ KV1 = ảnh chụp ⇒ qua.
+    cccd, _ = await _mot(
+        hs,
+        permanent_commune_code="GX2",
+        cultural_education_level="completed_thpt",
+        vocational_qualification="none",
+        priority_resolution_snapshot={
+            "kv_resolved": "KV1",
+            "rule_applied": "longest_duration",
+            "target_level": "cao_dang",
+            "admission_type": "chinh_quy",
+        },
+    )
+    kq, _ = await _cong([cccd])
+    assert kq.chan == () and kq.diem_kv == ("0.75",)
+
+
+async def test_resolver_nem_loi_thi_chan(hs, monkeypatch):
+    from app.services import priority_service
+
+    async def hong(*a, **k):
+        raise RuntimeError("giả: resolver hỏng")
+
+    cccd, _ = await _mot(hs)
+    monkeypatch.setattr(priority_service, "resolve_kv_for_profile", hong)
+    kq, _ = await _cong([cccd])
+    assert kq.chan == _mot_ly_do("khu_vuc_khong_tinh_lai_duoc")
+
+
+async def test_tinh_lai_kv_khong_ghi_gi_vao_ho_so(hs):
+    cccd, pid = await _mot(hs)
+    await _doi_lich_su(hs, pid, "KV3")
+    q = (
+        "SELECT priority_resolution_snapshot::text, updated_at FROM admission_profile "
+        "WHERE id = :p"
+    )
+    truoc = (await _sql(q, p=pid)).one()
+    anh = await doc.doc_ho_so_theo_ma(csdl.engine, [cccd], academic_year=2026)
+    # Phép đo hợp lệ: đã tính lại (và thấy lệch).
+    assert anh.kiem[0].kv_ly_do == "khu_vuc_doi_sau_anh_chup"
+    assert anh.giao_dich.transaction_read_only == "on"
+    assert (await _sql(q, p=pid)).one() == truoc
 
 
 async def test_giao_dich_doc_van_chi_doc_khi_tra_an_dinh_thu_cong(hs):

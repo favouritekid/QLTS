@@ -31,6 +31,13 @@ CHẶN, liệt kê từng dòng (không tự chọn bên nào).
 học của hồ sơ qua ``select_open_priority_rates`` (hàm đọc gọi — không chép luật ở đây). Thiếu ⇒
 CHẶN, không in rỗng / 0.
 
+**Câu 21 (owner 06-11 — chặn và liệt kê):** KV in lấy từ ảnh chụp; "Nộp lại" không chụp lại ⇒
+hàm đọc TÍNH LẠI KV chỉ đọc bằng ĐÚNG resolver của app (``resolve_kv_for_profile`` — năm học hồ sơ
+qua ``priority_academic_year`` bên trong nó; cùng ngữ cảnh trình độ / loại hình đã ghi trong ảnh
+chụp) và so mã KV. Khác ⇒ CHẶN ``khu_vuc_doi_sau_anh_chup``; resolver ném lỗi ⇒ CHẶN
+``khu_vuc_khong_tinh_lai_duoc``. Ấn định thủ công không tính lại (resolver CỐ Ý không phân giải
+nhánh ấy) — đã qua ``verify_manual_override_provenance``, hàm này tự so dấu vân tay dữ liệu KV.
+
 Lỗi chỉ nêu SỐ DÒNG + mã lý do + trạng thái — không mã hồ sơ, không giá trị dữ liệu.
 """
 from dataclasses import dataclass
@@ -142,6 +149,14 @@ LY_DO: Dict[str, str] = {
     ),
     "muc_khu_vuc_khong_nhat_quan": (
         "hơn một mức điểm khu vực đang mở cho cùng năm học (dữ liệu mức lỗi)"
+    ),
+    # Câu 21 (owner 06-11 — chặn và liệt kê)
+    "khu_vuc_doi_sau_anh_chup": (
+        "khu vực tính lại từ dữ liệu hiện tại của hồ sơ khác khu vực sẽ in (ảnh chụp lúc "
+        "nộp / chấm) — dữ liệu khu vực đã đổi sau lần chụp"
+    ),
+    "khu_vuc_khong_tinh_lai_duoc": (
+        "không tính lại được khu vực từ dữ liệu hiện tại của hồ sơ để đối chiếu"
     ),
 }
 

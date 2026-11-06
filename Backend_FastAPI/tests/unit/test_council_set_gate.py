@@ -164,6 +164,15 @@ def test_dong_sach_khong_ly_do():
         (dict(hp_nganh_id=None), "hoc_phi_chua_gan_nganh"),
         (dict(hp_nganh_id=6), "hoc_phi_khac_nganh_nv"),
         (dict(kv_ly_do="thieu_khu_vuc", kv_muc=None), "thieu_khu_vuc"),
+        # Câu 21 (lượt H): mã do hàm đọc điền phải có trong bảng lý do (danh_gia sắp theo bảng).
+        (
+            dict(kv_ly_do="khu_vuc_doi_sau_anh_chup", kv_muc=None),
+            "khu_vuc_doi_sau_anh_chup",
+        ),
+        (
+            dict(kv_ly_do="khu_vuc_khong_tinh_lai_duoc", kv_muc=None),
+            "khu_vuc_khong_tinh_lai_duoc",
+        ),
     ],
 )
 def test_bo_may_nguyen_vong_mot_ly_do(sua, ma):
