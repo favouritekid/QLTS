@@ -70,6 +70,18 @@ def test_ten_rang_buoc_cua_model_co_du_trong_migration():
         o_model |= {
             n for n in _ten_rang_buoc_model(lop) if n.startswith(("ck_", "uq_"))
         }
+    # Lượt I: bốn CHECK mới trên ``council_document_set`` do ``hdts20261107`` tạo (khoá ở
+    # ``test_council_decision_models.py``) — không thuộc migration 1103.
+    cua_1107 = set(
+        re.findall(
+            r'\("(ck_council_document_set_[a-z_]+)", CHECK_',
+            (TEP_MIGRATION.parent / "hdts20261107_council_decision.py").read_text(
+                encoding="utf-8"
+            ),
+        )
+    )
+    assert len(cua_1107) == 4 and cua_1107 <= o_model
+    o_model -= cua_1107
     assert o_model == trong_mig and len(o_model) == 15
 
 
@@ -107,8 +119,10 @@ def test_migration_la_head_duy_nhat_noi_tiep_head_cu():
     cfg = Config(str(GOC / "alembic.ini"))
     cfg.set_main_option("script_location", str(GOC / "alembic"))
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    # lượt E3: hai bảng vết nối sau quyền Casbin (E2); lượt F: quyền route cờ giao diện
-    assert heads == ["hdts20261105"]
+    # lượt E3: hai bảng vết nối sau quyền Casbin (E2); lượt F: quyền route cờ giao diện; lượt I:
+    # ghi nhận Quyết định đã ký (hdts20261107 nối sau hdts20261105 — khoá ở
+    # ``test_council_decision_models.py``)
+    assert heads == ["hdts20261107"]
     mig = _migration()
     assert (mig.revision, mig.down_revision) == ("hdts20261103", "v3circ20261011c")
     assert mig.CO_CHO_PHEP_XOA.endswith("_ENABLED")  # cờ CHO PHÉP, mặc định tắt

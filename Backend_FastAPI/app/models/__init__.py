@@ -52,10 +52,16 @@ from .student import Student, StudentDocument
 from .enrollment_letter import EnrollmentLetter
 # Kho mẫu + bộ văn bản Hội đồng tuyển sinh (giai đoạn 1 "Lần xét tuyển").
 from .council_document import (
+    CouncilDecision,
+    CouncilDecisionHold,
+    CouncilDecisionRow,
+    CouncilDecisionScan,
     CouncilDocumentDownloadLog,
+    CouncilDocumentEvent,
     CouncilDocumentSet,
     CouncilDocumentSetDeletion,
     CouncilDocumentSetFile,
+    CouncilDocumentSetRow,
     CouncilDocumentTemplate,
 )
 
@@ -230,6 +236,12 @@ __all__ = [
     "CouncilDocumentSetFile",
     "CouncilDocumentSetDeletion",
     "CouncilDocumentDownloadLog",
+    "CouncilDocumentSetRow",
+    "CouncilDecision",
+    "CouncilDecisionRow",
+    "CouncilDecisionScan",
+    "CouncilDecisionHold",
+    "CouncilDocumentEvent",
     "ProfileSubjectScore",
     "ProfileDocument",
     "DocumentAuditLog",  # Audit trail for document operations
