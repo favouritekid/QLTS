@@ -196,19 +196,47 @@ async def ba_bo_57(hs):
 @contextlib.contextmanager
 def _policy_tam(*them, bo=()):
     """Thêm ``them`` / bỏ ``bo`` (dòng ``p``) trên model của enforcer THẬT của app; trả lại
-    nguyên trạng khi ra."""
+    nguyên trạng khi ra.
+
+    F247 (Codex lần 10): việc ĐỔI policy nằm TRONG ``try`` và chỉ những dòng đã đổi THÀNH CÔNG
+    được ghi lại ⇒ một ``assert`` hỏng giữa chừng (dòng thứ hai không bỏ / không thêm được) vẫn
+    trả lại đúng các dòng đã đổi trước đó, không đụng dòng chưa đổi."""
     mo_hinh = fastapi_app.state.enforcer.get_model()
-    for x in bo:
-        assert mo_hinh.remove_policy("p", "p", list(x)), x
-    for x in them:
-        assert mo_hinh.add_policy("p", "p", list(x)), x
+    da_bo, da_them = [], []
     try:
+        for x in bo:
+            assert mo_hinh.remove_policy("p", "p", list(x)), x
+            da_bo.append(x)
+        for x in them:
+            assert mo_hinh.add_policy("p", "p", list(x)), x
+            da_them.append(x)
         yield
     finally:
-        for x in them:
+        for x in reversed(da_them):
             mo_hinh.remove_policy("p", "p", list(x))
-        for x in bo:
+        for x in reversed(da_bo):
             mo_hinh.add_policy("p", "p", list(x))
+
+
+def _policy_hien_tai():
+    return sorted(tuple(r) for r in fastapi_app.state.enforcer.get_policy())
+
+
+async def test_policy_tam_hong_giua_chung_tra_lai_dung_dong_da_doi(client):
+    # F247: assert hỏng giữa chừng (dòng thứ hai) ⇒ dòng đã đổi trước đó vẫn được trả lại, dòng
+    # chưa đổi không bị đụng; policy sau == trước (đo trên enforcer thật của app).
+    truoc = _policy_hien_tai()
+    co_san = list(truoc[0])
+    moi = ["role:admin", P + "/sets/9/files/*", "GET", "deny"]
+    assert tuple(moi) not in truoc, "phép đo không hợp lệ"
+    with pytest.raises(AssertionError):
+        with _policy_tam(moi, co_san):  # thêm ``moi`` được, thêm dòng ĐÃ CÓ ⇒ False ⇒ assert
+            pass
+    assert _policy_hien_tai() == truoc
+    with pytest.raises(AssertionError):
+        with _policy_tam(bo=[co_san, ["role:khong-co", "/x", "GET", "allow"]]):
+            pass
+    assert _policy_hien_tai() == truoc
 
 
 async def _ma(client, h, duong):
