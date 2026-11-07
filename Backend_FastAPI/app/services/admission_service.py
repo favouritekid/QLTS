@@ -536,6 +536,26 @@ def _check_idor_access(
 # they took a seat that cannot be reassigned for the same academic year.
 # This matches the legal/compliance reading that quota = seats consumed,
 # not seats currently active.
+#: Trạng thái được TẠO link tự rút — MỘT hằng cho cờ ``send_withdraw_link`` và
+#: ``generate_action_magic_link`` (lượt I gộp hai bản chép — CLAUDE.md §7).
+TRANG_THAI_TAO_LINK_RUT = (
+    "draft", "submitted", "reviewing", "rejected",
+    "resubmitted", "revision_requested", "waitlisted",
+)
+
+
+def _doc_tinh_trang_qd(profile):
+    from .council_decision_status_service import doc_tinh_trang
+
+    return doc_tinh_trang(profile)
+
+
+async def _gan_tinh_trang_qd(db, profiles) -> None:
+    from .council_decision_status_service import gan_tinh_trang_qd
+
+    await gan_tinh_trang_qd(db, profiles)
+
+
 QUOTA_OCCUPYING_STATUSES = (
     # Admitted-equivalent (legacy + choice-engine). ``admitted`` lands here
     # forward-compat for #15 — Phase 1 widens the CHECK constraint and #16
@@ -1723,7 +1743,8 @@ def _list_action_flags(
     can_review = status in ("submitted", "resubmitted") and (is_manager or is_admin)
     return {
         "approve": can_review and not outstanding_debt_codes,
-        "reject": can_review,
+        # Lượt I (F230, J1 dòng 12 + E1): không Từ chối em có Quyết định đã ký / dấu AppSheet.
+        "reject": can_review and not _doc_tinh_trang_qd(profile).khoa_trang_thai,
         "claim": can_review and not profile.assigned_reviewer_id,
         "unclaim": bool(profile.assigned_reviewer_id)
         and (profile.assigned_reviewer_id == current_user.id or is_admin),
@@ -2284,6 +2305,8 @@ def _compute_frontend_fields(
         documents: Optional list of ProfileDocument (to avoid re-fetching)
     """
     status = profile.status
+    # Lượt I (F230): tình trạng Quyết định đã gán TRƯỚC (``gan_tinh_trang_qd``); chưa gán ⇒ như chưa có.
+    _tq = _doc_tinh_trang_qd(profile)
     user_role = current_user.role                                   
     is_admin = user_role == UserRole.ADMIN                          
     is_manager = user_role == UserRole.MANAGER                      
@@ -2357,6 +2380,7 @@ def _compute_frontend_fields(
             and status in ["submitted", "reviewing"]
             and (is_manager or is_admin)
             and not _outstanding_debt_codes
+            and not _tq.chan_xet_moi  # lượt I: QĐ hiệu lực / chờ quyết / dấu AppSheet
         ),
         "request_revision": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
         "resubmit": status in ["rejected", "revision_requested"] and (is_owner or is_manager or is_admin),
@@ -2392,11 +2416,9 @@ def _compute_frontend_fields(
             and (is_owner or is_manager or is_admin)
         ),
         "send_withdraw_link": (
-            status in (
-                "draft", "submitted", "reviewing", "rejected",
-                "resubmitted", "revision_requested", "waitlisted",
-            )
+            status in TRANG_THAI_TAO_LINK_RUT
             and (is_owner or is_manager or is_admin)
+            and not _tq.khoa_trang_thai  # lượt I: em có QĐ đã ký / dấu AppSheet
         ),
         # Q9 #07 Phase E.4 commit 7 hardening (yêu cầu nghiệp vụ #10):
         # Officer KHÔNG được override KV. Chỉ admin + manager mới có quyền.
@@ -2451,7 +2473,9 @@ def _compute_frontend_fields(
         ) and status not in ["draft", "withdrawn", "dropped", "withdrawal_pending"],
         # PR-B: admin reverts a pending withdrawal back to draft when the refund
         # was rejected (so the profile is not stuck awaiting a refund).
-        "cancel_withdrawal": is_admin and status == "withdrawal_pending",
+        "cancel_withdrawal": (
+            is_admin and status == "withdrawal_pending" and not _tq.khoa_trang_thai
+        ),
         "drop": status == "enrolled" and not _is_dropped and (is_manager or is_admin),
         "claim": _la["claim"],
         "unclaim": _la["unclaim"],
@@ -2487,7 +2511,7 @@ def _compute_frontend_fields(
                 )
             )
         ),
-        "delete": status == "draft" and is_admin,
+        "delete": status == "draft" and is_admin and not _tq.co_ten_van_ban,
         # F6 fix 2026-05-16: Override = bypass normal eligibility flow,
         # admin-only per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN §3.4.
         # State machine allows ONLY approved → overridden (see
@@ -2500,7 +2524,11 @@ def _compute_frontend_fields(
         # allow_major_change) cho hồ sơ đã nộp/nộp-lại — trước đây chỉ gọi được
         # qua API. Chỉ submitted/resubmitted (miền mở chu kỳ đổi ngành; các status
         # khác dùng override/luồng riêng).
-        "admin_rollback": is_admin and status in ("submitted", "resubmitted"),
+        "admin_rollback": (
+            is_admin
+            and status in ("submitted", "resubmitted")
+            and not _tq.khoa_trang_thai
+        ),
         # Tentative — true only when role + status + path_id snapshot
         # exists. Async resolver _resolve_minor_correction_state flips
         # this back to False if the per-path effective allowlist is
@@ -3814,6 +3842,7 @@ async def _populate_response_fields(
     # SELECT so the documents_checklist response carries verified_by_name
     # without N+1.
     verifier_names = await _resolve_verifier_names(db, documents)
+    await _gan_tinh_trang_qd(db, [profile])
     _compute_frontend_fields(profile, current_user, documents, verifier_names)
 
     # Refine the tentative minor_correction permission flag against the
@@ -5204,6 +5233,7 @@ async def get_profiles(
                     )
                 ).scalars().all()
             )
+        await _gan_tinh_trang_qd(db, profiles)
         for profile in profiles:
             profile.completion_percent = (
                 profile.cached_completion if profile.cached_completion is not None else 0
@@ -5261,6 +5291,7 @@ async def get_profiles(
         )
 
     # Hydrate computed fields (same as detail API) using eager-loaded relations
+    await _gan_tinh_trang_qd(db, profiles)
     for profile in profiles:
         _calculate_and_update_totals(profile)
         # documents already loaded via selectinload in get_filtered_with_count
@@ -5501,6 +5532,7 @@ async def get_profile(
     # =========================================================================
     # Fetch documents for completion calculation
     documents = await admission_repo.get_all_documents(profile_id)
+    await _gan_tinh_trang_qd(db, [profile])
     _compute_frontend_fields(
         profile,
         current_user,
@@ -6096,6 +6128,7 @@ async def update_profile(
     # (or, conversely, showing "missing" for docs that are actually uploaded). See MEDIUM #1 in
     # the post-BUG-001 residual risks audit.
     documents = await admission_repo.get_all_documents(profile.id)
+    await _gan_tinh_trang_qd(db, [profile])
     _compute_frontend_fields(
         profile,
         current_user,
@@ -12227,6 +12260,18 @@ async def delete_profile(
             f"Cannot delete profile with status '{profile.status}'. "
             "Only draft profiles can be deleted."
         )
+    # Lượt I (F230): hồ sơ có tên trong văn bản đã ký chưa huỷ ghi nhận KHÔNG xoá cứng được — CSDL giữ
+    # (K5a, ``ck_council_decision_row_k5a``); báo trước bằng ĐÚNG điều kiện ấy.
+    from .council_decision_status_service import mot_ho_so
+
+    if (await mot_ho_so(db, profile.id)).co_ten_van_ban:
+        from app.utils.exceptions import QuyetDinhKhoaHoSo
+
+        raise QuyetDinhKhoaHoSo(
+            "Hồ sơ có tên trong văn bản đã ký (Quyết định / điều chỉnh / văn bản huỷ chưa huỷ ghi "
+            "nhận) — không xoá được.",
+            public_payload={"thao_tac": "xoa_ho_so"},
+        )
 
     lead = profile.lead
     lead_id = profile.lead_id
@@ -12716,6 +12761,12 @@ async def withdraw_profile(
     # IDOR bypass when actor=None (magic-link path verifies CCCD).
     _check_idor_access(profile, actor)
 
+    # Lượt I (F230, owner C4 + E1): em có tên trong Quyết định đã ký / mang dấu AppSheet ⇒ tạm chặn rút
+    # (kể cả cán bộ, kể cả token tạo trước) — TRƯỚC khi tự lập yêu cầu hoàn. Chốt cuối: ``transition``.
+    from .council_decision_status_service import kiem_som_khoa_trang_thai
+
+    await kiem_som_khoa_trang_thai(db, profile.id, "rut_ho_so")
+
     # Actor attribution (officer dashboard vs. magic-link self-service).
     # Downstream consumers accept Optional ids; the human-readable label is
     # (re)computed inside ``_finalize_withdrawn`` where the bundle is built.
@@ -12932,6 +12983,11 @@ async def cancel_withdrawal(
             "Chỉ có thể hủy quy trình rút khi hồ sơ đang ở trạng thái "
             "'Chờ hoàn để rút'."
         )
+    # Lượt I (F230, owner C5 + E1): không về Nháp khi có Quyết định đã ký / dấu AppSheet — TRƯỚC khi
+    # từ chối yêu cầu hoàn đang mở. Chốt cuối: ``transition``.
+    from .council_decision_status_service import kiem_som_khoa_trang_thai
+
+    await kiem_som_khoa_trang_thai(db, profile.id, "huy_quy_trinh_rut")
     if not reason:
         raise BadRequest("Lý do hủy quy trình rút là bắt buộc")
 
@@ -13446,14 +13502,16 @@ async def generate_action_magic_link(
             f"Chỉ tạo magic-link 'resubmit' khi hồ sơ ở trạng thái "
             f"'revision_requested'. Trạng thái hiện tại: '{status}'."
         )
-    if action == "withdraw" and status not in (
-        "draft", "submitted", "reviewing", "rejected",
-        "resubmitted", "revision_requested", "waitlisted",
-    ):
+    if action == "withdraw" and status not in TRANG_THAI_TAO_LINK_RUT:
         raise BadRequest(
             f"Hồ sơ ở trạng thái '{status}' không thể tạo magic-link "
             f"'withdraw' (hồ sơ đã ở trạng thái cuối)."
         )
+    if action == "withdraw":
+        # Lượt I (F230): link tự rút KHÔNG mở cho em có Quyết định đã ký / dấu AppSheet (J1 dòng 15, E1).
+        from .council_decision_status_service import kiem_som_khoa_trang_thai
+
+        await kiem_som_khoa_trang_thai(db, profile.id, "tao_link_rut")
 
     # Generate secure token + repo upsert with action_type
     token_value = secrets.token_urlsafe(32)

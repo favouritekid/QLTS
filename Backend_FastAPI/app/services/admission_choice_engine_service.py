@@ -1290,6 +1290,11 @@ async def publish_result(
             f"Hồ sơ phải ở trạng thái 'submitted' hoặc 'reviewing' để publish; "
             f"trạng thái hiện tại: '{profile.status}'"
         )
+    # Lượt I (F230 — N11 suy owner đồng ý, C7, E1): công bố theo nguyện vọng là một lần xét ⇒ bỏ qua em có
+    # Quyết định đã ký / đang chờ Admin quyết / mang dấu AppSheet (đơn lẻ ⇒ từ chối kèm lý do).
+    from .council_decision_status_service import kiem_xet_moi
+
+    await kiem_xet_moi(db, profile.id, "cong_bo_theo_nguyen_vong")
 
     # Đổi ngành: CHẶN công bố kết quả khi đang chu kỳ đổi ngành (học phí chưa
     # chốt / chờ kế toán) — không quyết định trúng tuyển với nghĩa vụ tiền chưa
@@ -1394,6 +1399,10 @@ async def promote_waitlisted_choice(
         raise BusinessRuleViolation(
             f"Hồ sơ phải ở trạng thái 'waitlisted'; current: '{profile.status}'"
         )
+    # Lượt I (F230): đưa em danh sách chờ lên trúng tuyển = một lần xét ⇒ như ``publish_result``.
+    from .council_decision_status_service import kiem_xet_moi
+
+    await kiem_xet_moi(db, profile.id, "cong_bo_theo_nguyen_vong")
 
     # PR-1 (2026-05-28) — Re-check capacity AT promote-time. Cascade
     # capacity gate only fires at T6; between T6 and T10 (admin click)
@@ -1596,6 +1605,12 @@ async def admin_rollback_profile(
         raise BusinessRuleViolation(
             "Lý do rollback bắt buộc, tối thiểu 10 ký tự"
         )
+    # Lượt I (F230, owner C5 + E1): không trả về Nháp em có Quyết định đã ký / dấu AppSheet — TRƯỚC nhánh
+    # "đã ở Nháp" (vẫn mở chu kỳ đổi ngành), từ chối yêu cầu hoàn, mở chu kỳ đổi ngành. Chốt cuối:
+    # ``transition``.
+    from .council_decision_status_service import kiem_som_khoa_trang_thai
+
+    await kiem_som_khoa_trang_thai(db, profile.id, "tra_ve_nhap")
 
     # W9-J.7.idem fix 2026-05-16: idempotent no-op khi đã ở 'draft'.
     # Trước: state machine raise "Invalid transition: draft → draft"
