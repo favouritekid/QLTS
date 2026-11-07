@@ -1211,6 +1211,14 @@ jobs:
           # Codex lần 9 (lượt H): `tests/unit/test_council_flag_policy_grammar.py` (không CSDL: ngữ
           # pháp policy của cờ văn bản Hội đồng quyết theo hàm khớp keyMatch4 THẬT của enforcer — lọt /
           # tắt nhầm, so với vét cạn, nối dây đọc policy). Ghim WHOLE-FILE.
+          # Lượt I (F230 — ghi nhận Quyết định đã ký): `tests/unit/test_council_decision_models.py` (không
+          # CSDL: model = migration hdts20261107), `tests/integration/test_council_decision_constraints_db.py`
+          # (CSDL test: mỗi CHECK / UNIQUE / khoá ngoại ghép một ca cô lập + đối chứng),
+          # `tests/integration/test_council_decision_migration.py` (nâng / hạ qua ĐÚNG alembic, hai phiên,
+          # quá trần chờ khoá), `tests/api/test_council_decisions_api.py` (request THẬT: ghi nhận, huỷ,
+          # nhóm chờ, điều chỉnh, tái dựng bản ký) và `tests/api/test_council_decision_profile_gates_api.py`
+          # (request THẬT: chặn từ chối / rút / về Nháp / công bố theo NV với em có Quyết định / dấu
+          # AppSheet + kiểm kê chỗ gọi transition). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1295,6 +1303,11 @@ jobs:
               tests/integration/test_council_document_downgrade_cho_khoa.py
               tests/api/test_council_documents_hop_dong_api.py
               tests/unit/test_council_flag_policy_grammar.py
+              tests/unit/test_council_decision_models.py
+              tests/integration/test_council_decision_constraints_db.py
+              tests/integration/test_council_decision_migration.py
+              tests/api/test_council_decisions_api.py
+              tests/api/test_council_decision_profile_gates_api.py
 
     env:
       APP_ENV: test
