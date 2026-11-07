@@ -27,6 +27,7 @@ from types import SimpleNamespace
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from pydantic import ValidationError as PydanticValidationError
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
@@ -42,6 +43,7 @@ from app.services.council_document_render_service import (
     CANDIDATE_FIELDS,
     CandidateRowV1,
 )
+from app.services.council_decision_status_service import tu_hang
 from app.services.council_set_gate_service import DuLieuKiem
 from app.utils.exceptions import (
     DataValidationError,
@@ -71,6 +73,9 @@ class AnhChupHoSo:
     giao_dich: ThongTinGiaoDich
     # Dữ liệu cho cổng dựng bộ (lượt G) — cùng giao dịch, cùng thứ tự; KHÔNG ghi gì.
     kiem: Tuple[DuLieuKiem, ...] = ()
+    # Lượt I (F230): id hồ sơ từng dòng (cột ``pid`` của chính truy vấn đọc), cùng thứ tự — ghi
+    # vào dòng bộ để ghi nhận Quyết định nối được về hồ sơ (CCCD sửa được).
+    pids: Tuple[int, ...] = ()
 
 
 async def _kv_tinh_lai_lech(
@@ -357,23 +362,73 @@ async def doc_ho_so_theo_ma(
             if [stt for stt, _, _ in khop] != list(range(1, len(ds) + 1)):
                 raise ServiceError("Phân giải mã hồ sơ trả sai thứ tự — không đọc.")
             pids = [pid for _, _, pid in khop]
-            hang = await doc_so_lieu(conn, pids)
-            # Cổng dựng bộ (lượt G): dữ liệu kiểm đọc trong CÙNG giao dịch chỉ đọc, theo đúng
-            # nguyện vọng mà truy vấn số liệu in (cột phụ ``nv_in_id``).
-            nv_in = {h["stt"]: h.get("nv_in_id") for h in hang}
-            hang_kiem = await doc_kiem_nguon(
-                conn, pids, [nv_in.get(i) for i in range(1, len(pids) + 1)]
-            )
-            khu_vuc = await _tra_khu_vuc(conn, hang_kiem)
-            # Câu 22 + lượt H2: luật cộng điểm (KV, đối tượng) của đường xét của nguyện vọng in —
-            # cùng giao dịch.
-            luat = await _luat_cong_diem(
-                conn, [h.get("nv_in_path_id") for h in hang_kiem]
-            )
+            tho = await _doc_tho(conn, pids)
     except DBAPIError:
         # Thông báo của trình điều khiển có câu SQL + tham số (danh sách mã) ⇒ không giữ.
         raise ServiceError("Lỗi CSDL khi đọc hồ sơ cho bộ văn bản.") from None
+    return _dung_anh_chup(tho, pids, tt)
 
+
+async def doc_ho_so_theo_id(
+    engine: AsyncEngine,
+    pids: Sequence[int],
+    *,
+    academic_year: Optional[int],
+) -> AnhChupHoSo:
+    """Lượt I (F230 — tái dựng bản ký / so bộ với hiện tại): đọc ĐÚNG các hồ sơ ``pids`` (id lấy từ
+    dòng bộ — KHÔNG phân giải lại theo CCCD, vì CCCD có thể chính là chỗ sửa) bằng CÙNG truy vấn +
+    cùng giao dịch ``REPEATABLE READ READ ONLY`` của :func:`doc_ho_so_theo_ma`. Hồ sơ phải tồn tại và
+    thuộc năm học ``academic_year``; dòng ``stt`` của kết quả = vị trí trong ``pids`` (1…)."""
+    nam = kiem_nam_hoc(academic_year)
+    ds = [int(p) for p in pids]
+    if not ds or len(set(ds)) != len(ds):
+        raise ServiceError("Danh sách id hồ sơ rỗng hoặc trùng — không đọc.")
+    try:
+        async with giao_dich_chi_doc(engine) as (conn, tt):
+            co = {
+                r[0]: r[1]
+                for r in (
+                    await conn.execute(
+                        text(
+                            "SELECT id, academic_year FROM admission_profile "
+                            "WHERE id = ANY(CAST(:ids AS integer[]))"
+                        ),
+                        {"ids": ds},
+                    )
+                ).all()
+            }
+            sai = [i for i, p in enumerate(ds, 1) if co.get(p) != nam]
+            if sai:
+                raise DataValidationError(
+                    "Dòng %s: hồ sơ không còn hoặc không thuộc năm học của bộ — không đọc."
+                    % _neu_dong(sai)
+                )
+            tho = await _doc_tho(conn, ds)
+    except DBAPIError:
+        raise ServiceError("Lỗi CSDL khi đọc hồ sơ cho bộ văn bản.") from None
+    return _dung_anh_chup(tho, ds, tt)
+
+
+async def _doc_tho(conn: AsyncConnection, pids: Sequence[int]):
+    """Phần đọc dùng chung (trong giao dịch chỉ đọc đã mở): số liệu in + dữ liệu kiểm + khu vực +
+    luật cộng điểm."""
+    hang = await doc_so_lieu(conn, pids)
+    # Cổng dựng bộ (lượt G): dữ liệu kiểm đọc trong CÙNG giao dịch chỉ đọc, theo đúng
+    # nguyện vọng mà truy vấn số liệu in (cột phụ ``nv_in_id``).
+    nv_in = {h["stt"]: h.get("nv_in_id") for h in hang}
+    hang_kiem = await doc_kiem_nguon(
+        conn, pids, [nv_in.get(i) for i in range(1, len(pids) + 1)]
+    )
+    khu_vuc = await _tra_khu_vuc(conn, hang_kiem)
+    # Câu 22 + lượt H2: luật cộng điểm (KV, đối tượng) của đường xét của nguyện vọng in —
+    # cùng giao dịch.
+    luat = await _luat_cong_diem(conn, [h.get("nv_in_path_id") for h in hang_kiem])
+    return hang, hang_kiem, khu_vuc, luat
+
+
+def _dung_anh_chup(tho, pids, tt) -> AnhChupHoSo:
+    hang, hang_kiem, khu_vuc, luat = tho
+    so_dong = len(pids)
     # Mỗi hồ sơ đúng MỘT hàng: bảng tham chiếu (địa giới, khu vực) khớp nhiều hàng hiện
     # hành thì bộ xuất in TRÙNG người ⇒ dừng, không tự chọn một hàng.
     dem: dict = {}
@@ -385,13 +440,15 @@ async def doc_ho_so_theo_ma(
             "Dòng %s: dữ liệu tham chiếu (địa giới / khu vực) khớp nhiều hàng hiện hành "
             "— không dựng." % _neu_dong(du)
         )
-    if sorted(dem) != list(range(1, len(ds) + 1)):
+    if sorted(dem) != list(range(1, so_dong + 1)):
         raise ServiceError("Đọc số liệu hồ sơ thiếu hàng — không dựng.")
     hang.sort(key=lambda h: h["stt"])
     if (
-        [h["stt"] for h in hang_kiem] != list(range(1, len(ds) + 1))
-        or len(khu_vuc) != len(ds)
-        or len(luat) != len(ds)
+        [h["stt"] for h in hang_kiem] != list(range(1, so_dong + 1))
+        or len(khu_vuc) != so_dong
+        or len(luat) != so_dong
+        or [h["pid"] for h in hang] != list(pids)
+        or [h["pid"] for h in hang_kiem] != list(pids)
     ):
         raise ServiceError(
             "Đọc dữ liệu kiểm hồ sơ sai thứ tự / thiếu hàng — không dựng."
@@ -422,12 +479,22 @@ async def doc_ho_so_theo_ma(
             kv_muc=kv[1],
             luat_kv=lk[0],
             luat_ut=lk[1],
+            # Lượt I (F230): khoá đếm của NV in + tình trạng Quyết định (biểu thức một nguồn).
+            nv_in_ai_id=k["nv_in_ai_id"],
+            nv_in_offering_id=k["nv_in_offering_id"],
+            qd_hieu_luc_id=tq.qd_hieu_luc_id,
+            qd_chuoi_id=tq.qd_chuoi_id,
+            cho_quyet_id=tq.cho_quyet_id,
+            dau_appsheet=tq.dau_appsheet,
         )
-        for k, kv, lk in zip(hang_kiem, khu_vuc, luat)
+        for k, kv, lk, tq in zip(
+            hang_kiem, khu_vuc, luat, (tu_hang(k) for k in hang_kiem)
+        )
     )
     return AnhChupHoSo(
         rows=tuple(_thanh_dto(h["stt"], h) for h in hang),
         don_vi=tuple(h["unit_id"] for h in hang),
         giao_dich=tt,
         kiem=kiem,
+        pids=tuple(h["pid"] for h in hang),
     )

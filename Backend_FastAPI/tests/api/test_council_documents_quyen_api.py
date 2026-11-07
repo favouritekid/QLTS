@@ -42,6 +42,23 @@ pytestmark = pytest.mark.integration
 P, _dem, _dem_vet = api.P, api._dem, api._dem_vet
 CO = tuple(CouncilDocumentPermissions.model_fields)
 NAM_VAI = ["admin", "ql_u1", "ql_khong_dv", "can_bo", "ke_toan"]
+#: Mười ba cờ của lượt I (F230) — viết TAY (không suy từ schema) — đều chỉ Admin (J1 dòng 9: Quản lý chỉ thấy
+#: tóm tắt trên chi tiết bộ, không có cờ riêng).
+CO_LUOT_I_CHI_ADMIN = {
+    "ghi_nhan_qd",
+    "xem_danh_sach_qd",
+    "xem_chi_tiet_qd",
+    "tai_scan_qd",
+    "huy_ghi_nhan_qd",
+    "huy_hieu_luc_qd",
+    "tao_bo_dieu_chinh",
+    "ghi_nhan_dieu_chinh",
+    "dung_lai_ban_ky",
+    "so_bo_voi_hien_tai",
+    "xem_nhom_cho",
+    "cho_xet_lai",
+    "xem_su_kien",
+}
 
 
 # Ba fixture như ``test_council_documents_api.py`` — khai lại tại chỗ (flake8 F811).
@@ -100,7 +117,130 @@ async def _goi_that(client, co, h, sid):
         return await client.get(P + "/nhat-ky-tai", headers=h)
     if co == "xem_nhat_ky_xoa":
         return await client.get(P + "/nhat-ky-xoa", headers=h)
+    # Lượt I (F230): văn bản đã ký + nhóm chờ GIẢ gắn vào bộ ``sid`` (chèn SQL một lần, không đổi số
+    # bộ / tệp / mẫu). Route ghi: đầu vào rỗng ⇒ 422 / service từ chối (409) SAU các cổng — không ghi.
+    x, muc = await _dam_bao_qd_gia(sid)
+    d = P + "/decisions/%d" % x
+    if co == "ghi_nhan_qd":
+        return await client.post(P + "/decisions", data={}, headers=h)
+    if co == "xem_danh_sach_qd":
+        return await client.get(P + "/decisions", headers=h)
+    if co == "xem_chi_tiet_qd":
+        return await client.get(d, headers=h)
+    if co == "tai_scan_qd":
+        return await client.get(d + "/scan", headers=h)
+    if co == "huy_ghi_nhan_qd":
+        return await client.post(d + "/huy-ghi-nhan", json={}, headers=h)
+    if co == "huy_hieu_luc_qd":
+        return await client.post(d + "/huy-hieu-luc", data={}, headers=h)
+    if co == "tao_bo_dieu_chinh":  # văn bản giả đã hết hiệu lực ⇒ 409 sau các cổng
+        return await client.post(
+            d + "/bo-dieu-chinh",
+            json={"ma_ho_so": [ma_gia(990001)], "academic_year": 2026},
+            headers=h,
+        )
+    if co == "ghi_nhan_dieu_chinh":
+        return await client.post(d + "/dieu-chinh", data={}, headers=h)
+    if co == "dung_lai_ban_ky":
+        return await client.post(b + "/dung-lai-ban-ky", json={}, headers=h)
+    if co == "so_bo_voi_hien_tai":
+        return await client.get(b + "/so-voi-hien-tai", headers=h)
+    if co == "xem_nhom_cho":
+        return await client.get(P + "/decision-holds", headers=h)
+    if co == "cho_xet_lai":
+        return await client.post(
+            P + "/decision-holds/%d/cho-xet-lai" % muc, json={}, headers=h
+        )
+    if co == "xem_su_kien":
+        return await client.get(P + "/su-kien", headers=h)
     raise AssertionError("cờ chưa có cách gọi: " + co)
+
+
+async def _dam_bao_qd_gia(sid):
+    """(id văn bản GIẢ đã hết hiệu lực, id mục chờ) gắn với bộ ``sid`` — chèn SQL MỘT lần / bộ: một dòng
+    bộ (hồ sơ giả đầu tiên), văn bản trúng tuyển + scan + dòng, văn bản huỷ, mục chờ."""
+    async with csdl.engine.begin() as c:
+        co = (
+            await c.execute(
+                text(
+                    "SELECT d.id, h.id FROM council_decision d JOIN council_decision_hold h "
+                    "ON h.decision_row_id IN (SELECT id FROM council_decision_row WHERE "
+                    "decision_id = d.id) WHERE d.set_id = :s"
+                ),
+                {"s": sid},
+            )
+        ).first()
+        if co:
+            return co[0], co[1]
+        pid = (await c.execute(text("SELECT min(id) FROM admission_profile"))).scalar_one()
+        sr = (
+            await c.execute(
+                text(
+                    "INSERT INTO council_document_set_row (set_id, stt, profile_id, "
+                    "academic_year, status_luc_dung) VALUES (:s, 1, :p, 2026, 'approved') "
+                    "RETURNING id"
+                ),
+                {"s": sid, "p": pid},
+            )
+        ).scalar_one()
+        so = str(800000 + sid % 100000)[:6]
+        x = (
+            await c.execute(
+                text(
+                    "INSERT INTO council_decision (loai, can_bo, set_id, so_quyet_dinh, ngay_ky, "
+                    "pham_vi_so, trang_thai, so_ho_so, ghi_nhan_boi_id) VALUES ('trung_tuyen', "
+                    "true, :s, :so, DATE '2026-09-08', 2026, 'hieu_luc', 1, 1) RETURNING id"
+                ),
+                {"s": sid, "so": so},
+            )
+        ).scalar_one()
+        await c.execute(
+            text(
+                "INSERT INTO council_decision_scan (decision_id, sha256, kich_thuoc, kieu, "
+                "noi_dung) VALUES (:x, encode(sha256(:b), 'hex'), length(:b), "
+                "'application/pdf', :b)"
+            ),
+            {"x": x, "b": b"%PDF-GIA"},
+        )
+        dr = (
+            await c.execute(
+                text(
+                    "INSERT INTO council_decision_row (decision_id, trang_thai_cha, set_id, "
+                    "set_row_id, profile_id, stt) VALUES (:x, 'hieu_luc', :s, :r, :p, 1) "
+                    "RETURNING id"
+                ),
+                {"x": x, "s": sid, "r": sr, "p": pid},
+            )
+        ).scalar_one()
+        h = (
+            await c.execute(
+                text(
+                    "INSERT INTO council_decision (loai, can_bo, huy_qd_id, so_quyet_dinh, "
+                    "ngay_ky, pham_vi_so, trang_thai, so_ho_so, ghi_nhan_boi_id) VALUES "
+                    "('van_ban_huy', false, :x, :so, DATE '2026-09-09', 2026, 'hieu_luc', 0, 1) "
+                    "RETURNING id"
+                ),
+                {"x": x, "so": str(int(so) + 1)[:6]},
+            )
+        ).scalar_one()
+        await c.execute(
+            text(
+                "UPDATE council_decision SET trang_thai = 'het_hieu_luc', "
+                "het_hieu_luc_boi_id = :h WHERE id = :x"
+            ),
+            {"h": h, "x": x},
+        )
+        muc = (
+            await c.execute(
+                text(
+                    "INSERT INTO council_decision_hold (profile_id, decision_row_id, "
+                    "van_ban_huy_id, ly_do_vao, trang_thai) VALUES (:p, :r, :h, 'qd_bi_huy', "
+                    "'cho_quyet') RETURNING id"
+                ),
+                {"p": pid, "r": dr, "h": h},
+            )
+        ).scalar_one()
+    return x, muc
 
 
 async def _hanh_vi_that(client, h, sid):
@@ -149,7 +289,8 @@ def test_moi_route_cua_module_co_dung_mot_co():
     ham_co = [r.endpoint for r in route if r.path == P + "/quyen"]
     assert len(ham_co) == 1  # route cờ không tự có cờ
     con_lai = [r.endpoint for r in route if r.endpoint is not ham_co[0]]
-    assert len(con_lai) == len(set(con_lai)) == 10  # mỗi hàm đúng MỘT route
+    # mỗi hàm đúng MỘT route — 10 (E2–F) + 13 (lượt I, ghi nhận Quyết định đã ký)
+    assert len(con_lai) == len(set(con_lai)) == 23
     assert set(rt.ENDPOINT_THEO_CO.values()) == set(con_lai)
     assert len(set(rt.ENDPOINT_THEO_CO.values())) == len(rt.ENDPOINT_THEO_CO)
     assert tuple(rt.ENDPOINT_THEO_CO) == CO  # trường schema = khoá bảng cờ, cùng thứ tự
@@ -219,13 +360,15 @@ async def test_casbin_cho_quan_ly_moi_route_thi_co_van_theo_lop_phu(
     co = await _co_qua_http(client, h)
     hanh_vi = await _hanh_vi_that(client, h, ba_bo["u1"][0])
     assert da_cho, "Casbin giả không được hỏi — phép đo không hợp lệ"
-    # Lớp phụ chỉ-admin (deps) vẫn chặn bốn route; ba route chỉ có cổng Casbin thì mở.
+    # Lớp phụ chỉ-admin (deps) vẫn chặn bốn route cũ + MƯỜI BA cờ của lượt I (mọi route văn bản đã ký đi qua
+    # ``require_council_document_admin`` / ``get_council_decision*_for_admin``); ba route chỉ có cổng Casbin
+    # thì mở.
     assert {c for c, duoc in hanh_vi.items() if not duoc} == {
         "xoa_bo",
         "xem_ma_ho_so",
         "xem_nhat_ky_tai",
         "xem_nhat_ky_xoa",
-    }
+    } | CO_LUOT_I_CHI_ADMIN
     assert co == hanh_vi
 
 

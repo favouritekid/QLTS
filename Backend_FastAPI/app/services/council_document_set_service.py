@@ -39,6 +39,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
@@ -47,11 +48,17 @@ from app.constants.admission_circular import vn_calendar_date
 from app.models.council_document import (
     LY_DO_XOA_TOI_DA,
     CouncilDocumentDownloadLog,
+    CouncilDocumentEvent,
     CouncilDocumentSet,
     CouncilDocumentSetDeletion,
     CouncilDocumentSetFile,
+    CouncilDocumentSetRow,
 )
 from app.repositories import council_candidate_repository as _kho_doc
+from app.repositories.council_decision_repository import (
+    CouncilDecisionRepository,
+    ma_loi_csdl,
+)
 from app.repositories.council_document_repository import CouncilDocumentRepository
 from app.services import council_candidate_service as _ham_doc
 from app.services import council_document_render_service as bo_dung
@@ -128,7 +135,39 @@ async def tao_bo_van_ban(
     xac_nhan_trang_thai: Optional[Dict[str, int]] = None,
     duoc_xac_nhan: bool = False,
 ) -> Tuple[CouncilDocumentSet, None]:
+    """Dựng bộ XÉT MỚI (``POST /sets``) — ĐỦ mọi cổng, KHÔNG nhận tham số nào nới cổng (lượt I, đặc tả
+    mục 3.2 P1: test AST khoá lời gọi dưới truyền đúng HẰNG ``None``)."""
+    return await _dung_va_ghi_bo(
+        db,
+        engine,
+        ma_ho_so=ma_ho_so,
+        academic_year=academic_year,
+        tham_so=tham_so,
+        nguoi_tao_id=nguoi_tao_id,
+        luc_tao=luc_tao,
+        xac_nhan_trang_thai=xac_nhan_trang_thai,
+        duoc_xac_nhan=duoc_xac_nhan,
+        chuoi_qd_cho_phep=None,
+    )
+
+
+async def _dung_va_ghi_bo(
+    db: AsyncSession,
+    engine: AsyncEngine,
+    *,
+    ma_ho_so: Sequence[str],
+    academic_year: Optional[int],
+    tham_so: Optional[bo_dung.DecisionParams],
+    nguoi_tao_id: Optional[int],
+    luc_tao: Optional[datetime],
+    xac_nhan_trang_thai: Optional[Dict[str, int]],
+    duoc_xac_nhan: bool,
+    chuoi_qd_cho_phep: Optional[int],
+) -> Tuple[CouncilDocumentSet, None]:
     """Đọc → cổng dựng bộ → chọn mẫu → dựng → ghi. Trả ``(bộ đã flush, None)``; router commit.
+    ``chuoi_qd_cho_phep`` (CHỈ bộ dữ liệu cho văn bản điều chỉnh — :func:`tao_bo_dieu_chinh`) nới đúng
+    MỘT phép: hồ sơ có dòng hiệu lực trong chính chuỗi Quyết định ấy; bộ ghi
+    ``cho_quyet_dinh_goc_id`` = chuỗi ấy (chỉ dùng được cho điều chỉnh của chuỗi).
     ``academic_year`` BẮT BUỘC (mã hồ sơ chỉ duy nhất trong một năm học).
 
     Cổng (lượt G, owner 05-11 — ``council_set_gate_service``): dòng bị CHẶN (F228 trạng thái,
@@ -161,7 +200,9 @@ async def tao_bo_van_ban(
     # (i-b) cổng dựng bộ (lượt G): chặn / cảnh báo + xác nhận. Không qua ⇒ lỗi miền, KHÔNG ghi.
     if len(anh.kiem) != len(anh.rows):
         raise ServiceError("Thiếu dữ liệu kiểm hồ sơ — không dựng.")
-    kq_cong = cong.danh_gia(anh.kiem)
+    if len(anh.pids) != len(anh.rows):
+        raise ServiceError("Thiếu id hồ sơ của dòng — không dựng.")
+    kq_cong = cong.danh_gia(anh.kiem, chuoi_qd_cho_phep=chuoi_qd_cho_phep)
     da_xac_nhan = cong.kiem_va_xac_nhan(
         kq_cong, xac_nhan=xac_nhan, duoc_xac_nhan=duoc_xac_nhan
     )
@@ -246,6 +287,15 @@ async def tao_bo_van_ban(
     # Lượt H2: công tắc đối tượng của đường xét (cách suy + trần giữ luật v1).
     md["luat_diem_ut"] = "cong_tac_doi_tuong_cua_duong_xet_cach_tinh_v1"
     md["so_ho_so_theo_luat_ut"] = kq_cong.so_theo_luat_ut()
+    # Lượt I (F230): hồ sơ đang ở bộ khác — BÁO (id bộ + số đếm), không chặn (SPEC §13 câu 4).
+    md["ho_so_o_bo_khac"] = {
+        str(k): v
+        for k, v in (
+            await CouncilDecisionRepository(db).ho_so_o_bo_khac(list(anh.pids))
+        ).items()
+    }
+    if chuoi_qd_cho_phep is not None:
+        md["cho_quyet_dinh_goc_id"] = chuoi_qd_cho_phep
     bo = CouncilDocumentSet(
         nguoi_tao_id=nguoi_tao_id,
         tao_luc=luc_tao,
@@ -259,6 +309,7 @@ async def tao_bo_van_ban(
         ma_ho_so_dau_vao=[r.ma_ho_so for r in hang_in],
         snapshot_dto=[r.model_dump() for r in hang_in],
         thong_tin_dung=md,
+        cho_quyet_dinh_goc_id=chuoi_qd_cho_phep,
     )
     tep = [
         CouncilDocumentSetFile(
@@ -270,13 +321,83 @@ async def tao_bo_van_ban(
         )
         for i, f in enumerate(kq.files, 1)
     ]
+    dong = [
+        _dong_bo_tu_kiem(k, pid, academic_year)
+        for k, pid in zip(anh.kiem, anh.pids)
+    ]
+    su_kien = {
+        "so_ho_so": len(hang_in),
+        "trang_thai_ho_so": md["trang_thai_ho_so"],
+        "xac_nhan_canh_bao": (
+            None if da_xac_nhan is None else dict(da_xac_nhan)
+        ),
+        "ho_so_o_bo_khac": md["ho_so_o_bo_khac"],
+    }
+    await _ghi_bo_va_dong(
+        db,
+        bo,
+        tep,
+        dong,
+        loai_su_kien="tao_bo" if chuoi_qd_cho_phep is None else "tao_bo_dieu_chinh",
+        so_lieu=su_kien,
+        nguoi_id=nguoi_tao_id,
+        decision_id=chuoi_qd_cho_phep,
+    )
+    return bo, None
+
+
+def _dong_bo_tu_kiem(
+    k: "cong.DuLieuKiem", pid: int, academic_year: int
+) -> CouncilDocumentSetRow:
+    """MỘT dòng bộ từ dữ liệu kiểm ĐÃ ĐỌC trong giao dịch chỉ đọc (id hồ sơ, trạng thái lúc dựng,
+    khoá đếm của NV in — ảnh chụp)."""
+    if isinstance(pid, bool) or not isinstance(pid, int):
+        raise ServiceError("Id hồ sơ của dòng không hợp lệ — không dựng.")
+    return CouncilDocumentSetRow(
+        stt=k.stt,
+        profile_id=pid,
+        academic_year=academic_year,
+        status_luc_dung=k.status if isinstance(k.status, str) else "(khong_ro)",
+        nv_in_id=k.nv_in_id,
+        admission_path_id=k.nv_in_path_id,
+        academic_info_id=k.nv_in_ai_id,
+        offering_id=k.nv_in_offering_id,
+        major_id=k.hp_nganh_id,
+    )
+
+
+async def _ghi_bo_va_dong(
+    db: AsyncSession,
+    bo: CouncilDocumentSet,
+    tep: Sequence[CouncilDocumentSetFile],
+    dong: Sequence[CouncilDocumentSetRow],
+    *,
+    loai_su_kien: str,
+    so_lieu: Dict[str, object],
+    nguoi_id: Optional[int],
+    decision_id: Optional[int] = None,
+) -> None:
+    """Ghi bộ + tệp + dòng bộ + MỘT dòng sự kiện trong CÙNG SAVEPOINT (hỏng ⇒ không còn hàng nào)."""
+    if [d.stt for d in dong] != list(range(1, bo.so_ho_so + 1)):
+        raise ServiceError("Dòng bộ không khớp số hồ sơ — không lưu.")
     try:
         async with db.begin_nested():
             await CouncilDocumentRepository(db).them_bo(bo, tep)
+            for d in dong:
+                d.set_id = bo.id
+            await CouncilDecisionRepository(db).them(
+                *dong,
+                CouncilDocumentEvent(
+                    loai=loai_su_kien,
+                    set_id=bo.id,
+                    decision_id=decision_id,
+                    nguoi_id=nguoi_id,
+                    so_lieu=so_lieu,
+                ),
+            )
     except DBAPIError:
         # Tham số của câu lệnh hỏng mang PII (DTO, mã) + bytes tệp ⇒ không giữ lỗi gốc.
         raise ServiceError("Lỗi CSDL khi lưu bộ văn bản — không lưu gì.") from None
-    return bo, None
 
 
 @dataclass(frozen=True)
@@ -324,22 +445,30 @@ async def tep_cua_bo(db: AsyncSession, set_id: int) -> List[CouncilDocumentSetFi
 
 
 # ═══════════════════════════════ xoá bộ (Admin) — vết độc lập, cùng giao dịch ═════════════
-def kiem_ly_do_xoa(ly_do: object) -> str:
-    """Lý do xoá BẮT BUỘC (J1 dòng 29): chuỗi; bỏ khoảng trắng hai đầu; không rỗng; tối đa
-    ``LY_DO_XOA_TOI_DA`` ký tự (trần KỸ THUẬT); không ký tự nhóm C ngoài xuống dòng / tab.
-    Thông báo không nêu nội dung lý do."""
+def kiem_ly_do(ly_do: object, viec: str) -> str:
+    """Lý do / ghi chú BẮT BUỘC của một thao tác (MỘT nguồn — xoá bộ J1 dòng 29; lượt I: huỷ ghi
+    nhận, cho xét lại, tái dựng bản ký, ghi chú mẫu): chuỗi; bỏ khoảng trắng hai đầu; không rỗng;
+    tối đa ``LY_DO_XOA_TOI_DA`` ký tự (trần KỸ THUẬT); không ký tự nhóm C ngoài xuống dòng / tab.
+    Thông báo không nêu nội dung."""
     if not isinstance(ly_do, str):
-        raise DataValidationError("Lý do xoá bộ văn bản phải là chữ.")
+        raise DataValidationError("Lý do %s phải là chữ." % viec)
     s = ly_do.strip()
     if not s:
-        raise DataValidationError("Phải nhập lý do xoá bộ văn bản.")
+        raise DataValidationError("Phải nhập lý do %s." % viec)
     if len(s) > LY_DO_XOA_TOI_DA:
         raise DataValidationError(
-            "Lý do xoá dài quá giới hạn kỹ thuật %d ký tự." % LY_DO_XOA_TOI_DA
+            "Lý do %s dài quá giới hạn kỹ thuật %d ký tự." % (viec, LY_DO_XOA_TOI_DA)
         )
     if any(unicodedata.category(c)[0] == "C" and c not in "\n\r\t" for c in s):
-        raise DataValidationError("Lý do xoá có ký tự điều khiển / vô hình — gõ lại.")
+        raise DataValidationError(
+            "Lý do %s có ký tự điều khiển / vô hình — gõ lại." % viec
+        )
     return s
+
+
+def kiem_ly_do_xoa(ly_do: object) -> str:
+    """Lý do xoá bộ BẮT BUỘC (J1 dòng 29) — :func:`kiem_ly_do`."""
+    return kiem_ly_do(ly_do, "xoá bộ văn bản")
 
 
 async def xoa_bo_van_ban(
@@ -357,6 +486,17 @@ async def xoa_bo_van_ban(
     if isinstance(nguoi_xoa_id, bool) or not isinstance(nguoi_xoa_id, int):
         raise ServiceError("Không xác định được người xoá — không xoá.")
     repo = CouncilDocumentRepository(db)
+    # Lượt I (F230): bộ của văn bản ĐÃ KÝ còn / hết hiệu lực là hồ sơ lưu trữ ⇒ KHÔNG xoá (J1 dòng 8;
+    # số năm lưu chưa có — J5 M1). Báo 409 trước; CSDL chặn cuối (K4 / K5b — đặc tả mục 4.1).
+    qd_repo = CouncilDecisionRepository(db)
+    song = await qd_repo.van_ban_song_cua_bo(bo.id)
+    if song:
+        raise ConflictError(
+            "Bộ văn bản là bản in của Quyết định đã ký (văn bản #%s) — lưu theo hạn lưu trữ, "
+            "không xoá. Chỉ xoá được khi mọi ghi nhận của bộ đã huỷ ghi nhận."
+            % ", #".join(str(d.id) for d in song),
+            public_payload={"quyet_dinh_id": [d.id for d in song]},
+        )
     tep = await repo.danh_sach_tep(bo.id)  # metadata, KHÔNG nạp bytes
     vet = CouncilDocumentSetDeletion(
         set_id=bo.id,
@@ -378,9 +518,35 @@ async def xoa_bo_van_ban(
     try:
         async with db.begin_nested():
             await repo.them_vet_xoa(vet)
+            # Dòng của các ghi nhận ĐÃ HUỶ trỏ bộ này: dọn liên kết TRƯỚC khi xoá (thứ tự hai hành
+            # động tham chiếu của PostgreSQL có thể để ``set_row_id`` trỏ dòng bộ đã xoá — đo lượt I).
+            await db.execute(
+                text(
+                    "UPDATE council_decision_row SET set_row_id = NULL, set_id = NULL "
+                    "WHERE set_id = :s AND trang_thai_cha = 'huy_ghi_nhan'"
+                ),
+                {"s": set_id},
+            )
+            await qd_repo.them(
+                CouncilDocumentEvent(
+                    loai="xoa_bo",
+                    set_id=set_id,
+                    nguoi_id=nguoi_xoa_id,
+                    so_lieu={"so_ho_so": bo.so_ho_so, "so_tep": len(tep)},
+                )
+            )
             if await repo.xoa_bo(set_id) != 1:
                 raise ServiceError("Bộ văn bản không còn để xoá — không xoá gì.")
-    except DBAPIError:
+    except DBAPIError as e:
+        sqlstate, rang_buoc = ma_loi_csdl(e)
+        if sqlstate == "23514" and rang_buoc in (
+            "ck_council_decision_k4",
+            "ck_council_decision_row_k5b",
+        ):
+            # Tầng chủ sở hữu (CSDL) chặn — một phiên khác vừa ghi nhận bộ này.
+            raise ConflictError(
+                "Bộ văn bản là bản in của Quyết định đã ký — không xoá."
+            ) from None
         # Thông báo của trình điều khiển mang tham số câu lệnh (lý do, path) ⇒ không giữ.
         raise ServiceError("Lỗi CSDL khi xoá bộ văn bản — không xoá gì.") from None
     return vet, None
@@ -441,3 +607,361 @@ async def liet_ke_nhat_ky_tai(
     return await CouncilDocumentRepository(db).danh_sach_nhat_ky_tai(
         set_id=set_id, limit=limit, offset=offset
     )
+
+
+# ═══════════════════ Lượt I (F230) — bộ cho điều chỉnh · tái dựng bản ký · so với hiện tại ═════════
+async def tao_bo_dieu_chinh(
+    db: AsyncSession,
+    engine: AsyncEngine,
+    goc_id: int,
+    *,
+    ma_ho_so: Sequence[str],
+    academic_year: Optional[int],
+    tham_so: Optional[bo_dung.DecisionParams],
+    nguoi_tao_id: Optional[int],
+    xac_nhan_trang_thai: Optional[Dict[str, int]] = None,
+    duoc_xac_nhan: bool = False,
+) -> Tuple[CouncilDocumentSet, None]:
+    """Bộ DỮ LIỆU cho văn bản điều chỉnh của chuỗi ``goc_id`` (C6: văn thư soạn văn bản; phần mềm cần dữ
+    liệu của em được thêm / sửa). CÙNG đường dựng bộ (đọc chỉ đọc + đủ cổng), chỉ nới đúng MỘT phép: hồ
+    sơ có dòng hiệu lực trong CHÍNH chuỗi ấy (ca "sửa thông tin em C" — BS §1.3)."""
+    goc = await CouncilDecisionRepository(db).qd_theo_id(goc_id)
+    if goc is None:
+        raise ResourceNotFoundError("Không có Quyết định này.")
+    if goc.loai != "trung_tuyen" or goc.trang_thai != "hieu_luc":
+        raise ConflictError("Chỉ dựng bộ điều chỉnh cho Quyết định trúng tuyển đang hiệu lực.")
+    return await _dung_va_ghi_bo(
+        db,
+        engine,
+        ma_ho_so=ma_ho_so,
+        academic_year=academic_year,
+        tham_so=tham_so,
+        nguoi_tao_id=nguoi_tao_id,
+        luc_tao=None,
+        xac_nhan_trang_thai=xac_nhan_trang_thai,
+        duoc_xac_nhan=duoc_xac_nhan,
+        chuoi_qd_cho_phep=goc.id,
+    )
+
+
+async def _anh_chup_da_luu(db: AsyncSession, set_id: int) -> List[dict]:
+    """Ảnh chụp DTO đã lưu của bộ (cột deferred — đọc tường minh)."""
+    from sqlalchemy import select
+
+    ds = (
+        await db.execute(
+            select(CouncilDocumentSet.snapshot_dto).where(CouncilDocumentSet.id == set_id)
+        )
+    ).scalar_one()
+    if not isinstance(ds, list):
+        raise ServiceError("Ảnh chụp đã lưu sai dạng — không dùng.")
+    return ds
+
+
+async def _mau_theo_id(db: AsyncSession, mau_da_dung: Dict[str, Dict[str, object]]):
+    """Ba mẫu ĐÚNG như bộ in ban đầu đã dùng (id + sha; kiểm lại gói)."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import undefer
+
+    from app.models.council_document import CouncilDocumentTemplate
+
+    out = {}
+    for loai in bo_dung.LOAI_MAU:
+        m = (mau_da_dung or {}).get(loai) or {}
+        mau = (
+            await db.execute(
+                select(CouncilDocumentTemplate)
+                .options(undefer(CouncilDocumentTemplate.noi_dung))
+                .where(CouncilDocumentTemplate.id == m.get("id"))
+            )
+        ).scalar_one_or_none()
+        if (
+            mau is None
+            or mau.sha256 != m.get("sha256")
+            or hashlib.sha256(bytes(mau.noi_dung)).hexdigest() != mau.sha256
+        ):
+            raise ServiceError("Không còn đúng mẫu bộ in ban đầu đã dùng — không tái dựng.")
+        out[loai] = bytes(mau.noi_dung)
+        kiem_goi_mau(out[loai], TEN_LOAI[loai])
+    return bo_dung.CouncilTemplates(**out)
+
+
+def _truong_khac(a: dict, b: dict) -> List[str]:
+    return sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+
+
+async def tao_bo_dung_lai_ban_ky(
+    db: AsyncSession,
+    engine: AsyncEngine,
+    s0: CouncilDocumentSet,
+    *,
+    so_quyet_dinh: object,
+    ngay_ky: object,
+    dong_sua_tay: Sequence[int],
+    xac_nhan_dong_khac: Optional[List[Dict[str, object]]],
+    nguoi_tao_id: Optional[int],
+    luc_tao: Optional[datetime] = None,
+) -> Tuple[CouncilDocumentSet, None]:
+    """Đường TÁI DỰNG BẢN KÝ (F245 — owner C2 / C3; đặc tả mục 3.1) — RIÊNG, khác dựng bộ xét mới:
+
+    * dòng KHÔNG sửa tay: chép NGUYÊN ảnh chụp + dòng bộ của bộ in ban đầu ``s0`` (ảnh chụp thắng dữ liệu
+      sống; ``s0`` đã qua đủ cổng lúc in) — KHÔNG đọc sống, KHÔNG cổng;
+    * dòng sửa tay: đọc SỐNG theo id hồ sơ của dòng bộ ``s0`` bằng CÙNG hàm đọc, qua cổng DỮ LIỆU
+      (``danh_gia_dung_lai``) — KHÔNG cổng trạng thái F228 (bản ký thắng, trạng thái chỉ liệt kê lúc ghi
+      nhận — C3);
+    * MỌI dòng qua cổng tình trạng Quyết định (đã có QĐ hiệu lực / chờ quyết / dấu AppSheet ⇒ chặn);
+    * Admin xác nhận ĐÚNG danh sách {stt, tên trường khác} (C2 "Admin đối chiếu từng dòng khác");
+    * mẫu = ĐÚNG ba mẫu ``s0`` đã dùng; tham số = của ``s0`` + số / ngày trên giấy.
+    """
+    from app.services import council_decision_service as qd
+    from app.services.council_candidate_service import doc_ho_so_theo_id
+    from app.services.council_decision_status_service import tinh_trang_qd
+
+    so = qd.kiem_so_quyet_dinh(so_quyet_dinh)
+    ngay = qd.kiem_ngay(ngay_ky)
+    luc_tao = luc_tao or datetime.now(timezone.utc)
+    if PHIEN_BAN_MA is None:
+        raise ServiceError("Không đọc được mã nguồn của bộ dựng để ghi phiên bản — không dựng.")
+    if s0.ban_ky_so_quyet_dinh is not None or s0.cho_quyet_dinh_goc_id is not None:
+        raise DataValidationError(
+            "Chỉ tái dựng từ bộ in ban đầu (không từ bộ tái dựng / bộ dữ liệu điều chỉnh)."
+        )
+    repo = CouncilDecisionRepository(db)
+    dong0 = await repo.dong_bo(s0.id)
+    if len(dong0) != s0.so_ho_so or [d.stt for d in dong0] != list(
+        range(1, s0.so_ho_so + 1)
+    ):
+        raise DataValidationError("Bộ in ban đầu dựng trước khi có dòng bộ — không tái dựng.")
+    song = await repo.van_ban_song_cua_bo(s0.id)
+    if song:
+        raise ConflictError(
+            "Bộ in ban đầu đã được ghi nhận (văn bản #%d)." % song[0].id,
+            public_payload={"quyet_dinh_id": song[0].id},
+        )
+    sua = list(dong_sua_tay or [])
+    if (
+        not sua
+        or any(isinstance(x, bool) or not isinstance(x, int) for x in sua)
+        or len(set(sua)) != len(sua)
+        or not all(1 <= x <= s0.so_ho_so for x in sua)
+    ):
+        raise DataValidationError(
+            "Danh sách dòng sửa tay phải là số dòng của bộ (1…%d), không trùng, không rỗng."
+            % s0.so_ho_so
+        )
+    sua = sorted(sua)
+    if ngay < vn_calendar_date(s0.tao_luc):
+        raise DataValidationError(
+            "Ngày ký trước ngày in bộ ban đầu (giờ Việt Nam) — giấy không thể ký trước khi in."
+        )
+    ts0 = dict(s0.tham_so_quyet_dinh or {})
+    if ts0.get("so_quyet_dinh") not in (None, so) or ts0.get("ngay_quyet_dinh") not in (
+        None,
+        ngay.isoformat(),
+    ):
+        raise DataValidationError("Số / ngày trên giấy khác số / ngày bộ in ban đầu đã in.")
+    mat = [d.stt for d in dong0 if d.profile_id is None]
+    if mat:
+        raise DataValidationError(
+            "Dòng %s: hồ sơ của dòng bộ không còn — không tái dựng." % _dong_txt(mat)
+        )
+    nam = (s0.thong_tin_dung or {}).get("nam_hoc")
+    theo_stt = {d.stt: d for d in dong0}
+    anh = await doc_ho_so_theo_id(
+        engine, [theo_stt[s].profile_id for s in sua], academic_year=nam
+    )
+    kq_cong = cong.danh_gia_dung_lai(anh.kiem)
+    if kq_cong.chan:
+        raise DataValidationError(
+            "Dòng sửa tay không dựng lại được từ dữ liệu hiện tại của hồ sơ — xem danh sách.",
+            public_payload={
+                "kiem_tra_dung_lai": [
+                    {
+                        "ma": ma,
+                        "mo_ta": cong.LY_DO[ma],
+                        "trang_thai": tt_,
+                        "dong": [sua[i - 1] for i in dong],
+                    }
+                    for ma, tt_, dong in kq_cong.chan
+                ]
+            },
+        )
+    tt = await tinh_trang_qd(db, [d.profile_id for d in dong0])
+    chan_qd = qd._chan_tinh_trang(dong0, tt)
+    if chan_qd:
+        raise ConflictError(
+            "%d hồ sơ đã có Quyết định hiệu lực / đang chờ Admin quyết / mang dấu trúng tuyển "
+            "theo Quyết định cũ — không tái dựng." % len(chan_qd),
+            public_payload={"dong_bi_chan": chan_qd},
+        )
+    dto0 = await _anh_chup_da_luu(db, s0.id)
+    if len(dto0) != s0.so_ho_so:
+        raise ServiceError("Ảnh chụp đã lưu thiếu dòng — không tái dựng.")
+    song_theo_stt = {}
+    for i, s in enumerate(sua):
+        r = anh.rows[i]
+        song_theo_stt[s] = r.model_copy(
+            update={
+                "diem_kv": kq_cong.diem_kv[i],
+                "diem_ut": cong.diem_ut_in(kq_cong.luat_ut[i], r.diem_ut),
+            }
+        )
+        if song_theo_stt[s].diem_kv is None or song_theo_stt[s].diem_ut is None:
+            raise ServiceError("Thiếu điểm ưu tiên in sau cổng — không tái dựng.")
+    hang_in = [
+        song_theo_stt[d.stt]
+        if d.stt in song_theo_stt
+        else bo_dung.CandidateRowV1(**dto0[d.stt - 1])
+        for d in dong0
+    ]
+    khac = []
+    for s in sua:
+        truong = _truong_khac(song_theo_stt[s].model_dump(), dto0[s - 1])
+        if not truong:
+            raise DataValidationError(
+                "Dòng %d khai sửa tay nhưng hồ sơ chưa được sửa (không khác bản in)." % s
+            )
+        khac.append({"stt": s, "truong": truong})
+    if xac_nhan_dong_khac != khac:
+        raise ConflictError(
+            "Admin đối chiếu từng dòng khác bản in với bản ký rồi gửi lại đúng danh sách.",
+            public_payload={"dong_khac": khac},
+        )
+    mdd = (s0.thong_tin_dung or {}).get("mau_da_dung") or {}
+    mau = await _mau_theo_id(db, mdd)
+    tham_so = bo_dung.kiem_lai_tham_so_quyet_dinh(
+        bo_dung.DecisionParams(**{**ts0, "so_quyet_dinh": so, "ngay_quyet_dinh": ngay})
+    )
+    if not await CouncilDocumentRepository(db).thu_khoa_dung():
+        raise ConflictError("Đang dựng một bộ văn bản khác — chờ bộ ấy xong rồi thử lại.")
+    kq = await asyncio.to_thread(bo_dung.render_council_documents, hang_in, mau, tham_so)
+    tong = sum(len(f.content) for f in kq.files)
+    if tong > settings.COUNCIL_SET_MAX_TOTAL_BYTES:
+        raise DataValidationError("Bộ văn bản vượt giới hạn kỹ thuật — không lưu.")
+    for f in kq.files:
+        if hashlib.sha256(f.content).hexdigest() != f.sha256:
+            raise ServiceError("sha256 của tệp sinh lệch nội dung — không lưu.")
+    md = dict(kq.metadata)
+    md.pop("ma_ho_so_dau_vao", None)
+    md.pop("tham_so_quyet_dinh", None)
+    md["mau_da_dung"] = mdd
+    md["ngay_ky_chon_mau"] = (s0.thong_tin_dung or {}).get("ngay_ky_chon_mau")
+    md["nam_hoc"] = nam
+    md["phien_ban_ma"] = dict(PHIEN_BAN_MA)
+    md["giao_dich_doc"] = {
+        "transaction_isolation": anh.giao_dich.transaction_isolation,
+        "transaction_read_only": anh.giao_dich.transaction_read_only,
+    }
+    md["dung_lai_ban_ky"] = {
+        "tu_set_id": s0.id,
+        "dong_sua_tay": sua,
+        "dong_khac": khac,
+        "nguoi_xac_nhan_id": nguoi_tao_id,
+        "luc": luc_tao.isoformat(),
+    }
+    bo = CouncilDocumentSet(
+        nguoi_tao_id=nguoi_tao_id,
+        tao_luc=luc_tao,
+        moc_chup=anh.giao_dich.moc_chup,
+        unit_id=s0.unit_id,
+        trinh_do=kq.metadata["trinh_do"],
+        so_ho_so=len(hang_in),
+        so_tep=len(kq.files),
+        kich_thuoc_tong=tong,
+        tham_so_quyet_dinh=kq.metadata["tham_so_quyet_dinh"],
+        ma_ho_so_dau_vao=[r.ma_ho_so for r in hang_in],
+        snapshot_dto=[r.model_dump() for r in hang_in],
+        thong_tin_dung=md,
+        dung_lai_tu_set_id=s0.id,
+        ban_ky_so_quyet_dinh=so,
+        ban_ky_ngay=ngay,
+    )
+    tep = [
+        CouncilDocumentSetFile(
+            thu_tu=i, path=f.path, sha256=f.sha256, kich_thuoc=len(f.content), noi_dung=f.content
+        )
+        for i, f in enumerate(kq.files, 1)
+    ]
+    vi_tri = {s: i for i, s in enumerate(sua)}
+    dong = []
+    for d in dong0:
+        if d.stt in vi_tri:
+            r = _dong_bo_tu_kiem(anh.kiem[vi_tri[d.stt]], d.profile_id, nam)
+            r.stt = d.stt
+        else:
+            r = CouncilDocumentSetRow(
+                stt=d.stt,
+                profile_id=d.profile_id,
+                academic_year=d.academic_year,
+                status_luc_dung=d.status_luc_dung,
+                nv_in_id=d.nv_in_id,
+                admission_path_id=d.admission_path_id,
+                academic_info_id=d.academic_info_id,
+                offering_id=d.offering_id,
+                major_id=d.major_id,
+            )
+        r.status_luc_dung = d.status_luc_dung  # mốc so của C3 = bản đã in và đã ký
+        dong.append(r)
+    await _ghi_bo_va_dong(
+        db,
+        bo,
+        tep,
+        dong,
+        loai_su_kien="dung_lai_ban_ky",
+        so_lieu={"tu_set_id": s0.id, "dong_sua_tay": sua, "dong_khac": khac},
+        nguoi_id=nguoi_tao_id,
+    )
+    return bo, None
+
+
+def _dong_txt(ds: Sequence[int]) -> str:
+    return ", ".join(str(x) for x in list(ds)[:20]) + (
+        " … (+%d)" % (len(ds) - 20) if len(ds) > 20 else ""
+    )
+
+
+async def so_voi_hien_tai(
+    db: AsyncSession, engine: AsyncEngine, bo: CouncilDocumentSet
+) -> Dict[str, object]:
+    """Route chỉ đọc, CHỈ ADMIN (SPEC §11.2 điểm 8; BS §3.2): so ảnh chụp của bộ với dữ liệu HIỆN TẠI
+    — tính lại bằng CÙNG hàm của bộ dựng (đọc, cổng dữ liệu, điểm KV / đối tượng in). Trả số dòng + TÊN
+    trường đã đổi, không giá trị; dòng không dựng lại được ⇒ mã lý do."""
+    from app.services.council_candidate_service import doc_ho_so_theo_id
+
+    repo = CouncilDecisionRepository(db)
+    dong = await repo.dong_bo(bo.id)
+    if len(dong) != bo.so_ho_so:
+        raise DataValidationError("Bộ dựng trước khi có dòng bộ — không so được.")
+    co = [d for d in dong if d.profile_id is not None]
+    mat = [d.stt for d in dong if d.profile_id is None]
+    dto = await _anh_chup_da_luu(db, bo.id)
+    khac: List[Dict[str, object]] = []
+    khong: List[Dict[str, object]] = []
+    if co:
+        anh = await doc_ho_so_theo_id(
+            engine,
+            [d.profile_id for d in co],
+            academic_year=(bo.thong_tin_dung or {}).get("nam_hoc"),
+        )
+        kq = cong.danh_gia_dung_lai(anh.kiem)
+        for i, d in enumerate(co):
+            ly = cong.ly_do_cua_dong(anh.kiem[i])
+            if ly:
+                khong.append({"stt": d.stt, "ma": ly})
+                continue
+            r = anh.rows[i].model_copy(
+                update={
+                    "diem_kv": kq.diem_kv[i],
+                    "diem_ut": cong.diem_ut_in(kq.luat_ut[i], anh.rows[i].diem_ut),
+                }
+            )
+            truong = _truong_khac(r.model_dump(), dto[d.stt - 1])
+            if truong:
+                khac.append({"stt": d.stt, "truong": truong})
+    return {
+        "set_id": bo.id,
+        "so_dong": bo.so_ho_so,
+        "dong_khac": khac,
+        "khong_dung_lai_duoc": khong,
+        "mat_ho_so": mat,
+    }

@@ -3865,6 +3865,35 @@ async def get_council_document_confirm_right(
     return True
 
 
+# Lượt I (F230): văn bản ĐÃ KÝ + nhóm "chờ Admin quyết" — CHỈ ADMIN (J1 dòng 9: Admin tạo + ghi nhận;
+# owner C7: Admin cho phép TỪNG em). Tầng chủ sở hữu VAI = Casbin (admin wildcard; không vai nào khác có
+# dòng); hai dependency dưới là LỚP PHỤ fail-closed, kiểm "chỉ admin" TRƯỚC khi tìm (không lộ tồn tại).
+async def get_council_decision_for_admin(
+    decision_id: int = Path(..., ge=1, description="ID văn bản đã ký"),
+    scope: CouncilDocumentScope = Depends(require_council_document_admin),
+    db: AsyncSession = Depends(database.get_db),
+) -> "models.CouncilDecision":
+    from ..repositories.council_decision_repository import CouncilDecisionRepository
+
+    qd = await CouncilDecisionRepository(db).qd_theo_id(decision_id)
+    if qd is None:
+        raise ResourceNotFoundError(detail="Không có văn bản này.")
+    return qd
+
+
+async def get_council_decision_hold_for_admin(
+    hold_id: int = Path(..., ge=1, description="ID mục chờ Admin quyết"),
+    scope: CouncilDocumentScope = Depends(require_council_document_admin),
+    db: AsyncSession = Depends(database.get_db),
+) -> "models.CouncilDecisionHold":
+    from ..repositories.council_decision_repository import CouncilDecisionRepository
+
+    muc = await CouncilDecisionRepository(db).muc_cho_theo_id(hold_id)
+    if muc is None:
+        raise ResourceNotFoundError(detail="Không có mục chờ này.")
+    return muc
+
+
 # ── Cờ quyền GIAO DIỆN của văn bản Hội đồng (lượt F) ─────────────────────────────────────────
 # Giao diện ẩn / hiện nút theo cờ của API (FRONTEND_ARCHITECTURE_V3 §2.2), KHÔNG theo
 # ``user.role``. Cờ = máy chủ ĐÁNH GIÁ CHÍNH CÁC CỔNG của từng route cho người gọi — không có
@@ -3899,6 +3928,9 @@ _KHONG_PHAI_CONG_VAN_BAN_HOI_DONG = frozenset(
         get_council_document_set_for_admin,
         # lượt G: quyền XÁC NHẬN cảnh báo trạng thái — trả bool, không từ chối route nào
         get_council_document_confirm_right,
+        # lượt I: tìm văn bản đã ký / mục chờ theo id (cổng "chỉ admin" ở cây con quyết)
+        get_council_decision_for_admin,
+        get_council_decision_hold_for_admin,
     }
 )
 

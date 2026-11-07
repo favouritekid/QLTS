@@ -40,6 +40,7 @@ from typing import AsyncIterator, List, Optional, Sequence
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from app.models.council_document import SQL_COT_TINH_TRANG_QD
 from app.utils.exceptions import ServiceError
 
 MUC_CO_LAP = "repeatable read"
@@ -311,7 +312,8 @@ WITH chon AS (
 nv AS (
     SELECT c.admission_profile_id AS pid, c.id, c.display_order, c.decision,
            c.admission_path_id AS path_id, psg.subject_group_id AS sg_id,
-           po.program_id AS nganh_id
+           po.program_id AS nganh_id,
+           ap.academic_info_id AS ai_id, oai.offering_id AS offering_id
     FROM admission_profile_choice c
     JOIN chon ON chon.pid = c.admission_profile_id
     LEFT JOIN admission_path ap ON ap.id = c.admission_path_id
@@ -370,7 +372,13 @@ SELECT
   p.selected_subject_group_id AS lg_sg_id,
   COALESCE(diem.ca_hai_khac, 0) AS diem_ca_hai_khac,
   COALESCE(diem.chi_nv, 0) AS diem_chi_nv,
-  COALESCE(diem.chi_hs, 0) AS diem_chi_hs
+  COALESCE(diem.chi_hs, 0) AS diem_chi_hs,
+  -- lượt I (F230): khoá đếm của nguyện vọng in (ghi vào dòng bộ) + tình trạng Quyết định của hồ sơ
+  -- (biểu thức MỘT nguồn ``SQL_COT_TINH_TRANG_QD`` — cùng chuỗi hàm hỏi
+  -- ``council_decision_status_service`` dùng)
+  nvi.ai_id AS nv_in_ai_id,
+  nvi.offering_id AS nv_in_offering_id,
+  """ + SQL_COT_TINH_TRANG_QD + r"""
 FROM chon
 JOIN admission_profile p ON p.id = chon.pid
 LEFT JOIN nv_dem ON nv_dem.pid = p.id

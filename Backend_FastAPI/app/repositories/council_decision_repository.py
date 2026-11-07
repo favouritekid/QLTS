@@ -5,6 +5,7 @@
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select, text
+from sqlalchemy.orm import undefer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.council_document import (
@@ -274,14 +275,15 @@ class CouncilDecisionRepository:
             out[sid] = out.get(sid, 0) + 1
         return dict(sorted(out.items()))
 
-    async def scan_cua_qd(self, decision_id: int) -> Optional[CouncilDecisionScan]:
-        return (
-            await self.db.execute(
-                select(CouncilDecisionScan).where(
-                    CouncilDecisionScan.decision_id == decision_id
-                )
-            )
-        ).scalar_one_or_none()
+    async def scan_cua_qd(
+        self, decision_id: int, *, kem_noi_dung: bool = False
+    ) -> Optional[CouncilDecisionScan]:
+        """``noi_dung`` là cột HOÃN (deferred) — chỉ nạp khi ``kem_noi_dung`` (tải bản scan); đọc thuộc
+        tính hoãn ngoài ``await`` ⇒ ``MissingGreenlet``."""
+        cau = select(CouncilDecisionScan).where(CouncilDecisionScan.decision_id == decision_id)
+        if kem_noi_dung:
+            cau = cau.options(undefer(CouncilDecisionScan.noi_dung))
+        return (await self.db.execute(cau)).scalar_one_or_none()
 
     async def danh_sach_qd(
         self, *, set_id: Optional[int], limit: int, offset: int

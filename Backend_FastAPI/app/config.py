@@ -462,6 +462,11 @@ class Settings(BaseSettings):
         validation_alias="COUNCIL_SET_MAX_TOTAL_BYTES",
     )  # tổng bytes các tệp sinh của MỘT bộ (vượt ⇒ không ghi gì). Đo 03-11: 1.000 hồ sơ giả
     # ⇒ 2,6 MB tệp (mẫu giả mang ~130 KB không nén được như phông nhúng của mẫu thật)
+    COUNCIL_DECISION_SCAN_MAX_BYTES: int = Field(
+        default=20 * 1024 * 1024, ge=64 * 1024, le=100 * 1024 * 1024,
+        validation_alias="COUNCIL_DECISION_SCAN_MAX_BYTES",
+    )  # F230 lượt I: bản scan PDF của Quyết định đã ký — trần KỸ THUẬT (lưu trong CSDL, vào
+    # pg_dump), không phải số nghiệp vụ; đổi được ở cấu hình
     # -- Landing page công khai /lp/{code} (PR-5) --
     SMS_LANDING_SCHOOL_NAME: str = Field(
         default="Cao đẳng Bách khoa Tây Nguyên",

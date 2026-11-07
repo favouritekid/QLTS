@@ -164,6 +164,14 @@ ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     # Lượt E3 (owner 04-11, J1 dòng 29): Admin xoá bộ văn bản — rà tay 04-11.
     ("DELETE", "/api/admission-config/council-documents/sets/{set_id}"),
     ("POST", "/api/admission-config/council-documents/templates"),
+    # Lượt I (F230): ghi nhận Quyết định đã ký + nhóm chờ + tái dựng bản ký — rà tay 07-11.
+    ("POST", "/api/admission-config/council-documents/decisions"),
+    ("POST", "/api/admission-config/council-documents/decisions/{decision_id}/huy-ghi-nhan"),
+    ("POST", "/api/admission-config/council-documents/decisions/{decision_id}/huy-hieu-luc"),
+    ("POST", "/api/admission-config/council-documents/decisions/{decision_id}/bo-dieu-chinh"),
+    ("POST", "/api/admission-config/council-documents/decisions/{decision_id}/dieu-chinh"),
+    ("POST", "/api/admission-config/council-documents/sets/{set_id}/dung-lai-ban-ky"),
+    ("POST", "/api/admission-config/council-documents/decision-holds/{hold_id}/cho-xet-lai"),
     ("POST", "/api/admission-config/criteria"),
     ("DELETE", "/api/admission-config/criteria/{criteria_id}"),
     ("PUT", "/api/admission-config/criteria/{criteria_id}"),

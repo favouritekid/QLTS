@@ -180,7 +180,23 @@ LY_DO: Dict[str, str] = {
     "khong_xac_dinh_luat_cong_diem_ut": (
         "không xác định được luật cộng điểm đối tượng của đường xét dùng để in"
     ),
+    # Lượt I (F230) — tình trạng Quyết định đã ký của hồ sơ (đọc trong CÙNG giao dịch chỉ đọc bằng
+    # biểu thức một nguồn ``SQL_COT_TINH_TRANG_QD``). N10 / C7 / N13 + E1.
+    "da_co_quyet_dinh": (
+        "hồ sơ đã có tên trong một Quyết định đã ký đang hiệu lực — không đưa vào bộ văn bản mới"
+    ),
+    "cho_admin_quyet": (
+        "hồ sơ thuộc Quyết định đã bị huỷ hiệu lực — chờ Admin cho phép xét lại"
+    ),
+    "dau_trung_tuyen_appsheet": (
+        "hồ sơ mang dấu 'Đã trúng tuyển theo QĐ số …' (nhập từ AppSheet) — chưa có sổ Quyết "
+        "định cũ trong phần mềm"
+    ),
 }
+
+#: Mã chặn theo TÌNH TRẠNG Quyết định (lượt I) — tách khỏi cổng dữ liệu để đường tái dựng bản ký dùng
+#: riêng (đặc tả mục 3.1 bước 7).
+MA_TINH_TRANG_QD = ("da_co_quyet_dinh", "cho_admin_quyet", "dau_trung_tuyen_appsheet")
 
 # Câu 22 — luật cộng điểm KV của đường xét in (do hàm đọc điền bằng ĐÚNG hàm T6 dùng:
 # ``resolve_effective_bonus_rule`` + ``priority_service.area_bonus_enabled``).
@@ -231,6 +247,14 @@ class DuLieuKiem:
     luat_kv: Optional[str]  # câu 22 — một trong LUAT_KV_HOP_LE; None = không xác định
     # lượt H2 — công tắc đối tượng, cùng ba giá trị; None = không xác định
     luat_ut: Optional[str]
+    # Lượt I (F230) — khoá đếm của NV in (ghi vào dòng bộ) + tình trạng Quyết định (hàm đọc điền
+    # bằng ``council_decision_status_service.tu_hang`` trên cột ``SQL_COT_TINH_TRANG_QD``).
+    nv_in_ai_id: Optional[int] = None
+    nv_in_offering_id: Optional[int] = None
+    qd_hieu_luc_id: Optional[int] = None
+    qd_chuoi_id: Optional[int] = None
+    cho_quyet_id: Optional[int] = None
+    dau_appsheet: bool = False
 
 
 def diem_ut_in(luat_ut: Optional[str], diem_ut_v1: str) -> Optional[str]:
@@ -317,6 +341,24 @@ def ly_do_cua_dong(k: DuLieuKiem) -> List[str]:
     return out
 
 
+def ly_do_tinh_trang_qd(
+    k: DuLieuKiem, chuoi_qd_cho_phep: Optional[int] = None
+) -> List[str]:
+    """Mã chặn theo tình trạng Quyết định của MỘT dòng (lượt I). ``chuoi_qd_cho_phep`` = id Quyết
+    định gốc của chuỗi mà bộ ĐIỀU CHỈNH được dựng cho — CHỈ nới đúng một phép: hồ sơ có dòng hiệu lực
+    TRONG CHÍNH chuỗi ấy (ca "sửa thông tin em C" — BS §1.3). Dựng bộ xét mới gọi KHÔNG kèm chuỗi."""
+    out: List[str] = []
+    if k.qd_hieu_luc_id is not None and not (
+        chuoi_qd_cho_phep is not None and k.qd_chuoi_id == chuoi_qd_cho_phep
+    ):
+        out.append("da_co_quyet_dinh")
+    if k.cho_quyet_id is not None:
+        out.append("cho_admin_quyet")
+    if k.dau_appsheet:
+        out.append("dau_trung_tuyen_appsheet")
+    return out
+
+
 @dataclass(frozen=True)
 class KetQuaCong:
     """Kết quả cổng cho cả danh sách (thứ tự dòng = thứ tự đầu vào, đếm từ 1)."""
@@ -355,8 +397,11 @@ class KetQuaCong:
         return dict(sorted(dem.items()))
 
 
-def danh_gia(kiem: Sequence[DuLieuKiem]) -> KetQuaCong:
-    """Áp ba cổng cho mọi dòng. Không ném lỗi — :func:`kiem_va_xac_nhan` quyết."""
+def danh_gia(
+    kiem: Sequence[DuLieuKiem], *, chuoi_qd_cho_phep: Optional[int] = None
+) -> KetQuaCong:
+    """Áp các cổng cho mọi dòng. Không ném lỗi — :func:`kiem_va_xac_nhan` quyết. Dựng bộ XÉT MỚI
+    (``POST /sets``) gọi KHÔNG kèm ``chuoi_qd_cho_phep``; chỉ bộ điều chỉnh truyền chuỗi gốc."""
     chan: Dict[Tuple[str, Optional[str]], List[int]] = {}
     canh_bao: Dict[str, List[int]] = {}
     for k in kiem:
@@ -367,8 +412,35 @@ def danh_gia(kiem: Sequence[DuLieuKiem]) -> KetQuaCong:
             chan.setdefault((ma, ten), []).append(k.stt)
         elif muc == MUC_CANH_BAO:
             canh_bao.setdefault(k.status, []).append(k.stt)
+        for ma in ly_do_cua_dong(k) + ly_do_tinh_trang_qd(k, chuoi_qd_cho_phep):
+            chan.setdefault((ma, None), []).append(k.stt)
+    return _ket_qua(kiem, chan, canh_bao)
+
+
+def danh_gia_dung_lai(kiem: Sequence[DuLieuKiem]) -> KetQuaCong:
+    """Cổng của đường TÁI DỰNG BẢN KÝ (lượt I, đặc tả mục 3.1 bước 6 — F245, owner C2 / C3) cho
+    các dòng SỬA TAY: cổng DỮ LIỆU đủ (``ly_do_cua_dong`` — F229, F231, câu 21, câu 22) nhưng KHÔNG
+    cổng trạng thái F228 (trạng thái chỉ được liệt kê — bản ký thắng), trừ trạng thái LẠ (dữ liệu
+    hỏng ⇒ chặn). Tình trạng Quyết định kiểm riêng cho MỌI dòng (hàm hỏi). KHÔNG BAO GIỜ dùng cho bộ
+    xét mới — ``tao_bo_van_ban`` gọi :func:`danh_gia`."""
+    chan: Dict[Tuple[str, Optional[str]], List[int]] = {}
+    for k in kiem:
+        if not (
+            isinstance(k.status, str)
+            and (
+                k.status in TRANG_THAI_CHAN
+                or k.status in TRANG_THAI_CANH_BAO
+                or k.status in TRANG_THAI_KHONG_CANH_BAO
+            )
+        ):
+            ten = k.status if isinstance(k.status, str) else None
+            chan.setdefault(("trang_thai_la", ten), []).append(k.stt)
         for ma in ly_do_cua_dong(k):
             chan.setdefault((ma, None), []).append(k.stt)
+    return _ket_qua(kiem, chan, {})
+
+
+def _ket_qua(kiem, chan, canh_bao) -> KetQuaCong:
     thu_tu = list(LY_DO)
     return KetQuaCong(
         trang_thai=tuple(k.status for k in kiem),

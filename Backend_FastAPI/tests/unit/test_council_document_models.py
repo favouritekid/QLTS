@@ -224,6 +224,20 @@ ROUTE_CHI_ADMIN = (
     ("GET", "/api/admission-config/council-documents/sets/1/ma-ho-so"),
     ("GET", "/api/admission-config/council-documents/nhat-ky-tai"),
     ("GET", "/api/admission-config/council-documents/nhat-ky-xoa"),
+    # Lượt I (F230) — ghi nhận Quyết định đã ký: CHỈ admin (J1 dòng 9, C7)
+    ("POST", "/api/admission-config/council-documents/decisions"),
+    ("GET", "/api/admission-config/council-documents/decisions"),
+    ("GET", "/api/admission-config/council-documents/decisions/1"),
+    ("GET", "/api/admission-config/council-documents/decisions/1/scan"),
+    ("POST", "/api/admission-config/council-documents/decisions/1/huy-ghi-nhan"),
+    ("POST", "/api/admission-config/council-documents/decisions/1/huy-hieu-luc"),
+    ("POST", "/api/admission-config/council-documents/decisions/1/bo-dieu-chinh"),
+    ("POST", "/api/admission-config/council-documents/decisions/1/dieu-chinh"),
+    ("POST", "/api/admission-config/council-documents/sets/1/dung-lai-ban-ky"),
+    ("GET", "/api/admission-config/council-documents/sets/1/so-voi-hien-tai"),
+    ("GET", "/api/admission-config/council-documents/decision-holds"),
+    ("POST", "/api/admission-config/council-documents/decision-holds/1/cho-xet-lai"),
+    ("GET", "/api/admission-config/council-documents/su-kien"),
 )
 
 

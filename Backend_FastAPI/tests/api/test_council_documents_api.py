@@ -512,8 +512,9 @@ async def test_dong_bang_chan_moi_route_ghi_cua_module(
     client, tk, hs, ba_bo, dong_bang
 ):
     ghi = _route_ghi_cua_module()
-    # Bảng route THẬT — module có đúng ba route ghi: xoá bộ (E3) + tải mẫu + dựng bộ.
-    assert [m for m, _ in ghi] == ["DELETE", "POST", "POST"]
+    # Bảng route THẬT — xoá bộ (E3) + tải mẫu + dựng bộ + bảy route ghi của lượt I (ghi nhận, huỷ ghi
+    # nhận, huỷ hiệu lực, bộ điều chỉnh, điều chỉnh, tái dựng bản ký, cho xét lại).
+    assert [m for m, _ in ghi] == ["DELETE"] + ["POST"] * 9
     assert await _dem() == (0, 3, 3)  # ba bộ có sẵn (ba_bo)
     for m, duong in ghi:
         # Gọi ĐÚNG đường của bảng route — KHÔNG ghép lại từ hằng P: router bị dời ra ngoài
@@ -531,10 +532,18 @@ async def test_dong_bang_van_cho_route_doc(client, tk, ba_bo, dong_bang):
     # Mọi route ĐỌC của module (bảng route thật) vẫn 200 khi đóng băng — như mọi route đọc
     # khác của tiền tố (middleware chỉ chặn POST / PUT / PATCH / DELETE).
     doc = sorted(p for m, p in _route_cua_module() if m == "GET")
-    # E2: 4 + E3: danh sách mã, nhật ký tải, vết xoá + lượt F: cờ quyền giao diện (/quyen)
-    assert len(doc) == 8
+    # E2: 4 + E3: danh sách mã, nhật ký tải, vết xoá + lượt F: cờ quyền giao diện (/quyen) + lượt I:
+    # danh sách / chi tiết / scan văn bản đã ký, so với hiện tại, nhóm chờ, sự kiện
+    assert len(doc) == 14
+    from tests.api.test_council_documents_quyen_api import _dam_bao_qd_gia
+
+    x, _muc = await _dam_bao_qd_gia(ba_bo["u1"][0])
     for duong in doc:
-        url = duong.replace("{set_id}", str(ba_bo["u1"][0])).replace("{thu_tu}", "1")
+        url = (
+            duong.replace("{set_id}", str(ba_bo["u1"][0]))
+            .replace("{thu_tu}", "1")
+            .replace("{decision_id}", str(x))
+        )
         r = await client.get(url, headers=(await tk("admin")))
         assert r.status_code == 200, (url, r.text)
 
@@ -574,8 +583,10 @@ async def test_loi_422_khong_ghi_cccd_vao_log(client, tk, caplog):
 def test_moi_route_cua_module_khop_vi_tu_bo_input_422():
     duong = {p for _, p in _route_cua_module()}
     # /templates, /sets, /sets/{id}, /sets/{id}/files/{thu_tu} + E3: /sets/{id}/ma-ho-so,
-    # /nhat-ky-tai, /nhat-ky-xoa (DELETE dùng chung /sets/{id}) + lượt F: /quyen.
-    assert len(duong) == 8
+    # /nhat-ky-tai, /nhat-ky-xoa (DELETE dùng chung /sets/{id}) + lượt F: /quyen + lượt I (F230) 12 đường:
+    # /decisions, /decisions/{id}, …/scan, …/huy-ghi-nhan, …/huy-hieu-luc, …/bo-dieu-chinh, …/dieu-chinh,
+    # /sets/{id}/dung-lai-ban-ky, /sets/{id}/so-voi-hien-tai, /decision-holds, …/cho-xet-lai, /su-kien.
+    assert len(duong) == 20
     assert all(eh._khong_log_input_422(p) for p in duong)
     assert not eh._khong_log_input_422("/api/admission-config/council-documentsX")
     assert not eh._khong_log_input_422("/api/admission-config/criteria")

@@ -89,17 +89,29 @@ class CouncilSetOut(BaseModel):
 
 
 class CouncilSetDetailOut(CouncilSetOut):
-    """Metadata đầy đủ + danh sách tệp (không bytes)."""
+    """Metadata đầy đủ + danh sách tệp (không bytes). Lượt I: ``quyet_dinh`` = văn bản đã ký (chưa huỷ
+    ghi nhận) của bộ — trạng thái + số + ngày + số em (Quản lý xem được trên bộ đơn vị mình); ba trường
+    chế độ của bộ (tái dựng bản ký / dữ liệu cho điều chỉnh)."""
 
     thong_tin_dung: Dict[str, Any]
     tep: List[CouncilSetFileOut]
+    quyet_dinh: Optional[Dict[str, Any]] = None
+    dung_lai_tu_set_id: Optional[int] = None
+    ban_ky_so_quyet_dinh: Optional[str] = None
+    ban_ky_ngay: Optional[date] = None
+    cho_quyet_dinh_goc_id: Optional[int] = None
 
     @classmethod
-    def tu_bo_va_tep(cls, bo, tep) -> "CouncilSetDetailOut":
+    def tu_bo_va_tep(cls, bo, tep, quyet_dinh=None) -> "CouncilSetDetailOut":
         return cls(
             **CouncilSetOut.tu_bo(bo).model_dump(),
             thong_tin_dung=bo.thong_tin_dung,
             tep=[CouncilSetFileOut.model_validate(t) for t in tep],
+            quyet_dinh=quyet_dinh,
+            dung_lai_tu_set_id=bo.dung_lai_tu_set_id,
+            ban_ky_so_quyet_dinh=bo.ban_ky_so_quyet_dinh,
+            ban_ky_ngay=bo.ban_ky_ngay,
+            cho_quyet_dinh_goc_id=bo.cho_quyet_dinh_goc_id,
         )
 
 
@@ -154,6 +166,20 @@ class CouncilDocumentPermissions(BaseModel):
     xem_ma_ho_so: bool
     xem_nhat_ky_tai: bool
     xem_nhat_ky_xoa: bool
+    # Lượt I (F230) — ghi nhận Quyết định đã ký (CHỈ admin)
+    ghi_nhan_qd: bool
+    xem_danh_sach_qd: bool
+    xem_chi_tiet_qd: bool
+    tai_scan_qd: bool
+    huy_ghi_nhan_qd: bool
+    huy_hieu_luc_qd: bool
+    tao_bo_dieu_chinh: bool
+    ghi_nhan_dieu_chinh: bool
+    dung_lai_ban_ky: bool
+    so_bo_voi_hien_tai: bool
+    xem_nhom_cho: bool
+    cho_xet_lai: bool
+    xem_su_kien: bool
 
 
 class CouncilDocumentPermissionsOut(BaseModel):
@@ -175,3 +201,114 @@ class CouncilDownloadLogOut(BaseModel):
     sha256: str
     nguoi_tai_id: int
     tai_luc: datetime
+
+
+# ═══════════════════ Lượt I (F230) — ghi nhận Quyết định đã ký (CHỈ admin) ═══════════════════
+class CouncilDecisionOut(BaseModel):
+    """Một văn bản đã ký — không dữ liệu cá nhân."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    loai: str
+    trang_thai: str
+    can_bo: bool
+    set_id: Optional[int] = None
+    goc_id: Optional[int] = None
+    huy_qd_id: Optional[int] = None
+    het_hieu_luc_boi_id: Optional[int] = None
+    so_quyet_dinh: str
+    ngay_ky: date
+    pham_vi_so: int
+    so_ho_so: int
+    sha_tep_quyet_dinh: Optional[str] = None
+    tham_so_ban_ky: Optional[Dict[str, Any]] = None
+    xac_nhan: Optional[Dict[str, Any]] = None
+    ghi_chu_mau: Optional[str] = None
+    ghi_nhan_boi_id: int
+    ghi_nhan_luc: datetime
+    huy_ghi_nhan_boi_id: Optional[int] = None
+    huy_ghi_nhan_luc: Optional[datetime] = None
+    ly_do_huy_ghi_nhan: Optional[str] = None
+
+
+class CouncilDecisionRowOut(BaseModel):
+    """Một dòng của văn bản — id hồ sơ là khoá NỘI BỘ (chỉ admin), không CCCD."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    stt: int
+    set_row_id: Optional[int] = None
+    profile_id: Optional[int] = None
+    trang_thai_cha: str
+    bi_bo_boi_id: Optional[int] = None
+
+
+class CouncilEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    loai: str
+    set_id: Optional[int] = None
+    decision_id: Optional[int] = None
+    hold_id: Optional[int] = None
+    nguoi_id: Optional[int] = None
+    luc: datetime
+    so_lieu: Dict[str, Any]
+
+
+class CouncilDecisionDetailOut(CouncilDecisionOut):
+    dong: List[CouncilDecisionRowOut]
+    scan: Optional[Dict[str, Any]] = None
+    su_kien: List[CouncilEventOut]
+
+
+class CouncilDecisionWriteOut(CouncilDecisionOut):
+    """Phản hồi của thao tác ghi: văn bản + số đếm của thao tác (không dữ liệu cá nhân)."""
+
+    so_lieu: Optional[Dict[str, Any]] = None
+
+
+class CouncilDecisionCancelIn(BaseModel):
+    """``POST /decisions/{id}/huy-ghi-nhan`` — nhập SAI ⇒ như chưa từng ghi (giữ vết)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ly_do: StrictStr
+    so_go_lai: StrictStr
+    xac_nhan: Optional[Dict[str, StrictInt]] = None
+
+
+class CouncilHoldReleaseIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ly_do: StrictStr
+
+
+class CouncilHoldOut(BaseModel):
+    """Một mục "chờ Admin quyết" — id hồ sơ là khoá nội bộ (chỉ admin), không CCCD."""
+
+    id: int
+    profile_id: Optional[int] = None
+    decision_row_id: int
+    stt: int
+    quyet_dinh_id: int
+    van_ban_huy_id: int
+    ly_do_vao: str
+    trang_thai: str
+    tao_luc: datetime
+    quyet_boi_id: Optional[int] = None
+    quyet_luc: Optional[datetime] = None
+    vo_hieu_luc: Optional[datetime] = None
+
+
+class CouncilResignIn(BaseModel):
+    """``POST /sets/{id}/dung-lai-ban-ky`` — tái dựng bộ cho KHỚP bản đã ký (owner C2 / C3)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    so_quyet_dinh: StrictStr
+    ngay_ky: date
+    dong_sua_tay: List[StrictInt] = Field(..., min_length=1)
+    xac_nhan_dong_khac: Optional[List[Dict[str, Any]]] = None
