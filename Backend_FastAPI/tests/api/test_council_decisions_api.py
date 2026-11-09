@@ -657,7 +657,12 @@ async def test_tai_dung_ban_ky_dong_sua_tay_va_em_da_rut(client, hs, ad):
     await _sql("UPDATE admission_profile SET status = 'withdrawn' WHERE id = :p", p=hs[SACH[2]][1])
     r = await _bo(client, ad, hs, SACH)  # bộ XÉT MỚI: em đã rút bị chặn F228 (P3)
     assert r.status_code == 400 and "trang_thai_chan" in _ma_chan(r), r.text
-    than = {"so_quyet_dinh": "901", "ngay_ky": _ngay().isoformat(), "dong_sua_tay": [2]}
+    than = {
+        "so_quyet_dinh": "901",
+        "ngay_ky": _ngay().isoformat(),
+        "dong_sua_tay": [2],
+        "ly_do": "GIA truong sua tay ho ten tren ban ky",
+    }
     r = await client.post(P + "/sets/%d/dung-lai-ban-ky" % s0["id"], json=than, headers=ad)
     assert r.status_code == 409, r.text
     khac = r.json()["dong_khac"]
@@ -670,6 +675,19 @@ async def test_tai_dung_ban_ky_dong_sua_tay_va_em_da_rut(client, hs, ad):
     assert r.status_code == 201, r.text
     rb = r.json()
     assert (rb["dung_lai_tu_set_id"], rb["ban_ky_so_quyet_dinh"]) == (s0["id"], "901")
+    # Đặc tả 3.1: lý do bắt buộc, giữ ở thông tin dựng của R, KHÔNG ghi vào sự kiện (bước 12).
+    assert await _q1(
+        "SELECT thong_tin_dung->'dung_lai_ban_ky'->>'ly_do' FROM council_document_set WHERE id = :s",
+        s=rb["id"],
+    ) == than["ly_do"]
+    assert await _q1(
+        "SELECT count(*) FROM council_document_event WHERE loai = 'dung_lai_ban_ky' AND set_id = :s "
+        "AND so_lieu ? 'ly_do'",
+        s=rb["id"],
+    ) == 0
+    thieu = {k: v for k, v in than.items() if k != "ly_do"}
+    r = await client.post(P + "/sets/%d/dung-lai-ban-ky" % s0["id"], json=thieu, headers=ad)
+    assert r.status_code == 422, r.text
     # ghi nhận bộ tái dựng: em đã rút được LIỆT KÊ, Admin xác nhận (C3) — không chặn
     r = await _ghi(client, ad, rb["id"], so="901", so_hs=3)
     assert r.status_code == 409 and r.json()["xac_nhan_can"]["so_ho_so_theo_loai"] == {
@@ -688,7 +706,12 @@ async def test_tai_dung_dong_sua_tay_khong_dung_lai_duoc_tu_du_lieu_song(client,
     )
     r = await client.post(
         P + "/sets/%d/dung-lai-ban-ky" % s0["id"],
-        json={"so_quyet_dinh": "901", "ngay_ky": _ngay().isoformat(), "dong_sua_tay": [2]},
+        json={
+            "so_quyet_dinh": "901",
+            "ngay_ky": _ngay().isoformat(),
+            "dong_sua_tay": [2],
+            "ly_do": "GIA",
+        },
         headers=ad,
     )
     assert r.status_code == 400, r.text

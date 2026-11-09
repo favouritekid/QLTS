@@ -691,6 +691,7 @@ async def resign_council_document_set(
         so_quyet_dinh=payload.so_quyet_dinh,
         ngay_ky=payload.ngay_ky,
         dong_sua_tay=payload.dong_sua_tay,
+        ly_do=payload.ly_do,
         xac_nhan_dong_khac=payload.xac_nhan_dong_khac,
         nguoi_tao_id=current_user.id,
     )

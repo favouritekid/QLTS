@@ -311,4 +311,5 @@ class CouncilResignIn(BaseModel):
     so_quyet_dinh: StrictStr
     ngay_ky: date
     dong_sua_tay: List[StrictInt] = Field(..., min_length=1)
+    ly_do: StrictStr
     xac_nhan_dong_khac: Optional[List[Dict[str, Any]]] = None

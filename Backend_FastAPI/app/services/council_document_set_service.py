@@ -698,6 +698,7 @@ async def tao_bo_dung_lai_ban_ky(
     so_quyet_dinh: object,
     ngay_ky: object,
     dong_sua_tay: Sequence[int],
+    ly_do: object,
     xac_nhan_dong_khac: Optional[List[Dict[str, object]]],
     nguoi_tao_id: Optional[int],
     luc_tao: Optional[datetime] = None,
@@ -719,6 +720,8 @@ async def tao_bo_dung_lai_ban_ky(
 
     so = qd.kiem_so_quyet_dinh(so_quyet_dinh)
     ngay = qd.kiem_ngay(ngay_ky)
+    # Đặc tả 3.1: thân có ``ly_do``; bước 12 "lý do không ghi vào sự kiện" ⇒ giữ ở thông tin dựng của bộ R.
+    ly = kiem_ly_do(ly_do, "tái dựng bản ký")
     luc_tao = luc_tao or datetime.now(timezone.utc)
     if PHIEN_BAN_MA is None:
         raise ServiceError("Không đọc được mã nguồn của bộ dựng để ghi phiên bản — không dựng.")
@@ -858,6 +861,7 @@ async def tao_bo_dung_lai_ban_ky(
         "dong_khac": khac,
         "nguoi_xac_nhan_id": nguoi_tao_id,
         "luc": luc_tao.isoformat(),
+        "ly_do": ly,
     }
     bo = CouncilDocumentSet(
         nguoi_tao_id=nguoi_tao_id,

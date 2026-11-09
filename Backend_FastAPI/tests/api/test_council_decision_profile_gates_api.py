@@ -90,15 +90,42 @@ async def _co_qd(client, ad, hs, nhan, so="501", trang_thai="submitted"):
     return pid
 
 
-async def _dau(hs, nhan, trang_thai="submitted"):
+#: Dấu AppSheet theo ĐÚNG hai dạng của lô 182 em đã nhập thật (công cụ ``cong-cu-nhap-appsheet/nhap_ho_so.py``):
+#: * ``ly_do`` — em "Yêu cầu bổ sung": dòng 1 của ``revision_reason`` là dấu, các dòng sau là việc cần sửa
+#:   (``:679-681``, hậu kiểm ``:731``);
+#: * ``tu_van`` — em "Đã nộp": ``revision_reason`` RỖNG, dấu CHỈ nằm ở lần tư vấn ``method = 'system'`` (``:642-644``).
+#: Mỗi ca dựng MỘT nguồn (để mỗi nhánh của ``SQL_DAU_APPSHEET`` có ca riêng); em thật dạng (a) có cả hai.
+DAU_LY_DO = qd.DAU + "\n- GIA bo sung giay to tot nghiep"
+TRANG_THAI_DAU = {"ly_do": "revision_requested", "tu_van": "submitted"}
+
+
+async def _dau(hs, nhan, trang_thai=None, nguon="ly_do"):
     pid = hs[nhan][1]
-    await qd._sql(
-        "UPDATE admission_profile SET status = :s, revision_reason = :d WHERE id = :p",
-        s=trang_thai,
-        d=qd.DAU,
-        p=pid,
-    )
+    st = trang_thai or TRANG_THAI_DAU[nguon]
+    if nguon == "ly_do":
+        await qd._sql(
+            "UPDATE admission_profile SET status = :s, revision_reason = :d WHERE id = :p",
+            s=st,
+            d=DAU_LY_DO,
+            p=pid,
+        )
+    else:
+        await qd._sql(
+            "UPDATE admission_profile SET status = :s, revision_reason = NULL WHERE id = :p",
+            s=st,
+            p=pid,
+        )
+        await qd._sql(
+            "INSERT INTO consultation (lead_id, consultation_date, method, notes, officer_id, "
+            "reminder_sent, created_at) SELECT p.lead_id, now(), 'system', :d, "
+            '(SELECT min(id) FROM "user"), false, now() FROM admission_profile p WHERE p.id = :p',
+            d=qd.DAU,
+            p=pid,
+        )
     return pid
+
+
+DAU3 = ["qd", "ly_do", "tu_van"]
 
 
 async def _ban(pid):
@@ -127,9 +154,9 @@ def _la_chan(r):
 
 
 # ═══════════════════════════════ → rejected ═════════════════════════════════════════════════
-@pytest.mark.parametrize("dau", ["qd", "appsheet"])
+@pytest.mark.parametrize("dau", DAU3)
 async def test_tu_choi_le_bi_chan(client, hs, ad, dau):
-    pid = await (_co_qd(client, ad, hs, SACH[0]) if dau == "qd" else _dau(hs, SACH[0]))
+    pid = await (_co_qd(client, ad, hs, SACH[0]) if dau == "qd" else _dau(hs, SACH[0], nguon=dau))
     st, ver = await _ban(pid)
     r = await client.post(
         A + "/%d/reject" % pid, json={"reason": "GIA tu choi thu", "version": ver}, headers=ad
@@ -178,9 +205,9 @@ async def test_tu_choi_danh_sach_cho_bi_chan(client, hs, ad):
 
 
 # ═══════════════════════════════ rút ═══════════════════════════════════════════════════════
-@pytest.mark.parametrize("dau", ["qd", "appsheet"])
+@pytest.mark.parametrize("dau", DAU3)
 async def test_rut_qua_can_bo_bi_chan_khong_tu_lap_yeu_cau_hoan(client, hs, ad, dau):
-    pid = await (_co_qd(client, ad, hs, SACH[0]) if dau == "qd" else _dau(hs, SACH[0]))
+    pid = await (_co_qd(client, ad, hs, SACH[0]) if dau == "qd" else _dau(hs, SACH[0], nguon=dau))
     st, ver = await _ban(pid)
     truoc = await _so_yeu_cau_hoan()
     r = await client.post(
@@ -268,12 +295,12 @@ async def test_chot_rut_khi_hoan_xong_van_cho_em_co_qd(client, hs, ad):
 
 
 # ═══════════════════════════════ → draft ═══════════════════════════════════════════════════
-@pytest.mark.parametrize("dau", ["qd", "appsheet"])
+@pytest.mark.parametrize("dau", DAU3)
 async def test_huy_quy_trinh_rut_bi_chan(client, hs, ad, dau):
     pid = await (
         _co_qd(client, ad, hs, SACH[0], trang_thai="withdrawal_pending")
         if dau == "qd"
-        else _dau(hs, SACH[0], trang_thai="withdrawal_pending")
+        else _dau(hs, SACH[0], trang_thai="withdrawal_pending", nguon=dau)
     )
     r = await client.post(
         A + "/%d/cancel-withdrawal" % pid, json={"reason": "GIA huy quy trinh rut"}, headers=ad
@@ -282,14 +309,15 @@ async def test_huy_quy_trinh_rut_bi_chan(client, hs, ad, dau):
     assert (await _ban(pid))[0] == "withdrawal_pending"
 
 
-@pytest.mark.parametrize("dau", ["qd", "appsheet"])
+@pytest.mark.parametrize("dau", DAU3)
 async def test_admin_tra_ve_nhap_bi_chan(client, hs, ad, dau):
-    pid = await (_co_qd(client, ad, hs, SACH[0]) if dau == "qd" else _dau(hs, SACH[0]))
+    pid = await (_co_qd(client, ad, hs, SACH[0]) if dau == "qd" else _dau(hs, SACH[0], nguon=dau))
+    st = (await _ban(pid))[0]
     r = await client.post(
         V2 + "/%d/admin-rollback" % pid, json={"reason": "GIA tra ve nhap thu"}, headers=ad
     )
     assert _la_chan(r), r.text
-    assert (await _ban(pid))[0] == "submitted"
+    assert (await _ban(pid))[0] == st
 
 
 async def test_xoa_ho_so_nhap_co_ten_trong_van_ban_bi_chan(client, hs, ad):
@@ -317,13 +345,13 @@ async def test_cong_bo_theo_nguyen_vong_bi_chan_em_cho_admin_quyet(client, hs, a
     assert _la_chan(r) and r.json()["tinh_trang_qd"] == "cho_admin_quyet", r.text
 
 
-@pytest.mark.parametrize("dau", ["qd", "appsheet"])
+@pytest.mark.parametrize("dau", DAU3)
 async def test_dua_len_tu_danh_sach_cho_bi_chan(client, hs, ad, dau):
     # E1: ``promote_waitlisted_choice`` (danh sách chờ → trúng tuyển) là một lần xét ⇒ như công bố.
     pid = await (
         _co_qd(client, ad, hs, SACH[1], trang_thai="waitlisted")
         if dau == "qd"
-        else _dau(hs, SACH[1], trang_thai="waitlisted")
+        else _dau(hs, SACH[1], trang_thai="waitlisted", nguon=dau)
     )
     cid = await qd._q1(
         "SELECT min(id) FROM admission_profile_choice WHERE admission_profile_id = :p", p=pid
@@ -341,10 +369,22 @@ async def test_dua_len_tu_danh_sach_cho_bi_chan(client, hs, ad, dau):
     ) == "waitlisted"
 
 
-async def test_cong_bo_theo_nguyen_vong_bi_chan_dau_appsheet(client, hs, ad):
-    pid = await _dau(hs, SACH[1])
+@pytest.mark.parametrize("nguon", ["ly_do", "tu_van"])
+async def test_cong_bo_theo_nguyen_vong_bi_chan_dau_appsheet(client, hs, ad, nguon):
+    # Công bố chỉ nhận "Đã nộp" / "Đang xét" ⇒ cả hai dạng dấu đặt ở "Đã nộp" (dạng ``ly_do`` thật ở "Yêu cầu bổ
+    # sung" sẽ qua "Nộp lại"→… trước khi tới đây; ca này canh riêng nhánh đọc dấu của cổng công bố).
+    pid = await _dau(hs, SACH[1], trang_thai="submitted", nguon=nguon)
     r = await client.post(V2 + "/%d/publish-result" % pid, headers=ad)
     assert _la_chan(r) and r.json()["dau_appsheet"] is True, r.text
+    assert (await _ban(pid))[0] == "submitted"
+
+
+async def test_co_tat_voi_dau_appsheet_chi_o_lan_tu_van(client, hs, ad):
+    # Dạng THẬT của em "Đã nộp" trong lô 182: dấu CHỈ ở lần tư vấn — cờ giao diện (đọc gộp) cũng phải tắt.
+    pid = await _dau(hs, SACH[0], nguon="tu_van")
+    q = (await client.get(A + "/%d" % pid, headers=ad)).json()["permissions"]
+    assert q["send_withdraw_link"] is False and q["reject"] is False
+    assert q["admin_rollback"] is False and q["publish_result"] is False
 
 
 # ═══════════════════════════════ hai phiên — ghi nhận ↔ rút (G12) ═══════════════════════════

@@ -178,3 +178,25 @@ def test_bieu_thuc_mot_nguon_cho_dong_hieu_luc_va_dau_appsheet():
 
 def test_cot_bytes_scan_deferred():
     assert m.CouncilDecisionScan.__mapper__.attrs["noi_dung"].deferred
+
+
+def test_ma_loi_csdl_chi_doc_thuoc_tinh_khong_doc_chu():
+    # ``ma_loi_csdl`` đứng trong ``_S6_HAM_BOC`` (test_che_log_pii) ⇒ phải CHỈ đọc thuộc tính (SQLSTATE, tên
+    # ràng buộc), không bao giờ ``str``/``args`` — chữ lỗi CSDL có thể mang tham số câu lệnh (CCCD giả ở đây).
+    from app.repositories.council_decision_repository import ma_loi_csdl
+
+    class Goc(Exception):
+        sqlstate = "23505"
+        constraint_name = "uq_council_decision_u1_so"
+
+        def __str__(self):
+            return "DETAIL: Key (so)=(099999000E99) CANARY"
+
+    class Boc(Exception):
+        def __init__(self):
+            super().__init__("CANARY 099999000E99 boc")
+            self.orig = Goc()
+
+    kq = ma_loi_csdl(Boc())
+    assert kq == ("23505", "uq_council_decision_u1_so")
+    assert "CANARY" not in repr(kq) and "099999000E99" not in repr(kq)

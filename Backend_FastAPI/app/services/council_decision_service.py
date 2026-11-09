@@ -145,8 +145,10 @@ def _kiem_xac_nhan_dem(
     return dem
 
 
-def _dich_loi_csdl(e: DBAPIError, viec: str) -> Exception:
-    sqlstate, rang_buoc = ma_loi_csdl(e)
+def _dich_loi_csdl(ma: Tuple[Optional[str], Optional[str]], viec: str) -> Exception:
+    """Dịch (SQLSTATE, tên ràng buộc) — kết quả của :func:`ma_loi_csdl`, KHÔNG nhận ngoại lệ (chữ của nó có
+    thể mang tham số câu lệnh) — thành lỗi miền có thông điệp CỐ ĐỊNH."""
+    sqlstate, rang_buoc = ma
     if sqlstate == "23505" and rang_buoc in _LOI_RANG_BUOC:
         return ConflictError(
             _LOI_RANG_BUOC[rang_buoc], public_payload={"rang_buoc": rang_buoc}
@@ -436,7 +438,7 @@ async def ghi_nhan_quyet_dinh(
                 ),
             )
     except DBAPIError as e:
-        raise _dich_loi_csdl(e, "ghi nhận Quyết định") from None
+        raise _dich_loi_csdl(ma_loi_csdl(e), "ghi nhận Quyết định") from None
     return qd, None
 
 
@@ -590,7 +592,7 @@ async def ghi_nhan_dieu_chinh(
                 ),
             )
     except DBAPIError as e:
-        raise _dich_loi_csdl(e, "ghi nhận văn bản điều chỉnh") from None
+        raise _dich_loi_csdl(ma_loi_csdl(e), "ghi nhận văn bản điều chỉnh") from None
     return dc, None
 
 
@@ -697,7 +699,7 @@ async def huy_hieu_luc(
                 ),
             )
     except DBAPIError as e:
-        raise _dich_loi_csdl(e, "ghi nhận văn bản huỷ") from None
+        raise _dich_loi_csdl(ma_loi_csdl(e), "ghi nhận văn bản huỷ") from None
     return h, so_lieu
 
 
@@ -813,7 +815,7 @@ async def huy_ghi_nhan(
                 )
             )
     except DBAPIError as e:
-        raise _dich_loi_csdl(e, "huỷ ghi nhận") from None
+        raise _dich_loi_csdl(ma_loi_csdl(e), "huỷ ghi nhận") from None
     return x, so_lieu
 
 
@@ -847,7 +849,7 @@ async def cho_xet_lai(
                 )
             )
     except DBAPIError as e:
-        raise _dich_loi_csdl(e, "cho xét lại") from None
+        raise _dich_loi_csdl(ma_loi_csdl(e), "cho xét lại") from None
     return h, None
 
 
