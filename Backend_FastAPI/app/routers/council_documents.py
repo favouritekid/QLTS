@@ -366,9 +366,11 @@ async def list_council_document_set_deletions(
 # (trực tiếp hoặc qua ``get_council_document_set_for_admin`` / ``get_council_decision_for_admin`` /
 # ``get_council_decision_hold_for_admin``). Route ghi khai trong ``ADMISSION_WRITE_ROUTES`` (đóng băng ⇒
 # 503). Log chỉ id + số đếm — không CCCD, không lý do. Bản scan đọc tối đa trần + 1 byte.
-def _qd_ghi_out(qd, so_lieu=None) -> CouncilDecisionWriteOut:
+def _qd_ghi_out(qd, so_lieu=None, canh_bao=None) -> CouncilDecisionWriteOut:
     return CouncilDecisionWriteOut(
-        **CouncilDecisionOut.model_validate(qd).model_dump(), so_lieu=so_lieu
+        **CouncilDecisionOut.model_validate(qd).model_dump(),
+        so_lieu=so_lieu,
+        canh_bao_vuot_chi_tieu=canh_bao or [],
     )
 
 
@@ -415,7 +417,7 @@ async def create_council_decision(
     scan: UploadFile = File(...),
     db: AsyncSession = Depends(database.get_db),
 ):
-    qd, _ = await qd_vb.ghi_nhan_quyet_dinh(
+    qd, canh_bao = await qd_vb.ghi_nhan_quyet_dinh(
         db,
         set_id=set_id,
         loai=loai,
@@ -442,8 +444,9 @@ async def create_council_decision(
         set_id=qd.set_id,
         so_ho_so=qd.so_ho_so,
         actor=current_user.id,
+        so_o_vuot_chi_tieu=len(canh_bao),
     )
-    return _qd_ghi_out(qd)
+    return _qd_ghi_out(qd, canh_bao=canh_bao)
 
 
 @router.get(

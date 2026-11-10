@@ -479,3 +479,71 @@ async def kiem_khoa_dem_dong_bo(
             "ngành + năm) — không ghi được; dựng lại bộ cho đúng." % ", ".join(str(x["dong"]) for x in loi),
             public_payload={"dong_thieu_khoa_dem": loi},
         )
+
+
+# ═══════════════════════════════ N9 — cảnh báo vượt chỉ tiêu (không chặn) ═══════════════════
+async def canh_bao_vuot_chi_tieu(
+    db: AsyncSession, set_row_ids: Iterable[Optional[int]]
+) -> List[Dict[str, Any]]:
+    """N9 (đặc tả 5.3): sau khi ghi (cùng giao dịch, dưới khoá dòng chỉ tiêu), các ô chỉ tiêu mà dòng bộ
+    chiếm (:func:`o_chi_tieu_cua_dong_bo` — cùng nguồn với khoá) bị VƯỢT thì trả cảnh báo; KHÔNG chặn.
+
+    "Vượt" = số đã dùng > chỉ tiêu — ĐÚNG nghĩa sẵn có của phần mềm (Phê duyệt cũ / công bố chặn khi
+    ``đã dùng + 1 > chỉ tiêu`` ⇒ bằng chỉ tiêu là ĐẦY, chưa vượt). Chỉ tiêu NULL = không giới hạn ⇒ không xét.
+    Số đã dùng đếm qua ĐÚNG các hàm đếm của module (một nguồn): ô ngành (học vụ, chỉ tiêu năm) có HAI cách
+    đếm đang dùng — công bố (:func:`dem_theo_thong_tin_hoc_vu`) và Phê duyệt cũ (:func:`dem_theo_nganh_nam`)
+    — trả cả hai, vượt ở cách nào cũng báo; ô đường xét theo :func:`dem_theo_duong_xet`. Chỉ id + số đếm."""
+    ai_ids, path_ids = await o_chi_tieu_cua_dong_bo(db, set_row_ids)
+    out: List[Dict[str, Any]] = []
+    t_oai, t_path = models.OfferingAcademicInfo, models.AdmissionPath
+    if ai_ids:
+        for o in (
+            await db.execute(
+                select(t_oai.id, t_oai.offering_id, t_oai.academic_year, t_oai.annual_admission_quota)
+                .where(t_oai.id.in_(sorted(ai_ids)))
+                .order_by(t_oai.id)
+            )
+        ).all():
+            if o.annual_admission_quota is None:
+                continue
+            cong_bo = await dem_theo_thong_tin_hoc_vu(db, academic_info_id=o.id)
+            phe_duyet = await dem_theo_nganh_nam(
+                db, offering_id=o.offering_id, academic_year=o.academic_year
+            )
+            if max(cong_bo, phe_duyet) > o.annual_admission_quota:
+                out.append(
+                    {
+                        "loai": "nganh",
+                        "academic_info_id": o.id,
+                        "chi_tieu": o.annual_admission_quota,
+                        "da_dung_cong_bo": cong_bo,
+                        "da_dung_phe_duyet_cu": phe_duyet,
+                    }
+                )
+    if path_ids:
+        for p in (
+            await db.execute(
+                select(t_path.id, t_path.admit_quota)
+                .where(t_path.id.in_(sorted(path_ids)))
+                .order_by(t_path.id)
+            )
+        ).all():
+            if p.admit_quota is None:
+                continue
+            n = await dem_theo_duong_xet(db, admission_path_id=p.id)
+            if n > p.admit_quota:
+                out.append(
+                    {
+                        "loai": "duong_xet",
+                        "admission_path_id": p.id,
+                        "chi_tieu": p.admit_quota,
+                        "da_dung": n,
+                    }
+                )
+    if out:
+        log.warning(
+            "council_decision_vuot_chi_tieu",
+            so_o=len(out),
+            o=[(x["loai"], x.get("academic_info_id") or x.get("admission_path_id")) for x in out],
+        )
+    return out

@@ -17,7 +17,7 @@ chỉ tiêu" — lý do: ``DAC-TA-F230-2B-BO-SUNG-2026-11-10.md``; lượt K: ``
 
 Ba thao tác sinh / khôi phục dòng Phần B (ghi nhận, điều chỉnh có dòng thêm, huỷ ghi nhận có dòng bật lại) gọi
 ``kiem_khoa_dem_dong_bo`` DƯỚI khoá, TRƯỚC khi ghi (Q-J1 — owner 10-11: dòng bộ thiếu khoá đếm ⇒ 409 nêu số
-dòng).
+dòng). Ghi nhận trả cảnh báo vượt chỉ tiêu theo ngành / đường xét (N9 — không chặn).
 
 Không log dữ liệu cá nhân: chỉ id + số đếm. Lỗi chỉ nêu số dòng (``stt``) + id văn bản, không CCCD.
 """
@@ -56,6 +56,7 @@ from app.services.council_set_gate_service import (
 from app.services.quota_occupancy_service import (
     SQLSTATE_DEADLOCK,
     THONG_DIEP_XUNG_DOT,
+    canh_bao_vuot_chi_tieu,
     khoa_chi_tieu_cua_dong_bo,
     kiem_khoa_dem_dong_bo,
 )
@@ -349,9 +350,9 @@ async def ghi_nhan_quyet_dinh(
     ghi_chu_mau: Optional[str],
     scan: object,
     nguoi_id: int,
-) -> Tuple[CouncilDecision, None]:
+) -> Tuple[CouncilDecision, List[Dict[str, Any]]]:
     """Ghi nhận MỘT Quyết định trúng tuyển / bổ sung đã ký từ bộ ``set_id`` (đặc tả mục 5.3). Trả
-    ``(văn bản đã flush, None)``; router commit."""
+    ``(văn bản đã flush, cảnh báo vượt chỉ tiêu — N9, rỗng khi không ô nào vượt)``; router commit."""
     so = kiem_so_quyet_dinh(so_quyet_dinh)
     ngay = kiem_ngay(ngay_ky)
     b = kiem_scan(scan)
@@ -456,9 +457,12 @@ async def ghi_nhan_quyet_dinh(
                     },
                 ),
             )
+            # N9 (đặc tả 5.3): ĐÃ ghi — đếm lại các ô của dòng vừa ghi (cùng giao dịch, dưới khoá dòng
+            # chỉ tiêu) ⇒ cảnh báo ô bị vượt, KHÔNG chặn (giấy đã ký).
+            canh_bao = await canh_bao_vuot_chi_tieu(db, [d.id for d in dong])
     except DBAPIError as e:
         raise _dich_loi_csdl(ma_loi_csdl(e), "ghi nhận Quyết định") from None
-    return qd, None
+    return qd, canh_bao
 
 
 # ═══════════════════════════════ điều chỉnh (C6) ═══════════════════════════════════════════

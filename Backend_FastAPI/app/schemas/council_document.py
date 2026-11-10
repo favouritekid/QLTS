@@ -264,10 +264,29 @@ class CouncilDecisionDetailOut(CouncilDecisionOut):
     su_kien: List[CouncilEventOut]
 
 
+class CouncilQuotaWarningOut(BaseModel):
+    """N9 (đặc tả 5.3) — một ô chỉ tiêu bị VƯỢT sau khi ghi nhận (không chặn). Chỉ id + số đếm.
+
+    ``loai = "nganh"``: chỉ tiêu năm của học vụ (``academic_info_id``), số đã dùng theo HAI cách đếm đang có
+    (công bố / Phê duyệt cũ). ``loai = "duong_xet"``: chỉ tiêu đường xét (``admission_path_id``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    loai: str
+    chi_tieu: int
+    academic_info_id: Optional[int] = None
+    da_dung_cong_bo: Optional[int] = None
+    da_dung_phe_duyet_cu: Optional[int] = None
+    admission_path_id: Optional[int] = None
+    da_dung: Optional[int] = None
+
+
 class CouncilDecisionWriteOut(CouncilDecisionOut):
     """Phản hồi của thao tác ghi: văn bản + số đếm của thao tác (không dữ liệu cá nhân)."""
 
     so_lieu: Optional[Dict[str, Any]] = None
+    #: N9 — chỉ thao tác ghi nhận (``POST /decisions``) điền; rỗng = không ô nào vượt.
+    canh_bao_vuot_chi_tieu: List[CouncilQuotaWarningOut] = Field(default_factory=list)
 
 
 class CouncilDecisionCancelIn(BaseModel):
