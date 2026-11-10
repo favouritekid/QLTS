@@ -34,7 +34,7 @@ from typing import Awaitable, List, Optional, Dict, Any, Tuple, Callable
 from decimal import Decimal, InvalidOperation
 import structlog
 from sqlalchemy import or_, and_, select, func
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.utils.redis_lock import acquire_redis_lock
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,6 +53,7 @@ from ..schemas.admission import DEFAULT_UPLOAD_CONFIG
 from ..core.constants import UserRole, SYSTEM_CONSULTATION_METHOD
 from .admission_state_service import transition as state_transition
 from . import quota_occupancy_service as _qos
+from ..repositories.council_decision_repository import ma_loi_csdl
 from .commission_service import safe_check_commission_on_status_change
 from .notification_bundle import (
     NotificationIntent,
@@ -303,6 +304,75 @@ def _safe_bulk_error_message(
         error_type=exc.__class__.__name__,
     )
     return f"Unexpected error (ref: {correlation_id})"
+
+
+def _loi_csdl_hang_loat(
+    e: DBAPIError, *, bulk_label: str, profile_id: int, actor_id: Optional[int]
+) -> str:
+    """F259: lỗi CSDL của MỘT mục hàng loạt (savepoint của mục đã lùi). Bị chọn huỷ vì vòng chờ khoá (40P01)
+    ⇒ câu cố định "thử lại"; lỗi khác ⇒ khuôn ADM-012 (ẩn chi tiết sau mã tương quan)."""
+    if ma_loi_csdl(e)[0] == _qos.SQLSTATE_DEADLOCK:
+        log.warning(
+            "bulk_action_item_deadlock_victim",
+            bulk_label=bulk_label,
+            profile_id=profile_id,
+            actor_id=actor_id,
+        )
+        return _qos.THONG_DIEP_XUNG_DOT
+    return _safe_bulk_error_message(
+        e, bulk_label=bulk_label, profile_id=profile_id, actor_id=actor_id
+    )
+
+
+def _loi_goc_cua_savepoint(sp) -> Optional[BaseException]:
+    """Lỗi đã làm savepoint ``sp`` (``AsyncSessionTransaction``) lùi — SQLAlchemy ghi lỗi flush vào giao dịch cha
+    của lần flush hỏng (``_rollback_exception``). Không có / savepoint còn sống ⇒ None."""
+    if sp is None or sp.is_active:
+        return None
+    return getattr(getattr(sp, "sync_transaction", None), "_rollback_exception", None)
+
+
+def _loi_muc_hang_loat(
+    e: BaseException, sp, *, bulk_label: str, profile_id: int, actor_id: Optional[int]
+) -> str:
+    """Câu báo cho MỘT mục hàng loạt hỏng: lỗi CSDL (nổi thẳng, hoặc là lỗi gốc của savepoint đã lùi mà lớp dưới
+    nuốt rồi lộ ra ở lệnh sau) ⇒ :func:`_loi_csdl_hang_loat`; còn lại ⇒ khuôn ADM-012."""
+    goc = e if isinstance(e, DBAPIError) else _loi_goc_cua_savepoint(sp)
+    if isinstance(goc, DBAPIError):
+        return _loi_csdl_hang_loat(
+            goc, bulk_label=bulk_label, profile_id=profile_id, actor_id=actor_id
+        )
+    return _safe_bulk_error_message(
+        e, bulk_label=bulk_label, profile_id=profile_id, actor_id=actor_id
+    )
+
+
+async def _khoa_truoc_lo_duyet(db: AsyncSession, profile_ids: List[int]) -> None:
+    """F259: khoá TRƯỚC toàn lô Phê duyệt hàng loạt theo THỨ TỰ CHUẨN — mọi hồ sơ (id tăng dần, MỘT câu) rồi
+    mọi dòng chỉ tiêu mà ``_assert_quota_or_bypass`` của từng mục sẽ khoá (cùng ``_resolve_quota_context``,
+    không khoá ở bước dò) qua ``_qos.khoa_o_chi_tieu``."""
+    ids = sorted({int(x) for x in profile_ids})
+    if not ids:
+        return
+    ho_so = (
+        (
+            await db.execute(
+                select(models.AdmissionProfile)
+                .where(models.AdmissionProfile.id.in_(ids))
+                .options(selectinload(models.AdmissionProfile.lead))
+                .order_by(models.AdmissionProfile.id)
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    oai_ids = []
+    for p in ho_so:
+        ai, _ = await _resolve_quota_context(db, p, lock=False)
+        if ai is not None:
+            oai_ids.append(ai.id)
+    await _qos.khoa_o_chi_tieu(db, oai_ids, [])
 
 
 # ==============================================================================
@@ -14156,217 +14226,240 @@ async def bulk_approve(
     # cũng đồng bộ thứ tự khoá giữa các bulk song song.
     items = sorted(items, key=lambda it: it["profile_id"])
 
+    # F259 (Codex lần 15): THỨ TỰ KHOÁ CHUẨN cho CẢ giao dịch — MỌI hồ sơ của lô (id tăng dần, một câu)
+    # rồi MỌI dòng chỉ tiêu các mục sẽ khoá (``_qos.khoa_o_chi_tieu``) TRƯỚC khi xét mục đầu. Trước đây lô
+    # khoá XEN KẼ hồ sơ ↔ chỉ tiêu (P1 → Q → P2) trong khi ghi nhận khoá hồ sơ rồi chỉ tiêu ⇒ vòng chờ
+    # (lô giữ Q chờ P2, ghi nhận giữ P2 chờ Q). Khoá lại trong từng mục chỉ là khoá lại dòng đã giữ.
+    try:
+        await _khoa_truoc_lo_duyet(db, [it["profile_id"] for it in items])
+    except DBAPIError as e:
+        if ma_loi_csdl(e)[0] == _qos.SQLSTATE_DEADLOCK:
+            raise ConflictError(_qos.THONG_DIEP_XUNG_DOT) from None
+        raise
+
     for item in items:
         profile_id = item["profile_id"]
         expected_version = item["version"]
         try:
-            # Pessimistic lock + eager load lead
-            stmt = (
-                select(models.AdmissionProfile)
-                .where(models.AdmissionProfile.id == profile_id)
-                .options(selectinload(models.AdmissionProfile.lead))
-                .with_for_update()
-            )
-            result = await db.execute(stmt)
-            profile = result.scalar_one_or_none()
-
-            if not profile:
-                failed_ids.append(profile_id)
-                errors[profile_id] = "Profile not found"
-                continue
-
-            # IDOR check
-            _check_idor_access(profile, approver)
-
-            # State machine validation
-            try:
-                validate_transition(profile.status, "approved")
-            except ValueError as e:
-                failed_ids.append(profile_id)
-                errors[profile_id] = str(e)
-                continue
-
-            # Optimistic locking
-            if expected_version != profile.version:
-                failed_ids.append(profile_id)
-                errors[profile_id] = (
-                    f"Version mismatch: expected {expected_version}, "
-                    f"actual {profile.version}. Refresh and retry."
+            per_profile_cb = None
+            persist = None
+            sp = None
+            # F259 (Codex lần 15): SAVEPOINT TỪNG MỤC — lỗi CSDL giữa lô (gồm 40P01 khi lô bị chọn huỷ)
+            # chỉ lùi mục ấy; số thành công / callback CHỈ cho mục mà savepoint RELEASE thành công.
+            async with db.begin_nested() as sp:
+                # Pessimistic lock + eager load lead
+                stmt = (
+                    select(models.AdmissionProfile)
+                    .where(models.AdmissionProfile.id == profile_id)
+                    .options(selectinload(models.AdmissionProfile.lead))
+                    .with_for_update()
                 )
-                continue
+                result = await db.execute(stmt)
+                profile = result.scalar_one_or_none()
 
-            # Application fee gate
-            applied_rules = profile.applied_rules or {}
-            requires_fee = applied_rules.get("requires_application_fee", False)
-            fee_status = applied_rules.get("fee_status", "exempt")
-            if requires_fee and fee_status == "pending":
-                failed_ids.append(profile_id)
-                errors[profile_id] = "Lệ phí xét tuyển chưa được thanh toán"
-                continue
+                if not profile:
+                    failed_ids.append(profile_id)
+                    errors[profile_id] = "Profile not found"
+                    continue
 
-            # Fast-track nợ giấy tờ (C1.5) — same approve gate as single
-            # approve_profile: a profile with an unresolved document debt may
-            # NOT be (bulk-)approved. Per-item skip (not a batch abort) to match
-            # the other bulk gates. No-op for profiles without a debt snapshot.
-            _bulk_outstanding = await _outstanding_debt_for_approval(db, profile)
-            if _bulk_outstanding:
-                failed_ids.append(profile_id)
-                errors[profile_id] = (
-                    "Hồ sơ còn nợ giấy tờ chưa bổ sung/xác minh đủ, "
-                    "không thể duyệt."
-                )
-                continue
+                # IDOR check
+                _check_idor_access(profile, approver)
 
-            # Đổi ngành: CHẶN duyệt khi hồ sơ đang trong chu kỳ đổi ngành —
-            # parity với ``approve_profile``. bulk_approve KHÔNG gọi
-            # approve_profile mà tự dựng lại từng guard, nên thiếu ở đây nghĩa là
-            # manager duyệt được qua endpoint bulk trong khi học phí ngành mới
-            # chưa được kế toán xác nhận (bypass toàn bộ mục đích của gate).
-            # Per-item skip như các gate bulk khác, không abort cả lô.
-            try:
-                from .fee_calculation_service import (
-                    assert_major_change_cycle_closed,
-                )
-                await assert_major_change_cycle_closed(
+                # State machine validation
+                try:
+                    validate_transition(profile.status, "approved")
+                except ValueError as e:
+                    failed_ids.append(profile_id)
+                    errors[profile_id] = str(e)
+                    continue
+
+                # Optimistic locking
+                if expected_version != profile.version:
+                    failed_ids.append(profile_id)
+                    errors[profile_id] = (
+                        f"Version mismatch: expected {expected_version}, "
+                        f"actual {profile.version}. Refresh and retry."
+                    )
+                    continue
+
+                # Application fee gate
+                applied_rules = profile.applied_rules or {}
+                requires_fee = applied_rules.get("requires_application_fee", False)
+                fee_status = applied_rules.get("fee_status", "exempt")
+                if requires_fee and fee_status == "pending":
+                    failed_ids.append(profile_id)
+                    errors[profile_id] = "Lệ phí xét tuyển chưa được thanh toán"
+                    continue
+
+                # Fast-track nợ giấy tờ (C1.5) — same approve gate as single
+                # approve_profile: a profile with an unresolved document debt may
+                # NOT be (bulk-)approved. Per-item skip (not a batch abort) to match
+                # the other bulk gates. No-op for profiles without a debt snapshot.
+                _bulk_outstanding = await _outstanding_debt_for_approval(db, profile)
+                if _bulk_outstanding:
+                    failed_ids.append(profile_id)
+                    errors[profile_id] = (
+                        "Hồ sơ còn nợ giấy tờ chưa bổ sung/xác minh đủ, "
+                        "không thể duyệt."
+                    )
+                    continue
+
+                # Đổi ngành: CHẶN duyệt khi hồ sơ đang trong chu kỳ đổi ngành —
+                # parity với ``approve_profile``. bulk_approve KHÔNG gọi
+                # approve_profile mà tự dựng lại từng guard, nên thiếu ở đây nghĩa là
+                # manager duyệt được qua endpoint bulk trong khi học phí ngành mới
+                # chưa được kế toán xác nhận (bypass toàn bộ mục đích của gate).
+                # Per-item skip như các gate bulk khác, không abort cả lô.
+                try:
+                    from .fee_calculation_service import (
+                        assert_major_change_cycle_closed,
+                    )
+                    await assert_major_change_cycle_closed(
+                        db,
+                        profile,
+                        message=(
+                            "Hồ sơ đang trong quá trình đổi ngành — chờ kế toán xác "
+                            "nhận học phí trước khi duyệt."
+                        ),
+                    )
+                except BusinessRuleViolation as _mc_err:
+                    failed_ids.append(profile_id)
+                    errors[profile_id] = str(_mc_err)
+                    continue
+
+                # ADM-026: per-item quota gate. Per-item bypass fields let admin
+                # selectively override the cap for some profiles in the batch
+                # while letting others fail-fast. Errors map to per-item
+                # ``errors[profile_id]`` so the batch keeps moving (matches
+                # existing bulk error shape used for state/version/fee gates).
+                try:
+                    await _assert_quota_or_bypass(
+                        db,
+                        profile,
+                        approver,
+                        bypass_quota=bool(item.get("bypass_quota", False)),
+                        bypass_reason=item.get("bypass_reason"),
+                        transition="bulk_approve",
+                        source="bulk_api",
+                    )
+                except (BusinessRuleViolation, PermissionDeniedError, ValidationError) as quota_err:
+                    failed_ids.append(profile_id)
+                    errors[profile_id] = str(quota_err)
+                    continue
+
+                # STATE CHANGE — caller still captures old_status for the
+                # legacy bundle + commission callback below.
+                now = datetime.now(timezone.utc)
+                _old_status = profile.status
+
+                profile, transition_callback = await state_transition(
                     db,
                     profile,
-                    message=(
-                        "Hồ sơ đang trong quá trình đổi ngành — chờ kế toán xác "
-                        "nhận học phí trước khi duyệt."
-                    ),
-                )
-            except BusinessRuleViolation as _mc_err:
-                failed_ids.append(profile_id)
-                errors[profile_id] = str(_mc_err)
-                continue
-
-            # ADM-026: per-item quota gate. Per-item bypass fields let admin
-            # selectively override the cap for some profiles in the batch
-            # while letting others fail-fast. Errors map to per-item
-            # ``errors[profile_id]`` so the batch keeps moving (matches
-            # existing bulk error shape used for state/version/fee gates).
-            try:
-                await _assert_quota_or_bypass(
-                    db,
-                    profile,
-                    approver,
-                    bypass_quota=bool(item.get("bypass_quota", False)),
-                    bypass_reason=item.get("bypass_reason"),
-                    transition="bulk_approve",
-                    source="bulk_api",
-                )
-            except (BusinessRuleViolation, PermissionDeniedError, ValidationError) as quota_err:
-                failed_ids.append(profile_id)
-                errors[profile_id] = str(quota_err)
-                continue
-
-            # STATE CHANGE — caller still captures old_status for the
-            # legacy bundle + commission callback below.
-            now = datetime.now(timezone.utc)
-            _old_status = profile.status
-
-            profile, transition_callback = await state_transition(
-                db,
-                profile,
-                "approved",
-                actor=approver,
-                reason=notes,
-                source="bulk_api",
-                extra_fields={
-                    "approved_at": now,
-                    "approved_by_id": approver.id,
-                    "approval_notes": notes,
-                },
-            )
-
-            # Milestone consultation
-            if profile.lead:
-                await _create_admission_milestone_consultation(
-                    db=db,
-                    lead=profile.lead,
-                    event="profile_approved",
+                    "approved",
                     actor=approver,
-                    profile_id=profile.id,
+                    reason=notes,
+                    source="bulk_api",
+                    extra_fields={
+                        "approved_at": now,
+                        "approved_by_id": approver.id,
+                        "approval_notes": notes,
+                    },
                 )
 
-            # Lead sync
-            await sync_lead_from_admission(
-                db=db,
-                profile=profile,
-                changed_by_user_id=approver.id,
-                reason="Admission profile approved (bulk)",
-            )
-
-            # Per-profile bundle + commission (Path C / Arch-3)
-            bundle_callback = None
-            if profile.lead_id:
-                intents = [
-                    NotificationIntent(
-                        event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                        payload={
-                            "application_id": profile.id,
-                            "lead_id": profile.lead_id,
-                            "old_status": _old_status,
-                            "new_status": "approved",
-                            "actor_id": approver.id,
-                            "actor_name": approver.full_name or approver.username,
-                        },
-                        dedupe_key=f"admission_profile_approved:{profile.id}",
-                        rooms=rooms_for_admission(profile),
-                    ),
-                    NotificationIntent(
-                        event=SystemEvents.LEAD_STATUS_CHANGED,
-                        payload={
-                            "lead_id": profile.lead_id,
-                            "lead_name": f"Profile #{profile.id}",
-                            "old_status": _old_status,
-                            "new_status": "sts09",
-                            "actor_id": approver.id,
-                            "actor_name": approver.full_name or approver.username,
-                        },
-                        dedupe_key=f"lead_status_changed:{profile.lead_id}:sts09",
-                        rooms=rooms_for_admission(profile),
-                    ),
-                ]
-                bundle = await dispatch_bundle(
-                    db, bundle_label="admission_bulk_approve", intents=intents,
-                )
-                bundle_callback = bundle.callback
-                bundle_persist_results.append(bundle.persist_status)
-
-            commission_callback = None
-            if profile.lead_id:
-                # Bind eagerly via default args to avoid late-binding gotcha
-                # (closure over loop variables captures the LAST iteration).
-                async def _commission_callback(
-                    p_id=profile.lead_id,
-                    old=_old_status,
-                    actor_id=approver.id,
-                ):
-                    await safe_check_commission_on_status_change(
-                        db, p_id, old, "sts09", actor_id,
+                # Milestone consultation
+                if profile.lead:
+                    await _create_admission_milestone_consultation(
+                        db=db,
+                        lead=profile.lead,
+                        event="profile_approved",
+                        actor=approver,
+                        profile_id=profile.id,
                     )
 
-                commission_callback = _commission_callback
+                # Lead sync
+                await sync_lead_from_admission(
+                    db=db,
+                    profile=profile,
+                    changed_by_user_id=approver.id,
+                    reason="Admission profile approved (bulk)",
+                )
 
-            per_profile_cb = compose_post_commit_callbacks(
-                label=f"admission_bulk_approve:{profile.id}",
-                callbacks=[bundle_callback, commission_callback, transition_callback],
-            )
+                # F259: flush thay đổi nghiệp vụ của mục TRƯỚC bó thông báo — ``dispatch_bundle`` mở savepoint
+                # riêng (flush treo trước) và NUỐT mọi lỗi; lỗi ghi nghiệp vụ (vd 40P01) phải nổi lên ở
+                # savepoint của MỤC.
+                await db.flush()
+
+                # Per-profile bundle + commission (Path C / Arch-3)
+                bundle_callback = None
+                if profile.lead_id:
+                    intents = [
+                        NotificationIntent(
+                            event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                            payload={
+                                "application_id": profile.id,
+                                "lead_id": profile.lead_id,
+                                "old_status": _old_status,
+                                "new_status": "approved",
+                                "actor_id": approver.id,
+                                "actor_name": approver.full_name or approver.username,
+                            },
+                            dedupe_key=f"admission_profile_approved:{profile.id}",
+                            rooms=rooms_for_admission(profile),
+                        ),
+                        NotificationIntent(
+                            event=SystemEvents.LEAD_STATUS_CHANGED,
+                            payload={
+                                "lead_id": profile.lead_id,
+                                "lead_name": f"Profile #{profile.id}",
+                                "old_status": _old_status,
+                                "new_status": "sts09",
+                                "actor_id": approver.id,
+                                "actor_name": approver.full_name or approver.username,
+                            },
+                            dedupe_key=f"lead_status_changed:{profile.lead_id}:sts09",
+                            rooms=rooms_for_admission(profile),
+                        ),
+                    ]
+                    bundle = await dispatch_bundle(
+                        db, bundle_label="admission_bulk_approve", intents=intents,
+                    )
+                    bundle_callback = bundle.callback
+                    persist = bundle.persist_status
+
+                commission_callback = None
+                if profile.lead_id:
+                    # Bind eagerly via default args to avoid late-binding gotcha
+                    # (closure over loop variables captures the LAST iteration).
+                    async def _commission_callback(
+                        p_id=profile.lead_id,
+                        old=_old_status,
+                        actor_id=approver.id,
+                    ):
+                        await safe_check_commission_on_status_change(
+                            db, p_id, old, "sts09", actor_id,
+                        )
+
+                    commission_callback = _commission_callback
+
+                per_profile_cb = compose_post_commit_callbacks(
+                    label=f"admission_bulk_approve:{profile.id}",
+                    callbacks=[bundle_callback, commission_callback, transition_callback],
+                )
+            # Savepoint đã RELEASE ⇒ mục này nằm trong giao dịch router sẽ commit.
+            if persist is not None:
+                bundle_persist_results.append(persist)
             per_profile_callbacks.append(per_profile_cb)
-
             success_count += 1
 
         except ResourceNotFoundError:
             failed_ids.append(profile_id)
             errors[profile_id] = "Profile not found"
         except Exception as e:
+            # F259: savepoint của mục đã lùi (lỗi nổi lên, hoặc bị lớp dưới nuốt rồi lộ ra ở lệnh sau); giao
+            # dịch ngoài còn dùng được. Lỗi CSDL gốc (40P01 ⇒ câu "thử lại") lấy từ savepoint nếu có.
             failed_ids.append(profile_id)
-            errors[profile_id] = _safe_bulk_error_message(
-                e,
-                bulk_label="admission_bulk_approve",
-                profile_id=profile_id,
-                actor_id=approver.id,
+            errors[profile_id] = _loi_muc_hang_loat(
+                e, sp, bulk_label="admission_bulk_approve", profile_id=profile_id, actor_id=approver.id,
             )
 
     await db.flush()
@@ -14454,147 +14547,159 @@ async def bulk_reject(
         profile_id = item["profile_id"]
         expected_version = item["version"]
         try:
-            # Pessimistic lock + eager load lead
-            stmt = (
-                select(models.AdmissionProfile)
-                .where(models.AdmissionProfile.id == profile_id)
-                .options(selectinload(models.AdmissionProfile.lead))
-                .with_for_update()
-            )
-            result = await db.execute(stmt)
-            profile = result.scalar_one_or_none()
-
-            if not profile:
-                failed_ids.append(profile_id)
-                errors[profile_id] = "Profile not found"
-                continue
-
-            # IDOR check
-            _check_idor_access(profile, rejector)
-
-            # State machine validation
-            try:
-                validate_transition(profile.status, "rejected")
-            except ValueError as e:
-                failed_ids.append(profile_id)
-                errors[profile_id] = str(e)
-                continue
-
-            # Optimistic locking
-            if expected_version != profile.version:
-                failed_ids.append(profile_id)
-                errors[profile_id] = (
-                    f"Version mismatch: expected {expected_version}, "
-                    f"actual {profile.version}. Refresh and retry."
+            per_profile_cb = None
+            persist = None
+            sp = None
+            # F259 (Codex lần 15): SAVEPOINT TỪNG MỤC — lỗi CSDL giữa lô (gồm 40P01 khi lô bị chọn huỷ)
+            # chỉ lùi mục ấy; số thành công / callback CHỈ cho mục mà savepoint RELEASE thành công.
+            async with db.begin_nested() as sp:
+                # Pessimistic lock + eager load lead
+                stmt = (
+                    select(models.AdmissionProfile)
+                    .where(models.AdmissionProfile.id == profile_id)
+                    .options(selectinload(models.AdmissionProfile.lead))
+                    .with_for_update()
                 )
-                continue
+                result = await db.execute(stmt)
+                profile = result.scalar_one_or_none()
 
-            # STATE CHANGE — caller still captures old_status for the
-            # legacy bundle + commission callback below.
-            now = datetime.now(timezone.utc)
-            _old_status = profile.status
+                if not profile:
+                    failed_ids.append(profile_id)
+                    errors[profile_id] = "Profile not found"
+                    continue
 
-            profile, transition_callback = await state_transition(
-                db,
-                profile,
-                "rejected",
-                actor=rejector,
-                reason=reason,
-                source="bulk_api",
-                extra_fields={
-                    "rejected_at": now,
-                    "rejected_by_id": rejector.id,
-                    "rejection_reason": reason,
-                },
-            )
+                # IDOR check
+                _check_idor_access(profile, rejector)
 
-            # Milestone consultation
-            if profile.lead:
-                await _create_admission_milestone_consultation(
-                    db=db,
-                    lead=profile.lead,
-                    event="profile_rejected",
+                # State machine validation
+                try:
+                    validate_transition(profile.status, "rejected")
+                except ValueError as e:
+                    failed_ids.append(profile_id)
+                    errors[profile_id] = str(e)
+                    continue
+
+                # Optimistic locking
+                if expected_version != profile.version:
+                    failed_ids.append(profile_id)
+                    errors[profile_id] = (
+                        f"Version mismatch: expected {expected_version}, "
+                        f"actual {profile.version}. Refresh and retry."
+                    )
+                    continue
+
+                # STATE CHANGE — caller still captures old_status for the
+                # legacy bundle + commission callback below.
+                now = datetime.now(timezone.utc)
+                _old_status = profile.status
+
+                profile, transition_callback = await state_transition(
+                    db,
+                    profile,
+                    "rejected",
                     actor=rejector,
-                    profile_id=profile.id,
                     reason=reason,
+                    source="bulk_api",
+                    extra_fields={
+                        "rejected_at": now,
+                        "rejected_by_id": rejector.id,
+                        "rejection_reason": reason,
+                    },
                 )
 
-            # Lead sync
-            await sync_lead_from_admission(
-                db=db,
-                profile=profile,
-                changed_by_user_id=rejector.id,
-                reason=f"Admission profile rejected (bulk): {reason[:50]}",
-            )
-
-            # Per-profile bundle + commission (Path C / Arch-3)
-            bundle_callback = None
-            if profile.lead_id:
-                intents = [
-                    NotificationIntent(
-                        event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                        payload={
-                            "application_id": profile.id,
-                            "lead_id": profile.lead_id,
-                            "old_status": _old_status,
-                            "new_status": "rejected",
-                            "actor_id": rejector.id,
-                            "actor_name": rejector.full_name or rejector.username,
-                        },
-                        dedupe_key=f"admission_profile_rejected:{profile.id}",
-                        rooms=rooms_for_admission(profile),
-                    ),
-                    NotificationIntent(
-                        event=SystemEvents.LEAD_STATUS_CHANGED,
-                        payload={
-                            "lead_id": profile.lead_id,
-                            "lead_name": f"Profile #{profile.id}",
-                            "old_status": _old_status,
-                            "new_status": "sts16",
-                            "actor_id": rejector.id,
-                            "actor_name": rejector.full_name or rejector.username,
-                        },
-                        dedupe_key=f"lead_status_changed:{profile.lead_id}:sts16",
-                        rooms=rooms_for_admission(profile),
-                    ),
-                ]
-                bundle = await dispatch_bundle(
-                    db, bundle_label="admission_bulk_reject", intents=intents,
-                )
-                bundle_callback = bundle.callback
-                bundle_persist_results.append(bundle.persist_status)
-
-            commission_callback = None
-            if profile.lead_id:
-                async def _commission_callback(
-                    p_id=profile.lead_id,
-                    old=_old_status,
-                    actor_id=rejector.id,
-                ):
-                    await safe_check_commission_on_status_change(
-                        db, p_id, old, "sts16", actor_id,
+                # Milestone consultation
+                if profile.lead:
+                    await _create_admission_milestone_consultation(
+                        db=db,
+                        lead=profile.lead,
+                        event="profile_rejected",
+                        actor=rejector,
+                        profile_id=profile.id,
+                        reason=reason,
                     )
 
-                commission_callback = _commission_callback
+                # Lead sync
+                await sync_lead_from_admission(
+                    db=db,
+                    profile=profile,
+                    changed_by_user_id=rejector.id,
+                    reason=f"Admission profile rejected (bulk): {reason[:50]}",
+                )
 
-            per_profile_cb = compose_post_commit_callbacks(
-                label=f"admission_bulk_reject:{profile.id}",
-                callbacks=[bundle_callback, commission_callback, transition_callback],
-            )
+                # F259: flush thay đổi nghiệp vụ của mục TRƯỚC bó thông báo — ``dispatch_bundle`` mở savepoint
+                # riêng (flush treo trước) và NUỐT mọi lỗi; lỗi ghi nghiệp vụ (vd 40P01) phải nổi lên ở
+                # savepoint của MỤC.
+                await db.flush()
+
+                # Per-profile bundle + commission (Path C / Arch-3)
+                bundle_callback = None
+                if profile.lead_id:
+                    intents = [
+                        NotificationIntent(
+                            event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                            payload={
+                                "application_id": profile.id,
+                                "lead_id": profile.lead_id,
+                                "old_status": _old_status,
+                                "new_status": "rejected",
+                                "actor_id": rejector.id,
+                                "actor_name": rejector.full_name or rejector.username,
+                            },
+                            dedupe_key=f"admission_profile_rejected:{profile.id}",
+                            rooms=rooms_for_admission(profile),
+                        ),
+                        NotificationIntent(
+                            event=SystemEvents.LEAD_STATUS_CHANGED,
+                            payload={
+                                "lead_id": profile.lead_id,
+                                "lead_name": f"Profile #{profile.id}",
+                                "old_status": _old_status,
+                                "new_status": "sts16",
+                                "actor_id": rejector.id,
+                                "actor_name": rejector.full_name or rejector.username,
+                            },
+                            dedupe_key=f"lead_status_changed:{profile.lead_id}:sts16",
+                            rooms=rooms_for_admission(profile),
+                        ),
+                    ]
+                    bundle = await dispatch_bundle(
+                        db, bundle_label="admission_bulk_reject", intents=intents,
+                    )
+                    bundle_callback = bundle.callback
+                    persist = bundle.persist_status
+
+                commission_callback = None
+                if profile.lead_id:
+                    async def _commission_callback(
+                        p_id=profile.lead_id,
+                        old=_old_status,
+                        actor_id=rejector.id,
+                    ):
+                        await safe_check_commission_on_status_change(
+                            db, p_id, old, "sts16", actor_id,
+                        )
+
+                    commission_callback = _commission_callback
+
+                per_profile_cb = compose_post_commit_callbacks(
+                    label=f"admission_bulk_reject:{profile.id}",
+                    callbacks=[bundle_callback, commission_callback, transition_callback],
+                )
+            # Savepoint đã RELEASE ⇒ mục này nằm trong giao dịch router sẽ commit.
+            if persist is not None:
+                bundle_persist_results.append(persist)
             per_profile_callbacks.append(per_profile_cb)
-
             success_count += 1
 
         except ResourceNotFoundError:
             failed_ids.append(profile_id)
             errors[profile_id] = "Profile not found"
         except Exception as e:
+            # F259: savepoint của mục đã lùi (lỗi nổi lên, hoặc bị lớp dưới nuốt rồi lộ ra ở lệnh sau); giao
+            # dịch ngoài còn dùng được. Lỗi CSDL gốc (40P01 ⇒ câu "thử lại") lấy từ savepoint nếu có.
             failed_ids.append(profile_id)
-            errors[profile_id] = _safe_bulk_error_message(
-                e,
-                bulk_label="admission_bulk_reject",
-                profile_id=profile_id,
-                actor_id=rejector.id,
+            errors[profile_id] = _loi_muc_hang_loat(
+                e, sp, bulk_label="admission_bulk_reject", profile_id=profile_id, actor_id=rejector.id,
             )
 
     await db.flush()

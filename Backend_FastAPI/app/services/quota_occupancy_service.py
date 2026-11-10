@@ -35,12 +35,13 @@ học vụ → ngành — ``council_candidate_repository.SQL_SO_LIEU``). Gặp d
 báo lỗi khi đếm / đếm vào mọi nơi) là CÂU HỎI OWNER (báo cáo lượt J) — :func:`so_dong_hieu_luc_thieu_khoa`
 đếm để báo, mỗi lần đếm gặp thì ghi cảnh báo (không âm thầm).
 
-Khoá: các hàm đếm KHÔNG khoá; nơi gọi giữ thứ tự khoá của mình (hồ sơ → ``offering_academic_info`` →
-``admission_path``). Thao tác làm TĂNG Phần B (ghi nhận, điều chỉnh có thêm dòng, huỷ ghi nhận bật lại dòng)
-gọi :func:`khoa_chi_tieu_cua_dong_bo` SAU khi khoá hồ sơ — cùng thứ tự ⇒ Phê duyệt cũ / công bố đang đếm
-và ghi nhận tuần tự hoá trên cùng dòng chỉ tiêu (bổ sung đặc tả lượt J).
+Khoá — THỨ TỰ CHUẨN cho cả giao dịch (F259): mọi hồ sơ (id tăng dần) TRƯỚC, rồi mọi dòng chỉ tiêu qua
+:func:`khoa_o_chi_tieu` (``offering_academic_info`` id tăng dần MỘT câu, RỒI ``admission_path`` id tăng dần
+MỘT câu). Các hàm đếm KHÔNG khoá. Ghi nhận / điều chỉnh thêm dòng / huỷ ghi nhận bật lại (làm TĂNG Phần B) khoá
+qua :func:`khoa_chi_tieu_cua_dong_bo`; Phê duyệt hàng loạt và công bố nhiều nguyện vọng khoá TRƯỚC mọi dòng chỉ
+tiêu sẽ dùng (cùng hàm) rồi mới xét — giữ nguyên thứ tự xét nguyện vọng nghiệp vụ.
 """
-from typing import Dict, Iterable, Optional, Sequence
+from typing import Dict, Iterable, Optional, Sequence, Set, Tuple
 
 import structlog
 from sqlalchemy import Integer, String, cast, distinct, func, select, text, tuple_, union_all
@@ -67,6 +68,11 @@ TRANG_THAI_CHIEM_CHO: tuple = (
 )
 #: Phần B: hồ sơ ở trạng thái này TRẢ chỗ (rút hẳn — C3). ``withdrawal_pending`` KHÔNG trả (J1 dòng 5).
 TRANG_THAI_TRA_CHO = "withdrawn"
+
+#: F259: PostgreSQL huỷ ĐÚNG MỘT giao dịch của vòng chờ khoá (``deadlock_detected``). Nơi bị chọn huỷ trả câu
+#: cố định dưới đây (409 / lỗi của mục hàng loạt) — MỘT chuỗi cho ghi nhận, Phê duyệt hàng loạt, công bố.
+SQLSTATE_DEADLOCK = "40P01"
+THONG_DIEP_XUNG_DOT = "Xung đột với thao tác khác cùng lúc — thử lại."
 
 
 # ═══════════════════════════════ hai phần ══════════════════════════════════════════════════
@@ -332,16 +338,35 @@ async def dang_chiem_cho(db: AsyncSession, profile) -> bool:
     return await co_dong_hieu_luc(db, profile.id)
 
 
-# ═══════════════════════════════ khoá dòng chỉ tiêu cho thao tác làm tăng Phần B ════════════
-async def khoa_chi_tieu_cua_dong_bo(db: AsyncSession, set_row_ids: Iterable[int]) -> None:
-    """``FOR UPDATE`` các dòng chỉ tiêu mà các dòng bộ ``set_row_ids`` sẽ chiếm ở Phần B —
-    ``offering_academic_info`` (theo ``academic_info_id`` chụp và theo cặp ``offering_id`` + năm chụp) rồi
-    ``admission_path``, mỗi bảng id TĂNG DẦN trong một câu. Gọi SAU khi đã khoá hồ sơ (thứ tự chung: hồ sơ →
-    học vụ → đường xét — như Phê duyệt cũ và công bố) ⇒ ghi nhận và lần đếm của Phê duyệt cũ / công bố tuần
-    tự hoá: lần đếm thấy dòng mới, hoặc ghi nhận chờ lần duyệt commit."""
+# ═══════════════════════════════ THỨ TỰ KHOÁ CHUẨN của dòng chỉ tiêu (F259) ═════════════════
+async def khoa_o_chi_tieu(
+    db: AsyncSession, oai_ids: Iterable[Optional[int]], path_ids: Iterable[Optional[int]]
+) -> None:
+    """THỨ TỰ KHOÁ CHUẨN cho MỌI dòng chỉ tiêu một giao dịch sẽ dùng (F259 — Codex lần 15):
+    ``offering_academic_info`` id TĂNG DẦN trong MỘT câu, RỒI ``admission_path`` id TĂNG DẦN trong MỘT câu.
+    Nơi gọi khoá mọi hồ sơ (id tăng dần) TRƯỚC. Mọi lần khoá dòng chỉ tiêu SAU đó trong cùng giao dịch
+    (``_resolve_quota_context``, ``check_choice_admit_capacity``) chỉ khoá LẠI dòng đã giữ ⇒ không chờ ⇒
+    không vòng chờ với giao dịch khác cùng thứ tự (ghi nhận, Phê duyệt cũ, công bố, Phê duyệt hàng loạt)."""
+    oai = sorted({int(x) for x in oai_ids if x is not None})
+    if oai:
+        t = models.OfferingAcademicInfo
+        await db.execute(select(t.id).where(t.id.in_(oai)).order_by(t.id).with_for_update())
+    duong = sorted({int(x) for x in path_ids if x is not None})
+    if duong:
+        t = models.AdmissionPath
+        await db.execute(select(t.id).where(t.id.in_(duong)).order_by(t.id).with_for_update())
+
+
+async def o_chi_tieu_cua_dong_bo(
+    db: AsyncSession, set_row_ids: Iterable[Optional[int]]
+) -> Tuple[Set[int], Set[int]]:
+    """(id ``offering_academic_info``, id ``admission_path``) mà các dòng bộ chiếm ở Phần B — học vụ theo
+    ``academic_info_id`` CHỤP và theo cặp ``offering_id`` + năm CHỤP (phủ cả hai cách Phê duyệt cũ chọn dòng),
+    đường xét theo ``admission_path_id`` CHỤP. MỘT nguồn cho khoá (:func:`khoa_chi_tieu_cua_dong_bo`) và cảnh
+    báo vượt chỉ tiêu (:func:`canh_bao_vuot_chi_tieu`)."""
     ids = sorted({int(x) for x in set_row_ids if x is not None})
     if not ids:
-        return
+        return set(), set()
     b = CouncilDocumentSetRow
     khoa = (
         await db.execute(
@@ -363,13 +388,12 @@ async def khoa_chi_tieu_cua_dong_bo(db: AsyncSession, set_row_ids: Iterable[int]
                 )
             ).scalars()
         )
-    if ai_ids:
-        await db.execute(
-            select(oai.id).where(oai.id.in_(sorted(ai_ids))).order_by(oai.id).with_for_update()
-        )
-    path_ids = sorted({k.admission_path_id for k in khoa if k.admission_path_id is not None})
-    if path_ids:
-        path = models.AdmissionPath
-        await db.execute(
-            select(path.id).where(path.id.in_(path_ids)).order_by(path.id).with_for_update()
-        )
+    return ai_ids, {k.admission_path_id for k in khoa if k.admission_path_id is not None}
+
+
+async def khoa_chi_tieu_cua_dong_bo(db: AsyncSession, set_row_ids: Iterable[int]) -> None:
+    """``FOR UPDATE`` các dòng chỉ tiêu mà các dòng bộ ``set_row_ids`` sẽ chiếm ở Phần B — qua THỨ TỰ CHUẨN
+    (:func:`khoa_o_chi_tieu`). Gọi SAU khi đã khoá hồ sơ ⇒ ghi nhận và lần đếm của Phê duyệt cũ / công bố
+    tuần tự hoá: lần đếm thấy dòng mới, hoặc ghi nhận chờ lần duyệt commit."""
+    ai_ids, path_ids = await o_chi_tieu_cua_dong_bo(db, set_row_ids)
+    await khoa_o_chi_tieu(db, ai_ids, path_ids)

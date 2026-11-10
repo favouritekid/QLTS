@@ -10,9 +10,10 @@ trả 409 có số dòng, và dịch vi phạm của CSDL (hai phiên cùng qua 
 
 Thứ tự khoá (đặc tả 8.5, BS §4.6): văn bản → mục chờ → bộ → hồ sơ (id tăng dần, một câu) → [chặng 2b]
 dòng chỉ tiêu mà các dòng sắp chiếm chỗ (Phần B): ``offering_academic_info`` → ``admission_path`` (id tăng
-dần — ``quota_occupancy_service.khoa_chi_tieu_cua_dong_bo``). Cùng thứ tự với Phê duyệt cũ (hồ sơ → học vụ)
-và công bố (hồ sơ → học vụ → đường xét) ⇒ lần đếm chỉ tiêu của hai đường ấy tuần tự hoá với ghi nhận (đổi so
-với BS §4.6 "không khoá dòng chỉ tiêu" — lý do: ``DAC-TA-F230-2B-BO-SUNG-2026-11-10.md``).
+dần — ``quota_occupancy_service.khoa_chi_tieu_cua_dong_bo`` → ``khoa_o_chi_tieu``, THỨ TỰ CHUẨN). Phê duyệt cũ,
+Phê duyệt hàng loạt (khoá trước cả lô) và công bố (khoá trước mọi nguyện vọng) đi CÙNG thứ tự ⇒ không vòng chờ
+(F259); bên bị PostgreSQL chọn huỷ ở trường hợp khác ⇒ 409 "thử lại" (đổi so với BS §4.6 "không khoá dòng
+chỉ tiêu" — lý do: ``DAC-TA-F230-2B-BO-SUNG-2026-11-10.md``; lượt K: ``DAC-TA-F230-SUA-CUOI-BO-SUNG-2026-11-10.md``).
 
 Không log dữ liệu cá nhân: chỉ id + số đếm. Lỗi chỉ nêu số dòng (``stt``) + id văn bản, không CCCD.
 """
@@ -48,7 +49,11 @@ from app.services.council_set_gate_service import (
     TRANG_THAI_KHONG_CANH_BAO,
     ly_do_tinh_trang_qd,
 )
-from app.services.quota_occupancy_service import khoa_chi_tieu_cua_dong_bo
+from app.services.quota_occupancy_service import (
+    SQLSTATE_DEADLOCK,
+    THONG_DIEP_XUNG_DOT,
+    khoa_chi_tieu_cua_dong_bo,
+)
 from app.utils.exceptions import (
     ConflictError,
     DataValidationError,
@@ -158,8 +163,8 @@ def _dich_loi_csdl(ma: Tuple[Optional[str], Optional[str]], viec: str) -> Except
         return ConflictError(
             _LOI_RANG_BUOC[rang_buoc], public_payload={"rang_buoc": rang_buoc}
         )
-    if sqlstate == "40P01":  # deadlock — PostgreSQL đã huỷ đúng một giao dịch
-        return ConflictError("Xung đột với thao tác khác cùng lúc — thử lại.")
+    if sqlstate == SQLSTATE_DEADLOCK:  # deadlock — PostgreSQL đã huỷ đúng một giao dịch
+        return ConflictError(THONG_DIEP_XUNG_DOT)
     return ServiceError("Lỗi CSDL khi %s — không ghi gì." % viec)
 
 

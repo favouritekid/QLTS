@@ -200,6 +200,24 @@ def t6_profile_load_options() -> list:
 _QUOTA_OCCUPYING_STATUSES: tuple[str, ...] = _qos.TRANG_THAI_CHIEM_CHO
 
 
+def _dong_chi_tieu_se_khoa(path: Any) -> Tuple[Optional[int], Optional[int]]:
+    """MỘT nguồn (F259): (id học vụ, id đường xét) mà :func:`check_choice_admit_capacity` sẽ ``FOR UPDATE``
+    cho đường xét ``path`` — học vụ chỉ khi đặt chỉ tiêu năm; đường xét khi có chỉ tiêu năm hoặc chỉ tiêu
+    đường xét; không chỉ tiêu nào ⇒ (None, None) (hàm ấy trả "cho phép" không khoá). Công bố khoá TRƯỚC đúng
+    các dòng này cho MỌI nguyện vọng theo thứ tự chuẩn (``_qos.khoa_o_chi_tieu``)."""
+    academic_info = getattr(path, "academic_info", None)
+    annual_cap_hint = (
+        getattr(academic_info, "annual_admission_quota", None)
+        if academic_info is not None
+        else None
+    )
+    admit_quota_hint = getattr(path, "admit_quota", None)
+    if annual_cap_hint is None and admit_quota_hint is None:
+        return None, None
+    oai_id = academic_info.id if academic_info is not None and annual_cap_hint is not None else None
+    return oai_id, path.id
+
+
 @dataclass(frozen=True)
 class CapacityCheck:
     """Result of `check_choice_admit_capacity()` — capacity probe outcome.
@@ -297,21 +315,15 @@ async def check_choice_admit_capacity(
     #       ->>admission_path_id ∈ {paths under academic_info X},
     #       restricted to uses_choice_engine=FALSE to avoid double-counting
     #       with (a).
-    academic_info = getattr(path, "academic_info", None)
-    annual_cap_hint = (
-        getattr(academic_info, "annual_admission_quota", None)
-        if academic_info is not None
-        else None
-    )
-    admit_quota_hint = getattr(path, "admit_quota", None)
-    if annual_cap_hint is None and admit_quota_hint is None:
+    oai_khoa, path_khoa = _dong_chi_tieu_se_khoa(path)
+    if path_khoa is None:
         return CapacityCheck(allowed=True)
 
-    if academic_info is not None and annual_cap_hint is not None:
+    if oai_khoa is not None:
         ai_locked = (
             await db.execute(
                 select(models.OfferingAcademicInfo)
-                .where(models.OfferingAcademicInfo.id == academic_info.id)
+                .where(models.OfferingAcademicInfo.id == oai_khoa)
                 .with_for_update()
             )
         ).scalar_one()
@@ -886,6 +898,18 @@ async def evaluate_cascade(
         final_status="rejected",  # Default — overridden if any admit
     )
 
+    # F259 (Codex lần 15): khoá TRƯỚC mọi dòng chỉ tiêu mà các nguyện vọng có thể dùng theo THỨ TỰ CHUẨN
+    # (học vụ id tăng dần rồi đường xét id tăng dần — ``_qos.khoa_o_chi_tieu``), KHÔNG theo thứ tự nguyện
+    # vọng. Trước đây ``check_choice_admit_capacity`` khoá học vụ → đường xét của NV1 rồi NV2… (vòng Q lớn → Q
+    # nhỏ khi NV1 ở ô id lớn hơn) ngược với ghi nhận khoá tăng dần ⇒ vòng chờ. Thứ tự XÉT nguyện vọng giữ
+    # nguyên; khoá trong ``check_choice_admit_capacity`` chỉ còn là khoá lại dòng đã giữ.
+    se_khoa = [
+        _dong_chi_tieu_se_khoa(c.admission_path)
+        for c in sorted_choices
+        if getattr(c, "admission_path", None) is not None
+    ]
+    await _qos.khoa_o_chi_tieu(db, [k[0] for k in se_khoa], [k[1] for k in se_khoa])
+
     admitted_found = False
     for choice in sorted_choices:
         if admitted_found:
@@ -1288,7 +1312,31 @@ async def publish_result(
 
     # P2 fix 2026-05-22: forward actor xuống cascade để 2 transition
     # reviewing→result_published→final ghi đúng actor_id vào audit trail.
-    return await evaluate_cascade(db, profile, actor=actor)
+    # F259: công bố bị PostgreSQL chọn huỷ vì vòng chờ khoá ⇒ 409 "thử lại" (router không commit, callback
+    # không chạy), không 500. Lỗi có thể nổi thẳng, HOẶC bị một lớp "fail-soft" bên dưới bắt (vd
+    # ``resnapshot_fee_academic_info_for_profile`` bọc ``db.execute`` — autoflush hỏng đã LÙI cả giao dịch) ⇒ kiểm
+    # giao dịch còn sống trước khi trả cho router commit.
+    from sqlalchemy.exc import DBAPIError
+
+    from ..repositories.council_decision_repository import ma_loi_csdl
+    from ..utils.exceptions import ConflictError
+
+    def _nem_neu_xung_dot(loi) -> None:
+        if isinstance(loi, DBAPIError) and ma_loi_csdl(loi)[0] == _qos.SQLSTATE_DEADLOCK:
+            raise ConflictError(_qos.THONG_DIEP_XUNG_DOT) from None
+
+    try:
+        kq = await evaluate_cascade(db, profile, actor=actor)
+    except DBAPIError as e:
+        _nem_neu_xung_dot(e)
+        raise
+    gd = db.sync_session.get_transaction()
+    if gd is not None and not gd.is_active:
+        goc = getattr(gd, "_rollback_exception", None)
+        _nem_neu_xung_dot(goc)
+        if goc is not None:
+            raise goc
+    return kq
 
 
 # ============================================================================
