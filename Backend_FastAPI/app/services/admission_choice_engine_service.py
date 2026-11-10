@@ -63,7 +63,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TYPE_C
 from decimal import Decimal, InvalidOperation
 
 import structlog
-from sqlalchemy import Integer, func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
@@ -79,6 +79,7 @@ from ..utils.exceptions import (
     T6ChainNotLoaded,
     TargetLevelConfigGap,
 )
+from . import quota_occupancy_service as _qos
 from .admission_scoring_service import (
     AdmissionScoringService,
     AdmissionScoreResult,
@@ -192,19 +193,11 @@ def t6_profile_load_options() -> list:
 #     AdmissionPath SECOND. Mismatched order vs the admin config flow
 #     would deadlock under concurrent edit + cascade.
 
-# Statuses that occupy a quota seat. Duplicated from
-# `admission_service.QUOTA_OCCUPYING_STATUSES` deliberately: importing
-# admission_service would create a circular dep (admission_service already
-# imports state_service which imports event mapping which imports engine
-# in some legacy call paths). Keep both lists in sync if either is
-# extended; the set has been stable since #15/#16 (admitted forward-compat).
-_QUOTA_OCCUPYING_STATUSES: tuple[str, ...] = (
-    "approved",
-    "overridden",
-    "admitted",
-    "confirmed",
-    "enrolled",
-)
+# Statuses that occupy a quota seat. F230 chặng 2b: ĐỊNH NGHĨA MỘT LẦN ở
+# ``quota_occupancy_service`` (module nhẹ, không import admission_service ⇒ hết lý do
+# chép tay vì vòng import); tên cũ trỏ vào CÙNG đối tượng. Hai mức đếm của
+# ``check_choice_admit_capacity`` cũng đi qua helper ấy (Phần A + Phần B).
+_QUOTA_OCCUPYING_STATUSES: tuple[str, ...] = _qos.TRANG_THAI_CHIEM_CHO
 
 
 @dataclass(frozen=True)
@@ -324,53 +317,16 @@ async def check_choice_admit_capacity(
         ).scalar_one()
         annual_cap = ai_locked.annual_admission_quota
 
-        # (a) Multi-NV seats consumed in this academic_info.
-        annual_multi_nv_stmt = (
-            select(func.count(models.AdmissionProfileChoice.id))
-            .join(
-                models.AdmissionProfile,
-                models.AdmissionProfile.id
-                == models.AdmissionProfileChoice.admission_profile_id,
-            )
-            .join(
-                models.AdmissionPath,
-                models.AdmissionPath.id
-                == models.AdmissionProfileChoice.admission_path_id,
-            )
-            .where(
-                models.AdmissionPath.academic_info_id == ai_locked.id,
-                models.AdmissionProfileChoice.decision == "admitted",
-                models.AdmissionProfile.status.in_(_QUOTA_OCCUPYING_STATUSES),
-                models.AdmissionProfile.id != admission_profile_id,
-            )
+        # (a) Multi-NV seats (choice ``admitted`` on a path under this
+        # academic_info) + (b) legacy single-NV seats (``applied_rules`` path
+        # under it, ``uses_choice_engine=FALSE``) — Phần A, chỉ hồ sơ KHÔNG có dòng
+        # Quyết định hiệu lực — + Phần B (dòng Quyết định hiệu lực theo
+        # ``academic_info_id`` CHỤP ở dòng bộ). MỘT nguồn: quota_occupancy_service.
+        annual_count = await _qos.dem_theo_thong_tin_hoc_vu(
+            db,
+            academic_info_id=ai_locked.id,
+            exclude_profile_id=admission_profile_id,
         )
-        annual_multi_nv_count = int(
-            (await db.execute(annual_multi_nv_stmt)).scalar_one() or 0
-        )
-
-        # (b) Legacy seats consumed (applied_rules.admission_path_id points
-        # into a path under this academic_info). Restrict to
-        # uses_choice_engine=FALSE so multi-NV profiles aren't double-counted.
-        annual_legacy_stmt = (
-            select(func.count(models.AdmissionProfile.id))
-            .where(
-                models.AdmissionProfile.uses_choice_engine.is_(False),
-                models.AdmissionProfile.status.in_(_QUOTA_OCCUPYING_STATUSES),
-                models.AdmissionProfile.id != admission_profile_id,
-                models.AdmissionProfile.applied_rules["admission_path_id"]
-                .astext.cast(Integer)
-                .in_(
-                    select(models.AdmissionPath.id).where(
-                        models.AdmissionPath.academic_info_id == ai_locked.id,
-                    )
-                ),
-            )
-        )
-        annual_legacy_count = int(
-            (await db.execute(annual_legacy_stmt)).scalar_one() or 0
-        )
-
-        annual_count = annual_multi_nv_count + annual_legacy_count
         if annual_count + 1 > annual_cap:
             return CapacityCheck(
                 allowed=False,
@@ -394,39 +350,15 @@ async def check_choice_admit_capacity(
     if admit_quota is None:
         return CapacityCheck(allowed=True)
 
-    # (a) Multi-NV count via choice rows.
-    multi_nv_stmt = (
-        select(func.count(models.AdmissionProfileChoice.id))
-        .join(
-            models.AdmissionProfile,
-            models.AdmissionProfile.id
-            == models.AdmissionProfileChoice.admission_profile_id,
-        )
-        .where(
-            models.AdmissionProfileChoice.admission_path_id == path_locked.id,
-            models.AdmissionProfileChoice.decision == "admitted",
-            models.AdmissionProfile.status.in_(_QUOTA_OCCUPYING_STATUSES),
-            models.AdmissionProfile.id != admission_profile_id,
-        )
+    # (a) Multi-NV count via choice rows + (b) legacy single-NV via
+    # applied_rules snapshot (``uses_choice_engine=False``) — Phần A, chỉ hồ sơ
+    # KHÔNG có dòng Quyết định hiệu lực — + Phần B (dòng Quyết định hiệu lực theo
+    # ``admission_path_id`` CHỤP ở dòng bộ). MỘT nguồn: quota_occupancy_service.
+    current_count = await _qos.dem_theo_duong_xet(
+        db,
+        admission_path_id=path_locked.id,
+        exclude_profile_id=admission_profile_id,
     )
-    multi_nv_count = int((await db.execute(multi_nv_stmt)).scalar_one() or 0)
-
-    # (b) Legacy single-NV count via applied_rules snapshot. Restrict to
-    # uses_choice_engine=False so multi-NV profiles aren't double-counted
-    # (their seats are already in (a) via the choice row).
-    legacy_stmt = (
-        select(func.count(models.AdmissionProfile.id))
-        .where(
-            models.AdmissionProfile.uses_choice_engine.is_(False),
-            models.AdmissionProfile.status.in_(_QUOTA_OCCUPYING_STATUSES),
-            models.AdmissionProfile.applied_rules["admission_path_id"]
-            .astext.cast(Integer) == path_locked.id,
-            models.AdmissionProfile.id != admission_profile_id,
-        )
-    )
-    legacy_count = int((await db.execute(legacy_stmt)).scalar_one() or 0)
-
-    current_count = multi_nv_count + legacy_count
     if current_count + 1 > admit_quota:
         return CapacityCheck(
             allowed=False,

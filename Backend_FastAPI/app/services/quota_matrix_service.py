@@ -31,9 +31,10 @@ from app.schemas.quota_matrix import (
     QuotaMatrixRound,
     QuotaMatrixRow,
 )
-# Reuse canonical seat-occupying status tuple (single source of truth). Import
-# verified non-circular: admission_service does NOT import quota_matrix_service.
-from app.services.admission_service import QUOTA_OCCUPYING_STATUSES
+# F230 chặng 2b: cột "approved" (số chỗ đã dùng) đếm qua MỘT helper
+# ``quota_occupancy_service`` (Phần A hồ sơ chiếm chỗ không có dòng Quyết định hiệu lực +
+# Phần B dòng Quyết định hiệu lực theo đường xét CHỤP); các cột phễu khác giữ nguyên ở đây.
+from app.services import quota_occupancy_service as _qos
 
 
 class QuotaMatrixService:
@@ -173,7 +174,10 @@ class QuotaMatrixService:
         """Aggregate actual funnel counts per path (multi-NV + legacy).
 
         Returns map ``path_id → {submitted, approved, enrolled, dropped}``,
-        default 0. **Read-only SELECT** — tách hẳn đường enforcement
+        default 0. ``approved`` (số chỗ đã dùng) = ``quota_occupancy_service.
+        dem_da_trung_tuyen_theo_duong_xet`` (F230 chặng 2b — một nguồn với cổng
+        công bố; gồm dòng Quyết định hiệu lực); ba cột còn lại đếm ở đây như cũ.
+        **Read-only SELECT** — tách hẳn đường enforcement
         (``check_choice_admit_capacity`` tự đếm có lock riêng). Hiển thị
         sai chỉ ảnh hưởng UI cho admin, KHÔNG sai dữ liệu.
 
@@ -212,12 +216,6 @@ class QuotaMatrixService:
                 func.count(distinct(AdmissionProfileChoice.admission_profile_id))
                 .filter(
                     AdmissionProfileChoice.decision == "admitted",
-                    AdmissionProfile.status.in_(QUOTA_OCCUPYING_STATUSES),
-                )
-                .label("approved_cnt"),
-                func.count(distinct(AdmissionProfileChoice.admission_profile_id))
-                .filter(
-                    AdmissionProfileChoice.decision == "admitted",
                     AdmissionProfile.status == "enrolled",
                 )
                 .label("enrolled_cnt"),
@@ -242,7 +240,6 @@ class QuotaMatrixService:
             if d is None:
                 continue
             d["submitted"] += int(row.submitted_cnt or 0)
-            d["approved"] += int(row.approved_cnt or 0)
             d["enrolled"] += int(row.enrolled_cnt or 0)
             d["dropped"] += int(row.dropped_cnt or 0)
 
@@ -259,9 +256,6 @@ class QuotaMatrixService:
                     )
                 )
                 .label("submitted_cnt"),
-                func.count(AdmissionProfile.id)
-                .filter(AdmissionProfile.status.in_(QUOTA_OCCUPYING_STATUSES))
-                .label("approved_cnt"),
                 func.count(AdmissionProfile.id)
                 .filter(AdmissionProfile.status == "enrolled")
                 .label("enrolled_cnt"),
@@ -287,9 +281,14 @@ class QuotaMatrixService:
             if d is None:
                 continue
             d["submitted"] += int(row.submitted_cnt or 0)
-            d["approved"] += int(row.approved_cnt or 0)
             d["enrolled"] += int(row.enrolled_cnt or 0)
             d["dropped"] += int(row.dropped_cnt or 0)
+
+        for pid, n in (
+            await _qos.dem_da_trung_tuyen_theo_duong_xet(self.db, path_ids)
+        ).items():
+            if pid in counts:
+                counts[pid]["approved"] = n
 
         return counts
 

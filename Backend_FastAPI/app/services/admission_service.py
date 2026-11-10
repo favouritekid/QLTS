@@ -52,6 +52,7 @@ from ..core.admission_correction_constants import (
 from ..schemas.admission import DEFAULT_UPLOAD_CONFIG
 from ..core.constants import UserRole, SYSTEM_CONSULTATION_METHOD
 from .admission_state_service import transition as state_transition
+from . import quota_occupancy_service as _qos
 from .commission_service import safe_check_commission_on_status_change
 from .notification_bundle import (
     NotificationIntent,
@@ -527,15 +528,6 @@ def _check_idor_access(
 # ADM-026: Quota enforcement helpers
 # =========================================================================
 
-# Statuses that occupy a quota slot. These are profiles already committed to
-# the cohort: approved or further along the funnel. ``withdrawn`` and
-# pre-approval states (draft/submitted/rejected/resubmitted/revision_requested)
-# are NOT counted because they have not yet committed a seat.
-#
-# Note: ``enrolled`` profiles with ``is_dropped=True`` ARE still counted —
-# they took a seat that cannot be reassigned for the same academic year.
-# This matches the legal/compliance reading that quota = seats consumed,
-# not seats currently active.
 #: Trạng thái được TẠO link tự rút — MỘT hằng cho cờ ``send_withdraw_link`` và
 #: ``generate_action_magic_link`` (lượt I gộp hai bản chép — CLAUDE.md §7).
 TRANG_THAI_TAO_LINK_RUT = (
@@ -556,17 +548,19 @@ async def _gan_tinh_trang_qd(db, profiles) -> None:
     await gan_tinh_trang_qd(db, profiles)
 
 
-QUOTA_OCCUPYING_STATUSES = (
-    # Admitted-equivalent (legacy + choice-engine). ``admitted`` lands here
-    # forward-compat for #15 — Phase 1 widens the CHECK constraint and #16
-    # wires the writes; the moment the new string can land on the column,
-    # quota accounting is already correct without touching this site again.
-    "approved",
-    "overridden",
-    "admitted",
-    "confirmed",
-    "enrolled",
-)
+# Statuses that occupy a quota slot. These are profiles already committed to
+# the cohort: approved or further along the funnel. ``withdrawn`` and
+# pre-approval states (draft/submitted/rejected/resubmitted/revision_requested)
+# are NOT counted because they have not yet committed a seat.
+#
+# Note: ``enrolled`` profiles with ``is_dropped=True`` ARE still counted —
+# they took a seat that cannot be reassigned for the same academic year.
+# This matches the legal/compliance reading that quota = seats consumed,
+# not seats currently active.
+#
+# F230 chặng 2b: tập này ĐỊNH NGHĨA MỘT LẦN ở ``quota_occupancy_service`` (một nguồn
+# cho bốn nơi đếm chỉ tiêu — CLAUDE.md §7); tên cũ trỏ vào CÙNG đối tượng.
+QUOTA_OCCUPYING_STATUSES = _qos.TRANG_THAI_CHIEM_CHO
 
 
 async def _resolve_quota_context(
@@ -627,25 +621,20 @@ async def _count_quota_occupying_profiles(
     exclude_profile_id: Optional[int] = None,
 ) -> int:
     """
-    Count AdmissionProfile rows that currently occupy a quota seat for the
-    given (offering, academic_year). Excludes ``exclude_profile_id`` so a
-    transition INTO a quota-occupying status doesn't double-count itself
-    when the profile is mid-update.
-    """
-    stmt = (
-        select(func.count(models.AdmissionProfile.id))
-        .join(models.Lead, models.AdmissionProfile.lead_id == models.Lead.id)
-        .where(
-            models.Lead.offering_id == offering_id,
-            models.AdmissionProfile.academic_year == academic_year,
-            models.AdmissionProfile.status.in_(QUOTA_OCCUPYING_STATUSES),
-        )
-    )
-    if exclude_profile_id is not None:
-        stmt = stmt.where(models.AdmissionProfile.id != exclude_profile_id)
+    Count seats occupied for the given (offering, academic_year). Excludes
+    ``exclude_profile_id`` so a transition INTO a quota-occupying status
+    doesn't double-count itself when the profile is mid-update.
 
-    result = await db.execute(stmt)
-    return int(result.scalar_one() or 0)
+    F230 chặng 2b: đếm qua MỘT helper ``quota_occupancy_service.dem_theo_nganh_nam``
+    = Phần A (hồ sơ chiếm chỗ theo ``lead.offering_id`` + năm như cũ, KHÔNG có dòng
+    Quyết định hiệu lực) + Phần B (dòng Quyết định hiệu lực theo khoá CHỤP ở dòng bộ).
+    """
+    return await _qos.dem_theo_nganh_nam(
+        db,
+        offering_id=offering_id,
+        academic_year=academic_year,
+        exclude_profile_id=exclude_profile_id,
+    )
 
 
 async def _assert_quota_or_bypass(
@@ -777,7 +766,9 @@ async def _assert_quota_or_bypass(
     # profile), it was excluded from count_before, so count_after = count_before.
     # If profile is transitioning INTO a quota status from outside (e.g.
     # approve from submitted), count_after = count_before + 1.
-    is_already_occupying = profile.status in QUOTA_OCCUPYING_STATUSES
+    # F230 chặng 2b (đặc tả 5.4): em có dòng Quyết định hiệu lực đã được đếm ở Phần B
+    # (khoá chụp) ⇒ duyệt kiểu cũ cho em ấy KHÔNG cộng thêm chỗ.
+    is_already_occupying = await _qos.dang_chiem_cho(db, profile)
     count_after = count_before if is_already_occupying else count_before + 1
 
     over_cap = count_after > quota

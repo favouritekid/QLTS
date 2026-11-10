@@ -3,7 +3,7 @@
 
 Module NHẸ: chỉ model + SQLAlchemy, KHÔNG import ``admission_service`` (vòng import đã buộc bộ máy
 nguyện vọng chép tay tập trạng thái — ``admission_choice_engine_service.py`` khối
-``_QUOTA_OCCUPYING_STATUSES``). Gọi được từ chốt chuyển trạng thái (``admission_state_service``), bộ
+``_QUOTA_OCCUPYING_STATUSES`` — chặng 2b gộp về ``quota_occupancy_service``). Gọi được từ chốt chuyển trạng thái (``admission_state_service``), bộ
 máy nguyện vọng, ``admission_service``, service văn bản Hội đồng.
 
 Tình trạng của MỘT hồ sơ (đọc dữ liệu, KHÔNG suy từ trạng thái hồ sơ) — loại trừ nhau theo thứ tự:
