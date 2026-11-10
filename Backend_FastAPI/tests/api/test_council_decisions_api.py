@@ -698,6 +698,28 @@ async def test_tai_dung_ban_ky_dong_sua_tay_va_em_da_rut(client, hs, ad):
     await _ghi_ok(client, ad, rb["id"], so="901", so_hs=3, xac_nhan={"withdrawn": 1})
 
 
+async def test_tai_dung_dong_sua_tay_trang_thai_chan_f228_chi_liet_ke(client, hs, ad):
+    # Đặc tả 3.1 bước 6 + P3: CHÍNH dòng sửa tay có trạng thái chặn F228 ("Nháp") ⇒ đường tái dựng KHÔNG chặn
+    # (trạng thái chỉ liệt kê lúc ghi nhận — C3); bộ xét mới thì chặn. Trạng thái đặt bằng SQL ⇒ học phí còn nguyên
+    # (khác ca ba lớp ở dưới).
+    s0 = await _bo_ok(client, ad, hs, SACH)
+    pid = hs[SACH[1]][1]
+    await _sql(
+        "UPDATE admission_profile SET full_name = 'Họ Giả Sửa Tay', status = 'draft' WHERE id = :p", p=pid
+    )
+    r = await _bo(client, ad, hs, SACH)
+    assert r.status_code == 400 and "trang_thai_chan" in _ma_chan(r), r.text
+    than = {
+        "so_quyet_dinh": "901",
+        "ngay_ky": _ngay().isoformat(),
+        "dong_sua_tay": [2],
+        "ly_do": "GIA",
+        "xac_nhan_dong_khac": [{"stt": 2, "truong": ["ho", "ten"]}],
+    }
+    r = await client.post(P + "/sets/%d/dung-lai-ban-ky" % s0["id"], json=than, headers=ad)
+    assert r.status_code == 201, r.text
+
+
 async def test_tai_dung_dong_sua_tay_khong_dung_lai_duoc_tu_du_lieu_song(client, hs, ad):
     # Ca ba lớp (sửa tay + chính em ấy rút làm huỷ học phí): CHẶN, liệt kê — fail-closed.
     s0 = await _bo_ok(client, ad, hs, SACH)
