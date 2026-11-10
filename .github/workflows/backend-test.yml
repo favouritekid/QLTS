@@ -1219,6 +1219,12 @@ jobs:
           # nhóm chờ, điều chỉnh, tái dựng bản ký) và `tests/api/test_council_decision_profile_gates_api.py`
           # (request THẬT: chặn từ chối / rút / về Nháp / công bố theo NV với em có Quyết định / dấu
           # AppSheet + kiểm kê chỗ gọi transition). Ghim WHOLE-FILE.
+          # Lượt J (F230 chặng 2b — đếm chỉ tiêu cho dòng Quyết định đã ký): `tests/integration/
+          # test_quota_occupancy_db.py` (CSDL test: một nguồn đếm Phần A + Phần B ở bốn nơi, khoá chụp, năm,
+          # exclude, rút / chờ hoàn, điều chỉnh / huỷ / khôi phục, kiểm kê tập trạng thái chiếm chỗ) và
+          # `tests/api/test_council_decision_hai_phien_api.py` (request THẬT, HAI PHIÊN có điểm đồng bộ: ghi
+          # nhận ↔ từ chối hai thứ tự, chốt transition không khoá trước, công bố thành công, chỗ cuối cùng).
+          # Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1308,6 +1314,8 @@ jobs:
               tests/integration/test_council_decision_migration.py
               tests/api/test_council_decisions_api.py
               tests/api/test_council_decision_profile_gates_api.py
+              tests/integration/test_quota_occupancy_db.py
+              tests/api/test_council_decision_hai_phien_api.py
 
     env:
       APP_ENV: test
