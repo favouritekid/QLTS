@@ -1,7 +1,8 @@
 # app/repositories/council_decision_repository.py
 """Truy cập dữ liệu ghi nhận Quyết định đã ký (F230 — lượt I). Chỉ SQL / ORM; luật nghiệp vụ ở
 ``app/services/council_decision_service.py``. Khoá luôn theo thứ tự: văn bản → mục chờ → bộ → hồ sơ
-(id tăng dần) — đặc tả mục 2.2 / 2.5 / 8.5 (BS §4.6)."""
+(id tăng dần) — đặc tả mục 2.2 / 2.5 / 8.5 (BS §4.6) — rồi dòng chỉ tiêu (chặng 2b,
+``quota_occupancy_service.khoa_chi_tieu_cua_dong_bo``)."""
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import select, text

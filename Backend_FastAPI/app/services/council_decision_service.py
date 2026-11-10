@@ -8,7 +8,11 @@ của giao dịch request (lỗi ⇒ không còn hàng nào), router commit. Rà
 / cờ con theo cha / không xoá" do CSDL giữ (tầng chủ sở hữu — U1–U4, K2, K4, K5); service kiểm TRƯỚC để
 trả 409 có số dòng, và dịch vi phạm của CSDL (hai phiên cùng qua phép kiểm) thành 409 cố định.
 
-Thứ tự khoá (đặc tả 8.5, BS §4.6): văn bản → mục chờ → bộ → hồ sơ (id tăng dần, một câu).
+Thứ tự khoá (đặc tả 8.5, BS §4.6): văn bản → mục chờ → bộ → hồ sơ (id tăng dần, một câu) → [chặng 2b]
+dòng chỉ tiêu mà các dòng sắp chiếm chỗ (Phần B): ``offering_academic_info`` → ``admission_path`` (id tăng
+dần — ``quota_occupancy_service.khoa_chi_tieu_cua_dong_bo``). Cùng thứ tự với Phê duyệt cũ (hồ sơ → học vụ)
+và công bố (hồ sơ → học vụ → đường xét) ⇒ lần đếm chỉ tiêu của hai đường ấy tuần tự hoá với ghi nhận (đổi so
+với BS §4.6 "không khoá dòng chỉ tiêu" — lý do: ``DAC-TA-F230-2B-BO-SUNG-2026-11-10.md``).
 
 Không log dữ liệu cá nhân: chỉ id + số đếm. Lỗi chỉ nêu số dòng (``stt``) + id văn bản, không CCCD.
 """
@@ -44,6 +48,7 @@ from app.services.council_set_gate_service import (
     TRANG_THAI_KHONG_CANH_BAO,
     ly_do_tinh_trang_qd,
 )
+from app.services.quota_occupancy_service import khoa_chi_tieu_cua_dong_bo
 from app.utils.exceptions import (
     ConflictError,
     DataValidationError,
@@ -384,6 +389,8 @@ async def ghi_nhan_quyet_dinh(
             hien_tai = await repo.khoa_ho_so(pids)
             if set(hien_tai) != set(pids):
                 raise DataValidationError("Có hồ sơ của bộ không còn — không ghi nhận được.")
+            # Chặng 2b: dòng sắp chiếm chỗ (Phần B) ⇒ khoá dòng chỉ tiêu SAU hồ sơ (thứ tự chung).
+            await khoa_chi_tieu_cua_dong_bo(db, [d.id for d in dong])
             chan = _chan_tinh_trang(dong, await tinh_trang_qd(db, pids))
             if chan:
                 raise ConflictError(
@@ -526,6 +533,8 @@ async def ghi_nhan_dieu_chinh(
             hien_tai = await repo.khoa_ho_so(
                 pids_them + [d.profile_id for d in dong_bo_di if d.profile_id is not None]
             )
+            # Chặng 2b: dòng THÊM chiếm chỗ (Phần B); dòng BỎ chỉ trả chỗ ⇒ không cần khoá.
+            await khoa_chi_tieu_cua_dong_bo(db, [d.id for d in dong_them])
             tt = await tinh_trang_qd(db, pids_them)
             chan = _chan_tinh_trang(dong_them, tt, cho_phep_chuoi=goc.id)
             bo_ids = set(ds_bo)
@@ -753,6 +762,8 @@ async def huy_ghi_nhan(
             muc = await repo.muc_cho_cua_qd_huy(x.id) if dich is not None else []
             pids = [d.profile_id for d in bat_lai if d.profile_id is not None]
             hien_tai = await repo.khoa_ho_so(pids + [m.profile_id for m in muc if m.profile_id])
+            # Chặng 2b: dòng BẬT LẠI chiếm chỗ lại (Phần B) ⇒ khoá dòng chỉ tiêu của chúng.
+            await khoa_chi_tieu_cua_dong_bo(db, [d.set_row_id for d in bat_lai])
             khac = await repo.dong_hieu_luc_cua_ho_so(pids)
             xung = [
                 {"dong": d.stt, "quyet_dinh_id": khac[d.profile_id].decision_id}
