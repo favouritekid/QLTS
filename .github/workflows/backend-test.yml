@@ -1225,6 +1225,13 @@ jobs:
           # `tests/api/test_council_decision_hai_phien_api.py` (request THẬT, HAI PHIÊN có điểm đồng bộ: ghi
           # nhận ↔ từ chối hai thứ tự, chốt transition không khoá trước, công bố thành công, chỗ cuối cùng).
           # Ghim WHOLE-FILE.
+          # Lượt K (F230 sửa cuối — Codex lần 15): `tests/api/test_quota_occupancy_mot_anh_chup_api.py` (F260:
+          # thao tác chuyển A↔B chen giữa Phần A / Phần B — bốn hàm đếm vẫn đúng 1, Phê duyệt cũ không duyệt
+          # vượt), `tests/api/test_council_decision_khoa_cheo_api.py` (F259: vòng chờ khoá ghi nhận ↔ Phê duyệt
+          # hàng loạt / công bố nhiều nguyện vọng, mỗi bên lần lượt bị chọn huỷ; SAVEPOINT từng mục; 409 khi bị
+          # huỷ), `tests/api/test_council_decision_khoa_dem_api.py` (Q-J1: dòng bộ thiếu khoá đếm / lệch chuỗi
+          # ⇒ 409 ở ba thao tác) và `tests/api/test_council_decision_canh_bao_chi_tieu_api.py` (N9: cảnh báo vượt
+          # chỉ tiêu, không chặn). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1316,6 +1323,10 @@ jobs:
               tests/api/test_council_decision_profile_gates_api.py
               tests/integration/test_quota_occupancy_db.py
               tests/api/test_council_decision_hai_phien_api.py
+              tests/api/test_quota_occupancy_mot_anh_chup_api.py
+              tests/api/test_council_decision_khoa_cheo_api.py
+              tests/api/test_council_decision_khoa_dem_api.py
+              tests/api/test_council_decision_canh_bao_chi_tieu_api.py
 
     env:
       APP_ENV: test
