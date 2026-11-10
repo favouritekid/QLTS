@@ -319,6 +319,8 @@ async def test_cho_cuoi_phe_duyet_cu_trong_luc_ghi_nhan_chua_commit_khong_vuot( 
     # Chỉ tiêu 1. Ghi nhận em B (khoá chụp ô X) DỪNG sau khi đã chèn dòng (chưa commit) — giữ hồ sơ B + dòng chỉ tiêu
     # X. Phê duyệt cũ em A (lead ô X): khoá hồ sơ A → CHỜ dòng chỉ tiêu X → sau commit đếm thấy B ⇒ "vượt chỉ tiêu",
     # A không được duyệt. Thiếu khoá dòng chỉ tiêu ở ghi nhận ⇒ A đếm 0 trước commit, được duyệt ⇒ 2 / 1.
+    # (``sts09`` để nhánh "được duyệt" — xảy ra khi thiếu khoá — đi tới 200 thật, không dừng 404 ở đồng bộ lead.)
+    await _dam_bao_sts09()
     o = await _o_chi_tieu(hs, SACH[0])
     a = hs[SACH[1]][1]
     await _nop(a)
