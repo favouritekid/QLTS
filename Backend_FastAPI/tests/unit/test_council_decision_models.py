@@ -160,6 +160,29 @@ def test_khoa_ngoai_ghep_va_hanh_dong_dung_dac_ta():
     ).group(1)
 
 
+def test_moi_cot_cho_null_trong_khoa_ngoai_ghep_co_check_not_null():
+    """F257 + rà §6: ``MATCH SIMPLE`` bỏ qua khoá ngoại ghép có cột NULL ⇒ MỖI cột cho NULL nằm trong một
+    khoá ngoại ghép của sáu bảng mới phải có CHECK nêu ``<cột> IS NOT NULL`` (K3 / K5a / K5b / K5c) — thiếu
+    thì dòng lọt khoá ngoại khi cột ấy NULL. Kiểm kê; CSDL thật đo ở ``test_council_decision_constraints_db``."""
+    from sqlalchemy import CheckConstraint
+
+    thay = []
+    for lop in LOP_MOI:
+        bang = lop.__table__
+        ck = [str(c.sqltext) for c in bang.constraints if isinstance(c, CheckConstraint)]
+        for fk in bang.foreign_key_constraints:
+            if len(fk.columns) < 2:
+                continue
+            for cot in fk.columns:
+                if not cot.nullable:
+                    continue
+                thay.append((bang.name, fk.name, cot.name))
+                mau = re.compile(r"(?<![a-z_])%s IS NOT NULL" % re.escape(cot.name))
+                assert any(mau.search(s) for s in ck), (bang.name, fk.name, cot.name)
+    # fk_bo: set_id · fk_dong_bo: set_row_id, set_id, profile_id · k6: het_hieu_luc_boi_id
+    assert len(thay) == 5, thay
+
+
 def test_bieu_thuc_mot_nguon_cho_dong_hieu_luc_va_dau_appsheet():
     assert m.DIEU_KIEN_DONG_HIEU_LUC in m.SQL_COT_TINH_TRANG_QD
     assert m.DIEU_KIEN_DONG_GIU_HO_SO in m.SQL_COT_TINH_TRANG_QD

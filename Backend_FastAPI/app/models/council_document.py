@@ -183,6 +183,12 @@ DIEU_KIEN_U4 = "loai = 'van_ban_huy' AND trang_thai = 'hieu_luc'"
 
 CHECK_DONG_QD_K5A = "profile_id IS NOT NULL OR trang_thai_cha = 'huy_ghi_nhan'"
 CHECK_DONG_QD_K5B = "set_row_id IS NOT NULL OR trang_thai_cha = 'huy_ghi_nhan'"
+#: K5c (F257 — Codex lần 14): ``set_id`` nằm trong HAI khoá ngoại ghép (``fk_council_decision_row_bo``,
+#: ``fk_council_decision_row_dong_bo``). ``MATCH SIMPLE`` bỏ qua khoá ngoại có cột NULL ⇒ thiếu CHECK này
+#: thì dòng chưa huỷ ghi nhận mang ``set_id`` NULL + ``set_row_id`` của bộ + hồ sơ KHÁC vượt cả hai khoá
+#: ngoại lẫn K5a / K5b (gắn sai hồ sơ; bộ đếm lấy khoá từ dòng bộ). Dòng của văn bản đã huỷ ghi nhận được
+#: NULL (xoá bộ ⇒ ``council_decision.set_id`` SET NULL ⇒ ON UPDATE CASCADE lan xuống dòng).
+CHECK_DONG_QD_K5C = "set_id IS NOT NULL OR trang_thai_cha = 'huy_ghi_nhan'"
 CHECK_DONG_QD_BO = "bi_bo_boi_id IS NULL OR bi_bo_boi_id <> decision_id"
 CHECK_DONG_QD_STT = "stt >= 1"
 
@@ -614,6 +620,7 @@ class CouncilDecisionRow(Base):
         ),
         CheckConstraint(CHECK_DONG_QD_K5A, name="ck_council_decision_row_k5a"),
         CheckConstraint(CHECK_DONG_QD_K5B, name="ck_council_decision_row_k5b"),
+        CheckConstraint(CHECK_DONG_QD_K5C, name="ck_council_decision_row_k5c"),
         CheckConstraint(CHECK_DONG_QD_BO, name="ck_council_decision_row_bo"),
         CheckConstraint(CHECK_DONG_QD_STT, name="ck_council_decision_row_stt"),
         UniqueConstraint("decision_id", "stt", name="uq_council_decision_row_stt"),

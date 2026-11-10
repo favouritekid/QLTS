@@ -259,6 +259,75 @@ async def test_k5a_doi_chung_ho_so_chi_o_bo_nhap_hoac_ban_ghi_huy_xoa_duoc(c):
     assert await _thu(c, "DELETE FROM admission_profile WHERE id = :p", p=b) is None
 
 
+# ═══════════════════════════════ K5c (F257) — set_id NULL ở dòng chưa huỷ ghi nhận ═══════════
+# ``set_id`` của dòng nằm trong HAI khoá ngoại ghép; MATCH SIMPLE bỏ qua khoá ngoại có cột NULL ⇒ chỉ CHECK
+# K5c giữ. Mỗi ca: dòng ĐÚNG nguồn (đúng dòng bộ + đúng hồ sơ của dòng bộ) chỉ khác ``set_id`` NULL ⇒ K5a /
+# K5b có giá trị, hai khoá ngoại ghép không kiểm, U3 / U5 không trùng ⇒ chỉ K5c có thể bắn.
+_CHEN_DONG = (
+    "INSERT INTO council_decision_row (decision_id, trang_thai_cha, set_id, set_row_id, "
+    "profile_id, stt) VALUES (:d, :t, :s, :r, :p, 1)"
+)
+_K5C = ("23514", "ck_council_decision_row_k5c")
+
+
+@pytest.mark.parametrize("trang_thai", ["hieu_luc", "het_hieu_luc"])
+async def test_k5c_chen_dong_set_id_null(c, trang_thai):
+    (p,) = await _hs(c)
+    sid, (sr,) = await _bo(c, [p])
+    qd = await _qd(c, sid)
+    if trang_thai == "het_hieu_luc":
+        await _het_hieu_luc(c, qd)
+    assert await _thu(c, _CHEN_DONG, d=qd, t=trang_thai, s=None, r=sr, p=p) == _K5C
+    # đối chứng cùng ca: cùng dòng, ``set_id`` = bộ của văn bản ⇒ chèn được
+    assert await _thu(c, _CHEN_DONG, d=qd, t=trang_thai, s=sid, r=sr, p=p) is None
+
+
+@pytest.mark.parametrize("trang_thai", ["hieu_luc", "het_hieu_luc"])
+async def test_k5c_cap_nhat_set_id_null(c, trang_thai):
+    (p,) = await _hs(c)
+    sid, (sr,) = await _bo(c, [p])
+    qd = await _qd(c, sid)
+    d = await _dong(c, qd, sid, sr, p)
+    if trang_thai == "het_hieu_luc":
+        await _het_hieu_luc(c, qd)
+    assert await _thu(c, "UPDATE council_decision_row SET set_id = NULL WHERE id = :d", d=d) == _K5C
+    assert await _gia_tri(c, "SELECT set_id FROM council_decision_row WHERE id = :d", d=d) == sid
+
+
+async def test_k5c_doi_chung_dong_huy_ghi_nhan_mang_null_duoc(c):
+    # Chỉ khác điều kiện K5c canh: văn bản đã huỷ ghi nhận ⇒ dòng được mang ``set_id`` NULL (chèn + cập nhật).
+    a, b = await _hs(c, 2)
+    sa, (ra,) = await _bo(c, [a])
+    qa = await _qd(c, sa)
+    da = await _dong(c, qa, sa, ra, a)
+    await _huy_ghi_nhan(c, qa)
+    assert await _thu(c, "UPDATE council_decision_row SET set_id = NULL WHERE id = :d", d=da) is None
+    sb, (rb,) = await _bo(c, [b])
+    qb = await _qd(c, sb)
+    await _huy_ghi_nhan(c, qb)
+    assert await _thu(c, _CHEN_DONG, d=qb, t="huy_ghi_nhan", s=None, r=rb, p=b) is None
+
+
+@pytest.mark.parametrize("van_ban", ["trung_tuyen", "van_ban_huy"])
+async def test_k5c_sai_nguon_set_id_null_dong_bo_cua_ho_so_khac(c, van_ban):
+    # Kịch bản F257: dòng còn hiệu lực ``set_id`` NULL + ``set_row_id`` R (của hồ sơ A) + hồ sơ B KHÁC — trước
+    # F257 vượt cả ``fk_council_decision_row_bo`` lẫn ``fk_council_decision_row_dong_bo`` (MATCH SIMPLE) và
+    # K5a / K5b. ``van_ban_huy``: văn bản KHÔNG có bộ (``set_id`` NULL theo K4b) — cũng không được có dòng.
+    a, b = await _hs(c, 2)
+    sid, (ra,) = await _bo(c, [a])
+    qd = await _qd(c, sid)
+    dich = qd
+    if van_ban == "van_ban_huy":
+        dich = await _qd(c, None, loai="van_ban_huy", huy_qd_id=qd, can_bo=False)
+    assert await _thu(c, _CHEN_DONG, d=dich, t="hieu_luc", s=None, r=ra, p=b) == _K5C
+    if van_ban == "trung_tuyen":
+        # đối chứng: cùng dòng sai nguồn nhưng ``set_id`` có giá trị ⇒ khoá ngoại ghép bắt (lỗ chỉ là NULL)
+        assert await _thu(c, _CHEN_DONG, d=dich, t="hieu_luc", s=sid, r=ra, p=b) == (
+            "23503",
+            "fk_council_decision_row_dong_bo",
+        )
+
+
 async def test_xoa_bo_cua_ban_ghi_huy_co_dong_thi_duoc_va_giu_so(c):
     (p,) = await _hs(c)
     sid, (sr,) = await _bo(c, [p])

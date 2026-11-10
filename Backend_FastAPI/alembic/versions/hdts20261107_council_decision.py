@@ -107,6 +107,7 @@ DIEU_KIEN_U4 = "loai = 'van_ban_huy' AND trang_thai = 'hieu_luc'"
 
 CHECK_DONG_QD_K5A = "profile_id IS NOT NULL OR trang_thai_cha = 'huy_ghi_nhan'"
 CHECK_DONG_QD_K5B = "set_row_id IS NOT NULL OR trang_thai_cha = 'huy_ghi_nhan'"
+CHECK_DONG_QD_K5C = "set_id IS NOT NULL OR trang_thai_cha = 'huy_ghi_nhan'"  # F257
 CHECK_DONG_QD_BO = "bi_bo_boi_id IS NULL OR bi_bo_boi_id <> decision_id"
 CHECK_DONG_QD_STT = "stt >= 1"
 
@@ -447,6 +448,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(CHECK_DONG_QD_K5A, name="ck_council_decision_row_k5a"),
         sa.CheckConstraint(CHECK_DONG_QD_K5B, name="ck_council_decision_row_k5b"),
+        sa.CheckConstraint(CHECK_DONG_QD_K5C, name="ck_council_decision_row_k5c"),
         sa.CheckConstraint(CHECK_DONG_QD_BO, name="ck_council_decision_row_bo"),
         sa.CheckConstraint(CHECK_DONG_QD_STT, name="ck_council_decision_row_stt"),
         sa.UniqueConstraint("decision_id", "stt", name="uq_council_decision_row_stt"),
