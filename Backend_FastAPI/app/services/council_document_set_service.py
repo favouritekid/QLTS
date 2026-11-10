@@ -713,6 +713,11 @@ async def tao_bo_dung_lai_ban_ky(
     * MỌI dòng qua cổng tình trạng Quyết định (đã có QĐ hiệu lực / chờ quyết / dấu AppSheet ⇒ chặn);
     * Admin xác nhận ĐÚNG danh sách {stt, tên trường khác} (C2 "Admin đối chiếu từng dòng khác");
     * mẫu = ĐÚNG ba mẫu ``s0`` đã dùng; tham số = của ``s0`` + số / ngày trên giấy.
+
+    Lý do tái dựng (D.1 — Codex lần 14): CHỈ nằm ở ``thong_tin_dung.dung_lai_ban_ky.ly_do`` của bộ R (bộ tái
+    dựng) — nên MẤT THEO R nếu R bị xoá (xoá được khi R không có văn bản còn / hết hiệu lực — K4). Sự kiện độc lập
+    ``dung_lai_ban_ky`` (``council_document_event``) chỉ giữ DẤU THAO TÁC: bộ nguồn, dòng sửa tay, dòng khác,
+    người, lúc — KHÔNG giữ lý do (đặc tả 3.1 bước 12: sự kiện không mang chữ tự do).
     """
     from app.services import council_decision_service as qd
     from app.services.council_candidate_service import doc_ho_so_theo_id
@@ -720,7 +725,8 @@ async def tao_bo_dung_lai_ban_ky(
 
     so = qd.kiem_so_quyet_dinh(so_quyet_dinh)
     ngay = qd.kiem_ngay(ngay_ky)
-    # Đặc tả 3.1: thân có ``ly_do``; bước 12 "lý do không ghi vào sự kiện" ⇒ giữ ở thông tin dựng của bộ R.
+    # Đặc tả 3.1: thân có ``ly_do``; bước 12 "lý do không ghi vào sự kiện" ⇒ giữ ở thông tin dựng của bộ R
+    # (mất theo R nếu R bị xoá — xem docstring).
     ly = kiem_ly_do(ly_do, "tái dựng bản ký")
     luc_tao = luc_tao or datetime.now(timezone.utc)
     if PHIEN_BAN_MA is None:
