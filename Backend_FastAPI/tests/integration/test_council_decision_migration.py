@@ -273,6 +273,104 @@ async def test_nang_cap_cho_khoa_bang_ho_so_qua_tran_thi_dung_roi_chay_lai_toi_h
         await k.close()
 
 
+#: Mốc thời gian (KHÔNG phải khoá): trigger sự kiện DDL làm lệnh tạo bảng mới THỨ BA (``council_decision_row``)
+#: NGỦ ở đầu lệnh (``ddl_command_start`` — trước khi lệnh lấy khoá nào) ⇒ cửa sổ xác định để phiên GHI lấy khoá
+#: trên bảng mới thứ HAI (``council_decision``) SAU khi nó đã commit. Khoá chặn là của phiên GHI thật.
+_TRIGGER_NGU = (
+    "CREATE OR REPLACE FUNCTION f258_ngu_truoc_bang_thu_ba() RETURNS event_trigger LANGUAGE plpgsql AS $f$\n"
+    "BEGIN\n"
+    "    IF current_query() ILIKE '%CREATE TABLE IF NOT EXISTS council_decision_row (%' THEN\n"
+    "        PERFORM pg_sleep(4);\n"
+    "    END IF;\n"
+    "END $f$;\n"
+    "CREATE EVENT TRIGGER f258_ngu_truoc_bang_thu_ba ON ddl_command_start WHEN TAG IN ('CREATE TABLE')\n"
+    "    EXECUTE FUNCTION f258_ngu_truoc_bang_thu_ba();"
+)
+
+
+async def _kiem_du_chi_muc(k):
+    """MỌI chỉ mục (có tên) của sáu lớp mới đều có trên CSDL thật — chạy lại sau khi dừng giữa chừng không bỏ sót
+    chỉ mục của bảng đã tạo ở lần trước (``IF NOT EXISTS`` từng lệnh)."""
+    co = {r["indexname"] for r in await k.fetch("SELECT indexname FROM pg_indexes")}
+    can = set()
+    for lop in (
+        m.CouncilDocumentSetRow,
+        m.CouncilDecision,
+        m.CouncilDecisionRow,
+        m.CouncilDecisionScan,
+        m.CouncilDecisionHold,
+        m.CouncilDocumentEvent,
+    ):
+        can |= {i.name for i in lop.__table__.indexes if i.name}
+    assert len(can) >= 15, sorted(can)
+    assert can <= co, sorted(can - co)
+
+
+async def test_nang_cap_dung_sau_hai_bang_moi_da_commit_roi_chay_lai_toi_head(csdl_rieng):  # noqa: F811
+    """F258 bổ sung (Codex lần 15 câu 4) — qua ĐÚNG ``alembic`` (tiến trình con, ``env.py`` AUTOCOMMIT): nâng cấp
+    dừng SAU KHI hai bảng mới (``council_document_set_row``, ``council_decision``) + chỉ mục của chúng đã COMMIT,
+    vì phiên GHI giữ ROW EXCLUSIVE trên ``council_decision`` (khuôn một giao dịch đang ghi bảng ấy) chặn bước
+    tạo bảng thứ ba (khoá ngoại tới ``council_decision`` cần SHARE ROW EXCLUSIVE) ⇒ quá trần ⇒ mã thoát ≠ 0. Nhả
+    khoá ⇒ chạy lại tới head; lược đồ ĐỦ (mọi ràng buộc + mọi chỉ mục) — bằng chứng cho ``IF NOT EXISTS`` ở mọi
+    lệnh của phần đã tạo. Trần thời gian riêng (``_xong``: 50 s)."""
+    await _dung_1105(csdl_rieng)
+    k = await _ket_noi(csdl_rieng)
+    ghi = await _ket_noi(csdl_rieng)
+    p = None
+    gd = None
+    try:
+        await k.execute(_TRIGGER_NGU)
+        p = await _alembic(csdl_rieng, "upgrade", "hdts20261107")
+        het = time.monotonic() + 40
+        ngu = 0
+        while time.monotonic() < het and p.returncode is None:
+            ngu = await k.fetchval(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                "AND wait_event = 'PgSleep' AND query ILIKE '%council_decision_row (%'"
+            )
+            if ngu:
+                break
+            await asyncio.sleep(0.05)
+        assert ngu, "phép đo không hợp lệ: nâng cấp không tới bước tạo bảng thứ ba"
+        truoc = await _luoc_do(k)
+        assert sorted(b for b, co in truoc["bang_moi"].items() if co) == sorted(
+            ["council_document_set_row", "council_decision"]
+        ), truoc
+        gd = ghi.transaction()
+        await gd.start()
+        await ghi.execute("LOCK TABLE council_decision IN ROW EXCLUSIVE MODE")
+        pid = await ghi.fetchval("SELECT pg_backend_pid()")
+        assert await _doi_bi_chan(k, pid, p), "phép đo không hợp lệ: bước tạo bảng thứ ba không chờ phiên ghi"
+        rc, out = await asyncio.wait_for(_xong(p), 60)
+        giua = await _luoc_do(k)
+        print("F258-DUNG-SAU-HAI-BANG rc=%s luoc_do=%s" % (rc, giua))
+        assert rc != 0 and "NangCapChoKhoaQuaTran" in out, (rc, out[-800:])
+        assert giua["phien_ban"] == "hdts20261105"
+        assert sorted(b for b, co in giua["bang_moi"].items() if co) == sorted(
+            ["council_document_set_row", "council_decision"]
+        ), giua
+        await gd.rollback()
+        gd = None
+        await k.execute("DROP EVENT TRIGGER f258_ngu_truoc_bang_thu_ba")
+        rc2, out2 = await _chay_xong(csdl_rieng, "upgrade", "hdts20261107")
+        sau = await _luoc_do(k)
+        print("F258-CHAY-LAI-SAU-HAI-BANG rc=%s luoc_do=%s" % (rc2, sau))
+        assert rc2 == 0, out2[-800:]
+        assert sau["phien_ban"] == "hdts20261107"
+        assert all(sau["bang_moi"].values()) and all(v == 1 for v in sau["cot_moi"].values()), sau
+        await _kiem_du_rang_buoc(k)
+        await _kiem_du_chi_muc(k)
+    finally:
+        if p is not None and p.returncode is None:
+            p.kill()
+            await p.wait()
+        if gd is not None:
+            await gd.rollback()
+        await k.execute("DROP EVENT TRIGGER IF EXISTS f258_ngu_truoc_bang_thu_ba")
+        await ghi.close()
+        await k.close()
+
+
 # ═══════════════════════════════ hạ cấp fail-closed ═════════════════════════════════════════
 async def test_ha_cap_bang_moi_con_hang_thi_dung_khong_xoa_gi(csdl_rieng):  # noqa: F811
     await _len_1107(csdl_rieng)
