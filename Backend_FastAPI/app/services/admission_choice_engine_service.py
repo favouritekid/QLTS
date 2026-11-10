@@ -1321,19 +1321,18 @@ async def publish_result(
     from ..repositories.council_decision_repository import ma_loi_csdl
     from ..utils.exceptions import ConflictError
 
-    def _nem_neu_xung_dot(loi) -> None:
-        if isinstance(loi, DBAPIError) and ma_loi_csdl(loi)[0] == _qos.SQLSTATE_DEADLOCK:
-            raise ConflictError(_qos.THONG_DIEP_XUNG_DOT) from None
-
+    # SQLSTATE đọc bằng ``ma_loi_csdl`` (thuộc tính, không đọc chữ ngoại lệ — guard che log §6).
     try:
         kq = await evaluate_cascade(db, profile, actor=actor)
     except DBAPIError as e:
-        _nem_neu_xung_dot(e)
+        if ma_loi_csdl(e)[0] == _qos.SQLSTATE_DEADLOCK:
+            raise ConflictError(_qos.THONG_DIEP_XUNG_DOT) from None
         raise
     gd = db.sync_session.get_transaction()
     if gd is not None and not gd.is_active:
         goc = getattr(gd, "_rollback_exception", None)
-        _nem_neu_xung_dot(goc)
+        if ma_loi_csdl(goc)[0] == _qos.SQLSTATE_DEADLOCK:
+            raise ConflictError(_qos.THONG_DIEP_XUNG_DOT)
         if goc is not None:
             raise goc
     return kq

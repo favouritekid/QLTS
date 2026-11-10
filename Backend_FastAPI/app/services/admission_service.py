@@ -306,45 +306,26 @@ def _safe_bulk_error_message(
     return f"Unexpected error (ref: {correlation_id})"
 
 
-def _loi_csdl_hang_loat(
-    e: DBAPIError, *, bulk_label: str, profile_id: int, actor_id: Optional[int]
-) -> str:
-    """F259: lỗi CSDL của MỘT mục hàng loạt (savepoint của mục đã lùi). Bị chọn huỷ vì vòng chờ khoá (40P01)
-    ⇒ câu cố định "thử lại"; lỗi khác ⇒ khuôn ADM-012 (ẩn chi tiết sau mã tương quan)."""
-    if ma_loi_csdl(e)[0] == _qos.SQLSTATE_DEADLOCK:
-        log.warning(
-            "bulk_action_item_deadlock_victim",
-            bulk_label=bulk_label,
-            profile_id=profile_id,
-            actor_id=actor_id,
-        )
-        return _qos.THONG_DIEP_XUNG_DOT
-    return _safe_bulk_error_message(
-        e, bulk_label=bulk_label, profile_id=profile_id, actor_id=actor_id
+def _bao_muc_bi_huy(*, bulk_label: str, profile_id: int, actor_id: Optional[int]) -> str:
+    """F259: MỘT mục hàng loạt bị PostgreSQL chọn huỷ vì vòng chờ khoá (40P01; savepoint của mục đã lùi) ⇒ log
+    CHỈ id, trả câu cố định "thử lại". Nơi gọi đọc SQLSTATE bằng ``ma_loi_csdl`` (không đọc chữ ngoại lệ — guard
+    che log §6); lỗi khác đi ``_safe_bulk_error_message`` (khuôn ADM-012)."""
+    log.warning(
+        "bulk_action_item_deadlock_victim",
+        bulk_label=bulk_label,
+        profile_id=profile_id,
+        actor_id=actor_id,
     )
+    return _qos.THONG_DIEP_XUNG_DOT
 
 
 def _loi_goc_cua_savepoint(sp) -> Optional[BaseException]:
     """Lỗi đã làm savepoint ``sp`` (``AsyncSessionTransaction``) lùi — SQLAlchemy ghi lỗi flush vào giao dịch cha
-    của lần flush hỏng (``_rollback_exception``). Không có / savepoint còn sống ⇒ None."""
+    của lần flush hỏng (``_rollback_exception``). Không có / savepoint còn sống ⇒ None. Dùng khi lớp dưới
+    (``dispatch_bundle``) NUỐT lỗi rồi lỗi lộ ra ở lệnh sau dưới dạng khác."""
     if sp is None or sp.is_active:
         return None
     return getattr(getattr(sp, "sync_transaction", None), "_rollback_exception", None)
-
-
-def _loi_muc_hang_loat(
-    e: BaseException, sp, *, bulk_label: str, profile_id: int, actor_id: Optional[int]
-) -> str:
-    """Câu báo cho MỘT mục hàng loạt hỏng: lỗi CSDL (nổi thẳng, hoặc là lỗi gốc của savepoint đã lùi mà lớp dưới
-    nuốt rồi lộ ra ở lệnh sau) ⇒ :func:`_loi_csdl_hang_loat`; còn lại ⇒ khuôn ADM-012."""
-    goc = e if isinstance(e, DBAPIError) else _loi_goc_cua_savepoint(sp)
-    if isinstance(goc, DBAPIError):
-        return _loi_csdl_hang_loat(
-            goc, bulk_label=bulk_label, profile_id=profile_id, actor_id=actor_id
-        )
-    return _safe_bulk_error_message(
-        e, bulk_label=bulk_label, profile_id=profile_id, actor_id=actor_id
-    )
 
 
 async def _khoa_truoc_lo_duyet(db: AsyncSession, profile_ids: List[int]) -> None:
@@ -14458,9 +14439,17 @@ async def bulk_approve(
             # F259: savepoint của mục đã lùi (lỗi nổi lên, hoặc bị lớp dưới nuốt rồi lộ ra ở lệnh sau); giao
             # dịch ngoài còn dùng được. Lỗi CSDL gốc (40P01 ⇒ câu "thử lại") lấy từ savepoint nếu có.
             failed_ids.append(profile_id)
-            errors[profile_id] = _loi_muc_hang_loat(
-                e, sp, bulk_label="admission_bulk_approve", profile_id=profile_id, actor_id=approver.id,
-            )
+            if (
+                ma_loi_csdl(e if isinstance(e, DBAPIError) else _loi_goc_cua_savepoint(sp))[0]
+                == _qos.SQLSTATE_DEADLOCK
+            ):
+                errors[profile_id] = _bao_muc_bi_huy(
+                    bulk_label="admission_bulk_approve", profile_id=profile_id, actor_id=approver.id,
+                )
+            else:
+                errors[profile_id] = _safe_bulk_error_message(
+                    e, bulk_label="admission_bulk_approve", profile_id=profile_id, actor_id=approver.id,
+                )
 
     await db.flush()
 
@@ -14698,9 +14687,17 @@ async def bulk_reject(
             # F259: savepoint của mục đã lùi (lỗi nổi lên, hoặc bị lớp dưới nuốt rồi lộ ra ở lệnh sau); giao
             # dịch ngoài còn dùng được. Lỗi CSDL gốc (40P01 ⇒ câu "thử lại") lấy từ savepoint nếu có.
             failed_ids.append(profile_id)
-            errors[profile_id] = _loi_muc_hang_loat(
-                e, sp, bulk_label="admission_bulk_reject", profile_id=profile_id, actor_id=rejector.id,
-            )
+            if (
+                ma_loi_csdl(e if isinstance(e, DBAPIError) else _loi_goc_cua_savepoint(sp))[0]
+                == _qos.SQLSTATE_DEADLOCK
+            ):
+                errors[profile_id] = _bao_muc_bi_huy(
+                    bulk_label="admission_bulk_reject", profile_id=profile_id, actor_id=rejector.id,
+                )
+            else:
+                errors[profile_id] = _safe_bulk_error_message(
+                    e, bulk_label="admission_bulk_reject", profile_id=profile_id, actor_id=rejector.id,
+                )
 
     await db.flush()
 
