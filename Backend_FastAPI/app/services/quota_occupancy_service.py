@@ -24,6 +24,11 @@ Phần B vẫn ``count(DISTINCT profile_id)``). ``exclude_profile_id`` loại �
 năm học của bộ, CHÍNH là năm học của hồ sơ lúc dựng (bộ chỉ nhận hồ sơ của năm học đã chọn —
 ``council_candidate_repository.SQL_PHAN_GIAI_MA``).
 
+MỘT ẢNH CHỤP (F260 — Codex lần 15): mỗi hàm đếm tính Phần A + Phần B trong MỘT câu SQL (:func:`_tong`, hợp
+``UNION ALL`` ở ma trận). READ COMMITTED chụp ảnh theo TỪNG CÂU ⇒ hai câu riêng cho A và B để một thao tác
+chuyển hồ sơ A↔B (huỷ hiệu lực / huỷ ghi nhận / điều chỉnh bỏ dòng — KHÔNG khoá dòng chỉ tiêu; ghi nhận ở
+ma trận không khoá) commit chen giữa ⇒ đếm 0 (B→A) hoặc 2 (A→B) cho cùng một em. Một câu ⇒ em đếm đúng một lần.
+
 Dòng bộ THIẾU khoá đếm (cột NULL): không khớp nơi đếm cần khoá ấy (đặc tả 1.1). Không đường dựng bộ nào tạo
 được dòng như vậy (cổng dữ liệu chặn dòng không có nguyện vọng in; nguyện vọng in đòi đủ chuỗi đường xét →
 học vụ → ngành — ``council_candidate_repository.SQL_SO_LIEU``). Gặp dòng như vậy thì làm gì (chặn ghi nhận /
@@ -38,7 +43,7 @@ và ghi nhận tuần tự hoá trên cùng dòng chỉ tiêu (bổ sung đặc 
 from typing import Dict, Iterable, Optional, Sequence
 
 import structlog
-from sqlalchemy import Integer, distinct, func, select, text, tuple_
+from sqlalchemy import Integer, String, cast, distinct, func, select, text, tuple_, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -110,6 +115,16 @@ async def _so(db: AsyncSession, cau) -> int:
     return int((await db.execute(cau)).scalar_one() or 0)
 
 
+async def _tong(db: AsyncSession, *phan) -> int:
+    """F260: cộng các phần đếm (mỗi phần một ``select count``) trong MỘT câu SQL ⇒ MỘT ảnh chụp READ
+    COMMITTED cho cả A và B (câu con vô hướng dùng chung ảnh chụp của câu ngoài)."""
+    tong = None
+    for c in phan:
+        s = func.coalesce(c.scalar_subquery(), 0)
+        tong = s if tong is None else tong + s
+    return int((await db.execute(select(tong))).scalar_one() or 0)
+
+
 async def so_dong_hieu_luc_thieu_khoa(db: AsyncSession, cot) -> int:
     """Số dòng Quyết định còn hiệu lực (hồ sơ chưa trả chỗ) mà dòng bộ THIẾU khoá ``cot`` (NULL) — để báo,
     không suy (đặc tả 1.1; câu hỏi owner lượt J)."""
@@ -152,8 +167,9 @@ async def dem_theo_nganh_nam(
         CouncilDocumentSetRow.academic_year == academic_year,
         exclude_profile_id=exclude_profile_id,
     )
+    n = await _tong(db, a, b)
     await _bao_thieu_khoa(db, CouncilDocumentSetRow.offering_id, "nganh_nam")
-    return await _so(db, a) + await _so(db, b)
+    return n
 
 
 def _a_nhieu_nv(*dieu_kien, exclude_profile_id: Optional[int]):
@@ -210,8 +226,9 @@ async def dem_theo_thong_tin_hoc_vu(
         CouncilDocumentSetRow.academic_info_id == academic_info_id,
         exclude_profile_id=exclude_profile_id,
     )
+    n = await _tong(db, a1, a2, b)
     await _bao_thieu_khoa(db, CouncilDocumentSetRow.academic_info_id, "thong_tin_hoc_vu")
-    return await _so(db, a1) + await _so(db, a2) + await _so(db, b)
+    return n
 
 
 async def dem_theo_duong_xet(
@@ -229,8 +246,9 @@ async def dem_theo_duong_xet(
         CouncilDocumentSetRow.admission_path_id == admission_path_id,
         exclude_profile_id=exclude_profile_id,
     )
+    n = await _tong(db, a1, a2, b)
     await _bao_thieu_khoa(db, CouncilDocumentSetRow.admission_path_id, "duong_xet")
-    return await _so(db, a1) + await _so(db, a2) + await _so(db, b)
+    return n
 
 
 async def dem_da_trung_tuyen_theo_duong_xet(
@@ -246,8 +264,13 @@ async def dem_da_trung_tuyen_theo_duong_xet(
     ap = models.AdmissionProfile
     c = models.AdmissionProfileChoice
     ds = list(out)
+    # Khoá nhóm của ba nhánh ở DẠNG CHỮ (M2 so ``applied_rules`` dạng chữ, không ép kiểu — như cũ) để hợp
+    # được trong MỘT câu ``UNION ALL`` (F260: một ảnh chụp cho A và B).
     m1 = (
-        select(c.admission_path_id, func.count(distinct(c.admission_profile_id)))
+        select(
+            cast(c.admission_path_id, String),
+            func.count(distinct(c.admission_profile_id)),
+        )
         .join(ap, ap.id == c.admission_profile_id)
         .where(
             c.admission_path_id.in_(ds),
@@ -269,20 +292,14 @@ async def dem_da_trung_tuyen_theo_duong_xet(
         .group_by(chu)
     )
     b = _phan_b(
-        CouncilDocumentSetRow.admission_path_id,
+        cast(CouncilDocumentSetRow.admission_path_id, String),
         CouncilDocumentSetRow.admission_path_id.in_(ds),
     )
-    for pid, n in (await db.execute(m1)).all():
-        if pid in out:
-            out[pid] += int(n or 0)
-    for chu_id, n in (await db.execute(m2)).all():
+    for chu_id, n in (await db.execute(union_all(m1, m2, b))).all():
         try:
             pid = int(chu_id)
         except (TypeError, ValueError):
             continue
-        if pid in out:
-            out[pid] += int(n or 0)
-    for pid, n in (await db.execute(b)).all():
         if pid in out:
             out[pid] += int(n or 0)
     await _bao_thieu_khoa(db, CouncilDocumentSetRow.admission_path_id, "ma_tran")
