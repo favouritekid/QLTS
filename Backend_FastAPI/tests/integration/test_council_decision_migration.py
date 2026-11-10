@@ -112,6 +112,55 @@ async def _chen_su_kien(k):
     )
 
 
+async def _kiem_du_rang_buoc(k):
+    """Mọi ràng buộc có tên + chỉ mục ``uq_`` của sáu lớp mới đều có trên CSDL thật."""
+    ten = {
+        r["conname"]
+        for r in await k.fetch(
+            "SELECT conname FROM pg_constraint WHERE conname LIKE 'ck\\_council\\_%' "
+            "OR conname LIKE 'uq\\_council\\_%' OR conname LIKE 'fk\\_council\\_%'"
+        )
+    } | {
+        r["indexname"]
+        for r in await k.fetch(
+            "SELECT indexname FROM pg_indexes WHERE indexname LIKE 'uq\\_council\\_%'"
+        )
+    }
+    can = set()
+    for lop in (
+        m.CouncilDocumentSetRow,
+        m.CouncilDecision,
+        m.CouncilDecisionRow,
+        m.CouncilDecisionScan,
+        m.CouncilDecisionHold,
+        m.CouncilDocumentEvent,
+    ):
+        can |= {c.name for c in lop.__table__.constraints if c.name}
+        can |= {i.name for i in lop.__table__.indexes if i.name.startswith("uq_")}
+    assert "ck_council_decision_row_k5c" in can  # F257
+    assert can <= ten, sorted(can - ten)
+    # Biểu thức chỉ mục U3 trên CSDL thật = hằng của model (PostgreSQL chuẩn hoá chữ).
+    dinh_nghia = await k.fetchval(
+        "SELECT pg_get_indexdef('uq_council_decision_row_u3_ho_so'::regclass)"
+    )
+    assert "trang_thai_cha" in dinh_nghia and "bi_bo_boi_id IS NULL" in dinh_nghia
+
+
+async def _luoc_do(k):
+    """Ảnh chụp LƯỢC ĐỒ (không dữ liệu): phiên bản Alembic, bốn cột mới của bộ, sáu bảng mới, số ràng buộc
+    ``*_council_decision*`` — để ghi trạng thái nâng cấp dở vào log."""
+    return {
+        "phien_ban": await _phien_ban(k),
+        "cot_moi": {c: await _co_cot(k, c) for c in MIG.COT_MOI_CUA_BO},
+        "bang_moi": {
+            b: (await k.fetchval("SELECT to_regclass($1)", b)) is not None for b in BANG
+        },
+        "so_rang_buoc_qd": await k.fetchval(
+            "SELECT count(*) FROM pg_constraint WHERE conname LIKE '%council\\_decision%'"
+        ),
+    }
+
+
 # ═══════════════════════════════ nâng cấp ═══════════════════════════════════════════════════
 async def test_nang_cap_tao_du_bang_rang_buoc_va_chay_lai_khong_loi(csdl_rieng):  # noqa: F811
     await _len_1107(csdl_rieng)
@@ -122,35 +171,7 @@ async def test_nang_cap_tao_du_bang_rang_buoc_va_chay_lai_khong_loi(csdl_rieng):
             assert await _so_dong(k, b) == 0, b
         for cot in MIG.COT_MOI_CUA_BO:
             assert await _co_cot(k, cot) == 1, cot
-        ten = {
-            r["conname"]
-            for r in await k.fetch(
-                "SELECT conname FROM pg_constraint WHERE conname LIKE 'ck\\_council\\_%' "
-                "OR conname LIKE 'uq\\_council\\_%' OR conname LIKE 'fk\\_council\\_%'"
-            )
-        } | {
-            r["indexname"]
-            for r in await k.fetch(
-                "SELECT indexname FROM pg_indexes WHERE indexname LIKE 'uq\\_council\\_%'"
-            )
-        }
-        can = set()
-        for lop in (
-            m.CouncilDocumentSetRow,
-            m.CouncilDecision,
-            m.CouncilDecisionRow,
-            m.CouncilDecisionScan,
-            m.CouncilDecisionHold,
-            m.CouncilDocumentEvent,
-        ):
-            can |= {c.name for c in lop.__table__.constraints if c.name}
-            can |= {i.name for i in lop.__table__.indexes if i.name.startswith("uq_")}
-        assert can <= ten, sorted(can - ten)
-        # Biểu thức chỉ mục U3 trên CSDL thật = hằng của model (PostgreSQL chuẩn hoá chữ).
-        dinh_nghia = await k.fetchval(
-            "SELECT pg_get_indexdef('uq_council_decision_row_u3_ho_so'::regclass)"
-        )
-        assert "trang_thai_cha" in dinh_nghia and "bi_bo_boi_id IS NULL" in dinh_nghia
+        await _kiem_du_rang_buoc(k)
     finally:
         await k.close()
     # chạy lại phần câu DO của nâng cấp (IF NOT EXISTS) ⇒ không lỗi, không trùng ràng buộc
@@ -189,6 +210,61 @@ async def test_nang_cap_cho_khoa_bang_bo_qua_tran_thi_dung_khong_doi_gi(csdl_rie
         assert await _phien_ban(k) == "hdts20261105"
         assert await _co_cot(k, "ban_ky_ngay") == 0
         assert await _so_dong(k, "council_decision") is None
+    finally:
+        if p is not None and p.returncode is None:
+            p.kill()
+            await p.wait()
+        await ghi.close()
+        await k.close()
+
+
+async def test_nang_cap_cho_khoa_bang_ho_so_qua_tran_thi_dung_roi_chay_lai_toi_head(  # noqa: F811
+    csdl_rieng,
+):
+    """F258 — qua ĐÚNG ``alembic`` (tiến trình con, ``env.py`` AUTOCOMMIT): phiên khác giữ ROW EXCLUSIVE trên
+    ``admission_profile`` (giao dịch GHI đang mở) ⇒ ``CREATE TABLE`` có khoá ngoại tới hồ sơ phải dừng
+    trong trần (mã thoát ≠ 0, không treo); nhả khoá ⇒ chạy lại tới head, lược đồ đủ. Ca có trần thời gian
+    RIÊNG (``_xong``: 50 s) ⇒ mã gỡ trần thì ca ĐỎ vì hết giờ, không treo cả lượt."""
+    await _dung_1105(csdl_rieng)
+    ghi = await _ket_noi(csdl_rieng)
+    k = await _ket_noi(csdl_rieng)
+    p = None
+    try:
+        gd = ghi.transaction()
+        await gd.start()
+        await ghi.execute("INSERT INTO admission_profile (status) VALUES ('draft')")
+        assert (
+            await ghi.fetchval(
+                "SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() AND granted AND "
+                "mode = 'RowExclusiveLock' AND relation = 'admission_profile'::regclass"
+            )
+            == 1
+        ), "phép đo không hợp lệ: phiên ghi không giữ ROW EXCLUSIVE trên admission_profile"
+        pid = await ghi.fetchval("SELECT pg_backend_pid()")
+        t0 = time.monotonic()
+        p = await _alembic(csdl_rieng, "upgrade", "hdts20261107")
+        assert await _doi_bi_chan(k, pid, p), "phép đo không hợp lệ: nâng cấp không chờ khoá hồ sơ"
+        rc, out = await asyncio.wait_for(_xong(p), 60)
+        troi = time.monotonic() - t0
+        giua = await _luoc_do(k)
+        print("F258-NANG-CAP-DO rc=%s troi=%.1fs luoc_do=%s" % (rc, troi, giua))
+        assert rc != 0 and "NangCapChoKhoaQuaTran" in out, (rc, out[-800:])
+        assert "chạy lại" in out, out[-800:]
+        assert TRAN_GIAY - 1 <= troi <= TRAN_GIAY + 25, troi
+        # Trạng thái nâng cấp DỞ (ghi rõ): phiên bản chưa đổi; câu DO (bốn cột) đã commit; bảng mới đầu tiên
+        # (khoá ngoại tới hồ sơ) chưa tạo.
+        assert giua["phien_ban"] == "hdts20261105"
+        assert all(v == 1 for v in giua["cot_moi"].values()), giua
+        assert not any(giua["bang_moi"].values()), giua
+        assert await ghi.fetchval("SELECT count(*) FROM admission_profile") == 1  # phiên ghi không bị huỷ
+        await gd.rollback()
+        rc2, out2 = await _chay_xong(csdl_rieng, "upgrade", "hdts20261107")
+        sau = await _luoc_do(k)
+        print("F258-CHAY-LAI rc=%s luoc_do=%s" % (rc2, sau))
+        assert rc2 == 0, out2[-800:]
+        assert sau["phien_ban"] == "hdts20261107"
+        assert all(sau["bang_moi"].values()) and all(v == 1 for v in sau["cot_moi"].values()), sau
+        await _kiem_du_rang_buoc(k)
     finally:
         if p is not None and p.returncode is None:
             p.kill()

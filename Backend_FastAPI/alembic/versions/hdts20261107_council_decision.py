@@ -20,8 +20,14 @@ CHECK / biểu thức chỉ mục viết lại ĐÚNG chuỗi của model (``app
 test dựng bằng ``create_all()``; ``tests/unit/test_council_decision_models.py`` so hai bên.
 
 Lệnh chạm bảng ĐANG CÓ (thêm cột / CHECK / chỉ mục trên ``council_document_set``) nằm trong MỘT câu
-``DO`` tự đặt ``lock_timeout`` = :data:`TRAN_CHO_KHOA` (khuôn F227 — ``hdts20261104``): quá trần ⇒
-:class:`NangCapChoKhoaQuaTran`, không đổi gì.
+``DO`` tự đặt ``lock_timeout`` = :data:`TRAN_CHO_KHOA` (khuôn F227 — ``hdts20261104``). F258 (Codex lần
+14): ``env.py`` chạy ở ``AUTOCOMMIT`` nên trần đặt trong câu ``DO`` hết hiệu lực ngay sau câu ấy — ``upgrade``
+đặt thêm trần ở MỨC PHIÊN cho MỌI lệnh DDL (``CREATE TABLE`` có khoá ngoại tới ``admission_profile``), trả
+lại giá trị cũ khi xong. Quá trần ở bất kỳ lệnh nào ⇒ :class:`NangCapChoKhoaQuaTran`, mã thoát ≠ 0, phiên
+bản chưa đổi; phần đã tạo giữ nguyên và chạy lại đi tiếp tới head (mọi lệnh ``IF NOT EXISTS``).
+
+``downgrade`` là MỘT câu ``DO`` (khoá + kiểm + xoá) mang trần của chính nó; sau câu ấy chỉ còn ``SELECT
+to_regclass`` (không chờ khoá) ⇒ không cần trần mức phiên.
 
 ``downgrade`` XOÁ sáu bảng + bốn cột — tức xoá mọi ghi nhận Quyết định đã ký, scan, nhóm chờ, nhật ký
 sự kiện ⇒ FAIL-CLOSED: còn hàng (hoặc cột mới còn giá trị) ⇒ DỪNG, không xoá gì, trừ khi đặt
@@ -162,8 +168,9 @@ class HaCapChoKhoaQuaTran(RuntimeError):
 
 
 class NangCapChoKhoaQuaTran(RuntimeError):
-    """upgrade chờ khoá ``council_document_set`` quá ``TRAN_CHO_KHOA`` — câu ``DO`` lùi, không đổi
-    bảng đang có (bảng mới chưa tạo)."""
+    """upgrade chờ khoá quá ``TRAN_CHO_KHOA`` ở BẤT KỲ lệnh DDL nào (F258). Phiên bản Alembic CHƯA đổi;
+    phần đã tạo (``AUTOCOMMIT`` ⇒ mỗi lệnh tự commit) GIỮ nguyên — mọi lệnh đều ``IF NOT EXISTS`` nên
+    chạy lại ``alembic upgrade`` khi bảng rảnh sẽ đi tiếp tới head."""
 
 
 def _sql_them_cot_bo() -> str:
@@ -279,17 +286,48 @@ def _loi_cua_csdl(e: DBAPIError) -> str:
     return str(e.orig) if getattr(e, "orig", None) is not None else ""
 
 
+#: SQLSTATE của "hết trần chờ khoá" (``lock_timeout``) — PostgreSQL ``lock_not_available``.
+_SQLSTATE_CHO_KHOA = "55P03"
+
+
+def _sqlstate(e: DBAPIError) -> str:
+    """SQLSTATE của lỗi CSDL (asyncpg qua SQLAlchemy: ``e.orig.sqlstate`` / ``pgcode``, hoặc trên
+    ``__cause__``); không có ⇒ chuỗi rỗng. KHÔNG đọc thông điệp."""
+    orig = getattr(e, "orig", None)
+    for o in (orig, getattr(orig, "__cause__", None)):
+        for a in ("sqlstate", "pgcode"):
+            v = getattr(o, a, None)
+            if isinstance(v, str):
+                return v
+    return ""
+
+
 def upgrade() -> None:
+    """F258 (Codex lần 14): ``env.py`` chạy migration ở ``AUTOCOMMIT`` ⇒ ``set_config(…, true)`` trong câu
+    ``DO`` chỉ sống trong CHÍNH câu ấy. Trần chờ khoá phải phủ MỌI lệnh DDL (các ``CREATE TABLE`` có khoá
+    ngoại tới ``admission_profile`` / ``council_document_set`` lấy SHARE ROW EXCLUSIVE — một giao dịch đang
+    ghi hồ sơ làm chúng chờ, và hàng đợi khoá chặn luôn mọi phiên đọc / ghi hồ sơ sau nó). Đặt trần ở MỨC
+    PHIÊN cho cả ``upgrade``; xong thì trả về giá trị cũ (migration sau trong cùng lượt không bị đổi)."""
     bind = op.get_bind()
+    cu = bind.execute(text("SELECT current_setting('lock_timeout')")).scalar()
+    bind.execute(
+        text("SELECT set_config('lock_timeout', :t, false)"), {"t": TRAN_CHO_KHOA}
+    )
     try:
-        bind.execute(text(_sql_them_cot_bo()))
+        _nang_cap(bind)
     except DBAPIError as e:
-        if _DAU_CHO_KHOA in _loi_cua_csdl(e):
+        if _DAU_CHO_KHOA in _loi_cua_csdl(e) or _sqlstate(e) == _SQLSTATE_CHO_KHOA:
             raise NangCapChoKhoaQuaTran(
-                "Nâng cấp hdts20261107 dừng: chờ khoá bảng bộ văn bản quá %s. Không đổi gì — "
-                "chạy lại khi bảng rảnh." % TRAN_CHO_KHOA
+                "Nâng cấp hdts20261107 dừng: chờ khoá quá %s (có giao dịch khác đang dùng bảng bộ văn "
+                "bản / hồ sơ). Phiên bản CHƯA đổi; phần đã tạo giữ nguyên (mọi lệnh IF NOT EXISTS) — "
+                "chạy lại `alembic upgrade head` khi bảng rảnh để đi tiếp." % TRAN_CHO_KHOA
             ) from None
         raise
+    bind.execute(text("SELECT set_config('lock_timeout', :t, false)"), {"t": cu})
+
+
+def _nang_cap(bind) -> None:
+    bind.execute(text(_sql_them_cot_bo()))
 
     op.create_table(
         DONG_BO,
