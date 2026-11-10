@@ -15,6 +15,10 @@ Phê duyệt hàng loạt (khoá trước cả lô) và công bố (khoá trư�
 (F259); bên bị PostgreSQL chọn huỷ ở trường hợp khác ⇒ 409 "thử lại" (đổi so với BS §4.6 "không khoá dòng
 chỉ tiêu" — lý do: ``DAC-TA-F230-2B-BO-SUNG-2026-11-10.md``; lượt K: ``DAC-TA-F230-SUA-CUOI-BO-SUNG-2026-11-10.md``).
 
+Ba thao tác sinh / khôi phục dòng Phần B (ghi nhận, điều chỉnh có dòng thêm, huỷ ghi nhận có dòng bật lại) gọi
+``kiem_khoa_dem_dong_bo`` DƯỚI khoá, TRƯỚC khi ghi (Q-J1 — owner 10-11: dòng bộ thiếu khoá đếm ⇒ 409 nêu số
+dòng).
+
 Không log dữ liệu cá nhân: chỉ id + số đếm. Lỗi chỉ nêu số dòng (``stt``) + id văn bản, không CCCD.
 """
 import hashlib
@@ -53,6 +57,7 @@ from app.services.quota_occupancy_service import (
     SQLSTATE_DEADLOCK,
     THONG_DIEP_XUNG_DOT,
     khoa_chi_tieu_cua_dong_bo,
+    kiem_khoa_dem_dong_bo,
 )
 from app.utils.exceptions import (
     ConflictError,
@@ -396,6 +401,8 @@ async def ghi_nhan_quyet_dinh(
                 raise DataValidationError("Có hồ sơ của bộ không còn — không ghi nhận được.")
             # Chặng 2b: dòng sắp chiếm chỗ (Phần B) ⇒ khoá dòng chỉ tiêu SAU hồ sơ (thứ tự chung).
             await khoa_chi_tieu_cua_dong_bo(db, [d.id for d in dong])
+            # Q-J1 (owner 10-11): dòng bộ thiếu khoá đếm / lệch chuỗi ⇒ CHẶN (dưới khoá, trước ghi).
+            await kiem_khoa_dem_dong_bo(db, [(d.stt, d.id) for d in dong])
             chan = _chan_tinh_trang(dong, await tinh_trang_qd(db, pids))
             if chan:
                 raise ConflictError(
@@ -540,6 +547,8 @@ async def ghi_nhan_dieu_chinh(
             )
             # Chặng 2b: dòng THÊM chiếm chỗ (Phần B); dòng BỎ chỉ trả chỗ ⇒ không cần khoá.
             await khoa_chi_tieu_cua_dong_bo(db, [d.id for d in dong_them])
+            # Q-J1: dòng THÊM phải đủ khoá đếm + khớp chuỗi (dưới khoá, trước ghi).
+            await kiem_khoa_dem_dong_bo(db, [(d.stt, d.id) for d in dong_them])
             tt = await tinh_trang_qd(db, pids_them)
             chan = _chan_tinh_trang(dong_them, tt, cho_phep_chuoi=goc.id)
             bo_ids = set(ds_bo)
@@ -769,6 +778,8 @@ async def huy_ghi_nhan(
             hien_tai = await repo.khoa_ho_so(pids + [m.profile_id for m in muc if m.profile_id])
             # Chặng 2b: dòng BẬT LẠI chiếm chỗ lại (Phần B) ⇒ khoá dòng chỉ tiêu của chúng.
             await khoa_chi_tieu_cua_dong_bo(db, [d.set_row_id for d in bat_lai])
+            # Q-J1: dòng BẬT LẠI phải đủ khoá đếm + khớp chuỗi (dưới khoá, trước ghi).
+            await kiem_khoa_dem_dong_bo(db, [(d.stt, d.set_row_id) for d in bat_lai])
             khac = await repo.dong_hieu_luc_cua_ho_so(pids)
             xung = [
                 {"dong": d.stt, "quyet_dinh_id": khac[d.profile_id].decision_id}

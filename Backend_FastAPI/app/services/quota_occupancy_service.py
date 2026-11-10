@@ -29,11 +29,10 @@ MỘT ẢNH CHỤP (F260 — Codex lần 15): mỗi hàm đếm tính Phần A +
 chuyển hồ sơ A↔B (huỷ hiệu lực / huỷ ghi nhận / điều chỉnh bỏ dòng — KHÔNG khoá dòng chỉ tiêu; ghi nhận ở
 ma trận không khoá) commit chen giữa ⇒ đếm 0 (B→A) hoặc 2 (A→B) cho cùng một em. Một câu ⇒ em đếm đúng một lần.
 
-Dòng bộ THIẾU khoá đếm (cột NULL): không khớp nơi đếm cần khoá ấy (đặc tả 1.1). Không đường dựng bộ nào tạo
-được dòng như vậy (cổng dữ liệu chặn dòng không có nguyện vọng in; nguyện vọng in đòi đủ chuỗi đường xét →
-học vụ → ngành — ``council_candidate_repository.SQL_SO_LIEU``). Gặp dòng như vậy thì làm gì (chặn ghi nhận /
-báo lỗi khi đếm / đếm vào mọi nơi) là CÂU HỎI OWNER (báo cáo lượt J) — :func:`so_dong_hieu_luc_thieu_khoa`
-đếm để báo, mỗi lần đếm gặp thì ghi cảnh báo (không âm thầm).
+Dòng bộ THIẾU khoá đếm / lệch chuỗi cấu hình: owner chốt 10-11 (Q-J1) — CHẶN tại ba thao tác sinh / khôi phục
+dòng B (ghi nhận, dòng thêm khi điều chỉnh, dòng bật lại khi huỷ ghi nhận) bằng MỘT hàm
+(:func:`kiem_khoa_dem_dong_bo`, 409 nêu số dòng). Bộ đếm vẫn giữ lớp phụ: dòng như vậy (chỉ có khi sửa tay
+CSDL) không khớp nơi cần khoá ấy và mỗi lần đếm gặp thì ghi cảnh báo log (:func:`_bao_thieu_khoa`).
 
 Khoá — THỨ TỰ CHUẨN cho cả giao dịch (F259): mọi hồ sơ (id tăng dần) TRƯỚC, rồi mọi dòng chỉ tiêu qua
 :func:`khoa_o_chi_tieu` (``offering_academic_info`` id tăng dần MỘT câu, RỒI ``admission_path`` id tăng dần
@@ -41,7 +40,7 @@ MỘT câu). Các hàm đếm KHÔNG khoá. Ghi nhận / điều chỉnh thêm d
 qua :func:`khoa_chi_tieu_cua_dong_bo`; Phê duyệt hàng loạt và công bố nhiều nguyện vọng khoá TRƯỚC mọi dòng chỉ
 tiêu sẽ dùng (cùng hàm) rồi mới xét — giữ nguyên thứ tự xét nguyện vọng nghiệp vụ.
 """
-from typing import Dict, Iterable, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import structlog
 from sqlalchemy import Integer, String, cast, distinct, func, select, text, tuple_, union_all
@@ -53,6 +52,7 @@ from app.models.council_document import (
     CouncilDecisionRow,
     CouncilDocumentSetRow,
 )
+from app.utils.exceptions import ConflictError
 
 log = structlog.get_logger(__name__)
 
@@ -397,3 +397,85 @@ async def khoa_chi_tieu_cua_dong_bo(db: AsyncSession, set_row_ids: Iterable[int]
     tuần tự hoá: lần đếm thấy dòng mới, hoặc ghi nhận chờ lần duyệt commit."""
     ai_ids, path_ids = await o_chi_tieu_cua_dong_bo(db, set_row_ids)
     await khoa_o_chi_tieu(db, ai_ids, path_ids)
+
+
+# ═══════════════════════════════ Q-J1 — khoá đếm của dòng bộ (owner 10-11) ════════════════════
+#: Khoá đếm có thể NULL ở dòng bộ mà các hàm đếm thực dùng (``academic_year`` NOT NULL ở CSDL;
+#: ``major_id`` không hàm đếm nào dùng ⇒ không kiểm).
+KHOA_DEM_CO_THE_THIEU = ("admission_path_id", "academic_info_id", "offering_id")
+
+
+async def kiem_khoa_dem_dong_bo(
+    db: AsyncSession, dong: Sequence[Tuple[int, Optional[int]]]
+) -> None:
+    """Q-J1 (owner chốt 10-11): MỘT hàm kiểm cho ba thao tác sinh / khôi phục dòng Phần B — ghi nhận, dòng
+    THÊM khi điều chỉnh, dòng BẬT LẠI khi huỷ ghi nhận. Gọi DƯỚI khoá (sau :func:`khoa_chi_tieu_cua_dong_bo`),
+    TRƯỚC khi ghi. ``dong`` = [(số dòng, id dòng bộ nguồn)].
+
+    Chặn (409, nêu SỐ DÒNG — không tên, không CCCD) khi một dòng:
+
+    * không có dòng bộ nguồn (``thieu_dong_nguon``);
+    * thiếu khoá đếm mà hàm đếm thực dùng (``thieu_khoa``: đường xét / học vụ / ngành);
+    * khoá không khớp chuỗi cấu hình (``lech_chuoi_cau_hinh``): đường xét không còn / không thuộc học vụ chụp;
+      học vụ không còn / không thuộc ngành + năm chụp — khi ấy các hàm đếm đặt em vào các ô KHÁC nhau.
+
+    Owner KHÔNG chọn: 503 toàn hệ, đếm dòng ấy vào mọi ô, chỉ log. Cảnh báo log ở bộ đếm
+    (:func:`_bao_thieu_khoa`) giữ làm lớp phụ."""
+    b = CouncilDocumentSetRow
+    ids = sorted({int(sid) for _, sid in dong if sid is not None})
+    nguon = {}
+    if ids:
+        nguon = {
+            r.id: r
+            for r in (
+                await db.execute(
+                    select(
+                        b.id, b.admission_path_id, b.academic_info_id, b.offering_id, b.academic_year
+                    ).where(b.id.in_(ids))
+                )
+            ).all()
+        }
+    t_oai, t_path = models.OfferingAcademicInfo, models.AdmissionPath
+    ai_ids = sorted({r.academic_info_id for r in nguon.values() if r.academic_info_id is not None})
+    path_ids = sorted({r.admission_path_id for r in nguon.values() if r.admission_path_id is not None})
+    hoc_vu = {}
+    if ai_ids:
+        hoc_vu = {
+            r.id: (r.offering_id, r.academic_year)
+            for r in (
+                await db.execute(
+                    select(t_oai.id, t_oai.offering_id, t_oai.academic_year).where(t_oai.id.in_(ai_ids))
+                )
+            ).all()
+        }
+    duong_xet = {}
+    if path_ids:
+        duong_xet = {
+            r.id: r.academic_info_id
+            for r in (
+                await db.execute(
+                    select(t_path.id, t_path.academic_info_id).where(t_path.id.in_(path_ids))
+                )
+            ).all()
+        }
+    loi: List[Dict[str, Any]] = []
+    for stt, sid in sorted(dong, key=lambda x: (x[0], x[1] or 0)):
+        r = nguon.get(sid) if sid is not None else None
+        if r is None:
+            loi.append({"dong": stt, "ly_do": "thieu_dong_nguon"})
+            continue
+        thieu = [k for k in KHOA_DEM_CO_THE_THIEU if getattr(r, k) is None]
+        if thieu:
+            loi.append({"dong": stt, "ly_do": "thieu_khoa", "khoa": thieu})
+            continue
+        if (
+            duong_xet.get(r.admission_path_id) != r.academic_info_id
+            or hoc_vu.get(r.academic_info_id) != (r.offering_id, r.academic_year)
+        ):
+            loi.append({"dong": stt, "ly_do": "lech_chuoi_cau_hinh"})
+    if loi:
+        raise ConflictError(
+            "Dòng %s: dòng bộ thiếu khoá đếm chỉ tiêu hoặc lệch chuỗi cấu hình (đường xét → học vụ → "
+            "ngành + năm) — không ghi được; dựng lại bộ cho đúng." % ", ".join(str(x["dong"]) for x in loi),
+            public_payload={"dong_thieu_khoa_dem": loi},
+        )
