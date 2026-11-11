@@ -755,6 +755,155 @@ async def tep_cua_bo(db: AsyncSession, set_id: int) -> List[CouncilDocumentSetFi
     return await CouncilDocumentRepository(db).danh_sach_tep(set_id)
 
 
+# ═══════════════ danh sách / chi tiết bộ mở rộng + tải cả bộ (vòng giao diện — đặc tả 3.4–3.6) ═══════════════
+def _bo_mo_rong_ra(r: Dict[str, Any], *, xem_luot: bool) -> Dict[str, Any]:
+    """MỘT hàng của ``SQL_BO_MO_RONG`` → các trường của ``CouncilSetOut``. ``quyet_dinh`` = văn bản chưa huỷ ghi nhận
+    mới nhất (``SQL_BO_MO_RONG`` — nguồn duy nhất) — giữ các khoá cũ (loai, trang_thai, so_quyet_dinh, ngay_ky, so_ho_so)
+    + ``id`` + ``goc``. ``luot_gui_cho`` CHỈ khi ``xem_luot`` (người có quyền ghi nhận); người khác luôn None."""
+    qd = None
+    if r["qd_id"] is not None:
+        qd = {
+            "id": r["qd_id"],
+            "loai": r["qd_loai"],
+            "trang_thai": r["qd_trang_thai"],
+            "so_quyet_dinh": r["qd_so"],
+            "ngay_ky": r["qd_ngay_ky"].isoformat(),
+            "so_ho_so": r["qd_so_ho_so"],
+            "goc": (
+                None
+                if r["goc_id"] is None
+                else {
+                    "id": r["goc_id"],
+                    "so_quyet_dinh": r["goc_so"],
+                    "ngay_ky": r["goc_ngay_ky"].isoformat(),
+                }
+            ),
+        }
+    return {
+        "id": r["id"],
+        "nguoi_tao_id": r["nguoi_tao_id"],
+        "tao_luc": r["tao_luc"],
+        "moc_chup": r["moc_chup"],
+        "unit_id": r["unit_id"],
+        "trinh_do": r["trinh_do"],
+        "so_ho_so": r["so_ho_so"],
+        "so_tep": r["so_tep"],
+        "kich_thuoc_tong": r["kich_thuoc_tong"],
+        "nam_hoc": None if r["nam_hoc"] is None else int(r["nam_hoc"]),
+        "tham_so_quyet_dinh": r["tham_so_quyet_dinh"],
+        "nguoi_tao_ten": r["nguoi_tao_ten"],
+        "tinh_trang": r["tinh_trang"],
+        "quyet_dinh": qd,
+        "luot_gui_cho": (
+            {"ma": r["luot_ma"], "tao_luc": r["luot_tao_luc"]}
+            if xem_luot and r["luot_ma"] is not None
+            else None
+        ),
+    }
+
+
+async def liet_ke_bo_mo_rong(
+    db: AsyncSession,
+    *,
+    tat_ca: bool,
+    chi_don_vi: Optional[int],
+    nam_hoc: Optional[int] = None,
+    nguoi_tao_id: Optional[int] = None,
+    so_quyet_dinh: Optional[str] = None,
+    tinh_trang: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """``GET /sets`` (đặc tả 3.4) — MỘT câu (``SQL_BO_MO_RONG``). Phạm vi do ``deps.py`` quyết; "không tất cả mà không có
+    đơn vị" ⇒ ``ServiceError`` (fail-closed). ``luot_gui_cho`` chỉ với phạm vi admin (= người có quyền ghi nhận)."""
+    if not tat_ca and chi_don_vi is None:
+        raise ServiceError("Phạm vi xem bộ văn bản không xác định — không liệt kê.")
+    ds = await CouncilDocumentRepository(db).danh_sach_bo_mo_rong(
+        tat_ca=tat_ca,
+        chi_don_vi=chi_don_vi,
+        nam_hoc=nam_hoc,
+        nguoi_tao_id=nguoi_tao_id,
+        so_quyet_dinh=so_quyet_dinh,
+        tinh_trang=tinh_trang,
+        limit=limit,
+        offset=offset,
+    )
+    return [_bo_mo_rong_ra(r, xem_luot=tat_ca) for r in ds]
+
+
+async def chi_tiet_bo_mo_rong(
+    db: AsyncSession, set_id: int, *, tat_ca: bool
+) -> Dict[str, Any]:
+    """``GET /sets/{id}`` (đặc tả 3.5) — CÙNG câu với danh sách (một nguồn cho tình trạng / Quyết định). Bộ đã qua kiểm
+    phạm vi ở ``deps.py`` ⇒ đọc theo id không lọc đơn vị."""
+    ds = await CouncilDocumentRepository(db).danh_sach_bo_mo_rong(
+        tat_ca=True, chi_don_vi=None, set_id=set_id, limit=1, offset=0
+    )
+    if not ds:
+        raise ResourceNotFoundError("Không có bộ văn bản này.")
+    return _bo_mo_rong_ra(ds[0], xem_luot=tat_ca)
+
+
+async def nguoi_tao_bo(
+    db: AsyncSession, *, tat_ca: bool, chi_don_vi: Optional[int]
+) -> List[Dict[str, Any]]:
+    """Người tạo PHÂN BIỆT của các bộ trong phạm vi người gọi (bộ lọc "Người tạo")."""
+    if not tat_ca and chi_don_vi is None:
+        raise ServiceError("Phạm vi xem bộ văn bản không xác định — không liệt kê.")
+    return await CouncilDocumentRepository(db).nguoi_tao_bo(
+        tat_ca=tat_ca, chi_don_vi=chi_don_vi
+    )
+
+
+async def ten_nguoi_dung(db: AsyncSession, ids: Sequence[int]) -> Dict[int, str]:
+    """{id: tên hiển thị} — nhật ký tải / vết xoá hiện tên thay "Tài khoản #n"."""
+    return await CouncilDocumentRepository(db).ten_nguoi_dung(ids)
+
+
+async def doc_ca_bo(db: AsyncSession, set_id: int) -> List[Tuple[int, TepDaLuu]]:
+    """``GET /sets/{id}/tai-ca-bo`` (đặc tả 3.6) bước 1–2: đọc MỌI tệp đã lưu (bytes NGUYÊN, không dựng lại), tính lại
+    sha256 TỪNG tệp so cột ``sha256`` — lệch ⇒ ``ServiceError`` "tệp đã lưu hỏng", không trả gì; kiểm lại trần tổng
+    ``COUNCIL_SET_MAX_TOTAL_BYTES``. Trả ``[(thu_tu, tệp)]`` theo thứ tự. Kiểm quyền / IDOR ở ``deps.py``."""
+    ds = await CouncilDocumentRepository(db).tep_cua_bo_kem_noi_dung(set_id)
+    if not ds:
+        raise ResourceNotFoundError("Bộ văn bản không có tệp nào.")
+    out: List[Tuple[int, TepDaLuu]] = []
+    tong = 0
+    for t in ds:
+        b = bytes(t.noi_dung)
+        if hashlib.sha256(b).hexdigest() != t.sha256:
+            raise ServiceError(
+                "Tệp đã lưu hỏng (thứ tự %d lệch sha256) — không trả bộ." % t.thu_tu
+            )
+        tong += len(b)
+        out.append((t.thu_tu, TepDaLuu(path=t.path, sha256=t.sha256, noi_dung=b)))
+    if tong > settings.COUNCIL_SET_MAX_TOTAL_BYTES:
+        raise ServiceError(
+            "Bộ văn bản %d byte, vượt giới hạn kỹ thuật %d byte — không trả."
+            % (tong, settings.COUNCIL_SET_MAX_TOTAL_BYTES)
+        )
+    return out
+
+
+def nen_ca_bo(tep: Sequence[TepDaLuu], moc: datetime) -> bytes:
+    """Nén ĐÚNG bytes đã lưu thành một tệp zip — tên trong zip = ``path`` đã lưu (không đổi, không dựng lại); giờ của
+    mọi mục = ``moc`` (giờ Việt Nam của lúc tạo bộ) ⇒ cùng bộ cho cùng zip. Chạy NGOÀI event loop (CPU)."""
+    import io
+    import zipfile
+
+    from app.constants.admission_circular import VN_TZ
+
+    gio = moc.astimezone(VN_TZ).timetuple()[:6]
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        for t in tep:
+            info = zipfile.ZipInfo(t.path, date_time=max(gio, (1980, 1, 1, 0, 0, 0)))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            z.writestr(info, t.noi_dung)
+    return b.getvalue()
+
+
 # ═══════════════════════════════ xoá bộ (Admin) — vết độc lập, cùng giao dịch ═════════════
 def kiem_ly_do(ly_do: object, viec: str) -> str:
     """Lý do / ghi chú BẮT BUỘC của một thao tác (MỘT nguồn — xoá bộ J1 dòng 29; lượt I: huỷ ghi

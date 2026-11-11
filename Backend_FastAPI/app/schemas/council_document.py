@@ -208,6 +208,14 @@ class CouncilSetOut(BaseModel):
     kich_thuoc_tong: int
     nam_hoc: Optional[int] = None
     tham_so_quyet_dinh: Optional[Dict[str, Any]] = None
+    # Vòng giao diện (đặc tả 3.4 / 3.5) — ``GET /sets`` và ``GET /sets/{id}`` điền (MỘT câu ``SQL_BO_MO_RONG``); route
+    # khác (dựng bộ vừa xong) để None. ``tinh_trang``: chua_ghi_nhan | con_hieu_luc | het_hieu_luc | da_huy_ghi_nhan |
+    # chua_xac_dinh. ``quyet_dinh``: {id, loai, trang_thai, so_quyet_dinh, ngay_ky, so_ho_so, goc{id, so_quyet_dinh,
+    # ngay_ky} | null} | null. ``luot_gui_cho``: {ma, tao_luc} — CHỈ người có quyền ghi nhận (admin), người khác null.
+    nguoi_tao_ten: Optional[str] = None
+    tinh_trang: Optional[str] = None
+    quyet_dinh: Optional[Dict[str, Any]] = None
+    luot_gui_cho: Optional[Dict[str, Any]] = None
 
     @classmethod
     def tu_bo(cls, bo) -> "CouncilSetOut":
@@ -233,24 +241,32 @@ class CouncilSetDetailOut(CouncilSetOut):
 
     thong_tin_dung: Dict[str, Any]
     tep: List[CouncilSetFileOut]
-    quyet_dinh: Optional[Dict[str, Any]] = None
     dung_lai_tu_set_id: Optional[int] = None
     ban_ky_so_quyet_dinh: Optional[str] = None
     ban_ky_ngay: Optional[date] = None
     cho_quyet_dinh_goc_id: Optional[int] = None
 
     @classmethod
-    def tu_bo_va_tep(cls, bo, tep, quyet_dinh=None) -> "CouncilSetDetailOut":
+    def tu_bo_va_tep(cls, bo, tep, mo_rong=None) -> "CouncilSetDetailOut":
+        """``mo_rong`` = dict của ``chi_tiet_bo_mo_rong`` (``GET /sets/{id}``) — thay các trường chung của bộ; vắng
+        (vừa dựng bộ) ⇒ dựng từ hàng ORM, các trường mở rộng để None."""
+        chung = mo_rong if mo_rong is not None else CouncilSetOut.tu_bo(bo).model_dump()
         return cls(
-            **CouncilSetOut.tu_bo(bo).model_dump(),
+            **chung,
             thong_tin_dung=bo.thong_tin_dung,
             tep=[CouncilSetFileOut.model_validate(t) for t in tep],
-            quyet_dinh=quyet_dinh,
             dung_lai_tu_set_id=bo.dung_lai_tu_set_id,
             ban_ky_so_quyet_dinh=bo.ban_ky_so_quyet_dinh,
             ban_ky_ngay=bo.ban_ky_ngay,
             cho_quyet_dinh_goc_id=bo.cho_quyet_dinh_goc_id,
         )
+
+
+class CouncilSetCreatorOut(BaseModel):
+    """``GET /nguoi-tao-bo`` — một người tạo bộ trong phạm vi người gọi (bộ lọc "Người tạo")."""
+
+    id: int
+    ten: str
 
 
 # ═══════════════════ lượt E3 — xoá bộ · danh sách mã đầu vào · nhật ký (CHỈ admin) ═════════
@@ -276,6 +292,8 @@ class CouncilSetDeletionOut(BaseModel):
     nguoi_xoa_id: int
     xoa_luc: datetime
     ly_do: str
+    # Vòng giao diện (đặc tả 5.7): tên người xoá (tên đăng nhập nếu không có họ tên) — hiện thay "Tài khoản #n".
+    nguoi_xoa_ten: Optional[str] = None
 
 
 class CouncilSetInputCodesOut(BaseModel):
@@ -326,6 +344,9 @@ class CouncilDocumentPermissions(BaseModel):
     kiem_truoc: bool
     doi_ma: bool
     tim_ho_so: bool
+    # Vòng giao diện — tải cả bộ (đặc tả 3.6) + người tạo bộ (bộ lọc danh sách).
+    tai_ca_bo: bool
+    xem_nguoi_tao_bo: bool
 
 
 class CouncilDocumentPermissionsOut(BaseModel):
@@ -347,6 +368,8 @@ class CouncilDownloadLogOut(BaseModel):
     sha256: str
     nguoi_tai_id: int
     tai_luc: datetime
+    # Vòng giao diện (đặc tả 5.7): tên người tải — hiện thay "Tài khoản #n".
+    nguoi_tai_ten: Optional[str] = None
 
 
 # ═══════════════════ Lượt I (F230) — ghi nhận Quyết định đã ký (CHỈ admin) ═══════════════════
@@ -425,16 +448,19 @@ class CouncilQuotaWarningOut(BaseModel):
     da_dung_phe_duyet_cu: Optional[int] = None
     admission_path_id: Optional[int] = None
     da_dung: Optional[int] = None
+    # Vòng giao diện (đặc tả 3.8): tên ngành của học vụ / tên hiển thị của đường xét — chỉ để hiển thị; thiếu ⇒ None.
+    # Bản cảnh báo đã lưu TRƯỚC thay đổi này không có khoá ⇒ None.
+    nhan: Optional[str] = None
 
 
 class CouncilDecisionWriteOut(CouncilDecisionOut):
+    """Phản hồi của thao tác ghi: văn bản + số đếm của thao tác (không dữ liệu cá nhân)."""
+
     # Vòng giao diện (đặc tả 3.8): Quyết định gốc {id, so_quyet_dinh, ngay_ky} khi bổ sung; mã lượt gửi đã dùng; gửi
     # LẶP đúng nội dung ⇒ lap_lai = True (văn bản cũ, cảnh báo đọc từ sự kiện đã lưu, HTTP 200).
     goc: Optional[Dict[str, Any]] = None
     ma_luot_gui: Optional[str] = None
     lap_lai: bool = False
-    """Phản hồi của thao tác ghi: văn bản + số đếm của thao tác (không dữ liệu cá nhân)."""
-
     so_lieu: Optional[Dict[str, Any]] = None
     #: N9 — chỉ thao tác ghi nhận (``POST /decisions``) điền; rỗng = không ô nào vượt.
     canh_bao_vuot_chi_tieu: List[CouncilQuotaWarningOut] = Field(default_factory=list)

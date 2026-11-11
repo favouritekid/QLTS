@@ -122,9 +122,10 @@ def test_migration_la_head_duy_nhat_noi_tiep_head_cu():
     # lượt E3: hai bảng vết nối sau quyền Casbin (E2); lượt F: quyền route cờ giao diện; lượt I:
     # ghi nhận Quyết định đã ký (hdts20261107 nối sau hdts20261105 — khoá ở
     # ``test_council_decision_models.py``); vòng giao diện: K-2 hdts20261111 (khoá cấu hình) + hdts20261112 (lượt gửi
-    # ghi nhận) — chuỗi khoá cũng ở ``test_council_decision_models.py``. (Ca này lẽ ra phải sửa ở commit K-2 9d406eab:
-    # hồi quy của K-2 bỏ sót tệp này — phát hiện ở hồi quy rộng lượt gửi.)
-    assert heads == ["hdts20261112"]
+    # ghi nhận) + hdts20261113 (quyền Casbin cho Quản lý ở tải cả bộ / người tạo bộ) — chuỗi khoá cũng ở
+    # ``test_council_decision_models.py``. (Ca này lẽ ra phải sửa ở commit K-2 9d406eab: hồi quy của K-2 bỏ sót tệp
+    # này — phát hiện ở hồi quy rộng lượt gửi.)
+    assert heads == ["hdts20261113"]
     mig = _migration()
     assert (mig.revision, mig.down_revision) == ("hdts20261103", "v3circ20261011c")
     assert mig.CO_CHO_PHEP_XOA.endswith("_ENABLED")  # cờ CHO PHÉP, mặc định tắt
@@ -193,10 +194,23 @@ def _migration_co():
     return mod
 
 
+TEP_MIGRATION_VGD = (
+    GOC / "alembic" / "versions" / "hdts20261113_council_document_casbin_vong_gd.py"
+)
+
+
+def _migration_vgd():
+    spec = importlib.util.spec_from_file_location("hdts20261113", TEP_MIGRATION_VGD)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def test_quyen_manager_trong_template_co_migration_cap():
     # Production KHÔNG tự đồng bộ template ⇒ mọi dòng manager của API văn bản Hội đồng
     # trong template PHẢI là đúng các dòng migration chèn — hdts20261103b (ba route đọc bộ) +
-    # hdts20261105 (route cờ giao diện, lượt F) — và ngược lại.
+    # hdts20261105 (route cờ giao diện, lượt F) + hdts20261113 (tải cả bộ + người tạo bộ, vòng giao diện) — và
+    # ngược lại.
     from app.casbin_config.policy_templates import (
         ACCOUNTANT_TEMPLATE,
         MANAGER_TEMPLATE,
@@ -205,16 +219,24 @@ def test_quyen_manager_trong_template_co_migration_cap():
 
     cb = _migration_casbin()
     co = _migration_co()
+    vgd = _migration_vgd()
     tien_to = "/api/admission-config/council-documents"
     template = {
         ("role:manager", p["object"], p["action"], p.get("eft", "allow"))
         for p in MANAGER_TEMPLATE["policies"]
         if p["object"].startswith(tien_to)
     }
-    assert template == set(cb.POLICIES) | set(co.POLICIES) and len(template) == 4
+    assert template == set(cb.POLICIES) | set(co.POLICIES) | set(vgd.POLICIES)
+    assert len(template) == 6
     assert co.POLICIES == (("role:manager", tien_to + "/quyen", "GET", "allow"),)
-    assert co.TEMPLATE_ID != cb.TEMPLATE_ID  # hạ cấp mỗi bên chỉ xoá dòng của mình
-    assert all(p[2] == "GET" for p in cb.POLICIES + co.POLICIES)  # manager CHỈ ĐỌC
+    assert vgd.POLICIES == (
+        ("role:manager", tien_to + "/sets/{set_id}/tai-ca-bo", "GET", "allow"),
+        ("role:manager", tien_to + "/nguoi-tao-bo", "GET", "allow"),
+    )
+    assert (vgd.revision, vgd.down_revision) == ("hdts20261113", "hdts20261112")
+    # hạ cấp mỗi bên chỉ xoá dòng của mình
+    assert len({co.TEMPLATE_ID, cb.TEMPLATE_ID, vgd.TEMPLATE_ID}) == 3
+    assert all(p[2] == "GET" for p in cb.POLICIES + co.POLICIES + vgd.POLICIES)  # manager CHỈ ĐỌC
     for t in (OFFICER_TEMPLATE, ACCOUNTANT_TEMPLATE):
         assert not [p for p in t["policies"] if p["object"].startswith(tien_to)]
 

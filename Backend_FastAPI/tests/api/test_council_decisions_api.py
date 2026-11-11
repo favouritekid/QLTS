@@ -286,13 +286,17 @@ async def test_ghi_nhan_tao_van_ban_dong_scan_su_kien(client, hs, ad, tk):
     # Quản lý đơn vị xem được trạng thái QĐ trên bộ của mình (không id hồ sơ)
     r = await client.get(P + "/sets/%d" % bo["id"], headers=await tk("ql_u1"))
     assert r.status_code == 200
+    # Vòng giao diện (đặc tả 3.4 / 3.5): GIỮ các khoá cũ + thêm ``id`` và ``goc`` (văn bản xét mới ⇒ goc null).
     assert r.json()["quyet_dinh"] == {
+        "id": qd["id"],
         "loai": "trung_tuyen",
         "trang_thai": "hieu_luc",
         "so_quyet_dinh": "501",
         "ngay_ky": _ngay().isoformat(),
         "so_ho_so": 3,
+        "goc": None,
     }
+    assert r.json()["tinh_trang"] == "con_hieu_luc" and r.json()["luot_gui_cho"] is None
 
 
 async def test_tai_scan_tra_dung_byte_va_ghi_su_kien(client, hs, ad):

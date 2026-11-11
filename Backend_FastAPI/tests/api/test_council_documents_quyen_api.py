@@ -139,6 +139,11 @@ async def _goi_that(client, co, h, sid):
             json={"academic_year": 2026, "page": 1, "page_size": 5},
             headers=h,
         )
+    # Vòng giao diện — hai route ĐỌC: tải cả bộ (ghi nhật ký tải, không đổi bộ / tệp / mẫu) + người tạo bộ.
+    if co == "tai_ca_bo":
+        return await client.get(b + "/tai-ca-bo", headers=h)
+    if co == "xem_nguoi_tao_bo":
+        return await client.get(P + "/nguoi-tao-bo", headers=h)
     # Lượt I (F230): văn bản đã ký + nhóm chờ GIẢ gắn vào bộ ``sid`` (chèn SQL một lần, không đổi số
     # bộ / tệp / mẫu). Route ghi: đầu vào rỗng ⇒ 422 / service từ chối (409) SAU các cổng — không ghi.
     x, muc = await _dam_bao_qd_gia(sid)
@@ -354,8 +359,8 @@ def test_moi_route_cua_module_co_dung_mot_co():
     assert len(ham_co) == 1  # route cờ không tự có cờ
     con_lai = [r.endpoint for r in route if r.endpoint is not ham_co[0]]
     # mỗi hàm đúng MỘT route — 10 (E2–F) + 13 (lượt I, ghi nhận Quyết định đã ký) + 3 (vòng giao diện: lượt gửi) +
-    # 3 (vòng giao diện: kiểm trước, đổi mã, tìm hồ sơ)
-    assert len(con_lai) == len(set(con_lai)) == 29
+    # 3 (vòng giao diện: kiểm trước, đổi mã, tìm hồ sơ) + 2 (vòng giao diện: tải cả bộ, người tạo bộ)
+    assert len(con_lai) == len(set(con_lai)) == 31
     assert set(rt.ENDPOINT_THEO_CO.values()) == set(con_lai)
     assert len(set(rt.ENDPOINT_THEO_CO.values())) == len(rt.ENDPOINT_THEO_CO)
     assert tuple(rt.ENDPOINT_THEO_CO) == CO  # trường schema = khoá bảng cờ, cùng thứ tự
@@ -378,8 +383,9 @@ async def test_ham_tinh_co_goi_thang_khop_hanh_vi_that(client, tk, ba_bo, vai):
 
 
 # Neo (không phải bất biến chính): hành vi thật đúng J1 dòng 9, 29–31 — để phép so "cờ = hành
-# vi" ở trên không xanh RỖNG (vd fixture hỏng làm mọi route 403 và mọi cờ tắt).
-_DOC_BO = {"xem_danh_sach_bo", "xem_chi_tiet_bo", "tai_tep"}
+# vi" ở trên không xanh RỖNG (vd fixture hỏng làm mọi route 403 và mọi cờ tắt). Vòng giao diện: Quản lý thêm "tải cả bộ"
+# (đặc tả 3.6 — quyền y hệt tải lẻ) + "người tạo bộ" (bộ lọc của danh sách bộ Quản lý đã xem) — migration hdts20261113.
+_DOC_BO = {"xem_danh_sach_bo", "xem_chi_tiet_bo", "tai_tep", "tai_ca_bo", "xem_nguoi_tao_bo"}
 DUOC_PHEP_THEO_J1 = {
     "admin": set(CO),
     "ql_u1": _DOC_BO,

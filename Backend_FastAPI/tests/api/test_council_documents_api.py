@@ -537,8 +537,8 @@ async def test_dong_bang_van_cho_route_doc(client, tk, ba_bo, dong_bang):
     doc = sorted(p for m, p in _route_cua_module() if m == "GET")
     # E2: 4 + E3: danh sách mã, nhật ký tải, vết xoá + lượt F: cờ quyền giao diện (/quyen) + lượt I:
     # danh sách / chi tiết / scan văn bản đã ký, so với hiện tại, nhóm chờ, sự kiện + vòng giao diện: lượt gửi
-    # của bộ
-    assert len(doc) == 15
+    # của bộ, tải cả bộ, người tạo bộ
+    assert len(doc) == 17
     from tests.api.test_council_documents_quyen_api import _dam_bao_qd_gia
 
     x, _muc = await _dam_bao_qd_gia(ba_bo["u1"][0])
@@ -591,8 +591,8 @@ def test_moi_route_cua_module_khop_vi_tu_bo_input_422():
     # /decisions, /decisions/{id}, …/scan, …/huy-ghi-nhan, …/huy-hieu-luc, …/bo-dieu-chinh, …/dieu-chinh,
     # /sets/{id}/dung-lai-ban-ky, /sets/{id}/so-voi-hien-tai, /decision-holds, …/cho-xet-lai, /su-kien + vòng
     # giao diện 2 đường: /sets/{id}/luot-ghi-nhan (POST + GET), /luot-ghi-nhan/{ma}/chan + đường chọn hồ sơ 3
-    # đường: /sets/kiem-truoc, /sets/doi-ma, /sets/tim-ho-so.
-    assert len(duong) == 25
+    # đường: /sets/kiem-truoc, /sets/doi-ma, /sets/tim-ho-so + /sets/{id}/tai-ca-bo, /nguoi-tao-bo.
+    assert len(duong) == 27
     assert all(eh._khong_log_input_422(p) for p in duong)
     assert not eh._khong_log_input_422("/api/admission-config/council-documentsX")
     assert not eh._khong_log_input_422("/api/admission-config/criteria")

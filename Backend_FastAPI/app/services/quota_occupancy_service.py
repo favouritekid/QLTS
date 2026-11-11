@@ -514,9 +514,20 @@ async def canh_bao_vuot_chi_tieu(
     out: List[Dict[str, Any]] = []
     t_oai, t_path = models.OfferingAcademicInfo, models.AdmissionPath
     if ai_ids:
+        # Vòng giao diện (đặc tả 3.8): ``nhan`` = tên ngành của học vụ (``major_program.name`` qua
+        # ``program_offering``) / tên hiển thị của đường xét — chỉ để hiển thị; thiếu ⇒ None (giao diện hiện mã + id).
         for o in (
             await db.execute(
-                select(t_oai.id, t_oai.offering_id, t_oai.academic_year, t_oai.annual_admission_quota)
+                select(
+                    t_oai.id,
+                    t_oai.offering_id,
+                    t_oai.academic_year,
+                    t_oai.annual_admission_quota,
+                    models.MajorProgram.name.label("ten"),
+                )
+                .select_from(t_oai)
+                .outerjoin(models.ProgramOffering, models.ProgramOffering.id == t_oai.offering_id)
+                .outerjoin(models.MajorProgram, models.MajorProgram.id == models.ProgramOffering.program_id)
                 .where(t_oai.id.in_(sorted(ai_ids)))
                 .order_by(t_oai.id)
             )
@@ -535,12 +546,13 @@ async def canh_bao_vuot_chi_tieu(
                         "chi_tieu": o.annual_admission_quota,
                         "da_dung_cong_bo": cong_bo,
                         "da_dung_phe_duyet_cu": phe_duyet,
+                        "nhan": o.ten,
                     }
                 )
     if path_ids:
         for p in (
             await db.execute(
-                select(t_path.id, t_path.admit_quota)
+                select(t_path.id, t_path.admit_quota, t_path.display_name)
                 .where(t_path.id.in_(sorted(path_ids)))
                 .order_by(t_path.id)
             )
@@ -555,6 +567,7 @@ async def canh_bao_vuot_chi_tieu(
                         "admission_path_id": p.id,
                         "chi_tieu": p.admit_quota,
                         "da_dung": n,
+                        "nhan": p.display_name,
                     }
                 )
     if out:

@@ -287,11 +287,23 @@ class CouncilDecisionRepository:
         return (await self.db.execute(cau)).scalar_one_or_none()
 
     async def danh_sach_qd(
-        self, *, set_id: Optional[int], limit: int, offset: int
+        self,
+        *,
+        set_id: Optional[int],
+        limit: int,
+        offset: int,
+        loai: Optional[str] = None,
+        trang_thai: Optional[str] = None,
     ) -> List[CouncilDecision]:
+        """Văn bản đã ký, mới trước. Vòng giao diện: lọc ``loai`` / ``trang_thai`` ở máy chủ (giá trị do router
+        giới hạn đúng tập CHECK của bảng) — giao diện không lọc lại."""
         q = select(CouncilDecision).order_by(CouncilDecision.id.desc())
         if set_id is not None:
             q = q.where(CouncilDecision.set_id == set_id)
+        if loai is not None:
+            q = q.where(CouncilDecision.loai == loai)
+        if trang_thai is not None:
+            q = q.where(CouncilDecision.trang_thai == trang_thai)
         return list((await self.db.execute(q.limit(limit).offset(offset))).scalars())
 
     async def danh_sach_muc_cho(

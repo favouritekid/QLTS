@@ -1512,6 +1512,10 @@ class AdmissionProfileResponse(BaseModel):
             "Chỉ khi đó giấy báo cũ đã hết hiệu lực."
         ),
     )
+    # COMPUTED (transient) — CHỈ route chi tiết ``GET /api/admissions/{id}`` gán (vòng giao diện Văn bản Hội đồng,
+    # đặc tả 3.9): ô "Quyết định trúng tuyển" tính qua ``council_decision_status_service.o_quyet_dinh_ho_so``
+    # (nguồn duy nhất). Route khác ⇒ None (giao diện không hiện ô).
+    quyet_dinh_trung_tuyen: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1627,6 +1631,9 @@ class AdmissionProfileListItem(BaseModel):
     version: int
     status: str
     created_at: datetime
+    # Vòng giao diện Văn bản Hội đồng (đặc tả 5.1): nút "Dựng văn bản Hội đồng" trên thanh hàng loạt cần NĂM HỌC
+    # chung của các hồ sơ đang chọn — cột thật của hồ sơ, không suy từ bộ lọc.
+    academic_year: Optional[int] = None
     lead: Optional[LeadShallowForAdmission] = None
     program_name: Optional[str] = None
     completion_percent: int = 0

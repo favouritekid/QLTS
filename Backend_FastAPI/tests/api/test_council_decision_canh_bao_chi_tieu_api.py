@@ -19,6 +19,8 @@ async def _ghi_voi_chi_tieu(client, ad, hs, nam, duong):
     """Ghi nhận em ``SACH[0]`` vào ô K (chỉ tiêu năm ``nam``, chỉ tiêu đường xét ``duong``; None = không đặt).
     Sau khi ghi, ô K có ĐÚNG 1 chỗ đã dùng (dòng vừa ghi) ở mọi cách đếm."""
     o = await _o_chi_tieu(hs, SACH[0], chi_tieu=1)
+    # Dữ liệu giả không đặt tên hiển thị cho đường xét ⇒ đặt để đo được ``nhan`` của ô đường xét (đặc tả 3.8).
+    await qd._sql("UPDATE admission_path SET display_name = 'Đường xét giả K' WHERE id = :p", p=o["path"])
     await qd._sql(
         "UPDATE offering_academic_info SET annual_admission_quota = :n WHERE id = :a", n=nam, a=o["ai"]
     )
@@ -28,10 +30,23 @@ async def _ghi_voi_chi_tieu(client, ad, hs, nam, duong):
     return r, o
 
 
+async def _nhan(o):
+    """Nhãn hiển thị mong đợi của hai ô (vòng giao diện, đặc tả 3.8) — đọc bằng SQL từ kết nối khác."""
+    nganh = await qd._q1(
+        "SELECT mp.name FROM offering_academic_info a JOIN program_offering po ON po.id = a.offering_id "
+        "JOIN major_program mp ON mp.id = po.program_id WHERE a.id = :a",
+        a=o["ai"],
+    )
+    duong = await qd._q1("SELECT display_name FROM admission_path WHERE id = :p", p=o["path"])
+    return nganh, duong
+
+
 async def test_n9_vuot_chi_tieu_nganh_va_duong_xet_van_ghi_kem_canh_bao(client, hs, ad):  # noqa: F811
     r, o = await _ghi_voi_chi_tieu(client, ad, hs, 0, 0)
     assert r.status_code == 201, r.text  # N9: không chặn
     assert await qd._q1("SELECT count(*) FROM council_decision WHERE trang_thai = 'hieu_luc'") == 1
+    nganh, duong = await _nhan(o)
+    assert nganh and duong, "tiền điều kiện: dữ liệu giả có tên ngành + tên đường xét"
     assert r.json()["canh_bao_vuot_chi_tieu"] == [
         {
             "loai": "nganh",
@@ -41,6 +56,7 @@ async def test_n9_vuot_chi_tieu_nganh_va_duong_xet_van_ghi_kem_canh_bao(client, 
             "da_dung_phe_duyet_cu": 1,
             "admission_path_id": None,
             "da_dung": None,
+            "nhan": nganh,
         },
         {
             "loai": "duong_xet",
@@ -50,6 +66,7 @@ async def test_n9_vuot_chi_tieu_nganh_va_duong_xet_van_ghi_kem_canh_bao(client, 
             "da_dung_phe_duyet_cu": None,
             "admission_path_id": o["path"],
             "da_dung": 1,
+            "nhan": duong,
         },
     ], r.text
 
@@ -125,6 +142,7 @@ async def test_f264_chi_phe_duyet_cu_vuot(client, hs, ad):  # noqa: F811
             "da_dung_phe_duyet_cu": 2,
             "admission_path_id": None,
             "da_dung": None,
+            "nhan": (await _nhan(o))[0],
         }
     ], r.text
 
@@ -167,6 +185,7 @@ async def test_f264_chi_cong_bo_vuot(client, hs, ad):  # noqa: F811
             "da_dung_phe_duyet_cu": 1,
             "admission_path_id": None,
             "da_dung": None,
+            "nhan": (await _nhan(o))[0],
         }
     ], r.text
 

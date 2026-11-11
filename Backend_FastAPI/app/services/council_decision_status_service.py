@@ -30,7 +30,8 @@ from typing import Any, Dict, Iterable, Optional, Sequence
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.council_document import SQL_COT_TINH_TRANG_QD
+from app.core.constants import SYSTEM_CONSULTATION_METHOD
+from app.models.council_document import DAU_APPSHEET_TIEN_TO, SQL_COT_TINH_TRANG_QD
 from app.services.council_set_gate_service import ly_do_tinh_trang_qd
 from app.utils.exceptions import QuyetDinhKhoaHoSo
 
@@ -202,6 +203,64 @@ async def gan_tinh_trang_qd(db: AsyncSession, profiles: Sequence[Any]) -> None:
             p._tinh_trang_qd = tt.get(getattr(p, "id", None), KHONG_CO)
         except AttributeError:  # đối tượng không gán được thuộc tính (không xảy ra với ORM)
             pass
+
+
+# ═══════════════ ô "Quyết định trúng tuyển" trên trang hồ sơ (vòng giao diện — đặc tả 3.9) ═══════════════
+#: Văn bản GẦN NHẤT (id lớn nhất) có tên hồ sơ — mọi trạng thái (giao diện hiện trạng thái kèm theo).
+SQL_VAN_BAN_GAN_NHAT = text(
+    "SELECT d.id, d.loai, d.so_quyet_dinh, d.ngay_ky, d.trang_thai, d.set_id, d.ly_do_huy_ghi_nhan "
+    "FROM council_decision_row r JOIN council_decision d ON d.id = r.decision_id "
+    "WHERE r.profile_id = :p ORDER BY d.id DESC LIMIT 1"
+)
+#: Chữ số NGAY SAU tiền tố dấu AppSheet — CÙNG hai nguồn của ``SQL_DAU_APPSHEET`` (lý do trả về của hồ sơ; ghi chú lần
+#: tư vấn ``method = system`` của lead), ưu tiên hồ sơ. Không khớp mẫu ⇒ NULL (không đoán).
+assert not any(k in DAU_APPSHEET_TIEN_TO for k in ".^$*+?()[]{}|\\"), "tiền tố dùng trong biểu thức chính quy"
+_RE_SO_QD_APPSHEET = "^" + DAU_APPSHEET_TIEN_TO + "([0-9]+)"
+SQL_SO_QD_APPSHEET = text(
+    "SELECT COALESCE(substring(p.revision_reason FROM :re), "
+    "(SELECT substring(c.notes FROM :re) FROM consultation c WHERE c.lead_id = p.lead_id "
+    "AND c.method = :m AND substring(c.notes FROM :re) IS NOT NULL ORDER BY c.id LIMIT 1)) "
+    "FROM admission_profile p WHERE p.id = :p"
+)
+
+
+async def o_quyet_dinh_ho_so(
+    db: AsyncSession, profile_id: int, *, xem_ly_do_huy: bool
+) -> Dict[str, Any]:
+    """Ô "Quyết định trúng tuyển" của MỘT hồ sơ (đặc tả 3.9) — tình trạng từ CHÍNH :func:`mot_ho_so` (một nguồn, không
+    truy vấn thứ hai cho câu hỏi "có Quyết định không"); văn bản gần nhất có tên em; ``ly_do_huy_ghi_nhan`` CHỈ khi
+    ``xem_ly_do_huy`` (quyền do ``deps.py`` tính); dấu AppSheet tách riêng (``dau_appsheet`` + số Quyết định đọc
+    được sau tiền tố). Không ghi gì."""
+    tt = await mot_ho_so(db, profile_id)
+    vb = (await db.execute(SQL_VAN_BAN_GAN_NHAT, {"p": int(profile_id)})).mappings().first()
+    so_qd = None
+    if tt.dau_appsheet:
+        so_qd = (
+            await db.execute(
+                SQL_SO_QD_APPSHEET,
+                {"p": int(profile_id), "re": _RE_SO_QD_APPSHEET, "m": SYSTEM_CONSULTATION_METHOD},
+            )
+        ).scalar()
+    return {
+        "tinh_trang": tt.ma,
+        "van_ban": (
+            None
+            if vb is None
+            else {
+                "id": vb["id"],
+                "loai": vb["loai"],
+                "so_quyet_dinh": vb["so_quyet_dinh"],
+                "ngay_ky": vb["ngay_ky"].isoformat(),
+                "trang_thai": vb["trang_thai"],
+                "set_id": vb["set_id"],
+            }
+        ),
+        "ly_do_huy_ghi_nhan": (
+            vb["ly_do_huy_ghi_nhan"] if (xem_ly_do_huy and vb is not None) else None
+        ),
+        "dau_appsheet": tt.dau_appsheet,
+        "dau_appsheet_so_qd": so_qd,
+    }
 
 
 def doc_tinh_trang(profile: Any) -> TinhTrangQd:

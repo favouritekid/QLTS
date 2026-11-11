@@ -26,6 +26,7 @@ không trả. Không log dữ liệu cá nhân (danh sách mã, DTO, bytes, lý 
 — chỉ id + số đếm. Lỗi 422 của các route này chỉ vào log ở dạng đã chuẩn hoá
 (``exception_handlers._khong_log_input_422`` / ``_loi_422_an_toan_de_log``).
 """
+import asyncio
 from datetime import date
 from typing import List, Optional
 from urllib.parse import quote
@@ -57,6 +58,7 @@ from ..schemas.council_document import (
     CouncilProfileSearchOut,
     CouncilResignIn,
     CouncilSetCreate,
+    CouncilSetCreatorOut,
     CouncilSetDelete,
     CouncilSetDeletionOut,
     CouncilSetDetailOut,
@@ -333,12 +335,48 @@ async def list_council_document_sets(
     scope: deps.CouncilDocumentScope = Depends(deps.get_council_document_scope),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    # Vòng giao diện (đặc tả 3.4) — bộ lọc KHÔNG phải dữ liệu cá nhân; phân trang GIỮ limit / offset.
+    so_quyet_dinh: Optional[str] = Query(None, pattern=r"^[0-9]{1,6}$"),
+    nam_hoc: Optional[int] = Query(None, ge=2000, le=2100),
+    tinh_trang: Optional[str] = Query(
+        None,
+        pattern=r"^(chua_ghi_nhan|con_hieu_luc|het_hieu_luc|da_huy_ghi_nhan|chua_xac_dinh)$",
+    ),
+    nguoi_tao_id: Optional[int] = Query(None, ge=1),
     db: AsyncSession = Depends(database.get_db),
 ):
-    ds = await bo_vb.liet_ke_bo(
-        db, tat_ca=scope.tat_ca, chi_don_vi=scope.unit_id, limit=limit, offset=offset
+    ds = await bo_vb.liet_ke_bo_mo_rong(
+        db,
+        tat_ca=scope.tat_ca,
+        chi_don_vi=scope.unit_id,
+        nam_hoc=nam_hoc,
+        nguoi_tao_id=nguoi_tao_id,
+        so_quyet_dinh=so_quyet_dinh,
+        tinh_trang=tinh_trang,
+        limit=limit,
+        offset=offset,
     )
-    return [CouncilSetOut.tu_bo(b) for b in ds]
+    return [CouncilSetOut(**d) for d in ds]
+
+
+@router.get(
+    "/nguoi-tao-bo",
+    response_model=List[CouncilSetCreatorOut],
+    summary="Người tạo phân biệt của các bộ trong phạm vi người gọi (bộ lọc danh sách bộ)",
+)
+@limiter.limit(RateLimits.DATA_READ)
+async def list_council_document_set_creators(
+    request: Request,
+    current_user: models.User = deps.CasbinAuth,
+    scope: deps.CouncilDocumentScope = Depends(deps.get_council_document_scope),
+    db: AsyncSession = Depends(database.get_db),
+):
+    return [
+        CouncilSetCreatorOut(**d)
+        for d in await bo_vb.nguoi_tao_bo(
+            db, tat_ca=scope.tat_ca, chi_don_vi=scope.unit_id
+        )
+    ]
 
 
 @router.get(
@@ -350,13 +388,14 @@ async def list_council_document_sets(
 async def get_council_document_set(
     request: Request,
     current_user: models.User = deps.CasbinAuth,
+    scope: deps.CouncilDocumentScope = Depends(deps.get_council_document_scope),
     bo: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_user),
     db: AsyncSession = Depends(database.get_db),
 ):
     return CouncilSetDetailOut.tu_bo_va_tep(
         bo,
         await bo_vb.tep_cua_bo(db, bo.id),
-        await qd_vb.tom_tat_qd_cua_bo(db, bo.id),
+        await bo_vb.chi_tiet_bo_mo_rong(db, bo.id, tat_ca=scope.tat_ca),
     )
 
 
@@ -392,6 +431,43 @@ async def download_council_document_file(
         ),
         headers={
             "Content-Disposition": content_disposition_tai_ve(tep.path),
+            **_TIEU_DE_TAI,
+        },
+    )
+
+
+@router.get(
+    "/sets/{set_id}/tai-ca-bo",
+    summary="Tải CẢ BỘ (zip đúng các bytes đã lưu — không dựng lại; nhật ký tải mỗi tệp ghi bền trước khi trả)",
+)
+@limiter.limit(RateLimits.DATA_READ)
+async def download_council_document_set_zip(
+    request: Request,
+    current_user: models.User = deps.CasbinAuth,
+    bo: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_user),
+    db: AsyncSession = Depends(database.get_db),
+):
+    # Đặc tả 3.6 — quyền + phạm vi Y HỆT tải lẻ. Trước khi trả byte nào: đọc mọi tệp + so sha từng tệp (lệch ⇒ lỗi, không
+    # trả) → nén (NGOÀI event loop; nén hỏng ⇒ chưa ghi nhật ký nào) → MỘT dòng nhật ký tải cho MỖI tệp → COMMIT → trả.
+    tep = await bo_vb.doc_ca_bo(db, bo.id)
+    zip_ = await asyncio.to_thread(bo_vb.nen_ca_bo, [t for _, t in tep], bo.tao_luc)
+    for thu_tu, t in tep:
+        await bo_vb.ghi_nhat_ky_tai(
+            db, set_id=bo.id, thu_tu=thu_tu, tep=t, nguoi_tai_id=current_user.id
+        )
+    await db.commit()
+    log.info(
+        "council_document_set_zip_downloaded",
+        set_id=bo.id,
+        so_tep=len(tep),
+        actor=current_user.id,
+    )
+    return Response(
+        content=zip_,
+        media_type="application/zip",
+        headers={
+            # Tên tệp KHÔNG chứa tên người — chỉ id bộ.
+            "Content-Disposition": 'attachment; filename="bo-%d.zip"' % bo.id,
             **_TIEU_DE_TAI,
         },
     )
@@ -469,7 +545,13 @@ async def list_council_document_download_log(
     db: AsyncSession = Depends(database.get_db),
 ):
     ds = await bo_vb.liet_ke_nhat_ky_tai(db, set_id=set_id, limit=limit, offset=offset)
-    return [CouncilDownloadLogOut.model_validate(d) for d in ds]
+    ten = await bo_vb.ten_nguoi_dung(db, [d.nguoi_tai_id for d in ds])
+    return [
+        CouncilDownloadLogOut.model_validate(d).model_copy(
+            update={"nguoi_tai_ten": ten.get(d.nguoi_tai_id)}
+        )
+        for d in ds
+    ]
 
 
 @router.get(
@@ -487,7 +569,13 @@ async def list_council_document_set_deletions(
     db: AsyncSession = Depends(database.get_db),
 ):
     ds = await bo_vb.liet_ke_vet_xoa(db, limit=limit, offset=offset)
-    return [CouncilSetDeletionOut.model_validate(d) for d in ds]
+    ten = await bo_vb.ten_nguoi_dung(db, [d.nguoi_xoa_id for d in ds])
+    return [
+        CouncilSetDeletionOut.model_validate(d).model_copy(
+            update={"nguoi_xoa_ten": ten.get(d.nguoi_xoa_id)}
+        )
+        for d in ds
+    ]
 
 
 # ═══════════════════ Lượt I (F230) — ghi nhận Quyết định ĐÃ KÝ (CHỈ admin) ═══════════════════
@@ -682,12 +770,19 @@ async def list_council_decisions(
     set_id: Optional[int] = Query(None, ge=1),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    # Vòng giao diện: lọc ở máy chủ, đúng tập CHECK của bảng (CHECK_QD_LOAI / CHECK_QD_TRANG_THAI).
+    loai: Optional[str] = Query(
+        None, pattern=r"^(trung_tuyen|bo_sung|dieu_chinh|van_ban_huy)$"
+    ),
+    trang_thai: Optional[str] = Query(
+        None, pattern=r"^(hieu_luc|het_hieu_luc|huy_ghi_nhan)$"
+    ),
     db: AsyncSession = Depends(database.get_db),
 ):
     from ..repositories.council_decision_repository import CouncilDecisionRepository
 
     ds = await CouncilDecisionRepository(db).danh_sach_qd(
-        set_id=set_id, limit=limit, offset=offset
+        set_id=set_id, limit=limit, offset=offset, loai=loai, trang_thai=trang_thai
     )
     return [CouncilDecisionOut.model_validate(d) for d in ds]
 
@@ -1085,4 +1180,7 @@ ENDPOINT_THEO_CO = {
     "kiem_truoc": preview_council_document_set,
     "doi_ma": resolve_council_profile_codes,
     "tim_ho_so": search_council_profiles,
+    # Vòng giao diện — tải cả bộ (đặc tả 3.6) + người tạo bộ (bộ lọc danh sách)
+    "tai_ca_bo": download_council_document_set_zip,
+    "xem_nguoi_tao_bo": list_council_document_set_creators,
 }

@@ -3865,6 +3865,21 @@ async def get_council_document_confirm_right(
     return True
 
 
+# Vòng giao diện (đặc tả 3.9): ô "Quyết định trúng tuyển" trên trang hồ sơ — ai xem được hồ sơ thì xem số / ngày
+# Quyết định; RIÊNG lý do huỷ ghi nhận chỉ ADMIN. Cùng nguồn "chỉ admin" của văn bản Hội đồng; trả ``bool`` cho service,
+# không từ chối route nào (như ``get_council_document_confirm_right``).
+async def get_council_decision_reason_right(
+    current_user: models.User = Depends(check_permission),
+) -> bool:
+    try:
+        await require_council_document_admin(
+            await get_council_document_scope(current_user)
+        )
+    except PermissionDeniedError:
+        return False
+    return True
+
+
 # Lượt I (F230): văn bản ĐÃ KÝ + nhóm "chờ Admin quyết" — CHỈ ADMIN (J1 dòng 9: Admin tạo + ghi nhận;
 # owner C7: Admin cho phép TỪNG em). Tầng chủ sở hữu VAI = Casbin (admin wildcard; không vai nào khác có
 # dòng); hai dependency dưới là LỚP PHỤ fail-closed, kiểm "chỉ admin" TRƯỚC khi tìm (không lộ tồn tại).

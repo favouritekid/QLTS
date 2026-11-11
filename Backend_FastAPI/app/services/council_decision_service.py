@@ -963,20 +963,8 @@ async def cho_xet_lai(
 
 
 # ═══════════════════════════════ đọc ═════════════════════════════════════════════════════
-async def tom_tat_qd_cua_bo(db: AsyncSession, set_id: int) -> Optional[Dict[str, Any]]:
-    """Trạng thái + số + ngày + số em của văn bản đã ký (chưa huỷ ghi nhận, mới nhất) của bộ — phần
-    Quản lý được xem trên bộ đơn vị mình (J1 dòng 9). Không id hồ sơ."""
-    song = await CouncilDecisionRepository(db).van_ban_song_cua_bo(set_id)
-    if not song:
-        return None
-    d = song[-1]
-    return {
-        "loai": d.loai,
-        "trang_thai": d.trang_thai,
-        "so_quyet_dinh": d.so_quyet_dinh,
-        "ngay_ky": d.ngay_ky.isoformat(),
-        "so_ho_so": d.so_ho_so,
-    }
+# Tóm tắt văn bản đã ký của MỘT bộ (trước: ``tom_tat_qd_cua_bo``) nay ở ``SQL_BO_MO_RONG`` của
+# ``council_document_repository`` — MỘT câu cho danh sách + chi tiết bộ (vòng giao diện, đặc tả 3.4 / 3.5).
 
 
 async def chi_tiet_qd(db: AsyncSession, decision_id: int):

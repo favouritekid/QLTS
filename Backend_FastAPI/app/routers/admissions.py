@@ -703,6 +703,7 @@ async def get_admission_profile(
     profile_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
+    xem_ly_do_huy: bool = Depends(deps.get_council_decision_reason_right),
 ):
     """
     Get AdmissionProfile by ID.
@@ -722,7 +723,14 @@ async def get_admission_profile(
             profile_id=profile_id,
             current_user=current_user,
         )
+        # Vòng giao diện Văn bản Hội đồng (đặc tả 3.9) — SAU kiểm IDOR của ``get_profile``.
+        from ..services.council_decision_status_service import o_quyet_dinh_ho_so
 
+        object.__setattr__(
+            profile,
+            "quyet_dinh_trung_tuyen",
+            await o_quyet_dinh_ho_so(db, profile.id, xem_ly_do_huy=xem_ly_do_huy),
+        )
         return profile
 
     except ResourceNotFoundError as e:

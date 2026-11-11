@@ -1245,7 +1245,9 @@ jobs:
           # phân xử / xoá bộ / lịch ba phiên F272) + `tests/unit/test_council_decision_submission_model.py` (model ↔
           # migration hdts20261112). Đường chọn hồ sơ (vòng giao diện 3.1–3.3, 3.11):
           # `tests/api/test_council_set_preview_api.py` (kiểm trước / dựng theo id + dấu / đổi mã / tìm hồ sơ) +
-          # `tests/unit/test_council_preview_sign.py` (dấu + thứ tự chuẩn, hàm thuần). Ghim WHOLE-FILE.
+          # `tests/unit/test_council_preview_sign.py` (dấu + thứ tự chuẩn, hàm thuần). Đợt 2 (3.4–3.6, 3.8, 3.9):
+          # `tests/api/test_council_set_list_api.py` (tình trạng bộ / Quyết định / lọc / không N+1, người tạo, tải cả
+          # bộ, tên người trong nhật ký, lọc văn bản, ô Quyết định trên hồ sơ, năm học ở dòng danh sách). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1351,6 +1353,7 @@ jobs:
               tests/integration/test_council_decision_submission_migration.py
               tests/api/test_council_set_preview_api.py
               tests/unit/test_council_preview_sign.py
+              tests/api/test_council_set_list_api.py
 
     env:
       APP_ENV: test
