@@ -67,3 +67,105 @@ async def test_n9_chi_vuot_duong_xet(client, hs, ad):  # noqa: F811
     assert [(c["loai"], c["admission_path_id"]) for c in r.json()["canh_bao_vuot_chi_tieu"]] == [
         ("duong_xet", o["path"])
     ], r.text
+
+
+# ── F264 (Codex lần 16): hai cách đếm ô ngành cho số KHÁC nhau ─────────────────────────────────────────────────
+# Em thứ hai (``SACH[1]``, KHÔNG nằm trong bộ) được đặt để chiếm chỗ ở ĐÚNG MỘT cách đếm. Tiền điều kiện đo bằng
+# chính hai hàm đếm trước khi ghi (dựng dữ liệu sai thì ca đỏ ở tiền điều kiện, không đỏ vì cảnh báo). Chỉ tiêu
+# năm = 1, đường xét không đặt ⇒ sau khi ghi em ``SACH[0]``: một cách đếm = 1 (đầy, chưa vượt), cách kia = 2 (vượt)
+# ⇒ phải cảnh báo, kèm ĐÚNG hai số. Bỏ một nhánh khỏi ``max(cong_bo, phe_duyet)`` ⇒ đúng một trong hai ca đỏ.
+
+
+async def _hai_cach_dem(o):
+    from app.database import AsyncSessionLocal
+    from app.services import quota_occupancy_service as qos
+
+    async with AsyncSessionLocal() as db:
+        return (
+            await qos.dem_theo_thong_tin_hoc_vu(db, academic_info_id=o["ai"]),
+            await qos.dem_theo_nganh_nam(db, offering_id=o["off"], academic_year=2026),
+        )
+
+
+async def _ghi_sau_khi_dat_em_thu_hai(client, ad, hs, dat_em_thu_hai):
+    o = await _o_chi_tieu(hs, SACH[0], chi_tieu=1)
+    await qd._sql("UPDATE admission_path SET admit_quota = NULL WHERE id = :p", p=o["path"])
+    p2 = hs[SACH[1]][1]
+    await qd._sql("UPDATE admission_profile SET status = 'approved' WHERE id = :p", p=p2)
+    await dat_em_thu_hai(p2, o)
+    truoc = await _hai_cach_dem(o)
+    bo = await qd._bo_ok(client, ad, hs, [SACH[0]])
+    r = await qd._ghi(client, ad, bo["id"], so="502", so_hs=1)
+    return r, o, truoc
+
+
+async def test_f264_chi_phe_duyet_cu_vuot(client, hs, ad):  # noqa: F811
+    async def dat(p2, o):
+        # Phê duyệt cũ đếm theo lead → ngành + năm; công bố đếm nguyện vọng "trúng" ⇒ em 2 không có nguyện vọng
+        # trúng nào, chạy bộ máy nguyện vọng (không rơi vào nhánh kiểu cũ), lead trỏ đúng ngành của ô K.
+        await qd._sql(
+            "UPDATE lead SET offering_id = :o WHERE id = (SELECT lead_id FROM admission_profile WHERE id = :p)",
+            o=o["off"],
+            p=p2,
+        )
+        await qd._sql("UPDATE admission_profile SET uses_choice_engine = TRUE WHERE id = :p", p=p2)
+        await qd._sql(
+            "UPDATE admission_profile_choice SET decision = 'pending' WHERE admission_profile_id = :p", p=p2
+        )
+
+    r, o, truoc = await _ghi_sau_khi_dat_em_thu_hai(client, ad, hs, dat)
+    assert truoc == (0, 1), "tiền điều kiện: (công bố, Phê duyệt cũ) trước khi ghi = %r" % (truoc,)
+    assert r.status_code == 201, r.text
+    assert r.json()["canh_bao_vuot_chi_tieu"] == [
+        {
+            "loai": "nganh",
+            "chi_tieu": 1,
+            "academic_info_id": o["ai"],
+            "da_dung_cong_bo": 1,
+            "da_dung_phe_duyet_cu": 2,
+            "admission_path_id": None,
+            "da_dung": None,
+        }
+    ], r.text
+
+
+async def test_f264_chi_cong_bo_vuot(client, hs, ad):  # noqa: F811
+    async def dat(p2, o):
+        # Công bố đếm nguyện vọng "trúng" trên đường xét thuộc học vụ của ô K; Phê duyệt cũ đếm theo lead ⇒ lead của
+        # em 2 trỏ sang một ngành KHÁC; nguyện vọng đầu của em 2 chuyển sang đường xét K và đánh dấu trúng.
+        khac = await qd._q1(
+            "SELECT offering_id FROM offering_academic_info WHERE offering_id <> :o ORDER BY id LIMIT 1", o=o["off"]
+        )
+        assert khac is not None, "seed thiếu ngành thứ hai"
+        await qd._sql(
+            "UPDATE lead SET offering_id = :o WHERE id = (SELECT lead_id FROM admission_profile WHERE id = :p)",
+            o=khac,
+            p=p2,
+        )
+        await qd._sql("UPDATE admission_profile SET uses_choice_engine = TRUE WHERE id = :p", p=p2)
+        await qd._sql(
+            "UPDATE admission_profile_choice SET decision = 'pending' WHERE admission_profile_id = :p", p=p2
+        )
+        await qd._sql(
+            "UPDATE admission_profile_choice SET admission_path_id = :a, decision = 'admitted' WHERE id = ("
+            # ưu tiên nguyện vọng ĐÃ ở đường xét K (tránh trùng cặp hồ sơ – đường xét nếu có ràng buộc duy nhất)
+            "SELECT id FROM admission_profile_choice WHERE admission_profile_id = :p "
+            "ORDER BY (admission_path_id = :a) DESC, display_order, id LIMIT 1)",
+            a=o["path"],
+            p=p2,
+        )
+
+    r, o, truoc = await _ghi_sau_khi_dat_em_thu_hai(client, ad, hs, dat)
+    assert truoc == (1, 0), "tiền điều kiện: (công bố, Phê duyệt cũ) trước khi ghi = %r" % (truoc,)
+    assert r.status_code == 201, r.text
+    assert r.json()["canh_bao_vuot_chi_tieu"] == [
+        {
+            "loai": "nganh",
+            "chi_tieu": 1,
+            "academic_info_id": o["ai"],
+            "da_dung_cong_bo": 2,
+            "da_dung_phe_duyet_cu": 1,
+            "admission_path_id": None,
+            "da_dung": None,
+        }
+    ], r.text
