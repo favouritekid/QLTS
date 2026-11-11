@@ -96,6 +96,28 @@ async def _trang_thai(conn):
     return out
 
 
+async def _go_khoa_ngoai_cua_bang_sau(conn):
+    """Gỡ TẠM (giao dịch của ca, ROLLBACK ở cuối) mọi khoá ngoại từ bảng NGOÀI ba bảng của 1103 trỏ vào chúng —
+    như khi các migration SAU (lượt I ``hdts20261107``: Quyết định + dòng bộ; vòng giao diện ``hdts20261112``: lượt
+    gửi) đã được hạ cấp trước, đúng thứ tự một chuỗi hạ cấp thật. CSDL test dựng bằng ``create_all`` có MỌI bảng ⇒
+    thiếu bước này thì DROP của 1103 gặp ``DependentObjectsStillExistError`` — ca gãy TỪ lượt I (đo trên a3252ad9 và
+    bfba3a2e, phát hiện ở hồi quy rộng lượt L). Trả số khoá ngoại đã gỡ."""
+    ds = (
+        await conn.execute(
+            text(
+                "SELECT conrelid::regclass::text, conname FROM pg_constraint WHERE contype = 'f' "
+                "AND confrelid IN ('council_document_template'::regclass, 'council_document_set'::regclass, "
+                "'council_document_set_file'::regclass) AND conrelid NOT IN "
+                "('council_document_template'::regclass, 'council_document_set'::regclass, "
+                "'council_document_set_file'::regclass)"
+            )
+        )
+    ).all()
+    for bang, ten in ds:
+        await conn.execute(text('ALTER TABLE %s DROP CONSTRAINT "%s"' % (bang, ten)))
+    return len(ds)
+
+
 def _chay_downgrade(sync_conn):
     ctx = MigrationContext.configure(connection=sync_conn)
     with Operations.context(ctx):
@@ -148,6 +170,7 @@ async def test_co_cho_phep_thi_xoa_ca_ba_bang_du_con_du_lieu(
             for b in BA_BANG:
                 await _chen_mot_hang(conn, b)
             assert await _trang_thai(conn) == {MAU: 1, BO: 1, TEP: 1}
+            assert await _go_khoa_ngoai_cua_bang_sau(conn) >= 1
             await conn.run_sync(_chay_downgrade)
             assert await _trang_thai(conn) == {b: None for b in BA_BANG}  # đã xoá
         finally:
@@ -162,6 +185,7 @@ async def test_ba_bang_rong_thi_ha_cap_khong_can_co(setup_test_database, monkeyp
         gd = await conn.begin()
         try:
             assert await _trang_thai(conn) == {b: 0 for b in BA_BANG}
+            assert await _go_khoa_ngoai_cua_bang_sau(conn) >= 1
             await conn.run_sync(_chay_downgrade)
             assert await _trang_thai(conn) == {b: None for b in BA_BANG}
         finally:
