@@ -64,6 +64,9 @@ from .council_document import (
     CouncilDocumentSetRow,
     CouncilDocumentTemplate,
 )
+# K-2 (owner 11-11): trigger khoá cấu hình đã được Quyết định dùng — bản cho create_all() (bản thật: migration
+# hdts20261111). Import để listener after_create được gắn.
+from . import council_config_lock_ddl  # noqa: E402,F401
 
 # Admission Config Domain (Phase 1: Relational admission system)
 from .admission_config import (

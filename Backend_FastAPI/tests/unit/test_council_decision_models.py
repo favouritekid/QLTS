@@ -119,7 +119,11 @@ def test_ba_migration_hoi_dong_cung_tran_cho_khoa():
 def test_migration_la_head_noi_sau_hdts20261105_va_co_cho_phep_dung_chu():
     cfg = Config(str(GOC / "alembic.ini"))
     cfg.set_main_option("script_location", str(GOC / "alembic"))
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["hdts20261107"]
+    kho = ScriptDirectory.from_config(cfg)
+    # K-2 (owner 11-11): head mới hdts20261111 (trigger khoá cấu hình) nối NGAY sau hdts20261107; 1107 vẫn nối
+    # ngay sau 1105 (dòng dưới). Không ai được chen migration khác vào giữa chuỗi Hội đồng.
+    assert kho.get_heads() == ["hdts20261111"]
+    assert kho.get_revision("hdts20261111").down_revision == "hdts20261107"
     assert (MIG.revision, MIG.down_revision) == ("hdts20261107", "hdts20261105")
     assert MIG.CO_CHO_PHEP_XOA == "COUNCIL_DECISION_DOWNGRADE_DROP_DATA_ENABLED"
     with pytest.raises(TypeError):

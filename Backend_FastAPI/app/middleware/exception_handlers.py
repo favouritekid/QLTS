@@ -463,6 +463,30 @@ async def http_exception_handler(
 # ============================================================================
 
 
+async def database_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Lỗi CSDL (``sqlalchemy.exc.DBAPIError``). CHỈ đổi đúng SQLSTATE của trigger khoá cấu hình K-2
+    (``app.models.council_config_lock_ddl``) thành 409 câu dễ hiểu — trigger là tầng chủ sở hữu bất biến, bắt mọi
+    đường ghi (sửa / xoá dòng học vụ, đường xét, xoá dây chuyền). Mọi lỗi CSDL khác: NÉM LẠI nguyên trạng ⇒ đi đúng
+    đường cũ (``ServerErrorMiddleware`` → ``generic_exception_handler`` 500 + ném tiếp như trước — test client có
+    ``raise_app_exceptions`` vẫn thấy ngoại lệ). Đọc SQLSTATE bằng thuộc tính (``ma_loi_csdl``), không đọc chữ."""
+    from app.models.council_config_lock_ddl import (
+        SQLSTATE_CAU_HINH_DA_DUNG,
+        THONG_DIEP_CAU_HINH_DA_DUNG,
+    )
+    from app.repositories.council_decision_repository import ma_loi_csdl
+
+    if ma_loi_csdl(exc)[0] == SQLSTATE_CAU_HINH_DA_DUNG:
+        logger.warning(
+            "config_row_locked_by_signed_decision",
+            extra={"path": _redact_path(request.url.path), "method": request.method},
+        )
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"detail": THONG_DIEP_CAU_HINH_DA_DUNG, "error_code": "CAU_HINH_DA_DUOC_QUYET_DINH_DUNG"},
+        )
+    raise exc
+
+
 async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """
     Catch-all handler for unexpected exceptions.
@@ -559,6 +583,11 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     # Starlette HTTPException (backward compatibility)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+
+    # Lỗi CSDL: chỉ SQLSTATE trigger K-2 ⇒ 409; còn lại như generic (500)
+    from sqlalchemy.exc import DBAPIError
+
+    app.add_exception_handler(DBAPIError, database_error_handler)
 
     # Generic exception handler (last resort)
     app.add_exception_handler(Exception, generic_exception_handler)

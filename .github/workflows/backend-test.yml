@@ -1235,7 +1235,12 @@ jobs:
           # Lượt L (vòng giao diện GĐ1 — Codex lần 16 F263): `tests/api/test_council_bulk_ngu_canh_chi_tieu_api.py`
           # (Phê duyệt hàng loạt không khoá dòng chỉ tiêu ngoài tập khi cấu hình đổi năm giữa dò ↔ khoá; đo khoá
           # hàng bằng phiên thứ ba NOWAIT). `tests/integration/test_loi_goc_giao_dich_db.py` (D.2: ca canh thư viện —
-          # chỗ duy nhất đọc `_rollback_exception` của SQLAlchemy trả đúng lỗi flush gốc). Ghim WHOLE-FILE.
+          # chỗ duy nhất đọc `_rollback_exception` của SQLAlchemy trả đúng lỗi flush gốc).
+          # K-2 (owner 11-11): `tests/api/test_council_config_lock_api.py` (trigger khoá cấu hình đã được Quyết
+          # định dùng: route PATCH 409, mọi đường ghi ở tầng CSDL, hai thứ tự cạnh tranh, vị từ lệch SQL = Python)
+          # + `tests/unit/test_council_config_lock_ddl_lockin.py` (bản create_all ↔ migration) + `tests/integration/
+          # test_council_config_lock_migration.py` (migration hdts20261111 qua alembic thật: khoá → đếm → dừng / cài
+          # nguyên tử, phiên sửa đang mở, lỗi câu thứ hai, chạy lại, quá trần, hạ cấp). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1333,6 +1338,9 @@ jobs:
               tests/api/test_council_decision_canh_bao_chi_tieu_api.py
               tests/api/test_council_bulk_ngu_canh_chi_tieu_api.py
               tests/integration/test_loi_goc_giao_dich_db.py
+              tests/api/test_council_config_lock_api.py
+              tests/unit/test_council_config_lock_ddl_lockin.py
+              tests/integration/test_council_config_lock_migration.py
 
     env:
       APP_ENV: test
