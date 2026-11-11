@@ -131,6 +131,7 @@ describe("dựng bộ — biến số mutation không nằm lại trong Mutation
             id: 11, nguoi_tao_id: 1, tao_luc: "2026-11-05T01:00:00Z", moc_chup: "2026-11-05T01:00:00Z",
             unit_id: null, trinh_do: "Cao đẳng", so_ho_so: 3, so_tep: 1, kich_thuoc_tong: 1, nam_hoc: 2026,
             tham_so_quyet_dinh: null, thong_tin_dung: {}, tep: [],
+            nguoi_tao_ten: null, tinh_trang: null, quyet_dinh: null, luot_gui_cho: null,
           },
           { status: 201 },
         ),

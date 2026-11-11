@@ -48,13 +48,16 @@ export const councilDocumentPermissionsSchema = z.object({
   kiem_truoc: z.boolean(),
   tim_ho_so: z.boolean(),
   doi_ma: z.boolean(),
-  // ⏳ CHỜ MÁY CHỦ (đợt 2 của phiên A): `GET /sets/{id}/tai-ca-bo` + cờ này CHƯA có ở `5feb425d`. Thiếu ⇒ `false` (tắt
-  // tính năng — fail-closed), KHÔNG làm vỡ cả trang quyền. Khi máy chủ đã trả: bỏ `.default(false)` (bắt buộc như các cờ
-  // trên) và xoá tên khỏi `CO_CHO_MAY_CHU` — test `council-documents.test.ts` nhắc việc này.
-  tai_ca_bo: z.boolean().default(false),
+  // Vòng giao diện — đợt 2 (máy chủ `083a428d`): tải cả bộ (`GET /sets/{id}/tai-ca-bo`) + người tạo bộ cho bộ lọc danh sách
+  // (`GET /nguoi-tao-bo`, MỖI route một cờ). Bắt buộc như mọi cờ trên: vắng ⇒ hợp đồng gãy ⇒ từ chối cả phản hồi.
+  tai_ca_bo: z.boolean(),
+  xem_nguoi_tao_bo: z.boolean(),
 })
-/** Cờ giao diện CHƯA có ở máy chủ (đang `.default(false)`). Rỗng khi máy chủ đã giao đủ. */
-export const CO_CHO_MAY_CHU = ["tai_ca_bo"] as const
+/**
+ * Cờ giao diện CHƯA có ở máy chủ (đang `.default(false)`). RỖNG từ đợt 2 (`083a428d`): máy chủ đã trả đủ — thêm cờ mới
+ * chờ máy chủ thì thêm tên vào đây VÀ `.default(false)` ở schema; test `council-documents.test.ts` khoá hai vế khớp nhau.
+ */
+export const CO_CHO_MAY_CHU: readonly CouncilDocumentPermissionKey[] = []
 export type CouncilDocumentPermissions = z.infer<
   typeof councilDocumentPermissionsSchema
 >
@@ -95,18 +98,40 @@ export const councilSetSchema = z.object({
   kich_thuoc_tong: z.number().int(),
   nam_hoc: z.number().int().nullable(),
   tham_so_quyet_dinh: z.record(z.string(), z.unknown()).nullable(),
-  // ⏳ CHỜ MÁY CHỦ (đặc tả 3.4): các trường dưới CHƯA có ở `GET /sets` @dd6c725d ⇒ tuỳ chọn; khi máy chủ đã
-  // trả thì bỏ `.optional()`. Giao diện KHÔNG suy tình trạng từ chỗ khác — vắng ⇒ không hiện cột/nhãn ấy.
-  nguoi_tao_ten: z.string().nullable().optional(),
+  // Đợt 2 (máy chủ `083a428d`, đặc tả 3.4 / 3.5): BỐN trường dưới LUÔN có khoá ở `GET /sets` và `GET /sets/{id}` — danh
+  // sách và chi tiết CÙNG một hình. Ở phản hồi của `POST /sets`, `POST …/dung-lai-ban-ky`, `POST /decisions/{id}/bo-dieu-chinh`
+  // (bộ vừa dựng) cả bốn = `null`, nên KHÔNG dùng `.optional()` (vắng khoá ⇒ hợp đồng gãy) mà dùng `.nullable()`.
+  // Giao diện KHÔNG suy tình trạng từ chỗ khác — `null` ⇒ hiện "—".
+  nguoi_tao_ten: z.string().nullable(),
   /** `chua_ghi_nhan` | `con_hieu_luc` | `het_hieu_luc` | `da_huy_ghi_nhan` | `chua_xac_dinh` — máy chủ tính; lạ ⇒ in nguyên. */
-  tinh_trang: z.string().optional(),
-  luot_gui_cho: z.object({ ma: z.string(), tao_luc: z.string() }).nullable().optional(),
-  // `quyet_dinh`: ở chi tiết bộ máy chủ ĐÃ trả một dict (loai, trang_thai, so_quyet_dinh, ngay_ky, so_ho_so —
-  // `tom_tat_qd_cua_bo`); đặc tả 3.4/3.5 muốn hình khác ({id, loai, so_quyet_dinh, ngay_ky, goc}). Hai hình chưa
-  // thống nhất ⇒ nhận cả hai dưới dạng dict, đọc từng khoá bằng `tomTatQuyetDinh` (không đoán).
-  quyet_dinh: z.record(z.string(), z.unknown()).nullable().optional(),
+  tinh_trang: z.string().nullable(),
+  /** CHỈ admin thấy; Quản lý luôn `null` (kể cả khi `tinh_trang = chua_xac_dinh`). Danh sách lượt đầy đủ: `GET /sets/{id}/luot-ghi-nhan`. */
+  luot_gui_cho: z.object({ ma: z.string(), tao_luc: z.string() }).nullable(),
+  /** Văn bản đã ký CHƯA huỷ ghi nhận, mới nhất của bộ (+ Quyết định gốc khi là bổ sung); chưa có ⇒ `null`. */
+  quyet_dinh: z
+    .object({
+      id: z.number().int(),
+      loai: z.string(),
+      trang_thai: z.string(),
+      so_quyet_dinh: z.string(),
+      ngay_ky: z.string(),
+      so_ho_so: z.number().int(),
+      goc: z
+        .object({ id: z.number().int(), so_quyet_dinh: z.string(), ngay_ky: z.string() })
+        .nullable(),
+    })
+    .nullable(),
 })
 export type CouncilSet = z.infer<typeof councilSetSchema>
+export type CouncilSetDecisionSummary = NonNullable<CouncilSet["quyet_dinh"]>
+
+/** `GET /nguoi-tao-bo` — người tạo phân biệt của các bộ trong phạm vi người gọi (bộ lọc "Người tạo"); `ten` = họ tên, không có thì tên đăng nhập. */
+export const councilSetCreatorSchema = z.object({
+  id: z.number().int(),
+  ten: z.string(),
+})
+export type CouncilSetCreator = z.infer<typeof councilSetCreatorSchema>
+export const councilSetCreatorListSchema = z.array(councilSetCreatorSchema)
 export const councilSetListSchema = z.array(councilSetSchema)
 
 export const councilSetFileSchema = z.object({
@@ -140,8 +165,9 @@ export const councilSetDeletionSchema = z.object({
   nguoi_xoa_id: z.number().int(),
   xoa_luc: z.string(),
   ly_do: z.string(),
-  // ⏳ CHỜ MÁY CHỦ (đặc tả 5.7): tên người xoá để hiện thay "Tài khoản #n"; vắng ⇒ giữ "Tài khoản #n".
-  nguoi_xoa_ten: z.string().nullable().optional(),
+  // Đợt 2 (đặc tả 5.7): tên người xoá (họ tên, không có thì tên đăng nhập) — LUÔN có khoá; `null` (tài khoản không còn)
+  // ⇒ giao diện giữ "Tài khoản #n".
+  nguoi_xoa_ten: z.string().nullable(),
 })
 export type CouncilSetDeletion = z.infer<typeof councilSetDeletionSchema>
 export const councilSetDeletionListSchema = z.array(councilSetDeletionSchema)
@@ -154,8 +180,8 @@ export const councilDownloadLogSchema = z.object({
   sha256: z.string(),
   nguoi_tai_id: z.number().int(),
   tai_luc: z.string(),
-  // ⏳ CHỜ MÁY CHỦ (đặc tả 5.7): tên người tải; vắng ⇒ giữ "Tài khoản #n".
-  nguoi_tai_ten: z.string().nullable().optional(),
+  // Đợt 2 (đặc tả 5.7): tên người tải — LUÔN có khoá; `null` ⇒ giao diện giữ "Tài khoản #n".
+  nguoi_tai_ten: z.string().nullable(),
 })
 export type CouncilDownloadLog = z.infer<typeof councilDownloadLogSchema>
 export const councilDownloadLogListSchema = z.array(councilDownloadLogSchema)
@@ -393,7 +419,8 @@ export const councilQuotaWarningSchema = z.object({
   da_dung_phe_duyet_cu: z.number().int().nullable().optional(),
   admission_path_id: z.number().int().nullable().optional(),
   da_dung: z.number().int().nullable().optional(),
-  // ⏳ CHỜ MÁY CHỦ (đặc tả 3.8): tên ngành / đường xét để hiển thị. Thiếu ⇒ giao diện hiện mã + id.
+  // Đợt 2 (đặc tả 3.8): tên ngành (học vụ) / tên hiển thị của đường xét, chỉ để hiển thị. Cảnh báo ĐÃ LƯU trước bản này
+  // không có khoá ⇒ máy chủ trả `null` (hoặc vắng khi đọc lại sự kiện cũ) ⇒ giao diện hiện mã + id. Vì vậy KHÔNG bắt buộc.
   nhan: z.string().nullable().optional(),
 })
 export type CouncilQuotaWarning = z.infer<typeof councilQuotaWarningSchema>
@@ -501,8 +528,9 @@ export const councilCompareSchema = z.object({
 export type CouncilCompare = z.infer<typeof councilCompareSchema>
 
 // ═══════════════════════ Ô "Quyết định trúng tuyển" trên trang hồ sơ (đặc tả 3.9) ═══════════════════════
-// ⏳ CHỜ MÁY CHỦ: DTO chi tiết hồ sơ CHƯA có `quyet_dinh_trung_tuyen`. Thẻ đọc qua `safeParse` — vắng / sai dạng
-// ⇒ không hiện thẻ (không đoán).
+// Đợt 2 (máy chủ `083a428d`): CHỈ `GET /api/admissions/{id}` gán `quyet_dinh_trung_tuyen`; route khác trả
+// `AdmissionProfileResponse` (vd PUT cập nhật) ⇒ `null`. Thẻ đọc qua `safeParse` — `null` / vắng / sai dạng ⇒ không hiện
+// thẻ (không đoán), KHÔNG làm vỡ cả trang hồ sơ.
 export const councilProfileDecisionSchema = z.object({
   /** `co_qd_hieu_luc` | `cho_admin_quyet` | `da_cho_xet_lai` | `chua_co_qd` — máy chủ tính; lạ ⇒ in nguyên */
   tinh_trang: z.string(),

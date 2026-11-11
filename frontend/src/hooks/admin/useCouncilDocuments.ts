@@ -40,6 +40,7 @@ import {
   listCouncilDecisions,
   listCouncilDownloadLog,
   listCouncilSetDeletions,
+  listCouncilSetCreators,
   listCouncilSets,
   listCouncilSubmissions,
   listCouncilTemplates,
@@ -70,6 +71,8 @@ export const councilDocumentKeys = {
   sets: () => [...councilDocumentKeys.all, "sets"] as const,
   setList: (p: CouncilSetListParams) => [...councilDocumentKeys.sets(), "list", p] as const,
   set: (id: number) => [...councilDocumentKeys.sets(), "detail", id] as const,
+  /** người tạo phân biệt của các bộ trong phạm vi — bộ lọc "Người tạo" (tên người, không phải dữ liệu cá nhân của thí sinh) */
+  creators: () => [...councilDocumentKeys.sets(), "nguoi-tao"] as const,
   /** lượt gửi của bộ — mã lượt KHÔNG phải dữ liệu cá nhân nhưng không lưu ngoài bộ nhớ */
   submissions: (setId: number) => [...councilDocumentKeys.sets(), "luot-gui", setId] as const,
   decisions: () => [...councilDocumentKeys.all, "decisions"] as const,
@@ -119,6 +122,7 @@ export const NO_COUNCIL_PERMISSIONS: CouncilDocumentPermissions = {
   tim_ho_so: false,
   doi_ma: false,
   tai_ca_bo: false,
+  xem_nguoi_tao_bo: false,
 }
 
 /**
@@ -192,6 +196,19 @@ export function useCouncilSets(params: CouncilSetListParams, enabled: boolean) {
     enabled,
     staleTime: 30_000,
     placeholderData: keepPreviousData,
+  })
+}
+
+/**
+ * Người tạo phân biệt cho bộ lọc "Người tạo" của danh sách bộ. Chỉ gọi khi `enabled` (cờ `xem_nguoi_tao_bo` do máy chủ
+ * trả) — không có cờ thì KHÔNG gọi route (Casbin sẽ 403) và bộ lọc không hiện.
+ */
+export function useCouncilSetCreators(enabled: boolean) {
+  return useQuery({
+    queryKey: councilDocumentKeys.creators(),
+    queryFn: listCouncilSetCreators,
+    enabled,
+    staleTime: 60_000,
   })
 }
 

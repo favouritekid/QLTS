@@ -16,7 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useAcademicYears } from "@/hooks/admissions/useAdmissions"
-import { useCouncilSets, useDownloadCouncilSetZip } from "@/hooks/admin/useCouncilDocuments"
+import { useCouncilSetCreators, useCouncilSets, useDownloadCouncilSetZip } from "@/hooks/admin/useCouncilDocuments"
 import { useDebouncedValue } from "@/lib/hooks/use-debounced-value"
 import { NHAN_CHUA_XAC_DINH } from "@/lib/council-submission"
 
@@ -27,7 +27,6 @@ import {
   nguoiHienThi,
   nhanTinhTrangBo,
   thoiDiem,
-  tomTatQuyetDinh,
 } from "./hien-thi"
 
 const CO_TRANG = 50
@@ -37,20 +36,25 @@ interface Props {
   canOpenDetail: boolean
   /** cờ `tai_ca_bo` của máy chủ — nút "Tải cả bộ" từng dòng */
   canZip?: boolean
+  /** cờ `xem_nguoi_tao_bo` của máy chủ — bộ lọc "Người tạo" (không có cờ ⇒ không hiện và KHÔNG gọi route) */
+  canFilterCreator?: boolean
 }
 
 /**
  * Danh sách bộ văn bản (đặc tả 5.7): Bộ · Năm · Quyết định · Hồ sơ · Tình trạng · Người tạo · Dựng lúc · [Mở] [Tải cả bộ].
  * Máy chủ LỌC theo phạm vi (admin: mọi bộ; quản lý: bộ của đơn vị mình). Tình trạng / tên người tạo / Quyết định do MÁY
- * CHỦ trả (⏳ chờ — đặc tả 3.4); vắng ⇒ "—", giao diện KHÔNG tự suy từ chỗ khác. Bộ lọc gửi lên máy chủ; máy chủ cũ bỏ qua.
+ * CHỦ trả (đặc tả 3.4, máy chủ `083a428d`); `null` ⇒ "—", giao diện KHÔNG tự suy từ chỗ khác. Bốn bộ lọc (số Quyết định,
+ * năm học, tình trạng, người tạo) LỌC Ở MÁY CHỦ — giao diện chỉ gửi giá trị, không lọc lại.
  */
-export function CouncilSetList({ canOpenDetail, canZip = false }: Props) {
+export function CouncilSetList({ canOpenDetail, canZip = false, canFilterCreator = false }: Props) {
   const [offset, setOffset] = useState(0)
   const [soQd, setSoQd] = useState("")
   const soQdTre = useDebouncedValue(soQd, 400)
   const [nam, setNam] = useState("")
   const [tt, setTt] = useState("")
+  const [nguoiTao, setNguoiTao] = useState("")
   const { data: namCo } = useAcademicYears()
+  const nguoiTaoCo = useCouncilSetCreators(canFilterCreator)
   const zip = useDownloadCouncilSetZip()
 
   const q = useCouncilSets(
@@ -60,14 +64,15 @@ export function CouncilSetList({ canOpenDetail, canZip = false }: Props) {
       ...(soQdTre ? { so_quyet_dinh: soQdTre } : {}),
       ...(nam ? { nam_hoc: Number(nam) } : {}),
       ...(tt ? { tinh_trang: tt } : {}),
+      ...(canFilterCreator && nguoiTao ? { nguoi_tao_id: Number(nguoiTao) } : {}),
     },
     true,
   )
 
-  const dangLoc = soQd !== "" || nam !== "" || tt !== ""
+  const dangLoc = soQd !== "" || nam !== "" || tt !== "" || (canFilterCreator && nguoiTao !== "")
 
   const loc = (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid="set-list-filters">
+    <div className={`grid grid-cols-1 gap-3 ${canFilterCreator ? "sm:grid-cols-4" : "sm:grid-cols-3"}`} data-testid="set-list-filters">
       <div className="space-y-1">
         <Label htmlFor="ds-so-qd">Tìm theo số Quyết định</Label>
         <Input
@@ -122,6 +127,34 @@ export function CouncilSetList({ canOpenDetail, canZip = false }: Props) {
           ))}
         </select>
       </div>
+      {canFilterCreator ? (
+        <div className="space-y-1">
+          <Label htmlFor="ds-nguoi-tao">Người tạo</Label>
+          <select
+            id="ds-nguoi-tao"
+            data-testid="loc-nguoi-tao"
+            className="h-10 w-full rounded-md border border-border bg-card px-2 text-sm md:h-9"
+            value={nguoiTao}
+            disabled={nguoiTaoCo.isError}
+            onChange={(e) => {
+              setNguoiTao(e.target.value)
+              setOffset(0)
+            }}
+          >
+            <option value="">Tất cả</option>
+            {(nguoiTaoCo.data ?? []).map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.ten}
+              </option>
+            ))}
+          </select>
+          {nguoiTaoCo.isError ? (
+            <p className="text-xs text-muted-foreground" data-testid="loc-nguoi-tao-loi">
+              Không tải được danh sách người tạo — bộ lọc này tạm tắt.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 
@@ -168,8 +201,8 @@ export function CouncilSetList({ canOpenDetail, canZip = false }: Props) {
           </TableHeader>
           <TableBody>
             {ds.map((b) => {
-              const qd = tomTatQuyetDinh(b.quyet_dinh)
-              const khongRo = b.tinh_trang === "chua_xac_dinh" || (b.luot_gui_cho ?? null) !== null
+              const qd = b.quyet_dinh
+              const khongRo = b.tinh_trang === "chua_xac_dinh" || b.luot_gui_cho !== null
               const href = `/admin/council-documents/${b.id}${khongRo ? "?buoc=ghi-nhan" : ""}`
               return (
                 <TableRow key={b.id} data-testid={`set-row-${b.id}`}>
@@ -181,15 +214,14 @@ export function CouncilSetList({ canOpenDetail, canZip = false }: Props) {
                     <div className="text-xs text-muted-foreground">{b.trinh_do}</div>
                   </TableCell>
                   <TableCell data-testid={`qd-${b.id}`}>
-                    {qd && qd.so ? (
+                    {qd ? (
                       <>
                         <div>
-                          Số {qd.so}
-                          {qd.ngay ? ` · ${ngay(qd.ngay)}` : ""}
+                          Số {qd.so_quyet_dinh} · {ngay(qd.ngay_ky)}
                         </div>
                         {qd.goc ? (
                           <div className="text-xs text-muted-foreground">
-                            bổ sung cho số {qd.goc.so} ({ngay(qd.goc.ngay)})
+                            bổ sung cho số {qd.goc.so_quyet_dinh} ({ngay(qd.goc.ngay_ky)})
                           </div>
                         ) : null}
                       </>
@@ -199,7 +231,7 @@ export function CouncilSetList({ canOpenDetail, canZip = false }: Props) {
                   </TableCell>
                   <TableCell className="text-right">{b.so_ho_so}</TableCell>
                   <TableCell data-testid={`tt-${b.id}`}>
-                    {b.tinh_trang === undefined && !khongRo ? (
+                    {b.tinh_trang === null && !khongRo ? (
                       "—"
                     ) : (
                       <>

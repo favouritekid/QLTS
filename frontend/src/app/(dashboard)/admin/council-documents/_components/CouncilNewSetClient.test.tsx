@@ -44,6 +44,7 @@ const BO_MOI = {
   id: 9, nguoi_tao_id: 1, tao_luc: "2026-11-11T01:00:00Z", moc_chup: "2026-11-11T00:59:00Z", unit_id: null,
   trinh_do: "Cao đẳng", so_ho_so: 2, so_tep: 6, kich_thuoc_tong: 100, nam_hoc: 2026, tham_so_quyet_dinh: null,
   thong_tin_dung: {}, tep: [],
+  nguoi_tao_ten: null, tinh_trang: null, quyet_dinh: null, luot_gui_cho: null, // phản hồi POST: bốn trường này = null (bộ vừa dựng)
 }
 
 interface Cau {

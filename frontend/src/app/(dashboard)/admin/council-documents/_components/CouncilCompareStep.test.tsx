@@ -19,6 +19,7 @@ const API = "http://localhost:8000"
 const BO = {
   id: 7, nguoi_tao_id: 1, tao_luc: "2026-11-05T01:00:00Z", moc_chup: "2026-11-05T00:59:00Z", unit_id: 2, trinh_do: "Cao đẳng",
   so_ho_so: 3, so_tep: 2, kich_thuoc_tong: 20, nam_hoc: 2026, tham_so_quyet_dinh: null, thong_tin_dung: {}, tep: [],
+  nguoi_tao_ten: null, tinh_trang: null, quyet_dinh: null, luot_gui_cho: null,
 } as unknown as CouncilSetDetail
 
 let goi = 0

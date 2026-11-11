@@ -68,7 +68,7 @@ export function CouncilDocumentsClient() {
       </TabsList>
       {q.xem_danh_sach_bo ? (
         <TabsContent value="bo" className="pt-4">
-          <CouncilSetList canOpenDetail={q.xem_chi_tiet_bo} canZip={q.tai_ca_bo} />
+          <CouncilSetList canOpenDetail={q.xem_chi_tiet_bo} canZip={q.tai_ca_bo} canFilterCreator={q.xem_nguoi_tao_bo} />
         </TabsContent>
       ) : null}
       {q.tao_bo ? (

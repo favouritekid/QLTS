@@ -1,6 +1,5 @@
 /**
- * Hàm hiển thị của module Hội đồng — chỉ trình bày: nhãn do bảng cố định; mã LẠ ⇒ in nguyên (không đoán nghĩa);
- * `tomTatQuyetDinh` chỉ lấy khoá CÓ và ĐÚNG KIỂU (hai hình `quyet_dinh` của máy chủ chưa thống nhất).
+ * Hàm hiển thị của module Hội đồng — chỉ trình bày: nhãn do bảng cố định; mã LẠ ⇒ in nguyên (không đoán nghĩa).
  */
 import { describe, expect, it } from "vitest"
 
@@ -14,7 +13,6 @@ import {
   nhanTrangThai,
   nhanTrangThaiQuyetDinh,
   nhanTruongDoiChieu,
-  tomTatQuyetDinh,
 } from "./hien-thi"
 
 describe("nhãn: mã đã biết ⇒ nhãn; mã LẠ ⇒ in nguyên", () => {
@@ -47,35 +45,6 @@ describe("nhãn: mã đã biết ⇒ nhãn; mã LẠ ⇒ in nguyên", () => {
     [nhanTruongDoiChieu, "s_phieu", "s_phieu"], // khoá không chắc nghĩa ⇒ in nguyên khoá
   ] as const)("%o(%j) ⇒ %j", (f, vao, ra) => {
     expect((f as (x: string) => string)(vao)).toBe(ra)
-  })
-})
-
-describe("tomTatQuyetDinh", () => {
-  it("null / vắng ⇒ null", () => {
-    expect(tomTatQuyetDinh(null)).toBeNull()
-    expect(tomTatQuyetDinh(undefined)).toBeNull()
-  })
-
-  it("hình hiện có của máy chủ (tom_tat_qd_cua_bo): loai, trang_thai, so_quyet_dinh, ngay_ky, so_ho_so; chưa có id", () => {
-    const t = tomTatQuyetDinh({ loai: "trung_tuyen", trang_thai: "hieu_luc", so_quyet_dinh: "90", ngay_ky: "2026-10-20", so_ho_so: 12 })
-    expect(t).toMatchObject({ loai: "trung_tuyen", trangThai: "hieu_luc", so: "90", ngay: "2026-10-20", soHoSo: 12 })
-    expect(t?.id).toBeUndefined()
-    expect(t?.goc).toBeUndefined()
-  })
-
-  it("hình đặc tả (có id + goc) ⇒ đọc id và gốc", () => {
-    const t = tomTatQuyetDinh({ id: 21, so_quyet_dinh: "90", ngay_ky: "2026-10-20", goc: { id: 3, so_quyet_dinh: "50", ngay_ky: "2026-09-08" } })
-    expect(t?.id).toBe(21)
-    expect(t?.goc).toEqual({ so: "50", ngay: "2026-09-08" })
-  })
-
-  it("khoá sai kiểu ⇒ bỏ (không ép kiểu, không đoán)", () => {
-    const t = tomTatQuyetDinh({ id: "21", so_quyet_dinh: 90, ngay_ky: "", so_ho_so: "12", goc: { so_quyet_dinh: "50" } })
-    expect(t).toEqual({ id: undefined, so: undefined, ngay: undefined, loai: undefined, trangThai: undefined, soHoSo: undefined, goc: undefined })
-  })
-
-  it("id không nguyên ⇒ bỏ", () => {
-    expect(tomTatQuyetDinh({ id: 2.5 })?.id).toBeUndefined()
   })
 })
 

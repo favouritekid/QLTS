@@ -31,6 +31,7 @@ import {
   councilProfileSearchOutSchema,
   councilSetCreateByIdsSchema,
   councilSetCreateSchema,
+  councilSetCreatorListSchema,
   councilSetDeleteSchema,
   councilSetDeletionListSchema,
   councilSetDeletionSchema,
@@ -61,6 +62,7 @@ import {
   type CouncilSet,
   type CouncilSetCreate,
   type CouncilSetCreateByIds,
+  type CouncilSetCreator,
   type CouncilSetDeletion,
   type CouncilSetDetail,
   type CouncilSetGate,
@@ -115,8 +117,8 @@ export async function uploadCouncilTemplate(
 export interface CouncilSetListParams {
   limit: number
   offset: number
-  // ⏳ CHỜ MÁY CHỦ (đặc tả 3.4): bộ lọc của `GET /sets` CHƯA có ở `dd6c725d` — chỉ gửi khi người dùng đặt; máy chủ cũ
-  // bỏ qua (danh sách không lọc). Số Quyết định chỉ gồm chữ số (không phải dữ liệu cá nhân).
+  // Đợt 2 (máy chủ `083a428d`, đặc tả 3.4) — bộ lọc LỌC Ở MÁY CHỦ, chỉ gửi khi người dùng đặt; sai dạng ⇒ 422:
+  // `so_quyet_dinh` ^[0-9]{1,6}$ · `nam_hoc` 2000–2100 · `tinh_trang` 1 trong 5 mã · `nguoi_tao_id` ≥ 1. Không phải dữ liệu cá nhân.
   so_quyet_dinh?: string
   nam_hoc?: number
   tinh_trang?: string
@@ -133,6 +135,12 @@ export async function listCouncilSets(
   if (params.nguoi_tao_id !== undefined) q.nguoi_tao_id = params.nguoi_tao_id
   const res = await api.get(`${P}/sets`, { params: q })
   return councilSetListSchema.parse(res.data)
+}
+
+/** Người tạo phân biệt của các bộ trong phạm vi người gọi (bộ lọc "Người tạo"); sắp theo tên ở máy chủ. Cờ `xem_nguoi_tao_bo`. */
+export async function listCouncilSetCreators(): Promise<CouncilSetCreator[]> {
+  const res = await api.get(`${P}/nguoi-tao-bo`)
+  return councilSetCreatorListSchema.parse(res.data)
 }
 
 export async function getCouncilSet(setId: number): Promise<CouncilSetDetail> {
@@ -235,8 +243,9 @@ async function taiBlob(url: string, tenDuPhong: string): Promise<CouncilFileBlob
 }
 
 /**
- * Tải CẢ BỘ (.zip) — ⏳ CHỜ MÁY CHỦ (`GET /sets/{id}/tai-ca-bo`, đặc tả 3.6). Máy chủ kiểm sha từng tệp, ghi
- * nhật ký tải, commit rồi mới trả byte; giao diện chỉ nhận và lưu.
+ * Tải CẢ BỘ (.zip) — `GET /sets/{id}/tai-ca-bo` (máy chủ `083a428d`, đặc tả 3.6). Máy chủ kiểm sha từng tệp, nén, ghi MỘT
+ * dòng nhật ký tải cho MỖI tệp, commit rồi mới trả byte (`application/zip`, `attachment; filename="bo-<id>.zip"`,
+ * `Cache-Control: no-store`); tệp hỏng ⇒ 500, không zip, không nhật ký; Quản lý ngoài đơn vị ⇒ 404. Giao diện chỉ nhận và lưu.
  */
 export async function downloadCouncilSetZip(setId: number): Promise<CouncilFileBlob> {
   return taiBlob(`${P}/sets/${setId}/tai-ca-bo`, `bo-${setId}.zip`)
@@ -316,7 +325,8 @@ export interface CouncilDecisionListParams {
   limit: number
   offset: number
   set_id?: number
-  // ⏳ CHỜ MÁY CHỦ (phiên A chốt 11-11): bộ lọc loại + trạng thái; máy chủ cũ bỏ qua ⇒ nơi dùng vẫn lọc phòng thủ.
+  // Đợt 2 (máy chủ `083a428d`): lọc ở MÁY CHỦ — `loai` ∈ trung_tuyen|bo_sung|dieu_chinh|van_ban_huy, `trang_thai` ∈
+  // hieu_luc|het_hieu_luc|huy_ghi_nhan; giá trị lạ ⇒ 422. Giao diện KHÔNG lọc lại phía mình.
   loai?: string
   trang_thai?: string
 }

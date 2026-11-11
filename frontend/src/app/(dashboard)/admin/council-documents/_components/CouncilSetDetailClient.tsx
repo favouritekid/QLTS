@@ -56,7 +56,6 @@ import {
   nhanTinhTrangBo,
   shaRutGon,
   thoiDiem,
-  tomTatQuyetDinh,
 } from "./hien-thi"
 
 const NHAN_THAM_SO: Record<string, string> = {
@@ -218,7 +217,7 @@ export function CouncilSetDetailClient({
 function ThongTinBo({ bo, chuaRo }: { bo: CouncilSetDetail; chuaRo: boolean }) {
   const ts = bo.tham_so_quyet_dinh ?? {}
   const dongTs = Object.entries(ts).filter(([, v]) => v !== null && v !== undefined)
-  const qd = tomTatQuyetDinh(bo.quyet_dinh)
+  const qd = bo.quyet_dinh
   // Khi lượt gửi chưa rõ (phía này đang chờ phân xử, hoặc máy chủ nói `chua_xac_dinh`): CHỈ "Chưa xác định".
   const khongRo = chuaRo || bo.tinh_trang === "chua_xac_dinh"
   return (
@@ -234,7 +233,7 @@ function ThongTinBo({ bo, chuaRo }: { bo: CouncilSetDetail; chuaRo: boolean }) {
         <div><dt className="inline text-muted-foreground">Số hồ sơ: </dt><dd className="inline">{bo.so_ho_so}</dd></div>
         <div><dt className="inline text-muted-foreground">Số tệp · dung lượng: </dt><dd className="inline">{bo.so_tep} · {kichThuoc(bo.kich_thuoc_tong)}</dd></div>
       </dl>
-      {khongRo || bo.tinh_trang !== undefined ? (
+      {khongRo || bo.tinh_trang !== null ? (
         <div className="text-sm" data-testid="tinh-trang">
           <span className="text-muted-foreground">Tình trạng: </span>
           <span className="font-medium">{khongRo ? NHAN_CHUA_XAC_DINH : nhanTinhTrangBo(bo.tinh_trang ?? "")}</span>
@@ -245,12 +244,10 @@ function ThongTinBo({ bo, chuaRo }: { bo: CouncilSetDetail; chuaRo: boolean }) {
           ) : null}
         </div>
       ) : null}
-      {qd && (qd.so || qd.ngay) ? (
+      {qd ? (
         <div className="text-sm" data-testid="qd-cua-bo">
           <span className="text-muted-foreground">Quyết định đã ghi: </span>
-          {[qd.loai ? nhanLoaiQuyetDinh(qd.loai) : null, qd.so ? `số ${qd.so}` : null, qd.ngay ? `ngày ${ngay(qd.ngay)}` : null, typeof qd.soHoSo === "number" ? `${qd.soHoSo} hồ sơ` : null]
-            .filter(Boolean)
-            .join(" · ")}
+          {[nhanLoaiQuyetDinh(qd.loai), `số ${qd.so_quyet_dinh}`, `ngày ${ngay(qd.ngay_ky)}`, `${qd.so_ho_so} hồ sơ`].join(" · ")}
         </div>
       ) : null}
       <div className="text-sm">

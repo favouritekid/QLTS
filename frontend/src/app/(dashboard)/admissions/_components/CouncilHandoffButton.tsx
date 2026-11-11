@@ -21,12 +21,42 @@ import { useCouncilSelectionStore } from "@/lib/stores/council-selection.store"
 
 export const DUONG_DAN_DUNG_VAN_BAN = "/admin/council-documents/moi"
 
+/** Một hồ sơ đang chọn: id + NĂM HỌC thật của hồ sơ (`academic_year` của dòng danh sách — máy chủ `083a428d`). */
+export interface HoSoDangChon {
+  id: number
+  academic_year?: number | null
+}
+
 interface Props {
-  /** năm học của bộ lọc đang áp (lọc phía máy chủ ⇒ mọi dòng đang hiển thị đều thuộc năm này); `undefined` = "Tất cả năm" */
-  namHoc: number | undefined
-  /** id hồ sơ đang chọn Ở TRANG NÀY (màn này cố ý xoá lựa chọn khi đổi trang / bộ lọc) */
-  idHoSo: readonly number[]
+  /** hồ sơ đang chọn Ở TRANG NÀY (màn này cố ý xoá lựa chọn khi đổi trang / bộ lọc) */
+  hoSo: readonly HoSoDangChon[]
   disabled?: boolean
+}
+
+/**
+ * Năm học CHUNG của các hồ sơ đang chọn, đọc từ chính các dòng (không suy từ bộ lọc): đúng một năm ⇒ dùng; có dòng chưa
+ * biết năm, hoặc nhiều năm khác nhau ⇒ KHÔNG dựng (không đoán, không lấy năm của dòng đầu).
+ */
+export type NamChung =
+  | { kieu: "trong" }
+  | { kieu: "chua_ro" }
+  | { kieu: "nhieu_nam" }
+  | { kieu: "chung"; nam: number }
+
+export function namChungCua(hoSo: readonly HoSoDangChon[]): NamChung {
+  if (hoSo.length === 0) return { kieu: "trong" }
+  const nam = new Set<number>()
+  for (const h of hoSo) {
+    if (typeof h.academic_year !== "number") return { kieu: "chua_ro" }
+    nam.add(h.academic_year)
+  }
+  if (nam.size > 1) return { kieu: "nhieu_nam" }
+  return { kieu: "chung", nam: [...nam][0] }
+}
+
+const LY_DO_KHOA: Record<"chua_ro" | "nhieu_nam", string> = {
+  chua_ro: "Chưa biết năm học của một số hồ sơ đang chọn",
+  nhieu_nam: "Các hồ sơ đang chọn thuộc nhiều năm học — chọn lại cho cùng một năm học",
 }
 
 /**
@@ -37,11 +67,10 @@ interface Props {
  *
  * Hiện theo CỜ máy chủ (`tao_bo` + `kiem_truoc` + `tim_ho_so` — `coTheDungTuDanhSach`), không theo vai.
  *
- * ⚠️ Lệch đặc tả có chủ ý: đặc tả muốn "năm học chung" đọc từ dòng đang hiển thị, nhưng DTO nhẹ của danh sách
- * (`AdmissionListItem`) KHÔNG có `academic_year`. Năm học lấy từ bộ lọc năm học (lọc phía máy chủ nên mọi dòng cùng
- * năm); "Tất cả năm" ⇒ nút khoá. Muốn đúng đặc tả cần máy chủ thêm `academic_year` vào `AdmissionProfileListItem`.
+ * Năm học chung = `academic_year` của CÁC DÒNG đang chọn (máy chủ `083a428d` thêm cột này vào dòng danh sách — đúng đặc
+ * 5.1); nhiều năm khác nhau hoặc có dòng chưa rõ năm ⇒ nút khoá, nói lý do.
  */
-export function CouncilHandoffButton({ namHoc, idHoSo, disabled = false }: Props) {
+export function CouncilHandoffButton({ hoSo, disabled = false }: Props) {
   const router = useRouter()
   const vm = useCouncilDocumentPermissions()
   const thayThe = useCouncilSelectionStore((s) => s.thayThe)
@@ -49,8 +78,11 @@ export function CouncilHandoffButton({ namHoc, idHoSo, disabled = false }: Props
 
   if (vm.state !== "ready" || !coTheDungTuDanhSach(vm.permissions)) return null
 
-  const thieuNam = namHoc === undefined
-  const khoa = disabled || idHoSo.length === 0 || thieuNam
+  const chung = namChungCua(hoSo)
+  const namHoc = chung.kieu === "chung" ? chung.nam : undefined
+  const idHoSo = hoSo.map((h) => h.id)
+  const khoa = disabled || namHoc === undefined
+  const lyDoKhoa = chung.kieu === "chua_ro" || chung.kieu === "nhieu_nam" ? LY_DO_KHOA[chung.kieu] : undefined
 
   const day = () => {
     if (namHoc === undefined) return
@@ -78,7 +110,7 @@ export function CouncilHandoffButton({ namHoc, idHoSo, disabled = false }: Props
         onClick={bam}
         disabled={khoa}
         aria-label="Dựng văn bản Hội đồng"
-        title={thieuNam ? "Chọn một năm học ở bộ lọc trước" : undefined}
+        title={lyDoKhoa}
         className="h-10 touch-manipulation gap-1.5 md:h-8"
         data-testid="dung-van-ban-hoi-dong"
       >

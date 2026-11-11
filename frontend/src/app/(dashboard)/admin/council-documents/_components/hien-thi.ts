@@ -56,7 +56,7 @@ export function nguoi(id: number | null): string {
   return id === null ? "—" : `Tài khoản #${id}`
 }
 
-/** Tên người khi máy chủ đã trả (`nguoi_tao_ten`); chưa có ⇒ rơi về "Tài khoản #n" (đặc tả 3.4 ⏳ chờ máy chủ). */
+/** Tên người máy chủ trả (`nguoi_tao_ten` / `nguoi_tai_ten` / `nguoi_xoa_ten`: họ tên, không có thì tên đăng nhập); `null` (tài khoản không còn) ⇒ "Tài khoản #n". */
 export function nguoiHienThi(ten: string | null | undefined, id: number | null): string {
   return ten ? ten : nguoi(id)
 }
@@ -115,38 +115,6 @@ const NHAN_LY_DO_DAN_MA: Record<string, string> = {
 }
 export function nhanLyDoDanMa(ly_do: string): string {
   return NHAN_LY_DO_DAN_MA[ly_do] ?? ly_do
-}
-
-/**
- * Đọc MỘT dict `quyet_dinh` của máy chủ (hai hình chưa thống nhất — xem `councilSetSchema`): chỉ lấy khoá nào có và
- * ĐÚNG KIỂU; khoá vắng ⇒ không có trường ấy. Không suy, không điền mặc định.
- */
-export interface TomTatQuyetDinh {
-  /** ⏳ máy chủ sẽ thêm `id` (phiên A chốt 11-11) */
-  id?: number
-  so?: string
-  ngay?: string
-  loai?: string
-  trangThai?: string
-  soHoSo?: number
-  goc?: { so: string; ngay: string }
-}
-export function tomTatQuyetDinh(raw: Record<string, unknown> | null | undefined): TomTatQuyetDinh | null {
-  if (!raw) return null
-  const chuoi = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined)
-  const goc =
-    raw.goc && typeof raw.goc === "object"
-      ? { so: chuoi((raw.goc as Record<string, unknown>).so_quyet_dinh), ngay: chuoi((raw.goc as Record<string, unknown>).ngay_ky) }
-      : undefined
-  return {
-    id: typeof raw.id === "number" && Number.isInteger(raw.id) ? raw.id : undefined,
-    so: chuoi(raw.so_quyet_dinh),
-    ngay: chuoi(raw.ngay_ky),
-    loai: chuoi(raw.loai),
-    trangThai: chuoi(raw.trang_thai),
-    soHoSo: typeof raw.so_ho_so === "number" ? raw.so_ho_so : undefined,
-    goc: goc && goc.so && goc.ngay ? { so: goc.so, ngay: goc.ngay } : undefined,
-  }
 }
 
 /** "Ngành · trình độ" của một dòng kiểm trước. */

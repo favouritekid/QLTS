@@ -34,7 +34,9 @@ const BO = {
   id: 7, nguoi_tao_id: 1, tao_luc: "2026-11-05T01:00:00Z", moc_chup: "2026-11-05T00:59:00Z", unit_id: 2,
   trinh_do: "Cao đẳng", so_ho_so: 3, so_tep: 2, kich_thuoc_tong: 20, nam_hoc: 2026,
   tham_so_quyet_dinh: { so_quyet_dinh: "99", ngay_quyet_dinh: "2026-09-08" },
-  thong_tin_dung: { luat: "v1.1" }, tep: [], tinh_trang: "chua_ghi_nhan",
+  thong_tin_dung: { luat: "v1.1" }, tep: [],
+  // `GET /sets/{id}` (máy chủ `083a428d`): bốn trường LUÔN có khoá. `quyet_dinh` do `dung()` suy từ danh sách văn bản như máy chủ.
+  nguoi_tao_ten: null, tinh_trang: "chua_ghi_nhan", quyet_dinh: null, luot_gui_cho: null,
 }
 
 function qd(over: Record<string, unknown> = {}) {
@@ -62,17 +64,32 @@ let huyBodies: Record<string, unknown>[] = []
 let soLanMo = 0
 let urlsDecisions: URL[] = []
 
+/** Như `SQL_BO_MO_RONG` của máy chủ: văn bản CHƯA huỷ ghi nhận, id lớn nhất, của bộ 7 — hoặc null. */
+function quyetDinhCuaBo7(ds: unknown[]) {
+  type D = { id: number; set_id: number; loai: string; trang_thai: string; so_quyet_dinh: string; ngay_ky: string; so_ho_so: number }
+  const song = (ds as D[]).filter((d) => d.set_id === 7 && d.trang_thai !== "huy_ghi_nhan").sort((a, b) => b.id - a.id)[0]
+  return song
+    ? { id: song.id, loai: song.loai, trang_thai: song.trang_thai, so_quyet_dinh: song.so_quyet_dinh, ngay_ky: song.ngay_ky, so_ho_so: song.so_ho_so, goc: null }
+    : null
+}
+
 function dung(c: Cau = {}) {
   server.use(
     http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: TAT_CA })),
-    http.get(`${API}${P}/sets/7`, () => HttpResponse.json({ ...BO, ...(c.bo ?? {}) })),
+    http.get(`${API}${P}/sets/7`, () => HttpResponse.json({ ...BO, quyet_dinh: quyetDinhCuaBo7(c.decisions ?? []), ...(c.bo ?? {}) })),
     http.get(`${API}${P}/nhat-ky-tai`, () => HttpResponse.json([])),
     http.get(`${API}${P}/sets/7/luot-ghi-nhan`, () => HttpResponse.json(c.ds ?? [])),
-    // Như máy chủ thật: có `set_id` ⇒ chỉ văn bản của bộ ấy.
+    // Như máy chủ thật (`083a428d`): LỌC theo `set_id`, `loai`, `trang_thai` khi có — giao diện không lọc lại.
     http.get(`${API}${P}/decisions`, ({ request }) => {
-      urlsDecisions.push(new URL(request.url))
-      const sid = new URL(request.url).searchParams.get("set_id")
-      return HttpResponse.json((c.decisions ?? []).filter((d) => sid === null || String((d as { set_id: unknown }).set_id) === sid))
+      const u = new URL(request.url)
+      urlsDecisions.push(u)
+      const khop = (d: unknown, khoa: string, tham: string) => {
+        const v = u.searchParams.get(tham)
+        return v === null || String((d as Record<string, unknown>)[khoa]) === v
+      }
+      return HttpResponse.json(
+        (c.decisions ?? []).filter((d) => khop(d, "set_id", "set_id") && khop(d, "loai", "loai") && khop(d, "trang_thai", "trang_thai")),
+      )
     }),
     http.get(`${API}${P}/decisions/21`, () => (c.chiTiet ? c.chiTiet() : HttpResponse.json({ ...qd(), dong: [], scan: null, su_kien: [] }))),
     http.post(`${API}${P}/sets/7/luot-ghi-nhan`, () => {
@@ -176,7 +193,7 @@ describe("biểu mẫu", () => {
     expect(nutGhi().disabled).toBe(false)
   })
 
-  it("danh sách gốc: hỏi máy chủ với loai=trung_tuyen & trang_thai=hieu_luc (⏳), vẫn lọc phòng thủ nếu máy chủ cũ bỏ qua", async () => {
+  it("danh sách gốc: hỏi máy chủ với loai=trung_tuyen & trang_thai=hieu_luc (máy chủ lọc; giao diện không lọc lại)", async () => {
     dung({ decisions: [qd({ id: 30, set_id: 3, so_quyet_dinh: "10" })] })
     ve()
     await dien()
@@ -436,7 +453,7 @@ describe("bộ đã có Quyết định + Huỷ ghi nhận", () => {
 
   it("máy chủ đã trả quyet_dinh.id ⇒ chọn ĐÚNG văn bản đó (không đoán theo mới nhất)", async () => {
     dung({
-      bo: { quyet_dinh: { id: 21, loai: "trung_tuyen", trang_thai: "hieu_luc", so_quyet_dinh: "99", ngay_ky: "2026-09-08", so_ho_so: 7 } },
+      bo: { quyet_dinh: { id: 21, loai: "trung_tuyen", trang_thai: "hieu_luc", so_quyet_dinh: "99", ngay_ky: "2026-09-08", so_ho_so: 7, goc: null } },
       decisions: [
         qd({ id: 20, so_ho_so: 9, ghi_nhan_luc: "2026-11-12T03:00:00Z" }), // mới hơn nhưng KHÔNG phải văn bản của bộ theo máy chủ
         qd({ id: 21, so_ho_so: 7, ghi_nhan_luc: "2026-11-11T03:00:00Z" }),
@@ -446,6 +463,13 @@ describe("bộ đã có Quyết định + Huỷ ghi nhận", () => {
     const kq = await screen.findByTestId("ket-qua-ghi-nhan")
     expect(within(kq).getByTestId("ket-qua-dong").textContent).toContain("7 hồ sơ")
     expect(within(kq).getByTestId("ket-qua-dong").textContent).not.toContain("9 hồ sơ")
+  })
+
+  it("máy chủ nói bộ KHÔNG có văn bản còn tính (quyet_dinh null) ⇒ biểu mẫu mở, dù danh sách có văn bản của bộ — không tự chọn 'mới nhất'", async () => {
+    dung({ decisions: [qd()], bo: { quyet_dinh: null } })
+    ve()
+    expect(await screen.findByTestId("bieu-mau-ghi-nhan")).toBeTruthy()
+    expect(screen.queryByTestId("ket-qua-ghi-nhan")).toBeNull()
   })
 
   it("văn bản đã huỷ ghi nhận ⇒ biểu mẫu mở lại để ghi nhận lại", async () => {

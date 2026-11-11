@@ -1,6 +1,6 @@
 /**
- * Nhật ký tải / xoá (đặc tả 5.7): hiện TÊN người khi máy chủ đã trả (`nguoi_tai_ten` / `nguoi_xoa_ten`, ⏳); chưa trả ⇒
- * giữ "Tài khoản #n" (không bịa tên).
+ * Nhật ký tải / xoá (đặc tả 5.7, máy chủ `083a428d`): hiện TÊN người máy chủ trả (`nguoi_tai_ten` / `nguoi_xoa_ten`, LUÔN có
+ * khoá); `null` (tài khoản không còn) ⇒ giữ "Tài khoản #n" (không bịa tên).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { render, screen } from "@testing-library/react"
@@ -28,7 +28,7 @@ describe("nhật ký — tên người", () => {
       http.get(`${API}${P}/nhat-ky-tai`, () =>
         HttpResponse.json([
           { id: 1, set_id: 5, thu_tu: 1, path: "a.docx", sha256: "a".repeat(64), nguoi_tai_id: 2, tai_luc: "2026-11-05T01:00:00Z", nguoi_tai_ten: "Lê Thu Hạnh" },
-          { id: 2, set_id: 5, thu_tu: 2, path: "b.docx", sha256: "b".repeat(64), nguoi_tai_id: 3, tai_luc: "2026-11-05T01:00:00Z" },
+          { id: 2, set_id: 5, thu_tu: 2, path: "b.docx", sha256: "b".repeat(64), nguoi_tai_id: 3, tai_luc: "2026-11-05T01:00:00Z", nguoi_tai_ten: null },
         ]),
       ),
     )
@@ -43,7 +43,7 @@ describe("nhật ký — tên người", () => {
       http.get(`${API}${P}/nhat-ky-xoa`, () =>
         HttpResponse.json([
           { id: 1, set_id: 5, so_ho_so: 3, so_tep: 2, danh_sach_tep: [], nguoi_xoa_id: 2, xoa_luc: "2026-11-05T01:00:00Z", ly_do: "x", nguoi_xoa_ten: "Quản trị Thử" },
-          { id: 2, set_id: 6, so_ho_so: 1, so_tep: 2, danh_sach_tep: [], nguoi_xoa_id: 4, xoa_luc: "2026-11-05T01:00:00Z", ly_do: "y" },
+          { id: 2, set_id: 6, so_ho_so: 1, so_tep: 2, danh_sach_tep: [], nguoi_xoa_id: 4, xoa_luc: "2026-11-05T01:00:00Z", ly_do: "y", nguoi_xoa_ten: null },
         ]),
       ),
     )

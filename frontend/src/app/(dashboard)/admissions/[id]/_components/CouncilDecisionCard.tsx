@@ -23,7 +23,8 @@ const NHAN_TINH_TRANG: Record<string, string> = {
  * Thẻ "Quyết định trúng tuyển" trên trang hồ sơ (đặc tả 5.8, bản mẫu — ba dạng: còn hiệu lực + đã đối chiếu sổ · chỉ dấu
  * AppSheet · đã huỷ ghi nhận). Mọi chữ lấy từ DTO máy chủ; không suy tình trạng từ chỗ khác.
  *
- * ⏳ CHỜ MÁY CHỦ: DTO chi tiết hồ sơ chưa có `quyet_dinh_trung_tuyen`. Vắng hoặc sai dạng ⇒ KHÔNG hiện thẻ (không đoán).
+ * Máy chủ `083a428d`: CHỈ `GET /api/admissions/{id}` điền `quyet_dinh_trung_tuyen`; route khác (vd PUT cập nhật hồ sơ) trả `null`.
+ * `null` / vắng / sai dạng ⇒ KHÔNG hiện thẻ (không đoán). `ly_do_huy_ghi_nhan` CHỈ admin có giá trị (người khác: khoá vẫn có, giá trị null).
  * Hồ sơ chỉ mang dấu AppSheet hiện TÁCH RIÊNG ("chưa đối chiếu"), không trông giống hồ sơ đã đối chiếu.
  */
 export function CouncilDecisionCard({ value }: { value: unknown }) {
