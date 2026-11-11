@@ -15,7 +15,7 @@ import type { CouncilDecision, CouncilDocumentPermissions, CouncilSetDetail } fr
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
 import { CouncilRecordResult } from "./CouncilRecordResult"
-import { ngay, nhanLoaiQuyetDinh, nhanTrangThai, thoiDiem } from "./hien-thi"
+import { ngay, nhanLoaiQuyetDinh, nhanTrangThai, thoiDiem, tomTatQuyetDinh } from "./hien-thi"
 
 export type GhiNhanController = ReturnType<typeof useGhiNhanQuyetDinh>
 
@@ -68,13 +68,19 @@ export function CouncilRecordStep({ bo, quyen, gn, onQuayLai, onDaHuy }: Props) 
 
   // Danh sách Quyết định đã ghi của bộ (hiện kết quả khi tải lại trang) và danh sách gốc cho Quyết định bổ sung.
   const cua_bo = useCouncilDecisions({ set_id: bo.id, limit: 50, offset: 0 }, quyen.xem_danh_sach_qd)
-  const tatCa = useCouncilDecisions({ limit: 200, offset: 0 }, quyen.xem_danh_sach_qd && loai === "bo_sung")
+  // ⏳ máy chủ nhận `loai` + `trang_thai` (phiên A chốt 11-11); máy chủ cũ bỏ qua ⇒ vẫn lọc phòng thủ ở `ungVienGoc`.
+  const tatCa = useCouncilDecisions(
+    { limit: 200, offset: 0, loai: "trung_tuyen", trang_thai: "hieu_luc" },
+    quyen.xem_danh_sach_qd && loai === "bo_sung",
+  )
 
   // Văn bản CÒN tính của bộ — theo định nghĩa của chính máy chủ (`van_ban_song_cua_bo`: chưa huỷ ghi nhận), mới nhất.
+  const idQd = tomTatQuyetDinh(bo.quyet_dinh)?.id // ⏳ máy chủ sẽ thêm `quyet_dinh.id`; có ⇒ chọn đúng văn bản đó
   const hienCo: CouncilDecision | undefined = useMemo(() => {
+    if (idQd !== undefined) return (cua_bo.data ?? []).find((d) => d.id === idQd)
     const song = (cua_bo.data ?? []).filter((d) => d.trang_thai !== "huy_ghi_nhan")
     return song.length === 0 ? undefined : song.reduce((a, b) => (a.ghi_nhan_luc >= b.ghi_nhan_luc ? a : b))
-  }, [cua_bo.data])
+  }, [cua_bo.data, idQd])
 
   // ⏳ CHỜ MÁY CHỦ: `GET /decisions` chưa có bộ lọc loại / trạng thái ⇒ lọc ở đây theo giá trị máy chủ trả
   // ("Chỉ liệt kê Quyết định trúng tuyển còn hiệu lực — máy chủ kiểm lại khi ghi").

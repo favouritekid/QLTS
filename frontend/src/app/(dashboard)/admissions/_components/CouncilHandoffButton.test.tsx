@@ -44,15 +44,22 @@ describe("CouncilHandoffButton", () => {
     expect(container.querySelector("[data-testid='dung-van-ban-hoi-dong']")).toBeNull()
   })
 
+  it("thiếu cờ tim_ho_so (luồng chưa đủ route) ⇒ không hiện nút", async () => {
+    quyen({ tao_bo: true, kiem_truoc: true })
+    const { container } = ve({ namHoc: 2026, idHoSo: [1] })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(container.querySelector("[data-testid='dung-van-ban-hoi-dong']")).toBeNull()
+  })
+
   it("thiếu cờ tao_bo ⇒ không hiện nút (theo cờ, không theo vai)", async () => {
-    quyen({ kiem_truoc: true })
+    quyen({ kiem_truoc: true, tim_ho_so: true })
     const { container } = ve({ namHoc: 2026, idHoSo: [1] })
     await new Promise((r) => setTimeout(r, 50))
     expect(container.querySelector("[data-testid='dung-van-ban-hoi-dong']")).toBeNull()
   })
 
   it("bấm ⇒ ĐẨY năm + id sang store Hội đồng rồi chuyển trang /admin/council-documents/moi", async () => {
-    quyen({ tao_bo: true, kiem_truoc: true })
+    quyen({ tao_bo: true, kiem_truoc: true, tim_ho_so: true })
     ve({ namHoc: 2026, idHoSo: [5, 3, 5] })
     fireEvent.click(await screen.findByTestId("dung-van-ban-hoi-dong"))
     expect(push).toHaveBeenCalledWith(DUONG_DAN_DUNG_VAN_BAN)
@@ -62,13 +69,13 @@ describe("CouncilHandoffButton", () => {
   })
 
   it("không chọn hồ sơ nào ⇒ nút khoá", async () => {
-    quyen({ tao_bo: true, kiem_truoc: true })
+    quyen({ tao_bo: true, kiem_truoc: true, tim_ho_so: true })
     ve({ namHoc: 2026, idHoSo: [] })
     expect(((await screen.findByTestId("dung-van-ban-hoi-dong")) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it("'Tất cả năm' (không có năm học) ⇒ nút khoá, nói cần chọn năm học ở bộ lọc; bấm không làm gì", async () => {
-    quyen({ tao_bo: true, kiem_truoc: true })
+    quyen({ tao_bo: true, kiem_truoc: true, tim_ho_so: true })
     ve({ namHoc: undefined, idHoSo: [1, 2] })
     const nut = (await screen.findByTestId("dung-van-ban-hoi-dong")) as HTMLButtonElement
     expect(nut.disabled).toBe(true)
@@ -79,7 +86,7 @@ describe("CouncilHandoffButton", () => {
   })
 
   it("trang Hội đồng đang giữ danh sách KHÁC ⇒ hỏi 'Thay danh sách đang chọn?'; giữ cũ ⇒ không đổi; đồng ý ⇒ thay", async () => {
-    quyen({ tao_bo: true, kiem_truoc: true })
+    quyen({ tao_bo: true, kiem_truoc: true, tim_ho_so: true })
     useCouncilSelectionStore.getState().thayThe(2026, [9])
     ve({ namHoc: 2026, idHoSo: [1, 2] })
     fireEvent.click(await screen.findByTestId("dung-van-ban-hoi-dong"))
@@ -99,7 +106,7 @@ describe("CouncilHandoffButton", () => {
   })
 
   it("danh sách đang giữ TRÙNG danh sách mới ⇒ không hỏi, chuyển trang luôn", async () => {
-    quyen({ tao_bo: true, kiem_truoc: true })
+    quyen({ tao_bo: true, kiem_truoc: true, tim_ho_so: true })
     useCouncilSelectionStore.getState().thayThe(2026, [2, 1])
     ve({ namHoc: 2026, idHoSo: [1, 2] })
     fireEvent.click(await screen.findByTestId("dung-van-ban-hoi-dong"))
@@ -108,7 +115,7 @@ describe("CouncilHandoffButton", () => {
   })
 
   it("không dùng chung lựa chọn với màn Hồ sơ tuyển sinh: nút KHÔNG chạm vào rowSelection / storage", async () => {
-    quyen({ tao_bo: true, kiem_truoc: true })
+    quyen({ tao_bo: true, kiem_truoc: true, tim_ho_so: true })
     ve({ namHoc: 2026, idHoSo: [1] })
     fireEvent.click(await screen.findByTestId("dung-van-ban-hoi-dong"))
     expect(JSON.stringify({ ...localStorage, ...sessionStorage })).toBe("{}")

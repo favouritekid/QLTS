@@ -61,7 +61,7 @@ describe("CouncilCompareStep", () => {
     fireEvent.click(screen.getByTestId("so-sanh"))
     const co = await screen.findByTestId("co-doi")
     expect(co.textContent).toContain("3 dòng đã đổi so với lúc dựng")
-    expect(screen.getByTestId("dong-doi-14").textContent).toBe("Dòng 14 — đổi: ho, diem_in")
+    expect(screen.getByTestId("dong-doi-14").textContent).toBe("Dòng 14 — đổi: Họ, diem_in") // khoá đã biết ⇒ nhãn; khoá lạ ⇒ in nguyên
     expect(screen.getByTestId("dong-khong-dung-lai-2").textContent).toContain("thieu_nganh")
     expect(screen.getByTestId("dong-mat-ho-so-3").textContent).toBe("Dòng 3 — hồ sơ không còn")
     expect(co.textContent).toContain("vẫn ghi nhận được") // giấy in theo bộ vẫn ghi nhận

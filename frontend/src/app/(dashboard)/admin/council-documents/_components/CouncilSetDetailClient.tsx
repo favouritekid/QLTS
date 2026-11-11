@@ -28,6 +28,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import {
   NO_COUNCIL_PERMISSIONS,
+  coTheDungTuDanhSach,
   useCouncilDocumentPermissions,
   useCouncilSet,
   useCouncilSetInputCodes,
@@ -153,7 +154,7 @@ export function CouncilSetDetailClient({
     <div className="space-y-6" data-testid="set-detail">
       <div className="flex flex-wrap items-center justify-between gap-3">
         {quayLai}
-        {quyen.tao_bo && quyen.kiem_truoc ? (
+        {coTheDungTuDanhSach(quyen) ? (
           <Button asChild variant="outline" size="sm">
             <Link href="/admin/council-documents/moi" data-testid="dung-bo-moi-tu-bo">
               + Dựng bộ mới

@@ -6,7 +6,7 @@ import { Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { useCouncilDocumentPermissions } from "@/hooks/admin/useCouncilDocuments"
+import { coTheDungTuDanhSach, useCouncilDocumentPermissions } from "@/hooks/admin/useCouncilDocuments"
 import type { CouncilDocumentPermissionKey } from "@/lib/zod/council-documents"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
@@ -73,7 +73,7 @@ export function CouncilDocumentsClient() {
       ) : null}
       {q.tao_bo ? (
         <TabsContent value="tao" className="space-y-6 pt-4">
-          {q.kiem_truoc ? (
+          {coTheDungTuDanhSach(q) ? (
             <div className="space-y-2 rounded border p-4" data-testid="dung-tu-danh-sach">
               <h2 className="text-lg font-semibold">Dựng từ danh sách hồ sơ</h2>
               <p className="text-sm text-muted-foreground">
@@ -85,7 +85,7 @@ export function CouncilDocumentsClient() {
             </div>
           ) : null}
           <div className="space-y-2">
-            {q.kiem_truoc ? <h2 className="text-lg font-semibold">Hoặc: dán danh sách mã hồ sơ (cách cũ)</h2> : null}
+            {coTheDungTuDanhSach(q) ? <h2 className="text-lg font-semibold">Hoặc: dán danh sách mã hồ sơ (cách cũ)</h2> : null}
             <CreateCouncilSetForm canOpenDetail={q.xem_chi_tiet_bo} />
           </div>
         </TabsContent>

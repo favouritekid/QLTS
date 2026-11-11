@@ -5,6 +5,7 @@ import { useState } from "react"
 import { AlertTriangle, CheckCircle2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { coTheDungTuDanhSach } from "@/hooks/admin/useCouncilDocuments"
 import type {
   CouncilDecision,
   CouncilDecisionWrite,
@@ -122,7 +123,7 @@ export function CouncilRecordResult({ quyetDinh, setId, quyen, onDaHuy }: Props)
             Huỷ ghi nhận…
           </Button>
         ) : null}
-        {quyen.tao_bo && quyen.kiem_truoc ? (
+        {coTheDungTuDanhSach(quyen) ? (
           <Button asChild variant="outline" size="sm">
             <Link href="/admin/council-documents/moi" data-testid="dung-bo-moi">
               + Dựng bộ mới

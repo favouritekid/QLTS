@@ -123,17 +123,19 @@ describe("getCouncilDocumentPermissions", () => {
       ...NO_COUNCIL_PERMISSIONS,
       xem_mau: true, xem_danh_sach_bo: true, xem_chi_tiet_bo: true, tai_tep: true,
       ghi_nhan_qd: true, mo_luot_gui: true, xem_luot_gui: true, phan_xu_luot_gui: true,
-      kiem_truoc: true, tai_ca_bo: true,
+      kiem_truoc: true, tim_ho_so: true, doi_ma: true, tai_ca_bo: true,
     }
     server.use(http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: co })))
     expect(await getCouncilDocumentPermissions()).toEqual(co)
   })
 
-  it("⏳ hai cờ CHỜ MÁY CHỦ vắng (máy chủ chưa trả) ⇒ false, KHÔNG nổ; các cờ khác vẫn đúng", async () => {
-    const { kiem_truoc: _a, tai_ca_bo: _b, ...conLai } = { ...NO_COUNCIL_PERMISSIONS, xem_mau: true }
+  it("⏳ các cờ CHỜ MÁY CHỦ vắng (máy chủ chưa trả) ⇒ false, KHÔNG nổ; các cờ khác vẫn đúng", async () => {
+    const { kiem_truoc: _a, tim_ho_so: _c, doi_ma: _d, tai_ca_bo: _b, ...conLai } = { ...NO_COUNCIL_PERMISSIONS, xem_mau: true }
     server.use(http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: conLai })))
     const q = await getCouncilDocumentPermissions()
     expect(q.kiem_truoc).toBe(false)
+    expect(q.tim_ho_so).toBe(false)
+    expect(q.doi_ma).toBe(false)
     expect(q.tai_ca_bo).toBe(false)
     expect(q.xem_mau).toBe(true)
   })

@@ -44,14 +44,17 @@ export const councilDocumentPermissionsSchema = z.object({
   mo_luot_gui: z.boolean(),
   xem_luot_gui: z.boolean(),
   phan_xu_luot_gui: z.boolean(),
-  // ⏳ CHỜ MÁY CHỦ (đặc tả 3.10): máy chủ CHƯA trả hai cờ này ở `dd6c725d`. Thiếu ⇒ `false` (tắt tính năng —
-  // fail-closed), KHÔNG làm vỡ cả trang quyền. Khi máy chủ đã trả: bỏ `.default(false)` (bắt buộc như các cờ trên) và
-  // xoá tên khỏi `CO_CHO_MAY_CHU` — test `council-documents.test.ts` nhắc việc này.
+  // ⏳ CHỜ MÁY CHỦ (đặc tả 3.10; phiên A chốt 11-11: MỖI route mới một cờ): máy chủ CHƯA trả các cờ này ở `dd6c725d`.
+  // Thiếu ⇒ `false` (tắt tính năng — fail-closed), KHÔNG làm vỡ cả trang quyền. Tên cuối do phiên A báo kèm SHA. Khi máy
+  // chủ đã trả: bỏ `.default(false)` (bắt buộc như các cờ trên) và xoá tên khỏi `CO_CHO_MAY_CHU` — test
+  // `council-documents.test.ts` nhắc việc này.
   kiem_truoc: z.boolean().default(false),
+  tim_ho_so: z.boolean().default(false),
+  doi_ma: z.boolean().default(false),
   tai_ca_bo: z.boolean().default(false),
 })
 /** Cờ giao diện CHƯA có ở máy chủ (đang `.default(false)`). Rỗng khi máy chủ đã giao đủ. */
-export const CO_CHO_MAY_CHU = ["kiem_truoc", "tai_ca_bo"] as const
+export const CO_CHO_MAY_CHU = ["kiem_truoc", "tim_ho_so", "doi_ma", "tai_ca_bo"] as const
 export type CouncilDocumentPermissions = z.infer<
   typeof councilDocumentPermissionsSchema
 >
@@ -261,6 +264,9 @@ export const councilPreviewSummarySchema = z.object({
   can_xac_nhan_theo_trang_thai: z.record(z.string(), z.number().int()),
   so_nhom: z.number().int(),
   du_kien_so_tep: z.number().int(),
+  // ⏳ CHỜ MÁY CHỦ (phiên A chốt 11-11): máy chủ tính bằng đúng cổng quyền xác nhận hiện có. Vắng ⇒ hiện khối xác nhận
+  // (máy chủ vẫn kiểm khi dựng); `false` ⇒ khối xác nhận khoá, nói tài khoản không xác nhận được.
+  nguoi_goi_duoc_xac_nhan: z.boolean().optional(),
 })
 export type CouncilPreviewSummary = z.infer<typeof councilPreviewSummarySchema>
 

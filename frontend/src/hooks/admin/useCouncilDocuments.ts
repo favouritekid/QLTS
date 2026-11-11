@@ -116,7 +116,17 @@ export const NO_COUNCIL_PERMISSIONS: CouncilDocumentPermissions = {
   xem_luot_gui: false,
   phan_xu_luot_gui: false,
   kiem_truoc: false,
+  tim_ho_so: false,
+  doi_ma: false,
   tai_ca_bo: false,
+}
+
+/**
+ * Luồng "dựng từ danh sách chọn" dùng được: cần quyền tạo bộ + CẢ HAI route nền của luồng (kiểm trước, tìm hồ sơ) — mỗi
+ * route một cờ (phiên A chốt 11-11). Một nguồn cho mọi nơi hiện lối vào luồng.
+ */
+export function coTheDungTuDanhSach(q: CouncilDocumentPermissions): boolean {
+  return q.tao_bo && q.kiem_truoc && q.tim_ho_so
 }
 
 export type CouncilPermissionState = "loading" | "forbidden" | "error" | "ready"

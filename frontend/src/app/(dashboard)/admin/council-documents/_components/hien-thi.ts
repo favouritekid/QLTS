@@ -119,6 +119,8 @@ export function nhanLyDoDanMa(ly_do: string): string {
  * ĐÚNG KIỂU; khoá vắng ⇒ không có trường ấy. Không suy, không điền mặc định.
  */
 export interface TomTatQuyetDinh {
+  /** ⏳ máy chủ sẽ thêm `id` (phiên A chốt 11-11) */
+  id?: number
   so?: string
   ngay?: string
   loai?: string
@@ -134,6 +136,7 @@ export function tomTatQuyetDinh(raw: Record<string, unknown> | null | undefined)
       ? { so: chuoi((raw.goc as Record<string, unknown>).so_quyet_dinh), ngay: chuoi((raw.goc as Record<string, unknown>).ngay_ky) }
       : undefined
   return {
+    id: typeof raw.id === "number" && Number.isInteger(raw.id) ? raw.id : undefined,
     so: chuoi(raw.so_quyet_dinh),
     ngay: chuoi(raw.ngay_ky),
     loai: chuoi(raw.loai),
@@ -146,4 +149,35 @@ export function tomTatQuyetDinh(raw: Record<string, unknown> | null | undefined)
 /** "Ngành · trình độ" của một dòng kiểm trước. */
 export function nganhTrinhDo(nganh: string, trinhDo: string): string {
   return trinhDo ? `${nganh} · ${trinhDo}` : nganh
+}
+
+/**
+ * Nhãn tiếng Việt của TÊN TRƯỜNG ở bước 5 "Đối chiếu bản ký" (máy chủ trả khoá thô của dòng in — `CandidateRowV1`).
+ * Bảng TRÌNH BÀY (không phải luật): chỉ khoá nghĩa chắc chắn; khoá khác ⇒ in nguyên khoá, không đoán nghĩa.
+ */
+const NHAN_TRUONG_DOI_CHIEU: Record<string, string> = {
+  ma_ho_so: "Mã hồ sơ",
+  ho: "Họ",
+  ten: "Tên",
+  gioi_tinh: "Giới tính",
+  ngay_sinh: "Ngày sinh",
+  noi_sinh: "Nơi sinh",
+  dan_toc: "Dân tộc",
+  dia_chi: "Địa chỉ",
+  van_hoa: "Văn hoá",
+  nganh: "Ngành",
+  ma_nganh: "Mã ngành",
+  trinh_do: "Trình độ",
+  to_hop: "Tổ hợp",
+  phuong_thuc: "Phương thức",
+  mon_to_hop: "Môn tổ hợp",
+  diem_tb: "Điểm trung bình",
+  tong_diem: "Tổng điểm",
+  kv: "Khu vực",
+  diem_kv: "Điểm khu vực",
+  ut_ma: "Đối tượng ưu tiên",
+  diem_ut: "Điểm ưu tiên",
+}
+export function nhanTruongDoiChieu(khoa: string): string {
+  return NHAN_TRUONG_DOI_CHIEU[khoa] ?? khoa
 }

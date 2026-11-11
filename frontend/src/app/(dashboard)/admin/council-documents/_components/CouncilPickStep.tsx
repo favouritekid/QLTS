@@ -38,6 +38,8 @@ interface Props {
   /** kiểm trước của ĐÚNG danh sách đang chọn (cột "Kiểm trước" / "Điểm" chỉ có cho hồ sơ đã chọn) */
   xemTruoc: CouncilSetPreview | undefined
   dangKiem: boolean
+  /** cờ `doi_ma` của máy chủ: có route đổi mã hồ sơ ⇒ hiện cách phụ dán mã */
+  coDoiMa: boolean
 }
 
 /**
@@ -45,7 +47,7 @@ interface Props {
  * lựa chọn nằm ở store RIÊNG của trang Hội đồng, giữ qua trang. Cột "Kiểm trước" chỉ lấy từ `kiem-truoc` cho hồ sơ
  * ĐÃ chọn, hồ sơ chưa chọn hiện "—" (không tạo đường cổng thứ hai).
  */
-export function CouncilPickStep({ xemTruoc, dangKiem }: Props) {
+export function CouncilPickStep({ xemTruoc, dangKiem, coDoiMa }: Props) {
   const namHoc = useCouncilSelectionStore((s) => s.namHoc)
   const idChon = useCouncilSelectionStore((s) => s.idHoSo)
   const datNamHoc = useCouncilSelectionStore((s) => s.datNamHoc)
@@ -289,7 +291,7 @@ export function CouncilPickStep({ xemTruoc, dangKiem }: Props) {
         </>
       )}
 
-      {namHoc !== null ? <DanMa namHoc={namHoc} /> : null}
+      {namHoc !== null && coDoiMa ? <DanMa namHoc={namHoc} /> : null}
 
       <AlertDialog open={choDoiNam !== null} onOpenChange={(mo) => !mo && setChoDoiNam(null)}>
         <AlertDialogContent data-testid="doi-nam-dialog">

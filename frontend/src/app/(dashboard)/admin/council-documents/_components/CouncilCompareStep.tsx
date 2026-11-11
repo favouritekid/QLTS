@@ -8,7 +8,7 @@ import { useCompareCouncilSet } from "@/hooks/admin/useCouncilDocuments"
 import type { CouncilSetDetail } from "@/lib/zod/council-documents"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
-import { thoiDiem } from "./hien-thi"
+import { nhanTruongDoiChieu, thoiDiem } from "./hien-thi"
 
 interface Props {
   bo: CouncilSetDetail
@@ -61,7 +61,7 @@ export function CouncilCompareStep({ bo, onQuayLai, onTiep }: Props) {
             </p>
             <ul className="list-disc space-y-1 pl-5">
               {kq.dong_khac.map((d) => (
-                <li key={`k${d.stt}`} data-testid={`dong-doi-${d.stt}`}>{`Dòng ${d.stt} — đổi: ${d.truong.join(", ")}`}</li>
+                <li key={`k${d.stt}`} data-testid={`dong-doi-${d.stt}`}>{`Dòng ${d.stt} — đổi: ${d.truong.map(nhanTruongDoiChieu).join(", ")}`}</li>
               ))}
               {kq.khong_dung_lai_duoc.map((d) => (
                 <li key={`x${d.stt}`} data-testid={`dong-khong-dung-lai-${d.stt}`}>

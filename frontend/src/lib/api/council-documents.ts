@@ -315,13 +315,18 @@ export interface CouncilDecisionListParams {
   limit: number
   offset: number
   set_id?: number
+  // ⏳ CHỜ MÁY CHỦ (phiên A chốt 11-11): bộ lọc loại + trạng thái; máy chủ cũ bỏ qua ⇒ nơi dùng vẫn lọc phòng thủ.
+  loai?: string
+  trang_thai?: string
 }
 
 export async function listCouncilDecisions(
   params: CouncilDecisionListParams,
 ): Promise<CouncilDecision[]> {
-  const q: Record<string, number> = { limit: params.limit, offset: params.offset }
+  const q: Record<string, string | number> = { limit: params.limit, offset: params.offset }
   if (params.set_id !== undefined) q.set_id = params.set_id
+  if (params.loai) q.loai = params.loai
+  if (params.trang_thai) q.trang_thai = params.trang_thai
   const res = await api.get(`${P}/decisions`, { params: q })
   return councilDecisionListSchema.parse(res.data)
 }

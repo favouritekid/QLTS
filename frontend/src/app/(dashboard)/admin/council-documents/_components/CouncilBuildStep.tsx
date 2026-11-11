@@ -53,6 +53,9 @@ export function CouncilBuildStep({ namHoc, xemTruoc, onQuayLai, onDungXong, onDu
   const canXacNhan = useMemo(() => Object.entries(t.can_xac_nhan_theo_trang_thai), [t.can_xac_nhan_theo_trang_thai])
   const [go, setGo] = useState<Record<string, string>>({})
   const khop = canXacNhan.every(([tt, n]) => (go[tt] ?? "").trim() === String(n))
+  // ⏳ CHỜ MÁY CHỦ: máy chủ nói tài khoản này KHÔNG xác nhận được (cổng quyền xác nhận) ⇒ khoá. Vắng ⇒ không khoá
+  // (máy chủ vẫn kiểm khi dựng); giao diện không tự xét vai.
+  const khongXacNhanDuoc = canXacNhan.length > 0 && t.nguoi_goi_duoc_xac_nhan === false
   const dongTheoTrangThai = useMemo(() => {
     const m: Record<string, number[]> = {}
     for (const d of xemTruoc.dong) if (d.muc === "can_xac_nhan") (m[d.trang_thai] ??= []).push(d.stt)
@@ -103,6 +106,11 @@ export function CouncilBuildStep({ namHoc, xemTruoc, onQuayLai, onDungXong, onDu
           <div className="text-sm font-medium">
             Có hồ sơ chưa ở trạng thái “Đã duyệt” — Admin xác nhận để đưa vào bộ
           </div>
+          {khongXacNhanDuoc ? (
+            <p className="text-sm font-medium text-destructive" data-testid="khong-xac-nhan-duoc">
+              Cần Admin xác nhận — tài khoản của bạn không xác nhận được.
+            </p>
+          ) : null}
           {canXacNhan.map(([tt, n]) => (
             <div key={tt} className="space-y-1">
               <Label htmlFor={`xn-${tt}`}>
@@ -117,7 +125,7 @@ export function CouncilBuildStep({ namHoc, xemTruoc, onQuayLai, onDungXong, onDu
                 inputMode="numeric"
                 autoComplete="off"
                 value={go[tt] ?? ""}
-                disabled={tao.isPending}
+                disabled={tao.isPending || khongXacNhanDuoc}
                 onChange={(e) => setGo((g) => ({ ...g, [tt]: e.target.value }))}
               />
             </div>
@@ -140,7 +148,7 @@ export function CouncilBuildStep({ namHoc, xemTruoc, onQuayLai, onDungXong, onDu
         <Button type="button" variant="outline" onClick={onQuayLai} disabled={tao.isPending} data-testid="dung-quay-lai">
           ← Quay lại
         </Button>
-        <Button type="button" onClick={dung} disabled={tao.isPending || !khop} data-testid="dung-bo">
+        <Button type="button" onClick={dung} disabled={tao.isPending || !khop || khongXacNhanDuoc} data-testid="dung-bo">
           {tao.isPending ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Đang dựng bộ văn bản…

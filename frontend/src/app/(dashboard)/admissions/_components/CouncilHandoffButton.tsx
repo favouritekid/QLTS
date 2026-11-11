@@ -16,7 +16,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { useCouncilDocumentPermissions } from "@/hooks/admin/useCouncilDocuments"
+import { coTheDungTuDanhSach, useCouncilDocumentPermissions } from "@/hooks/admin/useCouncilDocuments"
 import { useCouncilSelectionStore } from "@/lib/stores/council-selection.store"
 
 export const DUONG_DAN_DUNG_VAN_BAN = "/admin/council-documents/moi"
@@ -35,7 +35,7 @@ interface Props {
  * Chỉ ĐẨY id hồ sơ + năm học sang store RIÊNG của trang Hội đồng rồi chuyển trang; KHÔNG giữ lựa chọn qua trang trên
  * màn này (chốt xoá lựa chọn ở `AdmissionsClient` giữ nguyên — màn này có Duyệt / Từ chối hàng loạt).
  *
- * Hiện theo CỜ máy chủ (`tao_bo` + `kiem_truoc`), không theo vai.
+ * Hiện theo CỜ máy chủ (`tao_bo` + `kiem_truoc` + `tim_ho_so` — `coTheDungTuDanhSach`), không theo vai.
  *
  * ⚠️ Lệch đặc tả có chủ ý: đặc tả muốn "năm học chung" đọc từ dòng đang hiển thị, nhưng DTO nhẹ của danh sách
  * (`AdmissionListItem`) KHÔNG có `academic_year`. Năm học lấy từ bộ lọc năm học (lọc phía máy chủ nên mọi dòng cùng
@@ -47,7 +47,7 @@ export function CouncilHandoffButton({ namHoc, idHoSo, disabled = false }: Props
   const thayThe = useCouncilSelectionStore((s) => s.thayThe)
   const [hoi, setHoi] = useState(false)
 
-  if (vm.state !== "ready" || !vm.permissions.tao_bo || !vm.permissions.kiem_truoc) return null
+  if (vm.state !== "ready" || !coTheDungTuDanhSach(vm.permissions)) return null
 
   const thieuNam = namHoc === undefined
   const khoa = disabled || idHoSo.length === 0 || thieuNam

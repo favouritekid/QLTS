@@ -27,7 +27,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 const API = "http://localhost:8000"
 const CCCD_GIA = (n: number) => "099" + "999" + String(n).padStart(6, "0")
-const QUYEN = { ...NO_COUNCIL_PERMISSIONS, tao_bo: true, kiem_truoc: true }
+const QUYEN = { ...NO_COUNCIL_PERMISSIONS, tao_bo: true, kiem_truoc: true, tim_ho_so: true, doi_ma: true }
 
 const HO_SO = [
   { profile_id: 11, ho_ten: "Nguyễn Văn A", cccd: CCCD_GIA(11), nganh_nhan: "CĐ Kế toán", trinh_do: "Cao đẳng", duong_xet_nhan: "Xét học bạ", trang_thai: "approved", trang_thai_nhan: "Đã duyệt" },
@@ -45,6 +45,8 @@ interface Cau {
   /** mức kiểm trước theo id hồ sơ (mặc định duoc_dung) */
   muc?: Record<number, "duoc_dung" | "can_xac_nhan" | "bi_chan">
   tao?: () => Response
+  /** máy chủ báo người gọi có xác nhận được hay không (⏳ `nguoi_goi_duoc_xac_nhan`); vắng ⇒ không gửi trường */
+  xacNhanDuoc?: boolean
   /** sau lần kiểm trước thứ n (đếm từ 1), đổi mức (mô phỏng người dùng sửa hồ sơ ở thẻ khác) */
   doiMucTuLanKiem?: { lan: number; muc: Record<number, "duoc_dung" | "can_xac_nhan" | "bi_chan"> }
 }
@@ -95,6 +97,7 @@ function dung(cau: Cau = {}) {
           tong: dong.length, duoc_dung: dem("duoc_dung"), can_xac_nhan: dem("can_xac_nhan"), bi_chan: dem("bi_chan"),
           theo_nganh: [{ nganh_nhan: "CĐ Kế toán", trinh_do: "Cao đẳng", so: dong.length }],
           can_xac_nhan_theo_trang_thai: xn, so_nhom: 1, du_kien_so_tep: 4,
+          ...(cau.xacNhanDuoc !== undefined ? { nguoi_goi_duoc_xac_nhan: cau.xacNhanDuoc } : {}),
         },
       })
     }),
@@ -270,6 +273,21 @@ describe("bước 4 — dựng", () => {
     expect(taoBodies[0].xac_nhan_trang_thai).toEqual({ resubmitted: 1 })
   })
 
+  it("máy chủ nói người gọi KHÔNG xác nhận được ⇒ khối xác nhận khoá + câu giải thích; nút Dựng khoá", async () => {
+    await denBuoc4({ muc: { 12: "can_xac_nhan" }, xacNhanDuoc: false })
+    expect(screen.getByTestId("khong-xac-nhan-duoc").textContent).toContain("không xác nhận được")
+    expect((screen.getByTestId("xac-nhan-resubmitted") as HTMLInputElement).disabled).toBe(true)
+    expect((screen.getByTestId("dung-bo") as HTMLButtonElement).disabled).toBe(true)
+    expect(taoBodies).toHaveLength(0)
+  })
+
+  it("máy chủ nói người gọi xác nhận được (true) ⇒ không câu khoá; gõ khớp thì dựng được", async () => {
+    await denBuoc4({ muc: { 12: "can_xac_nhan" }, xacNhanDuoc: true })
+    expect(screen.queryByTestId("khong-xac-nhan-duoc")).toBeNull()
+    fireEvent.change(screen.getByTestId("xac-nhan-resubmitted"), { target: { value: "1" } })
+    expect((screen.getByTestId("dung-bo") as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it("không có hồ sơ cần xác nhận ⇒ không khối xác nhận và KHÔNG gửi xac_nhan_trang_thai", async () => {
     await denBuoc4({})
     expect(screen.queryByTestId("khoi-xac-nhan")).toBeNull()
@@ -309,6 +327,24 @@ describe("điều kiện vào trang", () => {
     ve()
     expect(await screen.findByTestId("moi-chua-san-sang")).toBeTruthy()
     expect(timBodies).toHaveLength(0)
+  })
+
+  it("thiếu cờ tim_ho_so (route tìm hồ sơ chưa có) ⇒ báo chưa sẵn sàng, KHÔNG gọi tim-ho-so", async () => {
+    server.use(http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: { ...NO_COUNCIL_PERMISSIONS, tao_bo: true, kiem_truoc: true } })))
+    server.use(http.post(`${API}${P}/sets/tim-ho-so`, async ({ request }) => { timBodies.push((await request.json()) as Record<string, unknown>); return HttpResponse.json({}) }))
+    ve()
+    expect(await screen.findByTestId("moi-chua-san-sang")).toBeTruthy()
+    expect(timBodies).toHaveLength(0)
+  })
+
+  it("thiếu cờ doi_ma ⇒ vẫn chọn được từ danh sách nhưng KHÔNG có cách phụ dán mã", async () => {
+    dung()
+    server.use(http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: { ...QUYEN, doi_ma: false } })))
+    ve()
+    await screen.findByTestId("buoc-chon")
+    fireEvent.change(await screen.findByTestId("loc-nam"), { target: { value: "2026" } })
+    await screen.findByTestId("chon-11")
+    expect(screen.queryByTestId("dan-ma")).toBeNull()
   })
 
   it("không có quyền tao_bo ⇒ không vào được", async () => {

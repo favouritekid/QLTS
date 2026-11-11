@@ -60,6 +60,7 @@ interface Cau {
 let formGui: FormData[] = []
 let huyBodies: Record<string, unknown>[] = []
 let soLanMo = 0
+let urlsDecisions: URL[] = []
 
 function dung(c: Cau = {}) {
   server.use(
@@ -69,6 +70,7 @@ function dung(c: Cau = {}) {
     http.get(`${API}${P}/sets/7/luot-ghi-nhan`, () => HttpResponse.json(c.ds ?? [])),
     // Như máy chủ thật: có `set_id` ⇒ chỉ văn bản của bộ ấy.
     http.get(`${API}${P}/decisions`, ({ request }) => {
+      urlsDecisions.push(new URL(request.url))
       const sid = new URL(request.url).searchParams.get("set_id")
       return HttpResponse.json((c.decisions ?? []).filter((d) => sid === null || String((d as { set_id: unknown }).set_id) === sid))
     }),
@@ -117,6 +119,7 @@ beforeEach(() => {
   formGui = []
   huyBodies = []
   soLanMo = 0
+  urlsDecisions = []
   push.mockClear()
   vi.spyOn(console, "error").mockImplementation(() => undefined)
 })
@@ -171,6 +174,18 @@ describe("biểu mẫu", () => {
     expect(goc.textContent).not.toContain("số 12")
     fireEvent.change(goc, { target: { value: "30" } })
     expect(nutGhi().disabled).toBe(false)
+  })
+
+  it("danh sách gốc: hỏi máy chủ với loai=trung_tuyen & trang_thai=hieu_luc (⏳), vẫn lọc phòng thủ nếu máy chủ cũ bỏ qua", async () => {
+    dung({ decisions: [qd({ id: 30, set_id: 3, so_quyet_dinh: "10" })] })
+    ve()
+    await dien()
+    fireEvent.click(screen.getByTestId("loai-bo-sung"))
+    await waitFor(() => expect(urlsDecisions.some((u) => u.searchParams.get("loai") === "trung_tuyen")).toBe(true))
+    const u = urlsDecisions.find((x) => x.searchParams.get("loai") === "trung_tuyen")!
+    expect(u.searchParams.get("trang_thai")).toBe("hieu_luc")
+    expect(u.searchParams.get("limit")).toBe("200")
+    expect(u.searchParams.has("set_id")).toBe(false) // danh sách gốc là của MỌI bộ
   })
 })
 
@@ -417,6 +432,20 @@ describe("bộ đã có Quyết định + Huỷ ghi nhận", () => {
     ve()
     expect(await screen.findByTestId("ket-qua-ghi-nhan")).toBeTruthy()
     expect(screen.queryByTestId("bieu-mau-ghi-nhan")).toBeNull()
+  })
+
+  it("máy chủ đã trả quyet_dinh.id ⇒ chọn ĐÚNG văn bản đó (không đoán theo mới nhất)", async () => {
+    dung({
+      bo: { quyet_dinh: { id: 21, loai: "trung_tuyen", trang_thai: "hieu_luc", so_quyet_dinh: "99", ngay_ky: "2026-09-08", so_ho_so: 7 } },
+      decisions: [
+        qd({ id: 20, so_ho_so: 9, ghi_nhan_luc: "2026-11-12T03:00:00Z" }), // mới hơn nhưng KHÔNG phải văn bản của bộ theo máy chủ
+        qd({ id: 21, so_ho_so: 7, ghi_nhan_luc: "2026-11-11T03:00:00Z" }),
+      ],
+    })
+    ve()
+    const kq = await screen.findByTestId("ket-qua-ghi-nhan")
+    expect(within(kq).getByTestId("ket-qua-dong").textContent).toContain("7 hồ sơ")
+    expect(within(kq).getByTestId("ket-qua-dong").textContent).not.toContain("9 hồ sơ")
   })
 
   it("văn bản đã huỷ ghi nhận ⇒ biểu mẫu mở lại để ghi nhận lại", async () => {

@@ -84,8 +84,8 @@ export function CouncilNewSetClient() {
       </div>
     )
   }
-  if (!vm.permissions.kiem_truoc) {
-    // ⏳ máy chủ chưa trả cờ `kiem_truoc` (đặc tả 3.10): luồng chọn → kiểm trước chưa dùng được.
+  if (!vm.permissions.kiem_truoc || !vm.permissions.tim_ho_so) {
+    // ⏳ máy chủ chưa trả cờ `kiem_truoc` / `tim_ho_so` (đặc tả 3.10; mỗi route một cờ): luồng chọn → kiểm trước chưa dùng được.
     return (
       <div className="space-y-3">
         {quayLai}
@@ -107,7 +107,7 @@ export function CouncilNewSetClient() {
 
       {buoc === 1 ? (
         <>
-          <CouncilPickStep xemTruoc={xemTruoc} dangKiem={dangKiem} />
+          <CouncilPickStep xemTruoc={xemTruoc} dangKiem={dangKiem} coDoiMa={vm.permissions.doi_ma} />
           <div className="space-y-3 rounded border p-3">
             <CouncilPreviewSummary soDangChon={idHoSo.length} xemTruoc={xemTruoc} dangKiem={dangKiem} loi={loiKiem} />
             <div className="flex flex-wrap items-center gap-3">
