@@ -172,6 +172,9 @@ ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     ("POST", "/api/admission-config/council-documents/decisions/{decision_id}/dieu-chinh"),
     ("POST", "/api/admission-config/council-documents/sets/{set_id}/dung-lai-ban-ky"),
     ("POST", "/api/admission-config/council-documents/decision-holds/{hold_id}/cho-xet-lai"),
+    # Vòng giao diện GĐ1 (lượt L): lượt gửi ghi nhận — mở lượt + phân xử — rà tay 11-11.
+    ("POST", "/api/admission-config/council-documents/sets/{set_id}/luot-ghi-nhan"),
+    ("POST", "/api/admission-config/council-documents/luot-ghi-nhan/{ma}/chan"),
     ("POST", "/api/admission-config/criteria"),
     ("DELETE", "/api/admission-config/criteria/{criteria_id}"),
     ("PUT", "/api/admission-config/criteria/{criteria_id}"),

@@ -121,8 +121,10 @@ def test_migration_la_head_duy_nhat_noi_tiep_head_cu():
     heads = ScriptDirectory.from_config(cfg).get_heads()
     # lượt E3: hai bảng vết nối sau quyền Casbin (E2); lượt F: quyền route cờ giao diện; lượt I:
     # ghi nhận Quyết định đã ký (hdts20261107 nối sau hdts20261105 — khoá ở
-    # ``test_council_decision_models.py``)
-    assert heads == ["hdts20261107"]
+    # ``test_council_decision_models.py``); vòng giao diện: K-2 hdts20261111 (khoá cấu hình) + hdts20261112 (lượt gửi
+    # ghi nhận) — chuỗi khoá cũng ở ``test_council_decision_models.py``. (Ca này lẽ ra phải sửa ở commit K-2 9d406eab:
+    # hồi quy của K-2 bỏ sót tệp này — phát hiện ở hồi quy rộng lượt gửi.)
+    assert heads == ["hdts20261112"]
     mig = _migration()
     assert (mig.revision, mig.down_revision) == ("hdts20261103", "v3circ20261011c")
     assert mig.CO_CHO_PHEP_XOA.endswith("_ENABLED")  # cờ CHO PHÉP, mặc định tắt

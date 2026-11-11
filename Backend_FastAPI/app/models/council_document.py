@@ -31,6 +31,7 @@ tới ``user`` (giữ nguyên id người làm); KHÔNG danh sách CCCD, KHÔNG 
   path, sha256, lúc. Ghi BỀN (commit) TRƯỚC khi trả bytes; không tuyên bố người dùng đã nhận.
 """
 
+import uuid
 from datetime import date, datetime
 from typing import Any, Optional
 
@@ -47,6 +48,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     UniqueConstraint,
+    Uuid,
     func,
     text,
 )
@@ -756,3 +758,72 @@ class CouncilDocumentEvent(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
     so_lieu: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+
+# ═══════════════════════════════ lượt gửi ghi nhận (vòng giao diện — đặc tả bản 2 mục 3.7) ═══════════
+#: Ba trạng thái của một lượt gửi ghi nhận Quyết định. Mọi chuyển trạng thái là MỘT câu đặt đủ cột (CHECK của
+#: PostgreSQL kiểm theo từng câu, không trì hoãn được — F265).
+CHECK_LUOT_TRANG_THAI = "trang_thai IN ('cho_gui', 'da_ghi', 'da_chan')"
+CHECK_LUOT_QD = "(trang_thai = 'da_ghi') = (decision_id IS NOT NULL)"
+CHECK_LUOT_SHA = "(trang_thai = 'da_ghi') = (noi_dung_sha IS NOT NULL)"
+CHECK_LUOT_SHA_HEX = "noi_dung_sha IS NULL OR noi_dung_sha ~ '^[0-9a-f]{64}$'"
+CHECK_LUOT_KET_THUC = "(trang_thai = 'cho_gui') = (ket_thuc_luc IS NULL)"
+#: Lượt chưa rõ kết quả phải còn bộ: khoá ngoại tới bộ là ON DELETE SET NULL ⇒ xoá bộ đang có lượt ``cho_gui`` bị
+#: CSDL chặn (cập nhật dây chuyền vi phạm CHECK này) — lớp cuối; service chặn trước bằng 409 (F269).
+CHECK_LUOT_CHO_CO_BO = "trang_thai <> 'cho_gui' OR set_id IS NOT NULL"
+CHECK_LUOT_BO_KHOP = "set_id IS NULL OR set_id = set_id_luc_tao"
+#: Mỗi bộ tối đa MỘT lượt chưa rõ kết quả.
+DIEU_KIEN_LUOT_CHO_GUI = "trang_thai = 'cho_gui'"
+
+
+class CouncilDecisionSubmission(Base):
+    """MỘT lượt gửi ghi nhận Quyết định (``POST /decisions``) — mã do máy chủ cấp (uuid, không dữ liệu cá nhân) để
+    mất mạng không gây ghi đôi và không báo sai "chưa ghi". Khôi phục sau tải lại trang qua id bộ (không lưu mã ở
+    trình duyệt). Vòng đời: ``cho_gui`` → ``da_ghi`` (cùng giao dịch với Quyết định) | ``da_chan`` (phân xử).
+    ``set_id_luc_tao`` (không khoá ngoại) giữ vết sau khi bộ bị xoá."""
+
+    __tablename__ = "council_decision_submission"
+    __table_args__ = (
+        CheckConstraint(CHECK_LUOT_TRANG_THAI, name="ck_council_decision_submission_trang_thai"),
+        CheckConstraint(CHECK_LUOT_QD, name="ck_council_decision_submission_qd"),
+        CheckConstraint(CHECK_LUOT_SHA, name="ck_council_decision_submission_sha"),
+        CheckConstraint(CHECK_LUOT_SHA_HEX, name="ck_council_decision_submission_sha_hex"),
+        CheckConstraint(CHECK_LUOT_KET_THUC, name="ck_council_decision_submission_ket_thuc"),
+        CheckConstraint(CHECK_LUOT_CHO_CO_BO, name="ck_council_decision_submission_cho_co_bo"),
+        CheckConstraint(CHECK_LUOT_BO_KHOP, name="ck_council_decision_submission_bo_khop"),
+        UniqueConstraint("ma", name="uq_council_decision_submission_ma"),
+        UniqueConstraint("decision_id", name="uq_council_decision_submission_decision"),
+        Index(
+            "uq_council_decision_submission_cho_gui",
+            "set_id",
+            unique=True,
+            postgresql_where=text(DIEU_KIEN_LUOT_CHO_GUI),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ma: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    set_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey(
+            "council_document_set.id",
+            ondelete="SET NULL",
+            name="fk_council_decision_submission_set",
+        ),
+        nullable=True,
+    )
+    set_id_luc_tao: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    trang_thai: Mapped[str] = mapped_column(String(16), nullable=False)
+    decision_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("council_decision.id", name="fk_council_decision_submission_decision"),
+        nullable=True,
+    )
+    noi_dung_sha: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    nguoi_tao_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("user.id", name="fk_council_decision_submission_nguoi_tao"), nullable=False
+    )
+    tao_luc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    ket_thuc_luc: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -105,10 +105,27 @@ async def _ghi(
         data["goc_id"] = str(goc_id)
     if xac_nhan is not None:
         data["xac_nhan_trang_thai"] = json.dumps(xac_nhan)
+    # Vòng giao diện (lượt gửi — đặc tả bản 2 mục 3.7): xin mã lượt NGAY trước khi gửi, như giao diện; bộ đang có lượt
+    # chờ (lần gửi trước bị từ chối nghiệp vụ ⇒ lượt vẫn ``cho_gui``) ⇒ dùng lại mã ấy. Không xin được (quyền / bộ
+    # không có) ⇒ gửi KHÔNG mã để route trả đúng lỗi của nó.
+    if "ma_luot_gui" not in (them or {}):
+        ma = await _mo_luot(client, h, set_id)
+        if ma is not None:
+            data["ma_luot_gui"] = ma
     data.update(them or {})
     return await client.post(
         P + "/decisions", data=data, files={"scan": ("qd.pdf", pdf, "application/pdf")}, headers=h
     )
+
+
+async def _mo_luot(client, h, set_id):
+    """Mã lượt gửi cho bộ ``set_id``: 201 ⇒ mã mới; 409 ``luot_dang_cho`` ⇒ mã đang chờ; khác ⇒ None."""
+    r = await client.post(P + "/sets/%d/luot-ghi-nhan" % set_id, headers=h)
+    if r.status_code == 201:
+        return r.json()["ma"]
+    if r.status_code == 409 and r.json().get("ma_loi") == "luot_dang_cho":
+        return r.json()["ma"]
+    return None
 
 
 async def _ghi_ok(client, h, set_id, **kw):

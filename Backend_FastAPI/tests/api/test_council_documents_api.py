@@ -270,6 +270,7 @@ ROUTE_DOC_BO = [
 
 async def _goi(client, method, duong, h, ba_bo=None, hs=None, goc=P):
     """Gọi ``goc + duong``; ``goc=""`` ⇒ ``duong`` là đường ĐẦY ĐỦ (lấy từ bảng route)."""
+    duong = duong.replace("{ma}", "00000000-0000-4000-8000-000000000000")  # vòng giao diện: mã lượt gửi giả
     if ba_bo is not None:
         duong = duong.replace("{u1}", str(ba_bo["u1"][0]))
         duong = duong.replace("{set_id}", str(ba_bo["u1"][0]))
@@ -513,8 +514,9 @@ async def test_dong_bang_chan_moi_route_ghi_cua_module(
 ):
     ghi = _route_ghi_cua_module()
     # Bảng route THẬT — xoá bộ (E3) + tải mẫu + dựng bộ + bảy route ghi của lượt I (ghi nhận, huỷ ghi
-    # nhận, huỷ hiệu lực, bộ điều chỉnh, điều chỉnh, tái dựng bản ký, cho xét lại).
-    assert [m for m, _ in ghi] == ["DELETE"] + ["POST"] * 9
+    # nhận, huỷ hiệu lực, bộ điều chỉnh, điều chỉnh, tái dựng bản ký, cho xét lại) + hai route ghi của vòng
+    # giao diện (mở lượt gửi, phân xử lượt gửi).
+    assert [m for m, _ in ghi] == ["DELETE"] + ["POST"] * 11
     assert await _dem() == (0, 3, 3)  # ba bộ có sẵn (ba_bo)
     for m, duong in ghi:
         # Gọi ĐÚNG đường của bảng route — KHÔNG ghép lại từ hằng P: router bị dời ra ngoài
@@ -533,8 +535,9 @@ async def test_dong_bang_van_cho_route_doc(client, tk, ba_bo, dong_bang):
     # khác của tiền tố (middleware chỉ chặn POST / PUT / PATCH / DELETE).
     doc = sorted(p for m, p in _route_cua_module() if m == "GET")
     # E2: 4 + E3: danh sách mã, nhật ký tải, vết xoá + lượt F: cờ quyền giao diện (/quyen) + lượt I:
-    # danh sách / chi tiết / scan văn bản đã ký, so với hiện tại, nhóm chờ, sự kiện
-    assert len(doc) == 14
+    # danh sách / chi tiết / scan văn bản đã ký, so với hiện tại, nhóm chờ, sự kiện + vòng giao diện: lượt gửi
+    # của bộ
+    assert len(doc) == 15
     from tests.api.test_council_documents_quyen_api import _dam_bao_qd_gia
 
     x, _muc = await _dam_bao_qd_gia(ba_bo["u1"][0])
@@ -585,8 +588,9 @@ def test_moi_route_cua_module_khop_vi_tu_bo_input_422():
     # /templates, /sets, /sets/{id}, /sets/{id}/files/{thu_tu} + E3: /sets/{id}/ma-ho-so,
     # /nhat-ky-tai, /nhat-ky-xoa (DELETE dùng chung /sets/{id}) + lượt F: /quyen + lượt I (F230) 12 đường:
     # /decisions, /decisions/{id}, …/scan, …/huy-ghi-nhan, …/huy-hieu-luc, …/bo-dieu-chinh, …/dieu-chinh,
-    # /sets/{id}/dung-lai-ban-ky, /sets/{id}/so-voi-hien-tai, /decision-holds, …/cho-xet-lai, /su-kien.
-    assert len(duong) == 20
+    # /sets/{id}/dung-lai-ban-ky, /sets/{id}/so-voi-hien-tai, /decision-holds, …/cho-xet-lai, /su-kien + vòng
+    # giao diện 2 đường: /sets/{id}/luot-ghi-nhan (POST + GET), /luot-ghi-nhan/{ma}/chan.
+    assert len(duong) == 22
     assert all(eh._khong_log_input_422(p) for p in duong)
     assert not eh._khong_log_input_422("/api/admission-config/council-documentsX")
     assert not eh._khong_log_input_422("/api/admission-config/criteria")

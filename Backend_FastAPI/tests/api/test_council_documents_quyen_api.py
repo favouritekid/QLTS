@@ -59,6 +59,8 @@ CO_LUOT_I_CHI_ADMIN = {
     "cho_xet_lai",
     "xem_su_kien",
 }
+#: Ba cờ lượt gửi ghi nhận (vòng giao diện — đặc tả bản 2 mục 3.7) — viết TAY — đều chỉ Admin.
+CO_LUOT_GUI_CHI_ADMIN = {"mo_luot_gui", "xem_luot_gui", "phan_xu_luot_gui"}
 
 
 # Ba fixture như ``test_council_documents_api.py`` — khai lại tại chỗ (flake8 F811).
@@ -153,7 +155,49 @@ async def _goi_that(client, co, h, sid):
         )
     if co == "xem_su_kien":
         return await client.get(P + "/su-kien", headers=h)
+    # Vòng giao diện — lượt gửi: hai lượt GIẢ của bộ ``sid`` (một đang chờ, một đã chặn) ⇒ mở lượt bị service từ
+    # chối 409 (đang có lượt chờ) SAU các cổng; phân xử lượt đã chặn ⇒ trả lặp, không đổi gì — không ghi gì.
+    cho, da_chan = await _dam_bao_luot_gia(sid)
+    if co == "mo_luot_gui":
+        return await client.post(b + "/luot-ghi-nhan", headers=h)
+    if co == "xem_luot_gui":
+        return await client.get(b + "/luot-ghi-nhan", headers=h)
+    if co == "phan_xu_luot_gui":
+        return await client.post(P + "/luot-ghi-nhan/%s/chan" % da_chan, headers=h)
     raise AssertionError("cờ chưa có cách gọi: " + co)
+
+
+async def _dam_bao_luot_gia(sid):
+    """(mã lượt ĐANG CHỜ, mã lượt ĐÃ CHẶN) của bộ ``sid`` — chèn SQL MỘT lần / bộ."""
+    async with csdl.engine.begin() as c:
+        co = (
+            await c.execute(
+                text(
+                    "SELECT max(ma::text) FILTER (WHERE trang_thai = 'cho_gui'), "
+                    "max(ma::text) FILTER (WHERE trang_thai = 'da_chan') "
+                    "FROM council_decision_submission WHERE set_id = :s"
+                ),
+                {"s": sid},
+            )
+        ).first()
+        if co and co[0] and co[1]:
+            return co[0], co[1]
+        uid = (await c.execute(text('SELECT min(id) FROM "user"'))).scalar_one()
+        out = []
+        for tt, kt in (("cho_gui", None), ("da_chan", "now()")):
+            out.append(
+                (
+                    await c.execute(
+                        text(
+                            "INSERT INTO council_decision_submission (ma, set_id, set_id_luc_tao, trang_thai, "
+                            "nguoi_tao_id, ket_thuc_luc) VALUES (gen_random_uuid(), :s, :s, :t, :u, %s) "
+                            "RETURNING ma::text" % (kt or "NULL")
+                        ),
+                        {"s": sid, "t": tt, "u": uid},
+                    )
+                ).scalar_one()
+            )
+        return out[0], out[1]
 
 
 async def _dam_bao_qd_gia(sid):
@@ -289,8 +333,8 @@ def test_moi_route_cua_module_co_dung_mot_co():
     ham_co = [r.endpoint for r in route if r.path == P + "/quyen"]
     assert len(ham_co) == 1  # route cờ không tự có cờ
     con_lai = [r.endpoint for r in route if r.endpoint is not ham_co[0]]
-    # mỗi hàm đúng MỘT route — 10 (E2–F) + 13 (lượt I, ghi nhận Quyết định đã ký)
-    assert len(con_lai) == len(set(con_lai)) == 23
+    # mỗi hàm đúng MỘT route — 10 (E2–F) + 13 (lượt I, ghi nhận Quyết định đã ký) + 3 (vòng giao diện: lượt gửi)
+    assert len(con_lai) == len(set(con_lai)) == 26
     assert set(rt.ENDPOINT_THEO_CO.values()) == set(con_lai)
     assert len(set(rt.ENDPOINT_THEO_CO.values())) == len(rt.ENDPOINT_THEO_CO)
     assert tuple(rt.ENDPOINT_THEO_CO) == CO  # trường schema = khoá bảng cờ, cùng thứ tự
@@ -368,7 +412,7 @@ async def test_casbin_cho_quan_ly_moi_route_thi_co_van_theo_lop_phu(
         "xem_ma_ho_so",
         "xem_nhat_ky_tai",
         "xem_nhat_ky_xoa",
-    } | CO_LUOT_I_CHI_ADMIN
+    } | CO_LUOT_I_CHI_ADMIN | CO_LUOT_GUI_CHI_ADMIN
     assert co == hanh_vi
 
 

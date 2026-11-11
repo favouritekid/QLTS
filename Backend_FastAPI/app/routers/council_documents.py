@@ -58,9 +58,13 @@ from ..schemas.council_document import (
     CouncilSetDetailOut,
     CouncilSetInputCodesOut,
     CouncilSetOut,
+    CouncilSubmissionOpenOut,
+    CouncilSubmissionOut,
+    CouncilSubmissionResolveOut,
     CouncilTemplateOut,
 )
 from ..services import council_decision_service as qd_vb
+from ..services import council_decision_submission_service as luot_gui
 from ..services import council_document_render_service as bo_dung
 from ..services import council_document_set_service as bo_vb
 from ..services import council_document_template_service as kho_mau
@@ -366,11 +370,14 @@ async def list_council_document_set_deletions(
 # (trực tiếp hoặc qua ``get_council_document_set_for_admin`` / ``get_council_decision_for_admin`` /
 # ``get_council_decision_hold_for_admin``). Route ghi khai trong ``ADMISSION_WRITE_ROUTES`` (đóng băng ⇒
 # 503). Log chỉ id + số đếm — không CCCD, không lý do. Bản scan đọc tối đa trần + 1 byte.
-def _qd_ghi_out(qd, so_lieu=None, canh_bao=None) -> CouncilDecisionWriteOut:
+def _qd_ghi_out(qd, so_lieu=None, canh_bao=None, *, goc=None, ma_luot_gui=None, lap_lai=False) -> CouncilDecisionWriteOut:
     return CouncilDecisionWriteOut(
         **CouncilDecisionOut.model_validate(qd).model_dump(),
         so_lieu=so_lieu,
         canh_bao_vuot_chi_tieu=canh_bao or [],
+        goc=goc,
+        ma_luot_gui=ma_luot_gui,
+        lap_lai=lap_lai,
     )
 
 
@@ -399,6 +406,7 @@ def _json_xac_nhan(gia_tri: Optional[str]):
 @limiter.limit(RateLimits.ADMIN_WRITE)
 async def create_council_decision(
     request: Request,
+    response: Response,
     current_user: models.User = deps.CasbinAuth,
     _scope: deps.CouncilDocumentScope = Depends(deps.require_council_document_admin),
     set_id: int = Form(..., ge=1),
@@ -415,9 +423,11 @@ async def create_council_decision(
     xac_nhan_trang_thai: Optional[str] = Form(None),
     ghi_chu_mau: Optional[str] = Form(None),
     scan: UploadFile = File(...),
+    # Vòng giao diện (đặc tả bản 2 mục 3.7.3): mã lượt gửi do POST /sets/{id}/luot-ghi-nhan cấp — BẮT BUỘC.
+    ma_luot_gui: str = Form(..., pattern=r"^[0-9a-fA-F-]{36}$"),
     db: AsyncSession = Depends(database.get_db),
 ):
-    qd, canh_bao = await qd_vb.ghi_nhan_quyet_dinh(
+    qd, canh_bao, lap_lai = await qd_vb.ghi_nhan_quyet_dinh(
         db,
         set_id=set_id,
         loai=loai,
@@ -436,8 +446,13 @@ async def create_council_decision(
         ghi_chu_mau=ghi_chu_mau,
         scan=await _doc_scan(scan),
         nguoi_id=current_user.id,
+        ma_luot_gui=ma_luot_gui,
     )
-    await db.commit()
+    goc = await qd_vb.tom_tat_goc(db, qd.goc_id)
+    out = _qd_ghi_out(qd, canh_bao=canh_bao, goc=goc, ma_luot_gui=ma_luot_gui, lap_lai=lap_lai)
+    await db.commit()  # gửi lặp: không có gì để ghi — kết thúc giao dịch NGAY (F272)
+    if lap_lai:
+        response.status_code = 200
     log.info(
         "council_decision_recorded",
         decision_id=qd.id,
@@ -445,8 +460,88 @@ async def create_council_decision(
         so_ho_so=qd.so_ho_so,
         actor=current_user.id,
         so_o_vuot_chi_tieu=len(canh_bao),
+        lap_lai=lap_lai,
     )
-    return _qd_ghi_out(qd, canh_bao=canh_bao)
+    return out
+
+
+# ═══════════════════════════════ lượt gửi ghi nhận (vòng giao diện — đặc tả bản 2 mục 3.7) ═══════════
+def _luot_out(x) -> CouncilSubmissionOut:
+    return CouncilSubmissionOut(
+        ma=str(x.ma),
+        trang_thai=x.trang_thai,
+        tao_luc=x.tao_luc,
+        ket_thuc_luc=x.ket_thuc_luc,
+        decision_id=x.decision_id,
+    )
+
+
+@router.post(
+    "/sets/{set_id}/luot-ghi-nhan",
+    response_model=CouncilSubmissionOpenOut,
+    status_code=201,
+    summary="Mở MỘT lượt gửi ghi nhận cho bộ (chỉ admin) — gọi NGAY trước POST /decisions",
+)
+@limiter.limit(RateLimits.ADMIN_WRITE)
+async def open_council_decision_submission(
+    request: Request,
+    current_user: models.User = deps.CasbinAuth,
+    bo: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
+    db: AsyncSession = Depends(database.get_db),
+):
+    luot = await luot_gui.mo_luot(db, set_id=bo.id, nguoi_id=current_user.id)
+    ma = str(luot.ma)
+    await db.commit()  # commit RỒI mới trả mã (3.7.2)
+    log.info("council_submission_opened", set_id=bo.id, actor=current_user.id)
+    return CouncilSubmissionOpenOut(ma=ma)
+
+
+@router.get(
+    "/sets/{set_id}/luot-ghi-nhan",
+    response_model=List[CouncilSubmissionOut],
+    summary="Các lượt gửi ghi nhận của bộ (chỉ admin) — khôi phục sau tải lại trang, không lưu mã ở trình duyệt",
+)
+@limiter.limit(RateLimits.ADMIN_READ)
+async def list_council_decision_submissions(
+    request: Request,
+    current_user: models.User = deps.CasbinAuth,
+    bo: models.CouncilDocumentSet = Depends(deps.get_council_document_set_for_admin),
+    db: AsyncSession = Depends(database.get_db),
+):
+    return [_luot_out(x) for x in await luot_gui.luot_cua_bo(db, bo.id)]
+
+
+@router.post(
+    "/luot-ghi-nhan/{ma}/chan",
+    response_model=CouncilSubmissionResolveOut,
+    summary="Phân xử lượt gửi chưa rõ kết quả: đã ghi / chưa ghi (chặn lượt) / đang xử lý (chỉ admin)",
+)
+@limiter.limit(RateLimits.ADMIN_WRITE)
+async def resolve_council_decision_submission(
+    request: Request,
+    ma: str = Path(..., pattern=r"^[0-9a-fA-F-]{36}$"),
+    current_user: models.User = deps.CasbinAuth,
+    _scope: deps.CouncilDocumentScope = Depends(deps.require_council_document_admin),
+    db: AsyncSession = Depends(database.get_db),
+):
+    ma_uuid = luot_gui.kiem_ma_luot(ma)
+    try:
+        ket_qua, qd_id = await luot_gui.phan_xu(db, ma_uuid)
+    except luot_gui.LuotDangXuLy:
+        await db.rollback()  # giao dịch đã hỏng (55P03) — ROLLBACK trước khi trả (3.7.4)
+        return CouncilSubmissionResolveOut(ket_qua=luot_gui.DANG_XU_LY)
+    quyet_dinh = None
+    if ket_qua == luot_gui.DA_GHI:
+        qd = await qd_vb.chi_tiet_qd_ghi(db, qd_id)
+        quyet_dinh = _qd_ghi_out(
+            qd,
+            canh_bao=await qd_vb.canh_bao_da_luu(db, qd_id, "ghi_nhan"),
+            goc=await qd_vb.tom_tat_goc(db, qd.goc_id),
+            ma_luot_gui=str(ma_uuid),
+        )
+    await db.commit()  # chỉ kết luận SAU commit
+    log.info("council_submission_resolved", ket_qua=ket_qua, actor=current_user.id)
+    return CouncilSubmissionResolveOut(ket_qua=ket_qua, quyet_dinh=quyet_dinh)
 
 
 @router.get(
@@ -857,4 +952,8 @@ ENDPOINT_THEO_CO = {
     "xem_nhom_cho": list_council_decision_holds,
     "cho_xet_lai": release_council_decision_hold,
     "xem_su_kien": list_council_document_events,
+    # Vòng giao diện — lượt gửi ghi nhận (đặc tả bản 2 mục 3.7)
+    "mo_luot_gui": open_council_decision_submission,
+    "xem_luot_gui": list_council_decision_submissions,
+    "phan_xu_luot_gui": resolve_council_decision_submission,
 }

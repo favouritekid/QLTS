@@ -1240,7 +1240,10 @@ jobs:
           # định dùng: route PATCH 409, mọi đường ghi ở tầng CSDL, hai thứ tự cạnh tranh, vị từ lệch SQL = Python)
           # + `tests/unit/test_council_config_lock_ddl_lockin.py` (bản create_all ↔ migration) + `tests/integration/
           # test_council_config_lock_migration.py` (migration hdts20261111 qua alembic thật: khoá → đếm → dừng / cài
-          # nguyên tử, phiên sửa đang mở, lỗi câu thứ hai, chạy lại, quá trần, hạ cấp). Ghim WHOLE-FILE.
+          # nguyên tử, phiên sửa đang mở, lỗi câu thứ hai, chạy lại, quá trần, hạ cấp).
+          # Lượt gửi ghi nhận (vòng giao diện 3.7): `tests/api/test_council_decision_luot_gui_api.py` (mở / gửi / gửi lặp /
+          # phân xử / xoá bộ / lịch ba phiên F272) + `tests/unit/test_council_decision_submission_model.py` (model ↔
+          # migration hdts20261112). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1341,6 +1344,8 @@ jobs:
               tests/api/test_council_config_lock_api.py
               tests/unit/test_council_config_lock_ddl_lockin.py
               tests/integration/test_council_config_lock_migration.py
+              tests/api/test_council_decision_luot_gui_api.py
+              tests/unit/test_council_decision_submission_model.py
 
     env:
       APP_ENV: test

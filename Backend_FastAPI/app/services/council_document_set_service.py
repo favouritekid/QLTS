@@ -486,9 +486,13 @@ async def xoa_bo_van_ban(
     if isinstance(nguoi_xoa_id, bool) or not isinstance(nguoi_xoa_id, int):
         raise ServiceError("Không xác định được người xoá — không xoá.")
     repo = CouncilDocumentRepository(db)
+    qd_repo = CouncilDecisionRepository(db)
+    # Vòng giao diện (đặc tả bản 2 mục 3.7.6, F269 / F272): câu ĐẦU khoá dòng bộ ``FOR UPDATE`` — mở lượt gửi (INSERT
+    # có khoá ngoại ⇒ ``KEY SHARE`` trên bộ) không chen được sau bước kiểm lượt bên dưới.
+    if await qd_repo.khoa_bo(bo.id) is None:
+        raise ResourceNotFoundError("Không có bộ văn bản này.")
     # Lượt I (F230): bộ của văn bản ĐÃ KÝ còn / hết hiệu lực là hồ sơ lưu trữ ⇒ KHÔNG xoá (J1 dòng 8;
     # số năm lưu chưa có — J5 M1). Báo 409 trước; CSDL chặn cuối (K4 / K5b — đặc tả mục 4.1).
-    qd_repo = CouncilDecisionRepository(db)
     song = await qd_repo.van_ban_song_cua_bo(bo.id)
     if song:
         raise ConflictError(
@@ -496,6 +500,16 @@ async def xoa_bo_van_ban(
             "không xoá. Chỉ xoá được khi mọi ghi nhận của bộ đã huỷ ghi nhận."
             % ", #".join(str(d.id) for d in song),
             public_payload={"quyet_dinh_id": [d.id for d in song]},
+        )
+    # Lượt gửi chưa rõ kết quả ⇒ 409 (đọc KHÔNG khoá, không chờ dòng lượt nào — F272). CSDL chặn cuối: khoá ngoại
+    # ON DELETE SET NULL + CHECK ``ck_council_decision_submission_cho_co_bo``. Lượt đã kết thúc giữ lại (set_id NULL).
+    from app.services.council_decision_submission_service import co_luot_cho_gui
+
+    cho = await co_luot_cho_gui(db, bo.id)
+    if cho is not None:
+        raise ConflictError(
+            "Bộ đang có lượt gửi ghi nhận chưa rõ kết quả — phân xử (Kiểm tra trên máy chủ) trước khi xoá.",
+            public_payload={"ma_loi": "bo_co_luot_gui_chua_ro", "ma": str(cho.ma)},
         )
     tep = await repo.danh_sach_tep(bo.id)  # metadata, KHÔNG nạp bytes
     vet = CouncilDocumentSetDeletion(

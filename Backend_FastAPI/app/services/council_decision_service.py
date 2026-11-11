@@ -44,6 +44,7 @@ from app.repositories.council_decision_repository import (
     ma_loi_csdl,
 )
 from app.repositories.council_document_repository import CouncilDocumentRepository
+from app.services import council_decision_submission_service as luot_gui
 from app.services import council_document_render_service as bo_dung
 from app.services.council_decision_status_service import tinh_trang_qd
 from app.services.council_document_set_service import kiem_ly_do
@@ -350,9 +351,15 @@ async def ghi_nhan_quyet_dinh(
     ghi_chu_mau: Optional[str],
     scan: object,
     nguoi_id: int,
-) -> Tuple[CouncilDecision, List[Dict[str, Any]]]:
+    ma_luot_gui: object,
+) -> Tuple[CouncilDecision, List[Dict[str, Any]], bool]:
     """Ghi nhận MỘT Quyết định trúng tuyển / bổ sung đã ký từ bộ ``set_id`` (đặc tả mục 5.3). Trả
-    ``(văn bản đã flush, cảnh báo vượt chỉ tiêu — N9, rỗng khi không ô nào vượt)``; router commit."""
+    ``(văn bản, cảnh báo vượt chỉ tiêu — N9, rỗng khi không ô nào vượt, lap_lai)``; router commit.
+
+    Vòng giao diện (đặc tả bản 2 mục 3.7.3): ``ma_luot_gui`` (do ``POST /sets/{id}/luot-ghi-nhan`` cấp) — câu CSDL ĐẦU
+    TIÊN khoá lượt ``cho_gui`` (đầu thứ tự khoá chung); câu CUỐI chốt ``da_ghi``. Lượt không còn ``cho_gui`` ⇒ nhánh
+    CHỈ ĐỌC: gửi lặp đúng nội dung ⇒ trả lại văn bản cũ (``lap_lai`` = True, cảnh báo đọc từ sự kiện đã lưu); còn
+    lại 409."""
     so = kiem_so_quyet_dinh(so_quyet_dinh)
     ngay = kiem_ngay(ngay_ky)
     b = kiem_scan(scan)
@@ -369,8 +376,33 @@ async def ghi_nhan_quyet_dinh(
             "Admin phải xác nhận danh sách, ngành, điểm từng em trên bản ký khớp bản in của bộ "
             "(C2: bản ký sửa tay ⇒ dựng lại bộ cho khớp bản ký)."
         )
+    ma = luot_gui.kiem_ma_luot(ma_luot_gui)
+    sha = luot_gui.sha_noi_dung_gui(
+        set_id=set_id,
+        loai=loai,
+        goc_id=goc_id,
+        so_quyet_dinh=so,
+        ngay_ky=ngay,
+        tham_so_giay=tham_so_giay,
+        xac_nhan_so_ho_so=xac_nhan_so_ho_so,
+        xac_nhan_khop_ban_in=xac_nhan_khop_ban_in,
+        xac_nhan_trang_thai=xac_nhan,
+        ghi_chu_mau=ghi_chu,
+        sha_scan=hashlib.sha256(b).hexdigest(),
+    )
     repo = CouncilDecisionRepository(db)
     try:
+        # Lượt gửi: câu CSDL ĐẦU TIÊN, GIỮ ``cho_gui`` (F265) — đầu thứ tự khoá chung.
+        luot = await luot_gui.khoa_luot_cho_gui(db, ma=ma, set_id=set_id)
+        if luot is None:
+            # F272: nhánh CHỈ ĐỌC — không khoá thêm gì, router kết thúc giao dịch ngay.
+            qd_cu_id = luot_gui.kiem_luot_da_ket_thuc(
+                await luot_gui.doc_luot(db, ma), set_id=set_id, sha=sha
+            )
+            qd_cu = await repo.qd_theo_id(qd_cu_id)
+            if qd_cu is None:
+                raise ServiceError("Lượt gửi đã ghi nhưng không đọc được văn bản — không trả.")
+            return qd_cu, await canh_bao_da_luu(db, qd_cu_id, "ghi_nhan"), True
         async with db.begin_nested():
             goc = None
             if goc_id is not None:
@@ -462,9 +494,44 @@ async def ghi_nhan_quyet_dinh(
                     },
                 ),
             )
+            # Lượt gửi: câu CUỐI trước commit — MỘT câu đặt đủ cột (F265).
+            await luot_gui.chot_da_ghi(db, luot_id=luot.id, decision_id=qd.id, sha=sha)
     except DBAPIError as e:
         raise _dich_loi_csdl(ma_loi_csdl(e), "ghi nhận Quyết định") from None
-    return qd, canh_bao
+    return qd, canh_bao, False
+
+
+async def canh_bao_da_luu(db: AsyncSession, decision_id: int, loai_su_kien: str) -> List[Dict[str, Any]]:
+    """Cảnh báo vượt chỉ tiêu ĐÃ LƯU trong sự kiện (đặc tả 3.8 — đọc lại không tính lại)."""
+    so_lieu = (
+        await db.execute(
+            text(
+                "SELECT so_lieu FROM council_document_event WHERE decision_id = :d AND loai = :l "
+                "ORDER BY id DESC LIMIT 1"
+            ),
+            {"d": decision_id, "l": loai_su_kien},
+        )
+    ).scalar_one_or_none()
+    return list((so_lieu or {}).get("canh_bao_vuot_chi_tieu") or [])
+
+
+async def chi_tiet_qd_ghi(db: AsyncSession, decision_id: int) -> CouncilDecision:
+    qd = await CouncilDecisionRepository(db).qd_theo_id(decision_id)
+    if qd is None:
+        raise ResourceNotFoundError("Không có văn bản này.")
+    return qd
+
+
+async def tom_tat_goc(db: AsyncSession, goc_id: Optional[int]) -> Optional[Dict[str, Any]]:
+    """``{id, so_quyet_dinh, ngay_ky}`` của Quyết định gốc (DTO ghi nhận — đặc tả 3.8)."""
+    if goc_id is None:
+        return None
+    r = (
+        await db.execute(
+            text("SELECT id, so_quyet_dinh, ngay_ky FROM council_decision WHERE id = :g"), {"g": goc_id}
+        )
+    ).first()
+    return None if r is None else {"id": r[0], "so_quyet_dinh": r[1], "ngay_ky": r[2]}
 
 
 # ═══════════════════════════════ điều chỉnh (C6) ═══════════════════════════════════════════

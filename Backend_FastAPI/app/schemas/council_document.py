@@ -180,6 +180,10 @@ class CouncilDocumentPermissions(BaseModel):
     xem_nhom_cho: bool
     cho_xet_lai: bool
     xem_su_kien: bool
+    # Vòng giao diện (lượt gửi ghi nhận — đặc tả bản 2 mục 3.7): mở lượt / xem lượt của bộ / phân xử — chỉ admin.
+    mo_luot_gui: bool
+    xem_luot_gui: bool
+    phan_xu_luot_gui: bool
 
 
 class CouncilDocumentPermissionsOut(BaseModel):
@@ -282,6 +286,11 @@ class CouncilQuotaWarningOut(BaseModel):
 
 
 class CouncilDecisionWriteOut(CouncilDecisionOut):
+    # Vòng giao diện (đặc tả 3.8): Quyết định gốc {id, so_quyet_dinh, ngay_ky} khi bổ sung; mã lượt gửi đã dùng; gửi
+    # LẶP đúng nội dung ⇒ lap_lai = True (văn bản cũ, cảnh báo đọc từ sự kiện đã lưu, HTTP 200).
+    goc: Optional[Dict[str, Any]] = None
+    ma_luot_gui: Optional[str] = None
+    lap_lai: bool = False
     """Phản hồi của thao tác ghi: văn bản + số đếm của thao tác (không dữ liệu cá nhân)."""
 
     so_lieu: Optional[Dict[str, Any]] = None
@@ -332,3 +341,24 @@ class CouncilResignIn(BaseModel):
     dong_sua_tay: List[StrictInt] = Field(..., min_length=1)
     ly_do: StrictStr
     xac_nhan_dong_khac: Optional[List[Dict[str, Any]]] = None
+
+
+class CouncilSubmissionOut(BaseModel):
+    """Một lượt gửi ghi nhận (vòng giao diện — đặc tả bản 2 mục 3.7). Không dữ liệu cá nhân."""
+
+    ma: str
+    trang_thai: str
+    tao_luc: datetime
+    ket_thuc_luc: Optional[datetime] = None
+    decision_id: Optional[int] = None
+
+
+class CouncilSubmissionOpenOut(BaseModel):
+    ma: str
+
+
+class CouncilSubmissionResolveOut(BaseModel):
+    """Phân xử lượt chưa rõ: ``chua_ghi_da_chan`` | ``da_ghi`` (kèm văn bản) | ``dang_xu_ly`` (chưa kết luận)."""
+
+    ket_qua: str
+    quyet_dinh: Optional[CouncilDecisionWriteOut] = None

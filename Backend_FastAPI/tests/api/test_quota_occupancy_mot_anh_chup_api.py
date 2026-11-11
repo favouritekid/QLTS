@@ -127,8 +127,15 @@ async def _huy_hieu_luc_phien_khac(qd_id, nguoi):
 
 
 async def _ghi_nhan_phien_khac(set_id, nguoi):
+    # Vòng giao diện (lượt gửi — đặc tả bản 2 mục 3.7): xin mã lượt ở phiên RIÊNG và commit trước (như route mở lượt),
+    # rồi mới ghi nhận bằng mã ấy.
+    from app.services import council_decision_submission_service as luot_gui
+
+    async with AsyncSessionLocal() as db1:
+        ma = str((await luot_gui.mo_luot(db1, set_id=set_id, nguoi_id=nguoi)).ma)
+        await db1.commit()
     async with AsyncSessionLocal() as db2:
-        x, _ = await qd_vb.ghi_nhan_quyet_dinh(
+        x, _, _ = await qd_vb.ghi_nhan_quyet_dinh(
             db2,
             set_id=set_id,
             loai="trung_tuyen",
@@ -142,6 +149,7 @@ async def _ghi_nhan_phien_khac(set_id, nguoi):
             ghi_chu_mau=None,
             scan=qd.PDF,
             nguoi_id=nguoi,
+            ma_luot_gui=ma,
         )
         await db2.commit()
         return x.id
