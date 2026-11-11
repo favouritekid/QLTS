@@ -11,7 +11,7 @@ import type { CouncilSetPreview } from "@/lib/zod/council-documents"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
 import { CouncilPreviewSummary } from "./CouncilPreviewSummary"
-import { nganhTrinhDo, nhanMucKiem, thoiDiem } from "./hien-thi"
+import { nganhTrinhDo, nhanMucKiem, nhanTrangThai, thoiDiem } from "./hien-thi"
 
 interface Props {
   xemTruoc: CouncilSetPreview | undefined
@@ -134,7 +134,7 @@ export function CouncilCheckStep({ xemTruoc, dangKiem, loi, idDaGui, onKiemLai, 
                   </TableCell>
                   <TableCell>
                     <div>{d.ho_ten}</div>
-                    <div className="text-xs text-muted-foreground">{d.trang_thai_nhan}</div>
+                    <div className="text-xs text-muted-foreground">{nhanTrangThai(d.trang_thai)}</div>
                   </TableCell>
                   <TableCell>
                     <div>{nganhTrinhDo(d.nganh_nhan, d.trinh_do)}</div>

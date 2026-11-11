@@ -20,8 +20,12 @@ import {
   describeCouncilDocumentError,
   downloadCouncilSetFile,
   filenameFromContentDisposition,
+  createCouncilSetByIds,
   getCouncilDocumentPermissions,
   getCouncilSetInputCodes,
+  previewCouncilSet,
+  resolveCouncilCodes,
+  searchCouncilProfiles,
 } from "./council-documents"
 
 const API = "http://localhost:8000"
@@ -118,7 +122,7 @@ describe("getCouncilSetInputCodes — dữ liệu cá nhân chỉ trả về ng�
 })
 
 describe("getCouncilDocumentPermissions", () => {
-  it("parse đủ cờ (mười cờ lượt F + mười ba cờ Quyết định + ba cờ lượt gửi + hai cờ chờ máy chủ)", async () => {
+  it("parse đủ cờ (mười cờ lượt F + mười ba cờ Quyết định + ba cờ lượt gửi + ba cờ đường chọn hồ sơ + một cờ chờ máy chủ)", async () => {
     const co = {
       ...NO_COUNCIL_PERMISSIONS,
       xem_mau: true, xem_danh_sach_bo: true, xem_chi_tiet_bo: true, tai_tep: true,
@@ -129,15 +133,20 @@ describe("getCouncilDocumentPermissions", () => {
     expect(await getCouncilDocumentPermissions()).toEqual(co)
   })
 
-  it("⏳ các cờ CHỜ MÁY CHỦ vắng (máy chủ chưa trả) ⇒ false, KHÔNG nổ; các cờ khác vẫn đúng", async () => {
-    const { kiem_truoc: _a, tim_ho_so: _c, doi_ma: _d, tai_ca_bo: _b, ...conLai } = { ...NO_COUNCIL_PERMISSIONS, xem_mau: true }
+  it("⏳ cờ CHỜ MÁY CHỦ vắng (máy chủ chưa trả) ⇒ false, KHÔNG nổ; các cờ khác vẫn đúng", async () => {
+    const { tai_ca_bo: _b, ...conLai } = { ...NO_COUNCIL_PERMISSIONS, xem_mau: true }
     server.use(http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: conLai })))
     const q = await getCouncilDocumentPermissions()
-    expect(q.kiem_truoc).toBe(false)
-    expect(q.tim_ho_so).toBe(false)
-    expect(q.doi_ma).toBe(false)
     expect(q.tai_ca_bo).toBe(false)
     expect(q.xem_mau).toBe(true)
+  })
+
+  // Máy chủ đã trả ba cờ này từ `5feb425d` ⇒ vắng là hợp đồng vỡ (máy chủ cũ / sai bản), KHÔNG được coi là "tắt" lặng lẽ.
+  it.each([["kiem_truoc"], ["tim_ho_so"], ["doi_ma"]] as const)("cờ %s vắng ⇒ NỔ (đã là cờ bắt buộc)", async (k) => {
+    const co: Record<string, boolean> = { ...NO_COUNCIL_PERMISSIONS, xem_mau: true }
+    delete co[k]
+    server.use(http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: co })))
+    await expect(getCouncilDocumentPermissions()).rejects.toBeTruthy()
   })
 
   it.each(CO_CHO_MAY_CHU.map((k) => [k]))(
@@ -156,6 +165,114 @@ describe("getCouncilDocumentPermissions", () => {
   it("thiếu cờ ⇒ NỔ (không tự coi là tắt / bật)", async () => {
     server.use(http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: { xem_mau: true } })))
     await expect(getCouncilDocumentPermissions()).rejects.toBeTruthy()
+  })
+})
+
+/**
+ * Đường chọn hồ sơ — fixture dựng ĐÚNG hình Pydantic của máy chủ `5feb425d` (`CouncilPreviewRowOut`, `CouncilProfileSearchRowOut`,
+ * `CouncilCodesOut`): dòng KHÔNG có `trang_thai_nhan`; `nguoi_goi_duoc_xac_nhan` và `academic_year` LUÔN có.
+ */
+describe("đường chọn hồ sơ — DTO khớp máy chủ 5feb425d", () => {
+  const TOM_TAT = {
+    tong: 1, duoc_dung: 1, can_xac_nhan: 0, bi_chan: 0,
+    theo_nganh: [{ nganh_nhan: "CĐ Kế toán", trinh_do: "Cao đẳng", so: 1 }],
+    can_xac_nhan_theo_trang_thai: {}, so_nhom: 1, du_kien_so_tep: 4, nguoi_goi_duoc_xac_nhan: false,
+  }
+  const KIEM = {
+    kiem_luc: "2026-11-11T02:00:00Z", phien_ban_kiem: "dau-kiem-1",
+    dong: [{
+      stt: 1, stt_qd: 1, profile_id: 11, ho_ten: "Nguyễn Văn A", trang_thai: "approved", nganh_nhan: "CĐ Kế toán",
+      trinh_do: "Cao đẳng", duong_xet_nhan: "Xét học bạ", diem_in: "20,5", muc: "duoc_dung", ly_do: [],
+    }],
+    khong_tim_thay: [], tom_tat: TOM_TAT,
+  }
+  const DONG_TIM = {
+    profile_id: 11, ho_ten: "Nguyễn Văn A", cccd: maGia(11), nganh_nhan: "CĐ Kế toán", trinh_do: "Cao đẳng",
+    duong_xet_nhan: null, trang_thai: "approved", academic_year: 2026,
+  }
+  const TIM = { tong: 1, page: 1, page_size: 25, dong: [DONG_TIM] }
+  const VAO_TIM = { academic_year: 2026, tu_khoa: null, page: 1, page_size: 25 }
+
+  it("kiem-truoc: parse hình máy chủ — dòng không có trang_thai_nhan; nguoi_goi_duoc_xac_nhan=false được GIỮ", async () => {
+    server.use(http.post(`${API}${P}/sets/kiem-truoc`, () => HttpResponse.json(KIEM)))
+    const kq = await previewCouncilSet({ academic_year: 2026, profile_ids: [11] })
+    expect(kq.dong[0].trang_thai).toBe("approved")
+    expect("trang_thai_nhan" in kq.dong[0]).toBe(false)
+    expect(kq.tom_tat.nguoi_goi_duoc_xac_nhan).toBe(false)
+  })
+
+  it("kiem-truoc: tom_tat THIẾU nguoi_goi_duoc_xac_nhan ⇒ bị từ chối (máy chủ luôn trả; không đoán 'xác nhận được')", async () => {
+    const { nguoi_goi_duoc_xac_nhan: _bo, ...thieu } = TOM_TAT
+    server.use(http.post(`${API}${P}/sets/kiem-truoc`, () => HttpResponse.json({ ...KIEM, tom_tat: thieu })))
+    await expect(previewCouncilSet({ academic_year: 2026, profile_ids: [11] })).rejects.toBeTruthy()
+  })
+
+  it("tim-ho-so: parse hình máy chủ (academic_year có, duong_xet_nhan null); thân gửi đúng và URL không query", async () => {
+    let than: unknown
+    server.use(http.post(`${API}${P}/sets/tim-ho-so`, async ({ request }) => {
+      than = await request.json()
+      return HttpResponse.json(TIM)
+    }))
+    const kq = await searchCouncilProfiles(VAO_TIM)
+    expect(kq.dong[0].academic_year).toBe(2026)
+    expect(kq.dong[0].duong_xet_nhan).toBeNull()
+    expect("trang_thai_nhan" in kq.dong[0]).toBe(false)
+    expect(than).toEqual(VAO_TIM)
+    expect(urls).toEqual([`${API}${P}/sets/tim-ho-so`])
+  })
+
+  it("tim-ho-so: dòng THIẾU academic_year ⇒ bị từ chối (máy chủ luôn trả)", async () => {
+    const { academic_year: _bo, ...thieu } = DONG_TIM
+    server.use(http.post(`${API}${P}/sets/tim-ho-so`, () => HttpResponse.json({ ...TIM, dong: [thieu] })))
+    await expect(searchCouncilProfiles(VAO_TIM)).rejects.toBeTruthy()
+  })
+
+  it("doi-ma: nhận đủ sáu mã lý do (kể cả sai_dinh_dang, nhieu_ho_so); mã chỉ ở thân, không URL / console / storage", async () => {
+    const dongLoi = ["rong", "trung", "ky_tu_la", "sai_dinh_dang", "khong_khop", "nhieu_ho_so"].map((ly_do, i) => ({ dong: i + 1, ly_do }))
+    let than: unknown
+    server.use(http.post(`${API}${P}/sets/doi-ma`, async ({ request }) => {
+      than = await request.json()
+      return HttpResponse.json({ profile_ids: [11], dong_loi: dongLoi })
+    }))
+    const kq = await resolveCouncilCodes({ academic_year: 2026, ma_ho_so: MA })
+    expect(kq.dong_loi.map((d) => d.ly_do)).toEqual(["rong", "trung", "ky_tu_la", "sai_dinh_dang", "khong_khop", "nhieu_ho_so"])
+    expect(than).toEqual({ academic_year: 2026, ma_ho_so: MA })
+    expect(urls).toEqual([`${API}${P}/sets/doi-ma`])
+    khongCoMaOConsoleStorageUrl()
+  })
+
+  it("POST /sets dạng id: thân CHỈ có profile_ids + phien_ban_kiem + academic_year (+ tham số), KHÔNG kèm ma_ho_so (máy chủ trả 422 nếu gửi cả hai dạng)", async () => {
+    let than: Record<string, unknown> = {}
+    server.use(http.post(`${API}${P}/sets`, async ({ request }) => {
+      than = (await request.json()) as Record<string, unknown>
+      return HttpResponse.json({
+        id: 9, nguoi_tao_id: 1, tao_luc: "2026-11-11T01:00:00Z", moc_chup: "2026-11-11T00:59:00Z", unit_id: null,
+        trinh_do: "Cao đẳng", so_ho_so: 1, so_tep: 4, kich_thuoc_tong: 100, nam_hoc: 2026, tham_so_quyet_dinh: null,
+        thong_tin_dung: {}, tep: [],
+      }, { status: 201 })
+    }))
+    await createCouncilSetByIds({ profile_ids: [11], phien_ban_kiem: "dau-kiem-1", academic_year: 2026 })
+    expect(Object.keys(than).sort()).toEqual(["academic_year", "phien_ban_kiem", "profile_ids"])
+  })
+
+  // Ba POST chỉ đọc vẫn bị cần gạt đóng băng chặn (503 ADMISSION_FROZEN): câu lỗi phải nói rõ cả việc chọn / kiểm trước dừng,
+  // không để người dùng tưởng chỉ "ghi" mới bị chặn.
+  it.each([
+    ["kiem-truoc", () => previewCouncilSet({ academic_year: 2026, profile_ids: [11] })],
+    ["tim-ho-so", () => searchCouncilProfiles(VAO_TIM)],
+    ["doi-ma", () => resolveCouncilCodes({ academic_year: 2026, ma_ho_so: MA })],
+  ] as const)("%s bị đóng băng chặn (503) ⇒ câu đóng băng nói rõ cả chọn / kiểm trước", async (route, goi) => {
+    server.use(http.post(`${API}${P}/sets/${route}`, () => HttpResponse.json({ detail: "x", code: "ADMISSION_FROZEN" }, { status: 503 })))
+    try {
+      await goi()
+    } catch (e) {
+      const m = describeCouncilDocumentError(e)
+      expect(m.status).toBe(503)
+      expect(m.title).toMatch(/đóng băng/)
+      expect(m.title).toMatch(/chọn \/ kiểm trước/)
+      return
+    }
+    throw new Error("không lỗi")
   })
 })
 

@@ -108,7 +108,10 @@ const NHAN_LY_DO_DAN_MA: Record<string, string> = {
   rong: "dòng trống",
   trung: "mã trùng",
   ky_tu_la: "có ký tự lạ",
-  khong_khop: "không khớp hồ sơ nào của năm học đã chọn",
+  sai_dinh_dang: "mã không đúng dạng (phải đúng 9 hoặc 12 chữ số)",
+  // Hồ sơ ngoài phạm vi đơn vị của người gọi cũng báo `khong_khop` (máy chủ không phân biệt với "không có").
+  khong_khop: "không khớp hồ sơ nào của năm học đã chọn (hoặc hồ sơ ngoài phạm vi của bạn)",
+  nhieu_ho_so: "mã khớp nhiều hơn một hồ sơ",
 }
 export function nhanLyDoDanMa(ly_do: string): string {
   return NHAN_LY_DO_DAN_MA[ly_do] ?? ly_do

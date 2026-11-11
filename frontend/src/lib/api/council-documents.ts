@@ -268,9 +268,10 @@ export async function listCouncilSetDeletions(
   return councilSetDeletionListSchema.parse(res.data)
 }
 
-// ── vòng giao diện: chọn hồ sơ → kiểm trước → dựng (⏳ CHỜ MÁY CHỦ — đặc tả 3.1 / 3.2 / 3.3 / 3.11) ──────────────
-// Route CHƯA có ở `dd6c725d`: viết theo DTO đặc tả; test dùng MSW. ⚠️ Thân yêu cầu / phản hồi có `ho_ten`, `cccd`:
-// chỉ ở bộ nhớ, không `console.*`, không URL.
+// ── vòng giao diện: chọn hồ sơ → kiểm trước → dựng (đặc tả 3.1 / 3.2 / 3.3 / 3.11) ─────────────────────────────────
+// Máy chủ có các route này từ `5feb425d` (DTO đã đối chiếu từng trường với `schemas/council_document.py`); test vẫn dùng
+// MSW. Cả ba POST chỉ đọc (kiểm trước, tìm hồ sơ, đổi mã) bị cần gạt đóng băng chặn (503) như mọi lần ghi.
+// ⚠️ Thân yêu cầu / phản hồi có `ho_ten`, `cccd`: chỉ ở bộ nhớ, không `console.*`, không URL.
 
 /** Kiểm trước + thứ tự (đặc tả 3.1): cùng cổng và cùng đường đọc với bộ dựng; KHÔNG ghi gì. */
 export async function previewCouncilSet(input: CouncilSetPreviewIn): Promise<CouncilSetPreview> {
@@ -527,7 +528,9 @@ export function describeCouncilDocumentError(error: unknown): CouncilErrorMessag
       if (e.frozen) {
         return {
           status,
-          title: "Tuyển sinh đang tạm đóng băng — thao tác ghi bị chặn. Xem / tải vẫn được.",
+          // Ba route chỉ đọc của luồng dựng bộ (kiểm trước, tìm hồ sơ, đổi mã) cũng bị cần gạt chặn (máy chủ `5feb425d`).
+          title:
+            "Tuyển sinh đang tạm đóng băng — thao tác ghi bị chặn, cả chọn / kiểm trước hồ sơ để dựng bộ. Xem / tải vẫn được.",
         }
       }
       return { status, title: "Hệ thống tạm thời không phục vụ — thử lại sau." }

@@ -11,6 +11,7 @@ import {
   nhanLyDoDanMa,
   nhanMucKiem,
   nhanTinhTrangBo,
+  nhanTrangThai,
   nhanTrangThaiQuyetDinh,
   nhanTruongDoiChieu,
   tomTatQuyetDinh,
@@ -29,8 +30,18 @@ describe("nhãn: mã đã biết ⇒ nhãn; mã LẠ ⇒ in nguyên", () => {
     [nhanLoaiQuyetDinh, "dieu_chinh", "dieu_chinh"],
     [nhanTrangThaiQuyetDinh, "huy_ghi_nhan", "Đã huỷ ghi nhận"],
     [nhanTrangThaiQuyetDinh, "la", "la"],
-    [nhanLyDoDanMa, "khong_khop", "không khớp hồ sơ nào của năm học đã chọn"],
+    [nhanLyDoDanMa, "rong", "dòng trống"],
+    [nhanLyDoDanMa, "trung", "mã trùng"],
+    [nhanLyDoDanMa, "ky_tu_la", "có ký tự lạ"],
+    // Máy chủ `5feb425d`: hai mã thêm — dãy 10 số (không phải đúng 9 / 12) và mã khớp nhiều hồ sơ.
+    [nhanLyDoDanMa, "sai_dinh_dang", "mã không đúng dạng (phải đúng 9 hoặc 12 chữ số)"],
+    [nhanLyDoDanMa, "khong_khop", "không khớp hồ sơ nào của năm học đã chọn (hoặc hồ sơ ngoài phạm vi của bạn)"],
+    [nhanLyDoDanMa, "nhieu_ho_so", "mã khớp nhiều hơn một hồ sơ"],
     [nhanLyDoDanMa, "ly_do_moi", "ly_do_moi"],
+    // Máy chủ chỉ trả MÃ trạng thái; nhãn lấy từ status-config. Mã lạ ⇒ in nguyên mã.
+    [nhanTrangThai, "approved", "Đã duyệt (approved)"],
+    [nhanTrangThai, "resubmitted", "Đã nộp lại (resubmitted)"],
+    [nhanTrangThai, "trang_thai_la", "trang_thai_la"],
     [nhanTruongDoiChieu, "ho", "Họ"],
     [nhanTruongDoiChieu, "diem_kv", "Điểm khu vực"],
     [nhanTruongDoiChieu, "s_phieu", "s_phieu"], // khoá không chắc nghĩa ⇒ in nguyên khoá

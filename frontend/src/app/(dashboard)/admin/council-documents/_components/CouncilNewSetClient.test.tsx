@@ -1,6 +1,7 @@
 /**
  * Văn bản Hội đồng — trang `/moi`: chọn hồ sơ → kiểm tra & chốt → tham số → dựng (đặc tả 5.1 – 5.4, bản 2 mục 5.1).
- * Máy chủ giả (MSW) đóng vai các route ⏳ CHỜ MÁY CHỦ: `tim-ho-so`, `kiem-truoc`, `doi-ma`, `POST /sets` dạng id.
+ * Máy chủ giả (MSW) đóng vai các route `tim-ho-so`, `kiem-truoc`, `doi-ma`, `POST /sets` dạng id — fixture theo hình
+ * máy chủ `5feb425d` (chỉ MÃ trạng thái, không nhãn; `tim-ho-so` không có đường xét; `nguoi_goi_duoc_xac_nhan` luôn có).
  *
  * Khoá: (1) thứ tự hàng do MÁY CHỦ quyết (khác thứ tự người dùng chọn) và không có nút đổi thứ tự; (2) dựng gửi ĐÚNG
  * id theo thứ tự máy chủ + dấu `phien_ban_kiem`; (3) "Chốt" khoá khi còn dòng bị chặn / đang kiểm; (4) khối xác nhận số;
@@ -29,11 +30,15 @@ const API = "http://localhost:8000"
 const CCCD_GIA = (n: number) => "099" + "999" + String(n).padStart(6, "0")
 const QUYEN = { ...NO_COUNCIL_PERMISSIONS, tao_bo: true, kiem_truoc: true, tim_ho_so: true, doi_ma: true }
 
+// Dòng `tim-ho-so` đúng hình máy chủ `5feb425d`: KHÔNG có `trang_thai_nhan` (chỉ MÃ trạng thái), `duong_xet_nhan` LUÔN null
+// (danh sách dạng nhẹ), `academic_year` LUÔN có.
 const HO_SO = [
-  { profile_id: 11, ho_ten: "Nguyễn Văn A", cccd: CCCD_GIA(11), nganh_nhan: "CĐ Kế toán", trinh_do: "Cao đẳng", duong_xet_nhan: "Xét học bạ", trang_thai: "approved", trang_thai_nhan: "Đã duyệt" },
-  { profile_id: 12, ho_ten: "Trần Thị B", cccd: CCCD_GIA(12), nganh_nhan: "CĐ Kế toán", trinh_do: "Cao đẳng", duong_xet_nhan: null, trang_thai: "resubmitted", trang_thai_nhan: "Nộp lại" },
-  { profile_id: 13, ho_ten: "Lê Văn C", cccd: CCCD_GIA(13), nganh_nhan: "TC Điện", trinh_do: "Trung cấp", duong_xet_nhan: "Xét học bạ", trang_thai: "approved", trang_thai_nhan: "Đã duyệt" },
+  { profile_id: 11, ho_ten: "Nguyễn Văn A", cccd: CCCD_GIA(11), nganh_nhan: "CĐ Kế toán", trinh_do: "Cao đẳng", duong_xet_nhan: null, trang_thai: "approved", academic_year: 2026 },
+  { profile_id: 12, ho_ten: "Trần Thị B", cccd: CCCD_GIA(12), nganh_nhan: "CĐ Kế toán", trinh_do: "Cao đẳng", duong_xet_nhan: null, trang_thai: "resubmitted", academic_year: 2026 },
+  { profile_id: 13, ho_ten: "Lê Văn C", cccd: CCCD_GIA(13), nganh_nhan: "TC Điện", trinh_do: "Trung cấp", duong_xet_nhan: null, trang_thai: "approved", academic_year: 2026 },
 ]
+/** Đường xét CHÍNH XÁC — chỉ `kiem-truoc` trả (đọc nguyện vọng); `tim-ho-so` không nạp nguyện vọng. */
+const DUONG_XET: Record<number, string | null> = { 11: "Xét học bạ", 12: null, 13: "Xét học bạ" }
 
 const BO_MOI = {
   id: 9, nguoi_tao_id: 1, tao_luc: "2026-11-11T01:00:00Z", moc_chup: "2026-11-11T00:59:00Z", unit_id: null,
@@ -45,8 +50,12 @@ interface Cau {
   /** mức kiểm trước theo id hồ sơ (mặc định duoc_dung) */
   muc?: Record<number, "duoc_dung" | "can_xac_nhan" | "bi_chan">
   tao?: () => Response
-  /** máy chủ báo người gọi có xác nhận được hay không (⏳ `nguoi_goi_duoc_xac_nhan`); vắng ⇒ không gửi trường */
+  /** máy chủ báo người gọi có xác nhận được hay không (`nguoi_goi_duoc_xac_nhan` — LUÔN có trong `tom_tat`); mặc định true */
   xacNhanDuoc?: boolean
+  /** `kiem-truoc` / `tim-ho-so` trả lỗi này thay vì dữ liệu (vd 503 đóng băng) */
+  kiemLoi?: () => Response
+  timLoi?: () => Response
+  doiMaLoi?: () => Response
   /** sau lần kiểm trước thứ n (đếm từ 1), đổi mức (mô phỏng người dùng sửa hồ sơ ở thẻ khác) */
   doiMucTuLanKiem?: { lan: number; muc: Record<number, "duoc_dung" | "can_xac_nhan" | "bi_chan"> }
 }
@@ -67,12 +76,14 @@ function dung(cau: Cau = {}) {
     http.post(`${API}${P}/sets/tim-ho-so`, async ({ request }) => {
       urls.push(request.url)
       timBodies.push((await request.json()) as Record<string, unknown>)
+      if (cau.timLoi) return cau.timLoi()
       return HttpResponse.json({ tong: 3, page: 1, page_size: 25, dong: HO_SO })
     }),
     http.post(`${API}${P}/sets/kiem-truoc`, async ({ request }) => {
       urls.push(request.url)
       const b = (await request.json()) as { academic_year: number; profile_ids: number[] }
       kiemBodies.push(b)
+      if (cau.kiemLoi) return cau.kiemLoi()
       const muc = cau.doiMucTuLanKiem && kiemBodies.length >= cau.doiMucTuLanKiem.lan ? cau.doiMucTuLanKiem.muc : (cau.muc ?? {})
       // MÁY CHỦ sắp theo id tăng dần — KHÁC thứ tự người dùng chọn / gửi.
       const ids = [...b.profile_ids].sort((x, y) => x - y)
@@ -80,8 +91,8 @@ function dung(cau: Cau = {}) {
         const h = HO_SO.find((x) => x.profile_id === id)!
         const m = muc[id] ?? "duoc_dung"
         return {
-          stt: i + 1, stt_qd: i + 1, profile_id: id, ho_ten: h.ho_ten, trang_thai: h.trang_thai, trang_thai_nhan: h.trang_thai_nhan,
-          nganh_nhan: h.nganh_nhan, trinh_do: h.trinh_do, duong_xet_nhan: h.duong_xet_nhan, diem_in: "20,5", muc: m,
+          stt: i + 1, stt_qd: i + 1, profile_id: id, ho_ten: h.ho_ten, trang_thai: h.trang_thai,
+          nganh_nhan: h.nganh_nhan, trinh_do: h.trinh_do, duong_xet_nhan: DUONG_XET[id], diem_in: "20,5", muc: m,
           ly_do: m === "duoc_dung" ? [] : [{ ma: "ly_do_x", cau: m === "bi_chan" ? "Thiếu thông tin ngành." : "Hồ sơ nộp lại." }],
         }
       })
@@ -97,7 +108,7 @@ function dung(cau: Cau = {}) {
           tong: dong.length, duoc_dung: dem("duoc_dung"), can_xac_nhan: dem("can_xac_nhan"), bi_chan: dem("bi_chan"),
           theo_nganh: [{ nganh_nhan: "CĐ Kế toán", trinh_do: "Cao đẳng", so: dong.length }],
           can_xac_nhan_theo_trang_thai: xn, so_nhom: 1, du_kien_so_tep: 4,
-          ...(cau.xacNhanDuoc !== undefined ? { nguoi_goi_duoc_xac_nhan: cau.xacNhanDuoc } : {}),
+          nguoi_goi_duoc_xac_nhan: cau.xacNhanDuoc ?? true,
         },
       })
     }),
@@ -105,6 +116,7 @@ function dung(cau: Cau = {}) {
       urls.push(request.url)
       const b = (await request.json()) as Record<string, unknown>
       doiMaBodies.push(b)
+      if (cau.doiMaLoi) return cau.doiMaLoi()
       return HttpResponse.json({ profile_ids: [13], dong_loi: [{ dong: 2, ly_do: "khong_khop" }] })
     }),
     http.post(`${API}${P}/sets`, async ({ request }) => {
@@ -115,8 +127,18 @@ function dung(cau: Cau = {}) {
   )
 }
 
-function ve() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } } })
+/**
+ * `retryMacDinh`: KHÔNG đặt `retry: false` ở QueryClient của test ⇒ chỉ cấu hình của CHÍNH hook (`retry: false` trong
+ * `useCouncilSetPreview` / `useCouncilProfileSearch`) quyết định có thử lại hay không. Mặc định test tắt retry, che mất
+ * cấu hình của hook — nên ca "gọi ĐÚNG MỘT lần" phải dùng chế độ này mới có nghĩa.
+ */
+function ve(opts: { retryMacDinh?: boolean } = {}) {
+  const qc = new QueryClient({
+    defaultOptions: {
+      queries: opts.retryMacDinh ? { staleTime: 0 } : { retry: false, staleTime: 0 },
+      mutations: { retry: false },
+    },
+  })
   return render(
     <QueryClientProvider client={qc}>
       <CouncilNewSetClient />
@@ -203,6 +225,71 @@ describe("trang /moi — luồng chính", () => {
     await chon([11])
     await waitFor(() => expect(screen.getByTestId("kiem-11").textContent).toBe("Được dựng"), { timeout: 4000 })
     expect(screen.getByTestId("kiem-12").textContent).toBe("—")
+  })
+
+  it("nhãn trạng thái lấy từ MÃ (máy chủ chỉ trả mã): bước 1 và bước 2 cùng hiện 'Đã duyệt (approved)' / 'Đã nộp lại (resubmitted)'", async () => {
+    dung()
+    ve()
+    await chon([11, 12])
+    expect(screen.getByTestId("trang-thai-11").textContent).toBe("Đã duyệt (approved)")
+    expect(screen.getByTestId("trang-thai-12").textContent).toBe("Đã nộp lại (resubmitted)")
+    fireEvent.click(screen.getByTestId("tiep-kiem-tra"))
+    expect((await screen.findByTestId("dong-12")).textContent).toContain("Đã nộp lại (resubmitted)")
+  })
+
+  it("đường xét: danh sách tìm (nhẹ) không có ⇒ '—'; hồ sơ ĐÃ chọn lấy đường xét CHÍNH XÁC từ kiểm trước", async () => {
+    dung()
+    ve()
+    await chon([11])
+    await waitFor(() => expect(screen.getByTestId("duong-xet-11").textContent).toBe("Xét học bạ"), { timeout: 4000 })
+    expect(screen.getByTestId("duong-xet-13").textContent).toBe("—") // chưa chọn ⇒ chưa kiểm ⇒ không có
+  })
+})
+
+// Máy chủ `5feb425d`: ba route chỉ đọc (kiểm trước, tìm hồ sơ, đổi mã) vẫn bị cần gạt đóng băng chặn ⇒ 503 ADMISSION_FROZEN.
+describe("đóng băng tuyển sinh chặn route chỉ đọc (503)", () => {
+  const dongBang = () => HttpResponse.json({ detail: "Tuyển sinh đang đóng băng", code: "ADMISSION_FROZEN" }, { status: 503 })
+
+  it("tim-ho-so 503 ⇒ câu đóng băng nói rõ cả chọn / kiểm trước; gọi ĐÚNG MỘT lần; không báo 'không có hồ sơ'", async () => {
+    dung({ timLoi: dongBang })
+    ve({ retryMacDinh: true }) // retry do CHÍNH hook quyết (xem chú thích `ve`)
+    await screen.findByTestId("buoc-chon")
+    fireEvent.change(await screen.findByTestId("loc-nam"), { target: { value: "2026" } })
+    const loi = await screen.findByTestId("tim-ho-so-loi")
+    expect(loi.textContent).toMatch(/đóng băng/)
+    expect(loi.textContent).toMatch(/chọn \/ kiểm trước/)
+    expect(screen.queryByTestId("khong-co-ho-so")).toBeNull() // lỗi ≠ "không có hồ sơ nào"
+    // React Query mặc định thử lại lần đầu sau 1 s: chờ quá mốc ấy rồi mới đếm
+    await new Promise((r) => setTimeout(r, 1400))
+    expect(timBodies).toHaveLength(1)
+  })
+
+  it("doi-ma 503 ⇒ khối dán mã hiện câu đóng băng; không thêm hồ sơ nào vào danh sách chọn", async () => {
+    dung({ doiMaLoi: dongBang })
+    ve()
+    await screen.findByTestId("buoc-chon")
+    fireEvent.change(await screen.findByTestId("loc-nam"), { target: { value: "2026" } })
+    fireEvent.change(await screen.findByTestId("dan-ma-input"), { target: { value: CCCD_GIA(13) } })
+    fireEvent.click(screen.getByTestId("dan-ma-them"))
+    const loi = await screen.findByTestId("dan-ma-loi")
+    expect(loi.textContent).toMatch(/đóng băng/)
+    expect(loi.textContent).toMatch(/chọn \/ kiểm trước/)
+    expect(doiMaBodies).toHaveLength(1)
+    expect(useCouncilSelectionStore.getState().idHoSo).toEqual([])
+    for (const u of urls) expect(u).not.toContain(CCCD_GIA(13))
+  })
+
+  it("kiem-truoc 503 ⇒ khối tóm tắt hiện câu đóng băng, KHÔNG hiện số như đã kiểm; gọi ĐÚNG MỘT lần", async () => {
+    dung({ kiemLoi: dongBang })
+    ve({ retryMacDinh: true }) // retry do CHÍNH hook quyết (xem chú thích `ve`)
+    await screen.findByTestId("buoc-chon")
+    fireEvent.change(await screen.findByTestId("loc-nam"), { target: { value: "2026" } })
+    fireEvent.click(await screen.findByTestId("chon-11"))
+    const loi = await screen.findByTestId("tom-tat-loi", {}, { timeout: 4000 })
+    expect(loi.textContent).toMatch(/đóng băng/)
+    expect(screen.queryByTestId("tom-tat-tong")).toBeNull()
+    await new Promise((r) => setTimeout(r, 1400)) // quá mốc thử lại đầu tiên của React Query (1 s)
+    expect(kiemBodies).toHaveLength(1)
   })
 })
 
@@ -383,7 +470,9 @@ describe("danh sách chọn", () => {
     await waitFor(() => expect(doiMaBodies).toHaveLength(1))
     expect(doiMaBodies[0]).toEqual({ academic_year: 2026, ma_ho_so: [CCCD_GIA(13), CCCD_GIA(99)] })
     expect(await screen.findByTestId("dan-ma-dong-loi")).toBeTruthy()
-    expect(screen.getByTestId("dan-ma-dong-loi").textContent).toBe("Dòng 2: không khớp hồ sơ nào của năm học đã chọn")
+    expect(screen.getByTestId("dan-ma-dong-loi").textContent).toBe(
+      "Dòng 2: không khớp hồ sơ nào của năm học đã chọn (hoặc hồ sơ ngoài phạm vi của bạn)",
+    )
     expect(screen.getByTestId("dan-ma-dong-loi").textContent).not.toContain(CCCD_GIA(99))
     expect(useCouncilSelectionStore.getState().idHoSo).toEqual([13])
     for (const u of urls) expect(u).not.toContain(CCCD_GIA(13))

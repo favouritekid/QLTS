@@ -53,9 +53,9 @@ export function CouncilBuildStep({ namHoc, xemTruoc, onQuayLai, onDungXong, onDu
   const canXacNhan = useMemo(() => Object.entries(t.can_xac_nhan_theo_trang_thai), [t.can_xac_nhan_theo_trang_thai])
   const [go, setGo] = useState<Record<string, string>>({})
   const khop = canXacNhan.every(([tt, n]) => (go[tt] ?? "").trim() === String(n))
-  // ⏳ CHỜ MÁY CHỦ: máy chủ nói tài khoản này KHÔNG xác nhận được (cổng quyền xác nhận) ⇒ khoá. Vắng ⇒ không khoá
-  // (máy chủ vẫn kiểm khi dựng); giao diện không tự xét vai.
-  const khongXacNhanDuoc = canXacNhan.length > 0 && t.nguoi_goi_duoc_xac_nhan === false
+  // Máy chủ nói tài khoản này KHÔNG xác nhận được (cổng quyền xác nhận; `nguoi_goi_duoc_xac_nhan` luôn có) ⇒ khoá.
+  // Giao diện không tự xét vai.
+  const khongXacNhanDuoc = canXacNhan.length > 0 && !t.nguoi_goi_duoc_xac_nhan
   const dongTheoTrangThai = useMemo(() => {
     const m: Record<string, number[]> = {}
     for (const d of xemTruoc.dong) if (d.muc === "can_xac_nhan") (m[d.trang_thai] ??= []).push(d.stt)

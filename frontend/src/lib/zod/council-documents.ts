@@ -44,17 +44,17 @@ export const councilDocumentPermissionsSchema = z.object({
   mo_luot_gui: z.boolean(),
   xem_luot_gui: z.boolean(),
   phan_xu_luot_gui: z.boolean(),
-  // ⏳ CHỜ MÁY CHỦ (đặc tả 3.10; phiên A chốt 11-11: MỖI route mới một cờ): máy chủ CHƯA trả các cờ này ở `dd6c725d`.
-  // Thiếu ⇒ `false` (tắt tính năng — fail-closed), KHÔNG làm vỡ cả trang quyền. Tên cuối do phiên A báo kèm SHA. Khi máy
-  // chủ đã trả: bỏ `.default(false)` (bắt buộc như các cờ trên) và xoá tên khỏi `CO_CHO_MAY_CHU` — test
-  // `council-documents.test.ts` nhắc việc này.
-  kiem_truoc: z.boolean().default(false),
-  tim_ho_so: z.boolean().default(false),
-  doi_ma: z.boolean().default(false),
+  // Vòng giao diện — đường chọn hồ sơ (đặc tả 3.1 / 3.2 / 3.10; MỖI route một cờ). Máy chủ đã trả từ `5feb425d`.
+  kiem_truoc: z.boolean(),
+  tim_ho_so: z.boolean(),
+  doi_ma: z.boolean(),
+  // ⏳ CHỜ MÁY CHỦ (đợt 2 của phiên A): `GET /sets/{id}/tai-ca-bo` + cờ này CHƯA có ở `5feb425d`. Thiếu ⇒ `false` (tắt
+  // tính năng — fail-closed), KHÔNG làm vỡ cả trang quyền. Khi máy chủ đã trả: bỏ `.default(false)` (bắt buộc như các cờ
+  // trên) và xoá tên khỏi `CO_CHO_MAY_CHU` — test `council-documents.test.ts` nhắc việc này.
   tai_ca_bo: z.boolean().default(false),
 })
 /** Cờ giao diện CHƯA có ở máy chủ (đang `.default(false)`). Rỗng khi máy chủ đã giao đủ. */
-export const CO_CHO_MAY_CHU = ["kiem_truoc", "tim_ho_so", "doi_ma", "tai_ca_bo"] as const
+export const CO_CHO_MAY_CHU = ["tai_ca_bo"] as const
 export type CouncilDocumentPermissions = z.infer<
   typeof councilDocumentPermissionsSchema
 >
@@ -219,10 +219,11 @@ export const councilSetDeleteSchema = z.object({ ly_do: z.string() }).strict()
 export type CouncilSetDelete = z.infer<typeof councilSetDeleteSchema>
 
 // ═══════════════════════ Vòng giao diện GĐ1 — chọn hồ sơ → kiểm trước → dựng (đặc tả 3.1–3.3, 3.11) ═══════════════════
-// ⏳ CHỜ MÁY CHỦ: `kiem-truoc`, `doi-ma`, `tim-ho-so`, `POST /sets` dạng id CHƯA có ở `dd6c725d`. Schema viết theo
-// DTO của đặc tả (bản 1 + 2 + 3); khi máy chủ giao thì đối chiếu từng trường với `schemas/council_document.py`.
+// Máy chủ đã giao `kiem-truoc`, `doi-ma`, `tim-ho-so`, `POST /sets` dạng id từ `5feb425d`; schema dưới ĐÃ đối chiếu từng
+// trường với `schemas/council_document.py` ở SHA ấy (11-11). Đính chính so với đặc tả: máy chủ trả MÃ trạng thái, KHÔNG
+// trả `trang_thai_nhan` — nhãn lấy từ `status-config` (nguồn nhãn duy nhất, `nhanTrangThai`).
 // ⚠️ Các DTO dưới có `ho_ten` / `cccd` (dữ liệu cá nhân): chỉ ở bộ nhớ React Query với `gcTime: 0`, không storage,
-// không URL, không log (xem hook).
+// không URL, không log (xem hook). Cả ba route kiểm / tìm / đổi mã trả `Cache-Control: no-store`.
 
 /** Mức kiểm trước của một dòng — máy chủ quyết. Giá trị lạ ⇒ `nhanMucKiem` in nguyên (không suy). */
 export const COUNCIL_PREVIEW_LEVELS = ["duoc_dung", "can_xac_nhan", "bi_chan"] as const
@@ -241,8 +242,8 @@ export const councilPreviewRowSchema = z.object({
   stt_qd: z.number().int(),
   profile_id: z.number().int(),
   ho_ten: z.string(),
+  /** MÃ trạng thái hồ sơ — nhãn do giao diện ánh xạ (`nhanTrangThai`), máy chủ không trả nhãn */
   trang_thai: z.string(),
-  trang_thai_nhan: z.string(),
   nganh_nhan: z.string(),
   trinh_do: z.string(),
   duong_xet_nhan: z.string().nullable(),
@@ -264,9 +265,9 @@ export const councilPreviewSummarySchema = z.object({
   can_xac_nhan_theo_trang_thai: z.record(z.string(), z.number().int()),
   so_nhom: z.number().int(),
   du_kien_so_tep: z.number().int(),
-  // ⏳ CHỜ MÁY CHỦ (phiên A chốt 11-11): máy chủ tính bằng đúng cổng quyền xác nhận hiện có. Vắng ⇒ hiện khối xác nhận
-  // (máy chủ vẫn kiểm khi dựng); `false` ⇒ khối xác nhận khoá, nói tài khoản không xác nhận được.
-  nguoi_goi_duoc_xac_nhan: z.boolean().optional(),
+  // Máy chủ LUÔN trả (`5feb425d`), tính bằng đúng cổng quyền xác nhận hiện có. `false` ⇒ khối xác nhận khoá, nói tài
+  // khoản không xác nhận được. Vắng ⇒ phản hồi bị từ chối (không đoán).
+  nguoi_goi_duoc_xac_nhan: z.boolean(),
 })
 export type CouncilPreviewSummary = z.infer<typeof councilPreviewSummarySchema>
 
@@ -298,7 +299,8 @@ export type CouncilCodesIn = z.infer<typeof councilCodesInSchema>
 
 export const councilCodesOutSchema = z.object({
   profile_ids: z.array(z.number().int()),
-  /** `ly_do`: `rong` | `trung` | `ky_tu_la` | `khong_khop`; chỉ SỐ DÒNG, không giá trị */
+  /** `ly_do`: `rong` | `trung` | `ky_tu_la` | `sai_dinh_dang` | `khong_khop` | `nhieu_ho_so`; chỉ SỐ DÒNG, không giá trị.
+   * Hồ sơ ngoài phạm vi đơn vị của người gọi ⇒ `khong_khop` (máy chủ không phân biệt với "không có"). */
   dong_loi: z.array(z.object({ dong: z.number().int(), ly_do: z.string() })),
 })
 export type CouncilCodesOut = z.infer<typeof councilCodesOutSchema>
@@ -321,13 +323,15 @@ export const councilProfileSearchRowSchema = z.object({
   ho_ten: z.string(),
   /** DỮ LIỆU CÁ NHÂN — chỉ hiện trên bảng chọn, không lưu */
   cccd: z.string(),
+  /** cùng cột "Ngành" của màn Hồ sơ tuyển sinh (`lead.offering`) — KHÔNG phải ngành xét chính xác (chỉ `kiem-truoc` có) */
   nganh_nhan: z.string(),
+  /** `major_program.degree_level` dạng chữ */
   trinh_do: z.string(),
+  /** danh sách dạng nhẹ không nạp nguyện vọng ⇒ máy chủ LUÔN trả `null`; đường xét / điểm in chính xác chỉ ở `kiem-truoc` */
   duong_xet_nhan: z.string().nullable(),
+  /** MÃ trạng thái — nhãn do giao diện ánh xạ (`nhanTrangThai`) */
   trang_thai: z.string(),
-  trang_thai_nhan: z.string(),
-  // ⏳ CHỜ MÁY CHỦ: phiên A sẽ thêm `academic_year` vào dòng tìm hồ sơ; đến lúc đó bỏ `.optional()`.
-  academic_year: z.number().int().optional(),
+  academic_year: z.number().int(),
 })
 export type CouncilProfileSearchRow = z.infer<typeof councilProfileSearchRowSchema>
 

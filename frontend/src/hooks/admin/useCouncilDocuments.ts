@@ -295,7 +295,7 @@ export function useCouncilSetDeletions(
   })
 }
 
-// ═══════════════ vòng giao diện: chọn hồ sơ → kiểm trước → dựng (⏳ route CHỜ MÁY CHỦ) ═══════════════
+// ═══════════════ vòng giao diện: chọn hồ sơ → kiểm trước → dựng (máy chủ có từ `5feb425d`) ═══════════════
 // ⚠️ Phản hồi có `ho_ten` / `cccd`: `gcTime: 0` ⇒ React Query gỡ khỏi cache ngay khi không còn component quan sát;
 // không persist (QueryClient của app không có persister — test khoá), không storage, không `console.*`, không URL.
 

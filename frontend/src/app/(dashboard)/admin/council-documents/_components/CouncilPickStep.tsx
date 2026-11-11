@@ -28,7 +28,7 @@ import { useCouncilSelectionStore } from "@/lib/stores/council-selection.store"
 import type { CouncilCodesOut, CouncilSetPreview } from "@/lib/zod/council-documents"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
-import { nhanLyDoDanMa, nhanMucKiem } from "./hien-thi"
+import { nhanLyDoDanMa, nhanMucKiem, nhanTrangThai } from "./hien-thi"
 
 const CO_TRANG = 25
 /** Trạng thái hồ sơ cho bộ lọc (đúng ba mức của bản mẫu); "Tất cả" = không gửi bộ lọc trạng thái. */
@@ -243,9 +243,13 @@ export function CouncilPickStep({ xemTruoc, dangKiem, coDoiMa }: Props) {
                       <TableCell>{d.ho_ten}</TableCell>
                       <TableCell className="font-mono text-xs">{d.cccd}</TableCell>
                       <TableCell>{d.nganh_nhan}</TableCell>
-                      <TableCell>{d.duong_xet_nhan ?? "—"}</TableCell>
+                      {/* danh sách tìm là dạng nhẹ (máy chủ luôn trả `duong_xet_nhan: null`): đường xét / điểm CHÍNH XÁC chỉ có
+                          ở kiểm trước, nên chỉ hồ sơ ĐÃ chọn (đã kiểm) mới có giá trị */}
+                      <TableCell data-testid={`duong-xet-${d.profile_id}`}>
+                        {k ? (k.duong_xet_nhan ?? "—") : (d.duong_xet_nhan ?? "—")}
+                      </TableCell>
                       <TableCell>{k ? (k.diem_in ?? "—") : "—"}</TableCell>
-                      <TableCell>{d.trang_thai_nhan}</TableCell>
+                      <TableCell data-testid={`trang-thai-${d.profile_id}`}>{nhanTrangThai(d.trang_thai)}</TableCell>
                       <TableCell data-testid={`kiem-${d.profile_id}`}>
                         {k ? nhanMucKiem(k.muc) : chon.has(d.profile_id) && dangKiem ? "đang kiểm…" : "—"}
                       </TableCell>

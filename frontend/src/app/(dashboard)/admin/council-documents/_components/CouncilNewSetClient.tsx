@@ -85,13 +85,14 @@ export function CouncilNewSetClient() {
     )
   }
   if (!vm.permissions.kiem_truoc || !vm.permissions.tim_ho_so) {
-    // ⏳ máy chủ chưa trả cờ `kiem_truoc` / `tim_ho_so` (đặc tả 3.10; mỗi route một cờ): luồng chọn → kiểm trước chưa dùng được.
+    // Cờ `kiem_truoc` / `tim_ho_so` (đặc tả 3.10; mỗi route một cờ) tắt — tài khoản không được cấp quyền các route ấy, hoặc
+    // máy chủ chưa hỗ trợ: luồng chọn → kiểm trước không dùng được. Giao diện không phân biệt hai nguyên nhân (không đoán).
     return (
       <div className="space-y-3">
         {quayLai}
         <p className="text-muted-foreground" data-testid="moi-chua-san-sang">
-          Luồng dựng bộ theo danh sách chọn chưa sẵn sàng trên máy chủ này (chưa có tính năng kiểm trước). Dùng tab “Tạo bộ”
-          (dán danh sách mã) trong lúc chờ.
+          Luồng dựng bộ theo danh sách chọn chưa dùng được với tài khoản / máy chủ này (thiếu quyền kiểm trước hoặc tìm hồ sơ).
+          Dùng tab “Tạo bộ” (dán danh sách mã) trong lúc chờ.
         </p>
       </div>
     )
