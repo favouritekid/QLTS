@@ -79,6 +79,32 @@ async def test_patch_nam_hoc_dong_da_dung_bi_409(client, hs, ad):  # noqa: F811
     assert await _nam(o["ai"]) == 2026
 
 
+async def test_doi_nganh_cua_hoc_vu_da_dung_bi_chan(client, hs, ad):  # noqa: F811
+    # F275 (Codex lần 17): cột ``offering_id`` của học vụ đã dùng — CA RIÊNG (ca đổi năm học không bắt được việc bỏ
+    # ``offering_id`` khỏi ``UPDATE OF``). Đổi sang một ngành HỢP LỆ chưa có dòng cùng năm (không đụng ràng buộc duy
+    # nhất ngành + năm) ⇒ chỉ trigger còn chặn được: SQLSTATE QLK02, dữ liệu sau rollback giữ nguyên.
+    _, o = await _qd_mot_em(client, ad, hs)
+    nam = await _nam(o["ai"])
+    # Seed: mọi ngành đều có dòng năm này ⇒ làm TRỐNG chỗ (ngành 2, năm) bằng cách dời năm của dòng học vụ Y của ngành 2
+    # — Y CHƯA ai dùng nên trigger cho dời (đồng thời là đối chứng: sửa dòng chưa dùng thì được).
+    y = await _chuoi_khac(o["ai"])
+    assert y[2] != o["off"], "tiền điều kiện: chuỗi khác phải thuộc NGÀNH khác (không thì phép đổi ngành là phép không đổi)"
+    nam_y = y[3]
+    assert await _sql_loi("UPDATE offering_academic_info SET academic_year = 2039 WHERE id = :y", y=y[1]) is None
+    try:
+        assert await qd._q1(
+            "SELECT count(*) FROM offering_academic_info WHERE offering_id = :d AND academic_year = :n", d=y[2], n=nam
+        ) == 0, "tiền điều kiện: (ngành 2, năm) phải trống để lỗi duy nhất có thể là trigger"
+        loi = await _sql_loi("UPDATE offering_academic_info SET offering_id = :d WHERE id = :a", d=y[2], a=o["ai"])
+    finally:
+        # dọn dẹp: KHÔNG assert ở đây — khi guard hỏng (đổi ngành lọt), trả Y về chỗ cũ đụng ràng buộc duy nhất
+        # (23505) và một assert ở đây sẽ CHE phép kiểm chính bên dưới (kiểm ngược F275 lần 2 vấp đúng chỗ này).
+        await _sql_loi("UPDATE offering_academic_info SET academic_year = :n WHERE id = :y", n=nam_y, y=y[1])
+    assert loi == k2.SQLSTATE_CAU_HINH_DA_DUNG, loi
+    assert await qd._q1("SELECT offering_id FROM offering_academic_info WHERE id = :a", a=o["ai"]) == o["off"]
+    assert await _nam(o["ai"]) == nam
+
+
 async def test_patch_chi_tieu_dong_da_dung_van_duoc(client, hs, ad):  # noqa: F811
     _, o = await _qd_mot_em(client, ad, hs)
     r = await client.patch("/api/academic-info/%d" % o["ai"], json={"annual_admission_quota": 77}, headers=ad)
