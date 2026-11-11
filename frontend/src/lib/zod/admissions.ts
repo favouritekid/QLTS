@@ -848,6 +848,10 @@ export type AppliedRules = z.infer<typeof appliedRulesSchema>
 export const admissionProfileResponseSchema = z.object({
   id: z.number(),
   lead_id: z.number(),
+  // ⏳ CHỜ MÁY CHỦ (đặc tả vòng giao diện 3.9): ô "Quyết định trúng tuyển" — máy chủ CHƯA trả ở `dd6c725d`. Giữ `unknown`
+  // và đọc bằng `councilProfileDecisionSchema.safeParse` ở thẻ hiển thị (vắng / sai dạng ⇒ không hiện thẻ). Khi máy chủ
+  // đã trả: đổi sang `councilProfileDecisionSchema.optional()` tại đây.
+  quyet_dinh_trung_tuyen: z.unknown().optional(),
   citizen_id: z.string().optional().nullable(),
   citizen_id_masked: z.string().optional().nullable(), // Masked CCCD for display (e.g., ********1234)
   // Personal Info Extensions

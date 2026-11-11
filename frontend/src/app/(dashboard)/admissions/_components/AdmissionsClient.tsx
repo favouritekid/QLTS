@@ -63,6 +63,7 @@ import type { AdmissionListParams, AdmissionListItem, AdmissionsPageLite } from 
 
 import { getColumns } from "./columns"
 import { AdmissionsBulkActionsBar } from "./AdmissionsBulkActionsBar"
+import { CouncilHandoffButton } from "./CouncilHandoffButton"
 import { BulkRejectDialog } from "./dialogs/BulkRejectDialog"
 import { BulkAssignDialog } from "./dialogs/BulkAssignDialog"
 import { AdmissionsMetricRail, type MetricItem } from "./AdmissionsMetricRail"
@@ -599,6 +600,10 @@ export function AdmissionsClient({ initialData, initialQueryParams }: Admissions
         canReject={bulkPermissions.canReject}
         canAssign={bulkPermissions.canAssign}
         isLoading={isAnyLoading}
+        extraActions={
+          // Chỉ ĐẨY id + năm học sang trang Hội đồng (store riêng); chốt xoá lựa chọn ở trên giữ nguyên.
+          <CouncilHandoffButton namHoc={state.academicYear} idHoSo={selectedIds} disabled={isAnyLoading} />
+        }
       />
 
       {/* Dialogs */}

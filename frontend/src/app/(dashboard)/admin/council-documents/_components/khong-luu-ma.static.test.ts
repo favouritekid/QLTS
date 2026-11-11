@@ -24,6 +24,9 @@ const TEP = [
   "app/(dashboard)/admin/council-documents/page.tsx",
   "app/(dashboard)/admin/council-documents/[setId]/page.tsx",
   "app/(dashboard)/admin/council-documents/moi/page.tsx",
+  // màn "Hồ sơ tuyển sinh": nút đẩy lựa chọn sang trang Hội đồng + thẻ Quyết định trên trang hồ sơ
+  "app/(dashboard)/admissions/_components/CouncilHandoffButton.tsx",
+  "app/(dashboard)/admissions/[id]/_components/CouncilDecisionCard.tsx",
 ]
 
 const CAM: [string, RegExp][] = [
@@ -45,8 +48,16 @@ function ma(t: string): string {
 }
 
 describe("module văn bản Hội đồng — không cách viết làm rò danh sách mã", () => {
-  it("đủ tệp để quét (không xanh rỗng)", () => {
-    expect(TEP.length).toBeGreaterThanOrEqual(12)
+  it("đủ tệp để quét (không xanh rỗng) — gồm cả tệp của luồng mới", () => {
+    expect(TEP.length).toBeGreaterThanOrEqual(30)
+    for (const bat_buoc of [
+      "lib/stores/council-selection.store.ts",
+      "hooks/admin/useGhiNhanQuyetDinh.ts",
+      "app/(dashboard)/admin/council-documents/_components/CouncilNewSetClient.tsx",
+      "app/(dashboard)/admissions/_components/CouncilHandoffButton.tsx",
+    ]) {
+      expect(TEP, `thiếu trong danh sách quét: ${bat_buoc}`).toContain(bat_buoc)
+    }
     for (const t of TEP) expect(fs.existsSync(path.join(SRC, t)), t).toBe(true)
   })
 

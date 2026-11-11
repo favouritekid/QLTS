@@ -34,6 +34,8 @@ interface AdmissionsBulkActionsBarProps {
   canReject: boolean
   canAssign: boolean
   isLoading?: boolean
+  /** Nút bổ sung của module khác (vd "Dựng văn bản Hội đồng"); tự quyết hiện / ẩn theo cờ máy chủ. */
+  extraActions?: React.ReactNode
 }
 
 // =============================================================================
@@ -51,6 +53,7 @@ export function AdmissionsBulkActionsBar({
   canReject,
   canAssign,
   isLoading = false,
+  extraActions,
 }: AdmissionsBulkActionsBarProps) {
   if (selectedCount === 0) return null
 
@@ -130,6 +133,8 @@ export function AdmissionsBulkActionsBar({
             <span className="hidden sm:inline">Gán officer</span>
           </Button>
         )}
+
+        {extraActions}
 
         <Button
           variant="ghost"

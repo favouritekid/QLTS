@@ -115,14 +115,23 @@ export async function uploadCouncilTemplate(
 export interface CouncilSetListParams {
   limit: number
   offset: number
+  // ⏳ CHỜ MÁY CHỦ (đặc tả 3.4): bộ lọc của `GET /sets` CHƯA có ở `dd6c725d` — chỉ gửi khi người dùng đặt; máy chủ cũ
+  // bỏ qua (danh sách không lọc). Số Quyết định chỉ gồm chữ số (không phải dữ liệu cá nhân).
+  so_quyet_dinh?: string
+  nam_hoc?: number
+  tinh_trang?: string
+  nguoi_tao_id?: number
 }
 
 export async function listCouncilSets(
   params: CouncilSetListParams,
 ): Promise<CouncilSet[]> {
-  const res = await api.get(`${P}/sets`, {
-    params: { limit: params.limit, offset: params.offset },
-  })
+  const q: Record<string, string | number> = { limit: params.limit, offset: params.offset }
+  if (params.so_quyet_dinh) q.so_quyet_dinh = params.so_quyet_dinh
+  if (params.nam_hoc !== undefined) q.nam_hoc = params.nam_hoc
+  if (params.tinh_trang) q.tinh_trang = params.tinh_trang
+  if (params.nguoi_tao_id !== undefined) q.nguoi_tao_id = params.nguoi_tao_id
+  const res = await api.get(`${P}/sets`, { params: q })
   return councilSetListSchema.parse(res.data)
 }
 

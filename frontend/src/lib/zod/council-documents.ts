@@ -137,6 +137,8 @@ export const councilSetDeletionSchema = z.object({
   nguoi_xoa_id: z.number().int(),
   xoa_luc: z.string(),
   ly_do: z.string(),
+  // ⏳ CHỜ MÁY CHỦ (đặc tả 5.7): tên người xoá để hiện thay "Tài khoản #n"; vắng ⇒ giữ "Tài khoản #n".
+  nguoi_xoa_ten: z.string().nullable().optional(),
 })
 export type CouncilSetDeletion = z.infer<typeof councilSetDeletionSchema>
 export const councilSetDeletionListSchema = z.array(councilSetDeletionSchema)
@@ -149,6 +151,8 @@ export const councilDownloadLogSchema = z.object({
   sha256: z.string(),
   nguoi_tai_id: z.number().int(),
   tai_luc: z.string(),
+  // ⏳ CHỜ MÁY CHỦ (đặc tả 5.7): tên người tải; vắng ⇒ giữ "Tài khoản #n".
+  nguoi_tai_ten: z.string().nullable().optional(),
 })
 export type CouncilDownloadLog = z.infer<typeof councilDownloadLogSchema>
 export const councilDownloadLogListSchema = z.array(councilDownloadLogSchema)

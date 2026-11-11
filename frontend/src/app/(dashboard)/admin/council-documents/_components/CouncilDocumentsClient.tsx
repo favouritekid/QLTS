@@ -1,8 +1,10 @@
 "use client"
 
+import Link from "next/link"
 import { useState } from "react"
 import { Loader2 } from "lucide-react"
 
+import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useCouncilDocumentPermissions } from "@/hooks/admin/useCouncilDocuments"
 import type { CouncilDocumentPermissionKey } from "@/lib/zod/council-documents"
@@ -66,12 +68,26 @@ export function CouncilDocumentsClient() {
       </TabsList>
       {q.xem_danh_sach_bo ? (
         <TabsContent value="bo" className="pt-4">
-          <CouncilSetList canOpenDetail={q.xem_chi_tiet_bo} />
+          <CouncilSetList canOpenDetail={q.xem_chi_tiet_bo} canZip={q.tai_ca_bo} />
         </TabsContent>
       ) : null}
       {q.tao_bo ? (
-        <TabsContent value="tao" className="pt-4">
-          <CreateCouncilSetForm canOpenDetail={q.xem_chi_tiet_bo} />
+        <TabsContent value="tao" className="space-y-6 pt-4">
+          {q.kiem_truoc ? (
+            <div className="space-y-2 rounded border p-4" data-testid="dung-tu-danh-sach">
+              <h2 className="text-lg font-semibold">Dựng từ danh sách hồ sơ</h2>
+              <p className="text-sm text-muted-foreground">
+                Chọn hồ sơ từ danh sách (lọc, tìm, tick), kiểm tra & chốt, nhập tham số rồi dựng bộ. Không cần dán từng mã CCCD.
+              </p>
+              <Button asChild data-testid="dung-tu-danh-sach-nut">
+                <Link href="/admin/council-documents/moi">Dựng văn bản Hội đồng →</Link>
+              </Button>
+            </div>
+          ) : null}
+          <div className="space-y-2">
+            {q.kiem_truoc ? <h2 className="text-lg font-semibold">Hoặc: dán danh sách mã hồ sơ (cách cũ)</h2> : null}
+            <CreateCouncilSetForm canOpenDetail={q.xem_chi_tiet_bo} />
+          </div>
         </TabsContent>
       ) : null}
       {q.xem_mau ? (
