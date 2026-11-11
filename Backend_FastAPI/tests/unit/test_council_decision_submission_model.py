@@ -41,3 +41,17 @@ def test_chi_muc_va_khoa_ngoai_trung_ten():
         assert ten in van, ten
     for ten in ("uq_council_decision_submission_ma", "uq_council_decision_submission_decision"):
         assert ten in van
+
+
+def test_danh_sach_ky_vong_trong_migration_trung_model():
+    # Bước KIỂM HÌNH của migration (đọc tên kỳ vọng) phải trùng ĐÚNG ràng buộc / chỉ mục của model — một nguồn nghĩa.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("hdts20261112_kiem", _MIG)
+    mig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig)
+    bang = m.CouncilDecisionSubmission.__table__
+    rb_model = {c.name for c in bang.constraints if c.name} | {"council_decision_submission_pkey"}
+    assert set(mig.RANG_BUOC_KY_VONG) == rb_model, (set(mig.RANG_BUOC_KY_VONG) ^ rb_model)
+    assert set(mig.CHI_MUC_KY_VONG) == {i.name for i in bang.indexes}
+    assert len(mig.RANG_BUOC_KY_VONG) == len(set(mig.RANG_BUOC_KY_VONG)) == 13

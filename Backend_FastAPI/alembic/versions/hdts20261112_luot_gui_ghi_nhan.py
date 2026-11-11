@@ -67,14 +67,57 @@ SQL_CHI_MUC = (
 )
 
 
+#: Tên ràng buộc KỲ VỌNG (13 — khoá chính tự đặt tên ``<bảng>_pkey``). So THEO TÊN, không đếm toàn bộ (PostgreSQL 18
+#: thêm ràng buộc NOT NULL vào ``pg_constraint``).
+RANG_BUOC_KY_VONG = (
+    "council_decision_submission_pkey",
+    "fk_council_decision_submission_set",
+    "fk_council_decision_submission_decision",
+    "fk_council_decision_submission_nguoi_tao",
+    "uq_council_decision_submission_ma",
+    "uq_council_decision_submission_decision",
+    "ck_council_decision_submission_trang_thai",
+    "ck_council_decision_submission_qd",
+    "ck_council_decision_submission_sha",
+    "ck_council_decision_submission_sha_hex",
+    "ck_council_decision_submission_ket_thuc",
+    "ck_council_decision_submission_cho_co_bo",
+    "ck_council_decision_submission_bo_khop",
+)
+CHI_MUC_KY_VONG = ("uq_council_decision_submission_cho_gui", "ix_council_decision_submission_set_id_luc_tao")
+#: SQLSTATE khi bảng / chỉ mục cùng tên có sẵn mà KHÁC HÌNH (``IF NOT EXISTS`` đã bỏ qua im lặng) — fail-closed.
+SQLSTATE_KHAC_HINH = "QLLG2"
+
+
+def _mang(ten) -> str:
+    return "ARRAY[" + ", ".join("'%s'" % t for t in ten) + "]"
+
+
 def khoi_do_nang_cap() -> str:
+    """MỘT câu ``DO`` (một giao dịch): tạo bảng + chỉ mục (``IF NOT EXISTS`` — chạy lại được), rồi KIỂM HÌNH ngay trong câu
+    ấy: đủ 13 ràng buộc theo tên trên đúng bảng này + đủ 2 chỉ mục trên đúng bảng này; thiếu ⇒ ``RAISE`` (cả câu lùi). Không
+    có bước kiểm này thì một bảng / quan hệ cùng tên có sẵn mà khác hình làm ``IF NOT EXISTS`` bỏ qua IM LẶNG và migration
+    vẫn "xanh" (phiên B phát hiện khi viết hướng dẫn vận hành)."""
     cai = "".join("    EXECUTE $f$%s$f$;\n" % c.strip() for c in (SQL_TAO_BANG, *SQL_CHI_MUC))
     return (
         "DO $lg$\n"
+        "DECLARE n bigint;\n"
         "BEGIN\n"
         "    PERFORM set_config('lock_timeout', '" + TRAN_CHO_KHOA + "', true);\n"
         + cai
-        + "END $lg$"
+        + "    SELECT count(*) INTO n FROM pg_constraint WHERE conrelid = to_regclass('council_decision_submission') "
+        "AND conname = ANY (" + _mang(RANG_BUOC_KY_VONG) + ");\n"
+        "    IF n <> " + str(len(RANG_BUOC_KY_VONG)) + " THEN\n"
+        "        RAISE EXCEPTION USING ERRCODE = '" + SQLSTATE_KHAC_HINH + "', MESSAGE = 'Bang luot gui co san khac hinh: ' "
+        "|| n || ' rang buoc dung ten - khong ghi nhan migration';\n"
+        "    END IF;\n"
+        "    SELECT count(*) INTO n FROM pg_indexes WHERE schemaname = current_schema() "
+        "AND tablename = 'council_decision_submission' AND indexname = ANY (" + _mang(CHI_MUC_KY_VONG) + ");\n"
+        "    IF n <> " + str(len(CHI_MUC_KY_VONG)) + " THEN\n"
+        "        RAISE EXCEPTION USING ERRCODE = '" + SQLSTATE_KHAC_HINH + "', MESSAGE = 'Chi muc luot gui thieu: ' "
+        "|| n || ' - khong ghi nhan migration';\n"
+        "    END IF;\n"
+        "END $lg$"
     )
 
 

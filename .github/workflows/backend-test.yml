@@ -1346,6 +1346,7 @@ jobs:
               tests/integration/test_council_config_lock_migration.py
               tests/api/test_council_decision_luot_gui_api.py
               tests/unit/test_council_decision_submission_model.py
+              tests/integration/test_council_decision_submission_migration.py
 
     env:
       APP_ENV: test
