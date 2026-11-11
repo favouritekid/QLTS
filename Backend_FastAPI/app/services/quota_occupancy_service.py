@@ -75,6 +75,23 @@ SQLSTATE_DEADLOCK = "40P01"
 THONG_DIEP_XUNG_DOT = "Xung đột với thao tác khác cùng lúc — thử lại."
 
 
+def loi_goc_giao_dich(gd: Any) -> Optional[BaseException]:
+    """D.2 (Codex lần 16): chỗ DUY NHẤT đọc thuộc tính RIÊNG ``_rollback_exception`` của SQLAlchemy (ghim 2.0.44) —
+    lỗi đã làm giao dịch / savepoint ``gd`` lùi (SQLAlchemy ghi lỗi flush hỏng vào giao dịch cha của lần flush).
+    ``gd``: ``SessionTransaction`` đồng bộ, hoặc ``AsyncSessionTransaction`` (lấy ``sync_transaction``). ``None`` khi
+    ``gd`` là None, giao dịch còn sống, hoặc thư viện không ghi lỗi. Dùng khi một lớp dưới NUỐT lỗi flush rồi lỗi lộ
+    ra ở lệnh sau dưới dạng khác (đọc SQLSTATE gốc ⇒ 40P01 ⇒ câu "thử lại" thay vì 500).
+
+    Nâng SQLAlchemy ⇒ chạy lại ``tests/integration/test_loi_goc_giao_dich_db.py`` (ca canh thư viện: lỗi flush THẬT
+    trong savepoint và trong giao dịch ngoài) TRƯỚC khi dùng."""
+    if gd is None:
+        return None
+    gd = getattr(gd, "sync_transaction", gd)
+    if gd is None or gd.is_active:
+        return None
+    return getattr(gd, "_rollback_exception", None)
+
+
 # ═══════════════════════════════ hai phần ══════════════════════════════════════════════════
 def khong_co_dong_hieu_luc(profile_id_cot):
     """Điều kiện Phần A: hồ sơ (cột id ở câu ngoài) KHÔNG có dòng Quyết định còn hiệu lực. Câu con

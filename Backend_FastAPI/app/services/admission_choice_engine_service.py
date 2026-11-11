@@ -1330,7 +1330,7 @@ async def publish_result(
         raise
     gd = db.sync_session.get_transaction()
     if gd is not None and not gd.is_active:
-        goc = getattr(gd, "_rollback_exception", None)
+        goc = _qos.loi_goc_giao_dich(gd)  # D.2: một chỗ đọc thuộc tính riêng của SQLAlchemy
         if ma_loi_csdl(goc)[0] == _qos.SQLSTATE_DEADLOCK:
             raise ConflictError(_qos.THONG_DIEP_XUNG_DOT)
         if goc is not None:

@@ -324,9 +324,7 @@ def _loi_goc_cua_savepoint(sp) -> Optional[BaseException]:
     """Lỗi đã làm savepoint ``sp`` (``AsyncSessionTransaction``) lùi — SQLAlchemy ghi lỗi flush vào giao dịch cha
     của lần flush hỏng (``_rollback_exception``). Không có / savepoint còn sống ⇒ None. Dùng khi lớp dưới
     (``dispatch_bundle``) NUỐT lỗi rồi lỗi lộ ra ở lệnh sau dưới dạng khác."""
-    if sp is None or sp.is_active:
-        return None
-    return getattr(getattr(sp, "sync_transaction", None), "_rollback_exception", None)
+    return _qos.loi_goc_giao_dich(sp)  # D.2 (Codex lần 16): một chỗ đọc thuộc tính riêng của SQLAlchemy
 
 
 async def _khoa_truoc_lo_duyet(db: AsyncSession, profile_ids: List[int]) -> Dict[int, Optional[int]]:
