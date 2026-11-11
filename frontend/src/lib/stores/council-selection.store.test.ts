@@ -58,9 +58,18 @@ describe("council-selection.store", () => {
     expect(s().thamSo).toEqual(THAM_SO_TRONG)
   })
 
-  it("KHÔNG persist: dùng store rồi storage vẫn rỗng", () => {
-    s().thayThe(2026, [11, 22, 33])
+  it("KHÔNG persist: gọi MỌI hành động của store rồi storage vẫn rỗng", () => {
+    // Phải gọi TỪNG hành động: một test chỉ gọi vài hành động sẽ mù trước đột biến ở hành động còn lại
+    // (đã xảy ra: đột biến ghi localStorage trong `them` lọt qua bản test cũ, chỉ test tĩnh bắt được).
+    s().datNamHoc(2026)
+    s().them([11, 22, 33])
+    s().bo(22)
     s().datThamSo({ so_quyet_dinh: "777" })
+    s().thayThe(2025, [5, 6])
+    s().boTatCa()
+    s().lamSach()
+    expect(localStorage.length).toBe(0)
+    expect(sessionStorage.length).toBe(0)
     expect({ ...localStorage, ...sessionStorage }).toEqual({})
   })
 })
