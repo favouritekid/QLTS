@@ -442,6 +442,10 @@ async def ghi_nhan_quyet_dinh(
             n = await repo.chen_dong_tu_bo(qd.id, bo.id)
             if n != len(dong):
                 raise ServiceError("Chép dòng bộ sang Quyết định thiếu dòng — không ghi.")
+            # N9 (đặc tả 5.3): ĐÃ chèn dòng — đếm lại các ô của dòng vừa ghi (cùng giao dịch, dưới khoá dòng
+            # chỉ tiêu) ⇒ cảnh báo ô bị vượt, KHÔNG chặn (giấy đã ký). Vòng giao diện 3.8: cảnh báo LƯU vào sự
+            # kiện ghi nhận (cùng giao dịch) — đọc lại trả đúng bản đã lưu, không tính lại.
+            canh_bao = await canh_bao_vuot_chi_tieu(db, [d.id for d in dong])
             await repo.them(
                 _scan(qd.id, b),
                 _su_kien(
@@ -454,12 +458,10 @@ async def ghi_nhan_quyet_dinh(
                         "so_ho_so": len(dong),
                         "doi_trang_thai": da_xn,
                         "goc_id": goc_id,
+                        "canh_bao_vuot_chi_tieu": canh_bao,
                     },
                 ),
             )
-            # N9 (đặc tả 5.3): ĐÃ ghi — đếm lại các ô của dòng vừa ghi (cùng giao dịch, dưới khoá dòng
-            # chỉ tiêu) ⇒ cảnh báo ô bị vượt, KHÔNG chặn (giấy đã ký).
-            canh_bao = await canh_bao_vuot_chi_tieu(db, [d.id for d in dong])
     except DBAPIError as e:
         raise _dich_loi_csdl(ma_loi_csdl(e), "ghi nhận Quyết định") from None
     return qd, canh_bao
@@ -600,10 +602,13 @@ async def ghi_nhan_dieu_chinh(
                     ),
                     {"d": dc.id, "ids": ds_bo},
                 )
+            canh_bao: List[Dict[str, Any]] = []
             if bo is not None:  # THÊM sau
                 n = await repo.chen_dong_tu_bo(dc.id, bo.id)
                 if n != len(dong_them):
                     raise ServiceError("Chép dòng bộ sang văn bản thiếu dòng — không ghi.")
+                # K-1 (owner 11-11): dòng THÊM chiếm chỗ (Phần B) ⇒ cảnh báo vượt như ghi nhận, KHÔNG chặn.
+                canh_bao = await canh_bao_vuot_chi_tieu(db, [d.id for d in dong_them])
             await repo.them(
                 _scan(dc.id, b),
                 _su_kien(
@@ -615,12 +620,13 @@ async def ghi_nhan_dieu_chinh(
                         "goc_id": goc.id,
                         "so_dong_bo": len(ds_bo),
                         "so_dong_them": len(dong_them),
+                        "canh_bao_vuot_chi_tieu": canh_bao,
                     },
                 ),
             )
     except DBAPIError as e:
         raise _dich_loi_csdl(ma_loi_csdl(e), "ghi nhận văn bản điều chỉnh") from None
-    return dc, None
+    return dc, canh_bao
 
 
 # ═══════════════════════════════ huỷ hiệu lực (văn bản huỷ của trường) ═════════════════════
@@ -739,7 +745,7 @@ async def huy_ghi_nhan(
     so_go_lai: object,
     xac_nhan: object,
     nguoi_id: int,
-) -> Tuple[CouncilDecision, Dict[str, int]]:
+) -> Tuple[CouncilDecision, Dict[str, int], List[Dict[str, Any]]]:
     """Huỷ ghi nhận = văn bản nhập SAI vào phần mềm — như chưa từng ghi, giữ vết (BS §2; đặc tả 2.5).
     Chỉ gỡ được văn bản MỚI NHẤT còn sống của chuỗi. Văn bản huỷ: văn bản đích có hiệu lực lại (CSDL lan
     + U3 chặn nếu em đã ở Quyết định khác); mọi mục chờ nó sinh ⇒ ``vo_hieu`` — trong CÙNG giao dịch."""
@@ -836,18 +842,23 @@ async def huy_ghi_nhan(
                 "so_dong_bat_lai": len(bat_lai),
                 "so_muc_cho_vo_hieu": len([m for m in muc]),
             }
+            # K-1 (owner 11-11): dòng BẬT LẠI chiếm chỗ lại (Phần B) — đã bật ở trên, cùng giao dịch, dưới khoá
+            # dòng chỉ tiêu (``khoa_chi_tieu_cua_dong_bo``) ⇒ cảnh báo vượt như ghi nhận, KHÔNG chặn.
+            canh_bao = (
+                await canh_bao_vuot_chi_tieu(db, [d.set_row_id for d in bat_lai]) if bat_lai else []
+            )
             await repo.them(
                 _su_kien(
                     "huy_ghi_nhan",
                     nguoi_id=nguoi_id,
                     set_id=x.set_id,
                     decision_id=x.id,
-                    so_lieu=so_lieu,
+                    so_lieu={**so_lieu, "canh_bao_vuot_chi_tieu": canh_bao},
                 )
             )
     except DBAPIError as e:
         raise _dich_loi_csdl(ma_loi_csdl(e), "huỷ ghi nhận") from None
-    return x, so_lieu
+    return x, so_lieu, canh_bao
 
 
 # ═══════════════════════════════ nhóm chờ — Admin cho xét lại TỪNG em (C7) ═════════════════

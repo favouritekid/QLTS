@@ -169,3 +169,75 @@ async def test_f264_chi_cong_bo_vuot(client, hs, ad):  # noqa: F811
             "da_dung": None,
         }
     ], r.text
+
+
+# ── K-1 (owner 11-11): cảnh báo vượt ở CẢ BA đường sinh / khôi phục Phần B; cảnh báo LƯU vào sự kiện (đặc tả 3.8) ──
+async def _canh_bao_da_luu(decision_id, loai_su_kien):
+    """Cảnh báo đã lưu trong ``so_lieu`` của sự kiện (bảng sự kiện độc lập) — đọc từ kết nối khác, SAU commit."""
+    return await qd._q1(
+        "SELECT so_lieu -> 'canh_bao_vuot_chi_tieu' FROM council_document_event WHERE decision_id = :d AND loai = :l",
+        d=decision_id,
+        l=loai_su_kien,
+    )
+
+
+def _bo_none(ds):
+    """DTO trả về điền None cho trường không thuộc loại ô; bản lưu trong sự kiện là dict gốc (không có khoá ấy)
+    ⇒ so sau khi bỏ khoá None — mọi khoá CÓ giá trị phải trùng đúng."""
+    return [{k: v for k, v in c.items() if v is not None} for c in ds]
+
+
+def _nganh(ds):
+    return [(c["loai"], c["academic_info_id"], c["chi_tieu"]) for c in ds if c["loai"] == "nganh"]
+
+
+async def test_k1_ghi_nhan_luu_canh_bao_vao_su_kien(client, hs, ad):  # noqa: F811
+    r, o = await _ghi_voi_chi_tieu(client, ad, hs, 0, None)
+    assert r.status_code == 201, r.text
+    cb = r.json()["canh_bao_vuot_chi_tieu"]
+    assert _nganh(cb) == [("nganh", o["ai"], 0)], r.text
+    assert await _canh_bao_da_luu(r.json()["id"], "ghi_nhan") == _bo_none(cb)  # đúng bản trả về, không tính lại
+
+
+async def test_k1_dieu_chinh_them_em_vuot_canh_bao(client, hs, ad):  # noqa: F811
+    _, a = await qd._qd_cua_bo(client, ad, hs, SACH[:1], "501")
+    o = await _o_chi_tieu(hs, SACH[1], chi_tieu=0)  # ô của em SẼ THÊM: chỉ tiêu 0 ⇒ thêm 1 là vượt
+    await qd._sql("UPDATE admission_path SET admit_quota = NULL WHERE id = :p", p=o["path"])
+    bd = await qd._bo_ok(client, ad, hs, SACH[1:2], duong="/decisions/%d/bo-dieu-chinh" % a["id"])
+    r = await qd._dieu_chinh(client, ad, a["id"], "801", set_id=bd["id"], so_hs=1)
+    assert r.status_code == 201, r.text  # không chặn
+    cb = r.json()["canh_bao_vuot_chi_tieu"]
+    assert _nganh(cb) == [("nganh", o["ai"], 0)], r.text
+    assert await _canh_bao_da_luu(r.json()["id"], "ghi_nhan_dieu_chinh") == _bo_none(cb)
+
+
+async def test_k1_dieu_chinh_chi_bo_dong_khong_canh_bao(client, hs, ad):  # noqa: F811
+    # đối chứng: điều chỉnh CHỈ bỏ dòng (không dòng thêm) ⇒ không có gì chiếm thêm ⇒ danh sách rỗng
+    _, a = await qd._qd_cua_bo(client, ad, hs, SACH[:1], "501")
+    await _o_chi_tieu(hs, SACH[0], chi_tieu=0)
+    cu = await qd._dong_cua(a["id"], hs[SACH[0]][1])
+    r = await qd._dieu_chinh(client, ad, a["id"], "801", bo_dong=[cu])
+    assert r.status_code == 201, r.text
+    assert r.json()["canh_bao_vuot_chi_tieu"] == [], r.text
+
+
+async def test_k1_huy_ghi_nhan_bat_lai_vuot_canh_bao(client, hs, ad):  # noqa: F811
+    _, a = await qd._qd_cua_bo(client, ad, hs, SACH[:1], "501")
+    cu = await qd._dong_cua(a["id"], hs[SACH[0]][1])
+    dc = (await qd._dieu_chinh(client, ad, a["id"], "801", bo_dong=[cu])).json()
+    o = await _o_chi_tieu(hs, SACH[0], chi_tieu=0)  # SAU khi bỏ: ô trống; bật lại dòng ⇒ 1 > 0
+    await qd._sql("UPDATE admission_path SET admit_quota = NULL WHERE id = :p", p=o["path"])
+    r = await qd._huy_ghi_nhan(client, ad, dc["id"], "801")
+    assert r.status_code == 200, r.text  # không chặn
+    assert await qd._q1("SELECT bi_bo_boi_id FROM council_decision_row WHERE id = :d", d=cu) is None
+    cb = r.json()["canh_bao_vuot_chi_tieu"]
+    assert _nganh(cb) == [("nganh", o["ai"], 0)], r.text
+    assert await _canh_bao_da_luu(dc["id"], "huy_ghi_nhan") == _bo_none(cb)
+
+
+async def test_k1_huy_ghi_nhan_khong_bat_lai_khong_canh_bao(client, hs, ad):  # noqa: F811
+    # đối chứng: huỷ ghi nhận Quyết định trúng tuyển (dòng của nó TẮT, không dòng nào bật lại) ⇒ rỗng
+    r0, _ = await _ghi_voi_chi_tieu(client, ad, hs, 0, None)
+    r = await qd._huy_ghi_nhan(client, ad, r0.json()["id"], "501")
+    assert r.status_code == 200, r.text
+    assert r.json()["canh_bao_vuot_chi_tieu"] == [], r.text

@@ -537,7 +537,7 @@ async def cancel_council_decision_record(
     qd: models.CouncilDecision = Depends(deps.get_council_decision_for_admin),
     db: AsyncSession = Depends(database.get_db),
 ):
-    qd, so_lieu = await qd_vb.huy_ghi_nhan(
+    qd, so_lieu, canh_bao = await qd_vb.huy_ghi_nhan(
         db,
         qd.id,
         ly_do=payload.ly_do,
@@ -551,8 +551,9 @@ async def cancel_council_decision_record(
         decision_id=qd.id,
         actor=current_user.id,
         **{k: v for k, v in so_lieu.items() if isinstance(v, int)},
+        so_o_vuot_chi_tieu=len(canh_bao),
     )
-    return _qd_ghi_out(qd, so_lieu)
+    return _qd_ghi_out(qd, so_lieu, canh_bao=canh_bao)
 
 
 @router.post(
@@ -648,7 +649,7 @@ async def create_council_decision_adjustment(
     scan: UploadFile = File(...),
     db: AsyncSession = Depends(database.get_db),
 ):
-    dc, _ = await qd_vb.ghi_nhan_dieu_chinh(
+    dc, canh_bao = await qd_vb.ghi_nhan_dieu_chinh(
         db,
         qd.id,
         so_quyet_dinh=so_quyet_dinh,
@@ -670,7 +671,7 @@ async def create_council_decision_adjustment(
         so_dong_bo=len(bo_dong),
         actor=current_user.id,
     )
-    return _qd_ghi_out(dc)
+    return _qd_ghi_out(dc, canh_bao=canh_bao)
 
 
 @router.post(
