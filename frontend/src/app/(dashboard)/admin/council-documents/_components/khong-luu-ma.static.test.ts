@@ -12,13 +12,18 @@ const SRC = path.resolve(__dirname, "../../../../..") // frontend/src
 const TEP = [
   "lib/api/council-documents.ts",
   "lib/zod/council-documents.ts",
+  "lib/council-params.ts",
+  "lib/council-submission.ts",
+  "lib/stores/council-selection.store.ts",
   "hooks/admin/useCouncilDocuments.ts",
+  "hooks/admin/useGhiNhanQuyetDinh.ts",
   ...fs
     .readdirSync(path.join(SRC, "app/(dashboard)/admin/council-documents/_components"))
     .filter((t) => /\.(ts|tsx)$/.test(t) && !/\.test\.tsx?$/.test(t))
     .map((t) => `app/(dashboard)/admin/council-documents/_components/${t}`),
   "app/(dashboard)/admin/council-documents/page.tsx",
   "app/(dashboard)/admin/council-documents/[setId]/page.tsx",
+  "app/(dashboard)/admin/council-documents/moi/page.tsx",
 ]
 
 const CAM: [string, RegExp][] = [
@@ -48,5 +53,25 @@ describe("module văn bản Hội đồng — không cách viết làm rò danh 
   it.each(CAM)("không %s", (_ten, mau) => {
     const lot = TEP.filter((t) => mau.test(ma(t)))
     expect(lot).toEqual([])
+  })
+})
+
+describe("URL chỉ mang setId và tên bước (đặc tả 5, luật chung)", () => {
+  const TRANG_BO = "app/(dashboard)/admin/council-documents/[setId]/page.tsx"
+
+  it("chỉ trang [setId] được nhận `searchParams`; không tệp nào khác trong module", () => {
+    const coSearchParams = TEP.filter((t) => /\bsearchParams\b/.test(ma(t)))
+    expect(coSearchParams).toEqual([TRANG_BO])
+  })
+
+  it("trang [setId] chỉ đọc khoá `buoc` và kiểm theo danh sách đóng (không chuyển nguyên searchParams xuống)", () => {
+    const m = ma(TRANG_BO)
+    // `docBuoc` (`_components/buoc.ts`) kiểm theo danh sách đóng `BUOC_HOP_LE`; page.tsx của Next không được export tên lạ
+    expect(m).toMatch(/\bdocBuoc\b/)
+    // mọi chỗ đọc thuộc tính của searchParams phải là `.buoc`
+    const doc = [...m.matchAll(/\bsearchParams\b[^;\n]*?\.(\w+)/g)].map((x) => x[1])
+    for (const k of doc) expect(k).toBe("buoc")
+    // và không chuyển nguyên đối tượng xuống thành phần con
+    expect(m).not.toMatch(/searchParams=\{/)
   })
 })

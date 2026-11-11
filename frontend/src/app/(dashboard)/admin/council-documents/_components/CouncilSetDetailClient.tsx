@@ -35,6 +35,7 @@ import {
 } from "@/hooks/admin/useCouncilDocuments"
 import type { CouncilSetDetail } from "@/lib/zod/council-documents"
 
+import type { TenBuoc } from "./buoc"
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
 import { CouncilDownloadLogPanel } from "./CouncilLogPanels"
 import { kichThuoc, ngay, nguoi, shaRutGon, thoiDiem } from "./hien-thi"
@@ -49,7 +50,14 @@ const NHAN_THAM_SO: Record<string, string> = {
 }
 
 /** Chi tiết một bộ: metadata + tệp (tải bytes đã lưu) + phần CHỈ admin theo cờ. */
-export function CouncilSetDetailClient({ setId }: { setId: number }) {
+export function CouncilSetDetailClient({
+  setId,
+  buocBanDau: _buocBanDau = null,
+}: {
+  setId: number
+  /** tên bước từ `?buoc=` (trang máy chủ đã kiểm theo danh sách đóng); `null` = mặc định. ⏳ chưa dùng — lát bước 4–6. */
+  buocBanDau?: TenBuoc | null
+}) {
   const vm = useCouncilDocumentPermissions()
   const q = useCouncilSet(setId, vm.state === "ready" && vm.permissions.xem_chi_tiet_bo)
 

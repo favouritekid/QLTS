@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { http, HttpResponse } from "msw"
 
 import { server } from "@/test/mocks/server"
+import { NO_COUNCIL_PERMISSIONS } from "@/hooks/admin/useCouncilDocuments"
+import { CO_CHO_MAY_CHU, councilDocumentPermissionsSchema } from "@/lib/zod/council-documents"
 import {
   COUNCIL_DOCUMENTS_PREFIX as P,
   createCouncilSet,
@@ -116,14 +118,38 @@ describe("getCouncilSetInputCodes — dữ liệu cá nhân chỉ trả về ng�
 })
 
 describe("getCouncilDocumentPermissions", () => {
-  it("parse đủ mười cờ", async () => {
+  it("parse đủ cờ (mười cờ lượt F + mười ba cờ Quyết định + ba cờ lượt gửi + hai cờ chờ máy chủ)", async () => {
     const co = {
-      xem_mau: true, tai_mau_len: false, xem_danh_sach_bo: true, tao_bo: false, xem_chi_tiet_bo: true,
-      tai_tep: true, xoa_bo: false, xem_ma_ho_so: false, xem_nhat_ky_tai: false, xem_nhat_ky_xoa: false,
+      ...NO_COUNCIL_PERMISSIONS,
+      xem_mau: true, xem_danh_sach_bo: true, xem_chi_tiet_bo: true, tai_tep: true,
+      ghi_nhan_qd: true, mo_luot_gui: true, xem_luot_gui: true, phan_xu_luot_gui: true,
+      kiem_truoc: true, tai_ca_bo: true,
     }
     server.use(http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: co })))
     expect(await getCouncilDocumentPermissions()).toEqual(co)
   })
+
+  it("⏳ hai cờ CHỜ MÁY CHỦ vắng (máy chủ chưa trả) ⇒ false, KHÔNG nổ; các cờ khác vẫn đúng", async () => {
+    const { kiem_truoc: _a, tai_ca_bo: _b, ...conLai } = { ...NO_COUNCIL_PERMISSIONS, xem_mau: true }
+    server.use(http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: conLai })))
+    const q = await getCouncilDocumentPermissions()
+    expect(q.kiem_truoc).toBe(false)
+    expect(q.tai_ca_bo).toBe(false)
+    expect(q.xem_mau).toBe(true)
+  })
+
+  it.each(CO_CHO_MAY_CHU.map((k) => [k]))(
+    "⏳ %s: nhắc việc — khi máy chủ đã trả cờ này, bỏ `.default(false)` và xoá khỏi CO_CHO_MAY_CHU",
+    (k) => {
+      // Test này CHỦ Ý đỏ khi ai đó thêm cờ vào hợp đồng mà quên cập nhật danh sách: danh sách phải khớp
+      // đúng tập cờ đang `.default(false)` trong Zod.
+      const macDinh = Object.entries(councilDocumentPermissionsSchema.shape)
+        .filter(([, v]) => v.safeParse(undefined).success)
+        .map(([ten]) => ten)
+      expect(macDinh).toContain(k)
+      expect([...macDinh].sort()).toEqual([...CO_CHO_MAY_CHU].sort())
+    },
+  )
 
   it("thiếu cờ ⇒ NỔ (không tự coi là tắt / bật)", async () => {
     server.use(http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: { xem_mau: true } })))
