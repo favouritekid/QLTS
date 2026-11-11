@@ -468,8 +468,13 @@ describe("bộ đã có Quyết định + Huỷ ghi nhận", () => {
   it("máy chủ nói bộ KHÔNG có văn bản còn tính (quyet_dinh null) ⇒ biểu mẫu mở, dù danh sách có văn bản của bộ — không tự chọn 'mới nhất'", async () => {
     dung({ decisions: [qd()], bo: { quyet_dinh: null } })
     ve()
+    // Biểu mẫu hiện NGAY khi danh sách văn bản còn đang tải ⇒ phải đợi yêu cầu danh sách của bộ 7 xong và được vẽ rồi mới
+    // khẳng định "không hiện kết quả" — nếu không, khẳng định đúng một cách RỖNG (đột biến M40 sống sót ở lần đo đầu).
     expect(await screen.findByTestId("bieu-mau-ghi-nhan")).toBeTruthy()
+    await waitFor(() => expect(urlsDecisions.some((u) => u.searchParams.get("set_id") === "7")).toBe(true))
+    await new Promise((r) => setTimeout(r, 300))
     expect(screen.queryByTestId("ket-qua-ghi-nhan")).toBeNull()
+    expect(screen.getByTestId("bieu-mau-ghi-nhan")).toBeTruthy()
   })
 
   it("văn bản đã huỷ ghi nhận ⇒ biểu mẫu mở lại để ghi nhận lại", async () => {
