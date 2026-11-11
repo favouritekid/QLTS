@@ -274,13 +274,15 @@ describe("đường chọn hồ sơ — DTO khớp máy chủ 5feb425d", () => {
   })
 })
 
-/** jsdom: `Blob` không có `.text()` — đọc nội dung bằng FileReader. */
-const docBlob = (b: Blob) =>
-  new Promise<string>((xong, loi) => {
+/** Byte của một zip giả — CỐ Ý có 0xFF 0xFE (không hợp lệ UTF-8): đọc nhầm thành chữ sẽ làm hỏng byte. */
+const ZIP_BYTE = [0x50, 0x4b, 0x03, 0x04, 0xff, 0xfe]
+/** jsdom: `Blob` không có `.text()` / `.arrayBuffer()` — đọc byte bằng FileReader. */
+const docByte = (b: Blob) =>
+  new Promise<number[]>((xong, loi) => {
     const r = new FileReader()
-    r.onload = () => xong(String(r.result))
+    r.onload = () => xong(Array.from(new Uint8Array(r.result as ArrayBuffer)))
     r.onerror = () => loi(r.error)
-    r.readAsText(b)
+    r.readAsArrayBuffer(b)
   })
 
 describe("đợt 2 — DTO khớp máy chủ 083a428d (danh sách / chi tiết bộ, người tạo, tải cả bộ, nhật ký, lọc văn bản)", () => {
@@ -394,17 +396,17 @@ describe("đợt 2 — DTO khớp máy chủ 083a428d (danh sách / chi tiết b
 
   it("tải cả bộ: GET /sets/{id}/tai-ca-bo; Blob + tên bo-5.zip từ Content-Disposition của máy chủ", async () => {
     server.use(http.get(`${API}${P}/sets/5/tai-ca-bo`, () =>
-      new HttpResponse(new Blob(["PK"]), {
+      new HttpResponse(new Uint8Array(ZIP_BYTE), {
         headers: { "content-type": "application/zip", "content-disposition": 'attachment; filename="bo-5.zip"', "cache-control": "no-store" },
       })))
     const kq = await downloadCouncilSetZip(5)
     expect(kq.filename).toBe("bo-5.zip")
-    expect(await docBlob(kq.blob)).toBe("PK")
+    expect(await docByte(kq.blob)).toEqual(ZIP_BYTE)
     expect(urls).toEqual([`${API}${P}/sets/5/tai-ca-bo`])
   })
 
   it("tải cả bộ: máy chủ không gửi Content-Disposition ⇒ tên dự phòng bo-<id>.zip (id đúng bộ yêu cầu)", async () => {
-    server.use(http.get(`${API}${P}/sets/8/tai-ca-bo`, () => new HttpResponse(new Blob(["PK"]), { headers: { "content-type": "application/zip" } })))
+    server.use(http.get(`${API}${P}/sets/8/tai-ca-bo`, () => new HttpResponse(new Uint8Array(ZIP_BYTE), { headers: { "content-type": "application/zip" } })))
     expect((await downloadCouncilSetZip(8)).filename).toBe("bo-8.zip")
   })
 })

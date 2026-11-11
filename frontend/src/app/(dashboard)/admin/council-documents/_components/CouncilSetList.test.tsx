@@ -60,7 +60,7 @@ function dung(ds: unknown[], cau: Cau = {}) {
     http.get(`${API}${P}/sets/:id/tai-ca-bo`, ({ params }) => {
       zipGoi.push(Number(params.id))
       if (cau.zip) return cau.zip()
-      return new HttpResponse(new Blob(["PK"]), {
+      return new HttpResponse(new Uint8Array(ZIP_BYTE), {
         headers: {
           "content-type": "application/zip",
           "content-disposition": `attachment; filename="bo-${String(params.id)}.zip"`,
@@ -85,13 +85,15 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => undefined)
 })
 
-/** jsdom: `Blob` không có `.text()` — đọc nội dung bằng FileReader. */
-const docBlob = (b: Blob) =>
-  new Promise<string>((xong, loi) => {
+/** Byte của một zip giả — CỐ Ý có 0xFF 0xFE (không hợp lệ UTF-8): đọc nhầm thành chữ sẽ làm hỏng byte. */
+const ZIP_BYTE = [0x50, 0x4b, 0x03, 0x04, 0xff, 0xfe]
+/** jsdom: `Blob` không có `.text()` / `.arrayBuffer()` — đọc byte bằng FileReader. */
+const docByte = (b: Blob) =>
+  new Promise<number[]>((xong, loi) => {
     const r = new FileReader()
-    r.onload = () => xong(String(r.result))
+    r.onload = () => xong(Array.from(new Uint8Array(r.result as ArrayBuffer)))
     r.onerror = () => loi(r.error)
-    r.readAsText(b)
+    r.readAsArrayBuffer(b)
   })
 
 describe("CouncilSetList", () => {
@@ -234,7 +236,7 @@ describe("CouncilSetList", () => {
       expect(zipGoi).toEqual([6])
       const [blob, ten] = downloadBlob.mock.calls[0] as [Blob, string]
       expect(blob).toBeInstanceOf(Blob)
-      expect(await docBlob(blob)).toBe("PK")
+      expect(await docByte(blob)).toEqual(ZIP_BYTE)
       expect(ten).toBe("bo-6.zip")
     })
 
