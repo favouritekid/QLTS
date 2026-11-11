@@ -1232,6 +1232,9 @@ jobs:
           # huỷ), `tests/api/test_council_decision_khoa_dem_api.py` (Q-J1: dòng bộ thiếu khoá đếm / lệch chuỗi
           # ⇒ 409 ở ba thao tác) và `tests/api/test_council_decision_canh_bao_chi_tieu_api.py` (N9: cảnh báo vượt
           # chỉ tiêu, không chặn). Ghim WHOLE-FILE.
+          # Lượt L (vòng giao diện GĐ1 — Codex lần 16 F263): `tests/api/test_council_bulk_ngu_canh_chi_tieu_api.py`
+          # (Phê duyệt hàng loạt không khoá dòng chỉ tiêu ngoài tập khi cấu hình đổi năm giữa dò ↔ khoá; đo khoá
+          # hàng bằng phiên thứ ba NOWAIT). Ghim WHOLE-FILE.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1327,6 +1330,7 @@ jobs:
               tests/api/test_council_decision_khoa_cheo_api.py
               tests/api/test_council_decision_khoa_dem_api.py
               tests/api/test_council_decision_canh_bao_chi_tieu_api.py
+              tests/api/test_council_bulk_ngu_canh_chi_tieu_api.py
 
     env:
       APP_ENV: test

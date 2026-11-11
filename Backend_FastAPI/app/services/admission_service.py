@@ -30,7 +30,7 @@ Security Features:
 import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Awaitable, List, Optional, Dict, Any, Tuple, Callable
+from typing import Awaitable, List, Mapping, Optional, Dict, Any, Tuple, Callable
 from decimal import Decimal, InvalidOperation
 import structlog
 from sqlalchemy import or_, and_, select, func
@@ -80,6 +80,7 @@ from ..utils.exceptions import (
     PermissionDeniedError,
     ConflictError,
     DuplicateResourceError,
+    ServiceError,
     ValidationError,
 )
 from ..utils.admission_round_guards import assert_round_open
@@ -328,13 +329,19 @@ def _loi_goc_cua_savepoint(sp) -> Optional[BaseException]:
     return getattr(getattr(sp, "sync_transaction", None), "_rollback_exception", None)
 
 
-async def _khoa_truoc_lo_duyet(db: AsyncSession, profile_ids: List[int]) -> None:
+async def _khoa_truoc_lo_duyet(db: AsyncSession, profile_ids: List[int]) -> Dict[int, Optional[int]]:
     """F259: khoá TRƯỚC toàn lô Phê duyệt hàng loạt theo THỨ TỰ CHUẨN — mọi hồ sơ (id tăng dần, MỘT câu) rồi
     mọi dòng chỉ tiêu mà ``_assert_quota_or_bypass`` của từng mục sẽ khoá (cùng ``_resolve_quota_context``,
-    không khoá ở bước dò) qua ``_qos.khoa_o_chi_tieu``."""
+    không khoá ở bước dò) qua ``_qos.khoa_o_chi_tieu``.
+
+    F263 (Codex lần 16): trả ÁNH XẠ ĐÃ DÒ ``{profile_id: academic_info_id | None}`` cho MỌI hồ sơ khoá được —
+    kể cả hồ sơ dò ra None. Từng mục truyền nó vào ``_assert_quota_or_bypass(ngu_canh_da_do=…)``: ngữ cảnh
+    của mục phải đúng như đã dò (so TRƯỚC mọi khoá mới), nên lô không bao giờ khoá dòng chỉ tiêu NGOÀI tập đã
+    khoá ở đây (hồ sơ cũ dò theo ``lead.offering_id`` + năm — phiên sửa cấu hình có thể đổi năm giữa dò và
+    khoá)."""
     ids = sorted({int(x) for x in profile_ids})
     if not ids:
-        return
+        return {}
     ho_so = (
         (
             await db.execute(
@@ -348,12 +355,12 @@ async def _khoa_truoc_lo_duyet(db: AsyncSession, profile_ids: List[int]) -> None
         .scalars()
         .all()
     )
-    oai_ids = []
+    da_do: Dict[int, Optional[int]] = {}
     for p in ho_so:
         ai, _ = await _resolve_quota_context(db, p, lock=False)
-        if ai is not None:
-            oai_ids.append(ai.id)
-    await _qos.khoa_o_chi_tieu(db, oai_ids, [])
+        da_do[p.id] = ai.id if ai is not None else None
+    await _qos.khoa_o_chi_tieu(db, [a for a in da_do.values() if a is not None], [])
+    return da_do
 
 
 # ==============================================================================
@@ -619,9 +626,19 @@ async def _resolve_quota_context(
     profile: models.AdmissionProfile,
     *,
     lock: bool = True,
+    ngu_canh_da_do: Optional[Mapping[int, Optional[int]]] = None,
 ) -> tuple[Optional[models.OfferingAcademicInfo], Optional[int]]:
     """
     Resolve the OfferingAcademicInfo + quota for ``profile``.
+
+    F263 (Codex lần 16) — ``ngu_canh_da_do`` (chỉ Phê duyệt hàng loạt truyền; ánh xạ của
+    ``_khoa_truoc_lo_duyet``). ``None`` = thao tác đơn, hành vi như cũ. CÓ ánh xạ (kể cả mọi giá trị là None —
+    tập khoá rỗng VẪN là ràng buộc; cấm thử ``if not ngu_canh_da_do``):
+
+    1. hồ sơ không có trong ánh xạ ⇒ ``ServiceError`` (thiếu ≠ "dò ra None");
+    2. dò KHÔNG khoá; khác giá trị đã dò ⇒ ``ConflictError`` (câu "thử lại") TRƯỚC mọi câu khoá;
+    3. khớp và khác None ⇒ khoá lại THEO ID (dòng đã giữ từ đầu lô — không chờ; không chạy lại vị từ
+       ngành + năm).
 
     Strategy:
     1. Prefer ``applied_rules.academic_info_id`` (snapshotted at create_profile).
@@ -639,6 +656,25 @@ async def _resolve_quota_context(
         ``None`` when the profile cannot be linked to an offering academic
         info row (legacy profile without offering_id, or seed/test data).
     """
+    if ngu_canh_da_do is not None:
+        if profile.id not in ngu_canh_da_do:
+            raise ServiceError("Thiếu ngữ cảnh chỉ tiêu đã dò của hồ sơ — không duyệt.")
+        ai_moi, _ = await _resolve_quota_context(db, profile, lock=False)
+        id_moi = ai_moi.id if ai_moi is not None else None
+        if id_moi != ngu_canh_da_do[profile.id]:
+            raise ConflictError(_qos.THONG_DIEP_XUNG_DOT)
+        if id_moi is None:
+            return (None, None)
+        if lock:
+            ai_moi = (
+                await db.execute(
+                    select(models.OfferingAcademicInfo)
+                    .where(models.OfferingAcademicInfo.id == id_moi)
+                    .with_for_update()
+                )
+            ).scalar_one()
+        return (ai_moi, ai_moi.annual_admission_quota)
+
     applied_rules = profile.applied_rules or {}
     academic_info_id = applied_rules.get("academic_info_id")
 
@@ -697,6 +733,7 @@ async def _assert_quota_or_bypass(
     *,
     transition: str,
     source: str = "api",
+    ngu_canh_da_do: Optional[Mapping[int, Optional[int]]] = None,
 ) -> None:
     """
     ADM-026: Enforce ``annual_admission_quota`` for transitions INTO
@@ -738,7 +775,10 @@ async def _assert_quota_or_bypass(
         PermissionDeniedError: bypass requested by non-admin.
         ValidationError: bypass requested without valid reason.
     """
-    academic_info, quota = await _resolve_quota_context(db, profile, lock=True)
+    # F263: lô duyệt truyền ánh xạ đã dò (``_khoa_truoc_lo_duyet``) ⇒ không khoá dòng chỉ tiêu ngoài tập.
+    academic_info, quota = await _resolve_quota_context(
+        db, profile, lock=True, ngu_canh_da_do=ngu_canh_da_do
+    )
 
     # ADM-026 review (Round 2): three distinct quota states must be
     # disambiguated. Conflating them was the original bug.
@@ -14212,7 +14252,7 @@ async def bulk_approve(
     # khoá XEN KẼ hồ sơ ↔ chỉ tiêu (P1 → Q → P2) trong khi ghi nhận khoá hồ sơ rồi chỉ tiêu ⇒ vòng chờ
     # (lô giữ Q chờ P2, ghi nhận giữ P2 chờ Q). Khoá lại trong từng mục chỉ là khoá lại dòng đã giữ.
     try:
-        await _khoa_truoc_lo_duyet(db, [it["profile_id"] for it in items])
+        ngu_canh_da_do = await _khoa_truoc_lo_duyet(db, [it["profile_id"] for it in items])
     except DBAPIError as e:
         if ma_loi_csdl(e)[0] == _qos.SQLSTATE_DEADLOCK:
             raise ConflictError(_qos.THONG_DIEP_XUNG_DOT) from None
@@ -14322,8 +14362,12 @@ async def bulk_approve(
                         bypass_reason=item.get("bypass_reason"),
                         transition="bulk_approve",
                         source="bulk_api",
+                        ngu_canh_da_do=ngu_canh_da_do,
                     )
-                except (BusinessRuleViolation, PermissionDeniedError, ValidationError) as quota_err:
+                # F263: ConflictError = ngữ cảnh chỉ tiêu đổi từ lúc dò (câu "thử lại"); chưa ghi gì ở mục này.
+                except (
+                    BusinessRuleViolation, PermissionDeniedError, ValidationError, ConflictError
+                ) as quota_err:
                     failed_ids.append(profile_id)
                     errors[profile_id] = str(quota_err)
                     continue
