@@ -765,12 +765,14 @@ async def test_post_sets_khong_nhan_tham_so_noi_cong(client, hs, ad):
         assert r.status_code == 422, (k, r.text)
 
 
-def test_tao_bo_van_ban_goi_cong_day_du_khong_tham_so_noi():
-    # P1 (AST): ``tao_bo_van_ban`` không nhận tham số nới cổng; gọi lõi với HẰNG None; lõi gọi
-    # ``cong.danh_gia`` (không ``danh_gia_dung_lai``).
-    tham_so = set(inspect.signature(bo_vb.tao_bo_van_ban).parameters)
+@pytest.mark.parametrize("ham", ["tao_bo_van_ban", "tao_bo_van_ban_theo_id"])
+def test_tao_bo_van_ban_goi_cong_day_du_khong_tham_so_noi(ham):
+    # P1 (AST): HAI điểm vào dựng bộ XÉT MỚI (dạng mã; dạng id của vòng giao diện) không nhận tham số nới
+    # cổng; gọi lõi với HẰNG None; lõi gọi ``cong.danh_gia`` (không ``danh_gia_dung_lai``).
+    f = getattr(bo_vb, ham)
+    tham_so = set(inspect.signature(f).parameters)
     assert not tham_so & {"chuoi_qd_cho_phep", "dong_sua_tay", "dung_lai_tu_set_id"}
-    cay = ast.parse(textwrap.dedent(inspect.getsource(bo_vb.tao_bo_van_ban)))
+    cay = ast.parse(textwrap.dedent(inspect.getsource(f)))
     goi = [n for n in ast.walk(cay) if isinstance(n, ast.Call)]
     loi = [g for g in goi if getattr(g.func, "id", None) == "_dung_va_ghi_bo"]
     assert len(loi) == 1

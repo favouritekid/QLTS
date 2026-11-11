@@ -119,6 +119,26 @@ async def _goi_that(client, co, h, sid):
         return await client.get(P + "/nhat-ky-tai", headers=h)
     if co == "xem_nhat_ky_xoa":
         return await client.get(P + "/nhat-ky-xoa", headers=h)
+    # Vòng giao diện — đường chọn hồ sơ: ba route CHỈ ĐỌC (POST vì thân mang id / mã / từ khoá). Id / mã không
+    # khớp hồ sơ nào ⇒ 200 với danh sách rỗng (không lộ tồn tại) — không ghi gì.
+    if co == "kiem_truoc":
+        return await client.post(
+            P + "/sets/kiem-truoc",
+            json={"academic_year": 2026, "profile_ids": [2147483000]},
+            headers=h,
+        )
+    if co == "doi_ma":
+        return await client.post(
+            P + "/sets/doi-ma",
+            json={"academic_year": 2026, "ma_ho_so": [ma_gia(990001)]},
+            headers=h,
+        )
+    if co == "tim_ho_so":
+        return await client.post(
+            P + "/sets/tim-ho-so",
+            json={"academic_year": 2026, "page": 1, "page_size": 5},
+            headers=h,
+        )
     # Lượt I (F230): văn bản đã ký + nhóm chờ GIẢ gắn vào bộ ``sid`` (chèn SQL một lần, không đổi số
     # bộ / tệp / mẫu). Route ghi: đầu vào rỗng ⇒ 422 / service từ chối (409) SAU các cổng — không ghi.
     x, muc = await _dam_bao_qd_gia(sid)
@@ -333,8 +353,9 @@ def test_moi_route_cua_module_co_dung_mot_co():
     ham_co = [r.endpoint for r in route if r.path == P + "/quyen"]
     assert len(ham_co) == 1  # route cờ không tự có cờ
     con_lai = [r.endpoint for r in route if r.endpoint is not ham_co[0]]
-    # mỗi hàm đúng MỘT route — 10 (E2–F) + 13 (lượt I, ghi nhận Quyết định đã ký) + 3 (vòng giao diện: lượt gửi)
-    assert len(con_lai) == len(set(con_lai)) == 26
+    # mỗi hàm đúng MỘT route — 10 (E2–F) + 13 (lượt I, ghi nhận Quyết định đã ký) + 3 (vòng giao diện: lượt gửi) +
+    # 3 (vòng giao diện: kiểm trước, đổi mã, tìm hồ sơ)
+    assert len(con_lai) == len(set(con_lai)) == 29
     assert set(rt.ENDPOINT_THEO_CO.values()) == set(con_lai)
     assert len(set(rt.ENDPOINT_THEO_CO.values())) == len(rt.ENDPOINT_THEO_CO)
     assert tuple(rt.ENDPOINT_THEO_CO) == CO  # trường schema = khoá bảng cờ, cùng thứ tự

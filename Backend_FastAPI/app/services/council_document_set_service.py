@@ -32,12 +32,14 @@ bảng vết không có khoá ngoại tới bộ ⇒ sống tiếp khi bộ bị
 """
 import asyncio
 import hashlib
+import hmac
+import json
 import sys
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
@@ -151,6 +153,301 @@ async def tao_bo_van_ban(
     )
 
 
+async def tao_bo_van_ban_theo_id(
+    db: AsyncSession,
+    engine: AsyncEngine,
+    *,
+    profile_ids: Sequence[int],
+    phien_ban_kiem: str,
+    academic_year: Optional[int],
+    tham_so: Optional[bo_dung.DecisionParams],
+    nguoi_tao_id: Optional[int],
+    luc_tao: Optional[datetime] = None,
+    xac_nhan_trang_thai: Optional[Dict[str, int]] = None,
+    duoc_xac_nhan: bool = False,
+) -> Tuple[CouncilDocumentSet, None]:
+    """Dựng bộ XÉT MỚI dạng id (vòng giao diện — ``POST /sets`` với ``profile_ids`` + ``phien_ban_kiem``,
+    đặc tả 3.3 + bản 2/3 mục 3.1.1). ĐỦ mọi cổng như :func:`tao_bo_van_ban`, KHÔNG nhận tham số nào nới
+    cổng (test AST khoá cả hàm này). Thêm: thứ tự gửi phải là thứ tự chuẩn và dấu phải khớp ⇒ không thì
+    409 ``du_lieu_doi_tu_luc_kiem``."""
+    if not isinstance(phien_ban_kiem, str) or not phien_ban_kiem:
+        raise DataValidationError("Thiếu dấu kiểm trước (phien_ban_kiem).")
+    return await _dung_va_ghi_bo(
+        db,
+        engine,
+        ma_ho_so=(),
+        academic_year=academic_year,
+        tham_so=tham_so,
+        nguoi_tao_id=nguoi_tao_id,
+        luc_tao=luc_tao,
+        xac_nhan_trang_thai=xac_nhan_trang_thai,
+        duoc_xac_nhan=duoc_xac_nhan,
+        chuoi_qd_cho_phep=None,
+        theo_id=YeuCauTheoId(
+            profile_ids=tuple(kiem_danh_sach_id(profile_ids)),
+            phien_ban_kiem=phien_ban_kiem,
+        ),
+    )
+
+
+# ═══════════════ kiểm trước + thứ tự chuẩn (vòng giao diện — đặc tả 3.1, bản 2/3 mục 3.1.1) ═══════════
+#: Nhãn dẫn xuất khoá HMAC của dấu kiểm trước — khoá riêng, không dùng thẳng ``SECRET_KEY`` (khuôn
+#: ``duplicate_review_token._khoa_ky``). Đổi ``SECRET_KEY`` ⇒ mọi dấu cũ lệch ⇒ 409 ⇒ "Kiểm tra lại".
+_NHAN_KHOA_KIEM_TRUOC = b"council-preview-v1"
+#: Phần đầu của dữ liệu băm — đổi cách băm thì đổi nhãn này.
+DAU_PHIEN_BAN = "pbk-v1"
+MUC_DUOC_DUNG = "duoc_dung"
+MUC_CAN_XAC_NHAN = "can_xac_nhan"
+MUC_BI_CHAN = "bi_chan"
+MA_LOI_DOI_TU_LUC_KIEM = "du_lieu_doi_tu_luc_kiem"
+CAU_DOI_TU_LUC_KIEM = "Dữ liệu đã đổi từ lúc kiểm — bấm Kiểm tra lại."
+
+
+@dataclass(frozen=True)
+class YeuCauTheoId:
+    """``POST /sets`` dạng id: danh sách id ĐÃ kiểm (thứ tự gửi) + dấu kiểm trước nhận lại nguyên văn."""
+
+    profile_ids: Tuple[int, ...]
+    phien_ban_kiem: str
+
+
+@dataclass(frozen=True)
+class DongChuan:
+    """MỘT dòng sau phép chuẩn hoá (đặc tả bản 3 mục 3.1.1 bước 1–2). Mọi trường trừ ``vi_tri`` vào dấu;
+    ``vi_tri`` (chỉ số đầu vào, từ 0) KHÔNG băm — chỉ để biết dòng nào. Không có ``stt`` nguồn nào."""
+
+    vi_tri: int
+    pid: int
+    don_vi: Optional[int]
+    row: bo_dung.CandidateRowV1  # ảnh chụp NGUYÊN (chưa thay điểm KV / ĐT)
+    kiem: cong.DuLieuKiem
+    muc: str
+    ma_ly_do: Tuple[str, ...]  # đã sắp, không trùng
+    diem_kv: Optional[str]  # điểm KV IN (cổng)
+    luat_ut: Optional[str]
+    diem_ut: Optional[str]  # điểm đối tượng IN (cổng)
+    tong_xt: float  # tổng điểm xét tuyển tính từ điểm IN — chỉ để sắp / hiển thị
+    khoa: Tuple[Any, ...]  # khoá sắp chuẩn: nhóm → trong nhóm → id hồ sơ
+
+
+def kiem_danh_sach_id(profile_ids: object) -> List[int]:
+    """Danh sách id hồ sơ của ``kiem-truoc`` / ``POST /sets`` dạng id: số nguyên dương (không ``bool``),
+    1…``COUNCIL_SET_MAX_PROFILES``, không trùng (lỗi nêu SỐ DÒNG)."""
+    if not isinstance(profile_ids, (list, tuple)) or not profile_ids:
+        raise DataValidationError("Danh sách hồ sơ rỗng.")
+    if len(profile_ids) > settings.COUNCIL_SET_MAX_PROFILES:
+        raise DataValidationError(
+            "Danh sách có %d hồ sơ, vượt giới hạn kỹ thuật %d hồ sơ cho một bộ văn bản."
+            % (len(profile_ids), settings.COUNCIL_SET_MAX_PROFILES)
+        )
+    out: List[int] = []
+    gap: Dict[int, int] = {}
+    for i, p in enumerate(profile_ids, 1):
+        if isinstance(p, bool) or not isinstance(p, int) or p < 1:
+            raise DataValidationError("Dòng %d: id hồ sơ không hợp lệ." % i)
+        if p in gap:
+            raise DataValidationError(
+                "Dòng %d trùng hồ sơ với dòng %d — mỗi người một dòng." % (i, gap[p])
+            )
+        gap[p] = i
+        out.append(p)
+    return out
+
+
+def chuan_hoa(anh: "_ham_doc.AnhChupHoSo", kq_cong: "cong.KetQuaCong") -> List[DongChuan]:
+    """MỘT phép chuẩn hoá (đặc tả bản 3 mục 3.1.1) — ``kiem-truoc`` và ``POST /sets`` dạng id cùng gọi.
+
+    1. Gom theo dòng: ảnh chụp + dữ liệu kiểm + id + đơn vị + kết quả cổng CỦA RIÊNG dòng ấy (rút từ
+       ``KetQuaCong`` bằng ``stt`` nguồn — chỉ dùng ở bước này).
+    2. Không giữ giá trị nào phụ thuộc vị trí đầu vào: ``DuLieuKiem.stt`` bỏ ở :func:`dau_kiem_truoc`;
+       ``CandidateRowV1`` không có trường vị trí; câu lý do không băm, chỉ mã.
+    3. Sắp bằng khoá chung của Quyết định (``khoa_nhom_quyet_dinh`` → ``khoa_trong_nhom_quyet_dinh``) + phá
+       hoà cuối bằng id hồ sơ."""
+    n = len(anh.rows)
+    if not (
+        len(anh.kiem) == len(anh.pids) == len(anh.don_vi) == n
+        and len(kq_cong.diem_kv) == len(kq_cong.luat_ut) == n
+    ):
+        raise ServiceError("Ảnh chụp / kết quả cổng không đủ dòng — không kiểm.")
+    ma_theo_stt: Dict[int, set] = {}
+    for ma, _tt, dong in kq_cong.chan:
+        for s in dong:
+            ma_theo_stt.setdefault(s, set()).add(ma)
+    canh_bao = {s for d in kq_cong.canh_bao.values() for s in d}
+    out: List[DongChuan] = []
+    for i in range(n):
+        k, r, pid = anh.kiem[i], anh.rows[i], anh.pids[i]
+        ma = tuple(sorted(ma_theo_stt.get(k.stt, ())))
+        muc = (
+            MUC_BI_CHAN
+            if ma
+            else (MUC_CAN_XAC_NHAN if k.stt in canh_bao else MUC_DUOC_DUNG)
+        )
+        kv = kq_cong.diem_kv[i]
+        lu = kq_cong.luat_ut[i]
+        ut = cong.diem_ut_in(lu, r.diem_ut)
+        # Điểm IN chưa có (dòng bị chặn) ⇒ ô rỗng ⇒ ``so`` đọc 0: vẫn sắp được, như nhau ở hai phía.
+        tong = bo_dung.tinh_diem_in(r.tong_diem, kv or "", ut or "").tong_xt
+        out.append(
+            DongChuan(
+                vi_tri=i,
+                pid=pid,
+                don_vi=anh.don_vi[i],
+                row=r,
+                kiem=k,
+                muc=muc,
+                ma_ly_do=ma,
+                diem_kv=kv,
+                luat_ut=lu,
+                diem_ut=ut,
+                tong_xt=tong,
+                khoa=(
+                    bo_dung.khoa_nhom_quyet_dinh(r),
+                    bo_dung.khoa_trong_nhom_quyet_dinh(tong, r.ten),
+                    pid,
+                ),
+            )
+        )
+    out.sort(key=lambda d: d.khoa)
+    return out
+
+
+def _khoa_kiem_truoc() -> bytes:
+    return hmac.new(
+        settings.SECRET_KEY.encode("utf-8"), _NHAN_KHOA_KIEM_TRUOC, hashlib.sha256
+    ).digest()
+
+
+def dau_kiem_truoc(dong: Sequence[DongChuan], academic_year: int) -> str:
+    """MỘT hàm dấu (đặc tả bản 2 mục 3.1.1 + bản 3): HMAC-SHA256 (khoá suy từ ``SECRET_KEY``) của JSON
+    chuẩn (khoá sắp, không khoảng trắng) gồm phần đầu (nhãn, năm học, luật dựng, phiên bản mã dựng) + mỗi
+    dòng ĐÃ SẮP: ``stt_chuan``, TOÀN BỘ ảnh chụp in, TOÀN BỘ dữ liệu kiểm trừ ``stt``, id, đơn vị, mức, mã
+    lý do, điểm KV / luật ĐT / điểm ĐT in. KHÔNG băm mốc giao dịch. Không ghi dấu vào log."""
+    if PHIEN_BAN_MA is None:
+        raise ServiceError(
+            "Không đọc được mã nguồn của bộ dựng để ghi phiên bản — không kiểm."
+        )
+    du_lieu = {
+        "dau": [DAU_PHIEN_BAN, academic_year, bo_dung.LUAT_RENDER, PHIEN_BAN_MA],
+        "dong": [
+            {
+                "stt_chuan": stt,
+                "row": d.row.model_dump(mode="json"),
+                "kiem": {k: v for k, v in asdict(d.kiem).items() if k != "stt"},
+                "pid": d.pid,
+                "don_vi": d.don_vi,
+                "muc": d.muc,
+                "ma_ly_do": list(d.ma_ly_do),
+                "diem_kv": d.diem_kv,
+                "luat_ut": d.luat_ut,
+                "diem_ut": d.diem_ut,
+            }
+            for stt, d in enumerate(dong, 1)
+        ],
+    }
+    b = json.dumps(
+        du_lieu, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return hmac.new(_khoa_kiem_truoc(), b, hashlib.sha256).hexdigest()
+
+
+def so_voi_kiem_truoc(
+    anh: "_ham_doc.AnhChupHoSo",
+    kq_cong: "cong.KetQuaCong",
+    academic_year: int,
+    yeu_cau: YeuCauTheoId,
+) -> None:
+    """``POST /sets`` dạng id (đặc tả bản 2 mục 3.1.1 bước 2 + 4): thứ tự gửi khác thứ tự chuẩn của ảnh
+    chụp, HOẶC dấu tính lại khác dấu đã kiểm (so bằng ``hmac.compare_digest``) ⇒ 409
+    ``du_lieu_doi_tu_luc_kiem``. Không tự sắp lại."""
+    dc = chuan_hoa(anh, kq_cong)
+    dung_thu_tu = [d.pid for d in dc] == list(yeu_cau.profile_ids)
+    khop_dau = hmac.compare_digest(
+        dau_kiem_truoc(dc, academic_year).encode("ascii"),
+        yeu_cau.phien_ban_kiem.encode("utf-8"),
+    )
+    if not (dung_thu_tu and khop_dau):
+        raise ConflictError(
+            CAU_DOI_TU_LUC_KIEM, public_payload={"ma_loi": MA_LOI_DOI_TU_LUC_KIEM}
+        )
+
+
+async def kiem_truoc(
+    engine: AsyncEngine,
+    *,
+    profile_ids: Sequence[int],
+    academic_year: Optional[int],
+    tat_ca: bool,
+    chi_don_vi: Optional[int],
+    duoc_xac_nhan: bool,
+) -> Dict[str, Any]:
+    """``POST /sets/kiem-truoc`` (đặc tả 3.1 + bản 2/3 mục 3.1.1): đọc (cùng đường đọc của bộ dựng, lọc phạm
+    vi), cổng (``cong.danh_gia`` — không luật thứ hai), chuẩn hoá + dấu. KHÔNG ghi gì, KHÔNG lấy khoá tư vấn
+    dựng. Mọi chữ hiển thị (họ tên, ngành, đường xét, điểm in) lấy từ CÙNG ảnh chụp / kết quả cổng đã băm."""
+    nam = _ham_doc.kiem_nam_hoc(academic_year)
+    ds = kiem_danh_sach_id(profile_ids)
+    anh, khong_tim_thay = await _ham_doc.doc_ho_so_kiem_truoc(
+        engine, ds, academic_year=nam, tat_ca=tat_ca, chi_don_vi=chi_don_vi
+    )
+    if anh is None:
+        dc: List[DongChuan] = []
+        kiem_luc = datetime.now(timezone.utc)
+        so_canh_bao: Dict[str, int] = {}
+    else:
+        kq = cong.danh_gia(anh.kiem)
+        dc = chuan_hoa(anh, kq)
+        kiem_luc = anh.giao_dich.moc_chup
+        so_canh_bao = kq.so_canh_bao()
+    dong_out: List[Dict[str, Any]] = []
+    nhom: Dict[Tuple[str, str], int] = {}
+    for stt, d in enumerate(dc, 1):
+        ng = bo_dung.khoa_nhom_quyet_dinh(d.row)
+        nhom[ng] = nhom.get(ng, 0) + 1
+        dong_out.append(
+            {
+                "stt": stt,
+                "stt_qd": nhom[ng],
+                "profile_id": d.pid,
+                "ho_ten": ("%s %s" % (d.row.ho.strip(), d.row.ten.strip())).strip(),
+                "trang_thai": d.kiem.status if isinstance(d.kiem.status, str) else "",
+                "nganh_nhan": ng[0],
+                "trinh_do": ng[1],
+                "duong_xet_nhan": d.row.phuong_thuc.strip() or None,
+                "diem_in": (
+                    "%.2f" % d.tong_xt
+                    if d.diem_kv is not None and d.diem_ut is not None
+                    else None
+                ),
+                "muc": d.muc,
+                "ly_do": [{"ma": m, "cau": cong.LY_DO.get(m, m)} for m in d.ma_ly_do],
+            }
+        )
+    dem_muc = {
+        m: sum(1 for d in dc if d.muc == m)
+        for m in (MUC_DUOC_DUNG, MUC_CAN_XAC_NHAN, MUC_BI_CHAN)
+    }
+    return {
+        "kiem_luc": kiem_luc,
+        "phien_ban_kiem": dau_kiem_truoc(dc, nam),
+        "dong": dong_out,
+        "khong_tim_thay": khong_tim_thay,
+        "tom_tat": {
+            "tong": len(dc),
+            "duoc_dung": dem_muc[MUC_DUOC_DUNG],
+            "can_xac_nhan": dem_muc[MUC_CAN_XAC_NHAN],
+            "bi_chan": dem_muc[MUC_BI_CHAN],
+            "theo_nganh": [
+                {"nganh_nhan": ng[0], "trinh_do": ng[1], "so": so}
+                for ng, so in nhom.items()
+            ],
+            "can_xac_nhan_theo_trang_thai": so_canh_bao,
+            "so_nhom": len(nhom),
+            "du_kien_so_tep": 2 + 2 * len(nhom),
+            "nguoi_goi_duoc_xac_nhan": bool(duoc_xac_nhan),
+        },
+    }
+
+
 async def _dung_va_ghi_bo(
     db: AsyncSession,
     engine: AsyncEngine,
@@ -163,8 +460,11 @@ async def _dung_va_ghi_bo(
     xac_nhan_trang_thai: Optional[Dict[str, int]],
     duoc_xac_nhan: bool,
     chuoi_qd_cho_phep: Optional[int],
+    theo_id: Optional["YeuCauTheoId"] = None,
 ) -> Tuple[CouncilDocumentSet, None]:
     """Đọc → cổng dựng bộ → chọn mẫu → dựng → ghi. Trả ``(bộ đã flush, None)``; router commit.
+    ``theo_id`` (vòng giao diện — ``POST /sets`` dạng id): đọc theo id thay cho mã, rồi so thứ tự + dấu kiểm
+    trước (:func:`so_voi_kiem_truoc`) TRƯỚC cổng chặn / xác nhận; ``ma_ho_so`` khi ấy bỏ qua.
     ``chuoi_qd_cho_phep`` (CHỈ bộ dữ liệu cho văn bản điều chỉnh — :func:`tao_bo_dieu_chinh`) nới đúng
     MỘT phép: hồ sơ có dòng hiệu lực trong chính chuỗi Quyết định ấy; bộ ghi
     ``cho_quyet_dinh_goc_id`` = chuỗi ấy (chỉ dùng được cho điều chỉnh của chuỗi).
@@ -194,8 +494,15 @@ async def _dung_va_ghi_bo(
     # request đã tự mở từ bước xác thực (đọc người dùng + phiên trên cùng phiên CSDL) và
     # không bị đóng giữa chừng. Test: ``test_ghi_bo_o_giao_dich_khac_giao_dich_doc`` (gọi
     # thẳng) + ``test_qua_api_doc_o_giao_dich_rieng_da_dong_truoc_khi_dung`` (POST /sets thật).
-    # (i) đọc — giao dịch riêng, chỉ đọc, đã KẾT THÚC khi hàm này trả về.
-    anh = await doc_ho_so_theo_ma(engine, ma_ho_so, academic_year=academic_year)
+    # (i) đọc — giao dịch riêng, chỉ đọc, đã KẾT THÚC khi hàm này trả về. Dạng id (vòng giao diện,
+    # đặc tả bản 2 mục 3.1.1 bước 1): đọc ĐÚNG MỘT lần; từ đây tới khi ghi không đọc hồ sơ lần nào nữa
+    # — mọi thứ (so thứ tự, dấu, cổng, hàng in, dòng bộ) lấy từ CÙNG ``anh``.
+    if theo_id is None:
+        anh = await doc_ho_so_theo_ma(engine, ma_ho_so, academic_year=academic_year)
+    else:
+        anh = await _ham_doc.doc_ho_so_theo_id(
+            engine, theo_id.profile_ids, academic_year=academic_year
+        )
 
     # (i-b) cổng dựng bộ (lượt G): chặn / cảnh báo + xác nhận. Không qua ⇒ lỗi miền, KHÔNG ghi.
     if len(anh.kiem) != len(anh.rows):
@@ -203,6 +510,10 @@ async def _dung_va_ghi_bo(
     if len(anh.pids) != len(anh.rows):
         raise ServiceError("Thiếu id hồ sơ của dòng — không dựng.")
     kq_cong = cong.danh_gia(anh.kiem, chuoi_qd_cho_phep=chuoi_qd_cho_phep)
+    if theo_id is not None:
+        # Đặc tả bản 2 mục 3.1.1 bước 2 + 4: thứ tự gửi = thứ tự chuẩn của CHÍNH ảnh chụp này, và dấu tính
+        # lại = dấu đã kiểm ⇒ mới đi tiếp tới cổng chặn / xác nhận. Lệch ⇒ 409, không tự sắp lại.
+        so_voi_kiem_truoc(anh, kq_cong, academic_year, theo_id)
     da_xac_nhan = cong.kiem_va_xac_nhan(
         kq_cong, xac_nhan=xac_nhan, duoc_xac_nhan=duoc_xac_nhan
     )

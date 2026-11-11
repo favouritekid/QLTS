@@ -35,7 +35,7 @@ năm) — giữ để khoá bằng bộ xuất. Bộ văn bản KHÔNG in giá t
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import AsyncIterator, List, Optional, Sequence
+from typing import AsyncIterator, Dict, List, Optional, Sequence, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
@@ -425,6 +425,28 @@ async def phan_giai_ma(
             await conn.execute(SQL_PHAN_GIAI_MA, {"ma": list(ma), "nam": academic_year})
         ).all()
     ]
+
+
+#: Vòng giao diện (``kiem-truoc``): năm học + đơn vị (``lead.unit_id`` — CÙNG phép nối ``JOIN lead`` của
+#: ``SQL_SO_LIEU``: hồ sơ không có lead thì ``SQL_SO_LIEU`` cũng không đọc được) của từng id.
+SQL_PHAM_VI_THEO_ID = text(
+    """
+SELECT p.id, p.academic_year, l.unit_id
+FROM admission_profile p
+JOIN lead l ON l.id = p.lead_id
+WHERE p.id = ANY(CAST(:ids AS integer[]))
+"""
+)
+
+
+async def doc_pham_vi_theo_id(
+    conn: AsyncConnection, pids: Sequence[int]
+) -> Dict[int, Tuple[Optional[int], Optional[int]]]:
+    """{id hồ sơ: (năm học, đơn vị)} cho các id CÓ hồ sơ (kèm lead); id không có thì vắng."""
+    return {
+        r[0]: (r[1], r[2])
+        for r in (await conn.execute(SQL_PHAM_VI_THEO_ID, {"ids": list(pids)})).all()
+    }
 
 
 async def doc_so_lieu(conn: AsyncConnection, pids: Sequence[int]) -> List[dict]:

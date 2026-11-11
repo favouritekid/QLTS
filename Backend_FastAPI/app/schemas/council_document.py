@@ -10,7 +10,14 @@ nguồn, ngành + số thí sinh, năm học, mốc giao dịch — không dữ 
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    model_validator,
+)
 
 from app.services.council_document_render_service import DecisionParams
 
@@ -31,20 +38,151 @@ class CouncilTemplateOut(BaseModel):
 
 
 class CouncilSetCreate(BaseModel):
-    """Tạo bộ văn bản từ một danh sách mã hồ sơ (số CCCD) ĐÚNG THỨ TỰ — tương đương
-    ``--chi-ma`` của bộ xuất. ``academic_year`` bắt buộc (CCCD chỉ duy nhất trong một năm
-    học). Kiểm từng mã (rỗng / trùng / ký tự lạ / không khớp đúng một hồ sơ) và trần số hồ
-    sơ do service làm — lỗi nêu SỐ DÒNG, không nêu giá trị."""
+    """Tạo bộ văn bản — nhận ĐÚNG MỘT trong hai dạng (vòng giao diện, đặc tả 3.3):
+
+    * **mã** (cũ — test / công cụ): ``ma_ho_so`` = danh sách mã hồ sơ (số CCCD) ĐÚNG THỨ TỰ — tương đương
+      ``--chi-ma`` của bộ xuất. Kiểm từng mã (rỗng / trùng / ký tự lạ / không khớp đúng một hồ sơ) và trần
+      số hồ sơ do service làm — lỗi nêu SỐ DÒNG, không nêu giá trị.
+    * **id** (giao diện mới): ``profile_ids`` theo ĐÚNG thứ tự ``kiem-truoc`` trả + ``phien_ban_kiem`` nhận
+      lại nguyên văn. Thứ tự / dấu lệch ⇒ 409 ``du_lieu_doi_tu_luc_kiem``.
+
+    ``academic_year`` bắt buộc ở cả hai dạng (CCCD chỉ duy nhất trong một năm học)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    ma_ho_so: List[str] = Field(..., min_length=1)
+    ma_ho_so: Optional[List[str]] = Field(None, min_length=1)
+    profile_ids: Optional[List[StrictInt]] = Field(None, min_length=1)
+    phien_ban_kiem: Optional[StrictStr] = Field(None, min_length=1, max_length=128)
     academic_year: StrictInt
     tham_so_quyet_dinh: Optional[DecisionParams] = None
     # Lượt G (owner 05-11, F228): admin XÁC NHẬN dựng bộ có hồ sơ ở mức cảnh báo — ĐÚNG số hồ
     # sơ theo từng trạng thái máy chủ vừa báo (409). Khoá / số đếm do service kiểm
     # (``council_set_gate_service``); chỉ admin được gửi (``deps.py`` tính quyền).
     xac_nhan_trang_thai: Optional[Dict[str, StrictInt]] = None
+
+    @model_validator(mode="after")
+    def _dung_mot_dang(self) -> "CouncilSetCreate":
+        theo_ma = self.ma_ho_so is not None
+        theo_id = self.profile_ids is not None or self.phien_ban_kiem is not None
+        if theo_ma == theo_id:
+            raise ValueError(
+                "Gửi đúng MỘT dạng: ma_ho_so, hoặc profile_ids kèm phien_ban_kiem."
+            )
+        if theo_id and (self.profile_ids is None or self.phien_ban_kiem is None):
+            raise ValueError("Dạng id cần cả profile_ids và phien_ban_kiem.")
+        return self
+
+
+# ═══════════════════ vòng giao diện — kiểm trước · đổi mã (đặc tả 3.1 / 3.2) ═══════════════════
+class CouncilSetPreviewIn(BaseModel):
+    """``POST /sets/kiem-truoc`` — id hồ sơ (không trùng, 1…``COUNCIL_SET_MAX_PROFILES`` — service kiểm)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    academic_year: StrictInt
+    profile_ids: List[StrictInt] = Field(..., min_length=1)
+
+
+class CouncilPreviewReasonOut(BaseModel):
+    ma: str
+    cau: str
+
+
+class CouncilPreviewRowOut(BaseModel):
+    """MỘT dòng kiểm trước — DỮ LIỆU CÁ NHÂN (họ tên): chỉ trong thân phản hồi ``no-store``. Nhãn trạng
+    thái do giao diện ánh xạ từ mã (``status-config`` — nguồn nhãn duy nhất), máy chủ trả MÃ."""
+
+    stt: int
+    stt_qd: int
+    profile_id: int
+    ho_ten: str
+    trang_thai: str
+    nganh_nhan: str
+    trinh_do: str
+    duong_xet_nhan: Optional[str] = None
+    diem_in: Optional[str] = None
+    muc: str
+    ly_do: List[CouncilPreviewReasonOut]
+
+
+class CouncilPreviewGroupOut(BaseModel):
+    nganh_nhan: str
+    trinh_do: str
+    so: int
+
+
+class CouncilPreviewSummaryOut(BaseModel):
+    tong: int
+    duoc_dung: int
+    can_xac_nhan: int
+    bi_chan: int
+    theo_nganh: List[CouncilPreviewGroupOut]
+    can_xac_nhan_theo_trang_thai: Dict[str, int]
+    so_nhom: int
+    du_kien_so_tep: int
+    nguoi_goi_duoc_xac_nhan: bool
+
+
+class CouncilSetPreviewOut(BaseModel):
+    kiem_luc: datetime
+    phien_ban_kiem: str
+    dong: List[CouncilPreviewRowOut]
+    khong_tim_thay: List[int]
+    tom_tat: CouncilPreviewSummaryOut
+
+
+class CouncilProfileSearchIn(BaseModel):
+    """``POST /sets/tim-ho-so`` (đặc tả bản 2 mục 3.11) — mọi tham số ở THÂN JSON (từ khoá có thể là CCCD /
+    tên ⇒ không bao giờ ở URL / query). Từ khoá: cắt khoảng trắng hai đầu, tối đa 100 ký tự (service);
+    trạng thái: chỉ giá trị của CHECK trạng thái hồ sơ (service)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    academic_year: StrictInt
+    tu_khoa: Optional[StrictStr] = Field(None, max_length=200)
+    major_ids: Optional[List[StrictInt]] = Field(None, max_length=200)
+    trang_thai: Optional[List[StrictStr]] = Field(None, max_length=20)
+    page: StrictInt = Field(1, ge=1)
+    page_size: StrictInt = Field(50, ge=1, le=100)
+
+
+class CouncilProfileSearchRowOut(BaseModel):
+    """MỘT dòng tìm hồ sơ — DỮ LIỆU CÁ NHÂN (họ tên, CCCD): chỉ trong thân phản hồi ``no-store``."""
+
+    profile_id: int
+    ho_ten: str
+    cccd: str
+    nganh_nhan: str
+    trinh_do: str
+    duong_xet_nhan: Optional[str] = None
+    trang_thai: str
+    academic_year: int
+
+
+class CouncilProfileSearchOut(BaseModel):
+    tong: int
+    page: int
+    page_size: int
+    dong: List[CouncilProfileSearchRowOut]
+
+
+class CouncilCodesIn(BaseModel):
+    """``POST /sets/doi-ma`` — danh sách mã (DỮ LIỆU CÁ NHÂN) CHỈ ở thân, không bao giờ ở URL."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    academic_year: StrictInt
+    ma_ho_so: List[StrictStr] = Field(..., min_length=1)
+
+
+class CouncilCodeLineErrorOut(BaseModel):
+    dong: int
+    ly_do: str
+
+
+class CouncilCodesOut(BaseModel):
+    profile_ids: List[int]
+    dong_loi: List[CouncilCodeLineErrorOut]
 
 
 class CouncilSetFileOut(BaseModel):
@@ -184,6 +322,10 @@ class CouncilDocumentPermissions(BaseModel):
     mo_luot_gui: bool
     xem_luot_gui: bool
     phan_xu_luot_gui: bool
+    # Vòng giao diện — đường chọn hồ sơ (đặc tả 3.1 / 3.2 / 3.10): mỗi route MỘT cờ.
+    kiem_truoc: bool
+    doi_ma: bool
+    tim_ho_so: bool
 
 
 class CouncilDocumentPermissionsOut(BaseModel):

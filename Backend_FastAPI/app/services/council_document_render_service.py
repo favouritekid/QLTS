@@ -341,6 +341,23 @@ def _ngay_thang(d: date) -> Tuple[str, str]:
     return "%02d" % d.day, _thang(d.month)
 
 
+# ═══════════════════════════════ thứ tự trên Quyết định — MỘT nguồn ══════════════════
+# Vòng giao diện (đặc tả 3.1 / 3.1.1): bộ dựng, bước kiểm trước (``kiem-truoc``) và ``POST /sets`` dạng id
+# cùng gọi HAI hàm dưới. Nhóm = cặp (ngành, trình độ) theo thứ tự chữ tăng; trong nhóm theo
+# (-tổng điểm xét tuyển, tên). Phần tử phá hoà cuối (id hồ sơ) do phía dựng bộ thêm: renderer sắp ỔN
+# ĐỊNH nên giữ đúng thứ tự đầu vào của các em hoà nhau.
+def khoa_nhom_quyet_dinh(dto: CandidateRowV1) -> Tuple[str, str]:
+    """Khoá NHÓM của một hồ sơ trên Quyết định: CẶP (ngành, trình độ đã cắt khoảng trắng) — "Công
+    nghệ ô tô" có ở cả hai trình độ."""
+    return (dto.nganh, dto.trinh_do.strip())
+
+
+def khoa_trong_nhom_quyet_dinh(tong_xt: float, ten: str) -> Tuple[float, str]:
+    """Khoá sắp TRONG một nhóm của Quyết định (và bảng điểm của Danh sách): điểm xét tuyển giảm dần,
+    rồi tên."""
+    return (-tong_xt, ten)
+
+
 # ═══════════════════════════════ hồ sơ đã chuẩn bị ═══════════════════════════
 @dataclass(frozen=True)
 class _HoSo:
@@ -351,8 +368,7 @@ class _HoSo:
 
     @property
     def khoa_nganh(self) -> Tuple[str, str]:
-        # Khoá nhóm là CẶP (ngành, trình độ): "Công nghệ ô tô" có ở cả hai trình độ.
-        return (self.dto.nganh, self.td)
+        return khoa_nhom_quyet_dinh(self.dto)
 
 
 def _chuan_bi(rows: Sequence[CandidateRowV1]) -> List[_HoSo]:
@@ -1464,7 +1480,7 @@ def _dung_quyet_dinh(
     for stt, ((e_p, e_t, e_s), ng) in enumerate(zip(khoi, nganh_ds), 1):
         d3 = sorted(
             [h for h in hs if h.khoa_nganh == ng],
-            key=lambda h: (-h.diem.tong_xt, h.dto.ten),
+            key=lambda h: khoa_trong_nhom_quyet_dinh(h.diem.tong_xt, h.dto.ten),
         )
         _dat_doan(Paragraph(e_p, d), "%d.Ngành: %s - Trình độ: %s" % ((stt,) + ng))
         _dat_doan(Paragraph(e_s, d), "Số thí sinh: %d" % len(d3))
@@ -1955,7 +1971,9 @@ def _dung_danh_sach(hs, nganh_ds, mau: bytes) -> List[RenderedFile]:
         r_ng = [h for h in hs if h.khoa_nganh == ng]
         ds1 = sorted(r_ng, key=lambda h: (h.dto.ten, h.dto.ho))
         ds2 = list(ds1)
-        ds3 = sorted(r_ng, key=lambda h: (-h.diem.tong_xt, h.dto.ten))
+        ds3 = sorted(
+            r_ng, key=lambda h: khoa_trong_nhom_quyet_dinh(h.diem.tong_xt, h.dto.ten)
+        )
         pt = _bang_phuong_thuc(ds2)
         ma_td = "CD" if ng[1] == "Cao đẳng" else "TC"
         goc = "DanhSachXetTuyen/%02d-%s-%s/DanhSachXetTuyen-%s-%s" % (

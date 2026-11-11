@@ -175,6 +175,11 @@ ADMISSION_WRITE_ROUTES: Final[tuple[tuple[str, str], ...]] = (
     # Vòng giao diện GĐ1 (lượt L): lượt gửi ghi nhận — mở lượt + phân xử — rà tay 11-11.
     ("POST", "/api/admission-config/council-documents/sets/{set_id}/luot-ghi-nhan"),
     ("POST", "/api/admission-config/council-documents/luot-ghi-nhan/{ma}/chan"),
+    # Vòng giao diện GĐ1: đường chọn hồ sơ — POST CHỈ ĐỌC (thân mang id / mã hồ sơ, không để vào URL) nhưng
+    # cần gạt chặn MỌI phương thức ghi ⇒ đóng băng thì 503, như ``scoring/preview`` — rà tay 11-11.
+    ("POST", "/api/admission-config/council-documents/sets/kiem-truoc"),
+    ("POST", "/api/admission-config/council-documents/sets/doi-ma"),
+    ("POST", "/api/admission-config/council-documents/sets/tim-ho-so"),
     ("POST", "/api/admission-config/criteria"),
     ("DELETE", "/api/admission-config/criteria/{criteria_id}"),
     ("PUT", "/api/admission-config/criteria/{criteria_id}"),

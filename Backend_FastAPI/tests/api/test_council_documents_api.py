@@ -515,8 +515,9 @@ async def test_dong_bang_chan_moi_route_ghi_cua_module(
     ghi = _route_ghi_cua_module()
     # Bảng route THẬT — xoá bộ (E3) + tải mẫu + dựng bộ + bảy route ghi của lượt I (ghi nhận, huỷ ghi
     # nhận, huỷ hiệu lực, bộ điều chỉnh, điều chỉnh, tái dựng bản ký, cho xét lại) + hai route ghi của vòng
-    # giao diện (mở lượt gửi, phân xử lượt gửi).
-    assert [m for m, _ in ghi] == ["DELETE"] + ["POST"] * 11
+    # giao diện (mở lượt gửi, phân xử lượt gửi) + ba POST CHỈ ĐỌC của đường chọn hồ sơ (kiểm trước, đổi mã,
+    # tìm hồ sơ — cần gạt chặn mọi POST, như ``scoring/preview``).
+    assert [m for m, _ in ghi] == ["DELETE"] + ["POST"] * 14
     assert await _dem() == (0, 3, 3)  # ba bộ có sẵn (ba_bo)
     for m, duong in ghi:
         # Gọi ĐÚNG đường của bảng route — KHÔNG ghép lại từ hằng P: router bị dời ra ngoài
@@ -589,8 +590,9 @@ def test_moi_route_cua_module_khop_vi_tu_bo_input_422():
     # /nhat-ky-tai, /nhat-ky-xoa (DELETE dùng chung /sets/{id}) + lượt F: /quyen + lượt I (F230) 12 đường:
     # /decisions, /decisions/{id}, …/scan, …/huy-ghi-nhan, …/huy-hieu-luc, …/bo-dieu-chinh, …/dieu-chinh,
     # /sets/{id}/dung-lai-ban-ky, /sets/{id}/so-voi-hien-tai, /decision-holds, …/cho-xet-lai, /su-kien + vòng
-    # giao diện 2 đường: /sets/{id}/luot-ghi-nhan (POST + GET), /luot-ghi-nhan/{ma}/chan.
-    assert len(duong) == 22
+    # giao diện 2 đường: /sets/{id}/luot-ghi-nhan (POST + GET), /luot-ghi-nhan/{ma}/chan + đường chọn hồ sơ 3
+    # đường: /sets/kiem-truoc, /sets/doi-ma, /sets/tim-ho-so.
+    assert len(duong) == 25
     assert all(eh._khong_log_input_422(p) for p in duong)
     assert not eh._khong_log_input_422("/api/admission-config/council-documentsX")
     assert not eh._khong_log_input_422("/api/admission-config/criteria")

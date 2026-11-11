@@ -35,6 +35,7 @@ from app.config import settings
 from app.repositories.council_candidate_repository import (
     ThongTinGiaoDich,
     doc_kiem_nguon,
+    doc_pham_vi_theo_id,
     doc_so_lieu,
     giao_dich_chi_doc,
     phan_giai_ma,
@@ -254,10 +255,42 @@ def _neu_dong(dong: Sequence[int]) -> str:
     return s + (" … (tổng %d dòng)" % len(dong) if len(dong) > _NEU_TOI_DA else "")
 
 
+#: Mã loại lỗi của MỘT mã hồ sơ — :func:`loi_mot_ma` (MỘT nguồn luật cho ``POST /sets`` dạng mã và
+#: ``POST /sets/doi-ma``). ``doi-ma`` trả thẳng các mã này (+ ``trung`` / ``khong_khop`` / ``nhieu_ho_so``).
+LOI_MA_KHONG_PHAI_CHUOI = "khong_phai_chuoi"
+LOI_MA_RONG = "rong"
+LOI_MA_KY_TU_LA = "ky_tu_la"  # quá dài hoặc có ký tự nhóm C (kiểm kỹ thuật)
+LOI_MA_SAI_DINH_DANG = "sai_dinh_dang"  # không phải đúng 9 / 12 chữ số ASCII
+_CAU_LOI_MA = {
+    LOI_MA_KHONG_PHAI_CHUOI: "Dòng %d: mã hồ sơ không phải chuỗi.",
+    LOI_MA_RONG: "Dòng %d: mã hồ sơ rỗng.",
+    LOI_MA_KY_TU_LA: "Dòng %d: không phải mã hồ sơ (quá dài hoặc có ký tự điều khiển).",
+    LOI_MA_SAI_DINH_DANG: "Dòng %d: mã hồ sơ phải gồm đúng 12 chữ số (CCCD) hoặc đúng 9 chữ số "
+    "(CMND), chỉ chữ số 0-9.",
+}
+
+
+def loi_mot_ma(m: object) -> Tuple[Optional[str], Optional[str]]:
+    """``(mã đã bỏ khoảng trắng hai đầu | None, mã loại lỗi | None)`` của MỘT mã — theo thứ tự: không
+    phải chuỗi → rỗng → quá dài / ký tự nhóm C → sai định dạng (J1 dòng 28). Không kiểm trùng (việc của
+    danh sách)."""
+    if not isinstance(m, str):
+        return None, LOI_MA_KHONG_PHAI_CHUOI
+    m = m.strip()
+    if not m:
+        return m, LOI_MA_RONG
+    if len(m) > DAI_MA_TOI_DA or any(unicodedata.category(c)[0] == "C" for c in m):
+        return m, LOI_MA_KY_TU_LA
+    if not _RE_DINH_DANG_MA.fullmatch(m):
+        return m, LOI_MA_SAI_DINH_DANG
+    return m, None
+
+
 def chuan_hoa_ma(ma: Sequence[str]) -> List[str]:
     """MỘT nguồn kiểm danh sách mã hồ sơ. Bỏ khoảng trắng hai đầu từng mã; theo thứ tự: rỗng
     / quá dài / có ký tự nhóm C (kiểm kỹ thuật) → sai định dạng (không phải đúng 9 hoặc 12
     chữ số ASCII — J1 dòng 28) → trùng ⇒ lỗi nêu số thứ tự dòng (từ 1), KHÔNG nêu giá trị.
+    Luật từng mã: :func:`loi_mot_ma`.
     """
     if not isinstance(ma, (list, tuple)):
         raise DataValidationError("Danh sách mã hồ sơ phải là một danh sách.")
@@ -266,20 +299,9 @@ def chuan_hoa_ma(ma: Sequence[str]) -> List[str]:
     out: List[str] = []
     gap: dict = {}
     for i, m in enumerate(ma, 1):
-        if not isinstance(m, str):
-            raise DataValidationError("Dòng %d: mã hồ sơ không phải chuỗi." % i)
-        m = m.strip()
-        if not m:
-            raise DataValidationError("Dòng %d: mã hồ sơ rỗng." % i)
-        if len(m) > DAI_MA_TOI_DA or any(unicodedata.category(c)[0] == "C" for c in m):
-            raise DataValidationError(
-                "Dòng %d: không phải mã hồ sơ (quá dài hoặc có ký tự điều khiển)." % i
-            )
-        if not _RE_DINH_DANG_MA.fullmatch(m):
-            raise DataValidationError(
-                "Dòng %d: mã hồ sơ phải gồm đúng 12 chữ số (CCCD) hoặc đúng 9 chữ số "
-                "(CMND), chỉ chữ số 0-9." % i
-            )
+        m, loi = loi_mot_ma(m)
+        if loi is not None:
+            raise DataValidationError(_CAU_LOI_MA[loi] % i)
         if m in gap:
             raise DataValidationError(
                 "Dòng %d trùng mã hồ sơ với dòng %d — mỗi người một dòng." % (i, gap[m])
@@ -407,6 +429,186 @@ async def doc_ho_so_theo_id(
     except DBAPIError:
         raise ServiceError("Lỗi CSDL khi đọc hồ sơ cho bộ văn bản.") from None
     return _dung_anh_chup(tho, ds, tt)
+
+
+#: Trần ký tự của từ khoá tìm hồ sơ (đặc tả 3.11).
+TU_KHOA_TOI_DA = 100
+
+
+def _trang_thai_hop_le() -> frozenset:
+    from app.services.admission_state_machine import AdmissionStatus
+
+    return frozenset(s.value for s in AdmissionStatus)
+
+
+async def tim_ho_so(
+    db: AsyncSession,
+    *,
+    current_user: object,
+    academic_year: object,
+    tu_khoa: Optional[str],
+    major_ids: Optional[Sequence[int]],
+    trang_thai: Optional[Sequence[str]],
+    page: int,
+    page_size: int,
+) -> Dict[str, object]:
+    """Vòng giao diện (đặc tả bản 2 mục 3.11 — ``POST /sets/tim-ho-so``): tìm hồ sơ cho trang chọn bằng ĐÚNG
+    ``admission_service.get_profiles(..., lean=True)`` — cùng service / repository / phạm vi đơn vị (IDOR)
+    như ``GET /api/admissions``; KHÔNG có truy vấn tìm thứ hai; các bộ lọc điều phối (``unit_id``,
+    ``assigned_*``) không mở. Từ khoá KHÔNG bao giờ vào log (router và service không log nó).
+
+    Mỗi dòng chỉ chuyển dạng từ hồ sơ của trang: tên ngành = ``program_name`` (CÙNG cột "Ngành" của màn Hồ
+    sơ tuyển sinh — ``lead.offering``); trình độ = ``major_program.degree_level`` của chính ngành ấy; đường
+    xét KHÔNG có ở danh sách dạng nhẹ ⇒ ``None``. Ngành / đường xét / điểm IN chính xác chỉ ở ``kiem-truoc``
+    (nguồn của bộ dựng)."""
+    from app.services import admission_service
+
+    nam = kiem_nam_hoc(academic_year)
+    tk = tu_khoa.strip() if isinstance(tu_khoa, str) else None
+    if tk is not None and len(tk) > TU_KHOA_TOI_DA:
+        raise DataValidationError(
+            "Từ khoá tìm quá dài (tối đa %d ký tự)." % TU_KHOA_TOI_DA
+        )
+    tt = list(trang_thai) if trang_thai else None
+    if tt is not None and not set(tt) <= _trang_thai_hop_le():
+        raise DataValidationError("Bộ lọc trạng thái có giá trị không hợp lệ.")
+    profiles, tong = await admission_service.get_profiles(
+        db=db,
+        skip=(page - 1) * page_size,
+        limit=page_size,
+        current_user=current_user,
+        search=tk or None,
+        statuses=tt,
+        major_ids=list(major_ids) if major_ids else None,
+        academic_year=nam,
+        lean=True,
+    )
+    dong = []
+    for p in profiles:
+        lead = p.lead
+        ct = lead.offering.program if lead is not None and lead.offering else None
+        dong.append(
+            {
+                "profile_id": p.id,
+                "ho_ten": (p.full_name or "").strip(),
+                "cccd": p.citizen_id or "",
+                "nganh_nhan": getattr(p, "program_name", None) or "",
+                "trinh_do": ((ct.degree_level or "") if ct is not None else "").strip(),
+                "duong_xet_nhan": None,
+                "trang_thai": p.status,
+                "academic_year": p.academic_year,
+            }
+        )
+    return {"tong": tong, "page": page, "page_size": page_size, "dong": dong}
+
+
+#: Mã lỗi riêng của ``doi-ma`` (ngoài các mã của :func:`loi_mot_ma`).
+LOI_MA_TRUNG = "trung"
+LOI_MA_KHONG_KHOP = "khong_khop"  # không có hồ sơ của năm học / ngoài phạm vi đơn vị (không phân biệt)
+LOI_MA_NHIEU_HO_SO = "nhieu_ho_so"
+
+
+async def doi_ma_thanh_id(
+    engine: AsyncEngine,
+    ma_ho_so: Sequence[str],
+    *,
+    academic_year: Optional[int],
+    tat_ca: bool,
+    chi_don_vi: Optional[int],
+) -> Tuple[List[int], List[Dict[str, object]]]:
+    """Vòng giao diện (đặc tả 3.2 — ``POST /sets/doi-ma``, cách phụ "dán mã"): đổi danh sách mã (CCCD) thành
+    id hồ sơ. KHÔNG dừng ở dòng lỗi đầu tiên: trả ``(id theo thứ tự các dòng khớp, [{dong, ly_do}])`` —
+    chỉ SỐ DÒNG + mã lý do, không giá trị. Luật từng mã = :func:`loi_mot_ma` (cùng nguồn ``POST /sets``);
+    trùng ⇒ dòng sau mang ``trung``. Phân giải bằng CÙNG ``phan_giai_ma`` của ``POST /sets``, trong giao
+    dịch chỉ đọc; hồ sơ ngoài phạm vi đơn vị của người gọi ⇒ ``khong_khop`` (như không có — không lộ tồn
+    tại). Không ghi gì."""
+    nam = kiem_nam_hoc(academic_year)
+    if not tat_ca and chi_don_vi is None:
+        raise ServiceError("Phạm vi đọc hồ sơ không xác định — không đọc.")
+    if not isinstance(ma_ho_so, (list, tuple)) or not ma_ho_so:
+        raise DataValidationError("Danh sách mã hồ sơ rỗng.")
+    if len(ma_ho_so) > settings.COUNCIL_SET_MAX_PROFILES:
+        raise DataValidationError(
+            "Danh sách có %d dòng, vượt giới hạn kỹ thuật %d hồ sơ cho một bộ văn bản."
+            % (len(ma_ho_so), settings.COUNCIL_SET_MAX_PROFILES)
+        )
+    dong_loi: List[Dict[str, object]] = []
+    hop_le: List[Tuple[int, str]] = []
+    gap: Dict[str, int] = {}
+    for i, m in enumerate(ma_ho_so, 1):
+        s, loi = loi_mot_ma(m)
+        if loi is not None:
+            dong_loi.append({"dong": i, "ly_do": loi})
+        elif s in gap:
+            dong_loi.append({"dong": i, "ly_do": LOI_MA_TRUNG})
+        else:
+            gap[s] = i
+            hop_le.append((i, s))
+    pids: List[int] = []
+    if hop_le:
+        try:
+            async with giao_dich_chi_doc(engine) as (conn, _tt):
+                khop = await phan_giai_ma(conn, [s for _, s in hop_le], nam)
+                if [stt for stt, _, _ in khop] != list(range(1, len(hop_le) + 1)):
+                    raise ServiceError("Phân giải mã hồ sơ trả sai thứ tự — không đọc.")
+                pv = await doc_pham_vi_theo_id(
+                    conn, [pid for _, so, pid in khop if so == 1]
+                )
+        except DBAPIError:
+            raise ServiceError("Lỗi CSDL khi đọc hồ sơ cho bộ văn bản.") from None
+        for (i, _), (_, so, pid) in zip(hop_le, khop):
+            if so > 1:
+                dong_loi.append({"dong": i, "ly_do": LOI_MA_NHIEU_HO_SO})
+            elif (
+                so == 0
+                or pid not in pv
+                or not (tat_ca or pv[pid][1] == chi_don_vi)
+            ):
+                dong_loi.append({"dong": i, "ly_do": LOI_MA_KHONG_KHOP})
+            else:
+                pids.append(pid)
+    return pids, sorted(dong_loi, key=lambda d: d["dong"])
+
+
+async def doc_ho_so_kiem_truoc(
+    engine: AsyncEngine,
+    pids: Sequence[int],
+    *,
+    academic_year: Optional[int],
+    tat_ca: bool,
+    chi_don_vi: Optional[int],
+) -> Tuple[Optional[AnhChupHoSo], List[int]]:
+    """Vòng giao diện (đặc tả 3.1 — ``POST /sets/kiem-truoc``): CÙNG giao dịch ``REPEATABLE READ READ
+    ONLY`` + cùng phần đọc (:func:`_doc_tho` / :func:`_dung_anh_chup`) với :func:`doc_ho_so_theo_id`, thêm
+    MỘT bước lọc trong chính giao dịch ấy: id không có / khác năm học / ngoài phạm vi đơn vị của người gọi
+    (``lead.unit_id`` — đúng cột của ``SQL_SO_LIEU``) ⇒ VỊ TRÍ (từ 1) vào danh sách thứ hai, không phân biệt
+    ba ca (không lộ hồ sơ có tồn tại). Trả ``(ảnh chụp của các id còn lại theo thứ tự đầu vào | None nếu
+    không còn id nào, vị trí bị loại)``. Phạm vi do ``deps.py`` quyết; "không tất cả mà không có đơn vị" ⇒
+    ``ServiceError`` (fail-closed)."""
+    nam = kiem_nam_hoc(academic_year)
+    if not tat_ca and chi_don_vi is None:
+        raise ServiceError("Phạm vi đọc hồ sơ không xác định — không đọc.")
+    ds = [int(p) for p in pids]
+    if not ds or len(set(ds)) != len(ds):
+        raise ServiceError("Danh sách id hồ sơ rỗng hoặc trùng — không đọc.")
+    try:
+        async with giao_dich_chi_doc(engine) as (conn, tt):
+            co = await doc_pham_vi_theo_id(conn, ds)
+            loai = [
+                i
+                for i, p in enumerate(ds, 1)
+                if p not in co
+                or co[p][0] != nam
+                or not (tat_ca or co[p][1] == chi_don_vi)
+            ]
+            bo_ra = set(loai)
+            giu = [p for i, p in enumerate(ds, 1) if i not in bo_ra]
+            if not giu:
+                return None, loai
+            tho = await _doc_tho(conn, giu)
+    except DBAPIError:
+        raise ServiceError("Lỗi CSDL khi đọc hồ sơ cho bộ văn bản.") from None
+    return _dung_anh_chup(tho, giu, tt), loai
 
 
 async def _doc_tho(conn: AsyncConnection, pids: Sequence[int]):

@@ -49,8 +49,12 @@ from ..schemas.council_document import (
     CouncilDocumentPermissionsOut,
     CouncilDownloadLogOut,
     CouncilEventOut,
+    CouncilCodesIn,
+    CouncilCodesOut,
     CouncilHoldOut,
     CouncilHoldReleaseIn,
+    CouncilProfileSearchIn,
+    CouncilProfileSearchOut,
     CouncilResignIn,
     CouncilSetCreate,
     CouncilSetDelete,
@@ -58,11 +62,14 @@ from ..schemas.council_document import (
     CouncilSetDetailOut,
     CouncilSetInputCodesOut,
     CouncilSetOut,
+    CouncilSetPreviewIn,
+    CouncilSetPreviewOut,
     CouncilSubmissionOpenOut,
     CouncilSubmissionOut,
     CouncilSubmissionResolveOut,
     CouncilTemplateOut,
 )
+from ..services import council_candidate_service as doc_hs
 from ..services import council_decision_service as qd_vb
 from ..services import council_decision_submission_service as luot_gui
 from ..services import council_document_render_service as bo_dung
@@ -172,16 +179,30 @@ async def create_council_document_set(
     duoc_xac_nhan: bool = Depends(deps.get_council_document_confirm_right),
     db: AsyncSession = Depends(database.get_db),
 ):
-    bo, _ = await bo_vb.tao_bo_van_ban(
-        db,
-        database.engine,
-        ma_ho_so=payload.ma_ho_so,
-        academic_year=payload.academic_year,
-        tham_so=payload.tham_so_quyet_dinh,
-        nguoi_tao_id=current_user.id,
-        xac_nhan_trang_thai=payload.xac_nhan_trang_thai,
-        duoc_xac_nhan=duoc_xac_nhan,
-    )
+    if payload.profile_ids is not None:
+        # Vòng giao diện (đặc tả 3.3): dạng id + dấu kiểm trước.
+        bo, _ = await bo_vb.tao_bo_van_ban_theo_id(
+            db,
+            database.engine,
+            profile_ids=payload.profile_ids,
+            phien_ban_kiem=payload.phien_ban_kiem,
+            academic_year=payload.academic_year,
+            tham_so=payload.tham_so_quyet_dinh,
+            nguoi_tao_id=current_user.id,
+            xac_nhan_trang_thai=payload.xac_nhan_trang_thai,
+            duoc_xac_nhan=duoc_xac_nhan,
+        )
+    else:
+        bo, _ = await bo_vb.tao_bo_van_ban(
+            db,
+            database.engine,
+            ma_ho_so=payload.ma_ho_so,
+            academic_year=payload.academic_year,
+            tham_so=payload.tham_so_quyet_dinh,
+            nguoi_tao_id=current_user.id,
+            xac_nhan_trang_thai=payload.xac_nhan_trang_thai,
+            duoc_xac_nhan=duoc_xac_nhan,
+        )
     await db.commit()
     xac_nhan = (bo.thong_tin_dung or {}).get("xac_nhan_canh_bao_trang_thai")
     log.info(
@@ -194,6 +215,110 @@ async def create_council_document_set(
         xac_nhan_canh_bao=(xac_nhan or {}).get("so_ho_so_theo_trang_thai"),
     )
     return CouncilSetDetailOut.tu_bo_va_tep(bo, await bo_vb.tep_cua_bo(db, bo.id))
+
+
+@router.post(
+    "/sets/kiem-truoc",
+    response_model=CouncilSetPreviewOut,
+    summary="Kiểm trước danh sách hồ sơ (mức từng dòng + thứ tự chuẩn + dấu) — không ghi gì",
+)
+@limiter.limit(RateLimits.DATA_READ)
+async def preview_council_document_set(
+    request: Request,
+    payload: CouncilSetPreviewIn,
+    current_user: models.User = deps.CasbinAuth,
+    scope: deps.CouncilDocumentScope = Depends(deps.get_council_document_scope),
+    duoc_xac_nhan: bool = Depends(deps.get_council_document_confirm_right),
+):
+    kq = await bo_vb.kiem_truoc(
+        database.engine,
+        profile_ids=payload.profile_ids,
+        academic_year=payload.academic_year,
+        tat_ca=scope.tat_ca,
+        chi_don_vi=scope.unit_id,
+        duoc_xac_nhan=duoc_xac_nhan,
+    )
+    # Chỉ số đếm — không id, không họ tên, không dấu.
+    log.info(
+        "council_document_set_previewed",
+        so_dong=len(kq["dong"]),
+        so_khong_tim_thay=len(kq["khong_tim_thay"]),
+        actor=current_user.id,
+    )
+    return JSONResponse(
+        content=CouncilSetPreviewOut(**kq).model_dump(mode="json"),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post(
+    "/sets/tim-ho-so",
+    response_model=CouncilProfileSearchOut,
+    summary="Tìm hồ sơ cho trang chọn (cùng service + phạm vi của danh sách hồ sơ) — tham số ở thân",
+)
+@limiter.limit(RateLimits.DATA_READ)
+async def search_council_profiles(
+    request: Request,
+    payload: CouncilProfileSearchIn,
+    current_user: models.User = deps.CasbinAuth,
+    _scope: deps.CouncilDocumentScope = Depends(deps.get_council_document_scope),
+    db: AsyncSession = Depends(database.get_db),
+):
+    kq = await doc_hs.tim_ho_so(
+        db,
+        current_user=current_user,
+        academic_year=payload.academic_year,
+        tu_khoa=payload.tu_khoa,
+        major_ids=payload.major_ids,
+        trang_thai=payload.trang_thai,
+        page=payload.page,
+        page_size=payload.page_size,
+    )
+    # KHÔNG log từ khoá (có thể là CCCD / tên) — chỉ số đếm.
+    log.info(
+        "council_profiles_searched",
+        so_dong=len(kq["dong"]),
+        tong=kq["tong"],
+        co_tu_khoa=bool(payload.tu_khoa),
+        actor=current_user.id,
+    )
+    return JSONResponse(
+        content=CouncilProfileSearchOut(**kq).model_dump(mode="json"),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post(
+    "/sets/doi-ma",
+    response_model=CouncilCodesOut,
+    summary="Đổi danh sách mã hồ sơ (dán) thành id hồ sơ — lỗi chỉ nêu số dòng; không ghi gì",
+)
+@limiter.limit(RateLimits.DATA_READ)
+async def resolve_council_profile_codes(
+    request: Request,
+    payload: CouncilCodesIn,
+    current_user: models.User = deps.CasbinAuth,
+    scope: deps.CouncilDocumentScope = Depends(deps.get_council_document_scope),
+):
+    pids, dong_loi = await doc_hs.doi_ma_thanh_id(
+        database.engine,
+        payload.ma_ho_so,
+        academic_year=payload.academic_year,
+        tat_ca=scope.tat_ca,
+        chi_don_vi=scope.unit_id,
+    )
+    log.info(
+        "council_profile_codes_resolved",
+        so_khop=len(pids),
+        so_dong_loi=len(dong_loi),
+        actor=current_user.id,
+    )
+    return JSONResponse(
+        content=CouncilCodesOut(profile_ids=pids, dong_loi=dong_loi).model_dump(
+            mode="json"
+        ),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get(
@@ -956,4 +1081,8 @@ ENDPOINT_THEO_CO = {
     "mo_luot_gui": open_council_decision_submission,
     "xem_luot_gui": list_council_decision_submissions,
     "phan_xu_luot_gui": resolve_council_decision_submission,
+    # Vòng giao diện — đường chọn hồ sơ (đặc tả 3.1 / 3.2 / 3.10)
+    "kiem_truoc": preview_council_document_set,
+    "doi_ma": resolve_council_profile_codes,
+    "tim_ho_so": search_council_profiles,
 }
