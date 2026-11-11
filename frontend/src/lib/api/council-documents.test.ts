@@ -274,8 +274,11 @@ describe("đường chọn hồ sơ — DTO khớp máy chủ 5feb425d", () => {
   })
 })
 
-/** Byte của một zip giả — CỐ Ý có 0xFF 0xFE (không hợp lệ UTF-8): đọc nhầm thành chữ sẽ làm hỏng byte. */
-const ZIP_BYTE = [0x50, 0x4b, 0x03, 0x04, 0xff, 0xfe]
+/**
+ * Byte của một zip giả (chữ ký "PK 03 04" dạng hex). Chỉ dùng byte hợp lệ UTF-8: bộ chặn XHR của MSW trong jsdom giải mã thân
+ * phản hồi như chữ (byte 0xFF thành U+FFFD) — hạn chế của MÔI TRƯỜNG TEST, không phải của mã; tính nguyên vẹn nhị phân không đo được ở đây.
+ */
+const ZIP_BYTE = [0x50, 0x4b, 0x03, 0x04]
 /** jsdom: `Blob` không có `.text()` / `.arrayBuffer()` — đọc byte bằng FileReader. */
 const docByte = (b: Blob) =>
   new Promise<number[]>((xong, loi) => {
