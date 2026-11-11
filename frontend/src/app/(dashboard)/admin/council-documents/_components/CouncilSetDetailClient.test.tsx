@@ -158,6 +158,15 @@ describe("CouncilSetDetailClient — nút theo cờ", () => {
   })
 })
 
+/** jsdom: `Blob` không có `.text()` — đọc nội dung bằng FileReader. */
+const docBlob = (b: Blob) =>
+  new Promise<string>((xong, loi) => {
+    const r = new FileReader()
+    r.onload = () => xong(String(r.result))
+    r.onerror = () => loi(r.error)
+    r.readAsText(b)
+  })
+
 describe("Tải cả bộ (cờ tai_ca_bo)", () => {
   it("cờ tắt ⇒ không có nút", async () => {
     moc({ ...QUAN_LY, tai_ca_bo: false })
@@ -176,7 +185,7 @@ describe("Tải cả bộ (cờ tai_ca_bo)", () => {
     expect(zipGoi).toEqual([7])
     const [blob, ten] = downloadBlob.mock.calls[0] as [Blob, string]
     expect(blob).toBeInstanceOf(Blob)
-    expect(await blob.text()).toBe("PK")
+    expect(await docBlob(blob)).toBe("PK")
     expect(ten).toBe("bo-7.zip")
     expect(screen.queryByTestId("download-zip-error")).toBeNull()
   })

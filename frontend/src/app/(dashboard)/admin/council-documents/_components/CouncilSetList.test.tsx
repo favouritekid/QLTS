@@ -85,6 +85,15 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => undefined)
 })
 
+/** jsdom: `Blob` không có `.text()` — đọc nội dung bằng FileReader. */
+const docBlob = (b: Blob) =>
+  new Promise<string>((xong, loi) => {
+    const r = new FileReader()
+    r.onload = () => xong(String(r.result))
+    r.onerror = () => loi(r.error)
+    r.readAsText(b)
+  })
+
 describe("CouncilSetList", () => {
   it("bộ vừa dựng (tình trạng / Quyết định / tên người tạo đều null) ⇒ '—' và 'Tài khoản #n', không suy", async () => {
     dung([goc(5, { tinh_trang: null })])
@@ -184,7 +193,7 @@ describe("CouncilSetList", () => {
       expect(nguoiTaoGoi).toBe(0)
     })
 
-    it("có cờ ⇒ chọn từ danh sách máy chủ trả (tên người) ⇒ gửi nguoi_tao_id ĐÚNG id đã chọn; 'Tất cả' ⇒ bỏ tham số", async () => {
+    it("có cờ ⇒ chọn từ danh sách máy chủ trả (tên người) ⇒ gửi nguoi_tao_id ĐÚNG id đã chọn (đổi người ⇒ id mới); lần đầu (Tất cả) KHÔNG có tham số", async () => {
       dung([goc(5)])
       ve({ canFilterCreator: true })
       await screen.findByTestId("set-row-5")
@@ -196,8 +205,8 @@ describe("CouncilSetList", () => {
 
       fireEvent.change(chon, { target: { value: "9" } })
       await waitFor(() => expect(queries.at(-1)!.get("nguoi_tao_id")).toBe("9"))
-      fireEvent.change(chon, { target: { value: "" } })
-      await waitFor(() => expect(queries.at(-1)!.has("nguoi_tao_id")).toBe(false))
+      fireEvent.change(chon, { target: { value: "7" } })
+      await waitFor(() => expect(queries.at(-1)!.get("nguoi_tao_id")).toBe("7"))
     })
 
     it("danh sách người tạo lỗi ⇒ bộ lọc tắt kèm lời nói rõ, DANH SÁCH BỘ vẫn hiện", async () => {
@@ -225,7 +234,7 @@ describe("CouncilSetList", () => {
       expect(zipGoi).toEqual([6])
       const [blob, ten] = downloadBlob.mock.calls[0] as [Blob, string]
       expect(blob).toBeInstanceOf(Blob)
-      expect(await blob.text()).toBe("PK")
+      expect(await docBlob(blob)).toBe("PK")
       expect(ten).toBe("bo-6.zip")
     })
 

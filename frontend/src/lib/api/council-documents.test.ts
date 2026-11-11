@@ -274,6 +274,15 @@ describe("đường chọn hồ sơ — DTO khớp máy chủ 5feb425d", () => {
   })
 })
 
+/** jsdom: `Blob` không có `.text()` — đọc nội dung bằng FileReader. */
+const docBlob = (b: Blob) =>
+  new Promise<string>((xong, loi) => {
+    const r = new FileReader()
+    r.onload = () => xong(String(r.result))
+    r.onerror = () => loi(r.error)
+    r.readAsText(b)
+  })
+
 describe("đợt 2 — DTO khớp máy chủ 083a428d (danh sách / chi tiết bộ, người tạo, tải cả bộ, nhật ký, lọc văn bản)", () => {
   const QD = {
     id: 21, loai: "bo_sung", trang_thai: "hieu_luc", so_quyet_dinh: "90", ngay_ky: "2026-10-20", so_ho_so: 12,
@@ -390,7 +399,7 @@ describe("đợt 2 — DTO khớp máy chủ 083a428d (danh sách / chi tiết b
       })))
     const kq = await downloadCouncilSetZip(5)
     expect(kq.filename).toBe("bo-5.zip")
-    expect(await kq.blob.text()).toBe("PK")
+    expect(await docBlob(kq.blob)).toBe("PK")
     expect(urls).toEqual([`${API}${P}/sets/5/tai-ca-bo`])
   })
 
