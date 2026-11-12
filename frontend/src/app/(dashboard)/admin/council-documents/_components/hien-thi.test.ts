@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  nganhHienThi,
   nganhTrinhDo,
   nguoiHienThi,
   nhanLoaiQuyetDinh,
@@ -58,5 +59,15 @@ describe("nguoiHienThi / nganhTrinhDo", () => {
   it("ngành · trình độ", () => {
     expect(nganhTrinhDo("CĐ Kế toán", "Cao đẳng")).toBe("CĐ Kế toán · Cao đẳng")
     expect(nganhTrinhDo("CĐ Kế toán", "")).toBe("CĐ Kế toán")
+  })
+  // Đ2-4 (chạy thử trình duyệt đợt 2): hồ sơ không có ngành ⇒ máy chủ trả chuỗi rỗng; màn Hồ sơ tuyển sinh hiện "—".
+  it("hồ sơ không có ngành (chuỗi rỗng / chỉ khoảng trắng) ⇒ nganhHienThi trả '—'; có ngành ⇒ giữ nguyên", () => {
+    expect(nganhHienThi("")).toBe("—")
+    expect(nganhHienThi("   ")).toBe("—")
+    expect(nganhHienThi("CĐ Kế toán")).toBe("CĐ Kế toán")
+  })
+  it("hồ sơ không có ngành ⇒ 'Ngành · trình độ' (bước kiểm tra / tóm tắt) cũng hiện '—', không để trống hay thừa dấu chấm giữa", () => {
+    expect(nganhTrinhDo("", "Cao đẳng")).toBe("— · Cao đẳng")
+    expect(nganhTrinhDo("", "")).toBe("—")
   })
 })

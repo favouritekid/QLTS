@@ -9,7 +9,8 @@
  *   • Mất mạng / hết giờ / 5xx / 404 / 2xx không đọc được ⇒ "Chưa xác định". KHÔNG bao giờ suy "chưa ghi", và KHÔNG
  *     có đường "gửi lại" từ trạng thái này — chỉ có "Kiểm tra trên máy chủ" (phân xử).
  *   • Phân xử cũng có thể mất phản hồi, hoặc bị đóng băng tuyển sinh chặn (503) ⇒ vẫn "Chưa xác định" (gọi lại được: máy chủ
- *     luỹ đẳng) — không bao giờ suy "chưa ghi".
+ *     luỹ đẳng) — không bao giờ suy "chưa ghi". Giờ của lượt (`luc`) GIỮ NGUYÊN qua các lần phân xử không kết luận (không bị
+ *     thay bằng giờ bấm kiểm); phân xử ra "đã chặn" thì làm mới truy vấn của bộ để dòng "Tình trạng" theo máy chủ.
  *   • Mã của lượt đã `da_ghi` chỉ bị bỏ SAU KHI máy chủ xác nhận huỷ ghi nhận (`batDauLuotMoiSauHuy`); lỗi nghiệp vụ khi gửi
  *     KHÔNG bỏ mã (lượt vẫn `cho_gui`) — F276.
  *   • Chống bấm đúp bằng cờ đồng bộ (không chờ React render).
@@ -66,6 +67,11 @@ export type TrangThaiGhiNhan =
   | { kieu: "chua_ghi_da_chan" }
 
 export type DuLieuGuiGhiNhan = Omit<CreateCouncilDecisionInput, "set_id" | "ma_luot_gui">
+
+/** Giờ của lượt gửi đang mang trong trạng thái chưa rõ / đang phân xử; không có thì giờ hiện tại. */
+function gioCuaLuot(t: TrangThaiGhiNhan): string {
+  return t.kieu === "chua_xac_dinh" || t.kieu === "dang_phan_xu" ? t.luc : new Date().toISOString()
+}
 
 type KetQuaMoLuot =
   | { kieu: "ok"; ma: string }
@@ -153,8 +159,10 @@ export function useGhiNhanQuyetDinh(setId: number) {
     const ma = maRef.current
     if (ma === null || dangChay.current) return
     dangChay.current = true
-    const luc = new Date().toISOString()
-    setTrangThai({ kieu: "dang_phan_xu", ma, luc })
+    // `luc` = GIỜ CỦA LƯỢT GỬI (khung "Chưa xác định" ghi "Lượt gửi lúc …"), KHÔNG phải giờ bấm kiểm: lấy từ trạng thái đang
+    // đứng (chưa rõ / đang kiểm) và giữ nguyên qua mọi lần phân xử không kết luận. Chỉ khi trạng thái hiện tại không mang giờ
+    // (không xảy ra qua giao diện) mới lấy giờ hiện tại. Đọc qua hàm cập nhật để không phụ thuộc bản chụp cũ của trạng thái.
+    setTrangThai((cu) => ({ kieu: "dang_phan_xu", ma, luc: gioCuaLuot(cu) }))
     try {
       const kq = giaiNghiaPhanXu(await resolveCouncilSubmission(ma))
       switch (kq.kieu) {
@@ -169,21 +177,27 @@ export function useGhiNhanQuyetDinh(setId: number) {
         case "chua_ghi_da_chan":
           maRef.current = null
           setTrangThai({ kieu: "chua_ghi_da_chan" })
+          // Máy chủ vừa đổi tình trạng của bộ (từ `chua_xac_dinh` sang `chua_ghi_nhan`): làm mới CHÍNH bộ này, nếu không dòng
+          // "Tình trạng" đầu trang còn nguyên bản đã tải lúc lượt chưa rõ (Đ2-2). CHỈ truy vấn bộ — KHÔNG dùng `lamMoiSauGhi`
+          // (nó làm mới cả danh sách lượt): lượt không còn `cho_gui` thì trang tự rời bước 6 (bước mặc định rơi về bước 4 khi
+          // không còn lượt chờ) và khung "đã chặn" + nút "Nhập lại" biến mất trước khi người dùng đọc.
+          void qc.invalidateQueries({ queryKey: councilDocumentKeys.set(setId) })
           break
         case "dang_xu_ly":
-          setTrangThai({ kieu: "chua_xac_dinh", ma, luc, lyDo: "dang_xu_ly" })
+          setTrangThai((cu) => ({ kieu: "chua_xac_dinh", ma, luc: gioCuaLuot(cu), lyDo: "dang_xu_ly" }))
           break
         default:
-          setTrangThai({ kieu: "chua_xac_dinh", ma, luc, lyDo: "van_chua_ro" })
+          setTrangThai((cu) => ({ kieu: "chua_xac_dinh", ma, luc: gioCuaLuot(cu), lyDo: "van_chua_ro" }))
       }
     } catch (loi) {
       // mất mạng / hết giờ / 404 / 5xx / phản hồi không đọc được: KHÔNG kết luận gì. Đóng băng tuyển sinh (503 ADMISSION_FROZEN)
       // chặn CẢ việc phân xử: máy chủ vẫn trả lời nên không phải "mất mạng" — nói riêng để người dùng biết đợi hết đóng băng.
-      setTrangThai({ kieu: "chua_xac_dinh", ma, luc, lyDo: readApiError(loi).frozen ? "dong_bang" : "phan_xu_loi" })
+      const lyDo: LyDoChuaRo = readApiError(loi).frozen ? "dong_bang" : "phan_xu_loi"
+      setTrangThai((cu) => ({ kieu: "chua_xac_dinh", ma, luc: gioCuaLuot(cu), lyDo }))
     } finally {
       dangChay.current = false
     }
-  }, [lamMoiSauGhi])
+  }, [lamMoiSauGhi, qc, setId])
 
   /** Tải lại trang: thấy lượt `cho_gui` ⇒ vào thẳng "Chưa xác định" (chỉ khi đang ở `nhap`). */
   const khoiPhuc = useCallback((ds: readonly CouncilSubmission[]) => {

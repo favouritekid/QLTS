@@ -30,9 +30,8 @@ interface Props {
   onOpenChange: (open: boolean) => void
   decisionId: number
   loai: string
+  /** SỐ QUYẾT ĐỊNH của văn bản (máy chủ trả) — người dùng gõ lại để xác nhận; máy chủ so bằng nguyên chuỗi với `so_quyet_dinh` */
   soQuyetDinh: string
-  /** số hồ sơ của văn bản (máy chủ trả) — người dùng gõ lại để xác nhận */
-  soHoSo: number
   /** sau khi văn bản đã ở trạng thái huỷ ghi nhận (huỷ thành công, hoặc đọc lại thấy đã huỷ) */
   onXong: () => void
 }
@@ -40,11 +39,12 @@ interface Props {
 type DocLai = "khong" | "dang_doc" | "con_hieu_luc" | "loi"
 
 /**
- * Huỷ ghi nhận (nhập SAI) — lý do bắt buộc, gõ lại số hồ sơ, xác nhận trạng thái theo `CouncilDecisionCancelIn` (đặc tả
- * 5.6). Mất mạng / 5xx: KHÔNG cho bấm lại ngay — đọc lại `GET /decisions/{id}` trước (huỷ ghi nhận luỹ đẳng theo
+ * Huỷ ghi nhận (nhập SAI) — lý do bắt buộc, gõ lại SỐ QUYẾT ĐỊNH của văn bản (`so_go_lai`; đính chính đặc tả 12-11: máy chủ
+ * `council_decision_service.huy_ghi_nhan` so với `so_quyet_dinh`, KHÔNG phải số hồ sơ), xác nhận trạng thái theo
+ * `CouncilDecisionCancelIn` (đặc tả 5.6). Mất mạng / 5xx: KHÔNG cho bấm lại ngay — đọc lại `GET /decisions/{id}` trước (huỷ ghi nhận luỹ đẳng theo
  * trạng thái văn bản): thấy đã huỷ ⇒ xong; thấy còn hiệu lực ⇒ mới cho bấm lại; không đọc được ⇒ vẫn khoá.
  */
-export function CouncilCancelDialog({ open, onOpenChange, decisionId, loai, soQuyetDinh, soHoSo, onXong }: Props) {
+export function CouncilCancelDialog({ open, onOpenChange, decisionId, loai, soQuyetDinh, onXong }: Props) {
   const huy = useCancelCouncilDecisionRecord()
   const [lyDo, setLyDo] = useState("")
   const [soGoLai, setSoGoLai] = useState("")
@@ -83,7 +83,9 @@ export function CouncilCancelDialog({ open, onOpenChange, decisionId, loai, soQu
         decisionId,
         payload: {
           ly_do: lyDo,
-          so_go_lai: soGoLai,
+          // Cắt khoảng trắng đầu/cuối (dán thừa dấu cách): máy chủ so NGUYÊN chuỗi (`StrictStr`, không tự cắt), còn số Quyết định
+          // lưu ở máy chủ luôn là 1–6 chữ số ASCII (`kiem_so_quyet_dinh`) nên không bao giờ có khoảng trắng đầu/cuối cần giữ.
+          so_go_lai: soGoLai.trim(),
           ...(canXn ? { xac_nhan: canXn.so_ho_so_theo_loai } : {}),
         },
       },
@@ -119,10 +121,10 @@ export function CouncilCancelDialog({ open, onOpenChange, decisionId, loai, soQu
             <Textarea id="huy-ly-do" data-testid="huy-ly-do" value={lyDo} disabled={huy.isPending} onChange={(e) => setLyDo(e.target.value)} />
           </div>
           <div className="space-y-1">
-            <Label htmlFor="huy-so-ho-so">Gõ lại số hồ sơ của văn bản ({soHoSo})</Label>
+            <Label htmlFor="huy-so-quyet-dinh">Gõ lại số Quyết định của văn bản ({soQuyetDinh})</Label>
             <Input
-              id="huy-so-ho-so"
-              data-testid="huy-so-ho-so"
+              id="huy-so-quyet-dinh"
+              data-testid="huy-so-quyet-dinh"
               className="max-w-[8rem]"
               inputMode="numeric"
               autoComplete="off"

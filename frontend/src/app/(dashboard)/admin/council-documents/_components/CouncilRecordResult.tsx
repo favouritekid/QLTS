@@ -138,7 +138,6 @@ export function CouncilRecordResult({ quyetDinh, setId, quyen, onDaHuy }: Props)
         decisionId={quyetDinh.id}
         loai={quyetDinh.loai}
         soQuyetDinh={quyetDinh.so_quyet_dinh}
-        soHoSo={quyetDinh.so_ho_so}
         onXong={onDaHuy}
       />
     </div>

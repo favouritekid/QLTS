@@ -397,7 +397,7 @@ export async function createCouncilDecision(
   return councilDecisionWriteSchema.parse(res.data)
 }
 
-/** Huỷ ghi nhận (nhập SAI): lý do + gõ lại số hồ sơ + xác nhận trạng thái theo `CouncilDecisionCancelIn`. */
+/** Huỷ ghi nhận (nhập SAI): lý do + gõ lại SỐ QUYẾT ĐỊNH (`so_go_lai`) + xác nhận trạng thái theo `CouncilDecisionCancelIn`. */
 export async function cancelCouncilDecisionRecord(
   decisionId: number,
   payload: CouncilDecisionCancel,
