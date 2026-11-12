@@ -16,15 +16,14 @@ import { COUNCIL_DOCUMENTS_PREFIX as P } from "@/lib/api/council-documents"
 import { navigationConfig } from "@/lib/config/navigation"
 import type { NavGroup } from "@/types/navigation"
 
+import { NO_COUNCIL_PERMISSIONS } from "./admin/useCouncilDocuments"
 import { useServerFlagNavigation } from "./useServerFlagNavigation"
 
 const API = "http://localhost:8000"
 const HREF = "/admin/council-documents"
 
-const TAT = {
-  xem_mau: false, tai_mau_len: false, xem_danh_sach_bo: false, tao_bo: false, xem_chi_tiet_bo: false,
-  tai_tep: false, xoa_bo: false, xem_ma_ho_so: false, xem_nhat_ky_tai: false, xem_nhat_ky_xoa: false,
-}
+/** Mọi cờ tắt — dựng từ chính hằng của module (đủ khoá như hợp đồng máy chủ; thiếu khoá ⇒ Zod nổ ⇒ menu ẩn). */
+const TAT = { ...NO_COUNCIL_PERMISSIONS }
 
 let hoi = 0
 function mocQuyen(tra: () => Response) {

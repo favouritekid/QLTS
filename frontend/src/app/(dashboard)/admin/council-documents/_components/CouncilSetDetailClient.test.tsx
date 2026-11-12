@@ -1,7 +1,8 @@
 /**
  * Văn bản Hội đồng — chi tiết bộ (lượt F): nút theo CỜ (tải tệp, xoá, xem mã, nhật
  * ký), hộp xác nhận xoá nêu số hồ sơ / số tệp + bắt buộc lý do, danh sách mã đầu
- * vào chỉ trong bộ nhớ (ẩn ⇒ gỡ khỏi cache), không console / storage / URL.
+ * vào chỉ trong bộ nhớ (ẩn ⇒ gỡ khỏi cache), không console / storage / URL. "Tải cả bộ" (máy chủ `083a428d`): cờ `tai_ca_bo`,
+ * bấm ⇒ ĐÚNG bộ đang xem, ĐÚNG MỘT lần, lưu `bo-<id>.zip`; lỗi ⇒ hộp `download-zip-error`, không lưu tệp.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
@@ -21,6 +22,12 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/admin/council-documents/7",
 }))
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
+const { downloadBlob } = vi.hoisted(() => ({ downloadBlob: vi.fn() }))
+// Chặn điều hướng thật của jsdom; đồng thời cho test thấy ĐÚNG Blob + tên tệp đưa cho trình duyệt.
+vi.mock("@/lib/utils/download-blob", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/utils/download-blob")>()),
+  downloadBlob,
+}))
 
 const API = "http://localhost:8000"
 const maGia = (n: number) => "099" + "999" + String(n).padStart(6, "0")
@@ -40,6 +47,8 @@ const BO = {
   unit_id: 2, trinh_do: "Cao đẳng", so_ho_so: 3, so_tep: 2, kich_thuoc_tong: 20, nam_hoc: 2026,
   tham_so_quyet_dinh: { so_quyet_dinh: "99", ngay_quyet_dinh: "2026-09-08" },
   thong_tin_dung: { luat: "v1.1" },
+  // `GET /sets/{id}` (máy chủ `083a428d`): cùng hình với danh sách — bốn trường LUÔN có khoá.
+  nguoi_tao_ten: "Trần Minh Khoa", tinh_trang: "chua_ghi_nhan", quyet_dinh: null, luot_gui_cho: null,
   tep: [
     { thu_tu: 1, path: "HoiDong/BienBanXetTuyen-CD.docx", sha256: "a".repeat(64), kich_thuoc: 10 },
     { thu_tu: 2, path: "HoiDong/QuyetDinhTrungTuyen-CD.docx", sha256: "b".repeat(64), kich_thuoc: 10 },
@@ -49,24 +58,38 @@ const BO = {
 let console_: ReturnType<typeof vi.spyOn>[] = []
 let xoaBody: unknown = null
 let urls: string[] = []
+let zipGoi: number[] = []
+let zipTra: (() => Response) | null = null
 
-function moc(co: CouncilDocumentPermissions) {
+function moc(co: CouncilDocumentPermissions, boGhiDe: Record<string, unknown> = {}) {
   server.use(
     http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: co })),
     http.get(`${API}${P}/sets/7`, ({ request }) => {
       urls.push(request.url)
-      return HttpResponse.json(BO)
+      return HttpResponse.json({ ...BO, ...boGhiDe })
     }),
     http.get(`${API}${P}/sets/7/ma-ho-so`, ({ request }) => {
       urls.push(request.url)
       return HttpResponse.json({ set_id: 7, so_ho_so: 3, ma_ho_so: MA })
     }),
     http.get(`${API}${P}/nhat-ky-tai`, () => HttpResponse.json([])),
+    // Đúng hợp đồng `083a428d`: application/zip + attachment; filename="bo-<id>.zip" + no-store.
+    http.get(`${API}${P}/sets/:id/tai-ca-bo`, ({ params }) => {
+      zipGoi.push(Number(params.id))
+      if (zipTra) return zipTra()
+      return new HttpResponse(new Uint8Array(ZIP_BYTE), {
+        headers: {
+          "content-type": "application/zip",
+          "content-disposition": `attachment; filename="bo-${String(params.id)}.zip"`,
+          "cache-control": "no-store",
+        },
+      })
+    }),
     http.delete(`${API}${P}/sets/7`, async ({ request }) => {
       xoaBody = await request.json()
       return HttpResponse.json({
         id: 3, set_id: 7, so_ho_so: 3, so_tep: 2, danh_sach_tep: [], nguoi_xoa_id: 1,
-        xoa_luc: "2026-11-05T02:00:00Z", ly_do: "GIA ly do",
+        xoa_luc: "2026-11-05T02:00:00Z", ly_do: "GIA ly do", nguoi_xoa_ten: null,
       })
     }),
   )
@@ -87,6 +110,9 @@ function ve() {
 beforeEach(() => {
   xoaBody = null
   urls = []
+  zipGoi = []
+  zipTra = null
+  downloadBlob.mockClear()
   push.mockReset()
   localStorage.clear()
   sessionStorage.clear()
@@ -129,6 +155,83 @@ describe("CouncilSetDetailClient — nút theo cờ", () => {
     ve()
     expect(await screen.findByTestId("council-forbidden")).toBeTruthy()
     expect(urls).toEqual([])
+  })
+})
+
+/**
+ * Byte của một zip giả (chữ ký "PK 03 04" dạng hex). Chỉ dùng byte hợp lệ UTF-8: bộ chặn XHR của MSW trong jsdom giải mã thân
+ * phản hồi như chữ (byte 0xFF thành U+FFFD) — hạn chế của MÔI TRƯỜNG TEST, không phải của mã; tính nguyên vẹn nhị phân không đo được ở đây.
+ */
+const ZIP_BYTE = [0x50, 0x4b, 0x03, 0x04]
+/** jsdom: `Blob` không có `.text()` / `.arrayBuffer()` — đọc byte bằng FileReader. */
+const docByte = (b: Blob) =>
+  new Promise<number[]>((xong, loi) => {
+    const r = new FileReader()
+    r.onload = () => xong(Array.from(new Uint8Array(r.result as ArrayBuffer)))
+    r.onerror = () => loi(r.error)
+    r.readAsArrayBuffer(b)
+  })
+
+describe("Tải cả bộ (cờ tai_ca_bo)", () => {
+  it("cờ tắt ⇒ không có nút", async () => {
+    moc({ ...QUAN_LY, tai_ca_bo: false })
+    ve()
+    expect(await screen.findByTestId("set-detail")).toBeTruthy()
+    expect(screen.queryByTestId("tai-ca-bo")).toBeNull()
+  })
+
+  it("cờ bật: bấm ⇒ gọi ĐÚNG bộ đang xem (7) MỘT lần; hàm lưu tệp nhận Blob có byte máy chủ + tên bo-7.zip", async () => {
+    moc({ ...QUAN_LY, tai_ca_bo: true })
+    ve()
+    const nut = await screen.findByTestId("tai-ca-bo")
+    expect(nut.textContent).toContain("2 tệp")
+    fireEvent.click(nut)
+    await waitFor(() => expect(downloadBlob).toHaveBeenCalledTimes(1))
+    expect(zipGoi).toEqual([7])
+    const [blob, ten] = downloadBlob.mock.calls[0] as [Blob, string]
+    expect(blob).toBeInstanceOf(Blob)
+    expect(await docByte(blob)).toEqual(ZIP_BYTE)
+    expect(ten).toBe("bo-7.zip")
+    expect(screen.queryByTestId("download-zip-error")).toBeNull()
+  })
+
+  it("máy chủ báo lỗi (tệp hỏng ⇒ 500) ⇒ hộp download-zip-error, KHÔNG lưu tệp nào, gọi đúng một lần", async () => {
+    moc({ ...QUAN_LY, tai_ca_bo: true })
+    zipTra = () => HttpResponse.json({ detail: "Tệp đã lưu hỏng" }, { status: 500 })
+    ve()
+    fireEvent.click(await screen.findByTestId("tai-ca-bo"))
+    expect((await screen.findByTestId("download-zip-error")).textContent).toContain("Lỗi hệ thống")
+    expect(downloadBlob).not.toHaveBeenCalled()
+    expect(zipGoi).toEqual([7])
+  })
+
+  it("Quản lý ngoài đơn vị ⇒ 404 ⇒ câu 'Không tìm thấy' trong download-zip-error, KHÔNG lưu tệp nào", async () => {
+    moc({ ...QUAN_LY, tai_ca_bo: true })
+    zipTra = () => HttpResponse.json({ detail: "Not Found" }, { status: 404 })
+    ve()
+    fireEvent.click(await screen.findByTestId("tai-ca-bo"))
+    expect((await screen.findByTestId("download-zip-error")).textContent).toContain("Không tìm thấy")
+    expect(downloadBlob).not.toHaveBeenCalled()
+  })
+})
+
+// P9 (phiên A, đột biến `bo.tinh_trang !== null` → `!== undefined` sống sót ở lần nghiệm thu f560ad7a): `tinh_trang` null (máy chủ không
+// tính được) ⇒ KHÔNG vẽ dòng "Tình trạng" — không bịa nhãn rỗng. Bộ có tình trạng thì dòng ấy PHẢI hiện (đối chứng, để ca trên không rỗng).
+// Khẳng định "vắng" an toàn vì `set-detail` và dòng này vẽ CÙNG một lượt render từ dữ liệu bộ đã tải.
+describe("dòng 'Tình trạng' theo tinh_trang của máy chủ", () => {
+  it("tinh_trang null ⇒ không có dòng Tình trạng", async () => {
+    moc(TAT_CA, { tinh_trang: null })
+    ve()
+    expect(await screen.findByTestId("set-detail")).toBeTruthy()
+    expect(screen.getByText(/Số hồ sơ:/)).toBeTruthy() // thông tin bộ đã vẽ xong (ThongTinBo cùng lượt render)
+    expect(screen.queryByTestId("tinh-trang")).toBeNull()
+  })
+
+  it("đối chứng: tinh_trang = con_hieu_luc ⇒ dòng Tình trạng hiện nhãn 'Còn hiệu lực'", async () => {
+    moc(TAT_CA, { tinh_trang: "con_hieu_luc" })
+    ve()
+    const dong = await screen.findByTestId("tinh-trang")
+    expect(dong.textContent).toContain("Còn hiệu lực")
   })
 })
 

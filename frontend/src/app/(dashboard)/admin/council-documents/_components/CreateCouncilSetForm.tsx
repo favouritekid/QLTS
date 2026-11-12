@@ -19,52 +19,14 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useCreateCouncilSet } from "@/hooks/admin/useCouncilDocuments"
 import { councilSetGateFromError } from "@/lib/api/council-documents"
-import type { CouncilSetGate, DecisionParams } from "@/lib/zod/council-documents"
+import { THAM_SO_TRONG, dongNhapThanhDanhSach, thamSoGui, type ThamSoNhap } from "@/lib/council-params"
+import type { CouncilSetGate } from "@/lib/zod/council-documents"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
 import { nhanTrangThai } from "./hien-thi"
 
-/**
- * Ô nhập danh sách mã ⇒ mảng gửi máy chủ, GIỮ thứ tự VÀ số dòng: dòng thứ i của
- * ô nhập là phần tử thứ i (máy chủ báo lỗi theo SỐ DÒNG, đếm từ 1). Chỉ bỏ các
- * dòng trống ở CUỐI (không làm lệch số dòng nào). Không tự sửa / lọc mã — máy
- * chủ kiểm định dạng, trùng, khớp hồ sơ.
- */
-export function dongNhapThanhDanhSach(van_ban: string): string[] {
-  const dong = van_ban.split(/\r?\n/)
-  while (dong.length > 0 && dong[dong.length - 1].trim() === "") dong.pop()
-  return dong
-}
-
-interface ThamSoNhap {
-  so_quyet_dinh: string
-  ngay_quyet_dinh: string
-  dot_so: string
-  dot_thang: string
-  so_bien_ban: string
-  ngay_bien_ban: string
-}
-
-const THAM_SO_TRONG: ThamSoNhap = {
-  so_quyet_dinh: "",
-  ngay_quyet_dinh: "",
-  dot_so: "",
-  dot_thang: "",
-  so_bien_ban: "",
-  ngay_bien_ban: "",
-}
-
-/** Chỉ gửi ô đã điền; không điền ô nào ⇒ không gửi tham số (chỗ ấy để trống trên văn bản). */
-function thamSoGui(t: ThamSoNhap): DecisionParams | null {
-  const out: DecisionParams = {}
-  if (t.so_quyet_dinh.trim()) out.so_quyet_dinh = t.so_quyet_dinh.trim()
-  if (t.ngay_quyet_dinh) out.ngay_quyet_dinh = t.ngay_quyet_dinh
-  if (t.dot_so.trim()) out.dot_so = t.dot_so.trim()
-  if (t.dot_thang.trim()) out.dot_thang = Number(t.dot_thang.trim())
-  if (t.so_bien_ban.trim()) out.so_bien_ban = t.so_bien_ban.trim()
-  if (t.ngay_bien_ban) out.ngay_bien_ban = t.ngay_bien_ban
-  return Object.keys(out).length ? out : null
-}
+// Một nguồn ở `@/lib/council-params` (bước 1 mới cũng dùng); re-export để nơi đang import từ tệp này không đổi.
+export { dongNhapThanhDanhSach }
 
 /**
  * Tạo bộ văn bản. Danh sách mã chỉ sống trong state của component này (bộ nhớ)

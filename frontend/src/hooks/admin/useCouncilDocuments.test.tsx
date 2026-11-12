@@ -19,6 +19,7 @@ import {
   useCouncilDocumentPermissions,
   useCouncilSetInputCodes,
   useCreateCouncilSet,
+  useCreateCouncilSetByIds,
 } from "./useCouncilDocuments"
 
 const API = "http://localhost:8000"
@@ -131,6 +132,7 @@ describe("dựng bộ — biến số mutation không nằm lại trong Mutation
             id: 11, nguoi_tao_id: 1, tao_luc: "2026-11-05T01:00:00Z", moc_chup: "2026-11-05T01:00:00Z",
             unit_id: null, trinh_do: "Cao đẳng", so_ho_so: 3, so_tep: 1, kich_thuoc_tong: 1, nam_hoc: 2026,
             tham_so_quyet_dinh: null, thong_tin_dung: {}, tep: [],
+            nguoi_tao_ten: null, tinh_trang: null, quyet_dinh: null, luot_gui_cho: null,
           },
           { status: 201 },
         ),
@@ -147,6 +149,47 @@ describe("dựng bộ — biến số mutation không nằm lại trong Mutation
     await waitFor(() => expect(qc.getMutationCache().getAll()).toHaveLength(0))
     for (const m of MA) expect(cacheThanhChuoi(qc).includes(m)).toBe(false)
     khongMaNgoaiBoNho()
+  })
+
+  // Máy chủ `083a428d`: phản hồi POST /sets có bốn trường (nguoi_tao_ten, tinh_trang, quyet_dinh, luot_gui_cho) = null (bộ vừa
+  // dựng). Bản POST được đặt vào cache chi tiết để trang mở ngay, nhưng PHẢI bị đánh dấu CŨ — nếu không trang chi tiết dừng ở
+  // "—" / "Tài khoản #n" tới hết staleTime thay vì đọc lại GET /sets/{id} (nguồn của tình trạng thật).
+  const BO_POST = {
+    id: 11, nguoi_tao_id: 1, tao_luc: "2026-11-05T01:00:00Z", moc_chup: "2026-11-05T01:00:00Z",
+    unit_id: null, trinh_do: "Cao đẳng", so_ho_so: 3, so_tep: 1, kich_thuoc_tong: 1, nam_hoc: 2026,
+    tham_so_quyet_dinh: null, thong_tin_dung: {}, tep: [],
+    nguoi_tao_ten: null, tinh_trang: null, quyet_dinh: null, luot_gui_cho: null,
+  }
+  const moPost = () =>
+    server.use(
+      http.post(`${API}${P}/sets`, () => HttpResponse.json(BO_POST, { status: 201 })),
+      http.get(`${API}${P}/sets`, () => HttpResponse.json([])),
+    )
+
+  it("dựng xong (dán mã): bản POST có bốn trường null nằm trong cache chi tiết nhưng bị đánh dấu CŨ", async () => {
+    moPost()
+    const qc = qcNhuApp()
+    const { result } = renderHook(() => useCreateCouncilSet(), { wrapper: boc(qc) })
+    act(() => {
+      result.current.mutate({ ma_ho_so: MA, academic_year: 2026 })
+    })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    const st = qc.getQueryState(councilDocumentKeys.set(11))
+    expect(st?.data).toMatchObject({ id: 11, tinh_trang: null, quyet_dinh: null })
+    expect(st?.isInvalidated).toBe(true)
+  })
+
+  it("dựng xong (theo id + dấu kiểm trước): cùng bất biến — cache chi tiết bị đánh dấu CŨ", async () => {
+    moPost()
+    const qc = qcNhuApp()
+    const { result } = renderHook(() => useCreateCouncilSetByIds(), { wrapper: boc(qc) })
+    act(() => {
+      result.current.mutate({ profile_ids: [1, 2, 3], phien_ban_kiem: "dau-kiem-1", academic_year: 2026 })
+    })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    const st = qc.getQueryState(councilDocumentKeys.set(11))
+    expect(st?.data).toMatchObject({ id: 11, tinh_trang: null, quyet_dinh: null })
+    expect(st?.isInvalidated).toBe(true)
   })
 
   it("lỗi 400 rồi unmount ⇒ không còn mã trong cache, không console", async () => {

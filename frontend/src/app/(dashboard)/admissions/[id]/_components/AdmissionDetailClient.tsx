@@ -62,6 +62,7 @@ import { derivePriorityIssues, firstAttentionStep, missingRequiredDataSteps } fr
 import { AdmissionActions } from "./AdmissionActions"
 import { StatusBanner } from "@/components/ui/StatusBanner"
 import { MajorChangeRecallBanner } from "./MajorChangeRecallBanner"
+import { CouncilDecisionCard } from "./CouncilDecisionCard"
 
 // Tabs
 import { PersonalInfoTab } from "./tabs/PersonalInfoTab"
@@ -595,6 +596,9 @@ export function AdmissionDetailClient({
           }
           candidateName={profile.lead?.full_name}
         />
+
+        {/* Vòng giao diện GĐ1 (đặc tả 5.8): "Quyết định trúng tuyển" — ⏳ máy chủ chưa trả ⇒ thẻ tự ẩn. */}
+        <CouncilDecisionCard value={profile.quyet_dinh_trung_tuyen} />
 
         {/* TAB CONTENT — no wrapper card: each tab renders its own Card(s), so an
             outer bg-card/shadow here was a redundant card-in-card that boxed the

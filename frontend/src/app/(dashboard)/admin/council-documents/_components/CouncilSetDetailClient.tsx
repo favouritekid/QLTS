@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { ArrowLeft, Download, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -27,17 +27,36 @@ import {
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import {
+  NO_COUNCIL_PERMISSIONS,
+  coTheDungTuDanhSach,
   useCouncilDocumentPermissions,
   useCouncilSet,
   useCouncilSetInputCodes,
+  useCouncilSetSubmissions,
   useDeleteCouncilSet,
   useDownloadCouncilSetFile,
+  useDownloadCouncilSetZip,
 } from "@/hooks/admin/useCouncilDocuments"
+import { useGhiNhanQuyetDinh } from "@/hooks/admin/useGhiNhanQuyetDinh"
+import { NHAN_CHUA_XAC_DINH, luotDangCho } from "@/lib/council-submission"
 import type { CouncilSetDetail } from "@/lib/zod/council-documents"
 
+import type { TenBuoc } from "./buoc"
+import { CouncilCompareStep } from "./CouncilCompareStep"
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
 import { CouncilDownloadLogPanel } from "./CouncilLogPanels"
-import { kichThuoc, ngay, nguoi, shaRutGon, thoiDiem } from "./hien-thi"
+import { CouncilRecordStep } from "./CouncilRecordStep"
+import { CouncilStepper } from "./CouncilStepper"
+import {
+  CHU_THICH_CHUA_GHI_NHAN,
+  kichThuoc,
+  ngay,
+  nguoiHienThi,
+  nhanLoaiQuyetDinh,
+  nhanTinhTrangBo,
+  shaRutGon,
+  thoiDiem,
+} from "./hien-thi"
 
 const NHAN_THAM_SO: Record<string, string> = {
   so_quyet_dinh: "Số Quyết định",
@@ -48,10 +67,35 @@ const NHAN_THAM_SO: Record<string, string> = {
   ngay_bien_ban: "Ngày Biên bản",
 }
 
-/** Chi tiết một bộ: metadata + tệp (tải bytes đã lưu) + phần CHỈ admin theo cờ. */
-export function CouncilSetDetailClient({ setId }: { setId: number }) {
+/** Tên bước ↔ số bước trên thanh sáu bước (bước 1–3 đã qua khi bộ đã dựng). */
+const SO_BUOC: Record<TenBuoc, number> = { tai: 4, "doi-chieu": 5, "ghi-nhan": 6 }
+const TEN_BUOC: Record<number, TenBuoc> = { 4: "tai", 5: "doi-chieu", 6: "ghi-nhan" }
+
+/**
+ * Chi tiết một bộ: bước 4 (tệp + tải) · 5 (đối chiếu bản ký) · 6 (ghi nhận) + phần CHỈ admin theo cờ.
+ * Bước nào mở được do CỜ máy chủ quyết. URL chỉ mang `setId` và `?buoc=` (kiểm theo danh sách đóng ở trang máy chủ);
+ * không có `?buoc=` mà bộ có lượt gửi chưa rõ ⇒ vào thẳng bước 6 ("Chưa xác định").
+ */
+export function CouncilSetDetailClient({
+  setId,
+  buocBanDau = null,
+}: {
+  setId: number
+  /** tên bước từ `?buoc=` (trang máy chủ đã kiểm theo danh sách đóng); `null` = mặc định */
+  buocBanDau?: TenBuoc | null
+}) {
+  const router = useRouter()
   const vm = useCouncilDocumentPermissions()
   const q = useCouncilSet(setId, vm.state === "ready" && vm.permissions.xem_chi_tiet_bo)
+  const quyenSan = vm.state === "ready" ? vm.permissions : NO_COUNCIL_PERMISSIONS
+  // Bộ điều khiển ghi nhận dùng CHUNG: mọi chỗ trên màn nói "Chưa xác định" khi lượt chưa rõ (đặc tả 5.6.1).
+  const gn = useGhiNhanQuyetDinh(setId)
+  const ds = useCouncilSetSubmissions(setId, vm.state === "ready" && quyenSan.xem_luot_gui)
+  const { khoiPhuc } = gn
+  useEffect(() => {
+    if (ds.data) khoiPhuc(ds.data)
+  }, [ds.data, khoiPhuc])
+  const [buocChon, setBuocChon] = useState<TenBuoc | null>(buocBanDau)
 
   const quayLai = (
     <Link href="/admin/council-documents" className="inline-flex items-center gap-1 text-sm hover:underline">
@@ -89,11 +133,75 @@ export function CouncilSetDetailClient({ setId }: { setId: number }) {
   }
   const bo = q.data
   const quyen = vm.permissions
+
+  const buocMo: Record<TenBuoc, boolean> = {
+    tai: true,
+    "doi-chieu": quyen.so_bo_voi_hien_tai,
+    "ghi-nhan": quyen.ghi_nhan_qd && quyen.mo_luot_gui,
+  }
+  const coLuotCho = ds.data !== undefined && luotDangCho(ds.data) !== undefined
+  const macDinh: TenBuoc = coLuotCho && buocMo["ghi-nhan"] ? "ghi-nhan" : "tai"
+  const buoc: TenBuoc = buocChon !== null && buocMo[buocChon] ? buocChon : macDinh
+  const chonBuoc = (b: TenBuoc) => {
+    setBuocChon(b)
+    router.replace(`/admin/council-documents/${setId}?buoc=${b}`, { scroll: false })
+  }
+  const chuaRo = gn.trangThai.kieu === "chua_xac_dinh" || gn.trangThai.kieu === "dang_phan_xu"
+  const choPhepChon = (Object.keys(buocMo) as TenBuoc[]).filter((b) => buocMo[b]).map((b) => SO_BUOC[b])
+
   return (
     <div className="space-y-6" data-testid="set-detail">
-      {quayLai}
-      <ThongTinBo bo={bo} />
-      <DanhSachTep bo={bo} canDownload={quyen.tai_tep} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {quayLai}
+        {coTheDungTuDanhSach(quyen) ? (
+          <Button asChild variant="outline" size="sm">
+            <Link href="/admin/council-documents/moi" data-testid="dung-bo-moi-tu-bo">
+              + Dựng bộ mới
+            </Link>
+          </Button>
+        ) : null}
+      </div>
+      <ThongTinBo bo={bo} chuaRo={chuaRo} />
+      <CouncilStepper
+        hienTai={SO_BUOC[buoc]}
+        choPhepChon={choPhepChon}
+        onChon={(so) => {
+          const b = TEN_BUOC[so]
+          if (b) chonBuoc(b)
+        }}
+      />
+      {buoc === "tai" ? (
+        <>
+          <DanhSachTep bo={bo} canDownload={quyen.tai_tep} canZip={quyen.tai_ca_bo} />
+          {buocMo["doi-chieu"] || buocMo["ghi-nhan"] ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 text-sm" data-testid="huong-tiep-sau-tai">
+              <span className="text-muted-foreground">In, trình ký. Khi giấy đã ký về:</span>
+              <Button type="button" onClick={() => chonBuoc(buocMo["doi-chieu"] ? "doi-chieu" : "ghi-nhan")} data-testid="tiep-sau-tai">
+                {buocMo["doi-chieu"] ? "Tiếp: Đối chiếu bản ký →" : "Tiếp: Ghi nhận →"}
+              </Button>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+      {buoc === "doi-chieu" ? (
+        <CouncilCompareStep
+          bo={bo}
+          onQuayLai={() => chonBuoc("tai")}
+          onTiep={buocMo["ghi-nhan"] ? () => chonBuoc("ghi-nhan") : null}
+        />
+      ) : null}
+      {buoc === "ghi-nhan" ? (
+        <CouncilRecordStep
+          bo={bo}
+          quyen={quyen}
+          gn={gn}
+          onQuayLai={() => chonBuoc(buocMo["doi-chieu"] ? "doi-chieu" : "tai")}
+          onDaHuy={() => {
+            void q.refetch()
+            void ds.refetch()
+          }}
+        />
+      ) : null}
       {quyen.xem_ma_ho_so ? <MaHoSoDauVao setId={bo.id} soHoSo={bo.so_ho_so} /> : null}
       {quyen.xem_nhat_ky_tai ? (
         <section className="space-y-2">
@@ -106,22 +214,42 @@ export function CouncilSetDetailClient({ setId }: { setId: number }) {
   )
 }
 
-function ThongTinBo({ bo }: { bo: CouncilSetDetail }) {
+function ThongTinBo({ bo, chuaRo }: { bo: CouncilSetDetail; chuaRo: boolean }) {
   const ts = bo.tham_so_quyet_dinh ?? {}
   const dongTs = Object.entries(ts).filter(([, v]) => v !== null && v !== undefined)
+  const qd = bo.quyet_dinh
+  // Khi lượt gửi chưa rõ (phía này đang chờ phân xử, hoặc máy chủ nói `chua_xac_dinh`): CHỈ "Chưa xác định".
+  const khongRo = chuaRo || bo.tinh_trang === "chua_xac_dinh"
   return (
     <section className="space-y-2">
       <h1 className="text-2xl font-bold font-display">Bộ văn bản #{bo.id}</h1>
       <dl className="grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
         <div><dt className="inline text-muted-foreground">Tạo lúc: </dt><dd className="inline">{thoiDiem(bo.tao_luc)}</dd></div>
         <div><dt className="inline text-muted-foreground">Mốc chụp dữ liệu: </dt><dd className="inline">{thoiDiem(bo.moc_chup)}</dd></div>
-        <div><dt className="inline text-muted-foreground">Người tạo: </dt><dd className="inline">{nguoi(bo.nguoi_tao_id)}</dd></div>
+        <div><dt className="inline text-muted-foreground">Người tạo: </dt><dd className="inline">{nguoiHienThi(bo.nguoi_tao_ten, bo.nguoi_tao_id)}</dd></div>
         <div><dt className="inline text-muted-foreground">Đơn vị: </dt><dd className="inline">{bo.unit_id === null ? "Nhiều / chưa gán (chỉ Admin thấy)" : `#${bo.unit_id}`}</dd></div>
         <div><dt className="inline text-muted-foreground">Năm học: </dt><dd className="inline">{bo.nam_hoc ?? "—"}</dd></div>
         <div><dt className="inline text-muted-foreground">Trình độ: </dt><dd className="inline">{bo.trinh_do}</dd></div>
         <div><dt className="inline text-muted-foreground">Số hồ sơ: </dt><dd className="inline">{bo.so_ho_so}</dd></div>
         <div><dt className="inline text-muted-foreground">Số tệp · dung lượng: </dt><dd className="inline">{bo.so_tep} · {kichThuoc(bo.kich_thuoc_tong)}</dd></div>
       </dl>
+      {khongRo || bo.tinh_trang !== null ? (
+        <div className="text-sm" data-testid="tinh-trang">
+          <span className="text-muted-foreground">Tình trạng: </span>
+          <span className="font-medium">{khongRo ? NHAN_CHUA_XAC_DINH : nhanTinhTrangBo(bo.tinh_trang ?? "")}</span>
+          {!khongRo && bo.tinh_trang === "chua_ghi_nhan" ? (
+            <span className="ml-2 text-xs text-muted-foreground" data-testid="chu-thich-chua-ghi-nhan">
+              “Chưa ghi nhận” = {CHU_THICH_CHUA_GHI_NHAN}.
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {qd ? (
+        <div className="text-sm" data-testid="qd-cua-bo">
+          <span className="text-muted-foreground">Quyết định đã ghi: </span>
+          {[nhanLoaiQuyetDinh(qd.loai), `số ${qd.so_quyet_dinh}`, `ngày ${ngay(qd.ngay_ky)}`, `${qd.so_ho_so} hồ sơ`].join(" · ")}
+        </div>
+      ) : null}
       <div className="text-sm">
         <span className="text-muted-foreground">Tham số Quyết định: </span>
         {dongTs.length === 0 ? (
@@ -144,12 +272,27 @@ function ThongTinBo({ bo }: { bo: CouncilSetDetail }) {
   )
 }
 
-function DanhSachTep({ bo, canDownload }: { bo: CouncilSetDetail; canDownload: boolean }) {
+function DanhSachTep({ bo, canDownload, canZip }: { bo: CouncilSetDetail; canDownload: boolean; canZip: boolean }) {
   const tai = useDownloadCouncilSetFile()
+  const taiZip = useDownloadCouncilSetZip()
   const [dangTai, setDangTai] = useState<number | null>(null)
   return (
     <section className="space-y-2">
-      <h2 className="text-lg font-semibold">Tệp của bộ ({bo.tep.length})</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold">Tệp của bộ ({bo.tep.length})</h2>
+        {canZip ? (
+          <Button
+            type="button"
+            size="sm"
+            disabled={taiZip.isPending}
+            data-testid="tai-ca-bo"
+            onClick={() => taiZip.mutate({ setId: bo.id })}
+          >
+            {taiZip.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Download className="mr-1 h-4 w-4" />}
+            Tải cả bộ (.zip · {bo.so_tep} tệp · khoảng {Math.max(1, Math.round(bo.kich_thuoc_tong / 1024))} KB)
+          </Button>
+        ) : null}
+      </div>
       <Table data-testid="set-files">
         <TableHeader>
           <TableRow>
@@ -192,6 +335,7 @@ function DanhSachTep({ bo, canDownload }: { bo: CouncilSetDetail; canDownload: b
         </TableBody>
       </Table>
       <CouncilErrorAlert error={tai.error} testId="download-file-error" />
+      <CouncilErrorAlert error={taiZip.error} testId="download-zip-error" />
     </section>
   )
 }

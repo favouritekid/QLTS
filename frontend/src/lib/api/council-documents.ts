@@ -16,9 +16,22 @@ import axios from "axios"
 import { api } from "@/lib/api/client"
 import { readApiError } from "@/lib/error-handler"
 import {
+  councilBlockedRowsSchema,
+  councilCodesInSchema,
+  councilCodesOutSchema,
+  councilCompareSchema,
+  councilConfirmNeededSchema,
+  councilDecisionCancelSchema,
+  councilDecisionDetailSchema,
+  councilDecisionListSchema,
+  councilDecisionWriteSchema,
   councilDocumentPermissionsOutSchema,
   councilDownloadLogListSchema,
+  councilProfileSearchInSchema,
+  councilProfileSearchOutSchema,
+  councilSetCreateByIdsSchema,
   councilSetCreateSchema,
+  councilSetCreatorListSchema,
   councilSetDeleteSchema,
   councilSetDeletionListSchema,
   councilSetDeletionSchema,
@@ -26,16 +39,39 @@ import {
   councilSetGateSchema,
   councilSetInputCodesSchema,
   councilSetListSchema,
+  councilSetPreviewInSchema,
+  councilSetPreviewSchema,
+  councilSubmissionListSchema,
+  councilSubmissionOpenSchema,
+  councilSubmissionResolveSchema,
   councilTemplateListSchema,
   councilTemplateSchema,
+  type CouncilBlockedRows,
+  type CouncilCodesIn,
+  type CouncilCodesOut,
+  type CouncilCompare,
+  type CouncilConfirmNeeded,
+  type CouncilDecisionCancel,
+  type CouncilDecision,
+  type CouncilDecisionDetail,
+  type CouncilDecisionWrite,
   type CouncilDocumentPermissions,
   type CouncilDownloadLog,
+  type CouncilProfileSearchIn,
+  type CouncilProfileSearchOut,
   type CouncilSet,
   type CouncilSetCreate,
+  type CouncilSetCreateByIds,
+  type CouncilSetCreator,
   type CouncilSetDeletion,
   type CouncilSetDetail,
   type CouncilSetGate,
   type CouncilSetInputCodes,
+  type CouncilSetPreview,
+  type CouncilSetPreviewIn,
+  type CouncilSubmission,
+  type CouncilSubmissionOpen,
+  type CouncilSubmissionResolve,
   type CouncilTemplate,
   type CouncilTemplateKind,
 } from "@/lib/zod/council-documents"
@@ -81,15 +117,30 @@ export async function uploadCouncilTemplate(
 export interface CouncilSetListParams {
   limit: number
   offset: number
+  // Đợt 2 (máy chủ `083a428d`, đặc tả 3.4) — bộ lọc LỌC Ở MÁY CHỦ, chỉ gửi khi người dùng đặt; sai dạng ⇒ 422:
+  // `so_quyet_dinh` ^[0-9]{1,6}$ · `nam_hoc` 2000–2100 · `tinh_trang` 1 trong 5 mã · `nguoi_tao_id` ≥ 1. Không phải dữ liệu cá nhân.
+  so_quyet_dinh?: string
+  nam_hoc?: number
+  tinh_trang?: string
+  nguoi_tao_id?: number
 }
 
 export async function listCouncilSets(
   params: CouncilSetListParams,
 ): Promise<CouncilSet[]> {
-  const res = await api.get(`${P}/sets`, {
-    params: { limit: params.limit, offset: params.offset },
-  })
+  const q: Record<string, string | number> = { limit: params.limit, offset: params.offset }
+  if (params.so_quyet_dinh) q.so_quyet_dinh = params.so_quyet_dinh
+  if (params.nam_hoc !== undefined) q.nam_hoc = params.nam_hoc
+  if (params.tinh_trang) q.tinh_trang = params.tinh_trang
+  if (params.nguoi_tao_id !== undefined) q.nguoi_tao_id = params.nguoi_tao_id
+  const res = await api.get(`${P}/sets`, { params: q })
   return councilSetListSchema.parse(res.data)
+}
+
+/** Người tạo phân biệt của các bộ trong phạm vi người gọi (bộ lọc "Người tạo"); sắp theo tên ở máy chủ. Cờ `xem_nguoi_tao_bo`. */
+export async function listCouncilSetCreators(): Promise<CouncilSetCreator[]> {
+  const res = await api.get(`${P}/nguoi-tao-bo`)
+  return councilSetCreatorListSchema.parse(res.data)
 }
 
 export async function getCouncilSet(setId: number): Promise<CouncilSetDetail> {
@@ -165,15 +216,18 @@ export async function downloadCouncilSetFile(
   setId: number,
   thuTu: number,
 ): Promise<CouncilFileBlob> {
+  return taiBlob(`${P}/sets/${setId}/files/${thuTu}`, `bo-${setId}-tep-${thuTu}`)
+}
+
+/** Tải một đường dẫn trả byte (tệp lẻ / zip cả bộ). Lỗi: thân lỗi (Blob) đọc lại thành JSON để hiện đúng câu máy chủ. */
+async function taiBlob(url: string, tenDuPhong: string): Promise<CouncilFileBlob> {
   try {
-    const res = await api.get<Blob>(`${P}/sets/${setId}/files/${thuTu}`, {
-      responseType: "blob",
-    })
+    const res = await api.get<Blob>(url, { responseType: "blob" })
     return {
       blob: res.data,
       filename: filenameFromContentDisposition(
         res.headers["content-disposition"] as string | undefined,
-        `bo-${setId}-tep-${thuTu}`,
+        tenDuPhong,
       ),
     }
   } catch (e) {
@@ -186,6 +240,15 @@ export async function downloadCouncilSetFile(
     }
     throw e
   }
+}
+
+/**
+ * Tải CẢ BỘ (.zip) — `GET /sets/{id}/tai-ca-bo` (máy chủ `083a428d`, đặc tả 3.6). Máy chủ kiểm sha từng tệp, nén, ghi MỘT
+ * dòng nhật ký tải cho MỖI tệp, commit rồi mới trả byte (`application/zip`, `attachment; filename="bo-<id>.zip"`,
+ * `Cache-Control: no-store`); tệp hỏng ⇒ 500, không zip, không nhật ký; Quản lý ngoài đơn vị ⇒ 404. Giao diện chỉ nhận và lưu.
+ */
+export async function downloadCouncilSetZip(setId: number): Promise<CouncilFileBlob> {
+  return taiBlob(`${P}/sets/${setId}/tai-ca-bo`, `bo-${setId}.zip`)
 }
 
 // ── nhật ký (CHỈ admin) ──────────────────────────────────────────────────────
@@ -214,7 +277,187 @@ export async function listCouncilSetDeletions(
   return councilSetDeletionListSchema.parse(res.data)
 }
 
+// ── vòng giao diện: chọn hồ sơ → kiểm trước → dựng (đặc tả 3.1 / 3.2 / 3.3 / 3.11) ─────────────────────────────────
+// Máy chủ có các route này từ `5feb425d` (DTO đã đối chiếu từng trường với `schemas/council_document.py`); test vẫn dùng
+// MSW. Cả ba POST chỉ đọc (kiểm trước, tìm hồ sơ, đổi mã) bị cần gạt đóng băng chặn (503) như mọi lần ghi.
+// ⚠️ Thân yêu cầu / phản hồi có `ho_ten`, `cccd`: chỉ ở bộ nhớ, không `console.*`, không URL.
+
+/** Kiểm trước + thứ tự (đặc tả 3.1): cùng cổng và cùng đường đọc với bộ dựng; KHÔNG ghi gì. */
+export async function previewCouncilSet(input: CouncilSetPreviewIn): Promise<CouncilSetPreview> {
+  const body = councilSetPreviewInSchema.parse(input)
+  const res = await api.post(`${P}/sets/kiem-truoc`, body)
+  return councilSetPreviewSchema.parse(res.data)
+}
+
+/** Dán danh sách mã ⇒ id hồ sơ (đặc tả 3.2). Danh sách mã CHỈ ở thân JSON. */
+export async function resolveCouncilCodes(input: CouncilCodesIn): Promise<CouncilCodesOut> {
+  const body = councilCodesInSchema.parse(input)
+  const res = await api.post(`${P}/sets/doi-ma`, body)
+  return councilCodesOutSchema.parse(res.data)
+}
+
+/** Tìm hồ sơ cho trang chọn (đặc tả 3.11): POST, thân JSON — từ khoá (tên / CCCD) không bao giờ vào URL. */
+export async function searchCouncilProfiles(
+  input: CouncilProfileSearchIn,
+): Promise<CouncilProfileSearchOut> {
+  const body = councilProfileSearchInSchema.parse(input)
+  const res = await api.post(`${P}/sets/tim-ho-so`, body)
+  return councilProfileSearchOutSchema.parse(res.data)
+}
+
+/** Dựng bộ theo id + dấu kiểm trước (đặc tả 3.3). 409 `du_lieu_doi_tu_luc_kiem` ⇒ giao diện đưa về bước kiểm tra. */
+export async function createCouncilSetByIds(
+  payload: CouncilSetCreateByIds,
+): Promise<CouncilSetDetail> {
+  const body = councilSetCreateByIdsSchema.parse(payload)
+  const res = await api.post(`${P}/sets`, body)
+  return councilSetDetailSchema.parse(res.data)
+}
+
+/** Đối chiếu ảnh chụp của bộ với dữ liệu hiện tại: số dòng + TÊN trường đổi (không giá trị). Chỉ admin. */
+export async function compareCouncilSet(setId: number): Promise<CouncilCompare> {
+  const res = await api.get(`${P}/sets/${setId}/so-voi-hien-tai`)
+  return councilCompareSchema.parse(res.data)
+}
+
+// ── Quyết định đã ký + lượt gửi ghi nhận (máy chủ có từ `dd6c725d`) ───────────────────────────────────────────────
+export interface CouncilDecisionListParams {
+  limit: number
+  offset: number
+  set_id?: number
+  // Đợt 2 (máy chủ `083a428d`): lọc ở MÁY CHỦ — `loai` ∈ trung_tuyen|bo_sung|dieu_chinh|van_ban_huy, `trang_thai` ∈
+  // hieu_luc|het_hieu_luc|huy_ghi_nhan; giá trị lạ ⇒ 422. Giao diện KHÔNG lọc lại phía mình.
+  loai?: string
+  trang_thai?: string
+}
+
+export async function listCouncilDecisions(
+  params: CouncilDecisionListParams,
+): Promise<CouncilDecision[]> {
+  const q: Record<string, string | number> = { limit: params.limit, offset: params.offset }
+  if (params.set_id !== undefined) q.set_id = params.set_id
+  if (params.loai) q.loai = params.loai
+  if (params.trang_thai) q.trang_thai = params.trang_thai
+  const res = await api.get(`${P}/decisions`, { params: q })
+  return councilDecisionListSchema.parse(res.data)
+}
+
+export async function getCouncilDecision(decisionId: number): Promise<CouncilDecisionDetail> {
+  const res = await api.get(`${P}/decisions/${decisionId}`)
+  return councilDecisionDetailSchema.parse(res.data)
+}
+
+export interface CreateCouncilDecisionInput {
+  set_id: number
+  /** mã lượt do máy chủ cấp (`openCouncilSubmission`) — BẮT BUỘC; KHÔNG lưu ở trình duyệt */
+  ma_luot_gui: string
+  loai: "trung_tuyen" | "bo_sung"
+  goc_id?: number
+  so_quyet_dinh: string
+  /** YYYY-MM-DD */
+  ngay_ky: string
+  so_bien_ban?: string
+  ngay_bien_ban?: string
+  dot_so?: string
+  dot_thang?: number
+  xac_nhan_so_ho_so: number
+  xac_nhan_khop_ban_in: boolean
+  xac_nhan_trang_thai?: Record<string, number>
+  ghi_chu_mau?: string
+  scan: File
+}
+
+/**
+ * Ghi nhận MỘT Quyết định đã ký (multipart). Trả văn bản + số đếm; `lap_lai: true` khi gửi lặp đúng nội dung
+ * (văn bản cũ, không ghi lần hai). Mất mạng / 5xx / hết giờ: KHÔNG kết luận "chưa ghi" — xem
+ * `phanLoaiLoiGui` (`council-submission.ts`) và nút phân xử.
+ */
+export async function createCouncilDecision(
+  input: CreateCouncilDecisionInput,
+): Promise<CouncilDecisionWrite> {
+  const fd = new FormData()
+  fd.append("set_id", String(input.set_id))
+  fd.append("ma_luot_gui", input.ma_luot_gui)
+  fd.append("loai", input.loai)
+  if (input.goc_id !== undefined) fd.append("goc_id", String(input.goc_id))
+  fd.append("so_quyet_dinh", input.so_quyet_dinh)
+  fd.append("ngay_ky", input.ngay_ky)
+  if (input.so_bien_ban) fd.append("so_bien_ban", input.so_bien_ban)
+  if (input.ngay_bien_ban) fd.append("ngay_bien_ban", input.ngay_bien_ban)
+  if (input.dot_so) fd.append("dot_so", input.dot_so)
+  if (input.dot_thang !== undefined) fd.append("dot_thang", String(input.dot_thang))
+  fd.append("xac_nhan_so_ho_so", String(input.xac_nhan_so_ho_so))
+  fd.append("xac_nhan_khop_ban_in", input.xac_nhan_khop_ban_in ? "true" : "false")
+  if (input.xac_nhan_trang_thai && Object.keys(input.xac_nhan_trang_thai).length > 0) {
+    fd.append("xac_nhan_trang_thai", JSON.stringify(input.xac_nhan_trang_thai))
+  }
+  if (input.ghi_chu_mau) fd.append("ghi_chu_mau", input.ghi_chu_mau)
+  fd.append("scan", input.scan)
+  const res = await api.post(`${P}/decisions`, fd)
+  return councilDecisionWriteSchema.parse(res.data)
+}
+
+/** Huỷ ghi nhận (nhập SAI): lý do + gõ lại số hồ sơ + xác nhận trạng thái theo `CouncilDecisionCancelIn`. */
+export async function cancelCouncilDecisionRecord(
+  decisionId: number,
+  payload: CouncilDecisionCancel,
+): Promise<CouncilDecisionWrite> {
+  const body = councilDecisionCancelSchema.parse(payload)
+  const res = await api.post(`${P}/decisions/${decisionId}/huy-ghi-nhan`, body)
+  return councilDecisionWriteSchema.parse(res.data)
+}
+
+/** `xac_nhan_can` của `409` ghi nhận / huỷ ghi nhận (cần xác nhận số hồ sơ theo loại). Sai dạng / vắng ⇒ undefined. */
+export function councilConfirmNeededFromError(error: unknown): CouncilConfirmNeeded | undefined {
+  const r = councilConfirmNeededSchema.safeParse(readApiError(error).data?.xac_nhan_can)
+  return r.success && Object.keys(r.data.so_ho_so_theo_loai).length > 0 ? r.data : undefined
+}
+
+/** `dong_bi_chan` của `409` ghi nhận. Sai dạng / vắng ⇒ undefined. */
+export function councilBlockedRowsFromError(error: unknown): CouncilBlockedRows | undefined {
+  const r = councilBlockedRowsSchema.safeParse(readApiError(error).data?.dong_bi_chan)
+  return r.success && r.data.length > 0 ? r.data : undefined
+}
+
+/** Mã lượt gửi: uuid do máy chủ cấp (không phải dữ liệu cá nhân ⇒ được nằm trong URL). Chặn chuỗi lạ trước khi ghép URL. */
+const MA_LUOT_RE = /^[0-9a-fA-F-]{36}$/
+
+/** Mở MỘT lượt gửi ghi nhận cho bộ — gọi NGAY trước khi gửi, không gọi khi vào bước 6 (tránh lượt treo). */
+export async function openCouncilSubmission(setId: number): Promise<CouncilSubmissionOpen> {
+  const res = await api.post(`${P}/sets/${setId}/luot-ghi-nhan`)
+  return councilSubmissionOpenSchema.parse(res.data)
+}
+
+/** Các lượt của bộ — khôi phục sau tải lại trang. Mã lượt KHÔNG được lưu ở trình duyệt. */
+export async function listCouncilSubmissions(setId: number): Promise<CouncilSubmission[]> {
+  const res = await api.get(`${P}/sets/${setId}/luot-ghi-nhan`)
+  return councilSubmissionListSchema.parse(res.data)
+}
+
+/** Phân xử lượt chưa rõ. Chỉ kết luận theo `ket_qua` của phản hồi 2xx; lỗi ⇒ vẫn "chưa xác định". */
+export async function resolveCouncilSubmission(ma: string): Promise<CouncilSubmissionResolve> {
+  if (!MA_LUOT_RE.test(ma)) throw new Error("Mã lượt gửi không hợp lệ.")
+  const res = await api.post(`${P}/luot-ghi-nhan/${ma}/chan`)
+  return councilSubmissionResolveSchema.parse(res.data)
+}
+
 // ── thông báo lỗi ────────────────────────────────────────────────────────────
+/** Mã lỗi riêng của máy chủ (`ma_loi` ở cấp cao nhất của thân lỗi, cùng `ma`, `tao_luc`) — giao diện rẽ nhánh theo ĐÂY. */
+export interface CouncilApiErrorCode {
+  maLoi?: string
+  /** `ma` lượt gửi kèm lỗi (409 `luot_dang_cho`; có thể `null`) */
+  ma?: string | null
+  taoLuc?: string
+}
+
+export function councilErrorCode(error: unknown): CouncilApiErrorCode {
+  const d = readApiError(error).data
+  if (!d) return {}
+  const chuoi = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : undefined)
+  const ma = d.ma === null ? null : chuoi(d.ma)
+  return { maLoi: chuoi(d.ma_loi), ma, taoLuc: chuoi(d.tao_luc) }
+}
+
 export interface CouncilErrorMessage {
   /** câu chính, hiện cho người dùng */
   title: string
@@ -223,6 +466,8 @@ export interface CouncilErrorMessage {
   status?: number
   /** cổng dựng bộ (lượt G): danh sách bị chặn / cần xác nhận theo SỐ DÒNG — chỉ ở 400 / 409 */
   gate?: CouncilSetGate
+  /** mã lỗi riêng của máy chủ (`ma_loi`: `du_lieu_doi_tu_luc_kiem`, `luot_dang_cho`, …) — chỉ ở 409; giao diện rẽ nhánh theo đây */
+  maLoi?: string
 }
 
 /** `kiem_tra_dung_bo` của thân lỗi 400 / 409 (máy chủ: chỉ số dòng, mã lý do, trạng thái, số
@@ -274,6 +519,7 @@ export function describeCouncilDocumentError(error: unknown): CouncilErrorMessag
         title: "Không thực hiện được lúc này.",
         detail: e.detail,
         gate: docGate(e.data),
+        maLoi: councilErrorCode(error).maLoi,
       }
     case 422: {
       const dong = e.validation.map((x) => {
@@ -292,7 +538,9 @@ export function describeCouncilDocumentError(error: unknown): CouncilErrorMessag
       if (e.frozen) {
         return {
           status,
-          title: "Tuyển sinh đang tạm đóng băng — thao tác ghi bị chặn. Xem / tải vẫn được.",
+          // Ba route chỉ đọc của luồng dựng bộ (kiểm trước, tìm hồ sơ, đổi mã) cũng bị cần gạt chặn (máy chủ `5feb425d`).
+          title:
+            "Tuyển sinh đang tạm đóng băng — thao tác ghi bị chặn, cả chọn / kiểm trước hồ sơ để dựng bộ. Xem / tải vẫn được.",
         }
       }
       return { status, title: "Hệ thống tạm thời không phục vụ — thử lại sau." }

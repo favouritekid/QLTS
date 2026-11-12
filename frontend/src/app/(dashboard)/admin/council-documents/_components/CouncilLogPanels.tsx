@@ -18,7 +18,7 @@ import {
 } from "@/hooks/admin/useCouncilDocuments"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
-import { kichThuoc, nguoi, shaRutGon, thoiDiem } from "./hien-thi"
+import { kichThuoc, nguoiHienThi, shaRutGon, thoiDiem } from "./hien-thi"
 
 const CO_TRANG = 100
 
@@ -99,7 +99,7 @@ export function CouncilDownloadLogPanel({ setId }: { setId?: number }) {
             {q.data.map((d) => (
               <TableRow key={d.id} data-testid={`download-log-row-${d.id}`}>
                 <TableCell>{thoiDiem(d.tai_luc)}</TableCell>
-                <TableCell>{nguoi(d.nguoi_tai_id)}</TableCell>
+                <TableCell>{nguoiHienThi(d.nguoi_tai_ten, d.nguoi_tai_id)}</TableCell>
                 <TableCell>#{d.set_id}</TableCell>
                 <TableCell className="break-all">
                   {d.thu_tu}. {d.path}
@@ -157,7 +157,7 @@ export function CouncilDeletionLogPanel() {
             {q.data.map((v) => (
               <TableRow key={v.id} data-testid={`deletion-row-${v.id}`}>
                 <TableCell>{thoiDiem(v.xoa_luc)}</TableCell>
-                <TableCell>{nguoi(v.nguoi_xoa_id)}</TableCell>
+                <TableCell>{nguoiHienThi(v.nguoi_xoa_ten, v.nguoi_xoa_id)}</TableCell>
                 <TableCell>#{v.set_id}</TableCell>
                 <TableCell className="text-right">{v.so_ho_so}</TableCell>
                 <TableCell>
