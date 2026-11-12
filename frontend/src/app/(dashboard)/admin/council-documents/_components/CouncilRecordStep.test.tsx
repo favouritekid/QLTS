@@ -14,7 +14,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import { server } from "@/test/mocks/server"
 import { COUNCIL_DOCUMENTS_PREFIX as P } from "@/lib/api/council-documents"
-import { NO_COUNCIL_PERMISSIONS } from "@/hooks/admin/useCouncilDocuments"
+import { NO_COUNCIL_PERMISSIONS, councilDocumentKeys } from "@/hooks/admin/useCouncilDocuments"
 import type { CouncilDocumentPermissions } from "@/lib/zod/council-documents"
 
 import { CouncilSetDetailClient } from "./CouncilSetDetailClient"
@@ -121,8 +121,10 @@ function dung(c: Cau = {}) {
   )
 }
 
+let qcHienTai: QueryClient
 function ve(buoc: "ghi-nhan" | null = "ghi-nhan") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } } })
+  qcHienTai = qc
   return render(
     <QueryClientProvider client={qc}>
       <CouncilSetDetailClient setId={7} buocBanDau={buoc} />
@@ -834,6 +836,39 @@ describe("đóng băng tuyển sinh — bước ghi nhận", () => {
     expect(screen.queryByTestId("tb-dong-bang")).toBeNull()
   })
 
+  // Codex lần 19, mục 7.6: hai đột biến (đóng băng ⇒ "không kết nối"; đóng băng ⇒ "đã chặn") từng đỏ ở CÙNG khẳng định đầu (`tb-dong-bang`
+  // vắng) nên các khẳng định PHỦ ĐỊNH sau nó chưa bao giờ được đánh giá. Hai ca ĐỘC LẬP dưới đây đợi phân xử XONG (nút kiểm bị khoá
+  // lúc đang kiểm rồi mở lại) rồi mới khẳng định — mỗi đột biến đỏ ở đúng ca của nó.
+  async function denDongBangXong() {
+    dung({ gui: () => HttpResponse.error(), chan: dongBang })
+    ve()
+    await dien()
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("chua-xac-dinh")
+    fireEvent.click(screen.getByTestId("kiem-tra-may-chu"))
+    expect((screen.getByTestId("kiem-tra-may-chu") as HTMLButtonElement).disabled).toBe(true) // đang kiểm
+    // phân xử XONG = nút kiểm mở lại HOẶC biến mất (khung chưa xác định bị thay) — điểm đồng bộ KHÔNG phụ thuộc kết cục, để mỗi ca dưới
+    // đây chỉ đỏ ở khẳng định riêng của nó (không treo ở đây khi một đột biến đổi kết cục)
+    await waitFor(() => {
+      const nut = screen.queryByTestId("kiem-tra-may-chu") as HTMLButtonElement | null
+      expect(nut === null || !nut.disabled).toBe(true)
+    })
+  }
+
+  it("phân xử bị đóng băng chặn ⇒ KHÔNG nói 'không kết nối' (đóng băng ≠ mất mạng), sau khi phân xử đã xong", async () => {
+    await denDongBangXong()
+    expect(screen.queryByTestId("tb-phan-xu-loi")).toBeNull()
+    expect(vanBan()).not.toMatch(/không kết nối/i)
+  })
+
+  it("phân xử bị đóng băng chặn ⇒ KHÔNG kết luận 'đã chặn': vẫn 'Chưa xác định', không có khung đã chặn / nút Nhập lại, biểu mẫu khoá", async () => {
+    await denDongBangXong()
+    expect(screen.queryByTestId("da-chan")).toBeNull()
+    expect(screen.queryByTestId("nhap-lai")).toBeNull()
+    expect(screen.getByTestId("chua-xac-dinh")).toBeTruthy()
+    expect((screen.getByTestId("bieu-mau-ghi-nhan") as HTMLFieldSetElement).disabled).toBe(true)
+  })
+
   it("mở lượt bị đóng băng chặn ⇒ nói rõ đóng băng + 'chưa gửi gì'; chưa gửi văn bản nào", async () => {
     dung({ mo: dongBang })
     ve()
@@ -858,5 +893,129 @@ describe("đóng băng tuyển sinh — bước ghi nhận", () => {
     await screen.findByTestId("ket-qua-ghi-nhan")
     expect(maGui()).toEqual([MA, MA])
     expect(soLanMo).toBe(1)
+  })
+})
+
+// ── F281 (= Đ2-5; Codex lần 19+20): bước ĐANG XEM tách khỏi bước MẶC ĐỊNH ────────────────────────────────────────────────────
+// Vào KHÔNG có ?buoc= khi bộ có lượt chờ ⇒ trang tự vào bước 6. Trước đây bước mặc định suy lại từ danh sách lượt ở MỌI lần vẽ ⇒ sau
+// phân xử danh sách lượt được làm mới, lượt hết `cho_gui` ⇒ trang tự về bước 4, mất khung kết quả / cảnh báo / khung "đã chặn".
+// Các ca ở đây khoá BẤT BIẾN HIỂN THỊ: danh sách lượt ĐƯỢC làm mới (máy chủ giả trả lượt không còn `cho_gui`) mà khung bước 6 còn nguyên.
+describe("F281 — bước đang xem không bị dữ liệu kéo đi", () => {
+  const CANH_BAO = [{ loai: "nganh", chi_tieu: 40, academic_info_id: 5, da_dung_cong_bo: 41, da_dung_phe_duyet_cu: 45, nhan: "CĐ Kế toán" }]
+  const luotCho = { ma: MA, trang_thai: "cho_gui", tao_luc: "2026-11-11T02:00:00Z", ket_thuc_luc: null, decision_id: null }
+
+  /** Máy chủ giả CÓ TRẠNG THÁI: lượt `cho_gui` cho tới khi `chan` được gọi; sau đó danh sách lượt KHÔNG còn `cho_gui`. */
+  function mayChu(ketQua: "da_ghi" | "chua_ghi_da_chan") {
+    let daPhanXu = false
+    let soLanDocLuot = 0
+    const moi = qd({ canh_bao_vuot_chi_tieu: CANH_BAO })
+    const cau: Cau = {
+      decisions: [],
+      chan: () => {
+        daPhanXu = true
+        if (ketQua === "da_ghi") {
+          cau.decisions = [moi]
+          return HttpResponse.json({ ket_qua: "da_ghi", quyet_dinh: moi })
+        }
+        return HttpResponse.json({ ket_qua: "chua_ghi_da_chan" })
+      },
+      huy: () => {
+        cau.decisions = []
+        return HttpResponse.json(qd({ trang_thai: "huy_ghi_nhan" }))
+      },
+    }
+    dung(cau)
+    server.use(
+      http.get(`${API}${P}/sets/7`, () =>
+        HttpResponse.json({
+          ...BO,
+          quyet_dinh: quyetDinhCuaBo7(cau.decisions ?? []),
+          tinh_trang: daPhanXu ? (ketQua === "da_ghi" ? "con_hieu_luc" : "chua_ghi_nhan") : "chua_xac_dinh",
+          luot_gui_cho: daPhanXu ? null : { ma: MA, tao_luc: luotCho.tao_luc },
+        }),
+      ),
+      http.get(`${API}${P}/sets/7/luot-ghi-nhan`, () => {
+        soLanDocLuot++
+        const ketThuc = { ...luotCho, trang_thai: ketQua === "da_ghi" ? "da_ghi" : "da_chan", ket_thuc_luc: "2026-11-11T02:05:00Z", decision_id: ketQua === "da_ghi" ? 21 : null }
+        return HttpResponse.json([daPhanXu ? ketThuc : luotCho])
+      }),
+    )
+    return { soLanDocLuot: () => soLanDocLuot, daPhanXu: () => daPhanXu }
+  }
+
+  /** Vào KHÔNG ?buoc= (có lượt chờ ⇒ tự vào bước 6) → bấm kiểm → đợi danh sách lượt ĐƯỢC làm mới và tải xong. */
+  async function vaoPhanXuRoiDoiLamMoi(m: ReturnType<typeof mayChu>) {
+    ve(null)
+    await screen.findByTestId("chua-xac-dinh")
+    expect(screen.getByTestId("buoc-ghi-nhan")).toBeTruthy() // tự vào bước 6
+    const truoc = m.soLanDocLuot()
+    fireEvent.click(screen.getByTestId("kiem-tra-may-chu"))
+    await waitFor(() => expect(m.daPhanXu()).toBe(true))
+    await waitFor(() => expect(m.soLanDocLuot()).toBeGreaterThan(truoc)) // danh sách lượt ĐƯỢC làm mới (không né bằng cách cấm làm mới)
+    await waitFor(() => expect(qcHienTai.isFetching()).toBe(0)) // …và đã tải xong
+  }
+
+  it("phân xử 'đã ghi': danh sách lượt được làm mới (hết cho_gui) mà khung kết quả + cảnh báo vượt chỉ tiêu VẪN hiện, trang không về bước 4", async () => {
+    const m = mayChu("da_ghi")
+    await vaoPhanXuRoiDoiLamMoi(m)
+    expect(screen.getByTestId("buoc-ghi-nhan")).toBeTruthy()
+    expect(screen.getByTestId("ket-qua-ghi-nhan")).toBeTruthy()
+    expect(screen.getByTestId("canh-bao-chi-tieu").textContent).toContain("không chặn")
+    expect(screen.queryByTestId("set-files")).toBeNull() // không rơi về bước 4 (tải tệp)
+  })
+
+  it("phân xử 'đã chặn': danh sách lượt được làm mới mà khung 'đã chặn' + nút 'Nhập lại' VẪN hiện; dòng Tình trạng theo máy chủ", async () => {
+    const m = mayChu("chua_ghi_da_chan")
+    await vaoPhanXuRoiDoiLamMoi(m)
+    expect(screen.getByTestId("buoc-ghi-nhan")).toBeTruthy()
+    expect(screen.getByTestId("da-chan")).toBeTruthy()
+    expect(screen.getByTestId("nhap-lai")).toBeTruthy()
+    expect(screen.getByTestId("tinh-trang").textContent).toContain("Chưa ghi nhận") // Đ2-2: theo máy chủ, không kẹt "Chưa xác định"
+    expect(screen.queryByTestId("set-files")).toBeNull()
+  })
+
+  it("sau 'Nhập lại' (đã chặn): biểu mẫu mở ở bước 6 và một lần làm mới danh sách lượt nữa không kéo người dùng đi", async () => {
+    const m = mayChu("chua_ghi_da_chan")
+    await vaoPhanXuRoiDoiLamMoi(m)
+    fireEvent.click(screen.getByTestId("nhap-lai"))
+    expect(await screen.findByTestId("bieu-mau-ghi-nhan")).toBeTruthy()
+    await qcHienTai.invalidateQueries({ queryKey: councilDocumentKeys.submissions(7) }) // làm mới danh sách lượt thêm lần nữa
+    await waitFor(() => expect(qcHienTai.isFetching()).toBe(0))
+    expect(screen.getByTestId("buoc-ghi-nhan")).toBeTruthy()
+    expect(screen.getByTestId("bieu-mau-ghi-nhan")).toBeTruthy()
+    expect(screen.queryByTestId("set-files")).toBeNull()
+  })
+
+  it("'đã ghi' rồi Huỷ ghi nhận (vẫn không ?buoc=): làm mới sau huỷ không kéo người dùng về bước 4 — biểu mẫu ghi nhận mở lại ngay ở bước 6", async () => {
+    const m = mayChu("da_ghi")
+    await vaoPhanXuRoiDoiLamMoi(m)
+    fireEvent.click(await screen.findByTestId("huy-ghi-nhan-mo"))
+    const hop = await screen.findByTestId("huy-ghi-nhan-dialog")
+    fireEvent.change(within(hop).getByTestId("huy-ly-do"), { target: { value: "Nhập sai số" } })
+    fireEvent.change(within(hop).getByTestId("huy-so-quyet-dinh"), { target: { value: SO_QD } })
+    const truoc = m.soLanDocLuot()
+    fireEvent.click(within(hop).getByTestId("huy-xac-nhan-nut"))
+    expect(await screen.findByTestId("bieu-mau-ghi-nhan")).toBeTruthy()
+    await waitFor(() => expect(m.soLanDocLuot()).toBeGreaterThan(truoc)) // sau huỷ danh sách lượt được làm mới
+    await waitFor(() => expect(qcHienTai.isFetching()).toBe(0))
+    expect(screen.getByTestId("buoc-ghi-nhan")).toBeTruthy()
+    expect(screen.getByTestId("bieu-mau-ghi-nhan")).toBeTruthy()
+    expect(screen.queryByTestId("set-files")).toBeNull()
+  })
+
+  it("chiều ngược: vào KHÔNG ?buoc= khi CHƯA có lượt chờ ⇒ bước 4; lượt chờ xuất hiện SAU (vd phiên khác) KHÔNG kéo người dùng sang bước 6", async () => {
+    let coLuot = false
+    dung({})
+    server.use(http.get(`${API}${P}/sets/7/luot-ghi-nhan`, () => HttpResponse.json(coLuot ? [luotCho] : [])))
+    ve(null)
+    await screen.findByTestId("set-files") // bước 4
+    expect(screen.queryByTestId("buoc-ghi-nhan")).toBeNull()
+    coLuot = true
+    await qcHienTai.invalidateQueries({ queryKey: councilDocumentKeys.submissions(7) })
+    // dữ liệu mới ĐÃ tới (hook khôi phục: đầu trang nói chưa xác định)…
+    await waitFor(() => expect(screen.getByTestId("tinh-trang").textContent).toContain("Chưa xác định"))
+    // …nhưng người dùng vẫn ở bước 4
+    expect(screen.getByTestId("set-files")).toBeTruthy()
+    expect(screen.queryByTestId("buoc-ghi-nhan")).toBeNull()
   })
 })

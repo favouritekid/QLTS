@@ -10,7 +10,8 @@
  *     có đường "gửi lại" từ trạng thái này — chỉ có "Kiểm tra trên máy chủ" (phân xử).
  *   • Phân xử cũng có thể mất phản hồi, hoặc bị đóng băng tuyển sinh chặn (503) ⇒ vẫn "Chưa xác định" (gọi lại được: máy chủ
  *     luỹ đẳng) — không bao giờ suy "chưa ghi". Giờ của lượt (`luc`) GIỮ NGUYÊN qua các lần phân xử không kết luận (không bị
- *     thay bằng giờ bấm kiểm); phân xử ra "đã chặn" thì làm mới truy vấn của bộ để dòng "Tình trạng" theo máy chủ.
+ *     thay bằng giờ bấm kiểm); phân xử ra "đã chặn" thì làm mới bộ + danh sách lượt để dòng "Tình trạng" theo máy chủ (bước đang xem do trang giữ, không bị
+ *     kéo đi khi danh sách lượt đổi — F281).
  *   • Mã của lượt đã `da_ghi` chỉ bị bỏ SAU KHI máy chủ xác nhận huỷ ghi nhận (`batDauLuotMoiSauHuy`); lỗi nghiệp vụ khi gửi
  *     KHÔNG bỏ mã (lượt vẫn `cho_gui`) — F276.
  *   • Chống bấm đúp bằng cờ đồng bộ (không chờ React render).
@@ -177,11 +178,11 @@ export function useGhiNhanQuyetDinh(setId: number) {
         case "chua_ghi_da_chan":
           maRef.current = null
           setTrangThai({ kieu: "chua_ghi_da_chan" })
-          // Máy chủ vừa đổi tình trạng của bộ (từ `chua_xac_dinh` sang `chua_ghi_nhan`): làm mới CHÍNH bộ này, nếu không dòng
-          // "Tình trạng" đầu trang còn nguyên bản đã tải lúc lượt chưa rõ (Đ2-2). CHỈ truy vấn bộ — KHÔNG dùng `lamMoiSauGhi`
-          // (nó làm mới cả danh sách lượt): lượt không còn `cho_gui` thì trang tự rời bước 6 (bước mặc định rơi về bước 4 khi
-          // không còn lượt chờ) và khung "đã chặn" + nút "Nhập lại" biến mất trước khi người dùng đọc.
-          void qc.invalidateQueries({ queryKey: councilDocumentKeys.set(setId) })
+          // Máy chủ vừa đổi tình trạng của bộ (từ `chua_xac_dinh` sang `chua_ghi_nhan`) và đóng lượt (`da_chan`): làm mới bộ + danh
+          // sách lượt, nếu không dòng "Tình trạng" đầu trang còn nguyên bản đã tải lúc lượt chưa rõ (Đ2-2) và bản lưu của danh sách
+          // lượt còn `cho_gui` cũ (khôi phục nhầm "Chưa xác định" khi vào lại trang). Làm mới cả danh sách lượt AN TOÀN vì bước đang
+          // xem do trang giữ (F281: `CouncilSetDetailClient` không suy lại bước từ dữ liệu) — cùng đường với `da_ghi`.
+          lamMoiSauGhi()
           break
         case "dang_xu_ly":
           setTrangThai((cu) => ({ kieu: "chua_xac_dinh", ma, luc: gioCuaLuot(cu), lyDo: "dang_xu_ly" }))
@@ -197,7 +198,7 @@ export function useGhiNhanQuyetDinh(setId: number) {
     } finally {
       dangChay.current = false
     }
-  }, [lamMoiSauGhi, qc, setId])
+  }, [lamMoiSauGhi])
 
   /** Tải lại trang: thấy lượt `cho_gui` ⇒ vào thẳng "Chưa xác định" (chỉ khi đang ở `nhap`). */
   const khoiPhuc = useCallback((ds: readonly CouncilSubmission[]) => {

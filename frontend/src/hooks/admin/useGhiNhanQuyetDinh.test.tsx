@@ -413,33 +413,24 @@ describe("phân xử — giờ của lượt được giữ; 'đã chặn' làm 
     expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", luc: GIO_LUOT })
   })
 
-  it("Đ2-2: chua_ghi_da_chan ⇒ làm mới truy vấn của BỘ này (đánh dấu cũ để tải lại theo máy chủ); bộ khác không bị đụng", async () => {
+  it("Đ2-2: chua_ghi_da_chan ⇒ làm mới truy vấn của BỘ và DANH SÁCH LƯỢT (đánh dấu cũ để tải lại theo máy chủ)", async () => {
+    // Codex lần 19+20 (F281): ca cũ ở đây CẤM làm mới danh sách lượt (vì trang từng tự rời bước 6 khi lượt hết cho_gui). Nay bước đang
+    // xem do trang giữ nên làm mới là an toàn và cần (bản lưu của danh sách lượt không được còn `cho_gui` cũ); bất biến HIỂN THỊ
+    // "khung bước 6 + khung đã chặn còn đó sau làm mới" được khoá ở CouncilRecordStep.test.tsx (describe F281).
     dung({ chan: () => HttpResponse.json({ ket_qua: "chua_ghi_da_chan" }) })
     const h = dung_hook()
     h.qc.setQueryData(councilDocumentKeys.set(SET), { id: SET })
-    h.qc.setQueryData(councilDocumentKeys.set(SET + 1), { id: SET + 1 })
+    h.qc.setQueryData(councilDocumentKeys.submissions(SET), [luot(MA, "cho_gui")])
     act(() => h.result.current.khoiPhuc([luot(MA, "cho_gui")]))
     // trước khi phân xử: các truy vấn còn "tươi" (để khẳng định sau không rỗng)
     expect(h.qc.getQueryState(councilDocumentKeys.set(SET))?.isInvalidated).toBe(false)
+    expect(h.qc.getQueryState(councilDocumentKeys.submissions(SET))?.isInvalidated).toBe(false)
     await act(async () => {
       await h.result.current.phanXu()
     })
     expect(h.result.current.trangThai.kieu).toBe("chua_ghi_da_chan")
     expect(h.qc.getQueryState(councilDocumentKeys.set(SET))?.isInvalidated).toBe(true)
-    expect(h.qc.getQueryState(councilDocumentKeys.set(SET + 1))?.isInvalidated).toBe(false)
-  })
-
-  it("Đ2-2: …nhưng KHÔNG làm mới danh sách lượt — lượt hết `cho_gui` thì trang tự rời bước 6 và mất khung 'đã chặn' (xem ca giao diện)", async () => {
-    dung({ chan: () => HttpResponse.json({ ket_qua: "chua_ghi_da_chan" }) })
-    const h = dung_hook()
-    h.qc.setQueryData(councilDocumentKeys.submissions(SET), [luot(MA, "cho_gui")])
-    act(() => h.result.current.khoiPhuc([luot(MA, "cho_gui")]))
-    expect(h.qc.getQueryState(councilDocumentKeys.submissions(SET))?.isInvalidated).toBe(false)
-    await act(async () => {
-      await h.result.current.phanXu()
-    })
-    expect(h.result.current.trangThai.kieu).toBe("chua_ghi_da_chan")
-    expect(h.qc.getQueryState(councilDocumentKeys.submissions(SET))?.isInvalidated).toBe(false)
+    expect(h.qc.getQueryState(councilDocumentKeys.submissions(SET))?.isInvalidated).toBe(true)
   })
 })
 
@@ -535,6 +526,42 @@ describe("khôi phục sau tải lại trang", () => {
     expect(h.result.current.trangThai.kieu).toBe("da_ghi")
     act(() => h.result.current.khoiPhuc([luot(MA_2, "cho_gui")]))
     expect(h.result.current.trangThai.kieu).toBe("da_ghi")
+  })
+})
+
+// F276 ở MỨC HOOK (Codex lần 19, mục 7.6: trước đây chỉ có ca tích hợp qua màn hình): sau khi máy chủ xác nhận huỷ ghi nhận,
+// `batDauLuotMoiSauHuy` bỏ mã của lượt đã `da_ghi` để lần gửi kế MỞ LƯỢT MỚI; `veBieuMau` thì không đụng mã.
+describe("batDauLuotMoiSauHuy — mã lượt cũ bị bỏ SAU huỷ ghi nhận đã xác nhận (F276, mức hook)", () => {
+  const moHaiLan = () => {
+    let soMo = 0
+    return () => {
+      soMo++
+      return HttpResponse.json({ ma: soMo === 1 ? MA : MA_2 }, { status: 201 })
+    }
+  }
+
+  it("da_ghi → batDauLuotMoiSauHuy ⇒ về nhap; lần gửi kế MỞ LƯỢT MỚI (mã mới), không dùng lại mã đã da_ghi", async () => {
+    const dem = dung({ mo: moHaiLan() })
+    const h = dung_hook()
+    await guiXong(h)
+    expect(h.result.current.trangThai.kieu).toBe("da_ghi")
+    act(() => h.result.current.batDauLuotMoiSauHuy())
+    expect(h.result.current.trangThai).toEqual({ kieu: "nhap" })
+    await guiXong(h)
+    expect(dem.mo).toBe(2)
+    expect(dem.maTrongForm).toEqual([MA, MA_2])
+  })
+
+  it("đối chứng: veBieuMau KHÔNG bỏ mã ⇒ gửi kế tiếp dùng LẠI mã cũ, không mở lượt thứ hai (vì sao sau huỷ phải dùng batDauLuotMoiSauHuy)", async () => {
+    const dem = dung({ mo: moHaiLan() })
+    const h = dung_hook()
+    await guiXong(h)
+    expect(h.result.current.trangThai.kieu).toBe("da_ghi")
+    act(() => h.result.current.veBieuMau())
+    expect(h.result.current.trangThai).toEqual({ kieu: "nhap" })
+    await guiXong(h)
+    expect(dem.mo).toBe(1)
+    expect(dem.maTrongForm).toEqual([MA, MA])
   })
 })
 
