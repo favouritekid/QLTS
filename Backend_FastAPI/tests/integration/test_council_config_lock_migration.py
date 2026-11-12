@@ -12,7 +12,10 @@ CSDL tối giản ở ``hdts20261105`` (khuôn ``test_council_decision_migration
 * ``loi_trigger_thu_hai`` — câu cài thứ hai lỗi ⇒ KHÔNG còn hàm / trigger thứ nhất (một câu ``DO`` = một giao dịch);
 * ``chay_lai`` — chết giữa câu ``DO`` và câu cập nhật phiên bản ⇒ chạy lại vẫn xanh, không trùng trigger;
 * ``qua_tran_cho`` — phiên giữ khoá ghi quá trần ⇒ đỏ ``55P03``, không cài gì;
-* ``ha_cap`` — gỡ hết hàm + trigger.
+* ``ha_cap`` — gỡ hết hàm + trigger;
+* ``repeatable_read_sua_dang_mo`` (F280, Codex lần 19+20) — cùng lịch với ``sua_dang_mo`` nhưng CSDL đặt mặc định REPEATABLE
+  READ: ảnh chụp của câu ``DO`` chốt TRƯỚC khoá nên phép đếm sau khoá đọc dữ liệu CŨ (chưa lệch) ⇒ nếu không chặn thì trigger
+  được cài dù phiên kia đã commit bản lệch. Câu ``DO`` phải TỪ CHỐI ``QLK2C``, không cài gì, phiên bản không đổi.
 """
 import asyncpg
 import pytest
@@ -145,6 +148,47 @@ async def test_k2_mig_sua_dang_mo(csdl_rieng):  # noqa: F811
         assert rc != 0 and "sqlstate=QLK2M" in out, (rc, _dong_loi(out))
         assert await _da_cai(k) == (0, 0)
         assert await _phien_ban(k) == "hdts20261107"
+    finally:
+        if p is not None and p.returncode is None:
+            p.kill()
+            await p.wait()
+        await b.close()
+        await k.close()
+
+
+async def test_k2_mig_repeatable_read_sua_dang_mo_thi_tu_choi(csdl_rieng):  # noqa: F811
+    # F280: ở REPEATABLE READ, câu đầu tiên trong DO chốt ảnh chụp TRƯỚC khi có khoá ⇒ phép đếm sau khoá không thấy bản
+    # lệch mà phiên sửa cấu hình commit trong lúc nâng cấp chờ ⇒ nếu không chặn, trigger được cài trên dữ liệu ĐÃ lệch.
+    x = await _dung_1107_co_qd(csdl_rieng)
+    q = await _ket_noi(csdl_rieng)
+    try:
+        await q.execute(
+            "ALTER DATABASE \"%s\" SET default_transaction_isolation TO 'repeatable read'" % csdl_rieng
+        )
+    finally:
+        await q.close()
+    url = _url(csdl_rieng, "postgresql")
+    b = await asyncpg.connect(url)
+    k = await asyncpg.connect(url)
+    p = None
+    try:
+        assert await k.fetchval("SHOW transaction_isolation") == "repeatable read", "phép đo không hợp lệ: CSDL chưa ở RR"
+        gd = b.transaction()
+        await gd.start()
+        await b.execute("UPDATE offering_academic_info SET academic_year = 2031 WHERE id = $1", x)  # LỆCH, chưa commit
+        pid_b = await b.fetchval("SELECT pg_backend_pid()")
+        p = await _alembic(csdl_rieng, "upgrade", DICH)
+        # Có chặn: câu DO dừng NGAY (không chờ khoá). Không chặn: nó chờ khoá của phiên sửa ⇒ commit để lịch lỗi xảy ra.
+        await _doi_bi_chan(k, pid_b, p)
+        await gd.commit()
+        rc, out = await _xong(p)
+        # Thứ tự khẳng định: dữ liệu (đã lệch thật) → không cài gì → phiên bản → mã thoát + SQLSTATE.
+        assert await k.fetchval("SELECT academic_year FROM offering_academic_info WHERE id = $1", x) == 2031, (
+            "phép đo không hợp lệ: bản lệch của phiên sửa cấu hình không được commit"
+        )
+        assert await _da_cai(k) == (0, 0), "CÀI TRIGGER dù dữ liệu đã lệch ở REPEATABLE READ (F280)"
+        assert await _phien_ban(k) == "hdts20261107"
+        assert rc != 0 and "sqlstate=QLK2C" in out, (rc, _dong_loi(out))
     finally:
         if p is not None and p.returncode is None:
             p.kill()

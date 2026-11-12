@@ -8,7 +8,11 @@ Owner 11-11 (``logs-P5/cong-bo-ket-qua/vong-giao-dien/QUYET-DINH-OWNER-DAC-TA-20
 diện bản 2 mục 2.5.1 + bản 3 mục 2.5.1 (F274 — Codex review bản 2).
 
 ``env.py`` chạy ``AUTOCOMMIT`` ⇒ mỗi câu là một giao dịch. Vì vậy TOÀN BỘ phần kiểm + cài nằm trong MỘT câu ``DO``
-(một câu = một giao dịch): đặt ``lock_timeout`` → ``LOCK TABLE`` hai bảng cấu hình ở mức ``SHARE ROW EXCLUSIVE``
+(một câu = một giao dịch): kiểm mức cô lập = ``read committed`` (khác ⇒ ``QLK2C``, không cài gì — F280: ở REPEATABLE READ
+/ SERIALIZABLE ảnh chụp của giao dịch chốt ở câu ĐẦU TIÊN trong ``DO`` — trước khi có khoá — nên phép đếm sau khoá vẫn
+đọc dữ liệu CŨ: phiên sửa cấu hình commit bản lệch trong lúc nâng cấp chờ khoá thì vẫn bị đếm là 0 và trigger vẫn được
+cài; ở READ COMMITTED mỗi câu trong ``DO`` lấy ảnh mới nên phép đếm sau khoá thấy dữ liệu đã commit) → đặt
+``lock_timeout`` → ``LOCK TABLE`` hai bảng cấu hình ở mức ``SHARE ROW EXCLUSIVE``
 (xung đột với ``ROW EXCLUSIVE`` của INSERT / UPDATE / DELETE ⇒ phiên sửa cấu hình đang mở phải kết thúc trước, phiên
 mới không bắt đầu sửa được tới khi câu này xong; đọc và ``FOR UPDATE`` của ghi nhận KHÔNG bị chặn) → ĐẾM dòng Quyết
 định chưa huỷ ghi nhận có khoá đếm đã lệch cấu hình → > 0 thì ``RAISE`` (cả câu lùi, không cài gì) → cài hai hàm +
@@ -33,6 +37,9 @@ depends_on: Union[str, Sequence[str], None] = None
 TRAN_CHO_KHOA = "15s"
 #: SQLSTATE khi phát hiện dữ liệu đã lệch (khác SQLSTATE của trigger — ``QLK02``).
 SQLSTATE_DA_LECH = "QLK2M"
+#: SQLSTATE khi phiên chạy nâng cấp KHÔNG ở READ COMMITTED (F280) — khác ``QLK2M`` để người vận hành phân biệt "dữ liệu
+#: lệch" với "cấu hình phiên sai"; cùng khuôn ``QLLG3`` của hạ cấp ``hdts20261112``.
+SQLSTATE_CAN_READ_COMMITTED = "QLK2C"
 
 SQL_FN_HOC_VU = """
 CREATE OR REPLACE FUNCTION chan_sua_hoc_vu_da_tham_chieu()
@@ -126,12 +133,18 @@ def _bo_dau_cham_phay(cau: str) -> str:
 
 
 def khoi_do_nang_cap() -> str:
-    """MỘT câu ``DO`` (một giao dịch): khoá → đếm → dừng / cài. Ký tự ``%`` và ``::`` không xuất hiện (``text()``)."""
+    """MỘT câu ``DO`` (một giao dịch): kiểm mức cô lập → khoá → đếm → dừng / cài. Phép kiểm mức cô lập PHẢI đứng đầu
+    (trước ``set_config``): nó tự nó cũng là một câu lấy ảnh chụp, nhưng ở mức khác READ COMMITTED nó dừng ngay nên ảnh
+    ấy không bao giờ được dùng để đếm. Ký tự ``%`` và ``::`` không xuất hiện (``text()``)."""
     cai = "".join("    EXECUTE $f$%s$f$;\n" % _bo_dau_cham_phay(c) for c in CAC_CAU_LENH)
     return (
         "DO $k2$\n"
         "DECLARE n bigint;\n"
         "BEGIN\n"
+        "    IF current_setting('transaction_isolation') <> 'read committed' THEN\n"
+        "        RAISE EXCEPTION USING ERRCODE = '" + SQLSTATE_CAN_READ_COMMITTED + "', MESSAGE = 'K2: nang cap can "
+        "READ COMMITTED - khong cai trigger';\n"
+        "    END IF;\n"
         "    PERFORM set_config('lock_timeout', '" + TRAN_CHO_KHOA + "', true);\n"
         "    LOCK TABLE offering_academic_info, admission_path IN SHARE ROW EXCLUSIVE MODE;\n"
         "    EXECUTE $f$" + _bo_dau_cham_phay(SQL_DEM_LECH) + "$f$ INTO n;\n"
