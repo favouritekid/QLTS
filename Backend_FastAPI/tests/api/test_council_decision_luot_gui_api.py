@@ -21,6 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 import app.database as csdl
+from app.config import settings as app_settings
 from app.repositories.council_decision_repository import ma_loi_csdl
 from app.services import council_decision_submission_service as luot_gui
 from tests.api import test_council_decisions_api as qd
@@ -191,6 +192,22 @@ async def test_phan_xu_chua_gui_thi_chan_lap_luy_dang_gui_muon_409(client, hs, a
     assert r.status_code == 409 and r.json()["ma_loi"] == "luot_da_chan", r.text
     assert await _so_qd() == 0
     assert (await _mo(client, ad, bo["id"])).status_code == 201  # mở lượt MỚI được
+
+
+async def test_dong_bang_chan_phan_xu_va_mo_luot_luot_giu_nguyen(client, hs, ad, monkeypatch):  # noqa: F811
+    # Codex lần 18 câu 2: đóng băng chặn CẢ phân xử — lượt chưa rõ GIỮ NGUYÊN ``cho_gui`` tới khi phân xử được, KHÔNG
+    # thành "chưa ghi" (``da_chan``); không văn bản mới. Bỏ đóng băng ⇒ phân xử chạy bình thường trên CHÍNH lượt ấy.
+    bo, ma = await _bo_va_ma(client, ad, hs)
+    truoc = await _luot(ma)
+    assert truoc["tt"] == "cho_gui"
+    monkeypatch.setattr(app_settings, "ADMISSION_FROZEN", True)
+    for r in (await _phan_xu(client, ad, ma), await _mo(client, ad, bo["id"])):
+        assert r.status_code == 503 and r.json()["code"] == "ADMISSION_FROZEN", r.text
+    assert await _luot(ma) == truoc
+    assert await _so_qd() == 0
+    monkeypatch.setattr(app_settings, "ADMISSION_FROZEN", False)
+    r = await _phan_xu(client, ad, ma)
+    assert r.status_code == 200 and r.json()["ket_qua"] == "chua_ghi_da_chan", r.text
 
 
 async def test_phan_xu_sau_khi_da_ghi_tra_van_ban(client, hs, ad):  # noqa: F811

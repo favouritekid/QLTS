@@ -759,7 +759,8 @@ async def tep_cua_bo(db: AsyncSession, set_id: int) -> List[CouncilDocumentSetFi
 def _bo_mo_rong_ra(r: Dict[str, Any], *, xem_luot: bool) -> Dict[str, Any]:
     """MỘT hàng của ``SQL_BO_MO_RONG`` → các trường của ``CouncilSetOut``. ``quyet_dinh`` = văn bản chưa huỷ ghi nhận
     mới nhất (``SQL_BO_MO_RONG`` — nguồn duy nhất) — giữ các khoá cũ (loai, trang_thai, so_quyet_dinh, ngay_ky, so_ho_so)
-    + ``id`` + ``goc``. ``luot_gui_cho`` CHỈ khi ``xem_luot`` (người có quyền ghi nhận); người khác luôn None."""
+    + ``id`` + ``goc``. ``luot_gui_cho`` CHỈ khi ``xem_luot`` = cờ ``ghi_nhan_qd`` của người gọi (router tính bằng ĐÚNG hàm
+    tính cờ của ``GET /quyen`` — §5.8, Codex lần 18: một nguồn cho câu hỏi quyền, không suy từ phạm vi); người khác None."""
     qd = None
     if r["qd_id"] is not None:
         qd = {
@@ -807,6 +808,7 @@ async def liet_ke_bo_mo_rong(
     *,
     tat_ca: bool,
     chi_don_vi: Optional[int],
+    xem_luot: bool,
     nam_hoc: Optional[int] = None,
     nguoi_tao_id: Optional[int] = None,
     so_quyet_dinh: Optional[str] = None,
@@ -815,7 +817,7 @@ async def liet_ke_bo_mo_rong(
     offset: int = 0,
 ) -> List[Dict[str, Any]]:
     """``GET /sets`` (đặc tả 3.4) — MỘT câu (``SQL_BO_MO_RONG``). Phạm vi do ``deps.py`` quyết; "không tất cả mà không có
-    đơn vị" ⇒ ``ServiceError`` (fail-closed). ``luot_gui_cho`` chỉ với phạm vi admin (= người có quyền ghi nhận)."""
+    đơn vị" ⇒ ``ServiceError`` (fail-closed). ``luot_gui_cho`` chỉ khi ``xem_luot`` (cờ ``ghi_nhan_qd`` — router)."""
     if not tat_ca and chi_don_vi is None:
         raise ServiceError("Phạm vi xem bộ văn bản không xác định — không liệt kê.")
     ds = await CouncilDocumentRepository(db).danh_sach_bo_mo_rong(
@@ -828,11 +830,11 @@ async def liet_ke_bo_mo_rong(
         limit=limit,
         offset=offset,
     )
-    return [_bo_mo_rong_ra(r, xem_luot=tat_ca) for r in ds]
+    return [_bo_mo_rong_ra(r, xem_luot=xem_luot) for r in ds]
 
 
 async def chi_tiet_bo_mo_rong(
-    db: AsyncSession, set_id: int, *, tat_ca: bool
+    db: AsyncSession, set_id: int, *, xem_luot: bool
 ) -> Dict[str, Any]:
     """``GET /sets/{id}`` (đặc tả 3.5) — CÙNG câu với danh sách (một nguồn cho tình trạng / Quyết định). Bộ đã qua kiểm
     phạm vi ở ``deps.py`` ⇒ đọc theo id không lọc đơn vị."""
@@ -841,7 +843,7 @@ async def chi_tiet_bo_mo_rong(
     )
     if not ds:
         raise ResourceNotFoundError("Không có bộ văn bản này.")
-    return _bo_mo_rong_ra(ds[0], xem_luot=tat_ca)
+    return _bo_mo_rong_ra(ds[0], xem_luot=xem_luot)
 
 
 async def nguoi_tao_bo(

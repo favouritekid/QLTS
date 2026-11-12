@@ -21,6 +21,7 @@ from sqlalchemy import event, text
 
 import app.database as csdl
 from app.models.council_document import DAU_APPSHEET_TIEN_TO
+from app.main import fastapi_app
 from tests.api import test_council_decisions_api as qd
 from tests.api import test_council_documents_api as api
 from tests.fixtures.hoi_dong_seed import seed_hoi_dong
@@ -104,6 +105,32 @@ async def test_luot_cho_lam_chua_xac_dinh_va_chi_admin_thay_ma(client, hs, ad, t
     assert r.status_code == 200 and r.json()["luot_gui_cho"] is None
     r = await client.get(P + "/sets/%d" % bo["id"], headers=ad)
     assert r.json()["luot_gui_cho"]["ma"] == ma and r.json()["tinh_trang"] == "chua_xac_dinh"
+
+
+async def test_luot_gui_cho_theo_dung_co_ghi_nhan_khong_theo_pham_vi(client, hs, ad):
+    # §5.8 (Codex lần 18): mã lượt chờ trả lời bằng ĐÚNG cờ ``ghi_nhan_qd`` (cổng thật của route ghi nhận), không suy từ
+    # phạm vi admin. Phân biệt hai nguồn: admin (phạm vi "tất cả") + dòng deny THEO MẪU route ``POST /decisions`` ⇒ cờ
+    # ghi_nhan_qd tắt mà phạm vi vẫn admin ⇒ mã lượt phải null ở CẢ danh sách lẫn chi tiết (nguồn cũ: vẫn lộ mã).
+    from tests.api import test_council_documents_quyen_api as q
+
+    bo = await qd._bo_ok(client, ad, hs, SACH)
+    ma = await qd._mo_luot(client, ad, bo["id"])
+    assert ma
+    mo_hinh = fastapi_app.state.enforcer.get_model()
+    dong = ["role:admin", P + "/decisions", "POST", "deny"]
+    mo_hinh.add_policy("p", "p", dong)
+    try:
+        co = await q._co_qua_http(client, ad)
+        assert co["ghi_nhan_qd"] is False, "phép đo không hợp lệ: dòng deny không tắt cờ ghi nhận"
+        assert co["xem_danh_sach_bo"] and co["xem_chi_tiet_bo"], "phép đo không hợp lệ: dòng deny tắt cả cờ xem"
+        x = _mot(await _ds(client, ad), bo["id"])
+        assert x["tinh_trang"] == "chua_xac_dinh" and x["luot_gui_cho"] is None, x
+        r = await client.get(P + "/sets/%d" % bo["id"], headers=ad)
+        assert r.status_code == 200 and r.json()["luot_gui_cho"] is None, r.text
+    finally:
+        mo_hinh.remove_policy("p", "p", dong)
+    # Đối chứng: gỡ dòng ⇒ admin thấy lại mã (cùng bộ, cùng lượt).
+    assert _mot(await _ds(client, ad), bo["id"])["luot_gui_cho"]["ma"] == ma
 
 
 async def test_huy_ghi_nhan_thi_da_huy_va_khong_con_quyet_dinh(client, hs, ad):

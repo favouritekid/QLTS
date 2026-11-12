@@ -15,7 +15,8 @@ CHECK / chỉ mục viết lại ĐÚNG chuỗi của model ``app/models/council
 ``DIEU_KIEN_LUOT_CHO_GUI``); ``tests/unit/test_council_decision_submission_model.py`` so hai bên. Migration KHÔNG import
 mã ứng dụng.
 
-Hạ cấp: bảng còn dòng ⇒ DỪNG (vết lượt gửi là dữ liệu kiểm toán), không xoá gì.
+Hạ cấp: bảng còn dòng ⇒ DỪNG (vết lượt gửi là dữ liệu kiểm toán), không xoá gì. Khoá bảng TRƯỚC khi đếm (F277 — xem
+``KHOI_DO_HA_CAP``).
 """
 from typing import Sequence, Union
 
@@ -121,12 +122,25 @@ def khoi_do_nang_cap() -> str:
     )
 
 
+#: SQLSTATE khi hạ cấp chạy ở mức cô lập khác READ COMMITTED (ảnh chụp chốt TRƯỚC khoá ⇒ đếm sau khoá vẫn có thể "rỗng").
+SQLSTATE_CAN_READ_COMMITTED = "QLLG3"
+
+#: F277 (Codex lần 18) — khoá → đếm → xoá trong MỘT câu ``DO``. Khuôn cũ đếm TRƯỚC khi khoá: phiên khác INSERT một lượt
+#: chưa commit ⇒ đếm thấy 0 ⇒ ``DROP`` chờ khoá ⇒ phiên kia commit ⇒ ``DROP`` chạy, MẤT dòng lượt vừa commit (vết kiểm
+#: toán). Nay ``LOCK TABLE … ACCESS EXCLUSIVE`` TRƯỚC phép đếm (cùng khuôn ``hdts20261103`` / ``hdts20261104``): khoá chờ
+#: phiên ghi kết thúc, phép đếm lấy ảnh chụp MỚI sau khoá (READ COMMITTED) ⇒ thấy dòng ⇒ ``QLLG1``; khoá giữ tới hết câu.
+#: Mức cô lập khác READ COMMITTED ⇒ ``QLLG3``, không xoá gì. Chờ khoá quá ``lock_timeout`` ⇒ ``55P03``, không xoá gì.
 KHOI_DO_HA_CAP = (
     "DO $lg$\n"
     "DECLARE n bigint;\n"
     "BEGIN\n"
+    "    IF current_setting('transaction_isolation') <> 'read committed' THEN\n"
+    "        RAISE EXCEPTION USING ERRCODE = '" + SQLSTATE_CAN_READ_COMMITTED + "', MESSAGE = 'Ha cap bang luot gui can "
+    "READ COMMITTED - khong ha cap';\n"
+    "    END IF;\n"
     "    PERFORM set_config('lock_timeout', '" + TRAN_CHO_KHOA + "', true);\n"
     "    IF to_regclass('council_decision_submission') IS NOT NULL THEN\n"
+    "        EXECUTE 'LOCK TABLE council_decision_submission IN ACCESS EXCLUSIVE MODE';\n"
     "        EXECUTE 'SELECT count(*) FROM council_decision_submission' INTO n;\n"
     "        IF n > 0 THEN\n"
     "            RAISE EXCEPTION USING ERRCODE = 'QLLG1', MESSAGE = 'Bang luot gui con ' || n || ' dong - khong ha cap';\n"

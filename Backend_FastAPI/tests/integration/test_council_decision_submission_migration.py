@@ -12,6 +12,10 @@ Alembic thật (chỉ so chuỗi model ↔ migration). Khuôn ``test_council_con
   ``42703`` ngay ở câu tạo chỉ mục;
 * ``qua_tran_cho`` — phiên giữ khoá ghi bảng bộ (đích khoá ngoại) quá trần ⇒ đỏ ``55P03``, không có bảng;
 * ``ha_cap_rong`` / ``ha_cap_con_dong`` — hạ cấp xoá bảng rỗng; còn dòng ⇒ đỏ ``QLLG1``, bảng + dòng còn nguyên.
+* F277 (Codex lần 18) — HAI PHIÊN: phiên ghi INSERT một lượt CHƯA commit → hạ cấp qua alembic thật → đợi tới khi tiến
+  trình hạ cấp bị CHÍNH phiên ghi chặn (``pg_blocking_pids``) → commit ⇒ bảng + dòng còn, đỏ ``QLLG1`` (khuôn cũ đếm
+  trước khi khoá: đếm 0 → DROP chờ → commit → DROP chạy ⇒ MẤT dòng); đối chứng phiên ghi huỷ ⇒ hạ cấp xoá bảng rỗng;
+  REPEATABLE READ (ảnh chụp chốt trước khoá) ⇒ đỏ ``QLLG3``, không xoá gì.
 
 Lớp che log của app in lỗi CSDL dạng ``DBError[… sqlstate=…]`` ⇒ đo đầu ra theo ``sqlstate=``.
 """
@@ -219,6 +223,95 @@ async def test_lg_mig_ha_cap_con_dong_thi_dung(csdl_rieng):  # noqa: F811
         assert rc != 0 and "sqlstate=QLLG1" in out, (rc, _dong_loi(out))
         assert (await _hinh(k))[0] is True
         assert await k.fetchval("SELECT count(*) FROM council_decision_submission") == 1
+        assert await _phien_ban(k) == DICH
+    finally:
+        await k.close()
+
+
+# ═══════════════════════════════ F277 (Codex lần 18) — hạ cấp khi có lượt CHƯA commit, hai phiên ═══════════════
+SQL_CHEN_CHO_GUI = (
+    "INSERT INTO council_decision_submission (ma, set_id, set_id_luc_tao, trang_thai, nguoi_tao_id) "
+    "VALUES (gen_random_uuid(), $1, $1, 'cho_gui', $2)"
+)
+
+
+async def _chen_chua_commit_roi_ha_cap(ten_db, ket_thuc):
+    """Phiên GHI: BEGIN + INSERT một lượt ``cho_gui`` (CHƯA commit) → ``alembic downgrade`` (tiến trình con, đúng env.py)
+    → đợi tới khi tiến trình hạ cấp bị CHÍNH phiên ghi chặn → ``ket_thuc`` (commit / rollback).
+    Trả (kết nối kiểm, đã bị chặn, mã thoát, đầu ra)."""
+    url = _url(ten_db, "postgresql")
+    ghi = await asyncpg.connect(url)
+    k = await asyncpg.connect(url)
+    p = None
+    try:
+        s, u = await _bo_id(k), await k.fetchval('SELECT min(id) FROM "user"')
+        gd = ghi.transaction()
+        await gd.start()
+        await ghi.execute(SQL_CHEN_CHO_GUI, s, u)
+        pid = await ghi.fetchval("SELECT pg_backend_pid()")
+        p = await _alembic(ten_db, "downgrade", TRUOC)
+        bi_chan = await _doi_bi_chan(k, pid, p)
+        await (gd.commit() if ket_thuc == "commit" else gd.rollback())
+        rc, out = await _xong(p)
+    except BaseException:
+        if p is not None and p.returncode is None:
+            p.kill()
+            await p.wait()
+        await k.close()
+        raise
+    finally:
+        await ghi.close()
+    return k, bi_chan, rc, out
+
+
+async def _len_1112(ten_db):
+    await _len_1111(ten_db)
+    rc, out = await _chay_xong(ten_db, "upgrade", DICH)
+    assert rc == 0, _dong_loi(out)
+
+
+async def test_lg_mig_ha_cap_luot_chua_commit_thi_cho_roi_dung_giu_dong(csdl_rieng):  # noqa: F811
+    await _len_1112(csdl_rieng)
+    k, bi_chan, rc, out = await _chen_chua_commit_roi_ha_cap(csdl_rieng, "commit")
+    try:
+        # Bất biến DỮ LIỆU trước (đỏ phải đỏ đúng lý do), rồi mới tới tính hợp lệ của phép đo và mã thoát.
+        assert (await _hinh(k))[0] is True, "MẤT BẢNG lượt gửi cùng dòng vừa COMMIT — hạ cấp đếm trước khi khoá (F277)"
+        assert await k.fetchval("SELECT count(*) FROM council_decision_submission WHERE trang_thai = 'cho_gui'") == 1
+        assert bi_chan, "phép đo không hợp lệ: hạ cấp không đợi phiên ghi"
+        assert rc != 0 and "sqlstate=QLLG1" in out, (rc, _dong_loi(out))
+        assert await _phien_ban(k) == DICH
+    finally:
+        await k.close()
+
+
+async def test_lg_mig_ha_cap_phien_ghi_huy_thi_xoa_bang_rong(csdl_rieng):  # noqa: F811
+    # Đối chứng: khoá chờ phiên ghi KHÔNG làm hạ cấp hỏng khi phiên ghi huỷ — bảng rỗng thật ⇒ xoá, rc 0.
+    await _len_1112(csdl_rieng)
+    k, bi_chan, rc, out = await _chen_chua_commit_roi_ha_cap(csdl_rieng, "rollback")
+    try:
+        assert bi_chan, "phép đo không hợp lệ: hạ cấp không đợi phiên ghi"
+        assert rc == 0, _dong_loi(out)
+        assert (await _hinh(k))[0] is False
+        assert await _phien_ban(k) == TRUOC
+    finally:
+        await k.close()
+
+
+async def test_lg_mig_ha_cap_repeatable_read_thi_tu_choi_giu_dong(csdl_rieng):  # noqa: F811
+    # Ở REPEATABLE READ ảnh chụp của câu DO chốt TRƯỚC khoá ⇒ đếm sau khoá vẫn có thể "rỗng" ⇒ câu DO phải TỪ CHỐI chạy.
+    await _len_1112(csdl_rieng)
+    q = await _ket_noi(csdl_rieng)
+    try:
+        await q.execute(
+            "ALTER DATABASE \"%s\" SET default_transaction_isolation TO 'repeatable read'" % csdl_rieng
+        )
+    finally:
+        await q.close()
+    k, _bi_chan, rc, out = await _chen_chua_commit_roi_ha_cap(csdl_rieng, "commit")
+    try:
+        assert (await _hinh(k))[0] is True, "MẤT BẢNG lượt gửi ở REPEATABLE READ"
+        assert await k.fetchval("SELECT count(*) FROM council_decision_submission") == 1
+        assert rc != 0 and "sqlstate=QLLG3" in out, (rc, _dong_loi(out))
         assert await _phien_ban(k) == DICH
     finally:
         await k.close()

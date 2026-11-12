@@ -349,6 +349,7 @@ async def list_council_document_sets(
         db,
         tat_ca=scope.tat_ca,
         chi_don_vi=scope.unit_id,
+        xem_luot=await _co_quyen_ghi_nhan(request, current_user),
         nam_hoc=nam_hoc,
         nguoi_tao_id=nguoi_tao_id,
         so_quyet_dinh=so_quyet_dinh,
@@ -395,7 +396,9 @@ async def get_council_document_set(
     return CouncilSetDetailOut.tu_bo_va_tep(
         bo,
         await bo_vb.tep_cua_bo(db, bo.id),
-        await bo_vb.chi_tiet_bo_mo_rong(db, bo.id, tat_ca=scope.tat_ca),
+        await bo_vb.chi_tiet_bo_mo_rong(
+            db, bo.id, xem_luot=await _co_quyen_ghi_nhan(request, current_user)
+        ),
     )
 
 
@@ -1142,6 +1145,14 @@ async def get_council_document_permissions(
     return CouncilDocumentPermissionsOut(
         permissions=CouncilDocumentPermissions(**quyen)
     )
+
+
+async def _co_quyen_ghi_nhan(request: Request, current_user: models.User) -> bool:
+    """§5.8 (Codex lần 18): ``luot_gui_cho`` (mã lượt gửi đang chờ) chỉ cho người có quyền GHI NHẬN — trả lời bằng ĐÚNG
+    cờ ``ghi_nhan_qd`` do CÙNG hàm tính cờ của ``GET /quyen`` (cổng thật của route ghi nhận), không suy từ phạm vi admin:
+    phạm vi dữ liệu không phải quyền thao tác. Dòng policy ngoài mẫu route ⇒ mọi cờ tắt ⇒ không lộ mã (fail-closed)."""
+    quyen = await deps.quyen_van_ban_hoi_dong(request, current_user, ENDPOINT_THEO_CO)
+    return quyen["ghi_nhan_qd"] is True
 
 
 #: Cờ ↔ HÀM xử lý của ĐÚNG MỘT route (phương thức + đường đọc từ bảng route thật của app, không
