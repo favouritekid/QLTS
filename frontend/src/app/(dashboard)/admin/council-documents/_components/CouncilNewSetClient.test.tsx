@@ -245,6 +245,22 @@ describe("trang /moi — luồng chính", () => {
     await waitFor(() => expect(screen.getByTestId("duong-xet-11").textContent).toBe("Xét học bạ"), { timeout: 4000 })
     expect(screen.getByTestId("duong-xet-13").textContent).toBe("—") // chưa chọn ⇒ chưa kiểm ⇒ không có
   })
+
+  // Codex lần 18, §5.15: ngành ở danh sách tìm là ngành GHI TRÊN HỒ SƠ; ngành xét / đường xét chính xác chỉ có sau kiểm trước.
+  it("ngành ở bảng chọn được ghi rõ 'Ngành trên hồ sơ' (cột và bộ lọc); chú thích nói ngành xét / đường xét chính xác lấy từ kiểm trước", async () => {
+    dung()
+    ve()
+    await chon([11])
+    const bang = screen.getByTestId("bang-chon-ho-so")
+    const tieuDe = Array.from(bang.querySelectorAll("th")).map((th) => th.textContent)
+    expect(tieuDe).toContain("Ngành trên hồ sơ")
+    expect(tieuDe).not.toContain("Ngành")
+    expect((screen.getByLabelText("Ngành trên hồ sơ") as HTMLSelectElement).id).toBe("hd-nganh")
+    const ct = screen.getByTestId("chu-thich-nganh-ho-so").textContent ?? ""
+    expect(ct).toMatch(/ngành xét/i)
+    expect(ct).toMatch(/và đường xét chính xác/i) // chữ "đường xét" của CHÚ THÍCH (không lẫn tên cột "Đường xét" ở cuối câu)
+    expect(ct).toMatch(/sau khi kiểm trước/i)
+  })
 })
 
 // Máy chủ `5feb425d`: ba route chỉ đọc (kiểm trước, tìm hồ sơ, đổi mã) vẫn bị cần gạt đóng băng chặn ⇒ 503 ADMISSION_FROZEN.

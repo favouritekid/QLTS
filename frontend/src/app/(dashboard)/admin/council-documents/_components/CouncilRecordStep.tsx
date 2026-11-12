@@ -131,7 +131,7 @@ export function CouncilRecordStep({ bo, quyen, gn, onQuayLai, onDaHuy }: Props) 
   if (t.kieu === "da_ghi" && t.quyetDinh) {
     return (
       <div className="space-y-4" data-testid="buoc-ghi-nhan">
-        <CouncilRecordResult quyetDinh={t.quyetDinh} setId={bo.id} quyen={quyen} onDaHuy={() => { onDaHuy(); gn.veBieuMau() }} />
+        <CouncilRecordResult quyetDinh={t.quyetDinh} setId={bo.id} quyen={quyen} onDaHuy={() => { onDaHuy(); gn.batDauLuotMoiSauHuy() }} />
       </div>
     )
   }
@@ -148,7 +148,7 @@ export function CouncilRecordStep({ bo, quyen, gn, onQuayLai, onDaHuy }: Props) 
     return (
       <div className="space-y-4" data-testid="buoc-ghi-nhan">
         <p className="text-sm text-muted-foreground">Bước 6 — bộ #{bo.id} đã có Quyết định đã ghi nhận.</p>
-        <CouncilRecordResult quyetDinh={hienCo} setId={bo.id} quyen={quyen} onDaHuy={() => { onDaHuy(); gn.veBieuMau() }} />
+        <CouncilRecordResult quyetDinh={hienCo} setId={bo.id} quyen={quyen} onDaHuy={() => { onDaHuy(); gn.batDauLuotMoiSauHuy() }} />
       </div>
     )
   }
@@ -398,6 +398,12 @@ function ChuaXacDinh({
       </p>
       {lyDo === "dang_xu_ly" ? <p data-testid="tb-dang-xu-ly">Máy chủ đang xử lý — vẫn chưa rõ, thử lại sau ít giây.</p> : null}
       {lyDo === "phan_xu_loi" ? <p data-testid="tb-phan-xu-loi">Không kết nối được — kiểm thất bại. Thử lại.</p> : null}
+      {lyDo === "dong_bang" ? (
+        <p data-testid="tb-dong-bang">
+          Tuyển sinh đang tạm đóng băng nên máy chủ chưa cho kiểm lượt này. Kết quả vẫn chưa xác định (Quyết định CÓ THỂ đã được
+          ghi). Biểu mẫu vẫn khoá; đợi hết đóng băng rồi bấm kiểm lại.
+        </p>
+      ) : null}
       {lyDo === "van_chua_ro" ? <p data-testid="tb-van-chua-ro">Máy chủ trả kết quả không hiểu được — vẫn chưa rõ.</p> : null}
       <Button type="button" size="sm" onClick={onKiemTra} disabled={dangKiem} data-testid="kiem-tra-may-chu">
         {dangKiem ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}

@@ -9,6 +9,7 @@ import {
   nhanLoaiQuyetDinh,
   nhanTrangThaiQuyetDinh,
 } from "@/app/(dashboard)/admin/council-documents/_components/hien-thi"
+import { useCouncilDocumentPermissions } from "@/hooks/admin/useCouncilDocuments"
 import { councilProfileDecisionSchema } from "@/lib/zod/council-documents"
 
 /** Nhãn tình trạng do MÁY CHỦ tính (đặc tả 3.9); giá trị lạ ⇒ in nguyên (không suy). */
@@ -17,6 +18,24 @@ const NHAN_TINH_TRANG: Record<string, string> = {
   cho_admin_quyet: "Đang chờ Admin quyết",
   da_cho_xet_lai: "Đã cho xét lại",
   chua_co_qd: "Chưa có Quyết định",
+}
+
+/**
+ * Mã bộ của văn bản. Cán bộ xem được hồ sơ chưa chắc được xem bộ văn bản Hội đồng (cổng RIÊNG của module): chỉ làm LIÊN KẾT khi
+ * máy chủ báo cờ `xem_chi_tiet_bo` (`GET /quyen`; 403 = mọi cờ tắt — hợp đồng hiện có). Đang tải / lỗi / 403 / thiếu cờ ⇒ chỉ
+ * hiện mã bộ dạng chữ (bấm ra chỉ gặp từ chối quyền — F279). Đọc cờ CHỈ khi thật sự có bộ để trỏ tới (component con).
+ */
+function MaBo({ setId }: { setId: number }) {
+  const vm = useCouncilDocumentPermissions()
+  const nhan = `bộ #${setId}`
+  if (vm.state === "ready" && vm.permissions.xem_chi_tiet_bo) {
+    return (
+      <Link href={`/admin/council-documents/${setId}`} className="underline-offset-2 hover:underline" data-testid="qd-bo-link">
+        {nhan}
+      </Link>
+    )
+  }
+  return <span data-testid="qd-bo-ma">{nhan}</span>
 }
 
 /**
@@ -45,9 +64,7 @@ export function CouncilDecisionCard({ value }: { value: unknown }) {
             {vb.set_id !== null ? (
               <>
                 {" · "}
-                <Link href={`/admin/council-documents/${vb.set_id}`} className="underline-offset-2 hover:underline" data-testid="qd-bo-link">
-                  bộ #{vb.set_id}
-                </Link>
+                <MaBo setId={vb.set_id} />
               </>
             ) : null}
           </div>

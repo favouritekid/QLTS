@@ -61,12 +61,12 @@ let urls: string[] = []
 let zipGoi: number[] = []
 let zipTra: (() => Response) | null = null
 
-function moc(co: CouncilDocumentPermissions) {
+function moc(co: CouncilDocumentPermissions, boGhiDe: Record<string, unknown> = {}) {
   server.use(
     http.get(`${API}${P}/quyen`, () => HttpResponse.json({ permissions: co })),
     http.get(`${API}${P}/sets/7`, ({ request }) => {
       urls.push(request.url)
-      return HttpResponse.json(BO)
+      return HttpResponse.json({ ...BO, ...boGhiDe })
     }),
     http.get(`${API}${P}/sets/7/ma-ho-so`, ({ request }) => {
       urls.push(request.url)
@@ -212,6 +212,26 @@ describe("Tải cả bộ (cờ tai_ca_bo)", () => {
     fireEvent.click(await screen.findByTestId("tai-ca-bo"))
     expect((await screen.findByTestId("download-zip-error")).textContent).toContain("Không tìm thấy")
     expect(downloadBlob).not.toHaveBeenCalled()
+  })
+})
+
+// P9 (phiên A, đột biến `bo.tinh_trang !== null` → `!== undefined` sống sót ở lần nghiệm thu f560ad7a): `tinh_trang` null (máy chủ không
+// tính được) ⇒ KHÔNG vẽ dòng "Tình trạng" — không bịa nhãn rỗng. Bộ có tình trạng thì dòng ấy PHẢI hiện (đối chứng, để ca trên không rỗng).
+// Khẳng định "vắng" an toàn vì `set-detail` và dòng này vẽ CÙNG một lượt render từ dữ liệu bộ đã tải.
+describe("dòng 'Tình trạng' theo tinh_trang của máy chủ", () => {
+  it("tinh_trang null ⇒ không có dòng Tình trạng", async () => {
+    moc(TAT_CA, { tinh_trang: null })
+    ve()
+    expect(await screen.findByTestId("set-detail")).toBeTruthy()
+    expect(screen.getByText(/Số hồ sơ:/)).toBeTruthy() // thông tin bộ đã vẽ xong (ThongTinBo cùng lượt render)
+    expect(screen.queryByTestId("tinh-trang")).toBeNull()
+  })
+
+  it("đối chứng: tinh_trang = con_hieu_luc ⇒ dòng Tình trạng hiện nhãn 'Còn hiệu lực'", async () => {
+    moc(TAT_CA, { tinh_trang: "con_hieu_luc" })
+    ve()
+    const dong = await screen.findByTestId("tinh-trang")
+    expect(dong.textContent).toContain("Còn hiệu lực")
   })
 })
 

@@ -8,7 +8,10 @@
  *   • Bị từ chối dứt khoát (4xx đã định) ⇒ mở khoá biểu mẫu, gửi lại CÙNG mã (lượt vẫn `cho_gui`).
  *   • Mất mạng / hết giờ / 5xx / 404 / 2xx không đọc được ⇒ "Chưa xác định". KHÔNG bao giờ suy "chưa ghi", và KHÔNG
  *     có đường "gửi lại" từ trạng thái này — chỉ có "Kiểm tra trên máy chủ" (phân xử).
- *   • Phân xử cũng có thể mất phản hồi ⇒ vẫn "Chưa xác định" (gọi lại được: máy chủ luỹ đẳng).
+ *   • Phân xử cũng có thể mất phản hồi, hoặc bị đóng băng tuyển sinh chặn (503) ⇒ vẫn "Chưa xác định" (gọi lại được: máy chủ
+ *     luỹ đẳng) — không bao giờ suy "chưa ghi".
+ *   • Mã của lượt đã `da_ghi` chỉ bị bỏ SAU KHI máy chủ xác nhận huỷ ghi nhận (`batDauLuotMoiSauHuy`); lỗi nghiệp vụ khi gửi
+ *     KHÔNG bỏ mã (lượt vẫn `cho_gui`) — F276.
  *   • Chống bấm đúp bằng cờ đồng bộ (không chờ React render).
  *
  * ⚠️ KHÔNG dùng `useMutation`: biến số (scan, số hồ sơ gõ lại, ghi chú) không được nằm trong MutationCache.
@@ -43,6 +46,7 @@ export type LyDoChuaRo =
   | "tai_lai_trang" // khôi phục từ `GET /sets/{id}/luot-ghi-nhan`
   | "dang_xu_ly" // phân xử: giao dịch ghi còn giữ lượt
   | "phan_xu_loi" // phân xử mất phản hồi
+  | "dong_bang" // phân xử bị đóng băng tuyển sinh chặn (503 ADMISSION_FROZEN): vẫn chưa rõ, đợi hết đóng băng
   | "van_chua_ro" // phân xử trả `ket_qua` lạ
 
 export type TrangThaiGhiNhan =
@@ -172,9 +176,10 @@ export function useGhiNhanQuyetDinh(setId: number) {
         default:
           setTrangThai({ kieu: "chua_xac_dinh", ma, luc, lyDo: "van_chua_ro" })
       }
-    } catch {
-      // mất mạng / hết giờ / 404 / 5xx / phản hồi không đọc được: KHÔNG kết luận gì
-      setTrangThai({ kieu: "chua_xac_dinh", ma, luc, lyDo: "phan_xu_loi" })
+    } catch (loi) {
+      // mất mạng / hết giờ / 404 / 5xx / phản hồi không đọc được: KHÔNG kết luận gì. Đóng băng tuyển sinh (503 ADMISSION_FROZEN)
+      // chặn CẢ việc phân xử: máy chủ vẫn trả lời nên không phải "mất mạng" — nói riêng để người dùng biết đợi hết đóng băng.
+      setTrangThai({ kieu: "chua_xac_dinh", ma, luc, lyDo: readApiError(loi).frozen ? "dong_bang" : "phan_xu_loi" })
     } finally {
       dangChay.current = false
     }
@@ -191,8 +196,24 @@ export function useGhiNhanQuyetDinh(setId: number) {
     })
   }, [])
 
-  /** Về biểu mẫu sau khi đã chặn lượt / sau khi đọc xong lỗi (không xoá mã nếu lượt còn `cho_gui`). */
+  /**
+   * Về biểu mẫu sau khi lượt đã bị CHẶN (`chua_ghi_da_chan`, mã đã bỏ lúc phân xử). CHỈ đổi trạng thái: KHÔNG đụng mã, nên
+   * KHÔNG dùng sau khi huỷ ghi nhận (xem `batDauLuotMoiSauHuy`).
+   */
   const veBieuMau = useCallback(() => setTrangThai({ kieu: "nhap" }), [])
 
-  return { trangThai, gui, phanXu, khoiPhuc, veBieuMau }
+  /**
+   * Gọi CHỈ SAU KHI máy chủ đã xác nhận huỷ ghi nhận văn bản của lượt này (`CouncilCancelDialog.onXong`: huỷ thành công, hoặc
+   * đọc lại thấy văn bản đã huỷ). Lượt cũ đã `da_ghi` — mã của nó đã "dùng hết": gửi lại cùng mã thì máy chủ (luỹ đẳng) trả lại
+   * đúng văn bản ĐÃ HUỶ, khác nội dung thì 409 (F276). Bỏ mã cũ để lần gửi kế tiếp mở lượt MỚI, và về biểu mẫu.
+   *
+   * KHÔNG mở lượt ngay ở đây (lượt chỉ mở NGAY trước khi gửi — vào bước rồi bỏ đi sẽ để lại lượt treo). KHÔNG gọi khi huỷ
+   * chưa được xác nhận, và KHÔNG gọi ở nhánh lỗi nghiệp vụ khi gửi (lượt vẫn `cho_gui`, gửi lại CÙNG mã).
+   */
+  const batDauLuotMoiSauHuy = useCallback(() => {
+    maRef.current = null
+    setTrangThai({ kieu: "nhap" })
+  }, [])
+
+  return { trangThai, gui, phanXu, khoiPhuc, veBieuMau, batDauLuotMoiSauHuy }
 }

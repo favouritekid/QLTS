@@ -146,7 +146,7 @@ export function CouncilPickStep({ xemTruoc, dangKiem, coDoiMa }: Props) {
           </select>
         </div>
         <div className="space-y-1">
-          <Label htmlFor="hd-nganh">Ngành</Label>
+          <Label htmlFor="hd-nganh">Ngành trên hồ sơ</Label>
           <select
             id="hd-nganh"
             data-testid="loc-nganh"
@@ -212,7 +212,7 @@ export function CouncilPickStep({ xemTruoc, dangKiem, coDoiMa }: Props) {
                   <TableHead>#</TableHead>
                   <TableHead>Họ tên</TableHead>
                   <TableHead>CCCD</TableHead>
-                  <TableHead>Ngành</TableHead>
+                  <TableHead>Ngành trên hồ sơ</TableHead>
                   <TableHead>Đường xét</TableHead>
                   <TableHead>Điểm</TableHead>
                   <TableHead>Trạng thái</TableHead>
@@ -267,6 +267,10 @@ export function CouncilPickStep({ xemTruoc, dangKiem, coDoiMa }: Props) {
             </Table>
           </div>
           <CouncilErrorAlert error={tim.error} testId="tim-ho-so-loi" />
+          <p className="text-xs text-muted-foreground" data-testid="chu-thich-nganh-ho-so">
+            “Ngành trên hồ sơ” là ngành ghi trên hồ sơ lúc tìm. Ngành xét và đường xét chính xác chỉ có sau khi kiểm trước (hồ sơ đã
+            chọn) — xem cột Đường xét, Điểm và Kiểm trước.
+          </p>
           <div className="flex items-center justify-between text-sm">
             <span data-testid="phan-trang-nhan">
               {tim.data ? `${tong} hồ sơ · trang ${tim.data.page}/${soTrang}` : ""}

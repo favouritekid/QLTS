@@ -558,3 +558,181 @@ describe("bộ đã có Quyết định + Huỷ ghi nhận", () => {
     expect((within(hop).getByTestId("huy-xac-nhan-nut") as HTMLButtonElement).disabled).toBe(true)
   })
 })
+
+/** Mã lượt gửi đã mang trong thân các lần POST /decisions, theo thứ tự. */
+const maGui = () => formGui.map((f) => f.get("ma_luot_gui"))
+
+// ── F276 (Codex lần 18): ghi nhận → huỷ ghi nhận → ghi nhận LẠI, KHÔNG tải lại trang ─────────────────────────────────────
+// Bộ điều khiển là hook THẬT (`useGhiNhanQuyetDinh`) nối qua `CouncilSetDetailClient` → `CouncilRecordStep` →
+// `CouncilRecordResult` → `CouncilCancelDialog`; máy chủ là MSW CÓ TRẠNG THÁI (không mock hook). Lỗi cũ: sau khi huỷ, giao diện
+// chỉ đổi trạng thái về biểu mẫu mà GIỮ mã của lượt đã `da_ghi` ⇒ gửi lại cùng mã ⇒ máy chủ (luỹ đẳng) trả lại đúng văn bản ĐÃ
+// HUỶ; khác nội dung thì 409.
+describe("F276 — ghi nhận → huỷ → ghi nhận lại (không tải lại trang)", () => {
+  const MA_MOI = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+  /**
+   * Máy chủ giả có trạng thái: mỗi mã lượt chỉ ghi MỘT văn bản; gửi lại CÙNG mã trả đúng văn bản ấy (luỹ đẳng) — kể cả khi
+   * văn bản đã bị huỷ ghi nhận. Lượt mở thứ nhất cấp `MA`, thứ hai cấp `MA_MOI`.
+   */
+  function mayChuGhiHuyGhiLai(opt: { matPhanHoiLanGuiDau?: boolean; loiNghiepVuLanGuiThu?: number } = {}) {
+    const daGhi = new Map<string, Record<string, unknown>>()
+    let lanGui = 0
+    const cau: Cau = {
+      decisions: [],
+      mo: () => HttpResponse.json({ ma: soLanMo === 1 ? MA : MA_MOI }, { status: 201 }),
+      gui: () => {
+        lanGui++
+        const ma = String(formGui[formGui.length - 1]?.get("ma_luot_gui"))
+        if (opt.loiNghiepVuLanGuiThu === lanGui) {
+          return HttpResponse.json({ detail: "Số hồ sơ gõ lại không khớp.", error_code: "BUSINESS_RULE_VIOLATION" }, { status: 400 })
+        }
+        const cu = daGhi.get(ma)
+        if (cu) return HttpResponse.json({ ...cu, lap_lai: true }, { status: 200 })
+        const moi = qd({ id: 21 + daGhi.size, ma_luot_gui: ma })
+        daGhi.set(ma, moi)
+        cau.decisions = [moi]
+        return opt.matPhanHoiLanGuiDau && lanGui === 1 ? HttpResponse.error() : HttpResponse.json(moi, { status: 201 })
+      },
+      chan: () => HttpResponse.json({ ket_qua: "da_ghi", quyet_dinh: daGhi.get(MA) }),
+      huy: () => {
+        const huy = { ...daGhi.get(MA), trang_thai: "huy_ghi_nhan" }
+        daGhi.set(MA, huy)
+        cau.decisions = []
+        return HttpResponse.json(huy)
+      },
+    }
+    return cau
+  }
+
+  /** Huỷ văn bản đang hiện ở khung kết quả (lý do + gõ lại số hồ sơ do máy chủ báo = 7) rồi đợi biểu mẫu mở lại. */
+  async function huyRoiDoiBieuMau() {
+    fireEvent.click(await screen.findByTestId("huy-ghi-nhan-mo"))
+    const hop = await screen.findByTestId("huy-ghi-nhan-dialog")
+    fireEvent.change(within(hop).getByTestId("huy-ly-do"), { target: { value: "Nhập sai số" } })
+    fireEvent.change(within(hop).getByTestId("huy-so-ho-so"), { target: { value: "7" } })
+    fireEvent.click(within(hop).getByTestId("huy-xac-nhan-nut"))
+    await waitFor(() => expect(huyBodies).toHaveLength(1))
+    await screen.findByTestId("bieu-mau-ghi-nhan")
+  }
+
+  /** Các ô người dùng đã điền vẫn còn sau khi ghi (cùng một màn); bảo đảm đủ điều kiện mà không bật tắt nhầm ô xác nhận. */
+  function bamGhiNhanLai() {
+    const khop = screen.getByTestId("xac-nhan-khop")
+    if (khop.getAttribute("aria-checked") !== "true") fireEvent.click(khop)
+    fireEvent.change(screen.getByTestId("xac-nhan-so-ho-so"), { target: { value: "3" } })
+    fireEvent.click(nutGhi())
+  }
+
+  it("ghi thành công → huỷ → ghi lại: lượt gửi THỨ HAI mang mã MỚI (mở lượt mới), không dùng lại mã lượt đã ghi", async () => {
+    dung(mayChuGhiHuyGhiLai())
+    ve()
+    await dien()
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("ket-qua-ghi-nhan") // lượt 1 đã ghi
+    await huyRoiDoiBieuMau()
+    bamGhiNhanLai()
+    await screen.findByTestId("ket-qua-ghi-nhan")
+    expect(maGui()).toEqual([MA, MA_MOI])
+    expect(soLanMo).toBe(2)
+    // hệ quả người dùng thấy: khung kết quả là văn bản MỚI còn hiệu lực, không phải văn bản cũ đã huỷ
+    expect(screen.getByTestId("ket-qua-dong").textContent).not.toContain("Đã huỷ ghi nhận")
+    expect(screen.queryByTestId("ket-qua-lap-lai")).toBeNull()
+  })
+
+  it("lượt chưa rõ → phân xử 'đã ghi' → huỷ → ghi lại: cũng mở lượt MỚI (nhánh anh em: mã lượt đến từ phân xử)", async () => {
+    dung(mayChuGhiHuyGhiLai({ matPhanHoiLanGuiDau: true }))
+    ve()
+    await dien()
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("chua-xac-dinh")
+    fireEvent.click(screen.getByTestId("kiem-tra-may-chu"))
+    await screen.findByTestId("ket-qua-ghi-nhan") // phân xử: đã ghi
+    await huyRoiDoiBieuMau()
+    bamGhiNhanLai()
+    await screen.findByTestId("ket-qua-ghi-nhan")
+    expect(maGui()).toEqual([MA, MA_MOI])
+    expect(soLanMo).toBe(2)
+  })
+
+  it("đối chứng: lỗi NGHIỆP VỤ khi ghi lại ⇒ gửi tiếp vẫn cùng mã lượt đang chờ (không mở lượt thứ ba)", async () => {
+    dung(mayChuGhiHuyGhiLai({ loiNghiepVuLanGuiThu: 2 })) // lần gửi thứ hai (lượt MỚI sau huỷ) bị từ chối 400
+    ve()
+    await dien()
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("ket-qua-ghi-nhan")
+    await huyRoiDoiBieuMau()
+    bamGhiNhanLai()
+    expect((await screen.findByTestId("ghi-nhan-loi")).textContent).toContain("Số hồ sơ gõ lại không khớp.")
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("ket-qua-ghi-nhan")
+    expect(maGui()).toEqual([MA, MA_MOI, MA_MOI])
+    expect(soLanMo).toBe(2)
+  })
+})
+
+// ── Codex lần 18, §5.13 + câu 2: đóng băng tuyển sinh (503 ADMISSION_FROZEN) ──────────────────────────────────────────────
+// Máy chủ cũng chặn việc PHÂN XỬ lượt cũ khi đóng băng. Lượt chưa rõ phải GIỮ NGUYÊN "Chưa xác định" (không bao giờ thành "chưa
+// ghi nhận"), nói bằng lời thường vì sao chưa kiểm được, và biểu mẫu vẫn khoá.
+describe("đóng băng tuyển sinh — bước ghi nhận", () => {
+  const dongBang = () => HttpResponse.json({ detail: "Tuyển sinh đang đóng băng", code: "ADMISSION_FROZEN" }, { status: 503 })
+
+  it("phân xử bị đóng băng chặn ⇒ VẪN 'Chưa xác định' + nói rõ lý do đóng băng; không 'chưa ghi nhận'; không mở khoá biểu mẫu", async () => {
+    dung({ gui: () => HttpResponse.error(), chan: dongBang })
+    ve()
+    await dien()
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("chua-xac-dinh")
+    fireEvent.click(screen.getByTestId("kiem-tra-may-chu"))
+    const tb = await screen.findByTestId("tb-dong-bang")
+    expect(tb.textContent).toMatch(/đóng băng/)
+    expect(tb.textContent).toMatch(/chưa xác định/i)
+    expect(tb.textContent).not.toMatch(/không kết nối/i) // máy chủ vẫn trả lời; đây không phải mất mạng
+    expect(screen.queryByTestId("tb-phan-xu-loi")).toBeNull()
+    expect(screen.getByTestId("chua-xac-dinh")).toBeTruthy()
+    expect(vanBan()).not.toMatch(/chưa ghi nhận/i)
+    expect((screen.getByTestId("bieu-mau-ghi-nhan") as HTMLFieldSetElement).disabled).toBe(true)
+    expect(screen.queryByTestId("ghi-nhan")).toBeNull()
+    expect(screen.queryByTestId("da-chan")).toBeNull()
+  })
+
+  it("phân xử đóng băng rồi hết đóng băng ⇒ bấm lại được và phân xử ra kết quả thật", async () => {
+    let dong = true
+    dung({ gui: () => HttpResponse.error(), chan: () => (dong ? dongBang() : HttpResponse.json({ ket_qua: "chua_ghi_da_chan" })) })
+    ve()
+    await dien()
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("chua-xac-dinh")
+    fireEvent.click(screen.getByTestId("kiem-tra-may-chu"))
+    await screen.findByTestId("tb-dong-bang")
+    dong = false
+    fireEvent.click(screen.getByTestId("kiem-tra-may-chu"))
+    expect(await screen.findByTestId("da-chan")).toBeTruthy()
+    expect(screen.queryByTestId("tb-dong-bang")).toBeNull()
+  })
+
+  it("mở lượt bị đóng băng chặn ⇒ nói rõ đóng băng + 'chưa gửi gì'; chưa gửi văn bản nào", async () => {
+    dung({ mo: dongBang })
+    ve()
+    await dien()
+    fireEvent.click(nutGhi())
+    const the = await screen.findByTestId("loi-mo-luot")
+    expect(the.textContent).toMatch(/đóng băng/)
+    expect(the.textContent).toContain("Chưa gửi gì")
+    expect(formGui).toHaveLength(0)
+    expect(screen.queryByTestId("chua-xac-dinh")).toBeNull()
+  })
+
+  it("gửi bị đóng băng chặn ⇒ nói rõ đóng băng; lượt còn chờ, gửi lại sau khi hết đóng băng vẫn CÙNG mã", async () => {
+    let dong = true
+    dung({ gui: () => (dong ? dongBang() : HttpResponse.json(qd(), { status: 201 })) })
+    ve()
+    await dien()
+    fireEvent.click(nutGhi())
+    expect((await screen.findByTestId("ghi-nhan-loi")).textContent).toMatch(/đóng băng/)
+    dong = false
+    fireEvent.click(nutGhi())
+    await screen.findByTestId("ket-qua-ghi-nhan")
+    expect(maGui()).toEqual([MA, MA])
+    expect(soLanMo).toBe(1)
+  })
+})
