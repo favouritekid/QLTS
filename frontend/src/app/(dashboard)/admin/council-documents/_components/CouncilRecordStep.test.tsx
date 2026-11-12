@@ -28,6 +28,8 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 const API = "http://localhost:8000"
 const MA = "11111111-2222-3333-4444-555555555555"
+/** Số Quyết định của văn bản giả (id 21). Hộp Huỷ ghi nhận đòi gõ lại ĐÚNG số này — không phải số hồ sơ (7). */
+const SO_QD = "99"
 const TAT_CA = Object.fromEntries(Object.keys(NO_COUNCIL_PERMISSIONS).map((k) => [k, true])) as CouncilDocumentPermissions
 
 const BO = {
@@ -42,8 +44,8 @@ const BO = {
 function qd(over: Record<string, unknown> = {}) {
   return {
     id: 21, loai: "trung_tuyen", trang_thai: "hieu_luc", can_bo: false, set_id: 7,
-    so_quyet_dinh: "99", ngay_ky: "2026-09-08", pham_vi_so: 2026,
-    so_ho_so: 7, // KHÁC số người dùng gõ (3) — để chứng minh khung kết quả lấy từ DTO
+    so_quyet_dinh: SO_QD, ngay_ky: "2026-09-08", pham_vi_so: 2026,
+    so_ho_so: 7, // KHÁC số người dùng gõ (3) — để chứng minh khung kết quả lấy từ DTO; cũng KHÁC SỐ QUYẾT ĐỊNH (99) của hộp Huỷ
     ghi_nhan_boi_id: 1, ghi_nhan_luc: "2026-11-11T03:00:00Z", canh_bao_vuot_chi_tieu: [], ma_luot_gui: MA, lap_lai: false,
     ...over,
   }
@@ -106,7 +108,14 @@ function dung(c: Cau = {}) {
     }),
     http.post(`${API}${P}/luot-ghi-nhan/:ma/chan`, () => (c.chan ? c.chan() : HttpResponse.json({ ket_qua: "dang_xu_ly" }))),
     http.post(`${API}${P}/decisions/21/huy-ghi-nhan`, async ({ request }) => {
-      huyBodies.push((await request.json()) as Record<string, unknown>)
+      const than = (await request.json()) as Record<string, unknown>
+      huyBodies.push(than)
+      // Như máy chủ thật (`council_decision_service.huy_ghi_nhan`, `if so_go_lai != x.so_quyet_dinh`): so NGUYÊN CHUỖI với SỐ QUYẾT
+      // ĐỊNH của văn bản, KHÔNG phải số hồ sơ. Lệch ⇒ 400 DATA_VALIDATION_ERROR, văn bản không đổi. (Máy chủ giả cũ nhận mọi giá
+      // trị nên không bắt được lỗi Đ2-1: hộp thoại bảo gõ số hồ sơ.)
+      if (than.so_go_lai !== SO_QD) {
+        return HttpResponse.json({ detail: "Số văn bản gõ lại không khớp.", error_code: "DATA_VALIDATION_ERROR" }, { status: 400 })
+      }
       return c.huy ? c.huy() : HttpResponse.json(qd({ trang_thai: "huy_ghi_nhan" }))
     }),
   )
@@ -310,6 +319,65 @@ describe("lượt CHƯA RÕ — mọi chỗ chỉ nói 'Chưa xác định'", ()
     expect(vanBan()).not.toMatch(/chưa ghi nhận/i)
     expect(soLanMo).toBe(0) // vào bước KHÔNG mở lượt
   })
+
+  // Đ2-2 (chạy thử trình duyệt đợt 2): phân xử trả "đã chặn" nhưng dòng "Tình trạng" đầu trang vẫn "Chưa xác định" dù máy chủ đã
+  // đổi sang `chua_ghi_nhan`. Máy chủ giả CÓ TRẠNG THÁI: bộ + danh sách lượt chỉ đổi sau khi gọi `chan`.
+  it("Đ2-2: phân xử 'đã chặn' ⇒ dòng 'Tình trạng' đầu trang được LÀM MỚI theo máy chủ (không còn kẹt 'Chưa xác định')", async () => {
+    let daChan = false
+    const luotCho = { ma: MA, trang_thai: "cho_gui", tao_luc: "2026-11-11T02:00:00Z", ket_thuc_luc: null, decision_id: null }
+    dung({
+      ds: [luotCho],
+      chan: () => {
+        daChan = true
+        return HttpResponse.json({ ket_qua: "chua_ghi_da_chan" })
+      },
+    })
+    server.use(
+      http.get(`${API}${P}/sets/7`, () =>
+        HttpResponse.json({
+          ...BO,
+          tinh_trang: daChan ? "chua_ghi_nhan" : "chua_xac_dinh",
+          luot_gui_cho: daChan ? null : { ma: MA, tao_luc: "2026-11-11T02:00:00Z" },
+        }),
+      ),
+      http.get(`${API}${P}/sets/7/luot-ghi-nhan`, () =>
+        HttpResponse.json([daChan ? { ...luotCho, trang_thai: "da_chan", ket_thuc_luc: "2026-11-11T02:05:00Z" } : luotCho]),
+      ),
+    )
+    ve(null)
+    await screen.findByTestId("chua-xac-dinh")
+    expect(screen.getByTestId("tinh-trang").textContent).toContain("Chưa xác định") // trước phân xử: đúng
+    fireEvent.click(screen.getByTestId("kiem-tra-may-chu"))
+    await screen.findByTestId("da-chan")
+    await waitFor(() => expect(screen.getByTestId("tinh-trang").textContent).toContain("Chưa ghi nhận"))
+    expect(screen.getByTestId("tinh-trang").textContent).not.toContain("Chưa xác định")
+    // làm mới bộ KHÔNG được đẩy trang khỏi bước 6: khung "đã chặn" + nút "Nhập lại" còn đó để người dùng đọc
+    expect(screen.getByTestId("da-chan")).toBeTruthy()
+    expect(screen.getByTestId("nhap-lai")).toBeTruthy()
+  })
+
+  // Đ2-3: "Lượt gửi lúc …" là giờ của LƯỢT, không phải giờ bấm kiểm. Giờ lượt cố ý ở quá khứ xa (11:07 05/01/2026 giờ VN — `thoiDiem` in giờ trước ngày) để lệch
+  // hẳn giờ hiện tại; mọi lần phân xử không kết luận (đóng băng / đang xử lý / mất mạng) phải giữ NGUYÊN giờ đó.
+  it.each([
+    ["đóng băng tuyển sinh (503)", () => HttpResponse.json({ detail: "Tuyển sinh đang đóng băng", code: "ADMISSION_FROZEN" }, { status: 503 }), "tb-dong-bang"],
+    ["đang xử lý", () => HttpResponse.json({ ket_qua: "dang_xu_ly" }), "tb-dang-xu-ly"],
+    ["không kết nối", () => HttpResponse.error(), "tb-phan-xu-loi"],
+  ] as const)("Đ2-3: phân xử không kết luận (%s) ⇒ 'Lượt gửi lúc' GIỮ giờ của lượt, không thành giờ bấm kiểm", async (_ten, tra, thay) => {
+    dung({
+      ds: [{ ma: MA, trang_thai: "cho_gui", tao_luc: "2026-01-05T04:07:00Z", ket_thuc_luc: null, decision_id: null }],
+      chan: tra,
+    })
+    ve(null)
+    const the = await screen.findByTestId("chua-xac-dinh")
+    expect(the.textContent).toContain("Lượt gửi lúc 11:07 05/01/2026,") // khôi phục sau tải lại: giờ tạo của lượt
+    fireEvent.click(screen.getByTestId("kiem-tra-may-chu"))
+    await screen.findByTestId(thay)
+    expect(screen.getByTestId("chua-xac-dinh").textContent).toContain("Lượt gửi lúc 11:07 05/01/2026,")
+    // bấm kiểm lần nữa vẫn thế
+    fireEvent.click(screen.getByTestId("kiem-tra-may-chu"))
+    await screen.findByTestId(thay)
+    expect(screen.getByTestId("chua-xac-dinh").textContent).toContain("Lượt gửi lúc 11:07 05/01/2026,")
+  })
 })
 
 describe("bị từ chối nghiệp vụ", () => {
@@ -490,18 +558,74 @@ describe("bộ đã có Quyết định + Huỷ ghi nhận", () => {
     return screen.findByTestId("huy-ghi-nhan-dialog")
   }
 
-  it("Huỷ ghi nhận: lý do + gõ lại số hồ sơ BẮT BUỘC; thân gửi đúng; xong ⇒ biểu mẫu mở lại", async () => {
+  it("Huỷ ghi nhận: lý do + gõ lại SỐ QUYẾT ĐỊNH BẮT BUỘC; thân gửi đúng; xong ⇒ biểu mẫu mở lại", async () => {
     const hop = await moHuy()
     const nut = within(hop).getByTestId("huy-xac-nhan-nut") as HTMLButtonElement
     expect(nut.disabled).toBe(true)
     fireEvent.change(within(hop).getByTestId("huy-ly-do"), { target: { value: "Nhập sai số" } })
     expect(nut.disabled).toBe(true)
-    fireEvent.change(within(hop).getByTestId("huy-so-ho-so"), { target: { value: "7" } })
+    fireEvent.change(within(hop).getByTestId("huy-so-quyet-dinh"), { target: { value: SO_QD } })
     expect(nut.disabled).toBe(false)
     dung({ decisions: [] }) // sau khi huỷ, máy chủ không còn văn bản còn tính
     fireEvent.click(nut)
     await waitFor(() => expect(huyBodies).toHaveLength(1))
-    expect(huyBodies[0]).toEqual({ ly_do: "Nhập sai số", so_go_lai: "7" })
+    expect(huyBodies[0]).toEqual({ ly_do: "Nhập sai số", so_go_lai: SO_QD })
+  })
+
+  // Đ2-1 (CHẶN, chạy thử trình duyệt đợt 2): hộp thoại bảo gõ lại SỐ HỒ SƠ nhưng máy chủ so với SỐ QUYẾT ĐỊNH ⇒ làm đúng chữ trên
+  // màn thì luôn 400, Admin không huỷ được. Ca này làm ĐÚNG như người dùng: đọc con số ngay trên nhãn rồi gõ đúng con số ấy.
+  it("Đ2-1: nhãn ô gõ lại nói 'số Quyết định' (không phải 'số hồ sơ') và hiện số Quyết định của văn bản", async () => {
+    const hop = await moHuy()
+    const nhan = hop.querySelector('label[for="huy-so-quyet-dinh"]')?.textContent ?? ""
+    expect(nhan).toMatch(/số Quyết định/)
+    expect(nhan).not.toMatch(/số hồ sơ/)
+    expect(/\((\d+)\)/.exec(nhan)?.[1]).toBe(SO_QD) // số trên nhãn là số Quyết định (99), KHÔNG phải số hồ sơ của văn bản (7)
+  })
+
+  it("Đ2-1: làm ĐÚNG chữ trên màn — đọc con số trên nhãn rồi gõ đúng con số ấy ⇒ huỷ được (văn bản đã huỷ, biểu mẫu mở lại)", async () => {
+    const hop = await moHuy()
+    const nhan = hop.querySelector('label[for="huy-so-quyet-dinh"]')?.textContent ?? ""
+    const soTrenNhan = /\((\d+)\)/.exec(nhan)?.[1] ?? "" // đúng việc người dùng làm: chép con số in trên nhãn
+    expect(soTrenNhan).not.toBe("") // không vacuous: nhãn có con số để chép
+    fireEvent.change(within(hop).getByTestId("huy-ly-do"), { target: { value: "Nhập sai số" } })
+    fireEvent.change(within(hop).getByTestId("huy-so-quyet-dinh"), { target: { value: soTrenNhan } })
+    dung({ decisions: [] }) // sau khi huỷ, máy chủ không còn văn bản còn tính
+    fireEvent.click(within(hop).getByTestId("huy-xac-nhan-nut"))
+    expect(await screen.findByTestId("bieu-mau-ghi-nhan")).toBeTruthy() // máy chủ nhận ⇒ văn bản đã huỷ ⇒ biểu mẫu mở lại
+    expect(huyBodies).toEqual([{ ly_do: "Nhập sai số", so_go_lai: soTrenNhan }])
+    await waitFor(() => expect(screen.queryByTestId("huy-ghi-nhan-dialog")).toBeNull())
+  })
+
+  it("Đ2-1: gõ SỐ HỒ SƠ thay vì số Quyết định ⇒ máy chủ 400; hộp thoại vẫn mở + hiện câu máy chủ, văn bản KHÔNG đổi; gõ lại đúng số ⇒ huỷ được", async () => {
+    const hop = await moHuy()
+    fireEvent.change(within(hop).getByTestId("huy-ly-do"), { target: { value: "Nhập sai số" } })
+    fireEvent.change(within(hop).getByTestId("huy-so-quyet-dinh"), { target: { value: "7" } }) // số hồ sơ của văn bản
+    fireEvent.click(within(hop).getByTestId("huy-xac-nhan-nut"))
+    expect((await within(hop).findByTestId("huy-loi")).textContent).toContain("Số văn bản gõ lại không khớp.")
+    expect(huyBodies).toEqual([{ ly_do: "Nhập sai số", so_go_lai: "7" }])
+    // văn bản không đổi: hộp thoại còn, khung kết quả còn (văn bản còn hiệu lực), biểu mẫu KHÔNG mở lại
+    expect(screen.getByTestId("huy-ghi-nhan-dialog")).toBeTruthy()
+    expect(screen.getByTestId("ket-qua-ghi-nhan")).toBeTruthy()
+    expect(screen.queryByTestId("bieu-mau-ghi-nhan")).toBeNull()
+    // 400 là từ chối dứt khoát (không phải "chưa rõ"): không đi đường đọc lại, nút bấm lại được ngay
+    expect(within(hop).queryByTestId("huy-doc-lai")).toBeNull()
+    expect((within(hop).getByTestId("huy-xac-nhan-nut") as HTMLButtonElement).disabled).toBe(false)
+    // sửa lại đúng số Quyết định ⇒ huỷ được
+    fireEvent.change(within(hop).getByTestId("huy-so-quyet-dinh"), { target: { value: SO_QD } })
+    dung({ decisions: [] })
+    fireEvent.click(within(hop).getByTestId("huy-xac-nhan-nut"))
+    expect(await screen.findByTestId("bieu-mau-ghi-nhan")).toBeTruthy()
+    expect(huyBodies.map((b) => b.so_go_lai)).toEqual(["7", SO_QD])
+  })
+
+  it("Đ2-1: dán thừa dấu cách đầu/cuối quanh số Quyết định ⇒ vẫn huỷ được (gửi đã cắt; máy chủ so nguyên chuỗi, số QĐ không có khoảng trắng)", async () => {
+    const hop = await moHuy()
+    fireEvent.change(within(hop).getByTestId("huy-ly-do"), { target: { value: "Nhập sai số" } })
+    fireEvent.change(within(hop).getByTestId("huy-so-quyet-dinh"), { target: { value: `  ${SO_QD} ` } })
+    dung({ decisions: [] })
+    fireEvent.click(within(hop).getByTestId("huy-xac-nhan-nut"))
+    expect(await screen.findByTestId("bieu-mau-ghi-nhan")).toBeTruthy()
+    expect(huyBodies).toEqual([{ ly_do: "Nhập sai số", so_go_lai: SO_QD }])
   })
 
   it("409 cần xác nhận ⇒ khối gõ số; gửi lại kèm xac_nhan đúng số máy chủ báo", async () => {
@@ -522,7 +646,7 @@ describe("bộ đã có Quyết định + Huỷ ghi nhận", () => {
     fireEvent.click(await screen.findByTestId("huy-ghi-nhan-mo"))
     const hop = await screen.findByTestId("huy-ghi-nhan-dialog")
     fireEvent.change(within(hop).getByTestId("huy-ly-do"), { target: { value: "lý do" } })
-    fireEvent.change(within(hop).getByTestId("huy-so-ho-so"), { target: { value: "7" } })
+    fireEvent.change(within(hop).getByTestId("huy-so-quyet-dinh"), { target: { value: SO_QD } })
     fireEvent.click(within(hop).getByTestId("huy-xac-nhan-nut"))
     const khoi = await within(hop).findByTestId("huy-xac-nhan")
     expect(khoi.textContent).toContain("2 hồ sơ (dòng 1, 4)")
@@ -531,7 +655,7 @@ describe("bộ đã có Quyết định + Huỷ ghi nhận", () => {
     fireEvent.change(within(hop).getByTestId("huy-xac-nhan-admitted"), { target: { value: "2" } })
     fireEvent.click(nut)
     await waitFor(() => expect(huyBodies).toHaveLength(2))
-    expect(huyBodies[1]).toEqual({ ly_do: "lý do", so_go_lai: "7", xac_nhan: { admitted: 2 } })
+    expect(huyBodies[1]).toEqual({ ly_do: "lý do", so_go_lai: SO_QD, xac_nhan: { admitted: 2 } })
   })
 
   it("mất mạng lúc huỷ ⇒ ĐỌC LẠI văn bản trước; thấy vẫn còn hiệu lực ⇒ mới cho bấm lại", async () => {
@@ -540,7 +664,7 @@ describe("bộ đã có Quyết định + Huỷ ghi nhận", () => {
     fireEvent.click(await screen.findByTestId("huy-ghi-nhan-mo"))
     const hop = await screen.findByTestId("huy-ghi-nhan-dialog")
     fireEvent.change(within(hop).getByTestId("huy-ly-do"), { target: { value: "lý do" } })
-    fireEvent.change(within(hop).getByTestId("huy-so-ho-so"), { target: { value: "7" } })
+    fireEvent.change(within(hop).getByTestId("huy-so-quyet-dinh"), { target: { value: SO_QD } })
     fireEvent.click(within(hop).getByTestId("huy-xac-nhan-nut"))
     expect(await within(hop).findByTestId("huy-con-hieu-luc")).toBeTruthy() // đã đọc lại: còn hiệu lực
     expect((within(hop).getByTestId("huy-xac-nhan-nut") as HTMLButtonElement).disabled).toBe(false)
@@ -552,7 +676,7 @@ describe("bộ đã có Quyết định + Huỷ ghi nhận", () => {
     fireEvent.click(await screen.findByTestId("huy-ghi-nhan-mo"))
     const hop = await screen.findByTestId("huy-ghi-nhan-dialog")
     fireEvent.change(within(hop).getByTestId("huy-ly-do"), { target: { value: "lý do" } })
-    fireEvent.change(within(hop).getByTestId("huy-so-ho-so"), { target: { value: "7" } })
+    fireEvent.change(within(hop).getByTestId("huy-so-quyet-dinh"), { target: { value: SO_QD } })
     fireEvent.click(within(hop).getByTestId("huy-xac-nhan-nut"))
     expect(await within(hop).findByTestId("huy-doc-lai-loi")).toBeTruthy()
     expect((within(hop).getByTestId("huy-xac-nhan-nut") as HTMLButtonElement).disabled).toBe(true)
@@ -604,12 +728,12 @@ describe("F276 — ghi nhận → huỷ → ghi nhận lại (không tải lại
     return cau
   }
 
-  /** Huỷ văn bản đang hiện ở khung kết quả (lý do + gõ lại số hồ sơ do máy chủ báo = 7) rồi đợi biểu mẫu mở lại. */
+  /** Huỷ văn bản đang hiện ở khung kết quả (lý do + gõ lại SỐ QUYẾT ĐỊNH của văn bản = 99) rồi đợi biểu mẫu mở lại. */
   async function huyRoiDoiBieuMau() {
     fireEvent.click(await screen.findByTestId("huy-ghi-nhan-mo"))
     const hop = await screen.findByTestId("huy-ghi-nhan-dialog")
     fireEvent.change(within(hop).getByTestId("huy-ly-do"), { target: { value: "Nhập sai số" } })
-    fireEvent.change(within(hop).getByTestId("huy-so-ho-so"), { target: { value: "7" } })
+    fireEvent.change(within(hop).getByTestId("huy-so-quyet-dinh"), { target: { value: SO_QD } })
     fireEvent.click(within(hop).getByTestId("huy-xac-nhan-nut"))
     await waitFor(() => expect(huyBodies).toHaveLength(1))
     await screen.findByTestId("bieu-mau-ghi-nhan")

@@ -117,9 +117,15 @@ export function nhanLyDoDanMa(ly_do: string): string {
   return NHAN_LY_DO_DAN_MA[ly_do] ?? ly_do
 }
 
+/** Ngành trên hồ sơ để hiện: hồ sơ không có ngành (máy chủ trả chuỗi rỗng) ⇒ "—", như màn Hồ sơ tuyển sinh. */
+export function nganhHienThi(nganh: string): string {
+  return nganh.trim() === "" ? "—" : nganh
+}
+
 /** "Ngành · trình độ" của một dòng kiểm trước. */
 export function nganhTrinhDo(nganh: string, trinhDo: string): string {
-  return trinhDo ? `${nganh} · ${trinhDo}` : nganh
+  const n = nganhHienThi(nganh)
+  return trinhDo ? `${n} · ${trinhDo}` : n
 }
 
 /**

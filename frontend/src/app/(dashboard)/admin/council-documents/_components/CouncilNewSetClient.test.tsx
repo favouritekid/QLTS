@@ -56,6 +56,8 @@ interface Cau {
   /** `kiem-truoc` / `tim-ho-so` trả lỗi này thay vì dữ liệu (vd 503 đóng băng) */
   kiemLoi?: () => Response
   timLoi?: () => Response
+  /** thay danh sách trả về của `tim-ho-so` (mặc định `HO_SO`) */
+  dongTim?: typeof HO_SO
   doiMaLoi?: () => Response
   /** sau lần kiểm trước thứ n (đếm từ 1), đổi mức (mô phỏng người dùng sửa hồ sơ ở thẻ khác) */
   doiMucTuLanKiem?: { lan: number; muc: Record<number, "duoc_dung" | "can_xac_nhan" | "bi_chan"> }
@@ -78,7 +80,8 @@ function dung(cau: Cau = {}) {
       urls.push(request.url)
       timBodies.push((await request.json()) as Record<string, unknown>)
       if (cau.timLoi) return cau.timLoi()
-      return HttpResponse.json({ tong: 3, page: 1, page_size: 25, dong: HO_SO })
+      const dong = cau.dongTim ?? HO_SO
+      return HttpResponse.json({ tong: dong.length, page: 1, page_size: 25, dong })
     }),
     http.post(`${API}${P}/sets/kiem-truoc`, async ({ request }) => {
       urls.push(request.url)
@@ -260,6 +263,18 @@ describe("trang /moi — luồng chính", () => {
     expect(ct).toMatch(/ngành xét/i)
     expect(ct).toMatch(/và đường xét chính xác/i) // chữ "đường xét" của CHÚ THÍCH (không lẫn tên cột "Đường xét" ở cuối câu)
     expect(ct).toMatch(/sau khi kiểm trước/i)
+  })
+
+  // Đ2-4 (chạy thử trình duyệt đợt 2): hồ sơ không có ngành ⇒ máy chủ trả `nganh_nhan: ""`; màn Hồ sơ tuyển sinh hiện "—" cho cùng
+  // hồ sơ, bước chọn từng để ô TRỐNG.
+  it("hồ sơ không có ngành (nganh_nhan rỗng) ⇒ ô 'Ngành trên hồ sơ' hiện '—'; hồ sơ có ngành vẫn hiện đúng tên ngành", async () => {
+    dung({ dongTim: [HO_SO[0], { ...HO_SO[0], profile_id: 14, ho_ten: "Phạm Thị D", cccd: CCCD_GIA(14), nganh_nhan: "" }] })
+    ve()
+    await screen.findByTestId("buoc-chon")
+    fireEvent.change(await screen.findByTestId("loc-nam"), { target: { value: "2026" } })
+    await screen.findByTestId("ho-so-14")
+    expect(screen.getByTestId("nganh-14").textContent).toBe("—")
+    expect(screen.getByTestId("nganh-11").textContent).toBe("CĐ Kế toán")
   })
 })
 

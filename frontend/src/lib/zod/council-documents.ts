@@ -484,7 +484,7 @@ export const councilBlockedRowsSchema = z.array(
 )
 export type CouncilBlockedRows = z.infer<typeof councilBlockedRowsSchema>
 
-/** `CouncilDecisionCancelIn` (extra="forbid") — huỷ ghi nhận: lý do + gõ lại số hồ sơ + xác nhận trạng thái. */
+/** `CouncilDecisionCancelIn` (extra="forbid") — huỷ ghi nhận: lý do + gõ lại SỐ QUYẾT ĐỊNH (`so_go_lai`, máy chủ so với `so_quyet_dinh`) + xác nhận trạng thái. */
 export const councilDecisionCancelSchema = z
   .object({
     ly_do: z.string(),

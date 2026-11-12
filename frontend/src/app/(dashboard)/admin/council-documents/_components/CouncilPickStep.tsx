@@ -28,7 +28,7 @@ import { useCouncilSelectionStore } from "@/lib/stores/council-selection.store"
 import type { CouncilCodesOut, CouncilSetPreview } from "@/lib/zod/council-documents"
 
 import { CouncilErrorAlert } from "./CouncilErrorAlert"
-import { nhanLyDoDanMa, nhanMucKiem, nhanTrangThai } from "./hien-thi"
+import { nganhHienThi, nhanLyDoDanMa, nhanMucKiem, nhanTrangThai } from "./hien-thi"
 
 const CO_TRANG = 25
 /** Trạng thái hồ sơ cho bộ lọc (đúng ba mức của bản mẫu); "Tất cả" = không gửi bộ lọc trạng thái. */
@@ -242,7 +242,8 @@ export function CouncilPickStep({ xemTruoc, dangKiem, coDoiMa }: Props) {
                       <TableCell>{d.profile_id}</TableCell>
                       <TableCell>{d.ho_ten}</TableCell>
                       <TableCell className="font-mono text-xs">{d.cccd}</TableCell>
-                      <TableCell>{d.nganh_nhan}</TableCell>
+                      {/* hồ sơ không có ngành ⇒ máy chủ trả chuỗi rỗng; hiện "—" như màn Hồ sơ tuyển sinh (Đ2-4) */}
+                      <TableCell data-testid={`nganh-${d.profile_id}`}>{nganhHienThi(d.nganh_nhan)}</TableCell>
                       {/* danh sách tìm là dạng nhẹ (máy chủ luôn trả `duong_xet_nhan: null`): đường xét / điểm CHÍNH XÁC chỉ có
                           ở kiểm trước, nên chỉ hồ sơ ĐÃ chọn (đã kiểm) mới có giá trị */}
                       <TableCell data-testid={`duong-xet-${d.profile_id}`}>

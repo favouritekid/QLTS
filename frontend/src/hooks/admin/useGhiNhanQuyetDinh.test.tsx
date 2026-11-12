@@ -13,6 +13,7 @@ import type { ReactNode } from "react"
 
 import { server } from "@/test/mocks/server"
 import { COUNCIL_DOCUMENTS_PREFIX as P } from "@/lib/api/council-documents"
+import { councilDocumentKeys } from "./useCouncilDocuments"
 import { useGhiNhanQuyetDinh, type DuLieuGuiGhiNhan } from "./useGhiNhanQuyetDinh"
 
 const API = "http://localhost:8000"
@@ -342,6 +343,103 @@ describe("phân xử — bốn kết quả", () => {
       await h.result.current.phanXu()
     })
     expect(dem.chan).toBe(2)
+  })
+})
+
+// Chạy thử trình duyệt đợt 2 (12-11): Đ2-3 — "Lượt gửi lúc …" bị thay bằng giờ BẤM KIỂM sau một lần phân xử không kết luận;
+// Đ2-2 — phân xử "đã chặn" không làm mới bộ nên dòng "Tình trạng" đầu trang kẹt ở "Chưa xác định".
+describe("phân xử — giờ của lượt được giữ; 'đã chặn' làm mới bộ", () => {
+  const GIO_LUOT = "2026-11-11T02:00:00Z"
+  const dongBang = () => HttpResponse.json({ detail: "Tuyển sinh đang đóng băng", code: "ADMISSION_FROZEN" }, { status: 503 })
+
+  it.each([
+    ["đang xử lý", () => HttpResponse.json({ ket_qua: "dang_xu_ly" }), "dang_xu_ly"],
+    ["ket_qua lạ", () => HttpResponse.json({ ket_qua: "gia_tri_moi_cua_may_chu" }), "van_chua_ro"],
+    ["mất mạng", () => HttpResponse.error(), "phan_xu_loi"],
+    ["đóng băng tuyển sinh (503)", dongBang, "dong_bang"],
+  ] as const)("Đ2-3: phân xử %s trên lượt khôi phục ⇒ chua_xac_dinh GIỮ `luc` của lượt (cả lần bấm kiểm thứ hai)", async (_ten, tra, lyDo) => {
+    dung({ chan: tra })
+    const h = dung_hook()
+    act(() => h.result.current.khoiPhuc([luot(MA, "cho_gui", { tao_luc: GIO_LUOT })]))
+    for (let lan = 0; lan < 2; lan++) {
+      await act(async () => {
+        await h.result.current.phanXu()
+      })
+      expect(h.result.current.trangThai).toEqual({ kieu: "chua_xac_dinh", ma: MA, luc: GIO_LUOT, lyDo })
+    }
+  })
+
+  it("Đ2-3: lượt vừa gửi mất phản hồi — giờ của lượt (lúc gửi) giữ nguyên dù giờ hệ thống đã sang giờ khác khi bấm kiểm", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] }) // chỉ giả đồng hồ; hẹn giờ thật vẫn chạy (MSW / waitFor)
+    try {
+      vi.setSystemTime(new Date("2026-03-01T10:00:00.000Z"))
+      dung({ gui: () => HttpResponse.error(), chan: () => HttpResponse.json({ ket_qua: "dang_xu_ly" }) })
+      const h = dung_hook()
+      await guiXong(h)
+      expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", luc: "2026-03-01T10:00:00.000Z", lyDo: "gui" })
+      vi.setSystemTime(new Date("2026-03-01T11:30:00.000Z")) // người dùng bấm kiểm sau 90 phút
+      await act(async () => {
+        await h.result.current.phanXu()
+      })
+      expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", luc: "2026-03-01T10:00:00.000Z", lyDo: "dang_xu_ly" })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("Đ2-3: ngay trong lúc đang kiểm (dang_phan_xu) cũng mang giờ của lượt", async () => {
+    let tha: () => void = () => undefined
+    const cho = new Promise<void>((r) => {
+      tha = r
+    })
+    dung({
+      chan: async () => {
+        await cho
+        return HttpResponse.json({ ket_qua: "dang_xu_ly" })
+      },
+    })
+    const h = dung_hook()
+    act(() => h.result.current.khoiPhuc([luot(MA, "cho_gui", { tao_luc: GIO_LUOT })]))
+    let xong: Promise<void> = Promise.resolve()
+    act(() => {
+      xong = h.result.current.phanXu()
+    })
+    await waitFor(() => expect(h.result.current.trangThai.kieu).toBe("dang_phan_xu"))
+    expect(h.result.current.trangThai).toEqual({ kieu: "dang_phan_xu", ma: MA, luc: GIO_LUOT })
+    tha()
+    await act(async () => {
+      await xong
+    })
+    expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", luc: GIO_LUOT })
+  })
+
+  it("Đ2-2: chua_ghi_da_chan ⇒ làm mới truy vấn của BỘ này (đánh dấu cũ để tải lại theo máy chủ); bộ khác không bị đụng", async () => {
+    dung({ chan: () => HttpResponse.json({ ket_qua: "chua_ghi_da_chan" }) })
+    const h = dung_hook()
+    h.qc.setQueryData(councilDocumentKeys.set(SET), { id: SET })
+    h.qc.setQueryData(councilDocumentKeys.set(SET + 1), { id: SET + 1 })
+    act(() => h.result.current.khoiPhuc([luot(MA, "cho_gui")]))
+    // trước khi phân xử: các truy vấn còn "tươi" (để khẳng định sau không rỗng)
+    expect(h.qc.getQueryState(councilDocumentKeys.set(SET))?.isInvalidated).toBe(false)
+    await act(async () => {
+      await h.result.current.phanXu()
+    })
+    expect(h.result.current.trangThai.kieu).toBe("chua_ghi_da_chan")
+    expect(h.qc.getQueryState(councilDocumentKeys.set(SET))?.isInvalidated).toBe(true)
+    expect(h.qc.getQueryState(councilDocumentKeys.set(SET + 1))?.isInvalidated).toBe(false)
+  })
+
+  it("Đ2-2: …nhưng KHÔNG làm mới danh sách lượt — lượt hết `cho_gui` thì trang tự rời bước 6 và mất khung 'đã chặn' (xem ca giao diện)", async () => {
+    dung({ chan: () => HttpResponse.json({ ket_qua: "chua_ghi_da_chan" }) })
+    const h = dung_hook()
+    h.qc.setQueryData(councilDocumentKeys.submissions(SET), [luot(MA, "cho_gui")])
+    act(() => h.result.current.khoiPhuc([luot(MA, "cho_gui")]))
+    expect(h.qc.getQueryState(councilDocumentKeys.submissions(SET))?.isInvalidated).toBe(false)
+    await act(async () => {
+      await h.result.current.phanXu()
+    })
+    expect(h.result.current.trangThai.kieu).toBe("chua_ghi_da_chan")
+    expect(h.qc.getQueryState(councilDocumentKeys.submissions(SET))?.isInvalidated).toBe(false)
   })
 })
 
