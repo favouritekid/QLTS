@@ -128,10 +128,15 @@ export async function luatTaiMau(
 }
 
 // ── mã hồ sơ (dùng chung `POST /sets` dạng mã và `POST /sets/doi-ma`) ─────────────────────────────────────────────────
-export type LyDoMa = "rong" | "ky_tu_la" | "sai_dinh_dang"
-/** `loi_mot_ma`: không phải chuỗi / rỗng ⇒ rong; dài > 32 hoặc ký tự nhóm C ⇒ ky_tu_la; không đúng 12 hoặc 9 chữ số ASCII ⇒ sai_dinh_dang. */
+export type LyDoMa = "khong_phai_chuoi" | "rong" | "ky_tu_la" | "sai_dinh_dang"
+/**
+ * `loi_mot_ma` (candidate_service:273, theo thứ tự): không phải chuỗi ⇒ khong_phai_chuoi; rỗng (sau cắt) ⇒ rong; dài > 32 hoặc ký tự nhóm C ⇒
+ * ky_tu_la; không đúng 12 hoặc 9 chữ số ASCII ⇒ sai_dinh_dang.
+ * ⚠️ Đây là luật TẦNG SERVICE. Ở ranh giới HTTP schema (`List[str]` / `List[StrictStr]`) chặn phần tử không phải chuỗi bằng 422 TRƯỚC khi tới
+ * đây — mô-đun này chưa áp lớp schema ấy cho `ma_ho_so`.
+ */
 export function loiMotMa(m: unknown): { ma: string | null; ly_do: LyDoMa | null } {
-  if (typeof m !== "string") return { ma: null, ly_do: "rong" }
+  if (typeof m !== "string") return { ma: null, ly_do: "khong_phai_chuoi" }
   const s = m.trim()
   if (s === "") return { ma: s, ly_do: "rong" }
   if ([...s].length > 32 || [...s].some((c) => /\p{C}/u.test(c))) return { ma: s, ly_do: "ky_tu_la" }
@@ -180,8 +185,10 @@ export function luatTimHoSo(than: Record<string, unknown>): LoiMayChu | null {
 }
 
 // ── 4. POST /sets/kiem-truoc  (và kiem_danh_sach_id dùng chung với POST /sets dạng id) ────────────────────────────────────
+/** Trần số hồ sơ của MỘT bộ = mặc định của `COUNCIL_SET_MAX_PROFILES` (app/config.py:455 — `default=1000`; prod không đặt biến ⇒ 1000). */
+export const TRAN_HO_SO_MAC_DINH = 1000
 /** `kiem_danh_sach_id`: rỗng / vượt trần / id không phải số nguyên dương / TRÙNG (nêu số dòng, không nêu giá trị). */
-export function luatDanhSachId(ids: unknown, toiDa = 500): LoiMayChu | null {
+export function luatDanhSachId(ids: unknown, toiDa = TRAN_HO_SO_MAC_DINH): LoiMayChu | null {
   if (!Array.isArray(ids) || ids.length === 0) return loi400("Danh sách hồ sơ rỗng.")
   if (ids.length > toiDa) return loi400(`Danh sách có ${ids.length} hồ sơ, vượt giới hạn kỹ thuật ${toiDa} hồ sơ cho một bộ văn bản.`)
   const gap = new Map<number, number>()
@@ -194,7 +201,7 @@ export function luatDanhSachId(ids: unknown, toiDa = 500): LoiMayChu | null {
   }
   return null
 }
-export function luatKiemTruoc(than: Record<string, unknown>, toiDa = 500): LoiMayChu | null {
+export function luatKiemTruoc(than: Record<string, unknown>, toiDa = TRAN_HO_SO_MAC_DINH): LoiMayChu | null {
   if (!Number.isInteger(than.academic_year)) return loi422(["academic_year"], "Input should be a valid integer", "int_type")
   if (!Array.isArray(than.profile_ids) || than.profile_ids.length === 0) return loi422(["profile_ids"], "List should have at least 1 item after validation, not 0", "too_short")
   return luatDanhSachId(than.profile_ids, toiDa)
@@ -254,11 +261,12 @@ export function luatTaoBo(than: Record<string, unknown>, o: { anh: AnhKiemTruoc 
     const gap = new Map<string, number>()
     for (let i = 0; i < ma.length; i++) {
       const { ma: s, ly_do } = loiMotMa(ma[i])
+      if (ly_do === "khong_phai_chuoi") return loi400(`Dòng ${i + 1}: mã hồ sơ không phải chuỗi.`)
       if (ly_do === "rong") return loi400(`Dòng ${i + 1}: mã hồ sơ rỗng.`)
-      if (ly_do === "ky_tu_la") return loi400(`Dòng ${i + 1}: mã hồ sơ quá dài hoặc có ký tự lạ.`)
+      if (ly_do === "ky_tu_la") return loi400(`Dòng ${i + 1}: không phải mã hồ sơ (quá dài hoặc có ký tự điều khiển).`)
       if (ly_do === "sai_dinh_dang") return loi400(`Dòng ${i + 1}: mã hồ sơ phải gồm đúng 12 chữ số (CCCD) hoặc đúng 9 chữ số (CMND), chỉ chữ số 0-9.`)
       const truoc = gap.get(s as string)
-      if (truoc !== undefined) return loi400(`Dòng ${i + 1} trùng mã với dòng ${truoc} — mỗi người một dòng.`)
+      if (truoc !== undefined) return loi400(`Dòng ${i + 1} trùng mã hồ sơ với dòng ${truoc} — mỗi người một dòng.`)
       gap.set(s as string, i + 1)
       if (!o.idTheoMa.has(s as string)) return loi400(`Dòng ${i + 1}: mã hồ sơ không khớp đúng một hồ sơ của năm học đã chọn.`)
     }
@@ -283,6 +291,12 @@ export interface BoGhiNhan {
   ngay_dung: string
   /** bộ đã có văn bản còn sống (chưa huỷ ghi nhận) */
   van_ban_song_id?: number
+  /**
+   * Bộ TÁI DỰNG theo bản ký = cột `ban_ky_so_quyet_dinh` + `ban_ky_ngay` (cùng NULL hoặc cùng có — CHECK_BO_BAN_KY_DU). Vắng / `null` = bộ thường.
+   * Bộ tái dựng: số / ngày trên giấy PHẢI bằng bản ký đã khai (`_so_tham_so` :210) và KHÔNG áp "ngày ký trước ngày dựng" (:425 chỉ khi
+   * `ban_ky_so_quyet_dinh is None`).
+   */
+  ban_ky?: { so_quyet_dinh: string; ngay: string } | null
 }
 export interface NguCanhGhiNhan {
   bo: BoGhiNhan
@@ -296,7 +310,7 @@ const TRUONG_THAM_SO_GIAY = ["so_bien_ban", "ngay_bien_ban", "dot_so", "dot_than
 /**
  * `ghi_nhan_quyet_dinh` + khuôn `Form` của router. Thứ tự: khuôn trường (422) → số / ngày / scan / ghi chú / cặp loại↔gốc / xác nhận khớp
  * bản in (400) → gốc (404 / 409) → bộ đã có văn bản sống (409) → `xac_nhan_so_ho_so == bo.so_ho_so` (400) → tham số giấy lệch bản in (400)
- * → ngày ký trước ngày dựng (400) → số đã dùng trong NĂM CỦA NGÀY KÝ (409).
+ * → ngày ký trước ngày dựng (400; CHỈ bộ thường — bộ tái dựng theo bản ký thì bỏ qua) → số đã dùng trong NĂM CỦA NGÀY KÝ (409).
  * KHÔNG áp: mẫu theo ngày ký, dòng bộ / chỉ tiêu / khoá, đếm đổi trạng thái (`xac_nhan_trang_thai` chỉ kiểm là JSON), lượt gửi (hook có test riêng).
  */
 export async function luatGhiNhan(form: FormData, cx: NguCanhGhiNhan): Promise<LoiMayChu | null> {
@@ -334,7 +348,7 @@ export async function luatGhiNhan(form: FormData, cx: NguCanhGhiNhan): Promise<L
   const scan = form.get("scan")
   // --- service ---
   if (!laTep(scan) || scan.size === 0) return loi400("Phải kèm bản scan (PDF) của văn bản đã ký.")
-  if ((await docDauTep(scan, 5)) !== "%PDF-") return loi400("Bản scan phải là tệp PDF (%PDF-).")
+  if ((await docDauTep(scan, 5)) !== "%PDF-") return loi400("Bản scan phải là tệp PDF.")
   const xnTt = s("xac_nhan_trang_thai")
   if (xnTt !== null) {
     try {
@@ -366,6 +380,8 @@ export async function luatGhiNhan(form: FormData, cx: NguCanhGhiNhan): Promise<L
   // _so_tham_so: mọi tham số bộ ĐÃ in phải BẰNG giá trị trên giấy (lệch ⇒ CHẶN); trường bộ để trống nhận giá trị Admin gõ
   const ts = cx.bo.tham_so ?? {}
   const lech: string[] = []
+  const banKy = cx.bo.ban_ky ?? null
+  if (banKy !== null && (banKy.so_quyet_dinh !== so || banKy.ngay !== ngayKy)) lech.push("số / ngày của bản ký đã khai khi tái dựng")
   if (ts.so_quyet_dinh != null && ts.so_quyet_dinh !== so) lech.push("số Quyết định")
   if (ts.ngay_quyet_dinh != null && ts.ngay_quyet_dinh !== ngayKy) lech.push("ngày Quyết định")
   const giay: Record<string, unknown> = { so_bien_ban: soBb, ngay_bien_ban: ngayBb, dot_so: dotSo, dot_thang: dotThangRaw === null ? null : Number(dotThangRaw) }
@@ -375,7 +391,10 @@ export async function luatGhiNhan(form: FormData, cx: NguCanhGhiNhan): Promise<L
   if (lech.length > 0) {
     return loi400(`Giấy đã ký khác bản in của bộ ở: ${lech.join(", ")} — dựng lại bộ đúng tham số trên giấy.`, { truong_lech: lech })
   }
-  if (ngayKy < cx.bo.ngay_dung) return loi400("Ngày ký trước ngày dựng bộ (giờ Việt Nam) — tờ giấy không thể là bản in của bộ này.")
+  // :425 — CHỈ bộ THƯỜNG (`ban_ky_so_quyet_dinh is None`); bộ tái dựng đã bị ràng số / ngày bằng bản ký ở trên.
+  if (banKy === null && ngayKy < cx.bo.ngay_dung) {
+    return loi400("Ngày ký trước ngày dựng bộ (giờ Việt Nam) — tờ giấy không thể là bản in của bộ này.")
+  }
   const nam = Number(ngayKy.slice(0, 4))
   const dung = cx.soDaDung(so, nam)
   if (dung !== undefined) return loi409(`Số Quyết định ${so} đã dùng trong năm ${nam} (văn bản #${dung}).`, { quyet_dinh_id: dung })

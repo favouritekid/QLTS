@@ -132,7 +132,7 @@ function UploadTemplateForm() {
           </Select>
         </div>
         <div className="space-y-1">
-          <Label htmlFor="mau-hieu-luc">Hiệu lực từ ngày</Label>
+          <Label htmlFor="mau-hieu-luc">Áp cho văn bản KÝ từ ngày</Label>
           <Input
             id="mau-hieu-luc"
             type="date"

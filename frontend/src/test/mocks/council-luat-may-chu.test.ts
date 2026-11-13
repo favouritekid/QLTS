@@ -19,6 +19,7 @@ import {
   luatThamSoQuyetDinh,
   luatTimHoSo,
   luatXoaBo,
+  loiMotMa,
   type NguCanhGhiNhan,
 } from "./council-luat-may-chu"
 
@@ -109,6 +110,33 @@ describe("luatDoiMa — lỗi theo SỐ DÒNG, không nêu giá trị", () => {
     ])
     expect(JSON.stringify(kq)).not.toContain(CCCD(7)) // không nêu giá trị
   })
+  it("Đ3-2: phần tử KHÔNG PHẢI CHUỖI (số / null) ⇒ `khong_phai_chuoi` (loi_mot_ma, candidate_service:273) — KHÁC `rong` của mã trống", () => {
+    const kq = luatDoiMa([CCCD(1), 123456789012, null, "", "   "], kho)
+    expect(kq.profile_ids).toEqual([11])
+    expect(kq.dong_loi).toEqual([
+      { dong: 2, ly_do: "khong_phai_chuoi" },
+      { dong: 3, ly_do: "khong_phai_chuoi" },
+      { dong: 4, ly_do: "rong" },
+      { dong: 5, ly_do: "rong" },
+    ])
+  })
+  it("ky_tu_la: dài > 32 ký tự HOẶC có ký tự điều khiển (nhóm C) — trước kiểm dạng 9 / 12 số", () => {
+    const kq = luatDoiMa(["1".repeat(33), CCCD(1) + String.fromCharCode(7), "1".repeat(11)], kho)
+    expect(kq.dong_loi).toEqual([
+      { dong: 1, ly_do: "ky_tu_la" },
+      { dong: 2, ly_do: "ky_tu_la" },
+      { dong: 3, ly_do: "sai_dinh_dang" },
+    ])
+  })
+})
+describe("loiMotMa — thứ tự luật của loi_mot_ma", () => {
+  it("không phải chuỗi ⇒ khong_phai_chuoi (mã null); chuỗi rỗng / toàn khoảng trắng ⇒ rong; đúng 12 và 9 số ⇒ không lỗi (đã cắt khoảng trắng)", () => {
+    for (const x of [123, null, undefined, {}, [], true]) expect(loiMotMa(x)).toEqual({ ma: null, ly_do: "khong_phai_chuoi" })
+    expect(loiMotMa("")).toEqual({ ma: "", ly_do: "rong" })
+    expect(loiMotMa("  ")).toEqual({ ma: "", ly_do: "rong" })
+    expect(loiMotMa(` ${CCCD(1)} `)).toEqual({ ma: CCCD(1), ly_do: null })
+    expect(loiMotMa("123456789")).toEqual({ ma: "123456789", ly_do: null })
+  })
 })
 
 // ── 6. POST /sets/tim-ho-so ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -143,6 +171,20 @@ describe("luatKiemTruoc / luatDanhSachId", () => {
     expect(luatKiemTruoc({ academic_year: 2026, profile_ids: [] })).toMatchObject({ status: 422 })
     expect(luatDanhSachId([1, 2, 3], 2)).toMatchObject({ status: 400 })
     expect(luatDanhSachId([1, 0])).toMatchObject({ status: 400 })
+  })
+  it("Đ3-1: trần MẶC ĐỊNH 1000 (COUNCIL_SET_MAX_PROFILES, config.py:455): 501 và 1000 hồ sơ ĐÚNG; 1001 ⇒ 400 đúng câu máy chủ; trần truyền vào vẫn ưu tiên", () => {
+    const tu = (n: number) => Array.from({ length: n }, (_, i) => i + 1)
+    expect(luatDanhSachId(tu(501))).toBeNull() // trần cũ (500) từng chặn nhầm ca này
+    expect(luatDanhSachId(tu(1000))).toBeNull()
+    expect(luatKiemTruoc({ academic_year: 2026, profile_ids: tu(501) })).toBeNull()
+    expect(luatKiemTruoc({ academic_year: 2026, profile_ids: tu(1000) })).toBeNull()
+    const cau = "Danh sách có 1001 hồ sơ, vượt giới hạn kỹ thuật 1000 hồ sơ cho một bộ văn bản."
+    expect(luatDanhSachId(tu(1001))).toMatchObject({ status: 400, body: { detail: cau, error_code: "DATA_VALIDATION_ERROR" } })
+    expect(luatKiemTruoc({ academic_year: 2026, profile_ids: tu(1001) })).toMatchObject({ status: 400, body: { detail: cau } })
+    expect(luatDanhSachId(tu(3), 2)).toMatchObject({
+      status: 400,
+      body: { detail: "Danh sách có 3 hồ sơ, vượt giới hạn kỹ thuật 2 hồ sơ cho một bộ văn bản." },
+    })
   })
 })
 
@@ -199,6 +241,15 @@ describe("luatTaoBo dạng ID — profile_ids ĐÚNG thứ tự kiểm trước 
   it("tham_so_quyet_dinh đi qua DecisionParams: đợt chỉ một nửa ⇒ 422", () => {
     expect(goi([1, 4, 9], "DAU-LAN-KIEM-2", { tham_so_quyet_dinh: { dot_so: "1" } })).toMatchObject({ status: 422 })
   })
+  it("Đ3-1: dạng id dùng trần mặc định 1000 — 1000 hồ sơ đúng thứ tự + dấu ⇒ ĐÚNG; 1001 ⇒ 400 (chặn TRƯỚC khi so dấu)", () => {
+    const tu = (n: number) => Array.from({ length: n }, (_, i) => i + 1)
+    const lon = { thuTuChuan: tu(1000), dau: "DAU-1000" }
+    expect(luatTaoBo({ profile_ids: tu(1000), phien_ban_kiem: "DAU-1000", academic_year: 2026 }, { anh: lon, idTheoMa })).toBeNull()
+    expect(luatTaoBo({ profile_ids: tu(1001), phien_ban_kiem: "DAU-1000", academic_year: 2026 }, { anh: lon, idTheoMa })).toMatchObject({
+      status: 400,
+      body: { detail: "Danh sách có 1001 hồ sơ, vượt giới hạn kỹ thuật 1000 hồ sơ cho một bộ văn bản." },
+    })
+  })
 })
 describe("luatTaoBo dạng MÃ — 12 / 9 số; trùng dòng; sai năm (mã đúng nhưng không có hồ sơ năm đó)", () => {
   const kho = new Map([[CCCD(1), 11], [CCCD(4), 14]])
@@ -208,6 +259,15 @@ describe("luatTaoBo dạng MÃ — 12 / 9 số; trùng dòng; sai năm (mã đú
     expect(goi([CCCD(1), "09999900000"])).toMatchObject({ status: 400, body: { detail: expect.stringContaining("Dòng 2") } })
     expect(goi([CCCD(1), CCCD(1)])).toMatchObject({ status: 400, body: { detail: expect.stringContaining("Dòng 2 trùng") } })
     expect(goi([CCCD(9)])).toMatchObject({ status: 400 })
+  })
+  it("câu lỗi từng dòng = câu máy chủ (`_CAU_LOI_MA` + `chuan_hoa_ma`): không phải chuỗi (Đ3-2) · ký tự điều khiển · trùng — chỉ nêu SỐ DÒNG", () => {
+    const loi = (ma: unknown[]) => (luatTaoBo({ ma_ho_so: ma, academic_year: 2026 }, { anh: null, idTheoMa: kho })?.body as { detail: string }).detail
+    expect(loi([CCCD(1), 123456789012])).toBe("Dòng 2: mã hồ sơ không phải chuỗi.")
+    expect(loi([CCCD(1), null])).toBe("Dòng 2: mã hồ sơ không phải chuỗi.")
+    expect(loi([CCCD(1), ""])).toBe("Dòng 2: mã hồ sơ rỗng.")
+    expect(loi([CCCD(1), CCCD(4) + String.fromCharCode(7)])).toBe("Dòng 2: không phải mã hồ sơ (quá dài hoặc có ký tự điều khiển).")
+    expect(loi([CCCD(1), "09999900000"])).toBe("Dòng 2: mã hồ sơ phải gồm đúng 12 chữ số (CCCD) hoặc đúng 9 chữ số (CMND), chỉ chữ số 0-9.")
+    expect(loi([CCCD(1), CCCD(4), CCCD(1)])).toBe("Dòng 3 trùng mã hồ sơ với dòng 1 — mỗi người một dòng.")
   })
 })
 
@@ -288,6 +348,25 @@ describe("luatGhiNhan — xac_nhan_so_ho_so, goc_id ↔ loai, tham số đã in,
     expect(await luatGhiNhan(form({ ngay_ky: "2027-02-28" }), trong)).toMatchObject({ status: 400 })
     expect(await luatGhiNhan(form({ ngay_ky: "2027-03-01" }), trong)).toBeNull()
   })
+  it("Đ3-4: bộ TÁI DỰNG theo bản ký (`ban_ky`) KHÔNG bị chặn 'ngày ký trước ngày dựng' (:425 chỉ áp khi ban_ky_so_quyet_dinh is None); bộ thường (vắng / null) vẫn bị chặn", async () => {
+    const banKy = { so_quyet_dinh: SO_QD, ngay: "2027-02-20" } // ký 20-02, bộ tái dựng ngày 01-03 (SAU ngày ký)
+    const f = () => form({ ngay_ky: "2027-02-20" })
+    expect(await luatGhiNhan(f(), cx({ tham_so: null, ban_ky: banKy }))).toBeNull()
+    expect(await luatGhiNhan(f(), cx({ tham_so: null, ban_ky: null }))).toMatchObject({ status: 400, body: { detail: expect.stringContaining("Ngày ký trước ngày dựng bộ") } })
+    expect(await luatGhiNhan(f(), cx({ tham_so: null }))).toMatchObject({ status: 400, body: { detail: expect.stringContaining("Ngày ký trước ngày dựng bộ") } })
+  })
+  it("bộ tái dựng: số / ngày trên giấy PHẢI bằng bản ký đã khai (`_so_tham_so` :210) — lệch ⇒ 400 truong_lech nêu đúng một mục, đứng ĐẦU danh sách", async () => {
+    const banKy = { so_quyet_dinh: SO_QD, ngay: "2027-02-20" }
+    const muc = "số / ngày của bản ký đã khai khi tái dựng"
+    // lệch SỐ (202 ≠ 201), cùng ngày
+    expect(await luatGhiNhan(form({ so_quyet_dinh: "202", ngay_ky: "2027-02-20" }), cx({ tham_so: null, ban_ky: banKy }))).toMatchObject({ status: 400, body: { truong_lech: [muc] } })
+    // lệch NGÀY (2027-02-21 ≠ 2027-02-20), cùng số
+    expect(await luatGhiNhan(form({ ngay_ky: "2027-02-21" }), cx({ tham_so: null, ban_ky: banKy }))).toMatchObject({ status: 400, body: { truong_lech: [muc] } })
+    // bộ tái dựng ĐỒNG THỜI có số QĐ đã in lệch ⇒ mục bản ký đứng TRƯỚC (thứ tự của `_so_tham_so`)
+    expect(
+      await luatGhiNhan(form({ so_quyet_dinh: "202", ngay_ky: "2027-02-20" }), cx({ ban_ky: banKy, tham_so: { so_quyet_dinh: SO_QD } })),
+    ).toMatchObject({ status: 400, body: { truong_lech: [muc, "số Quyết định"] } })
+  })
   it("xác nhận khớp bản in: 'false' ⇒ 400; bộ đã có văn bản sống ⇒ 409", async () => {
     expect(await luatGhiNhan(form({ xac_nhan_khop_ban_in: "false" }), cx())).toMatchObject({ status: 400 })
     expect(await luatGhiNhan(form(), cx({ van_ban_song_id: 5 }))).toMatchObject({ status: 409, body: { quyet_dinh_id: 5 } })
@@ -296,6 +375,16 @@ describe("luatGhiNhan — xac_nhan_so_ho_so, goc_id ↔ loai, tham số đã in,
     expect(await luatGhiNhan(form({}, null), cx())).toMatchObject({ status: 400 })
     expect(await luatGhiNhan(form({}, new File([], "scan.pdf")), cx())).toMatchObject({ status: 400 })
     expect(await luatGhiNhan(form({}, new File(["PK\u0003\u0004"], "scan.docx")), cx())).toMatchObject({ status: 400 })
+  })
+  it("Đ3-3: scan không phải PDF ⇒ 400 ĐÚNG câu máy chủ 'Bản scan phải là tệp PDF.' (decision_service:111) — không kèm '(%PDF-)'; phần mở rộng .pdf không cứu được nội dung", async () => {
+    for (const sai of [new File(["hello world"], "scan.pdf"), new File(["%PDF"], "scan.pdf")]) {
+      // `%PDF` thiếu dấu '-' ⇒ chữ ký sai
+      expect(await luatGhiNhan(form({}, sai), cx())).toEqual({
+        status: 400,
+        body: { detail: "Bản scan phải là tệp PDF.", error_code: "DATA_VALIDATION_ERROR" },
+      })
+    }
+    expect(await luatGhiNhan(form({}, new File(["%PDF-1.7"], "scan.pdf")), cx())).toBeNull() // đúng chữ ký ⇒ nhận
   })
 })
 
