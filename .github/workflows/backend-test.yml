@@ -1258,6 +1258,8 @@ jobs:
           # SQL: chèn đủ, chạy lại không trùng, dòng có sẵn giữ nguyên, hạ cấp chỉ xoá dòng của mình). Ghim WHOLE-FILE.
           # Codex lần 21 câu 1: `tests/unit/test_hop_dong_msw_ghim_luat.py` ghim mã băm các hàm / hằng máy chủ mà MSW giao diện
           # (`frontend/src/test/mocks/council-luat-may-chu.ts`) CHÉP luật — đổi luật ⇒ đỏ ⇒ rà bảng hợp đồng + MSW cùng lượt.
+          # CLAUDE.md §7 (13-11): `tests/unit/test_hop_dong_msw_cau_loi.py` khoá CÂU LỖI + tên loại mẫu / tập trạng thái / trần từ
+          # khoá của MSW bằng máy chủ (so trực tiếp; test ghim chỉ canh phía máy chủ đổi). Đọc tệp frontend ⇒ cần checkout cả repo.
           - tier: Tier 5 — Phase 2 engine prereqs
             tests: >-
               tests/unit/test_nginx_template_packaging.py
@@ -1366,6 +1368,7 @@ jobs:
               tests/api/test_council_set_list_api.py
               tests/integration/test_council_document_casbin_vong_gd_migration.py
               tests/unit/test_hop_dong_msw_ghim_luat.py
+              tests/unit/test_hop_dong_msw_cau_loi.py
 
     env:
       APP_ENV: test
