@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactNode } from "react"
 
 import { server } from "@/test/mocks/server"
+import { dap, luatMoLuot } from "@/test/mocks/council-luat-may-chu"
 import { COUNCIL_DOCUMENTS_PREFIX as P } from "@/lib/api/council-documents"
 import { councilDocumentKeys } from "./useCouncilDocuments"
 import { useGhiNhanQuyetDinh, type DuLieuGuiGhiNhan } from "./useGhiNhanQuyetDinh"
@@ -436,13 +437,8 @@ describe("phân xử — giờ của lượt được giữ; 'đã chặn' làm 
 
 describe("mở lượt", () => {
   it("409 luot_dang_cho ⇒ chua_xac_dinh với mã CŨ của máy chủ; KHÔNG gửi POST /decisions", async () => {
-    const dem = dung({
-      mo: () =>
-        HttpResponse.json(
-          { detail: "Bộ đang có lượt gửi chưa rõ.", error_code: "CONFLICT", ma_loi: "luot_dang_cho", ma: MA_2, tao_luc: "2026-11-11T01:00:00Z" },
-          { status: 409 },
-        ),
-    })
+    // thân 409 do LUẬT THẬT của MSW sinh (`luatMoLuot` — câu + payload của `mo_luot`, Codex lần 22 #7), không chép tay
+    const dem = dung({ mo: () => dap(luatMoLuot({ ma: MA_2, tao_luc: "2026-11-11T01:00:00Z" })) ?? HttpResponse.error() })
     const h = dung_hook()
     await guiXong(h)
     expect(h.result.current.trangThai).toMatchObject({ kieu: "chua_xac_dinh", ma: MA_2, lyDo: "mo_luot" })

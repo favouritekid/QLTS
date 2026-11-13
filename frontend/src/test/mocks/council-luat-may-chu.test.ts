@@ -18,6 +18,7 @@ import {
   luatTaoBo,
   luatThamSoQuyetDinh,
   luatTimHoSo,
+  luatXacNhanTrangThai,
   luatXoaBo,
   loiMotMa,
   luatDoiMaTruoc,
@@ -34,7 +35,7 @@ const CCCD = (n: number) => "099" + "999" + String(n).padStart(6, "0")
 
 // ── 7. DELETE /sets/{id} ────────────────────────────────────────────────────────────────────────────────────────────────
 describe("luatXoaBo — lý do xoá bộ (kiem_ly_do)", () => {
-  const khongVanBan = { coVanBanHieuLuc: false }
+  const khongVanBan = {}
   it("ĐÚNG: lý do có chữ (cắt khoảng trắng hai đầu)", () => {
     expect(luatXoaBo({ ly_do: "  Dựng nhầm năm học  " }, khongVanBan)).toBeNull()
   })
@@ -52,8 +53,46 @@ describe("luatXoaBo — lý do xoá bộ (kiem_ly_do)", () => {
     expect(luatXoaBo({}, khongVanBan)).toMatchObject({ status: 422 })
     expect(luatXoaBo({ ly_do: 5 }, khongVanBan)).toMatchObject({ status: 422 })
   })
-  it("SAI: bộ đang có văn bản hiệu lực ⇒ 409", () => {
-    expect(luatXoaBo({ ly_do: "lý do" }, { coVanBanHieuLuc: true })).toMatchObject({ status: 409, body: { error_code: "CONFLICT" } })
+})
+
+// Codex lần 22 mục 4 (#1): câu + payload của máy chủ (`xoa_bo_van_ban`, council_document_set_service.py:960 và :972) và luật lượt gửi chưa rõ.
+describe("C22-1 luatXoaBo — văn bản đã ký còn sống ⇒ 409 + quyet_dinh_id; lượt gửi chưa rõ ⇒ 409 bo_co_luot_gui_chua_ro (thứ tự: văn bản trước, lượt sau)", () => {
+  const CAU_VAN_BAN_1 = "Bộ văn bản là bản in của Quyết định đã ký (văn bản #7) — lưu theo hạn lưu trữ, không xoá. Chỉ xoá được khi mọi ghi nhận của bộ đã huỷ ghi nhận."
+  const CAU_VAN_BAN_2 = "Bộ văn bản là bản in của Quyết định đã ký (văn bản #41, #42) — lưu theo hạn lưu trữ, không xoá. Chỉ xoá được khi mọi ghi nhận của bộ đã huỷ ghi nhận."
+  const CAU_LUOT = "Bộ đang có lượt gửi ghi nhận chưa rõ kết quả — phân xử (Kiểm tra trên máy chủ) trước khi xoá."
+  const ly = { ly_do: "Dựng nhầm năm học" }
+
+  it("C22-1: một văn bản sống ⇒ 409 CONFLICT đúng câu máy chủ, `quyet_dinh_id` là DANH SÁCH một phần tử", () => {
+    expect(luatXoaBo(ly, { vanBanSongIds: [7] })).toEqual({
+      status: 409,
+      body: { detail: CAU_VAN_BAN_1, error_code: "CONFLICT", quyet_dinh_id: [7] },
+    })
+  })
+  it("C22-1: nhiều văn bản sống ⇒ câu nối '#41, #42' (đúng thứ tự máy chủ), `quyet_dinh_id` = [41, 42]", () => {
+    expect(luatXoaBo(ly, { vanBanSongIds: [41, 42] })).toEqual({
+      status: 409,
+      body: { detail: CAU_VAN_BAN_2, error_code: "CONFLICT", quyet_dinh_id: [41, 42] },
+    })
+  })
+  it("C22-1: danh sách văn bản sống RỖNG ⇒ không chặn (Python `if song:`) — đối chứng của hai ca trên", () => {
+    expect(luatXoaBo(ly, { vanBanSongIds: [] })).toBeNull()
+    expect(luatXoaBo(ly, { vanBanSongIds: [], luotChoMa: null })).toBeNull()
+  })
+  it("C22-1b: bộ có lượt gửi chưa rõ (không có văn bản sống) ⇒ 409 CONFLICT `bo_co_luot_gui_chua_ro` kèm `ma` của lượt, đúng câu máy chủ (:972)", () => {
+    expect(luatXoaBo(ly, { luotChoMa: MA_LUOT })).toEqual({
+      status: 409,
+      body: { detail: CAU_LUOT, error_code: "CONFLICT", ma_loi: "bo_co_luot_gui_chua_ro", ma: MA_LUOT },
+    })
+  })
+  it("C22-1b: có CẢ văn bản sống LẪN lượt chưa rõ ⇒ câu VĂN BẢN ĐÃ KÝ (kiểm trước); không có `ma_loi` của lượt", () => {
+    const kq = luatXoaBo(ly, { vanBanSongIds: [7], luotChoMa: MA_LUOT })
+    expect(kq).toEqual({ status: 409, body: { detail: CAU_VAN_BAN_1, error_code: "CONFLICT", quyet_dinh_id: [7] } })
+    expect(kq?.body).not.toHaveProperty("ma_loi")
+  })
+  it("C22-1b: lý do sai đứng TRƯỚC cả hai ca 409 (kiem_ly_do_xoa chạy đầu); thiếu lý do ⇒ 422 trước cả hai", () => {
+    const ca = { vanBanSongIds: [7], luotChoMa: MA_LUOT }
+    expect(luatXoaBo({ ly_do: "   " }, ca)).toMatchObject({ status: 400, body: { detail: "Phải nhập lý do xoá bộ văn bản." } })
+    expect(luatXoaBo({}, ca)).toMatchObject({ status: 422 })
   })
 })
 
@@ -92,6 +131,63 @@ describe("luatTaiMau — hieu_luc_tu là ngày KÝ áp mẫu (không phải ngà
   })
   it("SAI: tệp không phải .docx (không có chữ ký ZIP) ⇒ 400", async () => {
     expect(await luatTaiMau(form({ loai: "quyet_dinh", hieu_luc_tu: "2027-01-01", file: new File(["%PDF-1.4"], "mau.pdf") }), [])).toMatchObject({ status: 400 })
+  })
+})
+
+// Codex lần 22 mục 4 (#2): `kiem_goi_mau` (council_document_template_service.py:66) — HAI câu khác nhau, `FileValidationError` ⇒ HTTP 400 nhưng error_code RIÊNG; %s = TEN_LOAI[loai].
+describe("C22-2 luatTaiMau — tệp rỗng / không đọc được như .docx: câu của máy chủ theo TÊN LOẠI, error_code FILE_VALIDATION_ERROR", () => {
+  const f = (o: Record<string, string | File>) => {
+    const d = new FormData()
+    for (const [k, v] of Object.entries(o)) d.append(k, v)
+    return d
+  }
+  const mau = (loai: string, file: File, them: Record<string, string> = {}) => f({ loai, hieu_luc_tu: "2027-01-01", file, ...them })
+  const TEN = { bien_ban: "Biên bản", quyet_dinh: "Quyết định", danh_sach: "Danh sách xét tuyển" } as const
+  // câu ĐẦY ĐỦ theo từng loại (không ghép chuỗi) — để so NGUYÊN VĂN với máy chủ bằng tìm chuỗi (`kiem_cau_msw_tung_chu.py`)
+  const CAU_TEP: Record<string, { rong: string; khong_doc: string }> = {
+    "Biên bản": { rong: "Mẫu Biên bản: tệp rỗng hoặc không phải bytes.", khong_doc: "Mẫu Biên bản không đọc được như tệp Word (.docx)." },
+    "Quyết định": { rong: "Mẫu Quyết định: tệp rỗng hoặc không phải bytes.", khong_doc: "Mẫu Quyết định không đọc được như tệp Word (.docx)." },
+    "Danh sách xét tuyển": { rong: "Mẫu Danh sách xét tuyển: tệp rỗng hoặc không phải bytes.", khong_doc: "Mẫu Danh sách xét tuyển không đọc được như tệp Word (.docx)." },
+  }
+  const RONG = (ten: string) => ({ status: 400, body: { detail: CAU_TEP[ten].rong, error_code: "FILE_VALIDATION_ERROR" } })
+  const KHONG_DOC = (ten: string) => ({ status: 400, body: { detail: CAU_TEP[ten].khong_doc, error_code: "FILE_VALIDATION_ERROR" } })
+
+  it("C22-2: tệp RỖNG ⇒ câu 'tệp rỗng hoặc không phải bytes' với ĐÚNG tên của từng loại (danh_sach = 'Danh sách xét tuyển')", async () => {
+    for (const [loai, ten] of Object.entries(TEN)) {
+      expect(await luatTaiMau(mau(loai, new File([], "mau.docx")), [])).toEqual(RONG(ten))
+    }
+  })
+  it("C22-2: tệp CÓ NỘI DUNG nhưng không mở được như gói zip (PDF; 1 byte 'P') ⇒ câu 'không đọc được như tệp Word (.docx)' — KHÁC câu tệp rỗng", async () => {
+    for (const [loai, ten] of Object.entries(TEN)) {
+      expect(await luatTaiMau(mau(loai, new File(["%PDF-1.4"], "mau.pdf")), [])).toEqual(KHONG_DOC(ten))
+    }
+    expect(await luatTaiMau(mau("quyet_dinh", new File(["P"], "mau.docx")), [])).toEqual(KHONG_DOC("Quyết định"))
+  })
+  it("C22-2: hai câu KHÔNG lẫn nhau — tệp rỗng không mang câu 'không đọc được'; tệp lạ không mang câu 'rỗng'", async () => {
+    const rong = await luatTaiMau(mau("quyet_dinh", new File([], "mau.docx")), [])
+    const la = await luatTaiMau(mau("quyet_dinh", new File(["xyz"], "mau.docx")), [])
+    expect(String(rong?.body.detail)).not.toContain("không đọc được")
+    expect(String(la?.body.detail)).not.toContain("rỗng")
+  })
+  it("C22-2: thứ tự — loại sai ⇒ câu loại; ghi chú > 500 ⇒ câu ghi chú (DATA_VALIDATION_ERROR) — cả hai ĐỨNG TRƯỚC câu tệp; câu tệp đứng TRƯỚC câu trùng (loại, ngày)", async () => {
+    const rong = new File([], "mau.docx")
+    expect(await luatTaiMau(mau("quyet-dinh", rong), [])).toMatchObject({ body: { detail: "Loại mẫu không thuộc bien_ban / quyet_dinh / danh_sach.", error_code: "DATA_VALIDATION_ERROR" } })
+    expect(await luatTaiMau(mau("quyet_dinh", rong, { ghi_chu: "a".repeat(501) }), [])).toMatchObject({ body: { detail: "Ghi chú của mẫu dài quá 500 ký tự.", error_code: "DATA_VALIDATION_ERROR" } })
+    // trùng (loại, ngày) NHƯNG tệp rỗng ⇒ câu tệp rỗng (400), không phải 409
+    expect(await luatTaiMau(mau("quyet_dinh", rong, { hieu_luc_tu: "2026-09-08" }), [{ loai: "quyet_dinh", hieu_luc_tu: "2026-09-08" }])).toEqual(RONG("Quyết định"))
+    expect(await luatTaiMau(mau("quyet_dinh", new File(["xyz"], "mau.docx"), { hieu_luc_tu: "2026-09-08" }), [{ loai: "quyet_dinh", hieu_luc_tu: "2026-09-08" }])).toEqual(KHONG_DOC("Quyết định"))
+  })
+  it("C22-2: câu 'đã có mẫu … hiệu lực từ ngày' nêu tên loại của máy chủ (danh_sach ⇒ 'Danh sách xét tuyển')", async () => {
+    const docx = new File(["PK\u0003\u0004 gia"], "mau.docx")
+    expect(await luatTaiMau(mau("danh_sach", docx, { hieu_luc_tu: "2026-09-08" }), [{ loai: "danh_sach", hieu_luc_tu: "2026-09-08" }])).toEqual({
+      status: 409,
+      body: { detail: "Đã có mẫu Danh sách xét tuyển hiệu lực từ ngày 2026-09-08.", error_code: "DUPLICATE_RESOURCE" },
+    })
+  })
+  it("C22-2: loại là tên thuộc tính của prototype ('constructor', 'toString') KHÔNG phải loại hợp lệ ⇒ 400 câu loại (máy chủ: `loai not in TEN_LOAI` là phép thử khoá của dict)", async () => {
+    for (const loai of ["constructor", "toString", "__proto__"]) {
+      expect(await luatTaiMau(mau(loai, new File(["PK\u0003\u0004 gia"], "mau.docx")), [])).toMatchObject({ status: 400, body: { detail: "Loại mẫu không thuộc bien_ban / quyet_dinh / danh_sach." } })
+    }
   })
 })
 
@@ -154,6 +250,25 @@ describe("luatTimHoSo", () => {
   })
   it("SAI: trạng thái là NHÃN ('Đã duyệt') thay vì mã ⇒ 400", () => {
     expect(luatTimHoSo({ ...nam, trang_thai: ["Đã duyệt"] })).toMatchObject({ status: 400 })
+  })
+  // Codex lần 22 mục 4 (#3, #4): ĐÚNG câu của `tim_ho_so` (council_candidate_service.py:470 và :474), đúng error_code, và thứ tự từ khoá → trạng thái.
+  it("C22-3: từ khoá quá dài ⇒ 400 ĐÚNG câu 'Từ khoá tìm quá dài (tối đa 100 ký tự).'", () => {
+    expect(luatTimHoSo({ ...nam, tu_khoa: "a".repeat(101) })).toEqual({
+      status: 400,
+      body: { detail: "Từ khoá tìm quá dài (tối đa 100 ký tự).", error_code: "DATA_VALIDATION_ERROR" },
+    })
+  })
+  it("C22-4: trạng thái là nhãn / mã lạ ⇒ 400 ĐÚNG câu 'Bộ lọc trạng thái có giá trị không hợp lệ.'; một mã lạ lẫn mã đúng cũng sai", () => {
+    const dung = {
+      status: 400,
+      body: { detail: "Bộ lọc trạng thái có giá trị không hợp lệ.", error_code: "DATA_VALIDATION_ERROR" },
+    }
+    expect(luatTimHoSo({ ...nam, trang_thai: ["Đã duyệt"] })).toEqual(dung)
+    expect(luatTimHoSo({ ...nam, trang_thai: ["approved", "da_duyet"] })).toEqual(dung)
+  })
+  it("C22-3/4: vừa từ khoá quá dài vừa trạng thái lạ ⇒ câu TỪ KHOÁ (kiểm trước)", () => {
+    const kq = luatTimHoSo({ ...nam, tu_khoa: "a".repeat(101), trang_thai: ["Đã duyệt"] })
+    expect(kq?.body.detail).toBe("Từ khoá tìm quá dài (tối đa 100 ký tự).")
   })
   it("SAI: page_size 101 / khoá lạ ⇒ 422", () => {
     expect(luatTimHoSo({ ...nam, page_size: 101 })).toMatchObject({ status: 422 })
@@ -525,6 +640,65 @@ describe("luatGhiNhan — xac_nhan_so_ho_so, goc_id ↔ loai, tham số đã in,
     expect(await luatGhiNhan(form({}, pdf(20 * 1024 * 1024)), cx())).toBeNull()
     expect(await luatGhiNhan(form({}, pdf(20 * 1024 * 1024 + 1)), cx())).toEqual(CAU_TRAN(20971520))
   })
+
+  // ── Codex lần 22 mục 4 (#5, #6): `xac_nhan_trang_thai` — router `_json_xac_nhan` (council_documents.py:604) + `kiem_xac_nhan_trang_thai` (council_decision_service.py:115) ──
+  const CAU_XN_DANG = { status: 400, body: { detail: "Xác nhận phải là danh sách {loại: số hồ sơ} không rỗng.", error_code: "DATA_VALIDATION_ERROR" } }
+  const CAU_XN_SO = { status: 400, body: { detail: "Số hồ sơ trong xác nhận phải là số nguyên ≥ 1.", error_code: "DATA_VALIDATION_ERROR" } }
+  const xn = (v: string) => form({ xac_nhan_trang_thai: v })
+
+  it("C22-5: ĐÚNG — đối tượng không rỗng, mọi giá trị là số nguyên ≥ 1; không gửi / chuỗi rỗng / JSON `null` ⇒ không có xác nhận (nhận)", async () => {
+    expect(await luatGhiNhan(xn('{"reviewing":1,"submitted":2}'), cx())).toBeNull()
+    expect(await luatGhiNhan(xn('{"resubmitted":1}'), cx())).toBeNull()
+    expect(await luatGhiNhan(form(), cx())).toBeNull() // không gửi trường
+    expect(await luatGhiNhan(xn(""), cx())).toBeNull() // `_json_xac_nhan`: "" ⇒ None
+    expect(await luatGhiNhan(xn("null"), cx())).toBeNull() // JSON null ⇒ None ⇒ `kiem_xac_nhan_trang_thai(None)` nhận
+  })
+  it("C22-5b: đối tượng RỖNG `{}` ⇒ 400 ĐÚNG câu 'Xác nhận phải là danh sách {loại: số hồ sơ} không rỗng.' (máy chủ từ chối `{}`; MSW cũ nhận)", async () => {
+    expect(await luatGhiNhan(xn("{}"), cx())).toEqual(CAU_XN_DANG)
+  })
+  it("C22-5: không phải đối tượng (mảng / chuỗi / số / bool) ⇒ cùng câu 'Xác nhận phải là danh sách …'", async () => {
+    for (const sai of ["[]", "[1]", '"3"', "5", "true", "false"]) {
+      expect(await luatGhiNhan(xn(sai), cx()), `xac_nhan_trang_thai = ${sai}`).toEqual(CAU_XN_DANG)
+    }
+  })
+  it("C22-6: JSON HỎNG ⇒ router đổi thành chuỗi ⇒ CÙNG câu 'Xác nhận phải là danh sách …' (không có câu 'không phải JSON' riêng)", async () => {
+    for (const hong of ["{", "abc", "{'a': 1}", '{"a":1,}', "undefined"]) {
+      expect(await luatGhiNhan(xn(hong), cx()), `xac_nhan_trang_thai = ${hong}`).toEqual(CAU_XN_DANG)
+    }
+  })
+  it("C22-5c: giá trị KHÔNG phải số nguyên ≥ 1 ⇒ 400 ĐÚNG câu 'Số hồ sơ trong xác nhận phải là số nguyên ≥ 1.' — 0, âm, số lẻ, chuỗi số, null, bool (bool KHÔNG phải số)", async () => {
+    for (const sai of ['{"submitted":0}', '{"submitted":-1}', '{"submitted":1.5}', '{"submitted":"3"}', '{"submitted":null}', '{"submitted":true}', '{"submitted":false}', '{"submitted":[2]}']) {
+      expect(await luatGhiNhan(xn(sai), cx()), `xac_nhan_trang_thai = ${sai}`).toEqual(CAU_XN_SO)
+    }
+  })
+  it("C22-5c: MỘT giá trị sai trong nhiều mục cũng đủ (không chỉ mục đầu); hai câu 'dạng' và 'số' KHÔNG lẫn nhau", async () => {
+    expect(await luatGhiNhan(xn('{"reviewing":1,"submitted":2,"draft":0}'), cx())).toEqual(CAU_XN_SO)
+    expect(await luatGhiNhan(xn('{"reviewing":true,"submitted":2}'), cx())).toEqual(CAU_XN_SO)
+    expect(await luatGhiNhan(xn("{}"), cx())).not.toEqual(CAU_XN_SO)
+    expect(await luatGhiNhan(xn('{"submitted":0}'), cx())).not.toEqual(CAU_XN_DANG)
+  })
+  it("C22-5: thứ tự (decision_service :363–:374) — khuôn trường 422 ⇒ scan ⇒ XÁC NHẬN ĐỔI TRẠNG THÁI ⇒ ghi chú mẫu ⇒ cặp loại↔gốc ⇒ khớp bản in", async () => {
+    const hong = { xac_nhan_trang_thai: "{}" }
+    // scan sai ĐỨNG TRƯỚC xác nhận
+    expect(await luatGhiNhan(form(hong, new File(["hello"], "scan.pdf")), cx())).toMatchObject({ body: { detail: "Bản scan phải là tệp PDF." } })
+    expect(await luatGhiNhan(form(hong, null), cx())).toMatchObject({ body: { detail: "Phải kèm bản scan (PDF) của văn bản đã ký." } })
+    // xác nhận sai ĐỨNG TRƯỚC ghi chú mẫu, cặp loại↔gốc và xác nhận khớp bản in
+    expect(await luatGhiNhan(form({ ...hong, ghi_chu_mau: "   x".repeat(400) }), cx())).toEqual(CAU_XN_DANG)
+    expect(await luatGhiNhan(form({ ...hong, loai: "bo_sung" }), cx())).toEqual(CAU_XN_DANG)
+    expect(await luatGhiNhan(form({ ...hong, xac_nhan_khop_ban_in: "false" }), cx())).toEqual(CAU_XN_DANG)
+    // khuôn trường (422) đứng TRƯỚC mọi kiểm của service
+    expect(await luatGhiNhan(form({ ...hong, so_quyet_dinh: "abc" }), cx())).toMatchObject({ status: 422 })
+  })
+  it("luatXacNhanTrangThai (hàm thuần): null / undefined nhận; {} / mảng / chuỗi ⇒ câu 'dạng'; giá trị sai ⇒ câu 'số'", () => {
+    expect(luatXacNhanTrangThai(null)).toBeNull()
+    expect(luatXacNhanTrangThai(undefined)).toBeNull()
+    expect(luatXacNhanTrangThai({ a: 1 })).toBeNull()
+    expect(luatXacNhanTrangThai({})).toEqual(CAU_XN_DANG)
+    expect(luatXacNhanTrangThai([1])).toEqual(CAU_XN_DANG)
+    expect(luatXacNhanTrangThai("<khong-doc-duoc>")).toEqual(CAU_XN_DANG)
+    expect(luatXacNhanTrangThai({ a: 1.5 })).toEqual(CAU_XN_SO)
+    expect(luatXacNhanTrangThai({ a: Number.NaN })).toEqual(CAU_XN_SO)
+  })
 })
 
 // ── 10. huỷ ghi nhận ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -546,6 +720,35 @@ describe("luatHuyGhiNhan — so_go_lai = SỐ QUYẾT ĐỊNH, nguyên chuỗi (
     expect(luatHuyGhiNhan({ ly_do: "x", so_go_lai: 201 }, qd)).toMatchObject({ status: 422 })
     expect(luatHuyGhiNhan({ ly_do: "x", so_go_lai: "201" }, { ...qd, trang_thai: "huy_ghi_nhan" })).toMatchObject({ status: 409 })
   })
+
+  // C22-5d — `huy_ghi_nhan` cũng gọi `kiem_xac_nhan_trang_thai` (council_decision_service.py:820): cùng hai câu với ghi nhận; schema `Dict[str, StrictInt]` chặn kiểu TRƯỚC bằng 422.
+  const CAU_XN_DANG = { status: 400, body: { detail: "Xác nhận phải là danh sách {loại: số hồ sơ} không rỗng.", error_code: "DATA_VALIDATION_ERROR" } }
+  const CAU_XN_SO = { status: 400, body: { detail: "Số hồ sơ trong xác nhận phải là số nguyên ≥ 1.", error_code: "DATA_VALIDATION_ERROR" } }
+  const huy = (xac_nhan: unknown, so_go_lai = "201", ly_do = "Nhập sai") => luatHuyGhiNhan({ ly_do, so_go_lai, xac_nhan }, qd)
+  it("C22-5d: ĐÚNG — không gửi / null / đối tượng số nguyên ≥ 1 (đối chứng của các ca sai bên dưới)", () => {
+    expect(luatHuyGhiNhan({ ly_do: "Nhập sai", so_go_lai: "201" }, qd)).toBeNull()
+    expect(huy(null)).toBeNull()
+    expect(huy({ reviewing: 1, submitted: 2 })).toBeNull()
+  })
+  it("C22-5d: `xac_nhan` = {} ⇒ 400 'Xác nhận phải là danh sách …' (schema cho qua {}, service chặn); số < 1 ⇒ 400 'Số hồ sơ trong xác nhận phải là số nguyên ≥ 1.'", () => {
+    expect(huy({})).toEqual(CAU_XN_DANG)
+    for (const sai of [{ a: 0 }, { a: -2 }, { a: 1, b: 0 }]) expect(huy(sai), JSON.stringify(sai)).toEqual(CAU_XN_SO)
+  })
+  it("C22-5d: schema `Dict[str, StrictInt]` — không phải đối tượng ⇒ 422 dict_type; giá trị chuỗi / số lẻ / bool ⇒ 422 int_type mang KHOÁ mục sai", () => {
+    for (const sai of [[1], "3", 5, true]) {
+      expect(huy(sai), JSON.stringify(sai)).toMatchObject({ status: 422, body: { errors: [{ type: "dict_type", loc: ["body", "xac_nhan"] }] } })
+    }
+    for (const v of ["3", 1.5, true, null]) {
+      expect(huy({ ok: 1, sai: v }), JSON.stringify(v)).toMatchObject({ status: 422, body: { errors: [{ type: "int_type", loc: ["body", "xac_nhan", "sai"] }] } })
+    }
+  })
+  it("C22-5d: thứ tự — lý do sai ĐỨNG TRƯỚC xác nhận; xác nhận sai ĐỨNG TRƯỚC so_go_lai lệch và văn bản đã huỷ; schema (422) đứng trước lý do", () => {
+    expect(huy({}, "201", "   ")).toMatchObject({ status: 400, body: { detail: "Phải nhập lý do huỷ ghi nhận." } })
+    expect(huy({}, "4")).toEqual(CAU_XN_DANG) // so_go_lai sai (số hồ sơ) nhưng xác nhận sai đứng trước
+    expect(huy({ a: 0 }, "4")).toEqual(CAU_XN_SO)
+    expect(luatHuyGhiNhan({ ly_do: "Nhập sai", so_go_lai: "201", xac_nhan: {} }, { ...qd, trang_thai: "huy_ghi_nhan" })).toEqual(CAU_XN_DANG)
+    expect(huy({ a: "3" }, "201", "   ")).toMatchObject({ status: 422 }) // 422 của schema đứng trước cả lý do
+  })
 })
 
 // ── 11. lượt gửi ────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -555,6 +758,19 @@ describe("lượt gửi", () => {
     expect(luatMoLuot({ ma: MA_LUOT, tao_luc: "2026-11-11T02:00:00Z" })).toMatchObject({
       status: 409,
       body: { ma_loi: "luot_dang_cho", ma: MA_LUOT, tao_luc: "2026-11-11T02:00:00Z" },
+    })
+  })
+  // Codex lần 22 mục 4 (#7): ĐÚNG câu của `mo_luot` (council_decision_submission_service.py:137) — dấu nháy kép quanh "Kiểm tra trên máy chủ" là của câu.
+  it('C22-7: câu 409 là NGUYÊN VĂN của máy chủ — \'Bộ đang có lượt gửi ghi nhận chưa rõ kết quả — bấm "Kiểm tra trên máy chủ" trước.\'; payload ma_loi / ma / tao_luc đủ', () => {
+    expect(luatMoLuot({ ma: MA_LUOT, tao_luc: "2026-11-11T02:00:00Z" })).toEqual({
+      status: 409,
+      body: {
+        detail: 'Bộ đang có lượt gửi ghi nhận chưa rõ kết quả — bấm "Kiểm tra trên máy chủ" trước.',
+        error_code: "CONFLICT",
+        ma_loi: "luot_dang_cho",
+        ma: MA_LUOT,
+        tao_luc: "2026-11-11T02:00:00Z",
+      },
     })
   })
   it("phân xử: mã uuid ⇒ ĐÚNG; chuỗi lạ ⇒ 422", () => {
