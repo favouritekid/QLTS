@@ -376,6 +376,11 @@ jobs:
           # folded scalar thành MỘT dòng, nên dấu `#` đầu tiên biến toàn bộ
           # phần còn lại thành comment của shell — nuốt cả danh sách test lẫn
           # `--timeout=60`, và workflow vẫn xanh vì lệnh vẫn chạy (chạy thiếu).
+          #
+          # Codex lần 22 F285: `tests/unit/test_admission_state_service.py` (WHOLE-FILE) đi cùng
+          # `test_phase3_pr3b_state_machine.py` — chứa hai ca canh NỐI DÂY chốt Quyết định đã ký
+          # (F230 `kiem_chuyen_trang_thai`) trong `admission_state_service.transition`; trước đây
+          # không selector nào chọn tệp này nên gỡ lời gọi chốt vẫn xanh trên ma trận PR.
           - tier: Tier 1 — Phase 3 multi-NV core
             tests: >-
               tests/api/test_b1_kv_override_preserve.py
@@ -383,6 +388,7 @@ jobs:
               tests/api/test_admission_submit_document_debt.py
               tests/unit/test_phase3_pr3a_choice_and_score.py
               tests/unit/test_phase3_pr3b_state_machine.py
+              tests/unit/test_admission_state_service.py
               tests/unit/test_phase3_pr3c_sub1_scoring_gates.py
               tests/unit/test_phase3_pr3c_sub2_choice_engine.py
               tests/unit/test_phase3_pr3c_sub2b_router_helpers.py
