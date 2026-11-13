@@ -10,6 +10,7 @@ import { http, HttpResponse } from "msw"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import { server } from "@/test/mocks/server"
+import { dap, luatXoaBo } from "@/test/mocks/council-luat-may-chu"
 import { COUNCIL_DOCUMENTS_PREFIX as P } from "@/lib/api/council-documents"
 import { NO_COUNCIL_PERMISSIONS, councilDocumentKeys } from "@/hooks/admin/useCouncilDocuments"
 import type { CouncilDocumentPermissions } from "@/lib/zod/council-documents"
@@ -57,6 +58,8 @@ const BO = {
 
 let console_: ReturnType<typeof vi.spyOn>[] = []
 let xoaBody: unknown = null
+/** bộ đang có văn bản hiệu lực ⇒ máy chủ thật trả 409 khi xoá */
+let boCoVanBanHieuLuc = false
 let urls: string[] = []
 let zipGoi: number[] = []
 let zipTra: (() => Response) | null = null
@@ -87,6 +90,9 @@ function moc(co: CouncilDocumentPermissions, boGhiDe: Record<string, unknown> = 
     }),
     http.delete(`${API}${P}/sets/7`, async ({ request }) => {
       xoaBody = await request.json()
+      // luật thật (`kiem_ly_do_xoa` + bộ có văn bản hiệu lực ⇒ 409) — `council-luat-may-chu.ts`
+      const sai = dap(luatXoaBo(xoaBody, { coVanBanHieuLuc: boCoVanBanHieuLuc }))
+      if (sai) return sai
       return HttpResponse.json({
         id: 3, set_id: 7, so_ho_so: 3, so_tep: 2, danh_sach_tep: [], nguoi_xoa_id: 1,
         xoa_luc: "2026-11-05T02:00:00Z", ly_do: "GIA ly do", nguoi_xoa_ten: null,
@@ -109,6 +115,7 @@ function ve() {
 
 beforeEach(() => {
   xoaBody = null
+  boCoVanBanHieuLuc = false
   urls = []
   zipGoi = []
   zipTra = null
@@ -250,6 +257,35 @@ describe("xoá bộ — hộp xác nhận", () => {
     fireEvent.click(nut)
     await waitFor(() => expect(push).toHaveBeenCalledWith("/admin/council-documents"))
     expect(xoaBody).toEqual({ ly_do: "GIA dựng nhầm" })
+  })
+
+  // Hợp đồng thân yêu cầu mục 7: máy chủ giả ÁP luật thật. Giao diện chỉ chặn lý do TRỐNG (cắt khoảng trắng); ký tự VÔ HÌNH (U+200B) qua được
+  // giao diện nhưng máy chủ (`kiem_ly_do`) từ chối ⇒ giao diện phải hiện câu của máy chủ, giữ hộp thoại, KHÔNG chuyển trang.
+  it("lý do chỉ có ký tự vô hình (U+200B) ⇒ máy chủ 400; hiện câu máy chủ; hộp thoại còn; không chuyển trang; sửa lý do thật ⇒ xoá được", async () => {
+    moc(TAT_CA)
+    ve()
+    fireEvent.click(await screen.findByTestId("delete-set-open"))
+    fireEvent.change(await screen.findByTestId("delete-set-reason"), { target: { value: "\u200b" } })
+    const nut = screen.getByTestId("delete-set-confirm") as HTMLButtonElement
+    expect(nut.disabled).toBe(false) // giao diện không thấy "trống" (JS trim không cắt U+200B)
+    fireEvent.click(nut)
+    expect((await screen.findByTestId("delete-set-error")).textContent).toContain("ký tự điều khiển / vô hình")
+    expect(screen.getByTestId("delete-set-dialog")).toBeTruthy()
+    expect(push).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByTestId("delete-set-reason"), { target: { value: "GIA dựng nhầm" } })
+    fireEvent.click(screen.getByTestId("delete-set-confirm"))
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/admin/council-documents"))
+  })
+
+  it("bộ đang có văn bản hiệu lực ⇒ máy chủ 409; hiện câu máy chủ; hộp thoại còn; không chuyển trang", async () => {
+    boCoVanBanHieuLuc = true
+    moc(TAT_CA)
+    ve()
+    fireEvent.click(await screen.findByTestId("delete-set-open"))
+    fireEvent.change(await screen.findByTestId("delete-set-reason"), { target: { value: "GIA dựng nhầm" } })
+    fireEvent.click(screen.getByTestId("delete-set-confirm"))
+    expect((await screen.findByTestId("delete-set-error")).textContent).toContain("đang có văn bản hiệu lực")
+    expect(push).not.toHaveBeenCalled()
   })
 })
 
