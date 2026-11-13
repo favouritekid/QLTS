@@ -35,10 +35,21 @@ export const loi400 = (detail: string, them?: Record<string, unknown>) => mien(4
 export const loi404 = (detail: string) => mien(404, detail, "RESOURCE_NOT_FOUND")
 export const loi409 = (detail: string, them?: Record<string, unknown>) => mien(409, detail, "CONFLICT", them)
 export const loiTrung = (detail: string) => mien(409, detail, "DUPLICATE_RESOURCE")
-export const loi422 = (loc: string[], msg: string, type = "value_error"): LoiMayChu => ({
+/** 422 của pydantic: MỘT mục lỗi mỗi chỗ sai (`loc` có thể mang CHỈ SỐ phần tử — số, không phải chuỗi). */
+export interface Muc422 {
+  type: string
+  loc: ReadonlyArray<string | number>
+  msg: string
+}
+export const loi422Nhieu = (errors: Muc422[]): LoiMayChu => ({
   status: 422,
-  body: { detail: "Request validation failed", error_code: "VALIDATION_ERROR", errors: [{ type, loc: ["body", ...loc], msg }] },
+  body: {
+    detail: "Request validation failed",
+    error_code: "VALIDATION_ERROR",
+    errors: errors.map((e) => ({ type: e.type, loc: ["body", ...e.loc], msg: e.msg })),
+  },
 })
+export const loi422 = (loc: ReadonlyArray<string | number>, msg: string, type = "value_error"): LoiMayChu => loi422Nhieu([{ type, loc, msg }])
 
 // ── hằng và hàm nhỏ chung ────────────────────────────────────────────────────────────────────────────────────────────────
 export const LY_DO_TOI_DA = 1000 // LY_DO_XOA_TOI_DA (models/council_document.py:81)
@@ -49,6 +60,8 @@ export const TRANG_THAI_HO_SO = [
   "draft", "submitted", "resubmitted", "approved", "overridden", "confirmed", "enrolled", "reviewing", "result_published",
   "admitted", "waitlisted", "rejected", "revision_requested", "withdrawal_pending", "withdrawn",
 ] as const
+/** Trần KỸ THUẬT của bản scan PDF = mặc định của `COUNCIL_DECISION_SCAN_MAX_BYTES` (app/config.py:465 — `default=20 * 1024 * 1024`). */
+export const TRAN_BYTE_SCAN_MAC_DINH = 20 * 1024 * 1024
 const RE_NGAY = /^\d{4}-\d{2}-\d{2}$/
 const RE_SO_1_6 = /^[0-9]{1,6}$/
 const RE_SO_1_2 = /^[0-9]{1,2}$/
@@ -133,7 +146,7 @@ export type LyDoMa = "khong_phai_chuoi" | "rong" | "ky_tu_la" | "sai_dinh_dang"
  * `loi_mot_ma` (candidate_service:273, theo thứ tự): không phải chuỗi ⇒ khong_phai_chuoi; rỗng (sau cắt) ⇒ rong; dài > 32 hoặc ký tự nhóm C ⇒
  * ky_tu_la; không đúng 12 hoặc 9 chữ số ASCII ⇒ sai_dinh_dang.
  * ⚠️ Đây là luật TẦNG SERVICE. Ở ranh giới HTTP schema (`List[str]` / `List[StrictStr]`) chặn phần tử không phải chuỗi bằng 422 TRƯỚC khi tới
- * đây — mô-đun này chưa áp lớp schema ấy cho `ma_ho_so`.
+ * đây — lớp ấy là :func:`luatLopSchemaMa` (`luatTaoBo` và `luatDoiMaTruoc` gọi nó trước).
  */
 export function loiMotMa(m: unknown): { ma: string | null; ly_do: LyDoMa | null } {
   if (typeof m !== "string") return { ma: null, ly_do: "khong_phai_chuoi" }
@@ -144,12 +157,60 @@ export function loiMotMa(m: unknown): { ma: string | null; ly_do: LyDoMa | null 
   return { ma: s, ly_do: null }
 }
 
+/**
+ * LỚP SCHEMA của `ma_ho_so` — pydantic chạy TRƯỚC service: `CouncilSetCreate.ma_ho_so: Optional[List[str]] = Field(None, min_length=1)`
+ * (schemas/council_document.py:53) và `CouncilCodesIn.ma_ho_so: List[StrictStr] = Field(..., min_length=1)` (:175) cho CÙNG luật quan sát được:
+ * không phải danh sách ⇒ 422 `list_type`; danh sách rỗng ⇒ 422 `too_short`; MỖI phần tử không phải chuỗi (số / null / đối tượng …) ⇒ MỘT lỗi
+ * 422 `string_type` mang CHỈ SỐ phần tử (pydantic báo hết, không dừng ở phần tử đầu). Vì vậy `khong_phai_chuoi` và "danh sách rỗng" của
+ * service KHÔNG BAO GIỜ tới được qua HTTP. Chỉ gọi khi `ma_ho_so` có mặt và khác null (trường tuỳ chọn của `POST /sets`).
+ */
+export function luatLopSchemaMa(ma: unknown): LoiMayChu | null {
+  if (!Array.isArray(ma)) return loi422(["ma_ho_so"], "Input should be a valid list", "list_type")
+  if (ma.length === 0) return loi422(["ma_ho_so"], "List should have at least 1 item after validation, not 0", "too_short")
+  const sai: Muc422[] = []
+  ma.forEach((p, i) => {
+    if (typeof p !== "string") sai.push({ type: "string_type", loc: ["ma_ho_so", i], msg: "Input should be a valid string" })
+  })
+  return sai.length > 0 ? loi422Nhieu(sai) : null
+}
+
+/** `_neu_dong` (council_candidate_service.py:253): tối đa 20 số dòng, quá thì thêm " … (tổng N dòng)". */
+const NEU_DONG_TOI_DA = 20
+export function neuDong(dong: readonly number[]): string {
+  const s = dong.slice(0, NEU_DONG_TOI_DA).join(", ")
+  return s + (dong.length > NEU_DONG_TOI_DA ? ` … (tổng ${dong.length} dòng)` : "")
+}
+
 // ── 5. POST /sets/doi-ma ─────────────────────────────────────────────────────────────────────────────────────────────────
 export interface DoiMaOut {
   profile_ids: number[]
   dong_loi: Array<{ dong: number; ly_do: string }>
 }
-/** Trả id theo thứ tự dòng + lỗi theo SỐ DÒNG (không nêu giá trị). Mã đúng nhưng NGOÀI phạm vi / sai năm ⇒ `khong_khop`; dòng trùng ⇒ dòng sau mang `trung`. */
+/**
+ * Phần máy chủ chạy TRƯỚC khi đổi mã (`CouncilCodesIn` + `doi_ma_thanh_id`): thân là đối tượng, khoá lạ cấm (`extra="forbid"`), `academic_year`
+ * (StrictInt) và `ma_ho_so` BẮT BUỘC, lớp schema của `ma_ho_so` (:func:`luatLopSchemaMa`) ⇒ 422; rồi trần số dòng ⇒ 400 "Danh sách có N dòng,
+ * vượt giới hạn kỹ thuật M hồ sơ cho một bộ văn bản." (đếm TRƯỚC khi kiểm từng mã). `null` ⇒ qua, gọi tiếp :func:`luatDoiMa`.
+ */
+export function luatDoiMaTruoc(than: unknown, toiDa = TRAN_HO_SO_MAC_DINH): LoiMayChu | null {
+  if (than === null || typeof than !== "object" || Array.isArray(than)) {
+    return loi422([], "Input should be a valid dictionary or object to extract fields from", "model_attributes_type")
+  }
+  const t = than as Record<string, unknown>
+  const la = Object.keys(t).find((k) => k !== "academic_year" && k !== "ma_ho_so")
+  if (la) return loi422([la], "Extra inputs are not permitted", "extra_forbidden")
+  if (t.academic_year === undefined) return loi422(["academic_year"], "Field required", "missing")
+  if (!Number.isInteger(t.academic_year)) return loi422(["academic_year"], "Input should be a valid integer", "int_type")
+  if (t.ma_ho_so === undefined) return loi422(["ma_ho_so"], "Field required", "missing")
+  const lop = luatLopSchemaMa(t.ma_ho_so)
+  if (lop) return lop
+  const n = (t.ma_ho_so as unknown[]).length
+  if (n > toiDa) return loi400(`Danh sách có ${n} dòng, vượt giới hạn kỹ thuật ${toiDa} hồ sơ cho một bộ văn bản.`)
+  return null
+}
+/**
+ * Trả id theo thứ tự dòng + lỗi theo SỐ DÒNG (không nêu giá trị). Mã đúng nhưng NGOÀI phạm vi / sai năm ⇒ `khong_khop`; dòng trùng ⇒ dòng sau mang `trung`.
+ * ⚠️ Đây là luật TẦNG SERVICE (`doi_ma_thanh_id`): qua HTTP, phần tử không phải chuỗi đã bị 422 ở :func:`luatDoiMaTruoc` — handler gọi hàm kia TRƯỚC.
+ */
 export function luatDoiMa(codes: unknown, idTheoMa: ReadonlyMap<string, number>): DoiMaOut {
   const out: DoiMaOut = { profile_ids: [], dong_loi: [] }
   const gap = new Set<string>()
@@ -242,11 +303,24 @@ export interface AnhKiemTruoc {
   thuTuChuan: readonly number[]
   dau: string
 }
-export function luatTaoBo(than: Record<string, unknown>, o: { anh: AnhKiemTruoc | null; idTheoMa: ReadonlyMap<string, number>; toiDa?: number }): LoiMayChu | null {
+/**
+ * `POST /sets`. Thứ tự = máy chủ: SCHEMA (khoá lạ · `academic_year` · lớp schema của `ma_ho_so` — pydantic báo lỗi TRƯỜNG trước validator mô hình
+ * "đúng MỘT dạng") → dạng mã: `chuan_hoa_ma` (từng dòng: không phải chuỗi / rỗng / ký tự lạ / sai dạng / TRÙNG — DỪNG ở dòng sai ĐẦU TIÊN)
+ * → TRẦN (`doc_ho_so_theo_ma`: đếm danh sách đã chuẩn hoá) → KHỚP CSDL (câu GỘP nêu mọi dòng không khớp / khớp nhiều, `_neu_dong` ≤ 20 dòng).
+ * `o.maNhieuHoSo`: mã khớp NHIỀU hồ sơ (`phan_giai_ma` trả so > 1); mặc định không có.
+ */
+export function luatTaoBo(
+  than: Record<string, unknown>,
+  o: { anh: AnhKiemTruoc | null; idTheoMa: ReadonlyMap<string, number>; toiDa?: number; maNhieuHoSo?: ReadonlySet<string> },
+): LoiMayChu | null {
   const khoa = new Set(["ma_ho_so", "profile_ids", "phien_ban_kiem", "academic_year", "tham_so_quyet_dinh", "xac_nhan_trang_thai"])
   const la = Object.keys(than).find((k) => !khoa.has(k))
   if (la) return loi422([la], "Extra inputs are not permitted", "extra_forbidden")
   if (!Number.isInteger(than.academic_year)) return loi422(["academic_year"], "Input should be a valid integer", "int_type")
+  if (than.ma_ho_so !== undefined && than.ma_ho_so !== null) {
+    const lop = luatLopSchemaMa(than.ma_ho_so)
+    if (lop) return lop
+  }
   const theoMa = than.ma_ho_so !== undefined && than.ma_ho_so !== null
   const theoId = (than.profile_ids !== undefined && than.profile_ids !== null) || (than.phien_ban_kiem !== undefined && than.phien_ban_kiem !== null)
   if (theoMa === theoId) return loi422([], "Value error, Gửi đúng MỘT dạng: ma_ho_so, hoặc profile_ids kèm phien_ban_kiem.")
@@ -256,19 +330,36 @@ export function luatTaoBo(than: Record<string, unknown>, o: { anh: AnhKiemTruoc 
   const ts = luatThamSoQuyetDinh(than.tham_so_quyet_dinh)
   if (ts) return ts
   if (theoMa) {
-    const ma = than.ma_ho_so as unknown[]
-    if (!Array.isArray(ma) || ma.length === 0) return loi400("Danh sách mã hồ sơ rỗng.")
+    // lớp schema ở trên đã bảo đảm `ma_ho_so` là danh sách ≥ 1 CHUỖI ⇒ nhánh "không phải danh sách / rỗng" của service không tới được qua HTTP
+    const ma = than.ma_ho_so as string[]
+    // pha 1 — `chuan_hoa_ma`: cú pháp + trùng, từng dòng, DỪNG ở dòng sai đầu tiên (chưa đụng CSDL)
     const gap = new Map<string, number>()
+    const chuan: string[] = []
     for (let i = 0; i < ma.length; i++) {
-      const { ma: s, ly_do } = loiMotMa(ma[i])
-      if (ly_do === "khong_phai_chuoi") return loi400(`Dòng ${i + 1}: mã hồ sơ không phải chuỗi.`)
+      const { ma: s, ly_do } = loiMotMa(ma[i]) // phần tử luôn là chuỗi (lớp schema) ⇒ `khong_phai_chuoi` không xảy ra ở đây
       if (ly_do === "rong") return loi400(`Dòng ${i + 1}: mã hồ sơ rỗng.`)
       if (ly_do === "ky_tu_la") return loi400(`Dòng ${i + 1}: không phải mã hồ sơ (quá dài hoặc có ký tự điều khiển).`)
       if (ly_do === "sai_dinh_dang") return loi400(`Dòng ${i + 1}: mã hồ sơ phải gồm đúng 12 chữ số (CCCD) hoặc đúng 9 chữ số (CMND), chỉ chữ số 0-9.`)
       const truoc = gap.get(s as string)
       if (truoc !== undefined) return loi400(`Dòng ${i + 1} trùng mã hồ sơ với dòng ${truoc} — mỗi người một dòng.`)
       gap.set(s as string, i + 1)
-      if (!o.idTheoMa.has(s as string)) return loi400(`Dòng ${i + 1}: mã hồ sơ không khớp đúng một hồ sơ của năm học đã chọn.`)
+      chuan.push(s as string)
+    }
+    // pha 2 — trần (đếm danh sách đã chuẩn hoá; câu nói "mã", khác câu "hồ sơ" của dạng id và câu "dòng" của doi-ma)
+    const toiDa = o.toiDa ?? TRAN_HO_SO_MAC_DINH
+    if (chuan.length > toiDa) return loi400(`Danh sách có ${chuan.length} mã, vượt giới hạn kỹ thuật ${toiDa} hồ sơ cho một bộ văn bản.`)
+    // pha 3 — khớp CSDL: MỘT câu GỘP cho mọi dòng không khớp (so == 0) / khớp nhiều (so > 1)
+    const khong: number[] = []
+    const nhieu: number[] = []
+    chuan.forEach((s, i) => {
+      if (o.maNhieuHoSo?.has(s)) nhieu.push(i + 1)
+      else if (!o.idTheoMa.has(s)) khong.push(i + 1)
+    })
+    if (khong.length > 0 || nhieu.length > 0) {
+      const phan: string[] = []
+      if (khong.length > 0) phan.push(`dòng ${neuDong(khong)} không có hồ sơ nào mang mã này trong năm học đã chọn`)
+      if (nhieu.length > 0) phan.push(`dòng ${neuDong(nhieu)} khớp NHIỀU hồ sơ cùng mã`)
+      return loi400(`Mã hồ sơ phải khớp đúng một hồ sơ: ${phan.join("; ")}.`)
     }
     return null
   }
@@ -304,6 +395,8 @@ export interface NguCanhGhiNhan {
   goc: (id: number) => { loai: string; trang_thai: string } | undefined
   /** số đã dùng trong năm ký ⇒ id văn bản đang dùng */
   soDaDung: (so: string, nam: number) => number | undefined
+  /** trần byte của bản scan; mặc định = cấu hình mặc định của máy chủ (`TRAN_BYTE_SCAN_MAC_DINH`, 20 MiB). Cho test hạ thấp để khỏi tạo tệp 20 MiB. */
+  scanToiDa?: number
 }
 const TRUONG_THAM_SO_GIAY = ["so_bien_ban", "ngay_bien_ban", "dot_so", "dot_thang"] as const
 
@@ -347,7 +440,11 @@ export async function luatGhiNhan(form: FormData, cx: NguCanhGhiNhan): Promise<L
   if (ma === null || !RE_UUID.test(ma)) return loi422(["ma_luot_gui"], "String should match pattern '^[0-9a-fA-F-]{36}$'", "string_pattern_mismatch")
   const scan = form.get("scan")
   // --- service ---
+  // `kiem_scan` (decision_service:99): rỗng → vượt trần kỹ thuật → chữ ký `%PDF-`. Router chỉ đọc tối đa TRẦN + 1 byte (`_doc_scan`) ⇒ đúng TRẦN byte vẫn nhận,
+  // TRẦN + 1 trở lên bị chặn và câu luôn nêu TRẦN (không nêu kích thước thật). Tệp quá trần mà không phải PDF ⇒ câu trần (kiểm TRƯỚC chữ ký).
   if (!laTep(scan) || scan.size === 0) return loi400("Phải kèm bản scan (PDF) của văn bản đã ký.")
+  const tranScan = cx.scanToiDa ?? TRAN_BYTE_SCAN_MAC_DINH
+  if (scan.size > tranScan) return loi400(`Bản scan vượt giới hạn kỹ thuật ${tranScan} byte.`)
   if ((await docDauTep(scan, 5)) !== "%PDF-") return loi400("Bản scan phải là tệp PDF.")
   const xnTt = s("xac_nhan_trang_thai")
   if (xnTt !== null) {

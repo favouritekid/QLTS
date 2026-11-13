@@ -9,6 +9,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { http, HttpResponse } from "msw"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { toast } from "sonner"
 
 import { server } from "@/test/mocks/server"
 import { dap, luatTaiMau } from "@/test/mocks/council-luat-may-chu"
@@ -101,10 +102,31 @@ describe("tải mẫu mới — hieu_luc_tu là ngày KÝ áp mẫu (hợp đồ
     dung()
     ve()
     await screen.findByTestId("template-list")
-    const o = screen.getByLabelText("Áp cho văn bản KÝ từ ngày") // nhãn THẬT gắn với ô — `htmlFor` ⇒ `id`
+    // chữ hiển thị là "ký" viết THƯỜNG (so khớp chính xác, phân biệt hoa/thường); nhãn THẬT gắn với ô — `htmlFor` ⇒ `id`
+    const o = screen.getByLabelText("Áp cho văn bản ký từ ngày")
     expect(o).toBe(screen.getByTestId("upload-hieu-luc"))
     expect((o as HTMLInputElement).type).toBe("date")
     expect(screen.queryByLabelText("Hiệu lực từ ngày")).toBeNull() // nhãn cũ (dễ hiểu là ngày tải) KHÔNG còn
+    expect(screen.queryByLabelText("Áp cho văn bản KÝ từ ngày")).toBeNull() // và không phải bản viết HOA
+  })
+
+  it("cột của kho mẫu cùng nghĩa ngày KÝ: tiêu đề 'Áp cho văn bản ký từ' (không còn 'Hiệu lực từ'); ngày vẫn hiện đúng dòng", async () => {
+    dung()
+    ve()
+    await screen.findByTestId("template-list")
+    expect(screen.getByRole("columnheader", { name: "Áp cho văn bản ký từ" })).toBeTruthy()
+    expect(screen.queryByRole("columnheader", { name: "Hiệu lực từ" })).toBeNull()
+    expect(screen.getByTestId("template-row-1").textContent).toContain("08/09/2026") // ngày của mẫu id 1 (2026-09-08)
+  })
+
+  it("thông báo sau khi tải xong nói ngày KÝ: 'Đã tải mẫu Quyết định, áp cho văn bản ký từ 01/01/2027.' (không còn 'hiệu lực từ')", async () => {
+    dung()
+    ve()
+    await screen.findByTestId("template-list")
+    vi.mocked(toast.success).mockClear()
+    await tai("quyet_dinh", "2027-01-01")
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    expect(toast.success).toHaveBeenCalledWith("Đã tải mẫu Quyết định, áp cho văn bản ký từ 01/01/2027.")
   })
 
   it("gửi ĐÚNG ngày người dùng chọn (2027-01-01 — ngày bắt đầu áp cho văn bản KÝ), không phải ngày tải; mẫu xuất hiện trong kho", async () => {

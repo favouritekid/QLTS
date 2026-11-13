@@ -217,13 +217,13 @@ describe("CreateCouncilSetForm", () => {
 // CCCD chỉ duy nhất trong MỘT năm học ⇒ mã đúng dạng nhưng sai năm ⇒ "không có hồ sơ"; mã 11 số / trùng dòng ⇒ 400 nêu SỐ DÒNG.
 describe("hợp đồng thân yêu cầu — POST /sets dạng mã (luật thật)", () => {
   const KHO_2026 = new Map([[MA[0], 30], [MA[1], 10], [MA[2], 20]])
-  function mocLuat() {
+  function mocLuat(kho: ReadonlyMap<string, number> = KHO_2026) {
     server.use(
       http.post(`${API}${P}/sets`, async ({ request }) => {
         urls.push(request.url)
         const than = (await request.clone().json()) as Record<string, unknown>
         bodies.push(than)
-        const sai = dap(luatTaoBo(than, { anh: null, idTheoMa: than.academic_year === 2026 ? KHO_2026 : new Map() }))
+        const sai = dap(luatTaoBo(than, { anh: null, idTheoMa: than.academic_year === 2026 ? kho : new Map() }))
         return sai ?? HttpResponse.json(BO, { status: 201 })
       }),
       http.get(`${API}${P}/sets`, () => HttpResponse.json([])),
@@ -262,12 +262,57 @@ describe("hợp đồng thân yêu cầu — POST /sets dạng mã (luật thậ
     ve()
     nhap(MA.join("\n"), "2027")
     fireEvent.click(screen.getByTestId("create-set-submit"))
-    expect((await screen.findByTestId("create-set-error")).textContent).toContain("không khớp đúng một hồ sơ")
+    // câu GỘP của máy chủ nêu MỌI dòng không khớp (cả ba dòng vì sai năm), không phải câu của dòng đầu
+    expect((await screen.findByTestId("create-set-error")).textContent).toContain(
+      "Mã hồ sơ phải khớp đúng một hồ sơ: dòng 1, 2, 3 không có hồ sơ nào mang mã này trong năm học đã chọn.",
+    )
     expect(push).not.toHaveBeenCalled()
     fireEvent.change(screen.getByTestId("nam-hoc-input"), { target: { value: "2026" } })
     fireEvent.click(screen.getByTestId("create-set-submit"))
     await waitFor(() => expect(push).toHaveBeenCalledWith("/admin/council-documents/21"))
     expect(bodies.map((b) => (b as { academic_year: number }).academic_year)).toEqual([2027, 2026])
+  })
+
+  it("Đ3-5 (thẻ 'Tạo bộ' = dạng mã): chỉ MỘT SỐ dòng không khớp ⇒ câu GỘP nêu đúng các dòng đó (2, 4), không nêu giá trị mã; sửa hai dòng ⇒ dựng được", async () => {
+    mocLuat()
+    ve()
+    nhap([MA[0], maGia(777), MA[2], maGia(888)].join("\n"))
+    fireEvent.click(screen.getByTestId("create-set-submit"))
+    const loi = (await screen.findByTestId("create-set-error")).textContent ?? ""
+    expect(loi).toContain("Mã hồ sơ phải khớp đúng một hồ sơ: dòng 2, 4 không có hồ sơ nào mang mã này trong năm học đã chọn.")
+    expect(loi).not.toContain(maGia(777))
+    expect(loi).not.toContain(maGia(888))
+    expect(push).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByTestId("ma-ho-so-input"), { target: { value: [MA[0], MA[1], MA[2]].join("\n") } })
+    fireEvent.click(screen.getByTestId("create-set-submit"))
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/admin/council-documents/21"))
+    expect(bodies).toHaveLength(2)
+  })
+
+  it("Đ3-5: THỨ TỰ ba pha — dòng 1 không khớp + dòng 2 SAI DẠNG ⇒ báo 'Dòng 2' (cú pháp đứng trước khớp CSDL), không phải câu gộp", async () => {
+    mocLuat()
+    ve()
+    nhap([maGia(777), "09999900000"].join("\n"))
+    fireEvent.click(screen.getByTestId("create-set-submit"))
+    const loi = (await screen.findByTestId("create-set-error")).textContent ?? ""
+    expect(loi).toContain("Dòng 2: mã hồ sơ phải gồm đúng 12 chữ số")
+    expect(loi).not.toContain("phải khớp đúng một hồ sơ")
+  })
+
+  it("Đ3-5: TRẦN — 1001 mã ⇒ 'Danh sách có 1001 mã, vượt giới hạn kỹ thuật 1000 hồ sơ…' (chưa tới khớp CSDL); đúng 1000 mã khớp hết ⇒ dựng được", async () => {
+    const tu = (n: number) => Array.from({ length: n }, (_, i) => maGia(i + 1))
+    mocLuat(new Map(tu(1001).map((m, i) => [m, i + 1] as [string, number])))
+    ve()
+    nhap(tu(1001).join("\n"))
+    fireEvent.click(screen.getByTestId("create-set-submit"))
+    expect((await screen.findByTestId("create-set-error")).textContent).toContain(
+      "Danh sách có 1001 mã, vượt giới hạn kỹ thuật 1000 hồ sơ cho một bộ văn bản.",
+    )
+    expect(push).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByTestId("ma-ho-so-input"), { target: { value: tu(1000).join("\n") } })
+    fireEvent.click(screen.getByTestId("create-set-submit"))
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/admin/council-documents/21"))
+    expect((bodies[1] as { ma_ho_so: string[] }).ma_ho_so).toHaveLength(1000)
   })
 
   it("tham số đợt chỉ MỘT NỬA (Đợt số 1, không tháng) ⇒ máy chủ 422; ĐỦ (1, 9) ⇒ được, thân dot_so CHUỖI + dot_thang SỐ", async () => {

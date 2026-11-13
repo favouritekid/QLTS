@@ -13,7 +13,7 @@ import { http, HttpResponse } from "msw"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import { server } from "@/test/mocks/server"
-import { dap, luatDoiMa, luatKiemTruoc, luatTaoBo, luatTimHoSo } from "@/test/mocks/council-luat-may-chu"
+import { dap, luatDoiMa, luatDoiMaTruoc, luatKiemTruoc, luatTaoBo, luatTimHoSo } from "@/test/mocks/council-luat-may-chu"
 import { COUNCIL_DOCUMENTS_PREFIX as P } from "@/lib/api/council-documents"
 import { NO_COUNCIL_PERMISSIONS } from "@/hooks/admin/useCouncilDocuments"
 import { useCouncilSelectionStore } from "@/lib/stores/council-selection.store"
@@ -144,7 +144,10 @@ function dung(cau: Cau = {}) {
       const b = (await request.json()) as Record<string, unknown>
       doiMaBodies.push(b)
       if (cau.doiMaLoi) return cau.doiMaLoi()
-      // luật thật (`loi_mot_ma` + trùng + ngoài phạm vi): id theo thứ tự dòng, lỗi theo SỐ DÒNG
+      // luật thật: schema (`List[StrictStr]`, 422) + trần số dòng (400) TRƯỚC, rồi (`loi_mot_ma` + trùng + ngoài phạm vi):
+      // id theo thứ tự dòng, lỗi theo SỐ DÒNG
+      const truoc = dap(luatDoiMaTruoc(b))
+      if (truoc) return truoc
       return HttpResponse.json(luatDoiMa(b.ma_ho_so, ID_THEO_MA))
     }),
     http.post(`${API}${P}/sets`, async ({ request }) => {
@@ -540,6 +543,25 @@ describe("danh sách chọn", () => {
     expect(screen.getByTestId("dan-ma-dong-loi").textContent).not.toContain(CCCD_GIA(99))
     expect(useCouncilSelectionStore.getState().idHoSo).toEqual([13])
     for (const u of urls) expect(u).not.toContain(CCCD_GIA(13))
+  })
+
+  it("Đ3-5: dán 1001 dòng ⇒ máy chủ 400 'Danh sách có 1001 dòng, vượt giới hạn kỹ thuật 1000…' hiện ở khối dán mã; không thêm hồ sơ nào; 1000 dòng ⇒ được xử lý", async () => {
+    dung()
+    ve()
+    await screen.findByTestId("buoc-chon")
+    fireEvent.change(await screen.findByTestId("loc-nam"), { target: { value: "2026" } })
+    const dong = (n: number) => Array.from({ length: n }, (_, i) => CCCD_GIA(i + 1)).join("\n")
+    fireEvent.change(await screen.findByTestId("dan-ma-input"), { target: { value: dong(1001) } })
+    fireEvent.click(screen.getByTestId("dan-ma-them"))
+    const loi = await screen.findByTestId("dan-ma-loi")
+    expect(loi.textContent).toContain("Danh sách có 1001 dòng, vượt giới hạn kỹ thuật 1000 hồ sơ cho một bộ văn bản.")
+    expect(useCouncilSelectionStore.getState().idHoSo).toEqual([])
+    // đúng 1000 dòng qua trần (máy chủ giả trả lỗi theo SỐ DÒNG vì kho chỉ có vài mã) ⇒ KHÔNG còn câu trần
+    fireEvent.change(screen.getByTestId("dan-ma-input"), { target: { value: dong(1000) } })
+    fireEvent.click(screen.getByTestId("dan-ma-them"))
+    await waitFor(() => expect(doiMaBodies).toHaveLength(2))
+    await waitFor(() => expect(screen.queryByTestId("dan-ma-loi")).toBeNull())
+    expect(await screen.findByTestId("dan-ma-dong-loi")).toBeTruthy()
   })
 
   it("xoá hết danh sách khi đang ở bước 2 ⇒ về bước 1; chọn lại từ đầu KHÔNG nhảy lại bước 2", async () => {
