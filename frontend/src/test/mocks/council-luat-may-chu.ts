@@ -6,6 +6,9 @@
  *   council_decision_service.py (ghi_nhan_quyet_dinh :339, huy_ghi_nhan :807, _so_tham_so :203, _so_chua_dung :318, _bo_qd_hop_le :286),
  *   council_document_set_service.py (so_voi_kiem_truoc, kiem_danh_sach_id, kiem_ly_do), council_document_template_service.py (tai_mau_len),
  *   council_document_render_service.py (DecisionParams), council_candidate_service.py (loi_mot_ma), router council_documents.py (Form).
+ * CÂU LỖI (Codex lần 22, mục 4): mỗi câu tiếng Việt trong `loi400/404/409(…)` phải có NGUYÊN VĂN ở mã máy chủ (đối chiếu LXT1 `452298b6`; các chỗ đã sửa: xoa_bo_van_ban :960 / :972,
+ * kiem_goi_mau :73 / :81, tim_ho_so :470 / :474, kiem_xac_nhan_trang_thai :120 / :124 qua `_json_xac_nhan` :604, mo_luot :137). Viết câu CÙNG dòng với `loiNNN(` — công cụ so câu
+ * (`so_cau_loi_msw.py`) chỉ đọc phần còn lại của dòng ấy, câu nằm sang dòng sau sẽ không được so.
  *
  * Mỗi hàm trả `null` (máy chủ NHẬN) hoặc `LoiMayChu` {status, body} đúng khuôn handler lỗi thật:
  *   400 {detail, error_code:"DATA_VALIDATION_ERROR"} · 404 "RESOURCE_NOT_FOUND" · 409 "CONFLICT" / "DUPLICATE_RESOURCE" (+ `ma_loi` …) ·
@@ -31,7 +34,10 @@ const mien = (status: number, detail: string, code: string, them: Record<string,
   status,
   body: { detail, error_code: code, ...them },
 })
-export const loi400 = (detail: string, them?: Record<string, unknown>) => mien(400, detail, "DATA_VALIDATION_ERROR", them)
+/** `error_code` của lỗi TỆP (`FileValidationError`, `app/utils/exceptions.py:341`): CÙNG mã HTTP 400 với `DataValidationError` nhưng KHÁC `error_code`. */
+export const MA_LOI_TEP = "FILE_VALIDATION_ERROR"
+/** 400 miền. Viết câu lỗi ở CÙNG dòng với tên hàm (công cụ so câu `so_cau_loi_msw.py` chỉ đọc phần còn lại của dòng ấy) và KHÔNG viết tên hàm kèm dấu mở ngoặc trong chú thích. */
+export const loi400 = (detail: string, them?: Record<string, unknown>, maLoi = "DATA_VALIDATION_ERROR") => mien(400, detail, maLoi, them)
 export const loi404 = (detail: string) => mien(404, detail, "RESOURCE_NOT_FOUND")
 export const loi409 = (detail: string, them?: Record<string, unknown>) => mien(409, detail, "CONFLICT", them)
 export const loiTrung = (detail: string) => mien(409, detail, "DUPLICATE_RESOURCE")
@@ -103,22 +109,43 @@ export function luatLyDo(ly: unknown, viec: string): LoiMayChu | null {
 }
 
 // ── 7. DELETE /sets/{id} ─────────────────────────────────────────────────────────────────────────────────────────────────
-/** `kiem_ly_do_xoa` + bộ đang có văn bản hiệu lực ⇒ 409. `ly_do` thiếu / không phải chuỗi ⇒ 422 (StrictStr). */
-export function luatXoaBo(thanBody: unknown, bo: { coVanBanHieuLuc: boolean }): LoiMayChu | null {
+/**
+ * Điều CSDL nói về bộ lúc xoá (`xoa_bo_van_ban`, council_document_set_service.py:936): văn bản SỐNG của bộ (`van_ban_song_cua_bo`: mọi văn bản trỏ bộ có
+ * trạng thái ≠ `huy_ghi_nhan`, xếp theo id) và lượt gửi `cho_gui` của bộ (`co_luot_cho_gui`).
+ */
+export interface NguCanhXoaBo {
+  /** id các văn bản SỐNG của bộ, đúng thứ tự máy chủ (theo id); rỗng / vắng ⇒ không có (Python `if song:`) */
+  vanBanSongIds?: readonly number[]
+  /** mã lượt gửi `cho_gui` của bộ; `null` / vắng ⇒ không có */
+  luotChoMa?: string | null
+}
+
+/**
+ * `xoa_bo_van_ban`, theo thứ tự của máy chủ: `ly_do` thiếu / không phải chuỗi ⇒ 422 (StrictStr) → `kiem_ly_do_xoa` (400) → văn bản ĐÃ KÝ còn sống ⇒ 409 (:960, kèm
+ * `quyet_dinh_id` = DANH SÁCH id) → lượt gửi chưa rõ ⇒ 409 `bo_co_luot_gui_chua_ro` kèm `ma` (:972) — văn bản đã ký kiểm TRƯỚC, lượt chưa rõ SAU.
+ * KHÔNG áp: 404 khi bộ biến mất giữa chừng (`khoa_bo`, :954) — router đã trả 404 từ lúc nạp bộ.
+ */
+export function luatXoaBo(thanBody: unknown, bo: NguCanhXoaBo): LoiMayChu | null {
   const ly = (thanBody as { ly_do?: unknown } | null)?.ly_do
   if (typeof ly !== "string") return loi422(["ly_do"], "Input should be a valid string", "string_type")
   const sai = luatLyDo(ly, "xoá bộ văn bản")
   if (sai) return sai
-  if (bo.coVanBanHieuLuc) return loi409("Bộ này đang có văn bản hiệu lực — không xoá được.")
+  const song = bo.vanBanSongIds ?? []
+  if (song.length > 0) return loi409(`Bộ văn bản là bản in của Quyết định đã ký (văn bản #${song.join(", #")}) — lưu theo hạn lưu trữ, không xoá. Chỉ xoá được khi mọi ghi nhận của bộ đã huỷ ghi nhận.`, { quyet_dinh_id: [...song] })
+  if (bo.luotChoMa != null) return loi409("Bộ đang có lượt gửi ghi nhận chưa rõ kết quả — phân xử (Kiểm tra trên máy chủ) trước khi xoá.", { ma_loi: "bo_co_luot_gui_chua_ro", ma: bo.luotChoMa })
   return null
 }
 
 // ── 1. POST /templates ───────────────────────────────────────────────────────────────────────────────────────────────────
-const TEN_LOAI_MAU: Record<string, string> = { bien_ban: "Biên bản", quyet_dinh: "Quyết định", danh_sach: "Danh sách" }
+/** `TEN_LOAI` của council_document_template_service.py:41 — tên đi vào câu lỗi (`%s`); loại `danh_sach` là "Danh sách xét tuyển", KHÔNG phải "Danh sách". */
+const TEN_LOAI_MAU: Record<string, string> = { bien_ban: "Biên bản", quyet_dinh: "Quyết định", danh_sach: "Danh sách xét tuyển" }
 /**
- * `tai_mau_len`: loại ∈ 3 loại; `hieu_luc_tu` là NGÀY (áp cho văn bản KÝ từ ngày này — KHÔNG phải ngày tải); ghi chú ≤ 500 ký tự;
- * cùng (loại, ngày hiệu lực) đã có ⇒ 409 (không ghi đè; hai mẫu cùng loại KHÁC ngày ⇒ được).
- * KHÔNG áp: `bo_dung.kiem_mau` (nội dung .docx) — chỉ kiểm có tệp và chữ ký ZIP `PK`.
+ * `tai_mau_len` (council_document_template_service.py:141), theo thứ tự: loại ∈ 3 loại (400) → ghi chú ≤ 500 ký tự (400) → `kiem_goi_mau`: tệp rỗng ⇒ 400
+ * `FILE_VALIDATION_ERROR` "Mẫu <tên loại>: tệp rỗng hoặc không phải bytes." (:73); tệp không mở được như gói zip ⇒ 400 `FILE_VALIDATION_ERROR` "Mẫu <tên loại> không đọc
+ * được như tệp Word (.docx)." (:81) — `FileValidationError` mang HTTP 400 nhưng `error_code` RIÊNG → cùng (loại, ngày hiệu lực) đã có ⇒ 409 (không ghi đè;
+ * hai mẫu cùng loại KHÁC ngày ⇒ được). `hieu_luc_tu` là NGÀY (áp cho văn bản KÝ từ ngày này — KHÔNG phải ngày tải).
+ * KHÔNG áp: trần kích thước tệp (`FileSizeError`, :74, mặc định 5 MiB), giới hạn gói zip (:86 – :99), `bo_dung.kiem_mau` (nội dung .docx) — chỉ kiểm có tệp và chữ ký ZIP `PK`
+ * (tệp bắt đầu bằng `PK` nhưng không phải zip thật MSW vẫn nhận; máy chủ từ chối ở `zipfile.ZipFile`).
  */
 export async function luatTaiMau(
   form: FormData,
@@ -131,11 +158,14 @@ export async function luatTaiMau(
   if (typeof loai !== "string") return loi422(["loai"], "Field required", "missing")
   if (typeof hieu !== "string" || !laNgay(hieu)) return loi422(["hieu_luc_tu"], "Input should be a valid date or datetime", "date_from_datetime_parsing")
   if (!laTep(tep)) return loi422(["file"], "Field required", "missing")
-  if (!(loai in TEN_LOAI_MAU)) return loi400("Loại mẫu không thuộc bien_ban / quyet_dinh / danh_sach.")
+  // `loai not in TEN_LOAI` của máy chủ là phép thử KHOÁ của dict — KHÔNG dùng `in` của JS (nó thấy cả "constructor", "toString" … của prototype)
+  if (!Object.prototype.hasOwnProperty.call(TEN_LOAI_MAU, loai)) return loi400("Loại mẫu không thuộc bien_ban / quyet_dinh / danh_sach.")
   if (typeof ghiChu === "string" && [...ghiChu].length > 500) return loi400("Ghi chú của mẫu dài quá 500 ký tự.")
-  if (tep.size === 0 || (await docDauTep(tep, 2)) !== "PK") return loi400("Tệp mẫu không phải .docx hợp lệ.")
+  const ten = TEN_LOAI_MAU[loai]
+  if (tep.size === 0) return loi400(`Mẫu ${ten}: tệp rỗng hoặc không phải bytes.`, undefined, MA_LOI_TEP)
+  if ((await docDauTep(tep, 2)) !== "PK") return loi400(`Mẫu ${ten} không đọc được như tệp Word (.docx).`, undefined, MA_LOI_TEP)
   if (mauDaCo.some((m) => m.loai === loai && m.hieu_luc_tu === hieu)) {
-    return loiTrung(`Đã có mẫu ${TEN_LOAI_MAU[loai]} hiệu lực từ ngày ${hieu}.`)
+    return loiTrung(`Đã có mẫu ${ten} hiệu lực từ ngày ${hieu}.`)
   }
   return null
 }
@@ -227,7 +257,9 @@ export function luatDoiMa(codes: unknown, idTheoMa: ReadonlyMap<string, number>)
 }
 
 // ── 6. POST /sets/tim-ho-so ──────────────────────────────────────────────────────────────────────────────────────────────
-/** Schema (`extra=forbid`, page ≥ 1, page_size 1…100) + service: từ khoá cắt khoảng trắng ≤ 100 ký tự; trạng thái ∈ CHECK. */
+/** Trần từ khoá tìm (sau cắt khoảng trắng) = `TU_KHOA_TOI_DA` của council_candidate_service.py:435; vào cả phép kiểm lẫn câu lỗi (`%d`). */
+export const TU_KHOA_TOI_DA = 100
+/** Schema (`extra=forbid`, page ≥ 1, page_size 1…100) + service: từ khoá cắt khoảng trắng ≤ 100 ký tự (400 "Từ khoá tìm quá dài …"); trạng thái ∈ CHECK (400 "Bộ lọc trạng thái …"). */
 export function luatTimHoSo(than: Record<string, unknown>): LoiMayChu | null {
   const khoa = new Set(["academic_year", "tu_khoa", "major_ids", "trang_thai", "page", "page_size"])
   const la = Object.keys(than).find((k) => !khoa.has(k))
@@ -238,9 +270,9 @@ export function luatTimHoSo(than: Record<string, unknown>): LoiMayChu | null {
     return loi422(["page_size"], "Input should be less than or equal to 100", "less_than_equal")
   }
   if (typeof than.tu_khoa === "string" && than.tu_khoa.length > 200) return loi422(["tu_khoa"], "String should have at most 200 characters", "string_too_long")
-  if (typeof than.tu_khoa === "string" && [...than.tu_khoa.trim()].length > 100) return loi400("Từ khoá tìm kiếm dài quá 100 ký tự.")
+  if (typeof than.tu_khoa === "string" && [...than.tu_khoa.trim()].length > TU_KHOA_TOI_DA) return loi400(`Từ khoá tìm quá dài (tối đa ${TU_KHOA_TOI_DA} ký tự).`)
   if (Array.isArray(than.trang_thai) && than.trang_thai.some((t) => !(TRANG_THAI_HO_SO as readonly unknown[]).includes(t))) {
-    return loi400("Trạng thái hồ sơ không hợp lệ.")
+    return loi400("Bộ lọc trạng thái có giá trị không hợp lệ.")
   }
   return null
 }
@@ -401,10 +433,25 @@ export interface NguCanhGhiNhan {
 const TRUONG_THAM_SO_GIAY = ["so_bien_ban", "ngay_bien_ban", "dot_so", "dot_thang"] as const
 
 /**
- * `ghi_nhan_quyet_dinh` + khuôn `Form` của router. Thứ tự: khuôn trường (422) → số / ngày / scan / ghi chú / cặp loại↔gốc / xác nhận khớp
- * bản in (400) → gốc (404 / 409) → bộ đã có văn bản sống (409) → `xac_nhan_so_ho_so == bo.so_ho_so` (400) → tham số giấy lệch bản in (400)
+ * `kiem_xac_nhan_trang_thai` (council_decision_service.py:115) — nhận cái `_json_xac_nhan` của router đã đọc ra: `null` (không gửi, "" hoặc JSON `null`) ⇒ nhận;
+ * còn lại PHẢI là đối tượng KHÔNG rỗng ({} ⇒ từ chối, mảng / chuỗi / số cũng vậy — kể cả chuỗi "<khong-doc-duoc>" mà router đưa vào khi JSON hỏng) ⇒ 400 "Xác nhận phải là danh
+ * sách {loại: số hồ sơ} không rỗng."; MỖI giá trị phải là SỐ NGUYÊN ≥ 1 (bool, chuỗi, null, 0, âm, số lẻ đều sai) ⇒ 400 "Số hồ sơ trong xác nhận phải là số nguyên ≥ 1.".
+ * Giới hạn đã biết: JS không phân biệt `1.0` với `1` sau `JSON.parse` (Python: `1.0` là float ⇒ bị từ chối); `NaN` / `Infinity` Python đọc được còn JS thì không.
+ */
+export function luatXacNhanTrangThai(xn: unknown): LoiMayChu | null {
+  if (xn === null || xn === undefined) return null
+  if (typeof xn !== "object" || Array.isArray(xn) || Object.keys(xn).length === 0) return loi400("Xác nhận phải là danh sách {loại: số hồ sơ} không rỗng.")
+  for (const v of Object.values(xn)) {
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 1) return loi400("Số hồ sơ trong xác nhận phải là số nguyên ≥ 1.")
+  }
+  return null
+}
+
+/**
+ * `ghi_nhan_quyet_dinh` + khuôn `Form` của router. Thứ tự: khuôn trường (422) → số / ngày / scan (400) → xác nhận đổi trạng thái (400, :366) → ghi chú / cặp loại↔gốc /
+ * xác nhận khớp bản in (400) → gốc (404 / 409) → bộ đã có văn bản sống (409) → `xac_nhan_so_ho_so == bo.so_ho_so` (400) → tham số giấy lệch bản in (400)
  * → ngày ký trước ngày dựng (400; CHỈ bộ thường — bộ tái dựng theo bản ký thì bỏ qua) → số đã dùng trong NĂM CỦA NGÀY KÝ (409).
- * KHÔNG áp: mẫu theo ngày ký, dòng bộ / chỉ tiêu / khoá, đếm đổi trạng thái (`xac_nhan_trang_thai` chỉ kiểm là JSON), lượt gửi (hook có test riêng).
+ * KHÔNG áp: mẫu theo ngày ký, dòng bộ / chỉ tiêu / khoá, ĐẾM đổi trạng thái (`_kiem_xac_nhan_dem` — chỉ kiểm DẠNG của `xac_nhan_trang_thai`, không kiểm số đếm), lượt gửi (hook có test riêng).
  */
 export async function luatGhiNhan(form: FormData, cx: NguCanhGhiNhan): Promise<LoiMayChu | null> {
   const s = (k: string) => {
@@ -440,20 +487,23 @@ export async function luatGhiNhan(form: FormData, cx: NguCanhGhiNhan): Promise<L
   if (ma === null || !RE_UUID.test(ma)) return loi422(["ma_luot_gui"], "String should match pattern '^[0-9a-fA-F-]{36}$'", "string_pattern_mismatch")
   const scan = form.get("scan")
   // --- service ---
-  // `kiem_scan` (decision_service:99): rỗng → vượt trần kỹ thuật → chữ ký `%PDF-`. Router chỉ đọc tối đa TRẦN + 1 byte (`_doc_scan`) ⇒ đúng TRẦN byte vẫn nhận,
+  // `kiem_scan` (decision_service:101): rỗng → vượt trần kỹ thuật → chữ ký `%PDF-`. Router chỉ đọc tối đa TRẦN + 1 byte (`_doc_scan`) ⇒ đúng TRẦN byte vẫn nhận,
   // TRẦN + 1 trở lên bị chặn và câu luôn nêu TRẦN (không nêu kích thước thật). Tệp quá trần mà không phải PDF ⇒ câu trần (kiểm TRƯỚC chữ ký).
   if (!laTep(scan) || scan.size === 0) return loi400("Phải kèm bản scan (PDF) của văn bản đã ký.")
   const tranScan = cx.scanToiDa ?? TRAN_BYTE_SCAN_MAC_DINH
   if (scan.size > tranScan) return loi400(`Bản scan vượt giới hạn kỹ thuật ${tranScan} byte.`)
   if ((await docDauTep(scan, 5)) !== "%PDF-") return loi400("Bản scan phải là tệp PDF.")
+  // `_json_xac_nhan` (router council_documents.py:604): vắng / "" ⇒ không có; JSON hỏng ⇒ MỘT CHUỖI (không phải 400 riêng) → `kiem_xac_nhan_trang_thai` (:366) — ĐỨNG SAU scan, TRƯỚC ghi chú mẫu.
   const xnTt = s("xac_nhan_trang_thai")
-  if (xnTt !== null) {
+  if (xnTt !== null && xnTt !== "") {
+    let j: unknown
     try {
-      const j: unknown = JSON.parse(xnTt)
-      if (j === null || typeof j !== "object" || Array.isArray(j)) return loi400("xac_nhan_trang_thai phải là đối tượng {mã trạng thái: số}.")
+      j = JSON.parse(xnTt)
     } catch {
-      return loi400("xac_nhan_trang_thai không phải JSON hợp lệ.")
+      j = "<khong-doc-duoc>"
     }
+    const saiXn = luatXacNhanTrangThai(j)
+    if (saiXn) return saiXn
   }
   const ghiChu = s("ghi_chu_mau")
   if (ghiChu !== null && ghiChu !== "") {
@@ -499,23 +549,46 @@ export async function luatGhiNhan(form: FormData, cx: NguCanhGhiNhan): Promise<L
 }
 
 // ── 10. POST /decisions/{id}/huy-ghi-nhan ────────────────────────────────────────────────────────────────────────────────
-/** `huy_ghi_nhan`: lý do (kiem_ly_do) → `so_go_lai` phải BẰNG NGUYÊN CHUỖI số QUYẾT ĐỊNH của văn bản (không phải số hồ sơ) → văn bản chưa huỷ. */
+/**
+ * LỚP SCHEMA của `xac_nhan` ở `CouncilDecisionCancelIn` (schemas/council_document.py:476 — `Optional[Dict[str, StrictInt]]`): vắng / null ⇒ nhận; không phải đối tượng ⇒ 422 `dict_type`;
+ * MỖI giá trị không phải SỐ NGUYÊN (chuỗi / số lẻ / bool / null …) ⇒ 422 `int_type` mang KHOÁ của mục sai (`StrictInt`: bool KHÔNG phải số nguyên). `{}` và số < 1 KHÔNG bị chặn ở đây —
+ * schema cho qua, tầng service (`kiem_xac_nhan_trang_thai`) mới chặn (400). Cùng giới hạn đã biết với :func:`luatXacNhanTrangThai` (`1.0` ≡ `1` sau `JSON.parse`).
+ */
+export function luatLopSchemaXacNhan(xn: unknown): LoiMayChu | null {
+  if (xn === undefined || xn === null) return null
+  if (typeof xn !== "object" || Array.isArray(xn)) return loi422(["xac_nhan"], "Input should be a valid dictionary", "dict_type")
+  const sai: Muc422[] = []
+  for (const [k, v] of Object.entries(xn)) {
+    if (typeof v !== "number" || !Number.isInteger(v)) sai.push({ type: "int_type", loc: ["xac_nhan", k], msg: "Input should be a valid integer" })
+  }
+  return sai.length > 0 ? loi422Nhieu(sai) : null
+}
+
+/**
+ * `huy_ghi_nhan` (council_decision_service.py:807), theo thứ tự: schema (422: `so_go_lai` chuỗi; `xac_nhan` ⇒ :func:`luatLopSchemaXacNhan`) → lý do (kiem_ly_do, :819) →
+ * `xac_nhan` qua `kiem_xac_nhan_trang_thai` (:820 — `{}` / số < 1 ⇒ 400, CÙNG hai câu với ghi nhận) → `so_go_lai` phải BẰNG NGUYÊN CHUỖI số QUYẾT ĐỊNH của văn bản
+ * (không phải số hồ sơ, :828) → văn bản chưa huỷ (:830). KHÔNG áp: các 409 `van_ban_sau` / `dong_xung_dot` và đếm đổi trạng thái (`_kiem_xac_nhan_dem`).
+ */
 export function luatHuyGhiNhan(than: unknown, qd: { so_quyet_dinh: string; trang_thai: string }): LoiMayChu | null {
   const t = (than ?? {}) as Record<string, unknown>
   if (typeof t.so_go_lai !== "string") return loi422(["so_go_lai"], "Input should be a valid string", "string_type")
+  const lopXn = luatLopSchemaXacNhan(t.xac_nhan)
+  if (lopXn) return lopXn
   const ly = luatLyDo(t.ly_do, "huỷ ghi nhận")
   if (ly) return ly
+  const xn = luatXacNhanTrangThai(t.xac_nhan ?? null)
+  if (xn) return xn
   if (t.so_go_lai !== qd.so_quyet_dinh) return loi400("Số văn bản gõ lại không khớp.")
   if (qd.trang_thai === "huy_ghi_nhan") return loi409("Văn bản đã được huỷ ghi nhận.")
   return null
 }
 
 // ── 11. lượt gửi ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-/** Mở lượt: đã có lượt `cho_gui` ⇒ 409 `luot_dang_cho` + mã + giờ tạo. */
+/** Mở lượt (`mo_luot`, council_decision_submission_service.py:137): đã có lượt `cho_gui` ⇒ 409 `luot_dang_cho` + mã CŨ + giờ tạo. */
 export function luatMoLuot(luotCho: { ma: string; tao_luc: string } | null): LoiMayChu | null {
   return luotCho === null
     ? null
-    : loi409("Bộ đang có lượt gửi chưa rõ.", { ma_loi: "luot_dang_cho", ma: luotCho.ma, tao_luc: luotCho.tao_luc })
+    : loi409("Bộ đang có lượt gửi ghi nhận chưa rõ kết quả — bấm \"Kiểm tra trên máy chủ\" trước.", { ma_loi: "luot_dang_cho", ma: luotCho.ma, tao_luc: luotCho.tao_luc })
 }
 /** Phân xử: `ma` trên URL phải đúng dạng uuid (giao diện chặn chuỗi lạ bằng `MA_LUOT_RE`). */
 export function luatPhanXuMa(ma: string): LoiMayChu | null {

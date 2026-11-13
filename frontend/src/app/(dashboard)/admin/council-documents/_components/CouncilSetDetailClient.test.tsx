@@ -10,7 +10,7 @@ import { http, HttpResponse } from "msw"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import { server } from "@/test/mocks/server"
-import { dap, luatXoaBo } from "@/test/mocks/council-luat-may-chu"
+import { dap, luatXoaBo, type NguCanhXoaBo } from "@/test/mocks/council-luat-may-chu"
 import { COUNCIL_DOCUMENTS_PREFIX as P } from "@/lib/api/council-documents"
 import { NO_COUNCIL_PERMISSIONS, councilDocumentKeys } from "@/hooks/admin/useCouncilDocuments"
 import type { CouncilDocumentPermissions } from "@/lib/zod/council-documents"
@@ -58,8 +58,8 @@ const BO = {
 
 let console_: ReturnType<typeof vi.spyOn>[] = []
 let xoaBody: unknown = null
-/** bộ đang có văn bản hiệu lực ⇒ máy chủ thật trả 409 khi xoá */
-let boCoVanBanHieuLuc = false
+/** điều CSDL nói về bộ lúc xoá: văn bản đã ký còn sống / lượt gửi chưa rõ ⇒ máy chủ thật trả 409 (`xoa_bo_van_ban`) */
+let boXoa: NguCanhXoaBo = {}
 let urls: string[] = []
 let zipGoi: number[] = []
 let zipTra: (() => Response) | null = null
@@ -90,8 +90,8 @@ function moc(co: CouncilDocumentPermissions, boGhiDe: Record<string, unknown> = 
     }),
     http.delete(`${API}${P}/sets/7`, async ({ request }) => {
       xoaBody = await request.json()
-      // luật thật (`kiem_ly_do_xoa` + bộ có văn bản hiệu lực ⇒ 409) — `council-luat-may-chu.ts`
-      const sai = dap(luatXoaBo(xoaBody, { coVanBanHieuLuc: boCoVanBanHieuLuc }))
+      // luật thật (`kiem_ly_do_xoa` + văn bản đã ký còn sống / lượt gửi chưa rõ ⇒ 409) — `council-luat-may-chu.ts`
+      const sai = dap(luatXoaBo(xoaBody, boXoa))
       if (sai) return sai
       return HttpResponse.json({
         id: 3, set_id: 7, so_ho_so: 3, so_tep: 2, danh_sach_tep: [], nguoi_xoa_id: 1,
@@ -115,7 +115,7 @@ function ve() {
 
 beforeEach(() => {
   xoaBody = null
-  boCoVanBanHieuLuc = false
+  boXoa = {}
   urls = []
   zipGoi = []
   zipTra = null
@@ -277,15 +277,35 @@ describe("xoá bộ — hộp xác nhận", () => {
     await waitFor(() => expect(push).toHaveBeenCalledWith("/admin/council-documents"))
   })
 
-  it("bộ đang có văn bản hiệu lực ⇒ máy chủ 409; hiện câu máy chủ; hộp thoại còn; không chuyển trang", async () => {
-    boCoVanBanHieuLuc = true
+  it("C22-1: bộ là bản in của Quyết định đã ký ⇒ máy chủ 409; hiện NGUYÊN CÂU của máy chủ (nêu số văn bản); hộp thoại còn; không chuyển trang", async () => {
+    boXoa = { vanBanSongIds: [41, 42] }
     moc(TAT_CA)
     ve()
     fireEvent.click(await screen.findByTestId("delete-set-open"))
     fireEvent.change(await screen.findByTestId("delete-set-reason"), { target: { value: "GIA dựng nhầm" } })
     fireEvent.click(screen.getByTestId("delete-set-confirm"))
-    expect((await screen.findByTestId("delete-set-error")).textContent).toContain("đang có văn bản hiệu lực")
+    expect((await screen.findByTestId("delete-set-error")).textContent).toContain(
+      "Bộ văn bản là bản in của Quyết định đã ký (văn bản #41, #42) — lưu theo hạn lưu trữ, không xoá. Chỉ xoá được khi mọi ghi nhận của bộ đã huỷ ghi nhận.",
+    )
+    expect(screen.getByTestId("delete-set-dialog")).toBeTruthy()
     expect(push).not.toHaveBeenCalled()
+  })
+
+  it("C22-1b: bộ có lượt gửi ghi nhận chưa rõ kết quả ⇒ máy chủ 409 bo_co_luot_gui_chua_ro; hiện NGUYÊN CÂU; hộp thoại còn; không chuyển trang; hết lượt chưa rõ ⇒ xoá được", async () => {
+    boXoa = { luotChoMa: "11111111-2222-3333-4444-555555555555" }
+    moc(TAT_CA)
+    ve()
+    fireEvent.click(await screen.findByTestId("delete-set-open"))
+    fireEvent.change(await screen.findByTestId("delete-set-reason"), { target: { value: "GIA dựng nhầm" } })
+    fireEvent.click(screen.getByTestId("delete-set-confirm"))
+    expect((await screen.findByTestId("delete-set-error")).textContent).toContain(
+      "Bộ đang có lượt gửi ghi nhận chưa rõ kết quả — phân xử (Kiểm tra trên máy chủ) trước khi xoá.",
+    )
+    expect(screen.getByTestId("delete-set-dialog")).toBeTruthy()
+    expect(push).not.toHaveBeenCalled()
+    boXoa = {} // lượt đã được phân xử ⇒ máy chủ cho xoá (đối chứng: không chặn oan)
+    fireEvent.click(screen.getByTestId("delete-set-confirm"))
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/admin/council-documents"))
   })
 })
 
