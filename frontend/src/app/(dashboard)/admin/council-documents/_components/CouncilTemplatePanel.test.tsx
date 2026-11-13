@@ -97,6 +97,16 @@ async function tai(loai: "bien_ban" | "quyet_dinh" | "danh_sach", ngayHieuLuc: s
 }
 
 describe("tải mẫu mới — hieu_luc_tu là ngày KÝ áp mẫu (hợp đồng mục 1)", () => {
+  it("nhãn ô ngày nói rõ là ngày KÝ mà mẫu bắt đầu áp (không phải ngày tải / ngày có hiệu lực chung): ô date gắn đúng nhãn", async () => {
+    dung()
+    ve()
+    await screen.findByTestId("template-list")
+    const o = screen.getByLabelText("Áp cho văn bản KÝ từ ngày") // nhãn THẬT gắn với ô — `htmlFor` ⇒ `id`
+    expect(o).toBe(screen.getByTestId("upload-hieu-luc"))
+    expect((o as HTMLInputElement).type).toBe("date")
+    expect(screen.queryByLabelText("Hiệu lực từ ngày")).toBeNull() // nhãn cũ (dễ hiểu là ngày tải) KHÔNG còn
+  })
+
   it("gửi ĐÚNG ngày người dùng chọn (2027-01-01 — ngày bắt đầu áp cho văn bản KÝ), không phải ngày tải; mẫu xuất hiện trong kho", async () => {
     dung()
     ve()
