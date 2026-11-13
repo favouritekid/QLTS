@@ -74,7 +74,7 @@ const TEN_BUOC: Record<number, TenBuoc> = { 4: "tai", 5: "doi-chieu", 6: "ghi-nh
 /**
  * Chi tiết một bộ: bước 4 (tệp + tải) · 5 (đối chiếu bản ký) · 6 (ghi nhận) + phần CHỈ admin theo cờ.
  * Bước nào mở được do CỜ máy chủ quyết. URL chỉ mang `setId` và `?buoc=` (kiểm theo danh sách đóng ở trang máy chủ);
- * không có `?buoc=` mà bộ có lượt gửi chưa rõ ⇒ vào thẳng bước 6 ("Chưa xác định").
+ * không có `?buoc=` mà bộ có lượt gửi chưa rõ ⇒ vào thẳng bước 6 ("Chưa xác định") — quyết định ĐÚNG MỘT LẦN lúc vào trang (F281).
  */
 export function CouncilSetDetailClient({
   setId,
@@ -95,7 +95,20 @@ export function CouncilSetDetailClient({
   useEffect(() => {
     if (ds.data) khoiPhuc(ds.data)
   }, [ds.data, khoiPhuc])
+  // BƯỚC ĐANG XEM tách khỏi BƯỚC MẶC ĐỊNH (F281, Codex lần 19+20):
+  //   • `buocChon` — người dùng chọn (bấm thanh bước) hoặc `?buoc=` lúc vào: là bước đang xem khi nó mở được.
+  //   • `buocVao` — bước mặc định, suy từ dữ liệu ĐÚNG MỘT LẦN, lúc vào trang (khi quyền và danh sách lượt đã có kết quả), rồi CHỐT.
+  //     Sau đó dữ liệu lượt / bộ đổi (phân xử, ghi nhận, huỷ, làm mới) KHÔNG kéo người dùng rời bước đang xem. Trước đây bước
+  //     mặc định suy lại từ `luotDangCho(ds.data)` ở MỌI lần vẽ: vào không `?buoc=` có lượt chờ ⇒ tự vào bước 6 ⇒ phân xử xong
+  //     lượt hết `cho_gui` ⇒ trang tự về bước 4, mất khung kết quả / cảnh báo vượt chỉ tiêu / khung "đã chặn".
   const [buocChon, setBuocChon] = useState<TenBuoc | null>(buocBanDau)
+  const [buocVao, setBuocVao] = useState<TenBuoc | null>(null)
+  const daCoDuLieuVao = vm.state === "ready" && (!quyenSan.xem_luot_gui || ds.isSuccess || ds.isError)
+  if (buocVao === null && daCoDuLieuVao) {
+    // chỉ chạy MỘT lần (điều kiện `buocVao === null`); cập nhật trạng thái trong lúc vẽ theo đúng cách React cho phép
+    const coLuotCho = ds.data !== undefined && luotDangCho(ds.data) !== undefined
+    setBuocVao(coLuotCho && quyenSan.ghi_nhan_qd && quyenSan.mo_luot_gui ? "ghi-nhan" : "tai")
+  }
 
   const quayLai = (
     <Link href="/admin/council-documents" className="inline-flex items-center gap-1 text-sm hover:underline">
@@ -139,9 +152,10 @@ export function CouncilSetDetailClient({
     "doi-chieu": quyen.so_bo_voi_hien_tai,
     "ghi-nhan": quyen.ghi_nhan_qd && quyen.mo_luot_gui,
   }
-  const coLuotCho = ds.data !== undefined && luotDangCho(ds.data) !== undefined
-  const macDinh: TenBuoc = coLuotCho && buocMo["ghi-nhan"] ? "ghi-nhan" : "tai"
-  const buoc: TenBuoc = buocChon !== null && buocMo[buocChon] ? buocChon : macDinh
+  // Bước đang xem: bước người dùng chọn (nếu mở được), không thì bước mặc định ĐÃ CHỐT lúc vào (nếu mở được), không thì bước 4.
+  // Chưa chốt (còn chờ quyền / danh sách lượt) ⇒ bước 4, như trước.
+  const buoc: TenBuoc =
+    buocChon !== null && buocMo[buocChon] ? buocChon : buocVao !== null && buocMo[buocVao] ? buocVao : "tai"
   const chonBuoc = (b: TenBuoc) => {
     setBuocChon(b)
     router.replace(`/admin/council-documents/${setId}?buoc=${b}`, { scroll: false })
