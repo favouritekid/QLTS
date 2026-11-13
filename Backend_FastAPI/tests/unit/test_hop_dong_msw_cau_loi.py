@@ -174,9 +174,44 @@ def tach_tu(src: str):
 DOI_SO_CAU = {"loi400": 0, "loi404": 0, "loi409": 0, "loiTrung": 0, "loi422": 1}
 
 
+def _gia_tri_chu(t):
+    if t.loai == "chuoi":
+        return t.gt
+    if t.loai == "mau":
+        return [(lo, _giai_thoat(g) if lo == "chu" else g) for lo, g in t.gt]
+    return None
+
+
+def hang_chu_ts(tu) -> dict:
+    """Hằng ``const TEN[: kiểu] = "…"`` / `` `…` `` mà khởi tạo là ĐÚNG MỘT chữ (không ghép, không gọi hàm) ⇒ {TEN: câu}.
+    Codex lần 23 F289: lời gọi ``loi409(CAU_DOI_TU_LUC_KIEM, …)`` đưa câu qua hằng — phải giải được, không lặng lẽ bỏ qua."""
+    out = {}
+    for k, t in enumerate(tu):
+        if t.loai != "id" or t.gt != "const" or k + 1 >= len(tu) or tu[k + 1].loai != "id":
+            continue
+        j, sau = k + 2, 0  # bỏ phần kiểu (``: Record<…>``) tới dấu ``=`` ở mức 0
+        while j < len(tu) and not (tu[j].loai == "dau" and tu[j].gt == "=" and sau == 0):
+            if tu[j].loai == "dau" and tu[j].gt in "<([{":
+                sau += 1
+            elif tu[j].loai == "dau" and tu[j].gt in ">)]}":
+                sau -= 1
+            elif tu[j].loai == "dau" and tu[j].gt in (";",):
+                break
+            j += 1
+        if j + 1 >= len(tu) or tu[j].gt != "=":
+            continue
+        gt = _gia_tri_chu(tu[j + 1])
+        sau_do = tu[j + 2] if j + 2 < len(tu) else None
+        if gt is not None and not (sau_do is not None and sau_do.loai == "dau" and sau_do.gt in ("+", ".", "[", "(", "?")):
+            out[tu[k + 1].gt] = gt
+    return out
+
+
 def cau_cua_msw(src: str):
-    """[(hàm, dòng, câu)] — câu là str (chuỗi thường) hoặc list phần (mẫu). Lời gọi mà đối số câu không phải chữ ⇒ câu = None."""
+    """[(hàm, dòng, câu)] — câu là str (chuỗi thường) hoặc list phần (mẫu); đối số là TÊN một hằng chữ đầu tệp ⇒ giải ra câu
+    của hằng. Còn lại (biểu thức, biến, hằng không giải được) ⇒ câu = None — test chính ĐỎ nếu gặp (trừ ngoại lệ đích danh)."""
     tu = tach_tu(src)
+    hang = hang_chu_ts(tu)
     out = []
     for k, t in enumerate(tu):
         if t.loai != "id" or t.gt not in DOI_SO_CAU or k + 1 >= len(tu) or tu[k + 1].gt != "(":
@@ -202,12 +237,16 @@ def cau_cua_msw(src: str):
         vt = DOI_SO_CAU[t.gt]
         ds = doi_so[vt] if vt < len(doi_so) else []
         cau = None
-        if len(ds) == 1 and ds[0].loai == "chuoi":
-            cau = ds[0].gt
-        elif len(ds) == 1 and ds[0].loai == "mau":
-            cau = [(lo, _giai_thoat(g) if lo == "chu" else g) for lo, g in ds[0].gt]
+        if len(ds) == 1:
+            cau = _gia_tri_chu(ds[0])
+            if cau is None and ds[0].loai == "id":
+                cau = hang.get(ds[0].gt)
         out.append((t.gt, t.dong, cau))
     return out
+
+
+#: lời gọi dựng lỗi mà câu KHÔNG đọc được tĩnh nhưng được miễn — MỖI mục (hàm, dòng) một lý do. Hiện RỖNG (F289).
+KHONG_DOC_DUOC_MIEN: dict = {}
 
 
 # ── phía máy chủ ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -292,6 +331,12 @@ def test_moi_cau_loi_tieng_viet_cua_msw_co_nguyen_van_o_may_chu():
         g for lo, g in c if lo == "chu"))]
     # chống "xanh vì đọc được 0 câu": bộ tách từ hỏng ⇒ số câu rơi mạnh
     assert len(cau) >= 80 and len(viet) >= 40, (len(cau), len(viet))
+    # F289: câu không đọc được KHÔNG được lặng lẽ bỏ qua
+    khong_doc = [(h, d) for h, d, c in cau if c is None and (h, d) not in KHONG_DOC_DUOC_MIEN]
+    assert not khong_doc, (
+        "Lời gọi dựng lỗi của MSW mà câu không đọc được tĩnh (biến / biểu thức / hằng không giải được): %s — viết câu là chữ "
+        "hoặc hằng chữ đầu tệp; nếu buộc phải giữ, thêm vào KHONG_DOC_DUOC_MIEN kèm lý do." % khong_doc
+    )
     assert {h for h, _, _ in viet} >= {"loi400", "loi409", "loiTrung", "loi422"}, {h for h, _, _ in viet}
     hang = hang_chuoi_may_chu()
     dung_lai = _dung_luc_chay()
@@ -370,8 +415,15 @@ def test_ten_loai_trang_thai_va_tran_tu_khoa_msw_bang_may_chu():
         ('loi400(`A ${x ? "b" : `c${d}`} E`)', [("loi400", [("chu", "A "), ("cho", 'x ? "b" : `c${d}`'), ("chu", " E")])]),
         # đối số câu là biến ⇒ None (không bịa câu)
         ("loi400(cauTuBien)", [("loi400", None)]),
+        # F289: hằng chữ đầu tệp ⇒ giải ra câu; hằng có kiểu; hằng ghép / gọi hàm ⇒ KHÔNG giải (None)
+        ('export const CAU = "Câu trong hằng."\nreturn loi409(CAU, { ma_loi: "x" })', [("loi409", "Câu trong hằng.")]),
+        ('const C2: string = `Mẫu ${a} hằng.`\nloi400(C2)', [("loi400", [("chu", "Mẫu "), ("cho", "a"), ("chu", " hằng.")])]),
+        ('const C3 = "a" + b\nloi400(C3)', [("loi400", None)]),
+        ('const C4 = f("x")\nloi400(C4)', [("loi400", None)]),
+        ('loi400(KHONG_KHAI)', [("loi400", None)]),
     ],
-    ids=["loiTrung", "nhieu-dong", "chu-thich", "nhay-kep-thoat", "loi422-doi-so-2", "regex", "mau-long", "bien"],
+    ids=["loiTrung", "nhieu-dong", "chu-thich", "nhay-kep-thoat", "loi422-doi-so-2", "regex", "mau-long", "bien",
+         "hang-chu", "hang-co-kieu-mau", "hang-ghep", "hang-goi-ham", "ten-khong-khai"],
 )
 def test_bo_tach_tu_doc_dung_cau(nguon, mong):
     assert [(h, c) for h, _, c in cau_cua_msw(nguon)] == mong
